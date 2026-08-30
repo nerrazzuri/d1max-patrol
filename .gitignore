@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# C++ build
+bridge/build/
+build/
+
+# Runtime artifacts
+runs/
+*.log
+
+# Official reference material lives in ../refs (never committed)
+refs/
