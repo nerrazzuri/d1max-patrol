@@ -76,11 +76,17 @@ async def test_连续多条故障码不丢(rig):
 async def test_卡住时导航等待终态超时(rig):
     """stuck: 状态一直是 Active,永远到不了。只能靠超时发现。"""
     rig.inject("stuck on")
+    target = Pose.from_xy_yaw(5.0, 0.0, 0.0)
     with rig.backend.subscription() as queue:
-        await rig.backend.goto(Pose.from_xy_yaw(5.0, 0.0, 0.0))
+        await rig.backend.goto(target)
         with pytest.raises(NavTimeoutError):
             await rig.backend.wait_nav_terminal(1.0, queue=queue)
     assert await rig.backend.nav_status() is NavStatus.ACTIVE
+    # 光凭"超时了"证明不了 stuck 真的生效 —— 1.0s 的超时本来就比 5m/0.6(m/s)
+    # 的正常耗时(~8.6s)短得多,不卡也会超时。真正的 stuck 后果是"几乎没动":
+    # 冻结时 model.step() 直接早退,goal_distance 应原封不动留在 5.0 附近。
+    # 零耗时,只是读一个当前值,不额外等待。
+    assert rig.sim.model.goal_distance == pytest.approx(5.0, abs=0.01)
 
 
 async def test_超时后能停下并恢复(rig):
@@ -105,11 +111,42 @@ async def test_超时后能停下并恢复(rig):
 
 async def test_减速会让原本够用的超时变得不够用(rig):
     """slow 是制造"能走但太慢"的手段 —— 巡检里最难判断的一类故障。"""
-    rig.inject("slow 20")
+    # "原本够用"不能靠测试名字自证,必须真的用同一个超时、同一段路程跑一遍
+    # 且真的走完,才算数。所以这里让机器狗在 a<->b 之间走两趟同样的路:
+    # 第一趟(a->b)不注入 slow,用来证明 timeout_s originally 够用;
+    # 第二趟再走回 a,然后原路重发 a->b、注入 slow,用完全相同的
+    # timeout_s —— 若这次等不到终态,才是"同一个超时,慢了就不够用"的
+    # 直接证据,而不是换了一段更长/更短的路程碰运气凑出来的超时。
+    target_a = Pose.from_xy_yaw(0.6, 0.0, 0.0)
+    target_b = Pose.from_xy_yaw(1.2, 0.0, 0.0)
+    timeout_s = 3.0
     with rig.backend.subscription() as queue:
-        await rig.backend.goto(Pose.from_xy_yaw(5.0, 0.0, 0.0))
+        # 走到 a,作为两趟 a->b 的共同起点。
+        await rig.backend.goto(target_a)
+        status = await rig.backend.wait_nav_terminal(10.0, queue=queue)
+        assert status is NavStatus.SUCCEED
+        # 终态之后要驻留 terminal_hold_s 才回落 StandBy,下一次 start_nav
+        # 在此之前会被拒绝 —— 等这条事件到齐才能发下一次导航。
+        await _drain_until(queue, _nav_is(NavStatus.STANDBY))
+
+        # 第一趟 a->b: 不注入 slow,必须在 timeout_s 内正常走完 ——
+        # 这就是"原本够用"的证明,而不是断言里假设出来的。
+        await rig.backend.goto(target_b)
+        status = await rig.backend.wait_nav_terminal(timeout_s, queue=queue)
+        assert status is NavStatus.SUCCEED
+        await _drain_until(queue, _nav_is(NavStatus.STANDBY))
+
+        # 走回 a,准备原路重发一次同样的 a->b。
+        await rig.backend.goto(target_a)
+        status = await rig.backend.wait_nav_terminal(10.0, queue=queue)
+        assert status is NavStatus.SUCCEED
+        await _drain_until(queue, _nav_is(NavStatus.STANDBY))
+
+        # 第二趟 a->b: 注入 slow,同一段路、同一个 timeout_s,这次等不到。
+        rig.inject("slow 20")
+        await rig.backend.goto(target_b)
         with pytest.raises(NavTimeoutError):
-            await rig.backend.wait_nav_terminal(1.0, queue=queue)
+            await rig.backend.wait_nav_terminal(timeout_s, queue=queue)
 
 
 # ------------------------------------------------------- 定位
@@ -228,6 +265,31 @@ async def test_乱序加并发不串台(rig):
         assert nav is NavStatus.STANDBY
         assert loc is LocStatus.CONTINUOUS_LOC
         assert set(speed) == {"x", "y", "z"}
+
+    # 上面这段哪怕响应按发出顺序原样到达也会通过 —— 帧号匹配本来就该让
+    # "谁先回来"不影响结果正确性。要证明乱序注入真的生效,必须证明响应确实
+    # 没有按发出顺序到达。`request()` 里 frame_count 在第一个 await 之前
+    # 同步分配,同一批任务的调度顺序等价于发出顺序,于是"完成顺序"如果和
+    # "发出顺序"不同,就是乱序确实发生了的直接证据。
+    order: list[int] = []
+
+    async def _tagged(i: int) -> None:
+        if i % 3 == 0:
+            await rig.backend.nav_status()
+        elif i % 3 == 1:
+            await rig.backend.loc_status()
+        else:
+            await rig.backend.get_speed()
+        order.append(i)
+
+    n = 12
+    await asyncio.gather(*(_tagged(i) for i in range(n)))
+    assert order != list(range(n)), "完成顺序与发出顺序一致,说明乱序注入没有生效"
+
+    # 而且这份乱序是靠帧号正确路由处理掉的,没有退化成函数名回退匹配、
+    # 也没有丢帧。
+    assert rig.backend.dropped_frames == 0
+    assert rig.backend.fallback_matches == 0
 
 
 async def test_注入复位后一切回到正常(rig):
