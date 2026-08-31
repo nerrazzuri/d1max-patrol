@@ -44,9 +44,11 @@ class NavTimeoutError(NavBackendError):
 class NavRequestError(NavBackendError):
     """设备明确回了 error。"""
 
-    def __init__(self, req_func: str, message: str) -> None:
-        super().__init__(f"{req_func} 被设备拒绝: {message}")
-        self.req_func = req_func
+    def __init__(self, operation: str, message: str) -> None:
+        super().__init__(f"{operation} 被设备拒绝: {message}")
+        #: 被拒绝的操作名。厂商后端把自己的 req_func 映射进来,
+        #: Nav2 后端映射自己的 action 名 —— 这一层不认识 req_func 这个词。
+        self.operation = operation
         self.message = message
 
 
@@ -134,23 +136,39 @@ class NavBackend(ABC):
         for queue in list(self._subscribers):
             queue.put_nowait(event)
 
-    async def wait_nav_terminal(self, timeout_s: float) -> NavStatus:
+    async def wait_nav_terminal(
+        self, timeout_s: float,
+        queue: asyncio.Queue[Event] | None = None,
+    ) -> NavStatus:
         """等到导航进入终态。
 
-        调用方必须在下发 `goto()` **之前**订阅,否则可能错过瞬时终态;
-        本方法内部自己订阅,所以正确用法是先 await 本方法的 task,
-        再下发 goto —— 或者直接用第 3 卷的 MissionRunner。
+        **有竞态的用法**:先 `await goto()` 再调用本方法。终态可能在这两步
+        之间就推过来了,那条事件没人订阅、直接丢掉,本方法一路等到超时。
+
+        **没有竞态的用法**:自己先订阅,再下发,再把队列交给本方法 ——
+        订阅与下发之间没有 await,不存在让出点::
+
+            with backend.subscription() as q:
+                await backend.goto(pose)
+                status = await backend.wait_nav_terminal(30.0, queue=q)
+
+        不传 `queue` 时本方法自己订阅,只适合"订阅时导航已经在跑"的场合。
 
         注:用 `asyncio.wait_for` 而不是 `asyncio.timeout` —— 后者要
         Python 3.11+,而全局约束是 3.10。
         """
-        with self.subscription() as queue:
-            try:
-                return await asyncio.wait_for(
-                    self._await_terminal(queue), timeout_s)
-            except asyncio.TimeoutError as exc:
-                raise NavTimeoutError(
-                    f"等待导航终态超过 {timeout_s}s") from exc
+        if queue is not None:
+            return await self._wait_on(queue, timeout_s)
+        with self.subscription() as own_queue:
+            return await self._wait_on(own_queue, timeout_s)
+
+    async def _wait_on(
+        self, queue: asyncio.Queue[Event], timeout_s: float,
+    ) -> NavStatus:
+        try:
+            return await asyncio.wait_for(self._await_terminal(queue), timeout_s)
+        except asyncio.TimeoutError as exc:
+            raise NavTimeoutError(f"等待导航终态超过 {timeout_s}s") from exc
 
     async def _await_terminal(self, queue: asyncio.Queue[Event]) -> NavStatus:
         while True:
