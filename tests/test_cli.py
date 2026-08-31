@@ -59,7 +59,14 @@ def test_ctrl_c_返回1(monkeypatch):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli.asyncio, "run", _boom)
-    assert cli.main(["--url", "ws://127.0.0.1:1", "status"]) == 1
+    # 必须在这里就地接住:KeyboardInterrupt 不是 Exception 的子类,一旦逃出去
+    # pytest 会当成"用户要中断整场测试",直接终止 session(退出码 2),
+    # 后面的测试一条都不会跑。就地转成 pytest.fail,才能变成一条正常的红。
+    try:
+        rc = cli.main(["--url", "ws://127.0.0.1:1", "status"])
+    except KeyboardInterrupt:
+        pytest.fail("main() 没接住 KeyboardInterrupt,Ctrl+C 会带着 traceback 逃到用户面前")
+    assert rc == 1
 
 
 async def test_status(sim, capsys):
