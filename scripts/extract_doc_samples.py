@@ -10,7 +10,8 @@ JSON 语法错,不是内容缺失。严格解析失败时会先尝试机械修�
 括号)原样跳过,不做任何猜测性修补。
 
 用法:
-    python scripts/extract_doc_samples.py refs/nav-api/自主导航_WEBSOCKET_API.md tests/protocol/fixtures
+    python scripts/extract_doc_samples.py refs/nav-api/自主导航_WEBSOCKET_API.md \\
+        tests/protocol/fixtures
 """
 
 from __future__ import annotations
@@ -69,6 +70,36 @@ def repair(text: str) -> tuple[str, list[str]]:
     return fixed, applied
 
 
+def expected_req_func(payload: dict) -> str | None:
+    """从报文里直接扒出期望的 req_func,供测试与解析器结果比对。
+
+    **刻意不调用 `d1max_patrol.protocol` 的解析函数**:这里要的是一份独立的
+    第二实现。若改成调用解析器,测试就成了"解析器跟自己比",恒真,这条断言
+    的全部价值就没了。以后不要"顺手去重"把它合并掉。
+    """
+    head_type = (payload.get("head") or {}).get("type")
+    data = payload.get("data") or {}
+    if head_type == "app_req":
+        req_func = data.get("req_func")
+        if isinstance(req_func, str):  # §7.14 exit_charging 那种裸字符串
+            return req_func
+        if isinstance(req_func, dict) and len(req_func) == 1:
+            return next(iter(req_func))
+        return None
+    if head_type == "app_resp":
+        result = data.get("req_result") or {}
+        # 两种外壳键名都要认(厂商在不同章节写了两种拼法)。这里的重复是
+        # 有意的:解析器那边少认一种时,这一份还认,测试才会红。
+        for shell in ("AppReponseObjectData", "AppResponse"):
+            nested = result.get(shell)
+            if isinstance(nested, dict):
+                result = nested
+                break
+        req_func = result.get("req_func")
+        return req_func if isinstance(req_func, str) else None
+    return None
+
+
 def extract(doc: str) -> list[tuple[int, str]]:
     """返回 [(起始行号, 代码块文本)]。"""
     out: list[tuple[int, str]] = []
@@ -120,6 +151,7 @@ def main(argv: list[str]) -> int:
                 "file": name,
                 "doc_line": line_no,
                 "type": payload.get("head", {}).get("type"),
+                "expected_req_func": expected_req_func(payload),
                 "repaired": repaired,
             }
         )

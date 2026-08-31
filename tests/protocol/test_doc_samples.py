@@ -48,7 +48,10 @@ def test_三类报文都有样例():
 @pytest.mark.parametrize("entry", _entries(FRAME_TYPE_REQUEST), ids=lambda e: e["file"])
 def test_文档里的请求样例都能解析(entry):
     frame_count, req_func, _args = parse_request(_payload(entry))
-    assert isinstance(req_func, str) and req_func
+    # 只断言"是个非空字符串"挡不住"解析器永远返回同一个错名"——评审实测
+    # 过:那样改,这 36 条会全部照常绿。所以必须比对具体的值。期望值由抽取
+    # 脚本独立扒出、记在 index.json 里,是解析器之外的第二实现。
+    assert req_func == entry["expected_req_func"]
     assert frame_count is None or isinstance(frame_count, int)
 
 
@@ -56,8 +59,28 @@ def test_文档里的请求样例都能解析(entry):
 def test_文档里的响应样例都能解析(entry):
     message = parse_message(_payload(entry))
     assert isinstance(message, Response)
-    assert message.req_func
+    assert message.req_func == entry["expected_req_func"]
     assert isinstance(message.ok, bool)
+
+
+def test_index_的元数据字段没有退化():
+    """`expected_req_func` / `doc_line` / `repaired` 都必须真的在库里。
+
+    没有这条,上面两个 parametrize 里的 `entry["expected_req_func"]` 在
+    "脚本不再写这个字段"时会 KeyError——那也是红,但错得莫名其妙。这条
+    让退化在一个说得清的地方先红。
+    """
+    for entry in INDEX:
+        assert "expected_req_func" in entry, entry["file"]
+        assert isinstance(entry["doc_line"], int)
+    # 请求与响应必须都有期望名;故障推送没有 req_func,应为 None
+    for entry in _entries(FRAME_TYPE_REQUEST) + _entries(FRAME_TYPE_RESPONSE):
+        assert entry["expected_req_func"], entry["file"]
+    for entry in _entries(FRAME_TYPE_ALG_ERROR):
+        assert entry["expected_req_func"] is None, entry["file"]
+    # 机械修复过的样例恰好 3 条(尾逗号 ×2、行注释 ×1)。数字钉死,便于文档
+    # 更新时立刻发现修复面变了。
+    assert sum(1 for e in INDEX if e["repaired"]) == 3
 
 
 @pytest.mark.parametrize("entry", _entries(FRAME_TYPE_ALG_ERROR), ids=lambda e: e["file"])
