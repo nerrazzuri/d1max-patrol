@@ -56,6 +56,7 @@ def test_异常层次():
         assert issubclass(exc, Exception)
     assert issubclass(NavTimeoutError, NavBackendError)
     assert issubclass(NavRequestError, NavBackendError)
+    assert issubclass(NavConnectionError, NavBackendError)
 
 
 def test_请求错误带上操作名与设备消息():
