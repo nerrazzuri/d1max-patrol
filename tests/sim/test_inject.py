@@ -55,6 +55,16 @@ def test_故障码必须是整数():
         apply_command(FaultState(), "alg_error abc")
 
 
+def test_alg_error_不带故障码被拒绝():
+    with pytest.raises(InjectError, match="缺少故障码"):
+        apply_command(FaultState(), "alg_error")
+
+
+def test_alg_error_严重度非整数被拒绝():
+    with pytest.raises(InjectError, match="严重度"):
+        apply_command(FaultState(), "alg_error 13330 xyz")
+
+
 def test_预约下次导航失败():
     s = FaultState()
     apply_command(s, "nav_fail")
@@ -130,6 +140,8 @@ def test_status_命令回显当前注入():
     apply_command(s, "slow 2")
     out = apply_command(s, "status")
     assert "speed_scale=0.5" in out
+    apply_command(s, "loc_lost")
+    assert "loc_lost_requested=True" in apply_command(s, "status")
 
 
 def test_help_命令列出全部命令():

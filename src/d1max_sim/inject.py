@@ -87,7 +87,10 @@ class FaultState:
             f"speed_scale={self.speed_scale} stuck={self.stuck} "
             f"frame_count_zero={self.frame_count_zero} "
             f"response_delay_s={self.response_delay_s} "
+            f"disconnect_seconds={self.disconnect_seconds} "
             f"fail_next_nav={self.fail_next_nav} "
+            f"loc_lost_requested={self.loc_lost_requested} "
+            f"loc_recover_requested={self.loc_recover_requested} "
             f"queued_alg_errors={len(self.queued_alg_errors)}"
         )
 
