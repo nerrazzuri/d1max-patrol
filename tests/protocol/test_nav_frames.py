@@ -153,6 +153,22 @@ def test_故障码推送允许空列表():
     assert msg.items == ()
 
 
+@pytest.mark.parametrize("severity", [None, "abc"])
+def test_故障条目severity非法时抛ProtocolError(severity):
+    """I1: 厂商本来就爱填 null(build_response 自己就发 "msg": null),
+    这是现实输入 —— 必须是 ProtocolError,不能是裸的 TypeError/ValueError
+    逃到调用方,把读循环的链路健康判断带崩。
+    """
+    text = json.dumps(
+        {"head": {"type": "alg_error_code_notify", "time_stamp": 1,
+                  "source": "alg_control_node", "frame_count": 1},
+         "data": {"items": [{"code": 13330, "description": "x",
+                             "severity": severity}]}}
+    )
+    with pytest.raises(ProtocolError, match="severity"):
+        parse_message(text)
+
+
 def test_frame_count_缺失或非整数时为_None():
     text = json.dumps(
         {"head": {"type": "app_resp", "time_stamp": 1, "source": "alg_control_node"},

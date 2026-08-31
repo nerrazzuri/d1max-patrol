@@ -210,11 +210,18 @@ def _parse_alg_error(payload: dict[str, Any], head: dict[str, Any]) -> AlgErrorN
     for entry in data["items"]:
         if not isinstance(entry, dict) or not isinstance(entry.get("code"), int):
             raise ProtocolError(f"故障条目格式错误: {entry!r}")
+        # I1: severity 非法(比如厂商填了 null)本来就该由协议层报自己的
+        # 错误类型,而不是让 TypeError/ValueError 逃到调用方——那样会被
+        # 读循环的外层 except Exception 接住,误判成链路已死。
+        try:
+            severity = int(entry.get("severity", 0))
+        except (TypeError, ValueError) as exc:
+            raise ProtocolError(f"故障条目 severity 非法: {entry!r}") from exc
         items.append(
             AlgErrorItem(
                 code=entry["code"],
                 description=str(entry.get("description", "")),
-                severity=int(entry.get("severity", 0)),
+                severity=severity,
             )
         )
     ts = head.get("time_stamp")

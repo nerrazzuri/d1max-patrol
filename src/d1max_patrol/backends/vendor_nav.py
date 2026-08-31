@@ -15,7 +15,7 @@ import asyncio
 import contextlib
 import itertools
 import logging
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,9 +69,16 @@ class VendorNavBackend(NavBackend):
         self._ws: ClientConnection | None = None
         self._reader: asyncio.Task[None] | None = None
         self._frame_counter = itertools.count(1)
+        #: 已经发出过的最大帧号。C1: 只有落在 (0, 这个值] 里、却又不在挂起表
+        #: 中的响应,才是"我们自己已结算/已超时的旧帧",必须走丢弃而不是降级。
+        self._last_issued = 0
         #: frame_count -> 挂起请求。dict 保序,降级匹配靠它取最早一条。
         self._pending: dict[int, _Pending] = {}
         self._closing = False
+        #: I2: `_on_link_lost` 派生的后台关闭任务在这里存一份强引用,
+        #: 防止任务被 GC 提前回收(以及 close() 时能等它们收尾,不留
+        #: "Task was destroyed but it is pending" 这类杂散告警)。
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
         #: 观测指标 —— 契约测试与真机对拍都靠它们判断链路健康
         self.fallback_matches = 0
@@ -112,6 +119,12 @@ class VendorNavBackend(NavBackend):
         if ws is not None:
             with contextlib.suppress(Exception):
                 await ws.close()
+        # I2: 等在飞的后台关闭任务(比如 _on_link_lost 派生的)收尾,
+        # 免得进程退出时留下 "Task was destroyed but it is pending"。
+        tasks, self._background_tasks = list(self._background_tasks), set()
+        for task in tasks:
+            with contextlib.suppress(Exception):
+                await task
         self._fail_pending("连接已关闭")
 
     def _fail_pending(self, reason: str) -> None:
@@ -119,6 +132,15 @@ class VendorNavBackend(NavBackend):
         for entry in pending.values():
             if not entry.future.done():
                 entry.future.set_exception(NavConnectionError(reason))
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _safe_close(self, ws: ClientConnection) -> None:
+        with contextlib.suppress(Exception):
+            await ws.close()
 
     # ------------------------------------------------------------ 读循环
 
@@ -132,7 +154,13 @@ class VendorNavBackend(NavBackend):
                 except ProtocolError as exc:
                     log.warning("忽略无法解析的报文: %s", exc)
                     continue
-                self._route(message)
+                try:
+                    self._route(message)
+                except Exception:  # noqa: BLE001
+                    # I1: 单帧路由失败绝不能判定链路死亡 —— 否则一条畸形
+                    # 推送就能把所有挂起请求连坐失败。异常留在日志里
+                    # (exc_info=True),不悄悄吞掉真实 bug。
+                    log.warning("路由报文时出错,已忽略该帧", exc_info=True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -145,7 +173,11 @@ class VendorNavBackend(NavBackend):
     def _on_link_lost(self, reason: str) -> None:
         """链路断开的统一入口。Task 14 会在这里接上重连。"""
         log.warning("导航链路断开: %s", reason)
-        self._ws = None
+        ws, self._ws = self._ws, None
+        # I2: 光丢引用不够 —— 旧连接的 socket 还开着,服务端会一直把它算作
+        # 在线客户端。真正关掉它,丢给后台任务做,免得阻塞读循环本身的收尾。
+        if ws is not None:
+            self._spawn(self._safe_close(ws))
         self._fail_pending(reason)
 
     # ------------------------------------------------------------ 匹配
@@ -170,16 +202,25 @@ class VendorNavBackend(NavBackend):
             self._on_push(message)
             return
 
-        # 3. 降级匹配: 帧号不可信时按函数名认领最早一条。
-        for frame_count, entry in self._pending.items():
-            if entry.response_func == message.req_func:
-                del self._pending[frame_count]
-                self.fallback_matches += 1
-                log.warning("帧号 %s 未命中,按函数名 %s 降级匹配(累计 %d 次)",
-                            message.frame_count, message.req_func,
-                            self.fallback_matches)
-                self._settle(entry, message)
-                return
+        # 3. 降级匹配: 只在帧号不可信时才允许降级。
+        # 假设(待真机验证): 帧号由我们从 1 单调递增发出,设备原样回显。
+        # 于是"落在 [1, 已发出的最大帧号] 里、却不在挂起表中"⟺ 这是我们自己
+        # 某条已结算/已超时的旧帧(比如客户端已等超时、之后设备的迟到响应
+        # 才姗姗来迟)—— 拿它去冒领另一条同名的挂起请求,就是把 A 的响应
+        # 交给了 B,而且没有任何异常,只会在压力下悄悄错发数据。这种帧必须
+        # 走步骤 4 丢弃,不能降级。真机要确认: 设备是否真的原样回显
+        # frame_count、以及超时后的迟到帧是否真会出现。
+        fc = message.frame_count
+        if fc is None or not (1 <= fc <= self._last_issued):
+            for frame_count, entry in self._pending.items():
+                if entry.response_func == message.req_func:
+                    del self._pending[frame_count]
+                    self.fallback_matches += 1
+                    log.warning("帧号 %s 未命中,按函数名 %s 降级匹配(累计 %d 次)",
+                                message.frame_count, message.req_func,
+                                self.fallback_matches)
+                    self._settle(entry, message)
+                    return
 
         # 4. 无人认领
         self.dropped_frames += 1
@@ -206,6 +247,7 @@ class VendorNavBackend(NavBackend):
             raise NavConnectionError("尚未连接导航设备")
 
         frame_count = next(self._frame_counter)
+        self._last_issued = frame_count
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         entry = _Pending(req.req_func, req.response_func, future)
         self._pending[frame_count] = entry
@@ -215,13 +257,18 @@ class VendorNavBackend(NavBackend):
             self._pending.pop(frame_count, None)
             raise NavConnectionError(f"发送 {req.req_func} 失败: {exc}") from exc
 
+        # C2: 无论正常拿到响应、超时、还是被外部取消(gather 连坐、上层
+        # wait_for、Task 14 重连撤销在飞请求……),挂起表都必须清干净 ——
+        # 否则一条"死"条目会一直排在最前面,被之后每一次降级匹配优先冒领。
         try:
-            response = await asyncio.wait_for(future, self.config.request_timeout_s)
-        except asyncio.TimeoutError as exc:
+            try:
+                response = await asyncio.wait_for(future, self.config.request_timeout_s)
+            except asyncio.TimeoutError as exc:
+                raise NavTimeoutError(
+                    f"{req.req_func} 超过 {self.config.request_timeout_s}s 未收到响应"
+                ) from exc
+        finally:
             self._pending.pop(frame_count, None)
-            raise NavTimeoutError(
-                f"{req.req_func} 超过 {self.config.request_timeout_s}s 未收到响应"
-            ) from exc
 
         if not response.ok:
             raise NavRequestError(req.req_func, response.msg or "设备未给出原因")
