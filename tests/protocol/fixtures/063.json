@@ -1,0 +1,18 @@
+{
+  "head": {
+    "type": "app_resp",
+    "time_stamp": 1763710059813,
+    "source": "alg_control_node",
+    "frame_count": 1
+  },
+  "data": {
+    "req_result": {
+      "AppResponse": {
+        "req_func": "get_arc_alg_status",
+        "status": "ok",
+        "msg": null,
+        "data": "StandBy"
+      }
+    }
+  }
+}

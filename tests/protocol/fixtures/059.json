@@ -1,0 +1,13 @@
+{
+  "head": {
+    "type": "app_req",
+    "time_stamp": 1234567890123,
+    "source": "app",
+    "frame_count": 1
+  },
+  "data": {
+    "req_func": {
+      "stop_arc_mapping": null
+    }
+  }
+}

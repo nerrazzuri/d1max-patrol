@@ -1,0 +1,16 @@
+{
+  "head": {
+    "type": "app_req",
+    "time_stamp": 1234567890123,
+    "source": "app",
+    "frame_count": 1
+  },
+  "data": {
+    "req_func": {
+      "rename_map_name": [
+        "old_map_id",
+        "new_map_id"
+      ]
+    }
+  }
+}

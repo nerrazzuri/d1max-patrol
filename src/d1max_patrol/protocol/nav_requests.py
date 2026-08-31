@@ -22,10 +22,12 @@ REQUEST_TO_RESPONSE_FUNC: dict[str, str] = {
 #: 它们的 head.type 也是 app_resp,但 frame_count 不对应任何请求。
 PUSH_ONLY_FUNCS = frozenset({"notify_stop_mapping_status"})
 
-#: 协议地雷 1: 响应带 AppReponseObjectData 外壳(厂商把 Response 拼成 Reponse)的请求名。
-#: 注意文档里还有第二种外壳键名 AppResponse(拼写正确),出现在 §7 回充/对桩接口
-#: (get_arc_alg_status §7.13、exit_charging §7.14)。本卷不发这些请求,故解析器
-#: 只处理 AppReponseObjectData;第 2 卷做回充时必须把 AppResponse 一并支持。
+#: 协议地雷 1: 响应带外壳(AppReponseObjectData,厂商把 Response 拼成 Reponse)的
+#: 请求名——这管的是仿真器**发**响应时要不要套壳,不是解析器**读**得懂哪些拼法。
+#: 读的一侧(nav_frames._parse_response)两种外壳键名都认:AppReponseObjectData
+#: (§3.9/§3.10 速度接口)与拼写正确的 AppResponse(§7 回充/对桩接口,如
+#: get_arc_alg_status §7.13、exit_charging §7.14,已由 Task 19 的文档样例证实)。
+#: 本卷不发 §7 的请求,仿真器也就不必学会套 AppResponse——只放宽读、不放宽写。
 NESTED_RESPONSE_FUNCS = frozenset({"get_navigation_speed", "set_navigation_speed"})
 
 #: 文档只给了请求没给响应样例的接口,响应 req_func 名未经验证。

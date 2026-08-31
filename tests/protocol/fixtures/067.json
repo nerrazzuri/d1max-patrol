@@ -1,0 +1,22 @@
+{
+  "head": {
+    "type": "alg_error_code_notify",
+    "time_stamp": 1763697492747,
+    "source": "alg_control_node",
+    "frame_count": 1
+  },
+  "data": {
+    "items": [
+      {
+        "code": 13330,
+        "description": "navigation blocked",
+        "severity": 0
+      },
+      {
+        "code": 13331,
+        "description": "lidar disconnected",
+        "severity": 1
+      }
+    ]
+  }
+}

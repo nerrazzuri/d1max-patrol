@@ -1,0 +1,22 @@
+{
+  "head": {
+    "type": "app_resp",
+    "time_stamp": 1234567890124,
+    "source": "alg_control_node",
+    "frame_count": 1
+  },
+  "data": {
+    "req_result": {
+      "AppReponseObjectData": {
+        "req_func": "set_navigation_speed",
+        "status": "ok",
+        "msg": null,
+        "data": {
+          "x": 0.8,
+          "y": 0.4,
+          "z": 1.2
+        }
+      }
+    }
+  }
+}

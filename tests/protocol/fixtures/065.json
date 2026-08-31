@@ -1,0 +1,11 @@
+{
+  "head": {
+    "type": "app_req",
+    "time_stamp": 1763708841048,
+    "source": "app",
+    "frame_count": 1
+  },
+  "data": {
+    "req_func": "exit_charging"
+  }
+}

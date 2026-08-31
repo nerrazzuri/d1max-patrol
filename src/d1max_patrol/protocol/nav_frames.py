@@ -23,7 +23,11 @@ SOURCE_ALG = "alg_control_node"
 
 #: 协议地雷 1: §3.9/§3.10 的响应在 req_result 下多包一层,
 #: 且厂商把 Response 拼写成了 Reponse。不要"修正"这个拼写。
-NESTED_RESULT_KEY = "AppReponseObjectData"
+#: §7 回充/对桩接口(get_arc_alg_status §7.13、exit_charging §7.14)用的是拼写
+#: 正确的 AppResponse——同一层外壳,厂商在不同章节写了两种拼法。解析时两种
+#: 都要认,构造响应(build_response)仍然只写第一种,即速度接口那种拼错的。
+#: 假设(待真机验证): 只见过这两种拼写,不确定文档没覆盖到的接口是否还有第三种。
+NESTED_RESULT_KEYS = ("AppReponseObjectData", "AppResponse")
 
 STATUS_OK = "ok"
 STATUS_ERROR = "error"
@@ -113,7 +117,7 @@ def build_response(
         "msg": msg,
         "data": data,
     }
-    payload = {NESTED_RESULT_KEY: result} if nested else result
+    payload = {NESTED_RESULT_KEYS[0]: result} if nested else result
     return {
         "head": {
             "type": FRAME_TYPE_RESPONSE,
@@ -186,9 +190,11 @@ def _parse_response(payload: dict[str, Any], head: dict[str, Any]) -> Response:
     result = data.get("req_result")
     if not isinstance(result, dict):
         raise ProtocolError("app_resp 缺少 req_result")
-    nested = result.get(NESTED_RESULT_KEY)
-    if isinstance(nested, dict):
-        result = nested
+    for key in NESTED_RESULT_KEYS:
+        nested = result.get(key)
+        if isinstance(nested, dict):
+            result = nested
+            break
     req_func = result.get("req_func")
     if not isinstance(req_func, str):
         raise ProtocolError("req_result 缺少 req_func")
@@ -239,10 +245,18 @@ def parse_request(text: str | bytes) -> tuple[int | None, str, Any]:
     if head.get("type") != FRAME_TYPE_REQUEST:
         raise ProtocolError(f"报文不是 app_req: {head.get('type')!r}")
     data = payload.get("data")
-    if not isinstance(data, dict) or not isinstance(data.get("req_func"), dict):
+    if not isinstance(data, dict):
         raise ProtocolError("app_req 缺少 req_func")
-    req_func_obj: dict[str, Any] = data["req_func"]
-    if len(req_func_obj) != 1:
-        raise ProtocolError(f"req_func 应恰好含一个函数名,实际 {len(req_func_obj)} 个")
-    (name, args), = req_func_obj.items()
+    req_func = data.get("req_func")
+    # 假设(待真机验证): §7.14 exit_charging 这类无参接口,文档样例里
+    # req_func 直接是裸字符串而非 {函数名: 参数} 对象(第 1553 行)。不确定
+    # 还有哪些接口这么写,读的一侧两种形状都接住,构造请求(build_request)
+    # 不受影响,仍然只发 {函数名: 参数} 这一种形状。
+    if isinstance(req_func, str):
+        return _frame_count_of(head), req_func, None
+    if not isinstance(req_func, dict):
+        raise ProtocolError("app_req 缺少 req_func")
+    if len(req_func) != 1:
+        raise ProtocolError(f"req_func 应恰好含一个函数名,实际 {len(req_func)} 个")
+    (name, args), = req_func.items()
     return _frame_count_of(head), name, args

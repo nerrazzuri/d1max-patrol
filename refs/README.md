@@ -12,3 +12,9 @@
 
 代码与计划中引用官方接口时，一律以 `refs/nav-api/自主导航_WEBSOCKET_API.md`
 的章节号为准（例如"§3.1 开始单点导航"）。
+
+## 测试用的文档样例
+
+`tests/protocol/fixtures/` 下的 JSON 由
+`python scripts/extract_doc_samples.py refs/nav-api/自主导航_WEBSOCKET_API.md tests/protocol/fixtures`
+从本目录的 API 文档中抠出,已入库。文档更新后重跑该脚本并复查 diff。

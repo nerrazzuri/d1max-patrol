@@ -1,0 +1,16 @@
+{
+  "head": {
+    "type": "app_resp",
+    "time_stamp": 1234567890124,
+    "source": "alg_control_node",
+    "frame_count": 1
+  },
+  "data": {
+    "req_result": {
+      "req_func": "start_mapping",
+      "status": "error",
+      "msg": "错误信息",
+      "data": null
+    }
+  }
+}

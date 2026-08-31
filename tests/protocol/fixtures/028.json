@@ -1,0 +1,16 @@
+{
+  "head": {
+    "type": "app_req",
+    "time_stamp": 1234567890123,
+    "source": "app",
+    "frame_count": 1
+  },
+  "data": {
+    "req_func": {
+      "start_multi_nav": [
+        "map_id",
+        "path_id"
+      ]
+    }
+  }
+}

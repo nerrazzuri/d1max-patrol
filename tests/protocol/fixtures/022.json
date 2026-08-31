@@ -1,0 +1,35 @@
+{
+  "head": {
+    "type": "app_req",
+    "time_stamp": 1234567890123,
+    "source": "app",
+    "frame_count": 1
+  },
+  "data": {
+    "req_func": {
+      "modify_nav_path": [
+        "map_id",
+        "old_path_id",
+        "new_path_id",
+        [
+          [
+            "point_name_1",
+            {
+              "position": {
+                "x": 1.0,
+                "y": 2.0,
+                "z": 0.0
+              },
+              "orientation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "w": 1.0
+              }
+            }
+          ]
+        ]
+      ]
+    }
+  }
+}
