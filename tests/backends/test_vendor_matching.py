@@ -24,6 +24,13 @@ from d1max_patrol.protocol.nav_types import (
 )
 from d1max_sim.nav_server import SimNavServer
 
+#: 把状态轮询器静默掉。本文件测的是响应匹配层,而轮询器是一个后台请求
+#: 发生器 —— 它会占着 _pending、把自己的迟到响应计进 dropped_frames、
+#: 还会拨动仿真器那个全局响应奇偶计数器(延迟注入正是靠奇偶性打中特定
+#: 请求的)。这三样都是本文件的断言直接依赖的东西。
+#: 因为 _poll_loop 的 sleep 在循环体开头,这个间隔意味着测试期间它一次都不发。
+_POLLER_OFF = 3600.0
+
 
 @pytest.fixture
 async def sim():
@@ -37,7 +44,8 @@ async def sim():
 
 @pytest.fixture
 async def backend(sim):
-    b = VendorNavBackend(NavConfig(url=sim.url, request_timeout_s=3.0))
+    b = VendorNavBackend(
+        NavConfig(url=sim.url, request_timeout_s=3.0, status_poll_interval_s=_POLLER_OFF))
     await b.connect()
     try:
         yield b
@@ -61,7 +69,7 @@ async def test_连接后可用(backend):
 
 
 async def test_未连接时请求抛连接错误(sim):
-    b = VendorNavBackend(NavConfig(url=sim.url))
+    b = VendorNavBackend(NavConfig(url=sim.url, status_poll_interval_s=_POLLER_OFF))
     with pytest.raises(NavConnectionError):
         await b.request(R.get_nav_status())
 
@@ -225,7 +233,8 @@ async def test_C1_超时后迟到响应不会冒领同名请求(sim):
     sim.store.set_path(m1, "path", [Waypoint("P_ONE", Pose.from_xy_yaw(0.0, 0.0))])
     sim.store.set_path(m2, "path", [Waypoint("P_TWO", Pose.from_xy_yaw(0.0, 0.0))])
 
-    b = VendorNavBackend(NavConfig(url=sim.url, request_timeout_s=0.5))
+    b = VendorNavBackend(
+        NavConfig(url=sim.url, request_timeout_s=0.5, status_poll_interval_s=_POLLER_OFF))
     await b.connect()
     try:
         sim.faults.response_delay_s = 5.0

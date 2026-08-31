@@ -43,10 +43,15 @@ from d1max_patrol.protocol.nav_types import (
 
 from .base import (
     AlgErrorEvent,
+    BackendDisconnected,
+    BackendReconnected,
+    LocStatusEvent,
+    MappingStatusEvent,
     NavBackend,
     NavBackendError,
     NavConnectionError,
     NavRequestError,
+    NavStatusEvent,
     NavTimeoutError,
 )
 
@@ -66,7 +71,7 @@ class _Pending:
 
 
 class VendorNavBackend(NavBackend):
-    def __init__(self, config: NavConfig) -> None:
+    def __init__(self, config: NavConfig, auto_reconnect: bool = True) -> None:
         super().__init__()
         self.config = config
         self._ws: ClientConnection | None = None
@@ -87,6 +92,17 @@ class VendorNavBackend(NavBackend):
         self.fallback_matches = 0
         self.dropped_frames = 0
 
+        self.auto_reconnect = auto_reconnect
+        self._poller: asyncio.Task[None] | None = None
+        self._reconnector: asyncio.Task[None] | None = None
+        self._connect_lock = asyncio.Lock()
+        self._connected_event = asyncio.Event()
+        self.reconnect_attempts = 0
+
+        self.last_nav_status: NavStatus | None = None
+        self.last_loc_status: LocStatus | None = None
+        self.last_mapping_status: MappingStatus | None = None
+
     # ------------------------------------------------------------ 生命周期
 
     @property
@@ -98,8 +114,24 @@ class VendorNavBackend(NavBackend):
         return len(self._pending)
 
     async def connect(self) -> None:
-        if self._ws is not None:
-            return
+        # M2(Task 12 评审遗留,到这里才真正兑现): connect() 与 _reconnect_once()
+        # 共用同一把 `_connect_lock` 围 `_open_link()`。原来的
+        # `if self._ws is not None` 守卫在 await 之前判断,两个并发调用会
+        # 双双通过,漏一个 socket 加一个读循环任务。整段建链必须串行。
+        async with self._connect_lock:
+            if self._ws is not None:
+                return
+            await self._open_link()
+            self._connected_event.set()
+
+    async def _open_link(self) -> None:
+        """建链 + 起读循环 + 起轮询器。不发任何请求,不碰就绪标志。
+
+        初次连接刻意不做探针: 探针会多消耗一个 frame_count、并拨动仿真器
+        那个全局响应奇偶计数器,而匹配测试正靠奇偶性把延迟注入打在特定
+        请求上(见 test_vendor_matching.py 的 test_C1 docstring)。缺陷 19
+        真正要防的是"重连把半开链路当成功",初次连接不涉及这个问题。
+        """
         self._closing = False
         try:
             self._ws = await asyncio.wait_for(
@@ -109,10 +141,34 @@ class VendorNavBackend(NavBackend):
         except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as exc:
             raise NavConnectionError(f"连接 {self.config.url} 失败: {exc}") from exc
         self._reader = asyncio.create_task(self._read_loop())
+        if self._poller is None:
+            self._poller = asyncio.create_task(self._poll_loop())
         log.info("已连接导航设备 %s", self.config.url)
 
-    async def close(self) -> None:
-        self._closing = True
+    async def _reconnect_once(self) -> None:
+        """重连一次。与 connect() 的区别: 建链之后要用一条真实请求确认对端
+        真的在应答,确认过了才置就绪标志。
+
+        握手成功 ≠ 链路可用: 仿真器的 disconnect 注入是"静默窗口"语义 ——
+        窗口内握手会成功,服务端随后立刻以 1012 关闭(nav_server.py:166)。
+        只看 connect() 有没有抛错的话,会误报 BackendReconnected、误置就绪
+        标志,而且退避会因为重连循环反复重建而永远从头开始。
+        """
+        async with self._connect_lock:
+            if self._ws is None:
+                await self._open_link()
+        try:
+            await self.request(R.get_nav_status())
+        except NavBackendError:
+            await self._teardown_link()
+            raise
+        self._connected_event.set()
+
+    async def _teardown_link(self) -> None:
+        """探针失败后拆干净,好让下一次重连能真的重来。
+
+        不收 `_poller` —— 它跨断链存活,只由 close() 收。
+        """
         reader, self._reader = self._reader, None
         ws, self._ws = self._ws, None
         if reader is not None:
@@ -122,10 +178,28 @@ class VendorNavBackend(NavBackend):
         if ws is not None:
             with contextlib.suppress(Exception):
                 await ws.close()
+        self._fail_pending("探针失败,链路未建立")
+
+    async def close(self) -> None:
+        self._closing = True
+        self._connected_event.clear()
+        tasks = [self._reader, self._poller, self._reconnector]
+        self._reader = self._poller = self._reconnector = None
+        for task in tasks:
+            if task is not None:
+                task.cancel()
+        for task in tasks:
+            if task is not None:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        ws, self._ws = self._ws, None
+        if ws is not None:
+            with contextlib.suppress(Exception):
+                await ws.close()
         # I2: 等在飞的后台关闭任务(比如 _on_link_lost 派生的)收尾,
         # 免得进程退出时留下 "Task was destroyed but it is pending"。
-        tasks, self._background_tasks = list(self._background_tasks), set()
-        for task in tasks:
+        bg, self._background_tasks = list(self._background_tasks), set()
+        for task in bg:
             with contextlib.suppress(Exception):
                 await task
         self._fail_pending("连接已关闭")
@@ -174,14 +248,89 @@ class VendorNavBackend(NavBackend):
             self._on_link_lost("设备关闭了连接")
 
     def _on_link_lost(self, reason: str) -> None:
-        """链路断开的统一入口。Task 14 会在这里接上重连。"""
+        """链路断开的统一入口,接着重连。"""
+        if self._ws is None and not self._connected_event.is_set():
+            return                       # 已经在处理同一次断链了
         log.warning("导航链路断开: %s", reason)
         ws, self._ws = self._ws, None
+        self._connected_event.clear()
         # I2: 光丢引用不够 —— 旧连接的 socket 还开着,服务端会一直把它算作
         # 在线客户端。真正关掉它,丢给后台任务做,免得阻塞读循环本身的收尾。
         if ws is not None:
             self._spawn(self._safe_close(ws))
         self._fail_pending(reason)
+        self.emit(BackendDisconnected(reason))
+        if self.auto_reconnect and not self._closing and self._reconnector is None:
+            self._reconnector = asyncio.create_task(self._reconnect_loop())
+
+    # ------------------------------------------------------------ 重连
+
+    async def wait_connected(self, timeout_s: float) -> None:
+        try:
+            await asyncio.wait_for(self._connected_event.wait(), timeout_s)
+        except asyncio.TimeoutError as exc:
+            raise NavTimeoutError(f"等待重连超过 {timeout_s}s") from exc
+
+    async def _reconnect_loop(self) -> None:
+        delay = self.config.reconnect_min_s
+        try:
+            while not self._closing:
+                await asyncio.sleep(delay)
+                self.reconnect_attempts += 1
+                try:
+                    await self._reconnect_once()
+                except NavBackendError as exc:
+                    # 控制者订正: 原文只捕 NavConnectionError。_reconnect_once()
+                    # 带探针,探针可能抛 NavTimeoutError / NavRequestError ——
+                    # 窄捕获会让重连循环带着异常静默死掉,从此再也不重连。
+                    # 重连循环里没有任何错误值得杀死重连。
+                    log.info("第 %d 次重连失败: %s", self.reconnect_attempts, exc)
+                    delay = min(delay * 2, self.config.reconnect_max_s)
+                    continue
+                # 断链期间机器人可能已经走完或已经失败,缓存一律作废,
+                # 下一轮轮询会以 previous=None 重新广播真实状态。
+                self.last_nav_status = None
+                self.last_loc_status = None
+                self.last_mapping_status = None
+                self.emit(BackendReconnected())
+                log.info("重连成功(第 %d 次尝试)", self.reconnect_attempts)
+                return
+        finally:
+            self._reconnector = None
+
+    # ------------------------------------------------------------ 状态轮询
+
+    async def _poll_loop(self) -> None:
+        """设备没有状态推送通道,只能自己轮询出"变化"这件事。"""
+        while not self._closing:
+            await asyncio.sleep(self.config.status_poll_interval_s)
+            if self._ws is None:
+                continue
+            try:
+                await self._poll_once()
+            except asyncio.CancelledError:
+                raise
+            except NavBackendError as exc:
+                # 单轮失败不该杀死轮询器 —— 断链有 _on_link_lost 兜底
+                log.debug("状态轮询这一轮失败: %s", exc)
+            except Exception:  # noqa: BLE001
+                log.exception("状态轮询意外异常")
+
+    async def _poll_once(self) -> None:
+        nav = await self.nav_status()
+        if nav is not None and nav is not self.last_nav_status:
+            self.emit(NavStatusEvent(nav, self.last_nav_status))
+            self.last_nav_status = nav
+
+        loc = await self.loc_status()
+        if loc is not None and loc is not self.last_loc_status:
+            self.emit(LocStatusEvent(loc, self.last_loc_status))
+            self.last_loc_status = loc
+
+        mapping = await self.mapping_status()
+        if mapping is not None and mapping is not self.last_mapping_status:
+            self.emit(MappingStatusEvent(mapping, self.last_mapping_status))
+            self.last_mapping_status = mapping
 
     # ------------------------------------------------------------ 匹配
 
