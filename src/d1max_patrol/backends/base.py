@@ -14,7 +14,7 @@ import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from d1max_patrol.protocol.nav_frames import AlgErrorItem
 from d1max_patrol.protocol.nav_types import (
@@ -99,42 +99,57 @@ Event = (
 )
 
 
-# --------------------------------------------------------------------- 抽象
+# --------------------------------------------------------------------- 事件分发
 
 
-class NavBackend(ABC):
-    """一台可导航设备。
+_E = TypeVar("_E")
 
-    订阅模型: 每个消费者拿一条自己的无界队列,互不抢事件。队列无界是刻意的
-    —— 广播端绝不能因为某个慢消费者而卡住状态轮询。
+
+class EventEmitter(Generic[_E]):
+    """一对多的事件分发。
+
+    每个消费者拿一条自己的无界队列,互不抢事件。队列无界是刻意的 ——
+    广播端绝不能因为某个慢消费者而卡住状态轮询。
+
+    子类若自定义 `__init__`,**必须**调用 `super().__init__()`,否则
+    `_subscribers` 不存在,第一次 `subscribe()` 就 AttributeError。
     """
 
     def __init__(self) -> None:
-        self._subscribers: list[asyncio.Queue[Event]] = []
+        self._subscribers: list[asyncio.Queue[_E]] = []
 
-    # ------------------------------------------------------------ 事件分发
-
-    def subscribe(self) -> asyncio.Queue[Event]:
-        queue: asyncio.Queue[Event] = asyncio.Queue()
+    def subscribe(self) -> asyncio.Queue[_E]:
+        queue: asyncio.Queue[_E] = asyncio.Queue()
         self._subscribers.append(queue)
         return queue
 
-    def unsubscribe(self, queue: asyncio.Queue[Event]) -> None:
+    def unsubscribe(self, queue: asyncio.Queue[_E]) -> None:
         with contextlib.suppress(ValueError):
             self._subscribers.remove(queue)
 
     @contextlib.contextmanager
-    def subscription(self) -> Iterator[asyncio.Queue[Event]]:
+    def subscription(self) -> Iterator[asyncio.Queue[_E]]:
         queue = self.subscribe()
         try:
             yield queue
         finally:
             self.unsubscribe(queue)
 
-    def emit(self, event: Event) -> None:
+    def emit(self, event: _E) -> None:
         """向所有订阅者广播。同步、不阻塞、不抛错。"""
         for queue in list(self._subscribers):
             queue.put_nowait(event)
+
+
+# --------------------------------------------------------------------- 抽象
+
+
+class NavBackend(EventEmitter[Event], ABC):
+    """一台可导航设备。
+
+    订阅模型: 每个消费者拿一条自己的无界队列,互不抢事件。队列无界是刻意的
+    —— 广播端绝不能因为某个慢消费者而卡住状态轮询。
+    """
 
     async def wait_nav_terminal(
         self, timeout_s: float,
@@ -274,3 +289,129 @@ class NavBackend(ABC):
     async def set_speed(self, x: float, y: float | None = None,
                         z: float | None = None) -> dict[str, float]:
         """设置速度,返回设备回报的生效值(可能补齐了未传的分量)。"""
+
+
+# ------------------------------------------------------------------ 设备端口
+
+
+class DeviceBackendError(Exception):
+    """本体动作或遥测相关错误。"""
+
+
+@dataclass(frozen=True)
+class BatteryEvent:
+    #: 电量百分比,量纲 0-100(与 DeviceBackend.battery 一致,非 0-1 的小数)。
+    percent: float
+    charging: bool = False
+
+
+@dataclass(frozen=True)
+class FaultEvent:
+    items: tuple[str, ...]
+    fatal: bool = False
+
+
+@dataclass(frozen=True)
+class ControlLostEvent:
+    """控制权被别人拿走了。见规范 §5.3 —— 拿不到控制权就不许下动作指令。"""
+
+    reason: str
+
+
+@dataclass(frozen=True)
+class DevicePoseEvent:
+    pose: Pose
+
+
+DeviceEvent = BatteryEvent | FaultEvent | ControlLostEvent | DevicePoseEvent
+
+
+class DeviceBackend(EventEmitter[DeviceEvent], ABC):
+    """本体动作与遥测。
+
+    本卷不实现 —— 它要靠 C++ 旁路进程(第 2 卷)。这里先把词汇定死,
+    免得第 2 卷写着写着又发明一套名字。
+
+    真理源规则(规范 §3.4): 导航进展以 NavBackend 为准,本端口的遥测
+    只作交叉校验与安全兜底。两边不一致时停车记异常,不做猜测性推断。
+    """
+
+    @abstractmethod
+    async def connect(self) -> None: ...
+
+    @abstractmethod
+    async def close(self) -> None: ...
+
+    @abstractmethod
+    async def acquire_control(self) -> None:
+        """申请控制权。拿不到时抛 DeviceBackendError。"""
+
+    @abstractmethod
+    async def release_control(self) -> None: ...
+
+    @abstractmethod
+    async def has_control(self) -> bool: ...
+
+    @abstractmethod
+    async def stand(self) -> None: ...
+
+    @abstractmethod
+    async def lie(self) -> None: ...
+
+    @abstractmethod
+    async def set_light(self, on: bool) -> None: ...
+
+    @abstractmethod
+    async def set_gimbal(self, pitch: float, yaw: float) -> None:
+        # 假设(待真机验证): 云台角度单位取 rad。厂商文档未给单位,常见做法
+        # 是度数,接真机时第一件事就是确认这个。
+        """云台角度,单位 rad。"""
+
+    @abstractmethod
+    async def take_photo(self) -> Frame:
+        # 假设(待真机验证): 拍照直接回图像字节。若真机只回一个文件路径或
+        # 一个 URL,这个签名要改成回路径,由上层再去取。
+        """用机身相机拍一张。MediaSource 的备用取图路径。"""
+
+    @abstractmethod
+    async def battery(self) -> float:
+        # 假设(待真机验证): 量纲取 0-100 的百分数,不是 0-1 的小数。
+        """当前电量百分比 (0-100)。"""
+
+
+# ------------------------------------------------------------------ 取图端口
+
+
+class MediaError(Exception):
+    """取图失败。"""
+
+
+@dataclass(frozen=True)
+class Frame:
+    """一帧图像。"""
+
+    data: bytes
+    mime: str
+    captured_at_ms: int
+
+
+class MediaSource(ABC):
+    """到点取图。
+
+    本卷不实现。主路径是 RTSP 抽帧,备用路径是 DeviceBackend.take_photo。
+    不继承 EventEmitter —— 取图是请求式的,没有事件流。
+    """
+
+    @abstractmethod
+    async def open(self) -> None: ...
+
+    @abstractmethod
+    async def close(self) -> None: ...
+
+    @abstractmethod
+    async def grab(self) -> Frame:
+        """取一帧。取不到时抛 MediaError。"""
+
+    @abstractmethod
+    async def healthy(self) -> bool:
+        """流是否还活着。用于巡检前的预检。"""
