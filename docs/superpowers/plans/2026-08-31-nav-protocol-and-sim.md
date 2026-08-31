@@ -3709,7 +3709,7 @@ from d1max_patrol.protocol.nav_types import (
     Pose,
     Waypoint,
 )
-from d1max_sim.nav_server import CONTROL_PATH, SimNavServer
+from d1max_sim.nav_server import SimNavServer
 
 
 @pytest.fixture
