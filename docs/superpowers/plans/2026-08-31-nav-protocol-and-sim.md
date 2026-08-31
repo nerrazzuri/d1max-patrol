@@ -2915,6 +2915,7 @@ def test_栅格地图结构():
     assert grid["info"]["resolution"] == 0.05
     assert len(grid["data"]) == 400
     assert set(grid["info"]["origin"]) == {"position", "orientation"}
+    assert grid["info"]["map_load_time"] == {"sec": 0, "nanosec": 0}
 
 
 def test_栅格地图取不存在的地图报错():
@@ -2978,6 +2979,16 @@ def test_删除路径():
     s.remove_path("不存在", "p1")
 
 
+def test_取路径返回的字典不会写回存储():
+    s = MapStore()
+    s.create_map("m1")
+    s.set_path("m1", "p1", [_wp("a", 0.0, 0.0)])
+    got = s.get_paths("m1")
+    got["p_injected"] = []
+    assert "p_injected" not in s.paths["m1"]
+    assert list(s.get_paths("m1")) == ["p1"]
+
+
 def test_存档与读档往返(tmp_path):
     s = MapStore()
     s.create_map("m1")
@@ -3008,6 +3019,14 @@ def test_读档不存在的文件不报错(tmp_path):
     s = MapStore()
     s.load(tmp_path / "nope.json")
     assert s.map_ids() == []
+
+
+def test_读档格式错误报_StoreError(tmp_path):
+    s = MapStore()
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("not json at all", encoding="utf-8")
+    with pytest.raises(StoreError, match="读档失败"):
+        s.load(bad_file)
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -3037,6 +3056,10 @@ from typing import Any
 
 from d1max_patrol.protocol.nav_types import Waypoint
 
+# 假设(待真机验证): 新建空白地图的 id 编号规则为 map_1, map_2, ...
+# 供应商文档 §1.5 的示例使用 map_id_1/map_id_2，且无"新建空白地图"的接口，
+# 实际设备保存完成的 SLAM 会话后分配什么 id 未知。须在真机上运行建图会话、
+# 保存后调用 get_all_map，记录设备分配的实际 id。
 _AUTO_NAME = re.compile(r"^map_(\d+)$")
 
 
@@ -3046,9 +3069,16 @@ class StoreError(Exception):
 
 @dataclass
 class MapRecord:
-    """一张占用栅格地图。尺寸刻意小,避免测试里搬运大数组。"""
+    """一张占用栅格地图。
+
+    宽高默认值为仿真便利设定，不代表实际设备能力。实际设备的地图尺寸由 SLAM 结果决定。
+    """
 
     map_id: str
+    # 假设(待真机验证): 默认网格尺寸为 20×20，数据全零。供应商文档 §1.4 的示例为
+    # 1000×1000 地图(约百万整数、数 MB JSON)，实际 get_pgm_map 响应可能远大于仿真器。
+    # 须在真机验证：缓冲区大小、响应超时、网络开销是否能应对真实负载。所有零数据是
+    # 仿真器便利(设备无障碍物，路径规划用运动学直线逼近)，与 SLAM 产出的混合值不同。
     width: int = 20
     height: int = 20
     resolution: float = 0.05
@@ -3061,6 +3091,7 @@ class MapRecord:
         return {
             "header": {"frame_id": "map", "stamp": {"sec": 0, "nanosec": 0}},
             "info": {
+                "map_load_time": {"sec": 0, "nanosec": 0},
                 "resolution": self.resolution,
                 "width": self.width,
                 "height": self.height,
@@ -3149,7 +3180,9 @@ class MapStore:
 
     def get_paths(self, map_id: str) -> dict[str, list[Waypoint]]:
         self._require(map_id)
-        return self.paths.setdefault(map_id, {})
+        # 返回映射的浅拷贝:调用方增删键不会影响存储。值(list[Waypoint])仍共享,
+        # 与公开的 paths 属性同级别 —— Waypoint 本身不可变。
+        return dict(self.paths.get(map_id, {}))
 
     def remove_path(self, map_id: str, path_id: str) -> None:
         """删不存在的静默返回 —— 与厂商批量删除的宽松语义一致。"""
@@ -3194,16 +3227,19 @@ class MapStore:
         p = Path(path)
         if not p.is_file():
             return
-        payload = json.loads(p.read_text(encoding="utf-8"))
-        self.maps = {
-            entry["map_id"]: MapRecord(**entry) for entry in payload.get("maps", [])
-        }
-        self.paths = {
-            map_id: {
-                pid: [Waypoint.from_wire(w) for w in wire] for pid, wire in paths.items()
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+            self.maps = {
+                entry["map_id"]: MapRecord(**entry) for entry in payload.get("maps", [])
             }
-            for map_id, paths in payload.get("paths", {}).items()
-        }
+            self.paths = {
+                map_id: {
+                    pid: [Waypoint.from_wire(w) for w in wire] for pid, wire in paths.items()
+                }
+                for map_id, paths in payload.get("paths", {}).items()
+            }
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            raise StoreError(f"读档失败({p})：{e}") from e
         for map_id in self.maps:
             self.paths.setdefault(map_id, {})
 ```
@@ -7989,6 +8025,8 @@ git commit -m "test: 厂商文档 JSON 样例作为解析器 golden fixture"
 | 12 | 导航初始化耗时 `init_delay_s`≈0.3s(StandBy→Initializing→Active) | `d1max_sim/nav_state.py` | 待测 | |
 | 13 | 地图加载 0.2s、初始定位 0.3s(`load_delay_s` / `init_delay_s`) | `d1max_sim/nav_state.py` | 待测 | |
 | 14 | 建图三阶段耗时:传感器 0.2s、就绪 0.2s、保存 0.3s | `d1max_sim/nav_state.py` | 待测 | |
+| 15 | 真机保存一次建图会话后,设备给新地图分配的 id 长什么样(文档样例是 `map_id_1`,仿真器发 `map_1`) | `d1max_sim/store.py` `_AUTO_NAME` | 待测 | 跑一次建图→保存→`get_all_map`,抄回实际 id |
+| 16 | `get_pgm_map` 真实响应体量:文档样例地图 1000×1000(约百万整数、数 MB JSON),仿真器只发 20×20。缓冲区、响应超时、网络开销扛不扛得住 | `d1max_sim/store.py` `MapRecord` | 待测 | |
 
 核对方法:`d1max --url ws://192.168.144.100:10010 -v <子命令>`,把原始报文抄进本表。
 ```
