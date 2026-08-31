@@ -5268,6 +5268,7 @@ import asyncio
 import contextlib
 import itertools
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -5283,6 +5284,13 @@ from d1max_patrol.protocol.nav_frames import (
     parse_message,
 )
 from d1max_patrol.protocol.nav_requests import PUSH_ONLY_FUNCS, NavRequest
+from d1max_patrol.protocol.nav_types import (
+    LocStatus,
+    MappingStatus,
+    NavStatus,
+    Pose,
+    Waypoint,
+)
 
 from .base import (
     AlgErrorEvent,
@@ -5471,7 +5479,82 @@ class VendorNavBackend(NavBackend):
         if not response.ok:
             raise NavRequestError(req.req_func, response.msg or "设备未给出原因")
         return response.data
+
+    # ---------------------------------------------- Task 13 之前的占位块
+    # `NavBackend` 有 22 个抽象方法,本任务只落了 `connect` / `close`。
+    # ABC 只要还剩一个抽象方法没实现就不许实例化,而下面的测试要真的
+    # `VendorNavBackend(config)` —— 所以这里先把余下 20 个占位掉。
+    # **Task 13 的工作就是把这一整块换成真实现**,不是在它后面追加。
+
+    async def nav_status(self) -> NavStatus | None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def loc_status(self) -> LocStatus | None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def mapping_status(self) -> MappingStatus | None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def goto(self, pose: Pose) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def pause(self) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def resume(self) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def stop(self) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def load_map(self, map_id: str) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def list_maps(self) -> list[str]:
+        raise NotImplementedError("Task 13 实现")
+
+    async def rename_map(self, old_id: str, new_id: str) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def remove_maps(self, map_ids: Sequence[str]) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def get_map_grid(self, map_id: str) -> dict[str, Any]:
+        raise NotImplementedError("Task 13 实现")
+
+    async def list_paths(self, map_id: str) -> dict[str, list[Waypoint]]:
+        raise NotImplementedError("Task 13 实现")
+
+    async def save_path(
+        self, map_id: str, path_id: str, waypoints: Sequence[Waypoint],
+    ) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def remove_path(self, map_id: str, path_id: str) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def reset_localization(self) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def start_mapping(self) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def stop_mapping(self) -> None:
+        raise NotImplementedError("Task 13 实现")
+
+    async def get_speed(self) -> dict[str, float]:
+        raise NotImplementedError("Task 13 实现")
+
+    async def set_speed(
+        self, x: float, y: float | None = None, z: float | None = None,
+    ) -> dict[str, float]:
+        raise NotImplementedError("Task 13 实现")
 ```
+
+**为什么有那个占位块:** `NavBackend` 是 ABC,只要 `__abstractmethods__` 非空就不许实例化。
+本任务的 fixture 要真的 `VendorNavBackend(NavConfig(...))`,所以余下 20 个抽象方法必须先
+占位,否则整个测试文件在 fixture 就 `TypeError: Can't instantiate abstract class`。
+占位块是脚手架,不是实现 —— Task 13 会整块换掉。**不要给占位方法写测试。**
 
 **关于嵌套外壳（地雷 1）的剥离位置：** Task 3 的 `parse_message` 已经统一剥掉了 `AppReponseObjectData` 外层，所以 `request()` 直接返回 `response.data` 即可。**不要在这里再剥一次**——两处都剥会把速度字典变成 `KeyError`。执行本任务时先打开 `protocol/nav_frames.py` 确认 `parse_message` 的这段逻辑存在，再往下写。
 
@@ -5493,12 +5576,12 @@ git commit -m "feat: 厂商导航后端的连接、读循环与两级响应匹�
 把 `NavBackend` 的抽象方法逐个落到 `request()` 上。这一层的全部价值在于**翻译**：厂商的数组参数、字符串状态、拼错的键名，到这里为止；再往上只有 `Waypoint`、`NavStatus`、`Pose`。
 
 **Files:**
-- Modify: `src/d1max_patrol/backends/vendor_nav.py`（在 Task 12 的 `request()` 之后追加）
+- Modify: `src/d1max_patrol/backends/vendor_nav.py`（**替换掉 Task 12 留下的占位块**——那 20 个 `raise NotImplementedError` 的方法，逐个换成真实现；不是在它后面追加，写完之后文件里不应再有 `NotImplementedError`）
 - Test: `tests/backends/test_vendor_capabilities.py`
 
 **Interfaces:**
 - Consumes: Task 12 的 `VendorNavBackend.request()`；`protocol.nav_requests` 的全部构造函数与 `parse_paths_payload` / `parse_map_ids`；`protocol.nav_types.parse_enum`
-- Produces: `VendorNavBackend` 实现 `NavBackend` 的全部抽象方法（签名见 Task 11），实例化不再抛 `TypeError`
+- Produces: `VendorNavBackend` 实现 `NavBackend` 的全部抽象方法（签名见 Task 11 与 Task 12 的占位块，逐字一致）；文件里不再有 `NotImplementedError`
 
 **状态方法的返回约定：** `nav_status()` / `loc_status()` / `mapping_status()` 拿到未知字符串时返回 `None` 并记 warning，不抛错。固件升级新增一个枚举值不应该让整条巡检线挂掉。
 
