@@ -15,7 +15,6 @@ from d1max_patrol.backends.base import (
     NavTimeoutError,
 )
 from d1max_patrol.protocol.nav_types import (
-    NAV_TERMINAL,
     LocStatus,
     MappingStatus,
     NavStatus,
@@ -141,11 +140,13 @@ async def test_定位与建图的状态变化也产生事件(nav_backend):
 
 async def test_导航到点走到成功(ready_backend):
     backend, _ = ready_backend
-    waiter = asyncio.create_task(backend.wait_nav_terminal(timeout_s=20.0))
-    await asyncio.sleep(0.05)
-    await backend.goto(Pose.from_xy_yaw(1.0, 0.0, 0.0))
-    assert await waiter is NavStatus.SUCCEED
-    assert await backend.nav_status() in NAV_TERMINAL | {NavStatus.STANDBY}
+    # 无竞态写法(见 NavBackend.wait_nav_terminal 文档):先订阅,订阅与下发
+    # 之间没有 await,不存在让出点,终态不会在两步之间被漏掉。
+    with backend.subscription() as q:
+        await backend.goto(Pose.from_xy_yaw(1.0, 0.0, 0.0))
+        status = await backend.wait_nav_terminal(20.0, queue=q)
+    assert status is NavStatus.SUCCEED
+    assert await backend.nav_status() in {NavStatus.SUCCEED, NavStatus.STANDBY}
 
 
 async def test_连续走多个点(ready_backend):
@@ -155,20 +156,22 @@ async def test_连续走多个点(ready_backend):
                    Pose.from_xy_yaw(1.0, 1.0, 1.5708),
                    Pose.from_xy_yaw(0.0, 0.0, 3.1416)):
         await _wait_status(backend, NavStatus.STANDBY)
-        waiter = asyncio.create_task(backend.wait_nav_terminal(timeout_s=20.0))
-        await asyncio.sleep(0.05)
-        await backend.goto(target)
-        assert await waiter is NavStatus.SUCCEED
+        with backend.subscription() as q:
+            await backend.goto(target)
+            status = await backend.wait_nav_terminal(20.0, queue=q)
+        assert status is NavStatus.SUCCEED
 
 
 async def test_停止导航进入取消(ready_backend):
     backend, _ = ready_backend
-    waiter = asyncio.create_task(backend.wait_nav_terminal(timeout_s=20.0))
-    await asyncio.sleep(0.05)
-    await backend.goto(Pose.from_xy_yaw(9.0, 0.0, 0.0))
-    await asyncio.sleep(0.2)
-    await backend.stop()
-    assert await waiter is NavStatus.CANCELLED
+    with backend.subscription() as q:
+        await backend.goto(Pose.from_xy_yaw(9.0, 0.0, 0.0))
+        # 观察窗口,不是等事件:让它先真的跑起来(进入 Active、迈开步子),
+        # 免得测的只是"还没起步就被叫停"这种平凡情形。
+        await asyncio.sleep(0.2)
+        await backend.stop()
+        status = await backend.wait_nav_terminal(20.0, queue=q)
+    assert status is NavStatus.CANCELLED
 
 
 async def test_暂停与继续(ready_backend):
@@ -232,6 +235,8 @@ async def test_退订后不再收事件(ready_backend):
     while not queue.empty():
         queue.get_nowait()
     await backend.goto(Pose.from_xy_yaw(1.0, 0.0, 0.0))
+    # 负向观察窗口:等的不是某个事件,是"这段时间里退订后的队列始终不会
+    # 冒出东西"——没有正向信号可等,只能靠固定时长兜底。
     await asyncio.sleep(0.5)
     assert queue.empty()
 
@@ -240,6 +245,7 @@ async def test_退订后不再收事件(ready_backend):
 
 
 async def test_关闭后不再连接(nav_backend):
+    assert nav_backend.connected is True
     await nav_backend.close()
     assert nav_backend.connected is False
     await nav_backend.close()          # 可重复调用
