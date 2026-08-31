@@ -1,8 +1,19 @@
-"""状态轮询、断链与重连。第四个地雷:设备没有状态推送通道。"""
+"""状态轮询、断链与重连。第四个地雷:设备没有状态推送通道。
+
+时序约定(评审 C1):凡是"注入之后要做后续动作"的地方,一律**等真实信号**
+(`_drain_until` 等到 `BackendDisconnected`、`_wait_until` 等到某个可观测量
+成立),不要 `await asyncio.sleep(0.2)` 赌它已经发生了 —— 断链注入不是同步
+生效的,生效链条是 tick 循环下一拍 → `_apply_faults()` → 独立任务里关连接 →
+客户端读循环退出 → `_on_link_lost()`,没有任何东西保证它在写死的零点几秒内
+走完。只有**负向断言的观察窗口**("再等 0.8s 看它会不会发生")才保留固定
+sleep,那种 sleep 是断言的一部分。
+"""
 
 import asyncio
+import contextlib
 
 import pytest
+from websockets.asyncio.server import serve
 
 from d1max_patrol.backends.base import (
     BackendDisconnected,
@@ -10,6 +21,7 @@ from d1max_patrol.backends.base import (
     LocStatusEvent,
     MappingStatusEvent,
     NavBackendError,
+    NavConnectionError,
     NavStatusEvent,
     NavTimeoutError,
 )
@@ -25,6 +37,10 @@ from d1max_sim.nav_server import SimNavServer
 
 FAST = dict(request_timeout_s=3.0, status_poll_interval_s=0.05,
             connect_timeout_s=2.0, reconnect_min_s=0.05, reconnect_max_s=0.2)
+
+#: 轮询周期大到一次都发不出来(`_poll_loop` 的 sleep 在循环体第一句)。
+#: 给那些只想单独测某条路径、不希望轮询器插进来搅局的用例。
+_POLLER_OFF = 3600.0
 
 
 @pytest.fixture
@@ -56,6 +72,32 @@ async def _drain_until(queue, predicate, timeout_s: float = 10.0):
     return await asyncio.wait_for(loop(), timeout=timeout_s)
 
 
+async def _collect_until(queue, predicate, timeout_s: float = 15.0) -> list:
+    """收到 predicate 命中为止,返回**这期间收到的全部事件**(含命中那条)。
+
+    `_drain_until` 会把不匹配的事件丢掉,数不出"中间夹了几条"。要断言
+    "一次断链只发一条 BackendDisconnected",就得把中间那些也留下来。
+    """
+    received: list = []
+
+    async def loop():
+        while True:
+            event = await queue.get()
+            received.append(event)
+            if predicate(event):
+                return
+    await asyncio.wait_for(loop(), timeout=timeout_s)
+    return received
+
+
+async def _wait_until(predicate, timeout_s: float = 10.0, tick_s: float = 0.01) -> None:
+    """轮询等一个条件成立。用于没有事件可等的场合(服务端在线连接数之类)。"""
+    async def loop():
+        while not predicate():
+            await asyncio.sleep(tick_s)
+    await asyncio.wait_for(loop(), timeout=timeout_s)
+
+
 async def _ready(backend) -> str:
     await backend.start_mapping()
     while await backend.mapping_status() is not MappingStatus.MAPPING_RUNNING:
@@ -78,9 +120,17 @@ async def test_轮询器开局就广播当前状态(backend):
 
 
 async def test_状态不变时不重复发事件(backend):
-    await asyncio.sleep(0.3)          # 让轮询器跑好几轮
+    # 开局那一轮会连发 Nav/Loc/Mapping 三条 previous=None 的事件。必须先把这
+    # 三条收干净再断言"不再发" —— 原来靠 `sleep(0.3)` 赌它们已经发完,整机
+    # 负载下它们落在 0.3s 之后,新订阅者就正好接住(评审实测:把轮询周期调到
+    # 0.35 即确定性变红)。
+    需要 = {NavStatusEvent, LocStatusEvent, MappingStatusEvent}
+    with backend.subscription() as 预热:
+        收到 = set()
+        while not 需要 <= 收到:
+            收到.add(type(await asyncio.wait_for(预热.get(), 10.0)))
     q = backend.subscribe()
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.3)          # 让轮询器再跑好几轮 —— 这段是断言的一部分
     assert q.empty()
 
 
@@ -111,19 +161,19 @@ async def test_定位与建图状态也有事件(backend):
 
 async def test_等待导航终态可用(backend):
     await _ready(backend)
-    waiter = asyncio.create_task(backend.wait_nav_terminal(timeout_s=15.0))
-    await asyncio.sleep(0.05)         # 确保订阅已建立再下发
-    await backend.goto(Pose.from_xy_yaw(1.0, 0.0, 0.0))
-    assert await waiter is NavStatus.SUCCEED
+    # base.py 文档化的无竞态写法:先订阅、再下发、把队列交给 wait_nav_terminal,
+    # 订阅与下发之间没有 await,不存在"终态在这两步之间就推过来了"的窗口。
+    with backend.subscription() as q:
+        await backend.goto(Pose.from_xy_yaw(1.0, 0.0, 0.0))
+        assert await backend.wait_nav_terminal(timeout_s=15.0, queue=q) is NavStatus.SUCCEED
 
 
 async def test_导航失败也是终态(sim, backend):
     await _ready(backend)
     sim.faults.fail_next_nav = True
-    waiter = asyncio.create_task(backend.wait_nav_terminal(timeout_s=15.0))
-    await asyncio.sleep(0.05)
-    await backend.goto(Pose.from_xy_yaw(1.0, 0.0, 0.0))
-    assert await waiter is NavStatus.FAILED
+    with backend.subscription() as q:
+        await backend.goto(Pose.from_xy_yaw(1.0, 0.0, 0.0))
+        assert await backend.wait_nav_terminal(timeout_s=15.0, queue=q) is NavStatus.FAILED
 
 
 async def test_断链发出断开事件(sim, backend):
@@ -133,7 +183,28 @@ async def test_断链发出断开事件(sim, backend):
     assert event.reason
 
 
+async def test_一次断链只发一条断开事件(sim, backend):
+    """I2 / M3: 事件契约是"每次链路丢失一条",不是"每次重连失败一条"。
+
+    断链窗口(2.0s)远长于重连退避(0.05~0.2s),期间会有好几次重连尝试:
+    `_open_link()` 每次都把 `_ws` 设上、随即被仿真器以 1012 关掉,读循环退出
+    再次走进 `_on_link_lost`。老守卫在这段窗口里形同虚设(评审实测 12 条)。
+    """
+    q = backend.subscribe()
+    sim.faults.disconnect_seconds = 2.0
+    事件 = await _collect_until(q, lambda e: isinstance(e, BackendReconnected),
+                                timeout_s=30.0)
+    断开 = [e for e in 事件 if isinstance(e, BackendDisconnected)]
+    assert len(断开) == 1, f"一次断链只应有一条 BackendDisconnected,实收 {len(断开)} 条"
+    # 确认这段窗口里确实反复重试过 —— 否则上面那条断言是空过的
+    assert backend.reconnect_attempts >= 2
+
+
 async def test_自动重连并重新对齐状态(sim, backend):
+    # I1: 先等轮询器把 last_nav_status 钉成 STANDBY。断链若发生在首轮轮询之前,
+    # 三个 last_* 本来就是 None,"重连后清缓存"这条规则清不清都一样,这条测试
+    # 就守不住它了(评审 MUT2:删掉那三行清缓存,无人变红)。
+    await _wait_until(lambda: backend.last_nav_status is not None)
     q = backend.subscribe()
     sim.faults.disconnect_seconds = 0.3
     await _drain_until(q, lambda e: isinstance(e, BackendDisconnected))
@@ -149,32 +220,45 @@ async def test_自动重连并重新对齐状态(sim, backend):
 
 
 async def test_断链期间的请求抛错而不是永久挂起(sim, backend):
+    q = backend.subscribe()
     sim.faults.disconnect_seconds = 1.0
-    await asyncio.sleep(0.3)
+    await _drain_until(q, lambda e: isinstance(e, BackendDisconnected))
     with pytest.raises(NavBackendError):
         await backend.nav_status()
 
 
 async def test_等待重连(sim, backend):
+    q = backend.subscribe()
     sim.faults.disconnect_seconds = 0.3
-    await asyncio.sleep(0.2)
+    await _drain_until(q, lambda e: isinstance(e, BackendDisconnected))
     await backend.wait_connected(timeout_s=15.0)
     assert backend.connected is True
 
 
 async def test_等待重连超时(sim, backend):
+    q = backend.subscribe()
     sim.faults.disconnect_seconds = 30.0
-    await asyncio.sleep(0.2)
+    # 等到断链真的被登记再开始等重连:此刻静默窗口还剩 ~30s,重连必然还在失败,
+    # NavTimeoutError 是确定的(原来先 sleep(0.2) 再等,断链没登记就
+    # wait_connected 立刻返回 → DID NOT RAISE)。
+    await _drain_until(q, lambda e: isinstance(e, BackendDisconnected))
     with pytest.raises(NavTimeoutError):
         await backend.wait_connected(timeout_s=0.5)
 
 
 async def test_关闭时不再重连(sim, backend):
+    """I3: close() 之后重连必须彻底停下。
+
+    原来先 sleep(0.1) 再 close():断链常常还没发生,`reconnect_attempts` 前后
+    自然相等,这条测试静默退化成空测;偶尔时序对上了就抓出真 bug
+    (`assert 13 == 2`)。改成等真信号之后,每一次跑都在真正验证。
+    """
+    q = backend.subscribe()
     sim.faults.disconnect_seconds = 0.3
-    await asyncio.sleep(0.1)
+    await _drain_until(q, lambda e: isinstance(e, BackendDisconnected))
     await backend.close()
     before = backend.reconnect_attempts
-    await asyncio.sleep(0.8)
+    await asyncio.sleep(0.8)          # 负向断言的观察窗口:真要重连,早该重连了
     assert backend.reconnect_attempts == before
     assert backend.connected is False
 
@@ -186,17 +270,228 @@ async def test_关掉自动重连时只发断开事件(sim):
         q = b.subscribe()
         sim.faults.disconnect_seconds = 0.2
         await _drain_until(q, lambda e: isinstance(e, BackendDisconnected))
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.8)      # 负向断言的观察窗口
         assert b.connected is False
         assert b.reconnect_attempts == 0
     finally:
         await b.close()
 
 
-async def test_轮询遇到超时不会杀死轮询器(sim, backend):
-    sim.faults.response_delay_s = 4.0
-    await asyncio.sleep(0.5)
-    sim.faults.response_delay_s = 0.0
+async def test_轮询遇到超时不会杀死轮询器(sim):
+    # 单开一个 request_timeout_s 很短的后端,好让"轮询这一轮超时"这件事快速、
+    # 确定地发生。仿真器的 response_delay_s 只延迟一半的响应(全局奇偶计数器),
+    # 所以要等的是一个确定信号而不是一段时长:迟到的响应回来时挂起表里已经
+    # 没人认领了,dropped_frames 自增 —— 那就是"这一轮确实以 NavTimeoutError
+    # 收场"的铁证。
+    b = VendorNavBackend(NavConfig(url=sim.url, **dict(FAST, request_timeout_s=0.3)))
+    await b.connect()
+    try:
+        sim.faults.response_delay_s = 1.0
+        await _wait_until(lambda: b.dropped_frames > 0, timeout_s=15.0)
+        sim.faults.response_delay_s = 0.0
+        q = b.subscribe()
+        await b.start_mapping()
+        # 轮询器还活着 —— 状态重新流动起来
+        await _drain_until(q, lambda e: isinstance(e, MappingStatusEvent), timeout_s=10.0)
+    finally:
+        sim.faults.response_delay_s = 0.0
+        await b.close()
+
+
+async def test_并发connect只建一条链路(sim):
+    """M2: `connect()` 里的 `_connect_lock`(Task 12 评审遗留修复)的守卫。
+
+    去掉那把锁,并发 5 次 `connect()` 会双双越过 `if self._ws is not None`
+    守卫,漏掉几个 socket 加几个读循环任务(评审实测:服务端在线 3 个,
+    `close()` 之后仍是 3 个,全泄漏)。
+    """
+    b = VendorNavBackend(NavConfig(url=sim.url, **FAST))
+    try:
+        await asyncio.gather(*[b.connect() for _ in range(5)])
+        await _wait_until(lambda: len(sim._clients) >= 1)
+        await asyncio.sleep(0.2)      # 负向断言的观察窗口:再等等看会不会冒出第二条
+        assert len(sim._clients) == 1
+    finally:
+        await b.close()
+        await _wait_until(lambda: len(sim._clients) == 0)
+
+
+async def test_建链途中关闭不留下链路(sim):
+    """I3: `close()` 必须与在飞的 `connect()` 互斥。
+
+    不互斥的话,`close()` 在 `await` 上让出的空档里,一个正卡在握手上的
+    `connect()` 会在 `close()` 返回**之后**才把 `_ws` 与读循环装回去 —— 建出
+    一条 `close()` 再也不追踪的链路(评审 closerace.py 实测:close() 之后
+    `connected=True`、读循环任务还活着、服务端在线客户端数 = 1,全泄漏)。
+    """
+    b = VendorNavBackend(NavConfig(url=sim.url, **FAST))
+    t = asyncio.create_task(b.connect())
+    await asyncio.sleep(0)        # 让 connect() 跑到握手的 await 上
+    await b.close()               # 用户在建链途中关闭
+    await t
+    assert b.connected is False
+    assert b._reader is None, "读循环任务泄漏了:close() 之后没人再取消它"
+    assert b._poller is None
+    await _wait_until(lambda: len(sim._clients) == 0)
+
+
+class _只握手不应答的桩服务端:
+    """第一条连接收到请求就关掉,之后的连接照单全收但一个字节都不回。
+
+    用来让重连探针以 **NavTimeoutError** 失败(仿真器的静默窗口只会让它以
+    NavConnectionError 失败)。`_reconnect_loop` 的宽捕获 `except
+    NavBackendError` 正是为这种失败准备的:收窄成 `except NavConnectionError`
+    的话,重连循环会带着异常静默死掉,从此再也不重连。
+    """
+
+    def __init__(self) -> None:
+        self._server = None
+        self.port = 0
+        self.connections = 0
+
+    @property
+    def url(self) -> str:
+        return f"ws://127.0.0.1:{self.port}"
+
+    async def start(self) -> None:
+        self._server = await serve(self._handle, "127.0.0.1", 0)
+        self.port = next(iter(self._server.sockets)).getsockname()[1]
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+
+    async def _handle(self, ws) -> None:
+        self.connections += 1
+        with contextlib.suppress(Exception):
+            if self.connections == 1:
+                await ws.recv()       # 等客户端发第一条请求,再制造一次断链
+                await ws.close(code=1012, reason="制造一次断链")
+                return
+            async for _ in ws:        # 之后:收下请求,永不应答
+                pass
+
+
+@pytest.fixture
+async def 哑服务端():
+    server = _只握手不应答的桩服务端()
+    await server.start()
+    try:
+        yield server
+    finally:
+        await server.stop()
+
+
+async def test_探针超时不会杀死重连循环(哑服务端):
+    """M1: `_reconnect_loop` 的宽捕获。"""
+    b = VendorNavBackend(NavConfig(
+        url=哑服务端.url, request_timeout_s=0.3, connect_timeout_s=2.0,
+        status_poll_interval_s=_POLLER_OFF, reconnect_min_s=0.05, reconnect_max_s=0.1))
+    await b.connect()
+    try:
+        # 这条请求会被桩服务端用"收下就关连接"回应,于是登记一次断链、起重连循环
+        with pytest.raises(NavBackendError):
+            await b.nav_status()
+        # 之后每一次重连: 握手成功 → 探针发出去 → 对端永不应答 → NavTimeoutError。
+        # 宽捕获在,重连循环就该一次次接着试。
+        await _wait_until(lambda: b.reconnect_attempts >= 3, timeout_s=10.0)
+        assert b._reconnector is not None      # 重连循环没有被异常掀掉
+    finally:
+        await b.close()
+
+
+class _发送必失败的链路:
+    """替身链路:send 一定失败,close 什么也不做。
+
+    用来单独构造"`ws.send()` 失败"这条路径 —— 真实断链会同时惊动读循环,
+    分不清 `_connected_event` 是被谁清掉的。
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def send(self, _text: str) -> None:
+        raise ConnectionResetError("替身链路:发送必失败")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_发送失败会被登记为断链(sim):
+    """裁定 6: send 失败本身就是链路故障,必须走 `_on_link_lost` 这条统一入口。
+
+    否则 `_connected_event` 不会被清:调用者刚拿到 `NavConnectionError`,回头
+    调 `wait_connected()` 却立刻拿到一个假的"已连接"(评审 C1 的 EVIDENCE-1)。
+    """
+    b = VendorNavBackend(
+        NavConfig(url=sim.url, request_timeout_s=1.0, connect_timeout_s=2.0,
+                  status_poll_interval_s=_POLLER_OFF),
+        auto_reconnect=False)
+    await b.connect()
+    真链路 = b._ws
+    try:
+        await b.wait_connected(timeout_s=1.0)      # 前提:此刻确实是"已连接"
+        b._ws = _发送必失败的链路()
+        with pytest.raises(NavConnectionError):
+            await b.nav_status()
+        assert b.connected is False
+        with pytest.raises(NavTimeoutError):
+            await b.wait_connected(timeout_s=0.2)
+    finally:
+        await b.close()
+        await 真链路.close()
+
+
+class _已废弃的旧链路:
+    """替身:代表一条早已被换掉的连接。只需要能被 close()。"""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_陈旧链路的断链报告不拆当前链路(sim, backend):
+    """重连风暴里,上一次尝试留下的读循环会慢半拍才退出。它那句"断链了"报的是
+    一条早被换掉的连接,绝不能让它把当前这条刚探针通过的新链路当场打死 ——
+    否则会倒着发一条 BackendDisconnected,还得再重连一轮。
+    """
+    当前链路 = backend._ws
     q = backend.subscribe()
-    # 轮询器还活着 —— 状态重新流动起来
-    await _drain_until(q, lambda e: isinstance(e, NavStatusEvent), timeout_s=10.0)
+    旧链路 = _已废弃的旧链路()
+
+    backend._on_link_lost("上一次重连尝试的读循环慢半拍才退出", ws=旧链路)
+
+    assert backend._ws is 当前链路, "陈旧报告把当前链路拆掉了"
+    assert backend.connected is True
+    await asyncio.sleep(0.05)          # 观察窗口:确认没有倒发断开事件
+    事件 = [q.get_nowait() for _ in range(q.qsize())]
+    assert not [e for e in 事件 if isinstance(e, BackendDisconnected)]
+    await _wait_until(lambda: 旧链路.closed)   # 那条旧连接仍然要被关干净
+    assert await backend.nav_status() is not None      # 链路确实还能用
+
+
+async def test_重连循环不被意外异常掀掉(sim, backend):
+    """`_link_down` 置位之后,所有 `_on_link_lost` 一律早退 —— 重连循环是唯一
+    还能把链路救回来的人。它若带着一个非 `NavBackendError` 的异常死掉,后端就
+    永久停在"已断开且无人重连"(实测过的现场:读循环的 AssertionError 顺着
+    `_teardown_link()` 里的 `await reader` 逃出来,40 轮断链注入卡死 3 轮)。
+    """
+    真身 = backend._reconnect_once
+    炸过 = []
+
+    async def 前两次先炸个非导航异常():
+        if len(炸过) < 2:
+            炸过.append(1)
+            raise RuntimeError("重连路径上的意外异常")
+        await 真身()
+
+    backend._reconnect_once = 前两次先炸个非导航异常
+    q = backend.subscribe()
+    sim.faults.disconnect_seconds = 0.3
+    await _drain_until(q, lambda e: isinstance(e, BackendReconnected), timeout_s=15.0)
+    assert len(炸过) == 2, "两次意外异常没有真的发生,这条测试是空过的"
+    assert backend.connected is True

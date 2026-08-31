@@ -93,6 +93,12 @@ class VendorNavBackend(NavBackend):
         self.dropped_frames = 0
 
         self.auto_reconnect = auto_reconnect
+        #: I2: "这条链路已经报过断了"的显式闸门。一次链路丢失只发一条
+        #: BackendDisconnected —— 重连尝试期间读循环会反复走进 _on_link_lost,
+        #: 靠 `_ws` / `_connected_event` 推断"是不是同一次断链"是推不准的。
+        #: 置位: _on_link_lost 首次进入。清位: connect() 建链成功、或
+        #: _reconnect_once() 的探针过了。
+        self._link_down = False
         self._poller: asyncio.Task[None] | None = None
         self._reconnector: asyncio.Task[None] | None = None
         self._connect_lock = asyncio.Lock()
@@ -121,18 +127,28 @@ class VendorNavBackend(NavBackend):
         async with self._connect_lock:
             if self._ws is not None:
                 return
+            # I3: 清 `_closing` 的责任在 connect(),置位的责任在 close(),两者
+            # 都在 `_connect_lock` 之内。这行原来在 _open_link() 里 —— 一个
+            # 建链的低层辅助函数没有资格改生命周期标志: close() 在 await 上
+            # 让出 CPU 的空档里,重连路径的 _open_link() 会把 _closing 悄悄
+            # 复位成 False,于是 close() 之后重连循环照跑不误
+            # (现场: `assert 13 == 2`,见 flake-evidence.txt)。
+            self._closing = False
             await self._open_link()
+            self._link_down = False
             self._connected_event.set()
 
     async def _open_link(self) -> None:
-        """建链 + 起读循环 + 起轮询器。不发任何请求,不碰就绪标志。
+        """建链 + 起读循环 + 起轮询器。不发任何请求,不碰任何生命周期标志。
 
         初次连接刻意不做探针: 探针会多消耗一个 frame_count、并拨动仿真器
         那个全局响应奇偶计数器,而匹配测试正靠奇偶性把延迟注入打在特定
         请求上(见 test_vendor_matching.py 的 test_C1 docstring)。缺陷 19
         真正要防的是"重连把半开链路当成功",初次连接不涉及这个问题。
+
+        `_closing` / `_link_down` / `_connected_event` 一律由调用方
+        (connect() 与 _reconnect_once())负责,见 I3。
         """
-        self._closing = False
         try:
             self._ws = await asyncio.wait_for(
                 connect(self.config.url, open_timeout=None),
@@ -140,7 +156,16 @@ class VendorNavBackend(NavBackend):
             )
         except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as exc:
             raise NavConnectionError(f"连接 {self.config.url} 失败: {exc}") from exc
-        self._reader = asyncio.create_task(self._read_loop())
+        # 把这条连接**显式**交给读循环。原来读循环不收参数,自己回头取
+        # self._ws —— 而 create_task() 只是排期、并不立刻运行:重连风暴里
+        # (轮询器 0.05s 一轮、退避 0.05~0.2s)常有另一条协程赶在读循环真正
+        # 跑起来之前就把 self._ws 摘成 None,读循环开头那句断言于是炸出
+        # AssertionError。后果见 _reconnect_loop 里的说明(会把重连循环整个
+        # 掀掉,后端永久停在"已断开且无人重连")。这里到赋值之间没有 await,
+        # 所以这条断言现在是真的不可能失败。
+        ws = self._ws
+        assert ws is not None
+        self._reader = asyncio.create_task(self._read_loop(ws))
         if self._poller is None:
             self._poller = asyncio.create_task(self._poll_loop())
         log.info("已连接导航设备 %s", self.config.url)
@@ -157,11 +182,23 @@ class VendorNavBackend(NavBackend):
         async with self._connect_lock:
             if self._ws is None:
                 await self._open_link()
+        # 假设(待真机验证): "设备对 get_nav_status 有应答" ⟺ "导航链路可用"。
+        # 厂商文档没有给出链路健康判据,这条探针的判据是我们自己定的。真机要
+        # 确认两件事: (1) 半开连接(TCP 还在、导航服务已死)下设备会不会照样
+        # 应答 get_nav_status —— 若会,这条探针挡不住半开链路,得换成更强的
+        # 判据(带状态一致性校验,或厂商提供的心跳/保活接口);(2) 设备是否
+        # 允许在链路刚建立、其它初始化尚未完成时就收到 get_nav_status。
         try:
             await self.request(R.get_nav_status())
         except NavBackendError:
             await self._teardown_link()
             raise
+        if self._ws is None:
+            # 探针刚过链路就没了(读循环已在 _on_link_lost 里把 _ws 摘掉)。
+            # 此时绝不能宣布重连成功: _link_down 一旦被清掉,而 _on_link_lost
+            # 那次已经按"同一次断链"早退过,就再没有人触发下一轮重连了。
+            raise NavConnectionError("探针通过后链路随即断开")
+        self._link_down = False
         self._connected_event.set()
 
     async def _teardown_link(self) -> None:
@@ -176,33 +213,47 @@ class VendorNavBackend(NavBackend):
             with contextlib.suppress(asyncio.CancelledError):
                 await reader
         if ws is not None:
-            with contextlib.suppress(Exception):
-                await ws.close()
+            await self._safe_close(ws)
         self._fail_pending("探针失败,链路未建立")
 
     async def close(self) -> None:
+        # I3: 先立标志(在锁外),让在飞的重连循环/轮询器尽早看见"要关了";
+        # 拆解本身必须与在飞的 connect() / _reconnect_once() 互斥 —— 否则一个
+        # 正卡在握手 await 上的 connect() 会在 close() 返回之后才把 _ws / 读
+        # 循环装回去,建出一条 close() 再也不追踪的链路(socket 与读循环任务
+        # 双泄漏,评审 closerace.py)。
+        #
+        # 走 `_connect_lock` 不会与 M2(connect() 与 _reconnect_once() 共用该锁
+        # 串行建链)打架,也不会自锁: 锁内唯一的 await 是 _open_link() 的握手,
+        # 有 connect_timeout_s 上限;而被 cancel 的任务即便正卡在这把锁上等,
+        # `Lock.acquire()` 是可取消的,CancelledError 会直接把它掀掉,不会回过
+        # 头来等 close() 释放锁。
         self._closing = True
-        self._connected_event.clear()
-        tasks = [self._reader, self._poller, self._reconnector]
-        self._reader = self._poller = self._reconnector = None
-        for task in tasks:
-            if task is not None:
-                task.cancel()
-        for task in tasks:
-            if task is not None:
-                with contextlib.suppress(asyncio.CancelledError):
+        async with self._connect_lock:
+            self._connected_event.clear()
+            # I3: 必须先 cancel + await,再断引用。`_on_link_lost` 的
+            # `self._reconnector is None` 去重守卫是承重的(评审 MUT8):提前把
+            # 它置成 None,读循环收尾时就看不见在飞的重连循环,于是又起一个新
+            # 的 —— 那正是"close() 之后 reconnect_attempts 还在涨"。
+            tasks = [self._reader, self._poller, self._reconnector]
+            for task in tasks:
+                if task is not None:
+                    task.cancel()
+            for task in tasks:
+                if task is not None:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+            self._reader = self._poller = self._reconnector = None
+            ws, self._ws = self._ws, None
+            if ws is not None:
+                await self._safe_close(ws)
+            # I2: 等在飞的后台关闭任务(比如 _on_link_lost 派生的)收尾,
+            # 免得进程退出时留下 "Task was destroyed but it is pending"。
+            bg, self._background_tasks = list(self._background_tasks), set()
+            for task in bg:
+                with contextlib.suppress(Exception):
                     await task
-        ws, self._ws = self._ws, None
-        if ws is not None:
-            with contextlib.suppress(Exception):
-                await ws.close()
-        # I2: 等在飞的后台关闭任务(比如 _on_link_lost 派生的)收尾,
-        # 免得进程退出时留下 "Task was destroyed but it is pending"。
-        bg, self._background_tasks = list(self._background_tasks), set()
-        for task in bg:
-            with contextlib.suppress(Exception):
-                await task
-        self._fail_pending("连接已关闭")
+            self._fail_pending("连接已关闭")
 
     def _fail_pending(self, reason: str) -> None:
         pending, self._pending = self._pending, {}
@@ -216,14 +267,23 @@ class VendorNavBackend(NavBackend):
         task.add_done_callback(self._background_tasks.discard)
 
     async def _safe_close(self, ws: ClientConnection) -> None:
+        """带超时地关掉一条连接。链路拆解一律走这里,不要裸 `await ws.close()`。
+
+        M4: websockets 的 close() 要等对端回关闭帧,默认等到 close_timeout
+        (10s)。一个不回关闭帧的对端 —— 断链注入模拟的正是这种链路异常 ——
+        能让 close() 整整阻塞十秒。仿真器侧同名方法早就为同一原因加了超时
+        (仿真器 nav_server.py 里的同名 _safe_close),客户端这边照做。
+        Python 3.10 用 asyncio.wait_for,不是 3.11 才有的 asyncio.timeout。
+        """
         with contextlib.suppress(Exception):
-            await ws.close()
+            await asyncio.wait_for(ws.close(), timeout=self.config.connect_timeout_s)
 
     # ------------------------------------------------------------ 读循环
 
-    async def _read_loop(self) -> None:
-        ws = self._ws
-        assert ws is not None
+    async def _read_loop(self, ws: ClientConnection) -> None:
+        """读一条**指定**连接直到它结束。断链一律带着这条连接上报,好让
+        `_on_link_lost()` 分辨得出报的是不是当前那条链路。
+        """
         try:
             async for raw in ws:
                 try:
@@ -242,23 +302,44 @@ class VendorNavBackend(NavBackend):
             raise
         except Exception as exc:  # noqa: BLE001
             if not self._closing:
-                self._on_link_lost(f"读循环异常: {exc}")
+                self._on_link_lost(f"读循环异常: {exc}", ws=ws)
             return
         if not self._closing:
-            self._on_link_lost("设备关闭了连接")
+            self._on_link_lost("设备关闭了连接", ws=ws)
 
-    def _on_link_lost(self, reason: str) -> None:
-        """链路断开的统一入口,接着重连。"""
-        if self._ws is None and not self._connected_event.is_set():
-            return                       # 已经在处理同一次断链了
-        log.warning("导航链路断开: %s", reason)
-        ws, self._ws = self._ws, None
+    def _on_link_lost(self, reason: str, ws: ClientConnection | None = None) -> None:
+        """链路断开的统一入口: 拆掉这条链路,发一次断开事件,接着重连。
+
+        发现断链的渠道不止读循环一条 —— `request()` 里 `ws.send()` 失败同样
+        是链路故障,也走这里(裁定 6)。统一入口的意义就在于: 无论从哪条渠道
+        察觉,`_connected_event` 都被清掉、重连都被触发,`wait_connected()`
+        便不会回一个假的"已连接"。
+        """
+        # 报的是哪条链路: 调用方给了就按它算,没给(旧调用点)按当前链路算。
+        current = self._ws
+        if ws is not None and current is not None and ws is not current:
+            # 陈旧报告: 这条连接早就被换掉了(上一次重连尝试留下的读循环慢半拍
+            # 才退出),当前链路是好的,绝不能把它拆掉 —— 那会把一条刚探针通过
+            # 的新链路当场打死,还倒着发一条 BackendDisconnected。
+            self._spawn(self._safe_close(ws))
+            return
+        ws, self._ws = current, None
         self._connected_event.clear()
-        # I2: 光丢引用不够 —— 旧连接的 socket 还开着,服务端会一直把它算作
-        # 在线客户端。真正关掉它,丢给后台任务做,免得阻塞读循环本身的收尾。
+        # I2(Task 12): 光丢引用不够 —— 旧连接的 socket 还开着,服务端会一直把
+        # 它算作在线客户端。真正关掉它,丢给后台任务做,免得阻塞读循环的收尾。
         if ws is not None:
             self._spawn(self._safe_close(ws))
         self._fail_pending(reason)
+        # I2 + M3: 一次链路丢失只广播一条 BackendDisconnected。老守卫
+        # (`_ws is None and not _connected_event.is_set()`)在重连尝试期间形同
+        # 虚设: _open_link() 刚把 _ws 设上,仿真器随即以 1012 关闭,读循环退出
+        # 再次进来时 _ws 非 None,守卫放行 —— 每失败一次重连就多发一条
+        # (实测 2.0s 窗口 12 条)。事件契约是"每次链路丢失一条",上层按事件
+        # 计数做状态机的话,一次网络抖动会被记成十几次断链。
+        if self._link_down:
+            return
+        self._link_down = True
+        log.warning("导航链路断开: %s", reason)
         self.emit(BackendDisconnected(reason))
         if self.auto_reconnect and not self._closing and self._reconnector is None:
             self._reconnector = asyncio.create_task(self._reconnect_loop())
@@ -266,6 +347,16 @@ class VendorNavBackend(NavBackend):
     # ------------------------------------------------------------ 重连
 
     async def wait_connected(self, timeout_s: float) -> None:
+        """等到链路就绪(初次连接完成,或一次重连的探针过了)。
+
+        契约: 就绪标志表达的是"客户端尚未观察到断链"。所有察觉断链的渠道都
+        汇到 `_on_link_lost()`(读循环退出、`ws.send()` 失败),那里 `clear()`
+        排在 `_fail_pending()` 之前 —— 所以被在飞请求的异常唤醒的调用者,拿到
+        异常时标志已经清了,不会立刻拿到一个假的"已连接"。**这两步的先后不能
+        调换。** 若调用者是从后端之外的渠道(上层业务超时、外部心跳)得知链路
+        有问题的,本方法仍可能立刻返回;那种场合请先自己收到一条
+        `BackendDisconnected` 再等。
+        """
         try:
             await asyncio.wait_for(self._connected_event.wait(), timeout_s)
         except asyncio.TimeoutError as exc:
@@ -279,11 +370,18 @@ class VendorNavBackend(NavBackend):
                 self.reconnect_attempts += 1
                 try:
                     await self._reconnect_once()
-                except NavBackendError as exc:
+                except Exception as exc:  # noqa: BLE001
                     # 控制者订正: 原文只捕 NavConnectionError。_reconnect_once()
                     # 带探针,探针可能抛 NavTimeoutError / NavRequestError ——
                     # 窄捕获会让重连循环带着异常静默死掉,从此再也不重连。
-                    # 重连循环里没有任何错误值得杀死重连。
+                    # 重连循环里没有任何错误值得杀死重连,所以这里兜到
+                    # Exception 为止(CancelledError 是 BaseException,照旧穿透,
+                    # close() 才收得掉这个任务)。
+                    # 这道兜底是承重的: _link_down 一旦置位,后续 _on_link_lost
+                    # 全部早退,重连循环是唯一还能把链路救回来的人。它带异常死掉
+                    # 的话,后端就永久停在"已断开且无人重连"上(实测: 读循环的
+                    # AssertionError 顺着 _teardown_link 的 `await reader` 逃出来,
+                    # 40 轮断链注入里卡死 3 轮)。
                     log.info("第 %d 次重连失败: %s", self.reconnect_attempts, exc)
                     delay = min(delay * 2, self.config.reconnect_max_s)
                     continue
@@ -406,8 +504,25 @@ class VendorNavBackend(NavBackend):
         try:
             await ws.send(encode_request(req.req_func, req.args, frame_count))
         except Exception as exc:  # noqa: BLE001
+            reason = f"发送 {req.req_func} 失败: {exc}"
+            # I4: 断链与 send 失败几乎同时发生时,`_fail_pending()` 会**先**给
+            # 这条 future 设上异常,send 才抛错走到这里。只从表里摘掉的话,那个
+            # 已经带着异常的 future 再也没人 await,asyncio 回收它时刷一条
+            # "Future exception was never retrieved" —— 一次长断网能刷几十上百
+            # 条,把真问题淹掉。这里必须把异常消费掉。
+            # 顺序: 先摘掉并结清自己这条,再走 _on_link_lost —— 那里的
+            # _fail_pending() 就只会结算**其它**在飞请求,不会二次结算本条。
+            # 注意必须用手上这个 `future` 局部变量来消费,不能回表里查 ——
+            # `_fail_pending()` 是整张 `_pending` 换成新的空 dict,我们这条早就
+            # 不在表里了,查回来只会是 None,异常照样没人消费(第一版就栽在这)。
             self._pending.pop(frame_count, None)
-            raise NavConnectionError(f"发送 {req.req_func} 失败: {exc}") from exc
+            if future.done() and not future.cancelled():
+                future.exception()
+            # 裁定 6: send 失败本身就是链路故障,走统一入口。这样
+            # `_connected_event` 会被清掉、重连会被触发,此后 wait_connected()
+            # 不会再回一个假的"已连接"(评审 C1 里 EVIDENCE-1 那个洞)。
+            self._on_link_lost(reason, ws=ws)
+            raise NavConnectionError(reason) from exc
 
         # C2: 无论正常拿到响应、超时、还是被外部取消(gather 连坐、上层
         # wait_for、Task 14 重连撤销在飞请求……),挂起表都必须清干净 ——
