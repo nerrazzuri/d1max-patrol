@@ -136,7 +136,14 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.command == "sim":
-        from d1max_sim.__main__ import main as sim_main
+        # MIN-1: 仿真器是开发期依赖,真机现场装的可能只有 d1max_patrol 一个包。
+        # 裸 import 撞上来是一条英文 ModuleNotFoundError 栈,对现场没有意义。
+        try:
+            from d1max_sim.__main__ import main as sim_main
+        except ImportError as exc:
+            print(f"仿真器未安装,无法执行 sim 子命令: {exc}", file=sys.stderr)
+            print("它随开发依赖一起安装: pip install -e .[dev]", file=sys.stderr)
+            return 1
 
         sim_argv = ["--port", str(args.port)]
         if args.seed:

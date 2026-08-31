@@ -15,6 +15,7 @@ from d1max_patrol.backends.base import (
     NavTimeoutError,
 )
 from d1max_patrol.protocol.nav_types import (
+    NAV_TERMINAL,
     LocStatus,
     MappingStatus,
     NavStatus,
@@ -197,6 +198,31 @@ async def test_等待终态会超时而不是永久挂起(ready_backend):
     backend, _ = ready_backend
     with pytest.raises(NavTimeoutError):
         await backend.wait_nav_terminal(timeout_s=0.2)
+
+
+async def test_外部队列消灭先订阅后下发的竞态(ready_backend):
+    """IMP-2: 端口自己文档化的队列交接契约,必须由契约测试守住。
+
+    `wait_nav_terminal` 的 docstring 承诺: 传 `queue=` 时,订阅在"下发"之前
+    就已经建好,终态**不会**在 `goto()` 与开始等待之间被漏掉。第 2 卷换
+    `Nav2Backend` 时,这条承诺是端口可替换性的承重点。
+
+    终审实测: 把 `queue=` 参数整个丢弃(让本方法一律自己新订阅一条),
+    `tests/contract` 19 条**全绿** —— 因为其余用例里终态总是在开始等待
+    之后才到,漏订阅那一小段窗口谁都没踩到。所以这里必须把窗口撑开:
+
+    开两条订阅。用**第一条**把终态"等过去";`emit()` 是同步向所有订阅者
+    投递的,所以那一刻同一条事件已经躺在**第二条**队列里、且没有任何人在
+    await 它。此时才把第二条交给 `wait_nav_terminal` —— 交接生效它就立刻
+    拿到终态;交接失效(自己新订阅)它就只能等到超时。
+    """
+    backend, _ = ready_backend
+    with backend.subscription() as 观察, backend.subscription() as 交接:
+        await backend.goto(Pose.from_xy_yaw(0.5, 0.0, 0.0))
+        await _drain_until(观察, lambda e: isinstance(e, NavStatusEvent)
+                           and e.status in NAV_TERMINAL, timeout_s=20.0)
+        status = await backend.wait_nav_terminal(5.0, queue=交接)
+    assert status is NavStatus.SUCCEED
 
 
 # --------------------------------------------------------------- 速度

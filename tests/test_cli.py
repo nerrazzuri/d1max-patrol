@@ -9,6 +9,8 @@ fixture + main() 内部 asyncio.run()"组合会挂 —— sim fixture 的事件�
 接线、asyncio.run、连不上时的退出码)保持同步,照原样调 main()。
 """
 
+import builtins
+
 import pytest
 
 from d1max_patrol import cli
@@ -38,12 +40,49 @@ def test_没有子命令时打印帮助并返回2():
 
 
 def test_解析器认识所有子命令():
+    """MIN-6: 断的是解析出来的**值**,不是 `is not None`。
+
+    老写法 `assert parser.parse_args(argv) is not None` 是一条空断言:
+    `parse_args` 要么抛 `SystemExit`(参数不认),要么返回一个
+    `Namespace` —— 它**永远不可能**返回 None,那句断言恒为真。
+    真正被测到的只有"没抛 SystemExit",而且是隐式的。
+    """
     parser = build_parser()
-    for argv in (["status"], ["maps"], ["paths", "m"], ["map-start"], ["map-stop"],
-                 ["load", "m"], ["goto", "1", "2"], ["walk", "m", "p"],
-                 ["path-save", "m", "p", "--point", "A:1:2"],
-                 ["speed"], ["sim"]):
-        assert parser.parse_args(argv) is not None
+    期望 = [
+        (["status"], {"command": "status"}),
+        (["maps"], {"command": "maps"}),
+        (["paths", "m"], {"command": "paths", "map_id": "m"}),
+        (["map-start"], {"command": "map-start"}),
+        (["map-stop"], {"command": "map-stop"}),
+        (["load", "m"], {"command": "load", "map_id": "m"}),
+        (["goto", "1", "2"], {"command": "goto", "x": 1.0, "y": 2.0}),
+        (["walk", "m", "p"], {"command": "walk", "map_id": "m", "path_id": "p"}),
+        (["path-save", "m", "p", "--point", "A:1:2"],
+         {"command": "path-save", "map_id": "m", "path_id": "p",
+          "point": ["A:1:2"]}),
+        (["speed"], {"command": "speed"}),
+        (["sim"], {"command": "sim"}),
+    ]
+    for argv, 字段 in 期望:
+        args = parser.parse_args(argv)
+        for 名, 值 in 字段.items():
+            assert getattr(args, 名) == 值, f"{argv}: {名} 解析成了 {getattr(args, 名)!r}"
+
+
+def test_仿真器没装时_sim_子命令给中文提示(monkeypatch, capsys):
+    """MIN-1: 真机现场可能只装了 d1max_patrol,`sim` 子命令不能撞裸 ImportError。"""
+    真import = builtins.__import__
+
+    def 拦住仿真器(name, *args, **kwargs):
+        if name.startswith("d1max_sim"):
+            raise ImportError("No module named 'd1max_sim'")
+        return 真import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", 拦住仿真器)
+    assert main(["sim"]) == 1
+    err = capsys.readouterr().err
+    assert "仿真器未安装" in err
+    assert "pip install -e .[dev]" in err
 
 
 def test_连不上时返回1(capsys):

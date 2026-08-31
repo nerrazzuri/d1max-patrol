@@ -197,7 +197,10 @@ class MapStore:
                 }
                 for map_id, paths in payload.get("paths", {}).items()
             }
-        except (json.JSONDecodeError, TypeError, ValueError) as e:
+        # MIN-2: KeyError 必须一起收 —— 存档里缺 `map_id` 键时上面那句
+        # `entry["map_id"]` 抛的是 KeyError,它不是 ValueError 的子类,
+        # 会直接穿透 StoreError 这道边界,把"存档坏了"暴露成一个裸 KeyError。
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             raise StoreError(f"读档失败({p})：{e}") from e
         for map_id in self.maps:
             self.paths.setdefault(map_id, {})

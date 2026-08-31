@@ -13,6 +13,7 @@ import json
 import logging
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 from websockets.asyncio.server import Server, ServerConnection, serve
 
@@ -160,7 +161,11 @@ class SimNavServer:
     # ------------------------------------------------------------ 连接处理
 
     async def _handle(self, ws: ServerConnection) -> None:
-        if ws.request is not None and ws.request.path.rstrip("/") == CONTROL_PATH:
+        # MIN-4: 必须先把查询串剥掉再比。裸 `path.rstrip("/")` 下
+        # `/control?x=1` 匹配不上 CONTROL_PATH,会被当成导航通道接进来 ——
+        # 而带查询串的 URL 在真实客户端里再普通不过。
+        路径 = urlsplit(ws.request.path).path if ws.request is not None else ""
+        if ws.request is not None and 路径.rstrip("/") == CONTROL_PATH:
             # 控制通道不受 disconnect 注入影响,这是有意的设计(评审 Mi-6 确认):
             # 断链注入模拟的是导航链路故障,运维/测试仍需要能连控制通道下达、
             # 查询、撤销注入。
@@ -236,7 +241,7 @@ class SimNavServer:
         text = json.dumps(frame, ensure_ascii=False)
         try:
             await ws.send(text)
-        except Exception:
+        except Exception:  # noqa: BLE001 —— 回一条响应失败不该打断服务端
             log.debug("回复发送失败,客户端可能已断开: req_func=%s", req_func)
 
     async def _broadcast(self, frame: dict[str, Any]) -> None:
@@ -247,7 +252,7 @@ class SimNavServer:
                 # 一个不读取的客户端会让写缓冲填满、drain() 永久挂起,进而
                 # 拖停所有客户端共用的这条 tick 循环。
                 await asyncio.wait_for(ws.send(text), timeout=_TICK_IO_TIMEOUT_S)
-            except Exception:
+            except Exception:  # noqa: BLE001 —— 任何发送故障都只摘这一个客户端
                 log.warning("广播发送超时或失败,已从客户端列表摘除")
                 self._clients.discard(ws)
                 self._spawn(self._safe_close(ws, code=1011, reason="slow consumer"))
@@ -358,7 +363,7 @@ class SimNavServer:
             return True, None, handler(self, args)
         except (SimRejected, StoreError, ValueError) as exc:
             return False, str(exc), None
-        except Exception as exc:  # noqa: BLE001 —— M4: 见下方说明
+        except Exception as exc:  # M4: 见下方说明
             # 旧实现的白名单只挡 (SimRejected, StoreError, ValueError),漏网的
             # 异常(比如参数类型不对导致 float(None) 抛 TypeError)会一路逃到
             # _handle_nav 的宽 except,那里只是 log.debug 一句就把连接摘掉,

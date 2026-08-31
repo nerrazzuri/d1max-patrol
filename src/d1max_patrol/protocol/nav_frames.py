@@ -190,6 +190,13 @@ def _parse_response(payload: dict[str, Any], head: dict[str, Any]) -> Response:
     result = data.get("req_result")
     if not isinstance(result, dict):
         raise ProtocolError("app_resp 缺少 req_result")
+    # IMP-4: **只剥一层,不要改成剥到底。** 那句 `break` 是承重的,不是
+    # "反正只有一层、写不写都一样"的顺手优化。协议里外壳只有一层;真出现
+    # 嵌套两层的报文,那是设备端的数据异常,应当照着**外层**的 req_func 去
+    # 匹配、让不一致暴露出来,而不是一路往里钻、拿最内层的字段冒充响应 ——
+    # 那会把一条畸形报文悄悄"修好"成另一条请求的响应(降级匹配还会替它
+    # 认领挂起请求)。改成 while 循环剥到底的话,383 条测试无一变红,
+    # 唯一守着它的是 test_nav_frames.py::test_嵌套外壳只剥一层。
     for key in NESTED_RESULT_KEYS:
         nested = result.get(key)
         if isinstance(nested, dict):

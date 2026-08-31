@@ -235,6 +235,44 @@ class VendorNavBackend(NavBackend):
                 await reader
         self._fail_pending("探针失败,链路未建立")
 
+    # ------------------------------------------------------------------------
+    # BLOCK-1(终审):close() 曾经会白等一整个 request_timeout_s,而 455 条测试
+    # 全绿。承重的修法**不在这个函数里**,在 `request()` 顶部那道 `_closing`
+    # 闸门 —— 删掉那两行,下面这条因果链立刻复活。完整链条(已在 CPython
+    # 3.10.11 的安装源码里逐字核对):
+    #
+    #   1. 轮询器正卡在 `request()` 的 `asyncio.wait_for(future, ...)` 上,而
+    #      读循环刚好已经把这条 future **结清**(set_result),`wait_for` 内部
+    #      那个 `waiter` 还挂着、轮询器还没被唤醒。
+    #   2. close() 置 `_closing = True`,`poller.cancel()` 把取消转发给
+    #      `Task._fut_waiter`(就是那个 `waiter`)—— **成功**,返回 True,
+    #      于是 `_must_cancel` 保持 False。
+    #   3. 轮询器醒来,`CancelledError` 抛进 `wait_for` 的 except 分支:
+    #
+    #          except exceptions.CancelledError:
+    #              if fut.done():
+    #                  return fut.result()     # ← 取消被整个丢掉,正常返回
+    #
+    #      这是 CPython 3.10 `asyncio/tasks.py::wait_for` 的原文。**取消到此蒸发。**
+    #   4. `_poll_once()` 若无其事地往下走,在**仍然打开**的 socket 上发出
+    #      下一条状态查询(close() 要把 `_ws` 摘成 None,还得等下面三个
+    #      `await task` 走完)。
+    #   5. 读循环已经先被取消并 await 掉了,没有人再解析回包。
+    #   6. 这条新请求等满 `request_timeout_s`(测试 3.00s,真机默认 5.0s)
+    #      才抛 NavTimeoutError。
+    #   7. `_poll_loop` 的 `except NavBackendError` 吃掉它,`while not self._closing`
+    #      为假 → 轮询器**正常退出**,`cancelled()` 是 False,没有任何异常冒头。
+    #      净效果:close() 慢了 3 秒,而一切"看起来"都很正常。
+    #
+    # 闸门切断的是第 4 步:不管取消有没有被吞、任务取消/await 的次序如何、
+    # `_reader` 是不是已经是 None,`_closing` 置位之后没有任何新请求发得出去。
+    # 语义上也更正 —— close() 开始之后再发请求,本来就该是 NavConnectionError。
+    #
+    # **不要**改成"在 await task 之前再 cancel 一次"。终审做过决定性实验:
+    # 保留补发 cancel、只把下面 `tasks` 的元素次序换一换,close() 累计耗时就从
+    # 2.02s 弹回 49.98s,而 455 条测试无一变红 —— 那个修法依赖一条没人写下来、
+    # 也没有任何测试守着的次序不变式。
+    # ------------------------------------------------------------------------
     async def close(self) -> None:
         # I3: 先立标志(在锁外),让在飞的重连循环/轮询器尽早看见"要关了";
         # 拆解本身必须与在飞的 connect() / _reconnect_once() 互斥 —— 否则一个
@@ -325,6 +363,13 @@ class VendorNavBackend(NavBackend):
         所以超时旋钮要拧在 websockets 内部: 建链时传 `close_timeout=`
         (见 `_open_link()`),这边裸调 `close()`。等待时长一样受控,而 socket
         真的会被拆掉。回归测试: `test_半开链路下关闭不泄漏socket`。
+
+        那条回归测试守的**不只是"别卡死"**: 它断言 close() 的耗时落在
+        [0.8×close_timeout, 1.5×close_timeout] 里。下界是承重的 —— 谁要是
+        在这里重新套一层 `wait_for`,只要外层超时短于 close_timeout,
+        close() 就会提前返回、abort() 跑不到、连接永久泄漏,而"没卡死"
+        这种上界断言是拦不住的(IMP-1: 老断言 `用时 < 5.0` 的实际余量只有 7ms,
+        全靠两个截止时刻的先后巧合)。
         """
         with contextlib.suppress(Exception):
             await ws.close()
@@ -344,7 +389,7 @@ class VendorNavBackend(NavBackend):
                     continue
                 try:
                     self._route(message)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     # I1: 单帧路由失败绝不能判定链路死亡 —— 否则一条畸形
                     # 推送就能把所有挂起请求连坐失败。异常留在日志里
                     # (exc_info=True),不悄悄吞掉真实 bug。
@@ -421,7 +466,7 @@ class VendorNavBackend(NavBackend):
                 self.reconnect_attempts += 1
                 try:
                     await self._reconnect_once()
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     # 控制者订正: 原文只捕 NavConnectionError。_reconnect_once()
                     # 带探针,探针可能抛 NavTimeoutError / NavRequestError ——
                     # 窄捕获会让重连循环带着异常静默死掉,从此再也不重连。
@@ -469,7 +514,7 @@ class VendorNavBackend(NavBackend):
             except NavBackendError as exc:
                 # 单轮失败不该杀死轮询器 —— 断链有 _on_link_lost 兜底
                 log.debug("状态轮询这一轮失败: %s", exc)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("状态轮询意外异常")
 
     async def _poll_once(self) -> None:
@@ -550,6 +595,13 @@ class VendorNavBackend(NavBackend):
     # ------------------------------------------------------------ 请求
 
     async def request(self, req: NavRequest) -> Any:
+        # BLOCK-1 的闸门。**删掉这两行,close() 就会重新退化成一次
+        # request_timeout_s 的干等**,而且 455 条测试里没有一条会变红
+        # (回归测试见 test_vendor_resilience.py::
+        #  test_关闭时轮询器手上有已结清的在飞请求也必须立刻返回)。
+        # 完整因果链写在 close() 上方,别当成"顺手的防御性检查"删掉。
+        if self._closing:
+            raise NavConnectionError("连接正在关闭")
         ws = self._ws
         if ws is None:
             raise NavConnectionError("尚未连接导航设备")
@@ -561,7 +613,7 @@ class VendorNavBackend(NavBackend):
         self._pending[frame_count] = entry
         try:
             await ws.send(encode_request(req.req_func, req.args, frame_count))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             reason = f"发送 {req.req_func} 失败: {exc}"
             # I4: 断链与 send 失败几乎同时发生时,`_fail_pending()` 会**先**给
             # 这条 future 设上异常,send 才抛错走到这里。只从表里摘掉的话,那个

@@ -27,6 +27,8 @@ from d1max_patrol.backends.base import (
 )
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.models import NavConfig
+from d1max_patrol.protocol import nav_requests as R
+from d1max_patrol.protocol.nav_frames import Response
 from d1max_patrol.protocol.nav_types import (
     LocStatus,
     MappingStatus,
@@ -519,9 +521,27 @@ async def test_半开链路下关闭不泄漏socket(sim):
     那是这种链路下唯一真正拆掉 TCP 的动作。从外面套 `asyncio.wait_for` 把
     close() 取消,等于赶在 abort() 之前把它打断:连接永久泄漏。所以超时旋钮
     拧在建链处的 `close_timeout=`,`_safe_close()` 裸调 close()。
+
+    IMP-1(终审): 这条测试原来写的是 `connect_timeout_s=1.0` + `用时 < 5.0`。
+    那样只断言得出"没卡死",断不出"abort() 到底跑没跑到" —— 一个重新套上
+    `wait_for(ws.close(), 外层超时)` 的改动,只要外层超时比 close_timeout 短
+    一点点,连接就永久泄漏,而 `用时 < 5.0` 照样成立;唯一能拦住它的
+    `transport.is_closing()` 断言,靠的是两个截止时刻谁先谁后这种毫秒级巧合
+    (实测余量 7ms)。
+
+    所以这里**把两个数拆开**: `close_timeout`(= connect_timeout_s)单独设一个
+    值,再断言 close() 的耗时必须落在 [0.8×它, 1.5×它] 里。
+    (派单举的例子是 3.0;这里取 2.0 —— 性质完全一样"任何短于 close_timeout
+    的外层 wait_for 都会违反下界",只是可捕获区间从 <2.4s 收窄到 <1.6s,
+    换来全量耗时少 1 秒。全量预算 90s 已经很紧,见修复报告的"顾虑"一节。)
+    * 下界挡住"提前被打断"——任何短于 close_timeout 的外层 wait_for 都会让
+      close() 早退,立刻违反下界,不再依赖巧合;
+    * 上界挡住"根本没有超时兜底"(裸 close() 会等 websockets 的默认 10s)。
     """
+    关闭超时 = 2.0
     b = VendorNavBackend(
-        NavConfig(url=sim.url, request_timeout_s=1.0, connect_timeout_s=1.0,
+        NavConfig(url=sim.url, request_timeout_s=1.0,
+                  connect_timeout_s=关闭超时,
                   status_poll_interval_s=_POLLER_OFF),
         auto_reconnect=False)
     await b.connect()
@@ -535,7 +555,13 @@ async def test_半开链路下关闭不泄漏socket(sim):
     用时 = 循环.time() - 起
 
     assert 真链路.transport.is_closing(), "对端不回关闭帧时,这条 TCP 根本没被拆掉"
-    assert 用时 < 5.0, f"close() 花了 {用时:.2f}s,关闭超时没有按 close_timeout 生效"
+    assert 用时 >= 0.8 * 关闭超时, (
+        f"close() 只花了 {用时:.2f}s,短于 close_timeout({关闭超时}s)—— "
+        f"关闭握手是被外面打断的,websockets 内部那句 transport.abort() "
+        f"没有机会跑,这条 TCP 会永久泄漏")
+    assert 用时 <= 1.5 * 关闭超时, (
+        f"close() 花了 {用时:.2f}s,远超 close_timeout({关闭超时}s)—— "
+        f"关闭超时根本没有按 close_timeout 生效")
     # 服务端一恢复读取就会读到 EOF —— 这是"socket 真的没了"的对端确认。
     await _退出半开链路(sim)
     await _wait_until(lambda: len(sim._clients) == 0, timeout_s=15.0)
@@ -570,3 +596,92 @@ async def test_拆链路摘走的连接一定有人负责关掉(sim):
     assert 真链路.transport.is_closing(), "被 _teardown_link 摘走的连接没有任何人关"
     await _退出半开链路(sim)
     await _wait_until(lambda: len(sim._clients) == 0, timeout_s=15.0)
+
+
+# --------------------------------------------------------------------------
+# BLOCK-1: close() 不许因为轮询器而白等一个 request_timeout_s
+# --------------------------------------------------------------------------
+
+
+async def _等到轮询器挂在请求上(backend, req_func: str, timeout_s: float = 10.0):
+    """等到轮询器把 `req_func` 发出去、**并且已经在 wait_for 里挂起**。
+
+    两个条件缺一不可:
+
+    * `_pending` 里出现了这条请求 —— 说明 `ws.send()` 已经发出去了;
+    * 这条 future 上已经挂了 done 回调 —— `asyncio.wait_for` 在
+      `await waiter` 之前紧挨着一句 `fut.add_done_callback(cb)`,两者之间
+      没有任何 await。所以从别的任务观察到"回调非空",就等价于
+      "轮询器此刻停在 `wait_for` 里那个 `await waiter` 上"。
+
+    第二个条件是承重的,不是保险丝: 轮询器若还卡在 `ws.send()` 里,
+    `cancel()` 会正常穿透、`close()` 本来就是快的 —— 构造落不到要测的那个
+    窗口上,这条测试就退化成一条永远绿的空测试。
+    """
+    命中: list = []
+
+    def 挂住了() -> bool:
+        for entry in list(backend._pending.values()):
+            # `future._callbacks` 是 CPython 的内部字段,没有对应的公开 API。
+            # 用它是有意的:这条测试要断言的正是 asyncio 内部的一个状态。
+            if entry.req_func == req_func and entry.future._callbacks:
+                命中.append(entry)
+                return True
+        return False
+
+    await _wait_until(挂住了, timeout_s=timeout_s)
+    return 命中[0]
+
+
+async def test_关闭时轮询器手上有已结清的在飞请求也必须立刻返回(sim):
+    """BLOCK-1: `close()` 必须立刻返回,不许白等一个 `request_timeout_s`。
+
+    守的是 `request()` 顶部那道 `_closing` 闸门。删掉那两行,这条测试就会
+    量到约 3.00s(= `request_timeout_s`)。完整因果链写在 `close()` 上方,
+    根因是 CPython 3.10 的 `asyncio.wait_for` 在 `fut.done()` 时把
+    `CancelledError` 整个丢掉(`return fut.result()`)。
+
+    构造分两步,两步都是确定性的,不靠抢时序:
+
+    1. 让仿真器**吞掉** `get_nav_status` 的回复。轮询器的这条请求于是稳定
+       挂起一整个 `request_timeout_s`,给了一个三秒宽的构造窗口 ——
+       不需要去抢"读循环刚结清"那一两个事件循环回合。
+    2. 由本测试**亲手** `set_result()` 结清这条 future。这与读循环
+       `_settle()` 做的是同一个动作;区别只在于这里能保证"结清"与
+       "`close()` 里那句 `poller.cancel()`"之间一个 await 都没有,
+       也就精确地落在缺陷要求的那个窗口里(future 已 done、轮询器尚未唤醒
+       → `waiter.cancel()` 返回 True → `_must_cancel` 保持 False → 取消蒸发)。
+    """
+    真回复 = sim._reply
+
+    async def 吞掉状态查询的回复(ws, req_func, frame_count, ok, msg, data):
+        if req_func == "get_nav_status":
+            return
+        await 真回复(ws, req_func, frame_count, ok, msg, data)
+
+    sim._reply = 吞掉状态查询的回复
+
+    b = VendorNavBackend(NavConfig(url=sim.url, **FAST), auto_reconnect=False)
+    await b.connect()
+    条目 = await _等到轮询器挂在请求上(b, "get_nav_status")
+
+    条目.future.set_result(Response(
+        frame_count=None,
+        req_func=R.get_nav_status().response_func,
+        ok=True,
+        msg=None,
+        data=NavStatus.STANDBY.value,
+        raw={},
+    ))
+
+    循环 = asyncio.get_running_loop()
+    起 = 循环.time()
+    await b.close()          # ← 与上面那句 set_result 之间不许插入任何 await
+    用时 = 循环.time() - 起
+
+    assert 用时 < 0.5, (
+        f"close() 花了 {用时:.2f}s。轮询器手上那条在飞请求的取消被 "
+        f"asyncio.wait_for 吞掉了,它接着在还没关掉的 socket 上又发出一条状态"
+        f"查询,而读循环早已收摊 —— close() 于是白等一个 request_timeout_s"
+        f"({b.config.request_timeout_s}s)"
+    )

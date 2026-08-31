@@ -116,6 +116,46 @@ def test_解析嵌套的_AppReponseObjectData_变体():
     assert msg.data == {"x": 0.8, "y": 0.4, "z": 1.2}
 
 
+def test_嵌套外壳只剥一层():
+    """IMP-4: `_parse_response` 剥外壳时那句 `break` 是承重的。
+
+    协议里外壳只有一层。真收到嵌套两层的报文,那是设备端的数据异常 ——
+    正确做法是照**外层**的 req_func 去匹配,让不一致暴露成"无人认领的响应";
+    一路剥到底则会把畸形报文悄悄"修好"成另一条请求的响应,连降级匹配都会
+    替它认领一条挂起请求,而没有任何异常。
+
+    终审实测: 把那个 for/break 改成"反复剥壳",383 条测试无一变红。
+    这条测试就是那条不变式唯一的守卫。
+    """
+    text = json.dumps(
+        {
+            "head": {"type": "app_resp", "time_stamp": 1, "source": "alg_control_node",
+                     "frame_count": 7},
+            "data": {
+                "req_result": {
+                    "AppReponseObjectData": {
+                        "req_func": "外层的名字",
+                        "status": "ok",
+                        "msg": None,
+                        "data": {"哪一层": "外层"},
+                        # 再套一层拼写正确的外壳。剥到底的实现会拿这一层。
+                        "AppResponse": {
+                            "req_func": "内层的名字",
+                            "status": "ok",
+                            "msg": None,
+                            "data": {"哪一层": "内层"},
+                        },
+                    }
+                }
+            },
+        }
+    )
+    msg = parse_message(text)
+    assert isinstance(msg, Response)
+    assert msg.req_func == "外层的名字", "外壳被剥了不止一层"
+    assert msg.data == {"哪一层": "外层"}
+
+
 def test_解析算法故障码推送():
     text = json.dumps(
         {

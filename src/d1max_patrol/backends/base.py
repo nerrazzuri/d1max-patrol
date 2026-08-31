@@ -169,6 +169,10 @@ class NavBackend(EventEmitter[Event], ABC):
 
         不传 `queue` 时本方法自己订阅,只适合"订阅时导航已经在跑"的场合。
 
+        传 `queue` 时反过来要当心**陈旧终态**:队列里若还压着上一次导航的
+        终态事件,这里会把它当成本次的终态立刻返回。一次导航一条订阅,
+        别跨多次导航复用同一条长命队列 —— 详见 `_await_terminal` 的说明。
+
         注:用 `asyncio.wait_for` 而不是 `asyncio.timeout` —— 后者要
         Python 3.11+,而全局约束是 3.10。
         """
@@ -186,6 +190,22 @@ class NavBackend(EventEmitter[Event], ABC):
             raise NavTimeoutError(f"等待导航终态超过 {timeout_s}s") from exc
 
     async def _await_terminal(self, queue: asyncio.Queue[Event]) -> NavStatus:
+        """从 `queue` 里取到第一条终态事件为止。
+
+        MIN-9: 这里认的是"队列里下一条终态事件",**不是**"本次导航的终态"
+        —— 本方法没有、也拿不到任何把事件与某一次 `goto()` 关联起来的凭据
+        (协议里没有任务 id)。两面都要记住:
+
+        * 队列是**新订阅**的(`wait_nav_terminal` 不传 `queue=` 的分支):
+          订阅之前的事件一条都收不到,所以不会认领陈旧终态;代价是
+          `goto()` 与订阅之间那条终态会被漏掉,一路等到超时。
+        * 队列是**外部传进来的**(`queue=` 分支,推荐用法):`goto()` 之前的
+          那条终态不会漏 —— 但反过来,**这条队列里若还压着上一次导航的
+          终态,本方法会把它当成这一次的终态立刻返回**。所以外部队列的正确
+          用法是"一次导航一条订阅"(`with backend.subscription() as q:`
+          包住 goto + 等待),不要跨多次导航复用同一条长命队列;
+          `test_连续走多个点` 就是照这个形状写的。
+        """
         while True:
             event = await queue.get()
             if isinstance(event, BackendDisconnected):

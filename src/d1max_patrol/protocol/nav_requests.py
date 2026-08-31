@@ -12,6 +12,22 @@ from typing import Any
 
 from .nav_types import Pose, Waypoint
 
+# ---------------------------------------------------------------------------
+# IMP-3(终审)· 这张表有一片结构性盲区,改它之前先读完这段。
+#
+# 仿真器(d1max_sim/nav_server.py 的 `_reply`)与产品侧(vendor_nav 的
+# `_Pending.response_func`)**共用同一个** `response_func_for()`。共用是对的
+# ——一份线格式定义,两边不会各写一份字面量、改名时漏改其中一处。代价是:
+# **名字写错时两边会一起用错的名字,永远不分歧,集成/契约测试因此不会变红。**
+#
+# 终审实测: 删掉下面 `loc_load_map -> load_localization_map`(协议地雷 2)
+# 这条映射,只有 2 条字面量单测变红,所有集成测试与契约测试照常通过。
+#
+# 所以本映射的正确性**只**由这两处非循环的证据守住:
+#   * `tests/protocol/test_doc_samples.py` —— 厂商文档语料抽出来的真实样例;
+#   * `tests/protocol/test_nav_requests.py` —— 对名字的字面断言。
+# 删掉这两处断言,等于把这张表唯一的防线拆掉。要改这张表,同时改那两处。
+# ---------------------------------------------------------------------------
 #: 协议地雷 2: 请求名与响应 req_func 不一致的接口。
 #: 只收录不一致的条目;相同的不写,由 response_func_for 兜底。
 REQUEST_TO_RESPONSE_FUNC: dict[str, str] = {

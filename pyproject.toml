@@ -8,6 +8,10 @@ version = "0.1.0"
 description = "智元 D1 Max 四足机器人巡检与例检系统"
 requires-python = ">=3.10"
 dependencies = [
+    # MIN-10: 下界 `>=13` 是设计文档的全局约束(新版 asyncio 接口
+    # `websockets.asyncio.client` / `.server` 是 13.0 落地的),不动。
+    # 但要如实记账: 本卷**实际验证过的只有 16.0**,13.x/14.x/15.x 从未跑过
+    # 一次测试。13.x 的 CI 矩阵留给第 2 卷;在那之前,"支持 13"是声明,不是证据。
     "websockets>=13",
     "PyYAML>=6.0",
 ]
@@ -39,4 +43,15 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+# MIN-7: BLE 必须在这里启用。启用之前,代码里那 8 处 `# noqa: BLE001`
+# 是**空注解** —— BLE 没进 select,它们一条规则都没抑制,却让读代码的人以为
+# "这处宽捕获已经被 linter 认可过了"。启用后的爆炸半径已实测: 只多出 2 条
+# 命中(都在 d1max_sim/nav_server.py,均为有意的宽捕获且已有日志),已就地补
+# noqa。
+# RUF100 是 MIN-7 的第二半:它禁止"空注解"本身。光把 BLE 打开还不够 ——
+# 实测启用 BLE 之后,原来那 8 处 `# noqa: BLE001` 里仍有 5 处是无效注解
+# (ruff 的 BLE001 对"把异常记进日志/原样再抛"的处理器本来就不报),
+# 也就是说它们抑制的规则根本没有命中过。RUF100 会把这类注解当错误报出来,
+# 于是"注解上写着的规则确实存在"这件事从此有人守。爆炸半径: 清掉那 5 处
+# 之后为 0 命中。
+select = ["E", "F", "I", "UP", "B", "BLE", "RUF100"]

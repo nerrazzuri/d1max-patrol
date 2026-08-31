@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -13,6 +14,8 @@ from typing import Any
 from d1max_patrol.protocol.nav_types import LocStatus, MappingStatus, NavStatus, Pose
 
 from .kinematics import Planar2DModel
+
+log = logging.getLogger(__name__)
 
 
 class SimRejected(Exception):
@@ -98,9 +101,16 @@ class NavStateMachine:
         self.status = NavStatus.ACTIVE
 
     def fail(self, reason: str = "") -> None:
-        """外部注入导航失败。"""
+        """外部注入导航失败。
+
+        MIN-3: `reason` 要用起来。调用方传的是有意义的原因("定位丢失"、
+        测试里的"注入"),而导航转 FAILED 之后线上只看得到一个状态码 ——
+        原因不落日志就等于丢了,现场排查时无从判断这次 FAILED 是谁造成的。
+        """
         if self.status not in (NavStatus.INITIALIZING, NavStatus.ACTIVE, NavStatus.PAUSE):
             raise SimRejected(f"当前 {self.status.value} 无导航可失败")
+        log.info("导航从 %s 转入 FAILED,原因: %s",
+                 self.status.value, reason or "未给出")
         self._enter_terminal(NavStatus.FAILED)
 
     def _enter_terminal(self, status: NavStatus) -> None:

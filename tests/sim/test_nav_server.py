@@ -236,6 +236,21 @@ async def test_控制通道执行注入命令(sim):
     assert "speed_scale=0.5" in out["msg"]
 
 
+async def test_带查询串的控制通道地址仍然走控制通道(sim):
+    """MIN-4: `/control?x=1` 必须还是控制通道,不能被当成导航通道。
+
+    路由原来是 `ws.request.path.rstrip("/") == CONTROL_PATH`,不剥查询串。
+    带查询串的连接会掉进 `_handle_nav()`:注入命令被当成导航请求,
+    `parse_request` 解析不了、只在日志里记一句"忽略畸形报文",客户端
+    **一个字都收不到**,表现为静默挂起而不是报错。
+    """
+    async with connect(sim.control_url + "?x=1") as ws:
+        await ws.send(json.dumps({"cmd": "slow 2"}))
+        out = json.loads(await asyncio.wait_for(ws.recv(), timeout=5.0))
+    assert out["ok"] is True
+    assert sim.faults.speed_scale == 0.5
+
+
 async def test_控制通道对非法命令回_ok_false(sim):
     out = await _control(sim, "fly")
     assert out["ok"] is False
