@@ -9,6 +9,7 @@ from websockets.exceptions import ConnectionClosed
 
 from d1max_patrol.protocol import nav_requests as R
 from d1max_patrol.protocol.nav_frames import (
+    AlgErrorItem,
     AlgErrorNotify,
     Response,
     encode_request,
@@ -21,7 +22,7 @@ from d1max_patrol.protocol.nav_types import (
     Pose,
     Waypoint,
 )
-from d1max_sim.nav_server import SimNavServer
+from d1max_sim.nav_server import _TICK_IO_TIMEOUT_S, SimNavServer
 
 
 @pytest.fixture
@@ -430,3 +431,53 @@ async def test_get_pgm_map冒烟(sim):
         assert resp.ok is True
         assert resp.data["info"]["width"] > 0
         assert resp.data["info"]["height"] > 0
+
+
+class _卡死的连接:
+    """M3 回归用的假连接: send() 永不返回,但可被 cancel() 正常打断。
+
+    刻意不构造真实拥塞 socket —— 那需要把写缓冲真的塞满,在 CI 里对机器
+    负载敏感、容易 flaky。这里换一种造法:直接顶替一个"送不出去也不报错、
+    只是永远不返回"的连接,纯粹验证 `_broadcast` 对每个客户端的
+    `asyncio.wait_for(..., timeout=_TICK_IO_TIMEOUT_S)` 这个界确实生效,
+    不涉及真实网络、不依赖墙钟精度数 tick 次数。
+    """
+
+    def __init__(self) -> None:
+        self.remote_address = ("stuck", 0)
+
+    async def send(self, _text: str) -> None:
+        await asyncio.Event().wait()   # 永远挂起,直到被 cancel
+
+
+async def test_tick循环不会被不读取的客户端永久拖住(sim):
+    """M3 回归: 删掉 `_broadcast`/`_apply_faults` 里的 `asyncio.wait_for`
+    (换成裸 `await`)必须让这条测试变红或挂住 —— 见修复报告里的变异验证。"""
+    stuck = _卡死的连接()
+    sim._clients.add(stuck)
+    try:
+        async with connect(sim.url) as ws:
+            await _ready_map(ws)
+            await _call(ws, R.start_nav(Pose.from_xy_yaw(9.0, 0.0)), 10)
+            await _poll_until(ws, R.get_nav_status(), NavStatus.ACTIVE.value)
+
+            # 直接入队一条待推送的故障码(不经控制通道的真实网络往返),
+            # 逼下一次 _flush_pushes -> _broadcast 命中 stuck 连接。
+            sim.faults.queued_alg_errors.append(
+                AlgErrorItem(code=13330, description="injected", severity=0))
+
+            # 给 tick 循环几个周期,确保它已经取到这条待推送项、正卡在对
+            # stuck 连接的 send() 上(此刻若无 wait_for 保护,tick 循环已经
+            # 永久停摆)。
+            await asyncio.sleep(1.0 / sim.tick_hz * 5)
+            x1 = sim.model.x
+
+            # 再等一段明显长于 _TICK_IO_TIMEOUT_S 的时间。若这个界还在生效,
+            # tick 循环会在超时后恢复,机器人应当继续朝目标走出一段肉眼可辨
+            # 的距离;若界被去掉,tick 循环永久卡死,位置纹丝不动。这里只
+            # 断言"确实又走了一截",不掐着墙钟精度数 tick 次数。
+            await asyncio.sleep(_TICK_IO_TIMEOUT_S + 1.0)
+            x2 = sim.model.x
+            assert x2 - x1 > 0.1
+    finally:
+        sim._clients.discard(stuck)
