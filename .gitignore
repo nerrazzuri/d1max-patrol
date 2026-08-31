@@ -16,5 +16,6 @@ build/
 runs/
 *.log
 
-# Official reference material lives in ../refs (never committed)
-refs/
+# 厂商原始资料落位于 refs/，除 refs/README.md 外不入库
+refs/*
+!refs/README.md
