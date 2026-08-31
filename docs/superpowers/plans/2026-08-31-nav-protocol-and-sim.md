@@ -2411,6 +2411,18 @@ def test_未暂停时继续被拒绝():
         sm.resume()
 
 
+def test_非激活状态下暂停被拒绝():
+    sm = _nav()
+    with pytest.raises(SimRejected):
+        sm.pause()
+
+
+def test_无导航时注入失败被拒绝():
+    sm = _nav()
+    with pytest.raises(SimRejected):
+        sm.fail("没有导航在跑")
+
+
 def test_注入失败进入_failed_再回就绪():
     sm = _nav()
     sm.start(Pose.from_xy_yaw(5.0, 0.0))
@@ -2544,6 +2556,20 @@ def test_零角度目标也能收敛():
     sm = NavStateMachine(model=Planar2DModel())
     sm.start(Pose.from_xy_yaw(1.0, 0.0, math.pi))
     assert _run_until(sm, lambda: sm.status is NavStatus.SUCCEED)
+
+
+def test_跨初始化边界的大步长不多算行走时间():
+    """回归:一次大 step 里,初始化占掉的那部分时间不能算进行走距离。"""
+    big = _nav()
+    big.start(Pose.from_xy_yaw(5.0, 0.0))
+    big.step(0.31)                       # 0.30s 初始化 + 0.01s 行走
+    small = _nav()
+    small.start(Pose.from_xy_yaw(5.0, 0.0))
+    for _ in range(31):
+        small.step(0.01)
+    assert big.status is NavStatus.ACTIVE
+    assert small.status is NavStatus.ACTIVE
+    assert big.model.x == pytest.approx(small.model.x, abs=1e-6)
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -2559,8 +2585,7 @@ Expected: FAIL —— `ModuleNotFoundError: No module named 'd1max_sim.nav_state
 """仿真设备的三套状态机:导航、定位、建图。
 
 状态取值与迁移必须贴住 refs/nav-api 文档,因为契约测试用它们判定
-"到点了没有"。凡是文档没写死、由本仿真器补齐的行为,一律以
-"# 假设(待真机验证):" 注释标出。
+"到点了没有"。凡是文档没写死、由本仿真器补齐的行为,一律在源码里加注待真机验证标记。
 """
 
 from __future__ import annotations
@@ -2590,9 +2615,9 @@ class _Schedule:
     def push(self, delay: float, value: Any) -> None:
         self._queue.append((delay, value))
 
-    def tick(self, dt: float) -> list[Any]:
-        """推进 dt 秒,返回本次触发的所有值(可能不止一个)。"""
-        fired: list[Any] = []
+    def tick(self, dt: float) -> list[tuple[Any, float]]:
+        """推进 dt 秒,返回本次触发的 (值, 触发后本次 dt 的剩余量)。"""
+        fired: list[tuple[Any, float]] = []
         remaining = dt
         while self._queue and remaining > 0.0:
             delay, value = self._queue[0]
@@ -2602,7 +2627,7 @@ class _Schedule:
             else:
                 remaining -= delay
                 self._queue.pop(0)
-                fired.append(value)
+                fired.append((value, remaining))
         return fired
 
 
@@ -2613,10 +2638,14 @@ class NavStateMachine:
     """导航功能状态,见 refs/nav-api §3.6。"""
 
     model: Planar2DModel
+    # 假设(待真机验证): 以下两个延时参数是为使导航流程从初始化到活跃有明确的时间演变而设定的。
+    # 文档未指定这些时间;在实际机器人上需验证:
+    # 1. init_delay_s=0.3 s: 从启动导航到机器人可开始实际行走的初始化阶段耗时
+    # 2. terminal_hold_s=0.5 s: 导航到达终态(成功/失败/取消)后回落至待命状态前的驻留时间
     #: StandBy -> Initializing -> Active 的过渡时长
     init_delay_s: float = 0.3
-    #: 假设(待真机验证): 终态(Succeed/Failed/Cancelled)保持多久后回落 StandBy。
-    #: 文档只说"仅在 StandBy 下可启动导航",没说终态如何退出,这里补一个短驻留。
+    # 假设(待真机验证): 终态(Succeed/Failed/Cancelled)保持多久后回落 StandBy。
+    # 文档只说"仅在 StandBy 下可启动导航",没说终态如何退出,这里补一个短驻留。
     terminal_hold_s: float = 0.5
 
     status: NavStatus = NavStatus.STANDBY
@@ -2665,13 +2694,17 @@ class NavStateMachine:
         self._schedule.push(self.terminal_hold_s, NavStatus.STANDBY)
 
     def step(self, dt: float) -> None:
-        for value in self._schedule.tick(dt):
+        move_budget = dt
+        for value, remaining in self._schedule.tick(dt):
             self.status = value
-            if value is NavStatus.FAILED:
+            # 进入 Active 之前的那段时间是初始化,不该算作行走
+            if value is NavStatus.ACTIVE:
+                move_budget = remaining
+            elif value is NavStatus.FAILED:
                 self.model.clear_goal()
                 self._schedule.push(self.terminal_hold_s, NavStatus.STANDBY)
-        if self.status is NavStatus.ACTIVE:
-            self.model.step(dt)
+        if self.status is NavStatus.ACTIVE and move_budget > 0.0:
+            self.model.step(move_budget)
             if self.model.arrived:
                 self._enter_terminal(NavStatus.SUCCEED)
 
@@ -2682,6 +2715,10 @@ class NavStateMachine:
 class LocStateMachine:
     """定位功能状态,见 refs/nav-api §4.3。"""
 
+    # 假设(待真机验证): 以下两个延时参数是地图加载和初始定位的预估耗时。
+    # 文档未指定这些时间;在实际机器人上需验证:
+    # 1. load_delay_s=0.2 s: 地图加载从启动到完成的耗时
+    # 2. init_delay_s=0.3 s: 初始定位从加载完成到定位连续可用的耗时
     load_delay_s: float = 0.2
     init_delay_s: float = 0.3
 
@@ -2715,7 +2752,7 @@ class LocStateMachine:
         self.reset()
 
     def step(self, dt: float) -> None:
-        for value in self._schedule.tick(dt):
+        for value, _ in self._schedule.tick(dt):
             self.status = value
 
 
@@ -2733,6 +2770,11 @@ _MAPPING_STARTABLE = (
 class MappingStateMachine:
     """建图功能状态,见 refs/nav-api §1.3。"""
 
+    # 假设(待真机验证): 以下三个延时参数是建图流程各阶段的预估耗时。
+    # 文档未指定这些时间;在实际机器人上需验证:
+    # 1. sensor_delay_s=0.2 s: 传感器初始化等待耗时(启动到传感器就绪)
+    # 2. ready_delay_s=0.2 s: 建图准备阶段耗时(就绪到实际开始建图)
+    # 3. save_delay_s=0.3 s: 地图保存耗时(停止到保存完成)
     sensor_delay_s: float = 0.2
     ready_delay_s: float = 0.2
     save_delay_s: float = 0.3
@@ -2759,7 +2801,7 @@ class MappingStateMachine:
         self._schedule.push(self.save_delay_s, MappingStatus.MAPPING_SAVE_END)
 
     def step(self, dt: float) -> None:
-        for value in self._schedule.tick(dt):
+        for value, _ in self._schedule.tick(dt):
             self.status = value
             if value is MappingStatus.MAPPING_SAVE_END and self.on_saved is not None:
                 self.on_saved()
@@ -7943,6 +7985,10 @@ git commit -m "test: 厂商文档 JSON 样例作为解析器 golden fixture"
 | 8 | `notify_stop_mapping_status` 推送里的 `frame_count` 取值 | `d1max_sim/nav_server.py` | 待测 | |
 | 9 | §7 回充接口的 `AppResponse` 外壳(拼写与速度接口的 `AppReponseObjectData` 不同) | `protocol/nav_requests.py` `NESTED_RESPONSE_FUNCS` 注释 | 文档已确认存在,本卷不发这些请求 | 第 2 卷做回充时解析器要一并支持 |
 | 10 | 状态轮询 0.5s 是否会漏掉短暂终态 | `config/models.py` | 待测 | |
+| 11 | 四足运动参数:直线 0.6 m/s、转身 1.2 rad/s、到点容差 0.08 m、朝向容差 0.10 rad、朝向偏差阈值 0.20 rad | `d1max_sim/kinematics.py` | 待测 | |
+| 12 | 导航初始化耗时 `init_delay_s`≈0.3s(StandBy→Initializing→Active) | `d1max_sim/nav_state.py` | 待测 | |
+| 13 | 地图加载 0.2s、初始定位 0.3s(`load_delay_s` / `init_delay_s`) | `d1max_sim/nav_state.py` | 待测 | |
+| 14 | 建图三阶段耗时:传感器 0.2s、就绪 0.2s、保存 0.3s | `d1max_sim/nav_state.py` | 待测 | |
 
 核对方法:`d1max --url ws://192.168.144.100:10010 -v <子命令>`,把原始报文抄进本表。
 ```
