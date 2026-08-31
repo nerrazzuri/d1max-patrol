@@ -868,7 +868,7 @@ import json
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any
 
 FRAME_TYPE_REQUEST = "app_req"
 FRAME_TYPE_RESPONSE = "app_resp"
@@ -915,7 +915,7 @@ class AlgErrorNotify:
     raw: dict[str, Any] = field(repr=False)
 
 
-Message = Union[Response, AlgErrorNotify]
+Message = Response | AlgErrorNotify
 
 
 def _now_ms() -> int:
@@ -4508,7 +4508,7 @@ git commit -m "feat: 仿真导航服务端、故障注入控制通道与可执�
     - `AlgErrorEvent(items: tuple[AlgErrorItem, ...], time_stamp_ms: int)`
     - `BackendDisconnected(reason: str)`
     - `BackendReconnected()`
-    - `Event = Union[...]`（以上六者）
+    - `Event`:以上六者的 PEP 604 联合(`A | B | ...`;**不要用 `typing.Union`**,ruff UP007 会报错)
   - `NavBackend` 抽象基类
 
 **订阅模型：** 多个消费者可以各拿一条队列，互不抢事件。第 3 卷的 `MissionRunner` 会订一条跑任务，日志会订另一条落盘。
@@ -4701,7 +4701,7 @@ import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Any
 
 from d1max_patrol.protocol.nav_frames import AlgErrorItem
 from d1max_patrol.protocol.nav_types import (
@@ -4774,14 +4774,14 @@ class BackendReconnected:
     pass
 
 
-Event = Union[
-    NavStatusEvent,
-    LocStatusEvent,
-    MappingStatusEvent,
-    AlgErrorEvent,
-    BackendDisconnected,
-    BackendReconnected,
-]
+Event = (
+    NavStatusEvent
+    | LocStatusEvent
+    | MappingStatusEvent
+    | AlgErrorEvent
+    | BackendDisconnected
+    | BackendReconnected
+)
 
 
 # --------------------------------------------------------------------- 抽象
@@ -4827,21 +4827,26 @@ class NavBackend(ABC):
         调用方必须在下发 `goto()` **之前**订阅,否则可能错过瞬时终态;
         本方法内部自己订阅,所以正确用法是先 await 本方法的 task,
         再下发 goto —— 或者直接用第 3 卷的 MissionRunner。
+
+        注:用 `asyncio.wait_for` 而不是 `asyncio.timeout` —— 后者要
+        Python 3.11+,而全局约束是 3.10。
         """
         with self.subscription() as queue:
             try:
-                async with asyncio.timeout(timeout_s):
-                    while True:
-                        event = await queue.get()
-                        if isinstance(event, BackendDisconnected):
-                            raise NavConnectionError(
-                                f"等待导航终态期间链路断开: {event.reason}")
-                        if isinstance(event, NavStatusEvent) and \
-                                event.status in NAV_TERMINAL:
-                            return event.status
-            except TimeoutError as exc:
+                return await asyncio.wait_for(
+                    self._await_terminal(queue), timeout_s)
+            except asyncio.TimeoutError as exc:
                 raise NavTimeoutError(
                     f"等待导航终态超过 {timeout_s}s") from exc
+
+    async def _await_terminal(self, queue: asyncio.Queue[Event]) -> NavStatus:
+        while True:
+            event = await queue.get()
+            if isinstance(event, BackendDisconnected):
+                raise NavConnectionError(
+                    f"等待导航终态期间链路断开: {event.reason}")
+            if isinstance(event, NavStatusEvent) and event.status in NAV_TERMINAL:
+                return event.status
 
     # ------------------------------------------------------------ 生命周期
 
@@ -4935,26 +4940,6 @@ class NavBackend(ABC):
         """设置速度,返回设备回报的生效值(可能补齐了未传的分量)。"""
 ```
 
-**注意** `asyncio.timeout` 需要 Python 3.11+。全局约束里写的是 3.10，所以这里必须换成 3.10 兼容写法。用 `asyncio.wait_for` 包一个内部协程：
-
-```python
-    async def wait_nav_terminal(self, timeout_s: float) -> NavStatus:
-        with self.subscription() as queue:
-            try:
-                return await asyncio.wait_for(self._await_terminal(queue), timeout_s)
-            except asyncio.TimeoutError as exc:
-                raise NavTimeoutError(f"等待导航终态超过 {timeout_s}s") from exc
-
-    async def _await_terminal(self, queue: asyncio.Queue[Event]) -> NavStatus:
-        while True:
-            event = await queue.get()
-            if isinstance(event, BackendDisconnected):
-                raise NavConnectionError(f"等待导航终态期间链路断开: {event.reason}")
-            if isinstance(event, NavStatusEvent) and event.status in NAV_TERMINAL:
-                return event.status
-```
-
-按这个版本写，删掉上面用 `asyncio.timeout` 的那段。
 
 - [ ] **Step 4: 运行测试确认通过**
 
