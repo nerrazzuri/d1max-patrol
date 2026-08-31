@@ -33,6 +33,7 @@ HELP_TEXT = """\
   frame_count_zero on|off  响应的 frame_count 一律填 0,逼客户端走名字回退匹配
   reorder <秒>             响应统一延迟,制造乱序到达
   disconnect <秒>          断开所有连接并静默这么久
+  half_open on|off         半开链路: TCP 还在,设备却什么都不再读、不回关闭帧
   reset                    清空所有注入
   status                   回显当前注入状态
   help                     显示本帮助
@@ -57,6 +58,14 @@ class FaultState:
     response_delay_s: float = 0.0
     #: 待执行的断链秒数,服务端消费后清零
     disconnect_seconds: float = 0.0
+    # 假设(待真机验证): 真机在此形态下究竟表现为静默、还是表现为 TCP 层
+    # 立即 RST,文档没写。这里选的是静默(不读、不回、不断),因为它对客户端
+    # 更苛刻 —— 客户端必须自己有超时兜底才活得下来。
+    #: 半开链路: 设备侧不再读取任何客户端数据,自然也不会回关闭帧,但 TCP 不断。
+    #: 与 disconnect 的区别: disconnect 是"干脆地断",半开是"连着但死了"——
+    #: 后者才是机器狗跑出 wifi 覆盖时最常见的形态,也是唯一能暴露"关闭握手
+    #: 拿不到回应"这一类客户端缺陷的形态。
+    half_open: bool = False
     #: 下一次 start_nav 失败
     fail_next_nav: bool = False
     #: 待执行的定位丢失 / 恢复,服务端消费后清零
@@ -71,6 +80,7 @@ class FaultState:
         self.frame_count_zero = False
         self.response_delay_s = 0.0
         self.disconnect_seconds = 0.0
+        self.half_open = False
         self.fail_next_nav = False
         self.loc_lost_requested = False
         self.loc_recover_requested = False
@@ -88,6 +98,7 @@ class FaultState:
             f"frame_count_zero={self.frame_count_zero} "
             f"response_delay_s={self.response_delay_s} "
             f"disconnect_seconds={self.disconnect_seconds} "
+            f"half_open={self.half_open} "
             f"fail_next_nav={self.fail_next_nav} "
             f"loc_lost_requested={self.loc_lost_requested} "
             f"loc_recover_requested={self.loc_recover_requested} "
@@ -184,5 +195,9 @@ def apply_command(state: FaultState, line: str) -> str:
         state.disconnect_seconds = _positive_float(
             args[0] if args else None, "disconnect")
         return f"将断链 {state.disconnect_seconds}s"
+
+    if name == "half_open":
+        state.half_open = _on_off(args[0] if args else None, "half_open")
+        return f"half_open={state.half_open}"
 
     raise InjectError(f"未知命令: {name!r}。输入 help 查看可用命令")

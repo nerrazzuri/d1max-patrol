@@ -12,6 +12,7 @@ def test_默认状态什么都不注入():
     assert s.frame_count_zero is False
     assert s.response_delay_s == 0.0
     assert s.disconnect_seconds == 0.0
+    assert s.half_open is False
     assert s.fail_next_nav is False
     assert s.queued_alg_errors == []
 
@@ -117,6 +118,16 @@ def test_断链秒数():
     assert s.disconnect_seconds == pytest.approx(2.0)
 
 
+def test_半开链路开关():
+    s = FaultState()
+    apply_command(s, "half_open on")
+    assert s.half_open is True
+    apply_command(s, "half_open off")
+    assert s.half_open is False
+    with pytest.raises(InjectError, match="on 或 off"):
+        apply_command(s, "half_open 3")
+
+
 def test_sdk_链路命令给出明确的未实现提示():
     """battery / fault fatal / control_lost 属 SDK 链路,第 2 卷才有。"""
     for line in ("battery 20", "fault fatal", "control_lost"):
@@ -129,9 +140,11 @@ def test_reset_清空所有注入():
     apply_command(s, "slow 4")
     apply_command(s, "stuck on")
     apply_command(s, "alg_error 13330")
+    apply_command(s, "half_open on")
     apply_command(s, "reset")
     assert s.speed_scale == 1.0
     assert s.stuck is False
+    assert s.half_open is False
     assert s.queued_alg_errors == []
 
 
@@ -147,7 +160,7 @@ def test_status_命令回显当前注入():
 def test_help_命令列出全部命令():
     out = apply_command(FaultState(), "help")
     for name in ("loc_lost", "alg_error", "nav_fail", "slow", "stuck",
-                 "frame_count_zero", "reorder", "disconnect", "reset"):
+                 "frame_count_zero", "reorder", "disconnect", "half_open", "reset"):
         assert name in out
 
 

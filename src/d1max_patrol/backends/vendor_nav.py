@@ -151,7 +151,11 @@ class VendorNavBackend(NavBackend):
         """
         try:
             self._ws = await asyncio.wait_for(
-                connect(self.config.url, open_timeout=None),
+                # F1: 关闭握手的超时**必须**在这里交代给 websockets 自己,
+                # 不能到 _safe_close() 里用 wait_for 从外面掐。原因见
+                # _safe_close() 的 docstring。
+                connect(self.config.url, open_timeout=None,
+                        close_timeout=self.config.connect_timeout_s),
                 timeout=self.config.connect_timeout_s,
             )
         except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as exc:
@@ -208,12 +212,27 @@ class VendorNavBackend(NavBackend):
         """
         reader, self._reader = self._reader, None
         ws, self._ws = self._ws, None
+        if ws is not None:
+            # F2 不变式: **一条被摘下的连接,无论摘它的协程随后是否被取消,
+            # 都必须有人负责关掉它。** 原来是先摘、再 `await reader`、最后
+            # `await self._safe_close(ws)` —— close() 发过来的取消若落在
+            # `_safe_close` 上,`suppress(Exception)` 不捕 CancelledError
+            # (它是 BaseException),取消直接穿透;而 close() 那边取到的
+            # `self._ws` 早就是 None 了,这条 socket 于是**谁都不关**。
+            # 对端不应答时这个窗口有 connect_timeout_s 那么宽
+            # (再评审 q4b_isolated.py: race → LEAK,control → clean)。
+            #
+            # 改法照抄 _on_link_lost 的样板: 派一个后台任务去关。它独立于
+            # 本协程存活,被 `_background_tasks` 追踪,由 close() 兜底 await。
+            # 关键在于**摘下与派人之间一个 await 都没有** —— 交接是原子的。
+            # 代价: 拆解从同步变成异步,下一次重连可能在旧 socket 关完之前
+            # 就开始。这与 _on_link_lost 早就有的行为一致,仿真器按在线客户端
+            # 计数的那几条测试都不受影响(已验)。
+            self._spawn(self._safe_close(ws))
         if reader is not None:
             reader.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reader
-        if ws is not None:
-            await self._safe_close(ws)
         self._fail_pending("探针失败,链路未建立")
 
     async def close(self) -> None:
@@ -223,11 +242,27 @@ class VendorNavBackend(NavBackend):
         # 循环装回去,建出一条 close() 再也不追踪的链路(socket 与读循环任务
         # 双泄漏,评审 closerace.py)。
         #
-        # 走 `_connect_lock` 不会与 M2(connect() 与 _reconnect_once() 共用该锁
-        # 串行建链)打架,也不会自锁: 锁内唯一的 await 是 _open_link() 的握手,
-        # 有 connect_timeout_s 上限;而被 cancel 的任务即便正卡在这把锁上等,
-        # `Lock.acquire()` 是可取消的,CancelledError 会直接把它掀掉,不会回过
-        # 头来等 close() 释放锁。
+        # **不自锁靠的是 `_closing` 不变式,别弄错承重墙。** 上一版这里写的两条
+        # 理由再评审实测都不成立,已订正:
+        #   ✗ "锁内唯一的 await 是握手,有 connect_timeout_s 上限" —— 不对。
+        #     close() 自己在锁内 await 了三个任务、_safe_close(ws)、以及全部在飞
+        #     的 _background_tasks;实测持锁 5.00s(connect_timeout_s 才 2.0)。
+        #     持锁时长没有静态上限。
+        #   ✗ "被 cancel 的任务卡在 Lock.acquire() 上会被 CancelledError 掀掉"
+        #     —— 卡在 acquire() 上时确实如此,但那不是实际发生的事: 实测
+        #     `reconnector.cancelled() == False`,close() 发出的取消被
+        #     `_teardown_link()` 里的 `suppress(asyncio.CancelledError)` 吞掉了。
+        #
+        # 真正的保证: 锁内 await 的四类对象里,只有 `_reconnector` 会回头要
+        # `_connect_lock`(_reconnect_once() 里那句 `async with`)。而 `_closing`
+        # 只有三处赋值(__init__、connect()、close()),close() 在**锁外**先置
+        # True,唯一能清掉它的 connect() 在**锁内** —— close() 持锁期间没有任何
+        # 东西能把它翻回 False。于是 _reconnect_loop 的 `while not self._closing`
+        # 必定为假,重连循环退出,不会再来要锁。(再评审 8 条交叉 + 40 轮随机
+        # 压测造不出死锁,最慢 close() 5.00s。)
+        #
+        # 推论,给后来人: 谁要是在 _reconnect_loop 里放宽/挪走
+        # `while not self._closing`,或者在锁内清 `_closing`,就会得到一个真死锁。
         self._closing = True
         async with self._connect_lock:
             self._connected_event.clear()
@@ -267,16 +302,32 @@ class VendorNavBackend(NavBackend):
         task.add_done_callback(self._background_tasks.discard)
 
     async def _safe_close(self, ws: ClientConnection) -> None:
-        """带超时地关掉一条连接。链路拆解一律走这里,不要裸 `await ws.close()`。
+        """关掉一条连接,吞掉关闭过程中的一切异常。链路拆解一律走这里。
 
-        M4: websockets 的 close() 要等对端回关闭帧,默认等到 close_timeout
-        (10s)。一个不回关闭帧的对端 —— 断链注入模拟的正是这种链路异常 ——
-        能让 close() 整整阻塞十秒。仿真器侧同名方法早就为同一原因加了超时
-        (仿真器 nav_server.py 里的同名 _safe_close),客户端这边照做。
-        Python 3.10 用 asyncio.wait_for,不是 3.11 才有的 asyncio.timeout。
+        **这里绝对不能再套一层 `asyncio.wait_for`。** 这是踩过的坑,原样记下:
+
+        M4 一开始写成 `asyncio.wait_for(ws.close(), connect_timeout_s)`,想的是
+        "对端不回关闭帧时别让 close() 阻塞十秒"。方向对,机制错 ——
+        `ws.close()` **自带**超时兜底: websockets 在等关闭握手时挂着一个
+        `close_deadline = now + close_timeout`,**到点就 `transport.abort()`**。
+        对端不回关闭帧时,那句 `abort()` 是唯一真正拆掉 TCP 的动作。
+        从外面用 wait_for 取消 close(),等于赶在它自己的 abort() 之前把它打断:
+        阻塞是没有了,连接却**永久泄漏** —— 比不加超时更坏。
+
+        再评审实测的剂量-反应(对端是不回关闭帧的裸 TCP 服务端):
+
+            裸 close()                  10.02s  clean   ← close_timeout 到点 abort
+            wait_for(close(), 2.0)       2.00s  LEAK
+            wait_for(close(), 5.0)       5.00s  LEAK
+            wait_for(close(), 30.0)     10.00s  clean   ← 超时长于 close_timeout,
+                                                          abort() 跑到了
+
+        所以超时旋钮要拧在 websockets 内部: 建链时传 `close_timeout=`
+        (见 `_open_link()`),这边裸调 `close()`。等待时长一样受控,而 socket
+        真的会被拆掉。回归测试: `test_半开链路下关闭不泄漏socket`。
         """
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(ws.close(), timeout=self.config.connect_timeout_s)
+            await ws.close()
 
     # ------------------------------------------------------------ 读循环
 
@@ -382,7 +433,14 @@ class VendorNavBackend(NavBackend):
                     # 的话,后端就永久停在"已断开且无人重连"上(实测: 读循环的
                     # AssertionError 顺着 _teardown_link 的 `await reader` 逃出来,
                     # 40 轮断链注入里卡死 3 轮)。
-                    log.info("第 %d 次重连失败: %s", self.reconnect_attempts, exc)
+                    if isinstance(exc, NavBackendError):
+                        log.info("第 %d 次重连失败: %s", self.reconnect_attempts, exc)
+                    else:
+                        # 非导航异常落到这里就是真 bug(上一轮那个 AssertionError
+                        # 就是这么被 log.info 一行盖掉、害得全量跑三次才暴露的),
+                        # 必须带 traceback 喊出来。
+                        log.warning("第 %d 次重连遇到意外异常",
+                                    self.reconnect_attempts, exc_info=exc)
                     delay = min(delay * 2, self.config.reconnect_max_s)
                     continue
                 # 断链期间机器人可能已经走完或已经失败,缓存一律作废,

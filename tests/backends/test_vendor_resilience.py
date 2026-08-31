@@ -495,3 +495,78 @@ async def test_重连循环不被意外异常掀掉(sim, backend):
     await _drain_until(q, lambda e: isinstance(e, BackendReconnected), timeout_s=15.0)
     assert len(炸过) == 2, "两次意外异常没有真的发生,这条测试是空过的"
     assert backend.connected is True
+
+
+async def _进入半开链路(sim) -> None:
+    """把仿真器切成半开链路(TCP 还在、设备什么都不再读、不回关闭帧)。
+
+    等的是服务端自己的 `_half_open` 标志(tick 循环施加注入时置上),不是挂钟。
+    """
+    sim.faults.half_open = True
+    await _wait_until(lambda: sim._half_open)
+
+
+async def _退出半开链路(sim) -> None:
+    """恢复读取,让服务端察觉到对端已经走了,好让 sim.stop() 干净收尾。"""
+    sim.faults.half_open = False
+    await _wait_until(lambda: not sim._half_open)
+
+
+async def test_半开链路下关闭不泄漏socket(sim):
+    """F1: 对端不回关闭帧时,`close()` 必须**真的**把 TCP 拆掉。
+
+    `ws.close()` 自带 close_timeout 兜底,到点会 `transport.abort()` ——
+    那是这种链路下唯一真正拆掉 TCP 的动作。从外面套 `asyncio.wait_for` 把
+    close() 取消,等于赶在 abort() 之前把它打断:连接永久泄漏。所以超时旋钮
+    拧在建链处的 `close_timeout=`,`_safe_close()` 裸调 close()。
+    """
+    b = VendorNavBackend(
+        NavConfig(url=sim.url, request_timeout_s=1.0, connect_timeout_s=1.0,
+                  status_poll_interval_s=_POLLER_OFF),
+        auto_reconnect=False)
+    await b.connect()
+    真链路 = b._ws
+    await _wait_until(lambda: len(sim._clients) == 1)
+    await _进入半开链路(sim)
+
+    循环 = asyncio.get_running_loop()
+    起 = 循环.time()
+    await b.close()
+    用时 = 循环.time() - 起
+
+    assert 真链路.transport.is_closing(), "对端不回关闭帧时,这条 TCP 根本没被拆掉"
+    assert 用时 < 5.0, f"close() 花了 {用时:.2f}s,关闭超时没有按 close_timeout 生效"
+    # 服务端一恢复读取就会读到 EOF —— 这是"socket 真的没了"的对端确认。
+    await _退出半开链路(sim)
+    await _wait_until(lambda: len(sim._clients) == 0, timeout_s=15.0)
+
+
+async def test_拆链路摘走的连接一定有人负责关掉(sim):
+    """F2: `_teardown_link()` 摘下 `_ws` 之后若自己被取消,那条 socket 仍须有人关。
+
+    老写法是先摘、再 `await self._safe_close(ws)`;取消落在后半段时
+    `suppress(Exception)` 不捕 CancelledError,取消直接穿透,而 `close()` 那边
+    取到的 `_ws` 已经是 None —— 这条 socket 谁都不关(再评审 q4b_isolated.py:
+    race → LEAK conn#2,control → clean)。半开链路把那个窗口拉到肉眼可见。
+    """
+    b = VendorNavBackend(
+        NavConfig(url=sim.url, request_timeout_s=1.0, connect_timeout_s=1.0,
+                  status_poll_interval_s=_POLLER_OFF),
+        auto_reconnect=False)
+    await b.connect()
+    真链路, 读循环 = b._ws, b._reader
+    await _wait_until(lambda: len(sim._clients) == 1)
+    await _进入半开链路(sim)
+
+    拆解 = asyncio.create_task(b._teardown_link())
+    # 等到"已摘走、读循环也收完了"—— 老写法这时正卡在 _safe_close 的关闭握手上,
+    # 那一段有 close_timeout(1.0s)那么宽,取消必定落在里面。
+    await _wait_until(lambda: b._ws is None and 读循环.done())
+    拆解.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await 拆解
+
+    await b.close()          # close() 取到的 _ws 已经是 None,指望不上它
+    assert 真链路.transport.is_closing(), "被 _teardown_link 摘走的连接没有任何人关"
+    await _退出半开链路(sim)
+    await _wait_until(lambda: len(sim._clients) == 0, timeout_s=15.0)

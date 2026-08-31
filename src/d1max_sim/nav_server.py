@@ -98,6 +98,9 @@ class SimNavServer:
         self._tasks: set[asyncio.Task[None]] = set()
         self._pending_map_saved = False
         self._silent_until = 0.0
+        #: 半开链路注入当前是否已经施加到连接上。tick 循环负责让它跟上
+        #: faults.half_open;测试等这个标志,而不是等挂钟。
+        self._half_open = False
         # Mi-1: 这是**全局**响应序号(跨所有连接共用),不是按连接单独计数。
         # reorder 注入靠它的奇偶性决定"延迟这一半、放行那一半";多个客户端
         # 并发下,哪个客户端的哪条请求命中奇数位不可预测 —— 这个注入只保证
@@ -177,6 +180,9 @@ class SimNavServer:
 
     async def _handle_nav(self, ws: ServerConnection) -> None:
         self._clients.add(ws)
+        if self._half_open:
+            # 注入生效期间新接进来的连接也一样是哑的,免得客户端一重连就"好了"。
+            self._set_half_open(ws, True)
         try:
             async for raw in ws:
                 try:
@@ -308,6 +314,30 @@ class SimNavServer:
             for ws in list(self._clients):
                 self._spawn(self._safe_close(ws, code=1012, reason="injected disconnect"))
             self._clients.clear()
+        if f.half_open != self._half_open:
+            self._half_open = f.half_open
+            for ws in list(self._clients):
+                self._set_half_open(ws, f.half_open)
+
+    def _set_half_open(self, ws: ServerConnection, on: bool) -> None:
+        """半开链路: 让这条连接的接收侧彻底哑掉,但不动 TCP 本身。
+
+        做法是暂停传输层的读取 —— 服务端从此收不到这个客户端的任何东西,
+        包括它的关闭帧,自然也就不会回一帧关闭帧。连接对象、socket、发送侧
+        都还在,与"设备跑出 wifi 覆盖"的形态一致。
+
+        为什么不用别的做法: 直接 abort 传输层是"干脆地断",客户端立刻拿到
+        ConnectionResetError,压根考验不到"关闭握手等不到回应"这条路径 ——
+        而那正是 F1 那类客户端缺陷唯一能被抓住的地方。
+        """
+        transport = getattr(ws, "transport", None)
+        if transport is None:
+            return
+        with contextlib.suppress(Exception):
+            if on:
+                transport.pause_reading()
+            else:
+                transport.resume_reading()
 
     async def _flush_pushes(self) -> None:
         for item in self.faults.take_alg_errors():
