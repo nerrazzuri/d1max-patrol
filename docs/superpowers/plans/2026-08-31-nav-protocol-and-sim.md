@@ -43,7 +43,7 @@
 核对厂商文档 `refs/nav-api/自主导航_WEBSOCKET_API.md` 后确认的四处偏离直觉之处：
 
 1. **响应嵌套层**：`get_navigation_speed` / `set_navigation_speed`（§3.9/§3.10）的响应把 payload 多包了一层 `data.req_result.AppReponseObjectData.{req_func,status,msg,data}`（厂商把 Response 拼成了 Reponse）。其余接口都是 `data.req_result.{...}` 直挂。解析器必须两种都吃。
-2. **请求名与响应名不一致**：请求发 `loc_load_map`（§4.1），响应回的 `req_func` 是 `load_localization_map`。这直接击穿"按 `req_func` 名回退匹配"的策略，必须有别名表。`exit_charging` 属同类（本卷不实现回充，只在别名表里留位置）。
+2. **请求名与响应名不一致**：请求发 `loc_load_map`（§4.1），响应回的 `req_func` 是 `load_localization_map`。这直接击穿"按 `req_func` 名回退匹配"的策略，必须有别名表。（`exit_charging` 曾被归入此类，实为误判：§7.14 文档给了完整的请求/响应样例，响应名与请求名一致，且是被动答复而非主动推送。本卷不实现回充，别名表与推送名单里都不留它。）
 3. **推送复用 `app_resp` 类型**：`notify_stop_mapping_status`（§1.2）是设备主动推送，但 `head.type` 也是 `app_resp`，`frame_count` 不对应任何请求。收到匹配不上的 `app_resp` 不能直接丢弃，必须先查推送名单。
 4. **导航状态没有推送通道**：文档中只有 `alg_error_code_notify`（§9）和 `notify_stop_mapping_status` 两种主动推送。`get_nav_status` / `get_loc_status` / `get_mapping_status` 只能轮询。因此 `VendorNavBackend` 必须自带轮询器，把状态变化转成事件流。
 
@@ -1528,7 +1528,7 @@ git commit -m "feat: 导航状态枚举、故障码常量与位姿类型"
   - `UNVERIFIED_RESPONSE_FUNCS: frozenset[str]` —— 文档未给响应样例、响应名未验证的请求名
   - `NavRequest(req_func: str, args: Any = None)` 冻结数据类，含 `response_func: str` 属性与 `nested: bool` 属性
   - 建图与地图：`start_mapping()`、`stop_mapping()`、`get_mapping_status()`、`get_pgm_map(map_id)`、`get_all_pgm_map()`、`remove_map_by_id(map_ids: Sequence[str])`、`rename_map_name(old_id, new_id)`
-  - 路径：`get_all_paths_by_mapid(map_id)`、`add_nav_path(map_id, path_id, waypoints: Sequence[Waypoint])`、`modify_nav_path(map_id, path_id, waypoints)`、`remove_nav_path(pairs: Sequence[tuple[str, str]])`
+  - 路径：`get_all_paths_by_mapid(map_id)`、`add_nav_path(map_id, path_id, waypoints: Sequence[Waypoint])`、`modify_nav_path(map_id, old_path_id, new_path_id, waypoints)`、`remove_nav_path(pairs: Sequence[tuple[str, str]])`
   - 导航：`start_nav(pose: Pose)`、`start_multi_nav(map_id, path_id)`、`start_multi_nav_by_points(map_id, poses: Sequence[Pose])`、`start_nav_return_home()`、`stop_nav()`、`pause_nav()`、`continue_nav()`、`get_nav_status()`、`get_navigation_speed()`、`set_navigation_speed(x, y=None, z=None)`
   - 定位：`loc_load_map(map_id)`、`reset_loc()`、`get_loc_status()`
   - 解析辅助：`parse_paths_payload(data: Any) -> dict[str, list[Waypoint]]`、`parse_map_ids(data: Any) -> list[str]`
@@ -1588,10 +1588,14 @@ def test_添加路径参数形状():
     assert req.args[2][1][0] == "P2"
 
 
-def test_修改路径与添加路径形状相同但函数名不同():
+def test_修改路径是四元参数且可改名():
+    """§2.3: [map_id, old_path_id, new_path_id, waypoints] —— 比 add 多一个改名位。"""
     wps = [Waypoint("P1", Pose.from_xy_yaw(0.0, 0.0))]
-    assert R.modify_nav_path("m", "p", wps).req_func == "modify_nav_path"
-    assert R.modify_nav_path("m", "p", wps).args[2] == R.add_nav_path("m", "p", wps).args[2]
+    req = R.modify_nav_path("m", "old", "new", wps)
+    assert req.req_func == "modify_nav_path"
+    assert req.args[:3] == ["m", "old", "new"]
+    # 路点段的编码与 add_nav_path 完全一致,只是位置不同
+    assert req.args[3] == R.add_nav_path("m", "p", wps).args[2]
 
 
 def test_删除路径参数是二元组数组():
@@ -1659,8 +1663,9 @@ def test_别名表只收录不一致的条目():
 
 def test_只推送不响应的函数名():
     """协议地雷 3: 这些名字只会作为主动推送出现,匹配不上请求属正常。"""
-    assert "notify_stop_mapping_status" in R.PUSH_ONLY_FUNCS
-    assert "exit_charging" in R.PUSH_ONLY_FUNCS
+    assert R.PUSH_ONLY_FUNCS == frozenset({"notify_stop_mapping_status"})
+    # exit_charging 不在此列: §7.14 有完整请求/响应样例,是答复不是推送。
+    assert "exit_charging" not in R.PUSH_ONLY_FUNCS
 
 
 def test_未验证响应名的接口被标注():
@@ -1739,10 +1744,12 @@ REQUEST_TO_RESPONSE_FUNC: dict[str, str] = {
 
 #: 协议地雷 3: 只会作为设备主动推送出现的响应 req_func。
 #: 它们的 head.type 也是 app_resp,但 frame_count 不对应任何请求。
-#: exit_charging 属回充功能,本卷不实现,先占位以免被当作乱码丢弃。
-PUSH_ONLY_FUNCS = frozenset({"notify_stop_mapping_status", "exit_charging"})
+PUSH_ONLY_FUNCS = frozenset({"notify_stop_mapping_status"})
 
-#: 协议地雷 1: 响应带 AppReponseObjectData 外壳的请求名。
+#: 协议地雷 1: 响应带 AppReponseObjectData 外壳(厂商把 Response 拼成 Reponse)的请求名。
+#: 注意文档里还有第二种外壳键名 AppResponse(拼写正确),出现在 §7 回充/对桩接口
+#: (get_arc_alg_status §7.13、exit_charging §7.14)。本卷不发这些请求,故解析器
+#: 只处理 AppReponseObjectData;第 2 卷做回充时必须把 AppResponse 一并支持。
 NESTED_RESPONSE_FUNCS = frozenset({"get_navigation_speed", "set_navigation_speed"})
 
 #: 文档只给了请求没给响应样例的接口,响应 req_func 名未经验证。
@@ -1793,6 +1800,9 @@ def get_mapping_status() -> NavRequest:
 
 def get_pgm_map(map_id: str) -> NavRequest:
     """§1.4 获取指定 PGM 地图。"""
+    # 假设(待真机验证): 文档 §1.4 的请求样例写的是 {"get_pgm_map": null},没有给出
+    # 按 map_id 取图的形状。这里仍按 map_id 下发 —— 上层需要指定地图,而多传一个
+    # 参数通常被忽略;若真机拒绝,改回 None 即可,调用方签名不变。
     return NavRequest("get_pgm_map", map_id)
 
 
@@ -1827,9 +1837,16 @@ def add_nav_path(map_id: str, path_id: str, waypoints: Sequence[Waypoint]) -> Na
     return NavRequest("add_nav_path", [map_id, path_id, _waypoints_wire(waypoints)])
 
 
-def modify_nav_path(map_id: str, path_id: str, waypoints: Sequence[Waypoint]) -> NavRequest:
-    """§2.3 修改导航路径。参数形状同 add_nav_path。"""
-    return NavRequest("modify_nav_path", [map_id, path_id, _waypoints_wire(waypoints)])
+def modify_nav_path(map_id: str, old_path_id: str, new_path_id: str,
+                    waypoints: Sequence[Waypoint]) -> NavRequest:
+    """§2.3 修改导航路径。比 add_nav_path 多一个改名位:老路径名改成新路径名。
+
+    同名覆盖就把 old 和 new 传成同一个值。
+    """
+    return NavRequest(
+        "modify_nav_path",
+        [map_id, old_path_id, new_path_id, _waypoints_wire(waypoints)],
+    )
 
 
 def remove_nav_path(pairs: Sequence[tuple[str, str]]) -> NavRequest:
@@ -3736,7 +3753,7 @@ async def test_路径增删查往返(sim):
         assert [w.name for w in got["p1"]] == ["A", "B"]
         assert got["p1"][1].pose.position.y == 4.0
 
-        assert (await _call(ws, R.modify_nav_path(map_id, "p1", wps[:1]), 22)).ok
+        assert (await _call(ws, R.modify_nav_path(map_id, "p1", "p1", wps[:1]), 22)).ok
         got = R.parse_paths_payload(
             (await _call(ws, R.get_all_paths_by_mapid(map_id), 23)).data)
         assert [w.name for w in got["p1"]] == ["A"]
@@ -4163,7 +4180,8 @@ class SimNavServer:
     def _h_get_all_paths_by_mapid(self, args: Any) -> Any:
         return self.store.paths_payload(_as_str(args, "get_all_paths_by_mapid"))
 
-    def _set_path(self, args: Any, name: str) -> None:
+    def _h_add_nav_path(self, args: Any) -> None:
+        name = "add_nav_path"
         map_id, path_id, points = _as_list(args, name, 3)
         self.store.set_path(
             _as_str(map_id, name),
@@ -4171,11 +4189,19 @@ class SimNavServer:
             [Waypoint.from_wire(p) for p in _as_list(points, name)],
         )
 
-    def _h_add_nav_path(self, args: Any) -> None:
-        self._set_path(args, "add_nav_path")
-
     def _h_modify_nav_path(self, args: Any) -> None:
-        self._set_path(args, "modify_nav_path")
+        """§2.3 是四元参数,且允许顺带改名:old_path_id -> new_path_id。"""
+        name = "modify_nav_path"
+        map_id, old_id, new_id, points = _as_list(args, name, 4)
+        map_id = _as_str(map_id, name)
+        old_id = _as_str(old_id, name)
+        new_id = _as_str(new_id, name)
+        self.store.set_path(
+            map_id, new_id,
+            [Waypoint.from_wire(p) for p in _as_list(points, name)],
+        )
+        if old_id != new_id:
+            self.store.remove_path(map_id, old_id)
 
     def _h_remove_nav_path(self, args: Any) -> None:
         for pair in _as_list(args, "remove_nav_path"):
@@ -5549,8 +5575,12 @@ Expected: FAIL —— `TypeError: Can't instantiate abstract class VendorNavBack
         # 厂商把新增和修改分成两个接口,但语义都是"整条覆盖"。
         # 上层只需要一个 save,已存在就走 modify。
         existing = await self.list_paths(map_id)
-        request = modify_nav_path if path_id in existing else add_nav_path
-        await self.request(request(map_id, path_id, list(waypoints)))
+        if path_id in existing:
+            # 同名覆盖:老名字新名字传成同一个。
+            req = modify_nav_path(map_id, path_id, path_id, list(waypoints))
+        else:
+            req = add_nav_path(map_id, path_id, list(waypoints))
+        await self.request(req)
 
     async def remove_path(self, map_id: str, path_id: str) -> None:
         await self.request(remove_nav_path([(map_id, path_id)]))
@@ -7909,9 +7939,9 @@ git commit -m "test: 厂商文档 JSON 样例作为解析器 golden fixture"
 | 4 | `reset_loc` 的响应函数名就是 `reset_loc` | `protocol/nav_requests.py` `UNVERIFIED_RESPONSE_FUNCS` | 待测 | |
 | 5 | `start_nav_return_home` 的响应函数名 | 同上 | 待测 | |
 | 6 | `start_multi_nav_by_points` 的响应函数名 | 同上 | 待测 | |
-| 7 | `exit_charging` 是否真的只推不回 | `protocol/nav_requests.py` `PUSH_ONLY_FUNCS` | 待测 | |
+| 7 | `get_pgm_map` 能否按 map_id 取图(文档样例写的是 null) | `protocol/nav_requests.py` `get_pgm_map` | 待测 | |
 | 8 | `notify_stop_mapping_status` 推送里的 `frame_count` 取值 | `d1max_sim/nav_server.py` | 待测 | |
-| 9 | 除速度接口外是否还有别的接口用嵌套外壳 | `protocol/nav_frames.py` | 待测 | |
+| 9 | §7 回充接口的 `AppResponse` 外壳(拼写与速度接口的 `AppReponseObjectData` 不同) | `protocol/nav_requests.py` `NESTED_RESPONSE_FUNCS` 注释 | 文档已确认存在,本卷不发这些请求 | 第 2 卷做回充时解析器要一并支持 |
 | 10 | 状态轮询 0.5s 是否会漏掉短暂终态 | `config/models.py` | 待测 | |
 
 核对方法:`d1max --url ws://192.168.144.100:10010 -v <子命令>`,把原始报文抄进本表。
