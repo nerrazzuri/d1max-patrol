@@ -40,6 +40,7 @@ from d1max_patrol.protocol.nav_types import (
     Waypoint,
     parse_enum,
 )
+from d1max_patrol.recorder import FrameRecorder
 
 from .base import (
     AlgErrorEvent,
@@ -71,9 +72,18 @@ class _Pending:
 
 
 class VendorNavBackend(NavBackend):
-    def __init__(self, config: NavConfig, auto_reconnect: bool = True) -> None:
+    def __init__(
+        self,
+        config: NavConfig,
+        auto_reconnect: bool = True,
+        recorder: FrameRecorder | None = None,
+    ) -> None:
         super().__init__()
         self.config = config
+        #: 原始帧录制器(旁路,可为 None)。**它是明天真机现场唯一不可复现的
+        #: 产出** —— 见 recorder.py 模块文档。录制永远不许弄断链路,所以这里
+        #: 只在两个点上调它,而且 FrameRecorder 自己吞掉所有异常。
+        self.recorder = recorder
         self._ws: ClientConnection | None = None
         self._reader: asyncio.Task[None] | None = None
         self._frame_counter = itertools.count(1)
@@ -173,6 +183,8 @@ class VendorNavBackend(NavBackend):
         if self._poller is None:
             self._poller = asyncio.create_task(self._poll_loop())
         log.info("已连接导航设备 %s", self.config.url)
+        if self.recorder is not None:
+            self.recorder.note("link_up", url=self.config.url)
 
     async def _reconnect_once(self) -> None:
         """重连一次。与 connect() 的区别: 建链之后要用一条真实请求确认对端
@@ -382,6 +394,10 @@ class VendorNavBackend(NavBackend):
         """
         try:
             async for raw in ws:
+                # 录制放在 parse_message **之前**: 解析不了的畸形帧恰恰是
+                # 最需要带回去离线分析的那种,放在后面就正好把它漏掉了。
+                if self.recorder is not None:
+                    self.recorder.record_rx(raw)
                 try:
                     message = parse_message(raw)
                 except ProtocolError as exc:
@@ -421,6 +437,8 @@ class VendorNavBackend(NavBackend):
             return
         ws, self._ws = current, None
         self._connected_event.clear()
+        if self.recorder is not None:
+            self.recorder.note("link_down", reason=reason)
         # I2(Task 12): 光丢引用不够 —— 旧连接的 socket 还开着,服务端会一直把
         # 它算作在线客户端。真正关掉它,丢给后台任务做,免得阻塞读循环的收尾。
         if ws is not None:
@@ -612,7 +630,12 @@ class VendorNavBackend(NavBackend):
         entry = _Pending(req.req_func, req.response_func, future)
         self._pending[frame_count] = entry
         try:
-            await ws.send(encode_request(req.req_func, req.args, frame_count))
+            wire = encode_request(req.req_func, req.args, frame_count)
+            if self.recorder is not None:
+                # 录在 send **之前**: send 失败的帧同样是现场证据,
+                # 而且录了之后如果没有对应的 rx,离线一眼就看得出丢在哪。
+                self.recorder.record_tx(wire)
+            await ws.send(wire)
         except Exception as exc:
             reason = f"发送 {req.req_func} 失败: {exc}"
             # I4: 断链与 send 失败几乎同时发生时,`_fail_pending()` 会**先**给

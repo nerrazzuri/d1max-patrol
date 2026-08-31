@@ -17,6 +17,7 @@ from dataclasses import replace
 from d1max_patrol.backends.base import NavBackendError, NavTimeoutError
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.loader import ConfigError, load_config
+from d1max_patrol.conformance import nav_host_port, run_conformance
 from d1max_patrol.protocol.nav_types import (
     LOC_HEALTHY,
     MappingStatus,
@@ -24,6 +25,7 @@ from d1max_patrol.protocol.nav_types import (
     Pose,
     Waypoint,
 )
+from d1max_patrol.recorder import FrameRecorder, default_recording_path
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=DEFAULT_NAV_TIMEOUT_S,
                         help="单点导航超时秒数(默认 %(default)s)")
     parser.add_argument("-v", "--verbose", action="store_true")
+    # 录制**默认开**。理由见 recorder.py: 代码以后能改,真机上没录到的帧
+    # 补不回来。要关掉必须显式说出口。
+    parser.add_argument("--record", metavar="路径",
+                        help="原始帧录制落盘位置(默认 runs/frames/nav-<UTC>.jsonl)")
+    parser.add_argument("--no-record", action="store_true",
+                        help="关闭原始帧录制(不推荐:现场录像不可复现)")
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -86,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--y", type=float)
     p.add_argument("--z", type=float)
 
+    p = sub.add_parser("conform", help="真机一致性巡检(阶段 0/1,纯只读)")
+    p.add_argument("--outdir", help="报告输出目录(默认 runs/conformance/<UTC>)")
+    p.add_argument("--allow-motion", action="store_true",
+                   help="允许会让机器移动的阶段。默认关闭 —— 现场机器旁边站着人")
+
     p = sub.add_parser("sim", help="起一台仿真设备")
     p.add_argument("--port", type=int, default=10010)
     p.add_argument("--seed", action="store_true")
@@ -102,12 +115,27 @@ async def _backend(args) -> AsyncIterator[VendorNavBackend]:
     # NavConfig 是 frozen dataclass,覆盖单个字段用 replace 就够了 ——
     # 不要写 type(config.nav)(**{**config.nav.__dict__, ...}) 那种绕法。
     nav = config.nav if args.url is None else replace(config.nav, url=args.url)
-    backend = VendorNavBackend(nav, auto_reconnect=False)
-    await backend.connect()
+
+    recorder = None
+    if not getattr(args, "no_record", False):
+        path = getattr(args, "record", None) or default_recording_path(config.runs_dir)
+        recorder = FrameRecorder(path)
+
+    backend = VendorNavBackend(nav, auto_reconnect=False, recorder=recorder)
     try:
-        yield backend
+        await backend.connect()
+        try:
+            yield backend
+        finally:
+            await backend.close()
     finally:
-        await backend.close()
+        # 录制器必须在**连接失败的路径上也**收尾 —— 连不上的那次录像里
+        # 恰好记着 link_up 之前发生了什么,现场排障就靠它。
+        if recorder is not None:
+            recorder.close()
+            if not recorder.failed:
+                print(f"原始帧录像: {recorder.path} ({recorder.count} 行)",
+                      file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -346,6 +374,43 @@ async def _cmd_speed(backend, args) -> int:
     return 0
 
 
+async def _cmd_conform(backend, args) -> int:
+    """一致性巡检。阶段 0/1 纯只读,不会让机器动。"""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    config = load_config(args.config)
+    url = args.url or config.nav.url
+    if args.outdir:
+        outdir = Path(args.outdir)
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        outdir = Path(config.runs_dir) / "conformance" / stamp
+
+    host, port = nav_host_port(url)
+    # 探测表里把**实际用的**导航地址替掉默认值 —— 现场可能改了 IP,
+    # 拿默认值去探等于报告里写了一条假的"不通"。
+    probes = (("nav", host, port), ("sdk", "192.168.234.1", 8081))
+
+    result = await run_conformance(
+        backend, url, outdir, backend.recorder,
+        allow_motion=args.allow_motion, probes=probes,
+    )
+
+    ok = sum(1 for c in result.calls if c.ok)
+    print(f"只读接口: {ok}/{len(result.calls)} 成功")
+    for p in result.probes:
+        print(f"网络 {p.name} {p.host}:{p.port}: {'通' if p.ok else '不通'} — {p.detail}")
+    dirty = [d for d in result.diffs if not d.clean]
+    print(f"字段对拍: {len(result.diffs)} 种响应,{len(dirty)} 种与文档不一致")
+    for d in dirty:
+        print(f"  ! {d.resp_func}")
+    print(f"报告: {outdir / 'conformance-report.md'}")
+    # 退出码只反映"巡检本身有没有跑起来"。字段不一致**不算失败** ——
+    # 那正是我们来采集的信息,拿它当错误会让现场以为流程崩了。
+    return 0 if ok else 1
+
+
 _COMMANDS = {
     "status": _cmd_status,
     "maps": _cmd_maps,
@@ -357,6 +422,7 @@ _COMMANDS = {
     "goto": _cmd_goto,
     "walk": _cmd_walk,
     "speed": _cmd_speed,
+    "conform": _cmd_conform,
 }
 
 

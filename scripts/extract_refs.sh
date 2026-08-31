@@ -17,7 +17,20 @@ unzip -q "$SRC/3.自主导航二开资料.zip" -d "$TMP" \
     -x '*/lib/*/librobot_sdk.so'
 
 find "$TMP" -name '自主导航_WEBSOCKET_API.md' -exec cp {} "$DEST/nav-api/" \;
-find "$TMP" -maxdepth 4 -type d -name 'RobotSDK-*' -exec cp -r {} "$DEST/robot-sdk/" \;
-find "$TMP" -maxdepth 4 -type d -name 'max_description' -exec cp -r {} "$DEST/urdf/" \;
+find "$TMP" -type d -name 'max_description' -exec cp -r {} "$DEST/urdf/" \;
+
+# RobotSDK 在 zip 里是 **tar 包**(RobotSDK-<ver>.tar.gz),不是目录。
+# 早先这里写的是 `find -maxdepth 4 -type d -name 'RobotSDK-*'`,-type d 永远
+# 匹配不到一个 .tar.gz,所以 refs/robot-sdk/ 一直是空的、而且不报错。
+# 别改回 -type d。
+find "$TMP" -type f -name 'RobotSDK-*.tar.gz' -print0     | while IFS= read -r -d '' tarball; do
+        tar xzf "$tarball" -C "$DEST/robot-sdk/"
+    done
+
+# 解出来必须非空 —— 上一版的失败模式就是"静默产出空目录"。
+if [ -z "$(ls -A "$DEST/robot-sdk")" ]; then
+    echo "错误: refs/robot-sdk/ 解包后为空" >&2
+    exit 1
+fi
 
 echo "refs/ 已重建于 $DEST"
