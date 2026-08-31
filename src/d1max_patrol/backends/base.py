@@ -189,6 +189,11 @@ class NavBackend(ABC):
     async def close(self) -> None:
         """断开并释放所有后台任务。可重复调用。"""
 
+    @property
+    @abstractmethod
+    def connected(self) -> bool:
+        """链路当前是否可用。"""
+
     # ------------------------------------------------------------ 地图
 
     @abstractmethod

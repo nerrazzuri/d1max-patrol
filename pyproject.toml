@@ -29,6 +29,7 @@ where = ["src"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["contract: NavBackend 的实现无关行为约定"]
 
 [tool.ruff]
 line-length = 100
