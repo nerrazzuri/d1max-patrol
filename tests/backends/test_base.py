@@ -76,8 +76,10 @@ async def test_订阅者各自收到全部事件():
     a, b = backend.subscribe(), backend.subscribe()
     event = NavStatusEvent(NavStatus.ACTIVE, NavStatus.INITIALIZING)
     backend.emit(event)
-    assert await a.get() is event
-    assert await b.get() is event
+    # 必须包超时:emit/subscribe 一旦出 bug,事件永远不来,裸 await 会让整场
+    # 测试挂死而不是报红 —— 挂起比失败更糟,CI 上只剩一个超时,什么信息都没有。
+    assert await asyncio.wait_for(a.get(), timeout=5.0) is event
+    assert await asyncio.wait_for(b.get(), timeout=5.0) is event
 
 
 async def test_退订后不再收到事件():
