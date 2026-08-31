@@ -107,6 +107,30 @@ async def test_路径保存读取与删除(backend):
     assert await backend.list_paths(map_id) == {}
 
 
+async def test_新增路径走add_同名覆盖走modify(backend, monkeypatch):
+    """厂商把新增和修改拆成两个接口,仿真器对两者反应相同(都落到同一个
+    store.set_path),只看结果分不出对错 —— 必须直接盯住发出去的接口名。
+    发错了真机会拒绝,这里不会,所以这条分支只能这样测。"""
+    map_id = await _ready(backend)
+    points = [Waypoint("P1", Pose.from_xy_yaw(1.0, 0.0, 0.0))]
+
+    sent: list[str] = []
+    real = backend.request
+
+    async def spy(req):
+        sent.append(req.req_func)
+        return await real(req)
+
+    monkeypatch.setattr(backend, "request", spy)
+
+    await backend.save_path(map_id, "路线甲", points)
+    assert sent[-1] == "add_nav_path"      # save_path 会先 list_paths,取最后一条
+
+    sent.clear()
+    await backend.save_path(map_id, "路线甲", points)
+    assert sent[-1] == "modify_nav_path"
+
+
 async def test_导航到点并走到成功(backend):
     await _ready(backend)
     assert await backend.nav_status() is NavStatus.STANDBY
