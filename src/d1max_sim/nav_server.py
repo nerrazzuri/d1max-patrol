@@ -164,8 +164,8 @@ class SimNavServer:
         # MIN-4: 必须先把查询串剥掉再比。裸 `path.rstrip("/")` 下
         # `/control?x=1` 匹配不上 CONTROL_PATH,会被当成导航通道接进来 ——
         # 而带查询串的 URL 在真实客户端里再普通不过。
-        路径 = urlsplit(ws.request.path).path if ws.request is not None else ""
-        if ws.request is not None and 路径.rstrip("/") == CONTROL_PATH:
+        path = urlsplit(ws.request.path).path if ws.request is not None else ""
+        if ws.request is not None and path.rstrip("/") == CONTROL_PATH:
             # 控制通道不受 disconnect 注入影响,这是有意的设计(评审 Mi-6 确认):
             # 断链注入模拟的是导航链路故障,运维/测试仍需要能连控制通道下达、
             # 查询、撤销注入。
