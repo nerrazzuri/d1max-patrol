@@ -97,6 +97,10 @@ async def test_建图全流程并推送保存完成通知(sim):
 
         notify = await asyncio.wait_for(wait_notify(), timeout=5.0)
         assert notify.ok is True
+        # Mi-8: frame_count == 1 是厂商地雷 3 的核心特征 —— 客户端必须靠它(而不是
+        # 猜测)识别出这是一条推送而不是某个 frame_count=1 请求的响应。Task 12/13
+        # 的帧号匹配实现要以这个数值为红线,这里必须钉住。
+        assert notify.frame_count == 1
         assert R.parse_map_ids((await _call(ws, R.get_all_pgm_map(), 3)).data) == ["map_1"]
 
 
@@ -288,5 +292,141 @@ async def test_断链注入会踢掉客户端(sim):
 async def test_停止后端口释放(sim):
     url = sim.url
     await sim.stop()
-    with pytest.raises(OSError):
+    # Mi-5: 不能用 OSError —— Python 3.11 起内置 TimeoutError 是 OSError 的子类,
+    # 一旦 stop() 又出现"端口未释放导致 connect() 挂起超时"的回归,3.11+ 上这条
+    # 断言会照样通过。这里钉的是"连接被拒绝",不是"某种 OSError"。
+    with pytest.raises(ConnectionRefusedError):
         await asyncio.wait_for(connect(url), timeout=3.0)
+
+
+async def test_stuck注入让机器人完全不动(sim):
+    """M2: `stuck` 是 `FaultState.stuck` -> `Planar2DModel.frozen` 的唯一接线点,
+    删掉接线这条用例必须变红(见修复报告里的变异实验)。"""
+    async with connect(sim.url) as ws:
+        await _ready_map(ws)
+        await _call(ws, R.start_nav(Pose.from_xy_yaw(9.0, 0.0)), 10)
+        await _poll_until(ws, R.get_nav_status(), NavStatus.ACTIVE.value)
+
+        await _control(sim, "stuck on")
+        x0, y0 = sim.model.x, sim.model.y
+        await asyncio.sleep(0.3)
+        assert sim.model.x == pytest.approx(x0)
+        assert sim.model.y == pytest.approx(y0)
+        # 状态正常但完全不动,这正是 stuck 的定义 —— 不是导航卡死或报错。
+        assert (await _call(ws, R.get_nav_status(), 11)).data == NavStatus.ACTIVE.value
+
+
+async def test_slow注入让行走显著变慢(sim):
+    """M2: `slow` 接线到 `Planar2DModel.speed_scale`。"""
+    async with connect(sim.url) as ws:
+        await _ready_map(ws)
+        await _call(ws, R.start_nav(Pose.from_xy_yaw(9.0, 0.0)), 10)
+        await _poll_until(ws, R.get_nav_status(), NavStatus.ACTIVE.value)
+
+        await _control(sim, "slow 4")   # speed_scale = 0.25
+        x0 = sim.model.x
+        await asyncio.sleep(0.3)
+        moved = sim.model.x - x0
+        # 常速下 0.3s 的理论位移量级是 linear_speed(0.6) * 0.3 = 0.18;
+        # slow 4 应显著小于这个量级,但仍然 > 0(不是完全不动,那是 stuck 的定义)。
+        assert 0.0 < moved < 0.09
+
+
+async def test_合法请求内部抛类型错误也回错误而不断链(sim):
+    """M4: `set_navigation_speed` 传 x=None 会在 handler 内部触发 `float(None)`
+    抛出的 TypeError —— 请求本身是合法 JSON、req_func 也认识,只是参数类型
+    古怪。这类异常必须变成一条 error 响应,链路不能被静默关掉。"""
+    async with connect(sim.url) as ws:
+        resp = await _call(ws, R.set_navigation_speed(None), 1)
+        assert resp.ok is False
+        assert (await _call(ws, R.get_nav_status(), 2)).ok   # 链路仍在
+
+
+async def test_reorder注入制造响应乱序到达(sim):
+    """Mi-1: `reorder` 只延迟"全局响应序号"为奇数位的那一半响应
+    (`nav_server.py` `_reply` 里的奇偶交替),用来制造真乱序。"""
+    async with connect(sim.url) as ws:
+        await _control(sim, "reorder 0.2")
+        await ws.send(encode_request("get_nav_status", None, 1))
+        await ws.send(encode_request("get_loc_status", None, 2))
+        first = parse_message(await asyncio.wait_for(ws.recv(), timeout=5.0))
+        second = parse_message(await asyncio.wait_for(ws.recv(), timeout=5.0))
+        # 两条请求按 nav/loc 顺序发出;第一条响应命中全局序号的奇数位、被延迟,
+        # 第二条命中偶数位、不延迟,所以到达顺序反过来变成 loc/nav。
+        assert first.req_func == "get_loc_status"
+        assert second.req_func == "get_nav_status"
+
+
+async def test_预约导航失败不会残留到下一次不相关的导航(sim):
+    """Mi-3 真 bug 回归: `fail_next_nav` 是一次性开关,如果它在
+    `start_nav` 被 `nav.start()` 自身拒绝(不在 StandBy)时已经被消费掉,
+    会残留到下一次毫不相干的成功导航上,让它莫名其妙地失败。"""
+    async with connect(sim.url) as ws:
+        await _ready_map(ws)
+        await _call(ws, R.start_nav(Pose.from_xy_yaw(9.0, 0.0)), 10)
+        await _poll_until(ws, R.get_nav_status(), NavStatus.ACTIVE.value)
+
+        await _control(sim, "nav_fail")
+        # 此时 nav 处于 Active,不在 StandBy —— start_nav 会被 nav.start() 自身
+        # 的状态检查拒绝,根本没机会消费 fail_next_start。
+        rejected = await _call(ws, R.start_nav(Pose.from_xy_yaw(2.0, 0.0)), 11)
+        assert rejected.ok is False
+
+        assert (await _call(ws, R.stop_nav(), 12)).ok
+        await _poll_until(ws, R.get_nav_status(), NavStatus.CANCELLED.value)
+        await _poll_until(ws, R.get_nav_status(), NavStatus.STANDBY.value)
+
+        # 不相关的下一次导航必须正常成功,不能被上面残留的 fail_next_start 拖累。
+        assert (await _call(ws, R.start_nav(Pose.from_xy_yaw(1.0, 0.0)), 13)).ok
+        await _poll_until(ws, R.get_nav_status(), NavStatus.SUCCEED.value)
+
+
+async def test_断链静默窗口内连接先握手成功再被关闭(sim):
+    """Mi-6 裁决: 静默窗口内新连接的语义是"握手先成功,随后立刻以 1012
+    关闭",不是 TCP 层拒连。这与真机断网(客户端连 TCP 都建立不起来)不同,
+    是本卷有意保留的已知简化 —— 给 Task 14 的提示: 重连逻辑不能把
+    `connect()` 成功本身当成"链路已恢复"的证据,必须继续看后续是否又被
+    1012 关闭。"""
+    ws = await connect(sim.url)
+    await _control(sim, "disconnect 1")
+    with pytest.raises(ConnectionClosed):
+        await asyncio.wait_for(ws.recv(), timeout=5.0)
+
+    ws2 = await connect(sim.url)   # 握手必须成功,不应在这里抛异常
+    with pytest.raises(ConnectionClosed) as exc_info:
+        await asyncio.wait_for(ws2.recv(), timeout=5.0)
+    # `.code` 在 websockets 13.1+ 已弃用,改用 `.rcvd.code`(见弃用提示)。
+    assert exc_info.value.rcvd.code == 1012
+
+
+async def test_断链静默窗口内控制通道仍可用(sim):
+    """Mi-6: 断链注入模拟的是导航链路故障,控制通道是有意不受影响的 ——
+    运维/测试仍需要能在静默窗口内连控制通道下达、查询、撤销注入。"""
+    ws = await connect(sim.url)
+    await _control(sim, "disconnect 1")
+    with pytest.raises(ConnectionClosed):
+        await asyncio.wait_for(ws.recv(), timeout=5.0)
+
+    out = await _control(sim, "status")
+    assert out["ok"] is True
+
+
+async def test_reset_loc冒烟(sim):
+    """Mi-9: `reset_loc` 还在 `UNVERIFIED_RESPONSE_FUNCS` 里,响应名未经真机
+    验证,但至少要有一条冒烟用例证明这条链路走得通。"""
+    async with connect(sim.url) as ws:
+        await _ready_map(ws)
+        resp = await _call(ws, R.reset_loc(), 1)
+        assert resp.ok is True
+        await _poll_until(ws, R.get_loc_status(), LocStatus.CONTINUOUS_LOC.value)
+
+
+async def test_get_pgm_map冒烟(sim):
+    """Mi-9: `get_pgm_map` 的载荷形状(`MapRecord.to_grid()`)是下游读图的
+    唯一契约,之前完全没有测试覆盖。"""
+    async with connect(sim.url) as ws:
+        map_id = await _ready_map(ws)
+        resp = await _call(ws, R.get_pgm_map(map_id), 1)
+        assert resp.ok is True
+        assert resp.data["info"]["width"] > 0
+        assert resp.data["info"]["height"] > 0
