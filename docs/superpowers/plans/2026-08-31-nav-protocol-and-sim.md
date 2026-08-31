@@ -7301,6 +7301,7 @@ import contextlib
 import logging
 import sys
 from collections.abc import AsyncIterator
+from dataclasses import replace
 
 from d1max_patrol.backends.base import NavBackendError
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
@@ -7369,8 +7370,9 @@ def build_parser() -> argparse.ArgumentParser:
 @contextlib.asynccontextmanager
 async def _backend(args) -> AsyncIterator[VendorNavBackend]:
     config = load_config(args.config)
-    nav = config.nav if args.url is None else \
-        type(config.nav)(**{**config.nav.__dict__, "url": args.url})
+    # NavConfig 是 frozen dataclass,覆盖单个字段用 replace 就够了 ——
+    # 不要写 type(config.nav)(**{**config.nav.__dict__, ...}) 那种绕法。
+    nav = config.nav if args.url is None else replace(config.nav, url=args.url)
     backend = VendorNavBackend(nav, auto_reconnect=False)
     await backend.connect()
     try:
@@ -7495,16 +7497,20 @@ async def _cmd_load(backend, args) -> int:
 
 
 async def _goto_and_wait(backend, pose: Pose, timeout_s: float) -> NavStatus:
-    waiter = asyncio.create_task(backend.wait_nav_terminal(timeout_s))
-    await asyncio.sleep(0)          # 让 waiter 先把订阅建起来
-    try:
+    # 先订阅、再下发、再把队列交给 wait_nav_terminal —— 订阅与下发之间没有
+    # await,不存在让出点,所以终态不会漏。wait_nav_terminal 的 queue= 参数
+    # 就是为这个场合加的(Task 11 评审结论)。
+    #
+    # 旧写法 create_task(wait_nav_terminal()) + await asyncio.sleep(0) 其实也
+    # **不漏事件**(实测 200/200 接住终态:subscribe() 是同步的,发生在协程第一个
+    # 挂起点之前,所以一次 sleep(0) 就足够把订阅建起来)。换成现在这版不是为了
+    # 修竞态,而是因为它不依赖上面这段绕弯的推理,而且省掉了 create_task /
+    # cancel / suppress(CancelledError) 那一串(10 行变 3 行)。
+    #
+    # 另:不要在 cli.py 里另写一份等终态的循环 —— 那是把 base.py 抄第二遍。
+    with backend.subscription() as queue:
         await backend.goto(pose)
-    except Exception:
-        waiter.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await waiter
-        raise
-    return await waiter
+        return await backend.wait_nav_terminal(timeout_s, queue=queue)
 
 
 async def _cmd_goto(backend, args) -> int:
@@ -7564,26 +7570,7 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-`_backend()` 里用 `type(config.nav)(**{**config.nav.__dict__, "url": args.url})` 来覆盖 URL 太绕。`NavConfig` 是 frozen dataclass，改用 `dataclasses.replace`：
 
-```python
-from dataclasses import replace
-...
-    nav = config.nav if args.url is None else replace(config.nav, url=args.url)
-```
-
-`_goto_and_wait` 里 `await asyncio.sleep(0)` 只让出一次事件循环，不足以保证 `wait_nav_terminal` 已经订阅完成。改成先订阅、再下发、再把队列交给 `wait_nav_terminal`：
-
-```python
-async def _goto_and_wait(backend, pose: Pose, timeout_s: float) -> NavStatus:
-    with backend.subscription() as queue:
-        await backend.goto(pose)
-        return await backend.wait_nav_terminal(timeout_s, queue=queue)
-```
-
-先订阅再下发，中间没有让出点——这才是没有竞态的写法。把上面 `_goto_and_wait` 的初版整段替换掉。
-
-`wait_nav_terminal` 的 `queue=` 参数就是为这个场合加的（Task 11 评审结论），所以这里**不要**在 `cli.py` 里另写一份等终态的循环——那会把 `base.py` 的逻辑整段抄第二遍。
 
 - [ ] **Step 4: 运行测试确认通过**
 
