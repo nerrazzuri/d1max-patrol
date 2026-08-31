@@ -399,7 +399,7 @@ def test_环境变量覆盖_url(monkeypatch):
 
 def test_配置对象不可变():
     cfg = load_config(None)
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         cfg.nav.url = "ws://other"  # type: ignore[misc]
 
 
@@ -3411,6 +3411,18 @@ def test_status_命令回显当前注入():
     apply_command(s, "slow 2")
     out = apply_command(s, "status")
     assert "speed_scale=0.5" in out
+    apply_command(s, "loc_lost")
+    assert "loc_lost_requested=True" in apply_command(s, "status")
+
+
+def test_alg_error_不带故障码被拒绝():
+    with pytest.raises(InjectError, match="缺少故障码"):
+        apply_command(FaultState(), "alg_error")
+
+
+def test_alg_error_严重度非整数被拒绝():
+    with pytest.raises(InjectError, match="严重度"):
+        apply_command(FaultState(), "alg_error 13330 xyz")
 
 
 def test_help_命令列出全部命令():
@@ -3531,7 +3543,10 @@ class FaultState:
             f"speed_scale={self.speed_scale} stuck={self.stuck} "
             f"frame_count_zero={self.frame_count_zero} "
             f"response_delay_s={self.response_delay_s} "
+            f"disconnect_seconds={self.disconnect_seconds} "
             f"fail_next_nav={self.fail_next_nav} "
+            f"loc_lost_requested={self.loc_lost_requested} "
+            f"loc_recover_requested={self.loc_recover_requested} "
             f"queued_alg_errors={len(self.queued_alg_errors)}"
         )
 
@@ -3678,6 +3693,7 @@ import json
 
 import pytest
 from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed
 
 from d1max_patrol.protocol import nav_requests as R
 from d1max_patrol.protocol.nav_frames import (
@@ -3953,7 +3969,7 @@ async def test_预约导航失败(sim):
 async def test_断链注入会踢掉客户端(sim):
     ws = await connect(sim.url)
     await _control(sim, "disconnect 1")
-    with pytest.raises(Exception):
+    with pytest.raises(ConnectionClosed):
         await asyncio.wait_for(ws.recv(), timeout=5.0)
 
 
@@ -5818,6 +5834,7 @@ from d1max_patrol.backends.base import (
     BackendReconnected,
     LocStatusEvent,
     MappingStatusEvent,
+    NavBackendError,
     NavStatusEvent,
     NavTimeoutError,
 )
@@ -5954,7 +5971,7 @@ async def test_自动重连并重新对齐状态(sim, backend):
 async def test_断链期间的请求抛错而不是永久挂起(sim, backend):
     sim.faults.disconnect_seconds = 1.0
     await asyncio.sleep(0.3)
-    with pytest.raises(Exception):
+    with pytest.raises(NavBackendError):
         await backend.request_nav_status_for_test()
 
 
@@ -6688,6 +6705,7 @@ from d1max_patrol.backends.base import (
     BackendDisconnected,
     BackendReconnected,
     LocStatusEvent,
+    NavBackendError,
     NavStatusEvent,
     NavTimeoutError,
 )
@@ -6807,7 +6825,7 @@ async def test_定位恢复后可以重新导航(rig):
     await _drain_until(queue, lambda e: isinstance(e, LocStatusEvent)
                        and e.status is LocStatus.LOC_LOST)
 
-    with pytest.raises(Exception):
+    with pytest.raises(NavBackendError):
         await rig.backend.goto(Pose.from_xy_yaw(1.0, 0.0, 0.0))
 
     rig.inject("loc_ok")
@@ -7574,7 +7592,7 @@ def test_设备事件字段():
 def test_帧对象():
     frame = Frame(data=b"\xff\xd8", mime="image/jpeg", captured_at_ms=1700000000000)
     assert frame.mime == "image/jpeg"
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         frame.data = b""          # frozen
 ```
 
