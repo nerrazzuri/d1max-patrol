@@ -5206,11 +5206,19 @@ async def test_设备回error抛请求错误(backend):
     assert "不存在" in info.value.message
 
 
-async def test_无人认领的响应被计入丢帧(backend):
-    """构造一条谁也不认的响应,链路必须活着。"""
-    await backend._ws.send(
-        '{"head":{"type":"app_resp","frame_count":9999,"source":"app"},'
-        '"data":{"req_result":{"req_func":"nobody_asked","status":"ok"}}}')
+async def test_无人认领的响应被计入丢帧(sim, backend):
+    """构造一条谁也不认的响应,链路必须活着。
+
+    必须从**服务端**推。`backend._ws.send()` 是客户端→服务端方向,报文会被
+    仿真器按 `app_req` 校验拒掉("忽略畸形报文: 报文不是 app_req"),根本回不到
+    本端读循环,`dropped_frames` 永远是 0。这条测试要验的是读循环收到一条
+    无人认领的响应之后:计数加一、且**不把读循环带崩**——所以最后一行的
+    `request()` 才是这条测试的重点,不能改成直接调 `_route()` 了事。
+    """
+    await sim._broadcast({
+        "head": {"type": "app_resp", "frame_count": 9999, "source": "app"},
+        "data": {"req_result": {"req_func": "nobody_asked", "status": "ok"}},
+    })
     await asyncio.sleep(0.1)
     assert backend.dropped_frames == 1
     assert await backend.request(R.get_nav_status()) == NavStatus.STANDBY.value
@@ -5761,7 +5769,7 @@ async def test_未知状态字符串返回None而不是抛错(backend, monkeypat
 Run: `python -m pytest tests/backends/test_vendor_capabilities.py -v`
 Expected: FAIL —— `TypeError: Can't instantiate abstract class VendorNavBackend`
 
-- [ ] **Step 3: 追加能力方法**
+- [ ] **Step 3: 把占位块换成能力方法**
 
 在 `src/d1max_patrol/backends/vendor_nav.py` 末尾，`request()` 之后追加（仍在 `VendorNavBackend` 类体内）：
 
