@@ -23,6 +23,7 @@ import websockets
 from websockets.asyncio.client import ClientConnection, connect
 
 from d1max_patrol.config.models import NavConfig
+from d1max_patrol.protocol import nav_requests as R
 from d1max_patrol.protocol.nav_frames import (
     AlgErrorNotify,
     ProtocolError,
@@ -37,11 +38,13 @@ from d1max_patrol.protocol.nav_types import (
     NavStatus,
     Pose,
     Waypoint,
+    parse_enum,
 )
 
 from .base import (
     AlgErrorEvent,
     NavBackend,
+    NavBackendError,
     NavConnectionError,
     NavRequestError,
     NavTimeoutError,
@@ -274,72 +277,99 @@ class VendorNavBackend(NavBackend):
             raise NavRequestError(req.req_func, response.msg or "设备未给出原因")
         return response.data
 
-    # ---------------------------------------------- Task 13 之前的占位块
-    # `NavBackend` 有 22 个抽象方法,本任务只落了 `connect` / `close`。
-    # ABC 只要还剩一个抽象方法没实现就不许实例化,而下面的测试要真的
-    # `VendorNavBackend(config)` —— 所以这里先把余下 20 个占位掉。
-    # **Task 13 的工作就是把这一整块换成真实现**,不是在它后面追加。
-
-    async def nav_status(self) -> NavStatus | None:
-        raise NotImplementedError("Task 13 实现")
-
-    async def loc_status(self) -> LocStatus | None:
-        raise NotImplementedError("Task 13 实现")
-
-    async def mapping_status(self) -> MappingStatus | None:
-        raise NotImplementedError("Task 13 实现")
-
-    async def goto(self, pose: Pose) -> None:
-        raise NotImplementedError("Task 13 实现")
-
-    async def pause(self) -> None:
-        raise NotImplementedError("Task 13 实现")
-
-    async def resume(self) -> None:
-        raise NotImplementedError("Task 13 实现")
-
-    async def stop(self) -> None:
-        raise NotImplementedError("Task 13 实现")
-
-    async def load_map(self, map_id: str) -> None:
-        raise NotImplementedError("Task 13 实现")
+    # ------------------------------------------------------------ 地图
 
     async def list_maps(self) -> list[str]:
-        raise NotImplementedError("Task 13 实现")
-
-    async def rename_map(self, old_id: str, new_id: str) -> None:
-        raise NotImplementedError("Task 13 实现")
+        return R.parse_map_ids(await self.request(R.get_all_pgm_map()))
 
     async def remove_maps(self, map_ids: Sequence[str]) -> None:
-        raise NotImplementedError("Task 13 实现")
+        await self.request(R.remove_map_by_id(list(map_ids)))
+
+    async def rename_map(self, old_id: str, new_id: str) -> None:
+        await self.request(R.rename_map_name(old_id, new_id))
 
     async def get_map_grid(self, map_id: str) -> dict[str, Any]:
-        raise NotImplementedError("Task 13 实现")
+        return await self.request(R.get_pgm_map(map_id))
 
-    async def list_paths(self, map_id: str) -> dict[str, list[Waypoint]]:
-        raise NotImplementedError("Task 13 实现")
-
-    async def save_path(
-        self, map_id: str, path_id: str, waypoints: Sequence[Waypoint],
-    ) -> None:
-        raise NotImplementedError("Task 13 实现")
-
-    async def remove_path(self, map_id: str, path_id: str) -> None:
-        raise NotImplementedError("Task 13 实现")
-
-    async def reset_localization(self) -> None:
-        raise NotImplementedError("Task 13 实现")
+    # ------------------------------------------------------------ 建图
 
     async def start_mapping(self) -> None:
-        raise NotImplementedError("Task 13 实现")
+        await self.request(R.start_mapping())
 
     async def stop_mapping(self) -> None:
-        raise NotImplementedError("Task 13 实现")
+        await self.request(R.stop_mapping())
+
+    async def mapping_status(self) -> MappingStatus | None:
+        return self._as_enum(MappingStatus, await self.request(R.get_mapping_status()))
+
+    # ------------------------------------------------------------ 路径
+
+    async def list_paths(self, map_id: str) -> dict[str, list[Waypoint]]:
+        return R.parse_paths_payload(await self.request(R.get_all_paths_by_mapid(map_id)))
+
+    async def save_path(self, map_id: str, path_id: str,
+                        waypoints: Sequence[Waypoint]) -> None:
+        # 厂商把新增和修改分成两个接口,但语义都是"整条覆盖"。
+        # 上层只需要一个 save,已存在就走 modify。
+        existing = await self.list_paths(map_id)
+        if path_id in existing:
+            # 同名覆盖:老名字新名字传成同一个。
+            req = R.modify_nav_path(map_id, path_id, path_id, list(waypoints))
+        else:
+            req = R.add_nav_path(map_id, path_id, list(waypoints))
+        await self.request(req)
+
+    async def remove_path(self, map_id: str, path_id: str) -> None:
+        await self.request(R.remove_nav_path([(map_id, path_id)]))
+
+    # ------------------------------------------------------------ 定位
+
+    async def load_map(self, map_id: str) -> None:
+        await self.request(R.loc_load_map(map_id))
+
+    async def reset_localization(self) -> None:
+        await self.request(R.reset_loc())
+
+    async def loc_status(self) -> LocStatus | None:
+        return self._as_enum(LocStatus, await self.request(R.get_loc_status()))
+
+    # ------------------------------------------------------------ 导航
+
+    async def goto(self, pose: Pose) -> None:
+        await self.request(R.start_nav(pose))
+
+    async def stop(self) -> None:
+        await self.request(R.stop_nav())
+
+    async def pause(self) -> None:
+        await self.request(R.pause_nav())
+
+    async def resume(self) -> None:
+        await self.request(R.continue_nav())
+
+    async def nav_status(self) -> NavStatus | None:
+        return self._as_enum(NavStatus, await self.request(R.get_nav_status()))
+
+    # ------------------------------------------------------------ 速度
 
     async def get_speed(self) -> dict[str, float]:
-        raise NotImplementedError("Task 13 实现")
+        return self._as_speed(await self.request(R.get_navigation_speed()))
 
-    async def set_speed(
-        self, x: float, y: float | None = None, z: float | None = None,
-    ) -> dict[str, float]:
-        raise NotImplementedError("Task 13 实现")
+    async def set_speed(self, x: float, y: float | None = None,
+                        z: float | None = None) -> dict[str, float]:
+        return self._as_speed(await self.request(R.set_navigation_speed(x, y, z)))
+
+    # ------------------------------------------------------------ 小工具
+
+    @staticmethod
+    def _as_enum(cls, value: Any):
+        parsed = parse_enum(cls, value)
+        if parsed is None:
+            log.warning("设备回了未知的 %s 值: %r", cls.__name__, value)
+        return parsed
+
+    @staticmethod
+    def _as_speed(payload: Any) -> dict[str, float]:
+        if not isinstance(payload, dict):
+            raise NavBackendError(f"速度响应格式意外: {payload!r}")
+        return {key: float(payload[key]) for key in ("x", "y", "z") if key in payload}
