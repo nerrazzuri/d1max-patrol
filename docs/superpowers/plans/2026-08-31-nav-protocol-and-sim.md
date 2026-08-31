@@ -4500,7 +4500,7 @@ git commit -m "feat: 仿真导航服务端、故障注入控制通道与可执�
 **Interfaces:**
 - Consumes: `d1max_patrol.protocol.nav_types.{NavStatus, LocStatus, MappingStatus, Pose, Waypoint, NAV_TERMINAL}`；`d1max_patrol.protocol.nav_frames.AlgErrorItem`
 - Produces（`d1max_patrol.backends.base`）：
-  - 异常：`NavBackendError`、`NavConnectionError(NavBackendError)`、`NavTimeoutError(NavBackendError)`、`NavRequestError(NavBackendError)`（字段 `req_func: str`、`message: str`）
+  - 异常：`NavBackendError`、`NavConnectionError(NavBackendError)`、`NavTimeoutError(NavBackendError)`、`NavRequestError(NavBackendError)`（字段 `operation: str`、`message: str`）
   - 事件（均为 frozen dataclass）：
     - `NavStatusEvent(status: NavStatus, previous: NavStatus | None)`
     - `LocStatusEvent(status: LocStatus, previous: LocStatus | None)`
@@ -4577,11 +4577,52 @@ def test_异常层次():
     assert issubclass(NavRequestError, NavBackendError)
 
 
-def test_请求错误带上接口名与设备消息():
-    exc = NavRequestError("start_nav", "定位未就绪")
-    assert exc.req_func == "start_nav"
+def test_请求错误带上操作名与设备消息():
+    # 这里刻意用中性的操作名而不是厂商的 start_nav —— 本文件在换 Nav2 时
+    # 要原封不动留下,任何厂商接口名出现在这里都是渗漏。
+    exc = NavRequestError("goto", "定位未就绪")
+    assert exc.operation == "goto"
     assert exc.message == "定位未就绪"
-    assert "start_nav" in str(exc) and "定位未就绪" in str(exc)
+    assert "goto" in str(exc) and "定位未就绪" in str(exc)
+
+
+async def test_等待超时后订阅被清理():
+    """try/finally 的回归测试。删掉 `subscription()` 里的 finally 这条就该变红。
+
+    队列是无界的,第 3 卷会按航点反复调 `wait_nav_terminal`;泄漏一条队列
+    就是泄漏一路无界增长的内存,而且不会有任何测试变红。
+    """
+    backend = _Stub()
+    with pytest.raises(NavTimeoutError):
+        await backend.wait_nav_terminal(timeout_s=0.05)
+    assert backend._subscribers == []
+
+
+async def test_断链退出后订阅被清理():
+    backend = _Stub()
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.01, backend.emit, BackendDisconnected("读循环退出"))
+    with pytest.raises(NavConnectionError):
+        await backend.wait_nav_terminal(timeout_s=2.0)
+    assert backend._subscribers == []
+
+
+async def test_外部队列消灭先订阅后下发的竞态():
+    """传 queue= 时,订阅在"下发"之前就建好了,终态不会漏。"""
+    backend = _Stub()
+    with backend.subscription() as queue:
+        # 模拟"下发之后立刻推终态"——若 wait_nav_terminal 此刻才自己订阅,
+        # 这条事件已经丢了。
+        backend.emit(NavStatusEvent(NavStatus.SUCCEED, NavStatus.ACTIVE))
+        assert await backend.wait_nav_terminal(2.0, queue=queue) is NavStatus.SUCCEED
+
+
+async def test_等待导航终态_取消也算终态():
+    backend = _Stub()
+    loop = asyncio.get_running_loop()
+    loop.call_later(
+        0.01, backend.emit, NavStatusEvent(NavStatus.CANCELLED, NavStatus.ACTIVE))
+    assert await backend.wait_nav_terminal(timeout_s=2.0) is NavStatus.CANCELLED
 
 
 async def test_订阅者各自收到全部事件():
@@ -4731,9 +4772,11 @@ class NavTimeoutError(NavBackendError):
 class NavRequestError(NavBackendError):
     """设备明确回了 error。"""
 
-    def __init__(self, req_func: str, message: str) -> None:
-        super().__init__(f"{req_func} 被设备拒绝: {message}")
-        self.req_func = req_func
+    def __init__(self, operation: str, message: str) -> None:
+        super().__init__(f"{operation} 被设备拒绝: {message}")
+        #: 被拒绝的操作名。厂商后端把自己的 req_func 映射进来,
+        #: Nav2 后端映射自己的 action 名 —— 这一层不认识 req_func 这个词。
+        self.operation = operation
         self.message = message
 
 
@@ -4821,23 +4864,39 @@ class NavBackend(ABC):
         for queue in list(self._subscribers):
             queue.put_nowait(event)
 
-    async def wait_nav_terminal(self, timeout_s: float) -> NavStatus:
+    async def wait_nav_terminal(
+        self, timeout_s: float,
+        queue: asyncio.Queue[Event] | None = None,
+    ) -> NavStatus:
         """等到导航进入终态。
 
-        调用方必须在下发 `goto()` **之前**订阅,否则可能错过瞬时终态;
-        本方法内部自己订阅,所以正确用法是先 await 本方法的 task,
-        再下发 goto —— 或者直接用第 3 卷的 MissionRunner。
+        **有竞态的用法**:先 `await goto()` 再调用本方法。终态可能在这两步
+        之间就推过来了,那条事件没人订阅、直接丢掉,本方法一路等到超时。
+
+        **没有竞态的用法**:自己先订阅,再下发,再把队列交给本方法 ——
+        订阅与下发之间没有 await,不存在让出点::
+
+            with backend.subscription() as q:
+                await backend.goto(pose)
+                status = await backend.wait_nav_terminal(30.0, queue=q)
+
+        不传 `queue` 时本方法自己订阅,只适合"订阅时导航已经在跑"的场合。
 
         注:用 `asyncio.wait_for` 而不是 `asyncio.timeout` —— 后者要
         Python 3.11+,而全局约束是 3.10。
         """
-        with self.subscription() as queue:
-            try:
-                return await asyncio.wait_for(
-                    self._await_terminal(queue), timeout_s)
-            except asyncio.TimeoutError as exc:
-                raise NavTimeoutError(
-                    f"等待导航终态超过 {timeout_s}s") from exc
+        if queue is not None:
+            return await self._wait_on(queue, timeout_s)
+        with self.subscription() as own_queue:
+            return await self._wait_on(own_queue, timeout_s)
+
+    async def _wait_on(
+        self, queue: asyncio.Queue[Event], timeout_s: float,
+    ) -> NavStatus:
+        try:
+            return await asyncio.wait_for(self._await_terminal(queue), timeout_s)
+        except asyncio.TimeoutError as exc:
+            raise NavTimeoutError(f"等待导航终态超过 {timeout_s}s") from exc
 
     async def _await_terminal(self, queue: asyncio.Queue[Event]) -> NavStatus:
         while True:
@@ -5143,7 +5202,7 @@ async def test_降级匹配按先进先出认领同名响应(sim, backend):
 async def test_设备回error抛请求错误(backend):
     with pytest.raises(NavRequestError) as info:
         await backend.request(R.loc_load_map("不存在的图"))
-    assert info.value.req_func == "loc_load_map"
+    assert info.value.operation == "loc_load_map"
     assert "不存在" in info.value.message
 
 
@@ -7422,36 +7481,18 @@ from dataclasses import replace
     nav = config.nav if args.url is None else replace(config.nav, url=args.url)
 ```
 
-`_goto_and_wait` 里 `await asyncio.sleep(0)` 只让出一次事件循环，不足以保证 `wait_nav_terminal` 已经订阅完成。改成显式握手：
+`_goto_and_wait` 里 `await asyncio.sleep(0)` 只让出一次事件循环，不足以保证 `wait_nav_terminal` 已经订阅完成。改成先订阅、再下发、再把队列交给 `wait_nav_terminal`：
 
 ```python
 async def _goto_and_wait(backend, pose: Pose, timeout_s: float) -> NavStatus:
     with backend.subscription() as queue:
         await backend.goto(pose)
-        return await _await_terminal(queue, timeout_s)
-
-
-async def _await_terminal(queue, timeout_s: float) -> NavStatus:
-    from d1max_patrol.backends.base import (
-        BackendDisconnected, NavConnectionError, NavStatusEvent, NavTimeoutError,
-    )
-    from d1max_patrol.protocol.nav_types import NAV_TERMINAL
-
-    async def loop() -> NavStatus:
-        while True:
-            event = await queue.get()
-            if isinstance(event, BackendDisconnected):
-                raise NavConnectionError(f"导航途中链路断开: {event.reason}")
-            if isinstance(event, NavStatusEvent) and event.status in NAV_TERMINAL:
-                return event.status
-
-    try:
-        return await asyncio.wait_for(loop(), timeout_s)
-    except asyncio.TimeoutError as exc:
-        raise NavTimeoutError(f"导航超过 {timeout_s}s 未结束") from exc
+        return await backend.wait_nav_terminal(timeout_s, queue=queue)
 ```
 
-先订阅再下发，中间没有让出点——这才是没有竞态的写法。把上面 `_goto_and_wait` 的初版整段替换掉，并把这两个 import 提到文件顶部。
+先订阅再下发，中间没有让出点——这才是没有竞态的写法。把上面 `_goto_and_wait` 的初版整段替换掉。
+
+`wait_nav_terminal` 的 `queue=` 参数就是为这个场合加的（Task 11 评审结论），所以这里**不要**在 `cli.py` 里另写一份等终态的循环——那会把 `base.py` 的逻辑整段抄第二遍。
 
 - [ ] **Step 4: 运行测试确认通过**
 
