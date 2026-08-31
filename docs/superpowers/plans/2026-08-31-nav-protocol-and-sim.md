@@ -3993,8 +3993,8 @@ Expected: FAIL —— `ModuleNotFoundError: No module named 'd1max_sim.nav_serve
 """仿真导航服务端。
 
 它是接口契约的可执行定义:客户端行为有争议时,以这台仿真器的表现为准,
-直到真机把它推翻。凡文档未明写、由本仿真器补齐的行为,均以
-"# 假设(待真机验证):" 标注。
+直到真机把它推翻。凡文档未明写、由本仿真器补齐的行为,一律在源码里
+加注待真机验证标记。
 """
 
 from __future__ import annotations
@@ -4315,6 +4315,11 @@ class SimNavServer:
         self.nav.start(Pose.from_wire(args))
 
     def _h_reject_multi(self, args: Any) -> None:
+        # 假设(待真机验证): 多点导航一律回 error,是本仿真器的**有意偏离**,不是对设备的猜测。
+        # 真机上 start_multi_nav / start_multi_nav_by_points 很可能是能正常走的;本项目
+        # 决定全逐点执行(见设计方案"全逐点执行"一节),仿真器便不假装支持它们。
+        # 真机核对:确认这两个接口在设备上确实可用、以及它们的响应函数名 —— 若将来要改回
+        # 多点下发,这里的拒绝必须先撤掉,否则仿真器会与真机行为相反。
         raise SimRejected("本仿真器不支持多点导航行走,请逐点下发 start_nav")
 
     def _h_reject_return_home(self, args: Any) -> None:
@@ -8045,6 +8050,7 @@ git commit -m "test: 厂商文档 JSON 样例作为解析器 golden fixture"
 | 14 | 建图三阶段耗时:传感器 0.2s、就绪 0.2s、保存 0.3s | `d1max_sim/nav_state.py` | 待测 | |
 | 15 | 真机保存一次建图会话后,设备给新地图分配的 id 长什么样(文档样例是 `map_id_1`,仿真器发 `map_1`) | `d1max_sim/store.py` `_AUTO_NAME` | 待测 | 跑一次建图→保存→`get_all_map`,抄回实际 id |
 | 16 | `get_pgm_map` 真实响应体量:文档样例地图 1000×1000(约百万整数、数 MB JSON),仿真器只发 20×20。缓冲区、响应超时、网络开销扛不扛得住 | `d1max_sim/store.py` `MapRecord` | 待测 | |
+| 17 | **有意偏离,非猜测**:仿真器让 `start_multi_nav` / `start_multi_nav_by_points` 一律回 `error`,真机上它们很可能是能走的。本项目全逐点执行才这么做 | `d1max_sim/nav_server.py` `_h_reject_multi` | 待测 | 真机确认这两个接口可用性与响应函数名;若将来改回多点下发,必须先撤掉这处拒绝 |
 
 核对方法:`d1max --url ws://192.168.144.100:10010 -v <子命令>`,把原始报文抄进本表。
 ```
