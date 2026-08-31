@@ -11,6 +11,7 @@ fixture + main() 内部 asyncio.run()"组合会挂 —— sim fixture 的事件�
 
 import pytest
 
+from d1max_patrol import cli
 from d1max_patrol.cli import _amain, build_parser, main
 from d1max_sim.nav_server import SimNavServer
 
@@ -50,6 +51,17 @@ def test_连不上时返回1(capsys):
     assert "连接" in capsys.readouterr().err
 
 
+def test_ctrl_c_返回1(monkeypatch):
+    # 不碰仿真器:直接让 asyncio.run 抛 KeyboardInterrupt,模拟真按 Ctrl+C
+    # 时它从 main() 里 asyncio.run() 那一行冒出来的样子。
+    def _boom(coro):
+        coro.close()  # 避免 "coroutine was never awaited" 警告
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.asyncio, "run", _boom)
+    assert cli.main(["--url", "ws://127.0.0.1:1", "status"]) == 1
+
+
 async def test_status(sim, capsys):
     assert await run(sim, "status") == 0
     out = capsys.readouterr().out
@@ -78,6 +90,17 @@ async def test_load_与_goto(sim, capsys):
 
     assert await run(sim, "goto", "1", "0", "0") == 0
     assert "Succeed" in capsys.readouterr().out
+
+
+async def test_goto_导航失败返回1(sim, capsys):
+    await run(sim, "map-start")
+    await run(sim, "map-stop")
+    await run(sim, "load", "map_1")
+    sim.faults.fail_next_nav = True
+
+    assert await run(sim, "goto", "1", "0", "0") == 1
+    out = capsys.readouterr().out
+    assert "Failed" in out
 
 
 async def test_goto_在定位未就绪时返回1(sim, capsys):

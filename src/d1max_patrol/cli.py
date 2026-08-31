@@ -119,6 +119,15 @@ def main(argv: list[str] | None = None) -> int:
     异步 sim fixture + 这里内部 asyncio.run()"这个组合会挂 —— sim fixture
     的事件循环在同步测试函数体执行期间不转,握手等不到应答,一路挂到
     `connect_timeout_s`(默认 5s)超时,`main()` 于是稳定返回 1。
+
+    `KeyboardInterrupt` 必须在这一层接,不能挪进 `_amain()`:真按 Ctrl+C
+    时,异常是从下面这行 `asyncio.run()` 的调用帧里抛出来的(事件循环收到
+    信号后把它重新抛到发起 `run()` 的同步代码里),不是从协程体内部抛的 ——
+    `_amain()` 内部的 try/except 天生够不着它。`NavTimeoutError` /
+    `NavBackendError` / `ConfigError` 三个分支则相反,必须留在 `_amain()`:
+    它们是协程体里真实抛出的业务异常,测试也要靠它们(测试直接
+    `await _amain(...)`,压根不经过这里的 `asyncio.run()`)。两层各管各的,
+    以后不要图省事又挪到一块。
     """
     args = build_parser().parse_args(argv)
     logging.basicConfig(
@@ -134,7 +143,10 @@ def main(argv: list[str] | None = None) -> int:
             sim_argv.append("--seed")
         return sim_main(sim_argv)
 
-    return asyncio.run(_amain(args))
+    try:
+        return asyncio.run(_amain(args))
+    except KeyboardInterrupt:
+        return 1
 
 
 async def _amain(args: argparse.Namespace) -> int:
@@ -151,8 +163,6 @@ async def _amain(args: argparse.Namespace) -> int:
         return 1
     except (NavBackendError, ConfigError) as exc:
         print(str(exc), file=sys.stderr)
-        return 1
-    except KeyboardInterrupt:
         return 1
 
 
