@@ -6488,7 +6488,7 @@ git commit -m "test: NavBackend 契约测试套件(实现无关)"
 **Interfaces:**
 - Consumes: `VendorNavBackend`、`SimNavServer`、`FaultState`、`backends.base` 全部事件
 - Produces（fixtures，第 3 卷的任务级故障测试会复用）：
-  - `rig` —— `namedtuple`/dataclass `Rig(sim, backend)`，已连接、已建图、已加载定位
+  - `rig` —— dataclass `Rig(sim, backend, map_id)`，已连接、已建图、已加载定位
   - `Rig.inject(command: str) -> str` —— 直接调 `apply_command`，等价于走控制通道但不用开连接
 
 - [ ] **Step 1: 写 conftest**
@@ -7666,7 +7666,7 @@ git commit -m "feat: DeviceBackend 与 MediaSource 端口定义,事件分发提�
 - Modify: `refs/README.md`（补一句样例来源）
 
 **Interfaces:**
-- Consumes: `refs/nav_ws_api.md`（Task 1 的 `extract_refs.sh` 落位的《自主导航_WEBSOCKET_API.md》）；`protocol.nav_frames.{parse_message, parse_request}`
+- Consumes: `refs/nav-api/自主导航_WEBSOCKET_API.md`（Task 1 的 `extract_refs.sh` 落位）；`protocol.nav_frames.{parse_message, parse_request}`
 - Produces: `tests/protocol/fixtures/NNN.json` 一批文件 + 一个 `index.json` 记录每段样例在文档中的行号
 
 - [ ] **Step 1: 写抽取脚本**
@@ -7680,7 +7680,7 @@ git commit -m "feat: DeviceBackend 与 MediaSource 端口定义,事件分发提�
 解析器每次改动都要重新对着它们过一遍。
 
 用法:
-    python scripts/extract_doc_samples.py refs/nav_ws_api.md tests/protocol/fixtures
+    python scripts/extract_doc_samples.py refs/nav-api/自主导航_WEBSOCKET_API.md tests/protocol/fixtures
 """
 
 from __future__ import annotations
@@ -7750,7 +7750,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: 跑脚本生成 fixture**
 
 ```bash
-python scripts/extract_doc_samples.py refs/nav_ws_api.md tests/protocol/fixtures
+python scripts/extract_doc_samples.py refs/nav-api/自主导航_WEBSOCKET_API.md tests/protocol/fixtures
 ```
 
 Expected: 打印"抠出 N 段"，`N` 在 50 以上；`tests/protocol/fixtures/` 下出现一批 `NNN.json` 与 `index.json`。
@@ -7859,7 +7859,7 @@ Expected: 全部 passed。
 ## 测试用的文档样例
 
 `tests/protocol/fixtures/` 下的 JSON 由
-`python scripts/extract_doc_samples.py refs/nav_ws_api.md tests/protocol/fixtures`
+`python scripts/extract_doc_samples.py refs/nav-api/自主导航_WEBSOCKET_API.md tests/protocol/fixtures`
 从本目录的 API 文档中抠出,已入库。文档更新后重跑该脚本并复查 diff。
 ```
 
