@@ -39,7 +39,13 @@ from d1max_patrol.recorder import FrameRecorder
 FIXTURE_DIR = Path("tests/protocol/fixtures")
 
 #: 阶段 0 要探的两个网段。SDK 那条本卷没有实现,但**可达性本身就是要带回去的
-#: 数据** —— 明天验不了,至少要知道网通不通、以后还要不要为它单独接线。
+#: 数据** —— 至少要知道网通不通、以后还要不要为它单独接线。
+#:
+#: 8081 不是笔误,别"顺手改成 8082"。厂商 SDK 文档
+#: (refs/robot-sdk/RobotSDK-0.2.0/docs/zh/sdk_client_api_zh.md:136) 写明:
+#: **WebSocket 走 8081,UDP 走 8082**,示例代码一律用 8082。这里探的是 TCP,
+#: 而 TCP 连一个 UDP 端口必然失败 —— 探 8082 只会稳定产出一条假阴性。
+#: 要验 8082,得跑厂商自己的 example/data(见 docs/真机联调手册.md 的 S 阶段)。
 DEFAULT_PROBES: tuple[tuple[str, str, int], ...] = (
     ("nav", "192.168.144.100", 10010),
     ("sdk", "192.168.234.1", 8081),
