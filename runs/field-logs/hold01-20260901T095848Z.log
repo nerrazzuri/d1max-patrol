@@ -1,0 +1,38 @@
+===== 启动(v2 实时): WiFi保持 + hold01 抢连常驻 09:58:48Z =====
+WiFi 保持器 pid 28479
+狗可达 → 启动 hold01
+[hold01] 开始抢连接 192.168.234.1:8082 ...
+[STATE*] motion=2(LIE_DOWN)  estop sw=1 hw=1  batt=44%/44%
+[hold01] ★★★ 抢到窗口，已连上！(第1次) ★★★
+[hold01] >>> TakeControl（握住控制权）
+[hold01] TakeControl(): ok
+[hold01] 进入常驻：持续持有会话+读状态（不释放；Ctrl+C 退出）
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#5 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#10 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#15 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#20 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#25 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#30 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#35 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#40 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#45 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#50 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#55 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#60 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#65 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold01] 心跳#70 仍在持有 (motion=LIE_DOWN, TakeControl重申:ok)
+[CTRL] TakeControlAck: SUCCESS 'OK'

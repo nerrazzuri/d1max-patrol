@@ -1,0 +1,35 @@
+===== hold02 抢连+常驻+命令通道 10:02:19Z =====
+狗可达 → hold02 抢连(此刻 hold01 可能还握着→会被拒重试)
+[hold02] 抢连 192.168.234.1:8082 ...
+[hold02] 第10次未抢到，最近:Robot Controlled denial of service
+[STATE*] motion=2(LIE_DOWN)  estop sw=1 hw=1  batt=43%/43%
+[hold02] ★★★ 抢到窗口，已连上！(第11次) ★★★
+[hold02] TakeControl(): ok
+[hold02] 常驻中：握住会话+读状态，等命令（fifo=/home/liang/Projects/D1 Max/d1max-patrol/runs/d1max-cmd.fifo）
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold02] 心跳#5 持有中 motion=LIE_DOWN batt=43%
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[CMD] stand: SetMode(1)+StandUp
+[CTRL] acked Mode 1
+[CTRL] acked StandUp
+[STATE*] motion=1(STAND_UP)  estop sw=1 hw=1  batt=43%/43%
+[STATE*] motion=5(GENERAL)  estop sw=1 hw=1  batt=43%/43%
+[hold02] 心跳#10 持有中 motion=GENERAL batt=43%
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold02] 心跳#15 持有中 motion=GENERAL batt=43%
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold02] 心跳#20 持有中 motion=GENERAL batt=43%
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold02] 心跳#25 持有中 motion=GENERAL batt=43%
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[CMD] lie: LieDown
+[CTRL] acked LieDown
+[STATE*] motion=2(LIE_DOWN)  estop sw=1 hw=1  batt=43%/43%
+[hold02] 心跳#30 持有中 motion=LIE_DOWN batt=43%
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold02] 心跳#35 持有中 motion=LIE_DOWN batt=43%
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[hold02] 心跳#40 持有中 motion=LIE_DOWN batt=43%
+[CTRL] TakeControlAck: SUCCESS 'OK'
+
+[hold02] 退出：ReleaseControl+Disconnect
