@@ -17,7 +17,7 @@ from dataclasses import replace
 from d1max_patrol.backends.base import NavBackendError, NavTimeoutError
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.loader import ConfigError, load_config
-from d1max_patrol.conformance import nav_host_port, run_conformance
+from d1max_patrol.conformance import DEFAULT_PROBES, nav_host_port, run_conformance
 from d1max_patrol.protocol.nav_types import (
     LOC_HEALTHY,
     MappingStatus,
@@ -388,9 +388,12 @@ async def _cmd_conform(backend, args) -> int:
         outdir = Path(config.runs_dir) / "conformance" / stamp
 
     host, port = nav_host_port(url)
-    # 探测表里把**实际用的**导航地址替掉默认值 —— 现场可能改了 IP,
-    # 拿默认值去探等于报告里写了一条假的"不通"。
-    probes = (("nav", host, port), ("sdk", "192.168.234.1", 8081))
+    # 探测表里把**实际用的**导航地址放在第一条 —— 现场可能改了 IP,
+    # 只探默认值等于报告里写了一条假的"不通"。其余候选地址照探:
+    # 厂商两份文档对导航地址的说法不一致(见 conformance.DEFAULT_PROBES 的
+    # 注释),SDK 又分有线/WiFi 两个入口,一次全扫完才知道这台机器长什么样。
+    extra = tuple(p for p in DEFAULT_PROBES if (p[1], p[2]) != (host, port))
+    probes = (("nav", host, port), *extra)
 
     result = await run_conformance(
         backend, url, outdir, backend.recorder,
