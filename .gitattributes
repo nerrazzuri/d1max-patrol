@@ -1,0 +1,16 @@
+# 这个仓库在 Windows 上开发、在 Ubuntu 笔记本上跑真机。
+# Makefile 里只要混进一个 \r，make 就会报 "command not found" —— 而且
+# 报的是错误的行号，查半天。强制这几类文件永远是 LF。
+*        text=auto
+Makefile text eol=lf
+*.mk     text eol=lf
+*.sh     text eol=lf
+*.cpp    text eol=lf
+*.hpp    text eol=lf
+*.py     text eol=lf
+
+# SDK 的二进制件和硬件文档不许被当成文本改行尾
+*.so     binary
+*.so.*   binary
+*.a      binary
+*.pdf    binary
