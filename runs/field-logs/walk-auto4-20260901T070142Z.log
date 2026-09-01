@@ -1,0 +1,18 @@
+[walk1] connecting 192.168.234.1:8082 ...
+[walk1] ✓ connected
+[walk1] 开启 运控/速度 上报
+[walk1] >>> TakeControl
+[walk1] TakeControl(): ok
+[walk1] >>> SwitchRemoteState (激活电机)
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[walk1] machine=?
+[walk1] >>> StandUp，稳定 6s（从趴姿站起要给足时间）
+[CTRL] robot acked StandUp
+[walk1] 起点 pos=(0,0) mile=0m  (pos有效:否)
+[walk1] >>> 前进 1s @ mag=0.11（20Hz 连发 Move(0,0.11,0)）
+[walk1] >>> 停 Move(0,0,0)
+[walk1] 终点 pos=(0,0) mile=0m
+[walk1] === 位移(直线) ≈ 0 m ;  里程增量 ≈ 0 m ;  峰值前向速度 ≈ 0 m/s ===
+[walk1] （据此:走 1 米约需 -1 s，仅供参考）
+[walk1] >>> ReleaseControl
+[walk1] done.

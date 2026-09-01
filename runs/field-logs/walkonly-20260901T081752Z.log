@@ -1,0 +1,20 @@
+============================================================
+ 只走动：Move(lat=0.0, fwd=0.11, yaw=0.0) 共 1.7s
+ 前提：机器已站着 / App 已关 / 按方向留足空地 / 急停在手
+============================================================
+>> 确认？回车走，Ctrl-C 退出... [walkonly] connecting 192.168.234.1:8082 ...
+[walkonly] ✓ connected
+[walkonly] >>> TakeControl
+[walkonly] TakeControl(): ok
+[walkonly] >>> SwitchRemoteState
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[walkonly] >>> Gait()（进入步态/通用行走模式）
+[CTRL] ✓ Gait acked
+[walkonly] >>> Move(0,0.11,0) 连发 1.7s（20Hz）
+[walkonly] >>> 停 Move(0,0,0)
+[walkonly] >>> ReleaseControl
+[walkonly] done.
+(walkonly exit: 0)
+日志：runs/field-logs/walkonly-20260901T081752Z.log
+走不动的话：多半是站起后落在了『原地模式』（Move 只在通用模式平移，而 0.2.0 读不到/切不了模式）。
+可再跑一次碰运气，或先让它重新站一次（bash field-stand.sh）再走。

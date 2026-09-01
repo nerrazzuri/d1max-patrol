@@ -24,3 +24,10 @@ refs/urdf/
 
 # 覆盖率产物
 .coverage
+
+# 运动控制编译产物（源码在 motion/*.cpp，二进制可重编）
+motion/m0
+motion/m1
+motion/stand2
+motion/walk1
+motion/walkonly

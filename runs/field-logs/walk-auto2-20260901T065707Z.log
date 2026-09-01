@@ -1,0 +1,14 @@
+===== 1. 重启 RK3588（ssh 包 timeout 15，不会再挂）=====
+Terminated
+(reboot 已发/超时返回，正常)
+===== 2. 等下线 =====
+已下线(第1次×2s)
+===== 3. 等上线 + 重连狗热点 =====
+已上线(第1次×2s) ✓
+给运控服务 8s 启动...
+===== 4. 单会话：激活→站起(6s)→前进1.0s→停 =====
+[walk1] connecting 192.168.234.1:8082 ...
+[walk1] connect cb error: Robot ShakeHand failed
+[walk1] connection timeout
+(walk1 exit: 1)
+===== 完成 runs/field-logs/walk-auto2-20260901T065707Z.log =====

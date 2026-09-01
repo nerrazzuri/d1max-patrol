@@ -1,0 +1,61 @@
+============================================================
+ 让 D1 Max 站起来（StandUp）—— 腿会动、原地站立、不行走。
+ 本脚本会【先重启机器狗】清掉锁死的控制会话，再站起。
+ 确认：App 已关且不会自动重连 / 遥控器关机 /
+       周围含机器下方已清空 / 人在安全侧 / 急停在手。
+============================================================
+>> 以上都确认了？回车继续，Ctrl-C 退出... 
+===== 1. 确保 WiFi 连在机器狗上（以便 SSH 进去重启） =====
+已在 XG2WIFI_C40221
+机器狗可达 ✓
+
+===== 2. 重启 RK3588 清锁（会问 SSH 密码=bot，随后 sudo 密码也=bot） =====
+client_loop: send disconnect: Broken pipe
+(连接已断/命令已发，正常)
+
+===== 3. 等机器狗重启（先掉线再上线，约 1-2 分钟） =====
+  等待下线 ........................................  等待上线 已上线 ✓
+  给运控服务 8 秒启动时间...
+
+===== 4. 最后确认：马上要站起来了 =====
+>> 周围仍清空、急停在手？回车=站起，Ctrl-C=放弃... 
+===== 5. 单会话站起（连上→拿控制权→SwitchRemoteState 激活电机→StandUp→观察→交还） =====
+[stand2] connecting 192.168.234.1:8082 ...
+[stand2] ✓ connected
+[2026-09-01 14:25:24.918] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[stand2] >>> TakeControl
+[stand2] TakeControl(): ok
+[stand2] 读初始状态 2s（期望 machine=IDLE, motion=LIE_DOWN）...
+[CTRL] TakeControlAck: SUCCESS reason='OK'
+[2026-09-01 14:25:25.919] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:26.919] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[stand2] >>> SwitchRemoteState (IDLE→REMOTE，激活电机)
+[stand2] SwitchRemoteState(): ok
+[2026-09-01 14:25:27.919] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:29.011] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:29.919] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:30.919] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:31.918] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[stand2] 现在 machine=other
+[stand2] >>> StandUp（站起，不平移）
+[stand2] StandUp(): ok
+[stand2] 观察 8 秒，看是否变 STAND_UP...
+[CTRL] robot acked StandUp
+[2026-09-01 14:25:32.921] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:33.920] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:34.922] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:35.918] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:36.919] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:37.919] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:38.918] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[2026-09-01 14:25:39.918] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[stand2] 最终: machine=other motion=other
+[stand2] >>> ReleaseControl
+[2026-09-01 14:25:40.920] [ERROR] (327) [json.exception.out_of_range.403] key 'current_state' not found
+[stand2] done. 只做了 StandUp，未平移。
+(stand2 退出码: 0)
+
+===== 完成 =====
+日志：runs/field-logs/stand-20260901T062312Z.log —— 把上面输出整段贴给 Claude。
+若仍报 Controlled denial of service：说明重启后有别的客户端(多半是 App)先连了；
+彻底关掉 App 再重跑本脚本。
