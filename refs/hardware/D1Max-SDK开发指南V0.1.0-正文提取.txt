@@ -1,0 +1,1761 @@
+===== PAGE 1 =====
+智元酷拓四足机器人D1 Max
+SDK 开发指南
+版本：V0.1.0
+时间：2026.07
+===== PAGE 2 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+1
+目录
+一、产品介绍....................................................................................................................................5
+1.1 产品概述.............................................................................................................................. 5
+1.2 产品清单.............................................................................................................................. 5
+1.3 产品参数.............................................................................................................................. 6
+1.4 背部负载安装.................................................................................................................... 11
+1.4.1 负载安装孔位图...........................................................................................11
+1.4.2 重心限制.....................................................................................................12
+1.5 电气拓展接口.................................................................................................................... 12
+1.5.1 电源口48V(10A).........................................................................................14
+1.5.2 电源口24V(20A).........................................................................................16
+1.5.3 网口(24V)....................................................................................................17
+1.5.4 网口(12V)....................................................................................................20
+1.5.5 串口.............................................................................................................22
+1.5.6 USB口.........................................................................................................23
+1.6 D1 Max 硬件架构图...........................................................................................................24
+二、SDK 开发指南...........................................................................................................................25
+2.1 SDK 介绍.............................................................................................................................25
+2.2 SDK 软件服务接口列表.....................................................................................................25
+2.3 安全保护机制.................................................................................................................... 26
+2.3.1 硬急停..........................................................................................................26
+2.3.2 软急停..........................................................................................................26
+2.3.3 内部异常保护(自动触发).............................................................................26
+2.4 环境依赖............................................................................................................................ 27
+2.5 设备登录............................................................................................................................ 27
+2.6 SDK 获取.............................................................................................................................29
+2.7 Demo 运行..........................................................................................................................29
+2.8 SDK 控制说明.....................................................................................................................30
+2.9 关节命名规范.................................................................................................................... 32
+2.10 传感设备坐标定义.......................................................................................................... 33
+三、SDK 函数介绍...........................................................................................................................34
+3.1 HighLevel API 函数介绍..................................................................................................... 34
+3.1.1 错误码机制..................................................................................................34
+3.1.2 类型定义......................................................................................................35
+3.1.3 构造与析构..................................................................................................36
+3.1.4 连接管理接口...............................................................................................36
+3.1.5 回调设置函数...............................................................................................37
+3.1.6 控制接口......................................................................................................41
+3.1.7 运动与姿态控制接口....................................................................................46
+3.1.8 数据配置接口...............................................................................................47
+3.1.9 版本信息......................................................................................................49
+四、传感设备数据获取.................................................................................................................. 51
+4.1 视频流数据........................................................................................................................ 51
+4.2 激光雷达数据................................................................................................................... 52
+4.2.1 ROS2接口定义...........................................................................................52
+4.2.2 获取激光雷达数据.......................................................................................53
+4.3 超声波雷达数据................................................................................................................ 53
+4.3.1 ROS2接口定义...........................................................................................53
+4.3.2 获取超声波雷达数据....................................................................................54
+4.5 RTK 数据............................................................................................................................. 54
+===== PAGE 3 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+2
+4.5.1 RTK简介.....................................................................................................54
+4.5.2获取六分RTK服务......................................................................................54
+4.5.3NX侧RTK服务配置...................................................................................55
+4.5.4ROS2接口定义...........................................................................................56
+4.5.5 获取RTK数据.............................................................................................58
+4.6 IMU 数据............................................................................................................................ 58
+4.7 相机数据............................................................................................................................ 58
+五、调试说明.................................................................................................................................. 59
+5.1 控制权切换说明................................................................................................................ 59
+5.2 自主回充说明.................................................................................................................... 59
+5.3 ROS2 多机通信配置.......................................................................................................... 61
+5.4 日志查看............................................................................................................................ 63
+5.5 设备进程工具使用............................................................................................................ 64
+5.6 连接外部 wifi ..................................................................................................................... 65
+5.7 连接 WiFi 的情况下访问有线网口...................................................................................65
+===== PAGE 4 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+3
+文档修订记录
+修订日期 修订内容 版本
+2025.9  初始预测试版本 V0.0.1
+2025.10  提供基础机器人控制接口
+ 支持机器人状态数据回调
+ 支持故障信息回调
+v0.0.2
+2025.11  添加登阶模式接口
+ 添加运动模式下爬高台接口
+ 添加模式状态获取接口
+v0.0.3
+2025.12.27  添加获取系统版本号的接口
+ 新增 UDP通信方式支持
+ 优化连接失败时的错误信息提示
+ 内部适配新版本通信协议
+v0.0.4
+2026.1.17  新增2.10机体坐标系方向
+ 新增4.4本体传感器坐标
+v0.0.41
+2026.01.15  新增步态姿态接口(Gait(...))
+ 新增瘦身姿态接口(Slim(...))
+ 新增断开后自动续连的配置接口
+ 新增获取当前连接状态接口
+ 添加一些自动续连/手动续连的示例
+ 异步接口中 添加获取发送结果的回调
+参数
+v0.0.5
+2026.02.08  新增控制权切换功能
+ 新增 “4.5RTK使用说明”
+ 修复IMUacc/gyro取反问题
+v0.0.6
+2026.03.17  新增自主回充功能
+ 修改nxssh登录用户名
+ 修改前后激光雷达IP地址及rostopic
+ 新增 “1.6D1Max硬件架构图”
+v0.0.8
+===== PAGE 5 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+4
+2026.03.31  新增单独的速度信息上报接口，并提供
+接口配置速度信息上报的频率
+ 适配点足的关节温度上报
+ 提高自主回充成功率
+ 增加无图回充API接口
+v0.0.9
+2026.04.30  新增无图自主回充sdk接口
+ 新增调试指南
+v0.1.0
+2026.07  勘误 v0.1.0
+===== PAGE 6 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+5
+一、产品介绍
+1.1产品概述
+智元仿生四足机器人 D1Max是一款轮足式仿生四足机器人， 具备自重轻、负载
+大、续航长、防护强、运动灵活稳定等优势。机器人每条腿配备3个关节电机和1个
+轮毂电机，配备光学相机、激光雷达、超声波雷达、IMU、RTK模块等传感设备，内
+部搭载高算力平台，用于实现运动控制、自主导航定位、环境侦测等功能，提供丰富
+的供电和通信接口，支持多品类的任务载荷拓展。
+1.2产品清单
+D1Max本体
+
+===== PAGE 7 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+6
+1.3产品参数
+分类 规格 说明
+基础
+信息
+站立尺寸 930mm*480mm*585mm
+趴下尺寸 930mm*630mm*200mm
+整机重量
+(含电池)
+41kg
+工作温度 -20°~55°
+防护等级 IP67
+电池模组 504.9Wh*2，双电池，支持快拆快换，支持热插拔
+充电时长 <1.5h
+续航时间 空载5±0.5h,满载3.5±0.5h
+性能
+参数
+最大速度 6m/s
+稳定负载 30kg
+连续攀爬
+台阶高度
+25cm
+极限跨越
+障碍高度
+80cm
+极限跨越
+沟壑宽度
+80cm
+带负载跨
+越高度
+50cm
+最窄通过
+宽度
+50cm
+最大爬坡
+角度
+45°
+===== PAGE 8 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+7
+最窄掉头
+宽度
+支持原地掉头，支持前后向切换
+算力主控 157Tops
+传感
+单元
+激光雷达 前后各1个96线激光雷达(Airy96线)、覆盖角度
+360°*90°、覆盖直径范围120m
+广角相机 前后各1个FPV相机，工业级800万像素，视场角：
+DFOV122°，HFOV111°，VFOV70°
+补光灯 补光灯*4，FPV相机左右各1个。照射距离≥3m
+IMU 车规级 IMU*1
+超声波传
+感器
+左右各一个超声波，支持5m以内的障碍物识别
+RTK模块 GNSSRTK*1
+麦克风扬
+声器
+部分版本支持
+光照传感
+器
+部分版本支持
+功能
+列表
+运动性能 具备踏步、滑行、匍匐等姿态，能够前后左右直线移动、原
+地旋转等，支持膝关节姿态变换；
+支持在砂石路面、柏油路面、草地、沙土地面、森林地面、
+建筑废墟等各类路面行走；
+轮\足快换 支持轮足、点足快换
+实时图像
+传输
+支持
+OTA升级 支持
+二次开发 支持，提供SDK开发包，机器人模型提供3D数模和urdf
+文件用于仿真
+供电接口 5V、12V、24V、48V，最大输出功率480W
+===== PAGE 9 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+8
+通讯接口 千兆网口*2、USB3.0*2、串口*1
+通信 WIFI通信 支持
+蓝牙 支持
+射频通信 支持
+配件 适配器充
+电座
+标配
+带屏遥控
+器
+标配，遥控距离700-1000m
+自主充电
+桩
+选配
+航空包装
+箱
+标配
+其他 保修期 1年
+注：以上参数为实验室测试数据，实际表现可能因使用环境、操作方式等因素有所
+差异，请以实际为准
+===== PAGE 10 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+9
+
+===== PAGE 11 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+10
+ 关节参数
+部位 参数 数值
+髋部滚转关节(hip_roll) 最大扭矩 150N.m
+最大转速 190RPM
+重量 0.93kg
+关节限位 -39.9°~30°
+髋部俯仰关节
+(hip_pitch)
+最大扭矩 150N.m
+最大转速 190RPM
+重量 0.93kg
+关节限位 -140°~140°
+膝部俯仰(knee_pitch) 最大扭矩 150N.m
+最大转速 190RPM
+重量 0.93kg
+关节限位 -160°~160°
+足端(foot) 最大扭矩 33N.m
+最大转速 1200RPM
+重量 1.275kg
+半径 9cm
+关节限位 -180°~180°
+===== PAGE 12 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+11
+1.4背部负载安装
+1.4.1 负载安装孔位图
+机器狗背部的空间平整，负载25-30kg，背部部署有双导轨，两条导轨上有14个M4
+孔位支持上装载荷便捷安装，双导轨具体尺寸如下
+机器人加装负载后，仅支持基础运动模式，请勿在加装负载后使用高台模式
+当在机器人背部加装载荷时，机器人的运动性能可能会受影响，请务必在加装前向
+售后人员咨询相关事宜
+===== PAGE 13 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+12
+1.4.2 重心限制
+为避免D1Max机身上加装上装载荷之后，在各类地形运动过程中，腿部与上装载荷
+发生碰撞干涉，对D1Max的上装空间给出如下推荐示意，具体尺寸为长40cm，宽
+22cm，高24cm，位置在机身背部居中位置，如下图所示：
+1.5电气拓展接口
+
+===== PAGE 14 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+13
+序号 接口名称
+1 48V(10A)
+2 24V(20A)
+3 24V(3A)+网口
+4 12V(5A)+网口
+5 串口（RS232x1、RS485x1、SBUSx2、PPSx1）
+6、7 USB3.0（5V、1A）
+8 RTK天线接口
+9 拓展仓按键
+•所有供电接口的供电总功率在 480W以内；
+•有航插头配备防护盖，以确保 IP67，不用的航插头务必盖好防护盖；
+•扩展仓按键用于控制扩展接口的供电，在进行上装接线时，务必先关闭扩展仓的
+电源。
+航插扩展功能接口说明：
+设备名称 设备路径
+RS232 /dev/ttyCH9344USB4
+RS485 /dev/ttyCH9344USB5
+SBUS1 /dev/ttyCH9344USB2
+SBUS2 /dev/ttyCH9344USB3
+===== PAGE 15 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+14
+1.5.1 电源口48V(10A)
+ 航插母头
+航插名称 48V10A
+板端航插型号 M12-S4S-GPFM16-135-CS24044
+线序定义 1(棕) GND
+2(红) 48V
+3(蓝) 48V
+4(黄绿) GND
+===== PAGE 16 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+15
+ 对插线束
+
+===== PAGE 17 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+16
+1.5.2 电源口24V(20A)
+ 航插母头
+航插名称 24V20A
+板端航插型号 M12-S4S-GPFM16-135-CS24044
+线序定义 1(棕) GND
+2(红) 24V
+3(蓝) 24V
+4(黄绿) GND
+===== PAGE 18 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+17
+ 对插线束
+1.5.3 网口(24V)
+ 航插母头
+
+===== PAGE 19 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+18
+航插名称 网口+24V
+板端航插型号 M12-P12A-GPFM12
+线序定义 1(棕) GND
+2(蓝) 24V
+3(白) 24V
+4(绿) 网口A+
+5(粉) 网口A-
+6(黄) 网口B+
+7(黑) 网口B-
+8(灰) 网口C+
+9(红) 网口C-
+10(紫) GND
+11(橙) 网口D+
+12(浅绿) 网口D-
+===== PAGE 20 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+19
+ 对插线束
+
+===== PAGE 21 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+20
+1.5.4 网口(12V)
+ 航插母头
+航插名称 网口+12V
+板端航插型号 M12-P12A-GPFM12
+线序定义 1(棕) GND
+2(蓝) 12V
+3(白) 12V
+4(绿) 网口A+
+5(粉) 网口A-
+6(黄) 网口B+
+7(黑) 网口B-
+8(灰) 网口C+
+9(红) 网口C-
+10(紫) GND
+===== PAGE 22 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+21
+11(橙) 网口D+
+12(浅绿) 网口D-
+ 对插线束
+
+===== PAGE 23 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+22
+1.5.5 串口
+ 航插母头
+航插名称 串口（RS232、RS845、SBUS*2、PPS）
+板端航插型号 M12-P8A-GPFM12
+线序定义 1(白) PPS
+2(棕) SBUS1
+3(绿) SBUS2
+4(黄) RS485A
+5(灰) RS485B
+6(粉) RS232_TX
+7(蓝) RS232_RX
+8(红) GND
+===== PAGE 24 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+23
+ 对插线束
+1.5.6 USB 口
+ 航插母头
+航插名称 USB3.0+5V 两个
+板端航插型号 E10B-FT3-PPF
+线序定义 无
+===== PAGE 25 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+24
+ 对插线束
+1.6D1Max硬件架构图
+注：主控板为 RK3588，用来进行四足机器人运动控制，勿在主控板进行开发和部署；
+算力板为 Orin NX, 用来进行四足机器人感知控制，可在此算力板进行开发和部署，需做
+好备份管理，刷机或 OTA 升级可能会被刷新；
+===== PAGE 26 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+25
+二、SDK 开发指南
+2.1SDK介绍
+ 本文档描述了 D1Max的软件开发工具包 (SDK)，提供其核心服务接口的详细信
+息，包括高层运动控制接口、IMU惯导数据接口、电机状态数据接口。
+ 各章节分别介绍不同服务接口的调用方法、数据输入/输出的标准格式定义与一些
+功能开发示例。
+ 接口定义会随量产开发状态产生变更，请以最新版本的接口定义文档为准。
+ SDK程序与四足机器人本体内程序通讯存在特定协议，故不同版本的SDK程序设
+备本体内程序通讯存在差异，请根据设备版本选择对应版本SDK程序。若条件允
+许，建议更新四足机器人固件到最新版本，以获得更好的兼容性。
+ SDK接口控制时，全部状态均由二次开发者设计指定，本体运控不做额外的干预
+与状态跳转。
+ 运行SDK时,请保证系统有足够的资源,否则可能出现运动控制模块失效的情况。
+2.2SDK软件服务接口列表
+序号 接口名称 功能 SDK版本
+1 高层运动控制接口 实现机器狗的高层运动控制，包括
+前后转向速度运动，趴下，旋转，
+四肢站立等
+V0.0.2
+2 视频流推送数据接口 向客户端推送相机本体视频流 V0.0.2
+3 设备状态服务接口 查询并获取当前设备状态和系统资
+源使用信息
+V0.0.3
+4 惯导状态数据接口 获取IMU原始数据信息 V0.0.4
+5 超声波雷达接口 实现自主避障功能 v0.0.5
+6 遥控器和sdk控制权
+切换功能及sdk接口
+实现控制权切换功能 v0.0.6
+7 RTK模块的sdk接口 实现自主定位功能 v0.0.6
+8 自主回充功能及API 实现自主充电功能 v0.0.9
+===== PAGE 27 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+26
+接口(选配)
+9 slam建图导航功能及
+API接口 (选配)
+实现自主导航功能 v0.1.0
+2.3安全保护机制
+2.3.1 硬急停
+ 触发方式：按下机身急停按钮
+ 效果：机器狗缓慢着地，红灯亮起
+ 指示灯状态
+ 按下时：红灯亮
+ 松开后：绿灯亮
+ 恢复：旋开急停按钮后，系统自动恢复(若无其他故障)
+2.3.2 软急停
+ 触发方式：通过遥控器触发或者通过sdk接口触发
+ 效果：机器人立即停车，不再响应任何控制指令
+ 恢复：接触软急停后可恢复正常操作
+从V0.0.6版本sdk起，支持遥控器和sdk控制权切换功能，若要实现在sdk控制阶
+段通过遥控器触发设备软急停，必须得在遥控器中打开app获取到控制权后，然后
+便可以随时使用遥控器右上方红色急停按钮触发软急停，触发软急停后，机器狗显
+示红灯，保持当前姿态，不再响应任何控制指令，再次点击遥控器急停按键即可恢
+复急停。
+2.3.3 内部异常保护(自动触发)
+以下情况将触发内部保护机制，机器人自动停车并缓慢着地
+ 遥控信号断连(含网络阻塞)，重新连接APP即可恢复
+ 电池在位但电量<10%
+ 关节故障
+ IMU(惯性测量单元)通信中断
+===== PAGE 28 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+27
+2.4环境依赖
+-操作系统:Ubuntu22.04
+-构建工具:CMake3.8+,GCC11+
+-依赖库:Boost1.74+
+-编程语言:C++
+2.5设备登录
+网络连接
+ Wifi连接
+ wifi名称：XG2WIFI_xxxxxx
+ wifi密码：12345678
+ 有线连接
+ 使用网线连接机器狗拓展网口和控制端PC
+ 设置控制端PC网口IP为192.168.168.x(不能设置为192.168.168.168和
+192.168.168.100)
+
+===== PAGE 29 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+28
+ssh 登录
+Bash
+#通过wifi 连接
+ssh robot@192.168.234.1 #RK3588，password: bot
+#通过网线连接
+ssh robot@192.168.168.168 #RK3588, password: bot
+ssh robot@192.168.168.100 #Orin NX,password: 1
+===== PAGE 30 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+29
+2.6SDK获取
+way1：通过ssh进入机器狗本体，查询当前的的固件版本信息后，将查询到的四足机
+器人固件版本号截图发送售后技术支持团队获取对应的SDK安装包与示例代码，查询
+方式如下：
+bash
+ssh robot@192.168.234.1 #password: bot
+cat /opt/release/version.yaml #查看rk 对应固件版本
+ssh robot@192.168.168.100 #password: 1
+cat /opt/release/version.yaml #查看nx 对应固件版本
+way2:通过如下github地址获取
+bash
+git clone https://github.com/AgibotTech/Agibot_D1_Max.git
+2.7Demo运行
+在本地PC端，进入到sdk文件中
+Bash
+# 进入 C++ 演示目录
+cd example
+# 创建构建目录
+mkdir build && cd build
+#配置并编译项目
+cmake ..
+make -j6
+#运行demo 示例
+./example_data 192.168.168.168 8081 #有线连接
+./example_data 192.168.234.1 8081 #无线连接
+在运行demo文件前，务必使遥控器app退出后台程序
+===== PAGE 31 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+30
+2.8SDK控制说明
+ sdk指令下发需要按照以下状态跳转逻辑，否则可能会造成机器摔倒、故障或不响
+应等异常情况。
+注意：
+1. 当下发站立命令时，完成站立后会根据当前的模式自动切换到通用状态或者原
+地状态
+2. 锁定状态下切到任意其他状态下就算解锁
+===== PAGE 32 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+31
+ SDK命令下发流程如下
+
+===== PAGE 33 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+32
+2.9关节命名规范
+为便于识别与调试，本设备采用如下命名规则：
+ 方向缩写
+ f=front(前)
+ b=back(后)
+ l=left(左)
+ r=right(右)
+ 编号含义
+ 1=髋部滚转(hip_roll)
+ 2=髋部俯仰(hip_pitch)
+ 3=膝部俯仰(knee_pitch)
+ 4=足端(foot)
+ 示例命名
+ fr1_hip_roll：右前腿1号关节(髋部滚转)
+ bl3_knee_pitch：左后腿3号关节(膝部俯仰)
+front_left_leg #左前腿
+front_right_leg #右前腿
+back_left_leg #左后腿
+back_right_leg #右后腿
+fl1_hip_roll #左前1 号
+fl2_hip_pitch #左前2 号
+fl3_knee_pitch #左前3 号
+fl4_foot #左前4 号
+fr1_hip_roll #右前1 号
+fr2_hip_pitch #右前2 号
+fr3_knee_pitch #右前3 号
+fr4_foot #右前4 号
+bl1_hip_roll #左后1 号
+bl2_hip_pitch #左后2 号
+bl3_knee_pitch #左后3 号
+bl4_foot #左后4 号
+br1_hip_roll #右后1 号
+br2_hip_pitch #右后2 号
+br3_knee_pitch #右后3 号
+br4_foot #右后4 号
+===== PAGE 34 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+33
+2.10传感设备坐标定义
+传感器名称
+传感器坐标（相对机身BASE原点)
+（单位mm） 备注
+x y z
+IMU_ICM42688（运控用） 0 0 36.2
+IMU_LUA300C （车规级） 0 0 56.9
+前激光雷达AIRY 404.3 0 -37.7 详见规格书
+前摄像头IMX415 412.3 0 37.8 详见规格书
+右前补光灯 420.3 -30.9 28.3 照射范围 120°
+左前补光灯 420.3 30.9 28.3 照射范围 120°
+后激光雷达AIRY -404.3 0 -37.7 详见规格书
+后摄像头IMX415 -412.3 0 37.8 详见规格书
+右后补光灯 -420.3 -30.9 28.3 照射范围 120°
+左后补光灯 -420.3 30.9 28.3 照射范围 120°
+右前超声波雷达RADAR A22 179.2 -100.2 50 详见规格书
+左前超声波雷达RADAR A22 179.2 100.2 50 详见规格书
+当各个关节均为零度时，各坐标系如下图。红色为 x轴，绿色为 y轴，蓝色为 z轴。
+关节的旋转轴和旋转正方向请参考下图
+
+===== PAGE 35 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+34
+三、SDK 函数介绍
+ SDKClient 是AgibotD1Max机器人 SDK的核心通信类， 用于与机器人建立连
+接、断开连接、发送控制命令、配置上报数据等。 开发者通过该类可实现机器人
+运动控制、模式切换、急停、安全锁定等多种功能。
+ 该类支持阻塞模式与非阻塞模式两种调用方式
+ 阻塞模式：函数会等待操作完成或超时后返回结果。
+ 非阻塞模式：函数立即返回，并通过回调函数通知结果。
+ SDK目录结构
+sdk 目录结构
+├── example/ # 演示应用程序 (C++)
+├── docs/ # 详细的文档文件
+├── include/ # SDK 的 C++ 头文件
+└── lib/ # 针对不同架构的预编译库文件 (.so)
+ 当前版本目前开放了HighLevel高层控制接口，后续会逐步开放更多sdk接口
+3.1HighLevelAPI函数介绍
+3.1.1 错误码机制
+ 异常码
+ error_code
+ 成功： ec.value() ==0
+ 失败：ec.value()!=0
+ error_msg:可通过 ec.message() 获取详细的错误描述。
+ 示例
+C++
+std::error_code ec = sdk.Connect("192.168.234.1", 8081);
+if (ec) {
+std::cerr << "连接失败: " << ec.message() << std::endl;
+} else {
+std::cout << "连接成功" << std::endl;
+}
+ 错误码定义
+目前所有错误码均采用C++标准中定义
+===== PAGE 36 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+35
+SDK 中常用的错误码表如下
+枚举值 整数值 含义
+success 0 成功
+invalid argument 22 参数无效
+already connected 106 已连接
+not connected 107 未连接
+timeout 110 操作超时
+connection refused 111 连接拒绝
+connection already in
+progress
+114 连接执行中
+operation in progress 115 正在执行中
+operation canceled 125 操作被取消
+ 示例
+C++
+std::error_code ec = sdk.Connect("192.168.234.1", 8081);
+if (ec) {
+std::cerr << "连接失败: " << ec.message() << std::endl;
+} else {
+std::cout << "连接成功" << std::endl;
+}
+3.1.2 类型定义
+类型名 定义 说明
+ConnectHandler std::function<void(const
+std::error_code&)>
+连接完成后的回
+调函数
+DisConnectHandler std::function<void(const
+std::error_code&)>
+断开完成后的回
+调函数
+ErrorHandler std::function<void(const SDK内部错误回
+===== PAGE 37 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+36
+std::error_code&)> 调函数
+3.1.3 构造与析构
+ 构造
+函数名 SDKClient(ErrorHandler error_callback = [](const std::error_code&) {})
+功能概述 构造一个SDK 客户端对象
+参数 error_callback：SDK 内部通信异常回调函数
+返回值
+备注
+ 析构
+函数名 ~SDKClient()
+功能概述 析构函数，释放资源
+参数
+返回值
+备注
+3.1.4 连接管理接口
+ 建立连接
+函数名 std::error_code Connect(std::string ip, std::string port, bool block = false, ConnectHandler handler = {})
+功能概述 与机器狗建立通信连接
+参数 ip:目标IP 地址
+port:目标端口号
+block:是否阻塞：true 阻塞模式；false 非阻塞
+handler:非阻塞模式下连接完成后的回调函数
+返回值 成功：返回std::error_code()
+失败：返回带错误信息的std::error_code
+备注 通信建立失败时，终端输出失败日志
+ 断开链接
+函数名 std::error_code Disconnect(bool block = false, DisConnectHandler handler = {})
+功能概述 断开与机器人的连接
+参数 block:是否阻塞模式：true阻塞模式；false非阻塞
+handler:非阻塞模式下断开完成后的回调函数
+返回值 成功：返回 std::error_code()
+失败：返回带错误信息的 std::error_code
+备注 通信建立失败时，终端输出失败日志
+===== PAGE 38 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+37
+ 获取连接状态
+函数名 bool IsConnected() const
+功能概述 判断当前是否已连接机器人
+参数 无
+返回值 true：已连接
+false：未连接
+备注
+3.1.5 回调设置函数
+设置控制应答回调函数
+函数名 void SetControlCallback(std::shared_ptr<IControlCallback>& control_callback)
+功能概述 设置控制应答回调函数，用于非阻塞模式下接收命令反馈
+回调函数 详见IControlCallback 类的详细说明
+备注
+IControlCallback 类
+ 说明：控制命令回调接口，该接口用于接收机器人确认“已收到”控制命令的回调
+仅在非阻塞模式下使用
+ 定义
+C++
+IControlCallback
+class ROBOT_EXPORT_API IControlCallback {
+public:
+virtual void OnSoftEmergencyStop(bool on) {}
+virtual void OnStandUp() {}
+virtual void OnLieDown() {}
+virtual void OnCrawl() {}
+virtual void OnClimb() {}
+virtual void OnSlim() {}
+virtual void OnGait() {}
+virtual void OnReverseHeadTail() {}
+virtual void OnMode(int mode) {}
+virtual void OnSpeed(int speed_level) {}
+virtual void OnLocked() {}
+virtual void OnFrontLight(bool on) {}
+virtual void OnBackLight(bool on) {}
+virtual void OnAutoModeLight(bool on) {}
+virtual void OnLuxConfig(bool on) {}
+virtual void OnImuConfig(int freq) {}
+virtual void OnMcConfig(bool on) {}
+virtual void OnTakeControlAck(const TakeControlAck& ack) {}
+virtual void OnReleaseControlAck(const ReleaseControlAck& ack)
+{}
+virtual ~IControlCallback() = default;
+};
+===== PAGE 39 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+38
+回调列表
+回调函数 说明 参数
+OnSoftEmergencyStop(bool on) 已收到急停命令 on = true 开启急
+停
+on = false 关闭急
+停
+OnStandUp() 已收到站立命令 —
+OnLieDown() 已收到卧倒命令 —
+OnCrawl() 已收到匍匐命令 —
+OnClimb() 已收到爬高台命令
+OnSlim() 已收到瘦身命令
+OnGait() 已收到步态命令
+OnReverseHeadTail() 已收到调转头尾命令 —
+OnMode(int mode) 已收到模式切换命令 模式编号
+OnSpeed(int speed_level) 已收到速度切换命令 速度档位
+OnLocked() 已收到锁定命令 -
+OnFrontLight(bool on) 已收到前补光灯命令 true 开启，false
+关闭
+OnBackLight(bool on) 已收到后补光灯命令 true 开启，false
+关闭
+OnLuxConfig(bool on) 已收到光强值配置命
+令
+true 开启，false
+关闭
+OnImuConfig(int freq) 已收到 IMU配置命令 频率值
+OnMcConfig(bool on) 已收到运控数据配置
+命令
+true 开启，false
+关闭
+===== PAGE 40 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+39
+OnTakeControlAck(const
+TakeControlAck& ack)
+已收到获取控制权命
+令应答
+应答信息
+OnReleaseControlAck(const
+ReleaseControlAck& ack)
+已收到释放控制权命
+令应答
+应答信息
+ 示例
+C++
+#include "robot_sdk/sdk_callback.hpp"
+class MyDataCallback : public robot_sdk::IDataCallback {
+public:
+void OnImuData(const ImuData& data) override {
+// 轻量处理，例如缓存
+}
+};
+class MyControlCallback : public robot_sdk::IControlCallback {
+public:
+void OnStandUp() override {
+// 收到站立命令应答
+}
+};
+ 注意事项
+不要在回调中执行耗时任务。
+若需要耗时处理，请在回调中将数据复制并投递至独立线程。
+设置数据接收回调函数
+函数名 void SetDataCallback(std::shared_ptr<IDataCallback>& data_callback)
+功能概述 设置数据接收回调函数，当机器人数据上报时触发
+回调函数 详见IDataCallback 类的详细说明
+备注
+IDataCallback 类
+ 说明：数据上报回调接口 ，用户需根据需要实现此接口以接收来自机器人系统的
+数据
+回调函数必须轻量级，不能执行耗时操作。
+===== PAGE 41 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+40
+在回调函数中仅建议进行数据复制、校验等快速操作。
+若需执行耗时任务（如数据库写入、文件I/O、复杂计算、网络发送等），请在回
+调函数内部将数据复制到独立线程或线程池中处理。
+ 定义
+C++
+IDataCallback
+class ROBOT_EXPORT_API IDataCallback {
+public:
+virtual void OnImuData(const ImuData& data) {}
+virtual void OnLuxData(const LuxData& data) {}
+virtual void OnMcData(const MotionData& data) {}
+virtual void OnRobotStateData(const RobotState& data) {}
+virtual void OnFaultData(const FaultDatas& data) {}
+virtual void OnControlLost(const ControlLostInfo& info) {}
+virtual void OnControlAvailable(const ControlAvailableInfo&
+info) {}
+virtual ~IDataCallback() = default;
+};
+ 回调列表
+回调函数 描述 参数 调用频率
+OnImuData IMU数据回调 const ImuData& data ：
+IMU数据结构
+按配置频率上报
+OnLuxData 光照强度数据
+回调
+const LuxData& data ：光
+照强度数据结构
+配置后定频 1Hz
+上报
+OnRobotState
+Data
+机器人状态数
+据回调
+const RobotState&
+data：机器人状态结构
+1Hz主动上报
+OnFaultData 故障信息数据
+回调
+const FaultDatas&
+data： 故障数据集合
+发生故障时主动
+上报
+OnMcData 机器人运动数
+据回调
+const MotionData&
+data：机器人状态结构
+配置后定频
+100Hz上报
+OnControlLost 控制权丢失回
+调
+const ControlLostInfo&
+info：控制权丢失信息
+OnControlAvai
+lable
+控制权可用回
+调
+const
+ControlAvailableInfo&
+info：控制权可用信息
+===== PAGE 42 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+41
+3.1.6 控制接口
+3.1.6.1 急停控制(SoftEmergencyStop)
+函数名 std::error_code SoftEmergencyStop(bool on, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 急停控制。软急停后，系统不会响应其他运动命令,并且速度将为 0
+参数 on: 急停状态：true:急停；false:解除急停
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 - 异步模式：函数返回仅表示命令已发送，发送结果通过回调函数通知
+- 同步模式：函数返回即表示命令发送结果
+启用急停后，系统将不响应其他运动命令，此时速度为 0
+3.1.6.2 站立(StandUp)
+函数名 std::error_code StandUp(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 机器人站立动作
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 调用站立后，站立过程中会上报`MOTION_STATUS_STAND_UP` 状态，站立完成后会根据模式自动进
+入`MOTION_STATUS_GENERAL` 或`MOTION_STATUS_IN_PLACE` 状态。
+3.1.6.3 卧倒(LieDown)
+函数名 std::error_code LieDown(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 机器人卧倒动作
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+===== PAGE 43 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+42
+3.1.6.4 匍匐(Crawl )
+函数名 std::error_code Crawl(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t){})
+功能概述 机器人匍匐动作
+参数 timeout_ms：0 表示异步模式； >0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数； 同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+3.1.6.5 爬高台(Climb)
+函数名 std::error_code Climb(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 机器人爬高台动作
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 仅在"通用模式"下使用
+3.1.6.6 瘦身(Slim)
+函数名 std::error_code Slim(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 机器人瘦身动作
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 仅在"通用模式"下使用
+===== PAGE 44 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+43
+3.1.6.7 步态(Gait)
+函数名 std::error_code Gait(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 机器人步态姿态
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 仅在"通用模式"下使用
+3.1.6.8 过挡鼠板姿态(DSB)
+函数名 std::error_code DSB(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 过挡鼠板姿态
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 仅在”通用模式”下使用
+3.1.6.9 调转头尾方向(ReverseHeadTail)
+函数名 std::error_code ReverseHeadTail(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 调转机器人头尾方向
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+===== PAGE 45 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+44
+3.1.6.10 设置当前运行模式(SetMode)
+函数名 std::error_code SetMode(int mode, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 设置机器人运行模式，默认为通用模式。
+参数 mode：1 为通用模式；2 为原地模式；3 为登阶模式
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+3.1.6.11 设置运动速度等级(SetSpeed)
+函数名 std::error_code SetSpeed(int speed_level, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 设置速度等级，主要影响通用模式下`Move` 命令的速度，默认为低速。
+低速对 Move 接口的影响：
+forward_back：[-1.0, 1.0]对应[-1.0m/s , +1.0m/s]
+left_right：[-1.0, 1.0]对应[-0.5m/s , +0.5m/s]
+yaw：[-1.0, 1.0]对应[-1.5rad/s, +1.5rad/s]
+=====================================================================================
+中速对 Move 接口的影响：
+forward_back：[-1.0, 1.0]对应[-2.0m/s , +2.0m/s]
+left_right：
+当-1.0m/s < forward_back < 1.0m/s 时，[-1.0, 1.0]对应[-0.5m/s , +0.5m/s]
+当 forward_back> 1.0m/s 或者forward_back< -1.0m/s 时，限制为0m/s
+yaw：
+当-1.0m/s < forward_back < 1.0m/s 时，[-1.0, 1.0]对应[-1.5rad/s, +1.5rad/s]
+当 forward_back> 1.0m/s 或者forward_back< -1.0m/s 时，[-1.0, 1.0]对应[-1.0rad/s, +1.0rad/s]
+=====================================================================================
+高速对 Move 接口的影响：
+forward_back：[-1.0, 1.0]对应[-3.0m/s , +3.0m/s]
+left_right：
+当-1.0m/s < forward_back < 1.0m/s 时，[-1.0, 1.0]对应[-0.5m/s , +0.5m/s]
+当 forward_back> 1.0m/s 或者forward_back< -1.0m/s 时，限制为0m/s
+yaw：
+当-1.0m/s < forward_back < 1.0m/s 时，[-1.0, 1.0]对应[-1.5rad/s, +1.5rad/s]
+当 forward_back> 1.0m/s 或者forward_back< -1.0m/s 时，[-1.0, 1.0]对应[-1.0rad/s, +1.0rad/s]
+当 forward_back> 2.0m/s 或者forward_back< -2.0m/s 时，[-1.0, 1.0]对应[-0.5rad/s, +0.5rad/s]
+参数 speed_level: 1 为低速；2 为中速；3 为高速
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+===== PAGE 46 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+45
+3.1.6.12 锁定机器人(Locked)
+函数名 std::error_code Locked(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 锁定机器人：机器锁在当前固定的位置，各个关节保持不动。
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 注意：当下发切换到其他运动状态的命令（站立、匍匐、卧倒）时，自动解锁，切换到其他动作状
+态
+3.1.6.13 前补光灯控制(FrontLight )
+函数名 std::error_code FrontLight(bool on, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 设置前补光灯，设置后自动模式关闭。
+参数 on: true 打开；false 关闭
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+3.1.6.14 后补光灯控制(BackLight)
+函数名 std::error_code BackLight(bool on, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 后补光灯控制
+参数 on: true 打开；false 关闭
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+3.1.6.15 自动补光灯模式(AutoModeLight)
+函数名 std::error_code AutoModeLight(bool on, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 设置自动补光灯模式
+参数 on: true 打开；false 关闭
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 V0.0.6 版本sdk 新增
+===== PAGE 47 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+46
+3.1.7 运动与姿态控制接口
+3.1.6.16 移动(Move)
+函数名 std::error_code Move(float left_right, float forward_back, float yaw,
+int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 控制机器狗进行前后左右移动及旋转，用在通用模式下进行移动，单位：百分比，根据SpeedLevel
+来限速。最新的Move 指令会维持1s。
+参数 left_right: 左右平移速度，范围[-1.0, 1.0]；正数左移，负数右移
+forward_back:前后移动速度，范围[-1.0, 1.0]；正数前进，负数后退
+yaw: 旋转速度，范围[-1.0, 1.0]； 正数左转，负数右转
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+- `std::errc::invalid_argument`: 参数无效
+备注 异步模式：函数返回仅表示命令已发送，发送结果通过回调函数通知
+同步模式：函数返回即表示命令发送结果
+建议运动时以 50Hz 下发命令
+3.1.6.17 原地左右翻滚(Turn)
+函数名 std::error_code Turn(int direction, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 控制机器狗在原地进行左右翻滚动作
+参数 direction: 0 为恢复；1 为左翻滚；2 为右翻滚
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 仅”原地模式”有效
+3.1.6.18 控制头部(ControlHead)
+函数名 std::error_code ControlHead(float left_right, float up_down, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 控制机器人"左右探头"与"抬头/低头"动作（仅**原地模式**有效）。
+参数 left_right: 取值范围[-1.0，1.0]，正数:左探头；负数:右探头，单位是 rad/s
+up_down: 取值范围[-1.0，1.0]，正数:抬头；负数:低头，单位是 rad/s
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 仅”原地模式”有效
+===== PAGE 48 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+47
+3.1.6.19 设置高低站姿(HighLowStance)
+函数名 std::error_code HighLowStance(int stance, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 控制机器人高低站姿，仅”原地模式”有效
+参数 stance 0:恢复；1:高站姿；2:低站姿
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+3.1.8 数据配置接口
+3.1.6.20 配置IMU(SetImuConfig)
+函数名 std::error_code SetImuConfig(int freq, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 配置IMU 上报频率，默认关闭。
+参数 freq: 取值范围[0，100]，0 表示关闭
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+3.1.6.21 配置光强值(SetLuxConfig)
+函数名 std::error_code SetLuxConfig(bool on, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 配置光强值上报开关，默认关闭。
+参数 on: true:开启；false:关闭
+timeout_ms：0 表示异步模式； >0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数； 同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 配置后光强值以1Hz上报
+===== PAGE 49 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+48
+3.1.6.22 配置运动数据(SetMcConfig)
+函数名 std::error_code SetMcConfig(bool on, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 配置运动数据上报开关，默认关闭。
+参数 on true:开启；false:关闭
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 配置后运动数据以50Hz 上报。
+3.1.6.23 配置速度数据(SetSpeed ReportConfig)
+函数名 std::error_code SetSpeedReportConfig(bool on, uint32_t frequency, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 配置速度数据上报开关，默认关闭。配置完成后，将上报速度数据。
+参数 on true:开启；false:关闭
+frequency: 上报频率，[1hz,50hz]
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 配置后速度数据以设定的频率上报。
+3.1.6.24 获取控制权(TakeControl)
+函数名 std::error_code TakeControl(int timeout_ms = 0,
+功能概述 获取机器人的控制权。如果当前APP 在控制，则无法抢占接管。
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注
+===== PAGE 50 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+49
+3.1.6.25 释放控制权(ReleaseControl)
+函数名 std::error_code ReleaseControl(int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {})
+功能概述 释放机器人的控制权
+参数 timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 v0.0.6 版本sdk 新增
+3.1.6.26 更新摄像头码率
+函数名 std::error_code UpdateCameraBitrate(
+CameraBitrateCmd cmd, int timeout_ms = 0,
+WriteHandler handler = [](const std::error_code&, std::size_t) {});
+功能概述 跟新摄像头码率
+参数 cmd: 配置具体摄像头的码率
+timeout_ms：0 表示异步模式；>0:同步模式，最大等待时间(毫秒)
+handler: 异步模式下命令发送结果回调函数；同步模式下不使用
+返回值 - `std::errc::success`: 操作成功
+- 常见失败错误码：
+- `std::errc::timed_out`: 操作超时
+- `std::errc::not_connected`: 未连接
+- `std::errc::operation_canceled`: 操作已取消
+备注 v0.0.6 版本sdk 新增
+3.1.9 版本信息
+3.1.6.27 获取sdk 版本号
+函数名 const std::string& Version() const
+功能概述 获取SDK 版本号字符串
+参数 无
+返回值
+备注
+3.1.6.28 获取协议版本号
+函数名 const std::string& ProtocolVersion() const
+功能概述 获取协议版本号字符串
+参数 无
+返回值
+备注
+===== PAGE 51 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+50
+3.1.6.29 获取系统版本号
+函数名 const std::string& SystemVersion() const
+功能概述 获取系统版本号字符串
+参数 无
+返回值
+备注
+示例代码
+C++
+#include "robot_sdk/sdk_client.hpp"
+using namespace robot_sdk;
+int main() {
+SDKClient client([](const std::error_code& ec) {
+if (ec) std::cerr << "SDK Error: " << ec.message() <<
+std::endl;
+});
+auto ec = client.Connect("192.168.234.1", "8081", true);
+if (ec) {
+std::cerr << "Connect failed: " << ec.message() <<
+std::endl;
+return -1;
+}
+client.StandUp(2000);
+client.Move(0, 0.5, 0);
+client.Disconnect(true);
+return 0;
+}
+注：更多sdk数据接口，请以sdk文件为准
+===== PAGE 52 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+51
+四、传感设备数据获取
+4.1视频流数据
+前后广角相机的视频分别以Gstreamer方式推流到以下URL:
+前置摄像头： rtsp://192.168.234.1:8554/front
+后置摄像头： rtsp://192.168.234.1:8554/back
+默认会在遥控器侧拉流显示实时画面，可通过 VLC或者 ffplay进行预览和调用，例
+如：
+Way1:在 windows电脑连接四足机器人 wifi，可通过 VLC软件进行视频流数据查看：
+step1:打开 vlc，点击"媒
+体-->打开网络串流"
+step2:输入设备推流地
+址：
+rtsp://192.168.234.1:8554
+/front
+step3:预览画面
+Way2:ubuntu电脑连接四足机器人 wifi，在终端中输入以下指令进行视频流获取：
+Bash
+ffplay rtsp://192.168.234.1:8554/front
+ffplay rtsp://192.168.234.1:8554/back
+注意：若以低延迟获取视频流数据，可按如下方法获取：
+Bash
+gst-launch-1.0 rtspsrc location=rtsp://192.168.234.1:8554/front
+latency=0 ! 1rtph264depay ! h264parse ! avdec_h264 !
+videoconvert ! videoscale ! video/x-raw,width=1280,height=720 !
+autovideosink
+===== PAGE 53 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+52
+4.2 激光雷达数据
+4.2.1 ROS2 接口定义
+topic msg 字段类型 字段 字段释义 初
+始
+值
+数
+值
+范
+围
+发
+送
+周
+期
+前雷达点
+云数据：
+/front_lidar
+后雷达点
+云数据：
+/rear_lidar
+sensor_msgs::m
+sg::PointCloud2
+（数据服务模型
+Qos::best_effort
+）
+std_msgs/H
+eader
+header ROS2标准
+MSG帧头
+10h
+z
+uint32 height 点云的垂直高
+度（行数）
+uint32 width 点云的水平方
+向宽度（列
+数）
+PointField[] fields 点云中每个通
+道的字段描述
+bool is_bige
+ndian
+是否是大端字
+节序
+uint32 point_s
+tep
+每个点所占字
+节数
+uint32 row_st
+ep
+一行点数据占
+用的字节数
+uint8[] data 点云的原始二
+进制数据，是
+一维数组
+bool is_den
+se
+是否为稠密点
+云（即没有无
+效点）
+前激光雷达IP:192.168.1.102
+后激光雷达IP:192.168.2.102
+===== PAGE 54 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+53
+4.2.2 获取激光雷达数据
+Bash
+ssh robot@192.168.168.100
+ros2 topic echo /front_lidar --once
+ros2 topic echo /rear_lidar --once
+4.3超声波雷达数据
+4.3.1 ROS2 接口定义
+topic msg 字段类
+型
+字段 字段释义 初
+始
+值
+数值
+范围
+发送
+周期
+左侧超声波雷达：
+/uss_driver/uss_le
+ft/range
+右侧超声波雷达：
+/uss_driver/uss_ri
+ght/range
+sensor
+_msgs:
+:msg::
+Range
+std_ms
+gs/Hea
+der
+header ROS2标准
+MSG帧头
+10h
+z
+uint8_t radiatio
+n_type
+传感器类
+型。枚举
+值：0超声
+波 1红外线
+0 0-1
+float field_of
+_view
+传感器视场
+角（弧
+度），通常
+为测距锥形
+区域的角度
+0 当前
+固定
+为0
+float min_ra
+nge
+传感器可测
+量最小距离
+（米）
+0 当前
+固定
+为0
+float max_ra
+nge
+传感器可测
+量的最大距
+离（米）
+0 当前
+固定
+为0
+float range 当前实际测
+得距离
+（米）
+0 0-4米
+===== PAGE 55 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+54
+4.3.2 获取超声波雷达数据
+Bash
+ros2 topic echo /uss_driver/uss_left/range --once
+ros2 topic echo /uss_driver/uss_right/range --once
+4.5RTK数据
+4.5.1 RTK 简介
+LK1220D是六分科技自研的一款工规级全频高精度定位定向模组，最多支持
+1040卫星通道,支持双天线接入。模组可内置高精度 NRTK&定向算法，且具备优秀的
+抗干扰能力，通过基带内置多频窄带抗干扰单元，提升复杂电磁环境下的信号接收和
+处理性能。
+D1Max设备内部预留RTK拓展接口，且已安装驱动，如需使用RTK服务，需
+外接天线(SMA接头)并开通RTK服务账号 ，另外需要通过4G模组访问外网，方可正
+常使用RTK功能。推荐的rtk天线型号：北天BT560。
+定位精度：
+水平定位精度: 单点定位1.5m; 差分定位 2~3cm; RTK 精度：1cm+1ppm;
+高程定位精度: 单点定位 2.5m; 差分定位 4~5cm; RTK 精度：1.5cm+1ppm;
+注 1：单点定位需加装天线；差分定位需加装天线并开通 RTK 服务账号；
+注 2：RTK 精度测量条件：需要高精度天线，空旷区域，距离基站 1km 内;
+4.5.2 获取六分RTK 服务
+使用从注册的六分账户和密码登录到官网
+网址：https://www.sixents.com/login
+ 登录进控制台
+===== PAGE 56 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+55
+ 获取AK和AS
+准备好需要使用的AK和AS
+4.5.3 NX 侧RTK 服务配置
+ 登录进入NX
+首先需要连接机器狗的WIFI，密码默认是 12345678
+Bash
+ssh robot@192.168.234.1 #密码是 bot
+ 打开配置文件
+配置文件路径：/ota/sixents_config.ini
+Bash
+sudo vim /ota/sixents_config.ini
+TOML
+配置文件说明
+[sixents_sdk]
+sdk_ak =
+sdk_as =
+sdk_dev_id =
+sdk_dev_type =
+ sdk_ak:设置您购买服务实例的 AK
+===== PAGE 57 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+56
+ sdk_as:设置您购买服务实例的 AS
+ sdk_dev_id:设置您的设备 ID或 SN（自定义）
+ sdk_dev_type:设置您的设备类型（自定义）
+注意：sdk_dev_id和 sdk_dev_type是和 账户唯一绑定的，之后更改其他的需要去
+官网解绑
+4.5.4 ROS2 接口定义
+ rtk话题名称：/rtk_pvh
+ 数据说明
+类别 字段 说明
+heading utc_time_s headingUTC时间
+sol_status 解的状态
+• 0：已解出
+• 1：观测量不足
+• 2：未收敛
+• 4：协方差矩阵的迹超过最大值（迹＞
+1000米）
+heading_type 定位类型
+• 0：不进行解算
+• 16：单点定位
+• 17：伪距差分定位
+• 34：浮点解
+• 50：整数解
+base_line 基线长度，单位米（0~3000）
+heading_deg 航向角，单位度（0~360）
+pitch_deg 俯仰角，单位度（±90）
+heading_std 航向角标准差，单位度
+pitch_std 俯仰角标准差，单位度
+===== PAGE 58 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+57
+sys_num 跟踪的卫星数
+soln_svs_num 参与解算的卫星数
+bestnav utc_time_s bestposUTC时间
+p_sol_status 解的状态
+• 0：已解出
+• 1：观测量不足
+• 2：未收敛
+4：协方差矩阵的迹超过最大值（迹＞1000
+米）
+pos_type 定位类型
+• 0：不进行解算
+• 16：单点定位
+• 17：伪距差分定位
+• 34：浮点解
+• 50：整数解
+pose_type是50说明是精准定位
+latitude_deg 纬度，单位度
+longitude_deg 经度，单位度
+altitude_m 海拔高，单位米
+undulation 大地水准面差距，大地水准面与 WGS84
+参考椭球面的差值，单位米
+lat_std 纬度标准差，单位米
+lon_std 经度标准差，单位米
+hgt_std 高度标准差，单位米
+diff_age_s 差分龄期，单位秒
+sol_age_s 解的龄期，单位秒
+===== PAGE 59 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+58
+svs_num 跟踪的卫星数
+soln_svs_num 参与解算的卫星数
+v_sol_status 解的状态
+vel_type 定位类型
+hor_spd 水平方向对地速度，单位米/秒
+trk_gnd 相对于真北的实际对地运动方向，单位度
+ver_spd 垂直方向速度，单位米/秒。正值表示方向
+向上，负值表示方向向下
+ver_spd_std 垂直方向速度标准差（未填写）
+hor_spd_std 水平方向对地速度标准差（未填写
+4.5.5 获取RTK 数据
+Bash
+ssh robot@192.168.168.100
+ros2 topic echo /rtk_pvh --once
+4.6IMU数据
+目前系统中有三个IMU（2雷达+1车规级），通过topic发出数据，标准ROS2的数
+据类型 sensor_msgs::msg::Imu
+前雷达IMU：/front_lidar/imu
+后雷达IMU：/rear_lidar/imu
+车规级IMU：/imu_driver/imu_central
+注：车规级IMU涉及硬件改动的问题，若无法获取imu数据，请联系售后服务人员
+4.7相机数据
+相机数据来源于RK3588,topic名称如下:
+ 前: /front_camera/image_compressed
+ 后: /rear_camera/image_compressed
+===== PAGE 60 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+59
+五、调试说明
+5.1控制权切换说明
+功能说明：控制权切换功能主要用来在进行sdk控制阶段，当出现一些紧急情况或需
+要人工介入处理的场景。
+控制原则：
+ 在同一时间，不支持遥控器和sdk同时进行控制；
+ sdk控制阶段，可以在遥控器端APP进行控制权的抢夺，并可在遥控器端触发软
+急停；
+ 遥控器控制阶段，sdk无法获得控制权，但可通过sdk下发急停指令并获取设备状
+态；
+SDK先链接，APP后链接
+ APP先链接，SDK后链接
+5.2自主回充说明
+版本要求：rk3588版本为:0.2.4，OrinNX固件版本为:0.4.5
+使用要求：需搭配充电桩进行使用，安装说明详见“智元D1Max自主充电产品说明
+书”，目前支持"无图回充"，即将四足机器人D1Max设备正对充电桩，设备头部距离
+充电桩1.5m左右，确保在相机视野中可完整看到充电桩的二维码。
+===== PAGE 61 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+60
+Demo 运行：
+Bash
+# 进入 C++ 演示目录
+cd example
+# 创建构建目录
+mkdir build && cd build
+#配置并编译项目
+cmake ..
+make -j6
+#运行demo 示例
+./control 192.168.168.168 8081 192.168.168.100 10010
+===== PAGE 62 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+61
+5.3ROS2多机通信配置
+NX系统中有统一配置的环境变量：/opt/runtime/env.bash ,这个变量在.bashrc中
+会默认导入
+由上图可见，ROS_DOMAIN_ID=24 ，目前机器狗使用 ros2的 zenoh 中间件对外提供
+ros2topic服务，需要用户在自己的笔记本安装相关环境。
+ IP 配置
+配置用户笔记本 ip为： 192.168.168.xxx （xxx不能为100或者168或者255）
+ 用户笔记本环境配置
+Ubuntu22.04
+Ros2humble
+Zenohrmw
+ 安装zenoh
+Plain Text
+sudo apt-get install ros-humble-rmw-zenoh-cpp
+ 修改配置文件
+使用编辑器打开下面文件
+/opt/ros/humble/share/rmw_zenoh_cpp/config/DEFAULT_RMW_ZENOH_ROUTER_
+CONFIG.json5
+找到 connect/endpoints 字段，将机器狗NX的IP写入并保存:
+===== PAGE 63 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+62
+Plain Text
+"tcp/192.168.168.100:7447"
+在pc端新建终端1，设置中间件切换的环境变量以及 ROS2的 DomainID
+Bash
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=24
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+ros2 run rmw_zenoh_cpp rmw_zenohd
+重置 ROS2后台守护进程
+Bash
+ros2 daemon stop
+ros2 daemon start
+在上述的环境变量生效的前提下即可使用 rviz可视化，录包，或者启动自己的 ros2程
+序与狗中的驱动交互。
+===== PAGE 64 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+63
+5.4日志查看
+ 遥控器报错信息查看
+ 设备log查看
+最近1次设备启动后的log路径(RK&NX)： /home/robot/robot_launch_log
+最近6次设备启动后的log路径(RK&NX)： /userdata/log/
+自主回充日志路径(NX)： /tmp/log/alg_data
+Bash
+scp -r robot@192.168.234.1:/userdata/log . #拉取最近6 次设备启动后
+的所有日志
+scp -r robot@192.168.234.1:/home/robot/robot_launch_log . # 拉取当
+前设备启动后的日志
+
+===== PAGE 65 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+64
+5.5设备进程工具使用
+使用说明：在设备内部通过robot-launch工具对相关进程进行管理，包括查看进程运
+行状态、启动和停止进程，查看进程日志信息等。
+格式说明：robot-launch [OPTIONS] [COMMAND]
+eg:
+关闭节点：robot-launchstop<#id>
+打开节点：robot-launchstart<#id>
+查看节点状态：robot-launchegg<#id>
+查看帮助：robot-launchhelp
+...
+===== PAGE 66 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+65
+5.6连接外部 wifi
+Bash
+ssh robot@192.168.234.1 #登录到rk 中
+wpa_passphrase <WIFI 热点名称> <WIFI 热点密码> > /tmp/wifi.conf
+sudo wpa_supplicant -B -i wlan0 -c /tmp/wifi.conf
+5.7连接 WiFi的情况下访问有线网口
+连接设备的AP热点：XG2WIFI_xxxxx，添加如下路由可实现在连接wifi的情况下能
+够访问设备的有线网口：
+windows系统：
+Bash
+route -p ADD 192.168.168.0 MASK 255.255.255.0 192.168.234.1
+ping 192.168.168.168
+ping 192.168.168.100
+linux系统：
+Bash
+sudo ip route add 192.168.168.0/24 via 192.168.234.1
+ping 192.168.168.168
+ping 192.168.168.100
+===== PAGE 67 =====
+智元酷拓四足机器人 D1 Max 二次开发文档
+66

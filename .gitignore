@@ -16,9 +16,11 @@ build/
 runs/
 *.log
 
-# 厂商原始资料落位于 refs/，除 refs/README.md 外不入库
-refs/*
-!refs/README.md
+# 厂商原始资料落位于 refs/。
+# 除 urdf 外全部入库 —— 出差那台笔记本 clone 就有全套资料，不用手工拷贝。
+# urdf 单独排除：252 MB，其中 126 MB 是 meshes、另有一份完全重复的 install 拷贝，
+# 现场用不到，真要用就跑 scripts/extract_refs.sh 从原始压缩包解出来。
+refs/urdf/
 
 # 覆盖率产物
 .coverage
