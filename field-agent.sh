@@ -41,6 +41,17 @@ fi
 # 命令管道（应急人工通道）
 [ -p "$FIFO" ] || { rm -f "$FIFO"; mkfifo "$FIFO"; }
 
+# 判定"机器重启了"要连续多少次 ping 不通(每次间隔 3s)。
+#
+# 这个数字的两边不对称,所以宁大勿小:
+#   判早了 —— 一次 WiFi 抖动就把**活着的、握着控制权的** agent 杀掉。杀掉之后
+#             机器根本没重启,也就没有新的开机窗口可抢,重连大概率撞上
+#             "Controlled denial of service"(清单 #40),这台机器今天就废了。
+#   判晚了 —— 只是晚几十秒去抢窗口。而 patrol_agent 自己会重试 2000 次,
+#             真机重启到 SDK 口可用本来就要 40s 以上,晚一点根本追得上。
+# 原来是 3(=9 秒),太灵敏了 —— 2.4G 热点上有人走过去就可能抖这么久。
+DOWN_STRIKES=10   # 10 x 3s = 30s
+
 AGENT_PID=""
 cleanup(){
   echo
@@ -95,8 +106,8 @@ while true; do
       fi
     elif [ "$seen_up" = 1 ]; then
       fails=$((fails+1))
-      echo "[field-agent] 机器不可达 #${fails}（曾在线）—— 疑似重启中"
-      if [ "$fails" -ge 3 ]; then
+      echo "[field-agent] 机器不可达 #${fails}/${DOWN_STRIKES}（曾在线）—— 疑似重启中"
+      if [ "$fails" -ge "$DOWN_STRIKES" ]; then
         echo "[field-agent] 判定机器重启：当前会话已断，停掉旧 agent，准备重抢新开机窗口"
         kill -TERM "$AGENT_PID" 2>/dev/null; wait "$AGENT_PID" 2>/dev/null
         AGENT_PID=""

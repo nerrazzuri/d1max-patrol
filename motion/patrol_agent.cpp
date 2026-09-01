@@ -37,6 +37,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -710,6 +711,13 @@ int main(int argc, char** argv) {
   }).detach();
 
   while (g_running.load()) {
+    // 先 poll 再 accept。直接 accept 会一直阻塞在那儿,g_running 变 false
+    // 也没人看见 —— shutdown 之后进程会带着已经交还的控制权继续挂着,
+    // 而 field-agent.sh 正指望它退出好回去重抢。500ms 一轮足够灵敏。
+    pollfd pfd{server, POLLIN, 0};
+    const int ready = ::poll(&pfd, 1, 500);
+    if (ready <= 0) continue;  // 超时或被信号打断,回去重看 g_running
+
     sockaddr_in peer{};
     socklen_t len = sizeof(peer);
     const int fd = ::accept(server, reinterpret_cast<sockaddr*>(&peer), &len);
