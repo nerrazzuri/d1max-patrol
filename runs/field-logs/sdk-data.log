@@ -1,0 +1,117 @@
+============================================================
+ S 阶段 · SDK 侦察 —— 机器【不会动】，只订阅数据
+ 安全前提：请保持厂商 App 连着。App 连着时 SDK 抢不到控制权，
+ 这是今天的安全垫。本脚本不发任何运动指令，也不会退出 App。
+============================================================
+>> 厂商 App 确认还连着吗？连着按回车继续（否则 Ctrl-C 退出）... 
+========== 0. 预热 sudo（连狗/加路由要用） ==========
+
+========== 1. 临时关掉 Always Robots_5G 的自动连接 ==========
+已临时关闭（收尾会恢复）
+
+========== 2. 连接机器狗热点 XG2WIFI_C40221 ==========
+第 1 轮：看到热点，连接中...
+[2KDevice 'wlp59s0' successfully activated with '8a620c67-3514-46b4-a0ea-2b2303759c2e'.
+wlp59s0          UP             192.168.234.232/24 fe80::b29b:25f0:cdf9:3b82/64 
+
+========== 3. 加路由（导航主机 Orin NX 在 192.168.168 网段） ==========
+路由已加
+
+========== 4. 抄两台主机平台版本号（清单 #19/#30，决定用哪版 SDK） ==========
+>>> 这里会问 SSH 密码。RK3588 (robot@192.168.234.1) 的密码是:  bot
+Warning: Permanently added '192.168.234.1' (ED25519) to the list of known hosts.
+Permission denied, please try again.
+Permission denied, please try again.
+[RK3588  /opt/release/version.yaml]
+version: 0.2.4
+description: A2503 RK3588 Released Image with all modules
+modules:
+  kernel:
+    name: Linux Kernel
+    tag: v0.1.4
+  rootfs:
+    name: Root Filesystem
+    tag: v0.0.4
+  packages:
+  - name: robot-runtime
+    tag: v0.1.7
+  - name: zsibot_common
+    tag: v0.6.2
+  - name: robot-launch
+    tag: v0.1.5-r2
+  - name: robot-ws
+    tag: v0.2.2
+  - name: motion-control
+    tag: v0.5.9
+mcu_firmware:
+- name: uart2canfd
+  tag: v1.0.2
+- name: power_board
+  tag: v1.0.3
+- name: hot_swap_board
+  tag: v0.2.0
+- name: imu_board
+  tag: v15
+- name: w190s
+  tag: v1002
+- name: p85max
+  tag: v1003
+- name: battery_bin
+  tag: v1026
+ota_tools:
+  name: OTA Tools
+  tag: v0.0.1
+build_info:
+  build_date: 2026-05-20 21:21:47 +0800
+  build_host: zskj-virtual-machine
+  maintainer: Jenkins
+
+>>> 接着问 Orin NX (robot@192.168.168.100) 的密码，是:  1
+Warning: Permanently added '192.168.168.100' (ED25519) to the list of known hosts.
+[Orin NX  /opt/release/version.yaml]
+version: "0.4.5"
+release_date: "2026-05-20"
+description: "None"
+
+
+========== 5. 跑 SDK data 例子（端口 8081,WiFi 侧地址 192.168.234.1）——两个版本都试一遍 ==========
+   data 例子会依次订阅：运控数据 / 20Hz 速度 / 关节状态，各约 2 秒后自动退出。
+   哪个版本能连上并吐数据，就是机器该配的那版（另一版报错是正常的，也是答案）。
+
+-------------------- SDK 0.2.0 : ./data 192.168.234.1 8081 --------------------
+========================================
+  Robot SDK Sensor Data Demo
+========================================
+Target: 192.168.234.1:8081
+========================================
+
+[INFO] SDK Version: 0.2.0
+[INFO] Protocol Version: 1.3.0
+
+[INIT] Connecting to robot...
+[ERROR] Connect failed: Robot ShakeHand failed
+[ERROR] Not connected. State: 3
+(SDK 0.2.0 data 退出码: 1  —— 0=正常跑完, 124=25s超时被杀, 其它=连不上/报错)
+
+-------------------- SDK 0.1.1 : ./data 192.168.234.1 8081 --------------------
+========================================
+  Robot SDK Sensor Data Demo
+========================================
+Target: 192.168.234.1:8081
+========================================
+
+[INFO] SDK Version: 0.1.1
+[INFO] Protocol Version: 1.2.0
+
+[INIT] Connecting to robot...
+[ERROR] Connect failed: Robot ShakeHand failed
+[ERROR] Not connected. State: 3
+(SDK 0.1.1 data 退出码: 1  —— 0=正常跑完, 124=25s超时被杀, 其它=连不上/报错)
+
+========== 6. 收尾：恢复上网 ==========
+Connection successfully activated (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/8)
+
+====================================================================
+ 上网恢复后，请把这个文件整段贴回给 Claude：
+     /home/liang/sdk-data.log
+====================================================================

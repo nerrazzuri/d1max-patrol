@@ -1,0 +1,469 @@
+
+========== 0. 预热 sudo（加路由要用，现在输一次密码，后面就不再问） ==========
+
+========== 1. 临时关掉 Always Robots_5G 的自动连接（防止没网时系统偷偷跳回去） ==========
+已临时关闭（收尾会自动恢复）
+
+========== 2. 连接机器狗热点 XG2WIFI_C40221（AP 信号偏弱，最多扫 12 轮） ==========
+第 1 轮：看到热点，尝试连接...
+[2KDevice 'wlp59s0' successfully activated with '8a620c67-3514-46b4-a0ea-2b2303759c2e'.
+
+========== 3. 看拿到的 IP（预期是 192.168.234.x） ==========
+wlp59s0          UP             192.168.234.232/24 fe80::b29b:25f0:cdf9:3b82/64 
+
+========== 4. ping RK3588 的 AP 地址 192.168.234.1 ==========
+PING 192.168.234.1 (192.168.234.1) 56(84) bytes of data.
+64 bytes from 192.168.234.1: icmp_seq=1 ttl=64 time=1.13 ms
+64 bytes from 192.168.234.1: icmp_seq=2 ttl=64 time=1.11 ms
+64 bytes from 192.168.234.1: icmp_seq=3 ttl=64 time=1.09 ms
+
+--- 192.168.234.1 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2002ms
+rtt min/avg/max/mdev = 1.092/1.109/1.125/0.013 ms
+
+========== 5. 加路由：192.168.168.0/24 走 AP（这样才够得到导航主机 Orin NX） ==========
+路由已加
+
+========== 6. ping 两台主机 ==========
+-- RK3588  192.168.168.168 --
+PING 192.168.168.168 (192.168.168.168) 56(84) bytes of data.
+64 bytes from 192.168.168.168: icmp_seq=1 ttl=64 time=4.55 ms
+64 bytes from 192.168.168.168: icmp_seq=2 ttl=64 time=20.1 ms
+64 bytes from 192.168.168.168: icmp_seq=3 ttl=64 time=17.6 ms
+
+--- 192.168.168.168 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2001ms
+rtt min/avg/max/mdev = 4.553/14.085/20.135/6.821 ms
+-- Orin NX 192.168.168.100 --
+PING 192.168.168.100 (192.168.168.100) 56(84) bytes of data.
+64 bytes from 192.168.168.100: icmp_seq=1 ttl=63 time=19.6 ms
+64 bytes from 192.168.168.100: icmp_seq=2 ttl=63 time=10.3 ms
+64 bytes from 192.168.168.100: icmp_seq=3 ttl=63 time=4.82 ms
+
+--- 192.168.168.100 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2003ms
+rtt min/avg/max/mdev = 4.821/11.575/19.594/6.097 ms
+
+========== 7. 选导航地址（TCP 探 10010，两个候选都试） ==========
+  192.168.168.100:10010  通  → 用它跑 conform
+  U=ws://192.168.168.100:10010
+
+========== 8. 【今天的头号任务】conform 一致性巡检 —— 全程只读，机器不动 ==========
+DEBUG asyncio Using selector: EpollSelector
+DEBUG websockets.client = connection is CONNECTING
+DEBUG websockets.client > GET / HTTP/1.1
+DEBUG websockets.client > Host: 192.168.168.100:10010
+DEBUG websockets.client > Upgrade: websocket
+DEBUG websockets.client > Connection: Upgrade
+DEBUG websockets.client > Sec-WebSocket-Key: w3zu3EGq7Q+HRW7xu5IpyA==
+DEBUG websockets.client > Sec-WebSocket-Version: 13
+DEBUG websockets.client > Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+DEBUG websockets.client > User-Agent: Python/3.10 websockets/16.1.1
+DEBUG websockets.client < HTTP/1.1 101 Switching Protocols
+DEBUG websockets.client < connection: Upgrade
+DEBUG websockets.client < upgrade: websocket
+DEBUG websockets.client < sec-websocket-accept: Qdu0SXWMbAJ9YlzYrEBZKbq+SxI=
+DEBUG websockets.client = connection is OPEN
+INFO d1max_patrol.backends.vendor_nav 已连接导航设备 ws://192.168.168.100:10010
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [141 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [810 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [227 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_loc_status": null}}}' [141 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [227 bytes]
+WARNING d1max_patrol.backends.vendor_nav 设备回了未知的 LocStatus 值: 'Unknown'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...apping_status": null}}}' [145 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [236 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788... "navigation_speed"}}}}' [171 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236....6,"y":0.5,"z":1.5}}}}}' [240 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...t_all_pgm_map": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...msg":null,"data":{}}}}}' [210 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: req_result 缺少 req_func
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [810 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [809 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [141 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [227 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_loc_status": null}}}' [141 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [230 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...apping_status": null}}}' [145 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [236 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [141 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [227 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_loc_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [231 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...apping_status": null}}}' [146 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [808 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [237 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [228 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_loc_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [231 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...apping_status": null}}}' [146 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [237 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [809 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [810 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [228 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_loc_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [231 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...apping_status": null}}}' [146 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [237 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [228 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_loc_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [231 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...apping_status": null}}}' [146 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [237 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [810 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [808 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [228 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_loc_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [231 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...apping_status": null}}}' [146 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [237 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [228 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_loc_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [231 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...apping_status": null}}}' [146 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [237 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [810 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [228 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [810 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_loc_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [231 bytes]
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...apping_status": null}}}' [146 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [237 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [810 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [812 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > TEXT '{"head": {"type": "app_req", "time_stamp": 1788...et_nav_status": null}}}' [142 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [811 bytes]
+WARNING d1max_patrol.backends.vendor_nav 忽略无法解析的报文: 不支持的报文类型: 'app_sub_topic'
+DEBUG websockets.client > CLOSE 1000 (OK) [2 bytes]
+DEBUG websockets.client = connection is CLOSING
+DEBUG websockets.client < TEXT '{"head":{"type":"app_resp","time_stamp":1788236...","error_code":null}}}}' [228 bytes]
+DEBUG websockets.client < TEXT '{"head":{"type":"app_sub_topic","time_stamp":17....0,0.0,0.0,0.0,0.0]}}}}' [813 bytes]
+DEBUG websockets.client < EOF
+DEBUG websockets.client < EOF
+DEBUG websockets.client > EOF
+DEBUG websockets.client = connection is CLOSED
+DEBUG websockets.client x half-closing TCP connection
+原始帧录像: runs/frames/nav-20260901T041557Z.jsonl (216 行)
+只读接口: 4/5 成功
+网络 nav 192.168.168.100:10010: 通 — TCP 可达
+网络 nav-144 192.168.144.100:10010: 通 — TCP 可达
+网络 sdk-wired 192.168.168.168:8081: 通 — TCP 可达
+网络 sdk-wifi 192.168.234.1:8081: 通 — TCP 可达
+字段对拍: 4 种响应,3 种与文档不一致
+  ! get_loc_status
+  ! get_mapping_status
+  ! get_nav_status
+报告: runs/conformance/20260901T041557Z/conformance-report.md
+
+========== 跑完了 ==========
+日志：     /home/liang/d1max-field-20260901T041537Z.log
+原始帧：   runs/frames/   （最重要的产出，务必带回）
+对拍报告： runs/conformance/<时间戳>/conformance-report.md
+
+>> 想留在机器狗网络里手动多敲几条只读命令，现在按 Ctrl-C。
+>> 否则按回车，自动连回 Always Robots_5G 恢复上网，再把日志贴给 Claude。
+
+========== 9. 收尾：恢复上网 ==========
+Connection successfully activated (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/6)
+
+====================================================================
+ 上网恢复后，请把这个文件的【全部内容】整段贴回给 Claude：
+     /home/liang/d1max-field-20260901T041537Z.log
+ （或直接贴 runs/conformance/ 里那个 conformance-report.md 的正文）
+====================================================================

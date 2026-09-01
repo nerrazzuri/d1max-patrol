@@ -1,0 +1,143 @@
+{
+  "started_at": "2026-09-01T04:15:57.754227+00:00",
+  "nav_url": "ws://192.168.168.100:10010",
+  "allow_motion": false,
+  "probes": [
+    {
+      "name": "nav",
+      "host": "192.168.168.100",
+      "port": 10010,
+      "ok": true,
+      "detail": "TCP 可达"
+    },
+    {
+      "name": "nav-144",
+      "host": "192.168.144.100",
+      "port": 10010,
+      "ok": true,
+      "detail": "TCP 可达"
+    },
+    {
+      "name": "sdk-wired",
+      "host": "192.168.168.168",
+      "port": 8081,
+      "ok": true,
+      "detail": "TCP 可达"
+    },
+    {
+      "name": "sdk-wifi",
+      "host": "192.168.234.1",
+      "port": 8081,
+      "ok": true,
+      "detail": "TCP 可达"
+    }
+  ],
+  "calls": [
+    {
+      "op": "nav_status",
+      "ok": true,
+      "detail": "<NavStatus.STANDBY: 'StandBy'>",
+      "elapsed_s": 0.004
+    },
+    {
+      "op": "loc_status",
+      "ok": true,
+      "detail": "None",
+      "elapsed_s": 0.005
+    },
+    {
+      "op": "mapping_status",
+      "ok": true,
+      "detail": "<MappingStatus.MAPPING_READY: 'MappingReady'>",
+      "elapsed_s": 0.004
+    },
+    {
+      "op": "get_speed",
+      "ok": true,
+      "detail": "{'x': 0.6, 'y': 0.5, 'z': 1.5}",
+      "elapsed_s": 0.017
+    },
+    {
+      "op": "list_maps",
+      "ok": false,
+      "detail": "NavTimeoutError: get_all_pgm_map 超过 5.0s 未收到响应",
+      "elapsed_s": 5.002
+    }
+  ],
+  "diffs": [
+    {
+      "resp_func": "get_loc_status",
+      "fixture_files": [
+        "048.json"
+      ],
+      "missing_in_real": [
+        "data.req_result.data",
+        "data.req_result.msg",
+        "data.req_result.req_func",
+        "data.req_result.status"
+      ],
+      "extra_in_real": [
+        "data.req_result.AppResponse.data",
+        "data.req_result.AppResponse.error_code",
+        "data.req_result.AppResponse.msg",
+        "data.req_result.AppResponse.req_func",
+        "data.req_result.AppResponse.status"
+      ],
+      "type_mismatch": {}
+    },
+    {
+      "resp_func": "get_mapping_status",
+      "fixture_files": [
+        "009.json"
+      ],
+      "missing_in_real": [
+        "data.req_result.data",
+        "data.req_result.msg",
+        "data.req_result.req_func",
+        "data.req_result.status"
+      ],
+      "extra_in_real": [
+        "data.req_result.AppResponse.data",
+        "data.req_result.AppResponse.error_code",
+        "data.req_result.AppResponse.msg",
+        "data.req_result.AppResponse.req_func",
+        "data.req_result.AppResponse.status"
+      ],
+      "type_mismatch": {}
+    },
+    {
+      "resp_func": "get_nav_status",
+      "fixture_files": [
+        "035.json"
+      ],
+      "missing_in_real": [
+        "data.req_result.data",
+        "data.req_result.msg",
+        "data.req_result.req_func",
+        "data.req_result.status"
+      ],
+      "extra_in_real": [
+        "data.req_result.AppResponse.data",
+        "data.req_result.AppResponse.error_code",
+        "data.req_result.AppResponse.msg",
+        "data.req_result.AppResponse.req_func",
+        "data.req_result.AppResponse.status"
+      ],
+      "type_mismatch": {}
+    },
+    {
+      "resp_func": "get_navigation_speed",
+      "fixture_files": [
+        "041.json"
+      ],
+      "missing_in_real": [],
+      "extra_in_real": [],
+      "type_mismatch": {}
+    }
+  ],
+  "notes": [
+    "机器上没有任何地图: list_paths / get_map_grid 未能执行。若需要覆盖它们,先按手册手动建一张小图再重跑本命令。"
+  ],
+  "recording_path": "runs/frames/nav-20260901T041557Z.jsonl",
+  "recorded_frames": 215
+}

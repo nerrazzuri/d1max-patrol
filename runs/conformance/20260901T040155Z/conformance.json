@@ -1,0 +1,209 @@
+{
+  "started_at": "2026-09-01T04:01:55.702173+00:00",
+  "nav_url": "ws://127.0.0.1:10011",
+  "allow_motion": false,
+  "probes": [
+    {
+      "name": "nav",
+      "host": "127.0.0.1",
+      "port": 10011,
+      "ok": true,
+      "detail": "TCP 可达"
+    },
+    {
+      "name": "nav-144",
+      "host": "192.168.144.100",
+      "port": 10010,
+      "ok": false,
+      "detail": "连接 192.168.144.100:10010 超时(3.0s) —— 网段不通或 IP 没配对"
+    },
+    {
+      "name": "nav-168",
+      "host": "192.168.168.100",
+      "port": 10010,
+      "ok": false,
+      "detail": "连接 192.168.168.100:10010 超时(3.0s) —— 网段不通或 IP 没配对"
+    },
+    {
+      "name": "sdk-wired",
+      "host": "192.168.168.168",
+      "port": 8081,
+      "ok": false,
+      "detail": "连接 192.168.168.168:8081 超时(3.0s) —— 网段不通或 IP 没配对"
+    },
+    {
+      "name": "sdk-wifi",
+      "host": "192.168.234.1",
+      "port": 8081,
+      "ok": false,
+      "detail": "连接 192.168.234.1:8081 超时(3.0s) —— 网段不通或 IP 没配对"
+    }
+  ],
+  "calls": [
+    {
+      "op": "nav_status",
+      "ok": true,
+      "detail": "<NavStatus.STANDBY: 'StandBy'>",
+      "elapsed_s": 0.001
+    },
+    {
+      "op": "loc_status",
+      "ok": true,
+      "detail": "<LocStatus.INIT: 'Init'>",
+      "elapsed_s": 0.001
+    },
+    {
+      "op": "mapping_status",
+      "ok": true,
+      "detail": "<MappingStatus.PASSIVE: 'Passive'>",
+      "elapsed_s": 0.001
+    },
+    {
+      "op": "get_speed",
+      "ok": true,
+      "detail": "{'x': 0.8, 'y': 0.5, 'z': 1.5}",
+      "elapsed_s": 0.001
+    },
+    {
+      "op": "list_maps",
+      "ok": true,
+      "detail": "['demo_map']",
+      "elapsed_s": 0.001
+    },
+    {
+      "op": "list_paths(demo_map)",
+      "ok": true,
+      "detail": "{'demo_route': [Waypoint(name='P1_配电柜', pose=Pose(position=Position(x=2.0, y=0.0, z=0.0), orientation=Orientation(x=0.0, y=0.0, z=0.0, w=1.0))), Waypoint(name='P2_水泵', pose=Pose(position=Position(x=2.0, y=2.0, z=0.0), orientation=Orientation(x=0.0, y=0.0, z=0.7071080798594735, w=0.7071054825112363))), Waypoint(name='P3_出口', pose=Pose(position=Position(x=0.0, y=2.0, z=0.0), orientation=Orientation(",
+      "elapsed_s": 0.001
+    },
+    {
+      "op": "get_map_grid(demo_map)",
+      "ok": true,
+      "detail": "{'header': {'frame_id': 'map', 'stamp': {'sec': 0, 'nanosec': 0}}, 'info': {'map_load_time': {'sec': 0, 'nanosec': 0}, 'resolution': 0.05, 'width': 20, 'height': 20, 'origin': {'position': {'x': 0.0, 'y': 0.0, 'z': 0.0}, 'orientation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}}}, 'data': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ",
+      "elapsed_s": 0.001
+    }
+  ],
+  "diffs": [
+    {
+      "resp_func": "get_all_paths_by_mapid",
+      "fixture_files": [],
+      "missing_in_real": [],
+      "extra_in_real": [
+        "data.req_result.data",
+        "data.req_result.data[]",
+        "data.req_result.msg",
+        "data.req_result.req_func",
+        "data.req_result.status",
+        "head.frame_count",
+        "head.source",
+        "head.time_stamp",
+        "head.type"
+      ],
+      "type_mismatch": {}
+    },
+    {
+      "resp_func": "get_all_pgm_map",
+      "fixture_files": [],
+      "missing_in_real": [],
+      "extra_in_real": [
+        "data.req_result.data.demo_map",
+        "data.req_result.data.demo_map[].data",
+        "data.req_result.data.demo_map[].data[]",
+        "data.req_result.data.demo_map[].header.frame_id",
+        "data.req_result.data.demo_map[].header.stamp.nanosec",
+        "data.req_result.data.demo_map[].header.stamp.sec",
+        "data.req_result.data.demo_map[].info.height",
+        "data.req_result.data.demo_map[].info.map_load_time.nanosec",
+        "data.req_result.data.demo_map[].info.map_load_time.sec",
+        "data.req_result.data.demo_map[].info.origin.orientation.w",
+        "data.req_result.data.demo_map[].info.origin.orientation.x",
+        "data.req_result.data.demo_map[].info.origin.orientation.y",
+        "data.req_result.data.demo_map[].info.origin.orientation.z",
+        "data.req_result.data.demo_map[].info.origin.position.x",
+        "data.req_result.data.demo_map[].info.origin.position.y",
+        "data.req_result.data.demo_map[].info.origin.position.z",
+        "data.req_result.data.demo_map[].info.resolution",
+        "data.req_result.data.demo_map[].info.width",
+        "data.req_result.msg",
+        "data.req_result.req_func",
+        "data.req_result.status",
+        "head.frame_count",
+        "head.source",
+        "head.time_stamp",
+        "head.type"
+      ],
+      "type_mismatch": {}
+    },
+    {
+      "resp_func": "get_loc_status",
+      "fixture_files": [
+        "048.json"
+      ],
+      "missing_in_real": [],
+      "extra_in_real": [],
+      "type_mismatch": {}
+    },
+    {
+      "resp_func": "get_mapping_status",
+      "fixture_files": [
+        "009.json"
+      ],
+      "missing_in_real": [],
+      "extra_in_real": [],
+      "type_mismatch": {}
+    },
+    {
+      "resp_func": "get_nav_status",
+      "fixture_files": [
+        "035.json"
+      ],
+      "missing_in_real": [],
+      "extra_in_real": [],
+      "type_mismatch": {}
+    },
+    {
+      "resp_func": "get_navigation_speed",
+      "fixture_files": [
+        "041.json"
+      ],
+      "missing_in_real": [],
+      "extra_in_real": [],
+      "type_mismatch": {}
+    },
+    {
+      "resp_func": "get_pgm_map",
+      "fixture_files": [],
+      "missing_in_real": [],
+      "extra_in_real": [
+        "data.req_result.data.data",
+        "data.req_result.data.data[]",
+        "data.req_result.data.header.frame_id",
+        "data.req_result.data.header.stamp.nanosec",
+        "data.req_result.data.header.stamp.sec",
+        "data.req_result.data.info.height",
+        "data.req_result.data.info.map_load_time.nanosec",
+        "data.req_result.data.info.map_load_time.sec",
+        "data.req_result.data.info.origin.orientation.w",
+        "data.req_result.data.info.origin.orientation.x",
+        "data.req_result.data.info.origin.orientation.y",
+        "data.req_result.data.info.origin.orientation.z",
+        "data.req_result.data.info.origin.position.x",
+        "data.req_result.data.info.origin.position.y",
+        "data.req_result.data.info.origin.position.z",
+        "data.req_result.data.info.resolution",
+        "data.req_result.data.info.width",
+        "data.req_result.msg",
+        "data.req_result.req_func",
+        "data.req_result.status",
+        "head.frame_count",
+        "head.source",
+        "head.time_stamp",
+        "head.type"
+      ],
+      "type_mismatch": {}
+    }
+  ],
+  "notes": [],
+  "recording_path": "runs/frames/nav-20260901T040155Z.jsonl",
+  "recorded_frames": 18
+}
