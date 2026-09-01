@@ -105,6 +105,9 @@ time_stamp    纳秒
 
 ### 阶段 0：打通 ROS2 链路（半天，**不用动机器**）
 
+> 这一段的逐步操作已经写成现场手册：[`R阶段-ROS2与建图手册.md`](R阶段-ROS2与建图手册.md)。
+
+
 笔记本装 zenoh、配 IP、改 router 配置、`ros2 topic list` 能看到那几个话题、
 `ros2 topic echo /front_lidar --once` 能出数据。
 
