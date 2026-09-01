@@ -14,6 +14,7 @@
 #include "robot_sdk/sdk_client.hpp"
 using namespace robot_sdk;
 static std::atomic<bool> g_connected{false};
+static std::atomic<bool> g_connect_err{false};
 static std::atomic<int> g_motion{-1};
 static SDKClient* g_client=nullptr;
 static const char* M(int s){switch(s){case 1:return"STAND_UP";case 2:return"LIE_DOWN";case 3:return"CRAWL";
@@ -52,10 +53,10 @@ int main(int argc,char**argv){
   std::cout<<"[stand01] connecting "<<argv[1]<<":"<<argv[2]<<" (SDK 0.1.1) ...\n";
   auto ec=client.Connect(argv[1],argv[2],false,[](const std::error_code&e){
     if(!e){g_connected=true;std::cout<<"[stand01] ✓ connected\n";}
-    else std::cerr<<"[stand01] connect err: "<<e.message()<<"\n";});
+    else {std::cerr<<"[stand01] connect err: "<<e.message()<<"\n"; g_connect_err=true;}});
   if(ec){std::cerr<<"[stand01] Connect() failed: "<<ec.message()<<"\n";return 1;}
-  for(int i=0;i<15&&!g_connected;++i) std::this_thread::sleep_for(std::chrono::seconds(1));
-  if(!g_connected){std::cerr<<"[stand01] timeout\n";return 1;}
+  for(int i=0;i<15&&!g_connected&&!g_connect_err;++i) std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  if(!g_connected){std::cerr<<"[stand01] 未连上(秒退,便于重试)\n";return 1;}
 
   std::cout<<"[stand01] 开状态上报，读初始状态 2s\n";
   client.SetMcConfig(true,2000); client.SetSpeedReportConfig(true,20,2000);
