@@ -1,0 +1,20 @@
+============================================================
+ 只走动：Move(lat=0.0, fwd=0.5, yaw=0.0) 共 0.5s
+ 前提：机器已站着 / App 已关 / 按方向留足空地 / 急停在手
+============================================================
+>> 确认？回车走，Ctrl-C 退出... [walkonly] connecting 192.168.234.1:8082 ...
+[walkonly] ✓ connected
+[walkonly] >>> TakeControl
+[walkonly] TakeControl(): ok
+[walkonly] >>> SwitchRemoteState
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[walkonly] >>> Gait()（进入步态/通用行走模式）
+[CTRL] ✓ Gait acked
+[walkonly] >>> Move(0,0.5,0) 连发 0.5s（20Hz）
+[walkonly] >>> 停 Move(0,0,0)
+[walkonly] >>> ReleaseControl
+[walkonly] done.
+(walkonly exit: 0)
+日志：runs/field-logs/walkonly-20260901T085117Z.log
+走不动的话：优先把前进量调大（fwd 0.11 太慢几乎不动，0.3~0.5 才明显走）。
+例如：bash field-walkonly.sh 1.0 0.5

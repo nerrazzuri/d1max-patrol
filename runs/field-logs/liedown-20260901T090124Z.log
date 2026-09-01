@@ -1,0 +1,10 @@
+[liedown] connecting 192.168.234.1:8082 ...
+[liedown] ✓ connected
+[liedown] >>> TakeControl
+[liedown] TakeControl(): ok
+[liedown] >>> SwitchRemoteState
+[CTRL] TakeControlAck: SUCCESS 'OK'
+[liedown] >>> LieDown（缓慢趴下）
+[CTRL] robot acked LieDown
+[liedown] >>> ReleaseControl
+[liedown] done. 已趴下，可以充电了。
