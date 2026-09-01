@@ -16,7 +16,7 @@ SDK_LIB  := $(SDK_ROOT)/lib/$(ARCH)
 
 CXX      ?= g++
 CXXFLAGS += -std=c++17 -O2 -Wall -Wextra -pthread -I$(SDK_ROOT)/include
-LDFLAGS  += -L$(SDK_LIB) -Wl,-rpath,'$$ORIGIN/$(SDK_LIB)' -Wl,-rpath,$(abspath $(SDK_LIB))
+LDFLAGS  += -L'$(SDK_LIB)' -Wl,-rpath,'$$ORIGIN/$(SDK_LIB)' -Wl,-rpath,'$(abspath $(SDK_LIB))'
 LDLIBS   += -lrobot_sdk -pthread
 
 # patrol_agent 放第一位：它是产品件，其余是现场留下的一次性侦察程序。

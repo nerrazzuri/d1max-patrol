@@ -26,6 +26,7 @@ refs/urdf/
 .coverage
 
 # 运动控制编译产物（源码在 motion/*.cpp，二进制可重编）
+motion/patrol_agent
 motion/m0
 motion/m1
 motion/stand2
