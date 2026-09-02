@@ -138,6 +138,8 @@ class FakeMaps:
 
     def __init__(self) -> None:
         self.link = False
+        #: 桥上最近推来的那一帧。没接真机时是 None,页面画底图会退回盘上存好的图。
+        self.latest = None
 
     @property
     def connected(self) -> bool:

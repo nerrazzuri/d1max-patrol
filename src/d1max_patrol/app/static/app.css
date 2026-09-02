@@ -1,0 +1,255 @@
+/* 巡检 app 的全部样式。一个文件、不引外部字体 —— 现场没有外网。
+ *
+ * 配色只有三档语义:绿(好)、黄(要留神)、红(出事了)。别再加第四种颜色,
+ * 值班的人是扫一眼就走,颜色多了等于没有颜色。
+ */
+
+:root {
+  --bg: #f4f5f7;
+  --fg: #1c1f23;
+  --line: #d0d4da;
+  --panel: #ffffff;
+  --muted: #6b7280;
+  --ok: #1f9d55;
+  --warn: #d97706;
+  --bad: #d1332e;
+  --model-bg: #eceef1;   /* 模型说的:灰底 */
+  --human-bg: #ffffff;   /* 人说的:白底。这两块视觉上必须分得开 */
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.6 "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 460px 1fr;
+  gap: 12px;
+  padding: 12px;
+  align-items: start;
+}
+
+#left, #right {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+/* 左栏在窗口里粘住:切到哪个页签都看得见急停和状态灯 */
+#left { position: sticky; top: 12px; }
+
+/* --------------------------------------------------------------- 状态灯 */
+
+#leds {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.led {
+  padding: 2px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #e5e7eb;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.led.ok   { background: var(--ok);   color: #fff; border-color: var(--ok); }
+.led.warn { background: var(--warn); color: #fff; border-color: var(--warn); }
+.led.bad  { background: var(--bad);  color: #fff; border-color: var(--bad); }
+
+#battery { margin-left: auto; color: var(--muted); }
+
+/* 急停:整栏最大的那个东西。慌的时候手会往最大的红色块上按 */
+#estop {
+  display: block;
+  width: 100%;
+  padding: 14px;
+  margin-bottom: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: #fff;
+  background: var(--bad);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#estop:active { background: #a3211d; }
+
+#banner {
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border-radius: 4px;
+  background: #fdecea;
+  border: 1px solid var(--bad);
+  color: #7f1d1d;
+  white-space: pre-wrap;
+}
+
+/* --------------------------------------------------------------- 左栏两格 */
+
+.box { margin-bottom: 12px; }
+
+.box-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+#grid-source { margin-left: auto; font-weight: 400; color: var(--muted); }
+
+#map {
+  width: 100%;
+  height: auto;
+  background: #9aa0a6;         /* 未知区域的底色 */
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+#cam {
+  width: 100%;
+  min-height: 60px;
+  background: #111;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.hint { color: var(--muted); font-size: 13px; margin: 4px 0; }
+.warn { color: var(--warn); font-size: 13px; margin: 4px 0; }
+.err  { color: var(--bad);  margin: 4px 0; white-space: pre-wrap; }
+
+/* --------------------------------------------------------------- 页签 */
+
+#tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 2px solid var(--line);
+  margin-bottom: 12px;
+}
+
+#tabs button {
+  padding: 8px 14px;
+  border: none;
+  background: none;
+  font-size: 15px;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+
+#tabs button.on { color: var(--fg); font-weight: 600; border-bottom-color: var(--fg); }
+
+.tab-panel h2 { margin: 0 0 8px; font-size: 18px; }
+.tab-panel h3 { margin: 18px 0 6px; font-size: 15px; }
+.tab-panel h3 small { color: var(--muted); font-weight: 400; }
+
+/* --------------------------------------------------------------- 表单件 */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+input, select, textarea {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+  background: #fff;
+  color: inherit;
+}
+
+input[type="number"] { width: 90px; }
+
+button {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { background: #eef0f3; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: #fafafa;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.pad { display: grid; grid-template-columns: repeat(3, 90px); gap: 6px; }
+.pad button { padding: 10px 0; }
+.pad button.on { background: var(--ok); color: #fff; border-color: var(--ok); }
+
+pre {
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px;
+  background: #14171a;
+  color: #d7dbe0;
+  border-radius: 4px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+th, td { border: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+th { background: #eef0f3; font-weight: 600; }
+td input { width: 100%; }
+
+/* --------------------------------------------------------- 判读与复核 */
+
+.photo {
+  display: grid;
+  grid-template-columns: 180px 1fr 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.photo img { width: 100%; border-radius: 4px; }
+
+/* 灰的是模型说的,白的是人说的。两半用底色分开是硬要求 —— 谁下的结论,
+ * 是这一页唯一不能含糊的事。 */
+.verdict-model { background: var(--model-bg); padding: 8px; border-radius: 4px; }
+.verdict-human { background: var(--human-bg); padding: 8px; border-radius: 4px;
+                 border: 1px solid var(--line); }
+.verdict-model h4, .verdict-human h4 { margin: 0 0 4px; font-size: 13px; color: var(--muted); }
+
+.tag { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 12px; color: #fff; }
+.tag.normal   { background: var(--ok); }
+.tag.abnormal { background: var(--bad); }
+.tag.unclear  { background: var(--warn); }
+.tag.pending  { background: var(--muted); }

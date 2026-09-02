@@ -130,6 +130,11 @@ class MappingOrchestrator:
         return self._bag
 
     @property
+    def maps_dir(self) -> Path:
+        """存好的地图放在哪。页面要画底图,得知道去哪儿读那对 pgm/yaml。"""
+        return self._cfg.maps_dir
+
+    @property
     def last_error(self) -> str:
         """上一次失败的原因。
 

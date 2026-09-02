@@ -40,6 +40,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from d1max_patrol.app.bridge import LoopBridge
+from d1max_patrol.app.gridmap import GridError, from_frame, load_saved
 from d1max_patrol.app.mapping import (
     MappingConfig,
     MappingError,
@@ -593,6 +594,7 @@ class AppServer:
         self.route("POST", "/api/run/abort", self._run_abort)
         self.route("GET", "/api/maps", self._maps)
         self.route("POST", "/api/maps/load", self._map_load)
+        self.route("GET", "/api/maps/<map_id>/grid", self._map_grid)
         self.route("POST", "/api/pose/initial", self._pose_initial)
         self.route("POST", "/api/pose/reset", self._pose_reset)
         self.route("GET", "/api/runs", self._runs)
@@ -896,6 +898,23 @@ class AppServer:
         map_id = _safe_id(_text(req.json(), "map_id"), "图名")
         self._call(lambda: self._ctx.nav.load_map(map_id), timeout_s=60.0)
         return json_response({"map_id": map_id})
+
+    def _map_grid(self, req: Request) -> Response:
+        """一张图的占据栅格,给页面画底图用。
+
+        **先找盘上存好的,再退回建图桥推的那一帧。** 存好的图是按名字取的,
+        取到的一定是这一张;桥推的那帧是"现在正在长的那张",建图还没存盘时
+        只有它。响应里的 ``source`` 说明这次给的是哪一种,页面照着标。
+        """
+        map_id = _safe_id(req.params["map_id"], "图名")
+        try:
+            grid = load_saved(self._ctx.mapping.maps_dir, map_id)
+        except GridError as exc:
+            frame = self._ctx.maps.latest
+            if frame is None:
+                raise HttpError(404, f"画不出 {map_id} 的底图", str(exc)) from exc
+            grid = from_frame(frame)
+        return json_response(grid.to_wire())
 
     def _pose_initial(self, req: Request) -> Response:
         """给定位一个初始猜测。见 ``docs/建图定位与巡检管线.md`` §4。

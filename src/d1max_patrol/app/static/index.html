@@ -1,19 +1,199 @@
 <!doctype html>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>D1 Max 巡检</title>
-<!--
-  占位页面。真正的单页界面在 Task 18 写进来。
+<link rel="stylesheet" href="/static/app.css">
 
-  在此之前它仍然是有用的:打开根路径能看见这一行,就说明 app 起来了、
-  静态目录挂对了、端口没被别的东西占着 —— 现场排查从这一步开始。
+<!--
+  单页界面。没有框架、没有构建、不引任何外部资源 —— 现场（变电站）经常没有
+  外网，页面必须在一台断网的笔记本上打开就能用。
+
+  布局：左边一列是"永远看得见的东西"（三盏灯、急停、地图、实时画面），
+  右边五个页签是"要做的事"。急停不在任何页签里，切到哪一页都按得到。
 -->
-<style>
-  body { font: 14px/1.6 system-ui, sans-serif; margin: 3rem auto; max-width: 40rem; }
-  code { background: #eee; padding: 0 .3em; }
-</style>
-<h1>D1 Max 巡检</h1>
-<p>服务已启动。界面还没做（Task 18），现在能用的是这两个接口：</p>
-<ul>
-  <li><code>GET /api/state</code> —— 全量状态快照</li>
-  <li><code>GET /api/events</code> —— SSE 事件流，第一帧就是当前状态</li>
-</ul>
+
+<div id="app">
+
+  <aside id="left">
+    <div id="leds">
+      <span class="led" id="led-pose" title="定位状态">定位</span>
+      <span class="led" id="led-agent" title="导航 / 设备链路">链路</span>
+      <span class="led" id="led-control" title="运控控制权">控制权</span>
+      <span id="battery">电量 --</span>
+    </div>
+
+    <button id="estop" type="button">急 停</button>
+
+    <div id="banner" hidden></div>
+
+    <div class="box">
+      <div class="box-head">
+        <span>地图</span>
+        <select id="grid-map" title="画哪一张图"></select>
+        <button id="grid-reload" type="button">重画</button>
+        <span id="grid-source"></span>
+      </div>
+      <canvas id="map" width="420" height="420"></canvas>
+      <p class="hint" id="map-hint">
+        在图上<b>按下并拖一段再松开</b>可以标一个点位：按下的位置是坐标，
+        拖出的方向是朝向。
+      </p>
+    </div>
+
+    <div class="box">
+      <div class="box-head">
+        <span>实时画面</span>
+        <select id="cam-pick">
+          <option value="">关闭</option>
+          <option value="front">前广角</option>
+          <option value="back">后广角</option>
+        </select>
+      </div>
+      <img id="cam" alt="实时画面">
+      <p class="warn">
+        画面有<b>延迟</b>，不能当遥控的依据。遥控时请看着机器狗本体，
+        不要看这一格。
+      </p>
+    </div>
+  </aside>
+
+  <main id="right">
+    <nav id="tabs">
+      <button type="button" data-tab="mapping" class="on">建图</button>
+      <button type="button" data-tab="map">地图与点位</button>
+      <button type="button" data-tab="mission">任务</button>
+      <button type="button" data-tab="run">运行</button>
+      <button type="button" data-tab="review">判读与报告</button>
+    </nav>
+
+    <!-- ------------------------------------------------------------ 建图 -->
+    <section class="tab-panel" data-panel="mapping">
+      <h2>建图</h2>
+      <p class="hint">
+        流程：<b>录包</b>（遥控机器狗把现场走一遍）→ <b>停录</b> →
+        <b>离线重建</b>（跑几分钟到几十分钟，进度看下面的日志）。
+      </p>
+      <p>当前阶段：<b id="map-phase">--</b> <span id="map-bag"></span></p>
+      <p class="err" id="map-error"></p>
+
+      <div class="row">
+        <input id="bag-name" placeholder="包名，例如 20260903-变电站一层">
+        <button id="rec-start" type="button">开始录包</button>
+        <button id="rec-stop" type="button">停录</button>
+      </div>
+
+      <div class="row">
+        <select id="bag-pick" title="拿哪个包重建"></select>
+        <input id="rebuild-map-id" placeholder="出图的名字">
+        <button id="rebuild" type="button">离线重建</button>
+      </div>
+
+      <h3>遥控<small>（把机器狗开到要去的地方）</small></h3>
+      <p class="hint">
+        键盘 <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 前后左右、
+        <kbd>Q</kbd><kbd>E</kbd> 转向，松手即停。
+        鼠标移出页面或窗口失焦，遥控自动断开。
+      </p>
+      <div class="pad">
+        <button type="button" data-fwd="1" data-lat="0" data-yaw="0">前</button>
+        <button type="button" data-fwd="-1" data-lat="0" data-yaw="0">后</button>
+        <button type="button" data-fwd="0" data-lat="1" data-yaw="0">左移</button>
+        <button type="button" data-fwd="0" data-lat="-1" data-yaw="0">右移</button>
+        <button type="button" data-fwd="0" data-lat="0" data-yaw="1">左转</button>
+        <button type="button" data-fwd="0" data-lat="0" data-yaw="-1">右转</button>
+      </div>
+      <p>速度百分比 <input id="teleop-gain" type="range" min="10" max="100"
+        step="5" value="30"><b id="teleop-gain-out">30</b></p>
+
+      <h3>子进程日志</h3>
+      <div class="row">
+        <select id="log-pick"></select>
+        <button id="log-reload" type="button">刷新</button>
+      </div>
+      <pre id="log"></pre>
+    </section>
+
+    <!-- ---------------------------------------------------- 地图与点位 -->
+    <section class="tab-panel" data-panel="map" hidden>
+      <h2>地图与点位</h2>
+      <p class="hint">左边那张图上标出来的点会落到这里。</p>
+      <div class="row">
+        <select id="map-list"></select>
+        <button id="map-load" type="button">载入这张图</button>
+        <button id="pose-reset" type="button">自动重定位</button>
+      </div>
+      <div class="row">
+        <span>初始位姿</span>
+        <input id="pose-x" type="number" step="0.01" placeholder="x">
+        <input id="pose-y" type="number" step="0.01" placeholder="y">
+        <input id="pose-yaw" type="number" step="0.01" placeholder="yaw">
+        <button id="pose-initial" type="button">发出去</button>
+      </div>
+      <p class="hint">
+        自建导航没有"自动重定位"，要人给一个初始位姿；厂商导航反过来。
+        按钮能不能点由后端报的能力集决定。
+      </p>
+      <table id="wp-table">
+        <thead><tr><th>点位</th><th>x</th><th>y</th><th>yaw</th>
+          <th>判读依据</th><th>拍照</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- ------------------------------------------------------------ 任务 -->
+    <section class="tab-panel" data-panel="mission" hidden>
+      <h2>任务</h2>
+      <div class="row">
+        <select id="mission-list"></select>
+        <button id="mission-open" type="button">打开</button>
+        <input id="mission-name" placeholder="任务名">
+        <input id="mission-map" placeholder="用哪张图">
+        <button id="mission-save" type="button">保存</button>
+        <button id="mission-run" type="button">起飞</button>
+      </div>
+      <p class="hint">
+        点位在"地图与点位"那一页上标。保存前会整份校验一遍，
+        校验不过一个字节都不落盘。
+      </p>
+      <div id="preflight"></div>
+      <pre id="mission-preview"></pre>
+    </section>
+
+    <!-- ------------------------------------------------------------ 运行 -->
+    <section class="tab-panel" data-panel="run" hidden>
+      <h2>运行</h2>
+      <p>状态 <b id="run-state">--</b>　任务 <b id="run-mission">--</b>
+        　进度 <b id="run-progress">--</b></p>
+      <p class="err" id="run-reason"></p>
+      <div class="row">
+        <button id="run-pause" type="button">暂停</button>
+        <button id="run-resume" type="button">继续</button>
+        <button id="run-abort" type="button">中止</button>
+      </div>
+      <table id="run-table">
+        <thead><tr><th>点位</th><th>结果</th><th>用时</th><th>照片</th>
+          <th>说明</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- ---------------------------------------------------- 判读与报告 -->
+    <section class="tab-panel" data-panel="review" hidden>
+      <h2>判读与报告</h2>
+      <div class="row">
+        <select id="run-list"></select>
+        <button id="run-open" type="button">打开</button>
+        <button id="judge" type="button">自动判读</button>
+        <a id="report-md" href="#" target="_blank" rel="noopener">报告 md</a>
+        <a id="report-html" href="#" target="_blank" rel="noopener">报告 html</a>
+      </div>
+      <p class="hint">
+        左边灰底是<b>模型说的</b>，右边白底是<b>人说的</b>。
+        重跑判读只会换掉灰的那一半，人写过的一个字都不动。
+      </p>
+      <div id="photos"></div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
