@@ -413,6 +413,16 @@ class SidecarDeviceBackend(DeviceBackend):
             raise DeviceBackendError("还没收到过状态帧,读不到电量")
         return self._state.battery
 
+    async def emergency(self) -> bool:
+        """急停是否按下。软急停与硬急停任一为 STOP 就算按下。
+
+        没收到过状态帧时抛错而不是回 False:那种情况是"不知道",放行等于
+        赌运气。
+        """
+        if self._state is None:
+            raise DeviceBackendError("还没收到过状态帧,读不到急停状态")
+        return self._state.emergency
+
     async def motion_status(self) -> MotionStatus:
         """当前运动状态。没收到过状态帧时抛错,不猜。"""
         if self._state is None:

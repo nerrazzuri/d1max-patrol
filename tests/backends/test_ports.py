@@ -20,7 +20,7 @@ from d1max_patrol.protocol.nav_types import Pose
 DEVICE_METHODS = {
     "connect", "close", "acquire_control", "release_control",
     "stand", "lie", "walk", "set_light", "set_gimbal", "take_photo",
-    "battery", "has_control",
+    "battery", "emergency", "has_control",
 }
 MEDIA_METHODS = {"open", "close", "grab", "healthy"}
 
