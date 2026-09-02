@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>D1 Max 巡检</title>
+<!--
+  占位页面。真正的单页界面在 Task 18 写进来。
+
+  在此之前它仍然是有用的:打开根路径能看见这一行,就说明 app 起来了、
+  静态目录挂对了、端口没被别的东西占着 —— 现场排查从这一步开始。
+-->
+<style>
+  body { font: 14px/1.6 system-ui, sans-serif; margin: 3rem auto; max-width: 40rem; }
+  code { background: #eee; padding: 0 .3em; }
+</style>
+<h1>D1 Max 巡检</h1>
+<p>服务已启动。界面还没做（Task 18），现在能用的是这两个接口：</p>
+<ul>
+  <li><code>GET /api/state</code> —— 全量状态快照</li>
+  <li><code>GET /api/events</code> —— SSE 事件流，第一帧就是当前状态</li>
+</ul>

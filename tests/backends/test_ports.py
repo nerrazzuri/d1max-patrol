@@ -89,3 +89,35 @@ async def test_返航默认是明确拒绝而不是静默无操作():
     _Nav.__abstractmethods__ = frozenset()
     with pytest.raises(NavRequestError, match="返航"):
         await _Nav().return_home()
+
+
+def test_可选能力默认全支持():
+    """新写一个后端忘了声明,顶多是页面多画一个按钮,而不是少画一个。
+
+    反过来(默认全不支持)的话,厂商后端哪天漏了这一行,建图按钮就整个消失,
+    而且没人会想到去看这个属性。
+    """
+    class _Nav(NavBackend):
+        pass
+
+    for name in _abstracts(NavBackend):
+        setattr(_Nav, name, lambda self, *a, **k: None)
+    _Nav.__abstractmethods__ = frozenset()
+    assert _Nav().capabilities == NavBackend.ALL_CAPABILITIES
+
+
+def test_可选能力就这三项():
+    """界面按这三个名字灰按钮,加一项要同时改界面 —— 所以定死在这里。"""
+    assert NavBackend.ALL_CAPABILITIES == {"mapping", "map_admin", "reloc"}
+
+
+def test_可选能力不是抽象方法():
+    """它是有默认值的属性。要是变成抽象的,现有后端全得改。"""
+    assert "capabilities" not in _abstracts(NavBackend)
+
+
+def test_自建导航一项可选能力都不声明():
+    """建图是 ROS 侧离线重建、删改图是文件系统的事、重定位 slam_toolbox 自己管。"""
+    from d1max_patrol.backends.local_nav import LocalNavBackend
+
+    assert LocalNavBackend.capabilities.fget(None) == frozenset()

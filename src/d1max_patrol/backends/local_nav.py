@@ -229,6 +229,15 @@ class LocalNavBackend(NavBackend):
     def connected(self) -> bool:
         return self._writer is not None and self._pump is not None
 
+    @property
+    def capabilities(self) -> frozenset[str]:
+        """这条路线三项可选能力一项都没有 —— 下面三个方法各自解释了为什么。
+
+        建图是 ROS 侧的离线重建,删改图是文件系统的事,重定位由 slam_toolbox
+        自己管。声明出来,页面就不会把这三个按钮画成可点的。
+        """
+        return frozenset()
+
     # ------------------------------------------------------------ 位姿流
 
     async def _pump_frames(self) -> None:

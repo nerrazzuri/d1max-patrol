@@ -229,6 +229,29 @@ class NavBackend(EventEmitter[Event], ABC):
     def connected(self) -> bool:
         """链路当前是否可用。"""
 
+    #: 全部可选能力。后端不支持哪一项,就从 capabilities 里去掉哪一项。
+    ALL_CAPABILITIES = frozenset({"mapping", "map_admin", "reloc"})
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        """本后端支持哪些**可选**能力。
+
+        必选的那些(建图之外的地图读取、点到点导航、停/暂停/继续)每个后端
+        都得有,不在这里列。这里列的是两条路线真正不一样的地方:
+
+        * ``mapping`` —— ``start_mapping`` / ``stop_mapping``。厂商那条路
+          由厂商建图;自建那条路建图是 ROS 侧离线重建,不走这个接口。
+        * ``map_admin`` —— ``remove_maps`` / ``rename_map``。
+        * ``reloc`` —— ``reset_localization``。
+
+        **界面拿它来决定按钮灰不灰。** 没有这个声明,页面就只能把按钮都画
+        出来,让人点了才知道"该后端不支持" —— 现场那是白跑一趟。
+
+        默认全支持:多数后端(厂商、仿真)确实全支持,少数不支持的自己覆盖,
+        这样新增后端时忘了写这一条,顶多是多画一个按钮,而不是少画。
+        """
+        return self.ALL_CAPABILITIES
+
     # ------------------------------------------------------------ 地图
 
     @abstractmethod
