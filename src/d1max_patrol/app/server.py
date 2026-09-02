@@ -33,7 +33,7 @@ import sys
 import threading
 import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -47,6 +47,7 @@ from d1max_patrol.app.mapping import (
 )
 from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.teleop import DEFAULT_PULSE_S, Teleop, TeleopBusy
+from d1max_patrol.app.video import CAMERAS, MjpegSource, VideoError
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
@@ -111,6 +112,9 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9_\-.一-鿿]+$")
 #: (``runs/<任务名>/<时间戳>``),而 URL 的一段里放不下斜杠。
 RUN_SEP = "__"
 
+#: MJPEG 各帧之间的分隔串。内容里不可能出现它,所以固定死就够了。
+_BOUNDARY = b"d1maxframe"
+
 
 # ------------------------------------------------------------------ 请求与响应
 
@@ -162,6 +166,19 @@ class Response:
 
 
 @dataclass(frozen=True, slots=True)
+class ByteStream:
+    """一条长连的**二进制**响应(MJPEG)。
+
+    和 :class:`Stream` 的区别只在编码:那个把 dict 写成 ``data:`` 行,这个
+    把字节原样写出去。收尾要求一模一样 —— 生成器必须能被 ``close()`` 打断,
+    因为杀 ffmpeg 的逻辑只写在它的 ``finally`` 里。
+    """
+
+    chunks: Iterator[bytes]
+    content_type: str
+
+
+@dataclass(frozen=True, slots=True)
 class Stream:
     """一条长连响应(SSE)。生成器吐一个 dict,就是一帧 ``data:``。
 
@@ -181,7 +198,7 @@ def _error_response(exc: HttpError) -> Response:
     return json_response(exc.to_wire(), exc.status)
 
 
-Handler = Callable[["Request"], "Response | Stream"]
+Handler = Callable[["Request"], "Response | Stream | ByteStream"]
 
 
 def _number(body: Mapping[str, Any], name: str, default: float = 0.0) -> float:
@@ -238,6 +255,37 @@ def _run_id(run_dir: Path) -> str:
     return f"{run_dir.parent.name}{RUN_SEP}{run_dir.name}"
 
 
+#: MJPEG 的响应头。``<img>`` 认这个,一帧一换。
+MJPEG_CONTENT_TYPE = f"multipart/x-mixed-replace; boundary={_BOUNDARY.decode()}"
+
+
+def _close(it: Iterator[Any]) -> None:
+    """关掉一个生成器。关不上也不能让它盖住真正的错误。"""
+    with contextlib.suppress(Exception):
+        it.close()      # type: ignore[attr-defined]
+
+
+def _multipart(first: bytes, rest: Iterator[bytes]) -> Iterator[bytes]:
+    """把一串 JPEG 包成 ``multipart/x-mixed-replace``。
+
+    第一帧是单独传进来的:调用方已经先取了它,用来判断这条流到底起没起来。
+
+    ``finally`` 里必须把 ``rest`` 关掉 —— 人关掉标签页时,杀 ffmpeg 的逻辑
+    就挂在那个生成器的 ``finally`` 上。
+    """
+    def part(jpg: bytes) -> bytes:
+        return (b"--" + _BOUNDARY + b"\r\nContent-Type: image/jpeg\r\n"
+                b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n"
+                + jpg + b"\r\n")
+
+    try:
+        yield part(first)
+        for jpg in rest:
+            yield part(jpg)
+    finally:
+        _close(rest)
+
+
 @dataclass(frozen=True, slots=True)
 class _Route:
     method: str
@@ -281,6 +329,9 @@ class AppContext:
     mapping: MappingOrchestrator
     missions_dir: Path
     runs_root: Path
+    #: 相机名 -> 那一路 RTSP 流。没配的相机在页面上是一句"没配地址",
+    #: 而不是一个转不出来的图标。
+    video: Mapping[str, MjpegSource] = field(default_factory=dict)
 
 
 # ------------------------------------------------------------------ 状态汇总
@@ -526,6 +577,7 @@ class AppServer:
         self.route("POST", "/api/mapping/record/stop", self._record_stop)
         self.route("POST", "/api/mapping/rebuild", self._rebuild)
         self.route("GET", "/api/procs/<name>/log", self._proc_log)
+        self.route("GET", "/api/video/<name>", self._video)
         self.route("GET", "/api/missions", self._missions)
         self.route("GET", "/api/missions/<mid>", self._mission_get)
         self.route("PUT", "/api/missions/<mid>", self._mission_put)
@@ -687,6 +739,35 @@ class AppServer:
         # 容错解码:看日志的人要的是内容,不是一个 500。
         return Response(200, raw.decode("utf-8", errors="replace").encode("utf-8"),
                         "text/plain; charset=utf-8")
+
+    # ---------------------------------------------------------------- 画面
+
+    def _video(self, req: Request) -> ByteStream:
+        """一路 MJPEG,直接喂 ``<img src="/api/video/front">``。
+
+        **先取一帧再发响应头。** ffmpeg 装没装、流拉不拉得到、观众超没超上限,
+        这三件事都要到第一帧才见分晓;头一旦发出去就只能是 200,那时再出错,
+        页面上看到的就是一个不动的破图标而不是一句人话。
+        """
+        name = req.params["name"]
+        if name not in CAMERAS:
+            raise HttpError(404, "不认识的相机",
+                            f"只有 {'、'.join(CAMERAS)},给的是 {name!r}")
+        source = self._ctx.video.get(name)
+        if source is None:
+            raise HttpError(503, f"{name} 相机没配地址",
+                            "起 app 时用 --camera-host 指到推流的那台机器")
+        frames = source.stream()
+        try:
+            first = next(frames)
+        except VideoError as exc:
+            _close(frames)
+            raise HttpError(503, str(exc)) from exc
+        except StopIteration as exc:
+            _close(frames)
+            raise HttpError(503, f"拉不到 {name} 相机的画面",
+                            "ffmpeg 起来了但一帧没出") from exc
+        return ByteStream(_multipart(first, frames), MJPEG_CONTENT_TYPE)
 
     # ---------------------------------------------------------------- 任务
 
@@ -1012,6 +1093,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return
         if isinstance(result, Stream):
             self._send_stream(result)
+        elif isinstance(result, ByteStream):
+            self._send_bytes(result)
         else:
             self._send(result)
 
@@ -1062,6 +1145,29 @@ class _RequestHandler(BaseHTTPRequestHandler):
             with contextlib.suppress(Exception):
                 stream.events.close()   # type: ignore[attr-defined]
 
+    def _send_bytes(self, stream: ByteStream) -> None:
+        """把生成器吐的字节块原样写出去(MJPEG 走这条)。
+
+        和 :meth:`_send_stream` 一样没有 ``Content-Length``,写完就关。人关掉
+        标签页时这里会撞上 ``BrokenPipeError`` —— 那是正常收尾,但一定要走到
+        ``finally``,ffmpeg 才会被杀掉。
+        """
+        self.close_connection = True
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", stream.content_type)
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            for chunk in stream.chunks:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass                    # 客户端走了,正常收尾
+        finally:
+            with contextlib.suppress(Exception):
+                stream.chunks.close()   # type: ignore[attr-defined]
+
 
 # ------------------------------------------------------------------ 入口
 
@@ -1084,6 +1190,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bags-dir", default="runs/bags", help="录包落盘目录")
     p.add_argument("--params-file", default="config/params/mapper_3d.yaml",
                    help="建图用的 slam_toolbox 参数模板")
+    p.add_argument("--camera-host", default="192.168.234.1",
+                   help="推 RTSP 的那台机器。前后广角是 8554/{front,back}")
+    p.add_argument("--ffmpeg", default="ffmpeg",
+                   help="ffmpeg 可执行文件。板载装的不在 PATH 里时用它指过去")
     p.add_argument("--missions-dir", default="missions")
     p.add_argument("--runs-root", default="runs")
     p.add_argument("--log-dir", help="子进程日志目录(默认 <runs-root>/logs)")
@@ -1145,9 +1255,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         bags_dir=Path(args.bags_dir), maps_dir=Path(args.maps_dir),
         params_template=Path(args.params_file)))
 
+    # 相机源现在就造好,但一条 ffmpeg 都不起 —— 真起是在有人打开画面的时候。
+    video = {name: MjpegSource(f"rtsp://{args.camera_host}:8554/{name}",
+                               ffmpeg=args.ffmpeg)
+             for name in CAMERAS}
+
     ctx = AppContext(bridge=bridge, engine=engine, nav=nav, device=device,
                      maps=maps, procs=procs, teleop=teleop, mapping=mapping,
-                     missions_dir=Path(args.missions_dir), runs_root=runs_root)
+                     missions_dir=Path(args.missions_dir), runs_root=runs_root,
+                     video=video)
     server = AppServer(ctx, host=args.host, port=args.port)
     server.start()
     print(f"app 起来了:{server.url}")
@@ -1182,5 +1298,5 @@ if __name__ == "__main__":      # pragma: no cover - 入口
     sys.exit(main())
 
 
-__all__ = ["AppContext", "AppServer", "HttpError", "Request", "Response",
-           "Stream", "json_response", "main"]
+__all__ = ["AppContext", "AppServer", "ByteStream", "HttpError", "Request",
+           "Response", "Stream", "json_response", "main"]
