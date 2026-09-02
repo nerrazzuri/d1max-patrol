@@ -735,6 +735,12 @@ class VendorNavBackend(NavBackend):
     async def goto(self, pose: Pose) -> None:
         await self.request(R.start_nav(pose))
 
+    async def return_home(self) -> None:
+        # 假设(待真机验证): §3.4 未给响应样例,响应函数名没验过。模拟器直接
+        # 拒这条,所以这条路径只有接真机才走得通;设备拒了会抛 NavRequestError,
+        # 引擎按"返航失败"处置,不会静默停在原地。
+        await self.request(R.start_nav_return_home())
+
     async def stop(self) -> None:
         await self.request(R.stop_nav())
 

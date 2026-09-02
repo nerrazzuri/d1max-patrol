@@ -75,3 +75,17 @@ def test_帧对象():
     assert frame.mime == "image/jpeg"
     with pytest.raises(AttributeError):
         frame.data = b""          # frozen
+
+
+async def test_返航默认是明确拒绝而不是静默无操作():
+    """引擎在电量低的时候调它 —— 静默无操作等于狗停在原地等着没电。"""
+    from d1max_patrol.backends.base import NavRequestError
+
+    class _Nav(NavBackend):
+        pass
+
+    for name in _abstracts(NavBackend):
+        setattr(_Nav, name, lambda self, *a, **k: None)
+    _Nav.__abstractmethods__ = frozenset()
+    with pytest.raises(NavRequestError, match="返航"):
+        await _Nav().return_home()

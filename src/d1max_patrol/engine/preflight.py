@@ -54,6 +54,9 @@ class PreflightReport:
 async def _check_nav_ready(nav: NavBackend) -> CheckResult:
     """导航必须在 StandBy —— 只有这个状态下 start_nav 才会被受理(§3.6)。"""
     status = await nav.nav_status()
+    if status is None:
+        # 端口约定:认不出的枚举值回 None(固件可能新增)。认不出就不放行。
+        return CheckResult("nav_ready", False, "导航状态认不出来,不敢放行")
     ok = status is NavStatus.STANDBY
     return CheckResult("nav_ready", ok,
                        "导航就绪" if ok else f"导航当前是 {status.value},不是 StandBy")
@@ -76,6 +79,8 @@ async def _check_device_ready(device: DeviceBackend) -> CheckResult:
 async def _check_localized(nav: NavBackend) -> CheckResult:
     """定位必须收敛到 ContinuousLoc(§4.3)。没收敛就走,走的是错的地方。"""
     status = await nav.loc_status()
+    if status is None:
+        return CheckResult("localized", False, "定位状态认不出来,不敢放行")
     ok = status is LocStatus.CONTINUOUS_LOC
     return CheckResult("localized", ok,
                        "定位已收敛" if ok

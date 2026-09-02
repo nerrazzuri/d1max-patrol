@@ -299,6 +299,17 @@ class NavBackend(EventEmitter[Event], ABC):
     @abstractmethod
     async def nav_status(self) -> NavStatus | None: ...
 
+    async def return_home(self) -> None:
+        """返航。**不是抽象方法** —— 默认就是明确拒绝。
+
+        规范 §3.4 的 ``start_nav_return_home`` 至今没有响应样例,函数名未经
+        真机验证(见 nav_requests.py),模拟器也是直接拒的。所以这里给一个
+        会抛错的默认实现:支持的后端自己覆盖,不支持的**明确拒绝**,而不是
+        悄悄什么都不做 —— 引擎在电量低的时候调它,静默无操作等于狗停在原地
+        等着没电。
+        """
+        raise NavRequestError("return_home", "该后端不支持返航")
+
     # ------------------------------------------------------------ 速度
 
     @abstractmethod

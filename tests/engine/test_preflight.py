@@ -129,3 +129,13 @@ async def test_读不到状态算没过而不是当成好的(tmp_path, sample_mi
 async def test_通过的项也说得出理由(tmp_path, sample_mission, fake_nav, fake_device):
     r = await run_preflight(fake_nav, fake_device, sample_mission, tmp_path)
     assert all(c.detail for c in r.checks), "过了也要给人看,别留空串"
+
+
+@pytest.mark.parametrize("field, failed", [("nav", "nav_ready"), ("loc", "localized")])
+async def test_状态认不出来就不放行(tmp_path, sample_mission, fake_nav, fake_device,
+                                    field, failed):
+    """端口约定认不出的枚举值回 None(固件可能新增)——None 不是"好的"。"""
+    setattr(fake_nav, field, None)
+    r = await run_preflight(fake_nav, fake_device, sample_mission, tmp_path)
+    assert [c.name for c in r.failures] == [failed]
+    assert "认不出" in r.failures[0].detail
