@@ -190,3 +190,18 @@ def test_导出的动作只带这种动作用得上的字段(tmp_path):
     """全字段导出会让 YAML 变得没法读 —— 一个 photo 动作不需要 pitch。"""
     text = dump_mission(load_mission(_write(tmp_path, SAMPLE)))
     assert "pitch" not in text
+
+
+@pytest.mark.parametrize("key", ["on_loc_lost", "on_control_lost"])
+def test_不认识的丢失处置被拒(tmp_path, key):
+    """词表要在读任务的时候就卡死,不能等出事那一刻才发现不认识。"""
+    text = SAMPLE + f"  {key}: 装死\n"
+    with pytest.raises(MissionError, match=key):
+        load_mission(_write(tmp_path, text))
+
+
+@pytest.mark.parametrize("key, value", [("on_loc_lost", "abort"),
+                                        ("on_control_lost", "abort")])
+def test_认识的丢失处置读得进来(tmp_path, key, value):
+    text = SAMPLE + f"  {key}: {value}\n"
+    assert getattr(load_mission(_write(tmp_path, text)).policy, key) == value

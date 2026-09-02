@@ -32,6 +32,13 @@ CAMERAS = frozenset({"front", "back"})
 #: 单点失败之后怎么办。
 ON_WAYPOINT_FAILED = frozenset({"abort", "skip", "retry_then_skip"})
 
+#: 定位丢了之后怎么办。默认先暂停试重置,试满次数再中止(主规范 §6.4)。
+ON_LOC_LOST = frozenset({"pause_then_abort", "abort"})
+
+#: 控制权被拿走之后怎么办。默认暂停 —— 上装抢走控制权是可以人工夺回的
+#: (清单 #46/#47),不必直接判整趟失败。
+ON_CONTROL_LOST = frozenset({"pause", "abort"})
+
 #: 点位名里绝对不能出现的东西 —— 它会成为照片文件名的一部分。
 _NAME_FORBIDDEN = ("/", "\\", "..", "\x00")
 
@@ -232,11 +239,14 @@ def _parse_policy(raw: Any) -> Policy:
                  f"policy.on_waypoint_failed 不认识: {value!r}"
                  f"(支持 {sorted(ON_WAYPOINT_FAILED)})")
         got["on_waypoint_failed"] = value
-    for key in ("on_loc_lost", "on_control_lost"):
+    for key, allowed in (("on_loc_lost", ON_LOC_LOST),
+                         ("on_control_lost", ON_CONTROL_LOST)):
         if key in raw:
             value = raw[key]
-            _require(isinstance(value, str) and value,
-                     f"policy.{key} 应为非空字符串,实际为 {value!r}")
+            # 词表在这里卡死,而不是等到出事那一刻在安全规则表里才发现不认识
+            # —— 那时候狗已经在外面了。
+            _require(value in allowed,
+                     f"policy.{key} 不认识: {value!r}(支持 {sorted(allowed)})")
             got[key] = value
 
     policy = replace(base, **got)
