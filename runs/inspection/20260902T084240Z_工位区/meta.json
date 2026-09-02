@@ -1,0 +1,8 @@
+{
+  "point": "工位区",
+  "time_utc": "20260902T084240Z",
+  "map_frame": "loc_map",
+  "pose": {"x": -0.79087828045596, "y": 0.11334782372208307, "yaw": 1.6322778284556725, "ok": true},
+  "front": "front.jpg",
+  "back": "back.jpg"
+}
