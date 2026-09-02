@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import socket
 import threading
 import time
@@ -25,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import rclpy
 from rclpy.time import Time
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import Buffer, TransformException, TransformListener
 
 STATE = {"x": None, "y": None, "yaw": None, "ok": False, "t": 0.0}
 STATE_LOCK = threading.Lock()
@@ -75,7 +74,7 @@ def tf_thread(map_frame: str):
                 STATE.update(x=t.x, y=t.y,
                              yaw=quat_yaw(q.x, q.y, q.z, q.w),
                              ok=True, t=time.time())
-        except Exception:
+        except TransformException:
             with STATE_LOCK:
                 if time.time() - STATE["t"] > 1.5:
                     STATE["ok"] = False
@@ -201,7 +200,8 @@ PAGE = """<!doctype html><html lang=zh><head><meta charset=utf-8>
  const es=new EventSource('/events');
  es.onmessage=e=>{const d=JSON.parse(e.data);
    const fix=document.getElementById('fix');
-   document.getElementById('hdr').textContent='地图 '+(META?META.w+'×'+META.h+' @ '+META.res+'m':'')+' · loc_map 帧';
+   document.getElementById('hdr').textContent='地图 '
+     +(META?META.w+'×'+META.h+' @ '+META.res+'m':'')+' · loc_map 帧';
    if(d.ok){fix.textContent='已锁定';fix.className='pill on';
      document.getElementById('px').textContent=d.x.toFixed(3);
      document.getElementById('py').textContent=d.y.toFixed(3);

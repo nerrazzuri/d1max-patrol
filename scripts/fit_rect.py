@@ -53,7 +53,8 @@ def main():
 
     rgb = np.stack([a, a, a], -1).copy()
     cv2.polylines(rgb, [box], True, (0, 0, 255), 1)
-    cv2.imwrite(outs + "_overlay.png", cv2.resize(rgb, (w * 5, h * 5), interpolation=cv2.INTER_NEAREST))
+    cv2.imwrite(outs + "_overlay.png",
+                cv2.resize(rgb, (w * 5, h * 5), interpolation=cv2.INTER_NEAREST))
     print(f"写出 {outs}.pgm/.yaml/.png + {outs}_overlay.png")
 
 
