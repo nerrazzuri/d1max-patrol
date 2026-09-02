@@ -81,6 +81,12 @@ from d1max_patrol.engine.mission import (
     save_mission,
 )
 from d1max_patrol.engine.preflight import PreflightReport, run_preflight
+from d1max_patrol.inspect.judge import (
+    judge_run,
+    read_findings,
+    read_reviews,
+    save_review,
+)
 from d1max_patrol.inspect.report import write_reports
 
 #: 静态文件目录。模块导入时就 resolve,后面判越界拿它当基准。
@@ -593,6 +599,8 @@ class AppServer:
         self.route("GET", "/api/runs/<run_id>", self._run_detail)
         self.route("GET", "/api/runs/<run_id>/photos/<name>", self._run_photo)
         self.route("GET", "/api/runs/<run_id>/report.<fmt>", self._run_report)
+        self.route("POST", "/api/runs/<run_id>/judge", self._run_judge)
+        self.route("POST", "/api/runs/<run_id>/review/<name>", self._run_review)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes) -> Response | Stream:
@@ -962,6 +970,10 @@ class AppServer:
             "state": read_state(run),
             "events": read_events(run),
             "photos": sorted(p.name for p in (run / "photos").glob("*.jpg")),
+            # 两层结论一起给:页面上每张照片旁边要同时显示"模型说什么"和
+            # "人改成了什么",分两次请求只会让那一屏闪一下。
+            "findings": [f.to_wire() for f in read_findings(run)],
+            "reviews": read_reviews(run),
         })
 
     def _run_photo(self, req: Request) -> Response:
@@ -1004,6 +1016,51 @@ class AppServer:
                 raise HttpError(500, "生成报告失败", str(exc)) from exc
         ctype = ("text/markdown" if fmt == "md" else "text/html")
         return Response(200, path.read_bytes(), f"{ctype}; charset=utf-8")
+
+    def _stale_reports(self, run: Path) -> None:
+        """把已经生成的报告删掉,让下次取报告时重新出一份。
+
+        报告是**结论的快照**:判读或复核改了之后,躺在目录里的那份就过时了,
+        而 :meth:`_run_report` 只在文件不存在时才生成。删掉是最省事的失效
+        方式 —— 报告本来就随时能从归档重建。
+        """
+        for name in ("report.md", "report.html"):
+            with contextlib.suppress(OSError):
+                (run / name).unlink(missing_ok=True)
+
+    def _run_judge(self, req: Request) -> Response:
+        """判读一趟的照片。**同步跑完再回**。
+
+        判读是人点一下"判读"按钮触发的(工程版,手动触发),几十张照片要
+        分钟级 —— 服务是多线程的,占住的只是这一条连接。做成后台任务要多一
+        套进度上报,而现在还没有第二个人会同时点它。
+
+        没配密钥不是错:照片会全标 ``pending``,页面照样列得出来,人自己看。
+        """
+        run = self._run_dir(req.params["run_id"])
+        try:
+            findings = judge_run(run, history_root=self._ctx.runs_root)
+        except OSError as exc:
+            raise HttpError(500, "判读时读写归档失败", str(exc)) from exc
+        self._stale_reports(run)
+        return json_response({"findings": [f.to_wire() for f in findings]})
+
+    def _run_review(self, req: Request) -> Response:
+        """记一条人工复核。碰不到模型的结论 —— 见 ``inspect.judge``。"""
+        run = self._run_dir(req.params["run_id"])
+        payload = req.json()
+        if not isinstance(payload, dict):
+            raise HttpError(400, "复核要一个对象", "形如 {verdict, note}")
+        try:
+            save_review(run, req.params["name"],
+                        str(payload.get("verdict", "")),
+                        str(payload.get("note", "")))
+        except ValueError as exc:
+            raise HttpError(400, "这条复核记不下来", str(exc)) from exc
+        except OSError as exc:
+            raise HttpError(500, "写复核失败", str(exc)) from exc
+        self._stale_reports(run)
+        return json_response({"reviews": read_reviews(run)})
 
     def _call(self, factory: Callable[[], Any], timeout_s: float = 10.0) -> Any:
         """过桥,并且把业务异常翻成 HTTP 状态。
