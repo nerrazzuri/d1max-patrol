@@ -23,6 +23,7 @@ from d1max_patrol.backends.base import (
     LocStatusEvent,
     MediaError,
     MediaSource,
+    NavBackendError,
     NavStatusEvent,
 )
 from d1max_patrol.engine.archive import read_events, read_manifest, read_state
@@ -71,17 +72,28 @@ class NavStub(EventEmitter[Event]):
         self.reset_calls = 0
         self.home_calls = 0
         self.reset_recovers = True
+        #: 每次下发之后,状态机在终态上驻留几次问询才回落 StandBy。
+        #: 真设备就是这样的:上一段导航到了 Succeed,状态机要过一会儿才让位。
+        self.hold_after_goto = 0
+        #: 还剩几次问询回终态。归零之前 ``goto`` 会像真设备那样直接拒绝。
+        self.terminal_holds = 0
 
     async def nav_status(self) -> NavStatus:
+        if self.terminal_holds > 0:
+            self.terminal_holds -= 1
+            return NavStatus.SUCCEED
         return self.nav
 
     async def loc_status(self) -> LocStatus:
         return self.loc
 
     async def goto(self, pose: Pose) -> None:
+        if self.terminal_holds > 0:
+            raise NavBackendError("导航只能在 StandBy 下启动,当前 Succeed")
         self.goto_calls.append(pose)
         for event in self.on_goto:
             self.emit(event)
+        self.terminal_holds = self.hold_after_goto
 
     async def stop(self) -> None:
         self.stop_calls += 1
@@ -356,6 +368,32 @@ async def test_不重试的策略只下发一次(make_engine, nav):
                                          waypoint_retry=5))
     await run_to_end(engine, mission)
     assert len(nav.goto_calls) == 2, "skip 就是一次定生死,retry 次数不该偷偷生效"
+
+
+async def test_上一个点的终态没散掉就先等着不硬下发(make_engine, sample_mission, nav):
+    """两个点之间必须等状态机回落 StandBy,不等就是整趟报废。
+
+    真设备上 ``start_nav`` 只在 StandBy 下受理:上一个点走完是 Succeed,紧接着
+    下发第二个点会被当场拒绝,而那是个 ``NavBackendError`` —— 掉进兜底那层,
+    整趟按"引擎内部异常"中止。**只跑一个点的测试永远盖不住这条路径。**
+    """
+    nav.hold_after_goto = 3
+    engine = make_engine()
+    assert await run_to_end(engine, sample_mission) is RunState.DONE
+    assert len(nav.goto_calls) == 2
+    assert all(r.ok for r in engine.snapshot.results)
+
+
+async def test_导航一直回不到standby就判这个点失败(make_engine, nav):
+    """等也是有上限的。等不到就是这个点失败,不是整趟卡在那里不动。"""
+    nav.hold_after_goto = 10 ** 6
+    engine = make_engine()
+    mission = make_mission(policy=policy(waypoint_timeout_s=0.3,
+                                         on_waypoint_failed="skip"))
+    assert await run_to_end(engine, mission) is RunState.DONE
+    results = engine.snapshot.results
+    assert [r.ok for r in results] == [True, False]
+    assert "StandBy" in results[1].note
 
 
 async def test_点位失败也会留在结果里而不是被抹掉(make_engine, nav):

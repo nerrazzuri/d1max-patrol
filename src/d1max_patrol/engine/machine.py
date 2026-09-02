@@ -54,6 +54,15 @@ NAV_TERMINAL = frozenset({NavStatus.SUCCEED, NavStatus.FAILED, NavStatus.CANCELL
 #: 等定位收敛最多等这么久。LOCALIZING 阶段和定位重置之后都用它。
 LOCALIZE_TIMEOUT_S = 30.0
 
+#: 上一段导航到了终态之后,状态机要过一会儿才回落 StandBy,而 start_nav 只在
+#: StandBy 下受理(§3.6)。这中间下一个点会被设备当场拒绝 —— 不是竞态,是设备
+#: 状态机本身的约束。cli.py 的 walk 和契约测试 test_连续走多个点 撞的是同一堵墙。
+NAV_STANDBY_TIMEOUT_S = 10.0
+
+#: 等 StandBy 期间重新问一次状态的间隔。后端状态一变就会推事件,这个轮询只是
+#: 为了不把"回落"这件事全押在事件推送上。
+_STANDBY_POLL_S = 0.05
+
 #: 返航最多等这么久。
 RETURN_TIMEOUT_S = 300.0
 
@@ -396,6 +405,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         await self._transition(RunState.RETURNING, reason)
         try:
             await self._stop_nav_quietly()
+            # 返航也是一次 start_nav,一样只在 StandBy 下受理。
+            await self._await_nav_standby(self._clock() + NAV_STANDBY_TIMEOUT_S)
             await self._nav.return_home()
             await self._wait_nav_terminal(self._clock() + RETURN_TIMEOUT_S)
         except _AbortRun as exc:
@@ -463,6 +474,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             # 再继续,不该一恢复就立刻判超时。
             attempt_started = self._clock()
             try:
+                # 先等上一段导航的余温散掉。等的上限取两者中先到的那个:
+                # 既不该超出这一次尝试的预算,也不值得为回落等满两分钟。
+                await self._await_nav_standby(min(
+                    attempt_started + policy.waypoint_timeout_s,
+                    self._clock() + NAV_STANDBY_TIMEOUT_S))
                 await self._nav.goto(wp.pose)
                 self._note("nav", waypoint=wp.name, attempt=tried + 1)
                 await self._wait_nav_terminal(
@@ -481,6 +497,29 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         if policy.on_waypoint_failed == "abort":
             raise _AbortRun(f"点位 {wp.name} 失败: {note}")
         return WaypointResult(wp.name, False, 0, self._clock() - started, (), note)
+
+    async def _await_nav_standby(self, deadline: float) -> None:
+        """等导航状态机回落 StandBy。等的期间照常处理事件。
+
+        不这么等,后果是整趟停在第二个点上:第一个点走完是 Succeed,紧接着
+        下一个 start_nav 会被设备拒绝,而那是个 ``NavRequestError`` —— 落到
+        兜底那一层,整趟按"引擎内部异常"中止。这条路径只有把多个点连起来跑
+        才会露面,单点测试全绿也盖不住它。
+        """
+        status = await self._nav.nav_status()
+        while status is not NavStatus.STANDBY:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise _FailWaypoint(
+                    f"导航没回到 StandBy,停在 "
+                    f"{status.value if status else '未知'}")
+            item = await self._next(min(remaining, _STANDBY_POLL_S))
+            if item is None:
+                status = await self._nav.nav_status()
+                continue
+            await self._handle(item)
+            if isinstance(item, NavStatusEvent):
+                status = item.status
 
     async def _wait_nav_terminal(self, deadline: float) -> None:
         """等到这一段导航有结果。等的期间照常处理事件。"""

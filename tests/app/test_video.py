@@ -11,11 +11,8 @@ Python 脚本,外面套一层同名的可执行壳(Windows 上是 ``.bat``,别�
 from __future__ import annotations
 
 import itertools
-import os
-import sys
 import time
 import urllib.request
-from pathlib import Path
 
 import pytest
 
@@ -24,9 +21,11 @@ from d1max_patrol.app.video import (
     CAMERAS,
     MAX_VIEWERS,
     MjpegSource,
+    RtspStill,
     VideoError,
 )
-from tests.app.conftest import get_err, status, url
+from d1max_patrol.backends.base import MediaError
+from tests.app.conftest import _fake, get_err, status, url
 
 # --------------------------------------------------------------- 假的 ffmpeg
 
@@ -72,37 +71,6 @@ while True:
     sys.stdout.buffer.flush()
     time.sleep(0.02)
 '''
-
-
-@pytest.fixture
-def ffdir(tmp_path_factory) -> Path:
-    """假 ffmpeg 的落脚处。
-
-    **不能用 tmp_path**:它的名字里带测试函数名,而这里的测试名是中文。
-    Windows 上 cmd 按当前代码页(GBK)读 ``.bat``,路径里的中文到子进程手上
-    就成了乱码,脚本直接打不开。``mktemp`` 给的目录名是纯 ASCII。
-    """
-    return tmp_path_factory.mktemp("ff")
-
-
-def _fake(where: Path, body: str, tag: str) -> str:
-    """把一段 Python 包成一个能直接执行的"ffmpeg"。
-
-    包一层壳而不是直接把 ``.py`` 交给 ``Popen``:``.py`` 能不能直接执行取决于
-    系统上的文件关联,而 ``.bat`` / 带 shebang 的 ``.sh`` 到哪儿都能跑。
-    """
-    script = where / f"{tag}.py"
-    script.write_text(body, encoding="utf-8")
-    if os.name == "nt":
-        shim = where / f"{tag}.bat"
-        shim.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
-                        encoding="utf-8")
-    else:
-        shim = where / f"{tag}.sh"
-        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n',
-                        encoding="utf-8")
-        shim.chmod(0o755)
-    return str(shim)
 
 
 @pytest.fixture
@@ -362,3 +330,67 @@ def test_观众关了页面ffmpeg就没了(server_video, ctx):
 
 def test_相机名就是CAMERAS里那两个():
     assert CAMERAS == ("front", "back")
+
+
+# --------------------------------------------------------------- 拍照抓帧
+
+
+def _still(ffmpeg: str) -> RtspStill:
+    return RtspStill("rtsp://x:8554/front", ffmpeg=ffmpeg, timeout_s=20.0)
+
+
+async def test_抓得出一张jpeg(fake_ffmpeg):
+    frame = await _still(fake_ffmpeg).grab()
+    assert frame.data.startswith(b"\xff\xd8") and frame.data.endswith(b"\xff\xd9")
+    assert frame.mime == "image/jpeg"
+    assert frame.captured_at_ms > 0
+
+
+async def test_只要第一张不把整段管道当成一张(fake_ffmpeg):
+    """假 ffmpeg 一口气吐了两张。拿两张拼成的字节串存下来就是一个坏文件。"""
+    assert await _still(fake_ffmpeg).grab() and True
+    assert (await _still(fake_ffmpeg).grab()).data == b"\xff\xd8AAA\xff\xd9"
+
+
+async def test_流头上的垃圾不会混进照片里(fake_ffmpeg_chunked):
+    data = (await _still(fake_ffmpeg_chunked).grab()).data
+    assert data == b"\xff\xd8AAAAAAAA\xff\xd9"
+    assert b"garbage" not in data
+
+
+async def test_一帧都抓不到时把ffmpeg的原话带出来(fake_ffmpeg_silent):
+    with pytest.raises(MediaError, match="Connection refused"):
+        await _still(fake_ffmpeg_silent).grab()
+
+
+async def test_拍照那条路上没装ffmpeg也给一句人话(ffdir):
+    with pytest.raises(MediaError, match="ffmpeg"):
+        await _still(str(ffdir / "根本没有这个")).grab()
+
+
+async def test_抓不到时healthy是假的不是抛(fake_ffmpeg_silent):
+    """预检要的是一个能写进检查表的布尔值,不是一个异常。"""
+    assert await _still(fake_ffmpeg_silent).healthy() is False
+
+
+async def test_抓得到时healthy是真的(fake_ffmpeg):
+    assert await _still(fake_ffmpeg).healthy() is True
+
+
+def test_拍照走的也是tcp():
+    """UDP 在现场那条 WiFi 上丢包 —— 实时画面和拍照是同一条链路,别只改一边。"""
+    argv = _still("ffmpeg").argv
+    assert "-rtsp_transport" in argv
+    assert argv[argv.index("-rtsp_transport") + 1] == "tcp"
+
+
+def test_拍照只要一帧就退():
+    """不加 -frames:v 1 的话 ffmpeg 会一直拉流,而这里没有人来关它。"""
+    argv = _still("ffmpeg").argv
+    assert "-frames:v" in argv
+    assert argv[argv.index("-frames:v") + 1] == "1"
+
+
+def test_拍照和实时画面拉的是同一个地址():
+    """两边地址各拼各的,迟早有一天页面上看着是前广角、存下来的是后广角。"""
+    assert _still("ffmpeg").url == MjpegSource("rtsp://x:8554/front").url

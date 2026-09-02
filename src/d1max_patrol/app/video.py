@@ -20,12 +20,17 @@ UDP 在那上面丢包丢到画面没法看 —— ``patrol_snap.sh`` 已经踩�
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import io
 import subprocess
 import tempfile
 import threading
+import time
 from collections.abc import Iterator
 from typing import IO
+
+from d1max_patrol.backends.base import Frame, MediaError, MediaSource
 
 #: app 认识的相机名。和 RTSP 路径最后一段一致。
 CAMERAS = ("front", "back")
@@ -42,6 +47,9 @@ _CHUNK = 65536
 
 #: 拉流失败时,ffmpeg 的报错取最后这么多字节带给页面。
 _ERR_TAIL = 400
+
+#: 抓一张最多等多久。RTSP 握手加上等一个关键帧,现场那条 WiFi 上偶尔要好几秒。
+STILL_TIMEOUT_S = 20.0
 
 
 class VideoError(RuntimeError):
@@ -185,4 +193,89 @@ class MjpegSource:
                 self._viewers -= 1
 
 
-__all__ = ["CAMERAS", "MAX_VIEWERS", "MjpegSource", "VideoError"]
+class RtspStill(MediaSource):
+    """到点抓一张。巡检拍照走的就是它。
+
+    跟 :class:`MjpegSource` 同一路流、同一串 ffmpeg 参数的前半截,区别只有一
+    条:**抓完就把 ffmpeg 收掉**。巡检拍照是几分钟一次的事,让一条 ffmpeg 在
+    两个点位之间空转几分钟,白解码是小事,真正的问题是它会在链路抖动时悄悄
+    死掉 —— 而那一刻没有人在看,等到了点位要拍照才发现。
+
+    这是 ``MediaSource`` 在这台机器上唯一的实现。备用路径(``take_photo``)
+    不存在:SDK 没有拍照接口,``sidecar_device`` 会明确拒绝。
+    """
+
+    def __init__(self, rtsp_url: str, *, ffmpeg: str = "ffmpeg",
+                 timeout_s: float = STILL_TIMEOUT_S) -> None:
+        self._url = rtsp_url
+        self._ffmpeg = ffmpeg
+        self._timeout = timeout_s
+
+    @property
+    def url(self) -> str:
+        return self._url
+
+    @property
+    def argv(self) -> tuple[str, ...]:
+        """完整命令行。``-frames:v 1`` 是"拿到一帧就退",不是"截前一秒"。
+
+        ``-rtsp_transport tcp`` 和实时画面那边是同一个理由,见模块开头。
+        """
+        return (self._ffmpeg, "-nostdin", "-loglevel", "error",
+                "-rtsp_transport", "tcp", "-i", self._url,
+                "-frames:v", "1", "-f", "image2pipe", "-vcodec", "mjpeg",
+                "-q:v", "2", "-")
+
+    async def open(self) -> None:
+        """没有要开的东西 —— 每次抓图起自己那条 ffmpeg。"""
+
+    async def close(self) -> None:
+        """同上。抓图那条 ffmpeg 在 :meth:`grab` 返回时就已经退了。"""
+
+    async def grab(self) -> Frame:
+        """抓一帧。**在线程里跑** —— 等 ffmpeg 是阻塞的,不能占住事件循环。
+
+        循环被占住的后果不是"慢一点":急停、遥控心跳、事件流全在这条循环上,
+        而抓图最长能等 20 秒。
+        """
+        data = await asyncio.to_thread(self._grab)
+        return Frame(data=data, mime="image/jpeg",
+                     captured_at_ms=int(time.time() * 1000))
+
+    async def healthy(self) -> bool:
+        """真抓一张试试。
+
+        比"看进程在不在"贵,但那个便宜的版本在这里什么也证明不了 —— 这个类
+        平时根本没有进程。预检要回答的是"到了点位拍得出来吗"。
+        """
+        try:
+            await self.grab()
+        except MediaError:
+            return False
+        return True
+
+    def _grab(self) -> bytes:
+        try:
+            done = subprocess.run(          # 命令行是自己拼的,没有 shell
+                self.argv, stdin=subprocess.DEVNULL,
+                capture_output=True, timeout=self._timeout)
+        except OSError as exc:
+            raise MediaError(
+                f"起不了 ffmpeg({self._ffmpeg}): {exc} —— "
+                f"装一个(apt install ffmpeg),或者用 --ffmpeg 指到它"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise MediaError(
+                f"抓 {self._url} 超过 {self._timeout:g}s 还没出图 —— "
+                f"多半是推流没开或者网断了") from exc
+        # 走同一个切帧器:ffmpeg 偶尔会在图前面带点别的,而"第一个完整 JPEG"
+        # 这件事两边必须是同一套判断,不然实时画面能看、拍照存下来是坏的。
+        frame = next(_frames(io.BytesIO(done.stdout)), None)
+        if frame is None:
+            tail = done.stderr[-_ERR_TAIL:].decode("utf-8", "replace").strip()
+            raise MediaError(f"抓不到 {self._url}: {tail or 'ffmpeg 没说原因'}")
+        return frame
+
+
+__all__ = ["CAMERAS", "MAX_VIEWERS", "STILL_TIMEOUT_S", "MjpegSource",
+           "RtspStill", "VideoError"]

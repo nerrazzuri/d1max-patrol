@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -213,6 +215,40 @@ def server_local_backend(bridge, tmp_path):
     s.stop()
     with contextlib.suppress(Exception):
         bridge.call(c.engine.aclose, timeout_s=10.0)
+
+
+# --------------------------------------------------------------- 假的 ffmpeg
+
+
+@pytest.fixture
+def ffdir(tmp_path_factory) -> Path:
+    """假 ffmpeg 的落脚处。
+
+    **不能用 tmp_path**:它的名字里带测试函数名,而这里的测试名是中文。
+    Windows 上 cmd 按当前代码页(GBK)读 ``.bat``,路径里的中文到子进程手上
+    就成了乱码,脚本直接打不开。``mktemp`` 给的目录名是纯 ASCII。
+    """
+    return tmp_path_factory.mktemp("ff")
+
+
+def _fake(where: Path, body: str, tag: str) -> str:
+    """把一段 Python 包成一个能直接执行的"ffmpeg"。
+
+    包一层壳而不是直接把 ``.py`` 交给 ``Popen``:``.py`` 能不能直接执行取决于
+    系统上的文件关联,而 ``.bat`` / 带 shebang 的 ``.sh`` 到哪儿都能跑。
+    """
+    script = where / f"{tag}.py"
+    script.write_text(body, encoding="utf-8")
+    if os.name == "nt":
+        shim = where / f"{tag}.bat"
+        shim.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
+                        encoding="utf-8")
+    else:
+        shim = where / f"{tag}.sh"
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n',
+                        encoding="utf-8")
+        shim.chmod(0o755)
+    return str(shim)
 
 
 # ------------------------------------------------------------------ 打请求

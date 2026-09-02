@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 d1max = "d1max_patrol.cli:main"
+d1max-app = "d1max_patrol.app.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

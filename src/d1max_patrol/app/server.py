@@ -48,7 +48,7 @@ from d1max_patrol.app.mapping import (
 )
 from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.teleop import DEFAULT_PULSE_S, Teleop, TeleopBusy
-from d1max_patrol.app.video import CAMERAS, MjpegSource, VideoError
+from d1max_patrol.app.video import CAMERAS, MjpegSource, RtspStill, VideoError
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
@@ -61,6 +61,7 @@ from d1max_patrol.backends.base import (
     FaultEvent,
     LocStatusEvent,
     MappingStatusEvent,
+    MediaSource,
     NavBackend,
     NavBackendError,
     NavRequestError,
@@ -1284,15 +1285,41 @@ def _hostport(text: str, what: str) -> tuple[str, int]:
 
 
 async def _make_engine(nav: NavBackend, device: DeviceBackend,
+                       media: Mapping[str, MediaSource],
                        runs_root: Path) -> MissionEngine:
     """在循环线程里造引擎 —— 它内部那个队列要绑在这条循环上。"""
-    # 相机源还没接(Task 16 的 RTSP 抽帧)。拍照点位现在会**明确判失败**,
-    # 而不是悄悄跳过 —— 见 MissionEngine 的 media 说明。
-    return MissionEngine(nav, device, {}, runs_root)
+    return MissionEngine(nav, device, media, runs_root)
 
 
 async def _make_teleop(device: DeviceBackend, engine: MissionEngine) -> Teleop:
     return Teleop(device, engine)
+
+
+def shutdown(server: AppServer, ctx: AppContext) -> None:
+    """把 app 收干净。**顺序是有讲究的,而且每一步都不许让下一步跑不成。**
+
+    先停 HTTP:再有请求进来,后面几步就是在往正在关的链路上写。然后停遥控
+    (它挂着一条看门狗协程),再关三条链路,最后杀子进程 —— 子进程是 app
+    起的,app 走了它们不能留,留下就占着 ROS 话题和端口,下次起 app 会撞上。
+
+    **这里面没有 patrol_agent。** 旁路进程不是 app 起的:它在 app 之前就跑
+    着、在 app 之后还得跑着。控制权一旦被上装拿走就交接不回来(清单
+    #46/#47),唯一的恢复手段是重启运控主机 —— app 每关一次就顺手把旁路进程
+    带走,等于每关一次 app 都要重启一次机器狗。
+
+    每一步都吞异常:收尾路上一步失败不能挡住后面的,那会漏下最难收的东西
+    (子进程)。
+    """
+    server.stop()
+    bridge = ctx.bridge
+    with contextlib.suppress(Exception):
+        bridge.call(ctx.teleop.aclose, timeout_s=5.0)
+    for closer in (ctx.maps.close, ctx.nav.close, ctx.device.close):
+        with contextlib.suppress(Exception):
+            bridge.call(closer, timeout_s=5.0)
+    with contextlib.suppress(Exception):
+        bridge.call(ctx.procs.stop_all, timeout_s=15.0)
+    bridge.stop()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1323,7 +1350,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                               pose_host=pose_host, pose_port=pose_port)
     maps = MapBridgeClient(map_host, map_port)
     procs = ProcManager(log_dir)
-    engine = bridge.call(lambda: _make_engine(nav, device, runs_root))
+    # 拍照用的取图源。跟实时画面同一路 RTSP,但抓完就把 ffmpeg 收掉 ——
+    # 取舍见 app.video。没有它,所有拍照点位都会明确判失败。
+    photo: dict[str, MediaSource] = {
+        name: RtspStill(f"rtsp://{args.camera_host}:8554/{name}",
+                        ffmpeg=args.ffmpeg)
+        for name in CAMERAS}
+    engine = bridge.call(lambda: _make_engine(nav, device, photo, runs_root))
     # 遥控要在循环线程里造:它一上来就往引擎上挂检查,还会起后台看门狗。
     teleop = bridge.call(lambda: _make_teleop(device, engine))
 
@@ -1357,16 +1390,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\n收到 Ctrl+C,收尾中……")
     finally:
-        server.stop()
-        with contextlib.suppress(Exception):
-            bridge.call(teleop.aclose, timeout_s=5.0)
-        for closer in (maps.close, nav.close, device.close):
-            with contextlib.suppress(Exception):
-                bridge.call(closer, timeout_s=5.0)
-        # 子进程是 app 起的,app 走了它们不能留 —— 留下就占着话题和端口。
-        with contextlib.suppress(Exception):
-            bridge.call(procs.stop_all, timeout_s=15.0)
-        bridge.stop()
+        shutdown(server, ctx)
     return 0
 
 
@@ -1375,4 +1399,4 @@ if __name__ == "__main__":      # pragma: no cover - 入口
 
 
 __all__ = ["AppContext", "AppServer", "ByteStream", "HttpError", "Request",
-           "Response", "Stream", "json_response", "main"]
+           "Response", "Stream", "json_response", "main", "shutdown"]
