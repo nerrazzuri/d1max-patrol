@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from d1max_patrol.app.bridge import LoopBridge
+from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
 from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.server import AppContext, AppServer
 from d1max_patrol.app.teleop import Teleop
@@ -118,9 +119,16 @@ def ctx(bridge, tmp_path) -> AppContext:
     nav, device = FakeNav(), FakeDevice()
     engine = bridge.call(lambda: _make_engine(nav, device, tmp_path / "runs"))
     teleop = bridge.call(lambda: _make_teleop(device, engine))
+    procs = ProcManager(tmp_path / "logs")
+    # 真的 ProcManager 配真的编排器:这一层测的是接口的形状,不是 ROS ——
+    # 没有一条测试会走到"真起进程"那一步。
+    mapping = MappingOrchestrator(procs, MappingConfig(
+        bags_dir=tmp_path / "bags", maps_dir=tmp_path / "maps",
+        params_template=tmp_path / "mapper_3d.yaml",
+        work_dir=tmp_path / "work"))
     return AppContext(
         bridge=bridge, engine=engine, nav=nav, device=device,
-        maps=FakeMaps(), procs=ProcManager(tmp_path / "logs"), teleop=teleop,
+        maps=FakeMaps(), procs=procs, teleop=teleop, mapping=mapping,
         missions_dir=tmp_path / "missions", runs_root=tmp_path / "runs")
 
 

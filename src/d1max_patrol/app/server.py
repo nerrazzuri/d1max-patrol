@@ -40,6 +40,11 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from d1max_patrol.app.bridge import LoopBridge
+from d1max_patrol.app.mapping import (
+    MappingConfig,
+    MappingError,
+    MappingOrchestrator,
+)
 from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.teleop import DEFAULT_PULSE_S, Teleop, TeleopBusy
 from d1max_patrol.backends.base import (
@@ -74,6 +79,12 @@ MAX_BODY = 4 * 1024 * 1024
 
 #: 快照重建的节拍。链路通断这类"没有事件的变化"靠它发现。
 _TICK_S = 0.5
+
+#: 日志接口默认给多少字节的尾巴。够看清最近几百行,又不至于撑爆页面。
+LOG_TAIL_BYTES = 64 * 1024
+
+#: 进程名允许的形状。它要拼进文件名,松一点就是一条路径穿越。
+_PROC_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 # ------------------------------------------------------------------ 请求与响应
@@ -160,6 +171,16 @@ def _number(body: Mapping[str, Any], name: str, default: float = 0.0) -> float:
     return float(value)
 
 
+def _text(body: Any, name: str) -> str:
+    """从 JSON 体里取一个非空字符串。"""
+    if not isinstance(body, dict):
+        raise HttpError(400, "请求体得是一个对象", type(body).__name__)
+    value = body.get(name, "")
+    if not isinstance(value, str) or not value.strip():
+        raise HttpError(400, f"{name} 得是一个非空字符串", repr(value))
+    return value.strip()
+
+
 @dataclass(frozen=True, slots=True)
 class _Route:
     method: str
@@ -200,6 +221,7 @@ class AppContext:
     maps: MapBridgeClient
     procs: ProcManager
     teleop: Teleop
+    mapping: MappingOrchestrator
     missions_dir: Path
     runs_root: Path
 
@@ -442,6 +464,11 @@ class AppServer:
         self.route("POST", "/api/teleop", self._teleop)
         self.route("POST", "/api/teleop/heartbeat", self._teleop_beat)
         self.route("POST", "/api/estop", self._estop)
+        self.route("GET", "/api/mapping", self._mapping_state)
+        self.route("POST", "/api/mapping/record/start", self._record_start)
+        self.route("POST", "/api/mapping/record/stop", self._record_stop)
+        self.route("POST", "/api/mapping/rebuild", self._rebuild)
+        self.route("GET", "/api/procs/<name>/log", self._proc_log)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes) -> Response | Stream:
@@ -524,6 +551,71 @@ class AppServer:
         self._call(lambda: teleop.emergency_stop("页面按了急停"))
         return json_response({"ok": True})
 
+    # -------------------------------------------------------------- 建图
+
+    def _mapping_state(self, _req: Request) -> Response:
+        mapping = self._ctx.mapping
+        return json_response(self._call(mapping.snapshot))
+
+    def _record_start(self, req: Request) -> Response:
+        name = _text(req.json(), "name")
+        mapping = self._ctx.mapping
+        bag = self._call(lambda: mapping.start_record(name), timeout_s=60.0)
+        return json_response({"bag": bag.name})
+
+    def _record_stop(self, _req: Request) -> Response:
+        """停录。超时给得比别的接口长 —— rosbag2 要把 mcap 的索引写完才算完,
+        中途掐断的包放不回去,而那一段路是走不回来的。"""
+        mapping = self._ctx.mapping
+        bag = self._call(mapping.stop_record, timeout_s=60.0)
+        return json_response({"bag": bag.name})
+
+    def _rebuild(self, req: Request) -> Response:
+        """起一趟离线重建。**立刻返回 202**。
+
+        这件事要跑几分钟到几十分钟,压在一个 HTTP 请求里必然超时。所以只
+        同步验一遍参数(名字填错了要当场知道),然后丢到循环线程去跑。
+        进展去 ``GET /api/mapping`` 看 ``phase``,失败原因看 ``last_error``。
+        """
+        body = req.json()
+        bag_name = _text(body, "bag")
+        map_id = _text(body, "map_id")
+        mapping = self._ctx.mapping
+        bag = self._call(lambda: mapping.plan_rebuild(bag_name, map_id))
+        self._ctx.bridge.spawn(lambda: mapping.rebuild(bag, map_id))
+        return json_response({"bag": bag.name, "map_id": map_id}, status=202)
+
+    def _proc_log(self, req: Request) -> Response:
+        """一个子进程日志的**尾巴**。
+
+        只给尾巴不给全文:建图跑一小时的日志有几十兆,整个塞进响应体会把
+        页面和这台机器一起拖垮。想看全的人手边就有那个文件。
+
+        这里直接读文件、不过桥:``log_path`` 是纯拼路径,读文件也不碰循环
+        线程里的任何状态 —— 子进程自己往里写,我们只是另开一个句柄读。
+        """
+        name = req.params["name"]
+        if not _PROC_NAME.match(name):
+            raise HttpError(400, "进程名不合法", name)
+        path = self._ctx.procs.log_path(name)
+        if not path.is_file():
+            raise HttpError(404, f"没有这个进程的日志:{name}",
+                            "它可能还没起过")
+        raw_limit = req.query.get("bytes") or str(LOG_TAIL_BYTES)
+        try:
+            limit = int(raw_limit)
+        except ValueError as exc:
+            raise HttpError(400, "bytes 得是一个整数", raw_limit) from exc
+        limit = max(1, min(limit, MAX_BODY))
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - limit))
+            raw = fh.read()
+        # ROS 的 C++ 节点不吃 PYTHONIOENCODING,日志里混进别的编码是常事。
+        # 容错解码:看日志的人要的是内容,不是一个 500。
+        return Response(200, raw.decode("utf-8", errors="replace").encode("utf-8"),
+                        "text/plain; charset=utf-8")
+
     def _call(self, factory: Callable[[], Any], timeout_s: float = 10.0) -> Any:
         """过桥,并且把业务异常翻成 HTTP 状态。
 
@@ -534,7 +626,7 @@ class AppServer:
             return self._ctx.bridge.call(factory, timeout_s=timeout_s)
         except ValueError as exc:
             raise HttpError(400, "参数不对", str(exc)) from exc
-        except (TeleopBusy, EngineBusy) as exc:
+        except (TeleopBusy, EngineBusy, MappingError) as exc:
             raise HttpError(409, "现在做不了这件事", str(exc)) from exc
         except (TimeoutError, asyncio.TimeoutError) as exc:
             raise HttpError(504, "后端没在规定时间内回话", str(exc)) from exc
@@ -677,6 +769,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--map-bridge", default="127.0.0.1:8092",
                    help="地图桥 host:port")
     p.add_argument("--maps-dir", default="runs/slam", help="自建地图目录")
+    p.add_argument("--bags-dir", default="runs/bags", help="录包落盘目录")
+    p.add_argument("--params-file", default="config/params/mapper_3d.yaml",
+                   help="建图用的 slam_toolbox 参数模板")
     p.add_argument("--missions-dir", default="missions")
     p.add_argument("--runs-root", default="runs")
     p.add_argument("--log-dir", help="子进程日志目录(默认 <runs-root>/logs)")
@@ -734,8 +829,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     # 遥控要在循环线程里造:它一上来就往引擎上挂检查,还会起后台看门狗。
     teleop = bridge.call(lambda: _make_teleop(device, engine))
 
+    mapping = MappingOrchestrator(procs, MappingConfig(
+        bags_dir=Path(args.bags_dir), maps_dir=Path(args.maps_dir),
+        params_template=Path(args.params_file)))
+
     ctx = AppContext(bridge=bridge, engine=engine, nav=nav, device=device,
-                     maps=maps, procs=procs, teleop=teleop,
+                     maps=maps, procs=procs, teleop=teleop, mapping=mapping,
                      missions_dir=Path(args.missions_dir), runs_root=runs_root)
     server = AppServer(ctx, host=args.host, port=args.port)
     server.start()
