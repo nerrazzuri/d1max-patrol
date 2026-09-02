@@ -205,6 +205,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         self._done = asyncio.Event()
         self._done.set()
         self._snapshot = RunSnapshot(RunState.IDLE, "", 0, "", 0, 0)
+        self._busy_checks: list[Callable[[], str]] = []
 
     # ------------------------------------------------------------------ 对外
 
@@ -224,10 +225,25 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def add_busy_check(self, check: Callable[[], str]) -> None:
+        """登记一个"本体现在被别人占着吗"的检查。返回占用原因,空串表示没占。
+
+        引擎管得住自己不并行开两趟,管不住**别人**在动这条狗 —— 页面上的
+        遥控就是这样一个别人。它同时在动,任务的每一步都在跟人抢腿。
+
+        做成回调而不是让引擎认识遥控:遥控是外壳那一层的东西,引擎不许知道
+        外壳存在(见全局约束)。回调是纯函数,没有这个方向的依赖。
+        """
+        self._busy_checks.append(check)
+
     async def start(self, mission: Mission) -> None:
         """开一趟。已经在跑就拒绝 —— 两趟并行会把归档搅在一起。"""
         if self.running:
             raise EngineBusy(f"已经在跑 {self._snapshot.mission},先停下来再开新的")
+        for check in self._busy_checks:
+            reason = check()
+            if reason:
+                raise EngineBusy(reason)
         archive = RunArchive(self._runs_root, mission)
         archive.write_manifest(self._fingerprint)
         self._live = _Live(mission, archive, started_ms=int(time.time() * 1000))

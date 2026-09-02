@@ -41,6 +41,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from d1max_patrol.app.bridge import LoopBridge
 from d1max_patrol.app.procs import ProcManager
+from d1max_patrol.app.teleop import DEFAULT_PULSE_S, Teleop, TeleopBusy
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
@@ -57,7 +58,7 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
 )
 from d1max_patrol.backends.map_bridge import MapBridgeClient
-from d1max_patrol.engine.machine import MissionEngine
+from d1max_patrol.engine.machine import EngineBusy, MissionEngine
 
 #: 静态文件目录。模块导入时就 resolve,后面判越界拿它当基准。
 STATIC_DIR = (Path(__file__).resolve().parent / "static").resolve()
@@ -147,6 +148,18 @@ def _error_response(exc: HttpError) -> Response:
 Handler = Callable[["Request"], "Response | Stream"]
 
 
+def _number(body: Mapping[str, Any], name: str, default: float = 0.0) -> float:
+    """从 JSON 体里取一个数。取不到就是 400,不是 500。
+
+    ``bool`` 单独挡掉:它是 ``int`` 的子类,``{"fwd": true}`` 会静默变成 1.0,
+    也就是"闷头往前冲"。
+    """
+    value = body.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HttpError(400, f"{name} 得是一个数", repr(value))
+    return float(value)
+
+
 @dataclass(frozen=True, slots=True)
 class _Route:
     method: str
@@ -186,6 +199,7 @@ class AppContext:
     device: DeviceBackend
     maps: MapBridgeClient
     procs: ProcManager
+    teleop: Teleop
     missions_dir: Path
     runs_root: Path
 
@@ -425,6 +439,9 @@ class AppServer:
         self.route("GET", "/", self._index)
         self.route("GET", "/api/state", self._state)
         self.route("GET", "/api/events", self._events)
+        self.route("POST", "/api/teleop", self._teleop)
+        self.route("POST", "/api/teleop/heartbeat", self._teleop_beat)
+        self.route("POST", "/api/estop", self._estop)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes) -> Response | Stream:
@@ -476,6 +493,51 @@ class AppServer:
                 stream.close()  # type: ignore[attr-defined]
 
         return Stream(gen())
+
+    # -------------------------------------------------------------- 遥控
+
+    def _teleop(self, req: Request) -> Response:
+        """走一拍。
+
+        参数校验放在这一层是有意的:``Teleop`` 收的是数,HTTP 收的是 JSON,
+        "fwd 传了个字符串"是 HTTP 这一层的问题,不该让业务层去认识它。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体得是一个对象", type(body).__name__)
+        fwd = _number(body, "fwd")
+        lat = _number(body, "lat")
+        yaw = _number(body, "yaw")
+        seconds = _number(body, "seconds", DEFAULT_PULSE_S)
+        teleop = self._ctx.teleop
+        self._call(lambda: teleop.pulse(fwd, lat, yaw, seconds))
+        return json_response({"ok": True})
+
+    def _teleop_beat(self, _req: Request) -> Response:
+        """续命。同步的 —— 它只是记一个时间戳,没必要过桥。"""
+        self._ctx.teleop.heartbeat()
+        return json_response({"ok": True})
+
+    def _estop(self, _req: Request) -> Response:
+        """红按钮:停遥控,并打断正在跑的任务。"""
+        teleop = self._ctx.teleop
+        self._call(lambda: teleop.emergency_stop("页面按了急停"))
+        return json_response({"ok": True})
+
+    def _call(self, factory: Callable[[], Any], timeout_s: float = 10.0) -> Any:
+        """过桥,并且把业务异常翻成 HTTP 状态。
+
+        翻译只在这一处:业务层抛的是它自己的词(``TeleopBusy``、
+        ``EngineBusy``),不该为了 HTTP 去背状态码。
+        """
+        try:
+            return self._ctx.bridge.call(factory, timeout_s=timeout_s)
+        except ValueError as exc:
+            raise HttpError(400, "参数不对", str(exc)) from exc
+        except (TeleopBusy, EngineBusy) as exc:
+            raise HttpError(409, "现在做不了这件事", str(exc)) from exc
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raise HttpError(504, "后端没在规定时间内回话", str(exc)) from exc
 
     def _static(self, rel: str) -> Response:
         """取 static 目录下的文件。
@@ -636,6 +698,10 @@ async def _make_engine(nav: NavBackend, device: DeviceBackend,
     return MissionEngine(nav, device, {}, runs_root)
 
 
+async def _make_teleop(device: DeviceBackend, engine: MissionEngine) -> Teleop:
+    return Teleop(device, engine)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """``d1max-app`` 的入口。
 
@@ -665,9 +731,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     maps = MapBridgeClient(map_host, map_port)
     procs = ProcManager(log_dir)
     engine = bridge.call(lambda: _make_engine(nav, device, runs_root))
+    # 遥控要在循环线程里造:它一上来就往引擎上挂检查,还会起后台看门狗。
+    teleop = bridge.call(lambda: _make_teleop(device, engine))
 
     ctx = AppContext(bridge=bridge, engine=engine, nav=nav, device=device,
-                     maps=maps, procs=procs,
+                     maps=maps, procs=procs, teleop=teleop,
                      missions_dir=Path(args.missions_dir), runs_root=runs_root)
     server = AppServer(ctx, host=args.host, port=args.port)
     server.start()
@@ -687,6 +755,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("\n收到 Ctrl+C,收尾中……")
     finally:
         server.stop()
+        with contextlib.suppress(Exception):
+            bridge.call(teleop.aclose, timeout_s=5.0)
         for closer in (maps.close, nav.close, device.close):
             with contextlib.suppress(Exception):
                 bridge.call(closer, timeout_s=5.0)

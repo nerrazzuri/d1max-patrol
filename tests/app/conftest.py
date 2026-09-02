@@ -22,6 +22,7 @@ import pytest
 from d1max_patrol.app.bridge import LoopBridge
 from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.server import AppContext, AppServer
+from d1max_patrol.app.teleop import Teleop
 from d1max_patrol.backends.base import EventEmitter
 from d1max_patrol.engine.machine import MissionEngine
 
@@ -58,15 +59,31 @@ class FakeNav(EventEmitter):
 
 
 class FakeDevice(EventEmitter):
-    """假设备后端。"""
+    """假设备后端。``estop`` 直接改;``walk_calls`` 记下每一拍。
+
+    ``stop_calls`` 单独数"四个轴全零"的那种调用 —— 停车在这台机器上就是
+    一次零控制量的 ``walk``,没有单独的 stop 接口。
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.link = True
+        self.estop = False
+        self.walk_calls: list[tuple[float, float, float, float]] = []
+        self.stop_calls = 0
 
     @property
     def connected(self) -> bool:
         return self.link
+
+    async def emergency(self) -> bool:
+        return self.estop
+
+    async def walk(self, seconds: float, forward: float,
+                   lateral: float = 0.0, yaw: float = 0.0) -> None:
+        self.walk_calls.append((seconds, forward, lateral, yaw))
+        if (forward, lateral, yaw) == (0.0, 0.0, 0.0):
+            self.stop_calls += 1
 
 
 class FakeMaps:
@@ -92,13 +109,18 @@ def bridge():
     b.stop()
 
 
+async def _make_teleop(device, engine) -> Teleop:
+    return Teleop(device, engine)
+
+
 @pytest.fixture
 def ctx(bridge, tmp_path) -> AppContext:
     nav, device = FakeNav(), FakeDevice()
     engine = bridge.call(lambda: _make_engine(nav, device, tmp_path / "runs"))
+    teleop = bridge.call(lambda: _make_teleop(device, engine))
     return AppContext(
         bridge=bridge, engine=engine, nav=nav, device=device,
-        maps=FakeMaps(), procs=ProcManager(tmp_path / "logs"),
+        maps=FakeMaps(), procs=ProcManager(tmp_path / "logs"), teleop=teleop,
         missions_dir=tmp_path / "missions", runs_root=tmp_path / "runs")
 
 
@@ -168,3 +190,8 @@ def sse(server: AppServer, path: str = "/api/events", timeout: float = 5.0):
         yield frames()
     finally:
         resp.close()
+
+
+def post(server: AppServer, path: str, payload=None) -> int:
+    """打一个 POST,只要状态码。遥控那几个接口测的就是"收不收"。"""
+    return request(server, path, method="POST", payload=payload or {})[0]
