@@ -24,6 +24,8 @@ slam_toolbox、跑回环,这些都比实时慢。现场的做法是先录一段 
 
 from __future__ import annotations
 
+import json
+import math
 import re
 import tempfile
 from dataclasses import dataclass, field
@@ -48,6 +50,10 @@ REBUILD_TIMEOUT_S = 3600.0
 
 #: 存图两步各自最多多久。
 _SAVE_TIMEOUT_S = 120.0
+
+#: 发一条初始位姿最多等多久。``ros2 topic pub --once`` 发完自己就退了,
+#: 给的时间够它把 ROS 上下文起起来即可。
+_INITPOSE_TIMEOUT_S = 30.0
 
 
 class MappingError(RuntimeError):
@@ -83,6 +89,8 @@ class MappingConfig:
     #: 根治就是把这个设成 3.14159 重建一次。默认留着文档里的 0 ——
     #: 改这里等于改文档 §2,两处要一起改。
     lidar_yaw: float = 0.0
+    #: 定位地图的坐标系名。发 ``/initialpose`` 时要填,逐字照抄文档 §4。
+    loc_frame: str = "loc_map"
 
 
 class MappingOrchestrator:
@@ -99,6 +107,7 @@ class MappingOrchestrator:
     BAGPLAY = "bagplay"
     MAP_SAVER = "map_saver"
     SERIALIZE = "serialize"
+    INITPOSE = "initialpose"
 
     def __init__(self, procs: ProcManager, cfg: MappingConfig) -> None:
         self._procs = procs
@@ -214,6 +223,55 @@ class MappingOrchestrator:
                 await self._procs.stop(name)
             self._phase = "idle"
         return self._cfg.maps_dir / map_id
+
+    # -------------------------------------------------------------- 初始位姿
+
+    async def publish_initial_pose(self, x: float, y: float,
+                                   yaw: float = 0.0) -> None:
+        """告诉定位"狗现在大概在这儿"。文档 §4 的最后一条命令。
+
+        机器不在图原点上开机时,slam_toolbox 的定位模式要有人给一个初始猜测
+        才收敛得回来。这件事**只能由人在看板上点** —— 自己猜一个位置的代价
+        是真的撞上去(同 ``LocalNavBackend.reset_localization`` 的理由)。
+
+        录包和重建期间不许发:那两个阶段要么正在实时域上录、要么整个跑在隔离
+        域里,这一条发出去只会搅乱正在进行的事。
+        """
+        self._require_idle("发初始位姿")
+        await self._start(self.spec_for_initial_pose(x, y, yaw))
+        try:
+            await self._wait(self.INITPOSE, _INITPOSE_TIMEOUT_S)
+        finally:
+            # 超时的那条路上进程还挂着。不收掉的话,下次再发会撞名字,
+            # 而现场只会看到"发不出去",看不出是被上一次卡住的。
+            await self._procs.stop(self.INITPOSE)
+
+    def spec_for_initial_pose(self, x: float, y: float, yaw: float) -> ProcSpec:
+        """文档 §4 最后那条 ``ros2 topic pub``。走**实时域** —— 定位跑在那儿。
+
+        消息体用 ``json.dumps`` 生成,不手写那串花括号:JSON 是 YAML 的子集,
+        ``ros2 topic pub`` 照收,而手拼一层套一层的映射是这类命令唯一真正会
+        写错的地方 —— 少一个花括号,报的错和位姿一点关系都没有。
+
+        朝向要写成四元数:绕 Z 轴转 ``yaw`` 就是
+        ``z = sin(yaw/2), w = cos(yaw/2)``。``w`` 必须写出来,默认值 0 是一个
+        非法姿态,发下去定位会当场炸。
+        """
+        message = json.dumps({
+            "header": {"frame_id": self._cfg.loc_frame},
+            "pose": {"pose": {
+                "position": {"x": x, "y": y, "z": 0.0},
+                "orientation": {"z": math.sin(yaw / 2.0),
+                                "w": math.cos(yaw / 2.0)},
+            }},
+        })
+        return ProcSpec(
+            name=self.INITPOSE,
+            argv=("ros2", "topic", "pub", "--once", "/initialpose",
+                  "geometry_msgs/msg/PoseWithCovarianceStamped", message),
+            env=self._live_env(),
+            ready_pattern="",       # 发一条就退,没有"起来了"这回事
+        )
 
     async def snapshot(self) -> dict[str, object]:
         """给 HTTP 用的状态。做成协程是为了走线程桥,和别的读法保持一致。"""

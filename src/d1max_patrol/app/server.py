@@ -60,10 +60,27 @@ from d1max_patrol.backends.base import (
     LocStatusEvent,
     MappingStatusEvent,
     NavBackend,
+    NavBackendError,
+    NavRequestError,
     NavStatusEvent,
 )
 from d1max_patrol.backends.map_bridge import MapBridgeClient
+from d1max_patrol.engine.archive import (
+    list_runs,
+    read_events,
+    read_manifest,
+    read_state,
+)
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine
+from d1max_patrol.engine.mission import (
+    Mission,
+    MissionError,
+    load_mission,
+    parse_mission,
+    save_mission,
+)
+from d1max_patrol.engine.preflight import PreflightReport, run_preflight
+from d1max_patrol.inspect.report import write_reports
 
 #: 静态文件目录。模块导入时就 resolve,后面判越界拿它当基准。
 STATIC_DIR = (Path(__file__).resolve().parent / "static").resolve()
@@ -85,6 +102,14 @@ LOG_TAIL_BYTES = 64 * 1024
 
 #: 进程名允许的形状。它要拼进文件名,松一点就是一条路径穿越。
 _PROC_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+#: 会被拼进路径的 id 里许可的字符:字母、数字、下划线、横杠、点,加中文。
+#: 现场的任务名和图名就是中文("1号配电室"),不放行等于逼人改用拼音。
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_\-.一-鿿]+$")
+
+#: 运行 id 里"任务名"和"时间戳"之间的分隔。归档目录是两层
+#: (``runs/<任务名>/<时间戳>``),而 URL 的一段里放不下斜杠。
+RUN_SEP = "__"
 
 
 # ------------------------------------------------------------------ 请求与响应
@@ -179,6 +204,38 @@ def _text(body: Any, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise HttpError(400, f"{name} 得是一个非空字符串", repr(value))
     return value.strip()
+
+
+def _safe_id(value: str, what: str) -> str:
+    """把一个要拼进路径的 id 验一遍。
+
+    白名单,不是黑名单。放行中文之后,"查一遍 ``..`` 和斜杠"这种做法就更靠不
+    住了 —— 编码方式太多(``%2e%2e``、``....//``、全角点),补不完。只认列出来
+    的那几类字符,别的一律不要。
+
+    ``..`` 单独再挡一道:它每个字符都在白名单里,但拼出来就是往上一层走。
+    """
+    value = value.strip()
+    if not value or ".." in value or not _SAFE_ID.match(value):
+        raise HttpError(400, f"{what}不合法",
+                        "只能用字母、数字、下划线、横杠、点和中文,"
+                        f"给的是 {value!r}")
+    return value
+
+
+def _checks_wire(report: PreflightReport) -> list[dict[str, Any]]:
+    """起飞检查的结论,原样给页面。
+
+    只给"过没过"是不够的:人站在狗旁边,要知道的是**哪一项**没过、当时是
+    什么状态 —— 不然只能一项项自己试。
+    """
+    return [{"name": c.name, "ok": c.ok, "detail": c.detail}
+            for c in report.checks]
+
+
+def _run_id(run_dir: Path) -> str:
+    """归档目录 -> URL 里的运行 id。见 :data:`RUN_SEP`。"""
+    return f"{run_dir.parent.name}{RUN_SEP}{run_dir.name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -469,6 +526,21 @@ class AppServer:
         self.route("POST", "/api/mapping/record/stop", self._record_stop)
         self.route("POST", "/api/mapping/rebuild", self._rebuild)
         self.route("GET", "/api/procs/<name>/log", self._proc_log)
+        self.route("GET", "/api/missions", self._missions)
+        self.route("GET", "/api/missions/<mid>", self._mission_get)
+        self.route("PUT", "/api/missions/<mid>", self._mission_put)
+        self.route("POST", "/api/missions/<mid>/run", self._mission_run)
+        self.route("POST", "/api/run/pause", self._run_pause)
+        self.route("POST", "/api/run/resume", self._run_resume)
+        self.route("POST", "/api/run/abort", self._run_abort)
+        self.route("GET", "/api/maps", self._maps)
+        self.route("POST", "/api/maps/load", self._map_load)
+        self.route("POST", "/api/pose/initial", self._pose_initial)
+        self.route("POST", "/api/pose/reset", self._pose_reset)
+        self.route("GET", "/api/runs", self._runs)
+        self.route("GET", "/api/runs/<run_id>", self._run_detail)
+        self.route("GET", "/api/runs/<run_id>/photos/<name>", self._run_photo)
+        self.route("GET", "/api/runs/<run_id>/report.<fmt>", self._run_report)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes) -> Response | Stream:
@@ -616,6 +688,242 @@ class AppServer:
         return Response(200, raw.decode("utf-8", errors="replace").encode("utf-8"),
                         "text/plain; charset=utf-8")
 
+    # ---------------------------------------------------------------- 任务
+
+    def _mission_path(self, mid: str) -> Path:
+        return self._ctx.missions_dir / f"{_safe_id(mid, '任务名')}.yaml"
+
+    def _load_mission(self, mid: str) -> Mission:
+        """按 id 读一份任务。读不出来的原因原样往上抛。
+
+        文件坏了给的是 400 不是 500:任务文件是**人手写的**(不引数据库的全部
+        理由就是这个),而"缺少 map_id"这种话得原样出现在页面上,包在一个
+        "服务器内部错误"里没人查得动。
+        """
+        path = self._mission_path(mid)
+        if not path.is_file():
+            raise HttpError(404, f"没有这个任务:{path.stem}",
+                            f"任务放在 {self._ctx.missions_dir}")
+        try:
+            return load_mission(path)
+        except MissionError as exc:
+            raise HttpError(400, f"任务定义不合法:{exc}", str(path)) from exc
+
+    def _missions(self, _req: Request) -> Response:
+        """任务列表。只给 id —— 详情一份份取,列表页不需要全文。"""
+        root = self._ctx.missions_dir
+        names = sorted(p.stem for p in root.glob("*.yaml")) if root.is_dir() else []
+        return json_response({"missions": names})
+
+    def _mission_get(self, req: Request) -> Response:
+        return json_response(self._load_mission(req.params["mid"]).to_wire())
+
+    def _mission_put(self, req: Request) -> Response:
+        """存一份任务。**先验后写**。
+
+        验不过的任务一个字节都不落盘:页面上编到一半点了保存,写进去的半成品
+        会在下一次"起任务"时才炸,而那时人已经在外面等着了。
+        """
+        mid = _safe_id(req.params["mid"], "任务名")
+        raw = req.json()
+        if not isinstance(raw, dict):
+            raise HttpError(400, "任务定义得是一个对象", type(raw).__name__)
+        raw = dict(raw)
+        # 文件名就是任务名。对不上就直说 —— 悄悄以哪一个为准都会让人找不到
+        # 自己刚存的东西(照片按任务名归档,文件按 id 存)。
+        name = raw.setdefault("mission", mid)
+        if name != mid:
+            raise HttpError(400, "任务名和文件名对不上",
+                            f"路径里是 {mid},定义里是 {name!r}")
+        try:
+            mission = parse_mission(raw)
+        except MissionError as exc:
+            raise HttpError(400, f"任务定义不合法:{exc}") from exc
+        save_mission(mission, self._ctx.missions_dir / f"{mid}.yaml")
+        return json_response(mission.to_wire())
+
+    def _mission_run(self, req: Request) -> Response:
+        """起一趟巡检。**起飞检查没过就不起**,并且把没过的项原样交给页面。
+
+        检查结果连成功的一次也带回去:人在现场要的是"这五项现在都什么样",
+        不是一个"好了"。
+        """
+        mission = self._load_mission(req.params["mid"])
+        ctx = self._ctx
+        report = self._call(
+            lambda: run_preflight(ctx.nav, ctx.device, mission, ctx.runs_root),
+            timeout_s=30.0)
+        checks = _checks_wire(report)
+        if not report.ok:
+            return json_response({
+                "error": "起飞检查没过",
+                "detail": ";".join(f"{c.name}: {c.detail}"
+                                    for c in report.failures),
+                "checks": checks,
+            }, status=409)
+        self._call(lambda: ctx.engine.start(mission), timeout_s=30.0)
+        return json_response({"run": ctx.engine.snapshot.to_wire(),
+                              "checks": checks})
+
+    # ---------------------------------------------------------------- 运行
+
+    def _run_pause(self, _req: Request) -> Response:
+        return self._run_cmd(self._ctx.engine.pause)
+
+    def _run_resume(self, _req: Request) -> Response:
+        return self._run_cmd(self._ctx.engine.resume)
+
+    def _run_abort(self, req: Request) -> Response:
+        body = req.json()
+        raw = body.get("reason", "") if isinstance(body, dict) else ""
+        reason = raw.strip() if isinstance(raw, str) and raw.strip() else "页面上点了中止"
+        return self._run_cmd(lambda: self._ctx.engine.abort(reason))
+
+    def _run_cmd(self, factory: Callable[[], Any]) -> Response:
+        """暂停 / 继续 / 中止 共用的一段。
+
+        没任务在跑就是 409,不是静默成功:页面上点了"暂停"却什么都没发生,
+        人会以为已经停了。
+        """
+        if not self._ctx.engine.running:
+            raise HttpError(409, "现在没有任务在跑")
+        self._call(factory)
+        return json_response(self._ctx.engine.snapshot.to_wire())
+
+    # ---------------------------------------------------------------- 地图
+
+    def _maps(self, _req: Request) -> Response:
+        """地图列表,**带着当前后端的能力集**。
+
+        "建图"、"改名"、"重定位"这几个按钮该不该能点,取决于接的是哪条路线的
+        后端(厂商导航 / 自建导航),不该由页面自己猜。
+        """
+        nav = self._ctx.nav
+        maps = self._call(nav.list_maps, timeout_s=15.0)
+        return json_response({"maps": list(maps),
+                              "caps": sorted(nav.capabilities)})
+
+    def _map_load(self, req: Request) -> Response:
+        map_id = _safe_id(_text(req.json(), "map_id"), "图名")
+        self._call(lambda: self._ctx.nav.load_map(map_id), timeout_s=60.0)
+        return json_response({"map_id": map_id})
+
+    def _pose_initial(self, req: Request) -> Response:
+        """给定位一个初始猜测。见 ``docs/建图定位与巡检管线.md`` §4。
+
+        这是**自建路线**的重定位方式:往 ``/initialpose`` 发一条位姿。厂商
+        路线上等价的动作是 :meth:`_pose_reset`。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体得是一个对象", type(body).__name__)
+        x, y, yaw = (_number(body, "x"), _number(body, "y"),
+                     _number(body, "yaw"))
+        mapping = self._ctx.mapping
+        self._call(lambda: mapping.publish_initial_pose(x, y, yaw),
+                   timeout_s=60.0)
+        return json_response({"x": x, "y": y, "yaw": yaw})
+
+    def _pose_reset(self, _req: Request) -> Response:
+        """让后端自己重定位。**能力集里没有就当场拒**。
+
+        没有这个能力还照调不误,后端只会抛一个它自己的错,页面上看到的是
+        "设备拒绝了"——像是机器出了问题,其实是这条路线本来就没有这个动作。
+        """
+        nav = self._ctx.nav
+        if "reloc" not in nav.capabilities:
+            raise HttpError(409, "这条路线的后端不支持自动重定位",
+                            "自建导航要人给一个初始位姿:POST /api/pose/initial")
+        self._call(nav.reset_localization, timeout_s=60.0)
+        return json_response({"ok": True})
+
+    # ---------------------------------------------------------------- 归档
+
+    def _run_dir(self, run_id: str) -> Path:
+        """URL 里的运行 id -> 归档目录。
+
+        换回去不是拼路径,是在 ``list_runs`` 列出来的目录里**找**:候选全部来
+        自文件系统本身,所以拼不出一条通往目录外的路,任务名里有什么字符都
+        不影响。
+        """
+        run_id = _safe_id(run_id, "运行 id")
+        for run in list_runs(self._ctx.runs_root):
+            if _run_id(run) == run_id:
+                return run
+        raise HttpError(404, f"没有这次运行:{run_id}")
+
+    def _runs(self, _req: Request) -> Response:
+        """历史运行,**新的在前**(``list_runs`` 按时间戳倒序)。
+
+        只给列表要的那几项。事件流和照片名去 ``/api/runs/<id>`` 取 —— 几十次
+        运行的事件全塞进列表响应,页面第一屏就要等好几秒。
+        """
+        out = []
+        for run in list_runs(self._ctx.runs_root):
+            manifest = read_manifest(run) or {}
+            summary = manifest.get("summary") or {}
+            out.append({
+                "id": _run_id(run),
+                "mission": run.parent.name,
+                "started_at": manifest.get("started_at", run.name),
+                "state": summary.get("state", ""),
+                "succeeded": summary.get("succeeded", 0),
+                "failed": summary.get("failed", 0),
+                "total": summary.get("total", 0),
+            })
+        return json_response({"runs": out})
+
+    def _run_detail(self, req: Request) -> Response:
+        run = self._run_dir(req.params["run_id"])
+        return json_response({
+            "id": _run_id(run),
+            "manifest": read_manifest(run),
+            "state": read_state(run),
+            "events": read_events(run),
+            "photos": sorted(p.name for p in (run / "photos").glob("*.jpg")),
+        })
+
+    def _run_photo(self, req: Request) -> Response:
+        """取一张照片。
+
+        判越界和 :meth:`_static` 一样:``resolve()`` 之后看它在不在 photos 里。
+        照片名是**点位名拼出来的**,而点位名是人写的中文,过 ``_safe_id`` 会把
+        带空格的点位名连带挡掉 —— 所以这里只挡 ``..``,越界交给路径解析判。
+        """
+        run = self._run_dir(req.params["run_id"])
+        name = req.params["name"]
+        if ".." in name:
+            raise HttpError(400, "照片名不合法", name)
+        photos = (run / "photos").resolve()
+        try:
+            target = (photos / name).resolve()
+        except OSError as exc:      # 路径里有非法字符时 Windows 会抛
+            raise HttpError(400, "照片名不合法", str(exc)) from exc
+        if not target.is_relative_to(photos) or not target.is_file():
+            raise HttpError(404, f"没有这张照片:{name}")
+        ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        return Response(200, target.read_bytes(), ctype)
+
+    def _run_report(self, req: Request) -> Response:
+        """报告。**没生成过就当场生成一份**。
+
+        报告本来是运行结束时顺手写的,但"跑到一半被强杀"和"目录是从别的机器
+        拷过来的"都会留下没有报告的归档 —— 而人来翻报告的时候,十有八九就是
+        这两种情况。
+        """
+        run = self._run_dir(req.params["run_id"])
+        fmt = req.params["fmt"]
+        if fmt not in ("md", "html"):
+            raise HttpError(404, f"报告只有 md 和 html 两种,不是 {fmt}")
+        path = run / f"report.{fmt}"
+        if not path.is_file():
+            try:
+                write_reports(run)
+            except (OSError, ValueError) as exc:
+                raise HttpError(500, "生成报告失败", str(exc)) from exc
+        ctype = ("text/markdown" if fmt == "md" else "text/html")
+        return Response(200, path.read_bytes(), f"{ctype}; charset=utf-8")
+
     def _call(self, factory: Callable[[], Any], timeout_s: float = 10.0) -> Any:
         """过桥,并且把业务异常翻成 HTTP 状态。
 
@@ -626,8 +934,12 @@ class AppServer:
             return self._ctx.bridge.call(factory, timeout_s=timeout_s)
         except ValueError as exc:
             raise HttpError(400, "参数不对", str(exc)) from exc
-        except (TeleopBusy, EngineBusy, MappingError) as exc:
+        except (TeleopBusy, EngineBusy, MappingError, NavRequestError) as exc:
             raise HttpError(409, "现在做不了这件事", str(exc)) from exc
+        except NavBackendError as exc:
+            # 连不上、超时:机器那边的事,不是这次请求的错。502 而不是 500 ——
+            # 500 会让人去翻 app 的日志,而该翻的是链路。
+            raise HttpError(502, "导航后端没答应", str(exc)) from exc
         except (TimeoutError, asyncio.TimeoutError) as exc:
             raise HttpError(504, "后端没在规定时间内回话", str(exc)) from exc
 

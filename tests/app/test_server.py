@@ -171,12 +171,16 @@ def test_请求体不是JSON给400(server):
 
 
 def test_路径参数不跨斜杠(server):
-    """``/api/runs/r1/photos/..%2F..%2Fx`` 解码之后带斜杠,于是根本匹配不上。"""
-    server.route("GET", "/api/runs/<run_id>/photos/<name>",
+    """``/api/probe/r1/photos/..%2F..%2Fx`` 解码之后带斜杠,于是根本匹配不上。
+
+    挂在 ``/api/probe`` 而不是 ``/api/runs`` 下:后者已经有真处理函数占着,
+    测的又是路由本身的性质,借哪一段路径都一样。
+    """
+    server.route("GET", "/api/probe/<run_id>/photos/<name>",
                  lambda req: json_response(dict(req.params)))
-    assert get_json(server, "/api/runs/r1/photos/a.jpg") == {
+    assert get_json(server, "/api/probe/r1/photos/a.jpg") == {
         "run_id": "r1", "name": "a.jpg"}
-    assert status(server, "/api/runs/r1/photos/..%2F..%2Fmanifest.json") == 404
+    assert status(server, "/api/probe/r1/photos/..%2F..%2Fmanifest.json") == 404
 
 
 def test_后面的模块能往上挂路由(server):
