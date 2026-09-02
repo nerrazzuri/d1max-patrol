@@ -54,10 +54,31 @@ async def test_初始没有地图(nav_backend):
     assert await nav_backend.list_maps() == []
 
 
-async def test_建图产出一张可用的地图(ready_backend):
+async def test_有图之后列得出来(ready_backend):
     backend, map_id = ready_backend
     assert map_id in await backend.list_maps()
+
+
+async def test_建图产出一张可用的地图(mapping_ready):
+    backend, map_id = mapping_ready
+    assert map_id in await backend.list_maps()
     assert await backend.mapping_status() is MappingStatus.MAPPING_SAVE_END
+
+
+async def test_不建图的后端必须明确拒绝建图(nav_backend, nav_caps):
+    """"不支持"和"悄悄什么也没干"必须区分得开。
+
+    自建路线的图来自 ROS 侧的 slam_toolbox,``start_mapping`` 无处下手。
+    如果它选择静默返回,上层会以为图正在建、然后一直等一张永远不会出现的图。
+    所以契约要求:做不到就抛 ``NavRequestError``。
+    """
+    if "mapping" in nav_caps:
+        pytest.skip("这个后端支持建图")
+    with pytest.raises(NavRequestError):
+        await nav_backend.start_mapping()
+    with pytest.raises(NavRequestError):
+        await nav_backend.stop_mapping()
+    assert await nav_backend.mapping_status() is None
 
 
 async def test_栅格地图形状合法(ready_backend):
@@ -69,17 +90,29 @@ async def test_栅格地图形状合法(ready_backend):
     assert len(grid["data"]) == info["width"] * info["height"]
 
 
-async def test_重命名后旧名字消失(ready_backend):
-    backend, map_id = ready_backend
-    await backend.rename_map(map_id, "契约图")
+async def test_重命名后旧名字消失(admin_ready):
+    backend, map_id = admin_ready
+    await backend.rename_map(map_id, "改过名的图")
     names = await backend.list_maps()
-    assert "契约图" in names and map_id not in names
+    assert "改过名的图" in names and map_id not in names
 
 
-async def test_删除地图(ready_backend):
-    backend, map_id = ready_backend
+async def test_删除地图(admin_ready):
+    backend, map_id = admin_ready
     await backend.remove_maps([map_id])
     assert await backend.list_maps() == []
+
+
+async def test_不管地图增删改的后端必须明确拒绝(ready_backend, nav_caps):
+    """自建路线的图是仓库里的文件,增删改交给 git,后端不该假装办到了。"""
+    if "map_admin" in nav_caps:
+        pytest.skip("这个后端能增删改地图")
+    backend, map_id = ready_backend
+    with pytest.raises(NavRequestError):
+        await backend.rename_map(map_id, "新名字")
+    with pytest.raises(NavRequestError):
+        await backend.remove_maps([map_id])
+    assert map_id in await backend.list_maps(), "拒绝之后地图必须原封不动"
 
 
 # --------------------------------------------------------------- 路径
@@ -119,8 +152,9 @@ async def test_加载地图后定位健康(ready_backend):
     assert await backend.loc_status() is LocStatus.CONTINUOUS_LOC
 
 
-async def test_定位与建图的状态变化也产生事件(nav_backend):
+async def test_定位与建图的状态变化也产生事件(mapping_backend):
     """契约不只保证导航事件:建图与定位的变化,订阅者同样收得到。"""
+    nav_backend = mapping_backend
     queue = nav_backend.subscribe()
 
     await nav_backend.start_mapping()
@@ -187,6 +221,15 @@ async def test_暂停与继续(ready_backend):
     await backend.resume()
     await _drain_until(queue, lambda e: isinstance(e, NavStatusEvent)
                        and e.status is NavStatus.SUCCEED)
+
+
+async def test_不支持重定位的后端必须明确拒绝(ready_backend, nav_caps):
+    """自建路线要人在看板上点 /initialpose —— 自动猜位置猜错了会真的撞上去。"""
+    if "reloc" in nav_caps:
+        pytest.skip("这个后端支持重定位")
+    backend, _ = ready_backend
+    with pytest.raises(NavRequestError):
+        await backend.reset_localization()
 
 
 async def test_未加载定位地图时导航被拒(nav_backend):

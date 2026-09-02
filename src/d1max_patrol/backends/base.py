@@ -379,6 +379,21 @@ class DeviceBackend(EventEmitter[DeviceEvent], ABC):
     async def lie(self) -> None: ...
 
     @abstractmethod
+    async def walk(self, seconds: float, forward: float,
+                   lateral: float = 0.0, yaw: float = 0.0) -> None:
+        """开环直驱行走,固定时长后自行停下。
+
+        本卷把它提到端口上,是因为自建导航(``LocalNavBackend``)整条路线都
+        踩在它上面 —— 那条路线没有厂商的规划器,"走到某个点"就是一串脉冲式
+        的 ``walk``。任何 DeviceBackend 实现少了它,乙路线就无从谈起。
+
+        量纲是**百分比**不是 m/s(清单 #37/#38),而且有不小的死区:
+        ``forward=0.11`` 几乎不动,``0.3~0.5`` 才真的走。上层选控制量时
+        必须避开死区 —— 这正是自建导航不接 Nav2 的原因(Nav2 末段会把速度
+        降到 0.05 量级,在这台机器上会被静默吞掉)。
+        """
+
+    @abstractmethod
     async def set_light(self, on: bool) -> None: ...
 
     @abstractmethod
