@@ -102,6 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("sim", help="起一台仿真设备")
     p.add_argument("--port", type=int, default=10010)
     p.add_argument("--seed", action="store_true")
+    p.add_argument("--full", action="store_true",
+                   help="导航之外再起旁路进程和建图桥 —— 彩排整个 app 用这个")
 
     return parser
 
@@ -176,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         sim_argv = ["--port", str(args.port)]
         if args.seed:
             sim_argv.append("--seed")
+        if args.full:
+            sim_argv.append("--full")
         return sim_main(sim_argv)
 
     try:
