@@ -132,6 +132,26 @@ def test_查询串token只挂在设不了请求头的那几处():
                    ("/api/events", "/api/video/", "/photos/", "/report.")), line
 
 
+def test_页面上看得见面前是哪只狗():
+    """多机之后"在错的狗上按了跑"是真会发生的。
+
+    每只 D1 Max 的内网地址都一样(都是 ``192.168.168.100``),光看网址分不出
+    来 —— 所以身份必须常驻在页面上,而不是藏在某个页签里点开才有。
+    """
+    assert 'id="whoami"' in _read("index.html")
+    assert '"/api/identity"' in _read("app.js")
+
+
+def test_兜底出来的sn在页面上有区分():
+    """厂商不报 SN,查不到时拿网卡 MAC 凑一个。
+
+    凑出来的和烧在机器上的可信度差得远,人得看得出区别,不然会拿它当长期
+    编号一直用下去 —— 换块网卡那天,归档就断成两截。
+    """
+    assert "provisional" in _read("app.js")
+    assert ".provisional" in _read("app.css")
+
+
 def test_js里取的每个id在html里都真有():
     """挡的是"加了个功能,忘了加对应的元素"。
 

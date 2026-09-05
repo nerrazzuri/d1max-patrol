@@ -48,6 +48,7 @@ from d1max_patrol.app.auth import (
 )
 from d1max_patrol.app.bridge import LoopBridge
 from d1max_patrol.app.gridmap import GridError, from_frame, load_saved
+from d1max_patrol.app.identity import NICKNAME_ENV, SN_ENV, Identity, resolve
 from d1max_patrol.app.mapping import (
     MappingConfig,
     MappingError,
@@ -355,6 +356,9 @@ class AppContext:
     #: 相机名 -> 那一路 RTSP 流。没配的相机在页面上是一句"没配地址",
     #: 而不是一个转不出来的图标。
     video: Mapping[str, MjpegSource] = field(default_factory=dict)
+    #: 这是哪只狗。手机按它认机器、给归档分组 —— 每只 D1 Max 的内网地址
+    #: 都一样,靠地址分不出谁是谁(见 ``app/identity.py``)。
+    identity: Identity = field(default_factory=resolve)
 
 
 # ------------------------------------------------------------------ 状态汇总
@@ -615,6 +619,7 @@ class AppServer:
     def _register_routes(self) -> None:
         self.route("GET", "/", self._index)
         self.route("POST", AUTH_PATH, self._auth_unlock)
+        self.route("GET", "/api/identity", self._identity)
         self.route("GET", "/api/state", self._state)
         self.route("GET", "/api/events", self._events)
         self.route("POST", "/api/teleop", self._teleop)
@@ -692,6 +697,15 @@ class AppServer:
         except Denied as exc:
             raise HttpError(exc.status, exc.error, exc.detail) from None
         return json_response({"token": token})
+
+    def _identity(self, _req: Request) -> Response:
+        """这是哪只狗。手机拿它认机器、给拉回去的归档分组。
+
+        **放在 PIN 后面。** 认狗这件事手机用热点的 BSSID 就够了 —— 连上之前
+        就看得见,不用问服务端。既然如此,没必要让射程之内任何人白拿到机身
+        序列号和一串网卡地址。
+        """
+        return json_response(self._ctx.identity.to_wire())
 
     def _state(self, _req: Request) -> Response:
         return json_response(self._hub.snapshot)
@@ -1340,6 +1354,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="推 RTSP 的那台机器。前后广角是 8554/{front,back}")
     p.add_argument("--ffmpeg", default="ffmpeg",
                    help="ffmpeg 可执行文件。板载装的不在 PATH 里时用它指过去")
+    p.add_argument("--sn", default=os.environ.get(SN_ENV),
+                   help=f"这只狗的机身序列号。厂商接口不报这个字段,查不到的"
+                        f"时候就靠这里人填(也可以用环境变量 {SN_ENV})")
+    p.add_argument("--nickname", default=os.environ.get(NICKNAME_ENV),
+                   help=f"给这只狗起的名,现场喊着方便(环境变量 {NICKNAME_ENV})")
     p.add_argument("--missions-dir", default="missions")
     p.add_argument("--runs-root", default="runs")
     p.add_argument("--log-dir", help="子进程日志目录(默认 <runs-root>/logs)")
@@ -1355,9 +1374,18 @@ def _hostport(text: str, what: str) -> tuple[str, int]:
 
 async def _make_engine(nav: NavBackend, device: DeviceBackend,
                        media: Mapping[str, MediaSource],
-                       runs_root: Path) -> MissionEngine:
-    """在循环线程里造引擎 —— 它内部那个队列要绑在这条循环上。"""
-    return MissionEngine(nav, device, media, runs_root)
+                       runs_root: Path,
+                       fingerprint: Mapping[str, str] | None = None,
+                       ) -> MissionEngine:
+    """在循环线程里造引擎 —— 它内部那个队列要绑在这条循环上。
+
+    指纹里带着机身身份,这样每次运行的 ``manifest.json`` 自己就写明了是哪只
+    狗跑的。**归档目录不按机器分层**:一台狗上只会有它自己的数据,多那一层
+    下面永远只有一个兄弟;日后真要把几只狗的归档倒到一处,认的也是这个字段,
+    不是目录名。
+    """
+    return MissionEngine(nav, device, media, runs_root,
+                         fingerprint=dict(fingerprint or {}))
 
 
 async def _make_teleop(device: DeviceBackend, engine: MissionEngine) -> Teleop:
@@ -1427,7 +1455,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         name: RtspStill(f"rtsp://{args.camera_host}:8554/{name}",
                         ffmpeg=args.ffmpeg)
         for name in CAMERAS}
-    engine = bridge.call(lambda: _make_engine(nav, device, photo, runs_root))
+    who = resolve(args.sn, args.nickname)
+    engine = bridge.call(
+        lambda: _make_engine(nav, device, photo, runs_root, who.fingerprint()))
     # 遥控要在循环线程里造:它一上来就往引擎上挂检查,还会起后台看门狗。
     teleop = bridge.call(lambda: _make_teleop(device, engine))
 
@@ -1443,7 +1473,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ctx = AppContext(bridge=bridge, engine=engine, nav=nav, device=device,
                      maps=maps, procs=procs, teleop=teleop, mapping=mapping,
                      missions_dir=Path(args.missions_dir), runs_root=runs_root,
-                     video=video)
+                     video=video, identity=who)
     server = AppServer(ctx, host=args.host, port=args.port, pin=args.pin)
     server.start()
     print(f"app 起来了:{server.url}")

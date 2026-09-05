@@ -78,6 +78,22 @@ run "L4T / JetPack 版本" "cat /etc/nv_tegra_release 2>/dev/null; dpkg -l 2>/de
 run "厂商版本文件"      "cat /opt/release/version.yaml 2>/dev/null"
 run "开机多久了"        "uptime"
 
+# 多机管理按 SN 走,不按 IP —— 每只 D1 Max 的内网地址都是同一套
+# (Orin 192.168.168.100 / RK3588 192.168.168.168),靠地址分不出谁是谁。
+# 问题是 SN 从哪儿读:厂商 SDK 指南和导航 API 里都没有这个字段,所以只能
+# 现场把所有候选来源一次性摊开看。**这一段带回来的答案决定注册表怎么建。**
+run "机身序列号候选"    "for f in /proc/device-tree/serial-number                               /sys/firmware/devicetree/base/serial-number                               /sys/devices/virtual/dmi/id/product_serial                               /sys/devices/virtual/dmi/id/board_serial; do                            [ -r \"\$f\" ] && printf '%s = %s\n' \"\$f\" \"\$(tr -d '\000' < \"\$f\")\";                          done; echo '(空=这台上一个都读不到)'"
+# machine-id 单独列,而且**不要拿它当 SN**:刷机 / OTA 会重新生成,而厂商
+# 明说过 OTA 可能把我们部署的东西一起抹掉。它只配当"这次安装"的标记。
+run "machine-id(刷机会变)" "cat /etc/machine-id 2>/dev/null; cat /var/lib/dbus/machine-id 2>/dev/null"
+run "厂商目录里有什么"   "ls -la /opt/release/ 2>/dev/null; grep -rniE 'serial|sn|uuid|id' /opt/release/ 2>/dev/null | head -10"
+# MAC 一并记:它是唯一一个"一定读得到"的机身标识,SN 万一哪儿都读不到,
+# 至少还有它兜底;而且手机连热点时看得见 BSSID,不用登录就能认出是哪只狗。
+run "全部网卡 MAC"      "ip -br link 2>/dev/null || for n in /sys/class/net/*; do                            printf '%s %s\n' \"\$(basename \$n)\" \"\$(cat \$n/address 2>/dev/null)\"; done"
+# 真正的机身编号八成在 RK3588 上(热点名 XG2WIFI_C40221 的后缀就是它),
+# 而 RK3588 从 Orin 这边够得到。够不到也不算失败,只是这条留空。
+run "RK3588 那边的热点名" "timeout 5 curl -sS -m 4 http://192.168.168.168:8081/ 2>&1 | head -3;                           echo '(要 SSID 的话得 ssh 上 RK3588 看 hostapd 配置,这脚本不替你登)'"
+
 # ------------------------------------------------------------------ 磁盘
 # 录包是 GB 级的。这一段如果不够，建图就只能留在笔记本上，产品形态要改。
 sect "2. 磁盘（决定建图能不能在狗上做）"

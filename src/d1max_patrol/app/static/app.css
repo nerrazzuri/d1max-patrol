@@ -258,6 +258,16 @@ td input { width: 100%; }
 
 /* 盖住整个页面。z-index 要压得过急停按钮 —— 没解锁的时候那个按钮按下去
    只会得到一个 401，让它露在外面反而像是"按了没反应"。 */
+#whoami {
+  font-size: 12px;
+  color: #667;
+  padding: 2px 0 6px;
+  border-bottom: 1px solid #e3e3e8;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;   /* SN 可能很长，别把左栏撑宽 */
+}
+#whoami.provisional { color: #a56b00; }   /* 兜底出来的 SN，提醒去补一个真的 */
+
 #lock {
   position: fixed;
   inset: 0;

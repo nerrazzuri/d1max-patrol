@@ -800,6 +800,20 @@ on("judge", async () => {
   banner("判读完了。");
 });
 
+/* 面前是哪只狗。问一次就够 —— 身份是启动时定下的，不会中途变。
+ *
+ * 名字优先，没起名字才显示 SN：现场喊"三号"比念一串 C40221 快得多。
+ * 兜底出来的 SN（厂商没给这个字段，查不到时拿网卡 MAC 凑）标成橙色，
+ * 好让人知道该去补一个真的，而不是拿它当长期编号用下去。 */
+async function refreshWhoami() {
+  const who = await api("/api/identity");
+  const el = $("whoami");
+  el.textContent = who.nickname ? who.nickname + "（" + who.sn + "）" : who.sn;
+  el.title = "SN " + who.sn + " · 来源 " + who.source
+           + (who.macs.length ? " · MAC " + who.macs.join(" ") : "");
+  el.classList.toggle("provisional", !!who.provisional);
+}
+
 /* ------------------------------------------------------------------ 起步 */
 
 on("lock-go", unlock);
@@ -826,4 +840,5 @@ $("lock-pin").addEventListener("keydown", (ev) => {
   connect();
   guard(refreshMissions)();
   guard(refreshRuns)();
+  guard(refreshWhoami)();
 })();
