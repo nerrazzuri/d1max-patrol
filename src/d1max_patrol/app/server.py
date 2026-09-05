@@ -28,6 +28,7 @@ import asyncio
 import contextlib
 import json
 import mimetypes
+import os
 import re
 import sys
 import threading
@@ -39,6 +40,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from d1max_patrol.app.auth import (
+    AUTH_PATH,
+    Denied,
+    Guard,
+    normalize_pin,
+)
 from d1max_patrol.app.bridge import LoopBridge
 from d1max_patrol.app.gridmap import GridError, from_frame, load_saved
 from d1max_patrol.app.mapping import (
@@ -97,8 +104,12 @@ STATIC_DIR = (Path(__file__).resolve().parent / "static").resolve()
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8095
 
-#: 只听这些地址算"只给本机用"。别的地址一律警告。
+#: 只听这些地址算"只给本机用"。别的地址都必须配 PIN。
 _LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+#: 从环境变量里读 PIN。命令行上的 --pin 在 ``ps`` 里是明文可见的,同一台机器
+#: 上的别的账号能直接看到;板载常驻的时候用环境变量更合适。
+PIN_ENV = "D1MAX_PIN"
 
 #: 请求体上限。这些接口收的都是任务 JSON,几十 KB 顶天了。
 MAX_BODY = 4 * 1024 * 1024
@@ -154,6 +165,10 @@ class Request:
     params: Mapping[str, str]
     query: Mapping[str, str]
     body: bytes
+    #: 原始请求头,**键名已经归一成小写**(见 ``app/auth.py`` 的 ``bearer``)。
+    headers: Mapping[str, str] = field(default_factory=dict)
+    #: 请求从哪个 IP 来。PIN 试错限速按它记。
+    client: str = ""
 
     def json(self) -> Any:
         """请求体当 JSON 解。空体算空对象 —— 很多 POST 本来就没内容。"""
@@ -489,6 +504,28 @@ class _StateHub:
 # ------------------------------------------------------------------ 服务
 
 
+def check_exposure(host: str, pin: str | None) -> None:
+    """绑到局域网就必须有 PIN。不合规直接 ``SystemExit``。
+
+    **是拒绝启动,不是打条警告。** 警告没人看,而这一条看漏的后果是:狗热点的
+    密码是 12345678、还印在我们自己的手册里,射程之内任何人都能把机器开走,
+    也能把变电站里拍的照片整包拉走。
+
+    提成函数是为了让 ``main()`` 在连后端之前就能查一次 —— 不然要等到把线程桥
+    和三个后端都拉起来之后才报错,那时候看到的是一串莫名其妙的连接超时。
+    """
+    if host not in _LOCAL_HOSTS and not pin:
+        raise SystemExit(
+            f"拒绝启动:--host {host} 会把接口暴露到网络上,而这些接口能让机器"
+            f"狗走起来、能把现场照片整包拉走。加上 --pin(或设环境变量 "
+            f"{PIN_ENV})再来。只想自己本机用就别改 --host。")
+    if pin is not None:
+        try:
+            normalize_pin(pin)
+        except ValueError as exc:
+            raise SystemExit(f"--pin 不合规:{exc}") from None
+
+
 class _HTTPServer(ThreadingHTTPServer):
     #: 端口刚被上一次 app 释放时不至于起不来。
     allow_reuse_address = True
@@ -502,8 +539,10 @@ class AppServer:
     """HTTP 外壳。路由表由自己和后面几个模块一起填。"""
 
     def __init__(self, ctx: AppContext, *, host: str = DEFAULT_HOST,
-                 port: int = DEFAULT_PORT) -> None:
+                 port: int = DEFAULT_PORT, pin: str | None = None) -> None:
+        check_exposure(host, pin)
         self._ctx = ctx
+        self._auth = Guard(pin)
         self._host = host
         self._want_port = port
         self._httpd: _HTTPServer | None = None
@@ -522,8 +561,8 @@ class AppServer:
         self._httpd = _HTTPServer((self._host, self._want_port), _RequestHandler)
         self._httpd.app = self
         if self._host not in _LOCAL_HOSTS:
-            print(f"警告:app 正听在 {self._host},这些接口没有任何认证,"
-                  f"而且能让机器狗走起来。别把它暴露到公网或不受控的网段。")
+            print(f"app 正听在 {self._host}:{self.port},已启用 PIN。"
+                  f"这些接口能让机器狗走起来 —— 别把它暴露到公网。")
         self._ctx.bridge.call(self._hub.start)
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, name="d1max-http", daemon=True)
@@ -575,6 +614,7 @@ class AppServer:
 
     def _register_routes(self) -> None:
         self.route("GET", "/", self._index)
+        self.route("POST", AUTH_PATH, self._auth_unlock)
         self.route("GET", "/api/state", self._state)
         self.route("GET", "/api/events", self._events)
         self.route("POST", "/api/teleop", self._teleop)
@@ -606,8 +646,18 @@ class AppServer:
         self.route("POST", "/api/runs/<run_id>/review/<name>", self._run_review)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
-               body: bytes) -> Response | Stream:
-        """路由一个已经解码好的请求。找不到就抛 ``HttpError``。"""
+               body: bytes, headers: Mapping[str, str] | None = None,
+               client: str = "") -> Response | Stream:
+        """路由一个已经解码好的请求。找不到就抛 ``HttpError``。
+
+        **鉴权就在这一处。** 所有请求都从这儿过,放在这里不会漏 —— 而白名单
+        式的"给某几个接口加检查"迟早会漏掉新加的那个,偏偏新加的往往最危险。
+        """
+        headers = headers or {}
+        try:
+            self._auth.gate(method, path, headers, query)
+        except Denied as exc:
+            raise HttpError(exc.status, exc.error, exc.detail) from None
         if path.startswith("/static/"):
             return self._static(path[len("/static/"):])
         others: set[str] = set()
@@ -618,8 +668,9 @@ class AppServer:
             if route.method != method:
                 others.add(route.method)
                 continue
-            return route.handler(
-                Request(method, path, match.groupdict(), query, body))
+            return route.handler(Request(
+                method, path, match.groupdict(), query, body,
+                headers=headers, client=client))
         if others:
             raise HttpError(405, f"{path} 不支持 {method}",
                             "支持的方法:" + "、".join(sorted(others)))
@@ -630,6 +681,17 @@ class AppServer:
 
     def _index(self, _req: Request) -> Response:
         return self._static("index.html")
+
+    def _auth_unlock(self, req: Request) -> Response:
+        """PIN 换 token。**这是唯一一个不要 token 的 /api/ 接口。**"""
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体要是个对象", '形如 {"pin": "..."}')
+        try:
+            token = self._auth.unlock(body.get("pin"), req.client or "?")
+        except Denied as exc:
+            raise HttpError(exc.status, exc.error, exc.detail) from None
+        return json_response({"token": token})
 
     def _state(self, _req: Request) -> Response:
         return json_response(self._hub.snapshot)
@@ -1158,7 +1220,11 @@ class _RequestHandler(BaseHTTPRequestHandler):
         try:
             path = unquote(parsed.path)
             query = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
-            result = app.handle(method, path, query, self._read_body())
+            # 头名归一成小写:HTTP 头名大小写不敏感,而归一放在边界上做一次,
+            # 比让每个取值的地方各自"两种都试试"可靠。
+            headers = {k.lower(): v for k, v in self.headers.items()}
+            result = app.handle(method, path, query, self._read_body(),
+                                headers, self.client_address[0])
         except HttpError as exc:
             self._send(_error_response(exc))
             return
@@ -1252,7 +1318,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="d1max-app", description="D1 Max 巡检 app")
     p.add_argument("--host", default=DEFAULT_HOST,
-                   help="监听地址。默认只听本机 —— 换成别的会打印警告")
+                   help="监听地址。默认只听本机 —— 换成别的就必须给 --pin")
+    p.add_argument("--pin", default=os.environ.get(PIN_ENV),
+                   help=f"解锁用的 PIN,至少 4 位。也可以用环境变量 {PIN_ENV} "
+                        f"给(命令行上的 --pin 在 ps 里是明文的)")
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--nav", choices=("vendor", "local"), default="vendor",
                    help="导航后端:vendor=厂商导航(甲路线),local=自建(乙路线)")
@@ -1334,6 +1403,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     from d1max_patrol.config.models import NavConfig
 
     args = _build_parser().parse_args(argv)
+    # 先查这一条,再去连任何东西:不然要等三个后端都超时完才报错。
+    check_exposure(args.host, args.pin)
     runs_root = Path(args.runs_root)
     log_dir = Path(args.log_dir) if args.log_dir else runs_root / "logs"
     map_host, map_port = _hostport(args.map_bridge, "--map-bridge")
@@ -1373,7 +1444,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                      maps=maps, procs=procs, teleop=teleop, mapping=mapping,
                      missions_dir=Path(args.missions_dir), runs_root=runs_root,
                      video=video)
-    server = AppServer(ctx, host=args.host, port=args.port)
+    server = AppServer(ctx, host=args.host, port=args.port, pin=args.pin)
     server.start()
     print(f"app 起来了:{server.url}")
     for what, opener in (("导航", nav.connect), ("旁路进程", device.connect),

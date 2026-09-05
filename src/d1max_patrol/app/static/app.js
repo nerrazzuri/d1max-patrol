@@ -23,6 +23,39 @@
 const $ = (id) => document.getElementById(id);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+/* ------------------------------------------------------------------ 解锁 */
+
+/* token 存 sessionStorage：关掉标签页就没了。
+ *
+ * 不用 localStorage，是因为那会把"能开这条狗"这件事一直留在设备上。重输一次
+ * PIN 是五秒钟的事，换的是"手机借给别人看一眼"不等于把机器狗一起借出去。
+ *
+ * 每个访问都包 try：隐私模式下 sessionStorage 会直接抛，而那时候页面还得能用
+ * ——只是每次刷新要重输一次 PIN。 */
+const TOKEN_KEY = "d1max-token";
+
+function token() {
+  try { return sessionStorage.getItem(TOKEN_KEY) || ""; } catch (_) { return ""; }
+}
+
+function setToken(value) {
+  try {
+    if (value) sessionStorage.setItem(TOKEN_KEY, value);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch (_) { /* 存不下就存不下，这一次会话照样能用 */ }
+}
+
+/** 给浏览器原生加载的 URL 挂上 token。
+ *
+ * `<img>`、`<a href>` 和 `EventSource` 都没有"设请求头"的地方，只能走查询串。
+ * 服务端只在几条**只读 GET** 上认这个参数（见 `app/auth.py`），别处一律不认
+ * ——所以这个函数只该用在那几处，不要拿它去拼会改东西的请求。 */
+function withToken(url) {
+  const t = token();
+  if (!t) return url;
+  return url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(t);
+}
+
 /** 一次 API 调用。失败时把服务端那句人话原样抛出来。 */
 async function api(path, method = "GET", payload) {
   const opts = { method, headers: {} };
@@ -30,11 +63,17 @@ async function api(path, method = "GET", payload) {
     opts.headers["content-type"] = "application/json";
     opts.body = JSON.stringify(payload);
   }
+  // token 走请求头而不是 cookie：cookie 是浏览器自动附上的，别的网页里的
+  // 脚本一发请求就等于替你开狗。自定义头跨域要先过 CORS 预检，我们不放行。
+  const t = token();
+  if (t) opts.headers["authorization"] = "Bearer " + t;
   const resp = await fetch(path, opts);
   const text = await resp.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (_) { data = null; }
   if (!resp.ok) {
+    // 401 就是"这个 token 不作数了"。清掉再弹框，不然下一次点还是 401。
+    if (resp.status === 401) { setToken(""); showLock(); }
     const why = (data && (data.error || data.detail)) || text || resp.status;
     const err = new Error(why);
     err.status = resp.status;
@@ -42,6 +81,40 @@ async function api(path, method = "GET", payload) {
     throw err;
   }
   return data;
+}
+
+/** 亮出输 PIN 的那一层。 */
+function showLock(msg) {
+  $("lock").hidden = false;
+  $("lock-msg").textContent = msg || "";
+  $("lock-pin").focus();
+}
+
+/** PIN 换 token。换到了就整页重来 —— 这样 SSE、画面、报告链接全都带上新
+ *  token，比挨个去补要可靠得多，而且这个页面重来一次几乎不花时间。 */
+async function unlock() {
+  const pin = $("lock-pin").value.trim();
+  if (!pin) { $("lock-msg").textContent = "先输 PIN。"; return; }
+  let resp;
+  try {
+    resp = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pin: pin }),
+    });
+  } catch (err) {
+    $("lock-msg").textContent = "连不上：" + err.message;
+    return;
+  }
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    $("lock-msg").textContent = (data && (data.error || "")) + " " +
+                                (data && data.detail || "");
+    $("lock-pin").select();
+    return;
+  }
+  setToken(data.token);
+  location.reload();
 }
 
 /** 顶上那条红条。传空字符串收起来。 */
@@ -121,7 +194,7 @@ function render(snap) {
 }
 
 function connect() {
-  const src = new EventSource("/api/events");
+  const src = new EventSource(withToken("/api/events"));
   src.addEventListener("message", (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch (_) { return; }
@@ -302,7 +375,7 @@ on("grid-reload", loadGrid);
 $("cam-pick").addEventListener("change", () => {
   const name = $("cam-pick").value;
   // 空 src 会让浏览器去重新请求当前页面，反倒开一条没用的连接。
-  if (name) $("cam").src = "/api/video/" + name + "?t=" + Date.now();
+  if (name) $("cam").src = withToken("/api/video/" + name + "?t=" + Date.now());
   else $("cam").removeAttribute("src");
 });
 
@@ -445,7 +518,12 @@ function renderProcs(names) {
 
 on("log-reload", async () => {
   const name = $("log-pick").value;
-  const resp = await fetch("/api/procs/" + encodeURIComponent(name) + "/log");
+  // 这条给的是纯文本不是 JSON，走不了 api()，所以请求头要自己带。
+  // 它不在服务端 ?token= 的白名单里 —— 那个名单只给设不了请求头的标签。
+  const t = token();
+  const resp = await fetch("/api/procs/" + encodeURIComponent(name) + "/log",
+                           t ? { headers: { authorization: "Bearer " + t } } : {});
+  if (resp.status === 401) { setToken(""); showLock(); return; }
   $("log").textContent = await resp.text();
   $("log").scrollTop = $("log").scrollHeight;
 });
@@ -644,8 +722,8 @@ async function openRunDetail(id) {
   openRun = id;
   const got = await api("/api/runs/" + encodeURIComponent(id));
   const root = "/api/runs/" + encodeURIComponent(id);
-  $("report-md").href = root + "/report.md";
-  $("report-html").href = root + "/report.html";
+  $("report-md").href = withToken(root + "/report.md");
+  $("report-html").href = withToken(root + "/report.html");
   const byPhoto = {};
   (got.findings || []).forEach((f) => { byPhoto[f.photo] = f; });
   const box = $("photos");
@@ -662,7 +740,7 @@ function photoRow(root, name, finding, review) {
   row.className = "photo";
 
   const img = document.createElement("img");
-  img.src = root + "/photos/" + encodeURIComponent(name);
+  img.src = withToken(root + "/photos/" + encodeURIComponent(name));
   img.alt = name;
   row.appendChild(img);
 
@@ -724,8 +802,28 @@ on("judge", async () => {
 
 /* ------------------------------------------------------------------ 起步 */
 
-connect();
-showTab("mapping");
-guard(refreshMapping)();
-guard(refreshMissions)();
-guard(refreshRuns)();
+on("lock-go", unlock);
+$("lock-pin").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") unlock();
+});
+
+/* 第一个请求顺带就把"这台锁没锁"问出来了。
+ *
+ * 为什么不是靠 SSE 发现：`EventSource` 的 error 事件里没有状态码，401 和
+ * "网线掉了"在它那儿长得一模一样，而它还会自己每两秒重连一次 —— 页面会一直
+ * 空着，谁也不知道到底是要输 PIN 还是网断了。所以先打一个正常的请求。
+ *
+ * `refreshMapping` 不包 guard：guard 会把错误变成顶上一条红条，而 401 要的
+ * 不是红条，是输 PIN 那一层。 */
+(async () => {
+  showTab("mapping");
+  try {
+    await refreshMapping();
+  } catch (err) {
+    if (err.status === 401) return;      // api() 已经把输 PIN 那层亮出来了
+    banner(String(err.message || err));
+  }
+  connect();
+  guard(refreshMissions)();
+  guard(refreshRuns)();
+})();

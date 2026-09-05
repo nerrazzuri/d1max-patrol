@@ -291,8 +291,18 @@ def test_默认只听本地(server):
     assert server._httpd.server_address[0] == "127.0.0.1"
 
 
-def test_听0000会打印警告(ctx, capsys):
-    srv = AppServer(ctx, host="0.0.0.0", port=0)   # 测的就是这个地址
+def test_听0000没给pin就拒绝启动(ctx):
+    """从"打条警告"改成"起都不起"。
+
+    警告没人看,而这一条看漏的后果是:狗热点的密码是 12345678、还印在我们
+    自己的手册里,射程之内任何人都能把机器开走。
+    """
+    with pytest.raises(SystemExit, match="--pin"):
+        AppServer(ctx, host="0.0.0.0", port=0)
+
+
+def test_听0000给了pin能起来并说清在听哪儿(ctx, capsys):
+    srv = AppServer(ctx, host="0.0.0.0", port=0, pin="4321")
     try:
         srv.start()
         assert "公网" in capsys.readouterr().out

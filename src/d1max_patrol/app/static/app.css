@@ -253,3 +253,54 @@ td input { width: 100%; }
 .tag.abnormal { background: var(--bad); }
 .tag.unclear  { background: var(--warn); }
 .tag.pending  { background: var(--muted); }
+
+/* ------------------------------------------------------------------ 解锁层 */
+
+/* 盖住整个页面。z-index 要压得过急停按钮 —— 没解锁的时候那个按钮按下去
+   只会得到一个 401，让它露在外面反而像是"按了没反应"。 */
+#lock {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #1b1f23;
+}
+
+.lock-card {
+  width: 100%;
+  max-width: 320px;
+  background: #fff;
+  border-radius: 10px;
+  padding: 24px 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .4);
+}
+
+.lock-title { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+
+/* 手机上字号小于 16px 时 iOS Safari 会自动放大整个页面，放大之后就再也退
+   不回去了。所以这个框的字号不能往下调。 */
+#lock-pin {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 18px;
+  padding: 10px;
+  margin: 14px 0 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+#lock-go {
+  width: 100%;
+  font-size: 16px;
+  padding: 10px;
+  border: 0;
+  border-radius: 6px;
+  background: #2f6fdb;
+  color: #fff;
+  cursor: pointer;
+}
+
+#lock-msg { margin-top: 10px; min-height: 18px; color: #b00; font-size: 13px; }

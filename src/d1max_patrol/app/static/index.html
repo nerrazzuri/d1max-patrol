@@ -12,6 +12,25 @@
   右边五个页签是"要做的事"。急停不在任何页签里，切到哪一页都按得到。
 -->
 
+<!--
+  没解锁时挡在最上面的一层。默认收着 —— 这台没设 PIN 的时候（自己电脑上开发）
+  它永远不会露面，页面和从前一模一样。
+
+  输入框故意不设 inputmode="numeric"：那样手机上会弹数字键盘，好用，但有的
+  输入法一弹数字盘就打不出字母了。PIN 允许带字母，而"输不进自己的 PIN"这个
+  故障是在客户现场才发现的，不值得拿它换一点点方便。
+-->
+<div id="lock" hidden>
+  <div class="lock-card">
+    <div class="lock-title">D1 Max 巡检</div>
+    <p class="hint">这台开了 PIN。输一次就好 —— 关掉这个标签页之前都不用再输。</p>
+    <input id="lock-pin" type="password" autocomplete="off"
+           placeholder="PIN" aria-label="PIN">
+    <button id="lock-go" type="button">解 锁</button>
+    <div id="lock-msg"></div>
+  </div>
+</div>
+
 <div id="app">
 
   <aside id="left">

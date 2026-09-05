@@ -259,17 +259,21 @@ def url(server: AppServer, path: str) -> str:
 
 
 def request(server: AppServer, path: str, *, method: str = "GET",
-            payload=None, raw: bytes | None = None, timeout: float = 5.0):
+            payload=None, raw: bytes | None = None, timeout: float = 5.0,
+            headers: dict[str, str] | None = None):
     """打一个请求,返回 (状态码, 响应体 bytes)。4xx/5xx 也照样返回,不抛。
 
     ``payload`` 会被 ``json.dumps`` 一道;``raw`` 是原样发出去的字节,给
-    "发一段根本不是 JSON 的东西看服务怎么办"这种测试用。
+    "发一段根本不是 JSON 的东西看服务怎么办"这种测试用;``headers`` 给鉴权
+    那组测试带 ``Authorization`` 和 ``Host``。
     """
     body = raw if raw is not None else (
         None if payload is None else json.dumps(payload).encode("utf-8"))
     req = urllib.request.Request(url(server, path), data=body, method=method)
     if body is not None:
         req.add_header("Content-Type", "application/json")
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read(), dict(resp.headers)
