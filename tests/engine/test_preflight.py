@@ -12,6 +12,12 @@ from d1max_patrol.engine.homing import HomePoint, ReturnParams
 from d1max_patrol.engine.mission import MissionWaypoint, Policy
 from d1max_patrol.engine.preflight import departure_line_pct, run_preflight
 from d1max_patrol.engine.removable import DiskRole, Removable
+from d1max_patrol.engine.safety import (
+    Decision,
+    SafetyContext,
+    battery_ruling,
+    return_line_pct,
+)
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 from .conftest import make_mission
@@ -393,3 +399,22 @@ async def test_默认就是没扫过而不是没有盘(tmp_path, sample_mission,
     r = await run_preflight(fake_nav, fake_device, sample_mission, tmp_path,
                             home=_HOME)
     assert [c.name for c in r.failures] == ["removable"]
+
+
+# ---------------------------------------------------------- 两条线用同一份系数
+@pytest.mark.parametrize("floor", [0.0, 0.5, 1.2, 2.9, 3.0, 5.0, 12.0])
+def test_出发线永远不低于同一刻的返航线(sample_mission, floor):
+    """**放行了就不该立刻掉头。**
+
+    出发线按引擎自己那份 ``ReturnParams`` 算,返航线一度按模块默认那份算 ——
+    两支各按各的地板。``floor_pct`` 一旦标定到 3.0 以下,出发线就会低于返航线:
+    起飞门槛放行,第一帧电量遥测到达就判 ``RETURN_HOME``,狗一起飞就掉头,
+    而没有一条测试会红。这条把两支钉在一起。
+    """
+    params = ReturnParams(floor_pct=floor)
+    line = departure_line_pct(sample_mission, _HOME, params=params)
+    # 刚起飞那一刻站在原点上,回家成本是 0 —— 返航线取的正是地板那一支。
+    ctx = SafetyContext(policy=sample_mission.policy, battery_pct=line,
+                        return_cost_pct=0.0, floor_pct=floor)
+    assert return_line_pct(ctx) <= line
+    assert battery_ruling(ctx).decision is not Decision.RETURN_HOME

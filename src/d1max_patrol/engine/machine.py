@@ -674,7 +674,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                              battery_pct=live.battery_pct,
                              blocked_for_s=blocked_for,
                              loc_reset_attempts=live.loc_reset_attempts,
-                             return_cost_pct=self._return_cost_pct())
+                             return_cost_pct=self._return_cost_pct(),
+                             # 跟起飞门槛同一份系数。少了这一行,两支就会
+                             # 按不同的地板算,标定改了 floor_pct 之后狗会
+                             # 一起飞就掉头 —— 而没有一条测试会红。
+                             floor_pct=self._return_params.floor_pct)
 
     async def _handle(self, item: Any) -> None:
         """处理一个输入。该怎么办由规则表说了算,状态机自己不写规则。"""

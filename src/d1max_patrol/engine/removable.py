@@ -111,6 +111,15 @@ class MountRootProbe:
 #: (默认参数里不许调函数)。
 DEFAULT_PROBE = MountRootProbe()
 
+#: 这些"SN"等于没有 SN。``app/identity.py`` 查不到机身 SN 的时候**明写
+#: ``"unknown"``**,不是留空 —— 而 engine 不能反过来 import app(分层),
+#: 所以这里自己列一份。改那边的 ``UNKNOWN_SN``,记得同时改这里。
+#:
+#: 少了 ``"unknown"`` 这一项,下面那条"任一边为空一律放行"在真机上就是
+#: **一句死话**:``resolve()`` 从不返回空串,一只读不出身份的狗会被拦得
+#: 连自己的镜像盘都插不了 —— 正是这条规则本来要避免的那个故障模式。
+NO_IDENTITY = frozenset({"", "unknown"})
+
 
 async def scan_or_unknown(probe: RemovableProbe) -> tuple[Removable, ...] | None:
     """扫一遍外插盘,**炸了就当作"认不出插着什么"**。
@@ -142,7 +151,8 @@ def blocks_takeoff(disks: Sequence[Removable], *,
     role 上写的还是 ``mirror``,只看 role 的话它一路绿灯,而写进去的数据
     从此串了台。
 
-    **只在两边的 SN 都知道、而且不相等时才拦。** 任一边为空一律放行:
+    **只在两边的 SN 都知道、而且不相等时才拦。** 任一边不知道一律放行
+    (``NO_IDENTITY``:空串,以及 ``app/identity.py`` 那个明写的 ``"unknown"``):
 
     - §7.5 那条物理杠杆风险已经被"非镜像盘一律拦"兜住了,SN 这一条防的是
       **数据串台**,不是飞行安全 —— 不必按"不确定不放行"来办。
@@ -151,6 +161,7 @@ def blocks_takeoff(disks: Sequence[Removable], *,
 
     代价是一块没写 SN 的镜像盘会放行 —— 但那块盘也不属于任何一只狗。
     """
+    mine = "" if robot_sn in NO_IDENTITY else robot_sn
     return tuple(d for d in disks
                  if d.role is not DiskRole.MIRROR
-                 or (robot_sn and d.sn and d.sn != robot_sn))
+                 or (mine and d.sn not in NO_IDENTITY and d.sn != mine))

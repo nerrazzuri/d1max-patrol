@@ -7,6 +7,7 @@ from pathlib import Path
 
 from d1max_patrol.engine.removable import (
     MARKER_REL,
+    NO_IDENTITY,
     DiskRole,
     MountRootProbe,
     Removable,
@@ -150,3 +151,25 @@ async def test_扫出来的顺序是稳定的(tmp_path):
     probe = MountRootProbe(roots=(root,), is_mount=lambda p: True)
     got = await probe.scan()
     assert [d.mount.name for d in got] == ["a", "b", "c"]
+
+
+def test_读不出身份的狗报的是unknown不是空串():
+    """``app/identity.py`` 查不到 SN 的时候明写 ``"unknown"``,从不留空 ——
+    所以上面那条"本机没有身份就放行"只认空串的话,在真机上是一句死话:
+    真正会出现的那个值(``"unknown"``)照样被当成一个正经 SN 去比对。
+    """
+    from d1max_patrol.app.identity import UNKNOWN_SN
+
+    assert UNKNOWN_SN in NO_IDENTITY
+    assert blocks_takeoff(_mirror("D1MAX-0002"), robot_sn=UNKNOWN_SN) == ()
+
+
+def test_盘上写着unknown的镜像盘也放行():
+    """那块盘是一只读不出身份的狗备份出来的,它同样不属于任何一只狗。"""
+    assert blocks_takeoff(_mirror("unknown"), robot_sn="D1MAX-0001") == ()
+
+
+def test_两边都知道且不同还是照拦():
+    """放宽的只是"不知道"那一侧 —— 真串台的那条线一步没让。"""
+    assert len(blocks_takeoff(_mirror("D1MAX-0002"),
+                              robot_sn="D1MAX-0001")) == 1

@@ -320,3 +320,26 @@ def test_规则表不碰后端也不碰io():
     src = Path(inspect.getfile(safety)).read_text(encoding="utf-8")
     for banned in ("async def", "await ", "import asyncio", "open("):
         assert banned not in src, f"safety.py 里不该出现 {banned!r}"
+
+
+def test_回家成本的地板跟着引擎那份系数走():
+    """地板是可配的 —— ``ReturnParams`` 真机标定要改它。
+
+    这里读死 ``DEFAULT_RETURN_PARAMS`` 的话,配了低地板的引擎在起飞门槛那边
+    按新值算、在这边按旧值算,两条线就会交叉。
+    """
+    policy = Policy(battery_return_pct=25.0, battery_abort_pct=25.0)
+    low = SafetyContext(policy=policy, battery_pct=80.0, floor_pct=1.0)
+    high = SafetyContext(policy=policy, battery_pct=80.0, floor_pct=8.0)
+    assert return_line_pct(low) == pytest.approx(26.0)
+    assert return_line_pct(high) == pytest.approx(33.0)
+
+
+def test_返航理由里的回家成本印的是引擎那份地板():
+    """这句话是这一关唯一给人的解释。印一个 3% 而引擎按 8% 在算,站在狗
+    旁边的人会照着那个数去判断还能撑多久。"""
+    policy = Policy(battery_return_pct=25.0, battery_abort_pct=25.0)
+    ctx = SafetyContext(policy=policy, battery_pct=30.0, floor_pct=8.0)
+    r = battery_ruling(ctx)
+    assert r.decision is Decision.RETURN_HOME
+    assert "回家 8%" in r.reason

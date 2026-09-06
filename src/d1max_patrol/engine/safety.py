@@ -72,6 +72,12 @@ class SafetyContext:
     #: "从现在这个位置走回原点大约要掉多少个点的电"(``homing.estimate_cost_pct``)。
     #: **默认 0 表示"还没算出来",不表示"回家不要钱"** —— 见 ``return_line_pct``。
     return_cost_pct: float = 0.0
+    #: 回家成本的地板,**必须跟算出发线的那一份是同一个数**。
+    #: ``ReturnParams`` 是每台引擎可配的(真机标定要改它),而这里原先直接读
+    #: ``DEFAULT_RETURN_PARAMS`` —— 两支各按各的地板算,起飞门槛放行了、
+    #: 返航线却在同一刻判 ``RETURN_HOME``,狗一起飞就掉头。默认值只是给
+    #: 没配过的调用方兜底,引擎自己一律显式传。
+    floor_pct: float = DEFAULT_RETURN_PARAMS.floor_pct
 
 
 def _loc_lost(ctx: SafetyContext) -> Ruling:
@@ -145,7 +151,7 @@ def _return_cost(ctx: SafetyContext) -> float:
     ``return_cost_pct`` 默认 0 —— 那不是"回家不要钱",是"还没算出来"
     (原点还没换进来,或者这一趟没有点位)。按 0 用的话返航线就等于中止线。
     """
-    return max(ctx.return_cost_pct, DEFAULT_RETURN_PARAMS.floor_pct)
+    return max(ctx.return_cost_pct, ctx.floor_pct)
 
 
 def return_line_pct(ctx: SafetyContext) -> float:
@@ -166,7 +172,7 @@ def return_line_pct(ctx: SafetyContext) -> float:
     线都是 25,24.9% 判 ABORT、25.0% 判 CONTINUE,中间没有一格是
     ``RETURN_HOME``,那个分支就是永远走不到的死代码。
 
-    兜底用的是 ``DEFAULT_RETURN_PARAMS.floor_pct``,理由跟 ``floor_pct``
+    兜底用的是 ``ctx.floor_pct``(引擎那一份,不是模块默认那一份),理由跟它
     本身一样:**就算原点就在脚下,起身、站定、对位也要电。** 回家从来不是
     免费的,0 只可能是"还没算",不可能是"不要钱"。
     """
