@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 
 from d1max_patrol.engine.homing import (
+    DEFAULT_RETURN_PARAMS,
     HomeError,
     HomePoint,
+    ReturnParams,
+    estimate_cost_pct,
     forget_home,
     home_path,
     load_home,
+    route_length_m,
     save_home,
 )
 from d1max_patrol.protocol.nav_types import Pose
@@ -87,14 +93,33 @@ def test_原点文件就放在地图旁边(tmp_path):
     assert home_path(tmp_path, "一号厂房") == tmp_path / "一号厂房.home.json"
 
 
-# ---------------------------------------------------------------- 距离换电量
+def test_原点是先落盘再改名的(tmp_path, monkeypatch):
+    """``replace`` 一个人兑现不了"原子写"这句承诺。
 
-from d1max_patrol.engine.homing import (  # noqa: E402
-    DEFAULT_RETURN_PARAMS,
-    ReturnParams,
-    estimate_cost_pct,
-    route_length_m,
-)
+    ``write_text`` 返回时数据只到页缓存;rename 保证的是改名不早于写入落盘,
+    不保证两者都落了盘。这台机器的日常工况就是热插拔换电池 —— 断电不是
+    意外分支,是操作流程本身。顺序错了(先改名后 fsync)照样可能留下半个
+    JSON,所以这里查的不只是"调过 fsync",还有它在 replace 之前。
+    """
+    发生了: list[str] = []
+    真的 = os.fsync
+    真的replace = Path.replace
+
+    def 记一笔fsync(fd):
+        发生了.append("fsync")
+        return 真的(fd)
+
+    def 记一笔replace(self, target):
+        发生了.append("replace")
+        return 真的replace(self, target)
+
+    monkeypatch.setattr(os, "fsync", 记一笔fsync)
+    monkeypatch.setattr(Path, "replace", 记一笔replace)
+    save_home(tmp_path, _home())
+    assert 发生了 == ["fsync", "replace"]
+
+
+# ---------------------------------------------------------------- 距离换电量
 
 
 def test_原点就在脚下也要留一点电():

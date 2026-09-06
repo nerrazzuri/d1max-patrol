@@ -269,6 +269,11 @@ class _ConsoleUpload:
         return "控制台 https://console.example/upload"
 
 
+# 这两个工厂都收下 ``workspace`` 却一个都没用上 —— 别删。它们是
+# ``FORM_FACTORIES`` 里的两个值,签名必须一样,``form`` 那个 fixture 才能
+# 闭着眼睛按档名取一个出来调,而不是对着每一档写一个分支。
+# 现在两档恰好都不需要工作目录;下一档(比如要落一个上传队列目录的)就需要。
+# 为了对齐而留的形参,是这两个函数属于同一张表的证据。
 def _standalone_form(workspace: Path) -> Form:
     return STANDALONE
 

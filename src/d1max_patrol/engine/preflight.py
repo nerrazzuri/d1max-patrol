@@ -26,7 +26,11 @@ from d1max_patrol.engine.homing import (
 )
 from d1max_patrol.engine.mission import Mission
 from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff
-from d1max_patrol.engine.storage import storage_verdict
+from d1max_patrol.engine.storage import (
+    STOP_USED_RATIO,
+    WARN_USED_RATIO,
+    storage_verdict,
+)
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
 
 #: 预计耗电要乘的安全系数。**1.5 不是保守,是因为预计耗电本身不准**
@@ -96,7 +100,7 @@ async def _check_localized(nav: NavBackend) -> CheckResult:
                        else f"定位当前是 {status.value},不是 ContinuousLoc")
 
 
-def _check_home(mission: Mission, home: HomePoint | None) -> CheckResult:
+async def _check_home(mission: Mission, home: HomePoint | None) -> CheckResult:
     """原点必须标过,而且必须是这张图上的。
 
     原点同时是换电位、待命位和返航目标(spec §1.3)。没有它,返航就没有目标,
@@ -164,8 +168,8 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
                             f"{mission.policy.battery_return_pct:.0f}%)")
 
 
-def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
-                   last_upload_age_days: float | None) -> CheckResult:
+async def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
+                         last_upload_age_days: float | None) -> CheckResult:
     """真写一个探针文件再删掉。
 
     "目录存在"不等于"写得进去":只读挂载、权限不对、名字被一个同名文件占了
@@ -189,11 +193,20 @@ def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
         has_upload=form.has_upload,
         last_upload_age_days=last_upload_age_days,
     )
+    if verdict.ok and verdict.warn:
+        # 85% 是"过了,但该清盘了"。丢掉 warn 的话页面上这一项纯绿,
+        # spec §4.7「80% 就要报警」在这一卷就没有出口 —— 人第一次知道盘要
+        # 满,会是它满到 90% 拦停的那一天。告警通道是后面那份计划的事,
+        # 这里能做的是把通过的这句话说重。
+        return CheckResult("storage", True,
+                           f"{verdict.detail} —— 已经过了 "
+                           f"{WARN_USED_RATIO * 100:.0f}% 报警线,该清盘了;"
+                           f"到 {STOP_USED_RATIO * 100:.0f}% 就不许出发")
     return CheckResult("storage", verdict.ok, verdict.detail)
 
 
-def _check_removable(disks: Sequence[Removable] | None,
-                     robot_sn: str = "") -> CheckResult:
+async def _check_removable(disks: Sequence[Removable] | None,
+                           robot_sn: str = "") -> CheckResult:
     """认到外插的取走盘就不许出发(spec §7.5),别的狗的镜像盘也拦
     (spec §7.6)。
 
@@ -234,6 +247,12 @@ async def _guard(name: str, coro: Awaitable[CheckResult]) -> CheckResult:
     """某一项炸了就算这一项没过,不让它掀掉整份报告。
 
     现场要的是"还差哪几项",不是一个 traceback;异常本身就是这一项没过的理由。
+
+    **七项一律走这里,没有例外。** ``_check_home`` ``_check_storage``
+    ``_check_removable`` 里其实没有一处 await —— 它们写成 ``async`` 只为了
+    能进这个保护圈。少一项没进来,就等于那一项炸了会掀掉另外六项的结论,
+    而"哪几项是纯算的"这件事以后是会变的(``_check_home`` 早晚要去读盘上的
+    原点),那时候没人会记得回来补这一行。宁可现在把这条边抹齐。
     """
     try:
         return await coro
@@ -263,15 +282,13 @@ async def run_preflight(nav: NavBackend, device: DeviceBackend,
         await _guard("nav_ready", _check_nav_ready(nav)),
         await _guard("device_ready", _check_device_ready(device)),
         await _guard("localized", _check_localized(nav)),
-        _check_home(mission, home),
+        await _guard("home", _check_home(mission, home)),
         await _guard("battery",
                      _check_battery(device, mission, home, estimate_slack,
                                     return_params)),
+        await _guard("storage",
+                     _check_storage(Path(runs_root), min_free_mb, form,
+                                    last_upload_age_days)),
+        await _guard("removable", _check_removable(removable, robot_sn)),
     ]
-    try:
-        checks.append(_check_storage(Path(runs_root), min_free_mb, form,
-                                     last_upload_age_days))
-    except Exception as exc:  # noqa: BLE001 - 同 _guard
-        checks.append(CheckResult("storage", False, str(exc)))
-    checks.append(_check_removable(removable, robot_sn))
     return PreflightReport(tuple(checks))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -76,8 +77,7 @@ async def test_电量够走完全程就放行(tmp_path, sample_mission, fake_nav
     assert r.ok
 
 
-async def test_预计耗电的安全系数是可以调的(tmp_path, sample_mission, fake_nav,
-                                            fake_device):
+async def test_预计耗电的安全系数是可以调的(sample_mission):
     """1.5 是"预计耗电本身不准"的赔率。场地摸熟了可以往下调。"""
     assert (departure_line_pct(sample_mission, _HOME, slack=3.0)
             > departure_line_pct(sample_mission, _HOME, slack=1.5))
@@ -278,6 +278,59 @@ async def test_联网档盘满时说的是回传中断(tmp_path, sample_mission,
                    min_free_mb=1e12, form=connected, last_upload_age_days=9.0)
     detail = next(c.detail for c in r.checks if c.name == "storage")
     assert "回传" in detail and "9 天" in detail
+
+
+def _盘用到(ratio: float):
+    """伪造一个水位。总量 100GB,按比例分 used/free。"""
+    total = 100 * 1024 ** 3
+
+    def fake(_path):
+        used = int(total * ratio)
+        return SimpleNamespace(total=total, used=used, free=total - used)
+    return fake
+
+
+async def test_盘过了报警线但还没到拦停线时这一项要把话说重(
+        tmp_path, sample_mission, fake_nav, fake_device, monkeypatch):
+    # 85%:能起飞,但已经过了 §4.7 那条 80% 报警线。这一卷还没有告警通道,
+    # 只印一句"剩余 15360MB,已用 85%"的话,这一项在页面上纯绿 —— 人第一次
+    # 知道盘要满,会是它满到 90% 拦停的那一天。
+    monkeypatch.setattr("shutil.disk_usage", _盘用到(0.85))
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
+    storage = next(c for c in r.checks if c.name == "storage")
+    assert storage.ok, "85% 还没到拦停线,该放行"
+    assert "已用 85%" in storage.detail
+    assert "80% 报警线" in storage.detail
+    assert "清盘" in storage.detail
+    assert "90%" in storage.detail, "还要告诉人下一道线画在哪儿"
+
+
+async def test_水位正常的时候不说那些重话(tmp_path, sample_mission, fake_nav,
+                                          fake_device, monkeypatch):
+    monkeypatch.setattr("shutil.disk_usage", _盘用到(0.50))
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
+    storage = next(c for c in r.checks if c.name == "storage")
+    assert storage.ok
+    assert "报警线" not in storage.detail and "清盘" not in storage.detail
+
+
+@pytest.mark.parametrize("name", NAMES)
+async def test_七项里随便哪一项炸了都只算那一项没过(tmp_path, sample_mission,
+                                                  fake_nav, fake_device,
+                                                  monkeypatch, name):
+    """保护圈得罩住七项,一项都不能漏在外面。
+
+    漏在外面的那一项炸掉时,掀掉的是整份报告 —— 现场拿到的是一个
+    traceback,而不是"还差哪几项"。哪几项是"纯算的、不会炸"这件事以后会变,
+    所以这条按名字全量参数化:以后加了第八项,NAMES 一改这里自动跟上。
+    """
+    async def boom(*args, **kw):
+        raise RuntimeError(f"{name} 这一项炸了")
+    monkeypatch.setattr(f"d1max_patrol.engine.preflight._check_{name}", boom)
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
+    assert [c.name for c in r.checks] == NAMES, "炸掉一项不许少报另外六项"
+    assert [c.name for c in r.failures] == [name]
+    assert f"{name} 这一项炸了" in r.failures[0].detail, "异常本身就是没过的理由"
 
 
 async def test_还插着取走盘就不让起飞(tmp_path, sample_mission, fake_nav,

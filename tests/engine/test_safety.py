@@ -252,6 +252,28 @@ def test_返航成本没喂进来时退回静态返航线():
     assert battery_ruling(ctx).decision is Decision.RETURN_HOME
 
 
+def test_默认策略下返航线必须严格高于中止线():
+    # 上面那条测试挑了 abort=15 / return=25 —— 静态那一支自己就高出中止线
+    # 10 个点,回家成本兜不兜底都看不出来。默认 Policy 才是出厂那一份:
+    # 两条线都是 25。回家成本按 0 用的话返航线就等于中止线,24.9% 判 ABORT、
+    # 25.0% 判 CONTINUE,中间一格 RETURN_HOME 都没有 —— 那个分支是死代码。
+    ctx = SafetyContext(policy=Policy(), battery_pct=26.0)
+    assert Policy().battery_return_pct == Policy().battery_abort_pct, (
+        "出厂两条线本来就是同一个数,这条测试才有意义")
+    assert return_line_pct(ctx) > Policy().battery_abort_pct
+    assert return_line_pct(ctx) == pytest.approx(28.0), "25 + 兜底的 3"
+    assert battery_ruling(ctx).decision is Decision.RETURN_HOME
+
+
+def test_默认策略下返航那一格的理由报的是中止线加回家():
+    # 这一格是靠兜底的回家成本撑出来的,理由里就该说是中止线加回家,
+    # 不能报成静态下限 —— 静态下限是 25,人读到"低于返航线 28%(静态下限
+    # 25%)"会以为程序算错了。
+    ctx = SafetyContext(policy=Policy(), battery_pct=26.0)
+    reason = battery_ruling(ctx).reason
+    assert "中止线 25% + 回家 3%" in reason
+
+
 # ----------------------------------------------------------------------- 断连
 
 

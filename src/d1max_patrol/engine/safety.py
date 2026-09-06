@@ -23,6 +23,7 @@ from d1max_patrol.backends.base import (
     FaultEvent,
     LocStatusEvent,
 )
+from d1max_patrol.engine.homing import DEFAULT_RETURN_PARAMS
 from d1max_patrol.engine.mission import Policy
 from d1max_patrol.protocol.nav_types import (
     ALG_LIDAR_DISCONNECTED,
@@ -138,6 +139,15 @@ def rule(event: Event | DeviceEvent, ctx: SafetyContext) -> Ruling:
     return Ruling(Decision.CONTINUE, f"{type(event).__name__} 无对应规则,只记录")
 
 
+def _return_cost(ctx: SafetyContext) -> float:
+    """这一刻按多远算的回家成本,**下有地板**。
+
+    ``return_cost_pct`` 默认 0 —— 那不是"回家不要钱",是"还没算出来"
+    (原点还没换进来,或者这一趟没有点位)。按 0 用的话返航线就等于中止线。
+    """
+    return max(ctx.return_cost_pct, DEFAULT_RETURN_PARAMS.floor_pct)
+
+
 def return_line_pct(ctx: SafetyContext) -> float:
     """这一刻的返航线。
 
@@ -151,10 +161,16 @@ def return_line_pct(ctx: SafetyContext) -> float:
     字段名和 wire 格式都没动 —— 动了要改协议,而它作为下限仍然有意义:
     它挡的是有人把场地配得极小、把返航线压到没有余量。
 
-    ``return_cost_pct`` 为 0 时(还没算出来)退回静态下限,**绝不返回一条比
-    中止线还低的返航线** —— 那会让 ``RETURN_HOME`` 变成永远走不到的死代码。
+    ``return_cost_pct`` 为 0 时(还没算出来)回家成本按 ``floor_pct`` 兜底,
+    **返回的返航线严格高于中止线** —— 相等跟更低一样死:默认 policy 下两条
+    线都是 25,24.9% 判 ABORT、25.0% 判 CONTINUE,中间没有一格是
+    ``RETURN_HOME``,那个分支就是永远走不到的死代码。
+
+    兜底用的是 ``DEFAULT_RETURN_PARAMS.floor_pct``,理由跟 ``floor_pct``
+    本身一样:**就算原点就在脚下,起身、站定、对位也要电。** 回家从来不是
+    免费的,0 只可能是"还没算",不可能是"不要钱"。
     """
-    dynamic = ctx.policy.battery_abort_pct + ctx.return_cost_pct
+    dynamic = ctx.policy.battery_abort_pct + _return_cost(ctx)
     return max(ctx.policy.battery_return_pct, dynamic)
 
 
@@ -174,11 +190,11 @@ def battery_ruling(ctx: SafetyContext) -> Ruling:
         # 这句话是这一关唯一给人的解释,**两支各说各的**。静态下限赢的时候
         # 照印"中止线 + 回家",人读到的是"低于返航线 60%(中止线 25% +
         # 回家 3%)"—— 25 加 3 不等于 60,站在狗旁边的人会以为程序算错了。
-        if line > ctx.policy.battery_abort_pct + ctx.return_cost_pct:
+        cost = _return_cost(ctx)
+        if line > ctx.policy.battery_abort_pct + cost:
             why = f"静态下限 {ctx.policy.battery_return_pct:.0f}%"
         else:
-            why = (f"中止线 {ctx.policy.battery_abort_pct:.0f}% + 回家 "
-                   f"{ctx.return_cost_pct:.0f}%")
+            why = f"中止线 {ctx.policy.battery_abort_pct:.0f}% + 回家 {cost:.0f}%"
         return Ruling(Decision.RETURN_HOME,
                       f"电量 {ctx.battery_pct:.0f}% 低于返航线 {line:.0f}%"
                       f"({why}),返航")

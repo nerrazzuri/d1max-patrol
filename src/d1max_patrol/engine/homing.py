@@ -16,6 +16,7 @@ slam_toolbox 生成的,重建图会原样覆盖 —— 写进去等于写在沙�
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,10 +71,20 @@ def home_path(maps_dir: Path | str, map_id: str) -> Path:
 
 
 def save_home(maps_dir: Path | str, home: HomePoint) -> None:
-    """写原点。**先写临时文件再改名。**
+    """写原点。**先写临时文件,fsync,再改名。**
 
     写到一半断电,下次开机就是"原点不见了",而狗会因此拒绝起飞 —— 那还算好的;
     更坏的是写出半个 JSON,被当成"文件坏了"。原子写让这两种都不会发生。
+
+    **``replace`` 一个人兑现不了上面这句承诺。** ``write_text`` 返回时数据
+    只到了页缓存;``rename`` 在 ext4 上是有序的,但"有序"保证的是改名不早于
+    写入落盘,**不保证两者都落了盘**。这台机器的日常工况就是热插拔换电池 ——
+    断电不是意外分支,是操作流程本身。所以临时文件的字节必须先 ``fsync``
+    到盘上,再让它顶替旧文件。
+
+    只 fsync 文件、不 fsync 父目录:目录项没落盘的最坏结果是"改名丢了,
+    还剩上一份完整的原点",这跟"原点是旧的"没有区别,而原点极少变。
+    半个 JSON 才是要防的那一种。
     """
     target = home_path(maps_dir, home.map_id)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +92,10 @@ def save_home(maps_dir: Path | str, home: HomePoint) -> None:
     try:
         # 先序列化再落盘: 序列化抛错的时候临时文件还没建, 已有的那份原封不动。
         text = json.dumps(home.to_wire(), ensure_ascii=False, indent=2)
-        tmp.write_text(text, encoding="utf-8")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
         tmp.replace(target)
     finally:
         tmp.unlink(missing_ok=True)
