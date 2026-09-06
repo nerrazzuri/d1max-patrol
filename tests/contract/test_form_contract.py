@@ -22,7 +22,9 @@ async def test_没有上传目标的形态必须明确说没有(form, form_caps)
     会不会被测出来。
     """
     if "upload" in form_caps:
-        assert await form.describe_upload()
+        # 断"非空"等于没断:一个返回 " " 的上传目标照样过。声明了 upload 的
+        # 那一档,说出来的必须是**这一档自己的那个去处**。
+        assert "console.example" in await form.describe_upload()
         return
     with pytest.raises(UploadTargetError):
         await form.describe_upload()
