@@ -174,7 +174,12 @@ def scan_runs(runs_root: Path | str, *, now: datetime | None = None) -> list[Run
 
 
 def mark_uploaded(run_dir: Path | str) -> Path:
-    """标成"已经传走了"。**标记不等于删** —— 真删等到水位线(spec §4.4)。"""
+    """标成"别处还有一份"。**标记不等于删** —— 真删等到水位线(spec §4.4)。
+
+    两条路会打上它:``uploader`` 传成功(后面那一卷),以及一次哈希对上的人工
+    导出(``export.confirm_bundle``)。在"世界上还有没有第二份"这件事上,
+    这两者完全等价。
+    """
     path = Path(run_dir) / UPLOADED_REL
     path.touch(exist_ok=True)
     return path
@@ -324,6 +329,11 @@ def _deletable(info: RunInfo, *, now: datetime, has_upload: bool,
         # 可以按水位删 —— 服务器上有第二份。
         return info.uploaded
     # 单机:分类依据是保留期内/外,而且删之前必须先预告,还得挂满。
+    if info.uploaded:
+        # 但"别处还有一份"永远优先 —— 单机模式下这个标记只可能来自一次
+        # 哈希对上的人工导出(``export.confirm_bundle``),那正是 §4.6 第 2 条
+        # 「导出并释放」通道的出口。走过那条通道的,不必再等保留期。
+        return True
     if not info.is_expired(now):
         return False
     first = noticed.get(run_key(info))

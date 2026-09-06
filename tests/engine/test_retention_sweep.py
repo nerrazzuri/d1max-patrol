@@ -106,6 +106,14 @@ def test_单机时不看传没传():
     assert sweep.delete == (过期了,)
 
 
+def test_单机时导出确认过的不必再等保留期():
+    # §4.6 第 2 条「导出并释放」的出口:走过那条通道的,别处已经有一份了。
+    导出过 = _info(1.0, uploaded=True)
+    sweep = plan_sweep([导出过], now=NOW, has_upload=False, need_bytes=500,
+                       noticed={})
+    assert sweep.delete == (导出过,)
+
+
 def test_正在写的那一趟两边都不碰():
     for has_upload in (True, False):
         跑着呢 = _info(200.0, settled=False, uploaded=True)
