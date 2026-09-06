@@ -26,11 +26,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from d1max_patrol.engine.removable import MARKER_REL, DiskRole
+from d1max_patrol.engine.removable import MARKER_REL, NO_IDENTITY, DiskRole, Removable
 from d1max_patrol.engine.retention import unique_tmp
 
 #: 盘上记同步进度的文件。跟 :data:`~d1max_patrol.engine.removable.MARKER_REL`
@@ -154,3 +155,72 @@ def init_target(mount: Path | str, *, robot_sn: str, role: DiskRole,
     # 键名要跟 ``removable.read_role`` 认的一致: role、sn。多写的字段它会忽略。
     _atomic_json(marker_path(mount), target.to_wire())
     return target
+
+
+@dataclass(frozen=True, slots=True)
+class TargetStatus:
+    """一块盘现在能不能拿来备份,以及**为什么**。
+
+    ``detail`` 会原样出现在手机上。写"不可用"没有用 —— 人手里正拿着这块盘,
+    他要知道的是"这是别人的盘"还是"这块盘还没认过"。
+    """
+
+    mount: Path
+    role: DiskRole
+    sn: str
+    label: str
+    usable: bool
+    detail: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "mount": self.mount.as_posix(),
+            "role": self.role.value,
+            "sn": self.sn,
+            "label": self.label,
+            "usable": self.usable,
+            "detail": self.detail,
+        }
+
+
+def resolve_targets(disks: Sequence[Removable],
+                    *, robot_sn: str = "") -> tuple[TargetStatus, ...]:
+    """把扫到的外插盘筛成"能不能往上面备份"。**顺序不变。**
+
+    **认盘只认标记文件,绝不"看见一块盘就往上写"**(spec §7.6)。客户完全
+    可能插一张相机卡进来 —— 默默往上面写归档是我们能干出的最没礼貌的一件事,
+    而且事后没人分得清那些目录是谁建的。
+
+    **这里判的是"能不能备份",不是"拦不拦起飞"。** 同一块交付盘两个结论
+    相反:拿来备份是可以的(人就是插它来拷数据的),同时它拦起飞(见
+    ``removable.blocks_takeoff``)。合成一个布尔值的那天,要么交付盘拷不了
+    数据,要么狗带着一根杠杆出门。
+    """
+    out: list[TargetStatus] = []
+    for disk in disks:
+        mount = Path(disk.mount)
+        marker = read_marker(mount)
+        if marker is None:
+            out.append(TargetStatus(
+                mount=mount, role=DiskRole.UNKNOWN, sn="", label="",
+                usable=False,
+                detail="这块盘还没初始化成备份盘 —— 它可能是客户自己的存储卡,"
+                       "在初始化之前一个字节都不会往上面写。要用它备份,"
+                       "先在这一页上初始化"))
+            continue
+        # 两边都认得出身份、而且对不上,才拦。有一边是 unknown 就不拿 SN 去卡:
+        # ``app/identity.py`` 查不到机身 SN 时明写 "unknown",拿它去比,一只
+        # 读不出身份的狗会被拦得连自己的镜像盘都用不了。
+        known = marker.sn not in NO_IDENTITY and robot_sn not in NO_IDENTITY
+        if known and marker.sn != robot_sn:
+            out.append(TargetStatus(
+                mount=mount, role=marker.role, sn=marker.sn, label=marker.label,
+                usable=False,
+                detail=f"这块盘是 {marker.sn} 的备份盘,这台狗是 {robot_sn} —— "
+                       f"不会往上面写。两只狗的归档混在一块盘上事后分不开;"
+                       f"确实要改用途,先在别处清掉盘上的 .d1max-backup 目录"))
+            continue
+        out.append(TargetStatus(
+            mount=mount, role=marker.role, sn=marker.sn, label=marker.label,
+            usable=True, detail=""))
+    return tuple(out)

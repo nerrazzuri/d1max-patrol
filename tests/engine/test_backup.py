@@ -16,8 +16,9 @@ from d1max_patrol.engine.backup import (
     init_target,
     marker_path,
     read_marker,
+    resolve_targets,
 )
-from d1max_patrol.engine.removable import DiskRole, read_role
+from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff, read_role
 
 
 def test_写下的标记能被第一卷那个读取器读出来(tmp_path):
@@ -90,3 +91,79 @@ def test_写标记是原子的_不留临时文件(tmp_path):
     raw = json.loads(marker_path(tmp_path).read_text(encoding="utf-8"))
     assert raw["role"] == "mirror"
     assert raw["sn"] == "D1M-0007"
+
+
+def _plug(tmp_path, name: str, *, sn: str, role: DiskRole) -> Removable:
+    """造一块已经初始化过的盘,回一个 ``Removable`` —— 就是探针扫出来的样子。"""
+    mount = tmp_path / name
+    mount.mkdir()
+    init_target(mount, robot_sn=sn, role=role, label=name,
+                now_ms=1_757_000_000_000)
+    return Removable(mount=mount, role=role, sn=sn)
+
+
+def test_本狗的镜像盘可用(tmp_path):
+    disk = _plug(tmp_path, "u1", sn="D1M-0007", role=DiskRole.MIRROR)
+    (got,) = resolve_targets([disk], robot_sn="D1M-0007")
+    assert got.usable is True
+    assert got.role is DiskRole.MIRROR
+    assert got.label == "u1"
+
+
+def test_本狗的交付盘可用(tmp_path):
+    disk = _plug(tmp_path, "u1", sn="D1M-0007", role=DiskRole.TRANSFER)
+    (got,) = resolve_targets([disk], robot_sn="D1M-0007")
+    assert got.usable is True
+
+
+def test_别的狗的盘不可用_而且说清楚两边分别是谁(tmp_path):
+    disk = _plug(tmp_path, "u1", sn="D1M-0008", role=DiskRole.MIRROR)
+    (got,) = resolve_targets([disk], robot_sn="D1M-0007")
+    assert got.usable is False
+    assert "D1M-0008" in got.detail
+    assert "D1M-0007" in got.detail
+
+
+def test_没初始化的盘不可用_说的是还没初始化(tmp_path):
+    mount = tmp_path / "u1"
+    mount.mkdir()
+    disk = Removable(mount=mount, role=DiskRole.UNKNOWN, sn="")
+    (got,) = resolve_targets([disk], robot_sn="D1M-0007")
+    assert got.usable is False
+    assert "还没初始化" in got.detail
+    # 客户自己的相机卡长这个样子。**一个字节都不许往上写。**
+    assert not (mount / "runs").exists()
+
+
+def test_标记读不出来的盘按没初始化算(tmp_path):
+    mount = tmp_path / "u1"
+    marker_path(mount).parent.mkdir(parents=True)
+    marker_path(mount).write_text("{坏了", encoding="utf-8")
+    disk = Removable(mount=mount, role=DiskRole.UNKNOWN, sn="")
+    (got,) = resolve_targets([disk], robot_sn="D1M-0007")
+    assert got.usable is False
+    assert "还没初始化" in got.detail
+
+
+def test_狗自己没身份的时候不拿_SN_去卡(tmp_path):
+    # ``app/identity.py`` 查不到机身 SN 时明写 "unknown"。拿它去比,
+    # 一只读不出身份的狗会被拦得连自己的镜像盘都用不了。
+    disk = _plug(tmp_path, "u1", sn="D1M-0007", role=DiskRole.MIRROR)
+    (got,) = resolve_targets([disk], robot_sn="unknown")
+    assert got.usable is True
+
+
+def test_列出来的顺序跟扫到的顺序一致(tmp_path):
+    a = _plug(tmp_path, "u1", sn="D1M-0007", role=DiskRole.MIRROR)
+    b = _plug(tmp_path, "u2", sn="D1M-0007", role=DiskRole.TRANSFER)
+    got = resolve_targets([b, a], robot_sn="D1M-0007")
+    assert [s.mount for s in got] == [b.mount, a.mount]
+
+
+def test_能不能备份跟拦不拦起飞是两件事(tmp_path):
+    # 同一块盘: 拿来备份是可以的(人就是插它来拷数据的),同时它拦起飞
+    # (凸出来的盘挂在走动的狗身上是个杠杆)。两个结论相反,不许合成一个。
+    disk = _plug(tmp_path, "u1", sn="D1M-0007", role=DiskRole.TRANSFER)
+    (got,) = resolve_targets([disk], robot_sn="D1M-0007")
+    assert got.usable is True
+    assert blocks_takeoff([disk], robot_sn="D1M-0007") == (disk,)
