@@ -30,6 +30,7 @@ from d1max_patrol.engine.backup import (
     write_state,
 )
 from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff, read_role
+from d1max_patrol.engine.retention import scan_runs
 
 
 def test_写下的标记能被第一卷那个读取器读出来(tmp_path):
@@ -327,6 +328,25 @@ def test_落后多少就是所有还没同步的安定归档(tmp_path):
     assert plan.behind == 1
     assert plan.behind_bytes == sum(
         p.stat().st_size for p in a.rglob("*") if p.is_file())
+
+
+def test_传已经扫好的_runs_跟自己重扫结果一致(tmp_path):
+    # ``/api/storage`` 在同一次请求里已经扫过一遍归档,不该让 plan_sync 替它
+    # 重扫一遍 —— scan_runs 每一趟都是一次递归 stat,挂在 HTTP 请求路径上。
+    # 这条测试保证"传现成的名单"和"自己重扫"两条路排出来的计划完全一样,
+    # 不然将来谁动了 plan_sync 里的过滤逻辑,这两条路会悄悄分叉。
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    _make_run(runs, "甲", "20260901T010203Z")
+    _make_run(runs, "乙", "20260906T113000Z", settled=False)
+    scanned = scan_runs(runs, now=NOW)
+    own_scan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                         free_bytes=10 * 1024 * 1024 * 1024)
+    given = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                      free_bytes=10 * 1024 * 1024 * 1024, runs=scanned)
+    assert [i.key for i in given.items] == [i.key for i in own_scan.items]
+    assert given.behind == own_scan.behind
+    assert given.behind_bytes == own_scan.behind_bytes
 
 
 def test_盘装不下的时候只排能装下的_而且报满(tmp_path):

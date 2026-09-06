@@ -15,8 +15,13 @@ from d1max_patrol.engine.backup import (
     TargetStatus,
     backup_notice,
 )
+from d1max_patrol.engine.homing import HomePoint
 from d1max_patrol.engine.preflight import run_preflight
 from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff
+from d1max_patrol.protocol.nav_types import Pose
+
+_HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
+                  marked_at_ms=1_757_000_000_000)
 
 
 def _mirror(usable: bool = True) -> TargetStatus:
@@ -34,6 +39,15 @@ def test_起飞检查里没有备份这一项():
     # 写在文档里的"可选"会在半年内漂成"必选",而漂过去的那天没有任何测试会红。
     names = set(inspect.signature(run_preflight).parameters)
     assert not [n for n in names if "backup" in n]
+
+
+async def test_起飞检查跑完一遍结论里也没有备份这一项(tmp_path, sample_mission,
+                                                     fake_nav, fake_device):
+    # 只扫签名挡不住"复用一个已有参数把备份校验夹带进去"。这里真跑一遍,
+    # 断言的是**检查项的名字**,不是它过没过 —— 名字不受这台机器盘用了多少影响。
+    r = await run_preflight(fake_nav, fake_device, sample_mission, tmp_path,
+                            home=_HOME, removable=())
+    assert [c.name for c in r.checks if "backup" in c.name] == []
 
 
 def test_本狗的镜像盘不拦起飞():
@@ -82,3 +96,14 @@ def test_镜像盘落后太多要顶出来_哪怕配着():
     got = backup_notice([_mirror()], behind=BEHIND_PUSH_RUNS)
     assert got.level is NoticeLevel.PUSH
     assert "落后" in got.detail
+
+
+def test_不可用的镜像盘不算配了():
+    # 插着一块别的狗的镜像盘 —— role 上写着 mirror,但我们一个字节也不会往里写。
+    # 把它算成"配了",等于用最像"有备份"的样子盖住了"没有备份"。
+    got = backup_notice([_mirror(usable=False)])
+    assert got.level is NoticeLevel.NEUTRAL
+    assert "未配备份盘" in got.detail
+    # 而且该顶的时候照顶 —— 它等于没配,不是等于配好了。
+    urgent = backup_notice([_mirror(usable=False)], days_left=3.0)
+    assert urgent.level is NoticeLevel.PUSH

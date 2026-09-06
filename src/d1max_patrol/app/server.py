@@ -1420,8 +1420,11 @@ class AppServer:
         behind = 0
         for t in targets or ():
             if t.usable and t.role is DiskRole.MIRROR:
+                # ``runs`` 是这一屏上面早算好的那份名单——传进去让 plan_sync
+                # 不用再对 runs_root 重扫一遍(每一趟归档都是一次递归 stat)。
                 behind = max(behind, plan_sync(ctx.runs_root, t.mount,
-                                               robot_sn=ctx.identity.sn).behind)
+                                               robot_sn=ctx.identity.sn,
+                                               runs=runs).behind)
         notice = backup_notice(targets or (), behind=behind,
                                days_left=soonest)
         return json_response({

@@ -37,7 +37,7 @@ from typing import Any
 
 from d1max_patrol.engine.export import sha256_file
 from d1max_patrol.engine.removable import MARKER_REL, NO_IDENTITY, DiskRole, Removable
-from d1max_patrol.engine.retention import MIN_NOTICE_DAYS, run_key, scan_runs, unique_tmp
+from d1max_patrol.engine.retention import MIN_NOTICE_DAYS, RunInfo, run_key, scan_runs, unique_tmp
 
 #: 盘上记同步进度的文件。跟 :data:`~d1max_patrol.engine.removable.MARKER_REL`
 #: 挨着放,同一个隐藏目录里。
@@ -374,7 +374,8 @@ def _free_bytes(mount: Path) -> int:
 
 def plan_sync(runs_root: Path | str, mount: Path | str, *, robot_sn: str = "",
               now: datetime | None = None,
-              free_bytes: int | None = None) -> SyncPlan:
+              free_bytes: int | None = None,
+              runs: Sequence[RunInfo] | None = None) -> SyncPlan:
     """排一次同步。**只增不删,跳过正在写的,装不下就先拷能装下的。**
 
     **跳过正在写的**用第 2 卷的 ``RunInfo.settled``(有 summary,或者已经过了
@@ -388,6 +389,11 @@ def plan_sync(runs_root: Path | str, mount: Path | str, *, robot_sn: str = "",
 
     ``free_bytes`` 是给测试注入用的。临时目录上量不出"盘还剩多少",而"装不下
     怎么办"恰恰是这个函数里最需要被穷举的那一段。
+
+    ``runs`` 是给调用方手里已经有一份归档名单时用的:``scan_runs`` 每一趟都要
+    ``rglob("*")`` 递归 stat 整棵目录树,调用方(比如 ``/api/storage``)如果
+    在同一次请求里已经扫过一遍,这里不该再替它重扫一遍——这个函数挂在 HTTP
+    请求路径上,归档一多,重扫的代价不是可以忽略的。不给就照旧自己扫。
     """
     mount = Path(mount)
     state = read_state(mount, robot_sn=robot_sn)
@@ -397,8 +403,8 @@ def plan_sync(runs_root: Path | str, mount: Path | str, *, robot_sn: str = "",
     skipped: list[str] = []
     already: list[str] = []
     pending: list[SyncItem] = []
-    # scan_runs 就是最老在前,不用再排。
-    for info in scan_runs(runs_root, now=now):
+    # scan_runs 就是最老在前,不用再排;调用方传进来的 runs 沿用同一个约定。
+    for info in (runs if runs is not None else scan_runs(runs_root, now=now)):
         key = run_key(info)
         if not info.settled:
             skipped.append(key)
