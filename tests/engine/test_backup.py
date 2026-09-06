@@ -25,11 +25,11 @@ from d1max_patrol.engine.backup import (
     marker_path,
     plan_sync,
     read_marker,
-    read_state,
+    read_sync_state,
     resolve_targets,
     state_path,
     verify_run,
-    write_state,
+    write_sync_state,
 )
 from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff, read_role
 from d1max_patrol.engine.retention import scan_runs
@@ -184,18 +184,18 @@ def test_能不能备份跟拦不拦起飞是两件事(tmp_path):
 
 
 def test_从没同步过的盘读出来是空状态(tmp_path):
-    assert read_state(tmp_path, robot_sn="D1M-0007") == EMPTY_STATE
+    assert read_sync_state(tmp_path, robot_sn="D1M-0007") == EMPTY_STATE
 
 
 def test_写下的状态读得回(tmp_path):
     state = SyncState(robot_sn="D1M-0007", last_sync_ms=1_757_000_000_000,
                       done=frozenset({"一号厂房/20260901T010203Z"}))
-    write_state(tmp_path, state)
-    assert read_state(tmp_path, robot_sn="D1M-0007") == state
+    write_sync_state(tmp_path, state)
+    assert read_sync_state(tmp_path, robot_sn="D1M-0007") == state
 
 
 def test_写状态是原子的_不留临时文件(tmp_path):
-    write_state(tmp_path, SyncState(robot_sn="D1M-0007"))
+    write_sync_state(tmp_path, SyncState(robot_sn="D1M-0007"))
     assert not list(state_path(tmp_path).parent.glob("*.tmp"))
 
 
@@ -204,21 +204,21 @@ def test_状态文件坏了当成空状态而不是抛(tmp_path):
     # 看不见它在不在工作"的东西。当成没同步过最坏是重拷一遍,不毁任何东西。
     state_path(tmp_path).parent.mkdir(parents=True)
     state_path(tmp_path).write_text("{坏了", encoding="utf-8")
-    assert read_state(tmp_path, robot_sn="D1M-0007") == EMPTY_STATE
+    assert read_sync_state(tmp_path, robot_sn="D1M-0007") == EMPTY_STATE
 
 
 def test_状态里记的_SN_跟这台狗对不上就当成没同步过(tmp_path):
     # 这块盘被重新初始化给了这台狗,但旧进度还在。那些键指的是另一只狗的归档。
-    write_state(tmp_path, SyncState(robot_sn="D1M-0008", last_sync_ms=1,
+    write_sync_state(tmp_path, SyncState(robot_sn="D1M-0008", last_sync_ms=1,
                                     done=frozenset({"一号厂房/20260901T010203Z"})))
-    assert read_state(tmp_path, robot_sn="D1M-0007") == EMPTY_STATE
+    assert read_sync_state(tmp_path, robot_sn="D1M-0007") == EMPTY_STATE
 
 
 def test_狗没身份的时候不拿_SN_去卡状态(tmp_path):
     state = SyncState(robot_sn="D1M-0007", last_sync_ms=1,
                       done=frozenset({"一号厂房/20260901T010203Z"}))
-    write_state(tmp_path, state)
-    assert read_state(tmp_path, robot_sn="unknown") == state
+    write_sync_state(tmp_path, state)
+    assert read_sync_state(tmp_path, robot_sn="unknown") == state
 
 
 def test_记新的一趟是并集_不覆盖(tmp_path):
@@ -277,7 +277,7 @@ def test_已经同步过的不再拷(tmp_path):
     mount.mkdir()
     _make_run(runs, "一号厂房", "20260901T010203Z")
     _make_run(runs, "一号厂房", "20260902T010203Z")
-    write_state(mount, SyncState(robot_sn="D1M-0007", last_sync_ms=1,
+    write_sync_state(mount, SyncState(robot_sn="D1M-0007", last_sync_ms=1,
                                  done=frozenset({"一号厂房/20260901T010203Z"})))
     plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
                      free_bytes=10 * 1024 * 1024 * 1024)
@@ -448,7 +448,7 @@ def test_核对没过的那一趟不记进已同步(tmp_path):
 
     apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007",
                copy=_坏拷贝)
-    assert read_state(mount, robot_sn="D1M-0007").done == frozenset()
+    assert read_sync_state(mount, robot_sn="D1M-0007").done == frozenset()
 
 
 def test_一趟失败不影响别的趟(tmp_path):
@@ -464,7 +464,7 @@ def test_一趟失败不影响别的趟(tmp_path):
                      copy=_只坏一趟)
     assert res.copied == ("乙/20260902T010203Z",)
     assert [k for k, _ in res.failed] == ["甲/20260901T010203Z"]
-    assert read_state(mount, robot_sn="D1M-0007").done == {
+    assert read_sync_state(mount, robot_sn="D1M-0007").done == {
         "乙/20260902T010203Z"}
 
 
@@ -477,7 +477,7 @@ def test_拷贝不留临时文件(tmp_path):
 def test_拷完写状态_上次同步时间跟着走(tmp_path):
     runs, mount, plan = _plan(tmp_path)
     apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
-    state = read_state(mount, robot_sn="D1M-0007")
+    state = read_sync_state(mount, robot_sn="D1M-0007")
     assert state.last_sync_ms == 1_757_000_000_000
     assert state.robot_sn == "D1M-0007"
 
@@ -492,7 +492,7 @@ def test_没有新东西要拷也算同步过一次(tmp_path):
     assert again.items == ()
     res = apply_sync(again, now_ms=1_757_000_900_000, robot_sn="D1M-0007")
     assert res.copied == ()
-    assert read_state(mount, robot_sn="D1M-0007").last_sync_ms == 1_757_000_900_000
+    assert read_sync_state(mount, robot_sn="D1M-0007").last_sync_ms == 1_757_000_900_000
 
 
 def test_报满的计划照拷能装下的那些(tmp_path):
@@ -532,7 +532,7 @@ def test_源目录在开拷之前整个消失要记进失败而不是静默成�
     assert "甲/20260901T010203Z" not in res.copied
     assert [k for k, _ in res.failed] == ["甲/20260901T010203Z"]
     assert "消失" in dict(res.failed)["甲/20260901T010203Z"]
-    assert "甲/20260901T010203Z" not in read_state(
+    assert "甲/20260901T010203Z" not in read_sync_state(
         mount, robot_sn="D1M-0007").done
 
 
@@ -542,7 +542,7 @@ def test_两趟都没了的时候一个字节也不记(tmp_path):
     res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
     assert res.copied == ()
     assert res.bytes_copied == 0
-    assert read_state(mount, robot_sn="D1M-0007").done == frozenset()
+    assert read_sync_state(mount, robot_sn="D1M-0007").done == frozenset()
 
 
 def test_源目录不存在的时候核对回的是非空(tmp_path):
@@ -603,7 +603,7 @@ def test_拷到一半盘被拔掉_剩下的记失败而且不落到根盘上(tmp
     assert [k for k, _ in res.failed] == ["乙/20260902T010203Z"]
     assert "不在了" in dict(res.failed)["乙/20260902T010203Z"]
     assert not (mount / "runs" / "乙").exists()
-    assert read_state(mount, robot_sn="D1M-0007").done == {
+    assert read_sync_state(mount, robot_sn="D1M-0007").done == {
         "甲/20260901T010203Z"}
 
 
@@ -628,7 +628,7 @@ def test_核对那一下炸了只赔这一趟_前面拷成的照样记账(tmp_pa
     assert len(res.failed) == 1
     assert "核对不了" in dict(res.failed)[plan.items[0].key]
     # 拷成的那一趟照样进了账本 —— 下次不会重拷。
-    assert read_state(mount, robot_sn="D1M-0007").done == set(res.copied)
+    assert read_sync_state(mount, robot_sn="D1M-0007").done == set(res.copied)
 
 
 def test_账本写不进去不算整趟失败_但要说清楚下次会重拷(tmp_path, monkeypatch):
@@ -640,7 +640,7 @@ def test_账本写不进去不算整趟失败_但要说清楚下次会重拷(tmp
         raise OSError("Read-only file system")
 
     runs, mount, plan = _plan(tmp_path)
-    monkeypatch.setattr(B, "write_state", _写不进去)
+    monkeypatch.setattr(B, "write_sync_state", _写不进去)
     res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
     assert res.failed == ()
     assert len(res.copied) == len(plan.items)
@@ -684,6 +684,6 @@ def test_标记和进度都是_fsync_过才改名的(tmp_path, monkeypatch):
     init_target(tmp_path, robot_sn="D1M-0007", role=DiskRole.MIRROR,
                 now_ms=1_757_000_000_000)
     assert len(_落盘了) == 1
-    write_state(tmp_path, SyncState(robot_sn="D1M-0007", last_sync_ms=1,
+    write_sync_state(tmp_path, SyncState(robot_sn="D1M-0007", last_sync_ms=1,
                                     done=set()))
     assert len(_落盘了) == 2

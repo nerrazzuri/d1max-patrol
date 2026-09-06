@@ -103,7 +103,7 @@ def _atomic_json(target: Path, payload: dict[str, Any]) -> None:
     页缓存;``rename`` 在 ext4 上是有序的,但"有序"保证的是改名不早于写入落盘,
     **不保证两者都落了盘**。而这两个文件的工况恰恰是断电:热插拔换电池是这台
     机器的日常操作,拔盘更是天天在发生。写坏了的 ``state.json`` 意味着整块盘
-    的同步进度归零(``read_state`` 读不出来就回 ``EMPTY_STATE``),下次同步把
+    的同步进度归零(``read_sync_state`` 读不出来就回 ``EMPTY_STATE``),下次同步把
     几十 GB 重拷一遍;写坏了的 ``target.json`` 意味着这块盘不再被认出来 ——
     ``read_role`` 回 UNKNOWN,于是它开始拦起飞。写法照 ``homing.save_home``。
 
@@ -307,7 +307,7 @@ class SyncState:
 EMPTY_STATE = SyncState()
 
 
-def read_state(mount: Path | str, *, robot_sn: str = "") -> SyncState:
+def read_sync_state(mount: Path | str, *, robot_sn: str = "") -> SyncState:
     """读盘上的同步进度。**读不出来、或者不是这台狗的,一律当成没同步过。**
 
     这个方向是安全的:当成没同步过,最坏是重拷一遍(只增不删,不毁任何东西);
@@ -328,7 +328,7 @@ def read_state(mount: Path | str, *, robot_sn: str = "") -> SyncState:
     return state
 
 
-def write_state(mount: Path | str, state: SyncState) -> None:
+def write_sync_state(mount: Path | str, state: SyncState) -> None:
     """把进度写回盘上。原子写,理由同 :func:`_atomic_json`。"""
     _atomic_json(state_path(mount), state.to_wire())
 
@@ -426,7 +426,7 @@ def plan_sync(runs_root: Path | str, mount: Path | str, *, robot_sn: str = "",
     请求路径上,归档一多,重扫的代价不是可以忽略的。不给就照旧自己扫。
     """
     mount = Path(mount)
-    state = read_state(mount, robot_sn=robot_sn)
+    state = read_sync_state(mount, robot_sn=robot_sn)
     free = free_bytes if free_bytes is not None else _free_bytes(mount)
     dest_root = mount / RUNS_DIR_NAME
 
@@ -643,11 +643,11 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
 
     detail = plan.detail
     try:
-        state = read_state(plan.mount, robot_sn=robot_sn)
+        state = read_sync_state(plan.mount, robot_sn=robot_sn)
         if not state.robot_sn:
             state = SyncState(robot_sn=robot_sn, last_sync_ms=state.last_sync_ms,
                               done=state.done)
-        write_state(plan.mount, state.with_done(copied, now_ms=now_ms))
+        write_sync_state(plan.mount, state.with_done(copied, now_ms=now_ms))
     except OSError as exc:
         # **账本没记上不等于这一趟白拷了。** 数据已经落在盘上,只是"拷过了"
         # 这件事没记下来 —— 下次同步会把这几趟当成新的重拷一遍。重拷是浪费,

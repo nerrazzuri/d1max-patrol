@@ -95,9 +95,9 @@ from d1max_patrol.engine.backup import (
     init_target,
     marker_path,
     plan_sync,
+    read_sync_state,
     resolve_targets,
 )
-from d1max_patrol.engine.backup import read_state as read_backup_state
 from d1max_patrol.engine.baselines import BASELINE_DIR_NAME, baselines_bytes
 from d1max_patrol.engine.export import (
     EXPORTS_DIR_NAME,
@@ -1814,7 +1814,7 @@ class AppServer:
                     row["detail"] = ";".join(x for x in (
                         t.detail, _NO_MARKER_CAPACITY) if x)
                 if t.usable:
-                    state = read_backup_state(t.mount, robot_sn=ctx.identity.sn)
+                    state = read_sync_state(t.mount, robot_sn=ctx.identity.sn)
                     plan = plan_sync(ctx.runs_root, t.mount,
                                      robot_sn=ctx.identity.sn, now=now,
                                      runs=runs)

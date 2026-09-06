@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from d1max_patrol.engine.archive import STAMP_FMT
-from d1max_patrol.engine.backup import init_target, read_marker, read_state
+from d1max_patrol.engine.backup import init_target, read_marker, read_sync_state
 from d1max_patrol.engine.removable import DiskRole, Removable
 from tests.app import conftest as C
 from tests.conftest import SomeDisks
@@ -173,7 +173,7 @@ def test_sync_要_apply_true_才真拷(one_disk):
     assert body["result"]["copied"] == ["一号厂房/20260101T000000Z"]
     assert (mount / "runs" / "一号厂房" / "20260101T000000Z"
             / "manifest.json").is_file()
-    assert read_state(mount, robot_sn=ctx.identity.sn).last_sync_ms > 0
+    assert read_sync_state(mount, robot_sn=ctx.identity.sn).last_sync_ms > 0
 
 
 def test_eject_说可以拔了(one_disk):
@@ -301,7 +301,7 @@ def test_自动同步会往镜像盘上写(one_disk):
     ctx.bridge.call(s._autosync_once)
     key = f"一号厂房/{run.name}"
     assert (mount / "runs" / "一号厂房" / run.name / "manifest.json").is_file()
-    assert key in read_state(mount, robot_sn=ctx.identity.sn).done
+    assert key in read_sync_state(mount, robot_sn=ctx.identity.sn).done
 
 
 def test_自动同步一个字节都不往交付盘上写(one_disk):
