@@ -361,8 +361,16 @@ class AppContext:
     #: 这是哪只狗。手机按它认机器、给归档分组 —— 每只 D1 Max 的内网地址
     #: 都一样,靠地址分不出谁是谁(见 ``app/identity.py``)。
     identity: Identity = field(default_factory=resolve)
-    #: 这台狗跑在哪一档。默认单机 —— 没有服务器的客户装的就是这个。
-    form: Form = STANDALONE
+
+    @property
+    def form(self) -> Form:
+        """这台狗跑在哪一档。**ctx 自己不存,问引擎要。**
+
+        引擎里那道 preflight 才是真拦住这一趟的那道。ctx 再存一份,
+        就有了两个出处:今天两边都是单机档,谁也看不出来;等联网档落地,
+        对不上的那个组合正好是没人跑过的那个(见 ``engine/form.py`` 开篇)。
+        """
+        return self.engine.form
 
 
 # ------------------------------------------------------------------ 状态汇总
@@ -1385,7 +1393,7 @@ async def _make_engine(nav: NavBackend, device: DeviceBackend,
                        media: Mapping[str, MediaSource],
                        runs_root: Path,
                        fingerprint: Mapping[str, str] | None = None,
-                       ) -> MissionEngine:
+                       *, form: Form = STANDALONE) -> MissionEngine:
     """在循环线程里造引擎 —— 它内部那个队列要绑在这条循环上。
 
     指纹里带着机身身份,这样每次运行的 ``manifest.json`` 自己就写明了是哪只
@@ -1394,7 +1402,7 @@ async def _make_engine(nav: NavBackend, device: DeviceBackend,
     不是目录名。
     """
     return MissionEngine(nav, device, media, runs_root,
-                         fingerprint=dict(fingerprint or {}))
+                         fingerprint=dict(fingerprint or {}), form=form)
 
 
 async def _make_teleop(device: DeviceBackend, engine: MissionEngine) -> Teleop:

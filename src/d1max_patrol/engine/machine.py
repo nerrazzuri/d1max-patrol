@@ -242,6 +242,16 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    @property
+    def form(self) -> Form:
+        """这台狗跑在哪一档。**按进程定,一趟跑不会换。**
+
+        对外只读,是为了让"跑在哪一档"在整个进程里只有这一个出处 ——
+        引擎里那道 preflight 才是真拦住这一趟的那道,别处再存一份,
+        两份迟早不一样,而不一样的那天没有任何测试会红。
+        """
+        return self._form
+
     def add_busy_check(self, check: Callable[[], str]) -> None:
         """登记一个"本体现在被别人占着吗"的检查。返回占用原因,空串表示没占。
 
