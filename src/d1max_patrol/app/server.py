@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -143,6 +144,10 @@ from d1max_patrol.inspect.judge import (
 )
 from d1max_patrol.inspect.report import write_reports
 from d1max_patrol.protocol.nav_types import Pose
+
+#: 写法照 ``recorder`` / ``backends.vendor_nav``:模块级 logger,不在这里配
+#: handler、不动根 logger —— 配置是 ``cli`` 那一层的事。
+log = logging.getLogger(__name__)
 
 #: 静态文件目录。模块导入时就 resolve,后面判越界拿它当基准。
 STATIC_DIR = (Path(__file__).resolve().parent / "static").resolve()
@@ -1712,6 +1717,11 @@ class AppServer:
 
         **先睡后跑**:进程刚起来那一刻后端在连、引擎在建,那不是抢盘 I/O 的
         好时候,而备份晚一分钟没有任何代价。
+
+        **这里没有兜底,兜底在 ``_autosync_once`` 里** —— 它整趟都包着
+        ``except (OSError, BackupError)``,所以这条 ``while True`` 转不出去。
+        兜底放在那一层而不是这一层,是为了让"哪块盘出的事"还在手边:这一层
+        除了"又炸了一次"什么也说不出。
         """
         while True:
             await asyncio.sleep(_AUTOSYNC_S)
@@ -1738,15 +1748,34 @@ class AppServer:
 
         **引擎在跑就整趟跳过。** 巡检的时候不跟它抢盘 I/O:归档正在往
         ``runs_root`` 里写,而这边要递归 stat 整棵树再拷几百兆。
+
+        **这一趟从头到尾都在兜底里,而且出错要留下痕迹。** 取 ``engine.running``、
+        扫盘、认盘这几步在兜底外面的那一边:任何一个抛出来,``_autosync_loop``
+        整条就没了 —— 没有异常回溯、没有日志、页面上什么也不变,而镜像盘从此
+        再也不同步。**那正是这一卷立志要消灭的那种静默失败**(一块坏掉的镜像盘
+        本身就是个完美的静默失败)。所以捕获 ``(OSError, BackupError)`` 并
+        ``log.warning`` 一行说得出是哪块盘的话。
+
+        **``asyncio.CancelledError`` 必须让它穿过去。** 3.10 里它不是
+        ``Exception`` 的子类,写 ``except (OSError, BackupError)`` 本来就碰不到
+        它 —— 这里记一笔是提醒后来人:别为了"稳"把它改成 ``except Exception``
+        或 ``BaseException``,吞了它 ``_autosync_stop()`` 就停不掉这条协程。
         """
         ctx = self._ctx
-        if ctx.engine.running:
+        try:
+            if ctx.engine.running:
+                return
+            disks = await scan_or_unknown(ctx.removable)
+            if disks is None:
+                # 认不出插着什么就什么也不写 —— 跟 ``_scan_targets`` 同一条纪律。
+                return
+            targets = resolve_targets(disks, robot_sn=ctx.identity.sn)
+        except (OSError, BackupError):
+            # 还没轮到具体某块盘,所以这一行说不出挂载点 —— 它说的是"这一圈
+            # 连认盘都没认成",而下一圈会照常再来一次。
+            log.warning("自动同步:这一圈认盘没认成,跳过", exc_info=True)
             return
-        disks = await scan_or_unknown(ctx.removable)
-        if disks is None:
-            # 认不出插着什么就什么也不写 —— 跟 ``_scan_targets`` 同一条纪律。
-            return
-        for t in resolve_targets(disks, robot_sn=ctx.identity.sn):
+        for t in targets:
             if not (t.usable and t.role is DiskRole.MIRROR):
                 continue
             key = t.mount.as_posix()
@@ -1773,7 +1802,12 @@ class AppServer:
                 # 因为备份本来就是那个"平时看不见它在不在工作"的东西。
                 # ``asyncio.CancelledError`` 是 BaseException,不在这里被吞掉:
                 # 吞了 ``stop()`` 就停不掉。
-                pass
+                #
+                # **但"不死"不等于"不说话"。** 悄悄跳过跟循环死掉一样不可观测,
+                # 所以留一行说得出是哪块盘的日志;真正顶到人脸上的那句话由
+                # ``backup_notice`` 按 behind 出(见 ``/api/storage``)。
+                log.warning("自动同步:%s 这一圈没跑成,下一圈再试", key,
+                            exc_info=True)
             finally:
                 with self._sync_lock:
                     self._syncing.discard(key)

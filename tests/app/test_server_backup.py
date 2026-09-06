@@ -364,6 +364,51 @@ def test_扫盘炸了不许把这条循环炸掉(bridge, tmp_path):
         s.stop()
 
 
+def test_扫盘连炸两次这条循环也不许死_第三圈照常拷(one_disk, monkeypatch):
+    """一条悄悄死掉的自动同步是这一卷立志要消灭的那种静默失败。
+
+    取 ``engine.running`` 和扫盘原来在兜底外面:任何一个抛出来,整条
+    ``_autosync_loop`` 就没了 —— 没有回溯、没有日志、页面上什么也不变,
+    而镜像盘从此再也不同步,所有人都以为有第二份。
+
+    **这里测的是那条真的循环,不是 ``_autosync_once``** —— "循环还活着"这件事
+    只有循环自己答得了。周期临时调到 10 毫秒,不真睡 60 秒。
+    """
+    import time
+
+    from d1max_patrol.app import server as S
+
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    run = _write_run(ctx, "一号厂房", 1)
+
+    真扫盘, 扫了几次 = S.scan_or_unknown, []
+
+    async def _前两次炸(probe):
+        扫了几次.append(1)
+        if len(扫了几次) <= 2:
+            raise OSError("stale NFS file handle")
+        return await 真扫盘(probe)
+
+    # ``AppServer.start`` 已经把这条循环建起来了(周期 60 秒)。先收掉,
+    # 换上快周期和会炸的扫盘,再建一条新的。
+    ctx.bridge.call(s._autosync_stop)
+    monkeypatch.setattr(S, "scan_or_unknown", _前两次炸)
+    monkeypatch.setattr(S, "_AUTOSYNC_S", 0.01)
+    ctx.bridge.call(s._autosync_start)
+    try:
+        落地 = mount / "runs" / "一号厂房" / run.name / "manifest.json"
+        截止 = time.monotonic() + 10.0
+        while not 落地.is_file() and time.monotonic() < 截止:
+            time.sleep(0.02)
+        # 前两圈炸了,循环还活着才会有第三圈,第三圈才拷得出这个文件。
+        assert 落地.is_file()
+        assert len(扫了几次) >= 3
+    finally:
+        ctx.bridge.call(s._autosync_stop)
+
+
 def test_同步跑完之后挂载点从在飞的名单里退出来(one_disk):
     # 退不出来的话,这块盘从此再也不会被自动同步碰,而且 /api/backup/eject
     # 会永远回"这块盘正在同步,现在不能拔"。
