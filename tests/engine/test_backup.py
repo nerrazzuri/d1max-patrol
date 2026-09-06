@@ -605,3 +605,43 @@ def test_拷到一半盘被拔掉_剩下的记失败而且不落到根盘上(tmp
     assert not (mount / "runs" / "乙").exists()
     assert read_state(mount, robot_sn="D1M-0007").done == {
         "甲/20260901T010203Z"}
+
+
+def test_核对那一下炸了只赔这一趟_前面拷成的照样记账(tmp_path, monkeypatch):
+    # 核对要把两边的文件从头读一遍,而"拷完那一刻盘被拔了"正是这一段最可能
+    # 撞上的事。不接住的话,前面已经拷成的那几趟一趟都记不上账。
+    from d1max_patrol.engine import backup as B
+
+    真核对 = B.verify_run
+    炸过了 = []
+
+    def _第二趟核对就炸(src, dest):
+        if 炸过了:
+            return 真核对(src, dest)
+        炸过了.append(1)
+        raise OSError("Input/output error")
+
+    runs, mount, plan = _plan(tmp_path)
+    monkeypatch.setattr(B, "verify_run", _第二趟核对就炸)
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert len(res.copied) == 1
+    assert len(res.failed) == 1
+    assert "核对不了" in dict(res.failed)[plan.items[0].key]
+    # 拷成的那一趟照样进了账本 —— 下次不会重拷。
+    assert read_state(mount, robot_sn="D1M-0007").done == set(res.copied)
+
+
+def test_账本写不进去不算整趟失败_但要说清楚下次会重拷(tmp_path, monkeypatch):
+    # 数据已经落在盘上了,只是"拷过了"这件事没记下。抛出去的那一边,调用方
+    # 看到的是一次彻头彻尾的失败,连"哪几趟拷成了"都拿不到。
+    from d1max_patrol.engine import backup as B
+
+    def _写不进去(mount, state):
+        raise OSError("Read-only file system")
+
+    runs, mount, plan = _plan(tmp_path)
+    monkeypatch.setattr(B, "write_state", _写不进去)
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert res.failed == ()
+    assert len(res.copied) == len(plan.items)
+    assert "下次会重拷" in res.detail

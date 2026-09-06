@@ -569,6 +569,11 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
     盘不在的时候**绝不写进度**:写了等于把"同步过"记到一块不在的盘上 ——
     真正的进度还在那块盘里,而根盘上多出来的那份下次挂上会被 ``robot_sn``
     对不上以外的任何理由信任。
+
+    **一趟的 I/O 错误只赔一趟。** 拷贝、核对、写账本三处都各自接住 ``OSError``:
+    这个函数一次要跑几十趟、几十 GB,让最后一下 I/O 错误把前面全部的战果一起
+    掀翻,是最不值的一种失败。写账本失败尤其要说清楚 —— 数据已经在盘上了,
+    只是"记过了"没写下,下次会重拷一遍(重拷是浪费,不是损坏)。
     """
     copied: list[str] = []
     failed: list[tuple[str, str]] = []
@@ -594,20 +599,35 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
         except OSError as exc:
             failed.append((item.key, f"拷不过去: {exc}"))
             continue
-        why = verify_run(item.src, item.dest)
+        try:
+            why = verify_run(item.src, item.dest)
+        except OSError as exc:
+            # **核对自己也会炸。** 它要把两边的文件从头读一遍,而"拷完那一刻
+            # 盘被拔了"正是这一段最可能撞上的事。不接住的话,这个异常会从
+            # ``apply_sync`` 里蹿出去,前面已经拷成的那几趟一趟都记不上账 ——
+            # 下次全部重拷。接住只赔掉这一趟。
+            failed.append((item.key, f"拷完之后核对不了: {exc}"))
+            continue
         if why:
             failed.append((item.key, why))
             continue
         copied.append(item.key)
         done_bytes += size
 
-    state = read_state(plan.mount, robot_sn=robot_sn)
-    if not state.robot_sn:
-        state = SyncState(robot_sn=robot_sn, last_sync_ms=state.last_sync_ms,
-                          done=state.done)
-    write_state(plan.mount, state.with_done(copied, now_ms=now_ms))
-
     detail = plan.detail
+    try:
+        state = read_state(plan.mount, robot_sn=robot_sn)
+        if not state.robot_sn:
+            state = SyncState(robot_sn=robot_sn, last_sync_ms=state.last_sync_ms,
+                              done=state.done)
+        write_state(plan.mount, state.with_done(copied, now_ms=now_ms))
+    except OSError as exc:
+        # **账本没记上不等于这一趟白拷了。** 数据已经落在盘上,只是"拷过了"
+        # 这件事没记下来 —— 下次同步会把这几趟当成新的重拷一遍。重拷是浪费,
+        # 不是损坏(``_copy_file`` 覆盖写)。而把这一下抛出去的那一边,调用方
+        # 看到的是一次彻头彻尾的失败,连"哪几趟拷成了"都拿不到。
+        detail = (f"这一趟拷成了但进度没记上,下次会重拷(写盘上的账本时出错: "
+                  f"{exc})")
     if failed and not detail:
         detail = f"有 {len(failed)} 趟没拷成,见 failed"
     elif failed:
