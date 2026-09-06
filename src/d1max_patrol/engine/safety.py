@@ -68,6 +68,9 @@ class SafetyContext:
     blocked_for_s: float = 0.0
     loc_reset_attempts: int = 0
     ws_down_for_s: float = 0.0
+    #: "从现在这个位置走回原点大约要掉多少个点的电"(``homing.estimate_cost_pct``)。
+    #: **默认 0 表示"还没算出来",不表示"回家不要钱"** —— 见 ``return_line_pct``。
+    return_cost_pct: float = 0.0
 
 
 def _loc_lost(ctx: SafetyContext) -> Ruling:
@@ -135,6 +138,26 @@ def rule(event: Event | DeviceEvent, ctx: SafetyContext) -> Ruling:
     return Ruling(Decision.CONTINUE, f"{type(event).__name__} 无对应规则,只记录")
 
 
+def return_line_pct(ctx: SafetyContext) -> float:
+    """这一刻的返航线。
+
+    **返航线是动态的**(spec §1.2):跑到场地最远端时的返航线,必然高于刚出发时。
+    算法只有一句 —— **你必须在"还够走回去、而且走到家时手上还剩着中止线
+    那份余量"的时候就掉头**::
+
+        返航线 = max(静态下限, 中止线 + 回家的成本)
+
+    ``policy.battery_return_pct`` 因此从"返航线"降格成"返航线的静态下限"。
+    字段名和 wire 格式都没动 —— 动了要改协议,而它作为下限仍然有意义:
+    它挡的是有人把场地配得极小、把返航线压到没有余量。
+
+    ``return_cost_pct`` 为 0 时(还没算出来)退回静态下限,**绝不返回一条比
+    中止线还低的返航线** —— 那会让 ``RETURN_HOME`` 变成永远走不到的死代码。
+    """
+    dynamic = ctx.policy.battery_abort_pct + ctx.return_cost_pct
+    return max(ctx.policy.battery_return_pct, dynamic)
+
+
 def battery_ruling(ctx: SafetyContext) -> Ruling:
     """电量单独一条。
 
@@ -144,10 +167,13 @@ def battery_ruling(ctx: SafetyContext) -> Ruling:
     if ctx.battery_pct < ctx.policy.battery_abort_pct:
         # 撑着走回去可能半路没电趴在外面,原地停下更好找。
         return Ruling(Decision.ABORT,
-                      f"电量 {ctx.battery_pct:.1f}% 低于中止线 "
-                      f"{ctx.policy.battery_abort_pct:.1f}%,原地停止")
-    if ctx.battery_pct < ctx.policy.battery_return_pct:
+                      f"电量 {ctx.battery_pct:.0f}% 低于中止线 "
+                      f"{ctx.policy.battery_abort_pct:.0f}%,原地停止")
+    line = return_line_pct(ctx)
+    if ctx.battery_pct < line:
         return Ruling(Decision.RETURN_HOME,
-                      f"电量 {ctx.battery_pct:.1f}% 低于返航线 "
-                      f"{ctx.policy.battery_return_pct:.1f}%")
-    return Ruling(Decision.CONTINUE, f"电量 {ctx.battery_pct:.1f}%,充足")
+                      f"电量 {ctx.battery_pct:.0f}% 低于返航线 {line:.0f}%"
+                      f"(中止线 {ctx.policy.battery_abort_pct:.0f}% + 回家 "
+                      f"{ctx.return_cost_pct:.0f}%),返航")
+    return Ruling(Decision.CONTINUE,
+                  f"电量 {ctx.battery_pct:.0f}%,高于返航线 {line:.0f}%")

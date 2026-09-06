@@ -37,6 +37,7 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
 )
 from d1max_patrol.engine.archive import RunArchive
+from d1max_patrol.engine.homing import HomePoint, estimate_cost_pct
 from d1max_patrol.engine.mission import Action, Mission, MissionWaypoint
 from d1max_patrol.engine.preflight import PreflightReport, run_preflight
 from d1max_patrol.engine.safety import (
@@ -197,7 +198,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def __init__(self, nav: NavBackend, device: DeviceBackend,
                  media: Mapping[str, MediaSource], runs_root: Path,
                  *, clock: Callable[[], float] = time.monotonic,
-                 fingerprint: Mapping[str, Any] | None = None) -> None:
+                 fingerprint: Mapping[str, Any] | None = None,
+                 home: HomePoint | None = None) -> None:
         super().__init__()
         self._nav = nav
         self._device = device
@@ -215,6 +217,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         self._done.set()
         self._snapshot = RunSnapshot(RunState.IDLE, "", 0, "", 0, 0)
         self._busy_checks: list[Callable[[], str]] = []
+        self._home = home
 
     # ------------------------------------------------------------------ 对外
 
@@ -576,6 +579,25 @@ class MissionEngine(EventEmitter[RunSnapshot]):
 
     # ------------------------------------------------------------ 事件与降级
 
+    def _return_cost_pct(self) -> float:
+        """从"当前在哪"估回原点的电量成本。
+
+        **位置用"当前正要去的那个点",不用实时位姿。** NavBackend 没有位姿口子
+        (位姿走的是 8091 那座桥),而正要去的那个点比实际位置更远 —— 往
+        更费电的方向偏,正是我们要的方向。
+
+        没标原点时返回 0,由 ``return_line_pct`` 退回静态返航线。
+        起飞门槛(``preflight``)那一关会先把"没标原点"拦下来,所以跑到这里
+        还没有原点,只可能是有人绕过了门槛。
+        """
+        live = self._live
+        home = self._home
+        if live is None or home is None or not live.mission.waypoints:
+            return 0.0
+        index = min(live.index, len(live.mission.waypoints) - 1)
+        here = live.mission.waypoints[index].pose
+        return estimate_cost_pct(home.pose.distance_to(here))
+
     def _context(self) -> SafetyContext:
         live = self._live
         assert live is not None
@@ -584,7 +606,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         return SafetyContext(policy=live.mission.policy,
                              battery_pct=live.battery_pct,
                              blocked_for_s=blocked_for,
-                             loc_reset_attempts=live.loc_reset_attempts)
+                             loc_reset_attempts=live.loc_reset_attempts,
+                             return_cost_pct=self._return_cost_pct())
 
     async def _handle(self, item: Any) -> None:
         """处理一个输入。该怎么办由规则表说了算,状态机自己不写规则。"""

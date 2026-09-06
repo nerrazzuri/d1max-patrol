@@ -458,7 +458,7 @@ async def test_dwell期间照样处理事件(make_engine, nav, device):
 async def test_电量到返航线就返航(make_engine, nav, device):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(policy=policy(battery_abort_pct=15.0)))
     await until(lambda: nav.goto_calls)
     device.emit(BatteryEvent(percent=20.0))      # 返航线 25,中止线 15
     assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
@@ -497,7 +497,7 @@ async def test_中止不含任何位移(make_engine, nav, device):
 async def test_返航路上电量再掉也不会打断返航(make_engine, nav, device):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(policy=policy(battery_abort_pct=15.0)))
     await until(lambda: nav.goto_calls)
     device.emit(BatteryEvent(percent=20.0))
     await engine.wait_state(RunState.RETURNING)

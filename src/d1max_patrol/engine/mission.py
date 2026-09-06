@@ -107,7 +107,10 @@ class Policy:
     on_waypoint_failed: str = "retry_then_skip"
     waypoint_retry: int = 1
     battery_return_pct: float = 25.0
-    battery_abort_pct: float = 15.0
+    #: 中止线。**25 不是 15。** 厂商的强制趴窝线是单块电池 10%(硬件手册
+    #: 2.3.3「内部异常保护」),15 离它只剩 5 个点,而这 5 个点要覆盖:发现、
+    #: 告警、人走过去、把狗弄回来。不够。
+    battery_abort_pct: float = 25.0
     on_loc_lost: str = "pause_then_abort"
     on_control_lost: str = "pause"
     loops: int = 1

@@ -25,6 +25,7 @@ from d1max_patrol.engine.safety import (
     Decision,
     SafetyContext,
     battery_ruling,
+    return_line_pct,
     rule,
 )
 from d1max_patrol.protocol.nav_frames import AlgErrorItem
@@ -156,12 +157,16 @@ def test_丢控制权的理由里带得出对方给的原因(ctx):
 
 
 def test_电量掉到返航线就返航(ctx):
-    assert battery_ruling(replace(ctx, battery_pct=24.0)).decision is Decision.RETURN_HOME
+    c = replace(ctx, policy=replace(ctx.policy,
+                                    battery_return_pct=25.0, battery_abort_pct=15.0))
+    assert battery_ruling(replace(c, battery_pct=24.0)).decision is Decision.RETURN_HOME
 
 
 def test_电量掉到中止线就地中止而不是硬撑着回去(ctx):
     """撑着走回去可能半路没电趴在外面 —— 原地停下更好找。"""
-    assert battery_ruling(replace(ctx, battery_pct=14.0)).decision is Decision.ABORT
+    c = replace(ctx, policy=replace(ctx.policy,
+                                    battery_return_pct=25.0, battery_abort_pct=15.0))
+    assert battery_ruling(replace(c, battery_pct=14.0)).decision is Decision.ABORT
 
 
 def test_电量够就什么都不做(ctx):
@@ -173,6 +178,59 @@ def test_中止线优先于返航线(ctx):
     c = replace(ctx, policy=replace(ctx.policy,
                                     battery_return_pct=25.0, battery_abort_pct=15.0))
     assert battery_ruling(replace(c, battery_pct=10.0)).decision is Decision.ABORT
+
+
+def test_返航线是中止线加上回家的成本():
+    ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=25.0),
+                        battery_pct=80.0, return_cost_pct=8.0)
+    assert return_line_pct(ctx) == pytest.approx(33.0)
+
+
+def test_返航线永远高于中止线否则返航轮不到():
+    # 这条是本次改动的全部意义。中止先判,返航线要是不严格高于中止线,
+    # RETURN_HOME 这个分支就是死代码 —— 而它是死代码这件事,不会有任何人发现。
+    policy = Policy(battery_return_pct=25.0, battery_abort_pct=25.0)
+    ctx = SafetyContext(policy=policy, battery_pct=80.0, return_cost_pct=3.0)
+    assert return_line_pct(ctx) > policy.battery_abort_pct
+
+
+def test_静态下限还在_场地很小的时候不许把返航线压太低():
+    # 原点就在脚下时返航成本是 3.0,中止 25 + 3 = 28。但要是有人把
+    # battery_return_pct 配成 40,那就听 40 的 —— 下限是下限,不是上限。
+    ctx = SafetyContext(policy=Policy(battery_return_pct=40.0, battery_abort_pct=25.0),
+                        battery_pct=80.0, return_cost_pct=3.0)
+    assert return_line_pct(ctx) == pytest.approx(40.0)
+
+
+def test_跑在场地远端时的返航线高于刚出发时():
+    policy = Policy(battery_return_pct=25.0, battery_abort_pct=25.0)
+    near = SafetyContext(policy=policy, battery_pct=60.0, return_cost_pct=3.0)
+    far = SafetyContext(policy=policy, battery_pct=60.0, return_cost_pct=14.0)
+    assert return_line_pct(far) > return_line_pct(near)
+
+
+def test_同样的电在远端就该掉头_在原点旁边不用():
+    policy = Policy(battery_return_pct=25.0, battery_abort_pct=25.0)
+    far = SafetyContext(policy=policy, battery_pct=36.0, return_cost_pct=14.0)
+    near = SafetyContext(policy=policy, battery_pct=36.0, return_cost_pct=3.0)
+    assert battery_ruling(far).decision is Decision.RETURN_HOME
+    assert battery_ruling(near).decision is Decision.CONTINUE
+
+
+def test_返航的理由里要说清楚是按多远算的():
+    ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=25.0),
+                        battery_pct=30.0, return_cost_pct=8.0)
+    reason = battery_ruling(ctx).reason
+    assert "33" in reason, "人要能从这句话里看出返航线当时是多少"
+
+
+def test_返航成本没喂进来时退回静态返航线():
+    # return_cost_pct 默认 0 —— 那不是"回家不要钱",是"还没算出来"。
+    # 这时必须退回静态那条线,不能算出一条比中止线还低的返航线。
+    ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=15.0),
+                        battery_pct=24.0)
+    assert return_line_pct(ctx) == pytest.approx(25.0)
+    assert battery_ruling(ctx).decision is Decision.RETURN_HOME
 
 
 # ----------------------------------------------------------------------- 断连
