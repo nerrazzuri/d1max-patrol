@@ -645,3 +645,45 @@ def test_账本写不进去不算整趟失败_但要说清楚下次会重拷(tmp
     assert res.failed == ()
     assert len(res.copied) == len(plan.items)
     assert "下次会重拷" in res.detail
+
+
+def test_写标记的时候盘是只读的_出的是一句人话不是裸的_OSError(tmp_path, monkeypatch):
+    # 调用方 app/server.py 的 _backup_init 只接 BackupError。漏出去的那一边,
+    # 一块写保护的盘会变成一个 500 —— 人拿着盘站在狗边上,屏上是"服务器内部错误"。
+    from d1max_patrol.engine import backup as B
+
+    def _只读(target, payload):
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr(B, "_atomic_json", _只读)
+    with pytest.raises(BackupError) as e:
+        init_target(tmp_path, robot_sn="D1M-0007", role=DiskRole.MIRROR,
+                    now_ms=1_757_000_000_000)
+    assert "只读" in str(e.value)
+
+
+def test_标记和进度都是_fsync_过才改名的(tmp_path, monkeypatch):
+    """断电是这台机器的日常:热插拔换电池,拔盘天天在发生。
+
+    ``replace`` 一个人兑现不了原子性 —— ``rename`` 保证的是改名不早于写入落盘,
+    不保证两者都落了盘。写坏了的 ``state.json`` 意味着整块盘的进度归零,
+    写坏了的 ``target.json`` 意味着这块盘不再被认出来,于是开始拦起飞。
+    """
+    import os as _os
+
+    from d1max_patrol.engine import backup as B
+
+    _落盘了 = []
+    _真fsync = _os.fsync
+
+    def _记一笔(fd):
+        _落盘了.append(fd)
+        return _真fsync(fd)
+
+    monkeypatch.setattr(B.os, "fsync", _记一笔)
+    init_target(tmp_path, robot_sn="D1M-0007", role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    assert len(_落盘了) == 1
+    write_state(tmp_path, SyncState(robot_sn="D1M-0007", last_sync_ms=1,
+                                    done=set()))
+    assert len(_落盘了) == 2

@@ -93,17 +93,31 @@ def state_path(mount: Path | str) -> Path:
 
 
 def _atomic_json(target: Path, payload: dict[str, Any]) -> None:
-    """原子写一个 JSON。**先序列化,再落临时文件,再改名。**
+    """原子写一个 JSON。**先序列化,fsync,再改名。**
 
     临时名用 ``retention.unique_tmp`` 而不是固定的 ``.tmp``:备份跑在后台线程
     里,盘况页和接口都在 HTTP 线程里,两边撞上同一个固定名字的那次,先改名的
     那个会把另一个写了一半的内容改成正式文件。
+
+    **``replace`` 一个人兑现不了原子性。** ``write_text`` 返回时数据只到了
+    页缓存;``rename`` 在 ext4 上是有序的,但"有序"保证的是改名不早于写入落盘,
+    **不保证两者都落了盘**。而这两个文件的工况恰恰是断电:热插拔换电池是这台
+    机器的日常操作,拔盘更是天天在发生。写坏了的 ``state.json`` 意味着整块盘
+    的同步进度归零(``read_state`` 读不出来就回 ``EMPTY_STATE``),下次同步把
+    几十 GB 重拷一遍;写坏了的 ``target.json`` 意味着这块盘不再被认出来 ——
+    ``read_role`` 回 UNKNOWN,于是它开始拦起飞。写法照 ``homing.save_home``。
+
+    只 fsync 文件、不 fsync 父目录:目录项没落盘的最坏结果是"改名丢了,还剩
+    上一份完整的",而上一份是完整的。半个 JSON 才是要防的那一种。
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     tmp = unique_tmp(target)
     try:
-        tmp.write_text(text, encoding="utf-8")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
         tmp.replace(target)
     finally:
         tmp.unlink(missing_ok=True)
@@ -161,7 +175,16 @@ def init_target(mount: Path | str, *, robot_sn: str, role: DiskRole,
     target = Target(mount=mount, role=role, sn=robot_sn, label=label,
                     created_at_ms=now_ms)
     # 键名要跟 ``removable.read_role`` 认的一致: role、sn。多写的字段它会忽略。
-    _atomic_json(marker_path(mount), target.to_wire())
+    try:
+        _atomic_json(marker_path(mount), target.to_wire())
+    except OSError as exc:
+        # **包成 BackupError。** 这一句是这个函数唯一会漏出裸 ``OSError`` 的
+        # 地方,而它的调用方 ``app/server.py`` 的 ``_backup_init`` 只接
+        # ``BackupError`` —— 一块写保护的盘(相机的 SD 卡带物理锁片、只读挂载
+        # 的 U 盘)于是变成一个 500,人拿着盘站在狗边上,屏上是"服务器内部错误"。
+        raise BackupError(
+            f"这块盘写不进去({exc})—— 盘可能是只读的(有些盘身上有写保护的"
+            f"锁片),也可能挂载的时候就是只读的,或者盘已经满了") from exc
     return target
 
 
@@ -349,6 +372,10 @@ class SyncPlan:
     #: ``items`` 的总字节。盘装不下的时候它小于 ``behind_bytes``。
     need_bytes: int
     full: bool
+    #: 这一次有什么额外情况要说。**空串 = 没有额外情况**,不是"缺失"、不是
+    #: "还没算出来"。``full`` 为假时它就是空的 —— 调用方要判有没有话说,判
+    #: ``if detail`` 就够了(``apply_sync`` 里拼失败那句话正是这么干的);
+    #: 不要写成 ``detail or "..."`` 之外的任何"补一个默认值"的形状。
     detail: str
 
     def to_wire(self) -> dict[str, Any]:
