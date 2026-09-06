@@ -688,6 +688,10 @@ class AppServer:
         #: 在飞),不是引擎状态 —— 引擎压根不知道备份这回事。服务是
         #: ThreadingHTTPServer,两个请求真的会同时进来,所以要锁。
         self._syncing: set[str] = set()
+        #: 清盘正在跑。**跟 ``_syncing`` 共用一把锁,因为这两件事互斥** ——
+        #: 清盘删的正是同步这一刻在读的那几棵目录树:拷到一半源目录被 rmtree
+        #: 掉,盘上落的是残的一趟,而"只增不删"保证它再也不会被重拷。
+        self._sweeping: bool = False
         self._sync_lock = threading.Lock()
         self._register_routes()
 
@@ -1474,7 +1478,22 @@ class AppServer:
         applied = bool(body.get("apply"))
         deleted: tuple[Path, ...] = ()
         if applied:
-            deleted = apply_sweep(sweep, runs_root=ctx.runs_root)
+            # **清盘和同步互斥。** 同步这一侧正一趟趟地读 runs_root 下的目录树,
+            # 而这里那行 rmtree 删的就是它们。撞上的那次,盘上落的是残的一趟,
+            # 而"只增不删"保证它再也不会被重新考虑 —— 归档两边都缺一块,
+            # 屏上却写着有两份。``{"apply": false}`` 不受影响:出方案不动盘。
+            with self._sync_lock:
+                if self._syncing:
+                    raise HttpError(
+                        409, "正在同步备份盘,先等它跑完再清盘",
+                        "同步正一趟趟地读这些目录,这时候删它们,备份盘上会落下"
+                        "一趟残的归档 —— 而只增不删意味着它永远不会被重拷")
+                self._sweeping = True
+            try:
+                deleted = apply_sweep(sweep, runs_root=ctx.runs_root)
+            finally:
+                with self._sync_lock:
+                    self._sweeping = False
         return json_response({
             "applied": applied,
             "need_bytes": need,
@@ -1696,6 +1715,10 @@ class AppServer:
         if not applied:
             return json_response({"applied": False, "plan": plan.to_wire()})
         with self._sync_lock:
+            if self._sweeping:
+                raise HttpError(
+                    409, "正在按水位清盘,先等它跑完再同步",
+                    "清盘删的正是同步这一刻要读的那几棵目录树")
             if key in self._syncing:
                 raise HttpError(409, "这块盘上已经有一轮同步在跑了")
             self._syncing.add(key)

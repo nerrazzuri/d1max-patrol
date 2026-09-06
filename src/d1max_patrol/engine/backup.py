@@ -462,12 +462,24 @@ def _copy_file(src: Path, dest: Path) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def copy_run(src: Path, dest: Path) -> None:
-    """把一趟归档整个拷过去。目录结构照搬。"""
+def copy_run(src: Path, dest: Path) -> tuple[int, int]:
+    """把一趟归档整个拷过去。目录结构照搬。**回 (拷了几个文件, 拷了多少字节)。**
+
+    **回的是真实计数,不是计划里那个数。** 计划是 ``plan_sync`` 排的时候量的,
+    从那一刻到真开拷之间源目录可能已经变了(甚至整个没了)——拿计划里的数当
+    战果记进账本,盘上零字节而账本是绿的。字节数在**拷之前**从源文件上取:
+    拷完再量的是目标文件,而目标文件正是那个可能没写成的东西。
+    """
+    files = 0
+    total = 0
     for path in sorted(src.rglob("*")):
         if not path.is_file():
             continue
+        size = path.stat().st_size
         _copy_file(path, dest / path.relative_to(src))
+        files += 1
+        total += size
+    return files, total
 
 
 def verify_run(src: Path, dest: Path) -> str:
@@ -476,7 +488,16 @@ def verify_run(src: Path, dest: Path) -> str:
     哈希用 ``export.sha256_file`` —— 它是流式的(1 MiB 一块)。归档里有几百兆
     的视频,``read_bytes()`` 一次读进内存会在 Orin NX 的 8G 上被 OOM killer
     打死,而且是在半夜没人看着的时候。
+
+    **开头那一句 ``src.is_dir()`` 不能省。** ``Path.rglob`` 作用在一个不存在
+    的目录上**返回空列表,不抛异常**(py3.10 实测)。源目录在排计划与开拷之间
+    消失(并发的清盘、有人手动 rm、导出之后释放)时,下面那个循环一次都不进,
+    函数回空串 —— 而空串的意思是"核对通过"。于是这一趟被记进 ``done``,
+    "只增不删"保证它再也不会被重新考虑:**盘上零字节,账本是绿的**,接着清盘
+    器把狗上那份删掉,两边都没了,而屏上写着有两份。
     """
+    if not src.is_dir():
+        return "源目录在拷贝期间消失了 —— 这一趟没有拷成"
     for path in sorted(src.rglob("*")):
         if not path.is_file():
             continue
@@ -514,7 +535,8 @@ class SyncResult:
 
 
 def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
-               copy: Callable[[Path, Path], None] = copy_run) -> SyncResult:
+               copy: Callable[[Path, Path], tuple[int, int]] = copy_run,
+               ) -> SyncResult:
     """照计划拷,**每一趟拷完重新算哈希核对,核对过了才记进进度**。
 
     记早了,下次同步会跳过它 —— 于是那份坏数据永远不会被修,而值守屏上那块
@@ -522,7 +544,8 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
 
     ``copy`` 可注入:"拷过去之后内容不对"在真机上是硬件偶发的,离机没法复现,
     注入是这段核对代码能被测到的唯一办法。测不到的话,它在真机上第一次跑就是
-    它唯一一次跑。
+    它唯一一次跑。它要回 ``(文件数, 字节数)``,**记进账本的是它回的这个数,
+    不是 ``item.size_bytes``** —— 后者是排计划那一刻量的,不是这一趟的战果。
 
     **空计划也写进度。** "同步过了,没有新东西"是一次成功的同步;不更新时间
     的那一边,值守屏上那块"上次同步"会一直停在很久以前 —— 一块好盘看起来像
@@ -533,7 +556,7 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
     done_bytes = 0
     for item in plan.items:
         try:
-            copy(item.src, item.dest)
+            _files, size = copy(item.src, item.dest)
         except OSError as exc:
             failed.append((item.key, f"拷不过去: {exc}"))
             continue
@@ -542,7 +565,7 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
             failed.append((item.key, why))
             continue
         copied.append(item.key)
-        done_bytes += item.size_bytes
+        done_bytes += size
 
     state = read_state(plan.mount, robot_sn=robot_sn)
     if not state.robot_sn:

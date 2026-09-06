@@ -173,3 +173,44 @@ def test_盘况接口里带_backup_块(one_disk):
     body = C.get_json(s, "/api/storage")
     assert body["backup"]["level"] == "neutral"
     assert "未配备份盘" in body["backup"]["detail"]
+
+
+def test_同步在飞的时候清盘要_409(one_disk):
+    # 清盘那行 rmtree 删的正是同步这一刻在读的目录树。撞上的那次,备份盘上落的
+    # 是残的一趟,而"只增不删"保证它永远不会被重拷 —— 两边都缺一块。
+    # **不真起两条线程去撞**:那种红在别人机器上复现不了。直接摆出"有一轮
+    # 同步在飞"这个状态,测的是那道闸门本身。
+    _, s, mount = one_disk
+    s._syncing.add(mount.as_posix())
+    try:
+        body = C.get_err(s, "/api/storage/sweep", 409, method="POST",
+                         payload={"apply": True})
+        assert "正在同步" in json.dumps(body, ensure_ascii=False)
+    finally:
+        s._syncing.discard(mount.as_posix())
+
+
+def test_同步在飞的时候只出方案的清盘不受影响(one_disk):
+    # ``{"apply": false}`` 只出方案不动盘,没有任何东西可撞。
+    _, s, mount = one_disk
+    s._syncing.add(mount.as_posix())
+    try:
+        body = C.get_json(s, "/api/storage/sweep", method="POST",
+                          payload={"apply": False})
+        assert body["applied"] is False
+        assert "sweep" in body
+    finally:
+        s._syncing.discard(mount.as_posix())
+
+
+def test_清盘在飞的时候同步要_409(one_disk):
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    s._sweeping = True
+    try:
+        body = C.get_err(s, "/api/backup/sync", 409, method="POST",
+                         payload={"mount": mount.as_posix(), "apply": True})
+        assert "清盘" in json.dumps(body, ensure_ascii=False)
+    finally:
+        s._sweeping = False

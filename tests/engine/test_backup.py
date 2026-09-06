@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -417,8 +419,9 @@ def test_拷过去之后内容不对会被核对出来(tmp_path):
     runs, mount, plan = _plan(tmp_path)
 
     def _坏拷贝(src, dest):
-        copy_run(src, dest)
+        got = copy_run(src, dest)
         (dest / "events.jsonl").write_text("被改坏了", encoding="utf-8")
+        return got
 
     res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007",
                      copy=_坏拷贝)
@@ -432,8 +435,9 @@ def test_核对没过的那一趟不记进已同步(tmp_path):
     runs, mount, plan = _plan(tmp_path)
 
     def _坏拷贝(src, dest):
-        copy_run(src, dest)
+        got = copy_run(src, dest)
         (dest / "events.jsonl").write_text("被改坏了", encoding="utf-8")
+        return got
 
     apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007",
                copy=_坏拷贝)
@@ -444,9 +448,10 @@ def test_一趟失败不影响别的趟(tmp_path):
     runs, mount, plan = _plan(tmp_path)
 
     def _只坏一趟(src, dest):
-        copy_run(src, dest)
+        got = copy_run(src, dest)
         if src.parent.name == "甲":
             (dest / "events.jsonl").write_text("被改坏了", encoding="utf-8")
+        return got
 
     res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007",
                      copy=_只坏一趟)
@@ -507,3 +512,57 @@ def test_目标目录里缺文件核对出来是没拷过去而且说清楚是�
     why = verify_run(run, dest)
     assert why != ""
     assert "a.jpg" in why
+
+
+def test_源目录在开拷之前整个消失要记进失败而不是静默成功(tmp_path):
+    # ``Path.rglob`` 作用在不存在的目录上**返回空列表,不抛**。不 fail-closed
+    # 的那一边:copy_run 一个文件也不拷,verify_run 循环一次都不进、回空串
+    # (= 核对通过),这一趟被记进 done,而"只增不删"保证它再也不会被重新
+    # 考虑 —— 盘上零字节,账本是绿的,然后清盘器把狗上那份删掉。
+    runs, mount, plan = _plan(tmp_path)
+    shutil.rmtree(runs / "甲" / "20260901T010203Z")
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert "甲/20260901T010203Z" not in res.copied
+    assert [k for k, _ in res.failed] == ["甲/20260901T010203Z"]
+    assert "消失" in dict(res.failed)["甲/20260901T010203Z"]
+    assert "甲/20260901T010203Z" not in read_state(
+        mount, robot_sn="D1M-0007").done
+
+
+def test_两趟都没了的时候一个字节也不记(tmp_path):
+    runs, mount, plan = _plan(tmp_path)
+    shutil.rmtree(runs)
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert res.copied == ()
+    assert res.bytes_copied == 0
+    assert read_state(mount, robot_sn="D1M-0007").done == frozenset()
+
+
+def test_源目录不存在的时候核对回的是非空(tmp_path):
+    # 这是上面那条的最小单元:空循环不许被当成核对通过。
+    why = verify_run(tmp_path / "根本没有这个目录", tmp_path)
+    assert why != ""
+    assert "消失" in why
+
+
+def test_拷贝回的字节数等于源目录里所有文件大小之和(tmp_path):
+    runs = tmp_path / "runs"
+    run = _make_run(runs, "甲", "20260901T010203Z", size=777)
+    files, total = copy_run(run, tmp_path / "dest")
+    want = [p for p in run.rglob("*") if p.is_file()]
+    assert files == len(want)
+    assert total == sum(p.stat().st_size for p in want)
+
+
+def test_记进账本的字节数是真拷了多少而不是计划里那个数(tmp_path):
+    # 计划里那个 size_bytes 是排计划那一刻量的。排完到真开拷之间源目录还会变,
+    # 拿计划里的数当战果记账,就是"盘上零字节、账本是绿的"那条路的起点。
+    runs, mount, plan = _plan(tmp_path)
+    (runs / "甲" / "20260901T010203Z" / "extra.bin").write_bytes(b"y" * 999)
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert res.failed == ()
+    assert res.bytes_copied == sum(
+        p.stat().st_size
+        for key in res.copied
+        for p in (runs / Path(key)).rglob("*") if p.is_file())
+    assert res.bytes_copied > sum(i.size_bytes for i in plan.items)
