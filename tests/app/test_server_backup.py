@@ -11,10 +11,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from d1max_patrol.engine.archive import STAMP_FMT
 from d1max_patrol.engine.backup import init_target, read_marker, read_state
 from d1max_patrol.engine.removable import DiskRole, Removable
 from tests.app import conftest as C
@@ -214,3 +216,52 @@ def test_清盘在飞的时候同步要_409(one_disk):
         assert "清盘" in json.dumps(body, ensure_ascii=False)
     finally:
         s._sweeping = False
+
+
+def _write_run(ctx, mission: str, days_ago: float, *,
+               retention_days: int = 90) -> Path:
+    """在**真的** runs_root 下摆一趟跑完了的归档。
+
+    **manifest 里必须有 summary** —— ``scan_runs`` 靠它判"没人在写这一趟了"。
+    时间戳从此刻往回推,不写死:写死的日期今天能过,一年之后会因为"那趟归档
+    过期了"而莫名其妙地红。写法照 ``tests/app/test_api_retention.py``。
+    """
+    stamp = (datetime.now(timezone.utc)
+             - timedelta(days=days_ago)).strftime(STAMP_FMT)
+    run = Path(ctx.runs_root) / mission / stamp
+    (run / "photos").mkdir(parents=True)
+    (run / "photos" / f"P0__front__{stamp}.jpg").write_bytes(b"\xff\xd8j\xff\xd9")
+    (run / "manifest.json").write_text(json.dumps({
+        "mission": {"mission": mission, "map_id": "map_test", "waypoints": [],
+                    "policy": {"retention_days": retention_days}},
+        "started_at": stamp, "fingerprint": {},
+        "summary": {"state": "COMPLETED", "total": 1},
+    }, ensure_ascii=False), encoding="utf-8")
+    return run
+
+
+def test_盘上躺着一趟早就过期的归档也不许常年报红(one_disk):
+    # ``days_left`` 把已经过期的 run 钳到 0.0,而"已经过期但还在盘上"是正常
+    # 状态 —— 清盘按水位触发,不按到期。不把过期的滤掉,每一台没配镜像盘的狗
+    # 大约 83 天后就会永久顶着红色 PUSH"再过 0 天就有归档要被永久删掉了",
+    # 而实际上什么也没在被删(spec §7.6 纪律 2 禁止的常年报警)。
+    #
+    # **这条必须跑在真数据上。** 空 tmp_path 上 runs 是空的,soonest 恒为
+    # None,这条错永远不会显形 —— 那正是它躲过八轮任务评审的原因。
+    ctx, s, _ = one_disk
+    _write_run(ctx, "一号厂房", 400)      # 早就过期,还躺在盘上
+    _write_run(ctx, "一号厂房", 1)        # 还剩 89 天
+    body = C.get_json(s, "/api/storage")
+    assert body["runs_total"] == 2
+    assert body["backup"]["level"] == "neutral"
+    assert "未配备份盘" in body["backup"]["detail"]
+
+
+def test_真有一趟快到期的时候照顶(one_disk):
+    # 上一条不许把这一条一起关掉:滤掉的只是**已经过期**的,没到期的照算。
+    ctx, s, _ = one_disk
+    _write_run(ctx, "一号厂房", 400)
+    _write_run(ctx, "一号厂房", 87)       # 还剩 3 天
+    body = C.get_json(s, "/api/storage")
+    assert body["backup"]["level"] == "push"
+    assert "永久删掉" in body["backup"]["detail"]

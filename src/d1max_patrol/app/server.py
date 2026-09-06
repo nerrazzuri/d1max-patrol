@@ -1420,7 +1420,16 @@ class AppServer:
         # 扫盘炸了就当没配盘:这一屏在盘出事的时候必须还能显示,而降级的方向
         # 是安全的 —— 最坏是多说一句"未配备份盘"。
         targets, _why = self._scan_targets()
-        soonest = min((r.days_left(now) for r in runs), default=None)
+        # **那个 ``if not r.is_expired(now)`` 不能省。** ``days_left`` 把已经
+        # 过期的 run **钳到 0.0**(负数会在排序和文案里到处冒出来),而"已经
+        # 过期但还在盘上"是本仓有文档记载的正常状态 —— 清盘是按水位触发的,
+        # 不是按到期。不过滤的那一边:狗上只要躺着一趟过期归档,``soonest``
+        # 就永远是 0.0,``backup_notice`` 每次都判成"马上要删了",于是每一台
+        # 没配镜像盘的狗从此常年顶着红色 PUSH,而实际上什么也没在被删 ——
+        # 正是 spec §7.6 纪律 2 明令禁止的那种常年报警。规格原文是"保留期
+        # **到期之前**",已经到期的不在其列。
+        soonest = min((r.days_left(now) for r in runs if not r.is_expired(now)),
+                      default=None)
         behind = 0
         for t in targets or ():
             if t.usable and t.role is DiskRole.MIRROR:
