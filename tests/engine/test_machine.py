@@ -204,11 +204,9 @@ def clock() -> Clock:
 def make_engine(nav, device, media, clock, tmp_path):
     """造引擎。每个用例自己负责 ``aclose`` —— 收尾本身就是被测行为之一。
 
-    原点默认给 ``_HOME``——起飞门槛把它当成前置条件,真要测原点缺失/错图
-    的用例显式传 ``home=None`` 或别的 ``HomePoint`` 覆盖。
+    原点不在这里给:它是每趟开跑时由 ``start(mission, home=...)`` 换进去的。
     """
     def _make(**kwargs) -> MissionEngine:
-        kwargs.setdefault("home", _HOME)
         return MissionEngine(nav, device, media, tmp_path / "runs",
                              clock=clock, **kwargs)
 

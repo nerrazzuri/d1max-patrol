@@ -157,7 +157,7 @@ _HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
 
 
 async def _make_engine(nav, device, runs_root: Path) -> MissionEngine:
-    return MissionEngine(nav, device, {}, runs_root, home=_HOME)
+    return MissionEngine(nav, device, {}, runs_root)
 
 
 @pytest.fixture

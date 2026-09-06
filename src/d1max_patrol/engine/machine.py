@@ -198,8 +198,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def __init__(self, nav: NavBackend, device: DeviceBackend,
                  media: Mapping[str, MediaSource], runs_root: Path,
                  *, clock: Callable[[], float] = time.monotonic,
-                 fingerprint: Mapping[str, Any] | None = None,
-                 home: HomePoint | None = None) -> None:
+                 fingerprint: Mapping[str, Any] | None = None) -> None:
         super().__init__()
         self._nav = nav
         self._device = device
@@ -217,7 +216,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         self._done.set()
         self._snapshot = RunSnapshot(RunState.IDLE, "", 0, "", 0, 0)
         self._busy_checks: list[Callable[[], str]] = []
-        self._home = home
+        # 原点不进构造函数: 引擎按进程建,原点按地图选,每趟开跑时由
+        # ``start`` 换进来。构造时给一份就意味着它活不过第一次 start ——
+        # 一个悄悄失效的参数比没有这个参数更坑人。
+        self._home: HomePoint | None = None
 
     # ------------------------------------------------------------------ 对外
 

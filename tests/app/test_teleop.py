@@ -126,7 +126,7 @@ def fake_clock() -> FakeClock:
 
 @pytest.fixture
 def engine(fake_nav, fake_device, tmp_path) -> MissionEngine:
-    return MissionEngine(fake_nav, fake_device, {}, tmp_path / "runs", home=_HOME)
+    return MissionEngine(fake_nav, fake_device, {}, tmp_path / "runs")
 
 
 @pytest.fixture

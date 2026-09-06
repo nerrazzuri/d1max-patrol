@@ -227,7 +227,7 @@ def sim_stack(tmp_path: Path, ffdir: Path):
         home = HomePoint(map_id=map_id, pose=Pose.from_xy_yaw(0.0, 0.0),
                          marked_at_ms=1_757_000_000_000)
         save_home(tmp_path / "maps", home)
-        engine = MissionEngine(nav, device, media, runs_root, home=home)
+        engine = MissionEngine(nav, device, media, runs_root)
         parts["engine"] = engine
         parts["teleop"] = Teleop(device, engine)
         return map_id
