@@ -593,9 +593,23 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
     写进 Orin 的 eMMC。那个位置在 ``runs_root`` 之外,清盘器看不见也删不掉,
     终点是 EROFS 和一台起不来的狗。标记文件在盘上,盘一卸载就读不到了。
 
+    **这个判据要查三次,三次防的不是同一件事,一处也不多余:**
+
+    1. **进门**(循环之前):盘压根没挂上/早就拔了。这一次一个字节都不写,
+       全部记进 ``failed``。
+    2. **每趟**(每一趟开拷之前):拔盘发生在第几趟中间是没法预测的。只查
+       进门那一次的话,拔盘之后剩下的几趟会**一趟趟地**落到根文件系统上。
+    3. **落账**(写 ``state.json`` 之前):最后一趟拷完到写账本之间还有一段
+       窗口。这一步不查的话,``_atomic_json`` 的 ``mkdir(parents=True)`` 会在
+       根盘那个残留的挂载点空目录下建出 ``.d1max-backup/state.json``,还
+       fsync 一遍 —— 字节数虽小,但"根文件系统上的 ``/media/<label>`` 里一个
+       字节都没有"是这一卷立下的断言,漏一个 JSON 就是漏了。
+
     盘不在的时候**绝不写进度**:写了等于把"同步过"记到一块不在的盘上 ——
     真正的进度还在那块盘里,而根盘上多出来的那份下次挂上会被 ``robot_sn``
-    对不上以外的任何理由信任。
+    对不上以外的任何理由信任。落账那一次没查过关的时候,**已经拷成的那几趟
+    仍然留在 ``res.copied`` 里** —— 数据确实在盘上,调用方需要知道是哪几趟;
+    只是"拷过了"没记下,下次会重拷。
 
     **一趟的 I/O 错误只赔一趟。** 拷贝、核对、写账本三处都各自接住 ``OSError``:
     这个函数一次要跑几十趟、几十 GB,让最后一下 I/O 错误把前面全部的战果一起
@@ -642,19 +656,31 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
         done_bytes += size
 
     detail = plan.detail
-    try:
-        state = read_sync_state(plan.mount, robot_sn=robot_sn)
-        if not state.robot_sn:
-            state = SyncState(robot_sn=robot_sn, last_sync_ms=state.last_sync_ms,
-                              done=state.done)
-        write_sync_state(plan.mount, state.with_done(copied, now_ms=now_ms))
-    except OSError as exc:
-        # **账本没记上不等于这一趟白拷了。** 数据已经落在盘上,只是"拷过了"
-        # 这件事没记下来 —— 下次同步会把这几趟当成新的重拷一遍。重拷是浪费,
-        # 不是损坏(``_copy_file`` 覆盖写)。而把这一下抛出去的那一边,调用方
-        # 看到的是一次彻头彻尾的失败,连"哪几趟拷成了"都拿不到。
-        detail = (f"这一趟拷成了但进度没记上,下次会重拷(写盘上的账本时出错: "
-                  f"{exc})")
+    if not marker_path(plan.mount).is_file():
+        # **落账之前的第三次检查**(见 docstring)。最后一趟拷完到这里之间盘
+        # 被拔掉的话,写下去的 ``state.json`` 会落在根文件系统那个残留的挂载点
+        # 空目录里 —— 而"根盘上一个字节都没有"是这一卷立下的断言。
+        # 不写:已经拷成的那几趟仍然在 ``copied`` 里,数据确实在盘上,
+        # 只是"拷过了"没记下,下次会重拷(重拷是浪费,不是损坏)。
+        gone = ("这几趟数据拷成了(见 copied),但备份盘在记账之前就不在了 —— "
+                "账本没记上,下次会把这几趟当成新的重拷一遍"
+                "(重拷是浪费,不是损坏)")
+        detail = f"{detail};{gone}" if detail else gone
+    else:
+        try:
+            state = read_sync_state(plan.mount, robot_sn=robot_sn)
+            if not state.robot_sn:
+                state = SyncState(robot_sn=robot_sn,
+                                  last_sync_ms=state.last_sync_ms,
+                                  done=state.done)
+            write_sync_state(plan.mount, state.with_done(copied, now_ms=now_ms))
+        except OSError as exc:
+            # **账本没记上不等于这一趟白拷了。** 数据已经落在盘上,只是"拷过了"
+            # 这件事没记下来 —— 下次同步会把这几趟当成新的重拷一遍。重拷是浪费,
+            # 不是损坏(``_copy_file`` 覆盖写)。而把这一下抛出去的那一边,调用方
+            # 看到的是一次彻头彻尾的失败,连"哪几趟拷成了"都拿不到。
+            detail = (f"这一趟拷成了但进度没记上,下次会重拷(写盘上的账本时"
+                      f"出错: {exc})")
     if failed and not detail:
         detail = f"有 {len(failed)} 趟没拷成,见 failed"
     elif failed:

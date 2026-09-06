@@ -589,7 +589,18 @@ def test_盘在开拷之前就没了_一个字节不写而且不记进度(tmp_pa
     assert not state_path(mount).exists()
 
 
-def test_拷到一半盘被拔掉_剩下的记失败而且不落到根盘上(tmp_path):
+def test_拷到一半盘被拔掉_剩下的记失败而且连账本都不落到根盘上(tmp_path):
+    """拔盘之后**一个字节都不许写到根盘上,账本也算字节。**
+
+    挂载点在卸载之后常常作为一个空目录留在根文件系统上,而 ``_atomic_json``
+    第一行就是 ``mkdir(parents=True)`` —— 落账那一步不查盘还在不在的话,
+    根盘上会多出一个 ``.d1max-backup/state.json``,还 fsync 一遍。字节数虽小,
+    但《真机待验证清单》第 10 条断言的是"根文件系统上的 /media/<label> 里一个
+    字节都没有"。
+
+    **拷成了的那一趟仍然要出现在 ``res.copied`` 里** —— 数据确实落在盘上了,
+    调用方需要知道是哪几趟;没记上的只是"拷过了"这件事。
+    """
     runs, mount, plan = _plan(tmp_path)
 
     def _拷完第一趟就拔盘(src, dest):
@@ -603,8 +614,28 @@ def test_拷到一半盘被拔掉_剩下的记失败而且不落到根盘上(tmp
     assert [k for k, _ in res.failed] == ["乙/20260902T010203Z"]
     assert "不在了" in dict(res.failed)["乙/20260902T010203Z"]
     assert not (mount / "runs" / "乙").exists()
-    assert read_sync_state(mount, robot_sn="D1M-0007").done == {
-        "甲/20260901T010203Z"}
+    # 账本没写出来:盘已经不在了,写下去的那份会落在根盘上。
+    assert not state_path(mount).exists()
+    assert "重拷" in res.detail
+
+
+def test_全部拷完之后盘才没的_账本不写而且说得出下次会重拷(tmp_path):
+    # 最后一趟拷完到写账本之间还有一段窗口。这一段不查的话,盘上零字节的
+    # 那个残留挂载点目录里会多出一份 state.json。
+    runs, mount, plan = _plan(tmp_path)
+
+    def _拷完就拔盘(src, dest):
+        got = copy_run(src, dest)
+        if dest.name == plan.items[-1].dest.name:
+            marker_path(mount).unlink(missing_ok=True)
+        return got
+
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007",
+                     copy=_拷完就拔盘)
+    assert sorted(res.copied) == sorted(i.key for i in plan.items)
+    assert res.failed == ()
+    assert not state_path(mount).exists()
+    assert "重拷" in res.detail
 
 
 def test_核对那一下炸了只赔这一趟_前面拷成的照样记账(tmp_path, monkeypatch):
