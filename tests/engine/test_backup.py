@@ -638,6 +638,33 @@ def test_全部拷完之后盘才没的_账本不写而且说得出下次会重�
     assert "重拷" in res.detail
 
 
+def test_源目录还在但文件被删光_不算拷成(tmp_path):
+    """C1 关住的是"源目录整个消失",这一条关的是"目录还在、文件没了"。
+
+    ``copy_run`` 回 (0, 0),``verify_run`` 拿这个空的 src 去比一个文件都不用
+    比,回空串 —— 也就是"核对通过"。记进 ``done`` 之后"只增不删"保证它再也
+    不会被重新考虑:盘上零字节,账本是绿的。归档目录正常情况下至少有
+    ``manifest.json``,空目录本身就是症状。
+    """
+    runs, mount, plan = _plan(tmp_path)
+    空的 = runs / "甲" / "20260901T010203Z"
+    for p in sorted(空的.rglob("*"), reverse=True):
+        if p.is_file():
+            p.unlink()
+        else:
+            p.rmdir()
+    assert 空的.is_dir()      # 目录还在,只是空了 —— 这才是这一条要测的形状
+
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert "甲/20260901T010203Z" not in res.copied
+    assert [k for k, _ in res.failed] == ["甲/20260901T010203Z"]
+    assert "一个文件都没有" in dict(res.failed)["甲/20260901T010203Z"]
+    assert "甲/20260901T010203Z" not in read_sync_state(
+        mount, robot_sn="D1M-0007").done
+    # 边上那一趟照样拷成:一趟的症状只赔一趟。
+    assert res.copied == ("乙/20260902T010203Z",)
+
+
 def test_核对那一下炸了只赔这一趟_前面拷成的照样记账(tmp_path, monkeypatch):
     # 核对要把两边的文件从头读一遍,而"拷完那一刻盘被拔了"正是这一段最可能
     # 撞上的事。不接住的话,前面已经拷成的那几趟一趟都记不上账。

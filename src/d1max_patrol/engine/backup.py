@@ -636,7 +636,7 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
             failed.extend((rest.key, _DISK_GONE) for rest in plan.items[index:])
             break
         try:
-            _files, size = copy(item.src, item.dest)
+            files, size = copy(item.src, item.dest)
         except OSError as exc:
             failed.append((item.key, f"拷不过去: {exc}"))
             continue
@@ -651,6 +651,18 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
             continue
         if why:
             failed.append((item.key, why))
+            continue
+        if files == 0:
+            # **拷了 0 个文件不算拷成。** 源目录还在、但文件被删光(并发的
+            # 清盘、有人手动清、一趟写坏了的归档)时,``copy_run`` 回 (0, 0),
+            # 而 ``verify_run`` 拿这个空的 ``src`` 去比一个文件都不用比,回
+            # 空串 —— 也就是"核对通过"。记进 ``done`` 之后"只增不删"保证它
+            # 再也不会被重新考虑:盘上零字节,账本是绿的。归档目录正常情况下
+            # 至少有 ``manifest.json``,空目录本身就是症状。
+            #
+            # **这一查排在核对之后**:源目录整个消失也会回 (0, 0),但那一种
+            # 由 ``verify_run`` 说出更准的那句"源目录在拷贝期间消失了"。
+            failed.append((item.key, "源目录里一个文件都没有,这一趟不算拷成"))
             continue
         copied.append(item.key)
         done_bytes += size
