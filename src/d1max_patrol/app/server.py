@@ -385,6 +385,24 @@ class AppContext:
         return self.engine.removable
 
 
+async def _preflight_with_scan(ctx: AppContext, mission: Mission,
+                               home: HomePoint | None) -> PreflightReport:
+    """扫外插盘 + 跑全项检查。**两件事都在循环线程里做。**
+
+    扫盘要走 ``bridge`` 的原因不是它碰引擎状态(它不碰),而是 ``_call``
+    收的是一个**协程工厂** —— 在 HTTP 线程上 await 它需要另一个事件循环。
+    连在一个协程里交给桥,一次往返把两件事都办了。
+
+    **不扫就不能说没插。** 这里漏传 ``removable=`` 的后果不是少查一项,
+    是页面上白得一项绿的:插着取走盘时 HTTP 这条路照样放行,狗起来之后
+    引擎自己那道 preflight 才拦住,整趟 ABORT —— 操作员看到的是
+    "七项全绿,然后狗自己中止了"。
+    """
+    disks = await ctx.removable.scan()
+    return await run_preflight(ctx.nav, ctx.device, mission, ctx.runs_root,
+                               home=home, form=ctx.form, removable=disks)
+
+
 # ------------------------------------------------------------------ 状态汇总
 
 
@@ -949,8 +967,7 @@ class AppServer:
         except HomeError:
             home = None      # 让起飞门槛去说这句话,别在这儿抢着报错
         report = self._call(
-            lambda: run_preflight(ctx.nav, ctx.device, mission, ctx.runs_root,
-                                  home=home, form=ctx.form),
+            lambda: _preflight_with_scan(ctx, mission, home),
             timeout_s=30.0)
         checks = _checks_wire(report)
         if not report.ok:

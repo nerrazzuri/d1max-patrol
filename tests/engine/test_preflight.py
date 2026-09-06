@@ -23,12 +23,17 @@ _HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
 
 
 async def _run(nav, device, mission, root, **kw):
-    """跑一遍起飞检查,原点默认给一个正常的。
+    """跑一遍起飞检查,原点和"扫过的盘"默认都给一个正常的。
 
     绝大多数用例关心的不是原点,给它一个正常值,免得每条都写一遍;
     真要测原点的那几条显式传 ``home=``。
+
+    ``removable`` 同理,但默认值的含义要紧:``()`` 是"扫过了,一块都没有",
+    ``run_preflight`` 自己的默认 ``None`` 是"没扫过",判没过。这里显式传
+    ``()`` 而不是省略,是因为这些用例测的都不是"没扫过"那条路。
     """
     kw.setdefault("home", _HOME)
+    kw.setdefault("removable", ())
     return await run_preflight(nav, device, mission, root, **kw)
 
 
@@ -268,3 +273,20 @@ async def test_没插盘的时候这一项也说得出话(tmp_path, sample_missi
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     detail = next(c.detail for c in r.checks if c.name == "removable")
     assert "共认到 0 块" in detail
+
+
+async def test_没扫过盘跟没插盘不是一回事(tmp_path, sample_mission, fake_nav,
+                                          fake_device):
+    """``None`` 是"没扫过",判没过 —— 漏传参数不该白得一项绿的。"""
+    r = await run_preflight(fake_nav, fake_device, sample_mission, tmp_path,
+                            home=_HOME, removable=None)
+    assert [c.name for c in r.failures] == ["removable"]
+    assert "没扫过" in r.failures[0].detail
+
+
+async def test_默认就是没扫过而不是没有盘(tmp_path, sample_mission, fake_nav,
+                                          fake_device):
+    """默认值的方向必须跟 ``home`` 一致 —— 同一个函数里不能有两种哲学。"""
+    r = await run_preflight(fake_nav, fake_device, sample_mission, tmp_path,
+                            home=_HOME)
+    assert [c.name for c in r.failures] == ["removable"]

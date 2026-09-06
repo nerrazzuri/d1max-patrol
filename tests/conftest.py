@@ -14,3 +14,27 @@ class NoDisks:
 
     async def scan(self) -> tuple[()]:
         return ()
+
+
+class SomeDisks:
+    """认到一组给定的盘的探针替身。给"插着盘"那条路用。"""
+
+    def __init__(self, *disks: object) -> None:
+        self._disks = tuple(disks)
+
+    async def scan(self) -> tuple[object, ...]:
+        return self._disks
+
+
+class BadDisks:
+    """扫盘这一步自己炸掉的探针替身。
+
+    ``root.iterdir()`` 权限不对是 ``PermissionError``,``entry.is_dir()``
+    撞上 stale mount 是 ``OSError`` —— 真机上这两种都发生得了。
+    """
+
+    def __init__(self, exc: Exception | None = None) -> None:
+        self._exc = exc if exc is not None else PermissionError("/media 读不了")
+
+    async def scan(self) -> tuple[object, ...]:
+        raise self._exc

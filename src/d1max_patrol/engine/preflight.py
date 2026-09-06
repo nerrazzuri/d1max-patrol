@@ -182,11 +182,21 @@ def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
     return CheckResult("storage", verdict.ok, verdict.detail)
 
 
-def _check_removable(disks: Sequence[Removable]) -> CheckResult:
+def _check_removable(disks: Sequence[Removable] | None) -> CheckResult:
     """认到外插的取走盘就不许出发(spec §7.5)。
 
     跟盘水位一样是个 start gate,狗自己看得见、自己拦。
+
+    ``disks is None`` 的意思是**没扫过**,不是"没有盘" —— 这一项判没过。
+    本模块开头那条"不确定不放行"对这一项同样成立:空元组 ``()`` 才是
+    "扫过了,一块都没有"。两者混成一个默认值的话,调用方漏传参数就会白得
+    一项绿的,而实际插着的那块盘要等引擎自己那道 preflight 才拦得住 ——
+    操作员看到的是"七项全绿,然后狗自己中止了"。
     """
+    if disks is None:
+        return CheckResult("removable", False,
+                           "没扫过外插盘,不放行 —— 认不出插着什么,"
+                           "就不能说没插")
     blocking = blocks_takeoff(disks)
     if not blocking:
         return CheckResult("removable", True,
@@ -218,9 +228,15 @@ async def run_preflight(nav: NavBackend, device: DeviceBackend,
                         return_params: ReturnParams = DEFAULT_RETURN_PARAMS,
                         form: Form = STANDALONE,
                         last_upload_age_days: float | None = None,
-                        removable: Sequence[Removable] = (),
+                        removable: Sequence[Removable] | None = None,
                         ) -> PreflightReport:
-    """全项全查,顺序固定,**一项都不跳**。"""
+    """全项全查,顺序固定,**一项都不跳**。
+
+    **拿不到的东西一律往"没过"的方向倒。** ``home=None`` 和
+    ``removable=None`` 都是这个意思:调用方漏传一个参数,得到的是一项红的,
+    不是一项白送的绿。两个默认值一个 fail-closed 一个 fail-open 的话,
+    同一个函数里就有了两种哲学,而漏掉的那一处不会有任何测试红。
+    """
     checks = [
         await _guard("nav_ready", _check_nav_ready(nav)),
         await _guard("device_ready", _check_device_ready(device)),

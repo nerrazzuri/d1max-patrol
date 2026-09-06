@@ -17,7 +17,9 @@ from urllib.parse import quote
 import pytest
 
 from d1max_patrol.engine.machine import RunState
+from d1max_patrol.engine.removable import DiskRole, Removable
 from tests.app import conftest as C
+from tests.conftest import SomeDisks
 
 # --------------------------------------------------------------------- 小工具
 
@@ -236,6 +238,33 @@ def test_每一项检查的理由都带回来(saved, ctx):
     err = get_err(server, f"/api/missions/{quote(mid)}/run", 409, method="POST")
     bad = [c for c in err["checks"] if not c["ok"]]
     assert bad and all(c["detail"] for c in bad), "没过的项必须说清当时是什么状态"
+
+
+@pytest.fixture
+def server_with_disk(bridge, tmp_path):
+    """插着一块取走盘的那台狗。"""
+    ctx = C.make_ctx(bridge, tmp_path, removable=SomeDisks(
+        Removable(mount=Path("/media/u1"), role=DiskRole.TRANSFER)))
+    s = C.AppServer(ctx, port=0)
+    s.start()
+    yield s
+    s.stop()
+
+
+def test_插着取走盘时HTTP这条路也拦得住(server_with_disk):
+    """**HTTP 那条起飞路径必须自己扫盘。**
+
+    不扫的话这一项恒定报绿:409 不发生 → 返回 200 → 引擎起来 → 引擎自己
+    那道 preflight 扫到盘 → 整趟 ABORT。操作员看到的是"七项全绿,然后狗
+    自己中止了",而页面上那一项还写着"没有外插的取走盘(共认到 0 块)"。
+    """
+    server = server_with_disk
+    assert _put(server, "/api/missions/巡检一号", _mission())[0] == 200
+    err = get_err(server, "/api/missions/巡检一号/run", 409, method="POST",
+                  payload={})
+    bad = next(c for c in err["checks"] if c["name"] == "removable")
+    assert not bad["ok"], "插着取走盘,这一项不能是绿的"
+    assert "/media/u1" in bad["detail"]
 
 
 def test_起一个不存在的任务给404(server):
