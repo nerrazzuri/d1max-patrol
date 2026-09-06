@@ -16,6 +16,15 @@ ROS 侧 slam_toolbox 出的,``start_mapping`` 明确抛错。这不是"没实现
 
 没声明能力的后端要过 ``test_不建图的后端必须明确拒绝建图`` —— 它必须**拒绝**
 而不是假装成功。少了这一条,"不支持"就跟"悄悄什么也没干"分不出来了。
+
+## 形态(forms)
+
+同一套装置再来一遍,这次分的是"有没有服务器"。联网档声明 ``upload``,
+单机档不声明 —— 不声明的必须过 ``test_没有上传目标的形态必须明确说没有``。
+
+**只有 spec §8.3 点名的那四处需要跑两遍**:归档与删除、起飞门槛、鉴权、发现。
+其余一遍。全套跑两遍会把 240 秒变成 480 秒,而其中九成的重复零信息量 ——
+**慢下来的套件最后的结局是没人跑。**
 """
 
 from __future__ import annotations
@@ -33,6 +42,7 @@ from d1max_patrol.backends.local_nav import LocalNavBackend, LocalNavParams
 from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.models import NavConfig
+from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.protocol.agent_frames import MotionStatus
 from d1max_patrol.protocol.nav_types import LocStatus, MappingStatus
 from d1max_sim.agent_server import SimAgentServer
@@ -243,3 +253,52 @@ async def _until(getter, wanted, timeout_s: float = 15.0) -> None:
             return
         await asyncio.sleep(0.02)
     raise AssertionError(f"未在 {timeout_s}s 内变为 {wanted}")
+
+
+# --------------------------------------------------------------- 形态 target
+#
+# spec §8.2:形态差异跟"厂商后端会建图 / 自建后端不会"是同构的,装置原样搬。
+# 联网档声明 ``upload`` 能力,单机档**不声明** —— 不声明的必须过
+# `test_没有上传目标的形态必须明确说没有`,不许悄悄成功。
+
+
+class _ConsoleUpload:
+    """联网档的上传目标替身。真的那个在"服务器与值守"那份计划里。"""
+
+    async def describe(self) -> str:
+        return "控制台 https://console.example/upload"
+
+
+def _standalone_form(workspace: Path) -> Form:
+    return STANDALONE
+
+
+def _connected_form(workspace: Path) -> Form:
+    return Form(name="connected", upload=_ConsoleUpload())
+
+
+FORM_FACTORIES: dict[str, Callable[[Path], Form]] = {
+    "standalone": _standalone_form,
+    "connected": _connected_form,
+}
+
+#: 每档**声明**了什么能力。没声明的必须明确拒绝,不许假装成功。
+FORM_CAPS: dict[str, frozenset[str]] = {
+    "standalone": frozenset(),
+    "connected": frozenset({"upload"}),
+}
+
+
+@pytest.fixture(params=sorted(FORM_FACTORIES))
+def form_name(request) -> str:
+    return request.param
+
+
+@pytest.fixture
+def form(form_name: str, tmp_path: Path) -> Form:
+    return FORM_FACTORIES[form_name](tmp_path)
+
+
+@pytest.fixture
+def form_caps(form_name: str) -> frozenset[str]:
+    return FORM_CAPS[form_name]

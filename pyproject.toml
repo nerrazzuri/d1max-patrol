@@ -35,7 +35,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q"
 markers = [
-    "contract: NavBackend 的实现无关行为约定",
+    "contract: 实现无关的行为约定(后端 target、形态 target)",
     "scenarios: 故障注入与降级行为(慢,与实现耦合)",
 ]
 
