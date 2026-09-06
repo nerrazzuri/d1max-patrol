@@ -63,10 +63,26 @@ def test_targets_列出认到的盘(one_disk):
 
 
 def test_targets_带容量和剩余(one_disk):
-    _, s, _ = one_disk
+    """**盘要先认过**:容量是照着盘上的标记文件量的,没有标记就不量(见下一条)。"""
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
     (t,) = C.get_json(s, "/api/backup/targets")["targets"]
     assert t["total_bytes"] > 0
     assert t["free_bytes"] >= 0
+
+
+def test_读不到标记的盘不报容量而不是报根盘的容量(one_disk):
+    """盘卸载之后挂载点常常作为一个空目录留在根文件系统上。
+
+    照着那个路径量到的是**根盘**的容量 —— 把根盘的几百 GB 当成备份盘的余量,
+    是这一屏能犯的最贵的一个错。宁可报不出来,也不报错的那个数。
+    """
+    _, s, _ = one_disk
+    (t,) = C.get_json(s, "/api/backup/targets")["targets"]
+    assert t["total_bytes"] is None
+    assert t["free_bytes"] is None
+    assert "容量报不出来" in t["detail"]
 
 
 def test_targets_带上次同步时间和落后多少(one_disk):

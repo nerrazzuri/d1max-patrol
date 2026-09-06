@@ -79,6 +79,7 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
 )
 from d1max_patrol.backends.map_bridge import MapBridgeClient
+from d1max_patrol.engine import backup
 from d1max_patrol.engine.archive import (
     list_runs,
     read_events,
@@ -92,6 +93,7 @@ from d1max_patrol.engine.backup import (
     backup_notice,
     eject,
     init_target,
+    marker_path,
     plan_sync,
     resolve_targets,
 )
@@ -329,6 +331,12 @@ def _run_id(run_dir: Path) -> str:
 
 #: 下载导出包时一次读多少。包可以有好几个 G,不整个读进内存。
 _EXPORT_CHUNK = 1024 * 1024
+
+#: 读不到盘上的标记时,容量那两个字段为什么是 ``null``。
+_NO_MARKER_CAPACITY = (
+    "读不到这块盘上的备份标记,所以容量报不出来:盘卸载之后挂载点常常作为一个"
+    "空目录留在根文件系统上,照着那个路径量到的是根盘的容量 —— 把根盘的余量"
+    "当成备份盘的余量,是这一屏能犯的最贵的一个错")
 
 
 def _disk(path: Path) -> tuple[int, int]:
@@ -1618,17 +1626,22 @@ class AppServer:
         """狗现在认到哪些盘、各自能不能拿来备份。
 
         **过桥,但不是因为它碰引擎状态。** ``RemovableProbe.scan`` 是个协程,
-        在 HTTP 线程上 await 它需要一个事件循环,而 ``LoopBridge.call``(桥上
-        那个,不是本类的 ``_call``)收的正是一个**协程工厂** —— 理由跟
-        ``_preflight_with_scan`` 一模一样,跟单门不变量无关。下面那三个纯
-        文件 I/O 的处理器自己那部分**不过桥**,但都经 ``_pick`` 调用这一处,
-        所以扫盘那一跳除外。
+        在 HTTP 线程上 await 它需要一个事件循环,而桥收的正是一个**协程
+        工厂** —— 理由跟 ``_preflight_with_scan`` 一模一样,跟单门不变量无关。
+        下面那三个纯文件 I/O 的处理器自己那部分**不过桥**,但都经 ``_pick``
+        调用这一处,所以扫盘那一跳除外。
+
+        **走的是本类的 ``_call``,不是 ``ctx.bridge.call``。** 后者不经异常
+        翻译:探针卡住时它抛的 ``TimeoutError``、桥停了抛的 ``RuntimeError``
+        会绕过 ``_call`` 那段翻译一路穿到兜底,变成一个光秃秃的 500 —— 而这
+        一跳恰好挂在唯一两个"盘出毛病时必须还能打开"的页面上(盘况页、备份盘
+        页)。走 ``_call`` 拿到的是 504 加一句人话。
 
         回 ``(None, 一句话)`` 表示没扫成。认不出插着什么不等于这一屏该消失:
         人正是在盘出事的时候来看它的。
         """
         ctx = self._ctx
-        disks: tuple[Removable, ...] | None = ctx.bridge.call(
+        disks: tuple[Removable, ...] | None = self._call(
             lambda: scan_or_unknown(ctx.removable))
         if disks is None:
             return None, ("认不出现在插着什么盘 —— 扫挂载点的时候出错了"
@@ -1759,26 +1772,57 @@ class AppServer:
 
         **不过桥**,除了里面那一处扫盘(``_scan_targets`` 自己会过);算容量、
         读同步进度、排同步方案全是纯文件 I/O,不碰引擎状态。
+
+        **容量报得出来的前提是盘上那个标记文件读得到。** ``_disk`` 在路径不
+        存在时会一路往上走到父目录(第一次开机 ``runs/`` 还没建时它要的就是
+        这个),而一块刚被拔掉的盘,挂载点常常作为空目录留在根文件系统上 ——
+        照着量,报出来的是**根文件系统**的容量,而屏上写着这是备份盘的余量。
+        读不到标记就把两个容量字段报成 ``null`` 并在 ``detail`` 里说清楚:
+        少一个数好过多一个假数。
+
+        **一块坏盘不许把整条路由掀翻。** ``OSError`` 就地接住,那一块标成
+        不可用,边上那几块好盘照列 —— 人正等着看那份列表决定往哪块盘上拷。
         """
         ctx = self._ctx
         targets, why = self._scan_targets()
         if targets is None:
             return json_response({"robot_sn": ctx.identity.sn, "scanned": False,
                                   "targets": [], "detail": why})
+        now = datetime.now(timezone.utc)
+        # **扫一遍就够。** 每块盘各扫一遍的话,``scan_runs`` 会对整个 runs_root
+        # 递归 stat 一次(``retention._size_bytes`` 是 rglob("*")),而这条
+        # 路由挂在 HTTP 请求路径上,归档一多这个代价不是可以忽略的。
+        runs = scan_runs(ctx.runs_root, now=now)
         out = []
         for t in targets:
-            used, total = _disk(t.mount)
-            row = t.to_wire() | {"total_bytes": total,
-                                 "free_bytes": max(0, total - used),
+            row = t.to_wire() | {"total_bytes": None, "free_bytes": None,
                                  "last_sync_ms": 0, "behind": 0,
                                  "behind_bytes": 0}
-            if t.usable:
-                state = read_backup_state(t.mount, robot_sn=ctx.identity.sn)
-                plan = plan_sync(ctx.runs_root, t.mount,
-                                 robot_sn=ctx.identity.sn)
-                row |= {"last_sync_ms": state.last_sync_ms,
-                        "behind": plan.behind,
-                        "behind_bytes": plan.behind_bytes}
+            try:
+                if marker_path(t.mount).is_file():
+                    _used, total = _disk(t.mount)
+                    row["total_bytes"] = total
+                    # **剩余空间跟 ``plan_sync`` 取同一个数(bavail)。**
+                    # 屏上那个 ``total - used`` 是 bfree:ext4 默认给 root 留
+                    # 5%,同一块 2T 盘上两个数能差出几十个 G,现场会看到
+                    # "剩余 100 GB"紧挨着"盘上只剩 0 字节,拷不下"。
+                    row["free_bytes"] = backup._free_bytes(t.mount)
+                else:
+                    row["detail"] = ";".join(x for x in (
+                        t.detail, _NO_MARKER_CAPACITY) if x)
+                if t.usable:
+                    state = read_backup_state(t.mount, robot_sn=ctx.identity.sn)
+                    plan = plan_sync(ctx.runs_root, t.mount,
+                                     robot_sn=ctx.identity.sn, now=now,
+                                     runs=runs)
+                    row |= {"last_sync_ms": state.last_sync_ms,
+                            "behind": plan.behind,
+                            "behind_bytes": plan.behind_bytes}
+            except OSError as exc:
+                row |= {"usable": False, "total_bytes": None,
+                        "free_bytes": None,
+                        "detail": f"这块盘读不了({exc})—— 现在不会往它上面写。"
+                                  f"盘可能已经拔掉了,或者挂载点已经失效"}
             out.append(row)
         return json_response({"robot_sn": ctx.identity.sn, "scanned": True,
                               "targets": out, "detail": ""})

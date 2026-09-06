@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Callable, Sequence
@@ -93,6 +94,19 @@ class MountRootProbe:
         self._is_mount = is_mount
 
     async def scan(self) -> tuple[Removable, ...]:
+        """**整个扔进线程里跑。**
+
+        下面那一趟全是同步的文件系统调用:``iterdir``、``is_dir``、
+        ``os.path.ismount``、读标记文件。它们看着便宜,但撞上一个失效的挂载点
+        (拔掉的 USB、断了的 NFS)时,``ismount`` 那一下会在内核里**阻塞到
+        超时**,几秒到几十秒。这个协程跑在事件循环上,而急停、遥控心跳、SSE、
+        全部 HTTP 都在同一条循环上 —— 一块坏盘就能把整台狗冻住。同样的理由
+        见 ``app/video.py`` 里 ``RtspStill.grab``。
+        """
+        return await asyncio.to_thread(self._scan)
+
+    def _scan(self) -> tuple[Removable, ...]:
+        """真正去看文件系统的那一半。**同步的,只在线程里被调。**"""
         found: list[Removable] = []
         for root in self._roots:
             if not root.is_dir():
