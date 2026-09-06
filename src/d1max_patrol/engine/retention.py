@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -285,3 +286,111 @@ def write_notice(runs_root: Path | str, fc: Forecast) -> dict[str, datetime]:
     finally:
         tmp.unlink(missing_ok=True)
     return merged
+
+
+# --------------------------------------------------------------- 删除计划与真删
+
+
+def _mb(n: float) -> str:
+    return f"{n / (1024 * 1024):.0f}MB"
+
+
+@dataclass(frozen=True, slots=True)
+class Sweep:
+    """这一次要删哪些、能腾出多少、还差多少。**只是计划,没动手。**"""
+
+    delete: tuple[RunInfo, ...]
+    freed_bytes: int
+    short_bytes: int
+    detail: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "delete": [r.to_wire() for r in self.delete],
+            "freed_bytes": self.freed_bytes,
+            "short_bytes": self.short_bytes,
+            "detail": self.detail,
+        }
+
+
+def _deletable(info: RunInfo, *, now: datetime, has_upload: bool,
+               noticed: dict[str, datetime]) -> bool:
+    """这一趟现在能不能删。spec §4.6 那张表就是这个函数。"""
+    if not info.settled:
+        # 正在写的那一趟不碰,两套策略都一样。
+        return False
+    if has_upload:
+        # 有服务器:分类依据是已传/未传,**未传的绝不删**。传走了的当天就
+        # 可以按水位删 —— 服务器上有第二份。
+        return info.uploaded
+    # 单机:分类依据是保留期内/外,而且删之前必须先预告,还得挂满。
+    if not info.is_expired(now):
+        return False
+    first = noticed.get(run_key(info))
+    return first is not None and now - first >= timedelta(days=MIN_NOTICE_DAYS)
+
+
+def plan_sweep(runs: Sequence[RunInfo], *, now: datetime, has_upload: bool,
+               need_bytes: int,
+               noticed: dict[str, datetime] | None = None) -> Sweep:
+    """算这一次的删除计划。**最老的先删。**
+
+    ``need_bytes <= 0`` 时一趟都不删,哪怕全过期了 —— spec §4.4:删除由水位
+    驱动,不由过期驱动。立刻删的话,服务器那边一旦出事,狗这边已经空了,世界
+    上就没有第二份了;而留着那份冗余不花任何额外成本,盘反正空着。
+    """
+    if need_bytes <= 0:
+        return Sweep((), 0, 0, "盘在水位线下,不用删任何东西。")
+    noticed = noticed if noticed is not None else {}
+    picked: list[RunInfo] = []
+    freed = 0
+    for info in sorted(runs, key=lambda r: (r.started_at, r.path.name, r.mission)):
+        if freed >= need_bytes:
+            break
+        if not _deletable(info, now=now, has_upload=has_upload, noticed=noticed):
+            continue
+        picked.append(info)
+        freed += info.size_bytes
+    short = max(0, need_bytes - freed)
+    if short == 0:
+        detail = f"按水位删 {len(picked)} 趟归档,腾出 {_mb(freed)}。"
+    else:
+        why = ("剩下的都还没传走 —— 未传的绝不删,而回传可能已经断了很久"
+               if has_upload else
+               "剩下的都还在保留期内,或者预告还没挂满")
+        # §4.6:这个死锁是故意留的。它逼出一次人的确认,而这正是"删掉唯一
+        # 副本"这件事应该有的门槛。文案跟 `storage.py` 里那句对齐:说的是
+        # 下一步做什么,不是"盘满了"。
+        detail = (f"要腾出 {_mb(need_bytes)},能自动删的只够 {_mb(freed)},"
+                  f"还差 {_mb(short)} —— {why}。"
+                  f"需要人在 app 上「导出并释放」:先打包拉走,确认拿到了,才删")
+    return Sweep(tuple(picked), freed, short, detail)
+
+
+def apply_sweep(sweep: Sweep, *, runs_root: Path | str) -> tuple[Path, ...]:
+    """按计划真删,返回**确实删掉了的**那些。
+
+    **护栏:每条路径 ``resolve()`` 之后必须落在 ``runs_root`` 之下。**
+    ``shutil.rmtree`` 是全仓最危险的一行;没有这条,日后任何一个"顺手把 path
+    拼错了"的改动都会安静地删掉别处的东西。越界的**跳过**,不抛 —— 一条脏
+    记录不该阻止其余的清扫。
+
+    删不动的也跳过(只读挂载、被占用)。返回值是事实,不是计划。
+    """
+    root = Path(runs_root).resolve()
+    done: list[Path] = []
+    for info in sweep.delete:
+        try:
+            target = info.path.resolve()
+        except OSError:
+            continue
+        if target == root or not target.is_relative_to(root):
+            continue
+        if not target.is_dir():
+            continue
+        try:
+            shutil.rmtree(target)
+        except OSError:
+            continue
+        done.append(info.path)
+    return tuple(done)
