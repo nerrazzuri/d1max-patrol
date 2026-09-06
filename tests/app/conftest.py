@@ -31,8 +31,9 @@ from d1max_patrol.backends.base import (
     NavRequestError,
     NavStatusEvent,
 )
+from d1max_patrol.engine.homing import HomePoint, save_home
 from d1max_patrol.engine.machine import MissionEngine
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
+from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 
 class FakeNav(EventEmitter):
@@ -148,8 +149,15 @@ class FakeMaps:
         return self.link
 
 
+#: 起飞门槛把原点当成前置条件(preflight §home)。这些测试关心的是接口的
+#: 形状,不是原点本身,默认给个跟 ``map_test``(任务默认的那张图)对得上的
+#: 原点,免得每个用 ``ctx``/``server`` 的用例都要单独标一次。
+_HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
+                  marked_at_ms=1_757_000_000_000)
+
+
 async def _make_engine(nav, device, runs_root: Path) -> MissionEngine:
-    return MissionEngine(nav, device, {}, runs_root)
+    return MissionEngine(nav, device, {}, runs_root, home=_HOME)
 
 
 @pytest.fixture
@@ -177,6 +185,9 @@ def make_ctx(bridge, tmp_path: Path, nav=None, device=None) -> AppContext:
         bags_dir=tmp_path / "bags", maps_dir=tmp_path / "maps",
         params_template=tmp_path / "mapper_3d.yaml",
         work_dir=tmp_path / "work"))
+    # 起飞门槛真正读的是盘上那份(见 app/server.py 的 _mission_run):每次起飞
+    # 都会用它把引擎里的原点换一遍,构造时给的那份不写盘的话会被换成 None。
+    save_home(mapping.maps_dir, _HOME)
     return AppContext(
         bridge=bridge, engine=engine, nav=nav, device=device,
         maps=FakeMaps(), procs=procs, teleop=teleop, mapping=mapping,

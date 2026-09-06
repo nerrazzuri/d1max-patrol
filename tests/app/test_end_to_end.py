@@ -35,9 +35,10 @@ from d1max_patrol.backends.map_bridge import MapBridgeClient
 from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.models import NavConfig
+from d1max_patrol.engine.homing import HomePoint, save_home
 from d1max_patrol.engine.machine import MissionEngine
 from d1max_patrol.protocol.agent_frames import MotionStatus
-from d1max_patrol.protocol.nav_types import LocStatus, MappingStatus
+from d1max_patrol.protocol.nav_types import LocStatus, MappingStatus, Pose
 from d1max_sim.agent_server import SimAgentServer
 from d1max_sim.map_server import SimMapServer
 from d1max_sim.nav_server import SimNavServer
@@ -220,7 +221,13 @@ def sim_stack(tmp_path: Path, ffdir: Path):
         await device.acquire_control()
         await maps.connect()
 
-        engine = MissionEngine(nav, device, media, runs_root)
+        # 起飞门槛把原点当成前置条件(preflight §home)。这几条测的是全流程
+        # 接不接得通,不是原点本身,图 ID 是仿真器现建出来的,等它出来了
+        # 再落一份原点,免得每条测试都要自己摆一次。
+        home = HomePoint(map_id=map_id, pose=Pose.from_xy_yaw(0.0, 0.0),
+                         marked_at_ms=1_757_000_000_000)
+        save_home(tmp_path / "maps", home)
+        engine = MissionEngine(nav, device, media, runs_root, home=home)
         parts["engine"] = engine
         parts["teleop"] = Teleop(device, engine)
         return map_id

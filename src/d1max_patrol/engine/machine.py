@@ -237,6 +237,15 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def set_home(self, home: HomePoint | None) -> None:
+        """换一个原点。
+
+        引擎是按进程建的,原点却是按地图选的(见 ``app/server.py``):构造时
+        给的那份只是初始值,真正对得上"这一趟跑哪张图"的那份,由调用方在
+        开跑前用这个方法换进来 —— 不然切一次图,``self._home`` 就跟丢一次。
+        """
+        self._home = home
+
     def add_busy_check(self, check: Callable[[], str]) -> None:
         """登记一个"本体现在被别人占着吗"的检查。返回占用原因,空串表示没占。
 
@@ -368,7 +377,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         try:
             await self._transition(RunState.PREFLIGHT)
             report = await run_preflight(self._nav, self._device,
-                                         live.mission, self._runs_root)
+                                         live.mission, self._runs_root,
+                                         home=self._home)
             self._note("preflight", ok=report.ok,
                        checks=[{"name": c.name, "ok": c.ok, "detail": c.detail}
                                for c in report.checks])

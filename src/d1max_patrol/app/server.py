@@ -82,6 +82,7 @@ from d1max_patrol.engine.archive import (
     read_manifest,
     read_state,
 )
+from d1max_patrol.engine.homing import HomeError, load_home
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine
 from d1max_patrol.engine.mission import (
     Mission,
@@ -918,8 +919,16 @@ class AppServer:
         """
         mission = self._load_mission(req.params["mid"])
         ctx = self._ctx
+        try:
+            home = load_home(ctx.mapping.maps_dir, mission.map_id)
+        except HomeError:
+            home = None      # 让起飞门槛去说这句话,别在这儿抢着报错
+        # 引擎是按进程建的,原点是按地图选的:每次起飞都把这一张图现取的
+        # 原点换进去,不然切一次图,引擎手里的原点就跟丢一次。
+        ctx.engine.set_home(home)
         report = self._call(
-            lambda: run_preflight(ctx.nav, ctx.device, mission, ctx.runs_root),
+            lambda: run_preflight(ctx.nav, ctx.device, mission, ctx.runs_root,
+                                  home=home),
             timeout_s=30.0)
         checks = _checks_wire(report)
         if not report.ok:

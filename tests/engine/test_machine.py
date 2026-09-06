@@ -27,6 +27,7 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
 )
 from d1max_patrol.engine.archive import read_events, read_manifest, read_state
+from d1max_patrol.engine.homing import HomePoint
 from d1max_patrol.engine.machine import MissionEngine, RunState
 from d1max_patrol.engine.mission import Action, MissionWaypoint, Policy
 from d1max_patrol.protocol.nav_frames import AlgErrorItem
@@ -42,6 +43,12 @@ from .conftest import make_mission
 
 ARRIVED = [NavStatusEvent(NavStatus.SUCCEED)]
 NEVER = []
+
+#: 起飞门槛把原点当成前置条件(preflight §home)。这些测试关心的是状态机
+#: 的行为,不是原点本身,给个跟 ``sample_mission`` 同一张图的原点,免得每个
+#: 用例都要单独传。
+_HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
+                  marked_at_ms=1_757_000_000_000)
 
 
 def _alg(code: int) -> AlgErrorEvent:
@@ -195,8 +202,13 @@ def clock() -> Clock:
 
 @pytest.fixture
 def make_engine(nav, device, media, clock, tmp_path):
-    """造引擎。每个用例自己负责 ``aclose`` —— 收尾本身就是被测行为之一。"""
+    """造引擎。每个用例自己负责 ``aclose`` —— 收尾本身就是被测行为之一。
+
+    原点默认给 ``_HOME``——起飞门槛把它当成前置条件,真要测原点缺失/错图
+    的用例显式传 ``home=None`` 或别的 ``HomePoint`` 覆盖。
+    """
     def _make(**kwargs) -> MissionEngine:
+        kwargs.setdefault("home", _HOME)
         return MissionEngine(nav, device, media, tmp_path / "runs",
                              clock=clock, **kwargs)
 
@@ -291,14 +303,14 @@ async def test_起飞检查没过就不跑(make_engine, sample_mission, device, 
 
 
 async def test_检查结果整份进事件流(make_engine, sample_mission, device):
-    """现场要的是"还差哪几项",所以五项的结论都得留下来。"""
+    """现场要的是"还差哪几项",所以每一项的结论都得留下来。"""
     device.control = False
     engine = make_engine()
     await run_to_end(engine, sample_mission)
     pre = [e for e in read_events(engine.archive.path) if e["kind"] == "preflight"]
     assert len(pre) == 1
     assert [c["name"] for c in pre[0]["checks"]] == [
-        "nav_ready", "device_ready", "localized", "battery", "storage"]
+        "nav_ready", "device_ready", "localized", "home", "battery", "storage"]
 
 
 async def test_定位没收敛就等等不到就中止(make_engine, nav, monkeypatch):

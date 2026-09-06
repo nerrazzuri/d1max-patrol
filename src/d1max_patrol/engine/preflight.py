@@ -1,8 +1,8 @@
-"""起飞前检查。主规范 §6.2 的五条,一次全查完。
+"""起飞前检查。主规范 §6.2 的那几条,一次全查完。
 
 **两条原则:**
 
-1. **不许短路。** 五项挨个查,前面挂了后面照查。现场最烦的是修好一个毛病
+1. **不许短路。** 每一项挨个查,前面挂了后面照查。现场最烦的是修好一个毛病
    再跑一遍又冒出下一个 —— 一次把话说完。
 2. **不确定不放行。** 后端读不到状态时算这一项没过,而不是当成"好的"。
    "不知道有没有急停"和"确认没有急停"是两回事。
@@ -16,14 +16,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from d1max_patrol.backends.base import DeviceBackend, NavBackend
+from d1max_patrol.engine.homing import (
+    DEFAULT_RETURN_PARAMS,
+    HomePoint,
+    ReturnParams,
+    estimate_cost_pct,
+    route_length_m,
+)
 from d1max_patrol.engine.mission import Mission
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
 
-#: 电量要高出返航线这么多才让起飞。
-#:
-#: 刚好卡在返航线上就出发,等于第一个点还没走到就该返航了。10 个百分点是
-#: 实测里一趟短巡检的量级(清单 #43: 一天能从 71% 掉到 17%)。
-BATTERY_MARGIN_PCT = 10.0
+#: 预计耗电要乘的安全系数。**1.5 不是保守,是因为预计耗电本身不准**
+#: (spec §1.2):地面摩擦、载重、温度、绕路,每一项都在往上抬。
+#: 这就是唯一那层余量 —— 不要再叠第二层,叠了之后没人说得清哪层在起作用。
+ESTIMATE_SLACK = 1.5
 
 #: 归档目录至少要有这么多空间,MB。一次运行几十张照片加事件流。
 MIN_FREE_MB = 500.0
@@ -87,17 +93,63 @@ async def _check_localized(nav: NavBackend) -> CheckResult:
                        else f"定位当前是 {status.value},不是 ContinuousLoc")
 
 
+def _check_home(mission: Mission, home: HomePoint | None) -> CheckResult:
+    """原点必须标过,而且必须是这张图上的。
+
+    原点同时是换电位、待命位和返航目标(spec §1.3)。没有它,返航就没有目标,
+    出发线也算不出来。**一个别的图上的原点比没有原点更危险** —— 坐标在另一个
+    坐标系里,狗不会拒绝,它会一声不吭地走到一个错地方。
+    """
+    if home is None:
+        return CheckResult("home", False,
+                           f"地图 {mission.map_id!r} 没标过原点,先去标一个换电位")
+    if home.map_id != mission.map_id:
+        return CheckResult("home", False,
+                           f"原点记的是 {home.map_id!r},任务跑的是 "
+                           f"{mission.map_id!r} —— 两个坐标系,不能混用")
+    return CheckResult("home", True,
+                       f"原点在 ({home.pose.position.x:.1f}, "
+                       f"{home.pose.position.y:.1f})")
+
+
+def departure_line_pct(mission: Mission, home: HomePoint, *,
+                       slack: float = ESTIMATE_SLACK,
+                       params: ReturnParams = DEFAULT_RETURN_PARAMS) -> float:
+    """出发线:低于它就不出发(spec §1.2)。
+
+    ::
+
+        出发线 = 中止线 + 全程预计耗电 × slack
+
+    **"返航储备"就是中止线本身。** ``route_length_m`` 算的全程已经含回原点
+    那一段,回来的电已经在"预计耗电"里了;真正的储备是"走完全程回到家的
+    那一刻手上还剩多少",而那个数就是中止线 —— 低于它狗本来就该趴下。
+
+    这样这条线才解释得清:**出发时的电,够走完全程,回到家时还高于中止线。**
+    """
+    poses = [w.pose for w in mission.waypoints]
+    cost = estimate_cost_pct(route_length_m(home.pose, poses), params)
+    return mission.policy.battery_abort_pct + cost * slack
+
+
 async def _check_battery(device: DeviceBackend, mission: Mission,
-                         margin_pct: float) -> CheckResult:
-    """电量要高出返航线一截,不能刚好卡在线上。"""
+                         home: HomePoint | None, slack: float,
+                         params: ReturnParams) -> CheckResult:
+    """电量要够走完全程、回到家时还高于中止线。"""
     pct = await device.battery()
-    floor = mission.policy.battery_return_pct + margin_pct
-    ok = pct > floor
+    if home is None:
+        # 算不出线的时候不放行 —— 这是本模块开头那条"不确定不放行"。
+        # 原点所在的图跟任务对不对得上,是 home 项自己的事,这里不重复报。
+        return CheckResult("battery", False,
+                           f"电量 {pct:.1f}%,但算不出出发线:这张图的原点不可用"
+                           f"(见 home 项)")
+    line = departure_line_pct(mission, home, slack=slack, params=params)
+    ok = pct > line
     return CheckResult("battery", ok,
-                       f"电量 {pct:.1f}%" if ok
-                       else f"电量 {pct:.1f}%,不到返航线 "
-                            f"{mission.policy.battery_return_pct:.1f}% 加 "
-                            f"{margin_pct:.1f}% 余量")
+                       f"电量 {pct:.1f}%,出发线 {line:.1f}%" if ok
+                       else f"电量 {pct:.1f}%,不到出发线 {line:.1f}%"
+                            f"(中止线 {mission.policy.battery_abort_pct:.0f}% + "
+                            f"全程预计 × {slack:g})")
 
 
 def _check_storage(runs_root: Path, min_free_mb: float) -> CheckResult:
@@ -134,15 +186,20 @@ async def _guard(name: str, coro: Awaitable[CheckResult]) -> CheckResult:
 
 async def run_preflight(nav: NavBackend, device: DeviceBackend,
                         mission: Mission, runs_root: Path,
-                        *, min_free_mb: float = MIN_FREE_MB,
-                        battery_margin_pct: float = BATTERY_MARGIN_PCT,
+                        *, home: HomePoint | None = None,
+                        min_free_mb: float = MIN_FREE_MB,
+                        estimate_slack: float = ESTIMATE_SLACK,
+                        return_params: ReturnParams = DEFAULT_RETURN_PARAMS,
                         ) -> PreflightReport:
-    """五项全查,顺序固定,**一项都不跳**。"""
+    """全项全查,顺序固定,**一项都不跳**。"""
     checks = [
         await _guard("nav_ready", _check_nav_ready(nav)),
         await _guard("device_ready", _check_device_ready(device)),
         await _guard("localized", _check_localized(nav)),
-        await _guard("battery", _check_battery(device, mission, battery_margin_pct)),
+        _check_home(mission, home),
+        await _guard("battery",
+                     _check_battery(device, mission, home, estimate_slack,
+                                    return_params)),
     ]
     try:
         checks.append(_check_storage(Path(runs_root), min_free_mb))

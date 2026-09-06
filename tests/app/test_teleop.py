@@ -21,13 +21,19 @@ from d1max_patrol.app.teleop import (
     TeleopBusy,
 )
 from d1max_patrol.backends.base import Event, EventEmitter, NavStatusEvent
+from d1max_patrol.engine.homing import HomePoint
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine, RunState
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
+from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 from tests.app.conftest import post
 from tests.engine.conftest import make_mission
 
 #: 看门狗周期。测试里拨的是假表,真表上要等的就只有这一小段。
 TICK = 0.01
+
+#: 起飞门槛把原点当成前置条件。这里测的是遥控和引擎的互斥,不是原点本身,
+#: 给个跟 ``make_mission`` 同一张图的原点,免得每个用例都要单独传。
+_HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
+                  marked_at_ms=1_757_000_000_000)
 
 
 class NavStub(EventEmitter[Event]):
@@ -120,7 +126,7 @@ def fake_clock() -> FakeClock:
 
 @pytest.fixture
 def engine(fake_nav, fake_device, tmp_path) -> MissionEngine:
-    return MissionEngine(fake_nav, fake_device, {}, tmp_path / "runs")
+    return MissionEngine(fake_nav, fake_device, {}, tmp_path / "runs", home=_HOME)
 
 
 @pytest.fixture
