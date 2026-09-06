@@ -1449,16 +1449,19 @@ class AppServer:
         # **到期之前**",已经到期的不在其列。
         soonest = min((r.days_left(now) for r in runs if not r.is_expired(now)),
                       default=None)
-        behind = 0
+        behind, full = 0, False
         for t in targets or ():
             if t.usable and t.role is DiskRole.MIRROR:
                 # ``runs`` 是这一屏上面早算好的那份名单——传进去让 plan_sync
                 # 不用再对 runs_root 重扫一遍(每一趟归档都是一次递归 stat)。
-                behind = max(behind, plan_sync(ctx.runs_root, t.mount,
-                                               robot_sn=ctx.identity.sn,
-                                               runs=runs).behind)
+                plan = plan_sync(ctx.runs_root, t.mount,
+                                 robot_sn=ctx.identity.sn, runs=runs)
+                behind = max(behind, plan.behind)
+                # 任何一块镜像盘满了都要顶出来(spec §7.6)。满盘不删旧的,
+                # 于是同步就此停住 —— 不说的话,值守屏上只会看到"落后"在涨。
+                full = full or plan.full
         notice = backup_notice(targets or (), behind=behind,
-                               days_left=soonest)
+                               days_left=soonest, full=full)
         return json_response({
             "used_bytes": used,
             "total_bytes": total,

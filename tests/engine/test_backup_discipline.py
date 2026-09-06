@@ -107,3 +107,26 @@ def test_不可用的镜像盘不算配了():
     # 而且该顶的时候照顶 —— 它等于没配,不是等于配好了。
     urgent = backup_notice([_mirror(usable=False)], days_left=3.0)
     assert urgent.level is NoticeLevel.PUSH
+
+
+def test_备份盘满了要顶出来():
+    # spec §7.6:满了不删旧的,报出来停同步。停下来这件事人必须知道,
+    # 不然值守屏上只看得到"落后"在涨,而落后的那句话给的排查方向是错的。
+    got = backup_notice([_mirror()], full=True)
+    assert got.level is NoticeLevel.PUSH
+    assert "满" in got.detail
+
+
+def test_满盘那句话要明说不会删盘上的旧归档():
+    # 这是这条规矩的**理由**:盘上那份常常是唯一副本(狗自己那份按水位清)。
+    # 一个"自动腾空间"的备份盘会在某个没人看着的夜里把唯一副本删掉。
+    got = backup_notice([_mirror()], full=True)
+    assert "不会被自动删掉" in got.detail
+    assert "唯一副本" in got.detail
+
+
+def test_满盘那句话排在落后前面():
+    # 盘满了必然带着落后。先说根因 —— 换成"落后了去看三件事"那句话,
+    # 人会照着单子查一圈才发现是满了。
+    got = backup_notice([_mirror()], behind=BEHIND_PUSH_RUNS, full=True)
+    assert "满" in got.detail

@@ -717,7 +717,8 @@ class BackupNotice:
 
 def backup_notice(targets: Sequence[TargetStatus], *, behind: int = 0,
                   days_left: float | None = None,
-                  ota_pending: bool = False) -> BackupNotice:
+                  ota_pending: bool = False,
+                  full: bool = False) -> BackupNotice:
     """没配镜像盘 / 镜像盘落后了,该怎么说这句话。
 
     **没配镜像盘不许常年报红**(spec §7.6)。常年报警的东西等于没报警:现场
@@ -731,6 +732,12 @@ def backup_notice(targets: Sequence[TargetStatus], *, behind: int = 0,
     ``days_left`` 是盘上最快到期的那一趟还剩几天;``None`` 表示盘上一趟归档
     也没有。``ota_pending`` 由第 4 卷在授权升级之前传 ``True`` —— 这一卷不
     知道 OTA 这回事,只留好这个入口。
+
+    ``full`` 为真表示镜像盘满了(``plan_sync(...).full``)。**满盘要顶出来,
+    而且要说清楚"不会删盘上的旧归档"**(spec §7.6):备份盘上那份常常是唯一
+    副本 —— 狗自己那份是按水位清的,清掉之后就只剩盘上这一份。一个"自动腾
+    空间"的备份盘会在某个没人看着的夜里把唯一副本删掉。所以这里停下来等人,
+    而人必须知道自己在等什么。
     """
     mirrors = [t for t in targets if t.usable and t.role is DiskRole.MIRROR]
     if not mirrors:
@@ -748,6 +755,15 @@ def backup_notice(targets: Sequence[TargetStatus], *, behind: int = 0,
             NoticeLevel.PUSH,
             "这台狗没有备份盘,归档只有一份 —— " + ";".join(why)
             + "。现在插一块盘初始化成镜像盘,或者先把要留的那些导出来")
+    if full:
+        # **满盘排在落后前面。** 盘满了必然带着落后,先说根因 —— 换成"落后了
+        # 去看三件事"那句话,人会照着单子查一圈才发现是满了。
+        return BackupNotice(
+            NoticeLevel.PUSH,
+            "镜像盘满了,同步已经停下 —— 新的归档现在只有狗自己这一份。"
+            "盘上的旧归档不会被自动删掉:那些常常是唯一副本,狗自己那份是"
+            "按水位清的。要么换一块盘,要么把盘上的旧归档拷走之后人工删掉,"
+            "腾出空间同步会自己接上")
     if behind >= BEHIND_PUSH_RUNS:
         # **不下诊断。** 说"硬件故障"会把现场技术员指向一个可能并不存在的
         # 问题,而落后的原因里"盘满了"和"盘卸载了"都比硬件常见得多。

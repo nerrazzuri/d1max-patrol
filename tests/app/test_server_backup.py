@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -418,3 +419,27 @@ def test_只出方案不占在飞的名单(one_disk, monkeypatch):
     C.get_json(s, "/api/backup/sync", method="POST",
                payload={"mount": mount.as_posix()})
     assert 看到的 == [set()]
+
+
+def test_盘况接口把镜像盘满了这件事报出来(one_disk, monkeypatch):
+    """spec §7.6:满了不删旧的,报出来停同步。
+
+    ``full`` 在真机上要把盘写到只剩 64 MB 才出得来,离机造不出;这里替掉
+    ``plan_sync`` 的回值 —— 测的是 ``_storage`` 有没有把 ``.full`` 接过去,
+    "什么时候算满"归 ``tests/engine/test_backup.py`` 管。
+    """
+    from d1max_patrol.app import server as S
+
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    真排方案 = S.plan_sync
+
+    def _满了(*a, **kw):
+        return dataclasses.replace(真排方案(*a, **kw), full=True)
+
+    monkeypatch.setattr(S, "plan_sync", _满了)
+    body = C.get_json(s, "/api/storage")
+    assert body["backup"]["level"] == "push"
+    assert "满" in body["backup"]["detail"]
+    assert "不会被自动删掉" in body["backup"]["detail"]
