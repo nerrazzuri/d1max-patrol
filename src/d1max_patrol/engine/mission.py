@@ -42,6 +42,12 @@ ON_CONTROL_LOST = frozenset({"pause", "abort"})
 #: 点位名里绝对不能出现的东西 —— 它会成为照片文件名的一部分。
 _NAME_FORBIDDEN = ("/", "\\", "..", "\x00")
 
+#: 保留期的下限。低于一周,删除预告期(``retention.MIN_NOTICE_DAYS``,同样
+#: 是 7 天)比保留期还长 —— 每一趟归档一落地就已经过了预告期,预告整个失去
+#: 意义。**两个 7 不是同一个数**,只是恰好相等;``retention`` 那边有一条测试
+#: 把"预告期不得超过保留期下限"钉住,谁改一边都会红。
+MIN_RETENTION_DAYS = 7
+
 
 class MissionError(ValueError):
     """任务定义不合法。
@@ -114,6 +120,15 @@ class Policy:
     on_loc_lost: str = "pause_then_abort"
     on_control_lost: str = "pause"
     loops: int = 1
+    #: 这一趟的归档留多少天(spec §4.4)。**按任务算,不是全局设置** —— 日巡
+    #: 留 30 天够了,季度大检那一趟得留一年。整份 policy 会随 manifest 落进
+    #: 每一趟的目录,所以清扫器读一趟就知道它该留多久,不需要知道任务今天
+    #: 还在不在、策略后来有没有改。
+    #:
+    #: **没有永久保留这一说。** 盘是 128GB,拿 0 或 -1 当永不删的话,水位删除
+    #: 迟早要在一堆标着永不删的目录上做决定,而那时它只剩两条路:违反
+    #: 承诺,或者让盘满到狗停机。
+    retention_days: int = 90
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -125,6 +140,7 @@ class Policy:
             "on_loc_lost": self.on_loc_lost,
             "on_control_lost": self.on_control_lost,
             "loops": self.loops,
+            "retention_days": self.retention_days,
         }
 
 
@@ -236,6 +252,14 @@ def _parse_policy(raw: Any) -> Policy:
         _require(isinstance(value, int) and not isinstance(value, bool) and value >= 1,
                  f"policy.loops 应为正整数,实际为 {value!r}")
         got["loops"] = value
+    if "retention_days" in raw:
+        value = raw["retention_days"]
+        _require(isinstance(value, int) and not isinstance(value, bool)
+                 and value >= MIN_RETENTION_DAYS,
+                 f"policy.retention_days 应为不小于 {MIN_RETENTION_DAYS} 的整数,"
+                 f"实际为 {value!r} —— 0 和负数不当永久保留用,"
+                 f"盘满那天水位删除只剩违约或停机两条路")
+        got["retention_days"] = value
     if "on_waypoint_failed" in raw:
         value = raw["on_waypoint_failed"]
         _require(value in ON_WAYPOINT_FAILED,

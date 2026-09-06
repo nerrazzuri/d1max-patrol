@@ -5,8 +5,10 @@ from __future__ import annotations
 import pytest
 
 from d1max_patrol.engine.mission import (
+    MIN_RETENTION_DAYS,
     MissionError,
     Policy,
+    _parse_policy,
     dump_mission,
     load_mission,
     save_mission,
@@ -212,3 +214,32 @@ def test_中止线默认二十五不是十五():
     # 厂商的强制趴窝线是单块电池 10%(硬件手册 2.3.3)。默认 15 离它只剩 5 个点,
     # 而这 5 个点要覆盖:发现、告警、人走过去、把狗弄回来。不够。
     assert Policy().battery_abort_pct == 25.0
+
+
+# ------------------------------------------------------------- 保留天数
+
+
+def test_保留天数默认九十天():
+    assert Policy().retention_days == 90
+
+
+def test_保留天数写进线格式():
+    assert Policy(retention_days=30).to_wire()["retention_days"] == 30
+
+
+def test_保留天数能从任务文件里解出来():
+    policy = _parse_policy({"retention_days": 365})
+    assert policy.retention_days == 365
+
+
+@pytest.mark.parametrize("bad", [0, -1, 3, 6, 1.5, "90", True, None])
+def test_保留天数不合法要报错(bad):
+    # 0 和负数当"永不删"是个陷阱:盘满那天水位删除只剩两条路 —— 违反承诺,
+    # 或者让盘满到狗停机。小于 MIN_RETENTION_DAYS 则让删除预告失去意义。
+    with pytest.raises(MissionError):
+        _parse_policy({"retention_days": bad})
+
+
+def test_保留天数下限正好是七天():
+    assert MIN_RETENTION_DAYS == 7
+    assert _parse_policy({"retention_days": MIN_RETENTION_DAYS}).retention_days == 7
