@@ -691,8 +691,12 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
             # 这件事没记下来 —— 下次同步会把这几趟当成新的重拷一遍。重拷是浪费,
             # 不是损坏(``_copy_file`` 覆盖写)。而把这一下抛出去的那一边,调用方
             # 看到的是一次彻头彻尾的失败,连"哪几趟拷成了"都拿不到。
-            detail = (f"这一趟拷成了但进度没记上,下次会重拷(写盘上的账本时"
-                      f"出错: {exc})")
+            #
+            # **追加,不是赋值。** 盖掉的那一句往往正是"备份盘满了" —— 而满盘
+            # 是现场最需要看到的一句:账本写不进去多半就是因为盘满了。
+            why_ledger = (f"这一趟拷成了但进度没记上,下次会重拷"
+                          f"(写盘上的账本时出错: {exc})")
+            detail = f"{detail};{why_ledger}" if detail else why_ledger
     if failed and not detail:
         detail = f"有 {len(failed)} 趟没拷成,见 failed"
     elif failed:

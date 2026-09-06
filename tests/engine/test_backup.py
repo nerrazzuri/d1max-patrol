@@ -705,6 +705,28 @@ def test_账本写不进去不算整趟失败_但要说清楚下次会重拷(tmp
     assert "下次会重拷" in res.detail
 
 
+def test_账本写不进去不许盖掉_备份盘满了_那句话(tmp_path, monkeypatch):
+    """满盘是现场最需要看到的一句,而账本写不进去多半就是因为盘满了。
+
+    这两件事同时发生的时候,``detail`` 要是赋值而不是追加,人看到的就只剩
+    "下次会重拷" —— 照着它去查,永远查不到根因。
+    """
+    from d1max_patrol.engine import backup as B
+
+    def _写不进去(mount, state):
+        raise OSError("No space left on device")
+
+    runs, mount, plan = _plan(tmp_path, size=1000)
+    one = plan.items[0].size_bytes
+    tight = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                      free_bytes=FREE_MARGIN_BYTES + one)
+    assert tight.full is True
+    monkeypatch.setattr(B, "write_sync_state", _写不进去)
+    res = apply_sync(tight, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert "装不下" in res.detail        # 满盘那句话还在
+    assert "下次会重拷" in res.detail    # 账本那句话也在
+
+
 def test_写标记的时候盘是只读的_出的是一句人话不是裸的_OSError(tmp_path, monkeypatch):
     # 调用方 app/server.py 的 _backup_init 只接 BackupError。漏出去的那一边,
     # 一块写保护的盘会变成一个 500 —— 人拿着盘站在狗边上,屏上是"服务器内部错误"。
