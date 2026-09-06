@@ -28,6 +28,7 @@ from d1max_patrol.backends.base import NavStatus, NavStatusEvent
 from d1max_patrol.engine.archive import read_manifest
 from d1max_patrol.engine.mission import parse_mission
 
+from ..conftest import NoDisks
 from . import conftest as C
 
 PIN = "704311"
@@ -338,8 +339,10 @@ def test_跑完一趟归档里写着是哪只狗(bridge, tmp_path):
                   net_root=tmp_path / "无")
     nav, device = _ArrivingNav(), C.FakeDevice()
     runs_root = tmp_path / "runs"
+    # removable 必须显式传:这条是真开跑、真过 preflight 的,而 `_make_engine`
+    # 的默认值是 DEFAULT_PROBE —— 它扫的是这台机器上真的 /media 和 /mnt。
     engine = bridge.call(lambda: _make_engine(
-        nav, device, {}, runs_root, who.fingerprint()))
+        nav, device, {}, runs_root, who.fingerprint(), removable=NoDisks()))
     try:
         bridge.call(lambda: engine.start(parse_mission(_MISSION)))
         bridge.call(lambda: engine.wait_done(timeout_s=10.0))
@@ -355,7 +358,8 @@ def test_没身份的时候归档也照样写得出来(bridge, tmp_path):
     """指纹是空的不能把整趟跑挂掉 —— 归档比身份重要得多。"""
     nav, device = _ArrivingNav(), C.FakeDevice()
     engine = bridge.call(lambda: _make_engine(nav, device, {},
-                                              tmp_path / "runs", None))
+                                              tmp_path / "runs", None,
+                                              removable=NoDisks()))
     try:
         bridge.call(lambda: engine.start(parse_mission(_MISSION)))
         bridge.call(lambda: engine.wait_done(timeout_s=10.0))

@@ -10,6 +10,7 @@ from __future__ import annotations
 from d1max_patrol.app.server import _make_engine
 from d1max_patrol.engine.form import STANDALONE, Form
 
+from ..conftest import NoDisks
 from . import conftest as C
 
 
@@ -28,7 +29,7 @@ def test_生产那个造引擎的函数收得下形态(bridge, tmp_path):
     connected = Form(name="connected")
     engine = bridge.call(lambda: _make_engine(
         C.FakeNav(), C.FakeDevice(), {}, tmp_path / "runs", None,
-        form=connected))
+        form=connected, removable=NoDisks()))
     try:
         assert engine.form is connected
     finally:
