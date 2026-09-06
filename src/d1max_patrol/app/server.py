@@ -82,6 +82,7 @@ from d1max_patrol.engine.archive import (
     read_manifest,
     read_state,
 )
+from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomeError, load_home
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine
 from d1max_patrol.engine.mission import (
@@ -360,6 +361,8 @@ class AppContext:
     #: 这是哪只狗。手机按它认机器、给归档分组 —— 每只 D1 Max 的内网地址
     #: 都一样,靠地址分不出谁是谁(见 ``app/identity.py``)。
     identity: Identity = field(default_factory=resolve)
+    #: 这台狗跑在哪一档。默认单机 —— 没有服务器的客户装的就是这个。
+    form: Form = STANDALONE
 
 
 # ------------------------------------------------------------------ 状态汇总
@@ -925,7 +928,7 @@ class AppServer:
             home = None      # 让起飞门槛去说这句话,别在这儿抢着报错
         report = self._call(
             lambda: run_preflight(ctx.nav, ctx.device, mission, ctx.runs_root,
-                                  home=home),
+                                  home=home, form=ctx.form),
             timeout_s=30.0)
         checks = _checks_wire(report)
         if not report.ok:

@@ -37,6 +37,7 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
 )
 from d1max_patrol.engine.archive import RunArchive
+from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomePoint, estimate_cost_pct
 from d1max_patrol.engine.mission import Action, Mission, MissionWaypoint
 from d1max_patrol.engine.preflight import PreflightReport, run_preflight
@@ -198,7 +199,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def __init__(self, nav: NavBackend, device: DeviceBackend,
                  media: Mapping[str, MediaSource], runs_root: Path,
                  *, clock: Callable[[], float] = time.monotonic,
-                 fingerprint: Mapping[str, Any] | None = None) -> None:
+                 fingerprint: Mapping[str, Any] | None = None,
+                 form: Form = STANDALONE) -> None:
         super().__init__()
         self._nav = nav
         self._device = device
@@ -206,6 +208,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         self._runs_root = Path(runs_root)
         self._clock = clock
         self._fingerprint = dict(fingerprint or {})
+        self._form = form
         self._queue: asyncio.Queue[Any] = asyncio.Queue()
         self._state = RunState.IDLE
         self._seen: set[RunState] = set()
@@ -379,7 +382,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             await self._transition(RunState.PREFLIGHT)
             report = await run_preflight(self._nav, self._device,
                                          live.mission, self._runs_root,
-                                         home=self._home)
+                                         home=self._home, form=self._form)
             self._note("preflight", ok=report.ok,
                        checks=[{"name": c.name, "ok": c.ok, "detail": c.detail}
                                for c in report.checks])

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from d1max_patrol.backends.base import DeviceBackend, NavBackend
+from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import (
     DEFAULT_RETURN_PARAMS,
     HomePoint,
@@ -24,6 +25,7 @@ from d1max_patrol.engine.homing import (
     route_length_m,
 )
 from d1max_patrol.engine.mission import Mission
+from d1max_patrol.engine.storage import storage_verdict
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
 
 #: 预计耗电要乘的安全系数。**1.5 不是保守,是因为预计耗电本身不准**
@@ -151,11 +153,14 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
                             f"全程预计 × {slack:g})")
 
 
-def _check_storage(runs_root: Path, min_free_mb: float) -> CheckResult:
+def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
+                   last_upload_age_days: float | None) -> CheckResult:
     """真写一个探针文件再删掉。
 
     "目录存在"不等于"写得进去":只读挂载、权限不对、名字被一个同名文件占了
     —— 这些都要等到第一张照片存不下去才暴露,那时候狗已经在外面了。
+
+    写得进去之后再看水位,两条门槛并列(``storage.storage_verdict``)。
     """
     root = Path(runs_root)
     try:
@@ -165,11 +170,15 @@ def _check_storage(runs_root: Path, min_free_mb: float) -> CheckResult:
         probe.unlink()
     except OSError as exc:
         return CheckResult("storage", False, f"归档目录 {root} 写不了: {exc}")
-    free_mb = shutil.disk_usage(root).free / (1024 * 1024)
-    ok = free_mb >= min_free_mb
-    return CheckResult("storage", ok,
-                       f"剩余 {free_mb:.0f}MB" if ok
-                       else f"剩余 {free_mb:.0f}MB,不足 {min_free_mb:.0f}MB")
+    usage = shutil.disk_usage(root)
+    verdict = storage_verdict(
+        free_mb=usage.free / (1024 * 1024),
+        used_ratio=usage.used / usage.total if usage.total else 1.0,
+        min_free_mb=min_free_mb,
+        has_upload=form.has_upload,
+        last_upload_age_days=last_upload_age_days,
+    )
+    return CheckResult("storage", verdict.ok, verdict.detail)
 
 
 async def _guard(name: str, coro: Awaitable[CheckResult]) -> CheckResult:
@@ -189,6 +198,8 @@ async def run_preflight(nav: NavBackend, device: DeviceBackend,
                         min_free_mb: float = MIN_FREE_MB,
                         estimate_slack: float = ESTIMATE_SLACK,
                         return_params: ReturnParams = DEFAULT_RETURN_PARAMS,
+                        form: Form = STANDALONE,
+                        last_upload_age_days: float | None = None,
                         ) -> PreflightReport:
     """全项全查,顺序固定,**一项都不跳**。"""
     checks = [
@@ -201,7 +212,8 @@ async def run_preflight(nav: NavBackend, device: DeviceBackend,
                                     return_params)),
     ]
     try:
-        checks.append(_check_storage(Path(runs_root), min_free_mb))
+        checks.append(_check_storage(Path(runs_root), min_free_mb, form,
+                                     last_upload_age_days))
     except Exception as exc:  # noqa: BLE001 - 同 _guard
         checks.append(CheckResult("storage", False, str(exc)))
     return PreflightReport(tuple(checks))

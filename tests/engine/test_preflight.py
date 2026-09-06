@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomePoint, ReturnParams
 from d1max_patrol.engine.mission import MissionWaypoint
 from d1max_patrol.engine.preflight import departure_line_pct, run_preflight
@@ -216,3 +217,26 @@ async def test_通过时也说得出出发线是多少(tmp_path, sample_mission,
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     battery = next(c for c in r.checks if c.name == "battery")
     assert "出发线" in battery.detail, "过了也要让人看见这条线画在哪儿"
+
+
+class _FakeUpload:
+    async def describe(self) -> str:
+        return "控制台 https://console.example/upload"
+
+
+async def test_单机档盘满时说的是保留期而不是回传(tmp_path, sample_mission,
+                                                fake_nav, fake_device):
+    # 把 min_free_mb 顶到天上,借它触发拦停 —— 我们要看的是文案,不是水位怎么来的。
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path,
+                   min_free_mb=1e12, form=STANDALONE)
+    detail = next(c.detail for c in r.checks if c.name == "storage")
+    assert "保留期" in detail and "回传" not in detail
+
+
+async def test_联网档盘满时说的是回传中断(tmp_path, sample_mission, fake_nav,
+                                          fake_device):
+    connected = Form(name="connected", upload=_FakeUpload())
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path,
+                   min_free_mb=1e12, form=connected, last_upload_age_days=9.0)
+    detail = next(c.detail for c in r.checks if c.name == "storage")
+    assert "回传" in detail and "9 天" in detail
