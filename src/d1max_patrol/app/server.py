@@ -161,6 +161,11 @@ MAX_BODY = 4 * 1024 * 1024
 #: 快照重建的节拍。链路通断这类"没有事件的变化"靠它发现。
 _TICK_S = 0.5
 
+#: 自动同步的巡查周期。镜像盘是"不依赖人"的那一路(spec §7.5),所以不能等人点。
+#: 按分钟量级 —— 备份不是实时的,晚一分钟没有代价,而每分钟扫一次盘的开销
+#: 可以忽略。
+_AUTOSYNC_S = 60.0
+
 #: 日志接口默认给多少字节的尾巴。够看清最近几百行,又不至于撑爆页面。
 LOG_TAIL_BYTES = 64 * 1024
 
@@ -693,6 +698,9 @@ class AppServer:
         #: 掉,盘上落的是残的一趟,而"只增不删"保证它再也不会被重拷。
         self._sweeping: bool = False
         self._sync_lock = threading.Lock()
+        #: 自动同步那条后台协程。**活在循环线程上**,由 :meth:`start` 经桥
+        #: 建起来、:meth:`stop` 经桥收掉,写法照 ``_StateHub``。
+        self._autosync: asyncio.Task[None] | None = None
         self._register_routes()
 
     # ------------------------------------------------------------ 生命周期
@@ -708,6 +716,7 @@ class AppServer:
             print(f"app 正听在 {self._host}:{self.port},已启用 PIN。"
                   f"这些接口能让机器狗走起来 —— 别把它暴露到公网。")
         self._ctx.bridge.call(self._hub.start)
+        self._ctx.bridge.call(self._autosync_start)
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, name="d1max-http", daemon=True)
         self._thread.start()
@@ -717,6 +726,8 @@ class AppServer:
         if httpd is None:
             return
         if self._ctx.bridge.running:
+            with contextlib.suppress(Exception):
+                self._ctx.bridge.call(self._autosync_stop)
             with contextlib.suppress(Exception):
                 self._ctx.bridge.call(self._hub.stop)
         httpd.shutdown()
@@ -1647,11 +1658,103 @@ class AppServer:
         raise HttpError(404, f"现在没认到 {want} 这块盘 —— 拔掉了,"
                              f"或者根本没挂上")
 
+    # ------------------------------------------------------------ 自动同步
+
+    async def _autosync_start(self) -> None:
+        """把自动同步那条协程建起来。**在循环线程里跑**(经 ``bridge.call``
+        进来),写法照 ``_StateHub.start``。"""
+        if self._autosync is None:
+            self._autosync = asyncio.create_task(self._autosync_loop())
+
+    async def _autosync_stop(self) -> None:
+        """收掉那条协程。取消之后要 ``await`` —— 不等的话,它可能正卡在
+        ``to_thread`` 里往一个 pytest 马上要删掉的临时目录里写。"""
+        task, self._autosync = self._autosync, None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(BaseException):
+            await task
+
+    async def _autosync_loop(self) -> None:
+        """每 :data:`_AUTOSYNC_S` 秒巡一次镜像盘。
+
+        **先睡后跑**:进程刚起来那一刻后端在连、引擎在建,那不是抢盘 I/O 的
+        好时候,而备份晚一分钟没有任何代价。
+        """
+        while True:
+            await asyncio.sleep(_AUTOSYNC_S)
+            await self._autosync_once()
+
+    async def _autosync_once(self) -> None:
+        """巡一趟:认盘 -> 只挑镜像盘 -> 排方案 -> 拷。
+
+        **这一条才是"镜像盘不依赖人"那句话的兑现**(spec §7.5 那张表里镜像盘
+        那一列写着"依赖人:否",§7.6 写着"没有手机在场时,同步照常进行")。
+        四条 HTTP 路由都只是入口,不是同步的发起条件。
+
+        **不走 ``ctx.bridge.call``。** 这个协程本来就跑在循环线程上,而桥是给
+        HTTP 线程用的那道门 —— 在循环线程里调它,提交进去的活要等这条循环
+        转下一圈才轮得到,而这条循环正卡在等它,当场死锁。直接 ``await``。
+
+        **``plan_sync`` / ``apply_sync`` 必须 ``to_thread``。** 它们是阻塞的
+        文件 I/O,一趟 GB 级归档要跑几分钟。占住事件循环的后果不是"慢一点":
+        SSE、全部 HTTP、遥控看门狗全在这一条循环上(同样的理由见
+        ``video.py`` 里 ``RtspStill.grab``)。
+
+        **只碰镜像盘。** 交付盘是人插上来手动取走的,自动往上写违反 §7.5 ——
+        人拔走的那份会比他以为的多。
+
+        **引擎在跑就整趟跳过。** 巡检的时候不跟它抢盘 I/O:归档正在往
+        ``runs_root`` 里写,而这边要递归 stat 整棵树再拷几百兆。
+        """
+        ctx = self._ctx
+        if ctx.engine.running:
+            return
+        disks = await scan_or_unknown(ctx.removable)
+        if disks is None:
+            # 认不出插着什么就什么也不写 —— 跟 ``_scan_targets`` 同一条纪律。
+            return
+        for t in resolve_targets(disks, robot_sn=ctx.identity.sn):
+            if not (t.usable and t.role is DiskRole.MIRROR):
+                continue
+            key = t.mount.as_posix()
+            with self._sync_lock:
+                # 手动那条路由正在这块盘上跑,或者清盘在跑:让路,下一圈再说。
+                if self._sweeping or key in self._syncing:
+                    continue
+                self._syncing.add(key)
+            try:
+                plan = await asyncio.to_thread(
+                    plan_sync, ctx.runs_root, t.mount,
+                    robot_sn=ctx.identity.sn)
+                # **没有新东西就不写盘。** ``apply_sync`` 空计划也写进度是它的
+                # 本分(人点一下要看到"上次同步"往前走),但这条循环每分钟醒
+                # 一次:照写的话就是每分钟一次 fsync,一块机械镜像盘从此永远
+                # 不休眠。"这条循环还活着"由 ``behind`` 说 —— 它不回落到 0
+                # 就是没在同步。
+                if plan.items:
+                    await asyncio.to_thread(
+                        apply_sync, plan, now_ms=int(time.time() * 1000),
+                        robot_sn=ctx.identity.sn)
+            except (OSError, BackupError):
+                # **一块坏盘不能让这条循环死掉** —— 死了之后没有任何人会发现,
+                # 因为备份本来就是那个"平时看不见它在不在工作"的东西。
+                # ``asyncio.CancelledError`` 是 BaseException,不在这里被吞掉:
+                # 吞了 ``stop()`` 就停不掉。
+                pass
+            finally:
+                with self._sync_lock:
+                    self._syncing.discard(key)
+
     def _backup_targets(self, _req: Request) -> Response:
         """狗现在认到哪些备份盘。**这一屏就是 spec §7.6 那句"app 看见的
         不是备份盘,是狗看见的备份盘"。**
 
-        推论:**没有手机在场的时候同步照常进行。** 这几个接口都不是同步的
+        **没有手机在场的时候同步照常进行** —— 兑现它的是 ``_autosync_once``:
+        一条每 :data:`_AUTOSYNC_S` 秒醒一次的后台协程,只碰 ``usable`` 的
+        镜像盘(交付盘是人插上来手动取走的),引擎在跑的那几圈整趟让路,
+        跟这条路由共用 ``_sync_lock`` / ``_syncing``。这几个接口都不是同步的
         发起条件,只是它的一个入口。
 
         **不过桥**,除了里面那一处扫盘(``_scan_targets`` 自己会过);算容量、

@@ -265,3 +265,97 @@ def test_真有一趟快到期的时候照顶(one_disk):
     body = C.get_json(s, "/api/storage")
     assert body["backup"]["level"] == "push"
     assert "永久删掉" in body["backup"]["detail"]
+
+
+# --------------------------------------------------------------- 自动同步
+#
+# 镜像盘那一列在 spec §7.5 的表里写着"依赖人:否"。在这条后台协程落地之前,
+# 全仓 apply_sync 的唯一调用点是带 {"apply": true} 的 HTTP 路由 —— 也就是说
+# 镜像盘其实只有人点一下才会写,而文案、docstring 和规格都说它不用人管。
+#
+# 这里测的是 ``_autosync_once`` 这一层,**不在测试里真睡 60 秒**。
+
+
+def test_自动同步会往镜像盘上写(one_disk):
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    run = _write_run(ctx, "一号厂房", 1)
+    ctx.bridge.call(s._autosync_once)
+    key = f"一号厂房/{run.name}"
+    assert (mount / "runs" / "一号厂房" / run.name / "manifest.json").is_file()
+    assert key in read_state(mount, robot_sn=ctx.identity.sn).done
+
+
+def test_自动同步一个字节都不往交付盘上写(one_disk):
+    # 交付盘是人插上来手动取走的。自动往上写违反 §7.5:人拔走的那份会比他
+    # 以为的多,而他正是靠"我知道这块盘上有什么"在做交付。
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.TRANSFER,
+                now_ms=1_757_000_000_000)
+    _write_run(ctx, "一号厂房", 1)
+    ctx.bridge.call(s._autosync_once)
+    assert not (mount / "runs").exists()
+
+
+def test_引擎在跑的时候整趟跳过(one_disk, monkeypatch):
+    # 巡检的时候不跟它抢盘 I/O:归档正在往 runs_root 里写,而这边要递归 stat
+    # 整棵树再拷几百兆。
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    _write_run(ctx, "一号厂房", 1)
+    monkeypatch.setattr(type(ctx.engine), "running",
+                        property(lambda _self: True))
+    ctx.bridge.call(s._autosync_once)
+    assert not (mount / "runs").exists()
+
+
+def test_这块盘上已经有一轮同步在飞就让路(one_disk):
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    _write_run(ctx, "一号厂房", 1)
+    s._syncing.add(mount.as_posix())
+    try:
+        ctx.bridge.call(s._autosync_once)
+        assert not (mount / "runs").exists()
+    finally:
+        s._syncing.discard(mount.as_posix())
+
+
+def test_清盘在飞的时候自动同步也让路(one_disk):
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    _write_run(ctx, "一号厂房", 1)
+    s._sweeping = True
+    try:
+        ctx.bridge.call(s._autosync_once)
+        assert not (mount / "runs").exists()
+    finally:
+        s._sweeping = False
+
+
+def test_扫盘炸了不许把这条循环炸掉(bridge, tmp_path):
+    # 一块坏盘让这条循环死掉之后,没有任何人会发现 —— 备份本来就是那个
+    # "平时看不见它在不在工作"的东西。
+    _, s = _server(bridge, tmp_path, BoomProbe())
+    try:
+        bridge.call(s._autosync_once)
+    finally:
+        s.stop()
+
+
+def test_同步跑完之后挂载点从在飞的名单里退出来(one_disk):
+    # 退不出来的话,这块盘从此再也不会被自动同步碰,而且 /api/backup/eject
+    # 会永远回"这块盘正在同步,现在不能拔"。
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    _write_run(ctx, "一号厂房", 1)
+    ctx.bridge.call(s._autosync_once)
+    assert s._syncing == set()
+    body = C.get_json(s, "/api/backup/eject", method="POST",
+                      payload={"mount": mount.as_posix()})
+    assert body["ok"] is True
