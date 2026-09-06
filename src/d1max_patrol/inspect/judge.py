@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from d1max_patrol.engine.archive import list_runs, read_manifest
+from d1max_patrol.engine.baselines import BaselineError, load_baseline, save_baseline
 
 #: 默认用的模型。判读要看图、要讲道理,给最能打的那个。
 DEFAULT_MODEL = "claude-opus-5"
@@ -180,12 +181,24 @@ def _photos(run_dir: Path) -> list[str]:
 
 
 def _previous_photo(run_dir: Path, history_root: Path | None,
-                    waypoint: str, camera: str) -> bytes | None:
-    """同一点位同一相机上一次拍的那张。没有就 ``None``。
+                    waypoint: str, camera: str,
+                    baselines_root: Path | None = None) -> bytes | None:
+    """比对基准。**先问基线集,再退回历史 run。**
+
+    基线集是判读的工具,不参与水位删除;历史 run 是证据,随时可能被删。两个
+    都在的时候基线说了算 —— 否则同一台狗今天能比对、明天清了盘就不能了,
+    而**它不会报错**,只是从此每张都变成"无基准"判读。
+
+    退回历史那一支原样保留:基线集是新加的,存量客户升级上来的那一天它是
+    空的,那天判读不能变瞎。
 
     ``list_runs`` 已经是新的在前,所以第一个命中的就是"上一次"。当前这趟要
     跳过 —— 不然比对的是它自己。
     """
+    if baselines_root is not None:
+        got = load_baseline(baselines_root, waypoint, camera)
+        if got is not None:
+            return got
     if history_root is None:
         return None
     prefix = f"{waypoint}__{camera}__"
@@ -324,11 +337,17 @@ def default_client() -> VlmClient | None:
 
 
 def judge_run(run_dir: Path, *, client: VlmClient | None = None,
-              history_root: Path | None = None) -> list[Finding]:
+              history_root: Path | None = None,
+              baselines_root: Path | None = None) -> list[Finding]:
     """判读一整趟的照片,结论写进 ``findings.json``,并返回。
 
     ``client`` 留空就按环境变量造一个;造不出来(没密钥)全部标 ``pending``。
     ``history_root`` 给的是 runs 根目录,用来找同点位上一次的照片做比对。
+
+    ``baselines_root`` 给的是基线目录。给了就优先拿基线当比对基准,并且
+    **判成 ``normal`` 的那一张会覆盖更新成新基线**(spec §4.5)。
+    ``abnormal`` / ``unclear`` / ``pending`` 一律不回写 —— 拿异常当基准,
+    下一次就是异常比异常,模型看到"跟上次一样",异常静默转正。
 
     **重跑是覆盖式的**:模型的结论整个换掉,``review.json`` 一个字不动。
     """
@@ -352,7 +371,8 @@ def judge_run(run_dir: Path, *, client: VlmClient | None = None,
                                     verdict="pending", confidence=0.0,
                                     reason=f"照片读不了: {exc}"))
             continue
-        previous = _previous_photo(run_dir, history_root, waypoint, camera)
+        previous = _previous_photo(run_dir, history_root, waypoint, camera,
+                                   baselines_root)
         images = [data] if previous is None else [data, previous]
         prompt = build_prompt(waypoint, checks.get(waypoint, ""),
                               with_history=previous is not None)
@@ -366,7 +386,15 @@ def judge_run(run_dir: Path, *, client: VlmClient | None = None,
                 confidence=0.0,
                 reason=f"判读没调通({type(exc).__name__}): {exc}"[:_REASON_MAX]))
             continue
-        findings.append(parse_reply(raw, photo=name, waypoint=waypoint))
+        finding = parse_reply(raw, photo=name, waypoint=waypoint)
+        findings.append(finding)
+        if baselines_root is not None and finding.verdict == "normal":
+            try:
+                save_baseline(baselines_root, waypoint, camera, data)
+            except (BaselineError, OSError):
+                # 基线写不下去只该少一张基线。让它把这一趟判读拖垮的话,
+                # 一个"盘满"就会连带把结论也弄没 —— 而结论比基线要紧。
+                pass
 
     _atomic_write(run_dir / "findings.json",
                   json.dumps([f.to_wire() for f in findings],
