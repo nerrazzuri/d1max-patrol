@@ -44,6 +44,7 @@ from d1max_sim.map_server import SimMapServer
 from d1max_sim.nav_server import SimNavServer
 from tests.app import conftest as C
 from tests.app.conftest import _fake
+from tests.conftest import NoDisks
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -227,7 +228,9 @@ def sim_stack(tmp_path: Path, ffdir: Path):
         home = HomePoint(map_id=map_id, pose=Pose.from_xy_yaw(0.0, 0.0),
                          marked_at_ms=1_757_000_000_000)
         save_home(tmp_path / "maps", home)
-        engine = MissionEngine(nav, device, media, runs_root)
+        # removable 给假探针:默认的 DEFAULT_PROBE 扫真机上的 /media、/mnt,
+        # 端到端这条链路的结果就不该取决于跑测试的这台机器上此刻插着什么盘。
+        engine = MissionEngine(nav, device, media, runs_root, removable=NoDisks())
         parts["engine"] = engine
         parts["teleop"] = Teleop(device, engine)
         return map_id

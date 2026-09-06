@@ -39,6 +39,7 @@ from d1max_patrol.protocol.nav_types import (
     Pose,
 )
 
+from ..conftest import NoDisks
 from .conftest import make_mission
 
 ARRIVED = [NavStatusEvent(NavStatus.SUCCEED)]
@@ -207,6 +208,10 @@ def make_engine(nav, device, media, clock, tmp_path):
     原点不在这里给:它是每趟开跑时由 ``start(mission, home=...)`` 换进去的。
     """
     def _make(**kwargs) -> MissionEngine:
+        # removable 给个假探针,免得默认的 DEFAULT_PROBE 去扫真机上的
+        # /media、/mnt(见 tests/conftest.py);setdefault 是为了让显式传了
+        # removable= 的用例照样用自己那份。
+        kwargs.setdefault("removable", NoDisks())
         return MissionEngine(nav, device, media, tmp_path / "runs",
                              clock=clock, **kwargs)
 

@@ -266,4 +266,5 @@ async def test_只插着镜像盘照样起飞(tmp_path, sample_mission, fake_nav
 async def test_没插盘的时候这一项也说得出话(tmp_path, sample_mission, fake_nav,
                                             fake_device):
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
-    assert next(c.detail for c in r.checks if c.name == "removable")
+    detail = next(c.detail for c in r.checks if c.name == "removable")
+    assert "共认到 0 块" in detail

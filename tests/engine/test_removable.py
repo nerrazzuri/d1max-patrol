@@ -43,6 +43,16 @@ def test_标记文件坏了按认不出来处理(tmp_path):
     assert read_role(tmp_path)[0] is DiskRole.UNKNOWN
 
 
+def test_标记文件不是utf8也按认不出来处理(tmp_path):
+    # read_text(encoding="utf-8") 遇到不是 UTF-8 的字节会抛 UnicodeDecodeError,
+    # 那也是"读不出来",不该往外抛——抛出去会把整趟 preflight 掀翻,而不是
+    # 让 removable 这一项干净地没过(最需要拦住的那块盘,反而把检查炸了)。
+    marker = tmp_path / MARKER_REL
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_bytes(b"\xff\xfe\x00\x81binary junk")
+    assert read_role(tmp_path)[0] is DiskRole.UNKNOWN
+
+
 def test_标记文件里写了个没见过的角色也按认不出来处理(tmp_path):
     _mark(tmp_path, "backup")
     assert read_role(tmp_path)[0] is DiskRole.UNKNOWN

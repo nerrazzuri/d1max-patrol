@@ -25,6 +25,7 @@ from d1max_patrol.engine.homing import HomePoint
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine, RunState
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 from tests.app.conftest import post
+from tests.conftest import NoDisks
 from tests.engine.conftest import make_mission
 
 #: 看门狗周期。测试里拨的是假表,真表上要等的就只有这一小段。
@@ -126,7 +127,9 @@ def fake_clock() -> FakeClock:
 
 @pytest.fixture
 def engine(fake_nav, fake_device, tmp_path) -> MissionEngine:
-    return MissionEngine(fake_nav, fake_device, {}, tmp_path / "runs")
+    # removable 给假探针,免得默认的 DEFAULT_PROBE 去扫真机上的 /media、/mnt。
+    return MissionEngine(fake_nav, fake_device, {}, tmp_path / "runs",
+                         removable=NoDisks())
 
 
 @pytest.fixture

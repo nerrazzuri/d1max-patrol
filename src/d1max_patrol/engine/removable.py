@@ -52,7 +52,13 @@ def read_role(mount: Path | str) -> tuple[DiskRole, str]:
     marker = Path(mount) / MARKER_REL
     try:
         raw = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        # ValueError 这个大类接住的不只是 json.JSONDecodeError(它本来就是
+        # ValueError 的子类):marker.read_text 遇到不是 UTF-8 的字节会抛
+        # UnicodeDecodeError,同样是 ValueError 的子类。读不出来的原因不重要,
+        # 一律按 UNKNOWN 处理——抛出去的话,这一炸发生在 run_preflight 的
+        # _guard 外面(见 machine.py 里 scan() 那一步),会把整趟 preflight
+        # 报告都掀翻,而不是让"removable"这一项干净地没过。
         return DiskRole.UNKNOWN, ""
     if not isinstance(raw, dict):
         return DiskRole.UNKNOWN, ""

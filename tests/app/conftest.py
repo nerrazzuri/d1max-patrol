@@ -35,6 +35,8 @@ from d1max_patrol.engine.homing import HomePoint, save_home
 from d1max_patrol.engine.machine import MissionEngine
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
+from ..conftest import NoDisks
+
 
 class FakeNav(EventEmitter):
     """假导航后端。``link`` / ``caps`` / ``nav`` / ``loc`` 直接改。
@@ -157,7 +159,9 @@ _HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
 
 
 async def _make_engine(nav, device, runs_root: Path) -> MissionEngine:
-    return MissionEngine(nav, device, {}, runs_root)
+    # removable 传假探针:默认的 DEFAULT_PROBE 扫真机上的 /media、/mnt,
+    # 结果就取决于跑测试的这台机器上此刻插着什么盘(见 tests/conftest.py)。
+    return MissionEngine(nav, device, {}, runs_root, removable=NoDisks())
 
 
 @pytest.fixture
