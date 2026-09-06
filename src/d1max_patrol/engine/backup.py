@@ -27,12 +27,13 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from d1max_patrol.engine.export import sha256_file
 from d1max_patrol.engine.removable import MARKER_REL, NO_IDENTITY, DiskRole, Removable
 from d1max_patrol.engine.retention import run_key, scan_runs, unique_tmp
 
@@ -372,7 +373,7 @@ def _free_bytes(mount: Path) -> int:
 def plan_sync(runs_root: Path | str, mount: Path | str, *, robot_sn: str = "",
               now: datetime | None = None,
               free_bytes: int | None = None) -> SyncPlan:
-    """排一次同步。**只增不删,跳过正在写的,装不下就停。**
+    """排一次同步。**只增不删,跳过正在写的,装不下就先拷能装下的。**
 
     **跳过正在写的**用第 2 卷的 ``RunInfo.settled``(有 summary,或者已经过了
     24 小时安定期),不另造一套判据。拷一趟还在写的归档,拿到的是半份 —— 而
@@ -435,3 +436,117 @@ def plan_sync(runs_root: Path | str, mount: Path | str, *, robot_sn: str = "",
         mount=mount, items=tuple(fit), skipped_unsettled=tuple(skipped),
         already=tuple(already), behind=len(pending), behind_bytes=behind_bytes,
         free_bytes=free, need_bytes=used, full=full, detail=detail)
+
+
+def _copy_file(src: Path, dest: Path) -> None:
+    """拷一个文件。**先落临时名,再改名。**
+
+    改名在同一个文件系统里是原子的:半路断电或者拔盘,盘上要么是完整的那份,
+    要么什么也没有 —— 而不是一个名字对、内容缺一半的文件。后者最坏,因为
+    下一趟同步看它名字在、就不会再拷。
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = unique_tmp(dest)
+    try:
+        shutil.copyfile(src, tmp)
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def copy_run(src: Path, dest: Path) -> None:
+    """把一趟归档整个拷过去。目录结构照搬。"""
+    for path in sorted(src.rglob("*")):
+        if not path.is_file():
+            continue
+        _copy_file(path, dest / path.relative_to(src))
+
+
+def verify_run(src: Path, dest: Path) -> str:
+    """拷完重新算哈希核对。**一致回空串,不一致回一句话。**
+
+    哈希用 ``export.sha256_file`` —— 它是流式的(1 MiB 一块)。归档里有几百兆
+    的视频,``read_bytes()`` 一次读进内存会在 Orin NX 的 8G 上被 OOM killer
+    打死,而且是在半夜没人看着的时候。
+    """
+    for path in sorted(src.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(src)
+        other = dest / rel
+        if not other.is_file():
+            return f"{rel.as_posix()} 没拷过去"
+        if sha256_file(path) != sha256_file(other):
+            return f"{rel.as_posix()} 拷过去之后哈希对不上"
+    return ""
+
+
+@dataclass(frozen=True, slots=True)
+class SyncResult:
+    """这一次同步的结果。"""
+
+    mount: Path
+    copied: tuple[str, ...]
+    #: ``(哪一趟, 为什么)``。**每一条都要说得出为什么** —— 一句"同步失败"
+    #: 在现场等于没说。
+    failed: tuple[tuple[str, str], ...]
+    bytes_copied: int
+    full: bool
+    detail: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "mount": self.mount.as_posix(),
+            "copied": list(self.copied),
+            "failed": [{"key": k, "why": w} for k, w in self.failed],
+            "bytes_copied": self.bytes_copied,
+            "full": self.full,
+            "detail": self.detail,
+        }
+
+
+def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
+               copy: Callable[[Path, Path], None] = copy_run) -> SyncResult:
+    """照计划拷,**每一趟拷完重新算哈希核对,核对过了才记进进度**。
+
+    记早了,下次同步会跳过它 —— 于是那份坏数据永远不会被修,而值守屏上那块
+    "已同步"是绿的。
+
+    ``copy`` 可注入:"拷过去之后内容不对"在真机上是硬件偶发的,离机没法复现,
+    注入是这段核对代码能被测到的唯一办法。测不到的话,它在真机上第一次跑就是
+    它唯一一次跑。
+
+    **空计划也写进度。** "同步过了,没有新东西"是一次成功的同步;不更新时间
+    的那一边,值守屏上那块"上次同步"会一直停在很久以前 —— 一块好盘看起来像
+    块死盘,而这一卷做的正是让死盘看得出来。
+    """
+    copied: list[str] = []
+    failed: list[tuple[str, str]] = []
+    done_bytes = 0
+    for item in plan.items:
+        try:
+            copy(item.src, item.dest)
+        except OSError as exc:
+            failed.append((item.key, f"拷不过去: {exc}"))
+            continue
+        why = verify_run(item.src, item.dest)
+        if why:
+            failed.append((item.key, why))
+            continue
+        copied.append(item.key)
+        done_bytes += item.size_bytes
+
+    state = read_state(plan.mount, robot_sn=robot_sn)
+    if not state.robot_sn:
+        state = SyncState(robot_sn=robot_sn, last_sync_ms=state.last_sync_ms,
+                          done=state.done)
+    write_state(plan.mount, state.with_done(copied, now_ms=now_ms))
+
+    detail = plan.detail
+    if failed and not detail:
+        detail = f"有 {len(failed)} 趟没拷成,见 failed"
+    elif failed:
+        detail = f"{detail};另有 {len(failed)} 趟没拷成,见 failed"
+    return SyncResult(mount=plan.mount, copied=tuple(copied),
+                      failed=tuple(failed), bytes_copied=done_bytes,
+                      full=plan.full, detail=detail)

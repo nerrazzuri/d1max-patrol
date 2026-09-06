@@ -17,6 +17,8 @@ from d1max_patrol.engine.backup import (
     BackupError,
     SyncState,
     Target,
+    apply_sync,
+    copy_run,
     init_target,
     marker_path,
     plan_sync,
@@ -358,3 +360,114 @@ def test_报满那句话里要说清楚不会删任何东西(tmp_path):
     plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW, free_bytes=0)
     assert "不会删" in plan.detail
     assert "换一块" in plan.detail
+
+
+def _plan(tmp_path, *, size: int = 32, free: int | None = None):
+    """造两趟归档 + 一块干净的盘,回 ``(runs, mount, plan)``。"""
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir(exist_ok=True)
+    _make_run(runs, "甲", "20260901T010203Z", size=size)
+    _make_run(runs, "乙", "20260902T010203Z", size=size)
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                     free_bytes=free if free is not None else 10 * 1024 ** 3)
+    return runs, mount, plan
+
+
+def test_拷完盘上有一模一样的文件(tmp_path):
+    runs, mount, plan = _plan(tmp_path)
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert res.failed == ()
+    assert sorted(res.copied) == ["乙/20260902T010203Z", "甲/20260901T010203Z"]
+    src = runs / "甲" / "20260901T010203Z" / "events.jsonl"
+    dst = mount / "runs" / "甲" / "20260901T010203Z" / "events.jsonl"
+    assert dst.read_bytes() == src.read_bytes()
+
+
+def test_子目录里的照片也拷过去了(tmp_path):
+    runs, mount, plan = _plan(tmp_path)
+    apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert (mount / "runs" / "甲" / "20260901T010203Z"
+            / "photos" / "a.jpg").is_file()
+
+
+def test_拷过去之后内容不对会被核对出来(tmp_path):
+    # 备份最坏的失败模式不是没拷,是拷了但拷坏了 —— 它同时销毁了"我们有第二份"
+    # 这个信念。备份盘、读卡器、松掉的排线,坏的方式都是静悄悄的。
+    runs, mount, plan = _plan(tmp_path)
+
+    def _坏拷贝(src, dest):
+        copy_run(src, dest)
+        (dest / "events.jsonl").write_text("被改坏了", encoding="utf-8")
+
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007",
+                     copy=_坏拷贝)
+    assert res.copied == ()
+    assert len(res.failed) == 2
+    assert all("哈希" in why for _, why in res.failed)
+
+
+def test_核对没过的那一趟不记进已同步(tmp_path):
+    # 记早了,下次同步会跳过它 —— 于是那份坏数据永远不会被修。
+    runs, mount, plan = _plan(tmp_path)
+
+    def _坏拷贝(src, dest):
+        copy_run(src, dest)
+        (dest / "events.jsonl").write_text("被改坏了", encoding="utf-8")
+
+    apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007",
+               copy=_坏拷贝)
+    assert read_state(mount, robot_sn="D1M-0007").done == frozenset()
+
+
+def test_一趟失败不影响别的趟(tmp_path):
+    runs, mount, plan = _plan(tmp_path)
+
+    def _只坏一趟(src, dest):
+        copy_run(src, dest)
+        if src.parent.name == "甲":
+            (dest / "events.jsonl").write_text("被改坏了", encoding="utf-8")
+
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007",
+                     copy=_只坏一趟)
+    assert res.copied == ("乙/20260902T010203Z",)
+    assert [k for k, _ in res.failed] == ["甲/20260901T010203Z"]
+    assert read_state(mount, robot_sn="D1M-0007").done == {
+        "乙/20260902T010203Z"}
+
+
+def test_拷贝不留临时文件(tmp_path):
+    runs, mount, plan = _plan(tmp_path)
+    apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert not list((mount / "runs").rglob("*.tmp"))
+
+
+def test_拷完写状态_上次同步时间跟着走(tmp_path):
+    runs, mount, plan = _plan(tmp_path)
+    apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    state = read_state(mount, robot_sn="D1M-0007")
+    assert state.last_sync_ms == 1_757_000_000_000
+    assert state.robot_sn == "D1M-0007"
+
+
+def test_没有新东西要拷也算同步过一次(tmp_path):
+    # "同步过了,没有新东西"是一次成功的同步。不更新时间的那一边,值守屏上
+    # 那块"上次同步"会一直停在很久以前 —— 一块好盘看起来像块死盘。
+    runs, mount, plan = _plan(tmp_path)
+    apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    again = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                      free_bytes=10 * 1024 ** 3)
+    assert again.items == ()
+    res = apply_sync(again, now_ms=1_757_000_900_000, robot_sn="D1M-0007")
+    assert res.copied == ()
+    assert read_state(mount, robot_sn="D1M-0007").last_sync_ms == 1_757_000_900_000
+
+
+def test_报满的计划照拷能装下的那些(tmp_path):
+    runs, mount, plan = _plan(tmp_path, size=1000)
+    one = plan.items[0].size_bytes
+    tight = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                      free_bytes=FREE_MARGIN_BYTES + one)
+    res = apply_sync(tight, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert res.copied == ("甲/20260901T010203Z",)
+    assert res.full is True
+    assert "不会删" in res.detail
