@@ -7,16 +7,19 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
 from d1max_patrol.engine.backup import (
     EMPTY_STATE,
+    FREE_MARGIN_BYTES,
     BackupError,
     SyncState,
     Target,
     init_target,
     marker_path,
+    plan_sync,
     read_marker,
     read_state,
     resolve_targets,
@@ -219,3 +222,139 @@ def test_记新的一趟是并集_不覆盖(tmp_path):
     assert got.done == {"甲/20260901T010203Z", "乙/20260902T010203Z"}
     assert got.last_sync_ms == 1_757_000_000_000
     assert got.robot_sn == "D1M-0007"
+
+
+NOW = datetime(2026, 9, 6, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _make_run(runs_root, mission: str, stamp: str, *, settled: bool = True,
+              size: int = 32):
+    """在 ``runs_root`` 下造一趟归档,形状跟 ``archive.RunArchive`` 写出来的一样。"""
+    run = runs_root / mission / stamp
+    (run / "photos").mkdir(parents=True)
+    (run / "events.jsonl").write_text('{"kind":"start"}\n', encoding="utf-8")
+    (run / "photos" / "a.jpg").write_bytes(b"x" * size)
+    manifest = {"mission": {"name": mission}}
+    if settled:
+        manifest["summary"] = {"photos": 1}
+    (run / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    return run
+
+
+def test_没同步过的时候所有安定的归档都要拷(tmp_path):
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    _make_run(runs, "一号厂房", "20260901T010203Z")
+    _make_run(runs, "一号厂房", "20260902T010203Z")
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                     free_bytes=10 * 1024 * 1024 * 1024)
+    assert [i.key for i in plan.items] == [
+        "一号厂房/20260901T010203Z", "一号厂房/20260902T010203Z"]
+    assert plan.full is False
+
+
+def test_正在写的归档要跳过(tmp_path):
+    # 拷过去的是半份 events.jsonl,而下次它安定了我们已经把它记成拷过了 ——
+    # 于是盘上永远是半份。
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    _make_run(runs, "一号厂房", "20260906T113000Z", settled=False)
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                     free_bytes=10 * 1024 * 1024 * 1024)
+    assert plan.items == ()
+    assert plan.skipped_unsettled == ("一号厂房/20260906T113000Z",)
+
+
+def test_已经同步过的不再拷(tmp_path):
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    _make_run(runs, "一号厂房", "20260901T010203Z")
+    _make_run(runs, "一号厂房", "20260902T010203Z")
+    write_state(mount, SyncState(robot_sn="D1M-0007", last_sync_ms=1,
+                                 done=frozenset({"一号厂房/20260901T010203Z"})))
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                     free_bytes=10 * 1024 * 1024 * 1024)
+    assert [i.key for i in plan.items] == ["一号厂房/20260902T010203Z"]
+    assert plan.already == ("一号厂房/20260901T010203Z",)
+
+
+def test_盘上多出来的目录既不出现在计划里也不产生任何删除(tmp_path):
+    # 狗按水位删掉的那些,正是备份存在的全部理由。
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    (mount / "runs" / "早就删了的任务" / "20250101T000000Z").mkdir(parents=True)
+    _make_run(runs, "一号厂房", "20260901T010203Z")
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                     free_bytes=10 * 1024 * 1024 * 1024)
+    assert [i.key for i in plan.items] == ["一号厂房/20260901T010203Z"]
+    # 计划这个结构里根本没有"要删什么"这个概念。有那个字段,早晚有人往里填。
+    assert not hasattr(plan, "to_delete")
+    assert "delete" not in plan.to_wire()
+    assert (mount / "runs" / "早就删了的任务" / "20250101T000000Z").is_dir()
+
+
+def test_计划按时间从旧到新(tmp_path):
+    # 最老的那几趟离到期最近,也就是最快会被狗自己删掉的那几趟。
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    _make_run(runs, "乙", "20260903T010203Z")
+    _make_run(runs, "甲", "20260901T010203Z")
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                     free_bytes=10 * 1024 * 1024 * 1024)
+    assert [i.key for i in plan.items] == [
+        "甲/20260901T010203Z", "乙/20260903T010203Z"]
+
+
+def test_目标路径落在盘的_runs_目录下(tmp_path):
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    _make_run(runs, "一号厂房", "20260901T010203Z")
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                     free_bytes=10 * 1024 * 1024 * 1024)
+    assert plan.items[0].dest == mount / "runs" / "一号厂房" / "20260901T010203Z"
+
+
+def test_落后多少就是所有还没同步的安定归档(tmp_path):
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    a = _make_run(runs, "甲", "20260901T010203Z")
+    _make_run(runs, "乙", "20260906T113000Z", settled=False)
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                     free_bytes=10 * 1024 * 1024 * 1024)
+    assert plan.behind == 1
+    assert plan.behind_bytes == sum(
+        p.stat().st_size for p in a.rglob("*") if p.is_file())
+
+
+def test_盘装不下的时候只排能装下的_而且报满(tmp_path):
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    _make_run(runs, "甲", "20260901T010203Z", size=1000)
+    _make_run(runs, "乙", "20260902T010203Z", size=1000)
+    one = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                    free_bytes=10 * 1024 * 1024 * 1024).items[0].size_bytes
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
+                     free_bytes=FREE_MARGIN_BYTES + one)
+    assert [i.key for i in plan.items] == ["甲/20260901T010203Z"]
+    assert plan.full is True
+    assert plan.behind == 2
+
+
+def test_一趟都装不下的时候计划是空的但落后数照报(tmp_path):
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    _make_run(runs, "甲", "20260901T010203Z", size=1000)
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW, free_bytes=0)
+    assert plan.items == ()
+    assert plan.full is True
+    assert plan.behind == 1
+
+
+def test_报满那句话里要说清楚不会删任何东西(tmp_path):
+    # 删旧的那一边,是在"备份盘"这三个字上撒谎。
+    runs, mount = tmp_path / "runs", tmp_path / "u1"
+    mount.mkdir()
+    _make_run(runs, "甲", "20260901T010203Z", size=1000)
+    plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW, free_bytes=0)
+    assert "不会删" in plan.detail
+    assert "换一块" in plan.detail

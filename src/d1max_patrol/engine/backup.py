@@ -26,13 +26,15 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from d1max_patrol.engine.removable import MARKER_REL, NO_IDENTITY, DiskRole, Removable
-from d1max_patrol.engine.retention import unique_tmp
+from d1max_patrol.engine.retention import run_key, scan_runs, unique_tmp
 
 #: 盘上记同步进度的文件。跟 :data:`~d1max_patrol.engine.removable.MARKER_REL`
 #: 挨着放,同一个隐藏目录里。
@@ -300,3 +302,136 @@ def read_state(mount: Path | str, *, robot_sn: str = "") -> SyncState:
 def write_state(mount: Path | str, state: SyncState) -> None:
     """把进度写回盘上。原子写,理由同 :func:`_atomic_json`。"""
     _atomic_json(state_path(mount), state.to_wire())
+
+
+#: 备份盘上要留出的余量。盘上除了归档还要写标记和进度文件,填到一个字节不剩
+#: 的那一刻,连"我满了"这句话都记不下去。64 MiB 是一个不心疼的数。
+FREE_MARGIN_BYTES = 64 * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class SyncItem:
+    """要拷的一趟。"""
+
+    key: str
+    src: Path
+    dest: Path
+    size_bytes: int
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"key": self.key, "size_bytes": self.size_bytes}
+
+
+@dataclass(frozen=True, slots=True)
+class SyncPlan:
+    """这一次要拷哪几趟。**这个结构里没有"要删什么"这个概念。**
+
+    有那个字段,早晚有人往里面填东西 —— 而狗按水位删掉的那些,正是备份存在
+    的全部理由(spec §7.6)。
+    """
+
+    mount: Path
+    items: tuple[SyncItem, ...]
+    #: 还在写、这次不碰的那几趟。
+    skipped_unsettled: tuple[str, ...]
+    #: 已经拷过的那几趟。
+    already: tuple[str, ...]
+    #: 落后多少趟 —— 所有还没同步的**安定**归档,装不装得下都算。
+    behind: int
+    behind_bytes: int
+    free_bytes: int
+    #: ``items`` 的总字节。盘装不下的时候它小于 ``behind_bytes``。
+    need_bytes: int
+    full: bool
+    detail: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "mount": self.mount.as_posix(),
+            "items": [i.to_wire() for i in self.items],
+            "skipped_unsettled": list(self.skipped_unsettled),
+            "already": list(self.already),
+            "behind": self.behind,
+            "behind_bytes": self.behind_bytes,
+            "free_bytes": self.free_bytes,
+            "need_bytes": self.need_bytes,
+            "full": self.full,
+            "detail": self.detail,
+        }
+
+
+def _free_bytes(mount: Path) -> int:
+    """盘上还剩多少。取不到就当 0 —— 当 0 的结果是"报满、什么也不拷",
+    而当无穷大的结果是"拷到盘炸"。"""
+    try:
+        return shutil.disk_usage(mount).free
+    except OSError:
+        return 0
+
+
+def plan_sync(runs_root: Path | str, mount: Path | str, *, robot_sn: str = "",
+              now: datetime | None = None,
+              free_bytes: int | None = None) -> SyncPlan:
+    """排一次同步。**只增不删,跳过正在写的,装不下就停。**
+
+    **跳过正在写的**用第 2 卷的 ``RunInfo.settled``(有 summary,或者已经过了
+    24 小时安定期),不另造一套判据。拷一趟还在写的归档,拿到的是半份 —— 而
+    下次它安定了,我们已经把它记成拷过了,于是盘上**永远**是半份。
+
+    **装不下的时候照拷能装下的那些**(从最老的开始)。只增不删的前提下,多拷
+    一趟严格优于少拷一趟,而且不删掉任何东西;全停的那一边,一块只差 1% 就
+    装满的盘会从此一趟也不再备份。最老在前是因为最老的那几趟离到期最近,
+    也就是最快会被狗自己删掉的那几趟。
+
+    ``free_bytes`` 是给测试注入用的。临时目录上量不出"盘还剩多少",而"装不下
+    怎么办"恰恰是这个函数里最需要被穷举的那一段。
+    """
+    mount = Path(mount)
+    state = read_state(mount, robot_sn=robot_sn)
+    free = free_bytes if free_bytes is not None else _free_bytes(mount)
+    dest_root = mount / RUNS_DIR_NAME
+
+    skipped: list[str] = []
+    already: list[str] = []
+    pending: list[SyncItem] = []
+    # scan_runs 就是最老在前,不用再排。
+    for info in scan_runs(runs_root, now=now):
+        key = run_key(info)
+        if not info.settled:
+            skipped.append(key)
+            continue
+        if key in state.done:
+            # 拷过就不再拷,哪怕后来多了 .uploaded / .exported —— 那两个标记是
+            # 狗这一侧的台账,不是数据;备份盘上少一个空文件不损失任何东西,而
+            # 为它重拷一遍整趟要付出实打实的几百兆。
+            already.append(key)
+            continue
+        pending.append(SyncItem(
+            key=key, src=info.path,
+            dest=dest_root / info.mission / info.path.name,
+            size_bytes=info.size_bytes))
+
+    behind_bytes = sum(i.size_bytes for i in pending)
+    budget = max(0, free - FREE_MARGIN_BYTES)
+    fit: list[SyncItem] = []
+    used = 0
+    for item in pending:
+        if used + item.size_bytes > budget:
+            break
+        fit.append(item)
+        used += item.size_bytes
+    full = len(fit) < len(pending)
+
+    if not full:
+        detail = ""
+    else:
+        detail = (
+            f"备份盘装不下了: 还差 {behind_bytes - used} 字节,盘上只剩 "
+            f"{free} 字节。**不会删备份盘上的任何东西** —— 狗按水位删掉的那些,"
+            f"正是这块盘存在的理由。这次先拷了排在最前面的 {len(fit)} 趟,"
+            f"剩下 {len(pending) - len(fit)} 趟得换一块更大的盘,"
+            f"或者先把这块盘上的归档取走")
+    return SyncPlan(
+        mount=mount, items=tuple(fit), skipped_unsettled=tuple(skipped),
+        already=tuple(already), behind=len(pending), behind_bytes=behind_bytes,
+        free_bytes=free, need_bytes=used, full=full, detail=detail)
