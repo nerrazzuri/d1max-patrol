@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import threading
+import time
 import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -83,7 +84,7 @@ from d1max_patrol.engine.archive import (
     read_state,
 )
 from d1max_patrol.engine.form import STANDALONE, Form
-from d1max_patrol.engine.homing import HomeError, load_home
+from d1max_patrol.engine.homing import HomeError, HomePoint, load_home, save_home
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine
 from d1max_patrol.engine.mission import (
     Mission,
@@ -101,6 +102,7 @@ from d1max_patrol.inspect.judge import (
     save_review,
 )
 from d1max_patrol.inspect.report import write_reports
+from d1max_patrol.protocol.nav_types import Pose
 
 #: 静态文件目录。模块导入时就 resolve,后面判越界拿它当基准。
 STATIC_DIR = (Path(__file__).resolve().parent / "static").resolve()
@@ -663,6 +665,8 @@ class AppServer:
         self.route("GET", "/api/maps", self._maps)
         self.route("POST", "/api/maps/load", self._map_load)
         self.route("GET", "/api/maps/<map_id>/grid", self._map_grid)
+        self.route("PUT", "/api/maps/<map_id>/home", self._map_home_put)
+        self.route("GET", "/api/maps/<map_id>/home", self._map_home_get)
         self.route("POST", "/api/pose/initial", self._pose_initial)
         self.route("POST", "/api/pose/reset", self._pose_reset)
         self.route("GET", "/api/runs", self._runs)
@@ -1019,6 +1023,53 @@ class AppServer:
                 raise HttpError(404, f"画不出 {map_id} 的底图", str(exc)) from exc
             grid = from_frame(frame)
         return json_response(grid.to_wire())
+
+    def _map_home_put(self, req: Request) -> Response:
+        """在这张图上标一个原点。**位姿由客户端给。**
+
+        跟 ``POST /api/pose/initial`` 是同一个形状:手机 App 那边本来就显示着
+        8091 那座桥推来的实时位姿,"就在这儿标一个"这个动作,客户端手上已经
+        有那三个数了。狗自己问不出来 —— ``NavBackend`` 上没有"当前位姿"这个
+        口子(位姿走的是另一条链路),为这一个端点去开那个口子要动两个后端、
+        契约测试和两个 sim server。
+
+        **没有这个端点,``save_home`` 就没有调用者**,而起飞门槛把原点当硬
+        前置 —— 那意味着这台狗永远起不了飞。
+
+        **不过 ``bridge._call``。** 跟 ``_mission_run`` 里那处 ``load_home``
+        同一个道理:文件读写不是引擎状态,``maps_dir`` 只是 frozen config 上
+        的一个属性,HTTP 线程直接做没有并发边界要守。
+        """
+        map_id = _safe_id(req.params["map_id"], "图名")
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体得是一个对象", type(body).__name__)
+        missing = [k for k in ("x", "y", "yaw") if k not in body]
+        if missing:
+            # 缺字段不能按 0 补:(0, 0) 在地图里是一个真实存在的点,补出来的
+            # 原点跟人标的那个看不出区别,而狗会一声不吭地走过去。
+            raise HttpError(400, "原点少了字段", "缺 " + "、".join(missing))
+        x, y, yaw = (_number(body, "x"), _number(body, "y"),
+                     _number(body, "yaw"))
+        note = body.get("note", "")
+        if not isinstance(note, str):
+            raise HttpError(400, "note 得是一个字符串", repr(note))
+        home = HomePoint(map_id=map_id, pose=Pose.from_xy_yaw(x, y, yaw),
+                         marked_at_ms=int(time.time() * 1000), note=note)
+        try:
+            save_home(self._ctx.mapping.maps_dir, home)
+        except OSError as exc:
+            raise HttpError(500, "原点没写下去", str(exc)) from exc
+        return json_response(home.to_wire())
+
+    def _map_home_get(self, req: Request) -> Response:
+        """读回这张图上标的原点。**没标过是 404,不是一个零点。**"""
+        map_id = _safe_id(req.params["map_id"], "图名")
+        try:
+            home = load_home(self._ctx.mapping.maps_dir, map_id)
+        except HomeError as exc:
+            raise HttpError(404, "这张图上没有可用的原点", str(exc)) from exc
+        return json_response(home.to_wire())
 
     def _pose_initial(self, req: Request) -> Response:
         """给定位一个初始猜测。见 ``docs/建图定位与巡检管线.md`` §4。
