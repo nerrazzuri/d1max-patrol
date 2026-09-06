@@ -648,7 +648,7 @@ on("mission-run", async () => {
     renderChecks(got.checks || []);
     showTab("run");
   } catch (err) {
-    // 起飞检查没过：五项各是什么样得原样摆出来，不能只说一句"起不了"。
+    // 起飞检查没过：每一项现在什么样得原样摆出来，不能只说一句"起不了"。
     renderChecks((err.data && err.data.checks) || []);
     throw err;
   }

@@ -225,7 +225,7 @@ async def until(pred, timeout: float = 3.0) -> None:
 
 
 async def run_to_end(engine: MissionEngine, mission, timeout: float = 5.0):
-    await engine.start(mission)
+    await engine.start(mission, home=_HOME)
     state = await engine.wait_done(timeout_s=timeout)
     await engine.aclose()
     return state
@@ -326,7 +326,7 @@ async def test_定位没收敛就等等不到就中止(make_engine, nav, monkeyp
 
     nav.loc_status = loc_status
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     assert await engine.wait_done(timeout_s=5.0) is RunState.ABORTED
     assert "定位" in engine.snapshot.reason
     assert nav.goto_calls == []
@@ -455,7 +455,7 @@ async def test_dwell期间照样处理事件(make_engine, nav, device):
                         actions=(Action(type="dwell", seconds=30.0),)),
     ))
     engine = make_engine()
-    await engine.start(mission)
+    await engine.start(mission, home=_HOME)
     await until(lambda: nav.goto_calls)
     await asyncio.sleep(0.05)
     device.emit(BatteryEvent(percent=1.0))       # 远低于中止线
@@ -470,7 +470,7 @@ async def test_dwell期间照样处理事件(make_engine, nav, device):
 async def test_电量到返航线就返航(make_engine, nav, device):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission(policy=policy(battery_abort_pct=15.0)))
+    await engine.start(make_mission(policy=policy(battery_abort_pct=15.0)), home=_HOME)
     await until(lambda: nav.goto_calls)
     device.emit(BatteryEvent(percent=20.0))      # 返航线 25,中止线 15
     assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
@@ -482,7 +482,7 @@ async def test_电量到返航线就返航(make_engine, nav, device):
 async def test_电量到中止线就原地停不返航(make_engine, nav, device):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     device.emit(BatteryEvent(percent=5.0))
     assert await engine.wait_done(timeout_s=5.0) is RunState.ABORTED
@@ -494,7 +494,7 @@ async def test_中止不含任何位移(make_engine, nav, device):
     """主规范 §6.4:停止导航 + 记录 + 告警,不自动返航、不自动趴下。"""
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     before = len(nav.goto_calls)
     nav.emit(LIDAR_GONE)
@@ -509,7 +509,7 @@ async def test_中止不含任何位移(make_engine, nav, device):
 async def test_返航路上电量再掉也不会打断返航(make_engine, nav, device):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission(policy=policy(battery_abort_pct=15.0)))
+    await engine.start(make_mission(policy=policy(battery_abort_pct=15.0)), home=_HOME)
     await until(lambda: nav.goto_calls)
     device.emit(BatteryEvent(percent=20.0))
     await engine.wait_state(RunState.RETURNING)
@@ -532,7 +532,7 @@ async def test_雷达掉线直接中止(make_engine, nav):
 async def test_致命故障直接中止(make_engine, nav, device):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     device.emit(FaultEvent(("电机过温",), fatal=True))
     assert await engine.wait_done(timeout_s=5.0) is RunState.ABORTED
@@ -542,7 +542,7 @@ async def test_致命故障直接中止(make_engine, nav, device):
 
 async def test_非致命故障不打断任务(make_engine, nav, device):
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     device.emit(FaultEvent(("电池温度偏高",), fatal=False))
     assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
     await engine.aclose()
@@ -551,7 +551,7 @@ async def test_非致命故障不打断任务(make_engine, nav, device):
 async def test_被挡住先等不立刻判这个点失败(make_engine, nav, clock):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     nav.emit(BLOCKED)
     await asyncio.sleep(0.05)
@@ -570,7 +570,7 @@ async def test_控制权被拿走会暂停(make_engine, nav, device):
     """上装抢走控制权是可以人工夺回的(清单 #46/#47),不必直接判整趟失败。"""
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     device.emit(ControlLostEvent("上装接管"))
     await asyncio.sleep(0.05)
@@ -589,7 +589,7 @@ async def test_控制权被拿走会暂停(make_engine, nav, device):
 async def test_定位丢了会重置并重发当前点(make_engine, nav):
     nav.on_goto = [LocStatusEvent(LocStatus.LOC_LOST)]
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.reset_calls >= 1)
     assert nav.stop_calls >= 1, "重置定位之前要先停下来"
     await until(lambda: len(nav.goto_calls) >= 2)
@@ -604,7 +604,7 @@ async def test_定位重置到上限就中止(make_engine, nav):
 
     nav.on_goto = [LocStatusEvent(LocStatus.LOC_LOST)]
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     assert await engine.wait_done(timeout_s=10.0) is RunState.ABORTED
     assert nav.reset_calls == MAX_LOC_RESET
     assert "定位丢失" in engine.snapshot.reason
@@ -618,7 +618,7 @@ async def test_重置之后收不敛就中止而不是干等(make_engine, nav, m
     nav.reset_recovers = False
     nav.on_goto = [LocStatusEvent(LocStatus.LOC_LOST)]
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     assert await engine.wait_done(timeout_s=5.0) is RunState.ABORTED
     assert "未收敛" in engine.snapshot.reason
     await engine.aclose()
@@ -628,7 +628,7 @@ async def test_策略要求直接中止时不重置(make_engine, nav):
     nav.on_goto = [LocStatusEvent(LocStatus.LOC_LOST)]
     engine = make_engine()
     mission = make_mission(policy=policy(on_loc_lost="abort"))
-    await engine.start(mission)
+    await engine.start(mission, home=_HOME)
     assert await engine.wait_done(timeout_s=5.0) is RunState.ABORTED
     assert nav.reset_calls == 0
     await engine.aclose()
@@ -640,7 +640,7 @@ async def test_策略要求直接中止时不重置(make_engine, nav):
 async def test_人工暂停会真的把狗停下来(make_engine, nav):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     await engine.pause()
     await engine.wait_state(RunState.PAUSED)
@@ -655,7 +655,7 @@ async def test_继续之后重发当前点而且不算一次重试(make_engine, 
     engine = make_engine()
     # skip 策略只给一次机会 —— 还能重发就说明暂停没吃掉这次机会
     mission = make_mission(policy=policy(on_waypoint_failed="skip"))
-    await engine.start(mission)
+    await engine.start(mission, home=_HOME)
     await until(lambda: nav.goto_calls)
     await engine.pause()
     await engine.wait_state(RunState.PAUSED)
@@ -670,7 +670,7 @@ async def test_继续之后重发当前点而且不算一次重试(make_engine, 
 async def test_暂停期间的事件不会判当前点失败(make_engine, nav, device):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     await engine.pause()
     await engine.wait_state(RunState.PAUSED)
@@ -687,7 +687,7 @@ async def test_暂停期间的事件不会判当前点失败(make_engine, nav, d
 async def test_暂停期间也能中止(make_engine, nav):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     await engine.pause()
     await engine.wait_state(RunState.PAUSED)
@@ -700,7 +700,7 @@ async def test_暂停期间也能中止(make_engine, nav):
 async def test_没暂停的时候继续是空操作不报错(make_engine, nav):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     await engine.resume()
     await asyncio.sleep(0.05)
@@ -714,7 +714,7 @@ async def test_命令是入队的不是直接改状态(make_engine, nav):
     """直接改状态就把并发修改放回来了 —— 所以 pause 返回时状态可以还没变。"""
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(make_mission())
+    await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
     await engine.pause()
     assert engine.state is RunState.RUNNING
@@ -730,11 +730,33 @@ async def test_命令是入队的不是直接改状态(make_engine, nav):
 async def test_已经在跑的时候再开一趟被拒(make_engine, nav, sample_mission):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(sample_mission)
+    await engine.start(sample_mission, home=_HOME)
     from d1max_patrol.engine.machine import EngineBusy
 
     with pytest.raises(EngineBusy):
-        await engine.start(sample_mission)
+        await engine.start(sample_mission, home=_HOME)
+    await engine.abort("收工")
+    await engine.wait_done(timeout_s=5.0)
+    await engine.aclose()
+
+
+async def test_已经在跑的时候再开一趟被拒也不动正在飞的原点(make_engine, nav,
+                                                             sample_mission):
+    """并发的第二个 ``/run`` 会带着它自己查到的原点——但它一开始就该被拒,
+    绝不能顺手把正在飞的那一趟手里的原点换掉:``_return_cost_pct`` 那份动态
+    返航成本此刻正读着它。"""
+    nav.on_goto = NEVER
+    engine = make_engine()
+    await engine.start(sample_mission, home=_HOME)
+
+    other_home = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(9.0, 9.0),
+                           marked_at_ms=2)
+    from d1max_patrol.engine.machine import EngineBusy
+
+    with pytest.raises(EngineBusy):
+        await engine.start(sample_mission, home=other_home)
+    assert engine._home is _HOME, "被拒的请求不许改动正在跑的那趟的原点"
+
     await engine.abort("收工")
     await engine.wait_done(timeout_s=5.0)
     await engine.aclose()
@@ -755,7 +777,7 @@ async def test_引擎内部异常也会落成说得清原因的中止(make_engin
 async def test_关闭引擎会把转发任务收干净(make_engine, nav, sample_mission):
     nav.on_goto = NEVER
     engine = make_engine()
-    await engine.start(sample_mission)
+    await engine.start(sample_mission, home=_HOME)
     await until(lambda: nav.goto_calls)
     await engine.aclose()
     assert engine._forwarders == []

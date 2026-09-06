@@ -237,15 +237,6 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def set_home(self, home: HomePoint | None) -> None:
-        """换一个原点。
-
-        引擎是按进程建的,原点却是按地图选的(见 ``app/server.py``):构造时
-        给的那份只是初始值,真正对得上"这一趟跑哪张图"的那份,由调用方在
-        开跑前用这个方法换进来 —— 不然切一次图,``self._home`` 就跟丢一次。
-        """
-        self._home = home
-
     def add_busy_check(self, check: Callable[[], str]) -> None:
         """登记一个"本体现在被别人占着吗"的检查。返回占用原因,空串表示没占。
 
@@ -257,14 +248,22 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         """
         self._busy_checks.append(check)
 
-    async def start(self, mission: Mission) -> None:
-        """开一趟。已经在跑就拒绝 —— 两趟并行会把归档搅在一起。"""
+    async def start(self, mission: Mission, *,
+                    home: HomePoint | None = None) -> None:
+        """开一趟。已经在跑就拒绝 —— 两趟并行会把归档搅在一起。
+
+        引擎是按进程建的,原点却是按地图选的(见 ``app/server.py``):构造时
+        给的那份只是初始值,真正对得上"这一趟跑哪张图"的那份,由调用方在
+        这里换进来。**只在真的要开跑的这条路径上换**——挂在"已经在跑"或
+        某个 ``_busy_checks`` 上的请求,不许动正在飞的那趟手里的原点。
+        """
         if self.running:
             raise EngineBusy(f"已经在跑 {self._snapshot.mission},先停下来再开新的")
         for check in self._busy_checks:
             reason = check()
             if reason:
                 raise EngineBusy(reason)
+        self._home = home
         archive = RunArchive(self._runs_root, mission)
         archive.write_manifest(self._fingerprint)
         self._live = _Live(mission, archive, started_ms=int(time.time() * 1000))

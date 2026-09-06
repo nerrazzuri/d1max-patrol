@@ -264,7 +264,7 @@ async def test_收尾不会给狗发指令(teleop, fake_device):
 
 
 async def test_任务在跑的时候遥控被拒(teleop, engine, sample_mission):
-    await engine.start(sample_mission)
+    await engine.start(sample_mission, home=_HOME)
     await engine.wait_state(RunState.RUNNING)
     with pytest.raises(TeleopBusy, match="任务"):
         await teleop.pulse(1.0, 0.0, 0.0)
@@ -280,7 +280,7 @@ async def test_松手之后任务又能起了(teleop, engine, sample_mission):
     """互斥不能变成"遥控过一次就再也起不了任务"。"""
     await teleop.pulse(1.0, 0.0, 0.0)
     await teleop.stop()
-    await engine.start(sample_mission)
+    await engine.start(sample_mission, home=_HOME)
     assert engine.running
 
 
@@ -296,7 +296,7 @@ async def test_急停按下去遥控直接不动(teleop, fake_device):
 
 async def test_急停会同时打断正在跑的任务(engine, teleop, sample_mission):
     """遥控和任务是两条各自独立的动腿路径,只停一条等于没停。"""
-    await engine.start(sample_mission)
+    await engine.start(sample_mission, home=_HOME)
     await engine.wait_state(RunState.RUNNING)
     await teleop.emergency_stop("按了急停")
     assert await engine.wait_done(timeout_s=5.0) is RunState.ABORTED

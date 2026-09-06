@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_patrol.engine.homing import HomePoint
+from d1max_patrol.engine.homing import HomePoint, ReturnParams
 from d1max_patrol.engine.mission import MissionWaypoint
 from d1max_patrol.engine.preflight import departure_line_pct, run_preflight
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
@@ -71,6 +71,27 @@ async def test_预计耗电的安全系数是可以调的(tmp_path, sample_missi
     """1.5 是"预计耗电本身不准"的赔率。场地摸熟了可以往下调。"""
     assert (departure_line_pct(sample_mission, _HOME, slack=3.0)
             > departure_line_pct(sample_mission, _HOME, slack=1.5))
+
+
+async def test_run_preflight的安全系数和标定系数真的传到判决里(
+        tmp_path, sample_mission, fake_nav, fake_device):
+    """`departure_line_pct` 能调不等于 `run_preflight` 真把参数往下传了 ——
+    这条从 `_run` 一路查到 battery 项的判决,不是关起门来测那个纯函数。"""
+    line = departure_line_pct(sample_mission, _HOME)
+    fake_device.batt = line + 0.1
+    ok = await _run(fake_nav, fake_device, sample_mission, tmp_path)
+    assert ok.ok, "刚好卡在默认参数算出的线上方,默认情况下该放行"
+
+    steeper = await _run(fake_nav, fake_device, sample_mission, tmp_path,
+                         estimate_slack=10.0)
+    assert [c.name for c in steeper.failures] == ["battery"], (
+        "安全系数调大之后,同样的电量应该不够了")
+
+    thirsty = ReturnParams(drain_pct_per_hour=2230.0)
+    thirstier = await _run(fake_nav, fake_device, sample_mission, tmp_path,
+                           return_params=thirsty)
+    assert [c.name for c in thirstier.failures] == ["battery"], (
+        "标定系数换成耗电快得多的一套,同样的电量应该不够了")
 
 
 async def test_急停按下去了就不让起飞(tmp_path, sample_mission, fake_nav, fake_device):
@@ -173,7 +194,7 @@ async def test_原点是别的图上的就不让起飞(tmp_path, sample_mission,
     wrong = HomePoint(map_id="别的图", pose=Pose.from_xy_yaw(0.0, 0.0),
                       marked_at_ms=1)
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path, home=wrong)
-    assert [c.name for c in r.failures] == ["home"]
+    assert [c.name for c in r.failures] == ["home", "battery"]
     assert "别的图" in r.failures[0].detail
 
 

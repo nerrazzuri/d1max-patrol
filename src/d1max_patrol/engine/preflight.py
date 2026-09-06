@@ -137,9 +137,8 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
                          params: ReturnParams) -> CheckResult:
     """电量要够走完全程、回到家时还高于中止线。"""
     pct = await device.battery()
-    if home is None:
+    if home is None or home.map_id != mission.map_id:
         # 算不出线的时候不放行 —— 这是本模块开头那条"不确定不放行"。
-        # 原点所在的图跟任务对不对得上,是 home 项自己的事,这里不重复报。
         return CheckResult("battery", False,
                            f"电量 {pct:.1f}%,但算不出出发线:这张图的原点不可用"
                            f"(见 home 项)")

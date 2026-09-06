@@ -208,7 +208,7 @@ def sim_stack(tmp_path: Path, ffdir: Path):
     async def _wire() -> str:
         await nav.connect()
         # 厂商路线的图是设备自己建的 —— 照着现场的顺序来一遍:建、存、载入、
-        # 等定位收敛。起飞检查五项里有两项卡在这几步上。
+        # 等定位收敛。起飞检查里有两项卡在这几步上。
         await nav.start_mapping()
         await _until(nav.mapping_status, MappingStatus.MAPPING_RUNNING)
         await nav.stop_mapping()
@@ -300,7 +300,7 @@ def test_全流程对着仿真器跑一遍(sim_stack, monkeypatch):
     assert grid["width"] > 0 and grid["height"] > 0 and grid["rle"]
     assert grid["source"] == "live", "还没存盘的图必须标成 live,不然人会当成成品"
 
-    # 2~3. 编任务、起飞、跑完。起飞检查五项当场查,过不了就是 409
+    # 2~3. 编任务、起飞、跑完。起飞检查当场全项查,过不了就是 409
     run_id = _run_once(sim_stack)
 
     # 4. 归档:照片就是相机吐出来的那几个字节,一个都没被动过。

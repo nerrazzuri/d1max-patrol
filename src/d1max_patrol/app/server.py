@@ -914,7 +914,7 @@ class AppServer:
     def _mission_run(self, req: Request) -> Response:
         """起一趟巡检。**起飞检查没过就不起**,并且把没过的项原样交给页面。
 
-        检查结果连成功的一次也带回去:人在现场要的是"这五项现在都什么样",
+        检查结果连成功的一次也带回去:人在现场要的是"每一项现在都什么样",
         不是一个"好了"。
         """
         mission = self._load_mission(req.params["mid"])
@@ -923,9 +923,6 @@ class AppServer:
             home = load_home(ctx.mapping.maps_dir, mission.map_id)
         except HomeError:
             home = None      # 让起飞门槛去说这句话,别在这儿抢着报错
-        # 引擎是按进程建的,原点是按地图选的:每次起飞都把这一张图现取的
-        # 原点换进去,不然切一次图,引擎手里的原点就跟丢一次。
-        ctx.engine.set_home(home)
         report = self._call(
             lambda: run_preflight(ctx.nav, ctx.device, mission, ctx.runs_root,
                                   home=home),
@@ -938,7 +935,7 @@ class AppServer:
                                     for c in report.failures),
                 "checks": checks,
             }, status=409)
-        self._call(lambda: ctx.engine.start(mission), timeout_s=30.0)
+        self._call(lambda: ctx.engine.start(mission, home=home), timeout_s=30.0)
         return json_response({"run": ctx.engine.snapshot.to_wire(),
                               "checks": checks})
 
