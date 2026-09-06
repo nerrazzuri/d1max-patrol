@@ -14,7 +14,9 @@ spec §4.4:上传成功只把文件标成"可删",不立刻删,真正的删除�
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -44,6 +46,11 @@ SWEEP_TARGET_RATIO = 0.70
 #: "已经传走了"的标记文件,就在 run 目录里。**本卷只定义它、只读它**;写它
 #: 是「服务器与值守」卷的 ``uploader.py`` 的事。
 UPLOADED_REL = ".uploaded"
+
+#: 删除预告落在 runs 根目录下的这个文件里。**预告必须落盘**:一句只显示在
+#: app 上的提示不可验证 —— 狗这边没有任何东西能证明"说过了",于是 §4.6 那条
+#: "删之前必须先预告"的硬约束在代码里等于没写。
+NOTICE_REL = "retention-notice.json"
 
 #: ``archive._make_dir`` 撞上同名会追加 ``-2``、``-3``。拆时间戳前得先切掉。
 _SUFFIX = re.compile(r"-\d+$")
@@ -179,3 +186,102 @@ def bytes_to_free(*, used_bytes: int, total_bytes: int,
         return 0
     target = int(total_bytes * target_ratio)
     return max(0, used_bytes - target)
+
+
+def run_key(info: RunInfo) -> str:
+    """预告文件里认一趟归档用的键。任务名 + 目录名,跟盘上的路径一一对应。"""
+    return f"{info.mission}/{info.path.name}"
+
+
+@dataclass(frozen=True, slots=True)
+class Forecast:
+    """预告:再过不久这些就要到期了。**文案在这里拼,不在 app 里拼** ——
+    免得手机端和网页端各说各的,而这是要给客户看的一句话。"""
+
+    generated_at: datetime
+    used_ratio: float
+    runs: tuple[RunInfo, ...]
+    bytes_at_risk: int
+    detail: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "generated_at": self.generated_at.strftime(STAMP_FMT),
+            "used_ratio": self.used_ratio,
+            "bytes_at_risk": self.bytes_at_risk,
+            "runs": [r.to_wire() for r in self.runs],
+            "detail": self.detail,
+        }
+
+
+def forecast(runs: Sequence[RunInfo], *, now: datetime, used_ratio: float,
+             days: int = MIN_NOTICE_DAYS) -> Forecast:
+    """算预告名单:**``days`` 天内要到期的,加上已经到期还没删的。**
+
+    后一半不能漏。§4.4 说过期不等于立刻删,真删要等水位线,所以"已过期但还在
+    盘上"是常态 —— 而它们恰恰是下一次腾地方时第一批被删的。漏掉就等于没预告。
+    """
+    picked = tuple(sorted((r for r in runs if r.days_left(now) <= days),
+                          key=lambda r: (r.started_at, r.path.name, r.mission)))
+    at_risk = sum(r.size_bytes for r in picked)
+    used = f"{used_ratio:.0%}"
+    if not picked:
+        detail = f"盘 {used},{days} 天内没有归档到期。"
+    else:
+        first = min(r.expires_at() for r in picked).strftime("%Y-%m-%d")
+        detail = (f"盘 {used},{days} 天内将有 {len(picked)} 趟归档到期"
+                  f"(最早 {first}),共约 {at_risk / (1024 * 1024):.0f}MB。"
+                  f"要留就先在 app 上导出 —— 到期之后按水位删除。")
+    return Forecast(generated_at=now, used_ratio=used_ratio, runs=picked,
+                    bytes_at_risk=at_risk, detail=detail)
+
+
+def read_notice(runs_root: Path | str) -> dict[str, datetime]:
+    """读预告台账:键 -> **首次**被预告到的时刻。
+
+    读不出来当成空的,**不抛**。读不出来的后果是删除被推迟(等于从没预告过),
+    那是安全的方向;抛出来会把整条清扫链炸掉,盘就再也清不动了。
+    """
+    path = Path(runs_root) / NOTICE_REL
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, datetime] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        try:
+            out[key] = datetime.strptime(value, STAMP_FMT).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return out
+
+
+def write_notice(runs_root: Path | str, fc: Forecast) -> dict[str, datetime]:
+    """把预告名单并进台账,返回并好的结果。
+
+    **已有的键只读不写。** 每次预告都刷新时间戳的话,只要还在名单里就永远
+    挂不满 ``MIN_NOTICE_DAYS`` 天,删除永远轮不到 —— 盘会一直满下去。
+
+    **不在名单里的键清掉。** 否则这个文件只增不减,几年之后是一大坨早已不
+    存在的目录。代价是万一某次扫盘漏看了一趟(盘 I/O 抖了一下),它的预告
+    时钟会重新起算 —— 只会推迟删除,不会提前删,这个方向可以接受。
+    """
+    root = Path(runs_root)
+    root.mkdir(parents=True, exist_ok=True)
+    old = read_notice(root)
+    merged = {key: old.get(key, fc.generated_at)
+              for key in (run_key(r) for r in fc.runs)}
+    target = root / NOTICE_REL
+    tmp = target.with_suffix(".json.tmp")
+    try:
+        text = json.dumps({k: v.strftime(STAMP_FMT) for k, v in merged.items()},
+                          ensure_ascii=False, indent=2)
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(target)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return merged
