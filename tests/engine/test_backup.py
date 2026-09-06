@@ -11,12 +11,17 @@ import json
 import pytest
 
 from d1max_patrol.engine.backup import (
+    EMPTY_STATE,
     BackupError,
+    SyncState,
     Target,
     init_target,
     marker_path,
     read_marker,
+    read_state,
     resolve_targets,
+    state_path,
+    write_state,
 )
 from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff, read_role
 
@@ -167,3 +172,50 @@ def test_能不能备份跟拦不拦起飞是两件事(tmp_path):
     (got,) = resolve_targets([disk], robot_sn="D1M-0007")
     assert got.usable is True
     assert blocks_takeoff([disk], robot_sn="D1M-0007") == (disk,)
+
+
+def test_从没同步过的盘读出来是空状态(tmp_path):
+    assert read_state(tmp_path, robot_sn="D1M-0007") == EMPTY_STATE
+
+
+def test_写下的状态读得回(tmp_path):
+    state = SyncState(robot_sn="D1M-0007", last_sync_ms=1_757_000_000_000,
+                      done=frozenset({"一号厂房/20260901T010203Z"}))
+    write_state(tmp_path, state)
+    assert read_state(tmp_path, robot_sn="D1M-0007") == state
+
+
+def test_写状态是原子的_不留临时文件(tmp_path):
+    write_state(tmp_path, SyncState(robot_sn="D1M-0007"))
+    assert not list(state_path(tmp_path).parent.glob("*.tmp"))
+
+
+def test_状态文件坏了当成空状态而不是抛(tmp_path):
+    # 抛出去,备份就此彻底停摆 —— 而没人会发现,因为备份本来就是那个"平时
+    # 看不见它在不在工作"的东西。当成没同步过最坏是重拷一遍,不毁任何东西。
+    state_path(tmp_path).parent.mkdir(parents=True)
+    state_path(tmp_path).write_text("{坏了", encoding="utf-8")
+    assert read_state(tmp_path, robot_sn="D1M-0007") == EMPTY_STATE
+
+
+def test_状态里记的_SN_跟这台狗对不上就当成没同步过(tmp_path):
+    # 这块盘被重新初始化给了这台狗,但旧进度还在。那些键指的是另一只狗的归档。
+    write_state(tmp_path, SyncState(robot_sn="D1M-0008", last_sync_ms=1,
+                                    done=frozenset({"一号厂房/20260901T010203Z"})))
+    assert read_state(tmp_path, robot_sn="D1M-0007") == EMPTY_STATE
+
+
+def test_狗没身份的时候不拿_SN_去卡状态(tmp_path):
+    state = SyncState(robot_sn="D1M-0007", last_sync_ms=1,
+                      done=frozenset({"一号厂房/20260901T010203Z"}))
+    write_state(tmp_path, state)
+    assert read_state(tmp_path, robot_sn="unknown") == state
+
+
+def test_记新的一趟是并集_不覆盖(tmp_path):
+    state = SyncState(robot_sn="D1M-0007", last_sync_ms=1,
+                      done=frozenset({"甲/20260901T010203Z"}))
+    got = state.with_done(["乙/20260902T010203Z"], now_ms=1_757_000_000_000)
+    assert got.done == {"甲/20260901T010203Z", "乙/20260902T010203Z"}
+    assert got.last_sync_ms == 1_757_000_000_000
+    assert got.robot_sn == "D1M-0007"

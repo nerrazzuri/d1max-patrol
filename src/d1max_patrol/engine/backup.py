@@ -26,7 +26,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -224,3 +224,79 @@ def resolve_targets(disks: Sequence[Removable],
             mount=mount, role=marker.role, sn=marker.sn, label=marker.label,
             usable=True, detail=""))
     return tuple(out)
+
+
+@dataclass(frozen=True, slots=True)
+class SyncState:
+    """这块盘上的同步进度。**记在盘上,不记在狗上。**
+
+    盘会被拔走插到另一台机器上,狗会被重装系统 —— 进度必须跟着数据走。记在
+    狗上的那一边,重装一次系统之后狗以为一趟都没同步过,于是把整盘归档重拷
+    一遍;只增不删所以不毁数据,但一块 2T 的盘要白拷几个小时,而且每次重装都
+    会再来一次。
+    """
+
+    robot_sn: str = ""
+    last_sync_ms: int = 0
+    #: 已经拷完并核对过的归档,键是 ``retention.run_key`` —— ``任务名/目录名``。
+    done: frozenset[str] = frozenset()
+
+    def with_done(self, keys: Iterable[str], *, now_ms: int) -> SyncState:
+        """记上新拷完的几趟。**并集,不覆盖。**"""
+        return SyncState(robot_sn=self.robot_sn, last_sync_ms=now_ms,
+                         done=self.done | frozenset(keys))
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "robot_sn": self.robot_sn,
+            "last_sync_ms": self.last_sync_ms,
+            # 排序是为了让盘上那个文件在两次同步之间可比 —— 集合的迭代顺序
+            # 每个进程都不一样,不排的话每次写出来的文件都"变了"。
+            "done": sorted(self.done),
+        }
+
+    @classmethod
+    def from_wire(cls, raw: Any) -> SyncState:
+        """从盘上那份 JSON 拼回来。**拼不出来的字段一律取默认值,不抛。**"""
+        if not isinstance(raw, dict):
+            return EMPTY_STATE
+        sn = raw.get("robot_sn", "")
+        last = raw.get("last_sync_ms", 0)
+        done = raw.get("done", [])
+        ok_last = isinstance(last, int) and not isinstance(last, bool)
+        return cls(
+            robot_sn=sn if isinstance(sn, str) else "",
+            last_sync_ms=last if ok_last else 0,
+            done=frozenset(k for k in done if isinstance(k, str))
+            if isinstance(done, list) else frozenset(),
+        )
+
+
+#: "这块盘上什么也没同步过"。模块级单例,避开 ruff B008(默认参数里不许调函数)。
+EMPTY_STATE = SyncState()
+
+
+def read_state(mount: Path | str, *, robot_sn: str = "") -> SyncState:
+    """读盘上的同步进度。**读不出来、或者不是这台狗的,一律当成没同步过。**
+
+    这个方向是安全的:当成没同步过,最坏是重拷一遍(只增不删,不毁任何东西);
+    抛出去,备份就此彻底停摆 —— 而没有人会发现,因为备份本来就是那个"平时
+    看不见它在不在工作"的东西。
+
+    ``robot_sn`` 对不上的意思是:这块盘被重新初始化给了这台狗,但旧进度还在,
+    那些键指的是另一只狗的归档。信它就会漏拷。
+    """
+    try:
+        raw = json.loads(state_path(mount).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return EMPTY_STATE
+    state = SyncState.from_wire(raw)
+    known = state.robot_sn not in NO_IDENTITY and robot_sn not in NO_IDENTITY
+    if known and state.robot_sn != robot_sn:
+        return EMPTY_STATE
+    return state
+
+
+def write_state(mount: Path | str, state: SyncState) -> None:
+    """把进度写回盘上。原子写,理由同 :func:`_atomic_json`。"""
+    _atomic_json(state_path(mount), state.to_wire())
