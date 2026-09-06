@@ -534,6 +534,11 @@ class SyncResult:
         }
 
 
+#: 盘不在了的那几趟,记进 ``failed`` 的理由。写成常量是为了让"开拷之前就没了"
+#: 和"拷到一半没了"两条路说同一句话 —— 现场看到的是同一件事。
+_DISK_GONE = "备份盘不在了(盘上的标记文件读不到)—— 这一趟没有拷"
+
+
 def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
                copy: Callable[[Path, Path], tuple[int, int]] = copy_run,
                ) -> SyncResult:
@@ -550,11 +555,37 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
     **空计划也写进度。** "同步过了,没有新东西"是一次成功的同步;不更新时间
     的那一边,值守屏上那块"上次同步"会一直停在很久以前 —— 一块好盘看起来像
     块死盘,而这一卷做的正是让死盘看得出来。
+
+    **"盘还在不在"的判据是标记文件读不读得到,不是 ``mount.exists()``。**
+    Linux 上卸载之后 ``/media/<user>/<label>`` 通常**作为一个空目录留在根文件
+    系统上** —— ``exists()`` 照样为真,而 ``_copy_file`` 第一行就是
+    ``mkdir(parents=True)``,它会老老实实把整棵归档树在根盘上重建,把几个 GB
+    写进 Orin 的 eMMC。那个位置在 ``runs_root`` 之外,清盘器看不见也删不掉,
+    终点是 EROFS 和一台起不来的狗。标记文件在盘上,盘一卸载就读不到了。
+
+    盘不在的时候**绝不写进度**:写了等于把"同步过"记到一块不在的盘上 ——
+    真正的进度还在那块盘里,而根盘上多出来的那份下次挂上会被 ``robot_sn``
+    对不上以外的任何理由信任。
     """
     copied: list[str] = []
     failed: list[tuple[str, str]] = []
     done_bytes = 0
-    for item in plan.items:
+
+    if not marker_path(plan.mount).is_file():
+        return SyncResult(
+            mount=plan.mount, copied=(),
+            failed=tuple((i.key, _DISK_GONE) for i in plan.items),
+            bytes_copied=0, full=plan.full,
+            detail="备份盘在开拷之前就不在了 —— 一个字节也没写,进度也没记。"
+                   "盘卸载之后挂载点常常作为一个空目录留在根文件系统上,"
+                   "照着往里写会把几个 GB 的归档写进狗自己的 eMMC")
+
+    for index, item in enumerate(plan.items):
+        # **每一趟之前再查一次。** 拔盘发生在哪一趟中间是没法预测的,而只查
+        # 一次的那一边,剩下的几趟会一趟趟地落到根文件系统上。
+        if not marker_path(plan.mount).is_file():
+            failed.extend((rest.key, _DISK_GONE) for rest in plan.items[index:])
+            break
         try:
             _files, size = copy(item.src, item.dest)
         except OSError as exc:

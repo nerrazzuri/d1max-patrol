@@ -386,9 +386,16 @@ def test_报满那句话里要说清楚不会删任何东西(tmp_path):
 
 
 def _plan(tmp_path, *, size: int = 32, free: int | None = None):
-    """造两趟归档 + 一块干净的盘,回 ``(runs, mount, plan)``。"""
+    """造两趟归档 + 一块**认过的**盘,回 ``(runs, mount, plan)``。
+
+    盘要先 ``init_target``:``apply_sync`` 拿标记文件当"盘还在不在"的判据
+    (卸载之后挂载点常常作为空目录留在根盘上,``exists()`` 分不出来),
+    没有标记的目录在它眼里就是一块已经拔掉的盘。
+    """
     runs, mount = tmp_path / "runs", tmp_path / "u1"
     mount.mkdir(exist_ok=True)
+    init_target(mount, robot_sn="D1M-0007", role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
     _make_run(runs, "甲", "20260901T010203Z", size=size)
     _make_run(runs, "乙", "20260902T010203Z", size=size)
     plan = plan_sync(runs, mount, robot_sn="D1M-0007", now=NOW,
@@ -566,3 +573,35 @@ def test_记进账本的字节数是真拷了多少而不是计划里那个数(t
         for key in res.copied
         for p in (runs / Path(key)).rglob("*") if p.is_file())
     assert res.bytes_copied > sum(i.size_bytes for i in plan.items)
+
+
+def test_盘在开拷之前就没了_一个字节不写而且不记进度(tmp_path):
+    # 卸载之后 /media/<label> 常常作为一个空目录留在根文件系统上:拿
+    # ``exists()`` 当判据的那一边,几个 GB 的归档会被写进狗自己的 eMMC ——
+    # 那个位置在 runs_root 之外,清盘器看不见也删不掉。
+    runs, mount, plan = _plan(tmp_path)
+    marker_path(mount).unlink()
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007")
+    assert res.copied == ()
+    assert [k for k, _ in res.failed] == [i.key for i in plan.items]
+    assert not (mount / "runs").exists()
+    # **绝不写 state**:写了等于把"同步过"记到一块不在的盘上。
+    assert not state_path(mount).exists()
+
+
+def test_拷到一半盘被拔掉_剩下的记失败而且不落到根盘上(tmp_path):
+    runs, mount, plan = _plan(tmp_path)
+
+    def _拷完第一趟就拔盘(src, dest):
+        got = copy_run(src, dest)
+        marker_path(mount).unlink(missing_ok=True)
+        return got
+
+    res = apply_sync(plan, now_ms=1_757_000_000_000, robot_sn="D1M-0007",
+                     copy=_拷完第一趟就拔盘)
+    assert res.copied == ("甲/20260901T010203Z",)
+    assert [k for k, _ in res.failed] == ["乙/20260902T010203Z"]
+    assert "不在了" in dict(res.failed)["乙/20260902T010203Z"]
+    assert not (mount / "runs" / "乙").exists()
+    assert read_state(mount, robot_sn="D1M-0007").done == {
+        "甲/20260901T010203Z"}
