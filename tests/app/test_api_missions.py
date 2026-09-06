@@ -209,7 +209,8 @@ def test_起飞检查过了任务就真的跑起来了(saved, ctx):
     assert ctx.engine.running
     assert "state" in body["run"]
     assert [c["name"] for c in body["checks"]] == [
-        "nav_ready", "device_ready", "localized", "home", "battery", "storage"]
+        "nav_ready", "device_ready", "localized", "home", "battery", "storage",
+        "removable"]
 
 
 def test_起飞检查没过时run返回409并列出没过的项(saved, ctx):

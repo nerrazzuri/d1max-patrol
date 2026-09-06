@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomePoint, ReturnParams
 from d1max_patrol.engine.mission import MissionWaypoint
 from d1max_patrol.engine.preflight import departure_line_pct, run_preflight
+from d1max_patrol.engine.removable import DiskRole, Removable
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 from .conftest import make_mission
 
-NAMES = ["nav_ready", "device_ready", "localized", "home", "battery", "storage"]
+NAMES = ["nav_ready", "device_ready", "localized", "home", "battery",
+         "storage", "removable"]
 
 _HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
                   marked_at_ms=1_757_000_000_000)
@@ -141,7 +145,7 @@ async def test_不管前面哪项挂了后面几项照样查(tmp_path, sample_mi
     fake_nav.nav = NavStatus.ACTIVE
     fake_device.estop = True
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
-    assert len(r.checks) == 6
+    assert len(r.checks) == 7
     assert {c.name for c in r.failures} == {"nav_ready", "device_ready"}
 
 
@@ -153,7 +157,7 @@ async def test_后端抛异常算这一项没过而不是整个炸掉(tmp_path, 
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     assert [c.name for c in r.failures] == ["nav_ready"]
     assert "连不上" in r.failures[0].detail
-    assert len(r.checks) == 6, "一项炸了不该让后面几项不查"
+    assert len(r.checks) == 7, "一项炸了不该让后面几项不查"
 
 
 async def test_读不到状态算没过而不是当成好的(tmp_path, sample_mission, fake_nav,
@@ -240,3 +244,26 @@ async def test_联网档盘满时说的是回传中断(tmp_path, sample_mission,
                    min_free_mb=1e12, form=connected, last_upload_age_days=9.0)
     detail = next(c.detail for c in r.checks if c.name == "storage")
     assert "回传" in detail and "9 天" in detail
+
+
+async def test_还插着取走盘就不让起飞(tmp_path, sample_mission, fake_nav,
+                                      fake_device):
+    disks = [Removable(mount=Path("/media/u1"), role=DiskRole.TRANSFER)]
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path,
+                   removable=disks)
+    assert [c.name for c in r.failures] == ["removable"]
+    assert "/media/u1" in r.failures[0].detail
+
+
+async def test_只插着镜像盘照样起飞(tmp_path, sample_mission, fake_nav,
+                                    fake_device):
+    disks = [Removable(mount=Path("/media/mirror"), role=DiskRole.MIRROR)]
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path,
+                   removable=disks)
+    assert r.ok
+
+
+async def test_没插盘的时候这一项也说得出话(tmp_path, sample_mission, fake_nav,
+                                            fake_device):
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
+    assert next(c.detail for c in r.checks if c.name == "removable")

@@ -93,6 +93,7 @@ from d1max_patrol.engine.mission import (
     save_mission,
 )
 from d1max_patrol.engine.preflight import PreflightReport, run_preflight
+from d1max_patrol.engine.removable import DEFAULT_PROBE, RemovableProbe
 from d1max_patrol.inspect.judge import (
     judge_run,
     read_findings,
@@ -371,6 +372,15 @@ class AppContext:
         对不上的那个组合正好是没人跑过的那个(见 ``engine/form.py`` 开篇)。
         """
         return self.engine.form
+
+    @property
+    def removable(self) -> RemovableProbe:
+        """怎么去认外插盘。**ctx 自己不存,问引擎要。**
+
+        跟 ``form`` 一样:引擎里那道 preflight 才是真拦住这一趟的那道,
+        ctx 再存一份,两份迟早不一样,而不一样的那天没有任何测试会红。
+        """
+        return self.engine.removable
 
 
 # ------------------------------------------------------------------ 状态汇总
@@ -1393,7 +1403,9 @@ async def _make_engine(nav: NavBackend, device: DeviceBackend,
                        media: Mapping[str, MediaSource],
                        runs_root: Path,
                        fingerprint: Mapping[str, str] | None = None,
-                       *, form: Form = STANDALONE) -> MissionEngine:
+                       *, form: Form = STANDALONE,
+                       removable: RemovableProbe = DEFAULT_PROBE,
+                       ) -> MissionEngine:
     """在循环线程里造引擎 —— 它内部那个队列要绑在这条循环上。
 
     指纹里带着机身身份,这样每次运行的 ``manifest.json`` 自己就写明了是哪只
@@ -1402,7 +1414,8 @@ async def _make_engine(nav: NavBackend, device: DeviceBackend,
     不是目录名。
     """
     return MissionEngine(nav, device, media, runs_root,
-                         fingerprint=dict(fingerprint or {}), form=form)
+                         fingerprint=dict(fingerprint or {}), form=form,
+                         removable=removable)
 
 
 async def _make_teleop(device: DeviceBackend, engine: MissionEngine) -> Teleop:

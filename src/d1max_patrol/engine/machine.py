@@ -41,6 +41,7 @@ from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomePoint, estimate_cost_pct
 from d1max_patrol.engine.mission import Action, Mission, MissionWaypoint
 from d1max_patrol.engine.preflight import PreflightReport, run_preflight
+from d1max_patrol.engine.removable import DEFAULT_PROBE, RemovableProbe
 from d1max_patrol.engine.safety import (
     Decision,
     Ruling,
@@ -200,7 +201,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                  media: Mapping[str, MediaSource], runs_root: Path,
                  *, clock: Callable[[], float] = time.monotonic,
                  fingerprint: Mapping[str, Any] | None = None,
-                 form: Form = STANDALONE) -> None:
+                 form: Form = STANDALONE,
+                 removable: RemovableProbe = DEFAULT_PROBE) -> None:
         super().__init__()
         self._nav = nav
         self._device = device
@@ -209,6 +211,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         self._clock = clock
         self._fingerprint = dict(fingerprint or {})
         self._form = form
+        self._removable = removable
         self._queue: asyncio.Queue[Any] = asyncio.Queue()
         self._state = RunState.IDLE
         self._seen: set[RunState] = set()
@@ -251,6 +254,15 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         两份迟早不一样,而不一样的那天没有任何测试会红。
         """
         return self._form
+
+    @property
+    def removable(self) -> RemovableProbe:
+        """怎么去认外插盘。**对外只读,理由跟 ``form`` 一样。**
+
+        `AppContext.removable` 就是问这里要的 —— 一个按进程走的属性只该有
+        一个出处,两份迟早不一样,而不一样的那天没有任何测试会红。
+        """
+        return self._removable
 
     def add_busy_check(self, check: Callable[[], str]) -> None:
         """登记一个"本体现在被别人占着吗"的检查。返回占用原因,空串表示没占。
@@ -390,9 +402,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         assert live is not None
         try:
             await self._transition(RunState.PREFLIGHT)
+            disks = await self._removable.scan()
             report = await run_preflight(self._nav, self._device,
                                          live.mission, self._runs_root,
-                                         home=self._home, form=self._form)
+                                         home=self._home, form=self._form,
+                                         removable=disks)
             self._note("preflight", ok=report.ok,
                        checks=[{"name": c.name, "ok": c.ok, "detail": c.detail}
                                for c in report.checks])

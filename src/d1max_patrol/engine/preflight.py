@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +25,7 @@ from d1max_patrol.engine.homing import (
     route_length_m,
 )
 from d1max_patrol.engine.mission import Mission
+from d1max_patrol.engine.removable import Removable, blocks_takeoff
 from d1max_patrol.engine.storage import storage_verdict
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
 
@@ -181,6 +182,23 @@ def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
     return CheckResult("storage", verdict.ok, verdict.detail)
 
 
+def _check_removable(disks: Sequence[Removable]) -> CheckResult:
+    """认到外插的取走盘就不许出发(spec §7.5)。
+
+    跟盘水位一样是个 start gate,狗自己看得见、自己拦。
+    """
+    blocking = blocks_takeoff(disks)
+    if not blocking:
+        return CheckResult("removable", True,
+                           f"没有外插的取走盘(共认到 {len(disks)} 块)")
+    # 挂载点永远是 Linux 路径(/media、/mnt),用 as_posix() 而不是 str():
+    # 后者在 Windows 开发机上跑测试时会把 "/media/u1" 印成 "\media\u1"。
+    names = ", ".join(d.mount.as_posix() for d in blocking)
+    return CheckResult("removable", False,
+                       f"还插着盘: {names} —— 拔下来再出发。"
+                       f"盘挂在走动的狗身上是个杠杆,先坏的是接口")
+
+
 async def _guard(name: str, coro: Awaitable[CheckResult]) -> CheckResult:
     """某一项炸了就算这一项没过,不让它掀掉整份报告。
 
@@ -200,6 +218,7 @@ async def run_preflight(nav: NavBackend, device: DeviceBackend,
                         return_params: ReturnParams = DEFAULT_RETURN_PARAMS,
                         form: Form = STANDALONE,
                         last_upload_age_days: float | None = None,
+                        removable: Sequence[Removable] = (),
                         ) -> PreflightReport:
     """全项全查,顺序固定,**一项都不跳**。"""
     checks = [
@@ -216,4 +235,5 @@ async def run_preflight(nav: NavBackend, device: DeviceBackend,
                                      last_upload_age_days))
     except Exception as exc:  # noqa: BLE001 - 同 _guard
         checks.append(CheckResult("storage", False, str(exc)))
+    checks.append(_check_removable(removable))
     return PreflightReport(tuple(checks))

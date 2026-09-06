@@ -308,7 +308,8 @@ async def test_检查结果整份进事件流(make_engine, sample_mission, devic
     pre = [e for e in read_events(engine.archive.path) if e["kind"] == "preflight"]
     assert len(pre) == 1
     assert [c["name"] for c in pre[0]["checks"]] == [
-        "nav_ready", "device_ready", "localized", "home", "battery", "storage"]
+        "nav_ready", "device_ready", "localized", "home", "battery", "storage",
+        "removable"]
 
 
 async def test_定位没收敛就等等不到就中止(make_engine, nav, monkeypatch):
