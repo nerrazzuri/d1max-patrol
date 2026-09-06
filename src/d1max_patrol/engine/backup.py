@@ -31,12 +31,13 @@ import shutil
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from d1max_patrol.engine.export import sha256_file
 from d1max_patrol.engine.removable import MARKER_REL, NO_IDENTITY, DiskRole, Removable
-from d1max_patrol.engine.retention import run_key, scan_runs, unique_tmp
+from d1max_patrol.engine.retention import MIN_NOTICE_DAYS, run_key, scan_runs, unique_tmp
 
 #: 盘上记同步进度的文件。跟 :data:`~d1max_patrol.engine.removable.MARKER_REL`
 #: 挨着放,同一个隐藏目录里。
@@ -603,3 +604,70 @@ def eject(mount: Path | str, *, busy: bool = False,
                                f"而我们这边已经把它们记成拷完了")
     return Ejection(mount=mount, ok=True,
                     detail="缓冲已经刷到盘上,可以拔了")
+
+
+#: 镜像盘落后几趟就该顶到人脸上。落后 1 趟是常态(刚跑完一趟还没同步),
+#: 落后 5 趟说明这块盘已经好几天没写进去了 —— 那通常不是"还没轮到",
+#: 是它已经不工作了。
+BEHIND_PUSH_RUNS = 5
+
+
+class NoticeLevel(str, Enum):
+    #: 配了镜像盘,跟得上。**不说话。**
+    OK = "ok"
+    #: 没配镜像盘。**中性的一句话,不是红的。**
+    NEUTRAL = "neutral"
+    #: 该顶到人脸上了。
+    PUSH = "push"
+
+
+@dataclass(frozen=True, slots=True)
+class BackupNotice:
+    """要不要就备份这件事说话,以及说到什么份上。"""
+
+    level: NoticeLevel
+    detail: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"level": self.level.value, "detail": self.detail}
+
+
+def backup_notice(targets: Sequence[TargetStatus], *, behind: int = 0,
+                  days_left: float | None = None,
+                  ota_pending: bool = False) -> BackupNotice:
+    """没配镜像盘 / 镜像盘落后了,该怎么说这句话。
+
+    **没配镜像盘不许常年报红**(spec §7.6)。常年报警的东西等于没报警:现场
+    的人会先学会忽略它,然后连真的那次也一起忽略。平时是中性的一句"未配
+    备份盘",只在**两个时刻**顶到人脸上 —— 授权 OTA 之前(OTA 会刷掉启动盘),
+    保留期快到期之前(马上要有东西被永久删掉了)。
+
+    **一块不再同步的镜像盘比没有镜像盘更危险。** 它是个完美的静默故障:
+    所有人都以为有第二份。所以配了盘但落后太多,照样顶出来。
+
+    ``days_left`` 是盘上最快到期的那一趟还剩几天;``None`` 表示盘上一趟归档
+    也没有。``ota_pending`` 由第 4 卷在授权升级之前传 ``True`` —— 这一卷不
+    知道 OTA 这回事,只留好这个入口。
+    """
+    mirrors = [t for t in targets if t.usable and t.role is DiskRole.MIRROR]
+    if not mirrors:
+        soon = days_left is not None and days_left <= MIN_NOTICE_DAYS
+        if not (soon or ota_pending):
+            return BackupNotice(
+                NoticeLevel.NEUTRAL,
+                "未配备份盘。归档现在只有一份,存在这台狗自己的盘上")
+        why = []
+        if ota_pending:
+            why.append("马上要升级系统,而升级会刷掉启动盘")
+        if soon:
+            why.append(f"再过 {days_left:.0f} 天就有归档要被永久删掉了")
+        return BackupNotice(
+            NoticeLevel.PUSH,
+            "这台狗没有备份盘,归档只有一份 —— " + ";".join(why)
+            + "。现在插一块盘初始化成镜像盘,或者先把要留的那些导出来")
+    if behind >= BEHIND_PUSH_RUNS:
+        return BackupNotice(
+            NoticeLevel.PUSH,
+            f"镜像盘已经落后 {behind} 趟没同步了。一块不再同步的镜像盘比没有"
+            f"更危险 —— 所有人都以为有第二份。检查这块盘还挂着没有")
+    return BackupNotice(NoticeLevel.OK, "")

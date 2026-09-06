@@ -89,6 +89,7 @@ from d1max_patrol.engine.backup import (
     BackupError,
     TargetStatus,
     apply_sync,
+    backup_notice,
     eject,
     init_target,
     plan_sync,
@@ -1374,8 +1375,10 @@ class AppServer:
         页面不会把钟拨回去(拨得回去的话钟永远填不满,删除永远不会来,而那正好
         是这套东西看起来在工作、实际上什么也没做的样子)。
 
-        **不过桥。** 桥管的是引擎状态,不是磁盘(见 ``app/bridge.py`` 开篇,
-        以及 ``_map_home_put`` 里那条一样的论证)。
+        **这一屏自己不碰引擎状态。** 唯一过桥的一跳是下面那句 ``_scan_targets``——
+        过桥的理由跟磁盘无关:``scan_or_unknown`` 是个协程,在 HTTP 线程上
+        await 它需要一个事件循环,单门不变量在这儿说不上话(见 ``_scan_targets``
+        自己的 docstring,以及 ``_map_home_put`` 里那条一样的论证)。
         """
         ctx = self._ctx
         now = datetime.now(timezone.utc)
@@ -1406,6 +1409,21 @@ class AppServer:
                              f"或者出错之后被挂成了只读。删除的钟因此没有开始走,"
                              f"不会有任何归档因为这次失败而被提前删掉;"
                              f"腾出空间之后再刷新一次这一屏。")
+        # 备份这件事在这一屏上露一次面。**这里是"保留期快到期"那个时刻** ——
+        # 人看盘况的时候,正是"马上要有东西被永久删掉"这句话最该被听见的时候
+        # (spec §7.6 纪律 2)。另一个时刻(授权 OTA 之前)归第 4 卷。
+        #
+        # 扫盘炸了就当没配盘:这一屏在盘出事的时候必须还能显示,而降级的方向
+        # 是安全的 —— 最坏是多说一句"未配备份盘"。
+        targets, _why = self._scan_targets()
+        soonest = min((r.days_left(now) for r in runs), default=None)
+        behind = 0
+        for t in targets or ():
+            if t.usable and t.role is DiskRole.MIRROR:
+                behind = max(behind, plan_sync(ctx.runs_root, t.mount,
+                                               robot_sn=ctx.identity.sn).behind)
+        notice = backup_notice(targets or (), behind=behind,
+                               days_left=soonest)
         return json_response({
             "used_bytes": used,
             "total_bytes": total,
@@ -1419,6 +1437,7 @@ class AppServer:
             # 页面上那句"再过几天开始删除"是说了不算的,人得知道。
             "notice_written": notice_written,
             "notice_detail": notice_detail,
+            "backup": notice.to_wire(),
         })
 
     def _sweep(self, req: Request) -> Response:
@@ -1557,10 +1576,11 @@ class AppServer:
         """狗现在认到哪些盘、各自能不能拿来备份。
 
         **过桥,但不是因为它碰引擎状态。** ``RemovableProbe.scan`` 是个协程,
-        在 HTTP 线程上 await 它需要一个事件循环,而 ``_call``(桥上那个,不是
-        本类的 ``_call``)收的正是一个**协程工厂** —— 理由跟
+        在 HTTP 线程上 await 它需要一个事件循环,而 ``LoopBridge.call``(桥上
+        那个,不是本类的 ``_call``)收的正是一个**协程工厂** —— 理由跟
         ``_preflight_with_scan`` 一模一样,跟单门不变量无关。下面那三个纯
-        文件 I/O 的处理器因此**不过桥**。
+        文件 I/O 的处理器自己那部分**不过桥**,但都经 ``_pick`` 调用这一处,
+        所以扫盘那一跳除外。
 
         回 ``(None, 一句话)`` 表示没扫成。认不出插着什么不等于这一屏该消失:
         人正是在盘出事的时候来看它的。
@@ -1630,7 +1650,11 @@ class AppServer:
                               "targets": out, "detail": ""})
 
     def _backup_init(self, req: Request) -> Response:
-        """把一块盘认成这台狗的备份盘。**不过桥** —— 纯文件 I/O。"""
+        """把一块盘认成这台狗的备份盘。
+
+        本处理器自己那部分是纯文件 I/O,不过桥;扫盘那一跳除外 —— ``_pick``
+        里调的 ``_scan_targets`` 会过(见它的 docstring)。
+        """
         ctx = self._ctx
         target = self._pick(req)
         # ``_pick`` 已经验证过请求体是个 dict,这里是同一份 bytes 再解一遍。
@@ -1655,7 +1679,8 @@ class AppServer:
         """同步一次。**默认只给方案,真跑要显式 ``{"apply": true}``** ——
         跟 ``/api/storage/sweep`` 同一条纪律:人先看名单,再点第二下。
 
-        **不过桥**,纯文件 I/O。
+        本处理器自己那部分是纯文件 I/O,不过桥;扫盘那一跳除外 —— ``_pick``
+        里调的 ``_scan_targets`` 会过(见它的 docstring)。
         """
         ctx = self._ctx
         target = self._pick(req)
@@ -1681,7 +1706,11 @@ class AppServer:
                               "result": res.to_wire()})
 
     def _backup_eject(self, req: Request) -> Response:
-        """安全弹出。**不过桥**,纯文件 I/O。"""
+        """安全弹出。
+
+        本处理器自己那部分是纯文件 I/O,不过桥;扫盘那一跳除外 —— ``_pick``
+        里调的 ``_scan_targets`` 会过(见它的 docstring)。
+        """
         target = self._pick(req)
         key = target.mount.as_posix()
         with self._sync_lock:

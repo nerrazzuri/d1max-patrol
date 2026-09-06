@@ -165,3 +165,11 @@ def test_eject_说可以拔了(one_disk):
                       payload={"mount": mount.as_posix()})
     assert body["ok"] is True
     assert "可以拔" in body["detail"]
+
+
+def test_盘况接口里带_backup_块(one_disk):
+    # §5.1 那块玻璃上的第六项要的三个数,数据口先通,玻璃留给第 8 卷去画。
+    _, s, _ = one_disk
+    body = C.get_json(s, "/api/storage")
+    assert body["backup"]["level"] == "neutral"
+    assert "未配备份盘" in body["backup"]["detail"]
