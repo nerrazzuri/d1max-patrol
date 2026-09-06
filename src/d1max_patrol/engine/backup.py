@@ -180,8 +180,8 @@ def init_target(mount: Path | str, *, robot_sn: str, role: DiskRole,
     except OSError as exc:
         # **包成 BackupError。** 这一句是这个函数唯一会漏出裸 ``OSError`` 的
         # 地方,而它的调用方 ``app/server.py`` 的 ``_backup_init`` 只接
-        # ``BackupError`` —— 一块写保护的盘(相机的 SD 卡带物理锁片、只读挂载
-        # 的 U 盘)于是变成一个 500,人拿着盘站在狗边上,屏上是"服务器内部错误"。
+        # ``BackupError`` —— 一块写保护的盘(SD 卡带物理锁片、挂载的时候就带了
+        # ``ro``)于是变成一个 500,人拿着盘站在狗边上,屏上是"服务器内部错误"。
         raise BackupError(
             f"这块盘写不进去({exc})—— 盘可能是只读的(有些盘身上有写保护的"
             f"锁片),也可能挂载的时候就是只读的,或者盘已经满了") from exc
