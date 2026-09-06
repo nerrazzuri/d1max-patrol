@@ -1683,8 +1683,23 @@ class AppServer:
             self._autosync = asyncio.create_task(self._autosync_loop())
 
     async def _autosync_stop(self) -> None:
-        """收掉那条协程。取消之后要 ``await`` —— 不等的话,它可能正卡在
-        ``to_thread`` 里往一个 pytest 马上要删掉的临时目录里写。"""
+        """收掉那条协程。**停得掉协程,停不掉正在拷的那条线程。**
+
+        ``cancel()`` 之后 ``await`` 是为了等这条协程真的收尾,而不是发完取消
+        就走 —— 那样它还可能在下一拍才醒过来。但**等到的只是协程**:实测
+        (py3.10.11)协程正卡在 ``asyncio.to_thread`` 里的时候,
+        ``cancel()`` + ``await`` 会在 0.00 秒返回,而线程池里那条正在拷贝的
+        线程照跑不误 —— ``to_thread`` 底下是 ``run_in_executor``,取消的是
+        等待,不是已经交出去的那份活。
+
+        **这样是可以接受的**,因为拷贝本身是原子改名的(``_copy_file`` 先落
+        临时名再 ``replace``):那条线程被进程退出打断,盘上要么是完整的那份,
+        要么什么也没有,不会留下半个文件;而"拷过了"要等 ``apply_sync`` 落账
+        才算数,没落账的下次重拷(重拷是浪费,不是损坏)。
+
+        **要一个"连线程也停下来"的语义,得另加一条协作式的取消标志**,而这一
+        卷没有 —— 别照着这段 docstring 以为 ``stop()`` 回来之后盘上就没人写了。
+        """
         task, self._autosync = self._autosync, None
         if task is None:
             return
