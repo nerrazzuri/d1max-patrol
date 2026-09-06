@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -550,3 +551,55 @@ def apply_sync(plan: SyncPlan, *, now_ms: int, robot_sn: str = "",
     return SyncResult(mount=plan.mount, copied=tuple(copied),
                       failed=tuple(failed), bytes_copied=done_bytes,
                       full=plan.full, detail=detail)
+
+
+def _noop_sync() -> None:
+    """这台机器上没有 ``os.sync``(Windows 开发机)。什么也不做。"""
+
+
+#: 把缓冲刷到盘上。``os.sync`` 是 Unix 独有的 —— 直接写 ``os.sync()`` 会在
+#: import 阶段就把整个模块在 Windows 开发机上炸掉,而这个模块的每一条测试
+#: 都跑在那台机器上。写成模块级常量而不是默认参数里的表达式,是为了不撞
+#: ruff B008。
+DEFAULT_SYNC: Callable[[], None] = getattr(os, "sync", _noop_sync)
+
+
+@dataclass(frozen=True, slots=True)
+class Ejection:
+    """能不能拔。"""
+
+    mount: Path
+    ok: bool
+    detail: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"mount": self.mount.as_posix(), "ok": self.ok,
+                "detail": self.detail}
+
+
+def eject(mount: Path | str, *, busy: bool = False,
+          sync_fs: Callable[[], None] = DEFAULT_SYNC) -> Ejection:
+    """安全弹出。**停同步 -> 刷缓冲 -> 才说可以拔了。**
+
+    Linux 上写文件是先进页缓存的。人在手机上看到"同步完成"就伸手把备份盘拔了,
+    而那几百兆可能还有一部分在内存里 —— 盘上那趟归档因此是残的,**而我们
+    已经把它记成拷完了**,下次同步不会再碰它。
+
+    ``busy`` 由 app 那一层给:哪几个挂载点上正跑着同步是 HTTP 这一侧的事,
+    不是这个模块的事(它连"有没有别人在跑"都不该知道)。
+    """
+    mount = Path(mount)
+    if busy:
+        return Ejection(mount=mount, ok=False,
+                        detail="这块盘正在同步,现在不能拔。拔一块正在写的盘,"
+                               "坏的不只是这一趟 —— 文件系统元数据写到一半,"
+                               "整块盘可能就挂不上了。等这一轮跑完再弹出")
+    try:
+        sync_fs()
+    except OSError as exc:
+        return Ejection(mount=mount, ok=False,
+                        detail=f"没能把缓冲刷到盘上({exc})—— **先别拔**。"
+                               f"现在拔,盘上最后那几趟归档可能是残的,"
+                               f"而我们这边已经把它们记成拷完了")
+    return Ejection(mount=mount, ok=True,
+                    detail="缓冲已经刷到盘上,可以拔了")

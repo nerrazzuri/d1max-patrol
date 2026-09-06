@@ -26,6 +26,7 @@ from d1max_patrol.engine.backup import (
     read_state,
     resolve_targets,
     state_path,
+    verify_run,
     write_state,
 )
 from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff, read_role
@@ -471,3 +472,18 @@ def test_报满的计划照拷能装下的那些(tmp_path):
     assert res.copied == ("甲/20260901T010203Z",)
     assert res.full is True
     assert "不会删" in res.detail
+
+
+def test_目标目录里缺文件核对出来是没拷过去而且说清楚是哪个文件(tmp_path):
+    # verify_run 挡的另一半:不是拷过去之后内容坏了,是压根没落地。上面那
+    # 9 条用例全是"拷过去之后被改坏",没有一条走到过这一支 —— 而这一支
+    # 挡的正是 copy_run 半路撞上 OSError(盘被拔了)之后最可能落到的形状:
+    # 文件系统里干脆没有那个文件。
+    runs = tmp_path / "runs"
+    run = _make_run(runs, "甲", "20260901T010203Z")
+    dest = tmp_path / "dest"
+    copy_run(run, dest)
+    (dest / "photos" / "a.jpg").unlink()
+    why = verify_run(run, dest)
+    assert why != ""
+    assert "a.jpg" in why
