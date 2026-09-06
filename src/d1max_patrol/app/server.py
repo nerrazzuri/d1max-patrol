@@ -1345,6 +1345,8 @@ class AppServer:
     def _storage(self, _req: Request) -> Response:
         """盘还剩多少,以及"再过不久这些就要到期了"。
 
+        **落盘失败不报错,降级答完。** 见下面那个 ``except OSError``。
+
         **看一眼盘况就算预告过了。** 这一卷里没有常驻的巡盘任务,人打开这一屏
         是当前唯一一个"我们确实告诉过他"的时刻 —— 预告因此在这里落盘,7 天的
         钟从落盘那一刻起走。``write_notice`` 对已有的那几条只读不写,所以刷新
@@ -1359,13 +1361,30 @@ class AppServer:
         used, total = _disk(ctx.runs_root)
         ratio = (used / total) if total > 0 else 0.0
         runs = scan_runs(ctx.runs_root, now=now)
-        fc = forecast(runs, now=now, used_ratio=ratio)
+        # 台账要在算预告之前读:那句"预计几天后开始删除"里的日子,是
+        # ``max(到期日, 首次预告时刻 + 7 天)`` —— 拿不到台账就只能报到期日,
+        # 而到期日那天什么也不会发生(见 ``retention.forecast``)。
+        fc = forecast(runs, now=now, used_ratio=ratio,
+                      noticed=read_notice(ctx.runs_root))
+        notice_written = True
+        notice_detail = ""
         try:
             # 第一次开机时 runs/ 还不存在,而预告要落在它下面。
             Path(ctx.runs_root).mkdir(parents=True, exist_ok=True)
             write_notice(ctx.runs_root, fc)
         except OSError as exc:
-            raise HttpError(500, "预告记不下来", str(exc)) from exc
+            # **落不了盘也照样把这一屏答完。** eMMC 写满(ENOSPC)或者出错之后
+            # 被内核挂成只读(EROFS,Orin 上极常见)时,写什么都会失败 —— 而
+            # 盘况页正是唯一一个在盘出事时必须还能显示的页面:用了多少、哪几趟
+            # 要过期、"要留就先导出"那句话,全在这儿。整条接口 500 掉的话,
+            # 操作员在最需要它的那一刻什么都看不到。
+            #
+            # 降级的方向是安全的:钟没开始走,就没有任何一趟因此变得可删。
+            notice_written = False
+            notice_detail = (f"预告没能记到盘上({exc})—— 盘可能已经写满,"
+                             f"或者出错之后被挂成了只读。删除的钟因此没有开始走,"
+                             f"不会有任何归档因为这次失败而被提前删掉;"
+                             f"腾出空间之后再刷新一次这一屏。")
         return json_response({
             "used_bytes": used,
             "total_bytes": total,
@@ -1375,6 +1394,10 @@ class AppServer:
             "baselines_bytes": baselines_bytes(ctx.baselines),
             "exports_bytes": sum(b.size_bytes for b in list_bundles(ctx.exports)),
             "forecast": fc.to_wire(),
+            # 预告到底记下来没有。**这一条必须出现在响应里**:预告没落盘时
+            # 页面上那句"再过几天开始删除"是说了不算的,人得知道。
+            "notice_written": notice_written,
+            "notice_detail": notice_detail,
         })
 
     def _sweep(self, req: Request) -> Response:

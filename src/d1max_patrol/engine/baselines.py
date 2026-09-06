@@ -15,6 +15,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# 只借它那条"临时文件名怎么起"的规矩(见 ``retention.unique_tmp``),
+# 不借任何保留策略 —— 基线永不参与水位删除,那一条没有变。
+from d1max_patrol.engine.retention import unique_tmp
+
 #: 基线目录的惯用名。放在 runs 根目录**旁边**,不是里面 —— 放里面迟早被
 #: 某个"清空 runs"的动作连坐。
 BASELINE_DIR_NAME = "baselines"
@@ -51,10 +55,14 @@ def save_baseline(baselines_root: Path | str, waypoint: str, camera: str,
 
     写到一半断电就是"基线没了",而基线没了只是退回去翻历史 —— 但写出半张
     图会被当成一张能用的基准喂给判读,那是更坏的一种坏。
+
+    **临时名是这次调用独有的**(``retention.unique_tmp``):判读是从 HTTP 线程
+    直接跑的,而服务是多线程的 —— 两次判读同时回写同一个点位,固定的 ``.tmp``
+    名字会让其中一张变成半张图,而半张图正是上一段说的那种更坏的坏。
     """
     target = baseline_path(baselines_root, waypoint, camera)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".jpg.tmp")
+    tmp = unique_tmp(target)
     try:
         with open(tmp, "wb") as fh:
             fh.write(data)

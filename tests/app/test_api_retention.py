@@ -23,7 +23,12 @@ from urllib.parse import quote
 import pytest
 
 from d1max_patrol.engine.archive import STAMP_FMT
-from d1max_patrol.engine.retention import NOTICE_REL, UPLOADED_REL, read_notice
+from d1max_patrol.engine.retention import (
+    EXPORTED_REL,
+    NOTICE_REL,
+    UPLOADED_REL,
+    read_notice,
+)
 from tests.app import conftest as C
 
 #: 让每趟归档有点实际大小,好让 ``size_bytes`` 不是 0。
@@ -114,6 +119,42 @@ def test_再看一次预告的时间不会被刷新(server, 三趟):
     先 = read_notice(三趟.runs_root)
     C.get_json(server, "/api/storage")
     assert read_notice(三趟.runs_root) == 先
+
+
+def test_预告落不了盘也照样答得出盘况(server, 三趟, monkeypatch):
+    """**盘况页是唯一一个在盘出事时必须还能显示的页面。**
+
+    eMMC 写满(ENOSPC)或者出错之后被内核挂成只读(EROFS,Orin 上极常见)时,
+    预告一定落不了盘。要是整条接口因此 500,操作员在最需要它的那一刻看不到
+    盘用了多少、看不到预告名单、也看不到"要留就先导出"那句话。
+
+    降级的方向是安全的:钟没开始走,就没有任何一趟因此变得可删。
+    """
+    def 写不进去(*_args, **_kwargs):
+        raise OSError("[Errno 30] Read-only file system")
+
+    monkeypatch.setattr("d1max_patrol.app.server.write_notice", 写不进去)
+    got = C.get_json(server, "/api/storage")
+    assert got["notice_written"] is False
+    assert got["notice_detail"]
+    # 数字和名单一样不少 —— 这才是这一屏存在的理由。
+    assert got["total_bytes"] > 0
+    assert got["runs_total"] == 3
+    assert len(got["forecast"]["runs"]) == 2
+    assert not (Path(三趟.runs_root) / NOTICE_REL).exists()
+
+
+def test_预告记下来了就说记下来了(server, 三趟):
+    got = C.get_json(server, "/api/storage")
+    assert got["notice_written"] is True
+    assert got["notice_detail"] == ""
+
+
+def test_盘况的预告文案报的是开始删除日(server, 三趟):
+    """spec §4.6 第 1 条要的是「预计 N 天后开始删除 X 之前的记录」,两个数都要。"""
+    detail = C.get_json(server, "/api/storage")["forecast"]["detail"]
+    assert "开始删除" in detail
+    assert "之前的记录" in detail
 
 
 def test_一趟都没跑过也答得出盘况(server):
@@ -266,6 +307,7 @@ def test_哈希对不上不放行(server, 三趟, 包):
     assert "对不上" in got["error"] + got["detail"]
     # 没确认,也没给任何一趟打标记 —— 两样都不能漏。
     assert C.get_json(server, "/api/exports")["exports"][0]["confirmed"] is False
+    assert not list(Path(三趟.runs_root).glob(f"*/*/{EXPORTED_REL}"))
     assert not list(Path(三趟.runs_root).glob(f"*/*/{UPLOADED_REL}"))
 
 
@@ -275,13 +317,19 @@ def test_没给哈希也不放行(server, 三趟, 包):
     assert code == 409
 
 
-def test_哈希对上了才给那几趟打上别处还有一份的标记(server, 三趟, 包):
+def test_哈希对上了才给那几趟打上导到客户手里的标记(server, 三趟, 包):
+    """打的是 ``.exported``,**不是** ``.uploaded``。
+
+    后者的含义是"传到服务器了",而一次人工导出证明不了那件事 —— 混用会让
+    联网的狗在回传断掉的那几天里删掉服务器上还没有的归档。
+    """
     code, got = _confirm(server, 包["name"], 包["sha256"])
     assert code == 200
     assert got["confirmed"] is True
     marked = sorted(p.parent.name
-                    for p in Path(三趟.runs_root).glob(f"*/*/{UPLOADED_REL}"))
+                    for p in Path(三趟.runs_root).glob(f"*/*/{EXPORTED_REL}"))
     assert len(marked) == 2
+    assert not list(Path(三趟.runs_root).glob(f"*/*/{UPLOADED_REL}"))
 
 
 def test_确认可以重复一次不出错(server, 三趟, 包):

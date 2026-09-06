@@ -17,6 +17,7 @@ from d1max_patrol.engine.retention import (
     NOTICE_REL,
     Forecast,
     RunInfo,
+    delete_starts_at,
     forecast,
     read_notice,
     run_key,
@@ -69,11 +70,62 @@ def test_算得出名单一共多少字节():
     assert fc.bytes_at_risk == 500
 
 
-def test_提示语里有盘用量和趟数和最早到期日():
+def test_提示语里有盘用量和趟数和开始删除的日子():
     fc = forecast([_info(120.0), _info(85.0)], now=NOW, used_ratio=0.78)
     assert "78%" in fc.detail
     assert "2 趟" in fc.detail
     assert "导出" in fc.detail
+    assert "开始删除" in fc.detail
+
+
+def test_提示语报的是开始删除日而不是到期日():
+    """spec §4.6 第 1 条的原话是「盘 78%,预计 6 天后开始删除 8 月 12 日之前的
+    记录」—— **两个数都要**。
+
+    而**到期日那天什么也不会发生**:预告的钟还没满。报到期日等于报一个必然
+    平安无事的日子,客户看到"最早 9-12 到期",9-12 安然无恙,9-15 突然删了。
+    """
+    老的 = _info(120.0)                        # 2026-05-04 起,90 天前就过期了
+    fc = forecast([老的], now=NOW, used_ratio=0.78)
+    # 首次预告就是此刻,所以开始删除是 7 天之后,不是那个早就过了的到期日。
+    assert "预计 7 天后开始删除" in fc.detail
+    assert 老的.expires_at().strftime("%Y-%m-%d") not in fc.detail
+    # "之前"是严格早于:取名单里最新那一趟的次日。
+    assert "2026-05-05 之前的记录" in fc.detail
+
+
+def test_钟走了几天预告里的天数就少几天():
+    # 台账里已经记着首次预告时刻,forecast 拿它算,不是每次都从头数七天。
+    老的 = _info(120.0)
+    fc = forecast([老的], now=NOW, used_ratio=0.9,
+                  noticed={run_key(老的): NOW - timedelta(days=3)})
+    assert "预计 4 天后开始删除" in fc.detail
+
+
+def test_预告挂满了就说最快今天():
+    老的 = _info(120.0)
+    fc = forecast([老的], now=NOW, used_ratio=0.9,
+                  noticed={run_key(老的): NOW - timedelta(days=MIN_NOTICE_DAYS)})
+    assert "最快今天" in fc.detail
+
+
+def test_还没到期的那一趟拦着它的是保留期():
+    # ``max(到期日, 首次预告 + 7 天)``:这一趟的预告早挂满了,轮到保留期说话。
+    未到期 = _info(85.0)                       # 还有 5 天到期
+    fc = forecast([未到期], now=NOW, used_ratio=0.9,
+                  noticed={run_key(未到期): NOW - timedelta(days=30)})
+    assert "预计 5 天后开始删除" in fc.detail
+
+
+def test_开始删除的时刻是两个钟里晚的那个():
+    老的 = _info(120.0)
+    早就到期 = 老的.expires_at()
+    # 预告的钟晚:到期日早就过了,还得再挂满七天。
+    assert (delete_starts_at(老的, first_noticed=NOW)
+            == NOW + timedelta(days=MIN_NOTICE_DAYS))
+    # 保留期的钟晚:预告一年前就挂上了,那就是到期日说了算。
+    assert (delete_starts_at(老的, first_noticed=NOW - timedelta(days=365))
+            == 早就到期)
 
 
 def test_名单空的时候提示语说没有要过期的():

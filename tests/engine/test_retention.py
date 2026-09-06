@@ -16,12 +16,14 @@ import pytest
 from d1max_patrol.engine.mission import MIN_RETENTION_DAYS
 from d1max_patrol.engine.retention import (
     DEFAULT_RETENTION_DAYS,
+    EXPORTED_REL,
     MIN_NOTICE_DAYS,
     SETTLE_HOURS,
     SWEEP_TARGET_RATIO,
     UPLOADED_REL,
     RunInfo,
     bytes_to_free,
+    mark_exported,
     mark_uploaded,
     scan_runs,
 )
@@ -59,6 +61,7 @@ def test_扫出来的字段都对(tmp_path):
     assert info.size_bytes >= 100
     assert info.settled is True
     assert info.uploaded is False
+    assert info.exported is False
 
 
 def test_最老的排在最前面(tmp_path):
@@ -126,6 +129,31 @@ def test_重复打标记不算错(tmp_path):
     mark_uploaded(run)
     mark_uploaded(run)
     assert scan_runs(tmp_path)[0].uploaded is True
+
+
+def test_打过导出标记就算已导出(tmp_path):
+    # 两个标记是**两个文件、两件事**:传到服务器 vs 拉到客户手机上。
+    run = _run(tmp_path, "巡检一号", NOW - timedelta(days=3))
+    assert mark_exported(run) == run / EXPORTED_REL
+    info = scan_runs(tmp_path)[0]
+    assert info.exported is True
+    assert info.uploaded is False
+
+
+def test_传走了不等于导出过(tmp_path):
+    run = _run(tmp_path, "巡检一号", NOW - timedelta(days=3))
+    mark_uploaded(run)
+    info = scan_runs(tmp_path)[0]
+    assert info.uploaded is True
+    assert info.exported is False
+
+
+def test_线格式带得上两个标记(tmp_path):
+    run = _run(tmp_path, "巡检一号", NOW - timedelta(days=3))
+    mark_exported(run)
+    wire = scan_runs(tmp_path)[0].to_wire()
+    assert wire["uploaded"] is False
+    assert wire["exported"] is True
 
 
 def test_runs根目录不存在就是空的(tmp_path):

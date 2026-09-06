@@ -15,9 +15,11 @@ spec §4.4:上传成功只把文件标成"可删",不立刻删,真正的删除�
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
-from collections.abc import Sequence
+import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -44,9 +46,21 @@ SETTLE_HOURS = 24
 #: 变成每次出任务都在删。
 SWEEP_TARGET_RATIO = 0.70
 
-#: "已经传走了"的标记文件,就在 run 目录里。**本卷只定义它、只读它**;写它
-#: 是「服务器与值守」卷的 ``uploader.py`` 的事。
+#: "已经传到**服务器**了"的标记文件,就在 run 目录里。**本卷只定义它、只读它**;
+#: 写它是「服务器与值守」卷的 ``uploader.py`` 的事。
+#:
+#: **它只有这一个含义。** 一次人工导出证明不了"服务器上有第二份" —— 那件事
+#: 由 :data:`EXPORTED_REL` 记,两个标记不许混用,理由见 ``_deletable``。
 UPLOADED_REL = ".uploaded"
+
+#: "已经导到**客户手里**了"的标记文件。由 ``export.confirm_bundle`` 在哈希
+#: 对上之后打上。
+#:
+#: 跟 :data:`UPLOADED_REL` 分开,是因为"有服务器"档下那条硬约束(spec §4.6
+#: 那张表)的判据是**传到服务器了没有**:回传断了三天、操作员用导出通道把这
+#: 几趟拉到手机上确认过,并不等于服务器上有了 —— 混用一个标记的话,这几趟会
+#: 在次日过水位时被删掉,而服务器端的档案里从此有一个三天的洞。
+EXPORTED_REL = ".exported"
 
 #: 删除预告落在 runs 根目录下的这个文件里。**预告必须落盘**:一句只显示在
 #: app 上的提示不可验证 —— 狗这边没有任何东西能证明"说过了",于是 §4.6 那条
@@ -61,6 +75,25 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def unique_tmp(target: Path) -> Path:
+    """给 ``target`` 配一个**这次调用独有**的临时文件名。
+
+    **固定的 ``.tmp`` 名字在多线程服务里会互相踩。** A 写到一半,B 把自己那份
+    ``replace`` 过去,读回来就是半截文件。``app/server.py`` 是
+    ``ThreadingHTTPServer``,手机和网页同时开着盘况页就能撞上;这里那个半截
+    文件是预告台账,读坏之后 ``read_notice`` 回空,所有归档的首次预告时刻一起
+    清零,7 天的钟从头走。
+
+    进程号 + uuid:同一台机器上跑两个进程也不会撞。名字**以 ``.tmp`` 结尾、
+    并且在原后缀之后**,所以按 ``*.jpg`` / ``*.zip.json`` 之类的 glob 列目录
+    时捡不到它。
+
+    公开是因为 ``baselines`` 和 ``export`` 落盘时要的是同一条规矩,而这种
+    规矩只该有一份。
+    """
+    return target.with_name(f"{target.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp")
+
+
 @dataclass(frozen=True, slots=True)
 class RunInfo:
     """一趟归档在盘上的样子。**纯数据,不带 I/O** —— 所以过期判断能被穷举测。"""
@@ -71,7 +104,11 @@ class RunInfo:
     retention_days: int
     size_bytes: int
     settled: bool
+    #: 传到**服务器**了没有(:data:`UPLOADED_REL`)。
     uploaded: bool
+    #: 导到**客户手里**了没有(:data:`EXPORTED_REL`)。两者不是一回事,
+    #: 见 ``_deletable``。默认 ``False``:没打过标记就是没有。
+    exported: bool = False
 
     def expires_at(self) -> datetime:
         return self.started_at + timedelta(days=self.retention_days)
@@ -94,6 +131,7 @@ class RunInfo:
             "size_bytes": self.size_bytes,
             "settled": self.settled,
             "uploaded": self.uploaded,
+            "exported": self.exported,
         }
 
 
@@ -168,19 +206,32 @@ def scan_runs(runs_root: Path | str, *, now: datetime | None = None) -> list[Run
             # 有 summary 就是跑完了;没有但已经过了安定期,那是崩在半路的
             # 残骸 —— 也没人在写它了。两条都不满足的才叫"不安定",一律不碰。
             settled=bool(raw and raw.get("summary")) or started < settle_before,
-            uploaded=(run / UPLOADED_REL).exists()))
+            uploaded=(run / UPLOADED_REL).exists(),
+            exported=(run / EXPORTED_REL).exists()))
     out.sort(key=lambda i: (i.started_at, i.path.name, i.mission))
     return out
 
 
 def mark_uploaded(run_dir: Path | str) -> Path:
-    """标成"别处还有一份"。**标记不等于删** —— 真删等到水位线(spec §4.4)。
+    """标成"**服务器上**还有一份"。**标记不等于删** —— 真删等到水位线(spec §4.4)。
 
-    两条路会打上它:``uploader`` 传成功(后面那一卷),以及一次哈希对上的人工
-    导出(``export.confirm_bundle``)。在"世界上还有没有第二份"这件事上,
-    这两者完全等价。
+    **只有一个写入者:**``uploader`` 传成功(后面那一卷)。人工导出打的是
+    :func:`mark_exported`,不是这个 —— 一次导到手机上的确认证明不了服务器
+    收到了,而"有服务器"档下的硬约束(spec §4.6 那张表)判的正是服务器。
     """
     path = Path(run_dir) / UPLOADED_REL
+    path.touch(exist_ok=True)
+    return path
+
+
+def mark_exported(run_dir: Path | str) -> Path:
+    """标成"**客户手里**还有一份"。由 ``export.confirm_bundle`` 打上。
+
+    单机档下它跟 :func:`mark_uploaded` 等价 —— 那一档的判据是"世界上还有没有
+    第二份",拉到手机上和传到服务器上一样算数。有服务器的那一档下它**不算数**,
+    理由见 ``_deletable``。
+    """
+    path = Path(run_dir) / EXPORTED_REL
     path.touch(exist_ok=True)
     return path
 
@@ -220,13 +271,43 @@ class Forecast:
         }
 
 
+def delete_starts_at(info: RunInfo, *, first_noticed: datetime) -> datetime:
+    """这一趟最早什么时候会被删。**两个钟都得走完:保留期,和预告期。**
+
+    ``max(到期日, 首次预告时刻 + MIN_NOTICE_DAYS)``。到期日那天什么也不会
+    发生 —— 预告的钟还没满 —— 所以拿到期日当"要删了"报给客户,报的是一个
+    必然平安无事的日子,而真正动手的是这个函数算出来的时刻。
+
+    ``_deletable`` 单机那一支就是 ``now >= delete_starts_at(...)``,两处共用
+    这一个式子:预告说的哪一天和清扫器动手的哪一天,不许各算各的。
+    """
+    return max(info.expires_at(),
+               first_noticed + timedelta(days=MIN_NOTICE_DAYS))
+
+
 def forecast(runs: Sequence[RunInfo], *, now: datetime, used_ratio: float,
-             days: int = MIN_NOTICE_DAYS) -> Forecast:
+             days: int = MIN_NOTICE_DAYS,
+             noticed: Mapping[str, datetime] | None = None) -> Forecast:
     """算预告名单:**``days`` 天内要到期的,加上已经到期还没删的。**
 
     后一半不能漏。§4.4 说过期不等于立刻删,真删要等水位线,所以"已过期但还在
     盘上"是常态 —— 而它们恰恰是下一次腾地方时第一批被删的。漏掉就等于没预告。
+
+    ``noticed`` 是台账(``read_notice`` 的结果),用来算 spec §4.6 第 1 条要的
+    那句话里的**开始删除日**。**为什么把它收进参数,而不是把这句话挪到
+    ``write_notice`` 之后拼:**
+
+    - 文案只该有一处出处。挪到 ``write_notice`` 里,拼话的地方就分成了两半
+      (名单空的那句仍在这儿),而这是要给客户看的一句话。
+    - ``forecast`` 不会因此依赖它算不出来的东西:台账里没有的键,首次预告时刻
+      就是**此刻** —— 调用方紧接着那次 ``write_notice`` 记下的正是 ``now``。
+      所以 ``noticed.get(key, now)`` 不是估计,是准确值。
+    - 改动面最小:调用方多传一个已经在手上的 dict,别的什么都不用动。
+
+    不传就当台账是空的,也就是"这些都是刚被预告到的" —— 那正是第一次看盘况
+    时的实情。
     """
+    noticed = noticed if noticed is not None else {}
     picked = tuple(sorted((r for r in runs if r.days_left(now) <= days),
                           key=lambda r: (r.started_at, r.path.name, r.mission)))
     at_risk = sum(r.size_bytes for r in picked)
@@ -234,9 +315,19 @@ def forecast(runs: Sequence[RunInfo], *, now: datetime, used_ratio: float,
     if not picked:
         detail = f"盘 {used},{days} 天内没有归档到期。"
     else:
-        first = min(r.expires_at() for r in picked).strftime("%Y-%m-%d")
-        detail = (f"盘 {used},{days} 天内将有 {len(picked)} 趟归档到期"
-                  f"(最早 {first}),共约 {at_risk / (1024 * 1024):.0f}MB。"
+        starts = min(delete_starts_at(r, first_noticed=noticed.get(run_key(r), now))
+                     for r in picked)
+        # 向下取整:说少了会让人早点动手,说多了会让人错过 —— 这句话是催人
+        # 去导出的,宁可早。
+        left = int(max(0.0, (starts - now).total_seconds()) // 86400)
+        when = f"预计 {left} 天后开始删除" if left else "最快今天就会开始删除"
+        # "之前"是严格早于,所以取名单里**最新那一趟的次日** —— 名单里每一趟
+        # 都严格早于这个日子,这句话因此是准确的,不是约等于。
+        cutoff = (max(r.started_at for r in picked)
+                  + timedelta(days=1)).strftime("%Y-%m-%d")
+        detail = (f"盘 {used},{when} {cutoff} 之前的记录:"
+                  f"{days} 天内将有 {len(picked)} 趟归档到期,"
+                  f"共约 {at_risk / (1024 * 1024):.0f}MB。"
                   f"要留就先在 app 上导出 —— 到期之后按水位删除。")
     return Forecast(generated_at=now, used_ratio=used_ratio, runs=picked,
                     bytes_at_risk=at_risk, detail=detail)
@@ -267,7 +358,7 @@ def read_notice(runs_root: Path | str) -> dict[str, datetime]:
 
 
 def write_notice(runs_root: Path | str, fc: Forecast) -> dict[str, datetime]:
-    """把预告名单并进台账,返回并好的结果。
+    """把预告名单并进台账,返回合并好的结果。
 
     **已有的键只读不写。** 每次预告都刷新时间戳的话,只要还在名单里就永远
     挂不满 ``MIN_NOTICE_DAYS`` 天,删除永远轮不到 —— 盘会一直满下去。
@@ -282,7 +373,9 @@ def write_notice(runs_root: Path | str, fc: Forecast) -> dict[str, datetime]:
     merged = {key: old.get(key, fc.generated_at)
               for key in (run_key(r) for r in fc.runs)}
     target = root / NOTICE_REL
-    tmp = target.with_suffix(".json.tmp")
+    # 临时名必须**这次调用独有**,见 ``unique_tmp``:固定名字加多线程,
+    # 台账会被写成半截,而那等于所有的钟一起清零。
+    tmp = unique_tmp(target)
     try:
         text = json.dumps({k: v.strftime(STAMP_FMT) for k, v in merged.items()},
                           ensure_ascii=False, indent=2)
@@ -327,17 +420,23 @@ def _deletable(info: RunInfo, *, now: datetime, has_upload: bool,
     if has_upload:
         # 有服务器:分类依据是已传/未传,**未传的绝不删**。传走了的当天就
         # 可以按水位删 —— 服务器上有第二份。
+        #
+        # **``exported`` 在这一档下不算数。** 判据是"传到服务器了没有",而
+        # 一次人工导出证明不了这件事:回传断了三天、操作员把这几趟拉到手机上
+        # 确认过,次日过水位就被删了 —— 回传恢复之后 uploader 找不到它们,
+        # 服务器端的档案里从此有一个三天的洞,而服务器才是这一档下的权威副本。
         return info.uploaded
     # 单机:分类依据是保留期内/外,而且删之前必须先预告,还得挂满。
-    if info.uploaded:
-        # 但"别处还有一份"永远优先 —— 单机模式下这个标记只可能来自一次
-        # 哈希对上的人工导出(``export.confirm_bundle``),那正是 §4.6 第 2 条
-        # 「导出并释放」通道的出口。走过那条通道的,不必再等保留期。
+    if info.uploaded or info.exported:
+        # 但"别处还有一份"永远优先。单机档下的判据就是"世界上还有没有第二份",
+        # 传到服务器和拉到客户手机上在这件事上完全等价 —— 后者正是 §4.6 第 2 条
+        # 「导出并释放」通道的出口。走过任一条的,不必再等保留期。
         return True
-    if not info.is_expired(now):
-        return False
     first = noticed.get(run_key(info))
-    return first is not None and now - first >= timedelta(days=MIN_NOTICE_DAYS)
+    if first is None:
+        # 台账里没有它就是没预告过。§4.6 硬约束:删之前必须先预告。
+        return False
+    return now >= delete_starts_at(info, first_noticed=first)
 
 
 def plan_sweep(runs: Sequence[RunInfo], *, now: datetime, has_upload: bool,

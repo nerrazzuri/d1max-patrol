@@ -21,14 +21,15 @@ NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _info(days_ago: float, *, mission: str = "巡检一号", retention: int = 90,
-          size: int = 1000, settled: bool = True,
-          uploaded: bool = False, root: Path | None = None) -> RunInfo:
+          size: int = 1000, settled: bool = True, uploaded: bool = False,
+          exported: bool = False, root: Path | None = None) -> RunInfo:
     started = NOW - timedelta(days=days_ago)
     stamp = started.strftime("%Y%m%dT%H%M%SZ")
     base = root if root is not None else Path("runs")
     return RunInfo(path=base / mission / stamp, mission=mission,
                    started_at=started, retention_days=retention,
-                   size_bytes=size, settled=settled, uploaded=uploaded)
+                   size_bytes=size, settled=settled, uploaded=uploaded,
+                   exported=exported)
 
 
 def _noticed(*infos: RunInfo, days_ago: float = MIN_NOTICE_DAYS) -> dict:
@@ -108,10 +109,33 @@ def test_单机时不看传没传():
 
 def test_单机时导出确认过的不必再等保留期():
     # §4.6 第 2 条「导出并释放」的出口:走过那条通道的,别处已经有一份了。
-    导出过 = _info(1.0, uploaded=True)
+    # 打的是 ``.exported`` 不是 ``.uploaded`` —— 人工导出证明的是"客户手里
+    # 有一份",不是"服务器上有一份"。单机档下这两件事等价。
+    导出过 = _info(1.0, exported=True)
     sweep = plan_sweep([导出过], now=NOW, has_upload=False, need_bytes=500,
                        noticed={})
     assert sweep.delete == (导出过,)
+
+
+def test_有服务器时导出确认过的不算数():
+    """这一条钉的是两个标记不许混用。
+
+    判据是**传到服务器了没有**,而一次人工导出证明不了这件事。混用的失败
+    场景:联网的狗回传断了三天,操作员用导出通道把这几趟拉到手机上确认了;
+    次日盘过水位,它们被删;回传恢复之后 uploader 找不到它们 —— 服务器端的
+    档案里从此有一个三天的洞,**而服务器才是这一档下的权威副本**。
+    """
+    只导出过 = _info(200.0, exported=True, uploaded=False)
+    sweep = plan_sweep([只导出过], now=NOW, has_upload=True, need_bytes=5000)
+    assert sweep.delete == ()
+    assert sweep.short_bytes == 5000
+
+
+def test_有服务器时传走了的照删不误():
+    # 反面那一半:``uploaded`` 在这一档下照旧算数,别把闸门关死了。
+    传了 = _info(1.0, uploaded=True, exported=False)
+    sweep = plan_sweep([传了], now=NOW, has_upload=True, need_bytes=500)
+    assert sweep.delete == (传了,)
 
 
 def test_正在写的那一趟两边都不碰():

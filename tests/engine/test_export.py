@@ -25,12 +25,13 @@ from d1max_patrol.engine.export import (
     read_bundle,
     sha256_file,
 )
-from d1max_patrol.engine.retention import UPLOADED_REL, RunInfo
+from d1max_patrol.engine.retention import EXPORTED_REL, UPLOADED_REL, RunInfo
 
 NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _run(root: Path, mission: str, days_ago: float, *, size: int = 40) -> RunInfo:
+def _run(root: Path, mission: str, days_ago: float, *, size: int = 40,
+         settled: bool = True) -> RunInfo:
     started = NOW - timedelta(days=days_ago)
     stamp = started.strftime("%Y%m%dT%H%M%SZ")
     run = root / mission / stamp
@@ -38,7 +39,7 @@ def _run(root: Path, mission: str, days_ago: float, *, size: int = 40) -> RunInf
     (run / "photos" / "P1__front__x.jpg").write_bytes(b"j" * size)
     (run / "events.jsonl").write_text('{"e":1}\n', encoding="utf-8")
     return RunInfo(path=run, mission=mission, started_at=started,
-                   retention_days=90, size_bytes=size, settled=True,
+                   retention_days=90, size_bytes=size, settled=settled,
                    uploaded=False)
 
 
@@ -93,6 +94,34 @@ def test_一趟都没有要抛错而不是打个空包(tmp_path, out_dir):
     with pytest.raises(ExportError) as e:
         build_export([], out_dir=out_dir, now=NOW)
     assert "一趟" in str(e.value)
+
+
+def test_还在写的那一趟混在区间里就整包抛错(tmp_path, out_dir):
+    """**这条是会真丢数据的那条。**
+
+    狗 10:00 出发正在写这一趟,10:30 有人导了一个包含今天的区间:包里是当时
+    盘上的 3 张照片和半行 ``events.jsonl``;客户端重算 sha256 **对得上**
+    (对的是那个半截包本身),确认于是成立,原件被标成"别处还有一份";
+    12:00 狗跑完写下 40 张照片;次日盘过水位,整个目录被删。**37 张照片
+    永久消失,而系统全程认为还有一份。**
+
+    闸门在 ``build_export`` 里,不在 app 里 —— 闸门只该有一份。
+    """
+    安定 = _run(tmp_path, "甲", 5.0)
+    还在写 = _run(tmp_path, "乙", 0.1, settled=False)
+    with pytest.raises(ExportError) as e:
+        build_export([安定, 还在写], out_dir=out_dir, now=NOW)
+    assert "还在写" in str(e.value)
+    assert f"乙/{还在写.path.name}" in str(e.value)
+    # 抛了就什么都不留:半截包不许躺在导出目录里等人下载。
+    assert list_bundles(out_dir) == []
+
+
+def test_全都安定的照旧导得出(tmp_path, out_dir):
+    a, b = _run(tmp_path, "甲", 10.0), _run(tmp_path, "乙", 5.0)
+    bundle = build_export([a, b], out_dir=out_dir, now=NOW)
+    assert len(bundle.runs) == 2
+    assert bundle.path.is_file()
 
 
 def test_哈希跟直接算文件一致(tmp_path, out_dir):
@@ -160,11 +189,15 @@ def test_哈希对上了才算确认(tmp_path, out_dir):
     assert read_bundle(out_dir, bundle.name).confirmed is True
 
 
-def test_确认之后run上打了别处还有一份的标记(tmp_path, out_dir):
+def test_确认之后run上打了导到客户手里的标记(tmp_path, out_dir):
+    # **打的是 ``.exported``,不是 ``.uploaded``。** 后者的含义是"传到服务器
+    # 了",而人工导出证明不了那件事 —— 混用会在"有服务器"档下删掉服务器上
+    # 还没有的归档(见 ``tests/engine/test_retention_sweep.py``)。
     a = _run(tmp_path, "巡检一号", 5.0)
     bundle = build_export([a], out_dir=out_dir, now=NOW)
     confirm_bundle(out_dir, bundle.name, bundle.sha256, runs_root=tmp_path)
-    assert (a.path / UPLOADED_REL).is_file()
+    assert (a.path / EXPORTED_REL).is_file()
+    assert not (a.path / UPLOADED_REL).exists()
 
 
 def test_哈希对不上就抛错而且什么都不改(tmp_path, out_dir):
@@ -175,6 +208,7 @@ def test_哈希对不上就抛错而且什么都不改(tmp_path, out_dir):
         confirm_bundle(out_dir, bundle.name, "0" * 64, runs_root=tmp_path)
     assert "对不上" in str(e.value)
     assert read_bundle(out_dir, bundle.name).confirmed is False
+    assert not (a.path / EXPORTED_REL).exists()
     assert not (a.path / UPLOADED_REL).exists()
 
 

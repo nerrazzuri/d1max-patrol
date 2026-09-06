@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from d1max_patrol.engine.archive import STAMP_FMT
-from d1max_patrol.engine.retention import RunInfo, mark_uploaded
+from d1max_patrol.engine.retention import RunInfo, mark_exported, unique_tmp
 
 #: 导出包放在 runs 根目录**旁边**的这个目录里。放里面会被 ``scan_runs``
 #: 当成归档扫进去,然后被自己的水位删除删掉 —— 而它正是为了对抗删除才存在的。
@@ -98,7 +98,10 @@ def _sidecar(out_dir: Path | str, name: str) -> Path:
 
 def _write_sidecar(out_dir: Path | str, bundle: ExportBundle) -> None:
     target = _sidecar(out_dir, bundle.name)
-    tmp = target.with_suffix(".json.tmp")
+    # 临时名这次调用独有,见 ``retention.unique_tmp``:``_run_judge`` /
+    # ``_export_new`` 都是从 HTTP 线程直接跑的,而服务是多线程的。
+    # ``list_bundles`` 的 ``*.zip.json`` 也因此捡不到它 —— 名字以 ``.tmp`` 结尾。
+    tmp = unique_tmp(target)
     try:
         tmp.write_text(json.dumps(bundle.to_wire(), ensure_ascii=False, indent=2),
                        encoding="utf-8")
@@ -115,6 +118,15 @@ def build_export(infos: Sequence[RunInfo], *, out_dir: Path | str,
     「导出并释放」会在什么都没导出的情况下走完全流程,然后把原件删掉。那是
     这一整条链最坏的失败方式。
 
+    **还在写的那一趟不许进包 —— 混进来一趟就整包抛错。** 这个闸门只有这一处:
+    ``pick_runs`` 只按 ``started_at`` 圈区间,而 app 那一层不该再有第二份判断
+    (闸门有两份,迟早只剩一份是对的)。没有它的话:狗 10:00 出发正在写这一趟,
+    10:30 有人导了一个包含今天的区间,包里是当时盘上的 3 张照片和半行
+    ``events.jsonl``;客户端重算 sha256 **对得上**(对的是那个半截包本身),
+    于是 ``confirm_bundle`` 给这一趟打上"别处还有一份";12:00 狗跑完写下
+    40 张照片;次日盘过水位,整个目录被 ``apply_sweep`` 删掉。**37 张照片
+    永久消失,而系统全程认为还有一份。**
+
     用 ``ZIP_DEFLATED``:照片是 JPEG 压不动,但 ``events.jsonl`` /
     ``telemetry.jsonl`` 压得很狠,而这个包要经 WiFi 爬到手机上 —— 线上的
     字节比 Orin 的 CPU 贵。
@@ -124,6 +136,13 @@ def build_export(infos: Sequence[RunInfo], *, out_dir: Path | str,
         raise ExportError("这个区间里一趟归档都没有 —— 不打空包:"
                           "空包也能算出哈希、也能被确认,"
                           "那等于什么都没导出就走完了导出并释放这条链")
+    unsettled = tuple(i for i in infos if not i.settled)
+    if unsettled:
+        names = "、".join(f"{i.mission}/{i.path.name}" for i in unsettled)
+        raise ExportError(f"这一趟还在写,等它落地再导:{names}。现在打出来的是"
+                          f"半截包 —— 客户端重算的哈希照样对得上(对的是那个"
+                          f"半截包本身),确认之后原件就成了可删的,而剩下那"
+                          f"大半趟照片还没写进去,删掉就是真的没了")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     stem = f"export-{now.strftime(STAMP_FMT)}"
@@ -134,7 +153,9 @@ def build_export(infos: Sequence[RunInfo], *, out_dir: Path | str,
         name = f"{stem}-{serial}.zip"
         serial += 1
     target = out / name
-    tmp = target.with_suffix(".zip.tmp")
+    # 同上:临时名这次调用独有。两个人同一秒各导一个区间,固定的 ``.zip.tmp``
+    # 会让两条 zip 流写进同一个文件。
+    tmp = unique_tmp(target)
     keys: list[str] = []
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -200,10 +221,11 @@ def confirm_bundle(out_dir: Path | str, name: str, sha256: str, *,
     对不上说明路上掉了字节。那种时候删掉原件就是真的没了 —— 所以抛错,
     不写确认,不打标记。跟 §4.2「传成功 = 收方重算的哈希对上」同一个规矩。
 
-    对上了就给包里那些 run 打上 ``UPLOADED_REL`` 标记。**那个标记的含义是
-    "别处还有一份"**,一次哈希对上的人工导出跟一次成功的自动上传,在这件事
-    上完全等价。原目录已经不在了的跳过:包已经在客户手里,不能因为原件没了
-    就判确认失败。
+    对上了就给包里那些 run 打上 ``EXPORTED_REL`` 标记 —— **不是 ``UPLOADED_REL``**。
+    那个标记的含义是"传到**服务器**了",而这里发生的事是"拉到**客户手机**上了";
+    单机档下两者等价(判据是世界上还有没有第二份),有服务器的那一档下不等价,
+    混用会在回传断掉的那几天里删掉服务器上还没有的归档,见 ``retention._deletable``。
+    原目录已经不在了的跳过:包已经在客户手里,不能因为原件没了就判确认失败。
     """
     bundle = read_bundle(out_dir, name)
     given = sha256.strip().lower() if isinstance(sha256, str) else ""
@@ -218,5 +240,5 @@ def confirm_bundle(out_dir: Path | str, name: str, sha256: str, *,
         run = (root / key).resolve()
         # 侧写是我们自己写的,但它在盘上,改得动。越界的不碰。
         if run != root and run.is_relative_to(root) and run.is_dir():
-            mark_uploaded(run)
+            mark_exported(run)
     return bundle
