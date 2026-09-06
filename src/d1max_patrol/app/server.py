@@ -30,12 +30,14 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import sys
 import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -83,6 +85,16 @@ from d1max_patrol.engine.archive import (
     read_manifest,
     read_state,
 )
+from d1max_patrol.engine.baselines import BASELINE_DIR_NAME, baselines_bytes
+from d1max_patrol.engine.export import (
+    EXPORTS_DIR_NAME,
+    ExportError,
+    build_export,
+    confirm_bundle,
+    list_bundles,
+    pick_runs,
+    safe_name,
+)
 from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomeError, HomePoint, load_home, save_home
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine
@@ -98,6 +110,15 @@ from d1max_patrol.engine.removable import (
     DEFAULT_PROBE,
     RemovableProbe,
     scan_or_unknown,
+)
+from d1max_patrol.engine.retention import (
+    apply_sweep,
+    bytes_to_free,
+    forecast,
+    plan_sweep,
+    read_notice,
+    scan_runs,
+    write_notice,
 )
 from d1max_patrol.inspect.judge import (
     judge_run,
@@ -288,6 +309,35 @@ def _run_id(run_dir: Path) -> str:
     return f"{run_dir.parent.name}{RUN_SEP}{run_dir.name}"
 
 
+#: 下载导出包时一次读多少。包可以有好几个 G,不整个读进内存。
+_EXPORT_CHUNK = 1024 * 1024
+
+
+def _disk(path: Path) -> tuple[int, int]:
+    """(已用, 总量),字节。**目录还不存在就往上找。**
+
+    第一次开机时 ``runs/`` 是不存在的 —— 而"这块盘还剩多少"在那时候照样
+    有答案,不该因为还没跑过一趟就 500。
+    """
+    probe = Path(path).resolve()
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    usage = shutil.disk_usage(probe)
+    return usage.used, usage.total
+
+
+def _day(raw: Any, which: str) -> datetime:
+    """``YYYY-MM-DD`` -> 那天 UTC 零点。给导出区间用。"""
+    if not isinstance(raw, str):
+        raise HttpError(400, f"{which} 要是 YYYY-MM-DD 的字符串", repr(raw))
+    try:
+        day = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HttpError(400, f"{which} 不是 YYYY-MM-DD",
+                        f"{raw!r}: {exc}") from exc
+    return day.replace(tzinfo=timezone.utc)
+
+
 #: MJPEG 的响应头。``<img>`` 认这个,一帧一换。
 MJPEG_CONTENT_TYPE = f"multipart/x-mixed-replace; boundary={_BOUNDARY.decode()}"
 
@@ -387,6 +437,23 @@ class AppContext:
         ctx 再存一份,两份迟早不一样,而不一样的那天没有任何测试会红。
         """
         return self.engine.removable
+
+    @property
+    def baselines(self) -> Path:
+        """基线集在哪。**在 ``runs_root`` 旁边,不在里面。**
+
+        在里面它就活在那个被清扫器一遍遍扫过的目录树里 —— 今天 ``list_runs``
+        只认两层目录、扫不到它,但那是巧合,不是约定。
+
+        跟 ``form`` / ``removable`` 一样从别处推出来,**不另存一份字段**:
+        存了就有两个出处,而对不上的那天没有任何测试会红。
+        """
+        return Path(self.runs_root).parent / BASELINE_DIR_NAME
+
+    @property
+    def exports(self) -> Path:
+        """导出包放哪。理由同 :attr:`baselines`。"""
+        return Path(self.runs_root).parent / EXPORTS_DIR_NAME
 
 
 async def _preflight_with_scan(ctx: AppContext, mission: Mission,
@@ -702,6 +769,12 @@ class AppServer:
         self.route("GET", "/api/runs/<run_id>/report.<fmt>", self._run_report)
         self.route("POST", "/api/runs/<run_id>/judge", self._run_judge)
         self.route("POST", "/api/runs/<run_id>/review/<name>", self._run_review)
+        self.route("GET", "/api/storage", self._storage)
+        self.route("POST", "/api/storage/sweep", self._sweep)
+        self.route("GET", "/api/exports", self._exports)
+        self.route("POST", "/api/exports", self._export_new)
+        self.route("GET", "/api/exports/<name>", self._export_get)
+        self.route("POST", "/api/exports/<name>/confirm", self._export_confirm)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes, headers: Mapping[str, str] | None = None,
@@ -1236,10 +1309,15 @@ class AppServer:
         套进度上报,而现在还没有第二个人会同时点它。
 
         没配密钥不是错:照片会全标 ``pending``,页面照样列得出来,人自己看。
+
+        **判正常了才回写基线**(见 ``inspect.judge``)。判读通过的那张就是下一趟
+        的比对基准;判异常的不回写 —— 回写了的话下一趟拿异常比异常,模型说
+        "跟上次一样",异常就此静默转正。
         """
         run = self._run_dir(req.params["run_id"])
         try:
-            findings = judge_run(run, history_root=self._ctx.runs_root)
+            findings = judge_run(run, history_root=self._ctx.runs_root,
+                                 baselines_root=self._ctx.baselines)
         except OSError as exc:
             raise HttpError(500, "判读时读写归档失败", str(exc)) from exc
         self._stale_reports(run)
@@ -1261,6 +1339,175 @@ class AppServer:
             raise HttpError(500, "写复核失败", str(exc)) from exc
         self._stale_reports(run)
         return json_response({"reviews": read_reviews(run)})
+
+    # --------------------------------------------------- 盘况、预告、导出
+
+    def _storage(self, _req: Request) -> Response:
+        """盘还剩多少,以及"再过不久这些就要到期了"。
+
+        **看一眼盘况就算预告过了。** 这一卷里没有常驻的巡盘任务,人打开这一屏
+        是当前唯一一个"我们确实告诉过他"的时刻 —— 预告因此在这里落盘,7 天的
+        钟从落盘那一刻起走。``write_notice`` 对已有的那几条只读不写,所以刷新
+        页面不会把钟拨回去(拨得回去的话钟永远填不满,删除永远不会来,而那正好
+        是这套东西看起来在工作、实际上什么也没做的样子)。
+
+        **不过桥。** 桥管的是引擎状态,不是磁盘(见 ``app/bridge.py`` 开篇,
+        以及 ``_map_home_put`` 里那条一样的论证)。
+        """
+        ctx = self._ctx
+        now = datetime.now(timezone.utc)
+        used, total = _disk(ctx.runs_root)
+        ratio = (used / total) if total > 0 else 0.0
+        runs = scan_runs(ctx.runs_root, now=now)
+        fc = forecast(runs, now=now, used_ratio=ratio)
+        try:
+            # 第一次开机时 runs/ 还不存在,而预告要落在它下面。
+            Path(ctx.runs_root).mkdir(parents=True, exist_ok=True)
+            write_notice(ctx.runs_root, fc)
+        except OSError as exc:
+            raise HttpError(500, "预告记不下来", str(exc)) from exc
+        return json_response({
+            "used_bytes": used,
+            "total_bytes": total,
+            "used_ratio": ratio,
+            "runs_total": len(runs),
+            "runs_bytes": sum(r.size_bytes for r in runs),
+            "baselines_bytes": baselines_bytes(ctx.baselines),
+            "exports_bytes": sum(b.size_bytes for b in list_bundles(ctx.exports)),
+            "forecast": fc.to_wire(),
+        })
+
+    def _sweep(self, req: Request) -> Response:
+        """按水位删。**默认只给方案,不动盘** —— 真删要显式写 ``{"apply": true}``。
+
+        ``apply_sweep`` 里那行 ``shutil.rmtree`` 是全仓最危险的一行。这里做的
+        两件事是它的前提:一是默认不删,人先看名单再点第二下;二是名单只可能
+        来自 ``plan_sweep``,而 ``plan_sweep`` 从不把"还在写"的那一趟放进去。
+
+        ``free_bytes`` 是"至少腾出这么多",不给就按水位线算。现场常见的是人
+        自己知道要腾多少,而且给得出这个数 —— 这样清盘就不再取决于"这台机器
+        此刻用了百分之几"。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "清盘要一个对象",
+                            '形如 {"free_bytes": 2000000000, "apply": true}')
+        ctx = self._ctx
+        now = datetime.now(timezone.utc)
+        used, total = _disk(ctx.runs_root)
+        raw = body.get("free_bytes")
+        if raw is None:
+            need = bytes_to_free(used_bytes=used, total_bytes=total)
+        elif isinstance(raw, int) and not isinstance(raw, bool):
+            need = raw
+        else:
+            raise HttpError(400, "free_bytes 要是个整数", repr(raw))
+        sweep = plan_sweep(scan_runs(ctx.runs_root, now=now), now=now,
+                           has_upload=ctx.form.has_upload, need_bytes=need,
+                           noticed=read_notice(ctx.runs_root))
+        applied = bool(body.get("apply"))
+        deleted: tuple[Path, ...] = ()
+        if applied:
+            deleted = apply_sweep(sweep, runs_root=ctx.runs_root)
+        return json_response({
+            "applied": applied,
+            "need_bytes": need,
+            "deleted": [str(p) for p in deleted],
+            "sweep": sweep.to_wire(),
+        })
+
+    def _bundle_path(self, name: str) -> Path:
+        """URL 里的包名 -> 盘上的 zip。名字不合法 400,没有这个包 404。
+
+        两者必须分得开:400 是"你这个名字写错了",404 是"名字没问题,东西
+        不在了"。合成一个,人就查不出来是自己拼错了还是包被清掉了。
+        """
+        try:
+            safe = safe_name(name)
+        except ExportError as exc:
+            raise HttpError(400, "包名不合法", str(exc)) from exc
+        target = Path(self._ctx.exports) / safe
+        if not target.is_file():
+            raise HttpError(404, f"没有这个导出包:{safe}")
+        return target
+
+    def _exports(self, _req: Request) -> Response:
+        """列出盘上还留着的导出包,**新的在前**。"""
+        return json_response({
+            "exports": [b.to_wire() for b in list_bundles(self._ctx.exports)]})
+
+    def _export_new(self, req: Request) -> Response:
+        """打一个包。**同步打完再回**,理由跟 :meth:`_run_judge` 一条一样:
+        服务是多线程的,占住的只是这一条连接,而做成后台任务要多一套进度上报。
+
+        区间**左闭右开**,两头都是 UTC 那一天的零点 —— 人会一个月一个月地导,
+        左闭右开让相邻两个月既不重也不漏。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "导出要一个对象",
+                            '形如 {"start": "2026-08-01", "end": "2026-09-01"}')
+        start = _day(body.get("start"), "start")
+        end = _day(body.get("end"), "end")
+        if end <= start:
+            raise HttpError(400, "这个区间是空的",
+                            f"end({body.get('end')!r}) 不在 "
+                            f"start({body.get('start')!r}) 后面")
+        ctx = self._ctx
+        picked = pick_runs(scan_runs(ctx.runs_root), start=start, end=end)
+        try:
+            bundle = build_export(picked, out_dir=ctx.exports,
+                                  now=datetime.now(timezone.utc))
+        except ExportError as exc:
+            raise HttpError(400, "这个区间导不出来", str(exc)) from exc
+        except OSError as exc:
+            raise HttpError(500, "打包时读写失败", str(exc)) from exc
+        return json_response(bundle.to_wire())
+
+    def _export_get(self, req: Request) -> ByteStream:
+        """下载一个包。**分块吐,不整个读进内存** —— 一个月的照片可以好几个 G。
+
+        这条路上没有 ``Content-Length``(``ByteStream`` 不带),所以在 HTTP 这
+        一层看不出下载有没有被截断。这正是"确认"那一步要客户端**自己重算**
+        哈希的原因:截断的那半个包哈希一定对不上,而对不上就不放行。
+        """
+        target = self._bundle_path(req.params["name"])
+
+        def chunks() -> Iterator[bytes]:
+            with target.open("rb") as fh:
+                while True:
+                    block = fh.read(_EXPORT_CHUNK)
+                    if not block:
+                        return
+                    yield block
+
+        return ByteStream(chunks(), "application/zip")
+
+    def _export_confirm(self, req: Request) -> Response:
+        """客户端说它拿到了,并且自己重算的哈希是这个。**对上了才放行。**
+
+        对上之后包里那几趟就带上了"别处还有一份"的标记,水位删除从此动得了
+        它们。**这一步是自动删除的前提**(spec §4.6 第 2 条):没有导出通道的
+        自动删除,等于系统在单方面销毁客户的资产。
+
+        对不上抛 409 不抛 400:请求本身没写错,是包在路上掉了字节,重下一次
+        就可能对上。400 会让人回去查自己的参数,查不出来。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "确认要一个对象", '形如 {"sha256": "..."}')
+        ctx = self._ctx
+        # 先确认包在:名字错了是 400、包没了是 404,都不该被后面那个 409 盖掉。
+        self._bundle_path(req.params["name"])
+        try:
+            bundle = confirm_bundle(ctx.exports, req.params["name"],
+                                    str(body.get("sha256", "")),
+                                    runs_root=ctx.runs_root)
+        except ExportError as exc:
+            raise HttpError(409, "这个包对不上", str(exc)) from exc
+        except OSError as exc:
+            raise HttpError(500, "写确认失败", str(exc)) from exc
+        return json_response(bundle.to_wire())
 
     def _call(self, factory: Callable[[], Any], timeout_s: float = 10.0) -> Any:
         """过桥,并且把业务异常翻成 HTTP 状态。
