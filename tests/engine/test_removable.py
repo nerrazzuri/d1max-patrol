@@ -81,6 +81,39 @@ def test_一块镜像一块取走只拦取走那块():
     assert [d.mount for d in blocks_takeoff(disks)] == [Path("/media/u1")]
 
 
+# ------------------------------------------------- 镜像盘要验 SN(spec §7.6)
+
+
+def _mirror(sn: str = "") -> list[Removable]:
+    return [Removable(mount=Path("/media/mirror"), role=DiskRole.MIRROR, sn=sn)]
+
+
+def test_别的狗的镜像盘拦起飞():
+    """SN 记下来就是为了这一条 —— 只看 role 的话,A 狗的备份盘插到 B 狗上
+    一路绿灯,而写进去的数据从此串了台。"""
+    assert len(blocks_takeoff(_mirror("D1MAX-0002"),
+                              robot_sn="D1MAX-0001")) == 1
+
+
+def test_自己的镜像盘照样不拦():
+    assert blocks_takeoff(_mirror("D1MAX-0001"), robot_sn="D1MAX-0001") == ()
+
+
+def test_盘上没写SN的镜像盘放行():
+    """没写 SN 的那块盘不属于任何一只狗 —— 拦它防不住数据串台。"""
+    assert blocks_takeoff(_mirror(""), robot_sn="D1MAX-0001") == ()
+
+
+def test_本机没有身份时镜像盘一律放行():
+    """``fingerprint`` 读不出 SN 是合法工况(见 app/identity.py)。把这种狗
+    连自己的镜像盘都拦掉,是凭空造出来的一个新故障模式。"""
+    assert blocks_takeoff(_mirror("D1MAX-0002"), robot_sn="") == ()
+
+
+def test_不传robot_sn时跟以前一样只看角色():
+    assert blocks_takeoff(_mirror("D1MAX-0002")) == ()
+
+
 async def test_扫的是挂载点不是目录(tmp_path):
     # tmp_path 下造不出真挂载点,所以"是不是挂载点"这个判据必须可注入 ——
     # 那是这一层能被离机测到的唯一办法。

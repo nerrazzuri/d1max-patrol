@@ -171,9 +171,16 @@ def battery_ruling(ctx: SafetyContext) -> Ruling:
                       f"{ctx.policy.battery_abort_pct:.0f}%,原地停止")
     line = return_line_pct(ctx)
     if ctx.battery_pct < line:
+        # 这句话是这一关唯一给人的解释,**两支各说各的**。静态下限赢的时候
+        # 照印"中止线 + 回家",人读到的是"低于返航线 60%(中止线 25% +
+        # 回家 3%)"—— 25 加 3 不等于 60,站在狗旁边的人会以为程序算错了。
+        if line > ctx.policy.battery_abort_pct + ctx.return_cost_pct:
+            why = f"静态下限 {ctx.policy.battery_return_pct:.0f}%"
+        else:
+            why = (f"中止线 {ctx.policy.battery_abort_pct:.0f}% + 回家 "
+                   f"{ctx.return_cost_pct:.0f}%")
         return Ruling(Decision.RETURN_HOME,
                       f"电量 {ctx.battery_pct:.0f}% 低于返航线 {line:.0f}%"
-                      f"(中止线 {ctx.policy.battery_abort_pct:.0f}% + 回家 "
-                      f"{ctx.return_cost_pct:.0f}%),返航")
+                      f"({why}),返航")
     return Ruling(Decision.CONTINUE,
                   f"电量 {ctx.battery_pct:.0f}%,高于返航线 {line:.0f}%")

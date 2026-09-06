@@ -94,7 +94,11 @@ from d1max_patrol.engine.mission import (
     save_mission,
 )
 from d1max_patrol.engine.preflight import PreflightReport, run_preflight
-from d1max_patrol.engine.removable import DEFAULT_PROBE, RemovableProbe
+from d1max_patrol.engine.removable import (
+    DEFAULT_PROBE,
+    RemovableProbe,
+    scan_or_unknown,
+)
 from d1max_patrol.inspect.judge import (
     judge_run,
     read_findings,
@@ -393,14 +397,19 @@ async def _preflight_with_scan(ctx: AppContext, mission: Mission,
     收的是一个**协程工厂** —— 在 HTTP 线程上 await 它需要另一个事件循环。
     连在一个协程里交给桥,一次往返把两件事都办了。
 
+    ``scan_or_unknown`` 和 ``robot_sn=`` 都跟引擎那道 preflight 用同一份 ——
+    两条起飞路径判出不一样的结论,是这一卷最难查的一类错:页面上七项全绿,
+    狗起来之后自己中止了。
+
     **不扫就不能说没插。** 这里漏传 ``removable=`` 的后果不是少查一项,
     是页面上白得一项绿的:插着取走盘时 HTTP 这条路照样放行,狗起来之后
     引擎自己那道 preflight 才拦住,整趟 ABORT —— 操作员看到的是
     "七项全绿,然后狗自己中止了"。
     """
-    disks = await ctx.removable.scan()
     return await run_preflight(ctx.nav, ctx.device, mission, ctx.runs_root,
-                               home=home, form=ctx.form, removable=disks)
+                               home=home, form=ctx.form,
+                               removable=await scan_or_unknown(ctx.removable),
+                               robot_sn=ctx.identity.sn)
 
 
 # ------------------------------------------------------------------ 状态汇总

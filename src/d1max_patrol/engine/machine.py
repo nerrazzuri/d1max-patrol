@@ -38,10 +38,19 @@ from d1max_patrol.backends.base import (
 )
 from d1max_patrol.engine.archive import RunArchive
 from d1max_patrol.engine.form import STANDALONE, Form
-from d1max_patrol.engine.homing import HomePoint, estimate_cost_pct
+from d1max_patrol.engine.homing import (
+    DEFAULT_RETURN_PARAMS,
+    HomePoint,
+    ReturnParams,
+    estimate_cost_pct,
+)
 from d1max_patrol.engine.mission import Action, Mission, MissionWaypoint
 from d1max_patrol.engine.preflight import PreflightReport, run_preflight
-from d1max_patrol.engine.removable import DEFAULT_PROBE, RemovableProbe
+from d1max_patrol.engine.removable import (
+    DEFAULT_PROBE,
+    RemovableProbe,
+    scan_or_unknown,
+)
 from d1max_patrol.engine.safety import (
     Decision,
     Ruling,
@@ -202,7 +211,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                  *, clock: Callable[[], float] = time.monotonic,
                  fingerprint: Mapping[str, Any] | None = None,
                  form: Form = STANDALONE,
-                 removable: RemovableProbe = DEFAULT_PROBE) -> None:
+                 removable: RemovableProbe = DEFAULT_PROBE,
+                 return_params: ReturnParams = DEFAULT_RETURN_PARAMS) -> None:
         super().__init__()
         self._nav = nav
         self._device = device
@@ -212,6 +222,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         self._fingerprint = dict(fingerprint or {})
         self._form = form
         self._removable = removable
+        self._return_params = return_params
         self._queue: asyncio.Queue[Any] = asyncio.Queue()
         self._state = RunState.IDLE
         self._seen: set[RunState] = set()
@@ -263,6 +274,16 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         一个出处,两份迟早不一样,而不一样的那天没有任何测试会红。
         """
         return self._removable
+
+    @property
+    def return_params(self) -> ReturnParams:
+        """把"还有多远"换算成"还要多少电"的那四个系数。**按进程定,只读。**
+
+        出发线和飞行中的返航线必须用**同一份**:这四个数是这一卷唯一待真机
+        标定的,标定落地那天只换一处的话,两条线就开始用两套系数 —— 而今天
+        两边都是默认值,不一样的那天没有任何测试会红。
+        """
+        return self._return_params
 
     def add_busy_check(self, check: Callable[[], str]) -> None:
         """登记一个"本体现在被别人占着吗"的检查。返回占用原因,空串表示没占。
@@ -402,11 +423,14 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         assert live is not None
         try:
             await self._transition(RunState.PREFLIGHT)
-            disks = await self._removable.scan()
             report = await run_preflight(self._nav, self._device,
                                          live.mission, self._runs_root,
                                          home=self._home, form=self._form,
-                                         removable=disks)
+                                         removable=await scan_or_unknown(
+                                             self._removable),
+                                         return_params=self._return_params,
+                                         robot_sn=self._fingerprint.get(
+                                             "robot_sn", ""))
             self._note("preflight", ok=report.ok,
                        checks=[{"name": c.name, "ok": c.ok, "detail": c.detail}
                                for c in report.checks])
@@ -627,6 +651,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         没标原点时返回 0,由 ``return_line_pct`` 退回静态返航线。
         起飞门槛(``preflight``)那一关会先把"没标原点"拦下来,所以跑到这里
         还没有原点,只可能是有人绕过了门槛。
+
+        **系数用 ``self._return_params``,跟出发线那条用的是同一份。**
+        写死 ``DEFAULT_RETURN_PARAMS`` 的话,标定落地那天出发线换成了实测值,
+        飞行中的返航线还留在默认值上。
         """
         live = self._live
         home = self._home
@@ -634,7 +662,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             return 0.0
         index = min(live.index, len(live.mission.waypoints) - 1)
         here = live.mission.waypoints[index].pose
-        return estimate_cost_pct(home.pose.distance_to(here))
+        return estimate_cost_pct(home.pose.distance_to(here),
+                                 self._return_params)
 
     def _context(self) -> SafetyContext:
         live = self._live

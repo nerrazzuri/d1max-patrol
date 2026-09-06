@@ -25,7 +25,7 @@ from d1max_patrol.engine.homing import (
     route_length_m,
 )
 from d1max_patrol.engine.mission import Mission
-from d1max_patrol.engine.removable import Removable, blocks_takeoff
+from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff
 from d1max_patrol.engine.storage import storage_verdict
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
 
@@ -129,10 +129,19 @@ def departure_line_pct(mission: Mission, home: HomePoint, *,
     那一刻手上还剩多少",而那个数就是中止线 —— 低于它狗本来就该趴下。
 
     这样这条线才解释得清:**出发时的电,够走完全程,回到家时还高于中止线。**
+
+    **出发线必须同时高过返航线的两支。** 返航线是
+    ``max(battery_return_pct, 中止线 + 回家成本)``(见 ``safety.return_line_pct``)
+    —— 上面那条式子只压过了动态那一支,静态那一支(``battery_return_pct``)
+    完全没进来。而 ``abort=25 / return=60`` 这组参数是过得了 ``Mission``
+    校验的(它只查 ``abort <= return``):出发线算出来 29.5%,返航线 60%,
+    30% 的电能起飞,第一帧电量遥测到达就该返航 —— **刚起飞就该回来。**
+    所以这里再取一次 ``max``。
     """
     poses = [w.pose for w in mission.waypoints]
     cost = estimate_cost_pct(route_length_m(home.pose, poses), params)
-    return mission.policy.battery_abort_pct + cost * slack
+    return max(mission.policy.battery_return_pct,
+               mission.policy.battery_abort_pct + cost * slack)
 
 
 async def _check_battery(device: DeviceBackend, mission: Mission,
@@ -151,7 +160,8 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
                        f"电量 {pct:.1f}%,出发线 {line:.1f}%" if ok
                        else f"电量 {pct:.1f}%,不到出发线 {line:.1f}%"
                             f"(中止线 {mission.policy.battery_abort_pct:.0f}% + "
-                            f"全程预计 × {slack:g})")
+                            f"全程预计 × {slack:g},且不低于返航线的静态下限 "
+                            f"{mission.policy.battery_return_pct:.0f}%)")
 
 
 def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
@@ -182,8 +192,10 @@ def _check_storage(runs_root: Path, min_free_mb: float, form: Form,
     return CheckResult("storage", verdict.ok, verdict.detail)
 
 
-def _check_removable(disks: Sequence[Removable] | None) -> CheckResult:
-    """认到外插的取走盘就不许出发(spec §7.5)。
+def _check_removable(disks: Sequence[Removable] | None,
+                     robot_sn: str = "") -> CheckResult:
+    """认到外插的取走盘就不许出发(spec §7.5),别的狗的镜像盘也拦
+    (spec §7.6)。
 
     跟盘水位一样是个 start gate,狗自己看得见、自己拦。
 
@@ -197,13 +209,22 @@ def _check_removable(disks: Sequence[Removable] | None) -> CheckResult:
         return CheckResult("removable", False,
                            "没扫过外插盘,不放行 —— 认不出插着什么,"
                            "就不能说没插")
-    blocking = blocks_takeoff(disks)
+    blocking = blocks_takeoff(disks, robot_sn=robot_sn)
     if not blocking:
         return CheckResult("removable", True,
                            f"没有外插的取走盘(共认到 {len(disks)} 块)")
     # 挂载点永远是 Linux 路径(/media、/mnt),用 as_posix() 而不是 str():
     # 后者在 Windows 开发机上跑测试时会把 "/media/u1" 印成 "\media\u1"。
     names = ", ".join(d.mount.as_posix() for d in blocking)
+    # 别的狗的镜像盘要单独说一句:那块盘是装在机器内部的,照着"拔下来"这句
+    # 话去找,人会在外面找一块根本不在外面的盘。它的病也不是杠杆,是串台。
+    strangers = [d for d in blocking if d.role is DiskRole.MIRROR]
+    if strangers:
+        which = ", ".join(f"{d.mount.as_posix()}(SN {d.sn})" for d in strangers)
+        return CheckResult("removable", False,
+                           f"还插着盘: {names} —— 其中 {which} 是别的狗的"
+                           f"镜像盘,这台狗是 {robot_sn};接着跑会把两只狗的"
+                           f"数据写到一块盘上")
     return CheckResult("removable", False,
                        f"还插着盘: {names} —— 拔下来再出发。"
                        f"盘挂在走动的狗身上是个杠杆,先坏的是接口")
@@ -229,6 +250,7 @@ async def run_preflight(nav: NavBackend, device: DeviceBackend,
                         form: Form = STANDALONE,
                         last_upload_age_days: float | None = None,
                         removable: Sequence[Removable] | None = None,
+                        robot_sn: str = "",
                         ) -> PreflightReport:
     """全项全查,顺序固定,**一项都不跳**。
 
@@ -251,5 +273,5 @@ async def run_preflight(nav: NavBackend, device: DeviceBackend,
                                      last_upload_age_days))
     except Exception as exc:  # noqa: BLE001 - 同 _guard
         checks.append(CheckResult("storage", False, str(exc)))
-    checks.append(_check_removable(removable))
+    checks.append(_check_removable(removable, robot_sn))
     return PreflightReport(tuple(checks))

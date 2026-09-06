@@ -27,7 +27,7 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
 )
 from d1max_patrol.engine.archive import read_events, read_manifest, read_state
-from d1max_patrol.engine.homing import HomePoint
+from d1max_patrol.engine.homing import HomePoint, ReturnParams
 from d1max_patrol.engine.machine import MissionEngine, RunState
 from d1max_patrol.engine.mission import Action, MissionWaypoint, Policy
 from d1max_patrol.protocol.nav_frames import AlgErrorItem
@@ -39,7 +39,7 @@ from d1max_patrol.protocol.nav_types import (
     Pose,
 )
 
-from ..conftest import NoDisks
+from ..conftest import BadDisks, NoDisks
 from .conftest import make_mission
 
 ARRIVED = [NavStatusEvent(NavStatus.SUCCEED)]
@@ -317,6 +317,30 @@ async def test_检查结果整份进事件流(make_engine, sample_mission, devic
         "removable"]
 
 
+async def test_扫盘炸了不掀翻整份报告(make_engine, sample_mission):
+    """``scan`` 在 ``run_preflight`` 的 ``_guard`` 保护圈外面。
+
+    ``root.iterdir()`` 权限不对是 ``PermissionError``,``entry.is_dir()``
+    撞上 stale mount 是 ``OSError`` —— 真炸了就走 ``_run`` 的兜底,整趟
+    ABORTED +"引擎内部异常",而 preflight 那条事件压根没写:归档里一项
+    检查结论都没有,人不知道该修哪儿。
+    """
+    engine = make_engine(removable=BadDisks())
+    assert await run_to_end(engine, sample_mission) is RunState.ABORTED
+    pre = [e for e in read_events(engine.archive.path) if e["kind"] == "preflight"]
+    assert len(pre) == 1, "扫盘炸了也要把这份报告写出来"
+    checks = {c["name"]: c for c in pre[0]["checks"]}
+    assert [c["name"] for c in pre[0]["checks"]] == [
+        "nav_ready", "device_ready", "localized", "home", "battery", "storage",
+        "removable"]
+    assert not checks["removable"]["ok"]
+    assert all(checks[n]["ok"] for n in
+               ("nav_ready", "device_ready", "localized", "home", "battery",
+                "storage")), "最该拦住的那块盘不能反过来把别的六项也带下水"
+    assert "起飞前检查未通过" in engine.snapshot.reason
+    assert "引擎内部异常" not in engine.snapshot.reason
+
+
 async def test_定位没收敛就等等不到就中止(make_engine, nav, monkeypatch):
     import d1max_patrol.engine.machine as machine
 
@@ -491,6 +515,45 @@ async def test_电量到中止线就原地停不返航(make_engine, nav, device)
     device.emit(BatteryEvent(percent=5.0))
     assert await engine.wait_done(timeout_s=5.0) is RunState.ABORTED
     assert nav.home_calls == 0, "撑着走回去可能半路趴在外面,原地停下更好找"
+    await engine.aclose()
+
+
+async def test_飞行中的返航成本用的是引擎自己那份标定系数(make_engine, nav, device):
+    """出发线和飞行中的返航线必须用**同一份**系数。
+
+    这四个数是这一卷唯一待真机标定的。写死 ``DEFAULT_RETURN_PARAMS`` 的话,
+    标定落地那天出发线换成了实测值,飞行中的返航线还留在默认值上,而今天
+    两边都是默认值 —— 不一样的那天没有任何测试会红。
+
+    ``floor_pct=20`` 把回家成本顶到 20:返航线 15 + 20 = 35,35% 的电就该
+    掉头;默认的 3.0 算出来是 18,同样的电只会 CONTINUE。
+    """
+    nav.on_goto = NEVER
+    engine = make_engine(return_params=ReturnParams(floor_pct=20.0))
+    assert engine.return_params.floor_pct == 20.0
+    await engine.start(make_mission(policy=policy(battery_abort_pct=15.0,
+                                                  battery_return_pct=15.0)),
+                       home=_HOME)
+    await until(lambda: nav.goto_calls)
+    device.emit(BatteryEvent(percent=30.0))
+    assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
+    assert nav.home_calls == 1, "标定系数没传下去的话,30% 还够继续跑"
+    await engine.aclose()
+
+
+async def test_默认系数下同样的电还够继续跑(make_engine, nav, device):
+    """上一条的对照组 —— 不然它测的可能只是"30% 本来就该返航"。"""
+    nav.on_goto = NEVER
+    engine = make_engine()
+    await engine.start(make_mission(policy=policy(battery_abort_pct=15.0,
+                                                  battery_return_pct=15.0)),
+                       home=_HOME)
+    await until(lambda: nav.goto_calls)
+    device.emit(BatteryEvent(percent=30.0))
+    await asyncio.sleep(0.05)
+    assert nav.home_calls == 0
+    await engine.abort("测完了")
+    await engine.wait_done(timeout_s=5.0)
     await engine.aclose()
 
 

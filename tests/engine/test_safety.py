@@ -224,6 +224,25 @@ def test_返航的理由里要说清楚是按多远算的():
     assert "33" in reason, "人要能从这句话里看出返航线当时是多少"
 
 
+def test_动态那一支赢的时候理由里报的是中止线加回家():
+    ctx = SafetyContext(policy=Policy(battery_return_pct=25.0, battery_abort_pct=25.0),
+                        battery_pct=30.0, return_cost_pct=8.0)
+    reason = battery_ruling(ctx).reason
+    assert "中止线 25% + 回家 8%" in reason
+
+
+def test_静态下限赢的时候理由里不能再报中止线加回家():
+    """"低于返航线 60%(中止线 25% + 回家 3%)"—— 25 加 3 不等于 60。
+
+    这句话是这一关唯一给人的解释,站在狗旁边的人读到它会以为程序算错了。
+    """
+    ctx = SafetyContext(policy=Policy(battery_return_pct=60.0, battery_abort_pct=25.0),
+                        battery_pct=50.0, return_cost_pct=3.0)
+    reason = battery_ruling(ctx).reason
+    assert "静态下限 60%" in reason
+    assert "回家" not in reason, "静态下限赢的时候,回家成本没参与这条线"
+
+
 def test_返航成本没喂进来时退回静态返航线():
     # return_cost_pct 默认 0 —— 那不是"回家不要钱",是"还没算出来"。
     # 这时必须退回静态那条线,不能算出一条比中止线还低的返航线。

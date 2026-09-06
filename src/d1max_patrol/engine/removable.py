@@ -112,6 +112,45 @@ class MountRootProbe:
 DEFAULT_PROBE = MountRootProbe()
 
 
-def blocks_takeoff(disks: Sequence[Removable]) -> tuple[Removable, ...]:
-    """哪些盘拦起飞。**镜像盘不拦,别的都拦。**"""
-    return tuple(d for d in disks if d.role is not DiskRole.MIRROR)
+async def scan_or_unknown(probe: RemovableProbe) -> tuple[Removable, ...] | None:
+    """扫一遍外插盘,**炸了就当作"认不出插着什么"**。
+
+    这一步在 ``run_preflight`` 的 ``_guard`` 保护圈**外面**:``read_role``
+    特意做成永不抛,但 ``scan`` 自己还会抛 —— ``root.iterdir()`` 权限不对是
+    ``PermissionError``,``entry.is_dir()`` 撞上 stale mount 是 ``OSError``。
+    真炸了,调用方那一层的兜底会把整趟变成"引擎内部异常",而那份七项的
+    检查报告压根没写出来 —— 归档里一项结论都没有,人不知道该修哪儿。
+
+    回 ``None`` 的语义是"没扫过"(见 ``preflight._check_removable``):
+    removable 这一项干净地没过,其余六项照常出结论。**最该拦住的那块盘不能
+    反过来把检查炸了。**
+
+    两条起飞路径(引擎自己那道、HTTP 那道)都过这一个函数 —— 一处判得出、
+    另一处炸掉的话,页面上和归档里就会各说各话。
+    """
+    try:
+        return tuple(await probe.scan())
+    except OSError:
+        return None
+
+
+def blocks_takeoff(disks: Sequence[Removable], *,
+                   robot_sn: str = "") -> tuple[Removable, ...]:
+    """哪些盘拦起飞。**镜像盘不拦,别的都拦;别的狗的镜像盘也拦。**
+
+    SN 记下来就是为了这一条(spec §7.6):把 A 狗的备份盘插到 B 狗上,
+    role 上写的还是 ``mirror``,只看 role 的话它一路绿灯,而写进去的数据
+    从此串了台。
+
+    **只在两边的 SN 都知道、而且不相等时才拦。** 任一边为空一律放行:
+
+    - §7.5 那条物理杠杆风险已经被"非镜像盘一律拦"兜住了,SN 这一条防的是
+      **数据串台**,不是飞行安全 —— 不必按"不确定不放行"来办。
+    - 没有身份的狗(``fingerprint`` 读不出 SN)是合法工况。把它连自己的
+      镜像盘都拦掉,是凭空造出来的一个新故障模式。
+
+    代价是一块没写 SN 的镜像盘会放行 —— 但那块盘也不属于任何一只狗。
+    """
+    return tuple(d for d in disks
+                 if d.role is not DiskRole.MIRROR
+                 or (robot_sn and d.sn and d.sn != robot_sn))

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
@@ -19,7 +20,7 @@ import pytest
 from d1max_patrol.engine.machine import RunState
 from d1max_patrol.engine.removable import DiskRole, Removable
 from tests.app import conftest as C
-from tests.conftest import SomeDisks
+from tests.conftest import BadDisks, SomeDisks
 
 # --------------------------------------------------------------------- 小工具
 
@@ -265,6 +266,47 @@ def test_插着取走盘时HTTP这条路也拦得住(server_with_disk):
     bad = next(c for c in err["checks"] if c["name"] == "removable")
     assert not bad["ok"], "插着取走盘,这一项不能是绿的"
     assert "/media/u1" in bad["detail"]
+
+
+def test_扫盘炸了也回一份完整的报告而不是500(bridge, tmp_path):
+    """扫盘那一步在 ``run_preflight`` 的 ``_guard`` 保护圈外面。
+
+    炸了的话 HTTP 这条路给的是 500 "服务器内部错误",人只能去翻日志;
+    而该给的是一份七项齐全、removable 那一项没过的报告。
+    """
+    ctx = C.make_ctx(bridge, tmp_path, removable=BadDisks())
+    s = C.AppServer(ctx, port=0)
+    s.start()
+    try:
+        assert _put(s, "/api/missions/巡检一号", _mission())[0] == 200
+        err = get_err(s, "/api/missions/巡检一号/run", 409, method="POST",
+                      payload={})
+        assert [c["name"] for c in err["checks"]] == [
+            "nav_ready", "device_ready", "localized", "home", "battery",
+            "storage", "removable"]
+        bad = next(c for c in err["checks"] if c["name"] == "removable")
+        assert not bad["ok"] and "没扫过" in bad["detail"]
+    finally:
+        s.stop()
+
+
+def test_别的狗的镜像盘HTTP这条路也拦得住(bridge, tmp_path):
+    """两条起飞路径的结论必须一样 —— 引擎那道传了 ``robot_sn``,这道不传的话,
+    别的狗的镜像盘在页面上是绿的、狗自己起来才拦。"""
+    ctx = C.make_ctx(bridge, tmp_path, removable=SomeDisks(
+        Removable(mount=Path("/media/mirror"), role=DiskRole.MIRROR,
+                  sn="D1MAX-0002")))
+    ctx.identity = replace(ctx.identity, sn="D1MAX-0001")
+    s = C.AppServer(ctx, port=0)
+    s.start()
+    try:
+        assert _put(s, "/api/missions/巡检一号", _mission())[0] == 200
+        err = get_err(s, "/api/missions/巡检一号/run", 409, method="POST",
+                      payload={})
+        bad = next(c for c in err["checks"] if c["name"] == "removable")
+        assert not bad["ok"] and "别的狗" in bad["detail"]
+    finally:
+        s.stop()
 
 
 def test_起一个不存在的任务给404(server):

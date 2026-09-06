@@ -8,7 +8,7 @@ import pytest
 
 from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomePoint, ReturnParams
-from d1max_patrol.engine.mission import MissionWaypoint
+from d1max_patrol.engine.mission import MissionWaypoint, Policy
 from d1max_patrol.engine.preflight import departure_line_pct, run_preflight
 from d1max_patrol.engine.removable import DiskRole, Removable
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
@@ -215,6 +215,35 @@ async def test_出发线随着路线变长而升高(sample_mission):
     assert departure_line_pct(far, _HOME) > departure_line_pct(sample_mission, _HOME)
 
 
+async def test_出发线不会低于返航线的静态下限():
+    """**刚起飞就该返航**是这条线最难看的一种失败。
+
+    ``abort=25 / return=60`` 过得了 ``Mission`` 的校验(它只查
+    ``abort <= return``)。只算"中止线 + 全程预计 × 1.5"的话出发线是 29.5%,
+    而返航线是 60% —— 30% 的电能过起飞门槛,第一帧电量遥测到达就 RETURN_HOME。
+    """
+    m = make_mission(policy=Policy(battery_abort_pct=25.0,
+                                   battery_return_pct=60.0))
+    assert departure_line_pct(m, _HOME) == pytest.approx(60.0)
+
+
+async def test_静态下限低的时候还是动态那一支说了算():
+    """两支取 max —— 加上静态那一支不能把动态那一支盖掉。"""
+    m = make_mission(policy=Policy(battery_abort_pct=25.0,
+                                   battery_return_pct=26.0))
+    assert departure_line_pct(m, _HOME) > 26.0
+
+
+async def test_电量卡在静态下限上就不让起飞(tmp_path, fake_nav, fake_device):
+    """从 ``run_preflight`` 那一头查:这条线得真拦住,不只是纯函数算得对。"""
+    m = make_mission(policy=Policy(battery_abort_pct=25.0,
+                                   battery_return_pct=60.0))
+    fake_device.batt = 30.0
+    r = await _run(fake_nav, fake_device, m, tmp_path)
+    assert [c.name for c in r.failures] == ["battery"]
+    assert "60" in r.failures[0].detail
+
+
 async def test_出发线里带得出中止线那一份(sample_mission):
     # 走完全程回到家的那一刻,手上还得高于中止线 —— 这是出发线的地板。
     assert (departure_line_pct(sample_mission, _HOME)
@@ -273,6 +302,27 @@ async def test_没插盘的时候这一项也说得出话(tmp_path, sample_missi
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     detail = next(c.detail for c in r.checks if c.name == "removable")
     assert "共认到 0 块" in detail
+
+
+async def test_别的狗的镜像盘也拦得住(tmp_path, sample_mission, fake_nav,
+                                      fake_device):
+    """``robot_sn`` 要真传到 ``blocks_takeoff`` 那儿去,不是关起门来测纯函数。"""
+    disks = [Removable(mount=Path("/media/mirror"), role=DiskRole.MIRROR,
+                       sn="D1MAX-0002")]
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path,
+                   removable=disks, robot_sn="D1MAX-0001")
+    assert [c.name for c in r.failures] == ["removable"]
+    assert "别的狗" in r.failures[0].detail
+    assert "D1MAX-0002" in r.failures[0].detail, "得说清是哪块盘"
+
+
+async def test_自己的镜像盘照样放行(tmp_path, sample_mission, fake_nav,
+                                    fake_device):
+    disks = [Removable(mount=Path("/media/mirror"), role=DiskRole.MIRROR,
+                       sn="D1MAX-0001")]
+    r = await _run(fake_nav, fake_device, sample_mission, tmp_path,
+                   removable=disks, robot_sn="D1MAX-0001")
+    assert r.ok
 
 
 async def test_没扫过盘跟没插盘不是一回事(tmp_path, sample_mission, fake_nav,
