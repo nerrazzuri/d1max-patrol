@@ -85,6 +85,16 @@ from d1max_patrol.engine.archive import (
     read_manifest,
     read_state,
 )
+from d1max_patrol.engine.backup import (
+    BackupError,
+    TargetStatus,
+    apply_sync,
+    eject,
+    init_target,
+    plan_sync,
+    resolve_targets,
+)
+from d1max_patrol.engine.backup import read_state as read_backup_state
 from d1max_patrol.engine.baselines import BASELINE_DIR_NAME, baselines_bytes
 from d1max_patrol.engine.export import (
     EXPORTS_DIR_NAME,
@@ -108,6 +118,8 @@ from d1max_patrol.engine.mission import (
 from d1max_patrol.engine.preflight import PreflightReport, run_preflight
 from d1max_patrol.engine.removable import (
     DEFAULT_PROBE,
+    DiskRole,
+    Removable,
     RemovableProbe,
     scan_or_unknown,
 )
@@ -671,6 +683,11 @@ class AppServer:
         self._thread: threading.Thread | None = None
         self._hub = _StateHub(ctx)
         self._routes: list[_Route] = []
+        #: 哪几个挂载点上正跑着同步。**这是 HTTP 这一侧的状态**(哪几个请求
+        #: 在飞),不是引擎状态 —— 引擎压根不知道备份这回事。服务是
+        #: ThreadingHTTPServer,两个请求真的会同时进来,所以要锁。
+        self._syncing: set[str] = set()
+        self._sync_lock = threading.Lock()
         self._register_routes()
 
     # ------------------------------------------------------------ 生命周期
@@ -775,6 +792,10 @@ class AppServer:
         self.route("POST", "/api/exports", self._export_new)
         self.route("GET", "/api/exports/<name>", self._export_get)
         self.route("POST", "/api/exports/<name>/confirm", self._export_confirm)
+        self.route("GET", "/api/backup/targets", self._backup_targets)
+        self.route("POST", "/api/backup/init", self._backup_init)
+        self.route("POST", "/api/backup/sync", self._backup_sync)
+        self.route("POST", "/api/backup/eject", self._backup_eject)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes, headers: Mapping[str, str] | None = None,
@@ -1531,6 +1552,141 @@ class AppServer:
         except OSError as exc:
             raise HttpError(500, "写确认失败", str(exc)) from exc
         return json_response(bundle.to_wire())
+
+    def _scan_targets(self) -> tuple[list[TargetStatus] | None, str]:
+        """狗现在认到哪些盘、各自能不能拿来备份。
+
+        **过桥,但不是因为它碰引擎状态。** ``RemovableProbe.scan`` 是个协程,
+        在 HTTP 线程上 await 它需要一个事件循环,而 ``_call``(桥上那个,不是
+        本类的 ``_call``)收的正是一个**协程工厂** —— 理由跟
+        ``_preflight_with_scan`` 一模一样,跟单门不变量无关。下面那三个纯
+        文件 I/O 的处理器因此**不过桥**。
+
+        回 ``(None, 一句话)`` 表示没扫成。认不出插着什么不等于这一屏该消失:
+        人正是在盘出事的时候来看它的。
+        """
+        ctx = self._ctx
+        disks: tuple[Removable, ...] | None = ctx.bridge.call(
+            lambda: scan_or_unknown(ctx.removable))
+        if disks is None:
+            return None, ("认不出现在插着什么盘 —— 扫挂载点的时候出错了"
+                          "(权限不对,或者有一个挂载点已经失效)。"
+                          "备份不受影响:认不出来就什么也不写")
+        return list(resolve_targets(disks, robot_sn=ctx.identity.sn)), ""
+
+    def _pick(self, req: Request) -> TargetStatus:
+        """从请求体里取挂载点,**必须是刚扫到的那几块之一**。
+
+        这个 ``mount`` 来自外面。不核对的那一边,一个 POST 就能让狗往它文件
+        系统上的任意路径写一个标记文件,或者对着任意目录跑一次"只增不删"的
+        拷贝。核对是这一层唯一的边界。
+        """
+        raw = req.json()
+        if not isinstance(raw, dict):
+            raise HttpError(400, "要一个对象", '形如 {"mount": "/media/u1"}')
+        want = raw.get("mount")
+        if not isinstance(want, str) or not want:
+            raise HttpError(400, "要带上 mount")
+        targets, why = self._scan_targets()
+        if targets is None:
+            raise HttpError(503, why)
+        for t in targets:
+            if t.mount.as_posix() == want:
+                return t
+        raise HttpError(404, f"现在没认到 {want} 这块盘 —— 拔掉了,"
+                             f"或者根本没挂上")
+
+    def _backup_targets(self, _req: Request) -> Response:
+        """狗现在认到哪些备份盘。**这一屏就是 spec §7.6 那句"app 看见的
+        不是备份盘,是狗看见的备份盘"。**
+
+        推论:**没有手机在场的时候同步照常进行。** 这几个接口都不是同步的
+        发起条件,只是它的一个入口。
+
+        **不过桥**,除了里面那一处扫盘(``_scan_targets`` 自己会过);算容量、
+        读同步进度、排同步方案全是纯文件 I/O,不碰引擎状态。
+        """
+        ctx = self._ctx
+        targets, why = self._scan_targets()
+        if targets is None:
+            return json_response({"robot_sn": ctx.identity.sn, "scanned": False,
+                                  "targets": [], "detail": why})
+        out = []
+        for t in targets:
+            used, total = _disk(t.mount)
+            row = t.to_wire() | {"total_bytes": total,
+                                 "free_bytes": max(0, total - used),
+                                 "last_sync_ms": 0, "behind": 0,
+                                 "behind_bytes": 0}
+            if t.usable:
+                state = read_backup_state(t.mount, robot_sn=ctx.identity.sn)
+                plan = plan_sync(ctx.runs_root, t.mount,
+                                 robot_sn=ctx.identity.sn)
+                row |= {"last_sync_ms": state.last_sync_ms,
+                        "behind": plan.behind,
+                        "behind_bytes": plan.behind_bytes}
+            out.append(row)
+        return json_response({"robot_sn": ctx.identity.sn, "scanned": True,
+                              "targets": out, "detail": ""})
+
+    def _backup_init(self, req: Request) -> Response:
+        """把一块盘认成这台狗的备份盘。**不过桥** —— 纯文件 I/O。"""
+        ctx = self._ctx
+        target = self._pick(req)
+        # ``_pick`` 已经验证过请求体是个 dict,这里是同一份 bytes 再解一遍。
+        raw = req.json()
+        want = raw.get("role")
+        try:
+            role = DiskRole(want)
+        except ValueError:
+            raise HttpError(400, f"role 只能是 mirror 或 transfer,给的是"
+                                 f" {want!r}") from None
+        label = raw.get("label", "")
+        try:
+            got = init_target(target.mount, robot_sn=ctx.identity.sn, role=role,
+                              label=label if isinstance(label, str) else "",
+                              now_ms=int(time.time() * 1000))
+        except BackupError as exc:
+            # 409 而不是 400:请求本身没毛病,是盘上已经有东西了。
+            raise HttpError(409, str(exc)) from exc
+        return json_response(got.to_wire())
+
+    def _backup_sync(self, req: Request) -> Response:
+        """同步一次。**默认只给方案,真跑要显式 ``{"apply": true}``** ——
+        跟 ``/api/storage/sweep`` 同一条纪律:人先看名单,再点第二下。
+
+        **不过桥**,纯文件 I/O。
+        """
+        ctx = self._ctx
+        target = self._pick(req)
+        if not target.usable:
+            raise HttpError(409, target.detail)
+        key = target.mount.as_posix()
+        plan = plan_sync(ctx.runs_root, target.mount, robot_sn=ctx.identity.sn)
+        # ``_pick`` 已经验证过请求体是个 dict,这里是同一份 bytes 再解一遍。
+        applied = bool(req.json().get("apply"))
+        if not applied:
+            return json_response({"applied": False, "plan": plan.to_wire()})
+        with self._sync_lock:
+            if key in self._syncing:
+                raise HttpError(409, "这块盘上已经有一轮同步在跑了")
+            self._syncing.add(key)
+        try:
+            res = apply_sync(plan, now_ms=int(time.time() * 1000),
+                             robot_sn=ctx.identity.sn)
+        finally:
+            with self._sync_lock:
+                self._syncing.discard(key)
+        return json_response({"applied": True, "plan": plan.to_wire(),
+                              "result": res.to_wire()})
+
+    def _backup_eject(self, req: Request) -> Response:
+        """安全弹出。**不过桥**,纯文件 I/O。"""
+        target = self._pick(req)
+        key = target.mount.as_posix()
+        with self._sync_lock:
+            busy = key in self._syncing
+        return json_response(eject(target.mount, busy=busy).to_wire())
 
     def _call(self, factory: Callable[[], Any], timeout_s: float = 10.0) -> Any:
         """过桥,并且把业务异常翻成 HTTP 状态。
