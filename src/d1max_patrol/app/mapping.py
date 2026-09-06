@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from d1max_patrol.app.procs import ProcError, ProcManager, ProcSpec
+from d1max_patrol.engine.homing import forget_home
 
 #: 录包录哪几个话题。逐字照抄文档 §2 (a)。
 RECORD_TOPICS: tuple[str, ...] = (
@@ -207,6 +208,10 @@ class MappingOrchestrator:
         self._map_id = map_id
         self._error = ""
         self._cfg.maps_dir.mkdir(parents=True, exist_ok=True)
+        # 坐标系要被重建了,标在旧坐标系上的原点从这一刻起就是错的。
+        # 放在**开始之前**作废:重建崩在半路时图可能已经覆盖了一半,
+        # 那时候留着旧原点是最坏的一种。
+        forget_home(self._cfg.maps_dir, map_id)
         started: list[str] = []
         try:
             self._write_params()

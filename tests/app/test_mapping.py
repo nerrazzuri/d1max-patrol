@@ -24,6 +24,8 @@ from d1max_patrol.app.mapping import (
     MappingOrchestrator,
 )
 from d1max_patrol.app.procs import ProcError, ProcSpec
+from d1max_patrol.engine.homing import HomeError, HomePoint, load_home, save_home
+from d1max_patrol.protocol.nav_types import Pose
 from tests.app.conftest import request
 
 _PARAMS = """\
@@ -355,6 +357,41 @@ async def test_重建成功会清掉上一次的失败(orch, procs, bag):
     procs.exit_codes.clear()
     await orch.rebuild(bag, "m2")
     assert orch.last_error == ""
+
+
+async def test_重建图会把旧原点作废(orch, cfg, bag):
+    # 原点是标在坐标系上的。坐标系重建了,它就是错的。
+    save_home(cfg.maps_dir, HomePoint(map_id="m1",
+                                      pose=Pose.from_xy_yaw(1.0, 2.0),
+                                      marked_at_ms=1))
+    await orch.rebuild(bag, "m1")
+    with pytest.raises(HomeError):
+        load_home(cfg.maps_dir, "m1")
+
+
+async def test_重建一张图不动别的图的原点(orch, cfg, bag):
+    save_home(cfg.maps_dir, HomePoint(map_id="m2",
+                                      pose=Pose.from_xy_yaw(1.0, 2.0),
+                                      marked_at_ms=1))
+    await orch.rebuild(bag, "m1")
+    assert load_home(cfg.maps_dir, "m2").map_id == "m2"
+
+
+async def test_重建半路失败了原点照样作废(orch, cfg, bag, monkeypatch):
+    # 作废在重建**开始前**发生。重建崩在半路的时候,图很可能已经被覆盖了
+    # 一半 —— 那时候留着旧原点是最坏的一种。往安全的那一边错。
+    save_home(cfg.maps_dir, HomePoint(map_id="m1",
+                                      pose=Pose.from_xy_yaw(1.0, 2.0),
+                                      marked_at_ms=1))
+
+    async def boom(name, timeout_s=None):
+        raise RuntimeError("重建炸了")
+
+    monkeypatch.setattr(orch, "_wait", boom)
+    with pytest.raises(RuntimeError):
+        await orch.rebuild(bag, "m1")
+    with pytest.raises(HomeError):
+        load_home(cfg.maps_dir, "m1")
 
 
 # ------------------------------------------------------------------ 参数文件
