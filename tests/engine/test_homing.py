@@ -149,3 +149,11 @@ def test_全程是原点出发绕一圈再回来():
 
 def test_没有点位的全程是零():
     assert route_length_m(Pose.from_xy_yaw(1.0, 1.0), []) == pytest.approx(0.0)
+
+
+def test_只有一个点位也要算上回来那一段():
+    # 一个点位的全程是"去了再回来",不是"走过去就完了"。这条盯着的是日后
+    # 有人给最后一个点位加"到了就停"的特例 —— 那会让出发线少算一半的电。
+    home = Pose.from_xy_yaw(0.0, 0.0)
+    wp = Pose.from_xy_yaw(3.0, 4.0)
+    assert route_length_m(home, [wp]) == pytest.approx(10.0)
