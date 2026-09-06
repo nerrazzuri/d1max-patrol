@@ -375,3 +375,46 @@ def test_同步跑完之后挂载点从在飞的名单里退出来(one_disk):
     body = C.get_json(s, "/api/backup/eject", method="POST",
                       payload={"mount": mount.as_posix()})
     assert body["ok"] is True
+
+
+def test_排方案那段窗口里这块盘就已经算在飞了(one_disk, monkeypatch):
+    """``_pick`` 和 ``plan_sync`` 是这条路由最慢的两步。
+
+    记晚了的那一边,这段时间里并发进来的 ``/api/backup/eject`` 会照着一份空的
+    ``_syncing`` 回一句"可以拔了" —— 人真拔了,下一秒这边就开始往一个已经不在
+    的挂载点上拷。**不真起两条线程去撞**:在 ``plan_sync`` 里就地看那个集合。
+    """
+    from d1max_patrol.app import server as S
+
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    真排方案, 看到的 = S.plan_sync, []
+
+    def _排方案的时候看一眼(*a, **kw):
+        看到的.append(set(s._syncing))
+        return 真排方案(*a, **kw)
+
+    monkeypatch.setattr(S, "plan_sync", _排方案的时候看一眼)
+    C.get_json(s, "/api/backup/sync", method="POST",
+               payload={"mount": mount.as_posix(), "apply": True})
+    assert 看到的 == [{mount.as_posix()}]
+
+
+def test_只出方案不占在飞的名单(one_disk, monkeypatch):
+    # 光看名单的人不该把弹出按钮也一起锁住:出方案不动盘。
+    from d1max_patrol.app import server as S
+
+    ctx, s, mount = one_disk
+    init_target(mount, robot_sn=ctx.identity.sn, role=DiskRole.MIRROR,
+                now_ms=1_757_000_000_000)
+    真排方案, 看到的 = S.plan_sync, []
+
+    def _排方案的时候看一眼(*a, **kw):
+        看到的.append(set(s._syncing))
+        return 真排方案(*a, **kw)
+
+    monkeypatch.setattr(S, "plan_sync", _排方案的时候看一眼)
+    C.get_json(s, "/api/backup/sync", method="POST",
+               payload={"mount": mount.as_posix()})
+    assert 看到的 == [set()]

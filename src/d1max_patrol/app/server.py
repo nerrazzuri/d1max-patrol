@@ -1859,16 +1859,23 @@ class AppServer:
 
         本处理器自己那部分是纯文件 I/O,不过桥;扫盘那一跳除外 —— ``_pick``
         里调的 ``_scan_targets`` 会过(见它的 docstring)。
+
+        **进 ``_syncing`` 要赶在 ``plan_sync`` 之前。** ``_pick``(要扫盘)和
+        ``plan_sync``(要把整个 runs_root 递归 stat 一遍)是这条路由最慢的两步,
+        而这段时间里这块盘其实已经"要被动了"。记晚了的那一边,并发进来的
+        ``/api/backup/eject`` 会照着一份空的 ``_syncing`` 回一句"可以拔了" ——
+        人真拔了,下一秒这边就开始往一个已经不在的挂载点上拷。
         """
         ctx = self._ctx
         target = self._pick(req)
         if not target.usable:
             raise HttpError(409, target.detail)
         key = target.mount.as_posix()
-        plan = plan_sync(ctx.runs_root, target.mount, robot_sn=ctx.identity.sn)
         # ``_pick`` 已经验证过请求体是个 dict,这里是同一份 bytes 再解一遍。
-        applied = bool(req.json().get("apply"))
-        if not applied:
+        if not bool(req.json().get("apply")):
+            # 出方案不动盘,所以不占 ``_syncing``:跟 ``{"apply": false}`` 的
+            # 清盘同一条纪律 —— 光看名单的人不该把弹出按钮也一起锁住。
+            plan = plan_sync(ctx.runs_root, target.mount, robot_sn=ctx.identity.sn)
             return json_response({"applied": False, "plan": plan.to_wire()})
         with self._sync_lock:
             if self._sweeping:
@@ -1879,6 +1886,7 @@ class AppServer:
                 raise HttpError(409, "这块盘上已经有一轮同步在跑了")
             self._syncing.add(key)
         try:
+            plan = plan_sync(ctx.runs_root, target.mount, robot_sn=ctx.identity.sn)
             res = apply_sync(plan, now_ms=int(time.time() * 1000),
                              robot_sn=ctx.identity.sn)
         finally:
