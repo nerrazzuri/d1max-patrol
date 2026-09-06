@@ -85,3 +85,67 @@ def test_写原点是原子的_写坏了不会毁掉已有的那个(tmp_path):
 
 def test_原点文件就放在地图旁边(tmp_path):
     assert home_path(tmp_path, "一号厂房") == tmp_path / "一号厂房.home.json"
+
+
+# ---------------------------------------------------------------- 距离换电量
+
+from d1max_patrol.engine.homing import (  # noqa: E402
+    DEFAULT_RETURN_PARAMS,
+    ReturnParams,
+    estimate_cost_pct,
+    route_length_m,
+)
+
+
+def test_原点就在脚下也要留一点电():
+    # 返航成本能取 0 的话,返航线就等于中止线,而中止先判 —— 返航永远轮不到。
+    assert estimate_cost_pct(0.0) == pytest.approx(DEFAULT_RETURN_PARAMS.floor_pct)
+
+
+def test_越远要的电越多():
+    assert estimate_cost_pct(200.0) > estimate_cost_pct(50.0)
+
+
+def test_按默认系数算一百米要多少电():
+    # 100m × 1.4 绕路 = 140m;140 / 0.4 = 350s = 0.09722h;× 22.3 = 2.168%
+    # 比下限 3.0 还小,所以取下限。这个例子本身就是"下限在起作用"的证据。
+    assert estimate_cost_pct(100.0) == pytest.approx(3.0)
+
+
+def test_按默认系数算五百米要多少电():
+    # 500 × 1.4 = 700m;700 / 0.4 = 1750s = 0.48611h;× 22.3 = 10.84%
+    assert estimate_cost_pct(500.0) == pytest.approx(10.840, abs=0.01)
+
+
+def test_系数可以整组换掉():
+    slow = ReturnParams(cruise_speed_mps=0.2, drain_pct_per_hour=22.3,
+                        detour_factor=1.4, floor_pct=3.0)
+    assert estimate_cost_pct(500.0, slow) > estimate_cost_pct(500.0)
+
+
+def test_负距离是调用方的错要当场抛():
+    with pytest.raises(ValueError):
+        estimate_cost_pct(-1.0)
+
+
+@pytest.mark.parametrize("bad", [
+    ReturnParams(cruise_speed_mps=0.0),
+    ReturnParams(cruise_speed_mps=-0.4),
+    ReturnParams(drain_pct_per_hour=0.0),
+    ReturnParams(detour_factor=0.9),
+    ReturnParams(floor_pct=-1.0),
+])
+def test_系数不合法要当场抛而不是算出个荒唐的数(bad):
+    with pytest.raises(ValueError):
+        estimate_cost_pct(10.0, bad)
+
+
+def test_全程是原点出发绕一圈再回来():
+    home = Pose.from_xy_yaw(0.0, 0.0)
+    wps = [Pose.from_xy_yaw(3.0, 0.0), Pose.from_xy_yaw(3.0, 4.0)]
+    # 0->3 = 3;(3,0)->(3,4) = 4;(3,4)->0 = 5。合计 12。
+    assert route_length_m(home, wps) == pytest.approx(12.0)
+
+
+def test_没有点位的全程是零():
+    assert route_length_m(Pose.from_xy_yaw(1.0, 1.0), []) == pytest.approx(0.0)

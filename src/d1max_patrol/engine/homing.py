@@ -16,6 +16,7 @@ slam_toolbox 生成的,重建图会原样覆盖 —— 写进去等于写在沙�
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -113,3 +114,59 @@ def forget_home(maps_dir: Path | str, map_id: str) -> None:
     原点危险得多:狗不会拒绝起飞,它会一声不吭地走过去。
     """
     home_path(maps_dir, map_id).unlink(missing_ok=True)
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnParams:
+    """把"还有多远"换算成"还要多少电"的四个系数。
+
+    **四个都是待真机标定的。** 现在的默认值一律往"更费电"的方向取 ——
+    估低了的代价是狗在半路趴下,估高了的代价只是早回来一趟。
+    """
+
+    #: 巡航速度。``local_nav`` 的脉冲峰值是 max_fwd(0.50) × fwd_speed_mps(1.2)
+    #: = 0.6 m/s,中间还有 settle 和转向,取三分之二。
+    cruise_speed_mps: float = 0.4
+    #: 耗电率。spec §1.3 空载续航 5±0.5h,取下限 4.5h → 100/4.5。
+    drain_pct_per_hour: float = 22.3
+    #: 直线距离不是走的距离 —— 绕柱子、绕货架、掉头。
+    detour_factor: float = 1.4
+    #: 就算原点就在脚下,起身、站定、对位也要电。**这个下限是返航线能成立的
+    #: 前提**: 成本能取 0 的话,返航线就等于中止线,而中止先判,返航永远轮不到。
+    floor_pct: float = 3.0
+
+
+DEFAULT_RETURN_PARAMS = ReturnParams()
+
+
+def estimate_cost_pct(distance_m: float,
+                      params: ReturnParams = DEFAULT_RETURN_PARAMS) -> float:
+    """走 ``distance_m`` 米大约要掉多少个点的电。
+
+    **系数不合法就当场抛,不算。** 一个 ``cruise_speed_mps=0`` 算出来的是无穷,
+    而无穷会让"电永远不够"这件事看起来像一个正常判定。
+    """
+    if distance_m < 0.0:
+        raise ValueError(f"距离不能为负: {distance_m}")
+    if params.cruise_speed_mps <= 0.0:
+        raise ValueError(f"巡航速度必须为正: {params.cruise_speed_mps}")
+    if params.drain_pct_per_hour <= 0.0:
+        raise ValueError(f"耗电率必须为正: {params.drain_pct_per_hour}")
+    if params.detour_factor < 1.0:
+        raise ValueError(f"绕路系数不能小于 1: {params.detour_factor}")
+    if params.floor_pct < 0.0:
+        raise ValueError(f"电量下限不能为负: {params.floor_pct}")
+    hours = distance_m * params.detour_factor / params.cruise_speed_mps / 3600.0
+    return max(params.floor_pct, hours * params.drain_pct_per_hour)
+
+
+def route_length_m(home: Pose, waypoints: Sequence[Pose]) -> float:
+    """全程:原点 → 各点 → 回原点。**回来那一段必须算进去。**
+
+    只算到最后一个点为止,等于假设狗可以停在场地尽头 —— 而它不能,它得回来换电池。
+    """
+    if not waypoints:
+        return 0.0
+    legs = [home, *waypoints, home]
+    # B905: zip 必须显式写 strict。这里两个序列本来就差一个,只能 False。
+    return sum(a.distance_to(b) for a, b in zip(legs, legs[1:], strict=False))
