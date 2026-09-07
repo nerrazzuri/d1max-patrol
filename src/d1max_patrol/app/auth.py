@@ -27,6 +27,7 @@ app 那边没有这个限制,一律走请求头。
 from __future__ import annotations
 
 import hashlib
+import hmac
 import ipaddress
 import re
 import secrets
@@ -99,6 +100,30 @@ REF_HEX = 8
 OPERATOR_NOTICE = (
     "操作人姓名是本机记账用的,狗不核实它。要可信的人身份,得接服务器。"
 )
+
+#: 质询有效期。够手机做一次往返,不够别人捡回去重放。
+NONCE_TTL_S = 60.0
+
+#: 同时最多留几个没用掉的质询。防的是有人狂发质询把内存撑爆。
+MAX_NONCES = 32
+
+#: 一个质询多少字节随机。
+NONCE_BYTES = 16
+
+#: 证明用什么算。写进响应里,客户端不用猜。
+PROOF_ALG = "HMAC-SHA256"
+
+#: 取质询的接口。跟 AUTH_PATH 一样不能要 token —— 要了就没人换得到 token。
+CHALLENGE_PATH = "/api/auth/challenge"
+
+#: 不要 token 的路径,就这两条。
+OPEN_PATHS: frozenset[str] = frozenset({AUTH_PATH, CHALLENGE_PATH})
+
+#: 只读凭证也放行的两条写接口。急停永远不需要控制权、也永远不需要"写权限"
+#: (§3.5 规则 2);退出是把自己的名额还回去,拦它只会让名额漏光。
+READONLY_OPEN_PATHS: frozenset[str] = frozenset({
+    "/api/estop", "/api/auth/logout",
+})
 
 
 class Denied(Exception):
@@ -414,17 +439,87 @@ def normalize_operator(raw: object) -> str:
     return text[:MAX_OPERATOR_LEN]
 
 
+def proof_for(pin: str, nonce: str) -> str:
+    """这一轮质询的证明:``HMAC-SHA256(PIN, nonce)`` 的十六进制。
+
+    **为什么要有它。** 热点是 WPA2-PSK,密码出厂固定、改不了(要改得走厂家
+    支持通道),射程之内知道密码的任何人都能解开别人的报文(§6.5)。明文 PIN
+    走一趟 HTTP,等于当着所有人的面把钥匙念一遍 —— 而 PIN 是长期凭证,念一次
+    就永久泄露。HMAC 让线上只出现一次性的证明:抓到了重放不了(质询一次性),
+    也反推不出 PIN。
+
+    **它防不了什么。** 主动的中间人可以把整个响应换掉 —— 那一层要 TLS 加证
+    书钉扎,是手机 app 那边的事(§6.5 措施 1)。这里只解决"PIN 不上网"这一
+    件事,不假装解决别的。
+    """
+    return hmac.new(pin.encode("utf-8"), nonce.encode("utf-8"),
+                    hashlib.sha256).hexdigest()
+
+
+class NonceStore:
+    """发出去还没用掉的质询。**一次性,过期就扔。**
+
+    威胁模型:能在热点射程内抓包的人(§6.5)能看到质询和证明,但看不到 PIN。
+    如果同一个质询能反复核验,他捡到一次报文就等于捡到了一把能反复使用的
+    钥匙 —— 质询-应答就退化成一个可重放的固定口令。``take`` 因此在核验成功
+    的那一刻就把 nonce 作废,不管核验的是明文对比还是签名匹配。过期时间防的
+    是另一件事:质询发出去、迟迟没被用掉,窗口越长,被人从报文里捡回去重放
+    的机会就越大 —— TTL 把这个窗口钉死在"够一次手机往返"的量级上。
+    """
+
+    def __init__(self, *, ttl_s: float = NONCE_TTL_S,
+                 cap: int = MAX_NONCES) -> None:
+        self._ttl_s = ttl_s
+        self._cap = cap
+        self._lock = threading.Lock()
+        #: 插入序就是签发序,满了从头上淘汰。
+        self._live: dict[str, float] = {}
+
+    def mint(self, *, now: float | None = None) -> str:
+        now = time.monotonic() if now is None else now
+        nonce = secrets.token_hex(NONCE_BYTES)
+        with self._lock:
+            self._sweep(now)
+            while len(self._live) >= self._cap:
+                self._live.pop(next(iter(self._live)))
+            self._live[nonce] = now
+        return nonce
+
+    def take(self, nonce: object, *, now: float | None = None) -> bool:
+        """用掉一个质询。**用过就没了** —— 重放打不进来。"""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            self._sweep(now)
+            if not isinstance(nonce, str) or nonce not in self._live:
+                return False
+            del self._live[nonce]
+            return True
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return len(self._live)
+
+    def _sweep(self, now: float) -> None:
+        """清掉过期的。调用方已经拿着锁了。"""
+        dead = [n for n, at in self._live.items() if now - at > self._ttl_s]
+        for n in dead:
+            del self._live[n]
+
+
 class Guard:
     """鉴权闸门。``pin`` 给 ``None`` 就是不鉴权(只在本机听时才允许)。"""
 
     def __init__(self, pin: str | None = None, *,
                  tokens: TokenStore | None = None,
                  throttle: Throttle | None = None,
+                 nonces: NonceStore | None = None,
                  clock: Callable[[], float] = time.monotonic,
                  ap_nets: Sequence[str] = AP_NETS) -> None:
         self._pin = normalize_pin(pin) if pin is not None else None
         self.tokens = tokens if tokens is not None else TokenStore()
         self.throttle = throttle if throttle is not None else Throttle()
+        self.nonces = nonces if nonces is not None else NonceStore()
         self._clock = clock
         self._ap_nets = tuple(ap_nets)
 
@@ -457,6 +552,45 @@ class Guard:
                       else "再试一次。")
             raise Denied(401, "PIN 不对", detail)
         self.throttle.succeed(client)
+        # 热点上的明文 PIN 只换只读凭证:那条通道上报文人人可解,这个 PIN 已经
+        # 等于公开的了。要能操作,走质询-应答(手机 app),或者换个网络连。
+        return self._issue(client, operator,
+                           readonly=self.channel_of(client) == CHANNEL_AP,
+                           now=now)
+
+    def challenge(self, *, now: float | None = None) -> str:
+        """发一个一次性质询。**这条不要 token** —— 要了就没人换得到 token。"""
+        if self._pin is None:
+            raise Denied(400, "这台没设 PIN", "启动时没给 --pin,不需要解锁。")
+        return self.nonces.mint(now=self._clock() if now is None else now)
+
+    def unlock_proof(self, nonce: object, proof: object, client: str, *,
+                     operator: str = "", now: float | None = None) -> str:
+        """质询-应答换 token。**PIN 不上网**(§6.5 措施 2)。
+
+        限速跟明文那条走同一个 ``Throttle``:两条路都是在猜同一个六位 PIN,
+        分开计数等于把爆破防线开一半。
+        """
+        now = self._clock() if now is None else now
+        if self._pin is None:
+            raise Denied(400, "这台没设 PIN", "启动时没给 --pin,不需要解锁。")
+        wait = self.throttle.locked_for(client, now=now)
+        if wait > 0:
+            raise Denied(429, "试得太多了,先等等",
+                         f"还要等 {wait:.0f} 秒才能再试。")
+        if not self.nonces.take(nonce, now=now):
+            # **不记失败。** 质询过期是网络往返慢,不是在猜 PIN;把它算进爆破
+            # 计数,信号弱的现场会被自己的重试锁在门外。
+            raise Denied(400, "质询过期了,重新取一个",
+                         f"质询只有 {NONCE_TTL_S:.0f} 秒,而且只能用一次。")
+        want = proof_for(self._pin, nonce if isinstance(nonce, str) else "")
+        got = proof if isinstance(proof, str) else ""
+        if not secrets.compare_digest(want, got):
+            wait = self.throttle.fail(client, now=now)
+            detail = (f"连错太多次,锁 {wait:.0f} 秒。" if wait > 0
+                      else "重新取一个质询再试。")
+            raise Denied(401, "证明不对", detail)
+        self.throttle.succeed(client)
         return self._issue(client, operator, readonly=False, now=now)
 
     def channel_of(self, client: str) -> str:
@@ -487,24 +621,37 @@ class Guard:
     # ---------------------------------------------------------------- 放行
 
     def gate(self, method: str, path: str, headers: Mapping[str, str],
-             query: Mapping[str, str]) -> None:
-        """放行就什么都不做,不放行就抛 ``Denied``。"""
+             query: Mapping[str, str]) -> Session | None:
+        """放行就把会话带回来,不放行就抛 ``Denied``。
+
+        没设 PIN 的部署上放行但没有会话(返回 ``None``)—— 那种部署按定义只
+        听本机,没有"谁是谁"这个问题(见 ``server.check_exposure``)。
+        """
         if not host_is_literal(headers.get("host", "")):
             raise Denied(403, "Host 头不对",
                          "只收 IP 地址,不收域名 —— 防的是 DNS rebinding。")
         if not self.enabled:
-            return
+            return None
         # 页面和静态资源不拦:人得先能把页面打开,才有地方输 PIN。
         # 里面没有任何秘密 —— 数据全在 /api/ 后面。
         if not path.startswith("/api/"):
-            return
-        if path == AUTH_PATH:
-            return
+            return None
+        if path in OPEN_PATHS:
+            return None
         token = bearer(headers)
         if token is None and query_token_ok(method, path):
             token = query.get("token")
         if not token:
             raise Denied(401, "要先解锁", "在页面上输一次 PIN,或者用 app 连。")
-        if not self.tokens.valid(token):
+        sess = self.tokens.info(token, now=self._clock())
+        if sess is None:
             raise Denied(401, "登录过期了,重新输一次 PIN",
                          "token 无效或太久没用。")
+        if (sess.readonly and method != "GET"
+                and path not in READONLY_OPEN_PATHS):
+            raise Denied(403, "这个凭证只能看,不能操作",
+                         "它是在狗的热点上用明文 PIN 换的。热点的密码是出厂"
+                         "固定的,射程之内谁都能解开报文 —— 所以这条通道上只"
+                         "发只读凭证。要操作,用手机 app(它走质询-应答),或者"
+                         "从别的网连进来。")
+        return sess
