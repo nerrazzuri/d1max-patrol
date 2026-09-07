@@ -148,3 +148,38 @@ def test_盘上一版都没有就说清楚而不是装没事(tmp_path):
     layout = Layout(root=tmp_path / "opt")
     layout.releases.mkdir(parents=True)
     assert boot_guard(layout, now_ms=NOW) is GuardAction.BROKEN
+
+
+def test_权限拒绝也不会把异常甩给调用方(tmp_path):
+    """盘满/只读挂载/权限拒绝这类没法恢复的故障,一样得回一个 GuardAction,
+    不能把异常甩给调用方 —— 调用方就是那个「机器起不起得来」的判断点。"""
+    layout = _两版(tmp_path)
+    activate(layout, "2026-09-20-77b2de", now_ms=NOW)
+    for _ in range(MAX_BOOT_ATTEMPTS):
+        boot_guard(layout, now_ms=NOW)
+
+    import d1max_patrol.engine.release as rel
+
+    def 炸(_layout, _name):
+        raise OSError(13, "permission denied")
+
+    original, rel._point_current = rel._point_current, 炸
+    try:
+        # 数够了,src 非空 —— 该走 ROLLED_BACK,恰好在这一步炸出权限错误。
+        assert boot_guard(layout, now_ms=NOW) is GuardAction.BROKEN
+    finally:
+        rel._point_current = original
+
+
+def test_标记里的名字不合规也不会把异常甩给调用方(tmp_path):
+    """pending.json 里的 to/from 要是不合规的名字(比如带路径穿越的),
+    safe_name 会炸 ReleaseError —— 这也得被 boot_guard 兜住,而不是漏出去。"""
+    layout = _两版(tmp_path)
+    from d1max_patrol.engine.release import Pending, write_pending
+
+    write_pending(
+        layout,
+        Pending(to="2026-09-20-77b2de", src="../evil",
+                attempts=MAX_BOOT_ATTEMPTS, at_ms=NOW, auto=False),
+    )
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.BROKEN

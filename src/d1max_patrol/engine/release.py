@@ -435,6 +435,17 @@ def boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
     **任何一条路都不许抛异常。** 这段代码炸掉等于狗起不来,而起不来正是它
     本来要防的事;所以最坏的结论也是一个 ``GuardAction``,交给调用方去喊。
     """
+    try:
+        return _boot_guard(layout, now_ms=now_ms)
+    except (OSError, ReleaseError):
+        # 盘满、只读挂载、权限拒绝、坏道,或者 pending.json 被写成了不合规的
+        # 名字 —— 不管哪一种,盘上状态都已经没法确定,只能让人来看。
+        return GuardAction.BROKEN
+
+
+def _boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
+    """``boot_guard`` 的实际逻辑。可能抛 ``OSError``/``ReleaseError``,
+    由 ``boot_guard`` 兜底。"""
     pending = read_pending(layout)
     if pending is None:
         if _healthy(layout):
