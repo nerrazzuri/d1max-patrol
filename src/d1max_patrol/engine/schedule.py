@@ -15,6 +15,7 @@ cron 表达不了「错过了怎么办」,而错过是常态 —— 上一轮超
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import Enum
@@ -263,3 +264,54 @@ def decide(entry: ScheduleEntry, *, now: datetime,
     else:
         kind = DecisionKind.SKIP
     return Decision(kind, 这一轮, 这一轮毫秒, 迟了)
+
+
+# ---------------------------------------------------------------- 单队列
+
+#: 进得了队列的两种决定。别的都是 ``decide()`` 已经判了不跑的。
+RUNNABLE = (DecisionKind.DUE, DecisionKind.LATE)
+
+_条 = tuple[ScheduleEntry, Decision]
+
+
+@dataclass(frozen=True, slots=True)
+class Pick:
+    """这一刻的调度结果。"""
+
+    #: 起跑谁。``None`` = 谁都不起跑。
+    chosen: _条 | None
+    #: 到点了但没轮上的。已经按各自的 ``on_missed`` 处置过了。
+    displaced: tuple[_条, ...] = ()
+    #: ``displaced`` 里 ``on_missed == "alarm"`` 的那几条。**要把人叫醒。**
+    alarms: tuple[_条, ...] = ()
+
+
+def _排序键(item: _条) -> tuple[int, int, str]:
+    """priority 高的在前,同分则到点早的在前,再同则按 id。
+
+    **最后这条平局判据必须有。** 没有它,同一份包在两台狗上可能选出不同的
+    任务 —— 输入列表的顺序、set 的迭代顺序都不保证一致,而那种不一致
+    查起来要人命。
+    """
+    entry, decision = item
+    return (-entry.priority, decision.scheduled_ms or 0, entry.id)
+
+
+def pick(decisions: Sequence[_条], *, running: str | None) -> Pick:
+    """这一刻起跑谁。**纯函数。**
+
+    ``running`` 是此刻正在跑的那条排程的 id(``None`` = 空闲)。§3.3 第 3 条:
+    同一时刻只跑一个。**正在跑的不许被排程打断** —— 打断要走 §3.4 那条独立
+    实时通道,那是第 8 卷的事。
+    """
+    到点的 = tuple(sorted((d for d in decisions if d[1].kind in RUNNABLE),
+                         key=_排序键))
+    if not 到点的:
+        return Pick(None)
+    if running is not None:
+        return Pick(None, 到点的,
+                    tuple(d for d in 到点的 if d[0].on_missed == "alarm"))
+    chosen, *rest = 到点的
+    挤掉 = tuple(rest)
+    return Pick(chosen, 挤掉,
+                tuple(d for d in 挤掉 if d[0].on_missed == "alarm"))
