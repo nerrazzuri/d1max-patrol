@@ -40,6 +40,7 @@ import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -126,12 +127,14 @@ from d1max_patrol.engine.mission import (
     parse_mission,
     save_mission,
 )
-from d1max_patrol.engine.preflight import PreflightReport, run_preflight
+from d1max_patrol.engine.preflight import CheckResult, PreflightReport, run_preflight
 from d1max_patrol.engine.release import (
     Layout,
     ReleaseError,
     ReleaseManifest,
     activate,
+    clear_pending,
+    commit,
     current_name,
     installed,
     read_pending,
@@ -160,9 +163,12 @@ from d1max_patrol.engine.retention import (
 from d1max_patrol.engine.selfcheck import (
     PrecheckInputs,
     RestartPlan,
+    Verdict,
     mission_schema_floor,
+    postcheck_verdict,
     precheck,
     restart_plan,
+    run_postcheck,
 )
 from d1max_patrol.inspect.judge import (
     judge_run,
@@ -355,6 +361,11 @@ def _checks_wire(report: PreflightReport) -> list[dict[str, Any]]:
     """
     return [{"name": c.name, "ok": c.ok, "detail": c.detail}
             for c in report.checks]
+
+
+def _check_results_wire(results: Sequence[CheckResult]) -> list[dict[str, Any]]:
+    """一串检查结论,原样给页面。``CheckResult`` 没有 ``to_wire()``,补在这儿。"""
+    return [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in results]
 
 
 def _run_id(run_dir: Path) -> str:
@@ -783,6 +794,10 @@ class AppServer:
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, name="d1max-http", daemon=True)
         self._thread.start()
+        # **必须在这儿,不能更早**:自检第一项"进程起来了"的可观测定义就是
+        # 端口在听。放到 serve_forever 那个线程起来之前,第一项就永远是假失败,
+        # 于是每一次升级都会回滚。
+        self._boot_postcheck()
 
     def stop(self) -> None:
         httpd, self._httpd = self._httpd, None
@@ -879,6 +894,7 @@ class AppServer:
         self.route("POST", "/api/release/install", self._release_install)
         self.route("POST", "/api/release/activate", self._release_activate)
         self.route("POST", "/api/release/rollback", self._release_rollback)
+        self.route("GET", "/api/selfcheck", self._selfcheck)
         self.route("PUT", "/api/identity/payload", self._payload_put)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
@@ -2136,6 +2152,80 @@ class AppServer:
         plan = restart_plan(has_payload=self._ctx.identity.payload.has)
         self._ctx.restart(plan)
         return json_response({"rolled_back_to": back, "restart": plan.to_wire()})
+
+    # ------------------------------------------------------------ 起来之后那一遍
+
+    def _boot_postcheck(self) -> dict[str, Any] | None:
+        """起来之后跑一遍四项自检,按结果坐实或退回(§7.2、§7.3)。
+
+        **它是同步的,而且在 HTTP 端口起来之后才跑。** 顺序不能反:自检的第一
+        项就是"进程起来了",而在这套代码里"进程起来了"的可观测定义就是端口
+        在听。先自检后监听的话,第一项永远假失败,于是每一次升级都会回滚。
+
+        返回 ``None`` 表示这次开机根本不在途 —— 这是绝大多数开机的情况。
+        """
+        layout = self._layout()
+        pending = read_pending(layout)
+        if pending is None:
+            return None
+
+        ctx = self._ctx
+        try:
+            # **直接过桥,不走 ``self._call``。** ``_call`` 的活是把业务异常翻成
+            # HTTP 状态码,而这儿根本没有一个请求在等回话 —— 让它把
+            # ``HttpError`` 抛进 ``start()`` 只会把开机流程搅乱。这里要的恰恰
+            # 相反:任何异常都只是"这一项没过"。
+            results: Sequence[CheckResult] = ctx.bridge.call(partial(
+                run_postcheck, ctx.nav, ctx.device,
+                want_sn=pending.sn or ctx.identity.sn,
+                got_sn=ctx.identity.sn), timeout_s=30.0)
+        except Exception as exc:  # 自检自己炸了 ≠ 自检通过
+            # 一个坏到连自检都跑不完的版本,正是最该被退回去的那种。
+            log.exception("重启后自检自己炸了,按没过处理")
+            results = [CheckResult("process", False, f"自检崩了: {exc}")]
+            # 只有一项 —— ``postcheck_verdict`` 见到项数不全就判回滚,正合适。
+
+        verdict = postcheck_verdict(results)
+        wire = {"verdict": verdict.value,
+                "checks": _check_results_wire(results),
+                "name": pending.to, "previous": pending.src}
+
+        if verdict is Verdict.KEEP:
+            commit(layout)
+            self._hub.events.emit({"kind": "release.kept", **wire})
+            log.info("重启后自检四项全过,坐实 %s", pending.to)
+            return wire
+
+        if not pending.src:
+            # 退无可退。**不回滚** —— 回滚到"没有"会把机器变成一块砖。
+            # 清掉在途标记免得下次开机再回滚一次,然后把话喊出来。
+            clear_pending(layout)
+            self._hub.events.emit({"kind": "release.stuck", **wire})
+            log.error("重启后自检没过,但没有上一版可退。留着 %s,请人来看",
+                     pending.to)
+            return wire
+
+        back = rollback(layout, now_ms=int(time.time() * 1000))
+        self._hub.events.emit({"kind": "release.rolled_back",
+                              "rolled_back_to": back, **wire})
+        log.error("重启后自检没过,退回 %s", back)
+        ctx.restart(restart_plan(has_payload=ctx.identity.payload.has))
+        return wire
+
+    def _selfcheck(self, _req: Request) -> Response:
+        """随时重跑那四项。**只看不动** —— 不坐实也不回滚。
+
+        人在值守屏上点这一下,意思是"现在还好吗",不是"我确认这版能用"。
+        把它做成会清在途标记的,等于给了一条绕开自动回滚的路。
+        """
+        ctx = self._ctx
+        pending = read_pending(self._layout())
+        want = pending.sn if pending is not None and pending.sn else ctx.identity.sn
+        results = self._call(partial(run_postcheck, ctx.nav, ctx.device,
+                                     want_sn=want, got_sn=ctx.identity.sn))
+        return json_response({"verdict": postcheck_verdict(results).value,
+                              "checks": _check_results_wire(results),
+                              "pending": pending.to_wire() if pending else None})
 
     def _payload_put(self, req: Request) -> Response:
         """改「这台有没有装上装」。**改完立刻生效**,不用重启。
