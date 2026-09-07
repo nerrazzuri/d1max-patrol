@@ -248,6 +248,7 @@ def 交付文件() -> tuple[Path, ...]:
         DEPLOY / "install.sh",
         DEPLOY / "d1max-patrol.service",
         ROOT / "docs" / "装机清单.md",
+        ROOT / "docs" / "任务包格式.md",
     )
 
 
