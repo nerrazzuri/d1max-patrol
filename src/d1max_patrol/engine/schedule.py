@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from enum import Enum
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -169,3 +171,95 @@ def parse_schedule(raw: Any) -> Schedule:
         seen.add(e.id)
 
     return Schedule(timezone=tzname, entries=entries)  # type: ignore[arg-type]
+
+
+# ------------------------------------------------------------ 到点了没有
+
+
+class DecisionKind(str, Enum):
+    """一条排程此刻的处境。**这五个字符串是接口的一部分。**"""
+
+    NOT_YET = "not_yet"
+    DUE = "due"
+    LATE = "late"
+    SKIP = "skip"
+    ALARM = "alarm"
+
+
+@dataclass(frozen=True, slots=True)
+class Decision:
+    """对一条排程的决定。"""
+
+    kind: DecisionKind
+    #: 这个决定说的是哪一轮。``NOT_YET`` 且今天根本没有这一轮时是 ``None``。
+    scheduled: datetime | None
+    scheduled_ms: int | None
+    #: 现在比那一轮的点晚了多少分钟。够不着任何一轮时是 0。
+    late_min: int
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind.value,
+            "scheduled": self.scheduled.isoformat() if self.scheduled else "",
+            "late_min": self.late_min,
+        }
+
+
+_NOT_YET = Decision(DecisionKind.NOT_YET, None, None, 0)
+
+
+def _occurrence(entry: ScheduleEntry, day: date, tz: Any) -> datetime | None:
+    """``day`` 那天这条排程的那一刻。那天不在 ``days`` 里就回 ``None``。
+
+    **查的是 ``day`` 自己的星期几**,不是「今天」的 —— 跨午夜的那一轮属于
+    昨天(见 ``decide`` 的注释)。
+    """
+    if DAYS[day.weekday()] not in entry.days:
+        return None
+    return datetime(day.year, day.month, day.day,
+                    entry.at_h, entry.at_m, tzinfo=tz)
+
+
+def decide(entry: ScheduleEntry, *, now: datetime,
+           last_started_ms: int | None) -> Decision:
+    """这条排程此刻该不该跑。**纯函数:不读盘、不看钟、不发网络。**
+
+    ``now`` 必须带时区,而且应当是用**包里那个时区**转过的(见模块开头)。
+    裸 datetime 会被 ``timestamp()`` 按系统时区解释 —— 那正是 §3.3 第 1 条
+    要堵死的事,而且它不报错,只是悄悄算错。
+
+    **看两天,不是一天。** 23:30 那一轮配 60 分钟窗口,到了第二天 00:15 还
+    在窗口里;只看今天那一轮的话,每一条跨午夜的排程都会在午夜整点被静静
+    丢掉。两轮都够得着时取**晚的那一轮** —— 早的那一轮已经该放弃了,为它
+    出发是拿昨天的理由干今天的活。
+    """
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("decide() 的 now 必须带时区 —— 裸 datetime 会被按"
+                         "系统时区解释,那正是排程绝不能碰的东西")
+
+    today = now.date()
+    # 只有这条排程自己的窗口会跨过午夜时,才去看昨天那一轮 —— 否则一条
+    # 22:00 + 45 分钟窗口的排程,会在第二天一整天里都被昨天那个早就该
+    # 放弃的窗口占着,答出 SKIP/LATE/ALARM 而不是 NOT_YET。
+    跨午夜 = entry.at_h * 60 + entry.at_m + entry.window_min >= 24 * 60
+    候选日 = (today, today - timedelta(days=1)) if 跨午夜 else (today,)
+    候选 = [c for c in (_occurrence(entry, d, now.tzinfo) for d in 候选日)
+           if c is not None and c <= now]
+    if not 候选:
+        return _NOT_YET
+    这一轮 = max(候选)
+
+    这一轮毫秒 = int(这一轮.timestamp() * 1000)
+    if last_started_ms is not None and last_started_ms >= 这一轮毫秒:
+        return _NOT_YET                       # 这一轮已经起跑过了
+
+    迟了 = int((now - 这一轮).total_seconds() // 60)
+    if 迟了 <= entry.window_min:
+        kind = DecisionKind.DUE
+    elif entry.on_missed == "run_late":
+        kind = DecisionKind.LATE
+    elif entry.on_missed == "alarm":
+        kind = DecisionKind.ALARM
+    else:
+        kind = DecisionKind.SKIP
+    return Decision(kind, 这一轮, 这一轮毫秒, 迟了)
