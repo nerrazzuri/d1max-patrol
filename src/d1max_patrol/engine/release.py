@@ -24,7 +24,7 @@ import json
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -411,3 +411,56 @@ def prune(layout: Layout, *, keep: int = KEEP_RELEASES) -> tuple[str, ...]:
         shutil.rmtree(layout.releases / name, ignore_errors=True)
         dropped.append(name)
     return tuple(dropped)
+
+
+def _healthy(layout: Layout) -> bool:
+    """``current`` 指着一个真的、装着 ``release.json`` 的目录吗。"""
+    name = current_name(layout)
+    if not name:
+        return False
+    return (layout.releases / name / MANIFEST_NAME).is_file()
+
+
+def boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
+    """开机时第一个跑的东西。**它是唯一与版本无关的一段代码。**
+
+    装在 ``<root>/bin/`` 下、由 systemd 的 ``ExecStartPre`` 调,所以它跑在
+    「那一版有没有毛病」之前。装在版本目录里就没意义了 —— 坏掉的那一版里的
+    守卫,正是最不该被信任的那一份。
+
+    它只回答一个问题:**这台机器现在该跑哪一版。** 自检过没过不归它管
+    (那是 ``engine/selfcheck.py``),它只看得见「有没有人来 commit 过」。
+    数够 ``MAX_BOOT_ATTEMPTS`` 次还没人 commit,就当新版起不来。
+
+    **任何一条路都不许抛异常。** 这段代码炸掉等于狗起不来,而起不来正是它
+    本来要防的事;所以最坏的结论也是一个 ``GuardAction``,交给调用方去喊。
+    """
+    pending = read_pending(layout)
+    if pending is None:
+        if _healthy(layout):
+            return GuardAction.OK
+        names = installed(layout)
+        if not names:
+            return GuardAction.BROKEN
+        _point_current(layout, names[-1])
+        return GuardAction.REPAIRED
+
+    if pending.attempts >= MAX_BOOT_ATTEMPTS:
+        if not pending.src:
+            # 装机那一次就没起来。没有上一版可退,再数下去也数不出结果 ——
+            # 每次开机数一遍、每次都数到这儿,而没有任何一次会有别的结论。
+            # 清掉标记,让人来看:这台机器要重装,不是要回滚。
+            clear_pending(layout)
+            return GuardAction.GAVE_UP
+        _point_current(layout, pending.src)
+        clear_pending(layout)
+        return GuardAction.ROLLED_BACK
+
+    # 还有机会。顺手把链修一下 —— 换链换了一半的话,链现在还指着旧版
+    # (或者根本没有),而标记说的是「该跑 to 那一版」。**照标记修,不照
+    # 「盘上最新的」修**:两者在正常情况下是同一版,不同的那天正是出事那天。
+    if current_name(layout) != pending.to or not _healthy(layout):
+        if (layout.releases / pending.to / MANIFEST_NAME).is_file():
+            _point_current(layout, pending.to)
+    write_pending(layout, replace(pending, attempts=pending.attempts + 1))
+    return GuardAction.COUNTED
