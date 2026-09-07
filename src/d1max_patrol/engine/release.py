@@ -428,6 +428,16 @@ def boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
     「那一版有没有毛病」之前。装在版本目录里就没意义了 —— 坏掉的那一版里的
     守卫,正是最不该被信任的那一份。
 
+    **``ExecStartPre`` 会在每一次服务启动时跑,不只是开机那一次** ——
+    ``Restart=`` 的每一次重试也算。这一条是有意的,而且是这一层的全部意义:
+    不带上装的机器(交付的默认形态)升级走的是 ``systemctl restart``
+    (见 ``selfcheck.restart_plan``),根本不开机;守卫挂在开机上的话
+    ``attempts`` 永远停在 0,新版坏到起不来时这一层压根不会数。挂在
+    ``ExecStartPre`` 上,一个起来就崩的版本会在两次 ``RestartSec`` 之内
+    数满 ``MAX_BOOT_ATTEMPTS`` 被退回上一版。
+    **反过来也成立:守卫不能同时挂在开机上**,那样真开机时它会被数两次,
+    第二次开机就把一版本来健康的退掉。
+
     它只回答一个问题:**这台机器现在该跑哪一版。** 自检过没过不归它管
     (那是 ``engine/selfcheck.py``),它只看得见「有没有人来 commit 过」。
     数够 ``MAX_BOOT_ATTEMPTS`` 次还没人 commit,就当新版起不来。

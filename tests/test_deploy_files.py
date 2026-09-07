@@ -1,8 +1,8 @@
 """装机那几个文件。**测的是它们的约定,不是它们的手艺。**
 
 真机上跑不跑得起来只有真机说了算(见 docs/真机待验证清单.md)。这里守的是几条
-一旦写错就会在客户现场变成事故的硬约定:守卫必须在服务之前跑、单元必须指着
-符号链接而不是某一版、脚本必须能重跑。
+一旦写错就会在客户现场变成事故的硬约定:守卫必须在每一次服务启动之前跑一遍、
+守卫自己挂了不许拦住服务启动、单元必须指着符号链接而不是某一版、脚本必须能重跑。
 """
 
 from __future__ import annotations
@@ -20,9 +20,10 @@ def 服务单元() -> str:
     return (DEPLOY / "d1max-patrol.service").read_text(encoding="utf-8")
 
 
-@pytest.fixture
-def 守卫单元() -> str:
-    return (DEPLOY / "d1max-bootguard.service").read_text(encoding="utf-8")
+#: 守卫那一行的完整形状。前缀的 '-'、根下(不是 current 下)的解释器、
+#: 子命令三样缺一不可 —— 分开断言各自的理由见下面几条用例。
+GUARD_LINE = ("ExecStartPre=-/opt/d1max/bin/python "
+              "-m d1max_patrol.cli release boot-guard")
 
 
 @pytest.fixture
@@ -30,14 +31,20 @@ def 装机脚本() -> str:
     return (DEPLOY / "install.sh").read_text(encoding="utf-8")
 
 
-def test_三个文件都在(服务单元, 守卫单元, 装机脚本):
+def test_两个文件都在而且没有第二个单元(服务单元, 装机脚本):
+    """交付的单元**只剩一个**。
+
+    d1max-bootguard.service 连同它 WantedBy=multi-user.target 的形态一起
+    删掉了:守卫挪成了主单元的 ExecStartPre=。两个单元同时存在的话,真开机
+    时守卫会被数两次(attempts 一次开机加二),第二次开机就把一版本来健康
+    的退掉 —— 比守卫根本没跑还危险,所以"仓里不再有它"本身是条硬约定。
+    """
     assert (DEPLOY / "install.sh").exists()
     assert (DEPLOY / "d1max-patrol.service").exists()
-    assert (DEPLOY / "d1max-bootguard.service").exists()
-    # fixture 本身已经证明这三个文件读得出内容,这里再显式断言一次,
+    assert not (DEPLOY / "d1max-bootguard.service").exists()
+    # fixture 本身已经证明这两个文件读得出内容,这里再显式断言一次,
     # 免得将来有人把 fixture 换成别的来源却没人发现断言早就名不副实。
     assert 服务单元
-    assert 守卫单元
     assert 装机脚本
 
 
@@ -47,22 +54,40 @@ def test_服务指着符号链接而不是某一版(服务单元):
     assert "/opt/d1max/releases/" not in 服务单元
 
 
-def test_守卫排在服务之前(守卫单元, 服务单元):
-    """顺序反了,守卫就永远在坏版本已经失败之后才跑,救不了任何东西。"""
-    assert "Before=d1max-patrol.service" in 守卫单元
-    assert "d1max-bootguard.service" in 服务单元      # 服务 After= 它
+def test_守卫在每一次服务启动之前跑一遍(服务单元):
+    """顺序反了,守卫就永远在坏版本已经失败之后才跑,救不了任何东西。
 
-
-def test_守卫是一次性的而且失败不拦开机(守卫单元):
-    """三条分别断言,不用 or 兜底。
-
-    之前写成三选一的 or,`RemainAfterExit=yes` 恒真,删掉
-    `SuccessExitStatus=0 1` 那一行(真正兜住"守卫挂了也不拦开机"的机制)
-    测试照样绿。这条具体值必须原样在,删掉就是把这层保证撤了。
+    原来这条靠守卫单元的 ``Before=d1max-patrol.service`` + 服务单元的
+    ``After=`` 保证。**换成 ``ExecStartPre=`` 之后顺序是 systemd 的语义
+    保证的**(ExecStartPre 全部跑完才轮到 ExecStart),而且顺带把原来那个
+    洞补上了:守卫现在每一次服务启动都数一遍,不只是真开机那一次 ——
+    不带上装的机器升级走的正是 ``systemctl restart``,根本不开机。
     """
-    assert "Type=oneshot" in 守卫单元
-    assert "RemainAfterExit=yes" in 守卫单元
-    assert "SuccessExitStatus=0 1" in 守卫单元
+    assert GUARD_LINE in 服务单元
+    # ExecStartPre 排在 ExecStart 之前 —— 顺序在文件里也看得见。
+    assert 服务单元.index("ExecStartPre=") < 服务单元.index("\nExecStart=")
+    # 守卫用的是根下那个跟版本无关的解释器,不是 current 下那一版自己的。
+    assert "/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard" in 服务单元
+
+
+def test_守卫自己挂了也不拦服务启动(服务单元):
+    """原来这层保证由守卫单元的 ``SuccessExitStatus=0 1`` 兜着。
+
+    守卫改成 ``ExecStartPre=`` 之后,**那条兜底的活归行首那个 ``-``**:
+    没有它的话,``/opt/d1max/bin/python`` 缺失或损坏 —— 正是守卫本该兜底
+    的那种坏法 —— 会让 ExecStartPre 失败并中止整个服务启动,机器连网页都
+    开不出来。那就是我们刚用 ``Wants=`` 替掉 ``Requires=`` 修掉的那个陷阱
+    换个地方重犯。安全网不该比它防的问题更危险。
+
+    ``WorkingDirectory`` 那个 ``-`` 是同一条理由的第二半:``current`` 悬空
+    (指着一版已经被删掉的目录)时,没有 ``-`` 的话 systemd 进不去工作目录,
+    ExecStartPre 自己就跑不起来 —— 而修 ``current`` 正是守卫要干的事。
+
+    两条分别断言,不用 or 兜底:写成二选一的 or 时,删掉真正兜住这层保证
+    的那一样,测试照样绿。
+    """
+    assert "ExecStartPre=-/opt/d1max/bin/python" in 服务单元
+    assert "WorkingDirectory=-/opt/d1max/current" in 服务单元
 
 
 def test_服务会自己重启但不无限刷屏(服务单元):
@@ -80,18 +105,13 @@ def test_脚本能重跑():
 
 
 def test_脚本不把口令写死在里头():
-    """这个仓是私有的,但**四个交付文件**都是要发给客户现场的人的。
+    """这个仓是私有的,但**交付文件**都是要发给客户现场的人的。
 
-    之前只查了 install.sh,两个 .service 和装机清单同样会被发出去,
-    漏查它们等于这条护栏只盖了四分之一的交付面。
+    之前只查了 install.sh,.service 和装机清单同样会被发出去,漏查它们
+    等于这条护栏只盖了一小半的交付面。名单集中在 ``交付文件()`` 里,
+    交付面增减一份文件时,这条护栏跟着它走,不会漏。
     """
-    交付文件 = (
-        DEPLOY / "install.sh",
-        DEPLOY / "d1max-patrol.service",
-        DEPLOY / "d1max-bootguard.service",
-        ROOT / "docs" / "装机清单.md",
-    )
-    for 文件 in 交付文件:
+    for 文件 in 交付文件():
         text = 文件.read_text(encoding="utf-8")
         for 不该出现 in ("12345678", "XG2WIFI"):
             assert 不该出现 not in text, f"{文件.name} 里不该出现 {不该出现!r}"
@@ -137,15 +157,18 @@ def test_装机脚本会给这一版建自己的venv(装机脚本):
 
 # ------------------------------------------------------------- 裁定 3: D1MAX_SN
 
-def test_两个单元都读EnvironmentFile(服务单元, 守卫单元):
+def test_单元读EnvironmentFile(服务单元):
     """D1MAX_SN 的来源必须唯一 —— 命令行 release activate 记进 pending.json 的
 
     SN,跟 HTTP 服务侧解析出来的 SN 得是同一个来源,否则重启后自检第四项
     (identity)会假失败,把一版好的自动回滚掉。前缀的 '-' 是"文件不在也别
     拦启动",不能省。
+
+    守卫那一侧原来靠 d1max-bootguard.service 上同名的一行读同一份文件;
+    守卫挪成本单元的 ExecStartPre 之后,它跟服务共用这一行 ——"同一个来源"
+    这条约束从"两处写得一样"变成了结构上的。
     """
     assert "EnvironmentFile=-/etc/d1max/env" in 服务单元
-    assert "EnvironmentFile=-/etc/d1max/env" in 守卫单元
 
 
 def test_装机脚本播种env文件但不覆盖已有的(装机脚本):
@@ -165,18 +188,34 @@ def test_装机清单里SN要在activate之前填():
 
 # ------------------------------------------------------------- fix1: 评审回来的修复
 
-def test_服务对守卫用Wants不用Requires(服务单元):
-    """systemd.unit(5):跟顺序依赖(After=)同时存在时,Requires= 会在被依赖
+def test_单元里不再有对守卫单元的任何依赖(服务单元, 装机脚本):
+    """守卫单元没了,单元里那两行(``After=``/``Wants=``)也得跟着走干净。
 
-    单元没有成功激活时连带不启动本单元。守卫是 Type=oneshot,只有以
-    SuccessExitStatus 里的码退出才算成功——`/opt/d1max/bin/python` 缺失或
-    损坏这种真机会发生的坏法,恰恰是守卫本该兜底、而不是自己也 failed 的
-    场景。用 Requires= 的话,守卫一 failed,主服务跟着起不来,机器连网页
-    都开不出来——没有服务严格地更坏。顺序依然要保证,所以 After= 必须还在。
+    原来那两行守的是"守卫一 failed 不能连带让主服务起不来"(``Wants=`` 而
+    不是 ``Requires=``)。那层保证现在归 ``ExecStartPre=`` 行首的 ``-``,
+    由上面 ``test_守卫自己挂了也不拦服务启动`` 盯着;这里盯的是另一半:
+    留一行指着一个不存在的单元,会让下一个读这个文件的人以为守卫还是那个
+    形态,而那正是"守卫被数两次"那类事故的温床。
+
+    ``After=network-online.target`` / ``Wants=network-online.target`` 保留
+    —— 那跟守卫无关,是网卡的事。
+
+    ``install.sh`` 那一侧同样要**幂等地**把老机器上已经装着的那个单元清掉:
+    仓里删掉不等于现场那台机器上删掉了,而现场留着它就是"数两次"。
     """
-    assert "Wants=d1max-bootguard.service" in 服务单元
-    assert "Requires=d1max-bootguard.service" not in 服务单元
-    assert "After=network-online.target d1max-bootguard.service" in 服务单元
+    # 查的是**指令行**,不是"这几个字不许出现" —— 单元里那段讲清楚守卫为什么
+    # 从独立单元挪成 ExecStartPre 的注释,恰恰是这次改动最该留下的东西。
+    指令行 = [ln for ln in 服务单元.splitlines()
+             if ln.strip() and not ln.lstrip().startswith("#")]
+    assert not [ln for ln in 指令行 if "d1max-bootguard" in ln]
+    assert "After=network-online.target" in 服务单元
+    assert "Wants=network-online.target" in 服务单元
+    assert "systemctl disable --now d1max-bootguard.service" in 装机脚本
+    assert "rm -f /etc/systemd/system/d1max-bootguard.service" in 装机脚本
+    # 清老单元要排在 daemon-reload 之前,不然这一次 reload 读到的还是它。
+    assert (装机脚本.index("rm -f /etc/systemd/system/d1max-bootguard.service")
+            < 装机脚本.index("systemctl daemon-reload"))
+    assert "systemctl enable d1max-patrol.service" in 装机脚本
 
 
 def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机脚本):
@@ -208,7 +247,6 @@ def 交付文件() -> tuple[Path, ...]:
     return (
         DEPLOY / "install.sh",
         DEPLOY / "d1max-patrol.service",
-        DEPLOY / "d1max-bootguard.service",
         ROOT / "docs" / "装机清单.md",
     )
 

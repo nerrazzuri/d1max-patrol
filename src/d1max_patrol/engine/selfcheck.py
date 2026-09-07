@@ -213,6 +213,24 @@ MAX_GRAB_TRIES = 3
 #: 两次之间等多久。测试里注入假的,套件里不许真等(§8.5)。
 GRAB_WAIT_S = 2.0
 
+#: 三个桥最多探几次。**这一层的宽限不能省。**
+#:
+#: ``MAX_BOOT_ATTEMPTS = 2`` 的理由是「第一次开机可能撞上别的偶发(网卡没
+#: 起来、盘没挂上),给一次机会」 —— 可那是守卫那一层(第二层)的宽限。
+#: 第一层(``app/server.py`` 的 ``_boot_postcheck``)在同一次启动里、在守卫
+#: 之后跑,而且**第一次不过就直接回滚**,零宽限;于是第二层那两次机会在这
+#: 条路上一次都用不上。而 ``_check_bridges`` 问的 ``nav.loc_status()`` /
+#: ``nav.list_maps()`` 正是「网卡没起来」时最容易炸的东西:``main()`` 里三个
+#: ``connect()`` 各只有 10 秒超时且失败被吞掉,冷启动时导航桥慢一拍,桥就红,
+#: 一版好的第一次启动就被退掉。**这是好版本被误判回滚的最短路径。**
+#:
+#: 宽限只能加在这一层,不能改成「第一次失败不回滚、交给下一次启动」:
+#: 那条路没有推动者 —— 服务没崩,只是桥红了,不会有人再启动一次,机器会
+#: 挂在半空。
+MAX_BRIDGE_TRIES = 3
+#: 两次探测之间等多久。测试里注入假的,套件里不许真等(§8.5)。
+BRIDGE_WAIT_S = 2.0
+
 
 class Verdict(str, Enum):
     """重启后自检的结论。**只有两个值** —— 这不是个可以「再看看」的判断。"""
@@ -290,7 +308,7 @@ async def run_postcheck(
 
     control = await grab_control(device, tries=tries, sleep=sleep)
 
-    bridges = await _check_bridges(nav, device)
+    bridges = await _check_bridges(nav, device, sleep=sleep)
 
     identity_ok = bool(want_sn) and want_sn == got_sn
     identity = CheckResult(
@@ -302,12 +320,37 @@ async def run_postcheck(
     return (process, control, bridges, identity)
 
 
-async def _check_bridges(nav: Any, device: Any) -> CheckResult:
-    """相机、位姿、地图三个桥都能应答吗。
+async def _check_bridges(
+    nav: Any, device: Any, *, tries: int = MAX_BRIDGE_TRIES,
+    sleep: Callable[[float], Awaitable[None]] | None = None,
+    wait_s: float = BRIDGE_WAIT_S,
+) -> CheckResult:
+    """相机、位姿、地图三个桥都能应答吗。**有界重试。**
 
     三个一起判成一项,是因为它们的坏法是同一种:桥没起来。分成三项只会让
     ``POST_CHECKS`` 变长,而判据那边的结论一模一样。
+
+    重试的次数、间隔、以及为什么这一层非有宽限不可,见 ``MAX_BRIDGE_TRIES``
+    上面那段。形状照 ``grab_control``:次数与间隔是常量,``sleep`` 可注入,
+    默认走真 sleep,套件里注入假的(§8.5)。**探到一次全通就立刻返回**,
+    一秒都不多等 —— 绝大多数启动都会走这一条。
     """
+    slumber = sleep if sleep is not None else asyncio.sleep
+    bad: list[str] = []
+    for n in range(1, max(1, tries) + 1):
+        bad = await _probe_bridges(nav, device)
+        if not bad:
+            return CheckResult(
+                "bridges", True, f"位姿、地图、设备三个桥都应答了(第 {n} 次探测)")
+        if n < max(1, tries):
+            await slumber(wait_s)
+    return CheckResult(
+        "bridges", False,
+        f"探了 {max(1, tries)} 次,这几个桥还是不应答: " + "、".join(bad))
+
+
+async def _probe_bridges(nav: Any, device: Any) -> list[str]:
+    """探一遍三个桥,回没应答的那几个。**一项炸掉不许掀掉另外两项。**"""
     bad: list[str] = []
     try:
         if await nav.loc_status() is None:
@@ -322,9 +365,7 @@ async def _check_bridges(nav: Any, device: Any) -> CheckResult:
         await device.has_control()
     except Exception as exc:  # noqa: BLE001 - 同上
         bad.append(f"相机/设备({exc})")
-    if bad:
-        return CheckResult("bridges", False, "这几个桥不应答: " + "、".join(bad))
-    return CheckResult("bridges", True, "位姿、地图、设备三个桥都应答了")
+    return bad
 
 
 #: systemd 里我们那个单元叫什么。
@@ -348,13 +389,28 @@ class RestartPlan:
         return {"kind": self.kind, "argv": list(self.argv), "why": self.why}
 
 
-def restart_plan(*, has_payload: bool, unit: str = SERVICE_UNIT) -> RestartPlan:
+def restart_plan(*, has_payload: bool, recorded: bool = True,
+                 unit: str = SERVICE_UNIT) -> RestartPlan:
     """按「有没有上装」定重启粒度(§7.1)。**纯函数** —— 只算方案,不执行。
 
     装了上装就得整机重启:重启我们自己的进程等于放掉 SDK 会话,而放掉之后
     **不一定抢得回来** —— 上装会在开机窗口里把它拿走,而那个窗口只有整机
     重启才会再来一次。
+
+    **``recorded`` 不能省,也不能跟 ``has_payload`` 合成一位。**
+    ``Payload.has`` 在「没记过」时是 ``False``,跟「记过,确认没装上装」
+    长得一模一样。只收 ``has_payload`` 一位的话,一台**真装了上装但还没
+    登记**的机器会走上「只重启服务」那条路 —— 放掉 SDK 会话,然后要跟上装
+    抢开机窗口才拿得回来(§7.1)。``app/identity.py`` 的 ``read_payload``
+    docstring 一字不差地点过这个坏法,而知识原来就丢在这个函数的入参上。
+    没记过时按整机重启走:**整机重启从不会永久丢会话,不知道的时候站在
+    安全那一侧。**
     """
+    if not recorded:
+        return RestartPlan(
+            "machine", ("systemctl", "reboot"),
+            "这台有没有装上装还没记过:整机重启从不会永久丢 SDK 会话,而只重启"
+            "服务在装了上装的机器上会 —— 不知道的时候站在安全那一侧")
     if has_payload:
         return RestartPlan(
             "machine", ("systemctl", "reboot"),

@@ -82,12 +82,19 @@ fi
 
 说 "5/7 装 systemd 单元与环境文件"
 install -m 0644 "$(dirname "$0")/d1max-patrol.service" /etc/systemd/system/
-install -m 0644 "$(dirname "$0")/d1max-bootguard.service" /etc/systemd/system/
+# **老机器上的 d1max-bootguard.service 要清掉。** 守卫已经挪成主单元的
+# ExecStartPre=(理由见那个单元里那段注释:不带上装的机器升级走 systemctl
+# restart,根本不开机,挂在开机上的守卫永远不会重跑)。两处都留着的话,
+# 真开机时守卫会被数两次,pending.attempts 一次开机加二,第二次开机就把
+# 一版本来健康的退掉 —— 比守卫根本没跑还危险。
+# **失败不致命**:绝大多数机器上本来就没有这个单元,而这个脚本要能重跑。
+systemctl disable --now d1max-bootguard.service 2>/dev/null || true
+rm -f /etc/systemd/system/d1max-bootguard.service
 # D1MAX_SN 的唯一来源。**已经存在就绝不覆盖** —— 现场填过的值不能被
-# 重跑抹掉。两个 systemd 单元都用 EnvironmentFile=-/etc/d1max/env 读它,
-# 7/7 步里这个脚本自己也 source 同一份文件再把 D1MAX_SN 显式传给
-# release activate,两条路必须是同一个来源,否则重启后自检第四项
-# (identity)会假失败,把一版好的自动回滚掉。
+# 重跑抹掉。服务单元用 EnvironmentFile=-/etc/d1max/env 读它,7/7 步里这个
+# 脚本自己也 source 同一份文件再把 D1MAX_SN 显式传给 release activate,
+# 两条路必须是同一个来源,否则重启后自检第四项(identity)会假失败,
+# 把一版好的自动回滚掉。
 mkdir -p /etc/d1max
 if [[ ! -e /etc/d1max/env ]]; then
   cat > /etc/d1max/env <<'环境模板'
@@ -122,7 +129,7 @@ D1MAX_RELEASE_ROOT=/opt/d1max
   echo "  sudo systemctl restart d1max-patrol.service。"
 fi
 systemctl daemon-reload
-systemctl enable d1max-bootguard.service d1max-patrol.service
+systemctl enable d1max-patrol.service
 
 说 "6/7 记下这台有没有装上装"
 cat <<'提示'

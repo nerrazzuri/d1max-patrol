@@ -1,29 +1,52 @@
 [Unit]
 Description=D1 Max 巡检服务
-# 守卫先跑完。它决定了 current 指向哪一版 —— 我们得在它定好之后才启动。
-After=network-online.target d1max-bootguard.service
+After=network-online.target
 Wants=network-online.target
-# **是 Wants=,不是 Requires=。** systemd.unit(5):跟顺序依赖(After=)同时
-# 存在时,Requires= 会在被依赖单元"没有成功激活"时连带不启动本单元。守卫
-# 是 Type=oneshot,只有以 SuccessExitStatus 里的码退出才算激活成功——而
-# "/opt/d1max/bin/python 缺失或损坏"这种真机会发生的坏法,恰恰是守卫本该
-# 兜底、而不是自己也 failed 的场景。用 Requires= 的话,守卫一 failed,
-# 主服务跟着起不来,机器连网页都开不出来,比"守卫没兜住、跑在旧版上"
-# 更糟——没有服务严格地更坏。顺序依然由 After= 单独保证,跟这一行无关。
-Wants=d1max-bootguard.service
 
 [Service]
 Type=simple
 User=robot
 # **指着符号链接,不指任何一版。** 这一行就是双槽能换、能退的全部原因。
-WorkingDirectory=/opt/d1max/current
+#
+# **前缀的 '-' 不能省。** current 是一条符号链接,而"它悬空"(指着一版已经
+# 被删掉、或者换链换了一半的目录)正是下面 ExecStartPre 那个守卫要修的事。
+# 没有 '-' 的话,systemd 进不去工作目录就直接判整个启动失败 —— 守卫连跑都
+# 跑不起来,而它本来就是为这种坏法准备的。安全网不该比它防的问题更危险。
+WorkingDirectory=-/opt/d1max/current
 Environment=D1MAX_RELEASE_ROOT=/opt/d1max
 Environment=PYTHONUNBUFFERED=1
 # D1MAX_SN 从这份文件来。前缀的 '-' 是"文件不在也别拦启动" —— 装机第一次
 # 起服务时人可能还没来得及填 SN,不能让服务因此起不来。命令行 release
 # activate 记进 pending.json 的 SN 跟这里解析出来的必须是同一个来源,
 # 否则重启后自检第四项(identity)会假失败,把一版好的自动回滚掉。
+# install.sh 第 7 步自己也 source 这同一份文件,再把 D1MAX_SN 显式传给
+# release activate —— "同一个来源"是靠那两处一起成立的。
 EnvironmentFile=-/etc/d1max/env
+# 版本守卫。**它必须在每一次服务启动时数一次,不只是真开机那一次。**
+#
+# 这里原来是一个独立的 d1max-bootguard.service(oneshot +
+# WantedBy=multi-user.target),那意味着守卫只在真开机时跑。而不带上装的
+# 机器 —— 也就是交付的默认形态 —— 升级走的是 systemctl restart
+# d1max-patrol(见 engine/selfcheck.py 的 restart_plan()),根本不开机:
+# 守卫不重跑,pending.attempts 永远停在 0,于是新版坏到起不来时,第一层
+# (app/server.py 的 _boot_postcheck)跑不到、第二层不触发、Restart=always
+# 无限刷,机器躺着等人按电源。而 §7.1 给这一列的承诺是"自检没过就自动
+# 回滚,服务再起一次"。engine/release.py 里 boot_guard() 的 docstring 写的
+# 本来就是"由 systemd 的 ExecStartPre 调" —— 按它做恰好补上这个洞。
+#
+# 挂成 ExecStartPre 之后,Restart=always 的每一次重试也会重跑守卫,所以一个
+# 起来就崩的版本大约 10 秒内(两次 RestartSec=5)就会被退回上一版。这正是
+# 我们要的。**两个单元不能都留着**:真开机时守卫会被数两次,attempts 一次
+# 开机加二,第二次开机就把一版本来健康的退掉,比原来那个洞更危险。
+#
+# **前缀的 '-' 不能省。** 没有它的话,/opt/d1max/bin/python 缺失或损坏
+# (正是守卫本该兜底的那种坏法)会让 ExecStartPre 失败并中止整个服务启动
+# —— 那就是我们刚用 Wants= 替掉 Requires= 修掉的那个陷阱,换个地方重犯。
+# 守卫自己挂了也放行,原来那条 SuccessExitStatus=0 1 的活现在归这个 '-'。
+#
+# **这个 python 是根下的,不是 current 下的** —— 守卫必须跟版本无关:
+# 一个坏到解释器都装歪了的版本,不该把自己的救生索也带坏。
+ExecStartPre=-/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard
 # **这一版自己的 venv,不是根下共享的解释器。** 装机脚本会在把包落进这个
 # 槽之后,当场给这个槽建一份自己的 venv —— 双槽的意义之一就是回滚要把
 # 依赖也一并退回去,共用解释器的话回滚只退代码不退依赖,退了也白退。
@@ -46,7 +69,8 @@ EnvironmentFile=-/etc/d1max/env
 # 在 restart 之前检查它非空,空就 exit 3 停下来喊,不去 restart。
 ExecStart=/opt/d1max/current/venv/bin/python -m d1max_patrol.app.server --host 0.0.0.0
 # 起不来就再试。**RestartSec 不能是 0**:一个起来就崩的版本会在日志里刷成
-# 一堵墙,把真正的错因冲掉,顺便烧掉写盘寿命。
+# 一堵墙,把真正的错因冲掉,顺便烧掉写盘寿命。5 秒同时也是上面那段"大约
+# 10 秒内退回上一版"的来源 —— 守卫要数满 MAX_BOOT_ATTEMPTS(2)次。
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=0

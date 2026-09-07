@@ -23,6 +23,20 @@ from d1max_patrol.engine.release import (
 from .conftest import get_json, make_ctx
 
 
+def 假睡本(记录: list | None = None):
+    """一个不会真等的 ``sleep``。
+
+    B2 给自检的 ``bridges`` 那一项加了有界重试(3 次探测、每次之间等
+    ``BRIDGE_WAIT_S`` 秒)。桥断掉的用例要是走真 ``asyncio.sleep``,这个文件
+    每跑一次就白等 4 秒 —— §8.5 的「时间必须可注入」正是为了这个,所以
+    ``AppServer`` 收一个 ``postcheck_sleep``,测试里一律注入这个。
+    """
+    async def 睡(秒: float) -> None:
+        if 记录 is not None:
+            记录.append(秒)
+    return 睡
+
+
 def _pkg(root: Path, name: str) -> Path:
     where = root / name
     (where / "bin").mkdir(parents=True, exist_ok=True)
@@ -74,11 +88,13 @@ def test_桥不应答就退回上一版(装了两版):
     ctx.nav.loc = None                                # 让位姿那一路答不出来
     重启记录: list = []
     ctx.restart = 重启记录.append
-    s = AppServer(ctx, port=0)
+    等过: list = []
+    s = AppServer(ctx, port=0, postcheck_sleep=假睡本(等过))
     queue = s.hub.events.subscribe()                  # 订阅要在 start() 之前挂上
     s.start()
     try:
         assert current_name(layout) == "2026-09-06-a3f9c1"
+        assert len(等过) == 2                         # 重试的两次间隔,都是假的
         assert read_pending(layout) is None
         assert len(重启记录) == 1                     # 退回去之后还得再起一次
         收到: list = []
@@ -118,7 +134,7 @@ def test_没有上一版就不回滚而是留着并喊(bridge, tmp_path):
     activate(layout, "2026-09-20-77b2de", now_ms=1, auto=False)
     重启记录: list = []
     ctx.restart = 重启记录.append
-    s = AppServer(ctx, port=0)
+    s = AppServer(ctx, port=0, postcheck_sleep=假睡本())
     queue = s.hub.events.subscribe()                  # 订阅要在 start() 之前挂上
     s.start()
     try:
@@ -283,5 +299,42 @@ def test_start带postcheck假时不跑自检main要用这条时序(装了两版)
         while not queue.empty():
             收到.append(queue.get_nowait())
         assert any(e.get("kind") == "release.kept" for e in 收到)
+    finally:
+        s.stop()
+
+
+def test_桥好着的时候一次都不等(装了两版):
+    """有界重试不该给「桥本来就好」的绝大多数启动添一次等待。
+
+    这条同时钉住注入口本身:``AppServer`` 要是没把 ``postcheck_sleep`` 往
+    ``run_postcheck`` 里传,上面那两条断桥的用例会各自真等 4 秒,而这条会
+    悄悄照过 —— 所以断桥那两条断言了"等过几次",这条断言"一次没等"。
+    """
+    ctx, layout = 装了两版
+    ctx.restart = lambda _plan: None
+    等过: list = []
+    s = AppServer(ctx, port=0, postcheck_sleep=假睡本(等过))
+    s.start()
+    try:
+        assert read_pending(layout) is None            # 四项都过,坐实了
+        assert 等过 == []
+    finally:
+        s.stop()
+
+
+def test_自检路由那一遍也走注入进来的sleep(装了两版):
+    """``_boot_postcheck`` 和 ``/api/selfcheck`` 是两个各自调 ``run_postcheck``
+    的地方。只补第一个的话,人点一下自检就会在断桥的机器上卡 4 秒。
+    """
+    ctx, layout = 装了两版
+    ctx.restart = lambda _plan: None
+    等过: list = []
+    s = AppServer(ctx, port=0, postcheck_sleep=假睡本(等过))
+    s.start(postcheck=False)                           # 先别跑开机那一遍
+    try:
+        ctx.nav.loc = None                             # 起来之后桥再断掉
+        got = get_json(s, "/api/selfcheck")
+        assert got["verdict"] == "rollback"             # 断了就是断了,重试救不回来
+        assert len(等过) == 2                           # 而且等的是假的
     finally:
         s.stop()

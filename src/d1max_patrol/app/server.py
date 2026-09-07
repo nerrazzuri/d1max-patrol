@@ -37,7 +37,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import partial
@@ -753,9 +753,21 @@ class AppServer:
     """HTTP 外壳。路由表由自己和后面几个模块一起填。"""
 
     def __init__(self, ctx: AppContext, *, host: str = DEFAULT_HOST,
-                 port: int = DEFAULT_PORT, pin: str | None = None) -> None:
+                 port: int = DEFAULT_PORT, pin: str | None = None,
+                 postcheck_sleep: Callable[[float], Awaitable[None]] | None = None
+                 ) -> None:
         check_exposure(host, pin)
         self._ctx = ctx
+        #: 重启后自检里那几处等待走谁。**默认真 sleep,测试注入假的**(§8.5)。
+        #:
+        #: ``run_postcheck`` 有两处有界重试(``grab_control`` 抢会话、
+        #: ``_check_bridges`` 探三个桥),两处的间隔都是秒级。原来这儿不传
+        #: ``sleep=``,走的是真 ``asyncio.sleep`` —— 套件之所以不慢,只因为
+        #: ``tests/app/conftest.py`` 里 ``FakeDevice.control = True`` 让抢会话
+        #: 第一次就成、``FakeNav`` 三个桥也第一次就通。那是个会突然咬人的隐式
+        #: 依赖:哪天有人把假件改成"第二次才通",套件立刻慢下来,而且慢得
+        #: 没有出处。开一个口子把它变成显式的。
+        self._postcheck_sleep = postcheck_sleep
         self._auth = Guard(pin)
         self._host = host
         self._want_port = port
@@ -2153,7 +2165,12 @@ class AppServer:
             raise HttpError(409, "升级前自检没过",
                             json.dumps(report.to_wire(), ensure_ascii=False))
 
-        plan = restart_plan(has_payload=ctx.identity.payload.has)
+        # ``recorded`` 在这条路上其实到不了 False —— precheck 的 payload 那一项
+        # 就拦着「没记过」的机器。**照样传对**:一个只在某些调用点传的参数,
+        # 下一个人读到时说不清它到底是不是可省的,而漏传的后果是一台装了上装
+        # 但没登记的机器被只重启服务(= 放掉 SDK 会话,§7.1)。
+        plan = restart_plan(has_payload=ctx.identity.payload.has,
+                            recorded=ctx.identity.payload.recorded)
         try:
             pending = activate(layout, name, now_ms=int(time.time() * 1000),
                                auto=auto, sn=ctx.identity.sn)
@@ -2171,7 +2188,8 @@ class AppServer:
             back = rollback(layout, now_ms=int(time.time() * 1000))
         except ReleaseError as exc:
             raise HttpError(409, str(exc)) from exc
-        plan = restart_plan(has_payload=self._ctx.identity.payload.has)
+        payload = self._ctx.identity.payload
+        plan = restart_plan(has_payload=payload.has, recorded=payload.recorded)
         self._ctx.restart(plan)
         return json_response({"rolled_back_to": back, "restart": plan.to_wire()})
 
@@ -2213,7 +2231,8 @@ class AppServer:
                 results: Sequence[CheckResult] = await run_postcheck(
                     ctx.nav, ctx.device,
                     want_sn=pending.sn or ctx.identity.sn,
-                    got_sn=ctx.identity.sn)
+                    got_sn=ctx.identity.sn,
+                    sleep=self._postcheck_sleep)
             except Exception as exc:  # 自检自己炸了 ≠ 自检通过
                 # 一个坏到连自检都跑不完的版本,正是最该被退回去的那种。
                 log.exception("重启后自检自己炸了,按没过处理")
@@ -2245,7 +2264,9 @@ class AppServer:
                 self._hub.events.emit({"kind": "release.rolled_back",
                                       "rolled_back_to": back, **wire})
                 log.error("重启后自检没过,退回 %s", back)
-                ctx.restart(restart_plan(has_payload=ctx.identity.payload.has))
+                ctx.restart(restart_plan(
+                    has_payload=ctx.identity.payload.has,
+                    recorded=ctx.identity.payload.recorded))
                 return wire
             except Exception:  # 落盘/发事件炸了也不能把过桥的调用方带崩
                 # **别把 pending 标记清掉去图好看。** 上面这一段(坐实/回滚/发事
@@ -2272,7 +2293,8 @@ class AppServer:
         pending = read_pending(self._layout())
         want = pending.sn if pending is not None and pending.sn else ctx.identity.sn
         results = self._call(partial(run_postcheck, ctx.nav, ctx.device,
-                                     want_sn=want, got_sn=ctx.identity.sn))
+                                     want_sn=want, got_sn=ctx.identity.sn,
+                                     sleep=self._postcheck_sleep))
         return json_response({"verdict": postcheck_verdict(results).value,
                               "checks": _check_results_wire(results),
                               "pending": pending.to_wire() if pending else None})
