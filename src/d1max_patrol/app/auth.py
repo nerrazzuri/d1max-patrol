@@ -73,6 +73,11 @@ TOKEN_IDLE_S = 12 * 3600.0
 #: 同时最多留几个 token。防的是"有人反复解锁把内存撑爆"。
 MAX_TOKENS = 64
 
+#: §3.6:一只狗同时最多几个 app 会话。**多的直接拒,不排队。**
+#: 依据是物理的:CPE 的无线上行是共享的,每多一路视频所有人都变卡。排队更糟
+#: —— "等着等着突然就连上了"意味着操作员在不确定的时刻拿到一只会动的狗。
+MAX_SESSIONS = 3
+
 #: Host 头里允许出现的名字。别的一律只收 IP 字面量。
 _LOCAL_NAMES = frozenset({"localhost"})
 
@@ -522,11 +527,13 @@ class Guard:
                  throttle: Throttle | None = None,
                  nonces: NonceStore | None = None,
                  clock: Callable[[], float] = time.monotonic,
-                 ap_nets: Sequence[str] = AP_NETS) -> None:
+                 ap_nets: Sequence[str] = AP_NETS,
+                 max_sessions: int = MAX_SESSIONS) -> None:
         self._pin = normalize_pin(pin) if pin is not None else None
         self.tokens = tokens if tokens is not None else TokenStore()
         self.throttle = throttle if throttle is not None else Throttle()
         self.nonces = nonces if nonces is not None else NonceStore()
+        self.max_sessions = max_sessions
         self._clock = clock
         self._ap_nets = tuple(ap_nets)
 
@@ -615,15 +622,51 @@ class Guard:
         return self.tokens.info(token,
                                 now=self._clock() if now is None else now)
 
+    def logout(self, token: str) -> bool:
+        """交回一个会话的名额。原来有就返回 ``True``。
+
+        **必须有这条。** 没有它,一个装完就卸载的 app 会占着 1/3 的名额到闲
+        置期走完为止 —— 在局域网上那是 12 小时。
+        """
+        had = self.tokens.info(token, now=self._clock()) is not None
+        self.tokens.revoke(token)
+        return had
+
     def _issue(self, client: str, operator: object, *, readonly: bool,
                now: float) -> str:
-        """发一个 token。**通道决定它的闲置期**(§6.5 措施 3)。"""
+        """发一个 token。**先看有没有名额**(§3.6),再看通道(§6.5)。
+
+        名额满了淘汰谁,是安全判据不是容量细节:这里选的是"同名换座" ——
+        只挤同一个报名者自己的老会话,从不挤别人的。威胁模型是反复登录的
+        攻击者:如果谁都能靠猜中或不带 operator 挤掉别人的名额,``MAX_SESSIONS``
+        就从一道闸变成了一件武器。所以空名字(§6.3:狗从不核实报名,空名字
+        谁都能报)不算身份,不许互相挤 —— 换座只发生在"同一个字符串"之间,
+        而攻击者拿不到别人已经在用的那个名字(狗也从不把在线操作人的名字
+        往外广播给未鉴权的人)。名额真满且不是换座时,一律硬拒、不排队。
+        """
+        name = normalize_operator(operator)
+        live = self.tokens.sessions(now=now)
+        if len(live) >= self.max_sessions:
+            # 同一个报名的人回来了(换设备、重装 app、清了缓存):挤掉的是他
+            # 自己那个老会话,不是别人的。空名字不算身份 —— 让空名字互相挤
+            # 等于把上限废掉。
+            mine = [s for s in live if name and s.operator == name]
+            if not mine:
+                raise Denied(409,
+                             f"这只狗最多同时连 {self.max_sessions} 个人",
+                             self._占位说明(live))
+            for s in mine:
+                self.tokens.revoke_ref(s.ref)
         channel = self.channel_of(client)
         idle = AP_TOKEN_IDLE_S if channel == CHANNEL_AP else None
-        return self.tokens.issue(now=now,
-                                 operator=normalize_operator(operator),
-                                 channel=channel, readonly=readonly,
-                                 idle_s=idle)
+        return self.tokens.issue(now=now, operator=name, channel=channel,
+                                 readonly=readonly, idle_s=idle)
+
+    def _占位说明(self, live: tuple[Session, ...]) -> str:
+        """名额被谁占着。**拒绝必须说清原因**(§3.6),不然现场只会反复重试。"""
+        who = "、".join(s.operator or f"未具名({s.ref})" for s in live)
+        return (f"现在连着的是:{who}。等一个人退出,或者请他在 app 上退出登录。"
+                f"上限是硬的 —— 热点的上行带宽是共享的,人一多每个人的画面都卡。")
 
     # ---------------------------------------------------------------- 放行
 
