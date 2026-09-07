@@ -46,8 +46,17 @@ from d1max_patrol.engine.lease import AuditRecord, LeaseBook, LeaseState
 #: * ``PUT /api/missions/<id>``、``PUT /api/maps/<id>/home`` —— 编任务是
 #:   案头活。常常是第二个人在改航点, 而第一个人在开狗; 要控制权只会让两个人
 #:   为了改一个数去抢方向盘。
-#: * 导出、备份、清盘、升级、任务包 —— 都不改变这只狗正在做什么。升级尤其
-#:   不能要: 一次恢复性的回滚不该被一个已经掉线的会话挡住。
+#: * 导出、备份、清盘 —— 都不改变这只狗正在做什么。
+#: * 升级(``/api/release/*``) —— 尤其不能要: 一次恢复性的回滚不该被一个已经
+#:   掉线的会话挡住。
+#: * 任务包(``POST /api/bundle/apply``、``/api/bundle/rollback``) ——
+#:   **这一条的理由要说准, 别读成"有闸挡着"**: 代码里并没有一道"跑着的时候
+#:   不许切包"的闸(``server.py`` 的 ``_bundle_apply``、``engine/bundle.py``
+#:   都没有)。它安全是因为**没有耦合**: ``bundles_root`` 跟正在跑的任务读的
+#:   ``missions_dir``/``maps_dir``/``ctx.nav`` 之间没有写路径相交, 切包对在跑
+#:   的那一趟是惰性的 —— 下一趟才生效。**这是一个前提, 不是一道防线。**
+#:   哪天有人把 ``bundles_root`` 接进热加载, 这条排除就悄悄变错, 而且不会有
+#:   任何测试变红(见 docs/第2卷待办.md 第 49 条)。
 #: * ``POST /api/mapping/rebuild`` —— 拿录好的包离线重建, 狗本身没在动。
 CONTROLLED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/api/teleop$")),
