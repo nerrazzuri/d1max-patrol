@@ -102,3 +102,27 @@ def test_落盘的是合法json而且带时刻(tmp_path):
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["has_payload"] is True and raw["at_ms"] == NOW
     assert raw["by"] == "装机-老王"
+
+
+def test_从环境变量读路径(tmp_path, monkeypatch):
+    """没有 override 时, payload_path() 从环境变量 D1MAX_PAYLOAD_FILE 读路径。"""
+    from d1max_patrol.app.identity import PAYLOAD_ENV, payload_path
+
+    env_path = tmp_path / "somewhere.json"
+    monkeypatch.setenv(PAYLOAD_ENV, str(env_path))
+    got = payload_path()
+    assert got == env_path
+
+    # override 仍然优先于环境变量
+    override_path = tmp_path / "override.json"
+    got_override = payload_path(override=override_path)
+    assert got_override == override_path
+
+
+def test_环境变量缺失时使用默认路径(tmp_path, monkeypatch):
+    """没有 override 也没有环境变量时, payload_path() 返回默认的 PAYLOAD_FILE。"""
+    from d1max_patrol.app.identity import PAYLOAD_ENV, PAYLOAD_FILE, payload_path
+
+    monkeypatch.delenv(PAYLOAD_ENV, raising=False)
+    got = payload_path()
+    assert got == PAYLOAD_FILE
