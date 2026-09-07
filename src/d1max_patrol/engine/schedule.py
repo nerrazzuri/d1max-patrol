@@ -324,7 +324,8 @@ def pick(decisions: Sequence[_条], *, running: str | None) -> Pick:
 #: 代价是值守屏上多一行字,漏报的代价是整晚的巡检时间全错而没人知道。
 CLOCK_SKEW_ALARM_S = 60.0
 
-#: 往后找几天算「找不到下一轮」。7 天足够覆盖 ``days`` 的一整个周期。
+#: 往后找几天算「找不到下一轮」。7 天覆盖 ``days`` 的一整个周期,再加一天
+#: 余量给「下周同一天」这种情形。
 _NEXT_RUN_HORIZON_DAYS = 8
 
 
