@@ -60,17 +60,18 @@ def _整数(v: Any) -> bool:
     return type(v) is int
 
 
-def _aware(s: str) -> datetime:
+def _aware(s: str, field: str = "built_at") -> datetime:
     """解一个**必须带时区**的 ISO8601 时刻。
 
     裸时刻会被按读它那台机器的时区解释,而包是从服务器发到狗上的。
+    ``field`` 只用来把报错说准 —— 调这个函数的字段不总叫 ``built_at``。
     """
     try:
         dt = datetime.fromisoformat(s)
     except (TypeError, ValueError) as e:
-        raise BundleError(f"built_at 解不出来: {s!r}") from e
+        raise BundleError(f"{field} 解不出来: {s!r}") from e
     if dt.tzinfo is None or dt.utcoffset() is None:
-        raise BundleError(f"built_at 必须带时区: {s!r}")
+        raise BundleError(f"{field} 必须带时区: {s!r}")
     return dt
 
 
@@ -514,10 +515,22 @@ def read_state(bundles_root: Path | str) -> BundleState:
 
 
 def active_bundle(bundles_root: Path | str) -> Path | None:
-    """``current`` 指着的那个包目录。没有就 ``None``。"""
+    """``current`` 指着的那个包目录。没有就 ``None``。
+
+    链在但指向的目录不在了(比如整棵 ``bundles_root`` 被搬走过,搬的时候
+    没跟着挪这条绝对链),就地是「悬空」——不能悄悄当 ``None`` 处理,
+    也不能把一个不存在的路径交给调用方去踩:跟 ``verify_pure_data`` 曾经
+    对着一个不存在的目录悄悄放行是同一类坑,这里选择当场炸。
+    """
     root = Path(bundles_root)
     link = root / CURRENT_LINK
-    return link.resolve() if link.is_symlink() else None
+    if not link.is_symlink():
+        return None
+    target = link.resolve()
+    if not target.is_dir():
+        raise BundleError(f"{CURRENT_LINK} 指着 {target},可那儿没有目录 —— "
+                          "链是悬空的")
+    return target
 
 
 def land(bundles_root: Path | str, staged: Path | str) -> BundleManifest:
@@ -582,12 +595,12 @@ def apply_bundle(bundles_root: Path | str, slot_name: str, *,
         raise BundleError(f"{slot_name} 是退过的那一版,不许再生效 —— "
                           "要硬来就明确传 force")
 
+    记 = _读记(root)
+    记.pop("proven_slot", None)            # 新的一版还没被证过
+    _写记(root, 记)                          # 先落记,链才动 —— 断电也能认账
     if st.current and st.current != slot_name:
         point_link(root / PREVIOUS_LINK, root / st.current)
     point_link(root / CURRENT_LINK, dest)
-    记 = _读记(root)
-    记.pop("proven_slot", None)            # 新的一版还没被证过
-    _写记(root, 记)
     return read_state(root)
 
 
@@ -611,18 +624,18 @@ def rollback_bundle(bundles_root: Path | str, *, at: str,
     现场取证都要用;但它进了 ``rollbacks``,``apply_bundle`` 默认不让它再上。
     """
     root = Path(bundles_root)
-    _aware(at)                              # 时刻必须带时区
+    _aware(at, "at")                        # 只校验格式,原字符串照样落盘
     cur, prev = _链指向(root, CURRENT_LINK), _链指向(root, PREVIOUS_LINK)
     if not prev:
         raise BundleError(f"没有 {PREVIOUS_LINK},退不了")
-    point_link(root / CURRENT_LINK, root / prev)
-    if cur:
-        point_link(root / PREVIOUS_LINK, root / cur)
     记 = _读记(root)
     记.setdefault("rollbacks", []).append(
         {"at": at, "from": cur, "to": prev, "reason": reason})
     记["proven_slot"] = prev                # 退回去的那一版本来就是证过的
-    _写记(root, 记)
+    _写记(root, 记)                          # 先落记,链才动 —— 断电也能认账
+    point_link(root / CURRENT_LINK, root / prev)
+    if cur:
+        point_link(root / PREVIOUS_LINK, root / cur)
     return read_state(root)
 
 

@@ -397,13 +397,19 @@ def test_退过的记录留着不被清理(tmp_path, root):
 
 def test_搬到别的路径去还认得出来(tmp_path, root):
     """链是相对的还是绝对的?**绝对的**,而且整棵树是可以被整体搬走的 ——
-    第 3 卷的备份盘就是这么用的。这一条钉住「搬完还能读」。
+    第 3 卷的备份盘就是这么用的。这一条钉住两件事:``read_state`` 只认链的
+    basename,搬完还能读;但那条链本身还绝对指着老地方 —— 老地方一旦真的
+    没了(不是复制一份留着原地,而是**真搬走**),``active_bundle`` 必须
+    当场炸,不能把一个不存在的路径悄悄交给调用方。
     """
     槽 = 打包并落(tmp_path, root, 1)
     apply_bundle(root, 槽)
     另 = tmp_path / "elsewhere"
     shutil.copytree(root, 另, symlinks=True)
+    shutil.rmtree(root)                     # 真搬:老地方彻底不在了
     assert read_state(另).current == 槽
+    with pytest.raises(BundleError, match="悬空"):
+        active_bundle(另)
 
 
 def test_一版装进去跑崩了自己退回来这条路真走一遍(tmp_path, root):
