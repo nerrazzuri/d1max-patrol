@@ -20,6 +20,8 @@ MAC 无论如何都记。它是唯一一个一定读得到的机身标识,SN 全
 
 from __future__ import annotations
 
+import json
+import os
 import socket
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +69,84 @@ NULL_MAC = "00:00:00:00:00:00"
 #: SN 一个都没查到时用这个。**不是编一个,是明写"没查到"。**
 UNKNOWN_SN = "unknown"
 
+#: 「这台有没有装上装」记在哪。**不在版本目录里** —— 它是机器的属性,
+#: 换一版软件不该把它换掉。环境变量是给测试和开发机用的。
+PAYLOAD_ENV = "D1MAX_PAYLOAD_FILE"
+PAYLOAD_FILE = Path("/etc/d1max/payload.json")
+
+#: 改这个属性要原样打这句话。**不是防手滑,是让改的人停一秒**:
+#: 这一改会静默地改掉升级的安全模型(§7.1 纪律 2) —— 从「只重启服务」
+#: 变成「整机重启且不许自动升」,或者反过来。
+CONFIRM_PHRASE = "我知道这会改掉升级方式"
+
+
+@dataclass(frozen=True, slots=True)
+class Payload:
+    """这台有没有装上装。
+
+    **``has`` 和 ``recorded`` 是两个字段,不能合成一个。** 「没装上装」是一个
+    结论,「没人记过」是没有结论;合成一个的话,一台刚装完还没登记的机器
+    看起来就跟一台确认过没有上装的机器一模一样,而升级流程正是照着它选路的。
+    """
+
+    has: bool = False
+    recorded: bool = False
+    at_ms: int = 0
+    #: 谁记的。现场排查时要问的第一句话是"这是谁填的"。
+    by: str = ""
+
+    def to_wire(self) -> dict[str, object]:
+        return {"has_payload": self.has, "payload_recorded": self.recorded,
+                "payload_at_ms": self.at_ms, "payload_by": self.by}
+
+
+def payload_path(override: Path | str | None = None) -> Path:
+    """上装属性记在哪。显式给的赢,其次环境变量,最后默认路径。"""
+    if override is not None:
+        return Path(override)
+    env = os.environ.get(PAYLOAD_ENV, "").strip()
+    return Path(env) if env else PAYLOAD_FILE
+
+
+def read_payload(path: Path | str | None = None) -> Payload:
+    """读上装属性。**读不动就是"没记过",不是"没装"。**
+
+    这个区别是本模块里最要紧的一条:把读失败当成"没装上装",等于让一台装了
+    上装的机器走上"只重启我们的服务"那条路 —— 而重启我们的进程就是放掉 SDK
+    会话,放掉之后不一定抢得回来(§7.1)。
+    """
+    try:
+        raw = json.loads(payload_path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return Payload()
+    if not isinstance(raw, dict) or "has_payload" not in raw:
+        return Payload()
+    try:
+        at_ms = int(raw.get("at_ms", 0))
+    except (TypeError, ValueError):
+        at_ms = 0
+    return Payload(has=bool(raw.get("has_payload")), recorded=True,
+                   at_ms=at_ms, by=str(raw.get("by", "")))
+
+
+def write_payload(*, has: bool, by: str, now_ms: int,
+                  path: Path | str | None = None, confirm: str) -> Payload:
+    """记下上装属性。**确认语对不上就一个字节都不写。**"""
+    if confirm != CONFIRM_PHRASE:
+        raise ValueError(f"要改这个属性得原样打一遍确认语: {CONFIRM_PHRASE}")
+    target = payload_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = Payload(has=bool(has), recorded=True, at_ms=int(now_ms),
+                      by=str(by or ""))
+    tmp = target.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"has_payload": payload.has, "at_ms": payload.at_ms,
+                   "by": payload.by}, fh, ensure_ascii=False, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, target)
+    return payload
+
 
 @dataclass(frozen=True, slots=True)
 class Identity:
@@ -83,6 +163,8 @@ class Identity:
     nickname: str
     #: 主机名。同一批机器上常常是一样的,所以它只是参考,不当主键。
     host: str
+    #: 这台有没有装上装。**它决定升级怎么重启**(§7.1),而且它是会变的。
+    payload: Payload = Payload()
 
     @property
     def provisional(self) -> bool:
@@ -97,6 +179,7 @@ class Identity:
             "macs": list(self.macs),
             "nickname": self.nickname,
             "host": self.host,
+            **self.payload.to_wire(),
         }
 
     def fingerprint(self) -> dict[str, str]:
@@ -167,6 +250,7 @@ def read_macs(net_root: Path = NET_ROOT) -> tuple[str, ...]:
 def resolve(sn: str | None = None, nickname: str | None = None, *,
             files: tuple[Path, ...] = SN_FILES,
             net_root: Path = NET_ROOT,
+            payload_file: Path | str | None = None,
             host: str | None = None) -> Identity:
     """定下这台机器的身份。
 
@@ -193,4 +277,5 @@ def resolve(sn: str | None = None, nickname: str | None = None, *,
 
     return Identity(sn=value, source=source, macs=macs,
                     nickname=(nickname or "").strip(),
-                    host=host if host is not None else socket.gethostname())
+                    host=host if host is not None else socket.gethostname(),
+                    payload=read_payload(payload_file))
