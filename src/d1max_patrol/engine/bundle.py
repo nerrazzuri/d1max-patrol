@@ -19,6 +19,7 @@ import stat
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -655,3 +656,99 @@ def prune_bundles(bundles_root: Path | str) -> tuple[str, ...]:
         shutil.rmtree(p)
         删.append(p.name)
     return tuple(删)
+
+
+# ------------------------------------------------------------ 意图与执行
+
+
+@dataclass(frozen=True, slots=True)
+class BundleRef:
+    """指着某一版包的三个字段。**心跳报的就是这三样**(§3.2)。"""
+
+    bundle_id: str
+    version: int
+    content_sha256: str
+
+    @classmethod
+    def of(cls, m: BundleManifest) -> BundleRef:
+        return cls(m.bundle_id, m.version, m.content_sha256)
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"bundle_id": self.bundle_id, "version": self.version,
+                "content_sha256": self.content_sha256}
+
+
+class DivergenceKind(str, Enum):
+    """意图跟执行差在哪儿。**这五个字符串是接口的一部分。**"""
+
+    IN_SYNC = "in_sync"
+    #: 狗落后:服务器已经到 v9,狗手上还是 v7。
+    BEHIND = "behind"
+    #: 狗超前:服务器被回滚过,狗手上那一版已经被撤回了。
+    AHEAD = "ahead"
+    #: 从没对过话。两边碰巧同号也不算一致。
+    NEVER_SYNCED = "never_synced"
+    #: 同号不同内容,或者压根不是同一个包。
+    CONFLICT = "conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class Divergence:
+    """一台狗跟服务器差在哪儿。"""
+
+    kind: DivergenceKind
+    local: BundleRef | None
+    intended: BundleRef | None
+    #: 差几版。``BEHIND`` / ``AHEAD`` 时是正数,别的情况是 0。
+    gap: int
+    #: 最后一次同步是多久以前(秒)。从没同步过是 ``None``。
+    #: **负数是留着的**:它说明这台的钟比服务器快,而那正是 ``clock_skew()``
+    #: 在另一头报的同一件事。夹到 0 就把这条线索抹掉了。
+    since_sync_s: float | None
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind.value,
+            "local": self.local.to_wire() if self.local else None,
+            "intended": self.intended.to_wire() if self.intended else None,
+            "gap": self.gap,
+            "since_sync_s": self.since_sync_s,
+        }
+
+
+def divergence(*, local: BundleRef | None, intended: BundleRef | None,
+               last_sync_ms: int | None, now_ms: int) -> Divergence:
+    """狗手上那一版跟服务器那一版差在哪儿。**纯函数。**
+
+    §3.4:狗手上那一版是「执行」的唯一真理源,服务器那一版是「意图」的唯一
+    真理源。**规格原话:不显示落差是这一节最危险的失败模式** —— 所以这不是
+    一个 UI 细节,是一个有测试的判据。
+    """
+    since = None if last_sync_ms is None else (now_ms - last_sync_ms) / 1000.0
+
+    def 出(kind: DivergenceKind, gap: int = 0) -> Divergence:
+        return Divergence(kind, local, intended, gap, since)
+
+    # **「从没同步过」压在最前面。** 两边碰巧都是 v7 也不算一致:那是两个从
+    # 没对过话的人报了同一个数字,而不是一次成功的同步。
+    if last_sync_ms is None:
+        return 出(DivergenceKind.NEVER_SYNCED)
+    if local is None and intended is None:
+        return 出(DivergenceKind.IN_SYNC)
+    if local is None:
+        assert intended is not None
+        return 出(DivergenceKind.BEHIND, intended.version)
+    if intended is None:
+        return 出(DivergenceKind.AHEAD, local.version)
+    if local.bundle_id != intended.bundle_id:
+        # 狗手上跑着**别的站点**的包。比落后几版严重得多。
+        return 出(DivergenceKind.CONFLICT)
+    if local.version == intended.version:
+        if local.content_sha256 == intended.content_sha256:
+            return 出(DivergenceKind.IN_SYNC)
+        # §3.2 定死了同号不许换内容。真出现了,说明包在路上被改过、或者有人
+        # 手工动过盘 —— 报「一致」就等于把 content_sha256 这道闸白设了。
+        return 出(DivergenceKind.CONFLICT)
+    if local.version < intended.version:
+        return 出(DivergenceKind.BEHIND, intended.version - local.version)
+    return 出(DivergenceKind.AHEAD, local.version - intended.version)
