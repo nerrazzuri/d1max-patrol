@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import pytest
 
-from d1max_patrol.app.server import _TICK_S, AppServer
+from d1max_patrol.app.server import AppServer
 from tests.app.conftest import get_json, make_ctx, request, sse
 
 PIN = "428913"
@@ -42,6 +42,26 @@ def 解锁(server, operator: str = "张三") -> str:
                             payload={"pin": PIN, "operator": operator})
     assert code == 200, body
     return json.loads(body)["token"]
+
+
+def 等到(取值, 期望, *, 最多等=3.0):
+    """一直读到快照重建过为止, 最多等这么久。
+
+    **不写死 ``sleep(_TICK_S + 余量)``。** 那种写法的余量是拿机器负载赌的:
+    这台机器上跑全量套件的时候, 一拍 0.5 秒的余量给 0.3 秒并不宽裕, 偶尔
+    错过一拍就红一次, 而这种红没人复现得出来。这里改成"到点就走、不到就
+    再看一眼", 常见情况下比写死的 sleep 还快, 负载高的时候也不会假红。
+
+    等的是墙上时间, 不是被测代码里的时刻 —— ``_StateHub`` 那一拍是真的
+    ``asyncio.sleep`` 在后台线程里跑, 没有可注入的钟能拨快它(§8.5 第 2 条
+    管的是被测代码, 不是等一个真线程)。
+    """
+    截止 = time.monotonic() + 最多等
+    while True:
+        got = 取值()
+        if got == 期望 or time.monotonic() >= 截止:
+            return got
+        time.sleep(0.02)
 
 
 def auth(token: str) -> dict[str, str]:
@@ -109,9 +129,9 @@ def test_状态快照里有control段(有pin的服务):
     有pin的服务.auth.unlock(PIN, "192.168.1.50", operator="李四")
     # /api/state 读的是缓存快照,新会话得等下一拍重建才看得见,原因同下面
     # test_持有租约之后快照里看得见是谁 的 docstring。
-    time.sleep(_TICK_S + 0.3)
-    snap2 = get_json(有pin的服务, "/api/state", headers=auth(tok))
-    assert snap2["control"]["sessions"] == 1
+    got = 等到(lambda: get_json(有pin的服务, "/api/state",
+                                headers=auth(tok))["control"]["sessions"], 1)
+    assert got == 1
 
 
 def test_没设pin时control段也在(server):
@@ -129,7 +149,7 @@ def test_快照里没有token(有pin的服务):
 def test_持有租约之后快照里看得见是谁(有pin的服务, 墙钟):
     """``/api/state`` 读的是 ``_StateHub`` 的缓存快照,跟 ``links``/``procs``/
     ``caps`` 一样只在 tick(或导航/设备事件)时重建 —— 这是既有设计,不是这
-    次接线漏掉的。所以这里真等一拍(``_TICK_S`` 一点余量),顺带把
+    次接线漏掉的。所以这里真等一拍(见 ``等到``),顺带把
     ``_tick`` 里 sweep → drain → _rebuild 那条链路也走一遍,这才是这个任务
     真正要交付的东西。
     """
@@ -137,9 +157,10 @@ def test_持有租约之后快照里看得见是谁(有pin的服务, 墙钟):
     sess = 有pin的服务.auth.session_of(tok)
     assert sess is not None
     有pin的服务.control.book.acquire(sess.ref, sess.operator, now_ms=墙钟.t)
-    time.sleep(_TICK_S + 0.3)
-    snap = get_json(有pin的服务, "/api/state", headers=auth(tok))
-    assert snap["control"]["holder"] == {"ref": sess.ref, "operator": "张三"}
+    想要 = {"ref": sess.ref, "operator": "张三"}
+    got = 等到(lambda: get_json(有pin的服务, "/api/state",
+                                headers=auth(tok))["control"]["holder"], 想要)
+    assert got == 想要
 
 
 def test_留痕会上事件流(有pin的服务, 墙钟):
