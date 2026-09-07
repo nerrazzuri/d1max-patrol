@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,6 +48,12 @@ AUDIT_KINDS: frozenset[str] = frozenset({
     "acquired", "released", "expired", "dropped",
     "takeover_asked", "taken_over", "forced",
 })
+
+__all__ = (
+    "AUDIT_KINDS", "AUDIT_MAX", "LEASE_HEARTBEAT_MS", "LEASE_TTL_MS",
+    "TAKEOVER_GRACE_MS", "AuditRecord", "Holder", "LeaseBook", "LeaseBusy",
+    "LeaseError", "LeaseLost", "LeaseState",
+)
 
 
 class LeaseError(RuntimeError):
@@ -206,6 +213,36 @@ class LeaseBook:
             if self._holder is not None and self._holder.ref == ref:
                 self._log(now_ms, "released", self._holder, "")
                 self._clear()
+            return self._snapshot()
+
+    def keep_only(self, refs: Iterable[str], *, now_ms: int) -> LeaseState:
+        """只留下这些 token 指纹的租约。**token 一失效,租约立即释放**(§6.4)。
+
+        反过来不成立:一个 token 可以没有租约 —— 那就是只读观众,§3.6 那 3
+        个名额里的另外两个正是干这个的。
+
+        为什么是"把活着的交进来"而不是让 ``TokenStore`` 回调:回调要在
+        ``TokenStore`` 的锁里回头去拿 ``LeaseBook`` 的锁,而这里又可能反过来
+        问会话 —— 两把锁两个方向,那是死锁的写法。
+        """
+        live = frozenset(refs)
+        with self._lock:
+            self._settle(now_ms)
+            if (self._challenger is not None
+                    and self._challenger.ref not in live):
+                gone = self._challenger
+                self._challenger = None
+                self._grace_ends = None
+                self._log(now_ms, "dropped", gone, "请求接管的那个会话没了")
+            if self._holder is not None and self._holder.ref not in live:
+                gone = self._holder
+                waiting = self._challenger
+                self._clear()
+                self._log(now_ms, "dropped", gone,
+                          "token 失效了,租约跟着走(§6.4)")
+                if waiting is not None:
+                    self._grant(waiting, now_ms, "taken_over",
+                                "原持有者的 token 失效了")
             return self._snapshot()
 
     def ask_takeover(self, ref: str, operator: str = "", *,
