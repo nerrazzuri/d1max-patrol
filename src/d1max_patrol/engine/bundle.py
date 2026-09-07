@@ -25,7 +25,7 @@ from typing import Any
 import yaml
 
 from .mission import MissionError, parse_mission
-from .release import tree_sha256
+from .release import point_link, tree_sha256
 
 #: 包的自述文件名。整包哈希不算它自己 —— 它里头存着那个值。
 BUNDLE_MANIFEST = "bundle.yaml"
@@ -427,3 +427,218 @@ def verify_bundle(bundle_dir: Path | str) -> BundleManifest:
         raise BundleError(f"content_sha256 对不上: 自述说 {m.content_sha256}, "
                           f"实际是 {got}")
     return m
+
+
+# -------------------------------------------------------- 落盘、两份、回退
+
+CURRENT_LINK = "current"
+PREVIOUS_LINK = "previous"
+#: 链存不下的那点东西:证没证过、退过哪些。**「在跑哪一版」不在这儿。**
+LANDED = "landed.json"
+
+#: 槽名长什么样:``<bundle_id>-<version>``。**槽名会被拼进路径。**
+_SLOT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,47}-[0-9]{1,6}$")
+
+
+@dataclass(frozen=True, slots=True)
+class Rollback:
+    """退过一次。``frm`` 而不是 ``from``,后者是关键字。"""
+
+    at: str
+    frm: str
+    to: str
+    reason: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"at": self.at, "from": self.frm, "to": self.to,
+                "reason": self.reason}
+
+
+@dataclass(frozen=True, slots=True)
+class BundleState:
+    """盘上现在是什么局面。"""
+
+    current: str
+    previous: str
+    #: ``current`` 这一版有没有真跑成过一次。
+    proven: bool
+    #: 退过哪些。**只增。** 清理磁盘不清它。
+    rollbacks: tuple[Rollback, ...]
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"current": self.current, "previous": self.previous,
+                "proven": self.proven,
+                "rollbacks": [r.to_wire() for r in self.rollbacks]}
+
+
+def _链指向(root: Path, 名: str) -> str:
+    """一条链指着的槽名。没有这条链就是空串。"""
+    link = root / 名
+    if not link.is_symlink():
+        return ""
+    return Path(os.readlink(link)).name
+
+
+def _读记(root: Path) -> dict[str, Any]:
+    """读 ``landed.json``。**读不出来就当空的,不炸。**
+
+    链才是「在跑哪一版」的唯一真理源。一个坏掉的 json 不该让狗连自己
+    在跑什么都说不出来。
+    """
+    try:
+        raw = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _写记(root: Path, 记: dict[str, Any]) -> None:
+    (root / LANDED).write_text(
+        json.dumps(记, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8")
+
+
+def read_state(bundles_root: Path | str) -> BundleState:
+    """盘上现在是什么局面。"""
+    root = Path(bundles_root)
+    cur = _链指向(root, CURRENT_LINK)
+    记 = _读记(root)
+    退 = tuple(Rollback(str(r.get("at", "")), str(r.get("from", "")),
+                        str(r.get("to", "")), str(r.get("reason", "")))
+               for r in 记.get("rollbacks", [])
+               if isinstance(r, dict))
+    # proven 记的是**哪一个槽**被证过。存布尔的话,有人手工把 current 挪到
+    # 另一版上,那一版就凭空继承了「跑成过」这个结论 —— 它一次都没跑过。
+    return BundleState(cur, _链指向(root, PREVIOUS_LINK),
+                       bool(cur) and 记.get("proven_slot") == cur, 退)
+
+
+def active_bundle(bundles_root: Path | str) -> Path | None:
+    """``current`` 指着的那个包目录。没有就 ``None``。"""
+    root = Path(bundles_root)
+    link = root / CURRENT_LINK
+    return link.resolve() if link.is_symlink() else None
+
+
+def land(bundles_root: Path | str, staged: Path | str) -> BundleManifest:
+    """把一个打好的包落到盘上。**只落盘,不换链**(定夺 11)。
+
+    「落好了但还没生效」是一个必须能被看到的状态。合成一个的话,要测它
+    只能靠一个 sleep 循环,而 §8.5 把 sleep 禁了。
+
+    同一个包落第二遍是**空操作** —— 网络会重传,报错会让重传逻辑变成一个
+    要处理特例的东西。同号不同内容则拒:§3.2 的版本号是单调递增的。
+    """
+    root, staged = Path(bundles_root), Path(staged)
+    m = verify_bundle(staged)
+    dest = root / m.slot_name
+    if dest.exists():
+        旧 = read_manifest(dest)
+        if 旧.content_sha256 == m.content_sha256:
+            return m                       # 重传,空操作
+        raise BundleError(
+            f"{m.slot_name} 已经在盘上了,而且内容不一样(盘上 "
+            f"{旧.content_sha256[:12]},来的是 {m.content_sha256[:12]}) —— "
+            "版本号要单调递增,改了内容就得升版号")
+    root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(staged, dest, symlinks=True)
+    return m
+
+
+def apply_bundle(bundles_root: Path | str, slot_name: str, *,
+                 sn: str = "", force: bool = False) -> BundleState:
+    """让某一版生效。**换链之前先校验** —— 换完再校验的话,坏包已经在跑了。
+
+    退过的那一版默认不许再生效:什么都不拦的话,下一次下发会原样再生效一次
+    那个崩过的包,然后再退一次 —— 一个安静的死循环,现场看到的是「狗一直在
+    重启」。``force`` 是给「人看过日志、认定那次是别的原因」留的路,必须
+    明确写出来。
+
+    ``sn`` 是这台机器的序列号,拿去跟 §3.1 那个「目标 SN」对(定夺 13)。
+    **闸只在这儿,不在 ``parse_manifest`` 也不在 ``land``:**
+    换链是唯一一个「这台机器要开始按这份包干活了」的时刻。服务器跑的是同一段
+    编包和校验代码(§3.8),它手上根本没有「我是哪台狗」这个概念。
+    ``force`` **不跳这道闸** —— 它是给「退过的那一版」开的口子,不是给
+    「这份包不是给这台狗的」开的。
+    """
+    root = Path(bundles_root)
+    # **槽名是外面传进来的,而且会被拼进路径。** ``root / "../../etc"`` 在
+    # Linux 上解出来就是 ``/etc``,而 ``/etc`` 真的是个目录 —— 光靠下一行的
+    # ``is_dir()`` 拦不住,后面那句 ``verify_bundle`` 就会去遍历它。
+    if not _SLOT_RE.match(slot_name):
+        raise BundleError(f"槽名不合规: {slot_name!r} —— 形如 site-kl-7")
+    dest = root / slot_name
+    if not dest.is_dir():
+        raise BundleError(f"{slot_name} 不在 {root} 底下")
+    m = verify_bundle(dest)
+
+    if not m.accepts(sn):
+        raise BundleError(
+            f"这份包不是给这台机器的:{slot_name} 的 targets 是 "
+            f"{list(m.targets)},本机 SN 是 {sn!r}(定夺 13)")
+
+    st = read_state(root)
+    if not force and any(r.frm == slot_name for r in st.rollbacks):
+        raise BundleError(f"{slot_name} 是退过的那一版,不许再生效 —— "
+                          "要硬来就明确传 force")
+
+    if st.current and st.current != slot_name:
+        point_link(root / PREVIOUS_LINK, root / st.current)
+    point_link(root / CURRENT_LINK, dest)
+    记 = _读记(root)
+    记.pop("proven_slot", None)            # 新的一版还没被证过
+    _写记(root, 记)
+    return read_state(root)
+
+
+def mark_proven(bundles_root: Path | str) -> BundleState:
+    """记下:``current`` 这一版真跑成过一次。§3.2 的自动回退判据靠它。"""
+    root = Path(bundles_root)
+    cur = _链指向(root, CURRENT_LINK)
+    if not cur:
+        raise BundleError(f"没有 {CURRENT_LINK},没有哪一版可以标记")
+    记 = _读记(root)
+    记["proven_slot"] = cur
+    _写记(root, 记)
+    return read_state(root)
+
+
+def rollback_bundle(bundles_root: Path | str, *, at: str,
+                    reason: str) -> BundleState:
+    """退回上一版,并留下记录。
+
+    退完之后 ``previous`` 指着**刚被退掉的那一版** —— 它还在盘上,日志和
+    现场取证都要用;但它进了 ``rollbacks``,``apply_bundle`` 默认不让它再上。
+    """
+    root = Path(bundles_root)
+    _aware(at)                              # 时刻必须带时区
+    cur, prev = _链指向(root, CURRENT_LINK), _链指向(root, PREVIOUS_LINK)
+    if not prev:
+        raise BundleError(f"没有 {PREVIOUS_LINK},退不了")
+    point_link(root / CURRENT_LINK, root / prev)
+    if cur:
+        point_link(root / PREVIOUS_LINK, root / cur)
+    记 = _读记(root)
+    记.setdefault("rollbacks", []).append(
+        {"at": at, "from": cur, "to": prev, "reason": reason})
+    记["proven_slot"] = prev                # 退回去的那一版本来就是证过的
+    _写记(root, 记)
+    return read_state(root)
+
+
+def prune_bundles(bundles_root: Path | str) -> tuple[str, ...]:
+    """只留 ``current`` 和 ``previous`` 两份,别的删掉。返回删了哪些。
+
+    §3.2:狗上永远留两份。``landed.json`` 和那两条链不动 —— 尤其
+    ``rollbacks`` 是只增的,清磁盘不该清掉「这一版崩过」这条事实。
+    """
+    root = Path(bundles_root)
+    st = read_state(root)
+    留 = {st.current, st.previous} - {""}
+    删 = []
+    for p in sorted(root.iterdir()):
+        if p.is_symlink() or not p.is_dir() or p.name in 留:
+            continue
+        shutil.rmtree(p)
+        删.append(p.name)
+    return tuple(删)

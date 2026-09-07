@@ -322,29 +322,35 @@ def stage(layout: Layout, package: Path | str, *, now_ms: int) -> ReleaseManifes
     return manifest
 
 
-def _point_current(layout: Layout, name: str) -> None:
-    """把 ``current`` 指到 ``name`` 上。
+def point_link(link: Path, target: Path) -> None:
+    """把 ``link`` 这条符号链接指到 ``target`` 上。
 
     **先做一条临时链,再一次替换过去。** 直接「删了再建」的话,中间有一个
-    ``current`` 不存在的窗口,守卫正好在那一瞬间开机,看到的就是一台没有
+    ``link`` 不存在的窗口,守卫正好在那一瞬间开机,看到的就是一台没有
     current 的机器。``os.replace`` 在 Linux 上一步换完,没有这个窗口。
 
     Windows 开发机上替换目录符号链接会 ``WinError 5``(已实测),退回两步走。
-    那条退路上的窗口由 ``pending.json`` 兜着 —— 标记是换链之前写的,守卫照着
-    它把 ``current`` 修得回来。**两种系统调用,同一条业务路径。**
+    那条退路上的窗口由调用方的标记文件兜着 —— 标记是换链之前写的。
+
+    版本目录(§7.3)和任务包(§3.2)用的是同一段。**两处各写一遍的话,
+    哪天只改对了一处,另一处会在那个窗口上出事,而且不会有测试红。**
     """
-    target = layout.releases / safe_name(name)
-    tmp = layout.root / (CURRENT_LINK + ".new")
+    tmp = link.parent / (link.name + ".new")
     if tmp.is_symlink() or tmp.exists():
         tmp.unlink()
     tmp.symlink_to(target, target_is_directory=True)
     try:
-        os.replace(tmp, layout.current)
+        os.replace(tmp, link)
     except OSError:
         tmp.unlink()
-        if layout.current.is_symlink() or layout.current.exists():
-            layout.current.unlink()
-        layout.current.symlink_to(target, target_is_directory=True)
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(target, target_is_directory=True)
+
+
+def _point_current(layout: Layout, name: str) -> None:
+    """把 ``current`` 指到 ``name`` 上。名字过闸,再交给 ``point_link``。"""
+    point_link(layout.current, layout.releases / safe_name(name))
 
 
 def activate(layout: Layout, name: str, *, now_ms: int,
