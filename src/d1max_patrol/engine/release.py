@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -289,3 +290,124 @@ def clear_pending(layout: Layout) -> None:
         layout.pending.unlink()
     except OSError:
         pass
+
+
+def stage(layout: Layout, package: Path | str, *, now_ms: int) -> ReleaseManifest:
+    """把一个包落进 ``releases/<name>/``。**校验不过就一个字节都不写。**
+
+    先拷到 ``<name>.staging``、拷完再改名 —— 半个版本目录比没有更坏,它看着
+    像装上了,而 ``installed()`` 也确实会把它列出来。
+
+    同一个包落两遍是幂等的:装机脚本要可重放(§7.9),而「已经装过了」不是错。
+    """
+    package = Path(package)
+    manifest = verify_package(package)
+    dest = layout.release_dir(manifest.name)
+    if dest.is_dir():
+        # 已经落过了。这里不去比对盘上那份的哈希:那是 selfcheck 的活,
+        # 而且落槽是个热路径 —— 装机脚本每跑一次就重算一遍整棵树不划算。
+        return manifest
+    layout.releases.mkdir(parents=True, exist_ok=True)
+    staging = layout.releases / (manifest.name + ".staging")
+    if staging.exists():
+        shutil.rmtree(staging)
+    try:
+        shutil.copytree(package, staging)
+        os.replace(staging, dest)
+    except OSError:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return manifest
+
+
+def _point_current(layout: Layout, name: str) -> None:
+    """把 ``current`` 指到 ``name`` 上。
+
+    **先做一条临时链,再一次替换过去。** 直接「删了再建」的话,中间有一个
+    ``current`` 不存在的窗口,守卫正好在那一瞬间开机,看到的就是一台没有
+    current 的机器。``os.replace`` 在 Linux 上一步换完,没有这个窗口。
+
+    Windows 开发机上替换目录符号链接会 ``WinError 5``(已实测),退回两步走。
+    那条退路上的窗口由 ``pending.json`` 兜着 —— 标记是换链之前写的,守卫照着
+    它把 ``current`` 修得回来。**两种系统调用,同一条业务路径。**
+    """
+    target = layout.releases / safe_name(name)
+    tmp = layout.root / (CURRENT_LINK + ".new")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    tmp.symlink_to(target, target_is_directory=True)
+    try:
+        os.replace(tmp, layout.current)
+    except OSError:
+        tmp.unlink()
+        if layout.current.is_symlink() or layout.current.exists():
+            layout.current.unlink()
+        layout.current.symlink_to(target, target_is_directory=True)
+
+
+def activate(layout: Layout, name: str, *, now_ms: int,
+             auto: bool = False, sn: str = "") -> Pending:
+    """切到某一版。**先落标记,再换链** —— 这条顺序是本模块的枢纽。
+
+    换完不算数,要等 ``commit()``。中间这段时间里机器要是重启了,守卫看见标记
+    就开始数;数够 ``MAX_BOOT_ATTEMPTS`` 还没等到 commit,它就判新版起不来。
+    """
+    name = safe_name(name)
+    dest = layout.release_dir(name)
+    if not (dest / MANIFEST_NAME).is_file():
+        raise ReleaseError(f"{name} 没装在盘上 —— 先落槽再切")
+    src = current_name(layout)
+    if src == name:
+        raise ReleaseError(f"{name} 已经是在跑的那一版了")
+    pending = Pending(to=name, src=src, attempts=0, at_ms=now_ms,
+                      auto=auto, sn=sn)
+    write_pending(layout, pending)
+    _point_current(layout, name)
+    return pending
+
+
+def commit(layout: Layout) -> tuple[str, ...]:
+    """这一版坐实了:清标记,顺手把多余的版本删掉。返回删掉了哪几版。"""
+    clear_pending(layout)
+    return prune(layout)
+
+
+def rollback(layout: Layout, *, now_ms: int) -> str:
+    """退回上一版。**跟 activate 用同一个 ``_point_current``**,方向相反而已。
+
+    扳机只有一个(§7.3):重启后自检没过,或者守卫数够了次数。所以这里要求
+    在途标记必须在 —— 没有它就不知道该退到哪儿,而「猜一个」比不退更坏。
+    """
+    pending = read_pending(layout)
+    if pending is None:
+        raise ReleaseError("没有在途的升级 —— 没有该退回哪儿这回事")
+    if not pending.src:
+        raise ReleaseError("装机那一次没有上一版可退 —— 这台机器要人来看")
+    _point_current(layout, pending.src)
+    clear_pending(layout)
+    return pending.src
+
+
+def prune(layout: Layout, *, keep: int = KEEP_RELEASES) -> tuple[str, ...]:
+    """盘上只留 ``keep`` 份,按名字从旧到新删。返回删掉了哪几版。
+
+    **在跑的那版和退路那版绝不删。** 名字是日期打头的,大多数时候最旧的那份
+    确实该删 —— 但「大多数时候」在这儿不够:回滚之后在跑的正是较旧的那一版,
+    照名字删就把脚下的地板抽了。
+    """
+    pending = read_pending(layout)
+    protected = {current_name(layout)}
+    if pending is not None:
+        protected.update({pending.to, pending.src})
+    protected.discard("")
+
+    names = list(installed(layout))
+    dropped: list[str] = []
+    for name in names:
+        if len(names) - len(dropped) <= keep:
+            break
+        if name in protected:
+            continue
+        shutil.rmtree(layout.releases / name, ignore_errors=True)
+        dropped.append(name)
+    return tuple(dropped)
