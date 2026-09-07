@@ -50,9 +50,11 @@ from d1max_patrol.app.auth import (
     AUTH_PATH,
     Denied,
     Guard,
+    Session,
     normalize_pin,
 )
 from d1max_patrol.app.bridge import LoopBridge
+from d1max_patrol.app.control import ControlDesk
 from d1max_patrol.app.gridmap import GridError, from_frame, load_saved
 from d1max_patrol.app.identity import (
     NICKNAME_ENV,
@@ -281,6 +283,9 @@ class Request:
     headers: Mapping[str, str] = field(default_factory=dict)
     #: 请求从哪个 IP 来。PIN 试错限速按它记。
     client: str = ""
+    #: 这个请求是谁在发。没设 PIN 的部署上是 ``None`` —— 那种部署按定义只听
+    #: 本机,没有"谁是谁"这个问题(见 ``check_exposure``)。
+    session: Session | None = None
 
     def json(self) -> Any:
         """请求体当 JSON 解。空体算空对象 —— 很多 POST 本来就没内容。"""
@@ -628,8 +633,9 @@ class _StateHub:
     读到的要么是旧的一整份、要么是新的一整份,不会读到改了一半的。
     """
 
-    def __init__(self, ctx: AppContext) -> None:
+    def __init__(self, ctx: AppContext, control: ControlDesk) -> None:
         self._ctx = ctx
+        self._control = control
         self.events: EventEmitter[dict[str, Any]] = EventEmitter()
         self._snapshot: dict[str, Any] = {}
         self._tasks: list[asyncio.Task[None]] = []
@@ -683,13 +689,24 @@ class _StateHub:
                 self._rebuild()
 
     async def _tick(self) -> None:
-        """定期重建。
+        """定期重建,顺便结算控制权。
 
         链路断没断、子进程还在不在,这些是**属性**不是事件,没人会推给我们。
-        只有变了才发,所以静止的时候这条 SSE 是安静的。
+        租约到期也一样:没有人会来通知"那 30 秒过去了"。只有变了才发,所以静
+        止的时候这条 SSE 是安静的。
+
+        **这一拍只管显示和事件流,闸门不靠它。** 这里的 ``sweep()`` 是为了让
+        ``/api/state`` 和 SSE 上看到的控制权状态别拖太久;真正拦请求的
+        ``ControlDesk.require()`` 自己会在每次判定时调 ``sweep()``
+        (见 ``app/control.py``),不依赖这条 tick 有没有按时跑。也就是说,
+        就算这个协程因为某种原因卡住甚至死掉,也不会出现"租约早过期了,
+        但闸门还认"这种事——顶多是屏幕上的数字晚一拍才更新。
         """
         while True:
             await asyncio.sleep(_TICK_S)
+            self._control.sweep(now_ms=self._ctx.clock())
+            for rec in self._control.drain():
+                self.events.emit({"kind": "control", "event": rec.to_wire()})
             self._rebuild()
 
     def _on_nav(self, event: Any) -> None:
@@ -755,6 +772,7 @@ class _StateHub:
                 "procs": ctx.procs.running(),
             },
             "caps": sorted(ctx.nav.capabilities),
+            "control": self._control.snapshot(now_ms=ctx.clock()),
         }
 
 
@@ -812,11 +830,13 @@ class AppServer:
         #: 没有出处。开一个口子把它变成显式的。
         self._postcheck_sleep = postcheck_sleep
         self._auth = Guard(pin)
+        #: L1 控制权。**墙上钟**,理由见 ``app/control.py`` 的模块文档。
+        self._control = ControlDesk(self._auth, clock_ms=ctx.clock)
         self._host = host
         self._want_port = port
         self._httpd: _HTTPServer | None = None
         self._thread: threading.Thread | None = None
-        self._hub = _StateHub(ctx)
+        self._hub = _StateHub(ctx, self._control)
         self._routes: list[_Route] = []
         #: 哪几个挂载点上正跑着同步。**这是 HTTP 这一侧的状态**(哪几个请求
         #: 在飞),不是引擎状态 —— 引擎压根不知道备份这回事。服务是
@@ -916,6 +936,16 @@ class AppServer:
     def hub(self) -> _StateHub:
         return self._hub
 
+    @property
+    def auth(self) -> Guard:
+        """鉴权闸门。测试和控制权那几条路由要它。"""
+        return self._auth
+
+    @property
+    def control(self) -> ControlDesk:
+        """L1 控制权台。"""
+        return self._control
+
     # ------------------------------------------------------------ 路由
 
     def route(self, method: str, pattern: str, handler: Handler) -> None:
@@ -988,7 +1018,7 @@ class AppServer:
         """
         headers = headers or {}
         try:
-            self._auth.gate(method, path, headers, query)
+            session = self._auth.gate(method, path, headers, query)
         except Denied as exc:
             raise HttpError(exc.status, exc.error, exc.detail) from None
         if path.startswith("/static/"):
@@ -1003,7 +1033,7 @@ class AppServer:
                 continue
             return route.handler(Request(
                 method, path, match.groupdict(), query, body,
-                headers=headers, client=client))
+                headers=headers, client=client, session=session))
         if others:
             raise HttpError(405, f"{path} 不支持 {method}",
                             "支持的方法:" + "、".join(sorted(others)))
@@ -1021,7 +1051,8 @@ class AppServer:
         if not isinstance(body, dict):
             raise HttpError(400, "请求体要是个对象", '形如 {"pin": "..."}')
         try:
-            token = self._auth.unlock(body.get("pin"), req.client or "?")
+            token = self._auth.unlock(body.get("pin"), req.client or "?",
+                                      operator=body.get("operator", ""))
         except Denied as exc:
             raise HttpError(exc.status, exc.error, exc.detail) from None
         return json_response({"token": token})
@@ -2185,9 +2216,14 @@ class AppServer:
             free_mb=free_mb, need_mb=need_mb,
             battery_pct=float(battery),
             engine_running=ctx.engine.running,
-            # 第 6 卷才有租约。在那之前恒为 False,而不是"不知道" ——
-            # 这一项现在没有别的可能,写 None 只会让判据多一种要处理的形状。
-            lease_active=False,
+            # 用 sweep() 而不是 book.state():两者都会结算过期,但 sweep()
+            # 还会把 token 已经没了的租约释放掉(keep_only(live_refs))——
+            # 操作员手机掉线、token 死了,不该让那份租约再挡 30 秒 TTL 才放行
+            # (见 docs/第2卷待办.md 第 50 条)。``ControlDesk.require()`` 判
+            # 「有没有人握着控制权」用的就是这同一个 sweep(),这里跟它对齐,
+            # 免得同一个文件里出现两套判据。
+            lease_active=self._control.sweep(
+                now_ms=ctx.clock()).holder is not None,
             payload_recorded=payload.recorded, has_payload=payload.has,
             auto=auto, backup_age_days=targets)
 

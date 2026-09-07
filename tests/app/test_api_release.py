@@ -9,6 +9,7 @@ import pytest
 
 from d1max_patrol.app.identity import CONFIRM_PHRASE
 from d1max_patrol.app.server import AppServer
+from d1max_patrol.engine.lease import LEASE_TTL_MS
 from d1max_patrol.engine.release import (
     MANIFEST_NAME,
     Layout,
@@ -18,7 +19,7 @@ from d1max_patrol.engine.release import (
     tree_sha256,
 )
 
-from .conftest import get_err, get_json, make_ctx, post
+from .conftest import get_err, get_json, make_ctx, post, request
 
 
 def _pkg(root: Path, name: str) -> Path:
@@ -104,6 +105,108 @@ def test_自检没过就不许切而且链一动不动(rel_server, tmp_path):
     assert current_name(layout) == ""
     assert read_pending(layout) is None
     assert rel_server.重启记录 == []
+
+
+_RELPIN = "428913"
+
+
+class _假墙钟:
+    """给"租约到期"这两条测试拨钟用的——不能真等 30 秒(§8.5 第 2 条)。"""
+
+    def __init__(self, t: int = 1_757_000_000_000) -> None:
+        self.t = t
+
+    def __call__(self) -> int:
+        return self.t
+
+
+@pytest.fixture
+def rel_server_带钟(bridge, tmp_path):
+    """跟 ``rel_server`` 一样的机器,只是墙钟可以拨、设了 PIN。
+
+    设 PIN 是必须的:``lease_active`` 现在用 ``ControlDesk.sweep()`` 结
+    算,而 ``sweep()`` 会把"token 已经不在 ``Guard.live_refs()`` 里"的租约
+    当死租约释放掉(见 ``app/server.py`` 的 ``_gather_precheck`` 注释)。
+    没有真实会话就没有活着的 token,直接在 ``book`` 上塞一个编出来的
+    ref 会被 ``sweep()`` 秒杀,测不出"busy"——所以这里要真解锁一次拿一个
+    活着的 ``sess.ref``。
+    """
+    from d1max_patrol.app.identity import write_payload
+
+    payload_file = tmp_path / "payload.json"
+    write_payload(has=False, by="装机", now_ms=1, path=payload_file,
+                  confirm=CONFIRM_PHRASE)
+    钟 = _假墙钟()
+    ctx = make_ctx(bridge, tmp_path, release_root=tmp_path / "opt",
+                   payload_file=payload_file, clock=钟)
+    重启记录: list = []
+    ctx.restart = 重启记录.append
+    s = AppServer(ctx, port=0, pin=_RELPIN)
+    s.start()
+    s.重启记录 = 重启记录
+    s.钟 = 钟
+    yield s
+    s.stop()
+
+
+def _rel解锁(server) -> tuple[str, dict[str, str]]:
+    code, body, _ = request(server, "/api/auth", method="POST",
+                            payload={"pin": _RELPIN, "operator": "张三"})
+    assert code == 200, body
+    tok = json.loads(body)["token"]
+    return tok, {"Authorization": f"Bearer {tok}"}
+
+
+def test_持有租约时切版本会被busy挡住(rel_server_带钟, tmp_path):
+    """docs/第2卷待办.md 第 50 条:``busy`` 判据要接到真实的、结算过的租约状态。
+
+    这里直接摸 ``control.book``——``/api/control/acquire`` 这条路由是后面的
+    任务才接,这一卷只保证"只要 book 里有人握着,precheck 就看得见"。租约
+    绑的是真解锁拿到的 ``sess.ref``,不是编出来的字符串,这样它才是
+    ``sweep()`` 眼里"活着"的租约。
+    """
+    tok, hdr = _rel解锁(rel_server_带钟)
+    sess = rel_server_带钟.auth.session_of(tok)
+    assert sess is not None
+    pkg = _pkg(tmp_path / "pkg", "2026-09-20-77b2de")
+    code, body, _ = request(rel_server_带钟, "/api/release/install",
+                            method="POST", payload={"package": str(pkg)},
+                            headers=hdr)
+    assert code == 200, body
+    rel_server_带钟.control.book.acquire(sess.ref, sess.operator,
+                                        now_ms=rel_server_带钟.钟.t)
+    err = get_err(rel_server_带钟, "/api/release/activate", 409,
+                  method="POST", payload={"name": "2026-09-20-77b2de"},
+                  headers=hdr)
+    assert "租约" in json.dumps(err, ensure_ascii=False)
+    layout = Layout(root=rel_server_带钟._ctx.release_root)
+    assert current_name(layout) == ""
+    assert rel_server_带钟.重启记录 == []
+
+
+def test_租约过期后busy又通过了(rel_server_带钟, tmp_path):
+    """同一把租约,拨过 TTL 之后——不用等,也不用有人来"通知"——busy 该放行了。"""
+    tok, hdr = _rel解锁(rel_server_带钟)
+    sess = rel_server_带钟.auth.session_of(tok)
+    assert sess is not None
+    pkg = _pkg(tmp_path / "pkg", "2026-09-20-77b2de")
+    code, body, _ = request(rel_server_带钟, "/api/release/install",
+                            method="POST", payload={"package": str(pkg)},
+                            headers=hdr)
+    assert code == 200, body
+    rel_server_带钟.control.book.acquire(sess.ref, sess.operator,
+                                        now_ms=rel_server_带钟.钟.t)
+    get_err(rel_server_带钟, "/api/release/activate", 409,
+            method="POST", payload={"name": "2026-09-20-77b2de"},
+            headers=hdr)
+
+    rel_server_带钟.钟.t += LEASE_TTL_MS
+    got = get_json(rel_server_带钟, "/api/release/activate",
+                   method="POST", payload={"name": "2026-09-20-77b2de"},
+                   headers=hdr)
+    assert got["precheck"]["ok"] is True
+    layout = Layout(root=rel_server_带钟._ctx.release_root)
+    assert current_name(layout) == "2026-09-20-77b2de"
 
 
 def test_没记过上装属性的机器不许升(bridge, tmp_path):
