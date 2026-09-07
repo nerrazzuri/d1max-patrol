@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from d1max_patrol.app.auth import (
+    MAX_LOCAL_SESSIONS,
     MAX_SESSIONS,
     MAX_TOKENS,
     Denied,
@@ -196,9 +197,39 @@ def test_本机会话不占非本机的三个名额():
         g.unlock(PIN, "10.0.0.9", operator="赵六")
 
 
-def test_本机会话可以无限累积():
+def test_本机会话到上限也被拒():
+    """本机不是没有上限,只是不跟非本机共用那 3 个。**满了照样硬拒,不悄悄
+    挤掉别人**——这是复审第二轮的补丁:免限之后 MAX_TOKENS = 64 这个总
+    兜底第一次变得可达,而 TokenStore.issue 的 FIFO 淘汰不看 channel 也
+    不看 operator,顶到 64 会把最早签发的会话(含非本机)无通知踢掉。给
+    本机自己一个远小于 64 的上限,让 FIFO 永远轮不到触发。
+    """
     g = Guard(PIN, clock=假钟())
-    toks = [g.unlock(PIN, "127.0.0.1", operator=f"本机{i}") for i in range(5)]
-    assert len(g.sessions()) == 5
+    toks = [g.unlock(PIN, "127.0.0.1", operator=f"本机{i}")
+            for i in range(MAX_LOCAL_SESSIONS)]
+    assert len(g.sessions()) == MAX_LOCAL_SESSIONS
+    with pytest.raises(Denied):
+        g.unlock(PIN, "127.0.0.1", operator="本机加塞")
+    assert len(g.sessions()) == MAX_LOCAL_SESSIONS
     for tok in toks:
         assert g.session_of(tok) is not None
+
+
+def test_本机占满也不影响非本机的三个名额():
+    """两个名额池互不侵占:本机顶到自己的上限,非本机的三个名额还是三个。"""
+    g = Guard(PIN, clock=假钟())
+    for i in range(MAX_LOCAL_SESSIONS):
+        g.unlock(PIN, "127.0.0.1", operator=f"本机{i}")
+    for i, name in enumerate(("张三", "李四", "王五")):
+        g.unlock(PIN, f"10.0.0.{i}", operator=name)
+    assert len(g.sessions()) == MAX_LOCAL_SESSIONS + 3
+    with pytest.raises(Denied):
+        g.unlock(PIN, "10.0.0.9", operator="赵六")
+
+
+def test_两个会话上限之和远小于内存兜底():
+    """MAX_SESSIONS + MAX_LOCAL_SESSIONS 必须远小于 MAX_TOKENS,不然本机
+    免限这个口子会让 TokenStore.issue 的 FIFO 淘汰被顶到、无通知踢掉正在
+    作业的非本机会话。**调宽任何一个常量之前,先想想 FIFO 淘汰会不会被
+    触发。**"""
+    assert MAX_SESSIONS + MAX_LOCAL_SESSIONS < MAX_TOKENS // 2

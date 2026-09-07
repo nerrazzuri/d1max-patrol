@@ -87,6 +87,26 @@ MAX_TOKENS = 64
 #: 威胁模型见 ``Guard._issue``。
 MAX_SESSIONS = 3
 
+#: 本机(``CHANNEL_LOCAL``)自己的会话上限。**本机免于 MAX_SESSIONS 这道
+#: 闸(见 ``Guard._issue``),但不能因此对 ``MAX_TOKENS = 64`` 这个更底层
+#: 的内存兜底敞开口子** —— ``TokenStore.issue`` 满了之后是纯插入顺序
+#: FIFO 淘汰,不看 channel 也不看 operator,顶到 64 会把最早签发的
+#: 会话(包括正在作业的非本机会话)无通知踢掉,正好绕开 ``Guard._issue``
+#: 里"名额满了只挤同名、从不挤别人"这句承诺。作为攻击不值一提(能走回
+#: 环的人早就能 ``systemctl stop``),但作为**事故**很现实:一个本地脚本
+#: 或服务在循环里重复认证,就能把正在作业的运维静默踢掉,日志里还看不出
+#: 来 —— 而"控制权无声易主"正是这一卷存在的理由,不能被自己开的口子破
+#: 坏。所以本机也要有一个远小于 ``MAX_TOKENS`` 的上限:**MAX_SESSIONS +
+#: MAX_LOCAL_SESSIONS 必须远小于 MAX_TOKENS**,这样那条 FIFO 淘汰永远轮
+#: 不到被触发(见 test_两个会话上限之和远小于内存兜底)。数值给个位数 ——
+#: 本机会话的正当用途是"有人在控制台前",不是承载并发。
+#:
+#: **本机满了之后一样硬拒,不是又变回"没钥匙"。** 人在控制台前,他还能
+#: 重启服务或杀掉那个失控的脚本,这两件事射程内的攻击者都做不到 —— 权限
+#: 梯度仍然在对的那一头。免限没有被撤销,只是从"无限"改成"一个够用的
+#: 有限值"。
+MAX_LOCAL_SESSIONS = 4
+
 #: Host 头里允许出现的名字。别的一律只收 IP 字面量。
 _LOCAL_NAMES = frozenset({"localhost"})
 
@@ -537,12 +557,14 @@ class Guard:
                  nonces: NonceStore | None = None,
                  clock: Callable[[], float] = time.monotonic,
                  ap_nets: Sequence[str] = AP_NETS,
-                 max_sessions: int = MAX_SESSIONS) -> None:
+                 max_sessions: int = MAX_SESSIONS,
+                 max_local_sessions: int = MAX_LOCAL_SESSIONS) -> None:
         self._pin = normalize_pin(pin) if pin is not None else None
         self.tokens = tokens if tokens is not None else TokenStore()
         self.throttle = throttle if throttle is not None else Throttle()
         self.nonces = nonces if nonces is not None else NonceStore()
         self.max_sessions = max_sessions
+        self.max_local_sessions = max_local_sessions
         self._clock = clock
         self._ap_nets = tuple(ap_nets)
 
@@ -650,17 +672,27 @@ class Guard:
                now: float) -> str:
         """发一个 token。**先看有没有名额**(§3.6),再看通道(§6.5)。
 
-        **名额只管非本机通道。** ``CHANNEL_LOCAL`` 不占用、也不受这道闸拦 ——
-        ``MAX_SESSIONS`` 的理由是"CPE 的无线上行是共享的",回环流量根本不
-        走那条上行,这条理由对它不成立;而能从回环发请求的人已经在这台机
-        器上了(SSH/控制台到场),这是比"在热点射程内"更强的权限,免限跟
-        ``channel_of`` 定的信任梯度是一致的,不是另开的口子。
+        **本机(``CHANNEL_LOCAL``)有自己的一套名额,``MAX_LOCAL_SESSIONS``,
+        不跟非本机共用 ``MAX_SESSIONS`` 那 3 个。** 理由是"CPE 的无线上行
+        是共享的",回环流量根本不走那条上行,这条理由对它不成立;而能从
+        回环发请求的人已经在这台机器上了(SSH/控制台到场),这是比"在热
+        点射程内"更强的权限。**但本机不是没有上限** —— 更底层的
+        ``MAX_TOKENS = 64`` 是纯插入顺序 FIFO 淘汰,不看 channel 也不看
+        operator,如果本机真的不设限,顶到 64 会把最早签发的非本机会话
+        无通知踢掉。``MAX_SESSIONS + MAX_LOCAL_SESSIONS`` 因此被钉在远小
+        于 ``MAX_TOKENS`` 的量级,让那条 FIFO 永远轮不到触发(见常量定义
+        处、以及 test_两个会话上限之和远小于内存兜底)。**本机满了一样硬
+        拒,不是又变回"没钥匙"** —— 人在控制台前,他还能重启服务或杀掉
+        那个失控的脚本,这两件事射程内的攻击者都做不到,权限梯度仍然在
+        对的那一头;免限没有被撤销,只是从"无限"改成"一个够用的有限值"。
 
         名额满了淘汰谁,是安全判据不是容量细节:这里选的是"同名换座" ——
         只挤同一个报名者自己的老会话,从不挤别人的。威胁模型是反复登录的
-        攻击者:如果谁都能靠猜中或不带 operator 挤掉别人的名额,``MAX_SESSIONS``
-        就从一道闸变成了一件武器。所以空名字(§6.3:狗从不核实报名,空名字
+        攻击者:如果谁都能靠猜中或不带 operator 挤掉别人的名额,这道闸就
+        从一道闸变成了一件武器。所以空名字(§6.3:狗从不核实报名,空名字
         谁都能报)不算身份,不许互相挤 —— 换座只发生在"同一个字符串"之间。
+        本机和非本机各自的名额池互不相干:同名换座只在同一个池子里发生,
+        本机会话挤不掉非本机会话,反过来也一样。
 
         **但"同名 = 同一个人"这个等式不总成立。** 名字是操作人自报的,狗
         从不核实(``OPERATOR_NOTICE``)。这条防线挡得住的是"攻击者不知道
@@ -673,7 +705,7 @@ class Guard:
         可靠的身份判据 —— 它只是"记账用的字符串相等",跟 §6.3 说的是同一
         回事。
 
-        **三个非本机名额都满、又没有同名可换座时,远端的人拿不回座位。**
+        **非本机名额都满、又没有同名可换座时,远端的人拿不回座位。**
         ``logout()`` 只能退自己手里的 token,``revoke_ref()`` 没有对外的
         HTTP 路由,这一卷里唯一能从远端挤开别人的办法就是上面的同名换座。
         走不通的话,能进来的只有本机(SSH/控制台到场),或者重启整个服务
@@ -682,23 +714,25 @@ class Guard:
         """
         name = normalize_operator(operator)
         channel = self.channel_of(client)
-        if channel != CHANNEL_LOCAL:
-            # 本机(CHANNEL_LOCAL)不占用、也不受这道闸拦 —— 见上面的
-            # docstring:MAX_SESSIONS 防的是共享的无线上行,回环流量不占
-            # 那条上行,这条理由对它不成立。
-            live = [s for s in self.tokens.sessions(now=now)
+        if channel == CHANNEL_LOCAL:
+            cap = self.max_local_sessions
+            pool = [s for s in self.tokens.sessions(now=now)
+                    if s.channel == CHANNEL_LOCAL]
+            full_msg = f"本机(回环)同时最多 {cap} 个会话"
+        else:
+            cap = self.max_sessions
+            pool = [s for s in self.tokens.sessions(now=now)
                     if s.channel != CHANNEL_LOCAL]
-            if len(live) >= self.max_sessions:
-                # 同一个报名的人回来了(换设备、重装 app、清了缓存):挤掉
-                # 的是他自己那个老会话,不是别人的。空名字不算身份 —— 让
-                # 空名字互相挤等于把上限废掉。
-                mine = [s for s in live if name and s.operator == name]
-                if not mine:
-                    raise Denied(409,
-                                 f"这只狗最多同时连 {self.max_sessions} 个人",
-                                 self._占位说明(live))
-                for s in mine:
-                    self.tokens.revoke_ref(s.ref)
+            full_msg = f"这只狗最多同时连 {cap} 个人"
+        if len(pool) >= cap:
+            # 同一个报名的人回来了(换设备、重装 app、清了缓存):挤掉的是
+            # 他自己那个老会话,不是别人的。空名字不算身份 —— 让空名字互
+            # 相挤等于把上限废掉。本机和非本机各自一个池子,互不侵占。
+            mine = [s for s in pool if name and s.operator == name]
+            if not mine:
+                raise Denied(409, full_msg, self._占位说明(pool))
+            for s in mine:
+                self.tokens.revoke_ref(s.ref)
         idle = AP_TOKEN_IDLE_S if channel == CHANNEL_AP else None
         return self.tokens.issue(now=now, operator=name, channel=channel,
                                  readonly=readonly, idle_s=idle)
