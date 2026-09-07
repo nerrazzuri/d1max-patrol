@@ -191,3 +191,41 @@ def test_自检路由不会把在途标记清掉(bridge, tmp_path):
         assert read_pending(layout) is not None
     finally:
         s.stop()
+
+
+def test_start带postcheck假时不跑自检main要用这条时序(装了两版):
+    """§7.3:自动回滚只有"重启后自检没过"这一个触发条件,不该被开机时序自己
+    触发。``main()`` 里 ``server.start()`` 排在三个后端 ``connect()`` 之前
+    (见 ``server.py`` 的 ``main()``),那时候问 ``control``/``bridges`` 两项
+    几乎必然假失败——所以 ``main()`` 传 ``postcheck=False``,等三个
+    ``connect()`` 都跑完了才补一次 ``server._boot_postcheck()``。
+
+    这条不跑 ``main()``(不真的连后端、不真的起子进程),只证明
+    ``AppServer`` 这一侧的两个承诺:``postcheck=False`` 时 ``start()`` 本身
+    是空操作,以及事后显式调一次 ``_boot_postcheck()`` 才真的会跑判据。
+    """
+    ctx, layout = 装了两版
+    ctx.restart = lambda _plan: None
+    s = AppServer(ctx, port=0)
+    queue = s.hub.events.subscribe()
+    s.start(postcheck=False)
+    try:
+        # start() 里没跑自检:链没坐实、标记还在、没有 release.* 事件。
+        assert current_name(layout) == "2026-09-20-77b2de"
+        assert read_pending(layout) is not None
+        收到: list = []
+        while not queue.empty():
+            收到.append(queue.get_nowait())
+        assert not any(str(e.get("kind", "")).startswith("release.")
+                       for e in 收到)
+
+        # 事后显式补一次,判据才真的跑:四项都过,坐实。
+        s._boot_postcheck()
+        assert current_name(layout) == "2026-09-20-77b2de"
+        assert read_pending(layout) is None
+        收到 = []
+        while not queue.empty():
+            收到.append(queue.get_nowait())
+        assert any(e.get("kind") == "release.kept" for e in 收到)
+    finally:
+        s.stop()

@@ -779,7 +779,16 @@ class AppServer:
 
     # ------------------------------------------------------------ 生命周期
 
-    def start(self) -> None:
+    def start(self, *, postcheck: bool = True) -> None:
+        """起服务。``postcheck=False`` 时不在这儿跑重启后自检。
+
+        默认 ``True``:绝大多数调用方(全仓每一条 HTTP 测试、绝大多数用法)
+        起完服务就该把自检带上,没有理由让调用方每次都记着补一句。
+
+        ``main()`` 是唯一的例外,而且是有意的:见下面 ``self._boot_postcheck()``
+        那一句原来的位置(现在挪到了 ``main()`` 里连上三个后端**之后**)——
+        理由写在那边,别在这儿重复。
+        """
         if self._httpd is not None:
             return
         if not self._ctx.bridge.running:
@@ -794,10 +803,23 @@ class AppServer:
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, name="d1max-http", daemon=True)
         self._thread.start()
-        # **必须在这儿,不能更早**:自检第一项"进程起来了"的可观测定义就是
-        # 端口在听。放到 serve_forever 那个线程起来之前,第一项就永远是假失败,
-        # 于是每一次升级都会回滚。
-        self._boot_postcheck()
+        # **不能早于这儿**:自检第一项"进程起来了"的可观测定义就是端口在听。
+        # 放到 serve_forever 那个线程起来之前,第一项就永远是假失败,于是
+        # 每一次升级都会回滚。
+        #
+        # **但 ``main()`` 还要把它推得更晚。** 这儿说的只是"HTTP 起没起来",
+        # 不代表 nav/device/maps 三个后端已经连上了——``main()`` 里
+        # ``server.start()`` 排在那三个 ``connect()`` 之前(先把端口起来,
+        # 免得连接慢的时候整个进程看着像卡死)。真机上一旦有在途升级,这四
+        # 项里的 ``control``/``bridges`` 两项问的正是这三个后端;后端没连
+        # 上时问它们几乎必然假失败,一版好版本就这么被误判回滚——而 §7.3
+        # 说自动回滚只有"重启后自检没过"这一个触发条件,不该被"我们自己
+        # 后端还没连上"这种开机时序意外触发。所以 ``main()`` 传
+        # ``postcheck=False``,等三个 ``connect()`` 都跑完了才补一次
+        # ``self._boot_postcheck()``。测试起服务时后端(假件)天生就是连着
+        # 的,不受这条时序影响,默认值留 ``True`` 就够了。
+        if postcheck:
+            self._boot_postcheck()
 
     def stop(self) -> None:
         httpd, self._httpd = self._httpd, None
@@ -2571,7 +2593,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                      missions_dir=Path(args.missions_dir), runs_root=runs_root,
                      video=video, identity=who)
     server = AppServer(ctx, host=args.host, port=args.port, pin=args.pin)
-    server.start()
+    # postcheck=False:重启后自检要等三个后端都连上(或者连不上也试过了)才
+    # 跑——不然 control/bridges 两项问的正是这三个后端,后端还没连的时候问
+    # 它们几乎必然假失败,一版好版本就这么被误判回滚。理由详见
+    # ``AppServer.start()`` 里那段注释。
+    server.start(postcheck=False)
     print(f"app 起来了:{server.url}")
     for what, opener in (("导航", nav.connect), ("旁路进程", device.connect),
                          ("地图桥", maps.connect)):
@@ -2579,6 +2605,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             bridge.call(opener, timeout_s=10.0)
         except Exception as exc:    # noqa: BLE001 - 连不上不影响 app 起来
             print(f"{what}没连上({type(exc).__name__}: {exc}),页面上会显示未连接")
+    # 三个后端都试过了(连没连上不重要——后端没连上本身也是一种"这一版有
+    # 问题"的信号,该走自检的判据决定留还是退)。**现在**才是重启后自检该
+    # 跑的时刻。
+    server._boot_postcheck()
 
     stop = threading.Event()
     try:
