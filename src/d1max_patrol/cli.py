@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
 
-from d1max_patrol.app.identity import resolve
+from d1max_patrol.app.identity import SN_ENV, resolve
 from d1max_patrol.backends.base import NavBackendError, NavTimeoutError
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.loader import ConfigError, load_config
@@ -503,13 +503,20 @@ def _cmd_release(args: argparse.Namespace) -> int:
     if args.release_command == "activate":
         try:
             # 把当下的 SN 记进在途标记 —— 重启后自检第四项拿它比对(§7.2)。
+            # 这里要读 D1MAX_SN 而不是零参 resolve():现场设备树/DMI 里常常
+            # 没有真 SN,HTTP 服务侧(app/server.py 的 resolve(args.sn, ...),
+            # args.sn 默认就是这个环境变量)靠它拿到运维填的真值。两条路
+            # 必须用同一个来源定 SN,不然这里记下的是 MAC 兜底值,重启后
+            # 自检拿真 SN 一比对不上,把一版好的自动回滚掉。
             pending = activate(layout, args.name, now_ms=now_ms, auto=False,
-                               sn=resolve().sn)
+                               sn=resolve(os.environ.get(SN_ENV)).sn)
         except (ReleaseError, OSError) as exc:
             print(f"切不了: {exc}", file=sys.stderr)
             return 2
         print(f"切到 {pending.to},上一版 {pending.src or '无'}。"
               f"重启之后会自检,没过会自己退回去。")
+        print("提示: 升级前那七项检查(precheck)在命令行这条路上没跑,"
+              "只有 HTTP 那条路(POST /api/release/activate)才跑。")
         return 0
 
     if args.release_command == "rollback":
@@ -551,8 +558,15 @@ def _cmd_boot_guard(layout: Layout, now_ms: int) -> int:
         GuardAction.GAVE_UP: "装机那一次就没起来,没有上一版可退 —— 请人来看。",
         GuardAction.BROKEN: "盘上一版都没有 —— 这台机器要重装。",
     }
-    print(f"[守卫] {话.get(action, action.value)} 现在指着: "
-          f"{current_name(layout) or '(没有)'}")
+    文本 = (f"[守卫] {话.get(action, action.value)} 现在指着: "
+           f"{current_name(layout) or '(没有)'}")
+    # GAVE_UP / BROKEN 是"请人来看"的两种,打到 stderr 才不会被日常开机时
+    # 收 stdout 的脚本悄悄吞掉。退出码仍然一律是 0(见本函数 docstring)——
+    # 改的只是可见性,不是"这次开机算不算数"。
+    if action in (GuardAction.GAVE_UP, GuardAction.BROKEN):
+        print(文本, file=sys.stderr)
+    else:
+        print(文本)
     return 0
 
 

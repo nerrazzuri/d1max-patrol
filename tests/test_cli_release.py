@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
-from d1max_patrol.cli import main
+from d1max_patrol.cli import _release_root, main
 from d1max_patrol.engine.release import (
     MANIFEST_NAME,
     MAX_BOOT_ATTEMPTS,
@@ -16,6 +17,7 @@ from d1max_patrol.engine.release import (
     read_pending,
     stage,
     tree_sha256,
+    write_pending,
 )
 
 
@@ -69,17 +71,54 @@ def test_切版本会换链并留下在途标记(tmp_path):
     assert read_pending(layout) is not None
 
 
-def test_切一个没装的版本退非零(tmp_path):
+def test_切版本记的sn跟环境变量对齐(tmp_path, monkeypatch):
+    """跟 HTTP 服务侧(app/server.py 的 resolve(args.sn, ...))对齐同一个来源,
+
+    否则命令行这条路记进 pending.sn 的是 MAC 兜底值,重启后自检拿真 SN 一比
+    对不上,把一版好的自动回滚掉(见 fix1 brief 第 1 条)。
+    """
     root = tmp_path / "opt"
-    assert main(["release", "activate", "根本没这一版", "--root", str(root)]) != 0
+    monkeypatch.setenv("D1MAX_SN", "D1M-XYZ-9")
+    main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
+          "--root", str(root)])
+    assert main(["release", "activate", "2026-09-20-77b2de",
+                 "--root", str(root)]) == 0
+    layout = Layout(root=root)
+    assert read_pending(layout).sn == "D1M-XYZ-9"
 
 
-def test_守卫在没有在途标记时放行(tmp_path):
-    """绝大多数开机走这条。它必须便宜、安静、退 0。"""
+def test_切版本提示升级前检查在这条路上没跑(tmp_path, capsys):
     root = tmp_path / "opt"
     main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
           "--root", str(root)])
+    capsys.readouterr()
+    assert main(["release", "activate", "2026-09-20-77b2de",
+                 "--root", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "没跑" in out
+
+
+def test_切一个没装的版本退非零(tmp_path, capsys):
+    root = tmp_path / "opt"
+    layout = Layout(root=root)
+    before = current_name(layout)
+    assert main(["release", "activate", "根本没这一版", "--root", str(root)]) != 0
+    err = capsys.readouterr().err
+    assert "切不了" in err
+    assert current_name(layout) == before
+
+
+def test_守卫在没有在途标记时放行(tmp_path):
+    """绝大多数开机走这条。它必须便宜、安静、退 0,而且不能碰链。"""
+    root = tmp_path / "opt"
+    layout = Layout(root=root)
+    main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
+          "--root", str(root)])
+    main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)])
+    commit(layout)
+    before = current_name(layout)
     assert main(["release", "boot-guard", "--root", str(root)]) == 0
+    assert current_name(layout) == before
 
 
 def test_守卫第一次开机只记一笔就放行(tmp_path):
@@ -119,6 +158,34 @@ def test_守卫数够次数就退回去(tmp_path, capsys):
     assert "退回" in capsys.readouterr().out
 
 
+def test_守卫放弃时提示落在stderr(tmp_path, capsys):
+    """GAVE_UP:装机那一次就没起来,没有上一版可退。退出码仍是 0,
+
+    但"请人来看"这句必须落在 stderr,不能被日常开机收 stdout 的脚本吞掉。
+    造标记用 activate + write_pending,不手写 JSON。
+    """
+    root = tmp_path / "opt"
+    layout = Layout(root=root)
+    stage(layout, _pkg(tmp_path / "p", "2026-09-20-77b2de"), now_ms=1)
+    pending = activate(layout, "2026-09-20-77b2de", now_ms=1, auto=False)
+    write_pending(layout, replace(pending, attempts=MAX_BOOT_ATTEMPTS))
+    capsys.readouterr()
+    assert main(["release", "boot-guard", "--root", str(root)]) == 0
+    out = capsys.readouterr()
+    assert "请人来看" in out.err
+    assert "请人来看" not in out.out
+
+
+def test_守卫盘上一版都没有时提示落在stderr(tmp_path, capsys):
+    """BROKEN:根目录下什么版本都没有,也没有在途标记 —— 这台机器要重装。"""
+    root = tmp_path / "opt"
+    capsys.readouterr()
+    assert main(["release", "boot-guard", "--root", str(root)]) == 0
+    out = capsys.readouterr()
+    assert "重装" in out.err
+    assert "重装" not in out.out
+
+
 def test_守卫看的是根不是自己装在哪(tmp_path):
     """守卫**必须**跟版本无关 —— 它装在 <root>/bin 里,不在任何一版目录里。
 
@@ -143,3 +210,34 @@ def test_根路径也能从环境变量来(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
     assert main(["release", "list"]) == 0
     assert "2026-09-20-77b2de" in capsys.readouterr().out
+
+
+def test_rollback成功退回上一版(tmp_path):
+    root = tmp_path / "opt"
+    layout = Layout(root=root)
+    for name in ("2026-09-06-a3f9c1", "2026-09-20-77b2de"):
+        main(["release", "install", str(_pkg(tmp_path / name, name)),
+              "--root", str(root)])
+    main(["release", "activate", "2026-09-06-a3f9c1", "--root", str(root)])
+    commit(layout)
+    main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)])
+    assert main(["release", "rollback", "--root", str(root)]) == 0
+    assert current_name(layout) == "2026-09-06-a3f9c1"
+
+
+def test_rollback没有上一版可退时退非零(tmp_path, capsys):
+    root = tmp_path / "opt"
+    main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
+          "--root", str(root)])
+    capsys.readouterr()
+    assert main(["release", "rollback", "--root", str(root)]) == 2
+    assert "退不了" in capsys.readouterr().err
+
+
+def test_release_root默认取opt_d1max(monkeypatch):
+    """三级优先级(--root > D1MAX_RELEASE_ROOT > /opt/d1max)只测过前两级。
+
+    这里只调纯函数,不经过 main(),绝不能真的去碰 /opt/d1max。
+    """
+    monkeypatch.delenv("D1MAX_RELEASE_ROOT", raising=False)
+    assert _release_root(None) == Path("/opt/d1max")
