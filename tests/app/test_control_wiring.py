@@ -201,3 +201,31 @@ def test_控制权台每拍都会结算(有pin的服务, 墙钟):
             if frame["kind"] == "control":
                 assert frame["event"]["kind"] == "expired"
                 break
+
+
+def test_token没了租约也会被收走(有pin的服务, 墙钟):
+    """**TTL 一秒没走,租约照样得没**  —— 持有人的 token 被吊销了。
+
+    这条测的是 ``ControlDesk.sweep()`` 独有的那一半:``LeaseBook.state()``
+    自己会算 TTL 到期,所以光靠"等到期"根本分不出接的是 ``sweep()`` 还是
+    ``book.state()``。只有"token 死了但 TTL 还没到"这种情形是
+    ``keep_only(live_refs)`` 专属的 —— 而它恰好是现实里最常见的那种:人把
+    app 杀了、退出了、或者闲置超时了,狗这边不该一直替他锁着控制权到 30 秒
+    走完。
+
+    墙钟一动不动,所以任何靠 TTL 蒙对的实现在这条上都会红。
+    """
+    甲 = 解锁(有pin的服务, "张三")
+    乙 = 解锁(有pin的服务, "李四")
+    sess = 有pin的服务.auth.session_of(甲)
+    assert sess is not None
+    有pin的服务.control.book.acquire(sess.ref, sess.operator, now_ms=墙钟.t)
+
+    def 看():
+        return get_json(有pin的服务, "/api/state",
+                        headers=auth(乙))["control"]["holder"]
+
+    # 先确认它真的上过屏 —— 不然下面那个 None 可能只是"从来没出现过"。
+    assert 等到(看, {"ref": sess.ref, "operator": "张三"}) is not None
+    有pin的服务.auth.logout(甲)
+    assert 等到(看, None) is None
