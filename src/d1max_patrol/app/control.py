@@ -130,7 +130,7 @@ class ControlDesk:
         网络对手"(那超出了这一层能挡的范围), 而是"未来某条调用路径没有先
         经过 ``Guard.gate`` 就直接调了 ``require``"——那种失误不该让只读凭证
         意外拿到写权限。判据是"只读永远不能改变这只狗正在做什么", 跟规则 1
-        是同一条道理, 只是換了一层来守。
+        是同一条道理, 只是换了一层来守。
         """
         if sess is None or not needs_lease(method, path):
             return
