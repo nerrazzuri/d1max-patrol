@@ -10,15 +10,19 @@ import shutil
 
 import pytest
 
+from d1max_patrol.engine import bundle as bundle_mod
 from d1max_patrol.engine.bundle import (
     CURRENT_LINK,
     LANDED,
+    MAX_ROLLBACKS,
     PREVIOUS_LINK,
     SCHEDULE_NAME,
     BundleError,
+    BundleGuard,
     active_bundle,
     apply_bundle,
     build_bundle,
+    guard_bundle,
     land,
     mark_proven,
     prune_bundles,
@@ -491,3 +495,224 @@ def test_排程不合规抛的也是BundleError而且带原话(tmp_path):
         "entries: []\n", encoding="utf-8")
     with pytest.raises(BundleError, match="timezone"):
         read_bundle_schedule(root / "site-kl-1")
+
+
+# ---- 连着退两次(评审 F1) ------------------------------------------------
+
+def test_连着退两次第二次要被拒(tmp_path, root):
+    """**黑名单这道闸两扇门上都要装。**
+
+    它本来只装在 ``apply_bundle`` 那一扇。v2 崩了退到 v1 之后再点一次回退,
+    ``previous`` 正是刚拉黑的 v2 —— 那扇门开着,狗被送回刚崩掉的那一版,
+    还被 ``proven_slot = prev`` 标成「跑成过」。手机双击、客户端超时重试、
+    第 8 卷的自动回退判据抖一下,都够触发。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    mark_proven(root)                       # 一 是真跑成过的那一版
+    二 = 打包并落(tmp_path, root, 2)
+    apply_bundle(root, 二)
+    退了 = rollback_bundle(root, at=后来, reason="首次执行就崩")
+    assert (退了.current, 退了.previous) == (一, 二)
+
+    with pytest.raises(BundleError, match="退过的那一版"):
+        rollback_bundle(root, at="2026-09-09T02:00:00+08:00", reason="再点一次")
+
+    st = read_state(root)
+    assert st.current == 一                  # 没被送回刚崩掉的那一版
+    assert 二 in st.denied                   # 二 仍然在黑名单里
+    assert [r.frm for r in st.rollbacks] == [二]      # 没多记一条
+    assert st.proven is True                 # 一 本来就是证过的
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    assert 记["proven_slot"] == 一            # 二 没有凭空被标成「跑成过」
+    with pytest.raises(BundleError, match="退过"):
+        apply_bundle(root, 二)
+
+
+def test_两条链指着同一版就退不了(tmp_path, root):
+    """``current == previous`` 是「换链换到一半断电」留下的局面,不是可退的
+    局面。退过去等于原地打转,还会记下一条 ``from == to`` 的荒唐审计,
+    并且把这唯一一版拉黑 —— 盘上那份好包就此再也装不上去。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    bundle_mod.point_link(root / PREVIOUS_LINK, root / 一)
+    with pytest.raises(BundleError, match="没有别的一版可退"):
+        rollback_bundle(root, at=后来, reason="崩了")
+    assert read_state(root).denied == ()
+
+
+# ---- 换链换到一半断电(评审 F2) ------------------------------------------
+
+def 断在两次换链之间(monkeypatch):
+    """让下一次 ``apply_bundle`` 的**第二次** ``point_link`` 断电。
+
+    §8.5 禁 sleep,也没法在开发机上真断电 —— 所以这儿直接把那个中间态造出来,
+    不依赖任何时序。
+    """
+    真 = bundle_mod.point_link
+    次 = []
+
+    def 假(link, target):
+        次.append(link.name)
+        if len(次) >= 2:
+            raise OSError("断电")
+        真(link, target)
+
+    monkeypatch.setattr(bundle_mod, "point_link", 假)
+
+
+def 断电装二(tmp_path, root, monkeypatch):
+    """一台装着 v1 的狗,装 v2 装到两次换链之间断了电。返回 ``(一, 二)``。"""
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    mark_proven(root)
+    二 = 打包并落(tmp_path, root, 2)
+    断在两次换链之间(monkeypatch)
+    with pytest.raises(OSError):
+        apply_bundle(root, 二)
+    monkeypatch.undo()                      # 电来了:后面那一段是真的换链
+    return 一, 二
+
+
+def test_换链换到一半断电标记里有足够的信息(tmp_path, root, monkeypatch):
+    """``point_link`` 的 docstring 承诺「那条退路上的窗口由调用方的标记文件
+    兜着」。任务包这一侧原来写的是个 ``{}`` —— 兜不住任何东西。
+    """
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+
+    st = read_state(root)
+    assert (st.current, st.previous) == (一, 一)      # 自相矛盾的中间态
+    assert st.proven is False                        # 一 还凭空丢了 proven
+
+    assert st.applying is not None
+    assert (st.applying.to, st.applying.src, st.applying.prev) == (二, 一, "")
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    assert 记["applying"] == {"to": 二, "from": 一, "prev": ""}
+
+
+def test_断电之后走一次guard状态回到可用的终态(tmp_path, root, monkeypatch):
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+    assert guard_bundle(root) is BundleGuard.FINISHED
+
+    st = read_state(root)
+    assert (st.current, st.previous) == (二, 一)      # 两条链各指各的
+    assert st.applying is None                       # 半成品收拾干净了
+    assert active_bundle(root) == (root / 二).resolve()
+    assert st.denied == ()                           # 谁都没被拉黑
+    assert st.rollbacks == ()
+
+
+def test_断电之后那份唯一的好包没有被误拉黑(tmp_path, root, monkeypatch):
+    """原来的下场:``current == previous == v1`` 且 ``proven=False``,
+    第 8 卷那条判据 ``崩了 and not proven and previous`` 随即成立,自动退一次,
+    记下 ``from=v1 to=v1`` 并**把盘上唯一那份好包拉黑** —— 而路由不暴露
+    ``force``,靠 API 再也装不回去。
+    """
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+
+    def 该不该退(state, 崩了: bool) -> bool:
+        return 崩了 and not state.proven and bool(state.previous)
+
+    assert 该不该退(read_state(root), 崩了=True) is True      # 判据照样成立
+    with pytest.raises(BundleError, match="没有别的一版可退"):
+        rollback_bundle(root, at=后来, reason="崩了")          # 但退不动
+    assert read_state(root).denied == ()
+
+    guard_bundle(root)
+    assert apply_bundle(root, 一).current == 一               # 好包还装得回去
+
+
+def test_目标那份包落坏了guard就把两条链放回换链之前(tmp_path, root, monkeypatch):
+    """标记指着的那一版要是没落全(或者落下的那半份校验不过),就换不过去 ——
+    两条链一起放回换链前的样子。只放回 ``current`` 的话会留下
+    ``current == previous``,那正是这一条要消掉的局面。
+    """
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+    shutil.rmtree(root / 二)                          # 那份包没了
+    assert guard_bundle(root) is BundleGuard.UNDONE
+
+    st = read_state(root)
+    assert (st.current, st.previous) == (一, "")      # 跟换链之前一模一样
+    assert st.applying is None
+    assert active_bundle(root) == (root / 一).resolve()
+
+
+def test_两个方向都走不通就报broken而且标记留着(tmp_path, root, monkeypatch):
+    """标记是现场取证唯一的线索,不能在「修不动」的那条路上被清掉;而且下一次
+    guard 还要照它再试一遍 —— 那份包可能只是暂时读不到(盘没挂上)。
+    """
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+    shutil.rmtree(root / 二)
+    shutil.rmtree(root / 一)
+    assert guard_bundle(root) is BundleGuard.BROKEN
+    assert read_state(root).applying is not None
+
+
+def test_没有半成品的时候guard什么都不动(tmp_path, root):
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    assert guard_bundle(root) is BundleGuard.OK
+    assert read_state(root).current == 一
+
+
+def test_apply跑完了标记就没了(tmp_path, root):
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    assert "applying" not in 记
+
+
+# ---- 回退历史有上限,拉黑事实没有(评审 F6) ------------------------------
+
+def test_退很多次历史被截掉但最老那次拉黑仍然有效(tmp_path, root):
+    """``reason`` 限的是长度、不是次数:实测 300 次回退把 ``landed.json``
+    撑到 489KB、``GET /api/bundle`` 吐 177KB 用 3.1s。狗是长期在线的设备。
+
+    **截断绝不能把拉黑事实一起截掉** —— 那样最老那几版就被放出来了,
+    ``apply_bundle`` 那道闸拦的死循环会原样回来。所以拉黑单独存在 ``denied``,
+    截掉的只是 ``at``/``reason``/``to`` 这些历史细节。
+    """
+    理由 = "崩" * 500                        # 每条都卡在路由那个 500 字上限上
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    退过的 = []
+    大小 = []
+    for v in range(2, MAX_ROLLBACKS + 12):   # 比上限多退十次
+        槽 = 打包并落(tmp_path, root, v)
+        apply_bundle(root, 槽)
+        rollback_bundle(root, at=后来, reason=理由)
+        退过的.append(槽)
+        大小.append((root / LANDED).stat().st_size)
+
+    st = read_state(root)
+    assert len(st.rollbacks) == MAX_ROLLBACKS            # 历史有上限
+    # 填满之后再退十次,文件几乎不再长 —— 多出来的只有 denied 里那几个槽名。
+    assert 大小[-1] - 大小[MAX_ROLLBACKS - 1] < 1_000
+    assert 大小[-1] < 60_000
+
+    最老 = 退过的[0]
+    assert 最老 not in [r.frm for r in st.rollbacks]     # 历史里已经没有它
+    assert 最老 in st.denied                             # 但拉黑事实还在
+    with pytest.raises(BundleError, match="退过的那一版"):
+        apply_bundle(root, 最老)                         # 仍然装不上去
+
+
+def test_老盘上只有rollbacks没有denied照样认拉黑(tmp_path, root):
+    """升级上来的机器盘上那份 ``landed.json`` 只有 ``rollbacks``,没有
+    ``denied``。那些拉黑事实不能凭空消失 —— 消失了正好是「一版崩过的包又被
+    装回去」这条死循环。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    二 = 打包并落(tmp_path, root, 2)
+    apply_bundle(root, 二)
+    rollback_bundle(root, at=后来, reason="崩了")
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    del 记["denied"]                         # 装成老版本写下的那份
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+
+    assert read_state(root).denied == (二,)
+    with pytest.raises(BundleError, match="退过的那一版"):
+        apply_bundle(root, 二)

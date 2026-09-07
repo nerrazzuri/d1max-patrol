@@ -334,6 +334,33 @@ def test_退过的那一版从这条路也上不去(tmp_path, 装好):
     assert code == 409
 
 
+def test_连点两次回退第二次是409而且狗没被送回崩掉的那一版(tmp_path, 装好):
+    """评审 F1(全卷终评)。手机双击、客户端超时重试、值守员不确定第一次成没成
+    —— 这条序列在现场是**寻常操作**,不是攻击。
+
+    黑名单闸本来只装在 ``/api/bundle/apply`` 那一扇门上,而「装回一个已知会崩
+    的版本」有两扇门:换过去,和**退**过去。第二次回退的 ``previous`` 正是
+    第一次刚拉黑的那一版。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2"})
+    code, body, _h = request(s, "/api/bundle/rollback", method="POST",
+                             payload={"reason": "首次执行就崩"})
+    assert code == 200
+    assert json.loads(body)["state"]["current"] == "site-kl-1"
+
+    code, _b, _h = request(s, "/api/bundle/rollback", method="POST",
+                           payload={"reason": "再点一次"})
+    assert code == 409                      # 不是 200
+
+    st = get_json(s, "/api/bundle")["state"]
+    assert st["current"] == "site-kl-1"      # 没被送回刚崩掉的那一版
+    assert "site-kl-2" in st["denied"]       # 仍然在黑名单里
+    assert len(st["rollbacks"]) == 1         # 没多记一条
+
+
 # ---- GET /api/schedule ---------------------------------------------------
 
 def test_排程读得出来(装好):

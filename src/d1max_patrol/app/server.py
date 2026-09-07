@@ -2298,6 +2298,10 @@ class AppServer:
         **时刻是服务端盖的。** 请求里带的 ``at`` 一律不收 —— 手机的钟可以是
         任何值,而这条记录是事后追责用的:一条能被客户端随便写的时间戳,
         追责的时候等于没有。
+
+        **连点两次是安全的**(评审 F1):第二次的 ``previous`` 正是第一次刚
+        拉黑的那一版,``rollback_bundle`` 会拒,这儿翻成 409。这条闸在 engine
+        里,不在这儿 —— 跟 ``_bundle_apply`` 一样,两扇门共用同一份判据。
         """
         body = req.json()
         raw_reason = body.get("reason") if isinstance(body, dict) else None

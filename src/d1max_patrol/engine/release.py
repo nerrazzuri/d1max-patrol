@@ -334,6 +334,16 @@ def point_link(link: Path, target: Path) -> None:
 
     版本目录(§7.3)和任务包(§3.2)用的是同一段。**两处各写一遍的话,
     哪天只改对了一处,另一处会在那个窗口上出事,而且不会有测试红。**
+
+    **两个调用方各自的标记**(上面那句话不是白说的,评审 F2 就是它没被兑现):
+
+    * 版本目录:``activate`` 换链前写 ``pending.json``(``Pending(to, src)``),
+      ``boot_guard`` 照它修。这边**只换一条链**。
+    * 任务包:``apply_bundle`` 换链前写 ``landed.json`` 里的 ``applying``
+      (``bundle.Applying(to, src, prev)``),``guard_bundle`` 照它修。这边
+      **连着换两条链**(先 ``previous`` 后 ``current``),所以那个标记比
+      ``Pending`` 多记一条链、能修的中间态也多一个 —— 两次调用之间断电,
+      是 release 侧根本不存在的局面。
     """
     tmp = link.parent / (link.name + ".new")
     if tmp.is_symlink() or tmp.exists():
