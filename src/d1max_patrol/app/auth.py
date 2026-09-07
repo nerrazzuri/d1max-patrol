@@ -73,9 +73,18 @@ TOKEN_IDLE_S = 12 * 3600.0
 #: 同时最多留几个 token。防的是"有人反复解锁把内存撑爆"。
 MAX_TOKENS = 64
 
-#: §3.6:一只狗同时最多几个 app 会话。**多的直接拒,不排队。**
-#: 依据是物理的:CPE 的无线上行是共享的,每多一路视频所有人都变卡。排队更糟
-#: —— "等着等着突然就连上了"意味着操作员在不确定的时刻拿到一只会动的狗。
+#: §3.6:一只狗同时最多几个非本机 app 会话。**多的直接拒,不排队。**
+#: 依据是物理的:CPE 的无线上行是共享的,每多一路视频所有人都变卡。这条对
+#: 回环流量不成立 —— 回环不占那条无线上行,所以 ``CHANNEL_LOCAL`` 不占用
+#: 这三个名额、也不受这道闸拦(见 ``Guard._issue``)。排队更糟 —— "等着
+#: 等着突然就连上了"意味着操作员在不确定的时刻拿到一只会动的狗。
+#:
+#: **满了之后,远端的人拿不回座位。** 这一卷里没有远程"踢人"的接口 ——
+#: ``logout()`` 只退自己手里的 token,``revoke_ref()`` 没有对外的 HTTP 路由。
+#: 三个非本机名额都被占、又没人主动退出、也没人能同名换座时,唯一还能进来
+#: 的路是本机(SSH/控制台到场),或者重启整个服务(代价是打断正在跑的巡检)。
+#: **这不是"已解决"**,是一把物理到场才能用的钥匙,不是远程钥匙。完整的
+#: 威胁模型见 ``Guard._issue``。
 MAX_SESSIONS = 3
 
 #: Host 头里允许出现的名字。别的一律只收 IP 字面量。
@@ -612,6 +621,11 @@ class Guard:
         return channel_of(client, ap_nets=self._ap_nets)
 
     def sessions(self, *, now: float | None = None) -> tuple[Session, ...]:
+        """现在有哪些活着的会话,**含本机**。§3.6 的 ``max_sessions`` 只算
+        非本机通道(见 ``Guard._issue``)—— 这里返回的总数比
+        ``max_sessions`` 大不代表爆表,只是把本机也如实列出来了;
+        ``GET /api/sessions`` 用的就是这份原始列表,数字不矛盾。
+        """
         return self.tokens.sessions(now=self._clock() if now is None else now)
 
     def live_refs(self, *, now: float | None = None) -> frozenset[str]:
@@ -636,33 +650,60 @@ class Guard:
                now: float) -> str:
         """发一个 token。**先看有没有名额**(§3.6),再看通道(§6.5)。
 
+        **名额只管非本机通道。** ``CHANNEL_LOCAL`` 不占用、也不受这道闸拦 ——
+        ``MAX_SESSIONS`` 的理由是"CPE 的无线上行是共享的",回环流量根本不
+        走那条上行,这条理由对它不成立;而能从回环发请求的人已经在这台机
+        器上了(SSH/控制台到场),这是比"在热点射程内"更强的权限,免限跟
+        ``channel_of`` 定的信任梯度是一致的,不是另开的口子。
+
         名额满了淘汰谁,是安全判据不是容量细节:这里选的是"同名换座" ——
         只挤同一个报名者自己的老会话,从不挤别人的。威胁模型是反复登录的
         攻击者:如果谁都能靠猜中或不带 operator 挤掉别人的名额,``MAX_SESSIONS``
         就从一道闸变成了一件武器。所以空名字(§6.3:狗从不核实报名,空名字
-        谁都能报)不算身份,不许互相挤 —— 换座只发生在"同一个字符串"之间,
-        而攻击者拿不到别人已经在用的那个名字(狗也从不把在线操作人的名字
-        往外广播给未鉴权的人)。名额真满且不是换座时,一律硬拒、不排队。
+        谁都能报)不算身份,不许互相挤 —— 换座只发生在"同一个字符串"之间。
+
+        **但"同名 = 同一个人"这个等式不总成立。** 名字是操作人自报的,狗
+        从不核实(``OPERATOR_NOTICE``)。这条防线挡得住的是"攻击者不知道
+        在线的人叫什么、猜不中那个字符串";挡不住的是**猜一个现场惯用的
+        通用名**——"运维""值班"这类词谁都报得出来,报中了就会把当前占着
+        这个名字的会话直接换座挤掉,不管挤掉的是不是"同一个人"。两个人各
+        自不知情地撞上同一个通用名,也会互相顶替。**被顶替的一方拿不到任
+        何通知**,只有下次发现自己的 token 失效才会察觉。这不是这段代码
+        能解决的(现场约定不用通用名是运营手段),但不能把"同名"读成一个
+        可靠的身份判据 —— 它只是"记账用的字符串相等",跟 §6.3 说的是同一
+        回事。
+
+        **三个非本机名额都满、又没有同名可换座时,远端的人拿不回座位。**
+        ``logout()`` 只能退自己手里的 token,``revoke_ref()`` 没有对外的
+        HTTP 路由,这一卷里唯一能从远端挤开别人的办法就是上面的同名换座。
+        走不通的话,能进来的只有本机(SSH/控制台到场),或者重启整个服务
+        —— 代价是打断正在跑的巡检。**这不是"已解决"**,是一把物理到场
+        才能用的钥匙,不是远程钥匙。
         """
         name = normalize_operator(operator)
-        live = self.tokens.sessions(now=now)
-        if len(live) >= self.max_sessions:
-            # 同一个报名的人回来了(换设备、重装 app、清了缓存):挤掉的是他
-            # 自己那个老会话,不是别人的。空名字不算身份 —— 让空名字互相挤
-            # 等于把上限废掉。
-            mine = [s for s in live if name and s.operator == name]
-            if not mine:
-                raise Denied(409,
-                             f"这只狗最多同时连 {self.max_sessions} 个人",
-                             self._占位说明(live))
-            for s in mine:
-                self.tokens.revoke_ref(s.ref)
         channel = self.channel_of(client)
+        if channel != CHANNEL_LOCAL:
+            # 本机(CHANNEL_LOCAL)不占用、也不受这道闸拦 —— 见上面的
+            # docstring:MAX_SESSIONS 防的是共享的无线上行,回环流量不占
+            # 那条上行,这条理由对它不成立。
+            live = [s for s in self.tokens.sessions(now=now)
+                    if s.channel != CHANNEL_LOCAL]
+            if len(live) >= self.max_sessions:
+                # 同一个报名的人回来了(换设备、重装 app、清了缓存):挤掉
+                # 的是他自己那个老会话,不是别人的。空名字不算身份 —— 让
+                # 空名字互相挤等于把上限废掉。
+                mine = [s for s in live if name and s.operator == name]
+                if not mine:
+                    raise Denied(409,
+                                 f"这只狗最多同时连 {self.max_sessions} 个人",
+                                 self._占位说明(live))
+                for s in mine:
+                    self.tokens.revoke_ref(s.ref)
         idle = AP_TOKEN_IDLE_S if channel == CHANNEL_AP else None
         return self.tokens.issue(now=now, operator=name, channel=channel,
                                  readonly=readonly, idle_s=idle)
 
-    def _占位说明(self, live: tuple[Session, ...]) -> str:
+    def _占位说明(self, live: list[Session]) -> str:
         """名额被谁占着。**拒绝必须说清原因**(§3.6),不然现场只会反复重试。"""
         who = "、".join(s.operator or f"未具名({s.ref})" for s in live)
         return (f"现在连着的是:{who}。等一个人退出,或者请他在 app 上退出登录。"

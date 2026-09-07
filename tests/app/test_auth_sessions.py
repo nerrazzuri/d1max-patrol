@@ -160,3 +160,45 @@ def test_会话上限和内存兜底是两条不同的线():
     assert MAX_SESSIONS == 3
     assert MAX_TOKENS == 64
     assert MAX_SESSIONS < MAX_TOKENS
+
+
+# ---------------------------------------------------------- 本机免限(评审改动一)
+
+
+def test_三个非本机占满后本机还能拿到token():
+    """CHANNEL_LOCAL 不占共享的无线上行,MAX_SESSIONS 的理由对它不成立。"""
+    g = Guard(PIN, clock=假钟())
+    for i, name in enumerate(("张三", "李四", "王五")):
+        g.unlock(PIN, f"10.0.0.{i}", operator=name)
+    tok = g.unlock(PIN, "127.0.0.1", operator="运维甲")
+    assert g.session_of(tok) is not None
+
+
+def test_三个非本机占满后热点和局域网仍然被拒():
+    """别把闸拆过头 —— 免限只对本机,别的通道该拒还是拒。"""
+    g = Guard(PIN, clock=假钟())
+    for i, name in enumerate(("张三", "李四", "王五")):
+        g.unlock(PIN, f"10.0.0.{i}", operator=name)
+    with pytest.raises(Denied):
+        g.unlock(PIN, "192.168.168.50", operator="赵六")  # 热点(AP)通道
+    with pytest.raises(Denied):
+        g.unlock(PIN, "10.0.0.9", operator="赵六")  # 局域网(LAN)通道
+
+
+def test_本机会话不占非本机的三个名额():
+    """先连本机,非本机的三个名额还是三个 —— 本机不跟非本机抢位置。"""
+    g = Guard(PIN, clock=假钟())
+    g.unlock(PIN, "127.0.0.1", operator="运维甲")
+    for i, name in enumerate(("张三", "李四", "王五")):
+        g.unlock(PIN, f"10.0.0.{i}", operator=name)
+    assert len(g.sessions()) == 4  # 本机 1 个 + 非本机 3 个
+    with pytest.raises(Denied):
+        g.unlock(PIN, "10.0.0.9", operator="赵六")
+
+
+def test_本机会话可以无限累积():
+    g = Guard(PIN, clock=假钟())
+    toks = [g.unlock(PIN, "127.0.0.1", operator=f"本机{i}") for i in range(5)]
+    assert len(g.sessions()) == 5
+    for tok in toks:
+        assert g.session_of(tok) is not None
