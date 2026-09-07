@@ -8,20 +8,20 @@ from __future__ import annotations
 
 import contextlib
 import json
+import shutil
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from d1max_patrol.app.server import AppServer
+from d1max_patrol.app.server import MAX_ROLLBACK_REASON_LEN, AppServer
 from d1max_patrol.engine.bundle import (
     SCHEDULE_NAME,
     apply_bundle,
     build_bundle,
     land,
 )
-
-from .conftest import get_json, make_ctx, request
+from tests.app.conftest import get_json, make_ctx, request
 
 吉隆坡 = ZoneInfo("Asia/Kuala_Lumpur")
 时刻 = "2026-09-07T14:03:00+08:00"
@@ -148,6 +148,20 @@ def test_包被改过的时候状态还是答得出来(装好):
     body = get_json(s, "/api/bundle")
     assert body["state"]["current"] == "site-kl-1"
     assert body["manifest"] is None
+
+
+def test_current链悬空的时候状态还是答得出来(装好):
+    """评审 F1(修订轮 1)。``current`` 指着的槽目录被删掉(prune / 人手删 /
+    ``bundles_root`` 被搬过)—— ``active_bundle()`` 对这种情况抛
+    ``BundleError``(Task 8 收尾定的),但那不该让 ``manifest`` 是 ``None``
+    这件事以外的任何东西也跟着炸:``current`` 指着谁,链名本身还在,
+    ``read_bundle_state`` 不用管目录在不在就能答出来。
+    """
+    root, _ctx, s = 装好
+    shutil.rmtree(root / "site-kl-1")
+    got = get_json(s, "/api/bundle")
+    assert got["state"]["current"] == "site-kl-1"
+    assert got["manifest"] is None
 
 
 # ---- POST /api/bundle/apply ---------------------------------------------
@@ -278,8 +292,38 @@ def test_退回的时刻是服务端盖的不是请求里说的(tmp_path, 装好
     assert "1999" not in at
 
 
+def test_reason太长了是400(tmp_path, 装好):
+    """评审 F3(修订轮 1)。``reason`` 原样写进狗盘的 ``landed.json`` 并逐次
+    累加,没有上限的话客户端能把任意大的文本堆上去 —— 跟 ``engine/bundle.py``
+    的 ``MAX_SN_LEN`` 挡的是同一类事。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2"})
+    太长了 = "崩" * (MAX_ROLLBACK_REASON_LEN + 1)
+    code, _b, _h = request(s, "/api/bundle/rollback", method="POST",
+                           payload={"reason": 太长了})
+    assert code == 400
+
+
+def test_reason不是字符串是400(tmp_path, 装好):
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2"})
+    code, _b, _h = request(s, "/api/bundle/rollback", method="POST",
+                           payload={"reason": 12345})
+    assert code == 400
+
+
 def test_退过的那一版从这条路也上不去(tmp_path, 装好):
-    """§3.2 的自动回退不许变成一个安静的死循环。"""
+    """§3.2 的自动回退不许变成一个安静的死循环。
+
+    **409,不是 400。** 评审定夺(修订轮 1):请求本身没毛病 —— 槽名合规、
+    SN 也对 —— 是这台机器现在的状态不允许,跟 ``_bundle_rollback`` 那边
+    「没有 previous 就是 409」同一个判据,不该在相邻路由上给出两个答案。
+    """
     root, _ctx, s = 装好
     land(root, 打包(tmp_path, "b", 2))
     request(s, "/api/bundle/apply", method="POST",
@@ -287,7 +331,7 @@ def test_退过的那一版从这条路也上不去(tmp_path, 装好):
     request(s, "/api/bundle/rollback", method="POST", payload={"reason": "崩了"})
     code, _b, _h = request(s, "/api/bundle/apply", method="POST",
                            payload={"slot": "site-kl-2"})
-    assert code == 400
+    assert code == 409
 
 
 # ---- GET /api/schedule ---------------------------------------------------
@@ -375,6 +419,21 @@ def test_包里排程坏了要说清楚是哪儿坏了(tmp_path, 起一台):
     code, body, _ = request(s, "/api/schedule")
     assert code == 409
     assert "timezone" in body.decode("utf-8")
+
+
+def test_current链悬空的时候是409不是500(装好):
+    """评审 F1(修订轮 1)。``active_bundle()`` 对悬空链抛的是 ``BundleError``
+    (Task 8 收尾定的);这条路由「取不到包就没有排程可算」,得跟排程本身坏掉
+    一样翻成 409 —— **不能是未捕获异常冒出来的 500**,``detail`` 里也不许有
+    traceback。
+    """
+    root, _ctx, s = 装好
+    shutil.rmtree(root / "site-kl-1")
+    code, body, _h = request(s, "/api/schedule")
+    assert code == 409
+    text = body.decode("utf-8")
+    assert "Traceback" not in text
+    assert "site-kl-1" in text
 
 
 def test_这条路由不会真起跑任何任务(装好):

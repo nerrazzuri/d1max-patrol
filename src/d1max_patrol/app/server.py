@@ -216,6 +216,10 @@ PIN_ENV = "D1MAX_PIN"
 #: 请求体上限。这些接口收的都是任务 JSON,几十 KB 顶天了。
 MAX_BODY = 4 * 1024 * 1024
 
+#: 回退理由最长多少。挡的不是攻击,是「有人把整段日志粘进 landed.json」——
+#: 跟 ``engine/bundle.py`` 的 ``MAX_SN_LEN`` 挡的是同一类事。
+MAX_ROLLBACK_REASON_LEN = 500
+
 #: 快照重建的节拍。链路通断这类"没有事件的变化"靠它发现。
 _TICK_S = 0.5
 
@@ -2244,7 +2248,14 @@ class AppServer:
         「current 指着谁」正是出事之后第一个要看的东西。
         """
         root = self._ctx.bundles_root
-        where = active_bundle(root)
+        # ``current`` 链悬空(那个槽被 prune 掉了 / bundles_root 被搬过 /
+        # 人手删了槽目录)也算不出「那一版的内容」,但不该让整条路由跟着炸 ——
+        # `state` 用的是 ``read_bundle_state``,它直接读链名,不管链指的目录
+        # 在不在,所以「current 指着谁」这句话在这个分支里照样答得出来。
+        try:
+            where = active_bundle(root)
+        except BundleError:
+            where = None
         manifest = None
         if where is not None:
             with contextlib.suppress(BundleError):
@@ -2273,6 +2284,11 @@ class AppServer:
             state = apply_bundle(self._ctx.bundles_root, slot,
                                  sn=self._ctx.identity.sn)
         except BundleError as exc:
+            if "退过的那一版" in str(exc):
+                # 409,不是 400:请求本身没毛病(槽名、SN 都对),是这台机器
+                # 现在的状态不允许 —— 跟 `_bundle_rollback` 那边同一个判据。
+                # 评审定夺:同一件事在相邻两条路由上不该给两个不同的答案。
+                raise HttpError(409, str(exc)) from None
             raise HttpError(400, str(exc)) from None
         return json_response({"state": state.to_wire()})
 
@@ -2284,7 +2300,16 @@ class AppServer:
         追责的时候等于没有。
         """
         body = req.json()
-        reason = str(body.get("reason") or "") if isinstance(body, dict) else ""
+        raw_reason = body.get("reason") if isinstance(body, dict) else None
+        if raw_reason is not None and not isinstance(raw_reason, str):
+            raise HttpError(400, "reason 要是个字符串",
+                            f"给的是 {type(raw_reason).__name__}")
+        reason = raw_reason or ""
+        if len(reason) > MAX_ROLLBACK_REASON_LEN:
+            # 挡的不是攻击,是「有人把整段日志粘进 landed.json」——跟
+            # ``engine/bundle.py`` 的 ``MAX_SN_LEN`` 挡的是同一类事。
+            raise HttpError(400, f"reason 太长了,上限 {MAX_ROLLBACK_REASON_LEN} 字",
+                            f"给的是 {len(reason)} 字")
         at = datetime.fromtimestamp(
             self._ctx.clock() / 1000, tz=timezone.utc).isoformat()
         try:
@@ -2306,8 +2331,17 @@ class AppServer:
         归档里查,那同样是第 8 卷。这里按「从没跑过」答,**不是漏了** —— 这条
         路由一次都不会真起跑任何任务,重复起跑这件事在这儿不存在。
         """
-        clock = self._clock_skew().to_wire()
-        where = active_bundle(self._ctx.bundles_root)
+        # 一次请求里只读一次墙上时钟:真机上 ``now`` 和漂移用不同瞬间的读数
+        # 是一处可以省掉的糊涂账,读一次存下来,全程用它。
+        local_ms = self._ctx.clock()
+        clock = self._clock_skew(local_ms).to_wire()
+        try:
+            where = active_bundle(self._ctx.bundles_root)
+        except BundleError as exc:
+            # 链悬空(那个槽被 prune 掉了 / bundles_root 被搬过 / 人手删了槽
+            # 目录)也是「取不到包」的一种,同样翻成 409 —— 不能让它冒成 500:
+            # 现场的人看到 500 只能猜,而这台狗此刻在一个没有网的地方。
+            raise HttpError(409, str(exc)) from None
         if where is None:
             return json_response({"timezone": "", "now": "", "entries": [],
                                   "clock": clock})
@@ -2320,8 +2354,7 @@ class AppServer:
 
         # **用包里那个时区,不读系统时区**(§3.3 第 1 条)。裸 datetime 会被
         # 按系统时区解释,而且不报错,只是悄悄算错。
-        now = datetime.fromtimestamp(self._ctx.clock() / 1000,
-                                     tz=schedule.tz())
+        now = datetime.fromtimestamp(local_ms / 1000, tz=schedule.tz())
         entries = []
         for entry in schedule.entries:
             下一轮 = next_run(entry, now=now)
@@ -2334,15 +2367,18 @@ class AppServer:
                               "now": now.isoformat(),
                               "entries": entries, "clock": clock})
 
-    def _clock_skew(self) -> Skew:
-        """本地钟跟外头差多少。**没有参照就是「不知道」,不是 0。**"""
+    def _clock_skew(self, local_ms: int) -> Skew:
+        """本地钟跟外头差多少。**没有参照就是「不知道」,不是 0。**
+
+        ``local_ms`` 由调用方传进来,不在这儿现读 ``ctx.clock()`` —— 一次
+        请求只读一次墙上时钟,``now`` 和漂移用的是同一个瞬间。
+        """
         ref = self._ctx.time_reference()
         if ref is None:
-            return clock_skew(local_ms=self._ctx.clock(), reference_ms=None,
-                              source="")
+            return clock_skew(local_ms=local_ms, reference_ms=None, source="")
         reference_ms, source = ref
-        return clock_skew(local_ms=self._ctx.clock(),
-                          reference_ms=reference_ms, source=source)
+        return clock_skew(local_ms=local_ms, reference_ms=reference_ms,
+                          source=source)
 
     # ------------------------------------------------------------ 起来之后那一遍
 
