@@ -11,16 +11,21 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import stat
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from .mission import MissionError, parse_mission
+from .release import tree_sha256
 
 #: 包的自述文件名。整包哈希不算它自己 —— 它里头存着那个值。
 BUNDLE_MANIFEST = "bundle.yaml"
@@ -313,3 +318,112 @@ def verify_pure_data(root: Path | str, *,
     详 = "; ".join(f"{v.path}({v.gate}: {v.detail})" for v in vs[:5])
     更多 = f" 等共 {len(vs)} 条" if len(vs) > 5 else ""
     raise BundleError(f"这个包里有不是纯数据的东西: {详}{更多}")
+
+
+# ------------------------------------------------------------ 打包与校验
+
+#: 任务放这儿。``mission_schema_floor`` 扫的就是这个目录(§7.4)。
+MISSIONS_DIR = "missions"
+
+
+def bundle_sha256(bundle_dir: Path | str) -> str:
+    """整包指纹。**跟 §7.3 的发布包是同一套算法** —— 只是跳过的自述文件
+    换成了 ``bundle.yaml``。两套算法就是两个真理源(定夺 3)。
+    """
+    return tree_sha256(bundle_dir, skip=BUNDLE_MANIFEST)
+
+
+def _盖章(bundle_dir: Path, schema: int) -> None:
+    """把每个任务重写成规范形式,并盖上 ``schema``。
+
+    **盖章是打包器的活。** 一个手写的任务不该因为漏了一个版本号就把整台狗
+    的升级判据(§7.2 ``requires_mission_schema``)搞乱。顺带把任务过一遍
+    ``parse_mission`` —— 打包的时候发现坏任务,比半夜出发之后发现要好。
+
+    ``sort_keys=True`` 是为了可复现:同一棵源树打两遍必须是同一个指纹。
+    """
+    d = bundle_dir / MISSIONS_DIR
+    if not d.is_dir():
+        return
+    for p in sorted(d.glob("*.json")):
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            m = parse_mission(raw)
+        except (json.JSONDecodeError, MissionError, ValueError, OSError) as e:
+            raise BundleError(f"任务 {p.name} 不合规: {e}") from e
+        data = m.to_wire()
+        data["schema"] = schema
+        p.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True,
+                                indent=2) + "\n", encoding="utf-8")
+
+
+def build_bundle(src: Path | str, dest_root: Path | str, *,
+                 bundle_id: str, version: int, built_at: str,
+                 schema: int = BUNDLE_SCHEMA, built_by: str = "",
+                 targets: Sequence[str] = ()) -> Path:
+    """把一棵源树打成一个任务包,返回包目录。
+
+    §3.8:**这是个库,不是服务器的一个功能。** 编包、校验、算哈希这三件事,
+    狗上和服务器上跑的是同一段代码;服务器独占的只有规模。所以这儿一行
+    HTTP 都没有。
+    """
+    src, dest_root = Path(src), Path(dest_root)
+    # 先把版本号和 id 过一遍解析那道闸 —— 参数错了不该等到写自述才发现。
+    临 = parse_manifest({"bundle_id": bundle_id, "version": version,
+                         "schema": schema, "content_sha256": "0" * 64,
+                         "built_at": built_at, "built_by": built_by,
+                         "targets": list(targets)})
+    dest = dest_root / 临.slot_name
+    if dest.exists():
+        raise BundleError(f"{临.slot_name} 已经在 {dest_root} 底下了 —— "
+                          "版本号要单调递增,不许覆盖")
+
+    # verify_pure_data 对一个不存在的目录会静静地扫出零条违规(os.walk 对
+    # 不存在的路径就是空迭代)—— 那不是「干净」,是「没查」。自己先拦一道。
+    if not src.is_dir():
+        raise BundleError(f"源目录不存在: {src}")
+
+    # **拷之前先拦。** 拷完再拦的话,那个东西已经在盘上了。
+    verify_pure_data(src)
+    dest_root.mkdir(parents=True, exist_ok=True)
+    # symlinks=True:不解引用。上一行已经拒了所有链接,这里是第二层。
+    shutil.copytree(src, dest, symlinks=True)
+    try:
+        _盖章(dest, schema)
+        verify_pure_data(dest)          # 盖完再看一遍,拷/写这两步也得干净
+        m = BundleManifest(临.bundle_id, 临.version, schema,
+                           bundle_sha256(dest), built_at, 临.built_by,
+                           临.targets)
+        write_manifest(dest, m)
+    except BaseException:
+        shutil.rmtree(dest, ignore_errors=True)   # 半个包比没有包更糟
+        raise
+    return dest
+
+
+def verify_bundle(bundle_dir: Path | str) -> BundleManifest:
+    """收包这一头:这个目录里的东西,是不是那个包。
+
+    **三道的顺序是有理由的:**
+
+    1. 目录名对不对 —— 人看得懂的那条。先报哈希只会让人去查一个不是根因
+       的东西(改过名的包内容也一定对不上)。
+    2. 是不是纯数据 —— 一个 ``maps/x.pgm -> /etc/shadow`` 的包,算哈希那步
+       会去**读**那个链接。先查这一道,那一步就永远不会发生。
+    3. 内容指纹。
+
+    ``bundle_dir`` 不存在或者是空目录的情形,靠 ``read_manifest`` 打头一道
+    (读不到 ``bundle.yaml`` 就直接 ``BundleError``)—— 这一步永远先于任何
+    ``verify_pure_data`` 调用,所以「目录不存在」不会被后者悄悄放行。
+    """
+    bundle_dir = Path(bundle_dir)
+    m = read_manifest(bundle_dir)
+    if bundle_dir.name != m.slot_name:
+        raise BundleError(f"目录名 {bundle_dir.name} 跟自述里的 "
+                          f"{m.slot_name} 对不上")
+    verify_pure_data(bundle_dir)
+    got = bundle_sha256(bundle_dir)
+    if got != m.content_sha256:
+        raise BundleError(f"content_sha256 对不上: 自述说 {m.content_sha256}, "
+                          f"实际是 {got}")
+    return m

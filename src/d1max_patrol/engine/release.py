@@ -107,13 +107,15 @@ def safe_name(name: str) -> str:
     return name
 
 
-def tree_sha256(root: Path | str) -> str:
+def tree_sha256(root: Path | str, *, skip: str = MANIFEST_NAME) -> str:
     """整棵树的指纹:按相对路径排序,逐条喂「路径 + 这个文件的 sha256」。
 
     **路径要进指纹。** 只把内容首尾相接算一遍的话,改个文件名、把 a 的内容
     挪进 b,指纹一点不变 —— 那种改动就成了隐形的。
 
-    ``release.json`` 自己不算 —— 它里头存着这个值,算自己是个死循环。
+    ``skip`` 那个文件自己不算 —— 它里头存着这个值,算自己是个死循环。默认是
+    ``release.json``;任务包传的是 ``bundle.yaml``(§3.2 的整包 content_hash
+    跟 §7.3 是同一套算法,**不该有第二个真理源**)。
 
     排序按**相对路径的 posix 串**,不按 ``Path`` 对象:后者在 Windows 上按
     ``parts`` 比,和 Linux 上的结果不保证一样,而两边算出不同指纹的那天,
@@ -124,7 +126,7 @@ def tree_sha256(root: Path | str) -> str:
     files = sorted((p.relative_to(root).as_posix(), p)
                    for p in root.rglob("*") if p.is_file())
     for rel, path in files:
-        if rel == MANIFEST_NAME:
+        if rel == skip:
             continue
         digest.update(rel.encode())
         digest.update(_CHUNK_JOIN)
