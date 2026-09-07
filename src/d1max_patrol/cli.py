@@ -10,14 +10,31 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import os
 import sys
+import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from pathlib import Path
 
+from d1max_patrol.app.identity import resolve
 from d1max_patrol.backends.base import NavBackendError, NavTimeoutError
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.loader import ConfigError, load_config
 from d1max_patrol.conformance import DEFAULT_PROBES, nav_host_port, run_conformance
+from d1max_patrol.engine.release import (
+    MAX_BOOT_ATTEMPTS,
+    GuardAction,
+    Layout,
+    ReleaseError,
+    activate,
+    boot_guard,
+    current_name,
+    installed,
+    read_pending,
+    rollback,
+    stage,
+)
 from d1max_patrol.protocol.nav_types import (
     LOC_HEALTHY,
     MappingStatus,
@@ -105,6 +122,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--full", action="store_true",
                    help="导航之外再起旁路进程和建图桥 —— 彩排整个 app 用这个")
 
+    rel = sub.add_parser("release", help="装机、升级、回滚")
+    rel_sub = rel.add_subparsers(dest="release_command", required=True)
+
+    def _root_arg(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--root", default=None,
+                       help="版本目录的根,默认取 $D1MAX_RELEASE_ROOT 或 /opt/d1max")
+
+    _root_arg(rel_sub.add_parser("list", help="装了哪几版,现在跑哪版"))
+    p_ins = rel_sub.add_parser("install", help="把一个包落进槽里,不切换")
+    p_ins.add_argument("package", help="包目录")
+    _root_arg(p_ins)
+    p_act = rel_sub.add_parser("activate", help="切到某一版,下次起来自检")
+    p_act.add_argument("name", help="版本名")
+    _root_arg(p_act)
+    _root_arg(rel_sub.add_parser("rollback", help="退回上一版"))
+    _root_arg(rel_sub.add_parser(
+        "boot-guard",
+        help="开机守卫:连着两次开机还挂着在途标记就退回去"))
+
     return parser
 
 
@@ -181,6 +217,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.full:
             sim_argv.append("--full")
         return sim_main(sim_argv)
+
+    if args.command == "release":
+        # 跟 sim 同一条道理:装机时机器上根本没有后端可连,boot-guard 更是
+        # 在 systemd 把我们的服务拉起来之前就跑 —— 这条支路绝不许碰
+        # `_backend()`/`_amain()`,那条路一上来就要建后端连接。
+        return _cmd_release(args)
 
     try:
         return asyncio.run(_amain(args))
@@ -416,6 +458,102 @@ async def _cmd_conform(backend, args) -> int:
     # 退出码只反映"巡检本身有没有跑起来"。字段不一致**不算失败** ——
     # 那正是我们来采集的信息,拿它当错误会让现场以为流程崩了。
     return 0 if ok else 1
+
+
+# --------------------------------------------------------------------- release
+
+
+def _release_root(arg: str | None) -> Path:
+    """版本根在哪。显式参数赢,其次环境变量,最后真机上的默认路径。"""
+    if arg:
+        return Path(arg)
+    env = os.environ.get("D1MAX_RELEASE_ROOT", "").strip()
+    return Path(env) if env else Path("/opt/d1max")
+
+
+def _cmd_release(args: argparse.Namespace) -> int:
+    """release 子命令族。**这条支路不连后端** —— 装机时机器上没有后端可连,
+
+    boot-guard 更是在 systemd 把我们的服务拉起来之前就跑。见 `main()` 里
+    在 `asyncio.run(_amain(args))` 之前就把它分派掉的那一段。
+    """
+    layout = Layout(root=_release_root(getattr(args, "root", None)))
+    now_ms = int(time.time() * 1000)
+
+    if args.release_command == "list":
+        pending = read_pending(layout)
+        print(f"根       : {layout.root}")
+        print(f"现在跑的 : {current_name(layout) or '(还没有)'}")
+        for name in installed(layout):
+            print(f"装着的   : {name}")
+        if pending is not None:
+            print(f"在途     : {pending.to} 第 {pending.attempts} 次开机"
+                  f"(上一版 {pending.src or '无'})")
+        return 0
+
+    if args.release_command == "install":
+        try:
+            manifest = stage(layout, Path(args.package), now_ms=now_ms)
+        except (ReleaseError, OSError) as exc:
+            print(f"装不了: {exc}", file=sys.stderr)
+            return 2
+        print(f"落槽了: {manifest.name} (版本 {manifest.version})")
+        return 0
+
+    if args.release_command == "activate":
+        try:
+            # 把当下的 SN 记进在途标记 —— 重启后自检第四项拿它比对(§7.2)。
+            pending = activate(layout, args.name, now_ms=now_ms, auto=False,
+                               sn=resolve().sn)
+        except (ReleaseError, OSError) as exc:
+            print(f"切不了: {exc}", file=sys.stderr)
+            return 2
+        print(f"切到 {pending.to},上一版 {pending.src or '无'}。"
+              f"重启之后会自检,没过会自己退回去。")
+        return 0
+
+    if args.release_command == "rollback":
+        try:
+            back = rollback(layout, now_ms=now_ms)
+        except (ReleaseError, OSError) as exc:
+            print(f"退不了: {exc}", file=sys.stderr)
+            return 2
+        print(f"退回 {back}。重启生效。")
+        return 0
+
+    # boot-guard
+    return _cmd_boot_guard(layout, now_ms)
+
+
+def _cmd_boot_guard(layout: Layout, now_ms: int) -> int:
+    """开机守卫。**这是自动回滚的第二层,专治"坏到跑不出自检"。**
+
+    第一层是服务里那一遍自检:它需要新版能起来、能跑到那段代码。如果新版坏到
+    连进程都起不来,第一层永远不会被执行 —— 那台机器就永远停在坏版本上,而且
+    现场没人能通过 HTTP 看到任何东西。
+
+    这个守卫由 systemd 在我们的服务**之前**跑,它自己装在 ``<root>/bin`` 里,
+    **不在任何一版的目录内** —— 所以换版本换不掉它,坏版本也带不坏它。它不
+    读新版的任何一个字节,只数在途标记上的次数。
+
+    **它永远退 0。** 守卫失败绝不能拦住开机 —— 一个把机器挡在启动之外的
+    安全网,比它要防的问题更糟。``boot_guard()`` 自己已经保证任何一条路都
+    不抛异常(最坏回 ``GuardAction.BROKEN``),这里不需要再包一层。
+    """
+    action = boot_guard(layout, now_ms=now_ms)
+
+    话 = {
+        GuardAction.OK: "没有在途的升级,链是好的。",
+        GuardAction.COUNTED: "有在途的升级,数了一次,让它起。",
+        GuardAction.ROLLED_BACK:
+            f"连着 {MAX_BOOT_ATTEMPTS} 次开机都没坐实,已退回上一版。",
+        GuardAction.REPAIRED: "链断了,已经按在途标记(或盘上最新的一版)修好。",
+        GuardAction.GAVE_UP: "装机那一次就没起来,没有上一版可退 —— 请人来看。",
+        GuardAction.BROKEN: "盘上一版都没有 —— 这台机器要重装。",
+    }
+    print(f"[守卫] {话.get(action, action.value)} 现在指着: "
+          f"{current_name(layout) or '(没有)'}")
+    return 0
 
 
 _COMMANDS = {
