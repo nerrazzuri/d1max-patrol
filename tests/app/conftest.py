@@ -181,7 +181,8 @@ async def _make_teleop(device, engine) -> Teleop:
 
 
 def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
-             removable=None, release_root=None, payload_file=None) -> AppContext:
+             removable=None, release_root=None, payload_file=None,
+             bundles_root=None, clock=None, time_reference=None) -> AppContext:
     """拼一份上下文。``nav`` / ``device`` / ``removable`` 留空就是默认的假件。
 
     ``identity`` 显式传 ``resolve(...)``:``AppContext.identity`` 的默认工厂
@@ -210,6 +211,13 @@ def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
         release_root=release_root if release_root is not None
         else tmp_path / "opt",
         payload_file=payload_file,
+        bundles_root=bundles_root if bundles_root is not None
+        else tmp_path / "bundles",
+        # 留空就用 AppContext 自己的默认值(真墙上时钟、没有参照)——
+        # 现有那一堆 app 测试一个字都不用改。
+        **({"clock": clock} if clock is not None else {}),
+        **({"time_reference": time_reference}
+           if time_reference is not None else {}),
         identity=resolve(sn="D1M-TEST", files=(), net_root=tmp_path / "无",
                          payload_file=payload_file, host="test"))
 

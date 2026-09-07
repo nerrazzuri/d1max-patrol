@@ -108,6 +108,17 @@ from d1max_patrol.engine.backup import (
     resolve_targets,
 )
 from d1max_patrol.engine.baselines import BASELINE_DIR_NAME, baselines_bytes
+from d1max_patrol.engine.bundle import (
+    BundleError,
+    active_bundle,
+    apply_bundle,
+    read_bundle_schedule,
+    rollback_bundle,
+    verify_bundle,
+)
+from d1max_patrol.engine.bundle import (
+    read_state as read_bundle_state,
+)
 from d1max_patrol.engine.export import (
     EXPORTS_DIR_NAME,
     ExportError,
@@ -159,6 +170,12 @@ from d1max_patrol.engine.retention import (
     read_notice,
     scan_runs,
     write_notice,
+)
+from d1max_patrol.engine.schedule import (
+    Skew,
+    clock_skew,
+    decide,
+    next_run,
 )
 from d1max_patrol.engine.selfcheck import (
     PrecheckInputs,
@@ -479,6 +496,20 @@ def _spawn_restart(plan: RestartPlan) -> None:
 # ------------------------------------------------------------------ 上下文
 
 
+def _wall_ms() -> int:
+    """墙上时钟,UTC 毫秒。"""
+    return int(time.time() * 1000)
+
+
+def _no_time_reference() -> tuple[int, str] | None:
+    """默认没有外部时间参照。第 9 卷接上服务器之后换成真的。
+
+    **回 ``None`` 而不是回当前时间。** 没有参照的时候,漂移是「不知道」,
+    不是 0 —— 报 0 等于说「钟是准的」(§3.3 第 4 条)。
+    """
+    return None
+
+
 @dataclass
 class AppContext:
     """app 手里的全部零件。
@@ -510,6 +541,13 @@ class AppContext:
     #: 「有没有上装」记在哪。``None`` = 用 ``identity.payload_path`` 的默认
     #: 解析顺序(环境变量,再默认路径)。
     payload_file: Path | None = None
+    #: 任务包目录摆在哪。**默认是真机上的路径**,测试传 tmp_path。
+    bundles_root: Path = Path("/opt/d1max/bundles")
+    #: 现在几点(UTC 毫秒)。**注进来的**:这一整卷都是时间逻辑,测试里要能把
+    #: 钟拨到 22:00 而不是等到 22:00(§8.5 第 2 条)。
+    clock: Callable[[], int] = _wall_ms
+    #: 外头的时间参照:``(毫秒, 来源)``,拿不到就 ``None``(断网时就是)。
+    time_reference: Callable[[], tuple[int, str] | None] = _no_time_reference
 
     @property
     def form(self) -> Form:
@@ -930,6 +968,10 @@ class AppServer:
         self.route("POST", "/api/release/rollback", self._release_rollback)
         self.route("GET", "/api/selfcheck", self._selfcheck)
         self.route("PUT", "/api/identity/payload", self._payload_put)
+        self.route("GET", "/api/bundle", self._bundle)
+        self.route("POST", "/api/bundle/apply", self._bundle_apply)
+        self.route("POST", "/api/bundle/rollback", self._bundle_rollback)
+        self.route("GET", "/api/schedule", self._schedule)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes, headers: Mapping[str, str] | None = None,
@@ -2192,6 +2234,115 @@ class AppServer:
         plan = restart_plan(has_payload=payload.has, recorded=payload.recorded)
         self._ctx.restart(plan)
         return json_response({"rolled_back_to": back, "restart": plan.to_wire()})
+
+    # ------------------------------------------------------- 任务包与排程
+
+    def _bundle(self, _req: Request) -> Response:
+        """狗手上是哪一版包。**心跳报的就是这一条**(§3.2)。
+
+        包被改过的时候 ``manifest`` 是 ``None``,但 ``state`` 照样答得出来 ——
+        「current 指着谁」正是出事之后第一个要看的东西。
+        """
+        root = self._ctx.bundles_root
+        where = active_bundle(root)
+        manifest = None
+        if where is not None:
+            with contextlib.suppress(BundleError):
+                manifest = verify_bundle(where).to_wire()
+        return json_response({"root": str(root),
+                              "state": read_bundle_state(root).to_wire(),
+                              "manifest": manifest})
+
+    def _bundle_apply(self, req: Request) -> Response:
+        """让某一版生效。
+
+        **换链之前 engine 会先校验**(槽名那道闸、§3.1 那个目标 SN 那道闸都在
+        里头),坏包、越界的槽名、发错机器的包都换不过去。所以这儿不再验一遍
+        —— 验两遍就有两份判据,迟早分岔。
+
+        本机 SN 从 ``self._ctx.identity.sn`` 来。**SN 是服务端自己填的,不收
+        请求体里的** —— 让调用方报「我是谁」,这道闸就等于不存在(定夺 13)。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体要是个对象", '形如 {"slot": "..."}')
+        slot = body.get("slot")
+        if not isinstance(slot, str) or not slot:
+            raise HttpError(400, "要 slot", "就是包目录名,形如 site-kl-7")
+        try:
+            state = apply_bundle(self._ctx.bundles_root, slot,
+                                 sn=self._ctx.identity.sn)
+        except BundleError as exc:
+            raise HttpError(400, str(exc)) from None
+        return json_response({"state": state.to_wire()})
+
+    def _bundle_rollback(self, req: Request) -> Response:
+        """退回上一版。
+
+        **时刻是服务端盖的。** 请求里带的 ``at`` 一律不收 —— 手机的钟可以是
+        任何值,而这条记录是事后追责用的:一条能被客户端随便写的时间戳,
+        追责的时候等于没有。
+        """
+        body = req.json()
+        reason = str(body.get("reason") or "") if isinstance(body, dict) else ""
+        at = datetime.fromtimestamp(
+            self._ctx.clock() / 1000, tz=timezone.utc).isoformat()
+        try:
+            state = rollback_bundle(self._ctx.bundles_root, at=at,
+                                    reason=reason or "手工回退")
+        except BundleError as exc:
+            # 409:请求本身没毛病,是这台机器现在的状态不允许(没有 previous)。
+            # 手机上该弹「现在退不了」,不是「参数错了」。
+            raise HttpError(409, str(exc)) from None
+        return json_response({"state": state.to_wire()})
+
+    def _schedule(self, _req: Request) -> Response:
+        """包里的排程,加上每条此刻的决定。值守屏读这一条。
+
+        **这条路由是「看」,不是「跑」。** ``decide()`` 说 due 了,它也只是把
+        这句话答出来;真起跑是第 8 卷排程器的事。
+
+        ``last_started_ms`` 一律传 ``None``:「上一次真起跑是什么时候」得从 run
+        归档里查,那同样是第 8 卷。这里按「从没跑过」答,**不是漏了** —— 这条
+        路由一次都不会真起跑任何任务,重复起跑这件事在这儿不存在。
+        """
+        clock = self._clock_skew().to_wire()
+        where = active_bundle(self._ctx.bundles_root)
+        if where is None:
+            return json_response({"timezone": "", "now": "", "entries": [],
+                                  "clock": clock})
+        try:
+            schedule = read_bundle_schedule(where)
+        except BundleError as exc:
+            # 409 而不是 500:现场的人看到 500 只能猜,看到「缺 timezone」能
+            # 自己修 —— 而这台狗此刻在一个没有网的地方。
+            raise HttpError(409, str(exc)) from None
+
+        # **用包里那个时区,不读系统时区**(§3.3 第 1 条)。裸 datetime 会被
+        # 按系统时区解释,而且不报错,只是悄悄算错。
+        now = datetime.fromtimestamp(self._ctx.clock() / 1000,
+                                     tz=schedule.tz())
+        entries = []
+        for entry in schedule.entries:
+            下一轮 = next_run(entry, now=now)
+            entries.append(entry.to_wire() | {
+                "decision": decide(entry, now=now,
+                                   last_started_ms=None).to_wire(),
+                "next_run": 下一轮.isoformat() if 下一轮 is not None else "",
+            })
+        return json_response({"timezone": schedule.timezone,
+                              "now": now.isoformat(),
+                              "entries": entries, "clock": clock})
+
+    def _clock_skew(self) -> Skew:
+        """本地钟跟外头差多少。**没有参照就是「不知道」,不是 0。**"""
+        ref = self._ctx.time_reference()
+        if ref is None:
+            return clock_skew(local_ms=self._ctx.clock(), reference_ms=None,
+                              source="")
+        reference_ms, source = ref
+        return clock_skew(local_ms=self._ctx.clock(),
+                          reference_ms=reference_ms, source=source)
 
     # ------------------------------------------------------------ 起来之后那一遍
 

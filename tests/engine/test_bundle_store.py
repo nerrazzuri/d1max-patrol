@@ -14,6 +14,7 @@ from d1max_patrol.engine.bundle import (
     CURRENT_LINK,
     LANDED,
     PREVIOUS_LINK,
+    SCHEDULE_NAME,
     BundleError,
     active_bundle,
     apply_bundle,
@@ -21,9 +22,12 @@ from d1max_patrol.engine.bundle import (
     land,
     mark_proven,
     prune_bundles,
+    read_bundle_schedule,
     read_state,
     rollback_bundle,
 )
+
+from .test_bundle_build import 打一个
 
 时刻 = "2026-09-07T14:03:00+08:00"
 后来 = "2026-09-08T02:11:00+08:00"
@@ -457,3 +461,33 @@ def test_证过的那一版崩了不走自动退(tmp_path, root):
         return 崩了 and not state.proven and bool(state.previous)
 
     assert 该不该退(read_state(root), 崩了=True) is False
+
+
+def test_读得出包里那份排程(tmp_path):
+    root = tmp_path / "bundles"
+    land(root, 打一个(tmp_path))
+    apply_bundle(root, "site-kl-1")
+    got = read_bundle_schedule(root / "site-kl-1")
+    assert got.timezone == "Asia/Kuala_Lumpur"
+
+
+def test_排程不见了是BundleError(tmp_path):
+    root = tmp_path / "bundles"
+    land(root, 打一个(tmp_path))
+    (root / "site-kl-1" / SCHEDULE_NAME).unlink()
+    with pytest.raises(BundleError, match=SCHEDULE_NAME):
+        read_bundle_schedule(root / "site-kl-1")
+
+
+def test_排程不合规抛的也是BundleError而且带原话(tmp_path):
+    """**不许把 yaml 的异常和 ScheduleError 漏给调用方。**
+
+    调用方是 HTTP 层,它要把这件事翻成一个说得清的 409。漏上去就只能给
+    500,而现场的人看到 500 只能猜 —— 这台狗此刻在一个没有网的地方。
+    """
+    root = tmp_path / "bundles"
+    land(root, 打一个(tmp_path))
+    (root / "site-kl-1" / SCHEDULE_NAME).write_text(
+        "entries: []\n", encoding="utf-8")
+    with pytest.raises(BundleError, match="timezone"):
+        read_bundle_schedule(root / "site-kl-1")

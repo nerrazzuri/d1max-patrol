@@ -27,6 +27,7 @@ import yaml
 
 from .mission import MissionError, parse_mission
 from .release import point_link, tree_sha256
+from .schedule import Schedule, ScheduleError, parse_schedule
 
 #: 包的自述文件名。整包哈希不算它自己 —— 它里头存着那个值。
 BUNDLE_MANIFEST = "bundle.yaml"
@@ -48,6 +49,9 @@ _MANIFEST_KEYS = frozenset({"bundle_id", "version", "schema",
 
 #: 一条 SN 最长多少。挡的不是攻击,是「有人把整段日志粘进 targets」。
 MAX_SN_LEN = 64
+
+#: 排程在包里的文件名。
+SCHEDULE_NAME = "schedule.yaml"
 
 
 class BundleError(ValueError):
@@ -199,6 +203,24 @@ def write_manifest(bundle_dir: Path | str, m: BundleManifest) -> None:
     """把自述写进包目录。"""
     (Path(bundle_dir) / BUNDLE_MANIFEST).write_text(
         dump_manifest(m), encoding="utf-8")
+
+
+def read_bundle_schedule(bundle_dir: Path | str) -> Schedule:
+    """读包里那份排程。**坏了一律抛 ``BundleError``。**
+
+    yaml 的异常和 ``ScheduleError`` 都在这儿被翻一次。调用方是 HTTP 层,它
+    要把「包里的排程有问题」变成一个说得清的 409;漏上去就只能给 500,而
+    现场的人看到 500 只能猜 —— 这台狗此刻在一个没有网的地方。
+    """
+    p = Path(bundle_dir) / SCHEDULE_NAME
+    try:
+        raw = yaml.safe_load(p.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise BundleError(f"{SCHEDULE_NAME} 读不出来: {exc}") from exc
+    try:
+        return parse_schedule(raw)
+    except ScheduleError as exc:
+        raise BundleError(f"{SCHEDULE_NAME} 不合规: {exc}") from exc
 
 
 # --------------------------------------------------- 「纯数据」这条界的四道闸
