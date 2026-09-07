@@ -48,9 +48,17 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from d1max_patrol.app.auth import (
     AUTH_PATH,
+    CHALLENGE_PATH,
+    CHANNEL_LAN,
+    CHANNEL_LOCAL,
+    NONCE_TTL_S,
+    OPERATOR_NOTICE,
+    PROOF_ALG,
+    TOKEN_IDLE_S,
     Denied,
     Guard,
     Session,
+    bearer,
     normalize_pin,
 )
 from d1max_patrol.app.bridge import LoopBridge
@@ -955,6 +963,9 @@ class AppServer:
     def _register_routes(self) -> None:
         self.route("GET", "/", self._index)
         self.route("POST", AUTH_PATH, self._auth_unlock)
+        self.route("GET", CHALLENGE_PATH, self._auth_challenge)
+        self.route("POST", "/api/auth/logout", self._auth_logout)
+        self.route("GET", "/api/sessions", self._sessions)
         self.route("GET", "/api/identity", self._identity)
         self.route("GET", "/api/state", self._state)
         self.route("GET", "/api/events", self._events)
@@ -1046,16 +1057,86 @@ class AppServer:
         return self._static("index.html")
 
     def _auth_unlock(self, req: Request) -> Response:
-        """PIN 换 token。**这是唯一一个不要 token 的 /api/ 接口。**"""
+        """PIN 换 token,或者质询-应答换 token。
+
+        **这是唯一一个不要 token 的写接口。** 两条路:带 ``nonce``/``proof``
+        的走质询-应答(§6.5 措施 2,PIN 从不上网);带 ``pin`` 的是老路,在狗
+        的热点上只换得到只读凭证 —— 那条通道上报文人人可解。
+
+        ``operator`` 是操作人自己报的名字。**狗记下来,但不核实**(§6.3),所
+        以每一次响应都把 ``operator_verified: false`` 和 ``notice`` 一起发回
+        去 —— 界面上必须照着说,不许含糊成"已登录:张三"。
+        """
         body = req.json()
         if not isinstance(body, dict):
-            raise HttpError(400, "请求体要是个对象", '形如 {"pin": "..."}')
+            raise HttpError(400, "请求体要是个对象",
+                            '形如 {"pin": "..."},或者 '
+                            '{"nonce": "...", "proof": "..."}')
+        client = req.client or "?"
+        operator = body.get("operator", "")
         try:
-            token = self._auth.unlock(body.get("pin"), req.client or "?",
-                                      operator=body.get("operator", ""))
+            if "nonce" in body or "proof" in body:
+                token = self._auth.unlock_proof(body.get("nonce"),
+                                                body.get("proof"), client,
+                                                operator=operator)
+            else:
+                token = self._auth.unlock(body.get("pin"), client,
+                                          operator=operator)
         except Denied as exc:
             raise HttpError(exc.status, exc.error, exc.detail) from None
-        return json_response({"token": token})
+        sess = self._auth.session_of(token)
+        return json_response({
+            "token": token,
+            "operator": sess.operator if sess else "",
+            "operator_verified": False,
+            "channel": sess.channel if sess else CHANNEL_LAN,
+            "readonly": bool(sess and sess.readonly),
+            "idle_s": sess.idle_limit_s if sess else TOKEN_IDLE_S,
+            "notice": OPERATOR_NOTICE,
+        })
+
+    def _auth_challenge(self, _req: Request) -> Response:
+        """取一个一次性质询。**这条不要 token** —— 要了就没人换得到 token。"""
+        try:
+            nonce = self._auth.challenge()
+        except Denied as exc:
+            raise HttpError(exc.status, exc.error, exc.detail) from None
+        return json_response({"nonce": nonce, "ttl_s": NONCE_TTL_S,
+                              "alg": PROOF_ALG})
+
+    def _auth_logout(self, req: Request) -> Response:
+        """交回这个会话的名额。**顺带把租约还了**(§6.4)。
+
+        没有这条,一个装完就卸载的 app 会占着 1/3 的名额到闲置期走完 —— 在局
+        域网上那是 12 小时。
+        """
+        token = bearer(req.headers)
+        if not token:
+            raise HttpError(401, "要先解锁", "退出也得说清是谁在退。")
+        was_live = self._auth.logout(token)
+        self._control.sweep(now_ms=self._ctx.clock())
+        return json_response({"ok": True, "was_live": was_live})
+
+    def _sessions(self, req: Request) -> Response:
+        """3 个名额现在谁占着(§3.6)。**只给指纹,不给 token 本身。**
+
+        **``max_sessions`` 只约束 ``remote_sessions``。** 回环(``local``)走的
+        是自己那个池 —— 它不占那条无线上行,所以不占那 3 个名额(见
+        ``app/auth.py`` 的 ``Guard._issue``)。行是全给的,每行都带 ``channel``;
+        但界面上**不许**拿 ``len(sessions)`` 去跟 ``max_sessions`` 比,那是两个
+        分母,会渲染出"6 条会话,上限 3"这种话。要比就比
+        ``remote_sessions`` / ``max_sessions``。
+        """
+        mine = req.session.ref if req.session is not None else ""
+        rows = [{**s.to_wire(), "mine": s.ref == mine}
+                for s in self._auth.sessions()]
+        本机 = sum(1 for r in rows if r["channel"] == CHANNEL_LOCAL)
+        return json_response({"sessions": rows,
+                              "remote_sessions": len(rows) - 本机,
+                              "local_sessions": 本机,
+                              "max_sessions": self._auth.max_sessions,
+                              "max_local_sessions": self._auth.max_local_sessions,
+                              "notice": OPERATOR_NOTICE})
 
     def _identity(self, _req: Request) -> Response:
         """这是哪只狗。手机拿它认机器、给拉回去的归档分组。
