@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from d1max_patrol.app.bridge import LoopBridge
+from d1max_patrol.app.identity import resolve
 from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
 from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.server import AppContext, AppServer
@@ -180,8 +181,13 @@ async def _make_teleop(device, engine) -> Teleop:
 
 
 def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
-             removable=None) -> AppContext:
-    """拼一份上下文。``nav`` / ``device`` / ``removable`` 留空就是默认的假件。"""
+             removable=None, release_root=None, payload_file=None) -> AppContext:
+    """拼一份上下文。``nav`` / ``device`` / ``removable`` 留空就是默认的假件。
+
+    ``identity`` 显式传 ``resolve(...)``:``AppContext.identity`` 的默认工厂
+    在开发机上会去读 ``/etc/d1max/payload.json``,不传的话真机上那个文件
+    会串进测试。
+    """
     nav = nav if nav is not None else FakeNav()
     device = device if device is not None else FakeDevice()
     engine = bridge.call(lambda: _make_engine(nav, device, tmp_path / "runs",
@@ -200,7 +206,12 @@ def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
     return AppContext(
         bridge=bridge, engine=engine, nav=nav, device=device,
         maps=FakeMaps(), procs=procs, teleop=teleop, mapping=mapping,
-        missions_dir=tmp_path / "missions", runs_root=tmp_path / "runs")
+        missions_dir=tmp_path / "missions", runs_root=tmp_path / "runs",
+        release_root=release_root if release_root is not None
+        else tmp_path / "opt",
+        payload_file=payload_file,
+        identity=resolve(sn="D1M-TEST", files=(), net_root=tmp_path / "无",
+                         payload_file=payload_file, host="test"))
 
 
 @pytest.fixture

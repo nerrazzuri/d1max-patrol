@@ -32,12 +32,13 @@ import mimetypes
 import os
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,7 +53,13 @@ from d1max_patrol.app.auth import (
 )
 from d1max_patrol.app.bridge import LoopBridge
 from d1max_patrol.app.gridmap import GridError, from_frame, load_saved
-from d1max_patrol.app.identity import NICKNAME_ENV, SN_ENV, Identity, resolve
+from d1max_patrol.app.identity import (
+    NICKNAME_ENV,
+    SN_ENV,
+    Identity,
+    resolve,
+    write_payload,
+)
 from d1max_patrol.app.mapping import (
     MappingConfig,
     MappingError,
@@ -120,6 +127,20 @@ from d1max_patrol.engine.mission import (
     save_mission,
 )
 from d1max_patrol.engine.preflight import PreflightReport, run_preflight
+from d1max_patrol.engine.release import (
+    Layout,
+    ReleaseError,
+    ReleaseManifest,
+    activate,
+    current_name,
+    installed,
+    read_pending,
+    rollback,
+    stage,
+)
+from d1max_patrol.engine.release import (
+    read_manifest as read_release_manifest,
+)
 from d1max_patrol.engine.removable import (
     DEFAULT_PROBE,
     DiskRole,
@@ -135,6 +156,13 @@ from d1max_patrol.engine.retention import (
     read_notice,
     scan_runs,
     write_notice,
+)
+from d1max_patrol.engine.selfcheck import (
+    PrecheckInputs,
+    RestartPlan,
+    mission_schema_floor,
+    precheck,
+    restart_plan,
 )
 from d1max_patrol.inspect.judge import (
     judge_run,
@@ -357,6 +385,12 @@ def _disk(path: Path) -> tuple[int, int]:
     return usage.used, usage.total
 
 
+def _dir_size_mb(path: Path) -> float:
+    """一棵目录树占多少 MB。落槽前算一版新包要占多少地方就靠它。"""
+    return sum(p.stat().st_size for p in Path(path).rglob("*")
+              if p.is_file()) / 1024 / 1024
+
+
 def _day(raw: Any, which: str) -> datetime:
     """``YYYY-MM-DD`` -> 那天 UTC 零点。给导出区间用。"""
     if not isinstance(raw, str):
@@ -422,6 +456,15 @@ def _compile(pattern: str) -> re.Pattern[str]:
     return re.compile("^" + "".join(parts) + "$")
 
 
+def _spawn_restart(plan: RestartPlan) -> None:
+    """真去重启。**起了就不等** —— 等下去等的是自己的死。
+
+    ``systemctl restart`` 会先把我们停掉,所以这个调用永远不会正常返回;
+    ``Popen`` 之后立刻返回,让 HTTP 那一侧还来得及把响应写出去。
+    """
+    subprocess.Popen(list(plan.argv), start_new_session=True)
+
+
 # ------------------------------------------------------------------ 上下文
 
 
@@ -449,6 +492,13 @@ class AppContext:
     #: 这是哪只狗。手机按它认机器、给归档分组 —— 每只 D1 Max 的内网地址
     #: 都一样,靠地址分不出谁是谁(见 ``app/identity.py``)。
     identity: Identity = field(default_factory=resolve)
+    #: 版本目录摆在哪。**默认是真机上的路径**,测试传 tmp_path。
+    release_root: Path = Path("/opt/d1max")
+    #: 怎么执行重启。engine 只出方案,执行注入进来 —— 测试里换成一个记账的。
+    restart: Callable[[RestartPlan], None] = _spawn_restart
+    #: 「有没有上装」记在哪。``None`` = 用 ``identity.payload_path`` 的默认
+    #: 解析顺序(环境变量,再默认路径)。
+    payload_file: Path | None = None
 
     @property
     def form(self) -> Form:
@@ -825,6 +875,11 @@ class AppServer:
         self.route("POST", "/api/backup/init", self._backup_init)
         self.route("POST", "/api/backup/sync", self._backup_sync)
         self.route("POST", "/api/backup/eject", self._backup_eject)
+        self.route("GET", "/api/release", self._release)
+        self.route("POST", "/api/release/install", self._release_install)
+        self.route("POST", "/api/release/activate", self._release_activate)
+        self.route("POST", "/api/release/rollback", self._release_rollback)
+        self.route("PUT", "/api/identity/payload", self._payload_put)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes, headers: Mapping[str, str] | None = None,
@@ -1958,6 +2013,153 @@ class AppServer:
         with self._sync_lock:
             busy = key in self._syncing
         return json_response(eject(target.mount, busy=busy).to_wire())
+
+    def _backup_ages(self) -> float | None:
+        """距上次备份多少天。**取不到就是 None,不是 0**。
+
+        0 意味着「刚同步过」,而这里的「不知道」和「很新」得是两句不一样的话
+        —— 升级前自检那一项(``backup``)照 ``None``/一个数走两条不同的措辞。
+        跟 ``_scan_targets`` 一样:没扫成、或者一块能用的盘都没有,都算「不知道」。
+        """
+        targets, _why = self._scan_targets()
+        if not targets:
+            return None
+        ctx = self._ctx
+        best_ms: int | None = None
+        for t in targets:
+            if not t.usable:
+                continue
+            state = read_sync_state(t.mount, robot_sn=ctx.identity.sn)
+            if state.last_sync_ms and (best_ms is None or state.last_sync_ms > best_ms):
+                best_ms = state.last_sync_ms
+        if best_ms is None:
+            return None
+        return max(0.0, (int(time.time() * 1000) - best_ms) / 1000 / 86400)
+
+    # ------------------------------------------------------------ 版本
+
+    def _layout(self) -> Layout:
+        return Layout(root=Path(self._ctx.release_root))
+
+    def _release(self, _req: Request) -> Response:
+        """盘上现在是什么局面。装机验收和值守屏都读这一条。"""
+        layout = self._layout()
+        pending = read_pending(layout)
+        return json_response({
+            "root": str(layout.root),
+            "current": current_name(layout),
+            "installed": list(installed(layout)),
+            "pending": pending.to_wire() if pending is not None else None,
+        })
+
+    def _release_install(self, req: Request) -> Response:
+        """把一个包落进 releases/。**只落槽,不切换。**"""
+        raw = req.json()
+        if not isinstance(raw, dict):
+            raise HttpError(400, "请求体要是个对象", '形如 {"package": "..."}')
+        package = raw.get("package")
+        if not isinstance(package, str) or not package:
+            raise HttpError(400, f"package 要是一个路径字符串,给的是 {package!r}")
+        try:
+            manifest = stage(self._layout(), Path(package),
+                             now_ms=int(time.time() * 1000))
+        except ReleaseError as exc:
+            # 409 而不是 400:请求本身没毛病,是那个包有毛病。
+            raise HttpError(409, str(exc)) from exc
+        except OSError as exc:
+            raise HttpError(409, f"落槽失败: {exc}") from exc
+        return json_response(manifest.to_wire())
+
+    def _gather_precheck(self, manifest: ReleaseManifest, *,
+                         auto: bool) -> PrecheckInputs:
+        """把升级前自检要的事实一次取齐。**取值都在这儿,判断不在这儿。**"""
+        ctx = self._ctx
+        layout = self._layout()
+        used_b, total_b = _disk(layout.root)          # 回的是(已用, 总量),字节
+        free_mb = (total_b - used_b) / 1024 / 1024
+        need_mb = _dir_size_mb(layout.releases / manifest.name)
+        battery = self._call(ctx.device.battery)
+        payload = ctx.identity.payload
+        targets = self._backup_ages()
+        return PrecheckInputs(
+            package_ok=True, package_detail="落槽时已经对过哈希",
+            requires_mission_schema=manifest.requires_mission_schema,
+            mission_schema_floor=mission_schema_floor(ctx.missions_dir),
+            free_mb=free_mb, need_mb=need_mb,
+            battery_pct=float(battery),
+            engine_running=ctx.engine.running,
+            # 第 6 卷才有租约。在那之前恒为 False,而不是"不知道" ——
+            # 这一项现在没有别的可能,写 None 只会让判据多一种要处理的形状。
+            lease_active=False,
+            payload_recorded=payload.recorded, has_payload=payload.has,
+            auto=auto, backup_age_days=targets)
+
+    def _release_activate(self, req: Request) -> Response:
+        """切到某一版。**先自检,过了才换链。**"""
+        ctx = self._ctx
+        raw = req.json()
+        if not isinstance(raw, dict):
+            raise HttpError(400, "请求体要是个对象", '形如 {"name": "..."}')
+        name = raw.get("name")
+        if not isinstance(name, str):
+            raise HttpError(400, f"name 要是版本名,给的是 {name!r}")
+        auto = bool(raw.get("auto", False))
+        layout = self._layout()
+        try:
+            manifest = read_release_manifest(layout.release_dir(name))
+        except ReleaseError as exc:
+            raise HttpError(404, str(exc)) from exc
+
+        report = precheck(self._gather_precheck(manifest, auto=auto))
+        if not report.ok:
+            raise HttpError(409, "升级前自检没过",
+                            json.dumps(report.to_wire(), ensure_ascii=False))
+
+        plan = restart_plan(has_payload=ctx.identity.payload.has)
+        try:
+            pending = activate(layout, name, now_ms=int(time.time() * 1000),
+                               auto=auto, sn=ctx.identity.sn)
+        except ReleaseError as exc:
+            raise HttpError(409, str(exc)) from exc
+        ctx.restart(plan)
+        return json_response({"precheck": report.to_wire(),
+                              "pending": pending.to_wire(),
+                              "restart": plan.to_wire()})
+
+    def _release_rollback(self, _req: Request) -> Response:
+        """人工回滚。**跟自动回滚走同一个 ``release.rollback``。**"""
+        layout = self._layout()
+        try:
+            back = rollback(layout, now_ms=int(time.time() * 1000))
+        except ReleaseError as exc:
+            raise HttpError(409, str(exc)) from exc
+        plan = restart_plan(has_payload=self._ctx.identity.payload.has)
+        self._ctx.restart(plan)
+        return json_response({"rolled_back_to": back, "restart": plan.to_wire()})
+
+    def _payload_put(self, req: Request) -> Response:
+        """改「这台有没有装上装」。**改完立刻生效**,不用重启。
+
+        身份是个 frozen dataclass,所以这里换的是 ``ctx.identity`` 这个引用
+        本身 —— 换引用是原子的,HTTP 线程读到的要么是旧的一整份要么是新的
+        一整份,不会读到改了一半的。
+        """
+        ctx = self._ctx
+        raw = req.json()
+        if not isinstance(raw, dict):
+            raise HttpError(400, "请求体要是个对象")
+        try:
+            written = write_payload(has=bool(raw.get("has_payload")),
+                                    by=str(raw.get("by", "")),
+                                    now_ms=int(time.time() * 1000),
+                                    path=ctx.payload_file,
+                                    confirm=str(raw.get("confirm", "")))
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
+        except OSError as exc:
+            raise HttpError(500, f"记不下来: {exc}") from exc
+        ctx.identity = replace(ctx.identity, payload=written)
+        return json_response(ctx.identity.to_wire())
 
     def _call(self, factory: Callable[[], Any], timeout_s: float = 10.0) -> Any:
         """过桥,并且把业务异常翻成 HTTP 状态。
