@@ -193,3 +193,157 @@ def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机�
     # restart 不能被套进上面那个分支里 —— 顶格(不缩进)才说明它在
     # if/else 的 fi 之后,两条路都会走到,不是只有切换成功那一路才走。
     assert "\nsystemctl restart d1max-patrol.service" in 装机脚本
+
+
+# --------------------------------------------------- fix2: 第 4 卷终评 A 组
+
+#: 我们的 HTTP 服务真正听的端口(``app/server.py`` 的 ``DEFAULT_PORT``)。
+HTTP_PORT = "8095"
+#: 厂商导航 WebSocket 的端口。**不是我们的** —— 交付文件里出现它就是错的。
+VENDOR_WS_PORT = ":10010"
+
+
+def 交付文件() -> tuple[Path, ...]:
+    """会被发到客户现场那几份。**护栏都按这一份名单铺。**"""
+    return (
+        DEPLOY / "install.sh",
+        DEPLOY / "d1max-patrol.service",
+        DEPLOY / "d1max-bootguard.service",
+        ROOT / "docs" / "装机清单.md",
+    )
+
+
+def test_交付文件里不许出现厂商导航端口():
+    """10010 是厂商导航 WebSocket 的端口,我们的 HTTP 服务在 8095。
+
+    写错的后果是整台机器的验收全废:三条验收命令全部 connection refused,
+    于是上装属性永远记不上,于是这台机器永远不许升级(precheck 的 payload
+    那一项拦着)。
+    """
+    for 文件 in 交付文件():
+        text = 文件.read_text(encoding="utf-8")
+        assert VENDOR_WS_PORT not in text, f"{文件.name} 里不该出现 {VENDOR_WS_PORT}"
+
+
+def test_装机脚本和清单都用8095():
+    """光"没有 10010"不够 —— 得真的有人在说 8095,否则整段被删掉也照样绿。"""
+    assert HTTP_PORT in (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert HTTP_PORT in (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+
+
+def test_服务听在所有地址而不是只听本机(服务单元):
+    """``DEFAULT_HOST`` 是 127.0.0.1,而 ``--host`` **没有**环境变量兜底
+
+    (只有 --pin/--sn/--nickname 有)—— 不写在 ExecStart 上就没有第二个地方
+    能把它改掉。手机 app 连的是 192.168.168.100:8095,只听本机的机器它根本
+    连不上。
+    """
+    assert "--host 0.0.0.0" in 服务单元
+
+
+def test_装机脚本第一次写env时当场生成PIN(装机脚本):
+    """``--host 0.0.0.0`` 和 ``D1MAX_PIN`` 是一对,拆不开。
+
+    ``check_exposure()`` 见到非本机地址而没有 PIN 会 ``SystemExit``;配上
+    ``Restart=always`` + ``RestartSec=5``,那就是每 5 秒刷一条日志的启动
+    循环。所以模板里那一行不能留空,得当场生成一个填进去。
+    """
+    assert "secrets.randbelow" in 装机脚本
+    assert "D1MAX_PIN=%s" in 装机脚本            # printf 追加,不是留空的模板行
+    # **只在文件不存在时生成** —— 跟 D1MAX_SN 同一条纪律,现场填过的不许覆盖。
+    assert "-e /etc/d1max/env" in 装机脚本
+    # 生成完要大声打出来,不然现场的人不知道这台机器的 PIN 是什么。
+    assert "这台机器的设备 PIN 是" in 装机脚本
+
+
+def test_装机脚本在PIN空着时停下来而不是把机器丢进启动循环(装机脚本):
+    """跟 SN 那条警告不是一回事:SN 空只是**可能**被误判回滚,PIN 空是
+
+    **必定**起不来。让它崩成每 5 秒一条日志的启动循环,比停下来喊一声糟得多
+    —— 现场看到的是一堵日志墙。所以这里断言的是三样具体的东西:判据、
+    ``exit 3``、以及它排在 ``systemctl restart`` **之前**。
+    """
+    assert "grep -qE '^D1MAX_PIN=.+' /etc/d1max/env" in 装机脚本
+    assert "exit 3" in 装机脚本
+    assert (装机脚本.index("exit 3")
+            < 装机脚本.index("\nsystemctl restart d1max-patrol.service"))
+
+
+def test_装机清单里有记PIN那一条():
+    """§7.9 第 2 步「设置设备 PIN」。之前整条规格项在交付面上一个字都没有。"""
+    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    assert "D1MAX_PIN" in text
+    assert "--host 0.0.0.0" in text          # 为什么必须有 PIN,得说清楚
+    assert "登记表" in text                   # 抄到哪儿去
+
+
+def test_装机脚本把填好的SN透传给activate(装机脚本):
+    """``sudo`` 默认 ``env_reset``,``D1MAX_SN`` 不在 ``env_keep`` 里。
+
+    脚本自己不 source ``/etc/d1max/env`` 的话,``release activate`` 拿到的是
+    空值,``cli.py`` 的 ``resolve()`` 落到设备树/MAC 兜底;而服务侧经
+    ``EnvironmentFile=`` 拿到的是人填的真值 —— 重启后自检第四项恒红,
+    ``postcheck_verdict`` 判 ROLLBACK,一版好的被退回去。首次装机因
+    ``src=""`` 走 ``release.stuck`` 侥幸不炸,**从第二次升级起每次必炸**。
+    """
+    assert ". /etc/d1max/env" in 装机脚本                   # 读进脚本自己的环境
+    assert "set -a" in 装机脚本 and "set +a" in 装机脚本      # 读进来的要导出去
+    # 光 source 不够:sudo 那一行必须显式把它带过去。
+    assert 'D1MAX_SN="${D1MAX_SN:-}"' in 装机脚本
+    assert (装机脚本.index(". /etc/d1max/env")
+            < 装机脚本.index('D1MAX_SN="${D1MAX_SN:-}"'))
+
+
+def test_装机清单里有故意做坏的包那次演练():
+    """§8.5:回滚要真跑过,而且演练**必须包含一次故意做坏的升级包** ——
+
+    规格明说这一层「用装机验收里的一次演练覆盖」。
+    """
+    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    assert "演练" in text
+    assert "release install" in text
+    assert "拒收" in text                     # 看到拒收就是对的,得写明白
+    assert "release.json" in text             # 改文件不改哈希,坏法要说清楚
+
+
+def test_装机清单验收里查provisional():
+    """§7.9 第 1 步:``provisional == true`` 的机器不许出厂。
+
+    ``true`` 说明 SN 还在拿 MAC 兜底,以后每次升级都会把好版本判成失败。
+    """
+    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    assert "provisional" in text
+    assert "/api/identity" in text
+
+
+def test_装机脚本从临时副本装不污染待哈希的包目录(装机脚本):
+    """``pyproject.toml`` 用 ``setuptools.build_meta``,pip 对本地目录是就地
+
+    构建:会往源目录写 ``*.egg-info/`` 和 ``__pycache__/``。直接
+    ``pip install "$包"`` 的话,紧接着 ``release install`` 算 ``tree_sha256``
+    对账当场对不上,``set -e`` 把装机中止在那一步;直接 ``pip install "$槽"``
+    则是把已落槽的那一版写脏,以后任何一次重新校验都会判它坏掉。
+    """
+    assert "mktemp -d" in 装机脚本
+    assert 'pip install --quiet "$包"' not in 装机脚本
+    assert 'pip install --quiet "$槽"' not in 装机脚本
+    # 临时目录得有人清 —— trap 保证 set -e 中途退出、Ctrl+C 也清得掉。
+    assert "trap 清理 EXIT" in 装机脚本
+    assert "rm -rf" in 装机脚本
+
+
+def test_根目录写死不给环境变量覆盖(装机脚本, 服务单元):
+    """单元里 ``/opt/d1max`` 是逐字写死的,``AppContext.release_root`` 的默认
+
+    值也是它。允许脚本被 ``D1MAX_ROOT`` 改而单元不跟着改,装出来的是一台
+    脚本和服务各说各话的机器:包落在一个根下,服务读的是另一个根。
+    """
+    # 断言的是**那个展开**没了,不是"这三个字不许出现" —— 脚本里那段
+    # 说明为什么去掉它的注释,恰恰是这条改动最该留下的东西。
+    assert "${D1MAX_ROOT" not in 装机脚本
+    assert "根=/opt/d1max" in 装机脚本
+    # 单元那边是写死的,这条断言是上面那句"两边要一起改"的凭据。
+    assert "/opt/d1max" in 服务单元
+    # User= 那个覆盖保留了,但单元里同样是写死的 —— 注明过才算数。
+    assert "D1MAX_USER" in 装机脚本
+    assert "User=robot" in 服务单元

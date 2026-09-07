@@ -31,7 +31,20 @@ EnvironmentFile=-/etc/d1max/env
 # d1max-app);cli.py 的 build_parser() 里没有 serve 这个子命令,指着一个
 # 不存在的子命令的话服务每次起来都会 SystemExit 2,Restart=always 会把它
 # 刷成每 5 秒一条日志。
-ExecStart=/opt/d1max/current/venv/bin/python -m d1max_patrol.app.server
+#
+# **--host 0.0.0.0 不能省。** server.py 的 DEFAULT_HOST 是 127.0.0.1,而
+# _build_parser() 里 --host 没有环境变量兜底(只有 --pin/--sn/--nickname
+# 有),不写在这一行上就没有第二个地方能把它改掉。手机 app 连的是
+# 192.168.168.100:8095,只听 127.0.0.1 的机器它根本连不上 —— 那台机器上
+# 手机连不上、三条验收命令全 connection refused、上装属性永远记不上,
+# 于是这台机器永远不许升级。
+#
+# **这一行跟 /etc/d1max/env 里的 D1MAX_PIN 是一对,拆不开。** check_exposure()
+# (server.py)见到非本机地址而没有 PIN 会直接 SystemExit 拒绝启动;配上下面
+# 的 Restart=always + RestartSec=5,就是每 5 秒刷一条日志的启动循环。所以
+# install.sh 第一次写 /etc/d1max/env 时会当场随机生成一个 PIN 填进去,并且
+# 在 restart 之前检查它非空,空就 exit 3 停下来喊,不去 restart。
+ExecStart=/opt/d1max/current/venv/bin/python -m d1max_patrol.app.server --host 0.0.0.0
 # 起不来就再试。**RestartSec 不能是 0**:一个起来就崩的版本会在日志里刷成
 # 一堵墙,把真正的错因冲掉,顺便烧掉写盘寿命。
 Restart=always
