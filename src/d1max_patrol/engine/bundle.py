@@ -1,0 +1,192 @@
+"""任务包:狗断网 72 小时还能照常上岗所需要的全部东西(§3.1)。
+
+**包是纯数据。** 里头没有一行可执行的东西 —— 没有固件,没有代码,没有脚本。
+理由是这条链路的三个性质凑到了一起:包走网络、包可能被改、包自动生效不经
+人确认。三个里去掉任何一个,这条界都可以松;三个都在,它就是硬的。
+
+不进包的还有 VLM 权重和 API key(§3.1)。
+
+模块分层:``bundle.py`` 用 ``schedule.py``,反过来不行。
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+#: 包的自述文件名。整包哈希不算它自己 —— 它里头存着那个值。
+BUNDLE_MANIFEST = "bundle.yaml"
+
+#: 本版打出来的包写的 schema。§7.2 的 ``requires_mission_schema`` 跟它对账。
+BUNDLE_SCHEMA = 1
+
+MIN_VERSION = 1
+#: 上界拦的是时间戳。§3.2 要的是**单调递增的整数**,不是时间戳:两台机器的
+#: 钟不一样,而「哪一版更新」必须是确定的。
+MAX_VERSION = 999_999
+
+_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,47}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+
+_MANIFEST_KEYS = frozenset({"bundle_id", "version", "schema",
+                           "content_sha256", "built_at", "built_by",
+                           "targets"})
+
+#: 一条 SN 最长多少。挡的不是攻击,是「有人把整段日志粘进 targets」。
+MAX_SN_LEN = 64
+
+
+class BundleError(ValueError):
+    """包不合规。**解析、校验、落盘全用这一个。**"""
+
+
+def _整数(v: Any) -> bool:
+    """``isinstance(True, int)`` 是真的,所以这里比的是类型本身。
+    YAML 里 ``version: yes`` 会解成 ``True``,不拦就成了第 1 版。
+    """
+    return type(v) is int
+
+
+def _aware(s: str) -> datetime:
+    """解一个**必须带时区**的 ISO8601 时刻。
+
+    裸时刻会被按读它那台机器的时区解释,而包是从服务器发到狗上的。
+    """
+    try:
+        dt = datetime.fromisoformat(s)
+    except (TypeError, ValueError) as e:
+        raise BundleError(f"built_at 解不出来: {s!r}") from e
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise BundleError(f"built_at 必须带时区: {s!r}")
+    return dt
+
+
+@dataclass(frozen=True, slots=True)
+class BundleManifest:
+    """一个包的自述:它是谁,是第几版,内容是什么指纹。"""
+
+    bundle_id: str
+    version: int
+    schema: int
+    content_sha256: str
+    built_at: str
+    built_by: str = ""
+    #: §3.1 的「目标 SN」。**空元组是「不限」**(定夺 13)。
+    targets: tuple[str, ...] = ()
+
+    @property
+    def slot_name(self) -> str:
+        """落盘的目录名:``bundles/<slot_name>/``(定夺 4)。"""
+        return f"{self.bundle_id}-{self.version}"
+
+    def accepts(self, sn: str) -> bool:
+        """这份包认不认这台机器。**逐字相等,不做归一化**(定夺 13)。"""
+        return not self.targets or sn in self.targets
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"bundle_id": self.bundle_id, "version": self.version,
+                "schema": self.schema, "content_sha256": self.content_sha256,
+                "built_at": self.built_at, "built_by": self.built_by,
+                "targets": list(self.targets)}
+
+
+def parse_manifest(raw: Mapping[str, Any]) -> BundleManifest:
+    """解一份 ``bundle.yaml``。不合规就炸,不猜。"""
+    if not isinstance(raw, Mapping):
+        raise BundleError(f"bundle.yaml 得是个字典,拿到的是 {type(raw).__name__}")
+
+    多的 = set(raw) - _MANIFEST_KEYS
+    if 多的:
+        raise BundleError(
+            f"bundle.yaml 里有不认识的键: {sorted(多的)} —— 包是从网上来的,"
+            "多一个没人认识的键要么是版本对不上,要么是有人在试探")
+
+    for 键 in ("bundle_id", "version", "schema", "content_sha256", "built_at"):
+        if 键 not in raw:
+            raise BundleError(f"bundle.yaml 缺 {键}")
+
+    bid = raw["bundle_id"]
+    if not isinstance(bid, str) or not _ID_RE.match(bid):
+        raise BundleError(
+            f"bundle_id 不合规: {bid!r} —— 要 2-48 个小写字母/数字/连字符。"
+            "它会被拼进路径,所以这道闸同时挡着 ../")
+
+    ver = raw["version"]
+    if not _整数(ver) or ver < MIN_VERSION:
+        raise BundleError(f"version 得是 >= {MIN_VERSION} 的整数,拿到 {ver!r}")
+    if ver > MAX_VERSION:
+        raise BundleError(
+            f"version {ver} 超过上界 {MAX_VERSION} —— 看着像时间戳。§3.2 要的是"
+            "单调递增的整数:两台机器的钟不一样,而哪一版更新必须是确定的")
+
+    sch = raw["schema"]
+    if not _整数(sch) or sch < 1:
+        raise BundleError(f"schema 得是 >= 1 的整数,拿到 {sch!r}")
+
+    sha = raw["content_sha256"]
+    if not isinstance(sha, str) or not _SHA_RE.match(sha):
+        raise BundleError(f"content_sha256 得是 64 位小写十六进制,拿到 {sha!r}")
+
+    built_at = raw["built_at"]
+    if not isinstance(built_at, str):
+        raise BundleError(f"built_at 得是字符串,拿到 {built_at!r}")
+    _aware(built_at)
+
+    return BundleManifest(bid, ver, sch, sha, built_at,
+                          str(raw.get("built_by") or ""),
+                          _targets(raw.get("targets")))
+
+
+def _targets(raw: Any) -> tuple[str, ...]:
+    """解 §3.1 的「目标 SN」。**缺省是空元组,意思是不限**(定夺 13)。"""
+    if raw is None:
+        return ()
+    # 字符串本身是可迭代的 —— 不特判的话 "D1M-1" 会被拆成五个字符,而且
+    # 每个都「像」一条合法 SN,于是一份写错的包会静静地生效。
+    if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
+        raise BundleError(f"targets 得是个列表,拿到 {raw!r}")
+    out: list[str] = []
+    for one in raw:
+        if not isinstance(one, str):
+            raise BundleError(f"targets 里得全是字符串,拿到 {one!r}")
+        if not one or one != one.strip() or "\x00" in one:
+            raise BundleError(
+                f"targets 里这一条不像个 SN: {one!r} —— 不许空、不许带首尾空白、"
+                "不许带 NUL。狗那头的 SN 是 clean_sn() 收拾过的,两边得对得上")
+        if len(one) > MAX_SN_LEN:
+            raise BundleError(f"targets 里这一条超过 {MAX_SN_LEN} 个字符: {one[:20]!r}...")
+        if one in out:
+            raise BundleError(f"targets 里 {one!r} 出现了两次 —— 这份包像是拼出来的")
+        out.append(one)
+    return tuple(out)
+
+
+def dump_manifest(m: BundleManifest) -> str:
+    """把自述写成 YAML 文本。键排序,因为这份文本会进人的眼睛也进 git。"""
+    return yaml.safe_dump(m.to_wire(), allow_unicode=True, sort_keys=True)
+
+
+def read_manifest(bundle_dir: Path | str) -> BundleManifest:
+    """从包目录里读自述。"""
+    p = Path(bundle_dir) / BUNDLE_MANIFEST
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError as e:
+        raise BundleError(f"读不到 {BUNDLE_MANIFEST}: {p}") from e
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise BundleError(f"{BUNDLE_MANIFEST} 不是合法 YAML: {p}") from e
+    return parse_manifest(raw)
+
+
+def write_manifest(bundle_dir: Path | str, m: BundleManifest) -> None:
+    """把自述写进包目录。"""
+    (Path(bundle_dir) / BUNDLE_MANIFEST).write_text(
+        dump_manifest(m), encoding="utf-8")
