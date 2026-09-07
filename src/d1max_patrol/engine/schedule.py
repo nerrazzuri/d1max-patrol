@@ -315,3 +315,57 @@ def pick(decisions: Sequence[_条], *, running: str | None) -> Pick:
     挤掉 = tuple(rest)
     return Pick(chosen, 挤掉,
                 tuple(d for d in 挤掉 if d[0].on_missed == "alarm"))
+
+
+# ------------------------------------------------------------ 时钟与预告
+
+#: 漂多少秒算不对劲。60 秒的理由:``window_min`` 最小是 1 分钟,漂过一分钟
+#: 就足以让一条窗口最紧的排程整轮错位。**这个数偏小是故意的** —— 误报的
+#: 代价是值守屏上多一行字,漏报的代价是整晚的巡检时间全错而没人知道。
+CLOCK_SKEW_ALARM_S = 60.0
+
+#: 往后找几天算「找不到下一轮」。7 天足够覆盖 ``days`` 的一整个周期。
+_NEXT_RUN_HORIZON_DAYS = 8
+
+
+@dataclass(frozen=True, slots=True)
+class Skew:
+    """本地钟跟参照差了多少。"""
+
+    #: 正数 = 本地快了。``None`` = **不知道**(没有参照),不是 0。
+    skew_s: float | None
+    alarm: bool
+    #: 参照是哪儿来的。不知道时是 ``"unknown"``。
+    source: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"clock_skew_s": self.skew_s, "alarm": self.alarm,
+                "source": self.source}
+
+
+def clock_skew(*, local_ms: int, reference_ms: int | None,
+               source: str) -> Skew:
+    """本地钟跟参照差了多少。**纯函数,两个时刻都是传进来的。**
+
+    没有参照(断网、只有 RTC 在漂)时 ``skew_s`` 是 ``None``。**报 0 等于说
+    「钟是准的」**,而那正是断网久了之后最不可能成立的一句话。
+    """
+    if reference_ms is None:
+        return Skew(None, False, "unknown")
+    skew = (local_ms - reference_ms) / 1000.0
+    return Skew(skew, abs(skew) > CLOCK_SKEW_ALARM_S, source or "unknown")
+
+
+def next_run(entry: ScheduleEntry, *, now: datetime) -> datetime | None:
+    """下一轮是什么时候。够不着就回 ``None``。
+
+    **循环必须有界。** ``days`` 空着的排程(解析拦得住,但 ``ScheduleEntry``
+    是可以直接构的)会让一个无界的 while 转到天荒地老。
+    """
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("next_run() 的 now 必须带时区")
+    for 往后 in range(_NEXT_RUN_HORIZON_DAYS):
+        那天 = _occurrence(entry, now.date() + timedelta(days=往后), now.tzinfo)
+        if 那天 is not None and 那天 >= now:
+            return 那天
+    return None
