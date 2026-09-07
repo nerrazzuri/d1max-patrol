@@ -208,15 +208,109 @@ class LeaseBook:
                 self._clear()
             return self._snapshot()
 
+    def ask_takeover(self, ref: str, operator: str = "", *,
+                     now_ms: int) -> LeaseState:
+        """礼貌接管:当前持有者收到提示,**同意或超时即移交**(§3.5 规则 3)。
+
+        没人持有时直接给他 —— 排队等一个空位没有任何意义。
+
+        **威胁模型。** 单机档没有可信身份源(§6.3),``ref`` 只是 token 指纹、
+        ``operator`` 只是自报家门,狗不验证谁在说谎。能触发这个方法的前提是
+        先过了 token 校验那一关(``app/auth.py``)——所以这里假设的攻击者
+        不是"局域网上随便一台设备"(§6.5 明令不许把局域网当可信区),而是
+        "已经拿到一枚有效 token 的人",他能做的最坏的事就是排队请求接管,
+        排队本身不动权限,真正移交要么等宽限期、要么持有者点头。
+        """
+        with self._lock:
+            self._settle(now_ms)
+            if self._holder is None:
+                self._grant(Holder(ref, operator), now_ms, "acquired", "")
+                return self._snapshot()
+            if self._holder.ref == ref:
+                raise LeaseError("控制权已经在你手上了")
+            if self._challenger is not None and self._challenger.ref != ref:
+                raise LeaseBusy(
+                    f"{_显示名(self._challenger)} 已经在请求接管了,"
+                    f"等他那一轮走完")
+            who = Holder(ref, operator)
+            self._challenger = who
+            self._grace_ends = now_ms + self._grace
+            self._log(now_ms, "takeover_asked", who,
+                      f"要从 {_显示名(self._holder)} 手里接管")
+            return self._snapshot()
+
+    def approve(self, ref: str, *, now_ms: int) -> LeaseState:
+        """当前持有者同意移交。立刻交,不等宽限期走完。
+
+        **威胁模型。** 只有当前持有者的 ``ref`` 能触发移交——挑战者自己、
+        第三方、甚至过期的旧持有者都不行(见下面的判断)。假设的攻击者是
+        "手上有 token 但不是当前持有者的人",他不能靠调用这个方法伪装成
+        持有者点头同意,只能老老实实走 ``force`` 那条留痕更重的路。
+        """
+        with self._lock:
+            self._settle(now_ms)
+            if self._challenger is None:
+                raise LeaseError("没有人在请求接管")
+            if self._holder is None or self._holder.ref != ref:
+                raise LeaseLost("只有当前持有者能同意移交")
+            detail = f"{_显示名(self._holder)} 同意移交"
+            self._grant(self._challenger, now_ms, "taken_over", detail)
+            return self._snapshot()
+
+    def force(self, ref: str, operator: str = "", *, now_ms: int,
+              reason: str) -> LeaseState:
+        """强制接管。**必须写理由,理由进审计**(§3.5 规则 3)。
+
+        这条必须存在:持有者可能已经不在了 —— 手机没电、人走了、网断了。
+        没有它,一只狗会被一个已经不存在的会话占到 TTL 走完为止,而现场正等
+        着有人把它从带电设备旁边挪开。**代价是它能把正在操作的人挤下去**,
+        所以理由是硬性的,事后必须查得出是谁、为什么。
+
+        **威胁模型:谁能强夺、凭什么、留什么痕。** 这是本模块里最危险的一个
+        动作——它不问持有者同不同意,直接把控制权拿走。触发前提跟其它写方法
+        一样是先过 token 校验(§6.5:局域网不是信任边界,一枚有效 token 才
+        是),所以假设的攻击者是"已经拿到有效 token、但想绕开礼貌接管流程
+        的人"。这一层不能也不该判断"理由是不是真的"——那需要人的判断,不是
+        状态机的活。它能做、也必须做的是把代价钉死:理由不能是空字符串
+        (``LeaseError``),且不管理由是什么都无条件写入审计
+        (``ref``/``operator``/前任是谁/理由原文全部留痕,见 ``_log``),
+        这样事后翻审计环一定能查到"是谁在什么时候把谁挤下去、说的什么理
+        由"——留痕本身就是唯一的事前代价,而不是拦一道"验证"关卡去装出一种
+        并不存在的可信度。
+        """
+        with self._lock:
+            self._settle(now_ms)
+            if not reason.strip():
+                raise LeaseError("强制接管必须写明理由 —— 这一条会进审计")
+            前任 = _显示名(self._holder) if self._holder else "(本来没人持有)"
+            self._grant(Holder(ref, operator), now_ms, "forced",
+                        f"从 {前任} 手里强制接管:{reason.strip()}")
+            return self._snapshot()
+
     # -------------------------------------------------------------- 内部
 
     def _settle(self, now_ms: int) -> None:
-        """把"时间过去了"这件事结算掉。**调用方已经拿着锁。**"""
+        """把"时间过去了"这件事结算掉。**调用方已经拿着锁。**
+
+        两条时间线要按顺序算:先看持有者过没过期,再看宽限期到没到。反过来
+        算会出现"持有者已经过期了,却还在等他回应接管"这种荒唐状态。
+        """
         if (self._holder is not None and self._expires is not None
                 and now_ms >= self._expires):
             gone = self._holder
+            waiting = self._challenger
             self._clear()
             self._log(now_ms, "expired", gone, "TTL 到了没人续租")
+            if waiting is not None:
+                # 持有者过期时正好有人在排队,直接给他,不让他再抢一次:
+                # "抢"那一下之间谁都可能插进来,而他已经排过队了。
+                self._grant(waiting, now_ms, "taken_over",
+                            "原持有者的租约到期了")
+                return
+        if (self._challenger is not None and self._grace_ends is not None
+                and now_ms >= self._grace_ends):
+            self._grant(self._challenger, now_ms, "taken_over",
+                        "宽限期到了,持有者没有回应")
 
     def _clear(self) -> None:
         self._holder = None
