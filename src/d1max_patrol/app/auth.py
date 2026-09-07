@@ -26,13 +26,15 @@ app 那边没有这个限制,一律走请求头。
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import re
 import secrets
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 #: 换 token 的接口。它自己不能要 token,不然没人换得到。
 AUTH_PATH = "/api/auth"
@@ -73,6 +75,31 @@ MAX_TOKENS = 64
 #: Host 头里允许出现的名字。别的一律只收 IP 字面量。
 _LOCAL_NAMES = frozenset({"localhost"})
 
+#: 热点上发出去的 token 闲置多久就作废。比局域网短得多 —— 热点的信任边界是
+#: "射程",人走出射程之后,那个凭证不该还能用(§6.5 措施 3)。
+AP_TOKEN_IDLE_S = 30 * 60.0
+
+#: 三条通道。判的是"这个请求从哪个网络面进来",**不是"这个人是谁"**。
+CHANNEL_LOCAL = "local"
+CHANNEL_AP = "ap"
+CHANNEL_LAN = "lan"
+CHANNELS: frozenset[str] = frozenset({CHANNEL_LOCAL, CHANNEL_AP, CHANNEL_LAN})
+
+#: 狗自己那块热点的网段。
+AP_NETS: tuple[str, ...] = ("192.168.168.0/24",)
+
+#: 操作人姓名最长多少字。超了截断,**从不拒绝** —— 见 normalize_operator。
+MAX_OPERATOR_LEN = 32
+
+#: token 指纹取 sha256 的前几位十六进制。32 位够把 3 个并发会话分开,又短到
+#: 人能在屏幕上对得上。
+REF_HEX = 8
+
+#: §6.3:这句话必须原样跟着每一个带 operator 的响应发出去。
+OPERATOR_NOTICE = (
+    "操作人姓名是本机记账用的,狗不核实它。要可信的人身份,得接服务器。"
+)
+
 
 class Denied(Exception):
     """没放行。调用方负责把它变成 HTTP 响应。"""
@@ -89,9 +116,41 @@ class Denied(Exception):
 
 @dataclass
 class _Live:
-    """一个还活着的 token。``last`` 是最近一次用它的时刻。"""
+    """内存里一个 token 的全部家当。"""
 
     last: float
+    ref: str = ""
+    operator: str = ""
+    channel: str = CHANNEL_LAN
+    readonly: bool = False
+    idle_s: float = TOKEN_IDLE_S
+
+
+@dataclass(frozen=True, slots=True)
+class Session:
+    """一个活着的会话。**不含 token 本身** —— 发给客户端的是这个。"""
+
+    ref: str
+    operator: str
+    channel: str
+    readonly: bool
+    idle_for_s: float
+    idle_limit_s: float
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"ref": self.ref, "operator": self.operator,
+                # 恒为 False。§6.3:狗记名字,但从不核实它。
+                "operator_verified": False,
+                "channel": self.channel, "readonly": self.readonly,
+                "idle_for_s": round(self.idle_for_s, 1),
+                "idle_limit_s": self.idle_limit_s}
+
+
+def _session_of(rec: _Live, now: float) -> Session:
+    return Session(ref=rec.ref, operator=rec.operator, channel=rec.channel,
+                   readonly=rec.readonly,
+                   idle_for_s=max(0.0, now - rec.last),
+                   idle_limit_s=rec.idle_s)
 
 
 class TokenStore:
@@ -105,18 +164,23 @@ class TokenStore:
         #: 插入序就是签发序,满了从头上淘汰。
         self._live: dict[str, _Live] = {}
 
-    def issue(self, *, now: float | None = None) -> str:
+    def issue(self, *, now: float | None = None, operator: str = "",
+              channel: str = CHANNEL_LAN, readonly: bool = False,
+              idle_s: float | None = None) -> str:
         now = time.monotonic() if now is None else now
         token = secrets.token_urlsafe(TOKEN_BYTES)
         with self._lock:
             self._sweep(now)
             while len(self._live) >= self._cap:
                 self._live.pop(next(iter(self._live)))
-            self._live[token] = _Live(last=now)
+            self._live[token] = _Live(
+                last=now, ref=token_ref(token), operator=operator,
+                channel=channel, readonly=readonly,
+                idle_s=self._idle_s if idle_s is None else idle_s)
         return token
 
-    def valid(self, token: str, *, now: float | None = None) -> bool:
-        """认一个 token,顺带续期。
+    def info(self, token: str, *, now: float | None = None) -> Session | None:
+        """认一个 token 并把它的身份带回来,顺带续期。不认识就 ``None``。
 
         直接查字典而不是逐个 ``compare_digest``:token 是 256 位随机数,猜不
         中的东西不存在计时侧信道可利用的余地,而线性扫描会让 token 一多就慢。
@@ -126,9 +190,40 @@ class TokenStore:
             self._sweep(now)
             rec = self._live.get(token)
             if rec is None:
-                return False
+                return None
+            # 先做快照再续期:带回去的 idle_for_s 是"这次请求之前闲了多久",
+            # 那才是有信息量的那个数。
+            sess = _session_of(rec, now)
             rec.last = now
-            return True
+            return sess
+
+    def valid(self, token: str, *, now: float | None = None) -> bool:
+        """认一个 token,顺带续期。"""
+        return self.info(token, now=now) is not None
+
+    def sessions(self, *, now: float | None = None) -> tuple[Session, ...]:
+        """现在有哪些活着的会话。**只读,不续期** —— 值守屏每半秒看一眼,不
+        该因此让别人的闲置计时永远归零。
+        """
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            self._sweep(now)
+            return tuple(_session_of(r, now) for r in self._live.values())
+
+    def live_refs(self, *, now: float | None = None) -> frozenset[str]:
+        """还活着的 token 指纹。租约靠它收租(§6.4)。同样不续期。"""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            self._sweep(now)
+            return frozenset(r.ref for r in self._live.values())
+
+    def revoke_ref(self, ref: str) -> bool:
+        """按指纹撤一个 token。撤到了返回 ``True``。"""
+        with self._lock:
+            dead = [t for t, r in self._live.items() if r.ref == ref]
+            for t in dead:
+                del self._live[t]
+            return bool(dead)
 
     def revoke(self, token: str) -> None:
         with self._lock:
@@ -144,8 +239,10 @@ class TokenStore:
             return len(self._live)
 
     def _sweep(self, now: float) -> None:
-        """清掉闲置超时的。调用方已经拿着锁了。"""
-        dead = [t for t, r in self._live.items() if now - r.last > self._idle_s]
+        """清掉闲置超时的。**每个 token 有自己的闲置期** —— 热点上发出去的
+        那些短得多(§6.5 措施 3)。调用方已经拿着锁了。
+        """
+        dead = [t for t, r in self._live.items() if now - r.last > r.idle_s]
         for t in dead:
             del self._live[t]
 
@@ -264,15 +361,72 @@ def normalize_pin(pin: str) -> str:
     return pin
 
 
+def token_ref(token: str) -> str:
+    """token 的指纹。**审计和状态快照里出现的是它,不是 token 本身。**
+
+    威胁模型:能看到留痕的人(值守屏前的同事、事后拿到日志的人)不该顺手捡
+    到一把能开狗的钥匙。sha256 截 8 位十六进制不可逆,而 token 是 256 位随机
+    数,从指纹反推不出来。
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:REF_HEX]
+
+
+def channel_of(client: str, *, ap_nets: Sequence[str] = AP_NETS) -> str:
+    """这个请求是从哪条通道进来的。
+
+    **威胁模型是分档的,绝不许把"局域网"当成"可信"**(§6.5):
+
+    - ``local`` —— 回环。能从回环发请求的人已经在这台机器上了,再防他没意义。
+    - ``ap`` —— 狗自己的热点。密码出厂固定、改不了(要走厂家支持通道),而
+      WPA2-PSK 意味着**射程之内、知道密码的任何人都能解开别人的报文**。所以
+      这条通道上 PIN 和 token 都要当成"已经公开"来设计:凭证短命,明文 PIN
+      只换只读(任务 5)。
+    - ``lan`` —— 别的网(CPE 回传、办公网)。**不等于可信**,只是少了"同一
+      把 PSK 人人可解"这条额外的坏性质。
+
+    认不出来的来源(空串、代理写坏的头、Unix socket)一律按 ``ap`` 算 ——
+    **失败要往严的方向倒**。
+    """
+    try:
+        addr = ipaddress.ip_address(client.strip())
+    except ValueError:
+        return CHANNEL_AP
+    if addr.is_loopback:
+        return CHANNEL_LOCAL
+    for raw in ap_nets:
+        if addr in ipaddress.ip_network(raw):
+            return CHANNEL_AP
+    return CHANNEL_LAN
+
+
+def normalize_operator(raw: object) -> str:
+    """把操作人姓名收拾干净。**从不抛异常。**
+
+    §6.3:这个名字是**记账,不是鉴权**。单机档里根本没有可信的人身份来源 ——
+    狗没有任何办法核实"张三"真的是张三。既然核实不了,就不该假装在校验它:
+    一个会拒绝的字段会让人误以为它被验过。所以这里只做三件无害的事 —— 去掉
+    首尾空白、把控制字符换成空格、超长截断。给不出名字就是空串,而空串是合法
+    的(现场可能就是没人愿意报名)。
+    """
+    if not isinstance(raw, str):
+        return ""
+    text = "".join(c if c.isprintable() else " " for c in raw).strip()
+    return text[:MAX_OPERATOR_LEN]
+
+
 class Guard:
     """鉴权闸门。``pin`` 给 ``None`` 就是不鉴权(只在本机听时才允许)。"""
 
     def __init__(self, pin: str | None = None, *,
                  tokens: TokenStore | None = None,
-                 throttle: Throttle | None = None) -> None:
+                 throttle: Throttle | None = None,
+                 clock: Callable[[], float] = time.monotonic,
+                 ap_nets: Sequence[str] = AP_NETS) -> None:
         self._pin = normalize_pin(pin) if pin is not None else None
         self.tokens = tokens if tokens is not None else TokenStore()
         self.throttle = throttle if throttle is not None else Throttle()
+        self._clock = clock
+        self._ap_nets = tuple(ap_nets)
 
     @property
     def enabled(self) -> bool:
@@ -280,11 +434,16 @@ class Guard:
 
     # ---------------------------------------------------------------- 解锁
 
-    def unlock(self, pin: object, client: str) -> str:
-        """PIN 换 token。不对就抛 ``Denied``。"""
+    def unlock(self, pin: object, client: str, *, operator: str = "",
+               now: float | None = None) -> str:
+        """PIN 换 token。不对就抛 ``Denied``。
+
+        ``operator`` 是操作人自己报的名字,**狗记下来但不核实**(§6.3)。
+        """
+        now = self._clock() if now is None else now
         if self._pin is None:
             raise Denied(400, "这台没设 PIN", "启动时没给 --pin,不需要解锁。")
-        wait = self.throttle.locked_for(client)
+        wait = self.throttle.locked_for(client, now=now)
         if wait > 0:
             raise Denied(429, "试得太多了,先等等",
                          f"还要等 {wait:.0f} 秒才能再试。")
@@ -293,12 +452,37 @@ class Guard:
         want = self._pin.encode("utf-8")
         got = pin.encode("utf-8") if isinstance(pin, str) else b""
         if not secrets.compare_digest(want, got):
-            wait = self.throttle.fail(client)
+            wait = self.throttle.fail(client, now=now)
             detail = (f"连错太多次,锁 {wait:.0f} 秒。" if wait > 0
                       else "再试一次。")
             raise Denied(401, "PIN 不对", detail)
         self.throttle.succeed(client)
-        return self.tokens.issue()
+        return self._issue(client, operator, readonly=False, now=now)
+
+    def channel_of(self, client: str) -> str:
+        """这个来源走哪条通道。见模块级 :func:`channel_of`。"""
+        return channel_of(client, ap_nets=self._ap_nets)
+
+    def sessions(self, *, now: float | None = None) -> tuple[Session, ...]:
+        return self.tokens.sessions(now=self._clock() if now is None else now)
+
+    def live_refs(self, *, now: float | None = None) -> frozenset[str]:
+        return self.tokens.live_refs(now=self._clock() if now is None else now)
+
+    def session_of(self, token: str, *,
+                   now: float | None = None) -> Session | None:
+        return self.tokens.info(token,
+                                now=self._clock() if now is None else now)
+
+    def _issue(self, client: str, operator: object, *, readonly: bool,
+               now: float) -> str:
+        """发一个 token。**通道决定它的闲置期**(§6.5 措施 3)。"""
+        channel = self.channel_of(client)
+        idle = AP_TOKEN_IDLE_S if channel == CHANNEL_AP else None
+        return self.tokens.issue(now=now,
+                                 operator=normalize_operator(operator),
+                                 channel=channel, readonly=readonly,
+                                 idle_s=idle)
 
     # ---------------------------------------------------------------- 放行
 
