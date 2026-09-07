@@ -11,8 +11,10 @@
 
 from __future__ import annotations
 
+import os
 import re
-from collections.abc import Mapping
+import stat
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -190,3 +192,124 @@ def write_manifest(bundle_dir: Path | str, m: BundleManifest) -> None:
     """把自述写进包目录。"""
     (Path(bundle_dir) / BUNDLE_MANIFEST).write_text(
         dump_manifest(m), encoding="utf-8")
+
+
+# --------------------------------------------------- 「纯数据」这条界的四道闸
+
+#: 包里**只**认这些后缀。走白名单不走黑名单:黑名单漏 ``.pyc``、``.bin``、
+#: 没后缀的那些,而「包里该有什么」是个封闭的集合。
+ALLOWED_SUFFIXES = frozenset({
+    ".yaml", ".yml", ".json", ".md", ".txt", ".csv", ".pgm", ".png", ".jpg"})
+
+_EXEC_BITS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+_SHEBANG = b"#!"
+
+#: 报上去的分类。值守屏按它分类,**改一个字就是破坏兼容**。
+GATE_NAMES = ("suffix", "symlink", "exec_bit", "shebang")
+
+
+@dataclass(frozen=True, slots=True)
+class Violation:
+    """哪道闸、哪个文件、为什么。"""
+
+    gate: str
+    path: str          # 相对包根的 posix 路径
+    detail: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"gate": self.gate, "path": self.path, "detail": self.detail}
+
+
+def _走一遍(root: Path):
+    """走整棵树,**不跟符号链接进目录**。
+
+    ``a -> ..`` 是个环,跟着走会挂死 —— 而这个扫描正是那个本该**抓住**
+    符号链接的东西。产出 ``(相对posix路径, 绝对路径, 是不是链接)``。
+    """
+    for 上, 目录们, 文件们 in os.walk(root, followlinks=False):
+        base = Path(上)
+        for 名 in sorted(目录们) + sorted(文件们):
+            p = base / 名
+            yield p.relative_to(root).as_posix(), p, p.is_symlink()
+
+
+def _gate_suffix(条目) -> list[Violation]:
+    """第 1 道:后缀白名单。目录不参与。"""
+    out = []
+    for rel, p, 是链接 in 条目:
+        if 是链接 or p.is_dir():
+            continue
+        if p.suffix.lower() not in ALLOWED_SUFFIXES:
+            out.append(Violation("suffix", rel,
+                                 f"后缀 {p.suffix or '(没有)'} 不在白名单里"))
+    return out
+
+
+def _gate_symlink(条目) -> list[Violation]:
+    """第 2 道:符号链接,一个都不许有。
+
+    **内部的也拒。** 「只拦指向包外的」要先解析路径,而解析路径本身是能被
+    绕的(``a/../../etc``、中途再套一层链接)。一律拒才是条清楚的界。
+    """
+    return [Violation("symlink", rel, "包里不许有符号链接")
+            for rel, _p, 是链接 in 条目 if 是链接]
+
+
+def _gate_exec_bit(条目, mode_of) -> list[Violation]:
+    """第 3 道:可执行位。
+
+    **这道闸在 Windows 上是空转的** —— Windows 的 ``os.stat`` 给普通文件的
+    mode 里根本没有可执行位。所以它必须在真机上被验一次(见
+    ``docs/真机待验证清单.md``),不许假装两边一样有效。
+    """
+    out = []
+    for rel, p, 是链接 in 条目:
+        if 是链接 or p.is_dir():
+            continue
+        if mode_of(p) & _EXEC_BITS:
+            out.append(Violation("exec_bit", rel, "带着可执行位"))
+    return out
+
+
+def _gate_shebang(条目) -> list[Violation]:
+    """第 4 道:shebang。抓的是「改成 .txt 的脚本」—— 白名单放行了后缀,
+    这道拦住内容。只看**头两个字节**:正文里出现 ``#!`` 是正常的。
+    """
+    out = []
+    for rel, p, 是链接 in 条目:
+        if 是链接 or p.is_dir():
+            continue
+        with p.open("rb") as f:
+            if f.read(2) == _SHEBANG:
+                out.append(Violation("shebang", rel, "头两个字节是 #!"))
+    return out
+
+
+def scan_pure_data(root: Path | str, *,
+                   mode_of: Callable[[Path], int] | None = None
+                   ) -> tuple[Violation, ...]:
+    """四道闸全走一遍,**把问题一次收齐**。
+
+    不短路是故意的:写包的人改一个跑一次、改一个跑一次,是最容易让人干脆
+    绕过校验的那种体验。
+
+    ``mode_of`` 是取文件 mode 的那一步,默认 ``os.stat``。注它进来是为了让
+    第 3 道的**判据**在 Windows 上也能测(跟 §8.5 「时间必须可注入」同理)。
+    """
+    root = Path(root)
+    条目 = list(_走一遍(root))
+    取mode = mode_of or (lambda p: os.stat(p).st_mode)
+    出 = (_gate_suffix(条目) + _gate_symlink(条目)
+          + _gate_exec_bit(条目, 取mode) + _gate_shebang(条目))
+    return tuple(出)
+
+
+def verify_pure_data(root: Path | str, *,
+                     mode_of: Callable[[Path], int] | None = None) -> None:
+    """过不了就炸,报错里带上前几条具体是哪个文件。"""
+    vs = scan_pure_data(root, mode_of=mode_of)
+    if not vs:
+        return
+    详 = "; ".join(f"{v.path}({v.gate}: {v.detail})" for v in vs[:5])
+    更多 = f" 等共 {len(vs)} 条" if len(vs) > 5 else ""
+    raise BundleError(f"这个包里有不是纯数据的东西: {详}{更多}")
