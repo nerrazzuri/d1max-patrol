@@ -6,7 +6,9 @@ import json
 from dataclasses import replace
 
 from d1max_patrol.engine.selfcheck import (
+    BACKUP_NAG_DAYS,
     MIN_UPGRADE_BATTERY_PCT,
+    UPGRADE_FREE_MARGIN_MB,
     PrecheckInputs,
     mission_schema_floor,
     precheck,
@@ -69,6 +71,14 @@ def test_装得下新版但保不住回滚位就拒绝(tmp_path):
     assert _项(report, "disk").ok is False
 
 
+def test_空闲恰好等于新版加余量就放行(tmp_path):
+    """``>=`` 的边界:差一个字节都不该算过,卡在线上算过。"""
+    need_mb = 512.0
+    report = precheck(_好的输入(free_mb=need_mb + UPGRADE_FREE_MARGIN_MB,
+                              need_mb=need_mb))
+    assert _项(report, "disk").ok is True
+
+
 def test_电量不到一半就拒绝(tmp_path):
     report = precheck(_好的输入(battery_pct=MIN_UPGRADE_BATTERY_PCT - 0.1))
     assert _项(report, "battery").ok is False
@@ -112,6 +122,12 @@ def test_从来没备份过也只提示(tmp_path):
     assert report.ok is True
 
 
+def test_备份年龄恰好等于门槛就不提示(tmp_path):
+    """``<=`` 的边界:卡在 14 天整算过,不该被当成「很久没备份」。"""
+    report = precheck(_好的输入(backup_age_days=BACKUP_NAG_DAYS))
+    assert _项(report, "backup").ok is True
+
+
 def test_盘上任务包的schema取最低的那个(tmp_path):
     d = tmp_path / "missions"
     d.mkdir()
@@ -132,3 +148,20 @@ def test_目录空或不存在时回0(tmp_path):
     assert mission_schema_floor(tmp_path / "没有这个目录") == 0
     (tmp_path / "空").mkdir()
     assert mission_schema_floor(tmp_path / "空") == 0
+
+
+def test_上线格式全过时blocking是空的(tmp_path):
+    wire = precheck(_好的输入()).to_wire()
+    assert wire["ok"] is True
+    assert wire["blocking"] == []
+    assert len(wire["checks"]) == 7
+    assert wire["checks"][0] == {"name": "package", "ok": True, "detail": "哈希对得上"}
+
+
+def test_上线格式列出真正拦住的那几项(tmp_path):
+    """``backup`` 不过不该出现在 ``blocking`` 里 —— 它只是提示。"""
+    report = precheck(_好的输入(battery_pct=1.0, backup_age_days=99.0))
+    wire = report.to_wire()
+    assert wire["ok"] is False
+    assert wire["blocking"] == ["battery"]
+    assert any(c["name"] == "backup" and c["ok"] is False for c in wire["checks"])

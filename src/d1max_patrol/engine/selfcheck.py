@@ -16,10 +16,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from d1max_patrol.engine.preflight import CheckResult
 
@@ -101,8 +104,11 @@ class PrecheckReport:
     checks: tuple[CheckResult, ...]
 
     #: 不过就拦住升级的那几项。``backup`` 不在里头(§7.5)。
-    BLOCKING: tuple[str, ...] = ("package", "schema", "disk", "battery",
-                                 "busy", "payload")
+    #: ``ClassVar`` —— 这是个类常量,不是实例字段;不标出来的话
+    #: ``@dataclass`` 会把它当成一个有默认值的字段收进 ``fields()``,
+    #: ``replace()`` 就能把它覆盖掉,而这条黑名单从来不该因实例而异。
+    BLOCKING: ClassVar[tuple[str, ...]] = ("package", "schema", "disk",
+                                           "battery", "busy", "payload")
 
     @property
     def blocking(self) -> tuple[CheckResult, ...]:
@@ -196,3 +202,164 @@ def precheck(inputs: PrecheckInputs) -> PrecheckReport:
          + ("" if backup_ok else " —— 建议先点一次「升级前备份」(提示,不拦)"))))
 
     return PrecheckReport(tuple(checks))
+
+
+#: 重启后要过的四项(§7.2)。**顺序就是重要程度**。
+POST_CHECKS: tuple[str, ...] = ("process", "control", "bridges", "identity")
+
+#: 抢会话最多试几次。没有上装时第一次几乎必然成;这个循环留着是因为
+#: **只在特殊配置下才走的路一定是烂的**(§7.1) —— 让它天天走。
+MAX_GRAB_TRIES = 3
+#: 两次之间等多久。测试里注入假的,套件里不许真等(§8.5)。
+GRAB_WAIT_S = 2.0
+
+
+class Verdict(str, Enum):
+    """重启后自检的结论。**只有两个值** —— 这不是个可以「再看看」的判断。"""
+
+    KEEP = "keep"
+    ROLLBACK = "rollback"
+
+
+def postcheck_verdict(results: Sequence[CheckResult]) -> Verdict:
+    """留着,还是退回去。**纯函数**(§8.5),整个自动回滚就靠这一个判断。
+
+    规矩只有一条:``POST_CHECKS`` 里那四项**都在,而且都过**,才留着。
+
+    「都在」这半条容易被漏掉,而它恰恰是最要紧的:少跑一项是「不确定」,
+    不是「没问题」。新版本崩在第三项探测里,结果只有两条 —— 那时候按
+    「没有红的就算过」判,等于把一次崩溃读成了一次成功。跟起飞门槛那条
+    「不确定不放行」是同一个道理,方向相反。
+
+    多出来的项也算数:将来加第五项时,这个函数必须先被改,而不是悄悄
+    把新项忽略掉。
+    """
+    seen: dict[str, bool] = {}
+    for item in results:
+        seen[item.name] = seen.get(item.name, True) and item.ok
+    if set(seen) != set(POST_CHECKS):
+        return Verdict.ROLLBACK
+    return Verdict.KEEP if all(seen.values()) else Verdict.ROLLBACK
+
+
+async def grab_control(
+    device: Any, *, tries: int = MAX_GRAB_TRIES,
+    sleep: Callable[[float], Awaitable[None]] | None = None,
+    wait_s: float = GRAB_WAIT_S,
+) -> CheckResult:
+    """确认 SDK 会话在我们手里,不在就重试着抢(§7.1)。
+
+    **没有上装的机器上这一条几乎必然一次就过。** 留着重试是因为:
+    厂商自己的进程、上一轮没退干净的我们自己,都可能在开机那一刻短暂握着;
+    更要紧的是客户哪天自己加装了上装,而那一天不该需要我们改软件发新版。
+
+    ``sleep`` 可注入,套件里绝不真等(§8.5)。
+    """
+    slumber = sleep if sleep is not None else asyncio.sleep
+    last = ""
+    for n in range(1, max(1, tries) + 1):
+        try:
+            if await device.has_control():
+                return CheckResult("control", True, f"SDK 会话在手里(第 {n} 次确认)")
+            await device.acquire_control()
+        except Exception as exc:  # noqa: BLE001 - 任何异常都只是这一项没过
+            last = str(exc)
+        else:
+            last = "会话被别人握着"
+        if n < max(1, tries):
+            await slumber(wait_s)
+    return CheckResult(
+        "control", False,
+        f"试了 {max(1, tries)} 次也没拿到 SDK 会话: {last}"
+        f" —— 装了上装的机器上这一条是唯一真正会失败的那条")
+
+
+async def run_postcheck(
+    nav: Any, device: Any, *, want_sn: str, got_sn: str,
+    sleep: Callable[[float], Awaitable[None]] | None = None,
+    tries: int = MAX_GRAB_TRIES,
+) -> tuple[CheckResult, ...]:
+    """重启后那四项(§7.2)。
+
+    **一项炸掉不许掀掉另外三项** —— 现场要的是「哪几项没过」,不是一个
+    traceback;而且异常本身就是那一项没过的理由。这跟 ``preflight._guard``
+    是同一条纪律,只是这里的后果更重:掀掉整份报告 = 判据跑不全 =
+    ``postcheck_verdict`` 判回滚,一次本来会成功的升级就白退了。
+    """
+    process = CheckResult("process", True, "进程起来了 —— 这行代码本身就是证据")
+
+    control = await grab_control(device, tries=tries, sleep=sleep)
+
+    bridges = await _check_bridges(nav, device)
+
+    identity_ok = bool(want_sn) and want_sn == got_sn
+    identity = CheckResult(
+        "identity", identity_ok,
+        f"SN 还是 {got_sn}" if identity_ok
+        else f"升级前是 {want_sn or '(空)'},现在是 {got_sn or '(空)'}"
+             f" —— 这台机器上跑的不是我们以为的那只狗")
+
+    return (process, control, bridges, identity)
+
+
+async def _check_bridges(nav: Any, device: Any) -> CheckResult:
+    """相机、位姿、地图三个桥都能应答吗。
+
+    三个一起判成一项,是因为它们的坏法是同一种:桥没起来。分成三项只会让
+    ``POST_CHECKS`` 变长,而判据那边的结论一模一样。
+    """
+    bad: list[str] = []
+    try:
+        if await nav.loc_status() is None:
+            bad.append("位姿")
+    except Exception as exc:  # noqa: BLE001 - 桥不应答就是这一项没过
+        bad.append(f"位姿({exc})")
+    try:
+        await nav.list_maps()
+    except Exception as exc:  # noqa: BLE001 - 同上
+        bad.append(f"地图({exc})")
+    try:
+        await device.has_control()
+    except Exception as exc:  # noqa: BLE001 - 同上
+        bad.append(f"相机/设备({exc})")
+    if bad:
+        return CheckResult("bridges", False, "这几个桥不应答: " + "、".join(bad))
+    return CheckResult("bridges", True, "位姿、地图、设备三个桥都应答了")
+
+
+#: systemd 里我们那个单元叫什么。
+SERVICE_UNIT = "d1max-patrol"
+
+
+@dataclass(frozen=True, slots=True)
+class RestartPlan:
+    """该怎么重启。**这个模块只出方案,不执行** —— 执行在 app 那一层。
+
+    engine 里起子进程是条坏边:那会让每一条走到这儿的测试都有机会真去动
+    systemd。方案是数据,数据好测;执行是副作用,副作用注入进来。
+    """
+
+    #: ``service`` 只重启我们的服务;``machine`` 整机重启。
+    kind: str
+    argv: tuple[str, ...]
+    why: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"kind": self.kind, "argv": list(self.argv), "why": self.why}
+
+
+def restart_plan(*, has_payload: bool, unit: str = SERVICE_UNIT) -> RestartPlan:
+    """按「有没有上装」定重启粒度(§7.1)。**纯函数** —— 只算方案,不执行。
+
+    装了上装就得整机重启:重启我们自己的进程等于放掉 SDK 会话,而放掉之后
+    **不一定抢得回来** —— 上装会在开机窗口里把它拿走,而那个窗口只有整机
+    重启才会再来一次。
+    """
+    if has_payload:
+        return RestartPlan(
+            "machine", ("systemctl", "reboot"),
+            "这台装了上装:只重启服务会放掉 SDK 会话,而放掉之后要跟上装抢"
+            "开机窗口才拿得回来")
+    return RestartPlan(
+        "service", ("systemctl", "restart", unit),
+        "这台没装上装:没有竞争者,重启服务就够了")
