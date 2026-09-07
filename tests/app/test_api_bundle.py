@@ -361,6 +361,129 @@ def test_连点两次回退第二次是409而且狗没被送回崩掉的那一�
     assert len(st["rollbacks"]) == 1         # 没多记一条
 
 
+# ---- 强推那扇门(评审复评 finding 5) ------------------------------------
+
+@pytest.mark.parametrize("不算数", ["true", "false", "1", 1, 0, "yes", None,
+                                    [], {}])
+def test_force不是字面量布尔就是400(tmp_path, 装好, 不算数):
+    """**这扇门后面是「装一个已知会崩的版本」。**
+
+    跟同一个文件里 ``reason`` 那几条同一条道理:一个 ``if body.get("force")``
+    式的真值判断会把字符串 ``"false"``、``"0"`` 都当成真 —— 而现场发这个请求
+    的人写的可能正是 ``"false"``。这道门宁可多拒一次,也不能靠猜。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    code, body, _h = request(s, "/api/bundle/apply", method="POST",
+                             payload={"slot": "site-kl-2", "force": 不算数})
+    assert code == 400
+    assert "force" in body.decode("utf-8")
+    assert get_json(s, "/api/bundle")["state"]["current"] == "site-kl-1"
+
+
+def test_明确的force能把退过的那一版装回去(tmp_path, 装好):
+    """``docs/任务包格式.md`` 对客户写着「除非人明确强推」—— 而路由上原来
+    根本没有这扇门(评审复评 finding 5):文档承诺的那条路不存在,现场唯一
+    能走的是 SSH 上去手工改链,那比强推危险得多。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2"})
+    request(s, "/api/bundle/rollback", method="POST", payload={"reason": "崩了"})
+
+    code, body, _h = request(s, "/api/bundle/apply", method="POST",
+                             payload={"slot": "site-kl-2", "force": True})
+    assert code == 200
+    assert json.loads(body)["state"]["current"] == "site-kl-2"
+
+
+def test_强推要留痕而且时刻是服务端盖的(tmp_path, 装好):
+    """强推是「人明确地把一个已知会崩的版本装了回去」。**它必须留下痕迹**
+    ——事后追这台狗为什么又崩了,这一笔是唯一的线索。
+
+    时刻跟 ``rollbacks[].at`` 同一个来源:``ctx.clock``,服务端盖。请求体里
+    带的一律不收 —— 一条能被客户端随便写的时间戳,追责的时候等于没有。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2"})
+    request(s, "/api/bundle/rollback", method="POST", payload={"reason": "崩了"})
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2", "force": True,
+                     "at": "1999-01-01T00:00:00+08:00"})
+
+    st = get_json(s, "/api/bundle")["state"]
+    assert [f["slot"] for f in st["forced"]] == ["site-kl-2"]
+    at = st["forced"][0]["at"]
+    assert at.startswith("2026-09-07")
+    assert "1999" not in at
+
+
+def test_强推不是洗白下一次不带force照样是409(tmp_path, 装好):
+    """**``denied`` 不许被强推清掉。**
+
+    「这一次我知道我在干什么」跟「这一版从此可以随便装」是两句话。清掉的话,
+    下一轮自动下发会安安静静地把这个崩过的版本再装一次 —— 那正是黑名单这道
+    闸本来要拦的死循环,只不过多绕了一次人手。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2"})
+    request(s, "/api/bundle/rollback", method="POST", payload={"reason": "崩了"})
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2", "force": True})
+    # 换回 v1,好让下一次 apply v2 走的是同一条判据而不是"已经指着它了"。
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-1"})
+
+    code, _b, _h = request(s, "/api/bundle/apply", method="POST",
+                           payload={"slot": "site-kl-2"})
+    assert code == 409
+    assert "site-kl-2" in get_json(s, "/api/bundle")["state"]["denied"]
+
+
+def test_force不跳SN那道闸(tmp_path, 装好):
+    """``force`` 是给「退过的那一版」开的口子,**不是给「这份包不是给这台狗
+    的」开的**。两件事混进一个开关里,现场只会剩下一个「加 force 就好了」的
+    口诀 —— 然后一份别的站点的排程就在这台狗上跑起来了。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2, targets=["D1M-别的机器"]))
+    code, body, _h = request(s, "/api/bundle/apply", method="POST",
+                             payload={"slot": "site-kl-2", "force": True})
+    assert code == 400
+    assert "targets" in body.decode("utf-8")
+
+
+def test_没被拉黑的时候传force什么也不记(tmp_path, 装好):
+    """对一个本来就没被拉黑的槽传 ``force``,什么也没顶开。记下来只会把这份
+    历史冲成噪音 —— 而它是给人看「谁在什么时候硬来过」的。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    code, _b, _h = request(s, "/api/bundle/apply", method="POST",
+                           payload={"slot": "site-kl-2", "force": True})
+    assert code == 200
+    assert get_json(s, "/api/bundle")["state"]["forced"] == []
+
+
+def test_force是false跟不传一样(tmp_path, 装好):
+    """字面量 ``false`` 是合法的,而且必须**什么都不改变** —— 不然客户端
+    「显式写清楚」这个好习惯反而会踩雷。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2"})
+    request(s, "/api/bundle/rollback", method="POST", payload={"reason": "崩了"})
+    code, _b, _h = request(s, "/api/bundle/apply", method="POST",
+                           payload={"slot": "site-kl-2", "force": False})
+    assert code == 409
+
+
 # ---- GET /api/schedule ---------------------------------------------------
 
 def test_排程读得出来(装好):

@@ -2273,6 +2273,22 @@ class AppServer:
 
         本机 SN 从 ``self._ctx.identity.sn`` 来。**SN 是服务端自己填的,不收
         请求体里的** —— 让调用方报「我是谁」,这道闸就等于不存在(定夺 13)。
+
+        **``force`` 是这条路上唯一一扇「明确强推」的门**(评审复评 finding 5)。
+        交付文档对客户写着「退过的那一版默认不许再上,**除非人明确强推**」,
+        而在这之前产品里根本没有那个开关:排障确认崩因是环境(SD 卡没挂上)
+        之后想把上一版装回去,只能重打一个版号更高的同内容包。
+
+        **必须是字面量布尔 ``true``。** 字符串 ``"true"``、``1``、``"1"`` 一律
+        不算,非布尔直接 400 —— 跟同一个类里 ``reason`` 那道类型校验同源,而
+        理由更硬:这扇门后面是「装一个已知会崩的版本」,一个被 JSON 编码器
+        随手转成字符串的 truthy 值不该顶开它。(``isinstance(True, int)``
+        是真的,反过来 ``isinstance(1, bool)`` 是假的,所以这道闸写成
+        ``isinstance(force, bool)`` 正好只放行字面量布尔。)
+
+        强推会在 ``landed.json`` 的 ``forced`` 历史里留一笔(时刻同样是**服务端
+        盖的**,跟回退记录一个道理),而且**不动 ``denied``**:下一次不带
+        ``force`` 的 apply 照样被拒。
         """
         body = req.json()
         if not isinstance(body, dict):
@@ -2280,9 +2296,16 @@ class AppServer:
         slot = body.get("slot")
         if not isinstance(slot, str) or not slot:
             raise HttpError(400, "要 slot", "就是包目录名,形如 site-kl-7")
+        force = body.get("force", False)
+        if not isinstance(force, bool):
+            raise HttpError(400, "force 要是字面量布尔 true/false",
+                            f'给的是 {type(force).__name__} —— 字符串 "true"、'
+                            "1、\"1\" 都不算:这扇门后面是装一个已知会崩的版本")
+        at = datetime.fromtimestamp(
+            self._ctx.clock() / 1000, tz=timezone.utc).isoformat()
         try:
             state = apply_bundle(self._ctx.bundles_root, slot,
-                                 sn=self._ctx.identity.sn)
+                                 sn=self._ctx.identity.sn, force=force, at=at)
         except BundleError as exc:
             if "退过的那一版" in str(exc):
                 # 409,不是 400:请求本身没毛病(槽名、SN 都对),是这台机器

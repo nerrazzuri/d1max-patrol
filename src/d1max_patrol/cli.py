@@ -22,6 +22,7 @@ from d1max_patrol.backends.base import NavBackendError, NavTimeoutError
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.loader import ConfigError, load_config
 from d1max_patrol.conformance import DEFAULT_PROBES, nav_host_port, run_conformance
+from d1max_patrol.engine.bundle import BundleGuard, guard_bundle, read_state
 from d1max_patrol.engine.release import (
     MAX_BOOT_ATTEMPTS,
     GuardAction,
@@ -141,6 +142,15 @@ def build_parser() -> argparse.ArgumentParser:
         "boot-guard",
         help="开机守卫:连着两次开机还挂着在途标记就退回去"))
 
+    bun = sub.add_parser("bundle", help="任务包:开机守卫")
+    bun_sub = bun.add_subparsers(dest="bundle_command", required=True)
+    p_guard = bun_sub.add_parser(
+        "guard",
+        help="任务包开机守卫:把换链换到一半的局面收拾成能用的终态")
+    p_guard.add_argument(
+        "--root", default=None,
+        help="任务包目录的根,默认取 $D1MAX_BUNDLES_ROOT 或 <版本根>/bundles")
+
     return parser
 
 
@@ -223,6 +233,11 @@ def main(argv: list[str] | None = None) -> int:
         # 在 systemd 把我们的服务拉起来之前就跑 —— 这条支路绝不许碰
         # `_backend()`/`_amain()`,那条路一上来就要建后端连接。
         return _cmd_release(args)
+
+    if args.command == "bundle":
+        # 同上:任务包守卫也挂在 systemd 的 ExecStartPre 上,跑在服务被拉起来
+        # **之前** —— 那会儿根本没有后端可连。
+        return _cmd_bundle(args)
 
     try:
         return asyncio.run(_amain(args))
@@ -564,6 +579,66 @@ def _cmd_boot_guard(layout: Layout, now_ms: int) -> int:
     # 收 stdout 的脚本悄悄吞掉。退出码仍然一律是 0(见本函数 docstring)——
     # 改的只是可见性,不是"这次开机算不算数"。
     if action in (GuardAction.GAVE_UP, GuardAction.BROKEN):
+        print(文本, file=sys.stderr)
+    else:
+        print(文本)
+    return 0
+
+
+# --------------------------------------------------------------------- bundle
+
+
+def _bundles_root(arg: str | None) -> Path:
+    """任务包根在哪。显式参数赢,其次环境变量,最后跟着版本根走。
+
+    **默认值必须跟 ``app/server.py`` 的 ``AppContext.bundles_root``
+    (``/opt/d1max/bundles``)对得上。** 两边各说各话的话,守卫在一个根下修链、
+    服务读的是另一个根 —— 那比守卫根本没挂上还糟:它会报「链是好的」。
+    """
+    if arg:
+        return Path(arg)
+    env = os.environ.get("D1MAX_BUNDLES_ROOT", "").strip()
+    return Path(env) if env else _release_root(None) / "bundles"
+
+
+def _cmd_bundle(args: argparse.Namespace) -> int:
+    """bundle 子命令族。**这条支路跟 release 一样不连后端。**"""
+    return _cmd_bundle_guard(_bundles_root(getattr(args, "root", None)))
+
+
+def _cmd_bundle_guard(root: Path) -> int:
+    """任务包开机守卫。**照 ``_cmd_boot_guard`` 的形状做的**,理由也一样。
+
+    ``apply_bundle`` 连着换两条链(``previous``、``current``),两次之间断电
+    盘上就停在 ``current == previous`` 且 ``proven=False`` —— 第 8 卷那条自动
+    回退判据随即成立,把盘上唯一那份好包拉黑。``guard_bundle`` 是那条局面
+    唯一的出路,而它得有人调:评审复评 finding 4 逮到的正是「修复路径写好了,
+    真机上永远不会被执行」,而交付文档已经写着「开机时照着它把链修回一个能用
+    的样子」。这条子命令 + ``d1max-patrol.service`` 的 ``ExecStartPre`` 把那句
+    话变成真的。
+
+    它顺带**把老盘归一化一次**(见 ``guard_bundle``):截 ``rollbacks``、把
+    拉黑事实固化进 ``denied``。升级上来的狗开一次机就正常了。
+
+    **它永远退 0。** 跟版本守卫同一条理由:一个把机器挡在启动之外的安全网,
+    比它要防的问题更糟。``guard_bundle()`` 自己保证任何一条路都不抛异常
+    (最坏回 ``BundleGuard.BROKEN``),这里不需要再包一层。
+    """
+    结论 = guard_bundle(root)
+
+    话 = {
+        BundleGuard.OK: "没有换到一半的任务包,两条链是好的。",
+        BundleGuard.FINISHED: "有一次换链没换完,已经照标记换完。",
+        BundleGuard.UNDONE: "那一版换不过去,两条链已经放回换链之前的样子。",
+        BundleGuard.BROKEN:
+            "换链换到一半,两个方向都走不通 —— 标记留着,请人来看。",
+    }
+    st = read_state(root)
+    文本 = (f"[任务包守卫] {话.get(结论, 结论.value)} 现在指着: "
+           f"{st.current or '(没有)'}(上一版 {st.previous or '无'})")
+    # BROKEN 是"请人来看"那一种,打到 stderr 才不会被日常开机时收 stdout 的
+    # 脚本悄悄吞掉。退出码仍然是 0(见本函数 docstring)。
+    if 结论 is BundleGuard.BROKEN:
         print(文本, file=sys.stderr)
     else:
         print(文本)

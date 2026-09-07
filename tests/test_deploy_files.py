@@ -25,6 +25,11 @@ def 服务单元() -> str:
 GUARD_LINE = ("ExecStartPre=-/opt/d1max/bin/python "
               "-m d1max_patrol.cli release boot-guard")
 
+#: 任务包守卫那一行。**跟上面那条是两回事,两条都要**(评审复评 finding 4):
+#: 上面那条修版本目录的链,这条修 /opt/d1max/bundles 底下那两条链。
+BUNDLE_GUARD_LINE = ("ExecStartPre=-/opt/d1max/bin/python "
+                     "-m d1max_patrol.cli bundle guard")
+
 
 @pytest.fixture
 def 装机脚本() -> str:
@@ -68,6 +73,33 @@ def test_守卫在每一次服务启动之前跑一遍(服务单元):
     assert 服务单元.index("ExecStartPre=") < 服务单元.index("\nExecStart=")
     # 守卫用的是根下那个跟版本无关的解释器,不是 current 下那一版自己的。
     assert "/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard" in 服务单元
+
+
+def test_任务包守卫也挂在每一次服务启动之前(服务单元):
+    """**评审复评 finding 4:修复路径写好了,却没有任何一个地方调它。**
+
+    上面那条守的是版本目录(``/opt/d1max/releases`` + ``current`` 链)。
+    任务包是另一套链(``/opt/d1max/bundles`` 底下的 ``current``/``previous``),
+    ``engine/bundle.py`` 的 ``guard_bundle()`` 是「apply 连着换两条链,两次
+    之间断电」唯一的出路 —— 而 ``docs/任务包格式.md`` 已经对客户写着「开机时
+    照着它把链修回一个能用的样子」。没人调的话那句话就是假的,而现场看到的
+    是狗把盘上唯一那份好包拉黑之后再也装不回去。
+
+    **两条都要,而且都是 ExecStartPre。** 不带上装的机器升级走的是
+    ``systemctl restart``(见 ``engine/selfcheck.py`` 的 ``restart_plan()``),
+    根本不开机 —— 挂成独立的 oneshot 单元的话,守卫在最需要它的那条路上
+    永远不跑,这正是版本守卫当初挪过来的理由。
+    """
+    assert BUNDLE_GUARD_LINE in 服务单元
+    行 = [ln for ln in 服务单元.splitlines() if ln.startswith("ExecStartPre=")]
+    assert len(行) == 2                      # 版本一条,任务包一条,不多不少
+    assert 服务单元.index(BUNDLE_GUARD_LINE) < 服务单元.index("\nExecStart=")
+    # 前缀的 '-' 跟版本守卫同一条理由:安全网不该比它防的问题更危险。
+    assert BUNDLE_GUARD_LINE.startswith("ExecStartPre=-")
+    # **根下那个跟版本无关的解释器**,不是 current 下的 —— 一个坏到解释器都
+    # 装歪了的版本,不该把自己的救生索也带坏。
+    assert "/opt/d1max/current/venv/bin/python -m d1max_patrol.cli" \
+        not in 服务单元
 
 
 def test_守卫自己挂了也不拦服务启动(服务单元):

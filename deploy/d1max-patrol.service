@@ -47,6 +47,22 @@ EnvironmentFile=-/etc/d1max/env
 # **这个 python 是根下的,不是 current 下的** —— 守卫必须跟版本无关:
 # 一个坏到解释器都装歪了的版本,不该把自己的救生索也带坏。
 ExecStartPre=-/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard
+# 任务包守卫。**跟上面那个是两回事,两条都要。** 上面那个管的是版本目录
+# (/opt/d1max/releases + current 链),这一个管的是任务包(/opt/d1max/bundles
+# 底下的 current/previous 两条链)。
+#
+# apply 一个任务包要连着换两条链,两次之间断电盘上就停在 current == previous
+# 且 proven=False —— 自动回退判据随即成立,把盘上唯一那份好包拉黑,而路由
+# 那头它就再也装不回去了。engine/bundle.py 的 guard_bundle() 是那条局面唯一
+# 的出路,而它得有人调:写好了没人调等于没写(评审复评 finding 4),
+# 而 docs/任务包格式.md 已经对客户写着"开机时照着它把链修回一个能用的样子"。
+#
+# 它顺带把从老版本升上来的那份 landed.json 归一化一次(截掉过长的回退历史、
+# 把拉黑事实固化下来),所以升级上来的机器开一次机就正常了。
+#
+# 前缀的 '-' 同上,一个字都不能省;守卫自己永远退 0,理由见 cli.py 的
+# _cmd_bundle_guard() docstring。用的同样是根下那个跟版本无关的解释器。
+ExecStartPre=-/opt/d1max/bin/python -m d1max_patrol.cli bundle guard
 # **这一版自己的 venv,不是根下共享的解释器。** 装机脚本会在把包落进这个
 # 槽之后,当场给这个槽建一份自己的 venv —— 双槽的意义之一就是回滚要把
 # 依赖也一并退回去,共用解释器的话回滚只退代码不退依赖,退了也白退。

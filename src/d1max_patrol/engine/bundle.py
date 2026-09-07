@@ -186,12 +186,22 @@ def dump_manifest(m: BundleManifest) -> str:
 
 
 def read_manifest(bundle_dir: Path | str) -> BundleManifest:
-    """从包目录里读自述。"""
+    """从包目录里读自述。**读不动、解不了码,一律 ``BundleError``。**
+
+    ``UnicodeDecodeError`` 也得在这儿被翻掉(评审复评 finding 2):它是
+    ``ValueError`` 的子类,**不是 ``OSError``**,所以一个只写着
+    ``except (OSError, BundleError)`` 的调用方罩不住它。而这条路真会走到:
+    apply 到一半断电,同一次断电把这份 ``bundle.yaml`` 写成了非 UTF-8 字节
+    (拷了一半、闪存掉电损坏)—— 那正是 ``guard_bundle`` 的 ``UNDONE``
+    这条路存在的理由,守卫却会在读它的时候自己炸掉。
+    """
     p = Path(bundle_dir) / BUNDLE_MANIFEST
     try:
         text = p.read_text(encoding="utf-8")
     except OSError as e:
         raise BundleError(f"读不到 {BUNDLE_MANIFEST}: {p}") from e
+    except UnicodeDecodeError as e:
+        raise BundleError(f"{BUNDLE_MANIFEST} 不是合法 UTF-8: {p}") from e
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError as e:
@@ -215,7 +225,9 @@ def read_bundle_schedule(bundle_dir: Path | str) -> Schedule:
     p = Path(bundle_dir) / SCHEDULE_NAME
     try:
         raw = yaml.safe_load(p.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        # ``UnicodeDecodeError`` 跟 ``read_manifest`` 那儿是同一条理由:
+        # 它是 ``ValueError`` 的子类而不是 ``OSError``,漏掉就直穿上去。
         raise BundleError(f"{SCHEDULE_NAME} 读不出来: {exc}") from exc
     try:
         return parse_schedule(raw)
@@ -495,6 +507,24 @@ class Rollback:
 
 
 @dataclass(frozen=True, slots=True)
+class Forced:
+    """一次**强推**:人明确说了「我知道我在干什么」,把一个被拉黑的版本装了回去。
+
+    这扇门后面是「装一个已知会崩的版本」,所以它必须留痕(评审复评 finding 5)。
+
+    **强推不是洗白。** 这条记录写进历史,**不动 ``denied``** —— 下一次不带
+    ``force`` 的 ``apply`` 照样被拒。「这一次我知道我在干什么」跟「这一版从此
+    可以随便装」是两句话。
+    """
+
+    at: str
+    slot: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"at": self.at, "slot": self.slot}
+
+
+@dataclass(frozen=True, slots=True)
 class Applying:
     """一次**还没换完链**的 apply。**换链之前就落盘。**
 
@@ -515,14 +545,25 @@ class Applying:
     src: str
     #: 换链之前 ``previous`` 指着谁。空串 = 当时还没有这条链。
     prev: str = ""
+    #: 换链之前 ``proven_slot`` 记着哪一版。空串 = 当时谁都没被证过。
+    #:
+    #: **这一条不能少**(评审复评 finding 3):``apply_bundle`` 在写这个标记的
+    #: 同一次里就把 ``proven_slot`` pop 掉了。不记下来的话,``UNDONE`` 把两条
+    #: 链放回换链前的样子之后,那一版**已经真跑成过的**包回到 ``current``
+    #: 却带着 ``proven=False`` —— 第 8 卷那条判据
+    #: ``崩了 and not proven and previous`` 随即成立,自动退一次,
+    #: **把那份真跑成过的好包拉黑**。F2 的伤口只是挪后了一步。
+    proven: str = ""
 
     def to_wire(self) -> dict[str, Any]:
-        return {"to": self.to, "from": self.src, "prev": self.prev}
+        return {"to": self.to, "from": self.src, "prev": self.prev,
+                "proven_slot": self.proven}
 
     @classmethod
     def from_wire(cls, raw: Mapping[str, Any]) -> Applying:
         return cls(to=str(raw.get("to", "")), src=str(raw.get("from", "")),
-                   prev=str(raw.get("prev", "")))
+                   prev=str(raw.get("prev", "")),
+                   proven=str(raw.get("proven_slot", "")))
 
 
 class BundleGuard(Enum):
@@ -553,13 +594,17 @@ class BundleState:
     denied: tuple[str, ...] = ()
     #: 有一次 apply 换链换到一半没换完(断电)。``None`` = 盘上是个干净的终态。
     applying: Applying | None = None
+    #: 人明确强推过哪几次。**历史,不是判据** —— 跟 ``rollbacks`` 一样有条数
+    #: 上限,跟 ``denied`` 一样不影响对方:强推一次不会把那一版从黑名单里抹掉。
+    forced: tuple[Forced, ...] = ()
 
     def to_wire(self) -> dict[str, Any]:
         return {"current": self.current, "previous": self.previous,
                 "proven": self.proven,
                 "rollbacks": [r.to_wire() for r in self.rollbacks],
                 "denied": list(self.denied),
-                "applying": self.applying.to_wire() if self.applying else None}
+                "applying": self.applying.to_wire() if self.applying else None,
+                "forced": [f.to_wire() for f in self.forced]}
 
 
 def _链指向(root: Path, 名: str) -> str:
@@ -575,18 +620,34 @@ def _读记(root: Path) -> dict[str, Any]:
 
     链才是「在跑哪一版」的唯一真理源。一个坏掉的 json 不该让狗连自己
     在跑什么都说不出来。
+
+    接的是 ``ValueError`` 而不是 ``json.JSONDecodeError``,跟
+    ``release.read_pending`` 对齐:半个文件里的非 UTF-8 字节抛的是
+    ``UnicodeDecodeError``,那也是 ``ValueError`` 的子类,但**不是**
+    ``JSONDecodeError`` —— 断电正好断在这个文件上时走的就是那条路。
     """
     try:
         raw = json.loads((root / LANDED).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return {}
     return raw if isinstance(raw, dict) else {}
 
 
 def _写记(root: Path, 记: dict[str, Any]) -> None:
-    (root / LANDED).write_text(
-        json.dumps(记, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-        encoding="utf-8")
+    """写 ``landed.json``。**先写临时文件再改名**,不留半个 JSON 在盘上。
+
+    跟 ``release.write_pending`` 同一套做法。直接 ``write_text`` 的话,写到
+    一半断电盘上就是个截断的 JSON —— ``_读记`` 会把它当空的,于是
+    ``denied``(安全判据)和 ``proven_slot`` 一起没了。开机归一化
+    (``_归一化``)正是要在这种盘上跑的那一段,它自己更不能留下这种残骸。
+    """
+    tmp = root / (LANDED + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(记, fh, ensure_ascii=False, sort_keys=True, indent=2)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, root / LANDED)
 
 
 def read_state(bundles_root: Path | str) -> BundleState:
@@ -598,11 +659,13 @@ def read_state(bundles_root: Path | str) -> BundleState:
                         str(r.get("to", "")), str(r.get("reason", "")))
                for r in 记.get("rollbacks", [])
                if isinstance(r, dict))
+    强 = tuple(Forced(str(f.get("at", "")), str(f.get("slot", "")))
+               for f in 记.get("forced", []) if isinstance(f, dict))
     # proven 记的是**哪一个槽**被证过。存布尔的话,有人手工把 current 挪到
     # 另一版上,那一版就凭空继承了「跑成过」这个结论 —— 它一次都没跑过。
     return BundleState(cur, _链指向(root, PREVIOUS_LINK),
                        bool(cur) and 记.get("proven_slot") == cur, 退,
-                       denied=_黑名单(记), applying=_半成品(记))
+                       denied=_黑名单(记), applying=_半成品(记), forced=强)
 
 
 def _黑名单(记: Mapping[str, Any]) -> tuple[str, ...]:
@@ -618,19 +681,39 @@ def _黑名单(记: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(名))          # 去重,保序
 
 
+def _槽名(名: str, *, 可空: bool = False) -> bool:
+    """这个字符串能不能被拼进路径。空串按「没有这条链」算(``可空``)。"""
+    if not 名:
+        return 可空
+    return bool(_SLOT_RE.match(名))
+
+
 def _半成品(记: Mapping[str, Any]) -> Applying | None:
     """读那个「换链换到一半」的标记。**坏了当没有。**
 
     跟 ``release.read_pending`` 同一个判断:半个 JSON 让守卫炸掉的话,狗就
     起不来了,而「起不来」正是这个标记本来要防的事。
+
+    **四个槽名各过一遍 ``_SLOT_RE``**(评审复评 finding 7)。``guard_bundle``
+    会把它们直接拼进路径(``root / 半.to``),而 ``apply_bundle`` 对同一件事
+    写着「槽名是外面传进来的,而且会被拼进路径」并过闸 —— 同一条教条在这儿
+    也得成立。今天挡住 ``../../etc`` 的其实是 ``_能用()`` 里 ``verify_bundle``
+    那道「目录名要跟自述里的 ``slot_name`` 一致」,那是**别处的副作用**,
+    不是本地的判据;而一个带 NUL 的名字连 ``Path.is_dir()`` 都会抛
+    ``ValueError``,直接把「守卫不许抛」这条承诺也一起打掉。
     """
     raw = 记.get("applying")
     if not isinstance(raw, Mapping) or not raw.get("to"):
         return None
     try:
-        return Applying.from_wire(raw)
+        半 = Applying.from_wire(raw)
     except (TypeError, ValueError):
         return None
+    if not _槽名(半.to):
+        return None
+    if not all(_槽名(名, 可空=True) for 名 in (半.src, 半.prev, 半.proven)):
+        return None
+    return 半
 
 
 def active_bundle(bundles_root: Path | str) -> Path | None:
@@ -678,7 +761,7 @@ def land(bundles_root: Path | str, staged: Path | str) -> BundleManifest:
 
 
 def apply_bundle(bundles_root: Path | str, slot_name: str, *,
-                 sn: str = "", force: bool = False) -> BundleState:
+                 sn: str = "", force: bool = False, at: str = "") -> BundleState:
     """让某一版生效。**换链之前先校验** —— 换完再校验的话,坏包已经在跑了。
 
     退过的那一版默认不许再生效:什么都不拦的话,下一次下发会原样再生效一次
@@ -692,6 +775,13 @@ def apply_bundle(bundles_root: Path | str, slot_name: str, *,
     编包和校验代码(§3.8),它手上根本没有「我是哪台狗」这个概念。
     ``force`` **不跳这道闸** —— 它是给「退过的那一版」开的口子,不是给
     「这份包不是给这台狗的」开的。
+
+    **强推留痕**(评审复评 finding 5):``force`` 真的顶开了黑名单那一次,会往
+    ``landed.json`` 的 ``forced`` 历史里写一笔(``at`` + 槽名),``at`` 由调用方
+    盖(这一层不许读墙上时钟,§8.5 第 2 条)。**只在真顶开的时候记** ——
+    对一个本来就没被拉黑的槽传 ``force`` 什么也没发生,记下来只会把这份历史
+    冲成噪音。这一笔**不动 ``denied``**:强推是「这一次我知道我在干什么」,
+    不是「这一版从此洗白」,下一次不带 ``force`` 照样拒。
     """
     root = Path(bundles_root)
     # **槽名是外面传进来的,而且会被拼进路径。** ``root / "../../etc"`` 在
@@ -710,18 +800,30 @@ def apply_bundle(bundles_root: Path | str, slot_name: str, *,
             f"{list(m.targets)},本机 SN 是 {sn!r}(定夺 13)")
 
     st = read_state(root)
-    if not force and slot_name in st.denied:
+    顶开了 = slot_name in st.denied
+    if not force and 顶开了:
         raise BundleError(f"{slot_name} 是退过的那一版,不许再生效 —— "
                           "要硬来就明确传 force")
 
     记 = _读记(root)
-    记.pop("proven_slot", None)            # 新的一版还没被证过
+    旧证 = 记.pop("proven_slot", None)      # 新的一版还没被证过
+    # 盘上那个值可能是任何东西(``landed.json`` 是外面的)。不合规就当没有:
+    # 把一个坏值记进标记,会让 ``_半成品`` 把**整条**标记作废,断电之后连两条
+    # 链都修不回来了 —— 为了留一条没用的信息,赔掉那条修复路径,不划算。
+    if not isinstance(旧证, str) or not _槽名(旧证, 可空=True):
+        旧证 = ""
+    if 顶开了:
+        # 强推留痕。**写进历史,不动 ``denied``** —— 见本函数 docstring。
+        强 = 记.setdefault("forced", [])
+        强.append({"at": at, "slot": slot_name})
+        del 强[:-MAX_ROLLBACKS]            # 跟回退历史同一个上限,同一条理由
     # **先落标记,再换链**(评审 F2)。底下连着换两条链,两次之间断电的话
     # 盘上会停在 ``current == previous`` 这个自相矛盾的中间态;标记里带着
-    # 「要换到哪一版」「两条链本来指着谁」,``guard_bundle`` 才修得回去。
-    # 只 pop 一个 proven_slot 是兜不住任何东西的:它留下的是一个 ``{}``。
-    记["applying"] = Applying(to=slot_name, src=st.current,
-                              prev=st.previous).to_wire()
+    # 「要换到哪一版」「两条链本来指着谁」「谁被证过」,``guard_bundle``
+    # 才修得回去。只 pop 一个 proven_slot 是兜不住任何东西的:
+    # 它留下的是一个 ``{}``。
+    记["applying"] = Applying(to=slot_name, src=st.current, prev=st.previous,
+                              proven=旧证).to_wire()
     _写记(root, 记)
     if st.current and st.current != slot_name:
         point_link(root / PREVIOUS_LINK, root / st.current)
@@ -777,6 +879,12 @@ def rollback_bundle(bundles_root: Path | str, *, at: str,
     if prev in _黑名单(记):
         raise BundleError(f"{prev} 是退过的那一版,退回去也不许 —— "
                           "没有可退的了,要装哪一版得明说")
+    # **截断之前先把黑名单固化下来**(评审复评 finding 1)。老盘上那份
+    # ``landed.json`` 只有 ``rollbacks``、没有 ``denied``,那些拉黑事实只存在于
+    # ``rollbacks[].from`` 里 —— 直接截 ``rollbacks`` 就把它们静默扔了,而
+    # 「截断不得破坏黑名单语义」正是 F6 那条要求本身。升级上来的狗做**一次
+    # 寻常回退**就会踩到:25 条历史截成 20 条,最早那几版重新变得可以 apply。
+    记["denied"] = list(_黑名单(记))
     退 = 记.setdefault("rollbacks", [])
     退.append({"at": at, "from": cur, "to": prev, "reason": reason})
     del 退[:-MAX_ROLLBACKS]                 # 只留最近这些条**历史**
@@ -806,17 +914,32 @@ def guard_bundle(bundles_root: Path | str) -> BundleGuard:
     的回退并**把盘上唯一那份好包拉黑**,而路由不暴露 ``force``,靠 API 再也
     装不回去。
 
+    **它还顺手把老盘归一化一次**(评审复评 finding 6):截断只发生在
+    ``rollback_bundle`` 那条写路径上,一台从老版本升上来的狗在它**下一次回退
+    之前**照样带着几百条 ``rollbacks``(实测 489KB 文件、``GET /api/bundle``
+    吐 177KB 用 3.1s);而如果它不再回退,就永远这样。开机跑一次这里,那台
+    机器开一次机就正常了。归一化是**幂等**的(开十次机跟开一次机同一个结果),
+    而且**断电安全**(``_写记`` 是先写临时文件再改名,盘上不会留半个 JSON;
+    真在改名之前断了电,下次开机照着原样再归一化一遍就是了)。
+
     **任何一条路都不许抛异常**,理由同 ``boot_guard``:这段代码炸掉等于狗
     起不来,而起不来正是它要防的事。最坏的结论也是一个 ``BundleGuard``。
+    接的是 ``(OSError, ValueError)`` 而不是 ``(OSError, BundleError)``:
+    ``BundleError`` 本来就是 ``ValueError`` 的子类,而这条路上真正漏出去过的
+    是 ``UnicodeDecodeError``(``read_manifest`` 读一份非 UTF-8 的
+    ``bundle.yaml``,评审复评 finding 2)—— 那也是 ``ValueError`` 的子类,
+    却既不是 ``OSError`` 也不是 ``BundleError``。根因已经在 ``read_manifest``
+    里堵掉了,这一层是第二道:承诺是「任何一条路」,那就不能只堵今天见过的那条。
     """
     try:
         return _guard_bundle(Path(bundles_root))
-    except (OSError, BundleError):
+    except (OSError, ValueError):
         return BundleGuard.BROKEN
 
 
 def _guard_bundle(root: Path) -> BundleGuard:
     """``guard_bundle`` 的实际逻辑,可能抛,由外面兜底。"""
+    _归一化(root)                            # 老盘升上来的那一次开机顺手收拾
     记 = _读记(root)
     半 = _半成品(记)
     if 半 is None:
@@ -847,8 +970,58 @@ def _guard_bundle(root: Path) -> BundleGuard:
 
     记 = _读记(root)
     记.pop("applying", None)
+    if 结论 is BundleGuard.UNDONE and 半.proven:
+        # **把 ``proven_slot`` 原样放回**(评审复评 finding 3)。两条链已经回到
+        # 换链之前的样子,那份「真跑成过」的事实也该跟着回来 —— 不放回的话
+        # ``current`` 是一版跑成过的好包却带着 ``proven=False``,第 8 卷那条
+        # ``崩了 and not proven and previous`` 随即成立,自动退一次,把它拉黑。
+        记["proven_slot"] = 半.proven
     _写记(root, 记)
     return 结论
+
+
+def _归一化(root: Path) -> bool:
+    """把老盘上那份 ``landed.json`` 收拾成本版本的形状。改了返回 ``True``。
+
+    干两件事,**一次写完**:
+
+    1. 把 ``_黑名单()`` 的全量结果(``denied`` ∪ ``rollbacks[].from``)固化进
+       ``denied`` —— 跟 ``rollback_bundle`` 里那一行是同一件事,只是这条路不
+       需要等到「下一次回退」。
+    2. 把 ``rollbacks`` 截到 ``MAX_ROLLBACKS``。截断本来只在写路径上发生,
+       老盘在下一次回退之前照样几百条(评审复评 finding 6)。
+
+    **顺序不能反**,而且必须是同一次写:先截后固化,就是把老盘那些只存在于
+    被截掉的条目里的拉黑事实扔掉 —— 正是 finding 1 那个洞。
+
+    **幂等**:第二次跑,``denied`` 已经是全量、``rollbacks`` 已经不超上限,
+    两边都相等,直接不写。开十次机跟开一次机盘上是同一份文件。
+
+    **断电安全**:``_写记`` 先写 ``landed.json.tmp`` 再 ``os.replace``,盘上要么
+    是归一化之前那份、要么是之后那份,没有第三种。真断在改名之前,下次开机
+    读到的还是老那份,再归一化一遍即可 —— 归一化不依赖「上次跑到哪儿」。
+
+    **一份还没有 landed.json(或者里头什么都没有)的新盘上什么都不做** ——
+    凭空造一个 ``{"denied": [], "rollbacks": []}`` 出来只是噪音。
+    """
+    记 = _读记(root)
+    if not 记:
+        return False
+    退 = [r for r in 记.get("rollbacks", []) if isinstance(r, dict)]
+    新黑 = list(_黑名单(记))
+    新退 = 退[-MAX_ROLLBACKS:]
+    新强 = [f for f in 记.get("forced", []) if isinstance(f, dict)][-MAX_ROLLBACKS:]
+    if not 新黑 and not 退 and not 新强:
+        return False
+    if (新黑 == 记.get("denied") and 新退 == 记.get("rollbacks")
+            and 新强 == 记.get("forced", [])):
+        return False
+    记["denied"] = 新黑
+    记["rollbacks"] = 新退
+    if 新强 or "forced" in 记:
+        记["forced"] = 新强
+    _写记(root, 记)
+    return True
 
 
 def _能用(dest: Path) -> bool:

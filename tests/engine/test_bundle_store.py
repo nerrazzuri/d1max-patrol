@@ -587,8 +587,12 @@ def test_换链换到一半断电标记里有足够的信息(tmp_path, root, mon
 
     assert st.applying is not None
     assert (st.applying.to, st.applying.src, st.applying.prev) == (二, 一, "")
+    # ``proven_slot`` 也在标记里 —— 换链之前 一 是被证过的那一版,
+    # 撤销的时候得原样放回去(评审复评 finding 3)。
+    assert st.applying.proven == 一
     记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
-    assert 记["applying"] == {"to": 二, "from": 一, "prev": ""}
+    assert 记["applying"] == {"to": 二, "from": 一, "prev": "",
+                              "proven_slot": 一}
 
 
 def test_断电之后走一次guard状态回到可用的终态(tmp_path, root, monkeypatch):
@@ -716,3 +720,248 @@ def test_老盘上只有rollbacks没有denied照样认拉黑(tmp_path, root):
     assert read_state(root).denied == (二,)
     with pytest.raises(BundleError, match="退过的那一版"):
         apply_bundle(root, 二)
+
+
+# ---- 老盘升上来那一次(评审复评 finding 1 / 3 / 6 / 7) --------------------
+
+def 老盘(root, 条数: int, *, 真槽: str = "") -> list[str]:
+    """把 ``landed.json`` 改写成**升级之前那台狗**的形状,返回退过哪些槽。
+
+    老版本只写 ``rollbacks``,**没有 ``denied`` 这个键** —— 那些拉黑事实只
+    存在于 ``rollbacks[].from`` 里。``条数`` 要超过 ``MAX_ROLLBACKS``,不然
+    根本走不到截断那一行(上一轮那条测试正是栽在这儿)。
+    """
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    退过 = [真槽 or "site-kl-900"] + [f"site-kl-{900 + i}" for i in range(1, 条数)]
+    记["rollbacks"] = [{"at": 时刻, "from": s, "to": "site-kl-1",
+                        "reason": "崩" * 500} for s in 退过]
+    记.pop("denied", None)                   # 老版本压根没有这个键
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+    return 退过
+
+
+def test_老盘升上来第一次寻常回退不会把老的拉黑事实截掉(tmp_path, root):
+    """**评审复评 finding 1 —— 也是 F6 至今唯一一次被真正验收。**
+
+    上一轮那条 ``test_老盘上只有rollbacks没有denied照样认拉黑`` 只造了**一条**
+    rollback,走不到 ``del 退[:-MAX_ROLLBACKS]`` 那一行,钉住的是读路径不是
+    截断路径。这儿造的是真老盘:条数超过上限、没有 ``denied`` 键。
+
+    实跑序列:老盘 25 条 ``rollbacks`` → 升级(此刻 ``_黑名单()`` 从
+    ``rollbacks[].from`` 算得出 25 条,兼容是好的)→ 做**一次寻常回退** →
+    截断之前不固化的话,``rollbacks`` 截成 20、``denied`` 只有这一次的,
+    最早那几版就此从黑名单里消失,``apply`` 它们 200 OK ——
+    一个已知会崩的版本被装回去,正是 F1/F6 要堵的那个安静死循环。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    九 = 打包并落(tmp_path, root, 9)         # 这一版真在盘上,等下要拿它去 apply
+    apply_bundle(root, 九)
+    二 = 打包并落(tmp_path, root, 2)
+    apply_bundle(root, 二)                   # current=二, previous=九
+    最老 = 老盘(root, MAX_ROLLBACKS + 5, 真槽=九)[0]
+    assert 最老 == 九
+    assert 九 in read_state(root).denied      # 升上来这一刻兼容是好的
+
+    # previous 此刻是 九,而 九 在黑名单里 —— 先把链摆成一个能退的样子(退回
+    # 一),这是一次**寻常回退**,不是什么边角情形。
+    bundle_mod.point_link(root / PREVIOUS_LINK, root / 一)
+
+    rollback_bundle(root, at=后来, reason="又崩了")
+
+    st = read_state(root)
+    assert len(st.rollbacks) == MAX_ROLLBACKS                # 历史照样被截
+    assert 最老 not in [r.frm for r in st.rollbacks]          # 已经不在历史里
+    assert 最老 in st.denied                                  # (a) 仍然在黑名单里
+    with pytest.raises(BundleError, match="退过的那一版"):     # (b) 仍然装不上去
+        apply_bundle(root, 最老)
+
+
+def test_老盘开一次机就被归一化(tmp_path, root):
+    """**评审复评 finding 6。** 截断只发生在写路径上,老盘在下一次回退之前
+    照样几百条(实测 489KB / ``GET /api/bundle`` 吐 177KB / 3.1s);它要是
+    不再回退,就永远这样。开机守卫顺手把这件事做掉。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    退过的 = 老盘(root, 200)
+    大 = (root / LANDED).stat().st_size
+    assert 大 > 100_000                       # 老盘上真就是这么大一坨
+
+    assert guard_bundle(root) is BundleGuard.OK
+
+    st = read_state(root)
+    assert len(st.rollbacks) == MAX_ROLLBACKS
+    assert set(退过的) <= set(st.denied)      # 一条拉黑事实都没丢
+    assert (root / LANDED).stat().st_size < 大 // 3
+
+
+def test_归一化是幂等的(tmp_path, root):
+    """开十次机跟开一次机盘上得是同一份文件。"""
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    老盘(root, MAX_ROLLBACKS + 10)
+
+    guard_bundle(root)
+    第一次 = (root / LANDED).read_bytes()
+    for _ in range(9):
+        assert guard_bundle(root) is BundleGuard.OK
+    assert (root / LANDED).read_bytes() == 第一次
+
+
+def test_归一化断在改名之前下次开机照样修得回来(tmp_path, root, monkeypatch):
+    """``_写记`` 是「先写临时文件再改名」。真断在改名之前,盘上留着的还是
+    归一化**之前**那一份 —— 不是半份 —— 下次开机照原样再归一化一遍就是了。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    退过的 = 老盘(root, MAX_ROLLBACKS + 10)
+    原样 = (root / LANDED).read_bytes()
+
+    def 断电(src, dst):
+        raise OSError("断电")
+
+    monkeypatch.setattr(bundle_mod.os, "replace", 断电)
+    assert guard_bundle(root) is BundleGuard.BROKEN     # 守卫自己没炸
+    assert (root / LANDED).read_bytes() == 原样         # 盘上没有半份文件
+    monkeypatch.undo()                                  # 电来了
+
+    assert guard_bundle(root) is BundleGuard.OK
+    st = read_state(root)
+    assert len(st.rollbacks) == MAX_ROLLBACKS
+    assert set(退过的) <= set(st.denied)
+
+
+def test_撤销的时候那一版跑成过的事实要放回去(tmp_path, root, monkeypatch):
+    """**评审复评 finding 3。** ``UNDONE`` 把两条链放回换链之前的样子,
+    却让那份**真跑成过**的包带着 ``proven=False`` 回到 ``current`` ——
+    第 8 卷那条 ``崩了 and not proven and previous`` 随即成立,自动退一次,
+    **把那份跑成过的好包拉黑**。F2 的伤口只是从「断电当场」挪到了
+    「guard 修完之后」。
+
+    既有的 ``test_目标那份包落坏了guard就把两条链放回换链之前`` 恰好构造成
+    ``prev == ""``,判据里 ``bool(previous)`` 为假,所以看不见这个洞 ——
+    这儿显式构造 ``prev != ""`` 那一路。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    二 = 打包并落(tmp_path, root, 2)
+    apply_bundle(root, 二)
+    mark_proven(root)                        # 二 真跑成过一次
+    三 = 打包并落(tmp_path, root, 3)
+    断在两次换链之间(monkeypatch)
+    with pytest.raises(OSError):
+        apply_bundle(root, 三)
+    monkeypatch.undo()
+    shutil.rmtree(root / 三)                 # 三 那份包没落全
+
+    assert guard_bundle(root) is BundleGuard.UNDONE
+
+    st = read_state(root)
+    assert (st.current, st.previous) == (二, 一)          # prev != "" 那一路
+    assert st.proven is True                             # 跑成过的事实回来了
+
+    def 该不该退(state, 崩了: bool) -> bool:
+        return 崩了 and not state.proven and bool(state.previous)
+
+    assert 该不该退(st, 崩了=True) is False               # 判据不再成立
+    assert st.denied == ()                               # 谁都没被拉黑
+
+
+def test_自述不是合法UTF8抛的是BundleError(tmp_path, root):
+    """**评审复评 finding 2 的根因。** ``UnicodeDecodeError`` 是 ``ValueError``
+    的子类,**不是 ``OSError``** —— 只写 ``except OSError`` 的 ``read_manifest``
+    罩不住它,它会直穿 ``guard_bundle`` 那句
+    ``except (OSError, BundleError)``。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    (root / 一 / "bundle.yaml").write_bytes(b"\xff\xfe\x00\x01")
+    with pytest.raises(BundleError, match="UTF-8"):
+        bundle_mod.read_manifest(root / 一)
+
+
+def test_目标包的自述是非UTF8守卫也不许炸(tmp_path, root, monkeypatch):
+    """apply 到一半断电,**同一次断电**把目标包的 ``bundle.yaml`` 写成了非
+    UTF-8 字节(拷了一半、闪存掉电损坏)—— 那正是 ``UNDONE`` 这条路存在的
+    理由。守卫在这儿炸掉的话,两条链就停在断电时那个自相矛盾的状态上。
+    """
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+    (root / 二 / "bundle.yaml").write_bytes(b"\xff\xfe\x00\x01")
+
+    assert guard_bundle(root) is BundleGuard.UNDONE       # 没抛,给了个结论
+    st = read_state(root)
+    assert (st.current, st.previous) == (一, "")
+    assert st.applying is None
+
+
+@pytest.mark.parametrize("坏标记", ["../../etc", "site-kl-1\x00", "", "Site-KL-1"])
+def test_标记里的槽名不合规就当没有标记(tmp_path, root, 坏标记):
+    """**评审复评 finding 7。** ``guard_bundle`` 把 ``landed.json`` 里的
+    ``to``/``from``/``prev`` 直接拼进路径,而 ``apply_bundle`` 对同一件事写着
+    「槽名是外面传进来的,而且会被拼进路径」并过 ``_SLOT_RE``。今天挡住
+    ``../../etc`` 的是 ``_能用()`` 里 ``verify_bundle`` 的目录名一致性检查 ——
+    那是**别处的副作用**,不是本地判据;而一个带 NUL 的名字连
+    ``Path.is_dir()`` 都会抛 ``ValueError``,把「守卫不许抛」那条承诺也一起
+    打掉。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记["applying"] = {"to": 坏标记, "from": 一, "prev": "", "proven_slot": ""}
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+
+    assert read_state(root).applying is None              # 当没有这条标记
+    assert guard_bundle(root) is BundleGuard.OK           # 而且没抛
+    assert read_state(root).current == 一                 # 链一个字没动
+
+
+# ---- 强推留痕(评审复评 finding 5) ---------------------------------------
+
+def test_强推会留痕而且不把那一版洗白(tmp_path, root):
+    """这扇门后面是「装一个已知会崩的版本」,所以它必须留痕。
+
+    但**强推不是洗白**:那一版仍然在 ``denied`` 里,下一次不带 ``force``
+    照样拒。「这一次我知道我在干什么」跟「这一版从此可以随便装」是两句话。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    二 = 打包并落(tmp_path, root, 2)
+    apply_bundle(root, 二)
+    rollback_bundle(root, at=后来, reason="崩了")
+
+    st = apply_bundle(root, 二, force=True, at=后来)
+    assert st.current == 二
+    assert [(f.at, f.slot) for f in st.forced] == [(后来, 二)]   # 留痕
+    assert 二 in st.denied                                       # 没被洗白
+    assert st.to_wire()["forced"] == [{"at": 后来, "slot": 二}]
+
+    with pytest.raises(BundleError, match="退过的那一版"):
+        apply_bundle(root, 二)                                   # 下一次照样拒
+
+
+def test_没被拉黑的时候传force什么也不记(tmp_path, root):
+    """对一个本来就没被拉黑的槽传 ``force`` 什么也没顶开 —— 记下来只会把
+    这份历史冲成噪音,而它是给人看「谁在什么时候硬来过」的。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    assert apply_bundle(root, 一, force=True, at=后来).forced == ()
+
+
+def test_强推历史也有上限(tmp_path, root):
+    """跟 ``rollbacks`` 同一个上限、同一条理由:狗是长期在线的设备,
+    一个只增不减的列表迟早把 ``landed.json`` 撑成一个吐不动的东西。
+    **拉黑事实不跟着被截** —— 那是判据,不是历史。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    二 = 打包并落(tmp_path, root, 2)
+    apply_bundle(root, 二)
+    rollback_bundle(root, at=后来, reason="崩了")
+    for _ in range(MAX_ROLLBACKS + 5):
+        apply_bundle(root, 二, force=True, at=后来)
+
+    st = read_state(root)
+    assert len(st.forced) == MAX_ROLLBACKS
+    assert 二 in st.denied
