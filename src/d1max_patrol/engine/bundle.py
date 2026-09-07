@@ -561,9 +561,15 @@ class Applying:
 
     @classmethod
     def from_wire(cls, raw: Mapping[str, Any]) -> Applying:
-        return cls(to=str(raw.get("to", "")), src=str(raw.get("from", "")),
-                   prev=str(raw.get("prev", "")),
-                   proven=str(raw.get("proven_slot", "")))
+        """**四个字段一律走 ``_串``,不是 ``str()``**(评审复评第 3 轮 N5)。
+
+        ``str(None)`` 是 ``"None"`` —— 一个长得像槽名、却过不了 ``_SLOT_RE``
+        的假名字。``landed.json`` 里哪个键是 JSON ``null``(人手改过、别的
+        序列化器写的),整条标记就此作废,断电留下的两条链再也没人修。
+        「不是字符串」的正确读法是「没有这一项」,不是「有一项叫 None」。
+        """
+        return cls(to=_串(raw.get("to")), src=_串(raw.get("from")),
+                   prev=_串(raw.get("prev")), proven=_串(raw.get("proven_slot")))
 
 
 class BundleGuard(Enum):
@@ -605,6 +611,52 @@ class BundleState:
                 "denied": list(self.denied),
                 "applying": self.applying.to_wire() if self.applying else None,
                 "forced": [f.to_wire() for f in self.forced]}
+
+
+#: 守卫那条路上「不许抛出去」的异常。``BundleError`` 是 ``ValueError`` 的子类,
+#: 所以覆盖面只增不减;``TypeError`` 是评审复评第 3 轮 N2 逮到的那个漏网的
+#: —— ``landed.json`` 里 ``denied``/``rollbacks``/``forced`` 写成 ``null`` 或
+#: 数字时,列表推导抛的既不是 ``OSError`` 也不是 ``ValueError``。
+#: **一处定义两处用**(``guard_bundle`` 的兜底、``_guard_bundle`` 里那句家务活),
+#: 两边各写一遍的话,哪天补了一个漏网的另一边不会跟着补。
+_守卫兜底 = (OSError, ValueError, TypeError)
+
+
+def _串(值: Any) -> str:
+    """线上来的值当字符串用。**不是字符串就当空的**,不是 ``str(值)``。
+
+    ``landed.json`` 是「外面的东西」,里头任何一个键都可能是 ``null``、数字、
+    列表。``str()`` 会把它们变成 ``"None"``/``"7"`` 这种**长得像内容的假内容**,
+    比空串危险:空串的意思是「没有这一项」,一路上都有人认;``"None"`` 谁也
+    不认,只会在某道闸上把整件事作废掉。
+    """
+    return 值 if isinstance(值, str) else ""
+
+
+def _取表(记: Mapping[str, Any], 键: str) -> list[Any]:
+    """从 ``landed.json`` 里取一个列表。**不是列表就当空的。**
+
+    评审复评第 3 轮 N2:``{"denied": null}`` 这种盘上内容会让列表推导抛
+    ``TypeError``,直穿 ``guard_bundle`` 那句「任何一条路都不抛」的承诺。
+    同一行里 ``isinstance(r, dict)`` 早就在过滤条目了,容器本身却没过 ——
+    这三处(``_黑名单``、``read_state``、``_归一化``)统一走这一个门。
+    """
+    值 = 记.get(键)
+    return 值 if isinstance(值, list) else []
+
+
+def _取表写(记: dict[str, Any], 键: str) -> list[Any]:
+    """取一个列表准备往里追加,**不是列表就换成空的**(会写回 ``记``)。
+
+    评审复评第 3 轮 N6:``记.setdefault("forced", []).append(...)`` 在盘上那个
+    值是字符串/数字时抛 ``AttributeError``,``_bundle_apply`` 只接
+    ``BundleError``,于是冒成一个 500。跟 ``_取表`` 同一条理由,只是这条路要写。
+    """
+    值 = 记.get(键)
+    if not isinstance(值, list):
+        值 = []
+        记[键] = 值
+    return 值
 
 
 def _链指向(root: Path, 名: str) -> str:
@@ -657,15 +709,27 @@ def read_state(bundles_root: Path | str) -> BundleState:
     记 = _读记(root)
     退 = tuple(Rollback(str(r.get("at", "")), str(r.get("from", "")),
                         str(r.get("to", "")), str(r.get("reason", "")))
-               for r in 记.get("rollbacks", [])
+               for r in _取表(记, "rollbacks")
                if isinstance(r, dict))
     强 = tuple(Forced(str(f.get("at", "")), str(f.get("slot", "")))
-               for f in 记.get("forced", []) if isinstance(f, dict))
+               for f in _取表(记, "forced") if isinstance(f, dict))
     # proven 记的是**哪一个槽**被证过。存布尔的话,有人手工把 current 挪到
     # 另一版上,那一版就凭空继承了「跑成过」这个结论 —— 它一次都没跑过。
     return BundleState(cur, _链指向(root, PREVIOUS_LINK),
                        bool(cur) and 记.get("proven_slot") == cur, 退,
                        denied=_黑名单(记), applying=_半成品(记), forced=强)
+
+
+def denies(state: BundleState, slot_name: str) -> bool:
+    """这一版现在是不是被拉黑了 —— **``apply_bundle`` 那道闸的判据本身**。
+
+    单独拿出来只有一个理由:路由要如实回答「这一次 ``force`` 到底顶开了没有」
+    (评审复评第 3 轮 N4),而 ``apply_bundle`` 的返回值里看不出来 ——
+    ``denied`` 强推前后一模一样,``forced`` 只在真顶开时才多一笔、还带截断。
+    判据在这儿写一遍、两个调用方共用,**同一件事写两遍迟早分岔**;闸本身仍然
+    只在 ``apply_bundle`` 里,这个函数不做决定,只回答。
+    """
+    return slot_name in state.denied
 
 
 def _黑名单(记: Mapping[str, Any]) -> tuple[str, ...]:
@@ -675,8 +739,8 @@ def _黑名单(记: Mapping[str, Any]) -> tuple[str, ...]:
     只有 ``rollbacks``、没有 ``denied``,升级上来之后那些拉黑事实不能凭空消失
     —— 那正好是「一版崩过的包又被装回去」这条死循环。
     """
-    名 = [s for s in 记.get("denied", []) if isinstance(s, str) and s]
-    名 += [str(r.get("from", "")) for r in 记.get("rollbacks", [])
+    名 = [s for s in _取表(记, "denied") if isinstance(s, str) and s]
+    名 += [str(r.get("from", "")) for r in _取表(记, "rollbacks")
            if isinstance(r, dict) and r.get("from")]
     return tuple(dict.fromkeys(名))          # 去重,保序
 
@@ -711,8 +775,16 @@ def _半成品(记: Mapping[str, Any]) -> Applying | None:
         return None
     if not _槽名(半.to):
         return None
-    if not all(_槽名(名, 可空=True) for 名 in (半.src, 半.prev, 半.proven)):
+    if not all(_槽名(名, 可空=True) for 名 in (半.src, 半.prev)):
         return None
+    if not _槽名(半.proven, 可空=True):
+        # **``proven`` 坏了只丢这个字段,不作废整条标记**(评审复评第 3 轮 N5)。
+        # ``to``/``src``/``prev`` 会被**拼进路径**,坏了作废整条是对的;而
+        # ``proven`` 从头到尾没有被拼进过路径 —— 它只在 ``read_state`` 里跟
+        # ``current`` 比一次字符串。为了一条比不比得上都无所谓的信息,赔掉
+        # 「两条链断电之后还修不修得回来」,不划算。丢掉它的后果是那一版的
+        # 「跑成过」退回 False,比两条链停在中间态轻得多。
+        半 = Applying(to=半.to, src=半.src, prev=半.prev, proven="")
     return 半
 
 
@@ -800,7 +872,7 @@ def apply_bundle(bundles_root: Path | str, slot_name: str, *,
             f"{list(m.targets)},本机 SN 是 {sn!r}(定夺 13)")
 
     st = read_state(root)
-    顶开了 = slot_name in st.denied
+    顶开了 = denies(st, slot_name)
     if not force and 顶开了:
         raise BundleError(f"{slot_name} 是退过的那一版,不许再生效 —— "
                           "要硬来就明确传 force")
@@ -814,7 +886,7 @@ def apply_bundle(bundles_root: Path | str, slot_name: str, *,
         旧证 = ""
     if 顶开了:
         # 强推留痕。**写进历史,不动 ``denied``** —— 见本函数 docstring。
-        强 = 记.setdefault("forced", [])
+        强 = _取表写(记, "forced")             # 盘上那个值不是列表就换掉(N6)
         强.append({"at": at, "slot": slot_name})
         del 强[:-MAX_ROLLBACKS]            # 跟回退历史同一个上限,同一条理由
     # **先落标记,再换链**(评审 F2)。底下连着换两条链,两次之间断电的话
@@ -885,12 +957,12 @@ def rollback_bundle(bundles_root: Path | str, *, at: str,
     # 「截断不得破坏黑名单语义」正是 F6 那条要求本身。升级上来的狗做**一次
     # 寻常回退**就会踩到:25 条历史截成 20 条,最早那几版重新变得可以 apply。
     记["denied"] = list(_黑名单(记))
-    退 = 记.setdefault("rollbacks", [])
+    退 = _取表写(记, "rollbacks")             # 盘上那个值不是列表就换掉(N6)
     退.append({"at": at, "from": cur, "to": prev, "reason": reason})
     del 退[:-MAX_ROLLBACKS]                 # 只留最近这些条**历史**
     if cur:
         # **拉黑事实单独存,不随历史被截掉。** 去重:同一版退过十次也只有一条。
-        黑 = 记.setdefault("denied", [])
+        黑 = _取表写(记, "denied")
         if cur not in 黑:
             黑.append(cur)
     # 退回去的那一版本来就是证过的。上头那道黑名单闸保证了 prev 从没被拉黑过
@@ -930,16 +1002,47 @@ def guard_bundle(bundles_root: Path | str) -> BundleGuard:
     ``bundle.yaml``,评审复评 finding 2)—— 那也是 ``ValueError`` 的子类,
     却既不是 ``OSError`` 也不是 ``BundleError``。根因已经在 ``read_manifest``
     里堵掉了,这一层是第二道:承诺是「任何一条路」,那就不能只堵今天见过的那条。
+
+    兜底那张网现在是 ``_守卫兜底``,比原来多一个 ``TypeError``(评审复评第 3 轮
+    N2):``landed.json`` 里 ``denied``/``rollbacks``/``forced`` 写成 ``null``
+    或数字时,列表推导抛的正是它 —— 既不是 ``OSError`` 也不是 ``ValueError``,
+    上面那句承诺在这儿又被捅穿过一次。
     """
     try:
         return _guard_bundle(Path(bundles_root))
-    except (OSError, ValueError):
+    except _守卫兜底:
         return BundleGuard.BROKEN
 
 
 def _guard_bundle(root: Path) -> BundleGuard:
     """``guard_bundle`` 的实际逻辑,可能抛,由外面兜底。"""
-    _归一化(root)                            # 老盘升上来的那一次开机顺手收拾
+    try:
+        _归一化(root)                        # 老盘升上来的那一次开机顺手收拾
+    except _守卫兜底:
+        # **家务活绝不许挡在安全网前面,更不许把安全网赔掉**(评审复评第 3 轮
+        # N1)。归一化是家务活(截历史、固化黑名单),底下那一段修链才是安全网,
+        # 而归一化**自己会写盘**:ENOSPC、EIO、只读挂载、掉电正好落在
+        # ``os.replace`` 上 —— 它一抛,整个 ``_guard_bundle`` 就抛出去,外面兜成
+        # ``BROKEN``,**两条链一个字没修**。偏偏盘快满的那台狗正是最需要修链的
+        # 那台:链停在 ``current == previous`` 且 ``proven=False``,第 8 卷那条
+        # ``崩了 and not proven and previous`` 随即成立,自动退一次,把盘上唯一
+        # 那份好包拉黑。家务活这次没干成不要紧,下次开机再干一遍
+        # (``_归一化`` 是幂等的,不依赖「上次跑到哪儿」)。
+        #
+        # **为什么原地包住而不是挪到函数末尾:** 这个函数有三个出口(``OK``、
+        # ``BROKEN``、末尾那一条),而老盘归一化要走的正是最常见的 ``OK``
+        # 那一条 —— 挪到「末尾」等于把它从 99% 的开机路上删掉;要补回来得靠
+        # ``try/finally`` 或者三处各写一遍,而**那个 finally 自己还得再包一层
+        # try**(不然安全网又被赔掉一次),绕一圈回到同一处,还多两个出口要对。
+        #
+        # 两边会不会看见对方写的东西:会,但不相干。归一化只写
+        # ``denied``/``rollbacks``/``forced``,修链只写 ``applying``/``proven_slot``,
+        # 两组键不相交;而且底下每一次写盘之前都重新 ``_读记`` 一遍 ——
+        # 归一化成功,底下读到的是归一化之后那份;归一化失败,底下读到的是
+        # 原样那份。两种都是**完整的一份**,没有第三种(``_写记`` 先写 tmp
+        # 再改名)。反过来把归一化排在修链之后,它读到的就是「``applying``
+        # 刚被清掉」那份 —— 也对,但那时候链已经修好了,先后就没有意义了。
+        pass
     记 = _读记(root)
     半 = _半成品(记)
     if 半 is None:
@@ -1007,10 +1110,10 @@ def _归一化(root: Path) -> bool:
     记 = _读记(root)
     if not 记:
         return False
-    退 = [r for r in 记.get("rollbacks", []) if isinstance(r, dict)]
+    退 = [r for r in _取表(记, "rollbacks") if isinstance(r, dict)]
     新黑 = list(_黑名单(记))
     新退 = 退[-MAX_ROLLBACKS:]
-    新强 = [f for f in 记.get("forced", []) if isinstance(f, dict)][-MAX_ROLLBACKS:]
+    新强 = [f for f in _取表(记, "forced") if isinstance(f, dict)][-MAX_ROLLBACKS:]
     if not 新黑 and not 退 and not 新强:
         return False
     if (新黑 == 记.get("denied") and 新退 == 记.get("rollbacks")

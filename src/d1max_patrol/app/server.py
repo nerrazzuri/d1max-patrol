@@ -112,6 +112,7 @@ from d1max_patrol.engine.bundle import (
     BundleError,
     active_bundle,
     apply_bundle,
+    denies,
     read_bundle_schedule,
     rollback_bundle,
     verify_bundle,
@@ -2289,6 +2290,14 @@ class AppServer:
         强推会在 ``landed.json`` 的 ``forced`` 历史里留一笔(时刻同样是**服务端
         盖的**,跟回退记录一个道理),而且**不动 ``denied``**:下一次不带
         ``force`` 的 apply 照样被拒。
+
+        **响应里回一个 ``overrode_denied``**(评审复评第 3 轮 N4):这一次
+        ``force`` 到底有没有真顶开黑名单。留痕**只在真顶开那一次才记**
+        (不然这份历史会被噪音冲掉),于是「传了 force、200 OK、``forced``
+        里什么也没多」这件事在调用方看来无从分辨 —— 那正是上一轮挂账的
+        F8「静默降级」换了个位置。这个布尔把它变回看得见的。判据本身不在这儿
+        写第二遍:调的是 engine 那个 ``denies()``,跟 ``apply_bundle`` 的闸
+        同一份。
         """
         body = req.json()
         if not isinstance(body, dict):
@@ -2303,6 +2312,14 @@ class AppServer:
                             "1、\"1\" 都不算:这扇门后面是装一个已知会崩的版本")
         at = datetime.fromtimestamp(
             self._ctx.clock() / 1000, tz=timezone.utc).isoformat()
+        # 换链之前问一次「这一版现在是不是被拉黑的」。换完再问就晚了 ——
+        # 那时候 ``denied`` 一个字没变(强推不洗白),看不出这一次顶开过什么。
+        try:
+            顶开了 = denies(read_bundle_state(self._ctx.bundles_root), slot)
+        except (OSError, ValueError, TypeError):
+            # 状态读不出来只影响这个布尔的准头,不该让一次 apply 失败 ——
+            # 真读不出来的话底下 ``apply_bundle`` 自己会给出一个像样的错。
+            顶开了 = False
         try:
             state = apply_bundle(self._ctx.bundles_root, slot,
                                  sn=self._ctx.identity.sn, force=force, at=at)
@@ -2313,7 +2330,8 @@ class AppServer:
                 # 评审定夺:同一件事在相邻两条路由上不该给两个不同的答案。
                 raise HttpError(409, str(exc)) from None
             raise HttpError(400, str(exc)) from None
-        return json_response({"state": state.to_wire()})
+        return json_response({"state": state.to_wire(),
+                              "overrode_denied": 顶开了})
 
     def _bundle_rollback(self, req: Request) -> Response:
         """退回上一版。

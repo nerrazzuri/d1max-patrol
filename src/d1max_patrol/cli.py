@@ -22,7 +22,12 @@ from d1max_patrol.backends.base import NavBackendError, NavTimeoutError
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.loader import ConfigError, load_config
 from d1max_patrol.conformance import DEFAULT_PROBES, nav_host_port, run_conformance
-from d1max_patrol.engine.bundle import BundleGuard, guard_bundle, read_state
+from d1max_patrol.engine.bundle import (
+    BundleGuard,
+    BundleState,
+    guard_bundle,
+    read_state,
+)
 from d1max_patrol.engine.release import (
     MAX_BOOT_ATTEMPTS,
     GuardAction,
@@ -622,7 +627,17 @@ def _cmd_bundle_guard(root: Path) -> int:
 
     **它永远退 0。** 跟版本守卫同一条理由:一个把机器挡在启动之外的安全网,
     比它要防的问题更糟。``guard_bundle()`` 自己保证任何一条路都不抛异常
-    (最坏回 ``BundleGuard.BROKEN``),这里不需要再包一层。
+    (最坏回 ``BundleGuard.BROKEN``),但**底下那句 ``read_state`` 不在那个
+    保证里**(评审复评第 3 轮 N3):同一份坏 ``landed.json`` 照样能让它抛,
+    于是「永远退 0」这句话不成立,而 ``BROKEN`` 的时候运维本来就只有 stderr
+    这一条线索 —— 拿到的却是一坨 traceback,不是那句人话。所以这儿单独包一层:
+    **状态读不出来不影响结论,更不该改变退出码。**
+
+    接的是 ``(OSError, ValueError, TypeError)`` 而不是 ``except Exception``:
+    这三样正是 ``guard_bundle`` 自己那张兜底网(``bundle._守卫兜底``),而
+    ``read_state`` 走的是同一批函数(``_链指向``、``_读记``、``_黑名单``、
+    ``_半成品``)。用 ``except Exception`` + ``# noqa`` 把 ruff 的 ``BLE`` 绕
+    过去,等于把「哪些坏法是预料之内的」这个信息一起抹掉。
     """
     结论 = guard_bundle(root)
 
@@ -633,12 +648,20 @@ def _cmd_bundle_guard(root: Path) -> int:
         BundleGuard.BROKEN:
             "换链换到一半,两个方向都走不通 —— 标记留着,请人来看。",
     }
-    st = read_state(root)
-    文本 = (f"[任务包守卫] {话.get(结论, 结论.value)} 现在指着: "
-           f"{st.current or '(没有)'}(上一版 {st.previous or '无'})")
+    try:
+        st: BundleState | None = read_state(root)
+    except (OSError, ValueError, TypeError):
+        st = None
+    if st is None:
+        尾 = "现在指着: (状态取不到 —— landed.json 或那两条链读不出来)"
+    else:
+        尾 = (f"现在指着: {st.current or '(没有)'}"
+              f"(上一版 {st.previous or '无'})")
+    文本 = f"[任务包守卫] {话.get(结论, 结论.value)} {尾}"
     # BROKEN 是"请人来看"那一种,打到 stderr 才不会被日常开机时收 stdout 的
     # 脚本悄悄吞掉。退出码仍然是 0(见本函数 docstring)。
-    if 结论 is BundleGuard.BROKEN:
+    # **状态读不出来也走 stderr**:那同样是一台该有人看一眼的机器。
+    if 结论 is BundleGuard.BROKEN or st is None:
         print(文本, file=sys.stderr)
     else:
         print(文本)

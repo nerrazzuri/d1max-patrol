@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from d1max_patrol import cli
 from d1max_patrol.cli import _bundles_root, main
 from d1max_patrol.engine import bundle as bundle_mod
 from d1max_patrol.engine.bundle import (
@@ -202,6 +203,57 @@ def test_根目录根本不存在也不炸(tmp_path, capsys):
     """
     assert main(["bundle", "guard", "--root", str(tmp_path / "没有这个目录")]) == 0
     assert "(没有)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("键", ["denied", "rollbacks", "forced"])
+def test_landed里那几个键是null也照样退0(tmp_path, root, 键, capsys):
+    """**评审复评第 3 轮 N2 的端到端症状。**
+
+    ``{"denied": null}`` 这种盘上内容(人手改过、别的版本写的)会让列表推导
+    抛 ``TypeError`` —— 既不是 ``OSError`` 也不是 ``ValueError``,直穿
+    ``guard_bundle`` 那句「任何一条路都不抛」的承诺,开机时这条命令**退 1**
+    并吐一坨 traceback。``ExecStartPre=-`` 兜住了「挡住启动」,兜不住
+    「运维只有 stderr 这一条线索,拿到的却不是人话」。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记[键] = None
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+    capsys.readouterr()
+
+    assert main(["bundle", "guard", "--root", str(root)]) == 0
+
+    assert 一 in capsys.readouterr().out
+    assert read_state(root).current == 一
+
+
+def test_状态读不出来也退0而且说的是人话(tmp_path, root, monkeypatch, capsys):
+    """**评审复评第 3 轮 N3。**
+
+    ``guard_bundle()`` 自己保证不抛,但 ``_cmd_bundle_guard`` 里那句
+    ``read_state(root)`` 排在它**后面、在它的 try 之外** —— 同一份坏盘照样能
+    让这条命令退 1。而 ``BROKEN`` 的时候运维本来就只有 stderr 一条线索,
+    结果拿到的是一坨 traceback,不是那句人话。
+
+    这儿直接让 ``read_state`` 抛,盯的是这条命令自己的兜底,不是某一种盘上
+    内容 —— 「永远退 0」这句话不该依赖「我们已经想到了所有坏法」。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+
+    def 读不出来(_root):
+        raise OSError("盘掉了")
+
+    monkeypatch.setattr(cli, "read_state", 读不出来)
+    capsys.readouterr()
+
+    assert main(["bundle", "guard", "--root", str(root)]) == 0
+
+    out = capsys.readouterr()
+    assert "状态取不到" in out.err            # 该有人看一眼,所以走 stderr
+    assert "Traceback" not in out.err
 
 
 def test_链是悬空的也不炸(tmp_path, root, capsys):

@@ -16,6 +16,7 @@ import pytest
 
 from d1max_patrol.app.server import MAX_ROLLBACK_REASON_LEN, AppServer
 from d1max_patrol.engine.bundle import (
+    LANDED,
     SCHEDULE_NAME,
     apply_bundle,
     build_bundle,
@@ -468,6 +469,74 @@ def test_没被拉黑的时候传force什么也不记(tmp_path, 装好):
                            payload={"slot": "site-kl-2", "force": True})
     assert code == 200
     assert get_json(s, "/api/bundle")["state"]["forced"] == []
+
+
+def test_响应说得出这一次到底顶开了黑名单没有(tmp_path, 装好):
+    """**评审复评第 3 轮 N4。** 留痕只在真顶开那一次才记(取舍不变),于是
+    「传了 force、200 OK、``forced`` 里什么也没多」这件事在调用方看来无从
+    分辨 —— 那正是挂账的 F8「静默降级」换了个位置。这个布尔把它变回看得见的。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2"})
+    request(s, "/api/bundle/rollback", method="POST", payload={"reason": "崩了"})
+
+    code, body, _h = request(s, "/api/bundle/apply", method="POST",
+                             payload={"slot": "site-kl-2", "force": True})
+    assert code == 200
+    答 = json.loads(body)
+    assert 答["overrode_denied"] is True                    # 真顶开了
+    assert [f["slot"] for f in 答["state"]["forced"]] == ["site-kl-2"]
+
+
+def test_没顶开任何东西的强推响应里说得清楚(tmp_path, 装好):
+    """同 N4 的另一半:``force`` 传了,但那一版本来就没被拉黑 ——
+    ``forced`` 里一个字不多,响应里这个布尔是 ``false``。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    code, body, _h = request(s, "/api/bundle/apply", method="POST",
+                             payload={"slot": "site-kl-2", "force": True})
+    assert code == 200
+    答 = json.loads(body)
+    assert 答["overrode_denied"] is False
+    assert 答["state"]["forced"] == []
+
+
+def test_寻常的apply这个布尔永远是false(tmp_path, 装好):
+    """不带 ``force`` 的 apply 走不到那扇门,所以它永远什么也没顶开。"""
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    code, body, _h = request(s, "/api/bundle/apply", method="POST",
+                             payload={"slot": "site-kl-2"})
+    assert code == 200
+    assert json.loads(body)["overrode_denied"] is False
+
+
+def test_landed里forced不是列表强推也不是500(tmp_path, 装好):
+    """**评审复评第 3 轮 N6 的端到端症状。**
+
+    ``记.setdefault("forced", []).append(...)`` 遇到非 list 抛
+    ``AttributeError``,而这条路由只接 ``BundleError`` —— 于是一份被人手改过
+    的 ``landed.json`` 让强推冒成一个 500。
+    """
+    root, _ctx, s = 装好
+    land(root, 打包(tmp_path, "b", 2))
+    request(s, "/api/bundle/apply", method="POST",
+            payload={"slot": "site-kl-2"})
+    request(s, "/api/bundle/rollback", method="POST", payload={"reason": "崩了"})
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记["forced"] = "上一版写坏了"
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                                      encoding="utf-8")
+
+    code, body, _h = request(s, "/api/bundle/apply", method="POST",
+                             payload={"slot": "site-kl-2", "force": True})
+    assert code == 200
+    答 = json.loads(body)
+    assert 答["overrode_denied"] is True
+    assert [f["slot"] for f in 答["state"]["forced"]] == ["site-kl-2"]
 
 
 def test_force是false跟不传一样(tmp_path, 装好):

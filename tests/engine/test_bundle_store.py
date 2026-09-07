@@ -797,22 +797,48 @@ def test_老盘开一次机就被归一化(tmp_path, root):
     assert (root / LANDED).stat().st_size < 大 // 3
 
 
-def test_归一化是幂等的(tmp_path, root):
-    """开十次机跟开一次机盘上得是同一份文件。"""
+def test_归一化是幂等的(tmp_path, root, monkeypatch):
+    """开十次机跟开一次机盘上得是同一份文件,**而且后面九次根本不写盘**。
+
+    **断"字节相同"是不够的**(评审复评第 3 轮 N7):``json.dump(sort_keys=True)``
+    本来就保证字节稳定,所以把 ``_归一化`` 里那道「逐项比、一样就 return」的
+    短路整段删掉,老版本的这条测试照样绿 —— 复评实跑过。真正要钉住的风险是
+    **每次开机重写一遍 489KB**:磨闪存,而且每一次开机都平白多开一个掉电窗口
+    (盘上那份 ``landed.json`` 里存着 ``denied`` 这个安全判据)。
+    所以这儿数的是 ``_写记`` 被调了几次。
+    """
     一 = 打包并落(tmp_path, root, 1)
     apply_bundle(root, 一)
     老盘(root, MAX_ROLLBACKS + 10)
 
-    guard_bundle(root)
+    写了几次: list[str] = []
+    真写 = bundle_mod._写记
+
+    def 记一笔(root_, 记):
+        写了几次.append("写")
+        真写(root_, 记)
+
+    monkeypatch.setattr(bundle_mod, "_写记", 记一笔)
+
+    assert guard_bundle(root) is BundleGuard.OK
+    assert len(写了几次) == 1                 # 第一次:老盘要收拾,写这一次
     第一次 = (root / LANDED).read_bytes()
+
     for _ in range(9):
         assert guard_bundle(root) is BundleGuard.OK
+    assert len(写了几次) == 1                 # **后面九次一次都没写**
+    assert bundle_mod._归一化(root) is False   # 它自己也说"没改"
     assert (root / LANDED).read_bytes() == 第一次
 
 
 def test_归一化断在改名之前下次开机照样修得回来(tmp_path, root, monkeypatch):
     """``_写记`` 是「先写临时文件再改名」。真断在改名之前,盘上留着的还是
     归一化**之前**那一份 —— 不是半份 —— 下次开机照原样再归一化一遍就是了。
+
+    **结论是 ``OK`` 而不是 ``BROKEN``**(评审复评第 3 轮 N1):这台机器盘上
+    根本没有半成品标记,链好好的,归一化那点家务活没干成不该改变这个结论。
+    上一轮这儿断的是 ``BROKEN`` —— 那正是把「家务活失败」当成「链坏了」上报,
+    而第 8 卷的回退判据听的就是这个。
     """
     一 = 打包并落(tmp_path, root, 1)
     apply_bundle(root, 一)
@@ -823,7 +849,8 @@ def test_归一化断在改名之前下次开机照样修得回来(tmp_path, roo
         raise OSError("断电")
 
     monkeypatch.setattr(bundle_mod.os, "replace", 断电)
-    assert guard_bundle(root) is BundleGuard.BROKEN     # 守卫自己没炸
+    assert guard_bundle(root) is BundleGuard.OK         # 守卫自己没炸
+    assert read_state(root).current == 一               # 链本来就是好的
     assert (root / LANDED).read_bytes() == 原样         # 盘上没有半份文件
     monkeypatch.undo()                                  # 电来了
 
@@ -831,6 +858,204 @@ def test_归一化断在改名之前下次开机照样修得回来(tmp_path, roo
     st = read_state(root)
     assert len(st.rollbacks) == MAX_ROLLBACKS
     assert set(退过的) <= set(st.denied)
+
+
+def test_归一化写盘失败也绝不许挡住修链(tmp_path, root, monkeypatch):
+    """**评审复评第 3 轮 N1。** 归一化是家务活,修链是安全网。
+
+    上一轮把 ``_归一化(root)`` 放成了 ``_guard_bundle`` 的第一句,而它**自己
+    会写盘**:ENOSPC、EIO、只读挂载、掉电正好落在 ``os.replace`` 上 —— 一抛,
+    整个 ``_guard_bundle`` 就抛出去,外面兜成 ``BROKEN``,**两条链一个字没修**。
+    而这台机器接下来会怎么样:链停在 ``current == previous`` 且
+    ``proven=False``,第 8 卷那条 ``崩了 and not proven and previous`` 随即成立,
+    自动退一次,**把盘上唯一那份好包拉黑**。F2 那条修复路径被家务活挡在了外面。
+
+    验收场景写的就是「回退演练 + 装到一半断电」,而盘快满的老盘正是最需要
+    修链的那一台 —— 所以这条必须红得起来。
+    """
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+    老盘(root, MAX_ROLLBACKS + 10)             # 而且这是一台老盘,归一化有活干
+    assert read_state(root).applying is not None
+
+    真替 = bundle_mod.os.replace
+    落到landed = []
+
+    def 盘快满了(src, dst):
+        """**只打断 ``landed.json`` 的第一次改名**,也就是归一化那一次。
+
+        后面修链自己那一次写盘照常 —— 要断言的是「归一化失败之后修链照跑、
+        而且返回值反映的是修链的结果」,不是「什么都写不了会怎样」。
+        两条符号链接的 ``os.replace``(``point_link``)不在这条闸里。
+        """
+        if str(dst).endswith(LANDED):
+            落到landed.append(str(dst))
+            if len(落到landed) == 1:
+                raise OSError(28, "No space left on device")
+        return 真替(src, dst)
+
+    monkeypatch.setattr(bundle_mod.os, "replace", 盘快满了)
+
+    结论 = guard_bundle(root)
+
+    # (b) 返回值反映的是**修链**的结果,不是归一化那次写盘失败
+    assert 结论 is BundleGuard.FINISHED
+    # (a) **链确实被修了** —— 这才是重点
+    st = read_state(root)
+    assert (st.current, st.previous) == (二, 一)
+    assert st.applying is None
+    # 归一化那一次是真失败了(不然这条测试自己就是假的):历史一条没截
+    assert len(st.rollbacks) == MAX_ROLLBACKS + 10
+
+    monkeypatch.undo()                        # 电来了 / 盘腾出来了
+    assert guard_bundle(root) is BundleGuard.OK
+    assert len(read_state(root).rollbacks) == MAX_ROLLBACKS   # 家务活补上了
+
+
+# ---- landed.json 里那几个键不是列表(评审复评第 3 轮 N2 / N6) --------------
+
+@pytest.mark.parametrize("键", ["denied", "rollbacks", "forced"])
+@pytest.mark.parametrize("坏值", [None, 7, "site-kl-1", {"a": 1}], ids=str)
+def test_这三个键不是列表守卫也不许抛(tmp_path, root, 键, 坏值):
+    """``TypeError`` 既不是 ``OSError`` 也不是 ``ValueError`` —— 它**直穿**
+    ``guard_bundle`` 那句「任何一条路都不抛」的承诺(评审复评第 3 轮 N2)。
+
+    上一轮在同一句话上已经翻过一次车(``UnicodeDecodeError``),这次换了个
+    异常类型和位置:``landed.json`` 里 ``denied``/``rollbacks``/``forced``
+    是 JSON ``null`` 或者一个数字,列表推导就抛。同一个文件一贯把
+    ``landed.json`` 当「外面的东西」(到处 ``isinstance(r, dict)`` 过滤、
+    槽名过 ``_SLOT_RE``),偏偏容器本身没过。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记[键] = 坏值
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+
+    assert read_state(root).current == 一      # 读状态本身不抛
+    assert guard_bundle(root) is BundleGuard.OK
+    assert read_state(root).current == 一      # 链一个字没动
+
+
+@pytest.mark.parametrize("坏值", [None, 7, "site-kl-9", {"a": 1}], ids=str)
+def test_forced不是列表强推也不该炸成AttributeError(tmp_path, root, 坏值):
+    """``记.setdefault("forced", []).append(...)`` 遇到非 list 抛的是
+    ``AttributeError``,``_bundle_apply`` 只接 ``BundleError``,于是冒成一个
+    500(评审复评第 3 轮 N6)。跟 N2 用同一个「取列表」的写法收掉。
+    """
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    二 = 打包并落(tmp_path, root, 2)
+    apply_bundle(root, 二)
+    rollback_bundle(root, at=后来, reason="崩了")
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记["forced"] = 坏值
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+
+    st = apply_bundle(root, 二, force=True, at=后来)
+    assert st.current == 二
+    assert [(f.at, f.slot) for f in st.forced] == [(后来, 二)]   # 留痕还在
+    assert 二 in st.denied                                       # 没被洗白
+
+
+@pytest.mark.parametrize("坏值", [None, 7, "site-kl-9", {"a": 1}], ids=str)
+def test_rollbacks不是列表回退也不该炸成AttributeError(tmp_path, root, 坏值):
+    """``退 = 记.setdefault("rollbacks", [])`` 是同一个洞的另一半(N6)。"""
+    一 = 打包并落(tmp_path, root, 1)
+    apply_bundle(root, 一)
+    二 = 打包并落(tmp_path, root, 2)
+    apply_bundle(root, 二)
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记["rollbacks"] = 坏值
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+
+    st = rollback_bundle(root, at=后来, reason="崩了")
+    assert (st.current, st.previous) == (一, 二)
+    assert [(r.frm, r.to) for r in st.rollbacks] == [(二, 一)]
+    assert 二 in st.denied                    # 拉黑事实照样记下来了
+
+
+# ---- 标记里的 proven_slot 坏了只丢字段(评审复评第 3 轮 N5) ----------------
+
+def test_标记里proven_slot是null不许赔掉整条修复标记(tmp_path, root, monkeypatch):
+    """``str(raw.get("proven_slot", ""))`` 把 JSON ``null`` 变成 ``"None"``,
+    一个过不了 ``_SLOT_RE`` 的假槽名 —— **整条标记就此作废**,断电留下的两条
+    链再也没人修(评审复评第 3 轮 N5)。
+
+    而 ``proven`` 从头到尾**没有被拼进过路径**(只在 ``read_state`` 里跟
+    ``current`` 比一次字符串),为它赔掉修复路径不划算。``to``/``src``/``prev``
+    会拼路径,那三个作废才是对的。跟 N1 同源:安全网不许被家务活赔掉。
+    """
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记["applying"]["proven_slot"] = None
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+
+    半 = read_state(root).applying
+    assert 半 is not None                     # 标记保住了
+    assert (半.to, 半.src, 半.proven) == (二, 一, "")
+
+    assert guard_bundle(root) is BundleGuard.FINISHED
+    st = read_state(root)
+    assert (st.current, st.previous) == (二, 一)      # 链真的修回来了
+    assert st.applying is None
+
+
+@pytest.mark.parametrize("坏证", ["../../etc", "site-kl-1\x00", "Site-KL-1", 7])
+def test_标记里proven_slot不合规也只丢这个字段(tmp_path, root, monkeypatch, 坏证):
+    """同 N5:坏的 ``proven_slot`` 只该丢掉它自己,不该把整条标记拖下水。"""
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记["applying"]["proven_slot"] = 坏证
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+
+    半 = read_state(root).applying
+    assert 半 is not None and 半.proven == ""
+    assert guard_bundle(root) is BundleGuard.FINISHED
+    assert read_state(root).current == 二
+
+
+def test_标记里的from是null也不该被读成None这个假槽名(tmp_path, root, monkeypatch):
+    """N5 的另一半:``from_wire`` 里那四个 ``str()``。
+
+    ``str(None)`` 是 ``"None"`` —— 一个**长得像槽名的假槽名**。「不是字符串」
+    的正确读法是「没有这一项」(空串,一路上都有人认),不是「有一项叫 None」
+    (谁都不认,只会在某道闸上把整件事作废)。这儿盯的是 ``from``:它一变成
+    ``"None"``,整条标记就作废,两条链停在断电那一刻没人管;当成空串的话,
+    守卫照 ``to`` 把链换完,局面回到能用的终态。
+    """
+    _一, 二 = 断电装二(tmp_path, root, monkeypatch)
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记["applying"]["from"] = None
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+
+    半 = read_state(root).applying
+    assert 半 is not None and (半.to, 半.src) == (二, "")
+
+    assert guard_bundle(root) is BundleGuard.FINISHED
+    st = read_state(root)
+    assert st.current == 二
+    assert st.applying is None
+
+
+def test_标记里的to坏了照旧作废整条(tmp_path, root, monkeypatch):
+    """N5 只松 ``proven`` 这一项。``to`` 会被 ``root / 半.to`` 拼进路径,
+    坏了必须作废整条 —— 这条守的是「松的那一项没有顺手松掉别的」。
+    """
+    一, 二 = 断电装二(tmp_path, root, monkeypatch)
+    记 = json.loads((root / LANDED).read_text(encoding="utf-8"))
+    记["applying"]["to"] = None
+    (root / LANDED).write_text(json.dumps(记, ensure_ascii=False),
+                               encoding="utf-8")
+
+    assert read_state(root).applying is None
+    assert guard_bundle(root) is BundleGuard.OK
+    assert read_state(root).current == 一      # 链一个字没动
 
 
 def test_撤销的时候那一版跑成过的事实要放回去(tmp_path, root, monkeypatch):

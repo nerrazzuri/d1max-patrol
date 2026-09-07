@@ -90,12 +90,21 @@ def test_任务包守卫也挂在每一次服务启动之前(服务单元):
     根本不开机 —— 挂成独立的 oneshot 单元的话,守卫在最需要它的那条路上
     永远不跑,这正是版本守卫当初挪过来的理由。
     """
-    assert BUNDLE_GUARD_LINE in 服务单元
     行 = [ln for ln in 服务单元.splitlines() if ln.startswith("ExecStartPre=")]
     assert len(行) == 2                      # 版本一条,任务包一条,不多不少
-    assert 服务单元.index(BUNDLE_GUARD_LINE) < 服务单元.index("\nExecStart=")
+    # **断言的对象必须是从 service 文件里读出来的那一行**,不是本文件里的
+    # 字面量常量(评审复评第 3 轮 N7:原来那句
+    # ``BUNDLE_GUARD_LINE.startswith("ExecStartPre=-")`` 比的是同一个文件里的
+    # 常量跟它自己的前缀 —— **恒真**,跟 service 文件毫无关系,而它偏偏长在
+    # 交付面守卫的测试文件里)。
+    # 挑行用的是**不含那个 '-' 的弱特征**,所以真把 '-' 从 service 里拿掉时,
+    # 红的是下面那一句,而不是先被 ``BUNDLE_GUARD_LINE in 服务单元`` 拦掉。
+    任务包行 = [ln for ln in 行 if ln.endswith("d1max_patrol.cli bundle guard")]
+    assert len(任务包行) == 1
     # 前缀的 '-' 跟版本守卫同一条理由:安全网不该比它防的问题更危险。
-    assert BUNDLE_GUARD_LINE.startswith("ExecStartPre=-")
+    assert 任务包行[0].startswith("ExecStartPre=-")
+    assert BUNDLE_GUARD_LINE in 服务单元
+    assert 服务单元.index(BUNDLE_GUARD_LINE) < 服务单元.index("\nExecStart=")
     # **根下那个跟版本无关的解释器**,不是 current 下的 —— 一个坏到解释器都
     # 装歪了的版本,不该把自己的救生索也带坏。
     assert "/opt/d1max/current/venv/bin/python -m d1max_patrol.cli" \
