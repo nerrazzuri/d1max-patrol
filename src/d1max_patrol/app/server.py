@@ -2184,7 +2184,18 @@ class AppServer:
         项就是"进程起来了",而在这套代码里"进程起来了"的可观测定义就是端口
         在听。先自检后监听的话,第一项永远假失败,于是每一次升级都会回滚。
 
-        返回 ``None`` 表示这次开机根本不在途 —— 这是绝大多数开机的情况。
+        返回 ``None`` 表示这次开机根本不在途 —— 这是绝大多数开机的情况;也可能
+        是这次自检整个没跑起来(比如线程桥没在跑),那种情况下宁可当没在途处
+        理,也不能让异常从这个方法冒出去把 ``start()``/``main()`` 带崩。
+
+        **跑判据、落盘、发事件三件事挤在同一次 ``ctx.bridge.call`` 里一起过桥。**
+        ``EventEmitter.emit()`` 按 ``bridge.py`` 里写的约定只能在事件循环那根
+        线程上碰——订阅者列表没上锁,而且有等待者的时候 ``put_nowait`` 的唤醒
+        路径走的是非线程安全的 ``loop.call_soon()``。落盘(``commit``/
+        ``clear_pending``/``rollback``)跟着一起挪过去,不是因为它本身非得在
+        循环线程上跑,而是不想把"跑判据""落盘""发事件"这三件事拆到两次过桥
+        里——拆开以后中间状态更难想清楚(比如落盘成功了但因为在另一根线程上
+        发事件时抛了异常,调用方却看不出落盘到底成没成)。
         """
         layout = self._layout()
         pending = read_pending(layout)
@@ -2192,47 +2203,64 @@ class AppServer:
             return None
 
         ctx = self._ctx
+
+        async def _run() -> dict[str, Any]:
+            try:
+                # **直接跑,不走 ``self._call``。** ``_call`` 的活是把业务异常翻成
+                # HTTP 状态码,而这儿根本没有一个请求在等回话——让它把
+                # ``HttpError`` 抛出来只会把开机流程搅乱。这里要的恰恰相反:任何
+                # 异常都只是"这一项没过"。
+                results: Sequence[CheckResult] = await run_postcheck(
+                    ctx.nav, ctx.device,
+                    want_sn=pending.sn or ctx.identity.sn,
+                    got_sn=ctx.identity.sn)
+            except Exception as exc:  # 自检自己炸了 ≠ 自检通过
+                # 一个坏到连自检都跑不完的版本,正是最该被退回去的那种。
+                log.exception("重启后自检自己炸了,按没过处理")
+                results = [CheckResult("process", False, f"自检崩了: {exc}")]
+                # 只有一项——``postcheck_verdict`` 见到项数不全就判回滚,正合适。
+
+            verdict = postcheck_verdict(results)
+            wire = {"verdict": verdict.value,
+                    "checks": _check_results_wire(results),
+                    "name": pending.to, "previous": pending.src}
+
+            try:
+                if verdict is Verdict.KEEP:
+                    commit(layout)
+                    self._hub.events.emit({"kind": "release.kept", **wire})
+                    log.info("重启后自检四项全过,坐实 %s", pending.to)
+                    return wire
+
+                if not pending.src:
+                    # 退无可退。**不回滚**——回滚到"没有"会把机器变成一块砖。
+                    # 清掉在途标记免得下次开机再回滚一次,然后把话喊出来。
+                    clear_pending(layout)
+                    self._hub.events.emit({"kind": "release.stuck", **wire})
+                    log.error("重启后自检没过,但没有上一版可退。留着 %s,请人来看",
+                             pending.to)
+                    return wire
+
+                back = rollback(layout, now_ms=int(time.time() * 1000))
+                self._hub.events.emit({"kind": "release.rolled_back",
+                                      "rolled_back_to": back, **wire})
+                log.error("重启后自检没过,退回 %s", back)
+                ctx.restart(restart_plan(has_payload=ctx.identity.payload.has))
+                return wire
+            except Exception:  # 落盘/发事件炸了也不能把过桥的调用方带崩
+                # **别把 pending 标记清掉去图好看。** 上面这一段(坐实/回滚/发事
+                # 件/重启)没走完,标记就该照原样留着——``boot_guard`` 会在下一
+                # 次开机按 ``pending.attempts`` 接着判,这正是两层回滚设计里的
+                # 第二层,专门给"第一层自己没走完"兜底用的。
+                log.exception("重启后自检坐实/回滚落盘或发事件时炸了,"
+                              "标记留着等下次开机 boot_guard 兜底")
+                return wire
+
         try:
-            # **直接过桥,不走 ``self._call``。** ``_call`` 的活是把业务异常翻成
-            # HTTP 状态码,而这儿根本没有一个请求在等回话 —— 让它把
-            # ``HttpError`` 抛进 ``start()`` 只会把开机流程搅乱。这里要的恰恰
-            # 相反:任何异常都只是"这一项没过"。
-            results: Sequence[CheckResult] = ctx.bridge.call(partial(
-                run_postcheck, ctx.nav, ctx.device,
-                want_sn=pending.sn or ctx.identity.sn,
-                got_sn=ctx.identity.sn), timeout_s=30.0)
-        except Exception as exc:  # 自检自己炸了 ≠ 自检通过
-            # 一个坏到连自检都跑不完的版本,正是最该被退回去的那种。
-            log.exception("重启后自检自己炸了,按没过处理")
-            results = [CheckResult("process", False, f"自检崩了: {exc}")]
-            # 只有一项 —— ``postcheck_verdict`` 见到项数不全就判回滚,正合适。
-
-        verdict = postcheck_verdict(results)
-        wire = {"verdict": verdict.value,
-                "checks": _check_results_wire(results),
-                "name": pending.to, "previous": pending.src}
-
-        if verdict is Verdict.KEEP:
-            commit(layout)
-            self._hub.events.emit({"kind": "release.kept", **wire})
-            log.info("重启后自检四项全过,坐实 %s", pending.to)
-            return wire
-
-        if not pending.src:
-            # 退无可退。**不回滚** —— 回滚到"没有"会把机器变成一块砖。
-            # 清掉在途标记免得下次开机再回滚一次,然后把话喊出来。
-            clear_pending(layout)
-            self._hub.events.emit({"kind": "release.stuck", **wire})
-            log.error("重启后自检没过,但没有上一版可退。留着 %s,请人来看",
-                     pending.to)
-            return wire
-
-        back = rollback(layout, now_ms=int(time.time() * 1000))
-        self._hub.events.emit({"kind": "release.rolled_back",
-                              "rolled_back_to": back, **wire})
-        log.error("重启后自检没过,退回 %s", back)
-        ctx.restart(restart_plan(has_payload=ctx.identity.payload.has))
-        return wire
+            return ctx.bridge.call(_run, timeout_s=30.0)
+        except Exception:  # 这一路任何异常都不能从这个方法冒出去
+            log.exception("重启后自检整个没跑起来(比如线程桥没在跑)")
+            return None
 
     def _selfcheck(self, _req: Request) -> Response:
         """随时重跑那四项。**只看不动** —— 不坐实也不回滚。
@@ -2607,8 +2635,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{what}没连上({type(exc).__name__}: {exc}),页面上会显示未连接")
     # 三个后端都试过了(连没连上不重要——后端没连上本身也是一种"这一版有
     # 问题"的信号,该走自检的判据决定留还是退)。**现在**才是重启后自检该
-    # 跑的时刻。
-    server._boot_postcheck()
+    # 跑的时刻。``_boot_postcheck()`` 内部已经把自己的异常都收住了,这里再
+    # 套一层纯粹是保险——跟上面三个 ``connect()`` 一个待遇,绝不能有任何
+    # 意外让它把 main() 带崩。
+    try:
+        server._boot_postcheck()
+    except Exception as exc:    # noqa: BLE001 - 重启后自检不能有机会终止 main()
+        print(f"重启后自检没跑起来({type(exc).__name__}: {exc}),留给下次开机兜底")
 
     stop = threading.Event()
     try:

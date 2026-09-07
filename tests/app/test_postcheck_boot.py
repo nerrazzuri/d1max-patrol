@@ -75,11 +75,19 @@ def test_桥不应答就退回上一版(装了两版):
     重启记录: list = []
     ctx.restart = 重启记录.append
     s = AppServer(ctx, port=0)
+    queue = s.hub.events.subscribe()                  # 订阅要在 start() 之前挂上
     s.start()
     try:
         assert current_name(layout) == "2026-09-06-a3f9c1"
         assert read_pending(layout) is None
         assert len(重启记录) == 1                     # 退回去之后还得再起一次
+        收到: list = []
+        while not queue.empty():
+            收到.append(queue.get_nowait())
+        rolled = [e for e in 收到 if e.get("kind") == "release.rolled_back"]
+        assert len(rolled) == 1
+        assert rolled[0]["rolled_back_to"] == "2026-09-06-a3f9c1"
+        assert rolled[0]["name"] == "2026-09-20-77b2de"
     finally:
         s.stop()
 
@@ -111,11 +119,19 @@ def test_没有上一版就不回滚而是留着并喊(bridge, tmp_path):
     重启记录: list = []
     ctx.restart = 重启记录.append
     s = AppServer(ctx, port=0)
+    queue = s.hub.events.subscribe()                  # 订阅要在 start() 之前挂上
     s.start()
     try:
         assert current_name(layout) == "2026-09-20-77b2de"   # 还留着
         assert read_pending(layout) is None                   # 但不再算在途
         assert 重启记录 == []                                  # 不重启,重启也没用
+        收到: list = []
+        while not queue.empty():
+            收到.append(queue.get_nowait())
+        stuck = [e for e in 收到 if e.get("kind") == "release.stuck"]
+        assert len(stuck) == 1
+        assert stuck[0]["name"] == "2026-09-20-77b2de"
+        assert stuck[0]["previous"] == ""                     # 装机那一次没有上一版
     finally:
         s.stop()
 
@@ -138,11 +154,15 @@ def test_自检自己炸了也当没过(装了两版, monkeypatch):
         s.stop()
 
 
-def test_坐实和回滚都发事件(装了两版):
+def test_坐实会发kept事件(装了两版):
     """``EventEmitter.subscribe()`` 回一个 ``asyncio.Queue``。订阅要在
     ``s.start()`` 之前挂上 —— 自检就在 ``start()`` 里跑完了,事后再订阅
     什么都收不到。事后同步 ``get_nowait()`` 把它排空即可(参见
     ``tests/engine/test_machine.py`` 里同样的用法)。
+
+    ``release.rolled_back``/``release.stuck`` 两种事件分别在
+    ``test_桥不应答就退回上一版``/``test_没有上一版就不回滚而是留着并喊``
+    里断言过了,这条只管 ``release.kept`` 这一种。
     """
     ctx, layout = 装了两版
     ctx.restart = lambda _plan: None
@@ -153,7 +173,43 @@ def test_坐实和回滚都发事件(装了两版):
         收到: list = []
         while not queue.empty():
             收到.append(queue.get_nowait())
-        assert any(e.get("kind") == "release.kept" for e in 收到)
+        kept = [e for e in 收到 if e.get("kind") == "release.kept"]
+        assert len(kept) == 1
+        assert kept[0]["name"] == "2026-09-20-77b2de"
+        assert kept[0]["previous"] == "2026-09-06-a3f9c1"
+    finally:
+        s.stop()
+
+
+def test_落盘或发事件炸了标记还留着(装了两版, monkeypatch):
+    """坐实/回滚那一段(``commit``/``clear_pending``/``rollback``/``emit``/
+    重启)挪进了同一次过桥的 ``_run()`` 协程里,外面套了一层
+    ``except Exception``。这条证明两件事:
+
+    1. 那一段炸了,``_boot_postcheck()`` 不把异常带出来——``start()`` 照样
+       起完,不会把整个进程带崩。
+    2. **炸了不许把 pending 标记清掉。** 这里没有主动调 ``clear_pending``
+       去"看起来干净",所以标记原样留着,等下一次开机让 ``boot_guard`` 按
+       ``attempts`` 接着判——这正是两层回滚设计里的第二层。
+    """
+    import d1max_patrol.app.server as srv
+
+    def 炸(_layout):
+        raise OSError("落盘的时候盘满了")
+
+    ctx, layout = 装了两版
+    ctx.restart = lambda _plan: None
+    monkeypatch.setattr(srv, "commit", 炸)
+    before = read_pending(layout)
+    assert before is not None
+    s = AppServer(ctx, port=0)
+    s.start()                                          # 不许抛出来
+    try:
+        after = read_pending(layout)
+        assert after is not None                        # 标记原样留着
+        assert after.to == before.to
+        assert after.src == before.src
+        assert current_name(layout) == "2026-09-20-77b2de"  # commit 没坐实成
     finally:
         s.stop()
 
