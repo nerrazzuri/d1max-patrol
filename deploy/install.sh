@@ -88,11 +88,26 @@ cat <<'提示'
 提示
 
 说 "7/7 切到刚装的这一版并起服务"
-echo "  在切换之前,请确认 /etc/d1max/env 里的 D1MAX_SN 已经填过"
-echo "  (没填的话自检的 identity 那一项可能会拿兜底的 MAC 值去比对,"
-echo "   把这一版判成回滚)。"
-sudo -u "$用户" env D1MAX_RELEASE_ROOT="$根" \
-  "$根/bin/python" -m d1max_patrol.cli release activate "$名字"
+# SN 没填不致命(不 exit),但要喊出来 —— 打到 stderr,不吞在一堆 echo 里。
+# 不加交互确认(read -p 之类):install.sh 必须能在无人值守的 provisioning
+# 脚本里跑,一个会阻塞等输入的装机脚本比它要防的问题更麻烦,跟"安全网
+# 不该比它防的问题更危险"是同一条理由。
+if ! grep -qE '^D1MAX_SN=.+' /etc/d1max/env 2>/dev/null; then
+  echo "警告: /etc/d1max/env 里的 D1MAX_SN 还没填。" >&2
+  echo "      不填的话自检的 identity 那一项会拿兜底的 MAC 值去比对," >&2
+  echo "      可能把这一版判成回滚。现场先填好再继续。" >&2
+fi
+# release activate 撞见"已经是在跑的这一版"会报错退出(这是对 HTTP 那条
+# 路正确的行为,不改它 —— 见 engine/release.py 的 activate())。但重跑这个
+# 脚本正是现场"填完 SN 让它生效"的路子 —— 跳过切换不能连 restart 也跳过,
+# **restart 必须无条件执行**。
+当前=$(basename "$(readlink -f "$根/current" 2>/dev/null || true)")
+if [[ "$当前" == "$名字" ]]; then
+  echo "  $名字 已经是在跑的那一版了,跳过切换。"
+else
+  sudo -u "$用户" env D1MAX_RELEASE_ROOT="$根" \
+    "$根/bin/python" -m d1max_patrol.cli release activate "$名字"
+fi
 systemctl restart d1max-patrol.service
 
 说 "装完了。看一眼:"

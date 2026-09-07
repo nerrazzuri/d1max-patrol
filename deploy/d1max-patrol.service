@@ -3,7 +3,14 @@ Description=D1 Max 巡检服务
 # 守卫先跑完。它决定了 current 指向哪一版 —— 我们得在它定好之后才启动。
 After=network-online.target d1max-bootguard.service
 Wants=network-online.target
-Requires=d1max-bootguard.service
+# **是 Wants=,不是 Requires=。** systemd.unit(5):跟顺序依赖(After=)同时
+# 存在时,Requires= 会在被依赖单元"没有成功激活"时连带不启动本单元。守卫
+# 是 Type=oneshot,只有以 SuccessExitStatus 里的码退出才算激活成功——而
+# "/opt/d1max/bin/python 缺失或损坏"这种真机会发生的坏法,恰恰是守卫本该
+# 兜底、而不是自己也 failed 的场景。用 Requires= 的话,守卫一 failed,
+# 主服务跟着起不来,机器连网页都开不出来,比"守卫没兜住、跑在旧版上"
+# 更糟——没有服务严格地更坏。顺序依然由 After= 单独保证,跟这一行无关。
+Wants=d1max-bootguard.service
 
 [Service]
 Type=simple
