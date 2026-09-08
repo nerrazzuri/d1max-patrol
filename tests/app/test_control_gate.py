@@ -13,11 +13,15 @@ PIN = "428913"
 T0 = 1_757_000_000_000
 走一拍 = {"fwd": 0.0, "lat": 0.0, "yaw": 0.0}
 
-#: ``CONTROLLED`` 那七条正则展开之后能匹配到的全部具体路径 —— 11 条。
+#: ``CONTROLLED`` 那几条正则展开之后能匹配到的全部具体路径。
 #: 逐条钉住"没租约就 409", 少一条闸就是少一道闸, 而漏掉不会有任何报错。
-要控制权的十一条 = (
+#: **名字里不带数字**:带数字的名字每加一条路由就要跟着改, 改漏了也没人
+#: 红 —— 数字本身就是下一次遗漏的种子。底下
+#: ``test_这张表跟CONTROLLED两边对得上`` 补的就是这张表跟正主的一致性。
+要控制权的每一条 = (
     "/api/teleop",
     "/api/teleop/heartbeat",
+    "/api/teleop/mode",
     "/api/mapping/record/start",
     "/api/mapping/record/stop",
     "/api/missions/m1/run",
@@ -127,8 +131,8 @@ def test_没租约也读得到状态控制权和留痕(有pin的服务):
         assert code == 200, 路径
 
 
-@pytest.mark.parametrize("路径", 要控制权的十一条)
-def test_十一条路径没租约一律进不去(有pin的服务, 路径):
+@pytest.mark.parametrize("路径", 要控制权的每一条)
+def test_每条路径没租约一律进不去(有pin的服务, 路径):
     """``CONTROLLED`` 展开后的每一条都得真的挂上闸。
 
     ``/api/missions/m1/run`` 指的是一个不存在的任务 —— 闸在路由匹配之前,
@@ -143,8 +147,8 @@ def test_十一条路径没租约一律进不去(有pin的服务, 路径):
     assert body["error"] == "先取控制权", (路径, body)
 
 
-@pytest.mark.parametrize("路径", 要控制权的十一条)
-def test_十一条路径取了租约就不再是409(有pin的服务, 路径):
+@pytest.mark.parametrize("路径", 要控制权的每一条)
+def test_每条路径取了租约就不再是409(有pin的服务, 路径):
     """取了控制权之后, 这道闸就不该再说话了。
 
     不断 200:``/api/missions/m1/run`` 该 404、``/api/run/pause`` 没在跑该
@@ -165,6 +169,21 @@ def test_十一条路径取了租约就不再是409(有pin的服务, 路径):
     code, body = 打(有pin的服务, 路径, tok, 走一拍)
     assert code != 500, (路径, code, body)
     assert "控制权" not in body.get("error", ""), (路径, body)
+
+
+def test_这张表跟CONTROLLED两边对得上():
+    """手抄的镜像必须跟正主对得上 —— **两个方向都要**。
+
+    只查一个方向都不够:只查"元组里每条都要租约",往 ``CONTROLLED`` 加一条
+    新路由照样静默漏掉(这一卷刚发生过);只查"每个模式都被命中",元组里混进
+    一条不该要租约的也照样绿。
+    """
+    from d1max_patrol.app.control import CONTROLLED, needs_lease
+    for 路径 in 要控制权的每一条:
+        assert needs_lease("POST", 路径), 路径
+    for 方法, 模式 in CONTROLLED:
+        assert any(方法 == "POST" and 模式.match(p) for p in 要控制权的每一条), \
+            模式.pattern
 
 
 def test_别人拿着时动不了而且说得出是谁(有pin的服务):

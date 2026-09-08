@@ -138,6 +138,15 @@ class LeaseState:
     expires_in_ms: int | None = None
     #: 离宽限期结束还有多少毫秒。**相对量。** 没人在挑战就是 ``None``。
     grace_in_ms: int | None = None
+    #: 这一次授予的序号(§7.8 S-3)。**每次真正换手才变,续租/幂等重取不变**
+    #: ——见 ``LeaseBook._grant`` 只在真正授予的那几条路径上调用。没有持有者
+    #: 时是 ``None``。用途是让 ``app/teleop.py`` 的档位跟着"这一次租约"走,
+    #: 而不是跟着 token 指纹永远挂着:同一个 ``ref`` 放手再回来,``grant_seq``
+    #: 已经变了,档就该跟着掉回现场,不该凭 ref 相等就以为是同一段作业在继续。
+    #: **故意不进 ``to_wire()``/``to_wire_stable()``**:它只在授予那一刻变,
+    #: 不是"每拍都变的键"那一类,但客户端也没有理由要看这个内部序号 —— 加
+    #: 上线只会多一个没人用、以后却要跟着维护的字段。
+    grant_seq: int | None = None
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -209,6 +218,10 @@ class LeaseBook:
         self._grace_ends: int | None = None
         self._audit: list[AuditRecord] = []
         self._seq = 0
+        #: 授予序号(§7.8 S-3):每次 ``_grant()`` 真正换手就 +1,当前持有者
+        #: 对应哪一次授予记在 ``_holder_grant`` 里。没有持有者时是 ``None``。
+        self._grant_seq = 0
+        self._holder_grant: int | None = None
 
     # ---------------------------------------------------------------- 读
 
@@ -427,6 +440,7 @@ class LeaseBook:
         self._expires = None
         self._challenger = None
         self._grace_ends = None
+        self._holder_grant = None
 
     def _grant(self, who: Holder, now_ms: int, kind: str,
                detail: str) -> None:
@@ -434,6 +448,8 @@ class LeaseBook:
         self._expires = now_ms + self._ttl
         self._challenger = None
         self._grace_ends = None
+        self._grant_seq += 1
+        self._holder_grant = self._grant_seq
         self._log(now_ms, kind, who, detail)
 
     def _log(self, at_ms: int, kind: str, who: Holder, detail: str) -> None:
@@ -468,6 +484,7 @@ class LeaseBook:
             heartbeat_ms=self._beat,
             expires_in_ms=_剩余毫秒(self._expires, now_ms),
             grace_in_ms=_剩余毫秒(self._grace_ends, now_ms),
+            grant_seq=self._holder_grant,
         )
 
     def _剩余秒(self, now_ms: int) -> int:

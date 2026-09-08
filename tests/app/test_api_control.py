@@ -9,6 +9,7 @@ import pytest
 
 from d1max_patrol.app.auth import proof_for
 from d1max_patrol.app.server import AppServer
+from d1max_patrol.app.teleop import REMOTE_CONFIRM
 from d1max_patrol.engine.lease import AUDIT_MAX, TAKEOVER_GRACE_MS
 from tests.app.conftest import get_err, get_json, make_ctx, request
 
@@ -280,7 +281,7 @@ def test_切远程要确认(有pin的服务):
     打(有pin的服务, "/api/control/acquire", tok)
     code, body = 打(有pin的服务, "/api/teleop/mode", tok, {"mode": "remote"})
     assert code == 409
-    assert "确认" in body["detail"]
+    assert body["detail"] == REMOTE_CONFIRM
 
 
 def test_确认之后切得过去(有pin的服务):
@@ -290,6 +291,7 @@ def test_确认之后切得过去(有pin的服务):
                     {"mode": "remote", "confirmed": True})
     assert code == 200
     assert body["mode"] == "remote"
+    assert body["confirm"] == REMOTE_CONFIRM
 
 
 def test_这次确认自动写进留痕(有pin的服务):
@@ -318,11 +320,66 @@ def test_切回现场不用确认(有pin的服务):
 
 
 def test_没控制权不许切档(有pin的服务):
-    """切档要留名,而没控制权的人没有名字可留。"""
+    """切档要留名,而没控制权的人没有名字可留。
+
+    **断的是闸,不是处理函数自己的防御。** 只查 ``code in (401, 403, 409)``
+    不够 —— 处理函数里也有一条"没有持有者就拒"的判断(B-1 修完之后),两条
+    判断凑巧都吐 409,单看状态码分不出今天挡人的到底是 ``CONTROLLED`` 那道
+    闸,还是处理函数自己兜底。这里断言的措辞只在闸的拒绝信息里出现
+    (``ControlDesk.require()``,見 ``control.py``),处理函数自己的 409
+    文案里没有 ``/api/control/acquire`` 这个子串 —— 挡错了地方这条测试才会
+    真的变红。
+    """
     tok = 解锁(有pin的服务, "张三")
-    code, _body = 打(有pin的服务, "/api/teleop/mode", tok,
-                     {"mode": "remote", "confirmed": True})
-    assert code in (401, 403, 409)
+    code, body = 打(有pin的服务, "/api/teleop/mode", tok,
+                    {"mode": "remote", "confirmed": True})
+    assert code == 409
+    assert body["error"] == "先取控制权"
+    assert "/api/control/acquire" in body["detail"]
+
+
+def test_甲放手乙拿走甲再拿回来也掉回现场档(有pin的服务):
+    """S-3:档挂在**这一次租约**上,不挂在 token 指纹(``ref``)上。
+
+    评审实测过的场景:甲切远程、留痕落下一条 ``mode_switched``,release;
+    乙 acquire 又 release;甲用**同一个 token**再 acquire —— 甲回来不算
+    "换人",但那是**新的一段作业**,不是接着上一段没完的那段。用 ref 相
+    等判"还是原来那个人在远程"会漏掉这一段:甲第二段整段是在远程档上开
+    的狗,档案里却一个字都没有(既没有第二次确认,也没有第二条
+    ``mode_switched``)。这条测试直接验证那个反面表现不会发生:同一个
+    ref 重新拿到租约之后,不确认就切不到远程 —— 说明档确实随着这一次授
+    予被重置回了现场。
+    """
+    甲 = 解锁(有pin的服务, "张三")
+    乙 = 解锁(有pin的服务, "李四")
+
+    打(有pin的服务, "/api/control/acquire", 甲)
+    code, body = 打(有pin的服务, "/api/teleop/mode", 甲,
+                    {"mode": "remote", "confirmed": True})
+    assert code == 200 and body["mode"] == "remote"
+    打(有pin的服务, "/api/control/release", 甲)
+
+    打(有pin的服务, "/api/control/acquire", 乙)
+    打(有pin的服务, "/api/control/release", 乙)
+
+    打(有pin的服务, "/api/control/acquire", 甲)
+    # 甲这一次拿到的是新一轮租约。如果档还认 ref、不认这一次授予,这里会
+    # 直接 200(因为 ``teleop.mode()`` 一直以为还是 remote,没什么可确认
+    # 的)——那正是评审探针实测出来的那个反面表现。
+    code, body = 打(有pin的服务, "/api/teleop/mode", 甲, {"mode": "remote"})
+    assert code == 409
+    assert body["detail"] == REMOTE_CONFIRM
+    留痕 = get_json(有pin的服务, "/api/control/audit",
+                    headers=auth(甲))["audit"]
+    assert sum(1 for r in 留痕 if r["kind"] == "mode_switched") == 1
+
+    # 补上这一次的确认,新的一段作业就该留下自己的一条痕,不是复用第一条。
+    code, body = 打(有pin的服务, "/api/teleop/mode", 甲,
+                    {"mode": "remote", "confirmed": True})
+    assert code == 200
+    留痕 = get_json(有pin的服务, "/api/control/audit",
+                    headers=auth(甲))["audit"]
+    assert sum(1 for r in 留痕 if r["kind"] == "mode_switched") == 2
 
 
 def test_切档这条路要租约():
@@ -338,6 +395,22 @@ def test_没设pin的部署上取控制权说得清楚(server):
                             payload={})
     assert code == 400
     assert "没设 PIN" in json.loads(body)["error"]
+
+
+def test_没设pin的部署上切档说得清楚(server):
+    """B-1:``require()`` 对没设 PIN 的部署直接放行(只听本机,没有"谁是谁"
+    这回事),``/api/teleop/mode`` 因此没经过闸就进了处理函数 —— 那里必须自
+    己拒绝而不是 ``assert`` 崩溃(§8.5:``python -O`` 下 assert 整条被删,
+    崩得比这条测试还彻底)。这条钉的是那条拒绝路径本身,跟
+    ``test_没控制权不许切档`` 钉闸不是同一件事:那条服务器设了 PIN、有身
+    份、没租约;这条压根没有身份可言。
+    """
+    code, body, _ = request(server, "/api/teleop/mode", method="POST",
+                            payload={"mode": "remote", "confirmed": True})
+    assert code == 409
+    body = json.loads(body)
+    assert body["error"] == "先取控制权"
+    assert "没设 PIN" in body["detail"]
 
 
 def test_没设pin的部署上看控制权还是能看(server):

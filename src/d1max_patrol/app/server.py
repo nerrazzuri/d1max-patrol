@@ -1405,19 +1405,38 @@ class AppServer:
         if name not in MODES:
             raise HttpError(400, "不认识的档",
                             f"只有 {'、'.join(MODES)},给的是 {name!r}")
-        who = self._control.book.state(now_ms=self._ctx.clock()).holder
-        assert who is not None      # 这条路由在 CONTROLLED 里,进不来就没租约
-        if name == "remote" and self._ctx.teleop.mode(who.ref) != "remote":
+        now = self._ctx.clock()
+        state = self._control.book.state(now_ms=now)
+        who = state.holder
+        # **没设 PIN 的部署上,``require()`` 对 ``sess is None`` 直接放行**
+        # (只听本机,没有"谁是谁"这个问题)——这条路由虽然在 ``CONTROLLED``
+        # 里,但那只保证过了闸,不保证有租约持有者。切档这件事的唯一产出就
+        # 是审计环里那条署名记录,没有身份就没法署名;正确做法是**拒绝**,
+        # 不是放行后悄悄记一条匿名留痕(也不能用 ``assert``——``python -O``
+        # 下会被整个删掉,那时候会在 ``who.ref`` 上炸成没人看得懂的
+        # ``AttributeError``,连"切回现场"这个安全方向都会被一起炸掉)。
+        if who is None:
+            raise HttpError(
+                409, "先取控制权",
+                "这台狗没设 PIN,只听本机,没有'谁是谁'这回事;"
+                "切远程档要留名,留不了名就不许切。")
+        # 档挂在**这一次授予**上,不挂在 token 指纹上(§7.8 S-3):同一个
+        # ``ref`` 放手之后被别人拿走又要回来,那已经是新的一段作业,该重新
+        # 确认一次、重新留一条痕 —— 不能因为 ref 相等就以为还在接着上一段。
+        # 组合出来的身份只喂给 ``Teleop``(它天生就是不透明字符串),留痕的
+        # ``who=`` 仍然传干净的 ``Holder``,内部序号绝不混进审计记录。
+        holder_grant = f"{who.ref}#{state.grant_seq}"
+        if name == "remote" and self._ctx.teleop.mode(holder_grant) != "remote":
             # **没确认就切是 409 不是 400。** 发的东西完全正确,缺的是一次
             # 确认 —— 分错了,手机上只能显示一句「请求格式错误」,人不知道
             # 该点什么。
             if body.get("confirmed") is not True:
                 raise HttpError(409, "切远程遥控要先确认一次", REMOTE_CONFIRM)
             self._control.book.note(
-                at_ms=self._ctx.clock(), kind="mode_switched", who=who,
+                at_ms=now, kind="mode_switched", who=who,
                 detail="切到远程遥控")
         # 切回现场不用确认:往安全的方向走不该设卡,多设一道人就懒得切回来。
-        self._ctx.teleop.set_mode(name, who.ref)
+        self._ctx.teleop.set_mode(name, holder_grant)
         return json_response({"mode": name, "confirm": REMOTE_CONFIRM})
 
     def _estop(self, _req: Request) -> Response:
