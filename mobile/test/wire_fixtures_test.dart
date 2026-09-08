@@ -55,6 +55,22 @@ void main() {
     }
   });
 
+  test('有一路真在出画面时：anyLive 为真，since_frame_s 是个数', () {
+    // `video_health` 那一份两台相机都是 false、`since_frame_s` 都是 null，
+    // 于是「有画面」这条路和 `since_frame_s` 的类型在这头从来没被夹具驱动
+    // 过。Task 11 的遥控屏拿 `anyLive` 决定摇杆灰不灰 —— 它恒为假的话，
+    // 那块判断在真机之前不会有人发现。
+    final live = _load('video_health_live');
+    final cams = live['cameras'] as Map<String, dynamic>;
+    final front = cams['front'] as Map<String, dynamic>;
+    expect(front['online'], isTrue);
+    expect(front['since_frame_s'], isA<num>(),
+        reason: 'null 不带类型信息，这头就学不到它是个数');
+    expect((cams['back'] as Map<String, dynamic>)['since_frame_s'], isNull,
+        reason: '没起过泵的相机没有「多久之前」可言，null 才是如实描述');
+    expect(VideoHealth.fromJson(live).anyLive, isTrue);
+  });
+
   test('留痕：切远程那条认得出来', () {
     final audit = _load('control_audit')['audit'] as List<dynamic>;
     expect(audit.map((e) => (e as Map<String, dynamic>)['kind']),

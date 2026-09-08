@@ -169,6 +169,13 @@ class PatrolClient {
   }
 
   /// 发请求、等响应头、读完整个响应体——三步算一个超时窗口（B-2）。
+  ///
+  /// **只适用于一次性的 JSON 响应。** `/api/events`（SSE）和
+  /// `/api/video/<name>`（MJPEG）是**永不结束**的响应：这里最后那句
+  /// `.join()` 要等 `onDone`，而它永远不来，于是外面那个 `.timeout` 会把
+  /// 一条正常工作的长连接整体掐掉，还报成「狗没回话」——文案指向的是狗，
+  /// 真正的原因却是拿错了方法。这两条路自己开 `HttpClient` 增量读
+  /// （MJPEG 的做法见 `ui/widget/live_video.dart` 的 `mjpegFrames`）。
   Future<({int status, String raw})> _sendAndRead(
       String method, String path, Object? body,
       {required bool auth}) async {

@@ -1,0 +1,420 @@
+/// 视频屏与在线判定。
+///
+/// **在线判定走 `/api/video/health` 轮询，不看图片加载状态。**
+/// 加载状态的回调只在第一帧上响；MJPEG 是一条不结束的响应，第一帧到了之后
+/// 它就再也不说话了 —— 画面冻住的时候它跟一切正常长得一模一样，而冻住的
+/// 画面正是 §5.9 要防的头号情况。
+///
+/// **也不用 `Image.network` 拉 MJPEG。** 它读的是**整个**响应体
+/// (`painting/_network_image_io.dart` 的 `_loadAsync` 先
+/// `consolidateHttpClientResponseBytes(response)` 拿完整字节再解一次，而
+/// `foundation/consolidate_response.dart` 里那个 completer 只在 `onDone`
+/// 里 complete)。MJPEG 的 `onDone` 永远不来，一帧都解不出来；就算连接被
+/// 掐，攒到的也是 multipart 信封而不是裸 JPEG。所以这一屏自己解流。
+///
+/// **测试起的是真的 `HttpServer`,不是 mock。** 这个任务要证的就是「重连时
+/// 真的又发了一次 GET」「token 真的在请求头里」—— 把 HTTP 那头 mock 掉，
+/// 恰好把要证的那件事一起 mock 掉了。
+///
+/// **标识符全是 ASCII**：这台机器上的 Dart SDK 不接受非 ASCII 标识符，
+/// 中文只留在注释、docstring 和字符串字面量里。
+library;
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:d1max_patrol/net/patrol_client.dart';
+import 'package:d1max_patrol/net/wire.dart';
+import 'package:d1max_patrol/ui/widget/live_video.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+/// 一张真的 2x2 JPEG。
+///
+/// **不能拿几个字节冒充。** `Image.memory` 真的会去解码，解不开的时候
+/// 解码器抛出来的错会当成测试失败报出来 —— 那种红指向的是这份假数据，
+/// 不是被测代码。
+final Uint8List _jpeg = base64Decode(
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDACgcHiMeGSgjISMtKygwPGRBPDc3PHtYXUlkkYCZlo'
+    '+AjIqgtObDoKrarYqMyP/L2u71////m8H////6/+b9//j/2wBDASstLTw1PHZBQXb4pYyl+Pj4'
+    '+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj/wAARCAACAA'
+    'IDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIE'
+    'AwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJi'
+    'coKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWW'
+    'l5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09f'
+    'b3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQA'
+    'AQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKj'
+    'U2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJma'
+    'oqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9'
+    'oADAMBAAIRAxEAPwChRRRWhB//2Q==');
+
+/// 假狗发的 boundary。**故意不是狗那头现在用的那个**(`server.py` 的
+/// `d1maxframe`)：写死一个常量的实现在这条 boundary 上必须切不出帧来。
+const String _boundary = 'zz9-Boundary_x';
+
+/// 把一帧包成一段 multipart，跟 `server.py` 的 `_multipart` 逐字对应。
+List<int> _part(String boundary, List<int> jpg) => <int>[
+      ...utf8.encode('--$boundary\r\nContent-Type: image/jpeg\r\n'
+          'Content-Length: ${jpg.length}\r\n\r\n'),
+      ...jpg,
+      ...utf8.encode('\r\n'),
+    ];
+
+/// 一台只会发 MJPEG 的假狗。
+class FakeVideoDog {
+  FakeVideoDog(
+      {this.boundary = _boundary, this.frames = 3, this.closes = false});
+
+  /// 发完那几帧就把响应关掉。
+  ///
+  /// 模拟的是"我们这一头的连接断了，狗那头其实好好的" —— 健康轮询看不见
+  /// 这件事，所以只有 widget 自己接得回来。
+  final bool closes;
+
+  final String boundary;
+
+  /// 一条连接上发几帧就不发了。**发完不 close** —— MJPEG 是一条永不结束的
+  /// 响应，这里一 close 就把被测代码最该扛的那件事测没了。
+  final int frames;
+
+  late HttpServer _s;
+
+  /// 收到过几次 GET。「掉线再回来要重新拉流」盯的就是这个数。
+  int gets = 0;
+
+  final List<String?> auths = <String?>[];
+  final List<String> queries = <String>[];
+
+  String get baseUrl => 'http://127.0.0.1:${_s.port}';
+
+  Future<void> start() async {
+    _s = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    _s.listen((HttpRequest req) async {
+      gets++;
+      auths.add(req.headers.value(HttpHeaders.authorizationHeader));
+      queries.add(req.uri.query);
+      final HttpResponse r = req.response;
+      r.bufferOutput = false;
+      r.headers.set(HttpHeaders.contentTypeHeader,
+          'multipart/x-mixed-replace; boundary=$boundary');
+      try {
+        for (int i = 0; i < frames; i++) {
+          r.add(_part(boundary, _jpeg));
+          await r.flush();
+        }
+        if (closes) {
+          await r.close();
+        }
+      } catch (_) {
+        // 客户端把连接掐了。现场就是这样，不是错。
+      }
+    });
+  }
+
+  Future<void> stop() => _s.close(force: true);
+}
+
+/// 只记调用次数的假客户端。
+///
+/// Dart 每个类都自带一个隐式接口，所以 `implements PatrolClient` 就够了，
+/// 不用为这个测试单独抽一个抽象类。
+class CountingClient implements PatrolClient {
+  int calls = 0;
+
+  /// 真到设成 true 那一刻起，`get` 就抛 —— 用来测「问不到狗」那一支。
+  bool broken = false;
+
+  @override
+  Future<Map<String, dynamic>> get(String path) async {
+    calls++;
+    if (broken) {
+      throw const PatrolError(0, '连不上狗', '热点掉了');
+    }
+    return <String, dynamic>{
+      'cameras': <String, dynamic>{
+        'front': <String, dynamic>{'online': true, 'viewers': 1},
+      },
+    };
+  }
+
+  @override
+  String get baseUrl => 'http://x';
+
+  @override
+  Duration get timeout => const Duration(seconds: 10);
+
+  @override
+  String? get token => null;
+
+  @override
+  void close() {}
+
+  @override
+  Future<Map<String, dynamic>> post(String path, [Object? body]) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<Session> unlock(String pin, {required String operator}) async =>
+      throw UnimplementedError();
+}
+
+Widget _wrap(Widget w) => MaterialApp(home: Scaffold(body: w));
+
+/// 一边推真时钟一边 pump，直到条件成立。
+///
+/// widget 测试跑在假时钟上，真的网络 I/O 只有在 `runAsync` 里才推得动；而
+/// `runAsync` 里又不许 pump。所以只能这样交替着来。**不是固定 sleep**
+/// (§8.5 第 2 条)：条件一成立立刻出去，超时了就报清楚在等什么。
+Future<void> _pumpUntil(WidgetTester t, bool Function() ok, String why,
+    {Duration step = const Duration(milliseconds: 200)}) async {
+  final DateTime deadline = DateTime.now().add(const Duration(seconds: 10));
+  while (!ok()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('等了 10 秒还没等到：$why');
+    }
+    await t.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 5)));
+    // 假时钟也要跟着走:重连那个定时器挂在它上面，`pump()` 不带时长的话
+    // 它永远不到点。
+    await t.pump(step);
+  }
+}
+
+/// 真时钟上等条件成立。给不带 widget 的那几条用。
+Future<void> _until(bool Function() ok, String why) async {
+  final DateTime deadline = DateTime.now().add(const Duration(seconds: 10));
+  while (!ok()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('等了 10 秒还没等到：$why');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+}
+
+/// 收摊：先把 widget 拆了(连接跟着 `dispose` 一起关)，再收假狗。
+///
+/// **不许 `await` `close()` / `cancel()`。** 在 widget 测试的假时钟上等这两个
+/// future，测试体跑完之后整条测试再也回不来 —— 不报错、不超时，卡到 CI 把
+/// 它杀掉为止(这台机器上复现过，`testWidgets` 里 `await sub.cancel()` 就够)。
+Future<void> _teardown(
+    WidgetTester t, StreamController<VideoHealth> ctl, FakeVideoDog? dog) async {
+  await t.pumpWidget(const SizedBox());
+  unawaited(ctl.close());
+  await t.pump();
+  if (dog != null) {
+    await t.runAsync(dog.stop);
+  }
+}
+
+void main() {
+  HttpOverrides? saved;
+  bool savedTaken = false;
+
+  setUp(() {
+    // `flutter_test` 的绑定会把 `HttpOverrides.global` 换成一个所有请求都
+    // 回 400 的假件(`flutter_test/lib/src/_binding_io.dart` 的
+    // `setupHttpOverrides`)。这个文件要证的正是「真的发了一次 GET」，所以
+    // 得把它摘掉，跑完再装回去。
+    // `global` 只有 setter，读回来要走 `current`。
+    if (!savedTaken) {
+      saved = HttpOverrides.current;
+      savedTaken = true;
+    }
+    HttpOverrides.global = null;
+  });
+
+  tearDown(() {
+    HttpOverrides.global = saved;
+  });
+
+  group('分帧器', () {
+    test('boundary 从响应头里解出来，手工拼的流切得对', () {
+      // 喂的 boundary 跟狗那头现在用的那个不一样 —— 写死常量的实现在这里
+      // 一帧都切不出来。
+      final MjpegParser p = MjpegParser.fromContentType(
+          'multipart/x-mixed-replace; boundary=$_boundary');
+      final List<int> wire = <int>[
+        ..._part(_boundary, <int>[1, 2, 3]),
+        ..._part(_boundary, <int>[4, 5]),
+        ..._part(_boundary, <int>[6, 7, 8, 9]),
+        ...utf8.encode('--$_boundary'), // 下一段的头还没到
+      ];
+      final List<Uint8List> got = p.add(wire);
+      expect(got.length, 3);
+      expect(got[0], <int>[1, 2, 3]);
+      expect(got[1], <int>[4, 5]);
+      expect(got[2], <int>[6, 7, 8, 9]);
+    });
+
+    test('边界被切在两个块中间也切得对', () {
+      // **TCP 不保证一帧一个包。** 这是这类分帧器最常见的 bug：按块各切各的
+      // 就会把跨块的那个边界漏掉，而现场那条热点上跨块是常态。
+      final MjpegParser p = MjpegParser.fromContentType(
+          'multipart/x-mixed-replace;boundary="$_boundary"');
+      final List<int> wire = <int>[
+        ..._part(_boundary, <int>[10, 11, 12, 13, 14]),
+        ..._part(_boundary, <int>[20, 21]),
+        ..._part(_boundary, <int>[30]),
+        ...utf8.encode('--$_boundary'),
+      ];
+      final List<Uint8List> got = <Uint8List>[];
+      // 3 个字节一块，块边界跟帧边界完全错开。
+      for (int i = 0; i < wire.length; i += 3) {
+        got.addAll(p.add(wire.sublist(
+            i, i + 3 > wire.length ? wire.length : i + 3)));
+      }
+      expect(got.length, 3);
+      expect(got[0], <int>[10, 11, 12, 13, 14]);
+      expect(got[1], <int>[20, 21]);
+      expect(got[2], <int>[30]);
+    });
+
+    test('响应头里没有 boundary 就明说，不是默默给张黑图', () {
+      expect(() => MjpegParser.fromContentType('image/jpeg'),
+          throwsA(isA<PatrolError>()));
+    });
+  });
+
+  test('拉流：token 走请求头，不进查询串', () async {
+    // token 进了 URL 就会进日志、进代理记录。请求是我们自己发的，设得了头。
+    final FakeVideoDog dog = FakeVideoDog();
+    await dog.start();
+    final HttpClient io = HttpClient();
+    final List<Uint8List> frames = <Uint8List>[];
+    Object? blew;
+    final StreamSubscription<Uint8List> sub = mjpegFrames(
+            Uri.parse('${dog.baseUrl}/api/video/front'),
+            io: io,
+            token: 'T0KEN')
+        .listen(frames.add, onError: (Object e) => blew = e);
+
+    await _until(() => frames.isNotEmpty || blew != null, '第一帧');
+    expect(blew, isNull);
+    expect(frames.first, _jpeg, reason: '解出来的得是裸 JPEG，不是 multipart 信封');
+    expect(dog.auths.single, 'Bearer T0KEN');
+    expect(dog.queries.single, isEmpty);
+
+    // **先掐连接、再取消订阅。** 反过来 `cancel()` 会挂住 —— 它要等这条
+    // 响应收完，而 MJPEG 永远收不完。
+    io.close(force: true);
+    await sub.cancel();
+    await dog.stop();
+  });
+
+  testWidgets('在线时画出画面', (WidgetTester t) async {
+    final FakeVideoDog dog = FakeVideoDog();
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    await _pumpUntil(
+        t, () => find.byType(Image).evaluate().isNotEmpty, '画面出来');
+
+    expect(find.byType(Image), findsOneWidget);
+    // 画的是自己解出来的那一帧，不是 `Image.network` 去拉的。
+    expect(t.widget<Image>(find.byType(Image)).image, isA<MemoryImage>());
+
+    await _teardown(t, ctl, dog);
+  });
+
+  testWidgets('不在线时说人话，不是转圈', (WidgetTester t) async {
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: 'http://127.0.0.1:9', camera: 'front', health: ctl.stream)));
+
+    ctl.add(const VideoHealth(<String, bool>{'front': false}));
+    await t.pump();
+
+    expect(find.textContaining('没有画面'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing,
+        reason: '一直转圈的圈跟「连不上」长得一样，人分不出该等还是该走过去看');
+
+    await _teardown(t, ctl, null);
+  });
+
+  testWidgets('掉线再回来要重新拉流', (WidgetTester t) async {
+    /// **这一条是这个 widget 唯一的技术难点。**
+    ///
+    /// MJPEG 那条连接断了之后不会自己回来。连接在我们自己手里，所以恢复
+    /// 就是**关掉旧的、再发一次 GET** —— 盯的是假狗那头收到的 GET 次数，
+    /// 不是界面上换没换一个 key。
+    final FakeVideoDog dog = FakeVideoDog();
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    await _pumpUntil(
+        t, () => find.byType(Image).evaluate().isNotEmpty, '第一条流的画面');
+    expect(dog.gets, 1);
+
+    ctl.add(const VideoHealth(<String, bool>{'front': false}));
+    // **两次 pump。** 第一次把流上那条事件派下去(`setState` 到此为止只是把
+    // 这一帧标脏)，重建要等下一帧才落地。只 pump 一次的话断言看到的还是
+    // 上一帧的画面 —— 这台机器上实测过。
+    await t.pump();
+    await t.pump();
+    expect(find.byType(Image), findsNothing,
+        reason: '掉线了还挂着最后一帧，人会以为看到的是此刻');
+
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    await _pumpUntil(t, () => dog.gets >= 2, '第二次 GET');
+    expect(dog.gets, 2);
+    await _pumpUntil(
+        t, () => find.byType(Image).evaluate().isNotEmpty, '重连后的画面');
+
+    await _teardown(t, ctl, dog);
+  });
+
+  testWidgets('流自己断了、健康还说在线，也要自己把画面接回来', (WidgetTester t) async {
+    // **断的是我们这一头。** 狗还在线，健康轮询问不出毛病，`_onHealth` 也
+    // 就不会翻面 —— 没有人会来重开这条流。不自己接的话，屏幕停在最后那一
+    // 帧上不动，人以为看到的是此刻(§5.9 的头号情况)。
+    final FakeVideoDog dog = FakeVideoDog(closes: true);
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+
+    // 只喂这一次「在线」。后面那次 GET 不是谁通知出来的。
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    await _pumpUntil(t, () => dog.gets >= 2, '流断掉之后自己发的第二次 GET');
+
+    expect(dog.gets, greaterThanOrEqualTo(2));
+    await _teardown(t, ctl, dog);
+  });
+
+  test('轮询器按周期问，停了就不再问', () async {
+    final CountingClient c = CountingClient();
+    final VideoHealthPoller p = VideoHealthPoller(
+        client: c, period: const Duration(milliseconds: 10));
+    await p.stream.first;
+    p.stop();
+    final int atStop = c.calls;
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(c.calls, atStop,
+        reason: '人切走了还在问，就是在白耗电和白占热点带宽');
+  });
+
+  test('轮询问不到狗时发全 false 的那一份，不许把流关掉', () async {
+    // 问不到狗等于看不见，看不见就该变灰。**把流关掉的话摇杆会停在最后一个
+    // 状态上，而那个状态很可能是「亮着」。**
+    final CountingClient c = CountingClient()..broken = true;
+    final VideoHealthPoller p = VideoHealthPoller(
+        client: c, period: const Duration(milliseconds: 10));
+
+    expect((await p.stream.first).anyLive, isFalse);
+
+    final Future<VideoHealth> next = p.stream.first;
+    c.broken = false;
+    expect((await next).anyLive, isTrue,
+        reason: '出一次错就把流关掉的话，狗回来了也没人知道');
+
+    p.stop();
+  });
+}

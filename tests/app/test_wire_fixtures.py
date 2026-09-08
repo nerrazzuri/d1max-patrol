@@ -37,6 +37,7 @@ from tests.app.conftest import get_json, status
 # (F811)。两边都是这个跨模块夹具写法本身带来的,不是真的死代码,所以
 # 都挂 noqa,不改写法绕开它。
 from tests.app.test_api_control import auth, 墙钟, 打, 有pin的服务, 解锁  # noqa: F401
+from tests.app.test_video import fake_ffmpeg_freezes  # noqa: F401
 
 夹具目录 = Path(__file__).resolve().parents[2] / "mobile" / "test" / "fixtures"
 
@@ -196,6 +197,40 @@ def test_夹具_视频健康(server, ctx):
     """
     ctx.video = {name: CameraFeed(f"rtsp://x:8554/{name}") for name in CAMERAS}
     对("video_health", get_json(server, "/api/video/health"))
+
+
+def test_夹具_视频健康_有一路真的在出画面(server, ctx, fake_ffmpeg_freezes):  # noqa: F811
+    """**``video_health`` 那一份从来没把 ``online`` 驱动成 ``true``。**
+
+    两台相机都是 ``online:false``、``since_frame_s`` 都是 ``null``,于是
+    Dart 那头有两件事学不到:``VideoHealth.anyLive`` 为真长什么样(Task 11
+    的遥控屏拿它决定摇杆灰不灰),以及 ``since_frame_s`` 是个什么类型 ——
+    ``null`` 不带类型信息。这一份补上:``front`` 泵过一帧,``back`` 照旧
+    没起泵。
+
+    用的是"吐一帧就冻住"的假件加注进去的钟(跟 ``test_video`` 里那条
+    ``画面冻住`` 同一套):真的走一遍 ``video.py`` 的 ``health()``,又不用
+    sleep(§8.5 第 2 条)。钟往前拨 0.12 秒是为了让 ``since_frame_s`` 落成
+    一个**真的数**;它本来就在 ``易变的键`` 里,签进文件的值是那张表里的
+    定值,不随机器快慢变。
+    """
+    now = [1000.0]
+    front = CameraFeed("rtsp://x:8554/front", ffmpeg=fake_ffmpeg_freezes,
+                       clock=lambda: now[0], stale_s=2.0, start_timeout_s=5.0)
+    帧流 = front.stream()
+    try:
+        next(帧流)
+        now[0] += 0.12
+        ctx.video = {name: CameraFeed(f"rtsp://x:8554/{name}")
+                     for name in CAMERAS}
+        ctx.video["front"] = front
+        份 = get_json(server, "/api/video/health")
+        assert 份["cameras"]["front"]["online"] is True
+        assert isinstance(份["cameras"]["front"]["since_frame_s"], float)
+        对("video_health_live", 份)
+    finally:
+        帧流.close()
+        front.close()
 
 
 def test_夹具_控制权留痕(有pin的服务):  # noqa: F811
