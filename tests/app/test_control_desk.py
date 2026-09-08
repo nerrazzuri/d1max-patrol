@@ -182,9 +182,21 @@ def test_快照数得出几个人连着():
 def test_快照里没有每拍都变的量():
     """``_StateHub`` 靠"跟上一份一样就不发"保持安静。放一个每拍都变的数
     进去, 这条 SSE 会每半秒响一次 —— 在热点上那是实打实的带宽。
+
+    **持有者和挑战者都要真的造出来**, 不然 ``expires_in_ms``/
+    ``grace_in_ms`` 都是 ``None``, 两次快照天生一样, 这条测试就白测了
+    (修复轮 2 N1: 上一轮这条测试只 ``unlock`` 没 ``acquire``, 没能发现
+    这两个相对量漏进了 ``snapshot()``)。
     """
     g, desk, _单调, 墙 = 起一台()
-    g.unlock(PIN, "10.0.0.1", operator="张三")
+    tok = g.unlock(PIN, "10.0.0.1", operator="张三")
+    sess = g.session_of(tok)
+    assert sess is not None
+    desk.book.acquire(sess.ref, sess.operator, now_ms=墙.t)
+    tok2 = g.unlock(PIN, "10.0.0.2", operator="李四")
+    sess2 = g.session_of(tok2)
+    assert sess2 is not None
+    desk.book.ask_takeover(sess2.ref, sess2.operator, now_ms=墙.t)
     a = desk.snapshot(now_ms=墙.t)
     墙.t += 500
     assert desk.snapshot(now_ms=墙.t) == a

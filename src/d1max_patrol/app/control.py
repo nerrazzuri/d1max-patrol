@@ -125,8 +125,16 @@ class ControlDesk:
         SSE 就会每半秒响一次 —— 在热点上那是实打实的带宽, 而且会把真正的状态
         变化淹掉。会话明细去 ``GET /api/sessions`` 拿。
 
+        **这就是为什么这里用 ``to_wire_stable()`` 不用 ``to_wire()``。**
+        ``LeaseState.expires_in_ms``/``grace_in_ms`` 是给轮询接口做倒计时用
+        的相对量(狗上没有 NTP, 见 ``engine/lease.py``), 握着控制权的时候
+        它们每拍都变 —— 混进这条常连的 SSE 就正犯了上面那句话说的错(修复轮
+        2 N1)。``GET /api/control`` 及其余六条控制权路由(``server.py`` 的
+        ``_control_wire``)是轮询, 那边继续用 ``to_wire()``, 相对量正是要
+        送到手机上的东西, 不受这里影响。
+
         ``expires_ms`` 会跟着心跳每 10 秒变一次, 那是有意的: 第 8 卷要靠它算
-        "还剩多久到期"。10 秒一帧不吵。
+        "还剩多久到期"。10 秒一帧不吵, ``to_wire_stable()`` 不去掉它。
 
         ``remote_sessions``/``max_sessions`` 这两个数的定义在 :meth:`seats`,
         不在这儿重复。
@@ -141,7 +149,7 @@ class ControlDesk:
         """
         state = self.book.state(now_ms=now_ms)
         sessions, max_sessions = self.seats()
-        return {**state.to_wire(),
+        return {**state.to_wire_stable(),
                 "remote_sessions": sessions,
                 "max_sessions": max_sessions}
 

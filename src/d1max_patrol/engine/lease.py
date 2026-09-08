@@ -49,10 +49,15 @@ AUDIT_KINDS: frozenset[str] = frozenset({
     "takeover_asked", "taken_over", "forced",
 })
 
+#: ``to_wire()`` 里**每拍都会变**的那些键。``/api/state`` 那条 SSE 靠"跟上一份
+#: 一样就不发"保持安静,这些键一旦进去,握着控制权的时候它就每半秒响一次。
+#: 将来再加相对量,**必须同时加进这个集合** —— 下面那条测试会盯着。
+每拍都变的键: frozenset[str] = frozenset({"expires_in_ms", "grace_in_ms"})
+
 __all__ = (
     "AUDIT_KINDS", "AUDIT_MAX", "LEASE_HEARTBEAT_MS", "LEASE_TTL_MS",
     "TAKEOVER_GRACE_MS", "AuditRecord", "Holder", "LeaseBook", "LeaseBusy",
-    "LeaseError", "LeaseLost", "LeaseState",
+    "LeaseError", "LeaseLost", "LeaseState", "每拍都变的键",
 )
 
 
@@ -142,6 +147,24 @@ class LeaseState:
             "expires_in_ms": self.expires_in_ms,
             "grace_in_ms": self.grace_in_ms,
         }
+
+    def to_wire_stable(self) -> dict[str, Any]:
+        """跟 :meth:`to_wire` 一样,但去掉 ``每拍都变的键``。
+
+        **轮询的接口用 ``to_wire()``**(要 ``expires_in_ms``/``grace_in_ms``
+        算倒计时,狗上没有 NTP,这两个相对量是唯一能安全算倒计时的办法);
+        **常连的 SSE(``/api/state``)用这个**。``_StateHub`` 靠"这份快照跟
+        上一份一样就不发"保持安静,握着控制权的时候相对量每拍都在变,混进
+        这条 SSE 它就会从"静止时安静"变成每半秒响一次整份状态帧 —— 在热点
+        上是实打实的带宽,还会把真正的状态变化淹掉。
+
+        **默认方向不能反过来。** 没有专门叫一声"这个给 SSE 用"的方法,以后
+        有人往 ``LeaseState`` 上加字段,顺手就会在 ``ControlDesk.snapshot()``
+        那种全量展开的地方带出去 —— 这个方法把"该在 SSE 里出现的"收窄成一
+        份显式列表,而不是靠"记得手动排除"。
+        """
+        return {k: v for k, v in self.to_wire().items()
+                if k not in 每拍都变的键}
 
 
 def _剩余毫秒(at_ms: int | None, now_ms: int) -> int | None:

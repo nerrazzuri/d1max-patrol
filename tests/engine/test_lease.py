@@ -14,6 +14,7 @@ from d1max_patrol.engine.lease import (
     LeaseBusy,
     LeaseLost,
     _剩余毫秒,
+    每拍都变的键,
 )
 
 T0 = 1_757_000_000_000
@@ -234,6 +235,38 @@ def test_余量不会是负数():
     # 而在结算之前的那一刻,余量必须是 0 而不是负数。
     assert _剩余毫秒(T0, T0 + 5_000) == 0
     assert _剩余毫秒(None, T0) is None
+
+
+# --------------------------------------------- 每拍都变的键(修复轮 2 N1)
+
+
+def test_两份快照不一样的键集合等于每拍都变的键():
+    """给将来兜底的核心断言:谁再加一个相对量却忘了登记进
+    ``每拍都变的键``,这条测试就会红。
+
+    **必须同时有持有者和挑战者**,不然 ``expires_in_ms``/``grace_in_ms``
+    都是 ``None``,两个时刻的 ``to_wire()`` 不会有任何差异,这条测试就白
+    测了 —— 拿不到"变了的键"这个集合去跟 ``每拍都变的键`` 比。
+    """
+    book = LeaseBook()
+    book.acquire("aa11bb22", "张三", now_ms=T0)
+    book.ask_takeover("cc33dd44", "李四", now_ms=T0 + 1_000)
+    before = book.state(now_ms=T0 + 1_000).to_wire()
+    after = book.state(now_ms=T0 + 1_500).to_wire()
+    变了的键 = {k for k in before if before[k] != after[k]}
+    assert 变了的键 == 每拍都变的键
+
+
+def test_to_wire_stable在两个相隔的时刻完全相等():
+    """``to_wire_stable()`` 是给常连的 SSE 用的 —— 去掉每拍都变的相对量
+    之后,同一份租约在两个不同时刻的快照必须逐字段相等。
+    """
+    book = LeaseBook()
+    book.acquire("aa11bb22", "张三", now_ms=T0)
+    book.ask_takeover("cc33dd44", "李四", now_ms=T0 + 1_000)
+    before = book.state(now_ms=T0 + 1_000).to_wire_stable()
+    after = book.state(now_ms=T0 + 1_500).to_wire_stable()
+    assert before == after
 
 
 def test_审计能整个发出去():
