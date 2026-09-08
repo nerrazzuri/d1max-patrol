@@ -669,8 +669,8 @@ function renderChecks(checks) {
 
 const RUN_STATE = {
   IDLE: "空闲", PREFLIGHT: "起飞检查", LOCALIZING: "重定位中", RUNNING: "跑着",
-  PAUSED: "暂停", RETURNING: "返航中", ABORTING: "正在中止", ABORTED: "中止了",
-  DONE: "跑完了",
+  PAUSED: "暂停", SUSPENDED: "人工接管中", RETURNING: "返航中",
+  ABORTING: "正在中止", ABORTED: "中止了", DONE: "跑完了",
 };
 
 function renderRun(run) {

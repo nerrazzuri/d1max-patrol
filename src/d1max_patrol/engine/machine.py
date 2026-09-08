@@ -28,6 +28,7 @@ from typing import Any
 from d1max_patrol.backends.base import (
     BatteryEvent,
     DeviceBackend,
+    DevicePoseEvent,
     EventEmitter,
     LocStatusEvent,
     MediaError,
@@ -58,7 +59,7 @@ from d1max_patrol.engine.safety import (
     battery_ruling,
     rule,
 )
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
+from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 #: 导航终态。到了这几个之一,这一段导航就算有结果了。
 NAV_TERMINAL = frozenset({NavStatus.SUCCEED, NavStatus.FAILED, NavStatus.CANCELLED})
@@ -90,6 +91,15 @@ class RunState(str, Enum):
     LOCALIZING = "LOCALIZING"
     RUNNING = "RUNNING"
     PAUSED = "PAUSED"
+    #: 引擎**主动让开腿**：接下来这段路人要亲自开。
+    #:
+    #: 跟 ``PAUSED`` 的区别是「谁在动这条狗」。``PAUSED`` 是人按了暂停，狗停着，
+    #: 没有人碰它，``_busy_checks`` 全是空的。``SUSPENDED`` 期间 ``_busy_checks``
+    #: 恰恰是满的 —— 遥控正在动 —— 而那正是 §5.10 要放行的东西。
+    #:
+    #: **不许跟 PAUSED 合并**：「暂停时不许遥控」和「挂起时必须能遥控」是
+    #: 相反的两条规矩，落在同一个状态上就一定有一条是错的。
+    SUSPENDED = "SUSPENDED"
     RETURNING = "RETURNING"
     ABORTING = "ABORTING"
     ABORTED = "ABORTED"
@@ -120,6 +130,31 @@ class WaypointResult:
 
 
 @dataclass(frozen=True, slots=True)
+class SuspendPoint:
+    """让开腿的那一刻,狗停在哪儿(§5.10)。
+
+    **位姿是「人接管前狗在哪儿」的唯一记录。** 人开着走一段之后,点位序号
+    还在,但狗已经不在那儿了 —— 要判断接管结束后该从哪儿接着跑,靠的是这
+    一份快照,不是当前位姿。
+
+    ``pose`` 可以是 ``None``:旁路进程没连上、这一档不报位姿都会这样。
+    **少一份位姿不该让「人要接管」卡住** —— 挂不起来的后果是人挪不动狗。
+    """
+
+    waypoint_index: int
+    waypoint_name: str
+    pose: Pose | None
+    reason: str
+    at_ms: int
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"waypoint_index": self.waypoint_index,
+                "waypoint_name": self.waypoint_name,
+                "pose": self.pose.to_wire() if self.pose else None,
+                "reason": self.reason, "at_ms": self.at_ms}
+
+
+@dataclass(frozen=True, slots=True)
 class RunSnapshot:
     """引擎当前的全貌。订阅者拿到的就是这个,页面照着画即可。"""
 
@@ -131,13 +166,16 @@ class RunSnapshot:
     started_ms: int
     results: tuple[WaypointResult, ...] = ()
     reason: str = ""
+    suspended_at: SuspendPoint | None = None
 
     def to_wire(self) -> dict[str, Any]:
         return {"state": self.state.value, "mission": self.mission,
                 "waypoint_index": self.waypoint_index,
                 "waypoint_name": self.waypoint_name, "total": self.total,
                 "started_ms": self.started_ms, "reason": self.reason,
-                "results": [r.to_wire() for r in self.results]}
+                "results": [r.to_wire() for r in self.results],
+                "suspended_at": (self.suspended_at.to_wire()
+                                 if self.suspended_at else None)}
 
 
 # ------------------------------------------------------------------ 内部信号
@@ -147,7 +185,7 @@ class RunSnapshot:
 class _Command:
     """用户命令也走队列 —— 直接改状态就把并发修改放回来了。"""
 
-    kind: str          # pause / resume / abort
+    kind: str          # pause / suspend / resume / abort
     reason: str = ""
 
 
@@ -192,6 +230,11 @@ class _Live:
     loc_reset_attempts: int = 0
     photos: list[str] = field(default_factory=list)
     blocked_since: float | None = None
+    #: 最近一次收到的位姿。挂起时抄一份进 ``SuspendPoint``。
+    last_pose: Pose | None = None
+    #: 现在挂着的那一份。``_publish`` 每次都从这儿取 —— 快照是重建出来的,
+    #: 不从这儿取的话,挂起期间任何一次 publish 都会把它抹掉。
+    suspended: SuspendPoint | None = None
 
 
 def _preflight_reason(report: PreflightReport) -> str:
@@ -257,6 +300,15 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         return self._task is not None and not self._task.done()
 
     @property
+    def yielding(self) -> bool:
+        """引擎现在让着腿吗(§5.10)。
+
+        **做成引擎自己的属性,不让外壳去比状态**:「哪些状态算让位」是引擎的
+        词汇,外壳复刻一遍状态表就等于把这条规矩存了两份,而两份迟早不一样。
+        """
+        return self._state is RunState.SUSPENDED
+
+    @property
     def form(self) -> Form:
         """这台狗跑在哪一档。**按进程定,一趟跑不会换。**
 
@@ -307,10 +359,9 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         """
         if self.running:
             raise EngineBusy(f"已经在跑 {self._snapshot.mission},先停下来再开新的")
-        for check in self._busy_checks:
-            reason = check()
-            if reason:
-                raise EngineBusy(reason)
+        blocked = self._busy_reason()
+        if blocked:
+            raise EngineBusy(blocked)
         self._home = home
         archive = RunArchive(self._runs_root, mission)
         archive.write_manifest(self._fingerprint)
@@ -329,6 +380,13 @@ class MissionEngine(EventEmitter[RunSnapshot]):
 
     async def pause(self) -> None:
         await self._queue.put(_Command("pause"))
+
+    async def suspend(self, reason: str) -> None:
+        """让开腿:接下来这段路人亲自开(§5.10)。
+
+        **不是暂停。** 暂停是狗停着没人碰;挂起期间人正在用遥控开它。
+        """
+        await self._queue.put(_Command("suspend", reason))
 
     async def resume(self) -> None:
         await self._queue.put(_Command("resume"))
@@ -373,7 +431,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         """
         live = self._live
         if live is None:
-            self._snapshot = RunSnapshot(self._state, "", 0, "", 0, 0, reason=reason)
+            self._snapshot = RunSnapshot(self._state, "", 0, "", 0, 0, reason=reason,
+                                         suspended_at=None)
             self.emit(self._snapshot)
             return
         wps = live.mission.waypoints
@@ -382,7 +441,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             state=self._state, mission=live.mission.mission,
             waypoint_index=live.index, waypoint_name=wps[idx].name,
             total=len(wps), started_ms=live.started_ms,
-            results=tuple(live.results), reason=reason)
+            results=tuple(live.results), reason=reason,
+            suspended_at=live.suspended)
         live.archive.write_state(self._snapshot.to_wire())
         self.emit(self._snapshot)
 
@@ -691,6 +751,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             live.battery_pct = item.percent
             self._apply(battery_ruling(self._context()), item)
             return
+        if isinstance(item, DevicePoseEvent):
+            live.last_pose = item.pose
+            # 不 return:位姿照样交给规则表 —— 这里只是顺手留一份底,
+            # 不是接管这个事件的处置。
         ruling = rule(item, self._context())
         if ruling.decision is Decision.WAIT and live.blocked_since is None:
             # 记下"从什么时候开始被挡的"。下一条同样的推送进来时,规则表拿这个
@@ -753,6 +817,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             raise _AbortRun(cmd.reason or "人工中止")
         if cmd.kind == "pause":
             await self._pause_until_resumed()
+        if cmd.kind == "suspend":
+            await self._suspend_until_resumed(cmd.reason)
         # resume 在没暂停的时候是空操作,不报错 —— 现场手快点两下很常见。
 
     async def _pause_until_resumed(self) -> None:
@@ -777,6 +843,63 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             self._note("paused_event", event=type(item).__name__)
         await self._transition(RunState.RUNNING, "人工继续")
         raise _RetryWaypoint
+
+    async def _suspend_until_resumed(self, reason: str) -> None:
+        """挂起:停下来让开腿,人接管完再继续,回来时重发当前点。
+
+        跟 ``_pause_until_resumed`` 长得很像,但**不能合并**:这一支要在
+        继续之前查 ``_busy_checks``,而暂停那一支不查也不该查(暂停期间本来
+        就没人碰狗)。合了之后两条相反的规矩会落在同一段代码上。
+
+        回来重发当前点,是因为人可能已经把狗开到别处去了 —— 接着往下走等于
+        从一个没人知道的位置出发。
+        """
+        live = self._live
+        assert live is not None
+        wps = live.mission.waypoints
+        idx = min(live.index, len(wps) - 1)
+        live.suspended = SuspendPoint(
+            waypoint_index=live.index, waypoint_name=wps[idx].name,
+            pose=live.last_pose, reason=reason,
+            at_ms=int(time.time() * 1000))
+        await self._transition(RunState.SUSPENDED, reason)
+        await self._stop_nav_quietly()
+        while True:
+            item = await self._next(None)
+            if isinstance(item, _Command):
+                if item.kind == "abort":
+                    live.suspended = None
+                    raise _AbortRun(item.reason or "人工中止")
+                if item.kind == "resume":
+                    blocked = self._busy_reason()
+                    if not blocked:
+                        break
+                    # **人点「继续」的时候左手很可能还压在摇杆上。** 那一瞬间
+                    # 引擎和人同时在给腿下指令 —— add_busy_check 存在的全部
+                    # 理由就是它。说清楚为什么没继续,然后接着等。
+                    self._note("resume_refused", reason=blocked)
+                    self._publish(f"还不能继续: {blocked}")
+                    continue
+                continue
+            if isinstance(item, BatteryEvent):
+                live.battery_pct = item.percent
+            elif isinstance(item, DevicePoseEvent):
+                # 人开着的时候位姿一直在变。留着最新的 —— 但**不覆盖**
+                # ``live.suspended.pose``:那一份记的是「人接管前在哪儿」,
+                # 被现在的位置盖掉就什么都不剩了。
+                live.last_pose = item.pose
+            self._note("suspended_event", event=type(item).__name__)
+        live.suspended = None
+        await self._transition(RunState.RUNNING, "人工接管结束")
+        raise _RetryWaypoint
+
+    def _busy_reason(self) -> str:
+        """现在有别人在动这条狗吗。返回理由,空串表示没有。"""
+        for check in self._busy_checks:
+            reason = check()
+            if reason:
+                return reason
+        return ""
 
     async def _stop_nav_quietly(self) -> None:
         """停导航。已经在收尾的路径上,停不下来也只能记一笔。"""

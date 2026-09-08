@@ -1,0 +1,221 @@
+"""引擎让开腿：``SUSPENDED``(§5.10)。
+
+**跟 ``PAUSED`` 的区别是「谁在动这条狗」。** ``PAUSED`` 是人按了暂停，狗停着，
+没有人碰它。``SUSPENDED`` 是引擎主动让开，因为接下来这段路人要亲自开 ——
+挡在门口的箱子挪不开、点位飘到了墙里。这段时间 ``_busy_checks`` 恰恰是满的，
+而那正是 §5.10 要放行的东西。
+
+时刻全是注进来的，一个 ``sleep`` 都没有(§8.5 第 2 条)。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+
+import pytest
+
+from d1max_patrol.backends.base import DevicePoseEvent
+from d1max_patrol.engine.machine import MissionEngine, RunState
+from d1max_patrol.protocol.nav_types import Pose
+
+from .conftest import make_mission
+from .test_machine import _HOME, NEVER, clock, device, make_engine, media, nav, until
+
+#: 上面这几个是 ``test_machine.py`` 里既有的建引擎/喂事件那套夹具，直接照抄
+#: 复用而不新造一套(brief 明确要求)。它们只被 pytest 按名字注入，不在这个
+#: 文件里被直接引用，所以进 ``__all__`` 告诉 ruff 这些 import 是"导出"用的，
+#: 不是没用上。
+__all__ = ["clock", "device", "make_engine", "media", "nav"]
+
+
+async def 等一拍(eng: MissionEngine, *, timeout_s: float = 2.0) -> None:
+    """等到引擎把队列里的东西吃完。**有截止时间，不是 sleep。**
+
+    这里要证的是「点了继续但状态没变」，而「没变」只能靠等一小会儿再看 ——
+    所以等的是**队列空**这个可观察的事实，不是一个拍脑袋的余量。
+
+    它碰了一个私有属性(``eng._queue``)，这是明知故犯的。换成固定
+    ``sleep(余量)`` 才是真错：余量给小了偶发红，给大了每跑一次都白等。
+    """
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while not eng._queue.empty():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("引擎没把队列吃完")
+        await asyncio.sleep(0)
+
+
+# --------------------------------------------------------------------- 夹具
+
+
+@pytest.fixture
+async def 跑起来的引擎(make_engine, nav):
+    """已经 ``start`` 起来、卡在第一个点导航上的引擎。
+
+    照抄 ``test_machine.py`` 里 ``test_人工暂停会真的把狗停下来`` 那一路的
+    建法：``nav.on_goto = NEVER`` 让 ``goto`` 不产生终态事件，引擎停在
+    RUNNING 里一直等，这样才有稳定的时机去 suspend / pause，不必跟
+    「点位刚好跑完」赛跑。用例自己不用管收尾，这里统一处理。
+    """
+    nav.on_goto = NEVER
+    engine = make_engine()
+    await engine.start(make_mission(), home=_HOME)
+    await until(lambda: nav.goto_calls)
+    yield engine
+    if engine.running:
+        await engine.abort("测试收尾")
+        with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+            await engine.wait_done(timeout_s=5.0)
+    await engine.aclose()
+
+
+@pytest.fixture
+async def 跑起来的引擎_喂过位姿(跑起来的引擎, device):
+    """在 ``跑起来的引擎`` 的基础上，先喂进去一份位姿再交给用例。
+
+    位姿走的是设备事件那条路(``DevicePoseEvent``)，不是直接怼私有队列 ——
+    这样测的才是「引擎真收到过位姿」这件事，不是「测试自己造了一个字段」。
+    等的办法跟 ``等一拍`` 一个道理：碰私有属性(``eng._live.last_pose``)，
+    但只有它才能确认「已经被 ``_handle`` 处理过」，不是在猜一个时间余量。
+    """
+    eng = 跑起来的引擎
+    device.emit(DevicePoseEvent(Pose.from_xy_yaw(3.0, 4.0, 0.0)))
+    deadline = asyncio.get_running_loop().time() + 2.0
+    while eng._live is None or eng._live.last_pose is None:
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("位姿没被引擎收到")
+        await asyncio.sleep(0)
+    return eng
+
+
+# --------------------------------------------------------------------- 用例
+
+
+async def test_挂起进得去_并且状态是SUSPENDED(跑起来的引擎):
+    eng = 跑起来的引擎
+    await eng.suspend("门口有箱子，人去挪一下")
+    await eng.wait_state(RunState.SUSPENDED)
+    assert eng.state is RunState.SUSPENDED
+
+
+async def test_挂起时引擎让位(跑起来的引擎):
+    """``yielding`` 是给 ``TeleopBusy`` 读的那一个布尔(Task 6)。
+
+    做成引擎自己的属性，而不是让遥控去比 ``state is RunState.SUSPENDED``：
+    「哪些状态算让位」是引擎的词汇，外壳不该重新讲一遍(全局约束：业务层
+    不许知道外壳，反过来外壳也不该复刻业务层的状态表)。
+    """
+    eng = 跑起来的引擎
+    assert eng.yielding is False
+    await eng.suspend("人来开")
+    await eng.wait_state(RunState.SUSPENDED)
+    assert eng.yielding is True
+
+
+async def test_暂停不算让位(跑起来的引擎):
+    """**这一条是这两个状态不能合并的证明。**
+
+    ``PAUSED`` 的时候不许遥控，``SUSPENDED`` 的时候必须能遥控 —— 相反的两条
+    规矩落在同一个状态上，就一定有一条是错的。
+    """
+    eng = 跑起来的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+    assert eng.yielding is False
+
+
+async def test_挂起时记下停在哪个点(跑起来的引擎):
+    eng = 跑起来的引擎
+    await eng.suspend("门口有箱子")
+    await eng.wait_state(RunState.SUSPENDED)
+    点 = eng.snapshot.suspended_at
+    assert 点 is not None
+    assert 点.waypoint_name == eng.snapshot.waypoint_name
+    assert 点.reason == "门口有箱子"
+
+
+async def test_挂起时记下位姿(跑起来的引擎_喂过位姿):
+    """**位姿是「人接管前狗在哪儿」的唯一记录。**
+
+    人开着走一段之后，原来那个点位序号还在，但狗已经不在那儿了。要判断
+    「接管结束后该从哪儿接着跑」，靠的是这一份快照，不是当前位姿。
+    """
+    eng = 跑起来的引擎_喂过位姿
+    await eng.suspend("人来开")
+    await eng.wait_state(RunState.SUSPENDED)
+    assert eng.snapshot.suspended_at.pose is not None
+
+
+async def test_没收到过位姿也照样挂得起来(跑起来的引擎):
+    """位姿是**可有可无**的。旁路进程没连上、这一档不报位姿 —— 都不该
+    让「人要接管」这件事卡住。挂不起来的后果是人挪不动狗，那比少一份
+    位姿记录严重得多。
+    """
+    eng = 跑起来的引擎
+    await eng.suspend("人来开")
+    await eng.wait_state(RunState.SUSPENDED)
+    assert eng.snapshot.suspended_at.pose is None
+
+
+async def test_还有人握着摇杆就不许继续(跑起来的引擎):
+    """**这条是这个任务里唯一真正危险的一条。**
+
+    人点「继续」的时候左手很可能还压在摇杆上 —— 那一瞬间引擎和人同时在
+    给腿下指令。``add_busy_check`` 存在的全部理由就是它。
+    """
+    eng = 跑起来的引擎
+    握着 = ["遥控在动，先松手再继续"]
+    eng.add_busy_check(lambda: 握着[0])
+    await eng.suspend("人来开")
+    await eng.wait_state(RunState.SUSPENDED)
+    await eng.resume()
+    await 等一拍(eng)
+    assert eng.state is RunState.SUSPENDED
+    assert "松手" in eng.snapshot.reason
+    握着[0] = ""
+    await eng.resume()
+    await eng.wait_state(RunState.RUNNING)
+
+
+async def test_继续之后挂起快照清掉(跑起来的引擎, nav):
+    """留着就等于在界面上永远挂着一条「有人接管过」—— 那条信息第二天
+    还在的时候，值守的人分不出是现在正被接管还是上礼拜被接管过。
+
+    **没用 ``wait_state(RUNNING)`` 等这一下。** RUNNING 在 suspend 之前就已经
+    进过 ``_seen``(``跑起来的引擎`` 在开跑那一刻就先经过一次 RUNNING)——
+    ``wait_state`` 等的是"出现过"而不是"此刻是"，对一个已经出现过的状态它
+    会立刻返回，根本没让事件循环把 ``resume`` 处理掉。既有测试
+    ``test_继续之后重发当前点而且不算一次重试`` 撞的是同一堵墙，用的是等
+    "一个具体可观察的事实"这条路：继续之后会重发当前点，也就是会有一次
+    新的 ``goto`` 调用，等 ``goto_calls`` 涨到 2 就是等 resume 真被处理完。
+    """
+    eng = 跑起来的引擎
+    await eng.suspend("人来开")
+    await eng.wait_state(RunState.SUSPENDED)
+    await eng.resume()
+    await until(lambda: len(nav.goto_calls) == 2)
+    assert eng.state is RunState.RUNNING
+    assert eng.snapshot.suspended_at is None
+
+
+async def test_挂起时也能中止(跑起来的引擎):
+    """人接管到一半发现这趟没法跑了，得能直接收。"""
+    eng = 跑起来的引擎
+    await eng.suspend("人来开")
+    await eng.wait_state(RunState.SUSPENDED)
+    await eng.abort("现场不具备条件")
+    assert await eng.wait_done(timeout_s=5.0) is RunState.ABORTED
+
+
+async def test_上线的形状(跑起来的引擎):
+    eng = 跑起来的引擎
+    await eng.suspend("门口有箱子")
+    await eng.wait_state(RunState.SUSPENDED)
+    线 = eng.snapshot.to_wire()
+    assert 线["state"] == "SUSPENDED"
+    assert set(线["suspended_at"]) == {
+        "waypoint_index", "waypoint_name", "pose", "reason", "at_ms"}
+
+
+async def test_没挂起时上线是null(跑起来的引擎):
+    assert 跑起来的引擎.snapshot.to_wire()["suspended_at"] is None
