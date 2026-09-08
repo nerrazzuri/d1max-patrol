@@ -1,0 +1,22 @@
+{
+  "backup": {
+    "detail": "未配备份盘。归档现在只有一份,存在这台狗自己的盘上",
+    "level": "neutral"
+  },
+  "baselines_bytes": 0,
+  "exports_bytes": 0,
+  "forecast": {
+    "bytes_at_risk": 0,
+    "detail": "盘 42%,7 天内没有归档到期。",
+    "generated_at": "20250904T000000Z",
+    "runs": [],
+    "used_ratio": 0.42
+  },
+  "notice_detail": "",
+  "notice_written": true,
+  "runs_bytes": 0,
+  "runs_total": 0,
+  "total_bytes": 1000000000000,
+  "used_bytes": 420000000000,
+  "used_ratio": 0.42
+}

@@ -1,0 +1,21 @@
+{
+  "audit": [
+    {
+      "at_ms": 1757000000000,
+      "detail": "",
+      "kind": "acquired",
+      "operator": "张三",
+      "ref": "ab12cd34",
+      "seq": 1
+    },
+    {
+      "at_ms": 1757000000000,
+      "detail": "切到远程遥控",
+      "kind": "mode_switched",
+      "operator": "张三",
+      "ref": "ab12cd34",
+      "seq": 1
+    }
+  ],
+  "max": 200
+}
