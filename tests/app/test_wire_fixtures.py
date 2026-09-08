@@ -227,3 +227,21 @@ def test_夹具_盘况(server, monkeypatch):
 
 def test_夹具_身份(server):
     对("identity", get_json(server, "/api/identity"))
+
+
+def test_夹具_证明向量():
+    """质询-应答的跨语言向量(``auth.proof_for``)。
+
+    **两头各自实现同一个算法、各自绿、合起来对不上**,是这一类代码最典型的
+    翻车法。它翻车的表现是「手机上输对 PIN 也进不去」,而两边的测试都是绿的。
+
+    PIN 是编的,不是任何一台真机上的:这份文件要签进手机仓库。
+    """
+    from d1max_patrol.app.auth import PROOF_ALG, proof_for
+    样本 = [("000000", "00" * 16), ("123456", "a1b2c3d4" * 4),
+            ("864209", "ff" * 16)]
+    对("proof_vectors", {
+        "alg": PROOF_ALG,
+        "vectors": [{"pin": p, "nonce": n, "proof": proof_for(p, n)}
+                    for p, n in 样本],
+    })

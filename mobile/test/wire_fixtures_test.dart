@@ -11,6 +11,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:d1max_patrol/net/wire.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Map<String, dynamic> _load(String name) => jsonDecode(
@@ -69,5 +70,11 @@ void main() {
     final identity = _load('identity');
     expect(identity, isNotEmpty);
     expect(identity['sn'], isA<String>());
+  });
+
+  test('三个视图都吃得下狗发的那份', () {
+    expect(LeaseView.fromJson(_load('lease_state')).expiresInMs, isPositive);
+    expect(VideoHealth.fromJson(_load('video_health')).online, isNotEmpty);
+    expect(RunView.fromJson(_load('run_snapshot')).suspended, isTrue);
   });
 }
