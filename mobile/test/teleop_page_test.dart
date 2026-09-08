@@ -85,6 +85,9 @@ Future<void> unmount(WidgetTester t, Rig rig) async {
   rig.client.close();
   await t.pump();
   await t.runAsync(rig.dog.stop);
+  // **假狗自己出的错要看得见。** 它以前整段裹在一个宽 `catch (_)` 里，
+  // 于是假狗的笔误长得跟「这条路不回话」一模一样，人会去查客户端的超时。
+  expect(rig.dog.errors, isEmpty, reason: '假狗自己抛了：查的是假狗，不是被测代码');
 }
 
 /// 把一条健康结论推到屏幕上。
@@ -113,6 +116,14 @@ Future<Map<String, dynamic>> pulseWith(
   await pumpUntil(t, () => rig.pulses.any(hit), why);
   return rig.pulses.firstWhere(hit);
 }
+
+/// 发出去的那些全零拍。**停车说了几遍，数的是这个。**
+List<Map<String, dynamic>> zeroPulses(Rig rig) => rig.pulses
+    .where((Map<String, dynamic> p) =>
+        (p['fwd'] as num) == 0 &&
+        (p['lat'] as num) == 0 &&
+        (p['yaw'] as num) == 0)
+    .toList();
 
 Offset leftStick(WidgetTester t) => t.getCenter(find.byType(Joystick).at(0));
 Offset rightStick(WidgetTester t) => t.getCenter(find.byType(Joystick).at(1));
@@ -195,6 +206,57 @@ void main() {
     await unmount(t, rig);
   });
 
+  testWidgets('松手之后连着发几拍全零,不止一拍', (WidgetTester t) async {
+    /// **一拍丢了就等于没停。** 松手那一拍是立刻发的，可热点抖一下它就没
+    /// 了，而两个杆都在零位的时候周期发拍是不发的 —— 于是停车退回狗那头的
+    /// 兜底（一拍 0.4 秒走完 + 守死人 0.6 秒）。兜底是兜底，不是停车方式。
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    await pumpUntil(t, () => rig.pulses.isNotEmpty, '推着的那一拍');
+    await g.up();
+    await t.pump();
+    await pumpUntil(t, () => zeroPulses(rig).length >= 3,
+        '松手之后补上的那几拍全零（合计 3 拍），它们要绕过「零位不发」那条抑制');
+    await unmount(t, rig);
+  });
+
+  testWidgets('松手那一拍发失败,后面几拍照发', (WidgetTester t) async {
+    /// 补发要在**第一拍就失败**的时候还管用 —— 那正是它存在的理由。
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    await pumpUntil(t, () => rig.pulses.isNotEmpty, '推着的那一拍');
+    rig.dog.statusCodes['/api/teleop'] = 500; // 从松手那一拍起，全拒
+    await g.up();
+    await t.pump();
+    await pumpUntil(t, () => zeroPulses(rig).length >= 3,
+        '松手那一拍被拒之后补上的那两拍（失败不该让补发停下来）');
+    await unmount(t, rig);
+  });
+
+  testWidgets('报文一律不带 seconds', (WidgetTester t) async {
+    /// 派工令第八条：**一拍多长是狗的手感参数**（`profile` 那一档算出来的）。
+    /// 客户端传死一个 `seconds`，等于把狗的标定钉在这个 app 的某个版本上 ——
+    /// 标定改了，现场得挨个升级手机才跟得上。
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    await pumpUntil(t, () => rig.pulses.isNotEmpty, '推着的那一拍');
+    await g.up();
+    await t.pump();
+    await pumpUntil(t, () => zeroPulses(rig).isNotEmpty, '松手那一拍');
+    for (final Map<String, dynamic> p in rig.pulses) {
+      expect(p.containsKey('seconds'), isFalse,
+          reason: '不传 seconds，让狗按 profile 取默认');
+      expect(p, containsPair('profile', 'roam'));
+    }
+    await unmount(t, rig);
+  });
+
   testWidgets('视频掉线摇杆变灰', (WidgetTester t) async {
     final Rig rig = await mount(t);
     expect(enabledLeft(t), isTrue, reason: '有画面的时候杆是亮的');
@@ -233,17 +295,24 @@ void main() {
     /// §7.7 明写这是允许的：左杆前推 + 右杆右推 = 向右画弧。
     /// **两个杆各发各的拍是错的** —— 后发的那一拍会把先发的那一拍覆盖掉，
     /// 于是人推着两个杆，狗只执行其中一个，而且是哪个手先动就听哪个。
+    ///
+    /// **这条只管「合到一拍」这一件事，号的对错不归它管**（归上面那三条）。
+    /// 所以断的是「两个轴都非零」而不是「fwd > 0」：写成后者的话，`fwd` 的
+    /// 号一翻，这条也跟着红，而它红出来的话人会去查发拍的合并逻辑 —— 查的
+    /// 是完全另一件事。复审在这儿真踩过：斜推一下（生产代码一个字不动）
+    /// 就能让它红成跟「fwd 号翻了」一字不差的那句话。
     final Rig rig = await mount(t);
     final TestGesture l = await t.startGesture(leftStick(t), pointer: 11);
-    await l.moveBy(const Offset(0, -50));
+    await l.moveBy(const Offset(0, -50)); // 纯向上，别让 45 度吸附吃掉 fwd
     final TestGesture r = await t.startGesture(rightStick(t), pointer: 12);
     await r.moveBy(const Offset(50, 0));
     await t.pump();
     await pumpUntil(
         t,
         () => rig.pulses.any((Map<String, dynamic> p) =>
-            (p['fwd'] as num) > 0 && (p['yaw'] as num) != 0),
-        '一拍里同时带着 fwd 和 yaw');
+            (p['fwd'] as num) != 0 && (p['yaw'] as num) != 0),
+        '一拍里同时带着非零的 fwd 和非零的 yaw（两根杆没合到一拍，'
+            '或者其中一根压根没出这个轴）');
     await l.up();
     await r.up();
     await unmount(t, rig);
@@ -306,6 +375,39 @@ void main() {
         reason: '§7.8：每次都弹同一个框，第三次就被条件反射点掉了');
     await pumpUntil(t, () => rig.modes.length >= 3, '第二次切远程那条');
     expect(rig.modes.last, containsPair('mode', 'remote'));
+    await unmount(t, rig);
+  });
+
+  testWidgets('切档没切成就把屏幕退回上一档', (WidgetTester t) async {
+    /// **档位决定的是速度上限。** 屏幕上写着「远程」而狗那头还按「现场」
+    /// 记账，人就会照远程那一档的手感推杆，狗却收着走（反过来更糟）。
+    /// 一句红字纠正不了一整屏的视觉 —— 档得退回去。
+    final Rig rig = await mount(t);
+    rig.dog.statusCodes['/api/teleop/mode'] = 500;
+    await t.tap(find.byKey(TeleopPage.remoteKey));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 400));
+    await t.tap(find.byKey(TeleopPage.confirmRemoteKey));
+    await t.pump();
+    await pumpUntil(t, () => rig.modes.isNotEmpty, '那条切档请求');
+    await pumpUntil(t, () => find.textContaining('档没切成').evaluate().isNotEmpty,
+        '切档失败那句话');
+    expect(find.text(onsiteHint), findsOneWidget,
+        reason: '狗那头还在现场档，屏幕上就不许写着远程');
+    await unmount(t, rig);
+  });
+
+  testWidgets('心跳连着断了一秒就说一句话,但不把杆变灰', (WidgetTester t) async {
+    /// 顾虑 3 的定夺：**不把心跳失败并进那三次。** 它 5 Hz 地跑，拿它去关
+    /// 控制通路是过敏 —— 整网断掉的时候 `VideoHealthPoller` 走 `_degrade()`
+    /// 发全 false，≤2 秒经视频那道闸就变灰了，不依赖这条路。
+    /// 这里要证的是另一件事：这条路断了得**说出来**，不是默默地断。
+    final Rig rig = await mount(t);
+    rig.dog.statusCodes['/api/teleop/heartbeat'] = 500;
+    await pumpUntil(t, () => find.text(beatTroubleHint).evaluate().isNotEmpty,
+        '心跳连着失败之后状态带上那句话');
+    expect(enabledLeft(t), isTrue,
+        reason: '心跳抖一下就关掉控制通路是过敏：变灰归视频那道闸和发拍那三次管');
     await unmount(t, rig);
   });
 

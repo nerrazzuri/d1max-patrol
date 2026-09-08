@@ -32,6 +32,14 @@ const String onsiteHint = '请与机器狗保持在同一视线范围内';
 const String remoteConfirmAsk = '远程遥控：你看不见狗周围的实际情况，'
     '只能看见画面里的那一块。这次确认会记在案。';
 
+/// 心跳连着断了一秒之后，状态带上挂的那一句。
+///
+/// **只是一句话，不变灰、不弹框。** 心跳 5 Hz 地跑，拿它去关控制通路是过敏；
+/// 而这条路断了的时候狗那头的守死人到期只会 `stop()` —— 狗是停着的，不是失控。
+/// 该说出来的是「你和狗之间有一条路已经断了」，让人现在就往那台狗走过去。
+const String beatTroubleHint = '心跳没到狗那儿：你和狗之间有一条路断了。'
+    '狗那头到点会自己停 —— 别再往远处开';
+
 class TeleopPage extends StatefulWidget {
   const TeleopPage({
     super.key,
@@ -99,6 +107,19 @@ class _TeleopPageState extends State<TeleopPage> {
   /// 就没有下一拍，没有下一拍就永远不知道狗已经回话了。
   static const int _probeEvery = 4;
 
+  /// 松手之后**接着再补几拍全零**（接下来 2 个周期，合计 3 拍 ≈ 0.6 秒）。
+  ///
+  /// 松手那一拍是立刻发的，可它要是丢了（热点抖一下就够），今天什么都不会
+  /// 接上来 —— 零位不发拍那条抑制正好把补救也一起抑制掉了，只能退回狗那头
+  /// 「一拍 0.4 秒走完 + 守死人 0.6 秒」。**那是兜底，不是停车方式。**
+  /// 补发这几拍**绕过零位抑制、也不看杆是不是灰的**：停车这件事说三遍不贵，
+  /// 说漏了要拿撞上去来还。
+  static const int _stopBursts = 2;
+
+  /// 心跳连着这么多次失败就在状态带上说一句（200ms × 5 ≈ 1 秒）。见
+  /// [beatTroubleHint]。**不并进 [_failsToGrey]、不动 [_enabled]。**
+  static const int _beatFailsToWarn = 5;
+
   /// 节奏档。`roam` 是默认档（Task 2 的 `PROFILES`）。
   ///
   /// **`seconds` 一律不传**，让狗那头按这一档算 —— 一拍多长是狗的手感参数，
@@ -118,6 +139,13 @@ class _TeleopPageState extends State<TeleopPage> {
   bool _live = false;
   int _fails = 0;
   int _probeTick = 0;
+
+  /// 还欠几拍全零。见 [_stopBursts]。
+  int _stopsLeft = 0;
+
+  /// 心跳连着失败了几次。见 [_beatFailsToWarn]。
+  int _beatFails = 0;
+
   String _trouble = '';
 
   String _mode = 'onsite';
@@ -185,6 +213,12 @@ class _TeleopPageState extends State<TeleopPage> {
       _left = Offset.zero;
       _right = Offset.zero;
     });
+    _stopNow();
+  }
+
+  /// 立刻发一拍全零，并且**排上接下来那几拍**。见 [_stopBursts]。
+  void _stopNow() {
+    _stopsLeft = _stopBursts;
     unawaited(_post(_stopBody()));
   }
 
@@ -198,10 +232,10 @@ class _TeleopPageState extends State<TeleopPage> {
     final bool was = _moving;
     setState(apply);
     if (was && !_moving) {
-      // **松手主动发一次全零停，不等下一个周期。**
+      // **松手主动发一次全零停，不等下一个周期**，而且接着再补两拍。
       // 守死人（0.6 秒）是兜底，不是停车方式：靠它停意味着松手之后狗还会
-      // 往前走大半秒。
-      unawaited(_post(_stopBody()));
+      // 往前走大半秒。而只发一拍的话，那一拍丢了就等于退回守死人。
+      _stopNow();
     }
   }
 
@@ -210,7 +244,16 @@ class _TeleopPageState extends State<TeleopPage> {
   void _tick() {
     if (_moving && _enabled) {
       _probeTick = 0;
+      // 又推起来了：欠着的那几拍全零到此为止，不然会跟正推着的拍打架。
+      _stopsLeft = 0;
       unawaited(_post(_pulseBody()));
+      return;
+    }
+    if (_stopsLeft > 0) {
+      // 松手/变灰之后补发的全零。**排在零位抑制和探针的前面**，
+      // 而且不看杆是不是灰的 —— 停车那几拍在狗那头走的是 `stop()`。
+      _stopsLeft--;
+      unawaited(_post(_stopBody()));
       return;
     }
     if (_fails >= _failsToGrey) {
@@ -225,11 +268,21 @@ class _TeleopPageState extends State<TeleopPage> {
   Future<void> _beat() async {
     try {
       await widget.client.post('/api/teleop/heartbeat');
+      if (!mounted || _beatFails == 0) return;
+      _beatFails = 0;
+      // 自己挂上去的那句话自己收掉；别人挂的（发拍那条路）不碰。
+      if (_trouble == beatTroubleHint) setState(() => _trouble = '');
     } catch (e) {
-      // **心跳失败不上屏、不计进变灰的那三次。**
-      // 它 5 Hz 地跑，任何一次抖动都会闪一句话出来；而「狗不回话」这件事由
-      // 发拍那条路负责说 —— 两条路都说，屏幕上就会一句盖一句。
+      // **心跳失败不计进变灰的那三次。** 它 5 Hz 地跑，拿它去关控制通路是
+      // 过敏；「狗不回话」该不该变灰由发拍那条路说了算。
       developer.log('$e', name: 'teleop/heartbeat');
+      if (!mounted) return;
+      _beatFails++;
+      // **一次抖动不上屏，连着一秒才说话**（见 [beatTroubleHint]）。
+      // `_trouble` 空着才写：发拍那条路的话更急，不许被这句盖掉。
+      if (_beatFails >= _beatFailsToWarn && _trouble.isEmpty) {
+        setState(() => _trouble = beatTroubleHint);
+      }
     }
   }
 
@@ -303,6 +356,7 @@ class _TeleopPageState extends State<TeleopPage> {
       if (!mounted || !ok) return;
       _remoteConfirmed = true;
     }
+    final String was = _mode;
     setState(() => _mode = name);
     try {
       await widget.client.post('/api/teleop/mode', <String, dynamic>{
@@ -313,7 +367,14 @@ class _TeleopPageState extends State<TeleopPage> {
     } catch (e) {
       developer.log('$e', name: 'teleop/mode');
       if (!mounted) return;
-      setState(() => _trouble = '档没切成。狗那头还按上一档算');
+      setState(() {
+        // **切失败就把屏幕退回上一档。**
+        // 档位决定的是速度上限：屏幕上写着「远程」而狗那头还在「现场」，
+        // 人会按远程那一档的手感去推，而狗按现场那一档收着走 —— 反过来更
+        // 糟。一句话纠正不了一整屏的视觉，得把档退回去。
+        _mode = was;
+        _trouble = '档没切成，屏幕和狗都还按上一档算';
+      });
     }
   }
 

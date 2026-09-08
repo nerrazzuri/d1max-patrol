@@ -48,6 +48,17 @@ class FakeDog {
   /// 半路的连接。
   final Set<String> hangPaths = <String>{};
 
+  /// **假狗自己出的错，记在这儿让测试看得见。**
+  ///
+  /// 以前整个处理器裹在一个宽 `catch (_)` 里：`replies` 里填了个
+  /// `jsonEncode` 编不动的东西、或者这段代码自己写错了，都会被吞成
+  /// 「这条路不回话」—— 而不回话在测试里长得跟 [hangPaths] 一模一样，
+  /// 调试的人会去查客户端的超时，查的却是假狗的笔误。
+  ///
+  /// 收摊那一下的 `HttpException`/`SocketException` 不记（见 [start]）：
+  /// 那不是错，那就是收摊。
+  final List<String> errors = <String>[];
+
   String get baseUrl => 'http://127.0.0.1:${_s.port}';
 
   Future<void> start() async {
@@ -62,6 +73,9 @@ class FakeDog {
       // 一拍、200 毫秒一次心跳，几乎总有一条在飞）。读 body 那一步于是抛
       // `HttpException: Connection closed while receiving data`。
       // 那不是错，那就是收摊。
+      //
+      // **但只有这两种才吞得无声无息。** 别的都进 [errors]：假狗自己写错了
+      // 被吞成「不回话」的话，测试只会在别处超时，人会往完全错的方向找。
       try {
         final raw = await utf8.decoder.bind(req).join();
         received.add((
@@ -83,8 +97,13 @@ class FakeDog {
         req.response
             .write(jsonEncode(replies[req.uri.path] ?? <String, dynamic>{}));
         await req.response.close();
-      } catch (_) {
+      } on HttpException catch (_) {
         // 见上。对面走了就是走了。
+      } on SocketException catch (_) {
+        // 同上：收摊那一下连接被硬关。
+      } catch (e, s) {
+        // 假狗自己的毛病。**记下来，别让它长得像「这条路不回话」。**
+        errors.add('${req.method} ${req.uri.path}: $e\n$s');
       }
     });
   }
