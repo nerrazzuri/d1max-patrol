@@ -659,3 +659,42 @@ async def test_急停按着仍然不许动(fake_device, engine, fake_clock):
     t = 带闸(fake_device, engine, fake_clock, [""])
     with pytest.raises(TeleopBusy):
         await t.pulse(0.5, 0.0, 0.0)
+
+
+# ------------------------------------------------------------ 现场档/远程档
+
+
+def test_默认是现场档(fake_device, engine, fake_clock):
+    t = 带闸(fake_device, engine, fake_clock, [""])
+    assert t.mode("ab12") == "onsite"
+
+
+def test_切到远程(fake_device, engine, fake_clock):
+    t = 带闸(fake_device, engine, fake_clock, [""])
+    t.set_mode("remote", "ab12")
+    assert t.mode("ab12") == "remote"
+
+
+def test_换个人就掉回现场档(fake_device, engine, fake_clock):
+    """**档是「这个人现在在哪儿」,不是狗的属性。**
+
+    甲切了远程然后掉线,乙接过控制权时必须从现场档起步 —— 否则乙会在一个
+    自己从没确认过的档上开狗,而事后的留痕上写着甲的名字。
+    """
+    t = 带闸(fake_device, engine, fake_clock, [""])
+    t.set_mode("remote", "ab12")
+    assert t.mode("cd34") == "onsite"
+
+
+def test_不认识的档直接拒(fake_device, engine, fake_clock):
+    t = 带闸(fake_device, engine, fake_clock, [""])
+    with pytest.raises(ValueError):
+        t.set_mode("半远程", "ab12")
+
+
+async def test_远程档不放宽视频那道闸(fake_device, engine, fake_clock):
+    """§7.8 明写:**§5.9 不受本节影响,仍是无豁免的硬规则。**"""
+    t = 带闸(fake_device, engine, fake_clock, ["前相机没画面"])
+    t.set_mode("remote", "ab12")
+    with pytest.raises(TeleopBusy):
+        await t.pulse(0.5, 0.0, 0.0)

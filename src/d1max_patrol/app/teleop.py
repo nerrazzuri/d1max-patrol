@@ -97,6 +97,16 @@ MIN_LAT = 0.30
 #: 守死人的检查周期。取超时的三分之一:够快地发现,又不至于空转。
 WATCH_PERIOD_S = HEARTBEAT_TIMEOUT_S / 3
 
+#: 遥控的两档(§7.8)。**跟 Task 2 的节奏(``PROFILES``)是两件事,别混。**
+#: 节奏管一拍多长,是手感;档管人在不在现场,是留痕。两者正交 —— 远程档
+#: 也能用扫图节奏。放在同一个文件里,但不共用任何状态。
+MODES: tuple[str, ...] = ("onsite", "remote")
+
+#: 切到远程时要人确认的那句话。**放在狗这头,不放在手机那头**:
+#: 措辞改一次要跟着到每一个客户端上,而狗只有一个。
+REMOTE_CONFIRM = ("远程遥控:你看不见狗周围的实际情况,只能看见画面里的那一块。"
+                  "确认切过去 —— 这次确认会记在案。")
+
 #: 四个轴全零 —— "停"就是这个。
 _STOP = (0.0, 0.0, 0.0)
 
@@ -169,6 +179,10 @@ class Teleop:
         #: 做成回调而不是让遥控认识 ``CameraFeed``:跟 ``add_busy_check`` 同
         #: 一个理由,这一层不该长出对相机实现的依赖。
         self._video_gate = video_gate
+        #: (档名, 是谁切的)。**档是「这个人现在在哪儿」,不是狗的属性** ——
+        #: 甲切了远程然后掉线,乙接过控制权时必须从现场档起步,否则乙会在一个
+        #: 自己从没确认过的档上开狗,而事后的留痕上写着甲的名字。
+        self._mode: tuple[str, str] = ("onsite", "")
         engine.add_busy_check(self._busy_reason)
 
     # ------------------------------------------------------------------ 对外
@@ -183,6 +197,19 @@ class Teleop:
         的只有上面这几条路。
         """
         return self._active
+
+    def mode(self, holder_ref: str) -> str:
+        """这个人现在在哪一档。**不是他切的那一档就算现场档。**"""
+        name, who = self._mode
+        return name if who == holder_ref else "onsite"
+
+    def set_mode(self, name: str, holder_ref: str) -> None:
+        """切档(§7.8)。**§5.9 不受这里影响** —— 远程档一样要过视频那道闸,
+        闸在 ``pulse()`` 里,这个方法只管记账。
+        """
+        if name not in MODES:
+            raise ValueError(f"只有 {'、'.join(MODES)} 两档,给的是 {name!r}")
+        self._mode = (name, holder_ref)
 
     async def pulse(self, fwd: float, lat: float, yaw: float,
                     seconds: float | None = None, *,
@@ -314,7 +341,9 @@ __all__ = [
     "MIN_FWD",
     "MIN_LAT",
     "MIN_YAW",
+    "MODES",
     "PROFILES",
+    "REMOTE_CONFIRM",
     "ROAM",
     "SCAN",
     "WATCH_PERIOD_S",

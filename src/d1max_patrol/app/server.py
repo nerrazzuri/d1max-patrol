@@ -77,7 +77,7 @@ from d1max_patrol.app.mapping import (
     MappingOrchestrator,
 )
 from d1max_patrol.app.procs import ProcManager
-from d1max_patrol.app.teleop import PROFILES, Teleop, TeleopBusy
+from d1max_patrol.app.teleop import MODES, PROFILES, REMOTE_CONFIRM, Teleop, TeleopBusy
 from d1max_patrol.app.video import CAMERAS, CameraFeed, RtspStill, VideoError
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
@@ -1019,6 +1019,7 @@ class AppServer:
         self.route("GET", "/api/events", self._events)
         self.route("POST", "/api/teleop", self._teleop)
         self.route("POST", "/api/teleop/heartbeat", self._teleop_beat)
+        self.route("POST", "/api/teleop/mode", self._teleop_mode)
         self.route("POST", "/api/estop", self._estop)
         self.route("GET", "/api/mapping", self._mapping_state)
         self.route("POST", "/api/mapping/record/start", self._record_start)
@@ -1390,6 +1391,34 @@ class AppServer:
         """续命。同步的 —— 它只是记一个时间戳,没必要过桥。"""
         self._ctx.teleop.heartbeat()
         return json_response({"ok": True})
+
+    def _teleop_mode(self, req: Request) -> Response:
+        """切现场档 / 远程档(§7.8)。**同步的** —— 它不碰腿。
+
+        规格不硬禁远程遥控,要的是留痕:「每次都弹同一个框,第三次就被条件
+        反射点掉了」。所以这里真正的产出是**审计环里那一条**,不是返回值。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体得是一个对象", type(body).__name__)
+        name = body.get("mode")
+        if name not in MODES:
+            raise HttpError(400, "不认识的档",
+                            f"只有 {'、'.join(MODES)},给的是 {name!r}")
+        who = self._control.book.state(now_ms=self._ctx.clock()).holder
+        assert who is not None      # 这条路由在 CONTROLLED 里,进不来就没租约
+        if name == "remote" and self._ctx.teleop.mode(who.ref) != "remote":
+            # **没确认就切是 409 不是 400。** 发的东西完全正确,缺的是一次
+            # 确认 —— 分错了,手机上只能显示一句「请求格式错误」,人不知道
+            # 该点什么。
+            if body.get("confirmed") is not True:
+                raise HttpError(409, "切远程遥控要先确认一次", REMOTE_CONFIRM)
+            self._control.book.note(
+                at_ms=self._ctx.clock(), kind="mode_switched", who=who,
+                detail="切到远程遥控")
+        # 切回现场不用确认:往安全的方向走不该设卡,多设一道人就懒得切回来。
+        self._ctx.teleop.set_mode(name, who.ref)
+        return json_response({"mode": name, "confirm": REMOTE_CONFIRM})
 
     def _estop(self, _req: Request) -> Response:
         """红按钮:停遥控,并打断正在跑的任务。"""

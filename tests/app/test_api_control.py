@@ -267,6 +267,69 @@ def test_留痕里没有token(有pin的服务):
     assert tok not in body.decode("utf-8")
 
 
+# ------------------------------------------------------------ 现场档/远程档
+
+
+def test_切远程要确认(有pin的服务):
+    """**没确认就切,是 409 不是 400。**
+
+    400 的意思是「你发的东西不对」,而这里发的东西完全正确 —— 缺的是一次
+    确认。分错了,手机上只能显示一句「请求格式错误」,人不知道该点什么。
+    """
+    tok = 解锁(有pin的服务, "张三")
+    打(有pin的服务, "/api/control/acquire", tok)
+    code, body = 打(有pin的服务, "/api/teleop/mode", tok, {"mode": "remote"})
+    assert code == 409
+    assert "确认" in body["detail"]
+
+
+def test_确认之后切得过去(有pin的服务):
+    tok = 解锁(有pin的服务, "张三")
+    打(有pin的服务, "/api/control/acquire", tok)
+    code, body = 打(有pin的服务, "/api/teleop/mode", tok,
+                    {"mode": "remote", "confirmed": True})
+    assert code == 200
+    assert body["mode"] == "remote"
+
+
+def test_这次确认自动写进留痕(有pin的服务):
+    """§7.8:**留痕才是真兜底。** 一个被点掉的弹窗证明不了任何事。
+
+    盯的是「切档这个动作本身产生了记录」,不是「界面弹过框」—— 后者在事后
+    什么都证明不了,而这一条是删不掉的。
+    """
+    tok = 解锁(有pin的服务, "张三")
+    打(有pin的服务, "/api/control/acquire", tok)
+    打(有pin的服务, "/api/teleop/mode", tok, {"mode": "remote", "confirmed": True})
+    留痕 = get_json(有pin的服务, "/api/control/audit", headers=auth(tok))["audit"]
+    最后 = 留痕[-1]
+    assert 最后["kind"] == "mode_switched"
+    assert "远程" in 最后["detail"]
+    assert 最后["ref"]              # 谁切的,有指纹
+
+
+def test_切回现场不用确认(有pin的服务):
+    """往安全的方向走不该设卡。多设一道,人就会懒得切回来。"""
+    tok = 解锁(有pin的服务, "张三")
+    打(有pin的服务, "/api/control/acquire", tok)
+    打(有pin的服务, "/api/teleop/mode", tok, {"mode": "remote", "confirmed": True})
+    code, _body = 打(有pin的服务, "/api/teleop/mode", tok, {"mode": "onsite"})
+    assert code == 200
+
+
+def test_没控制权不许切档(有pin的服务):
+    """切档要留名,而没控制权的人没有名字可留。"""
+    tok = 解锁(有pin的服务, "张三")
+    code, _body = 打(有pin的服务, "/api/teleop/mode", tok,
+                     {"mode": "remote", "confirmed": True})
+    assert code in (401, 403, 409)
+
+
+def test_切档这条路要租约():
+    from d1max_patrol.app.control import needs_lease
+    assert needs_lease("POST", "/api/teleop/mode")
+
+
 # -------------------------------------------------------------- 边角情形
 
 

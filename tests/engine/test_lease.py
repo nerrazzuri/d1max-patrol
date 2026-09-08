@@ -20,6 +20,11 @@ from d1max_patrol.engine.lease import (
 T0 = 1_757_000_000_000
 
 
+@pytest.fixture
+def book() -> LeaseBook:
+    return LeaseBook()
+
+
 def test_一开始没人持有():
     book = LeaseBook()
     st = book.state(now_ms=T0)
@@ -276,3 +281,30 @@ def test_审计能整个发出去():
         "seq": 1, "at_ms": T0, "kind": "acquired",
         "ref": "aa11bb22", "operator": "张三", "detail": "",
     }
+
+
+# ------------------------------------------------------ 切档留痕(§7.8 Task 7)
+
+
+def test_留痕的种类是白名单(book):
+    """``AUDIT_KINDS`` 不许只是个摆设。
+
+    写一条没登记过的种类进去,值守屏和手机上的图标映射就会漏一个 —— 而漏的
+    表现是界面上一条空白记录,不是报错。**在写入口拦住,比在读的地方兜底好**:
+    读的地方有好几处,写只有这一处。
+    """
+    with pytest.raises(ValueError):
+        book.note(at_ms=1, kind="随便编的", who=Holder("ab12"), detail="")
+
+
+def test_模式切换是一种留痕():
+    assert "mode_switched" in AUDIT_KINDS
+
+
+def test_note写进同一个环(book):
+    book.note(at_ms=1, kind="mode_switched", who=Holder("ab12", "张三"),
+              detail="切到远程遥控")
+    最后 = book.audit[-1]
+    assert 最后.kind == "mode_switched"
+    assert 最后.operator == "张三"
+    assert 最后.ref == "ab12"

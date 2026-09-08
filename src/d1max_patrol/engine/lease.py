@@ -47,6 +47,10 @@ AUDIT_MAX = 200
 AUDIT_KINDS: frozenset[str] = frozenset({
     "acquired", "released", "expired", "dropped",
     "takeover_asked", "taken_over", "forced",
+    # 切到远程遥控(§7.8)。**这条是本节唯一的产出** —— 规格说得很直白:
+    # 「每次都弹同一个框,第三次就被条件反射点掉了」,弹窗事后什么也兜不住,
+    # 一条带署名和时间、删不掉的记录可以。
+    "mode_switched",
 })
 
 #: ``to_wire()`` 里**每拍都会变**的那些键。``/api/state`` 那条 SSE 靠"跟上一份
@@ -226,6 +230,20 @@ class LeaseBook:
         with self._lock:
             fresh = tuple(r for r in self._audit if r.seq > seq)
             return (self._seq, fresh)
+
+    def note(self, *, at_ms: int, kind: str, who: Holder,
+             detail: str = "") -> None:
+        """往审计环里补一条**不是租约本身**的事(§7.8 的切档就是一例)。
+
+        种类必须是 ``AUDIT_KINDS`` 里登记过的:写一条没登记的进去,值守屏和
+        手机上的图标映射就会漏一个,而漏的表现是界面上一条空白记录,不是
+        报错。**校验在 ``_log()`` 里,不在这儿** —— ``_log()`` 是所有留痕
+        (租约本身的、以及这条 ``note()``)唯一的出生地,校验放在那个漏斗上
+        才管得住以后每一条新加的调用,而不只是管住这一条。这儿只负责把参数
+        整理好、拿锁,然后委托过去。
+        """
+        with self._lock:
+            self._log(at_ms, kind, who, detail)
 
     # ---------------------------------------------------------------- 写
 
@@ -419,6 +437,16 @@ class LeaseBook:
         self._log(now_ms, kind, who, detail)
 
     def _log(self, at_ms: int, kind: str, who: Holder, detail: str) -> None:
+        """所有留痕唯一的出生地。**白名单校验放在这儿,不放在 ``note()``
+        里**:``note()`` 只是这个漏斗众多入口之一(``_grant()`` 和另外几处
+        直接调用是别的几个),校验只放在调用方一处,将来哪个内部调用把种类
+        拼错了(比如手滑写成 ``"handover"``)也一样会被拦住,而不是只管住
+        新加的这一条路。调用方已经拿着锁。
+        """
+        if kind not in AUDIT_KINDS:
+            raise ValueError(
+                f"没登记过的留痕种类 {kind!r};"
+                f"要加就先加进 AUDIT_KINDS,顺带说清楚它是什么事")
         self._seq += 1
         self._audit.append(AuditRecord(self._seq, at_ms, kind, who.ref,
                                         who.operator, detail))

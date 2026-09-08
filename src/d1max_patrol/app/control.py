@@ -60,6 +60,7 @@ from d1max_patrol.engine.lease import AuditRecord, LeaseBook, LeaseState
 CONTROLLED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/api/teleop$")),
     ("POST", re.compile(r"^/api/teleop/heartbeat$")),
+    ("POST", re.compile(r"^/api/teleop/mode$")),
     ("POST", re.compile(r"^/api/mapping/record/(start|stop)$")),
     ("POST", re.compile(r"^/api/missions/[^/]+/run$")),
     ("POST", re.compile(r"^/api/run/(pause|resume|abort)$")),
