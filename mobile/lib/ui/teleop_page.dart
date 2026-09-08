@@ -53,6 +53,25 @@ const String noControlHint = '没有控制权：先在上面那条里取得，�
 /// 分开**，一句说该去要控制权，一句说该去把画面弄回来。
 const String noVideoHint = '看不见就不许开狗：没有画面，两根杆是灰的';
 
+/// 顶部那条带子的外壳：**限高，超了在里面滚，不往下长。**
+///
+/// **抽成一个函数是为了让测试对着同一个壳子验它吃不吃手势。** 这个壳子里的
+/// `Scrollable` 挂的是一个 `HitTestBehavior.opaque` 的手势识别器：**它自己
+/// 那块矩形里的指针，一律到不了 `Stack` 里排在它下面的东西**（滚不滚得动都
+/// 一样，内容没溢出的时候也照吃）。所以这条规矩是：
+///
+/// **别往这条带子底下藏任何要接手势的东西。** 两根摇杆在屏幕底部、而且在
+/// `Stack` 里排在带子后面（压在带子上面），不受影响 —— `teleop_page_test.dart`
+/// 里那两条把这两件事都量出来了：壳子只吃自己那块矩形，且那块矩形够不着摇杆。
+///
+/// 另搭一个长得像的壳子去测的话，那个壳子明天就跟这里分家了 —— 分家那天两边
+/// 都是绿的。
+Widget bandShell({required double maxHeight, required Widget child}) =>
+    ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: SingleChildScrollView(child: child),
+    );
+
 class TeleopPage extends StatefulWidget {
   const TeleopPage({
     super.key,
@@ -480,12 +499,8 @@ class _TeleopPageState extends State<TeleopPage> {
                     top: 0,
                     left: 0,
                     right: 0,
-                    child: ConstrainedBox(
-                      constraints:
-                          BoxConstraints(maxHeight: _bandMaxFor(box.maxHeight)),
-                      // 超了在带子里面滚，不往下长。见 [_bandMaxFor]。
-                      child: SingleChildScrollView(child: _band()),
-                    )),
+                    child: bandShell(
+                        maxHeight: _bandMaxFor(box.maxHeight), child: _band())),
                 Positioned(
                   left: 0,
                   bottom: 0,

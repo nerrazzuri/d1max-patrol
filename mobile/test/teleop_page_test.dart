@@ -563,6 +563,88 @@ void main() {
     await unmount(t, rig);
   });
 
+  // ------------------------------------------------- 顶上那条带子吃不吃手势
+  //
+  // 复审问的是「上面那个 `SingleChildScrollView` 会不会把纵向拖拽抢走」。
+  // 这两条把它量出来：**第一条量「抢的是哪一块」，第二条量「那一块够不够
+  // 得着摇杆」。** 只量第二条的话，明天带子多两行、或者屏变矮，它就悄悄地
+  // 从「够不着」滑到「够得着」而没人知道。
+
+  testWidgets('带子的壳子会吃掉自己那块矩形里的纵向拖拽', (WidgetTester t) async {
+    /// `Scrollable` 建的 `RawGestureDetector` 带的是 `HitTestBehavior.opaque`，
+    /// 而 `RenderStack` 的命中测试**停在第一个命中的孩子**上 —— 于是落在带子
+    /// 那块矩形里的指针，压根到不了 `Stack` 里排在它下面的东西。
+    /// **内容有没有溢出、滚不滚得动，都一样吃。**
+    ///
+    /// 量的是 `teleop_page.dart` 导出的那个 `bandShell` 本身，不是另搭一个长
+    /// 得像的壳子：另搭的那个明天就跟真的那个分家了，分家那天两边都是绿的。
+    final List<String> under = <String>[];
+    await t.pumpWidget(wrap(Stack(
+      children: <Widget>[
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragUpdate: (DragUpdateDetails d) => under.add('drag'),
+          ),
+        ),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: bandShell(
+              maxHeight: 240,
+              child: const SizedBox(height: 60, child: Text('带子'))),
+        ),
+      ],
+    )));
+    final Rect band = t.getRect(find.byType(SingleChildScrollView));
+    expect(band.height, 60,
+        reason: '内容没溢出的时候壳子按内容高（60），不是按限高（240）铺开：'
+            '按限高铺的话它吃掉的那块比看得见的带子大得多');
+
+    final TestGesture inside = await t.startGesture(band.center);
+    await inside.moveBy(const Offset(0, 40));
+    await t.pump();
+    await inside.moveBy(const Offset(0, 40));
+    await t.pump();
+    await inside.up();
+    expect(under, isEmpty,
+        reason: '带子那块矩形里的纵向拖拽漏到了底下：'
+            '那说明这个壳子不是「吃自己那块」，下面这条的结论也就靠不住了');
+
+    final TestGesture outside =
+        await t.startGesture(Offset(band.center.dx, band.bottom + 80));
+    await outside.moveBy(const Offset(0, 40));
+    await t.pump();
+    await outside.moveBy(const Offset(0, 40));
+    await t.pump();
+    await outside.up();
+    expect(under, isNotEmpty,
+        reason: '壳子外面的拖拽也接不到的话，上面那句 isEmpty 是空绿的 —— '
+            '可能这个探针从头到尾就没有一次拖拽送到过');
+  });
+
+  testWidgets('带子那块矩形够不着两根摇杆', (WidgetTester t) async {
+    /// 上一条证了「壳子吃自己那块矩形」，这一条量那块矩形到底在哪儿：
+    /// **它的下沿在两根杆的上沿之上，两块不相交。** 所以带子吃手势这件事
+    /// 影响不到摇杆 —— 复审担心的那件事在当前布局下不成立。
+    ///
+    /// 另外两层保险，都不是这条在管的：杆在 `Stack` 里排在带子**后面**
+    /// （真叠上了也是杆压着带子），而且杆是贴着屏幕底部的。这条只管几何。
+    final Rig rig = await mount(t);
+    final Rect band = t.getRect(find.byType(SingleChildScrollView));
+    final Rect l = t.getRect(find.byType(Joystick).at(0));
+    final Rect r = t.getRect(find.byType(Joystick).at(1));
+    expect(band.height, greaterThan(0),
+        reason: '带子量出来是空的话，下面那两句是空绿的');
+    expect(band.bottom, lessThanOrEqualTo(l.top),
+        reason: '带子的下沿压到左杆上了：那一块的纵向拖拽会被带子吃掉，'
+            '人推杆想让狗往前走，狗一动不动');
+    expect(band.bottom, lessThanOrEqualTo(r.top),
+        reason: '带子的下沿压到右杆上了：同上');
+    await unmount(t, rig);
+  });
+
   testWidgets('现场档只有一行轻提示', (WidgetTester t) async {
     /// §7.8：现场模式是**轻提示** —— 「请与机器狗保持在同一视线范围内」。
     /// 不是弹框：现场档是默认档，每次进来都弹框的话，它就是那个第三次被
