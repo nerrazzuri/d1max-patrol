@@ -78,6 +78,21 @@ void main() {
         reason: '§6.3：狗记下名字但不核实。界面上不许说成「已登录：张三」');
   });
 
+  test('狗跟着应答发的那句 notice 要留下来', () async {
+    /// §6.3：**这句话跟着每一个带 operator 的响应发出去**
+    /// （`server.py:1158` 的 `OPERATOR_NOTICE`）。丢掉它，界面上就只剩
+    /// `operator_verified: false` 这一位 —— 那一位说得出「没核」，说不出
+    /// 「为什么不核、要可信的身份该怎么办」，而措辞的真理源在狗那头：
+    /// 手机硬编一句的话，狗改了措辞手机不跟。
+    const String notice = '操作人姓名是本机记账用的,狗不核实它。要可信的人身份,得接服务器。';
+    dog.replies['/api/auth'] = <String, dynamic>{
+      ...dog.replies['/api/auth'] as Map<String, dynamic>,
+      'notice': notice,
+    };
+    final s = await c.unlock('864209', operator: '张三');
+    expect(s.notice, notice);
+  });
+
   test('狗回错就抛出说得清楚的异常', () async {
     dog.statusCodes['/api/auth'] = 401;
     dog.replies['/api/auth'] = <String, dynamic>{

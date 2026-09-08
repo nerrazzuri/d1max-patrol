@@ -51,11 +51,19 @@ class Session {
   final bool operatorVerified;
   final bool readonly;
 
+  /// 狗跟着这次应答发过来的那句话（`auth.OPERATOR_NOTICE`）。**原样留着。**
+  ///
+  /// [operatorVerified] 只说得出「核没核」，说不出「为什么不核、要可信的
+  /// 身份该怎么办」—— 那句话在狗那头，措辞也归狗那头。这里硬编一句的话，
+  /// 狗改了措辞手机不跟。
+  final String notice;
+
   const Session({
     required this.token,
     required this.operator,
     required this.operatorVerified,
     required this.readonly,
+    this.notice = '',
   });
 }
 
@@ -123,6 +131,7 @@ class PatrolClient {
       operator: (got['operator'] as String?) ?? '',
       operatorVerified: got['operator_verified'] == true,
       readonly: got['readonly'] == true,
+      notice: (got['notice'] as String?) ?? '',
     );
   }
 

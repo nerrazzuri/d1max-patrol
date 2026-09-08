@@ -13,10 +13,13 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:d1max_patrol/model/robot.dart';
 import 'package:d1max_patrol/net/patrol_client.dart';
 import 'package:d1max_patrol/net/wire.dart';
+import 'package:d1max_patrol/ui/control_panel.dart';
 import 'package:d1max_patrol/ui/teleop_page.dart';
 import 'package:d1max_patrol/ui/widget/joystick.dart';
 import 'package:flutter/material.dart';
@@ -54,7 +57,13 @@ class Rig {
 /// **`unlock` 是两步**（`GET /api/auth/challenge` 拿 nonce，再
 /// `POST /api/auth` 交证明），两条路径都得先备好回复，少一条就换不到 token。
 /// 而且它是真的网络 I/O：假时钟上推不动，得进 `runAsync`。
-Future<Rig> mount(WidgetTester t, {bool online = true}) async {
+///
+/// **控制权那份回复也得备好。** Task 12 起，杆亮不亮多了一道闸（`_held`）：
+/// 不给 `/api/control` 备回复的话，屏上的面板问到的是一份空的租约，杆从头到
+/// 尾是灰的 —— 上面每一条盯发拍的测试都会红在一件跟它无关的事上。
+/// [lease] 不给就是「控制权在自己手上，还剩 30 秒」。
+Future<Rig> mount(WidgetTester t,
+    {bool online = true, Map<String, dynamic>? lease}) async {
   final FakeDog dog = FakeDog();
   await t.runAsync(dog.start);
   dog.replies['/api/auth/challenge'] = <String, dynamic>{'nonce': 'n0nce'};
@@ -64,6 +73,8 @@ Future<Rig> mount(WidgetTester t, {bool online = true}) async {
     'operator_verified': false,
     'readonly': false,
   };
+  dog.replies['/api/control'] = lease ?? heldByMe();
+  dog.replies['/api/control/heartbeat'] = lease ?? heldByMe();
   final PatrolClient c = PatrolClient(dog.baseUrl);
   await t.runAsync(() => c.unlock('864209', operator: '张三'));
 
@@ -75,8 +86,31 @@ Future<Rig> mount(WidgetTester t, {bool online = true}) async {
           robot: const Robot(sn: 'C40221', name: '三号'),
           health: health.stream)));
   await pushHealth(t, health, <String, bool>{'front': online});
+  // **等控制权那一问回来。** 面板问狗是一次真的往返，假时钟上推不动；
+  // 不等的话，下面每一条测试都会在「杆还没亮」的那一瞬间跑。
+  await pumpUntil(
+      t,
+      () =>
+          find.byKey(ControlPanel.releaseKey).evaluate().isNotEmpty ||
+          find.byKey(ControlPanel.acquireKey).evaluate().isNotEmpty ||
+          find.byKey(ControlPanel.takeoverKey).evaluate().isNotEmpty,
+      '控制权面板拿到第一份租约');
   return Rig(dog, health, c);
 }
+
+/// 控制权在自己手上。**照着 `test/fixtures/lease_state.json` 改**，不手搓 JSON。
+Map<String, dynamic> heldByMe() => <String, dynamic>{
+      ...jsonDecode(File('test/fixtures/lease_state.json').readAsStringSync())
+          as Map<String, dynamic>,
+      'mine': true,
+    };
+
+/// 控制权在别人手上。
+Map<String, dynamic> heldByOther() => <String, dynamic>{
+      ...heldByMe(),
+      'holder': <String, dynamic>{'ref': 'ff00ff00', 'operator': '李四'},
+      'mine': false,
+    };
 
 /// 收摊。**客户端也要关**：一条没收的 `HttpClient` 会留着自己那个 15 秒
 /// 空闲计时器，`flutter_test` 的 `!timersPending` 会当场把测试打红。
@@ -492,6 +526,40 @@ void main() {
     expect(l.right, lessThanOrEqualTo(r.left),
         reason: '两根杆叠上了：重叠那一块归靠后的右杆，'
             '人按左下角想往前走，狗原地转弯');
+    await unmount(t, rig);
+  });
+
+  testWidgets('没有控制权就把杆变灰', (WidgetTester t) async {
+    /// 狗那头**会动腿的接口全都要控制权**（`app/control.py` 的 `CONTROLLED`）。
+    /// 没有这道闸，人推杆得到的是一串 409 —— 而杆还亮着、还跟着手指走，
+    /// 人以为狗在走。
+    final Rig rig = await mount(t, lease: heldByOther());
+    expect(enabledLeft(t), isFalse, reason: '控制权在李四手上，这台手机推不动');
+    await unmount(t, rig);
+  });
+
+  testWidgets('两道闸的提示语分开:没有控制权和没有画面不是一句话', (WidgetTester t) async {
+    /// 合成一句「不能操作」的话，人会朝错误的方向去排查：没有控制权要去
+    /// 面板上要一份（或者请对方交还），没有画面要去看相机和网 —— 两件事的
+    /// 处置一点都不像。
+    final Rig rig = await mount(t, lease: heldByOther());
+    // 有画面、没控制权：只该说控制权那一句。
+    expect(find.text(noControlHint), findsOneWidget);
+    expect(find.text(noVideoHint), findsNothing,
+        reason: '画面好好的，还说「没有画面」的话，人会去查相机和网 —— 查的是另一件事');
+    expect(find.textContaining('不能操作'), findsNothing,
+        reason: '合成一句的话，人会朝错误的方向去排查');
+    await unmount(t, rig);
+  });
+
+  testWidgets('两道闸的提示语分开:有控制权而没画面时只说画面', (WidgetTester t) async {
+    final Rig rig = await mount(t);
+    await pushHealth(
+        t, rig.health, <String, bool>{'front': false, 'back': false});
+    expect(find.text(noVideoHint), findsOneWidget);
+    expect(find.text(noControlHint), findsNothing,
+        reason: '控制权在自己手上，还说「没有控制权」的话人会去抢一份已经拿着的租约');
+    expect(find.textContaining('不能操作'), findsNothing);
     await unmount(t, rig);
   });
 

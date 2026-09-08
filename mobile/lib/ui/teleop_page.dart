@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import '../model/robot.dart';
 import '../net/patrol_client.dart';
 import '../net/wire.dart';
+import 'control_panel.dart';
 import 'widget/joystick.dart';
 import 'widget/live_video.dart';
 
@@ -39,6 +40,18 @@ const String remoteConfirmAsk = '远程遥控：你看不见狗周围的实际�
 /// 该说出来的是「你和狗之间有一条路已经断了」，让人现在就往那台狗走过去。
 const String beatTroubleHint = '心跳没到狗那儿：你和狗之间有一条路断了。'
     '狗那头到点会自己停 —— 别再往远处开';
+
+/// 没有控制权那道闸落下来时说的那一句。
+///
+/// **跟「没有画面」那一句分开，绝不合成一句「不能操作」。** 两道闸都让杆变灰，
+/// 可处置一点都不像：没有控制权要在上面那条面板里要一份（或者请对方交还），
+/// 没有画面要去看相机和网。合成一句的话，人会朝错误的方向排查 —— 而排查的
+/// 那几分钟里，狗就停在原地占着现场。
+const String noControlHint = '没有控制权：先在上面那条里取得，取到之前两根杆是灰的';
+
+/// 没有画面那道闸落下来时说的那一句（§5.9）。见 [noControlHint]：**两句话
+/// 分开**，一句说该去要控制权，一句说该去把画面弄回来。
+const String noVideoHint = '看不见就不许开狗：没有画面，两根杆是灰的';
 
 class TeleopPage extends StatefulWidget {
   const TeleopPage({
@@ -175,10 +188,17 @@ class _TeleopPageState extends State<TeleopPage> {
   /// 狗那头的留痕在请求真正落地的那一次建得起来。
   bool _remoteConfirmed = false;
 
+  /// 控制权在不在自己手上。**由上面那条 [ControlPanel] 说了算。**
+  bool _held = false;
+
   bool get _moving => _left != Offset.zero || _right != Offset.zero;
 
-  /// 杆是不是亮的。**两道闸，任何一道落下都变灰。**
-  bool get _enabled => _live && _fails < _failsToGrey;
+  /// 杆是不是亮的。**三道闸，任何一道落下都变灰。**
+  ///
+  /// 控制权这一道不是可选的：狗那头会动腿的接口全都要控制权
+  /// （`app/control.py` 的 `CONTROLLED`）。少了它，人推杆得到的是一串 409，
+  /// 而杆还亮着、还跟着手指走 —— 人以为狗在走。
+  bool get _enabled => _live && _held && _fails < _failsToGrey;
 
   @override
   void initState() {
@@ -206,6 +226,17 @@ class _TeleopPageState extends State<TeleopPage> {
   }
 
   // ------------------------------------------------------------ 画面那道闸
+
+  /// 控制权到手 / 掉了。
+  ///
+  /// **掉了要跟画面掉了走同一条路**（[_disarmIfNeeded]）：人手里正推着杆而
+  /// 控制权被别人接管走了，狗那头下一拍就是 409 —— 杆得立刻归零并主动发一次
+  /// 全零停，不能等下一个周期。
+  void _onHeld(bool held) {
+    if (held == _held) return;
+    setState(() => _held = held);
+    _disarmIfNeeded();
+  }
 
   void _onHealth(VideoHealth h) {
     final bool live = h.anyLive;
@@ -445,7 +476,16 @@ class _TeleopPageState extends State<TeleopPage> {
                     token: widget.client.token ?? '',
                   ),
                 ),
-                Positioned(top: 0, left: 0, right: 0, child: _band()),
+                Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: ConstrainedBox(
+                      constraints:
+                          BoxConstraints(maxHeight: _bandMaxFor(box.maxHeight)),
+                      // 超了在带子里面滚，不往下长。见 [_bandMaxFor]。
+                      child: SingleChildScrollView(child: _band()),
+                    )),
                 Positioned(
                   left: 0,
                   bottom: 0,
@@ -497,11 +537,23 @@ class _TeleopPageState extends State<TeleopPage> {
     return half < _stickBoxMax ? half : _stickBoxMax;
   }
 
+  /// 这条带子最多占屏幕的多少。**不许无限往下长。**
+  ///
+  /// 带子最坏已经四五行（名字 / 控制权面板 / 现场提示 / 发拍那句 / 心跳那句 /
+  /// 没画面那句），再往下长就盖掉画面顶部 —— 而正前方远处那一块恰恰是开狗的
+  /// 人最需要看的。超了在带子里面滚：滚得到，又挡不住画面。
+  static double _bandMaxFor(double height) =>
+      height.isFinite ? height * 0.45 : 240.0;
+
   /// 顶部那条状态带。
   ///
-  /// **Task 12 的控制权面板挂在这儿**（下面那条注释标的位置）：租约倒计时、
-  /// 谁拿着、抢过来的按钮，都在同一条带子上 —— 开狗的人眼睛在画面上，能顺
-  /// 眼扫到的只有这一条。
+  /// **Task 12 的控制权面板在这儿单占一行。**
+  ///
+  /// **不许塞进上面那个 `Row`**（Ruling 84）：那一行是
+  /// `Expanded(Text(robot.label))` + 两个档位按钮，再往里加倒计时和按钮，
+  /// `robot.label` 会被挤成省略号 —— 而 label 正是防「开错狗」的最后一道
+  /// 视觉防线，现场有三台狗的时候，它是唯一能告诉人「你正在开的是哪一台」
+  /// 的东西。
   Widget _band() => Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         color: Colors.black.withValues(alpha: 0.55),
@@ -517,12 +569,13 @@ class _TeleopPageState extends State<TeleopPage> {
                       style: const TextStyle(
                           color: Colors.white, fontSize: 15)),
                 ),
-                // ↓↓↓ Task 12 的控制权面板插在这儿（档位按钮的左边）↓↓↓
                 _modeButton(TeleopPage.onsiteKey, 'onsite', '现场'),
                 const SizedBox(width: 4),
                 _modeButton(TeleopPage.remoteKey, 'remote', '远程'),
               ],
             ),
+            // 控制权面板：**同一个 `Column` 里新起一行**，见上面的 Ruling 84。
+            ControlPanel(client: widget.client, onHeld: _onHeld),
             if (_mode == 'onsite')
               const Padding(
                 padding: EdgeInsets.only(top: 4),
@@ -545,10 +598,18 @@ class _TeleopPageState extends State<TeleopPage> {
                     style: const TextStyle(
                         color: Color(0xFFFFB4A9), fontSize: 13)),
               ),
+            // **两道闸各说各的话。** 见 [noControlHint]：合成一句「不能操作」
+            // 的话，人会朝错误的方向去排查。
+            if (!_held)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(noControlHint,
+                    style: TextStyle(color: Color(0xFFFFB4A9), fontSize: 13)),
+              ),
             if (!_live)
               const Padding(
                 padding: EdgeInsets.only(top: 4),
-                child: Text('看不见就不许开狗：没有画面，两根杆是灰的',
+                child: Text(noVideoHint,
                     style: TextStyle(color: Color(0xFFFFB4A9), fontSize: 13)),
               ),
           ],

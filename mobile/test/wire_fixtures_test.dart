@@ -88,6 +88,57 @@ void main() {
     expect(identity['sn'], isA<String>());
   });
 
+  test('租约：面板要的那几样都解析得出来', () {
+    // 面板上每一格都对着这里的一个字段：谁拿着、是不是我、几个席位、
+    // 那句「不核实」。少解一个，屏上就少一格，而少的那一格在真机之前
+    // 没人会发现。
+    final v = LeaseView.fromJson(_load('lease_state'));
+    expect(v.mine, isTrue);
+    expect(v.holderOperator, isNotEmpty);
+    expect(v.holderRef, isNotNull);
+    expect(v.maxSessions, isPositive);
+    expect(v.remoteSessions, isNotNull);
+    expect(v.notice, isNotEmpty, reason: '§6.3 那句话要原样上屏，解不出来就没得上');
+  });
+
+  test('租约：没人拿着的时候 expires_in_ms 是 null,不是 0', () {
+    // 夹具里是「张三拿着」，`holder: null` 这条路夹具驱动不到 —— 所以照着
+    // 夹具改这两个字段（狗那头 `LeaseState.to_wire()` 就是这么发的：没有
+    // 持有者时 `holder` 和 `expires_in_ms` 一起是 null）。
+    //
+    // **`null` 和 0 不许合并**（`engine/lease.py:126-128`）：合并掉的话，
+    // 一台谁也没在开的狗在屏上写着「已过期」。
+    final m = <String, dynamic>{
+      ..._load('lease_state'),
+      'holder': null,
+      'expires_in_ms': null,
+      'mine': false,
+    };
+    final v = LeaseView.fromJson(m);
+    expect(v.expiresInMs, isNull,
+        reason: '塌成 0 的话「没人拿着」会被画成「已过期」');
+    expect(v.held, isFalse);
+    expect(v.mine, isFalse);
+  });
+
+  test('租约：challenger 拆成 ref 和 operator,跟 holder 一个样子', () {
+    // 夹具里没人在抢（`challenger: null`），所以这条也照着夹具改一个字段。
+    // 形状抄的是 `Holder.to_wire()` —— holder 和 challenger 在狗那头是同一
+    // 个类型，这头也该是同一种拆法。
+    final m = <String, dynamic>{
+      ..._load('lease_state'),
+      'challenger': <String, dynamic>{'ref': 'cc00cc00', 'operator': '王五'},
+      'grace_in_ms': 15000,
+    };
+    final v = LeaseView.fromJson(m);
+    expect(v.challenged, isTrue);
+    expect(v.challengerRef, 'cc00cc00');
+    expect(v.challengerOperator, '王五');
+    expect(v.graceInMs, 15000);
+    expect(LeaseView.fromJson(_load('lease_state')).challenged, isFalse,
+        reason: '没人在抢的时候不许凭空长出一个挑战者');
+  });
+
   test('三个视图都吃得下狗发的那份', () {
     expect(LeaseView.fromJson(_load('lease_state')).expiresInMs, isPositive);
     expect(VideoHealth.fromJson(_load('video_health')).online, isNotEmpty);
