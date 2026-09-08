@@ -13,17 +13,23 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+/// 狗收到的一个请求。
+///
+/// **`raw` 留着原始字节**：要证「PIN 不在请求体里」只能在没解析过的那份上
+/// 证 —— 解析过的 `body` 是一个 Map，`{'pin': ...}` 有没有出现在别的字段名
+/// 底下、有没有被塞进某个字符串里，它都答不上来。
+typedef FakeCall = ({
+  String method,
+  String path,
+  String? auth,
+  dynamic body,
+  String raw,
+});
+
 /// 一台假狗。记下每个请求，好让测试事后翻。
 class FakeDog {
   late HttpServer _s;
-  final List<
-      ({String method, String path, String? auth, dynamic body, String raw})>
-      received = <(
-          {String method,
-          String path,
-          String? auth,
-          dynamic body,
-          String raw})>[];
+  final List<FakeCall> received = <FakeCall>[];
   final Map<String, dynamic> replies = <String, dynamic>{};
 
   /// 按路径分的状态码，默认 200。
@@ -47,26 +53,39 @@ class FakeDog {
   Future<void> start() async {
     _s = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     _s.listen((HttpRequest req) async {
-      final raw = await utf8.decoder.bind(req).join();
-      received.add((
-        method: req.method,
-        path: req.uri.path,
-        auth: req.headers.value('authorization'),
-        body: raw.isEmpty ? null : jsonDecode(raw),
-        raw: raw,
-      ));
-      req.response.statusCode = statusCodes[req.uri.path] ?? 200;
-      req.response.headers.contentType = ContentType.json;
-      if (hangPaths.contains(req.uri.path)) {
-        // 逼头真的发出去（写一个字节触发 flush），然后就不管了：不写完
-        // body、不 close，模拟「头到了，body 永远不来」。
-        req.response.write(' ');
-        await req.response.flush();
-        return;
+      // **整段包起来。** 这个回调是 `async` 的，它返回的 future 没有人接 ——
+      // 里面抛出来的任何东西都是一个逸出去的 zone 错误，在 `flutter_test`
+      // 里就是一片框架级的红，而且红在跟被测代码毫无关系的地方。
+      //
+      // 真会抛的是收摊那一下：测试结束时 `stop()` 会 `force: true` 地关掉
+      // 整台服务器，而那一刻很可能还有一条请求在半路上（遥控屏 300 毫秒
+      // 一拍、200 毫秒一次心跳，几乎总有一条在飞）。读 body 那一步于是抛
+      // `HttpException: Connection closed while receiving data`。
+      // 那不是错，那就是收摊。
+      try {
+        final raw = await utf8.decoder.bind(req).join();
+        received.add((
+          method: req.method,
+          path: req.uri.path,
+          auth: req.headers.value('authorization'),
+          body: raw.isEmpty ? null : jsonDecode(raw),
+          raw: raw,
+        ));
+        req.response.statusCode = statusCodes[req.uri.path] ?? 200;
+        req.response.headers.contentType = ContentType.json;
+        if (hangPaths.contains(req.uri.path)) {
+          // 逼头真的发出去（写一个字节触发 flush），然后就不管了：不写完
+          // body、不 close，模拟「头到了，body 永远不来」。
+          req.response.write(' ');
+          await req.response.flush();
+          return;
+        }
+        req.response
+            .write(jsonEncode(replies[req.uri.path] ?? <String, dynamic>{}));
+        await req.response.close();
+      } catch (_) {
+        // 见上。对面走了就是走了。
       }
-      req.response
-          .write(jsonEncode(replies[req.uri.path] ?? <String, dynamic>{}));
-      await req.response.close();
     });
   }
 

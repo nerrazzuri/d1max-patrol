@@ -31,6 +31,8 @@ import 'package:d1max_patrol/ui/widget/live_video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/pump.dart';
+
 /// 一张真的 2x2 JPEG。
 ///
 /// **不能拿几个字节冒充。** `Image.memory` 真的会去解码，解不开的时候
@@ -207,74 +209,10 @@ class CountingClient implements PatrolClient {
       throw UnimplementedError();
 }
 
-Widget _wrap(Widget w) => MaterialApp(home: Scaffold(body: w));
-
-/// 一边推真时钟一边 pump，直到条件成立。
-///
-/// widget 测试跑在假时钟上，真的网络 I/O 只有在 `runAsync` 里才推得动；而
-/// `runAsync` 里又不许 pump。所以只能这样交替着来。**不是固定 sleep**
-/// (§8.5 第 2 条)：条件一成立立刻出去，超时了就报清楚在等什么。
-Future<void> _pumpUntil(WidgetTester t, bool Function() ok, String why,
-    {Duration step = const Duration(milliseconds: 200)}) async {
-  final DateTime deadline = DateTime.now().add(const Duration(seconds: 10));
-  while (!ok()) {
-    if (DateTime.now().isAfter(deadline)) {
-      fail('等了 10 秒还没等到：$why');
-    }
-    await t.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 5)));
-    // 假时钟也要跟着走:重连那个定时器挂在它上面，`pump()` 不带时长的话
-    // 它永远不到点。
-    await t.pump(step);
-  }
-}
-
-/// 真时钟上等条件成立。给不带 widget 的那几条用。
-Future<void> _until(bool Function() ok, String why) async {
-  final DateTime deadline = DateTime.now().add(const Duration(seconds: 10));
-  while (!ok()) {
-    if (DateTime.now().isAfter(deadline)) {
-      fail('等了 10 秒还没等到：$why');
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-  }
-}
-
-/// 收摊：先把 widget 拆了(连接跟着 `dispose` 一起关)，再收假狗。
-///
-/// **不许 `await` `close()` / `cancel()`。** 在 widget 测试的假时钟上等这两个
-/// future，测试体跑完之后整条测试再也回不来 —— 不报错、不超时，卡到 CI 把
-/// 它杀掉为止(这台机器上复现过，`testWidgets` 里 `await sub.cancel()` 就够)。
-Future<void> _teardown(
-    WidgetTester t, StreamController<VideoHealth> ctl, FakeVideoDog? dog) async {
-  await t.pumpWidget(const SizedBox());
-  unawaited(ctl.close());
-  await t.pump();
-  if (dog != null) {
-    await t.runAsync(dog.stop);
-  }
-}
-
 void main() {
-  HttpOverrides? saved;
-  bool savedTaken = false;
-
-  setUp(() {
-    // `flutter_test` 的绑定会把 `HttpOverrides.global` 换成一个所有请求都
-    // 回 400 的假件(`flutter_test/lib/src/_binding_io.dart` 的
-    // `setupHttpOverrides`)。这个文件要证的正是「真的发了一次 GET」，所以
-    // 得把它摘掉，跑完再装回去。
-    // `global` 只有 setter，读回来要走 `current`。
-    if (!savedTaken) {
-      saved = HttpOverrides.current;
-      savedTaken = true;
-    }
-    HttpOverrides.global = null;
-  });
-
-  tearDown(() {
-    HttpOverrides.global = saved;
-  });
+  // 摘掉 `flutter_test` 那个「所有请求都回 400」的 HttpOverrides:这个文件
+  // 要证的正是「真的发了一次 GET」。助手在 `support/pump.dart`。
+  useRealHttp();
 
   group('分帧器', () {
     test('boundary 从响应头里解出来，手工拼的流切得对', () {
@@ -365,7 +303,7 @@ void main() {
             token: 'T0KEN')
         .listen(frames.add, onError: (Object e) => blew = e);
 
-    await _until(() => frames.isNotEmpty || blew != null, '第一帧');
+    await until(() => frames.isNotEmpty || blew != null, '第一帧');
     expect(blew, isNull);
     expect(frames.first, _jpeg, reason: '解出来的得是裸 JPEG，不是 multipart 信封');
     expect(dog.auths.single, 'Bearer T0KEN');
@@ -382,23 +320,23 @@ void main() {
     final FakeVideoDog dog = FakeVideoDog();
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
 
     ctl.add(const VideoHealth(<String, bool>{'front': true}));
-    await _pumpUntil(
+    await pumpUntil(
         t, () => find.byType(Image).evaluate().isNotEmpty, '画面出来');
 
     expect(find.byType(Image), findsOneWidget);
     // 画的是自己解出来的那一帧，不是 `Image.network` 去拉的。
     expect(t.widget<Image>(find.byType(Image)).image, isA<MemoryImage>());
 
-    await _teardown(t, ctl, dog);
+    await teardown(t, ctl, dog.stop);
   });
 
   testWidgets('不在线时说人话，不是转圈', (WidgetTester t) async {
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: 'http://127.0.0.1:9', camera: 'front', health: ctl.stream)));
 
     ctl.add(const VideoHealth(<String, bool>{'front': false}));
@@ -408,7 +346,7 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing,
         reason: '一直转圈的圈跟「连不上」长得一样，人分不出该等还是该走过去看');
 
-    await _teardown(t, ctl, null);
+    await teardown(t, ctl);
   });
 
   testWidgets('掉线再回来要重新拉流', (WidgetTester t) async {
@@ -420,11 +358,11 @@ void main() {
     final FakeVideoDog dog = FakeVideoDog();
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
 
     ctl.add(const VideoHealth(<String, bool>{'front': true}));
-    await _pumpUntil(
+    await pumpUntil(
         t, () => find.byType(Image).evaluate().isNotEmpty, '第一条流的画面');
     expect(dog.gets, 1);
 
@@ -438,12 +376,12 @@ void main() {
         reason: '掉线了还挂着最后一帧，人会以为看到的是此刻');
 
     ctl.add(const VideoHealth(<String, bool>{'front': true}));
-    await _pumpUntil(t, () => dog.gets >= 2, '第二次 GET');
+    await pumpUntil(t, () => dog.gets >= 2, '第二次 GET');
     expect(dog.gets, 2);
-    await _pumpUntil(
+    await pumpUntil(
         t, () => find.byType(Image).evaluate().isNotEmpty, '重连后的画面');
 
-    await _teardown(t, ctl, dog);
+    await teardown(t, ctl, dog.stop);
   });
 
   testWidgets('流自己断了、健康还说在线，也要自己把画面接回来', (WidgetTester t) async {
@@ -453,15 +391,15 @@ void main() {
     final FakeVideoDog dog = FakeVideoDog(closes: true);
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
 
     // 只喂这一次「在线」。后面那次 GET 不是谁通知出来的。
     ctl.add(const VideoHealth(<String, bool>{'front': true}));
-    await _pumpUntil(t, () => dog.gets >= 2, '流断掉之后自己发的第二次 GET');
+    await pumpUntil(t, () => dog.gets >= 2, '流断掉之后自己发的第二次 GET');
 
     expect(dog.gets, greaterThanOrEqualTo(2));
-    await _teardown(t, ctl, dog);
+    await teardown(t, ctl, dog.stop);
   });
 
   testWidgets('一直被拒就越等越久，而且屏幕上说得出「人太多了」', (WidgetTester t) async {
@@ -472,7 +410,7 @@ void main() {
     final FakeVideoDog dog = FakeVideoDog(status: 503);
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
 
     ctl.add(const VideoHealth(<String, bool>{'front': true}));
@@ -495,7 +433,7 @@ void main() {
     expect(find.textContaining('HttpException'), findsNothing,
         reason: '现场屏幕上要的是「该做什么」，不是 Dart 的异常文本');
 
-    await _teardown(t, ctl, dog);
+    await teardown(t, ctl, dog.stop);
   });
 
   testWidgets('父层换了相机，画面要跟着换，不能停在上一路上', (WidgetTester t) async {
@@ -505,20 +443,20 @@ void main() {
     final FakeVideoDog dog = FakeVideoDog();
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
 
     ctl.add(const VideoHealth(<String, bool>{'front': true, 'back': true}));
-    await _pumpUntil(
+    await pumpUntil(
         t, () => find.byType(Image).evaluate().isNotEmpty, '第一路的画面');
     expect(dog.paths.single, '/api/video/front');
 
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'back', health: ctl.stream)));
-    await _pumpUntil(t, () => dog.paths.length >= 2, '换了相机之后的那次 GET');
+    await pumpUntil(t, () => dog.paths.length >= 2, '换了相机之后的那次 GET');
 
     expect(dog.paths.last, '/api/video/back');
-    await _teardown(t, ctl, dog);
+    await teardown(t, ctl, dog.stop);
   });
 
   testWidgets('接上了就把退避清回 2 秒，别拿着 16 秒去等一条好狗',
@@ -534,9 +472,28 @@ void main() {
     // `frames: 2`:分帧器要看见**下一个边界**才敢吐上一帧,发一帧就关的话
     // 一帧都解不出来 —— 那样测的就不是"接上过"，是"一次都没接上"。
     final FakeVideoDog dog = FakeVideoDog(frames: 2, closes: true);
+
+    // **「真的解出过帧」是这条测试的前提，得自己钉住。**
+    // 下面量的是"接上过之后退避有没有清回 2 秒"，而"接上过"这个前提整个系在
+    // `frames: 2` 上:改成 1 的话一帧都解不出来(分帧器要看见**下一个**边界才
+    // 敢吐上一帧)，于是测的变成了"一次都没接上"—— 可那时候两条断言的红跟
+    // "退避没清零"的红长得一模一样，分不出是哪一种坏。
+    // 这里把假狗要写的字节原样再喂一遍分帧器:切不出帧就在这儿红，红得指着
+    // 前提本身。
+    // (不能改去盯屏幕上的 `Image`:帧到达和 `onDone` 落在同一个事件轮次里，
+    // 中间没有 pump，画面被清掉之后那一帧在树上从来没出现过。)
+    final MjpegParser premise = MjpegParser(dog.boundary);
+    int decodable = 0;
+    for (int i = 0; i < dog.frames; i++) {
+      decodable += premise.add(_part(dog.boundary, _jpeg)).length;
+    }
+    expect(decodable, greaterThan(0),
+        reason: '假狗这一条连接上一帧都切不出来的话，下面量的就不是'
+            '"接上过之后的退避"，而是"一次都没接上"');
+
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
 
     ctl.add(const VideoHealth(<String, bool>{'front': true}));
@@ -554,7 +511,7 @@ void main() {
         reason: '每次都拿到过画面，退避就该清回 2 秒:第三次 GET 在 2+2≈4 秒。'
             '不清零的话是 2+4≈6 秒起步');
 
-    await _teardown(t, ctl, dog);
+    await teardown(t, ctl, dog.stop);
   });
 
   testWidgets('换了健康流之后，旧那条连接要真的被掐掉', (WidgetTester t) async {
@@ -570,26 +527,26 @@ void main() {
     final FakeVideoDog dog = FakeVideoDog(feedForever: true);
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> first = StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: first.stream)));
 
     first.add(const VideoHealth(<String, bool>{'front': true}));
-    await _pumpUntil(
+    await pumpUntil(
         t, () => find.byType(Image).evaluate().isNotEmpty, '第一路的画面');
     expect(dog.connections, 1, reason: '这会儿连接还该好好地连着');
 
     final StreamController<VideoHealth> second =
         StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: second.stream)));
-    await _pumpUntil(t, () => dog.connections == 0 || dog.dropped.isNotEmpty,
+    await pumpUntil(t, () => dog.connections == 0 || dog.dropped.isNotEmpty,
         '狗那头看见旧连接断掉');
 
     expect(dog.connections, 0, reason: '旧连接还挂着就是在占 6 个观看名额之一');
     expect(dog.gets, 1, reason: '换的只是健康流，新那条还没说话，不该急着开新连接');
 
     unawaited(first.close());
-    await _teardown(t, second, dog);
+    await teardown(t, second, dog.stop);
   });
 
   testWidgets('一个字节都不来的时候三秒就断开重来，不是先烧 8 MiB 流量',
@@ -601,7 +558,7 @@ void main() {
     final FakeVideoDog dog = FakeVideoDog(silent: true);
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
-    await t.pumpWidget(_wrap(LiveVideo(
+    await t.pumpWidget(wrap(LiveVideo(
         baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
 
     ctl.add(const VideoHealth(<String, bool>{'front': true}));
@@ -621,7 +578,7 @@ void main() {
     expect(find.textContaining('地址和端口'), findsOneWidget,
         reason: '"地址不对"跟"狗没起来""人太多了"要做的事完全不同');
 
-    await _teardown(t, ctl, dog);
+    await teardown(t, ctl, dog.stop);
   });
 
   test('轮询器按周期问，停了就不再问', () async {
