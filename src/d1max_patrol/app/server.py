@@ -78,7 +78,7 @@ from d1max_patrol.app.mapping import (
 )
 from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.teleop import PROFILES, Teleop, TeleopBusy
-from d1max_patrol.app.video import CAMERAS, MjpegSource, RtspStill, VideoError
+from d1max_patrol.app.video import CAMERAS, CameraFeed, RtspStill, VideoError
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
@@ -573,7 +573,7 @@ class AppContext:
     runs_root: Path
     #: 相机名 -> 那一路 RTSP 流。没配的相机在页面上是一句"没配地址",
     #: 而不是一个转不出来的图标。
-    video: Mapping[str, MjpegSource] = field(default_factory=dict)
+    video: Mapping[str, CameraFeed] = field(default_factory=dict)
     #: 这是哪只狗。手机按它认机器、给归档分组 —— 每只 D1 Max 的内网地址
     #: 都一样,靠地址分不出谁是谁(见 ``app/identity.py``)。
     identity: Identity = field(default_factory=resolve)
@@ -3160,8 +3160,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         params_template=Path(args.params_file)))
 
     # 相机源现在就造好,但一条 ffmpeg 都不起 —— 真起是在有人打开画面的时候。
-    video = {name: MjpegSource(f"rtsp://{args.camera_host}:8554/{name}",
-                               ffmpeg=args.ffmpeg)
+    video = {name: CameraFeed(f"rtsp://{args.camera_host}:8554/{name}",
+                              ffmpeg=args.ffmpeg)
              for name in CAMERAS}
 
     ctx = AppContext(bridge=bridge, engine=engine, nav=nav, device=device,

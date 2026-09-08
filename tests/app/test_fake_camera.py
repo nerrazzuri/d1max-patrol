@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.app.video import MjpegSource, RtspStill
+from d1max_patrol.app.video import CameraFeed, RtspStill
 
 #: JPEG 起始标记。video.py 里是私有的,测试自己写一份不算重复。
 SOI = b"\xff\xd8"
@@ -117,14 +117,15 @@ async def test_拍照那条路真能用它取到图(tmp_path):
 
 
 async def test_实时画面那条路也真能用它(tmp_path):
-    source = MjpegSource("rtsp://127.0.0.1:8554/back", ffmpeg=_shim(tmp_path),
-                         fps=20.0)
-    stream = source.stream()
+    feed = CameraFeed("rtsp://127.0.0.1:8554/back", ffmpeg=_shim(tmp_path),
+                      fps=20.0)
+    stream = feed.stream()
     try:
         first = next(stream)
         second = next(stream)
     finally:
         stream.close()
+        feed.close()
     assert first.startswith(b"\xff\xd8") and second.startswith(b"\xff\xd8")
 
 
