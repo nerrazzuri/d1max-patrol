@@ -102,6 +102,21 @@ class AuditRecord:
 class LeaseState:
     """这一刻的租约。``ttl_ms``/``heartbeat_ms`` 跟着一起发出去 —— 客户端
     不该把心跳间隔硬编在自己那头。
+
+    **界面上的倒计时一律读 ``expires_in_ms`` / ``grace_in_ms`` 这两个相对量,
+    不许拿 ``expires_ms`` / ``grace_ends_ms`` 去减手机自己的钟。** 狗上没有
+    NTP,它的 RTC 和手机的钟必然对不上;两边差几秒,一个"还剩 15 秒"的接管
+    倒计时就可能显示成负数,或者显示成还剩半分钟。两个绝对时刻**保留**是给
+    审计和日志用的(要能跟别的记录对时间),不是给界面算倒计时用的。
+
+    这两个相对量是**服务端在同一个 ``now_ms`` 上算出来的**(见
+    ``LeaseBook._snapshot``),所以它们和 ``holder``/``challenger`` 说的是同一
+    刻的事,自己内部对得上。会话那一侧的 ``Session.to_wire()`` 送
+    ``idle_for_s`` 也是同一个做法。
+
+    **过期之后是 0,不是负数。** 手机端不必自己夹到 0,读到 0 就是"这一刻
+    已经没了";没有持有者(或者没人在挑战)时是 ``None``,那是"这件事根本不
+    存在",跟 0 不是一回事,界面上不该画成 0 秒。
     """
 
     holder: Holder | None = None
@@ -110,6 +125,10 @@ class LeaseState:
     grace_ends_ms: int | None = None
     ttl_ms: int = LEASE_TTL_MS
     heartbeat_ms: int = LEASE_HEARTBEAT_MS
+    #: 离到期还有多少毫秒。**相对量,倒计时读这个。** 没有持有者就是 ``None``。
+    expires_in_ms: int | None = None
+    #: 离宽限期结束还有多少毫秒。**相对量。** 没人在挑战就是 ``None``。
+    grace_in_ms: int | None = None
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -120,7 +139,20 @@ class LeaseState:
             "grace_ends_ms": self.grace_ends_ms,
             "ttl_ms": self.ttl_ms,
             "heartbeat_ms": self.heartbeat_ms,
+            "expires_in_ms": self.expires_in_ms,
+            "grace_in_ms": self.grace_in_ms,
         }
+
+
+def _剩余毫秒(at_ms: int | None, now_ms: int) -> int | None:
+    """绝对时刻换成余量。**已经过去了就是 0,不是负数。**
+
+    ``None`` 原样传下去 —— "这件事不存在"和"这件事还剩 0 毫秒"在界面上是两
+    种画法,不许合并成一个。
+    """
+    if at_ms is None:
+        return None
+    return max(0, at_ms - now_ms)
 
 
 def _显示名(who: Holder) -> str:
@@ -159,7 +191,7 @@ class LeaseBook:
         """
         with self._lock:
             self._settle(now_ms)
-            return self._snapshot()
+            return self._snapshot(now_ms)
 
     @property
     def audit(self) -> tuple[AuditRecord, ...]:
@@ -185,13 +217,13 @@ class LeaseBook:
             self._settle(now_ms)
             if self._holder is not None and self._holder.ref == ref:
                 self._expires = now_ms + self._ttl
-                return self._snapshot()
+                return self._snapshot(now_ms)
             if self._holder is not None:
                 raise LeaseBusy(
                     f"控制权在 {_显示名(self._holder)} 手上,"
                     f"{self._剩余秒(now_ms)} 秒后到期")
             self._grant(Holder(ref, operator), now_ms, "acquired", "")
-            return self._snapshot()
+            return self._snapshot(now_ms)
 
     def renew(self, ref: str, *, now_ms: int) -> LeaseState:
         """续租。**不取消正在走的接管请求** —— §3.5 规则 3 说的是"同意或超时
@@ -202,7 +234,7 @@ class LeaseBook:
             if self._holder is None or self._holder.ref != ref:
                 raise LeaseLost("你已经不是持有者了 —— 租约到期或者被接管了")
             self._expires = now_ms + self._ttl
-            return self._snapshot()
+            return self._snapshot(now_ms)
 
     def release(self, ref: str, *, now_ms: int) -> LeaseState:
         """交回。**幂等**:交回一份本来就不属于你的租约不是错误 —— app 退出
@@ -213,7 +245,7 @@ class LeaseBook:
             if self._holder is not None and self._holder.ref == ref:
                 self._log(now_ms, "released", self._holder, "")
                 self._clear()
-            return self._snapshot()
+            return self._snapshot(now_ms)
 
     def keep_only(self, refs: Iterable[str], *, now_ms: int) -> LeaseState:
         """只留下这些 token 指纹的租约。**token 一失效,租约立即释放**(§6.4)。
@@ -243,7 +275,7 @@ class LeaseBook:
                 if waiting is not None:
                     self._grant(waiting, now_ms, "taken_over",
                                 "原持有者的 token 失效了")
-            return self._snapshot()
+            return self._snapshot(now_ms)
 
     def ask_takeover(self, ref: str, operator: str = "", *,
                      now_ms: int) -> LeaseState:
@@ -262,7 +294,7 @@ class LeaseBook:
             self._settle(now_ms)
             if self._holder is None:
                 self._grant(Holder(ref, operator), now_ms, "acquired", "")
-                return self._snapshot()
+                return self._snapshot(now_ms)
             if self._holder.ref == ref:
                 raise LeaseError("控制权已经在你手上了")
             if self._challenger is not None and self._challenger.ref != ref:
@@ -274,7 +306,7 @@ class LeaseBook:
             self._grace_ends = now_ms + self._grace
             self._log(now_ms, "takeover_asked", who,
                       f"要从 {_显示名(self._holder)} 手里接管")
-            return self._snapshot()
+            return self._snapshot(now_ms)
 
     def approve(self, ref: str, *, now_ms: int) -> LeaseState:
         """当前持有者同意移交。立刻交,不等宽限期走完。
@@ -292,7 +324,7 @@ class LeaseBook:
                 raise LeaseLost("只有当前持有者能同意移交")
             detail = f"{_显示名(self._holder)} 同意移交"
             self._grant(self._challenger, now_ms, "taken_over", detail)
-            return self._snapshot()
+            return self._snapshot(now_ms)
 
     def force(self, ref: str, operator: str = "", *, now_ms: int,
               reason: str) -> LeaseState:
@@ -322,7 +354,7 @@ class LeaseBook:
             前任 = _显示名(self._holder) if self._holder else "(本来没人持有)"
             self._grant(Holder(ref, operator), now_ms, "forced",
                         f"从 {前任} 手里强制接管:{reason.strip()}")
-            return self._snapshot()
+            return self._snapshot(now_ms)
 
     # -------------------------------------------------------------- 内部
 
@@ -370,9 +402,22 @@ class LeaseBook:
         if len(self._audit) > self._audit_max:
             del self._audit[:len(self._audit) - self._audit_max]
 
-    def _snapshot(self) -> LeaseState:
-        return LeaseState(self._holder, self._expires, self._challenger,
-                           self._grace_ends, self._ttl, self._beat)
+    def _snapshot(self, now_ms: int) -> LeaseState:
+        """这一刻的租约。**两个相对量在这里算,不许让客户端自己减。**
+
+        每个公开方法都已经拿着调用方传进来的 ``now_ms``,所以这里不需要新参数,
+        也不需要看钟(这个模块不看钟,见模块 docstring)。
+        """
+        return LeaseState(
+            holder=self._holder,
+            expires_ms=self._expires,
+            challenger=self._challenger,
+            grace_ends_ms=self._grace_ends,
+            ttl_ms=self._ttl,
+            heartbeat_ms=self._beat,
+            expires_in_ms=_剩余毫秒(self._expires, now_ms),
+            grace_in_ms=_剩余毫秒(self._grace_ends, now_ms),
+        )
 
     def _剩余秒(self, now_ms: int) -> int:
         if self._expires is None:

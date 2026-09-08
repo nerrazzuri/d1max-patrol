@@ -8,10 +8,12 @@ from d1max_patrol.engine.lease import (
     AUDIT_KINDS,
     LEASE_HEARTBEAT_MS,
     LEASE_TTL_MS,
+    TAKEOVER_GRACE_MS,
     Holder,
     LeaseBook,
     LeaseBusy,
     LeaseLost,
+    _剩余毫秒,
 )
 
 T0 = 1_757_000_000_000
@@ -182,7 +184,56 @@ def test_状态能整个发出去():
         "grace_ends_ms": None,
         "ttl_ms": LEASE_TTL_MS,
         "heartbeat_ms": LEASE_HEARTBEAT_MS,
+        "expires_in_ms": LEASE_TTL_MS,
+        "grace_in_ms": None,
     }
+
+
+# ------------------------------------------ 倒计时读的是相对量(挂账 52)
+
+
+def test_到期余量是服务端算好的相对量():
+    """**手机端的倒计时不许拿绝对时刻减自己的钟。**
+
+    狗上没有 NTP,它的 RTC 和手机的钟必然漂;两边差几秒,一个"还剩 15 秒"的
+    倒计时就可能显示成负数。所以余量在服务端、在同一个 ``now_ms`` 上算好。
+    """
+    book = LeaseBook()
+    st = book.acquire("aa11bb22", "张三", now_ms=T0)
+    assert st.expires_in_ms == LEASE_TTL_MS
+    st = book.state(now_ms=T0 + 8_000)
+    assert st.expires_in_ms == LEASE_TTL_MS - 8_000
+    # 绝对时刻**保留** —— 审计和日志要拿它跟别的记录对时间。
+    assert st.expires_ms == T0 + LEASE_TTL_MS
+
+
+def test_礼貌接管的宽限期也有相对量():
+    """挑战者那 15 秒倒计时是 §3.5 规则 3 的核心交互,它**没有第二条路**能算。"""
+    book = LeaseBook()
+    book.acquire("aa11bb22", "张三", now_ms=T0)
+    st = book.ask_takeover("cc33dd44", "李四", now_ms=T0 + 1_000)
+    assert st.grace_in_ms == TAKEOVER_GRACE_MS
+    st = book.state(now_ms=T0 + 1_000 + 5_000)
+    assert st.grace_in_ms == TAKEOVER_GRACE_MS - 5_000
+    assert st.grace_ends_ms == T0 + 1_000 + TAKEOVER_GRACE_MS
+
+
+def test_没有持有者时余量是none不是零():
+    """"这件事不存在"和"这件事还剩 0 毫秒"在界面上是两种画法。"""
+    st = LeaseBook().state(now_ms=T0)
+    assert st.expires_in_ms is None
+    assert st.grace_in_ms is None
+
+
+def test_余量不会是负数():
+    """过期之后送 0,手机端不必自己夹 —— 读到 0 就是"这一刻已经没了"。"""
+    book = LeaseBook()
+    book.acquire("aa11bb22", "张三", now_ms=T0)
+    # 直接问一个远在到期之后的时刻:结算会把租约收掉,余量归 None。
+    assert book.state(now_ms=T0 + LEASE_TTL_MS * 10).expires_in_ms is None
+    # 而在结算之前的那一刻,余量必须是 0 而不是负数。
+    assert _剩余毫秒(T0, T0 + 5_000) == 0
+    assert _剩余毫秒(None, T0) is None
 
 
 def test_审计能整个发出去():
