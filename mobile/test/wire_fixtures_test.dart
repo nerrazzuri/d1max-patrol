@@ -139,6 +139,28 @@ void main() {
         reason: '没人在抢的时候不许凭空长出一个挑战者');
   });
 
+  test('租约：heartbeat_ms 解得出来,缺了是 null 不是 0', () {
+    // 面板的校准周期是**从这个字段算出来的**（`engine/lease.py` 的
+    // `LeaseState` 明写客户端不该硬编心跳间隔）。解不出来的话，面板会以为
+    // 狗没说，一直按缺省的 3 秒走 —— 狗那头把 `LEASE_HEARTBEAT_MS` 调了，
+    // 手机不跟，而两头的代码各自看都是对的。
+    expect(LeaseView.fromJson(_load('lease_state')).heartbeatMs, 10000,
+        reason: '夹具是狗那头生成的，出厂常量 LEASE_HEARTBEAT_MS = 10_000');
+    // 老版本的狗压根没这一项。**缺了是 `null` 不是 0**：塌成 0 的话，
+    // 「狗没说」跟「狗说 0」就分不开了，而后者是个不合法的数。
+    final Map<String, dynamic> without = <String, dynamic>{
+      ..._load('lease_state')
+    }..remove('heartbeat_ms');
+    expect(LeaseView.fromJson(without).heartbeatMs, isNull);
+    expect(
+        LeaseView.fromJson(<String, dynamic>{
+          ..._load('lease_state'),
+          'heartbeat_ms': null,
+        }).heartbeatMs,
+        isNull,
+        reason: '发了个 JSON null 跟压根没发，在这头是同一个答案');
+  });
+
   test('三个视图都吃得下狗发的那份', () {
     expect(LeaseView.fromJson(_load('lease_state')).expiresInMs, isPositive);
     expect(VideoHealth.fromJson(_load('video_health')).online, isNotEmpty);

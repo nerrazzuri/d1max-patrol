@@ -20,6 +20,16 @@ class LeaseView {
 
   /// 宽限期还剩多久（毫秒）。没人在挑战就是 `null`。同样是相对量。
   final int? graceInMs;
+
+  /// 狗要求多久续一次租约（毫秒）。**面板的校准/续期周期从这儿算，不硬编。**
+  ///
+  /// `engine/lease.py` 的 `LeaseState` docstring 明写「`ttl_ms`/`heartbeat_ms`
+  /// 跟着一起发出去 —— 客户端不该把心跳间隔硬编在自己那头」。硬编的那头是
+  /// 这样坏的：狗那边把 `LEASE_HEARTBEAT_MS` 调小（比如为了让接管更快生效），
+  /// 手机还按老节奏续，人正开着狗，杆忽然灰了，而两头的代码各自看都是对的。
+  ///
+  /// 狗没发这一项（老版本的狗）就是 `null`，那时候回落到面板自己的缺省值。
+  final int? heartbeatMs;
   final String? holderRef;
   final String holderOperator;
 
@@ -48,6 +58,7 @@ class LeaseView {
   const LeaseView({
     this.expiresInMs,
     this.graceInMs,
+    this.heartbeatMs,
     this.holderRef,
     this.holderOperator = '',
     this.mine = false,
@@ -64,6 +75,7 @@ class LeaseView {
     return LeaseView(
       expiresInMs: (m['expires_in_ms'] as num?)?.toInt(),
       graceInMs: (m['grace_in_ms'] as num?)?.toInt(),
+      heartbeatMs: (m['heartbeat_ms'] as num?)?.toInt(),
       holderRef: h?['ref'] as String?,
       holderOperator: (h?['operator'] as String?) ?? '',
       mine: m['mine'] == true,
