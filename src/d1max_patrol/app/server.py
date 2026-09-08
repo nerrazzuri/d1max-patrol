@@ -1059,10 +1059,20 @@ class AppServer:
 
         **鉴权就在这一处。** 所有请求都从这儿过,放在这里不会漏 —— 而白名单
         式的"给某几个接口加检查"迟早会漏掉新加的那个,偏偏新加的往往最危险。
+
+        **L1 控制权的闸也在这儿,而且在路由匹配之前。** 它是**按路径**判的,
+        不是按处理函数判的: 放到匹配之后就得在十一个处理函数里各写一遍,而
+        漏写一个不会有任何报错 —— 只会安静地少一道闸。放在这里,
+        ``control.CONTROLLED`` 那张表就是唯一的真相, 读一处就知道哪些接口要
+        控制权。代价是遥控每一拍(5 Hz)多走一次 ``sweep``: 一把锁、一次
+        ``frozenset`` 比较、几个整数比较, 跟同一条请求里已经有的
+        ``TokenStore.info``(也上一把锁)是同一个量级。
         """
         headers = headers or {}
         try:
             session = self._auth.gate(method, path, headers, query)
+            self._control.require(session, method, path,
+                                  now_ms=self._ctx.clock())
         except Denied as exc:
             raise HttpError(exc.status, exc.error, exc.detail) from None
         if path.startswith("/static/"):
