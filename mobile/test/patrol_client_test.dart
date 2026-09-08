@@ -34,6 +34,10 @@ void main() {
   tearDown(() async {
     c.close();
     await dog.stop();
+    // **假狗自己出的错要看得见。** 不看这一眼的话，假狗里的笔误（回复里塞了
+    // 个编码不了的东西之类）长得跟「这条路不回话」一模一样，人会掉头去查
+    // 客户端的超时和重试。跟 `teleop_page_test.dart` 的 `unmount` 一个规矩。
+    expect(dog.errors, isEmpty, reason: '假狗自己抛了：查的是假狗，不是被测代码');
   });
 
   test('PIN 从不上网', () async {
