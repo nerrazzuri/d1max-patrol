@@ -64,7 +64,7 @@ LOCKOUT_S = 30.0
 MAX_LOCKOUT_S = 900.0
 
 #: ``Throttle`` 最多同时记多少个来源 IP。内存兜底 —— 见 ``Throttle`` 的
-#: docstring:淘汰只挑**没锁着**的条目。
+#: docstring:淘汰分两档,第一档优先扔没锁着的,扔完还超才动锁着的兜底。
 MAX_THROTTLE_CLIENTS = 512
 
 #: token 有多少字节的熵。32 字节 = 256 位,猜不着。
