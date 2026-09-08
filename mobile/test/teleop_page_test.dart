@@ -411,6 +411,70 @@ void main() {
     await unmount(t, rig);
   });
 
+  testWidgets('心跳一直不通的时候那句话不许闪', (WidgetTester t) async {
+    /// R-1：**每条路只清自己写的那一句。** 发拍成功那一下要是顺手把心跳那句
+    /// 也抹了，在「心跳端点挂了、发拍还通」这个场景里就成了：发拍每 300 毫秒
+    /// 抹一次、心跳每 200 毫秒挂回去 —— 人正推着杆，那行字在屏上闪。
+    /// **闪着的字比没有字更糟**：人当它是花屏，于是真断了也不当回事。
+    ///
+    /// **这条测试非推着杆不可。** 手停在零位就不发拍，也就没人来抹 ——
+    /// 上面那条心跳测试正是这么漏掉的。
+    final Rig rig = await mount(t);
+    rig.dog.statusCodes['/api/teleop/heartbeat'] = 500;
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    await pumpUntil(t, () => find.text(beatTroubleHint).evaluate().isNotEmpty,
+        '心跳连着失败之后状态带上那句话（推着杆）');
+
+    // 采样：连着好几拍地看，那句话一次都不许不见。
+    final int pulsesAtStart = rig.pulses.length;
+    int missing = 0;
+    for (int i = 0; i < 16; i++) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await t.pump(const Duration(milliseconds: 100));
+      if (find.text(beatTroubleHint).evaluate().isEmpty) missing++;
+    }
+    // **先证这一段里发拍真的在跑**，否则「没闪」是空绿的。
+    expect(rig.pulses.length - pulsesAtStart, greaterThanOrEqualTo(3),
+        reason: '这一段里几乎没发出拍：那这条测试根本没碰到「发拍会不会抹掉心跳那句」');
+    expect(missing, 0,
+        reason: '心跳还断着，那句话却在 16 次采样里没了 $missing 次：'
+            '发拍成功那一下把别人写的话也清了');
+
+    await g.up();
+    await unmount(t, rig);
+  });
+
+  testWidgets('心跳抖一两下不上屏,连着五次才说话', (WidgetTester t) async {
+    /// R-2：Ruling 78 有两半，这条钉的是**「一次抖动不上屏」**那半。
+    /// 5 Hz 的心跳掉一两拍是热点常态，每掉一拍就往状态带上写一句，那条带子
+    /// 三天就没人看了 —— 真断的时候那句话也就不起作用了。
+    ///
+    /// 数的是**狗收到了几次**：客户端那头的 `_beatFails` 只会比它少（回复还
+    /// 在路上），所以「狗才收到 4 次」时失败次数必然 < 5，这时候上屏就是错的。
+    final Rig rig = await mount(t);
+    rig.dog.statusCodes['/api/teleop/heartbeat'] = 500;
+    final DateTime deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (rig.beats < 4) {
+      if (DateTime.now().isAfter(deadline)) {
+        fail('等了 10 秒还没等到：心跳发够 4 次');
+      }
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await t.pump(const Duration(milliseconds: 50));
+      expect(find.text(beatTroubleHint), findsNothing,
+          reason: '狗才收到 ${rig.beats} 次心跳就上屏了：抖一下就喊，'
+              '喊多了这条状态带就没人看，真断的时候也白喊');
+    }
+    await pumpUntil(t, () => find.text(beatTroubleHint).evaluate().isNotEmpty,
+        '连着五次之后那句话', step: const Duration(milliseconds: 50));
+    expect(rig.beats, greaterThanOrEqualTo(5),
+        reason: '不到五次就说话了：门槛没在起作用');
+    await unmount(t, rig);
+  });
+
   testWidgets('窄屏上两根杆不许叠在一起', (WidgetTester t) async {
     /// 盒子写死 200 的话，<400dp 宽的竖屏上两根杆是叠着的，而**重叠那一块
     /// 归 `Stack` 里靠后的右杆** —— 人按左下角想往前走，狗原地转弯。

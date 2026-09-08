@@ -146,7 +146,16 @@ class _TeleopPageState extends State<TeleopPage> {
   /// 心跳连着失败了几次。见 [_beatFailsToWarn]。
   int _beatFails = 0;
 
+  /// 发拍那条路要说的话。**只有 [_post]（和视频回来那一下）写它、清它。**
+  ///
+  /// 跟 [_beatTrouble] 分开是必须的，不是洁癖：合在一个槽里的时候，发拍每
+  /// 300 毫秒成功一次就把心跳那句话抹掉、心跳每 200 毫秒再挂回去 —— 那行字
+  /// 在人正推着杆的时候一直在闪，而「心跳端点挂了、发拍还通」恰恰是这句话
+  /// 唯一存在的理由。**每条路只清自己写的那一句。**
   String _trouble = '';
+
+  /// 心跳那条路要说的话（[beatTroubleHint]）。**只有 [_beat] 写它、清它。**
+  String _beatTrouble = '';
 
   String _mode = 'onsite';
 
@@ -154,6 +163,16 @@ class _TeleopPageState extends State<TeleopPage> {
   ///
   /// **每次都弹同一个框，第三次就被条件反射点掉了。** 真正兜底的是狗那头
   /// 那条留痕（Task 7），不是这个框弹了几次。
+  ///
+  /// **切档请求失败了也不回滚这一位 —— 跟 [_mode] 的不对称是有意的。**
+  /// 两个变量记的不是同一件事：[_mode] 是**对狗的状态的断言**，它决定屏幕上
+  /// 写着哪一档，而档位就是速度上限，屏幕和狗不一致人就会按错的手感推，所以
+  /// 它必须跟着请求的成败走；这一位记的是**这个人被告知过一次** —— 那件事
+  /// 已经发生了，POST 落没落地改变不了它。真「补上对称」的话，热点抖一下就
+  /// 要重弹一次框，正好把这个框推向 §7.8 说的那个结局（第三次被条件反射点
+  /// 掉）。也没有留下漏洞：失败时 [_mode] 退回 `onsite`，`_setMode` 开头那句
+  /// `if (name == _mode) return;` 堵不住人；重试那一次照样带 `confirmed`，
+  /// 狗那头的留痕在请求真正落地的那一次建得起来。
   bool _remoteConfirmed = false;
 
   bool get _moving => _left != Offset.zero || _right != Offset.zero;
@@ -270,8 +289,8 @@ class _TeleopPageState extends State<TeleopPage> {
       await widget.client.post('/api/teleop/heartbeat');
       if (!mounted || _beatFails == 0) return;
       _beatFails = 0;
-      // 自己挂上去的那句话自己收掉；别人挂的（发拍那条路）不碰。
-      if (_trouble == beatTroubleHint) setState(() => _trouble = '');
+      // 自己挂上去的那句话自己收掉；发拍那条路的槽不碰。
+      if (_beatTrouble.isNotEmpty) setState(() => _beatTrouble = '');
     } catch (e) {
       // **心跳失败不计进变灰的那三次。** 它 5 Hz 地跑，拿它去关控制通路是
       // 过敏；「狗不回话」该不该变灰由发拍那条路说了算。
@@ -279,9 +298,9 @@ class _TeleopPageState extends State<TeleopPage> {
       if (!mounted) return;
       _beatFails++;
       // **一次抖动不上屏，连着一秒才说话**（见 [beatTroubleHint]）。
-      // `_trouble` 空着才写：发拍那条路的话更急，不许被这句盖掉。
-      if (_beatFails >= _beatFailsToWarn && _trouble.isEmpty) {
-        setState(() => _trouble = beatTroubleHint);
+      // 写的是自己那个槽：发拍那条路的话更急，两句话各占一行，谁也不盖谁。
+      if (_beatFails >= _beatFailsToWarn && _beatTrouble.isEmpty) {
+        setState(() => _beatTrouble = beatTroubleHint);
       }
     }
   }
@@ -312,6 +331,8 @@ class _TeleopPageState extends State<TeleopPage> {
     try {
       await widget.client.post('/api/teleop', body);
       if (!mounted) return;
+      // 收掉的**只有发拍自己挂上去的那句**（[_trouble]）。心跳那句归心跳
+      // 那条路管 —— 发拍通不代表心跳通，抹掉别人的话就是在骗人。
       if (_fails != 0 || _trouble.isNotEmpty) {
         setState(() {
           _fails = 0;
@@ -512,6 +533,15 @@ class _TeleopPageState extends State<TeleopPage> {
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(_trouble,
+                    style: const TextStyle(
+                        color: Color(0xFFFFB4A9), fontSize: 13)),
+              ),
+            // 心跳那句话**自己一行**。跟发拍那句挤一个槽的话，两条路会互相
+            // 抹，人看到的是一行在闪 —— 闪着的字比没有字更容易被当成花屏。
+            if (_beatTrouble.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(_beatTrouble,
                     style: const TextStyle(
                         color: Color(0xFFFFB4A9), fontSize: 13)),
               ),
