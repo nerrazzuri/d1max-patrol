@@ -141,6 +141,13 @@ from d1max_patrol.engine.export import (
 )
 from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomeError, HomePoint, load_home, save_home
+from d1max_patrol.engine.lease import (
+    AUDIT_MAX,
+    LeaseBusy,
+    LeaseError,
+    LeaseLost,
+    LeaseState,
+)
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine
 from d1max_patrol.engine.mission import (
     Mission,
@@ -386,6 +393,24 @@ def _safe_id(value: str, what: str) -> str:
                         "只能用字母、数字、下划线、横杠、点和中文,"
                         f"给的是 {value!r}")
     return value
+
+
+#: 租约被拒时统一附上的下一步。**每一条拒绝都要告诉人怎么往下走** —— 现场
+#: 拿着手机的人看不到我们的代码。
+_LEASE_DETAIL = ("控制权此刻在谁手上,GET /api/control 看得到。要接手就 POST "
+                 "/api/control/takeover —— 对方同意、或者 15 秒不回应就归你;"
+                 "紧急情况带上 force 和理由,那一下会进审计。")
+
+
+def _lease_error(exc: LeaseError) -> HttpError:
+    """租约层的拒绝翻成 HTTP。
+
+    ``LeaseBusy``/``LeaseLost`` 是 **409**:"你发的没错,是现在这个状态下做
+    不了"。客户端据此重试或者去接管;400 是"你发的东西不对",重试多少次都
+    一样。分不开这两类,app 那头只能一律弹一个"失败了"。
+    """
+    status = 409 if isinstance(exc, LeaseBusy | LeaseLost) else 400
+    return HttpError(status, str(exc), _LEASE_DETAIL)
 
 
 def _checks_wire(report: PreflightReport) -> list[dict[str, Any]]:
@@ -966,6 +991,14 @@ class AppServer:
         self.route("GET", CHALLENGE_PATH, self._auth_challenge)
         self.route("POST", "/api/auth/logout", self._auth_logout)
         self.route("GET", "/api/sessions", self._sessions)
+        self.route("GET", "/api/control", self._control_get)
+        self.route("POST", "/api/control/acquire", self._control_acquire)
+        self.route("POST", "/api/control/heartbeat", self._control_beat)
+        self.route("POST", "/api/control/release", self._control_release)
+        self.route("POST", "/api/control/takeover", self._control_takeover)
+        self.route("POST", "/api/control/takeover/approve",
+                   self._control_approve)
+        self.route("GET", "/api/control/audit", self._control_audit)
         self.route("GET", "/api/identity", self._identity)
         self.route("GET", "/api/state", self._state)
         self.route("GET", "/api/events", self._events)
@@ -1137,6 +1170,124 @@ class AppServer:
                               "max_sessions": self._auth.max_sessions,
                               "max_local_sessions": self._auth.max_local_sessions,
                               "notice": OPERATOR_NOTICE})
+
+    # ---------------------------------------------------------- L1 控制权
+
+    def _need_session(self, req: Request) -> Session:
+        """要一个会话,没有就说清为什么没有。"""
+        if req.session is None:
+            raise HttpError(
+                400, "这台没设 PIN",
+                "没有会话就没有「谁在控制」这回事:启动时不给 --pin 的部署按"
+                "定义只听本机(见 check_exposure),L1 仲裁没有对象。")
+        return req.session
+
+    def _control_wire(self, state: LeaseState, req: Request) -> Response:
+        """控制权报文。
+
+        ``mine`` 只在这儿有,不在 ``/api/state`` 的 ``control`` 段里 —— 那一段
+        是所有人共用的一份快照,塞一个"是不是我"进去就得按人分份,SSE 那条
+        广播路子立刻塌掉。
+
+        ``sessions``/``max_sessions`` 从 ``ControlDesk.seats()`` 取,不在这里
+        自己数 —— 那两个数只许有一处定义(见 ``app/control.py`` 的
+        ``seats()`` docstring),不然这条接口和 ``/api/state`` 会在同一时刻
+        对同一件事报出两个不同的答案。
+        """
+        mine = req.session.ref if req.session is not None else ""
+        sessions, max_sessions = self._control.seats()
+        return json_response({
+            **state.to_wire(),
+            "mine": state.holder is not None and state.holder.ref == mine,
+            "sessions": sessions,
+            "max_sessions": max_sessions,
+            "notice": OPERATOR_NOTICE,
+        })
+
+    def _control_get(self, req: Request) -> Response:
+        """控制权此刻在谁手上。**只读,永远不要控制权**(§3.5 规则 1)。"""
+        return self._control_wire(
+            self._control.sweep(now_ms=self._ctx.clock()), req)
+
+    def _control_acquire(self, req: Request) -> Response:
+        """取一份租约。自己已经拿着时是续,不是错。"""
+        sess = self._need_session(req)
+        now = self._ctx.clock()
+        self._control.sweep(now_ms=now)
+        try:
+            state = self._control.book.acquire(sess.ref, sess.operator,
+                                               now_ms=now)
+        except LeaseError as exc:
+            raise _lease_error(exc) from None
+        return self._control_wire(state, req)
+
+    def _control_beat(self, req: Request) -> Response:
+        """续租。**每 10 秒一次,30 秒不续自动到期**(§6.4)。"""
+        sess = self._need_session(req)
+        now = self._ctx.clock()
+        self._control.sweep(now_ms=now)
+        try:
+            state = self._control.book.renew(sess.ref, now_ms=now)
+        except LeaseError as exc:
+            raise _lease_error(exc) from None
+        return self._control_wire(state, req)
+
+    def _control_release(self, req: Request) -> Response:
+        """交回。**幂等** —— app 退出时无脑发一次就行。"""
+        sess = self._need_session(req)
+        state = self._control.book.release(sess.ref,
+                                           now_ms=self._ctx.clock())
+        return self._control_wire(state, req)
+
+    def _control_takeover(self, req: Request) -> Response:
+        """接管。默认是礼貌的;``force`` 是硬夺,**必须写理由**(§3.5 规则 3)。
+
+        为什么强制这条必须存在:持有者可能已经不在了 —— 手机没电、人走了、
+        网断了。没有它,一只狗会被一个不存在的会话占到 TTL 走完为止,而现场
+        正等着有人把它从带电设备旁边挪开。
+        """
+        sess = self._need_session(req)
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体要是个对象",
+                            '形如 {"force": true, "reason": "..."}')
+        now = self._ctx.clock()
+        self._control.sweep(now_ms=now)
+        reason = body.get("reason", "")
+        try:
+            if body.get("force"):
+                state = self._control.book.force(
+                    sess.ref, sess.operator, now_ms=now,
+                    reason=reason if isinstance(reason, str) else "")
+            else:
+                state = self._control.book.ask_takeover(
+                    sess.ref, sess.operator, now_ms=now)
+        except LeaseError as exc:
+            raise _lease_error(exc) from None
+        return self._control_wire(state, req)
+
+    def _control_approve(self, req: Request) -> Response:
+        """当前持有者同意移交。立刻交,不等宽限期。"""
+        sess = self._need_session(req)
+        now = self._ctx.clock()
+        self._control.sweep(now_ms=now)
+        try:
+            state = self._control.book.approve(sess.ref, now_ms=now)
+        except LeaseError as exc:
+            raise _lease_error(exc) from None
+        return self._control_wire(state, req)
+
+    def _control_audit(self, _req: Request) -> Response:
+        """控制权换过几次手(§3.5 规则 3)。**只有指纹,没有 token。**
+
+        这是个环,只留最近 200 条 —— 够值守屏翻一页,不够当档案。要长期存档
+        是服务器的活(§5.9)。
+        """
+        self._control.sweep(now_ms=self._ctx.clock())
+        return json_response({
+            "audit": [r.to_wire() for r in self._control.book.audit],
+            "max": AUDIT_MAX,
+        })
 
     def _identity(self, _req: Request) -> Response:
         """这是哪只狗。手机拿它认机器、给拉回去的归档分组。

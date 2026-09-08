@@ -97,6 +97,28 @@ class ControlDesk:
         self._cursor, fresh = self.book.audit_since(self._cursor)
         return fresh
 
+    def seats(self) -> tuple[int, int]:
+        """``(非本机会话数, max_sessions)`` —— 这两个数**只有这一处定义**。
+
+        ``Guard.sessions()`` 含本机(``CHANNEL_LOCAL``)会话, 而 §3.6 的
+        ``max_sessions`` 只算非本机通道(见 ``Guard._issue``): 回环不占那条
+        无线上行, 所以本机会话(SSH/控制台到场的人)不占这 3 个名额, 也不该
+        进这个计数。两个数天生不是一回事, 屏幕上绝不允许出现"8 条会话, 上限
+        3"这种对不上的假象。
+
+        **谁都不许再抄一遍这条过滤条件。** ``ControlDesk.snapshot()``
+        (``/api/state`` 的 ``control`` 段)和 ``server.py`` 的
+        ``_control_wire``(``GET /api/control`` 及其余六条控制权路由)读的
+        是同一时刻的同一份东西 —— 手机端两个接口都读, 分母如果在两处各写一
+        份过滤, 迟早会因为一处改了另一处没跟着改, 在同一时刻对同一件事报出
+        两个不同的 ``sessions``。想看含本机的全量会话表(比如运维在本机排
+        障), 走 ``GET /api/sessions``, 那里用的是 ``Guard.sessions()`` 的原
+        始列表, 自己就说明白了含本机。
+        """
+        remote = tuple(s for s in self._guard.sessions()
+                       if s.channel != CHANNEL_LOCAL)
+        return len(remote), self._guard.max_sessions
+
     def snapshot(self, *, now_ms: int) -> dict[str, Any]:
         """``/api/state`` 里 ``control`` 那一段。
 
@@ -108,21 +130,14 @@ class ControlDesk:
         ``expires_ms`` 会跟着心跳每 10 秒变一次, 那是有意的: 第 8 卷要靠它算
         "还剩多久到期"。10 秒一帧不吵。
 
-        **``sessions`` 跟 ``max_sessions`` 是同一个分母。** ``Guard.sessions()``
-        含本机(``CHANNEL_LOCAL``)会话, 而 §3.6 的 ``max_sessions`` 只算非
-        本机通道(见 ``Guard._issue``)——两个数天生不是一回事。这里数的
-        ``sessions`` 因此**只算非本机会话**, 跟 ``max_sessions`` 对得上;
-        本机(SSH/控制台到场的人)不占这 3 个名额, 也不进这个计数。屏幕上
-        绝不允许出现"8 条会话, 上限 3"这种数字对不上的假象。想看含本机的
-        全量会话表(比如运维在本机排障), 走 ``GET /api/sessions``, 那里用
-        的是 ``Guard.sessions()`` 的原始列表, 自己就说明白了含本机。
+        ``sessions``/``max_sessions`` 这两个数的定义在 :meth:`seats`, 不在
+        这儿重复。
         """
         state = self.book.state(now_ms=now_ms)
-        remote = tuple(s for s in self._guard.sessions()
-                       if s.channel != CHANNEL_LOCAL)
+        sessions, max_sessions = self.seats()
         return {**state.to_wire(),
-                "sessions": len(remote),
-                "max_sessions": self._guard.max_sessions}
+                "sessions": sessions,
+                "max_sessions": max_sessions}
 
     def require(self, sess: Session | None, method: str, path: str, *,
                 now_ms: int) -> None:
