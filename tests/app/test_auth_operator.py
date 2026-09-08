@@ -90,9 +90,25 @@ def test_ipv4映射的v6地址不许掉进最松的一档():
     assert channel_of("::ffff:127.0.0.1") == CHANNEL_LOCAL
     assert channel_of("::ffff:192.168.168.5") == CHANNEL_AP
     assert channel_of("::ffff:10.20.30.40") == CHANNEL_LAN
-    # 带方括号/大小写的写法一样得认。
-    assert channel_of("[::ffff:192.168.168.5]") == CHANNEL_AP
+    # 大小写得认 —— 这条不归一化就会判成 lan。
     assert channel_of("::FFFF:192.168.168.5") == CHANNEL_AP
+
+
+def test_带方括号的写法不认_而且倒向严的那一头():
+    """``[::1]`` 这种带方括号的写法 **``channel_of`` 不认**,倒进兜底那一档。
+
+    这是有意的,不是漏了。方括号是 URL 和 Host 头里的文本写法,而 TCP 对端
+    地址(``client_address[0]``,内核给的)永远不带方括号。哪天这里开始接受
+    方括号,等于说"我也吃得下从请求头里来的东西" —— 而这个函数的全部安全性
+    就压在"喂进来的必须是 TCP 对端地址"这一句上(见 ``channel_of`` 的
+    docstring)。**所以宽容在这里是坏事,不是好事。**
+
+    断言挑的是 ``127.0.0.1``:方括号真被解析的话答案是 ``local``(最松的一档),
+    走兜底才是 ``ap``。**两条路答案不同,所以这条断言测得到东西** —— 换成热点
+    网段里的地址就成了一条永远绿的空断言,两条路都返回 ``ap``。
+    """
+    assert channel_of("[::ffff:127.0.0.1]") == CHANNEL_AP
+    assert channel_of("[::1]") == CHANNEL_AP
 
 
 def test_热点网段可以换():
