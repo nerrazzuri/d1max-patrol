@@ -2,14 +2,42 @@
 
 假后端是**手写的小对象**,不是 mock 库:测试要能直接改 ``fake_nav.loc``
 这样的字段,而 mock 的自动 spec 在这里只会碍事。
+
+``NavStub``/``DeviceStub``/``MediaStub``/``Clock`` 连同 ``nav``/``device``/
+``media``/``clock``/``make_engine`` 这几个夹具、``until`` 这个轮询助手,原来
+都长在 ``test_machine.py`` 里,``test_machine_suspend.py`` 靠跨模块 import
+它们(外加一个专门压 ruff F401 的 ``__all__``)复用。搬到这儿之后两个测试
+模块都不用 import 就能直接用这些夹具 —— pytest 本来就会把 conftest.py 里
+的 ``@pytest.fixture`` 自动喂给同目录下的每个测试文件,不用再跨模块 import
+一遍,这也是仓库里其他共享夹具(比如下面这个 ``sample_mission``)一直在用
+的办法。``_HOME``/``NEVER``/``until`` 不是夹具,是普通的值和函数,该怎么
+导入还怎么导入。
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 
+from d1max_patrol.backends.base import (
+    DeviceEvent,
+    Event,
+    EventEmitter,
+    Frame,
+    LocStatusEvent,
+    MediaError,
+    MediaSource,
+    NavBackendError,
+    NavStatusEvent,
+)
+from d1max_patrol.engine.homing import HomePoint
+from d1max_patrol.engine.machine import MissionEngine
 from d1max_patrol.engine.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
+
+from ..conftest import NoDisks
 
 
 def make_mission(**overrides) -> Mission:
@@ -84,3 +112,176 @@ def fake_nav() -> FakeNav:
 @pytest.fixture
 def fake_device() -> FakeDevice:
     return FakeDevice()
+
+
+# ------------------------------------------------------- 状态机测试的假后端
+
+#: 起飞门槛把原点当成前置条件(preflight §home)。这些测试关心的是状态机
+#: 的行为,不是原点本身,给个跟 ``sample_mission`` 同一张图的原点,免得每个
+#: 用例都要单独传。
+_HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
+                  marked_at_ms=1_757_000_000_000)
+
+ARRIVED = [NavStatusEvent(NavStatus.SUCCEED)]
+NEVER = []
+
+
+class NavStub(EventEmitter[Event]):
+    """假导航。``on_goto`` 决定每次下发之后推什么事件回来。
+
+    不继承 ``NavBackend``:那要补十几个抽象方法,而引擎只用得上这几个。
+    端口的完整性由 ``tests/backends`` 盯着。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.nav = NavStatus.STANDBY
+        self.loc = LocStatus.CONTINUOUS_LOC
+        self.on_goto: list[Event] = list(ARRIVED)
+        self.goto_calls: list[Pose] = []
+        self.stop_calls = 0
+        self.reset_calls = 0
+        self.home_calls = 0
+        self.reset_recovers = True
+        #: 每次下发之后,状态机在终态上驻留几次问询才回落 StandBy。
+        #: 真设备就是这样的:上一段导航到了 Succeed,状态机要过一会儿才让位。
+        self.hold_after_goto = 0
+        #: 还剩几次问询回终态。归零之前 ``goto`` 会像真设备那样直接拒绝。
+        self.terminal_holds = 0
+
+    async def nav_status(self) -> NavStatus:
+        if self.terminal_holds > 0:
+            self.terminal_holds -= 1
+            return NavStatus.SUCCEED
+        return self.nav
+
+    async def loc_status(self) -> LocStatus:
+        return self.loc
+
+    async def goto(self, pose: Pose) -> None:
+        if self.terminal_holds > 0:
+            raise NavBackendError("导航只能在 StandBy 下启动,当前 Succeed")
+        self.goto_calls.append(pose)
+        for event in self.on_goto:
+            self.emit(event)
+        self.terminal_holds = self.hold_after_goto
+
+    async def stop(self) -> None:
+        self.stop_calls += 1
+
+    async def reset_localization(self) -> None:
+        self.reset_calls += 1
+        if self.reset_recovers:
+            self.emit(LocStatusEvent(LocStatus.CONTINUOUS_LOC))
+
+    async def return_home(self) -> None:
+        self.home_calls += 1
+        self.emit(NavStatusEvent(NavStatus.SUCCEED))
+
+
+class DeviceStub(EventEmitter[DeviceEvent]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.batt = 88.0
+        self.estop = False
+        self.control = True
+        self.lights: list[bool] = []
+        self.gimbals: list[tuple[float, float]] = []
+        self.lie_calls = 0
+        self.stand_calls = 0
+
+    async def battery(self) -> float:
+        return self.batt
+
+    async def emergency(self) -> bool:
+        return self.estop
+
+    async def has_control(self) -> bool:
+        return self.control
+
+    async def set_light(self, on: bool) -> None:
+        self.lights.append(on)
+
+    async def set_gimbal(self, pitch: float, yaw: float) -> None:
+        self.gimbals.append((pitch, yaw))
+
+    async def lie(self) -> None:
+        self.lie_calls += 1
+
+    async def stand(self) -> None:
+        self.stand_calls += 1
+
+
+class MediaStub(MediaSource):
+    def __init__(self) -> None:
+        self.grabs = 0
+        self.fail = False
+
+    async def open(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+    async def grab(self) -> Frame:
+        if self.fail:
+            raise MediaError("取不到图")
+        self.grabs += 1
+        return Frame(data=b"\xff\xd8fake", mime="image/jpeg", captured_at_ms=1)
+
+    async def healthy(self) -> bool:
+        return not self.fail
+
+
+class Clock:
+    """可以往前拨的表。用真 monotonic 打底,免得和 asyncio 的超时脱节。"""
+
+    def __init__(self) -> None:
+        self.offset = 0.0
+
+    def __call__(self) -> float:
+        return time.monotonic() + self.offset
+
+
+@pytest.fixture
+def nav() -> NavStub:
+    return NavStub()
+
+
+@pytest.fixture
+def device() -> DeviceStub:
+    return DeviceStub()
+
+
+@pytest.fixture
+def media() -> dict[str, MediaStub]:
+    return {"front": MediaStub(), "back": MediaStub()}
+
+
+@pytest.fixture
+def clock() -> Clock:
+    return Clock()
+
+
+@pytest.fixture
+def make_engine(nav, device, media, clock, tmp_path):
+    """造引擎。每个用例自己负责 ``aclose`` —— 收尾本身就是被测行为之一。
+
+    原点不在这里给:它是每趟开跑时由 ``start(mission, home=...)`` 换进去的。
+    """
+    def _make(**kwargs) -> MissionEngine:
+        # removable 给个假探针,免得默认的 DEFAULT_PROBE 去扫真机上的
+        # /media、/mnt(见 tests/conftest.py);setdefault 是为了让显式传了
+        # removable= 的用例照样用自己那份。
+        kwargs.setdefault("removable", NoDisks())
+        return MissionEngine(nav, device, media, tmp_path / "runs",
+                             clock=clock, **kwargs)
+
+    return _make
+
+
+async def until(pred, timeout: float = 3.0) -> None:
+    """等到条件成立。轮询而不是固定 sleep —— 固定 sleep 要么慢要么脆。"""
+    deadline = time.monotonic() + timeout
+    while not pred():
+        if time.monotonic() > deadline:
+            raise AssertionError("等条件超时")
+        await asyncio.sleep(0.005)

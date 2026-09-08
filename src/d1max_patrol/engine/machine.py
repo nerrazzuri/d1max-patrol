@@ -91,14 +91,14 @@ class RunState(str, Enum):
     LOCALIZING = "LOCALIZING"
     RUNNING = "RUNNING"
     PAUSED = "PAUSED"
-    #: 引擎**主动让开腿**：接下来这段路人要亲自开。
+    #: 引擎**主动让开腿**:接下来这段路人要亲自开。
     #:
-    #: 跟 ``PAUSED`` 的区别是「谁在动这条狗」。``PAUSED`` 是人按了暂停，狗停着，
-    #: 没有人碰它，``_busy_checks`` 全是空的。``SUSPENDED`` 期间 ``_busy_checks``
+    #: 跟 ``PAUSED`` 的区别是「谁在动这条狗」。``PAUSED`` 是人按了暂停,狗停着,
+    #: 没有人碰它,``_busy_checks`` 全是空的。``SUSPENDED`` 期间 ``_busy_checks``
     #: 恰恰是满的 —— 遥控正在动 —— 而那正是 §5.10 要放行的东西。
     #:
-    #: **不许跟 PAUSED 合并**：「暂停时不许遥控」和「挂起时必须能遥控」是
-    #: 相反的两条规矩，落在同一个状态上就一定有一条是错的。
+    #: **不许跟 PAUSED 合并**:「暂停时不许遥控」和「挂起时必须能遥控」是
+    #: 相反的两条规矩,落在同一个状态上就一定有一条是错的。
     SUSPENDED = "SUSPENDED"
     RETURNING = "RETURNING"
     ABORTING = "ABORTING"
@@ -108,6 +108,21 @@ class RunState(str, Enum):
 
 #: 跑完了的状态。``wait_done`` 等的就是这两个。
 FINAL_STATES = frozenset({RunState.DONE, RunState.ABORTED})
+
+#: ``suspend()`` 只在"继续之后 ``_RetryWaypoint`` 有处可去"的状态下受理(§5.10)。
+#:
+#: ``LOCALIZING`` 期间挂起再继续,``_RetryWaypoint`` 会从 ``_await_localized``
+#: 直接漏给 ``_run`` 的兜底,按"引擎内部异常"整趟中止。``RETURNING`` 期间同样
+#: 挂起再继续,状态先闪成 ``RUNNING``,``_RetryWaypoint`` 会被 ``_go_home``
+#: 接住按"返航失败"中止。两条都是"人接管完点继续,整趟任务却没了"——现场
+#: 最难归因的那种失败。
+#:
+#: 拒绝好过悄悄支持:真要让这两个状态也能挂起,是引擎行为的扩展(得先把
+#: 这两条路径也走通),不是这里能顺手做的事。
+_SUSPEND_UNSAFE_STATES: dict[RunState, str] = {
+    RunState.LOCALIZING: "正在重定位,现在不能让开腿",
+    RunState.RETURNING: "正在返航,现在不能让开腿",
+}
 
 
 class EngineBusy(RuntimeError):
@@ -215,6 +230,16 @@ class _FailWaypoint(Exception):
 
 class _RetryWaypoint(Exception):
     """暂停后继续 —— 重发当前点,但**不算**一次重试。"""
+
+
+class _BusyCheckFailed(Exception):
+    """``_busy_checks`` 里有一个回调炸了。
+
+    只在 ``_busy_reason`` 内部生生灭灭:炸了不能当成"没人占用"放行,
+    异常本身要变成占用理由说给人听。ruff 的 ``BLE001`` 不认"把异常塞进
+    返回字符串"这种用法,但认"就地转译成一个具名异常再 raise"——
+    这个类存在的唯一理由就是让那次转译过 BLE001,不是业务上真需要
+    一个新异常类型。"""
 
 
 @dataclass
@@ -818,6 +843,15 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         if cmd.kind == "pause":
             await self._pause_until_resumed()
         if cmd.kind == "suspend":
+            deny = _SUSPEND_UNSAFE_STATES.get(self._state)
+            if deny is not None:
+                # **诚实拒绝,不是硬撑着支持。** 这几个状态下 resume 之后的
+                # ``_RetryWaypoint`` 没有一条安全的路能接住它(见上面常量的
+                # 注释)——真要支持,得先把那几条路径也走通,那是引擎行为的
+                # 扩展,不是这里能顺手做的事。一句说得出口的拒绝,好过一趟
+                # 悄悄中止、现场最难归因的那种失败。
+                self._note("suspend_refused", state=self._state.value, reason=deny)
+                return
             await self._suspend_until_resumed(cmd.reason)
         # resume 在没暂停的时候是空操作,不报错 —— 现场手快点两下很常见。
 
@@ -864,39 +898,78 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             at_ms=int(time.time() * 1000))
         await self._transition(RunState.SUSPENDED, reason)
         await self._stop_nav_quietly()
-        while True:
-            item = await self._next(None)
-            if isinstance(item, _Command):
-                if item.kind == "abort":
-                    live.suspended = None
-                    raise _AbortRun(item.reason or "人工中止")
-                if item.kind == "resume":
-                    blocked = self._busy_reason()
-                    if not blocked:
-                        break
-                    # **人点「继续」的时候左手很可能还压在摇杆上。** 那一瞬间
-                    # 引擎和人同时在给腿下指令 —— add_busy_check 存在的全部
-                    # 理由就是它。说清楚为什么没继续,然后接着等。
-                    self._note("resume_refused", reason=blocked)
-                    self._publish(f"还不能继续: {blocked}")
+        try:
+            while True:
+                item = await self._next(None)
+                if isinstance(item, _Command):
+                    if item.kind == "abort":
+                        raise _AbortRun(item.reason or "人工中止")
+                    if item.kind == "resume":
+                        blocked = self._busy_reason()
+                        if not blocked:
+                            break
+                        # **人点「继续」的时候左手很可能还压在摇杆上。** 那一瞬间
+                        # 引擎和人同时在给腿下指令 —— add_busy_check 存在的全部
+                        # 理由就是它。说清楚为什么没继续,然后接着等。
+                        self._note("resume_refused", reason=blocked)
+                        # 拒绝理由和挂起理由是两件事,不许互相覆盖:直接
+                        # ``self._publish(blocked 那句)`` 会把 snapshot.reason
+                        # 从"为什么挂起"整个换成"为什么没能继续",人再看
+                        # 快照就想不起来当初为什么停在这儿。用
+                        # ``live.suspended.reason``(挂起时就定了、之后不再
+                        # 变)当稳定的底,不用 ``self._snapshot.reason`` ——
+                        # 后者如果已经被上一次拒绝改过,再拿来接就会一次比
+                        # 一次长。
+                        base = live.suspended.reason if live.suspended else ""
+                        self._publish(f"{base} —— 还不能继续: {blocked}"
+                                     if base else f"还不能继续: {blocked}")
+                        continue
                     continue
-                continue
-            if isinstance(item, BatteryEvent):
-                live.battery_pct = item.percent
-            elif isinstance(item, DevicePoseEvent):
-                # 人开着的时候位姿一直在变。留着最新的 —— 但**不覆盖**
-                # ``live.suspended.pose``:那一份记的是「人接管前在哪儿」,
-                # 被现在的位置盖掉就什么都不剩了。
-                live.last_pose = item.pose
-            self._note("suspended_event", event=type(item).__name__)
-        live.suspended = None
+                if isinstance(item, DevicePoseEvent):
+                    # 人开着的时候位姿一直在变 —— 每帧 odom 一条(见
+                    # sidecar_device.py),接管期间是持续流,几分钟就能灌上千条。
+                    # **不落盘。** 落了就是几分钟接管往归档里写上千行,还在事件
+                    # 循环里做上千次阻塞写;最新那份已经够用,存 live.last_pose
+                    # 就行。留着最新的 —— 但**不覆盖** ``live.suspended.pose``:
+                    # 那一份记的是「人接管前在哪儿」,被现在的位置盖掉就什么都
+                    # 不剩了。
+                    live.last_pose = item.pose
+                    continue
+                if isinstance(item, BatteryEvent):
+                    live.battery_pct = item.percent
+                self._note("suspended_event", event=type(item).__name__)
+        finally:
+            # ``finally`` 而不是分别在 abort / resume 两条路径上各清一次:
+            # 漏了第三条退出路径(比如这个协程被直接 ``cancel()``,不经过
+            # 命令队列)就会剩下一份挂起快照,快照上写着"正在被接管"但其实
+            # 这一趟已经没了。
+            live.suspended = None
         await self._transition(RunState.RUNNING, "人工接管结束")
         raise _RetryWaypoint
 
     def _busy_reason(self) -> str:
-        """现在有别人在动这条狗吗。返回理由,空串表示没有。"""
+        """现在有别人在动这条狗吗。返回理由,空串表示没有。
+
+        回调是 ``app/`` 层注册的,引擎管不了它内部会不会炸。**炸了不能当成
+        "没人占用"放行**:一个抛错的检查意味着"不知道现在安不安全",而这
+        道检查存在的全部意义就是"不确定就不放"。所以异常本身变成占用理由,
+        现场的人看得到真实原因,狗也不会在人还握着摇杆时动起来——把它当
+        "没查出问题"处理才是真正危险的那个方向。
+        """
+        try:
+            return self._raw_busy_reason()
+        except _BusyCheckFailed as exc:
+            return str(exc)
+
+    def _raw_busy_reason(self) -> str:
         for check in self._busy_checks:
-            reason = check()
+            try:
+                reason = check()
+            except Exception as exc:  # 见 _BusyCheckFailed:就地转译再 raise
+                name = getattr(check, "__name__", repr(check))
+                raise _BusyCheckFailed(
+                    f"安全检查出错,不能继续: {name} {type(exc).__name__}: {exc}"
+                ) from exc
             if reason:
                 return reason
         return ""

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
@@ -15,15 +14,8 @@ from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BatteryEvent,
     ControlLostEvent,
-    DeviceEvent,
-    Event,
-    EventEmitter,
     FaultEvent,
-    Frame,
     LocStatusEvent,
-    MediaError,
-    MediaSource,
-    NavBackendError,
     NavStatusEvent,
 )
 from d1max_patrol.engine.archive import read_events, read_manifest, read_state
@@ -39,17 +31,13 @@ from d1max_patrol.protocol.nav_types import (
     Pose,
 )
 
-from ..conftest import BadDisks, NoDisks
-from .conftest import make_mission
+from ..conftest import BadDisks
+from .conftest import _HOME, NEVER, make_mission, until
 
-ARRIVED = [NavStatusEvent(NavStatus.SUCCEED)]
-NEVER = []
-
-#: 起飞门槛把原点当成前置条件(preflight §home)。这些测试关心的是状态机
-#: 的行为,不是原点本身,给个跟 ``sample_mission`` 同一张图的原点,免得每个
-#: 用例都要单独传。
-_HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
-                  marked_at_ms=1_757_000_000_000)
+#: ``nav``/``device``/``media``/``clock``/``make_engine`` 这几个夹具,连同
+#: ``NavStub``/``DeviceStub``/``MediaStub``/``Clock`` 那套假后端,都长在
+#: ``conftest.py`` 里 —— pytest 会把它们自动喂给这个目录下的每个测试模块,
+#: 不用在这儿 import。
 
 
 def _alg(code: int) -> AlgErrorEvent:
@@ -58,173 +46,6 @@ def _alg(code: int) -> AlgErrorEvent:
 
 BLOCKED = _alg(ALG_NAV_BLOCKED)
 LIDAR_GONE = _alg(ALG_LIDAR_DISCONNECTED)
-
-
-# --------------------------------------------------------------------- 假后端
-
-
-class NavStub(EventEmitter[Event]):
-    """假导航。``on_goto`` 决定每次下发之后推什么事件回来。
-
-    不继承 ``NavBackend``:那要补十几个抽象方法,而引擎只用得上这几个。
-    端口的完整性由 ``tests/backends`` 盯着。
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.nav = NavStatus.STANDBY
-        self.loc = LocStatus.CONTINUOUS_LOC
-        self.on_goto: list[Event] = list(ARRIVED)
-        self.goto_calls: list[Pose] = []
-        self.stop_calls = 0
-        self.reset_calls = 0
-        self.home_calls = 0
-        self.reset_recovers = True
-        #: 每次下发之后,状态机在终态上驻留几次问询才回落 StandBy。
-        #: 真设备就是这样的:上一段导航到了 Succeed,状态机要过一会儿才让位。
-        self.hold_after_goto = 0
-        #: 还剩几次问询回终态。归零之前 ``goto`` 会像真设备那样直接拒绝。
-        self.terminal_holds = 0
-
-    async def nav_status(self) -> NavStatus:
-        if self.terminal_holds > 0:
-            self.terminal_holds -= 1
-            return NavStatus.SUCCEED
-        return self.nav
-
-    async def loc_status(self) -> LocStatus:
-        return self.loc
-
-    async def goto(self, pose: Pose) -> None:
-        if self.terminal_holds > 0:
-            raise NavBackendError("导航只能在 StandBy 下启动,当前 Succeed")
-        self.goto_calls.append(pose)
-        for event in self.on_goto:
-            self.emit(event)
-        self.terminal_holds = self.hold_after_goto
-
-    async def stop(self) -> None:
-        self.stop_calls += 1
-
-    async def reset_localization(self) -> None:
-        self.reset_calls += 1
-        if self.reset_recovers:
-            self.emit(LocStatusEvent(LocStatus.CONTINUOUS_LOC))
-
-    async def return_home(self) -> None:
-        self.home_calls += 1
-        self.emit(NavStatusEvent(NavStatus.SUCCEED))
-
-
-class DeviceStub(EventEmitter[DeviceEvent]):
-    def __init__(self) -> None:
-        super().__init__()
-        self.batt = 88.0
-        self.estop = False
-        self.control = True
-        self.lights: list[bool] = []
-        self.gimbals: list[tuple[float, float]] = []
-        self.lie_calls = 0
-        self.stand_calls = 0
-
-    async def battery(self) -> float:
-        return self.batt
-
-    async def emergency(self) -> bool:
-        return self.estop
-
-    async def has_control(self) -> bool:
-        return self.control
-
-    async def set_light(self, on: bool) -> None:
-        self.lights.append(on)
-
-    async def set_gimbal(self, pitch: float, yaw: float) -> None:
-        self.gimbals.append((pitch, yaw))
-
-    async def lie(self) -> None:
-        self.lie_calls += 1
-
-    async def stand(self) -> None:
-        self.stand_calls += 1
-
-
-class MediaStub(MediaSource):
-    def __init__(self) -> None:
-        self.grabs = 0
-        self.fail = False
-
-    async def open(self) -> None: ...
-
-    async def close(self) -> None: ...
-
-    async def grab(self) -> Frame:
-        if self.fail:
-            raise MediaError("取不到图")
-        self.grabs += 1
-        return Frame(data=b"\xff\xd8fake", mime="image/jpeg", captured_at_ms=1)
-
-    async def healthy(self) -> bool:
-        return not self.fail
-
-
-class Clock:
-    """可以往前拨的表。用真 monotonic 打底,免得和 asyncio 的超时脱节。"""
-
-    def __init__(self) -> None:
-        self.offset = 0.0
-
-    def __call__(self) -> float:
-        return time.monotonic() + self.offset
-
-
-# ------------------------------------------------------------------- 公共零件
-
-
-@pytest.fixture
-def nav() -> NavStub:
-    return NavStub()
-
-
-@pytest.fixture
-def device() -> DeviceStub:
-    return DeviceStub()
-
-
-@pytest.fixture
-def media() -> dict[str, MediaStub]:
-    return {"front": MediaStub(), "back": MediaStub()}
-
-
-@pytest.fixture
-def clock() -> Clock:
-    return Clock()
-
-
-@pytest.fixture
-def make_engine(nav, device, media, clock, tmp_path):
-    """造引擎。每个用例自己负责 ``aclose`` —— 收尾本身就是被测行为之一。
-
-    原点不在这里给:它是每趟开跑时由 ``start(mission, home=...)`` 换进去的。
-    """
-    def _make(**kwargs) -> MissionEngine:
-        # removable 给个假探针,免得默认的 DEFAULT_PROBE 去扫真机上的
-        # /media、/mnt(见 tests/conftest.py);setdefault 是为了让显式传了
-        # removable= 的用例照样用自己那份。
-        kwargs.setdefault("removable", NoDisks())
-        return MissionEngine(nav, device, media, tmp_path / "runs",
-                             clock=clock, **kwargs)
-
-    return _make
-
-
-async def until(pred, timeout: float = 3.0) -> None:
-    """等到条件成立。轮询而不是固定 sleep —— 固定 sleep 要么慢要么脆。"""
-    deadline = time.monotonic() + timeout
-    while not pred():
-        if time.monotonic() > deadline:
-            raise AssertionError("等条件超时")
-        await asyncio.sleep(0.005)
 
 
 async def run_to_end(engine: MissionEngine, mission, timeout: float = 5.0):
