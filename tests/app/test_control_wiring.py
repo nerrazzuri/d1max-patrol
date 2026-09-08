@@ -122,7 +122,7 @@ def test_状态快照里有control段(有pin的服务):
     # 通道(要跟 max_sessions 用同一个分母,见 app/control.py 的 snapshot()
     # docstring 和 test_control_desk.py::test_快照的sessions不含本机)。本机
     # 不占那 3 个名额,所以这里是 0,不是 1。
-    assert snap["control"]["sessions"] == 0
+    assert snap["control"]["remote_sessions"] == 0
 
     # 换一个非本机地址解锁一次,这回真的算进去 —— 钉住"sessions 只数非本机"
     # 这条裁定本身,而不是只验证"回环不算数"这一半。
@@ -130,14 +130,14 @@ def test_状态快照里有control段(有pin的服务):
     # /api/state 读的是缓存快照,新会话得等下一拍重建才看得见,原因同下面
     # test_持有租约之后快照里看得见是谁 的 docstring。
     got = 等到(lambda: get_json(有pin的服务, "/api/state",
-                                headers=auth(tok))["control"]["sessions"], 1)
+                                headers=auth(tok))["control"]["remote_sessions"], 1)
     assert got == 1
 
 
 def test_没设pin时control段也在(server):
     snap = get_json(server, "/api/state")
     assert snap["control"]["holder"] is None
-    assert snap["control"]["sessions"] == 0
+    assert snap["control"]["remote_sessions"] == 0
 
 
 def test_快照里没有token(有pin的服务):

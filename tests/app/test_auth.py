@@ -21,6 +21,7 @@ import json
 import pytest
 
 from d1max_patrol.app.auth import (
+    MAX_THROTTLE_CLIENTS,
     Denied,
     Guard,
     Throttle,
@@ -195,6 +196,53 @@ def test_锁到点了就自动开():
     t.fail("x", now=0.0)
     assert t.locked_for("x", now=5.0) > 0
     assert t.locked_for("x", now=10.1) == 0.0
+
+
+def test_限速表有内存兜底():
+    """每来一个新来源就多一条记录,没兜底的话扫端口的人能让它长到网段那么大。
+
+    这是这一卷里唯一一个会随外部输入无限长的结构(``TokenStore`` 有
+    ``MAX_TOKENS``,``NonceStore`` 有 ``MAX_NONCES``,``LeaseBook`` 有
+    ``AUDIT_MAX``)。
+    """
+    t = Throttle(max_fails=5, max_clients=8)
+    for i in range(200):
+        t.fail(f"10.0.0.{i}", now=0.0)
+    assert t.tracked <= 8
+
+
+def test_内存压力先淘汰没锁着的():
+    """**这是这条兜底要紧的那一句。**
+
+    一个正在被锁的来源,不许因为别人在灌"还没到阈值"的记录就被放行 —— 不然
+    爆破的人只要同时从很多个地址发几下请求,就能把自己的锁擦掉,限速当场变成
+    摆设。所以淘汰先挑 ``until <= now`` 的。
+    """
+    t = Throttle(max_fails=5, lockout_s=100.0, max_clients=4)
+    for _ in range(5):
+        t.fail("坏人", now=0.0)
+    assert t.locked_for("坏人", now=1.0) > 0
+    for i in range(200):                    # 拿一堆没锁着的条目去挤
+        t.fail(f"10.0.0.{i}", now=1.0)
+    assert t.tracked <= 4
+    assert t.locked_for("坏人", now=1.0) > 0, "锁还没走完的人被内存压力放掉了"
+
+
+def test_全都锁着的时候上限还是上限():
+    """兜底那一档:第一档一条都扔不动的时候,内存**仍然**不许无限长。
+
+    "内存有界"是这个类必须守住的承诺,而一个能换地址的人可以让每一条记录都
+    处在锁定中。这时只好扔最快要解锁的那些 —— 让出的东西很少,因为他换一个
+    新地址本来就直接得到一个干净的计数(计数是按 IP 记的)。
+    """
+    t = Throttle(max_fails=1, lockout_s=100.0, max_clients=4)
+    for i in range(200):
+        t.fail(f"10.0.0.{i}", now=1.0)      # 每一条都当场锁上
+    assert t.tracked <= 4
+
+
+def test_默认的限速表上限():
+    assert MAX_THROTTLE_CLIENTS == 512
 
 
 # ------------------------------------------------------------------ token 库

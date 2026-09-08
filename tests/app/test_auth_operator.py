@@ -74,6 +74,26 @@ def test_认不出来的来源按最严的算():
     assert channel_of("不是个地址") == CHANNEL_AP
 
 
+def test_ipv4映射的v6地址不许掉进最松的一档():
+    """``::ffff:x.x.x.x`` 说的就是 ``x.x.x.x``,分档得认这一点。
+
+    不归一化的话两条都会判成 ``lan``(``IPv4Network.__contains__`` 对 v6
+    地址直接返回 ``False``,``IPv6Address.is_loopback`` 不看 ``ipv4_mapped``)
+    —— 热点上的人明文 PIN 换到的从只读凭证变成**完整**凭证,闲置期从 30 分钟
+    变回 12 小时。**这一类不是"认不出来",是认错了,而且错在松的那一头**,
+    所以上面那条"认不出来按 ap 算"恰好盖不住它。
+
+    今天不可达(服务是 ``AF_INET``),但一句 ``address_family = AF_INET6``
+    就兑现 —— 那是让服务同时听 v4/v6 的标准写法,看起来完全无害。这条测试
+    就是为了让那一天有东西变红。
+    """
+    assert channel_of("::ffff:127.0.0.1") == CHANNEL_LOCAL
+    assert channel_of("::ffff:192.168.168.5") == CHANNEL_AP
+    assert channel_of("::ffff:10.20.30.40") == CHANNEL_LAN
+    # 带方括号/大小写的写法一样得认。
+    assert channel_of("::FFFF:192.168.168.5") == CHANNEL_AP
+
+
 def test_热点网段可以换():
     assert channel_of("10.9.9.9", ap_nets=("10.9.9.0/24",)) == CHANNEL_AP
     assert channel_of("192.168.168.5", ap_nets=("10.9.9.0/24",)) == CHANNEL_LAN

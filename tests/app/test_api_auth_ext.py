@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from d1max_patrol.app.auth import (
     CHANNEL_LOCAL,
     MAX_LOCAL_SESSIONS,
+    MAX_NONCES_PER_CLIENT,
     NONCE_TTL_S,
     PROOF_ALG,
     Denied,
@@ -132,6 +134,30 @@ def test_pin从不出现在质询这条路上(有pin的服务):
 
 def test_没设pin的服务上质询接口说清楚(server):
     get_err(server, "/api/auth/challenge", 400)
+
+
+def test_同一个来源狂取质询会被限到429(有pin的服务):
+    """这条路不要 token,所以配额只能按来源 IP 分桶(见 ``auth.NonceStore``)。
+
+    不分桶的话,一个未鉴权的人连发几十次就把别人还没用掉的质询挤光,把人降级
+    回明文 PIN —— 在热点上那是只读凭证,应急通道当场开不动狗。
+    **429 不是 400**:400 会让手机端以为"这个质询坏了"于是立刻再打一次。
+    """
+    for _ in range(MAX_NONCES_PER_CLIENT):
+        assert get_json(有pin的服务, "/api/auth/challenge")["nonce"]
+    get_err(有pin的服务, "/api/auth/challenge", 429)
+
+
+def test_取质询这条路走的是tcp对端地址(有pin的服务):
+    """分桶的全部安全性压在"``client`` 是内核给的对端地址"这一句上。
+
+    哪天有人把它改成读 ``X-Forwarded-For`` 之类的头,伪造一行就能换一个桶,
+    分桶当场失效 —— 跟 ``channel_of`` 是同一条前提,所以这里也立一根绊线。
+    """
+    src = inspect.getsource(AppServer._auth_challenge)
+    assert "req.client" in src
+    for 头 in ("forwarded", "x-real-ip"):
+        assert 头 not in src.lower()
 
 
 # ------------------------------------------------------------------ 退出

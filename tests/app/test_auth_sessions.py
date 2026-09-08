@@ -131,7 +131,7 @@ def test_用证明解锁也受上限管():
     g = Guard(PIN, clock=假钟())
     for i in range(3):
         g.unlock(PIN, f"10.0.0.{i}", operator=f"人{i}")
-    nonce = g.challenge()
+    nonce = g.challenge("10.0.0.9")
     with pytest.raises(Denied) as err:
         g.unlock_proof(nonce, proof_for(PIN, nonce), "10.0.0.9",
                        operator="赵六")

@@ -1139,10 +1139,15 @@ class AppServer:
             "notice": OPERATOR_NOTICE,
         })
 
-    def _auth_challenge(self, _req: Request) -> Response:
-        """取一个一次性质询。**这条不要 token** —— 要了就没人换得到 token。"""
+    def _auth_challenge(self, req: Request) -> Response:
+        """取一个一次性质询。**这条不要 token** —— 要了就没人换得到 token。
+
+        配额按 ``req.client``(TCP 对端地址)分桶:这条路不要 token,不分桶的
+        话一个未鉴权的人连发几十次就能把别人还没用掉的质询挤光,把人降级回
+        明文 PIN(见 ``auth.NonceStore``)。桶满了回 429。
+        """
         try:
-            nonce = self._auth.challenge()
+            nonce = self._auth.challenge(req.client)
         except Denied as exc:
             raise HttpError(exc.status, exc.error, exc.detail) from None
         return json_response({"nonce": nonce, "ttl_s": NONCE_TTL_S,
@@ -1200,17 +1205,22 @@ class AppServer:
         是所有人共用的一份快照,塞一个"是不是我"进去就得按人分份,SSE 那条
         广播路子立刻塌掉。
 
-        ``sessions``/``max_sessions`` 从 ``ControlDesk.seats()`` 取,不在这里
-        自己数 —— 那两个数只许有一处定义(见 ``app/control.py`` 的
+        ``remote_sessions``/``max_sessions`` 从 ``ControlDesk.seats()`` 取,
+        不在这里自己数 —— 那两个数只许有一处定义(见 ``app/control.py`` 的
         ``seats()`` docstring),不然这条接口和 ``/api/state`` 会在同一时刻
         对同一件事报出两个不同的答案。
+
+        **这个整数叫 ``remote_sessions``,不叫 ``sessions``。** 手机端两条接口
+        都要读,而 ``GET /api/sessions`` 里的 ``sessions`` 是一个**数组**;同一
+        个名字两种类型是最容易写出偶发崩溃的客户端的那种设计。那条接口早就把
+        这个整数叫 ``remote_sessions`` 了,这里对齐它 —— 一个概念一个名字。
         """
         mine = req.session.ref if req.session is not None else ""
         sessions, max_sessions = self._control.seats()
         return json_response({
             **state.to_wire(),
             "mine": state.holder is not None and state.holder.ref == mine,
-            "sessions": sessions,
+            "remote_sessions": sessions,
             "max_sessions": max_sessions,
             "notice": OPERATOR_NOTICE,
         })

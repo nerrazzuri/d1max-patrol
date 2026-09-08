@@ -338,15 +338,35 @@ def test_control和state报的sessions必须一致(有pin的服务):
 
     def state段sessions():
         return get_json(有pin的服务, "/api/state",
-                        headers=auth(本机))["control"]["sessions"]
+                        headers=auth(本机))["control"]["remote_sessions"]
 
     # /api/state 读的是 _StateHub 的缓存快照,新会话得等下一拍重建才看得见
     # (跟 tests/app/test_control_wiring.py 的 test_持有租约之后快照里看得见
     # 是谁 是同一个原因)——不写死 sleep,等到期望值出现或者超时为止。
     state_sessions = 等到(state段sessions, 1)
     control_sessions = get_json(有pin的服务, "/api/control",
-                                headers=auth(本机))["sessions"]
+                                headers=auth(本机))["remote_sessions"]
 
     assert state_sessions == 1
     assert control_sessions == 1
     assert control_sessions == state_sessions
+
+
+def test_一个名字不许有两种类型(有pin的服务):
+    """``sessions`` 在 ``GET /api/sessions`` 上是**数组**,所以别的接口上不许
+
+    再有一个叫 ``sessions`` 的**整数**。手机端两条接口都要读,同一个名字一个
+    是数组一个是整数,写出来的客户端会"看起来能跑、偶尔炸一下"。那个整数在三
+    条接口上统一叫 ``remote_sessions``。
+    """
+    本机 = 解锁(有pin的服务, "张三")
+    ctl = get_json(有pin的服务, "/api/control", headers=auth(本机))
+    assert "sessions" not in ctl
+    assert isinstance(ctl["remote_sessions"], int)
+    段 = get_json(有pin的服务, "/api/state", headers=auth(本机))["control"]
+    assert "sessions" not in 段
+    assert isinstance(段["remote_sessions"], int)
+    # 而 /api/sessions 上那个名字仍然是数组,两边合起来才说明问题被解掉了。
+    表 = get_json(有pin的服务, "/api/sessions", headers=auth(本机))
+    assert isinstance(表["sessions"], list)
+    assert isinstance(表["remote_sessions"], int)

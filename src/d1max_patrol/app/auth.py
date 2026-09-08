@@ -63,6 +63,10 @@ MAX_FAILS = 5
 LOCKOUT_S = 30.0
 MAX_LOCKOUT_S = 900.0
 
+#: ``Throttle`` 最多同时记多少个来源 IP。内存兜底 —— 见 ``Throttle`` 的
+#: docstring:淘汰只挑**没锁着**的条目。
+MAX_THROTTLE_CLIENTS = 512
+
 #: token 有多少字节的熵。32 字节 = 256 位,猜不着。
 TOKEN_BYTES = 32
 
@@ -138,8 +142,14 @@ OPERATOR_NOTICE = (
 #: 质询有效期。够手机做一次往返,不够别人捡回去重放。
 NONCE_TTL_S = 60.0
 
-#: 同时最多留几个没用掉的质询。防的是有人狂发质询把内存撑爆。
-MAX_NONCES = 32
+#: 全局同时最多留几个没用掉的质询。防的是很多个来源一起狂发把内存撑爆。
+#: 一条记录几十字节,这个量级可以忽略。
+MAX_NONCES = 512
+
+#: **同一个来源 IP** 同时最多留几个没用掉的质询。防的是一个未鉴权的人把别人
+#: 的质询挤掉(见 ``NonceStore`` 的威胁模型)。4 个够手机重试几次,不够拿来当
+#: 挤兑工具。
+MAX_NONCES_PER_CLIENT = 4
 
 #: 一个质询多少字节随机。
 NONCE_BYTES = 16
@@ -314,17 +324,38 @@ class _Fails:
     count: int = 0
     #: 锁到什么时候(monotonic)。0 表示没锁。
     until: float = 0.0
+    #: 最后一次记失败是什么时候(monotonic)。内存兜底按它挑最老的淘汰。
+    last: float = 0.0
 
 
 class Throttle:
-    """按来源 IP 记 PIN 试错。连错就退避,退避时间翻倍。"""
+    """按来源 IP 记 PIN 试错。连错就退避,退避时间翻倍。
+
+    **内存兜底,以及它买到的和没买到的。** 每来一个新的来源 IP 就多一条记录,
+    没有兜底的话,局域网上一个扫端口的人能让它长到整个网段那么大 —— 这是这
+    一卷里唯一一个会随外部输入无限长的结构(``TokenStore`` 有 ``MAX_TOKENS``,
+    ``NonceStore`` 有 ``MAX_NONCES``,``LeaseBook`` 有 ``AUDIT_MAX``)。所以
+    上限是 ``max_clients``,超了就淘汰。
+
+    **淘汰的规矩只有一条,但它是这里唯一要紧的一条:当前正锁着的条目绝不淘汰。**
+    只挑 ``until <= now``(锁已经走完,或者压根没到锁的份上)的条目,按最后一次
+    失败的时刻从老到新扔。所以内存压力**放不掉任何一个还在锁里的人**。
+
+    **说实话它没买到什么:**一个能从很多个源地址发请求的人,可以把自己那条
+    "还没到 ``max_fails``"的计数顶出去,于是他的失败计数被清零、重新从头数。
+    但他本来就能靠换源 IP 直接得到同一个效果(计数本来就是按 IP 记的),所以
+    这里没有多让出任何东西 —— 而真正挡离线穷举的从来不是这个类(见
+    ``proof_for`` 的 docstring)。
+    """
 
     def __init__(self, *, max_fails: int = MAX_FAILS,
                  lockout_s: float = LOCKOUT_S,
-                 max_lockout_s: float = MAX_LOCKOUT_S) -> None:
+                 max_lockout_s: float = MAX_LOCKOUT_S,
+                 max_clients: int = MAX_THROTTLE_CLIENTS) -> None:
         self._max_fails = max_fails
         self._lockout_s = lockout_s
         self._max_lockout_s = max_lockout_s
+        self._max_clients = max_clients
         self._lock = threading.Lock()
         self._by_client: dict[str, _Fails] = {}
 
@@ -343,16 +374,52 @@ class Throttle:
         with self._lock:
             rec = self._by_client.setdefault(client, _Fails())
             rec.count += 1
+            rec.last = now
             if rec.count < self._max_fails:
+                self._sweep(now)
                 return 0.0
             grow = 2.0 ** (rec.count - self._max_fails)
             wait = min(self._lockout_s * grow, self._max_lockout_s)
             rec.until = now + wait
+            self._sweep(now)
             return wait
 
     def succeed(self, client: str) -> None:
         with self._lock:
             self._by_client.pop(client, None)
+
+    @property
+    def tracked(self) -> int:
+        """现在记着多少个来源。给测试和排障看。"""
+        with self._lock:
+            return len(self._by_client)
+
+    def _sweep(self, now: float) -> None:
+        """超过上限就淘汰,**分两档**。调用方已经拿着锁了。
+
+        第一档:没锁着的(``until <= now``),按最后一次失败从老到新扔。正常情
+        况下够用 —— 扫端口的人每个地址只留一条没到阈值的记录。
+
+        第二档(**兜底,不得已**):第一档扔完还超,就扔**最快要解锁**的那些。
+        为什么必须有这一档:一个能从很多地址发请求的人可以让每一条记录都处在
+        锁定中,那时第一档一条都扔不动,上限就不再是上限了 —— 而"内存有界"是
+        这个类唯一必须守住的承诺。为什么它没让出多少:计数本来就是按 IP 记
+        的,他换一个新地址就直接得到一个干净的计数,不必费劲把自己顶出去;真
+        正挡离线穷举的从来不是这个类(见 ``proof_for``)。
+        """
+        if len(self._by_client) <= self._max_clients:
+            return
+        free = sorted((r.last, c) for c, r in self._by_client.items()
+                      if r.until <= now)
+        for _, client in free:
+            if len(self._by_client) <= self._max_clients:
+                return
+            del self._by_client[client]
+        locked = sorted((r.until, c) for c, r in self._by_client.items())
+        for _, client in locked:
+            if len(self._by_client) <= self._max_clients:
+                return
+            del self._by_client[client]
 
 
 # ------------------------------------------------------------------ 闸门
@@ -475,11 +542,27 @@ def channel_of(client: str, *, ap_nets: Sequence[str] = AP_NETS) -> str:
 
     所以要加代理之前先重新设计这一层(至少要有可信代理名单、并且只信最后
     一跳)。同一句话也写在 ``docs/鉴权与控制权.md`` 第六节,给现场运维看。
+
+    **IPv4 映射的 IPv6 地址先归一化,不归一化会掉进最松的一档。**
+    ``::ffff:192.168.168.5`` 说的就是 ``192.168.168.5``,但
+    ``IPv4Network.__contains__`` 对一个 v6 地址直接返回 ``False``,而
+    ``IPv6Address.is_loopback`` 不看 ``ipv4_mapped`` —— 不归一化的话,热点上
+    的人和本机自己都会被判成 ``lan``:明文 PIN 换到的从只读凭证变成完整凭证,
+    闲置期从 30 分钟变回 12 小时。**这一类不是"认不出来",是认出来了、认错了,
+    而且错在松的那一头** —— 上面那句"认不出来一律按 ap 算"恰好盖不住它。
+
+    今天不可达(``_HTTPServer`` 是 ``AF_INET``,对端地址永远是点分十进制),
+    但兑现它只要一句 ``address_family = socket.AF_INET6`` —— 那是让服务同时
+    听 v4/v6 的标准写法,看起来完全无害。所以这三行不是"以后可能有用",是
+    **提前把一个一句配置就能打开的口子焊死**。
     """
     try:
         addr = ipaddress.ip_address(client.strip())
     except ValueError:
         return CHANNEL_AP
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
     if addr.is_loopback:
         return CHANNEL_LOCAL
     for raw in ap_nets:
@@ -536,24 +619,72 @@ class NonceStore:
     的那一刻就把 nonce 作废,不管核验的是明文对比还是签名匹配。过期时间防的
     是另一件事:质询发出去、迟迟没被用掉,窗口越长,被人从报文里捡回去重放
     的机会就越大 —— TTL 把这个窗口钉死在"够一次手机往返"的量级上。
+
+    **第二个假想敌:一个连 PIN 都没有的人,只想把别人挤下去。** 取质询这条路
+    (``CHALLENGE_PATH``)必须放在 ``OPEN_PATHS`` 里 —— 要 token 就没人换得到
+    token —— 所以热点射程之内、或者客户局域网上任何能连到这个端口的人,都能
+    无限次地打它,而且不必先解锁。这个池子早先是**一个全局 FIFO**:满了就从
+    头上淘汰,不看那条 nonce 属于谁、过没过期。于是他只要连发 ``cap`` 次,就能
+    把每一个正当用户刚取到、还没用掉的质询全挤掉。
+
+    **他挤掉的后果不是"登不上",是把人降级回明文 PIN**,而这两条降级都实打实
+    地伤到东西:在狗自己的热点上,明文 PIN 只换只读凭证(``Guard.unlock``)——
+    应急通道当场开不动狗;在客户局域网上,人只能把 PIN 明文发上网 —— §6.5
+    措施 2 存在的全部理由就是别让它上网。而 ``unlock_proof`` 里"质询过期不记
+    失败计数"那个决定(它本身是对的,不然信号弱的现场会被自己的重试锁死)
+    恰好意味着他可以无限重复,一条限速也碰不到他。
+
+    **所以这个池子按来源 IP 分桶。** 每桶 ``per_client`` 个,淘汰**只淘汰过期
+    的** —— 新 nonce 永远挤不掉别人还没过期的那一条。自己那一桶满了返 429
+    (不是 400:429 才说得清"这是限流,等一会儿再来")。攻击者能撑爆的只有他
+    自己那一桶;要影响别人就得换源 IP,一个 IP 只顶 4 个,量级完全不同。
+
+    **上限的真实形状,不许说得比实际硬。** ``cap`` 不是一个咬死的天花板:全局
+    到顶之后**新来源**会被 429 挡在外面,而**已经有桶的来源**照旧能取到自己
+    那 4 个 —— 这是有意的,不然攻击者凑够 ``cap`` 条就又能把所有人挡在门外,
+    分桶等于白做。所以最坏情况是 ``cap × per_client`` 条(今天是 2048 条,几十
+    KB 的量级),仍然是有界的,内存兜底照样成立。
     """
 
     def __init__(self, *, ttl_s: float = NONCE_TTL_S,
-                 cap: int = MAX_NONCES) -> None:
+                 cap: int = MAX_NONCES,
+                 per_client: int = MAX_NONCES_PER_CLIENT) -> None:
         self._ttl_s = ttl_s
         self._cap = cap
+        self._per_client = per_client
         self._lock = threading.Lock()
-        #: 插入序就是签发序,满了从头上淘汰。
-        self._live: dict[str, float] = {}
+        #: 来源 IP -> {nonce: 签发时刻}。分桶就是这道防线本身。
+        self._buckets: dict[str, dict[str, float]] = {}
+        #: nonce -> 来源 IP。``take`` 靠它找回桶,不用遍历。
+        self._owner: dict[str, str] = {}
 
-    def mint(self, *, now: float | None = None) -> str:
+    def mint(self, client: str, *, now: float | None = None) -> str:
+        """给这个来源发一个质询。桶满了抛 ``Denied(429)``。
+
+        ``client`` 必须是 TCP 对端地址(``server.py`` 的 ``client_address[0]``),
+        不是任何请求头里的东西 —— 跟 ``channel_of`` 是同一条前提。哪天它变成
+        一个请求方自己写得了的值,分桶当场失效:伪造一行头就能换一个桶。
+        """
         now = time.monotonic() if now is None else now
         nonce = secrets.token_hex(NONCE_BYTES)
         with self._lock:
             self._sweep(now)
-            while len(self._live) >= self._cap:
-                self._live.pop(next(iter(self._live)))
-            self._live[nonce] = now
+            bucket = self._buckets.get(client)
+            if bucket is not None and len(bucket) >= self._per_client:
+                raise Denied(
+                    429, "质询取得太快了",
+                    f"同一个来源同时最多留 {self._per_client} 个没用掉的质询。"
+                    f"用掉一个,或者等 {self._ttl_s:.0f} 秒它自己过期。")
+            if bucket is None and len(self._owner) >= self._cap:
+                # 清过期的已经清过了(``_sweep``),清不出来就只挡**新来源**:
+                # 已经有桶的人不受影响,不然攻击者凑够 cap 条又能封住所有人。
+                raise Denied(
+                    429, "这台机器上待用的质询太多了",
+                    "等几秒再取一次。持续如此说明有人在刷这条接口。")
+            if bucket is None:
+                bucket = self._buckets.setdefault(client, {})
+            bucket[nonce] = now
+            self._owner[nonce] = client
         return nonce
 
     def take(self, nonce: object, *, now: float | None = None) -> bool:
@@ -561,21 +692,39 @@ class NonceStore:
         now = time.monotonic() if now is None else now
         with self._lock:
             self._sweep(now)
-            if not isinstance(nonce, str) or nonce not in self._live:
+            if not isinstance(nonce, str) or nonce not in self._owner:
                 return False
-            del self._live[nonce]
+            self._drop(nonce)
             return True
 
     @property
     def count(self) -> int:
         with self._lock:
-            return len(self._live)
+            return len(self._owner)
+
+    def count_for(self, client: str) -> int:
+        """这个来源手上还有几个没用掉的。给测试和排障看。"""
+        with self._lock:
+            return len(self._buckets.get(client, ()))
+
+    def _drop(self, nonce: str) -> None:
+        """把一条 nonce 从两个索引里一起摘掉。调用方已经拿着锁了。"""
+        client = self._owner.pop(nonce)
+        bucket = self._buckets.get(client)
+        if bucket is not None:
+            bucket.pop(nonce, None)
+            if not bucket:
+                del self._buckets[client]
 
     def _sweep(self, now: float) -> None:
-        """清掉过期的。调用方已经拿着锁了。"""
-        dead = [n for n, at in self._live.items() if now - at > self._ttl_s]
+        """清掉过期的。**只清过期的** —— 淘汰不许碰别人还能用的那条。
+
+        调用方已经拿着锁了。
+        """
+        dead = [n for n, c in self._owner.items()
+                if now - self._buckets[c][n] > self._ttl_s]
         for n in dead:
-            del self._live[n]
+            self._drop(n)
 
 
 class Guard:
@@ -633,11 +782,17 @@ class Guard:
                            readonly=self.channel_of(client) == CHANNEL_AP,
                            now=now)
 
-    def challenge(self, *, now: float | None = None) -> str:
-        """发一个一次性质询。**这条不要 token** —— 要了就没人换得到 token。"""
+    def challenge(self, client: str, *, now: float | None = None) -> str:
+        """发一个一次性质询。**这条不要 token** —— 要了就没人换得到 token。
+
+        正因为它不要 token,任何能连到这个端口的人都能无限次打它,所以配额按
+        ``client`` 分桶(见 ``NonceStore`` 的第二个假想敌)。桶满了这里会把
+        ``Denied(429)`` 原样抛出去。
+        """
         if self._pin is None:
             raise Denied(400, "这台没设 PIN", "启动时没给 --pin,不需要解锁。")
-        return self.nonces.mint(now=self._clock() if now is None else now)
+        return self.nonces.mint(client,
+                                now=self._clock() if now is None else now)
 
     def unlock_proof(self, nonce: object, proof: object, client: str, *,
                      operator: str = "", now: float | None = None) -> str:
@@ -734,6 +889,20 @@ class Guard:
         能解决的(现场约定不用通用名是运营手段),但不能把"同名"读成一个
         可靠的身份判据 —— 它只是"记账用的字符串相等",跟 §6.3 说的是同一
         回事。
+
+        **这条威胁还有没写的一半:换座连带把控制权也拿走了,而且不留接管
+        的痕迹。** 老会话的 token 一被 ``revoke_ref`` 掉,``ControlDesk``
+        下一轮 sweep 就会按 §6.4 把他的租约一起释放(``keep_only``),新来
+        的那个人于是可以直接 ``acquire``。审计上这一串读起来是"同一个名字
+        掉线又回来了"(``acquired`` → ``dropped`` → ``acquired``),跟一次
+        普通的闲置失效分不开 —— **没有 ``taken_over``、没有理由、也没有
+        任何一条指向新持有者的因果链**,而正规的接管(§3.4/§3.5)是一定要
+        留这些的。前提很硬(名额先得满、名字得猜中、手上得有 PIN;而有 PIN
+        的人本来就能走留痕的 ``force``),所以这不是一条新的夺权路径,**它
+        换到的只有"审计规避"这一样**。修它要跨 ``Guard``/``ControlDesk``/
+        ``LeaseBook`` 三处并且可能要动 ``AUDIT_KINDS``,已登记为
+        docs/第2卷待办.md 第 55 条 —— 在那之前,读到这段的人至少要知道
+        审计在这一档上会说谎。
 
         **非本机名额都满、又没有同名可换座时,远端的人拿不回座位。**
         ``logout()`` 只能退自己手里的 token,``revoke_ref()`` 没有对外的

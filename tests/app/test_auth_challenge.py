@@ -8,6 +8,7 @@ from d1max_patrol.app.auth import (
     AUTH_PATH,
     CHALLENGE_PATH,
     MAX_NONCES,
+    MAX_NONCES_PER_CLIENT,
     NONCE_TTL_S,
     OPEN_PATHS,
     PROOF_ALG,
@@ -30,8 +31,9 @@ class 假钟:
         return self.t
 
 
-def 拿证明(g: Guard, pin: str = PIN) -> tuple[str, str]:
-    nonce = g.challenge()
+def 拿证明(g: Guard, pin: str = PIN,
+         client: str = "10.0.0.5") -> tuple[str, str]:
+    nonce = g.challenge(client)
     return nonce, proof_for(pin, nonce)
 
 
@@ -69,14 +71,14 @@ def test_算法名字写死了给客户端看():
 
 def test_质询是一次性的():
     s = NonceStore()
-    n = s.mint(now=0.0)
+    n = s.mint("10.0.0.5", now=0.0)
     assert s.take(n, now=1.0) is True
     assert s.take(n, now=2.0) is False
 
 
 def test_质询过期就用不了():
     s = NonceStore()
-    n = s.mint(now=0.0)
+    n = s.mint("10.0.0.5", now=0.0)
     assert s.take(n, now=NONCE_TTL_S + 1.0) is False
 
 
@@ -88,19 +90,102 @@ def test_没发过的质询用不了():
 
 
 def test_质询数量有上限():
-    s = NonceStore(cap=4)
-    for _ in range(50):
-        s.mint(now=0.0)
-    assert s.count == 4
+    """内存兜底:很多个来源一起狂发,总量还是压得住。
+
+    每个来源顶多 ``per_client`` 个,全局到顶之后**新来源**被 429 挡在外面。
+    这里用 100 个不同来源去撞 cap=8 的全局上限。
+    """
+    s = NonceStore(cap=8, per_client=1)
+    发出去 = 0
+    for i in range(100):
+        try:
+            s.mint(f"10.0.0.{i}", now=0.0)
+        except Denied:
+            continue
+        发出去 += 1
+    assert 发出去 == 8
+    assert s.count == 8
 
 
-def test_默认上限是三十二():
-    assert MAX_NONCES == 32
+def test_默认全局上限和每个来源的上限():
+    """全局 512 是内存兜底,每个来源 4 个才是那道防线本身。
+
+    早先只有一个全局 FIFO(32),于是一个未鉴权的人连发 32 次就能把所有人
+    还没用掉的质询挤光 —— 见 ``NonceStore`` 的第二个假想敌。
+    """
+    assert MAX_NONCES == 512
+    assert MAX_NONCES_PER_CLIENT == 4
+    # 每个来源的配额必须**远小于**全局上限,不然分桶等于没分。
+    assert MAX_NONCES_PER_CLIENT * 8 < MAX_NONCES
+
+
+# ------------------------------------------------ 别人挤不掉我的质询(P1-2)
+
+
+def test_攻击者灌满之后好人照样换得到token():
+    """**这是这条修复的正题。**
+
+    假想敌:热点射程之内、或者局域网上任何能连到这个端口的人。他没有 PIN、
+    没有 token —— 取质询这条路本来就不要 token(要了就没人换得到 token)。
+    他能做的就是狂发 ``GET /api/auth/challenge``。
+
+    早先这个池子是一个全局 FIFO,他连发 ``cap`` 次就把好人刚取到、还没用掉
+    的那条挤掉,好人只能回去用明文 PIN —— 在热点上那是**只读**凭证,应急
+    通道当场开不动狗。所以这里断的不是"他被挡住了",是**好人没被影响**。
+    """
+    clock = 假钟(0.0)
+    g = Guard(PIN, clock=clock)
+    nonce = g.challenge("192.168.168.20")           # 好人先取一个
+    for _ in range(200):                            # 攻击者可劲儿灌
+        try:
+            g.challenge("192.168.168.99")
+        except Denied:
+            pass
+    token = g.unlock_proof(nonce, proof_for(PIN, nonce), "192.168.168.20")
+    assert token
+
+
+def test_同一个来源灌到桶满返429():
+    """桶满了必须是 429 不是 400。
+
+    400 会被手机端读成"这个质询坏了,再取一个",于是它立刻再打一次,把自己
+    锁得更死;429 才说得清"这是限流,等一会儿"。
+    """
+    s = NonceStore(per_client=4)
+    for _ in range(4):
+        s.mint("10.0.0.7", now=0.0)
+    with pytest.raises(Denied) as err:
+        s.mint("10.0.0.7", now=0.0)
+    assert err.value.status == 429
+    # 别人的桶不受影响。
+    assert s.mint("10.0.0.8", now=0.0)
+
+
+def test_桶里过期的会被回收():
+    """淘汰**只淘汰过期的** —— 时间靠参数传,不许 sleep(§8.5 第 2 条)。"""
+    s = NonceStore(per_client=2)
+    s.mint("10.0.0.7", now=0.0)
+    s.mint("10.0.0.7", now=0.0)
+    with pytest.raises(Denied):
+        s.mint("10.0.0.7", now=0.0)
+    # 过期之后位置腾出来了。
+    assert s.mint("10.0.0.7", now=NONCE_TTL_S + 1.0)
+    assert s.count_for("10.0.0.7") == 1
+
+
+def test_新取的质询挤不掉别人还没过期的():
+    """这是 FIFO 淘汰和"只清过期的"之间的差别,单独钉一条。"""
+    s = NonceStore(cap=2, per_client=1)
+    我的 = s.mint("10.0.0.7", now=0.0)
+    s.mint("10.0.0.8", now=0.0)
+    with pytest.raises(Denied):                     # 全局满了,新来源被挡
+        s.mint("10.0.0.9", now=1.0)
+    assert s.take(我的, now=2.0) is True             # 我的还在
 
 
 def test_两次质询不一样():
     s = NonceStore()
-    assert s.mint(now=0.0) != s.mint(now=0.0)
+    assert s.mint("10.0.0.5", now=0.0) != s.mint("10.0.0.5", now=0.0)
 
 
 # ------------------------------------------------------------ 用证明解锁
@@ -168,7 +253,7 @@ def test_证明连错也会被限速():
     clock = 假钟(0.0)
     g = Guard(PIN, clock=clock)
     for _ in range(6):
-        nonce = g.challenge()
+        nonce = g.challenge("10.0.0.5")
         with pytest.raises(Denied):
             g.unlock_proof(nonce, proof_for("000000", nonce), "10.0.0.5")
     assert g.throttle.locked_for("10.0.0.5", now=clock.t) > 0
@@ -189,7 +274,7 @@ def test_明文和证明共用同一条限速():
 def test_没设pin就没有质询():
     g = Guard(None)
     with pytest.raises(Denied) as err:
-        g.challenge()
+        g.challenge("10.0.0.5")
     assert err.value.status == 400
 
 

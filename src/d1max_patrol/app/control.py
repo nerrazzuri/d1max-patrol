@@ -128,13 +128,21 @@ class ControlDesk:
         ``expires_ms`` 会跟着心跳每 10 秒变一次, 那是有意的: 第 8 卷要靠它算
         "还剩多久到期"。10 秒一帧不吵。
 
-        ``sessions``/``max_sessions`` 这两个数的定义在 :meth:`seats`, 不在
-        这儿重复。
+        ``remote_sessions``/``max_sessions`` 这两个数的定义在 :meth:`seats`,
+        不在这儿重复。
+
+        **为什么这个整数叫 ``remote_sessions`` 而不是 ``sessions``。** 手机端
+        要同时读这一段和 ``GET /api/sessions``, 而那条接口里 ``sessions`` 是
+        一个**数组**(每条会话一行)。同一个名字在两条接口上一个是整数、一个
+        是数组, 是最容易写出"看起来能跑、偶尔炸一下"的那种客户端代码 —— 而
+        ``GET /api/sessions`` 早就把这个整数叫 ``remote_sessions`` 了。所以对
+        齐到那个名字: 一个概念一个名字, 一个名字一种类型。第 7 卷开工前改是
+        免费的(今天没有任何客户端在读它), 写完再改就不是了。
         """
         state = self.book.state(now_ms=now_ms)
         sessions, max_sessions = self.seats()
         return {**state.to_wire(),
-                "sessions": sessions,
+                "remote_sessions": sessions,
                 "max_sessions": max_sessions}
 
     def require(self, sess: Session | None, method: str, path: str, *,

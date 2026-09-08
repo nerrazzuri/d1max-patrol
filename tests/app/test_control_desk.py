@@ -169,14 +169,14 @@ def test_快照带着上限和心跳周期():
     assert snap["ttl_ms"] == LEASE_TTL_MS
     assert snap["heartbeat_ms"] == LEASE_HEARTBEAT_MS
     assert snap["max_sessions"] == 3
-    assert snap["sessions"] == 0
+    assert snap["remote_sessions"] == 0
 
 
 def test_快照数得出几个人连着():
     g, desk, _单调, 墙 = 起一台()
     g.unlock(PIN, "10.0.0.1", operator="张三")
     g.unlock(PIN, "10.0.0.2", operator="李四")
-    assert desk.snapshot(now_ms=墙.t)["sessions"] == 2
+    assert desk.snapshot(now_ms=墙.t)["remote_sessions"] == 2
 
 
 def test_快照里没有每拍都变的量():
@@ -208,7 +208,7 @@ def test_快照的sessions不含本机():
     g.unlock(PIN, "127.0.0.1", operator="本机张三")
     g.unlock(PIN, "10.0.0.1", operator="李四")
     snap = desk.snapshot(now_ms=墙.t)
-    assert snap["sessions"] == 1
+    assert snap["remote_sessions"] == 1
     assert snap["max_sessions"] == 3
 
 
