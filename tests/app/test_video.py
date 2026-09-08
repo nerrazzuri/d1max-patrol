@@ -14,6 +14,7 @@ Python 脚本,外面套一层同名的可执行壳(Windows 上是 ``.bat``,别�
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 import urllib.request
@@ -30,7 +31,7 @@ from d1max_patrol.app.video import (
     VideoError,
 )
 from d1max_patrol.backends.base import MediaError
-from tests.app.conftest import _fake, get_err, status, url
+from tests.app.conftest import _fake, get_err, get_json, status, url
 
 # --------------------------------------------------------------- 假的 ffmpeg
 
@@ -756,6 +757,68 @@ def test_观众关了页面ffmpeg就没了(server_video, ctx):
 
 def test_相机名就是CAMERAS里那两个():
     assert CAMERAS == ("front", "back")
+
+
+# ----------------------------------------------------------- 在线接到 HTTP
+
+
+def test_健康接口报每一路相机(server_video):
+    """``server_video`` 前相机配了、后相机没配 —— 两路都要出现在健康里。"""
+    cams = get_json(server_video, "/api/video/health")["cameras"]
+    assert set(cams) == set(CAMERAS)
+    assert set(cams["front"]) == {"online", "viewers", "since_frame_s", "detail"}
+
+
+def test_没配地址的相机也要出现在健康里(server):
+    """**「没配地址」和「配了但拉不到」在界面上是两句不同的话。**
+
+    漏掉没配的那一路,界面只能显示「没有这一路」,人分不出是装机时忘了填
+    还是推流挂了 —— 这两件事的处理方式完全不同。``server`` 这个 fixture
+    根本没配相机(``AppContext.video`` 默认是空 dict),正好就是这个情况。
+    """
+    cams = get_json(server, "/api/video/health")["cameras"]
+    assert cams["front"]["online"] is False
+    assert "没配地址" in cams["front"]["detail"]
+
+
+def test_状态快照里的视频段只有布尔(server_video):
+    """**每拍都变的数不许进这条 SSE。**
+
+    第 6 卷刚在这上面栽过一次:租约的相对倒计时被展开进常连的 SSE,握着
+    控制权的时候那条流从「静止时安静」变成每半秒一整帧 —— 在热点上是实打
+    实的带宽,还会把真正的状态变化淹掉。``since_frame_s`` 每拍都在变,
+    进去就是同一个错误。
+    """
+    seg = get_json(server_video, "/api/state")["video"]
+    assert set(seg) == set(CAMERAS)
+    assert all(isinstance(v, bool) for v in seg.values())
+
+
+def test_相机流断了不会把traceback印到stderr(ctx, fake_ffmpeg_dies, capsys):
+    """``_send_bytes`` 的 except 元组曾经漏了 ``VideoError``。
+
+    真机上 RTSP 一断,流会在观众读到一半时抛 ``VideoError``(见
+    ``test_ffmpeg中途死了流干净地结束``,那条测的是不带 HTTP 的生成器层)。
+    漏了这一项,每个观众都会在 stderr 刷一份 traceback,把真正的报错淹掉 ——
+    行为本身不坏(连接照常关),但下一个人整理 except 元组时很容易把它删掉,
+    所以在 HTTP 这一层单独钉一条。
+    """
+    feed = CameraFeed("rtsp://x", ffmpeg=fake_ffmpeg_dies)
+    ctx.video = {"front": feed}
+    s = AppServer(ctx, port=0)
+    s.start()
+    try:
+        resp = _open(s, "/api/video/front")
+        with contextlib.suppress(Exception):
+            resp.read()      # 读到流断,连接自然收尾(有没有异常都会关)
+        resp.close()
+        assert _until(lambda: feed.viewers == 0)
+    finally:
+        s.stop()
+        feed.close()
+    captured = capsys.readouterr()
+    assert "VideoError" not in captured.err
+    assert "VideoError" not in captured.out
 
 
 # --------------------------------------------------------------- 拍照抓帧

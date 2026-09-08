@@ -428,6 +428,19 @@ def _check_results_wire(results: Sequence[CheckResult]) -> list[dict[str, Any]]:
     return [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in results]
 
 
+def _video_wire(ctx: AppContext) -> dict[str, bool]:
+    """给 ``/api/state`` 那条常连 SSE 的视频段。**只放布尔。**
+
+    详细的健康数字(``since_frame_s`` 之类)只出现在轮询的
+    ``/api/video/health`` 上,不进这儿 —— 理由同 ``engine/lease.py`` 的
+    ``每拍都变的键``:第 6 卷刚在租约的相对倒计时上栽过一次,握着控制权的
+    时候那条流从"静止时安静"变成每半秒一整帧。``online`` 是个布尔,变一次
+    才响一次,进这儿没问题。
+    """
+    return {name: (ctx.video[name].online if name in ctx.video else False)
+            for name in CAMERAS}
+
+
 def _run_id(run_dir: Path) -> str:
     """归档目录 -> URL 里的运行 id。见 :data:`RUN_SEP`。"""
     return f"{run_dir.parent.name}{RUN_SEP}{run_dir.name}"
@@ -806,6 +819,7 @@ class _StateHub:
             },
             "caps": sorted(ctx.nav.capabilities),
             "control": self._control.snapshot(now_ms=ctx.clock()),
+            "video": _video_wire(ctx),
         }
 
 
@@ -1011,6 +1025,10 @@ class AppServer:
         self.route("POST", "/api/mapping/record/stop", self._record_stop)
         self.route("POST", "/api/mapping/rebuild", self._rebuild)
         self.route("GET", "/api/procs/<name>/log", self._proc_log)
+        # **顺序有讲究。** ``_dispatch()`` 按登记顺序找第一条匹配的路由,
+        # ``/api/video/<name>`` 的 ``<name>`` 是个万能段,会先吃掉
+        # ``/api/video/health`` —— 必须登记在它前面。
+        self.route("GET", "/api/video/health", self._video_health)
         self.route("GET", "/api/video/<name>", self._video)
         self.route("GET", "/api/missions", self._missions)
         self.route("GET", "/api/missions/<mid>", self._mission_get)
@@ -1445,6 +1463,25 @@ class AppServer:
                         "text/plain; charset=utf-8")
 
     # ---------------------------------------------------------------- 画面
+
+    def _video_health(self, _req: Request) -> Response:
+        """每一路相机现在在不在线。**这一屏是轮询的,数字放这儿。**
+
+        每拍都变的量(``since_frame_s``)只出现在这条轮询接口上,不进
+        ``/api/state`` 那条常连的 SSE —— 第 6 卷在这上面栽过一次,理由见
+        ``engine/lease.py`` 的 ``每拍都变的键``。
+        """
+        cams: dict[str, Any] = {}
+        for name in CAMERAS:
+            feed = self._ctx.video.get(name)
+            if feed is None:
+                cams[name] = {"online": False, "viewers": 0,
+                              "since_frame_s": None,
+                              "detail": f"{name} 相机没配地址 —— "
+                                        f"起 app 时用 --camera-host 指到推流的那台机器"}
+            else:
+                cams[name] = feed.health()
+        return json_response({"cameras": cams})
 
     def _video(self, req: Request) -> ByteStream:
         """一路 MJPEG,直接喂 ``<img src="/api/video/front">``。
@@ -2999,6 +3036,12 @@ class _RequestHandler(BaseHTTPRequestHandler):
         和 :meth:`_send_stream` 一样没有 ``Content-Length``,写完就关。人关掉
         标签页时这里会撞上 ``BrokenPipeError`` —— 那是正常收尾,但一定要走到
         ``finally``,ffmpeg 才会被杀掉。
+
+        ``VideoError`` 也在这个元组里:RTSP 流可能在已经发出第一帧**之后**
+        才断(源头见 ``app/video.py`` 的 ``_stream()``),那时异常是从
+        ``stream.chunks`` 这个生成器里,在下面这个 ``for`` 循环里冒出来的。
+        漏了它,连接照样会关,但每个观众都会在 stderr 刷一份 traceback,把
+        真正该看的报错淹掉。
         """
         self.close_connection = True
         try:
@@ -3010,8 +3053,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
             for chunk in stream.chunks:
                 self.wfile.write(chunk)
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            pass                    # 客户端走了,正常收尾
+        except (BrokenPipeError, ConnectionResetError, OSError, VideoError):
+            pass                    # 客户端走了,或者流断了 —— 都是正常收尾
         finally:
             with contextlib.suppress(Exception):
                 stream.chunks.close()   # type: ignore[attr-defined]
