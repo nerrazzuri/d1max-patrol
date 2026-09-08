@@ -69,7 +69,21 @@ class FakeVideoDog {
     this.frames = 3,
     this.closes = false,
     this.status = 200,
+    this.feedForever = false,
+    this.silent = false,
   });
+
+  /// 发完那几帧接着一直喂，直到客户端把连接掐了。
+  ///
+  /// **要的是"掐"这件事被看见。** 不接着喂的话，狗这头根本不知道对面还在
+  /// 不在 —— 一条早就没人要的连接跟一条安静的活连接长得一模一样，而狗那头
+  /// `MAX_VIEWERS` 的名额是按连接算的。
+  final bool feedForever;
+
+  /// 回一个正确的 `content-type`，然后**一个字节都不发**。
+  ///
+  /// 模拟"连错端口 / 热点上有个登录门户"：头看着像那么回事，画面永远不来。
+  final bool silent;
 
   /// 回这个状态码。503 是狗那头满 6 个观众时的回法
   /// (`video.py` 的 `MAX_VIEWERS` 到 `server.py` 的 503)。
@@ -98,7 +112,13 @@ class FakeVideoDog {
   /// 每次 GET 的路径。换相机之后拉的是不是另一路，盯的就是这个。
   final List<String> paths = <String>[];
 
+  /// 写不进去了(客户端把连接掐了)的那些路径。**只有 [feedForever] 会填。**
+  final List<String> dropped = <String>[];
+
   String get baseUrl => 'http://127.0.0.1:${_s.port}';
+
+  /// 狗这头此刻还挂着几条连接。**「旧连接收没收干净」盯的就是这个数。**
+  int get connections => _s.connectionsInfo().total;
 
   Future<void> start() async {
     _s = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -117,6 +137,10 @@ class FakeVideoDog {
       r.headers.set(HttpHeaders.contentTypeHeader,
           'multipart/x-mixed-replace; boundary=$boundary');
       try {
+        if (silent) {
+          await r.flush(); // 只把响应头推出去，正文一个字节都不发
+          return;
+        }
         for (int i = 0; i < frames; i++) {
           r.add(_part(boundary, _jpeg));
           await r.flush();
@@ -124,8 +148,14 @@ class FakeVideoDog {
         if (closes) {
           await r.close();
         }
+        while (feedForever) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+          r.add(_part(boundary, _jpeg));
+          await r.flush();
+        }
       } catch (_) {
         // 客户端把连接掐了。现场就是这样，不是错。
+        dropped.add(req.uri.path);
       }
     });
   }
@@ -488,6 +518,109 @@ void main() {
     await _pumpUntil(t, () => dog.paths.length >= 2, '换了相机之后的那次 GET');
 
     expect(dog.paths.last, '/api/video/back');
+    await _teardown(t, ctl, dog);
+  });
+
+  testWidgets('接上了就把退避清回 2 秒，别拿着 16 秒去等一条好狗',
+      (WidgetTester t) async {
+    // **退避不清零的坏法是"恢复之后还在按 16 秒等"。** 一条时好时坏的热点
+    // 上，每断一次都把等待翻一倍，而中间明明接上过、画面也出来过 —— 人看到
+    // 的是"越用越卡，最后干脆再也不回来"。
+    //
+    // **量假时钟只能用累加变量，不能用 `DateTime.now()`。**
+    // `testWidgets` 跑在 FakeAsync 上:`pump(step)` 推的是假时钟，而
+    // `DateTime.now()` 读的是真钟 —— 拿真钟去量这里的间隔，量出来的是几十
+    // 毫秒的真实耗时，跟被测的那个 2/4/8 秒毫无关系，断言会永远绿。
+    // `frames: 2`:分帧器要看见**下一个边界**才敢吐上一帧,发一帧就关的话
+    // 一帧都解不出来 —— 那样测的就不是"接上过"，是"一次都没接上"。
+    final FakeVideoDog dog = FakeVideoDog(frames: 2, closes: true);
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    Duration fake = Duration.zero;
+    const Duration step = Duration(milliseconds: 100);
+    while (dog.gets < 3 && fake < const Duration(seconds: 40)) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 3)));
+      await t.pump(step);
+      fake += step;
+    }
+
+    expect(dog.gets, 3, reason: '每次都拿到过一帧，还敲不够三次就是压根没重连');
+    expect(fake, lessThan(const Duration(seconds: 5, milliseconds: 500)),
+        reason: '每次都拿到过画面，退避就该清回 2 秒:第三次 GET 在 2+2≈4 秒。'
+            '不清零的话是 2+4≈6 秒起步');
+
+    await _teardown(t, ctl, dog);
+  });
+
+  testWidgets('换了健康流之后，旧那条连接要真的被掐掉', (WidgetTester t) async {
+    // **这一条盯的是 `didUpdateWidget` 里那一句 `_shut()`。**
+    // 换相机那条路上 `_open()` 自己会先收一次，所以漏收也看不出来;
+    // 换健康流这条路不会重开(新那条流还没说过话，`_live` 打回 false)，
+    // 漏收的话那条连接就**永远**留在狗那头占着 `MAX_VIEWERS`(6)里一个名额,
+    // 现场表现是"切来切去几次之后视频再也打不开"。
+    //
+    // 框架那条 `!timersPending` 不变式抓不到它:旧连接正在活跃收流，不是
+    // 空闲连接，没有那个 15 秒空闲计时器。所以这里直接盯**狗那头看见连接
+    // 断了**。
+    final FakeVideoDog dog = FakeVideoDog(feedForever: true);
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> first = StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: first.stream)));
+
+    first.add(const VideoHealth(<String, bool>{'front': true}));
+    await _pumpUntil(
+        t, () => find.byType(Image).evaluate().isNotEmpty, '第一路的画面');
+    expect(dog.connections, 1, reason: '这会儿连接还该好好地连着');
+
+    final StreamController<VideoHealth> second =
+        StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: second.stream)));
+    await _pumpUntil(t, () => dog.connections == 0 || dog.dropped.isNotEmpty,
+        '狗那头看见旧连接断掉');
+
+    expect(dog.connections, 0, reason: '旧连接还挂着就是在占 6 个观看名额之一');
+    expect(dog.gets, 1, reason: '换的只是健康流，新那条还没说话，不该急着开新连接');
+
+    unawaited(first.close());
+    await _teardown(t, second, dog);
+  });
+
+  testWidgets('一个字节都不来的时候三秒就断开重来，不是先烧 8 MiB 流量',
+      (WidgetTester t) async {
+    // **连错端口、或者热点上有个登录门户**的时候，对面会给一个像模像样的
+    // 头然后什么也不发(或者一直发不是 MJPEG 的字节)。光靠 8 MiB 那个上限
+    // 的话，是攒满 8 MiB 才抛一次、退避重开、再攒 8 MiB —— 封顶 16 秒就是
+    // 每 16 秒白烧 8 MiB 手机流量，而屏幕上还在说"过几秒自己再试"。
+    final FakeVideoDog dog = FakeVideoDog(silent: true);
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    Duration fake = Duration.zero;
+    const Duration step = Duration(milliseconds: 100);
+    while (dog.gets < 2 && fake < const Duration(seconds: 40)) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 3)));
+      await t.pump(step);
+      fake += step;
+    }
+
+    expect(dog.gets, 2, reason: '一个字节都不来的时候得自己认赔重来');
+    expect(fake, lessThan(const Duration(seconds: 7)),
+        reason: '3 秒宽限 + 2 秒退避 ≈ 5 秒就该敲第二次;'
+            '等 8 MiB 攒满的话这里根本走不到');
+    expect(find.textContaining('地址和端口'), findsOneWidget,
+        reason: '"地址不对"跟"狗没起来""人太多了"要做的事完全不同');
+
     await _teardown(t, ctl, dog);
   });
 

@@ -172,7 +172,29 @@ int _find(List<int> hay, List<int> needle, int from) {
 ///
 /// `io` 是**调用方的**：要停这条流就取消订阅、再 `close(force: true)` 掉它。
 /// 这里不替调用方关，跟 `PatrolClient` 那头一个规矩。
+///
+/// [abandoned] 是调用方说"这条流我已经不要了"的那个问句。**掐连接自己会
+/// 掀起一个错**(`Connection closed before full header was received` 之类)，
+/// 而那时候订阅已经取消了 —— 再抛出去就是一个没人接的 zone 错误，在测试里
+/// 直接是框架级的红，在真机上会打进 Flutter 的全局错误通道。是自己掐的就
+/// 咽下去，不是自己掐的照抛不误。
 Stream<Uint8List> mjpegFrames(Uri url,
+    {required HttpClient io,
+    String token = '',
+    bool Function()? abandoned}) async* {
+  try {
+    // 这里是 `await for` 不是 `yield*`:`yield*` 把内层的错**直接转交**给外层
+    // 那条流，绕过下面这个 catch;`await for` 才会把它抛进函数体里。
+    await for (final Uint8List f in _mjpegFrames(url, io: io, token: token)) {
+      yield f;
+    }
+  } catch (e) {
+    if (abandoned?.call() ?? false) return;
+    rethrow;
+  }
+}
+
+Stream<Uint8List> _mjpegFrames(Uri url,
     {required HttpClient io, String token = ''}) async* {
   final HttpClientRequest req = await io.openUrl('GET', url);
   // **不跟重定向。** 跟的话 302 会把下面这个 `Authorization: Bearer` 原样
@@ -258,6 +280,20 @@ class _LiveVideoState extends State<LiveVideo> {
   /// 下一次重连等多久。拿到一帧就清回 [_backoffMin]。
   Duration _backoff = _backoffMin;
 
+  /// 开了流之后多久还没切出**第一帧**就认赔。
+  ///
+  /// **这个短超时是给"地址根本不对"留的。** 连错端口、或者热点上有个登录
+  /// 门户把流截了的时候，对面会一直发字节但永远没有边界:光靠 8 MiB 那个
+  /// 上限的话，是攒满 8 MiB 才抛一次、退避重开、再攒 8 MiB —— 封顶 16 秒
+  /// 就是每 16 秒白烧 8 MiB 手机流量，而屏幕上还在说"过几秒自己再试"。
+  ///
+  /// **只管第一帧。** 出过一帧就说明这条流是真的 MJPEG、地址也对，后面
+  /// 卡多久都归 8 MiB 上限和退避管，不给正常的流再加一道超时。
+  static const Duration _firstFrameGrace = Duration(seconds: 3);
+
+  /// 等第一帧的那个闹钟。第一帧到了就取消。
+  Timer? _firstFrame;
+
   @override
   void initState() {
     super.initState();
@@ -293,9 +329,13 @@ class _LiveVideoState extends State<LiveVideo> {
       Uri.parse('${widget.baseUrl}/api/video/${widget.camera}'),
       io: io,
       token: widget.token,
+      // 这一茬被换掉之后，那条连接掀起来的错就是我们自己掐出来的。
+      abandoned: () => gen != _gen,
     ).listen(
       (Uint8List f) {
         if (!mounted || gen != _gen) return;
+        _firstFrame?.cancel(); // 画面来了，那个闹钟的活儿干完了
+        _firstFrame = null;
         _backoff = _backoffMin; // 真拿到画面了，退避从头算
         setState(() {
           _frame = f;
@@ -304,14 +344,7 @@ class _LiveVideoState extends State<LiveVideo> {
       },
       onError: (Object e) {
         if (!mounted || gen != _gen) return;
-        // 出错的这条连接不会自己好，先收掉再排重连 —— 不收的话它会一直
-        // 挂在狗那头占着 `MAX_VIEWERS` 里的一个名额。
-        _shut();
-        setState(() {
-          _frame = null;
-          _trouble = _human(e);
-        });
-        _reopenSoon();
+        _fail(e);
       },
       // **断在半路也要自己接回来。** 这条流结束(或者出错)的时候，狗那头
       // 完全可能还是在线的 —— 断的是我们这一头的连接。健康轮询看不见这
@@ -325,6 +358,29 @@ class _LiveVideoState extends State<LiveVideo> {
         _reopenSoon();
       },
     );
+    _firstFrame = Timer(_firstFrameGrace, () {
+      if (!mounted || gen != _gen) return;
+      _fail(
+          const PatrolError(0, '一直没收到画面数据',
+              '开了流之后 3 秒一帧都没切出来'),
+          say: '一直没收到画面数据。确认一下地址和端口对不对 —— '
+              '也可能是热点上有个登录页把这条流截下来了');
+    });
+  }
+
+  /// 一条流走不下去了:收连接、把话说给人听、按退避排下一次。
+  ///
+  /// **所有失败都走这一条路。** 分开写就会有一条忘了收连接，而那条连接
+  /// 会一直占着狗那头 `MAX_VIEWERS` 里的一个名额。
+  void _fail(Object raw, {String? say}) {
+    // 原文只进日志。屏幕上要的是"该做什么"，不是 Dart 的异常文本。
+    developer.log('$raw', name: 'live_video/${widget.camera}');
+    _shut();
+    setState(() {
+      _frame = null;
+      _trouble = say ?? _human(raw);
+    });
+    _reopenSoon();
   }
 
   /// 过一会儿再开一条，**每失败一次就等得更久**。
@@ -352,9 +408,8 @@ class _LiveVideoState extends State<LiveVideo> {
   /// **原样的异常文本不上屏。** 值守的人要的是"该做什么"，
   /// `HttpException: Connection closed while receiving data` 回答不了这个;
   /// 而 503 和"狗没起来"要做的事完全相反 —— 一个是等人退出来，一个是走
-  /// 过去看那台狗。原文进 `dart:developer` 的日志，屏幕上不留。
+  /// 过去看那台狗。原文由 [_fail] 记进 `dart:developer` 的日志，屏幕上不留。
   String _human(Object e) {
-    developer.log('$e', name: 'live_video/${widget.camera}');
     if (e is PatrolError && e.status == HttpStatus.serviceUnavailable) {
       return '这一路同时最多 6 个人看，现在满了。'
           '等一会儿，或者让先看的人退出来';
@@ -389,6 +444,8 @@ class _LiveVideoState extends State<LiveVideo> {
     _gen++;
     _retry?.cancel();
     _retry = null;
+    _firstFrame?.cancel();
+    _firstFrame = null;
     final StreamSubscription<Uint8List>? sub = _frames;
     final HttpClient? io = _io;
     _frames = null;
