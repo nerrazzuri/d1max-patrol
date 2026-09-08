@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import time
 from pathlib import Path
 
@@ -339,6 +340,68 @@ def test_引擎和判读都不import_http():
             src = py.read_text(encoding="utf-8")
             for banned in ("import http", "socketserver", "d1max_patrol.app"):
                 assert banned not in src, f"{py.name} 里出现了 {banned}"
+
+
+#: 认代理头的几种写法。``channel_of()`` 的整套通道分档压在"来源地址就是
+#: TCP 对端地址"这一个前提上,而这个前提没有任何运行时的东西在守 —— 改成读
+#: 代理头之后,分档静默失效,所有既有测试照样绿(测试里传的本来就是对端地址)。
+代理头 = re.compile(r"(?i)forwarded|x-real-ip")
+
+
+def _非文档串(源码: str):
+    """把一个模块里所有**不是文档字符串**的字符串常量捡出来。
+
+    注释根本不进 AST,所以不用管;文档字符串要排掉 —— ``channel_of()`` 的
+    docstring 里正大光明地写着 ``X-Forwarded-For``,那是在**警告**别这么干,
+    不是在这么干。
+    """
+    tree = ast.parse(源码)
+    文档 = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef,
+                             ast.FunctionDef, ast.AsyncFunctionDef)):
+            if (node.body and isinstance(node.body[0], ast.Expr)
+                    and isinstance(node.body[0].value, ast.Constant)
+                    and isinstance(node.body[0].value.value, str)):
+                文档.add(id(node.body[0].value))
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in 文档]
+
+
+def test_来源地址只认tcp对端():
+    """待办 47 的绊线:通道分档的前提,得有个东西替我们盯着。
+
+    ``Guard.channel_of()`` 拿 ``client`` 判本机/热点/局域网,而那三档只有在
+    ``client`` **是内核给的 TCP 对端地址**时才成立 —— 对端地址伪造不了。哪天
+    有人在前面加一层反向代理、改成读 ``X-Forwarded-For``,那个头是请求方自己
+    写的:射程之内的人伪造一行就能把自己抬成 ``local``,拿明文 PIN 换到完整
+    凭证。**而不会有任何一条既有测试变红**,因为测试里传进去的本来就是对端
+    地址,分档逻辑一个字没改。
+
+    所以这里不去禁止"读头"(将来可能有正当用法),而是钉住**来源** —— 谁把
+    那一路参数换掉,这条当场红。
+    """
+    from d1max_patrol.app import server as mod
+
+    src_dir = Path(mod.__file__).parent
+    源码 = Path(mod.__file__).read_text(encoding="utf-8")
+
+    # 一、``handle()`` 的来源地址那一路,必须还是对端地址。
+    调用 = [n for n in ast.walk(ast.parse(源码))
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and n.func.attr == "handle"
+            and n.args]
+    对端 = [c for c in 调用
+            if ast.unparse(c.args[-1]) == "self.client_address[0]"]
+    assert 对端, "HTTP 外壳不再把 TCP 对端地址传给 handle() 了,通道分档失去前提"
+
+    # 二、app/ 底下的**代码**里不许认代理头(docstring 里的警告不算)。
+    for py in sorted(src_dir.glob("*.py")):
+        for 串 in _非文档串(py.read_text(encoding="utf-8")):
+            assert 代理头.search(串) is None, (
+                f"{py.name} 的代码里出现了代理头 {串!r};"
+                "通道分档只认 TCP 对端地址,改这个之前先看 channel_of() 的 docstring")
 
 
 def test_外壳自己不碰后端的内部(server):
