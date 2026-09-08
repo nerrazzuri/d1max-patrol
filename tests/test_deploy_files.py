@@ -281,7 +281,10 @@ def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机�
 #: 我们的 HTTP 服务真正听的端口(``app/server.py`` 的 ``DEFAULT_PORT``)。
 HTTP_PORT = "8095"
 #: 厂商导航 WebSocket 的端口。**不是我们的** —— 交付文件里出现它就是错的。
-VENDOR_WS_PORT = ":10010"
+#: 早先这里是字面量 ``":10010"``,**带冒号** —— 于是"端口 10010""参见 10010
+#: 那条"这种更可能真的被写出来的形状全都逃得过(终评实测漏网)。改成看**数字
+#: 本身**,前后不许再跟数字,免得误伤 ``1100109`` 这类无关的串。
+VENDOR_WS_PORT = re.compile(r"(?<!\d)10010(?!\d)")
 
 
 def 交付文件() -> tuple[Path, ...]:
@@ -304,7 +307,8 @@ def test_交付文件里不许出现厂商导航端口():
     """
     for 文件 in 交付文件():
         text = 文件.read_text(encoding="utf-8")
-        assert VENDOR_WS_PORT not in text, f"{文件.name} 里不该出现 {VENDOR_WS_PORT}"
+        assert VENDOR_WS_PORT.search(text) is None, \
+            f"{文件.name} 里不该出现厂商导航端口(不管带不带冒号)"
 
 
 def test_装机脚本和清单都用8095():
@@ -533,6 +537,51 @@ def test_鉴权文档讲了热点是敌意网络():
     text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
     assert "射程" in text
     assert "只读" in text
+
+
+def test_鉴权文档没把热点说成只能看():
+    """**这一条挡的是一份会在应急通道上给出反向指引的文档。**
+
+    换到什么凭证是二维的:在哪个网 × 怎么解锁。``Guard.unlock``(明文 PIN)
+    才按通道判只读,``Guard.unlock_proof``(质询-应答)是**无条件**发完整凭证
+    —— 而手机 app 走的正是质询-应答,它是这个产品唯一的操作端。
+
+    文档要是只写"热点 → 只读 → 不能动机器",现场的人在客户网崩了的时候会
+    据此放弃热点这条应急通道,去派人进带电区抱狗 —— 而他掏出手机连热点本来
+    就能把狗开走。所以这里查的是:那张表上"热点 + 质询-应答 → 完整凭证"这
+    一行在不在。
+    """
+    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
+    行 = [ln for ln in text.splitlines()
+          if "热点" in ln and "质询-应答" in ln and "完整" in ln]
+    assert 行, "鉴权与控制权.md 没说清「热点上走质询-应答换到的是完整凭证」"
+
+
+def test_鉴权文档说破了热点上token也是明文的():
+    """``auth.py`` 早就承认"这条通道上 PIN 和 token 都要当成已经公开",
+
+    交付文档却只讲 PIN。而攻击者要的本来就是 token 不是 PIN:token 在同一条
+    没有 TLS 的链路上原样飞回手机,抄走一个正在用的就够了。不写这一句,第七
+    节"PIN 只有六位"那段会把人引向"把 PIN 加长"——那条路在热点上等于没做。
+    """
+    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
+    行 = [ln for ln in text.splitlines() if "token" in ln and "抄" in ln]
+    assert 行, "鉴权与控制权.md 没说破「热点上 token 本身也在明文链路上」"
+
+
+def test_鉴权文档没把急停说过头():
+    """"任何时候都按得下去"成立的前提是"你已经有 token"。
+
+    名额闸(§3.6)排在签发 token **之前**:三个远端名额满了的时候,第四个人
+    连凭证都换不到,``READONLY_OPEN_PATHS`` 对他没有意义。代码是合规格的,
+    过头的是文档 —— 而现场会照着文档做判断。
+    """
+    for 名 in ("鉴权与控制权.md", "手机app.md"):
+        text = (ROOT / "docs" / 名).read_text(encoding="utf-8")
+        for m in re.finditer("任何时候都按得下去", text):
+            窗 = text[max(0, m.start() - 400):m.end() + 400]
+            assert "已经连上" in 窗, \
+                f"{名} 把急停说过头了 —— 得写明前提是「已经连上」"
 
 
 def test_鉴权文档写了通道判据的前提():
