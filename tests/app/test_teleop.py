@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import time
+from unittest import mock
 
 import pytest
 
+from d1max_patrol.app import teleop as teleop_mod
 from d1max_patrol.app.teleop import (
     DEFAULT_PULSE_S,
     HEARTBEAT_TIMEOUT_S,
@@ -19,6 +21,7 @@ from d1max_patrol.app.teleop import (
     MIN_YAW,
     Teleop,
     TeleopBusy,
+    snap_to_axis,
 )
 from d1max_patrol.backends.base import Event, EventEmitter, NavStatusEvent
 from d1max_patrol.engine.homing import HomePoint
@@ -152,6 +155,52 @@ async def _until(pred, timeout: float = 3.0) -> None:
         if time.monotonic() > deadline:
             raise AssertionError("等条件超时")
         await asyncio.sleep(0.005)
+
+
+# ------------------------------------------------------------------ 单轴吸附
+
+
+def test_斜着推只留大的那一轴():
+    """规格 §7.7:左摇杆吸附到单轴。
+
+    **这不是手感,是正确性。** 底下的控制量是百分比不是速度,死区又大
+    (清单 #37/#38),所以 ``_clamp_above_deadband`` 是逐轴把非零值顶到死区
+    之上的。两个轴一起顶,``(0.5, 0.2)`` 会变成 ``(0.5, 0.3)`` —— 人指的是
+    「基本朝前、稍微偏一点」,狗走的是「四十度斜着」。
+    """
+    assert snap_to_axis(0.5, 0.2) == (0.5, 0.0)
+    assert snap_to_axis(0.2, -0.5) == (0.0, -0.5)
+
+
+def test_一样大的时候留前进():
+    """**平局判给前进。**
+
+    正推四十五度是「我想往前,手抖了」的概率,远大于「我想横着走,手也抖了」;
+    而且前进是这台机器唯一一个在真机上量过死区的轴(清单 #37/#38),侧移那个
+    数至今是借来的。平局倒向量过的那一头。
+    """
+    assert snap_to_axis(0.4, 0.4) == (0.4, 0.0)
+    assert snap_to_axis(-0.4, 0.4) == (-0.4, 0.0)
+
+
+def test_零还是零():
+    """全零是「停」,吸附不许把它变成别的。"""
+    assert snap_to_axis(0.0, 0.0) == (0.0, 0.0)
+    assert snap_to_axis(0.0, 0.7) == (0.0, 0.7)
+
+
+async def test_侧移用自己的死区不再借前进的(fake_device, engine):
+    """``MIN_LAT`` 是独立常量。**今天两个数一样,这条测试照样测得到东西** ——
+    它盯的是「用的是哪一个常量」,不是「值是多少」。真机标定那天改 ``MIN_LAT``,
+    这条会跟着变;而在此之前,有人把 ``MIN_LAT`` 删掉改回借用,这条会红。
+    """
+    tel = Teleop(fake_device, engine)
+    try:
+        with mock.patch.object(teleop_mod, "MIN_LAT", 0.66):
+            await tel.pulse(0.0, 0.05, 0.0)
+        assert fake_device.walk_calls[-1][2] == pytest.approx(0.66)
+    finally:
+        await tel.aclose()
 
 
 # ------------------------------------------------------------------ 一拍

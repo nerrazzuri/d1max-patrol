@@ -40,6 +40,11 @@ MAX_PULSE_S = 2.0
 #: 死区之上的最小控制量。见清单 #37/#38。
 MIN_FWD = 0.30
 MIN_YAW = 0.30
+#: 侧移(蟹步)的死区。**今天的值是从 MIN_FWD 抄来的,还没在真机上量过** ——
+#: 清单 #37/#38 量的是前进那一轴。横着走是另一种步态,没有任何理由认为它跟
+#: 前进共用一个死区。独立成一个常量不是为了现在有区别,是为了标定那天改它
+#: 不会顺手把前进也改了。真机清单 #67。
+MIN_LAT = 0.30
 
 #: 守死人的检查周期。取超时的三分之一:够快地发现,又不至于空转。
 WATCH_PERIOD_S = HEARTBEAT_TIMEOUT_S / 3
@@ -61,6 +66,26 @@ def _clamp_above_deadband(value: float, floor: float) -> float:
     if value == 0.0:
         return 0.0
     return math.copysign(min(max(abs(value), floor), 1.0), value)
+
+
+def snap_to_axis(fwd: float, lat: float) -> tuple[float, float]:
+    """左摇杆吸附到单轴:留下大的那一轴,另一轴清零(§7.7)。
+
+    **这是正确性,不是手感。** ``_clamp_above_deadband`` 是逐轴把非零值顶到
+    死区之上的,而那个动作只有在输入是单轴时才有意义:两个轴一起顶,
+    ``(0.5, 0.2)`` 会变成 ``(0.5, 0.3)`` —— 人指的是「基本朝前」,狗走的是
+    「四十度斜着」。
+
+    机器狗自带的摇杆本来就是这个行为(推四十五度它也只挑一个轴),所以吸附
+    还顺手让页面和实体摇杆的手感对上了。
+
+    **平局判给前进。** 正推四十五度是「想往前、手抖了」的概率远大于反过来;
+    而且前进是唯一一个真机量过死区的轴(清单 #37/#38),侧移那个数是借来的
+    (见 ``MIN_LAT``)。平局倒向量过的那一头。
+    """
+    if abs(lat) > abs(fwd):
+        return 0.0, lat
+    return fwd, 0.0
 
 
 class Teleop:
@@ -103,6 +128,8 @@ class Teleop:
         if not 0.0 < seconds <= MAX_PULSE_S:
             raise ValueError(f"一拍得在 (0, {MAX_PULSE_S}] 秒之间,给的是 {seconds}")
 
+        fwd, lat = snap_to_axis(fwd, lat)
+
         if (fwd, lat, yaw) == _STOP:
             await self.stop()
             return
@@ -118,7 +145,7 @@ class Teleop:
         await self._device.walk(
             seconds,
             _clamp_above_deadband(fwd, MIN_FWD),
-            _clamp_above_deadband(lat, MIN_FWD),
+            _clamp_above_deadband(lat, MIN_LAT),
             _clamp_above_deadband(yaw, MIN_YAW),
         )
 
@@ -192,8 +219,10 @@ __all__ = [
     "HEARTBEAT_TIMEOUT_S",
     "MAX_PULSE_S",
     "MIN_FWD",
+    "MIN_LAT",
     "MIN_YAW",
     "WATCH_PERIOD_S",
     "Teleop",
     "TeleopBusy",
+    "snap_to_axis",
 ]
