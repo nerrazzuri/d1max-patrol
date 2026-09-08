@@ -117,6 +117,31 @@ void main() {
     await dead.up();
   });
 
+  testWidgets('推着的时候变灰,杆当场就没了', (WidgetTester t) async {
+    /// **画面是在人推着的时候掉的** —— 那正是 §5.9 要拦的那一刻。
+    /// 上面那条「变灰之后推不动」进不到这里：它是先松手、再变灰、再重新按，
+    /// 而按在灰杆上根本不会有圆心。这一条走的是另一条路 ——
+    /// `didUpdateWidget` 里那次清场。清不掉的话杆会**僵在最后一个位置**，
+    /// 屏幕上看着还握在人手里，而一拍都发不出去了。
+    await t.pumpWidget(wrap(
+        Joystick(axis: JoystickAxis.translate, onChanged: (Offset _) {})));
+    final TestGesture g =
+        await t.startGesture(t.getCenter(find.byType(Joystick)));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    expect(find.byKey(Joystick.knobKey), findsOneWidget,
+        reason: '亮着、推着的时候本来就该有一根杆');
+    // 画面掉了：同一根杆，`enabled` 翻成假 —— 手指还没抬。
+    await t.pumpWidget(wrap(Joystick(
+        axis: JoystickAxis.translate,
+        enabled: false,
+        onChanged: (Offset _) {})));
+    await t.pump();
+    expect(find.byKey(Joystick.knobKey), findsNothing,
+        reason: '杆僵在最后一个位置上，看着像还握在人手里');
+    await g.up();
+  });
+
   testWidgets('推到底也不超过 1', (WidgetTester t) async {
     Offset? out;
     await t.pumpWidget(wrap(Joystick(

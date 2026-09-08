@@ -141,14 +141,27 @@ class _JoystickState extends State<Joystick> {
     super.didUpdateWidget(old);
     if (!widget.enabled && _center != null) {
       _pointer = null;
-      _center = null;
-      _value = Offset.zero;
+      // **走 `setState`,哪怕这一刻它是多余的。** 这里后面必然跟着一次重建
+      // （新 widget 正在装上去），不经 `setState` 直接改也画得对 —— 可这是
+      // 一个会被下一个人照抄的写法，抄到别处就是「改了状态屏幕不跟着变」。
+      setState(() {
+        _center = null;
+        _value = Offset.zero;
+      });
     }
   }
+
+  /// 灰的时候整根杆的不透明度。
+  ///
+  /// **调颜色的 alpha，不套 `Opacity`。** `Opacity` 每帧要 `saveLayer` 一次
+  /// （离屏一层），而这两根杆正压在一路铺满全屏的视频上 —— 那一层是整屏
+  /// 大小的。灰不灰只是几块纯色的事，直接把 alpha 乘进颜色里就够了。
+  double get _dim => widget.enabled ? 1.0 : 0.35;
 
   @override
   Widget build(BuildContext context) {
     final Offset? c = _center;
+    final double dim = _dim;
     final Widget face = Stack(
       fit: StackFit.expand,
       children: <Widget>[
@@ -156,18 +169,19 @@ class _JoystickState extends State<Joystick> {
         // **不画死一个圈** —— 画了人就会去按它，而按不准正是要避开的事。
         DecoratedBox(
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.18),
+            color: Colors.black.withValues(alpha: 0.18 * dim),
             borderRadius: const BorderRadius.all(Radius.circular(12)),
           ),
         ),
         if (c != null) ...<Widget>[
-          _circle(c, Joystick.radius, Colors.white24, null),
+          _circle(c, Joystick.radius, 0.24, dim, null),
           _circle(
               c +
                   Offset(_value.dx * Joystick.radius,
                       -_value.dy * Joystick.radius),
               Joystick.knobRadius,
-              Colors.white70,
+              0.70,
+              dim,
               Joystick.knobKey),
         ],
       ],
@@ -177,21 +191,19 @@ class _JoystickState extends State<Joystick> {
     // 杆照样跟着手指走，屏幕上看着像在开，其实一拍都没发出去。
     return IgnorePointer(
       ignoring: !widget.enabled,
-      child: Opacity(
-        opacity: widget.enabled ? 1.0 : 0.35,
-        child: Listener(
-          behavior: HitTestBehavior.opaque,
-          onPointerDown: _down,
-          onPointerMove: _move,
-          onPointerUp: _release,
-          onPointerCancel: _release,
-          child: face,
-        ),
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: _down,
+        onPointerMove: _move,
+        onPointerUp: _release,
+        onPointerCancel: _release,
+        child: face,
       ),
     );
   }
 
-  Widget _circle(Offset at, double r, Color color, Key? key) => Positioned(
+  Widget _circle(Offset at, double r, double alpha, double dim, Key? key) =>
+      Positioned(
         left: at.dx - r,
         top: at.dy - r,
         width: r * 2,
@@ -199,9 +211,10 @@ class _JoystickState extends State<Joystick> {
         child: DecoratedBox(
           key: key,
           decoration: BoxDecoration(
-            color: color,
+            color: Colors.white.withValues(alpha: alpha * dim),
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white54, width: 1.5),
+            border: Border.all(
+                color: Colors.white.withValues(alpha: 0.54 * dim), width: 1.5),
           ),
         ),
       );

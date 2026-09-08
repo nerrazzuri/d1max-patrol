@@ -411,6 +411,26 @@ void main() {
     await unmount(t, rig);
   });
 
+  testWidgets('窄屏上两根杆不许叠在一起', (WidgetTester t) async {
+    /// 盒子写死 200 的话，<400dp 宽的竖屏上两根杆是叠着的，而**重叠那一块
+    /// 归 `Stack` 里靠后的右杆** —— 人按左下角想往前走，狗原地转弯。
+    /// 320dp 是常见的小屏竖屏宽度。
+    ///
+    /// （横屏锁定不在这一轮做，那一条记在真机清单上。）
+    t.view.physicalSize = const Size(320, 640);
+    t.view.devicePixelRatio = 1.0;
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    final Rig rig = await mount(t);
+    final Rect l = t.getRect(find.byType(Joystick).at(0));
+    final Rect r = t.getRect(find.byType(Joystick).at(1));
+    expect(l.width, greaterThan(0), reason: '收窄不等于收没了');
+    expect(l.right, lessThanOrEqualTo(r.left),
+        reason: '两根杆叠上了：重叠那一块归靠后的右杆，'
+            '人按左下角想往前走，狗原地转弯');
+    await unmount(t, rig);
+  });
+
   testWidgets('现场档只有一行轻提示', (WidgetTester t) async {
     /// §7.8：现场模式是**轻提示** —— 「请与机器狗保持在同一视线范围内」。
     /// 不是弹框：现场档是默认档，每次进来都弹框的话，它就是那个第三次被

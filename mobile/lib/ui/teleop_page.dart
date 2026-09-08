@@ -336,7 +336,12 @@ class _TeleopPageState extends State<TeleopPage> {
   /// **不弹框**（§5.9 不设「确认后继续」的口子），就挂在顶部那条状态带上。
   String _human(Object e) {
     if (e is PatrolError && e.status == HttpStatus.conflict) {
-      return '狗那头现在不接遥控：任务在跑、急停按着，或者控制权在别人手里';
+      // **「没有画面」也是 409。** 狗那头 §5.9 那道视频闸拒绝的时候回的是
+      // 同一个码（`server.py` 的 `_video_gate` -> `TeleopBusy` -> 409）——
+      // 不提这一种的话，屏幕上会同时挂着「看不见」和一句不相干的话，人会
+      // 去找急停、找控制权，而该做的是把画面弄回来。
+      return '狗那头现在不接遥控：任务在跑、急停按着、控制权在别人手里，'
+          '或者没有画面';
     }
     if (e is PatrolError && e.status == HttpStatus.forbidden) {
       return '这个身份不许开狗。先取控制权';
@@ -405,41 +410,46 @@ class _TeleopPageState extends State<TeleopPage> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        child: Stack(
-          children: <Widget>[
-            // 视频铺满，垫在最底下。
-            Positioned.fill(
-              child: LiveVideo(
-                baseUrl: widget.client.baseUrl,
-                camera: TeleopPage.camera,
-                health: _health,
-                token: widget.client.token ?? '',
-              ),
-            ),
-            Positioned(top: 0, left: 0, right: 0, child: _band()),
-            Positioned(
-              left: 0,
-              bottom: 0,
-              width: _stickBox,
-              height: _stickBox,
-              child: Joystick(
-                axis: JoystickAxis.translate,
-                enabled: _enabled,
-                onChanged: _onLeft,
-              ),
-            ),
-            Positioned(
-              right: 0,
-              bottom: 0,
-              width: _stickBox,
-              height: _stickBox,
-              child: Joystick(
-                axis: JoystickAxis.turn,
-                enabled: _enabled,
-                onChanged: _onRight,
-              ),
-            ),
-          ],
+        child: LayoutBuilder(
+          builder: (BuildContext ctx, BoxConstraints box) {
+            final double side = _stickBoxFor(box.maxWidth);
+            return Stack(
+              children: <Widget>[
+                // 视频铺满，垫在最底下。
+                Positioned.fill(
+                  child: LiveVideo(
+                    baseUrl: widget.client.baseUrl,
+                    camera: TeleopPage.camera,
+                    health: _health,
+                    token: widget.client.token ?? '',
+                  ),
+                ),
+                Positioned(top: 0, left: 0, right: 0, child: _band()),
+                Positioned(
+                  left: 0,
+                  bottom: 0,
+                  width: side,
+                  height: side,
+                  child: Joystick(
+                    axis: JoystickAxis.translate,
+                    enabled: _enabled,
+                    onChanged: _onLeft,
+                  ),
+                ),
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  width: side,
+                  height: side,
+                  child: Joystick(
+                    axis: JoystickAxis.turn,
+                    enabled: _enabled,
+                    onChanged: _onRight,
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -447,7 +457,24 @@ class _TeleopPageState extends State<TeleopPage> {
 
   /// 一根杆占多大一块。两倍于 [Joystick.radius] 再宽一点：推到底的那一下
   /// 手指还在这块里，不至于滑出去把这一拍丢了。
-  static const double _stickBox = 200.0;
+  static const double _stickBoxMax = 200.0;
+
+  /// 两块中间至少留这么宽。**两个拇指不能挨着。**
+  static const double _stickGap = 24.0;
+
+  /// 这么宽的屏上一根杆该占多大一块。
+  ///
+  /// **写死 200 的话，<400dp 的竖屏上两根杆是叠着的** —— 重叠那一块归
+  /// `Stack` 里靠后的右杆，于是人按左下角想往前走，狗原地转弯。
+  /// 这里不设下限：屏再窄，杆跟着变小也好过两根叠在一起（`Joystick` 的圆心
+  /// 是按下那一点，盒子小一点只是量程短一点，不会按不准）。
+  ///
+  /// 横屏锁定不在这儿做，那一条记在真机清单上。
+  static double _stickBoxFor(double width) {
+    if (!width.isFinite) return _stickBoxMax;
+    final double half = (width - _stickGap) / 2;
+    return half < _stickBoxMax ? half : _stickBoxMax;
+  }
 
   /// 顶部那条状态带。
   ///
