@@ -30,7 +30,6 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from typing import Any
 
 from d1max_patrol.app.auth import CHANNEL_LOCAL, Denied, Guard, Session
@@ -80,10 +79,9 @@ class ControlDesk:
     自己不存状态(游标除外), 所有真状态都在 ``book`` 和 ``guard`` 里。
     """
 
-    def __init__(self, guard: Guard, *, clock_ms: Callable[[], int],
+    def __init__(self, guard: Guard, *,
                  book: LeaseBook | None = None) -> None:
         self._guard = guard
-        self._clock_ms = clock_ms
         self.book = book if book is not None else LeaseBook()
         #: 已经推给事件流的最后一条留痕序号。
         self._cursor = 0

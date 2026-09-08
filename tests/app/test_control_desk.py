@@ -32,7 +32,7 @@ def 起一台():
     单调 = 假单调钟()
     墙 = 假墙钟()
     g = Guard(PIN, clock=单调)
-    return g, ControlDesk(g, clock_ms=墙), 单调, 墙
+    return g, ControlDesk(g), 单调, 墙
 
 
 # -------------------------------------------------------- 哪几条要控制权

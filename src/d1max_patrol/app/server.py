@@ -863,8 +863,9 @@ class AppServer:
         #: 没有出处。开一个口子把它变成显式的。
         self._postcheck_sleep = postcheck_sleep
         self._auth = Guard(pin)
-        #: L1 控制权。**墙上钟**,理由见 ``app/control.py`` 的模块文档。
-        self._control = ControlDesk(self._auth, clock_ms=ctx.clock)
+        #: L1 控制权。**时刻一律由调用方读一次传进去**(``now_ms=ctx.clock()``),
+        #: 这个类自己不读钟 —— 理由见 ``app/control.py`` 的模块文档。
+        self._control = ControlDesk(self._auth)
         self._host = host
         self._want_port = port
         self._httpd: _HTTPServer | None = None
