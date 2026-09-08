@@ -91,6 +91,7 @@ def test_ipv4映射的v6地址不许掉进最松的一档():
     assert channel_of("::ffff:192.168.168.5") == CHANNEL_AP
     assert channel_of("::ffff:10.20.30.40") == CHANNEL_LAN
     # 带方括号/大小写的写法一样得认。
+    assert channel_of("[::ffff:192.168.168.5]") == CHANNEL_AP
     assert channel_of("::FFFF:192.168.168.5") == CHANNEL_AP
 
 
