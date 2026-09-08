@@ -231,22 +231,36 @@ async def test_挂起期间位姿事件不逐条落盘(跑起来的引擎, devic
     """M1:人接管期间位姿是持续流(``sidecar_device.py`` 每帧 odom 一条,
     不节流),几分钟的接管就能灌上千条。落了就是几分钟接管往归档里写上千行,
     还在事件循环里做上千次阻塞写 —— 这里灌 N 条,断言落盘的事件数不随 N 涨。
+
+    **N2(复审反向探测抓到的盲区):只钉这半句不够。** 把过滤改成"挂起期间
+    什么都不记",这条测试原样能过——那样电量告警之类真正该留的事件会跟着
+    位姿一起从归档里消失,事后复盘正缺这一段。这里在灌位姿流的同时穿插几条
+    ``BatteryEvent``,断言它们一条不少地落进 events.jsonl:该挡的只是
+    ``DevicePoseEvent`` 这一种(黑名单),不是"挂起期间全部不记"(白名单
+    挡过了头)。
     """
     eng = 跑起来的引擎
     await eng.suspend("人来开")
     await eng.wait_state(RunState.SUSPENDED)
     before = len(read_events(eng.archive.path))
     N = 200
+    电量事件数 = 5
     for i in range(N):
         device.emit(DevicePoseEvent(Pose.from_xy_yaw(float(i), 0.0, 0.0)))
+        if i % (N // 电量事件数) == 0:
+            device.emit(BatteryEvent(percent=60.0))
     deadline = asyncio.get_running_loop().time() + 2.0
     while (eng._live is None or eng._live.last_pose is None
            or eng._live.last_pose.position.x != float(N - 1)):
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("位姿事件没被引擎收完")
         await asyncio.sleep(0)
-    after = len(read_events(eng.archive.path))
-    assert after == before, "位姿事件不该逐条落盘,落了 N 条就该跟着 N 涨"
+    # 队列是单消费者、严格 FIFO:最后一条位姿(i = N - 1)已经被处理完,
+    # 说明它之前排队的每一条电量事件也早处理完了,不用再单独等一拍。
+    新增 = read_events(eng.archive.path)[before:]
+    落盘的电量事件 = [e for e in 新增 if e.get("event") == "BatteryEvent"]
+    assert len(落盘的电量事件) == 电量事件数, "电量事件不该被位姿的过滤一起挡掉"
+    assert len(新增) == 电量事件数, "位姿事件不该逐条落盘,落了 N 条就该跟着 N 涨"
     await eng.abort("测试收尾")
     await eng.wait_done(timeout_s=5.0)
 
@@ -345,3 +359,54 @@ async def test_返航中不能挂起(make_engine, nav, device):
     await engine.abort("测试收尾")
     await engine.wait_done(timeout_s=5.0)
     await engine.aclose()
+
+
+# ---------------------------------------------------------------- 评审第二轮 N1/N2/PAUSED
+
+
+async def test_挂起被拒也广播出去(make_engine, nav):
+    """N1:``suspend_refused`` 原来只走 ``_note``,没走 ``_publish`` ——
+    落进了 events.jsonl,却没广播给订阅方。旁边 ``resume_refused``
+    (``_suspend_until_resumed`` 里)两步都做了。只落档不广播等于没说出口:
+    现场的人在手机上点「让开腿」,界面上什么都不动,只会以为按钮坏了,
+    反复点。事后要有人翻 events.jsonl 才知道当时是被拒了。
+
+    钉的是**广播**这一步,不是只钉 ``_note`` 落的那条事件——S1/S2 已经
+    钉过事件和状态没变,这里改钉 ``eng.snapshot.reason``:它只在
+    ``_publish`` 被调用之后才会变,单靠 ``_note`` 动不了它。
+    """
+    calls = {"n": 0}
+
+    async def loc_status() -> LocStatus:
+        calls["n"] += 1
+        return LocStatus.CONTINUOUS_LOC if calls["n"] == 1 else LocStatus.LOC_LOST
+
+    nav.loc_status = loc_status
+    engine = make_engine()
+    await engine.start(make_mission(), home=_HOME)
+    await engine.wait_state(RunState.LOCALIZING)
+    await engine.suspend("门口有箱子")
+    await _等到拒绝(engine)
+    assert engine.snapshot.reason == "正在重定位,现在不能让开腿"
+    await engine.abort("测试收尾")
+    await engine.wait_done(timeout_s=5.0)
+    await engine.aclose()
+
+
+async def test_暂停时喊挂起也说清楚为什么不行(跑起来的引擎):
+    """暂停中调 ``suspend()`` 原来是静默吞掉:``_pause_until_resumed`` 自己
+    那条读命令的 while 只认 abort/resume,``suspend`` 落进兜底的
+    ``continue``,连事件都不落——比 N1 还彻底,连"落档但不广播"都算不上。
+    人点了「让开腿」界面上什么反应都没有,只会以为按钮坏了。
+
+    **这里只要求「说得出口」,不改受理与否的判断。** 暂停中该不该放行人工
+    接管是产品决策,不是这条测试要证的事(挂在 Task 14)。
+    """
+    eng = 跑起来的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+    await eng.suspend("门口有箱子")
+    拒绝 = await _等到拒绝(eng)
+    assert eng.state is RunState.PAUSED
+    assert 拒绝[-1]["reason"] == "正在暂停,现在不能让开腿"
+    assert eng.snapshot.reason == "正在暂停,现在不能让开腿"

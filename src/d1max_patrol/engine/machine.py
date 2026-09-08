@@ -850,7 +850,14 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 # 注释)——真要支持,得先把那几条路径也走通,那是引擎行为的
                 # 扩展,不是这里能顺手做的事。一句说得出口的拒绝,好过一趟
                 # 悄悄中止、现场最难归因的那种失败。
+                #
+                # ``_note`` 只落归档,不广播。旁边 ``resume_refused``
+                # (``_suspend_until_resumed`` 里)两步都做——这里原来只做了
+                # 一半:events.jsonl 里有,订阅方却什么都收不到。现场的人在
+                # 手机上点「让开腿」,界面上没反应,只会以为按钮坏了,反复点。
+                # 补上 ``_publish`` 才算把这句拒绝真的说出口。
                 self._note("suspend_refused", state=self._state.value, reason=deny)
+                self._publish(deny)
                 return
             await self._suspend_until_resumed(cmd.reason)
         # resume 在没暂停的时候是空操作,不报错 —— 现场手快点两下很常见。
@@ -870,6 +877,17 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     raise _AbortRun(item.reason or "人工中止")
                 if item.kind == "resume":
                     break
+                if item.kind == "suspend":
+                    # 跟 ``_SUSPEND_UNSAFE_STATES`` 那两条不是同一类问题:
+                    # PAUSED 走的是自己这条 while,压根不会抛
+                    # ``_RetryWaypoint``,不存在"没有安全路径"这回事。这里
+                    # 原来落进下面那句 ``continue``,静默吞掉——人点了
+                    # 「让开腿」界面上什么反应都没有,只会以为按钮坏了。
+                    # "暂停中要不要放行人工接管"本身还没有产品决策(记在
+                    # Task 14),这里只补"说得出口",不改受理判断。
+                    deny = "正在暂停,现在不能让开腿"
+                    self._note("suspend_refused", state=self._state.value, reason=deny)
+                    self._publish(deny)
                 continue
             if isinstance(item, BatteryEvent) and self._live is not None:
                 self._live.battery_pct = item.percent
