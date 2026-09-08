@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -290,6 +291,7 @@ def 交付文件() -> tuple[Path, ...]:
         DEPLOY / "d1max-patrol.service",
         ROOT / "docs" / "装机清单.md",
         ROOT / "docs" / "任务包格式.md",
+        ROOT / "docs" / "鉴权与控制权.md",
     )
 
 
@@ -427,3 +429,159 @@ def test_根目录写死不给环境变量覆盖(装机脚本, 服务单元):
     # User= 那个覆盖保留了,但单元里同样是写死的 —— 注明过才算数。
     assert "D1MAX_USER" in 装机脚本
     assert "User=robot" in 服务单元
+
+
+# ----------------------------------------------- 第 6 卷:鉴权与控制权交付面
+
+#: 装机脚本会当场随机生成 PIN,所以任何**字面量** PIN 出现在交付文件里都是
+#: 错的 —— 不是「示例」,是一台真机器的钥匙被印在了发给客户的纸上。
+PIN_字面量 = (
+    re.compile(r"D1MAX_PIN\s*=\s*\d"),
+    re.compile(r'"pin"\s*:\s*"\d'),
+    re.compile(r"--pin\s+\d"),
+    re.compile(r"设备 ?PIN 是 \d"),
+)
+
+#: 一串正好六位的数字。**不查某一个具体的数** —— 查的是形状,因为每台机器
+#: 的 PIN 都不一样,而"照抄一条真命令进文档"这件事每台机器都可能犯一次。
+六位数 = re.compile(r"(?<!\d)\d{6}(?!\d)")
+
+#: 出现在这个字附近的六位数才算 PIN。光凭"六位数"会误伤
+#: (`docs/任务包格式.md` 里的版本号上界 999999 就是一个),所以要看上下文。
+PIN_上下文 = re.compile(r"PIN|--pin|\"pin\"")
+
+#: 六位数左右各看这么多个字符,判它是不是长在 PIN 边上。
+PIN_窗口 = 160
+
+#: 「某某口令是这个」的几种写法。上面 ``test_脚本不把口令写死在里头`` 查的是
+#: 两个**具体的串**(热点密码和 SSID),这里查的是**形状** —— 热点密码会换、
+#: SSH 口令本来就不是那两个串里的任何一个,只钉具体值的话,下一次泄的是别的
+#: 东西,那条护栏一样绿。
+口令字面量 = (
+    re.compile(r"(?i)\bpsk\s*[:=]\s*\S"),
+    re.compile(r"(?i)\bpass(word|wd)?\s*[:=]\s*\S"),
+    re.compile(r"(密码|口令)\s*(是|为)?\s*[:：=]\s*\S"),
+    re.compile(r"sshpass"),
+)
+
+
+def test_交付文件里不许出现PIN字面量():
+    """这一卷开始,交付文档里会出现取 token 的命令。
+
+    照抄一条带着真 PIN 的命令进文档,等于把一台机器的钥匙印在发给客户的纸
+    上 —— 而这份文档会被复制到每一个站点。命令里只许出现 ``$D1MAX_PIN``
+    这种从 ``/etc/d1max/env`` 取值的写法。
+    """
+    for 文件 in 交付文件():
+        text = 文件.read_text(encoding="utf-8")
+        for 模式 in PIN_字面量:
+            assert 模式.search(text) is None, \
+                f"{文件.name} 里出现了 PIN 字面量:{模式.pattern}"
+
+
+def test_交付文件里不许有长在PIN边上的六位数():
+    """上一条查的是四种**写法**,这一条查的是**形状**。
+
+    PIN 是六位数字,每台机器一个;拿具体某个数去查等于只防住已经犯过的那
+    一次。所以这里找的是"六位数字长在 PIN 这个字附近",不管它是哪六位。
+    单纯的六位数不算 —— `docs/任务包格式.md` 里的版本号上界 999999 是正当
+    的,它周围没有 PIN。
+    """
+    for 文件 in 交付文件():
+        text = 文件.read_text(encoding="utf-8")
+        for m in 六位数.finditer(text):
+            窗 = text[max(0, m.start() - PIN_窗口):m.end() + PIN_窗口]
+            assert PIN_上下文.search(窗) is None, \
+                f"{文件.name} 里 {m.group()} 长在 PIN 边上,像是抄了一台真机器的 PIN"
+
+
+def test_交付文件里不许出现口令字面量():
+    """§6.5:狗的热点密码出厂固定、改不了,SSH 口令一样是长期凭证。
+
+    把任何一个印进发到现场的文件里,等于把"射程之内任何人"这个攻击面扩大
+    到"拿到过任何一份交付文档的人",而且撤不回来 —— 文档会被复制到每一个
+    站点、贴进每一张工单。要举例一律用占位符。
+    """
+    for 文件 in 交付文件():
+        text = 文件.read_text(encoding="utf-8")
+        for 模式 in 口令字面量:
+            assert 模式.search(text) is None, \
+                f"{文件.name} 里出现了口令字面量:{模式.pattern}"
+
+
+def test_鉴权与控制权那份文档在名单上():
+    """交付面增减一份文件,泄密护栏要跟着它走 —— 这一条守的就是那个「跟」。"""
+    assert ROOT / "docs" / "鉴权与控制权.md" in 交付文件()
+
+
+def test_鉴权文档说清了三个时间尺度():
+    """§6.4:三个尺度不许混。文档上混了,现场的人就会去调错的那个数。"""
+    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
+    for 关键词 in ("0.6 秒", "30 秒", "12 小时", "30 分钟"):
+        assert 关键词 in text, f"三个时间尺度里少了 {关键词}"
+
+
+def test_鉴权文档说清了姓名不核实():
+    """§6.3:界面上不许把「张三报了个名」写成「已登录:张三」。"""
+    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
+    assert "不核实" in text
+    assert "operator_verified" in text
+
+
+def test_鉴权文档讲了热点是敌意网络():
+    """§6.5:不许假设「局域网 = 可信」。"""
+    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
+    assert "射程" in text
+    assert "只读" in text
+
+
+def test_鉴权文档写了通道判据的前提():
+    """待办 47:整套通道分档建立在「``client`` 是 TCP 对端地址」上。
+
+    哪天有人在前面加一层反向代理、改成读 ``X-Forwarded-For``,分档会静默
+    失效 —— 伪造一个头就能把自己抬成最信任的那一档,而且没有一条测试会红。
+    现场运维要动网络拓扑之前得先在这份文档里读到这句话。
+    """
+    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
+    assert "X-Forwarded-For" in text
+    assert "反向代理" in text
+
+
+def test_验收命令都带上了token():
+    """**这是在补一个真的缺陷。** 服务的 ExecStart 带 ``--host 0.0.0.0``,
+
+    于是 ``check_exposure()`` 逼着必须有 PIN;而 ``Guard.gate()`` 没有本机
+    豁免(``tests/app/test_auth.py`` 里有一条断言守着 127.0.0.1 也要 401)。
+    所以第三节里那几条裸 ``curl`` 今天在真机上全部返回 401 —— 装机的人会
+    以为服务坏了,或者更糟:以为「返回了东西」就算过了。
+    """
+    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    assert "/api/auth" in text                    # 先换 token
+    assert "$D1MAX_PIN" in text                   # 从 env 取,不写死
+    assert "Authorization: Bearer" in text
+    for 接口 in ("/api/release", "/api/selfcheck", "/api/identity"):
+        # 每一条验收 curl 都得带上 token,不能只改一条。
+        assert f"$TOKEN\" http://127.0.0.1:8095{接口}" in text \
+            or f"$TOKEN' http://127.0.0.1:8095{接口}" in text, \
+            f"{接口} 那条验收命令没带 token"
+
+
+def test_装机清单里没有裸curl():
+    """光"每条都带 token"不够 —— 漏掉的那一条是**裸的**,上面那条查不出。
+
+    第四节演练自动回滚那一步也要打 `/api/release`,它当年也是裸的。
+    """
+    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    for 行 in text.splitlines():
+        if "http://127.0.0.1:8095/api/" not in 行:
+            continue
+        assert "$TOKEN" in 行 or "/api/auth" in 行, f"这条 curl 没带 token:{行.strip()}"
+
+
+def test_装机清单验收里查手写的SN():
+    """§6.2:SN 必须装机时手写。``provisional`` 查不出这一条 —— 从设备树
+
+    读出来的模组序列号它算「不是临时的」,而那个号换一次主板就变。
+    """
+    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    assert "hand_written" in text

@@ -171,11 +171,23 @@ class Identity:
         """这个 SN 是兜底来的吗?是的话别拿它当长期主键。"""
         return self.source in ("mac", "没查到")
 
+    @property
+    def hand_written(self) -> bool:
+        """这个 SN 是装机时人填进去的吗(§6.2)?
+
+        跟 ``provisional`` 不是一回事:``provisional`` 问的是"这个值稳不稳
+        定",而设备树里读出来的模组序列号很稳定 —— 它只是**标识错了对象**。
+        客户认的是机身上贴的那张标签,换一次主板,模组号就跟标签对不上了,
+        而所有归档、所有备份盘、所有任务包的 ``targets`` 都是按 SN 归堆的。
+        """
+        return self.source == "配置"
+
     def to_wire(self) -> dict[str, object]:
         return {
             "sn": self.sn,
             "source": self.source,
             "provisional": self.provisional,
+            "hand_written": self.hand_written,
             "macs": list(self.macs),
             "nickname": self.nickname,
             "host": self.host,

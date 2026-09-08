@@ -420,3 +420,33 @@ def test_解锁之后看得到身份(server_pin, ctx):
     body = C.get_json(server_pin, "/api/identity",
                       headers={"Authorization": "Bearer " + token})
     assert body["sn"] == ctx.identity.sn
+
+
+# ---------------------------------------------------- §6.2:SN 必须手写
+
+
+def test_人填的SN才算手写的(tmp_path):
+    who = resolve("C40221", files=(tmp_path / "无",), net_root=tmp_path / "无")
+    assert who.hand_written is True
+
+
+def test_从设备树读出来的不算手写(tmp_path):
+    """§6.2:设备树里那个标识的是**模组**,换一次主板就变;客户认的是机身
+    上贴的那张标签。它够稳定(所以 ``provisional`` 是 ``False``),但它不是
+    机身编号。
+    """
+    a = _sn_file(tmp_path, "a", "AAA111")
+    who = resolve(None, files=(a,), net_root=tmp_path / "无")
+    assert who.provisional is False
+    assert who.hand_written is False
+
+
+def test_mac兜底的更不算手写(tmp_path):
+    root = _net(tmp_path, eth0="aa:bb:cc:dd:ee:01")
+    who = resolve(None, files=(tmp_path / "无",), net_root=root)
+    assert who.hand_written is False
+
+
+def test_手写这件事发得出去(tmp_path):
+    who = resolve("C40221", files=(tmp_path / "无",), net_root=tmp_path / "无")
+    assert who.to_wire()["hand_written"] is True
