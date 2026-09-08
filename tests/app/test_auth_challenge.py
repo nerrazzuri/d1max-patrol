@@ -127,18 +127,27 @@ def test_攻击者灌满之后好人照样换得到token():
 
     假想敌:热点射程之内、或者局域网上任何能连到这个端口的人。他没有 PIN、
     没有 token —— 取质询这条路本来就不要 token(要了就没人换得到 token)。
-    他能做的就是狂发 ``GET /api/auth/challenge``。
+    他能做的就是狂发 ``GET /api/auth/challenge``,而且换着来源地址发,好绕
+    开"同一来源桶满"这一档、直接去撞全局上限。
 
-    早先这个池子是一个全局 FIFO,他连发 ``cap`` 次就把好人刚取到、还没用掉
+    早先这个池子是一个全局 FIFO,他灌够 ``cap`` 次就把好人刚取到、还没用掉
     的那条挤掉,好人只能回去用明文 PIN —— 在热点上那是**只读**凭证,应急
     通道当场开不动狗。所以这里断的不是"他被挡住了",是**好人没被影响**。
+
+    **``cap``/``per_client`` 这里自己取一对很小的值(``cap=8, per_client=4``)。**
+    默认 ``cap=512`` 只灌 200 次(而且只用一个来源地址)灌不满全局池 ——
+    单来源第 5 次起就先被自己那只桶的 ``per_client`` 挡掉了,压根没走到
+    "全局满了"那条分支,就算把分桶和"只淘汰过期的"两处防线一起拆掉、完整
+    退回原来的全局纯 FIFO,这条测试也照样绿,测不出真正要防的事(修复轮 2
+    N4)。这里用一大批**不同**来源地址真的把全局池灌满,才压得到那条分支。
     """
     clock = 假钟(0.0)
-    g = Guard(PIN, clock=clock)
+    nonces = NonceStore(cap=8, per_client=4)
+    g = Guard(PIN, clock=clock, nonces=nonces)
     nonce = g.challenge("192.168.168.20")           # 好人先取一个
-    for _ in range(200):                            # 攻击者可劲儿灌
+    for i in range(20):                             # 攻击者换着来源地址狂灌
         try:
-            g.challenge("192.168.168.99")
+            g.challenge(f"192.168.168.{100 + i}")
         except Denied:
             pass
     token = g.unlock_proof(nonce, proof_for(PIN, nonce), "192.168.168.20")
