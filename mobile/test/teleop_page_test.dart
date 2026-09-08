@@ -101,6 +101,19 @@ Future<void> pushHealth(WidgetTester t, StreamController<VideoHealth> ctl,
   await t.pump();
 }
 
+/// 等到某一拍在 [key] 上出了个非零，把那一拍取出来。
+///
+/// **等的是「非零」，断言留给调用方去写。** 直接把号写进 `pumpUntil` 的条件
+/// （比如等 `fwd > 0`）的话，号一翻就红成那句通用的「等了 10 秒还没等到」——
+/// 跟「压根没发拍」「这根杆没出这个轴」红得一字不差，分不清是哪件事坏了。
+/// 先等到非零、再单独断言号，红出来的就是「号反了」这一件事。
+Future<Map<String, dynamic>> pulseWith(
+    WidgetTester t, Rig rig, String key, String why) async {
+  bool hit(Map<String, dynamic> p) => (p[key] as num) != 0;
+  await pumpUntil(t, () => rig.pulses.any(hit), why);
+  return rig.pulses.firstWhere(hit);
+}
+
 Offset leftStick(WidgetTester t) => t.getCenter(find.byType(Joystick).at(0));
 Offset rightStick(WidgetTester t) => t.getCenter(find.byType(Joystick).at(1));
 
@@ -111,6 +124,58 @@ void main() {
   // 摘掉 `flutter_test` 那个「所有请求都回 400」的 HttpOverrides:这个文件
   // 要证的正是「一拍真的发出去了」。
   useRealHttp();
+
+  // ------------------------------------------------------- 三个轴的号
+  //
+  // **这三条是从摇杆手势一路量到 `POST /api/teleop` 报文字段的。**
+  // 狗那头的口径在 `app/static/index.html`（「左移」是 `lat=1`、「右移」是
+  // `lat=-1`、「左转」是 `yaw=1`、「右转」是 `yaw=-1`，就是 ROS 那套右手系）。
+  // 屏幕上向右是 `dx` 为正，所以从杆到报文这一路上 `lat`/`yaw` 必须翻一次号 ——
+  // 翻漏了或者翻两次，真机上的表现是「人推右、狗往左」，在现场就是撞人。
+  //
+  // **每条都是「纯」推一个轴**：斜推会被左杆的 45° 吸附（有意的，跟真狗自带
+  // 遥控器一致）吃掉一个轴，量到的就不是以为的那个东西。
+
+  testWidgets('左杆纯向上推:报文里 fwd 为正', (WidgetTester t) async {
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50)); // 纯向上，一点横的都不带
+    await t.pump();
+    final Map<String, dynamic> p = await pulseWith(t, rig, 'fwd', '一拍带着非零的 fwd');
+    expect(p['fwd'] as num, greaterThan(0),
+        reason: '推上去就是前进，前进是正的；这一处号反了真机上是「推上去往后退」');
+    expect(p['lat'], 0.0, reason: '纯向上推不该带出横向的量');
+    await g.up();
+    await unmount(t, rig);
+  });
+
+  testWidgets('左杆纯向右推:报文里 lat 为负', (WidgetTester t) async {
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(50, 0)); // 纯向右
+    await t.pump();
+    final Map<String, dynamic> p = await pulseWith(t, rig, 'lat', '一拍带着非零的 lat');
+    expect(p['lat'] as num, lessThan(0),
+        reason: '狗那头 lat=1 是左移，所以右移必须是负的；'
+            '号反了真机上是「人推右、狗左移」');
+    expect(p['fwd'], 0.0, reason: '纯向右推不该带出前后的量');
+    await g.up();
+    await unmount(t, rig);
+  });
+
+  testWidgets('右杆纯向右推:报文里 yaw 为负', (WidgetTester t) async {
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(rightStick(t));
+    await g.moveBy(const Offset(50, 0)); // 纯向右
+    await t.pump();
+    final Map<String, dynamic> p = await pulseWith(t, rig, 'yaw', '一拍带着非零的 yaw');
+    expect(p['yaw'] as num, lessThan(0),
+        reason: '狗那头 yaw=1 是左转，所以右转必须是负的；'
+            '号反了真机上是「人推右、狗左转」');
+    expect(p['fwd'], 0.0, reason: '右杆只转向，不该出前后的量');
+    await g.up();
+    await unmount(t, rig);
+  });
 
   testWidgets('松手主动发一次全零停', (WidgetTester t) async {
     /// **守死人（0.6 秒）是兜底，不是停车方式。**
