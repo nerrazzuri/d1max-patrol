@@ -62,29 +62,64 @@ class Session {
 class PatrolClient {
   final String baseUrl;
   final HttpClient _io;
+
+  /// 只有自己造的 `HttpClient` 才是 `true`。调用方传进来的那个不归我们
+  /// 所有——不许改它的超时，`close()` 也不许替调用方把它强关掉（N-1/N-2）。
+  final bool _ownsIo;
+
+  /// 罩住「发请求到读完整个响应体」这一整段的超时（B-2）。
+  ///
+  /// **不是只罩住等响应头。** `dart:io` 的 `HttpClientRequest.close()` 在
+  /// 响应头一到就完成——狗发完头就沉默时，读 body 那一步没有别的东西兜底，
+  /// 会挂到天荒地老，界面上连「狗没回话」都弹不出来。默认 10 秒；测试可以
+  /// 注入一个短值，不必真等 10 秒去证明超时生效。
+  final Duration timeout;
+
   String? _token;
 
-  PatrolClient(this.baseUrl, {HttpClient? io}) : _io = io ?? HttpClient() {
-    // 狗在热点上，慢一点是常态，但不该等到人以为死机。
-    _io.connectionTimeout = const Duration(seconds: 5);
+  PatrolClient(this.baseUrl,
+      {HttpClient? io, this.timeout = const Duration(seconds: 10)})
+      : _io = io ?? HttpClient(),
+        _ownsIo = io == null {
+    if (_ownsIo) {
+      // 狗在热点上，慢一点是常态，但不该等到人以为死机。
+      // 只在自己造的连接上设——注入进来的那个不归我们管（N-1）。
+      _io.connectionTimeout = const Duration(seconds: 5);
+    }
   }
 
   String? get token => _token;
 
-  void close() => _io.close(force: true);
+  void close() {
+    // 只关自己造的那个（N-2）。
+    if (_ownsIo) _io.close(force: true);
+  }
 
   /// PIN 换 token。**PIN 不出这个函数。**
+  ///
+  /// 狗回的质询/应答缺了该有的字段时（连错热点、撞上强制门户都会长这样），
+  /// **直接抛 `PatrolError`——绝不退回 `{'pin': pin}` 那条老路**去凑一个
+  /// token。那条路狗会静默降级成只读凭证：遥控全部 403，报错指向权限而不
+  /// 是「PIN 明文发出去了」，比一个裸的类型错误更难查（B-1）。
   Future<Session> unlock(String pin, {required String operator}) async {
     final ch = await _send('GET', '/api/auth/challenge', null, auth: false);
-    final nonce = ch['nonce'] as String;
+    final nonce = ch['nonce'];
+    if (nonce is! String) {
+      throw const PatrolError(
+          0, '狗回的质询看不懂', '没有 nonce 字段。热点连对了吗，还是撞上了强制门户');
+    }
     final got = await _send('POST', '/api/auth', <String, dynamic>{
       'nonce': nonce,
       'proof': proofFor(pin, nonce),
       'operator': operator,
     }, auth: false);
-    _token = got['token'] as String;
+    final token = got['token'];
+    if (token is! String) {
+      throw const PatrolError(0, '狗回的应答看不懂', '没有 token 字段');
+    }
+    _token = token;
     return Session(
-      token: _token!,
+      token: token,
       operator: (got['operator'] as String?) ?? '',
       operatorVerified: got['operator_verified'] == true,
       readonly: got['readonly'] == true,
@@ -99,32 +134,56 @@ class PatrolClient {
   Future<Map<String, dynamic>> _send(String method, String path, Object? body,
       {bool auth = true}) async {
     try {
-      final req = await _io.openUrl(method, Uri.parse('$baseUrl$path'));
-      // token 走请求头，不走 cookie 也不走查询串。狗那头的理由写在
-      // `auth.py` 开头：cookie 是浏览器自动带的，等于替人开狗。
-      if (auth && _token != null) {
-        req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
+      final res = await _sendAndRead(method, path, body, auth: auth)
+          .timeout(timeout);
+      Map<String, dynamic> m = <String, dynamic>{};
+      if (res.raw.isNotEmpty) {
+        try {
+          final parsed = jsonDecode(res.raw);
+          if (parsed is Map<String, dynamic>) m = parsed;
+        } on FormatException {
+          // 非 JSON 的响应体解析不出来时，状态码仍然要报对（S-2）——
+          // 下面照样走 >=400 分支，不许把这种情况压成「连不上狗」、
+          // 状态码归零。
+        }
       }
-      if (body != null) {
-        req.headers.contentType = ContentType.json;
-        req.write(jsonEncode(body));
-      }
-      final resp = await req.close().timeout(const Duration(seconds: 10));
-      final raw = await utf8.decoder.bind(resp).join();
-      final parsed = raw.isEmpty ? <String, dynamic>{} : jsonDecode(raw);
-      final m = parsed is Map<String, dynamic> ? parsed : <String, dynamic>{};
-      if (resp.statusCode >= 400) {
-        throw PatrolError(resp.statusCode,
-            (m['error'] as String?) ?? '狗回了 ${resp.statusCode}',
+      if (res.status >= 400) {
+        throw PatrolError(res.status,
+            (m['error'] as String?) ?? '狗回了 ${res.status}',
             (m['detail'] as String?) ?? '');
       }
       return m;
     } on PatrolError {
       rethrow;
     } on TimeoutException {
-      throw const PatrolError(0, '狗没回话', '等了 10 秒。看看还连着它的热点吗');
+      throw PatrolError(
+          0, '狗没回话', '等了 ${timeout.inMilliseconds} 毫秒。看看还连着它的热点吗');
     } catch (e) {
+      // **这里原样带 `$e` 的前提是请求体里从来没有长期凭证（S-3）。**
+      // `unlock` 走的是质询-应答，body 里只有 nonce/proof/operator，PIN
+      // 本身从不出现在任何请求里；异常信息里能带的至多是 URL/nonce 这类
+      // 不敏感的东西。哪天有人往某个请求体里塞了敏感字段，这一行要跟着
+      // 改，不能让那类内容原样出现在错误信息里。
       throw PatrolError(0, '连不上狗', '$e');
     }
+  }
+
+  /// 发请求、等响应头、读完整个响应体——三步算一个超时窗口（B-2）。
+  Future<({int status, String raw})> _sendAndRead(
+      String method, String path, Object? body,
+      {required bool auth}) async {
+    final req = await _io.openUrl(method, Uri.parse('$baseUrl$path'));
+    // token 走请求头，不走 cookie 也不走查询串。狗那头的理由写在
+    // `auth.py` 开头：cookie 是浏览器自动带的，等于替人开狗。
+    if (auth && _token != null) {
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
+    }
+    if (body != null) {
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode(body));
+    }
+    final resp = await req.close();
+    final raw = await utf8.decoder.bind(resp).join();
+    return (status: resp.statusCode, raw: raw);
   }
 }

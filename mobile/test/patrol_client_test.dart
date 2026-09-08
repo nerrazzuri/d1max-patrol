@@ -44,6 +44,14 @@ void main() {
         reason: '明文 PIN 在狗的热点上人人可解；而且那条老路只换得到只读凭证');
     expect(body['proof'], isA<String>());
     expect(body['nonce'], 'a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4');
+    // N-5：不只信解析后的 body，原始字节里也不许有 PIN 或 "pin" 这个词
+    // （不分大小写）——防的是「解析层把 PIN 过滤掉了，但线路上其实发了」
+    // 这种更隐蔽的漏法。
+    final rawLower = exchange.raw.toLowerCase();
+    expect(rawLower.contains('864209'), isFalse,
+        reason: '原始请求体字节里不许出现明文 PIN');
+    expect(rawLower.contains('pin'), isFalse,
+        reason: '原始请求体字节里不许出现 "pin" 这个词（不分大小写）');
   });
 
   test('拿到 token 之后每个请求都带着它', () async {
@@ -84,4 +92,54 @@ void main() {
         () => deadClient.get('/api/state'), throwsA(isA<PatrolError>()));
     deadClient.close();
   });
+
+  // ---------------------------------------------------------- B-1 复审回合
+
+  test('狗回的质询没有 nonce 时抛 PatrolError，不是裸的类型错误', () async {
+    // 连错热点、撞上强制门户时常见的形状：200，但body里什么都没有。
+    dog.replies['/api/auth/challenge'] = <String, dynamic>{};
+    expect(() => c.unlock('864209', operator: '张三'),
+        throwsA(isA<PatrolError>()));
+  });
+
+  test('狗回的应答没有 token 时抛 PatrolError，不是裸的类型错误', () async {
+    dog.replies['/api/auth'] = <String, dynamic>{
+      'operator': '张三',
+      'operator_verified': false,
+      'readonly': false,
+    };
+    expect(() => c.unlock('864209', operator: '张三'),
+        throwsA(isA<PatrolError>()));
+  });
+
+  // ---------------------------------------------------------- S-1 复审回合
+
+  test('质询挂了就抛出去，绝不退回明文 PIN 换 token', () async {
+    dog.statusCodes['/api/auth/challenge'] = 500;
+    dog.replies['/api/auth/challenge'] = <String, dynamic>{'error': '狗挂了'};
+    await expectLater(() => c.unlock('864209', operator: '张三'),
+        throwsA(isA<PatrolError>()));
+    // 质询这步就失败了，压根不该走到换 token 那一步。
+    expect(dog.received.where((r) => r.path == '/api/auth'), isEmpty,
+        reason: '质询失败不许退回去用明文 PIN 换只读 token');
+    for (final r in dog.received) {
+      final body = r.body;
+      if (body is Map) {
+        expect(body.containsKey('pin'), isFalse,
+            reason: '任何一次请求的 body 里都不许出现明文 PIN 字段');
+      }
+    }
+  });
+
+  // ---------------------------------------------------------- B-2 复审回合
+
+  test('body 卡住不来也不会永远转圈——超时罩住整个响应，不只是响应头',
+      () async {
+    dog.hangPaths.add('/api/auth/challenge');
+    final impatient =
+        PatrolClient(dog.baseUrl, timeout: const Duration(milliseconds: 200));
+    await expectLater(() => impatient.unlock('864209', operator: '张三'),
+        throwsA(isA<PatrolError>()));
+    impatient.close();
+  }, timeout: const Timeout(Duration(seconds: 5)));
 }
