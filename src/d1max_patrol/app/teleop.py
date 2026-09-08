@@ -102,7 +102,12 @@ _STOP = (0.0, 0.0, 0.0)
 
 
 class TeleopBusy(RuntimeError):
-    """现在不能遥控:任务在跑,或者急停按着。"""
+    """现在不能遥控:任务在跑,或者急停按着,或者没有画面(§5.9)。
+
+    引擎让开腿(``SUSPENDED``)时**不算**任务在跑 —— 那正是人要亲自开的时候
+    (§5.10)。租约那一半不在这儿,``app/control.py`` 的 ``CONTROLLED`` 已经
+    把整条路由钉在租约后面了。
+    """
 
 
 def _clamp_above_deadband(value: float, floor: float) -> float:
@@ -145,7 +150,8 @@ class Teleop:
     """
 
     def __init__(self, device: DeviceBackend, engine: MissionEngine,
-                 *, clock: Callable[[], float] = time.monotonic,
+                 *, video_gate: Callable[[], str],
+                 clock: Callable[[], float] = time.monotonic,
                  watch_period_s: float = WATCH_PERIOD_S) -> None:
         self._device = device
         self._engine = engine
@@ -154,13 +160,28 @@ class Teleop:
         self._last_beat = 0.0
         self._active = False
         self._watch: asyncio.Task[None] | None = None
+        #: 「现在能看得见吗」。返回拦住的理由,空串表示可以走(§5.9)。
+        #:
+        #: **必填,没有默认值。** 给个默认就意味着有一天会有人建一个没有闸的
+        #: ``Teleop`` 而不自知,而那一天没有任何测试会红 —— 这是安全约束,
+        #: 不是体验约束。
+        #:
+        #: 做成回调而不是让遥控认识 ``CameraFeed``:跟 ``add_busy_check`` 同
+        #: 一个理由,这一层不该长出对相机实现的依赖。
+        self._video_gate = video_gate
         engine.add_busy_check(self._busy_reason)
 
     # ------------------------------------------------------------------ 对外
 
     @property
     def active(self) -> bool:
-        """是不是正有一拍在走。"""
+        """这次遥控会话还开着吗。
+
+        靠 ``heartbeat()`` 续命,靠守死人开关(``HEARTBEAT_TIMEOUT_S``)到期
+        自动清掉;``stop()``/``aclose()`` 会主动清。**不是**"这一拍此刻正
+        在走"——一拍很快就发完了,``pulse()`` 发完之后不会把它清回去,清它
+        的只有上面这几条路。
+        """
         return self._active
 
     async def pulse(self, fwd: float, lat: float, yaw: float,
@@ -188,7 +209,16 @@ class Teleop:
             await self.stop()
             return
 
-        if self._engine.running:
+        # **闸放在停车早返的后面。** 三轴全零走的是 stop() —— 停车永远不许被
+        # 闸挡住:一个「因为看不见所以不许停」的实现,会在视频掉线的那一刻把狗
+        # 锁在最后一个动作上,而掉线恰恰是最需要它停下来的时候。
+        blind = self._video_gate()
+        if blind:
+            # §5.9 明写**不设「确认后继续」的绕过口子**:要挪狗,就必须能看得见。
+            # 网差到没有画面,那就走过去挪。
+            raise TeleopBusy(f"看不见就不许动:{blind}")
+
+        if self._engine.running and not self._engine.yielding:
             raise TeleopBusy("任务在跑,先停任务再遥控 —— 两边一起动是在抢腿")
         if await self._device.emergency():
             raise TeleopBusy("急停按着,松开急停再遥控")
@@ -256,6 +286,15 @@ class Teleop:
             await asyncio.sleep(self._period)
             if not self._active:
                 continue
+            blind = self._video_gate()
+            if blind:
+                # 掉线时没有人在调 pulse:人的手还压在摇杆上,页面还在发心跳。
+                # 真正危险的是「画面刚黑掉、人还没反应过来」那半秒,而这条协程
+                # 是唯一一直在看的东西。
+                self._active = False
+                with contextlib.suppress(Exception):
+                    await self._device.walk(0.0, 0.0, 0.0, 0.0)
+                return
             if self._clock() - self._last_beat > HEARTBEAT_TIMEOUT_S:
                 self._active = False
                 with contextlib.suppress(Exception):

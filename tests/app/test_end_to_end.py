@@ -232,7 +232,9 @@ def sim_stack(tmp_path: Path, ffdir: Path):
         # 端到端这条链路的结果就不该取决于跑测试的这台机器上此刻插着什么盘。
         engine = MissionEngine(nav, device, media, runs_root, removable=NoDisks())
         parts["engine"] = engine
-        parts["teleop"] = Teleop(device, engine)
+        # video_gate=lambda: "":端到端这条链路测的是全流程接不接得通,不是
+        # §5.9 那道闸,给个永远放行的闸。
+        parts["teleop"] = Teleop(device, engine, video_gate=lambda: "")
         return map_id
 
     map_id = bridge.call(_wire, timeout_s=60.0)

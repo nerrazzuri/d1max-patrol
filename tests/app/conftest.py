@@ -177,7 +177,10 @@ def bridge():
 
 
 async def _make_teleop(device, engine) -> Teleop:
-    return Teleop(device, engine)
+    # video_gate=lambda: "":这层测的不是 §5.9 那道闸(那是 test_teleop.py
+    # 自己的一组用例),给个永远放行的闸,免得每个用到这份 ctx 的既有测试
+    # 都要顺带布一份 CameraFeed。
+    return Teleop(device, engine, video_gate=lambda: "")
 
 
 def make_ctx(bridge, tmp_path: Path, nav=None, device=None,

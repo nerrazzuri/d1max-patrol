@@ -3125,8 +3125,26 @@ async def _make_engine(nav: NavBackend, device: DeviceBackend,
                          removable=removable)
 
 
-async def _make_teleop(device: DeviceBackend, engine: MissionEngine) -> Teleop:
-    return Teleop(device, engine)
+async def _make_teleop(device: DeviceBackend, engine: MissionEngine,
+                       video: Mapping[str, CameraFeed]) -> Teleop:
+    return Teleop(device, engine, video_gate=_video_gate(video))
+
+
+def _video_gate(video: Mapping[str, CameraFeed]) -> Callable[[], str]:
+    """§5.9 那道闸。**任何一路在线就算看得见。**
+
+    要求两路都在线,后相机掉一路就把整条狗锁死 —— 而人开着走的时候看的是
+    前面。要求「前相机在线」又太死:装机时可以只接一路,或者两路的名字换了。
+    所以判据是「至少有一路有画面」,拦的是**一张画面都没有**那种情况,那才是
+    §5.9 说的盲开。
+    """
+    def gate() -> str:
+        live = [name for name, feed in video.items() if feed.online]
+        if live:
+            return ""
+        return ("一路画面都没有 —— 打开视频再开狗;"
+                "网差到没有画面,那就走过去挪")
+    return gate
 
 
 def shutdown(server: AppServer, ctx: AppContext) -> None:
@@ -3195,17 +3213,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     who = resolve(args.sn, args.nickname)
     engine = bridge.call(
         lambda: _make_engine(nav, device, photo, runs_root, who.fingerprint()))
+    # 相机源现在就造好,但一条 ffmpeg 都不起 —— 真起是在有人打开画面的时候。
+    # 挪到遥控构造之前:video_gate(§5.9)要闭包引用它。
+    video = {name: CameraFeed(f"rtsp://{args.camera_host}:8554/{name}",
+                              ffmpeg=args.ffmpeg)
+             for name in CAMERAS}
     # 遥控要在循环线程里造:它一上来就往引擎上挂检查,还会起后台看门狗。
-    teleop = bridge.call(lambda: _make_teleop(device, engine))
+    teleop = bridge.call(lambda: _make_teleop(device, engine, video))
 
     mapping = MappingOrchestrator(procs, MappingConfig(
         bags_dir=Path(args.bags_dir), maps_dir=Path(args.maps_dir),
         params_template=Path(args.params_file)))
-
-    # 相机源现在就造好,但一条 ffmpeg 都不起 —— 真起是在有人打开画面的时候。
-    video = {name: CameraFeed(f"rtsp://{args.camera_host}:8554/{name}",
-                              ffmpeg=args.ffmpeg)
-             for name in CAMERAS}
 
     ctx = AppContext(bridge=bridge, engine=engine, nav=nav, device=device,
                      maps=maps, procs=procs, teleop=teleop, mapping=mapping,

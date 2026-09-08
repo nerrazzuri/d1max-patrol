@@ -140,11 +140,40 @@ def engine(fake_nav, fake_device, tmp_path) -> MissionEngine:
 
 @pytest.fixture
 async def teleop(fake_device, engine, fake_clock):
-    """看门狗周期压到 10ms:测试拨的是假表,不该真等 0.2 秒一拍。"""
-    t = Teleop(fake_device, engine, clock=fake_clock, watch_period_s=TICK)
+    """看门狗周期压到 10ms:测试拨的是假表,不该真等 0.2 秒一拍。
+
+    ``video_gate=lambda: ""``:这份夹具喂给的是这个文件里其它组的用例
+    (吸附、一拍、两档节奏、守死人、互斥、急停、HTTP),它们测的不是 §5.9
+    那道闸,给个永远放行的闸。§5.9 自己那组用例(见下面"视频闸"一节)
+    各自现造带闸的 ``Teleop``,不用这份夹具。
+    """
+    t = Teleop(fake_device, engine, clock=fake_clock, watch_period_s=TICK,
+              video_gate=lambda: "")
     yield t
     await t.aclose()
     await engine.aclose()
+
+
+@pytest.fixture
+async def 跑着的engine(engine, sample_mission):
+    """真被内核跑着的引擎:借 ``NavStub`` 默认 ``arrives=False``,卡在第一个
+    点的 ``goto`` 上不动 —— 跟 ``test_任务在跑的时候遥控被拒`` 是同一招。
+    """
+    await engine.start(sample_mission, home=_HOME)
+    await engine.wait_state(RunState.RUNNING)
+    yield engine
+    await engine.aclose()
+
+
+@pytest.fixture
+async def 挂起的engine(跑着的engine):
+    """§5.10:引擎让开腿。用 Task 5 的 ``suspend()`` 真的把它推到
+    ``SUSPENDED``,不在这儿复刻状态表 —— ``yielding`` 是引擎自己的词汇。
+    """
+    eng = 跑着的engine
+    await eng.suspend("测试:人来开")
+    await eng.wait_state(RunState.SUSPENDED)
+    return eng
 
 
 @pytest.fixture
@@ -152,7 +181,8 @@ def sample_mission():
     return make_mission()
 
 
-async def _until(pred, timeout: float = 3.0) -> None:
+async def 等到(pred, timeout: float = 3.0) -> None:
+    """带截止时间的轮询,不许用固定 ``sleep(余量)`` 空等一个后台协程的结果。"""
     deadline = time.monotonic() + timeout
     while not pred():
         if time.monotonic() > deadline:
@@ -197,7 +227,7 @@ async def test_侧移用自己的死区不再借前进的(fake_device, engine):
     它盯的是「用的是哪一个常量」,不是「值是多少」。真机标定那天改 ``MIN_LAT``,
     这条会跟着变;而在此之前,有人把 ``MIN_LAT`` 删掉改回借用,这条会红。
     """
-    tel = Teleop(fake_device, engine)
+    tel = Teleop(fake_device, engine, video_gate=lambda: "")
     try:
         with mock.patch.object(teleop_mod, "MIN_LAT", 0.66):
             await tel.pulse(0.0, 0.05, 0.0)
@@ -283,7 +313,7 @@ async def test_扫图档的转向是把一拍缩短_不是把量压低(fake_devi
 
     所以断言有两半,缺一不可:时长变短了 **而且** 控制量仍然在死区之上。
     """
-    tel = Teleop(fake_device, engine)
+    tel = Teleop(fake_device, engine, video_gate=lambda: "")
     try:
         await tel.pulse(0.0, 0.0, 1.0, profile=SCAN)
         seconds, _fwd, _lat, yaw = fake_device.walk_calls[-1]
@@ -298,7 +328,7 @@ async def test_扫图档的平移用平移那个时长(fake_device, engine):
     """转向和平移是**两个**时长。扫图时人要的是转向一点一点来,
     平移倒不必碎成一样。混成一个数就没法分别调。
     """
-    tel = Teleop(fake_device, engine)
+    tel = Teleop(fake_device, engine, video_gate=lambda: "")
     try:
         await tel.pulse(1.0, 0.0, 0.0, profile=SCAN)
         assert fake_device.walk_calls[-1][0] == pytest.approx(SCAN.fwd_seconds)
@@ -308,7 +338,7 @@ async def test_扫图档的平移用平移那个时长(fake_device, engine):
 
 async def test_漫游档是默认的(fake_device, engine):
     """不传 profile 就是漫游 —— 网页版 app 那些老调用方一行不用改。"""
-    tel = Teleop(fake_device, engine)
+    tel = Teleop(fake_device, engine, video_gate=lambda: "")
     try:
         await tel.pulse(1.0, 0.0, 0.0)
         assert fake_device.walk_calls[-1][0] == pytest.approx(ROAM.fwd_seconds)
@@ -322,7 +352,7 @@ async def test_同时有平移和转向时按长的那个时长走(fake_device, 
     **挑长的那个。** 挑短的话,人推着摇杆前进兼转向,前进会被截成扫图那么短
     的一小步 —— 明明推的是「往前走并且拐个弯」,走出来的是「原地拐了一下」。
     """
-    tel = Teleop(fake_device, engine)
+    tel = Teleop(fake_device, engine, video_gate=lambda: "")
     try:
         await tel.pulse(1.0, 0.0, 1.0, profile=SCAN)
         assert fake_device.walk_calls[-1][0] == pytest.approx(
@@ -333,7 +363,7 @@ async def test_同时有平移和转向时按长的那个时长走(fake_device, 
 
 async def test_显式给了秒数就听人的(fake_device, engine):
     """``seconds`` 仍然压过 profile —— 网页版 app 现在传的就是它。"""
-    tel = Teleop(fake_device, engine)
+    tel = Teleop(fake_device, engine, video_gate=lambda: "")
     try:
         await tel.pulse(1.0, 0.0, 0.0, seconds=1.5, profile=SCAN)
         assert fake_device.walk_calls[-1][0] == pytest.approx(1.5)
@@ -369,7 +399,7 @@ def test_每一档的时长都在合法范围里():
 async def test_心跳停了六百毫秒内停车(teleop, fake_device, fake_clock):
     await teleop.pulse(1.0, 0.0, 0.0)
     fake_clock.advance(HEARTBEAT_TIMEOUT_S + 0.01)
-    await _until(lambda: fake_device.stop_calls >= 1)
+    await 等到(lambda: fake_device.stop_calls >= 1)
     assert not teleop.active
 
 
@@ -511,3 +541,121 @@ def test_不认识的节奏档报400(server):
 def test_不传节奏档就是漫游(server, ctx):
     assert post(server, "/api/teleop", {"fwd": 1.0, "lat": 0.0, "yaw": 0.0}) == 200
     assert ctx.device.walk_calls[-1][0] == pytest.approx(ROAM.fwd_seconds)
+
+
+# ------------------------------------------------------------------ 视频闸
+
+
+def 带闸(fake_device, engine, fake_clock, 理由: list[str]) -> Teleop:
+    return Teleop(fake_device, engine, clock=fake_clock, watch_period_s=TICK,
+                  video_gate=lambda: 理由[0])
+
+
+async def test_视频不在线就不许动(fake_device, engine, fake_clock):
+    """§5.9。**安全约束,不是体验约束。**
+
+    没有画面还让人开着走,是在盲开:对人,盲开的狗会撞到人;对狗,它自己也
+    会被撞坏、被开下台阶。
+    """
+    理由 = ["前相机没画面"]
+    t = 带闸(fake_device, engine, fake_clock, 理由)
+    with pytest.raises(TeleopBusy) as e:
+        await t.pulse(0.5, 0.0, 0.0)
+    assert "画面" in str(e.value)
+    assert fake_device.walk_calls == []
+
+
+async def test_没有确认后继续这条路(fake_device, engine, fake_clock):
+    """**规格明写不设绕过口子。**
+
+    这一条钉的是「``pulse`` 上不存在任何放行参数」—— 加一个 ``force=True``
+    之类的旁路,这条测试就该红。要挪狗,就必须能看得见;网差到没有画面,
+    那就走过去挪。
+    """
+    import inspect
+    sig = inspect.signature(Teleop.pulse)
+    assert not {"force", "confirm", "override", "bypass"} & set(sig.parameters)
+
+
+async def test_停车永远不许被闸挡住(fake_device, engine, fake_clock):
+    """**这是这个任务里唯一能造成实际伤害的错法。**
+
+    一个「因为看不见所以不许停」的实现,会在视频掉线的那一刻把狗锁在最后
+    一个动作上 —— 掉线恰恰是最需要它停下来的时候。
+    """
+    理由 = ["前相机没画面"]
+    t = 带闸(fake_device, engine, fake_clock, 理由)
+    await t.pulse(0.0, 0.0, 0.0)          # 三轴全零 = 停
+    await t.stop()
+    assert fake_device.walk_calls[-1] == (0.0, 0.0, 0.0, 0.0)
+
+
+async def test_视频在线就照常走(fake_device, engine, fake_clock):
+    t = 带闸(fake_device, engine, fake_clock, [""])
+    try:
+        await t.pulse(0.5, 0.0, 0.0)
+        assert fake_device.walk_calls
+    finally:
+        await t.aclose()
+
+
+async def test_开着走的时候视频掉了_看门狗停狗(fake_device, engine, fake_clock):
+    """**掉线时没有人在调 ``pulse``。**
+
+    人的手还压在摇杆上,页面还在发心跳,``pulse`` 每一拍都进得来 —— 但真正
+    危险的那一刻是「画面刚黑掉、人还没反应过来」的那半秒。守死人那条协程
+    是唯一一直在看的东西,所以这一条判断得放在它里面。
+    """
+    理由 = [""]
+    t = 带闸(fake_device, engine, fake_clock, 理由)
+    try:
+        await t.pulse(0.5, 0.0, 0.0)
+        理由[0] = "前相机没画面"
+        # 超时给 0.2s,不给默认的 3.0s:``fake_clock`` 没被拨动,它底下垫的
+        # 还是真 monotonic,真等上 HEARTBEAT_TIMEOUT_S(0.6s)一样会把
+        # ``active`` 拨成 False —— 那是心跳超时那条路在起作用,不是这条视频闸
+        # 在起作用。0.2s 远够视频闸(周期 TICK=0.01s)反应,又远不够心跳超时
+        # 假装替它擦屁股。
+        await 等到(lambda: not t.active, timeout=0.2)   # 用这个文件里既有的那个助手
+        assert t.active is False
+        assert fake_device.walk_calls[-1] == (0.0, 0.0, 0.0, 0.0)
+    finally:
+        await t.aclose()
+
+
+async def test_引擎在跑就不许遥控(fake_device, 跑着的engine, fake_clock):
+    t = 带闸(fake_device, 跑着的engine, fake_clock, [""])
+    with pytest.raises(TeleopBusy):
+        await t.pulse(0.5, 0.0, 0.0)
+
+
+async def test_引擎让开腿的时候可以遥控(fake_device, 挂起的engine, fake_clock):
+    """§5.10:持租约 + 引擎已挂起 → 放行。
+
+    **租约那一半不在这儿。** ``app/control.py`` 的 ``CONTROLLED`` 已经把
+    ``POST /api/teleop`` 整条路由钉在租约后面了 —— 在这儿再查一遍就是把
+    同一条规矩存两份,而两份迟早不一样。这儿只管「引擎让不让位」。
+    """
+    t = 带闸(fake_device, 挂起的engine, fake_clock, [""])
+    try:
+        await t.pulse(0.5, 0.0, 0.0)
+        assert fake_device.walk_calls
+    finally:
+        await t.aclose()
+
+
+async def test_挂起了也一样要有画面(fake_device, 挂起的engine, fake_clock):
+    """**让位是让引擎的位,不是让 §5.9 的位。** 挂起恰恰是人要亲自开的时候
+    —— 那正是最需要看得见的时候。
+    """
+    t = 带闸(fake_device, 挂起的engine, fake_clock, ["前相机没画面"])
+    with pytest.raises(TeleopBusy):
+        await t.pulse(0.5, 0.0, 0.0)
+
+
+async def test_急停按着仍然不许动(fake_device, engine, fake_clock):
+    """闸多了一道,原来那两道不许弱。"""
+    fake_device.estop = True
+    t = 带闸(fake_device, engine, fake_clock, [""])
+    with pytest.raises(TeleopBusy):
+        await t.pulse(0.5, 0.0, 0.0)
