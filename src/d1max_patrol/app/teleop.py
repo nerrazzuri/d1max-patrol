@@ -23,7 +23,9 @@ import asyncio
 import contextlib
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 
 from d1max_patrol.backends.base import DeviceBackend
 from d1max_patrol.engine.machine import MissionEngine
@@ -36,6 +38,52 @@ DEFAULT_PULSE_S = 0.4
 
 #: 一拍最长多久。再长就等于把守死人开关架空了 —— 心跳断了也还要走这么久。
 MAX_PULSE_S = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class PulseProfile:
+    """一档节奏。**两档的差别只在时长上,不在控制量上。**
+
+    控制量是百分比不是速度,死区在 0.3 附近(清单 #37/#38)。想让狗慢一点,
+    唯一正确的做法是把一拍缩短 —— 把控制量压低的结果是原地不动,而且不报错
+    (见模块开头)。所以这里没有「转向系数」这种字段,只有两个时长。
+
+    **为什么转向和平移各有一个时长。** 扫图的时候人要的是转向一点一点来,
+    平移倒不必碎成一样。合成一个数就没法分别调,而这两件事在现场是分开
+    调的。
+    """
+
+    #: 上线时用的名字。``PROFILES`` 的键跟它必须一致。
+    name: str
+    #: 平移一拍多长。
+    fwd_seconds: float
+    #: 转向一拍多长。
+    yaw_seconds: float
+
+    def seconds_for(self, fwd: float, lat: float, yaw: float) -> float:
+        """这一拍该走多久。
+
+        既有平移又有转向时**取长的那个**。取短的话,人推着「往前走并且拐个
+        弯」,前进会被截成转向那么短的一小步,走出来像「原地拐了一下」。
+        """
+        moving = fwd != 0.0 or lat != 0.0
+        turning = yaw != 0.0
+        if moving and turning:
+            return max(self.fwd_seconds, self.yaw_seconds)
+        return self.yaw_seconds if turning else self.fwd_seconds
+
+
+#: 自主操控(漫游):走路用的那一档,一拍 0.4 秒,转向给满(§7.7)。
+ROAM = PulseProfile("roam", DEFAULT_PULSE_S, DEFAULT_PULSE_S)
+
+#: 扫图:建图的时候用,一拍更碎,转向尤其碎 —— 建图要的是慢慢挪、慢慢转,
+#: 让激光有时间把同一片地方看够(§7.7)。**碎是靠缩时长实现的,不是靠压
+#: 控制量**,理由见 ``PulseProfile``。
+SCAN = PulseProfile("scan", 0.25, 0.12)
+
+#: 上线时认的两个词。
+PROFILES: Mapping[str, PulseProfile] = MappingProxyType(
+    {ROAM.name: ROAM, SCAN.name: SCAN})
 
 #: 死区之上的最小控制量。见清单 #37/#38。
 MIN_FWD = 0.30
@@ -116,19 +164,25 @@ class Teleop:
         return self._active
 
     async def pulse(self, fwd: float, lat: float, yaw: float,
-                    seconds: float = DEFAULT_PULSE_S) -> None:
+                    seconds: float | None = None, *,
+                    profile: PulseProfile = ROAM) -> None:
         """走一拍。
 
-        控制量取 [-1, 1],会被顶到死区之上;想走慢就把 ``seconds`` 调小。
+        控制量取 [-1, 1],会被顶到死区之上;想走慢就换一档(``profile``)。
         三个轴全零等于 :meth:`stop`。
+
+        ``seconds`` 显式给了就听人的,不给就按这一档的节奏算 —— 网页版 app
+        现在传的就是显式秒数,它一行都不用改。
         """
         _check_range(fwd, "fwd")
         _check_range(lat, "lat")
         _check_range(yaw, "yaw")
-        if not 0.0 < seconds <= MAX_PULSE_S:
-            raise ValueError(f"一拍得在 (0, {MAX_PULSE_S}] 秒之间,给的是 {seconds}")
 
         fwd, lat = snap_to_axis(fwd, lat)
+        if seconds is None:
+            seconds = profile.seconds_for(fwd, lat, yaw)
+        if not 0.0 < seconds <= MAX_PULSE_S:
+            raise ValueError(f"一拍得在 (0, {MAX_PULSE_S}] 秒之间,给的是 {seconds}")
 
         if (fwd, lat, yaw) == _STOP:
             await self.stop()
@@ -221,7 +275,11 @@ __all__ = [
     "MIN_FWD",
     "MIN_LAT",
     "MIN_YAW",
+    "PROFILES",
+    "ROAM",
+    "SCAN",
     "WATCH_PERIOD_S",
+    "PulseProfile",
     "Teleop",
     "TeleopBusy",
     "snap_to_axis",

@@ -19,6 +19,9 @@ from d1max_patrol.app.teleop import (
     MAX_PULSE_S,
     MIN_FWD,
     MIN_YAW,
+    PROFILES,
+    ROAM,
+    SCAN,
     Teleop,
     TeleopBusy,
     snap_to_axis,
@@ -27,7 +30,7 @@ from d1max_patrol.backends.base import Event, EventEmitter, NavStatusEvent
 from d1max_patrol.engine.homing import HomePoint
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine, RunState
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
-from tests.app.conftest import post
+from tests.app.conftest import post, request
 from tests.conftest import NoDisks
 from tests.engine.conftest import make_mission
 
@@ -267,6 +270,99 @@ async def test_过长的一拍直接拒(teleop):
         await teleop.pulse(1.0, 0.0, 0.0, seconds=0.0)
 
 
+# ------------------------------------------------------------------ 两档节奏
+
+
+async def test_扫图档的转向是把一拍缩短_不是把量压低(fake_device, engine):
+    """**这一条是这个任务的全部要点。**
+
+    控制量是百分比不是速度,死区在 0.3 附近(清单 #37/#38)。把扫图档的
+    「转向压低」实现成「乘一个小于 1 的系数」,结果是控制量掉进死区 ——
+    狗原地不动,而且不报错,页面上看起来像掉线。规格 §7.7 要的「压低」在
+    这台机器上只有一种正确实现:**把一拍缩短**。
+
+    所以断言有两半,缺一不可:时长变短了 **而且** 控制量仍然在死区之上。
+    """
+    tel = Teleop(fake_device, engine)
+    try:
+        await tel.pulse(0.0, 0.0, 1.0, profile=SCAN)
+        seconds, _fwd, _lat, yaw = fake_device.walk_calls[-1]
+        assert seconds == pytest.approx(SCAN.yaw_seconds)
+        assert seconds < ROAM.yaw_seconds
+        assert abs(yaw) >= MIN_YAW
+    finally:
+        await tel.aclose()
+
+
+async def test_扫图档的平移用平移那个时长(fake_device, engine):
+    """转向和平移是**两个**时长。扫图时人要的是转向一点一点来,
+    平移倒不必碎成一样。混成一个数就没法分别调。
+    """
+    tel = Teleop(fake_device, engine)
+    try:
+        await tel.pulse(1.0, 0.0, 0.0, profile=SCAN)
+        assert fake_device.walk_calls[-1][0] == pytest.approx(SCAN.fwd_seconds)
+    finally:
+        await tel.aclose()
+
+
+async def test_漫游档是默认的(fake_device, engine):
+    """不传 profile 就是漫游 —— 网页版 app 那些老调用方一行不用改。"""
+    tel = Teleop(fake_device, engine)
+    try:
+        await tel.pulse(1.0, 0.0, 0.0)
+        assert fake_device.walk_calls[-1][0] == pytest.approx(ROAM.fwd_seconds)
+    finally:
+        await tel.aclose()
+
+
+async def test_同时有平移和转向时按长的那个时长走(fake_device, engine):
+    """一拍只有一个时长,得挑一个。
+
+    **挑长的那个。** 挑短的话,人推着摇杆前进兼转向,前进会被截成扫图那么短
+    的一小步 —— 明明推的是「往前走并且拐个弯」,走出来的是「原地拐了一下」。
+    """
+    tel = Teleop(fake_device, engine)
+    try:
+        await tel.pulse(1.0, 0.0, 1.0, profile=SCAN)
+        assert fake_device.walk_calls[-1][0] == pytest.approx(
+            max(SCAN.fwd_seconds, SCAN.yaw_seconds))
+    finally:
+        await tel.aclose()
+
+
+async def test_显式给了秒数就听人的(fake_device, engine):
+    """``seconds`` 仍然压过 profile —— 网页版 app 现在传的就是它。"""
+    tel = Teleop(fake_device, engine)
+    try:
+        await tel.pulse(1.0, 0.0, 0.0, seconds=1.5, profile=SCAN)
+        assert fake_device.walk_calls[-1][0] == pytest.approx(1.5)
+    finally:
+        await tel.aclose()
+
+
+def test_两档都在名录里_而且名字就是上线的那个词():
+    """``PROFILES`` 的键是 HTTP 上直接收的字符串,不许跟 ``name`` 不一致 ——
+    不一致的话,路由认得的词和 ``to_wire`` 报出去的词会是两套。
+    """
+    assert set(PROFILES) == {"roam", "scan"}
+    assert all(k == v.name for k, v in PROFILES.items())
+
+
+def test_每一档的时长都在合法范围里():
+    """一拍不许超过 ``MAX_PULSE_S`` —— 超了等于把守死人开关架空:
+    心跳断了以后还要再走这么久。
+    """
+    for prof in PROFILES.values():
+        assert 0.0 < prof.fwd_seconds <= MAX_PULSE_S
+        assert 0.0 < prof.yaw_seconds <= MAX_PULSE_S
+
+    # §7.7 那张表:扫图两个时长都比漫游短。**拿常量互相比,不拿常量跟自己比** ——
+    # 跟自己比的断言对"SCAN 整个缩水成 ROAM"这种变异是瞎的。
+    assert SCAN.fwd_seconds < ROAM.fwd_seconds
+    assert SCAN.yaw_seconds < ROAM.yaw_seconds
+
+
 # ------------------------------------------------------------------ 守死人
 
 
@@ -400,3 +496,18 @@ def test_急停按着的时候遥控接口给409(server, ctx):
 def test_遥控接口只收POST(server):
     from tests.app.conftest import status
     assert status(server, "/api/teleop") == 405
+
+
+def test_不认识的节奏档报400(server):
+    """**不许静默退回默认档。** 客户端拼错了词却照走漫游档,人在扫图的时候
+    会拿到走路的节奏 —— 而扫图那一档存在的理由,恰恰是走路的节奏建不出图。
+    """
+    code, body, _ = request(server, "/api/teleop", method="POST", payload={
+        "fwd": 1.0, "lat": 0.0, "yaw": 0.0, "profile": "sacn"})
+    assert code == 400
+    assert "sacn" in body.decode("utf-8")
+
+
+def test_不传节奏档就是漫游(server, ctx):
+    assert post(server, "/api/teleop", {"fwd": 1.0, "lat": 0.0, "yaw": 0.0}) == 200
+    assert ctx.device.walk_calls[-1][0] == pytest.approx(ROAM.fwd_seconds)

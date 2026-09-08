@@ -77,7 +77,7 @@ from d1max_patrol.app.mapping import (
     MappingOrchestrator,
 )
 from d1max_patrol.app.procs import ProcManager
-from d1max_patrol.app.teleop import DEFAULT_PULSE_S, Teleop, TeleopBusy
+from d1max_patrol.app.teleop import PROFILES, Teleop, TeleopBusy
 from d1max_patrol.app.video import CAMERAS, MjpegSource, RtspStill, VideoError
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
@@ -1358,9 +1358,14 @@ class AppServer:
         fwd = _number(body, "fwd")
         lat = _number(body, "lat")
         yaw = _number(body, "yaw")
-        seconds = _number(body, "seconds", DEFAULT_PULSE_S)
+        seconds = None if body.get("seconds") is None else _number(body, "seconds")
+        name = body.get("profile", "roam")
+        if not isinstance(name, str) or name not in PROFILES:
+            raise HttpError(400, "不认识的节奏档",
+                            f"只有 {'、'.join(PROFILES)},给的是 {name!r}")
+        profile = PROFILES[name]
         teleop = self._ctx.teleop
-        self._call(lambda: teleop.pulse(fwd, lat, yaw, seconds))
+        self._call(lambda: teleop.pulse(fwd, lat, yaw, seconds, profile=profile))
         return json_response({"ok": True})
 
     def _teleop_beat(self, _req: Request) -> Response:
