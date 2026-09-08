@@ -180,6 +180,11 @@ class PatrolClient {
       String method, String path, Object? body,
       {required bool auth}) async {
     final req = await _io.openUrl(method, Uri.parse('$baseUrl$path'));
+    // **不跟重定向。** 跟的话 302 会把下面那个 `Authorization: Bearer` 原样
+    // 带到重定向目标去 —— 那是一条 token 外泄的路。狗从不发 3xx，关掉它
+    // 不影响任何正常路径;真收到 3xx 的话现在会当成一个非 200 的状态码报
+    // 出来，那也正是该有的反应。
+    req.followRedirects = false;
     // token 走请求头，不走 cookie 也不走查询串。狗那头的理由写在
     // `auth.py` 开头：cookie 是浏览器自动带的，等于替人开狗。
     if (auth && _token != null) {

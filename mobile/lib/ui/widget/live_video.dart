@@ -20,6 +20,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -62,6 +63,18 @@ class MjpegParser {
         'content-type 里没有 boundary：${ct.isEmpty ? '(空)' : ct}');
   }
 
+  /// 攒到这么多字节还切不出一帧就认赔。
+  ///
+  /// **没有上限的话这里就是一台手机的 OOM。** 段头收到之后如果永远等不到
+  /// 下一个边界(狗挂在半句话上、热点上的门户把流截了、对面根本不是
+  /// MJPEG)，缓冲会一直涨到进程被系统杀掉 —— 复审的探针实测攒到 24 MiB
+  /// 一个字节都没丢。
+  ///
+  /// 8 MiB 的来历:狗那头出的是 `-q:v 2` 的 MJPEG，1080p 一帧几百 KB，
+  /// 2 MB 已经是离谱的一帧。留到 8 MiB 是给"一帧被切成很多包慢慢到"留足
+  /// 余量，同时离手机上真出事的量级还差得远。
+  static const int maxBuffer = 8 << 20;
+
   final String boundary;
   final Uint8List _mark;
 
@@ -72,7 +85,20 @@ class MjpegParser {
   /// 会漏掉那个边界，往后所有帧全错位。
   final List<int> _buf = <int>[];
 
+  /// 找"这一帧后面那个边界"时从哪儿接着扫。
+  ///
+  /// **不记这个数就是 O(n²)。** 一帧被切成 N 包到达时，每来一包都从缓冲
+  /// 头上重扫一遍;10 fps 一直开着的屏，这点开销全落在客户手机的电池上。
+  ///
+  /// 记住的位置要**往回退 `_mark.length - 1` 个字节**:边界完全可能正好
+  /// 骑在上一次扫描的终点上，不退回去就会漏掉它，往后所有帧全错位。
+  int _resume = 0;
+
   /// 喂一段字节，拿回这一段里切得出来的所有整帧。切不满一帧就返回空表。
+  ///
+  /// 攒过 [maxBuffer] 还切不出一帧就抛 `PatrolError`:那不是"还没收全"，
+  /// 是这条流坏了。抛出去让上层收连接、重开 —— **不许静默清掉缓冲接着等**，
+  /// 那会变成"永远不出画面，而且没有人知道为什么"。
   List<Uint8List> add(List<int> chunk) {
     _buf.addAll(chunk);
     final List<Uint8List> out = <Uint8List>[];
@@ -82,19 +108,35 @@ class MjpegParser {
         // 一个边界都没有。**不能整段丢掉**：边界可能正好被切在这一包的
         // 末尾，留住最后 mark.length-1 个字节去接下一包。
         _keepTail(_mark.length - 1);
+        _resume = 0;
         break;
       }
       final int head = _find(_buf, _blankLine, start + _mark.length);
       if (head < 0) break; // 这一段自己的头还没收全
       final int from = head + _blankLine.length;
-      final int next = _find(_buf, _mark, from);
-      if (next < 0) break; // 这一帧还没收全，等下一包
+      final int next = _find(_buf, _mark, from < _resume ? _resume : from);
+      if (next < 0) {
+        // 这一帧还没收全，等下一包。下次从"这次扫到的地方往回退一个边界
+        // 长度"接着扫，别再从头来一遍。
+        final int back = _buf.length - (_mark.length - 1);
+        final int mark = back < from ? from : back;
+        _resume = mark;
+        break;
+      }
       int end = next;
       if (end - from >= 2 && _buf[end - 2] == 13 && _buf[end - 1] == 10) {
         end -= 2; // 净荷和下一个边界之间那个 CRLF 不算画面
       }
       out.add(Uint8List.fromList(_buf.sublist(from, end)));
       _buf.removeRange(0, next); // 留着下一个边界，接着切
+      _resume = 0; // 缓冲挪过位了，记着的那个位置作废
+    }
+    if (_buf.length > maxBuffer) {
+      final int n = _buf.length;
+      _buf.clear();
+      _resume = 0;
+      throw PatrolError(0, '这一路画面接不下去',
+          '攒了 $n 字节还没切出一帧，这条流不是 MJPEG 或者已经断在半句话上');
     }
     return out;
   }
@@ -133,6 +175,10 @@ int _find(List<int> hay, List<int> needle, int from) {
 Stream<Uint8List> mjpegFrames(Uri url,
     {required HttpClient io, String token = ''}) async* {
   final HttpClientRequest req = await io.openUrl('GET', url);
+  // **不跟重定向。** 跟的话 302 会把下面这个 `Authorization: Bearer` 原样
+  // 带到重定向目标去 —— 热点上狗是唯一的主机，今天打不着，但那是"今天的
+  // 拓扑",不是这行代码的保证。狗从不发 3xx，跟不跟都不影响正常路径。
+  req.followRedirects = false;
   if (token.isNotEmpty) {
     req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
   }
@@ -195,11 +241,22 @@ class _LiveVideoState extends State<LiveVideo> {
   /// 等着重开一条流的那个定时器。见 [_reopenSoon]。
   Timer? _retry;
 
-  /// 流自己断了之后隔多久再拉一次。
+  /// 重连的起步间隔。
   ///
   /// 跟健康轮询同一个 2 秒:再快也没有新信息(狗那头 `STALE_S` 就是 2 秒)，
   /// 再慢就会在"画面没了"和"画面回来"之间多留一段黑屏。
-  static const Duration _retryAfter = Duration(seconds: 2);
+  static const Duration _backoffMin = Duration(seconds: 2);
+
+  /// 退避的封顶。
+  ///
+  /// **这个上限是给"满员"那种情况留的。** 狗那头一路最多 6 个观众
+  /// (`video.py` 的 `MAX_VIEWERS`)，第 7 个人拿到的是 503;固定 2 秒的话
+  /// 那台手机会以 0.5 Hz 无限期地猛敲狗，而现场那条热点本来就不宽。
+  /// 2→4→8→16 之后停在 16 秒:人退出来之后最多再等这么久画面就回来了。
+  static const Duration _backoffMax = Duration(seconds: 16);
+
+  /// 下一次重连等多久。拿到一帧就清回 [_backoffMin]。
+  Duration _backoff = _backoffMin;
 
   @override
   void initState() {
@@ -239,6 +296,7 @@ class _LiveVideoState extends State<LiveVideo> {
     ).listen(
       (Uint8List f) {
         if (!mounted || gen != _gen) return;
+        _backoff = _backoffMin; // 真拿到画面了，退避从头算
         setState(() {
           _frame = f;
           _trouble = '';
@@ -246,11 +304,14 @@ class _LiveVideoState extends State<LiveVideo> {
       },
       onError: (Object e) {
         if (!mounted || gen != _gen) return;
+        // 出错的这条连接不会自己好，先收掉再排重连 —— 不收的话它会一直
+        // 挂在狗那头占着 `MAX_VIEWERS` 里的一个名额。
+        _shut();
         setState(() {
           _frame = null;
-          _trouble = '$e';
+          _trouble = _human(e);
         });
-        _reopenSoon(gen);
+        _reopenSoon();
       },
       // **断在半路也要自己接回来。** 这条流结束(或者出错)的时候，狗那头
       // 完全可能还是在线的 —— 断的是我们这一头的连接。健康轮询看不见这
@@ -259,32 +320,71 @@ class _LiveVideoState extends State<LiveVideo> {
       // 而那正是 §5.9 要防的:人看着一张不动的图，以为那是此刻。
       onDone: () {
         if (!mounted || gen != _gen) return;
+        _shut();
         setState(() => _frame = null);
-        _reopenSoon(gen);
+        _reopenSoon();
       },
     );
   }
 
-  /// 隔 [_retryAfter] 再开一条。
+  /// 过一会儿再开一条，**每失败一次就等得更久**。
   ///
   /// 不立刻重开:热点断了的时候立刻重开会变成一个满速的重连风暴，把本来就
-  /// 不宽的那条上行占死。[gen] 是排掉已经换过茬的那条流的迟到回调。
-  void _reopenSoon(int gen) {
+  /// 不宽的那条上行占死。不翻倍的话，满员被拒(503)会变成 0.5 Hz 的无限期
+  /// 猛敲 —— 那台手机永远等不到，狗那头却一直在被敲。
+  ///
+  /// 记的号是**排队这一刻的** [_gen]:排完之后要是有人掐了流(掉线、换狗、
+  /// dispose)，那一茬就作废，定时器醒来什么也不做。
+  void _reopenSoon() {
+    final int gen = _gen;
+    final Duration wait = _backoff;
+    final Duration doubled = wait * 2;
+    _backoff = doubled > _backoffMax ? _backoffMax : doubled;
     _retry?.cancel();
-    _retry = Timer(_retryAfter, () {
+    _retry = Timer(wait, () {
       if (!mounted || gen != _gen || !_live) return;
       _open();
     });
   }
 
+  /// 把异常翻成现场看得懂的一句话。
+  ///
+  /// **原样的异常文本不上屏。** 值守的人要的是"该做什么"，
+  /// `HttpException: Connection closed while receiving data` 回答不了这个;
+  /// 而 503 和"狗没起来"要做的事完全相反 —— 一个是等人退出来，一个是走
+  /// 过去看那台狗。原文进 `dart:developer` 的日志，屏幕上不留。
+  String _human(Object e) {
+    developer.log('$e', name: 'live_video/${widget.camera}');
+    if (e is PatrolError && e.status == HttpStatus.serviceUnavailable) {
+      return '这一路同时最多 6 个人看，现在满了。'
+          '等一会儿，或者让先看的人退出来';
+    }
+    if (e is PatrolError && e.status == HttpStatus.unauthorized) {
+      return '狗不认这个身份了。退出去重新输 PIN';
+    }
+    return '这一路的画面断了，过几秒会自己再试一次。'
+        '一直是这句就走过去看看那台狗';
+  }
+
   /// 掐掉当前这条流。
   ///
-  /// **顺序是先掐连接、再取消订阅，不能反。** 反过来 `cancel()` 会挂住：
-  /// 它要等这条响应收完，而 MJPEG 永远收不完 —— 那条连接就会一直挂在狗那头
-  /// 占着一个观众名额(`video.py` 的 `MAX_VIEWERS` 是 6，重连几次就满了)。
+  /// **顺序是先掐连接、再取消订阅，不能反。** 掐了之后那条流会以一个
+  /// `HttpException` 结束，那个错**必须还有人接**，所以取消排在掐的后面;
+  /// [_gen] 负责让它别再改到已经换了一茬的状态上。
   ///
-  /// 掐了之后那条流会以一个 `HttpException` 结束。那个错**必须还有人接**，
-  /// 所以取消排在掐的后面；[_gen] 负责让它别再改到已经换了一茬的状态上。
+  /// **这件事有测试盯着，红从两个地方来**(复审亲手切过三个变体，都是
+  /// 1 秒内退出码 1，不是挂住)：
+  ///
+  /// - 顺序对调 → `在线时画出画面` / `掉线再回来要重新拉流` / `流自己断了…`
+  ///   三条红成框架级 `HttpException: Connection closed while receiving
+  ///   data`(掐起来的那个错没人接，逸出去了)。
+  /// - 连接漏了没收 → `流自己断了…` 红在 `flutter_test` 的 `!timersPending`
+  ///   上:一条没收的 `HttpClient` 一定留着自己那个 15 秒空闲计时器
+  ///   (`_HttpClientConnection.startTimer`)，跑不掉。
+  ///
+  /// 也就是说"来回切几屏就把狗那头 6 个观看名额占满"(`video.py` 的
+  /// `MAX_VIEWERS`)这个现场坏法，盯它的是框架不变式而不是某一条断言 ——
+  /// 重构这里的人会立刻看到红，不必自己再造一条测试。
   void _shut() {
     _gen++;
     _retry?.cancel();
@@ -295,6 +395,35 @@ class _LiveVideoState extends State<LiveVideo> {
     _io = null;
     io?.close(force: true);
     sub?.cancel();
+  }
+
+  /// 父层换了狗、换了相机、换了会话或者换了健康流。
+  ///
+  /// **这个项目从第一天就是多机的**,机群页上点另一台狗走的就是这条路:
+  /// State 被复用，`initState` 不会再跑一次。不接这一下的话，画面会稳稳地
+  /// 停在**上一台狗**的那一路上 —— 而屏幕上什么异常都没有，人以为看的是
+  /// 刚点的这台。
+  @override
+  void didUpdateWidget(LiveVideo old) {
+    super.didUpdateWidget(old);
+    final bool healthSwapped = old.health != widget.health;
+    final bool targetMoved = old.baseUrl != widget.baseUrl ||
+        old.camera != widget.camera ||
+        old.token != widget.token;
+    if (!healthSwapped && !targetMoved) return;
+    if (healthSwapped) {
+      _health?.cancel();
+      _health = widget.health.listen(_onHealth);
+      // 新的这条还没说过话。拿旧狗的结论顶着就会去开一条新狗上的流，
+      // 而那台狗在不在线这一头根本还不知道。
+      _live = false;
+    }
+    _shut();
+    _frame = null;
+    _trouble = '';
+    _backoff = _backoffMin;
+    if (_live) _open();
+    setState(() {});
   }
 
   @override
@@ -309,7 +438,15 @@ class _LiveVideoState extends State<LiveVideo> {
     final Uint8List? f = _frame;
     if (_live && f != null) {
       // `gaplessPlayback`：不加的话每来一帧都会先白一下再画。
-      return Image.memory(f, gaplessPlayback: true, fit: BoxFit.cover);
+      return Image.memory(
+        f,
+        gaplessPlayback: true,
+        fit: BoxFit.cover,
+        // 一帧坏 JPEG 不该走 Flutter 的全局错误通道 —— 那条路上屏幕什么
+        // 也不说，人只看到画面卡住。
+        errorBuilder: (_, _, _) => _panel(
+            '${widget.camera} 这一帧解不开', '下一帧一般就好了。一直这样就是这一路出了问题'),
+      );
     }
     if (_live) {
       return _panel(

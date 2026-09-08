@@ -64,8 +64,16 @@ List<int> _part(String boundary, List<int> jpg) => <int>[
 
 /// 一台只会发 MJPEG 的假狗。
 class FakeVideoDog {
-  FakeVideoDog(
-      {this.boundary = _boundary, this.frames = 3, this.closes = false});
+  FakeVideoDog({
+    this.boundary = _boundary,
+    this.frames = 3,
+    this.closes = false,
+    this.status = 200,
+  });
+
+  /// 回这个状态码。503 是狗那头满 6 个观众时的回法
+  /// (`video.py` 的 `MAX_VIEWERS` 到 `server.py` 的 503)。
+  final int status;
 
   /// 发完那几帧就把响应关掉。
   ///
@@ -87,6 +95,9 @@ class FakeVideoDog {
   final List<String?> auths = <String?>[];
   final List<String> queries = <String>[];
 
+  /// 每次 GET 的路径。换相机之后拉的是不是另一路，盯的就是这个。
+  final List<String> paths = <String>[];
+
   String get baseUrl => 'http://127.0.0.1:${_s.port}';
 
   Future<void> start() async {
@@ -95,8 +106,14 @@ class FakeVideoDog {
       gets++;
       auths.add(req.headers.value(HttpHeaders.authorizationHeader));
       queries.add(req.uri.query);
+      paths.add(req.uri.path);
       final HttpResponse r = req.response;
       r.bufferOutput = false;
+      if (status != 200) {
+        r.statusCode = status;
+        await r.close();
+        return;
+      }
       r.headers.set(HttpHeaders.contentTypeHeader,
           'multipart/x-mixed-replace; boundary=$boundary');
       try {
@@ -271,6 +288,34 @@ void main() {
       expect(got[2], <int>[30]);
     });
 
+    test('段头之后一直等不到边界就认赔，不是把手机内存吃光', () {
+      // **这是手机上真会出人命的那一条。** 段头收到之后如果永远等不到下一
+      // 个边界(狗挂在半句话上、热点上的门户把流截了、对面根本不是 MJPEG)，
+      // 没有上限的缓冲会一直涨到进程被系统杀掉 —— 复审的探针实测攒到
+      // 24 MiB 一个字节都没丢。认赔之后上层会收连接、按退避重开。
+      final MjpegParser p = MjpegParser.fromContentType(
+          'multipart/x-mixed-replace;boundary=$_boundary');
+      p.add(<int>[
+        ...utf8.encode('--$_boundary'), 13, 10,
+        ...utf8.encode('Content-Type: image/jpeg'), 13, 10, 13, 10,
+      ]);
+      final Uint8List junk = Uint8List(1 << 20); // 1 MiB 一块，里面没有边界
+      Object? blew;
+      int fed = 0;
+      while (blew == null && fed < 64) {
+        fed++;
+        try {
+          p.add(junk);
+        } catch (e) {
+          blew = e;
+        }
+      }
+      expect(blew, isA<PatrolError>(),
+          reason: '喂了 $fed MiB 都不叫停的话，这台手机就是在等 OOM');
+      expect(fed * (1 << 20),
+          lessThanOrEqualTo(MjpegParser.maxBuffer + (1 << 20)));
+    });
+
     test('响应头里没有 boundary 就明说，不是默默给张黑图', () {
       expect(() => MjpegParser.fromContentType('image/jpeg'),
           throwsA(isA<PatrolError>()));
@@ -386,6 +431,63 @@ void main() {
     await _pumpUntil(t, () => dog.gets >= 2, '流断掉之后自己发的第二次 GET');
 
     expect(dog.gets, greaterThanOrEqualTo(2));
+    await _teardown(t, ctl, dog);
+  });
+
+  testWidgets('一直被拒就越等越久，而且屏幕上说得出「人太多了」', (WidgetTester t) async {
+    // **满员(503)不能变成 0.5 Hz 的无限猛敲。** 狗那头一路最多 6 个观众，
+    // 第 7 个人的手机要是每 2 秒敲一次、敲到天荒地老，现场那条本来就不宽的
+    // 热点还要被它占着。屏幕也得说人话:满员该做的事(等一下、让人退出来)
+    // 跟「狗没起来」(走过去看)完全相反。
+    final FakeVideoDog dog = FakeVideoDog(status: 503);
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    // 自己攒假时钟:要断言的是「第三次 GET 之前过了多久」，不是「发生了没有」。
+    Duration fake = Duration.zero;
+    const Duration step = Duration(milliseconds: 100);
+    while (dog.gets < 3 && fake < const Duration(seconds: 40)) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 3)));
+      await t.pump(step);
+      fake += step;
+    }
+
+    expect(dog.gets, 3, reason: '等了 40 秒还没敲够三次，那是压根没在重连');
+    expect(fake, greaterThanOrEqualTo(const Duration(seconds: 6)),
+        reason: '2 秒起、每次翻倍的话第三次 GET 最早也在 2+4=6 秒；'
+            '每次都只等 2 秒的话 4 秒出头就到了');
+    expect(find.textContaining('最多 6 个人看'), findsOneWidget,
+        reason: '满员跟「狗没起来」要做的事完全相反，不能共用一句话');
+    expect(find.textContaining('HttpException'), findsNothing,
+        reason: '现场屏幕上要的是「该做什么」，不是 Dart 的异常文本');
+
+    await _teardown(t, ctl, dog);
+  });
+
+  testWidgets('父层换了相机，画面要跟着换，不能停在上一路上', (WidgetTester t) async {
+    // **这个项目从第一天就是多机的**，机群页上点另一台狗走的就是这条路:
+    // State 被复用，`initState` 不会再跑一次。不接这一下的话画面稳稳地停在
+    // 上一路上，而屏幕上什么异常也没有 —— 人以为看的是刚点的那一台。
+    final FakeVideoDog dog = FakeVideoDog();
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+
+    ctl.add(const VideoHealth(<String, bool>{'front': true, 'back': true}));
+    await _pumpUntil(
+        t, () => find.byType(Image).evaluate().isNotEmpty, '第一路的画面');
+    expect(dog.paths.single, '/api/video/front');
+
+    await t.pumpWidget(_wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'back', health: ctl.stream)));
+    await _pumpUntil(t, () => dog.paths.length >= 2, '换了相机之后的那次 GET');
+
+    expect(dog.paths.last, '/api/video/back');
     await _teardown(t, ctl, dog);
   });
 
