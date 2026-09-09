@@ -63,7 +63,7 @@ CONTROLLED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/api/teleop/mode$")),
     ("POST", re.compile(r"^/api/mapping/record/(start|stop)$")),
     ("POST", re.compile(r"^/api/missions/[^/]+/run$")),
-    ("POST", re.compile(r"^/api/run/(pause|resume|abort)$")),
+    ("POST", re.compile(r"^/api/run/(pause|resume|abort|suspend)$")),
     ("POST", re.compile(r"^/api/maps/load$")),
     ("POST", re.compile(r"^/api/pose/(initial|reset)$")),
 )

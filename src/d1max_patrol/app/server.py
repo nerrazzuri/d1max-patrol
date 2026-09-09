@@ -1038,6 +1038,7 @@ class AppServer:
         self.route("POST", "/api/run/pause", self._run_pause)
         self.route("POST", "/api/run/resume", self._run_resume)
         self.route("POST", "/api/run/abort", self._run_abort)
+        self.route("POST", "/api/run/suspend", self._run_suspend)
         self.route("GET", "/api/maps", self._maps)
         self.route("POST", "/api/maps/load", self._map_load)
         self.route("GET", "/api/maps/<map_id>/grid", self._map_grid)
@@ -1652,6 +1653,18 @@ class AppServer:
         raw = body.get("reason", "") if isinstance(body, dict) else ""
         reason = raw.strip() if isinstance(raw, str) and raw.strip() else "页面上点了中止"
         return self._run_cmd(lambda: self._ctx.engine.abort(reason))
+
+    def _run_suspend(self, req: Request) -> Response:
+        """让开腿:接下来这段路人拿手机亲自开(§5.10)。
+
+        **不是暂停。** 暂停是狗停着没人碰;挂起期间人正在用遥控开它,
+        所以 ``TeleopBusy`` 那道闸看的是 ``yielding``,不是 ``paused``。
+        鉴权、控制权、错误码、返回体形状一律跟 ``/api/run/pause`` 一族一致。
+        """
+        body = req.json()
+        raw = body.get("reason", "") if isinstance(body, dict) else ""
+        reason = raw.strip() if isinstance(raw, str) and raw.strip() else "页面上点了让开腿"
+        return self._run_cmd(lambda: self._ctx.engine.suspend(reason))
 
     def _run_cmd(self, factory: Callable[[], Any]) -> Response:
         """暂停 / 继续 / 中止 共用的一段。

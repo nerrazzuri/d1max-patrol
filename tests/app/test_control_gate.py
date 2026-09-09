@@ -28,6 +28,7 @@ T0 = 1_757_000_000_000
     "/api/run/pause",
     "/api/run/resume",
     "/api/run/abort",
+    "/api/run/suspend",
     "/api/maps/load",
     "/api/pose/initial",
     "/api/pose/reset",

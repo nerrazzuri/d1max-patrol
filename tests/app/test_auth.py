@@ -428,7 +428,7 @@ def test_读的接口也得有token(server_pin, path):
 
 @pytest.mark.parametrize("path", [
     "/api/estop", "/api/teleop", "/api/mapping/record/start",
-    "/api/run/abort", "/api/pose/reset",
+    "/api/run/abort", "/api/run/suspend", "/api/pose/reset",
     "/api/bundle/apply", "/api/bundle/rollback",
 ])
 def test_能动机器的接口更得有token(server_pin, path):
