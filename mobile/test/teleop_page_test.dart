@@ -566,9 +566,12 @@ void main() {
   // ------------------------------------------------- 顶上那条带子吃不吃手势
   //
   // 复审问的是「上面那个 `SingleChildScrollView` 会不会把纵向拖拽抢走」。
-  // 这两条把它量出来：**第一条量「抢的是哪一块」，第二条量「那一块够不够
-  // 得着摇杆」。** 只量第二条的话，明天带子多两行、或者屏变矮，它就悄悄地
-  // 从「够不着」滑到「够得着」而没人知道。
+  // 这两条把它量出来：**第一条量「抢的是哪一块」，第二条量「那一块压到摇杆
+  // 头上的时候谁先接到手势」。**
+  //
+  // 第二条以前断的是「两块矩形不相交」，而那件事只在 `flutter_test` 默认的
+  // 800×600 视口下成立 —— 换成一台普通安卓手机横过来的 800×360，带子的下沿
+  // 已经压进摇杆顶部 2dp。**几何从来就不是那层保险，`Stack` 的顺序才是。**
 
   testWidgets('带子的壳子会吃掉自己那块矩形里的纵向拖拽', (WidgetTester t) async {
     /// `Scrollable` 建的 `RawGestureDetector` 带的是 `HitTestBehavior.opaque`，
@@ -624,24 +627,55 @@ void main() {
             '可能这个探针从头到尾就没有一次拖拽送到过');
   });
 
-  testWidgets('带子那块矩形够不着两根摇杆', (WidgetTester t) async {
-    /// 上一条证了「壳子吃自己那块矩形」，这一条量那块矩形到底在哪儿：
-    /// **它的下沿在两根杆的上沿之上，两块不相交。** 所以带子吃手势这件事
-    /// 影响不到摇杆 —— 复审担心的那件事在当前布局下不成立。
+  testWidgets('矮横屏上带子压着摇杆头,而摇杆先接到手势', (WidgetTester t) async {
+    /// 上一条证了「壳子吃自己那块矩形」，这一条问那块矩形压不压得到摇杆。
     ///
-    /// 另外两层保险，都不是这条在管的：杆在 `Stack` 里排在带子**后面**
-    /// （真叠上了也是杆压着带子），而且杆是贴着屏幕底部的。这条只管几何。
+    /// **视口是 800×360 —— 一台 360×800dp 的普通安卓手机横过来的样子**，不是
+    /// `flutter_test` 默认的 800×600。这条以前跑在默认视口上，量出来带子离
+    /// 摇杆还有 270dp 余量，于是断言「两块不相交」永远绿 —— **而那个不变式
+    /// 在目标设备上本来就是假的**：
+    ///
+    /// - `_stickBoxFor(800) = min((800 − 24) / 2, 200) = 200`，摇杆贴着底边，
+    ///   顶边在 `360 − 200 = 160`；
+    /// - `_bandMaxFor(360) = 360 × 0.45 = 162`；
+    /// - **162 > 160，带子的下沿压进摇杆顶部 2dp。**
+    ///
+    /// 所以这条断的不是几何，是**谁先接到手势**：摇杆在 `Stack` 里排在带子
+    /// 后面，`RenderStack.hitTestChildren` 逆序走、停在第一个命中的孩子上，
+    /// 于是重叠那一条里落下去的手指进的是摇杆。**护着摇杆的是这个顺序，不是
+    /// 那点余量** —— 谁把带子和摇杆在 `Stack` 里的先后调换，这条就红。
+    ///
+    /// **带子得是满的**：只挂一行「谁拿着 + 还剩多久」的话它才 135dp，够不到
+    /// 摇杆，这条就什么都没测到。满带是真机上会出现的样子 —— 展开那句 notice
+    /// （人核对名字的时候就会点它），加上心跳断了那一行红字（控制权还在手上、
+    /// 杆还是亮的，正是这行字存在的理由）。
+    await t.binding.setSurfaceSize(const Size(800, 360));
+    addTearDown(() => t.binding.setSurfaceSize(null));
     final Rig rig = await mount(t);
+    await t.tap(find.byKey(ControlPanel.noticeKey));
+    await t.pump();
+    rig.dog.statusCodes['/api/control/heartbeat'] = 500;
+    await pumpUntil(t, () => find.text(renewTroubleHint).evaluate().isNotEmpty,
+        '面板上「租约没续上」那一行红字（带子铺满要靠它）');
     final Rect band = t.getRect(find.byType(SingleChildScrollView));
     final Rect l = t.getRect(find.byType(Joystick).at(0));
-    final Rect r = t.getRect(find.byType(Joystick).at(1));
     expect(band.height, greaterThan(0),
-        reason: '带子量出来是空的话，下面那两句是空绿的');
-    expect(band.bottom, lessThanOrEqualTo(l.top),
-        reason: '带子的下沿压到左杆上了：那一块的纵向拖拽会被带子吃掉，'
-            '人推杆想让狗往前走，狗一动不动');
-    expect(band.bottom, lessThanOrEqualTo(r.top),
-        reason: '带子的下沿压到右杆上了：同上');
+        reason: '带子量出来是空的话，下面几句都是空绿的');
+    expect(t.widget<Joystick>(find.byType(Joystick).at(0)).enabled, isTrue,
+        reason: '杆是灰的时候它整根不接触摸，带子当然赢 —— 那种情况无害，'
+            '也不是这条要证的');
+    expect(band.bottom, greaterThan(l.top),
+        reason: '这个视口上带子的下沿本该压进摇杆顶部（算出来是 2dp）。'
+            '没压上就说明这条测的那件事根本没发生 —— 它是空绿的；'
+            '真要改布局把这 2dp 让出来，这条该整条重写，不是把断言掰回去');
+    // 重叠那一条里落一根手指：杆头那个圈只在**摇杆自己收到 down** 的时候才画。
+    final double y = (l.top + band.bottom) / 2;
+    final TestGesture g = await t.startGesture(Offset(l.center.dx, y));
+    await t.pump();
+    expect(find.byKey(Joystick.knobKey), findsOneWidget,
+        reason: '重叠那一条里的手指被带子吃了：人推杆想让狗往前走，狗一动不动');
+    await g.up();
+    await t.pump();
     await unmount(t, rig);
   });
 
@@ -650,7 +684,7 @@ void main() {
     /// 不是弹框：现场档是默认档，每次进来都弹框的话，它就是那个第三次被
     /// 条件反射点掉的框。
     final Rig rig = await mount(t);
-    expect(find.textContaining('视线'), findsOneWidget);
+    expect(find.text(onsiteHint), findsOneWidget);
     expect(find.byType(AlertDialog), findsNothing);
     await unmount(t, rig);
   });
