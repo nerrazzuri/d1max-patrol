@@ -410,3 +410,27 @@ async def test_暂停时喊挂起也说清楚为什么不行(跑起来的引擎)
     assert eng.state is RunState.PAUSED
     assert 拒绝[-1]["reason"] == "正在暂停,现在不能让开腿"
     assert eng.snapshot.reason == "正在暂停,现在不能让开腿"
+
+
+async def test_让开腿之前先把导航停掉(跑起来的引擎, nav):
+    """**这一条正是第 7 卷的靶心。**
+
+    ``app/teleop.py`` 的 ``pulse()`` 写着「任务在跑,先停任务再遥控 ——
+    两边一起动是在抢腿」,而手机遥控唯一被放行的时机,就是引擎进了
+    ``SUSPENDED`` 之后(``yielding``)。也就是说 ``SUSPENDED`` 一到,人的
+    摇杆就开了闸。这时候导航那一路 ``goto`` 要是还挂着,狗还在朝原来那个
+    点位走 —— 遥控发的 ``walk`` 和导航发的速度指令同时压在同一台底盘上,
+    正是那句话说的抢腿,只不过换成了引擎自己去抢。
+
+    **断的是相对量(``> before``),不是 ``>= 1``。** 起跑到这一刻为止流程里
+    已经有过别的 ``stop``,``>= 1`` 是一句恒真的空话(形状 1)。
+
+    **等的是 ``stop_calls`` 涨,不是 ``wait_state(SUSPENDED)``。**
+    停导航排在状态翻页**后面**:等状态的话,这句断言会在 ``_stop_nav_quietly``
+    还没跑到的那一瞬间就跑,红得跟真漏了一模一样。
+    """
+    eng = 跑起来的引擎
+    before = nav.stop_calls
+    await eng.suspend("手机接管:门口有箱子")
+    await until(lambda: nav.stop_calls > before)
+    assert eng.state is RunState.SUSPENDED
