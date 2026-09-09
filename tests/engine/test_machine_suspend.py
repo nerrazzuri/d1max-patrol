@@ -15,7 +15,7 @@ import contextlib
 
 import pytest
 
-from d1max_patrol.backends.base import BatteryEvent, DevicePoseEvent
+from d1max_patrol.backends.base import BatteryEvent, DevicePoseEvent, NavStatusEvent
 from d1max_patrol.engine.archive import read_events
 from d1max_patrol.engine.machine import MissionEngine, RunState
 from d1max_patrol.engine.mission import Policy
@@ -464,3 +464,102 @@ async def test_让开腿之前先把导航停掉(跑起来的引擎, nav):
     await eng.suspend("手机接管:门口有箱子")
     await until(lambda: nav.stop_calls > before)
     assert eng.state is RunState.SUSPENDED
+
+
+# --------------------------------------------------------- 人拍的板 2(2026-09-10)
+#
+# 接管完点继续,按狗当下在不在地图里分两条:不在 —— 直接报错,明说「狗不在
+# 地图里,找不到下一个点」,不猜、不试着走、不静默中止;在 —— 就接着跑下
+# 一个节点,不提示、不二次确认。报错不是中止:引擎留在 SUSPENDED,人还能把
+# 狗牵回地图里再点一次继续。
+
+
+async def test_接管完狗不在地图里点继续会报错(跑起来的引擎, nav):
+    """人拍的板 2:不在地图里 —— 直接报错,不猜、不试着走、不静默中止。"""
+    eng = 跑起来的引擎
+    await eng.suspend("人要接管")
+    await eng.wait_state(RunState.SUSPENDED)
+
+    nav.emit_loc(LocStatus.LOC_LOST)          # 人把狗开出了地图
+    await until(lambda: eng.loc_lost)
+
+    await eng.resume()
+    await until(lambda: "不在地图里" in eng.snapshot.reason)
+    # 状态不许离开 SUSPENDED —— 报错不等于中止,人还能补救
+    assert eng.state is RunState.SUSPENDED
+    assert "找不到下一个点" in eng.snapshot.reason
+
+
+async def test_接管完狗还在地图里点继续就接着跑(跑起来的引擎, nav):
+    """人拍的板 2:在地图里 —— 就接着跑下一个节点,不提示、不二次确认。"""
+    eng = 跑起来的引擎
+    await eng.suspend("人要接管")
+    await eng.wait_state(RunState.SUSPENDED)
+    nav.emit_loc(LocStatus.CONTINUOUS_LOC)
+
+    before = len(nav.goto_calls)
+    await eng.resume()
+    # 不用 wait_state(RUNNING):跑起来的引擎在开跑那一刻就先经过一次
+    # RUNNING,那个状态早就进过 _seen,wait_state 对"已经出现过"的状态会
+    # 立刻返回,根本没让事件循环把 resume 处理掉(同样的坑见前面
+    # test_继续之后挂起快照清掉 的说明)。等一个具体可观察的事实:继续
+    # 之后会重发当前点,也就是 goto_calls 会涨。
+    await until(lambda: len(nav.goto_calls) > before)
+    assert eng.state is RunState.RUNNING
+    assert "不在地图里" not in eng.snapshot.reason     # 没有提示串混进来
+
+
+async def test_报错之后定位回来了还能继续(跑起来的引擎, nav):
+    """报错是可补救的:人把狗牵回地图里,再点继续就该走。"""
+    eng = 跑起来的引擎
+    await eng.suspend("人要接管")
+    await eng.wait_state(RunState.SUSPENDED)
+    nav.emit_loc(LocStatus.LOC_LOST)
+    await until(lambda: eng.loc_lost)
+    await eng.resume()
+    await until(lambda: "不在地图里" in eng.snapshot.reason)
+
+    nav.emit_loc(LocStatus.CONTINUOUS_LOC)
+    await until(lambda: not eng.loc_lost)
+    before = len(nav.goto_calls)
+    await eng.resume()
+    await until(lambda: len(nav.goto_calls) > before)
+    assert eng.state is RunState.RUNNING
+
+
+async def test_挂起理由不被拒绝理由盖掉(跑起来的引擎, nav):
+    """人再看快照要想得起来当初为什么停在这儿。"""
+    eng = 跑起来的引擎
+    await eng.suspend("人要过去挪箱子")
+    await eng.wait_state(RunState.SUSPENDED)
+    nav.emit_loc(LocStatus.LOC_LOST)
+    await until(lambda: eng.loc_lost)
+    await eng.resume()
+    await until(lambda: "不在地图里" in eng.snapshot.reason)
+    assert "人要过去挪箱子" in eng.snapshot.reason
+
+
+async def test_继续之后规划不出路的话跟不在地图里说的不一样(make_engine, nav):
+    """规划失败(被挪到隔断另一侧之类)跟定位丢失不是一回事:定位好好的、
+    狗确实在地图里,只是从这个位置规划不出到下一个点的路,``LOC_LOST``
+    根本不会亮。两句话不该混在一起 —— 现场的人要靠这句话判断"该去找狗"
+    还是"该去看这个点位是不是走不通了"。
+
+    (这条区分是这个任务的实现读法,不是产品拍的板,见 brief 说明。)
+    """
+    nav.on_goto = NEVER
+    engine = make_engine()
+    await engine.start(
+        make_mission(policy=Policy(on_waypoint_failed="abort")), home=_HOME)
+    await until(lambda: nav.goto_calls)
+    await engine.suspend("人来开")
+    await engine.wait_state(RunState.SUSPENDED)
+
+    nav.on_goto = [NavStatusEvent(NavStatus.FAILED)]
+    await engine.resume()
+    await engine.wait_done(timeout_s=5.0)
+
+    assert engine.state is RunState.ABORTED
+    assert "到不了下一个点" in engine.snapshot.reason
+    assert "不在地图里" not in engine.snapshot.reason
+    await engine.aclose()

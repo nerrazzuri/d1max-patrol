@@ -158,6 +158,17 @@ class NavStub(EventEmitter[Event]):
     async def loc_status(self) -> LocStatus:
         return self.loc
 
+    def emit_loc(self, status: LocStatus) -> None:
+        """喂一条定位状态事件,顺带把 ``loc_status()`` 会答的那个值也改了。
+
+        人拍的板 2(2026-09-10)那组测试要模拟"人把狗开出了地图"/"狗还在
+        地图里"——两件事都得两头一致:既要让引擎收到一条
+        ``LocStatusEvent``,也要让之后任何轮询 ``loc_status()`` 的代码
+        看到同一个答案,不然两条真相打起来。
+        """
+        self.loc = status
+        self.emit(LocStatusEvent(status))
+
     async def goto(self, pose: Pose) -> None:
         if self.terminal_holds > 0:
             raise NavBackendError("导航只能在 StandBy 下启动,当前 Succeed")

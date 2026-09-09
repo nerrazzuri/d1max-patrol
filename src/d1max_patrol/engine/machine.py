@@ -262,6 +262,10 @@ class _Live:
     blocked_since: float | None = None
     #: 最近一次收到的位姿。挂起时抄一份进 ``SuspendPoint``。
     last_pose: Pose | None = None
+    #: 最近一次收到的定位状态。挂起期间人可能把狗开出地图,resume 要靠它
+    #: 分岔(人拍的板 2,2026-09-10)。**跟 last_pose 一样是顺手留的底**,
+    #: 不是接管这个事件的处置 —— 处置仍然在 _handle 的规则表那边。
+    last_loc: LocStatus | None = None
     #: 现在挂着的那一份。``_publish`` 每次都从这儿取 —— 快照是重建出来的,
     #: 不从这儿取的话,挂起期间任何一次 publish 都会把它抹掉。
     suspended: SuspendPoint | None = None
@@ -337,6 +341,19 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         词汇,外壳复刻一遍状态表就等于把这条规矩存了两份,而两份迟早不一样。
         """
         return self._state is RunState.SUSPENDED
+
+    @property
+    def loc_lost(self) -> bool:
+        """狗现在不在地图里吗(人拍的板 2,2026-09-10)。
+
+        **做成引擎自己的属性,不让外壳去比枚举**:理由跟 ``yielding`` 一样,
+        "哪个枚举值算丢"是引擎的词汇,外壳复刻一遍就是把规矩存了两份。
+
+        任务 13(返航途中同一条规矩)也读这个属性 —— 公开只读,不是内部
+        细节。
+        """
+        return (self._live is not None
+                and self._live.last_loc is LocStatus.LOC_LOST)
 
     @property
     def form(self) -> Form:
@@ -692,7 +709,12 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     self._live.blocked_since = None
                 if item.status is NavStatus.SUCCEED:
                     return
-                raise _FailWaypoint(f"导航回了 {item.status.value}")
+                # 跟"不知道狗在哪儿"(LOC_LOST)分开说:这里定位是好的、狗
+                # 确实在地图里,只是这一段导航没能走到——可能是规划不出路
+                # (被挪到隔断另一侧之类),也可能是别的原因,厂商这一层只给
+                # 得出"没到"这个事实,不给原因。跟 LOC_LOST 混在一句话里,
+                # 现场的人会分不清"该去找狗"还是"该去看这个点走不通"。
+                raise _FailWaypoint(f"到不了下一个点(导航回了 {item.status.value})")
 
     async def _do_actions(self, wp: MissionWaypoint) -> None:
         for action in wp.actions:
@@ -785,6 +807,9 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             live.last_pose = item.pose
             # 不 return:位姿照样交给规则表 —— 这里只是顺手留一份底,
             # 不是接管这个事件的处置。
+        if isinstance(item, LocStatusEvent):
+            live.last_loc = item.status
+            # 不 return:事件照常交给规则表 —— 这里只是顺手留一份底。
         ruling = rule(item, self._context())
         if ruling.decision is Decision.WAIT and live.blocked_since is None:
             # 记下"从什么时候开始被挡的"。下一条同样的推送进来时,规则表拿这个
@@ -931,6 +956,19 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     if item.kind == "resume":
                         blocked = self._busy_reason()
                         if not blocked:
+                            if self.loc_lost:
+                                # 人拍的板(2026-09-10):不在地图里就直接报错,
+                                # 明说、不猜、不试着走、不静默中止。
+                                #
+                                # **不离开 SUSPENDED**:报错不是中止,人可以把狗
+                                # 牵回地图里再点一次。走 abort 的话这一趟就没了,
+                                # 而人要的恰恰是把它救回来。
+                                deny = "狗不在地图里,找不到下一个点"
+                                self._note("resume_refused", reason=deny)
+                                base = live.suspended.reason if live.suspended else ""
+                                self._publish(f"{base} —— 还不能继续: {deny}"
+                                             if base else f"还不能继续: {deny}")
+                                continue
                             break
                         # **人点「继续」的时候左手很可能还压在摇杆上。** 那一瞬间
                         # 引擎和人同时在给腿下指令 —— add_busy_check 存在的全部
@@ -961,6 +999,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     continue
                 if isinstance(item, BatteryEvent):
                     live.battery_pct = item.percent
+                if isinstance(item, LocStatusEvent):
+                    # 这条循环是 SUSPENDED 自己的等待,不经过 _handle —— 跟
+                    # 位姿/电量一样顺手留一份底,好让上面 resume 分支的
+                    # loc_lost 检查有东西可查(人拍的板 2,2026-09-10)。
+                    live.last_loc = item.status
                 self._note("suspended_event", event=type(item).__name__)
         finally:
             # ``finally`` 而不是分别在 abort / resume 两条路径上各清一次:
