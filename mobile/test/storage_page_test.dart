@@ -1,0 +1,379 @@
+/// 盘况屏。**只读，不清盘。**
+///
+/// `POST /api/storage/sweep` 那条路的另一头是 `shutil.rmtree`，它的安全前提
+/// 是「人先看名单，再点第二下」。在手机上、戴着手套、站在现场，那第二下点得
+/// 太容易了。
+///
+/// **起的是真的 `HttpServer`（`support/fake_dog.dart`），不是 mock。**
+/// 这一屏最硬的那条守备是「从头到尾没向狗发出过一个 POST」—— 那条只有在
+/// 真的网络层上才数得出来。盯按钮类型（`ButtonStyleButton.onPressed`）的那条
+/// 留着当第二层：将来谁把清盘做成 `IconButton`，它照样绿。
+///
+/// **所有数字断言一律精确匹配。** `find.textContaining('72')` 收得下 `172`、
+/// `720`、`0.72` —— 这个毛病这一卷已经抓过两次。
+///
+/// **报文一律从 `test/fixtures/storage.json` 改出来**，不手搓 JSON 字面量：
+/// 那份夹具是 `tests/app/test_wire_fixtures.py` 从真的路由处理器生成的
+/// （挂账 11）。手搓的那份跟狗那头分家的那天，两边都是绿的。
+///
+/// **标识符全是 ASCII**：这台机器上的 Dart SDK 不接受非 ASCII 标识符，
+/// 中文只留在注释、docstring 和字符串字面量里。
+library;
+
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:d1max_patrol/model/robot.dart';
+import 'package:d1max_patrol/net/patrol_client.dart';
+import 'package:d1max_patrol/net/wire.dart';
+import 'package:d1max_patrol/ui/storage_page.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fake_dog.dart';
+import 'support/pump.dart';
+
+/// 一次挂好的现场：一只假狗、一个解过锁的客户端。
+class Rig {
+  Rig(this.dog, this.client);
+
+  final FakeDog dog;
+  final PatrolClient client;
+
+  /// 这一屏问了几次盘况。**refresh 真的又问了一遍**靠它钉住。
+  int get asks => dog.received
+      .where((FakeCall r) => r.method == 'GET' && r.path == '/api/storage')
+      .length;
+
+  /// 这一屏往狗上发了几个 POST。**必须一直是 0。**
+  ///
+  /// 解锁那两条在 [mount] 里已经从账上抹掉了，所以这个数只算这一屏自己的。
+  int get posts =>
+      dog.received.where((FakeCall r) => r.method == 'POST').length;
+}
+
+/// 照着 `test/fixtures/storage.json` 改一份盘况报文出来。
+///
+/// **夹具里 `forecast.runs` 是空数组**（生成它的那台狗上一趟归档也没有），
+/// 所以「要过期的那几趟列得出来」只能自己造 `runs` 喂进去。
+Map<String, dynamic> storageWire({
+  bool? noticeWritten,
+  String? noticeDetail,
+  String? backupLevel,
+  String? backupDetail,
+  String? forecastDetail,
+  int? bytesAtRisk,
+  List<Map<String, dynamic>>? runs,
+}) {
+  final Map<String, dynamic> m =
+      jsonDecode(File('test/fixtures/storage.json').readAsStringSync())
+          as Map<String, dynamic>;
+  final Map<String, dynamic> fc =
+      Map<String, dynamic>.from(m['forecast'] as Map<String, dynamic>);
+  final Map<String, dynamic> bk =
+      Map<String, dynamic>.from(m['backup'] as Map<String, dynamic>);
+  if (forecastDetail != null) fc['detail'] = forecastDetail;
+  if (bytesAtRisk != null) fc['bytes_at_risk'] = bytesAtRisk;
+  if (runs != null) fc['runs'] = runs;
+  if (backupLevel != null) bk['level'] = backupLevel;
+  if (backupDetail != null) bk['detail'] = backupDetail;
+  return <String, dynamic>{
+    ...m,
+    'notice_written': ?noticeWritten,
+    'notice_detail': ?noticeDetail,
+    'forecast': fc,
+    'backup': bk,
+  };
+}
+
+/// 一趟归档在 wire 上的样子（`engine/retention.py` 的 `RunInfo.to_wire()`）。
+///
+/// **`started_at` 是生戳**（`%Y%m%dT%H%M%SZ`），不是 `2026-08-30`。
+Map<String, dynamic> runWire({
+  String path = '/data/runs/20260830T041500Z',
+  String mission = '巡检A',
+  String startedAt = '20260830T041500Z',
+  int retentionDays = 30,
+  int sizeBytes = 3000000000,
+}) =>
+    <String, dynamic>{
+      'path': path,
+      'mission': mission,
+      'started_at': startedAt,
+      'retention_days': retentionDays,
+      'size_bytes': sizeBytes,
+      'settled': true,
+      'uploaded': false,
+      'exported': false,
+    };
+
+/// 起一只假狗、解一次锁、把盘况屏挂上去。
+///
+/// `unlock` 是两步（`GET /api/auth/challenge` 拿 nonce，再 `POST /api/auth`
+/// 交证明），两条路径都得先备好回复。而且它是真的网络 I/O：假时钟上推不动，
+/// 得进 `runAsync`。
+Future<Rig> mount(WidgetTester t,
+    {Map<String, dynamic>? storage, int? status}) async {
+  final FakeDog dog = FakeDog();
+  await t.runAsync(dog.start);
+  dog.replies['/api/auth/challenge'] = <String, dynamic>{'nonce': 'n0nce'};
+  dog.replies['/api/auth'] = <String, dynamic>{
+    'token': 'tok-abc',
+    'operator': '张三',
+    'operator_verified': false,
+    'readonly': false,
+  };
+  dog.replies['/api/storage'] = storage ?? storageWire();
+  if (status != null) dog.statusCodes['/api/storage'] = status;
+  final PatrolClient c = PatrolClient(dog.baseUrl);
+  await t.runAsync(() => c.unlock('864209', operator: '张三'));
+  // **把解锁那两条从账上抹掉。** `POST /api/auth` 是解锁发的，不是这一屏发的；
+  // 不抹的话「这一屏一个 POST 都没有」那条永远数出 1，只好放宽成「不超过 1」，
+  // 而放宽之后它就再也拦不住真的第一个清盘请求。
+  dog.received.clear();
+  await t.pumpWidget(MaterialApp(
+      home: StoragePage(
+          client: c, robot: const Robot(sn: 'C40221', name: '三号'))));
+  await pumpUntil(
+      t,
+      () =>
+          find.byKey(StoragePage.capacityKey).evaluate().isNotEmpty ||
+          find.byKey(StoragePage.errorKey).evaluate().isNotEmpty,
+      '盘况问回来（或者报出读不到）',
+      step: const Duration(milliseconds: 20));
+  return Rig(dog, c);
+}
+
+/// 收摊。**客户端也要关**：一条没收的 `HttpClient` 会留着自己那个 15 秒空闲
+/// 计时器，`flutter_test` 的 `!timersPending` 会当场把测试打红。
+Future<void> unmount(WidgetTester t, Rig rig) async {
+  await teardown(t, null);
+  rig.client.close();
+  await t.pump();
+  await t.runAsync(rig.dog.stop);
+  expect(rig.dog.errors, isEmpty, reason: '假狗自己抛了：查的是假狗，不是被测代码');
+}
+
+/// 挂一次、把备份盘那句话的颜色读出来、收摊。
+///
+/// 三档要互相比颜色，而每一档都得是自己挂一次的结果 —— 拿被测代码之外
+/// 另算一份「应该是什么颜色」来比，比的是那份副本，不是屏上真画出来的东西。
+Future<Color?> backupColorFor(WidgetTester t, String level) async {
+  final Rig rig = await mount(t,
+      storage: storageWire(backupLevel: level, backupDetail: '这一档的原话'));
+  final Color? c =
+      t.widget<Text>(find.byKey(StoragePage.backupKey)).style?.color;
+  await unmount(t, rig);
+  return c;
+}
+
+void main() {
+  // 摘掉 `flutter_test` 那个「所有请求都回 400」的 HttpOverrides：这个文件
+  // 要证的正是「这一屏只发 GET、一个 POST 都没发」。
+  useRealHttp();
+
+  // ------------------------------------------------------------ 容量
+
+  testWidgets('盘用了多少要看得见,数字精确对得上', (WidgetTester t) async {
+    // 夹具是 420000000000 / 1000000000000，ratio 0.42。
+    // **精确匹配**：`textContaining('42')` 收得下 `142`、`420`、`0.42`。
+    final Rig rig = await mount(t);
+    expect(find.text('已用 42%（420.0 GB / 1000.0 GB）'), findsOneWidget);
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------------------- 预告落没落盘（两个局面）
+
+  testWidgets('预告没落盘要顶到脸上,而且顶在最上面', (WidgetTester t) async {
+    // **这一条是这块屏存在的理由。** `notice_written == false` 的意思是盘满了
+    // 或者被挂成只读 —— 「再过几天开始删除」那句话说了不算，钟没开始走。
+    // 不显示的话，人看到的是一块一切正常的屏，而归档会无声地堆到盘炸。
+    final Rig rig = await mount(t,
+        storage: storageWire(
+            noticeWritten: false, noticeDetail: '预告没能记到盘上(只读文件系统)'));
+    expect(find.text('预告没能记到盘上(只读文件系统)'), findsOneWidget);
+    // 画出来还不够 —— 排在容量那一行下面的话，它就是一条要往下滚才看得见的
+    // 提示，而这块屏上唯一「必须现在就看见」的就是它。
+    expect(t.getTopLeft(find.byKey(StoragePage.noticeKey)).dy,
+        lessThan(t.getTopLeft(find.byKey(StoragePage.capacityKey)).dy),
+        reason: '预告没落盘那块卡片要顶在容量上面');
+    await unmount(t, rig);
+  });
+
+  testWidgets('预告落了盘就不挂那块红卡片', (WidgetTester t) async {
+    // 另一个局面。两个局面都得跑到 —— 全都跑在 `notice_written == false` 上
+    // 的话，「落了盘就别吓人」这一支一次都没执行过。
+    final Rig rig = await mount(t);
+    expect(find.byKey(StoragePage.capacityKey), findsOneWidget,
+        reason: '屏真的画出来了，下面那条 findsNothing 才不是空绿');
+    expect(find.byKey(StoragePage.noticeKey), findsNothing);
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------------------------- 备份盘那三档
+
+  testWidgets('备份盘 ok 那一档的原话上屏', (WidgetTester t) async {
+    final Rig rig = await mount(t,
+        storage: storageWire(
+            backupLevel: backupLevelOk, backupDetail: '镜像盘跟得上,落后 0 趟'));
+    expect(find.text('镜像盘跟得上,落后 0 趟'), findsOneWidget);
+    await unmount(t, rig);
+  });
+
+  testWidgets('备份盘 neutral 那一档的原话上屏', (WidgetTester t) async {
+    // 夹具里就是这一档（`"level": "neutral"`）—— 没配备份盘是出厂常态。
+    final Rig rig = await mount(t);
+    expect(find.text('未配备份盘。归档现在只有一份,存在这台狗自己的盘上'),
+        findsOneWidget);
+    await unmount(t, rig);
+  });
+
+  testWidgets('备份盘 push 那一档的原话上屏', (WidgetTester t) async {
+    final Rig rig = await mount(t,
+        storage: storageWire(
+            backupLevel: backupLevelPush, backupDetail: '镜像盘落后 12 趟'));
+    expect(find.text('镜像盘落后 12 趟'), findsOneWidget);
+    await unmount(t, rig);
+  });
+
+  testWidgets('neutral 不许用警示色:跟 push 不同,跟 ok 一样', (WidgetTester t) async {
+    // `engine/backup.py` 的 `backup_notice` 写着：没配镜像盘不许常年报红
+    // （spec §7.6）—— 常年报警的东西等于没报警，现场的人会先学会忽略它，
+    // 然后连真的那次也一起忽略。`NEUTRAL` 单独立一档就是为了这件事。
+    // 手机端把它画成黄的或红的，每一台没插镜像盘的狗从此常年顶着警示色。
+    final Color? ok = await backupColorFor(t, backupLevelOk);
+    final Color? neutral = await backupColorFor(t, backupLevelNeutral);
+    final Color? push = await backupColorFor(t, backupLevelPush);
+    expect(push, isNotNull, reason: '颜色真的读出来了，下面两条才不是 null == null');
+    expect(neutral, isNot(push), reason: 'neutral 跟 push 一个颜色 = 常年报红');
+    expect(neutral, ok, reason: 'neutral 跟 ok 一样是中性色');
+    // `warn` 是狗从来不会发的值：`NoticeLevel` 只有 ok/neutral/push 三档。
+    expect(<String>[backupLevelOk, backupLevelNeutral, backupLevelPush],
+        isNot(contains('warn')));
+  });
+
+  testWidgets('认不出的档不许崩,按中性处理', (WidgetTester t) async {
+    // 狗以后加了新档，手机这头不能白屏，更不能凭一个读不懂的字符串把屏染红。
+    final Color? unknown = await backupColorFor(t, 'huh');
+    final Color? neutral = await backupColorFor(t, backupLevelNeutral);
+    expect(unknown, isNotNull);
+    expect(unknown, neutral);
+  });
+
+  // ------------------------------------------------------- 预告那一段
+
+  testWidgets('预告那句话原样上屏,bytes_at_risk 为 0 时不挂那一行',
+      (WidgetTester t) async {
+    final Rig rig = await mount(t);
+    // 夹具里那句原话。**手机不重新组织** —— 重新组织的版本迟早跟狗分家。
+    expect(find.text('盘 42%,7 天内没有归档到期。'), findsOneWidget);
+    expect(find.byKey(StoragePage.atRiskKey), findsNothing,
+        reason: '一个字节都没到风险里，不该凭空写一句「其中 0.0 GB 即将到期」');
+    await unmount(t, rig);
+  });
+
+  testWidgets('有东西要到期时,其中多少即将到期写出来', (WidgetTester t) async {
+    // 另一个局面（夹具里 `bytes_at_risk` 是 0，这一支夹具驱动不到）。
+    final Rig rig = await mount(t,
+        storage: storageWire(
+            forecastDetail: '再过 3 天开始删最早的 2 趟。',
+            bytesAtRisk: 12000000000));
+    expect(find.text('再过 3 天开始删最早的 2 趟。'), findsOneWidget);
+    expect(find.text('其中 12.0 GB 即将到期'), findsOneWidget);
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------------------------- 名单那几行
+
+  testWidgets('要过期的那几趟列得出来,生戳不许原样上屏', (WidgetTester t) async {
+    // 狗那头写的是 `engine/archive.py` 的 `STAMP_FMT`：`20260830T041500Z`。
+    // 那是给目录名排序用的，不是给人读的。
+    final Rig rig = await mount(t,
+        storage: storageWire(runs: <Map<String, dynamic>>[
+          runWire(),
+          runWire(
+              path: '/data/runs/20260901T230000Z',
+              mission: '巡检B',
+              startedAt: '20260901T230000Z'),
+        ]));
+    expect(find.text('2026-08-30 04:15 UTC 巡检A'), findsOneWidget);
+    expect(find.text('2026-09-01 23:00 UTC 巡检B'), findsOneWidget);
+    expect(find.textContaining('20260830T041500Z'), findsNothing,
+        reason: '生戳不是给人读的');
+    await unmount(t, rig);
+  });
+
+  testWidgets('行右边只写保留期,不许冒充「还剩几天」', (WidgetTester t) async {
+    // wire 上压根没有「还剩几天」（`RunInfo.days_left()` 没进 `to_wire()`）。
+    // 在一份标着「预告名单」的表里写「保留 30 天」，百分之百会被读成
+    // 「还剩 30 天」—— 而真正动手的时刻是 `delete_starts_at()` 算的
+    // `max(到期日, 首次预告 + 预告期)`，能差出十几天。
+    final Rig rig = await mount(t,
+        storage: storageWire(
+            forecastDetail: '盘 42%,7 天内没有归档到期。',
+            runs: <Map<String, dynamic>>[runWire(retentionDays: 30)]));
+    expect(find.text('保留期 30 天'), findsOneWidget,
+        reason: '这一行真的画出来了，下面那两条 findsNothing 才不是空绿');
+    expect(find.textContaining('还剩'), findsNothing);
+    expect(find.textContaining('即将删除'), findsNothing);
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------------------------- 只读那道守备
+
+  testWidgets('这一屏从头到尾没向狗发过 POST,点过刷新也没有', (WidgetTester t) async {
+    // **最硬的锚在网络层。** 盯 `ButtonStyleButton.onPressed == null` 的那条
+    // 拦不住把清盘做成 `IconButton` 的人；这一条拦得住。
+    final Rig rig = await mount(t);
+    expect(rig.asks, 1, reason: '这一屏真的问过狗 —— 否则下面数 POST 数的是一片空白');
+    await t.tap(find.byKey(StoragePage.refreshKey));
+    await pumpUntil(t, () => rig.asks >= 2, '刷新真的又问了一次',
+        step: const Duration(milliseconds: 20));
+    expect(rig.asks, 2, reason: '刷新是一次性的，不是起了个轮询');
+    expect(rig.posts, 0,
+        reason: '这一卷只读不删。清盘那条路的另一头是 shutil.rmtree');
+    await unmount(t, rig);
+  });
+
+  testWidgets('这块屏上一个会改狗的按钮都没有', (WidgetTester t) async {
+    // 第二层。真加了别的按钮，这条会红，那时再决定它该不该在。
+    final Rig rig = await mount(t);
+    expect(find.byKey(StoragePage.capacityKey), findsOneWidget,
+        reason: '屏真的画出来了，下面这一圈才不是在空列表上转');
+    for (final ButtonStyleButton b
+        in t.widgetList<ButtonStyleButton>(find.byType(ButtonStyleButton))) {
+      expect(b.onPressed, isNull,
+          reason: '这一卷只读不删。清盘那条路的另一头是 rmtree');
+    }
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------------------------- 狗不回话
+
+  testWidgets('狗不回话时说人话,异常原文不上屏', (WidgetTester t) async {
+    final Rig rig = await mount(t, status: 500);
+    expect(find.text(storageLoadFailed), findsOneWidget);
+    expect(find.textContaining('读不到盘况'), findsOneWidget);
+    // `PatrolError` 那份原文是「狗回了 500」。它既不告诉人下一步该干什么，
+    // 又会把内部细节推到客户面前。
+    expect(find.textContaining('500'), findsNothing);
+    expect(find.byKey(StoragePage.refreshKey), findsOneWidget,
+        reason: '出错这一屏也得给得出再试一次的路');
+    await unmount(t, rig);
+  });
+
+  testWidgets('读不到之后点刷新,狗回话了就画出来', (WidgetTester t) async {
+    // 出错屏上那个刷新真的能把人救回来 —— 不然它只是个装饰。
+    final Rig rig = await mount(t, status: 500);
+    expect(find.byKey(StoragePage.errorKey), findsOneWidget);
+    rig.dog.statusCodes.remove('/api/storage');
+    await t.tap(find.byKey(StoragePage.refreshKey));
+    await pumpUntil(
+        t,
+        () => find.byKey(StoragePage.capacityKey).evaluate().isNotEmpty,
+        '再问一次之后盘况画出来了',
+        step: const Duration(milliseconds: 20));
+    expect(find.byKey(StoragePage.errorKey), findsNothing);
+    await unmount(t, rig);
+  });
+}
