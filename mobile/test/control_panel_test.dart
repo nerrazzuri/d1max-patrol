@@ -256,6 +256,34 @@ int graceSeconds(WidgetTester t) {
   return int.parse(m.group(1)!);
 }
 
+/// **某个话槽里的那句话**（空槽读出空串）。
+///
+/// 屏上那三行长得一模一样，`find.text(...)` 只答得出「这句话上没上屏」，
+/// 答不出「它落进了哪个槽」—— 复审把 `_act()` 的失败改写进 `_syncTrouble`，
+/// 全仓 155 条一条没红。三个槽 × 两个方向一共六种写错的方式，一条条补测试
+/// 是补不完的；按 key 读才是由构造保证。
+///
+/// 空槽也占着自己的 key（画成带 key 的 `SizedBox.shrink()`），所以「这一格
+/// 是空的」跟「这一格里是那句话」是同一种断法。
+String troubleIn(WidgetTester t, Key slot) {
+  final Finder f =
+      find.descendant(of: find.byKey(slot), matching: find.byType(Text));
+  if (f.evaluate().isEmpty) return '';
+  return t.widget<Text>(f.first).data ?? '';
+}
+
+/// 三个槽一次读完。**每条测试都把三格全断一遍** —— 只断自己那一格的话，
+/// 「话写对了地方」证得了，「话没同时漏进别的地方」证不了。
+void expectTroubles(WidgetTester t,
+    {String sync = '', String beat = '', String act = ''}) {
+  expect(troubleIn(t, ControlPanel.syncTroubleKey), sync,
+      reason: '校准那一格里该是「$sync」');
+  expect(troubleIn(t, ControlPanel.beatTroubleKey), beat,
+      reason: '心跳那一格里该是「$beat」');
+  expect(troubleIn(t, ControlPanel.actTroubleKey), act,
+      reason: '按钮那一格里该是「$act」');
+}
+
 void main() {
   // 摘掉 `flutter_test` 那个「所有请求都回 400」的 HttpOverrides：这个文件
   // 要证的正是「问了狗几次、问的是哪条路」。
@@ -305,14 +333,36 @@ void main() {
     /// - tick 调成 250 毫秒 —— 这 1 秒里跳 **4** 次。tick 真去问狗的话多出
     ///   4 次，而「校准周期被人配短了」那种假象最多多出 1 次：**两种毛病红出
     ///   来的数不一样**，不至于像以前那样一句话读不出是哪件事。
+    ///
+    /// 这对数是靠自洽断言钉住的，见下面第一句 —— 复审只把 `tickPeriod` 改回
+    /// 1 秒（生产代码一个字没动），这条就跟真刀红成一模一样，而且 reason 里
+    /// 那句「跳了 4 次」当场变成假话。
+    const Duration window = Duration(seconds: 1);
+    const Duration tick = Duration(milliseconds: 250);
+    const Duration farAway = Duration(seconds: 60);
+    const int ticksInWindow = 4;
+    expect(window.inMilliseconds ~/ tick.inMilliseconds, ticksInWindow,
+        reason: '这条的分辨力全靠「tick 在窗口里跳 $ticksInWindow 次」：'
+            '把 tickPeriod 调回 1 秒，它红出来的数就跟「校准被配短了」一模一样，'
+            'reason 里那句「跳了 4 次」还会变成假话');
+    expect(farAway, greaterThan(window),
+        reason: '校准得挪到窗口外面去，不然窗口里多出来的那次说不清是谁发的');
     final Rig rig = await mount(t, mineHolds(expiresInMs: 30000),
-        syncPeriod: const Duration(seconds: 60),
-        tickPeriod: const Duration(milliseconds: 250));
+        syncPeriod: farAway, tickPeriod: tick);
     final int asked = rig.asked;
-    await t.pump(const Duration(seconds: 1));
+    final int before = remainSeconds(t);
+    await t.pump(window);
     expect(rig.asked, asked,
-        reason: '这一秒里 tick 跳了 4 次，而 /api/control 多出了 ${rig.asked - asked} 次：'
+        reason: '这一秒里 tick 跳了 $ticksInWindow 次，'
+            '而 /api/control 多出了 ${rig.asked - asked} 次：'
             '每一次都是一个往返，在热点上跟视频抢带宽');
+    // **先证 tick 真的跳过。** 不证的话这条是空绿的：把 tick 定时器整条删掉，
+    // 「没多问狗」在一个「什么都不发生」的世界里当然成立（复审的 CUT-R1）。
+    // 窗口正好 1 秒、`_secondsOf` 是向上取整，所以这个差必须**正好是 1**。
+    expect(before - remainSeconds(t), 1,
+        reason: 'tick 在这一秒里一共把倒计时推了 ${before - remainSeconds(t)} 秒：'
+            '推 0 秒就是 tick 根本没跳（定时器没了？）—— 不跳的东西当然不会去'
+            '问狗，上面那句「没多问」就是空绿的');
     expect(rig.dog.received.where((FakeCall r) => r.path == '/api/control'),
         isNotEmpty,
         reason: '一次都没真的问过狗的话，上面那句「没多问」是空绿的');
@@ -353,8 +403,15 @@ void main() {
     /// §6.3 / `auth.OPERATOR_NOTICE`：**狗记下名字但不核实。**
     /// 光写「李四」等于替一个没验过的名字背书；真出了事，现场只会指着这块屏
     /// 说「上面写着是李四」。
+    ///
+    /// **断的是常量本身，不是抄一份「未核实」的字面量。** 抄字面量的那天起
+    /// 改措辞在测试里就不跟着走了；更坏的是 [unverifiedMark]（挂在名字后面）
+    /// 和 [nameNotCheckedMark]（屏上没名字时挂的）原本只差一个字，子串断言
+    /// 会把两个标混着匹配 —— 那时候「findsNothing」那种方向直接变成永真。
     final Rig rig = await mount(t, otherHolds(operator: '李四'));
-    expect(find.textContaining('未核实'), findsOneWidget);
+    expect(find.text(unverifiedMark), findsOneWidget);
+    expect(find.text(nameNotCheckedMark), findsNothing,
+        reason: '屏上有名字，挂的该是名字后面那个短标，不是「屏上没名字」那个');
     await unmount(t, rig);
   });
 
@@ -458,14 +515,20 @@ void main() {
   testWidgets('狗回错的时候屏上是人话,异常原文只进日志', (WidgetTester t) async {
     /// 跟 `teleop_page.dart` 的 `_human` 一个规矩：**异常原文绝不上屏。**
     /// 屏幕上要的是「该做什么」，Dart 的异常文本回答不了这个。
+    ///
+    /// **顺带钉住方向**：校准那条路的话只许落进校准那一格。三行长得一模一样，
+    /// 按 key 断才分得出来（见 [troubleIn]）。
     final Rig rig = await mount(t, mineHolds());
     rig.dog.statusCodes['/api/control'] = 500;
     rig.dog.replies['/api/control'] = <String, dynamic>{
       'error': 'ZeroDivisionError',
       'detail': 'Traceback (most recent call last)',
     };
-    await pumpUntil(t, () => find.textContaining('没问到').evaluate().isNotEmpty,
+    await pumpUntil(
+        t,
+        () => troubleIn(t, ControlPanel.syncTroubleKey).isNotEmpty,
         '出错之后那句人话');
+    expectTroubles(t, sync: syncTroubleHint);
     expect(find.textContaining('Traceback'), findsNothing);
     expect(find.textContaining('ZeroDivisionError'), findsNothing);
     await unmount(t, rig);
@@ -509,11 +572,28 @@ void main() {
     /// 面板**没有**拿到 `syncPeriod`（真机上就是这条路），周期只能从狗发的
     /// `heartbeat_ms` 算：30000 → 三分之一是 10 秒（钳在上限）。
     /// 硬编 3 秒的话，这 4 秒的窗口里会多出一次 `/api/control`。
-    final Rig rig = await mount(t, withHeartbeatMs(mineHolds(), 30000));
+    ///
+    /// **「不该再问」是个否定命题**：校准定时器整条删掉它照样成立（复审的
+    /// CUT-R5 就是这么把它照绿的）。所以窗口之后还得再等一个整周期，证明
+    /// 校准**确实还活着、而且就在狗说的那个点上到点** —— 下界和上界一起断，
+    /// 这条才守得住「听狗的」这件事。
+    const int heartbeatMs = 30000;
+    const Duration window = Duration(seconds: 4);
+    final Duration period = ControlPanel.syncPeriodFor(heartbeatMs);
+    expect(period, greaterThan(window),
+        reason: '窗口得落在一个周期之内，不然「这 4 秒里不该再问」自己就不成立');
+    expect(defaultSyncPeriod, lessThan(window),
+        reason: '窗口还得比硬编的回落值长，不然硬编 3 秒也能悄悄绿过去');
+    final Rig rig = await mount(t, withHeartbeatMs(mineHolds(), heartbeatMs));
     final int asked = rig.asked;
-    await t.pump(const Duration(seconds: 4));
+    await t.pump(window);
     expect(rig.asked, asked,
         reason: '狗说 10 秒续一次，手机还按 3 秒问 —— 周期是硬编的，没听狗的');
+    await t.pump(period);
+    expect(rig.asked, greaterThan(asked),
+        reason: '又过了一整个周期（一共 ${(window + period).inSeconds} 秒）还是一次没问：'
+            '校准根本没在跑 —— 那上面那句「不该再问」是在一个「压根不会问」的'
+            '世界里成立的，是空绿的');
     await unmount(t, rig);
   });
 
@@ -545,15 +625,21 @@ void main() {
     /// 到尾没推过杆，根本没碰到「成功那一下会不会抹掉别人的话」。
     final Rig rig = await mount(t, mineHolds());
     rig.dog.statusCodes['/api/control/heartbeat'] = 500;
-    await pumpUntil(t, () => find.text(renewTroubleHint).evaluate().isNotEmpty,
+    await pumpUntil(
+        t,
+        () => troubleIn(t, ControlPanel.beatTroubleKey).isNotEmpty,
         '心跳失败之后那句「租约没续上」');
+    // 心跳那条路的话只许落进心跳那一格。
+    expectTroubles(t, beat: renewTroubleHint);
     final int gotBefore = rig.gets;
     int missing = 0;
     for (int i = 0; i < 40; i++) {
       await t.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 5)));
       await t.pump(const Duration(milliseconds: 200));
-      if (find.text(renewTroubleHint).evaluate().isEmpty) missing++;
+      if (troubleIn(t, ControlPanel.beatTroubleKey) != renewTroubleHint) {
+        missing++;
+      }
     }
     // **先证这一段里真的有成功的校准**，否则「没被抹掉」是空绿的。
     expect(rig.gets - gotBefore, greaterThanOrEqualTo(2),
@@ -565,6 +651,101 @@ void main() {
     await unmount(t, rig);
   });
 
+  testWidgets('按钮那句话落在按钮那一格,不许被后面成功的校准抹掉',
+      (WidgetTester t) async {
+    /// **B-1**：三格分离上一轮只守住了「校准别抹心跳」一个方向。把 `_act()`
+    /// 的失败改写进 `_syncTrouble`，全仓 155 条一条不红 —— 而后果正是 Task 11
+    /// 的 R-1 在按钮方向上原样复发：人点了「请求接手」，狗回了个错，屏上写出
+    /// 那句话，三秒后一次**成功的后台校准**把它悄悄抹掉；人只看见自己点了一下、
+    /// 什么都没发生。
+    ///
+    /// 这条同时断两件事，缺一件都不够：
+    /// - **落在哪一格**（按 key 断，三格全断一遍）—— 六个方向由构造保证；
+    /// - **活不活得过一次成功的校准** —— 时间上的那一维。
+    final Rig rig = await mount(t, otherHolds());
+    rig.dog.statusCodes['/api/control/takeover'] = 500;
+    await t.tap(find.byKey(ControlPanel.takeoverKey));
+    await pumpUntil(
+        t,
+        () => troubleIn(t, ControlPanel.actTroubleKey).isNotEmpty,
+        '「请求接手」失败之后那句话');
+    expectTroubles(t, act: takeoverFailedHint);
+    final int gotBefore = rig.gets;
+    int missing = 0;
+    for (int i = 0; i < 40; i++) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await t.pump(const Duration(milliseconds: 200));
+      if (troubleIn(t, ControlPanel.actTroubleKey) != takeoverFailedHint) {
+        missing++;
+      }
+    }
+    // **先证这一段里真的有成功的校准**，否则「没被抹掉」是空绿的。
+    expect(rig.gets - gotBefore, greaterThanOrEqualTo(2),
+        reason: '这 8 秒里狗只被问到了 ${rig.gets - gotBefore} 次：'
+            '那这条根本没碰到「一次成功的校准会不会抹掉按钮那句」');
+    expect(missing, 0,
+        reason: '按钮那句话在 40 次采样里没了 $missing 次：'
+            '校准成功那一下把别人写的话也清了');
+    await unmount(t, rig);
+  });
+
+  testWidgets('局面一换,按钮那句过时的话就收掉', (WidgetTester t) async {
+    /// 「只有下一次按按钮才清」太死：持有者松手之后，面板已经画成「没人拿着」、
+    /// 「请求接手」那个按钮也没了，屏上却还留着「控制权在别人手里：用「请求
+    /// 接手」…」—— 一句既过时又跟屏上其余的字自相矛盾的指示。
+    final Rig rig = await mount(t, otherHolds());
+    rig.dog.statusCodes['/api/control/takeover'] = 500;
+    await t.tap(find.byKey(ControlPanel.takeoverKey));
+    await pumpUntil(
+        t,
+        () => troubleIn(t, ControlPanel.actTroubleKey).isNotEmpty,
+        '「请求接手」失败之后那句话');
+    // 对方松手了：下一次校准把局面换成「没人拿着」。
+    rig.dog.replies['/api/control'] = nobodyHolds();
+    await pumpUntil(t, () => find.byKey(ControlPanel.acquireKey).evaluate().isNotEmpty,
+        '局面换成「没人拿着」');
+    expectTroubles(t);
+    await unmount(t, rig);
+  });
+
+  testWidgets('按按钮不许把校准和续期往后推', (WidgetTester t) async {
+    /// **SF-3**：`_apply()` 是 `_sync()`、`_beat()` 和 `_act()` 三条路共用的。
+    /// 每次 `_apply()` 都把校准定时器 `cancel()` 再 `periodic()` 的话，定时器
+    /// 永远从零重新数 —— 人按得比周期勤，校准就永远轮不到；而续期只由一次
+    /// **成功的校准**触发，于是租约续期跟着一起被推后，按得够勤就永远续不上，
+    /// 人正开着狗，杆忽然灰了。
+    const Duration period = Duration(seconds: 3);
+    const Duration between = Duration(seconds: 1);
+    const int taps = 12;
+    expect(between, lessThan(period),
+        reason: '按钮得按得比校准周期勤，不然「往后推」这件事根本发生不了');
+    final Rig rig = await mount(t, mineHolds(), syncPeriod: period);
+    // 交还回的还是「在我手上」：这条盯的是定时器，不是局面变化。
+    rig.dog.replies['/api/control/release'] = mineHolds();
+    final int asked = rig.asked;
+    final int beat = rig.beats;
+    for (int i = 0; i < taps; i++) {
+      await t.tap(find.byKey(ControlPanel.releaseKey));
+      await pumpUntil(
+          t,
+          () =>
+              rig.posted.where((String p) => p == '/api/control/release').length >
+              i,
+          '第 ${i + 1} 次交还回到面板');
+      await t.pump(between);
+    }
+    final int expected = (taps * between.inSeconds) ~/ period.inSeconds;
+    expect(rig.asked - asked, greaterThanOrEqualTo(expected - 1),
+        reason: '这 ${taps * between.inSeconds} 秒里校准只到点了 ${rig.asked - asked} 次'
+            '（$period 一次该有 $expected 次左右）：每按一次按钮就把定时器从零重起，'
+            '人按得比周期勤，校准和续期就永远轮不到');
+    expect(rig.beats, greaterThan(beat),
+        reason: '这一段里一次都没续上租约：续期只由成功的校准触发，校准被推后，'
+            '租约就跟着一起掉');
+    await unmount(t, rig);
+  });
+
   // ------------------------------------------------------ 那句 notice 的入口
 
   testWidgets('没人拿着的时候,那句 notice 也够得着', (WidgetTester t) async {
@@ -573,14 +754,17 @@ void main() {
     /// 不核实的名字写进狗的账上的时刻：那一刻看不到这句话，等于它在最该被
     /// 读到的时候藏着。
     final Rig rig = await mount(t, nobodyHolds());
-    expect(find.textContaining('未核实'), findsNothing,
-        reason: '屏上一个名字都没有，还挂着「未核实」的话，'
+    expect(find.text(unverifiedMark), findsNothing,
+        reason: '屏上一个名字都没有，还挂着名字后面那个短标的话，'
             '标的是一个没显示出来的名字');
+    expect(find.text(nameNotCheckedMark), findsOneWidget,
+        reason: '入口没了的话，上面那句 findsNothing 是空绿的：'
+            '屏上本来就什么标都没有');
     await t.tap(find.byKey(ControlPanel.noticeKey));
     await t.pump();
     expect(find.byKey(ControlPanel.noticeFullKey), findsOneWidget);
-    expect(find.textContaining('狗不核实'), findsOneWidget,
-        reason: '狗发的那句话得原样在这一屏上看得到');
+    expect(find.text(nobodyHolds()['notice'] as String), findsOneWidget,
+        reason: '狗发的那句话（夹具里那一句）得原样在这一屏上看得到');
     await unmount(t, rig);
   });
 
@@ -595,7 +779,9 @@ void main() {
     expect(find.textContaining('张三'), findsOneWidget,
         reason: '狗账上记的名字（holder.operator）没写出来，'
             '旁边那个「未核实」就没有着落');
-    expect(find.textContaining('未核实'), findsOneWidget);
+    expect(find.text(unverifiedMark), findsOneWidget);
+    expect(find.text(nameNotCheckedMark), findsNothing,
+        reason: '屏上有名字了，该挂的是名字后面那个短标');
     await unmount(t, rig);
   });
 

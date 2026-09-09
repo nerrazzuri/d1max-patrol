@@ -41,6 +41,13 @@ import '../net/wire.dart';
 ///
 /// **只在屏上真的有一个名字的时候才挂。** 标的是那个名字：屏上没有名字还挂
 /// 着它，人只会去猜「未核实的是什么」，而它其实在替一件没显示的事背书。
+///
+/// **别跟 [nameNotCheckedMark] 混。** 那一个是**屏上没有名字**的时候挂的，
+/// 标的是狗的规矩；这一个只挂在一个真的显示出来的名字后面。两句话原本只差
+/// 一个字（「未」/「不」），编译器对这种「相近而不相同」一句话也不会说 ——
+/// 所以两边的名字要差到不可能看错，而且**测试一律引用常量，不许抄字面量**：
+/// 抄了字面量的话，谁把措辞统一一下，断言就会开始把两个短标混着匹配，
+/// `findsNothing` 那种方向会直接变成永真的空绿。
 const String unverifiedMark = '（未核实）';
 
 /// 屏上没有名字的时候，那句话的入口。
@@ -48,7 +55,11 @@ const String unverifiedMark = '（未核实）';
 /// **全文的入口不许只在「有人拿着」的时候才有。** 没人拿着恰恰是人马上要按
 /// 「取得控制权」、把自己那个不核实的名字写进狗的账上的时刻 —— 那一刻看不到
 /// 这句话，等于这句话在最该被读到的时候是藏着的。
-const String noticeMark = '（名字不核实）';
+///
+/// **别跟 [unverifiedMark] 混**（原因见那一条）。名字里特意写足
+/// `nameNotChecked`：短标本身只差一个字，名字再相近的话，改措辞的人两头都
+/// 会以为自己改的是同一个东西。
+const String nameNotCheckedMark = '（名字不核实）';
 
 /// 续租那条路要说的话。**跟校准那条路的话分开一个槽。**
 ///
@@ -60,6 +71,20 @@ const String noticeMark = '（名字不核实）';
 /// 拎成常量是为了让测试能一字不差地盯住它：这句话在心跳一直不通的时候必须
 /// 一直挂着，不许被三秒后一次成功的校准抹掉（Task 11 的 R-1 在这儿原样复发过）。
 const String renewTroubleHint = '租约没续上：再过一会儿控制权会自己掉，杆会变灰';
+
+/// 校准那条路（`GET /api/control`）说的话。
+const String syncTroubleHint = '没问到控制权的状态，过几秒会自己再试';
+
+/// 那四个按钮各自失败时说的话。**一个按钮一句**：四句话说的是四件不同的
+/// 补救（再点一次 / 等它自己到期），合成一句的话人不知道下一步该干什么。
+///
+/// 拎成常量是为了让测试**引用它们**而不是抄字面量。抄字面量的那天起，改
+/// 措辞这件事在测试里就不跟着走了 —— 而「按钮那句话落在按钮那一格」正是
+/// 靠这几句原文断的（见 [ControlPanel.actTroubleKey]）。
+const String acquireFailedHint = '没要到，再点一次';
+const String takeoverFailedHint = '没请求成，再点一次';
+const String approveFailedHint = '没交出去，再点一次';
+const String releaseFailedHint = '没还成，过几秒会自己到期';
 
 /// 狗没说 `heartbeat_ms`（或者说了个不合法的数）时用的校准周期。
 const Duration defaultSyncPeriod = Duration(seconds: 3);
@@ -97,9 +122,17 @@ class ControlPanel extends StatefulWidget {
   /// 彻底隔开，得能把校准挪到窗口外面去。**不是为了在真机上调快** ——
   /// 真机上该听狗的，`engine/lease.py` 的 `LeaseState` 明写「客户端不该把
   /// 心跳间隔硬编在自己那头」，而写在这个参数的调用点上跟硬编是一回事。
+  ///
+  /// **`@visibleForTesting` 是这条规矩的唯一执法者。** 它只是个普通的公开
+  /// 具名参数：`TeleopPage` 哪天顺手传一个进去，「周期听狗的」这件事就在
+  /// 编译期不报任何错的情况下作废，而且没有一条测试会红 —— 测试自己就是
+  /// 靠传它工作的。加了这个注解，`lib/` 里再传就是一条 analyze 错误
+  /// （`invalid_use_of_visible_for_testing_member`），`test/` 里照用不误。
+  @visibleForTesting
   final Duration? syncPeriod;
 
-  /// 本地倒计时多久减一格。
+  /// 本地倒计时多久减一格。**同样只服务测试**，理由见 [syncPeriod]。
+  @visibleForTesting
   final Duration tickPeriod;
 
   /// 狗说它 [heartbeatMs] 毫秒要一次心跳，那么多久校准/续期一次。
@@ -126,6 +159,22 @@ class ControlPanel extends StatefulWidget {
   static const Key remainKey = ValueKey<String>('control-remain');
   static const Key graceKey = ValueKey<String>('control-grace');
   static const Key seatsKey = ValueKey<String>('control-seats');
+
+  /// 三个话槽各自的 key。**槽是按 key 认的，不是按屏上有没有这句话认的。**
+  ///
+  /// 这三行在屏上长得一模一样。没有 key 的时候，「这句话上没上屏」是能断言
+  /// 的，「这句话落进了哪个槽」不能 —— 于是把 `_act()` 的失败写进
+  /// [syncTroubleKey] 那一格，全仓测试一条都不会红，而人看到的是 Task 11
+  /// 的 R-1 原样复发：按钮那句话被三秒后一次成功的后台校准悄悄抹掉。
+  ///
+  /// 三个槽 × 两个方向 = 六种写错的方式。一条条补测试是补不完的；按 key 断言
+  /// 才是由构造保证：**每条路只写自己那个 key 的那一格。**
+  ///
+  /// **空着的时候槽也在**（画成一个带 key 的 `SizedBox.shrink()`），这样
+  /// 「这一格是空的」跟「这一格里是那句话」是同一种断法。
+  static const Key syncTroubleKey = ValueKey<String>('control-trouble-sync');
+  static const Key beatTroubleKey = ValueKey<String>('control-trouble-beat');
+  static const Key actTroubleKey = ValueKey<String>('control-trouble-act');
 
   @override
   State<ControlPanel> createState() => _ControlPanelState();
@@ -164,9 +213,19 @@ class _ControlPanelState extends State<ControlPanel> {
   /// [_beatTrouble]：`POST /api/control/heartbeat` 那条路。见 [renewTroubleHint]。
   String _beatTrouble = '';
 
-  /// [_actTrouble]：人按下那几个按钮之后的那条路。**下一次按按钮才清** ——
-  /// 按钮是人主动按的，回话也该等到人再按一次，不该被后台的校准顺手抹掉。
+  /// [_actTrouble]：人按下那几个按钮之后的那条路。**后台的校准不许碰它** ——
+  /// 按钮是人主动按的，回话不该被一次跟它无关的成功校准顺手抹掉（Task 11
+  /// 的 R-1 就是这么犯的）。
+  ///
+  /// 但「只有下一次按按钮才清」又太死：这句话是对**当时那个局面**的回话，
+  /// 局面变了它就过期，甚至跟屏上其余的字自相矛盾 —— 持有者松手之后，面板
+  /// 已经画成「没人拿着控制权」、「请求接手」那个按钮也没了，屏上却还留着
+  /// 「控制权在别人手里：用「请求接手」…」。所以再加一个清除时机：
+  /// **局面一换就收**，见 [_sceneOf]。
   String _actTrouble = '';
+
+  /// 上一句 [_actTrouble] 是对哪个局面说的。见 [_sceneOf]。
+  String _actScene = '';
 
   /// 眼下这个校准周期。见 [ControlPanel.syncPeriodFor]。
   late Duration _syncEvery;
@@ -219,8 +278,7 @@ class _ControlPanelState extends State<ControlPanel> {
       // 而屏上会挂着一句跟当前处境毫无关系的红字。
       if (_lease?.mine == true) unawaited(_beat());
     } catch (e) {
-      _fail(e, '没问到控制权的状态，过几秒会自己再试',
-          (String s) => _syncTrouble = s);
+      _fail(e, syncTroubleHint, (String s) => _syncTrouble = s);
     }
   }
 
@@ -256,10 +314,15 @@ class _ControlPanelState extends State<ControlPanel> {
   /// 说明不了心跳那条路也通了。碰了就是替另一条路报平安。
   void _apply(Map<String, dynamic> m) {
     final LeaseView v = LeaseView.fromJson(m);
+    final String scene = _sceneOf(v);
     setState(() {
       _lease = v;
       _remainMs = v.expiresInMs;
       _graceMs = v.graceInMs;
+      // **局面换了才收按钮那句话**（见 [_actTrouble]）。「同一个局面里的一次
+      // 成功校准」照样不许碰它 —— 那正是 Task 11 的 R-1。
+      if (scene != _actScene && _actTrouble.isNotEmpty) _actTrouble = '';
+      _actScene = scene;
     });
     _retimeSync(v);
     if (v.mine != _held) {
@@ -268,12 +331,25 @@ class _ControlPanelState extends State<ControlPanel> {
     }
   }
 
+  /// 「屏上这一刻是个什么局面」。[_actTrouble] 的保质期就是它。
+  ///
+  /// 只看**谁拿着、谁在抢、是不是我**这三件事：倒计时每秒都在变，跟着它清
+  /// 的话按钮那句话活不过一秒。
+  String _sceneOf(LeaseView v) =>
+      '${v.mine}|${v.holderRef ?? ''}|${v.challengerRef ?? ''}';
+
   /// 按狗说的 `heartbeat_ms` 重新对表。
   ///
-  /// **每次跟狗说上话都重起一次表**：周期量的是「距上次问到现在」，而刚问完
-  /// 的这一刻正好是零点。不重起的话，狗把周期改长之后，旧表还会再响一次。
+  /// **周期真的变了才动表。** 每次 `_apply()` 都 `cancel()` 再 `periodic()`
+  /// 的话，定时器永远从零重新数 —— 而 `_apply()` 是 `_sync()`、`_beat()`
+  /// **和 `_act()`** 三条路共用的：人在一个周期里反复按按钮，每按一次就把
+  /// 下一次校准整整往后推一个周期；而续期（`_beat()`）只由一次成功的校准
+  /// 触发，于是租约续期跟着一起被推后，按得够勤就永远续不上。
   void _retimeSync(LeaseView v) {
-    _syncEvery = widget.syncPeriod ?? ControlPanel.syncPeriodFor(v.heartbeatMs);
+    final Duration next =
+        widget.syncPeriod ?? ControlPanel.syncPeriodFor(v.heartbeatMs);
+    if (_syncTimer != null && next == _syncEvery) return;
+    _syncEvery = next;
     _syncTimer?.cancel();
     _syncTimer = Timer.periodic(_syncEvery, (_) => unawaited(_sync()));
   }
@@ -373,16 +449,18 @@ class _ControlPanelState extends State<ControlPanel> {
           ),
         // **三条路各占一行，谁也不盖谁。** 挤一个槽的话，两条路会互相抹，
         // 人看到的是一行在闪 —— 闪着的字比没有字更容易被当成花屏。
-        _troubleLine(_syncTrouble),
-        _troubleLine(_beatTrouble),
-        _troubleLine(_actTrouble),
+        _troubleLine(ControlPanel.syncTroubleKey, _syncTrouble),
+        _troubleLine(ControlPanel.beatTroubleKey, _beatTrouble),
+        _troubleLine(ControlPanel.actTroubleKey, _actTrouble),
       ],
     );
   }
 
-  Widget _troubleLine(String s) => s.isEmpty
-      ? const SizedBox.shrink()
+  /// 一个话槽。**空着也占着这个 key**，见 [ControlPanel.syncTroubleKey]。
+  Widget _troubleLine(Key key, String s) => s.isEmpty
+      ? SizedBox.shrink(key: key)
       : Padding(
+          key: key,
           padding: const EdgeInsets.only(top: 4),
           child: Text(s,
               style: const TextStyle(color: Color(0xFFFFB4A9), fontSize: 13)),
@@ -418,14 +496,14 @@ class _ControlPanelState extends State<ControlPanel> {
         // 自己那个不核实的名字写进狗的账上的时刻。
         //
         // 短标分两种：屏上有名字就挂 [unverifiedMark]（它标的是那个名字），
-        // 没名字就挂 [noticeMark]（它标的是狗的规矩）。
+        // 没名字就挂 [nameNotCheckedMark]（它标的是狗的规矩）。
         if ((v?.notice ?? '').isNotEmpty)
           InkWell(
             key: ControlPanel.noticeKey,
             onTap: () => setState(() => _noticeOpen = !_noticeOpen),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-              child: Text(named ? unverifiedMark : noticeMark,
+              child: Text(named ? unverifiedMark : nameNotCheckedMark,
                   style: const TextStyle(
                       color: Color(0xFFFFD08A), fontSize: 12)),
             ),
@@ -443,9 +521,9 @@ class _ControlPanelState extends State<ControlPanel> {
         // 就是干等宽限期走完 —— 那 15 秒里要开狗的人站在狗旁边，狗谁也不听。
         if (v.challenged)
           _button(ControlPanel.approveKey, '同意移交',
-              () => _act('/api/control/takeover/approve', '没交出去，再点一次')),
+              () => _act('/api/control/takeover/approve', approveFailedHint)),
         _button(ControlPanel.releaseKey, '交还',
-            () => _act('/api/control/release', '没还成，过几秒会自己到期')),
+            () => _act('/api/control/release', releaseFailedHint)),
       ];
     }
     if (someone) {
@@ -456,13 +534,13 @@ class _ControlPanelState extends State<ControlPanel> {
             // 宽限期里已经在等对方回应了，再点一次没有别的效果，
             // 只会让人以为「点了没反应」。
             grace == null
-                ? () => _act('/api/control/takeover', '没请求成，再点一次')
+                ? () => _act('/api/control/takeover', takeoverFailedHint)
                 : null),
       ];
     }
     return <Widget>[
       _button(ControlPanel.acquireKey, '取得控制权',
-          full ? null : () => _act('/api/control/acquire', '没要到，再点一次')),
+          full ? null : () => _act('/api/control/acquire', acquireFailedHint)),
     ];
   }
 
