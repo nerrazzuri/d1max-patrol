@@ -272,6 +272,15 @@ String troubleIn(WidgetTester t, Key slot) {
   return t.widget<Text>(f.first).data ?? '';
 }
 
+/// 三个槽里现在一共有几句话。**等的是「屏上出了话」，不是「我那一格出了话」**：
+/// 只等自己那一格的话，写错格的时候这条要靠 `pumpUntil` 超时才红，红出来的是
+/// 一句「等了 10 秒」，看不出话落到哪儿去了。
+int troubleCount(WidgetTester t) => <Key>[
+      ControlPanel.syncTroubleKey,
+      ControlPanel.beatTroubleKey,
+      ControlPanel.actTroubleKey,
+    ].where((Key k) => troubleIn(t, k).isNotEmpty).length;
+
 /// 三个槽一次读完。**每条测试都把三格全断一遍** —— 只断自己那一格的话，
 /// 「话写对了地方」证得了，「话没同时漏进别的地方」证不了。
 void expectTroubles(WidgetTester t,
@@ -524,10 +533,7 @@ void main() {
       'error': 'ZeroDivisionError',
       'detail': 'Traceback (most recent call last)',
     };
-    await pumpUntil(
-        t,
-        () => troubleIn(t, ControlPanel.syncTroubleKey).isNotEmpty,
-        '出错之后那句人话');
+    await pumpUntil(t, () => troubleCount(t) > 0, '出错之后那句人话');
     expectTroubles(t, sync: syncTroubleHint);
     expect(find.textContaining('Traceback'), findsNothing);
     expect(find.textContaining('ZeroDivisionError'), findsNothing);
@@ -625,10 +631,7 @@ void main() {
     /// 到尾没推过杆，根本没碰到「成功那一下会不会抹掉别人的话」。
     final Rig rig = await mount(t, mineHolds());
     rig.dog.statusCodes['/api/control/heartbeat'] = 500;
-    await pumpUntil(
-        t,
-        () => troubleIn(t, ControlPanel.beatTroubleKey).isNotEmpty,
-        '心跳失败之后那句「租约没续上」');
+    await pumpUntil(t, () => troubleCount(t) > 0, '心跳失败之后那句「租约没续上」');
     // 心跳那条路的话只许落进心跳那一格。
     expectTroubles(t, beat: renewTroubleHint);
     final int gotBefore = rig.gets;
@@ -665,10 +668,7 @@ void main() {
     final Rig rig = await mount(t, otherHolds());
     rig.dog.statusCodes['/api/control/takeover'] = 500;
     await t.tap(find.byKey(ControlPanel.takeoverKey));
-    await pumpUntil(
-        t,
-        () => troubleIn(t, ControlPanel.actTroubleKey).isNotEmpty,
-        '「请求接手」失败之后那句话');
+    await pumpUntil(t, () => troubleCount(t) > 0, '「请求接手」失败之后那句话');
     expectTroubles(t, act: takeoverFailedHint);
     final int gotBefore = rig.gets;
     int missing = 0;
@@ -697,10 +697,8 @@ void main() {
     final Rig rig = await mount(t, otherHolds());
     rig.dog.statusCodes['/api/control/takeover'] = 500;
     await t.tap(find.byKey(ControlPanel.takeoverKey));
-    await pumpUntil(
-        t,
-        () => troubleIn(t, ControlPanel.actTroubleKey).isNotEmpty,
-        '「请求接手」失败之后那句话');
+    await pumpUntil(t, () => troubleCount(t) > 0, '「请求接手」失败之后那句话');
+    expectTroubles(t, act: takeoverFailedHint);
     // 对方松手了：下一次校准把局面换成「没人拿着」。
     rig.dog.replies['/api/control'] = nobodyHolds();
     await pumpUntil(t, () => find.byKey(ControlPanel.acquireKey).evaluate().isNotEmpty,
@@ -738,8 +736,8 @@ void main() {
     final int expected = (taps * between.inSeconds) ~/ period.inSeconds;
     expect(rig.asked - asked, greaterThanOrEqualTo(expected - 1),
         reason: '这 ${taps * between.inSeconds} 秒里校准只到点了 ${rig.asked - asked} 次'
-            '（$period 一次该有 $expected 次左右）：每按一次按钮就把定时器从零重起，'
-            '人按得比周期勤，校准和续期就永远轮不到');
+            '（${period.inSeconds} 秒一次，该有 $expected 次左右）：'
+            '每按一次按钮就把定时器从零重起，人按得比周期勤，校准和续期就永远轮不到');
     expect(rig.beats, greaterThan(beat),
         reason: '这一段里一次都没续上租约：续期只由成功的校准触发，校准被推后，'
             '租约就跟着一起掉');
