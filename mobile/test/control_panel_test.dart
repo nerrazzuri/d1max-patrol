@@ -690,6 +690,64 @@ void main() {
     await unmount(t, rig);
   });
 
+  testWidgets('交还失败那句话不许被后面成功的续期抹掉', (WidgetTester t) async {
+    /// 上一条测出来的是「校准别抹按钮那句」；这条是它的对偶：
+    /// **续期（`_beat()`）别抹按钮那句**。前两轮把「往哪一格写」的六个方向
+    /// 用 key 锁死了，但「把哪一格清掉」是另一根轴 —— 跟续期有关的两格
+    /// （这条 + 下面那一段）复审之前一条测试都没守住：现有的两条相关测试
+    /// 都跑在 `otherHolds()`（别人拿着）的局面上，`mine == false` 时
+    /// `_sync()` 里那句 `if (_lease?.mine == true) unawaited(_beat());`
+    /// 永不成立 —— 续期那条路一次都没跑过。局面必须换成 `mineHolds()`。
+    final Rig rig = await mount(t, mineHolds());
+    rig.dog.statusCodes['/api/control/release'] = 500;
+    await t.tap(find.byKey(ControlPanel.releaseKey));
+    await pumpUntil(t, () => troubleCount(t) > 0, '「交还」失败之后那句话');
+    expectTroubles(t, act: releaseFailedHint);
+    final int beatBefore = rig.beats;
+    int missing = 0;
+    for (int i = 0; i < 40; i++) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await t.pump(const Duration(milliseconds: 200));
+      if (troubleIn(t, ControlPanel.actTroubleKey) != releaseFailedHint) {
+        missing++;
+      }
+      // 顺带守住另一个方向：这个局面下续期是通的，心跳那一格该一直是空的 ——
+      // 它自己没有理由变成别的样子。真正堵住 CUT-13b 的是下面那一段
+      // （心跳先断出话、再按一下按钮，看那句话还在不在）；这里只是多一层
+      // 「本来就该是空的」的日常保底。
+      if (troubleIn(t, ControlPanel.beatTroubleKey) != '') {
+        fail('心跳那一格不该有话，却冒出来了：'
+            '「${troubleIn(t, ControlPanel.beatTroubleKey)}」');
+      }
+    }
+    // 先证这一段里真的有成功的续期,否则「没被抹掉」是空绿的。
+    expect(rig.beats - beatBefore, greaterThanOrEqualTo(2),
+        reason: '这 8 秒里只续期成功了 ${rig.beats - beatBefore} 次：'
+            '那这条根本没碰到「一次成功的续期会不会抹掉按钮那句」，'
+            '底下那句「话没被抹掉」就是空绿的');
+    expect(missing, 0,
+        reason: '续期成功那一下把按钮写的话也清了');
+
+    // 再堵 CUT-13b 那个方向：按钮（`_act()`）不许把心跳那一格的话碰掉。
+    // 上面那段窗口里心跳一直是通的，从没冒出过话可清 —— 单靠「一直是空的」
+    // 这句断言堵不住这一刀：CUT-13b 加的那行本身是 `if (_beatTrouble
+    // .isNotEmpty) ...`，心跳那格本来就是空的时候，这行按不按都一个样，
+    // 空绿。真要逼它现形，得先让心跳那格真的有话、再按一下按钮，看那句话
+    // 还在不在。
+    rig.dog.statusCodes['/api/control/heartbeat'] = 500;
+    await pumpUntil(
+        t,
+        () => troubleIn(t, ControlPanel.beatTroubleKey) == renewTroubleHint,
+        '心跳失败之后那句「租约没续上」');
+    await t.tap(find.byKey(ControlPanel.releaseKey));
+    await t.pump();
+    expect(troubleIn(t, ControlPanel.beatTroubleKey), renewTroubleHint,
+        reason: '按一下「交还」就把心跳那句「租约没续上」带没了：'
+            '按钮不该碰心跳那一格');
+    await unmount(t, rig);
+  });
+
   testWidgets('局面一换,按钮那句过时的话就收掉', (WidgetTester t) async {
     /// 「只有下一次按按钮才清」太死：持有者松手之后，面板已经画成「没人拿着」、
     /// 「请求接手」那个按钮也没了，屏上却还留着「控制权在别人手里：用「请求
