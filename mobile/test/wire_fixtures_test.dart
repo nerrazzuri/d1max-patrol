@@ -161,6 +161,53 @@ void main() {
         reason: '发了个 JSON null 跟压根没发，在这头是同一个答案');
   });
 
+  test('盘况：StorageView 吃得下狗发的那份,而且往 forecast 里伸得到手', () {
+    // 这份夹具在仓库里躺了好几卷，**从来没有一处在读它** —— 于是盘况这一块
+    // 是全仓唯一一个绕开契约机制的界面：狗那头改了字段名，Dart 这头照旧绿，
+    // 直到有人在客户现场点开那一屏。
+    final v = StorageView.fromJson(_load('storage'));
+    expect(v.usedBytes, 420000000000);
+    expect(v.totalBytes, 1000000000000);
+    expect(v.usedRatio, closeTo(0.42, 1e-9));
+    // **`runs` / `bytes_at_risk` / `detail` 在 `forecast` 段里，不在顶层。**
+    // 写 `m['runs']` 的话恒为 null，屏上那份名单永远是空的 —— 而拿自己造的
+    // 报文喂进去的测试照样绿。
+    expect(v.forecastDetail, isNotEmpty,
+        reason: 'detail 在 forecast 段里，往顶层伸手拿到的是 null');
+    expect(v.forecastDetail, _load('storage')['forecast']['detail']);
+    expect(v.bytesAtRisk, 0);
+    expect(v.runs, isEmpty, reason: '生成这份夹具的那台狗上一趟归档也没有');
+    // **`backup.level` 只有三档，没有 `warn`。** 夹具里是 `neutral`：
+    // 没配备份盘是出厂常态，而它**不是警示态**（`engine/backup.py` 的
+    // `backup_notice`：常年报警的东西等于没报警）。
+    expect(v.backupLevel, backupLevelNeutral);
+    expect(v.backupLevel,
+        isIn(<String>[backupLevelOk, backupLevelNeutral, backupLevelPush]));
+    expect(v.backupDetail, _load('storage')['backup']['detail']);
+    expect(v.backupDetail, isNotEmpty);
+    // 预告落没落盘。夹具里那台狗是落了盘的（true）。
+    expect(v.noticeWritten, isTrue);
+  });
+
+  test('盘况：预告没落盘那一档解得出来,缺了这一项当成落了盘', () {
+    // 夹具里 `notice_written` 恒为 true，**「没落盘」那一支夹具驱动不到** ——
+    // 而那一支正是这块屏存在的理由。照着夹具改这两个字段（狗那头盘满或者
+    // 只读文件系统时发的就是这个）。
+    final m = <String, dynamic>{
+      ..._load('storage'),
+      'notice_written': false,
+      'notice_detail': '预告没能记到盘上(只读文件系统)',
+    };
+    final v = StorageView.fromJson(m);
+    expect(v.noticeWritten, isFalse);
+    expect(v.noticeDetail, '预告没能记到盘上(只读文件系统)');
+    // 老版本的狗压根没这一项。**缺了按「落了盘」处理**：默认为假的话，
+    // 每一台老狗上那块屏都常年顶着一句吓人的红话，而它其实什么也没发生。
+    final without = <String, dynamic>{..._load('storage')}
+      ..remove('notice_written');
+    expect(StorageView.fromJson(without).noticeWritten, isTrue);
+  });
+
   test('三个视图都吃得下狗发的那份', () {
     expect(LeaseView.fromJson(_load('lease_state')).expiresInMs, isPositive);
     expect(VideoHealth.fromJson(_load('video_health')).online, isNotEmpty);

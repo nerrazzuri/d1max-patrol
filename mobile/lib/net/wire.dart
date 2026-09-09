@@ -145,3 +145,157 @@ class RunView {
   /// 引擎让着腿吗。**遥控在这个状态下是放行的**（§5.10）。
   bool get suspended => state == 'SUSPENDED';
 }
+
+/// 盘况报文里的一趟归档（`forecast.runs[]`，`engine/retention.py` 的
+/// `RunInfo.to_wire()`）。
+///
+/// **wire 上没有「还剩几天」。** `RunInfo.days_left()` 在狗那头是有的，可它
+/// **没有进 `to_wire()`** —— 报文里只有 [retentionDays]，那是**保留期策略值**
+/// （这一趟按 30 天存），不是「再过 30 天就删」。两者在一份标着「要过期的
+/// 那几趟」的名单里长得一模一样，而它们能差出十几天：真正动手的时刻是
+/// `delete_starts_at()` 算的 `max(到期日, 首次预告 + 预告期)`。
+///
+/// 所以**这一行上不许出现「还剩」「即将删除」这类话** —— 那句话只能来自
+/// `forecast.detail`（狗那头拼好的原文）。见 `ui/storage_page.dart`。
+class StorageRun {
+  /// 归档目录的全路径。列表里拿它当身份，`mission` 会重名。
+  final String path;
+  final String mission;
+
+  /// 开跑的时刻，**生戳**，形如 `20260830T041500Z`
+  /// （`engine/archive.py` 的 `STAMP_FMT`，UTC）。
+  ///
+  /// **原样留着，不在这儿格式化。** 这一层是报文的样子；给人看的样子归
+  /// `ui/storage_page.dart` 的 `formatStamp`。
+  final String startedAt;
+
+  /// 保留期策略值（天）。**不是「还剩几天」**，见类注释。
+  final int retentionDays;
+  final int sizeBytes;
+
+  const StorageRun({
+    required this.path,
+    required this.mission,
+    required this.startedAt,
+    required this.retentionDays,
+    required this.sizeBytes,
+  });
+
+  factory StorageRun.fromJson(Map<String, dynamic> m) => StorageRun(
+        path: (m['path'] as String?) ?? '',
+        mission: (m['mission'] as String?) ?? '',
+        startedAt: (m['started_at'] as String?) ?? '',
+        retentionDays: (m['retention_days'] as num?)?.toInt() ?? 0,
+        sizeBytes: (m['size_bytes'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// 备份盘那句话说到什么份上（`engine/backup.py` 的 `NoticeLevel`）。
+///
+/// **只有三档，没有 `warn`。** 狗那头从来不发 `warn` —— 拿它写断言的测试会
+/// 绿，但什么也没钉住。
+///
+/// * `ok` —— 配了镜像盘、跟得上。
+/// * `neutral` —— 未配备份盘。**中性的一句话，不是红的。**
+/// * `push` —— 该顶到人脸上了。
+///
+/// **`neutral` 不许画成警示色。** `backup_notice` 的 docstring 写着：没配镜像
+/// 盘不许常年报红（spec §7.6）—— 常年报警的东西等于没报警，现场的人会先学会
+/// 忽略它，然后连真的那次也一起忽略。`NEUTRAL` 单独立一档就是为了这件事：
+/// 手机端把它画黄画红，每一台没插镜像盘的狗从此常年顶着警示色。
+const String backupLevelOk = 'ok';
+const String backupLevelNeutral = 'neutral';
+const String backupLevelPush = 'push';
+
+/// 盘况（`GET /api/storage`，`app/server.py` 里那个 handler）。
+///
+/// **顶层只有这些键**：`used_bytes` / `total_bytes` / `used_ratio` /
+/// `runs_total` / `runs_bytes` / `baselines_bytes` / `exports_bytes` /
+/// `forecast` / `notice_written` / `notice_detail` / `backup`。
+///
+/// `runs` / `bytes_at_risk` / 预告那句话**都在 `forecast` 段里**，不在顶层；
+/// `level` / `detail` 在 `backup` 段里。这里摊平了存，但解析要往里伸手 ——
+/// 写 `m['runs']` 的话恒为 `null`，屏上那份名单永远是空的，而测试要是拿
+/// 自己造的报文喂它，两头都是绿的。
+class StorageView {
+  final int usedBytes;
+  final int totalBytes;
+  final double usedRatio;
+  final int runsTotal;
+  final int runsBytes;
+  final int baselinesBytes;
+  final int exportsBytes;
+
+  /// 预告到底记到盘上了没有。
+  ///
+  /// **为假的时候必须上屏。** 它的意思是盘满了或者被挂成只读，「再过几天
+  /// 开始删除」那句话说了不算 —— 删除的钟根本没开始走。不显示的话，人看到的
+  /// 是一块一切正常的屏，而归档会无声地堆到盘炸。
+  final bool noticeWritten;
+
+  /// 预告没落盘时狗那头给的那句话。**原样上屏，手机不重新组织。**
+  final String noticeDetail;
+
+  /// 见 [backupLevelNeutral]。认不出的值一律按中性处理，别崩。
+  final String backupLevel;
+
+  /// 备份盘那句话。**原样上屏。**
+  final String backupDetail;
+
+  /// 预告那句话（`Forecast.detail`）。**原样上屏。**
+  ///
+  /// `retention.py` 里 `Forecast` 的 docstring 明写「文案在这里拼，不在 app 里
+  /// 拼 —— 免得手机端和网页端各说各的，而这是要给客户看的一句话」。
+  /// **「还剩几天 / 即将删除」这类话只准出自这里。**
+  final String forecastDetail;
+
+  final int bytesAtRisk;
+
+  /// 预告名单里的那几趟。夹具里是空数组（那台狗上一趟归档也没有）。
+  final List<StorageRun> runs;
+
+  const StorageView({
+    this.usedBytes = 0,
+    this.totalBytes = 0,
+    this.usedRatio = 0,
+    this.runsTotal = 0,
+    this.runsBytes = 0,
+    this.baselinesBytes = 0,
+    this.exportsBytes = 0,
+    this.noticeWritten = true,
+    this.noticeDetail = '',
+    this.backupLevel = backupLevelNeutral,
+    this.backupDetail = '',
+    this.forecastDetail = '',
+    this.bytesAtRisk = 0,
+    this.runs = const <StorageRun>[],
+  });
+
+  factory StorageView.fromJson(Map<String, dynamic> m) {
+    final Map<String, dynamic> fc =
+        (m['forecast'] as Map<String, dynamic>?) ?? <String, dynamic>{};
+    final Map<String, dynamic> bk =
+        (m['backup'] as Map<String, dynamic>?) ?? <String, dynamic>{};
+    return StorageView(
+      usedBytes: (m['used_bytes'] as num?)?.toInt() ?? 0,
+      totalBytes: (m['total_bytes'] as num?)?.toInt() ?? 0,
+      usedRatio: (m['used_ratio'] as num?)?.toDouble() ?? 0,
+      runsTotal: (m['runs_total'] as num?)?.toInt() ?? 0,
+      runsBytes: (m['runs_bytes'] as num?)?.toInt() ?? 0,
+      baselinesBytes: (m['baselines_bytes'] as num?)?.toInt() ?? 0,
+      exportsBytes: (m['exports_bytes'] as num?)?.toInt() ?? 0,
+      // **缺了当真**：老版本的狗没有这一项时，按「预告落盘了」处理才不会
+      // 凭空吓人；真出事的那台狗一定会把 false 发过来。
+      noticeWritten: m['notice_written'] != false,
+      noticeDetail: (m['notice_detail'] as String?) ?? '',
+      backupLevel: (bk['level'] as String?) ?? backupLevelNeutral,
+      backupDetail: (bk['detail'] as String?) ?? '',
+      forecastDetail: (fc['detail'] as String?) ?? '',
+      bytesAtRisk: (fc['bytes_at_risk'] as num?)?.toInt() ?? 0,
+      runs: <StorageRun>[
+        for (final Object? r in (fc['runs'] as List<dynamic>?) ?? const [])
+          StorageRun.fromJson(r as Map<String, dynamic>),
+      ],
+    );
+  }
+}
