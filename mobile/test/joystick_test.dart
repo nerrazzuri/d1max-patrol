@@ -154,4 +154,104 @@ void main() {
         reason: '狗那头 [-1,1] 之外直接 400，越界的一拍等于白发');
     await g.up();
   });
+
+  // ------------------------------------------------------------- 多指纪律
+  //
+  // **上面那八条全是单指的**，于是 `joystick.dart` 里那三处指针号判断
+  // （`_down` 的「已经有一根在推了，后来的不管」、`_move` / `_release` 的
+  // `e.pointer != _pointer`）一次都没跑过 —— 三处一起删掉，全套照样绿。
+  //
+  // 手上这套是**两根杆同时推**的设计（§7.7 允许左前推 + 右转向），左手掌缘
+  // 误触右杆区域是现场常态；同一根杆上落进第二根手指（手滑、换手）也是。
+  // 这三条各钉一处，**分开写不合并**：合成一条的话，先红的那句会把后面两句
+  // 遮住，人只会修第一处然后以为修完了。
+  //
+  // 三条都用同一个骨架：第一根手指按下并推出一个**非零**的值，然后第二根
+  // 手指进来捣乱，断言那个值一点没变。`seen.last` 是最后一次回调吐出来的
+  // 量，也就是这一刻真会发到狗腿上的那个数。
+
+  /// 第一根手指按下、推上去，返回那一刻的值。**先证它真的非零** ——
+  /// 零值上做「没变」的断言是恒真的（形状 1）。
+  Future<TestGesture> pushFirst(
+      WidgetTester t, List<Offset> seen, Offset at) async {
+    final TestGesture g = await t.startGesture(at, pointer: 1);
+    await g.moveBy(const Offset(0, -40));
+    await t.pump();
+    expect(seen.last.dy, greaterThan(0),
+        reason: '第一根手指压根没推出值来：下面那几句「值没变」是空绿的');
+    return g;
+  }
+
+  testWidgets('第二根手指按下不许把圆心挪走', (WidgetTester t) async {
+    /// 不认号的话后落的那根**把圆心挪到新落点**，正推着的那根杆瞬间跳一下：
+    /// 屏幕上杆回中、发出去的量归零，而人的手一点没动。
+    final List<Offset> seen = <Offset>[];
+    await t.pumpWidget(
+        wrap(Joystick(axis: JoystickAxis.translate, onChanged: seen.add)));
+    final Offset c = t.getCenter(find.byType(Joystick));
+    final TestGesture first = await pushFirst(t, seen, c);
+    final Offset value = seen.last;
+    final Offset knob = t.getCenter(find.byKey(Joystick.knobKey));
+
+    // 第二根手指落在别处（掌缘误触、换手）。
+    final TestGesture second =
+        await t.startGesture(c + const Offset(40, 40), pointer: 2);
+    await t.pump();
+    expect(seen.last, value,
+        reason: '第二根手指落下来就把圆心挪走了：人手里正推着的那根杆突然跳一下');
+    expect(t.getCenter(find.byKey(Joystick.knobKey)), knob,
+        reason: '屏幕上那根杆也跟着挪了 —— 杆是现场唯一的反馈，它跳一下人就以为狗跳了');
+    await second.up();
+    await first.up();
+  });
+
+  testWidgets('第二根手指移动不许把杆拽走', (WidgetTester t) async {
+    /// `_move` 少了号判断的话，第二根手指的位移会拿**第一根手指的圆心**去算，
+    /// 于是人推着不动，狗的方向被另一根手指带着走。
+    final List<Offset> seen = <Offset>[];
+    await t.pumpWidget(
+        wrap(Joystick(axis: JoystickAxis.translate, onChanged: seen.add)));
+    final Offset c = t.getCenter(find.byType(Joystick));
+    final TestGesture first = await pushFirst(t, seen, c);
+    final Offset value = seen.last;
+
+    final TestGesture second =
+        await t.startGesture(c + const Offset(40, 40), pointer: 2);
+    await t.pump();
+    // 第二根手指往上划一段：横向偏移还留着，算出来的是另一个轴。
+    await second.moveBy(const Offset(0, -60));
+    await t.pump();
+    expect(seen.last, value,
+        reason: '第二根手指一动就把杆拽走了：人的手没动，狗改了方向');
+    await second.up();
+    await first.up();
+  });
+
+  testWidgets('第二根手指抬起不许把杆归零', (WidgetTester t) async {
+    /// **这一侧比前两条更危险的地方在反过来的那一半。** 号判断没了之后：
+    /// 第二根手指一抬，整根杆归零 —— 屏幕上杆回中、狗停了，而人的手还压着；
+    /// 反过来（第一根先抬、第二根还在）会留下一根**不归零的杆**。
+    final List<Offset> seen = <Offset>[];
+    await t.pumpWidget(
+        wrap(Joystick(axis: JoystickAxis.translate, onChanged: seen.add)));
+    final Offset c = t.getCenter(find.byType(Joystick));
+    final TestGesture first = await pushFirst(t, seen, c);
+    final Offset value = seen.last;
+
+    final TestGesture second =
+        await t.startGesture(c + const Offset(40, 40), pointer: 2);
+    await t.pump();
+    await second.up();
+    await t.pump();
+    expect(seen.last, value,
+        reason: '第二根手指抬起就把整根杆归零了：人的第一根手指还压着，狗却停了');
+    expect(find.byKey(Joystick.knobKey), findsOneWidget,
+        reason: '杆都没了 —— 第一根手指还压着，屏幕上那根杆就该还在');
+
+    // 第一根手指抬起来，这一次才归零。
+    await first.up();
+    await t.pump();
+    expect(seen.last, Offset.zero,
+        reason: '真正握着的那根手指松了，必须归零 —— 松手要主动吐一个零');
+  });
 }
