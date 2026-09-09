@@ -9,12 +9,11 @@
 调用方是谁 —— 事件从哪来、什么时候升级提醒谁 —— 都不是这个模块的事;
 那些是 ``app/alert_sources.py``(任务 6)和确认/升级状态机(任务 5)的事。
 
-**聚合键是 ``robot/kind#seq``。** 同一只狗同一个类型、在 ``AGGREGATE_WINDOW_MS``
-窗口内(从 ``last_ms`` 算起)是同一条告警,``count`` 累加、``last_ms`` 前移;
-``robot`` 在键里,就是"P1 不跨狗合并"的实现 —— 两只狗同时卡住是两件事,要
-跑两趟。窗口过期、被确认(``acked_ms``)、被解决(``resolved_ms``)三者任一
-成立,下一次同 kind 的事件就另起一条(``#seq`` 递增)—— 确认过的告警不会
-悄悄吸收后来的新事件,那会让人以为一件已经处理过的事还是老样子。
+**聚合键是 ``robot/kind``。** 这是 §5.4 聚合的全部机制:同一只狗同一个类型
+就是同一条告警,``count`` 累加、``last_ms`` 前移;``robot`` 在键里,就是
+"P1 不跨狗合并"的实现 —— 两只狗同时卡住是两件事,要跑两趟。任务 4 会在这
+个键上加聚合窗口(``AGGREGATE_WINDOW_MS``),把键变成
+``f"{robot}/{kind}#{seq}"``;这里先不做窗口。
 """
 
 from __future__ import annotations
@@ -30,6 +29,25 @@ class Level(str, Enum):
     P1 = "P1"
     P2 = "P2"
     P3 = "P3"
+
+
+class Channel(str, Enum):
+    """升级(§5.3)走的通道,由弱到强。P1 没人确认,超时就换更吵的通道
+    —— 不是重复提醒,是换一种方式提醒。"""
+
+    SCREEN = "screen"
+    PUSH = "push"
+    SOUND = "sound"
+
+
+class AlertNotFound(KeyError):
+    """``ack``/``resolve`` 传入一个不存在(或已经不在)的 ``key``。**继承
+    ``KeyError``** 以免打破任何已有的"捕获 KeyError"假设,但用一个独立的
+    类型跟"kind 没注册"(``raise_alert`` 抛的裸 ``KeyError``)区分开 ——
+    前者是前端点了一条已经不在的告警(正常的用户误操作,该映射成 404),
+    后者是代码里写了个没登记的 kind(我们自己写错了,该映射成 500)。裸
+    ``KeyError`` 分不出这两件事,调用方(任务 9 的路由层)只能全按一种处
+    理。"""
 
 
 #: kind 到级别的唯一对应表。**判级只许在这一处说** —— 散在各个调用点上,
@@ -60,6 +78,19 @@ LEVEL_OF: dict[str, Level] = {
 }
 
 
+#: P1 未确认的升级时限(毫秒),从 ``first_ms`` 算起 —— 一条持续刷新的告警
+#: 用 ``last_ms`` 算就永远升不上去,而"一直卡着没人管"正是最该把声音打开
+#: 的那种。第 0 档满了转 app 推送、第 1 档满了再加声音。这两个数是拍的,
+#: 跟聚合窗口一样没有实测依据 —— 先定 2 分钟/5 分钟,真机清单里要量、按
+#: 现场手感调。只有 P1 会升级,P2/P3 不在这条链路里(§5.2:两级如果会导致
+#: 人做同样的事,那它们就是同一级 —— 升级 P2 就是把"今天之内"变成"立刻",
+#: 那它本来就该是 P1)。
+ESCALATE_AFTER_MS: tuple[int, ...] = (2 * 60_000, 5 * 60_000)
+
+#: 升级档位 -> 通道,下标就是 ``Alert.escalated`` 的值。
+_CHANNEL_BY_TIER: tuple[Channel, ...] = (Channel.SCREEN, Channel.PUSH, Channel.SOUND)
+
+
 @dataclass(frozen=True, slots=True)
 class Alert:
     """一条告警的事实。**同一只狗同一个 kind 在聚合窗口内是同一条**(键见
@@ -68,8 +99,11 @@ class Alert:
 
     ``acked_*`` 和 ``resolved_ms`` 是两个独立字段,不是同一个状态机上的两
     档:"我看见了在处理"(ack)和"这事没了"(resolve)是两回事(§5.3)。修一
-    个问题合理地可以花一小时,但"没人看见"才是真正的失败 —— 升级(任务 5)
-    只看有没有人确认,不看有没有解决。
+    个问题合理地可以花一小时,但"没人看见"才是真正的失败 —— 升级只看有没
+    有人确认,不看有没有解决,所以 ``resolve`` 不会让 ``escalated`` 停下来。
+
+    ``escalated`` 记这条告警已经升到第几档通道(``0`` = 只在大屏上,见
+    ``channel``),由 ``AlertBook.due_escalations`` 前移,不会倒退。
     """
 
     key: str
@@ -84,6 +118,13 @@ class Alert:
     acked_by: str
     acked_ms: int | None
     resolved_ms: int | None
+    escalated: int
+
+    @property
+    def channel(self) -> Channel:
+        """当前应该用哪个通道播这条告警 —— 由 ``escalated`` 直接算出,不是
+        另存一份可能跟 ``escalated`` 对不上的状态。"""
+        return _CHANNEL_BY_TIER[self.escalated]
 
     def to_wire(self) -> dict[str, Any]:
         """给前端/接口用的纯 ASCII 键字典。"""
@@ -197,14 +238,24 @@ class AlertBook:
                 acked_by="",
                 acked_ms=None,
                 resolved_ms=None,
+                escalated=0,
             )
             self._active[group] = alert.key
         self._by_key[alert.key] = alert
         return alert
 
     def ack(self, key: str, *, who: str, now_ms: int) -> Alert:
-        """有人确认在处理了。只改 ``acked_by``/``acked_ms``,不碰 ``resolved_ms``。"""
-        alert = replace(self._by_key[key], acked_by=who, acked_ms=now_ms)
+        """有人确认在处理了。只改 ``acked_by``/``acked_ms``,不碰 ``resolved_ms``。
+
+        ``who`` 必须是非空姓名 —— 空姓名的确认等于没人负责,升级(任务 5)
+        就失去了"停下来"的依据,所以直接抛 ``ValueError``。
+        """
+        if not who:
+            raise ValueError("ack 需要非空姓名,空姓名等于没人确认")
+        existing = self._by_key.get(key)
+        if existing is None:
+            raise AlertNotFound(key)
+        alert = replace(existing, acked_by=who, acked_ms=now_ms)
         self._by_key[key] = alert
         return alert
 
@@ -212,9 +263,39 @@ class AlertBook:
         """这件事没了。只改 ``resolved_ms``,不碰 ``acked_by``/``acked_ms`` ——
         解决了不等于确认过,"没人看见"是这个模块要暴露出来的事实,不是要
         替调用方悄悄圆过去的细节。"""
-        alert = replace(self._by_key[key], resolved_ms=now_ms)
+        existing = self._by_key.get(key)
+        if existing is None:
+            raise AlertNotFound(key)
+        alert = replace(existing, resolved_ms=now_ms)
         self._by_key[key] = alert
         return alert
+
+    def due_escalations(self, *, now_ms: int) -> tuple[tuple[Alert, Channel], ...]:
+        """**这个方法有副作用**:凡是被这次判定为"该升一档"的告警,内部记录
+        的 ``escalated`` 会被立即前移到新的档位 —— 同一档不会被再问出来一
+        次(§5.3:升级是换通道,不是重复提醒,否则声音会一直响)。
+
+        只看 P1、只看未确认的(``acked_ms is None``);``resolved_ms`` 不参
+        与判断 —— 解决了但没人确认,照样升级,升级看的是有没有人确认。
+
+        计时从 ``first_ms`` 算起,不是 ``last_ms``:一条持续刷新的告警用
+        ``last_ms`` 算就永远升不上去,而"一直卡着没人管"正是最该把声音打
+        开的那种。
+        """
+        due: list[tuple[Alert, Channel]] = []
+        for alert in self._by_key.values():
+            if alert.level is not Level.P1 or alert.acked_ms is not None:
+                continue
+            elapsed = now_ms - alert.first_ms
+            tier = 0
+            for i, threshold in enumerate(ESCALATE_AFTER_MS):
+                if elapsed > threshold:
+                    tier = i + 1
+            if tier > alert.escalated:
+                updated = replace(alert, escalated=tier)
+                self._by_key[alert.key] = updated
+                due.append((updated, _CHANNEL_BY_TIER[tier]))
+        return tuple(due)
 
     def open(self) -> tuple[Alert, ...]:
         """未解决的告警,按级别再按 ``last_ms`` 倒序 —— P1 永远在最上面。"""
