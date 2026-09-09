@@ -38,6 +38,19 @@ const String storageLoadFailed = '读不到盘况。看看还连着这只狗的�
 /// 备份盘那一句挂在哪个槽里，见 [backupColorOf]。
 const String backupSectionTitle = '备份盘';
 
+/// 盘要满了该去哪清。
+///
+/// **这一屏刻意不给清盘入口**（见文件头）：`POST /api/storage/sweep` 的另一头
+/// 是 `shutil.rmtree`，在手机上、戴着手套、站在现场，那一下点得太容易了。
+/// 但只挡不指路的话，人看完这块屏只是更急 —— 他知道盘要满了，不知道下一步
+/// 该走哪，于是现场就会打电话问。
+///
+/// **这句话里不许出现端口号、IP、密码，也不许出现任何厂商私有协议的细节。**
+/// 它是给站在狗旁边的人看的一句指路，不是给人照着敲的一条命令；写进去的地址
+/// 会跟着截图、跟着工单一路流到客户手上。
+const String sweepElsewhereHint = '这一屏只看不删。要清盘，请连上这只狗自己的'
+    '网页端，在那边照着名单一趟一趟地清。';
+
 /// 字节换成人读的样子。
 ///
 /// **按 10 的幂（1 GB = 1e9 字节）**，跟盘商标称的容量、也跟
@@ -115,6 +128,9 @@ class StoragePage extends StatefulWidget {
 
   /// 「其中 N 即将到期」那一行。`bytes_at_risk` 为 0 时压根不挂。
   static const Key atRiskKey = ValueKey<String>('storage-at-risk');
+
+  /// 指路那一句（[sweepElsewhereHint]）。**静态文案，不随报文变。**
+  static const Key sweepHintKey = ValueKey<String>('storage-sweep-hint');
 
   /// 读不到盘况时那一句。
   static const Key errorKey = ValueKey<String>('storage-error');
@@ -262,6 +278,15 @@ class _StoragePageState extends State<StoragePage> {
               key: StoragePage.atRiskKey,
               style: theme.textTheme.bodyMedium),
         ],
+        // **挡了就要指路。** 见 [sweepElsewhereHint]。挂在预告这一段下面：
+        // 人是在这儿看见「盘 42%、再过几天开始删」才想起要清盘的。
+        const SizedBox(height: 12),
+        Text(
+          sweepElsewhereHint,
+          key: StoragePage.sweepHintKey,
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
         if (v.runs.isNotEmpty) ...<Widget>[
           const SizedBox(height: 12),
           for (final StorageRun r in v.runs)

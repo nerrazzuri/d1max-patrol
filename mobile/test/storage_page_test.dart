@@ -154,18 +154,30 @@ Future<void> unmount(WidgetTester t, Rig rig) async {
   expect(rig.dog.errors, isEmpty, reason: '假狗自己抛了：查的是假狗，不是被测代码');
 }
 
-/// 挂一次、把备份盘那句话的颜色读出来、收摊。
+/// 挂一次、把备份盘那句话的颜色**连同整屏的配色**一起读出来、收摊。
 ///
-/// 三档要互相比颜色，而每一档都得是自己挂一次的结果 —— 拿被测代码之外
-/// 另算一份「应该是什么颜色」来比，比的是那份副本，不是屏上真画出来的东西。
-Future<Color?> backupColorFor(WidgetTester t, String level) async {
+/// 每一档都得是自己挂一次的结果 —— 拿被测代码之外另算一份「应该是什么颜色」
+/// 来比，比的是那份副本，不是屏上真画出来的东西。
+///
+/// [scheme] 一起带出来，是为了让「写死的期望色到底还是不是主题里那个中性色」
+/// 这件事**在测试里自己说得清**：Flutter 升级换了 M3 的默认调色板时，红的会是
+/// 那条自洽断言，而不是三条看不出所以然的颜色断言。
+typedef BackupInk = ({Color? color, ColorScheme scheme});
+
+Future<BackupInk> backupInkFor(WidgetTester t, String level) async {
   final Rig rig = await mount(t,
       storage: storageWire(backupLevel: level, backupDetail: '这一档的原话'));
-  final Color? c =
-      t.widget<Text>(find.byKey(StoragePage.backupKey)).style?.color;
+  final BackupInk ink = (
+    color: t.widget<Text>(find.byKey(StoragePage.backupKey)).style?.color,
+    scheme: Theme.of(t.element(find.byKey(StoragePage.backupKey))).colorScheme,
+  );
   await unmount(t, rig);
-  return c;
+  return ink;
 }
+
+/// 只要颜色的那几条用这个。
+Future<Color?> backupColorFor(WidgetTester t, String level) async =>
+    (await backupInkFor(t, level)).color;
 
 void main() {
   // 摘掉 `flutter_test` 那个「所有请求都回 400」的 HttpOverrides：这个文件
@@ -236,20 +248,46 @@ void main() {
     await unmount(t, rig);
   });
 
-  testWidgets('neutral 不许用警示色:跟 push 不同,跟 ok 一样', (WidgetTester t) async {
+  testWidgets('neutral 不许用警示色:ok 和 neutral 都得等于那个写死的中性色',
+      (WidgetTester t) async {
     // `engine/backup.py` 的 `backup_notice` 写着：没配镜像盘不许常年报红
     // （spec §7.6）—— 常年报警的东西等于没报警，现场的人会先学会忽略它，
     // 然后连真的那次也一起忽略。`NEUTRAL` 单独立一档就是为了这件事。
     // 手机端把它画成黄的或红的，每一台没插镜像盘的狗从此常年顶着警示色。
-    final Color? ok = await backupColorFor(t, backupLevelOk);
-    final Color? neutral = await backupColorFor(t, backupLevelNeutral);
-    final Color? push = await backupColorFor(t, backupLevelPush);
-    expect(push, isNotNull, reason: '颜色真的读出来了，下面两条才不是 null == null');
-    expect(neutral, isNot(push), reason: 'neutral 跟 push 一个颜色 = 常年报红');
-    expect(neutral, ok, reason: 'neutral 跟 ok 一样是中性色');
-    // `warn` 是狗从来不会发的值：`NoticeLevel` 只有 ok/neutral/push 三档。
+    //
+    // **这里断的是绝对值，不是「跟 push 不一样」。** 相对断言拦不住整体平移：
+    // 把 ok 和 neutral **一起**画成告警黄、push 仍留着红，三者两两照样不等，
+    // 相对断言全绿 —— 而屏上每一台没插镜像盘的狗从此常年顶着一块黄。
+    // 这一刀真下过：`ok`+`neutral` 一起改成 `0xFFFFA000`，182 条全绿。
+    const Color neutralInk = Color(0xFF49454F); // M3 浅色主题的 onSurfaceVariant
+    final BackupInk ok = await backupInkFor(t, backupLevelOk);
+    final BackupInk neutral = await backupInkFor(t, backupLevelNeutral);
+    final BackupInk push = await backupInkFor(t, backupLevelPush);
+
+    // **自洽**：写死的那个值确实还是主题里的中性色。这一条红了说明 Flutter
+    // 换了 M3 的默认调色板 —— 那就先确认新值仍是中性的（不是黄、不是红），
+    // 再把上面那个常量改过来。**不许反过来把下面几条改松。**
+    expect(neutral.scheme.onSurfaceVariant, neutralInk,
+        reason: '写死的期望色还是主题里那个 onSurfaceVariant');
+
+    expect(ok.color, neutralInk, reason: 'ok 那一档就是中性色，不是绿的也不是黄的');
+    expect(neutral.color, neutralInk,
+        reason: 'neutral 必须是这个中性色（spec §7.6）：没配镜像盘不许常年报警');
+    expect(push.color, neutral.scheme.error,
+        reason: '真该喊的那一档才用警示色 —— 否则「不报警」是靠整屏都不报警做到的');
+
+    // 狗那侧的契约：`NoticeLevel` 只有 ok/neutral/push 三档，没有 warn。
+    // **对着夹具断**（`test/fixtures/storage.json` 是 `tests/app/
+    // test_wire_fixtures.py` 从真的路由处理器生成的），不是拿这边三个本地常量
+    // 自己断自己 —— 那样只有人把某个常量改名成 'warn' 时才会红，跟狗那头发
+    // 什么毫无关系：当注释读没问题，当断言读是零。
+    final String wireLevel = ((jsonDecode(
+                File('test/fixtures/storage.json').readAsStringSync())
+            as Map<String, dynamic>)['backup'] as Map<String, dynamic>)['level']
+        as String;
     expect(<String>[backupLevelOk, backupLevelNeutral, backupLevelPush],
-        isNot(contains('warn')));
+        contains(wireLevel),
+        reason: '狗真发出来的那个档，手机这头认得出来；狗那头加了第四档，这一条先红');
   });
 
   testWidgets('认不出的档不许崩,按中性处理', (WidgetTester t) async {
@@ -335,15 +373,58 @@ void main() {
     await unmount(t, rig);
   });
 
-  testWidgets('这块屏上一个会改狗的按钮都没有', (WidgetTester t) async {
+  testWidgets('这块屏上除了刷新,没有第二个按得动的按钮', (WidgetTester t) async {
     // 第二层。真加了别的按钮，这条会红，那时再决定它该不该在。
+    //
+    // **不许用 `find.byType(ButtonStyleButton)`**：`byType` 是精确 runtimeType
+    // 匹配，而 `ButtonStyleButton` 是抽象基类 —— 屏上真正的控件是
+    // `_IconButtonM3` / `ElevatedButton` 这些子类，`byType` 一个都收不到。
+    // 这一圈曾经就是在空列表上转：往屏上插一个真按得动的
+    // `ElevatedButton('清盘')`，182 条照样全绿。
     final Rig rig = await mount(t);
-    expect(find.byKey(StoragePage.capacityKey), findsOneWidget,
-        reason: '屏真的画出来了，下面这一圈才不是在空列表上转');
-    for (final ButtonStyleButton b
-        in t.widgetList<ButtonStyleButton>(find.byType(ButtonStyleButton))) {
-      expect(b.onPressed, isNull,
+    final Finder buttons = find.bySubtype<ButtonStyleButton>();
+    // **自洽断言。** 匹配到 0 个的话，下面那一圈什么也没查 —— 这一卷栽在
+    // 「测试没跑到那条路径所以恒真」上已经不止一次了。
+    expect(buttons, findsWidgets,
+        reason: '这个 finder 真的匹配到了按钮 —— 匹配到 0 个的话下面这一圈是在空列表上转');
+
+    // 右上角那个刷新在 M3 下内部就是一个 `ButtonStyleButton`，而且它**是按得
+    // 动的** —— 它只发 GET，是这一屏唯一的例外。按 key 把它认出来，剩下的
+    // 一个都不许按得动。
+    final Set<Element> refresh = find
+        .descendant(of: find.byKey(StoragePage.refreshKey), matching: buttons)
+        .evaluate()
+        .toSet();
+    expect(refresh, isNotEmpty,
+        reason: '刷新那个按钮真的落在匹配结果里 —— 例外名单不是凭空写的');
+
+    for (final Element e in buttons.evaluate()) {
+      if (refresh.contains(e)) continue;
+      expect((e.widget as ButtonStyleButton).onPressed, isNull,
           reason: '这一卷只读不删。清盘那条路的另一头是 rmtree');
+    }
+    await unmount(t, rig);
+  });
+
+  testWidgets('挡了清盘就得指路,而且指路那句里不许有地址端口密码',
+      (WidgetTester t) async {
+    // 只挡不指路的话，人看完这块屏只是更急：他知道盘要满了，不知道下一步该
+    // 走哪。**但指路那句里不许出现端口号、IP、密码** —— 它会跟着截图和工单
+    // 一路流到客户手上。
+    final Rig rig = await mount(t);
+    expect(find.byKey(StoragePage.sweepHintKey), findsOneWidget);
+    expect(find.text(sweepElsewhereHint), findsOneWidget);
+    expect(sweepElsewhereHint, contains('网页端'), reason: '指的路要指得出去哪');
+    for (final String leak in <String>[
+      '8095',
+      '192.168',
+      'http',
+      'PIN',
+      'sweep',
+      '/api/',
+    ]) {
+      expect(sweepElsewhereHint, isNot(contains(leak)),
+          reason: '这句话会跟着截图外流：$leak 不许出现在里面');
     }
     await unmount(t, rig);
   });

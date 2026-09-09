@@ -15,6 +15,8 @@
 /// **标识符全是 ASCII**：这台机器上的 Dart SDK 不接受非 ASCII 标识符。
 library;
 
+import 'dart:io';
+
 import 'package:d1max_patrol/model/registry.dart';
 import 'package:d1max_patrol/model/robot.dart';
 import 'package:d1max_patrol/store/pin_vault.dart';
@@ -29,6 +31,60 @@ import 'support/fake_dog.dart';
 import 'support/pump.dart';
 
 const Duration _step = Duration(milliseconds: 20);
+
+/// 一个只管数 `close()` 的 `HttpClient` 外壳。
+///
+/// **「连接收没收」这件事只有在客户端那一侧数得准。** 从假狗那侧数连接数是
+/// 不行的：`HttpClient` 池子里的空闲连接过一阵子自己也会散，于是「忘了
+/// close」和「close 了」在服务器那侧最终长得一模一样 —— 那条断言看着很硬，
+/// 实测**拦不住删掉 `client.close()`**（本轮亲手试过，全绿）。
+///
+/// 只转发 `PatrolClient` 真正用到的那几样（`connectionTimeout` / `openUrl` /
+/// `close`）。别的走 `noSuchMethod`：真有人用到了就当场抛，**不会悄悄给一个
+/// 假值**，那样测试会绿在一件没发生过的事上。
+class CountingHttpClient implements HttpClient {
+  CountingHttpClient(this._inner);
+
+  final HttpClient _inner;
+
+  /// 被 `close()` 了几次。
+  int closes = 0;
+
+  @override
+  Duration? get connectionTimeout => _inner.connectionTimeout;
+
+  @override
+  set connectionTimeout(Duration? value) => _inner.connectionTimeout = value;
+
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) =>
+      _inner.openUrl(method, url);
+
+  @override
+  void close({bool force = false}) {
+    closes++;
+    _inner.close(force: force);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// 让这一条测试里造出来的每一个 `HttpClient` 都套上 [CountingHttpClient]。
+///
+/// `roster_page` 的 `_open()` 自己 `new` 一个 `PatrolClient`，测试拿不到那个
+/// 对象 —— 从 `HttpOverrides` 那一层套进去是唯一不改产品代码的seam。
+class CountingHttpOverrides extends HttpOverrides {
+  final List<CountingHttpClient> made = <CountingHttpClient>[];
+
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    final CountingHttpClient c =
+        CountingHttpClient(super.createHttpClient(context));
+    made.add(c);
+    return c;
+  }
+}
 
 /// 一次挂好的名册：一只假狗、一本存着 PIN 的名册。
 class Rig {
@@ -209,6 +265,78 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byType(StoragePage), findsNothing);
     expect(rig.unlocks, 0, reason: '人放弃了，就一个字节也别往狗上发');
+    await unmount(t, rig);
+  });
+
+  testWidgets('名字留空就按连上,一个字节也不往狗上发', (WidgetTester t) async {
+    // `_operatorName()` 里 `if (asked.isEmpty)` 那道守卫 —— **它的前提以前
+    // 从没被造出来过**：把它改成 `if (false)`（没填名字也照连），182 条全绿。
+    //
+    // 空名字在狗的账上是「未具名(ref)」（§6.3），事后谁也说不清那一趟是谁
+    // 开的 —— 而这是要拿去应付客户的一笔账。
+    final Rig rig = await mount(t);
+    await t.tap(find.byKey(RosterPage.storageKeyFor('C40221')));
+    await pumpUntil(
+        t,
+        () => find.byKey(RosterPage.operatorFieldKey).evaluate().isNotEmpty,
+        '问「你是谁」那个框弹出来',
+        step: _step);
+    // **一个字都不填**，直接按「连上」。
+    await t.tap(find.text('连上'));
+    await t.pumpAndSettle();
+    // **要推真时钟。** 解锁是真的网络 I/O，`pumpAndSettle` 只推假时钟推不动
+    // 它 —— 只 settle 一下就断 `unlocks == 0`，断到的是「还没来得及发」，
+    // 不是「不发」。守卫拆掉之后它照样绿，那正是这一卷栽过十几次的那种空绿。
+    // 所以在这儿等到局面分晓：要么拦下来说了一句，要么真去连了狗。
+    await pumpUntil(
+        t,
+        () =>
+            find.textContaining('填一个名字').evaluate().isNotEmpty ||
+            find.byType(StoragePage).evaluate().isNotEmpty ||
+            rig.unlocks > 0,
+        '要么屏上拦了一句，要么（守卫没了的话）解锁真的发出去了',
+        step: _step);
+
+    expect(rig.unlocks, 0, reason: '空名字不许拿去连狗：狗的账上要记下是谁开的');
+    expect(find.byType(StoragePage), findsNothing);
+    // 拦下来还得说一声 —— 不说的话，人按了「连上」什么也没发生，会以为按钮坏了。
+    expect(find.textContaining('填一个名字'), findsOneWidget);
+    await unmount(t, rig);
+  });
+
+  testWidgets('连不上狗时说人话,而且把那条连接收干净', (WidgetTester t) async {
+    // `_open()` 里 `unlock` 抛异常那一支 —— **以前一条测试都没有**：把
+    // `client.close()` 和那句 `_toast` 一起删掉（连不上时既不收连接、也不跟
+    // 人说一声），182 条全绿。
+    final Rig rig = await mount(t);
+    // 从这里开始造的 `HttpClient` 都套上数 `close()` 的壳。`useRealHttp()` 的
+    // `tearDown` 会把 `HttpOverrides.global` 装回去，不会漏给别的测试。
+    final CountingHttpOverrides counting = CountingHttpOverrides();
+    HttpOverrides.global = counting;
+    // 狗把解锁那一步打回来。现场最常见的两种：PIN 记错了、连错了别人家的热点。
+    rig.dog.statusCodes['/api/auth'] = 401;
+
+    await enter(t, RosterPage.storageKeyFor('C40221'));
+    await pumpUntil(
+        t,
+        () => find.textContaining(connectFailedHint).evaluate().isNotEmpty,
+        '屏上说了「连不上」那一句',
+        step: _step);
+
+    expect(rig.unlocks, 1,
+        reason: '解锁那一步真的发出去过 —— 否则下面查的是一条压根没建过的连接');
+    expect(find.byType(StoragePage), findsNothing, reason: '没连上就不许进那一屏');
+    // **异常原文不上屏。** `PatrolError` 那份原文里带着状态码，它既不告诉人
+    // 下一步该干什么，又会把内部细节推到客户面前。
+    expect(find.textContaining('401'), findsNothing);
+
+    // **连接要收。** `PatrolClient` 自己造的那个 `HttpClient` 带 keep-alive
+    // 和一个 15 秒空闲计时器；连不上就撒手的话，人每按一次就多挂一条。
+    expect(counting.made, hasLength(1),
+        reason: '这一趟真的造过一个 HttpClient —— 否则下面数的是一份空名单');
+    expect(counting.made.single.closes, 1,
+        reason: '连不上也要把 PatrolClient 收掉：撒手不管的话每按一次就多挂一条连接');
+
     await unmount(t, rig);
   });
 
