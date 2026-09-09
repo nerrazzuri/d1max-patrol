@@ -9,11 +9,12 @@
 调用方是谁 —— 事件从哪来、什么时候升级提醒谁 —— 都不是这个模块的事;
 那些是 ``app/alert_sources.py``(任务 6)和确认/升级状态机(任务 5)的事。
 
-**聚合键是 ``robot/kind``。** 这是 §5.4 聚合的全部机制:同一只狗同一个类型
-就是同一条告警,``count`` 累加、``last_ms`` 前移;``robot`` 在键里,就是
-"P1 不跨狗合并"的实现 —— 两只狗同时卡住是两件事,要跑两趟。任务 4 会在这
-个键上加聚合窗口(``AGGREGATE_WINDOW_MS``),把键变成
-``f"{robot}/{kind}#{seq}"``;这里先不做窗口。
+**聚合键是 ``robot/kind#seq``。** 同一只狗同一个类型、在 ``AGGREGATE_WINDOW_MS``
+窗口内(从 ``last_ms`` 算起)是同一条告警,``count`` 累加、``last_ms`` 前移;
+``robot`` 在键里,就是"P1 不跨狗合并"的实现 —— 两只狗同时卡住是两件事,要
+跑两趟。窗口过期、被确认(``acked_ms``)、被解决(``resolved_ms``)三者任一
+成立,下一次同 kind 的事件就另起一条(``#seq`` 递增)—— 确认过的告警不会
+悄悄吸收后来的新事件,那会让人以为一件已经处理过的事还是老样子。
 """
 
 from __future__ import annotations
@@ -61,9 +62,9 @@ LEVEL_OF: dict[str, Level] = {
 
 @dataclass(frozen=True, slots=True)
 class Alert:
-    """一条告警的事实。**同一只狗同一个 kind 是同一条**(键见 ``AlertBook``
-    的 ``_key``),``count``/``first_ms``/``last_ms`` 记的是这条告警被同一根因
-    重复触发的轨迹。
+    """一条告警的事实。**同一只狗同一个 kind 在聚合窗口内是同一条**(键见
+    ``AlertBook`` 的 ``_key``),``count``/``first_ms``/``last_ms`` 记的是这条
+    告警被同一根因重复触发的轨迹。
 
     ``acked_*`` 和 ``resolved_ms`` 是两个独立字段,不是同一个状态机上的两
     档:"我看见了在处理"(ack)和"这事没了"(resolve)是两回事(§5.3)。修一
@@ -102,16 +103,36 @@ class Alert:
         }
 
 
-def _key(robot: str, kind: str) -> str:
-    """聚合键:``robot/kind``。``robot`` 在键里就是"P1 不跨狗合并"的实现。"""
-    return f"{robot}/{kind}"
+#: 聚合窗口(毫秒):同一只狗同一个 ``kind`` 在这个窗口内的事件才合并成一
+#: 条,窗口从**最后一次触发**(``last_ms``)算起,不是从第一次。这个数是
+#: 拍的 —— 先定 15 分钟,跟 §5.7 那个 2 米一样没有实测依据,真机清单里要
+#: 有一条量它、按现场手感调。
+AGGREGATE_WINDOW_MS = 15 * 60_000
+
+
+def _key(robot: str, kind: str, seq: int) -> str:
+    """聚合键:``robot/kind#seq``。``robot`` 在键里就是"P1 不跨狗合并"的
+    实现;``seq`` 是同一个 ``robot/kind`` 下第几条(§5.4 聚合窗口引入后,
+    同一个 ``robot/kind`` 可能同时存在好几条已经互不吸收的告警,单靠
+    ``robot/kind`` 已经不够做键了)。"""
+    return f"{robot}/{kind}#{seq}"
 
 
 class AlertBook:
-    """所有告警的事实簿。内部一个 ``key -> Alert`` 的字典,没有别的状态。"""
+    """所有告警的事实簿。内部一个 ``key -> Alert`` 的字典,没有别的状态,
+    外加一个 ``robot/kind -> key`` 的指向表,记着"当前还在吸收新事件的
+    是哪一条"。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, window_ms: int = AGGREGATE_WINDOW_MS) -> None:
+        self._window_ms = window_ms
         self._by_key: dict[str, Alert] = {}
+        #: ``robot/kind`` -> 当前正在吸收新事件的那条告警的 ``key``。
+        #: 窗口过期、被确认、被解决,这个指向就断开,下次 ``raise_alert``
+        #: 另起一条并换一个新指向,不覆盖旧的。
+        self._active: dict[str, str] = {}
+        #: 每个 ``robot/kind`` 已经发出过的序号计数,只增不减,保证
+        #: ``#seq`` 不会跟已经存在过的(哪怕已解决)撞上。
+        self._seq: dict[str, int] = {}
 
     def raise_alert(
         self,
@@ -141,9 +162,18 @@ class AlertBook:
                 f"跟传入的 level={level.value} 不一致"
             )
 
-        key = _key(robot, kind)
-        existing = self._by_key.get(key)
-        if existing is not None and existing.resolved_ms is None:
+        group = f"{robot}/{kind}"
+        active_key = self._active.get(group)
+        existing = self._by_key.get(active_key) if active_key is not None else None
+        # 三条任一成立,当前这条就不再吸收新事件,下面另起一条:
+        # 窗口过期(从 last_ms 算起)、已经被确认、已经被解决。
+        absorbs = (
+            existing is not None
+            and existing.resolved_ms is None
+            and existing.acked_ms is None
+            and now_ms - existing.last_ms <= self._window_ms
+        )
+        if absorbs:
             alert = replace(
                 existing,
                 title=title,
@@ -152,8 +182,10 @@ class AlertBook:
                 count=existing.count + 1,
             )
         else:
+            seq = self._seq.get(group, 0) + 1
+            self._seq[group] = seq
             alert = Alert(
-                key=key,
+                key=_key(robot, kind, seq),
                 level=level,
                 kind=kind,
                 robot=robot,
@@ -166,7 +198,8 @@ class AlertBook:
                 acked_ms=None,
                 resolved_ms=None,
             )
-        self._by_key[key] = alert
+            self._active[group] = alert.key
+        self._by_key[alert.key] = alert
         return alert
 
     def ack(self, key: str, *, who: str, now_ms: int) -> Alert:

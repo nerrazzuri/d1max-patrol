@@ -87,3 +87,32 @@ def test_传入的level跟表不一致会抛而不是悄悄接受():
     with pytest.raises(KeyError):
         book.raise_alert(kind="从没见过的东西", robot="dog-1",
                          title="?", now_ms=1000, level=Level.P3)
+
+
+def test_窗口内合并窗口外另起一条():
+    book = AlertBook(window_ms=1000)
+    book.raise_alert(kind="stuck", robot="dog-1", title="卡住了", now_ms=0)
+    book.raise_alert(kind="stuck", robot="dog-1", title="卡住了", now_ms=900)
+    assert len(book.open()) == 1
+
+    book.raise_alert(kind="stuck", robot="dog-1", title="卡住了", now_ms=2500)
+    assert len(book.open()) == 2       # 隔了这么久,是新的一件事
+
+
+def test_窗口从最后一次算起不是从第一次():
+    """连续不断地卡,是一件事在持续,不是每 window 就变成新的一件。"""
+    book = AlertBook(window_ms=1000)
+    book.raise_alert(kind="stuck", robot="dog-1", title="卡住了", now_ms=0)
+    book.raise_alert(kind="stuck", robot="dog-1", title="卡住了", now_ms=900)
+    book.raise_alert(kind="stuck", robot="dog-1", title="卡住了", now_ms=1700)
+    assert len(book.open()) == 1
+    assert book.open()[0].count == 3
+
+
+def test_确认过的告警不再吸收新的():
+    """人已经看见并确认了这一条,再发生就是**新的一次**,要重新被看见。"""
+    book = AlertBook(window_ms=10_000)
+    a = book.raise_alert(kind="stuck", robot="dog-1", title="卡住了", now_ms=0)
+    book.ack(a.key, who="老王", now_ms=100)
+    book.raise_alert(kind="stuck", robot="dog-1", title="卡住了", now_ms=200)
+    assert len(book.open()) == 2
