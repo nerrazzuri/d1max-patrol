@@ -7,18 +7,58 @@
 /// 手机、没有插件的情况下整屏跑测试。
 library;
 
+import 'dart:async';
+import 'dart:developer' as developer;
+
 import 'package:flutter/material.dart';
 
 import '../model/registry.dart';
 import '../model/robot.dart';
+import '../net/patrol_client.dart';
 import '../store/pin_vault.dart';
 import '../store/registry_store.dart';
+import 'storage_page.dart';
+import 'teleop_page.dart';
+
+/// 连狗之前问的那一句。
+///
+/// **狗记下这个名字但不核实**（§6.3）。它不是登录：它是别人来接管控制权时
+/// 屏上显示的那个名字，也是留痕里记的那个名字。所以宁可问一句，也不要拿
+/// 空名字去连 —— 空名字在狗的账上是「未具名(ref)」，事后谁也说不清那一趟
+/// 是谁开的。
+///
+/// 问过一次就记在这一屏上，同一次开着 app 不再重复问。
+const String operatorAskTitle = '你是谁';
+
+/// 那个输入框底下的解释。**不许写成「登录」。**
+const String operatorAskHint = '记在狗的账上，狗不核实。别人来接管控制权时'
+    '看到的就是这个名字。';
+
+/// 名册里那条没存过 PIN 的狗，点进去时说的那一句。
+///
+/// **不拿空 PIN 去撞一次。** 空 PIN 换到的是一个 401，而报错会指向「PIN 不对」，
+/// 人于是去翻本子找那个其实从来没填过的号。
+const String noPinHint = '还没存 PIN。点开这一条填上，再进来。';
+
+/// 连不上时说的那一句。**异常原文不上屏**，只进 `developer.log`。
+const String connectFailedHint = '连不上。热点连对了吗，PIN 对吗';
 
 class RosterPage extends StatefulWidget {
   final RegistryStore store;
   final PinVault vault;
 
   const RosterPage({super.key, required this.store, required this.vault});
+
+  /// 每一行上那两个入口。
+  ///
+  /// **两个入口走同一套写法**（[_RosterPageState._open]）：读 PIN、问名字、
+  /// 解锁、`Navigator.push`、回来收连接。分两套写的话，两边迟早只有一边
+  /// 记得收 `PatrolClient`。
+  static Key teleopKeyFor(String sn) => ValueKey<String>('roster-teleop-$sn');
+  static Key storageKeyFor(String sn) => ValueKey<String>('roster-storage-$sn');
+
+  /// 问名字那个框。
+  static const Key operatorFieldKey = ValueKey<String>('roster-operator');
 
   @override
   State<RosterPage> createState() => _RosterPageState();
@@ -27,6 +67,9 @@ class RosterPage extends StatefulWidget {
 class _RosterPageState extends State<RosterPage> {
   RobotRegistry? _registry;
   Object? _loadError;
+
+  /// 这次开着 app 报的名字。问过一次就不再问。
+  String _operator = '';
 
   @override
   void initState() {
@@ -105,13 +148,110 @@ class _RosterPageState extends State<RosterPage> {
           if (r.provisional) '序列号是兜底的',
         ].join(' · '),
       ),
-      trailing: IconButton(
-        icon: const Icon(Icons.delete_outline),
-        tooltip: '从名册里去掉',
-        onPressed: () => _onDelete(r),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          IconButton(
+            key: RosterPage.teleopKeyFor(r.sn),
+            icon: const Icon(Icons.sports_esports_outlined),
+            tooltip: '遥控',
+            onPressed: () => unawaited(
+                _open(r, (PatrolClient c) => TeleopPage(client: c, robot: r))),
+          ),
+          IconButton(
+            key: RosterPage.storageKeyFor(r.sn),
+            icon: const Icon(Icons.sd_storage_outlined),
+            tooltip: '盘况',
+            onPressed: () => unawaited(
+                _open(r, (PatrolClient c) => StoragePage(client: c, robot: r))),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: '从名册里去掉',
+            onPressed: () => _onDelete(r),
+          ),
+        ],
       ),
       onTap: () => _onEdit(r),
     );
+  }
+
+  /// 进某一只狗的某一屏。**两个入口共用这一条路。**
+  ///
+  /// 顺序是：钥匙 → 名字 → 解锁 → 进屏 → 回来收连接。
+  ///
+  /// **收连接不能省。** `PatrolClient` 自己造的那个 `HttpClient` 带着一个空闲
+  /// 计时器；不收的话，人每进出一次就多挂一条，而狗那头那个 token 也一直有效。
+  Future<void> _open(Robot r, Widget Function(PatrolClient) page) async {
+    final String pin = await widget.vault.read(r.sn) ?? '';
+    if (!mounted) return;
+    if (pin.isEmpty) {
+      _toast('${r.label} $noPinHint');
+      return;
+    }
+    final String? who = await _operatorName();
+    if (!mounted || who == null) return;
+
+    final PatrolClient client = PatrolClient(r.baseUrl);
+    try {
+      await client.unlock(pin, operator: who);
+    } catch (e) {
+      // 异常原文只进日志：屏上写 `$e` 给不出下一步该干什么，还会把内部
+      // 地址推到客户面前。
+      developer.log('连 ${r.sn} 失败：$e', name: 'roster_page');
+      client.close();
+      if (mounted) _toast('${r.label}：$connectFailedHint');
+      return;
+    }
+    if (!mounted) {
+      client.close();
+      return;
+    }
+    await Navigator.of(context)
+        .push<void>(MaterialPageRoute<void>(builder: (_) => page(client)));
+    client.close();
+  }
+
+  /// 这次报什么名字。问过一次就记着，同一次开着 app 不再重复问。
+  ///
+  /// 返回 `null` 表示人放弃了（按了「算了」，或者名字是空的）—— 那就不连。
+  Future<String?> _operatorName() async {
+    if (_operator.isNotEmpty) return _operator;
+    final TextEditingController ctl = TextEditingController();
+    final String? asked = await showDialog<String>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text(operatorAskTitle),
+        content: TextField(
+          key: RosterPage.operatorFieldKey,
+          controller: ctl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '名字',
+            helperText: operatorAskHint,
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('算了'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
+            child: const Text('连上'),
+          ),
+        ],
+      ),
+    );
+    ctl.dispose();
+    if (asked == null) return null;
+    if (asked.isEmpty) {
+      // 空名字在狗的账上是「未具名(ref)」，事后谁也说不清那一趟是谁开的。
+      if (mounted) _toast('填一个名字：狗的账上要记下是谁开的。');
+      return null;
+    }
+    _operator = asked;
+    return asked;
   }
 
   Future<void> _onAdd() async {
