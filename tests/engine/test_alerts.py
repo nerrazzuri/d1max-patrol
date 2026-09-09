@@ -68,3 +68,22 @@ def test_解决了不等于确认过_两个状态各存各的():
     assert b.resolved_ms == 2000
     assert b.acked_ms is None          # 解决了,但没有人看见过
     assert b.acked_by == ""
+
+
+def test_传入的level跟表不一致会抛而不是悄悄接受():
+    """这条分支存在的全部意义是逼 Task 12 在新增 kind 时去注册它 —— 没测试
+    守着,它跟不存在没有区别,下一个人"顺手放宽一下"也不会有任何东西变红。
+    异常信息里要能看出两边分别是什么:表里是哪一档,传的是哪一档。"""
+    book = AlertBook()
+    with pytest.raises(ValueError) as exc_info:
+        book.raise_alert(kind="stuck", robot="dog-1", title="卡住了",
+                         now_ms=1000, level=Level.P3)
+    message = str(exc_info.value)
+    assert "P1" in message   # LEVEL_OF 里登记的那一档
+    assert "P3" in message   # 调用方传进来的那一档
+
+    # 跟"kind 根本没注册"是两条不同的路:那条抛 KeyError,这条抛 ValueError,
+    # 不能混。
+    with pytest.raises(KeyError):
+        book.raise_alert(kind="从没见过的东西", robot="dog-1",
+                         title="?", now_ms=1000, level=Level.P3)
