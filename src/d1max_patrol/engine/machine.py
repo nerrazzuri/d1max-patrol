@@ -111,6 +111,11 @@ FINAL_STATES = frozenset({RunState.DONE, RunState.ABORTED})
 
 #: ``suspend()`` 只在"继续之后 ``_RetryWaypoint`` 有处可去"的状态下受理(§5.10)。
 #:
+#: ``PAUSED`` 不在这张表里 —— 它没有"没处去"这个问题。``_pause_until_resumed``
+#: 自己那条 while 现在会接住 ``suspend`` 命令,转手调
+#: ``_suspend_until_resumed``,``_RetryWaypoint`` 是从**那一层**抛出来的,走的
+#: 跟平常挂起完全一样的路径,不会漏给别处的兜底。
+#:
 #: ``LOCALIZING`` 期间挂起再继续,``_RetryWaypoint`` 会从 ``_await_localized``
 #: 直接漏给 ``_run`` 的兜底,按"引擎内部异常"整趟中止。``RETURNING`` 期间同样
 #: 挂起再继续,状态先闪成 ``RUNNING``,``_RetryWaypoint`` 会被 ``_go_home``
@@ -878,16 +883,17 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 if item.kind == "resume":
                     break
                 if item.kind == "suspend":
-                    # 跟 ``_SUSPEND_UNSAFE_STATES`` 那两条不是同一类问题:
-                    # PAUSED 走的是自己这条 while,压根不会抛
-                    # ``_RetryWaypoint``,不存在"没有安全路径"这回事。这里
-                    # 原来落进下面那句 ``continue``,静默吞掉——人点了
-                    # 「让开腿」界面上什么反应都没有,只会以为按钮坏了。
-                    # "暂停中要不要放行人工接管"本身还没有产品决策(记在
-                    # Task 14),这里只补"说得出口",不改受理判断。
-                    deny = "正在暂停,现在不能让开腿"
-                    self._note("suspend_refused", state=self._state.value, reason=deny)
-                    self._publish(deny)
+                    # 人拍的板(2026-09-09):暂停中允许人工接管。
+                    #
+                    # **实现成"多一条通往挂起的路",不是放宽遥控那道闸**
+                    # (裁决四)。放宽闸会造出一个引擎不知道的状态:人在
+                    # PAUSED 下开着狗,而下面那句 break 是照着"暂停期间没人
+                    # 碰狗"写的——它不查 _busy_reason()。人左手压着摇杆点
+                    # 继续,引擎和人就同时在给腿下指令。
+                    #
+                    # 转进 SUSPENDED 之后,"谁在动这条狗"就是显式的:继续
+                    # 走的是挂起那一支,那一支查 busy。
+                    await self._suspend_until_resumed(item.reason)
                 continue
             if isinstance(item, BatteryEvent) and self._live is not None:
                 self._live.battery_pct = item.percent

@@ -393,23 +393,53 @@ async def test_挂起被拒也广播出去(make_engine, nav):
     await engine.aclose()
 
 
-async def test_暂停时喊挂起也说清楚为什么不行(跑起来的引擎):
-    """暂停中调 ``suspend()`` 原来是静默吞掉:``_pause_until_resumed`` 自己
-    那条读命令的 while 只认 abort/resume,``suspend`` 落进兜底的
-    ``continue``,连事件都不落——比 N1 还彻底,连"落档但不广播"都算不上。
-    人点了「让开腿」界面上什么反应都没有,只会以为按钮坏了。
+async def test_暂停时喊挂起不再产生拒绝事件(跑起来的引擎):
+    """这条原来钉的是"暂停中喊挂起被拒、但拒绝要说得出口"——那时"暂停中
+    要不要放行人工接管"还没有产品决策(挂在 Task 14)。
 
-    **这里只要求「说得出口」,不改受理与否的判断。** 暂停中该不该放行人工
-    接管是产品决策,不是这条测试要证的事(挂在 Task 14)。
+    人拍的板 1(2026-09-09)推翻了那个"待定":暂停已经是人在主导,再拦一道
+    是官僚。决策落地之后这条不再拒绝,改钉「不再拒绝」这件事本身:
+    ``events.jsonl`` 里不该再多出一条 ``suspend_refused``。转进 SUSPENDED
+    的完整覆盖(状态、挂起点位、闸)见前面 ``test_暂停中点让开腿能进挂起``和
+    ``test_从暂停进挂起之后遥控的闸放行`` —— 跟这里对照着看,正好是
+    LOCALIZING/RETURNING(S1/S2,仍然拒绝、仍然落 ``suspend_refused``)的
+    反例。
     """
     eng = 跑起来的引擎
+    before = len(read_events(eng.archive.path))
     await eng.pause()
     await eng.wait_state(RunState.PAUSED)
     await eng.suspend("门口有箱子")
-    拒绝 = await _等到拒绝(eng)
-    assert eng.state is RunState.PAUSED
-    assert 拒绝[-1]["reason"] == "正在暂停,现在不能让开腿"
-    assert eng.snapshot.reason == "正在暂停,现在不能让开腿"
+    await eng.wait_state(RunState.SUSPENDED)
+    新增 = read_events(eng.archive.path)[before:]
+    assert not any(e["kind"] == "suspend_refused" for e in 新增)
+
+
+async def test_暂停中点让开腿能进挂起(跑起来的引擎):
+    """人拍的板 1(2026-09-09):暂停已经是人在主导,再拦一道是官僚。"""
+    eng = 跑起来的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+
+    await eng.suspend("人要过去挪箱子")
+    await eng.wait_state(RunState.SUSPENDED)
+
+    # 挂起点位必须记下来 —— 这是 §5.6 的硬要求,不是顺手
+    snap = eng.snapshot
+    assert snap.suspended_at is not None
+    assert snap.suspended_at.reason == "人要过去挪箱子"
+
+
+async def test_从暂停进挂起之后遥控的闸放行(跑起来的引擎):
+    """闸的文字不动(裁决四):放行的判据仍然是 yielding,不是 paused。"""
+    eng = 跑起来的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+    assert eng.yielding is False          # 暂停时闸是关的
+
+    await eng.suspend("接管")
+    await eng.wait_state(RunState.SUSPENDED)
+    assert eng.yielding is True           # 挂起后才开
 
 
 async def test_让开腿之前先把导航停掉(跑起来的引擎, nav):
