@@ -381,6 +381,108 @@ void main() {
     await unmount(t, rig);
   });
 
+  testWidgets('杆变灰之后靠探针自己找回来', (WidgetTester t) async {
+    /// **变灰之后周期发拍那一支就被挡掉了** —— 此后唯一还会往狗上发东西的，
+    /// 只有 `_probeEvery` 那个探针。而 `_fails` 只在一次成功的发拍里清零，
+    /// 所以探针不发 = `_fails` 永远停在阈值以上 = 杆**永远**是灰的。
+    /// 现场表现是「热点抖了一下，从此这一屏再也开不了狗，得退出去重进」。
+    ///
+    /// **两半都要，缺一半就是空绿：**
+    /// 只断「杆亮了」的话，探针删掉之后这句话仍然可能因为别的原因成立；
+    /// 只数请求的话，数到的可能是变灰那一刻补发的那几拍全零（立刻一拍 +
+    /// `_stopBursts` 两拍 = **最多 3 拍**），跟探针毫无关系。
+    /// 所以先在**狗还在拒**的时候等到超过那 3 拍（多出来的只可能是探针发的），
+    /// 再放狗回话，等杆自己亮回来。
+    final Rig rig = await mount(t);
+    rig.dog.statusCodes['/api/teleop'] = 500;
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    await pumpUntil(t, () => !enabledLeft(t), '连着三拍被拒之后杆变灰');
+
+    // **手指不抬。** 抬手会再走一次 `_stopNow()`，又排上三拍全零 ——
+    // 那几拍会混进下面这个计数里，正好把要证的那件事糊掉。
+    final int atGrey = rig.pulses.length;
+    await pumpUntil(t, () => rig.pulses.length >= atGrey + 6,
+        '变灰之后探针还在往狗上发的那几拍（灰了就再也不发的话，杆永远回不来）');
+
+    // 狗回话了。**探针发的是全零**，在狗那头走的是 `stop()`，看不见也允许，
+    // 探一次不会让狗动一下。
+    rig.dog.statusCodes.remove('/api/teleop');
+    await pumpUntil(t, () => enabledLeft(t),
+        '狗重新回话之后杆自己亮回来（没有探针的话它永远等不到这一刻）');
+    await g.up();
+    await t.pump();
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------------------- 出事的那一刻要立刻停
+  //
+  // **「已经出事的静止场景」和「出事的那一刻」是两件事。**
+  // 上面那两条提示语的测试造的是前者（挂载时就没有控制权 / 没手指压着杆的
+  // 时候推一次 `front:false`），于是 `_disarmIfNeeded()` 里
+  // `if (_enabled || !_moving) return;` 早返，那两个调用点一次都没跑过。
+  //
+  // 下面这两条造的是后者：**手正推着杆**，这时候控制权被抢走 / 画面掉了。
+  // 漏掉 disarm 之后的真实表现是：屏幕上那根杆还停在推着的位置（人以为还在
+  // 控），实际一拍都发不出去，狗那头只剩守死人（0.6 秒）兜底 —— 而那半秒
+  // 足够撞上东西。
+  //
+  // 两条钉的都是**同一件可观察的事**：那一刻有没有一拍全零发出去。
+  // 没有 disarm 的话一拍都不会有 —— `_tick()` 在 `_enabled` 为假、
+  // `_stopsLeft` 为零、`_fails` 没到阈值的时候什么都不发。
+
+  testWidgets('正推着杆时控制权被抢走:立刻发一拍全零', (WidgetTester t) async {
+    /// 人手里正推着杆而控制权被别人接管走了，狗那头下一拍就是 409 ——
+    /// 杆得**立刻**归零并主动发一次全零停，不能等下一个周期（灰了之后压根
+    /// 没有下一个周期）。
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    await pulseWith(t, rig, 'fwd', '推着的那一拍（非零）');
+    expect(zeroPulses(rig), isEmpty,
+        reason: '还没出事就已经有全零拍了：下面那句「多出一拍全零」认不出是谁发的');
+
+    // 控制权被李四接管走了。**两份回复一起换**：面板下一次校准问的是
+    // `/api/control`，而它自己拿着的时候还会顺手续一次期。
+    rig.dog.replies['/api/control'] = heldByOther();
+    rig.dog.replies['/api/control/heartbeat'] = heldByOther();
+    await pumpUntil(t, () => !enabledLeft(t),
+        '面板下一次校准问到「控制权不在自己手上」，把杆变灰');
+    await pumpUntil(t, () => zeroPulses(rig).isNotEmpty,
+        '控制权掉的那一刻主动发出去的那一拍全零'
+        '（没有它，屏上那根杆还停在推着的位置，而狗只剩守死人兜底）');
+    await g.up();
+    await t.pump();
+    await unmount(t, rig);
+  });
+
+  testWidgets('正推着杆时画面掉了:立刻发一拍全零', (WidgetTester t) async {
+    /// §5.9 那道闸掉下来的那一刻，**恰恰是最需要它停下来的时刻** ——
+    /// 看不见画面还在往前推，是这一卷全部安全设计的靶心。
+    ///
+    /// 全零那一拍在狗那头走的是 `stop()`（停车早返排在视频闸前面），
+    /// 看不见也允许 —— 「因为看不见所以不许停」是把狗锁在最后一个动作上。
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    await pulseWith(t, rig, 'fwd', '推着的那一拍（非零）');
+    expect(zeroPulses(rig), isEmpty,
+        reason: '还没出事就已经有全零拍了：下面那句「多出一拍全零」认不出是谁发的');
+
+    await pushHealth(
+        t, rig.health, <String, bool>{'front': false, 'back': false});
+    expect(enabledLeft(t), isFalse, reason: '画面掉了杆就该灰');
+    await pumpUntil(t, () => zeroPulses(rig).isNotEmpty,
+        '画面掉的那一刻主动发出去的那一拍全零'
+        '（等下一个周期是等不到的：灰了之后周期发拍那一支根本不发）');
+    await g.up();
+    await t.pump();
+    await unmount(t, rig);
+  });
+
   testWidgets('切远程要先确认，而且确认过一次就不再问', (WidgetTester t) async {
     /// §7.8：**每次都弹同一个框，第三次就被条件反射点掉了。**
     /// 所以确认只问一次；真正兜底的是狗那头那条留痕（Task 7）。
