@@ -71,6 +71,11 @@ LEVEL_OF: dict[str, Level] = {
     "loc_lost_paused": Level.P1,
     "estop_pressed": Level.P1,
     "lease_expired": Level.P1,
+    # 人点了"让开腿"接管,接管完忘了还回来 —— 这一趟从此永远挂着,而屏幕上
+    # 一切如常(挂账 67a)。**处置是升 P1,不是自动 resume**:一只狗在"最后
+    # 已知状态是人正在接管"的情况下自己动起来,是这套系统里最不该发生的事
+    # (§5.8 同理),判定在 ``app/server.py`` 的 ``_挂起超时了``。
+    "suspend_stale": Level.P1,
     # 值守那条闸门协程自己死了(``server._StateHub._lease_watchdog``)。
     # **这一条报的是"报警器坏了"**,所以它是 P1 而不是 P2:从它死的那一刻
     # 起,租约到期没人处置 —— 人揣着手机走了狗也不会停,而屏幕上一切如常。
@@ -109,7 +114,7 @@ class Alert:
     ``AlertBook`` 的 ``_key``),``count``/``first_ms``/``last_ms`` 记的是这条
     告警被同一根因重复触发的轨迹。
 
-    ``acked_*`` 和 ``resolved_ms`` 是两个独立字段,不是同一个状态机上的两
+    ``acked_*`` 和 ``resolved_*`` 是两组独立字段,不是同一个状态机上的两
     档:"我看见了在处理"(ack)和"这事没了"(resolve)是两回事(§5.3)。修一
     个问题合理地可以花一小时,但"没人看见"才是真正的失败 —— 升级只看有没
     有人确认,不看有没有解决,所以 ``resolve`` 不会让 ``escalated`` 停下来。
@@ -129,6 +134,7 @@ class Alert:
     count: int
     acked_by: str
     acked_ms: int | None
+    resolved_by: str
     resolved_ms: int | None
     escalated: int
 
@@ -159,6 +165,7 @@ class Alert:
             "count": self.count,
             "acked_by": self.acked_by,
             "acked_ms": self.acked_ms,
+            "resolved_by": self.resolved_by,
             "resolved_ms": self.resolved_ms,
             "escalated": self.escalated,
             "channel": self.channel.value,
@@ -258,6 +265,7 @@ class AlertBook:
                 count=1,
                 acked_by="",
                 acked_ms=None,
+                resolved_by="",
                 resolved_ms=None,
                 escalated=0,
             )
@@ -280,14 +288,19 @@ class AlertBook:
         self._by_key[key] = alert
         return alert
 
-    def resolve(self, key: str, *, now_ms: int) -> Alert:
-        """这件事没了。只改 ``resolved_ms``,不碰 ``acked_by``/``acked_ms`` ——
-        解决了不等于确认过,"没人看见"是这个模块要暴露出来的事实,不是要
-        替调用方悄悄圆过去的细节。"""
+    def resolve(self, key: str, *, who: str = "", now_ms: int) -> Alert:
+        """这件事没了。只改 ``resolved_by``/``resolved_ms``,**不碰
+        ``acked_by``/``acked_ms``** —— 解决了不等于确认过,"没人看见"是这个
+        模块要暴露出来的事实,不是要替调用方悄悄圆过去的细节。
+
+        ``who`` **可以是空的**,这一点跟 ``ack`` 不一样:空姓名的确认会把升级
+        链关掉(所以那边是 ValueError),而空姓名的解决只是交接班那张表上少一
+        个名字 —— 拿它去挡住"这件事没了"这个事实,代价大得多。
+        """
         existing = self._by_key.get(key)
         if existing is None:
             raise AlertNotFound(key)
-        alert = replace(existing, resolved_ms=now_ms)
+        alert = replace(existing, resolved_by=who, resolved_ms=now_ms)
         self._by_key[key] = alert
         return alert
 

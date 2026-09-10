@@ -12,8 +12,17 @@ Dart 那头解析**同一批签进仓库的文件**。狗这头改了形状而�
     D1MAX_UPDATE_FIXTURES=1 python -m pytest tests/app/test_wire_fixtures.py \\
         --basetemp=D:/pytest-tmp/fx
 
-**重生成之后一定要跑一遍 Dart 测试**(``cd mobile && flutter test``):
-Python 这头重生成就不红了,Dart 那头的解析可能刚被这次改动打断。
+**重生成之后一定要跑一遍 Dart 测试**
+(``cd mobile && flutter test --concurrency=1``):Python 这头重生成就不红了,
+Dart 那头的解析可能刚被这次改动打断。
+
+``--concurrency=1`` **不是可选的**。这台机器上裸 ``flutter test`` 会时不时
+无声地吞掉字母序最后那个测试文件 —— 正好就是 ``wire_fixtures_test.dart``,
+也就是这段话让人去跑的那一个 —— 而屏幕上照样打 ``All tests passed!``、退出
+码照样是 0。是并发加载的竞态,所以**不是每次都复现**:2026-09-10 这天裸跑
+就是完整的 251 条。这恰恰是它危险的地方 —— 一件时灵时不灵、失灵时还给你
+一个绿的东西,没法靠"我上次跑过没事"排除。少了这个参数,这条提示就是在教
+人做一件看起来做过了、实际没做的事。
 """
 
 from __future__ import annotations
@@ -104,8 +113,11 @@ def 对(name: str, payload: Any) -> None:
         f"{name} 的上线形状变了。\n"
         f"改对了就重生成:D1MAX_UPDATE_FIXTURES=1 python -m pytest "
         f"tests/app/test_wire_fixtures.py\n"
-        f"**重生成之后一定要跑一遍 cd mobile && flutter test** —— "
-        f"Python 这头重生成就不红了,Dart 那头的解析可能刚被打断。")
+        f"**重生成之后一定要跑一遍 "
+        f"cd mobile && flutter test --concurrency=1** —— Python 这头重生成"
+        f"就不红了,Dart 那头的解析可能刚被打断。``--concurrency=1`` 不能省:"
+        f"裸跑会时不时无声吞掉 wire_fixtures_test.dart 自己,还打 "
+        f"All tests passed。")
 
 
 def _任务定义(map_id: str) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 from urllib.parse import quote
 
 import pytest
@@ -118,11 +119,15 @@ def test_确认记下的是谁(服务, 钟):
 def test_确认了升级就停(服务, 钟):
     """§5.3:升级只看有没有人确认。
 
-    **对照那一条是这个用例的全部分量。** ``escalated`` 在这套系统里此刻是个
-    天然恒零的字段 —— 全仓没有任何一处生产代码调 ``due_escalations``(升级的
-    驱动者还没人写),光断"确认过的那条是 0"跟把实现整个删掉写死 0 是分不出
-    来的。所以这里自己驱一次升级判定,并且**同一次判定**里放一条没人确认
-    的:它升到了顶档,上面那个 0 才叫"确认把升级停住了"。
+    **对照那一条是这个用例的全部分量。** ``escalated`` 是个天然容易恒零的
+    字段,光断"确认过的那条是 0"跟把实现整个删掉写死 0 是分不出来的。所以
+    这里自己驱一次升级判定,并且**同一次判定**里放一条没人确认的:它升到了
+    顶档,上面那个 0 才叫"确认把升级停住了"。
+
+    (任务 12 之前,这条判定在全仓没有任何一处生产调用点 —— 也就是说线上
+    从来没升过级。驱动者现在挂在闸门那一拍上,见
+    ``test_升级真的有人在驱动``。这里仍然自己驱一次:这条测的是"确认停住
+    升级"这条规矩本身,不该跟着那条协程的节拍走。)
     """
     卡住 = 报一条(服务, 钟, "stuck", title="狗卡在楼梯口")
     没人管 = 报一条(服务, 钟, "fallen", title="狗倒了")
@@ -257,7 +262,144 @@ def test_确认体不是对象就是400(服务, 钟):
 
 
 def test_解决不要体(服务, 钟):
-    """``resolve`` 没有记名 —— 空体就该过。"""
+    """``resolve`` 的记名是**可选的** —— 空体就该过(手机端至今发的就是空体,
+    见 ``mobile/lib/net/patrol_client.dart`` 的 ``resolveAlert``)。"""
     a = 报一条(服务, 钟, "finding", title="配电柜有痕迹")
     code, _body, _h = request(服务, 路径(a.key, "resolve"), method="POST")
     assert code == 200
+
+
+# ------------------------------------------------------- 升级到底有没有人驱
+
+
+def 等到(条件, *, 最多等: float = 3.0) -> bool:
+    """轮到条件成立为止,**有超时上界**。
+
+    等的是闸门那条真协程(跑在桥那根线程上),没有可注入的钟能拨快它 ——
+    §8.5 第 2 条管的是被测代码里的时间,不管这种轮询。跟
+    ``test_lease_expiry.py`` 里那个是同一份东西,同一个理由。
+    """
+    截止 = time.monotonic() + 最多等
+    while True:
+        if 条件():
+            return True
+        if time.monotonic() >= 截止:
+            return False
+        time.sleep(0.01)
+
+
+def test_升级真的有人在驱动(服务, 钟):
+    """**这条钉的是那一行驱动本身,不是 ``due_escalations`` 的算法。**
+
+    ``engine/alerts.py`` 那一侧早就测全了,可任务 12 之前**全仓没有一处生产
+    代码调它** —— 于是线上一条 P1 挂着没人管,``escalated`` 永远是 0、
+    ``channel`` 永远是 ``screen``,该出的声一次也没出过,而所有 engine 层的
+    测试全绿。
+
+    所以这一条必须走**真服务的那一拍**:起服务、拨钟、等闸门自己醒。把
+    ``server.py`` 里那一行驱动删掉,engine 那一组一条都不会红,这一条会。
+    """
+    a = 报一条(服务, 钟, "stuck", title="狗卡在楼梯口")
+    assert 取(服务, a.key)["escalated"] == 0, "还没拨钟就升上去了"
+
+    钟.前进(ESCALATE_AFTER_MS[1] + 1)
+    assert 等到(lambda: 取(服务, a.key)["escalated"] == len(ESCALATE_AFTER_MS)), \
+        f"P1 挂着没人确认,闸门醒了这么多拍也没人把它升上去:{取(服务, a.key)}"
+    assert 取(服务, a.key)["channel"] == "sound", 取(服务, a.key)
+
+
+def test_升级不跟着水位分频走(服务, 钟):
+    """升级挂在**每一拍**上,不在 ``if 水位:`` 里头。
+
+    ``_WATER_EVERY`` 那个 60 拍(30 秒)的分频是为盘水位那几件 I/O 活儿设的
+    (一次 ``disk_usage`` + 一趟目录遍历 + 一次读 ``landed.json``),而升级
+    判定是一本内存字典的一次扫描,没有那个开销。挂进 ``if 水位:`` 里,等于把
+    P1 出声的时机焊在盘水位的轮询节拍上 —— ``_LEASE_WATCH_PERIOD_S`` 上面
+    那段注释早就写过这句:哪天要把屏幕调慢省电,不该顺手把闸门也调慢。
+
+    直接驱一拍 ``水位=False``:这是"不量水位的那种拍"在代码里的样子,断言
+    不用等、不看运气。
+    """
+    a = 报一条(服务, 钟, "stuck", title="狗卡在楼梯口")
+    钟.前进(ESCALATE_AFTER_MS[0] + 1)
+    服务.ctx.bridge.call(lambda: 服务.hub._lease_once(水位=False))
+    行 = 取(服务, a.key)
+    assert 行["escalated"] == 1, 行
+    assert 行["channel"] == "push", 行
+
+
+# --------------------------------------------------------------- 解决也记名
+
+
+def test_解决也记下是谁(服务, 钟):
+    """§5.3 只说了确认要记名,可交接班那张表上"这条是谁消掉的"同样是要查的。
+
+    不记名的解决,事后只看得到"某个时刻它没了" —— 而告警是被人消掉的,不是
+    自己好的。
+    """
+    a = 报一条(服务, 钟, "finding", title="配电柜有痕迹")
+    码, 体 = 打(服务, 路径(a.key, "resolve"), {"who": "老王"})
+    assert 码 == 200, 体
+    行 = 取(服务, a.key, "/api/alerts/all")
+    assert 行["resolved_by"] == "老王", 行
+    assert 行["resolved_ms"] is not None, 行
+
+
+def test_解决记名不冒充确认(服务, 钟):
+    """**这一条是"解决记名"这次改动里唯一危险的地方。**
+
+    顺手把 ``acked_*`` 一起填上,看起来很贴心:反正都有名字了。但"没人看见"
+    正是 §5.3 要暴露出来的那个事实 —— 升级只看有没有人确认。在这儿悄悄补一
+    个确认,交接班那张表上就再也看不出这一班到底有没有人在盯屏幕,而升级链
+    会被一次"我顺手点了解决"整个关掉。
+
+    所以:**从头到尾没人确认过的那条,解决完 ``acked_by`` 必须还是空的。**
+    """
+    a = 报一条(服务, 钟, "stuck", title="狗卡在楼梯口")
+    assert 取(服务, a.key)["acked_by"] == "", "起手就有人确认了,下面断不出东西"
+
+    码, 体 = 打(服务, 路径(a.key, "resolve"), {"who": "老王"})
+    assert 码 == 200, 体
+    行 = 取(服务, a.key, "/api/alerts/all")
+    assert 行["resolved_by"] == "老王", 行
+    assert 行["acked_by"] == "", 行
+    assert 行["acked_ms"] is None, 行
+
+    # 而且升级照样往下走 —— 解决不等于有人看见(跟 ``test_解决不停升级`` 一对)。
+    钟.前进(ESCALATE_AFTER_MS[1] + 1)
+    服务.alerts.due_escalations(now_ms=钟.t)
+    assert 取(服务, a.key, "/api/alerts/all")["escalated"] == len(ESCALATE_AFTER_MS)
+
+
+def test_解决不记名时名字是空的(服务, 钟):
+    """空体照样过(手机端至今就是空体),记下来的名字是空串,不是 ``null``、
+    也不是一句编出来的"系统"。"""
+    a = 报一条(服务, 钟, "finding", title="配电柜有痕迹")
+    码, 体 = 打(服务, 路径(a.key, "resolve"))
+    assert 码 == 200, 体
+    assert 取(服务, a.key, "/api/alerts/all")["resolved_by"] == ""
+
+
+def test_解决的名字不是一串字就400不是500(服务, 钟):
+    """``{"who": 123}`` 是前端会犯的错,不是我们写错了代码。
+
+    **不许静默降级成"没记名"。** 那样手机上一次拼错类型的解决会安安静静地
+    成功,而交接班那张表上少一个名字,谁也不知道少在哪儿(docs/测试为什么会
+    说谎.md 的第五种)。也不许 500 —— 那是我们的锅,人看到的是一句读不懂的
+    话,而错在他自己那边。
+    """
+    a = 报一条(服务, 钟, "finding", title="配电柜有痕迹")
+    码, 体 = 打(服务, 路径(a.key, "resolve"), {"who": 123})
+    assert 码 == 400, (码, 体)
+    assert 体["error"], 体
+    assert "who" in 体.get("detail", "") or "名字" in 体["error"], 体
+    # 没记成的解决**不许生效**:半成功比失败更难查。
+    assert 取(服务, a.key)["key"] == a.key, "都 400 了,这条还是被解决掉了"
+
+
+def test_解决体不是对象就是400(服务, 钟):
+    """跟 ``ack`` 那条同一个规矩:体给的不是对象就当场说清楚。"""
+    a = 报一条(服务, 钟, "finding", title="配电柜有痕迹")
+    code, body, _ = request(服务, 路径(a.key, "resolve"), method="POST",
+                            raw='"老王"'.encode())
+    assert code == 400, body

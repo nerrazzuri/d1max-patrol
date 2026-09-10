@@ -162,11 +162,19 @@ class Teleop:
     def __init__(self, device: DeviceBackend, engine: MissionEngine,
                  *, video_gate: Callable[[], str],
                  clock: Callable[[], float] = time.monotonic,
-                 watch_period_s: float = WATCH_PERIOD_S) -> None:
+                 watch_period_s: float = WATCH_PERIOD_S,
+                 heartbeat_timeout_s: float = HEARTBEAT_TIMEOUT_S) -> None:
         self._device = device
         self._engine = engine
         self._clock = clock
         self._period = watch_period_s
+        #: 守死人开关的超时。**内部一律读这个字段,不读模块常量** ——
+        #: ``HEARTBEAT_TIMEOUT_S`` 是生产缺省(值不变、``__all__`` 里也还在),
+        #: 注进来是为了让"挂起 -> 接管 -> 手松开 -> 继续"那条端到端能在测试
+        #: 里走完:那条链非跨过这个超时不可,而被测代码里不许有真等待
+        #: (§8.5 第 2 条)。留一处读模块常量,注进来的值就是个摆设,而摆设
+        #: 不会有任何测试红。
+        self._heartbeat_timeout_s = heartbeat_timeout_s
         self._last_beat = 0.0
         self._active = False
         self._watch: asyncio.Task[None] | None = None
@@ -322,7 +330,7 @@ class Teleop:
                 with contextlib.suppress(Exception):
                     await self._device.walk(0.0, 0.0, 0.0, 0.0)
                 return
-            if self._clock() - self._last_beat > HEARTBEAT_TIMEOUT_S:
+            if self._clock() - self._last_beat > self._heartbeat_timeout_s:
                 self._active = False
                 with contextlib.suppress(Exception):
                     await self._device.walk(0.0, 0.0, 0.0, 0.0)

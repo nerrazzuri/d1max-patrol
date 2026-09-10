@@ -155,7 +155,7 @@ from d1max_patrol.engine.lease import (
     LeaseLost,
     LeaseState,
 )
-from d1max_patrol.engine.machine import EngineBusy, MissionEngine
+from d1max_patrol.engine.machine import EngineBusy, MissionEngine, SuspendPoint
 from d1max_patrol.engine.mission import (
     Mission,
     MissionError,
@@ -279,6 +279,21 @@ _LEASE_WATCH_PERIOD_S = 0.5
 #: 到写不进去以小时计,晚半分钟看见没有代价。再稀就开始有代价了 —— 值守屏
 #: 上那几项是按秒刷的,人盯着屏等一分钟才看见变化会以为是屏卡了。
 _WATER_EVERY = 60
+
+#: 让开腿之后多久没人还回来,就升一条 P1(挂账 67a)。**先定 10 分钟,可改**
+#: —— 跟聚合窗口那几个数一样是拍的,真机清单里要量、按现场手感调。
+#:
+#: 上界的依据是"人接管一段路"这件事本身:现场绕开一堆箱子、把狗从台阶上抱
+#: 下来,几分钟是正常的;超过十分钟还挂着,压倒性的可能是人已经走开、忘了
+#: 把腿还回来 —— 而这一趟从此永远停在那儿,屏幕上一切如常。
+#:
+#: 下界的依据是别把正常接管报成 P1:人很快就学会无视一个总在误报的 P1,
+#: 而它误报一次的代价,是下一次真的没人管时没人当回事。
+#:
+#: **超时的处置只有报警。** 不自动 ``resume``、不自动 ``abort``:一只狗在
+#: "最后已知状态是人正在接管"的情况下自己动起来,是这套系统里最不该发生
+#: 的事(§5.8 同理)。
+SUSPEND_STALE_MS = 10 * 60_000
 
 #: 自动同步的巡查周期。镜像盘是"不依赖人"的那一路(spec §7.5),所以不能等人点。
 #: 按分钟量级 —— 备份不是实时的,晚一分钟没有代价,而每分钟扫一次盘的开销
@@ -571,6 +586,14 @@ def _multipart(first: bytes, rest: Iterator[bytes]) -> Iterator[bytes]:
 
 @dataclass(frozen=True, slots=True)
 class _Route:
+    #: ``route()`` 收到的**原始模式串**(``/api/runs/<run_id>/judge`` 这种)。
+    #:
+    #: **留着它,不让人从 ``pattern.pattern`` 反推。** 编译过的正则里占位符
+    #: 已经变成 ``(?P<run_id>[^/]+)``,想拿回"这条路由长什么样"就得写一段
+    #: 反向扫描 —— 那是换了个马甲的源码文本扫描:脆,而且证明的是"正则源码
+    #: 里长这样",不是"注册的时候写的是这条"。守着受控路由表那一组
+    #: (``tests/app/test_control_gate.py``)读的就是这个字段。
+    raw: str
     method: str
     pattern: re.Pattern[str]
     handler: Handler
@@ -759,6 +782,25 @@ def _该量水位了(拍: int) -> bool:
     return (拍 - 1) % _WATER_EVERY == 0
 
 
+def _挂起超时了(点: SuspendPoint | None, *, now_ms: int) -> bool:
+    """让开腿之后没人还回来,超过 :data:`SUSPEND_STALE_MS` 了吗。
+
+    **算的是 ``SuspendPoint.at_ms``,不是这一趟的 ``started_ms``。** 一趟任务
+    可以跑一整天,人在最后一分钟才让开腿 —— 拿开跑那一刻算,人刚把手机掏出
+    来就会挨一条 P1,而那种误报会很快教会人无视这条告警。这个函数只收一个
+    ``SuspendPoint``,拿别的东西算这件事在这儿写不出来,这是故意的。
+
+    ``None``(没让开腿)一律为假。**不许当成"很久以前"** —— 那样任务正常
+    跑着也会报,而这条告警的全部意思就是"有人接管了却没还回来"。
+
+    严格大于:正好卡在 :data:`SUSPEND_STALE_MS` 上还不算超时,再多一毫秒才
+    算(跟 ``due_escalations`` 里那个 ``>`` 一个口径)。
+    """
+    if 点 is None:
+        return False
+    return now_ms - 点.at_ms > SUSPEND_STALE_MS
+
+
 def _失主了(fresh: tuple[AuditRecord, ...]) -> bool:
     """这一批留痕看完,狗是不是没主了 —— **看最后一条换手的是不是到期**。
 
@@ -836,6 +878,17 @@ class _StateHub:
         #: 闸门醒过几拍。只给分频和测试用 —— 它是这条协程"还活着"的唯一外部
         #: 迹象(判到期本身是静默的:没到期就什么也不发生)。
         self._lease_ticks = 0
+        #: 哪一次让开腿已经报过"没人还回来"了,存的是那一次的
+        #: ``SuspendPoint.at_ms``;没报过就是 ``None``。
+        #:
+        #: **非有不可。** 闸门半秒醒一拍,而 ``raise_alert`` 在聚合窗口内会把
+        #: 同一条 ``robot/kind`` 吸收成一条并把 ``count`` 往上加 —— 不记这一
+        #: 笔的话,一次没人管的接管十分钟就能把 ``count`` 顶到一千二,值守屏上
+        #: 那一行看起来像是出了一千两百件事。
+        #:
+        #: 存 ``at_ms`` 而不是一个布尔:接管结束又让开一次腿是**另一次**接管,
+        #: 那一次该重新报。
+        self._挂起报过: int | None = None
 
     # ------------------------------------------------------------ 生命周期
 
@@ -1002,8 +1055,55 @@ class _StateHub:
             self._lease_cursor)
         if _失主了(fresh):
             await self._lease_gone(now_ms)
+        self._判定挂起超时(now_ms=now_ms)
+        # **这一行的副作用就是它存在的理由,返回值是故意丢掉的。**
+        # ``due_escalations`` 会把该升档的告警的 ``escalated`` 就地前移,而
+        # ``Alert.channel`` 是由 ``escalated`` 直接算出来的 property、
+        # ``to_wire()`` 两个都上线 —— 也就是说"该出声了"这件事一路推到手机
+        # 上,靠的全是这次调用改掉的那个整数,不需要在这儿再搭一条投递。
+        # 任务 12 之前**全仓没有一处生产代码调它**:一条没人确认的 P1 永远停
+        # 在 ``escalated=0`` / ``channel=screen``,声音一次也没响过,而
+        # engine 那一组测试全绿。看着像死代码就把它"顺手清掉"的话,线上会
+        # 静悄悄地退回那个样子(端到端的守卫见
+        # ``tests/app/test_alert_routes.py::test_升级真的有人在驱动``)。
+        self._ctx.alerts.due_escalations(now_ms=now_ms)
+        # 上面这两条都在 ``if 水位:`` **外面**,这是有意的:分频是为盘水位那
+        # 几件 I/O 活儿设的(见 :data:`_WATER_EVERY`),而这两条一条是读引擎
+        # 快照、一条是扫一本内存字典,半秒一次的开销可以忽略。挂进去等于把
+        # "人接管没还回来"和"P1 该出声了"的时机焊死在盘水位的轮询节拍上。
         if 水位:
             self._alerts.on_tick()
+
+    def _判定挂起超时(self, *, now_ms: int) -> None:
+        """人点了「让开腿」接管,接管完忘了还回来 —— 报一条 P1(挂账 67a)。
+
+        **只报警,不动狗。** 这里没有、也不许有任何一句 ``resume`` / ``abort``:
+        一只狗在"最后已知状态是人正在接管"的情况下自己动起来,是这套系统里
+        最不该发生的事(理由跟 :meth:`_lease_gone` 那一条一样)。人还在现场,
+        腿是他的。
+
+        判据整个交给 :func:`_挂起超时了`,这儿只负责取数和记账。取的是引擎
+        自己的 ``yielding``,不在外壳里比一遍状态表 —— "哪些状态算让位"是
+        引擎的词汇,复刻一份迟早跟正主不一样。
+        """
+        engine = self._ctx.engine
+        点 = engine.snapshot.suspended_at if engine.yielding else None
+        if 点 is None:
+            # 接管结束(或者压根没让开腿)。**记账要清掉** —— 不清的话,下一
+            # 次让开腿如果凑巧撞上同一个 ``at_ms``,那一次就不会报了。
+            self._挂起报过 = None
+            return
+        if self._挂起报过 == 点.at_ms or not _挂起超时了(点, now_ms=now_ms):
+            return
+        self._挂起报过 = 点.at_ms
+        self._ctx.alerts.raise_alert(
+            kind="suspend_stale", robot=self._ctx.identity.sn,
+            title="人接管着没还回来,这趟一直挂着",
+            detail=f"让开腿的理由是「{点.reason}」,到现在已经超过 "
+                   f"{SUSPEND_STALE_MS // 60_000} 分钟没人点继续。"
+                   "**狗停在原地没有自己动**(§5.8)—— 回去点「继续」接着"
+                   "跑,或者中止这一趟。",
+            now_ms=now_ms)
 
     async def _lease_gone(self, now_ms: int) -> None:
         """人不在了。**停下来,并且只停下来**(§5.8)。
@@ -1296,7 +1396,8 @@ class AppServer:
 
     def route(self, method: str, pattern: str, handler: Handler) -> None:
         """挂一条路由。后面几个模块就是靠它把业务接口接进来的。"""
-        self._routes.append(_Route(method.upper(), _compile(pattern), handler))
+        self._routes.append(
+            _Route(pattern, method.upper(), _compile(pattern), handler))
 
     def _register_routes(self) -> None:
         self.route("GET", "/", self._index)
@@ -3288,16 +3389,37 @@ class AppServer:
         return json_response({"alert": alert.to_wire()})
 
     def _alert_resolve(self, req: Request) -> Response:
-        """这件事没了。
+        """这件事没了。**解决记名,但不冒充确认。**
 
-        **不顺手填 ``acked_*``。** 解决了不等于有人看见过 —— "没人看见"正是
-        §5.3 要暴露出来的那个事实(升级只看有没有人确认),在这里悄悄补一个
-        确认,交接班那张表上就再也看不出这一班到底有没有人在盯屏幕。
+        **一个名字都不许往 ``acked_*`` 里填。** 解决了不等于有人看见过 ——
+        "没人看见"正是 §5.3 要暴露出来的那个事实(升级只看有没有人确认),
+        在这里悄悄补一个确认,交接班那张表上就再也看不出这一班到底有没有人
+        在盯屏幕,而升级链会被一次"我顺手点了解决"整个关掉。所以名字落的是
+        ``resolved_by`` 这个独立字段,``acked_by`` / ``acked_ms`` 原样不动。
 
-        没有请求体 —— 解决不记名,所以也没什么可校验的。
+        **记名是可选的,这一点跟 ``ack`` 不一样。** 空姓名的确认会把升级关
+        掉,所以那边空了就是 400;而空姓名的解决只是交接班那张表上少一个名
+        字 —— 拿它去挡住"这件事没了",代价大得多(手机端至今发的就是空体,
+        见 ``mobile/lib/net/patrol_client.dart`` 的 ``resolveAlert``)。
+
+        **但类型错了要说出来,不许静默当成没记名。** ``{"who": 123}`` 是前端
+        会犯的错:悄悄按"没记名"办,那次解决会安安静静地成功,而表上少的那
+        个名字谁也不知道少在哪儿。也不该 500 —— 那是把我们的锅甩给一个只是
+        拼错了类型的人。
         """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体要是个对象",
+                            '形如 {"who": "老王"};不记名就发个空体。')
+        raw = body.get("who", "")
+        if not isinstance(raw, str):
+            raise HttpError(
+                400, "名字要是一串字",
+                f'"who" 给的是 {type(raw).__name__}。形如 {{"who": "老王"}};'
+                "不记名就别带这个字段 —— 但别拿一个不是字的东西当名字,"
+                "那样交接班那张表上会少一个名字而没人知道少在哪儿。")
         try:
-            alert = self.alerts.resolve(req.params["key"],
+            alert = self.alerts.resolve(req.params["key"], who=raw.strip(),
                                         now_ms=self._ctx.clock())
         except AlertNotFound:
             raise _没这条告警(req.params["key"]) from None

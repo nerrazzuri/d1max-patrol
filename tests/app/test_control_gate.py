@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
+from d1max_patrol.app.auth import AUTH_PATH
+from d1max_patrol.app.control import CONTROLLED, needs_lease
 from d1max_patrol.app.server import AppServer
 from tests.app.conftest import make_ctx, request
 
@@ -255,3 +258,169 @@ def test_退出之后别人立刻拿得到(有pin的服务):
     request(有pin的服务, "/api/auth/logout", method="POST", headers=auth(甲))
     取控制权(有pin的服务, 乙)
     assert 打(有pin的服务, "/api/teleop", 乙, 走一拍)[0] == 200
+
+
+# ------------------------------------------------- 路由表跟 CONTROLLED 对得上
+
+
+#: **不要**控制权的那几条 POST(挂账 68)。写的是 ``route()`` 收到的**原始
+#: 模式串**,跟 ``server._register_routes`` 里那一行一字不差 —— 加新路由的人
+#: 把那一行原样抄过来就行,不必先想清楚占位符会被展开成什么。
+#:
+#: **这张表是反着写的,这是它的全部分量。** 正着写("这几条要控制权")的表
+#: 漏掉一条不会有任何人红;反着写之后,加一条会改狗的 POST 而两处都不登记
+#: 时,底下那条测试立刻红 —— 而这正是第 7 卷加 ``suspend`` 时缺的那道逼迫。
+#:
+#: 每一条为什么不要,判据见 ``app/control.py`` 里 ``CONTROLLED`` 上方那段
+#: 注释,这里只记一句话的出处,不重抄论证。
+不要控制权的POST = {
+    # 登录/登出:还没有会话,谈不上租约。
+    AUTH_PATH,
+    "/api/auth/logout",
+    # 控制权本身。要控制权才能取控制权是个死结。
+    "/api/control/acquire",
+    "/api/control/heartbeat",
+    "/api/control/release",
+    "/api/control/takeover",
+    "/api/control/takeover/approve",
+    # §3.5 规则 2:急停永远不要控制权。这一条错了会死人。
+    "/api/estop",
+    # 拿录好的包离线重建,狗本身没在动。
+    "/api/mapping/rebuild",
+    # 归档上的判读和复核,改的是纸面不是狗。
+    "/api/runs/<run_id>/judge",
+    "/api/runs/<run_id>/review/<name>",
+    # 清盘、导出、备份:都不改变这只狗正在做什么。
+    "/api/storage/sweep",
+    "/api/exports",
+    "/api/exports/<name>/confirm",
+    "/api/backup/init",
+    "/api/backup/sync",
+    "/api/backup/eject",
+    # 升级尤其不能要:一次恢复性的回滚不该被一个已经掉线的会话挡住。
+    "/api/release/install",
+    "/api/release/activate",
+    "/api/release/rollback",
+    # 任务包对在跑的那一趟是惰性的(下一趟才生效)。
+    "/api/bundle/apply",
+    "/api/bundle/rollback",
+}
+
+#: 允许 ``<name*>`` (跨斜杠) 的那几条。**只许开在不落地的参数上** ——
+#: 判据原文在 ``server._compile`` 的文档串里:告警键唯一的去处是
+#: ``AlertBook`` 那本内存字典的一次 ``get``,不拼路径、不拼命令、不进子进程。
+#: 凡是会被拼进文件路径的段(``run_id``、``name``、``map_id``……)一律继续用
+#: 不带星号的写法 —— 那些地方"不跨斜杠"就是那道穿越防线本身。
+带星号的白名单 = {
+    "/api/alerts/<key*>/ack",
+    "/api/alerts/<key*>/resolve",
+}
+
+#: 不跨斜杠的占位符换成什么。一段普通的、不带斜杠的东西就够了。
+_一段 = "x"
+
+#: **跨斜杠的占位符必须换成一个真带斜杠的值**,这是这一段唯一容易写错的地方。
+#: ``<key*>`` 收的是告警键(``robot/kind#seq``,见 ``engine/alerts.py`` 的
+#: ``_key``),斜杠是键本身的一部分;而 ``CONTROLLED`` 里那两行正是靠 ``.+``
+#: 跨斜杠才匹配得上。换成 ``"x"`` 的话,哪天有人把那两行收紧成 ``[^/]+``,
+#: 这条测试照样绿 —— 而真机上带斜杠的键会从闸门底下整个漏过去(该红判成绿)。
+#: 反过来,给不带星号的占位符也塞一个带斜杠的值,``[^/]+`` 当场匹配不上,
+#: 一堆本来受控的路由会被判成漏网(该绿判成红)。**换的东西必须跟占位符自己
+#: 的跨度一致**,这就是这两个常量分开的理由。
+_跨段 = "D1M-TEST/stuck#1"
+
+_占位符 = re.compile(r"<([a-z_]+\*?)>")
+
+
+def 枚举注册过的路由(srv: AppServer) -> tuple[tuple[str, str], ...]:
+    """从真的路由表里读 ``(方法, 原始模式)``。
+
+    **不许手抄一份。** 手抄的那份就是下一次遗漏的种子 —— 加路由的人只会改
+    ``server._register_routes``,不会想起来还有一份影子表要跟着改。
+
+    读的是 ``_Route.raw``(``route()`` 收到的原始模式串),不是
+    ``pattern.pattern``(编译后的正则源码):后者是换了个马甲的源码文本扫描,
+    脆,而且要靠反推才知道哪一段原来是占位符。
+    """
+    return tuple((r.method, r.raw) for r in srv._routes)
+
+
+def 具体路径(模式: str) -> str:
+    """把带占位符的模式换成一条能拿去问 ``needs_lease`` 的具体路径。
+
+    换法见 :data:`_一段` / :data:`_跨段` 上面那两段注释。
+    """
+    return _占位符.sub(
+        lambda m: _跨段 if m.group(1).endswith("*") else _一段, 模式)
+
+
+@pytest.fixture
+def 没起的服务(ctx):
+    """只建不起。路由表在 ``__init__`` 里就填好了,这几条表测试用不着端口。"""
+    return AppServer(ctx, port=0)
+
+
+def test_每条会改狗的POST都在CONTROLLED里(没起的服务):
+    """挂账 68:原来只有"镜像表 <-> CONTROLLED"两个方向,漏的是第三个 ——
+    **路由表 <-> CONTROLLED**。
+
+    往 ``server.py`` 加一条会改狗的 POST 而两处都忘了登记时,镜像表和
+    ``CONTROLLED`` 依然彼此自洽、依然全绿,而那条新路由不受控制权闸门管:
+    没拿租约的人直接调得动。白名单反着写,加路由的人**必须**做出选择,
+    忘了就红 —— 这正是第 7 卷加 ``suspend`` 时缺的那道逼迫。
+    """
+    漏网 = [模式 for 方法, 模式 in 枚举注册过的路由(没起的服务)
+            if 方法 == "POST" and 模式 not in 不要控制权的POST
+            and not needs_lease("POST", 具体路径(模式))]
+    assert not 漏网, (
+        f"{漏网} 不受控制权闸门管。要么把它加进 app/control.py 的 "
+        "CONTROLLED,要么把它加进这个文件的 不要控制权的POST 并写清楚理由。")
+
+
+def test_豁免名单里没有已经不存在的路由(没起的服务):
+    """白名单会烂。
+
+    路由被删掉或改名之后,那条豁免会一直留在表上;哪天有人用同一个路径加回
+    一条**会改狗**的 POST,上面那条测试当场闭嘴 —— 一道闸就这么静悄悄地少
+    了。所以豁免名单里的每一条都必须真的还是一条注册过的 POST。
+    """
+    所有POST = {模式 for 方法, 模式 in 枚举注册过的路由(没起的服务)
+                if 方法 == "POST"}
+    assert 不要控制权的POST <= 所有POST, 不要控制权的POST - 所有POST
+
+
+def test_带星号的路由只许开在白名单里(没起的服务):
+    """``<name*>`` 跨斜杠,那是 ``_compile`` 唯一的例外,也是唯一一处能让一段
+    带斜杠的东西整个进到处理函数里的口子。
+
+    ``_compile`` 的文档串写着这条纪律:**只许开在不落地的参数上**。今天没有
+    任何测试逼着遵守它 —— 谁哪天给 ``/api/runs/<run_id*>/...`` 加个星号,
+    "占位符不跨斜杠"那道穿越防线就没了,而一条都不会红。
+
+    **两个方向都比。** 只查"新的星号要在白名单里",白名单里留着一条早就删掉
+    的路由就没人发现;只查"白名单里的都还在",加一条新的星号路由照样静悄悄。
+
+    这里读的是运行时的 ``_routes``,不是去扫 ``server.py`` 的源文件:源码扫描
+    会被字符串拼接、被注释、被换行绕过,而且它证明的是"源文件里长这样",
+    不是"服务器真的注册了这条"。
+    """
+    带星 = {模式 for _方法, 模式 in 枚举注册过的路由(没起的服务) if "*>" in 模式}
+    assert 带星 == 带星号的白名单, (
+        "带 <name*> 的路由变了。加星号之前先回答一个问题:这个参数会不会被"
+        "拼进文件路径?会的话就别加星号 —— 那里的「不跨斜杠」就是防线"
+        "本身(见 server._compile)。")
+
+
+def test_跨斜杠的告警键真的绕不过闸门(没起的服务):
+    """上面那条 ``具体路径`` 换出来的东西必须真的是带斜杠的。
+
+    这一条钉的是**替换值本身**:``_跨段`` 哪天被人改成一段不带斜杠的字符串,
+    ``test_每条会改狗的POST都在CONTROLLED里`` 会静默降级成一个恒真的断言 ——
+    ``CONTROLLED`` 里那两行收紧成 ``[^/]+`` 它也照样绿,而真机上的告警键
+    (``robot/kind#seq``)会从闸门底下整个漏过去。
+    """
+    assert "/" in _跨段, _跨段
+    assert needs_lease("POST", 具体路径("/api/alerts/<key*>/ack"))
+    assert needs_lease("POST", 具体路径("/api/alerts/<key*>/resolve"))
+    # 反过来:CONTROLLED 里一条 GET 都没有(§3.5 规则 1)。
+    assert not any(方法 != "POST" for 方法, _模式 in CONTROLLED)
