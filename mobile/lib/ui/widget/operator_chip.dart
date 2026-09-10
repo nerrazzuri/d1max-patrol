@@ -144,11 +144,22 @@ class OperatorChip extends StatelessWidget {
       return;
     }
     if (asked == name) return;
+    // **先按人输的那个换。** 热点断着的时候人照样要能换班，见 [client]。
     onChanged(asked);
     final PatrolClient? c = client;
     if (c == null) return;
     try {
-      await c.setOperator(asked);
+      // **狗回的那个名字才是账上那个，以它为准。**
+      //
+      // 这头只 `trim()`；狗那头（`app/identity.py::clean_operator`）还会把中间
+      // 的连续空白压成一个、把不可打印字符换成空格、超长截断。人输入「老  王」
+      // 或者一个 45 字的全名时，屏上和盘上留的是一份、狗的审计环里留的是另一
+      // 份 —— 而事后拿手机上那份跟审计对账，靠的就是字符串相等。
+      //
+      // **发得出去的时候两边一定一样；发不出去的时候不回滚**（见 [client]），
+      // 那一次换班本来就没进审计环，没有可对的账。
+      final String canon = await c.setOperator(asked);
+      if (canon.isNotEmpty && canon != asked) onChanged(canon);
     } catch (e) {
       // 异常原文只进日志。屏上写 `$e` 给不出下一步该干什么。**界面上的名字
       // 不回滚**，见 [client]。

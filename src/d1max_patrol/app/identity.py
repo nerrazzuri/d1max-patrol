@@ -26,6 +26,8 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 
+from d1max_patrol.app.auth import MAX_OPERATOR_LEN, normalize_operator
+
 #: 人填的 SN 从这个环境变量读。命令行 ``--sn`` 也收。
 SN_ENV = "D1MAX_SN"
 #: 人给这只狗起的名。现场喊"三号"比喊 C40221 顺口。
@@ -295,20 +297,27 @@ def resolve(sn: str | None = None, nickname: str | None = None, *,
 
 # ------------------------------------------------------------ 现在是谁在开
 
-#: 自报姓名最长这么多个字。**不是安全边界**(狗不核实,没什么可防的),是不让
-#: 一条超长记录把 200 条的审计环挤得只剩它自己。
-OPERATOR_MAX = 40
+#: 自报姓名最长这么多个字。**跟解锁那道门是同一个数**
+#: (``auth.MAX_OPERATOR_LEN``)—— 名字进这台机器只有两道门:解锁时报一次
+#: (``Guard.unlock``),换人时报一次(``PUT /api/operator``)。两道门给出不同
+#: 的长度,同一个超长姓名在会话上是一截、在审计里是另一截,而事后对账靠的就是
+#: 字符串相等。**不是安全边界**(狗不核实,没什么可防的),是不让一条超长记录
+#: 把 200 条的审计环挤得只剩它自己。
+OPERATOR_MAX = MAX_OPERATOR_LEN
 
 
 def clean_operator(raw: object) -> str:
     """把自报姓名收拾干净。**只由空白组成等于没填,返回空串** —— 调用方要拒。
 
-    中间的连续空白也压成一个:手机输入框很容易带出一个尾随空格,不收拾的话
-    "老王"和"老王 "在账上是两个人,而屏上长得一模一样。
+    **字符和长度这两条规矩不在这儿定,在 :func:`auth.normalize_operator`。**
+    那是解锁那道门用的同一个函数:不可打印字符换成空格、去首尾空白、超长截断。
+    这里只多做一件它不做的事 —— 把中间的连续空白也压成一个:手机输入框很容易
+    带出一个尾随空格或者中间双空格,不收拾的话"老 王"和"老  王"在账上是两个
+    人,而屏上长得一模一样。
+
+    压空白放在归一之后:不可打印字符已经变成空格了,``split()`` 才收拾得掉它。
     """
-    if not isinstance(raw, str):
-        return ""
-    return " ".join(raw.split())[:OPERATOR_MAX]
+    return " ".join(normalize_operator(raw).split())
 
 
 @dataclass(frozen=True, slots=True)

@@ -68,9 +68,22 @@ Map<String, dynamic> heldByMe() => <String, dynamic>{
       'mine': true,
     };
 
-Future<FakeDog> startDog(WidgetTester t, String who) async {
+Future<FakeDog> startDog(WidgetTester t, String who, {String? echo}) async {
   final FakeDog dog = FakeDog();
   await t.runAsync(dog.start);
+  if (echo != null) {
+    // **狗收拾完之后回出来的那个名字。**
+    //
+    // 不给的话假狗对 `PUT /api/operator` 回一个空的 `{}`，`setOperator` 的
+    // 返回值恒为空串 —— 于是「以狗那份为准」那条路在测试里根本走不到，而它
+    // 正是两侧清洗规则对不上时唯一的补救（手机只 `trim()`，狗还会压中间的
+    // 连续空白、换掉不可打印字符、超长截断）。
+    dog.replies['/api/operator'] = <String, dynamic>{
+      'name': echo,
+      'operator_verified': false,
+      'at_ms': 1757400000000,
+    };
+  }
   dog.replies['/api/auth/challenge'] = <String, dynamic>{'nonce': 'n0nce'};
   dog.replies['/api/auth'] = <String, dynamic>{
     'token': 'tok-abc',
@@ -88,8 +101,8 @@ Future<FakeDog> startDog(WidgetTester t, String who) async {
 
 /// 把遥控屏挂上去。**注意这里一次点击都不做** —— 「常显」就是这个意思。
 Future<Rig> mountTeleop(WidgetTester t,
-    {String who = '老王', ValueChanged<String>? onChanged}) async {
-  final FakeDog dog = await startDog(t, who);
+    {String who = '老王', ValueChanged<String>? onChanged, String? echo}) async {
+  final FakeDog dog = await startDog(t, who, echo: echo);
   final PatrolClient c = PatrolClient(dog.baseUrl);
   await t.runAsync(() => c.unlock('864209', operator: who));
   dog.received.clear();
@@ -156,6 +169,31 @@ String screenText(WidgetTester t) => t
     .map((Text w) => w.data ?? '')
     .join('\n');
 
+/// 弹出来那个框里所有 `Text` 的文字。**只收框里的** —— 要证的是这枚 chip
+/// 自己说的话，把整屏拼进来的话，底下那一屏说过的「不核实」会替它作答。
+String dialogText(WidgetTester t) => t
+    .widgetList<Text>(
+        find.descendant(of: find.byType(AlertDialog), matching: find.byType(Text)))
+    .map((Text w) => w.data ?? '')
+    .join('\n');
+
+/// §6.3 的措辞禁令：狗记下名字但**从不核实**，屏上任何地方都不许暗示它被验过。
+///
+/// **这是产品级硬约束，而这道闸是它唯一的守卫。** 说成登录的那天，一次冒名
+/// 操作在事后的记录里跟本人操作长得一模一样。
+void expectNoLoginWords(String words, String where) {
+  // 自洽：真的收到字了。收到空串的话下面四条全是恒真的。
+  expect(words, isNot(isEmpty), reason: '$where 上一个字都没读到，下面四条会全是恒真的');
+  for (final String banned in <String>[
+    '已登录',
+    '已认证',
+    '身份已验证',
+    '当前用户',
+  ]) {
+    expect(words, isNot(contains(banned)), reason: '§6.3：$where 上这不是登录');
+  }
+}
+
 /// 「不点开任何东西就看得见谁在开」这件事，两屏一个写法。
 ///
 /// 三条一条都不能少：Key 在树上、**点得到**（`hitTestable` —— 藏在折叠起来
@@ -192,20 +230,38 @@ void main() {
     await unmount(t, rig);
   });
 
-  testWidgets('屏上不许把这个自报的名字说成登录或者认证', (WidgetTester t) async {
-    // §6.3：狗记下名字但**从不核实**。说成登录的那天，一次冒名操作在事后的
-    // 记录里跟本人操作长得一模一样。
+  testWidgets('遥控屏上不许把这个自报的名字说成登录或者认证', (WidgetTester t) async {
+    final Rig rig = await mountTeleop(t, who: '老王');
+    expectNoLoginWords(screenText(t), '遥控屏');
+    await unmount(t, rig);
+  });
+
+  testWidgets('值守屏上不许把这个自报的名字说成登录或者认证', (WidgetTester t) async {
     final Rig rig = await mountWatch(t, who: '老王');
-    final String words = screenText(t);
-    for (final String banned in <String>[
-      '已登录',
-      '已认证',
-      '身份已验证',
-      '当前用户',
-    ]) {
-      expect(words, isNot(contains(banned)), reason: '§6.3：这不是登录');
-    }
-    expect(words, contains('不核实'), reason: '而且要把「不核实」说出来');
+    expectNoLoginWords(screenText(t), '值守屏');
+    await unmount(t, rig);
+  });
+
+  testWidgets('点开换人的那个框,里面也不许说登录,而且要把「不核实」说出来',
+      (WidgetTester t) async {
+    // **这一条是「不核实」那句话的唯一承重点。**
+    //
+    // 值守屏上那句「不核实」来自 `watch_page.dart` 的 `signedAs()`（任务 10
+    // 就有），在值守屏上断它是恒真的：这一枚 chip 一个字都不改也绿。而换人
+    // 的框才是本次新增的、人真正会停下来读一句的地方 —— §6.3 那句实话必须
+    // 在这儿说出来，而且这儿也一样不许说成登录。
+    final Rig rig = await mountTeleop(t, who: '老王');
+    await t.tap(find.byKey(OperatorChip.chipKey));
+    await pumpUntil(
+        t,
+        () => find.byKey(OperatorChip.editKey).evaluate().isNotEmpty,
+        '改名字的框出来了');
+    final String words = dialogText(t);
+    expectNoLoginWords(words, '换人的那个框');
+    expect(words, contains('不核实'),
+        reason: '§6.3：狗记下这个名字但从不核实 —— 这句实话要说在人读得到的地方');
+    await t.tap(find.text('算了'));
+    await t.pumpAndSettle();
     await unmount(t, rig);
   });
 
@@ -274,6 +330,39 @@ void main() {
     await unmount(t, rig);
   });
 
+  testWidgets('狗收拾过的那个名字才是账上那个,屏上跟着它改', (WidgetTester t) async {
+    // **两侧的清洗规则本来就不一样。** 这头只 `trim()`；狗那头
+    // （`app/identity.py::clean_operator`）还会把中间的连续空白压成一个、
+    // 把不可打印字符换成空格、按 `MAX_OPERATOR_LEN` 截断。
+    //
+    // 不认狗那份的话：屏上和盘上留着「老  王」，狗的审计环里留着「老 王」，
+    // 事后拿手机上那份跟审计对账，字符串比较不相等，同一个人对不上。
+    //
+    // 这一条同时把「换人这件事告诉了狗」那条名不副实的地方补上：那条只看
+    // `dog.received`（发出去了就绿，狗回 404 还是 500 都不看），这一条断的是
+    // **回来的那份**，往返的形状被握住了。
+    final Rig rig = await mountTeleop(t, who: '老王', echo: '老 王');
+    await t.tap(find.byKey(OperatorChip.chipKey));
+    await pumpUntil(
+        t,
+        () => find.byKey(OperatorChip.editKey).evaluate().isNotEmpty,
+        '改名字的框出来了');
+    await t.enterText(find.byKey(OperatorChip.editKey), '老  王');
+    await t.tap(find.byKey(OperatorChip.saveKey));
+    await pumpUntil(
+        t,
+        () => find
+            .descendant(
+                of: find.byKey(OperatorChip.chipKey), matching: find.text('老 王'))
+            .evaluate()
+            .isNotEmpty,
+        'chip 上挂的换成了狗收拾过的那一份',
+        step: const Duration(milliseconds: 20));
+    expect(rig.puts.single['name'], '老  王', reason: '发上去的是人输的原样');
+    expect(find.text('老  王'), findsNothing, reason: '屏上不许留着跟账上对不上的那一份');
+    await unmount(t, rig);
+  });
+
   // ------------------------------------------------ 落盘
 
   test('名字落盘,重开还在', () async {
@@ -307,17 +396,60 @@ void main() {
     }
   });
 
-  test('按狗分别记 —— 换一只狗可能就是换一个班', () async {
-    final MemoryRegistryStore store = MemoryRegistryStore();
-    await store.saveOperator(dog: 'dog-1', name: '老王');
-    await store.saveOperator(dog: 'dog-2', name: '小李');
-    expect(await store.readOperator(dog: 'dog-1'), '老王');
-    expect(await store.readOperator(dog: 'dog-2'), '小李');
-  });
+  // 「按狗分别记」这条硬要求，**两套实现各跑一遍**。
+  //
+  // 只跑 `MemoryRegistryStore` 的版本是形态 5（有分支但夹具保证进不去）：把
+  // `JsonFileStore.saveOperator` 里的 `all[dog] = name` 改成 `all['operator']
+  // = name`（重构时打错一个键，或者哪天有人想「简化成一个字段」），整套 Dart
+  // 测试全绿 —— 而真机上跑的正是 `JsonFileStore`。现场后果是同时开着两只狗
+  // 的那位在第二只上看见第一只那个班的名字，更坏的是
+  // `roster_page._operatorFor` 读到非空就**不再问**，那个错名字直接进
+  // `unlock` 发出去，账就从这一刻起记错了，而屏上一切正常。
+  for (final MapEntry<String, RegistryStore Function(Directory)> impl
+      in <String, RegistryStore Function(Directory)>{
+    '内存那份': (Directory _) => MemoryRegistryStore(),
+    '真机上那份': (Directory d) => JsonFileStore(File('${d.path}/roster.json')),
+  }.entries) {
+    test('按狗分别记 —— 换一只狗可能就是换一个班（${impl.key}）', () async {
+      final Directory dir =
+          Directory.systemTemp.createTempSync('d1max-operator-');
+      try {
+        final RegistryStore store = impl.value(dir);
+        await store.saveOperator(dog: 'dog-1', name: '老王');
+        await store.saveOperator(dog: 'dog-2', name: '小李');
+        expect(await store.readOperator(dog: 'dog-1'), '老王');
+        expect(await store.readOperator(dog: 'dog-2'), '小李');
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
 
-  test('没记过的那只是空串,不是编一个名字出来', () async {
-    final MemoryRegistryStore store = MemoryRegistryStore();
-    await store.saveOperator(dog: 'dog-1', name: '老王');
-    expect(await store.readOperator(dog: 'dog-2'), '');
+    test('没记过的那只是空串,不是编一个名字出来（${impl.key}）', () async {
+      final Directory dir =
+          Directory.systemTemp.createTempSync('d1max-operator-');
+      try {
+        final RegistryStore store = impl.value(dir);
+        await store.saveOperator(dog: 'dog-1', name: '老王');
+        expect(await store.readOperator(dog: 'dog-2'), '');
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
+  }
+
+  test('两只狗各自的名字,重开 app 之后还是各自的', () async {
+    // 上面那两条各自只摸一个 store 实例的内存。**这一条换实例再读** ——
+    // 那才是 `JsonFileStore` 真正的行为面：盘上那份 JSON 得按 SN 分格子。
+    final Directory dir =
+        Directory.systemTemp.createTempSync('d1max-operator-');
+    try {
+      final File f = File('${dir.path}/roster.json');
+      await JsonFileStore(f).saveOperator(dog: 'C40221', name: '老王');
+      await JsonFileStore(f).saveOperator(dog: 'C40222', name: '小李');
+      expect(await JsonFileStore(f).readOperator(dog: 'C40221'), '老王');
+      expect(await JsonFileStore(f).readOperator(dog: 'C40222'), '小李');
+    } finally {
+      dir.deleteSync(recursive: true);
+    }
   });
 }

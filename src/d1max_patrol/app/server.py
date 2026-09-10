@@ -1667,6 +1667,10 @@ class AppServer:
         **产出是审计环里那一条,不是返回值。** 挂账 65 接受的代价是"甲忘了
         切、乙的操作签在甲名下";正因为接受了它,这条带时刻、带新名字、删不掉
         的记录才是事后唯一能翻的东西。
+
+        **换的不只是这台狗记着的那个名字,还有当前这个会话的署名**(见下面
+        ``rename_ref`` 那一段)—— 不然这次会话后面每一条留痕都还签在上一个
+        人名下。
         """
         body = req.json()
         if not isinstance(body, dict):
@@ -1684,6 +1688,27 @@ class AppServer:
         # 留痕里 ``ref`` 是 token 指纹;没设 PIN 的部署上没有会话,那就是空串
         # —— **空串不许拿去顶替成别的什么**,"没有指纹"和"某个指纹"是两件事。
         sess = req.session
+        if sess is not None:
+            # **这一次会话后面每一条留痕也得跟着换名字。**
+            #
+            # 别的留痕(``acquired``/``taken_over``/``mode_switched``)署的是
+            # ``req.session.operator`` —— 那个名字是解锁那一刻定下的。不在这里
+            # 一起换的话,小李点了 chip、屏上写着小李、审计里也刚记下一条"换成
+            # 小李",可他接着抢控制权、切远程档产生的每一条留痕**仍然签老王**:
+            # 交接班查账时两份记录互相矛盾,而没有任何一处提示发生过什么。这比
+            # 挂账 65 接受的代价重一档 —— 那笔账认的是"甲忘了切",这里是人记得
+            # 切、系统也记下了,账还是错的。
+            #
+            # **换的是会话上那个名字,不是让留痕改从 ``self._operator`` 取。**
+            # ``self._operator`` 是**服务器级**的一份,两台手机连一只狗时它只是
+            # "最后报到的那个人";让留痕去读它,甲手机的抢控制权就会签上乙手机
+            # 刚报的名字 —— 那是把一个人的错名扩散成所有人的错名,比现在更坏。
+            # 会话是每台手机各一份,按 ``ref`` 换才只影响报名字的那一台。
+            #
+            # **也不是一次隐式 unlock。** 没有任何凭证被重新校验,token、
+            # readonly、通道、闲置计时全不动(见 ``Guard.rename_ref``);
+            # ``operator_verified`` 照旧恒为 ``False`` —— 狗只记,不核。
+            self._auth.rename_ref(sess.ref, name)
         self._control.book.note(
             at_ms=now, kind="operator_changed",
             who=Holder(ref=sess.ref if sess is not None else "", operator=name),

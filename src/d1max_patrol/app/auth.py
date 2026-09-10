@@ -294,6 +294,26 @@ class TokenStore:
                 del self._live[t]
             return bool(dead)
 
+    def rename_ref(self, ref: str, operator: str) -> bool:
+        """按指纹换一个会话的署名。换到了返回 ``True``。
+
+        **换的是活着的那条记录,不是 ``Session``。** ``Session`` 是 frozen 的、
+        每次请求现做一份(见 :func:`_session_of`)—— 改它等于改一份马上就要被
+        丢掉的复印件,下一个请求上来读到的还是旧名字。
+
+        **这不是重新认证。** 这里没有任何一次凭证校验:token 还是原来那个,
+        ``readonly``/``channel``/闲置计时一个都不动,只有署名换了。§6.3 说的
+        就是这件事 —— 狗记名字但从不核实,所以"换名字"本来就没有可核实的东西,
+        它不该、也不能变成一次隐式解锁。
+        """
+        with self._lock:
+            hit = False
+            for rec in self._live.values():
+                if rec.ref == ref:
+                    rec.operator = operator
+                    hit = True
+            return hit
+
     def revoke(self, token: str) -> None:
         with self._lock:
             self._live.pop(token, None)
@@ -846,6 +866,15 @@ class Guard:
                    now: float | None = None) -> Session | None:
         return self.tokens.info(token,
                                 now=self._clock() if now is None else now)
+
+    def rename_ref(self, ref: str, operator: str) -> bool:
+        """换一个会话的署名。见 :meth:`TokenStore.rename_ref`。
+
+        名字照样走 :func:`normalize_operator` —— **进这台机器的名字只许经过
+        这一道门**,不然解锁时报的名字和换人时报的名字会按两套规矩收拾,同一
+        个人在会话上和审计里成了两个字符串。
+        """
+        return self.tokens.rename_ref(ref, normalize_operator(operator))
 
     def logout(self, token: str) -> bool:
         """交回一个会话的名额。原来有就返回 ``True``。

@@ -18,6 +18,7 @@ library;
 import 'package:d1max_patrol/model/robot.dart';
 import 'package:d1max_patrol/net/patrol_client.dart';
 import 'package:d1max_patrol/ui/watch_page.dart';
+import 'package:d1max_patrol/ui/widget/operator_chip.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -431,6 +432,46 @@ void main() {
     await pumpUntil(t, () => rig.dog.acks.isNotEmpty, '确认那一下真的发出去了',
         step: const Duration(milliseconds: 20));
     expect(rig.dog.acks.single['who'], '李四');
+    await unmount(t, rig);
+  });
+
+  testWidgets('接班的人点 chip 换了名字,确认里带的就是接班的那一个', (WidgetTester t) async {
+    // **上面两条合起来仍然盖不住这件事。** 两条都是「进屏时是谁、确认里就是
+    // 谁」—— 换人这个动作一次都没做过，于是 `widget.operatorName` 和屏上挂着
+    // 的那个 `_operator` 永远相等，分叉看不见。
+    //
+    // 张三开着值守屏 → 李四接班点 chip 换成李四 → 屏上三处都写着李四 → 李四点
+    // 「我看见了」→ 狗的告警上 `acked_by` 记的却是张三。而 §5.3 记名确认存在
+    // 的全部理由，就是交接班时查得出谁在盯屏幕：这一屏偏偏会在交接班这唯一
+    // 场景上记错人。
+    final Rig rig = await mount(t,
+        alerts: <Map<String, dynamic>>[p1Wire()], operatorName: '张三');
+    await t.tap(find.byKey(OperatorChip.chipKey));
+    await pumpUntil(
+        t,
+        () => find.byKey(OperatorChip.editKey).evaluate().isNotEmpty,
+        '点一下 chip 就出来了改名字的框');
+    await t.enterText(find.byKey(OperatorChip.editKey), '李四');
+    await t.tap(find.byKey(OperatorChip.saveKey));
+    // 等的是 chip 上那个名字真的换掉了、而且框已经关上 —— 光等
+    // `find.text('李四')` 会等到还开着的输入框里那一份。
+    await pumpUntil(
+        t,
+        () =>
+            find
+                .descendant(
+                    of: find.byKey(OperatorChip.chipKey),
+                    matching: find.text('李四'))
+                .evaluate()
+                .isNotEmpty &&
+            find.byKey(OperatorChip.editKey).evaluate().isEmpty,
+        '框关上了,chip 上挂的名字换成了李四',
+        step: const Duration(milliseconds: 20));
+    await t.tap(find.byKey(WatchPage.ackKeyFor(0)));
+    await pumpUntil(t, () => rig.dog.acks.isNotEmpty, '确认那一下真的发出去了',
+        step: const Duration(milliseconds: 20));
+    expect(rig.dog.acks.single['who'], '李四',
+        reason: '屏上写着李四，狗那边的 acked_by 就不许是张三');
     await unmount(t, rig);
   });
 

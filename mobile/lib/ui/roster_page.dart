@@ -179,7 +179,8 @@ class _RosterPageState extends State<RosterPage> {
             tooltip: '盘况',
             onPressed: () => unawaited(_open(
                 r,
-                (PatrolClient c, String _, ValueChanged<String> __) =>
+                // 盘况屏不显示、也不改操作员姓名 —— 后两位原样丢掉。
+                (PatrolClient c, String _, ValueChanged<String> _) =>
                     StoragePage(client: c, robot: r))),
           ),
           IconButton(

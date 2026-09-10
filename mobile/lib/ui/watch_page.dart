@@ -386,10 +386,15 @@ class _WatchPageState extends State<WatchPage> {
     }
   }
 
-  /// 记名确认。**名字来自 [WatchPage.operatorName]，不是写死的。**
+  /// 记名确认。**送的是 [_operator]，屏上此刻挂着的那个名字。**
+  ///
+  /// **不许写成 `widget.operatorName`。** 那个值是进这一屏那一刻取的，点 chip
+  /// 换人不会动它 —— 张三开着屏、李四接班点 chip 改成李四、屏上三处都写着
+  /// 李四，而狗的告警上 `acked_by` 记的还是张三。§5.3 记名确认存在的全部理由
+  /// 就是交接班时查得出谁在盯屏幕，这一屏偏偏会在交接班这唯一场景上记错人。
   Future<void> _ack(Alert a) async {
     try {
-      await widget.client.ackAlert(a.key, who: widget.operatorName);
+      await widget.client.ackAlert(a.key, who: _operator);
     } catch (e) {
       developer.log('确认 ${a.key} 失败：$e', name: 'watch_page');
       if (mounted) _toast('确认没发出去。热点还连着吗');
