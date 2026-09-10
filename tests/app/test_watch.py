@@ -542,6 +542,35 @@ def test_有镜像盘这一拍读不了的时候屏上必须说出来(bridge, tm
     assert "读不了" in got["detail"]["mirror"]
 
 
+def test_只要有一块镜像盘满了整台狗就报满(bridge, tmp_path, monkeypatch):
+    """满盘是悲观聚合里最容易被乐观掉的那一格。
+
+    满盘的意思是「同步从这一刻起停住了」,而屏上只看得到 ``behind`` 在涨。
+    两块盘里满了一块,报的必须是满 —— 拿边上那块还有空间的盘把它盖掉,等于
+    帮着把一条已经断掉的备份链藏起来,跟 ``last_sync_ms`` 取最新的那一半是
+    同一个错。
+
+    这一格没法靠真造一块满盘来钉(得占满一整块真盘),所以在 ``plan_sync``
+    这一跳上换掉其中一块的结论。
+    """
+    ctx = C.make_ctx(bridge, tmp_path)
+    摆一趟(ctx.runs_root, "一号厂房", "20250901T010203Z")
+    targets = 认盘(ctx,
+                 摆镜像盘(ctx, tmp_path, "u1", last_sync_ms=NOW_MS),
+                 摆镜像盘(ctx, tmp_path, "u2", last_sync_ms=NOW_MS))
+    满的 = tmp_path / "media" / "u2"
+    真的 = watch.plan_sync
+
+    def 一块报满(runs_root, mount, **kw):
+        plan = 真的(runs_root, mount, **kw)
+        return dataclasses.replace(plan, full=True) if Path(mount) == 满的 else plan
+
+    monkeypatch.setattr(watch, "plan_sync", 一块报满)
+    got = watch_summary(ctx, now_ms=NOW_MS, targets=targets)
+    assert got["mirror"]["measured"] == 2
+    assert got["mirror"]["full"] is True
+
+
 # ------------------------------------------------------------------ 路由
 
 
