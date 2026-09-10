@@ -274,12 +274,47 @@ def test_超时的边界正好在这个常量上():
     起 = 1_757_000_000_000
     点 = SuspendPoint(waypoint_index=0, waypoint_name="P1_transformer",
                       pose=None, reason="人要接管", at_ms=起,
-                      from_state=RunState.RUNNING)
+                      from_state=RunState.RUNNING, prior_suspend_ms=0)
     assert not _挂起超时了(点, now_ms=起)
     assert not _挂起超时了(点, now_ms=起 + SUSPEND_STALE_MS)
     assert _挂起超时了(点, now_ms=起 + SUSPEND_STALE_MS + 1)
     # 没让开腿就没有这个点。``None`` 不许当成「很久以前」。
     assert not _挂起超时了(None, now_ms=起 + SUSPEND_STALE_MS * 10)
+
+
+def test_反复短接管按累计算不按单次算():
+    """狗在返航路上被反复拉开:每一次都四分钟,加起来早过线了。
+
+    现场那一幕(挂账 56 放行返航途中让开腿之后新长出来的洞):狗电量到线转
+    返航,走一段被人拉到一边、放回、又被拉开。``_go_home`` 那个 ``while True``
+    没有上限、每圈重算 ``RETURN_TIMEOUT_S``,挂起期间电量事件只留底不中止,
+    看门狗只在两次接管之间那几秒的缝里有机会开火 —— 于是狗耗到没电,而按
+    单次口径(``now_ms - 点.at_ms``)这条 P1 **一次都不报**,值守屏上一切
+    如常。
+
+    **不封接管次数、不加新阈值**:理由见 ``_挂起超时了`` 的文档串。判据换成
+    「这一趟累计有多久没在跑」,阈值仍然是同一个 ``SUSPEND_STALE_MS``。
+
+    引擎那一半(账要真的加起来)的守卫在
+    ``tests/engine/test_machine_suspend.py::test_同一趟返航里反复短接管_挂起时长会累计``。
+    """
+    四分钟 = 4 * 60_000
+    起 = 1_757_000_000_000
+
+    def 第几次(n: int) -> SuspendPoint:
+        """第 ``n`` 次接管刚开始的那一刻。之前 ``n-1`` 次各挂了四分钟。"""
+        return SuspendPoint(waypoint_index=0, waypoint_name="P1_transformer",
+                            pose=None, reason="走廊被堵了", at_ms=起,
+                            from_state=RunState.RETURNING,
+                            prior_suspend_ms=四分钟 * (n - 1))
+
+    # 头两次挂满四分钟:累计 4、8 分钟,都还不到线 —— 正常接管不该挨 P1,
+    # 一个总在误报的 P1 很快就没人当回事。
+    assert not _挂起超时了(第几次(1), now_ms=起 + 四分钟)
+    assert not _挂起超时了(第几次(2), now_ms=起 + 四分钟)
+    # 第三次也只挂了四分钟,但这一趟累计已经 12 分钟 —— 单次口径下这里仍然
+    # 是"才 4 分钟",这一句就是两种口径唯一分得开的地方。
+    assert _挂起超时了(第几次(3), now_ms=起 + 四分钟)
 
 
 def test_闸门读的钟必须还是墙钟(没起的服务):
@@ -328,7 +363,7 @@ class 假引擎:
 def _快照(*, 开跑: int, 让开腿于: int, 挂着: bool = True) -> RunSnapshot:
     点 = SuspendPoint(waypoint_index=0, waypoint_name="P1_transformer",
                       pose=None, reason="人要接管", at_ms=让开腿于,
-                      from_state=RunState.RUNNING)
+                      from_state=RunState.RUNNING, prior_suspend_ms=0)
     return RunSnapshot(
         state=RunState.SUSPENDED if 挂着 else RunState.RUNNING,
         mission="巡检一号", waypoint_index=0,

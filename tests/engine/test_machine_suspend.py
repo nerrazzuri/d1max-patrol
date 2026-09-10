@@ -17,7 +17,11 @@ import pytest
 
 from d1max_patrol.backends.base import BatteryEvent, DevicePoseEvent, NavStatusEvent
 from d1max_patrol.engine.archive import read_events
-from d1max_patrol.engine.machine import MissionEngine, RunState
+from d1max_patrol.engine.machine import (
+    RETURN_TIMEOUT_S,
+    MissionEngine,
+    RunState,
+)
 from d1max_patrol.engine.mission import Policy
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
@@ -611,6 +615,13 @@ async def test_返航中接管完继续_重新规划回家而不是接着走老�
     ``_seen``,对它调用会立刻返回,根本没让事件循环把 ``resume`` 处理掉 ——
     那样这句断言会在流水还空着的时候就跑(同样的坑见前面
     ``test_继续之后挂起快照清掉`` 的说明)。
+
+    **"没有中途闪成 RUNNING"这句话是记着广播序列断的,不是拿末态断的。**
+    原来这儿写的是 ``assert eng.state is RunState.RETURNING`` 加一句
+    ``# 也没有中途闪成 RUNNING`` 的注释 —— 闪一下再翻回来它照样绿,断言比
+    注释小了一整圈。订阅一路广播、把 ``state`` 收下来,闪变才真的抓得到。
+    收队列的时机是安全的:``_go_home`` 那一圈是先 ``_transition(RETURNING)``
+    再 ``return_home()``,所以流水一长出东西,该看的广播早就进队列了。
     """
     eng = 返航中的引擎
     await eng.suspend("走廊被堵了")
@@ -618,10 +629,15 @@ async def test_返航中接管完继续_重新规划回家而不是接着走老�
     nav.清空下发记录()
     nav.emit_loc(LocStatus.CONTINUOUS_LOC)           # 人把狗牵回来了,还在图里
 
-    await eng.resume()
-    await until(lambda: nav.下发过的目标点)
-    assert nav.下发过的目标点[-1] == 原点             # 重新发了一次,不是续跑
-    assert eng.state is RunState.RETURNING            # 也没有中途闪成 RUNNING
+    with eng.subscription() as 广播:
+        await eng.resume()
+        await until(lambda: nav.下发过的目标点)
+        assert nav.下发过的目标点[-1] == 原点         # 重新发了一次,不是续跑
+        assert eng.state is RunState.RETURNING
+        状态序列 = []
+        while not 广播.empty():
+            状态序列.append(广播.get_nowait().state)
+    assert RunState.RUNNING not in 状态序列, f"中途闪过 RUNNING: {状态序列}"
 
 
 async def test_返航中接管完狗不在地图里_照样报错(返航中的引擎, nav):
@@ -668,3 +684,214 @@ async def test_重定位期间仍然拒绝(重定位中的引擎):
     await eng.suspend("试试")
     await until(lambda: "正在重定位" in eng.snapshot.reason)
     assert eng.state is RunState.LOCALIZING
+
+
+# ------------------------------------------------- 任务 13 修复轮 1(必修 1/3/4/6)
+#
+# 上面那组测试盖住的是"返航中直接让开腿"这一条路。修复轮 1 补的是它旁边那几
+# 条侧门:从暂停里进挂起(``from_state`` 记的是 PAUSED 而不是 RETURNING)、
+# ``return_home`` 还没发出去的那个停靠点、以及反复短接管累计耗掉的时间。
+
+
+async def test_返航中暂停再让开腿再继续_也重新规划回家(返航中的引擎, nav):
+    """**任务 13 要杀的那一幕,从侧门原样走了回来。**
+
+    整条链每一步今天都成立:狗在 ``RETURNING`` 卡在 ``_wait_nav_terminal``
+    里等结果,人按暂停 —— 那两个等待循环都照常 ``_handle`` 事件,一路走到
+    ``_pause_until_resumed``,状态变 ``PAUSED``;人在暂停里再点让开腿 ——
+    ``PAUSED`` 不在 ``_SUSPEND_UNSAFE_STATES`` 里,挂得起来,而
+    ``SuspendPoint.from_state`` 记下的是 ``PAUSED``,不是 ``RETURNING``;人点
+    继续 —— 走的是重发点位那一支,抛 ``_RetryWaypoint``,一路漏到 ``_go_home``
+    的 except 里,**整趟按「返航失败」中止**。
+
+    人做的事跟 ``test_返航中接管完继续_重新规划回家而不是接着走老路`` 一模一
+    样,只是中间多按了一次暂停,结果却是这一趟没了 —— 现场最难归因的那种
+    失败。所以这一条断的是同一句话:重新规划回家,而且不许中止。
+    """
+    eng = 返航中的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+    await eng.suspend("地上有水,人把狗牵到一边")
+    await eng.wait_state(RunState.SUSPENDED)
+    点 = eng.snapshot.suspended_at
+    assert 点 is not None
+    assert 点.from_state is RunState.PAUSED, "侧门这一幕的前提没摆出来"
+    nav.清空下发记录()
+
+    await eng.resume()
+    await until(lambda: nav.下发过的目标点)
+    assert nav.下发过的目标点[-1] == 原点, "没重新规划回家"
+    # 中止是立刻发生的(``_do_abort`` 里没有等待),给半秒的窗口足够看清。
+    with pytest.raises((TimeoutError, asyncio.TimeoutError)):
+        await eng.wait_done(timeout_s=0.5)
+    assert eng.state is RunState.RETURNING, eng.snapshot.reason
+    assert "返航失败" not in eng.snapshot.reason, eng.snapshot.reason
+
+
+async def test_返航还没发出去就让开腿_继续之后照样发得出去(make_engine, nav, device):
+    """停靠点是 ``_await_nav_standby`` —— ``return_home`` **还没发出去**。
+
+    ``RETURNING`` 里有两个等待点,只看状态分不出来。旧测试
+    ``test_返航中不能挂起`` 站的就是这一个(``nav.nav = ACTIVE``),它的结论
+    在任务 13 里被翻了面,但**停靠点不能跟着结论一起丢**:翻面之后这一个点
+    零覆盖,而 ``_go_home`` 重来那一圈恰恰要重新走一遍它。
+
+    ``nav.nav = ACTIVE`` 不能提前设:那样第一个点的 ``goto`` 自己都发不出去。
+    """
+    nav.on_goto = NEVER
+    nav.on_return_home = NEVER
+    eng = make_engine()
+    await eng.start(
+        make_mission(policy=Policy(battery_abort_pct=15.0, battery_return_pct=25.0)),
+        home=_HOME)
+    try:
+        await until(lambda: nav.goto_calls)
+        nav.nav = NavStatus.ACTIVE                   # 现在才卡住 _await_nav_standby
+        device.emit(BatteryEvent(percent=20.0))      # 返航线 25,中止线 15
+        await eng.wait_state(RunState.RETURNING)
+        await eng.suspend("门口有箱子")
+        await eng.wait_state(RunState.SUSPENDED)
+        assert nav.home_calls == 0, "停靠点站错了:return_home 已经发出去了"
+        assert eng.snapshot.suspended_at is not None
+
+        nav.nav = NavStatus.STANDBY                  # 人挪完了,导航也回落了
+        await eng.resume()
+        await until(lambda: nav.home_calls)
+        assert eng.state is RunState.RETURNING
+    finally:
+        if eng.running:
+            await eng.abort("测试收尾")
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                await eng.wait_done(timeout_s=5.0)
+        await eng.aclose()
+
+
+async def test_让开腿盖的点位序号不越界(返航中的引擎):
+    """``waypoint_name`` 夹了、``waypoint_index`` 没夹。
+
+    返航段上"当前点位"这个概念本来就不成立,越界的那个序号会顺着
+    ``to_wire`` 一路流到手机上,变成一个不存在的点。
+
+    直接改 ``_live.index`` 是明知故犯:今天引擎自己没有哪条路把它推出界,
+    这条越界只能造出来。夹取是一行的事,而没有它的话,哪天真有一条路把序号
+    推出界(多一层循环、返航段自己记个数),露面的方式是页面上一个错的点位,
+    不是一条异常 —— 没有任何测试会红。
+    """
+    eng = 返航中的引擎
+    总数 = len(eng._live.mission.waypoints)
+    eng._live.index = 99
+    await eng.suspend("走廊被堵了")
+    await eng.wait_state(RunState.SUSPENDED)
+    点 = eng.snapshot.suspended_at
+    assert 点 is not None
+    assert 点.waypoint_index == 总数 - 1, 点.waypoint_index
+    assert 点.waypoint_name == eng._live.mission.waypoints[-1].name
+
+
+async def test_同一趟返航里反复短接管_挂起时长会累计(返航中的引擎, nav, clock):
+    """**反复短接管会让狗永远回不了家,而且零告警。**
+
+    ``_go_home`` 那个 ``while True`` 没有计数器也没有上限,每圈还把
+    ``RETURN_TIMEOUT_S`` 重算;挂起期间电量事件只留一份底不触发中止;看门狗
+    只在两次接管之间那几秒的缝里才有机会开火。于是狗在"回家 → 被拉开 →
+    回家 → 被拉开"里耗到没电,而每一次接管都短于十分钟,``suspend_stale``
+    那条 P1 一次都不报。
+
+    **处置是只补可见性、不补拒绝**(封顶等于在人最需要把狗拉到一边的时候拒
+    绝他),而可见性靠的是累计时长而不是次数 —— 耗电的是时间不是次数。这一
+    条钉引擎这一半:账要加起来。判定那一半在
+    ``app/server.py::_挂起超时了``,守卫是
+    ``tests/app/test_suspend_e2e.py::test_反复短接管按累计算不按单次算``。
+
+    时钟是注进来的那份(``clock.offset``),不是 sleep 四分钟。
+    """
+    eng = 返航中的引擎
+    四分钟_s = 4 * 60.0
+    记下的: list[int] = []
+    for n in range(3):
+        await eng.suspend(f"第 {n + 1} 次被拉到一边")
+        # 第二圈之后 SUSPENDED 早就进过 ``_seen``,``wait_state`` 会立刻返回,
+        # 只能等"此刻是"。
+        await until(lambda: eng.state is RunState.SUSPENDED)
+        点 = eng.snapshot.suspended_at
+        assert 点 is not None
+        记下的.append(点.prior_suspend_ms)
+        clock.offset += 四分钟_s                     # 人接管了四分钟
+        nav.清空下发记录()
+        await eng.resume()
+        await until(lambda: nav.下发过的目标点)      # 重新规划回家了
+        await until(lambda: eng.state is RunState.RETURNING)
+
+    assert 记下的[0] == 0, "第一次让开腿之前这一趟还没挂起过"
+    # ``>=`` 而不是 ``==``:累计量是拿 ``clock()`` 的差算的,里面还夹着真
+    # monotonic 走掉的那几毫秒。上界拦的是"多加了一圈"这种错。
+    assert 4 * 60_000 <= 记下的[1] < 5 * 60_000, 记下的
+    assert 8 * 60_000 <= 记下的[2] < 9 * 60_000, 记下的
+
+
+async def test_新一趟返航开始时挂起累计清零(make_engine, nav, device, clock):
+    """账按**这一趟返航**算,不跨趟累加。
+
+    跑点位的时候人正常接管过一会儿,那几分钟不该记在返航的账上 —— 记了的话
+    返航路上第一次让开腿就可能立刻挨一条 P1,而人很快就学会无视一个总在误报
+    的 P1(``SUSPEND_STALE_MS`` 注释里那段下界论证)。
+    """
+    nav.on_goto = NEVER
+    nav.on_return_home = NEVER
+    eng = make_engine()
+    await eng.start(
+        make_mission(policy=Policy(battery_abort_pct=15.0, battery_return_pct=25.0)),
+        home=_HOME)
+    try:
+        await until(lambda: nav.goto_calls)
+        await eng.suspend("跑点位的时候先接管一次")
+        await until(lambda: eng.state is RunState.SUSPENDED)
+        clock.offset += 4 * 60.0
+        await eng.resume()
+        await until(lambda: eng.state is RunState.RUNNING)
+        assert eng._live.suspend_total_ms >= 4 * 60_000, \
+            "这一次接管压根没记账,下面那个 0 是恒真的空话"
+
+        device.emit(BatteryEvent(percent=20.0))      # 返航线 25,中止线 15
+        await eng.wait_state(RunState.RETURNING)
+        await until(lambda: nav.home_calls)
+        await eng.suspend("返航路上又被拉开")
+        await until(lambda: eng.state is RunState.SUSPENDED)
+        点 = eng.snapshot.suspended_at
+        assert 点 is not None
+        assert 点.prior_suspend_ms == 0, \
+            f"跑点位那一段的接管被算进返航的账里了: {点.prior_suspend_ms}"
+    finally:
+        if eng.running:
+            await eng.abort("测试收尾")
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                await eng.wait_done(timeout_s=5.0)
+        await eng.aclose()
+
+
+async def test_重来那一圈的返航超时预算是新算的(返航中的引擎, nav, clock):
+    """人接管的时间比一整个 ``RETURN_TIMEOUT_S`` 还长,重来那一圈得拿一份新
+    预算,不是接着用发起返航时那一份。
+
+    没有这一条,"每圈重算超时预算"在整组测试里**无人守**:假后端恒 StandBy、
+    假时钟不推进,把 ``deadline`` 提到 ``while`` 外面照样全绿。现场的后果是
+    "人接管久了,点继续之后立刻判返航超时",整趟按返航失败中止 —— 恰恰是
+    任务 13 要消掉的那个结局,换了个触发条件。
+
+    断言落在"没中止"上而不是"重发了一次":``return_home()`` 在
+    ``_wait_nav_terminal`` **之前**,预算就算是旧的,那一次下发也照样发得
+    出去 —— 只断流水的话这条测试是恒真的。
+    """
+    eng = 返航中的引擎
+    await eng.suspend("走廊被堵了,人要挪很久")
+    await until(lambda: eng.state is RunState.SUSPENDED)
+    clock.offset += RETURN_TIMEOUT_S + 60.0
+    nav.清空下发记录()
+
+    await eng.resume()
+    await until(lambda: nav.下发过的目标点)
+    assert nav.下发过的目标点[-1] == 原点
+    with pytest.raises((TimeoutError, asyncio.TimeoutError)):
+        await eng.wait_done(timeout_s=0.5)
+    assert eng.state is RunState.RETURNING, eng.snapshot.reason
+    assert "返航失败" not in eng.snapshot.reason, eng.snapshot.reason
