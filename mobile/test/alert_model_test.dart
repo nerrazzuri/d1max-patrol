@@ -181,4 +181,40 @@ void main() {
     expect(s.clockSkewS, 0.0);
     expect(s.batteryPct, 100.0);
   });
+
+  // ---------------------------------------------------- 名单：读不懂就抛
+
+  test('读得懂的名单顺序原样留着', () {
+    final List<Alert> got = alertsFromWire(<String, dynamic>{
+      'alerts': <Map<String, dynamic>>[
+        <String, dynamic>{'key': 'a', 'level': 'P2'},
+        <String, dynamic>{'key': 'b', 'level': 'P1'},
+      ],
+    });
+    expect(got.map((Alert a) => a.key).toList(), <String>['a', 'b']);
+  });
+
+  test('体里没有名单那一段的时候抛,不许退回一份空名单', () {
+    // 空名单在值守屏上不是「没数据」——它会被翻译成一句「现在没有需要立刻
+    // 动身的事」，而那一刻狗上可能正挂着一条 P1。
+    expect(() => alertsFromWire(const <String, dynamic>{}),
+        throwsFormatException);
+  });
+
+  test('名单那一段不是名单的时候也抛', () {
+    // 将来狗那侧改成 `{"items": [...]}`、或者某一拍回 `{"alerts": null}`。
+    expect(() => alertsFromWire(const <String, dynamic>{'alerts': null}),
+        throwsFormatException);
+    expect(() => alertsFromWire(const <String, dynamic>{'alerts': 'nope'}),
+        throwsFormatException);
+  });
+
+  test('名单里有一条不是对象的时候整份都不算数,不许悄悄少一条', () {
+    // 少掉的那条正好是 P1 的那天，屏上剩下的几条看着一切正常。
+    expect(
+        () => alertsFromWire(<String, dynamic>{
+              'alerts': <Object>[fullWire(), 'not-an-alert'],
+            }),
+        throwsFormatException);
+  });
 }

@@ -144,6 +144,9 @@ Future<Rig> mount(
   List<Map<String, dynamic>>? alerts,
   Map<String, dynamic>? summary,
   Map<String, dynamic>? state,
+  /// 整个响应体照这份发。**给了就绕过上面那个 `{'alerts': [...]}` 的封皮**
+  /// —— 「狗回 200 但体解不出来/形状不对」那几条要的正是一份没有封皮的回复。
+  Map<String, dynamic>? alertsRaw,
   String operatorName = '老王',
   int Function()? nowMs,
   int? alertsStatus,
@@ -159,9 +162,10 @@ Future<Rig> mount(
     'operator_verified': false,
     'readonly': false,
   };
-  dog.replies['/api/alerts'] = <String, dynamic>{
-    'alerts': alerts ?? <Map<String, dynamic>>[],
-  };
+  dog.replies['/api/alerts'] = alertsRaw ??
+      <String, dynamic>{
+        'alerts': alerts ?? <Map<String, dynamic>>[],
+      };
   dog.replies['/api/watch/summary'] = summary ?? summaryWire();
   dog.replies['/api/state'] = state ?? stateWire();
   if (alertsStatus != null) dog.statusCodes['/api/alerts'] = alertsStatus;
@@ -216,6 +220,13 @@ String screenText(WidgetTester t) => t
     .widgetList<Text>(find.byType(Text))
     .map((Text w) => w.data ?? '')
     .join('\n');
+
+/// 某个 Key 上那句原话。找不到就是空串。
+String keyText(WidgetTester t, Key key) {
+  final Iterable<Element> got = find.byKey(key).evaluate();
+  if (got.isEmpty) return '';
+  return (got.first.widget as Text).data ?? '';
+}
 
 /// 「这一屏的数据读于 …」那一格上的原话。
 String asOfText(WidgetTester t) {
@@ -582,6 +593,112 @@ void main() {
         '再问一次之后屏上的读取时刻换成这一次的',
         step: const Duration(milliseconds: 20));
     expect(asOfText(t), isNot(contains('07:00')));
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------- 狗回了 200，但体里的东西读不懂
+  //
+  // **这条路今天就走得到。** `patrol_client.dart` 的 `_send` 里
+  // `jsonDecode` 抛 `FormatException` 是被吞掉的（S-2，为了让状态码报得
+  // 对），于是一份 200 + 一页门户 HTML 会原样变成一个空的 `{}` 交到解析
+  // 函数手上。现场最像的触发：手机没连上狗的热点，连到了带强制门户的网，
+  // 门户对任何 GET 都回 200 加一页登录页。
+  //
+  // **要证的不是「没崩」，是「没说让人放心的假话」。** 这一屏最坏的一种
+  // 错不是留白，是一句带着「刚问过狗」四个字的假保证。
+
+  testWidgets('告警读不懂的时候说读不到,不许说成没有告警', (WidgetTester t) async {
+    // 体里压根没有 `alerts` 这个键（门户回的那页 HTML 解出来就是这样）。
+    final Rig rig = await mount(t, alertsRaw: <String, dynamic>{});
+    // **先断这一条。** 它红的时候，报错里印出来的就是屏上那句让人放心的
+    // 假话本身 —— 那才是这一刀要证的东西。
+    expect(screenText(t), isNot(contains(noP1Hint)),
+        reason: '这一屏没读懂回复，却打出「现在没有需要立刻动身的事」—— '
+            '而狗上此刻可能正挂着一条 P1。这是这一屏能犯的最坏的一种错');
+    expect(find.byKey(WatchPage.p1NoneKey), findsNothing);
+    expect(find.byKey(WatchPage.alertsErrorKey), findsOneWidget,
+        reason: '读不懂就得说读不到');
+    await unmount(t, rig);
+  });
+
+  testWidgets('名单在那儿但不是个名单时也算读不到', (WidgetTester t) async {
+    // 将来狗那侧改成 `{"items": [...]}`、或者某一拍回 `{"alerts": null}`，
+    // 走的都是这一支。
+    final Rig rig = await mount(
+        t, alertsRaw: <String, dynamic>{'alerts': null});
+    expect(find.byKey(WatchPage.alertsErrorKey), findsOneWidget);
+    expect(find.byKey(WatchPage.p1NoneKey), findsNothing);
+    await unmount(t, rig);
+  });
+
+  testWidgets('名单里有一条读不懂,整份都不算数,不许悄悄少一条', (WidgetTester t) async {
+    // 静默丢一条最坏的形态：屏上还剩几条、看着一切正常，而丢掉的那条正是
+    // P1。跟 `store/registry_store.dart` 一个规矩 ——「名册里有条目不是
+    // 对象」是整份读不出，不是少一只狗。
+    final Rig rig = await mount(t, alertsRaw: <String, dynamic>{
+      'alerts': <Object>[p1Wire(), 'this-is-not-an-alert'],
+    });
+    expect(find.byKey(WatchPage.alertsErrorKey), findsOneWidget);
+    expect(find.byKey(WatchPage.p1NoneKey), findsNothing);
+    await unmount(t, rig);
+  });
+
+  testWidgets('狗的状态读不懂的时候说读不到,不许报第 0/0 个点位', (WidgetTester t) async {
+    final Rig rig = await mount(t, state: <String, dynamic>{});
+    expect(find.byKey(WatchPage.stateErrorKey), findsOneWidget);
+    expect(screenText(t), isNot(contains('0/0')),
+        reason: '没读懂回复却报两个凭空捏的数，比一句「读不到」坏得多');
+    await unmount(t, rig);
+  });
+
+  testWidgets('run 里没有点位进度的时候说不知道,不许凭空报一个 0/0',
+      (WidgetTester t) async {
+    // 这一份是读得懂的：引擎状态在，点位进度那两个数不在。**读得懂的那半句
+    // 照说，读不出的那半句说「不知道」** —— 跟同一个函数下面 `_poseText`
+    // 里那条「不许画成 (0.00, 0.00)」是同一条规矩。
+    final Rig rig = await mount(t, state: <String, dynamic>{
+      'run': <String, dynamic>{'state': 'RUNNING'},
+      'device': <String, dynamic>{'pose': null},
+    });
+    final String engine = keyText(t, WatchPage.engineKey);
+    expect(engine, contains('RUNNING'), reason: '读得懂的那半句照说');
+    expect(engine, contains(unknownText));
+    expect(engine, isNot(contains('0/0')));
+    expect(engine, isNot(contains('第 0')));
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------------------------- 补的几条覆盖
+
+  testWidgets('这事没了那个按钮真的发得出去,键也是转义过的', (WidgetTester t) async {
+    // 这个按钮原先一条测试都没有：它真的画在每条告警上、真的会发
+    // `POST …/resolve`，全靠跟 ack 共用 `_alertPath` 搭便车。
+    final Rig rig = await mount(t, alerts: <Map<String, dynamic>>[
+      p1Wire(key: 'C40221/stuck#7'),
+    ]);
+    await t.tap(find.byKey(WatchPage.resolveKeyFor(0)));
+    await pumpUntil(
+        t,
+        () => rig.dog.received
+            .any((FakeCall r) => r.method == 'POST' && r.path.endsWith('/resolve')),
+        '解决那一下真的发出去了',
+        step: const Duration(milliseconds: 20));
+    final FakeCall call = rig.dog.received
+        .firstWhere((FakeCall r) => r.path.endsWith('/resolve'));
+    final String seg = call.path.split('/')[3];
+    expect(seg, isNot(contains('#')), reason: '井号裸着拼进去，请求会在客户端就被截断');
+    expect(seg, isNot(contains('%2F/')));
+    expect(Uri.decodeComponent(seg), 'C40221/stuck#7');
+    await unmount(t, rig);
+  });
+
+  testWidgets('狗附的那句为什么挂在自己的 Key 上,不是靠找那句中文找到的',
+      (WidgetTester t) async {
+    // 原先唯一覆盖这一行的断言是 `find.text('长长的一句中文')`：狗那头改一个
+    // 标点它就红，而红的原因跟被测的事无关（挂账 62 的形状）。
+    final Rig rig = await mount(t);
+    expect(keyText(t, WatchPage.whyKeyFor('upload_backlog')),
+        '这台狗还没装回传功能，现场证据全存在本机');
     await unmount(t, rig);
   });
 }

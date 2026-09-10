@@ -130,6 +130,14 @@ class WatchPage extends StatefulWidget {
   static Key ackKeyFor(int i) => ValueKey<String>('watch-ack-$i');
   static Key resolveKeyFor(int i) => ValueKey<String>('watch-resolve-$i');
 
+  /// 某一档底下那句「为什么」。
+  ///
+  /// **这一行也是会变的话槽**：整句话来自狗（`app/watch.py`），所以也得有
+  /// 自己的 `Key`。没有 Key 的时候唯一能覆盖它的写法是
+  /// `find.text('一整句中文')` —— 狗那头改个标点测试就红，而红的原因跟被测
+  /// 的事无关。
+  static Key whyKeyFor(String field) => ValueKey<String>('watch-why-$field');
+
   /// 引擎状态、位姿。
   static const Key engineKey = ValueKey<String>('watch-engine');
   static const Key poseKey = ValueKey<String>('watch-pose');
@@ -165,12 +173,14 @@ class WatchPage extends StatefulWidget {
 class _Slot extends StatelessWidget {
   const _Slot({
     required this.slotKey,
+    required this.whyKey,
     required this.label,
     required this.value,
     required this.why,
   });
 
   final Key slotKey;
+  final Key whyKey;
   final String label;
   final String value;
 
@@ -189,6 +199,7 @@ class _Slot extends StatelessWidget {
               key: slotKey, style: theme.textTheme.bodyMedium),
           if (why.isNotEmpty)
             Text(why,
+                key: whyKey,
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
         ],
@@ -356,6 +367,13 @@ class _WatchPageState extends State<WatchPage> {
   Future<void> _loadState() async {
     try {
       final Map<String, dynamic> got = await widget.client.get('/api/state');
+      // **读不懂就当读不到，不许留着一份空壳往下画。** 空壳会让这一段一半
+      // 说「不知道」、一半报几个凭空捏的数（见 `_whereSection`）。这条路
+      // 今天就走得到：`_send` 吞掉 `FormatException` 之后，一页强制门户的
+      // HTML 就是一个空的 `{}`。
+      if (got['run'] is! Map<String, dynamic>) {
+        throw const FormatException('狗回的状态里没有 run 那一段，读不出它在干什么');
+      }
       if (mounted) {
         setState(() {
           _state = got;
@@ -538,11 +556,18 @@ class _WatchPageState extends State<WatchPage> {
         (s['device'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
     final String state = (run['state'] as String?) ?? unknownText;
     final String wpName = (run['waypoint_name'] as String?) ?? '';
-    final int wpIndex = (run['waypoint_index'] as num?)?.toInt() ?? 0;
-    final int total = (run['total'] as num?)?.toInt() ?? 0;
+    // **`null` 不许塌成 `0`。** `0` 是「查过了，就是第 0 个」，`null` 是
+    // 「这一拍答不上来」。塌成 `0` 之后屏上是「第 0/0 个点位」—— 值班的人
+    // 读到的是「这条线一共 0 个点位」或者「还没出发」，而事实是这一屏没读懂
+    // 回复。跟下面 `_poseText` 里那条「不许画成 (0.00, 0.00)」是同一条规矩：
+    // 一个看着像真事的假数比一句「不知道」更坏。
+    final int? wpIndex = (run['waypoint_index'] as num?)?.toInt();
+    final int? total = (run['total'] as num?)?.toInt();
+    final String progress = (wpIndex == null || total == null)
+        ? '点位进度$unknownText'
+        : '第 $wpIndex/$total 个点位${wpName.isEmpty ? '' : '「$wpName」'}';
     out.add(Text(
-      '引擎：$state · 第 $wpIndex/$total 个点位'
-      '${wpName.isEmpty ? '' : '「$wpName」'}',
+      '引擎：$state · $progress',
       key: WatchPage.engineKey,
       style: theme.textTheme.bodyMedium,
     ));
@@ -593,18 +618,21 @@ class _WatchPageState extends State<WatchPage> {
     out.addAll(<Widget>[
       _Slot(
         slotKey: WatchPage.bundleLagKey,
+        whyKey: WatchPage.whyKeyFor('bundle_lag'),
         label: '任务包落差',
         value: _bundleLagText(s.bundleLag),
         why: s.detailFor('bundle_lag'),
       ),
       _Slot(
         slotKey: WatchPage.clockSkewKey,
+        whyKey: WatchPage.whyKeyFor('clock_skew_s'),
         label: '钟偏',
         value: _clockSkewText(s.clockSkewS),
         why: s.detailFor('clock_skew_s'),
       ),
       _Slot(
         slotKey: WatchPage.backlogKey,
+        whyKey: WatchPage.whyKeyFor('upload_backlog'),
         label: '回传积压',
         // **`null` 这一支说「这一档没有回传」，不是 `0`。** 见 [noUploaderText]。
         value: s.uploadBacklog == null ? noUploaderText : '${s.uploadBacklog} 条',
@@ -612,18 +640,21 @@ class _WatchPageState extends State<WatchPage> {
       ),
       _Slot(
         slotKey: WatchPage.diskKey,
+        whyKey: WatchPage.whyKeyFor('disk_pct'),
         label: '盘水位',
         value: _diskText(s.diskPct),
         why: s.detailFor('disk_pct'),
       ),
       _Slot(
         slotKey: WatchPage.batteryKey,
+        whyKey: WatchPage.whyKeyFor('battery_pct'),
         label: '电量',
         value: _batteryText(s.batteryPct, s.batteryAsOfMs),
         why: s.detailFor('battery_pct'),
       ),
       _Slot(
         slotKey: WatchPage.mirrorKey,
+        whyKey: WatchPage.whyKeyFor('mirror'),
         label: '镜像盘',
         value: _mirrorText(s.mirror),
         why: s.detailFor('mirror'),

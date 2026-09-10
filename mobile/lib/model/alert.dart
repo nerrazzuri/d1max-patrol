@@ -257,11 +257,36 @@ class WatchSummary {
 /// 一份告警名单（`{"alerts": [...]}`）。
 ///
 /// **顺序原样留着**，见文件头。
+///
+/// **读不懂就抛，绝不退回一份空名单。** 空名单在这一屏上不是「没数据」，
+/// 它会被翻译成一句主动的、带着「这一屏刚问过狗」的假保证 ——
+/// 「现在没有需要立刻动身的事」—— 而那一刻狗上可能正挂着一条 P1。
+/// 留白只是分不清「太平」和「没加载」；这一句是**说了假话**，是这一屏
+/// 能犯的最坏的一种错。
+///
+/// 这条路今天就走得到：`net/patrol_client.dart` 的 `_send` 吞掉
+/// `FormatException`（S-2，为了让状态码报得对），于是一份 200 + 一页强制
+/// 门户 HTML 会原样变成一个空的 `{}` 交到这儿。
+///
+/// **单条读不懂也是整份不算数**，不是悄悄少一条：少掉的那条正好是 P1 的
+/// 那天，屏上剩下的几条看着一切正常。跟 `store/registry_store.dart` 里
+/// 「名册里有条目不是对象」一个规矩 —— 那儿也是整份读不出，不是少一只狗。
+///
+/// 抛的是 `FormatException`，跟 `model/robot.dart`、`store/registry_store.dart`
+/// 同一个类型：调用点（`ui/watch_page.dart` 的 `_loadAlerts`）本来就把
+/// 一切异常收进「读不到告警」那一支。
 List<Alert> alertsFromWire(Map<String, dynamic> m) {
   final Object? raw = m['alerts'];
-  if (raw is! List) return const <Alert>[];
+  if (raw is! List) {
+    throw FormatException(m.containsKey('alerts')
+        ? '狗回的告警名单不是个名单：${raw.runtimeType}'
+        : '狗回的这份东西里没有 alerts 那一段，读不出告警');
+  }
   return <Alert>[
     for (final Object? a in raw)
-      if (a is Map<String, dynamic>) Alert.fromWire(a),
+      if (a is Map<String, dynamic>)
+        Alert.fromWire(a)
+      else
+        throw FormatException('告警名单里有一条不是对象：${a.runtimeType}'),
   ];
 }
