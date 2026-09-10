@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from d1max_patrol.app.alert_sources import AlertSources
 from d1max_patrol.app.auth import (
     AUTH_PATH,
     CHALLENGE_PATH,
@@ -99,6 +100,7 @@ from d1max_patrol.backends.base import (
 )
 from d1max_patrol.backends.map_bridge import MapBridgeClient
 from d1max_patrol.engine import backup
+from d1max_patrol.engine.alerts import AlertBook
 from d1max_patrol.engine.archive import (
     list_runs,
     read_events,
@@ -604,6 +606,11 @@ class AppContext:
     clock: Callable[[], int] = _wall_ms
     #: 外头的时间参照:``(毫秒, 来源)``,拿不到就 ``None``(断网时就是)。
     time_reference: Callable[[], tuple[int, str] | None] = _no_time_reference
+    #: 告警簿(§5.2)。**跟 ``engine`` 同级挂在这儿,全进程只有这一份** ——
+    #: 认事实的(``app/alert_sources.py``)、看板(卷 8 的值守屏)、四条告警
+    #: 路由,问的必须是同一本簿子。各造各的,页面上确认掉的那条在别处还开
+    #: 着,升级照样往下走,而现场看到的是"我明明点过确认了,它还在响"。
+    alerts: AlertBook = field(default_factory=AlertBook)
 
     @property
     def form(self) -> Form:
@@ -695,6 +702,13 @@ class _StateHub:
         self._faults: tuple[str, ...] = ()
         self._control_lost: str = ""
         self._pose: dict[str, float] | None = None
+        #: 把这三条汇流上的事实翻成告警(§5.2)。**只在这一处接**:这个类
+        #: 已经是全进程唯一一个同时看得见三条流的地方,再开一份订阅就等于
+        #: 多一条会跟快照说法不一致的路。判什么级不归这儿管,见
+        #: ``app/alert_sources.py``。
+        self._alerts = AlertSources(
+            ctx.alerts, robot=ctx.identity.sn, clock_ms=ctx.clock,
+            run_state=lambda: ctx.engine.snapshot.state)
 
     # ------------------------------------------------------------ 生命周期
 
@@ -702,7 +716,7 @@ class _StateHub:
         self._rebuild(force=True)
         ctx = self._ctx
         self._tasks = [
-            asyncio.create_task(self._watch(ctx.engine)),
+            asyncio.create_task(self._watch(ctx.engine, self._on_run)),
             asyncio.create_task(self._watch(ctx.nav, self._on_nav)),
             asyncio.create_task(self._watch(ctx.device, self._on_device)),
             asyncio.create_task(self._tick()),
@@ -726,7 +740,8 @@ class _StateHub:
 
     async def _watch(self, emitter: Any,
                      on_event: Callable[[Any], None] | None = None) -> None:
-        """跟一条事件流。引擎那条不用记什么 —— 它的状态在 ``engine.snapshot``。"""
+        """跟一条事件流。引擎那条不用往快照里记什么 —— 它的状态在
+        ``engine.snapshot`` 里;但告警要认它,所以它也带了个回调。"""
         with emitter.subscription() as inbox:
             while True:
                 event = await inbox.get()
@@ -768,6 +783,7 @@ class _StateHub:
             self._link_down = event.reason
         elif isinstance(event, BackendReconnected):
             self._link_down = ""
+        self._alerts.on_nav(event)
 
     def _on_device(self, event: Any) -> None:
         if isinstance(event, BatteryEvent):
@@ -782,6 +798,12 @@ class _StateHub:
             pose = event.pose
             self._pose = {"x": pose.position.x, "y": pose.position.y,
                           "yaw": pose.yaw}
+        self._alerts.on_device(event)
+
+    def _on_run(self, snapshot: Any) -> None:
+        """引擎快照。这儿**只**喂告警 —— 快照该长什么样由 ``_build`` 现问
+        ``engine.snapshot``,不在这条回调里抄一份。"""
+        self._alerts.on_run(snapshot)
 
     # ------------------------------------------------------------ 快照
 
@@ -993,6 +1015,12 @@ class AppServer:
     def control(self) -> ControlDesk:
         """L1 控制权台。"""
         return self._control
+
+    @property
+    def alerts(self) -> AlertBook:
+        """告警簿(§5.2)。**转手 ``ctx`` 那一份,不另存** —— 存了就有两个
+        出处,而对不上的那天没有任何测试会红。"""
+        return self._ctx.alerts
 
     # ------------------------------------------------------------ 路由
 
