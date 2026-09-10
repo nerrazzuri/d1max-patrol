@@ -488,7 +488,10 @@ void main() {
     /// 「永远画『你』」或者「永远画『有人』」的实现都能过。
     ///
     /// 画错的后果不是一句话说错：旁观者以为自己已经在排队了，于是干等一个
-    /// 不会属于他的宽限期；等急了按「取得控制权」，把真正在等的那次接管顶掉。
+    /// 不会属于他的宽限期 —— 而这 15 秒他**什么也按不了**（别人拿着、又有
+    /// 人在抢，`_buttons()` 只给一个「请求接手」，`grace != null` 时它是灰
+    /// 的），等到宽限期走完，控制权落进那个真排了队的人手里，他还得从头再
+    /// 排一次。这一位画反，赔进去的就是这一整个宽限期。
     final Rig rig = await mount(t, takeoverBySameName());
     expect(find.byKey(ControlPanel.challengeOtherKey), findsOneWidget);
     expect(find.byKey(ControlPanel.challengeMineKey), findsNothing);

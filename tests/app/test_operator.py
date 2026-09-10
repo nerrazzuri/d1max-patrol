@@ -242,14 +242,27 @@ def test_手机那头的路径跟狗这头是同一条():
     路径**故意不从 Dart 那侧的字面量反着抄**:两边各自声明、在这里对齐,才是
     "两份说法必须一致"这件事本身。
     """
-    源 = (Path(__file__).resolve().parents[2] / "mobile" / "lib" / "net"
-          / "patrol_client.dart").read_text(encoding="utf-8")
+    lib = Path(__file__).resolve().parents[2] / "mobile" / "lib"
+    源 = (lib / "net" / "patrol_client.dart").read_text(encoding="utf-8")
     行 = [ln for ln in 源.splitlines()
           if ln.startswith("const String operatorPath")]
     assert len(行) == 1, f"手机那头的 operatorPath 不是恰好一行: {行}"
     assert 行[0] == f"const String operatorPath = '{OPERATOR_PATH}';", 行[0]
-    # 收干净了没有:除了那个常量声明,``lib/`` 里不许再有第二处字面量。
-    assert 源.count(f"'{OPERATOR_PATH}'") == 1, "手机那侧又抄了一份字面量"
+    # 收干净了没有:除了那个常量声明,``lib/`` **整棵树**里不许再有第二处
+    # 字面量。**只读 ``patrol_client.dart`` 一个文件是不够的** —— 那样
+    # ``lib/ui/`` 里冒出来的第二份手抄件照样全绿,而这条测试的说法是"两头
+    # 只许各有一份"。
+    #
+    # **认的是带引号的字面量形式,不是裸路径串。** ``ui/widget/operator_chip
+    # .dart`` 的文档注释里就写着 ``PUT /api/operator``(不带引号),那是一句
+    # 正常的注释;裸认路径串会把它判成违规。
+    抄件: dict[str, int] = {}
+    for f in sorted(lib.rglob("*.dart")):
+        文 = f.read_text(encoding="utf-8")
+        份数 = 文.count(f"'{OPERATOR_PATH}'") + 文.count(f'"{OPERATOR_PATH}"')
+        if 份数:
+            抄件[f.relative_to(lib).as_posix()] = 份数
+    assert 抄件 == {"net/patrol_client.dart": 1}, f"lib/ 里的字面量不止那一处: {抄件}"
 
 
 def test_狗这头也只有一份():

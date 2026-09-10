@@ -356,6 +356,31 @@ class _ControlPanelState extends State<ControlPanel> {
   /// 行写的是「你」还是「有人」，它就是局面的一部分；哪天狗那头换了会话 ref
   /// 的算法、或者 `challenging` 不再只由 `challengerRef` 决定，漏了它就是一
   /// 次真的漏刷。
+  ///
+  /// **但同一句话对 `mine` 也一字不差地成立（`mine` 就是「holder 是我」），
+  /// 而 `mine` 绝不许照这个理由删掉。** 两者的差别不在「是不是严格函数」，
+  /// 在「翻了之后看不看得见」：
+  ///
+  /// * `challenging` 这一位翻而 `challengerRef` 不变 ⇒ 两侧都有 challenger。
+  ///   狗那头 `ask_takeover()` 对「控制权已经在你手上了」是直接拒的，所以
+  ///   challenger 永远不等于 holder ⇒ 这一侧 `mine` 必为假；而 `_challenger`
+  ///   和 `_grace_ends` 在 `lease.py` 里五个赋值点**全是成对的**（初始化 /
+  ///   会话掉线 / `ask_takeover` / `_clear` / `_grant`），加上 `_settle()`
+  ///   在宽限期一走完就把挑战者扶正，所以带 challenger 的快照 `grace_in_ms`
+  ///   必然不是 null。于是这一侧走的是 [_buttons] 的 `someone` 那一支，
+  ///   **那一支唯一的按钮「请求接手」在 `grace != null` 时 `onPressed` 是
+  ///   null**；而 [_actTrouble] 唯一变非空的地方就是 [_act] 的 catch。
+  ///   按不动，这句话就压根挂不上去 —— 翻了也没人看得见。
+  /// * `mine` 这一位翻而 `holderRef` 不变的那条对称路径（我拿着租约、会话
+  ///   ref 换了）**没有 challenger、没有 grace**，走的是 `mine` 那一支，
+  ///   而那一支的「交还」「同意移交」是**无条件活的**（见 [_buttons]：宽限
+  ///   期里也活，不活的话唯一的移交方式就是干等 15 秒）。持有者按「交还」
+  ///   失败是实打实能把 [_actTrouble] 填上的 ⇒ 那一位漏刷就是**看得见的**
+  ///   一次漏刷。
+  ///
+  /// **别把「`grace` 在就全灰」记成一条通则** —— 灰的只有 `someone` 那一支。
+  /// 上面这条链能成立，靠的是「`challenging` 为真的那一侧一定不是持有者」，
+  /// 不是靠 grace 本身。
   String _sceneOf(LeaseView v) =>
       '${v.mine}|${v.holderRef ?? ''}|${v.challengerRef ?? ''}'
       '|${v.challenging}';

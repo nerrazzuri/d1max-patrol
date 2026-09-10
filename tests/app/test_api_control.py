@@ -569,13 +569,32 @@ def test_challenging没进共享快照(有pin的服务):
 
     ``/api/state`` 那一段是一份广播,按人分份就塌 —— 这条测试守的是
     ``_control_wire`` 那段 docstring 里写死的理由,不是守一个字段名。
+
+    **先等这一段里真的有租约再断,不然两条否定断言是恒真的。**
+    ``/api/state`` 回的是 ``_StateHub`` 那份**缓存快照**(``_state`` 直接
+    ``json_response(self._hub.snapshot)``),它由 ``_tick()`` 隔 ``_TICK_S``
+    (0.5 秒)重建一次 —— acquire/takeover 打完立刻读,读到的还是开机那一拍,
+    整份租约全是 ``None``。加锚点之前这条测试就是在一份空租约上断"没有
+    ``challenging``",本卷一路在猎的那个形状(挂账 100 第 1 条、任务 13
+    必修 B)原样又长了一次。
     """
     甲 = 解锁(有pin的服务, "张三")
     乙 = 解锁(有pin的服务, "李四")
     打(有pin的服务, "/api/control/acquire", 甲)
     打(有pin的服务, "/api/control/takeover", 乙)
 
+    def 那一段(tok: str) -> dict:
+        return get_json(有pin的服务, "/api/state", headers=auth(tok))["control"]
+
     for tok in (甲, 乙):
-        段 = get_json(有pin的服务, "/api/state", headers=auth(tok))["control"]
+        # 锚点:这一刻甲拿着、乙在抢,``challenger`` 必然在。等到它出现为止
+        # (等的是 ``_tick()`` 那条真协程,不是写死一个余量)。
+        # ``.get`` 不是 ``[]``:这一段整个塌成 ``{}`` 的时候要红在下面那句
+        # 带话的断言上,而不是红成一个 ``KeyError``。
+        等到(lambda t=tok: 那一段(t).get("challenger") is not None, True)
+        段 = 那一段(tok)
+        assert 段.get("challenger") is not None, f"这一段根本没画租约: {段}"
+        assert 段.get("holder") is not None, f"这一段根本没画租约: {段}"
         assert "challenging" not in 段
         assert "mine" not in 段
+
