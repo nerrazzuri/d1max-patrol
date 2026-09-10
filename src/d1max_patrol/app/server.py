@@ -146,6 +146,7 @@ from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomeError, HomePoint, load_home, save_home
 from d1max_patrol.engine.lease import (
     AUDIT_MAX,
+    AuditRecord,
     LeaseBusy,
     LeaseError,
     LeaseLost,
@@ -261,6 +262,20 @@ _TICK_S = 0.5
 #: 一拍没关系,停车不能晚),所以各写各的常量:哪天要把屏幕调慢省电,不该
 #: 顺手把闸门也调慢。
 _LEASE_WATCH_PERIOD_S = 0.5
+
+#: ``AlertSources.on_tick`` 那三条水位每多少拍看一次。60 拍 = 30 秒。
+#:
+#: **它跟 ``_LEASE_WATCH_PERIOD_S`` 是两码事,所以要分频。** 上面那个数论证
+#: 的是"人走了到狗停下"的时间上界;而盘水位、任务包落差、钟偏的变化尺度是
+#: 分钟到小时 —— 半秒看一次不会更早发现任何东西,却要在事件循环里做一次同步
+#: ``shutil.disk_usage`` + 一趟目录遍历 + 一次读 ``landed.json``。盘慢或者
+#: SD 卡将坏的时候,整个 server 的事件循环每半秒被拖一次,而拖的是那条最要紧
+#: 的闸门自己。
+#:
+#: 30 秒的依据:这三件事里最急的是盘满(它会变成"没法记录证据"),而从 80%
+#: 到写不进去以小时计,晚半分钟看见没有代价。再稀就开始有代价了 —— 值守屏
+#: 上那几项是按秒刷的,人盯着屏等一分钟才看见变化会以为是屏卡了。
+_WATER_EVERY = 60
 
 #: 自动同步的巡查周期。镜像盘是"不依赖人"的那一路(spec §7.5),所以不能等人点。
 #: 按分钟量级 —— 备份不是实时的,晚一分钟没有代价,而每分钟扫一次盘的开销
@@ -694,6 +709,44 @@ async def _preflight_with_scan(ctx: AppContext, mission: Mission,
 # ------------------------------------------------------------------ 状态汇总
 
 
+#: 会换归属的那几种留痕。别的(``takeover_asked`` 之类)只是打个招呼,不动
+#: 租约本身,读顺序的时候要跳过 —— 不跳的话,一条"我想接管"就能把前面那条
+#: ``expired`` 挡住。
+_换手 = frozenset({"expired", "released", "acquired", "taken_over", "forced"})
+
+
+def _该量水位了(拍: int) -> bool:
+    """第 ``拍`` 拍该不该量一次水位。第 1 拍量,之后每 :data:`_WATER_EVERY` 拍一次。
+
+    **起飞那一拍就量。** 盘满、包落好了没生效、钟偏,这三件事在服务起来的那
+    一刻通常就已经成立了 —— 等半分钟才第一次去看,等于让值守屏在开机后的头
+    30 秒里说一句它并不知道的"没事"。
+
+    写成 ``(拍 - 1) % N`` 而不是 ``拍 % N == 1``:后者在 ``N == 1``(每拍都
+    量)时永远是假,是一个只在改常量那天才现形的坑。
+    """
+    return (拍 - 1) % _WATER_EVERY == 0
+
+
+def _失主了(fresh: tuple[AuditRecord, ...]) -> bool:
+    """这一批留痕看完,狗是不是没主了 —— **看最后一条换手的是不是到期**。
+
+    ``LeaseBook`` 是一批一批地结算的:``_settle`` 在到期那一刻如果正好有人排
+    着队,写完 ``expired`` 会紧接着写一条 ``taken_over``。所以"有没有
+    ``expired``"这个问题本身问错了,该问的是"这一串换完手之后,还有没有人握
+    着"。
+
+    从后往前找第一条换手的:是 ``expired`` 就说明没人接着;是 ``acquired`` /
+    ``taken_over`` / ``forced`` 说明有人接着了(排队接管,或者在看门狗这半秒
+    的间隙里有人重新取了控制权);是 ``released`` 说明人自己交回来的,那本来
+    就不该报。一条换手的都没有 —— 这一拍什么也没发生。
+    """
+    for rec in reversed(fresh):
+        if rec.kind in _换手:
+            return rec.kind == "expired"
+    return False
+
+
 class _StateHub:
     """把引擎、导航、设备三条事件流汇成一条,并且始终备着一份全量快照。
 
@@ -737,7 +790,16 @@ class _StateHub:
         #: 看门狗读到哪条留痕了。**自己一份游标,不借 ``ControlDesk.drain()``
         #: 那份** —— 那份是事件流的,借来读一次就把记录从 SSE 嘴里抢走了。
         #: ``LeaseBook.audit_since`` 是纯读,两个游标各走各的互不干扰。
+        #:
+        #: **从 0 起,前提是这本簿子是这个进程新建的。** 今天成立:
+        #: ``LeaseBook`` 只活在内存里,0 就是"空历史"。哪天审计流水改成落盘
+        #: (值守场景多半要),这一行就得跟着改成"从簿子当前末尾起" ——
+        #: 否则重启后第一拍会把历史里所有 ``expired`` 一次读进来,只要那一刻
+        #: 恰好没人握着租约,就凭空报一条 P1,而那些"到期"是上辈子的事。
         self._lease_cursor = 0
+        #: 闸门醒过几拍。只给分频和测试用 —— 它是这条协程"还活着"的唯一外部
+        #: 迹象(判到期本身是静默的:没到期就什么也不发生)。
+        self._lease_ticks = 0
 
     # ------------------------------------------------------------ 生命周期
 
@@ -749,8 +811,13 @@ class _StateHub:
             asyncio.create_task(self._watch(ctx.nav, self._on_nav)),
             asyncio.create_task(self._watch(ctx.device, self._on_device)),
             asyncio.create_task(self._tick()),
-            asyncio.create_task(self._lease_watchdog()),
         ]
+        # 闸门那条单独建,因为它要挂一个"你要是死了得有人知道"的回调。别的
+        # 几条死掉是"屏幕不刷新了",人看得见;这一条死掉是**静默**的 ——
+        # 页面照常、SSE 照常,只是从此再没有人去问那 30 秒过没过去。
+        闸门 = asyncio.create_task(self._lease_watchdog())
+        闸门.add_done_callback(self._看门狗塌了)
+        self._tasks.append(闸门)
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -814,40 +881,85 @@ class _StateHub:
         后、钟偏)带上:它们跟租约到期是同一类东西 —— **没有任何一条流会推
         给我们,只能自己隔一会儿去看一眼**。
 
-        **整圈都在兜底里。** 这条协程死掉的后果是静默的:页面照常、SSE 照
-        常,只是从此再没有人去问那 30 秒过没过去 —— 而它存在的全部理由就是
-        没人在场。所以任何一次判定出错都只记一条日志,下一拍接着来。
-        ``asyncio.CancelledError`` 不在网里(它是 ``BaseException``),不然
+        **兜的是 ``OSError`` 和 ``ValueError`` 这两类,别的照样会把这条协程
+        掀翻。** 这是有意的,而且必须说清楚它兜不住什么:``raise_alert`` 撞上
+        没登记的 ``kind`` 抛的是 ``KeyError``,那是 ``alerts.py`` 特意设的
+        闸——"不许猜一个级别顶上";拓宽成 ``except Exception`` 会把那道闸和
+        一堆真 bug 一起吞掉(房规里 ``BLE`` 禁的就是这个)。
+        ``asyncio.CancelledError`` 更不能进网(它是 ``BaseException``),不然
         ``stop()`` 取消不掉这条协程。
+
+        **所以死掉这件事本身要有人接着。** 这条协程死掉的后果是静默的:页面
+        照常、SSE 照常,只是从此再没有人去问那 30 秒过没过去 —— 而它存在的
+        全部理由就是没人在场。``self._tasks`` 只在 ``stop()`` 时才被 await,
+        异常在那之前一个字都不会打出来。补法是 ``start()`` 里给它挂的那个
+        ``add_done_callback``,见 ``_看门狗塌了``。
         """
         while True:
             await asyncio.sleep(_LEASE_WATCH_PERIOD_S)
+            self._lease_ticks += 1
             try:
-                await self._lease_once()
+                await self._lease_once(水位=_该量水位了(self._lease_ticks))
             except (OSError, ValueError) as exc:
                 log.warning("租约看门狗这一拍出错了:%s", exc, exc_info=True)
 
-    async def _lease_once(self) -> None:
-        """看一眼:租约过期了没有,以及那三条周期事实。
+    def _看门狗塌了(self, task: asyncio.Task[None]) -> None:
+        """闸门那条协程结束了。**除了被取消,没有一种结束是正常的。**
+
+        它是个 ``while True``:正常情况下只有 ``stop()`` 的取消能让它出来。
+        剩下的路只有一条 —— 抛了一个不在兜底网里的异常。那一刻起租约到期
+        没人处置,而屏幕上一切如常,所以这里既要 ``log.error``,也要在簿子上
+        留一条 P1:日志没人盯着,告警栏有人盯着。
+
+        **回调自己不许再抛。** 它跑在事件循环的 ``call_soon`` 上,抛出去只会
+        进 loop 的异常处理器,又是一次静默。``raise_alert`` 那几条已知的抛法
+        (没登记的 kind、级别对不上、簿子写不动)都在这条 suppress 里。
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        log.error("租约看门狗协程死了,从此没人再问 TTL 过没过去:%s", exc,
+                  exc_info=exc)
+        with contextlib.suppress(KeyError, ValueError, OSError):
+            self._ctx.alerts.raise_alert(
+                kind="watchdog_died", robot=self._ctx.identity.sn,
+                title="值守闸门那条协程死了",
+                detail=f"{type(exc).__name__}: {exc} —— 租约到期从此没人处置,"
+                       "遥控走了也不会自动停。重启服务才能恢复(§5.8)。",
+                now_ms=self._ctx.clock())
+
+    async def _lease_once(self, *, 水位: bool = True) -> None:
+        """看一眼:租约过期了没有;每 :data:`_WATER_EVERY` 拍再看一眼水位。
 
         **判"到期"靠审计流水,不靠 ``holder`` 由有变无。** 人自己按了释放,
         ``holder`` 也是由有变无 —— 靠它分不开"走了"和"交回来了",而把一次
         正常交接报成 P1,人很快就学会无视 P1。``AuditRecord.kind`` 里
         ``released`` / ``expired`` / ``dropped`` 是分得清清楚楚的。
 
-        **还要"结算完之后确实没人接着"。** ``LeaseBook._settle`` 在到期的那
-        一刻如果正好有人排着队,会紧接着把租约给他(那一条留痕是
-        ``taken_over``)—— 那是一次正常的换人,狗没有失主,而 §5.8 说的是
-        "人揣着手机走了"。只认审计不看结果的话,每一次排队接管都会多响一条
-        P1。
+        **还要"到期之后没有人接着"** —— 判据见 :func:`_失主了`,读的是这一
+        批留痕里的先后顺序,不是"读完之后当下 holder 是谁"。后者有两个窟窿:
+        到期那一刻有人排着队会被 ``taken_over`` 立刻接走(正常换人,狗没有失
+        主);而在这半秒的间隙里有人重新 ``acquire``,那条 ``expired`` 已经被
+        游标吃掉了,下一拍再也读不到 —— 处置就这么被跳过。按顺序读这一批,
+        两个窟窿一起堵上。
+
+        **排队接管那条路上是故意不停腿的。** 前一个人的手机已经走了,可他那
+        一档遥控没有在这里被 ``stop()``;兜底的是 ``Teleop`` 自己那个 0.6 秒
+        的守死人开关(``HEARTBEAT_TIMEOUT_S``)—— 心跳一断它自己把 ``active``
+        落下来并发一次零速。在这儿顺手停一下不是更保险:接管的那个人这一秒
+        很可能已经在推摇杆了,一条来自"上一任到期"的零速会把他的动作打断,
+        而他看到的是狗莫名其妙顿了一下。
         """
         now_ms = self._ctx.clock()
-        state = self._control.sweep(now_ms=now_ms)
+        self._control.sweep(now_ms=now_ms)
         self._lease_cursor, fresh = self._control.book.audit_since(
             self._lease_cursor)
-        if state.holder is None and any(r.kind == "expired" for r in fresh):
+        if _失主了(fresh):
             await self._lease_gone(now_ms)
-        self._alerts.on_tick()
+        if 水位:
+            self._alerts.on_tick()
 
     async def _lease_gone(self, now_ms: int) -> None:
         """人不在了。**停下来,并且只停下来**(§5.8)。

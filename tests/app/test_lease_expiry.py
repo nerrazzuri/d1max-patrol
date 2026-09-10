@@ -16,13 +16,19 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import time
 from urllib.parse import quote
 
 import pytest
 
-from d1max_patrol.app.server import _LEASE_WATCH_PERIOD_S, AppServer
+from d1max_patrol.app.server import (
+    _LEASE_WATCH_PERIOD_S,
+    _WATER_EVERY,
+    AppServer,
+    _该量水位了,
+)
 from d1max_patrol.app.teleop import Teleop
 from d1max_patrol.engine.alerts import Level
 from d1max_patrol.engine.lease import LEASE_TTL_MS
@@ -142,6 +148,11 @@ def 到期告警(srv: AppServer) -> list:
     **按 kind 挑,不是整份比对。** 这台机器的盘水位可能本来就过 80%,那时
     候簿子里会多一条完全正确的 ``disk_80`` P2(见 ``AlertSources.on_tick``)
     —— 那是环境,不是这一组要测的事。
+
+    **但"挑"会把守卫挖松:多报出来的第三种告警从此没人看得见。** 所以
+    ``test_租约到期狗停下来并升P1`` 里另有一句整份比对
+    (``... - {"disk_80"} == {"lease_expired"}``)—— 环境那一条按名字扣掉,
+    剩下的必须一条不多。挑 kind 只用在"等它出现"和"数 count"的地方。
     """
     return [a for a in srv.alerts.open() if a.kind == "lease_expired"]
 
@@ -159,8 +170,10 @@ def test_租约到期狗停下来并升P1(服务器夹具, 墙钟):
     assert 等到(lambda: srv.ctx.teleop.active is False), "TTL 过了,狗还在遥控档上"
 
     a = 到期告警(srv)
-    assert [x.kind for x in a] == ["lease_expired"]
     assert a[0].level is Level.P1
+    # 整份比对(见 ``到期告警`` 的 docstring):``disk_80`` 是这台机器的盘况,
+    # 按名字扣掉;除此之外多出来任何一条,这里都得红。
+    assert {x.kind for x in srv.alerts.open()} - {"disk_80"} == {"lease_expired"}
 
 
 def test_租约到期绝不自动续跑(服务器夹具, 墙钟):
@@ -179,7 +192,10 @@ def test_租约到期绝不自动续跑(服务器夹具, 墙钟):
 
     墙钟.前进(LEASE_TTL_MS + 1)
     assert 等到(lambda: 到期告警(srv)), "TTL 过了,一条 P1 都没有"
-    assert ctx.engine.state is RunState.SUSPENDED     # 没有偷偷 resume
+    # **不是当场看一眼就完。** 告警那一拍和"续跑"那一拍不必是同一拍:看门狗
+    # 先报警、下一拍才 resume,当场断言照样绿。所以往后再守一秒。
+    assert not 等到(lambda: ctx.engine.state is not RunState.SUSPENDED,
+                   最多等=1.0), "它自己动起来了"
 
 
 def test_到期只报一条不是每拍一条(服务器夹具, 墙钟):
@@ -265,6 +281,90 @@ def test_看门狗是独立的一条协程(服务器夹具):
     名字 = {t.get_coro().__qualname__ for t in 服务器夹具.hub._tasks}
     assert "_StateHub._lease_watchdog" in 名字
     assert "_StateHub._tick" in 名字
+
+
+def test_人揣着手机走了_遥控停下而且任务不自己接着跑(服务器夹具, 墙钟):
+    """§5.8 那一幕的**整场**:接管中 -> 人走 -> TTL 过 -> 停腿,且不续跑。
+
+    **为什么要合成一条。** 上面两条各测了一半:一条起飞前就到期(证遥控停了
+    但引擎压根没在跑),一条挂起后不发遥控(证没续跑但没有腿在动)。真实的
+    §5.8 是两半同时成立 —— 人接管着,腿在动,然后人走了。分开测有个漏得掉
+    的形状:一个实现在 ``teleop.stop()`` 之后顺手把任务恢复了(常见的"接管
+    结束就交还给任务"的写法),两条半场测试**都是绿的**。
+
+    读过 ``app/teleop.py``:``stop()`` 只做三件事 —— 落 ``active``、撤看门
+    狗、发一拍零速度,``_watchdog()`` 也一样,整个文件里没有任何
+    resume/交还语义。所以这条测试现在是绿的;它钉的是**以后别加**。
+    """
+    srv = 服务器夹具
+    ctx = srv.ctx
+    token = 拿到租约(srv, operator="老王")
+    起飞(srv, token)
+    assert 打(srv, "/api/run/suspend", token, {"reason": "人要接管"})[0] == 200
+    ctx.bridge.call(lambda: ctx.engine.wait_state(RunState.SUSPENDED))
+
+    开始遥控(srv, token)
+    assert ctx.teleop.active is True, "遥控没起来,下面那个 False 什么也不证明"
+
+    墙钟.前进(LEASE_TTL_MS + 1)
+    assert 等到(lambda: ctx.teleop.active is False), "TTL 过了,腿还在遥控档上"
+    assert ctx.engine.state is RunState.SUSPENDED
+    assert not 等到(lambda: ctx.engine.state is not RunState.SUSPENDED,
+                   最多等=1.0), "停完腿之后把任务交还着跑起来了"
+
+
+def test_闸门协程死了_这件事本身会被报出来(服务器夹具):
+    """看门狗的兜底只网 ``OSError`` / ``ValueError``,别的会静悄悄弄死它。
+
+    **不去拓宽 catch**(``except Exception`` 过不了 ruff 的 BLE,而且真要网
+    住 ``KeyError`` 也不对:告警注册表少一条 kind 是代码错,应该炸出来)。
+    要补的是另一件事:它死了得有人知道 —— 否则 ``self._tasks`` 要等到
+    ``stop()`` 才被 await,一台服务可以顶着一条死掉的闸门跑一整天,而 §5.8
+    的"人走了狗自己停"从此不成立,屏上还什么都不显示。
+    """
+    srv = 服务器夹具
+
+    def 炸(*a, **k):
+        raise KeyError("这一拍撞上了一个没注册的 kind")
+
+    srv.hub._lease_once = 炸                 # type: ignore[method-assign]
+    assert 等到(lambda: [a for a in srv.alerts.open()
+                        if a.kind == "watchdog_died"]), "闸门死了,没人吭一声"
+    a = [x for x in srv.alerts.open() if x.kind == "watchdog_died"][0]
+    assert a.level is Level.P1
+    assert "KeyError" in a.detail, "报了,但没说是什么弄死的"
+
+
+def test_水位不是每拍都量(服务器夹具):
+    """闸门 2 Hz 是为了"人走了赶紧停腿";水位那三条不该跟着 2 Hz 走。
+
+    它们里头有 ``shutil.disk_usage``、一次目录遍历、一次 ``landed.json``
+    读盘 —— **同步 I/O,而且就在 asyncio 那根线程上**。盘水位是分钟到小时
+    尺度的事实,2 Hz 去问它既拖 loop,又在盘被拔掉时按 2 Hz 刷日志。
+    """
+    srv = 服务器夹具
+    # 先让第 1 拍过去 —— 那一拍是**该**量的(见 ``_该量水位了`` 的起点),
+    # 装在它前面的话数出来的 1 次是对的,这条测试会变成一条假红。
+    assert 等到(lambda: srv.hub._lease_ticks >= 1), "看门狗一拍都没醒"
+    次数 = itertools.count()
+    srv.hub._alerts.on_tick = lambda: next(次数)   # type: ignore[method-assign]
+    起 = srv.hub._lease_ticks
+    assert 等到(lambda: srv.hub._lease_ticks >= 起 + 4), "看门狗不接着醒了"
+    assert next(次数) == 0, "水位还是每拍都量"
+
+
+def test_水位分频_第一拍就量_之后六十拍一次():
+    """分频的两头都要钉:**起点**和**间隔**。
+
+    起点:服务刚起来那一刻,盘满/包没生效/钟偏通常**已经**成立了。要是写成
+    "第 60 拍才第一次量",值守屏开机头 30 秒会显示一句它并不知道的"没事"。
+    间隔:600 拍(5 分钟)里正好 ``600 // _WATER_EVERY`` 次。
+    """
+    assert _该量水位了(1) is True
+    命中 = [拍 for 拍 in range(1, 601) if _该量水位了(拍)]
+    assert len(命中) == 600 // _WATER_EVERY
+    assert 命中[0] == 1
+    assert 命中[1] - 命中[0] == _WATER_EVERY
 
 
 # ------------------------------------------------------------------ 起飞

@@ -71,6 +71,11 @@ LEVEL_OF: dict[str, Level] = {
     "loc_lost_paused": Level.P1,
     "estop_pressed": Level.P1,
     "lease_expired": Level.P1,
+    # 值守那条闸门协程自己死了(``server._StateHub._lease_watchdog``)。
+    # **这一条报的是"报警器坏了"**,所以它是 P1 而不是 P2:从它死的那一刻
+    # 起,租约到期没人处置 —— 人揣着手机走了狗也不会停,而屏幕上一切如常。
+    # 它跟别的 P1 不一样的地方在于:能做的事只有"重启服务",不是去现场。
+    "watchdog_died": Level.P1,
     # P2:今天之内处理。不影响这一趟巡检能不能跑完,但拖久了会变成 P1
     # (盘满了继续拖,就会变成没法记录;上传积压继续拖,数据就旧到没用)。
     "finding": Level.P2,

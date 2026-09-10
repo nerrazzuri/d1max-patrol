@@ -90,6 +90,31 @@ def _落了但没生效(bundles_root: Path) -> tuple[str, ...]:
     告警就变成了拿假数据算出来的真警报。
 
     只看盘和链,两样都是本机事实,单机档上一样成立。
+
+    **跨 ``bundle_id`` 故意不认。** ``current`` 指着 ``site-kl-3``,盘上摆着
+    一个 ``site-xy-1``,这里不报。理由是**盘上并存好几个 ``bundle_id`` 是正
+    常局面,而不是"有一版没生效"的证据**:
+
+    * ``prune_bundles`` 的规矩是"只留 ``current`` 和 ``previous`` 两份",而
+      这两条链**没有任何地方要求它们同 ``bundle_id``** —— 换站点之后
+      ``previous`` 天然就是另一个 id 的包。
+    * ``prune_bundles`` 今天还没有生产调用方(卷 5 只给了函数),所以更早的
+      那些槽会一直躺在盘上。
+    * ``landed.json`` 里没有任何一处记着"哪个槽是什么时候落的"
+      (``BundleState`` 只有 current / previous / proven / rollbacks /
+      denied / applying / forced),而 ``version`` 只在同一个 ``bundle_id``
+      内部单调 —— **跨 id 根本排不出先后**。
+
+    也就是说,放宽成"不是 current 也不是 previous 就算滞后"会把回滚备份和
+    没清干净的旧槽一起报成 P2,而且那条 P2 **没有任何动作能让它消下去**。
+    §5.2 判级的口径是"人得做什么";一条做什么都不消的告警,只会教会人无视
+    这个 kind —— 连带把真正管用的那条一起废掉。
+
+    代价说清楚:**"落了一个别的 ``bundle_id`` 的包、一直没生效"这一种,这里
+    确实报不出来。** 那条路今天由 §3.2 的下发侧和值守屏上的 ``bundle_lag``
+    列表兜(``app/watch.py`` 把这个函数的返回值原样摆在屏上,人看得见盘上
+    到底有哪几个槽)。要在这里也认出来,得先有一处记着"这个槽是什么时候落
+    的" —— 那是 ``landed.json`` 的改动,不是这个函数的。
     """
     root = Path(bundles_root)
     if not root.is_dir():
@@ -185,8 +210,19 @@ class AlertSources:
         #: ``count`` —— §5.4 做聚合的全部理由就是别让一个根因把真要紧的那条
         #: 埋掉,而这正好是自己动手埋。
         self._last_disk_80: bool = False
-        self._last_bundle_lag: bool = False
+        #: **任务包这一条记的是"哪几个槽",不是"有没有落差"。** 记 ``bool``
+        #: 的话:site-kl-4 落下报了一条,运维把 4 生效了、5 又落下来 ——
+        #: "有落差"这个布尔值一路都是 ``True``,一条新告警都不报,而簿子上
+        #: 那条的 ``detail`` 还写着 site-kl-4。人照着旧槽名去查,查到的是
+        #: 已经生效了的那一版。同一个文件里 ``_last_failed`` 用
+        #: ``frozenset[str]`` 就是为了"换了一个就得重新报",这里是同一件事。
+        self._last_bundle_lag: tuple[str, ...] = ()
         self._last_clock_skew: bool = False
+        #: 上一拍那三条各自读得出来读不出来。**读不出来的日志也要去重** ——
+        #: 盘拔掉之后这三条每隔 :data:`~d1max_patrol.app.server._WATER_EVERY`
+        #: 拍就各记一条带 traceback 的 WARNING,一天几千条,把日志里真有用
+        #: 的那些冲掉。跟告警去重同一套办法:只在跳变那一拍记一条。
+        self._last_quiet: dict[str, str] = {}
 
     # ------------------------------------------------------------ 导航
 
@@ -290,11 +326,17 @@ class AlertSources:
             return
         try:
             used, total = self._disk()
-        except OSError:
+        except OSError as exc:
             # 盘拔了、挂载点没了。**量不到不等于满了** —— 报一条假的 P2 比
             # 不报更坏(模块开头那句"认不出来的就不报")。
-            log.warning("量不到盘水位,这一拍不判", exc_info=True)
+            #
+            # **这里也不动 ``_last_disk_80``**,跟 ``_判定钟偏`` 那个
+            # ``None`` 守卫同一个道理:"量不到"不等于"退到线下了"。清掉的
+            # 话,盘一恢复就会把同一次盘满再报一遍。
+            self._静一句("disk", "量不到盘水位,这一拍不判", exc)
             return
+        # 这一拍读出来了 —— 把"上次说过的那句"清掉,下次再坏还得说一次。
+        self._last_quiet.pop("disk", None)
         ratio = (used / total) if total > 0 else 0.0
         成立 = ratio >= WARN_USED_RATIO
         if 成立 and not self._last_disk_80:
@@ -311,19 +353,23 @@ class AlertSources:
             return
         try:
             落后 = _落了但没生效(self._bundles_root)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
             # ``BundleError`` 是 ``ValueError`` 的子类,所以坏掉的
-            # ``landed.json`` 也在这一网里。读不出局面同样是"不知道",不报。
-            log.warning("读不出任务包的局面,这一拍不判", exc_info=True)
+            # ``landed.json`` 也在这一网里。读不出局面同样是"不知道",不报,
+            # 也不动记忆(理由同 ``_判定盘水位``)。
+            self._静一句("bundle", "读不出任务包的局面,这一拍不判", exc)
             return
-        成立 = bool(落后)
-        if 成立 and not self._last_bundle_lag:
+        self._last_quiet.pop("bundle", None)
+        # **比的是"哪几个槽",不是"有没有"** —— 见 ``_last_bundle_lag`` 的
+        # 注释:换了一批槽就是一件新的事,得重新报一条,不然簿子上那条的
+        # detail 会一直指着一个已经生效了的旧版本。
+        if 落后 and 落后 != self._last_bundle_lag:
             self._book.raise_alert(
                 kind="bundle_lag", robot=self._robot,
                 title="任务包落好了但没生效",
                 detail="盘上有 " + "、".join(落后) + ",current 还指着旧的",
                 now_ms=now_ms)
-        self._last_bundle_lag = 成立
+        self._last_bundle_lag = 落后
 
     def _判定钟偏(self, now_ms: int) -> None:
         """本地钟跟外头的参照差太多(§3.3 第 4 条)。"""
@@ -346,6 +392,20 @@ class AlertSources:
                 detail=f"跟 {skew.source} 差 {skew.skew_s:.0f} 秒",
                 now_ms=now_ms)
         self._last_clock_skew = skew.alarm
+
+    def _静一句(self, 口: str, 话: str, exc: Exception) -> None:
+        """同一个毛病只在**变了**的那一拍记一条日志。
+
+        这三条是周期看的:盘拔掉之后,每一轮都会走同一条早返,而
+        ``exc_info=True`` 带的是整段 traceback。不去重的话,一块坏掉的 SD 卡
+        能在一天里刷出几千条一模一样的 WARNING,把日志里真有用的那些冲掉 ——
+        跟告警刷屏是同一个毛病,所以用同一套办法治:只在跳变那一拍说一次。
+        """
+        指纹 = f"{type(exc).__name__}: {exc}"
+        if self._last_quiet.get(口) == 指纹:
+            return
+        self._last_quiet[口] = 指纹
+        log.warning("%s(%s)", 话, 指纹, exc_info=True)
 
     # ------------------------------------------------------------ 内部判定
 

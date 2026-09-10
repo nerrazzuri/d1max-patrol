@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-import os
+import logging
 from dataclasses import dataclass, field
 
 from d1max_patrol.app.alert_sources import AlertSources
@@ -157,17 +157,22 @@ def test_定位回来了再丢一次_算新的一次():
 
 
 def test_定位恢复又跑起来之后再丢一次_还认得出来():
-    """跨趟也得认得出来 —— 这两份定位记忆**故意没写进换趟清零那块**。
+    """跨趟也得认得出来:恢复 -> 新的一趟 -> 再丢一次,第二条照样报。
 
-    ``on_run`` 里 ``started_ms`` 一变就清 ``_last_failed`` /
-    ``_last_run_started``,但 ``_last_loc_lost`` 与
-    ``_last_loc_lost_paused`` 不在那个块里。理由是它们**自己会清**:
-    ``on_nav`` 每条 ``LocStatusEvent`` 都整个重赋前者,``_判定定位丢失``
-    结尾那句 ``self._last_loc_lost_paused = 成立`` 是无条件的。这条测试
-    钉的就是"自己清得干净"——恢复、又跑了新的一趟、再丢一次并且暂停,
-    第二条照样报得出来。
+    钉的是那两份定位记忆**自己清得干净** —— ``on_nav`` 每条
+    ``LocStatusEvent`` 都整个重赋 ``_last_loc_lost``,``_判定定位丢失``
+    结尾那句 ``self._last_loc_lost_paused = 成立`` 是无条件的。所以哪怕
+    换趟清零那块没管它们,第二趟上的丢失也认得出来。
 
-    (任务 6 评审:确认这处不对称是对的,不是漏了。)
+    **它钉不住"别把这两份记忆加进换趟清零块"。** 真去加,这条照样绿:清是
+    在 ``on_run(started_ms=2_000)`` 那一刻发生的,而紧跟着的
+    ``on_nav(LOC_LOST)`` 又把 ``_last_loc_lost`` 重新置了回来 —— 清了个
+    寂寞。真正守着那个方向的是
+    ``test_先丢定位_引擎随后才暂停_照样报得出来``:那一条里
+    ``on_nav`` 在前、``on_run`` 在后,记忆一旦被 ``on_run`` 清掉,
+    ``loc_lost_paused`` 就报不出来了。
+
+    (任务 6 评审:确认这处不对称是对的,不是漏了;代码不用动。)
     """
     env = 装好(engine_state=RunState.PAUSED)
     env.src.on_nav(LocStatusEvent(status=LocStatus.LOC_LOST, previous=None))
@@ -536,7 +541,10 @@ def 摆包(root, 槽名: list[str], *, current: str = ""):
     for 名 in 槽名:
         (root / 名).mkdir(exist_ok=True)
     if current:
-        os.symlink(root / current, root / "current", target_is_directory=True)
+        # 跟 ``tests/engine/test_bundle_pure_data.py`` 一个写法:用
+        # ``Path.symlink_to``,而且**不加 skip**。那边写过原因 —— 这台开发
+        # 机建得了符号链接,跳过反而会让 symlink 这道闸在这儿从没被真验过。
+        (root / "current").symlink_to(root / current, target_is_directory=True)
     return root
 
 
@@ -588,6 +596,108 @@ def test_任务包一直滞后_只报一条count也不涨(tmp_path):
         env.src.on_tick()
     a = env.book.open()
     assert len(a) == 1 and a[0].count == 1
+
+
+def test_旧的那版生效了_又落了更新的一版_得再报一条(tmp_path):
+    """**滞后是"落后了哪几个槽",不是一个 bool。**
+
+    现场序列:kl-4 落了 -> 报一条(人看见了、也去生效了)-> kl-4 生效的同
+    时 kl-5 又落下来 -> 这是一件**新的**事。用 bool 记"上一拍报没报过"的
+    话,这一拍的"落后"还是真,和上一拍一样,于是不报 —— 而簿子里那条老告
+    警的 detail 还写着 kl-4,人照着它去生效,发现早就生效了。
+
+    (§5.4 的聚合窗口会把这两条收成同一条 ``bundle_lag``,所以断言看的是
+    ``count`` 和 ``detail``,不是条数 —— 见 docs/测试为什么会说谎.md。)
+    """
+    root = 摆包(tmp_path / "bundles", ["site-kl-3", "site-kl-4"],
+              current="site-kl-3")
+    env = 装好(bundles_root=root)
+    env.src.on_tick()
+    a = env.book.open()
+    assert [x.kind for x in a] == ["bundle_lag"] and a[0].count == 1
+    assert "site-kl-4" in a[0].detail
+
+    # 人把 kl-4 生效了;与此同时 kl-5 落了下来。
+    (root / "current").unlink()
+    (root / "site-kl-5").mkdir()
+    (root / "current").symlink_to(root / "site-kl-4", target_is_directory=True)
+    env.src.on_tick()
+
+    a = env.book.open()
+    assert [x.kind for x in a] == ["bundle_lag"]
+    assert a[0].count == 2, "换了一版落后的槽,却当成同一件事没再报"
+    assert "site-kl-5" in a[0].detail, "报是报了,detail 还指着已经生效的那版"
+
+
+def test_盘上另一个bundle_id的槽_不算滞后(tmp_path):
+    """**跨 ``bundle_id`` 是故意不认的**(见 ``_落了但没生效`` 的 docstring)。
+
+    盘上并存好几个 ``bundle_id`` 是正常局面:``prune_bundles`` 只保
+    ``current`` / ``previous`` 两份,而这两条链没有同 id 的要求(换站点之后
+    ``previous`` 天然就是另一个 id);何况它今天还没有生产调用方,更早的槽
+    会一直躺着。``landed.json`` 里也没记过哪个槽什么时候落的,``version``
+    只在同一个 id 内单调 —— 跨 id 排不出先后。
+
+    放宽就会把回滚备份和没清干净的旧槽报成 P2,**而且那条 P2 没有任何动作
+    能让它消下去**;§5.2 判级看的是"人得做什么",一条做什么都不消的告警只
+    会教人无视这个 kind。代价(别的 id 的包一直没生效这里看不出来)写在
+    那个函数的 docstring 末尾。
+    """
+    root = 摆包(tmp_path / "bundles", ["site-kl-3", "site-xy-9", "yard-b-1"],
+              current="site-kl-3")
+    env = 装好(bundles_root=root)
+    env.src.on_tick()
+    assert env.book.open() == (), "把别的 bundle_id 的槽也当成滞后了"
+
+
+def test_同一个bundle_id里更高的版本_照样认(tmp_path):
+    """上一条的另一半:**收窄的只是跨 id,同 id 该认的一样得认。**
+
+    两条钉在一起才有意义 —— 单看上一条,一个"永远返回空"的实现也是绿的。
+    """
+    root = 摆包(tmp_path / "bundles",
+              ["site-kl-3", "site-kl-4", "site-xy-9"], current="site-kl-3")
+    env = 装好(bundles_root=root)
+    env.src.on_tick()
+    a = env.book.open()
+    assert [x.kind for x in a] == ["bundle_lag"]
+    assert "site-kl-4" in a[0].detail
+    assert "site-xy-9" not in a[0].detail
+
+
+def test_盘读不出来_日志只在跳变那一拍记一条(caplog):
+    """盘拔掉之后,那条早返每拍都走一遍 —— **日志也得去重**。
+
+    ``on_tick`` 是周期看的,而这条 WARNING 带着 ``exc_info=True``(整段
+    traceback)。不去重的话,一块坏掉的 SD 卡一天能刷出几千条一模一样的
+    记录,把日志里真有用的那些冲掉 —— 跟告警刷屏是同一个毛病,治法也一样:
+    只在跳变那一拍说一次。
+
+    后半段钉的是**别去重过头**:盘回来了再坏一次,是一件新的事,得再记
+    一条(靠的是成功那一路上的 ``_last_quiet.pop``)。
+    """
+    盒 = {"坏": True}
+
+    def 盘():
+        if 盒["坏"]:
+            raise OSError("盘拔了")
+        return (10, 1000)
+
+    env = 装好(disk=盘)
+    with caplog.at_level(logging.WARNING):
+        for _ in range(30):
+            env.src.on_tick()
+        assert len(取水位日志(caplog)) == 1, "同一个毛病每拍刷一条"
+
+        盒["坏"] = False                      # 盘回来了
+        env.src.on_tick()
+        盒["坏"] = True                       # 又坏了 —— 这是新的一件事
+        env.src.on_tick()
+    assert len(取水位日志(caplog)) == 2, "去重过头了,盘再坏一次没人记"
+
+
+def 取水位日志(caplog) -> list:
+    return [r for r in caplog.records if "量不到盘水位" in r.getMessage()]
 
 
 # -------------------------------------------------------------------- 钟偏
