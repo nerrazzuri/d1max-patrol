@@ -12,12 +12,19 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import time
 from urllib.parse import quote
 
 import pytest
 
-from d1max_patrol.app.server import SUSPEND_STALE_MS, AppServer, _挂起超时了
+from d1max_patrol.app.server import (
+    SUSPEND_STALE_MS,
+    AppContext,
+    AppServer,
+    _wall_ms,
+    _挂起超时了,
+)
 from d1max_patrol.app.teleop import HEARTBEAT_TIMEOUT_S, Teleop
 from d1max_patrol.engine.alerts import Level
 from d1max_patrol.engine.machine import RunSnapshot, RunState, SuspendPoint
@@ -204,10 +211,20 @@ def test_挂起超时只报警不自己动狗(跑起来的服务, 钟):
 
     钟.前进(SUSPEND_STALE_MS * 5)
     assert 等到(lambda: 挂起超时告警(srv)), "先得真报出来,不然下面全是空转"
-    # 报完之后再多等一会儿:自动 resume 是异步的,报警那一刻还没轮到它。
-    assert not 等到(lambda: ctx.engine.state is not RunState.SUSPENDED,
-                    最多等=0.5), "超时之后引擎自己离开了 SUSPENDED"
-    assert ctx.engine.state is RunState.SUSPENDED
+    # 报完之后要真的多给它几拍:自动 resume 是异步的,报警那一刻还没轮到它。
+    #
+    # **等的是闸门醒了几拍,不是墙上的半秒。** 原来写的是
+    # ``最多等=0.5``,而 ``_LEASE_WATCH_PERIOD_S`` 正好也是 0.5 —— 观察窗口
+    # 跟被观察者的周期一样长,还踩着边界:上一句 ``等到(挂起超时告警)`` 是在
+    # 报警那一刹那返回的,这 0.5 秒最多覆盖到"下一拍"。有人把自动 resume 写
+    # 成"先报警、下一拍再放行",或者写成一条投进引擎命令队列、要等引擎协程
+    # 下一轮才处理的异步命令,实际放行落在报警后 0.5~1.0 秒 —— 这条断言有
+    # 相当概率仍然绿,而且是**只在慢机器上偶尔红**的那一种。比恒绿更糟:
+    # 第一次红会被当成 flake 去调窗口。跟 ``test_一次挂起只报一条`` 统一。
+    起始拍 = srv.hub._lease_ticks
+    assert 等到(lambda: srv.hub._lease_ticks >= 起始拍 + 3, 最多等=3.0), \
+        "闸门没再醒过,下面那句「引擎没自己动」是因为它根本没机会动"
+    assert ctx.engine.state is RunState.SUSPENDED, "超时之后引擎自己离开了 SUSPENDED"
     # ``goto`` 才是「狗真的动了」在这台假后端上的样子:自动 resume 会重发当前
     # 点。``walk`` 一起看着,那是遥控档上的直接位移。
     assert ctx.nav.goto_calls[导过:] == [], ctx.nav.goto_calls[导过:]
@@ -225,8 +242,12 @@ def test_没到点不报(跑起来的服务, 钟):
 def test_没让开腿就不会有这条(跑起来的服务, 钟):
     """任务正常跑着,钟拨多远都不该有这条。
 
-    判据是「让开腿之后过了多久」,不是「这趟跑了多久」 —— 少了这条守卫,
-    一个照 ``started_ms`` 算的实现会在长任务上凭空报 P1。
+    **挡的是「没让开腿也报」这一件事,别把名牌挂大了。** 一个照
+    ``started_ms`` 算、但**还留着 ``yielding`` 判断**的实现在这儿照样绿 ——
+    真正接住那一刀的是 ``test_算的是让开腿那一刻不是开跑那一刻``,它把
+    "开跑很久但刚让开腿"摆出来了。这一条守的是另一半:``_判定挂起超时``
+    那个 ``if not engine.yielding: return`` 哪天被人删掉,任务正常跑着也会
+    去读一个陈旧的 ``suspended_at`` —— 这一条会红。
     """
     srv = 跑起来的服务
     钟.前进(SUSPEND_STALE_MS * 3)
@@ -261,12 +282,47 @@ def test_超时的边界正好在这个常量上():
     assert not _挂起超时了(None, now_ms=起 + SUSPEND_STALE_MS * 10)
 
 
-class 假引擎:
-    """摆好的引擎:``_判定挂起超时`` 只看 ``yielding`` 和 ``snapshot``。"""
+def test_闸门读的钟必须还是墙钟(没起的服务):
+    """**跨钟依赖:这条 P1 的正确性靠「``ctx.clock`` 等于墙钟」撑着。**
 
-    def __init__(self, snapshot: RunSnapshot) -> None:
+    ``_挂起超时了`` 算的是 ``now_ms - 点.at_ms``:``now_ms`` 来自
+    ``ctx.clock()``,``at_ms`` 是引擎自己拿 ``time.time()`` 盖的(引擎不认识
+    外壳,注不进去)。全仓别处一律把 ``ctx.clock`` 当一个可注入的时间源 ——
+    **这条减法是唯一的例外**。
+
+    第 9 卷紧接着就要动钟(回传、钟偏修正)。真给 ``ctx.clock`` 套一层 NTP
+    偏移修正、或者做回放/仿真模式换成场景时间,这个差值要么是巨大正数(一让
+    开腿立刻报 P1,人很快学会无视它),要么是负数(永远不报) —— **两种都
+    全绿**。所以让"有人把 ``ctx.clock`` 换掉"这件事在这儿响一声,而不是在
+    现场静默。
+
+    5 秒的余量:留给这一组自己那个 ``跟着墙走的钟`` 的 ``偏移``(这条用的是
+    没拨过的那份)和进程调度的抖动,而任何一种"换了纪元"的改法都会差出至少
+    几个数量级。
+    """
+    ctx = 没起的服务.ctx
+    差 = abs(ctx.clock() - time.time() * 1000)
+    assert 差 < 5_000, (
+        f"ctx.clock() 跟墙上时钟差了 {差} 毫秒。挂起超时那条 P1 是拿它去减"
+        "引擎盖的 SuspendPoint.at_ms(墙钟毫秒)的 —— 换了纪元之后这条告警"
+        "会静默失效,见 server._挂起超时了 的文档串。")
+    # 注进去的那份自己对得上,不代表真机上那条默认路径对得上:生产缺省也得
+    # 是墙钟。
+    assert AppContext.__dataclass_fields__["clock"].default is _wall_ms
+
+
+class 假引擎:
+    """摆好的引擎:``_判定挂起超时`` 只看 ``yielding`` 和 ``snapshot``。
+
+    ``yielding`` 允许显式指定,是为了摆出"引擎说自己在让位、快照上却没盖点"
+    那个**不该发生的状态**(见 ``test_让开腿了却没盖点不许静默走掉``)。
+    """
+
+    def __init__(self, snapshot: RunSnapshot, *,
+                 yielding: bool | None = None) -> None:
         self.snapshot = snapshot
-        self.yielding = snapshot.state is RunState.SUSPENDED
+        self.yielding = (snapshot.state is RunState.SUSPENDED
+                         if yielding is None else yielding)
 
 
 def _快照(*, 开跑: int, 让开腿于: int, 挂着: bool = True) -> RunSnapshot:
@@ -310,6 +366,43 @@ def test_算的是让开腿那一刻不是开跑那一刻(没起的服务, 钟):
         ctx.engine = 真的
 
 
+def test_让开腿了却没盖点不许静默走掉(没起的服务, 钟, caplog):
+    """``yielding`` 为真而 ``suspended_at`` 为空 —— **这是不该发生的状态**。
+
+    ``_判定挂起超时`` 取的是 ``engine.yielding``(不在外壳里复刻状态表,这个
+    决定是对的),可它把"``yielding`` 的每一种成因都会往快照上盖一个
+    ``suspended_at``"变成了一条**没人守着的隐含前提**:两种情况原来走的是
+    同一条静默出口 —— 「没让开腿」和「让开腿了但没盖点」都是 ``return``,
+    一行痕迹不留。
+
+    **前提已经在被搬动了**:任务 13 刚加了一种新的让位(``RETURNING`` 途中
+    挂起),下一种还会有。哪一种忘了盖点,这条 P1 就整个哑掉 —— 狗在返航路
+    上被拉到一边、然后没人管一整夜,``suspend_stale`` 一条不报、屏上一切如常,
+    挂账 67a 原样复发,只是换了个入口。
+
+    所以这里断的不是"报了一条告警"(不动狗、也不该拿一条 P1 去说一件本质是
+    内部不一致的事),而是**它没有静默走掉**:日志上必须留下一条 ERROR。
+    """
+    srv = 没起的服务
+    ctx = srv.ctx
+    此刻 = 钟()
+    真的 = ctx.engine
+    try:
+        # 快照是"没挂起"的那一份(``suspended_at`` 是 ``None``),而引擎嘴上
+        # 说自己在让位 —— 正是那个对不上的状态。
+        ctx.engine = 假引擎(_快照(开跑=此刻, 让开腿于=此刻, 挂着=False),
+                            yielding=True)
+        with caplog.at_level(logging.ERROR, logger="d1max_patrol.app.server"):
+            srv.hub._判定挂起超时(now_ms=此刻)
+        惨叫 = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert 惨叫, (
+            "引擎说自己在让位、快照上却没盖点,而这一拍一声不吭地走掉了 —— "
+            "这条 P1 从此是哑的,没有任何人会知道。")
+        assert "suspended_at" in 惨叫[0].getMessage(), 惨叫[0].getMessage()
+    finally:
+        ctx.engine = 真的
+
+
 # ------------------------------------------------- 12c 从路由挂起再从路由继续
 
 
@@ -335,10 +428,15 @@ def test_从路由挂起再从路由继续(跑起来的服务, 钟, 秒表):
     assert _post(srv, "/api/teleop", 走一拍)[0] == 200
     assert ctx.teleop.active is True, "遥控都没起来,下面那句「继续不了」是白的"
 
-    # 左手还压在摇杆上。
+    # 左手还压在摇杆上。**等的是闸门醒了几拍,不是墙上的半秒** —— 理由跟
+    # ``test_挂起超时只报警不自己动狗`` 里那一段一样:0.5 秒的窗口正好等于
+    # ``_LEASE_WATCH_PERIOD_S``,一个"下一拍才真放行"的实现能从这个窗口底下
+    # 溜过去,而且只在慢机器上偶尔红。
     assert _post(srv, "/api/run/resume")[0] == 200
-    assert not 等到(lambda: ctx.engine.state is not RunState.SUSPENDED,
-                    最多等=0.5), "人还握着摇杆,引擎就自己跑起来了"
+    起始拍 = srv.hub._lease_ticks
+    assert 等到(lambda: srv.hub._lease_ticks >= 起始拍 + 3, 最多等=3.0), \
+        "闸门没再醒过,下面那句「引擎没自己跑」是因为它根本没机会跑"
+    assert ctx.engine.state is RunState.SUSPENDED, "人还握着摇杆,引擎就自己跑起来了"
     assert "遥控" in ctx.engine.snapshot.reason, ctx.engine.snapshot.reason
 
     # 还没到注进去的那个超时:手必须还在。

@@ -9,7 +9,7 @@ import pytest
 
 from d1max_patrol.app.auth import AUTH_PATH
 from d1max_patrol.app.control import CONTROLLED, needs_lease
-from d1max_patrol.app.server import AppServer
+from d1max_patrol.app.server import AppServer, _compile
 from tests.app.conftest import make_ctx, request
 
 PIN = "428913"
@@ -317,6 +317,11 @@ def test_退出之后别人立刻拿得到(有pin的服务):
 }
 
 #: 不跨斜杠的占位符换成什么。一段普通的、不带斜杠的东西就够了。
+#:
+#: **它不带斜杠这件事跟 :data:`_跨段` 带斜杠一样是承重的**,所以底下那条
+#: ``test_跨斜杠的告警键真的绕不过闸门`` 把两边都钉住:这里哪天被人改成一段
+#: 带斜杠的东西,``CONTROLLED`` 里的 ``[^/]+`` 当场匹配不上,一堆本来受控的
+#: 路由会被判成漏网(该绿判成红),而红的地方跟真正的原因隔着三层。
 _一段 = "x"
 
 #: **跨斜杠的占位符必须换成一个真带斜杠的值**,这是这一段唯一容易写错的地方。
@@ -329,6 +334,16 @@ _一段 = "x"
 #: 的跨度一致**,这就是这两个常量分开的理由。
 _跨段 = "D1M-TEST/stuck#1"
 
+#: 占位符长什么样。**字符类必须跟正主 ``server._compile`` 里那一行
+#: (``re.split(r"(<[a-z_]+\*?>)", pattern)``)一模一样。**
+#:
+#: 宽了不行:这边认得、正主不认得的写法(比如把字符类放宽到收数字)会被这边
+#: 换成一段具体路径,而正主把它当字面量 ``re.escape`` 掉 —— 问 ``needs_lease``
+#: 的那条路径根本不是这条路由能匹配的路径。
+#: 窄了更不行:这边认不出来的占位符会**原样留在路径里**,而 ``CONTROLLED``
+#: 里的 ``[^/]+`` 会把 ``<name2>`` 这种东西照样匹配上 —— 那条路由被判成
+#: "受管",其实一个字都没验证过。窄的这一半由 :func:`具体路径` 里那句
+#: "换完不许还剩尖括号" 当场接住。
 _占位符 = re.compile(r"<([a-z_]+\*?)>")
 
 
@@ -341,8 +356,24 @@ def 枚举注册过的路由(srv: AppServer) -> tuple[tuple[str, str], ...]:
     读的是 ``_Route.raw``(``route()`` 收到的原始模式串),不是
     ``pattern.pattern``(编译后的正则源码):后者是换了个马甲的源码文本扫描,
     脆,而且要靠反推才知道哪一段原来是占位符。
+
+    **顺手断一句 ``_compile(raw) == pattern``,这一句是承重的。** 底下三条闸门
+    测试全部拿 ``raw`` 去问 ``needs_lease``,而真正拦请求的 ``_dispatch`` 拿的
+    是 ``pattern``。今天两者同源(``route()`` 是唯一构造点,同一次调用里一个
+    编译出另一个),可这是**约定不是机制**:哪天有人给 ``_Route`` 加第二个构造
+    点、或者在 ``route()`` 里对 ``raw`` 做一次归一化(去尾斜杠、小写化……),
+    两者就错开了 —— 闸门从此查的是一个跟真实匹配无关的字符串,而这三条测试
+    照样全绿。
     """
-    return tuple((r.method, r.raw) for r in srv._routes)
+    出 = []
+    for r in srv._routes:
+        assert _compile(r.raw).pattern == r.pattern.pattern, (
+            f"{r.method} {r.raw!r} 的 raw 跟 pattern 不同源了:"
+            f"{_compile(r.raw).pattern!r} != {r.pattern.pattern!r}。"
+            "受控路由表那几条测试全靠 raw 说话,错开之后它们查的是一个跟真实"
+            "匹配无关的字符串。")
+        出.append((r.method, r.raw))
+    return tuple(出)
 
 
 def 具体路径(模式: str) -> str:
@@ -350,8 +381,12 @@ def 具体路径(模式: str) -> str:
 
     换法见 :data:`_一段` / :data:`_跨段` 上面那两段注释。
     """
-    return _占位符.sub(
+    路径 = _占位符.sub(
         lambda m: _跨段 if m.group(1).endswith("*") else _一段, 模式)
+    # 换完不许还剩尖括号 —— 剩下的那个是 :data:`_占位符` 认不出来的写法,
+    # 而 ``CONTROLLED`` 里的 ``[^/]+`` 会把它照样匹配上(见 :data:`_占位符`)。
+    assert "<" not in 路径 and ">" not in 路径, (模式, 路径)
+    return 路径
 
 
 @pytest.fixture
@@ -375,6 +410,33 @@ def test_每条会改狗的POST都在CONTROLLED里(没起的服务):
     assert not 漏网, (
         f"{漏网} 不受控制权闸门管。要么把它加进 app/control.py 的 "
         "CONTROLLED,要么把它加进这个文件的 不要控制权的POST 并写清楚理由。")
+
+
+def test_豁免的那几条真的不受闸门管():
+    """豁免白名单是**单向**的,这一条补的是反方向。
+
+    上面那条测试的列表推导里,``模式 not in 不要控制权的POST`` 排在
+    ``needs_lease(...)`` 前面 —— 豁免表里的模式在 ``needs_lease`` 被问到之前
+    就被过滤掉了。也就是说任务 12 那三条闸门测试对「**一条本该豁免的路由被
+    闸门管住了**」完全瞎。``test_这张表跟CONTROLLED两边对得上`` 也接不住:
+    它的反方向只问「``CONTROLLED`` 里每条正则至少能匹配上手抄表的某一条」,
+    正则被放宽之后原来那条依然匹配得上,照样绿。
+
+    **失败场景**:有人为了收紧遥控把 ``CONTROLLED`` 里 ``/api/teleop`` 那条
+    放宽一格(比如写成 ``^/api/(estop|teleop)$``),``/api/estop`` 从此落进
+    ``CONTROLLED`` —— 没拿到租约的人(租约在别人手上,或者刚掉线还没续上)
+    按急停就是 409,**急停不生效**。§3.5 规则 2 就写在豁免表的注释里:
+    这一条错了会死人。
+
+    不用起服务:问的是 ``needs_lease`` 这个纯函数,而豁免表里的模式还在不在
+    路由表上由 ``test_豁免名单里没有已经不存在的路由`` 单管一头。
+    """
+    误管 = sorted(模式 for 模式 in 不要控制权的POST
+                  if needs_lease("POST", 具体路径(模式)))
+    assert not 误管, (
+        f"{误管} 写在豁免表里,却被 app/control.py 的 CONTROLLED 圈进去了。"
+        "要么是 CONTROLLED 里某条正则放宽过了头,要么是这条路由不该豁免 —— "
+        "先看 §3.5 规则 2:急停任何时候都得按得下去。")
 
 
 def test_豁免名单里没有已经不存在的路由(没起的服务):
@@ -420,6 +482,8 @@ def test_跨斜杠的告警键真的绕不过闸门(没起的服务):
     (``robot/kind#seq``)会从闸门底下整个漏过去。
     """
     assert "/" in _跨段, _跨段
+    # 反过来的那一半:不跨斜杠的替换值**必须不带斜杠**(见 :data:`_一段`)。
+    assert "/" not in _一段, _一段
     assert needs_lease("POST", 具体路径("/api/alerts/<key*>/ack"))
     assert needs_lease("POST", 具体路径("/api/alerts/<key*>/resolve"))
     # 反过来:CONTROLLED 里一条 GET 都没有(§3.5 规则 1)。

@@ -403,6 +403,24 @@ async def test_心跳停了六百毫秒内停车(teleop, fake_device, fake_clock
     assert not teleop.active
 
 
+async def test_实际生效的守死人超时说得出来(fake_device, engine, fake_clock):
+    """``heartbeat_timeout_s`` 这个只读属性钉的是「将来的宣告点该读哪儿」。
+
+    今天全仓一处「告诉手机该多久发一次心跳」的地方都没有(核查见属性自己的
+    文档串),所以这里**不去断某个 API 字段** —— 断的是这个属性说出来的确实
+    是注进去的那一个,而不是模块缺省。哪天有人把属性写成
+    ``return HEARTBEAT_TIMEOUT_S``(看着一样,读的却是常量),这一条会红。
+    """
+    注的 = HEARTBEAT_TIMEOUT_S + 1.25
+    t = Teleop(fake_device, engine, video_gate=lambda: "", clock=fake_clock,
+               watch_period_s=TICK, heartbeat_timeout_s=注的)
+    try:
+        assert t.heartbeat_timeout_s == 注的
+        assert t.heartbeat_timeout_s != HEARTBEAT_TIMEOUT_S
+    finally:
+        await t.aclose()
+
+
 async def test_心跳一直有就不会被停(teleop, fake_device, fake_clock):
     await teleop.pulse(1.0, 0.0, 0.0)
     for _ in range(5):

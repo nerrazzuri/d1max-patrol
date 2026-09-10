@@ -795,6 +795,18 @@ def _挂起超时了(点: SuspendPoint | None, *, now_ms: int) -> bool:
 
     严格大于:正好卡在 :data:`SUSPEND_STALE_MS` 上还不算超时,再多一毫秒才
     算(跟 ``due_escalations`` 里那个 ``>`` 一个口径)。
+
+    **``now_ms`` 必须跟 ``SuspendPoint.at_ms`` 同源。** 今天两边都是墙上时钟
+    毫秒:``at_ms`` 是引擎自己盖的(``engine/machine.py`` 里的
+    ``int(time.time() * 1000)``,引擎不认识外壳,注不进去),而 ``now_ms``
+    一路来自 ``ctx.clock``,它的生产缺省是 :func:`_wall_ms`。全仓别处一律把
+    ``ctx.clock`` 当一个可注入的时间源,**这一条减法是唯一一处依赖它仍然是
+    墙钟的地方** —— 哪天 ``ctx.clock`` 被换成别的纪元(套一层钟偏修正、回放
+    或仿真模式换成场景时间),这个差值要么变成一个巨大的正数(一让开腿立刻
+    报 P1,人很快学会无视这条告警,正好撞上 :data:`SUSPEND_STALE_MS` 注释里
+    那段下界论证),要么变成负数(永远不报) —— **两种都不会有任何一条测试
+    红**。守卫断在测试那一侧:
+    ``tests/app/test_suspend_e2e.py::test_闸门读的钟必须还是墙钟``。
     """
     if 点 is None:
         return False
@@ -1087,10 +1099,24 @@ class _StateHub:
         引擎的词汇,复刻一份迟早跟正主不一样。
         """
         engine = self._ctx.engine
-        点 = engine.snapshot.suspended_at if engine.yielding else None
-        if 点 is None:
+        if not engine.yielding:
             # 接管结束(或者压根没让开腿)。**记账要清掉** —— 不清的话,下一
             # 次让开腿如果凑巧撞上同一个 ``at_ms``,那一次就不会报了。
+            self._挂起报过 = None
+            return
+        点 = engine.snapshot.suspended_at
+        if 点 is None:
+            # **这是不该发生的状态,不许跟上面那条走同一个静默出口。**
+            # "``yielding`` 的每一种成因都会往快照上盖一个 ``suspended_at``"
+            # 是这条 P1 的隐含前提,而它没有编译器守着:任务 13 刚加了一种新
+            # 的让位(``RETURNING`` 途中挂起),下一种还会有。哪一种忘了盖点,
+            # 这条告警就整个哑掉 —— 狗在返航路上被拉到一边、然后没人管一整
+            # 夜,``suspend_stale`` 一条不报、屏上一切如常(挂账 67a 原样复发,
+            # 换了个入口)。合并进上面那个 ``return`` 的话,这件事连一行日志
+            # 都不会留下。
+            log.error("引擎说自己在让位(yielding),快照上却没有 suspended_at ——"
+                      "挂起超时这条 P1 在这种状态下是哑的。state=%s",
+                      engine.snapshot.state)
             self._挂起报过 = None
             return
         if self._挂起报过 == 点.at_ms or not _挂起超时了(点, now_ms=now_ms):
@@ -1099,8 +1125,13 @@ class _StateHub:
         self._ctx.alerts.raise_alert(
             kind="suspend_stale", robot=self._ctx.identity.sn,
             title="人接管着没还回来,这趟一直挂着",
+            # **正文里那个数是真除不是整除。** ``//`` 的话
+            # :data:`SUSPEND_STALE_MS` 一旦改成不整除 60 秒的数(它已经排进真
+            # 机清单要量,改是排好期的),正文会说"1 分钟"而阈值其实是 1.5
+            # 分钟 —— 人照着正文去复现("才过了 1 分 10 秒怎么没报"),得到
+            # 一个查不出来的结论。``:g`` 让 10 还是"10"、10.5 就是"10.5"。
             detail=f"让开腿的理由是「{点.reason}」,到现在已经超过 "
-                   f"{SUSPEND_STALE_MS // 60_000} 分钟没人点继续。"
+                   f"{SUSPEND_STALE_MS / 60_000:g} 分钟没人点继续。"
                    "**狗停在原地没有自己动**(§5.8)—— 回去点「继续」接着"
                    "跑,或者中止这一趟。",
             now_ms=now_ms)

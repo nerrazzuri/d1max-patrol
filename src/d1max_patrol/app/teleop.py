@@ -196,6 +196,26 @@ class Teleop:
     # ------------------------------------------------------------------ 对外
 
     @property
+    def heartbeat_timeout_s(self) -> float:
+        """这一台**实际生效**的守死人超时(秒)。
+
+        **将来任何一处"告诉手机该多久发一次心跳"的地方必须读这个属性,不许
+        读模块常量 ``HEARTBEAT_TIMEOUT_S``。** 核查过了:今天全仓一处这样的
+        宣告点都没有 —— ``/api/teleop`` 和 ``/api/teleop/mode`` 的响应里没有
+        这个数,``/api/control`` 里带的 ``heartbeat_ms`` 是**租约**那条线
+        (§6.4 明写两条线不是一回事),手机那头 ``teleop_page.dart`` 的
+        ``_beatPeriod`` 是它自己拍的一个 200 毫秒。所以这里**不凭空造一个
+        API 字段**,只把"该读哪儿"这件事钉住。
+
+        为什么钉:``_watchdog`` 已经改读实例字段。哪天某个部署为了省电注一个
+        ``heartbeat_timeout_s=1.5`` 进来,而新加的宣告点仍去读模块常量的
+        0.6 —— 手机按 0.6 的节奏发、狗按 1.5 判,或者反过来,两者分家之后
+        **不会有任何一条测试红**:模块常量还在、值也没变,实例字段也确实被
+        ``_watchdog`` 用着,两边各自都自洽。
+        """
+        return self._heartbeat_timeout_s
+
+    @property
     def active(self) -> bool:
         """这次遥控会话还开着吗。
 
