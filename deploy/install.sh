@@ -134,9 +134,13 @@ systemctl enable d1max-patrol.service
 说 "6/7 记下这台有没有装上装"
 cat <<'提示'
   这一步没法替你做,因为只有站在机器旁边的人看得见(§7.1)。
-  装完之后在手机 app 或者用 curl 记一次:
+  装完之后在手机 app 里记一次;要用 curl 的话**先换 token** ——
+  服务带 --host 0.0.0.0 起,所以从 127.0.0.1 发过去也一样要 token,
+  没有"本机豁免"这回事。换 token 的那几行在 docs/装机清单.md 三节,
+  照那儿抄,别把 PIN 敲进命令里。换到之后:
 
     curl -X PUT http://<机器 IP>:8095/api/identity/payload \
+      -H "Authorization: Bearer $TOKEN" \
       -H 'Content-Type: application/json' \
       -d '{"has_payload": false, "by": "你的名字",
            "confirm": "我知道这会改掉升级方式"}'
@@ -196,6 +200,12 @@ systemctl restart d1max-patrol.service
 
 说 "装完了。看一眼:"
 echo "  systemctl status d1max-patrol"
-echo "  curl http://127.0.0.1:8095/api/release"
-echo "  curl http://127.0.0.1:8095/api/selfcheck"
-echo "  curl http://127.0.0.1:8095/api/identity"
+echo ""
+echo "  下面三条要看的是 /api/release、/api/selfcheck、/api/identity,"
+echo "  但裸 curl 会全部返回 401 —— 服务带 --host 0.0.0.0 起,必须有 PIN,"
+echo "  而且从 127.0.0.1 发过去也一样要 token。先照 docs/装机清单.md 三节"
+echo "  换一个 TOKEN(那几行从 /etc/d1max/env 取 PIN,不用手敲),再:"
+echo ""
+echo "    curl -sS -H \"Authorization: Bearer \$TOKEN\" http://127.0.0.1:8095/api/release"
+echo "    curl -sS -H \"Authorization: Bearer \$TOKEN\" http://127.0.0.1:8095/api/selfcheck"
+echo "    curl -sS -H \"Authorization: Bearer \$TOKEN\" http://127.0.0.1:8095/api/identity"
