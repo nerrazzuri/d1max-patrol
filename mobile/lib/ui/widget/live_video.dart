@@ -242,6 +242,13 @@ class LiveVideo extends StatefulWidget {
 
   final String token;
 
+  /// 真在出画面的那一格。
+  ///
+  /// **没有画面的时候这一格压根不在**（那时候画的是 [_LiveVideoState._panel]
+  /// 那块板子）。所以「画面回来了没有」是一句 `findsOneWidget`，不是去比对
+  /// 板子上那句中文 —— 裁决 124 的同一条规矩。
+  static const Key frameKey = ValueKey<String>('live-frame');
+
   @override
   State<LiveVideo> createState() => _LiveVideoState();
 }
@@ -294,10 +301,56 @@ class _LiveVideoState extends State<LiveVideo> {
   /// 等第一帧的那个闹钟。第一帧到了就取消。
   Timer? _firstFrame;
 
+  /// 这一格此刻还在不在台上。**被一个不透明的全屏页盖住时是 false。**
+  ///
+  /// 挂账 64：推一个全屏页上去，底下这个 widget **不 dispose** —— `Navigator`
+  /// 默认 `maintainState: true`，State 原样留着，那条 MJPEG 连接也就原样连着。
+  /// 而狗那头 `MAX_VIEWERS` 的名额是**按连接**算的（`video.py`），不是按
+  /// 「谁真的在看」算的。现场的样子就是：连开两个页面，第二个人被告知
+  /// 「看的人满了」，而占着位子的那一路谁也没在看。
+  ///
+  /// **守的必须是狗那头的连接数，不是 widget 树里有没有这个对象** ——
+  /// 挂账 64 的病恰恰就是「对象在、位子占着」，守对象等于没守。
+  bool _onstage = true;
+
   @override
   void initState() {
     super.initState();
     _health = widget.health.listen(_onHealth);
+  }
+
+  /// 台上台下翻面的那一下。
+  ///
+  /// **靠 `TickerMode`，不靠 `RouteAware`。** `Overlay` 给「排在第一个不透明
+  /// entry 之下」的每一层挂的就是 `TickerMode(enabled: false)`
+  /// （`overlay.dart` 的 `_Theatre`），而 `TickerMode.valuesOf` 走的是
+  /// `dependOnInheritedWidgetOfExactType` —— 翻面这一下一定会把这里叫醒。
+  /// `RouteAware` 那条路要求 app 顶上挂一个 `RouteObserver`，而那是**这个
+  /// widget 管不着的地方**：谁哪天新起一个 `MaterialApp` 忘了挂，这一格就
+  /// 无声地退回今天的坏法 —— 没有任何测试会红。
+  ///
+  /// **不必 `setState`。** 依赖变了这一下 element 已经被标脏，这个回调跑完
+  /// 紧接着就是一次 build；在这儿再 `setState` 只是多标一次。
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final bool on = TickerMode.valuesOf(context).enabled;
+    if (on == _onstage) return;
+    _onstage = on;
+    if (on) {
+      // **回来要重新发一次 GET。** 跟掉线再回来是同一件事：那条连接已经
+      // 被我们自己掐了，它不会自己回来。
+      //
+      // 只做「盖住就断」的话，这一屏会变成「断了就再也不回来」—— 人从全屏
+      // 页退回来，看到的是一块「正在接画面」的板子，一直到下一次健康翻面
+      // 为止（而健康那头压根不会翻：狗一直在线）。
+      if (_live) _open();
+    } else {
+      _shut();
+      // 位子让出来了，最后那一帧也不留：留着的话人退回来的那一瞬间看见的是
+      // 一张旧图，而那正是 §5.9 要防的头号情况。
+      _frame = null;
+    }
   }
 
   void _onHealth(VideoHealth h) {
@@ -321,6 +374,11 @@ class _LiveVideoState extends State<LiveVideo> {
   /// 回来，而它断掉的样子跟"还连着、只是没新帧"在这一头长得一模一样。
   void _open() {
     _shut();
+    // **台下不许开流。** 这一句挡的不是 [didChangeDependencies]（那儿本来就
+    // 只在回台上时才开），挡的是**盖住期间健康那条流翻的面**：狗掉线又回来，
+    // `_onHealth` 会照常走到这儿 —— 于是一个谁也看不见的页面，又把位子占回去了。
+    // 健康那头照常记着 [_live]，回到台上那一下 [didChangeDependencies] 再开。
+    if (!_onstage) return;
     final int gen = _gen;
     final HttpClient io = HttpClient()
       ..connectionTimeout = const Duration(seconds: 5);
@@ -497,6 +555,7 @@ class _LiveVideoState extends State<LiveVideo> {
       // `gaplessPlayback`：不加的话每来一帧都会先白一下再画。
       return Image.memory(
         f,
+        key: LiveVideo.frameKey,
         gaplessPlayback: true,
         fit: BoxFit.cover,
         // 一帧坏 JPEG 不该走 Flutter 的全局错误通道 —— 那条路上屏幕什么

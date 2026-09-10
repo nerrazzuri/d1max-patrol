@@ -33,6 +33,36 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/fake_dog.dart';
 import 'support/pump.dart';
 
+/// 存储页那个模块的源码路径。
+///
+/// widget 测试的工作目录就是包根（`mobile/`）—— 上面那几条读
+/// `test/fixtures/storage.json` 走的是同一个相对路径。
+const String storagePagePath = 'lib/ui/storage_page.dart';
+
+/// 一份源码里所有**写得出一个 POST** 的行（去掉首尾空白）。
+///
+/// **认的是文本，所以是一根便宜的绊线，不是探针。** 真正的探针要跑得起 Dart
+/// 的分析器，这个仓里没有那个东西；而绊线的价值就一样：手滑的时候当场绊一下，
+/// 比真机早。同一招在 `tests/app/test_operator.py::test_手机那头的路径跟狗这头
+/// 是同一条` 里已经用过一次。
+///
+/// **`.post(` / `.put(` 是调用的形状，`POST` 是散文里的说法**，两样分开数：
+/// 前者出现在哪儿都不行（注释里也不行 —— 注释里写得出来的下一步就是把 `//`
+/// 删掉），后者只许出现在注释里。
+List<String> postCalls(String source) => <String>[
+      for (final String ln in source.split('\n'))
+        if (ln.contains('.post(') || ln.contains('.put(')) ln.trim(),
+    ];
+
+/// 一份源码里所有提到 `POST` 这三个字母的行（去掉首尾空白）。
+List<String> postMentions(String source) => <String>[
+      for (final String ln in source.split('\n'))
+        if (ln.contains('POST')) ln.trim(),
+    ];
+
+/// 这一行是不是注释。
+bool isComment(String trimmed) => trimmed.startsWith('//');
+
 /// 一次挂好的现场：一只假狗、一个解过锁的客户端。
 class Rig {
   Rig(this.dog, this.client);
@@ -371,6 +401,73 @@ void main() {
     expect(rig.posts, 0,
         reason: '这一卷只读不删。清盘那条路的另一头是 shutil.rmtree');
     await unmount(t, rig);
+  });
+
+  // ------------------------------------------------ 挂账 66：扫源码那一层
+  //
+  // 原文判的是「记账即可」，因为第一道防线是网络层那条计数（上面那条）。
+  // **但那条只证得了「跑过的那几条路上没发 POST」。** 清盘入口真加进来的时候，
+  // 它多半挂在一条今天的测试压根走不到的支上（`if (v.usedRatio > 0.9)` 之类），
+  // 于是网络层那条照样是 0，照样绿。
+  //
+  // 这一层问的是另一件事：**这个模块的源码里压根写不出一个 POST。** 走不走得
+  // 到那条支它不管 —— 写下来了就红。
+  //
+  // 这一层拦不住的：`client` 被递进另一个模块，那个模块去发 POST。那条得靠
+  // 网络层那条计数，两层各拦各的。
+
+  test('存储页那个模块的源码里发不出一个 POST', () {
+    final String source = File(storagePagePath).readAsStringSync();
+    // **自洽。** 路径写错、文件搬了家的话，`readAsStringSync` 会抛；但源码被
+    // 换成一份不相干的东西（或者哪天这一屏改名了）不会抛 —— 那时候下面两条
+    // 是在一份跟存储页无关的文本上转，绿得毫无意义。
+    expect(source, contains('class StoragePage'),
+        reason: '读到的不是存储页那个模块：下面两条扫的是别人的源码');
+
+    expect(postCalls(source), isEmpty,
+        reason: '清盘那条路的另一头是 shutil.rmtree。'
+            '注释里也不许出现调用的形状 —— 注释里写得出来的下一步就是把 // 删掉');
+
+    final List<String> mentions = postMentions(source);
+    for (final String ln in mentions) {
+      expect(isComment(ln), isTrue,
+          reason: 'POST 进了代码行，不再只是散文里的一句说明：$ln');
+    }
+    // **数目也钉住。** 只要「都是注释行」的话，往里加一句 `// POST` 是绿的 ——
+    // 而那正好是「有人开始在这个模块里琢磨 POST」的第一个动作。
+    //
+    // 这三行是**文件头那两句 + 指路那句的 docstring**，都在说「这一屏为什么
+    // 不发 POST」。白名单按数目记在测试里，不写进源码注释：写进源码的话，
+    // 改源码的人顺手把注释一起改了，这根绊线自己就松了。
+    expect(mentions.length, 3,
+        reason: '$storagePagePath 里提到 POST 的行从 3 行变成了 ${mentions.length} 行。'
+            '真是新写的一句说明，就把这个数一起改掉，并且想清楚为什么要在'
+            '一个只读的模块里第四次提起 POST');
+  });
+
+  test('那把扫源码的尺子真的量得出东西', () {
+    // **正对照。** 上面那条要是因为尺子坏了（读错文件、`contains` 写反、
+    // 循环在空表上转）而绿，红是永远不会来的 —— 而「扫描根本没生效」跟
+    // 「源码真的干净」在报告上长得一模一样。
+    //
+    // 喂给它的是**同一把尺子**，不是另写一个长得像的：另写的那个明天就跟
+    // 上面那条分家了，分家那天两边都是绿的。
+    const String dirty = '''
+class StoragePage {
+  Future<void> sweep() async {
+    await widget.client.post('/api/storage/sweep');
+  }
+}
+''';
+    expect(postCalls(dirty), hasLength(1),
+        reason: '一句明明白白的 POST 调用都量不出来的话，上面那条是空绿的');
+    expect(postCalls(dirty).single, contains('.post('));
+
+    const String commented = '// POST 这一句是有人开始琢磨清盘的第一个动作';
+    expect(postMentions(commented), hasLength(1),
+        reason: '一句 // POST 都量不出来的话，上面那条数目断言拦不住任何人');
+    expect(postCalls(commented), isEmpty,
+        reason: '散文里的 POST 不是调用的形状，两把尺子不许混成一把');
   });
 
   testWidgets('这块屏上除了刷新,没有第二个按得动的按钮', (WidgetTester t) async {

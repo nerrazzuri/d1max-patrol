@@ -166,6 +166,26 @@ Offset rightStick(WidgetTester t) => t.getCenter(find.byType(Joystick).at(1));
 bool enabledLeft(WidgetTester t) =>
     t.widget<Joystick>(find.byType(Joystick).at(0)).enabled;
 
+/// [k] 那一格里此刻写着什么。**那一格不在就是 `null`。**
+///
+/// 裁决 124：屏上会变的槽一律按 key 找，不按那句中文找。按中文找有两种坏法，
+/// 而且两种都不报错 —— 改文案会红在一条跟文案无关的测试上（于是下一个人把
+/// 断言里的字串跟着改一遍，改完它盯的已经是「屏上某处有这句话」了）；把同一
+/// 句话挪进另一个 `Column`、挪进一个点开才看得见的抽屉，`find.text` 照样找得
+/// 到，而现场的人再也看不见它。
+///
+/// **返回 `null` 而不是空串。** 空串会让「这一格压根没画出来」跟「画出来了但
+/// 是空的」长得一模一样 —— 而这一屏上每一格的存在与否本身就是断言的内容
+/// （现场档那行提示、两道闸各自那句话）。
+///
+/// **拿到字之后还要跟常量比一次。** 只断言 `findsOneWidget` 的话，这一格被
+/// 换成另一句话也照样绿；只按中文找的话，它被挪到别处也照样绿。两样都要。
+String? slotText(WidgetTester t, Key k) {
+  final Finder f = find.byKey(k);
+  if (f.evaluate().isEmpty) return null;
+  return t.widget<Text>(f).data;
+}
+
 void main() {
   // 摘掉 `flutter_test` 那个「所有请求都回 400」的 HttpOverrides:这个文件
   // 要证的正是「一拍真的发出去了」。
@@ -527,9 +547,11 @@ void main() {
     await t.tap(find.byKey(TeleopPage.confirmRemoteKey));
     await t.pump();
     await pumpUntil(t, () => rig.modes.isNotEmpty, '那条切档请求');
-    await pumpUntil(t, () => find.textContaining('档没切成').evaluate().isNotEmpty,
-        '切档失败那句话');
-    expect(find.text(onsiteHint), findsOneWidget,
+    await pumpUntil(
+        t,
+        () => (slotText(t, TeleopPage.troubleKey) ?? '').contains('档没切成'),
+        '切档失败那句话（发拍那条路自己那一格里）');
+    expect(slotText(t, TeleopPage.onsiteHintKey), onsiteHint,
         reason: '狗那头还在现场档，屏幕上就不许写着远程');
     await unmount(t, rig);
   });
@@ -541,8 +563,10 @@ void main() {
     /// 这里要证的是另一件事：这条路断了得**说出来**，不是默默地断。
     final Rig rig = await mount(t);
     rig.dog.statusCodes['/api/teleop/heartbeat'] = 500;
-    await pumpUntil(t, () => find.text(beatTroubleHint).evaluate().isNotEmpty,
-        '心跳连着失败之后状态带上那句话');
+    await pumpUntil(
+        t,
+        () => slotText(t, TeleopPage.beatTroubleKey) == beatTroubleHint,
+        '心跳连着失败之后状态带上那句话（心跳自己那一格里）');
     expect(enabledLeft(t), isTrue,
         reason: '心跳抖一下就关掉控制通路是过敏：变灰归视频那道闸和发拍那三次管');
     await unmount(t, rig);
@@ -561,8 +585,10 @@ void main() {
     final TestGesture g = await t.startGesture(leftStick(t));
     await g.moveBy(const Offset(0, -50));
     await t.pump();
-    await pumpUntil(t, () => find.text(beatTroubleHint).evaluate().isNotEmpty,
-        '心跳连着失败之后状态带上那句话（推着杆）');
+    await pumpUntil(
+        t,
+        () => slotText(t, TeleopPage.beatTroubleKey) == beatTroubleHint,
+        '心跳连着失败之后状态带上那句话（推着杆，心跳自己那一格里）');
 
     // 采样：连着好几拍地看，那句话一次都不许不见。
     final int pulsesAtStart = rig.pulses.length;
@@ -571,7 +597,7 @@ void main() {
       await t.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 5)));
       await t.pump(const Duration(milliseconds: 100));
-      if (find.text(beatTroubleHint).evaluate().isEmpty) missing++;
+      if (slotText(t, TeleopPage.beatTroubleKey) != beatTroubleHint) missing++;
     }
     // **先证这一段里发拍真的在跑**，否则「没闪」是空绿的。
     expect(rig.pulses.length - pulsesAtStart, greaterThanOrEqualTo(3),
@@ -601,11 +627,13 @@ void main() {
       await t.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 5)));
       await t.pump(const Duration(milliseconds: 50));
-      expect(find.text(beatTroubleHint), findsNothing,
+      expect(slotText(t, TeleopPage.beatTroubleKey), isNull,
           reason: '狗才收到 ${rig.beats} 次心跳就上屏了：抖一下就喊，'
               '喊多了这条状态带就没人看，真断的时候也白喊');
     }
-    await pumpUntil(t, () => find.text(beatTroubleHint).evaluate().isNotEmpty,
+    await pumpUntil(
+        t,
+        () => slotText(t, TeleopPage.beatTroubleKey) == beatTroubleHint,
         '连着五次之后那句话', step: const Duration(milliseconds: 50));
     expect(rig.beats, greaterThanOrEqualTo(5),
         reason: '不到五次就说话了：门槛没在起作用');
@@ -647,8 +675,8 @@ void main() {
     /// 处置一点都不像。
     final Rig rig = await mount(t, lease: heldByOther());
     // 有画面、没控制权：只该说控制权那一句。
-    expect(find.text(noControlHint), findsOneWidget);
-    expect(find.text(noVideoHint), findsNothing,
+    expect(slotText(t, TeleopPage.noControlKey), noControlHint);
+    expect(slotText(t, TeleopPage.noVideoKey), isNull,
         reason: '画面好好的，还说「没有画面」的话，人会去查相机和网 —— 查的是另一件事');
     expect(find.textContaining('不能操作'), findsNothing,
         reason: '合成一句的话，人会朝错误的方向去排查');
@@ -659,8 +687,8 @@ void main() {
     final Rig rig = await mount(t);
     await pushHealth(
         t, rig.health, <String, bool>{'front': false, 'back': false});
-    expect(find.text(noVideoHint), findsOneWidget);
-    expect(find.text(noControlHint), findsNothing,
+    expect(slotText(t, TeleopPage.noVideoKey), noVideoHint);
+    expect(slotText(t, TeleopPage.noControlKey), isNull,
         reason: '控制权在自己手上，还说「没有控制权」的话人会去抢一份已经拿着的租约');
     expect(find.textContaining('不能操作'), findsNothing);
     await unmount(t, rig);
@@ -782,12 +810,34 @@ void main() {
     await unmount(t, rig);
   });
 
+  testWidgets('「你正在开的是哪一台狗」自己占一格,不是靠找那串名字找到的',
+      (WidgetTester t) async {
+    /// **这一格是防「开错狗」的最后一道视觉防线。** 现场有三台狗的时候，它是
+    /// 屏上唯一能告诉人「你此刻推的是哪一台」的东西 —— Ruling 84 拦着不许把
+    /// 倒计时和按钮挤进它那一行，就是怕它被压成省略号。
+    ///
+    /// 而在 Task 15 之前，这一格**一条测试都没有**：它挂没挂、写的是哪一台、
+    /// 是不是被谁挪走了，全仓无人过问。
+    ///
+    /// 断的是 `Robot.label` 的**原样**（`name（sn）`），不是 `contains('三号')`：
+    /// 只查名字的话，一屏三台狗里挑错了那台 sn 的手机照样绿。
+    final Rig rig = await mount(t);
+    expect(slotText(t, TeleopPage.labelKey), '三号（C40221）',
+        reason: '现场有三台狗的时候，这一格是唯一能告诉人「你正在开哪一台」的东西');
+    expect(
+        t.widget<Text>(find.byKey(TeleopPage.labelKey)).overflow,
+        TextOverflow.ellipsis,
+        reason: '这一格不许换行往下长 —— 带子往下长就盖掉画面顶部，'
+            '而正前方远处那一块恰恰是开狗的人最需要看的');
+    await unmount(t, rig);
+  });
+
   testWidgets('现场档只有一行轻提示', (WidgetTester t) async {
     /// §7.8：现场模式是**轻提示** —— 「请与机器狗保持在同一视线范围内」。
     /// 不是弹框：现场档是默认档，每次进来都弹框的话，它就是那个第三次被
     /// 条件反射点掉的框。
     final Rig rig = await mount(t);
-    expect(find.text(onsiteHint), findsOneWidget);
+    expect(slotText(t, TeleopPage.onsiteHintKey), onsiteHint);
     expect(find.byType(AlertDialog), findsNothing);
     await unmount(t, rig);
   });

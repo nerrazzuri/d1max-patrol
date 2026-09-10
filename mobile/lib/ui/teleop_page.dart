@@ -112,6 +112,50 @@ class TeleopPage extends StatefulWidget {
   static const Key remoteKey = ValueKey<String>('teleop-mode-remote');
   static const Key confirmRemoteKey = ValueKey<String>('teleop-remote-confirm');
 
+  // ---------------------------------------------- 带子上每个会变的槽，一格一个 key
+  //
+  // **裁决 124：屏上会变的槽，一个都不许靠找那句中文找到。**
+  // 这个病在控制权面板上治好过，第 7 卷里又复发了四次，所以这一屏是一次
+  // 过完的，不是「哪条测试要用就补哪一个」。
+  //
+  // 按中文找有两种坏法，而且两种都不报错：
+  //
+  // - **改文案就红**，红在一条跟文案毫无关系的测试上 —— 于是下一个人把断言
+  //   里的字串跟着改一遍，改完它还是绿的，可它此刻盯的是「屏上某处有这句
+  //   话」，不再是「这一格里写着这句话」。
+  // - **换了格子却不红**：同一句话被挪进另一个 `Column`、挪进一个点开才看得
+  //   见的抽屉、甚至挪到面板里去，`find.text` 照样找得到 —— 而现场的人再也
+  //   看不见它了。
+  //
+  // 挂 key 的那一格必须是**那个 `Text` 本身**，不是它外面的 `Padding`：挂在
+  // `Padding` 上的话，测试读不到 `Text.data`，就只能退回去按中文比对。
+
+  /// 「你正在开的是哪一台狗」那一格（[Robot.label]）。
+  ///
+  /// **这是防「开错狗」的最后一道视觉防线**，Ruling 84 拦着不许把别的东西
+  /// 挤进它那一行，就是为了它不被压成省略号。挂上 key，测试才说得出
+  /// 「这一格里写的是这一台」而不是「屏上某处出现过这个名字」。
+  static const Key labelKey = ValueKey<String>('teleop-robot-label');
+
+  /// 现场档那一行轻提示（[onsiteHint]）。**档位切走就该没有这一格。**
+  static const Key onsiteHintKey = ValueKey<String>('teleop-onsite-hint');
+
+  /// 发拍那条路要说的话。见 `_trouble`。
+  static const Key troubleKey = ValueKey<String>('teleop-trouble');
+
+  /// 心跳那条路要说的话（[beatTroubleHint]）。见 `_beatTrouble`。
+  ///
+  /// **跟 [troubleKey] 是两格，不是两种文案。** 合成一格的话，两条路会互相
+  /// 抹，人看到的是一行在闪。
+  static const Key beatTroubleKey = ValueKey<String>('teleop-beat-trouble');
+
+  /// 没有控制权那道闸的话（[noControlHint]）。
+  static const Key noControlKey = ValueKey<String>('teleop-no-control');
+
+  /// 没有画面那道闸的话（[noVideoHint]）。**跟 [noControlKey] 分开**：
+  /// 两道闸的处置一点都不像，合成一句人会朝错误的方向排查。
+  static const Key noVideoKey = ValueKey<String>('teleop-no-video');
+
   /// 这一屏画哪一路。
   ///
   /// 前置那一路是开狗时唯一看得见「正前方有没有东西」的画面 —— 换路子的开关
@@ -605,6 +649,7 @@ class _TeleopPageState extends State<TeleopPage> {
               children: <Widget>[
                 Expanded(
                   child: Text(widget.robot.label,
+                      key: TeleopPage.labelKey,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                           color: Colors.white, fontSize: 15)),
@@ -639,12 +684,14 @@ class _TeleopPageState extends State<TeleopPage> {
               const Padding(
                 padding: EdgeInsets.only(top: 4),
                 child: Text(onsiteHint,
+                    key: TeleopPage.onsiteHintKey,
                     style: TextStyle(color: Colors.white70, fontSize: 13)),
               ),
             if (_trouble.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(_trouble,
+                    key: TeleopPage.troubleKey,
                     style: const TextStyle(
                         color: Color(0xFFFFB4A9), fontSize: 13)),
               ),
@@ -654,6 +701,7 @@ class _TeleopPageState extends State<TeleopPage> {
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(_beatTrouble,
+                    key: TeleopPage.beatTroubleKey,
                     style: const TextStyle(
                         color: Color(0xFFFFB4A9), fontSize: 13)),
               ),
@@ -663,12 +711,14 @@ class _TeleopPageState extends State<TeleopPage> {
               const Padding(
                 padding: EdgeInsets.only(top: 4),
                 child: Text(noControlHint,
+                    key: TeleopPage.noControlKey,
                     style: TextStyle(color: Color(0xFFFFB4A9), fontSize: 13)),
               ),
             if (!_live)
               const Padding(
                 padding: EdgeInsets.only(top: 4),
                 child: Text(noVideoHint,
+                    key: TeleopPage.noVideoKey,
                     style: TextStyle(color: Color(0xFFFFB4A9), fontSize: 13)),
               ),
           ],

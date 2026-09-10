@@ -236,6 +236,32 @@ class CountingClient implements PatrolClient {
   Future<WatchSummary> watchSummary() async => throw UnimplementedError();
 }
 
+/// 把这一格挂进一个**真的能推页面**的壳里，并把那个 `Navigator` 交出去。
+///
+/// **不许拿 `TickerMode(enabled: false)` 手工包一层来冒充「被盖住」。**
+/// 手工包的那份测的是「我自己包的那层管不管用」，而挂账 64 问的是
+/// 「`Navigator` 推一个全屏页这条真路上管不管用」—— 哪天 `Overlay` 换了别的
+/// 办法标记台下那几层（今天是 `overlay.dart` 里给第一个不透明 entry 之下的
+/// 每一层挂 `TickerMode(enabled: false)`），手工包的那份照样绿，而现场坏了。
+Widget underNavigator(GlobalKey<NavigatorState> nav, Widget child) =>
+    MaterialApp(navigatorKey: nav, home: Scaffold(body: child));
+
+/// 推一个不透明的全屏页上去，并且**等那段转场动画走完**。
+///
+/// 动画没走完之前底下那一层还在台上：`TransitionRoute._handleStatusChanged`
+/// 要等 `AnimationStatus.completed` 才把 `overlayEntries.first.opaque` 设回
+/// `opaque`（转场途中它是 `false`，好让底下那层还画得出来）。不等的话，
+/// 断言看到的是「还没盖住」的那一瞬间 —— 那种红指的是这条测试写错了，
+/// 不是被测代码。
+Future<void> pushFullScreen(
+    WidgetTester t, GlobalKey<NavigatorState> nav) async {
+  // 这个 future 要等到页面被退掉才完成，不能 await。
+  unawaited(nav.currentState!.push(MaterialPageRoute<void>(
+      builder: (BuildContext _) => const Scaffold(body: Text('盖在上面的那一页')))));
+  await t.pump();
+  await t.pump(const Duration(seconds: 1));
+}
+
 void main() {
   // 摘掉 `flutter_test` 那个「所有请求都回 400」的 HttpOverrides:这个文件
   // 要证的正是「真的发了一次 GET」。助手在 `support/pump.dart`。
@@ -574,6 +600,76 @@ void main() {
 
     unawaited(first.close());
     await teardown(t, second, dog.stop);
+  });
+
+  // ------------------------------------------- 挂账 64：被盖住就该让出位子
+  //
+  // **`Navigator` 默认 `maintainState: true`** —— 推一个全屏页上去，底下这个
+  // widget 不 dispose，State 原样留着，那条 MJPEG 连接也就原样连着。而狗那头
+  // `MAX_VIEWERS`（`video.py`，一路 6 个）的名额是**按连接**算的，不是按
+  // 「谁真的在看」算的。现场的样子：连开两个页面就说「看的人满了」，而占着
+  // 位子的那几路谁也没在看。
+  //
+  // **两条断言守的都是 `dog.connections`（狗那头真实的连接数），不是 widget
+  // 树里有没有那个对象** —— 挂账 64 的病恰恰就是「对象在、位子占着」，守对象
+  // 等于没守。
+  //
+  // **第二条比第一条重要。** 只做「盖住就断」很容易做成「断了就再也不回来」：
+  // 那时候人从全屏页退回来看见的是一块「正在接画面」的板子，而且再也不会变 ——
+  // 健康那头压根不会翻面（狗一直在线），没有人会来重开这条流。
+
+  testWidgets('页面被盖住之后不再占着看画面的位子', (WidgetTester t) async {
+    final FakeVideoDog dog = FakeVideoDog(feedForever: true);
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    final GlobalKey<NavigatorState> nav = GlobalKey<NavigatorState>();
+    await t.pumpWidget(underNavigator(
+        nav,
+        LiveVideo(
+            baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    await pumpUntil(t,
+        () => find.byKey(LiveVideo.frameKey).evaluate().isNotEmpty, '画面出来');
+    expect(dog.connections, 1, reason: '连接都没连上的话，下面数「让出来了」是空绿的');
+
+    await pushFullScreen(t, nav);
+    await pumpUntil(t, () => dog.connections == 0, '盖住之后那条连接被收掉');
+    expect(dog.connections, 0,
+        reason: '盖住了还连着就是在白占 6 个观看名额之一：'
+            '连开两个页面就说「看的人满了」');
+
+    await teardown(t, ctl, dog.stop);
+  });
+
+  testWidgets('盖住的页面退掉之后画面自己回来', (WidgetTester t) async {
+    final FakeVideoDog dog = FakeVideoDog(feedForever: true);
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    final GlobalKey<NavigatorState> nav = GlobalKey<NavigatorState>();
+    await t.pumpWidget(underNavigator(
+        nav,
+        LiveVideo(
+            baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    await pumpUntil(t,
+        () => find.byKey(LiveVideo.frameKey).evaluate().isNotEmpty, '画面出来');
+    await pushFullScreen(t, nav);
+    await pumpUntil(t, () => dog.connections == 0, '盖住之后那条连接被收掉');
+    expect(dog.gets, 1, reason: '盖住这一路上不该有第二次 GET');
+
+    nav.currentState!.pop();
+    await t.pump();
+    await t.pump(const Duration(seconds: 1)); // 退页面那段动画走完
+
+    await pumpUntil(t, () => dog.gets >= 2, '退回来之后重新发的那次 GET');
+    await pumpUntil(t,
+        () => find.byKey(LiveVideo.frameKey).evaluate().isNotEmpty, '画面自己回来');
+    expect(find.byKey(LiveVideo.frameKey), findsOneWidget);
+    expect(dog.connections, 1, reason: '位子该重新占回来一个 —— 人正看着呢');
+
+    await teardown(t, ctl, dog.stop);
   });
 
   testWidgets('一个字节都不来的时候三秒就断开重来，不是先烧 8 MiB 流量',
