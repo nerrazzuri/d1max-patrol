@@ -252,7 +252,8 @@ def test_超时的边界正好在这个常量上():
     """纯判定,不碰服务。``SUSPEND_STALE_MS`` 那一刻还不算超时,再多一毫秒才算。"""
     起 = 1_757_000_000_000
     点 = SuspendPoint(waypoint_index=0, waypoint_name="P1_transformer",
-                      pose=None, reason="人要接管", at_ms=起)
+                      pose=None, reason="人要接管", at_ms=起,
+                      from_state=RunState.RUNNING)
     assert not _挂起超时了(点, now_ms=起)
     assert not _挂起超时了(点, now_ms=起 + SUSPEND_STALE_MS)
     assert _挂起超时了(点, now_ms=起 + SUSPEND_STALE_MS + 1)
@@ -270,7 +271,8 @@ class 假引擎:
 
 def _快照(*, 开跑: int, 让开腿于: int, 挂着: bool = True) -> RunSnapshot:
     点 = SuspendPoint(waypoint_index=0, waypoint_name="P1_transformer",
-                      pose=None, reason="人要接管", at_ms=让开腿于)
+                      pose=None, reason="人要接管", at_ms=让开腿于,
+                      from_state=RunState.RUNNING)
     return RunSnapshot(
         state=RunState.SUSPENDED if 挂着 else RunState.RUNNING,
         mission="巡检一号", waypoint_index=0,

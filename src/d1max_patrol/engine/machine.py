@@ -109,24 +109,27 @@ class RunState(str, Enum):
 #: 跑完了的状态。``wait_done`` 等的就是这两个。
 FINAL_STATES = frozenset({RunState.DONE, RunState.ABORTED})
 
-#: ``suspend()`` 只在"继续之后 ``_RetryWaypoint`` 有处可去"的状态下受理(§5.10)。
+#: ``suspend()`` 只在"继续之后引擎知道该往哪走"的状态下受理(§5.10)。
 #:
 #: ``PAUSED`` 不在这张表里 —— 它没有"没处去"这个问题。``_pause_until_resumed``
 #: 自己那条 while 现在会接住 ``suspend`` 命令,转手调
 #: ``_suspend_until_resumed``,``_RetryWaypoint`` 是从**那一层**抛出来的,走的
 #: 跟平常挂起完全一样的路径,不会漏给别处的兜底。
 #:
-#: ``LOCALIZING`` 期间挂起再继续,``_RetryWaypoint`` 会从 ``_await_localized``
-#: 直接漏给 ``_run`` 的兜底,按"引擎内部异常"整趟中止。``RETURNING`` 期间同样
-#: 挂起再继续,状态先闪成 ``RUNNING``,``_RetryWaypoint`` 会被 ``_go_home``
-#: 接住按"返航失败"中止。两条都是"人接管完点继续,整趟任务却没了"——现场
-#: 最难归因的那种失败。
+#: **表里现在只剩 ``LOCALIZING`` 一个。** 它期间挂起再继续,``_RetryWaypoint``
+#: 会从 ``_await_localized`` 直接漏给 ``_run`` 的兜底,按"引擎内部异常"整趟
+#: 中止 —— "人接管完点继续,整趟任务却没了",现场最难归因的那种失败。而且
+#: 重定位期间人接管本来也没什么意义:狗还不知道自己在哪儿,牵到哪儿都一样。
 #:
-#: 拒绝好过悄悄支持:真要让这两个状态也能挂起,是引擎行为的扩展(得先把
-#: 这两条路径也走通),不是这里能顺手做的事。
+#: ``RETURNING`` 原来跟它并排在这儿(挂账 56),2026-09-10 移走了:走廊被堵、
+#: 地上有水,人在返航路上要把狗牵开是个真需求。移走的前提是那条路真接得住
+#: 继续 —— 见 ``_ResumeReturnHome``:人接管完是从狗**现在**停的地方重新规划
+#: 回家,不是接着跑发起返航时那一次 ``return_home``。
+#:
+#: 拒绝好过悄悄支持:真要让剩下这个状态也能挂起,是引擎行为的扩展(得先把
+#: 那条路径也走通),不是这里能顺手做的事。
 _SUSPEND_UNSAFE_STATES: dict[RunState, str] = {
     RunState.LOCALIZING: "正在重定位,现在不能让开腿",
-    RunState.RETURNING: "正在返航,现在不能让开腿",
 }
 
 
@@ -166,6 +169,19 @@ class SuspendPoint:
     pose: Pose | None
     reason: str
     at_ms: int
+    #: 进挂起之前引擎在哪个状态。**"人接管完之后该往哪走"只认这一个字段。**
+    #:
+    #: 从跑点位挂起的,继续时重发当前点;从返航路上挂起的,继续时得重新规划
+    #: 回家(任务 13)。这件事必须显式记下来:``reason`` 是人打的一句话,拿
+    #: 它去猜状态就是把控制流建在自由文本上 —— 现场随手写一句"返航路上有
+    #: 水",引擎就会走上完全不同的一支。
+    #:
+    #: **不上线**(不进 ``to_wire``):它是引擎决定下一步的内部依据,不是给
+    #: 人看的信息。上线意味着同时改协议和手机端的解析,那是另一件事。
+    #:
+    #: **没有默认值**:给一个"多半是对的"默认值,等于让漏传的调用方悄悄走上
+    #: 重发点位那一支,而没有任何测试会红。
+    from_state: RunState
 
     def to_wire(self) -> dict[str, Any]:
         return {"waypoint_index": self.waypoint_index,
@@ -235,6 +251,17 @@ class _FailWaypoint(Exception):
 
 class _RetryWaypoint(Exception):
     """暂停后继续 —— 重发当前点,但**不算**一次重试。"""
+
+
+class _ResumeReturnHome(Exception):
+    """返航途中被人接管,现在人还回来了 —— **从狗现在停的地方重新规划回家**。
+
+    自成一个类型,两条都不能复用:
+
+    * ``_RetryWaypoint`` 的意思是"重发当前点位",而返航路上没有当前点位;
+    * ``_ReturnHome`` 的意思是"电量到线,转返航",``_go_home`` 的 except 会把
+      它当成返航失败整趟中止 —— 恰恰是这个任务要消掉的那个结局。
+    """
 
 
 class _BusyCheckFailed(Exception):
@@ -574,19 +601,37 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         await self._transition(RunState.ABORTED, reason)
 
     async def _go_home(self, reason: str) -> None:
+        """回家。**是一个循环,不是一次性的**(任务 13)。
+
+        循环的唯一理由是"返航途中被人接管过":人接管完点继续,狗已经不在发起
+        返航时那个位置了,得重新走一遍这个循环 —— 重新停、重新等 StandBy、
+        重新 ``return_home``。接着等原来那次的结果是不行的:那一次是从一个
+        没人知道的位置算出来的。
+        """
         await self._transition(RunState.RETURNING, reason)
-        try:
-            await self._stop_nav_quietly()
-            # 返航也是一次 start_nav,一样只在 StandBy 下受理。
-            await self._await_nav_standby(self._clock() + NAV_STANDBY_TIMEOUT_S)
-            await self._nav.return_home()
-            await self._wait_nav_terminal(self._clock() + RETURN_TIMEOUT_S)
-        except _AbortRun as exc:
-            await self._do_abort(exc.reason)
-            return
-        except (NavBackendError, _FailWaypoint, _ReturnHome, _RetryWaypoint) as exc:
-            await self._do_abort(f"返航失败: {exc}")
-            return
+        while True:
+            try:
+                await self._stop_nav_quietly()
+                # 返航也是一次 start_nav,一样只在 StandBy 下受理。
+                await self._await_nav_standby(self._clock() + NAV_STANDBY_TIMEOUT_S)
+                await self._nav.return_home()
+                # 超时预算每一圈重算:人接管花了多久,不该记在这一趟返航头上
+                # (跟 ``_do_waypoint`` 里"到点超时按这一次尝试算"同一个道理)。
+                await self._wait_nav_terminal(self._clock() + RETURN_TIMEOUT_S)
+            except _ResumeReturnHome:
+                # 挂起期间状态一直是 SUSPENDED,这里把它翻回 RETURNING ——
+                # **不经过 RUNNING**:闪一下 RUNNING 会让订阅方以为任务又在跑
+                # 点位了,而这条狗从头到尾只是在回家的路上。
+                await self._transition(RunState.RETURNING, "人工接管结束,重新规划返航")
+                continue
+            except _AbortRun as exc:
+                await self._do_abort(exc.reason)
+                return
+            except (NavBackendError, _FailWaypoint, _ReturnHome,
+                    _RetryWaypoint) as exc:
+                await self._do_abort(f"返航失败: {exc}")
+                return
+            break
         await self._transition(RunState.DONE, reason)
 
     async def _finish(self) -> None:
@@ -936,15 +981,22 @@ class MissionEngine(EventEmitter[RunSnapshot]):
 
         回来重发当前点,是因为人可能已经把狗开到别处去了 —— 接着往下走等于
         从一个没人知道的位置出发。
+
+        **"重发当前点"只是跑点位那一支的做法。** 从返航路上挂起的,回来要重新
+        规划回家(任务 13),这两支靠 ``SuspendPoint.from_state`` 分开 —— 显式
+        字段,不是去解析 ``reason`` 里那句人话。
         """
         live = self._live
         assert live is not None
         wps = live.mission.waypoints
         idx = min(live.index, len(wps) - 1)
+        # 在翻进 SUSPENDED **之前**抄下来:翻完了就只剩 SUSPENDED,再也问不出
+        # 是从哪儿进来的。
+        from_state = self._state
         live.suspended = SuspendPoint(
             waypoint_index=live.index, waypoint_name=wps[idx].name,
             pose=live.last_pose, reason=reason,
-            at_ms=int(time.time() * 1000))
+            at_ms=int(time.time() * 1000), from_state=from_state)
         await self._transition(RunState.SUSPENDED, reason)
         await self._stop_nav_quietly()
         try:
@@ -1011,6 +1063,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             # 命令队列)就会剩下一份挂起快照,快照上写着"正在被接管"但其实
             # 这一趟已经没了。
             live.suspended = None
+        if from_state is RunState.RETURNING:
+            # 返航路上接管的那一支:交给 ``_go_home`` 重新规划回家,不在这儿
+            # 翻状态 —— 它自己那一圈会把状态翻回 RETURNING。
+            raise _ResumeReturnHome
         await self._transition(RunState.RUNNING, "人工接管结束")
         raise _RetryWaypoint
 

@@ -21,7 +21,7 @@ from d1max_patrol.engine.machine import MissionEngine, RunState
 from d1max_patrol.engine.mission import Policy
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
-from .conftest import _HOME, NEVER, make_mission, until
+from .conftest import _HOME, NEVER, make_mission, until, 原点
 
 #: ``nav``/``device``/``media``/``clock``/``make_engine`` 这几个夹具,连同
 #: ``NavStub``/``DeviceStub``/``MediaStub``/``Clock`` 那套假后端,都长在
@@ -64,6 +64,65 @@ async def 跑起来的引擎(make_engine, nav):
     engine = make_engine()
     await engine.start(make_mission(), home=_HOME)
     await until(lambda: nav.goto_calls)
+    yield engine
+    if engine.running:
+        await engine.abort("测试收尾")
+        with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+            await engine.wait_done(timeout_s=5.0)
+    await engine.aclose()
+
+
+@pytest.fixture
+async def 重定位中的引擎(make_engine, nav):
+    """卡在 ``LOCALIZING`` 里等定位收敛、而且再也收敛不回来的引擎。
+
+    起飞检查那一刻定位是好的(preflight 自己也查一遍 ``loc_status``,查到的
+    得是收敛的),进了 ``LOCALIZING`` 就掉了 —— 跟 test_machine.py 的
+    ``test_定位没收敛就等等不到就中止`` 是同一个办法。三条用例(S1、N1、
+    任务 13 的"仍然拒绝")原来各抄了一遍这段,现在合到这儿。
+    """
+    calls = {"n": 0}
+
+    async def loc_status() -> LocStatus:
+        calls["n"] += 1
+        return LocStatus.CONTINUOUS_LOC if calls["n"] == 1 else LocStatus.LOC_LOST
+
+    nav.loc_status = loc_status
+    engine = make_engine()
+    await engine.start(make_mission(), home=_HOME)
+    await engine.wait_state(RunState.LOCALIZING)
+    yield engine
+    if engine.running:
+        await engine.abort("测试收尾")
+        with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+            await engine.wait_done(timeout_s=5.0)
+    await engine.aclose()
+
+
+@pytest.fixture
+async def 返航中的引擎(make_engine, nav, device):
+    """已经转进 ``RETURNING``、``return_home`` 已经下发、卡在"等这段返航有
+    结果"上的引擎(任务 13)。
+
+    比 ``跑起来的引擎`` 多走一步:先让第一个点的 ``goto`` 发出去
+    (``on_goto = NEVER``,狗停在半路),再喂一条低电量事件把它推进返航。
+
+    **``on_return_home = NEVER`` 是关键。** 默认那份会立刻推一条 ``Succeed``
+    回来,引擎一拍就跑完 DONE,根本没有「返航途中」这段时间可以去 suspend。
+    最后等 ``home_calls`` 涨,是为了确保停在 ``_wait_nav_terminal`` 而不是
+    还没走到 ``return_home`` —— 这两处都在 ``RETURNING`` 状态里,只看状态
+    分不出来。
+    """
+    nav.on_goto = NEVER
+    nav.on_return_home = NEVER
+    engine = make_engine()
+    await engine.start(
+        make_mission(policy=Policy(battery_abort_pct=15.0, battery_return_pct=25.0)),
+        home=_HOME)
+    await until(lambda: nav.goto_calls)
+    device.emit(BatteryEvent(percent=20.0))          # 返航线 25,中止线 15
+    await engine.wait_state(RunState.RETURNING)
+    await until(lambda: nav.home_calls)
     yield engine
     if engine.running:
         await engine.abort("测试收尾")
@@ -307,64 +366,23 @@ async def _等到拒绝(engine: MissionEngine, timeout_s: float = 2.0) -> list[d
         await asyncio.sleep(0)
 
 
-async def test_定位中不能挂起(make_engine, nav):
+async def test_定位中不能挂起(重定位中的引擎):
     """S1:``LOCALIZING`` 期间没有一条安全路径能接住 resume 之后的
     ``_RetryWaypoint``(见 ``_SUSPEND_UNSAFE_STATES`` 的注释)—— 它会一路
     逃到 ``_run`` 的兜底,把整趟按"引擎内部异常"中止。所以 suspend 必须在
     这里就诚实拒绝,不是悄悄接受、等 resume 那一刻才炸。
     """
-    # 起飞检查那一刻定位是好的(preflight 自己也查一遍 loc_status,查到的
-    # 得是收敛的),进了 LOCALIZING 就掉了,而且再没收敛回来 —— 跟
-    # test_machine.py 的 test_定位没收敛就等等不到就中止 是同一个办法。
-    calls = {"n": 0}
-
-    async def loc_status() -> LocStatus:
-        calls["n"] += 1
-        return LocStatus.CONTINUOUS_LOC if calls["n"] == 1 else LocStatus.LOC_LOST
-
-    nav.loc_status = loc_status
-    engine = make_engine()
-    await engine.start(make_mission(), home=_HOME)
-    await engine.wait_state(RunState.LOCALIZING)
+    engine = 重定位中的引擎
     await engine.suspend("门口有箱子")
     拒绝 = await _等到拒绝(engine)
     assert engine.state is RunState.LOCALIZING
     assert 拒绝[-1]["reason"] == "正在重定位,现在不能让开腿"
-    await engine.abort("测试收尾")
-    await engine.wait_done(timeout_s=5.0)
-    await engine.aclose()
-
-
-async def test_返航中不能挂起(make_engine, nav, device):
-    """S2:``RETURNING`` 期间挂起,继续之后状态先闪回 RUNNING,
-    ``_RetryWaypoint`` 会被 ``_go_home`` 的 except 接住按"返航失败"中止
-    (见 ``_SUSPEND_UNSAFE_STATES`` 的注释)。同样是诚实拒绝,不是等
-    resume 那一刻才炸。
-    """
-    nav.on_goto = NEVER
-    engine = make_engine()
-    await engine.start(
-        make_mission(policy=Policy(battery_abort_pct=15.0, battery_return_pct=25.0)),
-        home=_HOME)
-    await until(lambda: nav.goto_calls)
-    nav.nav = NavStatus.ACTIVE           # 现在才卡住 _await_nav_standby,
-                                          # 不能提前设 —— 那样第一个点的
-                                          # goto 自己都发不出去
-    device.emit(BatteryEvent(percent=20.0))          # 返航线 25,中止线 15
-    await engine.wait_state(RunState.RETURNING)
-    await engine.suspend("门口有箱子")
-    拒绝 = await _等到拒绝(engine)
-    assert engine.state is RunState.RETURNING
-    assert 拒绝[-1]["reason"] == "正在返航,现在不能让开腿"
-    await engine.abort("测试收尾")
-    await engine.wait_done(timeout_s=5.0)
-    await engine.aclose()
 
 
 # ---------------------------------------------------------------- 评审第二轮 N1/N2/PAUSED
 
 
-async def test_挂起被拒也广播出去(make_engine, nav):
+async def test_挂起被拒也广播出去(重定位中的引擎):
     """N1:``suspend_refused`` 原来只走 ``_note``,没走 ``_publish`` ——
     落进了 events.jsonl,却没广播给订阅方。旁边 ``resume_refused``
     (``_suspend_until_resumed`` 里)两步都做了。只落档不广播等于没说出口:
@@ -375,22 +393,10 @@ async def test_挂起被拒也广播出去(make_engine, nav):
     钉过事件和状态没变,这里改钉 ``eng.snapshot.reason``:它只在
     ``_publish`` 被调用之后才会变,单靠 ``_note`` 动不了它。
     """
-    calls = {"n": 0}
-
-    async def loc_status() -> LocStatus:
-        calls["n"] += 1
-        return LocStatus.CONTINUOUS_LOC if calls["n"] == 1 else LocStatus.LOC_LOST
-
-    nav.loc_status = loc_status
-    engine = make_engine()
-    await engine.start(make_mission(), home=_HOME)
-    await engine.wait_state(RunState.LOCALIZING)
+    engine = 重定位中的引擎
     await engine.suspend("门口有箱子")
     await _等到拒绝(engine)
     assert engine.snapshot.reason == "正在重定位,现在不能让开腿"
-    await engine.abort("测试收尾")
-    await engine.wait_done(timeout_s=5.0)
-    await engine.aclose()
 
 
 async def test_暂停时喊挂起不再产生拒绝事件(跑起来的引擎):
@@ -563,3 +569,102 @@ async def test_继续之后规划不出路的话跟不在地图里说的不一�
     assert "到不了下一个点" in engine.snapshot.reason
     assert "不在地图里" not in engine.snapshot.reason
     await engine.aclose()
+
+
+# ------------------------------------------------------- 任务 13:返航途中也能让开腿
+#
+# 挂账 56。第 7 卷把 RETURNING 放进 _SUSPEND_UNSAFE_STATES「诚实地拒绝」,当时
+# 是对的 —— 一条说得出口的拒绝,比一趟悄悄中止的任务好太多。但产品上,返航
+# 路上人想把狗牵开是个真需求(走廊被堵、地上有水),不做的代价是现场遇到这
+# 一幕只能中止整趟重跑。
+#
+# 放行的前提是挂账 56 自己写的那条真解:接管完点继续,必须**从狗现在停的地
+# 方重新规划回家**,不是接着跑发起返航时那一次 return_home。下面第二条钉的
+# 就是这一句 —— 没有它,这个任务等于没做。
+#
+# LOCALIZING 不在本任务范围内,仍然拒绝(见最后一条)。
+
+
+async def test_返航途中能让开腿(返航中的引擎):
+    """这一条是 ``test_返航中不能挂起`` 的原地翻面:同样的场景、相反的结论。
+
+    翻面的依据是产品决策,不是测试迁就实现 —— 拒绝那一版的理由("继续之后
+    ``_RetryWaypoint`` 没人接")在下面第二条把接的人补上之后就不成立了。
+    """
+    eng = 返航中的引擎
+    await eng.suspend("走廊被堵了")
+    await eng.wait_state(RunState.SUSPENDED)
+    assert eng.state is RunState.SUSPENDED
+    assert eng.snapshot.suspended_at is not None
+
+
+async def test_返航中接管完继续_重新规划回家而不是接着走老路(返航中的引擎, nav):
+    """挂账 56 的真解。接着走老路 = 从一个没人知道的位置照原计划走。
+
+    人接管的那几分钟里狗已经被开到别处了,发起返航时那一次 ``return_home``
+    是从**当时**那个位置算出来的。继续时若只是接着等它的结果,狗要么原地不
+    动等一个永远不来的终态,要么按一条从别处起算的路走 —— 两种都是现场最难
+    归因的那类失败。
+
+    **等的是"下发流水又长出东西来",不是 ``wait_state(RETURNING)``。**
+    ``wait_state`` 等的是"出现过",而 ``RETURNING`` 在挂起之前就已经进过
+    ``_seen``,对它调用会立刻返回,根本没让事件循环把 ``resume`` 处理掉 ——
+    那样这句断言会在流水还空着的时候就跑(同样的坑见前面
+    ``test_继续之后挂起快照清掉`` 的说明)。
+    """
+    eng = 返航中的引擎
+    await eng.suspend("走廊被堵了")
+    await eng.wait_state(RunState.SUSPENDED)
+    nav.清空下发记录()
+    nav.emit_loc(LocStatus.CONTINUOUS_LOC)           # 人把狗牵回来了,还在图里
+
+    await eng.resume()
+    await until(lambda: nav.下发过的目标点)
+    assert nav.下发过的目标点[-1] == 原点             # 重新发了一次,不是续跑
+    assert eng.state is RunState.RETURNING            # 也没有中途闪成 RUNNING
+
+
+async def test_返航中接管完狗不在地图里_照样报错(返航中的引擎, nav):
+    """人拍的板 2 对返航这条路同样成立:不在地图里就直接报错,不猜、不试着
+    走、不静默中止。报错不是中止 —— 引擎留在 SUSPENDED,人还能把狗牵回图里
+    再点一次继续。
+    """
+    eng = 返航中的引擎
+    await eng.suspend("走廊被堵了")
+    await eng.wait_state(RunState.SUSPENDED)
+    nav.emit_loc(LocStatus.LOC_LOST)
+    await until(lambda: eng.loc_lost)
+
+    await eng.resume()
+    await until(lambda: "不在地图里" in eng.snapshot.reason)
+    assert eng.state is RunState.SUSPENDED
+
+
+async def test_返航中接管完还能直接中止(返航中的引擎):
+    """挂起是可以收场的,返航这条路也不例外 —— 人接管到一半发现这趟没法收,
+    得能直接中止,而不是被卡在一个只能"继续"的状态里。
+
+    钉这一条是因为 ``_go_home`` 现在多了一条 ``_ResumeReturnHome`` 的重来路
+    径:重来的那一支要是把 ``_AbortRun`` 一起吞了,人就再也停不下这条狗,而
+    上面三条测试全都照样绿。
+    """
+    eng = 返航中的引擎
+    await eng.suspend("走廊被堵了")
+    await eng.wait_state(RunState.SUSPENDED)
+    await eng.abort("现场不具备条件")
+    assert await eng.wait_done(timeout_s=5.0) is RunState.ABORTED
+
+
+async def test_重定位期间仍然拒绝(重定位中的引擎):
+    """``LOCALIZING`` 不在本任务范围内 —— 它是另一个病:``_RetryWaypoint``
+    会从 ``_await_localized`` 漏给 ``_run`` 的兜底,被当成引擎内部错误直接
+    中止。而且重定位期间人接管本来也没什么意义,狗还不知道自己在哪儿。
+
+    跟前面 S1 那条不重复:S1 钉的是归档里那条 ``suspend_refused`` 事件,
+    这里钉的是**移走 RETURNING 之后这张表没有被顺手清空** —— 断的是
+    ``snapshot.reason`` 上那句话还在。
+    """
+    eng = 重定位中的引擎
+    await eng.suspend("试试")
+    await until(lambda: "正在重定位" in eng.snapshot.reason)
+    assert eng.state is RunState.LOCALIZING

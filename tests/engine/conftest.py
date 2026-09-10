@@ -125,6 +125,12 @@ _HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
 ARRIVED = [NavStatusEvent(NavStatus.SUCCEED)]
 NEVER = []
 
+#: 下发流水里代表"回家"的那一笔。``return_home()`` 接口上就没有目标位姿这个
+#: 参数(见 ``backends/base.py``),用一个哨兵占位,好让"最后一次下发的是回
+#: 家"和"最后一次下发的是某个点位"能在同一条记录上比 —— 任务 13 要断的正是
+#: 「人接管完之后又重新发了一次回家」,分成两条计数就比不出"最后一次是谁"。
+原点 = "原点"
+
 
 class NavStub(EventEmitter[Event]):
     """假导航。``on_goto`` 决定每次下发之后推什么事件回来。
@@ -148,6 +154,17 @@ class NavStub(EventEmitter[Event]):
         self.hold_after_goto = 0
         #: 还剩几次问询回终态。归零之前 ``goto`` 会像真设备那样直接拒绝。
         self.terminal_holds = 0
+        #: ``return_home()`` 之后推什么事件回来。跟 ``on_goto`` 一个道理:
+        #: 默认那份立刻推一条 ``Succeed``,引擎一拍就跑完 DONE,根本没有
+        #: 「返航途中」这段时间可以去 suspend。
+        self.on_return_home: list[Event] = list(ARRIVED)
+        #: 下发过的目标点。``goto`` 记位姿,``return_home`` 记 ``原点``,
+        #: **两者同一条流水**——只有这样才问得出"最后一次下发的是什么"。
+        #: 跟 ``goto_calls`` 并存而不是取代它:``goto_calls`` 是"这一趟一共
+        #: 发过几次点位"的累计量,好些既有用例按它的长度断言;这条流水是可以
+        #: 被 ``清空下发记录()`` 归零的窗口,两个问题不一样,合成一个就会互相
+        #: 拆台。
+        self.下发过的目标点: list[Pose | str] = []
 
     async def nav_status(self) -> NavStatus:
         if self.terminal_holds > 0:
@@ -169,10 +186,20 @@ class NavStub(EventEmitter[Event]):
         self.loc = status
         self.emit(LocStatusEvent(status))
 
+    def 清空下发记录(self) -> None:
+        """把下发流水归零,开一个新窗口。**不动 ``goto_calls``**(理由见字段)。
+
+        断"人接管完之后**又**发了一次回家"需要一个干净的起点:不清的话,
+        挂起之前那一次 ``return_home`` 就已经躺在流水末尾了,``[-1] == 原点``
+        在引擎什么都没做的情况下也成立 —— 那是一句恒真的空话。
+        """
+        self.下发过的目标点.clear()
+
     async def goto(self, pose: Pose) -> None:
         if self.terminal_holds > 0:
             raise NavBackendError("导航只能在 StandBy 下启动,当前 Succeed")
         self.goto_calls.append(pose)
+        self.下发过的目标点.append(pose)
         for event in self.on_goto:
             self.emit(event)
         self.terminal_holds = self.hold_after_goto
@@ -187,7 +214,9 @@ class NavStub(EventEmitter[Event]):
 
     async def return_home(self) -> None:
         self.home_calls += 1
-        self.emit(NavStatusEvent(NavStatus.SUCCEED))
+        self.下发过的目标点.append(原点)
+        for event in self.on_return_home:
+            self.emit(event)
 
 
 class DeviceStub(EventEmitter[DeviceEvent]):
