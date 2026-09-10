@@ -19,6 +19,7 @@ from urllib.parse import quote
 import pytest
 
 from d1max_patrol.app.server import (
+    _LEASE_WATCH_PERIOD_S,
     SUSPEND_STALE_MS,
     AppContext,
     AppServer,
@@ -41,6 +42,17 @@ TICK = 0.02
 #: 的实现,会在 ``超时秒 / 2`` 那一步就把手松开,而那一步断的正是「还没到点,
 #: 手必须还在」。两个数要是相等,那一刀砍下去测试照样绿。
 超时秒 = 2.0
+
+#: 「等闸门醒几拍」的观察窗口。**按 ``_LEASE_WATCH_PERIOD_S`` 的倍数写,一个
+#: 写死的秒数都不许有。**
+#:
+#: 这一组原来写的是 ``最多等=0.5``,正好等于闸门周期本身 —— 窗口跟被观察者
+#: 同长还踩着边界,一个"下一拍才真放行"的实现能整个溜过去。改成写死的 ``3.0``
+#: 只是把病换了个数字:哪天有人把巡查周期调到 1.0 秒,3 拍就要 3.0 秒,这几条
+#: 当场开始 flake,而且是「第一次红被当成 flake 去调窗口」那一类。
+#:
+#: 6 倍 = 3 拍的两倍余量。**倍数在这儿只写一次**,常量一改所有窗口跟着走。
+观察窗口 = _LEASE_WATCH_PERIOD_S * 6
 
 
 class 跟着墙走的钟:
@@ -79,7 +91,7 @@ class 假秒表:
         self.t += s
 
 
-def 等到(条件, *, 最多等: float = 3.0) -> bool:
+def 等到(条件, *, 最多等: float = 观察窗口) -> bool:
     """轮到条件成立为止,**有超时上界**。
 
     等的是真的后台协程(跑在桥那根线程上),没有可注入的钟能拨快它 ——
@@ -221,8 +233,9 @@ def test_挂起超时只报警不自己动狗(跑起来的服务, 钟):
     # 下一轮才处理的异步命令,实际放行落在报警后 0.5~1.0 秒 —— 这条断言有
     # 相当概率仍然绿,而且是**只在慢机器上偶尔红**的那一种。比恒绿更糟:
     # 第一次红会被当成 flake 去调窗口。跟 ``test_一次挂起只报一条`` 统一。
+    # 窗口本身按周期的倍数写,不写死秒数 —— 见 :data:`观察窗口`。
     起始拍 = srv.hub._lease_ticks
-    assert 等到(lambda: srv.hub._lease_ticks >= 起始拍 + 3, 最多等=3.0), \
+    assert 等到(lambda: srv.hub._lease_ticks >= 起始拍 + 3, 最多等=观察窗口), \
         "闸门没再醒过,下面那句「引擎没自己动」是因为它根本没机会动"
     assert ctx.engine.state is RunState.SUSPENDED, "超时之后引擎自己离开了 SUSPENDED"
     # ``goto`` 才是「狗真的动了」在这台假后端上的样子:自动 resume 会重发当前
@@ -236,7 +249,7 @@ def test_没到点不报(跑起来的服务, 钟):
     srv = 跑起来的服务
     让开腿(srv)
     钟.前进(SUSPEND_STALE_MS - 60_000)
-    assert not 等到(lambda: 挂起超时告警(srv), 最多等=1.5), "还差一分钟就报了"
+    assert not 等到(lambda: 挂起超时告警(srv), 最多等=观察窗口), "还差一分钟就报了"
 
 
 def test_没让开腿就不会有这条(跑起来的服务, 钟):
@@ -245,13 +258,21 @@ def test_没让开腿就不会有这条(跑起来的服务, 钟):
     **挡的是「没让开腿也报」这一件事,别把名牌挂大了。** 一个照
     ``started_ms`` 算、但**还留着 ``yielding`` 判断**的实现在这儿照样绿 ——
     真正接住那一刀的是 ``test_算的是让开腿那一刻不是开跑那一刻``,它把
-    "开跑很久但刚让开腿"摆出来了。这一条守的是另一半:``_判定挂起超时``
-    那个 ``if not engine.yielding: return`` 哪天被人删掉,任务正常跑着也会
-    去读一个陈旧的 ``suspended_at`` —— 这一条会红。
+    "开跑很久但刚让开腿"摆出来了。
+
+    **这一条接不住「删掉 ``if not engine.yielding: return``」那一刀,别写成
+    它接得住。** 这里从头到尾没让开腿过,快照上的 ``suspended_at`` 是
+    ``None`` —— 那道闸删掉之后落进的是 ``点 is None`` 那个出口(照样不报警,
+    只多刷日志),这条断言原样绿。真接住那一刀的是
+    ``test_接管结束之后残留的挂起点不许再报``,它摆的才是「有一个陈旧的
+    ``suspended_at`` 摆在那儿,而唯一挡着告警的就是 ``yielding``」。
+
+    这一条今天挡的是**完全不看让位状态**的实现:照 ``started_ms`` 算、或者
+    照"这一趟开跑到现在流逝了多久"算 —— 那一类在这儿会当场报出来。
     """
     srv = 跑起来的服务
     钟.前进(SUSPEND_STALE_MS * 3)
-    assert not 等到(lambda: 挂起超时告警(srv), 最多等=1.5), "没让开腿也报了挂起超时"
+    assert not 等到(lambda: 挂起超时告警(srv), 最多等=观察窗口), "没让开腿也报了挂起超时"
 
 
 def test_一次挂起只报一条(跑起来的服务, 钟):
@@ -262,7 +283,7 @@ def test_一次挂起只报一条(跑起来的服务, 钟):
     assert 等到(lambda: 挂起超时告警(srv))
 
     起始拍 = srv.hub._lease_ticks
-    assert 等到(lambda: srv.hub._lease_ticks >= 起始拍 + 3, 最多等=3.0), \
+    assert 等到(lambda: srv.hub._lease_ticks >= 起始拍 + 3, 最多等=观察窗口), \
         "闸门没再醒过,下面那个 1 是因为它根本没机会报第二次"
     条 = 挂起超时告警(srv)
     assert len(条) == 1, 条
@@ -344,6 +365,17 @@ def test_闸门读的钟必须还是墙钟(没起的服务):
     # 注进去的那份自己对得上,不代表真机上那条默认路径对得上:生产缺省也得
     # 是墙钟。
     assert AppContext.__dataclass_fields__["clock"].default is _wall_ms
+    # **上面两句都只盯身份,不盯本体。** 第一句测的是这一组自己注进去的钟
+    # (fixture 那份本来就从 ``time.time()`` 派生,两边同源,离自测只差一步),
+    # 第二句只问"缺省还是不是 ``_wall_ms`` 这个对象"。把 ``_wall_ms`` **本体**
+    # 改掉(第 9 卷最可能的下手方式:让它读 ``time.monotonic()``、或者读一个
+    # 回放/仿真的场景钟),这两句一句都不红,而 ``now_ms - 点.at_ms`` 当场变成
+    # 一个跟墙钟毫无关系的数。所以直接量它本人 —— 它是纯函数,不用起服务。
+    本体差 = abs(_wall_ms() - time.time() * 1000)
+    assert 本体差 < 5_000, (
+        f"_wall_ms() 跟墙上时钟差了 {本体差} 毫秒 —— 它已经不是墙钟了。"
+        "挂起超时那条 P1 拿它去减引擎盖的 SuspendPoint.at_ms(墙钟毫秒),"
+        "换了纪元之后这条告警会静默失效,见 server._挂起超时了 的文档串。")
 
 
 class 假引擎:
@@ -360,15 +392,29 @@ class 假引擎:
                          if yielding is None else yielding)
 
 
-def _快照(*, 开跑: int, 让开腿于: int, 挂着: bool = True) -> RunSnapshot:
+def _快照(*, 开跑: int, 让开腿于: int, 挂着: bool = True,
+          盖着点: bool | None = None) -> RunSnapshot:
+    """摆一份快照。``盖着点`` 缺省跟 ``挂着`` 走。
+
+    ``盖着点`` 单开一个口子,是为了摆出「任务已经回到 ``RUNNING``、快照上却
+    还留着上一次接管的 ``suspended_at``」那个**残留**状态 —— 真引擎摆不出来
+    (它一继续就把点抹掉),而那正是
+    ``test_接管结束之后残留的挂起点不许再报`` 要盯的那一幕。
+    """
     点 = SuspendPoint(waypoint_index=0, waypoint_name="P1_transformer",
                       pose=None, reason="人要接管", at_ms=让开腿于,
                       from_state=RunState.RUNNING, prior_suspend_ms=0)
+    留点 = 挂着 if 盖着点 is None else 盖着点
     return RunSnapshot(
         state=RunState.SUSPENDED if 挂着 else RunState.RUNNING,
         mission="巡检一号", waypoint_index=0,
         waypoint_name="P1_transformer", total=1, started_ms=开跑,
-        suspended_at=点 if 挂着 else None)
+        suspended_at=点 if 留点 else None)
+
+
+def _惨叫(caplog) -> list:
+    """caplog 里 ERROR 及以上的那几条。"""
+    return [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 def test_算的是让开腿那一刻不是开跑那一刻(没起的服务, 钟):
@@ -429,11 +475,90 @@ def test_让开腿了却没盖点不许静默走掉(没起的服务, 钟, caplog
                             yielding=True)
         with caplog.at_level(logging.ERROR, logger="d1max_patrol.app.server"):
             srv.hub._判定挂起超时(now_ms=此刻)
-        惨叫 = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        惨叫 = _惨叫(caplog)
         assert 惨叫, (
             "引擎说自己在让位、快照上却没盖点,而这一拍一声不吭地走掉了 —— "
             "这条 P1 从此是哑的,没有任何人会知道。")
         assert "suspended_at" in 惨叫[0].getMessage(), 惨叫[0].getMessage()
+    finally:
+        ctx.engine = 真的
+
+
+def test_没盖点那句惨叫只喊一次(没起的服务, 钟, caplog):
+    """上面那条 ERROR 守的是一个**会一直存在**的状态,而闸门半秒醒一拍。
+
+    不节流就是 2 条 ERROR/秒、一夜二十万条。这在别的项目上只是吵,在这台狗上
+    是**自伤**:这条日志刷的盘,正是同一套值守在量 ``disk_used_ratio`` 的那块
+    盘 —— 一条诊断日志把自己的盘写满、然后触发一条 P1,比不报还糟。
+
+    **两个方向都钉:** 连着两拍只喊一次;可是回到正常状态之后再出一次同样的
+    问题,必须**还会再喊**。只钉前一半的话,一个"喊过就永远闭嘴"的实现照样
+    绿,而它在真机上的样子是:重启前的第二次故障从此无声。
+    """
+    srv = 没起的服务
+    ctx = srv.ctx
+    此刻 = 钟()
+    真的 = ctx.engine
+
+    def 没盖点的():
+        # 快照是"没挂起"的那一份(``suspended_at`` 是 ``None``),引擎却说
+        # 自己在让位 —— 那个不该发生的状态。
+        return 假引擎(_快照(开跑=此刻, 让开腿于=此刻, 挂着=False), yielding=True)
+
+    try:
+        with caplog.at_level(logging.ERROR, logger="d1max_patrol.app.server"):
+            ctx.engine = 没盖点的()
+            srv.hub._判定挂起超时(now_ms=此刻)
+            srv.hub._判定挂起超时(now_ms=此刻)
+            assert len(_惨叫(caplog)) == 1, (
+                f"连着两拍喊了 {len(_惨叫(caplog))} 声。闸门半秒醒一拍,"
+                "这么喊一夜就是二十万条 ERROR,写满的正是值守自己在量的那块盘。")
+
+            # 接管结束(``yielding`` 落回假),账要清掉。
+            ctx.engine = 假引擎(_快照(开跑=此刻, 让开腿于=此刻, 挂着=False),
+                                yielding=False)
+            srv.hub._判定挂起超时(now_ms=此刻)
+            ctx.engine = 没盖点的()
+            srv.hub._判定挂起超时(now_ms=此刻)
+            assert len(_惨叫(caplog)) == 2, (
+                "状态恢复过一次之后又坏了,这一次一声不吭 —— 节流写成了"
+                "「这辈子只喊一次」,重启之前的第二次故障从此没有任何痕迹。")
+    finally:
+        ctx.engine = 真的
+
+
+def test_接管结束之后残留的挂起点不许再报(没起的服务, 钟):
+    """快照上留着一个陈旧的 ``suspended_at``,而人早就把腿还回来了。
+
+    **这一条是 ``_判定挂起超时`` 里 ``if not engine.yielding: return`` 那道闸
+    的唯一接盘人。** 摆出来的状态是:``yielding`` 为假(没人在接管),快照上
+    却还盖着一个远超阈值的挂起点 —— 这时候挡着那条 P1 的**只有**那道闸,别的
+    条件(阈值、``点 is None``)一个都不挡。删掉它,这条当场红。
+
+    ``test_没让开腿就不会有这条`` 接不住这一刀:那边从头到尾没让开腿过,快照
+    上根本没有陈旧的点可读,删掉闸之后落进的是 ``点 is None`` 那个出口,照样
+    不报警。
+
+    这个残留状态不是假想的:引擎接管结束时如果忘了把 ``suspended_at`` 抹掉,
+    真机上就是这一幕 —— 狗好端端地在跑,值守屏上一条"人接管着没还回来"的 P1
+    十分钟一条地往外冒,而现场一个人都没有。误报会很快教会人无视这条告警,
+    然后真出事那一次也一起被无视掉。
+    """
+    srv = 没起的服务
+    ctx = srv.ctx
+    此刻 = 钟()
+    真的 = ctx.engine
+    try:
+        ctx.engine = 假引擎(
+            _快照(开跑=此刻 - SUSPEND_STALE_MS * 100,
+                  让开腿于=此刻 - SUSPEND_STALE_MS * 3,
+                  挂着=False, 盖着点=True),
+            yielding=False)
+        srv.hub._判定挂起超时(now_ms=此刻)
+        assert not 挂起超时告警(srv), (
+            "没有人在接管(yielding 是假),快照上那个挂起点是上一次接管留下的"
+            "残渣 —— 照着它报了一条 P1。挡着这一条的只有 _判定挂起超时 里那句"
+            "`if not engine.yielding: return`。")
     finally:
         ctx.engine = 真的
 
@@ -466,10 +591,10 @@ def test_从路由挂起再从路由继续(跑起来的服务, 钟, 秒表):
     # 左手还压在摇杆上。**等的是闸门醒了几拍,不是墙上的半秒** —— 理由跟
     # ``test_挂起超时只报警不自己动狗`` 里那一段一样:0.5 秒的窗口正好等于
     # ``_LEASE_WATCH_PERIOD_S``,一个"下一拍才真放行"的实现能从这个窗口底下
-    # 溜过去,而且只在慢机器上偶尔红。
+    # 溜过去,而且只在慢机器上偶尔红。窗口按周期的倍数写,见 :data:`观察窗口`。
     assert _post(srv, "/api/run/resume")[0] == 200
     起始拍 = srv.hub._lease_ticks
-    assert 等到(lambda: srv.hub._lease_ticks >= 起始拍 + 3, 最多等=3.0), \
+    assert 等到(lambda: srv.hub._lease_ticks >= 起始拍 + 3, 最多等=观察窗口), \
         "闸门没再醒过,下面那句「引擎没自己跑」是因为它根本没机会跑"
     assert ctx.engine.state is RunState.SUSPENDED, "人还握着摇杆,引擎就自己跑起来了"
     assert "遥控" in ctx.engine.snapshot.reason, ctx.engine.snapshot.reason
