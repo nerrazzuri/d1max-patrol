@@ -146,9 +146,16 @@ $env:JAVA_HOME = "C:\Program Files\Android\Android Studio1\jbr"
 cd "D:\Projects\D1 Max\d1max-patrol\mobile"
 
 flutter analyze                  # 期望：No issues found!
-flutter test --concurrency=1     # 期望：185 条全过
+flutter test --concurrency=1     # 期望：退出码 0，一条不红
 flutter build apk --debug
 ```
+
+> **这里故意不写条数。** 原来写的是「期望：185 条全过」，
+> 那个数在第 7 卷终审当天就变成 191 了，之后又变成 262 ——
+> **一个写在命令注释里的条数，唯一的作用是过期之后误导下一个人**：
+> 他看见 262 而注释写 185，会以为自己跑错了，或者反过来，
+> 以为「跑出 185 也算对」。**判据是退出码，不是条数。**
+> 当前的条数在 `docs/分卷与进度.md` 那张基线表里，那份是有人负责更新的。
 
 **`--concurrency=1` 不是可选的。** 这台机器上裸跑 `flutter test` 会
 **无声吞掉字母序最后一个测试文件**，并且照样打印 `All tests passed!`。

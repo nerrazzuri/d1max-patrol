@@ -20,7 +20,6 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
-import os
 import time
 from pathlib import Path
 
@@ -80,7 +79,7 @@ def 摆包(root: Path, 槽名: list[str], *, current: str = "") -> Path:
     for 名 in 槽名:
         (root / 名).mkdir(exist_ok=True)
     if current:
-        os.symlink(root / current, root / "current", target_is_directory=True)
+        (root / "current").symlink_to(root / current, target_is_directory=True)
     return root
 
 
