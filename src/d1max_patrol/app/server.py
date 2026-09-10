@@ -770,7 +770,12 @@ class _StateHub:
         self._mapping: str | None = None
         self._alg_errors: tuple[str, ...] = ()
         self._link_down: str = ""
-        self._battery: float | None = None
+        #: 最近一次电量遥测:``(百分比, 收到的时刻毫秒)``,一次也没收到就是
+        #: ``None``。**两件事存在一个字段里,不拆成两个** —— HTTP 线程要同时
+        #: 用到它俩(值守屏那一格既报电量也报「这个数多老了」),拆成两个字段
+        #: 的那一边,两次读之间夹进一个新事件,屏上就会出现「刚刚收到的」配着
+        #: 上一拍的数值。一个字段一次赋值,读到的永远是配对的。
+        self._battery_at: tuple[float, int] | None = None
         self._faults: tuple[str, ...] = ()
         self._control_lost: str = ""
         self._pose: dict[str, float] | None = None
@@ -832,6 +837,14 @@ class _StateHub:
     @property
     def snapshot(self) -> dict[str, Any]:
         return self._snapshot
+
+    @property
+    def battery_at(self) -> tuple[float, int] | None:
+        """最近一次电量遥测:``(百分比, 收到的时刻毫秒)``,没收到过就 ``None``。
+
+        **一次读到的是配对的两个数**,理由见 ``_battery_at`` 那一行。
+        """
+        return self._battery_at
 
     # ------------------------------------------------------------ 事件
 
@@ -1000,7 +1013,9 @@ class _StateHub:
 
     def _on_device(self, event: Any) -> None:
         if isinstance(event, BatteryEvent):
-            self._battery = event.percent
+            # 收到的时刻要一起记下来:链路断了这个字段不会自己变回 None,
+            # 只会一直停在最后一个读数上,而一个不再更新的数比 None 更危险。
+            self._battery_at = (event.percent, self._ctx.clock())
         elif isinstance(event, FaultEvent):
             self._faults = tuple(event.items)
         elif isinstance(event, ControlLostEvent):
@@ -1041,7 +1056,11 @@ class _StateHub:
             },
             "device": {
                 "connected": ctx.device.connected,
-                "battery": self._battery,
+                # 快照里**只放数值,不放接收时刻**:``_rebuild`` 靠
+                # ``snap == self._snapshot`` 去重,时刻一进来每一拍电量事件都
+                # 会重建快照、再往 SSE 上推一帧,哪怕百分比一个数没变。要时刻
+                # 的那一处(值守屏)直接读 :attr:`battery_at`。
+                "battery": self.battery_at[0] if self.battery_at else None,
                 "faults": list(self._faults),
                 "control_lost": self._control_lost,
                 "pose": self._pose,
@@ -3068,9 +3087,11 @@ class AppServer:
 
         * 盘水位传的是 ``_disk`` 本人,不是模块 —— ``app/watch.py`` import
           回这个模块就是一个环。跟 ``AlertSources`` 那个 ``disk=`` 同一个口径。
-        * 电量取 ``_StateHub`` 备好的快照,**不现问后端**:厂商后端上问一次
-          电量是一次真实的链路往返,而这一屏是按秒刷的;快照是事件推出来的,
-          读它不花一分钱。
+        * 电量取 ``_StateHub`` 手上那份 ``battery_at``,**不现问后端**:厂商
+          后端上问一次电量是一次真实的链路往返,而这一屏是按秒刷的;那份是
+          事件推出来的,读它不花一分钱。**连同接收时刻一起取** —— 链路断了
+          它不会自己变回 ``None``,只会停在最后一个读数上,把时刻一并报上去
+          才轮得到看的人自己判断这个数多老了。
         * 扫盘那一跳要过桥(``_scan_targets`` 的 docstring 说了为什么)。
 
         **探针卡住不许把另外五项一起带走。** 值守屏是最后一块必须还能亮的
@@ -3083,10 +3104,11 @@ class AppServer:
         except HttpError:
             log.warning("扫盘没成,镜像盘那一档按不知道答", exc_info=True)
             targets = None
+        battery_pct, battery_as_of_ms = self._hub.battery_at or (None, None)
         return json_response(watch_summary(
             ctx, now_ms=ctx.clock(),
             disk=lambda: _disk(ctx.runs_root),
-            battery_pct=self._hub.snapshot.get("device", {}).get("battery"),
+            battery_pct=battery_pct, battery_as_of_ms=battery_as_of_ms,
             targets=targets))
 
     # ------------------------------------------------------------ 起来之后那一遍

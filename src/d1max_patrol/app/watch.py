@@ -17,10 +17,19 @@
 
 **这个模块只读,一个会改狗的动作都不许有。** 这是挂账 66 那条教训的同一根:
 盘况屏的例外名单按 ``refreshKey`` 认,而名单挡不住有人换个 key 把功能挂进去
-—— 名单本身没写错,错在它认的是名字。所以这里换一种守法:配套的那条测试
-**读这个文件的源码**,里面一旦出现引擎那几个会动腿的方法、或者那个写请求方
-法的字面量,就红。守源码不守名单,换个名字也绕不过去。副作用是这份 docstring
-自己也在被检查的文本里,所以上面提到那几个方法时只能绕着说。
+—— 名单本身没写错,错在它认的是名字。
+
+守这条纪律的**真正那根钉子是一条行为测试**:
+``tests/app/test_watch.py::test_只读这条纪律_拿探针钉住`` 塞进来一个假引擎,
+它只放行白名单里那几个只读属性,**别的属性访问一律当场炸**,然后拿它把这份
+汇总和那条路由各跑一遍。取别名、改方法名、挪去 ``server.py`` 的处理器里 ——
+全部在运行时炸,因为它认的是属性访问,不是文本。
+
+同一个文件里还留着一条**读源码字面量**的旧守卫
+(``test_盘况屏那条规矩_这个模块只读``),它降级成了一条便宜的绊线:能在评审
+之前抓住手滑,但挡不住换个名字。副作用是这份 docstring 自己也在被那条绊线检查
+的文本里,所以上面提到那几个方法时只能绕着说;具体禁哪几个字面量,去那条测试
+里看。
 
 **拿不到的事实由调用方注入,注不进来就是「不知道」。** 三项在这一层读不到:
 ``_disk`` 住在 ``app/server.py``(import 回去就是一个环),电量在
@@ -61,7 +70,9 @@ if TYPE_CHECKING:                       # pragma: no cover - 只为标注,不进
 log = logging.getLogger(__name__)
 
 #: 回传积压为什么是 ``None``。**这一句必须出现在屏上** —— 见模块 docstring。
-NO_UPLOADER = ("回传队列是第 9 卷的东西,这台狗上还没有这个能力 ——"
+#: 这句话是印给值班的人看的,所以里面不许有排期黑话(「第 N 卷」那种):
+#: 站在屏前面的人不知道那是什么,他要知道的是「证据现在在哪儿」。
+NO_UPLOADER = ("这台狗还没装回传功能,现场证据全存在本机 —— "
                "所以这一档是「不知道」,不是「没有积压」")
 
 #: 电量取不到时的那句话。
@@ -74,6 +85,7 @@ NO_TIME_REF = "没有外部时间参照 —— 漂移是「不知道」,报 0 �
 def watch_summary(ctx: AppContext, *, now_ms: int,
                   disk: Callable[[], tuple[int, int]] | None = None,
                   battery_pct: float | None = None,
+                  battery_as_of_ms: int | None = None,
                   targets: Sequence[TargetStatus] | None = None,
                   ) -> dict[str, Any]:
     """§5.1 那六项,一次答齐。**只汇总,不判级,不改任何东西。**
@@ -81,24 +93,45 @@ def watch_summary(ctx: AppContext, *, now_ms: int,
     ``now_ms`` 由调用方读一次传进来(``ctx.clock()``),这儿不读钟:一次请求
     里钟偏和归档年龄用两个不同瞬间的读数,是一处可以省掉的糊涂账。
 
-    ``disk`` / ``battery_pct`` / ``targets`` 是三处注入口,留空就是「不知道」。
-    为什么要注入见模块 docstring。
+    ``disk`` / ``battery_pct`` / ``battery_as_of_ms`` / ``targets`` 是几处注入
+    口,留空就是「不知道」。为什么要注入见模块 docstring。
     """
     lag, lag_why = _包落差(ctx.bundles_root)
     skew, skew_why = _钟偏(ctx, now_ms)
     pct, pct_why = _盘水位(disk)
     mirror, mirror_why = _镜像(ctx, targets, now_ms=now_ms)
     got: dict[str, Any] = {
+        # 单位:槽名的列表(比 ``current`` 新的那几个),空列表 = 没落差。
         # 不显示的话:人以为改生效了,其实没有(§3.4)。
         "bundle_lag": lag,
+        # 单位:**秒**,正数 = 本地钟走快了。
         # 不显示的话:狗一脸认真地在错误的时间巡逻(§3.3)。
         "clock_skew_s": skew,
+        # 单位:条数(这一卷恒为 ``None``,见 ``NO_UPLOADER``)。
         # 不显示的话:证据在狗上堆着,没人知道(§4.3)。
         "upload_backlog": None,
+        # 单位:**已用比例 0-1**,不是 0-100 —— 0.83 的意思是这块盘 83% 满。
+        # **渲染这一格的时候千万别跟 ``battery_pct`` 共用一个格式化函数**:
+        # ``${disk_pct}%`` 会把一块 83% 满的盘画成「0.83%」,而这一格存在的
+        # 全部理由就是「盘快满了要看得见」—— 那一手滑会让它反着报,而且是
+        # 以最安静的方式(挂账 77 要把它改名成 ``disk_used_ratio``)。
         # 不显示的话:直到它拒绝出发那天才发现(§4.7)。
         "disk_pct": pct,
+        # 单位:**百分数 0-100**,不是 0-1。跟上面那一行量纲不同,见上面那段。
         # 不显示的话:平均 36% 看着健康,随时趴下(§1.1)。
         "battery_pct": battery_pct,
+        # 单位:UTC 毫秒 —— 上面那个电量是**什么时候**收到的。
+        # **这儿不设阈值,也不替人判「多久算旧」。** 电量是事件推出来的,链路
+        # 断了它不会自己变回 ``None``,只会一直停在最后一个读数上:狗在地下室
+        # 断链 40 分钟,屏上稳稳写着 31%。一个不再更新的数比 ``None`` 更危险,
+        # 因为它看起来像在更新。把时刻摆出来,让看的人自己算这个数多老了 ——
+        # 带 ``as_of`` 的不是撒谎,不带的才是。
+        "battery_as_of_ms": battery_as_of_ms,
+        # 单位:条数。**只报个数,不报详情。** 告警簿有自己的生命周期(挂起、
+        # 确认、清除),并进这份只读汇总就把它绑上了那台状态机;详情走
+        # ``/api/alerts`` 那几条路由。但一个数是要带的:「六项全绿 + 屏上没有
+        # 告警入口」会被读成「这台狗没事」。
+        "alerts_open": len(ctx.alerts.open()),
         # 不显示的话:一块坏掉或者被刷没了的备份盘,一切看起来都正常,直到
         # 你需要它(§7.6)。
         "mirror": mirror,
@@ -149,9 +182,18 @@ def _钟偏(ctx: AppContext, now_ms: int) -> tuple[float | None, str]:
 
 
 def _盘水位(disk: Callable[[], tuple[int, int]] | None) -> tuple[float | None, str]:
-    """已用比例,0-1。口径跟 ``/api/storage`` 和 ``disk_80`` 那条告警同一个。"""
+    """已用比例,0-1。口径跟 ``/api/storage`` 和 ``disk_80`` 那条告警同一个。
+
+    ``disk=None`` 这条分支**生产路径走不到**:那条路由无条件传
+    ``lambda: _disk(ctx.runs_root)``。留着是给别的调用方兜底 —— 任务书里的签名
+    就是 ``watch_summary(ctx, *, now_ms)``,哪天卷 9/10 照着签名写个 CLI 直接调,
+    就会踩进来。踩进来的时候屏上不能只是安静地少一格,所以那句话要说清楚这是
+    **接线错了**,不是盘的问题:另外两个注入口(电量、扫盘)留空是正当的现场
+    事实,这一个留空是 bug,三者不该被压进同一句「不知道」。
+    """
     if disk is None:
-        return None, "这一次没人把盘水位的取值口传进来 —— 这一档量不出来"
+        return None, ("这一拍没量盘 —— 调这一屏的人没把盘水位的取值口接上,"
+                      "这是接线的问题,不是盘的问题")
     try:
         used, total = disk()
     except OSError as exc:
@@ -169,18 +211,24 @@ def _镜像(ctx: AppContext, targets: Sequence[TargetStatus] | None, *,
     **一块坏掉或者被人格式化掉的备份盘,平时一切看起来都正常** —— 直到你需要
     它的那天。所以这一档报的是三件事:认到几块、能用几块、落后多少趟。
 
-    ``behind`` 取几块盘里**最大**的那个,跟 ``/api/storage`` 上那句
-    ``behind = max(behind, plan.behind)`` 同一个口径:只要有一块盘落后,这台
-    狗的备份就是落后的。
+    **这一档整个是悲观聚合:最差的那块盘代表这台狗。** ``behind`` 取几块盘里
+    最大的那个,跟 ``/api/storage`` 上那句 ``behind = max(behind, plan.behind)``
+    同一个口径;``full`` 取或;``last_sync_ms`` 取**最旧**的那个 —— 那是同一句
+    话的另一半,理由见循环里那段注释。
 
     ``disks`` 是 0 的时候 ``behind`` 给 ``None`` 而不是 0:一块镜像盘都没有的
     时候,「落后 0 趟」是一句听着让人放心的假话。
+
+    ``usable`` 是盘上的标记**声称**能用的块数,``measured`` 是这一拍**真的读
+    出来了**的块数。两个数都报,因为它们会不一样:一块盘掉线、``sync_state``
+    被拔坏,这一块就只剩声称。两者不等的时候 ``detail`` 里必有一句话 ——
+    在一块以消灭静默失败为职责的屏上,不许自己造一个静默失败。
     """
     if targets is None:
         return None, "认不出现在插着什么盘 —— 镜像盘这一档这一拍不知道"
     盘 = [t for t in targets if t.role is DiskRole.MIRROR]
     能用 = [t for t in 盘 if t.usable]
-    out: dict[str, Any] = {"disks": len(盘), "usable": len(能用),
+    out: dict[str, Any] = {"disks": len(盘), "usable": len(能用), "measured": 0,
                            "behind": None, "behind_bytes": None,
                            "full": None, "last_sync_ms": None}
     if not 能用:
@@ -206,15 +254,36 @@ def _镜像(ctx: AppContext, targets: Sequence[TargetStatus] | None, *,
             log.warning("这块镜像盘读不了,不算进落后量", exc_info=True)
             continue
         量到 += 1
+        # ``behind`` 和 ``behind_bytes`` **各取各的 max,报出来的两个数可能来自
+        # 两块不同的盘** —— 这是有意的:这一档要的是每一项里最悲观的那个数,
+        # 不是某一块盘的完整画像。想知道具体哪块盘落后多少、有多少字节,
+        # 看 ``/api/backup``,那里是一块盘一行。
         behind = max(behind, plan.behind)
         behind_bytes = max(behind_bytes, plan.behind_bytes)
         # 任何一块镜像盘满了都要顶出来:满盘不删旧的,同步就此停住,不说的话
         # 屏上只看得到「落后」在涨。
         full = full or plan.full
+        # **取最旧的那个。** 跟 ``behind = max(...)`` 是同一句话的两半:最差的
+        # 那块盘代表这台狗。取最新的那一边,一块三周前被拔去格式化过的盘会被
+        # 边上那块昨晚刚同步过的好盘整个盖住 —— 屏上写着「两块盘都在,昨晚
+        # 刚同步」,而事实是其中一块早就没了。§7.6 那一行原话要拦的就是这个:
+        # 「一块坏掉或者被刷没了的备份盘,一切看起来都正常,直到你需要它」。
         last = (state.last_sync_ms if last is None
-                else max(last, state.last_sync_ms))
+                else min(last, state.last_sync_ms))
     if not 量到:
         return out, "认到的镜像盘一块也读不了 —— 落后多少趟量不出来"
-    out |= {"behind": behind, "behind_bytes": behind_bytes, "full": full,
-            "last_sync_ms": last}
-    return out, ""
+    out |= {"measured": 量到, "behind": behind, "behind_bytes": behind_bytes,
+            "full": full,
+            # ``0`` 是 ``read_sync_state`` 拼不出进度时的默认值,意思是「这块盘
+            # 上一趟也没同步过」。原样报上去,屏上画出来是 1970-01-01 —— 一个
+            # 看着像真事的假时刻,比 ``null`` 更坏。翻成 ``None``,并在下面配一
+            # 句为什么。
+            "last_sync_ms": last or None}
+    话 = []
+    if not last:
+        话.append("认到的镜像盘里有一块一趟也没同步过 —— 上次同步时刻这一档是"
+                  "「不知道」,不是 1970 年")
+    if 量到 < len(能用):
+        话.append(f"认到 {len(能用)} 块能用的镜像盘,其中 {len(能用) - 量到} 块"
+                  "这一拍读不了 —— 上面这几个数只覆盖读得了的那些")
+    return out, ";".join(话)
