@@ -420,6 +420,8 @@ def test_页面和静态资源不拦(server_pin):
 @pytest.mark.parametrize("path", [
     "/api/state", "/api/missions", "/api/maps", "/api/runs", "/api/mapping",
     "/api/bundle", "/api/schedule",
+    # 值守屏那六项里有盘水位和电量 —— 那是运营信息,不是公开信息。
+    "/api/watch/summary",
 ])
 def test_读的接口也得有token(server_pin, path):
     """现场照片是客户资产,比机器本身更敏感。读也要拦。"""

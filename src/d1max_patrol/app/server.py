@@ -80,6 +80,7 @@ from d1max_patrol.app.mapping import (
 from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.teleop import MODES, PROFILES, REMOTE_CONFIRM, Teleop, TeleopBusy
 from d1max_patrol.app.video import CAMERAS, CameraFeed, RtspStill, VideoError
+from d1max_patrol.app.watch import watch_summary
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
@@ -1200,6 +1201,7 @@ class AppServer:
         self.route("POST", "/api/bundle/apply", self._bundle_apply)
         self.route("POST", "/api/bundle/rollback", self._bundle_rollback)
         self.route("GET", "/api/schedule", self._schedule)
+        self.route("GET", "/api/watch/summary", self._watch_summary)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes, headers: Mapping[str, str] | None = None,
@@ -2944,6 +2946,36 @@ class AppServer:
         reference_ms, source = ref
         return clock_skew(local_ms=local_ms, reference_ms=reference_ms,
                           source=source)
+
+    # ------------------------------------------------------------ 值守屏
+
+    def _watch_summary(self, _req: Request) -> Response:
+        """值守屏那六项(§5.1)。**只读** —— 判据全在 ``app/watch.py``。
+
+        这儿只干一件事:把那三样 ``watch.py`` 自己够不着的事实取来递进去。
+
+        * 盘水位传的是 ``_disk`` 本人,不是模块 —— ``app/watch.py`` import
+          回这个模块就是一个环。跟 ``AlertSources`` 那个 ``disk=`` 同一个口径。
+        * 电量取 ``_StateHub`` 备好的快照,**不现问后端**:厂商后端上问一次
+          电量是一次真实的链路往返,而这一屏是按秒刷的;快照是事件推出来的,
+          读它不花一分钱。
+        * 扫盘那一跳要过桥(``_scan_targets`` 的 docstring 说了为什么)。
+
+        **探针卡住不许把另外五项一起带走。** 值守屏是最后一块必须还能亮的
+        玻璃 —— 那五项里有盘水位和电量,正是盘出事、电快没了的时候人要看的。
+        扫不成就把镜像盘那一档报成「不知道」,这一屏照样答完。
+        """
+        ctx = self._ctx
+        try:
+            targets, _why = self._scan_targets()
+        except HttpError:
+            log.warning("扫盘没成,镜像盘那一档按不知道答", exc_info=True)
+            targets = None
+        return json_response(watch_summary(
+            ctx, now_ms=ctx.clock(),
+            disk=lambda: _disk(ctx.runs_root),
+            battery_pct=self._hub.snapshot.get("device", {}).get("battery"),
+            targets=targets))
 
     # ------------------------------------------------------------ 起来之后那一遍
 
