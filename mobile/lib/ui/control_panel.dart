@@ -357,20 +357,28 @@ class _ControlPanelState extends State<ControlPanel> {
   /// 的算法、或者 `challenging` 不再只由 `challengerRef` 决定，漏了它就是一
   /// 次真的漏刷。
   ///
-  /// **但同一句话对 `mine` 也一字不差地成立（`mine` 就是「holder 是我」），
-  /// 而 `mine` 绝不许照这个理由删掉。** 两者的差别不在「是不是严格函数」，
-  /// 在「翻了之后看不看得见」：
+  /// **但同一句话对 `mine` 也一字不差地成立（`mine` 就是「holder 是我」，
+  /// 它自己就排在这个串的第一位），而 `mine` 绝不许照这个理由删掉。** 两者
+  /// 的差别不在「是不是严格函数」，在「翻了之后看不看得见」——下面两条是
+  /// 对称的两侧，一侧看不见、一侧看得见：
   ///
   /// * `challenging` 这一位翻而 `challengerRef` 不变 ⇒ 两侧都有 challenger。
   ///   狗那头 `ask_takeover()` 对「控制权已经在你手上了」是直接拒的，所以
-  ///   challenger 永远不等于 holder ⇒ 这一侧 `mine` 必为假；而 `_challenger`
-  ///   和 `_grace_ends` 在 `lease.py` 里五个赋值点**全是成对的**（初始化 /
-  ///   会话掉线 / `ask_takeover` / `_clear` / `_grant`），加上 `_settle()`
-  ///   在宽限期一走完就把挑战者扶正，所以带 challenger 的快照 `grace_in_ms`
-  ///   必然不是 null。于是这一侧走的是 [_buttons] 的 `someone` 那一支，
-  ///   **那一支唯一的按钮「请求接手」在 `grace != null` 时 `onPressed` 是
-  ///   null**；而 [_actTrouble] 唯一变非空的地方就是 [_act] 的 catch。
-  ///   按不动，这句话就压根挂不上去 —— 翻了也没人看得见。
+  ///   challenger 永远不等于 holder ⇒ 这一侧 `mine` 必为假。**光到这儿还落
+  ///   不到 `someone` 那一支上** —— `mine` 为假还可以是「没人拿着」那条兜底
+  ///   支（按钮「取得控制权」，灰不灰只看 `full`，不看 `grace`）。闭合这条链
+  ///   的那一步是：`ask_takeover()` 在没人持有时是**当场把控制权给他、根本
+  ///   不排队**，所以**有 challenger ⇒ holder 必在** ⇒ `someone`（就是
+  ///   `v.held`，即 `holderRef != null`）必为真，兜底支走不到。而
+  ///   `_challenger` 和 `_grace_ends` 在 `lease.py` 里**同生共死**，加上
+  ///   `_settle()` 在宽限期一走完就把挑战者扶正，所以带 challenger 的快照
+  ///   `grace_in_ms` 必然不是 null。（这两条 Python 侧的事实不再由这行注释
+  ///   记账 —— 绊线在 `tests/engine/test_lease_takeover.py` 的
+  ///   `test_挑战者和宽限终点永远同生共死`，只赋一半就红在那儿。）于是这一
+  ///   侧走的是 [_buttons] 的 `someone` 那一支，**那一支唯一的按钮「请求接
+  ///   手」在 `grace != null` 时 `onPressed` 是 null**；而 [_actTrouble] 唯
+  ///   一变非空的地方就是 [_act] 的 catch。按不动，这句话就压根挂不上去
+  ///   —— 翻了也没人看得见。
   /// * `mine` 这一位翻而 `holderRef` 不变的那条对称路径（我拿着租约、会话
   ///   ref 换了）**没有 challenger、没有 grace**，走的是 `mine` 那一支，
   ///   而那一支的「交还」「同意移交」是**无条件活的**（见 [_buttons]：宽限

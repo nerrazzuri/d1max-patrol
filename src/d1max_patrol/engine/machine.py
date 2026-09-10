@@ -186,7 +186,8 @@ class SuspendPoint:
     #: 笼统一句"同一趟返航里"。**
     #:
     #: 累计器从**任务一开始**就在记(不分跑点位阶段还是返航阶段),
-    #: ``_go_home`` 进返航时清零一次(见 ``:657``)。所以:
+    #: ``_go_home`` 进返航时清零一次(见 ``_go_home`` 里那句
+    #: ``live.suspend_total_ms = 0``)。所以:
     #:  - 跑点位阶段让开腿,这个数是"这一趟任务到目前为止累计挂起了多久";
     #:  - 返航路上让开腿,这个数才是"这一趟返航里累计挂起了多久"——因为
     #:    进 ``_go_home`` 那一刻已经清过一次。
@@ -202,7 +203,8 @@ class SuspendPoint:
     #:
     #: 累计量由引擎按可注入的 ``clock`` 算(不是墙钟),在 ``_go_home`` 进入
     #: 时清零 —— 返航这一段一趟一算,不跨趟累加(跨趟靠 ``_Live`` 每趟
-    #: 新建来保证,见 ``:657`` 边上的注释)。
+    #: 新建来保证,见 ``_go_home`` 里 ``live.suspend_total_ms = 0`` 边上的
+    #: 注释)。
     #:
     #: **不上线**,理由同 ``from_state``:判定在 ``app/server.py``
     #: (``_挂起超时了``),它拿到的是这个对象本身,不是 wire 上那份。
@@ -693,7 +695,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 #   2. 返航中按暂停、在暂停里再点让开腿 → ``_suspend_until_
                 #      resumed`` 记下的 ``from_state`` 是 ``PAUSED`` 而不是
                 #      ``RETURNING`` → 点继续走的是重发点位那一支。
-                # 第三条候选 ``_recover_localization``(``:913``)到不了这儿:
+                # 第三条候选 ``_recover_localization`` 到不了这儿:
                 # ``_handle`` 里那道门槛要求 ``self._state is RUNNING``,而在
                 # 这个循环里状态只会是 RETURNING / PAUSED / SUSPENDED。
                 #
@@ -707,16 +709,17 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 # Waypoint`` 那两支会先被上游翻成 RUNNING 再翻回来。
                 #
                 # **这一闪是安全的,论证如下:** ``_suspend_until_resumed``
-                # 的 ``finally``(``:1172``)里不 await 任何东西,只做
+                # 的 ``finally`` 里不 await 任何东西,只做
                 # ``live.suspended = None`` 和累加 ``suspend_total_ms``;紧
                 # 接着 ``await self._transition(RUNNING, "人工接管结束")``,
                 # 下一句就是 ``raise``。这个异常一路传到这儿(中间只经过
                 # ``_wait_nav_terminal`` / ``_await_nav_standby`` 里
                 # ``await self._handle(item)`` 那一层调用返回),**这段窗口
                 # 内没有任何 ``await self._next(...)``**——引擎是单任务的,
-                # 处理不了任何新事件,``:967`` "只在 RUNNING 时做定位恢复"、
-                # ``:988`` "已在 RETURNING 就不重复触发返航"这两道门槛都穿
-                # 不透。副作用只落两处:(1) 广播快照上闪一下 RUNNING,手机
+                # 处理不了任何新事件,``_handle`` 里那两道门槛都穿不透:
+                # 定位恢复那一支要求 ``self._state is RUNNING``,
+                # ``RETURN_HOME`` 那一支遇上 ``self._state is RETURNING``
+                # 直接 ``return``。副作用只落两处:(1) 广播快照上闪一下 RUNNING,手机
                 # 上能看到;(2) 审计串里多一行 RUNNING「人工接管结束」,但
                 # 下一行紧跟着的 RETURNING「人工接管结束,重新规划返航」把它
                 # 纠正过来。
@@ -1180,7 +1183,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             # 上面一句"图省事共用一个块",是这里**只能**放在 ``finally``:
             # 这个函数没有一条正常落地的出口,``break`` 出循环之后走的是
             # ``raise _ResumeReturnHome`` 或 ``raise _RetryWaypoint``
-            # (下面 ``:1190``/``:1192``),``abort`` 分支走的是
+            # (就在这个函数末尾那两句 ``raise``),``abort`` 分支走的是
             # ``raise _AbortRun``——三条出口全是异常,没地方能在 ``try``
             # 主体里正常写"累加"这一句。
             live.suspend_total_ms += int((self._clock() - started) * 1000)

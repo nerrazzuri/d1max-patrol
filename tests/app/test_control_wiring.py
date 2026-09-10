@@ -140,10 +140,45 @@ def test_没设pin时control段也在(server):
     assert snap["control"]["remote_sessions"] == 0
 
 
-def test_快照里没有token(有pin的服务):
-    tok = 解锁(有pin的服务)
-    body = json.dumps(get_json(有pin的服务, "/api/state", headers=auth(tok)))
-    assert tok not in body
+def test_快照里没有token(有pin的服务, 墙钟):
+    """**先让快照里真的有这条会话的东西, 再说"里面没有 token"。**
+
+    这条以前是: 解锁一次、读一把 ``/api/state``、断言 ``tok not in body``。
+    两头都是空的 ——
+
+    * 没人拿租约, ``control.holder`` 一路是 ``None``, token 压根没有任何渠道
+      能走进快照里去。就算 ``ControlDesk`` 哪天真把整条会话原样塞进快照, 这
+      条断言也照样绿。
+    * ``/api/state`` 读的是 ``_StateHub`` 的缓存快照(见
+      ``test_持有租约之后快照里看得见是谁`` 的 docstring), 解锁之后立刻读到
+      的那份多半还是开机那一拍 —— 一份跟这次解锁毫无关系的旧快照, 当然不含
+      token。
+
+    所以改成先 ``acquire`` 再 ``等到`` 持有人上屏: 等到的那一刻手里这份 body
+    是**这条会话已经露过面的那一拍**, 此时"里面没有 token"才是一句关于脱敏
+    的话, 而不是一句关于"这份快照跟这条会话无关"的废话。
+    """
+    tok = 解锁(有pin的服务, "张三")
+    sess = 有pin的服务.auth.session_of(tok)
+    assert sess is not None
+    有pin的服务.control.book.acquire(sess.ref, sess.operator, now_ms=墙钟.t)
+
+    读到: list[dict] = []
+
+    def 看():
+        snap = get_json(有pin的服务, "/api/state", headers=auth(tok))
+        读到.append(snap)
+        # 用 .get 不用 [] : 万一 control 段整个塌了, 这里该走到下面那句带话的
+        # assert 上去, 而不是在等的过程中抛 KeyError。
+        return snap.get("control", {}).get("holder")
+
+    想要 = {"ref": sess.ref, "operator": "张三"}
+    assert 等到(看, 想要) == 想要, (
+        "持有人始终没在 /api/state 的快照里露过面 —— 下面那句 not in 就什么也"
+        "管不住, 它证明的只是「手里这份快照跟这条会话无关」。"
+    )
+    body = json.dumps(读到[-1], ensure_ascii=False)
+    assert tok not in body, "会话 token 泄漏进了 /api/state 的快照"
 
 
 def test_持有租约之后快照里看得见是谁(有pin的服务, 墙钟):

@@ -39,6 +39,24 @@ PIN = "428913"
 T0 = 1_757_000_000_000
 走一拍 = {"fwd": 0.2, "lat": 0.0, "yaw": 0.0}
 
+#: 轮询窗口的**唯一单位是看门狗自己的巡查周期**,这个文件里一个写死的秒数
+#: 都不许有。
+#:
+#: 这条规矩 ``test_suspend_e2e.py`` 已经治过一遍(见那边的 ``观察窗口``),
+#: 而这边的 ``等到`` 是同一份东西的第二份拷贝 —— 当时只修好了一份。写死的
+#: ``3.0``/``1.0`` 今天正好是 6 拍/2 拍,纯属 ``_LEASE_WATCH_PERIOD_S`` 现在
+#: 是 0.5;哪天有人把它调到 1.0 秒,这两个数就缩成 3 拍/1 拍,而 1 拍的窗口
+#: 跟被观察者同长还踩着边界。表现是这一组开始**偶尔**红,而且是「第一次红被
+#: 当成 flake 去调窗口」那一类。
+
+#: 等一件**该发生**的事发生。6 拍 = 3 拍的两倍余量 —— 看门狗跑在真线程上,
+#: 拍与拍之间受机器负载和调度抖动影响,只给一倍就是把「刚好赶上」当合格线。
+观察窗口 = _LEASE_WATCH_PERIOD_S * 6
+
+#: 守一件**不该发生**的事不发生。2 拍 —— 这里要的不是余量而是「看门狗确实
+#: 又醒过几拍、有过机会动手却没动」,窗口拉长只是让整套测试白等。
+守望窗口 = _LEASE_WATCH_PERIOD_S * 2
+
 
 class 假墙钟:
     """能拨的墙上钟。租约的每一条判定都读它(§8.5 第 2 条)。"""
@@ -110,12 +128,17 @@ def 开始遥控(srv: AppServer, token: str) -> None:
     assert code == 200, body
 
 
-def 等到(条件, *, 最多等: float = 3.0) -> bool:
+def 等到(条件, *, 最多等: float = 观察窗口) -> bool:
     """轮到条件成立为止,**有超时上界**。
 
     等的是一条真的后台协程(它跑在桥那根线程上),没有可注入的钟能拨快它
     —— §8.5 第 2 条管的是被测代码里的时间,不管这种轮询。不写死
     ``sleep(周期 + 余量)``:那是拿机器负载赌,会产生没人复现得出来的假红。
+
+    **窗口一律走 :data:`观察窗口` / :data:`守望窗口`,不收裸秒数。**
+    跟 ``test_suspend_e2e.py`` 里那个是同一份东西、同一个理由 —— 那边的
+    ``等到`` 也这么写,两份拷贝这次一起修好了(两份副本本身就是"这条不变量
+    没有唯一落脚点"的表现,见本轮报告)。
     """
     截止 = time.monotonic() + 最多等
     while True:
@@ -193,9 +216,10 @@ def test_租约到期绝不自动续跑(服务器夹具, 墙钟):
     墙钟.前进(LEASE_TTL_MS + 1)
     assert 等到(lambda: 到期告警(srv)), "TTL 过了,一条 P1 都没有"
     # **不是当场看一眼就完。** 告警那一拍和"续跑"那一拍不必是同一拍:看门狗
-    # 先报警、下一拍才 resume,当场断言照样绿。所以往后再守一秒。
+    # 先报警、下一拍才 resume,当场断言照样绿。所以往后再守几拍
+    # (见 :data:`守望窗口` —— 按周期的倍数写,不写死秒数)。
     assert not 等到(lambda: ctx.engine.state is not RunState.SUSPENDED,
-                   最多等=1.0), "它自己动起来了"
+                   最多等=守望窗口), "它自己动起来了"
 
 
 def test_到期只报一条不是每拍一条(服务器夹具, 墙钟):
@@ -211,7 +235,7 @@ def test_到期只报一条不是每拍一条(服务器夹具, 墙钟):
     assert 等到(lambda: 到期告警(srv))
 
     墙钟.前进(int(_LEASE_WATCH_PERIOD_S * 3000))
-    assert not 等到(lambda: 到期告警(srv)[0].count > 1, 最多等=1.0), \
+    assert not 等到(lambda: 到期告警(srv)[0].count > 1, 最多等=守望窗口), \
         "每醒一次就报一条 —— 一个根因把真要紧的那条埋了"
     assert 到期告警(srv)[0].count == 1
 
@@ -227,7 +251,7 @@ def test_正常释放不报警(服务器夹具):
     token = 拿到租约(srv, operator="老王")
     看门狗看过一眼(srv)                    # 见这个函数自己的 docstring
     释放租约(srv, token)
-    assert not 等到(lambda: 到期告警(srv), 最多等=1.0), \
+    assert not 等到(lambda: 到期告警(srv), 最多等=守望窗口), \
         "人自己交回来的租约被报成了 P1"
 
 
@@ -247,7 +271,7 @@ def test_到期时有人在排队接管_不算没人管(服务器夹具, 墙钟)
     墙钟.前进(LEASE_TTL_MS + 1)
     assert 等到(lambda: srv.control.book.state(now_ms=墙钟()).holder is not None
                 and srv.control.book.state(now_ms=墙钟()).holder.operator == "小李")
-    assert not 等到(lambda: 到期告警(srv), 最多等=1.0), \
+    assert not 等到(lambda: 到期告警(srv), 最多等=守望窗口), \
         "换了个人接着开,不是没人管"
 
 
@@ -310,7 +334,7 @@ def test_人揣着手机走了_遥控停下而且任务不自己接着跑(服务
     assert 等到(lambda: ctx.teleop.active is False), "TTL 过了,腿还在遥控档上"
     assert ctx.engine.state is RunState.SUSPENDED
     assert not 等到(lambda: ctx.engine.state is not RunState.SUSPENDED,
-                   最多等=1.0), "停完腿之后把任务交还着跑起来了"
+                   最多等=守望窗口), "停完腿之后把任务交还着跑起来了"
 
 
 def test_闸门协程死了_这件事本身会被报出来(服务器夹具):
