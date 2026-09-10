@@ -61,6 +61,19 @@ class FakeDog {
 
   String get baseUrl => 'http://127.0.0.1:${_s.port}';
 
+  /// 收到过的每一次记名确认的请求体（`POST /api/alerts/<key>/ack`）。
+  ///
+  /// **是从 [received] 里挑出来的，不是另存一份状态。** 另存一份的话，这台
+  /// 假狗身上就有了两个关于「收到过什么」的说法，而对不上的那天两边都不报错。
+  ///
+  /// **解的是 `raw`**，跟 [FakeCall] 那条 docstring 一个理由：要证「名字真的
+  /// 带上去了」得在没解析过的那份上证。
+  List<Map<String, dynamic>> get acks => <Map<String, dynamic>>[
+        for (final FakeCall r in received)
+          if (r.method == 'POST' && r.path.endsWith('/ack'))
+            (jsonDecode(r.raw.isEmpty ? '{}' : r.raw) as Map<String, dynamic>),
+      ];
+
   Future<void> start() async {
     _s = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     _s.listen((HttpRequest req) async {

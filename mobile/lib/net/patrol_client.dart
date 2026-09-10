@@ -18,6 +18,8 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
+import '../model/alert.dart';
+
 /// 这一轮质询的证明：`HMAC-SHA256(PIN, nonce)` 的十六进制。
 ///
 /// 跟 `auth.proof_for` 逐字对应。**跨语言的向量在
@@ -139,6 +141,53 @@ class PatrolClient {
 
   Future<Map<String, dynamic>> post(String path, [Object? body]) =>
       _send('POST', path, body);
+
+  // ---------------------------------------------------------------- 值守
+
+  /// 未解决的告警。**P1 已经在最上面，这头不再排一遍。**
+  ///
+  /// 排法（先级别再 `last_ms` 倒序）是判据的一部分，判据只许在
+  /// `engine/alerts.py` 里说一次 —— 狗那侧的 `_alerts_open` 处理器自己都写着
+  /// 「这儿不再排一遍」。手机这头再排一次就是同一件事有两个出处，而对不上的
+  /// 那天，屏幕第一行显示的不是该起身的那件事。
+  Future<List<Alert>> alertsOpen() async =>
+      alertsFromWire(await get('/api/alerts'));
+
+  /// 连已确认、已解决的一起。交接班要看的是这一张。
+  Future<List<Alert>> alertsAll() async =>
+      alertsFromWire(await get('/api/alerts/all'));
+
+  /// 记名确认：「我看见了，我在处理」（§5.3）。
+  ///
+  /// **`who` 空串狗那侧回 400**，这里不替它兜 —— 确认会把升级链停下来，
+  /// 匿名确认等于任何人都能把声音关掉而没人负责。姓名从界面一路传下来
+  /// （`ui/roster_page.dart` 里问的那一句），不拿会话上那个 `operator`
+  /// 顶替：那个名字狗记下来但**不核实**（§6.3）。
+  Future<Alert> ackAlert(String key, {required String who}) async =>
+      Alert.fromWire(
+          (await post('${_alertPath(key)}/ack', <String, dynamic>{'who': who}))[
+                  'alert'] as Map<String, dynamic>? ??
+              const <String, dynamic>{});
+
+  /// 这件事没了。**不记名** —— 解决了不等于有人看见过。
+  Future<Alert> resolveAlert(String key) async => Alert.fromWire(
+      (await post('${_alertPath(key)}/resolve', const <String, dynamic>{}))[
+              'alert'] as Map<String, dynamic>? ??
+          const <String, dynamic>{});
+
+  /// §5.1 那六项。
+  Future<WatchSummary> watchSummary() async =>
+      WatchSummary.fromWire(await get('/api/watch/summary'));
+
+  /// 一条告警的路径前缀。**键要整段转义。**
+  ///
+  /// 键形如 `robot/kind#seq`（`engine/alerts.py` 的 `_key`），`/` 和 `#`
+  /// 两个都在里面。狗那侧为此专门开了一个跨斜杠的路由占位符（`<key*>`），
+  /// 但那救不了一个在客户端就已经被砍断的请求：裸着拼进去的话，`Uri.parse`
+  /// 会把 `#` 之后的整段当 fragment 切掉 —— 连 `/ack` 都发不出去，而狗那边
+  /// 回的是 404，报错指向「没这条告警」，不指向「路径拼错了」。
+  static String _alertPath(String key) =>
+      '/api/alerts/${Uri.encodeComponent(key)}';
 
   Future<Map<String, dynamic>> _send(String method, String path, Object? body,
       {bool auth = true}) async {

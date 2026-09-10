@@ -19,6 +19,7 @@ import '../store/pin_vault.dart';
 import '../store/registry_store.dart';
 import 'storage_page.dart';
 import 'teleop_page.dart';
+import 'watch_page.dart';
 
 /// 连狗之前问的那一句。
 ///
@@ -49,13 +50,14 @@ class RosterPage extends StatefulWidget {
 
   const RosterPage({super.key, required this.store, required this.vault});
 
-  /// 每一行上那两个入口。
+  /// 每一行上那三个入口。
   ///
-  /// **两个入口走同一套写法**（[_RosterPageState._open]）：读 PIN、问名字、
-  /// 解锁、`Navigator.push`、回来收连接。分两套写的话，两边迟早只有一边
+  /// **三个入口走同一套写法**（[_RosterPageState._open]）：读 PIN、问名字、
+  /// 解锁、`Navigator.push`、回来收连接。分几套写的话，迟早只有一边
   /// 记得收 `PatrolClient`。
   static Key teleopKeyFor(String sn) => ValueKey<String>('roster-teleop-$sn');
   static Key storageKeyFor(String sn) => ValueKey<String>('roster-storage-$sn');
+  static Key watchKeyFor(String sn) => ValueKey<String>('roster-watch-$sn');
 
   /// 问名字那个框。
   static const Key operatorFieldKey = ValueKey<String>('roster-operator');
@@ -155,15 +157,27 @@ class _RosterPageState extends State<RosterPage> {
             key: RosterPage.teleopKeyFor(r.sn),
             icon: const Icon(Icons.sports_esports_outlined),
             tooltip: '遥控',
-            onPressed: () => unawaited(
-                _open(r, (PatrolClient c) => TeleopPage(client: c, robot: r))),
+            onPressed: () => unawaited(_open(r,
+                (PatrolClient c, String _) => TeleopPage(client: c, robot: r))),
           ),
           IconButton(
             key: RosterPage.storageKeyFor(r.sn),
             icon: const Icon(Icons.sd_storage_outlined),
             tooltip: '盘况',
-            onPressed: () => unawaited(
-                _open(r, (PatrolClient c) => StoragePage(client: c, robot: r))),
+            onPressed: () => unawaited(_open(r,
+                (PatrolClient c, String _) => StoragePage(client: c, robot: r))),
+          ),
+          IconButton(
+            key: RosterPage.watchKeyFor(r.sn),
+            icon: const Icon(Icons.monitor_heart_outlined),
+            tooltip: '值守',
+            // **`who` 一行传下去就够了**（裁决十六）：操作员姓名按计划就不在
+            // 狗那侧，它在这一屏上（[_RosterPageState._operatorName]）。值守屏
+            // 上那个记名确认（§5.3）带的就是它。
+            onPressed: () => unawaited(_open(
+                r,
+                (PatrolClient c, String who) =>
+                    WatchPage(client: c, robot: r, operatorName: who))),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
@@ -176,13 +190,19 @@ class _RosterPageState extends State<RosterPage> {
     );
   }
 
-  /// 进某一只狗的某一屏。**两个入口共用这一条路。**
+  /// 进某一只狗的某一屏。**几个入口共用这一条路。**
   ///
   /// 顺序是：钥匙 → 名字 → 解锁 → 进屏 → 回来收连接。
   ///
+  /// **`who` 交给 [page] 是有意的**（裁决十六）：这里已经问过名字了，值守屏
+  /// 那个记名确认（§5.3）要的就是同一个名字。让那一屏自己再去问一遍、或者
+  /// 去狗身上取，都会得到另一个名字 —— 而狗那侧的 `operator` 是**记下但不
+  /// 核实**的（§6.3）。
+  ///
   /// **收连接不能省。** `PatrolClient` 自己造的那个 `HttpClient` 带着一个空闲
   /// 计时器；不收的话，人每进出一次就多挂一条，而狗那头那个 token 也一直有效。
-  Future<void> _open(Robot r, Widget Function(PatrolClient) page) async {
+  Future<void> _open(
+      Robot r, Widget Function(PatrolClient, String) page) async {
     final String pin = await widget.vault.read(r.sn) ?? '';
     if (!mounted) return;
     if (pin.isEmpty) {
@@ -208,7 +228,7 @@ class _RosterPageState extends State<RosterPage> {
       return;
     }
     await Navigator.of(context)
-        .push<void>(MaterialPageRoute<void>(builder: (_) => page(client)));
+        .push<void>(MaterialPageRoute<void>(builder: (_) => page(client, who)));
     client.close();
   }
 
