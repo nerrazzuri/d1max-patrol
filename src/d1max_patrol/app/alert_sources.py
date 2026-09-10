@@ -23,12 +23,19 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
+from pathlib import Path
 
 from d1max_patrol.backends.base import FaultEvent, LocStatusEvent
 from d1max_patrol.engine.alerts import AlertBook
+from d1max_patrol.engine.bundle import read_state
 from d1max_patrol.engine.machine import RunSnapshot, RunState
+from d1max_patrol.engine.schedule import clock_skew
+from d1max_patrol.engine.storage import WARN_USED_RATIO
 from d1max_patrol.protocol.nav_types import LocStatus
+
+log = logging.getLogger(__name__)
 
 #: 故障文本里出现这些词就认作急停。
 #:
@@ -56,6 +63,52 @@ def _命中(文本: str, 词表: tuple[str, ...]) -> bool:
     return any(词 in 低 for 词 in 词表)
 
 
+def _槽(名: str) -> tuple[str, int] | None:
+    """``<bundle_id>-<version>`` 拆成两半。拆不开就回 ``None``。
+
+    形状的权威定义在 ``engine/bundle.py`` 的 ``BundleManifest.slot_name``。
+    这里**只拆不校验**:输出只拿去比大小,一个字都不会被拼进路径 —— 把那
+    条路径安全正则抄一份过来,只是多一处迟早会跟本尊分岔的定义。
+    """
+    bid, _, ver = 名.rpartition("-")
+    if not bid or not ver.isdigit():
+        return None
+    return bid, int(ver)
+
+
+def _落了但没生效(bundles_root: Path) -> tuple[str, ...]:
+    """盘上有比 ``current`` 新的槽 —— 包落好了,但链没换(§3.2)。
+
+    **判据为什么是这个。** ``bundle.land()`` 自己写着「落好了但还没生效是一
+    个必须能被看到的状态」:落盘和换链是分开的两步,中间断掉的那台狗会一直
+    按旧包干活,而下发那一侧看到的是「发过去了」。这正是 §3.4 那条失效模式
+    ——「人以为改生效了,其实没有」。
+
+    **不用 ``bundle.divergence()``。** 那个函数比的是「服务器想让它跑哪一
+    版」和「它实际在跑哪一版」,而那个"想要"是服务器侧的意图,``AppContext``
+    今天根本没有这个字段(联网档才有,见 §3.2)。硬凑一个出来,单机档上这条
+    告警就变成了拿假数据算出来的真警报。
+
+    只看盘和链,两样都是本机事实,单机档上一样成立。
+    """
+    root = Path(bundles_root)
+    if not root.is_dir():
+        return ()
+    当前 = _槽(read_state(root).current)
+    新的 = []
+    for p in sorted(root.iterdir()):
+        if p.is_symlink() or not p.is_dir():
+            continue
+        槽 = _槽(p.name)
+        if 槽 is None:
+            continue
+        # ``current`` 是空的(一份都没生效过)时,盘上任何一份都算滞后 ——
+        # 那台狗手上有包却什么也没在跑。
+        if 当前 is None or (槽[0] == 当前[0] and 槽[1] > 当前[1]):
+            新的.append(p.name)
+    return tuple(新的)
+
+
 class AlertSources:
     """把事件流和引擎快照翻成告警。
 
@@ -74,11 +127,27 @@ class AlertSources:
 
     def __init__(self, book: AlertBook, *, robot: str,
                  clock_ms: Callable[[], int],
-                 run_state: Callable[[], RunState]) -> None:
+                 run_state: Callable[[], RunState],
+                 disk: Callable[[], tuple[int, int]] | None = None,
+                 bundles_root: Path | None = None,
+                 time_reference: Callable[[], tuple[int, str] | None]
+                 | None = None) -> None:
         self._book = book
         self._robot = robot
         self._clock_ms = clock_ms
         self._run_state = run_state
+        #: :meth:`on_tick` 那三条周期事实的取值口。**三个都默认 ``None``,
+        #: 意思是"这条源没接上,所以不认这件事"** —— 不是"认了但值是空的"。
+        #: 给个默认实现(比如自己去 ``shutil.disk_usage``)会让每一份为了
+        #: 别的目的构出来的 ``AlertSources`` 都开始量宿主机的盘。
+        #:
+        #: ``disk`` 回 ``(已用, 总量)`` 字节,跟 ``server._disk`` 一个形状:
+        #: 注进来而不是自己算,是为了让 ``/api/storage`` 和这条告警**读同一
+        #: 个函数** —— 两处各写一遍,页面上说 82% 而告警不响的那天没人查得出
+        #: 来是哪一处的口径不一样。
+        self._disk = disk
+        self._bundles_root = bundles_root
+        self._time_reference = time_reference
         #: 上一次看到的定位是不是丢了。定位恢复过就清掉,不然第二次真丢
         #: 定位反而没声音。
         self._last_loc_lost: bool = False
@@ -98,11 +167,26 @@ class AlertSources:
         #: 这一趟的开跑报过没有。光看状态迁移不够:
         #: ``RUNNING -> PAUSED -> RUNNING`` 是同一趟,人按几次暂停就会多出
         #: 几条"开跑",交接班看到的是一份假的流水。
-        self._last_run_started: bool = False
+        #:
+        #: **开局跟 ``_last_state`` 一样问一次引擎,不是硬编码 ``False``。**
+        #: 接线的那一刻引擎已经在跑的话,第一份 ``RUNNING`` 快照会在
+        #: ``_判定起止`` 的 ``state is 上次`` 那一句早返 —— 而唯一把这个记忆
+        #: 置 True 的那一行正好在被跳过的那个分支里。留 ``False`` 的后果是
+        #: ``RUNNING -> PAUSED -> RUNNING`` 之后凭空多一条"开跑"
+        #: (任务 6 评审)。
+        self._last_run_started: bool = run_state() is RunState.RUNNING
         #: 上一份快照的引擎状态。**开局就问一次**,不是留 ``None`` ——
         #: 留 ``None`` 的话第一份快照永远算作"刚迁移过来",于是接线的那一刻
         #: 引擎正跑着就会凭空多一条"开跑"。
         self._last_state: RunState = run_state()
+        #: :meth:`on_tick` 那三条的"上次成不成立"。**这三条比前面几条更容易
+        #: 写错**:盘水位过了 80% 之后**每一拍都还过着**,而事实只发生了一
+        #: 次。按拍报的话,一个盘满会在 15 分钟的聚合窗口里累出几百次
+        #: ``count`` —— §5.4 做聚合的全部理由就是别让一个根因把真要紧的那条
+        #: 埋掉,而这正好是自己动手埋。
+        self._last_disk_80: bool = False
+        self._last_bundle_lag: bool = False
+        self._last_clock_skew: bool = False
 
     # ------------------------------------------------------------ 导航
 
@@ -146,12 +230,122 @@ class AlertSources:
         """
         now_ms = self._clock_ms()
         if snapshot.started_ms != self._last_started_ms:
+            # **第一份快照不算"换了一趟"。** 它只是我们头一回看见,而构造时
+            # 已经就着引擎的现状把 ``_last_run_started`` 问过一次了 —— 这里
+            # 无条件清成 ``False`` 会把那个初值当场抹掉,于是"接线时引擎正
+            # 跑着"这条路上,暂停再继续照样凭空多一条"开跑"(任务 6 评审)。
+            首次 = self._last_started_ms is None
             self._last_started_ms = snapshot.started_ms
             self._last_failed = frozenset()
-            self._last_run_started = False
+            if not 首次:
+                self._last_run_started = False
+            # **``_last_loc_lost`` / ``_last_loc_lost_paused`` 不在这个块
+            # 里,这是有意的。** 上面这两份记忆是"按趟"的:``results`` 是按
+            # 趟清空的,不跟着清,第二趟同一个点位再卡住就被当成"上次那
+            # 条"、一声不响。而定位那两份**会自己清**:``on_nav`` 每收到一
+            # 条 ``LocStatusEvent`` 就整个重赋 ``_last_loc_lost``,
+            # ``_判定定位丢失`` 结尾那一句 ``self._last_loc_lost_paused =
+            # 成立`` 也是无条件的 —— 定位一恢复、或者引擎一离开 PAUSED,它
+            # 们当拍就回到 ``False``。事实没了记忆就没了,不需要按趟兜底。
+            #
+            # 反过来说,在这儿多清一遍不是"更保险"而是"更糟":它们记的是
+            # 一个**此刻还成不成立**的组合条件,不是一趟里的历史。起飞那一
+            # 拍把它清掉,等于把"这一秒定位确实还丢着"这个事实忘了,而下一
+            # 拍条件仍然成立 —— 于是同一次丢定位报第二条。
         self._判定卡住(snapshot, now_ms)
         self._判定起止(snapshot, now_ms)
         self._判定定位丢失(snapshot.state, now_ms)
+
+    # ------------------------------------------------------------ 周期事实
+
+    def on_tick(self) -> None:
+        """没有事件推给我们的那几件事:盘水位、任务包滞后、钟偏(§5.2 P2)。
+
+        **这三条不是事件,是水位。** 没有任何一条流会推来"盘满了" —— 只能
+        自己隔一会儿去看一眼。所以它们挂在租约看门狗那条协程上(见
+        ``server._StateHub._lease_watchdog``):那条协程本来就是为了"没人在
+        的时候也得有人去问一句"而存在的。
+
+        **不挂在 ``_StateHub._tick`` 上。** 那条协程自己的 docstring 写着
+        "这一拍只管显示和事件流",往里塞处置就把两条相反的容忍度合在了一
+        起。
+
+        **三条源都没接的时候这个方法什么也不做**,一次调用不会凭空报出告警
+        来 —— 现有那一堆只构了 ``book``/``robot``/``clock``/``run_state``
+        的 ``AlertSources`` 一个字都不用改。
+        """
+        now_ms = self._clock_ms()
+        self._判定盘水位(now_ms)
+        self._判定任务包滞后(now_ms)
+        self._判定钟偏(now_ms)
+
+    def _判定盘水位(self, now_ms: int) -> None:
+        """已用超过 :data:`~d1max_patrol.engine.storage.WARN_USED_RATIO`。
+
+        水位线**用 ``engine/storage.py`` 那一个**,不在这儿再拍一个 0.8:
+        起飞门槛和这条告警说的是同一件事,两处各存一份,调了一处另一处不
+        跟着调的那天,页面会说"能起飞"而告警在响。
+        """
+        if self._disk is None:
+            return
+        try:
+            used, total = self._disk()
+        except OSError:
+            # 盘拔了、挂载点没了。**量不到不等于满了** —— 报一条假的 P2 比
+            # 不报更坏(模块开头那句"认不出来的就不报")。
+            log.warning("量不到盘水位,这一拍不判", exc_info=True)
+            return
+        ratio = (used / total) if total > 0 else 0.0
+        成立 = ratio >= WARN_USED_RATIO
+        if 成立 and not self._last_disk_80:
+            self._book.raise_alert(
+                kind="disk_80", robot=self._robot, title="盘快满了",
+                detail=f"已用 {ratio * 100:.0f}%,过了 "
+                       f"{WARN_USED_RATIO * 100:.0f}% 的报警线",
+                now_ms=now_ms)
+        self._last_disk_80 = 成立
+
+    def _判定任务包滞后(self, now_ms: int) -> None:
+        """盘上有比 ``current`` 新的包,判据见 :func:`_落了但没生效`。"""
+        if self._bundles_root is None:
+            return
+        try:
+            落后 = _落了但没生效(self._bundles_root)
+        except (OSError, ValueError):
+            # ``BundleError`` 是 ``ValueError`` 的子类,所以坏掉的
+            # ``landed.json`` 也在这一网里。读不出局面同样是"不知道",不报。
+            log.warning("读不出任务包的局面,这一拍不判", exc_info=True)
+            return
+        成立 = bool(落后)
+        if 成立 and not self._last_bundle_lag:
+            self._book.raise_alert(
+                kind="bundle_lag", robot=self._robot,
+                title="任务包落好了但没生效",
+                detail="盘上有 " + "、".join(落后) + ",current 还指着旧的",
+                now_ms=now_ms)
+        self._last_bundle_lag = 成立
+
+    def _判定钟偏(self, now_ms: int) -> None:
+        """本地钟跟外头的参照差太多(§3.3 第 4 条)。"""
+        if self._time_reference is None:
+            return
+        ref = self._time_reference()
+        if ref is None:
+            # **``None`` 不是漂移,是"不知道"。** 断网时就没有参照,拿 0 顶
+            # 上等于说"本地钟快了五十多年" —— 一条必然会响、而且永远说不清
+            # 的 P2(见 ``server._no_time_reference`` 的 docstring)。
+            #
+            # 这里**也不动那个 ``_last_``**:不知道不等于"回正了"。清掉的
+            # 话,一段断网就会让同一次漂移在恢复之后再报一遍。
+            return
+        参照, 来源 = ref
+        skew = clock_skew(local_ms=now_ms, reference_ms=参照, source=来源)
+        if skew.alarm and not self._last_clock_skew:
+            self._book.raise_alert(
+                kind="clock_skew", robot=self._robot, title="本机钟不准",
+                detail=f"跟 {skew.source} 差 {skew.skew_s:.0f} 秒",
+                now_ms=now_ms)
+        self._last_clock_skew = skew.alarm
 
     # ------------------------------------------------------------ 内部判定
 
@@ -183,13 +377,22 @@ class AlertSources:
             self._book.raise_alert(
                 kind="run_done", robot=self._robot,
                 title=f"跑完了:{snapshot.mission}", now_ms=now_ms)
-        elif state is RunState.ABORTED and _命中(snapshot.reason, BATTERY_WORDS):
-            # 别的原因中止走的是别的处置。本卷没有"泛泛中止"这个 kind ——
-            # 宁可不报,也不许拿一个 kind 冒充另一个:``battery_abort`` 说的
-            # 是"没电了,得去把狗抱回来充电",认错了就是把人往错的方向支。
+        elif state is RunState.ABORTED:
+            # **中止一律要报,只是报哪一条要分清。** 不许拿一个 kind 冒充另
+            # 一个:``battery_abort`` 说的是"没电了,得去把狗抱回来充电",
+            # 认错了就是把人往错的方向支 —— 所以关节过温、导航反复失败这些
+            # 走 ``run_abort``,标题里不许出现"电量"。
+            #
+            # 但"认不出原因就干脆不报"更坏:那恰恰是**最该响**的一类 ——
+            # 没人在的时候整趟中止,狗就在原地站到天亮,一声不响。两个 kind
+            # 都是 P1,人要做的第一件事都是"过去看看",分开只是为了让他知道
+            # 该带什么(见 ``engine/alerts.py`` 里 ``run_abort`` 那条注释)。
+            没电 = _命中(snapshot.reason, BATTERY_WORDS)
             self._book.raise_alert(
-                kind="battery_abort", robot=self._robot,
-                title="电量不足,整趟中止", detail=snapshot.reason, now_ms=now_ms)
+                kind="battery_abort" if 没电 else "run_abort",
+                robot=self._robot,
+                title="电量不足,整趟中止" if 没电 else "整趟中止了",
+                detail=snapshot.reason, now_ms=now_ms)
 
     def _判定定位丢失(self, state: RunState, now_ms: int | None = None) -> None:
         """§5.2 的原文是「定位丢失后暂停」,**两个条件都要**。

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from d1max_patrol.app.alert_sources import AlertSources
@@ -61,12 +62,20 @@ class 环境:
         self.盒["state"] = state
 
 
-def 装好(*, engine_state: RunState = RunState.RUNNING, now_ms: int = 1_000) -> 环境:
+def 装好(*, engine_state: RunState = RunState.RUNNING, now_ms: int = 1_000,
+       disk=None, bundles_root=None, time_reference=None) -> 环境:
+    """后三个参数是 ``on_tick`` 那三条周期事实的取值口。
+
+    **留空就是"这条源没接上"**,那几个判定整个不动 —— 所以既有的几十条测试
+    一个字都不用改,也不会因为跑测试的这台机器盘满了就凭空多一条 P2。
+    """
     book = AlertBook()
     钟 = 假钟(now_ms)
     盒 = {"state": engine_state}
     src = AlertSources(book, robot=ROBOT, clock_ms=钟,
-                       run_state=lambda: 盒["state"])
+                       run_state=lambda: 盒["state"], disk=disk,
+                       bundles_root=bundles_root,
+                       time_reference=time_reference)
     return 环境(book=book, src=src, 钟=钟, 盒=盒)
 
 
@@ -145,6 +154,41 @@ def test_定位回来了再丢一次_算新的一次():
     env.src.on_nav(LocStatusEvent(status=LocStatus.LOC_LOST, previous=None))
     assert len(env.book.open()) == 1
     assert env.book.open()[0].count == 2
+
+
+def test_定位恢复又跑起来之后再丢一次_还认得出来():
+    """跨趟也得认得出来 —— 这两份定位记忆**故意没写进换趟清零那块**。
+
+    ``on_run`` 里 ``started_ms`` 一变就清 ``_last_failed`` /
+    ``_last_run_started``,但 ``_last_loc_lost`` 与
+    ``_last_loc_lost_paused`` 不在那个块里。理由是它们**自己会清**:
+    ``on_nav`` 每条 ``LocStatusEvent`` 都整个重赋前者,``_判定定位丢失``
+    结尾那句 ``self._last_loc_lost_paused = 成立`` 是无条件的。这条测试
+    钉的就是"自己清得干净"——恢复、又跑了新的一趟、再丢一次并且暂停,
+    第二条照样报得出来。
+
+    (任务 6 评审:确认这处不对称是对的,不是漏了。)
+    """
+    env = 装好(engine_state=RunState.PAUSED)
+    env.src.on_nav(LocStatusEvent(status=LocStatus.LOC_LOST, previous=None))
+    env.src.on_run(造快照(state=RunState.PAUSED, started_ms=1_000))
+    assert [a.kind for a in env.book.open()] == ["loc_lost_paused"]
+    assert env.book.open()[0].count == 1
+
+    # 定位回来了,人把这一趟收了,又开了新的一趟。
+    env.src.on_nav(LocStatusEvent(status=LocStatus.CONTINUOUS_LOC,
+                                  previous=LocStatus.LOC_LOST))
+    env.引擎进(RunState.RUNNING)
+    env.src.on_run(造快照(state=RunState.RUNNING, started_ms=2_000))
+
+    # 新的一趟上又丢了一次,又暂停了。
+    env.钟.前进(1_000)
+    env.引擎进(RunState.PAUSED)
+    env.src.on_nav(LocStatusEvent(status=LocStatus.LOC_LOST, previous=None))
+    env.src.on_run(造快照(state=RunState.PAUSED, started_ms=2_000))
+    丢定位的 = [a for a in env.book.open() if a.kind == "loc_lost_paused"]
+    assert len(丢定位的) == 1
+    assert 丢定位的[0].count == 2
 
 
 def test_导航状态事件不掺和定位判定():
@@ -227,6 +271,27 @@ def test_暂停之后继续_不算又开跑了一趟():
     assert env.book.open()[0].count == 1
 
 
+def test_接线的时候引擎已经在跑_暂停再继续不算第二趟():
+    """**接线时刻引擎正跑着**,这是任务 6 评审逮到的那个 bug 的现场。
+
+    ``_last_state`` 开局就问了一次引擎(所以第一份 ``RUNNING`` 快照会在
+    ``state is 上次`` 那一句早返),而"这一趟的开跑报过没有"那个记忆开局是
+    硬编码的 ``False`` —— 唯一把它置 True 的那一行,正好在被早返跳过的那个
+    分支里。于是 ``RUNNING -> PAUSED -> RUNNING`` 之后凭空多一条"开跑",交
+    接班看到的是一份假的流水。
+
+    **上面那条 ``test_暂停之后继续_不算又开跑了一趟`` 盖不住这个** —— 它从
+    ``IDLE`` 起步,第一份 ``RUNNING`` 是一次真迁移,会走进那个分支把记忆置
+    上,整条路径绕开了 bug。差别只在 ``engine_state=`` 那一个词。
+    """
+    env = 装好(engine_state=RunState.RUNNING)
+    env.src.on_run(造快照(state=RunState.RUNNING, started_ms=100))
+    env.src.on_run(造快照(state=RunState.PAUSED, started_ms=100))
+    env.钟.前进(10_000)
+    env.src.on_run(造快照(state=RunState.RUNNING, started_ms=100))
+    assert [x for x in env.book.open() if x.kind == "run_start"] == []
+
+
 def test_两趟各报一条开跑():
     env = 装好(engine_state=RunState.IDLE)
     env.src.on_run(造快照(state=RunState.RUNNING, started_ms=100))
@@ -252,12 +317,53 @@ def test_电量中止报battery_abort():
 def test_中止但不是因为电量_不冒充battery_abort():
     """``battery_abort`` 说的是"没电了,得去把狗抱回来充电"。别的原因中止
 
-    走的是别的处置,认错了就是把人往错的方向支。本卷没有"泛泛中止"这个
-    kind —— 宁可不报,也不许拿一个 kind 冒充另一个。
+    走的是别的处置,认错了就是把人往错的方向支 —— 所以关节过温这一趟报的是
+    ``run_abort``,**一个字的"电量"都不许出现**。
+
+    (这条原来断言的是"什么都不报"。任务 7 之前确实没有"泛泛中止"这个
+    kind,而那意味着**没人在的时候整趟中止,狗在原地站到天亮一声不响** ——
+    恰恰是最该响的那一类。现在两个 kind 都在 ``LEVEL_OF`` 里,这条测的就变
+    成了"分得清",而不是"都不报"。)
     """
     book, src = 装好(engine_state=RunState.RUNNING)
     src.on_run(造快照(state=RunState.ABORTED, reason="SDK 致命故障: 关节过温"))
-    assert [x.kind for x in book.open()] == []
+    a = book.open()
+    assert [x.kind for x in a] == ["run_abort"]
+    assert a[0].level is Level.P1
+    assert "电量" not in a[0].title
+
+
+def test_关节过温中止报run_abort不报battery_abort():
+    """认不出原因不等于不报。**中止本身就是要人过去看的那一类。**"""
+    book, src = 装好(engine_state=RunState.RUNNING)
+    src.on_run(造快照(state=RunState.ABORTED, reason="SDK 致命故障: 关节过温"))
+    kinds = [x.kind for x in book.open()]
+    assert "run_abort" in kinds
+    assert "battery_abort" not in kinds
+
+
+def test_电量中止仍然报battery_abort不报run_abort():
+    """反向那一半:加了泛泛中止之后,别把没电那条也吞进去。
+
+    两条各测各的方向 —— 只测一边的话,把判据写反(``if 没电`` 写成
+    ``if not 没电``)时仍然有一条是绿的。
+    """
+    book, src = 装好(engine_state=RunState.RUNNING)
+    src.on_run(造快照(state=RunState.ABORTED,
+                   reason="电量 22% 低于中止线 25%"))
+    kinds = [x.kind for x in book.open()]
+    assert "battery_abort" in kinds
+    assert "run_abort" not in kinds
+
+
+def test_泛泛中止摆着不动_只报一次():
+    """``ABORTED`` 是个**终态**,快照会一直是这一份。"""
+    env = 装好(engine_state=RunState.RUNNING)
+    snap = 造快照(state=RunState.ABORTED, reason="导航连续三次失败")
+    for _ in range(4):
+        env.src.on_run(snap)
+    a = [x for x in env.book.open() if x.kind == "run_abort"]
+    assert len(a) == 1 and a[0].count == 1
 
 
 def test_中止状态摆着不动_只报一次():
@@ -335,13 +441,237 @@ def test_电量事件和控制权事件不在本卷接():
 # ------------------------------------------------------------------ 登记表
 
 
+# -------------------------------------------------------------- 周期事实 P2
+#
+# 这三条跟上面那些都不一样:**它们不是事件,是水位。** 盘过了 80% 之后每一
+# 拍都还过着,而事实只发生了一次 —— 所以下面每一组都有一条"摆着不动"的用
+# 例,而且断言的是 ``count``,不是 ``len(book.open())``:去重坏掉的时候,重
+# 复那些会被 §5.4 那个 15 分钟的聚合窗口收成同一条,``len()`` 照样是 1。
+
+
+def 盘(已用比: float):
+    """一个假的"量盘"。总量固定 1000,按比例给已用。"""
+    return lambda: (int(1000 * 已用比), 1000)
+
+
+def test_盘过了报警线报disk_80():
+    book, src = 装好(disk=盘(0.85))
+    src.on_tick()
+    a = book.open()
+    assert [x.kind for x in a] == ["disk_80"]
+    assert a[0].level is Level.P2
+    assert "85%" in a[0].detail
+
+
+def test_盘一直过着水位_只报一条count也不涨():
+    """**这一层最容易写错的地方。** 水位是状态,不是事件。
+
+    按拍报的话,一个盘满会在聚合窗口里累出几百次 ``count`` —— §5.4 做聚合
+    的全部理由就是别让一个根因把真要紧的那条埋掉,而这正好是自己动手埋。
+
+    断言 ``count`` 而不只是条数:只看 ``len(book.open()) == 1`` 的话,去重
+    整个删掉这条测试**照样是绿的**。
+    """
+    env = 装好(disk=盘(0.93))
+    for _ in range(30):
+        env.src.on_tick()
+    a = env.book.open()
+    assert len(a) == 1
+    assert a[0].count == 1
+
+
+def test_盘没过报警线不报():
+    book, src = 装好(disk=盘(0.5))
+    src.on_tick()
+    assert book.open() == ()
+
+
+def test_盘退到线下再涨上去_算新的一次():
+    """记忆要会自己清。不清的话,第二次盘满反而没声音。"""
+    盒 = {"比": 0.85}
+    env = 装好(disk=lambda: (int(1000 * 盒["比"]), 1000))
+    env.src.on_tick()
+    盒["比"] = 0.4
+    env.src.on_tick()
+    盒["比"] = 0.9
+    env.钟.前进(60_000)
+    env.src.on_tick()
+    a = [x for x in env.book.open() if x.kind == "disk_80"]
+    assert len(a) == 1 and a[0].count == 2
+
+
+def test_量不到盘_不报():
+    """盘拔了、挂载点没了。**量不到不等于满了。**
+
+    报一条假的 P2 比不报更坏:P2 多了人就不看 P2 了。
+    """
+    def 炸():
+        raise OSError("挂载点没了")
+
+    book, src = 装好(disk=炸)
+    src.on_tick()
+    assert book.open() == ()
+
+
+def test_没接盘这条源_on_tick什么也不报():
+    """三条源都留空时 ``on_tick`` 是个空操作 —— 既有那几十条测试因此不用改,
+
+    跑测试的这台机器盘满了也不会凭空多出一条 P2 来。
+    """
+    book, src = 装好()
+    src.on_tick()
+    assert book.open() == ()
+
+
+# ---------------------------------------------------------------- 任务包滞后
+
+
+def 摆包(root, 槽名: list[str], *, current: str = ""):
+    """在 ``root`` 里摆几个槽,可选地把 ``current`` 链指到其中一个。
+
+    手工摆而不是走 ``build_bundle``/``apply_bundle``:这一组测的是"盘上是什
+    么局面 -> 报不报",不是打包和换链本身(那是 ``tests/engine`` 的活)。
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    for 名 in 槽名:
+        (root / 名).mkdir(exist_ok=True)
+    if current:
+        os.symlink(root / current, root / "current", target_is_directory=True)
+    return root
+
+
+def test_盘上有比current新的包_报bundle_lag(tmp_path):
+    """§3.4 那条失效模式:**人以为改生效了,其实没有。**
+
+    ``land()`` 只落盘不换链(它自己的 docstring:"落好了但还没生效是一个必
+    须能被看到的状态")。中间断掉的那台狗会一直按旧包干活,而下发那一侧看
+    到的是"发过去了"。
+    """
+    root = 摆包(tmp_path / "bundles", ["site-kl-3", "site-kl-4"],
+              current="site-kl-3")
+    book, src = 装好(bundles_root=root)
+    src.on_tick()
+    a = book.open()
+    assert [x.kind for x in a] == ["bundle_lag"]
+    assert a[0].level is Level.P2
+    assert "site-kl-4" in a[0].detail
+
+
+def test_current就是最新的那一版_不报(tmp_path):
+    root = 摆包(tmp_path / "bundles", ["site-kl-3", "site-kl-4"],
+              current="site-kl-4")
+    book, src = 装好(bundles_root=root)
+    src.on_tick()
+    assert book.open() == ()
+
+
+def test_有包但一版都没生效过_也算滞后(tmp_path):
+    """``current`` 是空的:手上有包,却什么也没在跑。"""
+    root = 摆包(tmp_path / "bundles", ["site-kl-1"])
+    book, src = 装好(bundles_root=root)
+    src.on_tick()
+    assert [x.kind for x in book.open()] == ["bundle_lag"]
+
+
+def test_任务包目录还不存在_不报(tmp_path):
+    """第一次开机时 ``bundles/`` 根本还没有 —— 那不是滞后。"""
+    book, src = 装好(bundles_root=tmp_path / "还没有")
+    src.on_tick()
+    assert book.open() == ()
+
+
+def test_任务包一直滞后_只报一条count也不涨(tmp_path):
+    root = 摆包(tmp_path / "bundles", ["site-kl-3", "site-kl-4"],
+              current="site-kl-3")
+    env = 装好(bundles_root=root)
+    for _ in range(30):
+        env.src.on_tick()
+    a = env.book.open()
+    assert len(a) == 1 and a[0].count == 1
+
+
+# -------------------------------------------------------------------- 钟偏
+
+
+def test_钟偏过了报警线报clock_skew():
+    钟 = 假钟(1_000_000)
+    book = AlertBook()
+    src = AlertSources(book, robot=ROBOT, clock_ms=钟,
+                       run_state=lambda: RunState.IDLE,
+                       time_reference=lambda: (1_000_000 - 300_000, "ntp"))
+    src.on_tick()
+    a = book.open()
+    assert [x.kind for x in a] == ["clock_skew"]
+    assert a[0].level is Level.P2
+    assert "ntp" in a[0].detail
+
+
+def test_没有时间参照_不报():
+    """**``None`` 不是漂移,是"不知道"。**
+
+    断网时 ``time_reference`` 就回 ``None``(见 ``server._no_time_reference``
+    的 docstring:"没有参照的时候,漂移是「不知道」,不是 0")。拿 0 顶上算
+    出来的是"本地钟快了五十多年" —— 一条必然会响、而且永远说不清的 P2,而
+    单机档的狗**大部分时间都没有参照**,那就是每台狗屏幕上常驻一条假告警。
+
+    **钟要给一个真墙上钟量级的数**(这里是 2025 年的某一刻),不能用这一份
+    里默认那个 ``1_000``:拿 0 当参照算出来的漂移正好等于"现在几点",而
+    ``now_ms=1000`` 算出来才 1 秒,连报警线都够不着 —— 那样把 ``None`` 判掉
+    的那一句整个删了,这条测试照样绿(实测过)。
+    """
+    book, src = 装好(now_ms=1_757_000_000_000, time_reference=lambda: None)
+    for _ in range(5):
+        src.on_tick()
+    assert book.open() == ()
+
+
+def test_钟偏在容忍之内不报():
+    钟 = 假钟(1_000_000)
+    book = AlertBook()
+    src = AlertSources(book, robot=ROBOT, clock_ms=钟,
+                       run_state=lambda: RunState.IDLE,
+                       time_reference=lambda: (1_000_000 - 5_000, "ntp"))
+    src.on_tick()
+    assert book.open() == ()
+
+
+def test_钟一直偏着_只报一条count也不涨():
+    钟 = 假钟(1_000_000)
+    book = AlertBook()
+    src = AlertSources(book, robot=ROBOT, clock_ms=钟,
+                       run_state=lambda: RunState.IDLE,
+                       time_reference=lambda: (钟() - 300_000, "ntp"))
+    for _ in range(30):
+        src.on_tick()
+        钟.前进(1_000)
+    a = book.open()
+    assert len(a) == 1 and a[0].count == 1
+
+
+def test_三条源各报各的_互不影响(tmp_path):
+    """一拍之内三件事同时成立,三条都要在,而且各只有一条。"""
+    root = 摆包(tmp_path / "bundles", ["site-kl-1"])
+    钟 = 假钟(1_000_000)
+    book = AlertBook()
+    src = AlertSources(book, robot=ROBOT, clock_ms=钟,
+                       run_state=lambda: RunState.IDLE, disk=盘(0.95),
+                       bundles_root=root,
+                       time_reference=lambda: (1_000_000 - 300_000, "ntp"))
+    for _ in range(5):
+        src.on_tick()
+    assert sorted(x.kind for x in book.open()) == [
+        "bundle_lag", "clock_skew", "disk_80"]
+    assert all(x.count == 1 for x in book.open())
+
+
 def test_本卷用到的kind都在LEVEL_OF里登记过():
     """没登记的 kind ``raise_alert`` 会抛裸 ``KeyError`` —— 那是设计的闸,
 
     这条测试是那道闸在本任务这一侧的对照。
     """
     for kind in ("estop_pressed", "fallen", "loc_lost_paused", "battery_abort",
-                 "stuck", "run_start", "run_done"):
+                 "run_abort", "stuck", "run_start", "run_done",
+                 "lease_expired", "disk_80", "bundle_lag", "clock_skew"):
         assert kind in LEVEL_OF
 
 

@@ -243,6 +243,24 @@ MAX_ROLLBACK_REASON_LEN = 500
 #: 快照重建的节拍。链路通断这类"没有事件的变化"靠它发现。
 _TICK_S = 0.5
 
+#: 租约看门狗多久醒一次(§5.8)。
+#:
+#: **这个数就是"人走了"到"狗停下"之间的时间上界**,所以它不能按"屏幕刷新
+#: 得快不快"来定 —— 那是 ``_TICK_S`` 的事。0.5 秒的理由:
+#:
+#: * 它是 ``LEASE_TTL_MS``(30 秒)的六十分之一。TTL 本身就有 30 秒的不确定
+#:   性,在这个尺度上再纠结半秒毫无意义 —— 换句话说,把它调到 0.1 秒,现场
+#:   感知不到任何差别。
+#: * 再慢就开始有差别了:几秒一醒意味着人揣着手机走了之后,狗还可能在遥控
+#:   档上举着最后一个动作好几秒,而 §5.8 要的是"停在原地"。
+#: * 跟 ``_TICK_S`` 同一个数量级,现场排障时"多久一拍"是同一句话,不用记两
+#:   个数;更快纯粹是白耗电,这条协程醒一次要读一次审计环、量一次盘。
+#:
+#: **它跟 ``_TICK_S`` 相等是巧合,不是同一个数。** 两者容忍度相反(显示晚
+#: 一拍没关系,停车不能晚),所以各写各的常量:哪天要把屏幕调慢省电,不该
+#: 顺手把闸门也调慢。
+_LEASE_WATCH_PERIOD_S = 0.5
+
 #: 自动同步的巡查周期。镜像盘是"不依赖人"的那一路(spec §7.5),所以不能等人点。
 #: 按分钟量级 —— 备份不是实时的,晚一分钟没有代价,而每分钟扫一次盘的开销
 #: 可以忽略。
@@ -708,7 +726,17 @@ class _StateHub:
         #: ``app/alert_sources.py``。
         self._alerts = AlertSources(
             ctx.alerts, robot=ctx.identity.sn, clock_ms=ctx.clock,
-            run_state=lambda: ctx.engine.snapshot.state)
+            run_state=lambda: ctx.engine.snapshot.state,
+            # 后面这三个是 ``on_tick`` 那几条周期事实的取值口(盘水位、任务
+            # 包滞后、钟偏)。``disk=`` 传的就是 ``/api/storage`` 用的那一个
+            # 函数 —— 一个口径,两个出口。
+            disk=lambda: _disk(ctx.runs_root),
+            bundles_root=ctx.bundles_root,
+            time_reference=ctx.time_reference)
+        #: 看门狗读到哪条留痕了。**自己一份游标,不借 ``ControlDesk.drain()``
+        #: 那份** —— 那份是事件流的,借来读一次就把记录从 SSE 嘴里抢走了。
+        #: ``LeaseBook.audit_since`` 是纯读,两个游标各走各的互不干扰。
+        self._lease_cursor = 0
 
     # ------------------------------------------------------------ 生命周期
 
@@ -720,6 +748,7 @@ class _StateHub:
             asyncio.create_task(self._watch(ctx.nav, self._on_nav)),
             asyncio.create_task(self._watch(ctx.device, self._on_device)),
             asyncio.create_task(self._tick()),
+            asyncio.create_task(self._lease_watchdog()),
         ]
 
     async def stop(self) -> None:
@@ -769,6 +798,77 @@ class _StateHub:
             for rec in self._control.drain():
                 self.events.emit({"kind": "control", "event": rec.to_wire()})
             self._rebuild()
+
+    async def _lease_watchdog(self) -> None:
+        """租约到期:停 + 升 P1,**绝不自动续跑**(§5.8)。
+
+        ``LeaseBook`` 是惰性结算的——没人问它就"还没过期"。而 §5.8 要的
+        恰恰是**没人在的时候**它自己动作,所以必须有一条协程主动去问。
+
+        **不并进 ``_tick``**:那条协程自己的 docstring 写着"这一拍只管显示
+        和事件流,闸门不靠它"——显示晚一拍没关系,停车不能晚,两条相反的
+        容忍度不该落在同一条协程上。
+
+        顺手也把 ``AlertSources.on_tick`` 那三条周期事实(盘水位、任务包滞
+        后、钟偏)带上:它们跟租约到期是同一类东西 —— **没有任何一条流会推
+        给我们,只能自己隔一会儿去看一眼**。
+
+        **整圈都在兜底里。** 这条协程死掉的后果是静默的:页面照常、SSE 照
+        常,只是从此再没有人去问那 30 秒过没过去 —— 而它存在的全部理由就是
+        没人在场。所以任何一次判定出错都只记一条日志,下一拍接着来。
+        ``asyncio.CancelledError`` 不在网里(它是 ``BaseException``),不然
+        ``stop()`` 取消不掉这条协程。
+        """
+        while True:
+            await asyncio.sleep(_LEASE_WATCH_PERIOD_S)
+            try:
+                await self._lease_once()
+            except (OSError, ValueError) as exc:
+                log.warning("租约看门狗这一拍出错了:%s", exc, exc_info=True)
+
+    async def _lease_once(self) -> None:
+        """看一眼:租约过期了没有,以及那三条周期事实。
+
+        **判"到期"靠审计流水,不靠 ``holder`` 由有变无。** 人自己按了释放,
+        ``holder`` 也是由有变无 —— 靠它分不开"走了"和"交回来了",而把一次
+        正常交接报成 P1,人很快就学会无视 P1。``AuditRecord.kind`` 里
+        ``released`` / ``expired`` / ``dropped`` 是分得清清楚楚的。
+
+        **还要"结算完之后确实没人接着"。** ``LeaseBook._settle`` 在到期的那
+        一刻如果正好有人排着队,会紧接着把租约给他(那一条留痕是
+        ``taken_over``)—— 那是一次正常的换人,狗没有失主,而 §5.8 说的是
+        "人揣着手机走了"。只认审计不看结果的话,每一次排队接管都会多响一条
+        P1。
+        """
+        now_ms = self._ctx.clock()
+        state = self._control.sweep(now_ms=now_ms)
+        self._lease_cursor, fresh = self._control.book.audit_since(
+            self._lease_cursor)
+        if state.holder is None and any(r.kind == "expired" for r in fresh):
+            await self._lease_gone(now_ms)
+        self._alerts.on_tick()
+
+    async def _lease_gone(self, now_ms: int) -> None:
+        """人不在了。**停下来,并且只停下来**(§5.8)。
+
+        这里没有、也不许有任何一句 ``resume``:一只狗在"最后已知状态是人正
+        在接管"的情况下自己动起来,是这套系统里最不该发生的事(理由跟 §3.4
+        那个不对称一样)。引擎停在哪一档就留在哪一档,等人回来自己决定。
+
+        **停在前、报在后,但报不许被停的失败吃掉。** 停腿是要紧的那一半,
+        所以先做;而它要是抛了(链路正好断了),更得有人知道 —— 那时候屏幕
+        上一条告警都没有,才是真正的静默失败。
+        """
+        try:
+            await self._ctx.teleop.stop()
+        except (OSError, ValueError) as exc:
+            log.warning("租约到期后停遥控失败:%s", exc, exc_info=True)
+        self._ctx.alerts.raise_alert(
+            kind="lease_expired", robot=self._ctx.identity.sn,
+            title="遥控租约到期,狗已停在原地",
+            detail="TTL 到了没人续租。已经停下,**没有自动续跑** —— "
+                   "要接着干,回来重新取一次控制权(§5.8)。",
+            now_ms=now_ms)
 
     def _on_nav(self, event: Any) -> None:
         if isinstance(event, NavStatusEvent):

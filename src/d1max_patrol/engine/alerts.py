@@ -60,6 +60,13 @@ LEVEL_OF: dict[str, Level] = {
     # 天之内"处理,狗可能已经在原地卡了一整天,或者没人管的情况下继续乱动。
     "stuck": Level.P1,
     "battery_abort": Level.P1,
+    # 不是因为没电的整趟中止(关节过温、导航反复失败……)。**跟
+    # ``battery_abort`` 分成两个 kind,不合并**:两条告警要让人做的事不一
+    # 样 —— 没电是"去把狗抱回来充电",别的中止是"去看它到底怎么了",而
+    # §5.2 判级的口径就是"人得做什么"。合成一个,人看到的标题会把他往错
+    # 的方向支;而"认不出原因就不报"更坏:没人在的时候中止,狗就在原地站
+    # 到天亮,一声不响。
+    "run_abort": Level.P1,
     "fallen": Level.P1,
     "loc_lost_paused": Level.P1,
     "estop_pressed": Level.P1,
