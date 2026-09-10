@@ -101,7 +101,7 @@ from d1max_patrol.backends.base import (
 )
 from d1max_patrol.backends.map_bridge import MapBridgeClient
 from d1max_patrol.engine import backup
-from d1max_patrol.engine.alerts import AlertBook
+from d1max_patrol.engine.alerts import AlertBook, AlertNotFound
 from d1max_patrol.engine.archive import (
     list_runs,
     read_events,
@@ -389,6 +389,18 @@ def _error_response(exc: HttpError) -> Response:
     return json_response(exc.to_wire(), exc.status)
 
 
+def _没这条告警(key: str) -> HttpError:
+    """``ack``/``resolve`` 点到一条已经不在的告警 —— **404,不是 500**。
+
+    ``AlertNotFound`` 是 ``engine/alerts.py`` 特意从裸 ``KeyError`` 里分出来
+    的那一支:前端点了一条刚被别人解决掉的告警是正常的用户误操作,而
+    ``raise_alert`` 撞上没登记的 kind 抛的裸 ``KeyError`` 是我们自己写错了
+    代码,那个该冒成 500。这里只翻前者。
+    """
+    return HttpError(404, f"没有这条告警:{key}",
+                     "多半是刚被别人确认或解决掉了。刷一下 /api/alerts。")
+
+
 Handler = Callable[["Request"], "Response | Stream | ByteStream"]
 
 
@@ -566,11 +578,27 @@ def _compile(pattern: str) -> re.Pattern[str]:
 
     占位符**不跨斜杠**。这一条顺手堵住了一类穿越:``/api/runs/r1/photos/
     ..%2F..%2Fmanifest.json`` 解码之后带斜杠,于是根本匹配不上这条路由。
+
+    **``<name*>`` 是唯一的例外,它跨斜杠**(贪婪的 ``.+``)。开这个口子是因为
+    告警键(``engine/alerts.py`` 的 ``_key``)形如 ``robot/kind#seq``,斜杠是
+    键本身的一部分:``/api/alerts/<key*>/ack`` 那一段收到的就是带斜杠的东西。
+    转义解决不了 —— ``_dispatch`` 在匹配之前已经 ``unquote`` 过一道,``%2F``
+    到这儿早变回斜杠了(这也正是上面那条穿越防线成立的原因)。
+
+    **这个口子只许开在不落地的参数上。** 告警键唯一的去处是
+    ``AlertBook`` 那本内存字典的一次 ``get``:不拼路径、不拼命令、不进
+    子进程,上面那条穿越顾虑在它身上不成立。凡是会被拼进文件路径的段
+    (``run_id``、``name``、``map_id``……)一律继续用不带星号的写法 —— 那些
+    地方"不跨斜杠"就是防线本身。
     """
     parts = []
-    for chunk in re.split(r"(<[a-z_]+>)", pattern):
+    for chunk in re.split(r"(<[a-z_]+\*?>)", pattern):
         if chunk.startswith("<") and chunk.endswith(">"):
-            parts.append(f"(?P<{chunk[1:-1]}>[^/]+)")
+            name = chunk[1:-1]
+            if name.endswith("*"):
+                parts.append(f"(?P<{name[:-1]}>.+)")
+            else:
+                parts.append(f"(?P<{name}>[^/]+)")
         else:
             parts.append(re.escape(chunk))
     return re.compile("^" + "".join(parts) + "$")
@@ -1333,6 +1361,12 @@ class AppServer:
         self.route("POST", "/api/bundle/rollback", self._bundle_rollback)
         self.route("GET", "/api/schedule", self._schedule)
         self.route("GET", "/api/watch/summary", self._watch_summary)
+        self.route("GET", "/api/alerts", self._alerts_open)
+        self.route("GET", "/api/alerts/all", self._alerts_all)
+        # ``<key*>`` 跨斜杠(见 ``_compile``)。两条都以 ``/ack``、
+        # ``/resolve`` 收尾,吃不到上面那两条 GET。
+        self.route("POST", "/api/alerts/<key*>/ack", self._alert_ack)
+        self.route("POST", "/api/alerts/<key*>/resolve", self._alert_resolve)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes, headers: Mapping[str, str] | None = None,
@@ -3110,6 +3144,74 @@ class AppServer:
             disk=lambda: _disk(ctx.runs_root),
             battery_pct=battery_pct, battery_as_of_ms=battery_as_of_ms,
             targets=targets))
+
+    # ------------------------------------------------------------ 告警
+
+    def _alerts_open(self, _req: Request) -> Response:
+        """未解决的告警,P1 在最上面(§5.2)。值守屏的主表读这一条。
+
+        **顺序是 ``AlertBook.open()`` 给的,这儿不再排一遍。** 排法(先级别
+        再 ``last_ms`` 倒序)是判据的一部分,判据只许在 ``engine/`` 里说一
+        次;在这里再排一遍就是同一件事有两个出处,而对不上的那天,屏幕第一行
+        显示的不是该起身的那件事。
+        """
+        return json_response(
+            {"alerts": [a.to_wire() for a in self.alerts.open()]})
+
+    def _alerts_all(self, _req: Request) -> Response:
+        """连已确认、已解决的一起给 —— 交接班要看的是这一张。
+
+        **不做分页、不做截断。** 这本簿子活在内存里,一次开机的量级是几十
+        条;真要长到需要分页,那本身就是一件该被看见的事,不该被一条悄悄
+        截断的接口掩过去。
+        """
+        return json_response(
+            {"alerts": [a.to_wire() for a in self.alerts.all()]})
+
+    def _alert_ack(self, req: Request) -> Response:
+        """记名确认:"我看见了,我在处理"(§5.3)。
+
+        **记名是这条接口存在的理由。** 确认会把升级链停下来(``ack`` 之后
+        ``due_escalations`` 不再看这一条),匿名确认等于任何人都能把声音关
+        掉而没人负责 —— 所以空姓名是 400,不是"先记下来再说"。
+
+        ``who`` 只认请求体里传上来的。任务 11 负责让手机自动带上落盘的操作
+        员姓名;在那之前手机得自己填,这一层不去猜、也不拿会话上的
+        ``operator`` 顶替 —— 那个名字狗记下来但**不核实**(§6.3),拿它当
+        "谁确认的"会让屏幕上出现一个看着像被核实过的名字。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体要是个对象", '形如 {"who": "老王"}')
+        who = body.get("who")
+        who = who.strip() if isinstance(who, str) else ""
+        if not who:
+            raise HttpError(
+                400, "确认要记名",
+                '形如 {"who": "老王"}。确认会把升级停下来 —— 没有名字就没有'
+                "人负责,那条升级链就白做了(§5.3)。")
+        try:
+            alert = self.alerts.ack(req.params["key"], who=who,
+                                    now_ms=self._ctx.clock())
+        except AlertNotFound:
+            raise _没这条告警(req.params["key"]) from None
+        return json_response({"alert": alert.to_wire()})
+
+    def _alert_resolve(self, req: Request) -> Response:
+        """这件事没了。
+
+        **不顺手填 ``acked_*``。** 解决了不等于有人看见过 —— "没人看见"正是
+        §5.3 要暴露出来的那个事实(升级只看有没有人确认),在这里悄悄补一个
+        确认,交接班那张表上就再也看不出这一班到底有没有人在盯屏幕。
+
+        没有请求体 —— 解决不记名,所以也没什么可校验的。
+        """
+        try:
+            alert = self.alerts.resolve(req.params["key"],
+                                        now_ms=self._ctx.clock())
+        except AlertNotFound:
+            raise _没这条告警(req.params["key"]) from None
+        return json_response({"alert": alert.to_wire()})
 
     # ------------------------------------------------------------ 起来之后那一遍
 

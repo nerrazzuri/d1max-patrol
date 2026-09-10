@@ -139,7 +139,14 @@ class Alert:
         return _CHANNEL_BY_TIER[self.escalated]
 
     def to_wire(self) -> dict[str, Any]:
-        """给前端/接口用的纯 ASCII 键字典。"""
+        """给前端/接口用的纯 ASCII 键字典。
+
+        ``escalated`` 和 ``channel`` 两个都上线,不是只上前一个(裁决十一)。
+        光给 ``escalated`` 这个整数,等于让每个客户端自己再算一遍
+        ``escalated -> Channel`` 那张表 —— 同一份判据落在两处,早晚分叉,而
+        分叉的那天正好是该出声的那次没出声。``channel`` 本来就是这个类上的
+        property,由 ``escalated`` 直接算出,白送。
+        """
         return {
             "key": self.key,
             "level": self.level.value,
@@ -153,6 +160,8 @@ class Alert:
             "acked_by": self.acked_by,
             "acked_ms": self.acked_ms,
             "resolved_ms": self.resolved_ms,
+            "escalated": self.escalated,
+            "channel": self.channel.value,
         }
 
 

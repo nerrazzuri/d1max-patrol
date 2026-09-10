@@ -32,6 +32,13 @@ T0 = 1_757_000_000_000
     "/api/maps/load",
     "/api/pose/initial",
     "/api/pose/reset",
+    # 告警的记名确认/解决(§5.3)。**这两条写的是解码之后的路径** ——
+    # ``needs_lease`` 拿到的就是 ``_dispatch`` 里 ``unquote`` 过的那一份,
+    # 而告警键(``robot/kind#seq``)里的斜杠到这一步已经是真斜杠了。这里
+    # 特意挑了一个不带 ``#`` 的键: ``request()`` 走的是真 urllib, ``#``
+    # 会在客户端就被当成片段切掉, 这张表上的路径必须是原样发得出去的。
+    "/api/alerts/D1M-TEST/stuck/ack",
+    "/api/alerts/D1M-TEST/stuck/resolve",
 )
 
 
