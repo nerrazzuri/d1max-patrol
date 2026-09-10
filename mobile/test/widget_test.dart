@@ -21,6 +21,15 @@ class _BrokenStore implements RegistryStore {
   Future<RobotRegistry> load() async => throw const FormatException('半截 JSON');
   @override
   Future<void> save(RobotRegistry registry) async {}
+  // 姓名那两口子也一起坏掉：读不动就当没记过（见 `roster_page.dart`
+  // 的 `_readKept`），写不进去不打断人。
+  @override
+  Future<String> readOperator({required String dog}) async =>
+      throw const FormatException('半截 JSON');
+  @override
+  Future<void> saveOperator({required String dog, required String name}) async {
+    throw const FormatException('盘满了');
+  }
 }
 
 Future<void> _pump(

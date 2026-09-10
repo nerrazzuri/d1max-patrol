@@ -22,6 +22,15 @@ abstract class RegistryStore {
 
   /// 整本写回去。
   Future<void> save(RobotRegistry registry);
+
+  /// 这只狗上一次是谁在开。没记过就是空串 —— **不是 `null`，也不编一个**。
+  ///
+  /// **按狗分别记**（人拍的板 3）：换一只狗常常就是换一个班。全局记一个的话，
+  /// 现场同时开着两只狗的那位，在第二只上看到的是第一只上那个班的名字。
+  Future<String> readOperator({required String dog});
+
+  /// 记下这只狗此刻是谁在开。**落盘，重开 app 还在。**
+  Future<void> saveOperator({required String dog, required String name});
 }
 
 /// 存成一个 JSON 文件。
@@ -68,11 +77,64 @@ class JsonFileStore implements RegistryStore {
     await tmp.writeAsString('$text\n', flush: true);
     await tmp.rename(file.path);
   }
+
+  /// 姓名记在名册**旁边的另一个文件**里，不并进名册。
+  ///
+  /// 名册那份文件的用法写在文件头：可以随便导出、随便贴到工单里。值班人的
+  /// 姓名不该跟着工单出门 —— 它不是秘密，但它也不该在一份要发出去的附件里
+  /// 躺着。分开存，导出名册这件事就永远带不上它。
+  File get operatorFile => File('${file.path}.operators.json');
+
+  /// 盘上那份「哪只狗上一次是谁在开」。读不动、坏了都当成一本空的。
+  ///
+  /// **这一份跟名册的处置不一样。** 名册读坏了要喊出来（人会以为自己没登记
+  /// 过，然后重填一遍，而坏文件还躺在盘上）；姓名读坏了只是要再问一句「你是
+  /// 谁」，把人挡在名册屏外面反而更坏。
+  Future<Map<String, String>> _operators() async {
+    try {
+      if (!await operatorFile.exists()) return <String, String>{};
+      final text = await operatorFile.readAsString();
+      if (text.trim().isEmpty) return <String, String>{};
+      final raw = jsonDecode(text);
+      if (raw is! Map) return <String, String>{};
+      return <String, String>{
+        for (final e in raw.entries)
+          if (e.value is String) '${e.key}': e.value as String,
+      };
+    } catch (_) {
+      return <String, String>{};
+    }
+  }
+
+  @override
+  Future<String> readOperator({required String dog}) async =>
+      (await _operators())[dog] ?? '';
+
+  @override
+  Future<void> saveOperator(
+      {required String dog, required String name}) async {
+    final dir = operatorFile.parent;
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    final Map<String, String> all = await _operators();
+    all[dog] = name;
+    // 先写临时文件再改名，跟名册一个理由：掐在中间要么是旧的整本，要么是
+    // 新的整本，不会是半截 JSON。
+    final tmp = File('${operatorFile.path}.tmp');
+    await tmp.writeAsString(
+        '${const JsonEncoder.withIndent('  ').convert(all)}\n',
+        flush: true);
+    await tmp.rename(operatorFile.path);
+  }
 }
 
 /// 只在内存里。**测试用，别拿去装到手机上。**
 class MemoryRegistryStore implements RegistryStore {
   RobotRegistry _held = RobotRegistry();
+
+  /// SN → 这只狗上一次是谁在开。**按狗一格**，跟盘上那份一个形状。
+  final Map<String, String> _operators = <String, String>{};
 
   @override
   Future<RobotRegistry> load() async => _held;
@@ -80,5 +142,15 @@ class MemoryRegistryStore implements RegistryStore {
   @override
   Future<void> save(RobotRegistry registry) async {
     _held = RobotRegistry.fromList(registry.all);
+  }
+
+  @override
+  Future<String> readOperator({required String dog}) async =>
+      _operators[dog] ?? '';
+
+  @override
+  Future<void> saveOperator(
+      {required String dog, required String name}) async {
+    _operators[dog] = name;
   }
 }

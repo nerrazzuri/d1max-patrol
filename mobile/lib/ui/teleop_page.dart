@@ -18,6 +18,7 @@ import '../net/wire.dart';
 import 'control_panel.dart';
 import 'widget/joystick.dart';
 import 'widget/live_video.dart';
+import 'widget/operator_chip.dart';
 
 /// 现场档那一行轻提示（§7.8）。
 ///
@@ -77,6 +78,8 @@ class TeleopPage extends StatefulWidget {
     super.key,
     required this.client,
     required this.robot,
+    required this.operatorName,
+    this.onOperatorChanged,
     this.health,
   });
 
@@ -84,6 +87,15 @@ class TeleopPage extends StatefulWidget {
 
   /// **只用来显示名字**（[Robot.label]）。见文件头。
   final Robot robot;
+
+  /// 这一趟是谁在开。来源是 `roster_page.dart::_open`（按狗落盘的那一份）。
+  ///
+  /// **屏上常显**（[OperatorChip]，人拍的板 3 的第一条补偿）：开狗的人一眼
+  /// 看得见账记在谁头上。**不许说成「已登录」**（§6.3）。
+  final String operatorName;
+
+  /// 在这一屏上点 chip 换了人。**落盘是名册那一屏的事**，这儿只往上报。
+  final ValueChanged<String>? onOperatorChanged;
 
   /// 「这一刻有没有画面」从哪儿来。
   ///
@@ -191,6 +203,12 @@ class _TeleopPageState extends State<TeleopPage> {
 
   String _mode = 'onsite';
 
+  /// 屏上此刻挂着谁的名字。初值来自 [TeleopPage.operatorName]，点 chip 就换。
+  ///
+  /// **换了立刻生效，不等狗回话。** 名字的家在手机上（按狗落盘），狗那头只是
+  /// 记一条留痕；等一次往返才换的话，热点抖一下人就会以为没改成、再点一次。
+  late String _operator = widget.operatorName;
+
   /// 确认过一次就不再问（§7.8）。
   ///
   /// **每次都弹同一个框，第三次就被条件反射点掉了。** 真正兜底的是狗那头
@@ -255,6 +273,13 @@ class _TeleopPageState extends State<TeleopPage> {
     if (held == _held) return;
     setState(() => _held = held);
     _disarmIfNeeded();
+  }
+
+  /// 点 chip 换了人。**屏上先换，再往上报（落盘在名册那一屏）。**
+  void _onOperatorChanged(String name) {
+    if (name == _operator) return;
+    setState(() => _operator = name);
+    widget.onOperatorChanged?.call(name);
   }
 
   void _onHealth(VideoHealth h) {
@@ -588,6 +613,25 @@ class _TeleopPageState extends State<TeleopPage> {
                 const SizedBox(width: 4),
                 _modeButton(TeleopPage.remoteKey, 'remote', '远程'),
               ],
+            ),
+            // **署名 chip：同一个 `Column` 里自己一行，永远画得出来。**
+            //
+            // 不塞进上面那个 `Row`（Ruling 84 的同一条理由）：那一行是
+            // `Expanded(Text(robot.label))` + 两个档位按钮，再挤进来会把
+            // `robot.label` 压成省略号，而它是防「开错狗」的最后一道视觉防线。
+            //
+            // **也绝不许挪进任何要点开才看得见的地方**（人拍的板 3 的第一条
+            // 补偿）：这一格存在的全部理由就是让开狗的人在**没有任何动作**的
+            // 情况下看见账记在谁头上。挪进二级页之后，代价（乙的操作签在甲名
+            // 下）照旧，补偿没了。
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OperatorChip(
+                name: _operator,
+                client: widget.client,
+                dark: true,
+                onChanged: _onOperatorChanged,
+              ),
             ),
             // 控制权面板：**同一个 `Column` 里新起一行**，见上面的 Ruling 84。
             ControlPanel(client: widget.client, onHeld: _onHeld),

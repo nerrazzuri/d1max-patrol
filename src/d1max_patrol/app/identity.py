@@ -291,3 +291,49 @@ def resolve(sn: str | None = None, nickname: str | None = None, *,
                     nickname=(nickname or "").strip(),
                     host=host if host is not None else socket.gethostname(),
                     payload=read_payload(payload_file))
+
+
+# ------------------------------------------------------------ 现在是谁在开
+
+#: 自报姓名最长这么多个字。**不是安全边界**(狗不核实,没什么可防的),是不让
+#: 一条超长记录把 200 条的审计环挤得只剩它自己。
+OPERATOR_MAX = 40
+
+
+def clean_operator(raw: object) -> str:
+    """把自报姓名收拾干净。**只由空白组成等于没填,返回空串** —— 调用方要拒。
+
+    中间的连续空白也压成一个:手机输入框很容易带出一个尾随空格,不收拾的话
+    "老王"和"老王 "在账上是两个人,而屏上长得一模一样。
+    """
+    if not isinstance(raw, str):
+        return ""
+    return " ".join(raw.split())[:OPERATOR_MAX]
+
+
+@dataclass(frozen=True, slots=True)
+class Operator:
+    """这只狗此刻记着的**自报**姓名(§6.3)。
+
+    **姓名的家在手机上,不在这儿。** 手机按狗分别记(换一只狗常常就是换一个
+    班),这台机器上这一份只是"最近有人报了这个名字",给审计和屏幕用。掉电
+    重启之后它是空的,那是对的:没人报过就不该编一个出来。
+
+    **``operator_verified`` 恒为 ``False``。** 狗从不核实自报姓名 —— 它没有
+    名册、没有口令、没有任何能对得上的东西。这个字段是给界面用的一句实话:
+    照着它说,屏上写的就只能是"署名:张三",不能是"已登录:张三"。改成
+    ``True`` 不会让这台机器多出一分身份认证,只会让一次冒名操作在事后的记录
+    里跟本人操作长得一模一样。
+    """
+
+    name: str = ""
+    #: 什么时候换上来的。**墙上钟 UTC 毫秒**,跟审计那一条对得上。
+    at_ms: int = 0
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            # 见类文档。**这一行不许改成 True。**
+            "operator_verified": False,
+            "at_ms": self.at_ms,
+        }

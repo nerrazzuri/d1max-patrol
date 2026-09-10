@@ -206,6 +206,14 @@ class CountingClient implements PatrolClient {
       throw UnimplementedError();
 
   @override
+  Future<Map<String, dynamic>> put(String path, [Object? body]) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<String> setOperator(String name) async =>
+      throw UnimplementedError();
+
+  @override
   Future<Session> unlock(String pin, {required String operator}) async =>
       throw UnimplementedError();
 

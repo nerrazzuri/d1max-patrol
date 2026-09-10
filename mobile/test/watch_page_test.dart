@@ -145,6 +145,7 @@ Future<Rig> mount(
   Map<String, dynamic>? summary,
   Map<String, dynamic>? state,
   String operatorName = '老王',
+  int Function()? nowMs,
   int? alertsStatus,
   int? summaryStatus,
   int? stateStatus,
@@ -178,6 +179,9 @@ Future<Rig> mount(
       client: c,
       robot: const Robot(sn: 'C40221', name: '三号'),
       operatorName: operatorName,
+      // 不给就走真墙上钟（真机上那条路）。给了，「这一屏是什么时候的」
+      // 才断得出来 —— 真时钟每次跑都不一样，只能断「有那么一格」。
+      nowMs: nowMs ?? wallClockMs,
     ),
   ));
   // **三段都得等到。** 三条路各读各的（一条断了不许把另外两段带走），所以
@@ -212,6 +216,13 @@ String screenText(WidgetTester t) => t
     .widgetList<Text>(find.byType(Text))
     .map((Text w) => w.data ?? '')
     .join('\n');
+
+/// 「这一屏的数据读于 …」那一格上的原话。
+String asOfText(WidgetTester t) {
+  final Iterable<Element> got = find.byKey(WatchPage.asOfKey).evaluate();
+  if (got.isEmpty) return '';
+  return (got.first.widget as Text).data ?? '';
+}
 
 void main() {
   // 摘掉 `flutter_test` 那个「所有请求都回 400」的 HttpOverrides：这个文件
@@ -527,6 +538,50 @@ void main() {
         '再问一次之后告警画出来了',
         step: const Duration(milliseconds: 20));
     expect(find.byKey(WatchPage.alertsErrorKey), findsNothing);
+    await unmount(t, rig);
+  });
+
+  // ---------------------------------------- 屏上这堆数是什么时候读回来的
+
+  // **这一屏不轮询**（`watch_page.dart` 文件头）：每一格都是上一次问回来的
+  // 样子，之后再没变过。狗在地下室断链四十分钟，这一屏还稳稳地摆着四十分钟
+  // 前的告警数和位姿 —— 跟三秒前的一屏在玻璃上长得一模一样。
+  //
+  // **下面这两条断的都不是「有 `watch-as-of` 这个 Key」。** 那句话是恒真的：
+  // 把整段渲染删成一个空 `Text`，它照样绿。断的是**屏上那个时刻跟着喂进去
+  // 的读取时刻走** —— 喂两个不同的时刻，屏上就得是两个不同的显示。
+
+  testWidgets('屏上的读取时刻跟着注入的钟走,不是写死的一句', (WidgetTester t) async {
+    Future<String> shownAt(DateTime when) async {
+      final Rig rig =
+          await mount(t, nowMs: () => when.millisecondsSinceEpoch);
+      final String shown = asOfText(t);
+      await unmount(t, rig);
+      return shown;
+    }
+
+    final String early = await shownAt(DateTime.utc(2026, 9, 10, 7, 0));
+    final String later = await shownAt(DateTime.utc(2026, 9, 10, 9, 30));
+    expect(early, contains('2026-09-10 07:00 UTC'));
+    expect(later, contains('2026-09-10 09:30 UTC'));
+    // 两个时刻喂进去，屏上就得是两句不一样的话。写死一句常量的版本在这儿红。
+    expect(early, isNot(equals(later)));
+    expect(later, isNot(contains('07:00')));
+  });
+
+  testWidgets('再问一次之后,屏上写的是这一次的时刻', (WidgetTester t) async {
+    // 只在 `initState` 里取一次时刻的版本在这儿红：人点了刷新、数据换了，
+    // 而屏上还写着两小时前 —— 那比不写更坏，它是一句会骗人的话。
+    int now = DateTime.utc(2026, 9, 10, 7, 0).millisecondsSinceEpoch;
+    final Rig rig = await mount(t, nowMs: () => now);
+    expect(asOfText(t), contains('2026-09-10 07:00 UTC'));
+
+    now = DateTime.utc(2026, 9, 10, 9, 30).millisecondsSinceEpoch;
+    await t.tap(find.byKey(WatchPage.refreshKey));
+    await pumpUntil(t, () => asOfText(t).contains('2026-09-10 09:30 UTC'),
+        '再问一次之后屏上的读取时刻换成这一次的',
+        step: const Duration(milliseconds: 20));
+    expect(asOfText(t), isNot(contains('07:00')));
     await unmount(t, rig);
   });
 }

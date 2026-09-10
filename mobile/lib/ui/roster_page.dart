@@ -28,7 +28,9 @@ import 'watch_page.dart';
 /// 空名字去连 —— 空名字在狗的账上是「未具名(ref)」，事后谁也说不清那一趟
 /// 是谁开的。
 ///
-/// 问过一次就记在这一屏上，同一次开着 app 不再重复问。
+/// **问过一次就落盘**（按狗一格，`RegistryStore.saveOperator`），重开 app
+/// 也不再问。之后换班不走这个框，走屏上那枚常显的 chip：一点就换
+/// （`OperatorChip`，人拍的板 3 的两条补偿）。
 const String operatorAskTitle = '你是谁';
 
 /// 那个输入框底下的解释。**不许写成「登录」。**
@@ -43,6 +45,14 @@ const String noPinHint = '还没存 PIN。点开这一条填上，再进来。';
 
 /// 连不上时说的那一句。**异常原文不上屏**，只进 `developer.log`。
 const String connectFailedHint = '连不上。热点连对了吗，PIN 对吗';
+
+/// 三个入口共用的那一套：拿到连接、这次报的名字、以及「换人了」往哪儿报。
+///
+/// 第三位不是可选的装饰：屏上那枚 chip 一点就换人（人拍的板 3 的第二条补偿），
+/// 而**名字的家在名册这一屏**（按狗落盘）。不把这条回头路铺好，换完的名字
+/// 就只活在那一屏的 `setState` 里 —— 退出去再进来又变回上一个人。
+typedef PageBuilder = Widget Function(
+    PatrolClient client, String who, ValueChanged<String> onOperatorChanged);
 
 class RosterPage extends StatefulWidget {
   final RegistryStore store;
@@ -69,9 +79,6 @@ class RosterPage extends StatefulWidget {
 class _RosterPageState extends State<RosterPage> {
   RobotRegistry? _registry;
   Object? _loadError;
-
-  /// 这次开着 app 报的名字。问过一次就不再问。
-  String _operator = '';
 
   @override
   void initState() {
@@ -157,15 +164,23 @@ class _RosterPageState extends State<RosterPage> {
             key: RosterPage.teleopKeyFor(r.sn),
             icon: const Icon(Icons.sports_esports_outlined),
             tooltip: '遥控',
-            onPressed: () => unawaited(_open(r,
-                (PatrolClient c, String _) => TeleopPage(client: c, robot: r))),
+            onPressed: () => unawaited(_open(
+                r,
+                (PatrolClient c, String who, ValueChanged<String> changed) =>
+                    TeleopPage(
+                        client: c,
+                        robot: r,
+                        operatorName: who,
+                        onOperatorChanged: changed))),
           ),
           IconButton(
             key: RosterPage.storageKeyFor(r.sn),
             icon: const Icon(Icons.sd_storage_outlined),
             tooltip: '盘况',
-            onPressed: () => unawaited(_open(r,
-                (PatrolClient c, String _) => StoragePage(client: c, robot: r))),
+            onPressed: () => unawaited(_open(
+                r,
+                (PatrolClient c, String _, ValueChanged<String> __) =>
+                    StoragePage(client: c, robot: r))),
           ),
           IconButton(
             key: RosterPage.watchKeyFor(r.sn),
@@ -176,8 +191,12 @@ class _RosterPageState extends State<RosterPage> {
             // 上那个记名确认（§5.3）带的就是它。
             onPressed: () => unawaited(_open(
                 r,
-                (PatrolClient c, String who) =>
-                    WatchPage(client: c, robot: r, operatorName: who))),
+                (PatrolClient c, String who, ValueChanged<String> changed) =>
+                    WatchPage(
+                        client: c,
+                        robot: r,
+                        operatorName: who,
+                        onOperatorChanged: changed))),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
@@ -201,15 +220,14 @@ class _RosterPageState extends State<RosterPage> {
   ///
   /// **收连接不能省。** `PatrolClient` 自己造的那个 `HttpClient` 带着一个空闲
   /// 计时器；不收的话，人每进出一次就多挂一条，而狗那头那个 token 也一直有效。
-  Future<void> _open(
-      Robot r, Widget Function(PatrolClient, String) page) async {
+  Future<void> _open(Robot r, PageBuilder page) async {
     final String pin = await widget.vault.read(r.sn) ?? '';
     if (!mounted) return;
     if (pin.isEmpty) {
       _toast('${r.label} $noPinHint');
       return;
     }
-    final String? who = await _operatorName();
+    final String? who = await _operatorFor(r);
     if (!mounted || who == null) return;
 
     final PatrolClient client = PatrolClient(r.baseUrl);
@@ -227,16 +245,23 @@ class _RosterPageState extends State<RosterPage> {
       client.close();
       return;
     }
-    await Navigator.of(context)
-        .push<void>(MaterialPageRoute<void>(builder: (_) => page(client, who)));
+    await Navigator.of(context).push<void>(MaterialPageRoute<void>(
+        builder: (_) => page(
+            client, who, (String name) => unawaited(_rememberFor(r, name)))));
     client.close();
   }
 
-  /// 这次报什么名字。问过一次就记着，同一次开着 app 不再重复问。
+  /// 这只狗这次报什么名字。**落盘的那个直接用，不再问**（人拍的板 3）。
+  ///
+  /// 盘上没有才弹框问一句 —— 也就是每只狗**一辈子只问这一次**，之后换班靠
+  /// 屏上那枚常显的 chip 一步改（`OperatorChip`）。这两件事是同一块板的两半：
+  /// 记住是为了不烦人，一步切换是为了「不烦人」不至于变成「没人改」。
   ///
   /// 返回 `null` 表示人放弃了（按了「算了」，或者名字是空的）—— 那就不连。
-  Future<String?> _operatorName() async {
-    if (_operator.isNotEmpty) return _operator;
+  Future<String?> _operatorFor(Robot r) async {
+    final String kept = await _readKept(r);
+    if (!mounted) return null;
+    if (kept.isNotEmpty) return kept;
     final TextEditingController ctl = TextEditingController();
     final String? asked = await showDialog<String>(
       context: context,
@@ -270,8 +295,32 @@ class _RosterPageState extends State<RosterPage> {
       if (mounted) _toast('填一个名字：狗的账上要记下是谁开的。');
       return null;
     }
-    _operator = asked;
+    await _rememberFor(r, asked);
     return asked;
+  }
+
+  /// 盘上记着的那个名字。**读不动就当没记过** —— 再问一句而已，把人挡在
+  /// 名册屏外面反而更坏。
+  Future<String> _readKept(Robot r) async {
+    try {
+      return await widget.store.readOperator(dog: r.sn);
+    } catch (e) {
+      developer.log('读不到 ${r.sn} 上次是谁开的：$e', name: 'roster_page');
+      return '';
+    }
+  }
+
+  /// 记住这只狗此刻是谁在开。**按狗一格**（见 `RegistryStore.readOperator`）。
+  ///
+  /// **写不进去不打断人。** 名字已经在屏上、也已经跟着 `unlock` 发给狗了；
+  /// 这一步只影响下次开 app 要不要再问一句。为它弹个错框，等于用一句人看
+  /// 不懂的话去打断一次正在进行的出勤。
+  Future<void> _rememberFor(Robot r, String name) async {
+    try {
+      await widget.store.saveOperator(dog: r.sn, name: name);
+    } catch (e) {
+      developer.log('记不住 ${r.sn} 这次是谁开的：$e', name: 'roster_page');
+    }
   }
 
   Future<void> _onAdd() async {

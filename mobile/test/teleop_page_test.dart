@@ -84,6 +84,7 @@ Future<Rig> mount(WidgetTester t,
       home: TeleopPage(
           client: c,
           robot: const Robot(sn: 'C40221', name: '三号'),
+          operatorName: '张三',
           health: health.stream)));
   await pushHealth(t, health, <String, bool>{'front': online});
   // **等控制权那一问回来。** 面板问狗是一次真的往返，假时钟上推不动；

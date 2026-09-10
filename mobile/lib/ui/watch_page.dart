@@ -43,6 +43,10 @@ import 'package:flutter/material.dart';
 import '../model/alert.dart';
 import '../model/robot.dart';
 import '../net/patrol_client.dart';
+import 'widget/operator_chip.dart';
+
+/// 墙上钟，UTC 毫秒。**这一屏读时刻只走这一个口子**（见 [WatchPage.nowMs]）。
+int wallClockMs() => DateTime.now().toUtc().millisecondsSinceEpoch;
 
 /// 一条 P1 都没有的时候屏上那一句。**不许换成留白。**
 const String noP1Hint = '现在没有需要立刻动身的事。';
@@ -72,6 +76,8 @@ class WatchPage extends StatefulWidget {
     required this.client,
     required this.robot,
     required this.operatorName,
+    this.onOperatorChanged,
+    this.nowMs = wallClockMs,
   });
 
   final PatrolClient client;
@@ -85,11 +91,29 @@ class WatchPage extends StatefulWidget {
   /// 会话上那个 `operator`。
   final String operatorName;
 
+  /// 在这一屏上点 chip 换了人。**落盘是名册那一屏的事**，这儿只往上报。
+  final ValueChanged<String>? onOperatorChanged;
+
+  /// 现在几点（UTC 毫秒）。**注入的，不许在 widget 里 `DateTime.now()`。**
+  ///
+  /// 这一屏**不轮询**（见文件头）：屏上这堆数全是某一次点刷新时问回来的，
+  /// 之后再没变过。「这堆数是什么时候的」于是不是装饰，而是这一屏能不能被
+  /// 信的前提 —— 值班的人半夜看一眼，得知道自己看的是三秒前的还是四十分钟
+  /// 前的（电量那一格的「收到于」是同一条理由，只是它只管一格）。
+  ///
+  /// 走参数是为了这句话能被**证**：真时钟每次跑都不一样，断言只能写成
+  /// 「有个 `watch-as-of` 在」—— 那是恒真的，把渲染整段删掉也照样绿。喂两个
+  /// 不同的时刻、断出两个不同的显示，这一格才算承重。
+  final int Function() nowMs;
+
   /// 右上角那个刷新。
   static const Key refreshKey = ValueKey<String>('watch-refresh');
 
   /// 自报署名那一行。
   static const Key operatorKey = ValueKey<String>('watch-operator');
+
+  /// 屏上这堆数是什么时候问回来的。见 [nowMs]。
+  static const Key asOfKey = ValueKey<String>('watch-as-of');
 
   /// 告警那一整段画出来了没有。**测试拿它当「屏真的加载完了」的锚。**
   static const Key alertsSectionKey = ValueKey<String>('watch-alerts');
@@ -264,6 +288,16 @@ class _WatchPageState extends State<WatchPage> {
   bool _summaryFailed = false;
   bool _stateFailed = false;
 
+  /// 屏上此刻挂着谁的名字。初值来自 [WatchPage.operatorName]，点 chip 就换。
+  late String _operator = widget.operatorName;
+
+  /// 这一屏上这堆数是什么时候问回来的（UTC 毫秒）。见 [WatchPage.nowMs]。
+  ///
+  /// **这一次问出去的时刻，不是回来的时刻。** 三条路各读各的、快慢不一，
+  /// 拿最后一条回来的时刻当「这屏是什么时候的」会把断掉的那条路藏起来：
+  /// 告警路挂着重试到超时的那 10 秒，屏上写的反而是更新的时刻。
+  int _asOfMs = 0;
+
   @override
   void initState() {
     super.initState();
@@ -272,11 +306,19 @@ class _WatchPageState extends State<WatchPage> {
 
   /// 问一遍。**三条路各读各的。** 见文件头。
   Future<void> _load() async {
+    setState(() => _asOfMs = widget.nowMs());
     await Future.wait<void>(<Future<void>>[
       _loadAlerts(),
       _loadSummary(),
       _loadState(),
     ]);
+  }
+
+  /// 点 chip 换了人。**屏上先换，再往上报（落盘在名册那一屏）。**
+  void _onOperatorChanged(String name) {
+    if (name == _operator) return;
+    setState(() => _operator = name);
+    widget.onOperatorChanged?.call(name);
   }
 
   Future<void> _loadAlerts() async {
@@ -382,10 +424,31 @@ class _WatchPageState extends State<WatchPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
+            // **常显的署名 chip，就在这一屏最上头**（人拍的板 3 的第一条
+            // 补偿）。**不许挪进任何要点开才看得见的地方** —— 夜班接班的人
+            // 走到这块屏前，不做任何动作就该看见账记在谁头上；看不见的那
+            // 一版，代价（乙的操作签在甲名下）照旧，补偿没了。
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OperatorChip(
+                name: _operator,
+                client: widget.client,
+                onChanged: _onOperatorChanged,
+              ),
+            ),
             // **不许写成「已登录」。** 见文件头。
             Text(
-              signedAs(widget.operatorName),
+              signedAs(_operator),
               key: WatchPage.operatorKey,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            // **这堆数是什么时候的。** 这一屏不轮询（见文件头），所以屏上
+            // 每一格都是上一次问回来的样子 —— 不写出来的话，四十分钟前的
+            // 一屏和三秒前的一屏在玻璃上长得一模一样。
+            Text(
+              '这一屏的数据读于 ${_stampText(_asOfMs)}（不会自己刷新，点右上角再问一次）',
+              key: WatchPage.asOfKey,
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),

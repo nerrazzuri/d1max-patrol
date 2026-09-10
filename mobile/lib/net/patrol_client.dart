@@ -142,6 +142,23 @@ class PatrolClient {
   Future<Map<String, dynamic>> post(String path, [Object? body]) =>
       _send('POST', path, body);
 
+  Future<Map<String, dynamic>> put(String path, [Object? body]) =>
+      _send('PUT', path, body);
+
+  /// 换人：把新的自报姓名告诉狗（`PUT /api/operator`）。
+  ///
+  /// **姓名的家在手机上**（`store/registry_store.dart`，按狗分别记）。这一条
+  /// 不是"存到狗上"，它是让狗在审计环里留下一条「从这一刻起账记在这个名字
+  /// 下」—— 人拍的板 3 接受的代价（甲忘了切，乙的操作签在甲名下）事后能翻
+  /// 的就是这条记录。
+  ///
+  /// **狗不核实这个名字**（§6.3）。返回的报文里 `operator_verified` 恒为
+  /// `false`，界面上不许说成「已登录」。
+  Future<String> setOperator(String name) async {
+    final r = await put('/api/operator', <String, dynamic>{'name': name});
+    return (r['name'] as String?) ?? '';
+  }
+
   // ---------------------------------------------------------------- 值守
 
   /// 未解决的告警。**P1 已经在最上面，这头不再排一遍。**

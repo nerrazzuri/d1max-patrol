@@ -69,6 +69,8 @@ from d1max_patrol.app.identity import (
     NICKNAME_ENV,
     SN_ENV,
     Identity,
+    Operator,
+    clean_operator,
     resolve,
     write_payload,
 )
@@ -147,6 +149,7 @@ from d1max_patrol.engine.homing import HomeError, HomePoint, load_home, save_hom
 from d1max_patrol.engine.lease import (
     AUDIT_MAX,
     AuditRecord,
+    Holder,
     LeaseBusy,
     LeaseError,
     LeaseLost,
@@ -1159,6 +1162,13 @@ class AppServer:
         #: 没有出处。开一个口子把它变成显式的。
         self._postcheck_sleep = postcheck_sleep
         self._auth = Guard(pin)
+        #: 此刻记着的自报姓名(§6.3)。**这是署名,不是登录态。**
+        #:
+        #: 换的时候整个换掉这个引用(``Operator`` 是 frozen dataclass),换引用
+        #: 本身是原子的 —— 服务是 ``ThreadingHTTPServer``,两条请求真的会同时
+        #: 进来,读到的要么是旧的一整份要么是新的一整份,不会读到改了一半的。
+        #: 写法照 ``_payload_put`` 换 ``ctx.identity`` 那一处。
+        self._operator = Operator()
         #: L1 控制权。**时刻一律由调用方读一次传进去**(``now_ms=ctx.clock()``),
         #: 这个类自己不读钟 —— 理由见 ``app/control.py`` 的模块文档。
         self._control = ControlDesk(self._auth)
@@ -1302,6 +1312,8 @@ class AppServer:
         self.route("POST", "/api/control/takeover/approve",
                    self._control_approve)
         self.route("GET", "/api/control/audit", self._control_audit)
+        self.route("GET", "/api/operator", self._operator_get)
+        self.route("PUT", "/api/operator", self._operator_put)
         self.route("GET", "/api/identity", self._identity)
         self.route("GET", "/api/state", self._state)
         self.route("GET", "/api/events", self._events)
@@ -1624,6 +1636,59 @@ class AppServer:
             "audit": [r.to_wire() for r in self._control.book.audit],
             "max": AUDIT_MAX,
         })
+
+    # ------------------------------------------------------------ 现在是谁
+
+    def _operator_wire(self) -> Response:
+        """自报姓名的报文。**两条路由同一个出口**,免得一边改了另一边没跟。
+
+        ``notice`` 跟解锁、会话表、控制权那几条一样,发的是狗自己那句原话
+        (``auth.OPERATOR_NOTICE``):``operator_verified`` 只说得出"核没核",
+        说不出"为什么不核";手机上硬编一句的话,狗改了措辞手机不跟。
+        """
+        return json_response({**self._operator.to_wire(),
+                              "notice": OPERATOR_NOTICE})
+
+    def _operator_get(self, _req: Request) -> Response:
+        """此刻记着的是谁。**这不是登录状态**(§6.3)。
+
+        **不要 token 之外的任何东西,也不要控制权**(§3.5 规则 1:看永远不要)。
+        """
+        return self._operator_wire()
+
+    def _operator_put(self, req: Request) -> Response:
+        """换人。狗**收下并留痕,但从不核实**(§6.3)。
+
+        **不在 ``control.CONTROLLED`` 里,这是想清楚了的。** 换署名不改变这只
+        狗正在做什么(§3.5 规则 4);而且下一个要接手的人正是在拿到控制权
+        **之前**报名字的 —— 要控制权才准改名,等于让人只能顶着前一个人的名字
+        去接管,那条审计链上就再也分不出人。
+
+        **产出是审计环里那一条,不是返回值。** 挂账 65 接受的代价是"甲忘了
+        切、乙的操作签在甲名下";正因为接受了它,这条带时刻、带新名字、删不掉
+        的记录才是事后唯一能翻的东西。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体要是个对象", '形如 {"name": "老王"}')
+        name = clean_operator(body.get("name"))
+        if not name:
+            # **拒得干净:一个字节都不写。** 拒了却把已经记着的名字冲成空的,
+            # 比收下更坏 —— 屏上那个署名变成空白,而请求回的是 400,人以为
+            # 什么都没发生。
+            raise HttpError(400, "名字不能是空的",
+                            "空名字在账上是「未具名」,事后谁也说不清那一趟"
+                            "是谁开的。狗不核实这个名字,但要求你报一个。")
+        now = self._ctx.clock()
+        self._operator = Operator(name=name, at_ms=now)
+        # 留痕里 ``ref`` 是 token 指纹;没设 PIN 的部署上没有会话,那就是空串
+        # —— **空串不许拿去顶替成别的什么**,"没有指纹"和"某个指纹"是两件事。
+        sess = req.session
+        self._control.book.note(
+            at_ms=now, kind="operator_changed",
+            who=Holder(ref=sess.ref if sess is not None else "", operator=name),
+            detail="从这一刻起账记在这个名字下(狗不核实)")
+        return self._operator_wire()
 
     def _identity(self, _req: Request) -> Response:
         """这是哪只狗。手机拿它认机器、给拉回去的归档分组。
