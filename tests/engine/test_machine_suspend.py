@@ -637,6 +637,9 @@ async def test_返航中接管完继续_重新规划回家而不是接着走老�
         状态序列 = []
         while not 广播.empty():
             状态序列.append(广播.get_nowait().state)
+    # 先断非空,不然上面那句"RUNNING 不在里面"在广播队列本来就是空的时候
+    # 也恒真 —— 那就什么都没测到。
+    assert RunState.RETURNING in 状态序列, f"广播序列是空的或没有 RETURNING: {状态序列}"
     assert RunState.RUNNING not in 状态序列, f"中途闪过 RUNNING: {状态序列}"
 
 
@@ -861,6 +864,52 @@ async def test_新一趟返航开始时挂起累计清零(make_engine, nav, devi
         assert 点 is not None
         assert 点.prior_suspend_ms == 0, \
             f"跑点位那一段的接管被算进返航的账里了: {点.prior_suspend_ms}"
+    finally:
+        if eng.running:
+            await eng.abort("测试收尾")
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                await eng.wait_done(timeout_s=5.0)
+        await eng.aclose()
+
+
+async def test_跨趟真的不带账(make_engine, nav, device, clock):
+    """顺手 1:上一条 (``test_新一趟返航开始时挂起累计清零``) 走的是同一趟内
+    「跑点位阶段 → 返航阶段」的清零,``eng.start()`` 只调过一次 —— 没有任何
+    一条测试真的跨过 ``start()`` 走一遍。
+
+    这条走真路径:第一趟里攒出一笔非零的 ``suspend_total_ms``、把那一趟
+    中止收尾,再用**同一个引擎对象**开第二趟(真调 ``eng.start()``,不直接
+    造 ``_Live``),断言第二趟一开始账是 0。
+
+    **为什么不是同义反复:** 光断言"新引擎的 ``suspend_total_ms`` 是 0"
+    只是在断言 dataclass 默认值管用(见 ``machine.py:641`` 边上的引用)。
+    这条先把第一趟的账攒成非零,再跨 ``start()`` 检查第二趟是不是真的清零
+    了 —— 如果哪天 ``_Live`` 被改成跨趟复用、或者 ``start()`` 手滑把上一份
+    字段带了过去,这条会红;字段默认值本身没变,不会拿"默认值对"这件事
+    继续骗过去。
+    """
+    nav.on_goto = NEVER
+    eng = make_engine()
+    try:
+        # 第一趟:接管一次,攒出非零账。
+        await eng.start(make_mission(), home=_HOME)
+        await until(lambda: nav.goto_calls)
+        await eng.suspend("第一趟里接管一次")
+        await until(lambda: eng.state is RunState.SUSPENDED)
+        clock.offset += 4 * 60.0
+        await eng.resume()
+        await until(lambda: eng.state is RunState.RUNNING)
+        assert eng._live.suspend_total_ms >= 4 * 60_000, \
+            "第一趟压根没记上账,后面那个 0 就没什么好证明的"
+        await eng.abort("第一趟收尾")
+        await eng.wait_done(timeout_s=5.0)
+
+        # 第二趟:真的再调一次 start(),不是直接造 _Live。
+        nav.清空下发记录()
+        await eng.start(make_mission(), home=_HOME)
+        await until(lambda: nav.goto_calls)
+        assert eng._live.suspend_total_ms == 0, \
+            f"第二趟一开始账就不是 0,跨趟带过来了: {eng._live.suspend_total_ms}"
     finally:
         if eng.running:
             await eng.abort("测试收尾")

@@ -182,7 +182,16 @@ class SuspendPoint:
     #: **没有默认值**:给一个"多半是对的"默认值,等于让漏传的调用方悄悄走上
     #: 重发点位那一支,而没有任何测试会红。
     from_state: RunState
-    #: **这一次让开腿之前,同一趟返航里已经累计挂起了多少毫秒。**
+    #: **这一次让开腿之前,已经累计挂起了多少毫秒 —— 口径按阶段分,不是
+    #: 笼统一句"同一趟返航里"。**
+    #:
+    #: 累计器从**任务一开始**就在记(不分跑点位阶段还是返航阶段),
+    #: ``_go_home`` 进返航时清零一次(见 ``:657``)。所以:
+    #:  - 跑点位阶段让开腿,这个数是"这一趟任务到目前为止累计挂起了多久";
+    #:  - 返航路上让开腿,这个数才是"这一趟返航里累计挂起了多久"——因为
+    #:    进 ``_go_home`` 那一刻已经清过一次。
+    #: 两段口径不同,但服务同一个判定:"这条狗累计有多久没在跑"。跑点位
+    #: 阶段反复短接管,同样该报下面那条 P1(可见性正是要的,不是缺陷)。
     #:
     #: 存在的理由是"反复短接管"这一幕:狗在返航路上被拉开、放回、又被拉开,
     #: 每一次都短于 ``SUSPEND_STALE_MS``,于是那条 P1 一次都不报,而狗从
@@ -192,7 +201,8 @@ class SuspendPoint:
     #: 耗电率才定得下来的新阈值。
     #:
     #: 累计量由引擎按可注入的 ``clock`` 算(不是墙钟),在 ``_go_home`` 进入
-    #: 时清零 —— 一趟一算,不跨趟累加。
+    #: 时清零 —— 返航这一段一趟一算,不跨趟累加(跨趟靠 ``_Live`` 每趟
+    #: 新建来保证,见 ``:657`` 边上的注释)。
     #:
     #: **不上线**,理由同 ``from_state``:判定在 ``app/server.py``
     #: (``_挂起超时了``),它拿到的是这个对象本身,不是 wire 上那份。
@@ -638,6 +648,12 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         # ``SuspendPoint.prior_suspend_ms``)。清在 ``while`` **外面**:重来
         # 那一圈走的是 ``continue``,清在里面等于每被接管一次就把账抹平,那条
         # P1 就还是永远不报 —— 也就是这个字段白加了。
+        #
+        # 「不跨趟」结构上不需要靠这句清零来保证:``_Live`` 全仓只有一个创建点
+        # (``start()`` 里的 ``self._live = _Live(...)``),每趟新开都会造一个
+        # 新对象,``suspend_total_ms`` 的 dataclass 默认值就是 0。这句清零管的
+        # 是**同一个** ``_Live`` 内部「跑点位阶段 → 返航阶段」这一次切换,不是
+        # 跨趟。
         live.suspend_total_ms = 0
         await self._transition(RunState.RETURNING, reason)
         while True:
@@ -688,8 +704,27 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 # 状态在这儿翻回 ``RETURNING``。``_ResumeReturnHome`` 那一支
                 # **全程不经过 RUNNING**(闪一下 RUNNING 会让订阅方以为任务又
                 # 在跑点位了,而这条狗从头到尾只是在回家路上);绕道 ``_Retry
-                # Waypoint`` 那两支会先被上游翻成 RUNNING 再翻回来,闪这一下是
-                # 上游那两个函数的既有行为,不在这一刀的范围里。
+                # Waypoint`` 那两支会先被上游翻成 RUNNING 再翻回来。
+                #
+                # **这一闪是安全的,论证如下:** ``_suspend_until_resumed``
+                # 的 ``finally``(``:1172``)里不 await 任何东西,只做
+                # ``live.suspended = None`` 和累加 ``suspend_total_ms``;紧
+                # 接着 ``await self._transition(RUNNING, "人工接管结束")``,
+                # 下一句就是 ``raise``。这个异常一路传到这儿(中间只经过
+                # ``_wait_nav_terminal`` / ``_await_nav_standby`` 里
+                # ``await self._handle(item)`` 那一层调用返回),**这段窗口
+                # 内没有任何 ``await self._next(...)``**——引擎是单任务的,
+                # 处理不了任何新事件,``:967`` "只在 RUNNING 时做定位恢复"、
+                # ``:988`` "已在 RETURNING 就不重复触发返航"这两道门槛都穿
+                # 不透。副作用只落两处:(1) 广播快照上闪一下 RUNNING,手机
+                # 上能看到;(2) 审计串里多一行 RUNNING「人工接管结束」,但
+                # 下一行紧跟着的 RETURNING「人工接管结束,重新规划返航」把它
+                # 纠正过来。
+                #
+                # ``RUNNING → RETURNING`` 这个**序列**是这一刀新造的(任务
+                # 13 之前接的是 ``RUNNING → ABORTED``)。上游那次
+                # ``_transition(RUNNING)`` 调用本身确实是既有代码,但接在它
+                # 后面走到 RETURNING 而不是 ABORTED,是这一刀改出来的路径。
                 await self._transition(RunState.RETURNING, "人工接管结束,重新规划返航")
                 continue
             except _AbortRun as exc:
@@ -1140,10 +1175,14 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             # 命令队列)就会剩下一份挂起快照,快照上写着"正在被接管"但其实
             # 这一趟已经没了。
             live.suspended = None
-            # 这一次挂了多久,记进这一趟返航的总账(见
-            # ``SuspendPoint.prior_suspend_ms``)。跟上面一句同一个理由放在
-            # ``finally``:走 abort 那条路也得记 —— 不记的话,"被接管着中止、
-            # 再从别处重新起一趟"这种走法会把账悄悄抹掉。
+            # 这一次挂了多久,记进累计总账(见
+            # ``SuspendPoint.prior_suspend_ms``)。放在 ``finally`` 不是跟
+            # 上面一句"图省事共用一个块",是这里**只能**放在 ``finally``:
+            # 这个函数没有一条正常落地的出口,``break`` 出循环之后走的是
+            # ``raise _ResumeReturnHome`` 或 ``raise _RetryWaypoint``
+            # (下面 ``:1190``/``:1192``),``abort`` 分支走的是
+            # ``raise _AbortRun``——三条出口全是异常,没地方能在 ``try``
+            # 主体里正常写"累加"这一句。
             live.suspend_total_ms += int((self._clock() - started) * 1000)
         if point.from_state is RunState.RETURNING:
             # 返航路上接管的那一支:交给 ``_go_home`` 重新规划回家,不在这儿
