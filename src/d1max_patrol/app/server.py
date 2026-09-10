@@ -54,6 +54,7 @@ from d1max_patrol.app.auth import (
     CHANNEL_LOCAL,
     NONCE_TTL_S,
     OPERATOR_NOTICE,
+    OPERATOR_PATH,
     PROOF_ALG,
     TOKEN_IDLE_S,
     Denied,
@@ -1487,8 +1488,8 @@ class AppServer:
         self.route("POST", "/api/control/takeover/approve",
                    self._control_approve)
         self.route("GET", "/api/control/audit", self._control_audit)
-        self.route("GET", "/api/operator", self._operator_get)
-        self.route("PUT", "/api/operator", self._operator_put)
+        self.route("GET", OPERATOR_PATH, self._operator_get)
+        self.route("PUT", OPERATOR_PATH, self._operator_put)
         self.route("GET", "/api/identity", self._identity)
         self.route("GET", "/api/state", self._state)
         self.route("GET", "/api/events", self._events)
@@ -1703,9 +1704,22 @@ class AppServer:
     def _control_wire(self, state: LeaseState, req: Request) -> Response:
         """控制权报文。
 
-        ``mine`` 只在这儿有,不在 ``/api/state`` 的 ``control`` 段里 —— 那一段
-        是所有人共用的一份快照,塞一个"是不是我"进去就得按人分份,SSE 那条
-        广播路子立刻塌掉。
+        ``mine`` 和 ``challenging`` 只在这儿有,不在 ``/api/state`` 的
+        ``control`` 段里 —— 那一段是所有人共用的一份快照,塞一个"是不是我"
+        进去就得按人分份,SSE 那条广播路子立刻塌掉。
+
+        **``challenging`` 是 ``mine`` 的对称写法,同一个理由。** 它俩都不是
+        租约本身的状态,而是"这一份报文发给谁"的属性,所以两个都算在这儿、
+        两个都不进 ``LeaseState.to_wire()``:进去了的话,广播快照里会出现一个
+        对所有人都一样的 ``challenging``,那是错的。
+
+        **``challenging`` 不叫 ``challenger_mine``。** ``mine`` 说的是"东西
+        在我手上",``challenging`` 说的是"我正在要" —— 两个不同的动作,用两个
+        不同的词,比前缀套娃在界面代码里读起来清楚。
+
+        它解的是挂账 61:``challenger`` 只带 ``{ref, operator}``,现场两台手机
+        的操作人同名(都报"张三")时,屏上一模一样,看的人分不出"在要接管的
+        那个人就是我"。名字分不开,``ref`` 分得开 —— 而 ``ref`` 只有狗这头有。
 
         ``remote_sessions``/``max_sessions`` 从 ``ControlDesk.seats()`` 取,
         不在这里自己数 —— 那两个数只许有一处定义(见 ``app/control.py`` 的
@@ -1722,6 +1736,8 @@ class AppServer:
         return json_response({
             **state.to_wire(),
             "mine": state.holder is not None and state.holder.ref == mine,
+            "challenging": (state.challenger is not None
+                            and state.challenger.ref == mine),
             "remote_sessions": sessions,
             "max_sessions": max_sessions,
             "notice": OPERATOR_NOTICE,
@@ -1825,7 +1841,14 @@ class AppServer:
                               "notice": OPERATOR_NOTICE})
 
     def _operator_get(self, _req: Request) -> Response:
-        """此刻记着的是谁。**这不是登录状态**(§6.3)。
+        """**这台狗上一次被谁报过名字**。这不是登录状态(§6.3)。
+
+        **它不是「现在是谁在开这只狗」的真相来源**(挂账 93)。这个
+        ``self._operator`` 是服务器级的一份,而每个会话自己还有一份
+        ``Session.operator``:三台手机连着的时候,这条接口回的是**最后一个报过
+        名字的人**,不是此刻拿着控制权的那个人,两者长期是两份。要「现在谁在
+        开」,读 ``GET /api/control`` 的 ``holder.operator``;要事后对账,翻
+        ``operator_changed`` 那个审计环 —— 那是唯一带时刻、删不掉的一份。
 
         **不要 token 之外的任何东西,也不要控制权**(§3.5 规则 1:看永远不要)。
         """

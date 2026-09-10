@@ -98,7 +98,7 @@ def watch_summary(ctx: AppContext, *, now_ms: int,
     """
     lag, lag_why = _包落差(ctx.bundles_root)
     skew, skew_why = _钟偏(ctx, now_ms)
-    pct, pct_why = _盘水位(disk)
+    ratio, ratio_why = _盘水位(disk)
     mirror, mirror_why = _镜像(ctx, targets, now_ms=now_ms)
     got: dict[str, Any] = {
         # 单位:槽名的列表(比 ``current`` 新的那几个),空列表 = 没落差。
@@ -111,12 +111,15 @@ def watch_summary(ctx: AppContext, *, now_ms: int,
         # 不显示的话:证据在狗上堆着,没人知道(§4.3)。
         "upload_backlog": None,
         # 单位:**已用比例 0-1**,不是 0-100 —— 0.83 的意思是这块盘 83% 满。
-        # **渲染这一格的时候千万别跟 ``battery_pct`` 共用一个格式化函数**:
-        # ``${disk_pct}%`` 会把一块 83% 满的盘画成「0.83%」,而这一格存在的
-        # 全部理由就是「盘快满了要看得见」—— 那一手滑会让它反着报,而且是
-        # 以最安静的方式(挂账 77 要把它改名成 ``disk_used_ratio``)。
+        # 名字里的 ``ratio`` 就是这个量纲(挂账 77:它以前叫 ``disk_pct``,
+        # 名字里写着 pct 值却是比例,那时候只能靠这段注释兜)。
+        # **渲染这一格的时候仍然千万别跟 ``battery_pct`` 共用一个格式化
+        # 函数**:那种手滑会把一块 83% 满的盘画成「0.83%」,而这一格存在的
+        # 全部理由就是「盘快满了要看得见」—— 它会反着报,而且是以最安静的
+        # 方式。改名挡住的是「一眼看错量纲」,挡不住「两格共用一个格式化
+        # 函数」。
         # 不显示的话:直到它拒绝出发那天才发现(§4.7)。
-        "disk_pct": pct,
+        "disk_used_ratio": ratio,
         # 单位:**百分数 0-100**,不是 0-1。跟上面那一行量纲不同,见上面那段。
         # 不显示的话:平均 36% 看着健康,随时趴下(§1.1)。
         "battery_pct": battery_pct,
@@ -140,7 +143,7 @@ def watch_summary(ctx: AppContext, *, now_ms: int,
     if battery_pct is None:
         why["battery_pct"] = NO_BATTERY
     for 名, 说 in (("bundle_lag", lag_why), ("clock_skew_s", skew_why),
-                   ("disk_pct", pct_why), ("mirror", mirror_why)):
+                   ("disk_used_ratio", ratio_why), ("mirror", mirror_why)):
         if 说:
             why[名] = 说
     got["detail"] = why

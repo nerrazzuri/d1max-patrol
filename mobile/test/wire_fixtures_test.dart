@@ -11,6 +11,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/net/wire.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -206,6 +207,105 @@ void main() {
     final without = <String, dynamic>{..._load('storage')}
       ..remove('notice_written');
     expect(StorageView.fromJson(without).noticeWritten, isTrue);
+  });
+
+  test('租约：challenging 在报文里,没人在抢的时候是 false 不是缺席', () {
+    // 挂账 61。**键必须在**：狗那头无条件发这一位（跟 `mine` 一样），缺席
+    // 只会出现在老版本的狗上。夹具是「张三拿着、没人在抢」那一份，所以这里
+    // 是 false —— 但 false 和「压根没这个键」在这头是两件事，前者是狗说的，
+    // 后者是我们自己兜的底。
+    final m = _load('lease_state');
+    expect(m['challenging'], isA<bool>(),
+        reason: '缺了这一位，两台同名的手机在屏上就分不开');
+    expect(m['challenging'], isFalse);
+    expect(LeaseView.fromJson(m).challenging, isFalse);
+    // 照着夹具摆一个「有人在抢，而且那个人是我」。**`challenger` 那一段跟
+    // 「别人在抢」的那一份可以一个字不差** —— 判据只有 `challenging`。
+    final mine = <String, dynamic>{
+      ...m,
+      'challenger': <String, dynamic>{'ref': 'cc00cc00', 'operator': '张三'},
+      'challenging': true,
+    };
+    final other = <String, dynamic>{...mine, 'challenging': false};
+    expect(LeaseView.fromJson(mine).challenging, isTrue);
+    expect(LeaseView.fromJson(other).challenging, isFalse);
+    expect(LeaseView.fromJson(mine).challengerOperator,
+        LeaseView.fromJson(other).challengerOperator,
+        reason: '同名两台手机：名字比不出来，这条断言就是那个事实本身');
+    // 老版本的狗压根没这一位。**缺了是 false**：宁可退回到不指名的那句话，
+    // 也不许指错人。
+    final without = <String, dynamic>{...mine}..remove('challenging');
+    expect(LeaseView.fromJson(without).challenging, isFalse);
+  });
+
+  test('告警：三种局面的形状都在这一份里', () {
+    // 这一份取的是 `/api/alerts/all` —— 只有它里头同时有没人管的、有人确认
+    // 过的、已经解决的。`acked_ms`/`resolved_ms` 恒为 null 的那种夹具，教不
+    // 会这头它们非空时长什么样，而 `model/alert.dart` 上那段注释说的正是解析
+    // 错的后果：屏上写着「1970-01-01 已确认」。
+    final alerts = alertsFromWire(_load('alerts'));
+    expect(alerts, hasLength(4));
+    final byKind = <String, Alert>{for (final a in alerts) a.kind: a};
+    final fallen = byKind['fallen']!;
+    expect(fallen.isP1, isTrue);
+    expect(fallen.acked, isFalse, reason: '没人确认过，acked_ms 是 null');
+    expect(fallen.resolved, isFalse);
+    // **`channel` 是狗那头算好发过来的，不是这头再算一遍**（裁决十一）。
+    // 这一条已经升到顶了，所以它同时钉住了 escalated 和 channel 两个键。
+    expect(fallen.escalated, 2);
+    expect(fallen.channel, 'sound');
+    final estop = byKind['estop_pressed']!;
+    expect(estop.acked, isTrue);
+    expect(estop.ackedBy, isNotEmpty);
+    expect(estop.channel, 'screen');
+    final lag = byKind['bundle_lag']!;
+    // 同一个 kind 报了两次，聚合成一条。**first_ms 和 last_ms 是两个不同的
+    // 数** —— 一样的话，这两个键读串了也没人发现。
+    expect(lag.count, 2);
+    expect(lag.lastMs, greaterThan(lag.firstMs));
+    expect(lag.resolved, isTrue);
+    expect(lag.acked, isFalse,
+        reason: '解决不许冒充确认：狗那头 acked_* 原样不动（§5.3）');
+    expect(byKind['run_done']!.isP1, isFalse);
+    // 键里同时带 `/` 和 `#`，拼进 URL 之前必须整段转义。
+    expect(fallen.key, contains('/'));
+    expect(fallen.key, contains('#'));
+  });
+
+  test('值守汇总：六项都是非缺省值,量纲是 0-1 不是 0-100', () {
+    final m = _load('watch_summary');
+    // 裁决三十一：这个键叫 `disk_used_ratio`，**旧名字 `disk_pct` 不许再出现**
+    // —— 名字里写着 pct 而值是比例，是一次「把 83% 满的盘画成 0.83%」的手滑
+    // 的全部由来。
+    expect(m.containsKey('disk_pct'), isFalse);
+    expect(m['disk_used_ratio'], closeTo(0.83, 1e-9));
+    final v = WatchSummary.fromWire(m);
+    expect(v.diskUsedRatio, closeTo(0.83, 1e-9));
+    // **两个量纲不一样,这一条就是那件事本身**：盘是比例 0-1，电量是百分数
+    // 0-100。共用一个格式化函数的那天，其中一格会反着报。
+    expect(v.batteryPct, 36.0);
+    expect(v.diskUsedRatio!, lessThan(1.0));
+    expect(v.batteryPct!, greaterThan(1.0));
+    expect(v.clockSkewS, closeTo(12.5, 1e-9));
+    expect(v.batteryAsOfMs, isNotNull);
+    // **`null` 不许塌成 0。** 这一卷回传功能还没有，报 0 等于告诉人「证据都
+    // 传上去了」，而它们全在狗上堆着。
+    expect(v.uploadBacklog, isNull);
+    expect(v.detailFor('upload_backlog'), isNotEmpty,
+        reason: '一个光秃秃的「不知道」摆在屏上，本身就是一次新的静默失败');
+    // 嵌套那两块（列表、对象）都得真的走一遍：缺省值摆出来的夹具走不到。
+    expect(v.bundleLag, <String>['site-kl-4']);
+    final mirror = v.mirror!;
+    expect(mirror.disks, 1);
+    expect(mirror.usable, 1);
+    expect(mirror.measured, 1);
+    expect(mirror.behind, 1);
+    expect(mirror.behindBytes, isPositive);
+    expect(mirror.full, isFalse);
+    expect(mirror.lastSyncMs, isNotNull);
+    // 屏上那一格要跟告警栏对得上：同一份事实喂给两处，这一份夹具里盘水位
+    // 过了 disk_80 的线、盘上还有个没生效的槽，于是有两条未解决的告警。
+    expect(v.alertsOpen, 2);
   });
 
   test('三个视图都吃得下狗发的那份', () {

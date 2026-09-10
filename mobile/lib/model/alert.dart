@@ -11,7 +11,7 @@
 /// * **排序**（先级别再 `last_ms` 倒序）在 `AlertBook.open()` 里。狗那侧的
 ///   `_alerts_open` 处理器自己都写着「这儿不再排一遍」—— 同一件事有两个出处，
 ///   对不上的那天，屏幕第一行显示的不是该起身的那件事。
-/// * **量纲**：`disk_pct` 是已用**比例** 0-1，`battery_pct` 是**百分数**
+/// * **量纲**：`disk_used_ratio` 是已用**比例** 0-1，`battery_pct` 是**百分数**
 ///   0-100（`app/watch.py` 里那两段注释专门写了这件事）。模型这一层原样收着，
 ///   换算只在渲染那一处做，而且两处不共用一个格式化函数。
 ///
@@ -188,7 +188,7 @@ class WatchSummary {
   final int? uploadBacklog;
 
   /// 盘已用**比例 0-1**，不是 0-100。见文件头那段量纲。
-  final double? diskPct;
+  final double? diskUsedRatio;
 
   /// 电量**百分数 0-100**，不是 0-1。
   final double? batteryPct;
@@ -216,7 +216,7 @@ class WatchSummary {
     required this.bundleLag,
     required this.clockSkewS,
     required this.uploadBacklog,
-    required this.diskPct,
+    required this.diskUsedRatio,
     required this.batteryPct,
     required this.batteryAsOfMs,
     required this.alertsOpen,
@@ -236,7 +236,7 @@ class WatchSummary {
       // 只认 `double` 的话那一拍会崩。
       clockSkewS: (m['clock_skew_s'] as num?)?.toDouble(),
       uploadBacklog: (m['upload_backlog'] as num?)?.toInt(),
-      diskPct: (m['disk_pct'] as num?)?.toDouble(),
+      diskUsedRatio: (m['disk_used_ratio'] as num?)?.toDouble(),
       batteryPct: (m['battery_pct'] as num?)?.toDouble(),
       batteryAsOfMs: (m['battery_as_of_ms'] as num?)?.toInt(),
       alertsOpen: (m['alerts_open'] as num?)?.toInt() ?? 0,

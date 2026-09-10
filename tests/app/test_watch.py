@@ -55,7 +55,7 @@ async def _发(emitter, event) -> None:
 
 #: 六项。**一个不少** —— 少一项就是屏上少一块玻璃。
 六项 = {"bundle_lag", "clock_skew_s", "upload_backlog",
-        "disk_pct", "battery_pct", "mirror"}
+        "disk_used_ratio", "battery_pct", "mirror"}
 
 
 @pytest.fixture
@@ -202,7 +202,7 @@ def test_每一项都指得出出处(装好的ctx):
     got = watch_summary(装好的ctx(), now_ms=0, battery_pct=31,
                         disk=lambda: (83, 100))
     assert got["battery_pct"] == 31
-    assert got["disk_pct"] == pytest.approx(0.83)
+    assert got["disk_used_ratio"] == pytest.approx(0.83)
 
 
 def test_盘况屏那条规矩_这个模块只读():
@@ -355,10 +355,39 @@ def test_读不出盘上局面的时候是不知道(装好的ctx, monkeypatch):
 # ------------------------------------------------------------------ 盘水位与电量
 
 
+def test_旧键disk_pct不许长回来(装好的ctx, bridge, tmp_path):
+    """挂账 77 / 裁决三十一:这个字段叫 ``disk_used_ratio``,**没有兼容别名**。
+
+    这条守的不是改名本身(改名漏了哪一处,上面那几条断言自己就红了),守的是
+    **下一个人「顺手加个别名平滑过渡」**。狗和手机从同一个仓、同一个版本出厂,
+    仓外读者是零个 —— 别名是纯成本零收益,而它一旦以「向后兼容」的名义长回来,
+    这个字段就永远有两个名字,第 9 卷的 ``d1max_console`` 会两个都读到。
+
+    **值域一并钉住:还是 0-1,不是 0-100。** 改名的时候顺手改成百分数是更坏的
+    选择 —— 所有已经读对了的代码会在不报错的情况下算错 100 倍。
+    """
+    got = watch_summary(装好的ctx(), now_ms=0, disk=lambda: (83, 100))
+    assert "disk_pct" not in got
+    assert "disk_pct" not in got["detail"]
+    assert got["disk_used_ratio"] == pytest.approx(0.83)
+
+    # 路由那一头也要看一眼:汇总函数上没有别名不代表报文里没有。
+    ctx = C.make_ctx(bridge, tmp_path)
+    s = AppServer(ctx, port=0)
+    s.start()
+    try:
+        份 = C.get_json(s, WATCH)
+    finally:
+        s.stop()
+    assert "disk_pct" not in 份
+    assert "disk_pct" not in 份["detail"]
+    assert 0.0 < 份["disk_used_ratio"] <= 1.0, "值域还是 0-1,不是 0-100"
+
+
 def test_盘水位量不出来的时候是不知道不是0(装好的ctx):
     """报 0 等于说「盘是空的」—— 而这一档存在的理由正是「盘快满了」。"""
     got = watch_summary(装好的ctx(), now_ms=0, disk=lambda: (0, 0))
-    assert got["disk_pct"] is None
+    assert got["disk_used_ratio"] is None
 
 
 def test_还没收到电量遥测的时候是不知道不是0(装好的ctx):
@@ -619,7 +648,7 @@ def test_路由上一个电量事件都没来过的时候接收时刻是不知�
 def test_路由上的盘水位是真量出来的(值守服务):
     _, s = 值守服务
     got = C.get_json(s, WATCH)
-    assert 0.0 < got["disk_pct"] <= 1.0
+    assert 0.0 < got["disk_used_ratio"] <= 1.0
 
 
 def test_扫盘炸了这一屏照样答完(bridge, tmp_path):
@@ -637,7 +666,7 @@ def test_扫盘炸了这一屏照样答完(bridge, tmp_path):
     finally:
         s.stop()
     assert got["mirror"] is None
-    assert got["disk_pct"] is not None
+    assert got["disk_used_ratio"] is not None
 
 
 def test_插着镜像盘的时候路由也报得出来(bridge, tmp_path):

@@ -1,0 +1,23 @@
+{
+  "alerts_open": 2,
+  "battery_as_of_ms": 1757000000000,
+  "battery_pct": 36.0,
+  "bundle_lag": [
+    "site-kl-4"
+  ],
+  "clock_skew_s": 12.5,
+  "detail": {
+    "upload_backlog": "这台狗还没装回传功能,现场证据全存在本机 —— 所以这一档是「不知道」,不是「没有积压」"
+  },
+  "disk_used_ratio": 0.83,
+  "mirror": {
+    "behind": 1,
+    "behind_bytes": 4153,
+    "disks": 1,
+    "full": false,
+    "last_sync_ms": 1756996400000,
+    "measured": 1,
+    "usable": 1
+  },
+  "upload_backlog": null
+}

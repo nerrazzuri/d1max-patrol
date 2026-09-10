@@ -645,10 +645,10 @@ class _WatchPageState extends State<WatchPage> {
       ),
       _Slot(
         slotKey: WatchPage.diskKey,
-        whyKey: WatchPage.whyKeyFor('disk_pct'),
+        whyKey: WatchPage.whyKeyFor('disk_used_ratio'),
         label: '盘水位',
-        value: _diskText(s.diskPct),
-        why: s.detailFor('disk_pct'),
+        value: _diskText(s.diskUsedRatio),
+        why: s.detailFor('disk_used_ratio'),
       ),
       _Slot(
         slotKey: WatchPage.batteryKey,
@@ -689,7 +689,7 @@ class _WatchPageState extends State<WatchPage> {
   /// **盘水位是已用比例 0-1**，屏上要写成百分数。
   ///
   /// **千万别跟 [_batteryText] 共用一个格式化函数**（`app/watch.py` 里那段
-  /// 注释专门写了这件事）：`${diskPct}%` 会把一块 83% 满的盘画成「0.83%」，
+  /// 注释专门写了这件事）：`${diskUsedRatio}%` 会把一块 83% 满的盘画成「0.83%」，
   /// 而这一格存在的全部理由就是「盘快满了要看得见」—— 那一手滑会让它反着报，
   /// 而且是以最安静的方式。
   String _diskText(double? ratio) =>

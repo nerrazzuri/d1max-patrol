@@ -80,7 +80,7 @@ Map<String, dynamic> summaryWire([Map<String, dynamic> over = const {}]) =>
       // 这一卷恒为 null —— 这台狗还没有回传功能。
       'upload_backlog': null,
       // **已用比例 0-1**，不是 0-100。跟下面那个电量量纲不同。
-      'disk_pct': 0.83,
+      'disk_used_ratio': 0.83,
       // **百分数 0-100**，不是 0-1。
       'battery_pct': 36.0,
       'battery_as_of_ms': 1757400000000,
@@ -380,7 +380,7 @@ void main() {
         t,
         summary: summaryWire(<String, dynamic>{
           'clock_skew_s': null,
-          'disk_pct': null,
+          'disk_used_ratio': null,
           'battery_pct': null,
           'bundle_lag': null,
           'mirror': null,

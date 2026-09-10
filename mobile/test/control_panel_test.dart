@@ -83,6 +83,30 @@ Map<String, dynamic> takeoverPending(
       'grace_in_ms': graceInMs,
     };
 
+/// 别人拿着，**在抢的那个人就是我**（挂账 61）。
+///
+/// `challenging` 是狗那头按会话 ref 算好发过来的一位，跟 `mine` 是对称的
+/// 一对（`server.py` 的 `_control_wire`）。
+Map<String, dynamic> takeoverByMe({int graceInMs = 15000}) =>
+    <String, dynamic>{
+      ...takeoverPending(graceInMs: graceInMs),
+      'challenging': true,
+    };
+
+/// 别人拿着，在抢的是**另一台报着同一个名字的手机**（挂账 61）。
+///
+/// **除了 `challenging` 这一位，这份报文跟 [takeoverByMe] 一个字都不差** ——
+/// 那正是这条挂账要说的事：`challenger` 只带 `{ref, operator}`，而狗记的操作
+/// 员姓名**不核实**，现场两个人都报「张三」（或者同一个人手上两台手机）是完
+/// 全正常的局面。手机这头连自己的会话 ref 都没有，拿 `challengerRef` 或者
+/// `challengerOperator` 去比一律比不出来。所以这两份夹具故意连 ref 都一样：
+/// 屏上分得开，就只可能是靠 `challenging` 分开的。
+Map<String, dynamic> takeoverBySameName({int graceInMs = 15000}) =>
+    <String, dynamic>{
+      ...takeoverPending(graceInMs: graceInMs),
+      'challenging': false,
+    };
+
 /// 把 [lease] 里的 `heartbeat_ms` 换成 [ms]（给 `null` 就是狗发了个 JSON null）。
 ///
 /// 校准周期是**从这个字段算出来的**（`engine/lease.py` 明写客户端不该硬编），
@@ -447,6 +471,36 @@ void main() {
     expect(graceSeconds(t), inInclusiveRange(14, 15),
         reason: '宽限期读 grace_in_ms（相对量，狗给的是 15000），'
             '不拿 grace_ends_ms 减手机的钟；本地可能已经先减掉一格，所以容 14');
+    await unmount(t, rig);
+  });
+
+  testWidgets('我在抢的时候屏上说的是「你」不是「有人」', (WidgetTester t) async {
+    /// 挂账 61。**这一行是旁观者和排队的人唯一分得开的地方。**
+    final Rig rig = await mount(t, takeoverByMe());
+    expect(find.byKey(ControlPanel.challengeMineKey), findsOneWidget);
+    expect(find.byKey(ControlPanel.challengeOtherKey), findsNothing);
+    await unmount(t, rig);
+  });
+
+  testWidgets('同名的另一台手机在抢,屏上不能说是我', (WidgetTester t) async {
+    /// 挂账 61 那个原始场景：现场两个人都报「张三」。这份报文跟上一条**只差
+    /// `challenging` 一位**，所以这两条一起才说明问题 —— 单看哪一条，一个
+    /// 「永远画『你』」或者「永远画『有人』」的实现都能过。
+    ///
+    /// 画错的后果不是一句话说错：旁观者以为自己已经在排队了，于是干等一个
+    /// 不会属于他的宽限期；等急了按「取得控制权」，把真正在等的那次接管顶掉。
+    final Rig rig = await mount(t, takeoverBySameName());
+    expect(find.byKey(ControlPanel.challengeOtherKey), findsOneWidget);
+    expect(find.byKey(ControlPanel.challengeMineKey), findsNothing);
+    await unmount(t, rig);
+  });
+
+  testWidgets('没人在抢的时候这一行根本不画', (WidgetTester t) async {
+    /// 「有人正在要接管」常驻的话，这一行就从「一件要留意的事」变成了背景 ——
+    /// 而它存在的全部理由是让人在**真有人在抢**的那一刻抬头看一眼。
+    final Rig rig = await mount(t, otherHolds());
+    expect(find.byKey(ControlPanel.challengeMineKey), findsNothing);
+    expect(find.byKey(ControlPanel.challengeOtherKey), findsNothing);
     await unmount(t, rig);
   });
 

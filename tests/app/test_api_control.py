@@ -506,3 +506,76 @@ def test_一个名字不许有两种类型(有pin的服务):
     表 = get_json(有pin的服务, "/api/sessions", headers=auth(本机))
     assert isinstance(表["sessions"], list)
     assert isinstance(表["remote_sessions"], int)
+
+
+# ------------------------------------------- 挂账 61: 在抢的那个人是不是我
+
+
+def test_我在抢的时候challenging是真的(有pin的服务):
+    """**两台手机上的操作人同名** —— 挂账 61 的原始场景。
+
+    ``challenger`` 只带 ``{ref, operator}``:两边都叫「张三」的时候,靠名字
+    分不出「在要接管的那个人是不是我」。``challenging`` 跟 ``mine`` 一样按
+    ``req.session.ref`` 逐请求算,名字撞车也分得开。
+    """
+    甲 = 解锁(有pin的服务, "张三")
+    乙 = 解锁(有pin的服务, "张三")
+    打(有pin的服务, "/api/control/acquire", 甲)
+    打(有pin的服务, "/api/control/takeover", 乙)
+
+    甲份 = get_json(有pin的服务, "/api/control", headers=auth(甲))
+    乙份 = get_json(有pin的服务, "/api/control", headers=auth(乙))
+    assert 甲份["challenging"] is False and 甲份["mine"] is True
+    assert 乙份["challenging"] is True and 乙份["mine"] is False
+    # 名字这条便宜路子在这个场景里是错的:两份报文里的挑战者都叫「张三」,
+    # 而其中一份的「张三」不是读报文的这个人。
+    assert 甲份["challenger"]["operator"] == 乙份["challenger"]["operator"]
+
+
+def test_旁观的第三台手机上challenging是假的(有pin的服务):
+    """既不是持有者也不是挑战者的那台手机 —— 两个都得是假的。
+
+    只断持有者和挑战者两份的话,``challenging`` 写成 ``state.challenger is
+    not None``(忘了比 ref)照样绿:那种写法在持有者那份上恰好也是真的,
+    可它错的方向是「屏上告诉一个没按过接管的人『你正在要接管』」。
+    """
+    甲 = 解锁(有pin的服务, "张三")
+    乙 = 解锁(有pin的服务, "李四")
+    丙 = 解锁(有pin的服务, "王五")
+    打(有pin的服务, "/api/control/acquire", 甲)
+    打(有pin的服务, "/api/control/takeover", 乙)
+
+    丙份 = get_json(有pin的服务, "/api/control", headers=auth(丙))
+    assert 丙份["challenger"] is not None, "确实有人在抢,这条才有意义"
+    assert 丙份["challenging"] is False
+    assert 丙份["mine"] is False
+
+
+def test_没人在抢的时候challenging在报文里而且是假的(有pin的服务):
+    """**缺席和 false 是两件事。** 手机那头 ``m['challenging'] == true`` 的
+    写法对两者一视同仁,但夹具是照着真报文签进仓库的:这个键缺席的话,
+    Dart 那侧就永远学不到它存在。
+    """
+    甲 = 解锁(有pin的服务, "张三")
+    打(有pin的服务, "/api/control/acquire", 甲)
+    份 = get_json(有pin的服务, "/api/control", headers=auth(甲))
+    assert 份["challenger"] is None
+    assert "challenging" in 份
+    assert 份["challenging"] is False
+
+
+def test_challenging没进共享快照(有pin的服务):
+    """挂账 61 的真解只许落在 ``_control_wire`` 上。
+
+    ``/api/state`` 那一段是一份广播,按人分份就塌 —— 这条测试守的是
+    ``_control_wire`` 那段 docstring 里写死的理由,不是守一个字段名。
+    """
+    甲 = 解锁(有pin的服务, "张三")
+    乙 = 解锁(有pin的服务, "李四")
+    打(有pin的服务, "/api/control/acquire", 甲)
+    打(有pin的服务, "/api/control/takeover", 乙)
+
+    for tok in (甲, 乙):
+        段 = get_json(有pin的服务, "/api/state", headers=auth(tok))["control"]
+        assert "challenging" not in 段
+        assert "mine" not in 段

@@ -14,10 +14,11 @@ registry_store.dart``,按狗分别记 —— 换一只狗常常就是换一个�
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from d1max_patrol.app.auth import MAX_OPERATOR_LEN
+from d1max_patrol.app.auth import MAX_OPERATOR_LEN, OPERATOR_PATH
 from d1max_patrol.app.server import AppServer
 from tests.app.conftest import get_err, get_json, make_ctx, request
 
@@ -218,3 +219,42 @@ def test_报上来的时刻跟审计里那一条对得上(server):
     assert body["at_ms"] > 0
     换人 = [a for a in 留痕(server) if a["kind"] == "operator_changed"]
     assert [a["at_ms"] for a in 换人] == [body["at_ms"]]
+
+
+# ------------------------------------------------- 挂账 90: 两头别各抄一份
+
+
+def test_手机那头的路径跟狗这头是同一条():
+    """挂账 90:``'/api/operator'`` 在狗和手机两侧各写过一份手抄件。
+
+    **两边各收一个常量还不够。** 收成常量之后仓里还是两份(``OPERATOR_PATH``
+    和 ``patrol_client.dart`` 的 ``operatorPath``),狗这头改了路径,两侧的测试
+    **仍然各自全绿** —— 而现场表现是「换班改了名字,狗那儿一条留痕都没有」,
+    直到事后要翻账才发现。这条测试就是把那道缝钉死的那根钉子:它读手机源码里
+    的那一行,跟狗这头的常量比。
+
+    **它认的是文本,所以是一根便宜的绊线,不是探针。** 手机那侧把常量改个写法
+    (换成双引号、拆成两行、拼串)这条就认不出来了 —— 所以 ``patrol_client
+    .dart`` 那个常量上面写着「这一行的形状不要改」。真正的探针要跑得起 Dart,
+    这个仓的 Python 测试里没有那个东西;而绊线的价值就一样:手滑的时候当场绊
+    一下,比真机早。
+
+    路径**故意不从 Dart 那侧的字面量反着抄**:两边各自声明、在这里对齐,才是
+    "两份说法必须一致"这件事本身。
+    """
+    源 = (Path(__file__).resolve().parents[2] / "mobile" / "lib" / "net"
+          / "patrol_client.dart").read_text(encoding="utf-8")
+    行 = [ln for ln in 源.splitlines()
+          if ln.startswith("const String operatorPath")]
+    assert len(行) == 1, f"手机那头的 operatorPath 不是恰好一行: {行}"
+    assert 行[0] == f"const String operatorPath = '{OPERATOR_PATH}';", 行[0]
+    # 收干净了没有:除了那个常量声明,``lib/`` 里不许再有第二处字面量。
+    assert 源.count(f"'{OPERATOR_PATH}'") == 1, "手机那侧又抄了一份字面量"
+
+
+def test_狗这头也只有一份():
+    """``server.py`` 里那两条路由登记读的是同一个常量,不是两个字面量。"""
+    源 = (Path(__file__).resolve().parents[2] / "src" / "d1max_patrol"
+          / "app" / "server.py").read_text(encoding="utf-8")
+    assert f'"{OPERATOR_PATH}"' not in 源, "server.py 里又抄回了一份字面量"
+    assert 源.count("OPERATOR_PATH") >= 2, "两条路由都该读这个常量"

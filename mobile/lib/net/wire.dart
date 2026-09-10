@@ -42,6 +42,21 @@ class LeaseView {
   final String? challengerRef;
   final String challengerOperator;
 
+  /// 在要接管的那个人**是不是我**（`server.py` 的 `_control_wire` 按会话 ref
+  /// 算好了发过来，跟 [mine] 是对称的一对）。
+  ///
+  /// **不许拿 [challengerOperator] 跟本机记的操作员姓名比来代替它**（挂账
+  /// 61）：狗那头记的名字**不核实**，两台手机都报「张三」是完全正常的局面，
+  /// 那时候两台屏上会同时写着「你正在要接管」——而其中一台是旁观者，它按
+  /// 「取得控制权」只会把已经在等的那次接管顶掉。
+  ///
+  /// 也**不许拿 `challengerRef` 跟本地存的什么 ref 比**：手机这头根本没有自己
+  /// 的会话 ref，那个数只有狗知道（理由同 [mine]）。
+  ///
+  /// 老版本的狗不发这个键，那时候是 `false`——屏上只会退回到「有人正在要
+  /// 接管」这句不指名的话，而不会指错人。
+  final bool challenging;
+
   /// 现在几个远程会话 / 最多几个（§3.6，3 个封顶）。
   ///
   /// **叫 `remote_sessions` 不叫 `sessions`**：`GET /api/sessions` 里的
@@ -64,6 +79,7 @@ class LeaseView {
     this.mine = false,
     this.challengerRef,
     this.challengerOperator = '',
+    this.challenging = false,
     this.remoteSessions = 0,
     this.maxSessions = 0,
     this.notice = '',
@@ -81,6 +97,7 @@ class LeaseView {
       mine: m['mine'] == true,
       challengerRef: c?['ref'] as String?,
       challengerOperator: (c?['operator'] as String?) ?? '',
+      challenging: m['challenging'] == true,
       remoteSessions: (m['remote_sessions'] as num?)?.toInt() ?? 0,
       maxSessions: (m['max_sessions'] as num?)?.toInt() ?? 0,
       notice: (m['notice'] as String?) ?? '',

@@ -1,0 +1,72 @@
+{
+  "alerts": [
+    {
+      "acked_by": "",
+      "acked_ms": null,
+      "channel": "sound",
+      "count": 1,
+      "detail": "姿态报翻倒,得有人去现场把它扶起来",
+      "escalated": 2,
+      "first_ms": 1756999640000,
+      "key": "D1M-TEST/fallen#1",
+      "kind": "fallen",
+      "last_ms": 1756999640000,
+      "level": "P1",
+      "resolved_by": "",
+      "resolved_ms": null,
+      "robot": "D1M-TEST",
+      "title": "狗趴下了"
+    },
+    {
+      "acked_by": "老王",
+      "acked_ms": 1757000000000,
+      "channel": "screen",
+      "count": 1,
+      "detail": "现场有人按了急停,松开之前谁也开不走",
+      "escalated": 0,
+      "first_ms": 1757000000000,
+      "key": "D1M-TEST/estop_pressed#1",
+      "kind": "estop_pressed",
+      "last_ms": 1757000000000,
+      "level": "P1",
+      "resolved_by": "",
+      "resolved_ms": null,
+      "robot": "D1M-TEST",
+      "title": "急停被按下"
+    },
+    {
+      "acked_by": "",
+      "acked_ms": null,
+      "channel": "screen",
+      "count": 2,
+      "detail": "盘上有 site-kl-4,current 还指着旧的",
+      "escalated": 0,
+      "first_ms": 1756999400000,
+      "key": "D1M-TEST/bundle_lag#1",
+      "kind": "bundle_lag",
+      "last_ms": 1756999880000,
+      "level": "P2",
+      "resolved_by": "小李",
+      "resolved_ms": 1757000000000,
+      "robot": "D1M-TEST",
+      "title": "任务包落好了但没生效"
+    },
+    {
+      "acked_by": "",
+      "acked_ms": null,
+      "channel": "screen",
+      "count": 1,
+      "detail": "12 个点全过了,照片都归了档",
+      "escalated": 0,
+      "first_ms": 1757000000000,
+      "key": "D1M-TEST/run_done#1",
+      "kind": "run_done",
+      "last_ms": 1757000000000,
+      "level": "P3",
+      "resolved_by": "",
+      "resolved_ms": null,
+      "robot": "D1M-TEST",
+      "title": "这一趟跑完了"
+    }
+  ]
+}

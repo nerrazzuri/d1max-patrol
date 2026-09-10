@@ -96,7 +96,7 @@ void main() {
       'bundle_lag': <String>['b-0912'],
       'clock_skew_s': 12.5,
       'upload_backlog': null,
-      'disk_pct': 0.83,
+      'disk_used_ratio': 0.83,
       'battery_pct': 36.0,
       'battery_as_of_ms': 1757400000000,
       'alerts_open': 2,
@@ -117,7 +117,7 @@ void main() {
     // 狗上堆着。
     expect(s.uploadBacklog, isNull);
     // 已用**比例** 0-1，不是百分数 —— 模型这一层不换算。
-    expect(s.diskPct, 0.83);
+    expect(s.diskUsedRatio, 0.83);
     // **百分数** 0-100，跟上面那一行量纲不同。
     expect(s.batteryPct, 36.0);
     expect(s.batteryAsOfMs, 1757400000000);
@@ -136,7 +136,7 @@ void main() {
       'bundle_lag': null,
       'clock_skew_s': null,
       'upload_backlog': null,
-      'disk_pct': null,
+      'disk_used_ratio': null,
       'battery_pct': null,
       'battery_as_of_ms': null,
       'mirror': null,
@@ -144,7 +144,7 @@ void main() {
     expect(s.bundleLag, isNull);
     expect(s.clockSkewS, isNull);
     expect(s.uploadBacklog, isNull);
-    expect(s.diskPct, isNull);
+    expect(s.diskUsedRatio, isNull);
     expect(s.batteryPct, isNull);
     expect(s.batteryAsOfMs, isNull);
     expect(s.mirror, isNull);
@@ -166,15 +166,15 @@ void main() {
 
   test('汇总多出没见过的字段照样解得出来', () {
     final WatchSummary s = WatchSummary.fromWire(<String, dynamic>{
-      'disk_pct': 0.5,
+      'disk_used_ratio': 0.5,
       'net_backlog': 3,
       'gpu_temp_c': 61.5,
     });
-    expect(s.diskPct, 0.5);
+    expect(s.diskUsedRatio, 0.5);
   });
 
   test('整数报成整数,浮点报成浮点,两边都收得下', () {
-    // 狗那头 `disk_pct` 是 `used / total`（浮点），可 `clock_skew_s` 在钟正好
+    // 狗那头 `disk_used_ratio` 是 `used / total`（浮点），可 `clock_skew_s` 在钟正好
     // 对得上时是 `0`（JSON 里就是个整数）。只认 `double` 的话那一拍会崩。
     final WatchSummary s = WatchSummary.fromWire(
         const <String, dynamic>{'clock_skew_s': 0, 'battery_pct': 100});

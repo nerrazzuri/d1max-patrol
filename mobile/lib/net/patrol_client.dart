@@ -20,6 +20,24 @@ import 'package:crypto/crypto.dart';
 
 import '../model/alert.dart';
 
+/// 报名字那条接口的路径（挂账 90）。
+///
+/// **这个字面量在手机这一侧只许出现一次。** 它以前直接写在 [PatrolClient
+/// .setOperator] 的调用里，而狗那头 `server.py` 里又写了两遍 —— 三份互相自洽
+/// 的手抄件，改一处另外两处不会红。狗那侧改了路径，两侧的测试**各自全绿**，
+/// 现场表现是「换人到不了狗，留痕永远建不起来」。
+///
+/// 狗那头对应的是 `app/auth.py` 的 `OPERATOR_PATH`。**两个常量还是两份手抄
+/// 件**，只是从三份收成两份；真正把这条缝钉死的是狗那侧的
+/// `tests/app/test_operator.py::test_手机那头的路径跟狗这头是同一条` ——
+/// 它读这一行，跟 `OPERATOR_PATH` 比。所以**这一行的形状不要改**（单引号、
+/// 一行写完），改了那条测试认不出来。
+///
+/// **`GET` 这条路手机不走。** 狗那头那份是服务器级的「上一个报过名字的
+/// 人」，不是「现在是谁在开这只狗」（挂账 93）—— 后者读 `GET /api/control`
+/// 的 `holder.operator`。
+const String operatorPath = '/api/operator';
+
 /// 这一轮质询的证明：`HMAC-SHA256(PIN, nonce)` 的十六进制。
 ///
 /// 跟 `auth.proof_for` 逐字对应。**跨语言的向量在
@@ -145,7 +163,7 @@ class PatrolClient {
   Future<Map<String, dynamic>> put(String path, [Object? body]) =>
       _send('PUT', path, body);
 
-  /// 换人：把新的自报姓名告诉狗（`PUT /api/operator`）。
+  /// 换人：把新的自报姓名告诉狗（`PUT` [operatorPath]）。
   ///
   /// **姓名的家在手机上**（`store/registry_store.dart`，按狗分别记）。这一条
   /// 不是"存到狗上"，它是让狗在审计环里留下一条「从这一刻起账记在这个名字
@@ -155,7 +173,7 @@ class PatrolClient {
   /// **狗不核实这个名字**（§6.3）。返回的报文里 `operator_verified` 恒为
   /// `false`，界面上不许说成「已登录」。
   Future<String> setOperator(String name) async {
-    final r = await put('/api/operator', <String, dynamic>{'name': name});
+    final r = await put(operatorPath, <String, dynamic>{'name': name});
     return (r['name'] as String?) ?? '';
   }
 

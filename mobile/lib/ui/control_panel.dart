@@ -158,6 +158,18 @@ class ControlPanel extends StatefulWidget {
   static const Key noticeFullKey = ValueKey<String>('control-notice-full');
   static const Key remainKey = ValueKey<String>('control-remain');
   static const Key graceKey = ValueKey<String>('control-grace');
+
+  /// 「谁在要接管」那一行的两个 key。**两句话两个 key，不是一个 key 两种
+  /// 文案**：文案里那个「你」/「有人」是这一行全部的信息量，按 key 断言才
+  /// 分得清「说错了人」和「压根没说」——同一个 key 两种字的话，测试只能去
+  /// 比字符串，而屏上那句话哪天改一个字，测试红的是措辞不是判断。
+  ///
+  /// 挂账 61：这两句话以前分不出来。`challenger` 只带 `{ref, operator}`，
+  /// 而狗那头记的名字**不核实**——现场两个人都报「张三」，或者同一个人手上
+  /// 两台手机，报文里长得一模一样。判据只能是狗按会话 ref 算好的
+  /// `challenging`（`LeaseView.challenging`）。
+  static const Key challengeMineKey = ValueKey<String>('challenge-mine');
+  static const Key challengeOtherKey = ValueKey<String>('challenge-other');
   static const Key seatsKey = ValueKey<String>('control-seats');
 
   /// 三个话槽各自的 key。**槽是按 key 认的，不是按屏上有没有这句话认的。**
@@ -333,10 +345,20 @@ class _ControlPanelState extends State<ControlPanel> {
 
   /// 「屏上这一刻是个什么局面」。[_actTrouble] 的保质期就是它。
   ///
-  /// 只看**谁拿着、谁在抢、是不是我**这三件事：倒计时每秒都在变，跟着它清
+  /// 只看**谁拿着、谁在抢、是不是我**这几件事：倒计时每秒都在变，跟着它清
   /// 的话按钮那句话活不过一秒。
+  ///
+  /// **`challenging` 也进来了，但它进来是为了将来，不是为了今天。** 给定一
+  /// 个会话，`challenging` 是 `challengerRef` 的严格函数（同一台手机上，抢
+  /// 的人换了 `challengerRef` 必变），所以今天把它从这个串里删掉，仓库里没有
+  /// 一条测试会红 —— 这不是测试漏了，是这两件事此刻确实等价。列在这儿是因为
+  /// 这个串的口径是「屏上这一刻是个什么局面」，而 `challenging` 决定屏上那一
+  /// 行写的是「你」还是「有人」，它就是局面的一部分；哪天狗那头换了会话 ref
+  /// 的算法、或者 `challenging` 不再只由 `challengerRef` 决定，漏了它就是一
+  /// 次真的漏刷。
   String _sceneOf(LeaseView v) =>
-      '${v.mine}|${v.holderRef ?? ''}|${v.challengerRef ?? ''}';
+      '${v.mine}|${v.holderRef ?? ''}|${v.challengerRef ?? ''}'
+      '|${v.challenging}';
 
   /// 按狗说的 `heartbeat_ms` 重新对表。
   ///
@@ -413,6 +435,19 @@ class _ControlPanelState extends State<ControlPanel> {
                       key: ControlPanel.remainKey,
                       style: const TextStyle(
                           color: Colors.white70, fontSize: 13),
+                    ),
+                  // 有人在要接管的时候，**先说清楚那个人是不是你**（挂账
+                  // 61）。旁边那台同名的手机上写的是「有人」，这一行才是
+                  // 它们唯一分得开的地方 —— 分不开的后果是旁观者以为自己
+                  // 已经在排队了，于是干等一个不会属于他的宽限期。
+                  if (v != null && v.challenged)
+                    Text(
+                      v.challenging ? '你正在要接管' : '有人正在要接管',
+                      key: v.challenging
+                          ? ControlPanel.challengeMineKey
+                          : ControlPanel.challengeOtherKey,
+                      style: const TextStyle(
+                          color: Color(0xFFFFD08A), fontSize: 13),
                     ),
                   if (grace != null)
                     Text(
