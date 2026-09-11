@@ -24,6 +24,7 @@ LoopBridge、不持有任何巡检用的锁**。它碰的唯一一个共享对�
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from collections.abc import Callable
@@ -108,8 +109,12 @@ class UploadPump:
         try:
             return self._一步(now)
         except Exception as exc:
+            # **先把这一项退避重排, 再记日志。** 反过来的话, 日志自己抛(handler 坏了)
+            # 会把退避这一步跳过去 —— 那才是真正要命的: 这一项没退避, 下一拍
+            # 又立刻撞上同一个异常。
+            step = self._出意外了(exc, now)
             log.exception("上传走一步时抛了意外异常,这一项退避重排")
-            return self._出意外了(exc, now)
+            return step
 
     def _一步(self, now: int) -> Step:
         if now >= self._next_scan_ms:
@@ -176,13 +181,21 @@ class UploadPump:
                 step = self.tick()
             except Exception:
                 # **第二道门。** ``tick()`` 自己已经兜了一层,能漏到这儿的只剩
-                # "连退避重排那一步都炸了"(盘满,``queue.jsonl`` 写不进去)。
-                # 那种时候更不能让线程死 —— 盘满是会被清掉的,线程死了没人再起来。
-                # 同样靠 log.exception 让 BLE 放行,同样不许默默吞。
-                log.exception("上传线程兜底:这一拍整个失败了,歇一拍再来")
+                # "连退避重排那一步都炸了"(盘满,``queue.jsonl`` 写不进去),
+                # 或者"``tick()`` 里那句 log.exception 自己又抛了"(handler 的
+                # 流坏了、盘满了)。那种时候更不能让线程死 —— 盘满是会被清掉的,
+                # 线程死了没人再起来。
+                #
+                # **状态先落, 日志后记。** 这道门下面已经没有人了 —— 它自己抛出去
+                # 就是线程死。所以这里的顺序是: 先把值守屏看得见的那几个字写进去,
+                # 再去记日志; 日志这条路自己炸了(handler 的流坏了、盘满了)也不许
+                # 把线程带走。吞掉的代价是丢一条 traceback, 不吞的代价是上传线程
+                # 死光、last_error 还是空的 —— 后者严重得多。
                 with self._lock:
                     self._last_step = "deferred"
                     self._last_error = "上传线程这一拍整个失败了(详见日志)"
+                with contextlib.suppress(Exception):
+                    log.exception("上传线程兜底:这一拍整个失败了,歇一拍再来")
                 self._歇一下()
                 continue
             if step.action in {"idle", "deferred", "rewound"}:
@@ -208,6 +221,18 @@ class UploadPump:
         它不在关服务的过程中还在往 queue.jsonl 里写。
         """
         self._stop.set()
-        thread, self._thread = self._thread, None
-        if thread is not None:
-            thread.join(timeout=timeout_s)
+        thread = self._thread
+        if thread is None:
+            return
+        thread.join(timeout=timeout_s)
+        if thread.is_alive():
+            # **没收回来就不许清句柄。** 清了的话下一次 start() 会起出第二条线程,
+            # 两条一起往非线程安全的 queue.jsonl 里写。留着句柄, start() 那句
+            # `if self._thread is not None: return` 就会拦住它。
+            log.warning(
+                "上传线程 %.1f 秒还没收回来,句柄留着不清 —— "
+                "它多半卡在一个在途的 HTTP 请求上",
+                timeout_s,
+            )
+            return
+        self._thread = None

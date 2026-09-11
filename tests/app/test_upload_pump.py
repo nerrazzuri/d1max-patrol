@@ -203,3 +203,123 @@ def test_loop那一层也兜住_连退避重排都炸了线程照样活(tmp_path
     assert 打了 == ["tick"]
     assert 睡了 == [IDLE_SLEEP_S]
     assert "这一拍整个失败" in pump.stats().last_error
+
+
+# ---- 返修第 1 轮:日志这条路自己抛的时候 ----
+
+
+class _坏流:
+    """底下的流 write() 自己抛 RecursionError —— logging 对 RecursionError
+
+    是 ``except RecursionError: raise``,不走 handleError,``logging.raiseExceptions``
+    那套兜不住。这是"日志这条路自己炸了"的替身。
+    """
+
+    def write(self, s: str) -> None:
+        raise RecursionError("模拟 handler 自己抛")
+
+    def flush(self) -> None:
+        pass
+
+
+def _装一个坏handler():
+    import logging
+
+    logger = logging.getLogger("d1max_patrol.app.upload_pump")
+    旧 = (logger.handlers[:], logger.propagate, logger.level)
+    logger.handlers = [logging.StreamHandler(_坏流())]
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    return logger, 旧
+
+
+def _还原坏handler(logger, 旧) -> None:
+    handlers, propagate, level = 旧
+    logger.handlers = handlers
+    logger.propagate = propagate
+    logger.setLevel(level)
+
+
+def test_日志handler自己抛的时候线程不死_last_error写下来了(tmp_path: Path) -> None:
+    """兜底门(第二道)自己第一句就是 log.exception —— 日志这条路自己抛的时候,
+
+    没有任何人接。这条测的是修完之后:状态先落、日志后记,线程不许死。
+    """
+    import threading
+    import time
+
+    up, pump = 装配(tmp_path, 抛意外的服务器(ValueError("回执里的字段变成了火星文")))
+    logger, 旧 = _装一个坏handler()
+    try:
+        pump.start()
+        for _ in range(50):
+            if pump.stats().last_error:
+                break
+            time.sleep(0.05)
+        assert pump._thread is not None
+        assert pump._thread.is_alive()
+        assert pump.stats().last_error != ""
+    finally:
+        pump.stop(timeout_s=2.0)
+        _还原坏handler(logger, 旧)
+    # 收尾干净:stop() 已经把线程收回去了,别给后面的测试留一条挂着的线程。
+    assert not any(t.name == "d1max-upload" for t in threading.enumerate())
+
+
+def test_第一道门里日志抛了_退避照样打上(tmp_path: Path) -> None:
+    """(b) 那处顺序:先退避重排,再记日志。日志自己抛(handler 坏了)的话,
+
+    不能把退避这一步跳过去 —— 这条测的就是这个顺序,不是"tick 不许抛"。
+    """
+    up, pump = 装配(tmp_path, 抛意外的服务器(ValueError("回执里的字段变成了火星文")))
+    logger, 旧 = _装一个坏handler()
+    try:
+        with pytest.raises(RecursionError):
+            pump.tick()
+    finally:
+        _还原坏handler(logger, 旧)
+
+    条 = up.queue.get("巡检一/20260911T101500Z/events.jsonl")
+    assert 条.attempts == 1
+    assert 条.next_ms > 0
+
+
+def test_stop超时没收回线程就不清句柄_start不会起第二条(tmp_path: Path) -> None:
+    """join 超时之后如果照样把 _thread 清成 None, 下一次 start() 就会起出
+
+    第二条线程,两条一起往非线程安全的 queue.jsonl 里写。
+    """
+    import threading
+
+    卡住了 = threading.Event()
+    放行 = threading.Event()
+
+    class 会卡住的服务器:
+        def put(self, req):
+            卡住了.set()
+            放行.wait()
+            raise SinkError("放行之后照样失败,反正测的是 stop 的行为")
+
+    up, pump = 装配(tmp_path, 会卡住的服务器())
+    try:
+        pump.start()
+        assert 卡住了.wait(timeout=5.0)
+        pump.stop(timeout_s=0.05)
+        # 没收回来:句柄不许清。
+        assert pump._thread is not None
+
+        before = sum(
+            1 for t in threading.enumerate() if t.name == "d1max-upload" and t.is_alive()
+        )
+        assert before == 1
+
+        pump.start()
+        after = sum(
+            1 for t in threading.enumerate() if t.name == "d1max-upload" and t.is_alive()
+        )
+        # 句柄没清, start() 那句 `if self._thread is not None: return` 拦住了它 ——
+        # 活线程数还是 1, 不是 2。
+        assert after == 1
+    finally:
+        放行.set()
+        pump.stop(timeout_s=5.0)
