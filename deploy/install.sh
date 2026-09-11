@@ -3,6 +3,36 @@
 # 直接再跑一遍就是。每一步都在屏幕上说人话,因为跑它的人多半不写代码。
 set -euo pipefail
 
+# ---------------------------------------------------------- 对账声明块
+#
+# **下面这几行是给机器读的,不是装饰。** 这份脚本往盘上写的每一处都在这里
+# 记一行 @写盘,deploy/uninstall.sh 里对应地记 @删除 / @保留,
+# tests/test_deploy_coexist.py 把两边对起来:
+#
+#   * 这里新加一处 @写盘 而 uninstall.sh 没跟上 —— 那条测试当场红;
+#   * uninstall.sh 删了一处这里没记过的东西 —— 同样红。
+#
+# 加写盘动作的人请同时加这里的一行。**漏了就是卸载卸不干净。**
+#
+# @写盘 /opt/d1max                                                       根目录(下面那条 mkdir -p 建的)
+# @写盘 /opt/d1max/releases                                              版本槽,巡检数据也落在槽里
+# @写盘 /opt/d1max/bin                                                   跟版本无关的解释器软链
+# @写盘 /opt/d1max/bin-venv                                              上面那个解释器的 venv
+# @写盘 /opt/d1max/current                                               release activate 摆的版本链
+# @写盘 /opt/d1max/bundles                                               任务包目录,服务跑起来后落在根下
+# @写盘 /opt/d1max/pending.json                                          在途升级标记,同上
+# @写盘 /etc/d1max                                                       配置目录
+# @写盘 /etc/d1max/env                                                   设备 PIN 在这个文件里
+# @写盘 /etc/systemd/system/d1max-patrol.service                         install -m 0644 摆进去的单元
+# @写盘 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service systemctl enable 生成的自启链
+#
+# 这份脚本不写、但 uninstall.sh 要负责收掉的:
+#
+# @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元;这里只 rm -f 它,从来不写它
+#
+# **盘上只有以上这些。** 所有 pip install 都落在 /opt/d1max 底下的 venv 里,
+# python3 -m venv 只读系统 python3,不往系统 site-packages 里写东西。
+
 # **写死,不给环境变量覆盖。** systemd 单元里 /opt/d1max 是逐字写死的
 # (WorkingDirectory=、Environment=D1MAX_RELEASE_ROOT=、两条 Exec* 的解释器
 # 路径),app/server.py 里 AppContext.release_root 的默认值也是它。允许这里

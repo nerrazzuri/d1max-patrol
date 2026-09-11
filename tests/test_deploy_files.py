@@ -295,6 +295,11 @@ def 交付文件() -> tuple[Path, ...]:
     return (
         DEPLOY / "install.sh",
         DEPLOY / "d1max-patrol.service",
+        # 共存这一组也要发到现场:装机前后各跑一次 footprint.sh 留证据,
+        # 撤场时跑 uninstall.sh。挂在同一份名单上,护栏(口令、端口、
+        # PIN 字面量、厂商协议特征、骨架下界)就自动全都罩到它们头上。
+        DEPLOY / "footprint.sh",
+        DEPLOY / "uninstall.sh",
         ROOT / "docs" / "装机清单.md",
         ROOT / "docs" / "任务包格式.md",
         ROOT / "docs" / "鉴权与控制权.md",

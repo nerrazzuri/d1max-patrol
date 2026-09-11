@@ -53,6 +53,14 @@ from tests.test_deploy_files import DEPLOY, ROOT, 交付文件, 六位数
     # 现状约 3600 字。systemd 单元的三个段,少一个这份单元就不是单元了。
     DEPLOY / "d1max-patrol.service": (
         ("[Unit]", "[Service]", "[Install]"), 2400),
+    # 实测 8700 上下 —— 采集要覆盖 snapshot、diff 两条路和端口那一段,
+    # 少于下界说明有人把兜底或者某一类采集删了
+    DEPLOY / "footprint.sh": (
+        ("snapshot", "diff", "FILE|", "PORT|", "maxdepth", "timeout"), 6000),
+    # 实测 14000 上下 —— 五个步骤加上对账声明块;**下界卡得住**
+    # "有人把 patrol_agent 那一段删掉" 这种改法
+    DEPLOY / "uninstall.sh": (
+        ("1/5", "2/5", "3/5", "4/5", "5/5", "--dry-run", "--keep-data"), 9000),
     # 现状约 9400 字。六个编号小节。
     ROOT / "docs" / "装机清单.md": (
         ("## 一、", "## 二、", "## 三、", "## 四、", "## 五、", "## 六、"), 6000),

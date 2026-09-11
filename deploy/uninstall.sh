@@ -1,0 +1,457 @@
+#!/usr/bin/env bash
+# =====================================================================
+# uninstall.sh —— 一键卸载:把我们装上去的东西清掉,不留痕迹
+#
+#   用法:
+#     sudo bash deploy/uninstall.sh                      # 默认:全部清掉
+#     sudo bash deploy/uninstall.sh --keep-data          # 留 PIN 和数据
+#     sudo bash deploy/uninstall.sh --dry-run            # 只说要删什么,不动手
+#     sudo bash deploy/uninstall.sh --agent-root <目录>   # 指定放 runs/ 的那个目录
+#     sudo bash deploy/uninstall.sh --purge-agent-binary # 连编出来的二进制一起删
+#
+#   **默认就是彻底卸干净**:服务、单元、自启链、/opt/d1max 整个根、
+#   /etc/d1max 整个目录(含设备 PIN)、巡检数据、任务包,以及正在跑的
+#   patrol_agent 和它留下的管道 / pid 文件 / 现场日志。
+#   只想重装、不想让现场所有手机重输 PIN 的,用 --keep-data。
+#
+#   **没有二次确认。** 要的是"一键"。想先看一眼的人走 --dry-run ——
+#   脚本一上来就把要删的东西和不可逆的后果整块打在屏幕上,然后才动手。
+#   不做交互式确认还有第二条理由,跟 install.sh 第 216-219 行一样:
+#   这脚本要能在无人值守的 provisioning 里跑,一个会阻塞等输入的脚本
+#   比它要防的问题更麻烦。
+#
+#   这台机器上没有的那一半会自动跳过:Orin 上没有 runs/d1max-agent.fifo,
+#   agent 那一段就是个空操作;笔记本上没有 /opt/d1max,盘上那一段同理。
+#   什么都没装过的机器上跑一遍,干干净净退 0。
+#
+#   **变量名一律用 ASCII。** bash 的标识符只认 ASCII 字母和下划线:
+#   `根=/opt/d1max` 这种写法不是赋值,而是一条"找不到的命令",配上
+#   set -euo pipefail 会让脚本停在那一行。注释和屏幕上的话照旧写中文。
+# =====================================================================
+set -euo pipefail
+
+# ---------------------------------------------------------- 对账声明块
+#
+# **下面这几行是给机器读的,不是装饰。** tests/test_deploy_coexist.py 把
+# deploy/install.sh 里的 @写盘 / @也删 跟这里的 @删除 / @保留 对起来:
+#
+#   * install.sh 新加一处写盘而这里没跟上 —— 那条测试当场红;
+#   * 这里多删了一处 install.sh 根本没建过的东西 —— 同样红。
+#
+# 这条对账是"卸载卸得干净、又只卸我们自己的"这句话唯一不靠人记性的凭据。
+#
+# @删除 /opt/d1max                                                       整个根
+# @删除 /opt/d1max/bin                                                   跟版本无关的解释器
+# @删除 /opt/d1max/bin-venv                                              上面那个解释器的 venv
+# @删除 /opt/d1max/releases                                              版本槽(巡检数据就在槽里)
+# @删除 /opt/d1max/current                                               版本链
+# @删除 /opt/d1max/bundles                                               任务包
+# @删除 /opt/d1max/pending.json                                          在途升级标记
+# @删除 /etc/d1max                                                       整个配置目录
+# @删除 /etc/d1max/env                                                   里面有这台机器的设备 PIN
+# @删除 /etc/systemd/system/d1max-patrol.service                         主单元
+# @删除 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 开机自启那条链
+# @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
+#
+# 带 --keep-data 时这几处留着,每一处的理由都要能说出口:
+#
+# @保留 /etc/d1max          配置目录留着,因为 env 在它底下
+# @保留 /etc/d1max/env      里面有设备 PIN,删了重装会换一个,现场所有手机都要重输
+# @保留 /opt/d1max          根目录本身留着,数据在它底下
+# @保留 /opt/d1max/releases 巡检数据就在版本槽里(current/runs 实际指的是 <槽>/runs)
+# @保留 /opt/d1max/bundles  任务包
+
+# ------------------------------------------------------------ 常量
+# **写死,不给环境变量覆盖**,跟 install.sh 第 11 行同一个口径。下面那些
+# rm 的范围锁用的也是这几个字面量而不是这几个变量 —— 哪怕有人把变量改了,
+# 锁还在原地。
+ROOT=/opt/d1max
+ETC_DIR=/etc/d1max
+UNIT_DIR=/etc/systemd/system
+MAIN_UNIT=d1max-patrol.service
+OLD_UNIT=d1max-bootguard.service
+WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-patrol.service
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "$*" >&2; }
+
+usage() {
+  warn "用法:"
+  warn "  sudo bash $0                      # 默认:全部清掉,不留痕迹"
+  warn "  sudo bash $0 --keep-data          # 只卸配置和服务,留 PIN 和数据"
+  warn "  sudo bash $0 --dry-run            # 只说要删什么,不动手"
+  warn "  sudo bash $0 --agent-root <目录>   # patrol_agent 的 runs/ 在哪个目录下"
+  warn "  sudo bash $0 --purge-agent-binary # 连编出来的 motion/patrol_agent 一起删"
+}
+
+# ------------------------------------------------------------ 参数
+KEEP_DATA=0
+DO_IT=1
+PURGE_BIN=0
+AGENT_ROOT=
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep-data)          KEEP_DATA=1 ;;
+    --dry-run)            DO_IT=0 ;;
+    --purge-agent-binary) PURGE_BIN=1 ;;
+    --agent-root)
+      if [ $# -lt 2 ]; then
+        warn "!! --agent-root 后面要跟一个目录"
+        exit 2
+      fi
+      AGENT_ROOT=$2
+      shift
+      ;;
+    --agent-root=*) AGENT_ROOT=${1#--agent-root=} ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      warn "!! 不认识的参数:$1"
+      usage
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+# agent 那一套东西默认按"这个脚本在仓库里的位置"去找:field-agent.sh 开头
+# 会 cd 到仓库根,runs/ 就在那儿。脚本被单独拷到别处时用 --agent-root 指。
+if [ -z "$AGENT_ROOT" ]; then
+  AGENT_ROOT=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd) || AGENT_ROOT=$PWD
+fi
+AGENT_FIFO="$AGENT_ROOT/runs/d1max-agent.fifo"
+AGENT_PIDFILE="$AGENT_ROOT/runs/d1max-agent.pid"
+AGENT_LOGDIR="$AGENT_ROOT/runs/field-logs"
+AGENT_BIN="$AGENT_ROOT/motion/patrol_agent"
+
+# --------------------------------------------------------- 删除的两把锁
+#
+# 第一把:目标不许为空。第二把:目标必须长成下面 case 里那几个形状之一。
+# **两把锁都在 rm 之前,而且 rm 吃的是加了引号的、刚被这两把锁验过的变量。**
+# 这几条写不对就是事故,不是 bug。
+
+# 盘上属于我们的那几处。范围里**没有**任何一条能匹配到别家的目录、
+# 别家的 ROS、或者任何不叫 d1max-* 的 systemd 单元。
+rm_sys() {
+  local target=${1:-} why=${2:-}
+  if [ -z "$target" ]; then
+    warn "  内部错误:删除目标是空的,拒绝执行。"
+    return 0
+  fi
+  case "$target" in
+    /opt/d1max|/opt/d1max/*) ;;
+    /etc/d1max|/etc/d1max/*) ;;
+    /etc/systemd/system/d1max-*.service) ;;
+    /etc/systemd/system/*.target.wants/d1max-*.service) ;;
+    *)
+      warn "  拒绝删除 $target —— 不在允许的范围里。这是护栏,不是错误。"
+      return 0
+      ;;
+  esac
+  if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+    return 0
+  fi
+  if [ "$DO_IT" != 1 ]; then
+    say "  [dry-run] 会删:$target${why:+  ($why)}"
+    return 0
+  fi
+  rm -rf -- "$target"
+  say "  删了:$target${why:+  ($why)}"
+}
+
+# patrol_agent 留在工作目录里的痕迹。它们不在 /opt 也不在 /etc,所以单独
+# 一把锁:只认这几个固定的名字,而且必须长在 runs/ 或 motion/ 底下。
+rm_agent_trace() {
+  local target=${1:-} why=${2:-}
+  if [ -z "$target" ]; then
+    warn "  内部错误:删除目标是空的,拒绝执行。"
+    return 0
+  fi
+  case "$target" in
+    */runs/d1max-agent.fifo|*/runs/d1max-agent.pid|*/runs/field-logs) ;;
+    */motion/patrol_agent) ;;
+    *)
+      warn "  拒绝删除 $target —— 不在允许的范围里。这是护栏,不是错误。"
+      return 0
+      ;;
+  esac
+  if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+    return 0
+  fi
+  if [ "$DO_IT" != 1 ]; then
+    say "  [dry-run] 会删:$target${why:+  ($why)}"
+    return 0
+  fi
+  rm -rf -- "$target"
+  say "  删了:$target${why:+  ($why)}"
+}
+
+# ------------------------------------------------------- patrol_agent
+# 从 pidfile 认领一个还活着的 agent。跟 field-agent.sh 的 read_pidfile 同一
+# 条讲究:pid 会被系统回收,只看 kill -0 可能认领到一个毫不相干的进程。
+read_pidfile() {
+  local pid
+  [ -f "$AGENT_PIDFILE" ] || return 1
+  pid=$(cat "$AGENT_PIDFILE" 2>/dev/null) || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  printf '%s\n' "$pid"
+}
+
+# 等一个 pid 走掉。上限由参数给,**不许无限等**。
+wait_gone() {
+  local pid=$1 limit=$2 waited=0
+  while [ "$waited" -lt "$limit" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+# 找出所有在跑的 agent:pidfile 里那个 + pgrep 兜底。
+#
+# **两处不许出错的地方:**
+#   1. pgrep 的模式要收紧到"可执行文件本身叫 patrol_agent",否则
+#      `grep patrol_agent` 这种无辜进程也会被匹进来;
+#   2. 匹出来的 pid 里必须排掉自己($$)和自己的父进程($PPID) ——
+#      不排的话脚本会把自己(或者调它的那个 shell)杀掉。
+agent_pids() {
+  local pid found raw= p out=
+  pid=$(read_pidfile) || pid=
+  if [ -n "$pid" ]; then
+    raw="$pid"
+  fi
+  found=$(pgrep -f '(^|/)patrol_agent([[:space:]]|$)' 2>/dev/null) || found=
+  raw="$raw $found"
+  for p in $raw; do
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    if [ "$p" = "$$" ] || [ "$p" = "$PPID" ]; then
+      continue
+    fi
+    case " $out " in *" $p "*) continue ;; esac
+    out="$out $p"
+  done
+  printf '%s\n' "$out"
+}
+
+reap_agent() {
+  local pid pids p
+  say ""
+  say "2/5 收掉 patrol_agent,再清掉它留下的痕迹"
+  say "    (找的是 $AGENT_ROOT 底下的 runs/;不对的话用 --agent-root 指)"
+
+  # 第一级:走它自己认的优雅退出 —— 往 FIFO 里写一条 shutdown。
+  if [ -p "$AGENT_FIFO" ]; then
+    if [ "$DO_IT" = 1 ]; then
+      say "  往 $AGENT_FIFO 写一条 shutdown(field-agent.sh 里写明的那条优雅退出)"
+      # **一定要带超时。** FIFO 没有读端的时候写端会一直阻塞 —— agent 已经
+      # 死了而管道还留在盘上,正是最常见的那一种情形,不掐就是挂在这儿。
+      if timeout 5 bash -c 'printf "%s\n" shutdown > "$1"' _ "$AGENT_FIFO" 2>/dev/null; then
+        say "  写进去了。"
+      else
+        say "  (5 秒没写进去:多半没人在读这个管道 —— 往下走)"
+      fi
+    else
+      say "  [dry-run] 会往 $AGENT_FIFO 写一条 shutdown"
+    fi
+  else
+    say "  (没有 $AGENT_FIFO,跳过 FIFO 这一级)"
+  fi
+
+  # 第二级:有 pidfile 就等它自己退,上限 15 秒。
+  pid=$(read_pidfile) || pid=
+  if [ -n "$pid" ]; then
+    if [ "$DO_IT" = 1 ]; then
+      say "  pidfile 里是 $pid,等它自己退(最多 15 秒)"
+      if wait_gone "$pid" 15; then
+        say "  它自己退干净了 —— 不用发信号。"
+      fi
+    else
+      say "  [dry-run] pidfile 里是 $pid,会等它最多 15 秒"
+    fi
+  fi
+
+  # 第三、四级:还在就 TERM,再不走就 KILL。兜底那一路(pgrep)走同样两步。
+  pids=$(agent_pids)
+  if [ -z "$pids" ]; then
+    say "  现在没有在跑的 patrol_agent。"
+  else
+    for p in $pids; do
+      if [ "$DO_IT" != 1 ]; then
+        say "  [dry-run] 会对 pid $p 先发 TERM(等 5 秒),还在就发 KILL"
+        continue
+      fi
+      say "  pid $p 还在 —— 发 TERM,等 5 秒"
+      kill -TERM "$p" 2>/dev/null || true
+      if wait_gone "$p" 5; then
+        say "    走了。"
+        continue
+      fi
+      say "    还在 —— 发 KILL"
+      kill -KILL "$p" 2>/dev/null || true
+      if wait_gone "$p" 3; then
+        say "    走了。"
+      else
+        warn "    !! pid $p 连 KILL 都没弄走(多半是权限不够,没用 sudo),手工看一眼"
+      fi
+    done
+  fi
+
+  rm_agent_trace "$AGENT_FIFO" "命令管道"
+  rm_agent_trace "$AGENT_PIDFILE" "pid 文件"
+  rm_agent_trace "$AGENT_LOGDIR" "现场日志"
+  if [ "$PURGE_BIN" = 1 ]; then
+    rm_agent_trace "$AGENT_BIN" "编出来的二进制(--purge-agent-binary)"
+  else
+    say "  留着 $AGENT_BIN —— 它是源码目录里编出来的产物,不是装机脚本装的。"
+    say "    默认删掉它,下次开工的人会莫名其妙。真要删加 --purge-agent-binary。"
+  fi
+}
+
+# ------------------------------------------------------------ systemd
+stop_service() {
+  local u
+  say ""
+  say "3/5 停服务、关自启、清掉我们的 systemd 单元"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    say "  (这台机器上没有 systemctl,整段跳过)"
+    return 0
+  fi
+  for u in "$MAIN_UNIT" "$OLD_UNIT"; do
+    if [ "$DO_IT" != 1 ]; then
+      say "  [dry-run] 会 stop + disable $u"
+      continue
+    fi
+    # 没装过这个单元的机器上这两条都会失败 —— 那不是错误,是"本来就没有"。
+    systemctl stop "$u" >/dev/null 2>&1 || true
+    systemctl disable "$u" >/dev/null 2>&1 || true
+    say "  停了并关掉自启:$u(本来就没有的话,这一步什么也没发生)"
+  done
+  rm_sys "$UNIT_DIR/$MAIN_UNIT" "主单元"
+  rm_sys "$UNIT_DIR/$OLD_UNIT" "老的守卫单元,多数机器上本来就没有"
+  rm_sys "$WANTS_LINK" "开机自启那条链"
+  if [ "$DO_IT" = 1 ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl reset-failed "$MAIN_UNIT" >/dev/null 2>&1 || true
+    say "  daemon-reload 和 reset-failed 都跑过了。"
+  else
+    say "  [dry-run] 会跑 daemon-reload 和 reset-failed $MAIN_UNIT"
+  fi
+}
+
+# -------------------------------------------------------------- 盘上
+wipe_disk() {
+  local real=
+  say ""
+  say "4/5 清盘上的东西"
+  # **删链之前先把它指的真实目录打出来。** 链一删,数据还在盘上,但没人
+  # 知道在哪个槽里了 —— 这一行就是那张字条。
+  real=$(readlink -f "$ROOT/current" 2>/dev/null) || real=
+  if [ -n "$real" ] && [ "$real" != "$ROOT/current" ]; then
+    say "  current 这条链现在指着:$real"
+    say "  巡检数据就在它底下的 runs/,任务包在 $ROOT/bundles。"
+  fi
+
+  if [ "$KEEP_DATA" = 1 ]; then
+    say "  --keep-data:只卸配置和服务。下面这几处留着,每一处都有理由。"
+    rm_sys "$ROOT/bin" "跟版本无关的解释器"
+    rm_sys "$ROOT/bin-venv" "上面那个解释器的 venv"
+    rm_sys "$ROOT/current" "版本链;数据还在上面打出来的那个真实目录里"
+    rm_sys "$ROOT/pending.json" "在途升级标记"
+    say "  留着:$ETC_DIR/env —— 里面有这台机器的设备 PIN。删了它,重装会生成"
+    say "        一个新的,现场所有手机都要重新输一遍。留着,重装还是原来那个。"
+    say "  留着:$ETC_DIR —— env 在它底下。"
+    say "  留着:$ROOT/releases —— **巡检数据就在版本槽里**($ROOT/current/runs"
+    say "        实际指的是 <槽>/runs)。单独把 runs 挑出来搬走比整槽留着更容易出事。"
+    say "  留着:$ROOT/bundles —— 任务包。"
+    say "  留着:$ROOT —— 根目录本身,上面那两处在它底下。"
+  else
+    say "  默认模式:全部清掉,不留痕迹。"
+    rm_sys "$ROOT/current" "版本链"
+    rm_sys "$ROOT/pending.json" "在途升级标记"
+    rm_sys "$ROOT/bin" "跟版本无关的解释器"
+    rm_sys "$ROOT/bin-venv" "上面那个解释器的 venv"
+    rm_sys "$ROOT/releases" "版本槽,**巡检数据也在里面**"
+    rm_sys "$ROOT/bundles" "任务包"
+    rm_sys "$ROOT" "整个根"
+    rm_sys "$ETC_DIR/env" "设备 PIN 就在这个文件里"
+    rm_sys "$ETC_DIR" "整个配置目录"
+  fi
+}
+
+# ------------------------------------------------------------ 说在前面
+announce() {
+  say "================================================================"
+  if [ "$DO_IT" != 1 ]; then
+    say " D1 Max 巡检 · 卸载 —— **这是 dry-run,什么都不会动**"
+  elif [ "$KEEP_DATA" = 1 ]; then
+    say " D1 Max 巡检 · 卸载(--keep-data:留 PIN 和数据)"
+  else
+    say " D1 Max 巡检 · 卸载(默认:全部清掉,不留痕迹)"
+  fi
+  say "================================================================"
+  say ""
+  say "接下来这个脚本会停掉 patrol_agent 并**释放 SDK 会话**。"
+  say "这一步不可逆:"
+  say ""
+  say "  上装会立刻把控制权收回去,这台狗在重启 RK3588 之前"
+  say "  再也抢不到控制权了(厂家已确认,见真机验证清单 #46/#47)。"
+  say "  要重新接管:先重启运控主机,再跑 field-agent.sh 抢开机窗口。"
+  say ""
+  if [ "$KEEP_DATA" != 1 ]; then
+    say "同时会删掉(默认模式):"
+    say "  $ROOT 整个根 —— 代码、版本槽、**巡检数据**、任务包"
+    say "  $ETC_DIR 整个目录 —— 包括这台机器的设备 PIN"
+    say "  $UNIT_DIR 底下我们那两个 d1max-* 单元和开机自启链"
+    say "  patrol_agent 的命令管道、pid 文件、现场日志"
+    say ""
+    say "只想重装、不想让现场所有手机重输 PIN 的,按 Ctrl+C 停下来,"
+    say "改用:sudo bash $0 --keep-data"
+  fi
+  say ""
+  say "**不动的东西**:别家的栈、ROS、任何不叫 d1max-* 的 systemd 单元,"
+  say "一个字节都不碰 —— 这不是靠自觉,是 rm 前那两把锁挡着的。"
+}
+
+# -------------------------------------------------------------- 回执
+receipt() {
+  say ""
+  say "5/5 回执"
+  if [ "$DO_IT" != 1 ]; then
+    say "  这是 dry-run —— 上面每一条都没有真的执行。"
+    say "  真要动手:把 --dry-run 去掉重跑。"
+  else
+    say "  卸完了。"
+    say "  已经停掉 patrol_agent 并释放了 SDK 会话 —— 上装已经把控制权收回去,"
+    say "  这台狗在重启 RK3588 之前抢不到控制权了。要重新接管:先重启运控主机,"
+    say "  再跑 field-agent.sh 抢开机窗口。"
+  fi
+  say ""
+  say "  **这几样这个脚本清不掉,要的话得人去做:**"
+  say "    1. systemd 的历史日志(journalctl -u d1max-patrol 还查得到)。"
+  say "       要清得用 journalctl --vacuum-time= 之类,那会连别人的日志一起清,"
+  say "       所以这个脚本不替你做这个决定。"
+  say "    2. 装机时 pip 在 ~/.cache/pip 里留下的轮子缓存。"
+  say "    3. 跑过的人在 shell history 里留下的那些命令。"
+  say "    4. 笔记本上 NetworkManager 记住的那条狗热点连接配置。"
+  say "    5. 这个脚本和 footprint.sh 自己写在 runs/ 底下的快照文件。"
+  if [ "$PURGE_BIN" != 1 ]; then
+    say "    6. 源码目录里编出来的 motion/patrol_agent(加 --purge-agent-binary 才删)。"
+  fi
+}
+
+# -------------------------------------------------------------- 主流程
+say ""
+say "1/5 先说清楚要干什么"
+announce
+reap_agent
+stop_service
+wipe_disk
+receipt
+exit 0
