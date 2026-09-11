@@ -74,6 +74,21 @@ TOKEN_BYTES = 32
 #: 而一台被顺走的手机上的 token 不该永远有效。
 TOKEN_IDLE_S = 12 * 3600.0
 
+#: 一个 token 从签发那一刻起最多活多久。**这是跟闲置期互相独立的第二条判
+#: 据** —— 闲置期问的是"多久没用了", 绝对期问的是"签出来多久了", 后者
+#: 刷不掉:``touch_ref`` 只推 ``last``, 从不动 ``born``。
+#:
+#: 这条以前不存在(这个表只有闲置期一条判据)。加它是因为急停要豁免闲置期
+#: (见 ``IDLE_EXEMPT_PATHS``):没有绝对期兜底的话, "豁免闲置"就等于"这张
+#: 凭证永远按得停这条狗", 那不是中间解, 那是把门拆了。绝对期同时也是
+#: ``TokenStore`` 里那些"过了闲置期还留着的记录"的内存兜底。
+#:
+#: 数值给 24 小时, **远大于任何一条通道的闲置期**:绝对期是天花板, 不该在
+#: 一个班次之内咬人。SSE 上的活动只刷闲置计时, 刷不动它(见
+#: ``TokenStore.touch_ref``), 所以一块挂了一整天的值守屏确实会被请下线一
+#: 次 —— 那是有意的, 一张凭证不该永远有效。
+TOKEN_ABS_S = 24 * 3600.0
+
 #: 同时最多留几个 token。防的是"有人反复解锁把内存撑爆"。
 MAX_TOKENS = 64
 
@@ -184,6 +199,27 @@ READONLY_OPEN_PATHS: frozenset[str] = frozenset({
     "/api/estop", "/api/auth/logout",
 })
 
+#: **闲置期对这几条路径不算数, 身份照样要。** 现在只有急停一条。
+#:
+#: 为什么要有这条:热点上换来的凭证闲置 30 分钟就作废(``AP_TOKEN_IDLE_S``),
+#: 而值守屏不轮询, SSE 长连也只在建连那一刻过一次闸。人把手机架在那儿盯着
+#: 狗, 半小时后抓起来按急停 —— 401「登录过期了, 重新输一次 PIN」。急停是
+#: 这套系统里唯一一条"多按一次没有代价、按不下去有代价"的接口, 它不该跟别
+#: 的写接口共用同一套生死判定。
+#:
+#: **为什么不是干脆放进 ``OPEN_PATHS``。** 那等于同一个热点上任何人都能按
+#: 停这条狗 —— 不要凭证, 也不留任何指向按的人的痕迹。那是一次安全权衡, 得
+#: 由产品主拍板, 不该由这一行代码替他拍。豁免闲置是能拿到"急停永远按得动"
+#: 而**不**放弃身份的那个中间解:
+#:
+#: * 闲置太久 → 放行(这条豁免本身);
+#: * 根本没签发过 / 编出来的 token → 照样 401;
+#: * 被吊销过的(``revoke`` / ``revoke_ref``, 含退出登录、同名换座)→ 401;
+#: * 过了绝对期的(``TOKEN_ABS_S``)→ 照样 401。
+#:
+#: 豁免的是"多久没用了", 不是"你是谁"。
+IDLE_EXEMPT_PATHS: frozenset[str] = frozenset({"/api/estop"})
+
 
 class Denied(Exception):
     """没放行。调用方负责把它变成 HTTP 响应。"""
@@ -200,14 +236,22 @@ class Denied(Exception):
 
 @dataclass
 class _Live:
-    """内存里一个 token 的全部家当。"""
+    """内存里一个 token 的全部家当。
+
+    ``last`` 是"最后一次用是什么时候", ``born`` 是"什么时候签出来的"。两
+    个时刻对两条互相独立的判据:``last`` 配 ``idle_s`` 判闲置, ``born``
+    配 ``abs_s`` 判绝对期。**``born`` 写进来之后一次都不再动** —— 续期推
+    得动它的话, 它就不叫绝对期了。
+    """
 
     last: float
+    born: float = 0.0
     ref: str = ""
     operator: str = ""
     channel: str = CHANNEL_LAN
     readonly: bool = False
     idle_s: float = TOKEN_IDLE_S
+    abs_s: float = TOKEN_ABS_S
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +274,15 @@ class Session:
                 "idle_limit_s": self.idle_limit_s}
 
 
+def _idle_dead(rec: _Live, now: float) -> bool:
+    """这条记录过闲置期了没有。
+
+    **过了闲置期不等于已经被清掉** —— 记录还会留在表里, 留给急停那条豁免
+    认身份用(见 :data:`IDLE_EXEMPT_PATHS`)。对外它一律算死的。
+    """
+    return now - rec.last > rec.idle_s
+
+
 def _session_of(rec: _Live, now: float) -> Session:
     return Session(ref=rec.ref, operator=rec.operator, channel=rec.channel,
                    readonly=rec.readonly,
@@ -238,33 +291,65 @@ def _session_of(rec: _Live, now: float) -> Session:
 
 
 class TokenStore:
-    """内存里的 token 表。线程安全 —— HTTP 是一请求一线程的。"""
+    """内存里的 token 表。线程安全 —— HTTP 是一请求一线程的。
+
+    **一个 token 的死法有三种, 分两档记。** 吊销(``revoke``)和过绝对期
+    (``TOKEN_ABS_S``)是**真死**:记录直接从表里没了, 谁也认不出来。过闲
+    置期(``TOKEN_IDLE_S``)是**假死**:记录留着, 但 ``info``、``sessions``、
+    ``live_refs``、``count`` 全都当它不存在, 会话名额也照常腾出来 —— 对外
+    跟真死一模一样, 只有 :meth:`info_idle_exempt` 这一个门认得出它。
+
+    分这两档是急停逼出来的:急停要豁免闲置期(见 :data:`IDLE_EXEMPT_PATHS`),
+    而"豁免"的前提是那条记录还在 —— 原来的写法是闲置一过就 ``del``, 记录
+    都没了, 想放行也认不出这是谁签发的。假死留下的那点内存由绝对期兜底,
+    并且在 :meth:`issue` 腾地方的时候优先被扔。
+    """
 
     def __init__(self, *, idle_s: float = TOKEN_IDLE_S,
+                 abs_s: float = TOKEN_ABS_S,
                  cap: int = MAX_TOKENS) -> None:
         self._idle_s = idle_s
+        self._abs_s = abs_s
         self._cap = cap
         self._lock = threading.Lock()
+        #: 最近一次有人报进来的时刻。``count`` 拿它算"还活着几个" ——
+        #: **这个类自己不读钟**, 时刻一律由调用方传进来。
+        self._seen = 0.0
         #: 插入序就是签发序,满了从头上淘汰。
         self._live: dict[str, _Live] = {}
 
     def issue(self, *, now: float | None = None, operator: str = "",
               channel: str = CHANNEL_LAN, readonly: bool = False,
-              idle_s: float | None = None) -> str:
+              idle_s: float | None = None,
+              abs_s: float | None = None) -> str:
         now = time.monotonic() if now is None else now
         token = secrets.token_urlsafe(TOKEN_BYTES)
         with self._lock:
             self._sweep(now)
+            # 腾地方**先扔过了闲置期的那些**。它们留着只为给急停那条豁免
+            # 认一次身份, 让它们把一个正在作业的会话从下面那条纯插入序
+            # FIFO 里挤出去就本末倒置了 —— 那条 FIFO 不看死活。
+            if len(self._live) >= self._cap:
+                for stale in [t for t, r in self._live.items()
+                              if _idle_dead(r, now)]:
+                    del self._live[stale]
+                    if len(self._live) < self._cap:
+                        break
             while len(self._live) >= self._cap:
                 self._live.pop(next(iter(self._live)))
             self._live[token] = _Live(
-                last=now, ref=token_ref(token), operator=operator,
+                last=now, born=now, ref=token_ref(token),
+                operator=operator,
                 channel=channel, readonly=readonly,
-                idle_s=self._idle_s if idle_s is None else idle_s)
+                idle_s=self._idle_s if idle_s is None else idle_s,
+                abs_s=self._abs_s if abs_s is None else abs_s)
         return token
 
     def info(self, token: str, *, now: float | None = None) -> Session | None:
         """认一个 token 并把它的身份带回来,顺带续期。不认识就 ``None``。
+
+        **过了闲置期的在这个门上就是"不认识"。** 记录可能还留在表里(留给
+        急停那条豁免, 见 :meth:`info_idle_exempt`), 但走这儿的一律当死的。
 
         直接查字典而不是逐个 ``compare_digest``:token 是 256 位随机数,猜不
         中的东西不存在计时侧信道可利用的余地,而线性扫描会让 token 一多就慢。
@@ -273,13 +358,53 @@ class TokenStore:
         with self._lock:
             self._sweep(now)
             rec = self._live.get(token)
-            if rec is None:
+            if rec is None or _idle_dead(rec, now):
                 return None
             # 先做快照再续期:带回去的 idle_for_s 是"这次请求之前闲了多久",
             # 那才是有信息量的那个数。
             sess = _session_of(rec, now)
             rec.last = now
             return sess
+
+    def info_idle_exempt(self, token: str, *,
+                         now: float | None = None) -> Session | None:
+        """认一个 token, **闲置期不算数**。别的一样也不放松。
+
+        只给 :data:`IDLE_EXEMPT_PATHS` 里那几条路径用(现在只有急停)。能从
+        这个门里出来的前提仍然是三条硬的:这个 token 真被签发过、没被吊销
+        过、没过绝对期 —— 吊销是直接从表里删的, 过绝对期的 ``_sweep`` 刚
+        清掉, 两种都到不了下面这一行。
+
+        **不续期。** 按一次急停不该顺带把一张早就该歇的凭证在别的路由上复
+        活;带回去的 ``idle_for_s`` 因此是真实的"闲了多久", 能原样落进留痕。
+        """
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            self._sweep(now)
+            rec = self._live.get(token)
+            return None if rec is None else _session_of(rec, now)
+
+    def touch_ref(self, ref: str, *, now: float | None = None) -> bool:
+        """按指纹把闲置计时刷到现在。刷到了返回 ``True``。
+
+        **只刷闲置, 绝对期一点不动**(``born`` 不改)。SSE 长连上有流量就走
+        这条:值守屏挂着的时候人确实在看, 把它判成闲置本身就是错的 —— 而
+        建连时 ``Guard.gate()`` 只过一次闸, 那条连接之后再活跃也不会有第二
+        次 ``info()``。但"一直看着"不该换来一张永不过期的凭证, 所以
+        ``TOKEN_ABS_S`` 那条天花板照旧。
+
+        **已经过了闲置期的刷不活。** 复活一张死凭证要重新解锁, 不能靠一帧
+        迟到的事件 —— 否则 ``info()`` 刚判的死, 下一帧就被推翻了。
+        """
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            self._sweep(now)
+            hit = False
+            for rec in self._live.values():
+                if rec.ref == ref and not _idle_dead(rec, now):
+                    rec.last = now
+                    hit = True
+            return hit
 
     def valid(self, token: str, *, now: float | None = None) -> bool:
         """认一个 token,顺带续期。"""
@@ -292,14 +417,16 @@ class TokenStore:
         now = time.monotonic() if now is None else now
         with self._lock:
             self._sweep(now)
-            return tuple(_session_of(r, now) for r in self._live.values())
+            return tuple(_session_of(r, now) for r in self._live.values()
+                         if not _idle_dead(r, now))
 
     def live_refs(self, *, now: float | None = None) -> frozenset[str]:
         """还活着的 token 指纹。租约靠它收租(§6.4)。同样不续期。"""
         now = time.monotonic() if now is None else now
         with self._lock:
             self._sweep(now)
-            return frozenset(r.ref for r in self._live.values())
+            return frozenset(r.ref for r in self._live.values()
+                             if not _idle_dead(r, now))
 
     def revoke_ref(self, ref: str) -> bool:
         """按指纹撤一个 token。撤到了返回 ``True``。"""
@@ -339,14 +466,28 @@ class TokenStore:
 
     @property
     def count(self) -> int:
+        """还活着几个会话。**过了闲置期的不算**, 哪怕记录还留在表里。
+
+        按最近一次有人报进来的时刻算(``_seen``)—— 这个类自己不读钟。
+        """
         with self._lock:
-            return len(self._live)
+            return sum(1 for r in self._live.values()
+                       if not _idle_dead(r, self._seen))
 
     def _sweep(self, now: float) -> None:
-        """清掉闲置超时的。**每个 token 有自己的闲置期** —— 热点上发出去的
-        那些短得多(§6.5 措施 3)。调用方已经拿着锁了。
+        """清掉过了**绝对期**的, 顺带记下这一刻。调用方已经拿着锁了。
+
+        **过了闲置期的不在这里清** —— 它们要留着给急停那条豁免认身份(见
+        :data:`IDLE_EXEMPT_PATHS`)。对外它们已经是死的:``info``、
+        ``sessions``、``live_refs``、``count`` 全都当它们不存在, 会话名额
+        也照常腾出来了。留着的只是一条内存记录, 由绝对期兜底, 并且在
+        :meth:`issue` 腾地方时优先被扔。
+
+        **每个 token 有自己的闲置期和绝对期** —— 热点上发出去的那些闲置期
+        短得多(§6.5 措施 3)。
         """
-        dead = [t for t, r in self._live.items() if now - r.last > r.idle_s]
+        self._seen = now
+        dead = [t for t, r in self._live.items() if now - r.born > r.abs_s]
         for t in dead:
             del self._live[t]
 
@@ -882,6 +1023,16 @@ class Guard:
         return self.tokens.info(token,
                                 now=self._clock() if now is None else now)
 
+    def touch_ref(self, ref: str, *, now: float | None = None) -> bool:
+        """按指纹把闲置计时刷到现在。见 :meth:`TokenStore.touch_ref`。
+
+        SSE 长连每推一帧走一次这条。**这不是重新认证** —— 它不校验任何凭
+        证, 只把"这条连接上有流量"这件事记成一次活动, 而且只推得动闲置计
+        时, 推不动绝对期。
+        """
+        return self.tokens.touch_ref(
+            ref, now=self._clock() if now is None else now)
+
     def rename_ref(self, ref: str, operator: str) -> bool:
         """换一个会话的署名。见 :meth:`TokenStore.rename_ref`。
 
@@ -998,6 +1149,11 @@ class Guard:
 
         没设 PIN 的部署上放行但没有会话(返回 ``None``)—— 那种部署按定义只
         听本机,没有"谁是谁"这个问题(见 ``server.check_exposure``)。
+
+        **:data:`IDLE_EXEMPT_PATHS` 里那几条(现在只有急停)豁免闲置期。**
+        豁免的只有"多久没用了"这一条:编出来的、被吊销过的、过了绝对期的
+        token 打它们照样 401, 打别的路由闲置过期也照样 401。为什么不是把
+        急停直接放进 ``OPEN_PATHS``, 见那张表的注释。
         """
         if not host_is_literal(headers.get("host", "")):
             raise Denied(403, "Host 头不对",
@@ -1015,7 +1171,12 @@ class Guard:
             token = query.get("token")
         if not token:
             raise Denied(401, "要先解锁", "在页面上输一次 PIN,或者用 app 连。")
-        sess = self.tokens.info(token, now=self._clock())
+        now = self._clock()
+        sess = self.tokens.info(token, now=now)
+        if sess is None and path in IDLE_EXEMPT_PATHS:
+            # 急停的旁路:闲了多久都放行, **但身份还是要的**。认不出来的、
+            # 被吊销过的、过了绝对期的一样进不来。
+            sess = self.tokens.info_idle_exempt(token, now=now)
         if sess is None:
             raise Denied(401, "登录过期了,重新输一次 PIN",
                          "token 无效或太久没用。")

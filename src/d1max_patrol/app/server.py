@@ -1332,7 +1332,8 @@ class AppServer:
 
     def __init__(self, ctx: AppContext, *, host: str = DEFAULT_HOST,
                  port: int = DEFAULT_PORT, pin: str | None = None,
-                 postcheck_sleep: Callable[[float], Awaitable[None]] | None = None
+                 postcheck_sleep: Callable[[float], Awaitable[None]] | None = None,
+                 auth_clock: Callable[[], float] | None = None,
                  ) -> None:
         check_exposure(host, pin)
         self._ctx = ctx
@@ -1346,7 +1347,13 @@ class AppServer:
         #: 依赖:哪天有人把假件改成"第二次才通",套件立刻慢下来,而且慢得
         #: 没有出处。开一个口子把它变成显式的。
         self._postcheck_sleep = postcheck_sleep
-        self._auth = Guard(pin)
+        #: 鉴权那口钟(单调秒)。**默认真 monotonic, 测试注入假的。**
+        #: token 的闲置期是 12 小时、热点上 30 分钟, 绝对期 24 小时 ——
+        #: 这几条边界拿真钟一条都测不着, 而"过期了还按不按得动急停"正是
+        #: 第 8 卷值守那一段的成败所在(见 ``auth.IDLE_EXEMPT_PATHS``)。
+        #: 跟上面 ``postcheck_sleep`` 是同一个路数:把隐式依赖变成显式的口子。
+        self._auth = Guard(pin) if auth_clock is None else Guard(
+            pin, clock=auth_clock)
         #: 此刻记着的自报姓名(§6.3)。**这是署名,不是登录态。**
         #:
         #: 换的时候整个换掉这个引用(``Operator`` 是 frozen dataclass),换引用
@@ -1935,22 +1942,41 @@ class AppServer:
     def _state(self, _req: Request) -> Response:
         return json_response(self._hub.snapshot)
 
-    def _events(self, _req: Request) -> Stream:
+    def _events(self, req: Request) -> Stream:
         """SSE。**第一帧就是当前全量状态**。
 
         不这么做的话,页面打开之后要一直等到下一次状态变化才知道现在是什么
         情况 —— 机器停着不动的时候,那就是永远。
+
+        **这条长连上每推一帧, 就把这个会话的闲置计时刷一次。** 闸
+        (``Guard.gate``)只在建连那一刻过一次, 之后这条连接挂多久都不会再
+        有第二次 ``tokens.info()`` —— 于是值守屏上"人一直盯着"会被判成
+        "这个 token 一直没人用", 半小时后热点凭证就作废了。人在看着屏幕,
+        把它算成闲置本身就是错的。
+
+        刷的只有**闲置**计时。绝对期(``auth.TOKEN_ABS_S``)推不动 —— 一条
+        挂着不放的长连不该换来一张永不过期的凭证。
+
+        **注意这条救不了"狗停着不动"的场景**:快照一样就不推帧
+        (见 ``_StateHub._rebuild``), 没帧就没有活动可算。急停在那种情形下
+        按得动, 靠的是 ``auth.IDLE_EXEMPT_PATHS`` 那条豁免, 不是这里。
         """
         hub = self._hub
         bridge = self._ctx.bridge
+        auth = self._auth
+        #: 没设 PIN 的部署上没有会话, 那种部署也没有"谁是谁"这个问题。
+        ref = req.session.ref if req.session is not None else ""
 
         def gen() -> Iterator[dict[str, Any]]:
             stream = bridge.subscribe(hub.events)
             try:
+                # 第一帧不用刷:建连时 gate() 刚刚续过一次。
                 yield {"kind": "state", **hub.snapshot}
                 for event in stream:
                     if event.get("kind") == "bye":
                         return
+                    if ref:
+                        auth.touch_ref(ref)
                     yield event
             finally:
                 stream.close()  # type: ignore[attr-defined]
