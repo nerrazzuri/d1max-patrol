@@ -69,8 +69,13 @@ def parse_receipt(status: int, body: bytes) -> PutReceipt:
     """
     try:
         payload: Any = json.loads(body.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         # 中间挡了个网关,回了一页 HTML。我们读不懂,只能退避,不能 rewind。
+        #
+        # ``RecursionError`` 单列一支:回执要是一坨深度嵌套的 JSON(几千个
+        # 连着的 ``[``,烂网关和压坏的缓存都干得出来),``json`` 的扫描器抛的
+        # 是 ``RecursionError``,**它不是 ``ValueError``**,不列就原样穿出去。
+        # 这一支只罩住 ``json.loads`` 这一句,罩不到我们自己写的递归。
         raise SinkError(f"回执不是 JSON: {exc}") from exc
     if not isinstance(payload, dict):
         # json.loads 成功,但顶层不是对象(列表/null/裸字符串/裸数字)。
@@ -112,20 +117,63 @@ class HttpSink:
             else urllib.request.HTTPSHandler()
         )
 
-    def put(self, req: PutRequest) -> PutReceipt:
-        request = urllib.request.Request(
-            self._base + WIRE_PATH,
-            data=build_body(req),
-            headers=_headers(req, self._token),
-            method="POST",
-        )
+    def _build_request(self, req: PutRequest) -> urllib.request.Request:
+        """拼出这一次要发的东西。**这一步不碰网络。**
+
+        ``Request(...)`` 会在 base_url 压根没有 scheme(配置里写成
+        ``console.example/api`` 少了 ``http://``)时抛 ``ValueError``。这三句
+        以前摆在 ``try`` **外面**,抛出来是直接穿过 ``put()`` 的。
+        """
+        try:
+            return urllib.request.Request(
+                self._base + WIRE_PATH,
+                data=build_body(req),
+                headers=_headers(req, self._token),
+                method="POST",
+            )
+        except ValueError as err:
+            # 只罩住"URL 拼不出来"这一件事,话术也跟"网络不好"分开 —— 配错了
+            # 地址跟线路抖是两码事,现场看日志得能一眼分出来。
+            raise SinkError(f"请求拼不出来(base_url 配错了?): {err}") from err
+
+    def _exchange(self, request: urllib.request.Request) -> tuple[int, bytes]:
+        """**唯一一处真的碰网络的地方。** 把状态码和 body 原样带回来,一个字节
+        都不解析。
+
+        这个方法**故意不翻译任何异常**。它的 ``except HTTPError`` 块内部还要
+        再读一次 body(``err.read()``,4xx/5xx 身上那份),而**同级的 except
+        接不住在 except 块内部抛出来的东西** —— 读错误 body 被截断时的
+        ``IncompleteRead``/``ConnectionResetError`` 曾经就是从这儿原样穿出
+        ``put()`` 的。把翻译边界整个挪到调用方,这一次读跟 ``open()``、
+        ``resp.read()`` 才走同一条出口,少一处"看着被罩住其实没有"的地方。
+        """
         try:
             with self._opener.open(request, timeout=HTTP_TIMEOUT_S) as resp:
-                return parse_receipt(getattr(resp, "status", 200), resp.read())
+                return getattr(resp, "status", 200), resp.read()
         except urllib.error.HTTPError as err:
             # urllib 把 4xx/5xx 抛成 HTTPError,但它身上带着 body —— 409 的
             # body 里有服务器说的 stored,那个数正是我们要的。当回执读,不当异常。
-            return parse_receipt(err.code, err.read() or b"")
+            return err.code, err.read() or b""
+
+    def put(self, req: PutRequest) -> PutReceipt:
+        """出口只有两种:一张 ``PutReceipt``,或者一个 ``SinkError``。
+
+        第三种都是 bug —— ``Uploader.run_once`` 只 ``except SinkError``,别的
+        异常会带着上传线程往上走,规格 §4.3 的"传不上去就一直排着"当场破掉。
+        ``tests/engine/test_http_sink_matrix.py`` 那张故障注入矩阵守的就是这条。
+
+        ``parse_receipt`` 摆在 ``try`` **外面**是故意的:它只抛 ``SinkError``,
+        摆进去会被下面那支重新包一遍,把"回执读不懂"说成"发不出去"。
+        """
+        try:
+            status, body = self._exchange(self._build_request(req))
+        except UnicodeEncodeError as err:
+            # header 的值必须 latin-1 编得出来,编不出来是在 ``open()`` 里面
+            # 炸的,而 ``UnicodeEncodeError`` **不是 OSError** —— 配置里 sn 或
+            # 口令填了中文时,这条以前原样穿出去。翻成 SinkError:证据继续排
+            # 着队重试,不会把上传线程炸掉。单独一支单独的话术,免得跟"网络
+            # 不好"混成一句让人去查线路。
+            raise SinkError(f"请求头里有 latin-1 编不出来的字符(sn/口令?): {err}") from err
         except (urllib.error.URLError, TimeoutError, OSError, HTTPException) as err:
             # **只翻这几种。** catch Exception 会把编码错误、路径错误一起
             # 吞成"网络不好",而 ruff 的 BLE 也不许那么写。
@@ -136,3 +184,4 @@ class HttpSink:
             # 半路掐断连接、CPE 重拨截断响应这两种真实场景会带着原始异常把
             # Uploader.run_once 炸穿,而不是走退避重排。
             raise SinkError(f"发不出去: {err}") from err
+        return parse_receipt(status, body)
