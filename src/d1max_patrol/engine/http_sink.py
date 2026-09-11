@@ -51,37 +51,35 @@ def _headers(req: PutRequest, token: str) -> dict[str, str]:
 
 
 def parse_receipt(status: int, body: bytes) -> PutReceipt:
-    """**非 200 不是异常,是"这次没成"。**
+    """读不懂 = ``SinkError``,读懂了且服务器说不行 = ``ok=False``。
 
-    抛出去会走 ``SinkError`` 那条退避,而 409(偏移对不上)要的是 rewind
-    不是退避 —— 两条路不一样。所以状态码在这儿一律解析成 ``ok=False``,
-    让 :meth:`Uploader.run_once` 按回执内容判。
+    ``rewind`` 只能由"服务器明确说了话"触发 —— 那是"之前传的那些全不算数,
+    从头再来"的信号,会把之前**已经确认过哈希对上**的进度一起作废。我们读
+    不懂的一切,都只能退避(保留 ``item.offset``),不能 rewind。
 
-    **但 ``stored`` 这个字段例外,会真的抛 ``SinkError``。**
-    JSON 解不开、顶层不是对象这两种,我们连"服务器想说什么"都读不出来,
-    只能整体当失败;可一旦读出一个对象,``ok=False`` 走的是
-    :meth:`Uploader.run_once` 里的 ``rewind`` —— 那是"服务器明确告诉我们
-    之前传的不算数,从头再来"的信号,会把之前**已经确认过哈希对上**的
-    进度一起作废。而 ``stored`` 字段类型不对(比如服务器发来的是字符串
-    ``"abc"`` 而不是数字),我们没有拿到任何关于"服务器那边到底存了多少"
-    的可信信息 —— 这跟"服务器明确说少了"是两件不同的事,不该走同一条
-    会作废历史进度的路。所以这里改成 ``SinkError``:只退避重排(保留
-    ``item.offset``),不 rewind。
+    所以 ``PutReceipt(ok=False, ...)`` 只留给一种情况:回执是个结构完好的
+    对象,里面服务器**明确**说了 ``ok`` 为假(包括 409 偏移对不上那种 ——
+    那也是"结构完好、服务器明确表态"的一种)。
+
+    剩下每一种"解不出服务器到底想说什么"的情况,一律 ``SinkError``:
+    JSON 解不开、顶层不是对象、``stored`` 字段类型不对(字符串、列表、
+    ``None``……)。这些情况我们连"服务器那边到底存了多少/说了什么"都没有
+    可信信息,跟"服务器明确说了话"是两件不同的事,不该走同一条会作废历史
+    进度的路。
     """
     try:
         payload: Any = json.loads(body.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        # 中间挡了个网关,回了一页 HTML。这不该让上传器崩。
-        return PutReceipt(ok=False, stored=0, sha256="", message="回执不是 JSON")
+    except (ValueError, UnicodeDecodeError) as exc:
+        # 中间挡了个网关,回了一页 HTML。我们读不懂,只能退避,不能 rewind。
+        raise SinkError(f"回执不是 JSON: {exc}") from exc
     if not isinstance(payload, dict):
-        return PutReceipt(ok=False, stored=0, sha256="", message="回执不是 JSON")
+        # json.loads 成功,但顶层不是对象(列表/null/裸字符串/裸数字)。
+        # 同样是"读不懂服务器想说什么",不是"服务器明确说了话"。
+        raise SinkError(f"回执不是 JSON 对象: {payload!r}")
     try:
         stored = int(payload.get("stored", 0))
     except (ValueError, TypeError) as exc:
-        # 字段存在但类型不对(字符串、列表、``None``……)。跟上面两个分支不
-        # 一样:这里不返回 ``ok=False``,因为那会触发 rewind,把之前已经
-        # 验证过哈希的进度一起作废 —— 明明我们对"服务器那边存了多少"什么
-        # 都不知道,没道理去否定历史进度。
+        # 字段存在但类型不对(字符串、列表、``None``……)。同上,不能 rewind。
         raise SinkError(f"回执里的 stored 字段解析不出数字: {exc}") from exc
     return PutReceipt(
         ok=bool(payload.get("ok")) and status == 200,
