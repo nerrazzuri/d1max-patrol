@@ -234,3 +234,61 @@ def test_不传ssl_context时HTTPSHandler不带context(monkeypatch: pytest.Monke
     收到 = _装个记录参数的HTTPSHandler(monkeypatch)
     HttpSink("https://x:8095")
     assert "context" not in 收到
+
+
+def test_stored字段类型不对时parse_receipt抛SinkError_不是ok为false() -> None:
+    """``stored`` 字段存在但不是数字(服务器发来字符串、列表……)——
+    ``int(...)`` 会抛 ``ValueError``/``TypeError``。这不该走 ``ok=False``
+    (那条路在 ``Uploader`` 里会触发 rewind,把之前已经验证过哈希的进度
+    一起作废),该走 ``SinkError``(只退避重排,不动 offset)。
+    """
+    for stored, exc_word in (
+        ('"abc"', "abc"),
+        ("[1, 2]", "list"),
+    ):
+        body = f'{{"ok": true, "stored": {stored}, "sha256": "x", "message": "m"}}'.encode()
+        with pytest.raises(SinkError) as excinfo:
+            parse_receipt(200, body)
+        assert exc_word in str(excinfo.value)
+
+
+def test_stored字段类型不对时put也抛SinkError_不穿透() -> None:
+    """走完整 ``HttpSink.put()``(不只是单独调 ``parse_receipt``)确认
+    同一个洞在真正的调用路径上也堵住了。
+    """
+    opener = 假opener(body=b'{"ok": true, "stored": "abc", "sha256": "x", "message": "m"}')
+    with pytest.raises(SinkError):
+        HttpSink("http://x:8095", opener=opener).put(样例)
+
+
+def test_HTTPError分支里stored字段类型不对也抛SinkError_不穿透() -> None:
+    """``err.read()`` 那条路径(HTTPError 当回执读)一样会调 ``parse_receipt``,
+    同一个洞,单独补一条覆盖,别漏了这条调用点。
+    """
+    err = urllib.error.HTTPError(
+        "http://x:8095/api/intake/put",
+        409,
+        "Conflict",
+        {},
+        None,
+    )
+    err.read = lambda: b'{"ok": false, "stored": [1, 2], "sha256": "", "message": "m"}'
+    with pytest.raises(SinkError):
+        HttpSink("http://x:8095", opener=假opener(抛=err)).put(样例)
+
+
+def test_ok和sha256和message字段任意类型都不抛() -> None:
+    """异常出口清点表里另外三个字段(``ok``/``sha256``/``message``)—— 分别
+    经过 ``bool(...)``/``str(...)``,对 JSON 能解出来的任何标量、``list``、
+    ``dict``、``None`` 都不会抛,这里用一批"歪的"值钉住这个结论,防止以后
+    有人在这三行加新逻辑时不小心引入第四条泄漏。
+    """
+    for payload in (
+        {"ok": "text", "stored": 1, "sha256": "a", "message": "m"},
+        {"ok": [1, 2], "stored": 1, "sha256": "a", "message": "m"},
+        {"ok": None, "stored": 1, "sha256": [1, 2], "message": {}},
+        {"ok": True, "stored": 1, "sha256": None, "message": 123},
+    ):
+        body = json.dumps(payload).encode()
+        got = parse_receipt(200, body)
+        assert isinstance(got, PutReceipt)

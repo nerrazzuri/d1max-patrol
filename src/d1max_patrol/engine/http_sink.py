@@ -56,6 +56,17 @@ def parse_receipt(status: int, body: bytes) -> PutReceipt:
     抛出去会走 ``SinkError`` 那条退避,而 409(偏移对不上)要的是 rewind
     不是退避 —— 两条路不一样。所以状态码在这儿一律解析成 ``ok=False``,
     让 :meth:`Uploader.run_once` 按回执内容判。
+
+    **但 ``stored`` 这个字段例外,会真的抛 ``SinkError``。**
+    JSON 解不开、顶层不是对象这两种,我们连"服务器想说什么"都读不出来,
+    只能整体当失败;可一旦读出一个对象,``ok=False`` 走的是
+    :meth:`Uploader.run_once` 里的 ``rewind`` —— 那是"服务器明确告诉我们
+    之前传的不算数,从头再来"的信号,会把之前**已经确认过哈希对上**的
+    进度一起作废。而 ``stored`` 字段类型不对(比如服务器发来的是字符串
+    ``"abc"`` 而不是数字),我们没有拿到任何关于"服务器那边到底存了多少"
+    的可信信息 —— 这跟"服务器明确说少了"是两件不同的事,不该走同一条
+    会作废历史进度的路。所以这里改成 ``SinkError``:只退避重排(保留
+    ``item.offset``),不 rewind。
     """
     try:
         payload: Any = json.loads(body.decode("utf-8"))
@@ -64,9 +75,17 @@ def parse_receipt(status: int, body: bytes) -> PutReceipt:
         return PutReceipt(ok=False, stored=0, sha256="", message="回执不是 JSON")
     if not isinstance(payload, dict):
         return PutReceipt(ok=False, stored=0, sha256="", message="回执不是 JSON")
+    try:
+        stored = int(payload.get("stored", 0))
+    except (ValueError, TypeError) as exc:
+        # 字段存在但类型不对(字符串、列表、``None``……)。跟上面两个分支不
+        # 一样:这里不返回 ``ok=False``,因为那会触发 rewind,把之前已经
+        # 验证过哈希的进度一起作废 —— 明明我们对"服务器那边存了多少"什么
+        # 都不知道,没道理去否定历史进度。
+        raise SinkError(f"回执里的 stored 字段解析不出数字: {exc}") from exc
     return PutReceipt(
         ok=bool(payload.get("ok")) and status == 200,
-        stored=int(payload.get("stored", 0)),
+        stored=stored,
         sha256=str(payload.get("sha256", "")),
         message=str(payload.get("message", "")),
     )
