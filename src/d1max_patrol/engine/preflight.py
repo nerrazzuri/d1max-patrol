@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
@@ -40,6 +41,9 @@ ESTIMATE_SLACK = 1.5
 
 #: 归档目录至少要有这么多空间,MB。一次运行几十张照片加事件流。
 MIN_FREE_MB = 500.0
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,7 +260,14 @@ async def _guard(name: str, coro: Awaitable[CheckResult]) -> CheckResult:
     """
     try:
         return await coro
-    except Exception as exc:  # noqa: BLE001 - 理由见上,任何异常都只是一项没过
+    except Exception as exc:
+        # **这里必须兜住一切**:异常来自厂商 SDK、文件系统、盘符探测,写不出
+        # 一张穷尽的类型表,而漏掉的那一类会掀掉另外六项的结论 —— 恰恰是这个
+        # 函数存在的理由。原来靠一句 ``noqa: BLE001`` 压着,而本项目的 ruff 配置
+        # 写明 ``BLE`` 不许用 noqa 绕。改成带 ``exc_info`` 记一条日志:兜住但
+        # 留证据。``CheckResult.detail`` 只有 ``str(exc)`` 一句,给现场的人看
+        # 够用,要查"为什么这一项会炸"就得有 traceback。
+        log.warning("起飞检查 %s 自己炸了,按这一项没过处理", name, exc_info=True)
         return CheckResult(name, False, str(exc))
 
 

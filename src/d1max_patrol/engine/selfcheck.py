@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -36,6 +37,9 @@ UPGRADE_FREE_MARGIN_MB = 1024.0
 
 #: 多久没备份就该提示了。**提示,不阻断**(§7.5)。
 BACKUP_NAG_DAYS = 14.0
+
+
+log = logging.getLogger(__name__)
 
 
 def mission_schema_floor(missions_dir: Path | str) -> int:
@@ -293,7 +297,16 @@ async def grab_control(
             # 在"这一圈没拿到、而且还有下一圈"时才走到。
             if await device.has_control():
                 return CheckResult("control", True, f"SDK 会话在手里(第 {n} 次抢到)")
-        except Exception as exc:  # noqa: BLE001 - 任何异常都只是这一项没过
+        except Exception as exc:
+            # **必须兜住一切**:``has_control``/``acquire_control`` 是厂商 SDK,
+            # 抛什么全看它心情(连接断了、会话被抢、C 扩展里翻上来的 OSError),
+            # 写不出一张穷尽的类型表;而这一项炸掉只意味着"这一次没抢到",
+            # 下一圈还要接着抢。原来靠一句 ``noqa: BLE001`` 压着,本项目的 ruff
+            # 配置写明 ``BLE`` 不许用 noqa 绕 —— 改成带 ``exc_info`` 记日志:
+            # 兜住但留证据。``last`` 里只剩 ``str(exc)``,现场翻日志要看的是
+            # 卡在哪一步。
+            log.warning("抢 SDK 会话第 %d 次炸了,按这一次没抢到处理", n,
+                        exc_info=True)
             last = str(exc)
         else:
             # 抢没抢到和会话到没到手是两件事:``acquire_control()`` 不抛异常
@@ -368,18 +381,27 @@ async def _check_bridges(
 async def _probe_bridges(nav: Any, device: Any) -> list[str]:
     """探一遍三个桥,回没应答的那几个。**一项炸掉不许掀掉另外两项。**"""
     bad: list[str] = []
+    # 三处都必须兜住一切:桥不应答的表现形式由厂商 SDK 决定(超时、连接
+    # 被拒、反序列化炸、C 扩展翻上来的 OSError),写不出一张穷尽的类型表,
+    # 而漏掉的那一类会掀掉另外两项 —— 正是这个函数存在的理由。原来三行都靠
+    # 一句 ``noqa: BLE001`` 压着,本项目的 ruff 配置写明 ``BLE`` 不许用 noqa
+    # 绕;改成带 ``exc_info`` 记日志:兜住但留证据。``bad`` 里只装一句
+    # ``str(exc)`` 给现场看,traceback 留给事后查。
     try:
         if await nav.loc_status() is None:
             bad.append("位姿")
-    except Exception as exc:  # noqa: BLE001 - 桥不应答就是这一项没过
+    except Exception as exc:
+        log.warning("探位姿桥炸了,按不应答处理", exc_info=True)
         bad.append(f"位姿({exc})")
     try:
         await nav.list_maps()
-    except Exception as exc:  # noqa: BLE001 - 同上
+    except Exception as exc:
+        log.warning("探地图桥炸了,按不应答处理", exc_info=True)
         bad.append(f"地图({exc})")
     try:
         await device.has_control()
-    except Exception as exc:  # noqa: BLE001 - 同上
+    except Exception as exc:
+        log.warning("探相机/设备桥炸了,按不应答处理", exc_info=True)
         bad.append(f"相机/设备({exc})")
     return bad
 

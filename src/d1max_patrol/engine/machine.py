@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -111,30 +112,70 @@ FINAL_STATES = frozenset({RunState.DONE, RunState.ABORTED})
 
 #: ``suspend()`` 只在"继续之后引擎知道该往哪走"的状态下受理(§5.10)。
 #:
+#: **这张表现在是空的。** 空表不是废代码:下面那道按 ``before`` 查表的闸照样在,
+#: 它是下一个发现"某个状态挂起不安全"的人唯一的挂靠点。删了表和闸,下次就得把
+#: 整套机制重新发明一遍,而重新发明的那一版多半又会犯下面这条 ``PAUSED`` 的错。
+#:
 #: ``PAUSED`` 不在这张表里,**但这不等于暂停里喊挂起就一律放行。**
 #: ``_pause_until_resumed`` 那条 while 会接住 ``suspend`` 命令、转手调
 #: ``_suspend_until_resumed``,而 ``_RetryWaypoint`` 最后有没有人接,取决于
-#: **按暂停之前**站在哪一层:从 ``RUNNING`` 暂停的由 ``_do_waypoint`` 接住,
-#: 从 ``RETURNING`` 暂停的由 ``_go_home`` 接住,从 ``LOCALIZING`` 暂停的
-#: **没人接**。所以那条 while 查这张表时查的是"暂停之前那个状态",不是
-#: ``self._state`` —— 那一刻 ``self._state`` 已经是 ``PAUSED``,查什么都查不到,
-#: 这道闸就成了"先按暂停、再按让开腿"一绕就过的摆设。
+#: **按暂停之前**站在哪一层。所以那条 while 查这张表时查的是"暂停之前那个状态",
+#: 不是 ``self._state`` —— 那一刻 ``self._state`` 已经是 ``PAUSED``,查什么都查不到,
+#: 这道闸就成了"先按暂停、再按让开腿"一绕就过的摆设。**这条纪律跟表里有几项无关,
+#: 表空着也得照这么查。**
 #:
-#: **表里现在只剩 ``LOCALIZING`` 一个。** 它期间挂起再继续,``_RetryWaypoint``
-#: 会从 ``_await_localized`` 直接漏给 ``_run`` 的兜底,按"引擎内部异常"整趟
-#: 中止 —— "人接管完点继续,整趟任务却没了",现场最难归因的那种失败。而且
-#: 重定位期间人接管本来也没什么意义:狗还不知道自己在哪儿,牵到哪儿都一样。
+#: ``RETURNING`` 原来在这儿(挂账 56),2026-09-10 移走了:走廊被堵、地上有水,
+#: 人在返航路上要把狗牵开是个真需求。移走的前提是那条路真接得住继续 ——
+#: 见 ``_ResumeReturnHome``:人接管完是从狗**现在**停的地方重新规划回家,
+#: 不是接着跑发起返航时那一次 ``return_home``。
 #:
-#: ``RETURNING`` 原来跟它并排在这儿(挂账 56),2026-09-10 移走了:走廊被堵、
-#: 地上有水,人在返航路上要把狗牵开是个真需求。移走的前提是那条路真接得住
-#: 继续 —— 见 ``_ResumeReturnHome``:人接管完是从狗**现在**停的地方重新规划
-#: 回家,不是接着跑发起返航时那一次 ``return_home``。
+#: ``LOCALIZING`` 原来是表里最后一项,2026-09-11 移走。旧理由是"挂起再继续,
+#: ``_RetryWaypoint`` 会从 ``_await_localized`` 漏给 ``_run`` 的兜底,整趟中止";
+#: 那个漏子已经在 ``_await_localized`` 里堵上了,旧理由不再成立。**但"旧理由没了"
+#: 不等于"就该放行"**,所以按它自己的是非重推了一遍,结论是移走,五条:
 #:
-#: 拒绝好过悄悄支持:真要让剩下这个状态也能挂起,是引擎行为的扩展(得先把
-#: 那条路径也走通),不是这里能顺手做的事。
-_SUSPEND_UNSAFE_STATES: dict[RunState, str] = {
-    RunState.LOCALIZING: "正在重定位,现在不能让开腿",
-}
+#: 1. **拒绝的实际后果是"这条狗谁也动不了"。** ``app/teleop.py`` 那道闸是
+#:    ``if engine.running and not engine.yielding: raise TeleopBusy``,而
+#:    ``yielding`` 的定义就是 ``self._state is SUSPENDED``。挂起被拒 → 进不了
+#:    SUSPENDED → 遥控也被拒。于是等定位的 30s 里人对这条狗**没有任何操作手段**,
+#:    只能看着它走到 ``_AbortRun("等定位收敛超过 30s")``。
+#: 2. **而"把狗挪到特征多的地方"正是重定位不收敛时的标准处置。** 拒绝挂起等于
+#:    拿走唯一那个真能解决问题的动作,留下的只有"等超时然后整趟中止"。
+#: 3. **腿不会被抢。** 这段期间引擎一条运动指令都没下:``_await_localized``
+#:    只有 ``loc_status()`` 和等队列。``RUNNING`` 下人接管要防的"两边一起动",
+#:    在这儿没有对应物。
+#: 4. **继续之后不会吃到过期数据。** 回来只重新问一次 ``loc_status()``,拿的是
+#:    厂商此刻的判断;引擎自己不缓存位姿、不做推算。人把狗牵到哪儿,收敛就从哪儿
+#:    重新开始 —— 这恰恰是想要的。
+#: 5. **挂起点允许没有位姿。** ``SuspendPoint.pose`` 的文档串写明可以是 ``None``,
+#:    定位没收敛时拿不到位姿本来就在设计之内,不是被这次改动逼出来的例外。
+#:
+#: 反方的说法是"位姿在飘,人一动可能收敛到错的地方去"。这条不成立:收敛判定是
+#: 厂商侧做的,引擎只读 ``LocStatus``;人不动它也可能收到错的地方去,而人不动
+#: 就一定收不了 —— 上面第 2 条。
+#:
+#: 留一条已知的毛刺(不阻塞,记在这儿):定位期间若来了 ``LOC_LOST``,继续时的
+#: 那道闸会说"狗不在地图里,找不到下一个点"。话本身不假,但对着一条"本来就还没
+#: 定位好"的狗说这句,现场容易读成新故障。真要改得先给这条闸分状态说话。
+_SUSPEND_UNSAFE_STATES: dict[RunState, str] = {}
+
+
+log = logging.getLogger(__name__)
+
+
+def _now_ms() -> int:
+    """墙钟的毫秒数(Unix epoch)。**引擎里唯一一处 ``time.time()``。**
+
+    时间戳要走墙钟不是洁癖:``SuspendPoint.at_ms`` 会被 ``app/server.py`` 拿去
+    跟它自己的 ``now_ms`` 相减判"挂起太久了"(P1 告警 ``suspend_stale``),两边
+    得在同一条纪年上,单调钟那个数只在本进程内有意义。同理 ``_Live.started_ms``
+    和 ``WaypointResult.arrived_ms`` 都是要写进归档给人看的时刻。
+
+    但**每次都现问一次墙钟就错了** —— 见 ``MissionEngine._stamp_ms``。所以这个
+    函数只在每趟开跑时被调一次,而且可以从构造函数注进来(``wall_ms=``),
+    测试里就不用去动系统时间。
+    """
+    return int(time.time() * 1000)
 
 
 class EngineBusy(RuntimeError):
@@ -353,6 +394,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def __init__(self, nav: NavBackend, device: DeviceBackend,
                  media: Mapping[str, MediaSource], runs_root: Path,
                  *, clock: Callable[[], float] = time.monotonic,
+                 wall_ms: Callable[[], int] = _now_ms,
                  fingerprint: Mapping[str, Any] | None = None,
                  form: Form = STANDALONE,
                  removable: RemovableProbe = DEFAULT_PROBE,
@@ -363,6 +405,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         self._media = dict(media)
         self._runs_root = Path(runs_root)
         self._clock = clock
+        self._wall_ms = wall_ms
+        # 每趟开跑时对一次表:墙钟读一次当锚点,之后所有对外时刻都是
+        # "锚点 + 单调钟走过的量"。见 ``_stamp_ms``。
+        self._epoch_ms = 0
+        self._epoch_at = 0.0
         self._fingerprint = dict(fingerprint or {})
         self._form = form
         self._removable = removable
@@ -399,6 +446,26 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    def now_ms(self) -> int:
+        """引擎这一趟的"现在",Unix epoch 毫秒。**判"挂起多久了"该拿这个去减。**
+
+        跟 ``SuspendPoint.at_ms`` 出自同一口钟(见 ``_stamp_ms``):开跑时对一
+        次墙钟当锚点,之后按可注入的单调钟推。所以
+        ``engine.now_ms() - 点.at_ms`` 是一段**真实走过的时长**,狗上墙钟中途
+        被校一下、或者压根没有 NTP,都不影响它。
+
+        **这是给 ``app/server.py::_挂起超时了`` 预备的。** 那边现在拿的是
+        ``self._ctx.clock()``(每次现问墙钟),跟 ``at_ms`` 一减就是"活墙钟 −
+        锚定时刻",墙钟一跳这条 P1 的判据就跟着跳。那一半不在 engine 的地盘
+        里,已写进报告等协调;这个方法先备好,那边改成 ``ctx.engine.now_ms()``
+        是一行的事。
+
+        没在跑的时候没有锚点,直接回墙钟 —— 那时候也没有挂起点可减。
+        """
+        if self._live is None:
+            return self._wall_ms()
+        return self._stamp_ms()
 
     @property
     def yielding(self) -> bool:
@@ -479,7 +546,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         self._home = home
         archive = RunArchive(self._runs_root, mission)
         archive.write_manifest(self._fingerprint)
-        self._live = _Live(mission, archive, started_ms=int(time.time() * 1000))
+        # 对表:墙钟这一趟只读这一次,后面所有时刻都从这个锚点按单调钟推。
+        self._epoch_ms = self._wall_ms()
+        self._epoch_at = self._clock()
+        self._live = _Live(mission, archive, started_ms=self._epoch_ms)
         self._seen = set()
         while not self._queue.empty():       # 上一趟的残留不许漏进这一趟
             self._queue.get_nowait()
@@ -573,6 +643,28 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         if self._live is not None:
             self._live.archive.append_event(kind, **fields)
 
+    def _stamp_ms(self) -> int:
+        """对外时刻(Unix epoch 毫秒),**锚点 + 单调钟**,不是现问墙钟。
+
+        为什么不直接 ``int(time.time() * 1000)``:``SuspendPoint`` 的两个同胞
+        字段原来跑在两条时基上 —— ``at_ms`` 是墙钟,``prior_suspend_ms`` 是
+        ``self._clock()`` 这口可注入的单调钟,而它俩是同一个 ``finally`` 成对
+        收尾的。``app/server.py`` 判 ``suspend_stale``(P1 告警)算的是
+        ``now_ms - 点.at_ms + 点.prior_suspend_ms`` —— 一个式子里把两条时基加
+        在一起。现场没有 NTP,狗上墙钟一跳,这条 P1 的判据就跟着跳:往前跳
+        误报一串 P1(2 分钟没人确认就 push、5 分钟出声),往后跳则该报的不报。
+
+        改成锚点 + 单调钟之后:``at_ms`` 仍然是 epoch 毫秒(app 那边拿它跟自己
+        的 ``now_ms`` 相减的算法一个字不用动),但**一趟之内它和
+        ``prior_suspend_ms`` 走的是同一口钟**,狗上墙钟中途跳多少都不影响两者
+        的差。锚点在 ``start`` 里读一次,那一次读的是真墙钟。
+
+        剩下的一半在 app 侧,不在这个文件里:那边的 ``now_ms`` 还是每次现问
+        **手机/服务端**的墙钟。两台机器的墙钟差 + 服务端自己跳表,仍然会动这条
+        判据。已写进报告,不越界改。
+        """
+        return self._epoch_ms + int((self._clock() - self._epoch_at) * 1000)
+
     # ------------------------------------------------------------------ 队列
 
     async def _forward(self, emitter: NavBackend | DeviceBackend) -> None:
@@ -627,9 +719,18 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             await self._do_abort(exc.reason)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - 兜底,理由见下
+        except Exception as exc:
             # 让引擎带着异常静静死掉是最糟的结局:页面上还显示 RUNNING,
             # 人在外面等着。任何意外都要落成一个说得清原因的 ABORTED。
+            #
+            # **这里必须兜住一切,收窄到具体类型就是错的**:兜的是"我们没想到
+            # 的那种异常",一旦写得出类型名,它就已经是想到过的了。原来这行挂
+            # 着一句 ``noqa: BLE001`` 硬压 —— 而本项目的 ruff 配置写明 ``BLE``
+            # 不许用 noqa 绕。改成带 ``exc_info`` 记一条日志:ruff 认这种写法
+            # (兜住 + 留证据,不是吞掉),而且它补上了一个真缺口 ——
+            # ``_do_abort`` 的 reason 里只有 ``类型: 消息``,traceback 原来
+            # 整段丢了,事后没人查得出炸在哪一行。
+            log.exception("引擎内部异常,整趟按中止收尾")
             await self._do_abort(f"引擎内部异常: {type(exc).__name__}: {exc}")
         finally:
             await self._finish()
@@ -770,6 +871,30 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     # ------------------------------------------------------------------ 定位
 
     async def _await_localized(self) -> None:
+        """等定位收敛。等的期间照常处理事件 —— 包括暂停和让开腿。
+
+        **``_RetryWaypoint`` 在这儿必须有人接。** 它是"人点了继续"的信号:
+        ``_pause_until_resumed`` 和 ``_suspend_until_resumed`` 走到末尾都无条件
+        抛它。这个函数原来一个 ``except`` 都没有,于是等定位的时候光按一下暂停
+        再点继续,异常就一路漏给 ``_run`` 的兜底,整趟按
+        ``引擎内部异常: _RetryWaypoint`` 中止 —— 屏幕上是一句没人看得懂的话,
+        现场会读成"软件崩了"。而"等定位收敛"是现场执行单里一条明确的等待步骤,
+        人盯着一条不动的狗按一下暂停再正常不过。
+
+        接住之后**接着等收敛**:定位期间没有"当前点"可重发,``_RetryWaypoint``
+        在这儿的正确含义就是"人回来了,继续等"。做法跟 60 行开外的 ``_go_home``
+        (``except (_ResumeReturnHome, _RetryWaypoint)`` → ``continue``)是同一个,
+        不是新机制,是把已有的做法补到漏掉的这一处。
+
+        **只接 ``_RetryWaypoint``,不接 ``_ResumeReturnHome``** —— 核过:
+        ``_ResumeReturnHome`` 只有 ``_suspend_until_resumed`` 在
+        ``point.from_state is RETURNING`` 时才抛,而 ``_suspend_until_resumed``
+        只有两个调用点,``from_state`` 拿的都是当下的 ``self._state``:
+        ``_handle_command`` 那条在这个循环里看到的是 ``LOCALIZING``,
+        ``_pause_until_resumed`` 那条看到的是 ``PAUSED``。两个都不是
+        ``RETURNING``,所以那个异常到不了这儿。接一个到不了的异常等于给读代码
+        的人立一块错路牌。
+        """
         status = await self._nav.loc_status()
         deadline = self._clock() + LOCALIZE_TIMEOUT_S
         while status is not LocStatus.CONTINUOUS_LOC:
@@ -778,7 +903,26 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 raise _AbortRun(
                     f"等定位收敛超过 {LOCALIZE_TIMEOUT_S:.0f}s,"
                     f"当前 {status.value if status else '未知'}")
-            await self._handle(item)
+            try:
+                await self._handle(item)
+            except _RetryWaypoint:
+                # 状态翻回 LOCALIZING:上游那两条路都会先 ``_transition(RUNNING)``
+                # 再抛,而这条狗根本没在跑点位,还在等收敛。这一闪是安全的,论证
+                # 跟 ``_go_home`` 那一支一模一样:中间没有任何 ``self._next(...)``,
+                # 引擎处理不了新事件。
+                await self._transition(RunState.LOCALIZING, "人工继续,接着等定位收敛")
+                # **预算重置。** 不重置的话,人暂停五分钟再继续,回来时
+                # ``deadline - self._clock()`` 已经是负的,``_next`` 立刻返回
+                # ``None`` → "等定位收敛超过 Ns" —— 那还是一次错误的中止,只是
+                # 理由从看不懂换成了看得懂的假话:人没有"定位收敛失败",人只是
+                # 按了暂停。纪律照 ``_do_waypoint`` 那一段:超时按**这一次尝试**算。
+                deadline = self._clock() + LOCALIZE_TIMEOUT_S
+                # 重新问一次:人接管的那几分钟里定位很可能已经收敛了,而那期间的
+                # ``LocStatusEvent`` 被暂停/挂起那两条循环吃掉了(它们只记档,不往
+                # 上转发)。不重问就会守着一个过时的 ``status`` 再等满一个
+                # ``LOCALIZE_TIMEOUT_S``,然后中止一趟其实已经好了的任务。
+                status = await self._nav.loc_status()
+                continue
             if isinstance(item, LocStatusEvent):
                 status = item.status
 
@@ -809,7 +953,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 self._note("nav", waypoint=wp.name, attempt=tried + 1)
                 await self._wait_nav_terminal(
                     attempt_started + policy.waypoint_timeout_s)
-                arrived_ms = int(time.time() * 1000)
+                arrived_ms = self._stamp_ms()
                 await self._do_actions(wp)
                 return WaypointResult(wp.name, True, arrived_ms,
                                       self._clock() - started, tuple(live.photos))
@@ -1029,11 +1173,14 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         if cmd.kind == "suspend":
             deny = _SUSPEND_UNSAFE_STATES.get(self._state)
             if deny is not None:
-                # **诚实拒绝,不是硬撑着支持。** 这几个状态下 resume 之后的
-                # ``_RetryWaypoint`` 没有一条安全的路能接住它(见上面常量的
-                # 注释)——真要支持,得先把那几条路径也走通,那是引擎行为的
+                # **诚实拒绝,不是硬撑着支持。** 进表的状态是那些"resume 之后
+                # 的 ``_RetryWaypoint`` 没有一条安全的路能接住"的状态(见上面
+                # 常量的注释)——真要支持,得先把那条路径走通,那是引擎行为的
                 # 扩展,不是这里能顺手做的事。一句说得出口的拒绝,好过一趟
                 # 悄悄中止、现场最难归因的那种失败。
+                #
+                # 表眼下是空的,所以这一支现在走不到;留着它和上面那张表是一
+                # 回事 —— 加一项就立刻生效,不用重新发明一遍。
                 #
                 # ``_note`` 只落归档,不广播。旁边 ``resume_refused``
                 # (``_suspend_until_resumed`` 里)两步都做——这里原来只做了
@@ -1054,9 +1201,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         """
         # 在翻进 ``PAUSED`` **之前**把暂停前的状态抄下来:翻完了就只剩
         # ``PAUSED``,而下面那道挂起闸要问的恰恰是"按暂停之前在干什么"。
-        # 已知缺口(不在本次范围内,单独挂账):``LOCALIZING`` 期间光按暂停
-        # 再点继续,这里末尾那句 ``raise _RetryWaypoint`` 一样会漏给
-        # ``_run`` 的兜底 —— 那是暂停自己的病,拦挂起拦不掉它。
+        # 曾经的已知缺口(2026-09-11 修掉):``LOCALIZING`` 期间光按暂停再点
+        # 继续,这里末尾那句 ``raise _RetryWaypoint`` 会漏给 ``_run`` 的兜底,
+        # 整趟按"引擎内部异常"中止。那是暂停自己的病,拦挂起拦不掉它 ——
+        # 所以修在 ``_await_localized``:它现在接住 ``_RetryWaypoint``,重置
+        # 超时预算,接着等收敛。
         before = self._state
         await self._transition(RunState.PAUSED, "人工暂停")
         await self._stop_nav_quietly()
@@ -1083,10 +1232,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     # ``self._state``:这一刻状态已经是 ``PAUSED``,拿它去查
                     # ``_SUSPEND_UNSAFE_STATES`` 永远查不到,同一个"让开腿"
                     # 的意图在 ``_handle_command`` 那条路上被拒、在这条路上
-                    # 却受理 —— 先按暂停就能把闸绕过去。绕过去的后果不是
-                    # "多支持一种操作":``LOCALIZING`` 期间绕过去,人接管完
-                    # 点继续,``_RetryWaypoint`` 会从 ``_await_localized`` 漏
-                    # 给 ``_run`` 的兜底,整趟按"引擎内部异常"中止。
+                    # 却受理 —— 先按暂停就能把闸绕过去,同一个意图两条路两个
+                    # 答案。**表现在是空的,这道闸照样要留、照样查 ``before``**:
+                    # 下一个往表里加状态的人不必再想一遍这件事,加一项就两条路
+                    # 一起生效。
                     deny = _SUSPEND_UNSAFE_STATES.get(before)
                     if deny is None:
                         await self._suspend_until_resumed(item.reason)
@@ -1139,7 +1288,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         point = SuspendPoint(
             waypoint_index=idx, waypoint_name=wps[idx].name,
             pose=live.last_pose, reason=reason,
-            at_ms=int(time.time() * 1000), from_state=self._state,
+            at_ms=self._stamp_ms(), from_state=self._state,
             prior_suspend_ms=live.suspend_total_ms)
         live.suspended = point
         await self._transition(RunState.SUSPENDED, reason)

@@ -18,6 +18,8 @@ import pytest
 from d1max_patrol.backends.base import BatteryEvent, DevicePoseEvent, NavStatusEvent
 from d1max_patrol.engine.archive import read_events
 from d1max_patrol.engine.machine import (
+    _SUSPEND_UNSAFE_STATES,
+    LOCALIZE_TIMEOUT_S,
     RETURN_TIMEOUT_S,
     MissionEngine,
     RunState,
@@ -90,6 +92,39 @@ async def 重定位中的引擎(make_engine, nav):
     async def loc_status() -> LocStatus:
         calls["n"] += 1
         return LocStatus.CONTINUOUS_LOC if calls["n"] == 1 else LocStatus.LOC_LOST
+
+    nav.loc_status = loc_status
+    engine = make_engine()
+    await engine.start(make_mission(), home=_HOME)
+    await engine.wait_state(RunState.LOCALIZING)
+    yield engine
+    if engine.running:
+        await engine.abort("测试收尾")
+        with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+            await engine.wait_done(timeout_s=5.0)
+    await engine.aclose()
+
+
+@pytest.fixture
+async def 等定位收敛的引擎(make_engine, nav):
+    """卡在 ``LOCALIZING`` 里等定位收敛,而且**喂一条 ``CONTINUOUS_LOC``
+    就能收敛、整趟能跑完**的引擎。
+
+    跟 ``重定位中的引擎`` 的区别只有一条:那一个永远收敛不回来(用来钉"等
+    不到就中止"),这一个等得到。断"人在等定位的时候按了暂停,整趟还能跑完"
+    必须用这一个 —— 用那一个的话,末态永远是 ABORTED,断言分不出"是暂停把
+    这一趟弄没的"还是"本来就收敛不了"。
+
+    ``calls["n"] == 1`` 那一次是**起飞检查**问的(``preflight._check_localized``
+    自己也查一遍 ``loc_status``,查到的得是收敛的),从第二次起才是
+    ``_await_localized`` 在问,答"还在初始化定位" —— 于是引擎进那条等待循环。
+    """
+    calls = {"n": 0}
+
+    async def loc_status() -> LocStatus:
+        calls["n"] += 1
+        return (LocStatus.CONTINUOUS_LOC if calls["n"] == 1
+                else LocStatus.INIT_LOCALIZATION)
 
     nav.loc_status = loc_status
     engine = make_engine()
@@ -370,37 +405,65 @@ async def _等到拒绝(engine: MissionEngine, timeout_s: float = 2.0) -> list[d
         await asyncio.sleep(0)
 
 
-async def test_定位中不能挂起(重定位中的引擎):
-    """S1:``LOCALIZING`` 期间没有一条安全路径能接住 resume 之后的
-    ``_RetryWaypoint``(见 ``_SUSPEND_UNSAFE_STATES`` 的注释)—— 它会一路
-    逃到 ``_run`` 的兜底,把整趟按"引擎内部异常"中止。所以 suspend 必须在
-    这里就诚实拒绝,不是悄悄接受、等 resume 那一刻才炸。
+async def test_定位中现在准挂起了(重定位中的引擎):
+    """S1 掉了个头:``LOCALIZING`` 2026-09-11 从 ``_SUSPEND_UNSAFE_STATES``
+    里移走了。
+
+    原来的理由是"resume 之后的 ``_RetryWaypoint`` 没人接,会一路逃到 ``_run``
+    的兜底,把整趟按引擎内部异常中止"。那个漏子已经在 ``_await_localized`` 里
+    堵上,旧理由不成立了;而按这件事自己的是非重推,结论也是该放行 ——
+    ``app/teleop.py`` 那道闸是 ``engine.running and not engine.yielding``,拒了
+    挂起,人对这条狗就**没有任何操作手段**,只能看着它走到"等定位收敛超过
+    30s",而"把狗牵到特征多的地方"恰恰是收不敛时唯一的现场解法。五条完整推导
+    写在那张表自己的注释里。
+
+    这条只钉"受理了、而且没落拒绝档";断到整趟跑完的是
+    ``test_等定位时让开腿再继续_整趟还能跑完`` —— 这个夹具的定位永远收不回来,
+    在这儿断不了整趟。
     """
     engine = 重定位中的引擎
     await engine.suspend("门口有箱子")
-    拒绝 = await _等到拒绝(engine)
-    assert engine.state is RunState.LOCALIZING
-    assert 拒绝[-1]["reason"] == "正在重定位,现在不能让开腿"
+    await engine.wait_state(RunState.SUSPENDED)
+    assert [e for e in read_events(engine.archive.path)
+            if e["kind"] == "suspend_refused"] == [], "不该再有拒绝档"
+
+
+@pytest.fixture
+def 表里塞回一项(monkeypatch):
+    """把 ``LOCALIZING`` 临时塞回 ``_SUSPEND_UNSAFE_STATES``。
+
+    表现在是空的,**但闸还在**,而且闸的那几条纪律 —— 落档 + 广播两步都做、
+    查 ``before`` 不查 ``self._state`` —— 一条都不能退化:下一个往表里加状态的
+    人靠的就是它们。空表测不出这些,所以塞回一项来测。**测的是机制,不是
+    "LOCALIZING 该不该被拒"** —— 后者的结论是不该,见上一条用例。
+    """
+    理由 = "正在重定位,现在不能让开腿"
+    monkeypatch.setitem(_SUSPEND_UNSAFE_STATES, RunState.LOCALIZING, 理由)
+    return 理由
 
 
 # ---------------------------------------------------------------- 评审第二轮 N1/N2/PAUSED
 
 
-async def test_挂起被拒也广播出去(重定位中的引擎):
+async def test_挂起被拒也广播出去(表里塞回一项, 重定位中的引擎):
     """N1:``suspend_refused`` 原来只走 ``_note``,没走 ``_publish`` ——
     落进了 events.jsonl,却没广播给订阅方。旁边 ``resume_refused``
     (``_suspend_until_resumed`` 里)两步都做了。只落档不广播等于没说出口:
     现场的人在手机上点「让开腿」,界面上什么都不动,只会以为按钮坏了,
     反复点。事后要有人翻 events.jsonl 才知道当时是被拒了。
 
-    钉的是**广播**这一步,不是只钉 ``_note`` 落的那条事件——S1/S2 已经
-    钉过事件和状态没变,这里改钉 ``eng.snapshot.reason``:它只在
-    ``_publish`` 被调用之后才会变,单靠 ``_note`` 动不了它。
+    钉的是**广播**这一步,不是只钉 ``_note`` 落的那条事件——这里钉的是
+    ``eng.snapshot.reason``:它只在 ``_publish`` 被调用之后才会变,单靠
+    ``_note`` 动不了它。
+
+    ``LOCALIZING`` 自己已经不在表里了(见 ``test_定位中现在准挂起了``),所以
+    这条用例靠 ``表里塞回一项`` 临时塞一项进去 —— 它钉的从来就不是"重定位期间
+    该被拒",而是**一旦某个状态被拒,这句拒绝得真的说出口**。
     """
     engine = 重定位中的引擎
     await engine.suspend("门口有箱子")
     await _等到拒绝(engine)
-    assert engine.snapshot.reason == "正在重定位,现在不能让开腿"
+    assert engine.snapshot.reason == 表里塞回一项
 
 
 async def test_暂停时喊挂起不再产生拒绝事件(跑起来的引擎):
@@ -674,26 +737,36 @@ async def test_返航中接管完还能直接中止(返航中的引擎):
     assert await eng.wait_done(timeout_s=5.0) is RunState.ABORTED
 
 
-async def test_重定位期间仍然拒绝(重定位中的引擎):
-    """``LOCALIZING`` 不在本任务范围内 —— 它是另一个病:``_RetryWaypoint``
-    会从 ``_await_localized`` 漏给 ``_run`` 的兜底,被当成引擎内部错误直接
-    中止。而且重定位期间人接管本来也没什么意义,狗还不知道自己在哪儿。
+async def test_那张表现在是空的_但闸一分没少(表里塞回一项, 重定位中的引擎):
+    """表空了,闸不许跟着删。
 
-    跟前面 S1 那条不重复:S1 钉的是归档里那条 ``suspend_refused`` 事件,
-    这里钉的是**移走 RETURNING 之后这张表没有被顺手清空** —— 断的是
-    ``snapshot.reason`` 上那句话还在。
+    ``_SUSPEND_UNSAFE_STATES`` 2026-09-11 空掉了(``LOCALIZING`` 是最后一项,
+    移走的五条理由见那张表的注释)。空表加一道闸不是死代码:它是下一个发现
+    "某个状态挂起不安全"的人唯一的挂靠点 —— 删了它,下次就得把整套机制重新
+    发明一遍,而重新发明的那一版多半又会犯"查 ``self._state`` 而不是
+    ``before``"那个错(见下一条用例)。
+
+    所以这条钉两件事:表确实是空的(不留过期条目充数),以及往表里塞一项,
+    闸立刻生效。
     """
+    assert _SUSPEND_UNSAFE_STATES == {RunState.LOCALIZING: 表里塞回一项}, \
+        "除了这条用例自己塞回去的那一项,表里不该再有别的"
     eng = 重定位中的引擎
     await eng.suspend("试试")
-    await until(lambda: "正在重定位" in eng.snapshot.reason)
+    await until(lambda: 表里塞回一项 in eng.snapshot.reason)
     assert eng.state is RunState.LOCALIZING
 
 
-async def test_重定位中先按暂停再点让开腿_这道闸照样拦得住(重定位中的引擎):
+async def test_重定位中先按暂停再点让开腿_这道闸照样拦得住(表里塞回一项, 重定位中的引擎):
     """必修 2。这道闸原来查的是 ``self._state``,而在 ``_pause_until_resumed``
     那条 while 里,那一刻状态已经是 ``PAUSED`` —— ``_SUSPEND_UNSAFE_STATES``
     里查不到,于是**先按暂停、再点让开腿**就能把闸整个绕过去。同一个"让开腿"
-    的意图,直接点被拒(S1 那条),绕一道就受理。
+    的意图,直接点被拒,绕一道就受理。
+
+    **表眼下是空的,所以这条用例靠 ``表里塞回一项`` 临时塞一项进去。** 它钉的
+    是闸的机制(查 ``before``),不是"重定位期间该被拒" —— 后者已经推翻了,见
+    ``test_定位中现在准挂起了``。机制不能跟着结论一起废掉:下一个往表里加状态
+    的人,靠的就是这条用例还绿着。
 
     **绕过去的后果不是良性的**,这是实测出来的、不是推的:绕进 SUSPENDED 之后
     人点继续,``_suspend_until_resumed`` 末尾那句 ``raise _RetryWaypoint`` 从
@@ -711,15 +784,18 @@ async def test_重定位中先按暂停再点让开腿_这道闸照样拦得住(
     拒绝 = await _等到拒绝(eng)
     await 等一拍(eng)
     assert eng.state is RunState.PAUSED, "从暂停这条侧门被绕进了 SUSPENDED"
-    assert 拒绝[-1]["reason"] == "正在重定位,现在不能让开腿"
+    assert 拒绝[-1]["reason"] == 表里塞回一项
     # 记「暂停之前在重定位」而不是「现在是 PAUSED」:记成 PAUSED 的话,事后
     # 翻 events.jsonl 的人会看到一条"因为暂停所以不能挂起"的胡话。
     assert 拒绝[-1]["state"] == "LOCALIZING"
-    assert eng.snapshot.reason == "正在重定位,现在不能让开腿"
+    assert eng.snapshot.reason == 表里塞回一项
 
 
-async def test_重定位中挂起被拒之后暂停还在_人还能直接中止(重定位中的引擎):
+async def test_重定位中挂起被拒之后暂停还在_人还能直接中止(表里塞回一项, 重定位中的引擎):
     """拒绝是"接着等",不是把暂停这条循环打断。
+
+    跟上一条一样靠 ``表里塞回一项``:表空了,但"拒绝之后人还得能把这趟停下来"
+    这条纪律不能跟着空掉。
 
     钉这一条是因为拒绝那一支新走的是 ``continue``:它要是不小心 ``break``
     或者漏掉 ``continue``,人就会被留在一个既不能继续也停不下来的地方,而
@@ -989,3 +1065,246 @@ async def test_重来那一圈的返航超时预算是新算的(返航中的引�
         await eng.wait_done(timeout_s=0.5)
     assert eng.state is RunState.RETURNING, eng.snapshot.reason
     assert "返航失败" not in eng.snapshot.reason, eng.snapshot.reason
+
+
+# ------------------------------------------- 必修 1:挂起点两个字段的时基
+#
+# ``SuspendPoint.at_ms`` 原来是 ``int(time.time() * 1000)``(墙钟),它的同胞
+# ``prior_suspend_ms`` 是拿 ``self._clock()``(可注入的单调钟)算的 —— 而两者
+# 由同一个 ``finally`` 成对收尾,又在 ``app/server.py::_挂起超时了`` 里被加进
+# 同一个式子:``now_ms - 点.at_ms + 点.prior_suspend_ms > SUSPEND_STALE_MS``。
+# 判据是一条 P1 告警(``suspend_stale``,2 分钟没人确认就 push、5 分钟出声)。
+# 现场没有 NTP,狗上墙钟一跳,这条 P1 就跟着跳。
+
+
+class _假墙钟:
+    """一口读得出来的墙钟。``ms`` 随便改,``读过`` 记被调了几次。"""
+
+    def __init__(self, ms: int) -> None:
+        self.ms = ms
+        self.读过 = 0
+
+    def __call__(self) -> int:
+        self.读过 += 1
+        return self.ms
+
+
+async def test_挂起时刻和挂起累计走的是同一口钟(make_engine, nav, clock):
+    """两个字段一起动,动的幅度一样 —— 这就是"同一口钟"的可观察形式。
+
+    墙钟在整趟里一动不动(``_假墙钟`` 不会自己走),而把注进去的单调钟往前拨
+    七秒;如果 ``at_ms`` 还在现问墙钟,两次挂起的 ``at_ms`` 之差会是 0(用例
+    跑完也就几毫秒),跟 ``prior_suspend_ms`` 记下的 7000 对不上。
+    """
+    nav.on_goto = NEVER
+    墙钟 = _假墙钟(1_757_000_000_000)
+    eng = make_engine(wall_ms=墙钟)
+    await eng.start(make_mission(), home=_HOME)
+    try:
+        await until(lambda: nav.goto_calls)
+        await eng.suspend("第一次让开腿")
+        await until(lambda: eng.state is RunState.SUSPENDED)
+        点1 = eng.snapshot.suspended_at
+        assert 点1 is not None
+
+        clock.offset += 7.0                          # 人接管了七秒
+        await eng.resume()
+        await until(lambda: eng.state is RunState.RUNNING)
+        await eng.suspend("第二次让开腿")
+        await until(lambda: eng.state is RunState.SUSPENDED)
+        点2 = eng.snapshot.suspended_at
+        assert 点2 is not None
+
+        assert 7_000 <= 点2.prior_suspend_ms < 7_500, 点2.prior_suspend_ms
+        # 两个字段的差对得上,才谈得上"能加进同一个式子"。余量留给真
+        # monotonic 在两次挂起之间走掉的那几毫秒,以及 ``int()`` 的截断。
+        差 = 点2.at_ms - 点1.at_ms
+        assert abs(差 - 点2.prior_suspend_ms) < 200, (差, 点2.prior_suspend_ms)
+    finally:
+        if eng.running:
+            await eng.abort("测试收尾")
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                await eng.wait_done(timeout_s=5.0)
+        await eng.aclose()
+
+
+async def test_墙钟中途跳表_挂起时刻不跟着跳(make_engine, nav, clock):
+    """现场没有 NTP:狗上墙钟半夜被校一下、或者干脆没电重启过,是会跳的。
+
+    ``at_ms`` 仍然是 epoch 毫秒(app 那边拿它跟自己的 ``now_ms`` 相减的算法一
+    个字不用动),但一趟之内它是"开跑时对的那次表 + 单调钟走过的量",所以狗上
+    墙钟中途跳一个钟头,挂起时刻不跟着跳 —— 否则那一跳会直接变成一串误报的
+    P1(往前跳),或者该报的不报(往后跳)。
+
+    顺带钉死"一趟只对一次表":``读过 == 1``。这个数字比任何措辞都说得清楚。
+    """
+    nav.on_goto = NEVER
+    墙钟 = _假墙钟(1_757_000_000_000)
+    eng = make_engine(wall_ms=墙钟)
+    await eng.start(make_mission(), home=_HOME)
+    try:
+        await until(lambda: nav.goto_calls)
+        开跑时 = 墙钟.ms
+        墙钟.ms += 3_600_000                         # 墙钟往前跳了一个钟头
+        clock.offset += 5.0
+        await eng.suspend("跳表之后才让开腿")
+        await until(lambda: eng.state is RunState.SUSPENDED)
+        点 = eng.snapshot.suspended_at
+        assert 点 is not None
+
+        assert 点.at_ms - 开跑时 < 60_000, \
+            f"墙钟那一跳漏进了挂起时刻: {点.at_ms - 开跑时} ms"
+        assert 5_000 <= 点.at_ms - 开跑时, "单调钟走过的那五秒得算进去"
+        assert 墙钟.读过 == 1, f"一趟只该对一次表,实际读了 {墙钟.读过} 次"
+    finally:
+        if eng.running:
+            await eng.abort("测试收尾")
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                await eng.wait_done(timeout_s=5.0)
+        await eng.aclose()
+
+
+async def test_引擎给的现在和挂起时刻能直接相减(make_engine, nav, clock):
+    """``engine.now_ms()`` 跟 ``SuspendPoint.at_ms`` 出自同一口钟。
+
+    这是给 ``app/server.py::_挂起超时了`` 预备的:那边现在拿
+    ``self._ctx.clock()``(每次现问墙钟)去减 ``at_ms``,墙钟一跳判据就跳。
+    改成 ``ctx.engine.now_ms()`` 之后,那个减法两端都在单调钟上 —— **那一半
+    不在 engine 的地盘里,这条用例先把 engine 这半边钉死。**
+
+    没在跑的时候没有锚点,回的是墙钟:那时候也没有挂起点可减。
+    """
+    nav.on_goto = NEVER
+    墙钟 = _假墙钟(1_757_000_000_000)
+    eng = make_engine(wall_ms=墙钟)
+    assert eng.now_ms() == 墙钟.ms, "没在跑的时候该直接回墙钟"
+
+    await eng.start(make_mission(), home=_HOME)
+    try:
+        await until(lambda: nav.goto_calls)
+        await eng.suspend("让开腿")
+        await until(lambda: eng.state is RunState.SUSPENDED)
+        点 = eng.snapshot.suspended_at
+        assert 点 is not None
+
+        墙钟.ms += 3_600_000                         # 墙钟往前跳了一个钟头
+        clock.offset += 90.0                         # 人接管了一分半
+        已挂起 = eng.now_ms() - 点.at_ms
+        assert 90_000 <= 已挂起 < 91_000, f"算出来的挂起时长: {已挂起} ms"
+    finally:
+        if eng.running:
+            await eng.abort("测试收尾")
+            with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
+                await eng.wait_done(timeout_s=5.0)
+        await eng.aclose()
+
+
+# --------------------------------------------- 等定位那一段:暂停/挂起再继续
+#
+# 上一轮核挂起闸的时候撞出来的,不在复核报告的 25 条里:**不用挂起,只按一下
+# 暂停再点继续,整趟一样 ABORTED**,理由是一句谁都看不懂的
+# ``引擎内部异常: _RetryWaypoint:``。链路是
+# ``_pause_until_resumed`` 末尾无条件 ``raise _RetryWaypoint``
+# → 从 ``_await_localized`` 漏出去(那个函数一个 ``except`` 都没有)
+# → ``_run`` 的兜底 → 整趟中止。
+#
+# 现场执行单里「等定位收敛」是一条明确的等待步骤,人盯着一条不动的狗按一下
+# 暂停太正常了,而代价是整趟没了。
+
+
+async def test_等定位时按暂停再继续_整趟还能跑完(等定位收敛的引擎, nav):
+    """**这一条是本轮的主断言:断到整趟,不是断一个状态字段。**
+
+    ``_await_localized`` 得像 ``_go_home`` 那样接住 ``_RetryWaypoint``:定位
+    期间没有"当前点"可重发,它在这儿的正确含义就是"人回来了,接着等收敛"。
+    """
+    eng = 等定位收敛的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+
+    await eng.resume()
+    # 两个世界都会离开 PAUSED:修好了是回到 LOCALIZING 接着等,没修好是一路
+    # ABORTED。等"其中之一发生"才能让红的那一次报出真实原因,而不是超时。
+    await until(lambda: eng.state is RunState.LOCALIZING or not eng.running)
+    assert eng.state is RunState.LOCALIZING, \
+        f"继续之后没回到「接着等定位」: {eng.state.value} / {eng.snapshot.reason}"
+
+    nav.emit_loc(LocStatus.CONTINUOUS_LOC)           # 定位收敛了
+    assert await eng.wait_done(timeout_s=5.0) is RunState.DONE, eng.snapshot.reason
+
+
+async def test_等定位时暂停很久再继续_不许一恢复就判超时(等定位收敛的引擎, nav, clock):
+    """**坑要一起填:``deadline`` 得重置。**
+
+    ``deadline = self._clock() + LOCALIZE_TIMEOUT_S`` 是进循环前算一次的。人
+    暂停五分钟再继续,回来时 ``deadline - self._clock()`` 已经是负的,
+    ``_next`` 立刻返回 ``None`` → ``_AbortRun("等定位收敛超过 Ns")``。那还是
+    一次错误的中止,只是理由从看不懂换成了看得懂的假话:人没有"定位收敛
+    失败",人只是按了暂停。
+
+    纪律照 ``_do_waypoint`` 那一段的注释办:到点超时按**这一次尝试**算。
+    """
+    eng = 等定位收敛的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+    clock.offset += LOCALIZE_TIMEOUT_S * 10          # 人在外面忙了五分钟
+
+    await eng.resume()
+    await until(lambda: eng.state is RunState.LOCALIZING or not eng.running)
+    assert eng.state is RunState.LOCALIZING, \
+        f"一恢复就判超时了: {eng.state.value} / {eng.snapshot.reason}"
+
+    nav.emit_loc(LocStatus.CONTINUOUS_LOC)
+    assert await eng.wait_done(timeout_s=5.0) is RunState.DONE, eng.snapshot.reason
+
+
+async def test_等定位时接管期间定位自己收敛了_也认(等定位收敛的引擎, nav):
+    """人接管的那几分钟里定位很可能已经收敛了,而那几条 ``LocStatusEvent``
+    被暂停那条循环吃掉了(它只记 ``paused_event``,不往上转发)。
+
+    不重问一次 ``loc_status()`` 的话,引擎会守着一个已经过时的 ``status`` 再
+    等满一个 ``LOCALIZE_TIMEOUT_S``,然后按"等定位收敛超时"中止一趟其实已经
+    好了的任务。
+    """
+    eng = 等定位收敛的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+    # 暂停期间收敛了:事件会被暂停那条循环吃掉,只有 ``loc_status()`` 记得。
+    nav.emit_loc(LocStatus.CONTINUOUS_LOC)
+    nav.loc_status = _恒定(LocStatus.CONTINUOUS_LOC)
+
+    await eng.resume()
+    assert await eng.wait_done(timeout_s=5.0) is RunState.DONE, eng.snapshot.reason
+
+
+async def test_等定位时让开腿再继续_整趟还能跑完(等定位收敛的引擎, nav):
+    """``LOCALIZING`` 从 ``_SUSPEND_UNSAFE_STATES`` 里移走之后的正面行为。
+
+    移走的理由见那张表自己的注释:等定位这一段引擎一条位移指令都不发,而
+    ``app/teleop.py`` 那道闸是 ``engine.running and not engine.yielding`` ——
+    也就是说不让开腿,人**根本动不了这条狗**,而"把狗挪到特征多的地方"恰恰
+    是定位收不敛时唯一的现场解法。
+
+    断到整趟:让开腿 → 人开着走 → 点继续 → 接着等收敛 → 收敛 → 跑完。
+    """
+    eng = 等定位收敛的引擎
+    await eng.suspend("狗在空走廊里收不敛,人把它牵到配电柜那边去")
+    await eng.wait_state(RunState.SUSPENDED)
+    点 = eng.snapshot.suspended_at
+    assert 点 is not None
+    assert 点.from_state is RunState.LOCALIZING
+
+    await eng.resume()
+    await until(lambda: eng.state is RunState.LOCALIZING or not eng.running)
+    assert eng.state is RunState.LOCALIZING, \
+        f"接管完没回到「接着等定位」: {eng.state.value} / {eng.snapshot.reason}"
+
+    nav.emit_loc(LocStatus.CONTINUOUS_LOC)
+    assert await eng.wait_done(timeout_s=5.0) is RunState.DONE, eng.snapshot.reason
+
+
+def _恒定(status: LocStatus):
+    """一个恒答同一个值的 ``loc_status``。夹具里那份是按调用次数变的。"""
+    async def loc_status() -> LocStatus:
+        return status
+    return loc_status
