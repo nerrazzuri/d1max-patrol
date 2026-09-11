@@ -616,6 +616,11 @@ class VideoHealthPoller {
 
   static const Duration defaultPeriod = Duration(seconds: 2);
 
+  /// 这条周期路径自己的超时窗口（必修 4）。见 `PatrolClient.get` 的
+  /// `deadline`：默认那 10 秒是给一次性请求的，2 秒一发的路上等满 10 秒，
+  /// 那一问的答案早就过期了。**超时之后那条连接是真的被掐掉的。**
+  static const Duration healthDeadline = Duration(seconds: 3);
+
   final PatrolClient _client;
   final Duration period;
 
@@ -625,6 +630,15 @@ class VideoHealthPoller {
 
   Timer? _timer;
 
+  /// 上一发还没回来（必修 4）。
+  ///
+  /// 这一条跟遥控屏那两条走在**同一个 `PatrolClient`（同一个 `HttpClient`）**
+  /// 上。狗那头 HTTP 线程卡住而 TCP 还接得上的时候（扫盘、写归档），不挡的
+  /// 话这条 2 秒一发的路会在超时窗口里堆出一串谁也不回收的连接，跟发拍和
+  /// 心跳一起把狗自己的热点上行挤死 —— 而那一串正是「看不见」这个结论的
+  /// 由来，人于是去修一台好好的相机。
+  bool _asking = false;
+
   /// 上一次问到过哪几路相机。出错时拿它拼一份全 false 的 —— 保住相机名，
   /// 界面上那两块板子不会因为一次问不到就凭空少一块。
   Set<String> _seen = <String>{};
@@ -632,9 +646,14 @@ class VideoHealthPoller {
   Stream<VideoHealth> get stream => _ctl.stream;
 
   Future<void> _tick() async {
+    // **在途就跳过这一拍，但不 `_degrade()`。** 跳过说的是「上一问还没回来」，
+    // 不是「问不到狗」；这一拍报个全 false 的话，摇杆会在一条其实还活着的
+    // 链路上莫名其妙灰一下。
+    if (_asking) return;
+    _asking = true;
     try {
-      final VideoHealth h =
-          VideoHealth.fromJson(await _client.get('/api/video/health'));
+      final VideoHealth h = VideoHealth.fromJson(
+          await _client.get('/api/video/health', healthDeadline));
       _seen = h.online.keys.toSet();
       _emit(h);
     } on PatrolError {
@@ -643,6 +662,8 @@ class VideoHealthPoller {
       // 客户端契约上只抛 `PatrolError`；真漏出别的来，也不能让轮询这条线
       // 悄悄断掉 —— 那正是「摇杆停在亮着」的那种坏法。
       _degrade();
+    } finally {
+      _asking = false;
     }
   }
 

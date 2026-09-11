@@ -150,15 +150,16 @@ class SpyClient extends PatrolClient {
   final List<String> calls = <String>[];
 
   @override
-  Future<Map<String, dynamic>> get(String path) {
+  Future<Map<String, dynamic>> get(String path, [Duration? deadline]) {
     calls.add(path);
-    return super.get(path);
+    return super.get(path, deadline);
   }
 
   @override
-  Future<Map<String, dynamic>> post(String path, [Object? body]) {
+  Future<Map<String, dynamic>> post(String path,
+      [Object? body, Duration? deadline]) {
     calls.add(path);
-    return super.post(path, body);
+    return super.post(path, body, deadline);
   }
 }
 
@@ -308,13 +309,17 @@ int troubleCount(WidgetTester t) => <Key>[
 /// 三个槽一次读完。**每条测试都把三格全断一遍** —— 只断自己那一格的话，
 /// 「话写对了地方」证得了，「话没同时漏进别的地方」证不了。
 void expectTroubles(WidgetTester t,
-    {String sync = '', String beat = '', String act = ''}) {
+    {String sync = '', String beat = '', String act = '', String lost = ''}) {
   expect(troubleIn(t, ControlPanel.syncTroubleKey), sync,
       reason: '校准那一格里该是「$sync」');
   expect(troubleIn(t, ControlPanel.beatTroubleKey), beat,
       reason: '心跳那一格里该是「$beat」');
   expect(troubleIn(t, ControlPanel.actTroubleKey), act,
       reason: '按钮那一格里该是「$act」');
+  // 第四格（必修 6：租约掉了）。**加进来是必须的**：不断它的话，
+  // 上面每一条「屏上一个字都没有」的断言都漏掉了这一格。
+  expect(troubleIn(t, ControlPanel.leaseLostKey), lost,
+      reason: '「控制权过期了」那一格里该是「$lost」');
 }
 
 void main() {
@@ -944,6 +949,159 @@ void main() {
         t, withExpiresMs(mineHolds(expiresInMs: 30000), 4102444800000));
     expect(remainSeconds(t), inInclusiveRange(28, 30),
         reason: '倒计时拿 expires_ms（2100 年那个时刻）减了手机的钟');
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------------------- 必修 6：续租跟校准解耦
+
+  testWidgets('GET /api/control 不通的时候,心跳仍然在发', (WidgetTester t) async {
+    /// **这一条是必修 6 的正题，别的都绕着它转。**
+    ///
+    /// 老写法里续租是**链在校准成功之后**的（`_sync()` 成了才 `_beat()`）。
+    /// 于是 `GET /api/control` 一旦不通 —— 热点抖一下、狗那头忙着扫盘 ——
+    /// 一条心跳都出不去。30 秒之后狗把租约收了，而 app 这头 `_held` 还是
+    /// true、两根杆还亮着、还跟着手指走。人推杆，狗不动，屏上给的是「任务在
+    /// 跑 / 急停按着 / 控制权在别人手上 / 没画面」里的某一条 —— 四条没有一条
+    /// 是真的。
+    ///
+    /// 续租**唯一**该依赖的事实是「这份租约还在我手上」，跟「我刚才问狗成没
+    /// 成功」没有一点关系。
+    final Rig rig = await mount(t, mineHolds(),
+        syncPeriod: const Duration(milliseconds: 200));
+    await pumpUntil(t, () => rig.gets > 0, '第一次校准真的到了狗那儿');
+    rig.dog.statusCodes['/api/control'] = 500;
+    final int before = rig.beats;
+    await pumpUntil(t, () => rig.beats >= before + 3, '校准全挂着的时候，心跳照发',
+        step: const Duration(milliseconds: 100));
+    expect(troubleIn(t, ControlPanel.syncTroubleKey), isNotEmpty,
+        reason: '校准这会儿必须是真的挂了 —— 不挂的话这条测试压根没进到要测的局面');
+    expect(find.byKey(ControlPanel.releaseKey), findsOneWidget,
+        reason: '租约续上了，屏上就该还是「我拿着」这一档');
+    rig.dog.statusCodes.remove('/api/control');
+    await unmount(t, rig);
+  });
+
+  testWidgets('租约在本地走到 0:杆灰掉,屏上说的是「控制权过期了」', (WidgetTester t) async {
+    /// 必修 6 的后半段：**租约掉了之后界面要说实话。**
+    ///
+    /// 掉线那一刻屏上原本什么也不变 —— 两根杆还亮着，倒计时停在 0，而人一
+    /// 推杆收到的是 409，屏上给的理由是那四条里的一条。这一条钉住的是：杆
+    /// 要灰（`onHeld(false)`），而且要有一句**专门说这件事**的话，不许挤进
+    /// 校准/心跳/按钮那三格里去 —— 挤进去它读起来就成了「网络不好」，
+    /// 而真正该做的事（重新按一次「取得控制权」）没人会去做。
+    final List<bool> held = <bool>[];
+    final Rig rig = await mount(t, mineHolds(expiresInMs: 2000),
+        onHeld: held.add,
+        // 校准周期放得很长：这一条要证的是**本地这一头**自己认出了过期，
+        // 不是「又问了一次狗，狗说没了」。
+        syncPeriod: const Duration(hours: 1));
+    expect(held.last, isTrue, reason: '一开始租约在我手上');
+    for (int i = 0; i < 4; i++) {
+      await t.pump(const Duration(seconds: 1));
+    }
+    expect(held.last, isFalse, reason: '租约过期了，两根杆必须灰掉');
+    expectTroubles(t, lost: leaseLostHint);
+    await unmount(t, rig);
+  });
+
+  // ------------------------------------------------------ 必修 1：生命周期
+
+  testWidgets('切到后台:主动把控制权还回去,而且不再问狗', (WidgetTester t) async {
+    /// 熄屏、切出去、来一个电话 —— 人已经不在这块屏前面了，而狗那头的租约
+    /// 还在被心跳续着。别人（或者他自己换一台手机）想接管，得等满宽限期，
+    /// 而这段时间里狗是**没人管**的。
+    ///
+    /// 还要停表：人不在了还在一秒几个往返地问狗，白耗电、白占热点上行。
+    final List<bool> held = <bool>[];
+    final Rig rig = await mount(t, mineHolds(),
+        onHeld: held.add, syncPeriod: const Duration(milliseconds: 200));
+    await pumpUntil(t, () => rig.gets > 0, '第一次校准到了狗那儿');
+    await setLifecycle(t, AppLifecycleState.paused);
+    await pumpUntil(t, () => rig.posted.contains('/api/control/release'),
+        '切到后台那一下，控制权真的还回去了', step: const Duration(milliseconds: 100));
+    expect(held.last, isFalse, reason: '已经还回去了，就不许还说「在我手上」');
+    final int asked = rig.asked;
+    final int beats = rig.beats;
+    for (int i = 0; i < 10; i++) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await t.pump(const Duration(milliseconds: 200));
+    }
+    expect(rig.asked, asked, reason: '人都不在了还在问狗：白耗电，还占着热点的上行');
+    expect(rig.beats, beats, reason: '已经还回去的租约还在续 —— 那正是这条要堵的洞');
+    await unmount(t, rig);
+  });
+
+  testWidgets('通知栏拉一下(inactive)不算走:控制权不还,表不停', (WidgetTester t) async {
+    /// **`inactive` 不当成「走了」，这是一个有代价的选择，理由写在这儿。**
+    ///
+    /// Android 上 `inactive` 会在通知栏下拉、音量条弹出、权限框弹出、来电
+    /// 横幅这些时候发出来 —— 这些时刻人还举着手机、眼睛还在看着狗。把它当
+    /// 成「走了」的话，每划一下通知栏控制权就掉一次；而回到前台这一头是
+    /// **故意不自动取回**的（见下一条），于是人得手动再取一次，还要再等一轮
+    /// 校准。现场遥控一台会动腿的狗，这一下比多续一个租约周期危险得多。
+    ///
+    /// 真的要走的时候一定会跟着一个 `hidden`/`paused`（`inactive` 只是去后台
+    /// 路上的第一站），所以这样并不会漏掉「走了」。
+    final Rig rig = await mount(t, mineHolds(),
+        syncPeriod: const Duration(milliseconds: 200));
+    await pumpUntil(t, () => rig.gets > 0, '第一次校准到了狗那儿');
+    await setLifecycle(t, AppLifecycleState.inactive);
+    final int asked = rig.asked;
+    await pumpUntil(t, () => rig.asked >= asked + 2, 'inactive 之后表还在走',
+        step: const Duration(milliseconds: 100));
+    expect(rig.posted, isNot(contains('/api/control/release')),
+        reason: '拉一下通知栏就把控制权还掉，人得手动再取一次');
+    expect(find.byKey(ControlPanel.releaseKey), findsOneWidget,
+        reason: '控制权还在我手上，屏上就该还是「我拿着」这一档');
+    await unmount(t, rig);
+  });
+
+  testWidgets('回到前台不自动把控制权取回来', (WidgetTester t) async {
+    /// **回来这一头故意什么都不做。** 自动取回等于「手机一亮，狗就归你了」：
+    /// 这中间很可能已经有另一个人接管了，而他不会收到任何提示。取控制权是
+    /// 一个人要按一下的动作，不是一个状态恢复。
+    final Rig rig = await mount(t, mineHolds(),
+        syncPeriod: const Duration(milliseconds: 200));
+    await pumpUntil(t, () => rig.gets > 0, '第一次校准到了狗那儿');
+    await setLifecycle(t, AppLifecycleState.paused);
+    await pumpUntil(t, () => rig.posted.contains('/api/control/release'),
+        '切到后台那一下，控制权真的还回去了', step: const Duration(milliseconds: 100));
+    // 还回去之后，狗那头就是「没人拿着」了。
+    rig.dog.replies['/api/control'] = nobodyHolds();
+    await setLifecycle(t, AppLifecycleState.resumed);
+    await pumpUntil(
+        t,
+        () => find.byKey(ControlPanel.acquireKey).evaluate().isNotEmpty,
+        '回到前台之后照样问狗，问到的是「没人拿着」',
+        step: const Duration(milliseconds: 100));
+    expect(rig.posted, isNot(contains('/api/control/acquire')),
+        reason: '手机一亮就把狗抢回来 —— 这中间很可能已经换人在开了');
+    await unmount(t, rig);
+  });
+
+  // -------------------------------------------------------- 必修 4：在途闸
+
+  testWidgets('上一条校准还在路上的时候,这一拍不再发一条', (WidgetTester t) async {
+    /// 周期路径原本一条闸都没有：狗那头慢一拍（或者干脆只发了响应头就沉
+    /// 默），下一个周期照样再发一条。200 毫秒一拍，一次卡 5 秒就是二十几条
+    /// 谁也不回收的请求压在同一条热点上 —— 视频先掉，然后是摇杆。
+    final Rig rig = await mount(t, mineHolds(),
+        syncPeriod: const Duration(milliseconds: 200));
+    await pumpUntil(t, () => rig.gets > 0, '第一次校准到了狗那儿');
+    rig.dog.hangPaths.add('/api/control');
+    final int before = rig.gets;
+    // 3 秒 = 15 个周期，都落在这条请求自带的 5 秒期限之内。
+    for (int i = 0; i < 15; i++) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await t.pump(const Duration(milliseconds: 200));
+    }
+    expect(rig.gets, before + 1, reason: '没有在途闸的话，这三秒里会堆出十几条来');
+    // 闸不是单向的：期限到了要真的放开，不然这条路就永远哑了。
+    rig.dog.hangPaths.remove('/api/control');
+    await pumpUntil(t, () => rig.gets > before + 1, '期限到了之后闸放开，下一拍发得出去',
+        step: const Duration(milliseconds: 500));
     await unmount(t, rig);
   });
 }

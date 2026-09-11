@@ -98,6 +98,26 @@ const Duration minSyncPeriod = Duration(seconds: 1);
 /// 连掉两次还剩 10 秒余量。
 const Duration maxSyncPeriod = Duration(seconds: 10);
 
+/// 校准和续租这两条**周期路径**各自的超时窗口（必修 4）。
+///
+/// `PatrolClient` 的默认超时是 10 秒 —— 那是给 `unlock`、盘况这类一次性请求
+/// 的。校准等满 10 秒毫无意义：狗那头 30 秒的 TTL 已经过去三分之一，而那一
+/// 问的答案早就过期了。**超时之后那条连接是真的被掐掉的**（见
+/// `PatrolClient._send`），不是只让 Future 放弃。
+const Duration controlPeriodicDeadline = Duration(seconds: 5);
+
+/// 本地倒计时走到 0 那一刻，面板要说的那一句（必修 6）。
+///
+/// **这句话必须是「你的控制权已经过期」，不许换成别的四句里的任何一句。**
+/// 以前的坏法是这样的：`GET /api/control` 单独不通 ⇒ 一发心跳都不发 ⇒ 租约
+/// 悄悄过期，而 app 这头 `_held` 仍然是 true、两根杆还亮着还跟着手指走。人
+/// 继续推，狗那头回 409，遥控屏打出「任务在跑 / 急停按着 / 控制权在别人手里
+/// / 没有画面」—— **四个原因一个都不是真的**，而现场会照着其中一个去查一件
+/// 根本不存在的事，一段时间就没了。
+///
+/// 拎成常量是为了让测试一字不差地盯住它（跟 [renewTroubleHint] 一个理由）。
+const String leaseLostHint = '你的控制权已经过期：在这条里重新取一次，取到之前两根杆是灰的';
+
 class ControlPanel extends StatefulWidget {
   const ControlPanel({
     super.key,
@@ -188,13 +208,30 @@ class ControlPanel extends StatefulWidget {
   static const Key beatTroubleKey = ValueKey<String>('control-trouble-beat');
   static const Key actTroubleKey = ValueKey<String>('control-trouble-act');
 
+  /// 「你的控制权已经过期」那一格（必修 6）。**自己一个槽。**
+  ///
+  /// 不并进上面三个槽里：那三个说的是「某条路不通」，这一个说的是「你手上
+  /// 那份租约没了」—— 前三句人读完会去看网，这一句人读完要去按「取得控制
+  /// 权」。合成一个槽的话，一次成功的校准会把它顺手抹掉，而它恰恰是校准
+  /// 不通的时候唯一还说得出真话的那一行。
+  static const Key leaseLostKey = ValueKey<String>('control-lease-lost');
+
   @override
   State<ControlPanel> createState() => _ControlPanelState();
 }
 
-class _ControlPanelState extends State<ControlPanel> {
+class _ControlPanelState extends State<ControlPanel>
+    with WidgetsBindingObserver {
   Timer? _tickTimer;
   Timer? _syncTimer;
+
+  /// 续租自己一个表（必修 6）。**不再挂在「这一次校准成功」上。**
+  ///
+  /// 老写法是 `_sync()` 成功之后链着发一次心跳，于是 `GET /api/control` 这
+  /// 一条路就成了租约的单点：它不通 ⇒ 一发心跳都不发。狗那头 TTL 是 30 秒，
+  /// 校准周期封顶 10 秒，每次超时又要吃满一整个窗口 —— 连着三次失败就正好
+  /// 把 30 秒吃光，而这三次失败在狗自己的热点上是很平常的一段抖动。
+  Timer? _beatTimer;
 
   LeaseView? _lease;
 
@@ -242,6 +279,24 @@ class _ControlPanelState extends State<ControlPanel> {
   /// 眼下这个校准周期。见 [ControlPanel.syncPeriodFor]。
   late Duration _syncEvery;
 
+  /// 本地倒计时已经走到 0 了 —— 租约当成掉了（必修 6）。见 [leaseLostHint]。
+  ///
+  /// **一份新的快照（校准或者续租回来的那份）就地把它清掉**：狗说的算，
+  /// 本地这条推断只在「问不到狗」的那段时间里作数。
+  bool _leaseLost = false;
+
+  /// 校准那条路上一发还没回来（必修 4）。
+  bool _syncing = false;
+
+  /// 续租那条路上一发还没回来（必修 4）。
+  bool _beating = false;
+
+  /// app 还在前台。**进了后台就不许把表重新起起来**（必修 1）。
+  ///
+  /// [_retimeSync] 是「周期变了就重建定时器」，它不知道人在不在；少了这一位
+  /// 的话，后台里一次成功的续租回来就会把刚停掉的表又点着。
+  bool _awake = true;
+
   @override
   void initState() {
     super.initState();
@@ -251,14 +306,93 @@ class _ControlPanelState extends State<ControlPanel> {
     // 而那几秒里他会去点一个还没画出来的按钮。
     unawaited(_sync());
     _tickTimer = Timer.periodic(widget.tickPeriod, (_) => _onTick());
-    _syncTimer = Timer.periodic(_syncEvery, (_) => unawaited(_sync()));
+    _startPolling();
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _tickTimer?.cancel();
     _syncTimer?.cancel();
+    _beatTimer?.cancel();
     super.dispose();
+  }
+
+  // ------------------------------------------------------------ 人在不在
+
+  /// 切后台 / 锁屏 / 来电（必修 1）。
+  ///
+  /// **`inactive` 不算「人不在了」，只有 `hidden`/`paused`/`detached` 才算。**
+  /// Android 上 `inactive` 是给「短暂盖住」用的：通知栏下拉、音量条、权限框、
+  /// 来电的横幅还没接起来 —— 这几下人还握着手机、还看着那只狗。把它也算成
+  /// 「人不在了」的话，每划一次通知栏就弃一次租；而我们**回前台是有意不自动
+  /// 把控制权拿回来的**（让人重新拿），于是误划一下就要人手动重新取一次控制
+  /// 权。那比现在这个病更难在现场忍受。`paused` 才是 Android 给「这个 app
+  /// 已经看不见了」的那一位（Home、锁屏、切应用、接起电话），而且去后台这条
+  /// 路上 `inactive` 后面必定跟着 `hidden`/`paused`，卡在 `paused` 上不漏事。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _onResumed();
+      case AppLifecycleState.inactive:
+        break;
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        _onGone();
+    }
+  }
+
+  /// 人不在了：停表 + **主动弃租**。
+  ///
+  /// **不是「停掉续租、让它按 TTL 自己掉」就够了。** 那要白等 30 秒，而这
+  /// 30 秒里现场另一个人接不了管，占着控制权的那台手机屏幕是黑的。
+  void _onGone() {
+    if (!_awake) return;
+    _awake = false;
+    _syncTimer?.cancel();
+    _syncTimer = null;
+    _beatTimer?.cancel();
+    _beatTimer = null;
+    if (_held) unawaited(_releaseOnLeave());
+  }
+
+  /// 回前台。**不自动把控制权拿回来** —— 让人重新拿。
+  ///
+  /// 自动拿回来的话，「我刚才是不是还握着」这件事就没有一个人做过决定：手机
+  /// 在兜里的那几分钟别人可能已经接管了，回来悄悄抢一次是最坏的一种。
+  void _onResumed() {
+    if (_awake) return;
+    _awake = true;
+    _startPolling();
+    unawaited(_sync());
+  }
+
+  /// 交还控制权，并且**先把杆关掉再发请求**。
+  ///
+  /// 顺序是有意的：`onHeld(false)` 那一下会让遥控屏立刻归零并发一拍全零停，
+  /// 那件事不该等一次网络往返 —— 请求发不出去的时候它更要先发生。
+  Future<void> _releaseOnLeave() async {
+    _held = false;
+    widget.onHeld?.call(false);
+    try {
+      await widget.client
+          .post('/api/control/release', null, controlPeriodicDeadline);
+    } catch (e) {
+      // 弃租失败只进日志：人已经不在这块屏前面了，屏上写什么都没人读，
+      // 而狗那头 30 秒的 TTL 是这条路真正的兜底。
+      developer.log('$e', name: 'control');
+    }
+  }
+
+  /// 起校准和续租两张表。**两张，不是一张**（必修 6）。
+  void _startPolling() {
+    _syncTimer?.cancel();
+    _beatTimer?.cancel();
+    _syncTimer = Timer.periodic(_syncEvery, (_) => unawaited(_sync()));
+    _beatTimer = Timer.periodic(_syncEvery, (_) => unawaited(_beatIfHeld()));
   }
 
   // ------------------------------------------------------------ 倒计时
@@ -275,35 +409,75 @@ class _ControlPanelState extends State<ControlPanel> {
       if (r != null) _remainMs = r > step ? r - step : 0;
       if (g != null) _graceMs = g > step ? g - step : 0;
     });
+    _loseLeaseIfExpired();
+  }
+
+  /// 倒计时走到 0 ⇒ **把租约当成掉了，并且当场说出来**（必修 6）。
+  ///
+  /// 这一步是「说真话」那一半。光把续租解耦还不够：热点抖得够久的话，续租和
+  /// 校准会一起不通，租约照样会掉 —— 而屏上那时候仍然写着「控制权在你手上」，
+  /// 两根杆仍然亮着。人推一下，得到的是狗回的 409，遥控屏念出那四个原因，
+  /// 没有一个是真的。
+  ///
+  /// **只在自己拿着的时候管。** 别人的租约过期不关这块屏的事，那一格屏上
+  /// 本来就写着「已过期」。
+  void _loseLeaseIfExpired() {
+    if (!_held || _remainMs != 0 || _leaseLost) return;
+    setState(() => _leaseLost = true);
+    _held = false;
+    // 杆立刻变灰。**不等下一次校准** —— 校准正不通，等它就是永远不说。
+    widget.onHeld?.call(false);
   }
 
   // ------------------------------------------------------------ 跟狗说话
 
+  /// 跟狗校准一次。**这里不再链着发心跳**（必修 6）：续租有自己那张表。
   Future<void> _sync() async {
+    // **上一发还没回来就跳过这一拍**（必修 4）。堆起来的话每一发各占一条
+    // 连接，把狗自己的热点上行挤死，而屏上报的是「看不见就不许开狗」。
+    if (_syncing) return;
+    _syncing = true;
     try {
-      final Map<String, dynamic> m = await widget.client.get('/api/control');
+      final Map<String, dynamic> m =
+          await widget.client.get('/api/control', controlPeriodicDeadline);
       if (!mounted) return;
       _apply(m);
       // **只清自己写的那一格。** 心跳那句和按钮那句归它们自己那条路收。
       if (_syncTrouble.isNotEmpty) setState(() => _syncTrouble = '');
-      // 自己拿着才续。别人拿着还发心跳的话，狗那头只会回一串错，
-      // 而屏上会挂着一句跟当前处境毫无关系的红字。
-      if (_lease?.mine == true) unawaited(_beat());
     } catch (e) {
       _fail(e, syncTroubleHint, (String s) => _syncTrouble = s);
+    } finally {
+      _syncing = false;
     }
   }
 
+  /// 续租这一拍。**条件只有一个：上一次已知租约还在自己手上**（必修 6）。
+  ///
+  /// 不是「这一次校准成功」。校准不通照发 —— 狗不认自然会拒，那是它该干的
+  /// 事，而拒回来的那句话有 [renewTroubleHint] 那个槽接着（以前那个槽永远
+  /// 是空的：校准不通时 `_beat` 压根没被调用过）。
+  ///
+  /// 别人拿着的时候不发：狗那头只会回一串错，而屏上会挂着一句跟当前处境毫无
+  /// 关系的红字。
+  Future<void> _beatIfHeld() async {
+    if (!_held) return;
+    await _beat();
+  }
+
   Future<void> _beat() async {
+    if (_beating) return;
+    _beating = true;
     try {
-      final Map<String, dynamic> m =
-          await widget.client.post('/api/control/heartbeat');
+      final Map<String, dynamic> m = await widget.client
+          .post('/api/control/heartbeat', null, controlPeriodicDeadline);
       if (!mounted) return;
       // 续期回的就是最新那份租约，顺手拿来校准，省一次往返。
       _apply(m);
       if (_beatTrouble.isNotEmpty) setState(() => _beatTrouble = '');
     } catch (e) {
       _fail(e, renewTroubleHint, (String s) => _beatTrouble = s);
+    } finally {
+      _beating = false;
     }
   }
 
@@ -325,12 +499,22 @@ class _ControlPanelState extends State<ControlPanel> {
   /// 刷屏。**这里不碰那三个话槽** —— 一次成功的校准只说明「这一问通了」，
   /// 说明不了心跳那条路也通了。碰了就是替另一条路报平安。
   void _apply(Map<String, dynamic> m) {
+    // **人已经走了的话，这一份回话作废。**（必修 1）
+    //
+    // 切后台那一下我们主动把控制权还了回去（[_releaseOnLeave]），可是那一刻
+    // 往往还有一条校准/心跳在路上 —— 它带回来的那份快照里 `mine` 还是 true，
+    // 照着刷的话 `_held` 会被重新点亮：狗那头已经没人拿着了，屏上却说「在我
+    // 手上」，两根杆跟着亮回来。**顺序上谁后到不该决定谁说了算**：
+    // 「人走了」是本地这一头已经定下的事实，比一条起飞更早的回话新。
+    if (!_awake) return;
     final LeaseView v = LeaseView.fromJson(m);
     final String scene = _sceneOf(v);
     setState(() {
       _lease = v;
       _remainMs = v.expiresInMs;
       _graceMs = v.graceInMs;
+      // 狗刚发了一份新的快照 —— 过没过期以这份为准，本地那条推断作废。
+      _leaseLost = false;
       // **局面换了才收按钮那句话**（见 [_actTrouble]）。「同一个局面里的一次
       // 成功校准」照样不许碰它 —— 那正是 Task 11 的 R-1。
       if (scene != _actScene && _actTrouble.isNotEmpty) _actTrouble = '';
@@ -398,15 +582,19 @@ class _ControlPanelState extends State<ControlPanel> {
   /// **周期真的变了才动表。** 每次 `_apply()` 都 `cancel()` 再 `periodic()`
   /// 的话，定时器永远从零重新数 —— 而 `_apply()` 是 `_sync()`、`_beat()`
   /// **和 `_act()`** 三条路共用的：人在一个周期里反复按按钮，每按一次就把
-  /// 下一次校准整整往后推一个周期；而续期（`_beat()`）只由一次成功的校准
-  /// 触发，于是租约续期跟着一起被推后，按得够勤就永远续不上。
+  /// 下一次校准整整往后推一个周期。续租那张表跟校准那张表是一起重起的
+  /// （[_startPolling]），所以这条规矩对它同样是必须的：按得够勤就永远续不上。
+  /// （续租**触发的条件**已经跟校准解耦了，见 [_beatIfHeld]；这里说的是
+  /// 两张表的**起点**都不该被按钮推着走。）
   void _retimeSync(LeaseView v) {
     final Duration next =
         widget.syncPeriod ?? ControlPanel.syncPeriodFor(v.heartbeatMs);
     if (_syncTimer != null && next == _syncEvery) return;
     _syncEvery = next;
-    _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(_syncEvery, (_) => unawaited(_sync()));
+    // **后台里不许把表重新点着**（必修 1）：这个函数只管周期，不知道人在
+    // 不在。回前台时 [_onResumed] 会拿着这个新周期重新起表。
+    if (!_awake) return;
+    _startPolling();
   }
 
   /// 出岔子了。**原文只进日志，屏上是人话，而且只写自己那一格。**
@@ -520,6 +708,10 @@ class _ControlPanelState extends State<ControlPanel> {
         _troubleLine(ControlPanel.syncTroubleKey, _syncTrouble),
         _troubleLine(ControlPanel.beatTroubleKey, _beatTrouble),
         _troubleLine(ControlPanel.actTroubleKey, _actTrouble),
+        // **租约掉了这一句排在最后一格，而且自己一格**（必修 6）：上面三句
+        // 说的是「某条路不通」，这一句说的是「你手上那份没了」——人读完要
+        // 做的事完全不同。
+        _troubleLine(ControlPanel.leaseLostKey, _leaseLost ? leaseLostHint : ''),
       ],
     );
   }

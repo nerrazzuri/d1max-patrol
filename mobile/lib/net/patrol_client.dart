@@ -118,9 +118,15 @@ class PatrolClient {
 
   String? get token => _token;
 
-  void close() {
-    // 只关自己造的那个（N-2）。
-    if (_ownsIo) _io.close(force: true);
+  /// 收连接。**只关自己造的那个（N-2）。**
+  ///
+  /// [force] 给 `false` 的时候是**温和地收**：不再受理新请求，但已经在路上的
+  /// 那几条让它们跑完。退出遥控屏那条路要的就是这个（必修 2）——那一屏
+  /// `dispose()` 里会补一拍全零，硬关的话那一拍连一个字节都出不去，而它正是
+  /// 「松手就停」的最后一道兜底。**别的地方一律用默认的硬关**：连不上狗那
+  /// 条路上没有什么值得等的东西。
+  void close({bool force = true}) {
+    if (_ownsIo) _io.close(force: force);
   }
 
   /// PIN 换 token。**PIN 不出这个函数。**
@@ -155,10 +161,19 @@ class PatrolClient {
     );
   }
 
-  Future<Map<String, dynamic>> get(String path) => _send('GET', path, null);
+  /// [deadline] 只给**周期路径**用：心跳、发拍、校准这些一秒钟发好几次的
+  /// 小请求，等满 [timeout]（10 秒，那是给 unlock/盘况这类一次性请求的）
+  /// 毫无意义 —— 那一拍的答案早就过期了。不给就还是 [timeout]。
+  Future<Map<String, dynamic>> get(String path, [Duration? deadline]) =>
+      _send('GET', path, null, deadline: deadline);
 
-  Future<Map<String, dynamic>> post(String path, [Object? body]) =>
-      _send('POST', path, body);
+  /// 见 [get] 里那段关于 [deadline] 的话。
+  ///
+  /// **`deadline` 排在 `body` 后面是被 Dart 逼的**：一个函数不许同时有可选
+  /// 位置参数和命名参数，而 `body` 这个位置参数已经有几十个调用点了。
+  Future<Map<String, dynamic>> post(String path,
+          [Object? body, Duration? deadline]) =>
+      _send('POST', path, body, deadline: deadline);
 
   Future<Map<String, dynamic>> put(String path, [Object? body]) =>
       _send('PUT', path, body);
@@ -225,10 +240,15 @@ class PatrolClient {
       '/api/alerts/${Uri.encodeComponent(key)}';
 
   Future<Map<String, dynamic>> _send(String method, String path, Object? body,
-      {bool auth = true}) async {
+      {bool auth = true, Duration? deadline}) async {
+    final Duration cap = deadline ?? timeout;
+    // 超时那一支要掐的就是它。**不能在 `_sendAndRead` 里面掐** —— 那个
+    // future 超时之后没人再看它一眼，里面的 `req` 也就再也拿不到了。
+    final _InFlight live = _InFlight();
     try {
-      final res = await _sendAndRead(method, path, body, auth: auth)
-          .timeout(timeout);
+      final res =
+          await _sendAndRead(method, path, body, auth: auth, live: live)
+              .timeout(cap);
       Map<String, dynamic> m = <String, dynamic>{};
       if (res.raw.isNotEmpty) {
         try {
@@ -249,8 +269,15 @@ class PatrolClient {
     } on PatrolError {
       rethrow;
     } on TimeoutException {
+      // **真的把这条连接掐掉（必修 4）。** `future.timeout` 只是不再等，
+      // 底下那条 TCP 连接和 socket 一个都不会动 —— 而 `dart:io` 的
+      // `HttpClient` 不限 `maxConnectionsPerHost`：狗那头 HTTP 线程卡住
+      // 但 TCP 还接得上的时候（扫盘、写归档），周期路径会在超时窗口里堆
+      // 出几十条谁也不回收的连接，把自己的热点上行挤死，而屏上报的是
+      // 「看不见就不许开狗」，人会去修相机。
+      live.kill();
       throw PatrolError(
-          0, '狗没回话', '等了 ${timeout.inMilliseconds} 毫秒。看看还连着它的热点吗');
+          0, '狗没回话', '等了 ${cap.inMilliseconds} 毫秒。看看还连着它的热点吗');
     } catch (e) {
       // **这里原样带 `$e` 的前提是请求体里从来没有长期凭证（S-3）。**
       // `unlock` 走的是质询-应答，body 里只有 nonce/proof/operator，PIN
@@ -271,8 +298,10 @@ class PatrolClient {
   /// （MJPEG 的做法见 `ui/widget/live_video.dart` 的 `mjpegFrames`）。
   Future<({int status, String raw})> _sendAndRead(
       String method, String path, Object? body,
-      {required bool auth}) async {
+      {required bool auth, _InFlight? live}) async {
     final req = await _io.openUrl(method, Uri.parse('$baseUrl$path'));
+    // 交给外面那一层，好让超时的时候掐得到（见 `_send`）。
+    live?.req = req;
     // **不跟重定向。** 跟的话 302 会把下面那个 `Authorization: Bearer` 原样
     // 带到重定向目标去 —— 那是一条 token 外泄的路。狗从不发 3xx，关掉它
     // 不影响任何正常路径;真收到 3xx 的话现在会当成一个非 200 的状态码报
@@ -288,7 +317,53 @@ class PatrolClient {
       req.write(jsonEncode(body));
     }
     final resp = await req.close();
-    final raw = await utf8.decoder.bind(resp).join();
-    return (status: resp.statusCode, raw: raw);
+    // **响应体一个字节一个字节地自己收，不用 `.join()`。** `.join()` 那条
+    // 订阅是它自己在肚子里开的，外面拿不到，也就取消不了 —— 而「头到了、
+    // body 永远不来」正是超时最常落在的那一步（见 [_InFlight.kill]）。
+    final StringBuffer buf = StringBuffer();
+    final Completer<void> done = Completer<void>();
+    live?.body = utf8.decoder.bind(resp).listen(
+      buf.write,
+      onDone: () {
+        if (!done.isCompleted) done.complete();
+      },
+      onError: (Object e, StackTrace st) {
+        if (!done.isCompleted) done.completeError(e, st);
+      },
+      cancelOnError: true,
+    );
+    if (live?.body == null) {
+      // 没人要那个把手（内部调用）的时候还是走最省事的那条。
+      final String raw = await utf8.decoder.bind(resp).join();
+      return (status: resp.statusCode, raw: raw);
+    }
+    await done.future;
+    return (status: resp.statusCode, raw: buf.toString());
+  }
+}
+
+/// 一条**正在路上**的请求的把手。超时那一下要靠它去掐。
+///
+/// **两样都要留。** `HttpClientRequest.abort()` 只在响应头**还没到**的时候
+/// 才真的 `destroy()` 那条连接（`http_impl.dart` 的
+/// `if (!_responseCompleter.isCompleted)`）；头到了、body 卡住的那一种 ——
+/// 也就是狗那头 HTTP 线程正忙着扫盘写归档的那一种 —— `abort()` 是个空操作，
+/// 连接会一直挂着。那一半只有取消响应体那条订阅才掐得掉。
+class _InFlight {
+  HttpClientRequest? req;
+  StreamSubscription<String>? body;
+
+  /// 掐掉这条连接。**两种收尾方式都试一遍，谁也不依赖谁。**
+  void kill() {
+    try {
+      req?.abort();
+    } on Object catch (_) {
+      // 已经收尾了的请求再掐一次会抛，那不是错 —— 要的结果已经达到了。
+    }
+    try {
+      unawaited(body?.cancel());
+    } on Object catch (_) {
+      // 同上。
+    }
   }
 }

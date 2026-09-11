@@ -221,6 +221,16 @@ class _RosterPageState extends State<RosterPage> {
   ///
   /// **收连接不能省。** `PatrolClient` 自己造的那个 `HttpClient` 带着一个空闲
   /// 计时器；不收的话，人每进出一次就多挂一条，而狗那头那个 token 也一直有效。
+  ///
+  /// **但收连接的时机以前是错的（必修 2）。** 老写法是 `await push` 回来
+  /// 就地 `client.close()`：`push` 返回的 future 在 `didPop` 那一刻就完成
+  /// （退场动画刚开始），而被推上去那一屏的 `dispose()` 要等动画跑完才跑 ——
+  /// 于是 `close(force: true)` 大概率发生在 `dispose()` **前面**，遥控屏临走
+  /// 那一拍全零发给的是一个已经被强关的 `HttpClient`。退场那 300 毫秒里的
+  /// 发拍/心跳/校准也跟着全部失败，屏上闪一串红字。
+  ///
+  /// 现在交给 [_ClientHolder]：它是那一屏的**祖先**，Flutter 拆树是自底向上
+  /// 的，所以 `TeleopPage.dispose()` 一定排在它的 `dispose()` 前面。
   Future<void> _open(Robot r, PageBuilder page) async {
     final String pin = await widget.vault.read(r.sn) ?? '';
     if (!mounted) return;
@@ -247,9 +257,10 @@ class _RosterPageState extends State<RosterPage> {
       return;
     }
     await Navigator.of(context).push<void>(MaterialPageRoute<void>(
-        builder: (_) => page(
-            client, who, (String name) => unawaited(_rememberFor(r, name)))));
-    client.close();
+        builder: (_) => _ClientHolder(
+            client: client,
+            child: page(client, who,
+                (String name) => unawaited(_rememberFor(r, name))))));
   }
 
   /// 这只狗这次报什么名字。**落盘的那个直接用，不再问**（人拍的板 3）。
@@ -550,4 +561,48 @@ class _Notice extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 替被推上去的那一屏拿着 `PatrolClient`，**在它之后**收掉（必修 2）。
+///
+/// 这个壳子存在的全部理由是时序。老写法是 `_RosterPageState._open` 里
+/// `await push` 回来就地 `client.close()`，而那一刻被推上去那一屏还没
+/// `dispose()`（退场动画才刚开始）—— 遥控屏临走那一拍全零于是发给了一个
+/// 已经 `close(force: true)` 过的 `HttpClient`，一个字节都出不去。
+///
+/// 换成祖先之后，拆树的顺序（自底向上）就替我们把这件事定死了：
+/// `TeleopPage.dispose()` → 这个壳子的 `dispose()` → `client.close()`。
+/// **这条保证是 Flutter 的框架行为，不是一个凑出来的延时**，所以它不会在
+/// 动画时长改了、机器慢了的那天悄悄失效。
+///
+/// 它顺带把另一个洞堵上了：老写法里 `await push` 要是根本不返回
+/// （`RosterPage` 自己被销毁），那个 `client` 就漏在那儿了；壳子跟着路由走，
+/// 路由没了它一定 `dispose()`。
+///
+/// **一个更干净的做法是把 `PatrolClient` 按狗缓存复用**（终审报告的建议
+/// 11，顺带解决「每进一次屏就 `unlock` 一次、会话席位几下就占满」）。那件事
+/// 改的是连接的归属和生命周期，横跨遥控/值守/盘况三屏，本轮留给第 9 卷。
+class _ClientHolder extends StatefulWidget {
+  const _ClientHolder({required this.client, required this.child});
+
+  final PatrolClient client;
+  final Widget child;
+
+  @override
+  State<_ClientHolder> createState() => _ClientHolderState();
+}
+
+class _ClientHolderState extends State<_ClientHolder> {
+  @override
+  void dispose() {
+    // **温和地收，不硬关。** 遥控屏刚刚在它自己的 `dispose()` 里补了一拍
+    // 全零（必修 2），硬关会把那一拍连同它那条 socket 一起掐掉 —— 排对了
+    // 顺序却仍然发不出去，等于白排。已经在路上的那几条都带着自己的超时
+    // （周期路径 3 秒，超时之后连接是真的被掐掉的），不会挂着不散。
+    widget.client.close(force: false);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

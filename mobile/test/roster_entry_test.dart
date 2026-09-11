@@ -176,12 +176,36 @@ Future<void> enter(WidgetTester t, Key entry, {String who = '张三'}) async {
   await t.tap(find.text('连上'));
 }
 
-/// 从子屏退回名册。**退回来那一下 `_open` 才会把 `PatrolClient` 收掉** ——
+/// 从子屏退回名册。**退回来那一下 `PatrolClient` 才会被收掉** ——
 /// 不收的话它自己那个 15 秒空闲计时器会把测试打红（`!timersPending`）。
-Future<void> goBack(WidgetTester t, Type screen) async {
+///
+/// [rig] 给上的时候，多等一件事：**遥控屏在 `dispose()` 里补的那一拍全零**
+/// （必修 2 —— 手一离开那一屏，狗必须收到一次「停」）。那一拍是真的网络
+/// I/O，只有在 `runAsync` 里才推得动；屏一没了就走人的话，它那条超时定时器
+/// 还挂在假时钟上，收摊时照样 `!timersPending`。**红的会是「测试没等」，
+/// 不是「代码没发」** —— 所以这儿等的是狗真的收到了那一拍。
+Future<void> goBack(WidgetTester t, Type screen, [Rig? rig]) async {
+  final int before = rig == null
+      ? 0
+      : rig.dog.received.where((FakeCall c) => c.path == '/api/teleop').length;
   t.state<NavigatorState>(find.byType(Navigator).first).pop();
   await pumpUntil(t, () => find.byType(screen).evaluate().isEmpty, '退回名册',
       step: _step);
+  if (rig == null) return;
+  await pumpUntil(
+      t,
+      () =>
+          rig.dog.received.where((FakeCall c) => c.path == '/api/teleop').length >
+          before,
+      '退屏那一拍全零真的到了狗那儿',
+      step: _step);
+  // 请求到了不等于这头收完了回包 —— 再推几轮真时钟，让那条 future 落地，
+  // 它身上的超时定时器才会被取消。
+  for (int i = 0; i < 5; i++) {
+    await t.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)));
+    await t.pump(_step);
+  }
 }
 
 void main() {
@@ -229,7 +253,7 @@ void main() {
         findsOneWidget,
         reason: '进去的是名册上点的那一只');
 
-    await goBack(t, TeleopPage);
+    await goBack(t, TeleopPage, rig);
     await unmount(t, rig);
   });
 
@@ -249,7 +273,7 @@ void main() {
     expect(rig.unlocks, 2, reason: '第二次是一次新的解锁，不是复用上一条连接');
     expect(rig.reportedOperator, '张三');
 
-    await goBack(t, TeleopPage);
+    await goBack(t, TeleopPage, rig);
     await unmount(t, rig);
   });
 
@@ -351,6 +375,52 @@ void main() {
         reason: '连 PIN 都没有，问名字没有意义');
     expect(find.byType(StoragePage), findsNothing);
     expect(rig.unlocks, 0);
+    await unmount(t, rig);
+  });
+
+  testWidgets('按系统返回键离开遥控屏:狗先收到一拍全零,然后才退回名册',
+      (WidgetTester t) async {
+    /// **必修 2 的上半段。**
+    ///
+    /// 人从遥控屏退出去有两条路：按系统返回键，和这一屏被拆掉。后一条由
+    /// `teleop_page_test.dart` 那条「这一屏被拆掉之前」钉着；这一条钉的是
+    /// 前一条 —— 也是现场真正会走的那条。
+    ///
+    /// **不能拿 `NavigatorState.pop()` 去测。** `pop()` 是硬退，它绕开
+    /// `PopScope`；真机上按返回键走的是 `maybePop()`。拿 `pop()` 测的话，
+    /// `PopScope` 整个被跳过，测出来的是「什么都没做也绿」。
+    ///
+    /// **顺序是这条测试的正题**：那一拍全零要在这一屏还在的时候就到狗那儿。
+    /// 先退屏再补一拍的话，连接已经被上一层收掉了，那一拍连一个字节都出不
+    /// 去 —— 而屏幕上看起来一模一样。
+    final Rig rig = await mount(t);
+    await enter(t, RosterPage.teleopKeyFor('C40221'));
+    await pumpUntil(t, () => find.byType(TeleopPage).evaluate().isNotEmpty,
+        '进到遥控屏', step: _step);
+    final int before =
+        rig.dog.received.where((FakeCall c) => c.path == '/api/teleop').length;
+
+    await pressBack(t);
+    await pumpUntil(
+        t,
+        () =>
+            rig.dog.received
+                .where((FakeCall c) => c.path == '/api/teleop')
+                .length >
+            before,
+        '返回键那一拍全零真的到了狗那儿',
+        step: _step);
+    expect(find.byType(TeleopPage), findsOneWidget,
+        reason: '那一拍是在退屏之前发的 —— 退完再发的话它根本出不去');
+    final Map<String, dynamic> last = rig.dog.received
+        .lastWhere((FakeCall c) => c.path == '/api/teleop')
+        .body as Map<String, dynamic>;
+    expect(<num>[last['fwd'] as num, last['lat'] as num, last['yaw'] as num],
+        everyElement(0),
+        reason: '离屏那一拍必须是全零 —— 别的什么都等于让狗接着走');
+
+    await pumpUntil(t, () => find.byType(TeleopPage).evaluate().isEmpty,
+        '补完那一拍之后，才真的退回名册', step: _step);
     await unmount(t, rig);
   });
 }

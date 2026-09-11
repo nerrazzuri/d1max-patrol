@@ -176,9 +176,15 @@ class CountingClient implements PatrolClient {
   /// 真到设成 true 那一刻起，`get` 就抛 —— 用来测「问不到狗」那一支。
   bool broken = false;
 
+  /// 挂着不回。**摆在这儿就是「这一问还在路上」**（必修 4 的在途闸要的局面）。
+  /// 谁都不 `complete` 的话它就一直挂着，正如一台正在扫盘的狗。
+  Completer<void>? hold;
+
   @override
-  Future<Map<String, dynamic>> get(String path) async {
+  Future<Map<String, dynamic>> get(String path, [Duration? deadline]) async {
     calls++;
+    final Completer<void>? h = hold;
+    if (h != null) await h.future;
     if (broken) {
       throw const PatrolError(0, '连不上狗', '热点掉了');
     }
@@ -199,10 +205,11 @@ class CountingClient implements PatrolClient {
   String? get token => null;
 
   @override
-  void close() {}
+  void close({bool force = true}) {}
 
   @override
-  Future<Map<String, dynamic>> post(String path, [Object? body]) async =>
+  Future<Map<String, dynamic>> post(String path,
+          [Object? body, Duration? deadline]) async =>
       throw UnimplementedError();
 
   @override
@@ -714,6 +721,31 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 60));
     expect(c.calls, atStop,
         reason: '人切走了还在问，就是在白耗电和白占热点带宽');
+  });
+
+  test('上一问还在路上的时候,这一拍不再问,而且不许当成掉线', () async {
+    /// 必修 4 的第三条周期路径。这条 2 秒一发的路跟发拍、心跳走在**同一个
+    /// `HttpClient`** 上：不挡的话，狗那头 HTTP 线程一卡（扫盘、写归档），
+    /// 超时窗口里就会堆出一串谁也不回收的连接，把狗自己的热点上行挤死 ——
+    /// 而「看不见」这个结论正是这么来的，人于是去修一台好好的相机。
+    ///
+    /// **跳过一拍不等于掉线。** 跳过的时候顺手报一份全 false 的话，摇杆会在
+    /// 一条其实还活着的链路上莫名其妙灰一下 —— 那比多问几次还糟。
+    final CountingClient c = CountingClient()..hold = Completer<void>();
+    final VideoHealthPoller p = VideoHealthPoller(
+        client: c, period: const Duration(milliseconds: 10));
+    final List<VideoHealth> seen = <VideoHealth>[];
+    final StreamSubscription<VideoHealth> sub = p.stream.listen(seen.add);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(c.calls, 1, reason: '没有在途闸的话，这 200 毫秒里会堆出十几条来');
+    expect(seen, isEmpty, reason: '跳过一拍被当成了掉线：屏上两根杆会白白灰一下');
+
+    c.hold!.complete();
+    c.hold = null;
+    await until(() => seen.isNotEmpty, '那一问回来之后的第一份健康结论');
+    expect(seen.first.anyLive, isTrue, reason: '狗好好的，报回来的却是看不见');
+    p.stop();
+    unawaited(sub.cancel());
   });
 
   test('轮询问不到狗时发全 false 的那一份，不许把流关掉', () async {

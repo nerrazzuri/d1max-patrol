@@ -25,6 +25,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 把被测的东西塞进一个最小的 app 壳里。
@@ -76,6 +77,34 @@ Future<void> pumpUntil(WidgetTester t, bool Function() ok, String why,
         () => Future<void>.delayed(const Duration(milliseconds: 5)));
     await t.pump(step);
   }
+}
+
+/// 发一次生命周期状态，走的是**平台消息那条真路**。
+///
+/// **不直接调 `handleAppLifecycleStateChanged`**：那个方法是 `@protected` 的，
+/// 测试里调它 `flutter analyze` 会红。走 `flutter/lifecycle` 这条频道还有一个
+/// 更要紧的好处 —— 框架会替我们补齐中间态（`resumed → inactive → hidden →
+/// paused`），那正是真机上到得来的顺序。直接投递一个 `paused` 的话，
+/// 「`inactive` 算不算走」这件事在测试里根本走不到那条路。
+Future<void> setLifecycle(WidgetTester t, AppLifecycleState s) async {
+  final ByteData? msg = const StringCodec().encodeMessage('$s');
+  await t.binding.defaultBinaryMessenger
+      .handlePlatformMessage('flutter/lifecycle', msg, (ByteData? _) {});
+  await t.pump();
+}
+
+/// 按一下系统返回键（`flutter/navigation` 的 `popRoute`）。
+///
+/// **跟 `NavigatorState.pop()` 不是一回事。** `pop()` 是硬退，它绕开
+/// `PopScope`；真机上人按返回键走的是 `maybePop()`，那条路才会问
+/// `PopScope.canPop`。必修 2 的「退屏之前先补一拍全零」挂的正是后面这条路，
+/// 拿 `pop()` 去测等于没测。
+Future<void> pressBack(WidgetTester t) async {
+  final ByteData msg = const JSONMethodCodec()
+      .encodeMethodCall(const MethodCall('popRoute'));
+  await t.binding.defaultBinaryMessenger
+      .handlePlatformMessage('flutter/navigation', msg, (ByteData? _) {});
+  await t.pump();
 }
 
 /// 真时钟上等条件成立。给不带 widget 的那几条用。

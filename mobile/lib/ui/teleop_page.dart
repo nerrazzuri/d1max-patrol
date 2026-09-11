@@ -54,6 +54,23 @@ const String noControlHint = '没有控制权：先在上面那条里取得，�
 /// 分开**，一句说该去要控制权，一句说该去把画面弄回来。
 const String noVideoHint = '看不见就不许开狗：没有画面，两根杆是灰的';
 
+/// 自己这头已经知道没有控制权了，而狗还是回了 409 时说的那一句（必修 6）。
+///
+/// **这一句存在的全部理由是不许再念那四个原因。** 409 那一句列的是「任务在
+/// 跑、急停按着、控制权在别人手里、没有画面」——租约掉了的时候那四个一个都
+/// 不是真的，而现场会照着其中一个去查一件根本不存在的事。自己这头
+/// （[_TeleopPageState._held]）已经知道控制权不在手上，就该直说。
+const String noControlPulseHint = '这一拍狗没收：控制权不在你手上。'
+    '先在上面那条里重新取一次';
+
+/// 发拍/心跳这两条**周期路径**的超时窗口（必修 4）。
+///
+/// `PatrolClient` 的默认超时是 10 秒 —— 那是给 `unlock`、盘况这类一次性请求
+/// 的。一条 300 毫秒一发的路上等满 10 秒毫无意义：那一拍的答案早就过期了，
+/// 而在这 10 秒里请求会一发一发堆起来，每一发各占一条连接。**超时之后那条
+/// 连接是真的被掐掉的**（见 `PatrolClient._send`），不是只让 Future 放弃。
+const Duration teleopPeriodicDeadline = Duration(seconds: 3);
+
 /// 顶部那条带子的外壳：**限高，超了在里面滚，不往下长。**
 ///
 /// **抽成一个函数是为了让测试对着同一个壳子验它吃不吃手势。** 这个壳子里的
@@ -166,7 +183,7 @@ class TeleopPage extends StatefulWidget {
   State<TeleopPage> createState() => _TeleopPageState();
 }
 
-class _TeleopPageState extends State<TeleopPage> {
+class _TeleopPageState extends State<TeleopPage> with WidgetsBindingObserver {
   /// 发拍周期。
   ///
   /// 一拍最长 2 秒（狗那头 `MAX_PULSE_S`），而 `roam` 档一拍只有零点几秒 ——
@@ -272,6 +289,24 @@ class _TeleopPageState extends State<TeleopPage> {
   /// 控制权在不在自己手上。**由上面那条 [ControlPanel] 说了算。**
   bool _held = false;
 
+  /// 发拍那条路上一发还没回来（必修 4）。
+  ///
+  /// **只挡周期发拍和探针，不挡停车那几拍。** 停车说三遍不贵，说漏了要拿
+  /// 撞上去来还（见 [_stopBursts]）。
+  bool _posting = false;
+
+  /// 心跳那条路上一发还没回来（必修 4）。
+  bool _beating = false;
+
+  /// app 还在前台（必修 1）。**进了后台就不发拍、不发心跳。**
+  bool _awake = true;
+
+  /// 退出这一屏的那一拍全零已经发过了（必修 2）。
+  ///
+  /// [_leaveThenPop] 和 [dispose] 两条路都会发它，而正常退出走的是前者 ——
+  /// 这一位让后者不再补一发。
+  bool _farewellSent = false;
+
   bool get _moving => _left != Offset.zero || _right != Offset.zero;
 
   /// 杆是不是亮的。**三道闸，任何一道落下都变灰。**
@@ -293,17 +328,106 @@ class _TeleopPageState extends State<TeleopPage> {
       _health = p.stream;
     }
     _healthSub = _health.listen(_onHealth);
-    _pulseTimer = Timer.periodic(_pulsePeriod, (_) => _tick());
-    _beatTimer = Timer.periodic(_beatPeriod, (_) => _beat());
+    _startTimers();
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // **临走再发一拍全零（必修 2）。** 正常退出走的是 [_leaveThenPop]，那条
+    // 路上这一拍已经发过而且等过它落地了；这儿接的是别的走法（整个
+    // `Navigator` 被换掉、`TeleopPage` 被从树上摘走）。
+    //
+    // **这一拍必须排在两个 `cancel()` 前面**，也必须排在
+    // `roster_page` 收连接前面 —— 那一头的时序已经跟着改了（`_ClientHolder`
+    // 在这一屏 `dispose()` 之后才 `close()`）。`dispose()` 里等不了它落地，
+    // 所以它只是兜底，不是停车方式。
+    if (!_farewellSent) {
+      _farewellSent = true;
+      unawaited(_post(_stopBody()));
+    }
     _pulseTimer?.cancel();
     _beatTimer?.cancel();
     _healthSub?.cancel();
     _poller?.stop();
     super.dispose();
+  }
+
+  void _startTimers() {
+    _pulseTimer?.cancel();
+    _beatTimer?.cancel();
+    _pulseTimer = Timer.periodic(_pulsePeriod, (_) => _tick());
+    _beatTimer = Timer.periodic(_beatPeriod, (_) => unawaited(_beat()));
+  }
+
+  void _stopTimers() {
+    _pulseTimer?.cancel();
+    _pulseTimer = null;
+    _beatTimer?.cancel();
+    _beatTimer = null;
+  }
+
+  // ------------------------------------------------------------ 人在不在
+
+  /// 切后台 / 锁屏 / 来电（必修 1）。
+  ///
+  /// 以前这一屏一处生命周期都没有。人手里推着左杆让狗前进，这时候来电铃响、
+  /// 或者按了 Home、或者屏幕到点自动锁屏 —— `Timer.periodic` 在 Android 上
+  /// 进后台照常跑（引擎只停 vsync，不停 isolate），[_pulseTimer] 会拿着最后
+  /// 那个非零的 [_left] 一直发下去，**狗可能不停**。停车唯一的指望是 Android
+  /// 把 `ACTION_CANCEL` 送进来触发摇杆的松手，而锁屏/Home 这条路上发不发
+  /// cancel 是依机型和 ROM 的。
+  ///
+  /// **`inactive` 不算「人不在了」** —— 理由跟 `control_panel.dart` 里那条
+  /// 一字不差（通知栏下拉、音量条、权限框那几下人还握着手机）。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _onResumed();
+      case AppLifecycleState.inactive:
+        break;
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        _onGone();
+    }
+  }
+
+  /// 人不在了：**先把杆归零并立刻发一拍全零，再停表。**
+  ///
+  /// 顺序不许换。先停表的话，那一拍全零就得靠 [_post] 自己走出去，而
+  /// [_stopNow] 排的那几拍补发（[_stopBursts]）全都落进一个已经死掉的定时器
+  /// 里 —— 松手那一拍丢了就没有第二次机会。
+  ///
+  /// **弃租不在这儿**：那是 [ControlPanel] 的事（它自己也挂了生命周期），
+  /// 它弃完会回调 [_onHeld]`(false)`，这一屏跟着再变一次灰。
+  void _onGone() {
+    if (!_awake) return;
+    _awake = false;
+    if (_moving) {
+      setState(() {
+        _left = Offset.zero;
+        _right = Offset.zero;
+      });
+    }
+    _stopsLeft = 0;
+    // **同步发一拍全零。** 不走 [_stopNow]：那个会排上接下来几拍，而表马上
+    // 就要停了，排了也发不出去。
+    unawaited(_post(_stopBody()));
+    _stopTimers();
+  }
+
+  /// 回前台：把表重新起起来。
+  ///
+  /// **不自动恢复控制权** —— 那是 [ControlPanel] 的事，它也是有意不恢复的。
+  /// 这儿起的表只是让「狗现在还认不认我」这件事重新问得出来：杆此刻是灰的
+  /// （[_held] 已经被弃租那一下翻成 false），人要重新取一次控制权才推得动。
+  void _onResumed() {
+    if (_awake) return;
+    _awake = true;
+    _startTimers();
   }
 
   // ------------------------------------------------------------ 画面那道闸
@@ -384,12 +508,21 @@ class _TeleopPageState extends State<TeleopPage> {
       _probeTick = 0;
       // 又推起来了：欠着的那几拍全零到此为止，不然会跟正推着的拍打架。
       _stopsLeft = 0;
+      // **上一发还没回来就跳过这一拍**（必修 4）。狗那头 HTTP 线程卡住而
+      // TCP 还接得上的时候（扫盘、写归档），不挡的话手机会在超时窗口里堆出
+      // 几十条在途连接，把狗自己的热点上行挤死 —— 而屏上报的是「看不见就
+      // 不许开狗」，人会去修相机。跳过这一拍不会让狗多走：狗那头一拍本来就
+      // 有 `MAX_PULSE_S`，走完自己停。
+      if (_posting) return;
       unawaited(_post(_pulseBody()));
       return;
     }
     if (_stopsLeft > 0) {
       // 松手/变灰之后补发的全零。**排在零位抑制和探针的前面**，
       // 而且不看杆是不是灰的 —— 停车那几拍在狗那头走的是 `stop()`。
+      //
+      // **这一支不看 [_posting]。** 在途就跳过那条闸是为了不让请求堆起来，
+      // 而停车这件事说三遍不贵，说漏了要拿撞上去来还。
       _stopsLeft--;
       unawaited(_post(_stopBody()));
       return;
@@ -397,15 +530,21 @@ class _TeleopPageState extends State<TeleopPage> {
     if (_fails >= _failsToGrey) {
       // 灰下去之后自己找回来。见 [_probeEvery]。
       _probeTick++;
-      if (_probeTick % _probeEvery == 0) unawaited(_post(_stopBody()));
+      if (_probeTick % _probeEvery == 0 && !_posting) {
+        unawaited(_post(_stopBody()));
+      }
       return;
     }
     // 两个杆都在零位：**不发**。发零拍等于反复叫狗停，白占热点带宽。
   }
 
   Future<void> _beat() async {
+    // 上一发还没回来就跳过这一拍（必修 4）。见 [_tick] 里那段。
+    if (_beating) return;
+    _beating = true;
     try {
-      await widget.client.post('/api/teleop/heartbeat');
+      await widget.client
+          .post('/api/teleop/heartbeat', null, teleopPeriodicDeadline);
       if (!mounted || _beatFails == 0) return;
       _beatFails = 0;
       // 自己挂上去的那句话自己收掉；发拍那条路的槽不碰。
@@ -421,6 +560,8 @@ class _TeleopPageState extends State<TeleopPage> {
       if (_beatFails >= _beatFailsToWarn && _beatTrouble.isEmpty) {
         setState(() => _beatTrouble = beatTroubleHint);
       }
+    } finally {
+      _beating = false;
     }
   }
 
@@ -447,8 +588,9 @@ class _TeleopPageState extends State<TeleopPage> {
   static double _flip(double v) => v == 0.0 ? 0.0 : -v;
 
   Future<void> _post(Map<String, dynamic> body) async {
+    _posting = true;
     try {
-      await widget.client.post('/api/teleop', body);
+      await widget.client.post('/api/teleop', body, teleopPeriodicDeadline);
       if (!mounted) return;
       // 收掉的**只有发拍自己挂上去的那句**（[_trouble]）。心跳那句归心跳
       // 那条路管 —— 发拍通不代表心跳通，抹掉别人的话就是在骗人。
@@ -468,6 +610,8 @@ class _TeleopPageState extends State<TeleopPage> {
         _trouble = _human(e);
       });
       _disarmIfNeeded();
+    } finally {
+      _posting = false;
     }
   }
 
@@ -476,6 +620,10 @@ class _TeleopPageState extends State<TeleopPage> {
   /// **不弹框**（§5.9 不设「确认后继续」的口子），就挂在顶部那条状态带上。
   String _human(Object e) {
     if (e is PatrolError && e.status == HttpStatus.conflict) {
+      // **自己这头已经知道控制权不在手上，就不许再念那四个原因**（必修 6）。
+      // 租约掉了的时候那四个一个都不是真的，而现场会照着其中一个去查一件
+      // 根本不存在的事。
+      if (!_held) return noControlPulseHint;
       // **「没有画面」也是 409。** 狗那头 §5.9 那道视频闸拒绝的时候回的是
       // 同一个码（`server.py` 的 `_video_gate` -> `TeleopBusy` -> 409）——
       // 不提这一种的话，屏幕上会同时挂着「看不见」和一句不相干的话，人会
@@ -545,8 +693,69 @@ class _TeleopPageState extends State<TeleopPage> {
 
   // ------------------------------------------------------------ 画
 
+  /// 人按了返回键/返回手势（必修 2）。
+  ///
+  /// **停止指令必须在路由弹走之前发出去，而且要等它落地。** 以前这条路上一个
+  /// 字节都发不出去，两件事叠在一起：
+  ///
+  /// * `dispose()` 里压根没有停车那一拍；
+  /// * 就算有也发不出去 —— `roster_page._open` 里 `client.close()` 排在
+  ///   `TeleopPage.dispose()` **前面**（`await push` 在 `didPop` 那一刻就
+  ///   完成，而 `dispose()` 要等退场动画跑完），发给的是一个已经被
+  ///   `force: true` 关掉的 `HttpClient`。
+  ///
+  /// 于是操作员推着杆用返回手势退出遥控屏，狗要靠守死人在「一拍走完 +
+  /// 0.6 秒守死」之后才停 —— 最坏接近一秒。**那是兜底，不是停车方式。**
+  ///
+  /// `roster_page` 那一头的时序也跟着改了（收连接排到这一屏 `dispose()`
+  /// 之后），两处缺一不可。
+  Future<void> _leaveThenPop() async {
+    _farewellSent = true;
+    // 先停表：接下来这一拍是最后一拍，不该有别的拍跟它抢。
+    _stopTimers();
+    if (_moving) {
+      setState(() {
+        _left = Offset.zero;
+        _right = Offset.zero;
+      });
+    }
+    _stopsLeft = 0;
+    try {
+      // **等它落地再放行。** 超时窗口是周期路径那个短的：返回键不许被一条
+      // 卡住的连接按住不放。
+      await widget.client
+          .post('/api/teleop', _stopBody(), teleopPeriodicDeadline);
+    } catch (e) {
+      // 发不出去也照样放人走：屏上再写什么都没人读了，而人正在离开这一屏。
+      developer.log('$e', name: 'teleop/leave');
+    }
+    if (!mounted) return;
+    // **这儿用 `pop()`，不是 `maybePop()`。**
+    //
+    // `maybePop()` 会再问一次 `PopScope` —— 而 `canPop` 那一位是随着下一帧
+    // 才登记进路由的，这一刻它读到的还是「不放行」，于是这一屏永远退不出去
+    // （本机真卡在这儿过：那一拍全零发得好好的，人却退不回名册）。既然
+    // 该等的已经等完了，这里就是硬退。
+    final NavigatorState nav = Navigator.of(context);
+    if (nav.canPop()) nav.pop();
+  }
+
   @override
   Widget build(BuildContext context) {
+    return PopScope(
+      // **一律不放行，退出这件事由 [_leaveThenPop] 自己完成。** 让它在发完
+      // 那一拍之后翻成 `true` 再 `maybePop()` 是走不通的：那一位要等下一帧
+      // 才登记进路由。
+      canPop: false,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop || _farewellSent) return;
+        unawaited(_leaveThenPop());
+      },
+      child: _body(),
+    );
+  }
+
+  Widget _body() {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(

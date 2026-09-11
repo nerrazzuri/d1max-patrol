@@ -841,4 +841,68 @@ void main() {
     expect(find.byType(AlertDialog), findsNothing);
     await unmount(t, rig);
   });
+
+  // ----------------------------------------------- 必修 1 / 必修 2：离屏收尾
+
+  testWidgets('切到后台:杆归零、狗收到一拍全零、表停了', (WidgetTester t) async {
+    /// **手指还在杆上，人就被一个来电切走了。** 屏上那根杆停在推着的位置，
+    /// 而发拍的表还在一秒三拍地往狗上送 —— 狗于是照着最后那个方向一直走，
+    /// 一直走到它自己的守死人超时（那是最后一道兜底，不是正常收尾）。
+    ///
+    /// 切走那一下要做三件事：杆归零、主动补一拍全零、把表停掉。
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    await pulseWith(t, rig, 'fwd', '推着的那一拍（非零）');
+    expect(zeroPulses(rig), isEmpty,
+        reason: '还没切走就已经有全零拍了：下面那句认不出多出来的是谁发的');
+
+    await setLifecycle(t, AppLifecycleState.paused);
+    await pumpUntil(t, () => zeroPulses(rig).isNotEmpty, '切到后台那一下主动发的全零拍');
+
+    // 表真的停了：再推十几个周期过去，一条新的都不该出去。
+    final int sent = rig.pulses.length;
+    final int beats = rig.beats;
+    for (int i = 0; i < 15; i++) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await t.pump(const Duration(milliseconds: 300));
+    }
+    expect(rig.pulses.length, sent, reason: '人都不在了还在发拍：狗会照着最后那个方向走');
+    expect(rig.beats, beats, reason: '人都不在了还在续心跳');
+    await g.up();
+    await t.pump();
+    await unmount(t, rig);
+  });
+
+  testWidgets('这一屏被拆掉之前,狗一定收到一拍全零', (WidgetTester t) async {
+    /// **必修 2 的下半段。** 退屏、被别的路由顶掉、进程被回收 —— 走哪条路
+    /// 都一样：`dispose()` 之后这一屏再也发不出任何东西，而狗那头收到的最后
+    /// 一拍还是「向前走」。
+    ///
+    /// 这一条连着钉两件事：`dispose()` 里那一拍全零**真的发得出去**，
+    /// 以及那条连接**没有在它之前被关掉**（原来的 `roster_page._open` 是
+    /// `await push(...)` 回来之后立刻 `client.close()`，而那一刻子树还没
+    /// `dispose()`；顺序排对了、连接却已经硬关了的话，那一拍连一个字节都
+    /// 出不去 —— 两个毛病看起来一模一样）。
+    final Rig rig = await mount(t);
+    final TestGesture g = await t.startGesture(leftStick(t));
+    await g.moveBy(const Offset(0, -50));
+    await t.pump();
+    await pulseWith(t, rig, 'fwd', '推着的那一拍（非零）');
+    expect(zeroPulses(rig), isEmpty, reason: '还没拆屏就已经有全零拍了：下面那句认不出人');
+    await g.up();
+
+    // 换成一棵别的树 —— 这正是「这一屏被 `dispose()` 掉」那一下。
+    await t.pumpWidget(const SizedBox());
+    await pumpUntil(t, () => zeroPulses(rig).isNotEmpty, '拆屏那一拍全零真的到了狗那儿');
+
+    unawaited(rig.health.close());
+    await t.pump();
+    rig.client.close();
+    await t.pump();
+    await t.runAsync(rig.dog.stop);
+    expect(rig.dog.errors, isEmpty, reason: '假狗自己抛了：查的是假狗，不是被测代码');
+  });
 }

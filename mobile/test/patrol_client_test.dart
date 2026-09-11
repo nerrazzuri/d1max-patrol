@@ -5,6 +5,9 @@
 /// mock 掉，恰好把要证的那件事一起 mock 掉了。
 library;
 
+import 'dart:async';
+import 'dart:io';
+
 import 'package:d1max_patrol/net/patrol_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -161,4 +164,72 @@ void main() {
         throwsA(isA<PatrolError>()));
     impatient.close();
   }, timeout: const Timeout(Duration(seconds: 5)));
+
+  // ---------------------------------------------------------- 必修 4
+
+  test('周期路径可以自带一个更短的期限,不必等满那 10 秒', () async {
+    /// 10 秒那个默认值是给 `unlock`、盘况这类**一次性**请求的。摇杆一拍、
+    /// 一次心跳、一次校准的答案在一秒之后就没有意义了 —— 等满 10 秒的结果
+    /// 是这条路上的闸一直关着，后面十几拍一拍也发不出去。
+    dog.hangPaths.add('/api/state');
+    final Stopwatch sw = Stopwatch()..start();
+    await expectLater(() => c.get('/api/state', const Duration(milliseconds: 150)),
+        throwsA(isA<PatrolError>()));
+    sw.stop();
+    expect(sw.elapsed, lessThan(const Duration(seconds: 3)),
+        reason: '走的是这一条请求自带的期限,不是客户端那个 10 秒的默认值');
+  }, timeout: const Timeout(Duration(seconds: 15)));
+
+  test('超时那一下真的把 socket 掐掉,不是只让 Future 完成', () async {
+    /// **必修 4 的另一半。** `Future.timeout` 只管「我不等了」：它一个字节
+    /// 也不往 socket 上写，那条 TCP 连接照样连着。一分钟几十拍地超时下去，
+    /// 连接会一条条堆起来，把狗热点那点上行挤死 —— 而屏上报的是「看不见就
+    /// 不许开狗」，人会掉头去修相机。
+    ///
+    /// **光靠 `HttpClientRequest.abort()` 不够。** `http_impl.dart` 里那一句
+    /// `if (!_responseCompleter.isCompleted)` 写得很清楚：响应头**已经到了**
+    /// 的时候 `abort()` 是个空操作。而「头到了、body 卡住」恰恰是狗那头
+    /// HTTP 线程忙着扫盘写归档时最常落到的那一步。那一半只有把响应体那条
+    /// 订阅取消掉才掐得断。本机实测过这四种收尾方式，只有取消订阅那一种
+    /// 真的把 socket 关上了。
+    ///
+    /// **观测点在 socket 自己身上。** 从狗那头数连接数是数不出来的：
+    /// 服务器那个 `HttpConnection` 对象在它下一次往这条连接上写之前不会察觉
+    /// 对面已经走了，`connectionsInfo()` 照样把它算进去 —— 两种局面在那儿
+    /// 长得一模一样。
+    dog.hangPaths.add('/api/state');
+    final List<Socket> sockets = <Socket>[];
+    final HttpClient io = HttpClient();
+    io.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) async {
+      final ConnectionTask<Socket> task =
+          await Socket.startConnect(uri.host, uri.port);
+      unawaited(task.socket.then(sockets.add));
+      return task;
+    };
+    // **注入进来的 `HttpClient` 不归 `PatrolClient` 所有**（N-1/N-2），
+    // 所以这条测试自己负责关它。
+    final PatrolClient impatient = PatrolClient(dog.baseUrl, io: io);
+    await expectLater(
+        () => impatient.get('/api/state', const Duration(milliseconds: 200)),
+        throwsA(isA<PatrolError>()));
+    expect(sockets, hasLength(1), reason: '这一条请求只该开出一条连接来');
+    // 掐是异步的（取消一条订阅要走几个 microtask/事件循环）。**等的是条件
+    // 成立，不是固定 sleep**：掐掉了立刻走，没掐掉才等满这几秒再红。
+    bool dead() {
+      try {
+        sockets.first.remotePort;
+        return false;
+      } on SocketException catch (_) {
+        return true;
+      }
+    }
+
+    final DateTime deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (!dead() && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(dead(), isTrue,
+        reason: 'socket 还活着 —— 超时只是不再等，连接还占着狗那头的槽位');
+    io.close(force: true);
+  }, timeout: const Timeout(Duration(seconds: 15)));
 }
