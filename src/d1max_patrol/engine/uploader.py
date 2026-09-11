@@ -183,7 +183,15 @@ class Uploader:
         # **§4.2 的全部要害在这三行。** 不看 ok,不看它回显了什么,只看它
         # 对自己落盘的那 stored 个字节重新算出来的哈希,跟我们本地同样长度的
         # 前缀哈希对不对得上。
-        want = sha256_prefix(path, receipt.stored)
+        #
+        # **这是第二次读这个文件,它跟第一次一个待遇。** 上面那次 open 到这里
+        # 之间隔着一整个来回的网络请求 —— 几十秒里 U 盘可以被拔掉、归档盘可以
+        # 掉线、水位线可以把整趟删掉。这一次读照样会抛 OSError,不接住的话它会
+        # 直接穿出 run_once,而不是走 _missing() 那三分支的判断。
+        try:
+            want = sha256_prefix(path, receipt.stored)
+        except OSError:
+            return self._missing(item, run, now_ms)
         if receipt.sha256 != want:
             self.queue.rewind(item.key)
             wait = backoff_ms(item.attempts + 1, rand=self._rand)

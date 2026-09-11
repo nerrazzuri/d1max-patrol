@@ -252,3 +252,65 @@ def test_空队列返回idle(tmp_path: Path) -> None:
     (tmp_path / "runs").mkdir()
     up = 造(tmp_path / "runs", tmp_path, 假服务器())
     assert up.run_once(now_ms=0) == Step(key="", action="idle", detail="队列空")
+
+
+# ---- 第二次读文件,跟第一次一个待遇 ----
+
+
+class 传完就把盘抽走的服务器(假服务器):
+    """``put()`` 正常返回,但在返回之前动一下盘。
+
+    模拟的是**第一次读和第二次读之间**那个窗口:``run_once()`` 里读文件读了
+    两次,中间隔着一整个来回的网络请求 —— 几十秒里 U 盘可以被拔掉、归档盘可以
+    掉线、水位线可以把整趟删掉。第二次读照样会抛 ``OSError``,它必须跟第一次
+    一个待遇,走 ``_missing()`` 那三分支,而不是直接穿出 ``run_once()``。
+    """
+
+    def __init__(self, 动手) -> None:
+        super().__init__()
+        self.动手 = 动手
+
+    def put(self, req: PutRequest) -> PutReceipt:
+        回执 = super().put(req)
+        self.动手()
+        return 回执
+
+
+def test_第二次读_文件在发包期间没了就退避_不销账(tmp_path: Path) -> None:
+    run = tmp_path / "runs" / "巡检一" / "20260911T101500Z"
+    run.mkdir(parents=True)
+    (run / "events.jsonl").write_bytes(b"A" * 10)
+    sink = 传完就把盘抽走的服务器(lambda: (run / "events.jsonl").unlink())
+    up = 造(tmp_path / "runs", tmp_path, sink)
+    up.scan()
+    step = up.run_once(now_ms=0)
+    assert step.action == "deferred"
+    assert up.queue.get("巡检一/20260911T101500Z/events.jsonl").done is False
+    assert up.backlog() == 1
+
+
+def test_第二次读_整趟在发包期间被水位线删了就销账(tmp_path: Path) -> None:
+    run = tmp_path / "runs" / "巡检一" / "20260911T101500Z"
+    run.mkdir(parents=True)
+    (run / "events.jsonl").write_bytes(b"A" * 10)
+    sink = 传完就把盘抽走的服务器(lambda: shutil.rmtree(run))
+    up = 造(tmp_path / "runs", tmp_path, sink)
+    up.scan()
+    step = up.run_once(now_ms=0)
+    assert step.action == "gone"
+    assert up.queue.get("巡检一/20260911T101500Z/events.jsonl").done is True
+
+
+def test_第二次读_归档盘在发包期间掉了就退避_不销账(tmp_path: Path) -> None:
+    run = tmp_path / "runs" / "巡检一" / "20260911T101500Z"
+    run.mkdir(parents=True)
+    (run / "events.jsonl").write_bytes(b"A" * 10)
+    盒: list = []
+    sink = 传完就把盘抽走的服务器(lambda: shutil.rmtree(盒[0].runs_root))
+    up = 造(tmp_path / "runs", tmp_path, sink)
+    盒.append(up)
+    up.scan()
+    step = up.run_once(now_ms=0)
+    assert step.action == "deferred"
+    assert "归档盘不在" in step.detail
+    assert up.queue.get("巡检一/20260911T101500Z/events.jsonl").done is False
