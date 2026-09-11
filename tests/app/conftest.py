@@ -160,12 +160,21 @@ _HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),
 
 
 async def _make_engine(nav, device, runs_root: Path,
-                       removable=None) -> MissionEngine:
+                       removable=None, engine_clock=None) -> MissionEngine:
     # removable 传假探针:默认的 DEFAULT_PROBE 扫真机上的 /media、/mnt,
     # 结果就取决于跑测试的这台机器上此刻插着什么盘(见 tests/conftest.py)。
+    #
+    # ``engine_clock`` 是引擎那口**单调钟**(秒)。留空就是引擎自己的缺省
+    # ``time.monotonic``,现有那一堆 app 测试一个字都不用改。要它是因为
+    # ``SuspendPoint.at_ms`` / ``prior_suspend_ms`` / ``MissionEngine.now_ms()``
+    # 三个数全从它推(见 ``engine/machine.py`` 的 ``_stamp_ms``),而
+    # ``suspend_stale`` 那条 P1 判的正是这三个数 —— 不注进来就只能靠真的等
+    # 十分钟(见 ``tests/app/test_suspend_e2e.py``)。
     return MissionEngine(nav, device, {}, runs_root,
                          removable=removable if removable is not None
-                         else NoDisks())
+                         else NoDisks(),
+                         **({"clock": engine_clock}
+                            if engine_clock is not None else {}))
 
 
 @pytest.fixture
@@ -185,17 +194,22 @@ async def _make_teleop(device, engine) -> Teleop:
 
 def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
              removable=None, release_root=None, payload_file=None,
-             bundles_root=None, clock=None, time_reference=None) -> AppContext:
+             bundles_root=None, clock=None, time_reference=None,
+             engine_clock=None) -> AppContext:
     """拼一份上下文。``nav`` / ``device`` / ``removable`` 留空就是默认的假件。
 
     ``identity`` 显式传 ``resolve(...)``:``AppContext.identity`` 的默认工厂
     在开发机上会去读 ``/etc/d1max/payload.json``,不传的话真机上那个文件
     会串进测试。
+
+    ``clock`` 和 ``engine_clock`` 是**两口不同的钟,别混**:前者是 app 那口
+    墙钟(``ctx.clock``,毫秒,给告警盖时刻、给租约判 TTL),后者是引擎那口
+    单调钟(秒,见 :func:`_make_engine`)。两个都留空就全走各自的缺省。
     """
     nav = nav if nav is not None else FakeNav()
     device = device if device is not None else FakeDevice()
     engine = bridge.call(lambda: _make_engine(nav, device, tmp_path / "runs",
-                                              removable))
+                                              removable, engine_clock))
     teleop = bridge.call(lambda: _make_teleop(device, engine))
     procs = ProcManager(tmp_path / "logs")
     # 真的 ProcManager 配真的编排器:这一层测的是接口的形状,不是 ROS ——

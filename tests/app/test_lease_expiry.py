@@ -353,6 +353,70 @@ def test_人揣着手机走了_遥控停下而且任务不自己接着跑(服务
                    最多等=守望窗口), "停完腿之后把任务交还着跑起来了"
 
 
+def test_到期告警不许在任务还在跑的时候说狗停了(服务器夹具, 墙钟):
+    """**这条告警原来会说一句会伤人的假话。**
+
+    ``_lease_gone`` 实际动作只有一句 ``teleop.stop()`` —— **只停遥控那一档,
+    不停引擎正在跑的那趟任务**。而"取控制权 → 起一趟巡检 → 人走开 → TTL
+    到期"是一串完全正常的动作(起飞本身就要控制权),现场随时会发生。那种
+    局面下 ``teleop.stop()`` 基本是空动作:引擎照走点位、照拍照,而屏幕上和
+    推送里那句"遥控租约到期,狗已停在原地"是假的 —— 现场的人据此判断狗是
+    静止的,然后走过去。
+
+    这里断的是:任务还在跑的时候,标题和正文里**不许**出现"停在原地"这种
+    话,而且必须说清"这趟任务还没停"以及人该干什么。
+
+    **变异验证:** 把 ``_lease_gone`` 里那个 ``if 跑着 ... else ...`` 拍回
+    原来那一套单一文案,这一条当场红。
+    """
+    srv = 服务器夹具
+    ctx = srv.ctx
+    token = 拿到租约(srv, operator="老王")
+    起飞(srv, token)
+    assert ctx.engine.running is True, \
+        "任务都没起来,下面断的「还在跑的时候怎么说」是空的"
+
+    墙钟.前进(LEASE_TTL_MS + 1)
+    assert 等到(lambda: 到期告警(srv)), "TTL 过了,一条 P1 都没有"
+    a = 到期告警(srv)[0]
+    话 = a.title + a.detail
+    # 钉的是原来那套单一文案的两句原话("狗已停在原地" / "已经停下"),
+    # 不是泛泛地禁"停"这个字 —— 正文里要劝人"回来把它停下来",那也带"停"。
+    for 假话 in ("狗已停在原地", "已经停下"):
+        assert 假话 not in 话, (
+            f"任务还在跑,这条告警却说「{假话}」—— 现场的人会照着它走过去。"
+            f"title={a.title!r} detail={a.detail!r}")
+    # 光不说假话不够:得说出真话。任务没停这件事必须出现在人看得到的地方。
+    assert "没停" in a.title or "没有跟着停" in a.title, a.title
+    assert "还活着" in a.detail or "没停" in a.detail, a.detail
+    # 引擎在哪一档要摆出来:``running`` 为真里头还有 PAUSED / SUSPENDED,
+    # 光说"任务还活着"分不出腿这一刻在不在动,得让人自己看得见。
+    assert ctx.engine.snapshot.state.value in a.detail, a.detail
+    # 人该干什么。
+    assert "控制权" in a.detail, a.detail
+
+
+def test_到期告警在没任务的时候还是说狗停在原地(服务器夹具, 墙钟):
+    """另一半:引擎压根没在跑,原来那句话是对的,**不许被新分支冲掉**。
+
+    只钉上面那一条的话,一个"两边都改成『任务还在跑』"的实现照样绿,而它在
+    真机上的样子是:人只开了遥控、压根没起任务,租约到期之后屏上说"这趟任务
+    还没停" —— 一条指着不存在的任务的告警,比说错还难查。
+    """
+    srv = 服务器夹具
+    ctx = srv.ctx
+    token = 拿到租约(srv, operator="老王")
+    开始遥控(srv, token)
+    assert ctx.engine.running is False, \
+        "这条要的是「没有任务在跑」那一格,引擎却在跑"
+
+    墙钟.前进(LEASE_TTL_MS + 1)
+    assert 等到(lambda: 到期告警(srv)), "TTL 过了,一条 P1 都没有"
+    a = 到期告警(srv)[0]
+    assert "停在原地" in a.title, a.title
+    assert "没有自动续跑" in a.detail, a.detail
+
+
 def test_闸门协程死了_这件事本身会被报出来(服务器夹具):
     """看门狗的兜底只网 ``OSError`` / ``ValueError``,别的会静悄悄弄死它。
 
