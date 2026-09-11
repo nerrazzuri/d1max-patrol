@@ -111,10 +111,14 @@ FINAL_STATES = frozenset({RunState.DONE, RunState.ABORTED})
 
 #: ``suspend()`` 只在"继续之后引擎知道该往哪走"的状态下受理(§5.10)。
 #:
-#: ``PAUSED`` 不在这张表里 —— 它没有"没处去"这个问题。``_pause_until_resumed``
-#: 自己那条 while 现在会接住 ``suspend`` 命令,转手调
-#: ``_suspend_until_resumed``,``_RetryWaypoint`` 是从**那一层**抛出来的,走的
-#: 跟平常挂起完全一样的路径,不会漏给别处的兜底。
+#: ``PAUSED`` 不在这张表里,**但这不等于暂停里喊挂起就一律放行。**
+#: ``_pause_until_resumed`` 那条 while 会接住 ``suspend`` 命令、转手调
+#: ``_suspend_until_resumed``,而 ``_RetryWaypoint`` 最后有没有人接,取决于
+#: **按暂停之前**站在哪一层:从 ``RUNNING`` 暂停的由 ``_do_waypoint`` 接住,
+#: 从 ``RETURNING`` 暂停的由 ``_go_home`` 接住,从 ``LOCALIZING`` 暂停的
+#: **没人接**。所以那条 while 查这张表时查的是"暂停之前那个状态",不是
+#: ``self._state`` —— 那一刻 ``self._state`` 已经是 ``PAUSED``,查什么都查不到,
+#: 这道闸就成了"先按暂停、再按让开腿"一绕就过的摆设。
 #:
 #: **表里现在只剩 ``LOCALIZING`` 一个。** 它期间挂起再继续,``_RetryWaypoint``
 #: 会从 ``_await_localized`` 直接漏给 ``_run`` 的兜底,按"引擎内部异常"整趟
@@ -1048,6 +1052,12 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         用 ``stop`` 而不是 ``pause_nav``:厂商的暂停/继续语义没经真机验证,
         而"停 + 重发"这条路是走通过的,任务本来也是全逐点。
         """
+        # 在翻进 ``PAUSED`` **之前**把暂停前的状态抄下来:翻完了就只剩
+        # ``PAUSED``,而下面那道挂起闸要问的恰恰是"按暂停之前在干什么"。
+        # 已知缺口(不在本次范围内,单独挂账):``LOCALIZING`` 期间光按暂停
+        # 再点继续,这里末尾那句 ``raise _RetryWaypoint`` 一样会漏给
+        # ``_run`` 的兜底 —— 那是暂停自己的病,拦挂起拦不掉它。
+        before = self._state
         await self._transition(RunState.PAUSED, "人工暂停")
         await self._stop_nav_quietly()
         while True:
@@ -1068,7 +1078,27 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     #
                     # 转进 SUSPENDED 之后,"谁在动这条狗"就是显式的:继续
                     # 走的是挂起那一支,那一支查 busy。
-                    await self._suspend_until_resumed(item.reason)
+                    #
+                    # **但这道闸照样要过。** 查的是 ``before`` 不是
+                    # ``self._state``:这一刻状态已经是 ``PAUSED``,拿它去查
+                    # ``_SUSPEND_UNSAFE_STATES`` 永远查不到,同一个"让开腿"
+                    # 的意图在 ``_handle_command`` 那条路上被拒、在这条路上
+                    # 却受理 —— 先按暂停就能把闸绕过去。绕过去的后果不是
+                    # "多支持一种操作":``LOCALIZING`` 期间绕过去,人接管完
+                    # 点继续,``_RetryWaypoint`` 会从 ``_await_localized`` 漏
+                    # 给 ``_run`` 的兜底,整趟按"引擎内部异常"中止。
+                    deny = _SUSPEND_UNSAFE_STATES.get(before)
+                    if deny is None:
+                        await self._suspend_until_resumed(item.reason)
+                    else:
+                        # 落档 + 广播两步都做,跟 ``_handle_command`` 那条路
+                        # 一模一样:只落档不广播,现场的人在手机上看不到任何
+                        # 反应,只会以为按钮坏了。``state`` 记的是 ``before``
+                        # —— 说清楚是"因为暂停之前在重定位"才拒的,记成
+                        # ``PAUSED`` 反而让事后翻档的人看不懂。
+                        self._note("suspend_refused", state=before.value,
+                                   reason=deny)
+                        self._publish(deny)
                 continue
             if isinstance(item, BatteryEvent) and self._live is not None:
                 self._live.battery_pct = item.percent

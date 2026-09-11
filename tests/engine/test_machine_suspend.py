@@ -689,6 +689,51 @@ async def test_重定位期间仍然拒绝(重定位中的引擎):
     assert eng.state is RunState.LOCALIZING
 
 
+async def test_重定位中先按暂停再点让开腿_这道闸照样拦得住(重定位中的引擎):
+    """必修 2。这道闸原来查的是 ``self._state``,而在 ``_pause_until_resumed``
+    那条 while 里,那一刻状态已经是 ``PAUSED`` —— ``_SUSPEND_UNSAFE_STATES``
+    里查不到,于是**先按暂停、再点让开腿**就能把闸整个绕过去。同一个"让开腿"
+    的意图,直接点被拒(S1 那条),绕一道就受理。
+
+    **绕过去的后果不是良性的**,这是实测出来的、不是推的:绕进 SUSPENDED 之后
+    人点继续,``_suspend_until_resumed`` 末尾那句 ``raise _RetryWaypoint`` 从
+    ``_pause_until_resumed`` 一路穿出 ``_await_localized``(它不接这个异常),
+    落进 ``_run`` 的兜底,整趟按 ``引擎内部异常: _RetryWaypoint`` 中止 ——
+    正是这张表的注释指名要防的那一幕:"人接管完点继续,整趟任务却没了"。
+
+    钉三件事:没被绕进 SUSPENDED、拒绝落了档(而且记的是**暂停之前**那个
+    状态)、拒绝也广播出去了。
+    """
+    eng = 重定位中的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+    await eng.suspend("门口有箱子")
+    拒绝 = await _等到拒绝(eng)
+    await 等一拍(eng)
+    assert eng.state is RunState.PAUSED, "从暂停这条侧门被绕进了 SUSPENDED"
+    assert 拒绝[-1]["reason"] == "正在重定位,现在不能让开腿"
+    # 记「暂停之前在重定位」而不是「现在是 PAUSED」:记成 PAUSED 的话,事后
+    # 翻 events.jsonl 的人会看到一条"因为暂停所以不能挂起"的胡话。
+    assert 拒绝[-1]["state"] == "LOCALIZING"
+    assert eng.snapshot.reason == "正在重定位,现在不能让开腿"
+
+
+async def test_重定位中挂起被拒之后暂停还在_人还能直接中止(重定位中的引擎):
+    """拒绝是"接着等",不是把暂停这条循环打断。
+
+    钉这一条是因为拒绝那一支新走的是 ``continue``:它要是不小心 ``break``
+    或者漏掉 ``continue``,人就会被留在一个既不能继续也停不下来的地方,而
+    上面那条用例照样绿 —— 它只看到拒绝发生的那一刻为止。
+    """
+    eng = 重定位中的引擎
+    await eng.pause()
+    await eng.wait_state(RunState.PAUSED)
+    await eng.suspend("门口有箱子")
+    await _等到拒绝(eng)
+    await eng.abort("现场不具备条件")
+    assert await eng.wait_done(timeout_s=5.0) is RunState.ABORTED
+
+
 # ------------------------------------------------- 任务 13 修复轮 1(必修 1/3/4/6)
 #
 # 上面那组测试盖住的是"返航中直接让开腿"这一条路。修复轮 1 补的是它旁边那几

@@ -68,7 +68,13 @@ class _假设备:
         return self._n >= self._free
 
     async def acquire_control(self) -> None:
-        return None
+        # 还没轮到放手的时候,抢是抢不动的 —— 抛异常。原来这里是无条件
+        # ``return None``,等于"抢成功了但会话还不在手里",跟这个假设备
+        # 自己的设定(被别人占着)自相矛盾。矛盾在旧实现下看不出来,因为
+        # 旧实现根本不理会 acquire 的成功;改成抢到就当场确认之后,这份
+        # 矛盾会让"被占着"的用例走到"抢到了"那一支上去。
+        if self._n < self._free:
+            raise RuntimeError("会话被别人握着")
 
     @property
     def 试了几次(self) -> int:
@@ -124,6 +130,89 @@ async def test_抢会话炸了也只算这一项没过(tmp_path):
     got = await grab_control(会炸的(), tries=2, sleep=假睡)
     assert got.ok is False
     assert "旁路进程没起来" in got.detail
+
+
+class _抢到才放手的设备:
+    """厂商进程握着会话,抢满几次之后才松手的设备。
+
+    跟 ``_假设备`` 的区别是**会话什么时候到手由 acquire 决定,不由第几次查
+    决定**:``has_control()`` 只如实回答"现在在不在我们手里",要等某一次
+    ``acquire_control()`` 真的成功了才会翻成 True。升级重启后厂商进程还没
+    退干净就是长这样。
+    """
+
+    def __init__(self, 第几次抢得到: int) -> None:
+        self.查过几次 = 0
+        self.抢过几次 = 0
+        self._第几次 = 第几次抢得到
+        self._在手里 = False
+
+    async def has_control(self) -> bool:
+        self.查过几次 += 1
+        return self._在手里
+
+    async def acquire_control(self) -> None:
+        self.抢过几次 += 1
+        if self.抢过几次 < self._第几次:
+            raise RuntimeError("厂商进程还握着")
+        self._在手里 = True
+
+
+async def test_最后一圈抢到会话要当场认账_不能判成没拿到():
+    """必修 3。**最后一圈没有下一圈** —— 成功与否不许推给下一圈去确认。
+
+    原来的写法是:``acquire_control()`` 成功走 ``else`` 分支,只把 ``last``
+    写成"会话被别人握着",真正的确认要等下一圈开头那次 ``has_control()``。
+    第 ``tries`` 圈跑完循环就结束了,那一圈抢到的会话没人认。
+
+    后果不是"少报一条成功":``run_postcheck`` 把这一项塞进四项,
+    ``postcheck_verdict`` 要求四项全过才 KEEP,于是判 ROLLBACK ——
+    **一次已经成功的升级被自动退回去**,现场看到的是"升级失败了",
+    人还会照着回滚流程再走一遍。
+    """
+    睡过: list[float] = []
+
+    async def 假睡(s: float) -> None:
+        睡过.append(s)
+
+    device = _抢到才放手的设备(3)
+    got = await grab_control(device, tries=3, sleep=假睡)
+    assert got.ok is True, f"抢到了却报没拿到: {got.detail}"
+    assert device.抢过几次 == 3          # 重试次数的语义没被改掉
+    assert len(睡过) == 2                # 成功那一圈之后一秒都不许再等
+
+
+async def test_一次就抢到也要当场认账():
+    """``tries=1`` 是同一个病最直白的样子:一次成功的 acquire 也必然报失败,
+    因为根本没有"下一圈"可以确认。
+    """
+    async def 假睡(_s: float) -> None:
+        raise AssertionError("一次就抢到了,不该等")
+
+    device = _抢到才放手的设备(1)
+    got = await grab_control(device, tries=1, sleep=假睡)
+    assert got.ok is True, f"抢到了却报没拿到: {got.detail}"
+    assert device.抢过几次 == 1
+
+
+async def test_抢完确认还是不在手里_那就接着重试():
+    """抢没抢到和会话到没到手是两件事。``acquire_control()`` 不抛异常不等于
+    会话就在手里(厂商的实现可以是"排队申请"),所以确认这一步不许省 ——
+    确认下来还不在手里的,照常走完剩下的重试,最后如实报没拿到。
+    """
+    class 抢得动但从不到手:
+        async def has_control(self) -> bool:
+            return False
+
+        async def acquire_control(self) -> None:
+            return None
+
+    async def 假睡(_s: float) -> None:
+        return None
+
+    got = await grab_control(抢得动但从不到手(), tries=2, sleep=假睡)
+    assert got.ok is False
+    assert got.name == "control"
 
 
 async def test_SN变了就回滚(tmp_path):

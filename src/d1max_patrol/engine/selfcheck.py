@@ -280,10 +280,26 @@ async def grab_control(
             if await device.has_control():
                 return CheckResult("control", True, f"SDK 会话在手里(第 {n} 次确认)")
             await device.acquire_control()
+            # **抢完立刻自己确认一次,不把确认推给下一圈。**
+            #
+            # 推给下一圈的写法在**最后一圈**必错:第 ``tries`` 圈没有下一圈,
+            # 那一圈真抢到的会话没人认,函数报"试了 N 次也没拿到"。这一项
+            # 是 ``run_postcheck`` 四项之一,``postcheck_verdict`` 四项全过
+            # 才 KEEP —— 于是一次**已经成功**的升级被自动退回去,理由还是
+            # 一句与事实相反的话。``tries=1`` 时更直白:一次成功的 acquire
+            # 也必然报失败。
+            #
+            # 这里不多睡一轮:确认就在本圈内做完,下面那句 ``slumber`` 只
+            # 在"这一圈没拿到、而且还有下一圈"时才走到。
+            if await device.has_control():
+                return CheckResult("control", True, f"SDK 会话在手里(第 {n} 次抢到)")
         except Exception as exc:  # noqa: BLE001 - 任何异常都只是这一项没过
             last = str(exc)
         else:
-            last = "会话被别人握着"
+            # 抢没抢到和会话到没到手是两件事:``acquire_control()`` 不抛异常
+            # 不等于会话就在手里(厂商的实现可以是"排队申请")。这句话要能
+            # 跟上面 ``except`` 那句区分得开,现场翻日志才知道卡在哪一步。
+            last = "抢是抢过了,回头确认会话还不在手里"
         if n < max(1, tries):
             await slumber(wait_s)
     return CheckResult(
