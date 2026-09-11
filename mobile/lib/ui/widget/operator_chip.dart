@@ -26,18 +26,10 @@ import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 
 import '../../net/patrol_client.dart';
+import 'ask_operator.dart';
 
 /// chip 上那个名字前面的小字。**不是「当前用户」**，见文件头。
 const String signHint = '署名';
-
-/// 编辑框上那一句。**不许写成「登录」。**
-const String operatorEditHint = '狗记下这个名字，但不核实。换班就在这儿改一下。';
-
-/// 编辑框的标题。
-const String operatorEditTitle = '现在是谁在开';
-
-/// 名字空着按保存时说的那一句。
-const String operatorEmptyHint = '填一个名字：狗的账上要记下是谁开的。';
 
 /// 常显的署名 chip：显示当前是谁，点一下换人。
 class OperatorChip extends StatelessWidget {
@@ -68,10 +60,13 @@ class OperatorChip extends StatelessWidget {
   static const Key chipKey = ValueKey<String>('operator-chip');
 
   /// 点开之后那个输入框。
-  static const Key editKey = ValueKey<String>('operator-edit');
+  ///
+  /// **跟名册那一屏问名字的框是同一个 Key**（[operatorAskFieldKey]）——
+  /// 因为从这一轮起它们本来就是同一个框（`widget/ask_operator.dart`）。
+  static const Key editKey = operatorAskFieldKey;
 
   /// 编辑框上那个「就是我」。
-  static const Key saveKey = ValueKey<String>('operator-save');
+  static const Key saveKey = operatorAskConfirmKey;
 
   @override
   Widget build(BuildContext context) {
@@ -105,45 +100,14 @@ class OperatorChip extends StatelessWidget {
   }
 
   /// 点一下弹出来的那个框。**一步：点开、改、按「就是我」。**
+  ///
+  /// 框本身是共用的（`widget/ask_operator.dart`）：名册那一屏第一次连狗时
+  /// 问的是同一个框。以前这儿自己写了一份，两份的规范化处理一有一无 ——
+  /// 那正是终审报告必修 5 的根源。
   Future<void> _edit(BuildContext context) async {
-    final TextEditingController ctl = TextEditingController(text: name);
-    final String? asked = await showDialog<String>(
-      context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: const Text(operatorEditTitle),
-        content: TextField(
-          key: editKey,
-          controller: ctl,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: '名字',
-            helperText: operatorEditHint,
-          ),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('算了'),
-          ),
-          TextButton(
-            key: saveKey,
-            onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
-            child: const Text('就是我'),
-          ),
-        ],
-      ),
-    );
-    ctl.dispose();
-    if (asked == null) return;
-    if (asked.isEmpty) {
-      // 空名字在狗的账上是「未具名(ref)」，事后谁也说不清那一趟是谁开的。
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text(operatorEmptyHint)));
-      }
-      return;
-    }
-    if (asked == name) return;
+    final String? asked = await askOperator(context,
+        initial: name, title: operatorEditTitle, confirmLabel: '就是我');
+    if (asked == null || asked == name) return;
     // **先按人输的那个换。** 热点断着的时候人照样要能换班，见 [client]。
     onChanged(asked);
     final PatrolClient? c = client;
@@ -159,6 +123,13 @@ class OperatorChip extends StatelessWidget {
       // **发得出去的时候两边一定一样；发不出去的时候不回滚**（见 [client]），
       // 那一次换班本来就没进审计环，没有可对的账。
       final String canon = await c.setOperator(asked);
+      // **屏没了就到此为止（终审报告建议 7）。** 这一发最长 10 秒；人在这
+      // 期间退出了页面的话，[onChanged] 打到的是一个已经 `dispose()` 的
+      // State，`setState` 抛出来的异常会被下面那个 `catch (e)` 吞成一句
+      // 「换人没告诉成狗」—— 而那句话是假的：请求发出去了，也收到了，
+      // 坏的是这一头。**真正的后果是这个规范名既没上屏也没落盘**，下次
+      // 进来还是原字符串，回到必修 5；而日志把人指向网络。
+      if (!context.mounted) return;
       if (canon.isNotEmpty && canon != asked) onChanged(canon);
     } catch (e) {
       // 异常原文只进日志。屏上写 `$e` 给不出下一步该干什么。**界面上的名字

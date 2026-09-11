@@ -339,10 +339,11 @@ class _TeleopPageState extends State<TeleopPage> with WidgetsBindingObserver {
     // 路上这一拍已经发过而且等过它落地了；这儿接的是别的走法（整个
     // `Navigator` 被换掉、`TeleopPage` 被从树上摘走）。
     //
-    // **这一拍必须排在两个 `cancel()` 前面**，也必须排在
-    // `roster_page` 收连接前面 —— 那一头的时序已经跟着改了（`_ClientHolder`
-    // 在这一屏 `dispose()` 之后才 `close()`）。`dispose()` 里等不了它落地，
-    // 所以它只是兜底，不是停车方式。
+    // **这一拍必须排在两个 `cancel()` 前面。** 至于「连接会不会先被收掉」
+    // 那一半，从建议 11 那一轮起不再是时序问题：连接按狗缓存在
+    // `roster_page._clients` 里，**退屏根本不收它**，这一拍发给的是一个
+    // 照常活着的 `HttpClient`。`dispose()` 里等不了它落地，所以它只是
+    // 兜底，不是停车方式。
     if (!_farewellSent) {
       _farewellSent = true;
       unawaited(_post(_stopBody()));
@@ -707,8 +708,9 @@ class _TeleopPageState extends State<TeleopPage> with WidgetsBindingObserver {
   /// 于是操作员推着杆用返回手势退出遥控屏，狗要靠守死人在「一拍走完 +
   /// 0.6 秒守死」之后才停 —— 最坏接近一秒。**那是兜底，不是停车方式。**
   ///
-  /// `roster_page` 那一头的时序也跟着改了（收连接排到这一屏 `dispose()`
-  /// 之后），两处缺一不可。
+  /// 第二件事从建议 11 那一轮起彻底没了：连接按狗缓存在
+  /// `roster_page._clients` 里，**退屏不再收连接**。所以这条路上现在只剩
+  /// 一件事要保证 —— 那一拍要在路由弹走之前发出去并且等它落地。
   Future<void> _leaveThenPop() async {
     _farewellSent = true;
     // 先停表：接下来这一拍是最后一拍，不该有别的拍跟它抢。

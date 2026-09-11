@@ -363,6 +363,55 @@ void main() {
     await unmount(t, rig);
   });
 
+  testWidgets('狗还没回话人就退出了这一屏:不许再往拆掉的屏上打回调',
+      (WidgetTester t) async {
+    // **终审报告建议 7。** `setOperator` 最长 10 秒（`PatrolClient.timeout`）。
+    // 人在这期间退出了页面的话，`onChanged(canon)` 打到的是一个已经
+    // `dispose()` 的 State，`setState` 抛出来的异常被 `_edit` 外层那个
+    // `catch (e)` 吞掉、记成一句「换人没告诉成狗」—— **那句话是假的**：请求
+    // 发出去了，狗也回了。真正的后果是那个规范名既没上屏也没落盘，下次进来
+    // 还是原字符串（回到必修 5），而日志把查的人指向网络。
+    //
+    // **挂的是一枚裸 chip，不是整屏遥控。** 挂在遥控屏里的话，回调先在
+    // `_TeleopPageState.setState` 上抛一次，加不加这道守卫在外面看起来
+    // 一模一样 —— 那种测试是恒真的。
+    final FakeDog dog = await startDog(t, '老王', echo: '老 王');
+    final PatrolClient c = PatrolClient(dog.baseUrl);
+    await t.runAsync(() => c.unlock('864209', operator: '老王'));
+    dog.received.clear();
+    final Rig rig = Rig(dog, c, null);
+
+    final List<String> told = <String>[];
+    await t.pumpWidget(
+        wrap(OperatorChip(name: '老王', client: c, onChanged: told.add)));
+    await t.pump();
+    await t.tap(find.byKey(OperatorChip.chipKey));
+    await pumpUntil(
+        t,
+        () => find.byKey(OperatorChip.editKey).evaluate().isNotEmpty,
+        '改名字的框出来了');
+    await t.enterText(find.byKey(OperatorChip.editKey), '老  王');
+    await t.tap(find.byKey(OperatorChip.saveKey));
+    await t.pump();
+    // **请求刚起飞，这一屏就没了。** 现场就是这一下：按完「就是我」顺手
+    // 退出去，而热点正好抖一下。
+    await t.pumpWidget(const SizedBox());
+    await t.pump();
+
+    await pumpUntil(t, () => rig.puts.isNotEmpty, '换人那条请求真的到了狗那儿',
+        step: const Duration(milliseconds: 20));
+    // 请求到了不等于回包落了地 —— 再推几轮真时钟，让 `setOperator` 那条
+    // future 走完。不推的话「没打回调」断到的是「还没来得及打」。
+    for (int i = 0; i < 10; i++) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await t.pump(const Duration(milliseconds: 20));
+    }
+    expect(told, <String>['老  王'],
+        reason: '退屏之前那一下照旧；屏没了之后，狗回的那份不许再打回来');
+    await unmount(t, rig);
+  });
+
   // ------------------------------------------------ 落盘
 
   test('名字落盘,重开还在', () async {

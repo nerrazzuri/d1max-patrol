@@ -20,22 +20,7 @@ import '../store/registry_store.dart';
 import 'storage_page.dart';
 import 'teleop_page.dart';
 import 'watch_page.dart';
-
-/// 连狗之前问的那一句。
-///
-/// **狗记下这个名字但不核实**（§6.3）。它不是登录：它是别人来接管控制权时
-/// 屏上显示的那个名字，也是留痕里记的那个名字。所以宁可问一句，也不要拿
-/// 空名字去连 —— 空名字在狗的账上是「未具名(ref)」，事后谁也说不清那一趟
-/// 是谁开的。
-///
-/// **问过一次就落盘**（按狗一格，`RegistryStore.saveOperator`），重开 app
-/// 也不再问。之后换班不走这个框，走屏上那枚常显的 chip：一点就换
-/// （`OperatorChip`，人拍的板 3 的两条补偿）。
-const String operatorAskTitle = '你是谁';
-
-/// 那个输入框底下的解释。**不许写成「登录」。**
-const String operatorAskHint = '记在狗的账上，狗不核实。别人来接管控制权时'
-    '看到的就是这个名字。';
+import 'widget/ask_operator.dart';
 
 /// 名册里那条没存过 PIN 的狗，点进去时说的那一句。
 ///
@@ -70,7 +55,11 @@ class RosterPage extends StatefulWidget {
   static Key watchKeyFor(String sn) => ValueKey<String>('roster-watch-$sn');
 
   /// 问名字那个框。
-  static const Key operatorFieldKey = ValueKey<String>('roster-operator');
+  ///
+  /// **跟换班时点 chip 弹出来的是同一个框**（`widget/ask_operator.dart`），
+  /// 所以也是同一个 Key。以前是两份各自写的框，规范化处理一有一无 ——
+  /// 那正是终审报告必修 5 的根源。
+  static const Key operatorFieldKey = operatorAskFieldKey;
 
   @override
   State<RosterPage> createState() => _RosterPageState();
@@ -80,11 +69,55 @@ class _RosterPageState extends State<RosterPage> {
   RobotRegistry? _registry;
   Object? _loadError;
 
+  /// **一只狗一条连接，也就是一个会话**（终审报告建议 11）。按 SN 存。
+  ///
+  /// 老写法是每进一次屏就 `PatrolClient(r.baseUrl)` + `unlock` 一次。
+  /// `client.close()` 只关本地 socket，**狗那头那个 token 一个都不会少**：
+  /// `TokenStore` 的闲置期在热点通道上是 30 分钟（`AP_TOKEN_IDLE_S`），
+  /// 而 §3.6 的非本机会话名额是个位数。人在名册屏上依次点值守、退出、
+  /// 点盘况、退出、点遥控 —— 一台手机短时间内就把三个名额自己占光了。
+  ///
+  /// **同名换座救不了这件事。** `TokenStore.issue_with_quota` 只在
+  /// `len(pool) >= cap` 那一刻才去找同名的老会话挤掉；名额还没满的时候
+  /// 它照发不误，所以前三次进屏拿到的是三个各自独立的会话。第四个人
+  /// （另一个名字）来的时候 `mine` 是空的 —— 直接 403。现场执行单
+  /// 9.5/9.6/9.7 量的正是这三个名额和「第 4 个人被拒」，手机自己把座位
+  /// 坐满的话，那三条量出来的数是假的。
+  ///
+  /// **复用还顺带把必修 2 那个时序问题连根拔了。** 以前退屏要收连接，
+  /// 于是「收连接」和「遥控屏 `dispose()` 里补的那一拍全零」谁先谁后
+  /// 就成了一件要专门搭个壳子（老的 `_ClientHolder`）去保证的事。现在
+  /// 退屏根本不收连接 —— 那一拍发给的是一个照常活着的 `HttpClient`。
+  ///
+  /// 连接的归属因此上移到这一屏：只有 [dispose]（app 走人）和
+  /// [_dropClient]（这条记录没了/换了一只狗）收它。
+  final Map<String, PatrolClient> _clients = <String, PatrolClient>{};
+
   @override
   void initState() {
     super.initState();
     _load();
   }
+
+  @override
+  void dispose() {
+    // **温和地收，不硬关。** 这一屏被拆的时候，压在上面那一屏（遥控屏）
+    // 可能刚在自己的 `dispose()` 里补了一拍全零（必修 2）；`force: true`
+    // 会把那一拍连同它那条 socket 一起掐掉。已经在路上的那几条都带着
+    // 自己的超时，不会挂着不散。
+    for (final PatrolClient c in _clients.values) {
+      c.close(force: false);
+    }
+    _clients.clear();
+    super.dispose();
+  }
+
+  /// 这只狗的连接不要了：收掉、从缓存里划掉。
+  ///
+  /// **只在这条记录不再指向同一只狗的时候调**（从名册去掉、SN 改了）。
+  /// 别拿它去「刷新一下连接」：`close()` 收的是本地这一头，狗那头那个
+  /// token 照样占着名额，再 `unlock` 一次就是又烧掉一个座位。
+  void _dropClient(String sn) => _clients.remove(sn)?.close(force: false);
 
   Future<void> _load() async {
     try {
@@ -212,25 +245,23 @@ class _RosterPageState extends State<RosterPage> {
 
   /// 进某一只狗的某一屏。**几个入口共用这一条路。**
   ///
-  /// 顺序是：钥匙 → 名字 → 解锁 → 进屏 → 回来收连接。
+  /// 顺序是：钥匙 → 名字 →（这只狗还没有连接的话）解锁 → 进屏。
   ///
   /// **`who` 交给 [page] 是有意的**（裁决十六）：这里已经问过名字了，值守屏
   /// 那个记名确认（§5.3）要的就是同一个名字。让那一屏自己再去问一遍、或者
   /// 去狗身上取，都会得到另一个名字 —— 而狗那侧的 `operator` 是**记下但不
   /// 核实**的（§6.3）。
   ///
-  /// **收连接不能省。** `PatrolClient` 自己造的那个 `HttpClient` 带着一个空闲
-  /// 计时器；不收的话，人每进出一次就多挂一条，而狗那头那个 token 也一直有效。
+  /// **落盘和上屏的都是狗收拾过的那一份（必修 5）。** 这头只 `trim()`；
+  /// 狗那头（`app/identity.py::clean_operator`）还会把中间的连续空白压成
+  /// 一个、把不可打印字符换成空格、超长截断。以前这儿把 `unlock` 回的整个
+  /// [Session] 丢掉了 —— 人输「老  王」（中间两个空格），手机盘上、屏上署名
+  /// chip、`signedAs()` 那一行、值守屏记名确认送出去的 `who` 全是「老  王」，
+  /// 狗的审计环里从 unlock 那一刻起记的却是「老 王」。事后交接班查「这条 P1
+  /// 是谁确认的」，两边字符串对不上，而这正是 §6.3 那套「记下但不核实」唯一
+  /// 还剩下的对账手段。
   ///
-  /// **但收连接的时机以前是错的（必修 2）。** 老写法是 `await push` 回来
-  /// 就地 `client.close()`：`push` 返回的 future 在 `didPop` 那一刻就完成
-  /// （退场动画刚开始），而被推上去那一屏的 `dispose()` 要等动画跑完才跑 ——
-  /// 于是 `close(force: true)` 大概率发生在 `dispose()` **前面**，遥控屏临走
-  /// 那一拍全零发给的是一个已经被强关的 `HttpClient`。退场那 300 毫秒里的
-  /// 发拍/心跳/校准也跟着全部失败，屏上闪一串红字。
-  ///
-  /// 现在交给 [_ClientHolder]：它是那一屏的**祖先**，Flutter 拆树是自底向上
-  /// 的，所以 `TeleopPage.dispose()` 一定排在它的 `dispose()` 前面。
+  /// **退屏不再收连接**（建议 11）：连接按狗留着，见 [_clients]。
   Future<void> _open(Robot r, PageBuilder page) async {
     final String pin = await widget.vault.read(r.sn) ?? '';
     if (!mounted) return;
@@ -238,29 +269,46 @@ class _RosterPageState extends State<RosterPage> {
       _toast('${r.label} $noPinHint');
       return;
     }
-    final String? who = await _operatorFor(r);
-    if (!mounted || who == null) return;
+    final String? asked = await _operatorFor(r);
+    if (!mounted || asked == null) return;
 
-    final PatrolClient client = PatrolClient(r.baseUrl);
-    try {
-      await client.unlock(pin, operator: who);
-    } catch (e) {
-      // 异常原文只进日志：屏上写 `$e` 给不出下一步该干什么，还会把内部
-      // 地址推到客户面前。
-      developer.log('连 ${r.sn} 失败：$e', name: 'roster_page');
-      client.close();
-      if (mounted) _toast('${r.label}：$connectFailedHint');
-      return;
-    }
-    if (!mounted) {
-      client.close();
-      return;
+    final PatrolClient client;
+    final String who;
+    final PatrolClient? kept = _clients[r.sn];
+    if (kept != null) {
+      // 这只狗已经有一个会话了。**不再 `unlock`** —— 那会再烧一个名额。
+      client = kept;
+      who = asked;
+    } else {
+      final PatrolClient made = PatrolClient(r.baseUrl);
+      final Session session;
+      try {
+        session = await made.unlock(pin, operator: asked);
+      } catch (e) {
+        // 异常原文只进日志：屏上写 `$e` 给不出下一步该干什么，还会把内部
+        // 地址推到客户面前。
+        developer.log('连 ${r.sn} 失败：$e', name: 'roster_page');
+        made.close();
+        if (mounted) _toast('${r.label}：$connectFailedHint');
+        return;
+      }
+      // **狗回的那个才是账上那个，以它为准**（必修 5）。狗没回名字
+      // （老版本的狗、或者被强制门户截了）就还用人输的那份 —— 有一份
+      // 能对的账，好过一份都没有。
+      who = session.operator.isNotEmpty ? session.operator : asked;
+      // **落盘排在解锁之后，不是之前。** 排在之前的话盘上留的是原字符串，
+      // 而且每只狗一辈子只问这一次 —— 那份没规范化的名字会一直用下去。
+      await _rememberFor(r, who);
+      if (!mounted) {
+        made.close();
+        return;
+      }
+      _clients[r.sn] = made;
+      client = made;
     }
     await Navigator.of(context).push<void>(MaterialPageRoute<void>(
-        builder: (_) => _ClientHolder(
-            client: client,
-            child: page(client, who,
-                (String name) => unawaited(_rememberFor(r, name))))));
+        builder: (_) =>
+            page(client, who, (String name) => unawaited(_rememberFor(r, name)))));
   }
 
   /// 这只狗这次报什么名字。**落盘的那个直接用，不再问**（人拍的板 3）。
@@ -269,46 +317,17 @@ class _RosterPageState extends State<RosterPage> {
   /// 屏上那枚常显的 chip 一步改（`OperatorChip`）。这两件事是同一块板的两半：
   /// 记住是为了不烦人，一步切换是为了「不烦人」不至于变成「没人改」。
   ///
+  /// **框本身是共用的那一个**（`widget/ask_operator.dart`）：chip 点开的
+  /// 是同一个。空名字那道守卫和那句提示也在里面，这儿不再抄一遍。
+  ///
   /// 返回 `null` 表示人放弃了（按了「算了」，或者名字是空的）—— 那就不连。
+  /// **回来的这个名字还没经狗规范化**，规范化在 [_open] 里接 `unlock` 的
+  /// 回话（必修 5）。
   Future<String?> _operatorFor(Robot r) async {
     final String kept = await _readKept(r);
     if (!mounted) return null;
     if (kept.isNotEmpty) return kept;
-    final TextEditingController ctl = TextEditingController();
-    final String? asked = await showDialog<String>(
-      context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: const Text(operatorAskTitle),
-        content: TextField(
-          key: RosterPage.operatorFieldKey,
-          controller: ctl,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: '名字',
-            helperText: operatorAskHint,
-          ),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('算了'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
-            child: const Text('连上'),
-          ),
-        ],
-      ),
-    );
-    ctl.dispose();
-    if (asked == null) return null;
-    if (asked.isEmpty) {
-      // 空名字在狗的账上是「未具名(ref)」，事后谁也说不清那一趟是谁开的。
-      if (mounted) _toast('填一个名字：狗的账上要记下是谁开的。');
-      return null;
-    }
-    await _rememberFor(r, asked);
-    return asked;
+    return askOperator(context, confirmLabel: '连上');
   }
 
   /// 盘上记着的那个名字。**读不动就当没记过** —— 再问一句而已，把人挡在
@@ -368,6 +387,8 @@ class _RosterPageState extends State<RosterPage> {
       // SN 改了等于换了一只狗。旧条目和旧钥匙都得跟着走，不能留下孤儿。
       reg.remove(r.sn);
       await widget.vault.forget(r.sn);
+      // 那条连接是拿旧 SN 的 PIN 换来的，跟新条目不是一回事。
+      _dropClient(r.sn);
     }
     reg.upsert(draft.robot);
     if (draft.pin.isEmpty) {
@@ -399,8 +420,9 @@ class _RosterPageState extends State<RosterPage> {
     );
     if (yes != true) return;
     _registry!.remove(r.sn);
-    // 条目没了钥匙还留着，是一份谁也管不到的残留。
+    // 条目没了钥匙还留着，是一份谁也管不到的残留。连接也一样。
     await widget.vault.forget(r.sn);
+    _dropClient(r.sn);
     await _persist();
     if (mounted) setState(() {});
   }
@@ -561,48 +583,4 @@ class _Notice extends StatelessWidget {
       ),
     );
   }
-}
-
-/// 替被推上去的那一屏拿着 `PatrolClient`，**在它之后**收掉（必修 2）。
-///
-/// 这个壳子存在的全部理由是时序。老写法是 `_RosterPageState._open` 里
-/// `await push` 回来就地 `client.close()`，而那一刻被推上去那一屏还没
-/// `dispose()`（退场动画才刚开始）—— 遥控屏临走那一拍全零于是发给了一个
-/// 已经 `close(force: true)` 过的 `HttpClient`，一个字节都出不去。
-///
-/// 换成祖先之后，拆树的顺序（自底向上）就替我们把这件事定死了：
-/// `TeleopPage.dispose()` → 这个壳子的 `dispose()` → `client.close()`。
-/// **这条保证是 Flutter 的框架行为，不是一个凑出来的延时**，所以它不会在
-/// 动画时长改了、机器慢了的那天悄悄失效。
-///
-/// 它顺带把另一个洞堵上了：老写法里 `await push` 要是根本不返回
-/// （`RosterPage` 自己被销毁），那个 `client` 就漏在那儿了；壳子跟着路由走，
-/// 路由没了它一定 `dispose()`。
-///
-/// **一个更干净的做法是把 `PatrolClient` 按狗缓存复用**（终审报告的建议
-/// 11，顺带解决「每进一次屏就 `unlock` 一次、会话席位几下就占满」）。那件事
-/// 改的是连接的归属和生命周期，横跨遥控/值守/盘况三屏，本轮留给第 9 卷。
-class _ClientHolder extends StatefulWidget {
-  const _ClientHolder({required this.client, required this.child});
-
-  final PatrolClient client;
-  final Widget child;
-
-  @override
-  State<_ClientHolder> createState() => _ClientHolderState();
-}
-
-class _ClientHolderState extends State<_ClientHolder> {
-  @override
-  void dispose() {
-    // **温和地收，不硬关。** 遥控屏刚刚在它自己的 `dispose()` 里补了一拍
-    // 全零（必修 2），硬关会把那一拍连同它那条 socket 一起掐掉 —— 排对了
-    // 顺序却仍然发不出去，等于白排。已经在路上的那几条都带着自己的超时
-    // （周期路径 3 秒，超时之后连接是真的被掐掉的），不会挂着不散。
-    widget.client.close(force: false);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
 }

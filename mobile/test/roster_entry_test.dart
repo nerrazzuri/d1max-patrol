@@ -24,6 +24,8 @@ import 'package:d1max_patrol/store/registry_store.dart';
 import 'package:d1max_patrol/ui/roster_page.dart';
 import 'package:d1max_patrol/ui/storage_page.dart';
 import 'package:d1max_patrol/ui/teleop_page.dart';
+import 'package:d1max_patrol/ui/watch_page.dart';
+import 'package:d1max_patrol/ui/widget/operator_chip.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -104,13 +106,18 @@ class Rig {
           .body as Map<String, dynamic>)['operator'] as String;
 }
 
-Future<Rig> mount(WidgetTester t, {String pin = '864209'}) async {
+/// [canon] 是**狗收拾完之后回出来的那个名字**（`POST /api/auth` 的
+/// `operator` 字段）。狗那头 `app/identity.py::clean_operator` 会把中间的
+/// 连续空白压成一个、把不可打印字符换成空格、超长截断 —— 手机这头只
+/// `trim()`。不给就还是「张三」，跟人填的一样，那条路走不到（必修 5）。
+Future<Rig> mount(WidgetTester t,
+    {String pin = '864209', String canon = '张三'}) async {
   final FakeDog dog = FakeDog();
   await t.runAsync(dog.start);
   dog.replies['/api/auth/challenge'] = <String, dynamic>{'nonce': 'n0nce'};
   dog.replies['/api/auth'] = <String, dynamic>{
     'token': 'tok-abc',
-    'operator': '张三',
+    'operator': canon,
     'operator_verified': false,
     'readonly': false,
   };
@@ -270,10 +277,87 @@ void main() {
     await pumpUntil(t, () => find.byType(TeleopPage).evaluate().isNotEmpty,
         '第二次不问名字,直接进遥控屏', step: _step);
     expect(find.byKey(RosterPage.operatorFieldKey), findsNothing);
-    expect(rig.unlocks, 2, reason: '第二次是一次新的解锁，不是复用上一条连接');
+    // **这一条以前断的是 `2`**（「第二次是一次新的解锁」）——那正是终审报告
+    // 建议 11 指的那件事：每进一次屏就烧一个会话名额。判断反过来了，断言
+    // 跟着反过来，理由见下面那条「同一条狗只开一个会话」。
+    expect(rig.unlocks, 1, reason: '第二次进屏复用上一条连接，不再烧一个会话名额');
     expect(rig.reportedOperator, '张三');
 
     await goBack(t, TeleopPage, rig);
+    await unmount(t, rig);
+  });
+
+  testWidgets('第一次连狗:屏上和盘上留的都是狗收拾过的那个名字', (WidgetTester t) async {
+    // **必修 5。** 两侧的清洗规则本来就不一样：手机这头只 `trim()`，狗那头
+    // （`app/identity.py::clean_operator`）还会把中间的连续空白压成一个、把
+    // 不可打印字符换成空格、超长截断。
+    //
+    // 不认狗那份的话：手机盘上、遥控屏那枚常显 chip、值守屏 `signedAs()`
+    // 那一行、记名确认送出去的 `who` 全是「老  王」，而狗的审计环里从 unlock
+    // 那一刻起记的是「老 王」。事后交接班查「这条 P1 是谁确认的、那趟遥控是
+    // 谁开的」，两边字符串对不上 —— 而这正是 §6.3 那套「记下但不核实」唯一
+    // 还剩下的对账手段。
+    //
+    // **盘上那一份尤其要紧**：每只狗一辈子只问这一次，落进去的要是原字符串，
+    // 它会一直用下去，往后每一次 unlock 报上去的都是它。
+    final Rig rig = await mount(t, canon: '老 王');
+    await enter(t, RosterPage.teleopKeyFor('C40221'), who: '老  王');
+    await pumpUntil(t, () => find.byType(TeleopPage).evaluate().isNotEmpty,
+        '进到遥控屏', step: _step);
+
+    expect(rig.reportedOperator, '老  王', reason: '发上去的是人输的原样');
+    await pumpUntil(
+        t,
+        () => find
+            .descendant(
+                of: find.byKey(OperatorChip.chipKey), matching: find.text('老 王'))
+            .evaluate()
+            .isNotEmpty,
+        '屏上那枚常显 chip 挂的是狗收拾过的那一份',
+        step: _step);
+    expect(find.text('老  王'), findsNothing,
+        reason: '屏上不许留着一份跟狗的审计环对不上的名字');
+    expect(await rig.store.readOperator(dog: 'C40221'), '老 王',
+        reason: '盘上留的也得是账上那一份 —— 每只狗一辈子只问这一次，这份会一直用下去');
+
+    await goBack(t, TeleopPage, rig);
+    await unmount(t, rig);
+  });
+
+  testWidgets('同一条狗只开一个会话:进出三屏也只解锁一次', (WidgetTester t) async {
+    // **建议 11。** `client.close()` 只关本地那一头的 socket，狗那头那个
+    // token 一个都不会少 —— 热点通道上闲置期是 30 分钟
+    // （`auth.AP_TOKEN_IDLE_S`），而 §3.6 的非本机会话名额是个位数。
+    //
+    // **同名换座救不了这件事**：`TokenStore.issue_with_quota` 只在
+    // `len(pool) >= cap` 那一刻才去找同名的老会话挤掉，名额没满之前照发
+    // 不误。所以老写法下，一台手机依次点盘况、退出、点遥控、退出、点值守，
+    // 三个名额全被它自己占了；第 4 个人（另一个名字）来的时候 `mine` 是空
+    // 的，当场 403 —— 而现场执行单 9.5/9.6/9.7 量的正是「三个远端名额」和
+    // 「第 4 个人被拒」，那三条会因此量出假象。
+    final Rig rig = await mount(t);
+
+    await enter(t, RosterPage.storageKeyFor('C40221'));
+    await pumpUntil(t, () => find.byType(StoragePage).evaluate().isNotEmpty,
+        '进到盘况屏', step: _step);
+    await goBack(t, StoragePage);
+
+    await t.tap(find.byKey(RosterPage.teleopKeyFor('C40221')));
+    await pumpUntil(t, () => find.byType(TeleopPage).evaluate().isNotEmpty,
+        '进到遥控屏', step: _step);
+    await goBack(t, TeleopPage, rig);
+
+    await t.tap(find.byKey(RosterPage.watchKeyFor('C40221')));
+    await pumpUntil(t, () => find.byType(WatchPage).evaluate().isNotEmpty,
+        '进到值守屏', step: _step);
+    await goBack(t, WatchPage);
+
+    // 自洽：三屏是真的一个个进过的，否则下面那条断言断的是一件没发生过的事。
+    expect(rig.dog.received.any((FakeCall c) => c.path == '/api/storage'), isTrue,
+        reason: '盘况屏真的问过狗');
+    expect(rig.dog.received.any((FakeCall c) => c.path == '/api/teleop'), isTrue,
+        reason: '遥控屏真的发过拍');
+    expect(rig.unlocks, 1, reason: '进出三屏只许烧一个会话名额');
     await unmount(t, rig);
   });
 
