@@ -8,8 +8,9 @@
 **缺的事实一律 ``None``,不用 ``0``、不用 ``-1``、不用空串。** ``0`` 是
 「查过了,没有」,``None`` 是「这一档还没有这个能力 / 这一拍不知道」——
 两句话在屏幕上长得一样,在现场差着一次事故。``upload_backlog`` 是这条纪律
-最锋利的一处:回传队列是第 9 卷的东西,这台狗上还没有这个事实,报 ``0``
-等于告诉人「证据都传上去了」,而它们全在狗上堆着。
+最锋利的一处,而且它有**三**种状态:没接回传的那台狗上根本没有这个事实
+(``None``),接了回传又查过了才是 ``0``。没接回传却报 ``0``,等于告诉人
+「证据都传上去了」,而它们全在狗上堆着。
 
 配套的 ``detail`` 是这条纪律的另一半:一个光秃秃的 ``null`` 摆在屏上,人分
 不清是「没查」还是「查了没事」—— 那本身就是一次新的静默失败。所以每一项报
@@ -66,6 +67,7 @@ from d1max_patrol.engine.schedule import clock_skew
 
 if TYPE_CHECKING:                       # pragma: no cover - 只为标注,不进运行期
     from d1max_patrol.app.server import AppContext
+    from d1max_patrol.app.upload_pump import UploadStats
 
 log = logging.getLogger(__name__)
 
@@ -87,14 +89,19 @@ def watch_summary(ctx: AppContext, *, now_ms: int,
                   battery_pct: float | None = None,
                   battery_as_of_ms: int | None = None,
                   targets: Sequence[TargetStatus] | None = None,
+                  upload: UploadStats | None = None,
                   ) -> dict[str, Any]:
     """§5.1 那六项,一次答齐。**只汇总,不判级,不改任何东西。**
 
     ``now_ms`` 由调用方读一次传进来(``ctx.clock()``),这儿不读钟:一次请求
     里钟偏和归档年龄用两个不同瞬间的读数,是一处可以省掉的糊涂账。
 
-    ``disk`` / ``battery_pct`` / ``battery_as_of_ms`` / ``targets`` 是几处注入
-    口,留空就是「不知道」。为什么要注入见模块 docstring。
+    ``disk`` / ``battery_pct`` / ``battery_as_of_ms`` / ``targets`` / ``upload``
+    是几处注入口,留空就是「不知道」。为什么要注入见模块 docstring。
+
+    ``upload`` 那一口尤其不许自己去取:这一层够不着 ``UploadPump``(它住在
+    ``app/server.py`` 的上下文里),而且**留空的含义是承重的** —— 没接回传
+    的那台狗上,这一档就该是 ``None``。
     """
     lag, lag_why = _包落差(ctx.bundles_root)
     skew, skew_why = _钟偏(ctx, now_ms)
@@ -107,9 +114,14 @@ def watch_summary(ctx: AppContext, *, now_ms: int,
         # 单位:**秒**,正数 = 本地钟走快了。
         # 不显示的话:狗一脸认真地在错误的时间巡逻(§3.3)。
         "clock_skew_s": skew,
-        # 单位:条数(这一卷恒为 ``None``,见 ``NO_UPLOADER``)。
+        # 单位:条数。**三种状态各说各的话,一个都不许合并**:
+        # None = 这台狗没装回传(单机档,客户没买服务器);
+        # 0    = 装了,查过了,真的没有积压;
+        # N    = 装了,堆着 N 个文件传不出去。
+        # 把 None 和 0 合并的后果早就写死了一条测试盯着:0 会让人以为证据都
+        # 传上去了,而它们全在狗上堆着。
         # 不显示的话:证据在狗上堆着,没人知道(§4.3)。
-        "upload_backlog": None,
+        "upload_backlog": None if upload is None else upload.backlog,
         # 单位:**已用比例 0-1**,不是 0-100 —— 0.83 的意思是这块盘 83% 满。
         # 名字里的 ``ratio`` 就是这个量纲(挂账 77:它以前叫 ``disk_pct``,
         # 名字里写着 pct 值却是比例,那时候只能靠这段注释兜)。
@@ -139,7 +151,11 @@ def watch_summary(ctx: AppContext, *, now_ms: int,
         # 你需要它(§7.6)。
         "mirror": mirror,
     }
-    why = {"upload_backlog": NO_UPLOADER}
+    why: dict[str, str] = {}
+    if upload is None:
+        # **接了回传就别再印这句。** 它会把一个正在堆积的队列说成「没有这个
+        # 能力」,看的人于是不去查它 —— 而那正是要人去查的时候。
+        why["upload_backlog"] = NO_UPLOADER
     if battery_pct is None:
         why["battery_pct"] = NO_BATTERY
     for 名, 说 in (("bundle_lag", lag_why), ("clock_skew_s", skew_why),

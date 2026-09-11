@@ -697,3 +697,38 @@ def test_这条路由是只读的(值守服务):
     code, body, _ = C.request(s, WATCH, method="PUT", payload={})
     assert code == 405, body
     assert json.loads(body)["error"]
+
+
+# ------------------------------------------------- 接上回传之后那一格怎么说
+
+
+def test_接了回传之后积压是个数_不再是None(装好的ctx):
+    """三种状态各说各的话:None=没装,0=查过没积压,N=堆着 N 个。"""
+    from d1max_patrol.app.upload_pump import UploadStats
+
+    got = watch_summary(装好的ctx(), now_ms=NOW_MS, upload=UploadStats(backlog=7))
+    assert got["upload_backlog"] == 7
+    # 装了回传就别再印「这台狗还没装回传功能」—— 那句话会把一个正在堆积的
+    # 队列说成「没有这个能力」,看的人于是不去查它。
+    assert "upload_backlog" not in got["detail"]
+
+
+def test_接了回传且没积压_是0不是None(装好的ctx):
+    """**这一条跟上面那条不许合并。**
+
+    ``0`` 是「接着服务器,查过了,没有积压」;``None`` 是「这台狗根本没有这个
+    能力」。合成一个之后,单机档那台狗会在屏上报 0 —— 也就是告诉值班的人
+    「证据都传上去了」,而它们全在狗上堆着。
+    """
+    from d1max_patrol.app.upload_pump import UploadStats
+
+    got = watch_summary(装好的ctx(), now_ms=NOW_MS, upload=UploadStats(backlog=0))
+    assert got["upload_backlog"] == 0
+    assert "upload_backlog" not in got["detail"]
+
+
+def test_没接回传的时候那句话还在(装好的ctx):
+    """上面两条改的只是这句话**什么时候**出现,不是让它消失。"""
+    got = watch_summary(装好的ctx(), now_ms=NOW_MS)
+    assert got["upload_backlog"] is None
+    assert "不是「没有积压」" in got["detail"]["upload_backlog"]

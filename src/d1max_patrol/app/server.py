@@ -82,8 +82,9 @@ from d1max_patrol.app.mapping import (
 )
 from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.teleop import MODES, PROFILES, REMOTE_CONFIRM, Teleop, TeleopBusy
+from d1max_patrol.app.upload_pump import UploadPump
 from d1max_patrol.app.video import CAMERAS, CameraFeed, RtspStill, VideoError
-from d1max_patrol.app.watch import watch_summary
+from d1max_patrol.app.watch import NO_UPLOADER, watch_summary
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
@@ -147,6 +148,7 @@ from d1max_patrol.engine.export import (
 )
 from d1max_patrol.engine.form import STANDALONE, Form
 from d1max_patrol.engine.homing import HomeError, HomePoint, load_home, save_home
+from d1max_patrol.engine.http_sink import HttpSink
 from d1max_patrol.engine.lease import (
     AUDIT_MAX,
     AuditRecord,
@@ -192,6 +194,7 @@ from d1max_patrol.engine.retention import (
     apply_sweep,
     bytes_to_free,
     forecast,
+    mark_uploaded,
     plan_sweep,
     read_notice,
     scan_runs,
@@ -213,6 +216,8 @@ from d1max_patrol.engine.selfcheck import (
     restart_plan,
     run_postcheck,
 )
+from d1max_patrol.engine.upload_queue import UploadQueue
+from d1max_patrol.engine.uploader import Uploader
 from d1max_patrol.inspect.judge import (
     judge_run,
     read_findings,
@@ -238,6 +243,20 @@ _LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 #: 从环境变量里读 PIN。命令行上的 --pin 在 ``ps`` 里是明文可见的,同一台机器
 #: 上的别的账号能直接看到;板载常驻的时候用环境变量更合适。
 PIN_ENV = "D1MAX_PIN"
+
+#: 回传服务器地址从哪儿来。**不给就是单机档** —— 证据全留在本机,靠 U 盘导出。
+#: 这个名字只是个环境变量名,**具体地址一个字都不许写进代码或交付件**:
+#: 每个客户的服务器都不一样,写死一个进去,下一家装机就带着上一家的地址上线。
+CONSOLE_URL_ENV = "D1MAX_CONSOLE_URL"
+
+#: 回传用的 token。跟 PIN 同一个道理走环境变量:命令行上的东西在 ``ps`` 里是
+#: 明文。**它没有对应的命令行开关,这是故意的。**
+CONSOLE_TOKEN_ENV = "D1MAX_CONSOLE_TOKEN"
+
+#: 回传队列落在哪(相对 ``runs_root`` 的**兄弟**位置)。
+#: **不许放进 ``runs/`` 里面** —— 放里面的话 ``retention`` 清盘那一趟会把队列
+#: 本身当成一趟归档算进水位,更糟的是某天真删到它头上。
+QUEUE_FILE_NAME = "queue.jsonl"
 
 #: 请求体上限。这些接口收的都是任务 JSON,几十 KB 顶天了。
 MAX_BODY = 4 * 1024 * 1024
@@ -721,6 +740,12 @@ class AppContext:
     #: 路由,问的必须是同一本簿子。各造各的,页面上确认掉的那条在别处还开
     #: 着,升级照样往下走,而现场看到的是"我明明点过确认了,它还在响"。
     alerts: AlertBook = field(default_factory=AlertBook)
+    #: 回传那条后台线程。``None`` = **这台狗没装回传**(单机档,客户没买
+    #: 服务器),不是「装了但是空着」—— 值守屏上那一格的 ``None`` 和 ``0``
+    #: 差的就是这件事。装不装由 :func:`build_pump` 的调用方按有没有回传地址
+    #: 决定;**测试夹具默认不装**,所以现有那一堆 app 测试看到的照旧是
+    #: ``null``。
+    upload: UploadPump | None = None
 
     @property
     def form(self) -> Form:
@@ -757,6 +782,60 @@ class AppContext:
     def exports(self) -> Path:
         """导出包放哪。理由同 :attr:`baselines`。"""
         return Path(self.runs_root).parent / EXPORTS_DIR_NAME
+
+
+def _run_rel(key: str) -> str:
+    """从队列的 key 里切出那一趟的目录(相对 ``runs_root``)。
+
+    **key 的前两段就是一趟,后面全是 rel,而 rel 是会带斜杠的。**
+    形状由 ``engine/uploader.py`` 的 ``scan()`` 定死:``<任务>/<时刻>/<rel>``,
+    照片那一支的 rel 是 ``photos/<名字>.jpg``(``engine/archive.py`` 就写在
+    那儿,``engine/upload_queue.py`` 也正是靠这个前缀认照片的优先级)。
+
+    **所以不许用 ``rsplit("/", 1)[0]``。** 那个写法在 ``events.jsonl`` 上碰巧
+    对,在照片上给出的是 ``<任务>/<时刻>/photos`` —— 而
+    :func:`~d1max_patrol.engine.retention.mark_uploaded` 不做任何校验,拿到
+    这么一个路径也照样 ``touch`` 成功。两个后果都不出声:那一趟永远进不了
+    「可删」(``scan_runs`` 查的是 ``<run>/`` 底下那个标记),水位线于是扫不到
+    东西可删,**真机上盘会满**;而「这一趟还剩几个没传完」的判据用的是同一个
+    前缀,只看 photos 的话 ``events.jsonl`` 还在排队就会**提前**打上标记。
+    """
+    return "/".join(key.split("/")[:2])
+
+
+def _run_finished(runs_root: Path, queue: UploadQueue, key: str) -> None:
+    """一趟的文件**全**传完了才打「可删」—— 而且只打标,**不删**(spec §4.4)。
+
+    真删由水位线驱动(``engine/retention.py`` 那一套),不由上传驱动:一份
+    传上去了的证据该留多久是保留期的事,跟"它传没传上去"是两个判据。
+
+    判据是"这个 run 前缀底下还有没有没 ``done`` 的条目",不是"这个文件传完
+    了"。单个文件一传完就打标的话,一趟里先传完的那张照片会把整趟判成可删,
+    而 ``events.jsonl`` 还在队里排着。
+    """
+    run_rel = _run_rel(key)
+    剩 = [i for i in queue.all()
+          if i.key.startswith(f"{run_rel}/") and not i.done]
+    if 剩:
+        return
+    mark_uploaded(Path(runs_root) / run_rel)
+
+
+def build_pump(ctx: AppContext, console_url: str, *, token: str = "") -> UploadPump:
+    """**只有这一处知道怎么把那四个零件接起来。**
+
+    队列落在 ``runs_root`` 的**兄弟位置**(见 :data:`QUEUE_FILE_NAME`)。
+
+    ``on_done`` 那一口是分层的关节:``app/upload_pump.py`` 喊一声"这个文件
+    对上了",打「可删」这件事在这儿做 —— ``engine/`` 一行都不用知道
+    ``retention`` 的存在。
+    """
+    queue = UploadQueue(Path(ctx.runs_root).parent / QUEUE_FILE_NAME)
+    sink = HttpSink(console_url, token=token)
+    up = Uploader(ctx.runs_root, queue, sink, sn=ctx.identity.sn)
+    return UploadPump(
+        up, clock=ctx.clock,
+        on_done=partial(_run_finished, Path(ctx.runs_root), queue))
 
 
 async def _preflight_with_scan(ctx: AppContext, mission: Mission,
@@ -1530,6 +1609,10 @@ class AppServer:
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, name="d1max-http", daemon=True)
         self._thread.start()
+        # **先 HTTP 后 pump。** 反过来的话,起 HTTP 这一步要是炸了(端口被占),
+        # 已经起来的上传线程没人收 —— 它会一直往 queue.jsonl 里写到进程结束。
+        if self._ctx.upload is not None:
+            self._ctx.upload.start()
         # **不能早于这儿**:自检第一项"进程起来了"的可观测定义就是端口在听。
         # 放到 serve_forever 那个线程起来之前,第一项就永远是假失败,于是
         # 每一次升级都会回滚。
@@ -1552,6 +1635,12 @@ class AppServer:
         httpd, self._httpd = self._httpd, None
         if httpd is None:
             return
+        if self._ctx.upload is not None:
+            # **先停它,再停 HTTP。** 它在往 queue.jsonl 里写,而那份文件下次
+            # 开机要重放。反过来的话,HTTP 已经不收请求了而 pump 还在写队列,
+            # 关服务的最后一秒钟就是一段没人看得见的时间;那会儿被掐断写出来
+            # 的半行,重放那一头兜得住,但兜得住不等于该发生。
+            self._ctx.upload.stop(timeout_s=5.0)
         if self._ctx.bridge.running:
             with contextlib.suppress(Exception):
                 self._ctx.bridge.call(self._autosync_stop)
@@ -1686,6 +1775,7 @@ class AppServer:
         self.route("POST", "/api/bundle/rollback", self._bundle_rollback)
         self.route("GET", "/api/schedule", self._schedule)
         self.route("GET", "/api/watch/summary", self._watch_summary)
+        self.route("GET", "/api/upload", self._upload_get)
         self.route("GET", "/api/alerts", self._alerts_open)
         self.route("GET", "/api/alerts/all", self._alerts_all)
         # ``<key*>`` 跨斜杠(见 ``_compile``)。两条都以 ``/ack``、
@@ -3678,7 +3768,34 @@ class AppServer:
             ctx, now_ms=ctx.clock(),
             disk=lambda: _disk(ctx.runs_root),
             battery_pct=battery_pct, battery_as_of_ms=battery_as_of_ms,
-            targets=targets))
+            targets=targets,
+            # 没装回传就是 ``None``,不是 ``UploadStats()`` —— 后者的
+            # ``backlog`` 是 0,而 0 在这一格上的意思是「查过了没积压」。
+            upload=ctx.upload.stats() if ctx.upload is not None else None))
+
+    # ------------------------------------------------------------ 回传
+
+    def _upload_get(self, _req: Request) -> Response:
+        """回传这一档现在什么样。**只读 —— 这条路由按不动任何东西。**
+
+        没装回传的时候 ``backlog`` 是 ``None`` 不是 ``0``,口径跟
+        ``/api/watch/summary`` 上那一格完全一致(见 ``watch.NO_UPLOADER``)。
+
+        **它不进 ``OPEN_PATHS``,要 token。** 积压条数会泄露这台狗最近跑了
+        多少趟、传没传出去 —— 跟值守屏同一个口径。**也不进 ``CONTROLLED``**:
+        它不改狗,进了那张表就等于别人握着控制权的时候值守的人连看都看不了。
+        """
+        pump = self._ctx.upload
+        if pump is None:
+            return json_response({
+                "enabled": False, "backlog": None, "last_step": "",
+                "last_ok_ms": 0, "last_error": "", "sent_files": 0,
+                "detail": NO_UPLOADER})
+        st = pump.stats()
+        return json_response({
+            "enabled": True, "backlog": st.backlog,
+            "last_step": st.last_step, "last_ok_ms": st.last_ok_ms,
+            "last_error": st.last_error, "sent_files": st.sent_files})
 
     # ------------------------------------------------------------ 告警
 
@@ -4109,6 +4226,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--missions-dir", default="missions")
     p.add_argument("--runs-root", default="runs")
     p.add_argument("--log-dir", help="子进程日志目录(默认 <runs-root>/logs)")
+    p.add_argument("--console-url", default=os.environ.get(CONSOLE_URL_ENV),
+                   help=f"回传服务器地址(也可以用环境变量 {CONSOLE_URL_ENV})。"
+                        f"不给就是单机档:证据全留在本机,靠 U 盘导出。"
+                        f"token 只走环境变量 {CONSOLE_TOKEN_ENV} —— 命令行上的"
+                        f"东西在 ps 里是明文的")
     return p
 
 
@@ -4242,6 +4364,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                      maps=maps, procs=procs, teleop=teleop, mapping=mapping,
                      missions_dir=Path(args.missions_dir), runs_root=runs_root,
                      video=video, identity=who)
+    # **装不装回传就看这一处。** 没配地址 => ``ctx.upload`` 留 ``None`` =>
+    # 一条上传线程都不起,值守屏上那一格是「没装回传」而不是 0。
+    if args.console_url:
+        ctx.upload = build_pump(ctx, args.console_url,
+                                token=os.environ.get(CONSOLE_TOKEN_ENV, ""))
+    else:
+        log.info("没配回传地址,这台狗按单机档跑 —— 证据全留在本机,"
+                 "靠 U 盘导出(见《值守与告警》)。配 %s 就会开始回传。",
+                 CONSOLE_URL_ENV)
     server = AppServer(ctx, host=args.host, port=args.port, pin=args.pin)
     # postcheck=False:重启后自检要等三个后端都连上(或者连不上也试过了)才
     # 跑——不然 control/bridges 两项问的正是这三个后端,后端还没连的时候问
@@ -4281,4 +4412,5 @@ if __name__ == "__main__":      # pragma: no cover - 入口
 
 
 __all__ = ["AppContext", "AppServer", "ByteStream", "HttpError", "Request",
-           "Response", "Stream", "json_response", "main", "shutdown"]
+           "Response", "Stream", "build_pump", "json_response", "main",
+           "shutdown"]

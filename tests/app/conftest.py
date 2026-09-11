@@ -25,7 +25,7 @@ from d1max_patrol.app.bridge import LoopBridge
 from d1max_patrol.app.identity import resolve
 from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
 from d1max_patrol.app.procs import ProcManager
-from d1max_patrol.app.server import AppContext, AppServer
+from d1max_patrol.app.server import AppContext, AppServer, build_pump
 from d1max_patrol.app.teleop import Teleop
 from d1max_patrol.backends.base import (
     EventEmitter,
@@ -195,7 +195,7 @@ async def _make_teleop(device, engine) -> Teleop:
 def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
              removable=None, release_root=None, payload_file=None,
              bundles_root=None, clock=None, time_reference=None,
-             engine_clock=None) -> AppContext:
+             engine_clock=None, console_url=None) -> AppContext:
     """拼一份上下文。``nav`` / ``device`` / ``removable`` 留空就是默认的假件。
 
     ``identity`` 显式传 ``resolve(...)``:``AppContext.identity`` 的默认工厂
@@ -205,6 +205,11 @@ def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
     ``clock`` 和 ``engine_clock`` 是**两口不同的钟,别混**:前者是 app 那口
     墙钟(``ctx.clock``,毫秒,给告警盖时刻、给租约判 TTL),后者是引擎那口
     单调钟(秒,见 :func:`_make_engine`)。两个都留空就全走各自的缺省。
+
+    ``console_url`` 留空(默认)就是**单机档**:``ctx.upload is None``,一条
+    上传线程都不起,值守屏上那一格照旧是 ``null``。**这个默认是承重的** ——
+    全仓那一大堆 app 测试(含 ``test_wire_fixtures`` 里
+    ``assert 份["upload_backlog"] is None`` 那条)都靠它一个字不用改。
     """
     nav = nav if nav is not None else FakeNav()
     device = device if device is not None else FakeDevice()
@@ -221,7 +226,7 @@ def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
     # 起飞门槛真正读的是盘上那份(见 app/server.py 的 _mission_run):每次起飞
     # 都会用它把引擎里的原点换一遍,构造时给的那份不写盘的话会被换成 None。
     save_home(mapping.maps_dir, _HOME)
-    return AppContext(
+    c = AppContext(
         bridge=bridge, engine=engine, nav=nav, device=device,
         maps=FakeMaps(), procs=procs, teleop=teleop, mapping=mapping,
         missions_dir=tmp_path / "missions", runs_root=tmp_path / "runs",
@@ -237,6 +242,9 @@ def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
            if time_reference is not None else {}),
         identity=resolve(sn="D1M-TEST", files=(), net_root=tmp_path / "无",
                          payload_file=payload_file, host="test"))
+    if console_url is not None:
+        c.upload = build_pump(c, console_url)
+    return c
 
 
 @pytest.fixture

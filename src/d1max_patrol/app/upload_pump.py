@@ -62,6 +62,7 @@ class UploadPump:
         *,
         clock: Callable[[], int],
         sleep: Callable[[float], None] | None = None,
+        on_done: Callable[[str], None] | None = None,
     ) -> None:
         self._up = uploader
         self._clock = clock
@@ -76,6 +77,16 @@ class UploadPump:
         self._next_scan_ms = 0
         # 注入的 sleep 只给测试用;真跑的时候走 Event.wait,那个打得断。
         self._sleep = sleep
+        # 一个文件对上了(``done``)之后喊一声,参数是那个 key。
+        #
+        # **为什么是注入的而不是这儿自己做。** 收到这一声之后该干的事是
+        # "一趟的文件全传完了就给那个 run 目录打「可删」",而「可删」标记是
+        # ``engine/retention.py`` 的事 —— 这个模块住在 ``app/`` 下,但它伺候
+        # 的 ``Uploader``/``UploadQueue`` 全在 ``engine/`` 里,把 retention 的
+        # 判据也搬进来就等于让上传这条线自己决定什么能删。**传成功只打标,
+        # 不删**(spec §4.4),真删由水位线驱动;两件事分在两处才不会有人
+        # 哪天顺手把 ``mark_uploaded`` 改成 ``rmtree``。
+        self._on_done = on_done
 
     # ---- 一步 ----
 
@@ -133,7 +144,28 @@ class UploadPump:
                     self._sent_files += 1
             elif step.action in {"deferred", "rewound"}:
                 self._last_error = step.detail
+        if step.action == "done":
+            self._喊一声传完了(step.key)
         return step
+
+    def _喊一声传完了(self, key: str) -> None:
+        """通知注入的那个回调。**在锁外面调** —— 它会去碰盘。
+
+        回调炸了不许把这一步翻成失败:这个文件**确实**传上去了,把它改判成
+        "退避重排"会让同一份字节再传一遍。但也不许静悄悄 —— 打不上「可删」
+        的后果是水位线永远扫不到东西删,**真机上盘会满**,而那是最安静的一
+        种失败。所以两件事都做:记 traceback,并且把话写到值守屏看得见的
+        ``last_error`` 上。
+        """
+        if self._on_done is None:
+            return
+        try:
+            self._on_done(key)
+        except Exception as exc:
+            detail = f"传完之后那一下没办成: {type(exc).__name__}: {exc}"
+            with self._lock:
+                self._last_error = detail
+            log.exception("传完之后那一下回调抛了,这个文件照旧算传完了")
 
     def _出意外了(self, exc: BaseException, now: int) -> Step:
         """把一个没预料到的异常翻成"这一项退避重排"。
