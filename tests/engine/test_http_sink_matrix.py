@@ -216,6 +216,38 @@ class 故障:
         现场="Task 14 钉扎上之后证书换过了没同步,或者客户装了中间人根证书",
         装opener=lambda: _抛的opener(ssl.SSLCertVerificationError(1, "certificate verify failed")),
         预期="SinkError",
+        信息含="发不出去",
+    ),
+    故障(
+        名字="TLS没说再见就断了",
+        现场="中间设备把 TLS 连接直接掐了,没走 close_notify —— SSLEOFError 是 SSLError 的子类",
+        装opener=lambda: _抛的opener(ssl.SSLEOFError("EOF occurred in violation of protocol")),
+        预期="SinkError",
+        信息含="发不出去",
+    ),
+    故障(
+        名字="服务器没回话就断开",
+        现场="keep-alive 的连接被服务器那边先回收了,urllib 复用时读到空 —— RemoteDisconnected",
+        装opener=lambda: _抛的opener(http.client.RemoteDisconnected("Remote end closed")),
+        预期="SinkError",
+        信息含="发不出去",
+    ),
+    故障(
+        名字="系统调用被信号打断",
+        现场="狗上有别的进程发了信号,socket 的系统调用被 EINTR 打断",
+        装opener=lambda: _抛的opener(InterruptedError(4, "Interrupted system call")),
+        预期="SinkError",
+        信息含="发不出去",
+    ),
+    故障(
+        名字="跳转目标是畸形地址",
+        现场=(
+            "服务器回 302 且 Location 写成了 http://[ —— urllib 自己的 HTTPRedirectHandler "
+            "里 urlsplit 抛 ValueError(Invalid IPv6 URL),它既不是 OSError 也不是 HTTPException"
+        ),
+        装opener=lambda: _抛的opener(ValueError("Invalid IPv6 URL")),
+        预期="SinkError",
+        信息含="跳转目标",
     ),
     # ---- 二、请求根本拼不出来 / header 编不出来 -----------------------------
     故障(
@@ -417,6 +449,123 @@ class 故障:
         预期="SinkError",
         信息含="stored",
     ),
+    # ---- 五之二、stored 是 inf:NaN 那行的亲兄弟,int(inf) 抛的是 OverflowError -
+    #
+    # ``OverflowError`` 的 MRO 是 ``ArithmeticError -> Exception``,老代码那张
+    # ``except (ValueError, TypeError)`` 的清单**两个都接不住**。服务器侧同样是
+    # Python,``json.dumps(float("inf"))`` 默认就吐 ``Infinity``,而
+    # ``json.loads`` 默认就认 ``Infinity``,``1e400``/``1e309`` 也解成 ``inf`` ——
+    # 这三个字面量是三条独立的进门路径,一行一条,不合并。
+    故障(
+        名字="stored是Infinity",
+        现场="服务器侧也是 Python,某个分支算出了 inf,json.dumps 默认就吐 Infinity",
+        装opener=lambda: _回响应的opener(
+            _响应(body=b'{"ok": true, "stored": Infinity, "sha256": "x", "message": ""}')
+        ),
+        预期="SinkError",
+        信息含="stored",
+    ),
+    故障(
+        名字="stored是负Infinity",
+        现场="服务器拿两个数相减算 stored,结果溢出成了 -inf",
+        装opener=lambda: _回响应的opener(
+            _响应(body=b'{"ok": true, "stored": -Infinity, "sha256": "x", "message": ""}')
+        ),
+        预期="SinkError",
+        信息含="stored",
+    ),
+    故障(
+        名字="stored是1e400",
+        现场="回执里是个十进制字面量,json.loads 自己解成 inf —— 不写 Infinity 也能进门",
+        装opener=lambda: _回响应的opener(
+            _响应(body=b'{"ok": true, "stored": 1e400, "sha256": "x", "message": ""}')
+        ),
+        预期="SinkError",
+        信息含="stored",
+    ),
+    故障(
+        名字="409的body里stored是Infinity",
+        现场="同一个洞在 err.read() 那条路径上也得堵住 —— 4xx 的 body 一样要过 parse_receipt",
+        装opener=lambda: _抛的opener(_HTTPError(409, b'{"ok": false, "stored": 1e400}')),
+        预期="SinkError",
+        信息含="stored",
+    ),
+    故障(
+        名字="stored是小数",
+        现场="服务器把落盘字节数除了个 1024 才回过来,变成了 3.5",
+        装opener=lambda: _回响应的opener(
+            _响应(body=_json({"ok": True, "stored": 3.5, "sha256": "x", "message": ""}))
+        ),
+        预期="SinkError",
+        信息含="stored",
+    ),
+    故障(
+        名字="stored是bool的true",
+        现场="服务器把 stored 写成了存没存下的布尔 —— bool 是 int 的子类,不拦就悄悄变成 stored=1",
+        装opener=lambda: _回响应的opener(
+            _响应(body=_json({"ok": True, "stored": True, "sha256": "x", "message": ""}))
+        ),
+        预期="SinkError",
+        信息含="stored",
+    ),
+    故障(
+        名字="stored是超长数字串",
+        现场="服务器把 stored 序列化成了五千位的数字字符串,int() 在 py3.11+ 还会撞整数转换上限",
+        装opener=lambda: _回响应的opener(
+            _响应(body=('{"ok": true, "stored": "' + "1" * 5000 + '"}').encode())
+        ),
+        预期="SinkError",
+        信息含="stored",
+    ),
+    # ---- 五之三、另外三个字段的放行条件 --------------------------------------
+    #
+    # ``stored`` 之外的三个字段过去走 ``bool(...)``/``str(...)``,对什么都不抛 ——
+    # 于是"服务器发来一坨我们不认识的东西"被悄悄塞进回执当真话用:``{"ok": "no"}``
+    # 会变成 ``ok=True``(非空字符串为真),``{"sha256": 123}`` 会变成
+    # ``sha256="123"`` 去跟真哈希比。跟 stored 一个口径:认得的形状才用。
+    故障(
+        名字="ok是字符串yes",
+        现场="服务器侧把 ok 写成了字符串 —— bool 判非空串为真,不拦就把没传成读成传成了",
+        装opener=lambda: _回响应的opener(
+            _响应(body=_json({"ok": "yes", "stored": 4, "sha256": "x", "message": ""}))
+        ),
+        预期="SinkError",
+        信息含="ok",
+    ),
+    故障(
+        名字="ok是null",
+        现场="服务器某个分支忘了填 ok,序列化出来是 null —— 那是没表态,不是表态说不行",
+        装opener=lambda: _回响应的opener(
+            _响应(body=_json({"ok": None, "stored": 4, "sha256": "x", "message": ""}))
+        ),
+        预期="SinkError",
+        信息含="ok",
+    ),
+    故障(
+        名字="sha256是数字",
+        现场="服务器把哈希当数字回了过来,str() 罩得住但拿去跟真哈希比一定不等,白跑一轮",
+        装opener=lambda: _回响应的opener(
+            _响应(body=_json({"ok": True, "stored": 4, "sha256": 123, "message": ""}))
+        ),
+        预期="SinkError",
+        信息含="sha256",
+    ),
+    故障(
+        名字="message是对象",
+        现场="服务器把 message 写成了结构化的错误对象,str() 出来是一坨 Python 字面量进日志",
+        装opener=lambda: _回响应的opener(
+            _响应(body=_json({"ok": True, "stored": 4, "sha256": "x", "message": {"a": 1}}))
+        ),
+        预期="SinkError",
+        信息含="message",
+    ),
+    故障(
+        名字="回执是超深嵌套的JSON对象",
+        现场="压坏的缓存回了两千层嵌套的对象 —— 顶层是 dict,深度在 json 扫描器里就崩了",
+        装opener=lambda: _回响应的opener(_响应(body=(b'{"a":' * 2000) + b"1" + (b"}" * 2000))),
+        预期="SinkError",
+        信息含="回执不是 JSON",
+    ),
     # ---- 六、对照组:该给回执的就得给回执 -----------------------------------
     故障(
         名字="一切正常",
@@ -436,12 +585,16 @@ class 故障:
     ),
     故障(
         名字="ok和sha256和message类型歪但stored是对的",
-        现场="服务器侧字段类型漂了,但 stored 还是个数 —— 这种不该拦,bool()/str() 罩得住",
+        现场=(
+            "服务器侧字段类型漂了,stored 还是个数 —— 修复轮 5 之前这一行是放行的"
+            "(bool()/str() 什么都罩得住),于是 ok=yes 被读成传成了、sha256=None 被读成 "
+            "字符串 None 拿去跟真哈希比。现在四个字段一个口径:认不得就退避"
+        ),
         装opener=lambda: _回响应的opener(
             _响应(body=_json({"ok": "yes", "stored": 4, "sha256": None, "message": 123}))
         ),
-        预期="回执",
-        期望=PutReceipt(ok=True, stored=4, sha256="None", message="123"),
+        预期="SinkError",
+        信息含="ok",
     ),
     故障(
         名字="回执里没有stored字段",
@@ -482,11 +635,11 @@ def test_故障注入矩阵_put的出口只有回执和SinkError(案例: 故障)
 
 def test_矩阵本身是齐的() -> None:
     """守表的规矩,免得以后加行的人少填一格就悄悄退化成一行空跑的用例。"""
-    assert len(矩阵) >= 38, "故障模式只许加不许减"
+    assert len(矩阵) >= 54, "故障模式只许加不许减"
     名字 = [c.名字 for c in 矩阵]
     assert len(set(名字)) == len(名字), "行名重了,报错时分不清是哪一行"
     for c in 矩阵:
         assert c.预期 in ("回执", "SinkError"), f"{c.名字}: 出口只有这两种"
         assert c.现场.strip(), f"{c.名字}: 说不出现场的故障模式不该进表"
     assert any(c.预期 == "回执" for c in 矩阵), "得有对照组,否则全抛也算全绿"
-    assert sum(c.预期 == "SinkError" for c in 矩阵) >= 30
+    assert sum(c.预期 == "SinkError" for c in 矩阵) >= 49

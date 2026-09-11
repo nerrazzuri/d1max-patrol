@@ -196,6 +196,43 @@ def test_读body时的HTTPException也翻成SinkError() -> None:
         HttpSink("http://x:8095", opener=opener).put(样例)
 
 
+def test_畸形跳转地址翻成SinkError() -> None:
+    """服务器回 302 且 ``Location`` 写成 ``http://[`` 时,``urllib`` 自己的
+    ``HTTPRedirectHandler.http_error_302`` 里 ``urlsplit`` 抛
+    ``ValueError: Invalid IPv6 URL``,从 ``opener.open()`` 冒出来。
+
+    它既不是 ``OSError`` 也不是 ``HTTPException``,原来那张清单接不住。
+    """
+    opener = 假opener(抛=ValueError("Invalid IPv6 URL"))
+    with pytest.raises(SinkError, match="跳转目标"):
+        HttpSink("http://x:8095", opener=opener).put(样例)
+
+
+def test_三支except的顺序_专用话术不会被ValueError那支吞掉() -> None:
+    """``put()`` 那三支 except 的**顺序本身**是行为,得有测试钉住。
+
+    - ``UnicodeEncodeError`` **是** ``ValueError`` 的子类 —— 排到 ``ValueError``
+      后面,"header 编不出 latin-1"就会被说成"地址解不开"。
+    - ``ssl.SSLCertVerificationError`` **同时是** ``ValueError`` 和 ``OSError``
+      的子类 —— ``ValueError`` 那支排到网络那支前面,"证书验不过"就会被说成
+      "地址解不开",现场会去查跳转而不是查证书。
+    """
+
+    class _编header的opener(_固定响应的假opener):
+        def open(self, request, timeout=None):
+            for _, 值 in request.header_items():
+                str(值).encode("latin-1")
+            return super().open(request, timeout)
+
+    resp = _假响应(200, b'{"ok": true, "stored": 1, "sha256": "a", "message": ""}')
+    with pytest.raises(SinkError, match="latin-1"):
+        HttpSink("http://x:8095", token="口令中文", opener=_编header的opener(resp)).put(样例)
+
+    抛 = ssl.SSLCertVerificationError(1, "certificate verify failed")
+    with pytest.raises(SinkError, match="发不出去"):
+        HttpSink("http://x:8095", opener=假opener(抛=抛)).put(样例)
+
+
 def _装个记录参数的HTTPSHandler(monkeypatch: pytest.MonkeyPatch) -> dict:
     """把 ``urllib.request.HTTPSHandler`` 换成一个记参数的子类。
 
@@ -280,18 +317,60 @@ def test_HTTPError分支里stored字段类型不对也抛SinkError_不穿透() -
         HttpSink("http://x:8095", opener=假opener(抛=err)).put(样例)
 
 
-def test_ok和sha256和message字段任意类型都不抛() -> None:
-    """异常出口清点表里另外三个字段(``ok``/``sha256``/``message``)—— 分别
-    经过 ``bool(...)``/``str(...)``,对 JSON 能解出来的任何标量、``list``、
-    ``dict``、``None`` 都不会抛,这里用一批"歪的"值钉住这个结论,防止以后
-    有人在这三行加新逻辑时不小心引入第四条泄漏。
+def test_ok和sha256和message字段形状不对时抛SinkError() -> None:
+    """另外三个字段跟 ``stored`` 一个口径:**认得的形状才用,认不得就退避。**
+
+    这三行过去走 ``bool(...)``/``str(...)``,对什么都不抛 —— 于是服务器发来
+    一坨我们不认识的东西会被悄悄当真话用:``{"ok": "no"}`` 变成 ``ok=True``
+    (非空字符串为真),``{"sha256": None}`` 变成字符串 ``"None"`` 拿去跟真
+    哈希比。宽容转换在这儿不是优点:回执读错一个字段,后果跟读不懂是一样的,
+    但读错了没人知道。
+
+    ``SinkError`` 只退避不 rewind,所以判严的代价是多退一轮,不丢证据。
     """
-    for payload in (
-        {"ok": "text", "stored": 1, "sha256": "a", "message": "m"},
-        {"ok": [1, 2], "stored": 1, "sha256": "a", "message": "m"},
-        {"ok": None, "stored": 1, "sha256": [1, 2], "message": {}},
-        {"ok": True, "stored": 1, "sha256": None, "message": 123},
+    for payload, 字段 in (
+        ({"ok": "text", "stored": 1, "sha256": "a", "message": "m"}, "ok"),
+        ({"ok": [1, 2], "stored": 1, "sha256": "a", "message": "m"}, "ok"),
+        ({"ok": None, "stored": 1, "sha256": "a", "message": "m"}, "ok"),
+        ({"ok": True, "stored": 1, "sha256": [1, 2], "message": "m"}, "sha256"),
+        ({"ok": True, "stored": 1, "sha256": None, "message": "m"}, "sha256"),
+        ({"ok": True, "stored": 1, "sha256": "a", "message": 123}, "message"),
+        ({"ok": True, "stored": 1, "sha256": "a", "message": {}}, "message"),
     ):
         body = json.dumps(payload).encode()
-        got = parse_receipt(200, body)
-        assert isinstance(got, PutReceipt)
+        with pytest.raises(SinkError) as excinfo:
+            parse_receipt(200, body)
+        assert 字段 in str(excinfo.value)
+
+
+def test_四个字段形状都对时照常出回执() -> None:
+    """判严了也不能把正常回执判死 —— 这条钉住放行的那一侧。"""
+    body = json.dumps({"ok": True, "stored": 7, "sha256": "a" * 64, "message": "好了"}).encode()
+    assert parse_receipt(200, body) == PutReceipt(
+        ok=True, stored=7, sha256="a" * 64, message="好了"
+    )
+
+
+def test_stored是bool时抛SinkError_不当成1() -> None:
+    """``bool`` 是 ``int`` 的子类 —— ``isinstance(True, int)`` 为真。不单挡一下,
+    ``{"stored": true}`` 会悄悄变成 ``stored=1``,上传器拿着这个 1 去对偏移。
+    """
+    with pytest.raises(SinkError) as excinfo:
+        parse_receipt(200, b'{"ok": true, "stored": true, "sha256": "a", "message": ""}')
+    assert "stored" in str(excinfo.value)
+
+
+def test_stored是inf时抛SinkError_不穿OverflowError() -> None:
+    """``json.loads`` **默认就认** ``Infinity``,``1e400``/``1e309`` 也解成 ``inf``;
+    服务器侧同样是 Python,``json.dumps(float("inf"))`` **默认就吐** ``Infinity``。
+
+    ``int(inf)`` 抛的是 ``OverflowError``,MRO 是 ``ArithmeticError -> Exception``——
+    老代码那张 ``except (ValueError, TypeError)`` 的清单两个都接不住,原样穿出
+    ``put()`` 把上传线程炸掉。同一行的 ``NaN`` 一直是绿的(``int(nan)`` 抛
+    ``ValueError``),两者只差一个字面量。
+    """
+    for 字面量 in (b"Infinity", b"-Infinity", b"1e400", b"-1e400", b"1e309"):
+        body = b'{"ok": true, "stored": ' + 字面量 + b', "sha256": "a", "message": ""}'
+        with pytest.raises(SinkError) as excinfo:
+            parse_receipt(200, body)
+        assert "stored" in str(excinfo.value)

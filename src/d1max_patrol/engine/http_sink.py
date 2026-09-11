@@ -32,10 +32,15 @@ def build_body(req: PutRequest) -> bytes:
 def _headers(req: PutRequest, token: str) -> dict[str, str]:
     """元数据走 header,**不走 query string**。
 
-    两个理由:``sn``/``run``/``rel`` 里有中文(``巡检一``),塞进 URL 要转义
-    两遍;而且 URL 会原样进服务器的访问日志,run 名和点位名不该躺在那儿。
+    两个理由:``run``/``rel`` 里有中文(``巡检一``),塞进 URL 要转义两遍;
+    而且 URL 会原样进服务器的访问日志,run 名和点位名不该躺在那儿。
 
-    header 的值必须 latin-1 编得出来,所以 run/rel 用 ``quote`` 转义。
+    header 的值必须 latin-1 编得出来,所以 ``run``/``rel`` 用 ``quote`` 转义。
+    ``sn`` **不转义**,原样进 header:它是装机时定死的设备编号(``D1MAX-01``
+    那种 ASCII 串),服务器侧拿它当键直接比对,转义了两边就对不上。真被人填
+    成中文时不会在这儿炸,而是在 ``open()`` 深处编 latin-1 时抛
+    ``UnicodeEncodeError``,由 ``put()`` 翻成 ``SinkError`` 走退避重排 ——
+    "装机时挡住中文 sn"是配置自检那一层的事(挂账 142),不在这个函数里。
     """
     headers = {
         "Content-Type": "application/octet-stream",
@@ -50,6 +55,36 @@ def _headers(req: PutRequest, token: str) -> dict[str, str]:
     return headers
 
 
+def _认字段(payload: dict[str, Any], 键: str, 形状: type, 缺省: Any) -> Any:
+    """**放行条件,不是异常清单。**
+
+    前四轮在这个文件里找出的泄漏,有四条是同一个形状:有人列了一张
+    ``except (A, B)`` 的类型清单,清单漏了一个类型。最后一条尤其说明问题 ——
+    ``int(payload.get("stored", 0))`` 补过一次 ``ValueError``/``TypeError``,
+    可 ``json.loads`` 默认就认 ``Infinity``(``1e400``/``1e309`` 也解成 ``inf``),
+    而 ``int(inf)`` 抛的是 ``OverflowError``,它的 MRO 是
+    ``ArithmeticError -> Exception``,**那两个都接不住**。同一行 ``NaN``
+    是绿的(``int(nan)`` 抛 ``ValueError``),写那行的人离 ``Infinity``
+    只差一个字面量。
+
+    只要判据是"我能想到几种异常",下一个人就总能想出第 N+1 种。所以这儿把
+    判据**反过来**:先问"它是不是我们认的东西",是才用,不是就 ``SinkError``。
+    漏判的方向从"炸穿上传线程"变成"多退避一轮" —— 规格 §4.2 本来就是
+    "对不上就是没传成功",多退避一轮不丢证据,炸穿上传线程会丢。
+
+    代价是认得窄:服务器要是发 ``{"stored": "123"}``,本来 ``int()`` 宽容转得出来,
+    现在判成读不懂去退避。**这是故意选的**,宁可多退一轮,不留一条能炸穿的路。
+
+    字段缺省时给 ``缺省``(老版本服务器不回 ``stored`` 是已知的兼容情况);
+    字段在但形状不对,一律 ``SinkError``。
+    """
+    值 = payload.get(键, 缺省)
+    if isinstance(值, 形状) and not (形状 is int and isinstance(值, bool)):
+        # ``bool`` 是 ``int`` 的子类 —— ``{"stored": true}`` 不该被当成 stored=1。
+        return 值
+    raise SinkError(f"回执里的 {键} 字段不是 {形状.__name__}: {type(值).__name__} {值!r:.80}")
+
+
 def parse_receipt(status: int, body: bytes) -> PutReceipt:
     """读不懂 = ``SinkError``,读懂了且服务器说不行 = ``ok=False``。
 
@@ -62,10 +97,17 @@ def parse_receipt(status: int, body: bytes) -> PutReceipt:
     那也是"结构完好、服务器明确表态"的一种)。
 
     剩下每一种"解不出服务器到底想说什么"的情况,一律 ``SinkError``:
-    JSON 解不开、顶层不是对象、``stored`` 字段类型不对(字符串、列表、
-    ``None``……)。这些情况我们连"服务器那边到底存了多少/说了什么"都没有
-    可信信息,跟"服务器明确说了话"是两件不同的事,不该走同一条会作废历史
-    进度的路。
+    JSON 解不开、顶层不是对象、四个字段里**任何一个**形状不对。这些情况我们
+    连"服务器那边到底存了多少/说了什么"都没有可信信息,跟"服务器明确说了话"
+    是两件不同的事,不该走同一条会作废历史进度的路。
+
+    **四个字段一个口径,都走 ``_认字段`` 的放行条件**(见那个函数的说明:
+    枚举放行条件,不枚举异常类型):
+
+    - ``stored``:必须是 ``int``(``bool`` 不算),缺省 ``0``
+    - ``ok``:必须是 ``bool``,缺省 ``False``
+    - ``sha256``:必须是 ``str``,缺省 ``""``
+    - ``message``:必须是 ``str``,缺省 ``""``
     """
     try:
         payload: Any = json.loads(body.decode("utf-8"))
@@ -81,16 +123,11 @@ def parse_receipt(status: int, body: bytes) -> PutReceipt:
         # json.loads 成功,但顶层不是对象(列表/null/裸字符串/裸数字)。
         # 同样是"读不懂服务器想说什么",不是"服务器明确说了话"。
         raise SinkError(f"回执不是 JSON 对象: {payload!r}")
-    try:
-        stored = int(payload.get("stored", 0))
-    except (ValueError, TypeError) as exc:
-        # 字段存在但类型不对(字符串、列表、``None``……)。同上,不能 rewind。
-        raise SinkError(f"回执里的 stored 字段解析不出数字: {exc}") from exc
     return PutReceipt(
-        ok=bool(payload.get("ok")) and status == 200,
-        stored=stored,
-        sha256=str(payload.get("sha256", "")),
-        message=str(payload.get("message", "")),
+        ok=_认字段(payload, "ok", bool, False) and status == 200,
+        stored=_认字段(payload, "stored", int, 0),
+        sha256=_认字段(payload, "sha256", str, ""),
+        message=_认字段(payload, "message", str, ""),
     )
 
 
@@ -184,4 +221,15 @@ class HttpSink:
             # 半路掐断连接、CPE 重拨截断响应这两种真实场景会带着原始异常把
             # Uploader.run_once 炸穿,而不是走退避重排。
             raise SinkError(f"发不出去: {err}") from err
+        except ValueError as err:
+            # urllib 自己在处理**响应**时会抛 ValueError:服务器回 302 且
+            # ``Location`` 是畸形的(``http://[``),HTTPRedirectHandler 里
+            # urlsplit 抛 ``ValueError: Invalid IPv6 URL``,从 open() 冒出来。
+            # 它既不是 OSError 也不是 HTTPException,上面那支接不住。
+            #
+            # **这一支必须排在 UnicodeEncodeError 后面**(那个是 ValueError 的
+            # 子类,排前面会把"header 编不出 latin-1"的专用话术吞掉),也必须
+            # 排在网络那支后面(``ssl.SSLCertVerificationError`` 同时是
+            # ValueError 和 OSError 的子类,排前面会把"证书验不过"说成"地址不合法")。
+            raise SinkError(f"服务器回的东西里有解不开的地址(跳转目标?): {err}") from err
         return parse_receipt(status, body)
