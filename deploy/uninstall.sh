@@ -450,6 +450,19 @@ receipt() {
 say ""
 say "1/5 先说清楚要干什么"
 announce
+# 上面那段里写着"按 Ctrl+C 停下来,改用 --keep-data"。**不给窗口的话那句话是空的**
+# —— announce 打完屏,下一行 reap_agent 就开始收 patrol_agent,而 SDK 会话一丢
+# 就是不可逆的那一半(#46/#47),等人读完那段字早就没了。
+#
+# 所以人坐在终端前的时候给 5 秒。**没有 TTY 就不等** —— 头部注释里说明了这脚本
+# 要能在无人值守的 provisioning 里跑,那种场合没人会按 Ctrl+C,白等 5 秒而已;
+# 但那也正是"不做交互式确认"的理由,这里不能因为加窗口就把它改成阻塞等输入。
+# dry-run 更不用等:它什么都不动。
+if [ "$DO_IT" = 1 ] && [ -t 0 ]; then
+  say ""
+  say "  5 秒后开始。要停就现在按 Ctrl+C。"
+  sleep 5
+fi
 reap_agent
 stop_service
 wipe_disk
