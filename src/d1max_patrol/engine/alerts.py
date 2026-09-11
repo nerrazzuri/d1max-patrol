@@ -18,8 +18,11 @@
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass, replace
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 
@@ -192,7 +195,13 @@ class AlertBook:
     外加一个 ``robot/kind -> key`` 的指向表,记着"当前还在吸收新事件的
     是哪一条"。"""
 
-    def __init__(self, *, window_ms: int = AGGREGATE_WINDOW_MS) -> None:
+    def __init__(
+        self,
+        *,
+        window_ms: int = AGGREGATE_WINDOW_MS,
+        spool: Path | None = None,
+        keep_closed: int = 200,
+    ) -> None:
         self._window_ms = window_ms
         self._by_key: dict[str, Alert] = {}
         #: ``robot/kind`` -> 当前正在吸收新事件的那条告警的 ``key``。
@@ -202,6 +211,33 @@ class AlertBook:
         #: 每个 ``robot/kind`` 已经发出过的序号计数,只增不减,保证
         #: ``#seq`` 不会跟已经存在过的(哪怕已解决)撞上。
         self._seq: dict[str, int] = {}
+        #: 盘上那一份。**spec §4.3 第 1 级("告警",永不让路)要有一个真的文件**
+        #: 才能入上传队列 —— 只在内存里的话,``classify("alerts.jsonl")`` 永远
+        #: 匹配不到任何东西,第 1 级就是一句空话。
+        #:
+        #: ``None`` 时这个类的行为跟加这个参数之前**一模一样**:不写盘,也不
+        #: 修剪。已有的调用点一个都不用改。
+        self._spool = Path(spool) if spool is not None else None
+        if self._spool is not None:
+            self._spool.parent.mkdir(parents=True, exist_ok=True)
+        #: 修剪时内存里保留多少条已解决的(挂账 75)。剪掉的盘上一条不少。
+        self._keep_closed = keep_closed
+
+    @property
+    def spool_path(self) -> Path | None:
+        return self._spool
+
+    def _spill(self, alert: Alert) -> None:
+        """把这一拍的事实追加到盘上。**盘上是事件流,不是当前状态** ——
+        count 从 1 变成 2、被谁确认了、什么时候解决的,每一拍都留一行。
+        服务器那边按 ``key`` 归堆,最后一行就是最新状态。
+        """
+        if self._spool is None:
+            return
+        with open(self._spool, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(alert.to_wire(), ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
 
     def raise_alert(
         self,
@@ -271,6 +307,7 @@ class AlertBook:
             )
             self._active[group] = alert.key
         self._by_key[alert.key] = alert
+        self._spill(alert)
         return alert
 
     def ack(self, key: str, *, who: str, now_ms: int) -> Alert:
@@ -286,6 +323,7 @@ class AlertBook:
             raise AlertNotFound(key)
         alert = replace(existing, acked_by=who, acked_ms=now_ms)
         self._by_key[key] = alert
+        self._spill(alert)
         return alert
 
     def resolve(self, key: str, *, who: str = "", now_ms: int) -> Alert:
@@ -302,6 +340,7 @@ class AlertBook:
             raise AlertNotFound(key)
         alert = replace(existing, resolved_by=who, resolved_ms=now_ms)
         self._by_key[key] = alert
+        self._spill(alert)
         return alert
 
     def due_escalations(self, *, now_ms: int) -> tuple[tuple[Alert, Channel], ...]:
@@ -328,6 +367,7 @@ class AlertBook:
             if tier > alert.escalated:
                 updated = replace(alert, escalated=tier)
                 self._by_key[alert.key] = updated
+                self._spill(updated)
                 due.append((updated, _CHANNEL_BY_TIER[tier]))
         return tuple(due)
 
@@ -339,3 +379,27 @@ class AlertBook:
     def all(self) -> tuple[Alert, ...]:
         """所有告警,已解决的也在内,不排序。"""
         return tuple(self._by_key.values())
+
+    def trim(self) -> int:
+        """把内存里多余的已解决告警放掉。返回清掉的条数。
+
+        **挂账 75 的解。** 第 8 卷推这条账时说"修剪策略取决于第 9 卷把告警
+        存哪儿,所以现在别定"。现在定了:存盘上。于是修剪不再是丢数据 ——
+        盘上一条不少,只是不再在内存里拿着。
+
+        **没有 spool 就不剪。** 那种情况下内存是唯一的一份,剪了就真丢了。
+
+        ``_seq`` 不跟着剪:它记的是"这个 robot/kind 发过几号",剪掉内存里的
+        条目之后下一条的号还得往后走 —— 撞号会让服务器把两条不同的告警
+        当成同一条。它每个 ``robot/kind`` 只占一个整数,不是挂账 75 说的那种增长。
+        """
+        if self._spool is None:
+            return 0
+        closed = [a for a in self._by_key.values() if a.resolved_ms is not None]
+        if len(closed) <= self._keep_closed:
+            return 0
+        closed.sort(key=lambda a: (a.resolved_ms or 0, a.key))
+        drop = closed[: len(closed) - self._keep_closed]
+        for alert in drop:
+            del self._by_key[alert.key]
+        return len(drop)
