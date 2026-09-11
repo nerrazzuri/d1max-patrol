@@ -353,6 +353,70 @@ def test_人揣着手机走了_遥控停下而且任务不自己接着跑(服务
                    最多等=守望窗口), "停完腿之后把任务交还着跑起来了"
 
 
+def test_到期告警不许在让开腿的时候承诺它会自己跑完(服务器夹具, 墙钟):
+    """**第二种假话:反过来的那一种。**
+
+    局面是"取控制权 → 起一趟 → 按暂停接管 → 人走开 → TTL 到期",跟上面那条
+    ``test_人揣着手机走了_遥控停下而且任务不自己接着跑`` 摆的是同一格 ——
+    那条已经钉死了:这一格里引擎**保证不会**自己恢复,谁不喂 resume 它就
+    一直挂着。
+
+    而 ``engine.running`` 在 ``SUSPENDED`` 上也是真的。所以只按 ``running``
+    一位分文案的话,人在这一格会收到"该走点位的时候会自己接着走……不管它的
+    话它会自己把这趟跑完"——**这是假话,而且是让人转身就走的那一种**:
+    现场的人放心离开,这一趟巡检从此挂死在半道上,屏上只剩
+    ``suspend_stale`` 隔一阵一条 P1 在刷。比"狗已停在原地"更难发现,因为
+    没有人会去核一句"它会自己跑完"。
+
+    **但反过来也不是"换一套新词"。** spec §5.8 写的"人接管完,手机往兜里
+    一揣走了,TTL 到期 → 停在原地 + 升 P1。绝不自动续跑"**说的正是这一格**,
+    那两句在这里是真话,必须留着。这一格要做的是 §5.8 + 一件它没写的事:
+    这趟是"挂着"不是"结束了",不回来它就一直挂着,收尾得回来重新取一次
+    控制权,再在"继续 / 中止"里选一个。
+
+    **变异验证:** 把 ``_lease_gone`` 里 ``elif engine.yielding:`` 那一格的
+    文案拍回下面 ``else`` 那一格(也就是只按 ``running`` 分两套的老样子),
+    这一条当场红。
+    """
+    srv = 服务器夹具
+    ctx = srv.ctx
+    token = 拿到租约(srv, operator="老王")
+    起飞(srv, token)
+    assert 打(srv, "/api/run/suspend", token, {"reason": "人要接管"})[0] == 200
+    ctx.bridge.call(lambda: ctx.engine.wait_state(RunState.SUSPENDED))
+    开始遥控(srv, token)
+    # 前提断言,不是推算式:这两位同时为真才是这条测试要打的那一格。
+    assert ctx.engine.running is True, "任务都没起来,下面断的是空的"
+    assert ctx.engine.yielding is True, "腿没让开,这就不是要打的那一格了"
+
+    墙钟.前进(LEASE_TTL_MS + 1)
+    assert 等到(lambda: 到期告警(srv)), "TTL 过了,一条 P1 都没有"
+    a = 到期告警(srv)[0]
+    话 = a.title + a.detail
+    # 不许说"它会自己接着跑"。这两句是"引擎在跑、腿没让开"那一格的原话,
+    # 落到这一格上就是假话 —— 变异回去的话正是它们冒出来。
+    for 假话 in ("会自己接着走", "把这趟跑完"):
+        assert 假话 not in 话, (
+            f"腿已经让开了,这条告警却承诺「{假话}」—— 人会就这么走掉,"
+            f"这一趟从此挂死。title={a.title!r} detail={a.detail!r}")
+    # **spec §5.8 那两句承诺必须还在。** "人接管完,手机往兜里一揣走了,
+    # TTL 到期" 写的就是这一格,它的结论是"停在原地 + 升 P1。绝不自动续跑"
+    # —— 在这一格里这两句都是真话(teleop.stop() 发了零速,引擎挂在
+    # SUSPENDED 上不发运动指令,链路上没有 resume)。钉住它们,是防止以后
+    # 有人把这一格整个换成"任务还在跑"那一格的说法。
+    assert "停在原地" in 话, f"§5.8 的「停在原地」丢了。title={a.title!r}"
+    assert "没有自动续跑" in a.detail, f"§5.8 的「绝不自动续跑」丢了:{a.detail!r}"
+    # 光把 §5.8 说全了还不够 —— 它没说"这趟还挂着"。得说出来:
+    # 还挂着、要回来、回来之后二选一。
+    assert "挂" in a.title, a.title
+    assert "没跑完" in a.detail or "既没跑完" in a.detail, a.detail
+    assert "中止" in a.detail, a.detail
+    assert "继续" in a.detail, a.detail
+    assert "控制权" in a.detail, a.detail
+    # 在哪一档要摆出来,跟另外两格一个待遇。
+    assert ctx.engine.snapshot.state.value in a.detail, a.detail
+
+
 def test_到期告警不许在任务还在跑的时候说狗停了(服务器夹具, 墙钟):
     """**这条告警原来会说一句会伤人的假话。**
 
