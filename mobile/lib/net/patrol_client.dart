@@ -105,6 +105,21 @@ class PatrolClient {
 
   String? _token;
 
+  /// 自动重新解锁要用的那份凭证。**只喂给 [proofFor],绝不进任何请求体、
+  /// 任何日志、任何异常信息（S-3）。**
+  ///
+  /// 记住它是为了在 token 闲置死掉之后自己换一张（见 [_send] 那一支 401）。
+  /// 重新解锁走的仍然是现成的质询-应答，PIN 本身照旧不出这个类。
+  String? _pin;
+
+  /// 重新解锁时报的名字。**记的是狗回来的那个规范名**（`Session.operator`），
+  /// 不是调用方递进来的原样字符串 —— 狗那头会规范化它，拿规范名再报一次，
+  /// 审计环里前后就还是同一个人；拿原样字符串报，两次留痕可能对不上。
+  String? _operator;
+
+  /// 正在路上的那次重新解锁。**单飞（single-flight）就靠它。**
+  Future<void>? _relock;
+
   PatrolClient(this.baseUrl,
       {HttpClient? io, this.timeout = const Duration(seconds: 10)})
       : _io = io ?? HttpClient(),
@@ -136,7 +151,8 @@ class PatrolClient {
   /// token。那条路狗会静默降级成只读凭证：遥控全部 403，报错指向权限而不
   /// 是「PIN 明文发出去了」，比一个裸的类型错误更难查（B-1）。
   Future<Session> unlock(String pin, {required String operator}) async {
-    final ch = await _send('GET', '/api/auth/challenge', null, auth: false);
+    final ch = await _send('GET', '/api/auth/challenge', null,
+        auth: false, allowRelock: false);
     final nonce = ch['nonce'];
     if (nonce is! String) {
       throw const PatrolError(
@@ -146,19 +162,23 @@ class PatrolClient {
       'nonce': nonce,
       'proof': proofFor(pin, nonce),
       'operator': operator,
-    }, auth: false);
+    }, auth: false, allowRelock: false);
     final token = got['token'];
     if (token is! String) {
       throw const PatrolError(0, '狗回的应答看不懂', '没有 token 字段');
     }
     _token = token;
-    return Session(
+    final Session session = Session(
       token: token,
       operator: (got['operator'] as String?) ?? '',
       operatorVerified: got['operator_verified'] == true,
       readonly: got['readonly'] == true,
       notice: (got['notice'] as String?) ?? '',
     );
+    // **成功了才记。** 失败的那次不许把上一份好凭证覆盖掉。
+    _pin = pin;
+    _operator = session.operator.isEmpty ? operator : session.operator;
+    return session;
   }
 
   /// [deadline] 只给**周期路径**用：心跳、发拍、校准这些一秒钟发好几次的
@@ -239,7 +259,119 @@ class PatrolClient {
   static String _alertPath(String key) =>
       '/api/alerts/${Uri.encodeComponent(key)}';
 
+  /// 发一次请求。**撞上 401 就自己重新解锁一次，再把原请求原样重发一次。**
+  ///
+  /// ## 为什么非要有这一支
+  ///
+  /// 手机在现场走的是狗的热点，而 `app/auth.py` 的
+  /// `AP_TOKEN_IDLE_S = 30 * 60.0` —— **热点通道上的 token 闲置半小时就被
+  /// 当成不存在**（`TokenStore.info()` 对闲置死的记录返回 `None`，只有急停
+  /// 那条豁免路径认它）。「一只狗一条连接」之后，`PatrolClient` 是按 SN 缓存
+  /// 住的（`ui/roster_page.dart` 的 `_clients`），进屏命中就直接复用、不再
+  /// `unlock`。人从某一屏退回名册、把手机往兜里一揣，半小时之后再点进任何
+  /// 一屏，那条缓存连接上的 token 已经死了 —— 没有这一支的话，这台手机对
+  /// 这只狗就彻底废掉，唯一的出路是杀掉 app 重开。
+  ///
+  /// **不能退回「每进一次屏 unlock 一次」**：那样每进一次屏就烧掉狗那头一个
+  /// 会话名额（`auth.MAX_SESSIONS = 3`），一台手机自己就能把名额坐满。
+  ///
+  /// ## 401 之后原样重发，为什么对每一条路由都是安全的
+  ///
+  /// 狗那头**鉴权在路由匹配之前**：`app/server.py` 的 `handle()` 第一句就是
+  /// `self._auth.gate(...)`，`Denied` 当场翻成 `HttpError` 抛出去，底下
+  /// `for route in self._routes` 那个循环压根走不到。也就是说**一个收到 401
+  /// 的请求在狗那头一件事都没做过** —— 它不是「做了一半」，是「没进门」。
+  /// 重发得到的因此是这条请求的**第一次**执行，不是第二次。幂等性在这里
+  /// 根本没被动到。
+  ///
+  /// 手机这一侧会发的、本身**不**幂等的那几条，逐条核过：
+  ///
+  /// * `POST /api/control/acquire`、`/api/control/takeover`、
+  ///   `/api/control/takeover/approve`、`/api/control/release`
+  ///   （`ui/control_panel.dart` 的 `_act` / `_releaseOnLeave`）——
+  ///   都在 `gate()` 后面，401 的那一下租约状态一个字节没动过。
+  /// * `POST /api/teleop`、`/api/teleop/mode`（`ui/teleop_page.dart`）——
+  ///   同上；何况这两条本来就是「最后一拍说了算」，重放同一拍是同一件事。
+  /// * `PUT /api/operator`、`POST /api/alerts/<key>/ack`、`.../resolve` ——
+  ///   同上，而且重放的是同一个名字、同一个键。
+  /// * `POST /api/missions/<id>/run` **手机这一侧根本不发**（`mobile/lib`
+  ///   里没有任何一处提到 missions），不在这条路上。
+  ///
+  /// 结论：**没有哪一条需要「只重新解锁、不重发」的口子，所以这里不开那个
+  /// 口子。** 开一个没有调用方的参数，下一个人会以为某处真有不能重发的路由，
+  /// 反倒把这段推导读歪。
+  ///
+  /// **这段推导的前提就一条：狗那头的鉴权在处理函数之前。** 哪天有人把某条
+  /// 路由的鉴权挪进处理函数里（那样 401 就可能发生在它已经动过状态之后），
+  /// 这段话连同这一支都要重写。狗那侧的
+  /// `tests/app/test_auth.py` 是这条前提现在的守门人。
+  ///
+  /// [allowRelock] 是**挡递归的那道闸**：`unlock` 自己发的那两条请求给的是
+  /// `false`，它们撞上 401（PIN 被改了）的时候绝不许再去重新解锁一次。
+  ///
+  /// **这道闸必须是按请求给的，不能是客户端身上一个「正在重新解锁」的全局
+  /// 布尔。** 全局布尔会连坐：重新解锁那半秒里，另外两条周期路径撞上的 401
+  /// 会被当成递归直接抛出去 —— 而它们恰恰是**应该等这一次结果**的那两条。
   Future<Map<String, dynamic>> _send(String method, String path, Object? body,
+      {bool auth = true, Duration? deadline, bool allowRelock = true}) async {
+    // 这一条**实际带出去的**是哪张 token。拿它跟事后的 `_token` 比，就知道
+    // 「我撞 401 的这段时间里有没有别人已经把票换掉了」——换掉了就不必再换
+    // 一次（见下面那个 `==`）。
+    final String? used = _token;
+    try {
+      return await _sendOnce(method, path, body,
+          auth: auth, deadline: deadline);
+    } on PatrolError catch (first) {
+      // 只有「带着 token 发出去、狗回了 401」这一种才走自动重新解锁。
+      if (first.status != 401 || !auth || !allowRelock) rethrow;
+      final String? pin = _pin;
+      final String? operator = _operator;
+      // 身上没有记着的凭证（从来没 `unlock` 过）时，**行为跟以前一模一样**：
+      // 401 原样抛出去，不重试。
+      if (pin == null || operator == null) rethrow;
+      if (_token == used) {
+        try {
+          await _relockOnce(pin, operator);
+        } on Object catch (_) {
+          // 重新解锁失败（任何异常、任何非 200）：**把原来那个 401 原样抛
+          // 出去**，不换话术。屏上那句「登录过期了，重新输一次 PIN」是狗写
+          // 的，人照着做是对的；换成「重新登录失败」只会把人引去查网络。
+          throw first;
+        }
+      }
+      // **只重发一次。** 这一条走的是 `_sendOnce`，它自己不带这个 catch，
+      // 所以重发再撞 401 就是直接抛出去，死循环不成立。
+      return await _sendOnce(method, path, body,
+          auth: auth, deadline: deadline);
+    }
+  }
+
+  /// 重新解锁。**单飞（single-flight）：同一时刻只许有一个在路上。**
+  ///
+  /// 遥控屏上同时挂着发拍、心跳、校准三条周期路径，token 死掉的那一下它们
+  /// 会几乎同时撞上 401。三条各自去 `unlock` 一次 = 一口气烧掉狗那头三个
+  /// 会话名额（`auth.MAX_SESSIONS` 一共就 3 个），等于把「一只狗一条连接」
+  /// 当场废掉。**其余的等这一次，拿同一个结果。**
+  Future<void> _relockOnce(String pin, String operator) {
+    final Future<void>? live = _relock;
+    if (live != null) return live;
+    // `_doRelock` 同步跑到 `unlock` 里第一个 await 才让出去，所以这一行
+    // 赋值跟上一行的判空之间插不进别人 —— 单飞不会漏。
+    return _relock = _doRelock(pin, operator);
+  }
+
+  Future<void> _doRelock(String pin, String operator) async {
+    try {
+      await unlock(pin, operator: operator);
+    } finally {
+      // **清在这儿。** 清晚了，下一次 401 会挂在一个已经完成的 future 上，
+      // 永远等不到新的那张票。
+      _relock = null;
+    }
+  }
+
+  Future<Map<String, dynamic>> _sendOnce(
+      String method, String path, Object? body,
       {bool auth = true, Duration? deadline}) async {
     final Duration cap = deadline ?? timeout;
     // 超时那一支要掐的就是它。**不能在 `_sendAndRead` 里面掐** —— 那个

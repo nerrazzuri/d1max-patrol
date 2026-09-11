@@ -48,6 +48,29 @@ class FakeDog {
   /// 半路的连接。
   final Set<String> hangPaths = <String>{};
 
+  /// 这台狗查不查 `Authorization` 头。**默认不查** —— 绝大多数测试不关心
+  /// token 死没死，多一道闸只会让它们莫名其妙地红。
+  ///
+  /// 打开之后这台狗的行为跟真狗对齐（`app/auth.py` 的 `Guard.gate`）：
+  /// `/api/auth*` 那几条不拦（真狗的 `OPEN_PATHS`），别的 `/api/` 路由一律
+  /// 要一张在 [liveTokens] 里的票，否则 **401「登录过期了，重新输一次 PIN」**。
+  ///
+  /// **401 发在路由匹配之前**，跟真狗 `server.handle()` 的顺序一模一样 ——
+  /// 也就是说被 401 掉的那条请求什么都没做过。手机那头敢在 401 之后原样
+  /// 重发，靠的就是这个顺序。
+  bool checkTokens = false;
+
+  /// 还活着的 token。清空它 = 「闲置 30 分钟，这张票作废了」
+  /// （`auth.AP_TOKEN_IDLE_S`）。只在 [checkTokens] 打开时有意义。
+  final Set<String> liveTokens = <String>{};
+
+  /// 这台狗发出去过的票，按先后顺序。
+  ///
+  /// [checkTokens] 打开时，每成功换一次 token 就发一张**新的**，上一张当场
+  /// 作废 —— 真狗那头同名换座也是这样（`TokenStore.revoke_ref`）。手机那侧
+  /// 的单飞（single-flight）要的正是「两次重新解锁拿到的票不一样」才证得出来。
+  final List<String> issued = <String>[];
+
   /// **假狗自己出的错，记在这儿让测试看得见。**
   ///
   /// 以前整个处理器裹在一个宽 `catch (_)` 里：`replies` 里填了个
@@ -98,7 +121,34 @@ class FakeDog {
           body: raw.isEmpty ? null : jsonDecode(raw),
           raw: raw,
         ));
-        req.response.statusCode = statusCodes[req.uri.path] ?? 200;
+        final bool open = req.uri.path.startsWith('/api/auth');
+        if (checkTokens && !open && !liveTokens.contains(_bearer(req))) {
+          // 真狗那句原话（`auth.py` 的 `Denied(401, ...)`）。手机那头认的是
+          // 状态码，但屏上照抄的是这句，所以这儿也照抄。
+          req.response.statusCode = 401;
+          req.response.headers.contentType = ContentType.json;
+          req.response.write(jsonEncode(<String, dynamic>{
+            'error': '登录过期了,重新输一次 PIN',
+            'detail': 'token 无效或太久没用。',
+          }));
+          await req.response.close();
+          return;
+        }
+        final int code = statusCodes[req.uri.path] ?? 200;
+        Object? payload = replies[req.uri.path] ?? <String, dynamic>{};
+        if (checkTokens && req.uri.path == '/api/auth' && code == 200) {
+          final String fresh = 'tok-${issued.length + 1}';
+          issued.add(fresh);
+          // 上一张当场作废：同一只手机换了座，旧票就不该还开得动狗。
+          liveTokens
+            ..clear()
+            ..add(fresh);
+          payload = <String, dynamic>{
+            ...?(payload as Map<String, dynamic>?),
+            'token': fresh,
+          };
+        }
+        req.response.statusCode = code;
         req.response.headers.contentType = ContentType.json;
         if (hangPaths.contains(req.uri.path)) {
           // 逼头真的发出去（写一个字节触发 flush），然后就不管了：不写完
@@ -107,8 +157,7 @@ class FakeDog {
           await req.response.flush();
           return;
         }
-        req.response
-            .write(jsonEncode(replies[req.uri.path] ?? <String, dynamic>{}));
+        req.response.write(jsonEncode(payload));
         await req.response.close();
       } on HttpException catch (_) {
         // 见上。对面走了就是走了。
@@ -122,4 +171,12 @@ class FakeDog {
   }
 
   Future<void> stop() => _s.close(force: true);
+
+  /// `Authorization: Bearer <token>` 里的那个 token。没有头、或者不是
+  /// `Bearer` 开头的，返回空串 —— 空串永远不在 [liveTokens] 里。
+  static String _bearer(HttpRequest req) {
+    final String v = req.headers.value('authorization') ?? '';
+    const String prefix = 'Bearer ';
+    return v.startsWith(prefix) ? v.substring(prefix.length) : '';
+  }
 }

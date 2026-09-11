@@ -232,4 +232,141 @@ void main() {
         reason: 'socket 还活着 —— 超时只是不再等，连接还占着狗那头的槽位');
     io.close(force: true);
   }, timeout: const Timeout(Duration(seconds: 15)));
+
+  // ------------------------------------------------- 赛道 4c：401 自动重解锁
+
+  /// 「一只狗一条连接」之后，`PatrolClient` 是按 SN 缓存住的，进屏不再
+  /// `unlock`。而热点通道上的 token 闲置 30 分钟就作废
+  /// （`app/auth.py` 的 `AP_TOKEN_IDLE_S`）—— 人退回名册把手机一揣，半小时
+  /// 后再点进任何一屏，那条缓存连接上的票已经死了。没有这一组行为的话，
+  /// 这台手机对这只狗就彻底废掉，唯一的出路是杀掉 app 重开。
+
+  /// 数这台狗被打了几次「换 token」。
+  int unlocksOn(FakeDog d) =>
+      d.received.where((r) => r.path == '/api/auth').length;
+
+  /// 让狗开始查票，并且换一张新的给手机。
+  Future<void> armTokens(FakeDog d, PatrolClient client) async {
+    d.checkTokens = true;
+    await client.unlock('864209', operator: '张三');
+  }
+
+  test('token 闲置死了：401 之后自己重新解锁，调用方拿到的是成功的结果', () async {
+    dog.replies['/api/state'] = <String, dynamic>{'mode': 'idle'};
+    await armTokens(dog, c);
+    expect(unlocksOn(dog), 1);
+    // 半小时过去了。狗那头把这张票当成不存在。
+    dog.liveTokens.clear();
+
+    final Map<String, dynamic> got = await c.get('/api/state');
+
+    expect(got['mode'], 'idle',
+        reason: '调用方该拿到成功的结果，而不是一个 401 —— 否则这只狗对这台手机就废了');
+    expect(unlocksOn(dog), 2, reason: '重新解锁只许发生一次');
+    // 原请求确实重发了一次，而且第二次带的是新票。
+    final List<FakeCall> states =
+        dog.received.where((r) => r.path == '/api/state').toList();
+    expect(states, hasLength(2), reason: '一次撞 401、一次重发，就这两次');
+    expect(states.last.auth, 'Bearer ${dog.issued.last}');
+  });
+
+  test('三条请求同时撞 401：重新解锁仍然只发生一次（单飞）', () async {
+    /// 遥控屏上同时挂着发拍、心跳、校准三条周期路径。三条各自去 `unlock`
+    /// 一次 = 一口气烧掉狗那头三个会话名额（`auth.MAX_SESSIONS` 一共 3 个），
+    /// 等于把「一只狗一条连接」当场废掉。
+    dog.replies['/api/teleop'] = <String, dynamic>{'ok': true};
+    dog.replies['/api/teleop/heartbeat'] = <String, dynamic>{'ok': true};
+    dog.replies['/api/control'] = <String, dynamic>{'ok': true};
+    await armTokens(dog, c);
+    dog.liveTokens.clear();
+
+    final List<Map<String, dynamic>> all = await Future.wait(
+        <Future<Map<String, dynamic>>>[
+          c.post('/api/teleop', const <String, dynamic>{}),
+          c.post('/api/teleop/heartbeat'),
+          c.get('/api/control'),
+        ]);
+
+    for (final Map<String, dynamic> m in all) {
+      expect(m['ok'], isTrue, reason: '三条都该在重新解锁之后成功');
+    }
+    expect(unlocksOn(dog), 2,
+        reason: '三条撞 401，重新解锁只许有一次在路上 —— 否则一次烧掉三个名额');
+    expect(dog.issued, hasLength(2), reason: '狗只该多发出一张票');
+  });
+
+  test('重新解锁也回 401（PIN 被改了）：不死循环，抛出去的是原来那个 401', () async {
+    dog.replies['/api/state'] = <String, dynamic>{'mode': 'idle'};
+    await armTokens(dog, c);
+    dog.liveTokens.clear();
+    // 狗那头 PIN 换了：拿旧 PIN 去换票，换不到。
+    dog.statusCodes['/api/auth'] = 401;
+    dog.replies['/api/auth'] = <String, dynamic>{
+      'error': 'PIN 不对',
+      'detail': '还可以试 3 次',
+    };
+
+    await expectLater(
+        () => c.get('/api/state'),
+        throwsA(isA<PatrolError>()
+            .having((e) => e.status, 'status', 401)
+            .having((e) => e.error, 'error', '登录过期了,重新输一次 PIN')));
+
+    expect(unlocksOn(dog), 2,
+        reason: '一次是最开始那次，一次是失败的重新解锁 —— 再多就是在死循环');
+    expect(dog.received.where((r) => r.path == '/api/state'), hasLength(1),
+        reason: '重新解锁没成，原请求不许重发');
+  });
+
+  test('身上没有记着的凭证时撞 401：行为跟以前一模一样，不重试', () async {
+    // 这个客户端从头到尾没 `unlock` 过。
+    dog.checkTokens = true;
+
+    await expectLater(() => c.get('/api/state'),
+        throwsA(isA<PatrolError>().having((e) => e.status, 'status', 401)));
+
+    expect(unlocksOn(dog), 0, reason: '没有凭证可用，不许凭空去换票');
+    expect(dog.received.where((r) => r.path == '/api/state'), hasLength(1),
+        reason: '不重试');
+  });
+
+  test('重新解锁走的还是质询-应答，PIN 不进任何请求体', () async {
+    /// S-3：`_send` 最后那句 `throw PatrolError(0, '连不上狗', '$e')` 原样带
+    /// `$e` 的前提，就是「请求体里从来没有长期凭证」。自动重新解锁**不许**
+    /// 破坏这个前提。
+    dog.replies['/api/state'] = <String, dynamic>{'mode': 'idle'};
+    await armTokens(dog, c);
+    dog.liveTokens.clear();
+    await c.get('/api/state');
+
+    expect(dog.received.where((r) => r.path == '/api/auth/challenge'),
+        hasLength(2),
+        reason: '重新解锁也得先取 nonce —— 没有质询就说明走了明文 PIN 那条老路');
+    for (final FakeCall r in dog.received) {
+      final String raw = r.raw.toLowerCase();
+      expect(raw.contains('864209'), isFalse,
+          reason: '${r.path} 的原始请求体里出现了明文 PIN');
+      expect(raw.contains('pin'), isFalse,
+          reason: '${r.path} 的原始请求体里出现了 "pin" 这个词');
+    }
+  });
+
+  test('重新解锁报的是狗回来的那个规范名，不是调用方递进来的原样字符串', () async {
+    /// 名册页落盘留的就是 `session.operator`（`5266a22`）。重新解锁如果报回
+    /// 原样字符串，狗那头的审计环上前后两段就挂在两个名字下面，而「甲忘了切、
+    /// 乙的操作签在甲名下」事后能翻的就是这条记录。
+    dog.replies['/api/auth'] = <String, dynamic>{
+      ...dog.replies['/api/auth'] as Map<String, dynamic>,
+      'operator': '张三-狗规范过的',
+    };
+    dog.replies['/api/state'] = <String, dynamic>{'mode': 'idle'};
+    dog.checkTokens = true;
+    await c.unlock('864209', operator: '  张三  ');
+    dog.liveTokens.clear();
+    await c.get('/api/state');
+
+    final FakeCall relock =
+        dog.received.where((r) => r.path == '/api/auth').last;
+    expect((relock.body as Map<String, dynamic>)['operator'], '张三-狗规范过的');
+  });
 }
