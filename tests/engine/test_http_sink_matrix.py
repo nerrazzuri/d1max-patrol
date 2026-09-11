@@ -73,15 +73,25 @@ class _抛的opener:
 
 
 class _响应:
-    """``open()`` 顺利返回的响应。``读时抛`` 非空就是"读 body 读到一半断了"。"""
+    """``open()`` 顺利返回的响应。``读时抛`` 非空就是"读 body 读到一半断了"。
+
+    ``read`` 照 ``http.client.HTTPResponse.read(amt=None)`` 的签名收参数:生产
+    代码现在**带着长度上限读**(裁决二十五),``read()`` 一定会被塞一个字节数
+    进去,而且要一次次读到空为止。替身不照这个契约办事,就不是在模拟真响应,
+    而是在替生产代码规定一条真机上不存在的契约 —— 那种绿是假的。
+    """
 
     def __init__(self, status: int = 200, body: bytes = b"{}", 读时抛: BaseException | None = None):
         self.status, self._body, self._读时抛 = status, body, 读时抛
+        self._给到 = 0
 
-    def read(self) -> bytes:
+    def read(self, 上限: int | None = None) -> bytes:
         if self._读时抛 is not None:
             raise self._读时抛
-        return self._body
+        剩 = self._body[self._给到 :]
+        片 = 剩 if 上限 is None else 剩[:上限]
+        self._给到 += len(片)
+        return 片
 
     def __enter__(self) -> _响应:
         return self
@@ -123,12 +133,54 @@ def _HTTPError(
     err = urllib.error.HTTPError(_地址 + "/api/intake/put", code, "x", {}, None)
     if 读时抛 is not None:
 
-        def _读() -> bytes:
+        def _读(上限: int | None = None) -> bytes:
             raise 读时抛
 
         err.read = _读
     elif body is not None:
-        err.read = lambda: body
+        给到 = [0]
+
+        def _按上限给(上限: int | None = None, _b: bytes = body) -> bytes:
+            起 = 给到[0]
+            片 = _b[起:] if 上限 is None else _b[起 : 起 + 上限]
+            给到[0] += len(片)
+            return 片
+
+        err.read = _按上限给
+    return err
+
+
+def _没有尽头地给(上限: int | None = None) -> bytes:
+    """要多少给多少,永远给得出来 —— 服务器 ``Content-Length`` 报 100 GB 的形状。
+
+    真机上不带上限地读这种响应,是在底层 ``fp.read(那个数)`` 那一步抛
+    ``MemoryError``(``10**11``/``2**40`` 档)或 ``OverflowError``(``2**63`` 档)。
+    这个替身把同一件事做成"你要多少给多少",好让**上限那一道本身**可测:生产
+    代码只肯要 ``上限 + 1`` 个字节,拿到 ``上限 + 1`` 就该判"这不是一张回执"。
+    不带上限地读它(``上限 is None``)才走 ``MemoryError`` 那条真机形状。
+    """
+    if 上限 is None:
+        raise MemoryError
+    return b"a" * 上限
+
+
+class _没有尽头的响应:
+    """``open()`` 顺利返回,但 body 没有尽头。"""
+
+    status = 200
+    read = staticmethod(_没有尽头地给)
+
+    def __enter__(self) -> _没有尽头的响应:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def _没有尽头的HTTPError(code: int) -> urllib.error.HTTPError:
+    """4xx/5xx 身上那份 body 也没有尽头 —— ``err.read()`` 走的是同一道上限。"""
+    err = urllib.error.HTTPError(_地址 + "/api/intake/put", code, "x", {}, None)
+    err.read = _没有尽头地给
     return err
 
 
@@ -566,6 +618,123 @@ class 故障:
         预期="SinkError",
         信息含="回执不是 JSON",
     ),
+    # ---- 五之四、回执大得离谱:上限是第一道,翻译是第二道(裁决二十五)-------
+    #
+    # 复评在**真 http.server + 真默认 opener** 上实测到这几条:不带上限地读,
+    # 就是照着服务器说的那个数去要内存。``2**63`` 档在底层 ``fp.read()`` 里抛
+    # ``OverflowError``(MRO 是 ArithmeticError -> Exception),``10**11``(100 GB)
+    # 和 ``2**40`` 档抛 ``MemoryError``(``Exception`` 的直接子类)—— 老代码那三
+    # 支 except 一个都接不住。而 100 GB 这个数**不需要有人存心**,一个算错长度
+    # 的服务器就发得出来。
+    故障(
+        名字="回执长得没有尽头",
+        现场=(
+            "服务器 Content-Length 报了 100 GB(算错长度的服务器就干得出来)—— "
+            "正确的做法不是接住 MemoryError,是根本不去分配那 100 GB"
+        ),
+        装opener=lambda: _回响应的opener(_没有尽头的响应()),
+        预期="SinkError",
+        信息含="回执太长",
+    ),
+    故障(
+        名字="500的body也长得没有尽头",
+        现场="4xx/5xx 身上那份 body 走的是 err.read(),报 100 GB 的 500 跟报 100 GB 的 200 是一回事",
+        装opener=lambda: _抛的opener(_没有尽头的HTTPError(500)),
+        预期="SinkError",
+        信息含="回执太长",
+    ),
+    故障(
+        名字="回执ContentLength报2的63次方",
+        现场=(
+            "Content-Length >= 2**63,读 body 时底层 fp.read() 抛 OverflowError —— "
+            "它在分配之前就抛,够不着长度上限那一道,必须翻"
+        ),
+        装opener=lambda: _回响应的opener(
+            _响应(读时抛=OverflowError("cannot fit 'int' into an index-sized integer"))
+        ),
+        预期="SinkError",
+        信息含="发不出去",
+    ),
+    故障(
+        名字="回执ContentLength报100GB时读body抛MemoryError",
+        现场="Content-Length 是 10**11,读 body 那一步抛 MemoryError —— 它是 Exception 的直接子类",
+        装opener=lambda: _回响应的opener(_响应(读时抛=MemoryError())),
+        预期="SinkError",
+        信息含="发不出去",
+    ),
+    故障(
+        名字="500的body读到一半抛MemoryError",
+        现场=(
+            "500 的 Content-Length 也报了 100 GB —— err.read() 是在 except 块**内部**"
+            "调的,同级的 except 接不住"
+        ),
+        装opener=lambda: _抛的opener(_HTTPError(500, 读时抛=MemoryError())),
+        预期="SinkError",
+        信息含="发不出去",
+    ),
+    故障(
+        名字="chunked分块长度是畸形的超大十六进制",
+        现场="Transfer-Encoding: chunked 且分块长度写成二十个 f,读 body 时抛 OverflowError",
+        装opener=lambda: _回响应的opener(
+            _响应(读时抛=OverflowError("cannot fit 'int' into an index-sized integer"))
+        ),
+        预期="SinkError",
+        信息含="发不出去",
+    ),
+    故障(
+        名字="跳转目标的端口大得装不进C的long",
+        现场=(
+            "服务器回 302 且 Location 是 http://127.0.0.1:99999999999999999999/x —— "
+            "getaddrinfo 抛 OverflowError,这条走不到读 body,上限那一道够不着"
+        ),
+        装opener=lambda: _抛的opener(OverflowError("Python int too large to convert to C long")),
+        预期="SinkError",
+        信息含="发不出去",
+    ),
+    故障(
+        名字="base_url的端口大得装不进C的long",
+        现场=(
+            "配置里把控制台端口写成了 99999999999999999999 —— getaddrinfo 抛 OverflowError,"
+            "而且**每一次调用都抛**:配错这一个数,上传从第一秒起就是死的"
+        ),
+        装opener=lambda: _抛的opener(OverflowError("Python int too large to convert to C long")),
+        预期="SinkError",
+        信息含="发不出去",
+        base="http://127.0.0.1:99999999999999999999",
+    ),
+    # ---- 五之五、ok 没有缺省了(裁决二十四)----------------------------------
+    #
+    # ``ok`` 曾经缺省 ``False``,等于把"它什么都没说"翻译成"它说了 false" ——
+    # 而 ``ok=False`` 是会让上传器 rewind 的。复评端到端量过:一个 502 配上 API
+    # 网关的标准错误体,能把 2 MiB 已确认进度抹回 offset 0。
+    故障(
+        名字="502网关标准错误体里没有ok字段",
+        现场="API 网关回的标准错误体只有 message —— 那是它什么都没说,不是它说了 ok=false",
+        装opener=lambda: _抛的opener(_HTTPError(502, _json({"message": "Internal server error"}))),
+        预期="SinkError",
+        信息含="ok",
+    ),
+    故障(
+        名字="回执是空的JSON对象",
+        现场="服务器某个分支回了个 {} —— 结构是完好的,但它一个字都没说",
+        装opener=lambda: _回响应的opener(_响应(body=b"{}")),
+        预期="SinkError",
+        信息含="ok",
+    ),
+    # ---- 五之六、stored 是负数:形状对、值荒唐 -------------------------------
+    #
+    # 复评端到端量过:``{"stored": -5}`` 写进队列,下一轮 ``fh.seek(-5)`` 抛
+    # ``OSError``,此后永久 defer。backlog 保持 1 不丢证据,但 defer 的文案说的是
+    # "run 目录还在但这个文件不见了" —— 文件明明在,会把现场排查带偏。
+    故障(
+        名字="stored是负数",
+        现场="服务器拿两个数相减算 stored,结果成了负的 —— isinstance 是 int,值没有任何讲得通的意思",
+        装opener=lambda: _回响应的opener(
+            _响应(body=_json({"ok": True, "stored": -5, "sha256": "x", "message": ""}))
+        ),
+        预期="SinkError",
+        信息含="stored",
+    ),
     # ---- 六、对照组:该给回执的就得给回执 -----------------------------------
     故障(
         名字="一切正常",
@@ -635,11 +804,11 @@ def test_故障注入矩阵_put的出口只有回执和SinkError(案例: 故障)
 
 def test_矩阵本身是齐的() -> None:
     """守表的规矩,免得以后加行的人少填一格就悄悄退化成一行空跑的用例。"""
-    assert len(矩阵) >= 54, "故障模式只许加不许减"
+    assert len(矩阵) >= 65, "故障模式只许加不许减"
     名字 = [c.名字 for c in 矩阵]
     assert len(set(名字)) == len(名字), "行名重了,报错时分不清是哪一行"
     for c in 矩阵:
         assert c.预期 in ("回执", "SinkError"), f"{c.名字}: 出口只有这两种"
         assert c.现场.strip(), f"{c.名字}: 说不出现场的故障模式不该进表"
     assert any(c.预期 == "回执" for c in 矩阵), "得有对照组,否则全抛也算全绿"
-    assert sum(c.预期 == "SinkError" for c in 矩阵) >= 49
+    assert sum(c.预期 == "SinkError" for c in 矩阵) >= 60

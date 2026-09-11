@@ -24,6 +24,23 @@ from d1max_patrol.engine.uploader import PutReceipt, PutRequest, SinkError
 )
 
 
+def _按上限给(body: bytes):
+    """造一个照 ``read(amt)`` 契约办事的读函数:要多少给多少,给完了给 ``b""``。
+
+    真机上 ``read(n)`` 只保证**至多** n 字节,读完了给空 —— 替身写成"每次都把
+    整个 body 再给一遍"会让生产代码的上限循环永远吃不到结尾,那不是模拟真机。
+    """
+    位置 = [0]
+
+    def read(上限: int | None = None) -> bytes:
+        起 = 位置[0]
+        片 = body[起:] if 上限 is None else body[起 : 起 + 上限]
+        位置[0] += len(片)
+        return 片
+
+    return read
+
+
 class 假opener:
     def __init__(self, status: int = 200, body: bytes = b"{}", 抛=None) -> None:
         self.status, self.body, self.抛 = status, body, 抛
@@ -37,11 +54,22 @@ class 假opener:
 
 
 class _假响应:
+    """``read`` 照 ``http.client.HTTPResponse.read(amt=None)`` 的签名收参数。
+
+    生产代码现在**带着长度上限读**(``_读回执``),``read()`` 一定会被塞一个
+    字节数进去。替身不收这个参数就不是在模拟真响应,而是在替生产代码规定一条
+    真机上不存在的契约 —— 那种绿是假的。
+    """
+
     def __init__(self, status: int, body: bytes) -> None:
         self.status, self._body = status, body
+        self._给到 = 0
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, 上限: int | None = None) -> bytes:
+        剩 = self._body[self._给到 :]
+        片 = 剩 if 上限 is None else 剩[:上限]
+        self._给到 += len(片)
+        return 片
 
     def __enter__(self) -> _假响应:
         return self
@@ -56,7 +84,7 @@ class _读body时抛的假响应:
     def __init__(self, 抛: BaseException) -> None:
         self._抛 = 抛
 
-    def read(self) -> bytes:
+    def read(self, 上限: int | None = None) -> bytes:
         raise self._抛
 
     def __enter__(self) -> _读body时抛的假响应:
@@ -159,7 +187,9 @@ def test_HTTPError当回执读_不当异常() -> None:
         {},
         None,
     )
-    err.read = lambda: '{"ok": false, "stored": 3, "sha256": "", "message": "偏移对不上"}'.encode()
+    err.read = _按上限给(
+        '{"ok": false, "stored": 3, "sha256": "", "message": "偏移对不上"}'.encode()
+    )
     got = HttpSink("http://x:8095", opener=假opener(抛=err)).put(样例)
     assert (got.ok, got.stored) == (False, 3)
 
@@ -312,7 +342,7 @@ def test_HTTPError分支里stored字段类型不对也抛SinkError_不穿透() -
         {},
         None,
     )
-    err.read = lambda: b'{"ok": false, "stored": [1, 2], "sha256": "", "message": "m"}'
+    err.read = _按上限给(b'{"ok": false, "stored": [1, 2], "sha256": "", "message": "m"}')
     with pytest.raises(SinkError):
         HttpSink("http://x:8095", opener=假opener(抛=err)).put(样例)
 
@@ -374,3 +404,132 @@ def test_stored是inf时抛SinkError_不穿OverflowError() -> None:
         with pytest.raises(SinkError) as excinfo:
             parse_receipt(200, body)
         assert "stored" in str(excinfo.value)
+def test_ok缺了就是读不懂_不当成服务器说了false() -> None:
+    """裁决二十四:``ok`` 没有缺省值了。
+
+    它曾经缺省 ``False``,于是"回执里压根没有 ok 这个键"被翻译成了"服务器说了
+    ok 为假" —— 而 ``ok=False`` 会让 ``Uploader`` rewind,把已经确认过哈希的进度
+    整个作废。一个 502 配上 API 网关的标准错误体就走得通这条路。
+
+    这是**裁决十八的贯彻,不是新规矩**:rewind 只能由服务器**明确说了话**触发,
+    我们读不懂的一切只能退避。
+    """
+    for body in (
+        b"{}",
+        b'{"message": "Internal server error"}',
+        b'{"stored": 2097152, "sha256": "a"}',
+    ):
+        with pytest.raises(SinkError) as excinfo:
+            parse_receipt(200, body)
+        assert "ok" in str(excinfo.value)
+
+
+def test_服务器明确说ok为假那条路还活着() -> None:
+    """把 ``ok`` 判严之后要确认没把 ``PutReceipt(ok=False)`` 变成死路。
+
+    ``ok=False`` 是**服务器明确表态**的那条路,``Uploader`` 的 rewind 靠它。
+    服务器结构完好地回 ``{"ok": false, ...}``(200 也好,409 也好)必须照旧
+    给回执,不能变成 ``SinkError``。
+    """
+    body = json.dumps(
+        {"ok": False, "stored": 5, "sha256": "e" * 64, "message": "盘满了"}
+    ).encode()
+    assert parse_receipt(200, body) == PutReceipt(
+        ok=False, stored=5, sha256="e" * 64, message="盘满了"
+    )
+    assert parse_receipt(409, body).ok is False
+    opener = 假opener(body=body)
+    assert HttpSink("http://x:8095", opener=opener).put(样例).ok is False
+
+
+def test_stored是负数时抛SinkError() -> None:
+    """形状对、值荒唐,一样是读不懂。
+
+    ``{"stored": -5}`` 过得了 ``isinstance(值, int)``,写进队列之后下一轮
+    ``fh.seek(-5)`` 抛 ``OSError``,此后永久 defer —— 证据不丢(backlog 保持
+    住了),但 defer 的文案说的是"run 目录还在但这个文件不见了",文件明明在,
+    会把现场排查带去完全错的方向。在这儿判掉,错就报在离根子最近的地方。
+    """
+    for stored in (-1, -5, -2**62):
+        body = json.dumps({"ok": True, "stored": stored, "sha256": "a", "message": ""}).encode()
+        with pytest.raises(SinkError) as excinfo:
+            parse_receipt(200, body)
+        assert "stored" in str(excinfo.value)
+
+
+def test_必须正好200才算ok_201和204都判没传成() -> None:
+    """上线形状:服务器收下一块之后**必须回 200**。
+
+    ``201``/``204``/``206`` 哪怕 body 完美,在这儿也一律判成"这次没传成"。
+    这条规则以前只活在 ``ok=... and status == 200`` 那半行里,没写在任何地方。
+    要放宽成 ``200 <= status < 300`` 是**改协议**,得先改规格。
+    """
+    body = json.dumps({"ok": True, "stored": 9, "sha256": "a" * 64, "message": ""}).encode()
+    assert parse_receipt(200, body).ok is True
+    for status in (201, 202, 204, 206):
+        assert parse_receipt(status, body).ok is False
+
+
+class _没有尽头的假响应:
+    """要多少给多少,永远给得出来 —— 服务器 ``Content-Length`` 报 100 GB 的形状。"""
+
+    status = 200
+
+    def read(self, 上限: int | None = None) -> bytes:
+        if 上限 is None:
+            raise MemoryError
+        return b"a" * 上限
+
+    def __enter__(self) -> _没有尽头的假响应:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def test_回执超过上限就判读不懂_压根不去分配那100GB() -> None:
+    """裁决二十五:**上限是第一道,翻译异常是第二道。**
+
+    服务器报 ``Content-Length: 100000000000`` 的时候,正确的做法不是接住
+    ``MemoryError``,是根本不去分配那 100 GB。这个替身把"不带上限地读"做成
+    抛 ``MemoryError``(真机上就是那样炸的)—— 生产代码要是没带上限,这条会
+    直接红在 ``MemoryError`` 上;带了上限,它只会要 ``上限 + 1`` 个字节,拿到
+    ``上限 + 1`` 就判"这不是一张回执"。
+    """
+    opener = _固定响应的假opener(_没有尽头的假响应())
+    with pytest.raises(SinkError, match="回执太长"):
+        HttpSink("http://x:8095", opener=opener).put(样例)
+
+
+def test_读body时抛OverflowError和MemoryError也翻成SinkError() -> None:
+    """够不着上限的那两档:``Content-Length >= 2**63`` 在分配**之前**就抛
+    ``OverflowError``,``getaddrinfo`` 遇上大得装不进 C 的 long 的端口也抛它。
+
+    ``OverflowError`` 的 MRO 是 ``ArithmeticError -> Exception``,``MemoryError``
+    直接挂在 ``Exception`` 底下 —— **两个都不是 OSError**,原来那张清单一个都
+    接不住,会带着原始异常把 ``Uploader.run_once`` 炸穿。
+    """
+    for 抛 in (
+        OverflowError("cannot fit 'int' into an index-sized integer"),
+        MemoryError(),
+    ):
+        opener = _固定响应的假opener(_读body时抛的假响应(抛))
+        with pytest.raises(SinkError, match="发不出去"):
+            HttpSink("http://x:8095", opener=opener).put(样例)
+        with pytest.raises(SinkError, match="发不出去"):
+            HttpSink("http://x:8095", opener=假opener(抛=抛)).put(样例)
+
+
+def test_地址解不开的话术先说本机配置_不把人往查服务器上带() -> None:
+    """这一支罩的大多数其实是**我们这边**的问题:``base_url`` 的主机名过不了
+    IDNA 编码、``sn`` 里塞了 CRLF —— 两条都跟服务器和跳转毫无关系。
+
+    行为是对的(都翻成 ``SinkError`` 只退避),但话术以前只写"跳转目标?",
+    现场照着去查服务器和跳转,查的是没坏的那一头。
+    """
+    opener = 假opener(抛=ValueError("Invalid IPv6 URL"))
+    with pytest.raises(SinkError) as excinfo:
+        HttpSink("http://x:8095", opener=opener).put(样例)
+    话 = str(excinfo.value)
+    assert "base_url" in 话 and "sn" in 话
+    assert 话.index("base_url") < 话.index("跳转目标")
