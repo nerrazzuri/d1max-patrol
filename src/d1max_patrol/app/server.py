@@ -648,6 +648,27 @@ def _wall_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _归档钟() -> datetime:
+    """归档那一摊(保留期、清盘、导出、镜像)专用的钟。**故意不走
+    ``ctx.clock``,这不是漏注入。**
+
+    这几条路由算的都是"这一趟归档存了多久":被减数是这里,减数是归档目录
+    自己名字上那个时间戳,而那个时间戳是 ``engine/archive.py`` 的 ``_now()``
+    盖的 —— 那是一个**外壳注不进去**的 ``datetime.now(timezone.utc)``
+    (``engine/retention.py`` 的默认钟同理)。两个数必须来自同一口钟才减得
+    出意义:注入钟一旦被拨(测试里拨、将来接了时间服务器之后校时拨),
+    ``plan_sweep`` 算出来的"过期"就会横跨两个纪元 —— 而 ``plan_sweep`` 后面
+    接的是 ``shutil.rmtree``。**宁可报表上的时间跟别处差几秒,也不能按一个
+    错纪元去删盘。**
+
+    要真把这摊改成可注入,得连 ``engine/archive.py`` 的 ``_now()`` 一起改,
+    那不是这一层能单独完成的动作。在那之前,这个函数就是那条分界线:
+    **``ctx.clock()`` 那一侧是"app 自己盖、app 自己读"的时间戳;这一侧是
+    "engine 盖的、app 只能跟着读"的时间戳。**
+    """
+    return datetime.now(timezone.utc)
+
+
 def _no_time_reference() -> tuple[int, str] | None:
     """默认没有外部时间参照。第 9 卷接上服务器之后换成真的。
 
@@ -2090,12 +2111,43 @@ class AppServer:
         这件事要跑几分钟到几十分钟,压在一个 HTTP 请求里必然超时。所以只
         同步验一遍参数(名字填错了要当场知道),然后丢到循环线程去跑。
         进展去 ``GET /api/mapping`` 看 ``phase``,失败原因看 ``last_error``。
+
+        **这条路由是有破坏性的,不是"离线活儿"。** ``mapping.rebuild()`` 干的
+        第一件事是 ``forget_home(map_id)`` —— 把这张图的原点删掉。原点是起飞
+        门槛的硬前置,删完这只狗用这张图就起不了飞了,而唯一的恢复办法是有人
+        物理走到原点上用手机重标一次。所以这里有两道闸,拦的是两拨人:
+
+        * ``control.CONTROLLED`` 里那一条拦的是**没有控制权的人**;
+        * 下面这道 ``engine.running`` 拦的是**握着控制权的人自己手滑** ——
+          正巡检着把脚下这张图的原点删了。
+
+        另外补一条**留痕**:谁、什么时候、删的哪张图,走 ``self._hub.events``
+        (跟 ``release.*`` 那几条同一条流),值守屏和第 8 卷的告警都读得到。
         """
         body = req.json()
         bag_name = _text(body, "bag")
         map_id = _text(body, "map_id")
+        if self._ctx.engine.running:
+            raise HttpError(
+                409, "这一趟还在跑,不能重建地图",
+                "重建会把这张图的原点一起删掉,删完这只狗下一趟起不了飞。"
+                "先 POST /api/run/abort 把这一趟收掉,或者等它自己跑完。")
         mapping = self._ctx.mapping
         bag = self._call(lambda: mapping.plan_rebuild(bag_name, map_id))
+        # 留痕在 spawn **之前**:重建本身是异步的、可能失败,但"这张图的原点
+        # 要没了"在参数验过之后就是既成事实,值守屏得立刻看得见。事后再补
+        # 一条的话,中间那几分钟正是最需要知道"是谁动的"的那几分钟。
+        sess = req.session
+        who = sess.operator if sess else ""
+        self._hub.events.emit({"kind": "mapping.rebuild_started",
+                               "map_id": map_id, "bag": bag.name,
+                               "operator": who,
+                               "session": sess.ref if sess else "",
+                               "at_ms": self._ctx.clock(),
+                               "home_forgotten": True})
+        log.warning("重建地图 %s(用包 %s,发起人 %s):这张图的原点已作废,"
+                    "重建完要有人重新标一次原点才能起飞",
+                    map_id, bag.name, who or "未署名")
         self._ctx.bridge.spawn(lambda: mapping.rebuild(bag, map_id))
         return json_response({"bag": bag.name, "map_id": map_id}, status=202)
 
@@ -2362,7 +2414,7 @@ class AppServer:
         if not isinstance(note, str):
             raise HttpError(400, "note 得是一个字符串", repr(note))
         home = HomePoint(map_id=map_id, pose=Pose.from_xy_yaw(x, y, yaw),
-                         marked_at_ms=int(time.time() * 1000), note=note)
+                         marked_at_ms=self._ctx.clock(), note=note)
         try:
             save_home(self._ctx.mapping.maps_dir, home)
         except OSError as exc:
@@ -2567,7 +2619,7 @@ class AppServer:
         自己的 docstring,以及 ``_map_home_put`` 里那条一样的论证)。
         """
         ctx = self._ctx
-        now = datetime.now(timezone.utc)
+        now = _归档钟()
         used, total = _disk(ctx.runs_root)
         ratio = (used / total) if total > 0 else 0.0
         runs = scan_runs(ctx.runs_root, now=now)
@@ -2657,7 +2709,7 @@ class AppServer:
             raise HttpError(400, "清盘要一个对象",
                             '形如 {"free_bytes": 2000000000, "apply": true}')
         ctx = self._ctx
-        now = datetime.now(timezone.utc)
+        now = _归档钟()
         used, total = _disk(ctx.runs_root)
         raw = body.get("free_bytes")
         if raw is None:
@@ -2736,7 +2788,7 @@ class AppServer:
         picked = pick_runs(scan_runs(ctx.runs_root), start=start, end=end)
         try:
             bundle = build_export(picked, out_dir=ctx.exports,
-                                  now=datetime.now(timezone.utc))
+                                  now=_归档钟())
         except ExportError as exc:
             raise HttpError(400, "这个区间导不出来", str(exc)) from exc
         except OSError as exc:
@@ -2953,7 +3005,7 @@ class AppServer:
                 # 就是没在同步。
                 if plan.items:
                     await asyncio.to_thread(
-                        apply_sync, plan, now_ms=int(time.time() * 1000),
+                        apply_sync, plan, now_ms=ctx.clock(),
                         robot_sn=ctx.identity.sn)
             except (OSError, BackupError):
                 # **一块坏盘不能让这条循环死掉** —— 死了之后没有任何人会发现,
@@ -2998,7 +3050,7 @@ class AppServer:
         if targets is None:
             return json_response({"robot_sn": ctx.identity.sn, "scanned": False,
                                   "targets": [], "detail": why})
-        now = datetime.now(timezone.utc)
+        now = _归档钟()
         # **扫一遍就够。** 每块盘各扫一遍的话,``scan_runs`` 会对整个 runs_root
         # 递归 stat 一次(``retention._size_bytes`` 是 rglob("*")),而这条
         # 路由挂在 HTTP 请求路径上,归档一多这个代价不是可以忽略的。
@@ -3057,7 +3109,7 @@ class AppServer:
         try:
             got = init_target(target.mount, robot_sn=ctx.identity.sn, role=role,
                               label=label if isinstance(label, str) else "",
-                              now_ms=int(time.time() * 1000))
+                              now_ms=ctx.clock())
         except BackupError as exc:
             # 409 而不是 400:请求本身没毛病,是盘上已经有东西了。
             raise HttpError(409, str(exc)) from exc
@@ -3097,7 +3149,7 @@ class AppServer:
             self._syncing.add(key)
         try:
             plan = plan_sync(ctx.runs_root, target.mount, robot_sn=ctx.identity.sn)
-            res = apply_sync(plan, now_ms=int(time.time() * 1000),
+            res = apply_sync(plan, now_ms=ctx.clock(),
                              robot_sn=ctx.identity.sn)
         finally:
             with self._sync_lock:
@@ -3137,7 +3189,7 @@ class AppServer:
                 best_ms = state.last_sync_ms
         if best_ms is None:
             return None
-        return max(0.0, (int(time.time() * 1000) - best_ms) / 1000 / 86400)
+        return max(0.0, (ctx.clock() - best_ms) / 1000 / 86400)
 
     # ------------------------------------------------------------ 版本
 
@@ -3165,7 +3217,7 @@ class AppServer:
             raise HttpError(400, f"package 要是一个路径字符串,给的是 {package!r}")
         try:
             manifest = stage(self._layout(), Path(package),
-                             now_ms=int(time.time() * 1000))
+                             now_ms=self._ctx.clock())
         except ReleaseError as exc:
             # 409 而不是 400:请求本身没毛病,是那个包有毛病。
             raise HttpError(409, str(exc)) from exc
@@ -3230,7 +3282,7 @@ class AppServer:
         plan = restart_plan(has_payload=ctx.identity.payload.has,
                             recorded=ctx.identity.payload.recorded)
         try:
-            pending = activate(layout, name, now_ms=int(time.time() * 1000),
+            pending = activate(layout, name, now_ms=ctx.clock(),
                                auto=auto, sn=ctx.identity.sn)
         except ReleaseError as exc:
             raise HttpError(409, str(exc)) from exc
@@ -3239,17 +3291,67 @@ class AppServer:
                               "pending": pending.to_wire(),
                               "restart": plan.to_wire()})
 
-    def _release_rollback(self, _req: Request) -> Response:
-        """人工回滚。**跟自动回滚走同一个 ``release.rollback``。**"""
+    def _release_rollback(self, req: Request) -> Response:
+        """人工回滚。**跟自动回滚走同一个 ``release.rollback``。**
+
+        **巡检途中默认不许回滚。** 回滚这条路最后一定落在 ``ctx.restart()``
+        上,重启的那几秒到几十秒里 ``POST /api/estop`` 这条路由是**不通的**
+        —— 服务没起来,谁都软急停不了。狗这时候还在走。所以这里跟
+        ``_release_activate`` 的自检对齐:``engine_running`` 为真就 409。
+
+        **为什么是这里加闸而不是把它放进 ``control.CONTROLLED``:** 那张表拦
+        的是"没有控制权的人",而回滚常常正是一次恢复性操作 —— 现场刚升完一版
+        发现不对,这时候上一个会话很可能已经掉线了,让一份死租约挡住回滚是把
+        机器锁死。判据在这儿不一样:不该按"有没有人握方向盘"拦,该按"这只狗
+        现在在不在走"拦。
+
+        **留了硬回滚的口子**,写法跟 ``_control_takeover`` 的 ``force`` 一模
+        一样 —— ``{"force": true, "reason": "..."}``,**理由是必填的**(§3.5
+        规则 3)。理由:新装的这一版本身就可能是"狗停不下来"的原因,那种时候
+        ``/api/run/abort`` 也未必好使,不给口子等于把人逼去拔电。硬回滚会在
+        事件流上留一条 ``release.force_rollback``。
+        """
+        body = req.json()
+        if not isinstance(body, dict):
+            raise HttpError(400, "请求体要是个对象",
+                            '不给内容就是普通回滚;硬回滚形如 '
+                            '{"force": true, "reason": "..."}')
+        force = bool(body.get("force"))
+        reason = body.get("reason", "")
+        if not isinstance(reason, str):
+            reason = ""
+        reason = reason.strip()
+        if self._ctx.engine.running:
+            if not force:
+                raise HttpError(
+                    409, "这一趟还在跑,不能回滚版本",
+                    "回滚要重启服务,重启那几十秒里软急停是打不通的,而狗还在"
+                    "走。先 POST /api/run/abort 收掉这一趟;真要带着跑的活儿"
+                    '硬回滚,传 {"force": true, "reason": "为什么"}。')
+            if not reason:
+                raise HttpError(400, "硬回滚必须写理由",
+                                "带着一趟没跑完的活儿重启服务是要留痕的。")
+        sess = req.session
         layout = self._layout()
         try:
-            back = rollback(layout, now_ms=int(time.time() * 1000))
+            back = rollback(layout, now_ms=self._ctx.clock())
         except ReleaseError as exc:
             raise HttpError(409, str(exc)) from exc
+        if force:
+            # 只有硬回滚才留痕。普通回滚是"停着的时候换个版本",跟事故无关;
+            # 硬回滚是"带着一趟没跑完的活儿把服务重启了",事后一定有人要查。
+            self._hub.events.emit({"kind": "release.force_rollback",
+                                   "rolled_back_to": back, "reason": reason,
+                                   "operator": sess.operator if sess else "",
+                                   "session": sess.ref if sess else "",
+                                   "at_ms": self._ctx.clock()})
+            log.warning("巡检途中硬回滚到 %s(发起人 %s,理由:%s)",
+                        back, (sess.operator if sess else "") or "未署名", reason)
         payload = self._ctx.identity.payload
         plan = restart_plan(has_payload=payload.has, recorded=payload.recorded)
         self._ctx.restart(plan)
-        return json_response({"rolled_back_to": back, "restart": plan.to_wire()})
+        return json_response({"rolled_back_to": back, "restart": plan.to_wire(),
+                              "forced": force})
 
     # ------------------------------------------------------- 任务包与排程
 
@@ -3381,11 +3483,21 @@ class AppServer:
         """包里的排程,加上每条此刻的决定。值守屏读这一条。
 
         **这条路由是「看」,不是「跑」。** ``decide()`` 说 due 了,它也只是把
-        这句话答出来;真起跑是第 8 卷排程器的事。
+        这句话答出来。
 
-        ``last_started_ms`` 一律传 ``None``:「上一次真起跑是什么时候」得从 run
-        归档里查,那同样是第 8 卷。这里按「从没跑过」答,**不是漏了** —— 这条
-        路由一次都不会真起跑任何任务,重复起跑这件事在这儿不存在。
+        **到点自动出发这件事,整个仓库里没有人做。** ``engine/`` 那边只有
+        ``decide()`` 这个判据,没有任何一条循环去轮询它、更没有谁拿它的结论
+        去调 ``engine.start()``;这条路由是 ``decide()`` 唯一的调用点,而它只
+        把结论写进响应体给值守屏看。以前这段话写的是「真起跑是第 8 卷排程器
+        的事」—— 第 8 卷就是现在,那个排程器没有被做出来。**这里不把话再往
+        后推一卷**,只把现状写清楚:今天要让一趟任务出发,唯一的办法是有人
+        (或者手机)去 ``POST /api/missions/<id>/run``。
+
+        ``last_started_ms`` 一律传 ``None``:「上一次真起跑是什么时候」要从 run
+        归档里回查,那份回查同样没做。这里按「从没跑过」答,**在当下不是
+        漏了** —— 没有任何东西会照这个结论去起跑,重复起跑这件事在这儿不存在。
+        要哪天真接上自动起跑,这两条(轮询循环、``last_started_ms`` 回查)得
+        一起补:只补前一条会变成「到了点每一轮都判 due,于是每一轮起一趟」。
         """
         # 一次请求里只读一次墙上时钟:真机上 ``now`` 和漂移用不同瞬间的读数
         # 是一处可以省掉的糊涂账,读一次存下来,全程用它。
@@ -3625,7 +3737,7 @@ class AppServer:
                              pending.to)
                     return wire
 
-                back = rollback(layout, now_ms=int(time.time() * 1000))
+                back = rollback(layout, now_ms=ctx.clock())
                 self._hub.events.emit({"kind": "release.rolled_back",
                                       "rolled_back_to": back, **wire})
                 log.error("重启后自检没过,退回 %s", back)
@@ -3678,7 +3790,7 @@ class AppServer:
         try:
             written = write_payload(has=bool(raw.get("has_payload")),
                                     by=str(raw.get("by", "")),
-                                    now_ms=int(time.time() * 1000),
+                                    now_ms=ctx.clock(),
                                     path=ctx.payload_file,
                                     confirm=str(raw.get("confirm", "")))
         except ValueError as exc:

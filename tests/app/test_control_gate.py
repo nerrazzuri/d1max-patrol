@@ -27,6 +27,9 @@ T0 = 1_757_000_000_000
     "/api/teleop/mode",
     "/api/mapping/record/start",
     "/api/mapping/record/stop",
+    # 重建会 ``forget_home`` 掉这张图的原点(``app/mapping.py``), 删完这只狗
+    # 用这张图起不了飞 —— 判据是 §3.5 规则 4 的"下一趟还能不能出发"。
+    "/api/mapping/rebuild",
     "/api/missions/m1/run",
     "/api/run/pause",
     "/api/run/resume",
@@ -285,8 +288,6 @@ def test_退出之后别人立刻拿得到(有pin的服务):
     "/api/control/takeover/approve",
     # §3.5 规则 2:急停永远不要控制权。这一条错了会死人。
     "/api/estop",
-    # 拿录好的包离线重建,狗本身没在动。
-    "/api/mapping/rebuild",
     # 归档上的判读和复核,改的是纸面不是狗。
     "/api/runs/<run_id>/judge",
     "/api/runs/<run_id>/review/<name>",

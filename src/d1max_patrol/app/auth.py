@@ -323,26 +323,80 @@ class TokenStore:
               idle_s: float | None = None,
               abs_s: float | None = None) -> str:
         now = time.monotonic() if now is None else now
-        token = secrets.token_urlsafe(TOKEN_BYTES)
         with self._lock:
             self._sweep(now)
-            # 腾地方**先扔过了闲置期的那些**。它们留着只为给急停那条豁免
-            # 认一次身份, 让它们把一个正在作业的会话从下面那条纯插入序
-            # FIFO 里挤出去就本末倒置了 —— 那条 FIFO 不看死活。
-            if len(self._live) >= self._cap:
-                for stale in [t for t, r in self._live.items()
-                              if _idle_dead(r, now)]:
-                    del self._live[stale]
-                    if len(self._live) < self._cap:
-                        break
-            while len(self._live) >= self._cap:
-                self._live.pop(next(iter(self._live)))
-            self._live[token] = _Live(
-                last=now, born=now, ref=token_ref(token),
-                operator=operator,
-                channel=channel, readonly=readonly,
-                idle_s=self._idle_s if idle_s is None else idle_s,
-                abs_s=self._abs_s if abs_s is None else abs_s)
+            return self._issue_locked(now, operator=operator, channel=channel,
+                                      readonly=readonly, idle_s=idle_s,
+                                      abs_s=abs_s)
+
+    def issue_with_quota(self, *, now: float, cap: int, local: bool,
+                         operator: str = "", channel: str = CHANNEL_LAN,
+                         readonly: bool = False,
+                         idle_s: float | None = None,
+                         abs_s: float | None = None,
+                         ) -> tuple[str | None, tuple[Session, ...]]:
+        """名额判定 + 同名换座 + 签发, **三步在同一把锁里做完**。
+
+        回 ``(token, ())`` 是发出来了;回 ``(None, 占着名额的那几个)`` 是名额
+        满了又没有同名可以换座 —— **拒绝的话术归 ``Guard`` 写**, 这儿只出
+        事实, 这个类不认识 HTTP 状态码。
+
+        **为什么非得是一个方法, 不能在外面拼三步。** 原来 ``Guard._issue``
+        是 ``sessions()`` 读一次(锁里)、``len(pool) >= cap`` 判一次(锁
+        **外**)、``revoke_ref()`` / ``issue()`` 各写一次(各自锁里)。服务是
+        ``ThreadingHTTPServer``, 两个人几乎同时输 PIN 就是两条真线程:两边
+        都在锁外读到"现在 2 个, 上限 3", 于是两边都签发, 落地 4 个会话。
+        §3.6 那个上限是物理的(CPE 的无线上行是共享的), 破了它屏上的分母
+        和 ``video.MAX_VIEWERS = 6`` 那个推导一起失效。
+
+        ``local`` 说的是"要判的是哪个池子":本机(``CHANNEL_LOCAL``)和非本机
+        各有各的上限, 互不侵占(见 ``Guard._issue``)。判据写成
+        ``(r.channel == CHANNEL_LOCAL) is local``, 而不是让调用方传一个谓词
+        进来 —— 持着锁去调外面给的函数, 是把死锁的口子开在这个类的最里层。
+
+        ``count`` 那条按 ``self._seen`` 算的口径**这里一个字都不用** ——
+        这里读的是调用方传进来的 ``now``, 跟 ``sessions()`` 同一个口径。
+        """
+        with self._lock:
+            self._sweep(now)
+            pool = tuple(_session_of(r, now) for r in self._live.values()
+                         if not _idle_dead(r, now)
+                         and (r.channel == CHANNEL_LOCAL) is local)
+            if len(pool) >= cap:
+                # 同一个报名的人回来了(换设备、重装 app、清了缓存):挤掉的是
+                # 他自己那个老会话, 不是别人的。空名字不算身份 —— 让空名字互
+                # 相挤等于把上限废掉。理由的长版本在 ``Guard._issue``。
+                mine = {s.ref for s in pool if operator and s.operator == operator}
+                if not mine:
+                    return None, pool
+                for dead in [t for t, r in self._live.items() if r.ref in mine]:
+                    del self._live[dead]
+            return self._issue_locked(now, operator=operator, channel=channel,
+                                      readonly=readonly, idle_s=idle_s,
+                                      abs_s=abs_s), ()
+
+    def _issue_locked(self, now: float, *, operator: str, channel: str,
+                      readonly: bool, idle_s: float | None,
+                      abs_s: float | None) -> str:
+        """真的落一条记录。**调用方已经拿着锁, 并且已经 ``_sweep`` 过了。**"""
+        token = secrets.token_urlsafe(TOKEN_BYTES)
+        # 腾地方**先扔过了闲置期的那些**。它们留着只为给急停那条豁免
+        # 认一次身份, 让它们把一个正在作业的会话从下面那条纯插入序
+        # FIFO 里挤出去就本末倒置了 —— 那条 FIFO 不看死活。
+        if len(self._live) >= self._cap:
+            for stale in [t for t, r in self._live.items()
+                          if _idle_dead(r, now)]:
+                del self._live[stale]
+                if len(self._live) < self._cap:
+                    break
+        while len(self._live) >= self._cap:
+            self._live.pop(next(iter(self._live)))
+        self._live[token] = _Live(
+            last=now, born=now, ref=token_ref(token),
+            operator=operator,
+            channel=channel, readonly=readonly,
+            idle_s=self._idle_s if idle_s is None else idle_s,
+            abs_s=self._abs_s if abs_s is None else abs_s)
         return token
 
     def info(self, token: str, *, now: float | None = None) -> Session | None:
@@ -1112,28 +1166,21 @@ class Guard:
         """
         name = normalize_operator(operator)
         channel = self.channel_of(client)
-        if channel == CHANNEL_LOCAL:
-            cap = self.max_local_sessions
-            pool = [s for s in self.tokens.sessions(now=now)
-                    if s.channel == CHANNEL_LOCAL]
-            full_msg = f"本机(回环)同时最多 {cap} 个会话"
-        else:
-            cap = self.max_sessions
-            pool = [s for s in self.tokens.sessions(now=now)
-                    if s.channel != CHANNEL_LOCAL]
-            full_msg = f"这只狗最多同时连 {cap} 个人"
-        if len(pool) >= cap:
-            # 同一个报名的人回来了(换设备、重装 app、清了缓存):挤掉的是
-            # 他自己那个老会话,不是别人的。空名字不算身份 —— 让空名字互
-            # 相挤等于把上限废掉。本机和非本机各自一个池子,互不侵占。
-            mine = [s for s in pool if name and s.operator == name]
-            if not mine:
-                raise Denied(409, full_msg, self._占位说明(pool))
-            for s in mine:
-                self.tokens.revoke_ref(s.ref)
+        local = channel == CHANNEL_LOCAL
+        cap = self.max_local_sessions if local else self.max_sessions
+        full_msg = (f"本机(回环)同时最多 {cap} 个会话" if local
+                    else f"这只狗最多同时连 {cap} 个人")
         idle = AP_TOKEN_IDLE_S if channel == CHANNEL_AP else None
-        return self.tokens.issue(now=now, operator=name, channel=channel,
-                                 readonly=readonly, idle_s=idle)
+        # **判名额、换座、签发是一次调用, 不是三次。** 拆成三次的那个版本里,
+        # "现在几个人"是在锁外判的, 两条并发的解锁线程会同时读到"还有空位"
+        # 然后各发一个 token, 落地就多出一个会话(见
+        # ``TokenStore.issue_with_quota`` 的文档串)。
+        token, pool = self.tokens.issue_with_quota(
+            now=now, cap=cap, local=local, operator=name, channel=channel,
+            readonly=readonly, idle_s=idle)
+        if token is None:
+            raise Denied(409, full_msg, self._占位说明(list(pool)))
+        return token
 
     def _占位说明(self, live: list[Session]) -> str:
         """名额被谁占着。**拒绝必须说清原因**(§3.6),不然现场只会反复重试。"""

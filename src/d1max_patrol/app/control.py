@@ -56,12 +56,23 @@ from d1max_patrol.engine.lease import AuditRecord, LeaseBook, LeaseState
 #:   的那一趟是惰性的 —— 下一趟才生效。**这是一个前提, 不是一道防线。**
 #:   哪天有人把 ``bundles_root`` 接进热加载, 这条排除就悄悄变错, 而且不会有
 #:   任何测试变红(见 docs/第2卷待办.md 第 49 条)。
-#: * ``POST /api/mapping/rebuild`` —— 拿录好的包离线重建, 狗本身没在动。
+#:
+#: **``POST /api/mapping/rebuild`` 以前在这张清单上, 现在不在了。** 当初的
+#: 理由是"拿录好的包离线重建, 狗本身没在动" —— 那句话写于 ``rebuild()``
+#: 里加上 ``forget_home`` 之前, 今天只描述了它的一半。另一半是:它**无条件
+#: 删掉这张图的原点**(``app/mapping.py`` 的 ``rebuild`` 第一件事), 而原点
+#: 是起飞门槛的硬前置 —— 删完谁都起不了飞, 恢复的唯一办法是有人物理走到
+#: 原点上用手机重标一次。判据仍是 §3.5 规则 4:它改变的是这只狗**下一趟还
+#: 能不能出发**。所以它进了下面那张表, 跟 ``record/start|stop`` 对齐。
 CONTROLLED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/api/teleop$")),
     ("POST", re.compile(r"^/api/teleop/heartbeat$")),
     ("POST", re.compile(r"^/api/teleop/mode$")),
     ("POST", re.compile(r"^/api/mapping/record/(start|stop)$")),
+    # 见上面那段:这一条删原点, 不是"离线活儿"。**跟它配套的还有
+    # ``server._rebuild`` 里那道"引擎在跑就不许重建"的闸** —— 这张表拦的是
+    # "没有控制权的人", 那道闸拦的是"握着控制权的人自己手滑", 两道缺一不可。
+    ("POST", re.compile(r"^/api/mapping/rebuild$")),
     ("POST", re.compile(r"^/api/missions/[^/]+/run$")),
     ("POST", re.compile(r"^/api/run/(pause|resume|abort|suspend)$")),
     ("POST", re.compile(r"^/api/maps/load$")),

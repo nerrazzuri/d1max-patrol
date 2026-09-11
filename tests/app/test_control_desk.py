@@ -90,8 +90,25 @@ def test_数据和运维不要控制权():
                  "/api/backup/eject", "/api/release/install",
                  "/api/release/activate", "/api/release/rollback",
                  "/api/bundle/apply", "/api/bundle/rollback",
-                 "/api/mapping/rebuild", "/api/runs/r1/judge"):
+                 "/api/runs/r1/judge"):
         assert needs_lease("POST", path) is False
+
+
+def test_离线重建要控制权():
+    """**这一条以前在"不要"那一边, 是错的。**
+
+    当初的理由是"拿录好的包离线重建, 狗本身没在动"。那句话写于
+    ``app/mapping.py`` 的 ``rebuild()`` 里加上 ``forget_home()`` 之前 ——
+    今天它干的第一件事就是把这张图的原点删掉, 而原点是起飞门槛的硬前置。
+    删完谁都起不了飞, 恢复的唯一办法是有人物理走到原点上重标一次。判据
+    仍然是 §3.5 规则 4: 它改变的是这只狗**下一趟还能不能出发**。
+
+    钉死这条的同时也钉住它的边界: ``GET /api/mapping``(看进度)照旧不要
+    控制权 —— 规则 1。
+    """
+    assert needs_lease("POST", "/api/mapping/rebuild") is True
+    assert needs_lease("GET", "/api/mapping/rebuild") is False
+    assert needs_lease("GET", "/api/mapping") is False
 
 
 def test_控制权自己那几条不要控制权():
