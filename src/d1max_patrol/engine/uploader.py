@@ -9,12 +9,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from d1max_patrol.engine.upload_queue import UploadQueue, backoff_ms, classify
+from d1max_patrol.engine.upload_queue import QueueItem, UploadQueue, backoff_ms, classify
 
 #: 一次发多少。**未验证:1 MiB 一块在客户的 4G 上是不是太大,没量过。**
 CHUNK_BYTES = 1_048_576
@@ -148,19 +149,20 @@ class Uploader:
             return Step(key="", action="idle", detail="队列空")
         item = ready[0]
         path = self.runs_root / item.key
-        if not path.is_file():
-            # 水位线把它删了(spec §4.4 的删除由水位驱动)。**销账,别永远卡着** ——
-            # 一条读不到的文件挡在第 2 级,后面的照片就永远轮不上。
-            self.queue.finish(item.key)
-            return Step(key=item.key, action="gone", detail="文件已经不在盘上")
-
         parts = item.key.split("/")
         run, rel = "/".join(parts[:2]), "/".join(parts[2:])
-        size = path.stat().st_size
-        offset = min(item.offset, size)
-        with open(path, "rb") as fh:
-            fh.seek(offset)
-            data = fh.read(CHUNK_BYTES)
+
+        # **不先 is_file() 再 open()** —— 两者之间有个检查-使用窗口,文件恰好在
+        # 这中间被删的话,is_file() 判过之后 open() 照样能抛。直接 try open,
+        # 拿到 OSError 再去分辨到底是哪一种"读不到"。
+        try:
+            with open(path, "rb") as fh:
+                size = os.fstat(fh.fileno()).st_size
+                offset = min(item.offset, size)
+                fh.seek(offset)
+                data = fh.read(CHUNK_BYTES)
+        except OSError:
+            return self._missing(item, run, now_ms)
 
         req = PutRequest(sn=self.sn, run=run, rel=rel, offset=offset, data=data, total=size)
         try:
@@ -193,3 +195,40 @@ class Uploader:
             self.queue.finish(item.key)
             return Step(key=item.key, action="done", detail=f"{receipt.stored} 字节对上了")
         return Step(key=item.key, action="sent", detail=f"到第 {receipt.stored} 个字节")
+
+    def _missing(self, item: QueueItem, run: str, now_ms: int) -> Step:
+        """文件读不到,分三种情况——只有第三种真的允许销账。
+
+        ``UploadQueue.offer()`` 的规矩是"新 size <= 老 size 就不重开",所以这里
+        一旦错判成 ``gone`` 销账,而文件其实还在、大小没变,以后每一次 ``scan()``
+        都不会把它捡回来——那是真的能永久丢证据的一条路径。spec §4.3 写死的是
+        "传不上去就一直排着,不做重试 N 次后放弃"。
+
+        1. ``runs_root`` 自己不是目录——盘没挂上,最现实的触发场景不是杀毒软件,
+           是这一卷短暂掉线或者还没 mount 完。**退避,绝不销账。**
+        2. ``runs_root`` 在,但这一趟的 run 目录也不在了——``retention.py`` 是
+           整趟 ``rmtree`` 删的,这就是水位线真的删掉了它。**销账。**
+        3. run 目录还在,单独这一个文件不见了——这不是 retention 的形状,是异常。
+           **退避,不销账。** 代价是这一条会一直排着、``backlog()`` 不归零——这正是
+           §4.3 要的那一侧:让值守屏上看得见一个不降的积压,好过悄悄丢掉一份证据。
+        """
+        if not self.runs_root.is_dir():
+            wait = backoff_ms(item.attempts + 1, rand=self._rand)
+            self.queue.defer(item.key, next_ms=now_ms + wait)
+            return Step(
+                key=item.key,
+                action="deferred",
+                detail=f"归档盘不在(runs_root 读不到,等 {wait} ms)",
+            )
+        if not (self.runs_root / run).is_dir():
+            # 水位线把整趟删了(spec §4.4 的删除由水位驱动)。**销账,别永远卡着** ——
+            # 一条读不到的文件挡在前面,后面的条目就永远轮不上。
+            self.queue.finish(item.key)
+            return Step(key=item.key, action="gone", detail="这一趟已经被水位线删掉了")
+        wait = backoff_ms(item.attempts + 1, rand=self._rand)
+        self.queue.defer(item.key, next_ms=now_ms + wait)
+        return Step(
+            key=item.key,
+            action="deferred",
+            detail=f"run 目录还在但这个文件不见了(等 {wait} ms)",
+        )

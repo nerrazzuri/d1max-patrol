@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from pathlib import Path
 
 import pytest
@@ -148,12 +149,55 @@ def test_断网就退避_不放弃(一趟: Path, tmp_path: Path) -> None:
     assert up.run_once(now_ms=1_000).key.endswith(".jpg")
 
 
-def test_文件没了就销账_不许永远卡着(一趟: Path, tmp_path: Path) -> None:
-    """§4.4 的删除由水位驱动,水位真删的时候队列里可能还挂着它。"""
+def test_run目录还在_单个文件没了就退避_不销账(一趟: Path, tmp_path: Path) -> None:
+    """修复轮 1:run 目录还在,单独这一个文件不见了不是 retention 的形状,是异常。
+
+    **退避,不许销账。** 这条会一直排着、``backlog()`` 不归零 —— 这正是 §4.3
+    要的那一侧:让值守屏上看得见一个不降的积压,好过悄悄丢掉一份证据。
+    (修复前的版本在这里判 ``gone`` 直接销账,而 ``UploadQueue.offer()`` 的规矩
+    是"新 size <= 老 size 就不重开",文件其实没动过大小的话以后永远捡不回来。)
+    """
     sink = 假服务器()
     up = 造(一趟, tmp_path, sink)
     up.scan()
+    backlog_before = up.backlog()
     (一趟 / "巡检一" / "20260911T101500Z" / "events.jsonl").unlink()
+    step = up.run_once(now_ms=0)
+    assert step.action == "deferred"
+    assert up.queue.get("巡检一/20260911T101500Z/events.jsonl").done is False
+    assert up.backlog() == backlog_before
+
+
+def test_runs_root整个不在就退避_不销账(一趟: Path, tmp_path: Path) -> None:
+    """修复轮 1:盘没挂上(``runs_root`` 短暂掉线或者还没 mount 完)不是水位线删除,
+
+    最现实的触发场景不是杀毒软件,是这一卷短暂掉线。**退避,绝不销账** —— 盘一旦
+    回来,这一条还得在队列里等着。
+    """
+    sink = 假服务器()
+    up = 造(一趟, tmp_path, sink)
+    up.scan()
+    backlog_before = up.backlog()
+    key = "巡检一/20260911T101500Z/events.jsonl"
+    up.runs_root = tmp_path / "runs-掉线了"
+    step = up.run_once(now_ms=0)
+    assert step.action == "deferred"
+    assert up.queue.get(key).done is False
+    assert up.backlog() == backlog_before
+
+
+def test_run目录整个被删就销账(tmp_path: Path) -> None:
+    """修复轮 1:``retention.py`` 是整趟 ``rmtree`` 删的 —— 这才是水位线真的
+
+    删掉了它,才允许 ``finish()`` 销账。
+    """
+    run = tmp_path / "runs" / "巡检一" / "20260911T101500Z"
+    run.mkdir(parents=True)
+    (run / "events.jsonl").write_bytes(b"half\n")
+    sink = 假服务器()
+    up = 造(tmp_path / "runs", tmp_path, sink)
+    up.scan()
+    shutil.rmtree(run)
     step = up.run_once(now_ms=0)
     assert step.action == "gone"
     assert up.queue.get("巡检一/20260911T101500Z/events.jsonl").done is True
