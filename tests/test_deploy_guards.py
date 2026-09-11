@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pytest
 
+from d1max_patrol.engine.release import _NAME_RE
 from tests.test_deploy_coexist import 有bash
 from tests.test_deploy_files import DEPLOY, ROOT, 交付文件, 六位数
 
@@ -521,3 +522,181 @@ def test_每份shell脚本的语法都过得去(脚本: Path):
     完 = subprocess.run(
         [bash, "-n", 脚本.as_posix()], capture_output=True, text=True, timeout=60)
     assert 完.returncode == 0, f"{脚本.name} 语法不过:{完.stderr}"
+# ------------------------------------- 五、根下那个解释器是 wrapper, 不是软链
+#
+# **这一节存在的全部理由, 也是一件真事, 而且比第四节那件更难看见。**
+#
+# ``install.sh`` 的 2/7 步原来写的是:
+#
+#     ln -sfn "$ROOT/bin-venv/bin/python" "$ROOT/bin/python"
+#
+# 看着没毛病 —— venv 的解释器本来就是软链堆出来的。但 CPython 找 pyvenv.cfg
+# 用的是 ``sys.executable`` **没有解析软链**的那个路径, 而且只看它自己那一级
+# 目录和上一级。这条链落在 ``$ROOT/bin/`` 底下, 这两级都没有 pyvenv.cfg,
+# 于是解释器判定自己不在 venv 里, ``sys.prefix`` 变成 ``/usr`` —— 之后每一次
+# ``"$ROOT/bin/python" -m pip install`` 都写进**系统 site-packages**。
+#
+# 两种机器两种死法: 带 PEP 668 的(Ubuntu 23.04+)当场
+# externally-managed-environment, 装不下去; JetPack/Ubuntu 22.04 上没有这道
+# 闸, 它**不声不响地往系统 Python 里写**, 装完看着一切正常。而这台狗上还跑着
+# 厂商的上装, 系统 Python 是共用的; ``uninstall.sh`` 的删除范围够不到系统
+# site-packages —— 卸载卸不干净, ``install.sh`` 开头那句「盘上只有以上这些」
+# 就成了空话, ``footprint.sh`` 的 diff 也永远差着一块。
+#
+# 这类 bug 靠读脚本是读不出来的(那一行完全合法), 靠既有测试也查不出来
+# (它们只 grep 文本)。真跑一次量 ``sys.prefix`` 才看得见。所以这里**把
+# 结论钉成文本护栏**: 盘上不许再出现这种写法, 谁改回去谁当场变红。
+#
+# **扫的是可执行片段, 不是注释。** ``install.sh`` 的 2/7 步故意把老写法原样
+# 抄在注释里(不写下来, 下一个人三个月后又会觉得软链更干净), 那一行必须放过。
+# ``docs/superpowers/plans/`` 底下那份归档计划里也留着老写法 —— 它是冻结的
+# 历史记录, 不是交付件, 同样不在扫描范围内。
+
+
+#: 这一节扫哪些文件: 所有 shell 脚本, 加上 ``deploy/`` 底下的非脚本交付件
+#: (systemd 单元), 加上现场照着一行行敲的那两份文档。
+def 装机相关文件() -> list[Path]:
+    出 = list(shell脚本()) + sorted(DEPLOY.glob("*.service"))
+    for 名 in ("装机清单.md", "真机现场执行单.md"):
+        路径 = ROOT / "docs" / 名
+        if 路径.exists():
+            出.append(路径)
+    return 出
+
+
+#: 「把根下的解释器做成软链」这种写法。需求书给的形状就是 ``ln -s.*bin/python``。
+_软链解释器 = re.compile(r"ln\s+-s\S*\s[^\n]*bin/python")
+
+
+def 软链解释器的行(路径: Path) -> list[tuple[int, str]]:
+    """挑出这份文件里「把解释器做成软链」的**可执行**行。
+
+    shell 脚本走 ``代码行()`` —— 注释和 heredoc 正文都已经被抹掉, 所以 2/7 步
+    那条留作记录的注释不会被误伤。别的文件(单元文件、文档)没有可执行语义,
+    整行原样扫。
+    """
+    文本 = 路径.read_text(encoding="utf-8")
+    if 路径.suffix == ".sh":
+        行们 = 代码行(文本)
+    else:
+        行们 = [(i + 1, 行) for i, 行 in enumerate(文本.split("\n"))]
+    return [(行号, 行.strip()) for 行号, 行 in 行们 if _软链解释器.search(行)]
+
+
+def test_盘上不许再有指向根下解释器的软链():
+    """``ln -sfn ... bin/python`` 一处都不许有。
+
+    改回软链 = 把包装进系统 Python = 卸载卸不干净。这条是那件事唯一的看门人。
+    """
+    坏的 = [(路径, 行号, 行) for 路径 in 装机相关文件()
+            for 行号, 行 in 软链解释器的行(路径)]
+    assert not 坏的, "\n".join(
+        ["把根下的解释器做成软链了 —— 这样 sys.prefix 会掉回 /usr, "
+         "pip 会装进系统 site-packages:"]
+        + [f"  {路径.relative_to(ROOT).as_posix()}:{行号}: {行}"
+           for 路径, 行号, 行 in 坏的]
+        + ["要的是一个 exec 到 bin-venv/bin/python 的 wrapper 脚本, "
+           "理由见 install.sh 的 2/7 步"])
+
+
+def test_这条软链护栏自己不是摆设():
+    """**守的是上面那个扫描器。**
+
+    一个什么都匹配不上的正则永远是绿的。这里两头钉死: 老写法一定被抓住,
+    注释里那条记录一定放过, wrapper 的写法一定不被误伤。
+    """
+    样本 = "\n".join([
+        "#!/usr/bin/env bash",
+        '#   ln -sfn "$ROOT/bin-venv/bin/python" "$ROOT/bin/python"',
+        'cat > "$ROOT/bin/python" <<WRAP',
+        'exec "$ROOT/bin-venv/bin/python" "$@"',
+        "WRAP",
+        'ln -sfn "$ROOT/releases/$REL_NAME" "$ROOT/current"',
+        'ln -sfn "$ROOT/bin-venv/bin/python" "$ROOT/bin/python"',
+    ])
+    命中 = [行号 for 行号, 行 in 代码行(样本) if _软链解释器.search(行)]
+    assert 命中 == [7], f"扫描器的行为变了: {命中}"
+
+
+def test_装机脚本把根下的解释器装成一个wrapper():
+    """光「没有软链」不够 —— 还得真的有那个 wrapper, 而且是可执行的。
+
+    没有这一条的话, 把那几行整段删掉也是绿的: 没有软链了, 但根下也没有解释器,
+    单元里那两条 ExecStartPre 直接 203/EXEC。
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    # heredoc 的结束标记没加引号, 所以 ``$ROOT`` 在写盘那一刻就展开成真路径,
+    # 而 ``"\$@"`` 要转义一次才能原样落到 wrapper 里 —— 参数得透传给解释器,
+    # 不能在生成的时候就被这一层吃掉。这里按**脚本里的写法**对, 不是按落盘结果。
+    assert r'exec "$ROOT/bin-venv/bin/python" "\$@"' in 脚本, (
+        "根下的 wrapper 不见了 —— 单元里两条 ExecStartPre 都是打 "
+        "/opt/d1max/bin/python 的")
+    assert 'chmod 0755 "$ROOT/bin/python"' in 脚本, (
+        "wrapper 没有 chmod 0755, systemd 起不动它")
+    # 老机器上装的是软链, 重跑时得先拆掉 —— ``-x`` 对「指向可执行文件的软链」
+    # 也为真, 不显式拆一次的话, 已经装过的机器永远换不成 wrapper。
+    assert '[[ -L "$ROOT/bin/python" ]]' in 脚本, (
+        "没有把老机器上那条软链拆掉的那一步, 装过的机器换不成 wrapper")
+
+
+def test_装机脚本的用法例子过得了包名正则():
+    """例子里的包目录名必须真能装得进去。
+
+    ``engine/release.py`` 的 ``_NAME_RE`` 只认 ``<日期>-<6 到 12 位十六进制>``,
+    ``verify_package()`` 还要求目录名跟包里 release.json 的 name 一字不差。
+    原来的例子写的是 ``d1max-2026-09-20-77b2de``, 带前缀 —— 照着敲的人会在
+    3/7 步被 release install 拒掉, 而那时候前两步已经白跑了。
+    **要改的是例子, 不是去放宽正则**: 目录名跟 manifest 对齐是故意的,
+    它同时也是防路径穿越的那道闸。
+    """
+    例子 = re.compile(r"install\.sh\s+(\S*/)?([A-Za-z0-9._-]*\d{4}-\d{2}-\d{2}-[A-Za-z0-9._-]+)")
+    查过 = 0
+    for 路径 in [DEPLOY / "install.sh", ROOT / "docs" / "装机清单.md"]:
+        文本 = 路径.read_text(encoding="utf-8")
+        名字们 = [命中.group(2) for 命中 in 例子.finditer(文本)]
+        # 装机清单里还有不跟在 install.sh 后面的裸例子, 一并收上来。
+        名字们 += re.findall(r"`([A-Za-z0-9._-]*\d{4}-\d{2}-\d{2}-[0-9a-f]{6,12})`", 文本)
+        名字们 += re.findall(r"`/home/robot/([A-Za-z0-9._-]+)`", 文本)
+        for 名 in 名字们:
+            查过 += 1
+            assert _NAME_RE.match(名), (
+                f"{路径.relative_to(ROOT).as_posix()} 里的例子 {名!r} 过不了 "
+                f"_NAME_RE —— 照着它敲的人会在 3/7 步被 release install 拒掉。"
+                f"改例子, 不要改正则")
+    assert 查过 >= 3, f"一个包名例子都没扫到({查过} 个), 这条护栏像是瞎了"
+
+
+def test_装机脚本在动盘之前就把两种装不下去的情况拦掉():
+    """包目录不在、账号不在, 都要在 ``mkdir -p "$ROOT"`` **之前**失败。
+
+    原来这两样都是往后拖的: 打错的路径一路带到 2/7 末尾的 ``cp -a`` 才炸,
+    没有 robot 账号则是 1/7 的 ``chown`` 撞上 ``chown: invalid user`` —— 而
+    ``chown`` 排在 ``mkdir -p`` 之后。两种都在 ``/opt/d1max`` 已经建出来之后
+    中止, 留半个脚印给人收, 而 ``footprint.sh`` 的 diff 里会多出东西。
+    失败要早、要便宜、要说人话。
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    动盘 = 脚本.index('mkdir -p "$ROOT/releases"')
+    包目录检查 = 脚本.index('if [[ ! -d "$PKG" ]]; then')
+    账号检查 = 脚本.index('if ! id -u "$RUN_USER" >/dev/null 2>&1; then')
+    assert 包目录检查 < 动盘, "包目录的检查排在 mkdir 后面了, 会留半个脚印"
+    assert 账号检查 < 动盘, "账号的检查排在 mkdir 后面了, 会留半个脚印"
+    # 报错里必须把那个路径原样打出来, 不然现场的人不知道自己敲错在哪儿。
+    assert '$PKG" >&2' in 脚本, "包目录不存在的报错没把路径打出来"
+    assert '$RUN_USER' in 脚本, "账号不存在的报错没把账号名打出来"
+
+
+def test_当前版本名有显式的空默认值():
+    """``CURRENT_REL`` 没有 ``current`` 链时要是空串, 不能是别的什么。
+
+    原来是 ``CURRENT_REL=$(basename "$(readlink -f "$ROOT/current")")`` 一行
+    打完 —— 链不在时 ``readlink -f`` 回的是那条路径本身, ``basename`` 于是给出
+    字面量 ``current``。后面拿它跟 ``$REL_NAME`` 比、往回执里写, 靠的是
+    「``current`` 永远过不了 ``_NAME_RE``」这个巧合。**巧合不是接口。**
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    默认 = 脚本.index("\nCURRENT_REL=\n")
+    读链 = 脚本.index('CURRENT_REL=$(basename "$(readlink -f "$ROOT/current")")')
+    assert 默认 < 读链, "CURRENT_REL 没有先给一个空默认值"
+    assert '-e "$ROOT/current" || -L "$ROOT/current"' in 脚本, (
+        "读链之前没判断链在不在 —— 断链也要能读出名字, 所以 -L 那一半不能省")

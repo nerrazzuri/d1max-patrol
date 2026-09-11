@@ -762,7 +762,11 @@ def test_离线pip参数每一处pip都带上了(装机脚本):
     """
     assert "D1MAX_PIP_ARGS" in 装机脚本
     assert "PIP_ARGS=${D1MAX_PIP_ARGS:-}" in 装机脚本
-    pip行 = [ln for ln in 装机脚本.splitlines() if "-m pip install" in ln]
+    # **只数可执行行, 注释里提到 pip install 的不算。** 2/7 步那段解释「软链会
+    # 让 pip 装进系统 site-packages」的注释里就原样写着这五个字, 它不是一条要
+    # 带离线参数的命令。判据是行首第一个非空字符是不是 ``#``。
+    pip行 = [ln for ln in 装机脚本.splitlines()
+             if "-m pip install" in ln and not ln.lstrip().startswith("#")]
     # 今天是四条(2/7 两条、4/7 两条),我数过。
     assert len(pip行) == 4, f"pip install 的条数变了:{pip行}"
     for 行 in pip行:

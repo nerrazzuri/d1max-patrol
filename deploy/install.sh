@@ -16,7 +16,7 @@ set -euo pipefail
 #
 # @写盘 /opt/d1max                                                       根目录(下面那条 mkdir -p 建的)
 # @写盘 /opt/d1max/releases                                              版本槽,巡检数据也落在槽里
-# @写盘 /opt/d1max/bin                                                   跟版本无关的解释器软链
+# @写盘 /opt/d1max/bin                                                   跟版本无关的解释器 wrapper
 # @写盘 /opt/d1max/bin-venv                                              上面那个解释器的 venv
 # @写盘 /opt/d1max/current                                               release activate 摆的版本链
 # @写盘 /opt/d1max/bundles                                               任务包目录,服务跑起来后落在根下
@@ -58,6 +58,20 @@ PKG=${1:-}
 # 带空格的长参数传给 pip。它只从运维手里来,不从网上来。
 PIP_ARGS=${D1MAX_PIP_ARGS:-}
 
+# **包目录名不是随便起的。** engine/release.py 的 _NAME_RE 只认
+# <日期>-<6 到 12 位十六进制>,verify_package() 还要求这个目录名跟包里
+# release.json 的 name 一字不差 —— 那是包校验的第二关(第一关是整棵树的
+# tree_sha256)。所以例子里**不能**带 d1max- 之类的前缀:带了的话 3/7 的
+# release install 必拒,而那时候前两步已经白跑了。
+# **要改的是这个例子和 docs/装机清单.md,不是去放宽 _NAME_RE** —— 目录名跟
+# manifest 对齐是故意的,它同时也是防路径穿越的那道闸。
+usage() {
+  echo "用法: sudo bash install.sh <包目录>" >&2
+  echo "例:   sudo bash install.sh /home/robot/2026-09-20-77b2de" >&2
+  echo "      包目录名必须长成 <日期>-<6 到 12 位十六进制> 的样子,而且跟包里" >&2
+  echo "      release.json 的 name 一字不差。" >&2
+}
+
 say() { printf '\n>>> %s\n' "$*"; }
 
 # pip 会往它装的那份源目录里写东西(见 2/7 的注释),所以每次都从临时副本装。
@@ -72,8 +86,30 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ -z "$PKG" ]]; then
-  echo "用法: sudo bash install.sh <包目录>" >&2
-  echo "例:   sudo bash install.sh /home/robot/d1max-2026-09-20-77b2de" >&2
+  usage
+  exit 2
+fi
+
+# **包目录不在就停在这儿,别往下走。** 原来这里只判空串,一个打错的路径会被
+# 一路带到 2/7 末尾的 cp -a "$PKG/." 才炸 —— 而那时候 /opt/d1max 已经建出来了、
+# 根下那个跟版本无关的解释器也装完了。现场看到的是一条 cp 的报错,还得回头收拾
+# 半个脚印(footprint.sh 的 diff 里会多出东西)。失败要早、要便宜、要说人话。
+if [[ ! -d "$PKG" ]]; then
+  echo "错误: 包目录不存在,或者它不是一个目录: $PKG" >&2
+  echo "      **只收目录,不收 .tar.gz 之类的归档**,理由见脚本开头那段。" >&2
+  usage
+  exit 2
+fi
+
+# **账号不在也停在这儿。** 原来是 1/7 的 chown 撞上 chown: invalid user,而那
+# 一行排在 mkdir -p 之后 —— 客户机器上没有 robot 这个账号的话,脚本会在
+# /opt/d1max 已经建出来之后中止,留半个脚印给人收,报错还是 chown 的行话。
+# 这个检查排在 mkdir 之前,盘上一个字节都不会动。
+if ! id -u "$RUN_USER" >/dev/null 2>&1; then
+  echo "错误: 这台机器上没有账号 $RUN_USER,装不下去。" >&2
+  echo "      systemd 单元里的 User= 也是写死 robot 的。客户那边账号不叫 robot" >&2
+  echo "      的话:先把账号建出来,或者 sudo D1MAX_USER=<账号名> bash install.sh," >&2
+  echo "      **并且同时改单元里的 User=** —— 只改一边,服务的身份跟目录属主对不上。" >&2
   exit 2
 fi
 
@@ -83,9 +119,37 @@ chown -R "$RUN_USER":"$RUN_USER" "$ROOT"
 
 say "2/7 装一个跟版本无关的解释器到 $ROOT/bin"
 # 守卫要用它。**它不能在任何一版目录里** —— 版本坏了,救生索还得在。
+# **这里放的是一个 wrapper 脚本,不是软链。改回软链就是把包装进系统 Python。**
+# 原来写的是:
+#   ln -sfn "$ROOT/bin-venv/bin/python" "$ROOT/bin/python"
+# CPython 找 pyvenv.cfg 用的是 sys.executable **没有解析软链**的那个路径,而且
+# 只看它自己那一级目录和上一级。软链落在 $ROOT/bin/ 下,这两级都没有
+# pyvenv.cfg,于是解释器判定自己不在 venv 里,sys.prefix 变成 /usr —— 后面每
+# 一次 "$ROOT/bin/python" -m pip install 都写进**系统 site-packages**。
+# 两种机器两种死法:带 PEP 668 的(Ubuntu 23.04+)当场
+# externally-managed-environment,装不下去;JetPack/Ubuntu 22.04 上没有这道闸,
+# 它**不声不响地往系统 Python 里写**,装完看着一切正常。
+# 而这台狗上还跑着厂商的上装,系统 Python 是共用的;uninstall.sh 的删除范围
+# 够不到系统 site-packages —— 卸载卸不干净,脚本开头那句"盘上只有以上这些"
+# 就成了空话。
+# wrapper 是一个真的可执行文件,exec 出去之后 sys.executable 就是
+# bin-venv/bin/python 自己,pyvenv.cfg 在它的上一级,venv 认得出来。
+# **三处调用方都得能用**:单元里两条 ExecStartPre 的 -m、下面 5/7 生成设备
+# PIN 的 -c、以及这里 pip 的 -m。exec "$@" 原样透传,三种都过得去。
+#
+# 老机器上装的是软链,重跑时得换掉它:-x 对"指向可执行文件的软链"也为真,
+# 不显式拆一次的话,已经装过的机器永远换不成 wrapper。
+if [[ -L "$ROOT/bin/python" ]]; then
+  rm -f "$ROOT/bin/python"
+fi
 if [[ ! -x "$ROOT/bin/python" ]]; then
   python3 -m venv "$ROOT/bin-venv"
-  ln -sfn "$ROOT/bin-venv/bin/python" "$ROOT/bin/python"
+  cat > "$ROOT/bin/python" <<解释器包装
+#!/bin/sh
+# 由 deploy/install.sh 生成。**不要改成软链** —— 理由见 install.sh 的 2/7 步。
+exec "$ROOT/bin-venv/bin/python" "\$@"
+解释器包装
+  chmod 0755 "$ROOT/bin/python"
   # **升 pip 收在这个 if 里面,而且失败不致命。** 原来它在 if 外面,于是
   # 每一次重跑都强制联网一次 —— 而重跑正是"填完 SN 让它生效"的路子(见
   # 7/7),离线现场照着清单跑第二趟就会卡死在这一步,set -e 直接中止在
@@ -256,7 +320,16 @@ fi
 # 路正确的行为,不改它 —— 见 engine/release.py 的 activate())。但重跑这个
 # 脚本正是现场"填完 SN 让它生效"的路子 —— 跳过切换不能连 restart 也跳过,
 # **restart 必须无条件执行**。
-CURRENT_REL=$(basename "$(readlink -f "$ROOT/current" 2>/dev/null || true)")
+# **链不在就是空串,别拿 basename 的兜底值凑合。** readlink -f 在 current 这条
+# 链还不存在时什么也不输出,外面套一层 basename 得到的是字面量 "current" ——
+# 一个长得像版本名的假值。今天它碰巧咬不着人:_NAME_RE 不允许哪一版叫
+# current,所以下面那个相等判断一定不成立。但那是靠**别处**的规矩兜着的,
+# _NAME_RE 哪天松一点,这里就变成"第一次装机反而跳过了 activate"。
+# 写成显式的:没有链就是空,空串跟任何 REL_NAME 都不相等,该 activate 就 activate。
+CURRENT_REL=
+if [[ -e "$ROOT/current" || -L "$ROOT/current" ]]; then
+  CURRENT_REL=$(basename "$(readlink -f "$ROOT/current")")
+fi
 if [[ "$CURRENT_REL" == "$REL_NAME" ]]; then
   echo "  $REL_NAME 已经是在跑的那一版了,跳过切换。"
 else
