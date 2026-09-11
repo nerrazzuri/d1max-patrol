@@ -127,7 +127,7 @@ def test_非200一律当没传成功_但不抛() -> None:
     assert got.message == "偏移对不上"
 
 
-def test_回执不是json就当失败_不抛() -> None:
+def test_回执不是json就抛SinkError_不清进度() -> None:
     """中间挡了个网关,回了一页 HTML。我们读不懂,只能退避,不能 rewind ——
     所以这是 ``SinkError``,不是 ``ok=False``(``ok=False`` 会触发
     rewind,把之前已经确认过哈希对上的进度一起作废)。
@@ -164,7 +164,7 @@ def test_HTTPError当回执读_不当异常() -> None:
     assert (got.ok, got.stored) == (False, 3)
 
 
-def test_回执是合法json但不是对象_不抛() -> None:
+def test_回执是合法json但不是对象就抛SinkError_不清进度() -> None:
     """``json.loads`` 成功,但顶层不是 dict(列表/null/裸字符串/裸数字)——
     这不该走到 ``.get(...)`` 那一步去炸 ``AttributeError``,应该翻成
     ``SinkError``(不是 ``ok=False``:我们没读懂服务器想说什么,不能
