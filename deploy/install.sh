@@ -12,7 +12,21 @@ set -euo pipefail
 # 单元里的 User=robot 同样是写死的。留这个覆盖是给"客户那边账号不叫 robot"
 # 用的,但**用了就得同时改单元里的 User=**,否则服务起来的身份跟目录属主对不上。
 用户=${D1MAX_USER:-robot}
+# **只收目录,不收归档。** 下面 cp -a "$包/." 、basename "$包" 、以及
+# release install "$包" 要算的那一遍 tree_sha256,三处都只认目录;给一个
+# .tar.gz 会在第一处就炸。docs/装机清单.md 一节写的也是"只承诺目录",
+# **两份必须一起改** —— 哪天真要支持归档,是先解包再走同一条路,不是
+# 把这里放宽。
 包=${1:-}
+# 离线现场的透传口子。Orin NX 出不了外网时,把 aarch64 轮子拷到 U 盘上,
+# 然后这样跑:
+#   sudo D1MAX_PIP_ARGS='--no-index --find-links=/media/<U盘>/wheels' \
+#     bash install.sh <包目录>
+# 下面每一处 pip install 都带上它 —— 只带一半的话,离线现场会在没带的
+# 那一处卡住,而现场看到的是"装到一半不动了",最难查的那种。
+# **展开时故意不加引号**:这个变量装的是好几个参数,加引号会被当成一个
+# 带空格的长参数传给 pip。它只从运维手里来,不从网上来。
+pip参数=${D1MAX_PIP_ARGS:-}
 
 说() { printf '\n>>> %s\n' "$*"; }
 
@@ -42,8 +56,14 @@ chown -R "$用户":"$用户" "$根"
 if [[ ! -x "$根/bin/python" ]]; then
   python3 -m venv "$根/bin-venv"
   ln -sfn "$根/bin-venv/bin/python" "$根/bin/python"
+  # **升 pip 收在这个 if 里面,而且失败不致命。** 原来它在 if 外面,于是
+  # 每一次重跑都强制联网一次 —— 而重跑正是"填完 SN 让它生效"的路子(见
+  # 7/7),离线现场照着清单跑第二趟就会卡死在这一步,set -e 直接中止在
+  # 2/7,连服务都不会被 restart。升不上去本来也不是中止装机的理由:venv
+  # 自带的那个 pip 装得动我们的包。
+  "$根/bin/python" -m pip install --quiet $pip参数 --upgrade pip \
+    || echo "  (pip 没升上去,用 venv 自带的那个接着装 —— 不影响装机)"
 fi
-"$根/bin/python" -m pip install --quiet --upgrade pip
 # **从一份临时副本装,绝不直接 pip install "$包"。** pyproject.toml 用的是
 # setuptools.build_meta,pip 对本地目录做的是就地构建:会往源目录里写
 # *.egg-info/ 和 __pycache__/。而下一步 release install 要对 "$包" 算一遍
@@ -51,7 +71,7 @@ fi
 # 对不上,verify_package 报错,set -e 把装机整个中止在这一步。
 临时包=$(mktemp -d)
 cp -a "$包/." "$临时包/"
-"$根/bin/python" -m pip install --quiet "$临时包"
+"$根/bin/python" -m pip install --quiet $pip参数 "$临时包"
 
 说 "3/7 把包落进槽里"
 sudo -u "$用户" env D1MAX_RELEASE_ROOT="$根" \
@@ -70,14 +90,32 @@ sudo -u "$用户" env D1MAX_RELEASE_ROOT="$根" \
 # 保持跟落槽那一刻逐字节一致。
 名字=$(basename "$包")
 槽="$根/releases/$名字"
-if [[ ! -x "$槽/venv/bin/python" ]]; then
+# **幂等的门看哨兵,不看解释器在不在。** python3 -m venv 一跑完,
+# <槽>/venv/bin/python 就存在且可执行 —— 此后 pip 装到哪一步断掉(网断、
+# 盘满、Ctrl+C),重跑都会判"已经建过了"把整段跳过,留下一个解释器在、
+# 依赖不全的槽。脚本接着走到 7/7 restart,ExecStart 指的正是这个解释器,
+# ImportError + Restart=always + RestartSec=5 就是一堵日志墙。这正是脚本
+# 开头那句"可以重跑"的反面。
+# 哨兵**在依赖装完之后才落**,它在,就等于这一版的依赖装齐了。
+# **按槽(按版本)判仍然是对的**:每版一个 venv,换一版就该重装一遍。
+哨兵="$槽/venv/.deps-ok"
+if [[ ! -e "$哨兵" ]]; then
+  # 上一趟留下的半成品一律推倒重来。不推的话 venv 里可能躺着装了一半的
+  # 包,pip 会认为它已经装上了而跳过 —— 那正是我们要修的那个静默。
+  rm -rf "$槽/venv"
   临时槽包=$(mktemp -d)
   cp -a "$包/." "$临时槽包/"
   # pip 跑在 "$用户" 身份下,临时目录默认是 root 的 0700,不改属主它读不进去。
   chown -R "$用户":"$用户" "$临时槽包"
   sudo -u "$用户" python3 -m venv "$槽/venv"
-  sudo -u "$用户" "$槽/venv/bin/python" -m pip install --quiet --upgrade pip
-  sudo -u "$用户" "$槽/venv/bin/python" -m pip install --quiet "$临时槽包"
+  # 升不上去不中止,理由同 2/7。
+  sudo -u "$用户" "$槽/venv/bin/python" -m pip install --quiet $pip参数 --upgrade pip \
+    || echo "  (pip 没升上去,用 venv 自带的那个接着装 —— 不影响装机)"
+  sudo -u "$用户" "$槽/venv/bin/python" -m pip install --quiet $pip参数 "$临时槽包"
+  # **最后一行才落哨兵。** 上面任何一步断了,set -e 会在这之前就退出,
+  # 哨兵不在,下一趟整段重来 —— 这就是"依赖装完没有"这个判据的全部。
+  printf 'd1max_patrol %s\n' "$名字" > "$哨兵"
+  chown "$用户":"$用户" "$哨兵"
 fi
 
 说 "5/7 装 systemd 单元与环境文件"

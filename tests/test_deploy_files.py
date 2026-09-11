@@ -191,10 +191,13 @@ def test_装机脚本会给这一版建自己的venv(装机脚本):
     """
     assert "python3 -m venv" in 装机脚本
     assert "venv/bin/python" in 装机脚本
-    # 幂等的证据要断言完整形状,不能只查裸 "-x" —— 2/7 步给根解释器的判据
-    # 里也有 "-x",查裸字符串的话删掉这一步槽内 venv 的幂等判据,测试照样
-    # 绿。这里连槽路径变量一起断言,才是真的在测这一步。
-    assert '[[ ! -x "$槽/venv/bin/python" ]]' in 装机脚本
+    # 幂等的证据要断言完整形状,不能只查裸的判据 —— 2/7 步给根解释器也有
+    # 一个,查一个泛的字符串的话删掉这一步槽内 venv 的幂等判据,测试照样绿。
+    # 这里连槽路径变量一起断言,才是真的在测这一步。
+    # **判据换成哨兵了**(见 test_槽内venv的幂等判据看哨兵不看解释器):
+    # "解释器在不在" 判不出 "依赖装完没有"。
+    assert '哨兵="$槽/venv/.deps-ok"' in 装机脚本
+    assert '[[ ! -e "$哨兵" ]]' in 装机脚本
 
 
 # ------------------------------------------------------------- 裁定 3: D1MAX_SN
@@ -673,3 +676,147 @@ def test_装机清单验收里查手写的SN():
     """
     text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
     assert "hand_written" in text
+
+
+# ------------------------------------------- fix3: 交付面终审必修 2/3/4/5
+#
+# 这四条的共同形状是**两份交付件对同一件事说的话对不上**,而每一份单独读都
+# 挑不出毛病 —— 所以这一组护栏钉的全是「两份之间的那条线」,不是某一份的
+# 内容对不对。
+
+def test_槽内venv的幂等判据看哨兵不看解释器(装机脚本):
+    """必修 2:``python3 -m venv`` 一跑完解释器就存在且可执行,
+
+    此后 pip 装到哪一步断掉(网断、盘满、Ctrl+C),重跑都会判「已经建过了」
+    把整段跳过,留下一个解释器在、依赖不全的槽。脚本接着走到 7/7
+    ``systemctl restart``,ExecStart 指的正是这个解释器 —— ImportError +
+    ``Restart=always`` + ``RestartSec=5`` 就是一堵日志墙。这正是脚本开头
+    那句「可以重跑」的反面。
+
+    所以判据必须是「依赖装完没有」,而**哨兵要在最后一条 pip 之后才落** ——
+    落在前面的话 ``set -e`` 中途退出时它已经在盘上,门就白改了。
+    """
+    assert '[[ ! -x "$槽/venv/bin/python" ]]' not in 装机脚本, \
+        "槽内 venv 的门又退回「解释器在不在」了"
+    assert '哨兵="$槽/venv/.deps-ok"' in 装机脚本
+    assert '[[ ! -e "$哨兵" ]]' in 装机脚本
+    # 半成品一律推倒重来 —— 不推的话 pip 会认为装了一半的包已经装上了。
+    assert 'rm -rf "$槽/venv"' in 装机脚本
+    # **顺序是这条护栏的全部**:哨兵落在最后一条 pip install 之后。
+    落哨兵 = 装机脚本.index('> "$哨兵"')
+    最后一条pip = 装机脚本.rindex("-m pip install")
+    assert 最后一条pip < 落哨兵, "哨兵落在 pip 之前 —— 中途断了它照样在盘上"
+
+
+def test_升pip不在每次重跑都要走的路上(装机脚本):
+    """必修 3(a):原来 2/7 的 ``--upgrade pip`` 在 ``if`` **外面**,
+
+    于是每一次重跑都强制联网一次 —— 而重跑正是「填完 SN 让它生效」的路子
+    (见 docs/装机清单.md 二)。离线现场照着清单跑第二趟就会卡死在 2/7,
+    ``set -e`` 直接中止,连 ``systemctl restart`` 都走不到,SN 永远不生效。
+
+    查的是**缩进**:顶格那一行就是在 ``if`` 外面。
+    """
+    升pip行 = [ln for ln in 装机脚本.splitlines() if "--upgrade pip" in ln]
+    # 今天是两行(2/7 根解释器一行、4/7 槽内 venv 一行),我数过。
+    assert len(升pip行) == 2, f"升 pip 的行数变了:{升pip行}"
+    for 行 in 升pip行:
+        assert 行[:1].isspace(), f"这一行升 pip 顶格写,等于在 if 外面:{行}"
+    # 升不上去不该中止装机 —— venv 自带的那个 pip 装得动我们的包。
+    for 行 in 升pip行:
+        assert 行.rstrip().endswith("\\"), f"升 pip 那一行没接住失败:{行}"
+
+
+def test_离线pip参数每一处pip都带上了(装机脚本):
+    """必修 3(b):清单第一节承诺离线 wheel 这条路,脚本得真有这个口子。
+
+    **只带一半比一处都不带更坏**:现场看到的是「装到一半不动了」,而不动的
+    是没带参数的那一处,最难查的那种。
+    """
+    assert "D1MAX_PIP_ARGS" in 装机脚本
+    assert "pip参数=${D1MAX_PIP_ARGS:-}" in 装机脚本
+    pip行 = [ln for ln in 装机脚本.splitlines() if "-m pip install" in ln]
+    # 今天是四条(2/7 两条、4/7 两条),我数过。
+    assert len(pip行) == 4, f"pip install 的条数变了:{pip行}"
+    for 行 in pip行:
+        assert "$pip参数" in 行, f"这一条 pip 没带离线参数:{行.strip()}"
+    # 清单那一侧要写清楚怎么用,否则现场不知道有这个口子。
+    清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    assert "D1MAX_PIP_ARGS" in 清单
+    assert "--find-links" in 清单 and "--no-index" in 清单
+
+
+def test_清单和脚本对归档说的是同一句话(装机脚本):
+    """必修 3:清单原来承诺「能被 ``pip install`` 认的路径/**归档**」,
+
+    而脚本的 ``cp -a "$包/."``、``basename "$包"``、``release install "$包"``
+    三处都只接受目录 —— 给一个 ``.tar.gz`` 在第一处就炸。照清单备料的人到
+    现场会发现备的东西用不上。**两份必须一致**,所以这条护栏同时读两份。
+    """
+    清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    assert "归档" not in 清单.split("## 二、")[0] or "不认" in 清单, \
+        "清单第一节还在承诺归档,而脚本不认"
+    assert "pip install` 认的路径/归档" not in 清单
+    assert ".tar.gz" in 清单                      # 明说哪种输入不支持
+    assert "不收归档" in 装机脚本                   # 脚本这一侧注明同一件事
+
+
+def test_装机清单说清了要跑两趟(装机脚本):
+    """必修 4:``/etc/d1max/env`` 是 5/7 才写出来的,而 5/7 到 7/7 是同一次
+
+    运行、中间不停 —— 人插不进去。清单原来把「填 ``D1MAX_SN``」排在 6/7 与
+    7/7 之间,照着做的人会得到一台顶着 MAC 假 SN 的机器,正是清单自己在同
+    一条勾选项里警告的那个后果。**脚本的注释早就写着「重跑这个脚本正是现场
+    『填完 SN 让它生效』的路子」,而清单从头到尾没有一处说要重跑。**
+
+    这条护栏钉的是「重跑」这件事本身 —— 免得将来又被改回一趟。
+    """
+    清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    assert "两趟" in 清单
+    一趟 = 清单.index("### 第一趟")
+    填SN = 清单.index("### 两趟之间：填 SN")
+    二趟 = 清单.index("### 第二趟")
+    assert 一趟 < 填SN < 二趟, "两趟的顺序不对:填 SN 要夹在两趟之间"
+    # 第二趟为什么管用,要写出来 —— 不写的话下一个人会以为它是多余的一步。
+    assert "跳过切换" in 清单 and "无条件" in 清单
+    # 脚本那一侧的两个形状是这条路子成立的前提,一起钉住。
+    assert "已经是在跑的那一版了,跳过切换" in 装机脚本
+    assert "\nsystemctl restart d1max-patrol.service" in 装机脚本
+
+
+def test_装机清单把记上装挪到服务起来之后():
+    """必修 4 的另一半:``PUT /api/identity/payload`` 原来排在 6/7,
+
+    **可服务要到 7/7 才第一次起来** —— 首装机器在 6/7 那一刻端口上没人听,
+    照着敲只会得到「连不上」。
+    """
+    清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
+    记上装 = 清单.index("### 第二趟之后：记上装")
+    二趟 = 清单.index("### 第二趟")
+    assert 二趟 < 记上装, "记上装又排到第二趟之前去了 —— 那时候端口上没人听"
+    # 那条 PUT 要落在这一段里,不能还留在 6/7 那一条勾选项上。
+    assert 清单.index("/api/identity/payload", 记上装) > 记上装
+
+
+def test_控制权到期两份文档互相限定():
+    """必修 5:两句在机制上都对 —— 一句讲**没人接管**时租约过期(任务照跑,
+
+    只停遥控那一路并报一条 P1),一句讲**接管中**过期(狗停在原地,绝不自己
+    接着走)。**但两句原来都用了无限定的全称写法**,一句还是小节标题。现场
+    同时拿到这两份,谁都不知道该信哪个 —— 而这件事错一次就是「以为狗会停,
+    结果它照跑」或者反过来。
+    """
+    鉴权 = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
+    值守 = (ROOT / "docs" / "值守与告警.md").read_text(encoding="utf-8")
+    # 鉴权这一侧:全称写法要带上限定词,并且指得到另一份的那一节。
+    for 行 in [ln for ln in 鉴权.splitlines() if "狗不会因此停下" in ln]:
+        assert "未接管时" in 行, f"这一行还是无限定的全称写法:{行.strip()}"
+    assert "值守与告警.md` 五、规矩三" in 鉴权
+    # 值守这一侧:规矩三的标题要说明白它讲的是接管中。
+    标题 = [ln for ln in 值守.splitlines() if ln.startswith("### 规矩三")]
+    assert len(标题) == 1, f"规矩三的标题不止一行:{标题}"
+    assert "接管中" in 标题[0], f"规矩三的标题还是全称写法:{标题[0]}"
+    assert "鉴权与控制权.md" in 值守
+    # 死指针:第 8 卷已经给了答案,「不是这一层的事」这句不许再留着。
+    assert "逻辑那一层的事" not in 鉴权
+    assert "teleop.emergency_stop" in 鉴权
