@@ -196,8 +196,8 @@ def test_装机脚本会给这一版建自己的venv(装机脚本):
     # 这里连槽路径变量一起断言,才是真的在测这一步。
     # **判据换成哨兵了**(见 test_槽内venv的幂等判据看哨兵不看解释器):
     # "解释器在不在" 判不出 "依赖装完没有"。
-    assert '哨兵="$槽/venv/.deps-ok"' in 装机脚本
-    assert '[[ ! -e "$哨兵" ]]' in 装机脚本
+    assert 'SENTINEL="$SLOT/venv/.deps-ok"' in 装机脚本
+    assert '[[ ! -e "$SENTINEL" ]]' in 装机脚本
 
 
 # ------------------------------------------------------------- 裁定 3: D1MAX_SN
@@ -271,8 +271,8 @@ def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机�
     手段。这里断言的是跳过切换那个具体分支的形状,不是裸查 "readlink"
     这种在别处也可能出现的字符串。
     """
-    assert 'basename "$(readlink -f "$根/current"' in 装机脚本
-    assert '"$当前" == "$名字"' in 装机脚本
+    assert 'basename "$(readlink -f "$ROOT/current"' in 装机脚本
+    assert '"$CURRENT_REL" == "$REL_NAME"' in 装机脚本
     assert "已经是在跑的那一版了,跳过切换" in 装机脚本
     # restart 不能被套进上面那个分支里 —— 顶格(不缩进)才说明它在
     # if/else 的 fi 之后,两条路都会走到,不是只有切换成功那一路才走。
@@ -415,15 +415,15 @@ def test_装机脚本从临时副本装不污染待哈希的包目录(装机脚�
     """``pyproject.toml`` 用 ``setuptools.build_meta``,pip 对本地目录是就地
 
     构建:会往源目录写 ``*.egg-info/`` 和 ``__pycache__/``。直接
-    ``pip install "$包"`` 的话,紧接着 ``release install`` 算 ``tree_sha256``
-    对账当场对不上,``set -e`` 把装机中止在那一步;直接 ``pip install "$槽"``
+    ``pip install "$PKG"`` 的话,紧接着 ``release install`` 算 ``tree_sha256``
+    对账当场对不上,``set -e`` 把装机中止在那一步;直接 ``pip install "$SLOT"``
     则是把已落槽的那一版写脏,以后任何一次重新校验都会判它坏掉。
     """
     assert "mktemp -d" in 装机脚本
-    assert 'pip install --quiet "$包"' not in 装机脚本
-    assert 'pip install --quiet "$槽"' not in 装机脚本
+    assert 'pip install --quiet "$PKG"' not in 装机脚本
+    assert 'pip install --quiet "$SLOT"' not in 装机脚本
     # 临时目录得有人清 —— trap 保证 set -e 中途退出、Ctrl+C 也清得掉。
-    assert "trap 清理 EXIT" in 装机脚本
+    assert "trap cleanup EXIT" in 装机脚本
     assert "rm -rf" in 装机脚本
 
 
@@ -436,7 +436,12 @@ def test_根目录写死不给环境变量覆盖(装机脚本, 服务单元):
     # 断言的是**那个展开**没了,不是"这三个字不许出现" —— 脚本里那段
     # 说明为什么去掉它的注释,恰恰是这条改动最该留下的东西。
     assert "${D1MAX_ROOT" not in 装机脚本
-    assert "根=/opt/d1max" in 装机脚本
+    # **顶格整行匹配,不许用裸子串。** 变量名从 `根` 换成 `ROOT` 之后,裸的
+    # "ROOT=/opt/d1max" 同时是脚本里 /etc/d1max/env 模板那行
+    # "D1MAX_RELEASE_ROOT=/opt/d1max" 的子串 —— 拿子串断言的话,真把这一行
+    # 赋值删掉,这条护栏照样绿。
+    assert re.search(r"(?m)^ROOT=/opt/d1max$", 装机脚本), \
+        "install.sh 里那行写死的 ROOT=/opt/d1max 不见了"
     # 单元那边是写死的,这条断言是上面那句"两边要一起改"的凭据。
     assert "/opt/d1max" in 服务单元
     # User= 那个覆盖保留了,但单元里同样是写死的 —— 注明过才算数。
@@ -718,14 +723,14 @@ def test_槽内venv的幂等判据看哨兵不看解释器(装机脚本):
     所以判据必须是「依赖装完没有」,而**哨兵要在最后一条 pip 之后才落** ——
     落在前面的话 ``set -e`` 中途退出时它已经在盘上,门就白改了。
     """
-    assert '[[ ! -x "$槽/venv/bin/python" ]]' not in 装机脚本, \
+    assert '[[ ! -x "$SLOT/venv/bin/python" ]]' not in 装机脚本, \
         "槽内 venv 的门又退回「解释器在不在」了"
-    assert '哨兵="$槽/venv/.deps-ok"' in 装机脚本
-    assert '[[ ! -e "$哨兵" ]]' in 装机脚本
+    assert 'SENTINEL="$SLOT/venv/.deps-ok"' in 装机脚本
+    assert '[[ ! -e "$SENTINEL" ]]' in 装机脚本
     # 半成品一律推倒重来 —— 不推的话 pip 会认为装了一半的包已经装上了。
-    assert 'rm -rf "$槽/venv"' in 装机脚本
+    assert 'rm -rf "$SLOT/venv"' in 装机脚本
     # **顺序是这条护栏的全部**:哨兵落在最后一条 pip install 之后。
-    落哨兵 = 装机脚本.index('> "$哨兵"')
+    落哨兵 = 装机脚本.index('> "$SENTINEL"')
     最后一条pip = 装机脚本.rindex("-m pip install")
     assert 最后一条pip < 落哨兵, "哨兵落在 pip 之前 —— 中途断了它照样在盘上"
 
@@ -756,12 +761,12 @@ def test_离线pip参数每一处pip都带上了(装机脚本):
     是没带参数的那一处,最难查的那种。
     """
     assert "D1MAX_PIP_ARGS" in 装机脚本
-    assert "pip参数=${D1MAX_PIP_ARGS:-}" in 装机脚本
+    assert "PIP_ARGS=${D1MAX_PIP_ARGS:-}" in 装机脚本
     pip行 = [ln for ln in 装机脚本.splitlines() if "-m pip install" in ln]
     # 今天是四条(2/7 两条、4/7 两条),我数过。
     assert len(pip行) == 4, f"pip install 的条数变了:{pip行}"
     for 行 in pip行:
-        assert "$pip参数" in 行, f"这一条 pip 没带离线参数:{行.strip()}"
+        assert "$PIP_ARGS" in 行, f"这一条 pip 没带离线参数:{行.strip()}"
     # 清单那一侧要写清楚怎么用,否则现场不知道有这个口子。
     清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
     assert "D1MAX_PIP_ARGS" in 清单
@@ -771,7 +776,7 @@ def test_离线pip参数每一处pip都带上了(装机脚本):
 def test_清单和脚本对归档说的是同一句话(装机脚本):
     """必修 3:清单原来承诺「能被 ``pip install`` 认的路径/**归档**」,
 
-    而脚本的 ``cp -a "$包/."``、``basename "$包"``、``release install "$包"``
+    而脚本的 ``cp -a "$PKG/."``、``basename "$PKG"``、``release install "$PKG"``
     三处都只接受目录 —— 给一个 ``.tar.gz`` 在第一处就炸。照清单备料的人到
     现场会发现备的东西用不上。**两份必须一致**,所以这条护栏同时读两份。
     """

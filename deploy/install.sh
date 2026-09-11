@@ -38,16 +38,16 @@ set -euo pipefail
 # 路径),app/server.py 里 AppContext.release_root 的默认值也是它。允许这里
 # 被 D1MAX_ROOT 改而单元不跟着改,装出来的是一台脚本和服务各说各话的机器:
 # 包落在一个根下,服务读的是另一个根。**要换根目录,这里和单元一起改。**
-根=/opt/d1max
+ROOT=/opt/d1max
 # 单元里的 User=robot 同样是写死的。留这个覆盖是给"客户那边账号不叫 robot"
 # 用的,但**用了就得同时改单元里的 User=**,否则服务起来的身份跟目录属主对不上。
-用户=${D1MAX_USER:-robot}
-# **只收目录,不收归档。** 下面 cp -a "$包/." 、basename "$包" 、以及
-# release install "$包" 要算的那一遍 tree_sha256,三处都只认目录;给一个
+RUN_USER=${D1MAX_USER:-robot}
+# **只收目录,不收归档。** 下面 cp -a "$PKG/." 、basename "$PKG" 、以及
+# release install "$PKG" 要算的那一遍 tree_sha256,三处都只认目录;给一个
 # .tar.gz 会在第一处就炸。docs/装机清单.md 一节写的也是"只承诺目录",
 # **两份必须一起改** —— 哪天真要支持归档,是先解包再走同一条路,不是
 # 把这里放宽。
-包=${1:-}
+PKG=${1:-}
 # 离线现场的透传口子。Orin NX 出不了外网时,把 aarch64 轮子拷到 U 盘上,
 # 然后这样跑:
 #   sudo D1MAX_PIP_ARGS='--no-index --find-links=/media/<U盘>/wheels' \
@@ -56,70 +56,70 @@ set -euo pipefail
 # 那一处卡住,而现场看到的是"装到一半不动了",最难查的那种。
 # **展开时故意不加引号**:这个变量装的是好几个参数,加引号会被当成一个
 # 带空格的长参数传给 pip。它只从运维手里来,不从网上来。
-pip参数=${D1MAX_PIP_ARGS:-}
+PIP_ARGS=${D1MAX_PIP_ARGS:-}
 
-说() { printf '\n>>> %s\n' "$*"; }
+say() { printf '\n>>> %s\n' "$*"; }
 
 # pip 会往它装的那份源目录里写东西(见 2/7 的注释),所以每次都从临时副本装。
 # 两个临时目录统一在这儿清 —— 中途 set -e 退出、被 Ctrl+C 打断也清得掉。
-临时包=
-临时槽包=
-清理() {
-  [[ -n "$临时包" ]] && rm -rf "$临时包"
-  [[ -n "$临时槽包" ]] && rm -rf "$临时槽包"
+TMP_PKG=
+TMP_SLOT_PKG=
+cleanup() {
+  [[ -n "$TMP_PKG" ]] && rm -rf "$TMP_PKG"
+  [[ -n "$TMP_SLOT_PKG" ]] && rm -rf "$TMP_SLOT_PKG"
   return 0
 }
-trap 清理 EXIT
+trap cleanup EXIT
 
-if [[ -z "$包" ]]; then
+if [[ -z "$PKG" ]]; then
   echo "用法: sudo bash install.sh <包目录>" >&2
   echo "例:   sudo bash install.sh /home/robot/d1max-2026-09-20-77b2de" >&2
   exit 2
 fi
 
-说 "1/7 建目录 $根"
-mkdir -p "$根/releases" "$根/bin"
-chown -R "$用户":"$用户" "$根"
+say "1/7 建目录 $ROOT"
+mkdir -p "$ROOT/releases" "$ROOT/bin"
+chown -R "$RUN_USER":"$RUN_USER" "$ROOT"
 
-说 "2/7 装一个跟版本无关的解释器到 $根/bin"
+say "2/7 装一个跟版本无关的解释器到 $ROOT/bin"
 # 守卫要用它。**它不能在任何一版目录里** —— 版本坏了,救生索还得在。
-if [[ ! -x "$根/bin/python" ]]; then
-  python3 -m venv "$根/bin-venv"
-  ln -sfn "$根/bin-venv/bin/python" "$根/bin/python"
+if [[ ! -x "$ROOT/bin/python" ]]; then
+  python3 -m venv "$ROOT/bin-venv"
+  ln -sfn "$ROOT/bin-venv/bin/python" "$ROOT/bin/python"
   # **升 pip 收在这个 if 里面,而且失败不致命。** 原来它在 if 外面,于是
   # 每一次重跑都强制联网一次 —— 而重跑正是"填完 SN 让它生效"的路子(见
   # 7/7),离线现场照着清单跑第二趟就会卡死在这一步,set -e 直接中止在
   # 2/7,连服务都不会被 restart。升不上去本来也不是中止装机的理由:venv
   # 自带的那个 pip 装得动我们的包。
-  "$根/bin/python" -m pip install --quiet $pip参数 --upgrade pip \
+  "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS --upgrade pip \
     || echo "  (pip 没升上去,用 venv 自带的那个接着装 —— 不影响装机)"
 fi
-# **从一份临时副本装,绝不直接 pip install "$包"。** pyproject.toml 用的是
+# **从一份临时副本装,绝不直接 pip install "$PKG"。** pyproject.toml 用的是
 # setuptools.build_meta,pip 对本地目录做的是就地构建:会往源目录里写
-# *.egg-info/ 和 __pycache__/。而下一步 release install 要对 "$包" 算一遍
+# *.egg-info/ 和 __pycache__/。而下一步 release install 要对 "$PKG" 算一遍
 # tree_sha256 跟包里 release.json 记的哈希对账 —— 源目录被写脏了,哈希当场
 # 对不上,verify_package 报错,set -e 把装机整个中止在这一步。
-临时包=$(mktemp -d)
-cp -a "$包/." "$临时包/"
-"$根/bin/python" -m pip install --quiet $pip参数 "$临时包"
+TMP_PKG=$(mktemp -d)
+cp -a "$PKG/." "$TMP_PKG/"
+"$ROOT/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_PKG"
 
-说 "3/7 把包落进槽里"
-sudo -u "$用户" env D1MAX_RELEASE_ROOT="$根" \
-  "$根/bin/python" -m d1max_patrol.cli release install "$包"
+say "3/7 把包落进槽里"
+sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" \
+  "$ROOT/bin/python" -m d1max_patrol.cli release install "$PKG"
 
-说 "4/7 给这一版建自己的 venv"
+say "4/7 给这一版建自己的 venv"
 # **每版一个 venv,不是服务共用根下那个解释器。** 服务单元的 ExecStart
 # 指着 <槽>/venv/bin/python,这个解释器只能在这儿建 —— stage() 只是
 # shutil.copytree,不会替我们建。选每版一个 venv 而不是共用根解释器的
 # 理由:双槽的意义之一就是回滚要把依赖也一并退回去,依赖装在共用解释器
 # 里的话,回滚只退代码不退依赖,退了也是白退。
-# **装的是 "$包" 的一份临时副本,不是 "$槽" 本身。** pip 就地构建会往它装的
-# 那份源目录里写 *.egg-info/ 和 __pycache__/;直接装 "$槽" 的话,落槽那一刻
+# **装的是 "$PKG" 的一份临时副本,不是 "$SLOT" 本身。** pip 就地构建会往它装的
+# 那份源目录里写 *.egg-info/ 和 __pycache__/;直接装 "$SLOT" 的话,落槽那一刻
 # 算过的 tree_sha256 就跟盘上的字节对不上了,以后任何一次重新校验都会判这
-# 一版坏掉。装出来的东西跟装 "$槽" 一模一样(两者是同一份内容),而 "$槽"
+# 一版坏掉。装出来的东西跟装 "$SLOT" 一模一样(两者是同一份内容),而 "$SLOT"
 # 保持跟落槽那一刻逐字节一致。
-名字=$(basename "$包")
-槽="$根/releases/$名字"
+REL_NAME=$(basename "$PKG")
+SLOT="$ROOT/releases/$REL_NAME"
 # **幂等的门看哨兵,不看解释器在不在。** python3 -m venv 一跑完,
 # <槽>/venv/bin/python 就存在且可执行 —— 此后 pip 装到哪一步断掉(网断、
 # 盘满、Ctrl+C),重跑都会判"已经建过了"把整段跳过,留下一个解释器在、
@@ -128,27 +128,27 @@ sudo -u "$用户" env D1MAX_RELEASE_ROOT="$根" \
 # 开头那句"可以重跑"的反面。
 # 哨兵**在依赖装完之后才落**,它在,就等于这一版的依赖装齐了。
 # **按槽(按版本)判仍然是对的**:每版一个 venv,换一版就该重装一遍。
-哨兵="$槽/venv/.deps-ok"
-if [[ ! -e "$哨兵" ]]; then
+SENTINEL="$SLOT/venv/.deps-ok"
+if [[ ! -e "$SENTINEL" ]]; then
   # 上一趟留下的半成品一律推倒重来。不推的话 venv 里可能躺着装了一半的
   # 包,pip 会认为它已经装上了而跳过 —— 那正是我们要修的那个静默。
-  rm -rf "$槽/venv"
-  临时槽包=$(mktemp -d)
-  cp -a "$包/." "$临时槽包/"
-  # pip 跑在 "$用户" 身份下,临时目录默认是 root 的 0700,不改属主它读不进去。
-  chown -R "$用户":"$用户" "$临时槽包"
-  sudo -u "$用户" python3 -m venv "$槽/venv"
+  rm -rf "$SLOT/venv"
+  TMP_SLOT_PKG=$(mktemp -d)
+  cp -a "$PKG/." "$TMP_SLOT_PKG/"
+  # pip 跑在 "$RUN_USER" 身份下,临时目录默认是 root 的 0700,不改属主它读不进去。
+  chown -R "$RUN_USER":"$RUN_USER" "$TMP_SLOT_PKG"
+  sudo -u "$RUN_USER" python3 -m venv "$SLOT/venv"
   # 升不上去不中止,理由同 2/7。
-  sudo -u "$用户" "$槽/venv/bin/python" -m pip install --quiet $pip参数 --upgrade pip \
+  sudo -u "$RUN_USER" "$SLOT/venv/bin/python" -m pip install --quiet $PIP_ARGS --upgrade pip \
     || echo "  (pip 没升上去,用 venv 自带的那个接着装 —— 不影响装机)"
-  sudo -u "$用户" "$槽/venv/bin/python" -m pip install --quiet $pip参数 "$临时槽包"
+  sudo -u "$RUN_USER" "$SLOT/venv/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_SLOT_PKG"
   # **最后一行才落哨兵。** 上面任何一步断了,set -e 会在这之前就退出,
   # 哨兵不在,下一趟整段重来 —— 这就是"依赖装完没有"这个判据的全部。
-  printf 'd1max_patrol %s\n' "$名字" > "$哨兵"
-  chown "$用户":"$用户" "$哨兵"
+  printf 'd1max_patrol %s\n' "$REL_NAME" > "$SENTINEL"
+  chown "$RUN_USER":"$RUN_USER" "$SENTINEL"
 fi
 
-说 "5/7 装 systemd 单元与环境文件"
+say "5/7 装 systemd 单元与环境文件"
 install -m 0644 "$(dirname "$0")/d1max-patrol.service" /etc/systemd/system/
 # **老机器上的 d1max-bootguard.service 要清掉。** 守卫已经挪成主单元的
 # ExecStartPre=(理由见那个单元里那段注释:不带上装的机器升级走 systemctl
@@ -188,9 +188,9 @@ D1MAX_RELEASE_ROOT=/opt/d1max
 # 想换成好记的:直接改下面这一行,再 sudo systemctl restart d1max-patrol。
 环境模板
   # 用根下那个跟版本无关的解释器生成,不依赖机器上有没有别的 python。
-  设备PIN=$("$根/bin/python" -c 'import secrets; print(f"{secrets.randbelow(10**6):06d}")')
-  printf 'D1MAX_PIN=%s\n' "$设备PIN" >> /etc/d1max/env
-  说 "这台机器的设备 PIN 是 $设备PIN"
+  DEVICE_PIN=$("$ROOT/bin/python" -c 'import secrets; print(f"{secrets.randbelow(10**6):06d}")')
+  printf 'D1MAX_PIN=%s\n' "$DEVICE_PIN" >> /etc/d1max/env
+  say "这台机器的设备 PIN 是 $DEVICE_PIN"
   echo "  手机 app 第一次连这台机器要输它。**记进现场登记表**,屏幕关了就找不回来了"
   echo "  (还能在机器上看:sudo grep D1MAX_PIN /etc/d1max/env)。"
   echo "  想换成好记的:编辑 /etc/d1max/env 里的 D1MAX_PIN= 那一行,再"
@@ -199,7 +199,7 @@ fi
 systemctl daemon-reload
 systemctl enable d1max-patrol.service
 
-说 "6/7 记下这台有没有装上装"
+say "6/7 记下这台有没有装上装"
 cat <<'提示'
   这一步没法替你做,因为只有站在机器旁边的人看得见(§7.1)。
   装完之后在手机 app 里记一次;要用 curl 的话**先换 token** ——
@@ -216,7 +216,7 @@ cat <<'提示'
   没记过之前,这台机器**不许升级** —— 因为升级流程不知道该怎么重启它。
 提示
 
-说 "7/7 切到刚装的这一版并起服务"
+say "7/7 切到刚装的这一版并起服务"
 # **把 /etc/d1max/env 读进这个脚本自己的环境。** sudo 默认 env_reset,
 # D1MAX_SN 不在 env_keep 里,而 root 自己的环境里本来也没有它 —— 不 source
 # 的话,下面 release activate 拿到的是空值,cli.py 的 resolve() 会落到设备树
@@ -256,17 +256,17 @@ fi
 # 路正确的行为,不改它 —— 见 engine/release.py 的 activate())。但重跑这个
 # 脚本正是现场"填完 SN 让它生效"的路子 —— 跳过切换不能连 restart 也跳过,
 # **restart 必须无条件执行**。
-当前=$(basename "$(readlink -f "$根/current" 2>/dev/null || true)")
-if [[ "$当前" == "$名字" ]]; then
-  echo "  $名字 已经是在跑的那一版了,跳过切换。"
+CURRENT_REL=$(basename "$(readlink -f "$ROOT/current" 2>/dev/null || true)")
+if [[ "$CURRENT_REL" == "$REL_NAME" ]]; then
+  echo "  $REL_NAME 已经是在跑的那一版了,跳过切换。"
 else
   # D1MAX_SN 必须显式带过去 —— sudo env_reset 会把上面 source 进来的它扔掉。
-  sudo -u "$用户" env D1MAX_RELEASE_ROOT="$根" D1MAX_SN="${D1MAX_SN:-}" \
-    "$根/bin/python" -m d1max_patrol.cli release activate "$名字"
+  sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_SN="${D1MAX_SN:-}" \
+    "$ROOT/bin/python" -m d1max_patrol.cli release activate "$REL_NAME"
 fi
 systemctl restart d1max-patrol.service
 
-说 "装完了。看一眼:"
+say "装完了。看一眼:"
 echo "  systemctl status d1max-patrol"
 echo ""
 echo "  下面三条要看的是 /api/release、/api/selfcheck、/api/identity,"

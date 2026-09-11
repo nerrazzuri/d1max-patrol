@@ -29,8 +29,12 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
+import pytest
+
+from tests.test_deploy_coexist import 有bash
 from tests.test_deploy_files import DEPLOY, ROOT, 交付文件, 六位数
 
 # --------------------------------------------------------------- 一、没被掏空
@@ -250,3 +254,264 @@ def test_改PIN位数的人要看的那张便条():
         "PIN 位数变了。除了上面两条会自己变红的以外,还有两处白纸黑字要一起"
         "改:docs/鉴权与控制权.md 里「六位数字、一百万种」那一段,以及"
         "docs/装机清单.md 里记 PIN 那一条的 <六位数字>。改完把这里的 6 也改掉")
+
+
+# ------------------------------------------------- 四、shell 标识符一律 ASCII
+#
+# **这一节存在的全部理由,是下面这件真事。**
+#
+# ``deploy/install.sh`` 的变量名和函数名原来是中文(``根=/opt/d1max``、
+# ``说() {...}``)。bash 的变量名**只认 ASCII**(``legal_identifier()`` 是逐
+# 字节判的),``根=/opt/d1max`` 因此不是赋值,而是「执行一条叫
+# ``根=/opt/d1max`` 的命令」;配上第 4 行的 ``set -euo pipefail``,脚本在
+# **第一行有效语句上**就退 127 —— 也就是说,这份交付件一行都跑不起来,而它
+# 明天要在 Orin NX 上跑。跟 locale 无关,``bash -n`` 也查不出来:语法是合法的,
+# 只是语义完全不是作者想的那样。
+#
+# 它能活到今天,是三件事凑齐的:
+#
+# 1. 既有的那些护栏**只 grep 脚本的内容**,从来没有真的执行过这份脚本;
+# 2. 开发机是 Windows,脚本的目标是 Linux,没有人顺手跑过一次;
+# 3. ``test_deploy_coexist.py`` 里那条 ASCII 护栏当时只 parametrize 了
+#    ``uninstall.sh`` 和 ``footprint.sh`` 两份 —— **漏掉的恰好是 install.sh**。
+#
+# 所以这一节按**名单**扫,而且名单是 glob 出来的:新加一份 shell 脚本,它自动
+# 被盖上,不需要谁记得回来补一行。
+
+#: 扫哪些脚本。``deploy/*.sh``、``scripts/*.sh``,外加仓库根上的
+#: ``field-*.sh`` —— 现场那几份手动脚本同样是要在狗上跑的。
+def shell脚本() -> list[Path]:
+    return (sorted(DEPLOY.glob("*.sh"))
+            + sorted((ROOT / "scripts").glob("*.sh"))
+            + sorted(ROOT.glob("field-*.sh")))
+
+
+#: 标识符里能出现的字符:ASCII 的字母数字下划线,**外加**任何非 ASCII 字符。
+#: 后者不是笔误 —— 这条正则要能把「作者以为是标识符的那一串」整个圈出来,
+#: 才好在报错里把它原样打给人看。
+_标识符字符 = r"[A-Za-z0-9_\u0080-\U0010ffff]"
+#: 至少含一个非 ASCII 字符的「标识符」。
+_带中文的标识符 = r"(?:" + _标识符字符 + r"*[^\x00-\x7f]" + _标识符字符 + r"*)"
+
+#: 命令位上的赋值:``名=值``、``local 名=值``、``名+=值``、``名[i]=值``。
+#: **只认命令位(行首)** —— ``echo 版本=1`` 里那个 ``版本=`` 在 bash 眼里只是
+#: 一个普通参数,不是赋值,拦它就是误报。
+_赋值 = re.compile(
+    r"^\s*(?:(?:local|export|declare|readonly|typeset)\s+(?:-\w+\s+)*)?"
+    r"(" + _带中文的标识符 + r")(?:\[[^\]]*\])?\+?=")
+#: 函数定义:``名() {``,带不带 ``function`` 都认。
+_函数 = re.compile(r"^\s*(?:function\s+)?(" + _带中文的标识符 + r")\s*\(\s*\)")
+#: 变量引用:``$名``、``${名}``、``${#名}``。**只认以非 ASCII 开头的** ——
+#: ``$ROOT`` 后面跟一个中文字(``"$ROOT/根目录"``)是正当写法,不许拦。
+_引用 = re.compile(r"\$\{?[#!]?([^\x00-\x7f]" + _标识符字符 + r"*)")
+#: ``for 名 in ...`` / ``select 名 in ...`` / ``read 名`` 里的循环变量。
+_循环变量 = re.compile(r"^\s*(?:for|select)\s+(" + _带中文的标识符 + r")\s+in\b")
+_读入变量 = re.compile(r"^\s*read\s+(?:-\w+\s+)*(" + _带中文的标识符 + r")\b")
+
+_扫描规则 = (
+    (_赋值, "变量赋值"),
+    (_函数, "函数定义"),
+    (_引用, "变量引用"),
+    (_循环变量, "循环变量"),
+    (_读入变量, "read 的变量"),
+)
+
+_起heredoc = re.compile(r"<<-?\s*(?:'([^']*)'|\"([^\"]*)\"|([^\s'\";&|()<>]+))")
+
+
+def 可执行片段(行: str, 状态: int) -> tuple[str, int, str | None]:
+    """把一行里**会被 bash 当代码看**的那部分抠出来。
+
+    回 ``(代码, 新状态, heredoc 的结束标记)``。``状态`` 是跨行带过来的引号
+    状态(0 没在引号里、1 在单引号里、2 在双引号里) —— bash 的引号是可以跨
+    行的,footprint.sh 里那几段 awk 程序就是整块单引号。
+
+    三件事:
+
+    * **单引号里的内容整段抹成空格**。单引号里 ``$`` 不展开,``'$根'`` 是
+      一串字面量,拦它就是误报到散文上。
+    * **双引号里的内容留着**。``"$根/bin"`` 里那个引用是真的会展开(准确地说
+      是展不开 —— bash 会把 ``$根`` 原样留着),这正是要拦的东西。
+    * **注释从 ``#`` 起整段丢掉**,而 ``#`` 只有在引号外、且前面是空白或行首时
+      才算注释开头 —— 跟 bash 的判法一样。
+    """
+    出: list[str] = []
+    结束标记: str | None = None
+    i, n = 0, len(行)
+    while i < n:
+        c = 行[i]
+        if 状态 == 1:                      # 单引号里:原样抹掉
+            出.append(" ")
+            if c == "'":
+                状态 = 0
+            i += 1
+            continue
+        if 状态 == 2:                      # 双引号里:留着,但认转义
+            if c == "\\":
+                出.append("  ")
+                i += 2
+                continue
+            出.append(c)
+            if c == '"':
+                状态 = 0
+            i += 1
+            continue
+        # 状态 0:引号外
+        if c == "\\":
+            出.append("  ")
+            i += 2
+            continue
+        if c == "'":
+            状态 = 1
+            出.append(" ")
+            i += 1
+            continue
+        if c == '"':
+            状态 = 2
+            出.append(c)
+            i += 1
+            continue
+        if c == "#" and (not 出 or 出[-1].isspace()):
+            break                          # 注释,这一行到此为止
+        if 行.startswith("<<", i) and not 行.startswith("<<<", i) and 结束标记 is None:
+            命中 = _起heredoc.match(行, i)
+            if 命中:
+                结束标记 = next(g for g in 命中.groups() if g is not None)
+                出.append(" " * (命中.end() - i))
+                i = 命中.end()
+                continue
+        出.append(c)
+        i += 1
+    return "".join(出), 状态, 结束标记
+
+
+def 代码行(文本: str) -> list[tuple[int, str]]:
+    """整份脚本逐行走一遍,回 ``(行号, 可执行片段)``。**heredoc 的正文整段跳过。**
+
+    heredoc 正文是喂给别的程序的数据(install.sh 那两段就是 ``/etc/d1max/env``
+    的模板和一屏给人看的提示),里头的中文、``=``、``$`` 一律不是标识符。
+    """
+    行们 = 文本.split("\n")
+    出: list[tuple[int, str]] = []
+    状态 = 0
+    i = 0
+    while i < len(行们):
+        代码, 状态, 结束标记 = 可执行片段(行们[i], 状态)
+        出.append((i + 1, 代码))
+        if 结束标记 is not None:
+            j = i + 1
+            while j < len(行们) and 行们[j].strip() != 结束标记:
+                j += 1
+            状态 = 0
+            i = j + 1
+            continue
+        i += 1
+    return 出
+
+
+def 非ASCII标识符(文本: str) -> list[tuple[int, str, str]]:
+    """挑出非 ASCII 的标识符,回 ``(行号, 种类, 那个标识符)``。
+
+    **取舍写在这儿:宁可漏报,绝不误报到中文注释上。** 这条护栏的价值全在
+    「红了就一定是真的」—— 它要是会因为某句中文注释而莫名其妙变红,第一个
+    被撞红的人就会把它 skip 掉,然后 install.sh 那种 bug 会第二次活下来。
+    所以:
+
+    * 赋值**只认命令位**(行首,或 ``local``/``export`` 这类关键字之后)。
+      bash 本来也只在命令位上认赋值,``echo 版本=1`` 不是赋值。
+    * 引用**只认以非 ASCII 开头**的名字。``"$ROOT/根目录"`` 是正当写法。
+    * 单引号里、注释里、heredoc 正文里的东西一律不看。
+    * 字符串字面量里的中文**散文**照样放行 —— 只有 ``$中文`` 这种引用形状才拦。
+
+    漏报的那一头长什么样,也说清楚:间接展开(``${!名}``)、``eval`` 拼出来的
+    名字、跨行拼接出来的赋值,这里都看不见。真要写成那样,是另一种更该被
+    code review 拦下的问题。
+    """
+    出: list[tuple[int, str, str]] = []
+    for 行号, 代码 in 代码行(文本):
+        for 规则, 种类 in _扫描规则:
+            for 命中 in 规则.finditer(代码):
+                出.append((行号, 种类, 命中.group(1)))
+    return 出
+
+
+def test_shell脚本名单不是空的():
+    """**这一条是下面那个 glob 的活口。**
+
+    ``shell脚本()`` 要是哪天因为目录改名、glob 写错而回了个空列表,下面每一条
+    parametrize 出来的用例都会一起消失,而 pytest **不会报错** —— 它只会少收
+    几条用例,测试照样全绿。空名单的护栏和没有护栏是一回事。
+    """
+    名单 = shell脚本()
+    assert len(名单) >= 13, f"shell 脚本只扫到 {len(名单)} 份,glob 像是漏了:{名单}"
+    名字 = {p.name for p in 名单}
+    # 这三处各点一份名, 是为了「某个目录整个扫不到了」也会变红。
+    assert "install.sh" in 名字, "install.sh 不在名单上 —— 这正是这一节的由来"
+    assert "footprint.sh" in 名字
+    assert any(n.startswith("field-") for n in 名字), "仓库根上的 field-*.sh 没被扫到"
+
+
+@pytest.mark.parametrize("脚本", shell脚本(), ids=lambda 路径: 路径.name)
+def test_shell标识符一律是ASCII(脚本: Path):
+    """bash 的标识符只认 ASCII。中文变量名不是赋值,是一条找不到的命令。
+
+    报错要指到**文件名、行号、那个标识符本身** —— 只说「有问题」的护栏,
+    现场的人读不懂也改不动。
+    """
+    坏的 = 非ASCII标识符(脚本.read_text(encoding="utf-8"))
+    assert not 坏的, "\n".join(
+        [f"{脚本.name} 里有非 ASCII 的 shell 标识符 —— bash 不认,这些行跑不起来:"]
+        + [f"  {脚本.name}:{行号}: {种类} {名!r}" for 行号, 种类, 名 in 坏的]
+        + ["改成 ASCII(注释里的中文一个字都不用动)"])
+
+
+def test_扫描器认得出中文标识符也放得过中文散文():
+    """**这一条守的是上面那个扫描器自己。**
+
+    一个什么都匹配不上的扫描器永远是绿的 —— 而这一节要防的恰恰是「护栏在,
+    但它什么都没查」。所以在这儿用一份合成脚本两头都钉死:该拦的五种形状一
+    种都不许漏,该放的中文注释/单引号/heredoc/字符串散文一处都不许误伤。
+    """
+    样本 = "\n".join([
+        "#!/usr/bin/env bash",
+        "# 注释里写 根=/opt/d1max 和 $根 都不算数",
+        "根=/opt/d1max",
+        "用户=${D1MAX_USER:-robot}",
+        "说() { printf '%s' \"$*\"; }",
+        'echo "落在 $根/bin 底下"',
+        "echo '单引号里的 $根 不展开'",
+        "for 一版 in a b; do :; done",
+        "read -r 一行",
+        'echo "版本=1 只是个参数, 不是赋值"',
+        "ROOT=/opt/d1max",
+        'echo "$ROOT/根目录 是正当写法"',
+        "cat <<'模板'",
+        "里面写 根=/opt/d1max 和 $根 都不算数",
+        "模板",
+        "echo 尾巴",
+    ])
+    命中 = 非ASCII标识符(样本)
+    assert [(行号, 种类, 名) for 行号, 种类, 名 in 命中] == [
+        (3, "变量赋值", "根"),
+        (4, "变量赋值", "用户"),
+        (5, "函数定义", "说"),
+        (6, "变量引用", "根"),
+        (8, "循环变量", "一版"),
+        (9, "read 的变量", "一行"),
+    ], f"扫描器的行为变了:{命中}"
+
+
+@pytest.mark.parametrize("脚本", shell脚本(), ids=lambda 路径: 路径.name)
+def test_每份shell脚本的语法都过得去(脚本: Path):
+    """``bash -n``。
+
+    它查不出中文标识符那类问题(``根=/opt/d1max`` 语法完全合法),所以它**不是**
+    上面那条的替代品;但真的语法错还是要当场拦住,而且这是整份名单上唯一一次
+    「让 bash 自己读一遍这份脚本」的机会。
+    """
+    bash = 有bash()
+    if not bash:
+        pytest.skip("这台机器上没有 bash")
+    完 = subprocess.run(
+        [bash, "-n", 脚本.as_posix()], capture_output=True, text=True, timeout=60)
+    assert 完.returncode == 0, f"{脚本.name} 语法不过:{完.stderr}"
