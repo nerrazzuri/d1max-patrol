@@ -13,6 +13,7 @@ import json
 import ssl
 import urllib.error
 import urllib.request
+from http.client import HTTPException
 from typing import Any
 from urllib.parse import quote
 
@@ -108,7 +109,13 @@ class HttpSink:
             # urllib 把 4xx/5xx 抛成 HTTPError,但它身上带着 body —— 409 的
             # body 里有服务器说的 stored,那个数正是我们要的。当回执读,不当异常。
             return parse_receipt(err.code, err.read() or b"")
-        except (urllib.error.URLError, TimeoutError, OSError) as err:
+        except (urllib.error.URLError, TimeoutError, OSError, HTTPException) as err:
             # **只翻这几种。** catch Exception 会把编码错误、路径错误一起
             # 吞成"网络不好",而 ruff 的 BLE 也不许那么写。
+            #
+            # HTTPException 单独列一支:BadStatusLine(网关回了一段不是合法
+            # HTTP 状态行的东西)、IncompleteRead(读到的字节数比 Content-Length
+            # 少)都是它的子类,**不是** OSError 的子类,不加这一支的话,服务器
+            # 半路掐断连接、CPE 重拨截断响应这两种真实场景会带着原始异常把
+            # Uploader.run_once 炸穿,而不是走退避重排。
             raise SinkError(f"发不出去: {err}") from err

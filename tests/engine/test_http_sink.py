@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import http.client
 import json
+import ssl
 import urllib.error
+import urllib.request
 from urllib.parse import unquote
 
 import pytest
@@ -45,6 +48,32 @@ class _假响应:
 
     def __exit__(self, *exc: object) -> None:
         return None
+
+
+class _读body时抛的假响应:
+    """``open()`` 顺利返回,但读 body 的时候才炸 —— 模拟连接读到一半被截断。"""
+
+    def __init__(self, 抛: BaseException) -> None:
+        self._抛 = 抛
+
+    def read(self) -> bytes:
+        raise self._抛
+
+    def __enter__(self) -> _读body时抛的假响应:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+class _固定响应的假opener:
+    """``open()`` 不抛,直接把一个现成的响应对象原样交出去。"""
+
+    def __init__(self, resp) -> None:
+        self._resp = resp
+
+    def open(self, request, timeout=None):
+        return self._resp
 
 
 def test_body就是原始字节_不做base64() -> None:
@@ -131,3 +160,77 @@ def test_HTTPError当回执读_不当异常() -> None:
     err.read = lambda: '{"ok": false, "stored": 3, "sha256": "", "message": "偏移对不上"}'.encode()
     got = HttpSink("http://x:8095", opener=假opener(抛=err)).put(样例)
     assert (got.ok, got.stored) == (False, 3)
+
+
+def test_回执是合法json但不是对象_不抛() -> None:
+    """``json.loads`` 成功,但顶层不是 dict(列表/null/裸字符串/裸数字)——
+    这不该走到 ``.get(...)`` 那一步去炸 ``AttributeError``。
+    """
+    for body in (b"[1, 2, 3]", b"null", b'"ok"', b"3"):
+        got = parse_receipt(200, body)
+        assert got.ok is False
+        assert "回执不是 JSON" in got.message
+
+
+def test_HTTPException翻成SinkError() -> None:
+    """``http.client.HTTPException`` 不是 ``OSError`` 的子类 —— 网关回一段
+    不是合法 HTTP 状态行的东西时,urllib 在 ``open()`` 就会抛这个,必须翻成
+    ``SinkError``,否则会带着原始异常把 ``Uploader.run_once`` 炸穿。
+    """
+    opener = 假opener(抛=http.client.BadStatusLine("garbage-not-http"))
+    with pytest.raises(SinkError):
+        HttpSink("http://x:8095", opener=opener).put(样例)
+
+
+def test_读body时的HTTPException也翻成SinkError() -> None:
+    """``IncompleteRead`` 是在 ``resp.read()`` 那一步才抛的 —— 连接在
+    ``open()`` 顺利返回之后、读 body 的中途被截断(CPE 重拨截断响应是真实
+    会发生的场景)。这条不在 ``open()`` 那条路径上,单独补一条覆盖。
+    """
+    抛 = http.client.IncompleteRead(b"ab", 3)
+    opener = _固定响应的假opener(_读body时抛的假响应(抛))
+    with pytest.raises(SinkError):
+        HttpSink("http://x:8095", opener=opener).put(样例)
+
+
+def _装个记录参数的HTTPSHandler(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """把 ``urllib.request.HTTPSHandler`` 换成一个记参数的子类。
+
+    **不能换成普通函数** —— ``build_opener`` 自己会对传进去的 handler
+    实例做 ``isinstance(check, klass)``/``issubclass`` 判断(判断要不要用
+    默认的 ``HTTPSHandler``),换成函数会让那段标准库代码直接
+    ``TypeError: isinstance() arg 2 must be a type``。子类化才既能让
+    ``build_opener`` 内部的类型检查照常工作,又能拦截住构造参数。
+    """
+    收到: dict = {}
+    真HTTPSHandler = urllib.request.HTTPSHandler
+
+    class 假HTTPSHandler(真HTTPSHandler):
+        def __init__(self, *args, **kwargs):
+            收到.update(kwargs)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(urllib.request, "HTTPSHandler", 假HTTPSHandler)
+    return 收到
+
+
+def test_不传opener时真的调用build_opener(monkeypatch: pytest.MonkeyPatch) -> None:
+    """不传 ``opener`` 是真机上唯一会跑的路径 —— 生产代码不会注入假 opener。
+    这条分支里 ``ssl_context is not None`` 判断决定要不要把它挂进
+    ``HTTPSHandler``,不是纯转发给标准库,值得单独验证构造出来的参数对不对。
+    """
+    收到 = _装个记录参数的HTTPSHandler(monkeypatch)
+    ctx = ssl.create_default_context()
+    sink = HttpSink("https://x:8095", ssl_context=ctx)
+    assert 收到.get("context") is ctx
+    assert sink._opener is not None
+
+
+def test_不传ssl_context时HTTPSHandler不带context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """没给 ``ssl_context`` 就不该往 ``HTTPSHandler`` 里塞任何 ``context`` 参数——
+    这一步是 Task 14 证书钉扎留的口子,这一步先不用,得先确认"不用"这件事
+    真的成立,不是嘴上说说。
+    """
+    收到 = _装个记录参数的HTTPSHandler(monkeypatch)
+    HttpSink("https://x:8095")
+    assert "context" not in 收到
