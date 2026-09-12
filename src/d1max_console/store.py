@@ -20,6 +20,20 @@ from d1max_patrol.engine.export import sha256_file
 #: (``C:foo`` 盘符相对路径、``a\b`` 当分隔符),NUL 是 C 层截断。
 _坏字符 = frozenset("\\:\x00")
 
+#: NTFS 单个路径段的长度上限(字符数)。狗不会发出这么长的文件名,
+#: 超长只可能是探测或者畸形请求。不在这儿拒,它会在磁盘层炸成
+#: ``OSError [Errno 22]``,跟"盘坏了"长得一模一样。
+_MAX_SEG_LEN = 255
+
+#: Windows 保留设备名。不区分大小写,不管有没有扩展名 ——
+#: ``NUL.txt`` 底层打开的仍然是 NUL 设备,不是一个叫这个名字的文件。
+#: 同上,不在这儿拒就会在磁盘层炸成 ``OSError``。
+_保留设备名 = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+})
+
 
 class PathRefused(ValueError):
     """路径不合规。**拒绝就是拒绝,不清洗后接着用。**
@@ -32,10 +46,14 @@ class PathRefused(ValueError):
 def safe_join(root: Path, *parts: str) -> Path:
     """把网络上来的路径片段接到 ``root`` 底下。**两道闸,都要过。**
 
-    第一道按**段**查:``..``、绝对路径、空段、控制字符。
+    第一道按**段**查:``..``、绝对路径、空段、控制字符、超长段、Windows
+    保留设备名、**尾随的空格和点**。最后这一条是补的 —— Win32 在 syscall
+    时会把最后一段的尾随点和空格剥掉(``"a."`` 和 ``"a"`` 落到同一个文件),
+    这道剥离发生在 ``resolve()`` 和这道段级查之后、真正 ``open()`` 之前,
+    两道闸都看不见,只能在这儿把带尾随点/空格的段整段拒掉,不是拒
+    "剥完之后变空的" 那一小撮。
     第二道按**结果**查:接完之后 ``resolve()`` 一次,确认它确实还在 ``root``
-    底下,Windows 上 ``C:foo`` 这种盘符相对路径按段查看不出来,
-    NTFS 的 ``::$DATA`` 后缀也一样。
+    底下,Windows 上 ``C:foo`` 这种盘符相对路径按段查看不出来。
     """
     root = root.resolve()
     cur = root
@@ -45,6 +63,15 @@ def safe_join(root: Path, *parts: str) -> Path:
                 raise PathRefused(f"空路径段:{part!r}")
             if seg in {".", ".."}:
                 raise PathRefused(f"路径里有 {seg!r}:{part!r}")
+            if len(seg) > _MAX_SEG_LEN:
+                raise PathRefused(f"路径段过长({len(seg)} 字符):{part!r}")
+            if seg != seg.rstrip(" ."):
+                raise PathRefused(
+                    f"路径段有尾随空格或点,Win32 打开文件时会把它们剥掉,"
+                    f"造成两个不同的名字指向同一个文件:{seg!r}"
+                )
+            if seg.split(".", 1)[0].upper() in _保留设备名:
+                raise PathRefused(f"路径段是 Windows 保留设备名:{seg!r}")
             if _坏字符 & set(seg) or any(ord(c) < 32 for c in seg):
                 raise PathRefused(f"路径段里有不许出现的字符:{seg!r}")
             cur = cur / seg
