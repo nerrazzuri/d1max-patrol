@@ -830,8 +830,32 @@ def _该打可删了吗(runs_root: Path, queue: UploadQueue, run_rel: str) -> No
 
     **(b) 的判据一个字都不许在这儿重写**,整条走 :func:`is_settled` ——
     理由写在那个函数的文档串里。
+
+    最前面还有一道**不是判据、是分辨**的门:run 目录还在不在。
+    见下面那段注释 —— 它把"水位线删过了"跟"盘出事了"分开,
+    这两件事在这儿必须分得开。
     """
     run = Path(runs_root) / run_rel
+    # **「这个目录不在了」是一个预期之内的状态,不是错误。**
+    #
+    # 队列**按设计**永远留着已经 ``done`` 的条目(``UploadQueue._compact``:
+    # 要留 offset/size 给追加流),所以水位线 ``rmtree`` 掉一趟归档之后,
+    # 它那几条 key 还在队里 —— 而 ``.uploaded`` 跟着目录一起没了。于是这一
+    # 趟每一拍都会走到这儿:条件 (a) 全 ``done`` 放行,条件 (b) 靠目录名老过
+    # ``SETTLE_HOURS`` 也放行,最后拿一个**不存在的目录**去 ``touch`` ——
+    # ``FileNotFoundError``。那一下会把 :func:`_补打可删` 的循环当场打断,
+    # 排在后面的每一趟这一拍都轮不上;而那条死记录永不消失,于是**每一拍
+    # 重演**,第二触发点从此永久失效 —— 水位线第一次动手就把它自己捅穿了。
+    #
+    # **所以这儿要的是一句「分辨」,不是一个 ``try``。** 目录不在就是没这一
+    # 趟可标,安静走人;而"盘坏了、权限没了、只读挂载"那些**真的**
+    # ``OSError`` 照旧原样往上抛 —— 把它们一起吞掉会把"循环会断"换成"永远
+    # 不报错也永远不干活",那更糟,因为连 ``last_error`` 都不叫了。
+    #
+    # 归档盘短暂掉线时这儿同样回 ``False``(``runs_root`` 都读不到),方向跟
+    # ``Uploader._missing()`` 第 1 分支一致:**不销账、不打标**,等盘回来。
+    if not run.is_dir():
+        return
     if (run / UPLOADED_REL).exists():
         return
     if any(i.key.startswith(f"{run_rel}/") and not i.done for i in queue.all()):
@@ -863,9 +887,22 @@ def _补打可删(runs_root: Path, queue: UploadQueue) -> None:
     新文件是那一拍进的队,"收没收工"也该在那一拍重新问一遍。
 
     只看队列里出现过的那几趟 —— 没排过队的目录跟回传这条线没关系。
+
+    **一趟出事不许拖垮同一拍里其余的趟。** 下面那个 ``try`` 不是用来消音的:
+    接的是 ``OSError``(不是 ``Exception``,也没有 ``# noqa``),攒起来、跑完
+    整圈之后**原样抛出去**,由 ``_喊一声扫过了`` 记 traceback 并写上值守屏。
+    它只买一件事 —— 让排在出事那一趟**后面**的趟这一拍照样轮得上。
+    "水位线删过了"根本进不到这个 ``try`` 里:那一支在
+    :func:`_该打可删了吗` 最前面就被分辨出去了,不会留下假报错。
     """
+    出事的: list[str] = []
     for run_rel in dict.fromkeys(_run_rel(i.key) for i in queue.all()):
-        _该打可删了吗(runs_root, queue, run_rel)
+        try:
+            _该打可删了吗(runs_root, queue, run_rel)
+        except OSError as exc:
+            出事的.append(f"{run_rel}({type(exc).__name__}: {exc})")
+    if 出事的:
+        raise OSError("这几趟的「可删」没打上: " + "、".join(出事的))
 
 
 def build_pump(ctx: AppContext, console_url: str, *, token: str = "") -> UploadPump:

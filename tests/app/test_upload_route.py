@@ -24,10 +24,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
 
+import pytest
+
+from d1max_patrol.app import server
 from d1max_patrol.app.control import needs_lease
 from d1max_patrol.app.server import AppServer, _run_finished, _run_rel, _补打可删
 from d1max_patrol.app.upload_pump import SCAN_EVERY_MS, UploadPump
@@ -47,6 +51,9 @@ UPLOAD = "/api/upload"
 
 #: 队列里这一趟叫什么。**两段**:任务名 + 时刻,后面全是 rel。
 RUN_REL = "巡检一/20260911T101500Z"
+
+#: 更老的一趟。水位线先删的就是它 —— 队列的遍历序也是它排最前。
+OLD_REL = "巡检一/20260801T101500Z"
 
 
 def make_ctx_with_console(bridge, tmp_path):
@@ -449,3 +456,112 @@ def test_补打可删这一下炸了_也不许把这一拍的上传带走(tmp_pa
     # 这一拍上传是成功的 —— 成功那一支会把 last_error 清空。这句话还在,
     # 钉的就是"回调那一声排在清空之后"。
     assert "盘掉了" in pump.stats().last_error
+
+
+# ------------------------------- 水位线删过一趟之后, 第二触发点还得活着
+
+
+def test_水位线删过一趟之后_补打可删不许被那条死记录挡住(
+        tmp_path: Path, monkeypatch):
+    """**这一条钉的是「水位线第一次动手就把第二触发点捅穿了」。**
+
+    队列**按设计**永远留着已经 ``done`` 的条目(``UploadQueue._compact`` 要留
+    offset/size 给追加流), 所以一趟归档被 ``rmtree`` 之后, 它那几条 key 还在
+    队里, 而 ``.uploaded`` 跟着目录一起没了。``_补打可删`` 的遍历序是队列的
+    首次出现序 —— **被删掉的那趟恰好排最前**: 条件 (a) 全 done 放行, 条件 (b)
+    靠目录名老化放行, 最后拿一个不存在的目录去 touch。
+
+    那一下不但自己炸, 还会把整个 for 循环打断, **排在后面的每一趟这一拍都轮
+    不上**; 而那条死记录永不消失, 于是每一拍重演 —— 第二触发点从此永久失效,
+    裁决三十八要堵的「盘满」原样回来。
+    """
+    此刻 = datetime(2026, 9, 11, 10, 20, tzinfo=timezone.utc)
+    monkeypatch.setattr(retention, "_utcnow", lambda: 此刻)
+    老 = 摆一趟(tmp_path, "events.jsonl", run_rel=OLD_REL)
+    收工(老)
+    新 = 摆一趟(tmp_path, "photos/P1__front.jpg")
+    起个头(新)                                   # 新那一趟还没收工
+    runs_root = tmp_path / "runs"
+    pump, q = 装一台(tmp_path)
+    传到收工(pump)
+    assert (老 / UPLOADED_REL).exists(), "老那一趟收工了又全传完了, 该打上标"
+    assert not (新 / UPLOADED_REL).exists(), "新那一趟还没收工"
+
+    shutil.rmtree(老)                            # 水位线动手了(设计常态)
+    assert not 老.exists()
+    assert any(_run_rel(i.key) == OLD_REL for i in q.all()), \
+        "队列里该还留着它那几条 done 记录 —— 这正是这一条要测的前提"
+
+    收工(新)                                     # 新那一趟这会儿才收工
+    _补打可删(runs_root, q)                      # **不许抛**
+    assert (新 / UPLOADED_REL).exists(), \
+        "被删掉那一趟的死记录把后面的趟挡住了 —— 第二触发点从此永久失效"
+
+
+def test_水位线删过一趟之后_那一拍不许留下假报错(tmp_path: Path, monkeypatch):
+    """**这一条钉的是值守屏上那条告警通道不许被僵尸占住。**
+
+    ``on_scan`` 排在状态更新之后(那个排法是对的), 所以哪怕上传一路顺风、
+    ``done`` 刚把 ``last_error`` 清空, 一句假报错也会紧接着被写回去, 而且
+    **每一拍**都写。它跟「打不上可删 = 盘要满了」用的是同一个字段 —— 真出事
+    的时候值守的人分不出哪句是真的。
+
+    「目录不在了」是预期之内的状态, 不是错误, 所以这一拍该干干净净。
+    """
+    此刻 = datetime(2026, 9, 11, 10, 20, tzinfo=timezone.utc)
+    monkeypatch.setattr(retention, "_utcnow", lambda: 此刻)
+    老 = 摆一趟(tmp_path, "events.jsonl", run_rel=OLD_REL)
+    收工(老)
+    钟 = [0]
+    pump, _ = 装一台(tmp_path, 钟)
+    传到收工(pump)
+    shutil.rmtree(老)
+
+    钟[0] = SCAN_EVERY_MS                        # 正好踩在重扫那一拍上
+    step = pump.tick()
+    assert step.action == "idle", f"盘上已经没东西可传了: {step}"
+    assert pump.stats().last_error == "", \
+        f"「目录不在了」被当成错误报到值守屏上了: {pump.stats().last_error}"
+
+
+def test_一趟打标真出错_排在后面那趟这一拍照样轮得上_而且错还得报上去(
+        tmp_path: Path, monkeypatch):
+    """**坑二:一趟出事不许拖垮同一拍里其余的趟 —— 但不许靠吞异常做到。**
+
+    只读挂载、权限没了、盘坏了, 这些是真的 ``OSError``, 跟「水位线删过了」
+    是两件事。把它们一起吞掉, 就是把「循环会断」换成「永远不报错也永远不
+    干活」—— 那更糟, 因为连 ``last_error`` 都不叫了。
+
+    所以这一条同时要两头: 后面那趟**照样补上了标**, 而那个真错误**照样抛
+    出来**(再由 ``_喊一声扫过了`` 记 traceback、写上值守屏)。
+    """
+    此刻 = datetime(2026, 9, 11, 10, 20, tzinfo=timezone.utc)
+    monkeypatch.setattr(retention, "_utcnow", lambda: 此刻)
+    老 = 摆一趟(tmp_path, "events.jsonl", run_rel=OLD_REL)
+    收工(老)
+    新 = 摆一趟(tmp_path, "events.jsonl")
+    收工(新)
+
+    # **两个触发点都不接** —— 这一条测的是重扫那一拍自己, 不许 on_done 提前
+    # 把标打了(打过了就走不到 mark_uploaded, 那这一条什么都测不到)。
+    runs_root = tmp_path / "runs"
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    up = Uploader(runs_root, q, 好服务器(), sn="D1MAX-TEST-01", rand=lambda: 0.0)
+    传到收工(UploadPump(up, clock=lambda: 0))
+
+    真打标 = server.mark_uploaded
+
+    def 老那一趟打不上(run_dir):
+        if Path(run_dir).name == Path(OLD_REL).name:
+            raise OSError("只读挂载")
+        return 真打标(run_dir)
+
+    monkeypatch.setattr(server, "mark_uploaded", 老那一趟打不上)
+    with pytest.raises(OSError) as 出事:
+        _补打可删(runs_root, q)
+
+    assert "只读挂载" in str(出事.value), "真的 IO 出错被吞掉了"
+    assert OLD_REL in str(出事.value), "报上去的话里得说清是哪一趟"
+    assert not (老 / UPLOADED_REL).exists()
+    assert (新 / UPLOADED_REL).exists(), \
+        "老那一趟出事, 把排在它后面的新那一趟这一拍挤掉了"
