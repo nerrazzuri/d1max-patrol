@@ -17,17 +17,41 @@ from pathlib import Path
 from d1max_patrol.engine.export import sha256_file
 
 #: 路径段里一律不许出现的字符。反斜杠和冒号是 Windows 的两个后门
-#: (``C:foo`` 盘符相对路径、``a\b`` 当分隔符),NUL 是 C 层截断。
-_坏字符 = frozenset("\\:\x00")
+#: (``C:foo`` 盘符相对路径、``a\b`` 当分隔符),NUL 是 C 层截断,
+#: 剩下六个(``* ? < > | "``)是 Windows 文件名语法本身不许出现的字符 ——
+#: 它们在 Linux 上合法,狗侧 ``archive.py``/``mission.py`` 不会拦这些字符
+#: (任务名来自手机上人手打的字符串,没有消毒),所以一个带 ``?`` 的任务名
+#: 能在狗本地跑完一整趟,传到这儿才第一次被拒。不在这儿拒,就会在磁盘层
+#: 炸成 ``OSError [Errno 22]``,跟"盘坏了"长得一模一样。
+_坏字符 = frozenset("\\:\x00*?<>|\"")
 
-#: NTFS 单个路径段的长度上限(字符数)。狗不会发出这么长的文件名,
-#: 超长只可能是探测或者畸形请求。不在这儿拒,它会在磁盘层炸成
-#: ``OSError [Errno 22]``,跟"盘坏了"长得一模一样。
+#: NTFS 单个路径段的长度上限,单位是 **UTF-16 code unit**,不是 Python
+#: 的字符数(code point)。NTFS 内部按 UTF-16 存文件名,非 BMP 字符
+#: (比如大部分 emoji)在 UTF-16 里是一个代理对、占两个 code unit,但
+#: Python 的 ``len()`` 只算一个 code point。``"😀" * 200`` 用 ``len()``
+#: 量是 200,过得了这道闸,实际写到 NTFS 上是 400 个 code unit,照样炸
+#: ``OSError``。这里量的是 code unit 数,不是把非 BMP 字符整类拒掉 ——
+#: emoji 出现在人取的任务名里是正常事,不该因为"是 emoji"就被拒。
 _MAX_SEG_LEN = 255
 
-#: Windows 保留设备名。不区分大小写,不管有没有扩展名 ——
-#: ``NUL.txt`` 底层打开的仍然是 NUL 设备,不是一个叫这个名字的文件。
-#: 同上,不在这儿拒就会在磁盘层炸成 ``OSError``。
+
+def _utf16_len(s: str) -> int:
+    """按 UTF-16 code unit 数量计长,对齐 NTFS 的真实计量方式。"""
+    return len(s.encode("utf-16-le")) // 2
+
+
+#: Windows 保留设备名。**整段精确匹配,不区分大小写,不看有没有扩展名。**
+#:
+#: 真机验证过:只有整段就是 ``NUL``/``CON``/``COM1`` 这类词本身才是设备,``CON.txt``、
+#: ``con.北区``、``nul.tar.gz`` 在真实 NTFS 上都是能正常建出来、正常读写
+#: 的普通文件/目录 —— Win32 的设备别名只在"整段就是这几个词"时生效,
+#: 不是"去掉扩展名之后是这几个词"就算。上一版按 ``seg.split(".", 1)[0]``
+#: 取词根来判,比真实情况严太多:一个任务名叫 ``con.北区`` 的狗能在本地
+#: 跑完一整趟,却会在上传时被这道闸误杀,而且是**静默的、永久的**丢
+#: 数据 —— 400 之后狗不会重试。收窄成整段匹配是安全的:``ConsoleStore``
+#: 落盘后会自己重算 sha256(见 ``put``),如果哪个名字真的撞上了设备,
+#: 那会在哈希校验那一层大声炸出来,不会是这种悄无声息的数据丢失。
+#: 两害相权,取其轻。
 _保留设备名 = frozenset({
     "CON", "PRN", "AUX", "NUL",
     "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -63,14 +87,15 @@ def safe_join(root: Path, *parts: str) -> Path:
                 raise PathRefused(f"空路径段:{part!r}")
             if seg in {".", ".."}:
                 raise PathRefused(f"路径里有 {seg!r}:{part!r}")
-            if len(seg) > _MAX_SEG_LEN:
-                raise PathRefused(f"路径段过长({len(seg)} 字符):{part!r}")
+            seg_len = _utf16_len(seg)
+            if seg_len > _MAX_SEG_LEN:
+                raise PathRefused(f"路径段过长({seg_len} 个 UTF-16 code unit):{part!r}")
             if seg != seg.rstrip(" ."):
                 raise PathRefused(
                     f"路径段有尾随空格或点,Win32 打开文件时会把它们剥掉,"
                     f"造成两个不同的名字指向同一个文件:{seg!r}"
                 )
-            if seg.split(".", 1)[0].upper() in _保留设备名:
+            if seg.upper() in _保留设备名:
                 raise PathRefused(f"路径段是 Windows 保留设备名:{seg!r}")
             if _坏字符 & set(seg) or any(ord(c) < 32 for c in seg):
                 raise PathRefused(f"路径段里有不许出现的字符:{seg!r}")

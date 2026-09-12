@@ -76,12 +76,22 @@ def test_offset往回_是重传_截断后重写(tmp_path: Path) -> None:
     "a..",
     # 超长段,不拒会在磁盘层炸成 OSError,跟"盘坏了"长得一样。
     "L" * 260,
-    # Windows 保留设备名,不拒同样会在磁盘层炸出跟"盘坏了"一样的 OSError。
+    # Windows 保留设备名。**只放整段精确等于这几个词的用例** ——
+    # ``NUL.txt`` 这种带扩展名的形状真机上是普通文件,已经挪到
+    # test_保留设备名收窄成整段匹配_带扩展名的不再被误杀 里当正例(复评应修 C)。
     "NUL",
-    "NUL.txt",
     "CON",
     "COM1",
     "LPT1",
+    # Windows 文件名语法本身不许出现的 6 个字符(复评应修 A)。狗侧
+    # archive.py/mission.py 不消毒,人手打的任务名/点位名能一路带着
+    # 这些字符跑完一整趟,传到这儿第一次被拒。
+    "a*b",
+    "a?b",
+    "a<b",
+    "a>b",
+    "a|b",
+    'a"b',
 ])
 def test_路径穿越一律拒(tmp_path: Path, 坏: str) -> None:
     """**这是这一卷唯一一道拦路径穿越的闸。** 拒绝就是拒绝,不清洗后接着用。"""
@@ -150,6 +160,110 @@ def test_sn和run也要过闸(tmp_path: Path) -> None:
         # 尾随空格会被 Win32 剥掉,"D1MAX-02 " 会落进 "D1MAX-02" 的目录树,
         # 等于一只狗能踩进另一只狗的地盘(复评应修二点名的第二个后果)。
         s.put("D1MAX-02 ", "r/t", "a.jpg", offset=0, data=b"x")
+
+
+def test_sn和run里的win32非法字符也拒(tmp_path: Path) -> None:
+    """应修 A 补的六个字符不止拦 rel,sn/run 三个字段都要过闸。"""
+    s = ConsoleStore(tmp_path)
+    with pytest.raises(PathRefused):
+        s.put("D1MAX?01", "r/t", "a.jpg", offset=0, data=b"x")
+    with pytest.raises(PathRefused):
+        s.put("D1MAX-01", "r/t<1", "a.jpg", offset=0, data=b"x")
+
+
+def test_emoji超过UTF16上限才拒(tmp_path: Path) -> None:
+    """**这条是应修 B 的回归用例。** 128 个 emoji 用 Python ``len()`` 数是
+    128,远没到 255,旧代码会放行;但每个 emoji 是非 BMP 字符,在 NTFS
+    实际存成 UTF-16 时是一个代理对、占 2 个 code unit,128 个就是 256
+    个 code unit,超过 NTFS 的 255 上限,真机上会在磁盘层炸成 ``OSError``。
+    按 code unit 计长之后,这条必须在 ``ConsoleStore`` 这一层就被拒。"""
+    s = ConsoleStore(tmp_path)
+    段 = "😀" * 128
+    with pytest.raises(PathRefused):
+        s.put("D1MAX-01", "r/t", f"{段}.jpg", offset=0, data=b"x")
+
+
+def test_emoji没超UTF16上限时正常收(tmp_path: Path) -> None:
+    """**正例,防止把应修 B 修成"非 BMP 字符整类拒绝"。** 120 个 emoji 是
+    240 个 UTF-16 code unit,没超 255,是一个合法的人取的名字,该正常收。"""
+    s = ConsoleStore(tmp_path)
+    段 = "😀" * 120
+    got = s.put("D1MAX-01", "r/t", f"{段}.jpg", offset=0, data=b"x")
+    assert got.size == 1
+
+
+def test_中文段落在UTF16上限之内照收(tmp_path: Path) -> None:
+    """中文字符在 BMP 里,一个字符正好是一个 UTF-16 code unit,
+    250 个字符 = 250 个 code unit,没超 255,照收(应修 B 的另一个正例)。"""
+    s = ConsoleStore(tmp_path)
+    got = s.put("D1MAX-01", "r/t", "中" * 250 + ".jpg", offset=0, data=b"x")
+    assert got.size == 1
+
+
+def test_保留设备名收窄成整段匹配_带扩展名的不再被误杀(tmp_path: Path) -> None:
+    """**应修 C,这一轮第一优先级的丢数据修复。**
+
+    真机验证过:``CON.txt``、``con.北区``、``NUL.tar.gz`` 在真实 NTFS 上
+    都是能正常创建、正常读写的普通文件——Win32 的设备别名只在"整段就是
+    这几个词"时生效,不是"去掉扩展名之后是这几个词"就算。上一版按
+    ``seg.split(".", 1)[0]`` 取词根来判,比真实情况严太多:一个任务名
+    叫 ``con.北区`` 的狗能在本地跑完一整趟,却会在上传时被误杀,而且是
+    静默的、永久的丢数据(400 之后狗不会重试)。这条测试钉住收窄之后的
+    正确行为——这些名字必须能正常收下,不能再被拒。
+    """
+    s = ConsoleStore(tmp_path)
+    for rel in ("CON.txt", "con.北区.jpg", "NUL.tar.gz", "PRN.jpg", "aux.log"):
+        got = s.put("D1MAX-01", "r/t", rel, offset=0, data=b"x")
+        assert got.size == 1, f"{rel!r} 应该被正常收下,不该被当成保留设备名拒掉"
+
+
+def test_保留设备名裸词依然精确拒绝(tmp_path: Path) -> None:
+    """收窄之后,整段精确等于保留名(不区分大小写)依然要拒 ——
+    这条防止把闸收得太松,把裸的 NUL/CON 也放行了。"""
+    s = ConsoleStore(tmp_path)
+    for rel in ("NUL", "nul", "CON", "Con", "COM1", "lpt1"):
+        with pytest.raises(PathRefused):
+            s.put("D1MAX-01", "r/t", rel, offset=0, data=b"x")
+
+
+def test_sn大小写在两种文件系统上都是缺口_留给上层(tmp_path: Path) -> None:
+    """**应修 D:钉住现状,不是宣称这里安全。**
+
+    ``ConsoleStore`` 把 ``sn`` 当大小写敏感的字符串用,而文件系统未必
+    这么看。两种文件系统上都是缺口,只是形状不同 ——
+
+    * **大小写不敏感**(开发机的 NTFS、macOS 默认的 APFS):
+      ``D1MAX-02`` 和 ``d1max-02`` 落在同一个目录,第二次写**盖掉**
+      第一次的文件。一只狗的数据被另一个大小写的"同一只狗"覆盖。
+    * **大小写敏感**(服务器跑的 Linux,ext4/xfs):落成两棵独立的树,
+      同一只狗被记成两只,配额、清理、名录全部各算各的。
+
+    两种都不对,而且**都不是路径穿越**,所以不归这道闸管。这是身份
+    归一化问题("D1MAX-02" 和 "d1max-02" 算不算同一台设备),真正的
+    修法是在拿 ``sn`` 当隔离键**之前**,由花名册先核对、换成规范形式
+    —— 那是 Task 8/9 的范围,不是这一层的。
+
+    这条测试**不是在证明这里安全**,是防止未来有人扫一眼代码就以为
+    这条路已经被挡住了。
+    """
+    s = ConsoleStore(tmp_path)
+    s.put("D1MAX-02", "r/t", "a.jpg", offset=0, data=b"x")
+    s.put("d1max-02", "r/t", "a.jpg", offset=0, data=b"yy")
+
+    读回 = s.path_of("D1MAX-02", "r/t", "a.jpg").read_bytes()
+    同一个目录 = 读回 == b"yy"
+    if 同一个目录:
+        # 大小写不敏感:后写的盖掉了先写的,数据真的没了。
+        assert 读回 == b"yy"
+    else:
+        # 大小写敏感:各写各的,一只狗被记成两只。
+        assert 读回 == b"x"
+        assert s.path_of("d1max-02", "r/t", "a.jpg").read_bytes() == b"yy"
+
+    # 无论哪种文件系统,runs_of 都答得出来 —— 它按字符串问,
+    # 从来没有把这两个 sn 当成同一只狗来核对过。
+    assert s.runs_of("D1MAX-02") == ["r/t"]
+    assert s.runs_of("d1max-02") == ["r/t"]
 
 
 def test_中文路径照收(tmp_path: Path) -> None:
