@@ -191,9 +191,11 @@ from d1max_patrol.engine.removable import (
     scan_or_unknown,
 )
 from d1max_patrol.engine.retention import (
+    UPLOADED_REL,
     apply_sweep,
     bytes_to_free,
     forecast,
+    is_settled,
     mark_uploaded,
     plan_sweep,
     read_notice,
@@ -803,22 +805,67 @@ def _run_rel(key: str) -> str:
     return "/".join(key.split("/")[:2])
 
 
-def _run_finished(runs_root: Path, queue: UploadQueue, key: str) -> None:
-    """一趟的文件**全**传完了才打「可删」—— 而且只打标,**不删**(spec §4.4)。
+def _该打可删了吗(runs_root: Path, queue: UploadQueue, run_rel: str) -> None:
+    """两件事**同时**满足才打「可删」—— 而且只打标,**不删**(spec §4.4)。
+
+    (a) **队列里这个 run 前缀下没有还没 ``done`` 的条目。**
+        少了这一条,一趟里先传完的那张照片会把整趟判成可删,而
+        ``events.jsonl`` 还在队里排着。
+
+    (b) **这一趟已经收工**(:func:`is_settled`)。
+        少了这一条,后果比 (a) 严重得多,而且**每一趟都会中招**:
+        ``Uploader.scan()`` 的规矩是"不问这一趟结束了没有,谁在盘上谁就传"
+        (spec §4.1),所以巡检**刚开跑**、盘上只有 ``manifest.json`` 和刚起头
+        的 ``events.jsonl`` 时它们就进了队;pump 很快把这两个传完,此时 (a)
+        成立 —— 于是一趟**正在跑**的巡检被打上了「可删」。而 ``.uploaded``
+        只 ``touch``、**永不撤销**:等这一趟 settled 了(写了 summary,或者崩
+        在半路被 ``SETTLE_HOURS`` 老化),``_deletable(..., has_upload=True)``
+        认的就是 ``info.uploaded`` 这一个字段 —— 直接放行,水位线把整趟
+        ``rmtree`` 掉,而照片可能一个字节都没传出去。最坏的一档恰好是崩溃那
+        一趟:没有 summary,靠老化成 settled,而 §4.1 说它"恰恰是最需要看的
+        一趟"。
 
     真删由水位线驱动(``engine/retention.py`` 那一套),不由上传驱动:一份
     传上去了的证据该留多久是保留期的事,跟"它传没传上去"是两个判据。
 
-    判据是"这个 run 前缀底下还有没有没 ``done`` 的条目",不是"这个文件传完
-    了"。单个文件一传完就打标的话,一趟里先传完的那张照片会把整趟判成可删,
-    而 ``events.jsonl`` 还在队里排着。
+    **(b) 的判据一个字都不许在这儿重写**,整条走 :func:`is_settled` ——
+    理由写在那个函数的文档串里。
     """
-    run_rel = _run_rel(key)
-    剩 = [i for i in queue.all()
-          if i.key.startswith(f"{run_rel}/") and not i.done]
-    if 剩:
+    run = Path(runs_root) / run_rel
+    if (run / UPLOADED_REL).exists():
         return
-    mark_uploaded(Path(runs_root) / run_rel)
+    if any(i.key.startswith(f"{run_rel}/") and not i.done for i in queue.all()):
+        return
+    if not is_settled(run):
+        return
+    mark_uploaded(run)
+
+
+def _run_finished(runs_root: Path, queue: UploadQueue, key: str) -> None:
+    """**快的那条触发**:一个文件对上了,顺手看看它那一趟够不够格打「可删」。
+
+    它一个人不够 —— 见 :func:`_补打可删`。
+    """
+    _该打可删了吗(Path(runs_root), queue, _run_rel(key))
+
+
+def _补打可删(runs_root: Path, queue: UploadQueue) -> None:
+    """**补漏的那条触发**:回头把"传完了,但当时还没收工"的那几趟捡起来。
+
+    **没有这一条,应修那个 bug 换个位置照样发生。** ``_run_finished`` 只在
+    "有文件对上了"那一声上触发,而一趟的最后一个文件很可能在 ``summary``
+    写下**之前**就传完了(照片传完 → 狗还在往回走 → 才写 summary)。那之后
+    这一趟再也不会有第二声 ``done``,于是「可删」**永远打不上**、
+    ``scan_runs()`` 永远看不到它、这一趟永远不可删 —— **真机上盘还是会满**,
+    只不过这次是从另一头满的。
+
+    挂在 pump 重扫 runs 目录那一拍上(``SCAN_EVERY_MS``),跟着它的节奏走:
+    新文件是那一拍进的队,"收没收工"也该在那一拍重新问一遍。
+
+    只看队列里出现过的那几趟 —— 没排过队的目录跟回传这条线没关系。
+    """
+    for run_rel in dict.fromkeys(_run_rel(i.key) for i in queue.all()):
+        _该打可删了吗(runs_root, queue, run_rel)
 
 
 def build_pump(ctx: AppContext, console_url: str, *, token: str = "") -> UploadPump:
@@ -826,16 +873,22 @@ def build_pump(ctx: AppContext, console_url: str, *, token: str = "") -> UploadP
 
     队列落在 ``runs_root`` 的**兄弟位置**(见 :data:`QUEUE_FILE_NAME`)。
 
-    ``on_done`` 那一口是分层的关节:``app/upload_pump.py`` 喊一声"这个文件
-    对上了",打「可删」这件事在这儿做 —— ``engine/`` 一行都不用知道
-    ``retention`` 的存在。
+    ``on_done`` / ``on_scan`` 那两口是分层的关节:``app/upload_pump.py`` 只
+    喊"这个文件对上了"和"我刚重扫过盘",打「可删」这件事在这儿做 ——
+    ``engine/`` 一行都不用知道 ``retention`` 的存在。
+
+    **两个触发点缺一不可**,理由分别写在 :func:`_run_finished` 和
+    :func:`_补打可删` 上;两条都走同一道闸(:func:`_该打可删了吗`),
+    所以判据仍然只有一份。
     """
-    queue = UploadQueue(Path(ctx.runs_root).parent / QUEUE_FILE_NAME)
+    runs_root = Path(ctx.runs_root)
+    queue = UploadQueue(runs_root.parent / QUEUE_FILE_NAME)
     sink = HttpSink(console_url, token=token)
     up = Uploader(ctx.runs_root, queue, sink, sn=ctx.identity.sn)
     return UploadPump(
         up, clock=ctx.clock,
-        on_done=partial(_run_finished, Path(ctx.runs_root), queue))
+        on_done=partial(_run_finished, runs_root, queue),
+        on_scan=partial(_补打可删, runs_root, queue))
 
 
 async def _preflight_with_scan(ctx: AppContext, mission: Mission,

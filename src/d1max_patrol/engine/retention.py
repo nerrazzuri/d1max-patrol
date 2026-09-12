@@ -181,6 +181,32 @@ def _size_bytes(run_dir: Path) -> int:
     return total
 
 
+def is_settled(run_dir: Path | str, *, now: datetime | None = None) -> bool:
+    """这一趟**还有没有人在写**。见 :attr:`RunInfo.settled`。
+
+    两条出口,跟 :func:`scan_runs` 那一格是**同一份判据**:manifest 里有
+    ``summary``(跑完了),或者目录名上的起始时刻已经老过 :data:`SETTLE_HOURS`
+    (崩在半路的残骸 —— 也没人在写它了)。两条都不满足的一律叫"不安定"。
+
+    **这个函数存在的全部理由是「这份判据只许有一处」。** 它有两个调用方:
+    ``scan_runs`` 那一格,和回传那条线上"这一趟能不能打「可删」"那道闸
+    (``app/server.py``)。抄第二遍的后果不是重复代码,是**两份定义会漂**:
+    漂开的那天,回传这边认为一趟收工了就打上「可删」,而清扫器那边也认为它
+    收工了于是删掉 —— 而它其实还在写,照片一个字节都没传出去。
+
+    目录名不是时间戳就回 ``False``:不是我们建的目录,一律当"不安定",不碰。
+    """
+    run = Path(run_dir)
+    started = _started_at(run.name)
+    if started is None:
+        return False
+    raw = _manifest(run)
+    now = now if now is not None else _utcnow()
+    # 有 summary 就是跑完了;没有但已经过了安定期,那是崩在半路的残骸 ——
+    # 也没人在写它了。两条都不满足的才叫"不安定",一律不碰。
+    return bool(raw and raw.get("summary")) or started < now - timedelta(hours=SETTLE_HOURS)
+
+
 def scan_runs(runs_root: Path | str, *, now: datetime | None = None) -> list[RunInfo]:
     """扫一遍 runs 根目录,**最老在前**。
 
@@ -188,7 +214,6 @@ def scan_runs(runs_root: Path | str, *, now: datetime | None = None) -> list[Run
     这里反过来。
     """
     now = now if now is not None else _utcnow()
-    settle_before = now - timedelta(hours=SETTLE_HOURS)
     out: list[RunInfo] = []
     for run in list_runs(runs_root):
         started = _started_at(run.name)
@@ -203,9 +228,10 @@ def scan_runs(runs_root: Path | str, *, now: datetime | None = None) -> list[Run
             started_at=started,
             retention_days=_retention_days(raw),
             size_bytes=_size_bytes(run),
-            # 有 summary 就是跑完了;没有但已经过了安定期,那是崩在半路的
-            # 残骸 —— 也没人在写它了。两条都不满足的才叫"不安定",一律不碰。
-            settled=bool(raw and raw.get("summary")) or started < settle_before,
+            # **判据整条走 :func:`is_settled`,这儿不另写一份。** 回传那条线
+            # 上"能不能打「可删」"问的是同一个函数 —— 两处分岔的那天,一趟
+            # 还在写的归档会被一边打上「可删」、另一边照着标记删掉。
+            settled=is_settled(run, now=now),
             uploaded=(run / UPLOADED_REL).exists(),
             exported=(run / EXPORTED_REL).exists()))
     out.sort(key=lambda i: (i.started_at, i.path.name, i.mission))

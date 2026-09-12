@@ -63,6 +63,7 @@ class UploadPump:
         clock: Callable[[], int],
         sleep: Callable[[float], None] | None = None,
         on_done: Callable[[str], None] | None = None,
+        on_scan: Callable[[], None] | None = None,
     ) -> None:
         self._up = uploader
         self._clock = clock
@@ -87,6 +88,15 @@ class UploadPump:
         # 不删**(spec §4.4),真删由水位线驱动;两件事分在两处才不会有人
         # 哪天顺手把 ``mark_uploaded`` 改成 ``rmtree``。
         self._on_done = on_done
+        # 每次重扫 runs 目录之后喊一声,不带参数。
+        #
+        # **为什么光有 on_done 不够。** on_done 是"一个文件对上了"那一下,
+        # 可它到不了"这一趟收工了"那一下:最后一个文件常常在 summary 写下
+        # 之前就传完了,那之后队列里再没有东西会 done,**再也不会有第二声**。
+        # 只挂 on_done 的话,这种趟永远打不上「可删」,水位线永远扫不到东西
+        # 删 —— 盘照样会满。所以要有这么一个补漏的拍子:重扫盘那一拍顺带
+        # 回头看看"传完了、当时还没收工"的那几趟现在够不够格。
+        self._on_scan = on_scan
 
     # ---- 一步 ----
 
@@ -128,7 +138,8 @@ class UploadPump:
             return step
 
     def _一步(self, now: int) -> Step:
-        if now >= self._next_scan_ms:
+        扫过了 = now >= self._next_scan_ms
+        if 扫过了:
             # **先把下一次扫盘的时间推出去,再真的去扫。** 扫盘自己炸了(盘掉了、
             # 权限没了)的话,不能变成每一拍都去敲一次那块不在的盘。
             self._next_scan_ms = now + SCAN_EVERY_MS
@@ -144,8 +155,14 @@ class UploadPump:
                     self._sent_files += 1
             elif step.action in {"deferred", "rewound"}:
                 self._last_error = step.detail
+        # **两声都在锁外面、而且都在上面那段状态之后。** 顺序不是随便排的:
+        # 上面那段在 ``done``/``sent`` 那一支里会把 ``last_error`` 清空,搁在
+        # 它前面喊的话,回调写进去的那句话会被同一拍里一次成功的上传抹掉 ——
+        # 而打不上「可删」恰恰是那种"上传一路顺风、盘却在满"的失败。
         if step.action == "done":
             self._喊一声传完了(step.key)
+        if 扫过了:
+            self._喊一声扫过了()
         return step
 
     def _喊一声传完了(self, key: str) -> None:
@@ -166,6 +183,22 @@ class UploadPump:
             with self._lock:
                 self._last_error = detail
             log.exception("传完之后那一下回调抛了,这个文件照旧算传完了")
+
+    def _喊一声扫过了(self) -> None:
+        """通知那个补漏的回调。跟 :meth:`_喊一声传完了` 一样在锁外面调。
+
+        炸了也不许把这一拍带走:重扫盘这件事本身已经办成了,上传照旧要往
+        下走。但同样不许静悄悄 —— 这条路断了的后果跟那条一样是**盘会满**。
+        """
+        if self._on_scan is None:
+            return
+        try:
+            self._on_scan()
+        except Exception as exc:
+            detail = f"重扫之后那一下没办成: {type(exc).__name__}: {exc}"
+            with self._lock:
+                self._last_error = detail
+            log.exception("重扫之后那一下回调抛了,这一拍照旧往下走")
 
     def _出意外了(self, exc: BaseException, now: int) -> Step:
         """把一个没预料到的异常翻成"这一项退避重排"。
