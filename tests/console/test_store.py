@@ -252,18 +252,57 @@ def test_sn大小写在两种文件系统上都是缺口_留给上层(tmp_path: 
 
     读回 = s.path_of("D1MAX-02", "r/t", "a.jpg").read_bytes()
     同一个目录 = 读回 == b"yy"
+    落盘的 = sorted(p.name for p in tmp_path.iterdir() if p.is_dir())
     if 同一个目录:
-        # 大小写不敏感:后写的盖掉了先写的,数据真的没了。
-        assert 读回 == b"yy"
+        # 大小写不敏感:两次 put 落在同一棵树上,盘上只有一个目录,
+        # 后写的把先写的盖掉了 —— 数据真的没了。
+        # 断言的是**目录数**,不是分支条件本身,不然这一支就是同义反复。
+        assert len(落盘的) == 1, f"大小写不敏感的盘上该只有一棵树,实得 {落盘的}"
     else:
         # 大小写敏感:各写各的,一只狗被记成两只。
         assert 读回 == b"x"
         assert s.path_of("d1max-02", "r/t", "a.jpg").read_bytes() == b"yy"
+        assert 落盘的 == ["D1MAX-02", "d1max-02"], f"该是两棵独立的树,实得 {落盘的}"
 
     # 无论哪种文件系统,runs_of 都答得出来 —— 它按字符串问,
     # 从来没有把这两个 sn 当成同一只狗来核对过。
     assert s.runs_of("D1MAX-02") == ["r/t"]
     assert s.runs_of("d1max-02") == ["r/t"]
+
+
+def test_孤立代理字符在闸上拒_不许炸成UnicodeEncodeError(tmp_path: Path) -> None:
+    """**这条是修 B 自己带出来的缺陷的回归用例。**
+
+    按 UTF-16 计长用的 ``encode("utf-16-le")`` 默认是 ``strict``,
+    碰上孤立代理字符会抛 ``UnicodeEncodeError``。而计长这一步排在
+    字符闸**前面**,一炸就是所有闸都没机会拒 —— 本该 400 的请求
+    变成 500,Task 8 分不出是畸形输入还是盘坏了,狗会照着 5xx
+    无限重试,同时值守屏上多一条假的磁盘告警。
+
+    这个输入够得着真实流量:狗跑 Linux,``os.listdir()`` 对非 UTF-8
+    的字节名用 ``surrogateescape`` 解出来的就是孤立代理,
+    ``json.dumps`` 默认能把它编出去。
+
+    要的是 ``PathRefused``,不是 ``UnicodeEncodeError``,
+    更不是在 ``put()`` 里 catch 了再翻译。
+    """
+    孤 = "a" + chr(0xD800) + "b"
+    s = ConsoleStore(tmp_path)
+    for sn, run, rel in (
+        (f"D1MAX{孤}", "r/t", "a.jpg"),
+        ("D1MAX-01", f"r/{孤}", "a.jpg"),
+        ("D1MAX-01", "r/t", f"{孤}.jpg"),
+    ):
+        with pytest.raises(PathRefused):
+            s.put(sn, run, rel, offset=0, data=b"x")
+
+
+def test_成对代理的emoji不受影响(tmp_path: Path) -> None:
+    """正例:合法的非 BMP 字符在内存里不是孤立代理,照收。
+    防止把上一条修成"凡是代理区就拒",那会把所有 emoji 一起误杀。"""
+    s = ConsoleStore(tmp_path)
+    got = s.put("D1MAX-01", "r/t", "任务😀.jpg", offset=0, data=b"x")
+    assert got.size == 1
 
 
 def test_中文路径照收(tmp_path: Path) -> None:

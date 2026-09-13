@@ -36,8 +36,16 @@ _MAX_SEG_LEN = 255
 
 
 def _utf16_len(s: str) -> int:
-    """按 UTF-16 code unit 数量计长,对齐 NTFS 的真实计量方式。"""
-    return len(s.encode("utf-16-le")) // 2
+    """按 UTF-16 code unit 数量计长,对齐 NTFS 的真实计量方式。
+
+    用 ``surrogatepass`` 而不是默认的 ``strict``:U+D800 到 U+DFFF
+    里没配对的那种孤立代理字符,在默认模式下会让 ``encode`` 抛
+    ``UnicodeEncodeError``,而这个计长发生在字符闸**之前**,
+    一炸就是所有闸都没机会拒 —— 一个本该 400 的请求变成 500,
+    Task 8 分不出是畸形输入还是盘坏了,狗会照着 5xx 无限重试。
+    计长只管数长度,拒不拒是下面字符闸的事。
+    """
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
 
 
 #: Windows 保留设备名。**整段精确匹配,不区分大小写,不看有没有扩展名。**
@@ -99,6 +107,11 @@ def safe_join(root: Path, *parts: str) -> Path:
                 raise PathRefused(f"路径段是 Windows 保留设备名:{seg!r}")
             if _坏字符 & set(seg) or any(ord(c) < 32 for c in seg):
                 raise PathRefused(f"路径段里有不许出现的字符:{seg!r}")
+            if any(0xD800 <= ord(c) <= 0xDFFF for c in seg):
+                # 孤立代理:不是合法文本。来路是狗侧 os.listdir() 用
+                # surrogateescape 解出来的非 UTF-8 字节名,json.dumps
+                # 默认就能把它编出去。落盘行为因平台而异,一律拒。
+                raise PathRefused(f"路径段里有孤立的代理字符:{seg!r}")
             cur = cur / seg
     out = cur.resolve()
     # **第二道。** 前面按段查过一遍了,这儿查的是结果,两道判据不同,
