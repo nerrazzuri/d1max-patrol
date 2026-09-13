@@ -24,7 +24,9 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -50,6 +52,53 @@ MAX_BOOT_ATTEMPTS = 2
 _NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[0-9a-f]{6,12}$")
 
 _CHUNK_JOIN = b"\0"
+
+#: 打包收哪几个顶层条目。**这是一份白名单,不是黑名单。**
+#:
+#: **为什么是白名单。** 两种漏法的代价差着量级:白名单漏带一个目录,狗上服务
+#: 当场起不来 —— 装机现场几分钟内就发现了,补一趟就完事;黑名单漏排一个目录,
+#: ``refs/``(厂商的私有协议文档)或 ``dist/``(51MB 的 apk 和离线 wheel)就
+#: 被装进了客户的机器,而**这种事没有任何人会发现**。仓库还会长新目录,
+#: "新目录默认进包还是默认不进包"就是这条选择的全部内容。
+#:
+#: 三条各自的理由(都核过调用方,不是照着感觉列的):
+#:
+#: * ``pyproject.toml`` —— ``deploy/install.sh`` 的 2/7 和 4/7 都对包的一份
+#:   临时副本 ``pip install``,没有它 pip 连构建后端都找不到。
+#: * ``src/`` —— ``[tool.setuptools.packages.find] where = ["src"]``,包体在这儿。
+#: * ``config/`` —— systemd 单元里 ``WorkingDirectory=-/opt/d1max/current``,
+#:   也就是**包目录就是服务的工作目录**。``app/server.py`` 的 ``--params-file``
+#:   默认值 ``config/params/mapper_3d.yaml`` 是相对这里解析的
+#:   (``app/mapping.py`` 的 ``params_template`` 默认值是同一条路径)。
+#:
+#: ``app/server.py`` 的 argparse 默认值逐条核过,剩下那几个相对路径**都不该
+#: 进包**:``--maps-dir runs/slam``、``--bags-dir runs/bags``、
+#: ``--runs-root runs``、``--missions-dir missions`` 全是运行时自己建的输出
+#: 目录,把仓库里的同名目录塞进去等于把开发机的录像和任务包一起带上狗。
+#: ``--log-dir`` 默认落在 ``<runs-root>/logs`` 下,同理。
+#:
+#: 已知的**一处**副作用:``conformance.py`` 的 golden fixture 在
+#: ``tests/protocol/fixtures`` 下,而 ``tests/`` 不进包(狗上没有 pytest,
+#: 离线 wheel 里也没备)。``load_fixtures()`` 对"目录不在"的处理是返回空字典,
+#: 所以狗上跑 ``d1max conform`` 只是少了对拍那一段,不会炸。
+_PACK_INCLUDE = ("pyproject.toml", "src", "config")
+
+#: 白名单收下的目录里头还要再筛一遍的噪声。**它们是构建/缓存产物,不是源码**,
+#: 而且同一份源码带不带它们会算出两个不同的 ``content_sha256``。
+#: ``*.egg-info/`` 尤其要紧:pip 就地构建会往源目录里写它(见 install.sh 的
+#: 2/7 那段注释),开发机上的 ``src/d1max_patrol.egg-info`` 就是这么来的。
+_PACK_SKIP_DIRS = frozenset({"__pycache__", ".git", ".venv", "venv",
+                             ".pytest_cache", ".ruff_cache", ".mypy_cache"})
+#: 按后缀筛,目录和文件都走这一条(``.egg-info`` 筛的是目录名)。
+_PACK_SKIP_SUFFIXES = (".pyc", ".pyo", ".tmp", ".egg-info")
+
+#: 从 ``pyproject.toml`` 的 ``[project]`` 段里抠 ``version``。
+_PROJECT_VERSION_RE = re.compile(r"^\s*version\s*=\s*[\"']([^\"']+)[\"']",
+                                 re.MULTILINE)
+
+#: 打包时的中转目录名。拷完才改名成正式的包目录 —— 理由同 ``stage()``:
+#: 半个包比没有包更坏,它看着像打好了。
+_PACKING_DIR = ".packing"
 
 
 class ReleaseError(Exception):
@@ -198,6 +247,209 @@ def verify_package(where: Path | str) -> ReleaseManifest:
         raise ReleaseError(f"包的哈希对不上: 自述写 {manifest.content_sha256},"
                            f"算出来是 {got}")
     return manifest
+
+
+def _read_project_version(pyproject: Path) -> str:
+    """从 ``pyproject.toml`` 的 ``[project]`` 段里读 ``version``。
+
+    **不用 tomllib。** 它是 3.11 才有的,而本项目 ``requires-python = ">=3.10"``,
+    狗上的 JetPack / Ubuntu 22.04 正好是 3.10 —— 依赖它等于给打包器加一条
+    "只在新 python 上能跑"的隐含前提,而这条前提会在最不该出事的那天出事。
+
+    **段必须先切出来。** ``[build-system]``、``[tool.*]`` 里都可能有同名的
+    ``version =``;不切段的话,一个正则会抓到文件里第一个撞上的那行。
+    """
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ReleaseError(f"读不到 pyproject.toml: {pyproject}") from exc
+    section = ""
+    body: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if section == "[project]":
+                break               # [project] 那一段到此为止
+            section = stripped
+            continue
+        if section == "[project]":
+            body.append(line)
+    found = _PROJECT_VERSION_RE.search("\n".join(body))
+    if found is None:
+        raise ReleaseError(f"pyproject.toml 的 [project] 段里没有 version: "
+                           f"{pyproject}")
+    return found.group(1)
+
+
+def _git_short(src: Path) -> str:
+    """``src`` 那棵树的 git 短哈希(8 位小写十六进制)。拿不到就回空串。
+
+    **拿不到不是错。** 打包的源可能是从 tar 解出来的一棵树,机器上也可能压根
+    没装 git —— 那时候退到整棵树的指纹前 8 位,包照样打得出来。所以这里
+    ``check=False``,任何一种失败都只是"没有短哈希"。
+    """
+    try:
+        done = subprocess.run(          # 命令行是自己拼的,没有 shell
+            ["git", "-C", str(src), "rev-parse", "--short=8", "HEAD"],
+            capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if done.returncode != 0:
+        return ""
+    return done.stdout.strip().lower()
+
+
+def _pack_ignore(_where: str, names: list[str]) -> set[str]:
+    """``shutil.copytree`` 的筛子。筛掉的理由见 ``_PACK_SKIP_DIRS``。"""
+    return {n for n in names
+            if n in _PACK_SKIP_DIRS or n.endswith(_PACK_SKIP_SUFFIXES)}
+
+
+def _check_free(dest: Path, *, force: bool) -> None:
+    """包目录得不在,或者是空的。**不覆盖是默认值。**
+
+    目录名里带着日期和一截哈希,重名意味着"同一天、同一棵树,你已经打过一次
+    了" —— 而那一份可能已经拷给现场的人了。默默盖掉它,等于让两个人手里
+    同名的包内容不一样,那是对账这套东西最坏的一种坏法。要盖就显式说出口。
+    """
+    if not dest.exists():
+        return
+    if not dest.is_dir():
+        raise ReleaseError(f"{dest} 已经存在而且不是个目录 —— 挪开它再打")
+    if force:
+        return
+    if any(dest.iterdir()):
+        raise ReleaseError(f"{dest} 已经存在而且不是空的 —— 要盖掉就加 --force")
+
+
+def _copy_tree_into(src: Path, staging: Path) -> str:
+    """按白名单把 ``src`` 拷进 ``staging``,回整棵树的指纹。
+
+    指纹在这儿算,**也就是拷完之后、写 ``release.json`` 之前**。顺序反了的话
+    自述里记的是"含自述的树"的指纹,而 ``verify_package()`` 算的是"不含自述
+    的树" —— 打出来的包必然自相矛盾,而且是在 3/7 那一步才被发现。
+
+    ``tree_sha256`` 只把**相对路径**和内容喂进去,不含根目录自己的名字,
+    所以这里对中转目录算出来的值,改名之后对正式包目录算还是同一个。
+    """
+    staging.mkdir(parents=True)
+    for entry in _PACK_INCLUDE:
+        source = src / entry
+        if source.is_dir():
+            shutil.copytree(source, staging / entry, ignore=_pack_ignore)
+        elif source.is_file():
+            shutil.copy2(source, staging / entry)
+        else:
+            raise ReleaseError(f"源目录里少了 {entry},这棵树打出来的包"
+                               f"在狗上起不来: {source}")
+    return tree_sha256(staging)
+
+
+def _write_manifest(where: Path, manifest: ReleaseManifest) -> None:
+    """把自述落进包目录。**先写 .tmp 再 os.replace**,理由同 ``write_pending``。
+
+    ``open(p, "w")`` 是先截断再写:write 在中间抛一次(盘满、U 盘拔了),盘上
+    就留下一个 0 字节的 ``release.json`` —— 而 ``read_manifest`` 对着它报的是
+    "不是合法 JSON",跟真正的原因差着十万八千里。
+    """
+    tmp = where / (MANIFEST_NAME + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(manifest.to_wire(), fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, where / MANIFEST_NAME)
+
+
+def pack(src: Path | str, out_parent: Path | str, *, name: str | None = None,
+         version: str | None = None, now_ms: int, force: bool = False) -> Path:
+    """把一棵源码树打成一个 ``deploy/install.sh`` 收得下的包目录。
+
+    **这是造包的唯一真理源。** 在这之前,全仓库唯一会造包的是测试里的私有
+    夹具,于是 ``release install`` 要的那份 ``release.json`` 在真机上根本没有
+    来源 —— 装机必定停在 3/7,而那时 1/7、2/7 已经往 ``/opt/d1max`` 写过东西了。
+
+    **它跑在笔记本上,不跑在狗上。** 输入是仓库,输出是一个拷到 U 盘、再拿去
+    ``install.sh`` 的目录。
+
+    几条不能松的规矩:
+
+    * **指纹只有一个算法。** ``content_sha256`` 走的是本模块的 ``tree_sha256``,
+      跟 ``verify_package()`` 校验时用的是同一个函数。两边各写一遍的那天,
+      整套对账就废了。
+    * **``requires_mission_schema`` 复用 ``bundle.BUNDLE_SCHEMA``**,不在这儿
+      写第二个字面量 —— §7.2 的升级判据靠它对账,出现第二个真理源就是一个
+      不会报错的升级误判。
+    * **打完自己验一遍。** 一个造得出"验不过的包"的打包器等于没有;验不过就
+      把半成品删掉再报错,绝不交出去。
+
+    :param src: 源码树,一般就是仓库根。必须有 ``pyproject.toml``。
+    :param out_parent: 放包的**父**目录 —— 包建在它底下。
+    :param name: 包目录名。默认 ``<今天>-<git 短哈希 8 位>``;不是 git 仓库
+        (或者机器上没有 git)就退到整棵树指纹的前 8 位。两条路都过 ``safe_name``。
+    :param version: 默认从 ``src/pyproject.toml`` 的 ``[project] version`` 读。
+    :param now_ms: 打包时刻。日期和 ``built_at`` 都从它来,**可注入**。
+    :param force: 输出目录已经存在且非空时照打(先删掉它)。默认不覆盖。
+    :return: 打好的包目录。
+    """
+    # **局部 import,不是随手写的。** ``bundle.py`` 在模块顶部
+    # ``from .release import point_link, tree_sha256`` —— 这里在顶部反向 import
+    # 它就成了一个环,谁先被 import 谁就炸。分层没有被破坏:engine/ 内部互相
+    # 用是允许的,只是这一对必须晚一点才连上。
+    from d1max_patrol.engine.bundle import BUNDLE_SCHEMA
+
+    src = Path(src)
+    out_parent = Path(out_parent)
+    if not src.is_dir():
+        raise ReleaseError(f"源目录不在,或者它不是个目录: {src}")
+    pyproject = src / "pyproject.toml"
+    if not pyproject.is_file():
+        raise ReleaseError(f"源目录里没有 pyproject.toml,这不是一棵能装的树: "
+                           f"{src}")
+    if version is None:
+        version = _read_project_version(pyproject)
+
+    # **显式给的名字在动盘之前就过闸。** 一个带 ``d1max-`` 前缀的名字要是拖到
+    # 打完才拒,现场拿到的就是"等了半分钟然后报错",而它本可以是一瞬间。
+    if name is not None:
+        safe_name(name)
+        _check_free(out_parent / name, force=force)
+
+    stamp = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc)
+    out_parent.mkdir(parents=True, exist_ok=True)
+    staging = out_parent / _PACKING_DIR
+    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        content = _copy_tree_into(src, staging)
+        if name is None:
+            # git 短哈希优先:它认得出"这包是哪次提交打的",内容哈希认不出。
+            name = f"{stamp.strftime('%Y-%m-%d')}-{_git_short(src) or content[:8]}"
+            safe_name(name)
+            _check_free(out_parent / name, force=force)
+        dest = out_parent / name
+        # 走得到这儿要么 dest 不在,要么是空目录,要么 force —— 三种都能推平。
+        shutil.rmtree(dest, ignore_errors=True)
+        os.replace(staging, dest)
+    except (OSError, ReleaseError):
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    manifest = ReleaseManifest(
+        name=name,
+        version=version,
+        content_sha256=content,
+        requires_mission_schema=BUNDLE_SCHEMA,
+        built_at=stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+    try:
+        _write_manifest(dest, manifest)
+        verify_package(dest)
+    except (OSError, ReleaseError):
+        # 验不过的包一个字节都不留。留着的话它会被人拷上 U 盘,然后在 3/7
+        # 那一步才被拒 —— 那时候现场已经动过盘了。
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    return dest
 
 
 def installed(layout: Layout) -> tuple[str, ...]:

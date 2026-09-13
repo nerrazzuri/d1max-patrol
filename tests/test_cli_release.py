@@ -6,7 +6,9 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
-from d1max_patrol.cli import _release_root, main
+import pytest
+
+from d1max_patrol.cli import _release_root, build_parser, main
 from d1max_patrol.engine.release import (
     MANIFEST_NAME,
     MAX_BOOT_ATTEMPTS,
@@ -14,6 +16,7 @@ from d1max_patrol.engine.release import (
     activate,
     commit,
     current_name,
+    read_manifest,
     read_pending,
     stage,
     tree_sha256,
@@ -241,3 +244,78 @@ def test_release_root默认取opt_d1max(monkeypatch):
     """
     monkeypatch.delenv("D1MAX_RELEASE_ROOT", raising=False)
     assert _release_root(None) == Path("/opt/d1max")
+
+
+# ------------------------------------------------------- pack(在笔记本上跑)
+
+
+def _源码树(root):
+    """一棵最小的、能被 pack 收下的源码树。字段都跟真仓库一个形状。"""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "d1max-patrol"\nversion = "0.4.2"\n',
+        encoding="utf-8")
+    (root / "src" / "d1max_patrol").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "d1max_patrol" / "__init__.py").write_text(
+        "", encoding="utf-8")
+    (root / "config" / "params").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "params" / "mapper_3d.yaml").write_text(
+        "resolution: 0.05\n", encoding="utf-8")
+    # 一个不该进包的东西,验一下 CLI 这条路上排除规则也是活的。
+    (root / "refs").mkdir(parents=True, exist_ok=True)
+    (root / "refs" / "厂商协议.md").write_text("私有\n", encoding="utf-8")
+    return root
+
+
+def test_pack打出包目录和指纹(tmp_path, capsys):
+    """**屏幕上必须有这两行** —— 现场记录栏要抄它们。"""
+    出 = tmp_path / "出"
+    assert main(["release", "pack", str(_源码树(tmp_path / "树")), str(出)]) == 0
+    out = capsys.readouterr().out
+    包 = next(p for p in 出.iterdir() if p.is_dir())
+    manifest = read_manifest(包)
+    assert str(包) in out
+    assert manifest.content_sha256 in out
+    assert "0.4.2" in out
+
+
+def test_pack打出来的包能被install真的收下(tmp_path, capsys):
+    """端到端:这正是明天装机 install.sh 3/7 走的那条路。"""
+    出 = tmp_path / "出"
+    root = tmp_path / "opt"
+    assert main(["release", "pack", str(_源码树(tmp_path / "树")), str(出)]) == 0
+    包 = next(p for p in 出.iterdir() if p.is_dir())
+    capsys.readouterr()
+    assert main(["release", "install", str(包), "--root", str(root)]) == 0
+    assert "落槽了" in capsys.readouterr().out
+    assert (root / "releases" / 包.name / MANIFEST_NAME).is_file()
+    # 排除规则在 CLI 这条路上也得是活的。
+    assert not (root / "releases" / 包.name / "refs").exists()
+
+
+def test_pack名字不合规退非零(tmp_path, capsys):
+    出 = tmp_path / "出"
+    assert main(["release", "pack", str(_源码树(tmp_path / "树")), str(出),
+                 "--name", "d1max-2026-09-20-77b2de"]) == 2
+    assert "打不了包" in capsys.readouterr().err
+    assert not 出.exists() or list(出.iterdir()) == []
+
+
+def test_pack不覆盖已有的包除非给force(tmp_path, capsys):
+    出 = tmp_path / "出"
+    树 = _源码树(tmp_path / "树")
+    assert main(["release", "pack", str(树), str(出)]) == 0
+    包 = next(p for p in 出.iterdir() if p.is_dir())
+    capsys.readouterr()
+    assert main(["release", "pack", str(树), str(出), "--name", 包.name]) == 2
+    assert "--force" in capsys.readouterr().err
+    assert main(["release", "pack", str(树), str(出), "--name", 包.name,
+                 "--force"]) == 0
+
+
+def test_pack的帮助说清了它跑在笔记本上(capsys):
+    """现场最容易犯的错是拿着这条命令上狗敲。--help 里必须挡住它。"""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["release", "pack", "--help"])
+    帮助 = capsys.readouterr().out
+    assert "笔记本" in 帮助 and "狗" in 帮助

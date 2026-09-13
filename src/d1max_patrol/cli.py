@@ -37,6 +37,8 @@ from d1max_patrol.engine.release import (
     boot_guard,
     current_name,
     installed,
+    pack,
+    read_manifest,
     read_pending,
     rollback,
     stage,
@@ -136,6 +138,26 @@ def build_parser() -> argparse.ArgumentParser:
                        help="版本目录的根,默认取 $D1MAX_RELEASE_ROOT 或 /opt/d1max")
 
     _root_arg(rel_sub.add_parser("list", help="装了哪几版,现在跑哪版"))
+    p_pack = rel_sub.add_parser(
+        "pack",
+        help="把一棵源码树打成能装机的包(**在笔记本上跑,不在狗上跑**)",
+        description=(
+            "把一棵源码树打成 deploy/install.sh 收得下的包目录。\n"
+            "\n"
+            "**这条命令跑在笔记本(开发机)上,不跑在狗上。** 它的输入是这个\n"
+            "仓库,输出是一个拷到 U 盘、再拿去 install.sh 的目录。狗上跑的是\n"
+            "release install / activate / rollback / boot-guard,不是这一条 ——\n"
+            "狗上连仓库都没有。\n"
+            "\n"
+            "打完屏幕上会打出包目录和 content_sha256,**这两个值抄进现场记录栏**。"),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_pack.add_argument("src", help="源码树,一般就是这个仓库的根")
+    p_pack.add_argument("outdir", help="放包的**父**目录 —— 包建在它底下")
+    p_pack.add_argument("--name", default=None,
+                        help="包目录名。默认 <今天>-<git 短哈希 8 位>;"
+                             "不是 git 仓库就退到整棵树指纹的前 8 位")
+    p_pack.add_argument("--force", action="store_true",
+                        help="输出目录已经存在且非空也照打(会先把它删掉)")
     p_ins = rel_sub.add_parser("install", help="把一个包落进槽里,不切换")
     p_ins.add_argument("package", help="包目录")
     _root_arg(p_ins)
@@ -497,8 +519,14 @@ def _cmd_release(args: argparse.Namespace) -> int:
     boot-guard 更是在 systemd 把我们的服务拉起来之前就跑。见 `main()` 里
     在 `asyncio.run(_amain(args))` 之前就把它分派掉的那一段。
     """
-    layout = Layout(root=_release_root(getattr(args, "root", None)))
     now_ms = int(time.time() * 1000)
+
+    # **pack 排在最前面,而且一个字节都不碰 layout。** 它跑在笔记本上,
+    # 那台机器上根本没有 /opt/d1max,连算一次默认版本根都是多余的。
+    if args.release_command == "pack":
+        return _cmd_release_pack(args, now_ms)
+
+    layout = Layout(root=_release_root(getattr(args, "root", None)))
 
     if args.release_command == "list":
         pending = read_pending(layout)
@@ -550,6 +578,30 @@ def _cmd_release(args: argparse.Namespace) -> int:
 
     # boot-guard
     return _cmd_boot_guard(layout, now_ms)
+
+
+def _cmd_release_pack(args: argparse.Namespace, now_ms: int) -> int:
+    """`release pack`。造包的那一头,跑在笔记本上。
+
+    **屏幕上一定要有包目录和 content_sha256 这两行。** 现场记录栏要抄它们:
+    包被拷上 U 盘、再从 U 盘拷进狗,中间任何一次拷贝掉了字节,靠的就是这个
+    指纹能对得上 —— 而对账的前提是打包那一刻有人把它抄下来了。
+    """
+    try:
+        dest = pack(args.src, args.outdir, name=args.name, now_ms=now_ms,
+                    force=args.force)
+        manifest = read_manifest(dest)
+    except (ReleaseError, OSError) as exc:
+        print(f"打不了包: {exc}", file=sys.stderr)
+        return 2
+    print(f"包目录         : {dest}")
+    print(f"content_sha256 : {manifest.content_sha256}")
+    print(f"版本           : {manifest.version}"
+          f"(任务包 schema {manifest.requires_mission_schema},"
+          f"打包时刻 {manifest.built_at})")
+    print("下一步: 把这个目录整个拷到狗上,然后在狗上跑")
+    print(f"  sudo bash deploy/install.sh <拷过去的路径>/{dest.name}")
+    return 0
 
 
 def _cmd_boot_guard(layout: Layout, now_ms: int) -> int:
