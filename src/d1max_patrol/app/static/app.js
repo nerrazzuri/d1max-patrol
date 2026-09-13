@@ -699,6 +699,14 @@ on("run-resume", async () => { await api("/api/run/resume", "POST"); });
 on("run-abort", async () => {
   await api("/api/run/abort", "POST", { reason: "页面上点了中止" });
 });
+/* 「让开腿」——**不是暂停**。挂起期间人正在用遥控开狗,所以 TeleopBusy
+   那道闸看的是 yielding 不是 paused(见 server.py 的 _run_suspend)。
+   恢复走的还是「继续」那一条 /api/run/resume。
+   没有这个按钮,/api/run/suspend 就没有任何调用方 —— 现场执行单
+   10.18~10.22 的动作全部以「让开腿」开头,只能去敲 curl。 */
+on("run-yield", async () => {
+  await api("/api/run/suspend", "POST", { reason: "页面上点了让开腿" });
+});
 
 /* ------------------------------------------------------------ 判读与报告 */
 

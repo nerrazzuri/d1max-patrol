@@ -152,6 +152,32 @@ def test_兜底出来的sn在页面上有区分():
     assert ".provisional" in _read("app.css")
 
 
+def test_让开腿在页面上有按钮而且发的是suspend不是pause():
+    """``POST /api/run/suspend`` 一度**一个调用方都没有**。
+
+    狗这头实现得好好的(``server.py`` 的 ``_run_suspend``),网页面板只发
+    ``pause``/``resume``/``abort``,手机 App 一条 ``/api/run/*`` 都不发 ——
+    于是"让开腿"这个动作在任何界面上都按不到,只能去敲 curl。而现场执行单
+    10.18~10.22 那一段的动作**全部以"让开腿"开头**,那是四条现场优先级里
+    "回航与接管"那一条的主要验证手段。
+
+    顺带钉死它和"暂停"不是一回事:挂起期间人正在用遥控开狗,``TeleopBusy``
+    那道闸看的是 ``yielding`` 不是 ``paused``。两个按钮混成一个,现场按下去
+    遥控会被自己拦掉。
+    """
+    html = _read("index.html")
+    js = _read("app.js")
+    assert 'id="run-yield"' in html
+    assert "让开腿" in html
+    assert '"/api/run/suspend"' in js
+    # 发的必须是 suspend 这条路由,不许偷懒复用 pause
+    yield_call = [ln for ln in js.splitlines() if 'on("run-yield"' in ln]
+    assert len(yield_call) == 1, yield_call
+    tail = js[js.index('on("run-yield"'):]
+    assert '"/api/run/suspend"' in tail[:400]
+    assert '"/api/run/pause"' not in tail[:400]
+
+
 def test_js里取的每个id在html里都真有():
     """挡的是"加了个功能,忘了加对应的元素"。
 
