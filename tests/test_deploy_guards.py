@@ -700,3 +700,232 @@ def test_当前版本名有显式的空默认值():
     assert 默认 < 读链, "CURRENT_REL 没有先给一个空默认值"
     assert '-e "$ROOT/current" || -L "$ROOT/current"' in 脚本, (
         "读链之前没判断链在不在 —— 断链也要能读出名字, 所以 -L 那一半不能省")
+
+
+# ------------------------------------------------ 六、上机自检(2026-09-13)修的那几条
+#
+# 下面这一组守的是明天上机那一趟暴露出来的坑。每一条都写清楚**原来会怎么错**,
+# 不然半年后有人只看见一句断言, 会以为它可以随手放宽。
+
+
+def test_装机脚本绝不source那份给systemd用的env():
+    """``/etc/d1max/env`` 是给 systemd ``EnvironmentFile=`` 用的, **不是 shell 脚本**。
+
+    systemd 按字面量解析: 等号右边整段就是值, 不分词、不做命令替换、分号不是
+    分隔符。而 ``. /etc/d1max/env`` 是让 bash 求值同一份文件 —— 这份文件由现场
+    拿 nano 手填, 三种人手敲得出来的写法当场出事:
+
+    * ``D1MAX_SN=C4 0221`` —— systemd 收下; bash 去执行 ``0221``, ``set -e``
+      当场 127, 装机死在 7/7, 前六步白跑;
+    * ``D1MAX_CONSOLE_TOKEN=a;reboot`` —— systemd 收下; bash **以 root 把
+      reboot 跑了**;
+    * ``D1MAX_PIN=$(...)`` —— systemd 当字面量; bash 做命令替换。
+
+    所以这里钉死: 装机脚本里不许再出现 source 那份文件的任何形状。
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    代码 = "\n".join(片段 for _, 片段 in 代码行(脚本))
+    for 形状 in (". /etc/d1max/env", "source /etc/d1max/env"):
+        assert 形状 not in 代码, (
+            f"install.sh 又去 source /etc/d1max/env 了({形状!r})。那份文件是 "
+            f"systemd 按字面量解析的, shell 求值它等于让现场手填的一行字"
+            f"以 root 身份跑起来")
+    # 换上来的读法必须还在, 不然 D1MAX_SN 根本传不到 release activate。
+    assert "read_env_value()" in 脚本, "读 env 的那个函数没了"
+    assert 'sed -n "s/^[[:space:]]*$1=//p" /etc/d1max/env' in 脚本
+
+
+def test_读env的规矩跟systemd对得上():
+    r"""读法要跟 systemd 的解析一条一条对齐, **对不齐就是两边各读各的值**。
+
+    而「两边各读各的值」正是自检第四项(identity)假失败、把一版好的自动回滚
+    掉的那个根因 —— 服务侧经 ``EnvironmentFile=`` 读, 脚本侧自己读。
+
+    这里钉两条最容易被「简化」掉的:
+
+    * **同一个键写了两遍取最后一次**(systemd ``basic/env-util.c`` 的
+      ``strv_env_replace``: 后面的赋值替换前面的), 所以要 ``tail -n 1``;
+    * **不带引号的值两边的空白要剥掉**(``\r`` 也算空白)。现场用 nano 敲完
+      常常多一个尾随空格, 不剥的话那道字符白名单会把一个 systemd 明明认得的
+      值判死, 现场白挨一次 ``exit 3``。
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    函数 = 脚本[脚本.index("read_env_value()"):]
+    函数 = 函数[:函数.index("\n}\n") + 2]
+    assert "tail -n 1" in 函数, "同一个键写两遍时要取最后一次 —— 这是 systemd 的行为"
+    assert "s/^[[:space:]]*//" in 函数 and "s/[[:space:]]*$//" in 函数, (
+        "值两边的空白没剥 —— nano 敲出来的尾随空格会让白名单误杀")
+
+
+def test_env里的SN过一道字符白名单():
+    """脏 SN 要在装机这一层挡住, 而不是等它去炸回传线程。
+
+    ``engine/http_sink.py`` 里 ``sn`` **不转义、原样进 HTTP header**: 填成中文
+    的话每一条回传都 ``UnicodeEncodeError``。而「装机时挡住脏 sn 是配置自检
+    那一层的事」本来就记过账(挂账 142), 这里正是那一层。
+
+    白名单是 ``^[A-Za-z0-9._-]+$``: 本项目见过的真 SN(``C40221``、
+    ``D1M-0007``、``D1MAX-TEST-01``)全都过得去, 它挡的只是空格和标点。
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "=~ ^[A-Za-z0-9._-]+$" in 脚本, "SN 的字符白名单没了"
+    白名单 = re.compile(r"^[A-Za-z0-9._-]+$")
+    for 真SN in ("C40221", "D1M-TEST", "D1M-0007", "D1MAX-01", "D1MAX-TEST-01", "SN-A1"):
+        assert 白名单.match(真SN), f"白名单把一个真序列号挡了:{真SN}"
+    for 脏的 in ("C4 0221", "a;reboot", '"C40221"', "序列号"):
+        assert not 白名单.match(脏的), f"白名单放过了一个脏值:{脏的}"
+    # 挡在 activate 之前才有意义 —— 挡在后面等于没挡。
+    assert (脚本.index("=~ ^[A-Za-z0-9._-]+$")
+            < 脚本.index("d1max_patrol.cli release activate"))
+
+
+def test_两道守卫测的是解析出来的值而不是行在不在():
+    """原来两道守卫是 ``grep -qE '^D1MAX_PIN=.+'`` / ``'^D1MAX_SN=.+'``。
+
+    它问的是「文件里有没有一行长这样」, 而 ``D1MAX_PIN=`` 后面跟几个空格
+    它判「有 PIN」—— systemd 剥完空白读出来却是空串, 于是脚本照常 restart,
+    机器照样进那个每 5 秒刷一条日志的启动循环。**守卫在, 墙也在。**
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert '[[ -z "${D1MAX_PIN_VALUE//[[:space:]]/}" ]]' in 脚本
+    assert '[[ -z "${D1MAX_SN//[[:space:]]/}" ]]' in 脚本
+    代码 = "\n".join(片段 for _, 片段 in 代码行(脚本))
+    assert "grep -qE '^D1MAX_" not in 代码, "又退回去数行了, 要测的是解析出来的值"
+
+
+def test_PIN空着退出之前把自启链撤掉():
+    """5/7 已经 ``systemctl enable`` 过了, 7/7 因为 PIN 空而 ``exit 3``。
+
+    这次确实不 restart(脚本自己那句话是真的), 但**下一次开机** systemd 会照
+    ``multi-user.target.wants`` 那条自启链把它拉起来 → ``check_exposure()``
+    见到 ``--host 0.0.0.0`` 又没 PIN → ``SystemExit`` → ``Restart=always``
+    + ``RestartSec=5`` + ``StartLimitIntervalSec=0`` —— 这段守卫要防的那堵
+    日志墙原样回来, 只是推迟到了现场没人看着的时候。
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    撤 = 脚本.index("systemctl disable d1max-patrol.service")
+    # 紧跟在撤自启链后面的那个 exit 3 才是 PIN 守卫的那一个 —— 前面还有一个
+    # 是 SN 白名单的, 拿它比会比出个「顺序对了」的假绿。
+    退 = 脚本.index("  exit 3", 撤)
+    开 = 脚本.index("systemctl enable d1max-patrol.service")
+    assert 开 < 撤 < 退, "撤自启链的那一行不在 enable 之后、exit 3 之前"
+
+
+def test_env文件建出来就是0600():
+    """这份文件里有设备 PIN 和回传密钥(脚本自己写着「这一行是密钥」)。
+
+    ``cat >`` 在 root 的 umask 022 下建出来是 **0644** —— 而这台狗上还跑着
+    厂商的上装、系统 Python 是共用的, 同机任何一个账号都读得到。
+    读它的两方都是 root(systemd 的 ``EnvironmentFile=`` 由 PID 1 读完再降到
+    ``User=robot``; 7/7 步这个脚本也是 root), 0600 两边都够用。
+
+    ``chmod`` 那一行必须在 ``if`` **外面**: 这之前装出来的机器盘上躺着的是
+    0644 的那一份, 重跑一次才收得紧。
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "install -m 0600 /dev/null /etc/d1max/env" in 脚本, "建出来的时候就得是 0600"
+    行们 = 脚本.split("\n")
+    收紧 = [i for i, 行 in enumerate(行们) if 行 == "chmod 0600 /etc/d1max/env"]
+    assert 收紧, "没有顶格的 chmod 0600 —— 老机器重跑收不紧(缩进了就是在 if 里面)"
+    重载 = next(i for i, 行 in enumerate(行们) if 行 == "systemctl daemon-reload")
+    assert 收紧[0] < 重载, "收紧权限排在 daemon-reload 后面了"
+
+
+def test_根下装依赖那一步有哨兵挡着重跑():
+    """**重跑是现场「填完 SN 让它生效」的唯一路子**(见 docs/装机清单.md 二)。
+
+    2/7 那条 ``pip install "$TMP_PKG"`` 原来在任何 ``if`` 外面: ``pyproject.toml``
+    用 ``setuptools.build_meta``, PEP 517 的构建隔离每趟都要现拉 setuptools,
+    于是**重跑必联网**。离线现场跑第二趟忘了带 ``D1MAX_PIP_ARGS=`` 就挂死在
+    2/7(pip 默认 5 次重试、每次 15 秒), ``set -e`` 中止, 连 ``restart`` 都不跑
+    —— SN 永远不生效, 而现场看到的是「装到一半不动了」。
+
+    哨兵的讲究跟 4/7 那个一样: **最后一行才落**, 它在就等于装齐了; 里头存的是
+    版本名, 换一版内容对不上照样重装。
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert 'ROOT_SENTINEL="$ROOT/bin-venv/.deps-ok"' in 脚本
+    行们 = 脚本.split("\n")
+    落哨兵 = [i for i, 行 in enumerate(行们) if '> "$ROOT_SENTINEL"' in 行]
+    装包 = [i for i, 行 in enumerate(行们)
+            if '-m pip install --quiet $PIP_ARGS "$TMP_PKG"' in 行]
+    assert len(落哨兵) == 1 and len(装包) == 1
+    assert 装包[0] < 落哨兵[0], "哨兵落在装包之前 —— 装到一半断了会被当成装齐了"
+    assert 行们[装包[0]].startswith("  "), "那条 pip 没有缩进, 说明它还在 if 外面"
+
+
+def test_包目录名在动盘之前就核过():
+    """名字不对的包, 3/7 的 ``release install`` 必拒。
+
+    而那时候 ``/opt/d1max`` 已经建出来、根下那个跟版本无关的解释器也装完了
+    (离线现场还为它插过一次 U 盘), 现场要回头收拾半个脚印。跟另外两条前置
+    检查同一条理由: 失败要早、要便宜、要说人话。
+
+    **脚本里那个正则要跟 ``_NAME_RE`` 判得一样** —— 松一点就是「脚本放行、
+    3/7 才拒」, 等于白加; 紧一点就是「能装的包被脚本拒了」。
+    """
+    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    命中 = re.search(r'\[\[ ! "\$REL_NAME" =~ (\S+) \]\]', 脚本)
+    assert 命中, "找不到包目录名的前置检查"
+    脚本里的 = re.compile(命中.group(1))
+    样本 = ("2026-09-20-77b2de", "2026-09-13-abcdef123456",
+            "d1max-2026-09-20-77b2de", "2026-09-20-77B2DE", "2026-09-20-77b2",
+            "2026-9-20-77b2de", "2026-09-20-77b2de1234567", "current", "")
+    for 名 in 样本:
+        assert bool(脚本里的.match(名)) == bool(_NAME_RE.match(名)), (
+            f"脚本里的包名正则跟 engine/release.py 的 _NAME_RE 判得不一样:{名!r}")
+    assert 脚本.index("REL_NAME=$(basename") < 脚本.index('mkdir -p "$ROOT/releases"'), (
+        "包名检查排在 mkdir 后面了, 会留半个脚印")
+
+
+def test_卸载脚本真删之前有一道root闸():
+    """这脚本第一个不可逆的动作**恰恰不需要 root**。
+
+    ``reap_agent`` 收掉 patrol_agent(agent 是登录用户用 field-agent.sh 起的,
+    同一个用户 ``kill -TERM`` 就够), SDK 会话一丢, 不重启 RK3588 就再也抢不
+    回来。真正需要 root 的是后面那几条 ``rm /opt/d1max``。没有这道闸, 一次
+    忘了 sudo 的运行会: 先把控制权永久交还给上装 → 再在第一条 rm 上 EACCES
+    → ``set -e`` 打死 → 盘上一个字节没卸、5/5 回执也打不出来。
+
+    闸要排在**参数解析之后**: ``--dry-run`` 和 ``-h`` 什么都不动, 不该要 root。
+    """
+    脚本 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert '[ "$DO_IT" = 1 ] && [ "$(id -u)" != 0 ]' in 脚本, (
+        "root 闸没有放过 --dry-run —— 只看一眼要删什么不该要 root")
+    闸 = 脚本.index('[ "$(id -u)" != 0 ]')
+    assert 脚本.index("while [ $# -gt 0 ]; do") < 闸, "闸排在参数解析之前了"
+    assert 闸 < 脚本.index("\nreap_agent\n"), (
+        "root 闸排在 reap_agent 后面 —— 控制权已经交出去了才拦, 等于没拦")
+
+
+def test_删不掉的处数要记账并且写进回执():
+    """一条 ``rm`` 失败不能把后面几处和 5/5 回执一起带走。
+
+    5/5 回执是现场判断「卸干净没有」的唯一凭据 —— 死在第一条 ``rm`` 上, 等于
+    既没卸干净、又不告诉人。所以失败降级成记账, 回执里当着人的面说出来。
+    """
+    脚本 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "\nRM_FAILED=0\n" in 脚本, "没有给 RM_FAILED 一个显式的 0 初值"
+    assert 脚本.count("RM_FAILED=$((RM_FAILED + 1))") == 2, (
+        "两个删除函数里都要记账 —— 少一个就是那一类失败被静默吞掉")
+    assert 'if [ "$RM_FAILED" != 0 ]; then' in 脚本, "回执里没报没删掉的处数"
+    assert 脚本.index("5/5 回执") < 脚本.index('if [ "$RM_FAILED" != 0 ]; then')
+
+
+def test_单元文件的行尾被钉成LF():
+    r"""``.service`` 里混进一个 ``\r``, 坏得比 Makefile 还安静。
+
+    ``ExecStart=... --host 0.0.0.0\r`` 里那个 ``\r`` 会被当成参数的一部分,
+    服务起来就是「地址解析不了」, 配上 ``Restart=always`` 就是每 5 秒刷一条
+    日志的启动循环 —— 而现场看到的错跟行尾一点关系都没有。
+
+    眼下工作区里是 LF, 所以今天没坏; 但这是交付件, 换一台 Windows 机器重新
+    clone 出来就会是 CRLF, **那时候才发现就晚了**。
+    """
+    属性 = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^\*\.service\s+text\s+eol=lf\s*$", 属性), (
+        ".gitattributes 里没把 *.service 钉成 LF")
+    单元们 = list(DEPLOY.glob("*.service"))
+    assert 单元们, "deploy/ 底下一个 .service 都没有?"
+    for 路径 in 单元们:
+        assert b"\r" not in 路径.read_bytes(), f"{路径.name} 里有回车符"

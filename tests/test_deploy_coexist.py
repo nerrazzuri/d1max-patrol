@@ -315,9 +315,19 @@ def test_rm的形状只有一种():
 
     整份脚本里只允许两处 ``rm -rf``,都长成 ``rm -rf -- "$target"``,
     而且都在 ``rm_sys`` / ``rm_agent_trace`` 里面 —— 前面有空值检查和范围检查挡着。
+
+    **两处现在都写成 ``if rm -rf -- "$target"; then``**:删不掉只记一笔
+    (``RM_FAILED``),不让 ``set -e`` 把后面几处和 5/5 回执一起带走。外面套的
+    那个 ``if`` 不改 ``rm`` 吃的东西 —— 它吃的仍然是刚被两把锁验过的、
+    加了引号的那个变量,而这条断言守的正是这件事。
     """
     文本 = 读(卸载脚本)
-    出现 = [一条.strip() for 一条 in re.findall(r"(?m)^\s*rm\s+[^\n]*", 文本)]
+    出现 = []
+    for 一条 in re.findall(r"(?m)^\s*(?:if\s+)?rm\s+[^\n]*", 文本):
+        一条 = 一条.strip()
+        一条 = re.sub(r"^if\s+", "", 一条)
+        一条 = re.sub(r"\s*;\s*then$", "", 一条)
+        出现.append(一条)
     assert 出现, "找不到任何 rm —— 这个脚本还卸什么"
     for 一条 in 出现:
         assert 一条 == 'rm -rf -- "$target"', f"rm 的形状不对:{一条}"

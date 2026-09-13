@@ -105,6 +105,26 @@ fi
 # 一行排在 mkdir -p 之后 —— 客户机器上没有 robot 这个账号的话,脚本会在
 # /opt/d1max 已经建出来之后中止,留半个脚印给人收,报错还是 chown 的行话。
 # 这个检查排在 mkdir 之前,盘上一个字节都不会动。
+# **包目录名当场核一遍,别拖到 3/7 才拒。** engine/release.py 的 _NAME_RE 只认
+# <日期>-<6 到 12 位十六进制>,verify_package() 还要求这个名字跟包里 release.json
+# 的 name 一字不差。名字不对的话 3/7 的 release install 必拒 —— 而那时候
+# /opt/d1max 已经建出来、根下那个跟版本无关的解释器也装完了(离线现场还为它
+# 插过一次 U 盘),现场要回头收拾半个脚印。跟上面两条前置检查同一条理由:
+# 失败要早、要便宜、要说人话。
+# **这个正则要跟 _NAME_RE 一字不差**,放宽它不是这里的事 —— 目录名跟 manifest
+# 对齐是故意的,它同时也是防路径穿越的那道闸。
+# REL_NAME 在这里就算出来:2/7 的哨兵(见下面)和 4/7 的槽名都要用它。
+REL_NAME=$(basename "$PKG")
+if [[ ! "$REL_NAME" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{6,12}$ ]]; then
+  echo "错误: 包目录名不对: $REL_NAME" >&2
+  echo "      必须长成 <日期>-<6 到 12 位十六进制>,例如 2026-09-20-77b2de。" >&2
+  echo "      **不能带 d1max- 之类的前缀** —— 目录名要跟包里 release.json 的" >&2
+  echo "      name 一字不差,那是包校验的第二关(第一关是整棵树的 tree_sha256)。" >&2
+  echo "      包是在笔记本上用 release pack 打的,默认就是这个格式;名字不对" >&2
+  echo "      多半是拷贝的时候被改过,或者手工建了个目录。" >&2
+  exit 2
+fi
+
 if ! id -u "$RUN_USER" >/dev/null 2>&1; then
   echo "错误: 这台机器上没有账号 $RUN_USER,装不下去。" >&2
   echo "      systemd 单元里的 User= 也是写死 robot 的。客户那边账号不叫 robot" >&2
@@ -163,9 +183,25 @@ fi
 # *.egg-info/ 和 __pycache__/。而下一步 release install 要对 "$PKG" 算一遍
 # tree_sha256 跟包里 release.json 记的哈希对账 —— 源目录被写脏了,哈希当场
 # 对不上,verify_package 报错,set -e 把装机整个中止在这一步。
-TMP_PKG=$(mktemp -d)
-cp -a "$PKG/." "$TMP_PKG/"
-"$ROOT/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_PKG"
+# **这一条才是真正每趟都要联网的那一条。** 上面 153-157 行那段只把升 pip
+# 那一句收进了 if,而 pyproject.toml 用的是 setuptools.build_meta,
+# PEP 517 的构建隔离每一次都要现拉一份 setuptools —— 于是重跑必联网。
+# 而重跑正是现场"填完 SN 让它生效"的唯一路子(见 7/7):离线现场跑第二趟
+# 忘了带 D1MAX_PIP_ARGS=,就会挂死在 2/7(pip 默认 5 次重试、每次 15 秒),
+# 现场看到的是"装到一半不动了",set -e 中止,连 restart 都不跑,SN 永远不生效。
+# 所以照 4/7 那个哨兵的形状给根下的 venv 也加一个,讲究完全一样:
+# **哨兵在最后一行才落**,它在就等于这个包的依赖在根 venv 里装齐了。
+# 哨兵里存的是版本名:换一版,内容对不上,照样重装 —— 升级路径不受影响。
+ROOT_SENTINEL="$ROOT/bin-venv/.deps-ok"
+ROOT_SENTINEL_WANT="d1max_patrol $REL_NAME"
+if [[ "$(cat "$ROOT_SENTINEL" 2>/dev/null)" != "$ROOT_SENTINEL_WANT" ]]; then
+  TMP_PKG=$(mktemp -d)
+  cp -a "$PKG/." "$TMP_PKG/"
+  "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_PKG"
+  printf '%s\n' "$ROOT_SENTINEL_WANT" > "$ROOT_SENTINEL"
+else
+  echo "  根下这一版的依赖已经装齐了($REL_NAME),跳过 —— 离线重跑不需要网。"
+fi
 
 say "3/7 把包落进槽里"
 sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" \
@@ -182,7 +218,7 @@ say "4/7 给这一版建自己的 venv"
 # 算过的 tree_sha256 就跟盘上的字节对不上了,以后任何一次重新校验都会判这
 # 一版坏掉。装出来的东西跟装 "$SLOT" 一模一样(两者是同一份内容),而 "$SLOT"
 # 保持跟落槽那一刻逐字节一致。
-REL_NAME=$(basename "$PKG")
+# REL_NAME 在最上面那条包名校验旁边就算好了(2/7 的哨兵也要用它),这里不再算一遍。
 SLOT="$ROOT/releases/$REL_NAME"
 # **幂等的门看哨兵,不看解释器在不在。** python3 -m venv 一跑完,
 # <槽>/venv/bin/python 就存在且可执行 —— 此后 pip 装到哪一步断掉(网断、
@@ -224,11 +260,22 @@ systemctl disable --now d1max-bootguard.service 2>/dev/null || true
 rm -f /etc/systemd/system/d1max-bootguard.service
 # D1MAX_SN 的唯一来源。**已经存在就绝不覆盖** —— 现场填过的值不能被
 # 重跑抹掉。服务单元用 EnvironmentFile=-/etc/d1max/env 读它,7/7 步里这个
-# 脚本自己也 source 同一份文件再把 D1MAX_SN 显式传给 release activate,
+# 脚本自己也按 systemd 的规矩解析同一份文件再把 D1MAX_SN 显式传给 release activate,
 # 两条路必须是同一个来源,否则重启后自检第四项(identity)会假失败,
 # 把一版好的自动回滚掉。
 mkdir -p /etc/d1max
 if [[ ! -e /etc/d1max/env ]]; then
+  # **先把空文件按 0600 建出来,再往里写。** 这份文件里有设备 PIN 和回传密钥
+  # (下面自己就写着"这一行是密钥,别抄进任何工单"),而 `cat >` 在 root 的
+  # umask 022 下建出来是 0644 —— 这台狗上还跑着厂商的上装、系统 Python 是
+  # 共用的,同机任何一个账号都读得到。
+  # **0600 root:root 两个读它的人都够用**:服务那条路是 systemd 的
+  # EnvironmentFile= 在读,由 PID 1(root)读完再降到 User=robot,不是 robot
+  # 自己去开这个文件;7/7 步这个脚本也是 root。文档教现场看 PIN 用的也是
+  # sudo grep。**别为了让 robot 读得到就放宽它** —— 没有哪一方需要。
+  # 下面的 `cat >` 和 5/7 末尾的 `printf >>` 都是重定向,不改已有文件的 mode,
+  # 所以这个 0600 保得住。
+  install -m 0600 /dev/null /etc/d1max/env
   cat > /etc/d1max/env <<'环境模板'
 # D1 Max 运行环境。装机脚本只在这个文件不存在时才写一次,以后重跑
 # install.sh 不会碰它 —— 现场填过的值放心填。
@@ -277,6 +324,11 @@ D1MAX_CONSOLE_TOKEN=
   echo "  想换成好记的:编辑 /etc/d1max/env 里的 D1MAX_PIN= 那一行,再"
   echo "  sudo systemctl restart d1max-patrol.service。"
 fi
+# **老机器重跑一次也要被收紧。** 上面那个 install -m 0600 只在文件不存在时走,
+# 而 2026-09-13 之前装出来的机器盘上躺着的是 0644 的那一份,里面同样有 PIN 和
+# 回传密钥。这一行放在 if 外面,重跑一次就把它们一起收掉。chmod 不动文件内容,
+# 现场填过的值一个字都不会变。
+chmod 0600 /etc/d1max/env
 systemctl daemon-reload
 systemctl enable d1max-patrol.service
 
@@ -298,29 +350,93 @@ cat <<'提示'
 提示
 
 say "7/7 切到刚装的这一版并起服务"
-# **把 /etc/d1max/env 读进这个脚本自己的环境。** sudo 默认 env_reset,
-# D1MAX_SN 不在 env_keep 里,而 root 自己的环境里本来也没有它 —— 不 source
-# 的话,下面 release activate 拿到的是空值,cli.py 的 resolve() 会落到设备树
-# /MAC 兜底,而服务侧经 EnvironmentFile= 拿到的是人填的真值。两个值一不一样,
-# 重启后自检第四项(identity)就恒红,postcheck_verdict 判 ROLLBACK,一版好的
-# 被退回去。**docs/装机清单.md 里"不填 SN 会假失败"那段话,正是因为这里
-# source 了这份文件、并在下面把变量显式传了下去,才是成立的。**
-set -a
-[[ -f /etc/d1max/env ]] && . /etc/d1max/env
-set +a
+# **把 /etc/d1max/env 里要用的值读出来。** sudo 默认 env_reset,D1MAX_SN 不在
+# env_keep 里,而 root 自己的环境里本来也没有它 —— 不读的话,下面 release
+# activate 拿到的是空值,cli.py 的 resolve() 会落到设备树/MAC 兜底,而服务侧经
+# EnvironmentFile= 拿到的是人填的真值。两个值一不一样,重启后自检第四项
+# (identity)就恒红,postcheck_verdict 判 ROLLBACK,一版好的被退回去。
+# **docs/装机清单.md 里"不填 SN 会假失败"那段话,正是因为这里把这份文件读了、
+# 并在下面把变量显式传了下去,才是成立的。**
+#
+# **但绝不能 source 它。** 这份文件是 systemd 的 EnvironmentFile= 在读,systemd
+# 按字面量解析:等号右边就是值,不分词、不做命令替换、分号不是分隔符。而
+# `. /etc/d1max/env` 是让 bash 求值同一份文件,规矩根本不是一回事 —— 而这份
+# 文件是现场拿 nano 一个字一个字敲出来的,下面三种都是人手敲得出来的:
+#
+#   * D1MAX_SN=C4 0221              systemd 认;bash 去执行 `0221`,set -e 当场 127,
+#                                   装机死在 7/7,前六步全白跑
+#   * D1MAX_CONSOLE_TOKEN=a;reboot  systemd 认;bash **以 root 把 reboot 跑了**
+#   * D1MAX_PIN=$(id -u)            systemd 原样当字面量;bash 做命令替换
+#
+# 所以这里只把要用的两个键读出来,读法逐条对着 systemd 的解析(src/core/
+# execute.c 走 load_env_file_push,键名过 env_name_is_valid)对齐:
+#
+#   * 只认 `键=` 开头,键前面允许有空白 —— systemd 也跳过行首空白;
+#   * `#` 开头的注释行两边都不认(sed 那一条要求行首空白之后紧跟键名);
+#   * `export D1MAX_SN=x` 两边都不认 —— systemd 解出来的键名是 `export D1MAX_SN`,
+#     带空格,env_name_is_valid() 判非法,整行被忽略(只打一条警告)。这里跟着
+#     不认,是为了两边读出同一个值,不是漏掉了;
+#   * 同一个键写了两遍,**systemd 取最后一次**(basic/env-util.c 的
+#     strv_env_replace:后面的赋值替换前面的),所以这里 tail -n 1;
+#   * 值两边的空白 systemd 对不带引号的值会剥掉(\r 也算空白),这里跟着剥 ——
+#     现场用 nano 敲完常常多一个尾随空格,不剥的话下面的字符白名单会把一个
+#     systemd 明明认得的值判死,现场白挨一次 exit 3。
+#
+# 带引号的值(D1MAX_SN="C4 0221")这里**故意不还原**:引号会留在值里,被下面
+# 的白名单挡掉,让人改干净再来。与其在 shell 里重写一遍 systemd 的引号和转义
+# 规则(写歪一点就是两边各读各的值,而那正是这一步要防的事),不如停下来喊。
+read_env_value() {
+  sed -n "s/^[[:space:]]*$1=//p" /etc/d1max/env 2>/dev/null \
+    | tail -n 1 \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+D1MAX_SN=
+D1MAX_PIN_VALUE=
+if [[ -f /etc/d1max/env ]]; then
+  D1MAX_SN=$(read_env_value D1MAX_SN)
+  D1MAX_PIN_VALUE=$(read_env_value D1MAX_PIN)
+fi
+
+# **SN 的字符白名单,不干净就停下来喊。** 这个值会被原样塞进回传请求的
+# HTTP header(engine/http_sink.py 里 sn 不转义、原样进 header),填成中文的话
+# 上传线程每一条都 UnicodeEncodeError;带空格、引号、分号的值则说明这一行是
+# 手敲歪的,systemd 和这里读出来的多半已经不是同一个东西。"装机时挡住脏 sn"
+# 本来就记在配置自检这一层(挂账 142),这里正是那一层。
+# 白名单覆盖了本项目见过的所有真 SN(C40221、D1M-0007、D1MAX-TEST-01 之类),
+# 它挡的是空格和标点,不挡任何一种真序列号的写法。
+if [[ -n "$D1MAX_SN" && ! "$D1MAX_SN" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "错误: /etc/d1max/env 里的 D1MAX_SN 不干净: [$D1MAX_SN]" >&2
+  echo "      只收字母、数字、点、下划线、减号 —— 空格、引号、分号、中文都不行。" >&2
+  echo "      照着机身标签重新填一遍那一行(等号两边都不要加引号),再重跑这个脚本。" >&2
+  echo "      **没有 restart**,现在跑着的还是上一版(如果有的话)。" >&2
+  exit 3
+fi
 
 # **PIN 空着就停在这儿,不 restart。** 跟下面 SN 那条警告不是一回事:
 # SN 空只是"可能"被误判回滚,PIN 空是必定起不来。单元的 ExecStart 带
 # --host 0.0.0.0,check_exposure() 见到非本机地址又没 PIN 会 SystemExit;
 # 配上 Restart=always + RestartSec=5,机器会变成每 5 秒刷一条日志的启动
 # 循环,现场看到的是一堵日志墙,比停下来喊一声糟得多。
-if ! grep -qE '^D1MAX_PIN=.+' /etc/d1max/env 2>/dev/null; then
+# **测的是解析出来的值,不是"这一行非空"。** 原来这里是
+# grep -qE '^D1MAX_PIN=.+',它问的是"文件里有没有一行长这样",而
+# `D1MAX_PIN=   `(尾随几个空格)、`D1MAX_PIN=` 写了两遍第二遍是空的,
+# 这两种它都判"有 PIN",于是脚本照常 restart,机器照样进那个每 5 秒一条的
+# 启动循环 —— 守卫在,墙也在。现在测的是上面按 systemd 的规矩读出来的那个值。
+if [[ -z "${D1MAX_PIN_VALUE//[[:space:]]/}" ]]; then
   echo "错误: /etc/d1max/env 里的 D1MAX_PIN 是空的,服务起不来。" >&2
   echo "      单元的 ExecStart 带 --host 0.0.0.0(手机 app 要连它)," >&2
   echo "      而没有 PIN 的话服务会拒绝启动;Restart=always + RestartSec=5" >&2
   echo "      会把它刷成每 5 秒一条日志的启动循环。" >&2
   echo "      先填好 D1MAX_PIN=(4 位以上,建议 6 位数字),再重跑这个脚本。" >&2
   echo "      **没有 restart**,现在跑着的还是上一版(如果有的话)。" >&2
+  # **本次 enable 过了,得撤掉再退。** 5/7 已经 systemctl enable 过了:不撤的话
+  # 这次确实不 restart(上面那句话是真的),但**下一次开机** systemd 会照
+  # multi-user.target.wants 那条自启链把它拉起来,check_exposure() 见到
+  # --host 0.0.0.0 又没 PIN 就 SystemExit,Restart=always + RestartSec=5 +
+  # StartLimitIntervalSec=0 —— 这段守卫要防的那堵日志墙原样回来,只是推迟到了
+  # 现场没人看着的时候。填好 PIN 重跑一趟,5/7 会重新 enable 回去。
+  # 失败不致命:单元还没装上、systemd 不在的机器上也得能干净地退出来。
+  systemctl disable d1max-patrol.service >/dev/null 2>&1 || true
   exit 3
 fi
 
@@ -328,7 +444,9 @@ fi
 # 不加交互确认(read -p 之类):install.sh 必须能在无人值守的 provisioning
 # 脚本里跑,一个会阻塞等输入的装机脚本比它要防的问题更麻烦,跟"安全网
 # 不该比它防的问题更危险"是同一条理由。
-if ! grep -qE '^D1MAX_SN=.+' /etc/d1max/env 2>/dev/null; then
+# 同上,测的是解析出来的值 —— `D1MAX_SN=   ` 这种填了个寂寞的写法,
+# 原来那条 grep 判"填了",而 systemd 剥完空白读出来的是空串。
+if [[ -z "${D1MAX_SN//[[:space:]]/}" ]]; then
   echo "警告: /etc/d1max/env 里的 D1MAX_SN 还没填。" >&2
   echo "      不填的话自检的 identity 那一项会拿兜底的 MAC 值去比对," >&2
   echo "      可能把这一版判成回滚。现场先填好再继续。" >&2
@@ -350,7 +468,7 @@ fi
 if [[ "$CURRENT_REL" == "$REL_NAME" ]]; then
   echo "  $REL_NAME 已经是在跑的那一版了,跳过切换。"
 else
-  # D1MAX_SN 必须显式带过去 —— sudo env_reset 会把上面 source 进来的它扔掉。
+  # D1MAX_SN 必须显式带过去 —— sudo env_reset 会把上面读出来的它扔掉。
   sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_SN="${D1MAX_SN:-}" \
     "$ROOT/bin/python" -m d1max_patrol.cli release activate "$REL_NAME"
 fi

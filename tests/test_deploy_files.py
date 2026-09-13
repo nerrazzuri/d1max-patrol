@@ -358,7 +358,12 @@ def test_装机脚本在PIN空着时停下来而不是把机器丢进启动循�
     —— 现场看到的是一堵日志墙。所以这里断言的是三样具体的东西:判据、
     ``exit 3``、以及它排在 ``systemctl restart`` **之前**。
     """
-    assert "grep -qE '^D1MAX_PIN=.+' /etc/d1max/env" in 装机脚本
+    # 判据测的是**解析出来的值**,不是「文件里有没有一行长这样」。
+    # 原来这里是 grep -qE '^D1MAX_PIN=.+',而 `D1MAX_PIN=   `(尾随空格)
+    # 它判「有 PIN」,systemd 剥完空白读出来却是空串 —— 守卫在,日志墙也在。
+    # (「不许退回去数行」那一条在 test_deploy_guards.py 里,那边有剥注释的工具 ——
+    #  这里的脚本正文是连注释一起读进来的,而注释里正写着原来那个形状。)
+    assert '[[ -z "${D1MAX_PIN_VALUE//[[:space:]]/}" ]]' in 装机脚本
     assert "exit 3" in 装机脚本
     assert (装机脚本.index("exit 3")
             < 装机脚本.index("\nsystemctl restart d1max-patrol.service"))
@@ -375,17 +380,19 @@ def test_装机清单里有记PIN那一条():
 def test_装机脚本把填好的SN透传给activate(装机脚本):
     """``sudo`` 默认 ``env_reset``,``D1MAX_SN`` 不在 ``env_keep`` 里。
 
-    脚本自己不 source ``/etc/d1max/env`` 的话,``release activate`` 拿到的是
+    脚本自己不读 ``/etc/d1max/env`` 的话,``release activate`` 拿到的是
     空值,``cli.py`` 的 ``resolve()`` 落到设备树/MAC 兜底;而服务侧经
     ``EnvironmentFile=`` 拿到的是人填的真值 —— 重启后自检第四项恒红,
     ``postcheck_verdict`` 判 ROLLBACK,一版好的被退回去。首次装机因
     ``src=""`` 走 ``release.stuck`` 侥幸不炸,**从第二次升级起每次必炸**。
+
+    **读法是照 systemd 的字面量解析抄的,不是 source。** 理由见
+    ``test_装机脚本绝不source那份给systemd用的env``。
     """
-    assert ". /etc/d1max/env" in 装机脚本                   # 读进脚本自己的环境
-    assert "set -a" in 装机脚本 and "set +a" in 装机脚本      # 读进来的要导出去
-    # 光 source 不够:sudo 那一行必须显式把它带过去。
+    assert "read_env_value D1MAX_SN" in 装机脚本            # 读进脚本自己的变量
+    # 光读出来不够:sudo 那一行必须显式把它带过去。
     assert 'D1MAX_SN="${D1MAX_SN:-}"' in 装机脚本
-    assert (装机脚本.index(". /etc/d1max/env")
+    assert (装机脚本.index("read_env_value D1MAX_SN")
             < 装机脚本.index('D1MAX_SN="${D1MAX_SN:-}"'))
 
 

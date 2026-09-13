@@ -19,8 +19,12 @@ Environment=PYTHONUNBUFFERED=1
 # 起服务时人可能还没来得及填 SN,不能让服务因此起不来。命令行 release
 # activate 记进 pending.json 的 SN 跟这里解析出来的必须是同一个来源,
 # 否则重启后自检第四项(identity)会假失败,把一版好的自动回滚掉。
-# install.sh 第 7 步自己也 source 这同一份文件,再把 D1MAX_SN 显式传给
+# install.sh 第 7 步自己也读这同一份文件,再把 D1MAX_SN 显式传给
 # release activate —— "同一个来源"是靠那两处一起成立的。
+# **它那边是照着 systemd 的字面量规矩解析的,不是 source。** 这份文件由现场
+# 用 nano 手填,`D1MAX_SN=C4 0221`、`TOKEN=a;reboot` 这种值 systemd 原样收下,
+# 而 shell 会去分词、去执行 —— 两边读出不同的值是自检假失败的来源,
+# 更别说以 root 跑一段人手敲错的字符串。改 install.sh 那段解析的人请一起看这里。
 EnvironmentFile=-/etc/d1max/env
 # 版本守卫。**它必须在每一次服务启动时数一次,不只是真开机那一次。**
 #

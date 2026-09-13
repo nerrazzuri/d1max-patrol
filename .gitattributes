@@ -8,6 +8,12 @@ Makefile text eol=lf
 *.cpp    text eol=lf
 *.hpp    text eol=lf
 *.py     text eol=lf
+# systemd 单元同理，而且坏得更安静：`ExecStart=... --host 0.0.0.0\r` 里那个 \r
+# 会被当成参数的一部分，服务起来就是「地址解析不了」，配上 Restart=always
+# 就是每 5 秒刷一条日志的启动循环 —— 而现场看到的错跟行尾一点关系都没有。
+# 眼下工作区和 index 里都是 LF，所以今天没坏；但这一行是交付件，换一台
+# Windows 机器重新 clone 出来就会是 CRLF，那时候才发现就晚了。
+*.service text eol=lf
 
 # SDK 的二进制件和硬件文档不许被当成文本改行尾
 *.so     binary

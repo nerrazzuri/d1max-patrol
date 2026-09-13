@@ -89,6 +89,10 @@ KEEP_DATA=0
 DO_IT=1
 PURGE_BIN=0
 AGENT_ROOT=
+# 没删掉的处数。**一条 rm 失败不能让 set -e 把后面几处和 5/5 回执一起吞掉。**
+# 盘上有一处删不掉(权限、只读挂载、文件正被占着),现场最需要的恰恰是
+# "剩下几处怎么样了"和那张回执 —— 死在第一条上等于既没卸干净、又不告诉人。
+RM_FAILED=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -113,6 +117,22 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+# **真删必须是 root,而且这道闸要排在 reap_agent 前面。**
+# 这脚本第一个不可逆的动作是收掉 patrol_agent,而那一步**恰恰不需要 root**
+# (agent 是登录用户用 field-agent.sh 起的,同一个用户 kill -TERM 就够)。
+# SDK 会话一丢,不重启 RK3588 就再也抢不回来(真机待验证清单 #46/#47)。
+# 真正需要 root 的是后面 rm /opt/d1max 那几处。没有这道闸的话,一次忘了 sudo
+# 的运行会:先把控制权永久交还给上装 -> 再在第一条 rm 上 EACCES -> set -e
+# 当场打死 -> 盘上一个字节没卸、5/5 回执也打不出来。也就是最不可逆的那一步
+# 照做了,该做的一步都没做,现场还看不到回执。
+# **--dry-run 和 -h 不需要 root**:它们什么都不动,闸放在参数解析之后正是为此。
+if [ "$DO_IT" = 1 ] && [ "$(id -u)" != 0 ]; then
+  warn "!! 真删要用 root 跑: sudo bash $0 ..."
+  warn "   现在就停下 —— 盘上一个字节都没动,patrol_agent 也还活着。"
+  warn "   (想先看要删什么,不需要 root: bash $0 --dry-run)"
+  exit 2
+fi
 
 # agent 那一套东西默认按"这个脚本在仓库里的位置"去找:field-agent.sh 开头
 # 会 cd 到仓库根,runs/ 就在那儿。脚本被单独拷到别处时用 --agent-root 指。
@@ -155,8 +175,15 @@ rm_sys() {
     say "  [dry-run] 会删:$target${why:+  ($why)}"
     return 0
   fi
-  rm -rf -- "$target"
-  say "  删了:$target${why:+  ($why)}"
+  # **删不掉只记一笔,不许把整个脚本带走。** 这一处 EACCES / 只读挂载,后面
+  # 还有五六处该删的和那张 5/5 回执 —— set -e 死在这儿,现场既没卸干净,
+  # 也不知道卸到哪儿了。rm 吃的仍然是上面两把锁刚验过的那个加引号的变量。
+  if rm -rf -- "$target"; then
+    say "  删了:$target${why:+  ($why)}"
+  else
+    warn "  !! 没删掉:$target —— 记下来,人工确认。"
+    RM_FAILED=$((RM_FAILED + 1))
+  fi
 }
 
 # patrol_agent 留在工作目录里的痕迹。它们不在 /opt 也不在 /etc,所以单独
@@ -182,8 +209,13 @@ rm_agent_trace() {
     say "  [dry-run] 会删:$target${why:+  ($why)}"
     return 0
   fi
-  rm -rf -- "$target"
-  say "  删了:$target${why:+  ($why)}"
+  # 同 rm_sys:删不掉只记一笔。理由见那边。
+  if rm -rf -- "$target"; then
+    say "  删了:$target${why:+  ($why)}"
+  else
+    warn "  !! 没删掉:$target —— 记下来,人工确认。"
+    RM_FAILED=$((RM_FAILED + 1))
+  fi
 }
 
 # ------------------------------------------------------- patrol_agent
@@ -428,6 +460,12 @@ receipt() {
     say "  真要动手:把 --dry-run 去掉重跑。"
   else
     say "  卸完了。"
+    # **有删不掉的就得当着人的面说出来。** 5/5 回执是现场判断"卸干净没有"的
+    # 唯一凭据,漏掉这句话的回执是一张假回执。
+    if [ "$RM_FAILED" != 0 ]; then
+      say "  **但有 $RM_FAILED 处没删掉**(上面打了 !! 的那几条)。"
+      say "  这台机器没卸干净 —— 逐条抄下来,人工确认掉了再说撤场。"
+    fi
     say "  已经停掉 patrol_agent 并释放了 SDK 会话 —— 上装已经把控制权收回去,"
     say "  这台狗在重启 RK3588 之前抢不到控制权了。要重新接管:先重启运控主机,"
     say "  再跑 field-agent.sh 抢开机窗口。"
