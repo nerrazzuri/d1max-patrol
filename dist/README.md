@@ -9,12 +9,15 @@
 
 | 项 | 值 |
 |---|---|
-| 大小 | 51 331 578 B（49.0 MB） |
-| sha256 | `a484e9dc07b056f99a41cd0521b4409cb8f2c090fd671ae9d3d82dc394c9577f` |
-| 编出来的分支/提交 | `feat/交付主线` @ `cf3fa50` |
+| 大小 | 51 331 606 B（49.0 MB） |
+| sha256 | `a44b146b2d695fcd88350901c8f8043d985254c1f1a55baaab742d02b886b246` |
+| 编出来的分支/提交 | `feat/交付主线` @ `c25568c`（补了 INTERNET 权限的那一版） |
 | 编译命令 | `cd mobile && flutter build apk --release` |
 | 编译机 | 开发机（Windows），不是现场笔记本 |
-| 编译时间 | 2026-09-11 |
+| 编译时间 | 2026-09-15 |
+
+**上一版（@ `cf3fa50`）没有 INTERNET 权限，装上连不上狗，别再用。** 核对办法：
+`aapt2 dump permissions app-release.apk` 里要有 `android.permission.INTERNET`。
 
 **通用包,三个 ABI（arm64-v8a / armeabi-v7a / x86_64）都在里面**,
 不确定手机是什么架构就装它。装法见 `docs/真机现场执行单.md` 的 1.1b。
