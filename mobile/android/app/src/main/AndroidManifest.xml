@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 连狗全靠网络。Flutter 模板只在 debug/profile 的清单里放了这一条,
+         main 里没有 —— 调试包连得上、release 包连不上,就是这么来的。
+         tests/test_android_manifest.py 钉着它。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="d1max_patrol"
         android:name="${applicationName}"

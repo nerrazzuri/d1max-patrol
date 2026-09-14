@@ -8,7 +8,7 @@ import re
 import pytest
 
 from d1max_patrol.app.auth import AUTH_PATH
-from d1max_patrol.app.control import CONTROLLED, needs_lease
+from d1max_patrol.app.control import CONTROLLED, EXEMPT, needs_lease
 from d1max_patrol.app.server import AppServer, _compile
 from tests.app.conftest import make_ctx, request
 
@@ -25,6 +25,8 @@ T0 = 1_757_000_000_000
     "/api/teleop",
     "/api/teleop/heartbeat",
     "/api/teleop/mode",
+    # 解除急停:按下不设门槛、解除设门槛。``/api/estop`` 本身不在这张表上。
+    "/api/estop/release",
     "/api/mapping/record/start",
     "/api/mapping/record/stop",
     # 重建会 ``forget_home`` 掉这张图的原点(``app/mapping.py``), 删完这只狗
@@ -122,6 +124,19 @@ def test_一个租约都没有时急停照样按得下去(有pin的服务):
     """
     tok = 解锁(有pin的服务)
     assert 打(有pin的服务, "/api/estop", tok)[0] == 200
+
+
+def test_解除急停要控制权(有pin的服务):
+    """按下不设门槛、解除设门槛:按错了多按一次没有代价,解错了狗会动。"""
+    甲 = 解锁(有pin的服务, "张三")
+    乙 = 解锁(有pin的服务, "李四")
+    assert 打(有pin的服务, "/api/estop", 乙)[0] == 200
+    code, body = 打(有pin的服务, "/api/estop/release", 乙)
+    assert code == 409
+    assert "先取控制权" in body["error"]
+    取控制权(有pin的服务, 甲)
+    assert 打(有pin的服务, "/api/estop/release", 乙)[0] == 409, "别人的租约不作数"
+    assert 打(有pin的服务, "/api/estop/release", 甲)[0] == 200
 
 
 def test_看不需要控制权(有pin的服务):
@@ -305,6 +320,20 @@ def test_退出之后别人立刻拿得到(有pin的服务):
     # 任务包对在跑的那一趟是惰性的(下一趟才生效)。
     "/api/bundle/apply",
     "/api/bundle/rollback",
+}
+
+#: **不要**控制权的非 POST 写接口。跟上面那张一样是原始模式串。
+#:
+#: 以前闸门只认 POST, PUT 一律放行 —— 这几条"不要"是碰巧对的, 不是登记过
+#: 的。改成默认要控制权之后, 它们必须跟 POST 一样逐条登记。
+不要控制权的其它写接口 = {
+    # 换署名:下一个人正是在拿到控制权之前报名字的(``server._operator_put``)。
+    ("PUT", "/api/operator"),
+    # 编任务、标原点是案头活。
+    ("PUT", "/api/missions/<mid>"),
+    ("PUT", "/api/maps/<map_id>/home"),
+    # 登记有没有装上装:改的是身份记录, 不是动作。
+    ("PUT", "/api/identity/payload"),
 }
 
 #: 允许 ``<name*>`` (跨斜杠) 的那几条。**只许开在不落地的参数上** ——
@@ -500,3 +529,87 @@ def test_跨斜杠的告警键真的绕不过闸门(没起的服务):
     assert needs_lease("POST", 具体路径("/api/alerts/<key*>/resolve"))
     # 反过来:CONTROLLED 里一条 GET 都没有(§3.5 规则 1)。
     assert not any(方法 != "POST" for 方法, _模式 in CONTROLLED)
+
+
+# ------------------------------------------------- 默认要控制权(fail-closed)
+
+
+def _豁免表() -> set[tuple[str, str]]:
+    return {("POST", 模式) for 模式 in 不要控制权的POST} | 不要控制权的其它写接口
+
+
+def test_每条写接口都分过类而且跟EXEMPT两边对得上(没起的服务):
+    """每一条注册过的非 GET 路由: ``needs_lease`` 说不要, 当且仅当它在这个
+    文件的手抄豁免表里。
+
+    **两个方向都红。** 往 ``control.EXEMPT`` 加一条而不来这边登记 —— 红;
+    这边写了豁免而 ``EXEMPT`` 没放 —— 也红。豁免从此要在两处各写一次,
+    这是故意的: 放行一条写接口应该比挡住它难。
+    """
+    豁免 = _豁免表()
+    不一致 = []
+    for 方法, 模式 in 枚举注册过的路由(没起的服务):
+        if 方法 in {"GET", "HEAD", "OPTIONS"}:
+            continue
+        说不要 = not needs_lease(方法, 具体路径(模式))
+        if 说不要 != ((方法, 模式) in 豁免):
+            不一致.append((方法, 模式, "放行" if 说不要 else "要控制权"))
+    assert not 不一致, (
+        f"{不一致}: app/control.py 的判定跟这个文件的豁免表对不上。放行一条写"
+        "接口要在 EXEMPT 和这里各登记一次, 并写清楚理由。")
+
+
+def test_豁免表里的写接口都还注册着(没起的服务):
+    """跟 ``test_豁免名单里没有已经不存在的路由`` 同一个道理, 管 PUT 那张。"""
+    注册过 = set(枚举注册过的路由(没起的服务))
+    assert 不要控制权的其它写接口 <= 注册过, 不要控制权的其它写接口 - 注册过
+
+
+def test_EXEMPT每一条都真的放行了一条注册过的路由(没起的服务):
+    """``EXEMPT`` 会烂: 路由改名之后那条正则留在表上, 哪天同一个路径加回一条
+    会改狗的接口, 它就被静悄悄地放行了。"""
+    写接口 = [(方法, 具体路径(模式))
+              for 方法, 模式 in 枚举注册过的路由(没起的服务)
+              if 方法 not in {"GET", "HEAD", "OPTIONS"}]
+    烂掉的 = [(m, p.pattern) for m, p, _why in EXEMPT
+              if not any(m == 方法 and p.match(路径) for 方法, 路径 in 写接口)]
+    assert not 烂掉的, 烂掉的
+
+
+def test_没有一条路由同时落在CONTROLLED和EXEMPT里(没起的服务):
+    """两张表都圈住的路由, 结论全靠 ``needs_lease`` 里的先后顺序 —— 那是兜底,
+    不该是常态。真撞上了说明有一张表写宽了。"""
+    两边都有 = []
+    for 方法, 模式 in 枚举注册过的路由(没起的服务):
+        路径 = 具体路径(模式)
+        if (any(m == 方法 and p.match(路径) for m, p in CONTROLLED)
+                and any(m == 方法 and p.match(路径) for m, p, _w in EXEMPT)):
+            两边都有.append((方法, 模式))
+    assert not 两边都有, 两边都有
+
+
+def test_没登记的写接口默认要控制权():
+    """这就是第 7 条要的那一下: 忘了登记, 结果是被挡住, 不是谁都调得动。"""
+    for 方法 in ("POST", "PUT", "DELETE", "PATCH"):
+        assert needs_lease(方法, "/api/brand-new-write") is True
+    # 豁免的方法不对也不算豁免:DELETE /api/estop 不是急停。
+    assert needs_lease("DELETE", "/api/estop") is True
+    assert needs_lease("GET", "/api/brand-new-write") is False
+    assert needs_lease("HEAD", "/api/state") is False
+
+
+def test_写宽了的豁免吞不掉明确要的():
+    """``CONTROLLED`` 先判。``/api/estop/release`` 以 ``/api/estop`` 开头, 这
+    一对正是"豁免少写一个 ``$``"会出事的地方。"""
+    assert needs_lease("POST", "/api/estop") is False
+    assert needs_lease("POST", "/api/estop/release") is True
+
+
+def test_没登记的写接口真的回409(有pin的服务):
+    """走一遍真服务: 没租约打一条根本不存在的写接口, 回的是闸门的 409。"""
+    tok = 解锁(有pin的服务)
+    code, body = 打(有pin的服务, "/api/brand-new-write", tok, 走一拍)
+    assert code == 409, body
+    assert body["error"] == "先取控制权", body
+    取控制权(有pin的服务, tok)
+    assert 打(有pin的服务, "/api/brand-new-write", tok, 走一拍)[0] == 404

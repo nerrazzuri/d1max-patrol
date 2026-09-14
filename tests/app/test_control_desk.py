@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from d1max_patrol.app.auth import Denied, Guard
-from d1max_patrol.app.control import ControlDesk, needs_lease
+from d1max_patrol.app.control import CONTROLLED, ControlDesk, needs_lease
 from d1max_patrol.engine.lease import LEASE_HEARTBEAT_MS, LEASE_TTL_MS
 
 PIN = "428913"
@@ -123,8 +123,16 @@ def test_方法不对就不算():
 
 
 def test_前缀像但不是的不算():
-    assert needs_lease("POST", "/api/teleopXX") is False
-    assert needs_lease("POST", "/api/run/pause/extra") is False
+    """``CONTROLLED`` 的正则两头都锚着: 前缀像的路径**不算那一条**。
+
+    以前这里断的是 ``needs_lease(...) is False`` —— 那是"不在表上就放行"的
+    年代。现在写请求默认要控制权(第 7 条), 这两条路径没登记, 结论变成
+    要; 但"正则没有把它们圈进去"这件事照样要钉住, 否则哪天 ``$`` 被删了,
+    ``needs_lease`` 的结论不变, 没有一条测试会红。
+    """
+    for path in ("/api/teleopXX", "/api/run/pause/extra"):
+        assert not any(m == "POST" and p.match(path) for m, p in CONTROLLED)
+        assert needs_lease("POST", path) is True
 
 
 # ---------------------------------------------------------------- 收租

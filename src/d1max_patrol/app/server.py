@@ -81,7 +81,14 @@ from d1max_patrol.app.mapping import (
     MappingOrchestrator,
 )
 from d1max_patrol.app.procs import ProcManager
-from d1max_patrol.app.teleop import MODES, PROFILES, REMOTE_CONFIRM, Teleop, TeleopBusy
+from d1max_patrol.app.teleop import (
+    MODES,
+    PROFILES,
+    REMOTE_CONFIRM,
+    EmergencyStopFailed,
+    Teleop,
+    TeleopBusy,
+)
 from d1max_patrol.app.upload_pump import UploadPump
 from d1max_patrol.app.video import CAMERAS, CameraFeed, RtspStill, VideoError
 from d1max_patrol.app.watch import NO_UPLOADER, watch_summary
@@ -92,6 +99,7 @@ from d1max_patrol.backends.base import (
     BatteryEvent,
     ControlLostEvent,
     DeviceBackend,
+    DeviceBackendError,
     DevicePoseEvent,
     EventEmitter,
     FaultEvent,
@@ -1813,6 +1821,7 @@ class AppServer:
         self.route("POST", "/api/teleop/heartbeat", self._teleop_beat)
         self.route("POST", "/api/teleop/mode", self._teleop_mode)
         self.route("POST", "/api/estop", self._estop)
+        self.route("POST", "/api/estop/release", self._estop_release)
         self.route("GET", "/api/mapping", self._mapping_state)
         self.route("POST", "/api/mapping/record/start", self._record_start)
         self.route("POST", "/api/mapping/record/stop", self._record_stop)
@@ -2359,10 +2368,36 @@ class AppServer:
         self._ctx.teleop.set_mode(name, holder_grant)
         return json_response({"mode": name, "confirm": REMOTE_CONFIRM})
 
+    #: 急停这一趟最多要等多久:软急停、停车各有 ``URGENT_ACK_TIMEOUT_S``(5s)
+    #: 的回执上限,再加打断任务。给默认的 10s 会在两步都慢的时候先超时,
+    #: 报成 504 却说不清是哪一步没成。
+    ESTOP_TIMEOUT_S = 15.0
+
     def _estop(self, _req: Request) -> Response:
-        """红按钮:停遥控,并打断正在跑的任务。"""
+        """红按钮:软急停、停遥控,并打断正在跑的任务。
+
+        **只有三步都做到了才回 200。** 以前停车的错误被吞、软急停从来没发,
+        这里照样回 ``{"ok": true}``,页面就写「已急停」—— 人以为停了,狗没停。
+        现在任何一步没成都回 502,把哪一步没成原样带给页面。
+        """
         teleop = self._ctx.teleop
-        self._call(lambda: teleop.emergency_stop("页面按了急停"))
+        try:
+            self._call(lambda: teleop.emergency_stop("页面按了急停"),
+                       timeout_s=self.ESTOP_TIMEOUT_S)
+        except EmergencyStopFailed as exc:
+            raise HttpError(502, "急停没有全部做到,狗可能还在动", str(exc)) from exc
+        return json_response({"ok": True})
+
+    def _estop_release(self, _req: Request) -> Response:
+        """解除软急停。要控制权(见 ``control.CONTROLLED``)。
+
+        解除之后遥控和任务都**不会**自己接着动,要人重新推杆或重新起任务。
+        """
+        teleop = self._ctx.teleop
+        try:
+            self._call(teleop.release_emergency_stop)
+        except DeviceBackendError as exc:
+            raise HttpError(502, "解除急停没成功", str(exc)) from exc
         return json_response({"ok": True})
 
     # -------------------------------------------------------------- 建图

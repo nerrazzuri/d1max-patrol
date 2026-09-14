@@ -208,8 +208,20 @@ function connect() {
 /* -------------------------------------------------------------- 急停 */
 
 on("estop", async () => {
-  await api("/api/estop", "POST");
-  banner("已急停：遥控停了，正在跑的任务也打断了。");
+  // 「已急停」只在服务端说三步都做到了(200)时才写。没做到时服务端回 502,
+  // 把哪一步没成放在 detail 里 —— 这里两句都亮出来,别只剩一句笼统的话。
+  try {
+    await api("/api/estop", "POST");
+  } catch (err) {
+    const detail = err.data && err.data.detail;
+    throw new Error(detail ? `${err.message}：${detail}` : err.message);
+  }
+  banner("已急停：软急停已发出，遥控停了，正在跑的任务也打断了。");
+});
+
+on("estop-release", async () => {
+  await api("/api/estop/release", "POST");
+  banner("急停已解除。狗不会自己接着动：遥控要重新推杆，任务要重新起。");
 });
 
 /* -------------------------------------------------------------- 地图画布 */

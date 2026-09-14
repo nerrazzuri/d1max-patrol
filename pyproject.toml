@@ -34,6 +34,12 @@ d1max-app = "d1max_patrol.app.server:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# 网页面板的静态文件不是 .py, setuptools 默认不往 wheel 里放 —— 装机脚本
+# pip install 完, ``/`` 和 ``/static/*`` 就是 404。子目录要加就在这里加一行,
+# ``tests/test_packaging.py`` 会逐个核对 static 底下的文件都进了 wheel。
+[tool.setuptools.package-data]
+"d1max_patrol.app" = ["static/*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

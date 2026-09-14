@@ -28,10 +28,12 @@ from d1max_patrol.app.procs import ProcManager
 from d1max_patrol.app.server import AppContext, AppServer, build_pump
 from d1max_patrol.app.teleop import Teleop
 from d1max_patrol.backends.base import (
+    DeviceBackendError,
     EventEmitter,
     NavRequestError,
     NavStatusEvent,
 )
+from d1max_patrol.backends.sidecar_device import MAX_WALK_SECONDS
 from d1max_patrol.engine.homing import HomePoint, save_home
 from d1max_patrol.engine.machine import MissionEngine
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
@@ -102,8 +104,8 @@ class FakeNav(EventEmitter):
 class FakeDevice(EventEmitter):
     """假设备后端。``estop`` / ``batt`` / ``control`` 直接改;``walk_calls`` 记下每一拍。
 
-    ``stop_calls`` 单独数"四个轴全零"的那种调用 —— 停车在这台机器上就是
-    一次零控制量的 ``walk``,没有单独的 stop 接口。
+    ``stop_calls`` 数 ``halt()``。停车**不是**零控制量的 ``walk`` —— 真后端拒掉
+    非正时长,这个桩也拒。
     """
 
     def __init__(self) -> None:
@@ -113,7 +115,13 @@ class FakeDevice(EventEmitter):
         self.batt = 88.0
         self.control = True
         self.walk_calls: list[tuple[float, float, float, float]] = []
+        #: 数的是 ``halt()``。
         self.stop_calls = 0
+        #: 每次 ``emergency_stop(on)`` 的 on。
+        self.estop_calls: list[bool] = []
+        #: 设了就让对应的调用抛它 —— 急停链路"一步失败不挡下一步"靠它测。
+        self.halt_error: Exception | None = None
+        self.estop_error: Exception | None = None
 
     @property
     def connected(self) -> bool:
@@ -130,9 +138,22 @@ class FakeDevice(EventEmitter):
 
     async def walk(self, seconds: float, forward: float,
                    lateral: float = 0.0, yaw: float = 0.0) -> None:
+        # 跟真后端(``SidecarDeviceBackend.walk``)一样拒掉非正时长。以前这个桩
+        # 把 ``walk(0,0,0,0)`` 当停车照单全收,真狗上停车一直被拒,测试却是绿的。
+        if not 0 < seconds <= MAX_WALK_SECONDS:
+            raise DeviceBackendError(
+                f"行走时长要在 (0, {MAX_WALK_SECONDS}] 秒内,收到 {seconds}")
         self.walk_calls.append((seconds, forward, lateral, yaw))
-        if (forward, lateral, yaw) == (0.0, 0.0, 0.0):
-            self.stop_calls += 1
+
+    async def halt(self) -> None:
+        if self.halt_error is not None:
+            raise self.halt_error
+        self.stop_calls += 1
+
+    async def emergency_stop(self, on: bool = True) -> None:
+        if self.estop_error is not None:
+            raise self.estop_error
+        self.estop_calls.append(on)
 
     async def set_light(self, on: bool) -> None: ...
 

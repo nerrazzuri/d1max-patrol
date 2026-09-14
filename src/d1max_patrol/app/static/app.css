@@ -88,6 +88,14 @@ body {
 
 #estop:active { background: #a3211d; }
 
+/* 解除急停故意做得不起眼:它是"想清楚了再点"的那个。 */
+#estop-release {
+  display: block;
+  margin: -4px 0 10px auto;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
 #banner {
   padding: 8px 10px;
   margin-bottom: 10px;

@@ -32,7 +32,11 @@ from typing import Any
 
 #: 协议版本。旁路进程在 ``hello`` 里报自己的版本,对不上就拒绝连接 ——
 #: 现场最不需要的就是"连上了但字段对不上"这种半死不活的状态。
-PROTO_VERSION = 1
+#:
+#: 2:加了 ``halt``,并且 ``halt``/``estop`` 在旁路进程里**插队**执行、作废
+#: 正在走和排着队的 ``walk``。1 号旁路进程不认识 ``halt``、急停排在 walk
+#: 后面 —— 新巡检程序配它时停车会无声地不灵,所以握手时就拒。
+PROTO_VERSION = 2
 
 
 class MotionStatus(str, Enum):

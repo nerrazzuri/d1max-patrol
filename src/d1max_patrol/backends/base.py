@@ -428,6 +428,27 @@ class DeviceBackend(EventEmitter[DeviceEvent], ABC):
         """
 
     @abstractmethod
+    async def halt(self) -> None:
+        """停车:打断正在走的那一拍、作废排着队的,再发零速。
+
+        **不许用 ``walk(0, 0, 0, 0)`` 代替它。** 以前遥控的「停」和守死人开关
+        就是这么写的,而 ``walk`` 要求时长为正 —— 真后端直接拒掉,错误又被
+        ``suppress`` 吞了,于是松手、心跳断、画面掉线三条停车路径在真狗上
+        全是空的,只有测试桩(它不查时长)是绿的。
+
+        **不要控制权**,也不受急停状态影响:停车在任何状态下都得发得出去。
+        """
+
+    @abstractmethod
+    async def emergency_stop(self, on: bool = True) -> None:
+        """软急停(``on=False`` 是解除)。
+
+        **不要控制权。** 软急停走的是跟行走同一条 SDK 链路,链路本身出问题
+        时它也没了 —— 它不能替代机身上的硬急停按钮。失败必须抛错,不许静默:
+        页面上「已急停」这句话就是看它有没有抛。
+        """
+
+    @abstractmethod
     async def set_light(self, on: bool) -> None: ...
 
     @abstractmethod

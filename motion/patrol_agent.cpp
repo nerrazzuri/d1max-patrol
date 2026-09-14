@@ -44,11 +44,14 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -63,7 +66,11 @@ using namespace robot_sdk;
 
 // 与 agent_frames.PROTO_VERSION 一致。两边对不上时 Python 拒绝连接——
 // 这是唯一挡得住"新旁路进程配旧巡检程序"的东西，改了协议就必须一起加。
-static const int kProtoVersion = 1;
+//
+// 2:加了 halt,并且 halt/estop 改成**插队**执行(见 ServeClient)。旧的 1 号
+// 旁路进程会把 halt 回成「不认识的命令」、把急停排在几拍 walk 后面 ——
+// 新巡检程序配旧旁路进程时,停车会**无声地**不灵,所以必须在握手时就拒绝。
+static const int kProtoVersion = 2;
 
 // 一次 Move 在机器上维持约 1s(清单 #38)，靠 50ms 连续下发维持行走。
 static const int kMoveIntervalMs = 50;
@@ -172,9 +179,13 @@ static int64_t NowMs() {
 
 static std::mutex g_clients_mtx;
 static std::vector<int> g_clients;
+// 写 socket 串行化。命令回执(读线程/工作线程)和遥测广播(SDK 回调线程)
+// 会同时往同一个 fd 写，不锁的话两行字节会交错，Python 那头整帧解不开。
+static std::mutex g_send_mtx;
 
 static void SendTo(int fd, const std::string& obj) {
   std::string line = obj + "\n";
+  std::lock_guard<std::mutex> lk(g_send_mtx);
   size_t sent = 0;
   while (sent < line.size()) {
     // MSG_NOSIGNAL：客户端半路死掉时不要把 SIGPIPE 打到整个进程上——
@@ -204,6 +215,10 @@ static SDKClient* g_client = nullptr;
 static std::mutex g_sdk_mtx;   // 所有 SDK 调用串行化
 static std::atomic<bool> g_running{true};
 static std::atomic<int64_t> g_last_odom_ms{0};
+// 停车代数。halt 和 estop(on) 把它加一；每条 walk 开始时记下当时的代数，
+// 走的过程中每一拍都看一眼 —— 代数变了就是「有人叫停了」，立刻收手。
+// 排在队里还没轮到的 walk 也靠它作废：它们记下的代数早于那次叫停。
+static std::atomic<uint64_t> g_cancel_gen{0};
 
 static std::string StateFrame() {
   std::lock_guard<std::mutex> lk(g_state_mtx);
@@ -335,7 +350,17 @@ static Outcome DoLie() {
   return Outcome{};
 }
 
-static Outcome DoWalk(double seconds, double fwd, double lat, double yaw) {
+// 「这一拍被叫停了」的统一话术。Python 那头把它当普通拒绝处理。
+static const char* kWalkCancelled = "行走被停车/急停打断";
+
+/// 走一拍。stop() 返回 true 表示有人叫停(停车代数变了，或者发它的客户端
+/// 已经断开)，这时立刻发一次零速并返回 —— **后续的停法由叫停的那一方负责**
+/// (halt 连发零速，estop 走 SoftEmergencyStop)，这里不再自己补 6 次零速，
+/// 免得多占 300ms 的 SDK 锁、让急停在锁外面干等。
+///
+/// 已知的上限：Gait(2000) 本身是阻塞调用，叫停正好落在它里面时要等它回来。
+static Outcome DoWalk(double seconds, double fwd, double lat, double yaw,
+                      const std::function<bool()>& stop) {
   if (!g_held.load()) return DenyControl("walk");
   if (!(seconds > 0.0) || seconds > kMaxWalkSeconds)
     return Reject("行走时长要在 (0, 10] 秒内");
@@ -344,11 +369,24 @@ static Outcome DoWalk(double seconds, double fwd, double lat, double yaw) {
       std::fabs(yaw) > kMaxWalkSpeed)
     return Reject("速度分量要在 ±0.5 内");
 
+  if (stop()) return Reject(kWalkCancelled);
   std::lock_guard<std::mutex> lk(g_sdk_mtx);
+  if (stop()) return Reject(kWalkCancelled);
   g_client->Gait(2000);
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  // 起步那 500ms 也切成小段看叫停，不然急停最坏要多等半秒。
+  for (int i = 0; i < 500 / kMoveIntervalMs; ++i) {
+    if (stop()) {
+      g_client->Move(0, 0, 0);
+      return Reject(kWalkCancelled);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(kMoveIntervalMs));
+  }
   const int ticks = static_cast<int>(seconds * 1000.0 / kMoveIntervalMs + 0.5);
   for (int i = 0; i < ticks && g_running.load(); ++i) {
+    if (stop()) {
+      g_client->Move(0, 0, 0);
+      return Reject(kWalkCancelled);
+    }
     // 走到一半控制权被收走就立刻停 —— 不然剩下的 Move 全打空，
     // 而机器可能还在按最后一条指令滑行。
     if (!g_held.load()) break;
@@ -364,10 +402,30 @@ static Outcome DoWalk(double seconds, double fwd, double lat, double yaw) {
   return Outcome{};
 }
 
+/// 停车：作废正在走和排着队的 walk，再连发几次零速。
+///
+/// **不要控制权。** 没握着控制权时本来也发不出 Move，而这时也不会有 walk
+/// 在走(DoWalk 进门就要控制权)，所以只作废队列、回 ok。
+static Outcome DoHalt() {
+  g_cancel_gen.fetch_add(1);
+  if (!g_held.load()) return Outcome{};
+  std::lock_guard<std::mutex> lk(g_sdk_mtx);
+  // 多发几次：丢一两包也还是能停下来。
+  for (int i = 0; i < 3; ++i) {
+    g_client->Move(0, 0, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(kMoveIntervalMs));
+  }
+  return Outcome{};
+}
+
 static Outcome DoEstop(bool on) {
   // 急停不要控制权就能发 —— 它是安全动作，任何时候都得能出去。
+  // 按下时先作废所有 walk：正在走的那一拍会在 50ms 内松开 SDK 锁。
+  if (on) g_cancel_gen.fetch_add(1);
   std::lock_guard<std::mutex> lk(g_sdk_mtx);
-  g_client->SoftEmergencyStop(on, 2000);
+  // 返回值必须看。以前丢掉了，SDK 没发出去也回 ok，页面上写着「已急停」。
+  auto ec = g_client->SoftEmergencyStop(on, 2000);
+  if (ec) return Reject("SoftEmergencyStop 失败: " + ec.message());
   return Outcome{};
 }
 
@@ -419,9 +477,12 @@ static Outcome DoShutdown() {
 }
 
 /// 执行一条 JSONL 命令。cmd 已经解出来了，其余字段现从 line 里取。
-static Outcome RunCommand(const std::string& cmd, const std::string& line) {
+/// stop 只给 walk 用，见 DoWalk。
+static Outcome RunCommand(const std::string& cmd, const std::string& line,
+                          const std::function<bool()>& stop) {
   if (cmd == "hold") return DoHold();
   if (cmd == "shutdown") return DoShutdown();
+  if (cmd == "halt") return DoHalt();
   if (cmd == "estop") return DoEstop(JsonBoolField(line, "on", true));
   if (cmd == "light") {
     std::string which = "both";
@@ -436,13 +497,76 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line) {
     return DoWalk(JsonNumField(line, "seconds", 0.0),
                   JsonNumField(line, "fwd", 0.0),
                   JsonNumField(line, "lat", 0.0),
-                  JsonNumField(line, "yaw", 0.0));
+                  JsonNumField(line, "yaw", 0.0), stop);
   return Reject("不认识的命令: " + cmd);
 }
 
 // ===================================================================
 // TCP 服务
 // ===================================================================
+
+/// 插队命令：读线程当场执行，不进队列。
+///
+/// **为什么必须插队。** 以前一条连接上的命令是读一行、做完、回执、再读下一
+/// 行。手机每 300ms 发一拍，一拍在这里要占 Gait + 500ms 起步 + 走 + 收尾，
+/// 于是 walk 在 socket 里越积越多 —— 人按急停的时候，急停排在好几拍 walk
+/// 后面，要等它们一拍一拍走完才轮得到。
+static bool IsUrgent(const std::string& cmd) {
+  return cmd == "halt" || cmd == "estop";
+}
+
+static std::string AckFrame(int id, const Outcome& out) {
+  std::ostringstream ack;
+  ack << "{\"t\":\"ack\",\"id\":" << id << ",\"ok\":"
+      << (out.ok ? "true" : "false");
+  if (!out.ok) ack << ",\"error\":\"" << JsonEscape(out.error) << "\"";
+  ack << "}";
+  return ack.str();
+}
+
+struct Job {
+  int id = 0;
+  std::string cmd;
+  std::string line;
+  uint64_t gen = 0;  // 入队时的停车代数
+};
+
+struct Conn {
+  int fd = -1;
+  std::mutex mtx;
+  std::condition_variable cv;
+  std::deque<Job> queue;
+  std::atomic<bool> closing{false};
+};
+
+/// 工作线程：按顺序执行普通命令。一次只做一条 —— 跟以前的串行语义一样，
+/// 只是急停/停车不再排在它后面。
+static void ConnWorker(Conn* conn) {
+  while (true) {
+    Job job;
+    {
+      std::unique_lock<std::mutex> lk(conn->mtx);
+      conn->cv.wait(lk, [conn] {
+        return conn->closing.load() || !conn->queue.empty();
+      });
+      if (conn->closing.load()) return;  // 客户端走了，队里剩下的一律不做
+      job = std::move(conn->queue.front());
+      conn->queue.pop_front();
+    }
+    const uint64_t gen = job.gen;
+    // 发它的客户端断开也算叫停：没人等这一拍的回执了，也没人看着狗了。
+    auto stop = [conn, gen] {
+      return g_cancel_gen.load() != gen || conn->closing.load();
+    };
+    Outcome out;
+    if (job.cmd == "walk" && stop()) {
+      out = Reject(kWalkCancelled);  // 排队的时候已经被叫停了
+    } else {
+      out = RunCommand(job.cmd, job.line, stop);
+    }
+    SendTo(conn->fd, AckFrame(job.id, out));
+  }
+}
 
 static void ServeClient(int fd) {
   {
@@ -457,6 +581,10 @@ static void ServeClient(int fd) {
   // 立刻补一帧状态：客户端刚连上就该能读到电量和运动状态，不必干等到
   // 下一次状态变化 —— OnRobotStateData 只在变化时来。
   SendTo(fd, StateFrame());
+
+  Conn conn;
+  conn.fd = fd;
+  std::thread worker(ConnWorker, &conn);
 
   std::string buffer;
   char chunk[4096];
@@ -478,15 +606,24 @@ static void ServeClient(int fd) {
         continue;
       }
       const int id = static_cast<int>(JsonNumField(line, "id", 0));
-      Outcome out = RunCommand(cmd, line);
-      std::ostringstream ack;
-      ack << "{\"t\":\"ack\",\"id\":" << id << ",\"ok\":"
-          << (out.ok ? "true" : "false");
-      if (!out.ok) ack << ",\"error\":\"" << JsonEscape(out.error) << "\"";
-      ack << "}";
-      SendTo(fd, ack.str());
+      if (IsUrgent(cmd)) {
+        SendTo(fd, AckFrame(id, RunCommand(cmd, line, [] { return false; })));
+        continue;
+      }
+      {
+        std::lock_guard<std::mutex> lk(conn.mtx);
+        conn.queue.push_back(Job{id, cmd, line, g_cancel_gen.load()});
+      }
+      conn.cv.notify_one();
     }
   }
+
+  {
+    std::lock_guard<std::mutex> lk(conn.mtx);
+    conn.closing = true;
+  }
+  conn.cv.notify_one();
+  worker.join();  // 正在走的那一拍会在 50ms 内看见 closing 收手
 
   {
     std::lock_guard<std::mutex> lk(g_clients_mtx);
@@ -540,7 +677,11 @@ static void HandleFifoLine(const std::string& line) {
     double sec = 1.0, fwd = 0.5;
     is >> sec;
     if (!(is >> fwd)) fwd = 0.5;
-    out = DoWalk(sec, fwd, 0.0, 0.0);
+    const uint64_t gen = g_cancel_gen.load();
+    out = DoWalk(sec, fwd, 0.0, 0.0,
+                 [gen] { return g_cancel_gen.load() != gen; });
+  } else if (cmd == "halt") {
+    out = DoHalt();
   } else if (cmd == "estop") {
     out = DoEstop(true);
   } else if (cmd == "clear") {

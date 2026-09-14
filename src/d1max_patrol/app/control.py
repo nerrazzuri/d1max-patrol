@@ -38,7 +38,13 @@ from d1max_patrol.engine.lease import AuditRecord, LeaseBook, LeaseState
 #: 要 L1 控制权的那几条接口。**判据是"会改变这只狗正在做什么"**(§3.5 规
 #: 则 4), 不是"会不会让它动"。
 #:
-#: 不在这张表上的, 都是想清楚了才不在的:
+#: **默认要。** 这张表今天是"明确要"的那一半, 下面的 :data:`EXEMPT` 是"明确
+#: 不要"的那一半; 两张表都没登记的写请求一律按要控制权处理(见
+#: :func:`needs_lease`)。以前是反的 —— 不在这张表上就放行, 于是往
+#: ``server.py`` 加一条会改狗的接口而忘了登记, 没人会红, 没拿租约的人直接调得
+#: 动。
+#:
+#: 不在这张表上的, 都是想清楚了才不在的(逐条登记在 :data:`EXEMPT`):
 #:
 #: * ``POST /api/estop`` —— 规则 2, 急停永远不要控制权。
 #: * 一切 GET —— 规则 1, 看永远不要控制权。
@@ -68,6 +74,9 @@ CONTROLLED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/api/teleop$")),
     ("POST", re.compile(r"^/api/teleop/heartbeat$")),
     ("POST", re.compile(r"^/api/teleop/mode$")),
+    # 解除急停:按下不设门槛、解除设门槛 —— 按错了多按一次没有代价,解错了
+    # 狗会动。``/api/estop`` 本身仍然不在这张表上(规则 2)。
+    ("POST", re.compile(r"^/api/estop/release$")),
     ("POST", re.compile(r"^/api/mapping/record/(start|stop)$")),
     # 见上面那段:这一条删原点, 不是"离线活儿"。**跟它配套的还有
     # ``server._rebuild`` 里那道"引擎在跑就不许重建"的闸** —— 这张表拦的是
@@ -94,9 +103,65 @@ CONTROLLED: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+#: 看的方法。规则 1: 看永远不要控制权。
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+#: **明确不要**控制权的写接口, 每条带一句理由。判据的完整论证在
+#: :data:`CONTROLLED` 上方那段注释里, 这里只记结论。
+#:
+#: 加一条之前先回答: 它会不会改变这只狗**正在做什么**, 或者**下一趟还能不能
+#: 出发**? 会的话它不属于这里。``tests/app/test_control_gate.py`` 里有一份
+#: 手抄的豁免表跟这张逐条对账 —— 往这里加一条而不去那边登记, 当场红。
+EXEMPT: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("POST", re.compile(r"^/api/auth$"), "登录: 还没有会话, 谈不上租约"),
+    ("POST", re.compile(r"^/api/auth/logout$"), "登出: 顺带还控制权"),
+    ("POST", re.compile(r"^/api/control/(acquire|heartbeat|release|takeover)$"),
+     "控制权本身: 要控制权才能取控制权是个死结"),
+    ("POST", re.compile(r"^/api/control/takeover/approve$"),
+     "同意移交的是持有者自己, 也在控制权本身这一组"),
+    ("POST", re.compile(r"^/api/estop$"),
+     "§3.5 规则 2: 急停永远不要控制权。这一条错了会死人"),
+    ("PUT", re.compile(r"^/api/operator$"),
+     "换署名: 下一个人正是在拿到控制权之前报名字的"),
+    ("PUT", re.compile(r"^/api/missions/[^/]+$"),
+     "编任务是案头活, 不改在跑的那一趟"),
+    ("PUT", re.compile(r"^/api/maps/[^/]+/home$"),
+     "跟编任务同属案头活, 两个人不该为改一个数去抢方向盘"),
+    ("POST", re.compile(r"^/api/runs/[^/]+/judge$"), "判读归档: 改的是纸面不是狗"),
+    ("POST", re.compile(r"^/api/runs/[^/]+/review/[^/]+$"),
+     "复核归档: 改的是纸面不是狗"),
+    ("POST", re.compile(r"^/api/storage/sweep$"), "清盘: 不改变狗正在做什么"),
+    ("POST", re.compile(r"^/api/exports$"), "导出: 不改变狗正在做什么"),
+    ("POST", re.compile(r"^/api/exports/[^/]+/confirm$"), "导出确认"),
+    ("POST", re.compile(r"^/api/backup/(init|sync|eject)$"),
+     "备份: 不改变狗正在做什么"),
+    ("POST", re.compile(r"^/api/release/(install|activate|rollback)$"),
+     "升级尤其不能要: 恢复性的回滚不该被一个掉线的会话挡住"),
+    ("PUT", re.compile(r"^/api/identity/payload$"),
+     "登记有没有装上装: 改的是身份记录, 不是动作"),
+    ("POST", re.compile(r"^/api/bundle/(apply|rollback)$"),
+     "任务包对在跑的那一趟是惰性的(下一趟才生效), 见上方注释"),
+)
+
+
 def needs_lease(method: str, path: str) -> bool:
-    """这条接口要不要 L1 控制权。"""
-    return any(m == method and p.match(path) for m, p in CONTROLLED)
+    """这条接口要不要 L1 控制权。**写请求默认要。**
+
+    顺序是承重的:
+
+    1. 看的方法一律不要(规则 1)。
+    2. :data:`CONTROLLED` 先于 :data:`EXEMPT` —— 哪天有人把一条豁免写宽了
+       (比如 ``^/api/estop``少了 ``$``), 它也吞不掉 ``/api/estop/release``
+       这种明确要的。
+    3. 两张表都没登记的写请求: 要。忘了登记的新接口从此是"被挡住、有人来
+       问", 而不是"静悄悄地谁都调得动"。不存在的路径也一样回 409 而不是
+       404 —— 跟没解锁一律先 401 同一条立场, 不给没权限的人当存在性探针。
+    """
+    if method in SAFE_METHODS:
+        return False
+    if any(m == method and p.match(path) for m, p in CONTROLLED):
+        return True
+    return not any(m == method and p.match(path) for m, p, _why in EXEMPT)
 
 
 class ControlDesk:

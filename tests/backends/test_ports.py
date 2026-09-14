@@ -21,6 +21,9 @@ DEVICE_METHODS = {
     "connect", "close", "acquire_control", "release_control",
     "stand", "lie", "walk", "set_light", "set_gimbal", "take_photo",
     "battery", "emergency", "has_control",
+    # 停车和急停必须是端口上的一等方法:以前停车借用 walk(0,...),真后端
+    # 拒掉、错误被吞,测试桩却是绿的。
+    "halt", "emergency_stop",
 }
 MEDIA_METHODS = {"open", "close", "grab", "healthy"}
 

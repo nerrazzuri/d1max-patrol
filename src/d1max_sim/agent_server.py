@@ -10,6 +10,11 @@
 * 站起要花时间,不是瞬间的(#36 实测 ~6s),所以状态是**慢慢**变的。
 * ``forward`` 给太小就只是原地蹭,``motion`` 不会进 ``Gait``(#37)。
 
+**跟 C++ 一样的并发语义**(协议 2): 一条连接上的普通命令排队、一次做一条;
+``halt`` / ``estop`` **插队** —— 读到就当场做、当场回执,不排在还没走完的
+walk 后面。叫停会让正在走的 walk 立刻收手、排着队的 walk 直接作废,两者都
+回 ``WALK_CANCELLED``。
+
 用纯 asyncio 的 TCP server,不依赖 websockets —— 旁路进程的线协议是裸
 TCP + JSONL,跟导航那条 WebSocket 链路没有关系。
 """
@@ -45,6 +50,17 @@ TELEMETRY_HZ = 20.0
 #: 低于这个量的 ``forward`` 就只是原地蹭,不会真的走(清单 #37)。
 #: 假设(待真机验证): 真机上 0.11 "几乎不动"、0.3 "明显走",阈值取中间。
 WALK_DEADBAND = 0.2
+
+#: 被叫停的 walk 的拒绝原文。跟 ``patrol_agent.cpp`` 的 ``kWalkCancelled`` 一字不差。
+WALK_CANCELLED = "行走被停车/急停打断"
+
+#: 插队执行的命令。跟 ``patrol_agent.cpp`` 的 ``IsUrgent`` 对齐。
+URGENT_COMMANDS = frozenset({"halt", "estop"})
+
+#: walk 在仿真里睡的时候多久看一眼有没有被叫停。
+_CANCEL_POLL_S = 0.01
+
+_Job = tuple[int, str, dict[str, Any], int]
 
 
 class SimAgentServer:
@@ -88,6 +104,11 @@ class SimAgentServer:
         self.commands: list[tuple[str, dict[str, Any]]] = []
         #: 走过的总路程,给闭环实验的测试用。
         self.distance = 0.0
+        #: 停车代数。``halt`` / ``estop(on)`` 加一,walk 记下开始排队时的代数,
+        #: 代数变了就是被叫停了。同 ``patrol_agent.cpp`` 的 ``g_cancel_gen``。
+        self._cancel_gen = 0
+        #: 被叫停打断(或排队时就作废)的 walk 有几条。测试断言用。
+        self.cancelled_walks = 0
 
         self._server: asyncio.Server | None = None
         self._clients: set[asyncio.StreamWriter] = set()
@@ -145,17 +166,23 @@ class SimAgentServer:
             await writer.drain()
             telemetry = asyncio.create_task(self._telemetry_loop(writer))
             self._tasks.add(telemetry)
+            queue: asyncio.Queue[_Job] = asyncio.Queue()
+            worker = asyncio.create_task(self._worker(writer, queue))
+            self._tasks.add(worker)
             try:
                 while True:
                     line = await reader.readline()
                     if not line:
                         break
-                    await self._on_line(writer, line)
+                    await self._on_line(writer, line, queue)
             finally:
-                telemetry.cancel()
-                self._tasks.discard(telemetry)
-                with contextlib.suppress(asyncio.CancelledError):
-                    await telemetry
+                # 客户端走了:队里剩下的一律不做,正在走的那一拍收手 —— 跟 C++
+                # 的 ``closing`` 一样。
+                for task in (worker, telemetry):
+                    task.cancel()
+                    self._tasks.discard(task)
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
         except (ConnectionError, OSError):
             pass
         finally:
@@ -200,7 +227,8 @@ class SimAgentServer:
 
     # -------------------------------------------------------------- 命令
 
-    async def _on_line(self, writer: asyncio.StreamWriter, line: bytes) -> None:
+    async def _on_line(self, writer: asyncio.StreamWriter, line: bytes,
+                       queue: asyncio.Queue[_Job]) -> None:
         try:
             cmd_id, cmd, args = decode_command(line)
         except AgentProtocolError as exc:
@@ -208,9 +236,23 @@ class SimAgentServer:
             # 所以这里也只记日志 —— 客户端会自己等超时。
             log.warning("旁路仿真收到看不懂的命令行: %s", exc)
             return
+        # 收到就记,不等轮到它才记 —— 测试要断言的是"上层发了什么"。
         self.commands.append((cmd, dict(args)))
+        if cmd in URGENT_COMMANDS:
+            await self._execute(writer, (cmd_id, cmd, dict(args), self._cancel_gen))
+            return
+        queue.put_nowait((cmd_id, cmd, dict(args), self._cancel_gen))
+
+    async def _worker(self, writer: asyncio.StreamWriter,
+                      queue: asyncio.Queue[_Job]) -> None:
+        """一次做一条普通命令。跟 C++ 的 ``ConnWorker`` 一样。"""
+        while True:
+            await self._execute(writer, await queue.get())
+
+    async def _execute(self, writer: asyncio.StreamWriter, job: _Job) -> None:
+        cmd_id, cmd, args, gen = job
         try:
-            await self._run(cmd, args)
+            await self._run(cmd, args, gen)
         except _Rejected as exc:
             self._send(writer, {"t": "ack", "id": cmd_id, "ok": False,
                                 "error": str(exc)})
@@ -225,7 +267,7 @@ class SimAgentServer:
             # 照抄它,现场看日志时能一眼对上。
             raise _Rejected(f"Controlled denial of service ({what})")
 
-    async def _run(self, cmd: str, args: dict[str, Any]) -> None:
+    async def _run(self, cmd: str, args: dict[str, Any], gen: int) -> None:
         if cmd == "hold":
             if self._deny_control:
                 raise _Rejected("Controlled denial of service (上装占用中)")
@@ -235,9 +277,16 @@ class SimAgentServer:
             self._held = False
             self._broadcast({"t": "control_lost", "reason": "旁路进程按要求退出"})
             return
+        if cmd == "halt":
+            # 停车不要控制权:作废正在走和排着队的 walk,速度归零。
+            self._cancel_gen += 1
+            self.vx = self.vy = self.vyaw = 0.0
+            return
         if cmd == "estop":
             # 急停不需要控制权 —— 它是安全动作,任何时候都得能发出去。
             on = bool(args.get("on", True))
+            if on:
+                self._cancel_gen += 1
             self.estop_software = (EmergencyStatus.STOP if on
                                    else EmergencyStatus.RECOVER)
             if on:
@@ -261,7 +310,10 @@ class SimAgentServer:
             return
         if cmd == "walk":
             self._need_control("walk")
-            await self._walk(args)
+            if gen != self._cancel_gen:
+                self.cancelled_walks += 1
+                raise _Rejected(WALK_CANCELLED)   # 排队的时候已经被叫停了
+            await self._walk(args, gen)
             return
         raise _Rejected(f"不认识的命令: {cmd}")
 
@@ -277,7 +329,16 @@ class SimAgentServer:
             await asyncio.sleep(STAND_SECONDS)
             self.motion = MotionStatus.GENERAL
 
-    async def _walk(self, args: dict[str, Any]) -> None:
+    async def _sleep_unless_cancelled(self, duration: float, gen: int) -> float:
+        """睡 ``duration`` 秒,中途被叫停就提前醒。返回真正睡了多久。"""
+        start = time.monotonic()
+        while True:
+            elapsed = time.monotonic() - start
+            if self._cancel_gen != gen or elapsed >= duration:
+                return min(elapsed, duration)
+            await asyncio.sleep(min(_CANCEL_POLL_S, duration - elapsed))
+
+    async def _walk(self, args: dict[str, Any], gen: int) -> None:
         if self.motion in (MotionStatus.LIE_DOWN, MotionStatus.UNKNOWN):
             raise _Rejected("趴着走不了,先 stand")
         if self.estop_software is EmergencyStatus.STOP:
@@ -297,22 +358,36 @@ class SimAgentServer:
             # 假设(待真机验证): 现场只量过平移(0.11 几乎不动、0.3 明显走),
             # 转向那一路没验过。这里按同一个死区处理 —— 与其把 yaw 排除在外、
             # 让"纯转向永远不动"变成一个静默的坑,不如先按同样的量级建模。
-            await asyncio.sleep(min(seconds, STAND_SECONDS))
+            await self._sleep_unless_cancelled(min(seconds, STAND_SECONDS), gen)
+            if self._cancel_gen != gen:
+                self.cancelled_walks += 1
+                raise _Rejected(WALK_CANCELLED)
             return
 
         self.motion = MotionStatus.GAIT
         # 假设(待真机验证): fwd 是百分比,满量程按 1.0 折算 1.2 m/s,
         # 于是 fwd=0.5 → 0.6 m/s,和只读接口的 get_speed x=0.6 对得上(#38)。
         self.vx, self.vy, self.vyaw = fwd * 1.2, lat * 1.0, yaw_rate * 1.5
-        await asyncio.sleep(min(seconds, STAND_SECONDS))
-        self.yaw = _wrap(self.yaw + self.vyaw * seconds)
-        dx = (self.vx * math.cos(self.yaw) - self.vy * math.sin(self.yaw)) * seconds
-        dy = (self.vx * math.sin(self.yaw) + self.vy * math.cos(self.yaw)) * seconds
+        vx, vy, vyaw = self.vx, self.vy, self.vyaw
+        planned = min(seconds, STAND_SECONDS)
+        try:
+            slept = await self._sleep_unless_cancelled(planned, gen)
+        finally:
+            # 断连取消也要把速度落回零,不然遥测里一直挂着"在走"。
+            self.vx = self.vy = self.vyaw = 0.0
+            self.motion = MotionStatus.GENERAL
+        cancelled = self._cancel_gen != gen
+        # 仿真把整拍的位移压缩在 ``planned`` 里走完;被叫停时只算走了的那一截。
+        moved = seconds * (slept / planned) if cancelled else seconds
+        self.yaw = _wrap(self.yaw + vyaw * moved)
+        dx = (vx * math.cos(self.yaw) - vy * math.sin(self.yaw)) * moved
+        dy = (vx * math.sin(self.yaw) + vy * math.cos(self.yaw)) * moved
         self.x += dx
         self.y += dy
         self.distance += math.hypot(dx, dy)
-        self.vx = self.vy = self.vyaw = 0.0
-        self.motion = MotionStatus.GENERAL
+        if cancelled:
+            self.cancelled_walks += 1
+            raise _Rejected(WALK_CANCELLED)
 
     # -------------------------------------------------------------- 注入
 
@@ -348,4 +423,10 @@ def _wrap(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
-__all__ = ["STAND_SECONDS", "WALK_DEADBAND", "SimAgentServer"]
+__all__ = [
+    "STAND_SECONDS",
+    "URGENT_COMMANDS",
+    "WALK_CANCELLED",
+    "WALK_DEADBAND",
+    "SimAgentServer",
+]

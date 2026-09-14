@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from unittest import mock
 
@@ -22,11 +23,13 @@ from d1max_patrol.app.teleop import (
     PROFILES,
     ROAM,
     SCAN,
+    EmergencyStopFailed,
     Teleop,
     TeleopBusy,
     snap_to_axis,
 )
-from d1max_patrol.backends.base import Event, EventEmitter, NavStatusEvent
+from d1max_patrol.backends.base import DeviceBackendError, Event, EventEmitter, NavStatusEvent
+from d1max_patrol.backends.sidecar_device import MAX_WALK_SECONDS
 from d1max_patrol.engine.homing import HomePoint
 from d1max_patrol.engine.machine import EngineBusy, MissionEngine, RunState
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
@@ -77,7 +80,13 @@ class DeviceStub(EventEmitter[Event]):
         self.batt = 88.0
         self.control = True
         self.walk_calls: list[tuple[float, float, float, float]] = []
+        #: 数的是 ``halt()``。
         self.stop_calls = 0
+        #: 每次 ``emergency_stop(on)`` 的 on。
+        self.estop_calls: list[bool] = []
+        #: 设了就让对应的调用抛它 —— 急停链路"一步失败不挡下一步"靠它测。
+        self.halt_error: Exception | None = None
+        self.estop_error: Exception | None = None
 
     async def battery(self) -> float:
         return self.batt
@@ -90,9 +99,22 @@ class DeviceStub(EventEmitter[Event]):
 
     async def walk(self, seconds: float, forward: float,
                    lateral: float = 0.0, yaw: float = 0.0) -> None:
+        # 跟真后端(``SidecarDeviceBackend.walk``)一样拒掉非正时长。以前这个桩
+        # 把 ``walk(0,0,0,0)`` 当停车照单全收,真狗上停车一直被拒,测试却是绿的。
+        if not 0 < seconds <= MAX_WALK_SECONDS:
+            raise DeviceBackendError(
+                f"行走时长要在 (0, {MAX_WALK_SECONDS}] 秒内,收到 {seconds}")
         self.walk_calls.append((seconds, forward, lateral, yaw))
-        if (forward, lateral, yaw) == (0.0, 0.0, 0.0):
-            self.stop_calls += 1
+
+    async def halt(self) -> None:
+        if self.halt_error is not None:
+            raise self.halt_error
+        self.stop_calls += 1
+
+    async def emergency_stop(self, on: bool = True) -> None:
+        if self.estop_error is not None:
+            raise self.estop_error
+        self.estop_calls.append(on)
 
     async def stand(self) -> None: ...
 
@@ -281,7 +303,9 @@ async def test_控制量不会超过满量程(teleop, fake_device):
 
 async def test_零输入就是停不是发一个死区值(teleop, fake_device):
     await teleop.pulse(0.0, 0.0, 0.0)
-    assert fake_device.walk_calls[-1][1] == 0.0
+    # 停 = ``halt()``,不是零控制量的 walk(真后端拒 walk(0))。
+    assert fake_device.stop_calls == 1
+    assert fake_device.walk_calls == []
     assert not teleop.active
 
 
@@ -505,6 +529,36 @@ async def test_没任务在跑也能按急停(teleop, fake_device):
     assert fake_device.stop_calls >= 1
 
 
+async def test_急停先发软急停(teleop, fake_device):
+    """以前急停只停遥控、打断任务,``SoftEmergencyStop`` 从来没发过。"""
+    await teleop.emergency_stop()
+    assert fake_device.estop_calls == [True]
+
+
+async def test_软急停没发出去_照样停车打断任务然后报错(engine, teleop, sample_mission):
+    """一步失败不许挡住下一步;全做完了再如实报。"""
+    teleop._device.estop_error = DeviceBackendError("estop 等回执超过 5.0s")
+    await engine.start(sample_mission, home=_HOME)
+    await engine.wait_state(RunState.RUNNING)
+    with pytest.raises(EmergencyStopFailed, match="软急停没发出去"):
+        await teleop.emergency_stop("按了急停")
+    assert teleop._device.stop_calls >= 1
+    assert await engine.wait_done(timeout_s=5.0) is RunState.ABORTED
+
+
+async def test_停车没发出去_急停也要报错(teleop, fake_device):
+    fake_device.halt_error = DeviceBackendError("与旁路进程的连接已关闭")
+    with pytest.raises(EmergencyStopFailed, match="停车没发出去"):
+        await teleop.emergency_stop()
+    assert fake_device.estop_calls == [True]
+    assert not teleop.active
+
+
+async def test_解除急停发的是软急停关(teleop, fake_device):
+    await teleop.release_emergency_stop()
+    assert fake_device.estop_calls == [False]
+
+
 # ------------------------------------------------------------------ HTTP
 
 
@@ -534,6 +588,28 @@ def test_心跳接口走得通(server):
 def test_急停接口走得通(server, ctx):
     assert post(server, "/api/estop") == 200
     assert ctx.device.stop_calls >= 1
+    assert ctx.device.estop_calls == [True]
+
+
+def test_急停没做到时接口不许回200(server, ctx):
+    """页面只在 200 时写「已急停」。没做到还回 200,人就以为狗停了。"""
+    ctx.device.halt_error = DeviceBackendError("与旁路进程的连接已关闭")
+    code, body, _ = request(server, "/api/estop", method="POST", payload={})
+    assert code == 502
+    wire = json.loads(body)
+    assert "急停没有全部做到" in wire["error"]
+    assert "停车没发出去" in wire["detail"]
+
+
+def test_解除急停接口走得通(server, ctx):
+    assert post(server, "/api/estop") == 200
+    assert post(server, "/api/estop/release") == 200
+    assert ctx.device.estop_calls == [True, False]
+
+
+def test_解除急停没成功回502(server, ctx):
+    ctx.device.estop_error = DeviceBackendError("estop 被旁路进程拒绝: x")
+    assert post(server, "/api/estop/release") == 502
 
 
 def test_急停按着的时候遥控接口给409(server, ctx):
@@ -605,7 +681,7 @@ async def test_停车永远不许被闸挡住(fake_device, engine, fake_clock):
     t = 带闸(fake_device, engine, fake_clock, 理由)
     await t.pulse(0.0, 0.0, 0.0)          # 三轴全零 = 停
     await t.stop()
-    assert fake_device.walk_calls[-1] == (0.0, 0.0, 0.0, 0.0)
+    assert fake_device.stop_calls == 2
 
 
 async def test_视频在线就照常走(fake_device, engine, fake_clock):
@@ -636,7 +712,7 @@ async def test_开着走的时候视频掉了_看门狗停狗(fake_device, engin
         # 假装替它擦屁股。
         await 等到(lambda: not t.active, timeout=0.2)   # 用这个文件里既有的那个助手
         assert t.active is False
-        assert fake_device.walk_calls[-1] == (0.0, 0.0, 0.0, 0.0)
+        await 等到(lambda: fake_device.stop_calls >= 1, timeout=0.2)
     finally:
         await t.aclose()
 

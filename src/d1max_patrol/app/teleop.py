@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import math
 import time
 from collections.abc import Callable, Mapping
@@ -29,6 +30,8 @@ from types import MappingProxyType
 
 from d1max_patrol.backends.base import DeviceBackend
 from d1max_patrol.engine.machine import MissionEngine
+
+log = logging.getLogger(__name__)
 
 #: 心跳断了多久就停车。0.6s ≈ 半米内(死区控制量下的粗略估计)。
 HEARTBEAT_TIMEOUT_S = 0.6
@@ -109,6 +112,14 @@ REMOTE_CONFIRM = ("远程遥控:你看不见狗周围的实际情况,只能看�
 
 #: 四个轴全零 —— "停"就是这个。
 _STOP = (0.0, 0.0, 0.0)
+
+
+class EmergencyStopFailed(RuntimeError):
+    """急停这一下**没有全部做到**。消息里逐条写着哪一步没成。
+
+    以前急停把停车的错误 ``suppress`` 掉、从来不发软急停,页面照样回
+    「已急停」。人按了急停之后看到的那句话,必须是真的。
+    """
 
 
 class TeleopBusy(RuntimeError):
@@ -293,21 +304,54 @@ class Teleop:
         self._last_beat = self._clock()
 
     async def stop(self) -> None:
-        """停车。停不动也要把 ``active`` 落下来 —— 它是"该不该继续看着"。"""
+        """停车。停不动也要把 ``active`` 落下来 —— 它是"该不该继续看着"。
+
+        走的是 ``device.halt()``,**不是** ``walk(0, 0, 0, 0)``:后者在真后端上
+        会因为时长不为正被拒掉(见 ``DeviceBackend.halt``)。
+        """
         self._active = False
         self._cancel_watch()
-        await self._device.walk(0.0, 0.0, 0.0, 0.0)
+        await self._device.halt()
 
     async def emergency_stop(self, reason: str = "按了急停") -> None:
-        """页面上那个红按钮:停遥控,**并且**打断正在跑的任务。
+        """页面上那个红按钮:软急停,停遥控,**并且**打断正在跑的任务。
 
-        两件事都要做:急停的语义是"现在什么都别动了",而遥控和任务是两条
-        各自独立的动腿路径,只停一条等于没停。
+        三件事都要做,而且**一件失败不许挡住下一件**:急停的语义是"现在什么
+        都别动了",遥控和任务是两条各自独立的动腿路径,只停一条等于没停。
+
+        顺序:软急停最先 —— 它在旁路进程里插队、作废所有 walk,是最快让腿
+        停下来的那一下;然后停车(软急停没发出去时靠它);最后打断任务。
+
+        **任何一步失败都要抛** ``EmergencyStopFailed``,不许吞:页面上「已急停」
+        那句话只在这里不抛的时候才说。
         """
-        with contextlib.suppress(Exception):
-            await self.stop()
+        self._active = False
+        self._cancel_watch()
+        failures: list[str] = []
+        try:
+            await self._device.emergency_stop(True)
+        except Exception as exc:  # noqa: BLE001 - 每一步都得试,错误汇总后再抛
+            failures.append(f"软急停没发出去:{exc}")
+        try:
+            await self._device.halt()
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"停车没发出去:{exc}")
         if self._engine.running:
-            await self._engine.abort(reason)
+            try:
+                await self._engine.abort(reason)
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"任务没打断:{exc}")
+        if failures:
+            log.error("急停没有全部做到:%s", ";".join(failures))
+            raise EmergencyStopFailed(";".join(failures))
+
+    async def release_emergency_stop(self) -> None:
+        """解除软急停。**要控制权**(闸在 ``CONTROLLED`` 里),急停本身不要。
+
+        按下不设门槛、解除设门槛:按错了多按一次没有代价,解错了狗会动。
+        解除之后遥控和任务**不会自己恢复** —— 要人重新推杆、重新起任务。
+        """
+        await self._device.emergency_stop(False)
 
     async def aclose(self) -> None:
         """收尾。只停后台任务,不给狗发指令 —— 关服务不该让它动一下。"""
@@ -347,14 +391,22 @@ class Teleop:
                 # 真正危险的是「画面刚黑掉、人还没反应过来」那半秒,而这条协程
                 # 是唯一一直在看的东西。
                 self._active = False
-                with contextlib.suppress(Exception):
-                    await self._device.walk(0.0, 0.0, 0.0, 0.0)
+                await self._halt_from_watchdog("画面掉了")
                 return
             if self._clock() - self._last_beat > self._heartbeat_timeout_s:
                 self._active = False
-                with contextlib.suppress(Exception):
-                    await self._device.walk(0.0, 0.0, 0.0, 0.0)
+                await self._halt_from_watchdog("心跳断了")
                 return
+
+    async def _halt_from_watchdog(self, why: str) -> None:
+        """守死人停车。这里没有调用方可以抛给,所以失败只能记下来 —— 但**必须
+        记**:以前这里 ``suppress`` 了 ``walk(0,...)`` 的拒绝,两条守死人停车在
+        真狗上一直是空的,日志里一个字都没有。
+        """
+        try:
+            await self._device.halt()
+        except Exception:  # 后台协程,抛出去没人接 —— 只能记日志
+            log.exception("守死人开关要停车(%s),停车命令没发出去", why)
 
 
 def _check_range(value: float, name: str) -> None:
@@ -375,6 +427,7 @@ __all__ = [
     "ROAM",
     "SCAN",
     "WATCH_PERIOD_S",
+    "EmergencyStopFailed",
     "PulseProfile",
     "Teleop",
     "TeleopBusy",

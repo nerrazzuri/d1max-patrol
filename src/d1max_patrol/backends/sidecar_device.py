@@ -58,6 +58,12 @@ DEFAULT_AGENT_PORT = 8090
 #: 站起实测 ~6s(清单 #36)。取 15s,留一点余量。
 DEFAULT_ACK_TIMEOUT_S = 15.0
 
+#: 停车/急停等回执的上限。**比 ``DEFAULT_ACK_TIMEOUT_S`` 短得多**:这两条在
+#: 旁路进程里插队执行,最坏情况是等正在走的那一拍松开 SDK 锁(撞上
+#: ``Gait(2000)`` 时约 2s)再加 ``SoftEmergencyStop`` 自己的 2s。人按了急停,
+#: 页面上必须在几秒内知道成没成,而不是转 15 秒圈。
+URGENT_ACK_TIMEOUT_S = 5.0
+
 #: 一次 ``Move`` 在机器上维持约 1s(清单 #38),所以行走靠连续下发维持。
 #: 这两个上限是**安全阀**,不是调参项: 现场站着人。
 MAX_WALK_SECONDS = 10.0
@@ -252,7 +258,8 @@ class SidecarDeviceBackend(DeviceBackend):
 
     # -------------------------------------------------------------- 发命令
 
-    async def _command(self, cmd: str, **fields: Any) -> Ack:
+    async def _command(self, cmd: str, *, timeout_s: float | None = None,
+                       **fields: Any) -> Ack:
         if not self.connected:
             raise DeviceBackendError(f"没连上旁路进程,发不了 {cmd}")
         assert self._writer is not None
@@ -267,12 +274,13 @@ class SidecarDeviceBackend(DeviceBackend):
             self._pending.pop(cmd_id, None)
             raise DeviceBackendError(f"{cmd} 没发出去: {exc}") from exc
 
+        limit = self._ack_timeout_s if timeout_s is None else min(
+            timeout_s, self._ack_timeout_s)
         try:
-            ack = await asyncio.wait_for(future, self._ack_timeout_s)
+            ack = await asyncio.wait_for(future, limit)
         except asyncio.TimeoutError as exc:
             self._pending.pop(cmd_id, None)
-            raise DeviceBackendError(
-                f"{cmd} 等回执超过 {self._ack_timeout_s}s") from exc
+            raise DeviceBackendError(f"{cmd} 等回执超过 {limit}s") from exc
         if not ack.ok:
             raise DeviceBackendError(f"{cmd} 被旁路进程拒绝: {ack.error}")
         return ack
@@ -364,13 +372,21 @@ class SidecarDeviceBackend(DeviceBackend):
         await self._command("walk", seconds=seconds, fwd=forward,
                             lat=lateral, yaw=yaw)
 
+    async def halt(self) -> None:
+        """停车。旁路进程**插队**执行:不排在还没走完的 walk 后面。
+
+        不查控制权 —— 本端的 ``_held`` 可能已经被 ``release_control`` 清掉,
+        而旁路进程那头也许还在走最后一拍;停不停由旁路进程判断。
+        """
+        await self._command("halt", timeout_s=URGENT_ACK_TIMEOUT_S)
+
     async def emergency_stop(self, on: bool = True) -> None:
-        """软急停。
+        """软急停。旁路进程插队执行,并作废正在走和排着队的 walk。
 
         **软急停不能替代机身上那个硬急停按钮。** 它走的是同一条 SDK 链路,
         链路本身出问题时它也没了。
         """
-        await self._command("estop", on=on)
+        await self._command("estop", timeout_s=URGENT_ACK_TIMEOUT_S, on=on)
 
     async def set_light(self, on: bool) -> None:
         """前后补光灯一起开关。要分开控制用 ``set_front_light`` / ``set_back_light``。"""
@@ -476,6 +492,7 @@ __all__ = [
     "DEFAULT_AGENT_PORT",
     "MAX_WALK_SECONDS",
     "MAX_WALK_SPEED",
+    "URGENT_ACK_TIMEOUT_S",
     "SidecarDeviceBackend",
     "parse_agent_endpoint",
 ]
