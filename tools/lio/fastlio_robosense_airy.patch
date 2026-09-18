@@ -1,22 +1,38 @@
 diff --git a/src/laserMapping.cpp b/src/laserMapping.cpp
-index d441261..20ce0b1 100644
+index d441261..7f6cd97 100644
 --- a/src/laserMapping.cpp
 +++ b/src/laserMapping.cpp
-@@ -352,7 +352,13 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
+@@ -352,7 +352,7 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
      publish_count ++;
      // cout<<"IMU got at: "<<msg_in->header.stamp.toSec()<<endl;
      sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
 -    
 +
-+    // ★ RS-Airy 修正：Airy IMU 的 linear_acceleration 单位是 g（模长≈1.0），
-+    //   FAST-LIO 需要 m/s²（重力≈9.81）。不转的话 IMU 初始化把重力估成 1.0，
-+    //   状态估计冻死、里程计不动。这里 ×9.81 换算。
-+    msg->linear_acceleration.x *= 9.81;
-+    msg->linear_acceleration.y *= 9.81;
-+    msg->linear_acceleration.z *= 9.81;
  
      msg->header.stamp = get_ros_time(get_time_sec(msg_in->header.stamp) - time_diff_lidar_to_imu);
      if (abs(timediff_lidar_wrt_imu) > 0.1 && time_sync_en)
+@@ -1063,6 +1063,21 @@ private:
+             /******* Publish odometry *******/
+             publish_odometry(pubOdomAftMapped_, tf_broadcaster_);
+ 
++            /******* [ADDED] print estimated LiDAR-IMU extrinsic (convergence curve) *******/
++            {
++                static int ext_cnt = 0;
++                if (ext_cnt++ % 10 == 0) {
++                    V3D ext_e = SO3ToEuler(state_point.offset_R_L_I);
++                    auto qc = state_point.offset_R_L_I.coeffs(); // x,y,z,w
++                    printf("[EXT] t=%.2f eulerdeg=[%.2f %.2f %.2f] q=[%.6f %.6f %.6f %.6f] T=[%.5f %.5f %.5f]\n",
++                        Measures.lidar_beg_time - first_lidar_time,
++                        ext_e(0), ext_e(1), ext_e(2),
++                        qc[0], qc[1], qc[2], qc[3],
++                        state_point.offset_T_L_I(0), state_point.offset_T_L_I(1), state_point.offset_T_L_I(2));
++                    fflush(stdout);
++                }
++            }
++
+             /*** add the feature points to map kdtree ***/
+             t3 = omp_get_wtime();
+             map_incremental();
 diff --git a/src/preprocess.cpp b/src/preprocess.cpp
 index 88444f4..51e5d89 100644
 --- a/src/preprocess.cpp

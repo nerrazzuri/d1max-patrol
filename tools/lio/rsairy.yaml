@@ -26,9 +26,17 @@
             b_gyr_cov: 0.0001
             fov_degree: 360.0
             det_range: 100.0
-            extrinsic_est_en: false          # 在线估 lidar<->imu 外参(Airy IMU 在雷达内,近似识别)
-            extrinsic_T: [ 0.0, 0.0, 0.0 ]
-            extrinsic_R: [ 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 ]   # ★ 待填真值:抄 nx_zg.yaml 的 IMU-lidar 外参
+            extrinsic_est_en: false          # 固定外参(下面是 fixed_extrinsic_candidate,出图阶段务必 false)
+            # ★ fixed_extrinsic_candidate(mapping-grade,★不是 calibration ground truth★)
+            #   前雷达 IMU-LiDAR 外参 —— 由 FAST-LIO 在线估计收敛得到(2026-09-18 夜)
+            #   euler(RPY)≈(-0.62°, +1.54°, +89.05°),T≈(1.5,1.3,-5.8)cm。std 极小(yaw 0.008°),强收敛。
+            #   ⚠️ 观测性:89°初值→收敛89.05;但80°初值在本段运动只爬到~84°仍慢移 → 本 bag 旋转激励不足、
+            #      yaw 弱可观。此值"够建可用图"(89°初值那次干净跟踪35m),但非标定级精确。
+            #      要标定级精度:补录一段激进多轴激励运动(pitch/roll/yaw/8字)跑 LI-Init —— 需要狗,5分钟。
+            #   注:DIFOP off1092 字面四元数(-0.7029,0.7112,-0.0028,-0.0080)是 ~180° 解,固定填入会发散;
+            #      与 LIO 实测要的 ~90°yaw 解不符(RoboSense DIFOP 四元数的 frame 约定未完全对上,存疑)。
+            extrinsic_T: [ 0.015183, 0.013217, -0.057787 ]
+            extrinsic_R: [ 0.016772, -0.999805, -0.010401, 0.999496, 0.016485, 0.027128, -0.026951, -0.010850, 0.999578 ]
         publish:
             path_en: true
             scan_publish_en: true
