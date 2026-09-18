@@ -1,0 +1,22 @@
+// D1 Max RS-Airy 前雷达 —— GLIM config_ros.json 关键字段(overlay)
+// 用法:把这些值填进你拷出来的默认 config_ros.json 同名字段,别整体替换(默认文件字段更全)
+{
+  "glim_ros": {
+    "imu_topic": "/front_lidar/imu",
+    "points_topic": "/front_lidar",
+    "image_topic": "",
+
+    "imu_frame_id": "",          // 留空=自动
+    "lidar_frame_id": "",        // 留空=自动
+    "base_frame_id": "",         // 留空=默认用 imu 系
+    "odom_frame_id": "odom",
+    "map_frame_id": "map",
+
+    "acc_scale": 0.0,            // ★0.0=自动检测加速度单位 → 自动处理 RS-Airy 的 g(不用手动 ×9.81)
+    "gyro_scale": 1.0,
+    "imu_time_offset": 0.0,
+    "points_time_offset": 0.0,   // RS-Airy 带 per-point 绝对秒时戳,GLIM 自动去畸变
+
+    "tf_time_offset": 1e-6
+  }
+}
