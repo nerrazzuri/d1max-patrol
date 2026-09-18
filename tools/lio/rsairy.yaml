@@ -28,7 +28,7 @@
             det_range: 100.0
             extrinsic_est_en: false          # 在线估 lidar<->imu 外参(Airy IMU 在雷达内,近似识别)
             extrinsic_T: [ 0.0, 0.0, 0.0 ]
-            extrinsic_R: [ 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 ]
+            extrinsic_R: [ 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 ]   # ★ 待填真值:抄 nx_zg.yaml 的 IMU-lidar 外参
         publish:
             path_en: true
             scan_publish_en: true

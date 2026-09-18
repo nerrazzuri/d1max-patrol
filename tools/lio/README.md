@@ -72,3 +72,15 @@ LIO 出的是 6DoF pose + 3D 点云。给 Nav2 用时：**去地面 → 高度�
    - 验证阶梯（评审建议）：静止（应几乎不漂）→ 慢直线5m（墙不弯）→ 慢原地转360°（闭合）→ 才谈整段。
 3. 协方差（acc_cov/gyr_cov/b_*）按实测 IMU 噪声调。
 **在 extrinsic_R 标对之前，不要相信 LIO 的轨迹/地图**（会像"冻住"或"发散"）。
+
+## ★ 拿 extrinsic_R 真值的最快路径（等狗上线，优先做这个）
+瞎猜 90° 旋转会发散（实测 rotX±90 都失败）。**IMU-雷达外参要真值。**
+**最快：抄竞争对手的标定**（他们的 LIO 用的就是这两颗 Airy，早标好了）：
+```bash
+# 狗上线后
+sshpass -p 1 ssh robot@192.168.168.100 'grep -niA3 -iE "extrinsic|T_imu|R_imu|lidar_to_imu|imu_to_lidar|il_|T_il|R_il|rot|trans" /opt/runtime/config/nx_zg.yaml'
+# 找 IMU<->LiDAR 的 3x3 R 和 3x1 T，填进 rsairy.yaml 的 extrinsic_R / extrinsic_T，extrinsic_est_en:false
+```
+备选：跑 **LI-Init**（hku-mars/LiDAR_IMU_Init）自标定，需一段激励充分的运动录包（各轴都转一转）。
+**验证阶梯**：静止(轨迹≈0漂但不冻)→慢直线5m(位移≈5m、墙直)→慢转360°(回到起点附近)→整段。
+判据：轨迹**跨度合理(几米，非0.01也非上万)**、回到起点附近。
