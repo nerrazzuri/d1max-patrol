@@ -1,0 +1,18 @@
+// D1 Max RS-Airy 前雷达 —— GLIM config_sensors.json 关键字段(overlay)
+// 用法:把这些值填进你拷出来的默认 config_sensors.json 同名字段
+{
+  "sensors": {
+    // ★ IMU-LiDAR 外参。格式 [x,y,z, qx,qy,qz,qw](平移+四元数 xyzw)
+    //   约定:T_lidar_imu 把点从 imu 系变换到 lidar 系(p_lidar = T_lidar_imu * p_imu)
+    //   下面是我们 FAST-LIO 收敛的 R_IL(euler RPY -0.62/1.54/89.05°, T 1.5/1.3/-5.8cm)求逆到此约定。
+    //   ★ mapping-grade candidate,非标定级(本 bag yaw 弱可观)。若漂移,试 GLIM 在线外参优化或 LI-Init。
+    "T_lidar_imu": [ -0.015022, 0.014335, 0.057562, 0.013318, -0.005804, -0.701128, 0.712888 ],
+
+    // IMU 噪声(GLIM 默认值,RS-Airy 先用默认,必要时按实测调)
+    "imu_acc_noise": 0.05,
+    "imu_gyro_noise": 0.02,
+    "imu_int_noise": 0.001,
+    "imu_bias_noise_acc": 1e-5,
+    "imu_bias_noise_gyro": 1e-6
+  }
+}
