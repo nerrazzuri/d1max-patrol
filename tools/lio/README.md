@@ -62,7 +62,7 @@ LIO 出的是 6DoF pose + 3D 点云。给 Nav2 用时：**去地面 → 高度�
 ## 测试数据
 今天录的验证包（前雷达+IMU+tf，83s）在笔记本 `runs/bags/d1max-lio-*`（1.8G，gitignore，本地拷走）。
 
-## ★ RS-Airy IMU bring-up（未完，台式机继续 —— 关键）
+## ★ RS-Airy IMU bring-up（外参已解，见最底部「★★★ 外参已解」；本节留档背景）
 实测 Airy IMU 有两个必须处理的点，否则 LIO 不动或发散：
 1. **加速度单位是 g（静止模长≈1.0），不是 m/s²** → 必须 ×9.81。已在 patch 的 imu_cbk 里做了。
 2. **重力在 +Y 轴（静止 accel≈(0,1,0)），不是 Z** → **IMU 坐标系与雷达差约 90°**，必须给对
@@ -93,12 +93,53 @@ sshpass -p 1 ssh robot@192.168.168.100 'grep -niA3 -iE "extrinsic|T_imu|R_imu|li
 - `/front_lidar/imu` 是**原始 IMU**（重力在 +Y、orientation=单位阵，未应用标定）→ 外参必须由我们提供。
 - 现场事实：前雷达 IP `192.168.1.200`（Orin 网卡 enx…27b4=192.168.1.102）；imu_port 6688、difop_port 7788；`use_lidar_clock: true`。
 
-### 拿 extrinsic 的可行路径（台式机做，二选一）
-1. **读 Airy DIFOP 出厂标定（首选，最准）**：给 rslidar_sdk/rs_driver 的 `decodeDifopPkt()` 加一行打印 `IMU_CALIB_DATA`（qx,qy,qz,qw,x,y,z），或按 RSAIRY DIFOP 协议偏移解一个 7788 端口的包。
-   - **注意**：DIFOP 给的是 `T_LiDAR_IMU`（IMU 相对 LiDAR），FAST-LIO 要 `T_IMU_LiDAR`（LiDAR 在 IMU 系）→ **必须求逆**：`R_I_L=R_L_Iᵀ, t_I_L=-R_L_Iᵀ·t_L_I`。
-   - 填进 rsairy.yaml：`extrinsic_est_en: false`, `extrinsic_R`(9), `extrinsic_T`(3)。
-2. **LI-Init 自标定**（备选）：hku-mars/LiDAR_IMU_Init，录一段各轴都激励的运动，估 R/T/时偏/重力/bias。
+### ★★★ 外参已解（2026-09-18 夜）—— 从 DIFOP 直接读出出厂标定（含一次 offset 修正）
+用 Python AF_PACKET 原始套接字抓 7788 端口 DIFOP（Orin 上 tcpdump 没装），按 `RSAIRYDifopPkt`
+结构（`decoder_RSAIRY.hpp` + 官方 Airy 手册确认：`status` 后 **offset 1092, length 28**，
+接 BE float32 `qx,qy,qz,qw,x,y,z`）解出前后雷达出厂 IMU-LiDAR 外参（脚本：scratchpad/difop_raw.py）。
+
+> **⚠️ 踩坑记录**：一开始读 offset **1084**（错 8 字节），把 status 尾部两个≈0 的垃圾值
+> （`1fe21a45`≈5e-20、`00000362`≈1e-42，当 float 恰好≈0）当成了 qx,qy，凑出一个"假的干净"
+> 四元数 (0,0,−0.7029,0.7112)。**真 offset 是 1092**，官方手册确认。别被"看起来干净"骗了。
+
+**前雷达 DIFOP 原始 28 字节（offset 1092..1119，BE hex，存证——以后不用再开狗）：**
+```
+qx=bf33f22c qy=3f3612d0 qz=bb3927ef qw=bc02982b   x=3b8b4396 y=3b88f862 z=bb922531
+```
+
+| | qx | qy | qz | qw | x(m) | y(m) | z(m) | \|q\| |
+|---|---|---|---|---|---|---|---|---|
+| 前 rslidar_head | −0.702914 | 0.711225 | −0.002825 | −0.007971 | 0.004250 | 0.004180 | −0.004460 | 1.0000 |
+| 后 rslidar_tail | −0.700577 | 0.713576 | −0.000341 | −0.001023 | 0.004250 | 0.004180 | −0.004460 | 1.0000 |
+
+- 这是 **qw≈0 的 ~180° 旋转**（不是之前误判的绕 Z 89°）。DIFOP 定义 `p_imu = R·p_lidar + t`
+  = `R_IL`（经 RoboSense support issue #172 确认），FAST-LIO 的 `extrinsic_R/T` 正是 LiDAR 在 IMU 系
+  = `R_IL` → **直接填，不求逆**。
+- 前雷达 rsairy.yaml：`extrinsic_R=[-0.011698,-0.999905,-0.007367, -0.999815,0.011808,-0.015224, 0.015310,0.007187,-0.999858]`，`extrinsic_T=[0.004250,0.004180,-0.004460]`
+- **物理验证（地面法向 vs 重力，离线在包上做，scratchpad/ground_test.py）**：
+  点云地面法向 `n_L=[-0.9995,-0.003,-0.033]`（"上"在点云 **X 轴** → 是 Airy 原始帧，未被转到 base_link 的 Z-up），
+  IMU 重力 `g_I=[0.015,0.9999,0.005]`（"上"在 IMU **Y 轴**）。off1092 **direct 得分 0.9999(最高)**
+  → 竖直对上、不求逆两点都确证。**但静态只锁竖直 2 DOF，yaw 需运动段重跑 FAST-LIO 才能定**。
+- **反驳评审的隐藏变换担忧**：若点云已转 base_link，法向会是 Z=[0,0,1]；实测是 X → **无隐藏安装变换**，
+  DIFOP 外参是唯一需要的变换。`frame_id=rslidar_head`（原始帧）也印证。
+- `extrinsic_est_en: false` 固定用它。若运动段发散，试 transpose（另一个 yaw 候选，见 yaml 注释）。
 
 ### 验证阶梯（务必逐级，判据）
 静止30s(位移≈0不冻) → 慢直线3m(位移≈3m、墙直) → 原地转90°(xyz≈不变、yaw≈90°) → 才谈整段。
 **标好前 LIO 轨迹/图不可信**（实测：外参错→冻死0.01m 或 发散11000m）。
+
+## ★★★★ 最终结论（2026-09-18 深夜，务必读这段——上面的 off1092 direct 已被证伪）
+**DIFOP off1092 字面四元数(-0.7029,0.7112,-0.0028,-0.0080)是 qw≈0 的 ~180° 解；固定填入 FAST-LIO 直接发散(飞 1e11m)。**
+地面法向-重力静态测试只锁竖直 2DOF(4 个候选都≈0.9999)，锁不住 yaw，所以别用它判 yaw。
+真正能跑的外参 = **FAST-LIO 在线估计收敛值**(给 laserMapping.cpp 加了 `[EXT]` 打印读出来的)：
+- `euler(RPY)≈(-0.62°, +1.54°, +89.05°)`，`T≈(1.5,1.3,-5.8)cm`，末端 30 样本 std 极小(yaw 0.008°)。
+- `extrinsic_R=[0.016772,-0.999805,-0.010401, 0.999496,0.016485,0.027128, -0.026951,-0.010850,0.999578]`
+- `extrinsic_T=[0.015183,0.013217,-0.057787]`（已填 rsairy.yaml，extrinsic_est_en:false）
+- 这是 ~90°yaw(Z 保持)解，**不是** DIFOP 的 180° 解 → RoboSense DIFOP 四元数的 frame 约定没对上，存疑，先不纠结。
+
+**观测性(评审要求的扰动初值测试)**：89°初值→收敛 89.05；但 **80°初值在本段运动 67s 只从 80° 慢爬到 84°、仍在移动没会合** →
+**本 bag 旋转激励不足、yaw 弱可观**。此值够建可用图（89°初值那次干净跟踪 35m；固定值那次 Y 竖直只飘 ±0.07m，远好于粗糙 off1084 的 ±1.1m），
+但**非标定级精确**。要标定级精度：**补录一段激进多轴激励运动(pitch/roll/yaw 都甩、走 8 字)跑 LI-Init** —— 这是唯一值得再为外参开狗做的事(~5 分钟)。
+
+**性能**：笔记本 FAST-LIO 只 ~0.3-0.5Hz 跟不上，整层 858s 出图/GLIM **必须上台式机 4060**。
+**进程坑**：同 ROS_DOMAIN 别重复起 bag play（重复帧→`lidar loop back, clear buffer`→发散）；停进程用精确 PID，别用 `pkill -f 模式`（自匹配 → exit 144 中断脚本）。
