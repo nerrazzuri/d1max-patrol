@@ -31,9 +31,11 @@ RoboSense Airy handler，直接读 `/front_lidar`（per-point 绝对秒 timestam
 cd ~/lio_ws/src/FAST_LIO && git apply /path/to/fastlio_robosense_airy.patch && cd ~/lio_ws && colcon build --packages-select fast_lio
 ```
 配置用 `rsairy.yaml`（本目录，**lidar_type=5 ROBOSENSE_AIRY，lid_topic=/front_lidar**，blind=1.0 滤机身，extrinsic_est_en 在线估 lidar-imu 外参）。
-> **实测（2026-09-18）**：原生 handler 后 FAST-LIO2 在**笔记本 CPU 实时 9.2Hz**（rs2velo Python 时只有 1.05Hz）。
-> 商场走廊段建出**两条清晰长直平行墙 + 房间结构，876k点/14m高/65万墙点**，对比 2D 图（~200墙点）质变。**方向验证通过。**
-> rs2velo.py 仅作快速验证的临时方案，正式用原生 handler。
+> **实测（2026-09-18）**：原生 handler 后 FAST-LIO2 点云处理在**笔记本 CPU 实时 9.2Hz**（rs2velo Python 时仅 1.05Hz）——
+> 瓶颈确认在 Python 中转，不在 FAST-LIO/GPU。rs2velo.py 只作临时方案，正式用原生 handler。
+> **注意（诚实记录）**：点云处理实时了，但**里程计尚未正确跟踪** —— 见下面「RS-Airy IMU bring-up」：
+> IMU 加速度是 g 且重力在 Y 轴，未标好 extrinsic_R 前 LIO 会冻住或发散，此时的"地图"不可信。
+> **RS-Airy 是 3D 好数据（360°/46k点/扫到14m）这点是确证的；LIO 跑出正确轨迹还需完成 IMU-雷达标定。**
 ```bash
 # 隔离域跑
 export ROS_DOMAIN_ID=110 RMW_IMPLEMENTATION=rmw_fastrtps_cpp ROS_LOCALHOST_ONLY=1
@@ -59,3 +61,14 @@ LIO 出的是 6DoF pose + 3D 点云。给 Nav2 用时：**去地面 → 高度�
 
 ## 测试数据
 今天录的验证包（前雷达+IMU+tf，83s）在笔记本 `runs/bags/d1max-lio-*`（1.8G，gitignore，本地拷走）。
+
+## ★ RS-Airy IMU bring-up（未完，台式机继续 —— 关键）
+实测 Airy IMU 有两个必须处理的点，否则 LIO 不动或发散：
+1. **加速度单位是 g（静止模长≈1.0），不是 m/s²** → 必须 ×9.81。已在 patch 的 imu_cbk 里做了。
+2. **重力在 +Y 轴（静止 accel≈(0,1,0)），不是 Z** → **IMU 坐标系与雷达差约 90°**，必须给对
+   `extrinsic_R`（IMU→LiDAR 旋转）。单位阵 + 在线估计会**发散**（实测轨迹飙到 11000m）。
+   - 正解：查 RoboSense Airy 的 IMU-点云外参数据手册；或跑一次 **LI-Init** 自标定拿 extrinsic_T/R；
+     然后 `extrinsic_est_en: false` 固定它。
+   - 验证阶梯（评审建议）：静止（应几乎不漂）→ 慢直线5m（墙不弯）→ 慢原地转360°（闭合）→ 才谈整段。
+3. 协方差（acc_cov/gyr_cov/b_*）按实测 IMU 噪声调。
+**在 extrinsic_R 标对之前，不要相信 LIO 的轨迹/地图**（会像"冻住"或"发散"）。

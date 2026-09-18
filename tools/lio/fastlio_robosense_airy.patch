@@ -1,3 +1,22 @@
+diff --git a/src/laserMapping.cpp b/src/laserMapping.cpp
+index d441261..20ce0b1 100644
+--- a/src/laserMapping.cpp
++++ b/src/laserMapping.cpp
+@@ -352,7 +352,13 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
+     publish_count ++;
+     // cout<<"IMU got at: "<<msg_in->header.stamp.toSec()<<endl;
+     sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
+-    
++
++    // ★ RS-Airy 修正：Airy IMU 的 linear_acceleration 单位是 g（模长≈1.0），
++    //   FAST-LIO 需要 m/s²（重力≈9.81）。不转的话 IMU 初始化把重力估成 1.0，
++    //   状态估计冻死、里程计不动。这里 ×9.81 换算。
++    msg->linear_acceleration.x *= 9.81;
++    msg->linear_acceleration.y *= 9.81;
++    msg->linear_acceleration.z *= 9.81;
+ 
+     msg->header.stamp = get_ros_time(get_time_sec(msg_in->header.stamp) - time_diff_lidar_to_imu);
+     if (abs(timediff_lidar_wrt_imu) > 0.1 && time_sync_en)
 diff --git a/src/preprocess.cpp b/src/preprocess.cpp
 index 88444f4..51e5d89 100644
 --- a/src/preprocess.cpp
