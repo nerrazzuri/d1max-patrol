@@ -24,9 +24,16 @@ cd ~/lio_ws
 sudo apt install -y ros-humble-pcl-ros ros-humble-pcl-conversions
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
-**RS-Airy 适配**：FAST_LIO 的 velodyne 格式要相对 `time`，Airy 给的是绝对 `timestamp` →
-用 `rs2velo.py`（本目录）把 `/front_lidar` 转成 `/velodyne_points`（time=timestamp-帧头）。
-配置用 `rsairy.yaml`（本目录，lidar_type=2 velodyne，timestamp_unit=0 秒，blind=1.0 滤机身，extrinsic_est_en 在线估 lidar-imu 外参）。
+**RS-Airy 适配（★已验证的正解：原生 C++ handler）**：给 FAST_LIO 的 preprocess 加一个原生
+RoboSense Airy handler，直接读 `/front_lidar`（per-point 绝对秒 timestamp → 相对帧头 ms），
+**去掉 Python 中转**。打上本目录 `fastlio_robosense_airy.patch`：
+```bash
+cd ~/lio_ws/src/FAST_LIO && git apply /path/to/fastlio_robosense_airy.patch && cd ~/lio_ws && colcon build --packages-select fast_lio
+```
+配置用 `rsairy.yaml`（本目录，**lidar_type=5 ROBOSENSE_AIRY，lid_topic=/front_lidar**，blind=1.0 滤机身，extrinsic_est_en 在线估 lidar-imu 外参）。
+> **实测（2026-09-18）**：原生 handler 后 FAST-LIO2 在**笔记本 CPU 实时 9.2Hz**（rs2velo Python 时只有 1.05Hz）。
+> 商场走廊段建出**两条清晰长直平行墙 + 房间结构，876k点/14m高/65万墙点**，对比 2D 图（~200墙点）质变。**方向验证通过。**
+> rs2velo.py 仅作快速验证的临时方案，正式用原生 handler。
 ```bash
 # 隔离域跑
 export ROS_DOMAIN_ID=110 RMW_IMPLEMENTATION=rmw_fastrtps_cpp ROS_LOCALHOST_ONLY=1
