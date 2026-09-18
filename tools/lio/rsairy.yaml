@@ -1,0 +1,39 @@
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 3
+        max_iteration: 3
+        filter_size_surf: 0.3
+        filter_size_map: 0.3
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: false
+        map_file_path: "./rsairy.pcd"
+        common:
+            lid_topic:  "/velodyne_points"
+            imu_topic:  "/front_lidar/imu"
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+        preprocess:
+            lidar_type: 2          # velodyne 格式(我们把 RS-Airy 转成它)
+            scan_line: 128
+            scan_rate: 10
+            timestamp_unit: 0      # 我们输出的是相对秒
+            blind: 1.0             # 滤掉 1m 内的机身/腿
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0
+            det_range: 100.0
+            extrinsic_est_en: true          # 在线估 lidar<->imu 外参(Airy IMU 在雷达内,近似识别)
+            extrinsic_T: [ 0.0, 0.0, 0.0 ]
+            extrinsic_R: [ 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 ]
+        publish:
+            path_en: true
+            scan_publish_en: true
+            dense_publish_en: true
+            scan_bodyframe_pub_en: false
+        pcd_save:
+            pcd_save_en: true
+            interval: -1

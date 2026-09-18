@@ -34,15 +34,22 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
  * ——只是每次刷新要重输一次 PIN。 */
 const TOKEN_KEY = "d1max-token";
 
+/* 现场加固：token 以**内存变量**为主。有的手机浏览器 reload 后 sessionStorage
+ * 读不回来，解锁后一 reload 就把 token 丢了、闪回登录页。配合 unlock() 改成
+ * 就地初始化(不 reload)，内存里这份就够用；sessionStorage 仍尽量写一份作备份。*/
+let memToken = "";
+
 function token() {
+  if (memToken) return memToken;
   try { return sessionStorage.getItem(TOKEN_KEY) || ""; } catch (_) { return ""; }
 }
 
 function setToken(value) {
+  memToken = value || "";
   try {
     if (value) sessionStorage.setItem(TOKEN_KEY, value);
     else sessionStorage.removeItem(TOKEN_KEY);
-  } catch (_) { /* 存不下就存不下，这一次会话照样能用 */ }
+  } catch (_) { /* 存不下就存不下，内存里那份照样能用 */ }
 }
 
 /** 给浏览器原生加载的 URL 挂上 token。
@@ -114,7 +121,11 @@ async function unlock() {
     return;
   }
   setToken(data.token);
-  location.reload();
+  // 就地初始化，不 reload。内存里的 token 立刻生效，SSE/画面/链接都靠
+  // withToken() 从内存读，不必靠重载来"带上新 token"。
+  $("lock").hidden = true;
+  $("lock-pin").value = "";
+  await boot();
 }
 
 /** 顶上那条红条。传空字符串收起来。 */
@@ -849,7 +860,8 @@ $("lock-pin").addEventListener("keydown", (ev) => {
  *
  * `refreshMapping` 不包 guard：guard 会把错误变成顶上一条红条，而 401 要的
  * 不是红条，是输 PIN 那一层。 */
-(async () => {
+let _booted = false;
+async function boot() {
   showTab("mapping");
   try {
     await refreshMapping();
@@ -857,8 +869,10 @@ $("lock-pin").addEventListener("keydown", (ev) => {
     if (err.status === 401) return;      // api() 已经把输 PIN 那层亮出来了
     banner(String(err.message || err));
   }
-  connect();
+  // connect() 每次开一条新 SSE；解锁后重进 boot 时别再叠一条。
+  if (!_booted) { _booted = true; connect(); }
   guard(refreshMissions)();
   guard(refreshRuns)();
   guard(refreshWhoami)();
-})();
+}
+boot();
