@@ -84,3 +84,21 @@ sshpass -p 1 ssh robot@192.168.168.100 'grep -niA3 -iE "extrinsic|T_imu|R_imu|li
 备选：跑 **LI-Init**（hku-mars/LiDAR_IMU_Init）自标定，需一段激励充分的运动录包（各轴都转一转）。
 **验证阶梯**：静止(轨迹≈0漂但不冻)→慢直线5m(位移≈5m、墙直)→慢转360°(回到起点附近)→整段。
 判据：轨迹**跨度合理(几米，非0.01也非上万)**、回到起点附近。
+
+## ★★ 修正与确证（2026-09-18 夜，经第二轮评审）
+- **acc 单位不用手动 ×9.81**：FAST-LIO(Ericsii fork)`IMU_Processing.hpp` 本就 `acc_avr = acc_avr*G_m_s2/mean_acc.norm()` 自动归一化（第260行）+ grav 归一（193行）。**已撤掉手加的 ×9.81。** 单位转换只能有一处。
+- **"不缩放冻结、缩放后飞11km" 的差异不是单位** → 指向**外参/时戳**（评审判断）。
+- **优先级**：① IMU-LiDAR 出厂外参 ② per-point 时戳 ③ 时间同步 ④ 单位 ⑤ 协方差。别先调协方差、别先 LI-Init。
+- **确证：竞争对手用固定外参**（nx_zg.yaml `estimate_extrinsic_flag: false`，无在线估计），extrinsic 来自 **Airy DIFOP 的 IMU_CALIB_DATA**（每台出厂标定：四元数 qx,qy,qz,qw + 平移 x,y,z）。
+- `/front_lidar/imu` 是**原始 IMU**（重力在 +Y、orientation=单位阵，未应用标定）→ 外参必须由我们提供。
+- 现场事实：前雷达 IP `192.168.1.200`（Orin 网卡 enx…27b4=192.168.1.102）；imu_port 6688、difop_port 7788；`use_lidar_clock: true`。
+
+### 拿 extrinsic 的可行路径（台式机做，二选一）
+1. **读 Airy DIFOP 出厂标定（首选，最准）**：给 rslidar_sdk/rs_driver 的 `decodeDifopPkt()` 加一行打印 `IMU_CALIB_DATA`（qx,qy,qz,qw,x,y,z），或按 RSAIRY DIFOP 协议偏移解一个 7788 端口的包。
+   - **注意**：DIFOP 给的是 `T_LiDAR_IMU`（IMU 相对 LiDAR），FAST-LIO 要 `T_IMU_LiDAR`（LiDAR 在 IMU 系）→ **必须求逆**：`R_I_L=R_L_Iᵀ, t_I_L=-R_L_Iᵀ·t_L_I`。
+   - 填进 rsairy.yaml：`extrinsic_est_en: false`, `extrinsic_R`(9), `extrinsic_T`(3)。
+2. **LI-Init 自标定**（备选）：hku-mars/LiDAR_IMU_Init，录一段各轴都激励的运动，估 R/T/时偏/重力/bias。
+
+### 验证阶梯（务必逐级，判据）
+静止30s(位移≈0不冻) → 慢直线3m(位移≈3m、墙直) → 原地转90°(xyz≈不变、yaw≈90°) → 才谈整段。
+**标好前 LIO 轨迹/图不可信**（实测：外参错→冻死0.01m 或 发散11000m）。
