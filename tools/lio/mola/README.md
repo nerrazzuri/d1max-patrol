@@ -22,11 +22,21 @@ Outputs in `out_dir`:
 
 Load the grid: `ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=out_dir/floor.yaml`
 
-### Occupancy method (commercial-style vs quick)
-By default the PGM is built by **ray-tracing** from each sensor pose (`render_floormap.py --traj traj.tum`):
-rays are cast to the walls and every traversed cell is marked free → **thin walls + filled interior**,
-matching commercial nav maps; cells never observed stay unknown (honest). Without `--traj` it falls
-back to a floor-point heuristic (more gray holes, thicker walls).
+### Occupancy method (log-odds ray-tracing)
+With `--traj traj.tum` the PGM uses **log-odds occupancy**: each cell counts wall-point "hits" vs
+ray "pass-throughs"; a cell is occupied only if hits are significant relative to pass-throughs
+(`occ>=5 & hits/(hits+passes)>0.25`). This gives **thin walls + filled free interior** AND removes
+**dynamic objects / transient clutter** (people, glass returns) that a raw point-count would wrongly
+mark occupied. Cells never observed stay unknown. Without `--traj` it falls back to a floor-point
+heuristic (more gray holes, thicker walls, no dynamic removal).
+
+### unified_occ.py — density-independent renderer for FAIR SLAM comparison
+`unified_occ.py <cloud.ply> <out.png>` renders occupancy that is **independent of point density**
+(3D voxel-dedup at `--vox` before rasterizing, occupied = ≥1 dedup point). Use it to compare two
+SLAM outputs fairly (same `--vox --res --zlo --zhi`), or as a **decoupled map generator** (feed it
+any SLAM's registered cloud). Lesson learned: raw-PGM occupancy-cell counts differ ~5× between GLIM
+and MOLA purely from each framework's internal downsampling — NOT a geometry difference; unified_occ
+shows they are actually comparable (~230k cells each on coverage2).
 
 Remaining gap to a polished commercial map is **coverage** (the robot must actually traverse the whole
 floor with continuous motion — no algorithm fills unvisited area; ray "fans" in the PGM mark wall gaps)
