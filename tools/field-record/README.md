@@ -42,14 +42,27 @@
 
 ---
 
-## 现场 preflight 清单(到办公室、连上狗后逐项过)
-1. [ ] 狗开机;`record_bag.sh` 的机器能 `ros2 topic echo /front_lidar --once` 收到点云
-2. [ ] **`/front_lidar/imu` 也收得到**(标定包命根子)
+## SDK 标定驱动:`calibrate_drive.py`(我控制那半)
+复用项目 `SidecarDeviceBackend` 的 `walk/stand/lie`,默认 dry-run,`--arm` 才动。
+```bash
+# 这台笔记本带去办公室。连上狗网络后(host 填 Orin IP):
+python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --dry-run          # 看计划
+python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --test             # 小步试(1拍前进+停)
+python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --measure-yaw      # 转5s测角速率→改 YAW_DEG_PER_S
+python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --arm --stand-lie  # 正式跑(另开终端先跑 record_bag.sh calib)
+```
+- **前提(关键)**:`acquire_control()` 只是**核对**旁路进程握着控制权;真正的 TakeControl 是**旁路进程在开机窗口抢的**。
+  所以 SDK 驱动前必须:**重启狗 + 旁路进程抢赢握手**(否则上装占着,acquire 抛错,当天走不了 SDK 这条)。
+- 安全:walk 有硬上限(≤10s,|amt|≤0.5),脚本再收紧到 ≤4s;全程 try/finally 兜底 halt;**你守硬急停**。
+
+## 现场 preflight 清单(笔记本带到办公室、连上狗网络后逐项过)
+1. [ ] 笔记本连上办公室网络 + 能到狗(`ping 192.168.168.100` / Orin;zenoh 路由通)
+2. [ ] `ros2 topic echo /front_lidar --once` 收到点云;**`/front_lidar/imu` 也收得到**(标定命根子)
 3. [ ] 磁盘 >5GB(笔记本 262G,够)
-4. [ ] app 在跑、能登录、`POST /api/control/acquire` 抢到租约(标定用)
-5. [ ] `walk` 控制量/死区实测:先 `forward=0.35` 一小拍,确认真走且方向对
-6. [ ] `stand`/`lie` 能不能通过(决定第 7 步 pitch 激励做不做)
-7. [ ] **先小幅试跑一遍标定动作**确认安全,你守硬急停,再正式录
-8. [ ] 录标定包:`./record_bag.sh calib` + 我跑 SDK 序列
-9. [ ] 录覆盖包:`./record_bag.sh coverage` + 你遥控走遍室内
-10. [ ] 两个包跑 MOLA 出图:`tools/lio/mola/make_floor_map.sh <bag> ...`;标定包另做 IMU-雷达外参
+4. [ ] **【标定专属】重启狗 + 旁路进程抢赢握手**;`calibrate_drive.py --host <IP> --dry-run` 能连、acquire 不报错
+5. [ ] `--test` 一小拍前进:确认真走、方向对、死区够(<0.3 不动)
+6. [ ] `--measure-yaw` 转 5s:从 /odom/current_pose 或 IMU 读角度,改 `YAW_DEG_PER_S`
+7. [ ] `stand`/`lie` 单独试一次能不能通(决定 `--stand-lie` 开不开;它是唯一 pitch/Z 激励)
+8. [ ] **录标定包**:终端A `./record_bag.sh calib`;终端B `calibrate_drive.py --host <IP> --arm --stand-lie`;你守急停
+9. [ ] **录覆盖包**:`./record_bag.sh coverage` + 你遥控走遍室内(慢、平顺、连续、回起点)
+10. [ ] 两个包跑 MOLA:`tools/lio/mola/make_floor_map.sh <bag> mola_out /front_lidar rslidar_head`;标定包另做 IMU-雷达外参
