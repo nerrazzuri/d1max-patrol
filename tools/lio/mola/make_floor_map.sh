@@ -9,7 +9,7 @@
 #
 # Prereqs: sudo apt install ros-humble-mola ros-humble-mola-lidar-odometry ros-humble-mola-input-rosbag2
 set -euo pipefail
-source /opt/ros/humble/setup.bash
+set +u; source /opt/ros/humble/setup.bash; set -u   # ROS setup.bash trips nounset (AMENT_TRACE_SETUP_FILES)
 
 BAG="${1:?need bag path}"
 OUT="${2:-./mola_out}"
