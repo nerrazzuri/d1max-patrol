@@ -13,7 +13,13 @@ TOPICS=(/front_lidar /front_lidar/imu /tf /tf_static)
 source /opt/ros/humble/setup.bash 2>/dev/null || { echo "无 /opt/ros/humble"; exit 1; }
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_zenoh_cpp}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-24}"
-[ -n "${ZENOH_ROUTER_CONFIG_URI:-}" ] && export ZENOH_ROUTER_CONFIG_URI
+# 默认指向仓库里的 zenoh 路由配置(笔记本连狗用);已在环境里设了就用你的
+if [ -z "${ZENOH_ROUTER_CONFIG_URI:-}" ]; then
+  for c in "$PWD/config/zenoh_router.json5" "$(dirname "$0")/../../config/zenoh_router.json5"; do
+    [ -f "$c" ] && export ZENOH_ROUTER_CONFIG_URI="$c" && break
+  done
+fi
+echo "ZENOH_ROUTER_CONFIG_URI=${ZENOH_ROUTER_CONFIG_URI:-<未设,Orin本机跑可忽略>}"
 
 mkdir -p "$OUT_ROOT"
 # 磁盘检查(前雷达 ~20MB/s,留足)
