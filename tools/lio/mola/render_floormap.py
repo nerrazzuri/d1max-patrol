@@ -69,6 +69,9 @@ def main():
     ap.add_argument("--res",type=float,default=0.05)
     ap.add_argument("--subsample",type=int,default=1)
     ap.add_argument("--max-range",type=float,default=12.0)
+    ap.add_argument("--traj-margin",type=float,default=12.0,help="drop obstacle pts farther than this (m) from trajectory -> removes far glass ghosts; 0=off")
+    ap.add_argument("--floor-clear",type=float,default=0.7,help="obstacle slab starts this high above floor -> skips robot's own body (removes trajectory-hugging ghost smear)")
+    ap.add_argument("--wall-top",type=float,default=1.8,help="obstacle slab top above floor")
     a=ap.parse_args()
     P=load_ply_xyz(a.ply,a.subsample)
     if len(P)==0: sys.exit("no points")
@@ -77,10 +80,25 @@ def main():
     e1=ref-up*(ref@up); e1/=np.linalg.norm(e1); e2=np.cross(up,e1)
     u=P@e1; v=P@e2; h=P@up
     hist,edges=np.histogram(h,bins=300); floor=edges[np.argmax(hist)]
-    wall=(h>floor+0.4)&(h<floor+2.0); flr=(h>floor-0.15)&(h<floor+0.25)
+    # obstacle slab: floor+floor_clear .. floor+wall_top. Starting ABOVE the robot
+    # body removes the dense ghost smear that hugs the trajectory (robot's own legs
+    # /near-field returns), while keeping walls+pillars (they span this height).
+    wall=(h>floor+a.floor_clear)&(h<floor+a.wall_top); flr=(h>floor-0.15)&(h<floor+0.25)
 
-    # ---- wall-slab floor plan PNG (thin ~1m band for crisp walls) ----
-    thin=(h>floor+0.9)&(h<floor+1.2)
+    # trajectory: load once; used for margin-crop (remove far glass ghosts) + raytrace
+    Traj=None
+    if a.traj:
+        Traj=np.loadtxt(a.traj)[:,1:4]; tu=Traj@e1; tv=Traj@e2
+        if a.traj_margin>0:
+            try:
+                from scipy.spatial import cKDTree
+                d,_=cKDTree(np.stack([tu,tv],1)).query(np.stack([u,v],1),k=1)
+                wall=wall&(d<a.traj_margin)
+            except Exception as ex:
+                print("  (traj-margin crop skipped: %s)"%ex)
+
+    # ---- wall-slab floor plan PNG ----
+    thin=wall
     uu,vv=u[thin],v[thin]
     W,H=1400,1500; img=Image.new("RGB",(W,H),"white"); px=img.load()
     umin,umax=np.percentile(uu,0.3),np.percentile(uu,99.7); vmin,vmax=np.percentile(vv,0.3),np.percentile(vv,99.7)
@@ -113,6 +131,31 @@ def main():
         gu2=((u[flr]-umn)/res).astype(int); gv2=((v[flr]-vmn)/res).astype(int)
         m2=(gu2>=0)&(gu2<Wc)&(gv2>=0)&(gv2<Hc); np.add.at(fre,(gv2[m2],gu2[m2]),1)
         free_m=fre>=1; method="floorpoint"
+
+    # clean the free space: rays that leak through undetected glass walls carve a
+    # thin "fan" of free cells outside the room. Morphological opening severs the
+    # thin neck, then keep only the largest connected free region -> drops the fan
+    # and isolated free blobs.
+    if a.traj:
+        try:
+            from scipy.ndimage import binary_opening, label as cc_label
+            fo=binary_opening(free_m, iterations=3)
+            lab,n=cc_label(fo)
+            if n>0:
+                sz=np.bincount(lab.ravel()); sz[0]=0
+                free_m=(lab==int(sz.argmax()))
+        except Exception as ex:
+            print("  (free-space cleanup skipped: %s)"%ex)
+
+    # keep only obstacles bordering the traversed (free) space -> drops floating
+    # exterior ghosts (glass reflections) while keeping the walls that bound where
+    # the robot actually went.
+    if a.traj:
+        try:
+            from scipy.ndimage import binary_dilation
+            occ_m = occ_m & binary_dilation(free_m, iterations=int(0.5/res))
+        except Exception as ex:
+            print("  (occ-near-free filter skipped: %s)"%ex)
 
     grid=np.full((Hc,Wc),205,np.uint8); grid[free_m]=254; grid[occ_m]=0
     obs=grid!=205; ys,xs=np.where(obs)
