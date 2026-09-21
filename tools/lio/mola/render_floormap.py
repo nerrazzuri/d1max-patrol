@@ -140,17 +140,13 @@ def main():
         free_m=(fre>=1)&~occ_m; method="floorpoint"
 
     # clean the free space: rays that leak through undetected glass walls carve a
-    # thin "fan" of free cells outside the room. Morphological opening severs the
-    # thin neck, then keep only the largest connected free region -> drops the fan
-    # and isolated free blobs.
+    # thin "fan" of free cells. Morphological OPENING removes thin lines/protrusions
+    # (the fan) while preserving broad free areas (rooms, and space behind the fan)
+    # -> only the thin fan line is dropped, everything broad stays.
     if a.traj:
         try:
-            from scipy.ndimage import binary_opening, label as cc_label
-            fo=binary_opening(free_m, iterations=3)
-            lab,n=cc_label(fo)
-            if n>0:
-                sz=np.bincount(lab.ravel()); sz[0]=0
-                free_m=(lab==int(sz.argmax()))
+            from scipy.ndimage import binary_opening
+            free_m=binary_opening(free_m, iterations=2)
         except Exception as ex:
             print("  (free-space cleanup skipped: %s)"%ex)
 
