@@ -44,10 +44,11 @@ def estimate_up(P):
     if np.median(P.dot(n)) < -best_d: n=-n
     return n/np.linalg.norm(n)
 
-def raytrace_free(occ_m, poses, max_r, n_ang=540):
-    """poses: Nx2 int (col,row). Returns bool free grid."""
-    Hc,Wc=occ_m.shape
-    free=np.zeros((Hc,Wc),bool)
+def raytrace_passes(occ_strong, poses, max_r, n_ang=540):
+    """poses: Nx2 int (col,row). Returns per-cell ray-pass count (log-odds 'miss' count).
+    Rays stop at occ_strong (walls). Cells traversed before a wall accumulate passes."""
+    Hc,Wc=occ_strong.shape
+    passes=np.zeros((Hc,Wc),np.int32)
     angs=np.linspace(0,2*np.pi,n_ang,endpoint=False); ca,sa=np.cos(angs),np.sin(angs)
     steps=np.arange(1,max_r)
     for px,py in poses:
@@ -56,11 +57,11 @@ def raytrace_free(occ_m, poses, max_r, n_ang=540):
         for r in range(n_ang):
             xr=xs[r][valid[r]]; yr=ys[r][valid[r]]
             if len(xr)==0: continue
-            hit=occ_m[yr,xr]
+            hit=occ_strong[yr,xr]
             stop=int(np.argmax(hit)) if hit.any() else len(xr)
-            free[yr[:stop],xr[:stop]]=True
-        if 0<=py<Hc and 0<=px<Wc: free[py,px]=True
-    return free
+            passes[yr[:stop],xr[:stop]]+=1
+        if 0<=py<Hc and 0<=px<Wc: passes[py,px]+=1
+    return passes
 
 def main():
     ap=argparse.ArgumentParser()
@@ -120,17 +121,23 @@ def main():
     occ=np.zeros((Hc,Wc),np.int32); fre=np.zeros((Hc,Wc),np.int32)
     gu=((u[wall]-umn)/res).astype(int); gv=((v[wall]-vmn)/res).astype(int)
     m=(gu>=0)&(gu<Wc)&(gv>=0)&(gv<Hc); np.add.at(occ,(gv[m],gu[m]),1)
-    occ_m=occ>=3
     if a.traj:
         pc=np.stack([((tu-umn)/res).astype(int),((tv-vmn)/res).astype(int)],1)
         key=(pc[:,0]//6)*100000+(pc[:,1]//6); _,idx=np.unique(key,return_index=True)
         poses=pc[np.sort(idx)]
-        free_m=raytrace_free(occ_m, poses, int(a.max_range/res))
-        method="raytrace"
+        # log-odds: rays stop at strong walls; cells rays pass through often are demoted to free.
+        # This removes dynamic objects / transient clutter (people, glass returns) that a raw
+        # point-count occupancy would wrongly mark occupied.
+        passes=raytrace_passes(occ>=3, poses, int(a.max_range/res))
+        ratio=occ/np.maximum(occ+passes,1)
+        occ_m=(occ>=5)&(ratio>0.25)
+        free_m=(passes>=1)&~occ_m
+        method="raytrace-logodds"
     else:
+        occ_m=occ>=3
         gu2=((u[flr]-umn)/res).astype(int); gv2=((v[flr]-vmn)/res).astype(int)
         m2=(gu2>=0)&(gu2<Wc)&(gv2>=0)&(gv2<Hc); np.add.at(fre,(gv2[m2],gu2[m2]),1)
-        free_m=fre>=1; method="floorpoint"
+        free_m=(fre>=1)&~occ_m; method="floorpoint"
 
     # clean the free space: rays that leak through undetected glass walls carve a
     # thin "fan" of free cells outside the room. Morphological opening severs the
