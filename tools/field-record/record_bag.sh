@@ -10,7 +10,7 @@ OUT_ROOT="${OUT_ROOT:-$HOME/d1max-bags}"
 TOPICS=(/front_lidar /front_lidar/imu /tf /tf_static)
 # 备(以后双雷达):/rear_lidar /rear_lidar/imu
 
-source /opt/ros/humble/setup.bash 2>/dev/null || { echo "无 /opt/ros/humble"; exit 1; }
+set +u; source /opt/ros/humble/setup.bash 2>/dev/null || { echo "无 /opt/ros/humble"; exit 1; }; set -u
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_zenoh_cpp}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-24}"
 # 默认指向仓库里的 zenoh 路由配置(笔记本连狗用);已在环境里设了就用你的
