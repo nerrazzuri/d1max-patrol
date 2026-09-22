@@ -18,11 +18,12 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from .release import Layout, installed
+from .release import SLOT_DATA_ITEMS, Layout, installed
 
 #: 服务单元设它;开发机不设。
 DATA_ROOT_ENV = "D1MAX_DATA_ROOT"
@@ -49,10 +50,8 @@ def resolve_paths(data_root: str | Path | None) -> DataPaths:
                      bags_dir=runs / "bags", missions_dir=base / "missions")
 
 
-#: 槽里要搬走的东西。跟 app/server.py 里 ``runs_root`` 及其兄弟位置的名字一致:
-#: ``QUEUE_FILE_NAME``、``BASELINE_DIR_NAME``、``EXPORTS_DIR_NAME``。
-SLOT_DATA_ITEMS = ("runs", "queue.jsonl", "baselines", "exports")
-#: 搬完在槽里留下的名字。release.prune 的保险只看 ``runs``,改了名它就不再拦。
+#: 搬完在槽里留下的名字。``release.prune`` 的保险看的是 ``SLOT_DATA_ITEMS``
+#: 那几个原名,改了名它就不再拦 —— 单一真理源在 ``release.py``,这里 import。
 MIGRATED_SUFFIX = ".migrated"
 
 
@@ -69,6 +68,10 @@ def migrate_slot_data(layout: Layout, data_root: Path) -> MigrationReport:
     搬完把槽里的源改名加 :data:`MIGRATED_SUFFIX`,所以第二次跑什么都不做。
     目标已有同路径文件时跳过(算进 ``skipped``),源照样改名 —— 那份留在
     ``*.migrated`` 里,人想核对随时能看。
+
+    **调用前提:没有任何进程还在往槽里写。** 装机脚本要先停掉服务再跑它 ——
+    服务还活着的话,它可能正往 ``queue.jsonl``/``runs/`` 里追加,搬到一半的
+    文件被这里当成"已完整"拷走,数据就裂开了。
     """
     data_root = Path(data_root)
     touched: list[str] = []
@@ -107,12 +110,27 @@ def _retire(src: Path, dest: Path) -> None:
 
 
 def _merge_into(src: Path, dst: Path) -> tuple[int, int]:
-    """``src``(文件或目录)并进 ``dst``:目标已有的文件不动。返回 (拷了, 跳过)。"""
+    """``src``(文件或目录)并进 ``dst``:目标已有的文件不动。返回 (拷了, 跳过)。
+
+    **类型对不上就不敢猜。** ``src`` 是目录而 ``dst`` 已经是个文件(或反过来)
+    说明数据根跟槽里的东西对不上 —— 两次迁移用了不同的 ``--data-root``,或者
+    有人手改过。这种局面没有安全的合并做法,只能报错让人来看,不能瞎猜一个
+    方向搬。
+
+    **合并开始前先清一遍上一轮崩溃剩下的 ``*.part``。** 不清的话它们会被
+    ``target.exists()`` 当成"已经在目标里"而被跳过,那份半截数据就永远留在
+    数据根里,而它本该被这一轮重新、完整地拷一遍。
+    """
+    if (src.is_dir() and dst.exists() and not dst.is_dir()) or (
+            src.is_file() and dst.is_dir()):
+        raise OSError(f"数据根里 {dst} 的类型跟槽里的 {src} 对不上"
+                      f"(一个是文件一个是目录),不敢合并")
+    _clean_stale_parts(dst)
     if src.is_file():
         if dst.exists():
             return 0, 1
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        _atomic_copy(src, dst)
         return 1, 0
     copied = skipped = 0
     for p in sorted(src.rglob("*")):
@@ -123,6 +141,29 @@ def _merge_into(src: Path, dst: Path) -> tuple[int, int]:
             skipped += 1
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(p, target)
+        _atomic_copy(p, target)
         copied += 1
     return copied, skipped
+
+
+def _clean_stale_parts(dst: Path) -> None:
+    """清掉 ``dst`` 底下(或者紧挨着它自己的)上一轮崩溃剩下的 ``*.part``。"""
+    if dst.is_dir():
+        for p in list(dst.rglob("*.part")):
+            if p.is_file():
+                p.unlink()
+        return
+    part = dst.parent / (dst.name + ".part")
+    if part.is_file():
+        part.unlink()
+
+
+def _atomic_copy(src: Path, dst: Path) -> None:
+    """把 ``src`` 拷到 ``dst``。**先拷到 ``.part`` 再 ``os.replace()`` 过去**,
+    中途死掉(盘满、断电)不会在 ``dst`` 留下一个看着拷完了、其实是半截的文件
+    —— 那种半截文件会被下一轮的 ``target.exists()`` 当成"已经搬完",永远不
+    会被补全。
+    """
+    part = dst.with_name(dst.name + ".part")
+    shutil.copy2(src, part)
+    os.replace(part, dst)

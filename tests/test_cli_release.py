@@ -271,6 +271,25 @@ def test_migrate_data默认数据根读环境变量(tmp_path, monkeypatch):
     assert (data / "queue.jsonl").read_text(encoding="utf-8") == "x\n"
 
 
+def test_migrate_data合并出错时退非零而且提示搬迁失败(tmp_path, capsys):
+    """数据根撞上类型不对的东西(这里让它本身就是个文件)—— 合并没法进行,
+    要退非零、错误落 stderr,不能裸抛一坨 traceback。"""
+    root = tmp_path / "opt"
+    data = tmp_path / "var"
+    data.write_text("我是个文件,不是目录", encoding="utf-8")
+    layout = Layout(root=root)
+    layout.releases.mkdir(parents=True)
+    stage(layout, _pkg(tmp_path / "pkg", "2026-09-20-77b2de"), now_ms=NOW)
+    slot = layout.releases / "2026-09-20-77b2de"
+    (slot / "queue.jsonl").write_text("x\n", encoding="utf-8")
+
+    assert main(["release", "migrate-data", "--root", str(root),
+                 "--data-root", str(data)]) == 2
+
+    err = capsys.readouterr().err
+    assert "搬迁失败" in err
+
+
 def test_release_root默认取opt_d1max(monkeypatch):
     """三级优先级(--root > D1MAX_RELEASE_ROOT > /opt/d1max)只测过前两级。
 

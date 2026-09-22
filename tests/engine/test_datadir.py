@@ -100,6 +100,28 @@ def test_重跑是幂等的(tmp_path):
     assert report.copied == 0 and report.slots == ()
 
 
+def test_目标里残留的半截拷贝会被清掉重新拷(tmp_path):
+    """上一轮在拷 ``manifest.json`` 的路上断了电,只留下一个 ``.part``。
+
+    这份半截文件不能被当成"已经搬完"而跳过 —— 得先清掉,这一轮重新、
+    完整地拷一遍。
+    """
+    root = tmp_path / "opt"
+    data = tmp_path / "var"
+    a = _slot(root, "2026-09-01-aaaaaa")
+    (a / "runs" / "r1").mkdir(parents=True)
+    (a / "runs" / "r1" / "manifest.json").write_text("real", encoding="utf-8")
+    (data / "runs" / "r1").mkdir(parents=True)
+    (data / "runs" / "r1" / "manifest.json.part").write_text(
+        "垃圾半截", encoding="utf-8")
+
+    migrate_slot_data(Layout(root=root), data)
+
+    assert not (data / "runs" / "r1" / "manifest.json.part").exists()
+    assert (data / "runs" / "r1" / "manifest.json").read_text(
+        encoding="utf-8") == "real"
+
+
 def test_源改名撞上已有的部分搬迁结果时并进去而不是报错(tmp_path):
     """上一趟跑到一半就断了:``runs.migrated`` 已经在,``runs`` 也还在。
 

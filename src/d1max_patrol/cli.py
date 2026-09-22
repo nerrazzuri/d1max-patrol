@@ -175,7 +175,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="开机守卫:连着两次开机还挂着在途标记就退回去"))
     p_mig = rel_sub.add_parser(
         "migrate-data",
-        help="把版本槽里的巡检数据搬到数据根(W01;装机脚本在重启服务前调它)")
+        help="把版本槽里的巡检数据搬到数据根"
+             "(W01;装机脚本在停掉服务之后、起新版之前调它)")
     _root_arg(p_mig)
     p_mig.add_argument("--data-root", default=None,
                        help=f"数据根,默认取 ${DATA_ROOT_ENV} 或 {DEFAULT_DATA_ROOT}")
@@ -579,9 +580,18 @@ def _cmd_release(args: argparse.Namespace) -> int:
         return 0
 
     if args.release_command == "migrate-data":
+        raw = (args.data_root or "").strip()
         env = os.environ.get(DATA_ROOT_ENV, "").strip()
-        data_root = Path(args.data_root or env or DEFAULT_DATA_ROOT)
-        report = migrate_slot_data(layout, data_root)
+        data_root = Path(raw or env or DEFAULT_DATA_ROOT)
+        if os.geteuid() == 0:
+            print("注意:正以 root 跑搬迁,拷出来的文件会归 root;"
+                  "服务用户以后可能删不掉。装机脚本是用服务用户跑它的。",
+                  file=sys.stderr)
+        try:
+            report = migrate_slot_data(layout, data_root)
+        except (ReleaseError, OSError) as exc:
+            print(f"搬迁失败:{exc}", file=sys.stderr)
+            return 2
         print(f"数据根   : {data_root}")
         print(f"搬过的槽 : {', '.join(report.slots) or '(没有要搬的)'}")
         print(f"拷了 {report.copied} 个文件,跳过 {report.skipped} 个(目标已有)")

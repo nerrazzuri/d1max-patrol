@@ -47,9 +47,10 @@ MANIFEST_NAME = "release.json"
 
 #: 盘上留几份。理由见模块开头:第三份只占盘。
 KEEP_RELEASES = 2
-#: 槽里这个目录非空就说明还有巡检数据 —— W01 之前的机器数据就落在槽里。
-#: prune 见到它不删。名字跟 datadir.resolve_paths 里 ``runs`` 一致。
-SLOT_DATA_DIR = "runs"
+#: 槽里这几样东西里任一样还有数据,就说明还有巡检数据 —— W01 之前的机器
+#: 数据就落在槽里。prune 见到就不删。也是 ``datadir.migrate_slot_data`` 要
+#: 搬走的那几样(``datadir`` 从这里 import,单一真理源在这儿)。
+SLOT_DATA_ITEMS = ("runs", "queue.jsonl", "baselines", "exports")
 #: 守卫数到这个数还没等到「自检过了」,就判新版起不来,回滚。
 #: 2 而不是 1:第一次开机可能撞上别的偶发(网卡没起来、盘没挂上),给一次机会。
 MAX_BOOT_ATTEMPTS = 2
@@ -671,8 +672,9 @@ def prune(layout: Layout, *, keep: int = KEEP_RELEASES) -> tuple[str, ...]:
     确实该删 —— 但「大多数时候」在这儿不够:回滚之后在跑的正是较旧的那一版,
     照名字删就把脚下的地板抽了。
 
-    **槽里还有巡检数据也绝不删。** W01 之前的机器数据落在槽里的 ``runs/``
-    下,迁完之后这里应该是空的 —— 空不了就说明没迁干净,删了数据就没了。
+    **槽里还有巡检数据也绝不删。** W01 之前的机器数据落在槽里的
+    ``SLOT_DATA_ITEMS`` 那几样底下,迁完之后应该都空了 —— 还有任何一样没空,
+    就说明没迁干净,删了数据就没了。
     """
     pending = read_pending(layout)
     protected = {current_name(layout)}
@@ -698,11 +700,20 @@ def prune(layout: Layout, *, keep: int = KEEP_RELEASES) -> tuple[str, ...]:
 
 
 def _has_slot_data(slot: Path) -> bool:
-    """``<槽>/runs`` 底下还有任何文件吗。空目录不算。"""
-    runs = slot / SLOT_DATA_DIR
-    if not runs.is_dir():
-        return False
-    return any(p.is_file() for p in runs.rglob("*"))
+    """``SLOT_DATA_ITEMS`` 里任一样还有数据吗:非空文件,或者装着文件的目录。
+
+    ``runs/`` 被手动删掉、但 ``baselines/``、``exports/`` 或 ``queue.jsonl``
+    还在的槽也要算 —— 只看 ``runs`` 会让这几样跟着被 ``rmtree`` 一起没了。
+    """
+    for item in SLOT_DATA_ITEMS:
+        p = slot / item
+        if p.is_file():
+            if p.stat().st_size > 0:
+                return True
+            continue
+        if p.is_dir() and any(q.is_file() for q in p.rglob("*")):
+            return True
+    return False
 
 
 def _healthy(layout: Layout) -> bool:

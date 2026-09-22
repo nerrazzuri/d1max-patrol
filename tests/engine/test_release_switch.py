@@ -201,6 +201,20 @@ def test_槽里还有巡检数据就不删(tmp_path, caplog):
     assert "还有巡检数据" in caplog.text
 
 
+def test_槽里只有queue_jsonl也不删(tmp_path):
+    """``SLOT_DATA_ITEMS`` 覆盖四样,不止 ``runs``:``runs/`` 被手动删掉、但
+    ``queue.jsonl`` 还在的槽,一样不能被当成"已经迁完"删掉。"""
+    layout = _layout(tmp_path)
+    for name in ("2026-09-01-aaaaaa", "2026-09-06-a3f9c1", "2026-09-20-77b2de"):
+        stage(layout, _pkg(tmp_path / name, name), now_ms=NOW)
+    (layout.releases / "2026-09-01-aaaaaa" / "queue.jsonl").write_text(
+        '{"k":1}\n', encoding="utf-8")
+    activate(layout, "2026-09-20-77b2de", now_ms=NOW)
+    dropped = commit(layout)
+    assert dropped == ()
+    assert "2026-09-01-aaaaaa" in installed(layout)
+
+
 def test_槽里runs目录是空的照删(tmp_path):
     layout = _layout(tmp_path)
     for name in ("2026-09-01-aaaaaa", "2026-09-06-a3f9c1", "2026-09-20-77b2de"):
