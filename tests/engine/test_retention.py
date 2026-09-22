@@ -26,6 +26,7 @@ from d1max_patrol.engine.retention import (
     mark_exported,
     mark_uploaded,
     scan_runs,
+    unmark_uploaded,
 )
 
 NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -208,3 +209,13 @@ def test_超了水位要腾到目标线以下():
 
 def test_盘是空的不会去除以零():
     assert bytes_to_free(used_bytes=0, total_bytes=0) == 0
+
+
+def test_unmark_uploaded_撤掉标记_没有也不报错(tmp_path):
+    """W03:「可删」不再是永不撤销的。报告被改写重新入队时,标记要收回。"""
+    run = tmp_path / "巡检一" / "20260911T101500Z"
+    run.mkdir(parents=True)
+    mark_uploaded(run)
+    assert unmark_uploaded(run) is True
+    assert not (run / UPLOADED_REL).exists()
+    assert unmark_uploaded(run) is False

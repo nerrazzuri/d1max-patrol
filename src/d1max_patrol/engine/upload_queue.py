@@ -50,6 +50,11 @@ _EXACT: dict[str, int] = {
     # 没有它,服务器上那堆事件不知道是哪一趟、哪台机器、哪个版本产生的。
     "manifest.json": PRIORITY_EVENTS,
     "report.md": PRIORITY_PHOTO,
+    "report.html": PRIORITY_PHOTO,
+    # 判读结论与人工复核。**没有它们,服务器上那堆照片不知道谁判过、判成什么**——
+    # W03 之前这三份只在狗上有一份,保留策略删掉整趟就没了。
+    "findings.json": PRIORITY_EVENTS,
+    "review.json": PRIORITY_EVENTS,
     "telemetry.jsonl": PRIORITY_TELEMETRY,
 }
 

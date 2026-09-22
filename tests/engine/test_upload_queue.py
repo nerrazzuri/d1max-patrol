@@ -26,6 +26,9 @@ from d1max_patrol.engine.upload_queue import (
         ("manifest.json", PRIORITY_EVENTS),
         ("photos/P1__front__20260911T101500Z.jpg", PRIORITY_PHOTO),
         ("report.md", PRIORITY_PHOTO),
+        ("report.html", PRIORITY_PHOTO),
+        ("findings.json", PRIORITY_EVENTS),
+        ("review.json", PRIORITY_EVENTS),
         ("telemetry.jsonl", PRIORITY_TELEMETRY),
     ],
 )
@@ -293,3 +296,11 @@ def test_wire_往返_带mtime() -> None:
     it = QueueItem(key="k", priority=1, size=3, mtime_ns=42)
     assert QueueItem.from_wire(it.to_wire()) == it
     assert QueueItem.from_wire({"key": "k", "priority": 1}).mtime_ns == 0
+
+
+def test_改写型文件都在白名单里_不许只进一张表() -> None:
+    """W02 定的规矩:会被原地改写的文件必须同时进 REWRITTEN_IN_PLACE 和 _EXACT。
+    只进前者 = 判得出改写却根本不入队(W03 之前 findings/review/report.html 就是这样)。"""
+    from d1max_patrol.engine.upload_queue import REWRITTEN_IN_PLACE
+    for name in REWRITTEN_IN_PLACE:
+        assert classify(name) is not None, name

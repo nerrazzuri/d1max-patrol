@@ -389,3 +389,30 @@ def test_判读接口把基线目录交下去了(server, 三趟, monkeypatch):
     run_id = f"巡检二号__{_NEW}"
     got = C.get_json(server, _q(f"/api/runs/{run_id}/judge"), method="POST")
     assert len(got["findings"]) == 2
+
+
+def test_清盘方案跳过队列里还没传完的那趟_哪怕标记还挂着(server, 三趟, tmp_path):
+    """W03 第二道闸走到路由:``.uploaded`` 在、但活队列里这趟还有没 done 的,
+    方案里不许出现它。"""
+    from types import SimpleNamespace
+
+    from d1max_patrol.engine.retention import mark_uploaded
+    from d1max_patrol.engine.upload_queue import PRIORITY_PHOTO, UploadQueue
+    runs_root = Path(三趟.runs_root)
+    run = sorted(runs_root.glob("巡检一号/*"))[0]
+    mark_uploaded(run)
+    code, got = _sweep(server, {"free_bytes": 10**9})
+    assert code == 200
+    assert any(str(run) in d["path"] or run.name in d["path"] for d in got["sweep"]["delete"]), \
+        f"对照组:标了可删就该在方案里 {got['sweep']}"
+    q = UploadQueue(tmp_path / "q.jsonl")
+    rel = run.relative_to(runs_root).as_posix()
+    q.offer(f"{rel}/report.md", PRIORITY_PHOTO, size=1, mtime_ns=1)
+    三趟.upload = SimpleNamespace(queue=q)
+    try:
+        code, got = _sweep(server, {"free_bytes": 10**9})
+        assert code == 200
+        assert not any(run.name in d["path"] for d in got["sweep"]["delete"]), got["sweep"]
+    finally:
+        q.close()
+        三趟.upload = None

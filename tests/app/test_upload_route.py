@@ -39,10 +39,11 @@ from d1max_patrol.engine import retention
 from d1max_patrol.engine.retention import (
     SETTLE_HOURS,
     UPLOADED_REL,
+    mark_uploaded,
     plan_sweep,
     scan_runs,
 )
-from d1max_patrol.engine.upload_queue import UploadQueue
+from d1max_patrol.engine.upload_queue import PRIORITY_PHOTO, UploadQueue
 from d1max_patrol.engine.uploader import PutReceipt, Uploader
 
 from .conftest import get_json, make_ctx, request
@@ -565,3 +566,66 @@ def test_一趟打标真出错_排在后面那趟这一拍照样轮得上_而且
     assert not (老 / UPLOADED_REL).exists()
     assert (新 / UPLOADED_REL).exists(), \
         "老那一趟出事, 把排在它后面的新那一趟这一拍挤掉了"
+
+
+def test_已标可删的一趟_报告重写重开后标记被撤掉_传完再打回(tmp_path: Path):
+    """W03。W02 让同大小改写的 report.md 重新入队;这时 ``.uploaded`` 若还挂着,
+    水位线会在重传完成前把整趟删掉。所以「可删」要跟着队列走:有没传完的就撤,
+    全传完再打。
+
+    文件很小,一拍就能重传完 —— 所以中间那段用一个**断网的**服务器把它卡在
+    队列里,好看清"重开了、标记撤了"这个中间态。
+    """
+    import os
+
+    from d1max_patrol.engine.uploader import SinkError
+
+    class 断网的服务器:
+        def put(self, req):
+            raise SinkError("断网了")
+
+    run = 摆一趟(tmp_path, "report.md")
+    收工(run)
+    钟 = [0]
+    pump, q = 装一台(tmp_path, 钟)
+    好的 = pump._up.sink
+    pump.tick()
+    传到收工(pump)
+    assert (run / UPLOADED_REL).exists(), "前提:传完、收工,标记打上了"
+
+    p = run / "report.md"
+    p.write_bytes(b"NEW" + b"x" * (p.stat().st_size - 3))        # 同样大小
+    st = p.stat()
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    pump._up.sink = 断网的服务器()
+    pump._next_scan_ms = 0                                        # 逼下一拍重扫
+    pump.tick()
+    item = q.get(f"{RUN_REL}/report.md")
+    assert (item.done, item.offset) == (False, 0), "W02:重新入队、从 0 传"
+    assert not (run / UPLOADED_REL).exists(), "W03:标记被撤了"
+
+    pump._up.sink = 好的
+    钟[0] += 600_000                                              # 跨过退避
+    传到收工(pump)
+    assert q.get(f"{RUN_REL}/report.md").done is True
+    assert (run / UPLOADED_REL).exists(), "重传完、收工,标记回来了"
+
+
+def test_清盘看的是活队列_标记还在但有没传完的也不算已传(tmp_path: Path):
+    """闸的第二道:就算 ``.uploaded`` 还没来得及撤(scan 与撤标之间有一拍的窗),
+    水位线拿方案的时候要问一遍队列。"""
+
+    from d1max_patrol.app.server import _mask_uploaded_by_queue
+    from d1max_patrol.engine.retention import scan_runs
+    run = 摆一趟(tmp_path, "report.md")
+    收工(run)
+    mark_uploaded(run)
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    infos = scan_runs(tmp_path / "runs")
+    assert len(infos) == 1 and infos[0].uploaded is True
+    assert _mask_uploaded_by_queue(infos, tmp_path / "runs", q)[0].uploaded is True
+    q.offer(f"{RUN_REL}/report.md", PRIORITY_PHOTO, size=10, mtime_ns=1)
+    assert _mask_uploaded_by_queue(infos, tmp_path / "runs", q)[0].uploaded is False
+    q.finish(f"{RUN_REL}/report.md")
+    assert _mask_uploaded_by_queue(infos, tmp_path / "runs", q)[0].uploaded is True
+    q.close()

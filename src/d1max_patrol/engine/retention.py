@@ -250,6 +250,22 @@ def mark_uploaded(run_dir: Path | str) -> Path:
     return path
 
 
+def unmark_uploaded(run_dir: Path | str) -> bool:
+    """收回「服务器上还有一份」。返回原来有没有标记。
+
+    W03 之前这个标记**永不撤销**。W02 让被原地改写的报告重新入队之后,这就成了
+    洞:标记还挂着,水位线在重传完成前把整趟 ``rmtree`` 掉,改过的结论两头都没了。
+    写入者跟 :func:`mark_uploaded` 是同一个(``app/server.py`` 那条「该打可删了吗」),
+    它看到这一趟在队列里又有没传完的,就调这里收回。
+    """
+    path = Path(run_dir) / UPLOADED_REL
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def mark_exported(run_dir: Path | str) -> Path:
     """标成"**客户手里**还有一份"。由 ``export.confirm_bundle`` 打上。
 

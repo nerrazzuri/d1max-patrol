@@ -201,6 +201,7 @@ from d1max_patrol.engine.removable import (
 )
 from d1max_patrol.engine.retention import (
     UPLOADED_REL,
+    RunInfo,
     apply_sweep,
     bytes_to_free,
     forecast,
@@ -209,6 +210,7 @@ from d1max_patrol.engine.retention import (
     plan_sweep,
     read_notice,
     scan_runs,
+    unmark_uploaded,
     write_notice,
 )
 from d1max_patrol.engine.schedule import (
@@ -865,13 +867,38 @@ def _该打可删了吗(runs_root: Path, queue: UploadQueue, run_rel: str) -> No
     # ``Uploader._missing()`` 第 1 分支一致:**不销账、不打标**,等盘回来。
     if not run.is_dir():
         return
-    if (run / UPLOADED_REL).exists():
-        return
     if any(i.key.startswith(f"{run_rel}/") and not i.done for i in queue.all()):
+        # **有没传完的就不许挂着「可删」** —— 包括已经挂上去的。W02 让被原地
+        # 改写的报告重新入队,这时标记若还在,水位线会在重传完成前把整趟删掉
+        # (W03)。撤了之后全传完会走下面那条再打回来。
+        unmark_uploaded(run)
+        return
+    if (run / UPLOADED_REL).exists():
         return
     if not is_settled(run):
         return
     mark_uploaded(run)
+
+
+def _mask_uploaded_by_queue(runs: list[RunInfo], runs_root: Path,
+                            queue: UploadQueue) -> list[RunInfo]:
+    """水位线拿方案之前再问一遍活队列:标记说传完了、队列说还有没 done 的,
+    **听队列的**。这是「该打可删了吗」撤标之外的第二道闸 —— ``scan()`` 重开
+    条目到 ``_补打可删`` 撤标之间隔着一拍,清盘请求正好落进来的话,盘上的标记
+    还是旧的。
+    """
+    pending = {_run_rel(i.key) for i in queue.all() if not i.done}
+    if not pending:
+        return runs
+    root = Path(runs_root)
+    out: list[RunInfo] = []
+    for info in runs:
+        try:
+            rel = info.path.relative_to(root).as_posix()
+        except ValueError:
+            rel = ""
+        out.append(replace(info, uploaded=False) if info.uploaded and rel in pending else info)
+    return out
 
 
 def _run_finished(runs_root: Path, queue: UploadQueue, key: str) -> None:
@@ -3033,7 +3060,10 @@ class AppServer:
             need = raw
         else:
             raise HttpError(400, "free_bytes 要是个整数", repr(raw))
-        sweep = plan_sweep(scan_runs(ctx.runs_root, now=now), now=now,
+        runs = scan_runs(ctx.runs_root, now=now)
+        if ctx.upload is not None:
+            runs = _mask_uploaded_by_queue(runs, Path(ctx.runs_root), ctx.upload.queue)
+        sweep = plan_sweep(runs, now=now,
                            has_upload=ctx.form.has_upload, need_bytes=need,
                            noticed=read_notice(ctx.runs_root))
         applied = bool(body.get("apply"))

@@ -29,9 +29,14 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from d1max_patrol.engine.upload_queue import backoff_ms
 from d1max_patrol.engine.uploader import Step, Uploader
+
+if TYPE_CHECKING:
+    from d1max_patrol.engine.upload_queue import UploadQueue
+
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +104,11 @@ class UploadPump:
         self._on_scan = on_scan
 
     # ---- 一步 ----
+
+    @property
+    def queue(self) -> UploadQueue:
+        """活队列。清盘那条路由要拿它核一遍「可删」(见 server._mask_uploaded_by_queue)。"""
+        return self._up.queue
 
     def tick(self) -> Step:
         """走一步。**所有测试打的都是这个方法** —— 一个测试都不许 sleep 等线程。
