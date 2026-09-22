@@ -273,16 +273,18 @@ def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机�
     """release activate 撞见"已经是在跑的这一版"会报错退出(cli.py 把
 
     ReleaseError 变成 exit 2,install.sh 有 set -euo pipefail),脚本会
-    就地中止,restart 走不到——而 restart 正是"填完 SN 让它生效"的唯一
-    手段。这里断言的是跳过切换那个具体分支的形状,不是裸查 "readlink"
-    这种在别处也可能出现的字符串。
+    就地中止,stop/start 走不到——而它们正是"填完 SN 让它生效"的唯一
+    手段(W01 之后,重跑顺带把老槽的数据搬到 /var/lib/d1max,所以中间多了
+    一步 migrate-data,不再是单条 restart)。这里断言的是跳过切换那个具体
+    分支的形状,不是裸查 "readlink" 这种在别处也可能出现的字符串。
     """
     assert 'basename "$(readlink -f "$ROOT/current"' in 装机脚本
     assert '"$CURRENT_REL" == "$REL_NAME"' in 装机脚本
     assert "已经是在跑的那一版了,跳过切换" in 装机脚本
-    # restart 不能被套进上面那个分支里 —— 顶格(不缩进)才说明它在
+    # stop 和 start 都不能被套进上面那个分支里 —— 顶格(不缩进)才说明它们在
     # if/else 的 fi 之后,两条路都会走到,不是只有切换成功那一路才走。
-    assert "\nsystemctl restart d1max-patrol.service" in 装机脚本
+    assert "\nsystemctl stop d1max-patrol.service || true" in 装机脚本
+    assert "\nsystemctl start d1max-patrol.service" in 装机脚本
 
 
 # --------------------------------------------------- fix2: 第 4 卷终评 A 组
@@ -362,7 +364,8 @@ def test_装机脚本在PIN空着时停下来而不是把机器丢进启动循�
 
     **必定**起不来。让它崩成每 5 秒一条日志的启动循环,比停下来喊一声糟得多
     —— 现场看到的是一堵日志墙。所以这里断言的是三样具体的东西:判据、
-    ``exit 3``、以及它排在 ``systemctl restart`` **之前**。
+    ``exit 3``、以及它排在 ``systemctl start``(W01 之前是 ``restart``)
+    **之前**。
     """
     # 判据测的是**解析出来的值**,不是「文件里有没有一行长这样」。
     # 原来这里是 grep -qE '^D1MAX_PIN=.+',而 `D1MAX_PIN=   `(尾随空格)
@@ -372,7 +375,7 @@ def test_装机脚本在PIN空着时停下来而不是把机器丢进启动循�
     assert '[[ -z "${D1MAX_PIN_VALUE//[[:space:]]/}" ]]' in 装机脚本
     assert "exit 3" in 装机脚本
     assert (装机脚本.index("exit 3")
-            < 装机脚本.index("\nsystemctl restart d1max-patrol.service"))
+            < 装机脚本.index("\nsystemctl start d1max-patrol.service"))
 
 
 def test_装机清单里有记PIN那一条():
@@ -825,7 +828,7 @@ def test_装机清单说清了要跑两趟(装机脚本):
     assert "跳过切换" in 清单 and "无条件" in 清单
     # 脚本那一侧的两个形状是这条路子成立的前提,一起钉住。
     assert "已经是在跑的那一版了,跳过切换" in 装机脚本
-    assert "\nsystemctl restart d1max-patrol.service" in 装机脚本
+    assert "\nsystemctl start d1max-patrol.service" in 装机脚本
 
 
 def test_装机清单把记上装挪到服务起来之后():
@@ -1134,3 +1137,26 @@ def test_内部安全说明里那句一百万种也跟着位数走():
         assert PIN_位数 == 6, (
             "内部安全说明里还写着「一百万种」,而 PIN 位数已经不是 6 了 —— "
             f"{PIN_位数} 位是 10 的 {PIN_位数} 次方种,那一段要重写")
+
+
+# ---------------------------------------------------------- W01:数据根
+
+def test_装机脚本建数据根并在停服务后起新版前把老槽的数据搬过去(装机脚本):
+    """W01。目录归 robot,不然服务写不进去。迁移必须在服务**停着**的时候跑:
+    老版本还活着就可能正往槽里的 queue.jsonl / runs/ 追加,搬到一半的文件会被
+    当成已完整拷走。所以顺序是 stop → migrate-data → start,不是 migrate → restart。"""
+    assert re.search(r'mkdir -p .*"/var/lib/d1max"', 装机脚本)
+    assert 'chown -R "$RUN_USER":"$RUN_USER" "/var/lib/d1max"' in 装机脚本
+    stop = 装机脚本.index("systemctl stop d1max-patrol.service")
+    mig = 装机脚本.index("release migrate-data")
+    start = 装机脚本.index("systemctl start d1max-patrol.service")
+    assert stop < mig < start
+    assert "systemctl restart d1max-patrol.service" not in 装机脚本
+
+
+def test_卸载脚本默认删数据根而keep_data留着():
+    text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /var/lib/d1max" in text
+    assert "# @保留 /var/lib/d1max" in text
+    assert 'rm_sys "/var/lib/d1max"' in text
+    assert "/var/lib/d1max|/var/lib/d1max/*)" in text

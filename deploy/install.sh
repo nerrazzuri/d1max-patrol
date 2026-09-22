@@ -15,12 +15,13 @@ set -euo pipefail
 # 加写盘动作的人请同时加这里的一行。**漏了就是卸载卸不干净。**
 #
 # @写盘 /opt/d1max                                                       根目录(下面那条 mkdir -p 建的)
-# @写盘 /opt/d1max/releases                                              版本槽,巡检数据也落在槽里
+# @写盘 /opt/d1max/releases                                              版本槽(只有代码和 venv;巡检数据在 /var/lib/d1max)
 # @写盘 /opt/d1max/bin                                                   跟版本无关的解释器 wrapper
 # @写盘 /opt/d1max/bin-venv                                              上面那个解释器的 venv
 # @写盘 /opt/d1max/current                                               release activate 摆的版本链
 # @写盘 /opt/d1max/bundles                                               任务包目录,服务跑起来后落在根下
 # @写盘 /opt/d1max/pending.json                                          在途升级标记,同上
+# @写盘 /var/lib/d1max                                                   巡检数据根(runs、上传队列、基线、导出),升级回滚都不碰它
 # @写盘 /etc/d1max                                                       配置目录
 # @写盘 /etc/d1max/env                                                   设备 PIN 在这个文件里
 # @写盘 /etc/systemd/system/d1max-patrol.service                         install -m 0644 摆进去的单元
@@ -133,9 +134,13 @@ if ! id -u "$RUN_USER" >/dev/null 2>&1; then
   exit 2
 fi
 
-say "1/7 建目录 $ROOT"
+say "1/7 建目录 $ROOT 和数据根 /var/lib/d1max"
 mkdir -p "$ROOT/releases" "$ROOT/bin"
 chown -R "$RUN_USER":"$RUN_USER" "$ROOT"
+# **巡检数据根,在版本槽外面。** 服务单元的 Environment=D1MAX_DATA_ROOT 指着它,
+# uninstall.sh 默认删、--keep-data 留。路径写死,理由跟 $ROOT 一样:单元里是字面量。
+mkdir -p "/var/lib/d1max"
+chown -R "$RUN_USER":"$RUN_USER" "/var/lib/d1max"
 
 say "2/7 装一个跟版本无关的解释器到 $ROOT/bin"
 # 守卫要用它。**它不能在任何一版目录里** —— 版本坏了,救生索还得在。
@@ -188,7 +193,7 @@ fi
 # PEP 517 的构建隔离每一次都要现拉一份 setuptools —— 于是重跑必联网。
 # 而重跑正是现场"填完 SN 让它生效"的唯一路子(见 7/7):离线现场跑第二趟
 # 忘了带 D1MAX_PIP_ARGS=,就会挂死在 2/7(pip 默认 5 次重试、每次 15 秒),
-# 现场看到的是"装到一半不动了",set -e 中止,连 restart 都不跑,SN 永远不生效。
+# 现场看到的是"装到一半不动了",set -e 中止,连 stop/start 都不跑,SN 永远不生效。
 # 所以照 4/7 那个哨兵的形状给根下的 venv 也加一个,讲究完全一样:
 # **哨兵在最后一行才落**,它在就等于这个包的依赖在根 venv 里装齐了。
 # 哨兵里存的是版本名:换一版,内容对不上,照样重装 —— 升级路径不受影响。
@@ -223,7 +228,7 @@ SLOT="$ROOT/releases/$REL_NAME"
 # **幂等的门看哨兵,不看解释器在不在。** python3 -m venv 一跑完,
 # <槽>/venv/bin/python 就存在且可执行 —— 此后 pip 装到哪一步断掉(网断、
 # 盘满、Ctrl+C),重跑都会判"已经建过了"把整段跳过,留下一个解释器在、
-# 依赖不全的槽。脚本接着走到 7/7 restart,ExecStart 指的正是这个解释器,
+# 依赖不全的槽。脚本接着走到 7/7 start,ExecStart 指的正是这个解释器,
 # ImportError + Restart=always + RestartSec=5 就是一堵日志墙。这正是脚本
 # 开头那句"可以重跑"的反面。
 # 哨兵**在依赖装完之后才落**,它在,就等于这一版的依赖装齐了。
@@ -322,7 +327,7 @@ D1MAX_CONSOLE_TOKEN=
   echo "  手机 app 第一次连这台机器要输它。**记进现场登记表**,屏幕关了就找不回来了"
   echo "  (还能在机器上看:sudo grep D1MAX_PIN /etc/d1max/env)。"
   echo "  想换成好记的:编辑 /etc/d1max/env 里的 D1MAX_PIN= 那一行,再"
-  echo "  sudo systemctl restart d1max-patrol.service。"
+  echo "  sudo systemctl restart d1max-patrol(只改了 PIN,不用跑这个脚本、不用搬数据)。"
 fi
 # **老机器重跑一次也要被收紧。** 上面那个 install -m 0600 只在文件不存在时走,
 # 而 2026-09-13 之前装出来的机器盘上躺着的是 0644 的那一份,里面同样有 PIN 和
@@ -408,11 +413,11 @@ if [[ -n "$D1MAX_SN" && ! "$D1MAX_SN" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "错误: /etc/d1max/env 里的 D1MAX_SN 不干净: [$D1MAX_SN]" >&2
   echo "      只收字母、数字、点、下划线、减号 —— 空格、引号、分号、中文都不行。" >&2
   echo "      照着机身标签重新填一遍那一行(等号两边都不要加引号),再重跑这个脚本。" >&2
-  echo "      **没有 restart**,现在跑着的还是上一版(如果有的话)。" >&2
+  echo "      **没有 stop/start**,现在跑着的还是上一版(如果有的话)。" >&2
   exit 3
 fi
 
-# **PIN 空着就停在这儿,不 restart。** 跟下面 SN 那条警告不是一回事:
+# **PIN 空着就停在这儿,不 stop/start。** 跟下面 SN 那条警告不是一回事:
 # SN 空只是"可能"被误判回滚,PIN 空是必定起不来。单元的 ExecStart 带
 # --host 0.0.0.0,check_exposure() 见到非本机地址又没 PIN 会 SystemExit;
 # 配上 Restart=always + RestartSec=5,机器会变成每 5 秒刷一条日志的启动
@@ -420,7 +425,7 @@ fi
 # **测的是解析出来的值,不是"这一行非空"。** 原来这里是
 # grep -qE '^D1MAX_PIN=.+',它问的是"文件里有没有一行长这样",而
 # `D1MAX_PIN=   `(尾随几个空格)、`D1MAX_PIN=` 写了两遍第二遍是空的,
-# 这两种它都判"有 PIN",于是脚本照常 restart,机器照样进那个每 5 秒一条的
+# 这两种它都判"有 PIN",于是脚本照常往下 stop/start,机器照样进那个每 5 秒一条的
 # 启动循环 —— 守卫在,墙也在。现在测的是上面按 systemd 的规矩读出来的那个值。
 if [[ -z "${D1MAX_PIN_VALUE//[[:space:]]/}" ]]; then
   echo "错误: /etc/d1max/env 里的 D1MAX_PIN 是空的,服务起不来。" >&2
@@ -428,9 +433,9 @@ if [[ -z "${D1MAX_PIN_VALUE//[[:space:]]/}" ]]; then
   echo "      而没有 PIN 的话服务会拒绝启动;Restart=always + RestartSec=5" >&2
   echo "      会把它刷成每 5 秒一条日志的启动循环。" >&2
   echo "      先填好 D1MAX_PIN=(4 位以上,建议 6 位数字),再重跑这个脚本。" >&2
-  echo "      **没有 restart**,现在跑着的还是上一版(如果有的话)。" >&2
+  echo "      **没有 stop/start**,现在跑着的还是上一版(如果有的话)。" >&2
   # **本次 enable 过了,得撤掉再退。** 5/7 已经 systemctl enable 过了:不撤的话
-  # 这次确实不 restart(上面那句话是真的),但**下一次开机** systemd 会照
+  # 这次确实不 stop/start(上面那句话是真的),但**下一次开机** systemd 会照
   # multi-user.target.wants 那条自启链把它拉起来,check_exposure() 见到
   # --host 0.0.0.0 又没 PIN 就 SystemExit,Restart=always + RestartSec=5 +
   # StartLimitIntervalSec=0 —— 这段守卫要防的那堵日志墙原样回来,只是推迟到了
@@ -453,8 +458,8 @@ if [[ -z "${D1MAX_SN//[[:space:]]/}" ]]; then
 fi
 # release activate 撞见"已经是在跑的这一版"会报错退出(这是对 HTTP 那条
 # 路正确的行为,不改它 —— 见 engine/release.py 的 activate())。但重跑这个
-# 脚本正是现场"填完 SN 让它生效"的路子 —— 跳过切换不能连 restart 也跳过,
-# **restart 必须无条件执行**。
+# 脚本正是现场"填完 SN 让它生效"的路子 —— 跳过切换不能连 stop/start 也跳过,
+# **stop 和 start 必须无条件执行**。
 # **链不在就是空串,别拿 basename 的兜底值凑合。** readlink -f 在 current 这条
 # 链还不存在时什么也不输出,外面套一层 basename 得到的是字面量 "current" ——
 # 一个长得像版本名的假值。今天它碰巧咬不着人:_NAME_RE 不允许哪一版叫
@@ -472,7 +477,18 @@ else
   sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_SN="${D1MAX_SN:-}" \
     "$ROOT/bin/python" -m d1max_patrol.cli release activate "$REL_NAME"
 fi
-systemctl restart d1max-patrol.service
+# **先停服务,再搬数据,再起新版。** W01 之前 --runs-root 落在槽里;新版起来后
+# 读的是 /var/lib/d1max,不搬的话历史全"消失"、待传队列停传。搬的时候老版本
+# 必须已经停了 —— 它还活着就可能正往 queue.jsonl / runs/ 追加,搬到一半的文件
+# 会被当成已完整拷走。所以不是 migrate → restart,是 stop → migrate → start。
+# 可重跑:搬过的源会改名 *.migrated,第二次什么都不做。搬失败不拦装机 ——
+# 数据还在槽里没丢,prune 见到槽里有数据也不会删(engine/release.py)。
+# stop 加 '|| true':第一次装机服务还不存在,stop 会报错,不能让 set -e 死在这。
+systemctl stop d1max-patrol.service || true
+sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_DATA_ROOT=/var/lib/d1max \
+  "$ROOT/bin/python" -m d1max_patrol.cli release migrate-data \
+  || echo "  !! 槽内数据迁移没成功,数据还在原槽里没丢;装完后 stop 服务再手工跑一次 release migrate-data" >&2
+systemctl start d1max-patrol.service
 
 say "装完了。看一眼:"
 echo "  systemctl status d1max-patrol"

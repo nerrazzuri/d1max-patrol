@@ -347,13 +347,19 @@ def test_删之前有空值检查和范围检查():
 
 
 def test_范围只盖我们自己的东西():
-    """``rm_sys`` 的白名单里不许出现能匹配到别人东西的形状。"""
+    """``rm_sys`` 的白名单里不许出现能匹配到别人东西的形状。
+
+    W01 之后巡检数据根挪到了 ``/var/lib/d1max``(版本槽外面,理由见
+    ``deploy/d1max-patrol.service`` 里 ``D1MAX_DATA_ROOT`` 那段注释),
+    所以白名单多了这一条 —— 仍然是我们自己专用、不跟别家共用的路径。
+    """
     体 = 取函数体(读(卸载脚本), "rm_sys")
     形状 = re.findall(r"(?m)^\s*(/[^)\s|]+(?:\|/[^)\s|]+)*)\)\s*;;", 体)
     assert 形状, "rm_sys 里读不出白名单"
     for 一组 in 形状:
         for 一条 in 一组.split("|"):
             assert 一条.startswith("/opt/d1max") or 一条.startswith("/etc/d1max") \
+                or 一条.startswith("/var/lib/d1max") \
                 or 一条.startswith("/etc/systemd/system/"), f"白名单里有越界的形状:{一条}"
             if 一条.startswith("/etc/systemd/system/"):
                 assert "d1max-" in 一条, f"systemd 那一条没有限定 d1max-:{一条}"

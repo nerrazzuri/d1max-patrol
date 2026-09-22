@@ -43,10 +43,11 @@ set -euo pipefail
 # @删除 /opt/d1max                                                       整个根
 # @删除 /opt/d1max/bin                                                   跟版本无关的解释器
 # @删除 /opt/d1max/bin-venv                                              上面那个解释器的 venv
-# @删除 /opt/d1max/releases                                              版本槽(巡检数据就在槽里)
+# @删除 /opt/d1max/releases                                              版本槽(代码和 venv)
 # @删除 /opt/d1max/current                                               版本链
 # @删除 /opt/d1max/bundles                                               任务包
 # @删除 /opt/d1max/pending.json                                          在途升级标记
+# @删除 /var/lib/d1max                                                   巡检数据根
 # @删除 /etc/d1max                                                       整个配置目录
 # @删除 /etc/d1max/env                                                   里面有这台机器的设备 PIN
 # @删除 /etc/systemd/system/d1max-patrol.service                         主单元
@@ -57,9 +58,9 @@ set -euo pipefail
 #
 # @保留 /etc/d1max          配置目录留着,因为 env 在它底下
 # @保留 /etc/d1max/env      里面有设备 PIN,删了重装会换一个,现场所有手机都要重输
-# @保留 /opt/d1max          根目录本身留着,数据在它底下
-# @保留 /opt/d1max/releases 巡检数据就在版本槽里(current/runs 实际指的是 <槽>/runs)
+# @保留 /opt/d1max          根目录本身留着,/opt/d1max/bundles 在它底下
 # @保留 /opt/d1max/bundles  任务包
+# @保留 /var/lib/d1max      巡检数据根:runs、上传队列、基线、导出
 
 # ------------------------------------------------------------ 常量
 # **写死,不给环境变量覆盖**,跟 install.sh 第 11 行同一个口径。下面那些
@@ -161,6 +162,7 @@ rm_sys() {
   case "$target" in
     /opt/d1max|/opt/d1max/*) ;;
     /etc/d1max|/etc/d1max/*) ;;
+    /var/lib/d1max|/var/lib/d1max/*) ;;
     /etc/systemd/system/d1max-*.service) ;;
     /etc/systemd/system/*.target.wants/d1max-*.service) ;;
     *)
@@ -387,30 +389,31 @@ wipe_disk() {
   real=$(readlink -f "$ROOT/current" 2>/dev/null) || real=
   if [ -n "$real" ] && [ "$real" != "$ROOT/current" ]; then
     say "  current 这条链现在指着:$real"
-    say "  巡检数据就在它底下的 runs/,任务包在 $ROOT/bundles。"
+    say "  巡检数据在 /var/lib/d1max,任务包在 $ROOT/bundles。"
   fi
 
   if [ "$KEEP_DATA" = 1 ]; then
     say "  --keep-data:只卸配置和服务。下面这几处留着,每一处都有理由。"
     rm_sys "$ROOT/bin" "跟版本无关的解释器"
     rm_sys "$ROOT/bin-venv" "上面那个解释器的 venv"
-    rm_sys "$ROOT/current" "版本链;数据还在上面打出来的那个真实目录里"
+    rm_sys "$ROOT/current" "版本链"
     rm_sys "$ROOT/pending.json" "在途升级标记"
     say "  留着:$ETC_DIR/env —— 里面有这台机器的设备 PIN。删了它,重装会生成"
     say "        一个新的,现场所有手机都要重新输一遍。留着,重装还是原来那个。"
     say "  留着:$ETC_DIR —— env 在它底下。"
-    say "  留着:$ROOT/releases —— **巡检数据就在版本槽里**($ROOT/current/runs"
-    say "        实际指的是 <槽>/runs)。单独把 runs 挑出来搬走比整槽留着更容易出事。"
+    rm_sys "$ROOT/releases" "版本槽;数据不在里面了(W01 之后在 /var/lib/d1max)"
+    say "  留着:/var/lib/d1max —— 巡检数据根:runs、上传队列、基线、导出。"
     say "  留着:$ROOT/bundles —— 任务包。"
-    say "  留着:$ROOT —— 根目录本身,上面那两处在它底下。"
+    say "  留着:$ROOT —— 根目录本身,$ROOT/bundles 在它底下。"
   else
     say "  默认模式:全部清掉,不留痕迹。"
     rm_sys "$ROOT/current" "版本链"
     rm_sys "$ROOT/pending.json" "在途升级标记"
     rm_sys "$ROOT/bin" "跟版本无关的解释器"
     rm_sys "$ROOT/bin-venv" "上面那个解释器的 venv"
-    rm_sys "$ROOT/releases" "版本槽,**巡检数据也在里面**"
+    rm_sys "$ROOT/releases" "版本槽"
     rm_sys "$ROOT/bundles" "任务包"
+    rm_sys "/var/lib/d1max" "巡检数据根"
     rm_sys "$ROOT" "整个根"
     rm_sys "$ETC_DIR/env" "设备 PIN 就在这个文件里"
     rm_sys "$ETC_DIR" "整个配置目录"
@@ -438,7 +441,8 @@ announce() {
   say ""
   if [ "$KEEP_DATA" != 1 ]; then
     say "同时会删掉(默认模式):"
-    say "  $ROOT 整个根 —— 代码、版本槽、**巡检数据**、任务包"
+    say "  $ROOT 整个根 —— 代码、版本槽、任务包"
+    say "  /var/lib/d1max —— **巡检数据**根:runs、上传队列、基线、导出"
     say "  $ETC_DIR 整个目录 —— 包括这台机器的设备 PIN"
     say "  $UNIT_DIR 底下我们那两个 d1max-* 单元和开机自启链"
     say "  patrol_agent 的命令管道、pid 文件、现场日志"
