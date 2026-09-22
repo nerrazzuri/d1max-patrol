@@ -398,10 +398,19 @@ wipe_disk() {
     rm_sys "$ROOT/bin-venv" "上面那个解释器的 venv"
     rm_sys "$ROOT/current" "版本链"
     rm_sys "$ROOT/pending.json" "在途升级标记"
+    # **releases 里可能还留着搬迁时因重名没搬进数据根的 *.migrated 副本。**
+    # 那份数据只有这一处备份,--keep-data 图的就是不丢数据 —— 这时候把
+    # releases 整个删掉,数据就真的没了。先看一眼槽里(每个槽目录底下)
+    # 有没有 *.migrated,有就留着让人自己核对完再删,没有才真删。
+    if find "$ROOT/releases" -mindepth 2 -maxdepth 2 -name '*.migrated' \
+        -print -quit 2>/dev/null | grep -q .; then
+      say "  留着:$ROOT/releases —— 里面还有搬迁时因重名没搬进数据根的 *.migrated 副本,自己核对完再删。"
+    else
+      rm_sys "$ROOT/releases" "版本槽;数据不在里面了(W01 之后在 /var/lib/d1max)"
+    fi
     say "  留着:$ETC_DIR/env —— 里面有这台机器的设备 PIN。删了它,重装会生成"
     say "        一个新的,现场所有手机都要重新输一遍。留着,重装还是原来那个。"
     say "  留着:$ETC_DIR —— env 在它底下。"
-    rm_sys "$ROOT/releases" "版本槽;数据不在里面了(W01 之后在 /var/lib/d1max)"
     say "  留着:/var/lib/d1max —— 巡检数据根:runs、上传队列、基线、导出。"
     say "  留着:$ROOT/bundles —— 任务包。"
     say "  留着:$ROOT —— 根目录本身,$ROOT/bundles 在它底下。"
@@ -449,6 +458,8 @@ announce() {
     say ""
     say "只想重装、不想让现场所有手机重输 PIN 的,按 Ctrl+C 停下来,"
     say "改用:sudo bash $0 --keep-data"
+  else
+    say "$ROOT/releases 会删掉,除非里面还有搬迁时没搬完的 *.migrated 副本 —— 有就留着,自己核对完再删。"
   fi
   say ""
   say "**不动的东西**:别家的栈、ROS、任何不叫 d1max-* 的 systemd 单元,"

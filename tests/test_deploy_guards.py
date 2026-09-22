@@ -783,7 +783,7 @@ def test_两道守卫测的是解析出来的值而不是行在不在():
     """原来两道守卫是 ``grep -qE '^D1MAX_PIN=.+'`` / ``'^D1MAX_SN=.+'``。
 
     它问的是「文件里有没有一行长这样」, 而 ``D1MAX_PIN=`` 后面跟几个空格
-    它判「有 PIN」—— systemd 剥完空白读出来却是空串, 于是脚本照常 restart,
+    它判「有 PIN」—— systemd 剥完空白读出来却是空串, 于是脚本照常 stop/start,
     机器照样进那个每 5 秒刷一条日志的启动循环。**守卫在, 墙也在。**
     """
     脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
@@ -796,7 +796,7 @@ def test_两道守卫测的是解析出来的值而不是行在不在():
 def test_PIN空着退出之前把自启链撤掉():
     """5/7 已经 ``systemctl enable`` 过了, 7/7 因为 PIN 空而 ``exit 3``。
 
-    这次确实不 restart(脚本自己那句话是真的), 但**下一次开机** systemd 会照
+    这次确实不 stop/start(脚本自己那句话是真的), 但**下一次开机** systemd 会照
     ``multi-user.target.wants`` 那条自启链把它拉起来 → ``check_exposure()``
     见到 ``--host 0.0.0.0`` 又没 PIN → ``SystemExit`` → ``Restart=always``
     + ``RestartSec=5`` + ``StartLimitIntervalSec=0`` —— 这段守卫要防的那堵
@@ -837,8 +837,8 @@ def test_根下装依赖那一步有哨兵挡着重跑():
     2/7 那条 ``pip install "$TMP_PKG"`` 原来在任何 ``if`` 外面: ``pyproject.toml``
     用 ``setuptools.build_meta``, PEP 517 的构建隔离每趟都要现拉 setuptools,
     于是**重跑必联网**。离线现场跑第二趟忘了带 ``D1MAX_PIP_ARGS=`` 就挂死在
-    2/7(pip 默认 5 次重试、每次 15 秒), ``set -e`` 中止, 连 ``restart`` 都不跑
-    —— SN 永远不生效, 而现场看到的是「装到一半不动了」。
+    2/7(pip 默认 5 次重试、每次 15 秒), ``set -e`` 中止, 连 ``stop``/``start``
+    都不跑 —— SN 永远不生效, 而现场看到的是「装到一半不动了」。
 
     哨兵的讲究跟 4/7 那个一样: **最后一行才落**, 它在就等于装齐了; 里头存的是
     版本名, 换一版内容对不上照样重装。

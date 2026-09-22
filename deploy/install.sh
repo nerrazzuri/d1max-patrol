@@ -139,8 +139,17 @@ mkdir -p "$ROOT/releases" "$ROOT/bin"
 chown -R "$RUN_USER":"$RUN_USER" "$ROOT"
 # **巡检数据根,在版本槽外面。** 服务单元的 Environment=D1MAX_DATA_ROOT 指着它,
 # uninstall.sh 默认删、--keep-data 留。路径写死,理由跟 $ROOT 一样:单元里是字面量。
-mkdir -p "/var/lib/d1max"
-chown -R "$RUN_USER":"$RUN_USER" "/var/lib/d1max"
+# **chown 只在目录是这一趟新建的时候才做。** 重跑是这份脚本的日常路径(填完
+# SN 让它生效、换一版重装),这时候 /var/lib/d1max 早就在,而且里面正躺着
+# 服务自己写出来的 runs/、queue.jsonl —— 服务已经把它们的属主设成了
+# $RUN_USER;这里要是无条件 chown -R 一遍,每次重跑都要把这一整棵越长越大
+# 的数据树递归 chown 一遍,纯粹的浪费,而且万一现场手工改过属主(比如临时
+# 用 root 抢救过一次数据)这一行会把那次手工操作悄悄抹掉。只有目录还不在、
+# 也就是真的第一次建它的时候,才需要把它的属主设成服务要用的那个用户。
+if [ ! -d /var/lib/d1max ]; then
+  mkdir -p "/var/lib/d1max"
+  chown "$RUN_USER":"$RUN_USER" "/var/lib/d1max"
+fi
 
 say "2/7 装一个跟版本无关的解释器到 $ROOT/bin"
 # 守卫要用它。**它不能在任何一版目录里** —— 版本坏了,救生索还得在。
@@ -327,7 +336,7 @@ D1MAX_CONSOLE_TOKEN=
   echo "  手机 app 第一次连这台机器要输它。**记进现场登记表**,屏幕关了就找不回来了"
   echo "  (还能在机器上看:sudo grep D1MAX_PIN /etc/d1max/env)。"
   echo "  想换成好记的:编辑 /etc/d1max/env 里的 D1MAX_PIN= 那一行,再"
-  echo "  sudo systemctl restart d1max-patrol(只改了 PIN,不用跑这个脚本、不用搬数据)。"
+  echo "  sudo systemctl restart d1max-patrol(只改 PIN 的话,不用重跑装机脚本)。"
 fi
 # **老机器重跑一次也要被收紧。** 上面那个 install -m 0600 只在文件不存在时走,
 # 而 2026-09-13 之前装出来的机器盘上躺着的是 0644 的那一份,里面同样有 PIN 和
@@ -480,14 +489,21 @@ fi
 # **先停服务,再搬数据,再起新版。** W01 之前 --runs-root 落在槽里;新版起来后
 # 读的是 /var/lib/d1max,不搬的话历史全"消失"、待传队列停传。搬的时候老版本
 # 必须已经停了 —— 它还活着就可能正往 queue.jsonl / runs/ 追加,搬到一半的文件
-# 会被当成已完整拷走。所以不是 migrate → restart,是 stop → migrate → start。
+# 会被当成已完整拷走。所以不是 migrate → restart,是 stop → migrate → start,
+# **而且真没停掉就不搬**(见下面 is-active 那道闸)。
 # 可重跑:搬过的源会改名 *.migrated,第二次什么都不做。搬失败不拦装机 ——
 # 数据还在槽里没丢,prune 见到槽里有数据也不会删(engine/release.py)。
 # stop 加 '|| true':第一次装机服务还不存在,stop 会报错,不能让 set -e 死在这。
 systemctl stop d1max-patrol.service || true
-sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_DATA_ROOT=/var/lib/d1max \
-  "$ROOT/bin/python" -m d1max_patrol.cli release migrate-data \
-  || echo "  !! 槽内数据迁移没成功,数据还在原槽里没丢;装完后 stop 服务再手工跑一次 release migrate-data" >&2
+# **停不掉就别搬。** 搬的前提是没人在往槽里写;stop 超时/失败时老进程还活着。
+# is-active 对"没这个单元"也回非零,所以第一次装机照样走搬迁分支。
+if systemctl is-active --quiet d1max-patrol.service; then
+  echo "  !! 服务停不掉,跳过数据迁移(搬的前提是没人在往槽里写)。装完后手工:stop 服务,再跑 release migrate-data" >&2
+else
+  sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_DATA_ROOT=/var/lib/d1max \
+    "$ROOT/bin/python" -m d1max_patrol.cli release migrate-data \
+    || echo "  !! 槽内数据迁移没成功。没搬动的那几样还在原槽里、原名不变,prune 不会删它们;已经改名成 *.migrated 的不受保护。先 ls /opt/d1max/releases/*/ 看还有哪些原名的,再 stop 服务、手工跑 release migrate-data" >&2
+fi
 systemctl start d1max-patrol.service
 
 say "装完了。看一眼:"

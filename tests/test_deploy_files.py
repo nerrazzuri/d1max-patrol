@@ -1142,16 +1142,24 @@ def test_内部安全说明里那句一百万种也跟着位数走():
 # ---------------------------------------------------------- W01:数据根
 
 def test_装机脚本建数据根并在停服务后起新版前把老槽的数据搬过去(装机脚本):
-    """W01。目录归 robot,不然服务写不进去。迁移必须在服务**停着**的时候跑:
-    老版本还活着就可能正往槽里的 queue.jsonl / runs/ 追加,搬到一半的文件会被
-    当成已完整拷走。所以顺序是 stop → migrate-data → start,不是 migrate → restart。"""
+    """W01。目录归 robot,不然服务写不进去(只在第一次建目录时 chown,见下面
+    单独那条断言)。迁移必须在服务**真的停着**的时候跑:老版本还活着就可能
+    正往槽里的 queue.jsonl / runs/ 追加,搬到一半的文件会被当成已完整拷走。
+    所以顺序是 stop → is-active 判着确实停了 → migrate-data → start,
+    停不掉就跳过搬迁,不是 migrate → restart。"""
     assert re.search(r'mkdir -p .*"/var/lib/d1max"', 装机脚本)
-    assert 'chown -R "$RUN_USER":"$RUN_USER" "/var/lib/d1max"' in 装机脚本
+    assert 'chown "$RUN_USER":"$RUN_USER" "/var/lib/d1max"' in 装机脚本
     stop = 装机脚本.index("systemctl stop d1max-patrol.service")
+    is_active = 装机脚本.index("systemctl is-active --quiet d1max-patrol.service")
     mig = 装机脚本.index("release migrate-data")
     start = 装机脚本.index("systemctl start d1max-patrol.service")
-    assert stop < mig < start
-    assert "systemctl restart d1max-patrol.service" not in 装机脚本
+    assert stop < is_active < mig < start
+    assert ('\n    "$ROOT/bin/python" -m d1max_patrol.cli release migrate-data'
+           in 装机脚本)
+    代码 = [行 for 行 in 装机脚本.splitlines()
+          if 行.strip() and not 行.lstrip().startswith("#")
+          and not 行.lstrip().startswith("echo")]
+    assert not any("systemctl restart d1max-patrol" in 行 for 行 in 代码)
 
 
 def test_卸载脚本默认删数据根而keep_data留着():
@@ -1160,3 +1168,11 @@ def test_卸载脚本默认删数据根而keep_data留着():
     assert "# @保留 /var/lib/d1max" in text
     assert 'rm_sys "/var/lib/d1max"' in text
     assert "/var/lib/d1max|/var/lib/d1max/*)" in text
+
+
+def test_卸载脚本keep_data时releases里还有migrated就不删():
+    """搬迁时因重名没搬进数据根的那份留在槽里的 ``*.migrated`` 里 ——
+    ``--keep-data`` 图的就是不丢数据,这时候把 ``releases`` 整个删掉就白留了。"""
+    text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "*.migrated" in text
+    assert text.index("*.migrated") > text.index('rm_sys "$ROOT/current"')
