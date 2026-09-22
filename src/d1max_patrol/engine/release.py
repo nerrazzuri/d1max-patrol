@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -33,6 +34,8 @@ from typing import Any
 
 from d1max_patrol.engine.export import sha256_file
 
+log = logging.getLogger(__name__)
+
 #: 版本目录都在这儿。
 RELEASES_DIR = "releases"
 #: 指着当前那一版的符号链接。
@@ -44,6 +47,9 @@ MANIFEST_NAME = "release.json"
 
 #: 盘上留几份。理由见模块开头:第三份只占盘。
 KEEP_RELEASES = 2
+#: 槽里这个目录非空就说明还有巡检数据 —— W01 之前的机器数据就落在槽里。
+#: prune 见到它不删。名字跟 datadir.resolve_paths 里 ``runs`` 一致。
+SLOT_DATA_DIR = "runs"
 #: 守卫数到这个数还没等到「自检过了」,就判新版起不来,回滚。
 #: 2 而不是 1:第一次开机可能撞上别的偶发(网卡没起来、盘没挂上),给一次机会。
 MAX_BOOT_ATTEMPTS = 2
@@ -664,6 +670,9 @@ def prune(layout: Layout, *, keep: int = KEEP_RELEASES) -> tuple[str, ...]:
     **在跑的那版和退路那版绝不删。** 名字是日期打头的,大多数时候最旧的那份
     确实该删 —— 但「大多数时候」在这儿不够:回滚之后在跑的正是较旧的那一版,
     照名字删就把脚下的地板抽了。
+
+    **槽里还有巡检数据也绝不删。** W01 之前的机器数据落在槽里的 ``runs/``
+    下,迁完之后这里应该是空的 —— 空不了就说明没迁干净,删了数据就没了。
     """
     pending = read_pending(layout)
     protected = {current_name(layout)}
@@ -678,9 +687,22 @@ def prune(layout: Layout, *, keep: int = KEEP_RELEASES) -> tuple[str, ...]:
             break
         if name in protected:
             continue
+        if _has_slot_data(layout.releases / name):
+            log.warning("版本 %s 的槽里还有巡检数据,不删 —— 先跑 "
+                        "release migrate-data 把数据搬到数据根", name)
+            # 到这就止步,不找更新的那版来凑数 —— 该删的是它,不是别的槽。
+            break
         shutil.rmtree(layout.releases / name, ignore_errors=True)
         dropped.append(name)
     return tuple(dropped)
+
+
+def _has_slot_data(slot: Path) -> bool:
+    """``<槽>/runs`` 底下还有任何文件吗。空目录不算。"""
+    runs = slot / SLOT_DATA_DIR
+    if not runs.is_dir():
+        return False
+    return any(p.is_file() for p in runs.rglob("*"))
 
 
 def _healthy(layout: Layout) -> bool:

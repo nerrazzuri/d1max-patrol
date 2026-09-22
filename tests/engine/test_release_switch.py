@@ -182,3 +182,29 @@ def test_在跑的那版和退路那版绝不删(tmp_path):
     dropped = prune(layout, keep=1)
     assert "2026-09-01-aaaaaa" not in dropped
     assert "2026-09-01-aaaaaa" in installed(layout)
+
+
+def test_槽里还有巡检数据就不删(tmp_path, caplog):
+    """W01 的保险:数据本该在 /var/lib/d1max,但万一老机器没迁干净,
+    宁可多占盘也不删证据。"""
+    layout = _layout(tmp_path)
+    for name in ("2026-09-01-aaaaaa", "2026-09-06-a3f9c1", "2026-09-20-77b2de"):
+        stage(layout, _pkg(tmp_path / name, name), now_ms=NOW)
+    old_runs = layout.releases / "2026-09-01-aaaaaa" / "runs" / "20260901-0800"
+    old_runs.mkdir(parents=True)
+    (old_runs / "manifest.json").write_text("{}", encoding="utf-8")
+    activate(layout, "2026-09-20-77b2de", now_ms=NOW)
+    dropped = commit(layout)
+    assert dropped == ()
+    assert "2026-09-01-aaaaaa" in installed(layout)
+    assert (old_runs / "manifest.json").exists()
+    assert "还有巡检数据" in caplog.text
+
+
+def test_槽里runs目录是空的照删(tmp_path):
+    layout = _layout(tmp_path)
+    for name in ("2026-09-01-aaaaaa", "2026-09-06-a3f9c1", "2026-09-20-77b2de"):
+        stage(layout, _pkg(tmp_path / name, name), now_ms=NOW)
+    (layout.releases / "2026-09-01-aaaaaa" / "runs").mkdir()
+    activate(layout, "2026-09-20-77b2de", now_ms=NOW)
+    assert commit(layout) == ("2026-09-01-aaaaaa",)
