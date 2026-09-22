@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from dataclasses import dataclass
@@ -59,6 +60,9 @@ MIGRATED_SUFFIX = ".migrated"
 #: 巡检数据根往往跟系统盘是同一块盘,搬完把盘挤到 0 字节剩余,下一次写日志
 #: 都会失败。
 MIN_FREE_BYTES = 64 * 1024 * 1024
+#: 上传队列那一份**不是普通文件**,搬法不同(见 :func:`_merge_queue`)。名字跟
+#: ``app/server.py`` 的 ``QUEUE_FILE_NAME`` 一致,也在 ``SLOT_DATA_ITEMS`` 里。
+QUEUE_FILE = "queue.jsonl"
 
 
 @dataclass(frozen=True)
@@ -101,7 +105,10 @@ def migrate_slot_data(layout: Layout, data_root: Path) -> MigrationReport:
             if not src.exists():
                 continue
             hit = True
-            c, s = _merge_into(src, data_root / item)
+            if item == QUEUE_FILE:
+                c, s = _merge_queue(src, data_root / item)
+            else:
+                c, s = _merge_into(src, data_root / item)
             copied += c
             skipped += s
             _retire(src, slot / (item + MIGRATED_SUFFIX))
@@ -160,6 +167,53 @@ def _retire(src: Path, dest: Path) -> None:
         shutil.rmtree(src)
     else:
         src.unlink()
+
+
+def _merge_queue(src: Path, dst: Path) -> tuple[int, int]:
+    """把老槽的 ``queue.jsonl`` **并进**数据根的活动队列。返回 (并入, 跳过)。
+
+    队列是日志结构(同 key 后写覆盖先写,启动整个重放),所以它不能按"目标已有
+    就跳过"处理 —— 那会让老槽里没传完的条目全部停传,正是 W01 要解决的事。
+    ``Uploader.scan()`` 虽然会把搬进数据根的文件重新发现并 ``offer``,但那是从
+    offset 0 重来、而且丢掉 ``done`` 状态:已经传完的全部重传,``.uploaded`` 的
+    判定也被打回。并队列把 offset/done 一起带过来。
+
+    调用顺序是槽从新到旧,所以 ``dst`` 里已有的 key 是**更新的槽**的状态,保留它;
+    老槽同 key 的那行算 ``skipped``,原件留在 ``queue.jsonl.migrated`` 里可核对。
+    坏行照 ``UploadQueue._replay`` 的规矩跳过,不拦整体。
+    """
+    from .upload_queue import QueueItem, UploadQueue
+
+    if dst.exists() and not dst.is_file():
+        raise OSError(f"数据根里 {dst} 不是文件,不敢当队列合并")
+    old: list[QueueItem] = []
+    seen: dict[str, int] = {}
+    with open(src, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = QueueItem.from_wire(json.loads(line))
+            except (ValueError, KeyError, TypeError):
+                continue
+            if item.key in seen:          # 同 key 后写覆盖先写
+                old[seen[item.key]] = item
+            else:
+                seen[item.key] = len(old)
+                old.append(item)
+    merged = skipped = 0
+    q = UploadQueue(dst)
+    try:
+        for item in old:
+            if q.get(item.key) is not None:
+                skipped += 1
+                continue
+            q._write(item)
+            merged += 1
+    finally:
+        q.close()
+    return merged, skipped
 
 
 def _merge_into(src: Path, dst: Path) -> tuple[int, int]:

@@ -49,7 +49,9 @@ def test_把每个槽里的数据搬到数据根并改名源目录(tmp_path):
     b = _slot(root, "2026-09-06-a3f9c1")
     (a / "runs" / "r1").mkdir(parents=True)
     (a / "runs" / "r1" / "manifest.json").write_text("a", encoding="utf-8")
-    (a / "queue.jsonl").write_text('{"k":1}\n', encoding="utf-8")
+    (a / "queue.jsonl").write_text(
+        json.dumps({"key": "r1/x/events.jsonl", "priority": 2, "offset": 3, "size": 9}) + "\n",
+        encoding="utf-8")
     (b / "runs" / "r2").mkdir(parents=True)
     (b / "runs" / "r2" / "manifest.json").write_text("b", encoding="utf-8")
     (b / "baselines").mkdir()
@@ -59,7 +61,7 @@ def test_把每个槽里的数据搬到数据根并改名源目录(tmp_path):
 
     assert (data / "runs" / "r1" / "manifest.json").read_text(encoding="utf-8") == "a"
     assert (data / "runs" / "r2" / "manifest.json").read_text(encoding="utf-8") == "b"
-    assert (data / "queue.jsonl").read_text(encoding="utf-8") == '{"k":1}\n'
+    assert '"key": "r1/x/events.jsonl"' in (data / "queue.jsonl").read_text(encoding="utf-8")
     assert (data / "baselines" / "p1.jpg").read_bytes() == b"jpg"
     assert not (a / "runs").exists() and (a / "runs.migrated").is_dir()
     assert not (a / "queue.jsonl").exists() and (a / "queue.jsonl.migrated").is_file()
@@ -147,23 +149,55 @@ def test_源改名撞上已有的部分搬迁结果时并进去而不是报错(t
     assert not (a / "runs").exists()
 
 
-def test_撞名时新槽赢老槽的旧副本(tmp_path):
-    """两个槽都有 ``queue.jsonl``。按名字从新到旧搬,新槽先搬进数据根,
-    老槽那份撞上 ``target.exists()`` 被跳过 —— 数据根里留的是新槽的内容,
-    老槽自己的那份原样改名进 ``*.migrated``,人想核对随时能看。"""
+def test_两个槽的上传队列并成一份_同key新槽赢(tmp_path):
+    """``queue.jsonl`` 不是普通文件:它是日志结构的待传清单,老槽里没传完的
+    条目必须**并进**活动队列,否则切槽那刻它们就停传了(W01 工单原话)。
+    同一个 key 两边都有时保留新槽的状态(offset/done),老槽那份原样改名进
+    ``*.migrated`` 供核对。"""
+    from d1max_patrol.engine.upload_queue import UploadQueue
     root = tmp_path / "opt"
     data = tmp_path / "var"
     old = _slot(root, "2026-09-01-aaaaaa")
     new = _slot(root, "2026-09-06-a3f9c1")
-    (old / "queue.jsonl").write_text("old", encoding="utf-8")
-    (new / "queue.jsonl").write_text("new", encoding="utf-8")
+    (old / "queue.jsonl").write_text(
+        json.dumps({"key": "r_old/x/events.jsonl", "priority": 2, "offset": 10, "size": 40}) + "\n"
+        + json.dumps({"key": "shared/x/report.md", "priority": 3, "offset": 0, "size": 9}) + "\n",
+        encoding="utf-8")
+    (new / "queue.jsonl").write_text(
+        json.dumps({"key": "r_new/x/report.md", "priority": 3, "offset": 0, "size": 5}) + "\n"
+        + json.dumps({"key": "shared/x/report.md", "priority": 3, "offset": 9,
+                      "size": 9, "done": True}) + "\n",
+        encoding="utf-8")
 
+    report = migrate_slot_data(Layout(root=root), data)
+
+    q = UploadQueue(data / "queue.jsonl")
+    try:
+        keys = {i.key for i in q.all()}
+        assert keys == {"r_old/x/events.jsonl", "shared/x/report.md", "r_new/x/report.md"}
+        assert q.get("r_old/x/events.jsonl").offset == 10          # 老槽的进度保住了
+        assert q.get("shared/x/report.md").done is True            # 同 key 新槽赢
+    finally:
+        q.close()
+    assert (old / "queue.jsonl.migrated").is_file() and not (old / "queue.jsonl").exists()
+    assert (new / "queue.jsonl.migrated").is_file()
+    assert report.copied == 3 and report.skipped == 1
+
+
+def test_老槽队列里的坏行跳过不拦整体(tmp_path):
+    from d1max_patrol.engine.upload_queue import UploadQueue
+    root = tmp_path / "opt"
+    data = tmp_path / "var"
+    old = _slot(root, "2026-09-01-aaaaaa")
+    (old / "queue.jsonl").write_text(
+        "{not json\n" + json.dumps({"key": "r/x/events.jsonl", "priority": 2}) + "\n",
+        encoding="utf-8")
     migrate_slot_data(Layout(root=root), data)
-
-    assert (data / "queue.jsonl").read_text(encoding="utf-8") == "new"
-    assert (old / "queue.jsonl.migrated").read_text(encoding="utf-8") == "old"
-    assert not (old / "queue.jsonl").exists()
-    assert not (new / "queue.jsonl").exists()
+    q = UploadQueue(data / "queue.jsonl")
+    try:
+        assert [i.key for i in q.all()] == ["r/x/events.jsonl"]
+    finally:
+        q.close()
 
 
 def test_手写的任务文件也在搬的范围内(tmp_path):

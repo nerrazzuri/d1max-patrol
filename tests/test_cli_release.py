@@ -264,11 +264,11 @@ def test_migrate_data默认数据根读环境变量(tmp_path, monkeypatch):
     layout.releases.mkdir(parents=True)
     stage(layout, _pkg(tmp_path / "pkg", "2026-09-20-77b2de"), now_ms=NOW)
     (layout.releases / "2026-09-20-77b2de" / "queue.jsonl").write_text(
-        "x\n", encoding="utf-8")
+        json.dumps({"key": "r/x/events.jsonl", "priority": 2}) + "\n", encoding="utf-8")
     monkeypatch.setenv("D1MAX_DATA_ROOT", str(data))
 
     assert main(["release", "migrate-data", "--root", str(root)]) == 0
-    assert (data / "queue.jsonl").read_text(encoding="utf-8") == "x\n"
+    assert '"key": "r/x/events.jsonl"' in (data / "queue.jsonl").read_text(encoding="utf-8")
 
 
 def test_migrate_data合并出错时退非零而且提示搬迁失败(tmp_path, capsys):
