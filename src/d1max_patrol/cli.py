@@ -28,6 +28,11 @@ from d1max_patrol.engine.bundle import (
     guard_bundle,
     read_state,
 )
+from d1max_patrol.engine.datadir import (
+    DATA_ROOT_ENV,
+    DEFAULT_DATA_ROOT,
+    migrate_slot_data,
+)
 from d1max_patrol.engine.release import (
     MAX_BOOT_ATTEMPTS,
     GuardAction,
@@ -168,6 +173,12 @@ def build_parser() -> argparse.ArgumentParser:
     _root_arg(rel_sub.add_parser(
         "boot-guard",
         help="开机守卫:连着两次开机还挂着在途标记就退回去"))
+    p_mig = rel_sub.add_parser(
+        "migrate-data",
+        help="把版本槽里的巡检数据搬到数据根(W01;装机脚本在重启服务前调它)")
+    _root_arg(p_mig)
+    p_mig.add_argument("--data-root", default=None,
+                       help=f"数据根,默认取 ${DATA_ROOT_ENV} 或 {DEFAULT_DATA_ROOT}")
 
     bun = sub.add_parser("bundle", help="任务包:开机守卫")
     bun_sub = bun.add_subparsers(dest="bundle_command", required=True)
@@ -565,6 +576,15 @@ def _cmd_release(args: argparse.Namespace) -> int:
               f"重启之后会自检,没过会自己退回去。")
         print("提示: 升级前那七项检查(precheck)在命令行这条路上没跑,"
               "只有 HTTP 那条路(POST /api/release/activate)才跑。")
+        return 0
+
+    if args.release_command == "migrate-data":
+        env = os.environ.get(DATA_ROOT_ENV, "").strip()
+        data_root = Path(args.data_root or env or DEFAULT_DATA_ROOT)
+        report = migrate_slot_data(layout, data_root)
+        print(f"数据根   : {data_root}")
+        print(f"搬过的槽 : {', '.join(report.slots) or '(没有要搬的)'}")
+        print(f"拷了 {report.copied} 个文件,跳过 {report.skipped} 个(目标已有)")
         return 0
 
     if args.release_command == "rollback":

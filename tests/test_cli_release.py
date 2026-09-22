@@ -23,6 +23,8 @@ from d1max_patrol.engine.release import (
     write_pending,
 )
 
+NOW = 1_700_000_000_000
+
 
 def _pkg(root: Path, name: str, *, 弄坏: bool = False) -> Path:
     where = root / name
@@ -235,6 +237,38 @@ def test_rollback没有上一版可退时退非零(tmp_path, capsys):
     capsys.readouterr()
     assert main(["release", "rollback", "--root", str(root)]) == 2
     assert "退不了" in capsys.readouterr().err
+
+
+def test_migrate_data把槽里的数据搬到数据根(tmp_path, capsys):
+    root = tmp_path / "opt"
+    data = tmp_path / "var"
+    layout = Layout(root=root)
+    layout.releases.mkdir(parents=True)
+    stage(layout, _pkg(tmp_path / "pkg", "2026-09-20-77b2de"), now_ms=NOW)
+    slot = layout.releases / "2026-09-20-77b2de"
+    (slot / "runs" / "r1").mkdir(parents=True)
+    (slot / "runs" / "r1" / "manifest.json").write_text("{}", encoding="utf-8")
+
+    assert main(["release", "migrate-data", "--root", str(root),
+                 "--data-root", str(data)]) == 0
+
+    out = capsys.readouterr().out
+    assert (data / "runs" / "r1" / "manifest.json").exists()
+    assert "2026-09-20-77b2de" in out
+
+
+def test_migrate_data默认数据根读环境变量(tmp_path, monkeypatch):
+    root = tmp_path / "opt"
+    data = tmp_path / "var"
+    layout = Layout(root=root)
+    layout.releases.mkdir(parents=True)
+    stage(layout, _pkg(tmp_path / "pkg", "2026-09-20-77b2de"), now_ms=NOW)
+    (layout.releases / "2026-09-20-77b2de" / "queue.jsonl").write_text(
+        "x\n", encoding="utf-8")
+    monkeypatch.setenv("D1MAX_DATA_ROOT", str(data))
+
+    assert main(["release", "migrate-data", "--root", str(root)]) == 0
+    assert (data / "queue.jsonl").read_text(encoding="utf-8") == "x\n"
 
 
 def test_release_root默认取opt_d1max(monkeypatch):
