@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
@@ -27,8 +30,10 @@ from d1max_patrol.engine.retention import (
     EXPORTED_REL,
     NOTICE_REL,
     UPLOADED_REL,
+    mark_uploaded,
     read_notice,
 )
+from d1max_patrol.engine.upload_queue import PRIORITY_PHOTO, UploadQueue
 from tests.app import conftest as C
 
 #: 让每趟归档有点实际大小,好让 ``size_bytes`` 不是 0。
@@ -391,28 +396,126 @@ def test_判读接口把基线目录交下去了(server, 三趟, monkeypatch):
     assert len(got["findings"]) == 2
 
 
+
+
+
+def _假pump(tmp_path: Path):
+    q = UploadQueue(tmp_path / "q.jsonl")
+    return SimpleNamespace(queue=q, coord_lock=threading.RLock()), q
+
+
+def _全部入队并传完(q: UploadQueue, runs_root: Path, run: Path) -> None:
+    """把这一趟盘上该传的都记成 done,size/mtime 跟盘上一致 —— 也就是"确实
+    全在服务器上"的样子。"""
+    rel_run = run.relative_to(runs_root).as_posix()
+    for p in run.rglob("*"):
+        if p.is_file() and p.name != ".uploaded":
+            st = p.stat()
+            key = f"{rel_run}/{p.relative_to(run).as_posix()}"
+            q.offer(key, PRIORITY_PHOTO, size=st.st_size, mtime_ns=st.st_mtime_ns)
+            q.finish(key)
+
+
+def _方案里有(got, run: Path) -> bool:
+    return any(run.name in d["path"] for d in got["sweep"]["delete"])
+
+
 def test_清盘方案跳过队列里还没传完的那趟_哪怕标记还挂着(server, 三趟, tmp_path):
     """W03 第二道闸走到路由:``.uploaded`` 在、但活队列里这趟还有没 done 的,
     方案里不许出现它。"""
-    from types import SimpleNamespace
-
-    from d1max_patrol.engine.retention import mark_uploaded
-    from d1max_patrol.engine.upload_queue import PRIORITY_PHOTO, UploadQueue
     runs_root = Path(三趟.runs_root)
     run = sorted(runs_root.glob("巡检一号/*"))[0]
     mark_uploaded(run)
-    code, got = _sweep(server, {"free_bytes": 10**9})
-    assert code == 200
-    assert any(str(run) in d["path"] or run.name in d["path"] for d in got["sweep"]["delete"]), \
-        f"对照组:标了可删就该在方案里 {got['sweep']}"
-    q = UploadQueue(tmp_path / "q.jsonl")
-    rel = run.relative_to(runs_root).as_posix()
-    q.offer(f"{rel}/report.md", PRIORITY_PHOTO, size=1, mtime_ns=1)
-    三趟.upload = SimpleNamespace(queue=q)
+    pump, q = _假pump(tmp_path)
+    _全部入队并传完(q, runs_root, run)
+    三趟.upload = pump
     try:
         code, got = _sweep(server, {"free_bytes": 10**9})
+        assert code == 200 and _方案里有(got, run), f"对照组:全传完就该在方案里 {got['sweep']}"
+        key = f"{run.relative_to(runs_root).as_posix()}/manifest.json"
+        q.rewind(key)
+        q.offer(key, PRIORITY_PHOTO, size=1, mtime_ns=1)          # 重开
+        code, got = _sweep(server, {"free_bytes": 10**9})
+        assert code == 200 and not _方案里有(got, run), got["sweep"]
+    finally:
+        q.close()
+        三趟.upload = None
+
+
+def test_文件改写了但pump还没扫到_清盘也不许把它算成已传(server, 三趟, tmp_path):
+    """外部审核指出的更宽的窗:判读/复核刚改写了文件,pump 下一拍 scan 之前队列
+    里全是 done、``.uploaded`` 也还在。方案必须对着盘算:size/mtime 对不上就不算。"""
+    runs_root = Path(三趟.runs_root)
+    run = sorted(runs_root.glob("巡检一号/*"))[0]
+    mark_uploaded(run)
+    pump, q = _假pump(tmp_path)
+    _全部入队并传完(q, runs_root, run)
+    三趟.upload = pump
+    try:
+        code, got = _sweep(server, {"free_bytes": 10**9})
+        assert _方案里有(got, run), "对照组"
+        p = run / "manifest.json"
+        st = p.stat()
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000))    # 同大小,改写过
+        code, got = _sweep(server, {"free_bytes": 10**9})
+        assert not _方案里有(got, run), got["sweep"]
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))                 # 还原
+        (run / "review.json").write_text("{}", encoding="utf-8")         # 新文件还没入队
+        code, got = _sweep(server, {"free_bytes": 10**9})
+        assert not _方案里有(got, run), got["sweep"]
+    finally:
+        q.close()
+        三趟.upload = None
+
+
+def test_方案定了之后再重开_真删那一步要跳过它(server, 三趟, tmp_path, monkeypatch):
+    """检查后使用竞态:方案是快照,rmtree 之前必须再验。这里把"方案生成之后、
+    真删之前"那个时刻用钩子钉住,在里面把条目重开。"""
+    import d1max_patrol.app.server as S
+    runs_root = Path(三趟.runs_root)
+    run = sorted(runs_root.glob("巡检一号/*"))[0]
+    mark_uploaded(run)
+    pump, q = _假pump(tmp_path)
+    _全部入队并传完(q, runs_root, run)
+    三趟.upload = pump
+    原来的 = S.plan_sweep
+    key = f"{run.relative_to(runs_root).as_posix()}/manifest.json"
+
+    def 方案之后偷偷重开(*a, **kw):
+        sweep = 原来的(*a, **kw)
+        assert any(run.name in str(i.path) for i in sweep.delete), "对照组:方案里本来有它"
+        q.rewind(key)
+        q.offer(key, PRIORITY_PHOTO, size=1, mtime_ns=1)
+        return sweep
+
+    monkeypatch.setattr(S, "plan_sweep", 方案之后偷偷重开)
+    try:
+        code, got = _sweep(server, {"free_bytes": 10**9, "apply": True})
         assert code == 200
-        assert not any(run.name in d["path"] for d in got["sweep"]["delete"]), got["sweep"]
+        assert got["deleted"] == [] or not any(run.name in d for d in got["deleted"])
+        assert any(run.name in d["path"] for d in got["skipped"]), got
+        assert run.is_dir(), "真删那一步没跳过它,证据没了"
+    finally:
+        q.close()
+        三趟.upload = None
+
+
+def test_复核一写下去_可删标记当场就撤(server, 三趟, tmp_path):
+    """不等 pump 下一拍:判读/复核改写了证据文件,``.uploaded`` 此刻就得撤。"""
+    runs_root = Path(三趟.runs_root)
+    run = sorted(runs_root.glob("巡检一号/*"))[0]
+    mark_uploaded(run)
+    pump, q = _假pump(tmp_path)
+    三趟.upload = pump
+    try:
+        from d1max_patrol.app.server import _run_id
+        run_id = quote(_run_id(run), safe="/.%")
+        photo = next((run / "photos").glob("P0__*")).name
+        code, body, _ = C.request(server, f"/api/runs/{run_id}/review/{quote(photo, safe='')}",
+                                  method="POST",
+                                  payload={"verdict": "normal", "note": "看过了"})
+        assert code == 200, body
+        assert not (run / ".uploaded").exists()
     finally:
         q.close()
         三趟.upload = None

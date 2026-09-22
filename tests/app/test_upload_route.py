@@ -611,21 +611,30 @@ def test_已标可删的一趟_报告重写重开后标记被撤掉_传完再打
     assert (run / UPLOADED_REL).exists(), "重传完、收工,标记回来了"
 
 
-def test_清盘看的是活队列_标记还在但有没传完的也不算已传(tmp_path: Path):
-    """闸的第二道:就算 ``.uploaded`` 还没来得及撤(scan 与撤标之间有一拍的窗),
-    水位线拿方案的时候要问一遍队列。"""
-
+def test_清盘看的是活队列和盘_标记在也要对得上才算已传(tmp_path: Path):
+    """闸的第二道:``.uploaded`` 只是个异步打的标记,清盘拿方案时要对着活队列和
+    盘上的文件重算。三种"不算":队列里有没传完的;盘上有该入队的文件队列里没有;
+    队列记的 size/mtime 跟盘上对不上(改写过、pump 还没扫到)。"""
     from d1max_patrol.app.server import _mask_uploaded_by_queue
     from d1max_patrol.engine.retention import scan_runs
     run = 摆一趟(tmp_path, "report.md")
     收工(run)
     mark_uploaded(run)
     q = UploadQueue(tmp_path / "queue.jsonl")
-    infos = scan_runs(tmp_path / "runs")
+    root = tmp_path / "runs"
+    infos = scan_runs(root)
     assert len(infos) == 1 and infos[0].uploaded is True
-    assert _mask_uploaded_by_queue(infos, tmp_path / "runs", q)[0].uploaded is True
-    q.offer(f"{RUN_REL}/report.md", PRIORITY_PHOTO, size=10, mtime_ns=1)
-    assert _mask_uploaded_by_queue(infos, tmp_path / "runs", q)[0].uploaded is False
-    q.finish(f"{RUN_REL}/report.md")
-    assert _mask_uploaded_by_queue(infos, tmp_path / "runs", q)[0].uploaded is True
+
+    def 算() -> bool:
+        return _mask_uploaded_by_queue(scan_runs(root), root, q)[0].uploaded
+
+    assert 算() is False, "盘上有 report.md 和 manifest,队列里却没有 —— 不算"
+    for rel in ("report.md", "manifest.json"):
+        st = (run / rel).stat()
+        q.offer(f"{RUN_REL}/{rel}", PRIORITY_PHOTO, size=st.st_size, mtime_ns=st.st_mtime_ns)
+        q.finish(f"{RUN_REL}/{rel}")
+    assert 算() is True, "全入队、全 done、size/mtime 对上 —— 算"
+    q.rewind(f"{RUN_REL}/report.md")
+    q.offer(f"{RUN_REL}/report.md", PRIORITY_PHOTO, size=1, mtime_ns=1)   # 重开
+    assert 算() is False, "队列里有没传完的 —— 不算"
     q.close()

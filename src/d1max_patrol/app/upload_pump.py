@@ -71,6 +71,12 @@ class UploadPump:
         on_scan: Callable[[], None] | None = None,
     ) -> None:
         self._up = uploader
+        #: **上传状态与清盘之间的协调锁(W03)。** 谁会让一趟"从可删变成不可删":
+        #: ``scan()`` 重开条目、``on_scan``/``on_done`` 撤标或打标、判读/复核改写
+        #: 证据文件。清盘那条路由在"拿方案 → 重验 → rmtree"之间要握着它,不然
+        #: 验证过的结论在删之前就可能过期(检查后使用竞态)。``run_once`` 那段
+        #: 网络等待**不在**锁里 —— 它只会把条目往 done 推,不会制造新的 pending。
+        self.coord_lock = threading.RLock()
         self._clock = clock
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -153,7 +159,8 @@ class UploadPump:
             # **先把下一次扫盘的时间推出去,再真的去扫。** 扫盘自己炸了(盘掉了、
             # 权限没了)的话,不能变成每一拍都去敲一次那块不在的盘。
             self._next_scan_ms = now + SCAN_EVERY_MS
-            self._up.scan()
+            with self.coord_lock:
+                self._up.scan()
         step = self._up.run_once(now)
         with self._lock:
             self._backlog = self._up.backlog()
@@ -169,10 +176,14 @@ class UploadPump:
         # 上面那段在 ``done``/``sent`` 那一支里会把 ``last_error`` 清空,搁在
         # 它前面喊的话,回调写进去的那句话会被同一拍里一次成功的上传抹掉 ——
         # 而打不上「可删」恰恰是那种"上传一路顺风、盘却在满"的失败。
+        # 两声回调各自在协调锁里:它们会打/撤「可删」标记,清盘那边在同一把锁里
+        # 重验再删,所以标记不会在它验完、删之前被这里翻掉(W03)。
         if step.action == "done":
-            self._喊一声传完了(step.key)
+            with self.coord_lock:
+                self._喊一声传完了(step.key)
         if 扫过了:
-            self._喊一声扫过了()
+            with self.coord_lock:
+                self._喊一声扫过了()
         return step
 
     def _喊一声传完了(self, key: str) -> None:

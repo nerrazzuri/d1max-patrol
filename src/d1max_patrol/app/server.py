@@ -229,7 +229,7 @@ from d1max_patrol.engine.selfcheck import (
     restart_plan,
     run_postcheck,
 )
-from d1max_patrol.engine.upload_queue import UploadQueue
+from d1max_patrol.engine.upload_queue import UploadQueue, classify
 from d1max_patrol.engine.uploader import Uploader
 from d1max_patrol.inspect.judge import (
     judge_run,
@@ -880,24 +880,67 @@ def _该打可删了吗(runs_root: Path, queue: UploadQueue, run_rel: str) -> No
     mark_uploaded(run)
 
 
+def _why_not_uploaded(run: Path, run_rel: str, queue: UploadQueue) -> str | None:
+    """这一趟**此刻**真的全在服务器上了吗。回 ``None`` 表示是;否则回一句原因。
+
+    「可删」的判据不能只看盘上那个 ``.uploaded`` 标记(它是异步打的、异步撤的),
+    要对着**活队列和盘上的文件**重新算一遍(W03,外部审核的阻断项):
+
+    * 队列里这一趟还有没 ``done`` 的 —— 不算。
+    * 盘上该入队的文件(``classify`` 认的),队列里**没有**它 —— 说明是判读/复核
+      刚写出来、pump 还没 scan 到的,不算。
+    * 队列里有,但 ``size``/``mtime_ns`` 跟盘上对不上 —— 说明文件被原地改写了、
+      pump 还没 scan 到(W02 的判据就是这两个数),不算。老条目 ``mtime_ns`` 为 0
+      也不算 —— 下一拍 scan 补上就好,等得起。
+
+    这三条一起,才把"文件改写 → pump scan"之间那段没人守的窗也盖住;光靠撤标
+    只盖得住"scan 之后"。
+    """
+    if not run.is_dir():
+        return "目录不在了"
+    if not (run / UPLOADED_REL).exists():
+        return "没有「可删」标记"
+    if not is_settled(run):
+        return "这一趟还没收工"
+    prefix = f"{run_rel}/"
+    by_key = {i.key: i for i in queue.all() if i.key.startswith(prefix)}
+    if any(not i.done for i in by_key.values()):
+        return "队列里还有没传完的"
+    for path in run.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(run).as_posix()
+        if classify(rel) is None:
+            continue
+        item = by_key.get(f"{run_rel}/{rel}")
+        if item is None:
+            return f"{rel} 还没入队(刚写出来,pump 还没扫到)"
+        try:
+            st = path.stat()
+        except OSError:
+            return f"{rel} 读不到"
+        if item.mtime_ns == 0 or item.size != st.st_size or item.mtime_ns != st.st_mtime_ns:
+            return f"{rel} 盘上跟队列记的对不上(改写过,pump 还没扫到)"
+    return None
+
+
 def _mask_uploaded_by_queue(runs: list[RunInfo], runs_root: Path,
                             queue: UploadQueue) -> list[RunInfo]:
-    """水位线拿方案之前再问一遍活队列:标记说传完了、队列说还有没 done 的,
-    **听队列的**。这是「该打可删了吗」撤标之外的第二道闸 —— ``scan()`` 重开
-    条目到 ``_补打可删`` 撤标之间隔着一拍,清盘请求正好落进来的话,盘上的标记
-    还是旧的。
-    """
-    pending = {_run_rel(i.key) for i in queue.all() if not i.done}
-    if not pending:
-        return runs
+    """水位线拿方案之前,把 ``uploaded`` 按 :func:`_why_not_uploaded` 重算一遍:
+    标记说传完了、活队列或盘上文件说没有,**听后者的**。"""
     root = Path(runs_root)
     out: list[RunInfo] = []
     for info in runs:
+        if not info.uploaded:
+            out.append(info)
+            continue
         try:
             rel = info.path.relative_to(root).as_posix()
         except ValueError:
-            rel = ""
-        out.append(replace(info, uploaded=False) if info.uploaded and rel in pending else info)
+            out.append(replace(info, uploaded=False))
+            continue
+        out.append(replace(info, uploaded=False)
+                   if _why_not_uploaded(info.path, rel, queue) else info)
     return out
 
 
@@ -2886,22 +2929,37 @@ class AppServer:
         path = run / f"report.{fmt}"
         if not path.is_file():
             try:
-                write_reports(run)
+                with self._coord():
+                    write_reports(run)
+                    # 新写出来的报告要传;这一趟若已标「可删」,标记此刻就得撤,
+                    # 不能等 pump 下一拍才发现(W03)。
+                    unmark_uploaded(run)
             except (OSError, ValueError) as exc:
                 raise HttpError(500, "生成报告失败", str(exc)) from exc
         ctype = ("text/markdown" if fmt == "md" else "text/html")
         return Response(200, path.read_bytes(), f"{ctype}; charset=utf-8")
 
+    def _coord(self):
+        """上传协调锁(见 ``UploadPump.coord_lock``);单机档没有 pump 就是空的。"""
+        up = self._ctx.upload
+        return up.coord_lock if up is not None else contextlib.nullcontext()
+
     def _stale_reports(self, run: Path) -> None:
-        """把已经生成的报告删掉,让下次取报告时重新出一份。
+        """把已经生成的报告删掉,让下次取报告时重新出一份;**并同步撤掉「可删」**。
 
         报告是**结论的快照**:判读或复核改了之后,躺在目录里的那份就过时了,
         而 :meth:`_run_report` 只在文件不存在时才生成。删掉是最省事的失效
         方式 —— 报告本来就随时能从归档重建。
+
+        撤标为什么在这儿而不是等 pump:判读刚写了 ``findings.json``、复核刚写了
+        ``review.json``,到 pump 下一拍 scan 之间最长 15 秒,这段里 ``.uploaded``
+        还挂着、队列里还全是 done —— 清盘看这两样会把整趟删掉,而新结论一个
+        字节都还没传(W03,外部审核的阻断项)。调用方在 :meth:`_coord` 锁里调。
         """
         for name in ("report.md", "report.html"):
             with contextlib.suppress(OSError):
                 (run / name).unlink(missing_ok=True)
+        unmark_uploaded(run)
 
     def _run_judge(self, req: Request) -> Response:
         """判读一趟的照片。**同步跑完再回**。
@@ -2922,7 +2980,8 @@ class AppServer:
                                  baselines_root=self._ctx.baselines)
         except OSError as exc:
             raise HttpError(500, "判读时读写归档失败", str(exc)) from exc
-        self._stale_reports(run)
+        with self._coord():
+            self._stale_reports(run)
         return json_response({"findings": [f.to_wire() for f in findings]})
 
     def _run_review(self, req: Request) -> Response:
@@ -2939,7 +2998,8 @@ class AppServer:
             raise HttpError(400, "这条复核记不下来", str(exc)) from exc
         except OSError as exc:
             raise HttpError(500, "写复核失败", str(exc)) from exc
-        self._stale_reports(run)
+        with self._coord():
+            self._stale_reports(run)
         return json_response({"reviews": read_reviews(run)})
 
     # --------------------------------------------------- 盘况、预告、导出
@@ -3060,33 +3120,55 @@ class AppServer:
             need = raw
         else:
             raise HttpError(400, "free_bytes 要是个整数", repr(raw))
-        runs = scan_runs(ctx.runs_root, now=now)
-        if ctx.upload is not None:
-            runs = _mask_uploaded_by_queue(runs, Path(ctx.runs_root), ctx.upload.queue)
-        sweep = plan_sweep(runs, now=now,
-                           has_upload=ctx.form.has_upload, need_bytes=need,
-                           noticed=read_notice(ctx.runs_root))
         applied = bool(body.get("apply"))
         deleted: tuple[Path, ...] = ()
-        if applied:
-            # **清盘和同步互斥。** 同步这一侧正一趟趟地读 runs_root 下的目录树,
-            # 而这里那行 rmtree 删的就是它们。撞上的那次,盘上落的是残的一趟,
-            # 而"只增不删"保证它再也不会被重新考虑 —— 归档两边都缺一块,
-            # 屏上却写着有两份。``{"apply": false}`` 不受影响:出方案不动盘。
-            with self._sync_lock:
-                if self._syncing:
-                    raise HttpError(
-                        409, "正在同步备份盘,先等它跑完再清盘",
-                        "同步正一趟趟地读这些目录,这时候删它们,备份盘上会落下"
-                        "一趟残的归档 —— 而只增不删意味着它永远不会被重拷")
-                self._sweeping = True
-            try:
-                deleted = apply_sweep(sweep, runs_root=ctx.runs_root)
-            finally:
+        skipped: list[dict[str, str]] = []
+        # **拿方案、重验、真删,全在上传协调锁里。** 方案是队列和盘的一次快照;
+        # 不握锁的话,快照到 rmtree 之间 pump 可以重开一条、判读可以改写一份,
+        # 验证过的结论在删之前就过期了(W03 外部审核复现的检查后使用竞态)。
+        # 单机档没有 pump 也没有 .uploaded,``_coord()`` 就是空的。
+        with self._coord():
+            runs = scan_runs(ctx.runs_root, now=now)
+            if ctx.upload is not None:
+                runs = _mask_uploaded_by_queue(runs, Path(ctx.runs_root), ctx.upload.queue)
+            sweep = plan_sweep(runs, now=now,
+                               has_upload=ctx.form.has_upload, need_bytes=need,
+                               noticed=read_notice(ctx.runs_root))
+            if applied:
+                # **清盘和同步互斥。** 同步这一侧正一趟趟地读 runs_root 下的目录树,
+                # 而这里那行 rmtree 删的就是它们。撞上的那次,盘上落的是残的一趟,
+                # 而"只增不删"保证它再也不会被重新考虑 —— 归档两边都缺一块,
+                # 屏上却写着有两份。``{"apply": false}`` 不受影响:出方案不动盘。
                 with self._sync_lock:
-                    self._sweeping = False
+                    if self._syncing:
+                        raise HttpError(
+                            409, "正在同步备份盘,先等它跑完再清盘",
+                            "同步正一趟趟地读这些目录,这时候删它们,备份盘上会落下"
+                            "一趟残的归档 —— 而只增不删意味着它永远不会被重拷")
+                    self._sweeping = True
+                try:
+                    if ctx.upload is not None:
+                        # 删之前对每一趟再验一次:方案里的 uploaded 是刚算的,但
+                        # "刚算的"跟"删的那一刻"之间还是要对一次盘和队列。只验
+                        # 那些**凭 uploaded 进方案**的趟;凭导出/预告进来的不归这里管。
+                        ok: list[RunInfo] = []
+                        root = Path(ctx.runs_root)
+                        for info in sweep.delete:
+                            rel = info.path.relative_to(root).as_posix()
+                            why = (_why_not_uploaded(info.path, rel, ctx.upload.queue)
+                                   if info.uploaded else None)
+                            if why:
+                                skipped.append({"path": str(info.path), "reason": why})
+                            else:
+                                ok.append(info)
+                        sweep = replace(sweep, delete=tuple(ok))
+                    deleted = apply_sweep(sweep, runs_root=ctx.runs_root)
+                finally:
+                    with self._sync_lock:
+                        self._sweeping = False
         return json_response({
             "applied": applied,
+            "skipped": skipped,
             "need_bytes": need,
             "deleted": [str(p) for p in deleted],
             "sweep": sweep.to_wire(),
