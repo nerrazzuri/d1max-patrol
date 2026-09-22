@@ -54,6 +54,12 @@ def resolve_paths(data_root: str | Path | None) -> DataPaths:
 #: 那几个原名,改了名它就不再拦 —— 单一真理源在 ``release.py``,这里 import。
 MIGRATED_SUFFIX = ".migrated"
 
+#: 预检盘余量时,算完「要搬多少」还要再留的安全垫。**不是为了装下数据本身**
+#: (那部分是 ``needed * 1.1``),是给同一块盘上其它东西留出呼吸的空间 ——
+#: 巡检数据根往往跟系统盘是同一块盘,搬完把盘挤到 0 字节剩余,下一次写日志
+#: 都会失败。
+MIN_FREE_BYTES = 64 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class MigrationReport:
@@ -65,18 +71,29 @@ class MigrationReport:
 def migrate_slot_data(layout: Layout, data_root: Path) -> MigrationReport:
     """把每个版本槽里的巡检数据搬到 ``data_root``。**只增不覆盖,可重跑。**
 
+    **撞名时新槽赢。** 按 ``installed(layout)`` 倒序(新到旧)搬:单文件的
+    ``queue.jsonl``、``baselines/<x>.json`` 这种在两个槽里都存在的东西,搬进
+    数据根的是**当前槽**(较新那份)的内容,较旧槽里撞名的那份跳过
+    (算进 ``skipped``),照样改名进 ``*.migrated`` —— 数据没丢,只是没被
+    当成数据根里那份的来源,人想核对随时能翻。
+
     搬完把槽里的源改名加 :data:`MIGRATED_SUFFIX`,所以第二次跑什么都不做。
     目标已有同路径文件时跳过(算进 ``skipped``),源照样改名 —— 那份留在
     ``*.migrated`` 里,人想核对随时能看。
+
+    **动手之前先查一遍盘够不够。** 见 :func:`_check_free_space`;不够就直接
+    报错,一个文件都不碰。
 
     **调用前提:没有任何进程还在往槽里写。** 装机脚本要先停掉服务再跑它 ——
     服务还活着的话,它可能正往 ``queue.jsonl``/``runs/`` 里追加,搬到一半的
     文件被这里当成"已完整"拷走,数据就裂开了。
     """
     data_root = Path(data_root)
+    names = tuple(reversed(installed(layout)))
+    _check_free_space(layout, names, data_root)
     touched: list[str] = []
     copied = skipped = 0
-    for name in installed(layout):
+    for name in names:
         slot = layout.releases / name
         hit = False
         for item in SLOT_DATA_ITEMS:
@@ -91,6 +108,42 @@ def migrate_slot_data(layout: Layout, data_root: Path) -> MigrationReport:
         if hit:
             touched.append(name)
     return MigrationReport(slots=tuple(touched), copied=copied, skipped=skipped)
+
+
+def _check_free_space(layout: Layout, names: tuple[str, ...],
+                      data_root: Path) -> None:
+    """算一遍所有槽里 ``SLOT_DATA_ITEMS`` 加起来有多少字节,跟数据根所在盘的
+    剩余空间比一比。**不够就报错,不碰任何文件** —— 搬到一半才发现盘满,
+    槽里的源已经有一部分改名、数据根里也躺着半截数据,两头都不干净。
+
+    ``needed == 0``(没有数据要搬)时跳过 —— 空槽不该被盘满拦下来。
+
+    **数据根本身可能还不存在。** ``shutil.disk_usage`` 要一个存在的路径,
+    这里顺着 ``data_root`` 往上找到第一个已经在盘上的祖先目录去问。
+    """
+    needed = 0
+    for name in names:
+        slot = layout.releases / name
+        for item in SLOT_DATA_ITEMS:
+            src = slot / item
+            if src.is_file():
+                needed += src.stat().st_size
+            elif src.is_dir():
+                needed += sum(p.stat().st_size for p in src.rglob("*")
+                             if p.is_file())
+    if needed == 0:
+        return
+    anchor = data_root
+    while not anchor.exists():
+        parent = anchor.parent
+        if parent == anchor:
+            break
+        anchor = parent
+    free = shutil.disk_usage(anchor).free
+    if free < needed * 1.1 + MIN_FREE_BYTES:
+        raise OSError(
+            f"数据根 {data_root} 所在盘剩 {free // 2**20} MB,搬迁需要约 "
+            f"{needed // 2**20} MB,不够 —— 先清盘或删掉已核对过的 *.migrated")
 
 
 def _retire(src: Path, dest: Path) -> None:
