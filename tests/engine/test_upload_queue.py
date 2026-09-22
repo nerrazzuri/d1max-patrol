@@ -211,3 +211,68 @@ def test_紧凑之后重放结果不变_而且文件变小(tmp_path: Path) -> No
 def test_wire_往返() -> None:
     item = QueueItem(key="k", priority=2, offset=5, size=9, attempts=1, next_ms=7, done=False)
     assert QueueItem.from_wire(item.to_wire()) == item
+
+
+def test_offer_同样大小但改过的文件重新打开_从头传(tmp_path: Path) -> None:
+    """W02:report.md 每次判读/复核都会被删掉重生成,字节数经常一样甚至更小。
+    只比 size 的话服务器上永远是旧结论。改过(mtime 变了)就从 0 重传。"""
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    q.offer("a/report.md", PRIORITY_PHOTO, size=100, mtime_ns=1_000)
+    q.advance("a/report.md", offset=100)
+    q.finish("a/report.md")
+    assert q.backlog() == 0
+    assert q.offer("a/report.md", PRIORITY_PHOTO, size=100, mtime_ns=2_000) is False
+    item = q.get("a/report.md")
+    assert (item.done, item.offset, item.size, item.mtime_ns) == (False, 0, 100, 2_000)
+    assert q.backlog() == 1
+    q.close()
+
+
+def test_offer_变小而且改过也重新打开(tmp_path: Path) -> None:
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    q.offer("a/report.md", PRIORITY_PHOTO, size=100, mtime_ns=1_000)
+    q.finish("a/report.md")
+    q.offer("a/report.md", PRIORITY_PHOTO, size=60, mtime_ns=2_000)
+    item = q.get("a/report.md")
+    assert (item.done, item.offset, item.size) == (False, 0, 60)
+    q.close()
+
+
+def test_offer_没改过就还是不重开(tmp_path: Path) -> None:
+    """同样的 mtime 同样的 size 再来一次 —— 每轮 scan 都会这样,不能每轮都重传。"""
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    q.offer("a/report.md", PRIORITY_PHOTO, size=100, mtime_ns=1_000)
+    q.finish("a/report.md")
+    q.offer("a/report.md", PRIORITY_PHOTO, size=100, mtime_ns=1_000)
+    assert q.get("a/report.md").done is True
+    q.close()
+
+
+def test_offer_老条目不知道mtime_第一次见到只记下不重传(tmp_path: Path) -> None:
+    """升级上来的老队列里 mtime 全是 0。第一轮 scan 把 mtime 补上就行,
+    不能把整个已传完的历史全部重新打开。"""
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    q.offer("a/report.md", PRIORITY_PHOTO, size=100)     # 老代码写的那种,没有 mtime
+    q.finish("a/report.md")
+    q.offer("a/report.md", PRIORITY_PHOTO, size=100, mtime_ns=5_000)
+    item = q.get("a/report.md")
+    assert (item.done, item.mtime_ns) == (True, 5_000)
+    q.offer("a/report.md", PRIORITY_PHOTO, size=100, mtime_ns=6_000)   # 现在改了,才重开
+    assert q.get("a/report.md").done is False
+    q.close()
+
+
+def test_offer_追加流长了照旧接着传_mtime跟着更新(tmp_path: Path) -> None:
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    q.offer("a/events.jsonl", PRIORITY_EVENTS, size=100, mtime_ns=1_000)
+    q.advance("a/events.jsonl", offset=100)
+    q.offer("a/events.jsonl", PRIORITY_EVENTS, size=400, mtime_ns=2_000)
+    item = q.get("a/events.jsonl")
+    assert (item.offset, item.size, item.mtime_ns) == (100, 400, 2_000)
+    q.close()
+
+
+def test_wire_往返_带mtime() -> None:
+    it = QueueItem(key="k", priority=1, size=3, mtime_ns=42)
+    assert QueueItem.from_wire(it.to_wire()) == it
+    assert QueueItem.from_wire({"key": "k", "priority": 1}).mtime_ns == 0

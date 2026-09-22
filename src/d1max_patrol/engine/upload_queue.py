@@ -95,6 +95,10 @@ class QueueItem:
     attempts: int = 0
     next_ms: int = 0
     done: bool = False
+    #: 上次扫盘看到的 mtime(纳秒)。0 = 不知道(老队列里的条目)。
+    #: 它是"文件被原地改写了"的判据 —— report.md 每次判读/复核都被删掉重生成,
+    #: 字节数常常一样甚至更小,只比 size 的话服务器上永远是旧结论(W02)。
+    mtime_ns: int = 0
 
     def to_wire(self) -> dict[str, Any]:
         return asdict(self)
@@ -109,6 +113,7 @@ class QueueItem:
             attempts=int(d.get("attempts", 0)),
             next_ms=int(d.get("next_ms", 0)),
             done=bool(d.get("done", False)),
+            mtime_ns=int(d.get("mtime_ns", 0)),
         )
 
 
@@ -184,23 +189,39 @@ class UploadQueue:
 
     # ---- 队 ----
 
-    def offer(self, key: str, priority: int, *, size: int) -> bool:
+    def offer(self, key: str, priority: int, *, size: int, mtime_ns: int = 0) -> bool:
         """入队。返回 ``True`` 表示这是新的一条。
 
-        同一个 key 再来:**只把 size 改大,不动 offset**。追加流(events.jsonl)
-        一直在长,每次扫盘都会看到一个更大的 size,而已经传到第几个字节是不能忘的。
-        已经 ``done`` 的条目 size 变大也会被重新打开 —— 那是新写进去的证据。
+        同一个 key 再来,分三种:
+
+        * **长了**:只把 size 改大,不动 offset。追加流(events.jsonl)一直在长,
+          已经传到第几个字节是不能忘的;已经 ``done`` 的也重新打开 —— 那是新证据。
+        * **没长但 mtime 变了**:文件被原地改写了(report.md 判读后重生成、
+          findings.json 复核后回写)。**从 0 重传**,``done`` 清掉。只比 size 的话
+          同样大小或更小的改动永远传不上去(W02)。
+        * **都没变**:什么都不做。每轮 scan 都会走到这儿,不能每轮都重传。
+
+        ``mtime_ns`` 为 0 表示调用方不知道(老代码、老队列)。老条目第一次见到
+        真 mtime 只是**记下来**,不重开 —— 否则升级上来第一轮 scan 会把整个
+        已传完的历史全部重传。
         """
         old = self._items.get(key)
         if old is None:
-            self._write(QueueItem(key=key, priority=priority, size=size))
+            self._write(QueueItem(key=key, priority=priority, size=size, mtime_ns=mtime_ns))
             return True
-        if size <= old.size:
+        if size > old.size:
+            # **长了就重新打开,哪怕它已经 done。** offset 原样留着接着传。
+            self._write(QueueItem(**{**old.to_wire(), "size": size, "done": False,
+                                     "mtime_ns": mtime_ns or old.mtime_ns}))
             return False
-        # **长了就重新打开,哪怕它已经 done。** 追加流(events.jsonl)传完一轮之后
-        # 巡检还在往里写,下一次扫盘看到的 size 更大 —— 那是新证据,不是重复。
-        # offset 原样留着,从上次停的地方接着传。
-        self._write(QueueItem(**{**old.to_wire(), "size": size, "done": False}))
+        if mtime_ns and old.mtime_ns and mtime_ns != old.mtime_ns:
+            # **原地改写:从头来。** 之前传的那些字节对应的是旧内容,一个都不算数。
+            self._write(QueueItem(**{**old.to_wire(), "size": size, "offset": 0,
+                                     "done": False, "mtime_ns": mtime_ns}))
+            return False
+        if mtime_ns and not old.mtime_ns:
+            # 老条目补上 mtime,别的不动。
+            self._write(QueueItem(**{**old.to_wire(), "mtime_ns": mtime_ns}))
         return False
 
     def advance(self, key: str, *, offset: int) -> None:

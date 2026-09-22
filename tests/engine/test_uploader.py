@@ -314,3 +314,25 @@ def test_第二次读_归档盘在发包期间掉了就退避_不销账(tmp_path
     assert step.action == "deferred"
     assert "归档盘不在" in step.detail
     assert up.queue.get("巡检一/20260911T101500Z/events.jsonl").done is False
+
+
+def test_scan_改过的报告会被重新入队(一趟: Path, tmp_path: Path) -> None:
+    """W02 端到端:传完 → 报告被判读重写成同样大小 → 下一轮 scan 重新打开、从 0 传。"""
+    import os
+    sink = 假服务器()
+    up = 造(一趟, tmp_path, sink)
+    (一趟 / "巡检一" / "20260911T101500Z" / "report.md").write_bytes(b"OLD REPORT")
+    up.scan()
+    key = "巡检一/20260911T101500Z/report.md"
+    for _ in range(20):
+        up.run_once(now_ms=1_000)
+        if up.queue.get(key).done:
+            break
+    assert up.queue.get(key).done is True
+    p = 一趟 / "巡检一" / "20260911T101500Z" / "report.md"
+    p.write_bytes(b"NEW REPORT")                       # 同样 10 个字节
+    st = p.stat()
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    assert up.scan() == 0                              # 不是新条目
+    item = up.queue.get(key)
+    assert (item.done, item.offset) == (False, 0)

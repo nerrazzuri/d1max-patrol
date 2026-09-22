@@ -134,7 +134,8 @@ class Uploader:
             priority = classify(rel)
             if priority is None:
                 continue
-            if self.queue.offer(key, priority, size=path.stat().st_size):
+            st = path.stat()
+            if self.queue.offer(key, priority, size=st.st_size, mtime_ns=st.st_mtime_ns):
                 added += 1
         return added
 
@@ -207,7 +208,7 @@ class Uploader:
     def _missing(self, item: QueueItem, run: str, now_ms: int) -> Step:
         """文件读不到,分三种情况——只有第三种真的允许销账。
 
-        ``UploadQueue.offer()`` 的规矩是"新 size <= 老 size 就不重开",所以这里
+        ``UploadQueue.offer()`` 的规矩是"size 没长、mtime 也没变就不重开",所以这里
         一旦错判成 ``gone`` 销账,而文件其实还在、大小没变,以后每一次 ``scan()``
         都不会把它捡回来——那是真的能永久丢证据的一条路径。spec §4.3 写死的是
         "传不上去就一直排着,不做重试 N 次后放弃"。
