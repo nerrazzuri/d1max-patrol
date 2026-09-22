@@ -248,17 +248,34 @@ def test_offer_没改过就还是不重开(tmp_path: Path) -> None:
     q.close()
 
 
-def test_offer_老条目不知道mtime_第一次见到只记下不重传(tmp_path: Path) -> None:
-    """升级上来的老队列里 mtime 全是 0。第一轮 scan 把 mtime 补上就行,
-    不能把整个已传完的历史全部重新打开。"""
+def test_offer_老条目_改写型文件第一次见到mtime就重开_不信done(tmp_path: Path) -> None:
+    """升级上来的老队列没有 mtime。report.md 这种会被原地改写的文件,老队列里的
+    ``done`` 证明不了"盘上这一份就是传上去的那一份"——升级前最后一次判读可能
+    已经把它换掉了(外部审核指出的阻断项)。宁可重传一次小文件,不能永久漏证据。"""
     q = UploadQueue(tmp_path / "queue.jsonl")
-    q.offer("a/report.md", PRIORITY_PHOTO, size=100)     # 老代码写的那种,没有 mtime
-    q.finish("a/report.md")
-    q.offer("a/report.md", PRIORITY_PHOTO, size=100, mtime_ns=5_000)
-    item = q.get("a/report.md")
-    assert (item.done, item.mtime_ns) == (True, 5_000)
-    q.offer("a/report.md", PRIORITY_PHOTO, size=100, mtime_ns=6_000)   # 现在改了,才重开
-    assert q.get("a/report.md").done is False
+    q.offer("a/b/report.md", PRIORITY_PHOTO, size=100)      # 老代码写的,没有 mtime
+    q.advance("a/b/report.md", offset=100)
+    q.finish("a/b/report.md")
+    assert q.offer("a/b/report.md", PRIORITY_PHOTO, size=100, mtime_ns=5_000) is False
+    item = q.get("a/b/report.md")
+    assert (item.done, item.offset, item.mtime_ns) == (False, 0, 5_000)
+    q.offer("a/b/report.md", PRIORITY_PHOTO, size=100, mtime_ns=5_000)   # 第二轮:不再重开
+    assert q.get("a/b/report.md").offset == 0 and q.backlog() == 1
+    q.close()
+
+
+def test_offer_老条目_不可改写的文件第一次见到mtime只记下(tmp_path: Path) -> None:
+    """照片和追加流从不原地改写,老队列里的 done 可信;只补 mtime,不把整库
+    照片重传一遍。"""
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    for key, pri in (("a/b/photos/P1.jpg", PRIORITY_PHOTO), ("a/b/events.jsonl", PRIORITY_EVENTS)):
+        q.offer(key, pri, size=100)
+        q.finish(key)
+        q.offer(key, pri, size=100, mtime_ns=5_000)
+        item = q.get(key)
+        assert (item.done, item.mtime_ns) == (True, 5_000), key
+        q.offer(key, pri, size=100, mtime_ns=6_000)     # 现在真的改了,才重开
+        assert q.get(key).done is False, key
     q.close()
 
 

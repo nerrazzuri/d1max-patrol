@@ -54,6 +54,21 @@ _EXACT: dict[str, int] = {
 }
 
 
+#: **会被原地改写**的文件。报告每次判读/复核都删掉重生成,findings 判读重跑整个
+#: 换掉,review 每次复核回写。照片和 ``*.jsonl`` 追加流从不原地改写。
+#: 这张表决定升级上来的老队列(没有 mtime)怎么对待已 ``done`` 的条目:
+#: 在这张表上的,``done`` 证明不了"盘上这一份就是传上去的那一份"(升级前最后
+#: 一次改写可能没来得及传),第一次见到 mtime 就从 0 重传一次;不在表上的只记
+#: mtime,不把整库照片重传一遍。**加一种改写型文件,必须同时进这里和 _EXACT。**
+REWRITTEN_IN_PLACE: frozenset[str] = frozenset(
+    {"report.md", "report.html", "findings.json", "review.json"})
+
+
+def rewritten_in_place(key: str) -> bool:
+    """这个 key(相对 runs_root 的路径)是不是改写型文件。按文件名判。"""
+    return key.rsplit("/", 1)[-1] in REWRITTEN_IN_PLACE
+
+
 def classify(rel: str) -> int | None:
     """``rel`` 是相对 run 目录的路径。返回 ``None`` 表示**不入队**。
 
@@ -202,8 +217,11 @@ class UploadQueue:
         * **都没变**:什么都不做。每轮 scan 都会走到这儿,不能每轮都重传。
 
         ``mtime_ns`` 为 0 表示调用方不知道(老代码、老队列)。老条目第一次见到
-        真 mtime 只是**记下来**,不重开 —— 否则升级上来第一轮 scan 会把整个
-        已传完的历史全部重传。
+        真 mtime 分两种(:data:`REWRITTEN_IN_PLACE`):改写型文件且已 ``done`` 的
+        **从 0 重开一次** —— 老队列里的 ``done`` 证明不了盘上这份就是传上去的
+        那份,升级前最后一次判读可能已经把它换掉了,而没进 pending 的条目服务器
+        哈希也救不了;其余(照片、追加流)只把 mtime 记下来,不把已传完的历史
+        全部重传。
         """
         old = self._items.get(key)
         if old is None:
@@ -220,8 +238,13 @@ class UploadQueue:
                                      "done": False, "mtime_ns": mtime_ns}))
             return False
         if mtime_ns and not old.mtime_ns:
-            # 老条目补上 mtime,别的不动。
-            self._write(QueueItem(**{**old.to_wire(), "mtime_ns": mtime_ns}))
+            if old.done and rewritten_in_place(key):
+                # 老条目、改写型、已 done:不信这个 done,重传一次。见上。
+                self._write(QueueItem(**{**old.to_wire(), "size": size, "offset": 0,
+                                         "done": False, "mtime_ns": mtime_ns}))
+            else:
+                # 老条目补上 mtime,别的不动。
+                self._write(QueueItem(**{**old.to_wire(), "mtime_ns": mtime_ns}))
         return False
 
     def advance(self, key: str, *, offset: int) -> None:
