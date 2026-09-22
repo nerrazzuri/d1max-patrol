@@ -4319,6 +4319,19 @@ class _RequestHandler(BaseHTTPRequestHandler):
 # ------------------------------------------------------------------ 入口
 
 
+def _warn_if_data_in_slot(cwd: Path, env: Mapping[str, str]) -> str | None:
+    """D1MAX_DATA_ROOT 没设、而进程跑在版本槽里 —— 多半是 OTA 升上来、单元文件
+    没更新。返回要打的警告,没事回 None。拆成纯函数是为了不起服务也能测。
+    """
+    if env.get(DATA_ROOT_ENV) is not None:
+        return None
+    if "/releases/" not in str(cwd.resolve()) + "/":
+        return None
+    return (f"{DATA_ROOT_ENV} 没设,而当前目录在版本槽里:{cwd}。巡检数据会落在槽里,"
+            "升级两次会被 prune 拦下但不会被搬走。这台机器多半是 OTA 升上来、"
+            "单元文件没更新 —— 重跑一次 deploy/install.sh")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="d1max-app", description="D1 Max 巡检 app")
     p.add_argument("--host", default=DEFAULT_HOST,
@@ -4455,6 +4468,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     # 先查这一条,再去连任何东西:不然要等三个后端都超时完才报错。
     check_exposure(args.host, args.pin)
     runs_root = Path(args.runs_root)
+    if (msg := _warn_if_data_in_slot(Path.cwd(), os.environ)):
+        log.warning(msg)
     log_dir = Path(args.log_dir) if args.log_dir else runs_root / "logs"
     map_host, map_port = _hostport(args.map_bridge, "--map-bridge")
     pose_host, pose_port = _hostport(args.pose_bridge, "--pose-bridge")
