@@ -243,8 +243,8 @@ class UploadQueue:
                 self._write(QueueItem(**{**old.to_wire(), "size": size, "offset": 0,
                                          "done": False, "mtime_ns": mtime_ns}))
             else:
-                # 老条目补上 mtime,别的不动。
-                self._write(QueueItem(**{**old.to_wire(), "mtime_ns": mtime_ns}))
+                # 老条目补上 mtime(size 顺手刷新,别让它跟盘上对不上),别的不动。
+                self._write(QueueItem(**{**old.to_wire(), "size": size, "mtime_ns": mtime_ns}))
         return False
 
     def advance(self, key: str, *, offset: int) -> None:
