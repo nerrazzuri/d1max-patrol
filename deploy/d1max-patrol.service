@@ -14,6 +14,12 @@ User=robot
 # 跑不起来,而它本来就是为这种坏法准备的。安全网不该比它防的问题更危险。
 WorkingDirectory=-/opt/d1max/current
 Environment=D1MAX_RELEASE_ROOT=/opt/d1max
+# **巡检数据不在版本槽里。** 没有这一行,app/server.py 的 --runs-root 默认是
+# 相对路径 runs,落在上面那个 WorkingDirectory —— 也就是 releases/<版本>/ ——
+# 底下:切版本之后旧槽里待传的队列停传,第三版坐实时 prune 把最老的槽连同
+# 证据一起删掉(W01,已复现)。这个目录由 install.sh 1/7 建、chown 给 robot,
+# uninstall.sh 默认删、--keep-data 留。**三处路径要一致。**
+Environment=D1MAX_DATA_ROOT=/var/lib/d1max
 Environment=PYTHONUNBUFFERED=1
 # D1MAX_SN 从这份文件来。前缀的 '-' 是"文件不在也别拦启动" —— 装机第一次
 # 起服务时人可能还没来得及填 SN,不能让服务因此起不来。命令行 release

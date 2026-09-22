@@ -137,6 +137,12 @@ def test_服务会自己重启但不无限刷屏(服务单元):
     assert "RestartSec=" in 服务单元
 
 
+def test_服务把巡检数据指到版本槽外面(服务单元):
+    """W01:没有这一行,--runs-root 默认相对路径 runs,落在
+    WorkingDirectory=/opt/d1max/current 也就是版本槽里,升两次级就被 prune 删掉。"""
+    assert "Environment=D1MAX_DATA_ROOT=/var/lib/d1max" in 服务单元
+
+
 def test_脚本能重跑():
     """装机的人会重跑它 —— 装到一半断了、参数填错了、第二台机器。"""
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
