@@ -145,6 +145,7 @@ from d1max_patrol.engine.bundle import (
 from d1max_patrol.engine.bundle import (
     read_state as read_bundle_state,
 )
+from d1max_patrol.engine.datadir import DATA_ROOT_ENV, resolve_paths
 from d1max_patrol.engine.export import (
     EXPORTS_DIR_NAME,
     ExportError,
@@ -4335,8 +4336,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="自建导航用的定位桥 host:port")
     p.add_argument("--map-bridge", default="127.0.0.1:8092",
                    help="地图桥 host:port")
-    p.add_argument("--maps-dir", default="runs/slam", help="自建地图目录")
-    p.add_argument("--bags-dir", default="runs/bags", help="录包落盘目录")
+    # **数据根。** 服务单元设 D1MAX_DATA_ROOT=/var/lib/d1max,四个数据目录就都
+    # 落到版本槽外面;开发机不设,还是仓库里的相对路径。理由见 engine/datadir.py。
+    paths = resolve_paths(os.environ.get(DATA_ROOT_ENV))
+    p.add_argument("--maps-dir", default=str(paths.maps_dir), help="自建地图目录")
+    p.add_argument("--bags-dir", default=str(paths.bags_dir), help="录包落盘目录")
     p.add_argument("--params-file", default="config/params/mapper_3d.yaml",
                    help="建图用的 slam_toolbox 参数模板")
     p.add_argument("--camera-host", default="192.168.234.1",
@@ -4348,8 +4352,10 @@ def _build_parser() -> argparse.ArgumentParser:
                         f"时候就靠这里人填(也可以用环境变量 {SN_ENV})")
     p.add_argument("--nickname", default=os.environ.get(NICKNAME_ENV),
                    help=f"给这只狗起的名,现场喊着方便(环境变量 {NICKNAME_ENV})")
-    p.add_argument("--missions-dir", default="missions")
-    p.add_argument("--runs-root", default="runs")
+    p.add_argument("--missions-dir", default=str(paths.missions_dir))
+    p.add_argument("--runs-root", default=str(paths.runs_root),
+                   help=f"巡检数据根目录。默认按环境变量 {DATA_ROOT_ENV} 推:"
+                        f"<数据根>/runs;没设就是相对路径 runs")
     p.add_argument("--log-dir", help="子进程日志目录(默认 <runs-root>/logs)")
     p.add_argument("--console-url", default=os.environ.get(CONSOLE_URL_ENV),
                    help=f"回传服务器地址(也可以用环境变量 {CONSOLE_URL_ENV})。"
