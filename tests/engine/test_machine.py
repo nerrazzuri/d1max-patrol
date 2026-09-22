@@ -741,3 +741,36 @@ async def test_后端不支持返航_一个点都没到过就直接回原点(mak
     assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
     assert nav.goto_calls[1:] == [_HOME.pose], nav.goto_calls
     await engine.aclose()
+
+
+async def test_后端不支持返航_到过两个点就倒着走两段再回原点(make_engine, nav, device):
+    """真正钉住「倒序」的那一条:到过 P1、P2,正往 P3 走时返航,回程必须是
+    P2 → P1 → 原点。上面那条只到过一个点,倒不倒序看不出来(评审抓的)。"""
+    from d1max_patrol.backends.base import NavRequestError
+
+    async def 不支持() -> None:
+        raise NavRequestError("return_home", "该后端不支持返航")
+
+    nav.return_home = 不支持
+    脚本 = [list(ARRIVED), list(ARRIVED), list(NEVER)]      # P1 到, P2 到, P3 卡; 回程默认都到
+    原来的 = nav.goto
+
+    async def 按脚本(pose):
+        nav.on_goto = 脚本.pop(0) if 脚本 else list(ARRIVED)
+        await 原来的(pose)
+
+    nav.goto = 按脚本
+    p1, p2, p3 = (Pose.from_xy_yaw(1.0, 0.0, 0.0), Pose.from_xy_yaw(2.0, 1.0, 1.57),
+                  Pose.from_xy_yaw(3.0, 2.0, 0.0))
+    mission = make_mission(
+        policy=policy(battery_abort_pct=15.0),
+        waypoints=(MissionWaypoint(name="P1", pose=p1, actions=()),
+                   MissionWaypoint(name="P2", pose=p2, actions=()),
+                   MissionWaypoint(name="P3", pose=p3, actions=())))
+    engine = make_engine()
+    await engine.start(mission, home=_HOME)
+    await until(lambda: len(nav.goto_calls) == 3)          # P1、P2 到了,正往 P3 走
+    device.emit(BatteryEvent(percent=20.0))
+    assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
+    assert nav.goto_calls[3:] == [p2, p1, _HOME.pose], nav.goto_calls
+    await engine.aclose()
