@@ -177,8 +177,11 @@ class LocalNavBackend(NavBackend):
         self._loc = LocStatus.INIT
         self._nav = NavStatus.STANDBY
         self._current_map: str | None = None
-        self._speed = {"x": self.params.max_fwd, "y": 0.0,
-                       "z": self.params.max_yaw}
+        # **限速是上限,存的是控制量**(W05)。对外按基类契约说 m/s、rad/s,
+        # 换算靠 fwd_speed_mps / yaw_speed_rps。运动循环每一拍的控制量仍由误差
+        # 和死区决定,只是封顶在这里;低于死区的上限没有物理意义,set_speed 拒绝。
+        self._fwd_cap = self.params.max_fwd
+        self._yaw_cap = self.params.max_yaw
 
         self._runner: asyncio.Task[None] | None = None
         self._resumed = asyncio.Event()
@@ -620,34 +623,57 @@ class LocalNavBackend(NavBackend):
 
     async def _turn(self, error: float) -> None:
         p = self.params
-        cmd = _saturate(abs(error) * p.yaw_gain, p.min_yaw, p.max_yaw)
+        cmd = _saturate(abs(error) * p.yaw_gain, p.min_yaw, self._yaw_cap)
         seconds = _pulse_seconds(abs(error), cmd * p.yaw_speed_rps, p)
         await self._device.walk(seconds, 0.0, 0.0, math.copysign(cmd, error))
 
     async def _advance(self, distance: float) -> None:
         p = self.params
-        cmd = _saturate(distance * p.fwd_gain, p.min_fwd, p.max_fwd)
+        cmd = _saturate(distance * p.fwd_gain, p.min_fwd, self._fwd_cap)
         seconds = _pulse_seconds(distance, cmd * p.fwd_speed_mps, p)
         await self._device.walk(seconds, cmd, 0.0, 0.0)
 
     # ------------------------------------------------------------ 速度
 
     async def get_speed(self) -> dict[str, float]:
-        return dict(self._speed)
+        """当前上限,按基类契约:x m/s、y m/s(本后端恒 0,不侧移)、z rad/s。"""
+        p = self.params
+        return {"x": self._fwd_cap * p.fwd_speed_mps, "y": 0.0,
+                "z": self._yaw_cap * p.yaw_speed_rps}
 
     async def set_speed(self, x: float, y: float | None = None,
                         z: float | None = None) -> dict[str, float]:
-        """记录期望速度并回报生效值。
+        """设上限,回报**真实生效值**(W05)。
 
-        存的是"上层希望多快";每一拍实际用多少由死区和误差共同决定 ——
-        本后端不会为了迁就这个值把控制量降进死区。
+        以前这里只记一个数、运动循环不读它:设成 0 照样 0.5 往前冲,上层看到
+        零速、底层在动(D4)。现在:
+
+        * 上限换算成控制量后封顶在 ``max_fwd``/``max_yaw``,超过就夹住并把夹住
+          后的值回报出去 —— 不静默改写,回报的就是真的。
+        * 低于死区(``min_fwd``/``min_yaw``)的上限**拒绝**:这台机做不到,
+          假装生效比慢半拍危险(#37: 0.11 几乎不动)。0 也在此列 —— 要停用 stop。
+        * 侧移本后端不做,``y`` 只接受 0/None。
         """
-        self._speed["x"] = float(x)
-        if y is not None:
-            self._speed["y"] = float(y)
+        p = self.params
+        fwd = float(x) / p.fwd_speed_mps
+        if fwd < p.min_fwd:
+            raise NavRequestError(
+                "set_speed",
+                f"前进上限 {x} m/s 低于死区({p.min_fwd * p.fwd_speed_mps:.2f} m/s),"
+                f"这台机走不动;要停用 stop")
+        if y is not None and abs(float(y)) > 1e-9:
+            raise NavRequestError("set_speed", "自建导航不做侧移,y 只能是 0")
+        yaw_cap = self._yaw_cap
         if z is not None:
-            self._speed["z"] = float(z)
-        return dict(self._speed)
+            yaw = float(z) / p.yaw_speed_rps
+            if yaw < p.min_yaw:
+                raise NavRequestError(
+                    "set_speed",
+                    f"转向上限 {z} rad/s 低于死区({p.min_yaw * p.yaw_speed_rps:.2f} rad/s)")
+            yaw_cap = min(yaw, p.max_yaw)
+        self._fwd_cap = min(fwd, p.max_fwd)
+        self._yaw_cap = yaw_cap
+        return await self.get_speed()
 
     def __repr__(self) -> str:  # pragma: no cover - 只为调试好看
         return (f"<LocalNavBackend {self._pose_host}:{self._pose_port} "

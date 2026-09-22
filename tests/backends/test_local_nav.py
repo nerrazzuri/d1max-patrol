@@ -361,3 +361,57 @@ def test_角度归一():
     assert wrap_angle(3.14159 * 3) == pytest.approx(3.14159, abs=1e-4)
     assert wrap_angle(-3.14159 * 3) == pytest.approx(-3.14159, abs=1e-4)
     assert wrap_angle(1.5) == pytest.approx(1.5)
+
+
+# --------------------------------------------------------------- 限速(W05)
+
+
+async def test_限速是上限_每一拍的前进量都不超过它(tmp_path):
+    """W05。以前 ``set_speed`` 只记一个数,运动循环不读它:设成 0 照样 0.5 往前冲。
+    现在它是**上限**:控制量仍由误差和死区决定,但封顶在这个数换算出来的量。"""
+    async with rig(tmp_path) as (agent, _pose, backend):
+        p = backend.params
+        cap_cmd = 0.36                                   # 介于死区 0.30 和 max_fwd 0.50 之间
+        got = await backend.set_speed(cap_cmd * p.fwd_speed_mps)
+        assert got["x"] == pytest.approx(cap_cmd * p.fwd_speed_mps)
+        await _run(backend, Pose.from_xy_yaw(1.5, 0.0, 0.0))
+        walks = [args for cmd, args in agent.commands if cmd == "walk" and args["fwd"] > 0]
+    assert walks
+    assert max(a["fwd"] for a in walks) <= cap_cmd + 1e-9, [a["fwd"] for a in walks]
+    assert min(a["fwd"] for a in walks) >= p.min_fwd - 1e-9
+
+
+async def test_限速低于死区_拒绝而不是回显(tmp_path):
+    """0 或者死区以下的速度这台机做不到(#37:0.11 几乎不动)。以前回显"生效了"
+    然后照样 0.5 走,上层看到零速、底层在动 —— 这是 D4 那条缺陷。现在明确拒绝。"""
+    async with rig(tmp_path) as (_agent, _pose, backend):
+        before = await backend.get_speed()
+        for bad in (0.0, 0.1, -1.0):
+            with pytest.raises(NavRequestError, match="死区"):
+                await backend.set_speed(bad)
+        assert await backend.get_speed() == before
+
+
+async def test_速度按基类契约用米每秒_超过上限就封顶并回报真实值(tmp_path):
+    async with rig(tmp_path) as (_agent, _pose, backend):
+        p = backend.params
+        default = await backend.get_speed()
+        assert default == pytest.approx({"x": p.max_fwd * p.fwd_speed_mps, "y": 0.0,
+                                         "z": p.max_yaw * p.yaw_speed_rps})
+        got = await backend.set_speed(5.0, 0.0, 9.0)
+        assert got["x"] == pytest.approx(p.max_fwd * p.fwd_speed_mps)
+        assert got["z"] == pytest.approx(p.max_yaw * p.yaw_speed_rps)
+        assert got["y"] == 0.0
+        with pytest.raises(NavRequestError, match="侧移"):
+            await backend.set_speed(0.5, 0.3)
+
+
+async def test_限速也管转向(tmp_path):
+    async with rig(tmp_path) as (agent, _pose, backend):
+        p = backend.params
+        cap_cmd = 0.36
+        await backend.set_speed(p.max_fwd * p.fwd_speed_mps, 0.0, cap_cmd * p.yaw_speed_rps)
+        await _run(backend, Pose.from_xy_yaw(0.0, 0.0, 2.5))
+        turns = [args for cmd, args in agent.commands if cmd == "walk" and args["yaw"] != 0]
+    assert turns
+    assert max(abs(a["yaw"]) for a in turns) <= cap_cmd + 1e-9
