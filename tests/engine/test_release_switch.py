@@ -222,3 +222,16 @@ def test_槽里runs目录是空的照删(tmp_path):
     (layout.releases / "2026-09-01-aaaaaa" / "runs").mkdir()
     activate(layout, "2026-09-20-77b2de", now_ms=NOW)
     assert commit(layout) == ("2026-09-01-aaaaaa",)
+
+
+def test_槽里只有手写任务也不删(tmp_path):
+    """``missions/*.yaml`` 是运行时写的,不在包里 —— 跟 runs 一样受保险保护。"""
+    layout = _layout(tmp_path)
+    for name in ("2026-09-01-aaaaaa", "2026-09-06-a3f9c1", "2026-09-20-77b2de"):
+        stage(layout, _pkg(tmp_path / name, name), now_ms=NOW)
+    m = layout.releases / "2026-09-01-aaaaaa" / "missions"
+    m.mkdir()
+    (m / "night.yaml").write_text("id: night\n", encoding="utf-8")
+    activate(layout, "2026-09-20-77b2de", now_ms=NOW)
+    assert commit(layout) == ()
+    assert (m / "night.yaml").exists()

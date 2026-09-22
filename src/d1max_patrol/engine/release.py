@@ -50,7 +50,10 @@ KEEP_RELEASES = 2
 #: 槽里这几样东西里任一样还有数据,就说明还有巡检数据 —— W01 之前的机器
 #: 数据就落在槽里。prune 见到就不删。也是 ``datadir.migrate_slot_data`` 要
 #: 搬走的那几样(``datadir`` 从这里 import,单一真理源在这儿)。
-SLOT_DATA_ITEMS = ("runs", "queue.jsonl", "baselines", "exports")
+#: ``missions`` 也在:``missions/*.yaml`` 是 ``PUT /api/missions`` 写出来的,
+#: 发布包里不带(见上面 ``--missions-dir`` 那条注释),跟 runs 一样是槽里的
+#: 运行时数据;任务包(``/opt/d1max/bundles``)是另一套机制,不在槽里。
+SLOT_DATA_ITEMS = ("runs", "missions", "queue.jsonl", "baselines", "exports")
 #: 守卫数到这个数还没等到「自检过了」,就判新版起不来,回滚。
 #: 2 而不是 1:第一次开机可能撞上别的偶发(网卡没起来、盘没挂上),给一次机会。
 MAX_BOOT_ATTEMPTS = 2

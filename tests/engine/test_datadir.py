@@ -141,3 +141,19 @@ def test_源改名撞上已有的部分搬迁结果时并进去而不是报错(t
     assert (a / "runs.migrated" / "r1" / "manifest.json").read_text(
         encoding="utf-8") == "a"
     assert not (a / "runs").exists()
+
+
+def test_手写的任务文件也在搬的范围内(tmp_path):
+    """``missions/*.yaml`` 是 ``PUT /api/missions`` 写出来的,包里不带 —— 它跟
+    runs 一样是槽里的运行时数据,不搬就随着 prune 一起没了。"""
+    root = tmp_path / "opt"
+    data = tmp_path / "var"
+    a = _slot(root, "2026-09-01-aaaaaa")
+    (a / "missions").mkdir()
+    (a / "missions" / "night.yaml").write_text("id: night\n", encoding="utf-8")
+
+    report = migrate_slot_data(Layout(root=root), data)
+
+    assert (data / "missions" / "night.yaml").read_text(encoding="utf-8") == "id: night\n"
+    assert (a / "missions.migrated").is_dir() and not (a / "missions").exists()
+    assert report.copied == 1
