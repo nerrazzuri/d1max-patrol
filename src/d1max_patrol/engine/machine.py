@@ -36,6 +36,7 @@ from d1max_patrol.backends.base import (
     MediaSource,
     NavBackend,
     NavBackendError,
+    NavRequestError,
     NavStatusEvent,
 )
 from d1max_patrol.engine.archive import RunArchive
@@ -783,7 +784,16 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 # 挪开十几米,点继续,看它是从**新位置**起步回原点,还是掉头
                 # 走回原来那条路的起点。不通过的话,这个任务要退回"返航中拒绝
                 # 让开腿"。
-                await self._nav.return_home()
+                try:
+                    await self._nav.return_home()
+                except NavRequestError as exc:
+                    # **后端不会返航,引擎自己回(W04)。** 自建导航和仿真的
+                    # ``return_home`` 是明确拒绝的;以前这个拒绝直接把整趟按
+                    # 「返航失败」中止 —— 低电时狗原地趴下,而这正是最不该
+                    # 趴下的时候。沿来路倒着走回去:直线回家会穿墙。
+                    log.info("后端不支持返航(%s),引擎沿来路回原点", exc)
+                    await self._retrace_home()
+                    break
                 # 超时预算每一圈重算:人接管花了多久,不该记在这一趟返航头上
                 # (跟 ``_do_waypoint`` 里"到点超时按这一次尝试算"同一个道理)。
                 await self._wait_nav_terminal(self._clock() + RETURN_TIMEOUT_S)
@@ -843,6 +853,27 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 return
             break
         await self._transition(RunState.DONE, reason)
+
+    async def _retrace_home(self) -> None:
+        """沿来路回原点:已到过的点位倒序各走一段,最后一段到原点。
+
+        每一段都是一次普通的 ``goto`` + 等终态,所以人在半路接管、暂停再继续
+        走的仍是 ``_go_home`` 那个循环(``_ResumeReturnHome``/``_RetryWaypoint``
+        从这儿一路抛上去),重来时按当时的 ``live.index`` 重算这条回路。
+        「已到过」按 ``live.index`` 算:它是正在去的那个点,前面的都到过(或试过);
+        没到过任何点就只剩原点这一段。原点没标的话没得回,交给上层按返航失败处理。
+        """
+        live = self._live
+        assert live is not None
+        legs = [wp.pose for wp in live.mission.waypoints[:live.index]][::-1]
+        if self._home is None:
+            raise _FailWaypoint("没有原点,不知道该回哪儿")
+        legs.append(self._home.pose)
+        for pose in legs:
+            await self._stop_nav_quietly()
+            await self._await_nav_standby(self._clock() + NAV_STANDBY_TIMEOUT_S)
+            await self._nav.goto(pose)
+            await self._wait_nav_terminal(self._clock() + RETURN_TIMEOUT_S)
 
     async def _finish(self) -> None:
         live = self._live

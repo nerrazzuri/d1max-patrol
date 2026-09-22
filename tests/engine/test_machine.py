@@ -32,7 +32,7 @@ from d1max_patrol.protocol.nav_types import (
 )
 
 from ..conftest import BadDisks
-from .conftest import _HOME, NEVER, make_mission, until
+from .conftest import _HOME, ARRIVED, NEVER, make_mission, until
 
 #: ``nav``/``device``/``media``/``clock``/``make_engine`` 这几个夹具,连同
 #: ``NavStub``/``DeviceStub``/``MediaStub``/``Clock`` 那套假后端,都长在
@@ -682,3 +682,62 @@ async def test_引擎不认识HTTP(make_engine):
     for banned in ("aiohttp", "fastapi", "starlette", "uvicorn", "flask",
                    "http.server", "websockets"):
         assert banned not in src, f"引擎里不该出现 {banned}"
+
+
+async def test_后端不支持返航_引擎沿来路倒着回原点(make_engine, nav, device):
+    """W04。自建导航(和仿真)的 ``return_home`` 是明确拒绝的,以前引擎收到这个
+    拒绝就把整趟按「返航失败」中止 —— 低电时狗原地趴下。现在引擎自己回:已到过的
+    点位倒序走一遍,最后到原点。倒着走来路是为了不穿墙:直线回家会撞上中间的东西。
+
+    时序:P1 到了(index→1),P2 走不到(卡住),电量掉到返航线 → 引擎该发
+    ``goto(P1)`` 再 ``goto(原点)``,而不是 ``return_home()``。
+    """
+    from d1max_patrol.backends.base import NavRequestError
+
+    async def 不支持() -> None:
+        raise NavRequestError("return_home", "该后端不支持返航")
+
+    nav.return_home = 不支持
+    脚本 = [list(ARRIVED), list(NEVER), list(ARRIVED), list(ARRIVED)]   # P1 到, P2 卡, 回程两段都到
+    原来的 = nav.goto
+
+    async def 按脚本(pose):
+        nav.on_goto = 脚本.pop(0) if 脚本 else list(ARRIVED)
+        await 原来的(pose)
+
+    nav.goto = 按脚本
+    engine = make_engine()
+    mission = make_mission(policy=policy(battery_abort_pct=15.0))
+    await engine.start(mission, home=_HOME)
+    await until(lambda: len(nav.goto_calls) == 2)          # P1 到了,正往 P2 走
+    device.emit(BatteryEvent(percent=20.0))                # 返航线 25,中止线 15
+    assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
+    assert nav.home_calls == 0
+    p1 = mission.waypoints[0].pose
+    assert nav.goto_calls[2:] == [p1, _HOME.pose], nav.goto_calls
+    assert RunState.RETURNING in engine._seen
+    await engine.aclose()
+
+
+async def test_后端不支持返航_一个点都没到过就直接回原点(make_engine, nav, device):
+    from d1max_patrol.backends.base import NavRequestError
+
+    async def 不支持() -> None:
+        raise NavRequestError("return_home", "该后端不支持返航")
+
+    nav.return_home = 不支持
+    脚本 = [list(NEVER), list(ARRIVED)]                     # P1 卡住, 回原点到
+    原来的 = nav.goto
+
+    async def 按脚本(pose):
+        nav.on_goto = 脚本.pop(0) if 脚本 else list(ARRIVED)
+        await 原来的(pose)
+
+    nav.goto = 按脚本
+    engine = make_engine()
+    await engine.start(make_mission(policy=policy(battery_abort_pct=15.0)), home=_HOME)
+    await until(lambda: nav.goto_calls)
+    device.emit(BatteryEvent(percent=20.0))
+    assert await engine.wait_done(timeout_s=5.0) is RunState.DONE
+    assert nav.goto_calls[1:] == [_HOME.pose], nav.goto_calls
+    await engine.aclose()
