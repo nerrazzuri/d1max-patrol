@@ -581,3 +581,65 @@ def test_判读失败也要把正在判读的登记撤掉(server, 三趟, tmp_pa
     finally:
         q.close()
         三趟.upload = None
+
+
+def test_同一趟并发判读_第二个拒绝_第一个仍受保护(server, 三趟, tmp_path, monkeypatch):
+    """登记是集合不是引用计数:两个并发判读里先结束的那个会撤掉另一个的保护。
+    所以第二个请求直接 409;第一个还没结束时清盘照样删不了它。"""
+    import d1max_patrol.app.server as S
+    from d1max_patrol.app.server import _run_id
+    runs_root = Path(三趟.runs_root)
+    run = sorted(runs_root.glob("巡检一号/*"))[0]
+    mark_uploaded(run)
+    pump, q = _假pump(tmp_path)
+    _全部入队并传完(q, runs_root, run)
+    三趟.upload = pump
+    url = f"/api/runs/{quote(_run_id(run), safe='/.%')}/judge"
+    seen: dict = {}
+
+    def 第一个卡在半路(run_dir, **kw):
+        code2, body2, _ = C.request(server, url, method="POST")     # 第二个判读
+        seen["second"] = (code2, body2)
+        code3, got3 = _sweep(server, {"free_bytes": 10**9, "apply": True})
+        seen["sweep"] = (code3, got3, run_dir.is_dir())
+        return []
+
+    monkeypatch.setattr(S, "judge_run", 第一个卡在半路)
+    try:
+        code, body, _ = C.request(server, url, method="POST")
+        assert code == 200, body
+        assert seen["second"][0] == 409, seen["second"]
+        code3, got3, still = seen["sweep"]
+        assert code3 == 200 and still and not _方案里有(got3, run) and got3["deleted"] == []
+        assert run.is_dir()
+        code, body, _ = C.request(server, url, method="POST")      # 第一个结束后可再判
+        assert code == 200, body
+    finally:
+        q.close()
+        三趟.upload = None
+
+
+def test_判读抛非OSError_登记也要释放_不许永久锁死(server, 三趟, tmp_path, monkeypatch):
+    import d1max_patrol.app.server as S
+    from d1max_patrol.app.server import _run_id
+    runs_root = Path(三趟.runs_root)
+    run = sorted(runs_root.glob("巡检一号/*"))[0]
+    mark_uploaded(run)
+    pump, q = _假pump(tmp_path)
+    _全部入队并传完(q, runs_root, run)
+    三趟.upload = pump
+
+    def 炸得意外(run_dir, **kw):
+        raise RuntimeError("插件坏了")
+
+    monkeypatch.setattr(S, "judge_run", 炸得意外)
+    try:
+        code, _, _ = C.request(server, f"/api/runs/{quote(_run_id(run), safe='/.%')}/judge",
+                               method="POST")
+        assert code >= 500, "意外异常按既有兜底回 5xx"
+        assert run not in server._busy_runs
+        code, got = _sweep(server, {"free_bytes": 10**9})
+        assert _方案里有(got, run), "登记没释放,这趟永远清不了盘"
+    finally:
+        q.close()
+        三趟.upload = None

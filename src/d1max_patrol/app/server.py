@@ -2988,18 +2988,29 @@ class AppServer:
         # **判读期间这一趟不许被清盘删。** 模型调用要几分钟,不能握着协调锁;
         # 所以先登记"正在判读",清盘的判据见到它就不算已传;提交或失败后在锁里
         # 撤登记、撤「可删」、删旧报告 —— 这三件事跟写 findings 之间没有窗。
+        #
+        # **同一趟同时只许一个判读。** 登记是个集合,数不了引用:两个并发请求
+        # 一个先结束就把另一个的保护撤了,清盘随即可能把它正在读的照片删掉。
+        # 双击、客户端超时重试、代理重放都能造出两个并发调用 —— 拒绝第二个。
+        # **登记是资源,必须 finally 释放**:judge_run 抛任何异常都不能把这一趟
+        # 永久锁成"正在判读"(那样它以后永远清不了盘,只能重启服务)。
         with self._coord():
+            if run in self._busy_runs:
+                raise HttpError(409, "这一趟正在判读", "等它结束再点")
             self._busy_runs.add(run)
+        succeeded = False
         try:
             findings = judge_run(run, history_root=self._ctx.runs_root,
                                  baselines_root=self._ctx.baselines)
+            succeeded = True
         except OSError as exc:
+            raise HttpError(500, "判读时读写归档失败", str(exc)) from exc
+        finally:
             with self._coord():
                 self._busy_runs.discard(run)
-            raise HttpError(500, "判读时读写归档失败", str(exc)) from exc
-        with self._coord():
-            self._busy_runs.discard(run)
-            self._stale_reports(run)
+                if succeeded:
+                    # 提交、撤标、删旧报告在同一个锁区间里,中间没有窗。
+                    self._stale_reports(run)
         return json_response({"findings": [f.to_wire() for f in findings]})
 
     def _run_review(self, req: Request) -> Response:
