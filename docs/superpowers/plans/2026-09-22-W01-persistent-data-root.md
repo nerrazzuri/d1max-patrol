@@ -1,5 +1,12 @@
 # W01 持久数据目录 Implementation Plan
 
+> **执行后订正（2026-09-22）**：本计划已执行完毕。执行中发现并改掉的三处计划错误，
+> 为免误导后来者，在原文处以 ⚠️ 标出：(1) Task 3 的 `continue` 应为 `break`；
+> (2) Task 3 的保险只看 `runs` 是漏洞，应看四样；(3) Task 7 的 `migrate → restart`
+> 是竞态，应为 `stop → migrate → start`；(4) Task 4 说 `missions/` 不搬是错的——它装的是
+> `PUT /api/missions` 手写的 `*.yaml`，包里不带，跟 runs 一样是运行时数据，实际实现搬且受保险保护。
+> 以代码与 `docs/装机清单.md` 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 巡检数据（runs、上传队列、基线、导出、任务文件）搬出版本槽，落到一个升级和回滚都不碰的持久目录 `/var/lib/d1max`，并把老机器槽里的数据一次性迁过来；`prune()` 加一道保险，绝不删还装着数据的槽。
@@ -311,14 +318,16 @@ SLOT_DATA_DIR = "runs"
         if _has_slot_data(layout.releases / name):
             log.warning("版本 %s 的槽里还有巡检数据,不删 —— 先跑 "
                         "release migrate-data 把数据搬到数据根", name)
-            continue
+            break   # ⚠️ 原计划写 continue —— 那会跳过这一槽去删下一槽凑数;实际实现是 break
         shutil.rmtree(layout.releases / name, ignore_errors=True)
         dropped.append(name)
     return tuple(dropped)
 
 
 def _has_slot_data(slot: Path) -> bool:
-    """``<槽>/runs`` 底下还有任何文件吗。空目录不算。"""
+    """``<槽>/runs`` 底下还有任何文件吗。空目录不算。
+    ⚠️ 原计划只看 runs;评审指出 queue.jsonl/baselines/exports 也会被一起 rmtree。
+    实际实现看 release.SLOT_DATA_ITEMS 四样(非空文件或含文件的目录)。"""
     runs = slot / SLOT_DATA_DIR
     if not runs.is_dir():
         return False
@@ -347,7 +356,7 @@ git commit -m "release: prune never removes a slot that still holds run data (W0
 - Modify: `src/d1max_patrol/engine/datadir.py`
 - Test: `tests/engine/test_datadir.py`(追加)
 
-搬的四样(与 `runs_root.parent` 约定对应):`runs/`、`queue.jsonl`、`baselines/`、`exports/`。规则:**只增不覆盖**(目标已有同路径文件就跳过并记下),搬完把槽里的源改名加 `.migrated` 后缀,这样 Task 3 的保险不会因为已迁移的槽永远拦住 prune。`missions/` 不搬:任务由任务包(`/opt/d1max/bundles`)分发,槽里的 `missions/` 是包里带的样例。
+搬的四样(与 `runs_root.parent` 约定对应):`runs/`、`queue.jsonl`、`baselines/`、`exports/`。规则:**只增不覆盖**(目标已有同路径文件就跳过并记下),搬完把槽里的源改名加 `.migrated` 后缀,这样 Task 3 的保险不会因为已迁移的槽永远拦住 prune。~~`missions/` 不搬~~ ⚠️ 错:`missions/*.yaml` 是 `PUT /api/missions` 写出来的、包里不带(`release.py` 的打包注释明说),实际实现把 `missions` 加进了 `SLOT_DATA_ITEMS`,搬且保护。
 
 - [ ] **Step 1: 写失败的测试**(追加)
 
@@ -712,6 +721,10 @@ chown -R "$RUN_USER":"$RUN_USER" "/var/lib/d1max"
 ```
 
 `7/7` 里 `systemctl restart d1max-patrol.service` 之前加:
+
+> ⚠️ **原计划此处是竞态**:migrate 时老服务还在跑,可能正往槽里的 `queue.jsonl`/`runs/` 追加,
+> 半截文件会被当成已完整拷走。实际实现是 **`systemctl stop || true` → migrate-data → `systemctl start`**,
+> 且 `migrate_slot_data` 的 docstring 写明了"调用前提:没有任何进程还在往槽里写"。
 
 ```bash
 # **老机器槽里的数据先搬到数据根,再重启。** W01 之前 --runs-root 落在槽里;

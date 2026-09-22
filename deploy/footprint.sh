@@ -36,6 +36,9 @@ set -u
 SURVEY_DIRS=(
   "/etc/systemd/system:2"
   "/opt:2"
+  # W01 之后巡检数据根在 /var/lib/d1max;装机会在这儿建目录,勘察范围要跟上,
+  # 不然装机前后的 diff 证明不了"只动了声明过的那几处"。深度 1 只看到 d1max 这一层。
+  "/var/lib:1"
   "/etc:1"
   "/usr/local/bin:1"
   "/usr/local/lib:2"
