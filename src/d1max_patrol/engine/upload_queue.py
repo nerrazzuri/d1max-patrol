@@ -169,9 +169,14 @@ class UploadQueue:
                 self._remember(item)
 
     def _remember(self, item: QueueItem) -> None:
-        if item.key not in self._items:
-            self._order.append(item.key)
+        # **先进 _items,再进 _order。** 清盘那条路由会从 HTTP 线程读 all()(W03),
+        # 而它按 _order 去 _items 里取 —— 反过来写的话,两步之间被切走一次,读的
+        # 那边就拿着一个 _items 里还没有的 key 撞 KeyError。这个模块不是线程安全
+        # 的,这一处只是把最便宜的那个洞堵上,不是承诺。
+        new = item.key not in self._items
         self._items[item.key] = item
+        if new:
+            self._order.append(item.key)
 
     def _write(self, item: QueueItem) -> None:
         self._remember(item)
@@ -280,7 +285,8 @@ class UploadQueue:
         return self._items.get(key)
 
     def all(self) -> list[QueueItem]:
-        return [self._items[k] for k in self._order]
+        # 先把 _order 拍个快照再取值,别在别的线程 append 时边走边取。
+        return [self._items[k] for k in list(self._order)]
 
     def pending(self, now_ms: int) -> list[QueueItem]:
         """能传的,按 spec §4.3 的四级排;同级按入队先后。"""

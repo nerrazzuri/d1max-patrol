@@ -304,3 +304,44 @@ def test_改写型文件都在白名单里_不许只进一张表() -> None:
     from d1max_patrol.engine.upload_queue import REWRITTEN_IN_PLACE
     for name in REWRITTEN_IN_PLACE:
         assert classify(name) is not None, name
+
+
+def test_all_在另一个线程猛写的时候不炸(tmp_path: Path) -> None:
+    """W03 评审复现出来的:``_remember`` 先进 ``_order`` 再进 ``_items``,
+    另一个线程的 ``all()`` 正好切进两步之间就 ``KeyError``。这条把切换间隔调到
+    极小去逼它;修之前评审 5 秒内必现,这里给 2 秒 —— 绿了不等于完全无竞态,
+    红了一定是退化。"""
+    import sys
+    import threading
+
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def writer() -> None:
+        n = 0
+        while not stop.is_set():
+            q.offer(f"m/s/f{n}.jsonl", PRIORITY_EVENTS, size=1)
+            n += 1
+
+    def reader() -> None:
+        try:
+            while not stop.is_set():
+                q.all()
+        except BaseException as exc:  # noqa: BLE001 - 就是要抓它
+            errors.append(exc)
+
+    try:
+        ts = [threading.Thread(target=writer), threading.Thread(target=reader)]
+        for t in ts:
+            t.start()
+        ts[1].join(2.0)
+        stop.set()
+        for t in ts:
+            t.join(5.0)
+    finally:
+        sys.setswitchinterval(old)
+        q.close()
+    assert errors == []
