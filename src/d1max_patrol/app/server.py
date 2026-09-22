@@ -37,7 +37,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import partial
@@ -880,8 +880,13 @@ def _该打可删了吗(runs_root: Path, queue: UploadQueue, run_rel: str) -> No
     mark_uploaded(run)
 
 
-def _why_not_uploaded(run: Path, run_rel: str, queue: UploadQueue) -> str | None:
+def _why_not_uploaded(run: Path, run_rel: str, queue: UploadQueue,
+                      busy: Collection[Path] = ()) -> str | None:
     """这一趟**此刻**真的全在服务器上了吗。回 ``None`` 表示是;否则回一句原因。
+
+    ``busy`` 是**正在判读**的那几趟(``AppServer._busy_runs``):判读要几分钟,
+    模型调用不能放进协调锁,所以判读一开始就登记、提交或失败后撤销;登记期间
+    这一趟不算已传 —— 不然清盘会把它正在读的照片和马上要写的 findings 一起删掉。
 
     「可删」的判据不能只看盘上那个 ``.uploaded`` 标记(它是异步打的、异步撤的),
     要对着**活队列和盘上的文件**重新算一遍(W03,外部审核的阻断项):
@@ -898,6 +903,8 @@ def _why_not_uploaded(run: Path, run_rel: str, queue: UploadQueue) -> str | None
     """
     if not run.is_dir():
         return "目录不在了"
+    if run in busy:
+        return "正在判读,结论还没写完"
     if not (run / UPLOADED_REL).exists():
         return "没有「可删」标记"
     if not is_settled(run):
@@ -925,7 +932,8 @@ def _why_not_uploaded(run: Path, run_rel: str, queue: UploadQueue) -> str | None
 
 
 def _mask_uploaded_by_queue(runs: list[RunInfo], runs_root: Path,
-                            queue: UploadQueue) -> list[RunInfo]:
+                            queue: UploadQueue,
+                            busy: Collection[Path] = ()) -> list[RunInfo]:
     """水位线拿方案之前,把 ``uploaded`` 按 :func:`_why_not_uploaded` 重算一遍:
     标记说传完了、活队列或盘上文件说没有,**听后者的**。"""
     root = Path(runs_root)
@@ -940,7 +948,7 @@ def _mask_uploaded_by_queue(runs: list[RunInfo], runs_root: Path,
             out.append(replace(info, uploaded=False))
             continue
         out.append(replace(info, uploaded=False)
-                   if _why_not_uploaded(info.path, rel, queue) else info)
+                   if _why_not_uploaded(info.path, rel, queue, busy) else info)
     return out
 
 
@@ -1747,6 +1755,8 @@ class AppServer:
         #: 掉,盘上落的是残的一趟,而"只增不删"保证它再也不会被重拷。
         self._sweeping: bool = False
         self._sync_lock = threading.Lock()
+        #: 正在判读的那几趟(W03)。只在 ``_coord()`` 锁里增删;清盘的判据读它。
+        self._busy_runs: set[Path] = set()
         #: 自动同步那条后台协程。**活在循环线程上**,由 :meth:`start` 经桥
         #: 建起来、:meth:`stop` 经桥收掉,写法照 ``_StateHub``。
         self._autosync: asyncio.Task[None] | None = None
@@ -2975,12 +2985,20 @@ class AppServer:
         "跟上次一样",异常就此静默转正。
         """
         run = self._run_dir(req.params["run_id"])
+        # **判读期间这一趟不许被清盘删。** 模型调用要几分钟,不能握着协调锁;
+        # 所以先登记"正在判读",清盘的判据见到它就不算已传;提交或失败后在锁里
+        # 撤登记、撤「可删」、删旧报告 —— 这三件事跟写 findings 之间没有窗。
+        with self._coord():
+            self._busy_runs.add(run)
         try:
             findings = judge_run(run, history_root=self._ctx.runs_root,
                                  baselines_root=self._ctx.baselines)
         except OSError as exc:
+            with self._coord():
+                self._busy_runs.discard(run)
             raise HttpError(500, "判读时读写归档失败", str(exc)) from exc
         with self._coord():
+            self._busy_runs.discard(run)
             self._stale_reports(run)
         return json_response({"findings": [f.to_wire() for f in findings]})
 
@@ -2990,16 +3008,17 @@ class AppServer:
         payload = req.json()
         if not isinstance(payload, dict):
             raise HttpError(400, "复核要一个对象", "形如 {verdict, note}")
+        # 复核很短:写 review.json 和撤「可删」放进同一把协调锁,中间没有窗。
         try:
-            save_review(run, req.params["name"],
-                        str(payload.get("verdict", "")),
-                        str(payload.get("note", "")))
+            with self._coord():
+                save_review(run, req.params["name"],
+                            str(payload.get("verdict", "")),
+                            str(payload.get("note", "")))
+                self._stale_reports(run)
         except ValueError as exc:
             raise HttpError(400, "这条复核记不下来", str(exc)) from exc
         except OSError as exc:
             raise HttpError(500, "写复核失败", str(exc)) from exc
-        with self._coord():
-            self._stale_reports(run)
         return json_response({"reviews": read_reviews(run)})
 
     # --------------------------------------------------- 盘况、预告、导出
@@ -3130,7 +3149,8 @@ class AppServer:
         with self._coord():
             runs = scan_runs(ctx.runs_root, now=now)
             if ctx.upload is not None:
-                runs = _mask_uploaded_by_queue(runs, Path(ctx.runs_root), ctx.upload.queue)
+                runs = _mask_uploaded_by_queue(runs, Path(ctx.runs_root), ctx.upload.queue,
+                                               self._busy_runs)
             sweep = plan_sweep(runs, now=now,
                                has_upload=ctx.form.has_upload, need_bytes=need,
                                noticed=read_notice(ctx.runs_root))
@@ -3155,7 +3175,8 @@ class AppServer:
                         root = Path(ctx.runs_root)
                         for info in sweep.delete:
                             rel = info.path.relative_to(root).as_posix()
-                            why = (_why_not_uploaded(info.path, rel, ctx.upload.queue)
+                            why = (_why_not_uploaded(info.path, rel, ctx.upload.queue,
+                                                     self._busy_runs)
                                    if info.uploaded else None)
                             if why:
                                 skipped.append({"path": str(info.path), "reason": why})

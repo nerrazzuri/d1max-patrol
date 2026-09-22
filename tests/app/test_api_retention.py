@@ -519,3 +519,65 @@ def test_复核一写下去_可删标记当场就撤(server, 三趟, tmp_path):
     finally:
         q.close()
         三趟.upload = None
+
+
+def test_正在判读的那趟_清盘不许删(server, 三趟, tmp_path, monkeypatch):
+    """判读要几分钟,模型调用不能放进协调锁;所以判读一开始就登记"这趟正在判读",
+    `_why_not_uploaded` 见到就不算已传,直到判读提交或失败。这里把假的 judge_run
+    卡在半路,在里面发一次真删的清盘,断言它跳过了这趟、目录还在。"""
+    import d1max_patrol.app.server as S
+    from d1max_patrol.app.server import _run_id
+    runs_root = Path(三趟.runs_root)
+    run = sorted(runs_root.glob("巡检一号/*"))[0]
+    mark_uploaded(run)
+    pump, q = _假pump(tmp_path)
+    _全部入队并传完(q, runs_root, run)
+    三趟.upload = pump
+    seen: dict = {}
+
+    def 判读到一半有人清盘(run_dir, **kw):
+        code, got = _sweep(server, {"free_bytes": 10**9, "apply": True})
+        seen["code"], seen["got"] = code, got
+        seen["still_there"] = run_dir.is_dir()
+        return []
+
+    monkeypatch.setattr(S, "judge_run", 判读到一半有人清盘)
+    try:
+        code, body, _ = C.request(server, f"/api/runs/{quote(_run_id(run), safe='/.%')}/judge",
+                                  method="POST")
+        assert code == 200, body
+        assert seen["code"] == 200
+        assert seen["still_there"], "判读中被清盘删了"
+        # 登记在方案生成那一步就把它遮掉了 —— 根本不进方案,也就不在 skipped 里。
+        assert not _方案里有(seen["got"], run), seen["got"]["sweep"]
+        assert seen["got"]["deleted"] == []
+        assert run.is_dir()
+        assert not (run / ".uploaded").exists(), "判读完标记应已撤"
+    finally:
+        q.close()
+        三趟.upload = None
+
+
+def test_判读失败也要把正在判读的登记撤掉(server, 三趟, tmp_path, monkeypatch):
+    import d1max_patrol.app.server as S
+    from d1max_patrol.app.server import _run_id
+    runs_root = Path(三趟.runs_root)
+    run = sorted(runs_root.glob("巡检一号/*"))[0]
+    mark_uploaded(run)
+    pump, q = _假pump(tmp_path)
+    _全部入队并传完(q, runs_root, run)
+    三趟.upload = pump
+
+    def 炸(run_dir, **kw):
+        raise OSError("盘掉了")
+
+    monkeypatch.setattr(S, "judge_run", 炸)
+    try:
+        code, _, _ = C.request(server, f"/api/runs/{quote(_run_id(run), safe='/.%')}/judge",
+                               method="POST")
+        assert code == 500
+        code, got = _sweep(server, {"free_bytes": 10**9})
+        assert _方案里有(got, run), "判读失败后不该还挂着「正在判读」把这趟锁死"
+    finally:
+        q.close()
+        三趟.upload = None

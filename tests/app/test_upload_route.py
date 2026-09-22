@@ -638,3 +638,18 @@ def test_清盘看的是活队列和盘_标记在也要对得上才算已传(tmp
     q.offer(f"{RUN_REL}/report.md", PRIORITY_PHOTO, size=1, mtime_ns=1)   # 重开
     assert 算() is False, "队列里有没传完的 —— 不算"
     q.close()
+
+
+def test_登记为正在判读的那趟不算已传(tmp_path: Path):
+    from d1max_patrol.app.server import _why_not_uploaded
+    run = 摆一趟(tmp_path, "report.md")
+    收工(run)
+    mark_uploaded(run)
+    q = UploadQueue(tmp_path / "queue.jsonl")
+    for rel in ("report.md", "manifest.json"):
+        st = (run / rel).stat()
+        q.offer(f"{RUN_REL}/{rel}", PRIORITY_PHOTO, size=st.st_size, mtime_ns=st.st_mtime_ns)
+        q.finish(f"{RUN_REL}/{rel}")
+    assert _why_not_uploaded(run, RUN_REL, q) is None
+    assert "判读" in (_why_not_uploaded(run, RUN_REL, q, busy={run}) or "")
+    q.close()
