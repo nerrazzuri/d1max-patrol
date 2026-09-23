@@ -272,15 +272,23 @@ async def test_外部队列消灭先订阅后下发的竞态(ready_backend):
 
 
 async def test_速度读写往返(nav_backend):
+    """通用契约只测所有后端都必须支持的那一部分:``y=0.0``。
+
+    侧移不是通用能力 —— W05(``9fcc447``)规定 ``LocalNavBackend`` 不做侧移,
+    ``y`` 只收 0/None,给了非零要**明确拒绝**而不是静默忽略或回显。厂商后端
+    的侧移速度由 ``tests/backends/test_vendor_capabilities.py`` 单独验。
+    ``x``/``z`` 也取在每个后端的封顶之内(局部后端默认 0.5 m/s、0.75 rad/s,
+    超过就夹到上限,往返自然对不上)——契约测的是「设多少回多少」,不是上限。
+    """
     speed = await nav_backend.get_speed()
     assert {"x", "y", "z"} <= set(speed)
     assert all(isinstance(v, float) for v in speed.values())
 
-    await nav_backend.set_speed(0.5, y=0.3, z=1.0)
+    await nav_backend.set_speed(0.5, y=0.0, z=0.5)
     got = await nav_backend.get_speed()
     assert got["x"] == pytest.approx(0.5)
-    assert got["y"] == pytest.approx(0.3)
-    assert got["z"] == pytest.approx(1.0)
+    assert got["y"] == pytest.approx(0.0)
+    assert got["z"] == pytest.approx(0.5)
 
 
 # --------------------------------------------------------------- 事件订阅
