@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import shutil
@@ -816,3 +817,52 @@ def test_钟不可信就不按钟出发(tmp_path, 起一台, monkeypatch):
     time.sleep(1.0)
     assert not ctx.engine.running
     assert "钟" in get_json(s, "/api/schedule")["executor"]["last_skip"]
+
+
+def test_起飞检查期间有人拿了控制权_也不起(tmp_path, bridge, monkeypatch):
+    """检查后使用竞态(外部审核):第一次控制权检查过了,起飞检查里有好几个 await,
+    这期间操作员拿到控制权,起跑前不再查的话就从他手里把腿抢走了。这里把起飞
+    检查卡在半路,中途用真会话取控制权,再放行。"""
+    import threading
+
+    monkeypatch.setattr(S, "_SCHEDULE_PERIOD_S", 0.3)
+    root = tmp_path / "bundles"
+    land(root, 打包(tmp_path, "a", 1))
+    apply_bundle(root, "site-kl-1")
+    now = 毫秒(9, 7, 22, 10)
+    ctx = make_ctx(bridge, tmp_path, bundles_root=root, clock=lambda: now)
+    s = AppServer(ctx, port=0, pin="246810")
+    进了检查 = threading.Event()
+    放行 = threading.Event()
+    原来的 = S._preflight_with_scan
+
+    async def 卡在半路(ctx_, mission, home):
+        进了检查.set()
+        while not 放行.is_set():
+            await asyncio.sleep(0.01)
+        return await 原来的(ctx_, mission, home)
+
+    monkeypatch.setattr(S, "_preflight_with_scan", 卡在半路)
+    s.start()
+    try:
+        save_home(ctx.mapping.maps_dir, 夜巡原点)
+        assert 进了检查.wait(5.0), "执行器没进起飞检查"
+        code, body, _ = request(s, "/api/auth", method="POST",
+                                payload={"pin": "246810", "operator": "李四"})
+        tok = {"Authorization": f"Bearer {json.loads(body)['token']}"}
+        code, body, _ = request(s, "/api/control/acquire", method="POST",
+                                payload={}, headers=tok)
+        assert code == 200, body
+        放行.set()
+        time.sleep(1.0)
+        assert not ctx.engine.running, "起飞检查期间拿到控制权,排程还是起了"
+        code, body, _ = request(s, "/api/schedule", headers=tok)
+        assert "控制权" in json.loads(body)["executor"]["last_skip"]
+        code, _, _ = request(s, "/api/control/release", method="POST", payload={},
+                             headers=tok)
+        assert code == 200
+        _等到(lambda: ctx.engine.running)
+    finally:
+        s.stop()
+        with contextlib.suppress(Exception):
+            bridge.call(ctx.engine.aclose, timeout_s=10.0)

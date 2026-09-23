@@ -1479,6 +1479,15 @@ class _StateHub:
             self._sched_last_skip = "起飞检查没过: " + ";".join(
                 f"{c.name}: {c.detail}" for c in report.failures)
             return
+        # **起跑前再查一次控制权,用新的钟。** 起飞检查里有好几个 await(扫外插盘、
+        # 问后端),这期间操作员完全可能经桥拿到控制权;上面那次检查是"检查后使用"。
+        # ``engine.start`` 内没有 await 点,所以这一查到起跑之间插不进控制请求
+        # (外部审核指出;将来 start 里加了等待点,这条要换成显式的协调机制)。
+        lease = self._control.sweep(now_ms=ctx.clock())
+        if lease.holder is not None:
+            who = lease.holder.operator or lease.holder.ref
+            self._sched_last_skip = f"起飞检查期间有人拿了控制权({who}),不起"
+            return
         await ctx.engine.start(mission, home=home)
         self._sched_started[entry.id] = now_ms
         self._sched_running_id = entry.id
