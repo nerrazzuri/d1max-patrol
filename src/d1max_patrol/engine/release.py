@@ -91,7 +91,10 @@ _CHUNK_JOIN = b"\0"
 #: ``tests/protocol/fixtures`` 下,而 ``tests/`` 不进包(狗上没有 pytest,
 #: 离线 wheel 里也没备)。``load_fixtures()`` 对"目录不在"的处理是返回空字典,
 #: 所以狗上跑 ``d1max conform`` 只是少了对拍那一段,不会炸。
-_PACK_INCLUDE = ("pyproject.toml", "src", "config")
+#: ``deploy`` 是 W01b 加进来的:OTA 升级(``release activate``)要从
+#: ``releases/<版本>/deploy/d1max-patrol.service`` 拿单元交给特权助手装到
+#: ``/etc/systemd/system``。不进包的话,机器上的单元永远是装机那天的版本。
+_PACK_INCLUDE = ("pyproject.toml", "src", "config", "deploy")
 
 #: 白名单收下的目录里头还要再筛一遍的噪声。**它们是构建/缓存产物,不是源码**,
 #: 而且同一份源码带不带它们会算出两个不同的 ``content_sha256``。

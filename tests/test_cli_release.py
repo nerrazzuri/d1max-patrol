@@ -314,6 +314,8 @@ def _源码树(root):
     (root / "config" / "params").mkdir(parents=True, exist_ok=True)
     (root / "config" / "params" / "mapper_3d.yaml").write_text(
         "resolution: 0.05\n", encoding="utf-8")
+    (root / "deploy").mkdir(parents=True, exist_ok=True)          # W01b:deploy/ 进包
+    (root / "deploy" / "d1max-patrol.service").write_text("[Unit]\n", encoding="utf-8")
     # 一个不该进包的东西,验一下 CLI 这条路上排除规则也是活的。
     (root / "refs").mkdir(parents=True, exist_ok=True)
     (root / "refs" / "厂商协议.md").write_text("私有\n", encoding="utf-8")

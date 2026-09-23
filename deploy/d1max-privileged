@@ -1,0 +1,152 @@
+#!/bin/bash
+# d1max-privileged —— robot 通过 sudo 白名单能跑的**唯一** root 命令(W01b)。
+#
+# 为什么有它:服务以 User=robot 跑,而 OTA 升级要写 /etc/systemd/system 的
+# 单元、daemon-reload、restart/reboot,这几件都要 root。与其给 robot 一条
+# 宽的 sudo 规则,不如给它一个只会做这四件事、每件都把输入校验过的脚本。
+#
+# 装在哪:/usr/local/sbin/d1max-privileged,root:root 0755(install.sh 5/7)。
+# **不能放 /opt/d1max/bin** —— 那棵树归 robot;sudo 白名单指着 robot 可写的
+# 脚本,等于把 root 送给 robot。同理,这个脚本**不随 OTA 更新自己**:改它要
+# 重跑 install.sh。所以它必须小而稳。
+#
+# 子命令:
+#   check                 探一下 sudo 通不通。退 0。
+#   install-unit <版本名>  把 /opt/d1max/releases/<版本名>/deploy/d1max-patrol.service
+#                         校验后装到 /etc/systemd/system/,daemon-reload。
+#                         打印 installed / unchanged。
+#   restart               stop → (没人写槽时)以 robot 跑 release migrate-data → start。
+#                         与 install.sh 7/7 同一条路。
+#   reboot                systemctl reboot。
+#
+# 开发机测试(非 root):必须显式给 --root <dir> --dest <file> --no-systemctl;
+# root 下这三个参数一律拒绝 —— 真机上不接受任何改路径的口子。
+set -euo pipefail
+
+UNIT_NAME=d1max-patrol.service
+RELEASE_ROOT=/opt/d1max
+DEST=/etc/systemd/system/$UNIT_NAME
+RUN_USER=robot
+DATA_ROOT=/var/lib/d1max
+SYSTEMCTL=systemctl
+TEST_MODE=0
+
+die()  { printf 'd1max-privileged: %s\n' "$*" >&2; exit 1; }
+usage() {
+  printf '用法: d1max-privileged check | install-unit <版本名> | restart | reboot\n' >&2
+  exit 64
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --root)  [[ $# -ge 2 ]] || usage; RELEASE_ROOT=$2; TEST_MODE=1; shift 2 ;;
+    --dest)  [[ $# -ge 2 ]] || usage; DEST=$2;         TEST_MODE=1; shift 2 ;;
+    --no-systemctl) SYSTEMCTL=:; TEST_MODE=1; shift ;;
+    --) shift; break ;;
+    -*) usage ;;
+    *) break ;;
+  esac
+done
+
+if [[ $EUID -eq 0 && $TEST_MODE -eq 1 ]]; then
+  die "root 下不接受 --root/--dest/--no-systemctl:真机上路径是写死的"
+fi
+if [[ $EUID -ne 0 && $TEST_MODE -eq 0 ]]; then
+  die "不是 root。真机上用 sudo;开发机测试要显式给 --root --dest --no-systemctl"
+fi
+if [[ $TEST_MODE -eq 1 && ( $SYSTEMCTL != ":" || -z $DEST || $RELEASE_ROOT == /opt/d1max ) ]]; then
+  die "测试模式要 --root、--dest、--no-systemctl 三个一起给"
+fi
+
+# --------------------------------------------------------------- 单元校验
+# 这是提权面的护栏。robot 已经能以 robot 跑任意代码,护栏要挡的是「借单元
+# 变成 root」:User= 改掉、ExecStart 指到别处、ExecStartPre=+ 以 root 跑、
+# EnvironmentFile 读别的文件、LD_PRELOAD 之类的环境变量、能力集……不在白名单
+# 里的键一律拒,拒的时候说一句为什么。
+ALLOWED_KEYS=" Description After Wants StartLimitIntervalSec Type User ExecStart ExecStartPre Restart RestartSec Environment EnvironmentFile WorkingDirectory WantedBy "
+
+validate_unit() {
+  local file=$1 line key value n=0 saw_user=0
+  while IFS= read -r line || [[ -n $line ]]; do
+    n=$((n + 1))
+    line=${line%$'\r'}
+    [[ -z ${line//[[:space:]]/} ]] && continue
+    [[ ${line#"${line%%[![:space:]]*}"} == \#* ]] && continue
+    case "$line" in
+      "[Unit]"|"[Service]"|"[Install]") continue ;;
+      \[*) die "第 $n 行:不认识的段 $line(只许 [Unit]/[Service]/[Install])" ;;
+    esac
+    [[ $line == *=* ]] || die "第 $n 行:不是 键=值 也不是段头:$line"
+    key=${line%%=*}
+    value=${line#*=}
+    [[ $ALLOWED_KEYS == *" $key "* ]] || die "第 $n 行:不许出现 $key="
+    case "$key" in
+      User)
+        [[ $value == "$RUN_USER" ]] || die "第 $n 行:User 只能是 $RUN_USER,给的是 $value"
+        saw_user=1 ;;
+      ExecStart|ExecStartPre)
+        case "$value" in
+          [+!:@]*) die "第 $n 行:$key 不许用 +/!/:/@ 前缀(那是以 root 跑)" ;;
+        esac
+        value=${value#-}
+        [[ $value == /opt/d1max/* ]] || die "第 $n 行:$key 只能指向 /opt/d1max/ 底下,给的是 $value" ;;
+      EnvironmentFile)
+        [[ $value == "-/etc/d1max/env" ]] || die "第 $n 行:EnvironmentFile 只许 -/etc/d1max/env" ;;
+      Environment)
+        [[ $value =~ ^D1MAX_[A-Z0-9_]+= || $value == "PYTHONUNBUFFERED=1" ]] \
+          || die "第 $n 行:Environment 只许 D1MAX_* 或 PYTHONUNBUFFERED=1,给的是 $value" ;;
+      WorkingDirectory)
+        value=${value#-}
+        [[ $value == /opt/d1max/* ]] || die "第 $n 行:WorkingDirectory 只能在 /opt/d1max/ 底下" ;;
+    esac
+  done < "$file"
+  [[ $saw_user -eq 1 ]] || die "单元里没有 User=$RUN_USER —— 没有 User= 的单元以 root 跑"
+}
+
+install_unit() {
+  local name=${1:-} src size
+  [[ $name =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{6,12}$ ]] \
+    || die "版本名不合规:${name:-(空)}"
+  src=$RELEASE_ROOT/releases/$name/deploy/$UNIT_NAME
+  [[ -L $src ]] && die "源是符号链接,拒绝:$src"
+  [[ -f $src ]] || die "源不存在:$src(这一版的包没带 deploy/?)"
+  size=$(stat -c %s "$src")
+  [[ $size -le 65536 ]] || die "源太大($size 字节),不像一份单元文件"
+  validate_unit "$src"
+  if [[ -f $DEST ]] && cmp -s "$src" "$DEST"; then
+    echo unchanged
+    return 0
+  fi
+  install -m 0644 "$src" "$DEST.tmp"
+  mv -f "$DEST.tmp" "$DEST"
+  $SYSTEMCTL daemon-reload
+  echo installed
+}
+
+do_restart() {
+  if [[ $TEST_MODE -eq 1 ]]; then
+    echo "would: stop, migrate-data as $RUN_USER, start"
+    return 0
+  fi
+  $SYSTEMCTL stop "$UNIT_NAME" || true
+  if $SYSTEMCTL is-active --quiet "$UNIT_NAME"; then
+    printf '  !! 服务停不掉,跳过数据迁移(搬的前提是没人在往槽里写)\n' >&2
+  else
+    # 跟 install.sh 7/7 一模一样:以服务用户搬,拷出来的文件才归 robot。
+    runuser -u "$RUN_USER" -- env D1MAX_RELEASE_ROOT="$RELEASE_ROOT" D1MAX_DATA_ROOT="$DATA_ROOT" \
+      "$RELEASE_ROOT/bin/python" -m d1max_patrol.cli release migrate-data \
+      || printf '  !! 槽内数据迁移没成功;没搬动的还在原槽里、原名不变,prune 不会删它们\n' >&2
+  fi
+  $SYSTEMCTL start "$UNIT_NAME"
+}
+
+cmd=${1:-}
+[[ -n $cmd ]] || usage
+shift
+case "$cmd" in
+  check)        exit 0 ;;
+  install-unit) install_unit "${1:-}" ;;
+  restart)      do_restart ;;
+  reboot)       if [[ $TEST_MODE -eq 1 ]]; then echo "would: reboot"; else $SYSTEMCTL reboot; fi ;;
+  *)            usage ;;
+esac

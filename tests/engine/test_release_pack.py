@@ -73,6 +73,10 @@ def _源码树(root: Path, *, version: str = "0.3.0") -> Path:
     (root / "config" / "params").mkdir(parents=True, exist_ok=True)
     (root / "config" / "params" / "mapper_3d.yaml").write_text(
         "resolution: 0.05\n", encoding="utf-8")
+    # W01b:deploy/ 也进包 —— OTA 升上来的机器要靠包里这份单元和助手更新自己。
+    (root / "deploy").mkdir(parents=True, exist_ok=True)
+    for 名 in ("d1max-patrol.service", "d1max-privileged", "sudoers-d1max", "install.sh"):
+        (root / "deploy" / 名).write_text(f"# {名}\n", encoding="utf-8")
     for rel in 噪声:
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,10 +169,20 @@ def test_显式给的版本号赢过pyproject(tmp_path, 无git):
 # ----------------------------------------------------------- 包里装了什么
 
 
-def test_包里只有白名单那三样加一份自述(tmp_path, 无git):
+def test_包里只有白名单那四样加一份自述(tmp_path, 无git):
     dest = pack(_源码树(tmp_path / "树"), tmp_path / "出", now_ms=NOW_MS)
     assert {p.name for p in dest.iterdir()} == {
-        "pyproject.toml", "src", "config", MANIFEST_NAME}
+        "pyproject.toml", "src", "config", "deploy", MANIFEST_NAME}
+
+
+def test_单元文件和特权助手随包走(tmp_path, 无git):
+    """W01b:``deploy/`` 原来不进包,OTA 升上来的机器单元永远是装机那天的版本
+    (没有 D1MAX_DATA_ROOT、StartLimitIntervalSec 在错的段)。``release activate``
+    要从 ``releases/<版本>/deploy/`` 里拿单元交给特权助手装,所以它必须在包里。"""
+    dest = pack(_源码树(tmp_path / "树"), tmp_path / "出", now_ms=NOW_MS)
+    assert (dest / "deploy" / "d1max-patrol.service").is_file()
+    assert (dest / "deploy" / "d1max-privileged").is_file()
+    assert (dest / "deploy" / "sudoers-d1max").is_file()
 
 
 def test_服务要的那份建图参数在包里(tmp_path, 无git):

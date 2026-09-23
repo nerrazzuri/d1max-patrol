@@ -1,0 +1,1 @@
+robot ALL=(root) NOPASSWD: /usr/local/sbin/d1max-privileged
