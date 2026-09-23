@@ -250,7 +250,8 @@ def test_真正的stop_migrate_start不在sudo白名单里的那个脚本里():
     内 = RESTART_NOW.read_text(encoding="utf-8")
     for 句 in ("systemctl stop", "release migrate-data", "systemctl start", "runuser -u"):
         assert 句 in 内, 句
-    停, 搬, 起 = (内.index(x) for x in ("systemctl stop", "release migrate-data", "systemctl start"))
+    三步 = ("systemctl stop", "release migrate-data", "systemctl start")
+    停, 搬, 起 = (内.index(x) for x in 三步)
     assert 停 < 搬 < 起
     sudoers = SUDOERS.read_text(encoding="utf-8")
     assert "d1max-restart-now" not in sudoers
