@@ -274,3 +274,136 @@ def test_改完之后身份立刻跟着变(rel_server):
             payload={"has_payload": True, "by": "老王", "confirm": CONFIRM_PHRASE})
     got = get_json(rel_server, "/api/identity")
     assert got["has_payload"] is True and got["payload_by"] == "老王"
+
+
+# ------------------------------------------------------------ W01b:单元随包装、重启走助手
+
+import subprocess  # noqa: E402
+
+from d1max_patrol.app import server as server_mod  # noqa: E402
+from d1max_patrol.engine.privileged import Privileged, PrivilegedError  # noqa: E402
+from d1max_patrol.engine.selfcheck import RestartPlan  # noqa: E402
+
+
+class _假sudo:
+    """记下每次 sudo 的子命令;按剧本回退出码。"""
+
+    def __init__(self, 剧本=None):
+        self.剧本 = 剧本 or {}
+        self.调用: list[str] = []
+
+    def __call__(self, argv, **kw):
+        子命令 = " ".join(argv[3:])
+        self.调用.append(子命令)
+        默认 = (0, "installed\n" if argv[3] == "install-unit" else "", "")
+        rc, out, err = self.剧本.get(argv[3], 默认)
+        return subprocess.CompletedProcess(argv, rc, stdout=out, stderr=err)
+
+
+def _有助手的(tmp_path, 剧本=None):
+    helper = tmp_path / "d1max-privileged"
+    helper.write_text("#!/bin/bash\n", encoding="utf-8")
+    假 = _假sudo(剧本)
+    return Privileged(helper=helper, runner=假), 假
+
+
+def _两版装好(server, tmp_path):
+    for name in ("2026-09-06-a3f9c1", "2026-09-20-77b2de"):
+        post(server, "/api/release/install", {"package": str(_pkg(tmp_path / name, name))})
+
+
+def test_切版本先装单元再切链再重启(rel_server, tmp_path):
+    priv, 假 = _有助手的(tmp_path)
+    rel_server._ctx.privileged = priv
+    pkg = _pkg(tmp_path / "pkg", "2026-09-20-77b2de")
+    post(rel_server, "/api/release/install", {"package": str(pkg)})
+    got = get_json(rel_server, "/api/release/activate", method="POST",
+                   payload={"name": "2026-09-20-77b2de"})
+    assert got["unit"] == "installed"
+    assert 假.调用 == ["check", "install-unit 2026-09-20-77b2de"]
+    assert current_name(Layout(root=rel_server._ctx.release_root)) == "2026-09-20-77b2de"
+    assert len(rel_server.重启记录) == 1
+
+
+def test_单元装不上就不切链(rel_server, tmp_path):
+    priv, 假 = _有助手的(
+        tmp_path, {"install-unit": (1, "", "d1max-privileged: 第 8 行:User 只能是 robot\n")})
+    rel_server._ctx.privileged = priv
+    post(rel_server, "/api/release/install",
+         {"package": str(_pkg(tmp_path / "pkg", "2026-09-20-77b2de"))})
+    err = get_err(rel_server, "/api/release/activate", 409, method="POST",
+                  payload={"name": "2026-09-20-77b2de"})
+    assert "单元" in json.dumps(err, ensure_ascii=False)
+    assert "User 只能是 robot" in json.dumps(err, ensure_ascii=False)
+    layout = Layout(root=rel_server._ctx.release_root)
+    assert current_name(layout) == ""
+    assert read_pending(layout) is None
+    assert rel_server.重启记录 == []
+
+
+def test_重启命令发不出去就不切(rel_server, tmp_path):
+    """助手在、sudo 不通:切了链却重启不了,机器就挂在「在途」里等人。所以在切之前拦。"""
+    priv, 假 = _有助手的(tmp_path, {"check": (1, "", "sudo: a password is required\n")})
+    rel_server._ctx.privileged = priv
+    post(rel_server, "/api/release/install",
+         {"package": str(_pkg(tmp_path / "pkg", "2026-09-20-77b2de"))})
+    err = get_err(rel_server, "/api/release/activate", 409, method="POST",
+                  payload={"name": "2026-09-20-77b2de"})
+    assert "重启命令发不出去" in json.dumps(err, ensure_ascii=False)
+    assert current_name(Layout(root=rel_server._ctx.release_root)) == ""
+    assert "install-unit 2026-09-20-77b2de" not in 假.调用
+    assert rel_server.重启记录 == []
+
+
+def test_没有特权助手的开发机照旧切(rel_server, tmp_path):
+    假 = _假sudo()
+    rel_server._ctx.privileged = Privileged(helper=tmp_path / "不存在", runner=假)
+    post(rel_server, "/api/release/install",
+         {"package": str(_pkg(tmp_path / "pkg", "2026-09-20-77b2de"))})
+    got = get_json(rel_server, "/api/release/activate", method="POST",
+                   payload={"name": "2026-09-20-77b2de"})
+    assert got["unit"].startswith("skipped:")
+    assert 假.调用 == []
+    assert len(rel_server.重启记录) == 1
+
+
+def test_回滚把上一版的单元装回去(rel_server, tmp_path):
+    priv, 假 = _有助手的(tmp_path)
+    rel_server._ctx.privileged = priv
+    _两版装好(rel_server, tmp_path)
+    post(rel_server, "/api/release/activate", {"name": "2026-09-06-a3f9c1"})
+    commit(Layout(root=rel_server._ctx.release_root))
+    post(rel_server, "/api/release/activate", {"name": "2026-09-20-77b2de"})
+    假.调用.clear()
+    got = get_json(rel_server, "/api/release/rollback", method="POST", payload=None)
+    assert got["rolled_back_to"] == "2026-09-06-a3f9c1"
+    assert 假.调用 == ["install-unit 2026-09-06-a3f9c1"]
+
+
+def test_回滚时单元装不回去也照样退回去(rel_server, tmp_path, caplog):
+    """回到能跑的代码比单元一致更要紧;单元向后兼容(只引用 current)。"""
+    priv, 假 = _有助手的(tmp_path)
+    rel_server._ctx.privileged = priv
+    _两版装好(rel_server, tmp_path)
+    post(rel_server, "/api/release/activate", {"name": "2026-09-06-a3f9c1"})
+    commit(Layout(root=rel_server._ctx.release_root))
+    post(rel_server, "/api/release/activate", {"name": "2026-09-20-77b2de"})
+    假.剧本["install-unit"] = (1, "", "d1max-privileged: 源不存在\n")
+    got = get_json(rel_server, "/api/release/rollback", method="POST", payload=None)
+    assert got["rolled_back_to"] == "2026-09-06-a3f9c1"
+    assert current_name(Layout(root=rel_server._ctx.release_root)) == "2026-09-06-a3f9c1"
+    assert any("单元没装回去" in r.getMessage() for r in caplog.records)
+
+
+def test_spawn_restart探到没权限就抛而不是Popen(tmp_path, monkeypatch):
+    起过: list = []
+    monkeypatch.setattr(server_mod.subprocess, "Popen",
+                        lambda argv, **kw: 起过.append(tuple(argv)))
+    plan = RestartPlan("service", ("systemctl", "restart", "d1max-patrol.service"), "没上装")
+    priv, _ = _有助手的(tmp_path, {"check": (1, "", "sudo: a password is required\n")})
+    with pytest.raises(PrivilegedError):
+        server_mod._spawn_restart(plan, privileged=priv)
+    assert 起过 == []
+    priv, _ = _有助手的(tmp_path)
+    server_mod._spawn_restart(plan, privileged=priv)
+    assert 起过 == [("sudo", "-n", str(priv.helper), "restart")]

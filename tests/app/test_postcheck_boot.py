@@ -363,3 +363,31 @@ def test_自检路由给自检的是它自己的超时预算而不是默认10秒
     finally:
         s.stop()
     assert 看到的 == [POSTCHECK_TIMEOUT_S]
+
+
+def test_开机自检没过回滚时也把上一版的单元装回去(装了两版, tmp_path):
+    """W01b:回滚三条路(人工、开机自检、CLI)都要对齐单元,不然退回去的代码
+    配着新版的单元跑。"""
+    import subprocess
+
+    from d1max_patrol.engine.privileged import Privileged
+
+    ctx, layout = 装了两版
+    ctx.nav.loc = None
+    ctx.restart = lambda _plan: None
+    helper = tmp_path / "d1max-privileged"
+    helper.write_text("#!/bin/bash\n", encoding="utf-8")
+    调用: list[str] = []
+
+    def 假sudo(argv, **kw):
+        调用.append(" ".join(argv[3:]))
+        return subprocess.CompletedProcess(argv, 0, stdout="installed\n", stderr="")
+
+    ctx.privileged = Privileged(helper=helper, runner=假sudo)
+    s = AppServer(ctx, port=0, postcheck_sleep=假睡本())
+    s.start()
+    try:
+        assert current_name(layout) == "2026-09-06-a3f9c1"
+        assert 调用 == ["install-unit 2026-09-06-a3f9c1"]
+    finally:
+        s.stop()

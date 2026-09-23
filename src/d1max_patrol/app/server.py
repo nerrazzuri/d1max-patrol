@@ -180,6 +180,7 @@ from d1max_patrol.engine.mission import (
     save_mission,
 )
 from d1max_patrol.engine.preflight import CheckResult, PreflightReport, run_preflight
+from d1max_patrol.engine.privileged import Privileged, PrivilegedError
 from d1max_patrol.engine.release import (
     Layout,
     ReleaseError,
@@ -673,13 +674,20 @@ def _compile(pattern: str) -> re.Pattern[str]:
     return re.compile("^" + "".join(parts) + "$")
 
 
-def _spawn_restart(plan: RestartPlan) -> None:
+def _spawn_restart(plan: RestartPlan, privileged: Privileged | None = None) -> None:
     """真去重启。**起了就不等** —— 等下去等的是自己的死。
 
     ``systemctl restart`` 会先把我们停掉,所以这个调用永远不会正常返回;
     ``Popen`` 之后立刻返回,让 HTTP 那一侧还来得及把响应写出去。
+
+    W01b:命令走特权助手(``sudo -n /usr/local/sbin/d1max-privileged restart``),
+    起之前先探一下 sudo 通不通 —— 原来只 ``Popen`` 不看结果,被 polkit 拒了界面
+    照样显示「已重启」而机器一动没动(``真机待验证清单`` 第 6 条)。探不通就抛
+    ``PrivilegedError``。助手不在(开发机)时退回裸 ``systemctl``,跟原来一样。
     """
-    subprocess.Popen(list(plan.argv), start_new_session=True)
+    priv = privileged if privileged is not None else Privileged()
+    priv.ensure_can_restart()
+    subprocess.Popen(list(priv.restart_argv(plan)), start_new_session=True)
 
 
 # ------------------------------------------------------------------ 上下文
@@ -748,6 +756,9 @@ class AppContext:
     release_root: Path = Path("/opt/d1max")
     #: 怎么执行重启。engine 只出方案,执行注入进来 —— 测试里换成一个记账的。
     restart: Callable[[RestartPlan], None] = _spawn_restart
+    #: W01b:特权助手的客户端。装单元、探「重启命令发得出去吗」都走它;
+    #: 测试里注入假 runner。
+    privileged: Privileged = field(default_factory=Privileged)
     #: 「有没有上装」记在哪。``None`` = 用 ``identity.payload_path`` 的默认
     #: 解析顺序(环境变量,再默认路径)。
     payload_file: Path | None = None
@@ -3925,15 +3936,30 @@ class AppServer:
         # 但没登记的机器被只重启服务(= 放掉 SDK 会话,§7.1)。
         plan = restart_plan(has_payload=ctx.identity.payload.has,
                             recorded=ctx.identity.payload.recorded)
+        # W01b:**先探重启权限、再装新版的单元、最后才切链。** 单元只引用
+        # ``current`` 和几条稳定路径,新单元配老代码是安全的;反过来(链切了、
+        # 单元没装上、或者切了却重启不了)机器就挂在「在途」里等人 —— 正是这
+        # 张工单要消灭的状态。所以这两步失败都是 409,而且一动没动。
+        try:
+            ctx.privileged.ensure_can_restart()
+            unit_note = ctx.privileged.install_unit(name)
+        except PrivilegedError as exc:
+            raise HttpError(409, "新版单元文件没装上,没有切换", str(exc)) from exc
         try:
             pending = activate(layout, name, now_ms=ctx.clock(),
                                auto=auto, sn=ctx.identity.sn)
         except ReleaseError as exc:
             raise HttpError(409, str(exc)) from exc
-        ctx.restart(plan)
+        try:
+            ctx.restart(plan)
+        except PrivilegedError as exc:
+            # 只可能出现在 ensure 与 spawn 之间助手状态变了的窗口里。链已经切了,
+            # 说实话:切了,但没重启成。
+            raise HttpError(500, "版本切了,但重启命令发不出去", str(exc)) from exc
         return json_response({"precheck": report.to_wire(),
                               "pending": pending.to_wire(),
-                              "restart": plan.to_wire()})
+                              "restart": plan.to_wire(),
+                              "unit": unit_note})
 
     def _release_rollback(self, req: Request) -> Response:
         """人工回滚。**跟自动回滚走同一个 ``release.rollback``。**
@@ -3991,11 +4017,25 @@ class AppServer:
                                    "at_ms": self._ctx.clock()})
             log.warning("巡检途中硬回滚到 %s(发起人 %s,理由:%s)",
                         back, (sess.operator if sess else "") or "未署名", reason)
+        self._install_unit_after_rollback(back)
         payload = self._ctx.identity.payload
         plan = restart_plan(has_payload=payload.has, recorded=payload.recorded)
-        self._ctx.restart(plan)
+        try:
+            self._ctx.restart(plan)
+        except PrivilegedError as exc:
+            raise HttpError(500, "退回去了,但重启命令发不出去", str(exc)) from exc
         return json_response({"rolled_back_to": back, "restart": plan.to_wire(),
                               "forced": force})
+
+    def _install_unit_after_rollback(self, back: str) -> None:
+        """回滚之后把退回那一版的单元也装回去(W01b)。**失败只记一笔,不拦回滚**:
+        回到能跑的代码比单元一致更要紧,而单元向后兼容(只引用 ``current``)。"""
+        try:
+            note = self._ctx.privileged.install_unit(back)
+        except PrivilegedError as exc:
+            log.warning("退回 %s 了,但它的单元没装回去: %s", back, exc)
+        else:
+            log.info("退回 %s,单元文件: %s", back, note)
 
     # ------------------------------------------------------- 任务包与排程
 
@@ -4413,6 +4453,7 @@ class AppServer:
                 self._hub.events.emit({"kind": "release.rolled_back",
                                       "rolled_back_to": back, **wire})
                 log.error("重启后自检没过,退回 %s", back)
+                self._install_unit_after_rollback(back)
                 ctx.restart(restart_plan(
                     has_payload=ctx.identity.payload.has,
                     recorded=ctx.identity.payload.recorded))
