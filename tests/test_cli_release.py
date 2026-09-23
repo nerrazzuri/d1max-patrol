@@ -374,3 +374,89 @@ def test_pack的帮助说清了它跑在笔记本上(capsys):
         build_parser().parse_args(["release", "pack", "--help"])
     帮助 = capsys.readouterr().out
     assert "笔记本" in 帮助 and "狗" in 帮助
+
+
+# ------------------------------------------------------------ W01b:单元随包装
+
+def _两版(tmp_path, root):
+    for name in ("2026-09-06-a3f9c1", "2026-09-20-77b2de"):
+        main(["release", "install", str(_pkg(tmp_path / name, name)), "--root", str(root)])
+
+
+class _假助手:
+    def __init__(self, 在: bool = True, 拒: str | None = None) -> None:
+        self.在, self.拒, self.装过 = 在, 拒, []
+
+    def present(self) -> bool:
+        return self.在
+
+    def install_unit(self, name: str) -> str:
+        from d1max_patrol.engine.privileged import PrivilegedError
+        if self.拒:
+            raise PrivilegedError(self.拒)
+        self.装过.append(name)
+        return "installed"
+
+
+def test_activate在有助手时先装单元(tmp_path, monkeypatch, capsys):
+    import d1max_patrol.cli as cli
+    助手 = _假助手()
+    monkeypatch.setattr(cli, "Privileged", lambda: 助手)
+    root = tmp_path / "opt"
+    _两版(tmp_path, root)
+    assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
+    assert 助手.装过 == ["2026-09-20-77b2de"]
+    assert "单元文件: installed" in capsys.readouterr().out
+
+
+def test_activate没助手就提示并照常切(tmp_path, monkeypatch, capsys):
+    import d1max_patrol.cli as cli
+    助手 = _假助手(在=False)
+    monkeypatch.setattr(cli, "Privileged", lambda: 助手)
+    root = tmp_path / "opt"
+    _两版(tmp_path, root)
+    assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
+    assert 助手.装过 == []
+    assert "单元文件没更新" in capsys.readouterr().out
+    assert current_name(Layout(root=root)) == "2026-09-20-77b2de"
+
+
+def test_activate单元装不上退非零且不切链(tmp_path, monkeypatch, capsys):
+    import d1max_patrol.cli as cli
+    monkeypatch.setattr(cli, "Privileged", lambda: _假助手(拒="第 8 行:User 只能是 robot"))
+    root = tmp_path / "opt"
+    _两版(tmp_path, root)
+    assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 2
+    assert current_name(Layout(root=root)) == ""
+    assert read_pending(Layout(root=root)) is None
+    assert "User 只能是 robot" in capsys.readouterr().err
+
+
+def test_rollback也装回上一版单元(tmp_path, monkeypatch):
+    import d1max_patrol.cli as cli
+    助手 = _假助手()
+    monkeypatch.setattr(cli, "Privileged", lambda: 助手)
+    root = tmp_path / "opt"
+    layout = Layout(root=root)
+    _两版(tmp_path, root)
+    main(["release", "activate", "2026-09-06-a3f9c1", "--root", str(root)])
+    commit(layout)
+    main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)])
+    助手.装过.clear()
+    assert main(["release", "rollback", "--root", str(root)]) == 0
+    assert 助手.装过 == ["2026-09-06-a3f9c1"]
+
+
+def test_rollback单元装不回去也照样退回去(tmp_path, monkeypatch, capsys):
+    import d1max_patrol.cli as cli
+    root = tmp_path / "opt"
+    layout = Layout(root=root)
+    monkeypatch.setattr(cli, "Privileged", lambda: _假助手(在=False))
+    _两版(tmp_path, root)
+    main(["release", "activate", "2026-09-06-a3f9c1", "--root", str(root)])
+    commit(layout)
+    main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)])
+    monkeypatch.setattr(cli, "Privileged", lambda: _假助手(拒="源不存在"))
+    assert main(["release", "rollback", "--root", str(root)]) == 0
+    assert current_name(layout) == "2026-09-06-a3f9c1"
+    assert "源不存在" in capsys.readouterr().err

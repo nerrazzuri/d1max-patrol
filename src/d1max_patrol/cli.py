@@ -33,6 +33,7 @@ from d1max_patrol.engine.datadir import (
     DEFAULT_DATA_ROOT,
     migrate_slot_data,
 )
+from d1max_patrol.engine.privileged import Privileged, PrivilegedError
 from d1max_patrol.engine.release import (
     MAX_BOOT_ATTEMPTS,
     GuardAction,
@@ -561,6 +562,19 @@ def _cmd_release(args: argparse.Namespace) -> int:
         return 0
 
     if args.release_command == "activate":
+        # W01b:**先装这一版随包带的单元,再切链。** 单元只引用 current 和几条
+        # 稳定路径,新单元配老代码是安全的;反过来(切了链、单元没装上)正是
+        # OTA 升上来的机器单元永远停在装机那天的那个坏状态。助手不在(开发机、
+        # W01b 之前装的机器)就跳过并说一句怎么补 —— 装机脚本 5/7 自己也会装单元。
+        priv = Privileged()
+        if priv.present():
+            try:
+                print(f"单元文件: {priv.install_unit(args.name)}")
+            except PrivilegedError as exc:
+                print(f"切不了: 新版单元文件没装上,没有切换 —— {exc}", file=sys.stderr)
+                return 2
+        else:
+            print("提示: 没有特权助手,单元文件没更新;要更新单元请重跑 deploy/install.sh")
         try:
             # 把当下的 SN 记进在途标记 —— 重启后自检第四项拿它比对(§7.2)。
             # 这里要读 D1MAX_SN 而不是零参 resolve():现场设备树/DMI 里常常
@@ -603,6 +617,14 @@ def _cmd_release(args: argparse.Namespace) -> int:
         except (ReleaseError, OSError) as exc:
             print(f"退不了: {exc}", file=sys.stderr)
             return 2
+        # W01b:把退回那一版的单元也装回去。**失败不拦回滚**:回到能跑的代码
+        # 比单元一致更要紧,单元向后兼容(只引用 current)。
+        priv = Privileged()
+        if priv.present():
+            try:
+                print(f"单元文件: {priv.install_unit(back)}")
+            except PrivilegedError as exc:
+                print(f"退回去了,但 {back} 的单元没装回去: {exc}", file=sys.stderr)
         print(f"退回 {back}。重启生效。")
         return 0
 

@@ -1214,7 +1214,8 @@ def test_起动次数上限那一行写在Unit段而不是Service段(服务单�
 def test_装机脚本把特权助手装到usr_local_sbin而不是opt_d1max_bin(装机脚本):
     """sudo 白名单指着的脚本必须 root 拥有。``/opt/d1max/bin`` 整棵归 robot,
     放那儿等于把 root 送给 robot。"""
-    assert 'install -m 0755 -o root -g root "$HELPER_SRC" /usr/local/sbin/d1max-privileged' in 装机脚本
+    assert ('install -m 0755 -o root -g root "$HELPER_SRC" /usr/local/sbin/d1max-privileged'
+            in 装机脚本)
     代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
     assert not any("d1max-privileged" in 行 and "$ROOT/bin" in 行 for 行 in 代码)
 
