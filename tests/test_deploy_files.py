@@ -1176,3 +1176,34 @@ def test_卸载脚本keep_data时releases里还有migrated就不删():
     text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
     assert "*.migrated" in text
     assert text.index("*.migrated") > text.index('rm_sys "$ROOT/current"')
+
+
+def _按段(服务单元: str) -> dict[str, list[str]]:
+    段, 当前 = {}, None
+    for 行 in 服务单元.splitlines():
+        行 = 行.strip()
+        if not 行 or 行.startswith("#"):
+            continue
+        if 行.startswith("[") and 行.endswith("]"):
+            当前 = 行
+            段.setdefault(当前, [])
+            continue
+        assert 当前 is not None, f"段头之前出现了键: {行}"
+        段[当前].append(行.split("=", 1)[0])
+    return 段
+
+
+def test_起动次数上限那一行写在Unit段而不是Service段(服务单元):
+    """W01c 真机发现:``StartLimitIntervalSec=`` 是 ``[Unit]`` 段的键。写在
+    ``[Service]`` 段 systemd 只会记一句 "Unknown key name … ignoring" 然后**按
+    默认的 5 次/10 秒**限起 —— 跟单元注释里承诺的「起不来就再试」正好相反,
+    还顺带把注释说的那道守卫数满 MAX_BOOT_ATTEMPTS 的前提抽掉了。
+    ``systemd-analyze verify`` 在本机就能复现那句 ignoring。
+    """
+    段 = _按段(服务单元)
+    assert "StartLimitIntervalSec" in 段["[Unit]"], "要写在 [Unit] 段"
+    assert "StartLimitIntervalSec" not in 段["[Service]"], "写在 [Service] 段会被 systemd 忽略"
+    assert "StartLimitIntervalSec=0" in 服务单元
+    # 顺手把「哪个键属于哪个段」的另外两个常错的也钉住,免得下次挪错方向。
+    for 键 in ("Restart", "RestartSec", "ExecStart"):
+        assert 键 in 段["[Service]"], f"{键} 是 [Service] 段的键"

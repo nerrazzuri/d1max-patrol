@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import itertools
+import logging
 
 import pytest
 
+from d1max_patrol.backends.base import (
+    DeviceBackendError,
+    NavConnectionError,
+    NavTimeoutError,
+)
 from d1max_patrol.engine.preflight import CheckResult
 from d1max_patrol.engine.selfcheck import (
+    BRIDGE_WAIT_S,
+    GRAB_WAIT_S,
     MAX_BRIDGE_TRIES,
+    MAX_GRAB_TRIES,
     POST_CHECKS,
+    POSTCHECK_TIMEOUT_S,
     SERVICE_UNIT,
     RestartPlan,
     Verdict,
@@ -410,3 +420,115 @@ def test_默认当成记过了():
     ``app/server.py``),默认值只是签名上的礼貌。
     """
     assert restart_plan(has_payload=False).kind == "service"
+
+
+# ------------------------------------------------------------- W01c:日志不许刷 traceback
+
+def _selfcheck日志(caplog, 级别=logging.WARNING):
+    return [r for r in caplog.records
+            if r.name == "d1max_patrol.engine.selfcheck" and r.levelno >= 级别]
+
+
+async def test_旁路进程没起来时抢会话只记一句人话_不带traceback(caplog):
+    """真机(2026-09-22)点一下 /api/selfcheck,journal 里是三段 traceback,
+    说的却只是「还没连上旁路进程」—— 后端自己会说人话的错,不该带栈。"""
+    caplog.set_level(logging.DEBUG, logger="d1max_patrol.engine.selfcheck")
+
+    class 没连上的:
+        async def has_control(self) -> bool:
+            return False
+
+        async def acquire_control(self) -> None:
+            raise DeviceBackendError("还没连上旁路进程")
+
+    async def 假睡(_s: float) -> None:
+        return None
+
+    got = await grab_control(没连上的(), tries=3, sleep=假睡)
+    assert got.ok is False
+    assert "还没连上旁路进程" in got.detail
+    警告 = _selfcheck日志(caplog)
+    assert len(警告) == 1, [r.getMessage() for r in 警告]
+    assert "还没连上旁路进程" in 警告[0].getMessage()
+    assert 警告[0].exc_info is None, "后端说的人话不配 traceback"
+
+
+async def test_抢会话遇到意料之外的异常仍然留traceback(caplog):
+    """人话只给认识的错;不认识的错正是 bug 的线索,栈要留着。"""
+    caplog.set_level(logging.DEBUG, logger="d1max_patrol.engine.selfcheck")
+
+    class 会炸的:
+        async def has_control(self) -> bool:
+            raise KeyError("state")
+
+        async def acquire_control(self) -> None:
+            raise KeyError("state")
+
+    async def 假睡(_s: float) -> None:
+        return None
+
+    await grab_control(会炸的(), tries=2, sleep=假睡)
+    带栈 = [r for r in _selfcheck日志(caplog) if r.exc_info]
+    assert 带栈, "意料之外的异常没有留下 traceback"
+
+
+async def test_桥不应答时只记人话_不带traceback(caplog):
+    caplog.set_level(logging.DEBUG, logger="d1max_patrol.engine.selfcheck")
+
+    class 断了的导航:
+        async def loc_status(self):
+            raise NavConnectionError("尚未连接导航设备")
+
+        async def list_maps(self):
+            raise NavTimeoutError("等了 5s 没回")
+
+    class 没连上的设备:
+        async def has_control(self) -> bool:
+            raise DeviceBackendError("还没连上旁路进程")
+
+    async def 假睡(_s: float) -> None:
+        return None
+
+    got = await _check_bridges(断了的导航(), 没连上的设备(), tries=2, sleep=假睡)
+    assert got.ok is False
+    assert not [r for r in _selfcheck日志(caplog, logging.DEBUG) if r.exc_info], \
+        "后端自己抛的连接/超时错不配 traceback"
+    警告 = _selfcheck日志(caplog)
+    assert len(警告) == 1, [r.getMessage() for r in 警告]
+    for 词 in ("位姿", "地图", "相机/设备"):
+        assert 词 in 警告[0].getMessage()
+
+
+async def test_桥探测遇到意料之外的异常仍然留traceback(caplog):
+    caplog.set_level(logging.DEBUG, logger="d1max_patrol.engine.selfcheck")
+
+    class 炸的导航:
+        async def loc_status(self):
+            raise ZeroDivisionError("bug")
+
+        async def list_maps(self):
+            return []
+
+    class 好设备:
+        async def has_control(self) -> bool:
+            return True
+
+    async def 假睡(_s: float) -> None:
+        return None
+
+    await _check_bridges(炸的导航(), 好设备(), tries=1, sleep=假睡)
+    assert [r for r in _selfcheck日志(caplog) if r.exc_info]
+
+
+def test_自检接口的超时预算盖得住最坏情况():
+    """真机上 ``/api/selfcheck`` 走 ``_call`` 的默认 10 s 就 504 了 —— 可是抢会话
+    三次之间就要等 4 s,桥探测三轮又是 4 s,再加每次探测本身的请求超时。
+    预算要按常量推出来,改了重试次数或间隔这里就得跟着红。"""
+    from d1max_patrol.backends.sidecar_device import DEFAULT_ACK_TIMEOUT_S
+    from d1max_patrol.config.models import NavConfig
+
+    nav_t = NavConfig().request_timeout_s
+    抢 = MAX_GRAB_TRIES * DEFAULT_ACK_TIMEOUT_S + (MAX_GRAB_TRIES - 1) * GRAB_WAIT_S
+    桥 = MAX_BRIDGE_TRIES * (2 * nav_t) + (MAX_BRIDGE_TRIES - 1) * BRIDGE_WAIT_S
+    assert POSTCHECK_TIMEOUT_S >= 抢 + 桥, (POSTCHECK_TIMEOUT_S, 抢 + 桥)
+    assert POSTCHECK_TIMEOUT_S > 10.0

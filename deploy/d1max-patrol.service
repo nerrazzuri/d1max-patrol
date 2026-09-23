@@ -2,6 +2,11 @@
 Description=D1 Max 巡检服务
 After=network-online.target
 Wants=network-online.target
+# 不限起动次数 —— 配合下面 [Service] 的 Restart=always/RestartSec=5,才是
+# "起不来就再试"。**这一行属于 [Unit] 段**(systemd ≥ 230 的键名),写进
+# [Service] 段 systemd 只记一句 "Unknown key name ... ignoring",随后按默认的
+# 5 次/10 秒限起,进程连崩五次就再也不拉起了(W01c 真机发现)。
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -99,7 +104,6 @@ ExecStart=/opt/d1max/current/venv/bin/python -m d1max_patrol.app.server --host 0
 # 10 秒内退回上一版"的来源 —— 守卫要数满 MAX_BOOT_ATTEMPTS(2)次。
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target

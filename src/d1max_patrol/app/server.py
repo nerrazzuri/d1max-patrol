@@ -226,6 +226,7 @@ from d1max_patrol.engine.schedule import (
     pick,
 )
 from d1max_patrol.engine.selfcheck import (
+    POSTCHECK_TIMEOUT_S,
     PrecheckInputs,
     RestartPlan,
     Verdict,
@@ -4440,9 +4441,12 @@ class AppServer:
         ctx = self._ctx
         pending = read_pending(self._layout())
         want = pending.sn if pending is not None and pending.sn else ctx.identity.sn
+        # 预算按 ``run_postcheck`` 的最坏情况给,不用 ``_call`` 的默认 10 s ——
+        # 那个数在没有旁路进程的机器上是必 504 的(W01c)。
         results = self._call(partial(run_postcheck, ctx.nav, ctx.device,
                                      want_sn=want, got_sn=ctx.identity.sn,
-                                     sleep=self._postcheck_sleep))
+                                     sleep=self._postcheck_sleep),
+                             timeout_s=POSTCHECK_TIMEOUT_S)
         return json_response({"verdict": postcheck_verdict(results).value,
                               "checks": _check_results_wire(results),
                               "pending": pending.to_wire() if pending else None})

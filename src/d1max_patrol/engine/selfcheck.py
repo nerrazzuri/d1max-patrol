@@ -25,6 +25,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar
 
+from d1max_patrol.backends.base import DeviceBackendError, NavBackendError
 from d1max_patrol.engine.preflight import CheckResult
 
 #: 升级期间的电量下限。整机重启途中断电是最脏的一种坏法(§7.2)。
@@ -235,6 +236,20 @@ MAX_BRIDGE_TRIES = 3
 #: 两次探测之间等多久。测试里注入假的,套件里不许真等(§8.5)。
 BRIDGE_WAIT_S = 2.0
 
+#: ``/api/selfcheck`` 等 ``run_postcheck`` 跑完的预算。真机(2026-09-22)上它走
+#: 的是 ``_call`` 的默认 10 s,而没有旁路进程时抢会话三次之间就要等 4 s、桥探测
+#: 三轮再等 4 s,每次探测本身还各有请求超时 —— 于是人点一下得到的是一句
+#: 「后端没在规定时间内回话」,不是四项里哪项没过(W01c)。
+#: 最坏情况按常量推:抢 3×15 s(旁路回执超时)+ 2×2 s,桥 3×(2×5 s)+ 2×2 s,
+#: 合计 83 s;``tests/engine/test_selfcheck_post.py`` 用同一套常量钉着这个下界。
+#: 常见情况(旁路进程压根没起来、导航桥在线)4 s 就回来了。
+POSTCHECK_TIMEOUT_S = 90.0
+
+#: 后端自己会说人话的那几类错:连不上、超时、被拒。它们是「这一项没过」的
+#: 理由,不是 bug,记一行 ``str(exc)`` 就够了;traceback 只留给意料之外的异常。
+_EXPECTED_BACKEND_ERRORS: tuple[type[BaseException], ...] = (
+    DeviceBackendError, NavBackendError, TimeoutError, asyncio.TimeoutError, OSError)
+
 
 class Verdict(str, Enum):
     """重启后自检的结论。**只有两个值** —— 这不是个可以「再看看」的判断。"""
@@ -297,14 +312,19 @@ async def grab_control(
             # 在"这一圈没拿到、而且还有下一圈"时才走到。
             if await device.has_control():
                 return CheckResult("control", True, f"SDK 会话在手里(第 {n} 次抢到)")
+        except _EXPECTED_BACKEND_ERRORS as exc:
+            # 后端自己说的人话(「还没连上旁路进程」之类),不配 traceback:
+            # 真机上这里每次点自检就往 journal 里灌三段栈,说的却是同一句话
+            # (W01c)。不认识的错才是 bug 的线索,栈留在下面那个分支里。
+            log.info("抢 SDK 会话第 %d 次没成: %s", n, exc)
+            last = str(exc)
         except Exception as exc:
             # **必须兜住一切**:``has_control``/``acquire_control`` 是厂商 SDK,
-            # 抛什么全看它心情(连接断了、会话被抢、C 扩展里翻上来的 OSError),
-            # 写不出一张穷尽的类型表;而这一项炸掉只意味着"这一次没抢到",
-            # 下一圈还要接着抢。原来靠一句 ``noqa: BLE001`` 压着,本项目的 ruff
-            # 配置写明 ``BLE`` 不许用 noqa 绕 —— 改成带 ``exc_info`` 记日志:
-            # 兜住但留证据。``last`` 里只剩 ``str(exc)``,现场翻日志要看的是
-            # 卡在哪一步。
+            # 抛什么全看它心情,写不出一张穷尽的类型表;而这一项炸掉只意味着
+            # "这一次没抢到",下一圈还要接着抢。认识的那几类(连接、超时、
+            # 被拒、C 扩展翻上来的 OSError)已经在上面那个分支里按人话记了;
+            # 落到这里的才是意料之外的,带 ``exc_info`` 留证据。``last`` 里
+            # 只剩 ``str(exc)``,现场翻日志要看的是卡在哪一步。
             log.warning("抢 SDK 会话第 %d 次炸了,按这一次没抢到处理", n,
                         exc_info=True)
             last = str(exc)
@@ -315,6 +335,7 @@ async def grab_control(
             last = "抢是抢过了,回头确认会话还不在手里"
         if n < max(1, tries):
             await slumber(wait_s)
+    log.warning("试了 %d 次也没拿到 SDK 会话: %s", max(1, tries), last)
     return CheckResult(
         "control", False,
         f"试了 {max(1, tries)} 次也没拿到 SDK 会话: {last}"
@@ -373,6 +394,7 @@ async def _check_bridges(
                 "bridges", True, f"位姿、地图、设备三个桥都应答了(第 {n} 次探测)")
         if n < max(1, tries):
             await slumber(wait_s)
+    log.warning("探了 %d 次,这几个桥还是不应答: %s", max(1, tries), "、".join(bad))
     return CheckResult(
         "bridges", False,
         f"探了 {max(1, tries)} 次,这几个桥还是不应答: " + "、".join(bad))
@@ -381,25 +403,34 @@ async def _check_bridges(
 async def _probe_bridges(nav: Any, device: Any) -> list[str]:
     """探一遍三个桥,回没应答的那几个。**一项炸掉不许掀掉另外两项。**"""
     bad: list[str] = []
-    # 三处都必须兜住一切:桥不应答的表现形式由厂商 SDK 决定(超时、连接
-    # 被拒、反序列化炸、C 扩展翻上来的 OSError),写不出一张穷尽的类型表,
-    # 而漏掉的那一类会掀掉另外两项 —— 正是这个函数存在的理由。原来三行都靠
-    # 一句 ``noqa: BLE001`` 压着,本项目的 ruff 配置写明 ``BLE`` 不许用 noqa
-    # 绕;改成带 ``exc_info`` 记日志:兜住但留证据。``bad`` 里只装一句
-    # ``str(exc)`` 给现场看,traceback 留给事后查。
+    # 三处都必须兜住一切:桥不应答的表现形式由厂商 SDK 决定,写不出一张穷尽
+    # 的类型表,而漏掉的那一类会掀掉另外两项 —— 正是这个函数存在的理由。
+    # 分两档记:认识的那几类(``_EXPECTED_BACKEND_ERRORS``:连接、超时、被拒、
+    # C 扩展翻上来的 OSError —— 故意收得这么宽,桥探测里 OSError 的任何子类都
+    # 只是"没应答")一行人话不带栈;意料之外的才带 ``exc_info`` 留证据(W01c)。
+    # ``bad`` 里只装一句 ``str(exc)`` 给现场看。
     try:
         if await nav.loc_status() is None:
             bad.append("位姿")
+    except _EXPECTED_BACKEND_ERRORS as exc:
+        log.info("探位姿桥没应答: %s", exc)
+        bad.append(f"位姿({exc})")
     except Exception as exc:
         log.warning("探位姿桥炸了,按不应答处理", exc_info=True)
         bad.append(f"位姿({exc})")
     try:
         await nav.list_maps()
+    except _EXPECTED_BACKEND_ERRORS as exc:
+        log.info("探地图桥没应答: %s", exc)
+        bad.append(f"地图({exc})")
     except Exception as exc:
         log.warning("探地图桥炸了,按不应答处理", exc_info=True)
         bad.append(f"地图({exc})")
     try:
         await device.has_control()
+    except _EXPECTED_BACKEND_ERRORS as exc:
+        log.info("探相机/设备桥没应答: %s", exc)
+        bad.append(f"相机/设备({exc})")
     except Exception as exc:
         log.warning("探相机/设备桥炸了,按不应答处理", exc_info=True)
         bad.append(f"相机/设备({exc})")

@@ -37,6 +37,19 @@ class ProtocolError(Exception):
     """收到无法按协议解释的报文。"""
 
 
+class UnknownFrameType(ProtocolError):
+    """head.type 不是我们认识的那几种。
+
+    单独成一类是因为它**不是坏帧**:真机上厂商导航每秒推约 40 条
+    ``app_sub_topic``(话题订阅推送),协议文档里没写、我们也不消费。读循环
+    要按类型去重计数,所以得拿得到类型本身,而不是去拆异常文本(W01c)。
+    """
+
+    def __init__(self, msg_type: object) -> None:
+        super().__init__(f"不支持的报文类型: {msg_type!r}")
+        self.msg_type = msg_type
+
+
 @dataclass(frozen=True)
 class Response:
     """一条 app_resp。注意它既可能是请求的响应,也可能是设备主动推送。"""
@@ -180,7 +193,7 @@ def parse_message(text: str | bytes) -> Message:
         return _parse_alg_error(payload, head)
     if msg_type == FRAME_TYPE_RESPONSE:
         return _parse_response(payload, head)
-    raise ProtocolError(f"不支持的报文类型: {msg_type!r}")
+    raise UnknownFrameType(msg_type)
 
 
 def _parse_response(payload: dict[str, Any], head: dict[str, Any]) -> Response:

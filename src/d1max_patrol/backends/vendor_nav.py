@@ -28,6 +28,7 @@ from d1max_patrol.protocol.nav_frames import (
     AlgErrorNotify,
     ProtocolError,
     Response,
+    UnknownFrameType,
     encode_request,
     parse_message,
 )
@@ -60,6 +61,12 @@ log = logging.getLogger(__name__)
 
 #: 建图保存完成的推送函数名
 NOTIFY_MAPPING_SAVED = "notify_stop_mapping_status"
+
+#: 无法解析的报文:同一类**只在第一条时告警一次**,之后每累计到这么多条补一行
+#: INFO,让几小时后翻日志的人看得出它一直在发生、发生了多少。真机上厂商导航
+#: 每秒推约 40 条 ``app_sub_topic``,按这个阈值约 40 分钟一行、一天不到 40 行;
+#: 原来每条一行是 4 分钟 9 千行,journal 与 eMMC 一起遭殃,真错误被冲掉(W01c)。
+UNPARSEABLE_REMIND_EVERY = 100_000
 
 
 @dataclass
@@ -101,6 +108,10 @@ class VendorNavBackend(NavBackend):
         #: 观测指标 —— 契约测试与真机对拍都靠它们判断链路健康
         self.fallback_matches = 0
         self.dropped_frames = 0
+        #: 无法解析的报文按类归的计数,键形如 ``type='app_sub_topic'``(未知
+        #: 类型)或错误文本冒号前那半句(「报文不是合法 JSON」「报文缺少 head」)。**跨重连累计**,不按
+        #: 连接清零 —— 清零的话每次重连就又刷一遍那条告警。
+        self.unparseable_frames: dict[str, int] = {}
 
         self.auto_reconnect = auto_reconnect
         #: I2: "这条链路已经报过断了"的显式闸门。一次链路丢失只发一条
@@ -401,7 +412,7 @@ class VendorNavBackend(NavBackend):
                 try:
                     message = parse_message(raw)
                 except ProtocolError as exc:
-                    log.warning("忽略无法解析的报文: %s", exc)
+                    self._note_unparseable(exc)
                     continue
                 try:
                     self._route(message)
@@ -418,6 +429,32 @@ class VendorNavBackend(NavBackend):
             return
         if not self._closing:
             self._on_link_lost("设备关闭了连接", ws=ws)
+
+    @property
+    def unparseable_total(self) -> int:
+        """无法解析的报文总数(所有类相加)。"""
+        return sum(self.unparseable_frames.values())
+
+    def _note_unparseable(self, exc: ProtocolError) -> None:
+        """记一条无法解析的报文:**同类只告警一次**,之后计数,到阈值补一行。
+
+        真机(2026-09-22)上每条一行 WARNING 是每秒 40 行。第一行要把「后面
+        没有了不是修好了」说清楚,不然翻日志的人会以为它只出现过一次。
+        """
+        # 坏 JSON 的错误文本带 ``line 1 column N`` 位置,链路劣化时每条截断帧
+        # 位置都不同 —— 按整句归键就成了每条一键、每条一行,字典也没上界。
+        # 只取冒号前那半句(「报文不是合法 JSON」「故障条目格式错误」)。
+        key = (f"type={exc.msg_type!r}" if isinstance(exc, UnknownFrameType)
+               else str(exc).split(": ", 1)[0])
+        count = self.unparseable_frames.get(key, 0) + 1
+        self.unparseable_frames[key] = count
+        if count == 1:
+            log.warning("忽略无法解析的报文: %s —— 同类以后只计数不再打印,"
+                        "计数见 unparseable_frames", exc)
+        elif count % UNPARSEABLE_REMIND_EVERY == 0:
+            log.info("无法解析的报文 %s 累计 %d 条", key, count)
+        else:
+            log.debug("忽略无法解析的报文(第 %d 条): %s", count, exc)
 
     def _on_link_lost(self, reason: str, ws: ClientConnection | None = None) -> None:
         """链路断开的统一入口: 拆掉这条链路,发一次断开事件,接着重连。
