@@ -36,6 +36,7 @@ from d1max_patrol.backends.base import (
 from d1max_patrol.backends.sidecar_device import MAX_WALK_SECONDS
 from d1max_patrol.engine.homing import HomePoint, save_home
 from d1max_patrol.engine.machine import MissionEngine
+from d1max_patrol.engine.privileged import Privileged
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 from ..conftest import NoDisks
@@ -256,6 +257,10 @@ def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
         payload_file=payload_file,
         bundles_root=bundles_root if bundles_root is not None
         else tmp_path / "bundles",
+        # W01b:默认「没有特权助手」。不注入的话 AppContext 的默认值指向
+        # /usr/local/sbin/d1max-privileged —— 在装了助手的机器(狗)上跑测试
+        # 会真的发 sudo -n。
+        privileged=Privileged(helper=tmp_path / "no-privileged-helper"),
         # 留空就用 AppContext 自己的默认值(真墙上时钟、没有参照)——
         # 现有那一堆 app 测试一个字都不用改。
         **({"clock": clock} if clock is not None else {}),

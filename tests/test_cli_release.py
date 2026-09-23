@@ -403,6 +403,7 @@ def test_activate在有助手时先装单元(tmp_path, monkeypatch, capsys):
     助手 = _假助手()
     monkeypatch.setattr(cli, "Privileged", lambda: 助手)
     root = tmp_path / "opt"
+    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
     _两版(tmp_path, root)
     assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
     assert 助手.装过 == ["2026-09-20-77b2de"]
@@ -414,6 +415,7 @@ def test_activate没助手就提示并照常切(tmp_path, monkeypatch, capsys):
     助手 = _假助手(在=False)
     monkeypatch.setattr(cli, "Privileged", lambda: 助手)
     root = tmp_path / "opt"
+    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
     _两版(tmp_path, root)
     assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
     assert 助手.装过 == []
@@ -425,6 +427,7 @@ def test_activate单元装不上退非零且不切链(tmp_path, monkeypatch, cap
     import d1max_patrol.cli as cli
     monkeypatch.setattr(cli, "Privileged", lambda: _假助手(拒="第 8 行:User 只能是 robot"))
     root = tmp_path / "opt"
+    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
     _两版(tmp_path, root)
     assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 2
     assert current_name(Layout(root=root)) == ""
@@ -437,6 +440,7 @@ def test_rollback也装回上一版单元(tmp_path, monkeypatch):
     助手 = _假助手()
     monkeypatch.setattr(cli, "Privileged", lambda: 助手)
     root = tmp_path / "opt"
+    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
     layout = Layout(root=root)
     _两版(tmp_path, root)
     main(["release", "activate", "2026-09-06-a3f9c1", "--root", str(root)])
@@ -451,6 +455,7 @@ def test_rollback单元装不回去也照样退回去(tmp_path, monkeypatch, cap
     import d1max_patrol.cli as cli
     root = tmp_path / "opt"
     layout = Layout(root=root)
+    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
     monkeypatch.setattr(cli, "Privileged", lambda: _假助手(在=False))
     _两版(tmp_path, root)
     main(["release", "activate", "2026-09-06-a3f9c1", "--root", str(root)])
@@ -460,3 +465,16 @@ def test_rollback单元装不回去也照样退回去(tmp_path, monkeypatch, cap
     assert main(["release", "rollback", "--root", str(root)]) == 0
     assert current_name(layout) == "2026-09-06-a3f9c1"
     assert "源不存在" in capsys.readouterr().err
+
+
+def test_版本根不是opt_d1max时不走助手(tmp_path, monkeypatch, capsys):
+    """助手只认真机上写死的 /opt/d1max;--root 指到别处时装的会是另一棵树的单元。"""
+    import d1max_patrol.cli as cli
+    助手 = _假助手()
+    monkeypatch.setattr(cli, "Privileged", lambda: 助手)      # 助手在,但根不对
+    root = tmp_path / "opt"
+    _两版(tmp_path, root)
+    assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
+    assert 助手.装过 == []
+    assert "特权助手只认" in capsys.readouterr().out
+    assert current_name(Layout(root=root)) == "2026-09-20-77b2de"

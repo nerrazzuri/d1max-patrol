@@ -407,3 +407,14 @@ def test_spawn_restart探到没权限就抛而不是Popen(tmp_path, monkeypatch)
     priv, _ = _有助手的(tmp_path)
     server_mod._spawn_restart(plan, privileged=priv)
     assert 起过 == [("sudo", "-n", str(priv.helper), "restart")]
+
+
+def test_没注入restart时默认绑的是ctx里的privileged(bridge, tmp_path):
+    """``_spawn_restart`` 不许自己再 new 一个 ``Privileged()``:测试注入的 runner
+    要管得到重启那条路,生产上也别多发一次 sudo check。"""
+    from functools import partial
+
+    ctx = make_ctx(bridge, tmp_path)
+    assert isinstance(ctx.restart, partial)
+    assert ctx.restart.func is server_mod._spawn_restart
+    assert ctx.restart.keywords["privileged"] is ctx.privileged

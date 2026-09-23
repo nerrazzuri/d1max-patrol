@@ -759,6 +759,13 @@ class AppContext:
     #: W01b:特权助手的客户端。装单元、探「重启命令发得出去吗」都走它;
     #: 测试里注入假 runner。
     privileged: Privileged = field(default_factory=Privileged)
+
+    def __post_init__(self) -> None:
+        # ``restart`` 没被注入时,把这份 ``privileged`` 绑进 ``_spawn_restart`` ——
+        # 不然重启那条路会自己再 new 一个 ``Privileged()``,测试注入的 runner
+        # 管不到它,生产上一次 activate 也要多发一次 sudo check。
+        if self.restart is _spawn_restart:
+            self.restart = partial(_spawn_restart, privileged=self.privileged)
     #: 「有没有上装」记在哪。``None`` = 用 ``identity.payload_path`` 的默认
     #: 解析顺序(环境变量,再默认路径)。
     payload_file: Path | None = None
@@ -4454,9 +4461,13 @@ class AppServer:
                                       "rolled_back_to": back, **wire})
                 log.error("重启后自检没过,退回 %s", back)
                 self._install_unit_after_rollback(back)
-                ctx.restart(restart_plan(
-                    has_payload=ctx.identity.payload.has,
-                    recorded=ctx.identity.payload.recorded))
+                try:
+                    ctx.restart(restart_plan(
+                        has_payload=ctx.identity.payload.has,
+                        recorded=ctx.identity.payload.recorded))
+                except PrivilegedError as exc:
+                    # 链已经退了、标记留着;下次开机 boot_guard 会接着判。
+                    log.error("退回 %s 了,但重启命令发不出去: %s", back, exc)
                 return wire
             except Exception:  # 落盘/发事件炸了也不能把过桥的调用方带崩
                 # **别把 pending 标记清掉去图好看。** 上面这一段(坐实/回滚/发事

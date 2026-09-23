@@ -15,8 +15,10 @@
 #   install-unit <版本名>  把 /opt/d1max/releases/<版本名>/deploy/d1max-patrol.service
 #                         校验后装到 /etc/systemd/system/,daemon-reload。
 #                         打印 installed / unchanged。
-#   restart               stop → (没人写槽时)以 robot 跑 release migrate-data → start。
-#                         与 install.sh 7/7 同一条路。
+#   restart               用 systemd-run 起临时单元跑 restart-now(脱离服务自己的
+#                         cgroup,不然 stop 会把助手一起杀掉)。
+#   restart-now           stop → (没人写槽时)以 robot 跑 release migrate-data → start。
+#                         与 install.sh 7/7 同一条路。只由 restart 经 systemd-run 调。
 #   reboot                systemctl reboot。
 #
 # 开发机测试(非 root):必须显式给 --root <dir> --dest <file> --no-systemctl;
@@ -60,74 +62,116 @@ fi
 
 # --------------------------------------------------------------- 单元校验
 # 这是提权面的护栏。robot 已经能以 robot 跑任意代码,护栏要挡的是「借单元
-# 变成 root」:User= 改掉、ExecStart 指到别处、ExecStartPre=+ 以 root 跑、
-# EnvironmentFile 读别的文件、LD_PRELOAD 之类的环境变量、能力集……不在白名单
-# 里的键一律拒,拒的时候说一句为什么。
-ALLOWED_KEYS=" Description After Wants StartLimitIntervalSec Type User ExecStart ExecStartPre Restart RestartSec Environment EnvironmentFile WorkingDirectory WantedBy "
+# 变成 root」:User= 改掉或放错段、ExecStart 指到别处、ExecStartPre=+ 以 root
+# 跑、EnvironmentFile 读别的文件、LD_PRELOAD 之类的环境变量、能力集……
+# **按段校验**:systemd 对放错段的键只记一句 ignoring —— `[Unit]` 里的
+# User=robot 等于没写,服务以 root 起。不在该段白名单里的键一律拒。
+# **拒绝续行**:以反斜杠结尾的行 systemd 会跟下一行拼成一个值,校验器按物理
+# 行看到的 User=robot 会被并进上一行;真单元里没有续行,见到就拒。
+# **拒的时候只说行号和键,不回显内容**:源可以被换成指向 root 才读得到的
+# 文件的链,stderr 会原样透传到 HTTP 409 的 body 里。
+UNIT_KEYS=" Description After Wants StartLimitIntervalSec "
+SERVICE_KEYS=" Type User ExecStart ExecStartPre Restart RestartSec Environment EnvironmentFile WorkingDirectory "
+INSTALL_KEYS=" WantedBy "
 
 validate_unit() {
-  local file=$1 line key value n=0 saw_user=0
+  local file=$1 line key value n=0 saw_user=0 section="" allowed=""
   while IFS= read -r line || [[ -n $line ]]; do
     n=$((n + 1))
     line=${line%$'\r'}
     [[ -z ${line//[[:space:]]/} ]] && continue
     [[ ${line#"${line%%[![:space:]]*}"} == \#* ]] && continue
+    [[ $line == *\\ ]] && die "第 $n 行:不许用反斜杠续行"
     case "$line" in
-      "[Unit]"|"[Service]"|"[Install]") continue ;;
-      \[*) die "第 $n 行:不认识的段 $line(只许 [Unit]/[Service]/[Install])" ;;
+      "[Unit]")    section=Unit;    allowed=$UNIT_KEYS;    continue ;;
+      "[Service]") section=Service; allowed=$SERVICE_KEYS; continue ;;
+      "[Install]") section=Install; allowed=$INSTALL_KEYS; continue ;;
+      \[*) die "第 $n 行:不认识的段(只许 [Unit]/[Service]/[Install])" ;;
     esac
-    [[ $line == *=* ]] || die "第 $n 行:不是 键=值 也不是段头:$line"
+    [[ -n $section ]] || die "第 $n 行:段头之前不许有键"
+    [[ $line == *=* ]] || die "第 $n 行:不是 键=值 也不是段头"
     key=${line%%=*}
     value=${line#*=}
-    [[ $ALLOWED_KEYS == *" $key "* ]] || die "第 $n 行:不许出现 $key="
+    [[ $allowed == *" $key "* ]] || die "第 $n 行:[$section] 段里不许出现 $key="
     case "$key" in
       User)
-        [[ $value == "$RUN_USER" ]] || die "第 $n 行:User 只能是 $RUN_USER,给的是 $value"
+        [[ $value == "$RUN_USER" ]] || die "第 $n 行:User 只能是 $RUN_USER"
         saw_user=1 ;;
       ExecStart|ExecStartPre)
         case "$value" in
           [+!:@]*) die "第 $n 行:$key 不许用 +/!/:/@ 前缀(那是以 root 跑)" ;;
         esac
         value=${value#-}
-        [[ $value == /opt/d1max/* ]] || die "第 $n 行:$key 只能指向 /opt/d1max/ 底下,给的是 $value" ;;
+        [[ $value == /opt/d1max/* ]] || die "第 $n 行:$key 只能指向 /opt/d1max/ 底下" ;;
       EnvironmentFile)
         [[ $value == "-/etc/d1max/env" ]] || die "第 $n 行:EnvironmentFile 只许 -/etc/d1max/env" ;;
       Environment)
-        [[ $value =~ ^D1MAX_[A-Z0-9_]+= || $value == "PYTHONUNBUFFERED=1" ]] \
-          || die "第 $n 行:Environment 只许 D1MAX_* 或 PYTHONUNBUFFERED=1,给的是 $value" ;;
+        # 一行只许一个赋值,值里不许有空白和引号 —— 不然 D1MAX_A=1 后面能跟
+        # LD_PRELOAD=/x.so。
+        [[ $value =~ ^D1MAX_[A-Z0-9_]+=[^[:space:]\"\']*$ || $value == "PYTHONUNBUFFERED=1" ]] \
+          || die "第 $n 行:Environment 只许一个 D1MAX_*=值 或 PYTHONUNBUFFERED=1" ;;
       WorkingDirectory)
         value=${value#-}
         [[ $value == /opt/d1max/* ]] || die "第 $n 行:WorkingDirectory 只能在 /opt/d1max/ 底下" ;;
     esac
   done < "$file"
-  [[ $saw_user -eq 1 ]] || die "单元里没有 User=$RUN_USER —— 没有 User= 的单元以 root 跑"
+  [[ $saw_user -eq 1 ]] || die "[Service] 段里没有 User=$RUN_USER —— 没有它的单元以 root 跑"
 }
+
+TMP=
+cleanup() { if [[ -n ${TMP:-} ]]; then rm -f "$TMP"; fi; }
+trap cleanup EXIT
 
 install_unit() {
   local name=${1:-} src size
   [[ $name =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{6,12}$ ]] \
     || die "版本名不合规:${name:-(空)}"
   src=$RELEASE_ROOT/releases/$name/deploy/$UNIT_NAME
-  [[ -L $src ]] && die "源是符号链接,拒绝:$src"
-  [[ -f $src ]] || die "源不存在:$src(这一版的包没带 deploy/?)"
-  size=$(stat -c %s "$src")
+  [[ -e $src || -L $src ]] || die "源不存在:$src(这一版的包没带 deploy/?)"
+  # **只打开源一次:先 cp -P 进 root 拥有的目标目录,之后一切只看那份拷贝。**
+  # 源在 robot 可写的槽里,校验源、再拷源之间有窗口,robot 可以在窗口里把文件
+  # 换掉或换成指向 /etc/shadow 的链(TOCTOU)。-P 不跟链:拷出来还是链就拒。
+  # 拷贝落在 /etc/systemd/system 底下,robot 碰不到;校验的和装进去的是同一份。
+  TMP=$(mktemp "$DEST.XXXXXX")
+  rm -f "$TMP"
+  cp -P -- "$src" "$TMP"
+  [[ -L $TMP ]] && die "源是符号链接,拒绝"
+  [[ -f $TMP ]] || die "源不是普通文件,拒绝"
+  size=$(stat -c %s "$TMP")
   [[ $size -le 65536 ]] || die "源太大($size 字节),不像一份单元文件"
-  validate_unit "$src"
-  if [[ -f $DEST ]] && cmp -s "$src" "$DEST"; then
+  validate_unit "$TMP"
+  chmod 0644 "$TMP"
+  if [[ -f $DEST ]] && cmp -s "$TMP" "$DEST"; then
     echo unchanged
     return 0
   fi
-  install -m 0644 "$src" "$DEST.tmp"
-  mv -f "$DEST.tmp" "$DEST"
+  mv -f "$TMP" "$DEST"
+  TMP=
   $SYSTEMCTL daemon-reload
   echo installed
 }
 
+# --------------------------------------------------------------- 重启
+# **restart 不能在自己的 cgroup 里停自己。** 服务用 Popen 起助手,sudo/bash 都
+# 还在 d1max-patrol.service 的 cgroup 里;`systemctl stop` 按 KillMode=
+# control-group 会把助手一起杀掉,migrate 和 start 永远跑不到 —— 显式 stop 不
+# 触发 Restart=always,OTA 之后服务停着不起。所以 restart 只做一件事:用
+# systemd-run 起一个临时单元(在 systemd 自己的 cgroup 树里)去跑 restart-now,
+# 真正的 stop → migrate → start 在那里面做。
+SELF=/usr/local/sbin/d1max-privileged
+
 do_restart() {
   if [[ $TEST_MODE -eq 1 ]]; then
-    echo "would: stop, migrate-data as $RUN_USER, start"
+    echo "would: systemd-run --collect -- $SELF restart-now"
     return 0
   fi
+  systemd-run --quiet --collect --unit="d1max-restart-$(date +%s)-$$" \
+    --description="d1max OTA 重启:stop → migrate-data → start" \
+    -- "$SELF" restart-now
+}
+
+do_restart_now() {
+  [[ $TEST_MODE -eq 1 ]] && die "restart-now 只在真机上由 systemd-run 调"
   $SYSTEMCTL stop "$UNIT_NAME" || true
   if $SYSTEMCTL is-active --quiet "$UNIT_NAME"; then
     printf '  !! 服务停不掉,跳过数据迁移(搬的前提是没人在往槽里写)\n' >&2
@@ -147,6 +191,7 @@ case "$cmd" in
   check)        exit 0 ;;
   install-unit) install_unit "${1:-}" ;;
   restart)      do_restart ;;
+  restart-now)  do_restart_now ;;
   reboot)       if [[ $TEST_MODE -eq 1 ]]; then echo "would: reboot"; else $SYSTEMCTL reboot; fi ;;
   *)            usage ;;
 esac

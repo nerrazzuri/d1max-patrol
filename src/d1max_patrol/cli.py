@@ -60,6 +60,25 @@ from d1max_patrol.recorder import FrameRecorder, default_recording_path
 
 log = logging.getLogger(__name__)
 
+#: 特权助手只认真机上写死的版本根。``release activate --root 别处``(或
+#: ``D1MAX_RELEASE_ROOT`` 指到别处)时助手仍会从 /opt/d1max 取单元 —— 那是
+#: 另一棵树的单元,装错版本或误报「源不存在」都不该发生,所以根不一致就跳过。
+_HELPER_RELEASE_ROOT = Path("/opt/d1max")
+
+
+def _helper_for(layout: Layout) -> Privileged | None:
+    """这条命令该不该走特权助手:助手在、而且版本根就是真机那一个。"""
+    priv = Privileged()
+    if not priv.present():
+        print("提示: 没有特权助手,单元文件没更新;要更新单元请重跑 deploy/install.sh")
+        return None
+    if Path(layout.root) != _HELPER_RELEASE_ROOT:
+        print(f"提示: 版本根是 {layout.root} 而不是 {_HELPER_RELEASE_ROOT},"
+              "特权助手只认后者,单元文件没更新")
+        return None
+    return priv
+
+
 DEFAULT_NAV_TIMEOUT_S = 120.0
 #: 等定位就绪的上限
 LOC_READY_TIMEOUT_S = 60.0
@@ -566,15 +585,13 @@ def _cmd_release(args: argparse.Namespace) -> int:
         # 稳定路径,新单元配老代码是安全的;反过来(切了链、单元没装上)正是
         # OTA 升上来的机器单元永远停在装机那天的那个坏状态。助手不在(开发机、
         # W01b 之前装的机器)就跳过并说一句怎么补 —— 装机脚本 5/7 自己也会装单元。
-        priv = Privileged()
-        if priv.present():
+        priv = _helper_for(layout)
+        if priv is not None:
             try:
                 print(f"单元文件: {priv.install_unit(args.name)}")
             except PrivilegedError as exc:
                 print(f"切不了: 新版单元文件没装上,没有切换 —— {exc}", file=sys.stderr)
                 return 2
-        else:
-            print("提示: 没有特权助手,单元文件没更新;要更新单元请重跑 deploy/install.sh")
         try:
             # 把当下的 SN 记进在途标记 —— 重启后自检第四项拿它比对(§7.2)。
             # 这里要读 D1MAX_SN 而不是零参 resolve():现场设备树/DMI 里常常
@@ -619,8 +636,8 @@ def _cmd_release(args: argparse.Namespace) -> int:
             return 2
         # W01b:把退回那一版的单元也装回去。**失败不拦回滚**:回到能跑的代码
         # 比单元一致更要紧,单元向后兼容(只引用 current)。
-        priv = Privileged()
-        if priv.present():
+        priv = _helper_for(layout)
+        if priv is not None:
             try:
                 print(f"单元文件: {priv.install_unit(back)}")
             except PrivilegedError as exc:

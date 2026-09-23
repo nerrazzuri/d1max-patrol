@@ -120,6 +120,68 @@ def test_能把服务变成root跑的写法一律拒绝(tmp_path, 违规行):
     assert got.stderr.strip(), "拒绝要说一句为什么"
 
 
+@pytest.mark.parametrize("绕法, 单元", [
+    # User= 写在 [Unit] 段:systemd 只记一句 ignoring,服务以 root 起。
+    ("User在Unit段", UNIT.replace("User=robot\n", "")
+                    .replace("[Unit]\n", "[Unit]\nUser=robot\n", 1)),
+    # 反斜杠续行:校验器按物理行看到 User=robot,systemd 把它并进上一行的值。
+    ("续行吞掉User", UNIT.replace("User=robot\n", "Type=simple \\\nUser=robot\n", 1)
+                     .replace("Type=simple\n", "", 1)),
+    ("续行吞掉段头", UNIT.replace("[Service]\n", "Description=x \\\n[Service]\n", 1)),
+    # Environment 一行多赋值:前缀合规,后面跟着 LD_PRELOAD。
+    ("Environment多赋值", UNIT.replace("Environment=PYTHONUNBUFFERED=1\n",
+                                     "Environment=D1MAX_A=1 LD_PRELOAD=/x.so\n", 1)),
+    ("Environment带引号", UNIT.replace("Environment=PYTHONUNBUFFERED=1\n",
+                                     'Environment="D1MAX_A=1 LD_PRELOAD=/x.so"\n', 1)),
+    # 键放错段:Service 段的键写在 Unit 段被 systemd 忽略,等于没写。
+    ("ExecStart在Unit段", UNIT.replace("[Unit]\n", "[Unit]\nExecStart=/opt/d1max/x\n", 1)),
+])
+def test_绕过校验的写法一律拒绝(tmp_path, 绕法, 单元):
+    assert 单元 != UNIT, 绕法
+    root, dest = _机器(tmp_path, unit=单元)
+    got = _跑("install-unit", NAME, root=root, dest=dest)
+    assert got.returncode != 0, 绕法
+    assert not dest.exists(), 绕法
+
+
+def test_拒绝时不回显那一行的内容(tmp_path):
+    """源可以被 robot 换成指向 root 才读得到的文件的链;拒绝的理由只说行号和键,
+    不把内容打回去 —— stderr 会原样透传到 HTTP 409 的 body 里。"""
+    root, dest = _机器(tmp_path, unit=UNIT.replace(
+        "[Install]", "root:$6$SECRETHASH:19000\n[Install]", 1))
+    got = _跑("install-unit", NAME, root=root, dest=dest)
+    assert got.returncode != 0
+    assert "SECRETHASH" not in got.stderr
+    assert "SECRETHASH" not in got.stdout
+
+
+def test_校验的是root目录里的那份拷贝而不是源(tmp_path):
+    """源在 robot 可写的槽里。脚本要先把它拷进目标目录(root 的),校验拷贝,
+    再 mv 到位 —— 只打开源一次,robot 在校验与安装之间换文件也换不到装进去的那份。
+    结构性断言:脚本里 validate_unit 吃的是 $TMP,而且拷贝不跟符号链接。"""
+    文本 = HELPER.read_text(encoding="utf-8")
+    assert 'validate_unit "$TMP"' in 文本
+    assert 'validate_unit "$src"' not in 文本
+    assert "cp -P" in 文本 or "cp --no-dereference" in 文本
+    assert 'mktemp "$DEST.XXXXXX"' in 文本
+
+
+def test_restart不在自己的cgroup里停自己():
+    """服务用 Popen 起助手,助手跟服务同一个 cgroup;`systemctl stop` 会连助手
+    一起杀,migrate 和 start 永远跑不到 —— OTA 之后服务停着不起。所以 restart
+    必须先用 systemd-run 把真正的 stop→migrate→start 搬出这个 cgroup。"""
+    文本 = HELPER.read_text(encoding="utf-8")
+    assert "systemd-run" in 文本
+    assert "restart-now" in 文本
+
+
+def test_测试模式下restart只打印计划(tmp_path):
+    root, dest = _机器(tmp_path)
+    got = _跑("restart", root=root, dest=dest)
+    assert got.returncode == 0, got.stderr
+    assert "systemd-run" in got.stdout and "restart-now" in got.stdout
+
+
 def test_少了User_robot也拒绝(tmp_path):
     """没有 User= 的单元以 root 跑 —— 跟写 User=root 一样危险。"""
     root, dest = _机器(tmp_path, unit=UNIT.replace("User=robot\n", ""))
