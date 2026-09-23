@@ -51,6 +51,7 @@ def test_kind与级别的对应表只有一处():
     for kind in ("stuck", "battery_abort", "fallen", "loc_lost_paused",
                  "estop_pressed", "lease_expired"):
         assert LEVEL_OF[kind] is Level.P1
+    assert LEVEL_OF["schedule_died"] is Level.P1 and "schedule_died" != "watchdog_died"
     for kind in ("finding", "disk_80", "upload_backlog", "bundle_lag",
                  "clock_skew"):
         assert LEVEL_OF[kind] is Level.P2

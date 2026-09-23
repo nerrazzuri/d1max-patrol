@@ -11,6 +11,7 @@ import json
 import shutil
 import time
 from datetime import datetime
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -783,3 +784,35 @@ def test_有人握着控制权就不自动起跑(tmp_path, bridge, monkeypatch):
         s.stop()
         with contextlib.suppress(Exception):
             bridge.call(ctx.engine.aclose, timeout_s=10.0)
+
+
+def test_到点了但引擎在跑_记成没轮到而不是静默丢掉(tmp_path, 起一台, monkeypatch):
+    monkeypatch.setattr(S, "_SCHEDULE_PERIOD_S", 0.3)
+    now = [毫秒(9, 7, 21, 0)]
+    ctx, s = _装好带原点(tmp_path, 起一台, clock=lambda: now[0])
+    # 人手起一趟别的任务(假导航到不了,就一直跑着)
+    request(s, "/api/missions/" + quote("巡检一号"), method="PUT",
+            payload={"mission": "巡检一号", "map_id": "map_test",
+                     "waypoints": [{"name": "P1", "pose": {"position": {"x": 1, "y": 0, "z": 0},
+                                    "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}},
+                                    "actions": []}],
+                     "policy": {}})
+    assert _post(s, "/api/missions/" + quote("巡检一号") + "/run")[0] == 200
+    _等到(lambda: ctx.engine.running)
+    now[0] = 毫秒(9, 7, 22, 10)
+    _等到(lambda: "night-1" in get_json(s, "/api/schedule")["executor"]["last_displaced"])
+    assert ctx.engine.snapshot.mission == "巡检一号", "排程不许打断正在跑的"
+
+
+def test_钟不可信就不按钟出发(tmp_path, 起一台, monkeypatch):
+    monkeypatch.setattr(S, "_SCHEDULE_PERIOD_S", 0.3)
+    now = 毫秒(9, 7, 22, 10)
+    root = tmp_path / "bundles"
+    land(root, 打包(tmp_path, "a", 1))
+    apply_bundle(root, "site-kl-1")
+    ctx, s = 起一台(bundles_root=root, clock=lambda: now,
+                   time_reference=lambda: (now - 3 * 3600 * 1000, "手机"))   # 本地钟快了 3 小时
+    save_home(ctx.mapping.maps_dir, 夜巡原点)
+    time.sleep(1.0)
+    assert not ctx.engine.running
+    assert "钟" in get_json(s, "/api/schedule")["executor"]["last_skip"]

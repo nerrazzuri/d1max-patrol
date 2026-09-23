@@ -1193,6 +1193,7 @@ class _StateHub:
         self._sched_last_tick_ms = 0
         self._sched_last_skip = ""
         self._sched_last_error = ""
+        self._sched_last_displaced = ""
         self.events: EventEmitter[dict[str, Any]] = EventEmitter()
         self._snapshot: dict[str, Any] = {}
         self._tasks: list[asyncio.Task[None]] = []
@@ -1391,6 +1392,7 @@ class _StateHub:
                 "last_started": dict(self._sched_started),
                 "running": self._sched_running_id or "",
                 "last_skip": self._sched_last_skip,
+                "last_displaced": self._sched_last_displaced,
                 "last_error": self._sched_last_error}
 
     def _last_started(self, entry: ScheduleEntry) -> int | None:
@@ -1432,6 +1434,16 @@ class _StateHub:
         if where is None:
             return
         schedule = read_bundle_schedule(where)
+        # **钟不可信就不按钟出发。** 狗上没有 NTP,真机上见过钟差半年的;按错钟
+        # 出发等于半夜三点在人家院子里巡逻。有参照且偏差超阈值 → 这一拍不起,
+        # 记进 last_skip;没有参照(不知道偏不偏)照常起 —— 那是单机档的常态。
+        ref = ctx.time_reference()
+        skew = (clock_skew(local_ms=now_ms, reference_ms=None, source="") if ref is None
+                else clock_skew(local_ms=now_ms, reference_ms=ref[0], source=ref[1]))
+        if skew.alarm:
+            self._sched_last_skip = (f"本地钟跟 {skew.source} 差 {skew.skew_s:.0f} 秒,"
+                                     "不按这口钟出发")
+            return
         now = datetime.fromtimestamp(now_ms / 1000, tz=schedule.tz())
         decisions = [(e, decide(e, now=now, last_started_ms=self._last_started(e)))
                      for e in schedule.entries]
@@ -1439,6 +1451,14 @@ class _StateHub:
             self._sched_running_id = None
         running = (self._sched_running_id or "manual") if ctx.engine.running else None
         picked = pick(decisions, running=running)
+        if picked.displaced:
+            # 到点了但没轮到(有别的在跑/同一刻有更优先的)。**不能静默丢**:
+            # 值守屏要看得见"22:00 那趟没出发,因为 21:50 那趟还在跑"。
+            # on_missed=alarm 的那几条按 W17 接告警;这里先记账 + 日志。
+            names = ", ".join(f"{e.id}({d.kind.value})" for e, d in picked.displaced)
+            self._sched_last_displaced = f"{names};正在跑:{running}"
+            log.warning("排程到点但没轮到:%s(正在跑 %s;要告警的:%s)", names, running,
+                        ", ".join(e.id for e, _ in picked.alarms) or "无")
         if picked.chosen is None:
             return
         entry, decision = picked.chosen
@@ -1491,7 +1511,7 @@ class _StateHub:
         log.error("排程执行器协程死了,从此到点没人起跑:%s", exc, exc_info=exc)
         with contextlib.suppress(KeyError, ValueError, OSError):
             self._ctx.alerts.raise_alert(
-                kind="watchdog_died", robot=self._ctx.identity.sn,
+                kind="schedule_died", robot=self._ctx.identity.sn,
                 title="排程执行器那条协程死了",
                 detail=f"{type(exc).__name__}: {exc} —— 到点的巡逻从此不会自动出发,"
                        "重启服务才能恢复(W06)。",
