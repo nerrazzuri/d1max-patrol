@@ -94,6 +94,14 @@ validate_unit() {
     value=${line#*=}
     [[ $allowed == *" $key "* ]] || die "第 $n 行:[$section] 段里不许出现 $key="
     case "$key" in
+      After|Wants)
+        # 依赖值也是护栏:Wants=debug-shell.service 会拉起一个挂在 tty9 的无认证
+        # root shell,emergency.service 在锁了 root 口令的机器上也直接给 shell。
+        local dep
+        for dep in $value; do
+          [[ $dep == network-online.target || $dep == network.target ]] \
+            || die "第 $n 行:$key 只许 network-online.target / network.target"
+        done ;;
       User)
         [[ $value == "$RUN_USER" ]] || die "第 $n 行:User 只能是 $RUN_USER"
         saw_user=1 ;;
@@ -102,6 +110,7 @@ validate_unit() {
           [+!:@]*) die "第 $n 行:$key 不许用 +/!/:/@ 前缀(那是以 root 跑)" ;;
         esac
         value=${value#-}
+        [[ $value == *..* ]] && die "第 $n 行:$key 里不许有 .."
         [[ $value == /opt/d1max/* ]] || die "第 $n 行:$key 只能指向 /opt/d1max/ 底下" ;;
       EnvironmentFile)
         [[ $value == "-/etc/d1max/env" ]] || die "第 $n 行:EnvironmentFile 只许 -/etc/d1max/env" ;;
@@ -112,6 +121,7 @@ validate_unit() {
           || die "第 $n 行:Environment 只许一个 D1MAX_*=值 或 PYTHONUNBUFFERED=1" ;;
       WorkingDirectory)
         value=${value#-}
+        [[ $value == *..* ]] && die "第 $n 行:WorkingDirectory 里不许有 .."
         [[ $value == /opt/d1max/* ]] || die "第 $n 行:WorkingDirectory 只能在 /opt/d1max/ 底下" ;;
     esac
   done < "$file"
@@ -134,11 +144,18 @@ install_unit() {
   # 拷贝落在 /etc/systemd/system 底下,robot 碰不到;校验的和装进去的是同一份。
   TMP=$(mktemp "$DEST.XXXXXX")
   rm -f "$TMP"
-  cp -P -- "$src" "$TMP"
+  # 源可以是 robot 建的 FIFO:没有超时的话 root 的 cp 会永远阻塞在 open 上。
+  timeout 5 cp -P -- "$src" "$TMP" || die "源拷不出来(不是普通文件,或 5 s 内读不完)"
   [[ -L $TMP ]] && die "源是符号链接,拒绝"
   [[ -f $TMP ]] || die "源不是普通文件,拒绝"
   size=$(stat -c %s "$TMP")
   [[ $size -le 65536 ]] || die "源太大($size 字节),不像一份单元文件"
+  # **NUL 与其他控制字符一律拒。** bash 的 read 会静默丢掉 NUL,校验器看到的
+  # User=robot 在 systemd 眼里是 "Us" 和 "er=robot" 两行垃圾 —— 装进去的单元
+  # 没有 User=,以 root 起。只放行 \t \n \r;UTF-8 中文注释(0x80–0xFF)不受影响。
+  if LC_ALL=C grep -q -a -P '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]' "$TMP"; then
+    die "单元里有 NUL 或控制字符,拒绝"
+  fi
   validate_unit "$TMP"
   chmod 0644 "$TMP"
   if [[ -f $DEST ]] && cmp -s "$TMP" "$DEST"; then

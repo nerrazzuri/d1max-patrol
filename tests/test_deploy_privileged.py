@@ -144,6 +144,64 @@ def test_绕过校验的写法一律拒绝(tmp_path, 绕法, 单元):
     assert not dest.exists(), 绕法
 
 
+def test_NUL字节藏起来的键也拒绝(tmp_path):
+    """bash 的 read 会静默丢掉 NUL,校验器看到 User=robot;systemd 把 NUL 当行
+    分隔,看到的是 "Us" 和 "er=robot" 两行垃圾 —— 装进去的单元没有 User=,以 root 起。
+    复评在真脚本 + 真 systemd 上复现过。"""
+    root, dest = _机器(tmp_path)
+    src = root / "releases" / NAME / "deploy" / "d1max-patrol.service"
+    src.write_bytes(UNIT.replace("User=robot", "Us\0er=robot", 1).encode("utf-8"))
+    got = _跑("install-unit", NAME, root=root, dest=dest)
+    assert got.returncode != 0
+    assert not dest.exists()
+
+
+@pytest.mark.parametrize("控制字符", ["\x01", "\x1b", "\x7f", "\x0b"])
+def test_其他控制字符也拒绝(tmp_path, 控制字符):
+    root, dest = _机器(tmp_path, unit=UNIT.replace("[Install]", f"# {控制字符}\n[Install]", 1))
+    got = _跑("install-unit", NAME, root=root, dest=dest)
+    assert got.returncode != 0
+    assert not dest.exists()
+
+
+def test_合法的中文注释和CRLF照样放行(tmp_path):
+    """控制字符的检查不能把 UTF-8 中文注释(0x80–0xFF)和 CRLF 一起挡掉。"""
+    带CRLF = ("# 中文注释 —— 单元里本来就有\n" + UNIT).replace("\n", "\r\n")
+    root, dest = _机器(tmp_path, unit=带CRLF)
+    got = _跑("install-unit", NAME, root=root, dest=dest)
+    assert got.returncode == 0, got.stderr
+
+
+@pytest.mark.parametrize("行", [
+    "Wants=debug-shell.service",                 # /bin/bash 无认证 root shell 挂到 tty9
+    "After=emergency.service",
+    "Wants=network-online.target debug-shell.service",
+    "ExecStart=/opt/d1max/../../bin/sh",
+    "ExecStartPre=-/opt/d1max/current/../../../bin/sh",
+    "WorkingDirectory=/opt/d1max/../..",
+])
+def test_借依赖拉起root进程或用点点绕出opt_d1max一律拒绝(tmp_path, 行):
+    段 = "[Unit]" if 行.startswith(("Wants", "After")) else "[Service]"
+    root, dest = _机器(tmp_path, unit=UNIT.replace(段 + "\n", 段 + "\n" + 行 + "\n", 1))
+    got = _跑("install-unit", NAME, root=root, dest=dest)
+    assert got.returncode != 0, 行
+    assert not dest.exists(), 行
+
+
+def test_源是FIFO时不会挂死(tmp_path):
+    """robot 能 mkfifo;没有超时的话 root 的 cp 会永远阻塞在 open 上,留成孤儿。"""
+    import os
+    root, dest = _机器(tmp_path)
+    src = root / "releases" / NAME / "deploy" / "d1max-patrol.service"
+    src.unlink()
+    os.mkfifo(src)
+    got = subprocess.run(
+        ["bash", str(HELPER), "--root", str(root), "--dest", str(dest), "--no-systemctl",
+         "install-unit", NAME], capture_output=True, text=True, timeout=15)
+    assert got.returncode != 0
+    assert not dest.exists()
+
+
 def test_拒绝时不回显那一行的内容(tmp_path):
     """源可以被 robot 换成指向 root 才读得到的文件的链;拒绝的理由只说行号和键,
     不把内容打回去 —— stderr 会原样透传到 HTTP 409 的 body 里。"""
