@@ -655,6 +655,12 @@ class LocalNavBackend(NavBackend):
         * 侧移本后端不做,``y`` 只接受 0/None。
         """
         p = self.params
+        # **先查有限,再比大小。** ``nan <= 0`` 和 ``nan < 死区`` 都是 False,NaN 会
+        # 穿过下面每一道比较直接写进上限,之后每一拍的控制量和脉冲时长都跟着 NaN
+        # (外部审核复现)。三个分量在任何比较和写入之前先拦。
+        for name, v in (("x", x), ("y", y), ("z", z)):
+            if v is not None and not math.isfinite(float(v)):
+                raise NavRequestError("set_speed", f"{name}={v} 不是有限数,拒绝")
         if float(x) <= 0:
             raise NavRequestError(
                 "set_speed", "自建导航不倒退,前进上限得是正数;要停用 stop")

@@ -417,3 +417,18 @@ async def test_限速也管转向(tmp_path):
         turns = [args for cmd, args in agent.commands if cmd == "walk" and args["yaw"] != 0]
     assert turns
     assert max(abs(a["yaw"]) for a in turns) <= cap_cmd + 1e-9
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("axis", ["x", "y", "z"])
+async def test_非有限的速度一律拒绝_而且不留半提交(tmp_path, axis, bad):
+    """外部审核复现的:``nan <= 0`` 和 ``nan < 死区`` 都是 False,NaN 会穿过所有
+    比较直接写进上限,之后每一拍的控制量、脉冲时长都跟着 NaN。三条轴的校验路径
+    不同,分开覆盖;拒绝之后 ``get_speed`` 必须和调用前一字不差。"""
+    async with rig(tmp_path) as (_agent, _pose, backend):
+        before = await backend.get_speed()
+        kw = {"x": 0.5, "y": 0.0, "z": 0.5}
+        kw[axis] = bad
+        with pytest.raises(NavRequestError, match="有限"):
+            await backend.set_speed(kw["x"], kw["y"], kw["z"])
+        assert await backend.get_speed() == before
