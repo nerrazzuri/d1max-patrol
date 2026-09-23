@@ -75,7 +75,8 @@ def _源码树(root: Path, *, version: str = "0.3.0") -> Path:
         "resolution: 0.05\n", encoding="utf-8")
     # W01b:deploy/ 也进包 —— OTA 升上来的机器要靠包里这份单元和助手更新自己。
     (root / "deploy").mkdir(parents=True, exist_ok=True)
-    for 名 in ("d1max-patrol.service", "d1max-privileged", "sudoers-d1max", "install.sh"):
+    for 名 in ("d1max-patrol.service", "d1max-privileged", "d1max-restart-now",
+              "sudoers-d1max", "install.sh"):
         (root / "deploy" / 名).write_text(f"# {名}\n", encoding="utf-8")
     for rel in 噪声:
         path = root / rel
@@ -183,6 +184,7 @@ def test_单元文件和特权助手随包走(tmp_path, 无git):
     assert (dest / "deploy" / "d1max-patrol.service").is_file()
     assert (dest / "deploy" / "d1max-privileged").is_file()
     assert (dest / "deploy" / "sudoers-d1max").is_file()
+    assert (dest / "deploy" / "d1max-restart-now").is_file()
 
 
 def test_服务要的那份建图参数在包里(tmp_path, 无git):

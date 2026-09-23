@@ -1251,3 +1251,14 @@ def test_足迹勘察覆盖助手和sudoers目录():
     text = (DEPLOY / "footprint.sh").read_text(encoding="utf-8")
     assert '"/usr/local/sbin:1"' in text
     assert '"/etc/sudoers.d:1"' in text
+
+
+def test_装机脚本把restart_now装成root专用且不进sudoers(装机脚本):
+    """内部入口只能由 systemd-run(root)调;0700 root:root,sudoers 里没有它。"""
+    assert ('install -m 0700 -o root -g root "$RESTART_NOW_SRC" /usr/local/sbin/d1max-restart-now'
+            in 装机脚本)
+    assert 'RESTART_NOW_SRC="$PKG/deploy/d1max-restart-now"' in 装机脚本
+    text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /usr/local/sbin/d1max-restart-now" in text
+    assert 'rm_sys "/usr/local/sbin/d1max-restart-now"' in text
+    assert "/usr/local/sbin/d1max-restart-now) ;;" in text

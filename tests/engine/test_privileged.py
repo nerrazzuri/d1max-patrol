@@ -128,3 +128,36 @@ def test_有助手但sudo不通_ensure要抛(tmp_path):
 
 def test_有助手且sudo通_ensure不抛(tmp_path):
     _有助手(tmp_path, _假sudo({"check": (0, "", "")})).ensure_can_restart()
+
+
+# ----------------------------------------------------------- restart 同步等结果
+
+def test_有助手时restart同步跑并等它退0(tmp_path):
+    """外部审核阻断项:`check` 只证明此刻 sudo 能起助手,证明不了 systemd-run 真的把
+    任务排进去了。助手的 restart 只负责排队、自己不停服务,所以可以同步等它。"""
+    假 = _假sudo({"restart": (0, "", "")})
+    p = _有助手(tmp_path, 假)
+    p.restart(服务重启)
+    assert 假.调用[-1] == ["sudo", "-n", str(p.helper), "restart"]
+
+
+def test_restart非零_超时_炸了都是PrivilegedError(tmp_path):
+    排不进去 = _有助手(tmp_path, _假sudo(
+        {"restart": (1, "", "Failed to start transient service unit\n")}))
+    with pytest.raises(PrivilegedError, match="Failed to start transient"):
+        排不进去.restart(服务重启)
+    with pytest.raises(PrivilegedError, match="超时"):
+        _有助手(tmp_path, _假sudo(炸=subprocess.TimeoutExpired("sudo", 30))).restart(服务重启)
+    with pytest.raises(PrivilegedError):
+        _有助手(tmp_path, _假sudo(炸=OSError("sudo 不在"))).restart(整机重启)
+
+
+def test_没助手时restart退回后台起裸systemctl(tmp_path, monkeypatch):
+    """裸 `systemctl restart` 会先把我们停掉、永远不正常返回 —— 只能 Popen 不等。"""
+    import d1max_patrol.engine.privileged as mod
+    起过: list = []
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda argv, **kw: 起过.append(tuple(argv)))
+    假 = _假sudo()
+    _没助手(tmp_path, 假).restart(服务重启)
+    assert 起过 == [服务重启.argv]
+    assert 假.调用 == []

@@ -28,6 +28,7 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service systemctl enable 生成的自启链
 # @写盘 /usr/local/sbin/d1max-privileged                                 W01b:robot 通过 sudo 白名单能跑的唯一 root 命令(装单元、restart、reboot)
 # @写盘 /etc/sudoers.d/d1max                                             W01b:那条白名单,只放行上面那个脚本
+# @写盘 /usr/local/sbin/d1max-restart-now                                W01b:OTA 重启的内部入口(stop→搬数据→start),0700,不在白名单里,只由 systemd-run 调
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的:
 #
@@ -277,6 +278,11 @@ install -m 0644 "$UNIT_SRC" /etc/systemd/system/
 HELPER_SRC="$PKG/deploy/d1max-privileged"
 [[ -f "$HELPER_SRC" ]] || HELPER_SRC="$(dirname "$0")/d1max-privileged"
 install -m 0755 -o root -g root "$HELPER_SRC" /usr/local/sbin/d1max-privileged
+# 重启的内部入口:stop → 搬槽内数据 → start。**不进 sudoers**,0700 只有 root 能读
+# 能跑;助手的 restart 用 systemd-run 把它起在服务 cgroup 外面。
+RESTART_NOW_SRC="$PKG/deploy/d1max-restart-now"
+[[ -f "$RESTART_NOW_SRC" ]] || RESTART_NOW_SRC="$(dirname "$0")/d1max-restart-now"
+install -m 0700 -o root -g root "$RESTART_NOW_SRC" /usr/local/sbin/d1max-restart-now
 # sudoers:**先 visudo -cf 校验再落盘**。一份坏 sudoers 会锁死整机的 sudo,
 # 现场就只剩重刷系统这一条路。
 SUDOERS_SRC="$PKG/deploy/sudoers-d1max"

@@ -224,20 +224,65 @@ def test_校验的是root目录里的那份拷贝而不是源(tmp_path):
     assert 'mktemp "$DEST.XXXXXX"' in 文本
 
 
+RESTART_NOW = ROOT / "deploy" / "d1max-restart-now"
+
+
 def test_restart不在自己的cgroup里停自己():
-    """服务用 Popen 起助手,助手跟服务同一个 cgroup;`systemctl stop` 会连助手
-    一起杀,migrate 和 start 永远跑不到 —— OTA 之后服务停着不起。所以 restart
-    必须先用 systemd-run 把真正的 stop→migrate→start 搬出这个 cgroup。"""
+    """服务起的助手跟服务同一个 cgroup;`systemctl stop` 会连助手一起杀,migrate
+    和 start 永远跑不到 —— OTA 之后服务停着不起。所以 restart 必须用 systemd-run
+    把真正的 stop→migrate→start 搬出这个 cgroup,而且搬去跑的是**另一个脚本**。"""
     文本 = HELPER.read_text(encoding="utf-8")
     assert "systemd-run" in 文本
-    assert "restart-now" in 文本
+    assert "/usr/local/sbin/d1max-restart-now" in 文本
+
+
+def test_真正的stop_migrate_start不在sudo白名单里的那个脚本里():
+    """外部审核阻断项:内部入口 restart-now 原来是助手的一个子命令,而 sudoers 放行
+    的是整个助手 —— robot 直接 `sudo helper restart-now` 就能在自己的 cgroup 里把
+    服务停死。现在它是独立脚本 /usr/local/sbin/d1max-restart-now,不在白名单里,
+    robot 没有任何路能以 root 跑它。"""
+    文本 = HELPER.read_text(encoding="utf-8")
+    代码 = "\n".join(行 for 行 in 文本.splitlines() if not 行.lstrip().startswith("#"))
+    assert "restart-now)" not in 代码, "助手不许再有 restart-now 子命令"
+    assert "systemctl stop" not in 代码, "stop/start 不许留在 sudo 白名单脚本里"
+    assert RESTART_NOW.is_file()
+    assert subprocess.run(["bash", "-n", str(RESTART_NOW)]).returncode == 0
+    内 = RESTART_NOW.read_text(encoding="utf-8")
+    for 句 in ("systemctl stop", "release migrate-data", "systemctl start", "runuser -u"):
+        assert 句 in 内, 句
+    停, 搬, 起 = (内.index(x) for x in ("systemctl stop", "release migrate-data", "systemctl start"))
+    assert 停 < 搬 < 起
+    sudoers = SUDOERS.read_text(encoding="utf-8")
+    assert "d1max-restart-now" not in sudoers
+
+
+def test_restart_now非root直接拒绝():
+    got = subprocess.run(["bash", str(RESTART_NOW)], capture_output=True, text=True)
+    assert got.returncode != 0
+    assert "root" in got.stderr
 
 
 def test_测试模式下restart只打印计划(tmp_path):
     root, dest = _机器(tmp_path)
     got = _跑("restart", root=root, dest=dest)
     assert got.returncode == 0, got.stderr
-    assert "systemd-run" in got.stdout and "restart-now" in got.stdout
+    assert "systemd-run" in got.stdout and "d1max-restart-now" in got.stdout
+
+
+@pytest.mark.parametrize("argv", [
+    ("check", "x"),
+    ("restart", "x"),
+    ("reboot", "now"),
+    ("install-unit",),
+    ("install-unit", NAME, "extra"),
+    ("restart-now",),
+])
+def test_多余或缺少的参数一律退64(tmp_path, argv):
+    """sudoers 不限参数,参数安全全由脚本扛:每个子命令的参数个数都得严查。"""
+    root, dest = _机器(tmp_path)
+    got = _跑(*argv, root=root, dest=dest)
+    assert got.returncode == 64, (argv, got.stderr)
+    assert not dest.exists()
 
 
 def test_少了User_robot也拒绝(tmp_path):
@@ -253,6 +298,13 @@ def test_太大的单元也拒绝(tmp_path):
     got = _跑("install-unit", NAME, root=root, dest=dest)
     assert got.returncode != 0
     assert not dest.exists()
+
+
+def test_daemon_reload失败时说清楚单元已经落盘():
+    """外部审核观察 1:mv 之后才 daemon-reload,reload 失败时盘上的单元已经换了,
+    报错不能让人以为「单元没装上」。"""
+    文本 = HELPER.read_text(encoding="utf-8")
+    assert 'daemon-reload || die "单元已写入 $DEST,但 daemon-reload 失败' in 文本
 
 
 def test_不认识的子命令退64(tmp_path):

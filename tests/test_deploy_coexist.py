@@ -358,7 +358,8 @@ def test_范围只盖我们自己的东西():
     assert 形状, "rm_sys 里读不出白名单"
     # W01b 的两处在 /opt、/etc/d1max 之外,但都是**精确路径、不带通配**,
     # 而且名字里带 d1max —— 匹配不到别人的东西。
-    精确的 = {"/usr/local/sbin/d1max-privileged", "/etc/sudoers.d/d1max"}
+    精确的 = {"/usr/local/sbin/d1max-privileged", "/usr/local/sbin/d1max-restart-now",
+           "/etc/sudoers.d/d1max"}
     for 一组 in 形状:
         for 一条 in 一组.split("|"):
             if 一条 in 精确的:

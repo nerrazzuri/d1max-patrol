@@ -91,6 +91,35 @@ class Privileged:
             return tuple(plan.argv)
         return tuple(self._argv("reboot" if plan.kind == "machine" else "restart"))
 
+    def restart(self, plan: RestartPlan) -> None:
+        """真去重启。
+
+        助手在:**同步跑** ``sudo -n helper restart|reboot`` 并等它退 0。助手的
+        restart 只负责让 systemd-run 把 stop→migrate→start 排进一个临时单元,自己
+        不停服务,所以等得起;排不进去(systemd-run 不在、单元名冲突、systemd
+        拒绝、助手炸了)退非零 → :class:`PrivilegedError`。原来这里 ``Popen`` 完就
+        算成功,这些失败全看不见,界面照样显示「已重启」(外部审核阻断项)。
+        **能确认的是「排进去了」**,稍后那个临时单元里的 start 成不成,只有
+        journal 知道(``真机待验证`` 里有查法)。
+
+        助手不在:退回裸 ``systemctl restart``。它会先把我们停掉、永远不正常返回,
+        只能 ``Popen`` 不等 —— 跟 W01b 之前一样。
+        """
+        argv = list(self.restart_argv(plan))
+        if not self.present():
+            subprocess.Popen(argv, start_new_session=True)
+            return
+        try:
+            got = self.runner(argv, capture_output=True, text=True,
+                              timeout=_INSTALL_TIMEOUT_S)
+        except subprocess.TimeoutExpired as exc:
+            raise PrivilegedError(f"重启命令超时({_INSTALL_TIMEOUT_S:g}s)") from exc
+        except OSError as exc:
+            raise PrivilegedError(f"跑不起特权助手: {exc}") from exc
+        if got.returncode != 0:
+            why = (got.stderr or got.stdout or "").strip() or f"退出码 {got.returncode}"
+            raise PrivilegedError(f"重启命令发不出去: {why}")
+
     def ensure_can_restart(self) -> None:
         """重启命令发得出去吗。助手不在 → 不管(退回裸 systemctl,现状);
         在但 sudo 不通 → 抛,**在切链之前**就让人知道,而不是切完了假装已重启。

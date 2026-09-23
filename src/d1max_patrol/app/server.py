@@ -32,7 +32,6 @@ import mimetypes
 import os
 import re
 import shutil
-import subprocess
 import sys
 import threading
 import time
@@ -675,19 +674,22 @@ def _compile(pattern: str) -> re.Pattern[str]:
 
 
 def _spawn_restart(plan: RestartPlan, privileged: Privileged | None = None) -> None:
-    """真去重启。**起了就不等** —— 等下去等的是自己的死。
-
-    ``systemctl restart`` 会先把我们停掉,所以这个调用永远不会正常返回;
-    ``Popen`` 之后立刻返回,让 HTTP 那一侧还来得及把响应写出去。
+    """真去重启。
 
     W01b:命令走特权助手(``sudo -n /usr/local/sbin/d1max-privileged restart``),
-    起之前先探一下 sudo 通不通 —— 原来只 ``Popen`` 不看结果,被 polkit 拒了界面
-    照样显示「已重启」而机器一动没动(``真机待验证清单`` 第 6 条)。探不通就抛
-    ``PrivilegedError``。助手不在(开发机)时退回裸 ``systemctl``,跟原来一样。
+    先探 sudo 通不通,再**同步**等助手把重启任务经 systemd-run 排进去;哪一步不成
+    都抛 ``PrivilegedError``,路由回 500 而不是「已重启」。原来只 ``Popen`` 不看
+    结果,被 polkit 拒了、systemd-run 失败了,界面照样显示「已重启」而机器一动
+    没动(``真机待验证清单`` 第 6 条、外部审核阻断项)。
+
+    助手不在(开发机、W01b 之前装的机器)退回裸 ``systemctl restart``:它会先
+    把我们停掉、永远不正常返回,只能 ``Popen`` 不等 —— 见 ``Privileged.restart``。
     """
     priv = privileged if privileged is not None else Privileged()
     priv.ensure_can_restart()
-    subprocess.Popen(list(priv.restart_argv(plan)), start_new_session=True)
+    # 有助手时这是同步的:等 systemd-run 把重启任务排进去;排不进去抛
+    # PrivilegedError,路由据此回 500 而不是「已重启」。没助手才是 Popen 不等。
+    priv.restart(plan)
 
 
 # ------------------------------------------------------------------ 上下文

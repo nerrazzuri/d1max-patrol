@@ -279,6 +279,7 @@ def test_改完之后身份立刻跟着变(rel_server):
 # ------------------------------------------------------------ W01b:单元随包装、重启走助手
 
 import subprocess  # noqa: E402
+from functools import partial  # noqa: E402
 
 from d1max_patrol.app import server as server_mod  # noqa: E402
 from d1max_patrol.engine.privileged import Privileged, PrivilegedError  # noqa: E402
@@ -396,17 +397,34 @@ def test_回滚时单元装不回去也照样退回去(rel_server, tmp_path, cap
 
 
 def test_spawn_restart探到没权限就抛而不是Popen(tmp_path, monkeypatch):
+    import d1max_patrol.engine.privileged as priv_mod
     起过: list = []
-    monkeypatch.setattr(server_mod.subprocess, "Popen",
+    monkeypatch.setattr(priv_mod.subprocess, "Popen",
                         lambda argv, **kw: 起过.append(tuple(argv)))
     plan = RestartPlan("service", ("systemctl", "restart", "d1max-patrol.service"), "没上装")
     priv, _ = _有助手的(tmp_path, {"check": (1, "", "sudo: a password is required\n")})
     with pytest.raises(PrivilegedError):
         server_mod._spawn_restart(plan, privileged=priv)
     assert 起过 == []
-    priv, _ = _有助手的(tmp_path)
+    priv, 假 = _有助手的(tmp_path)
     server_mod._spawn_restart(plan, privileged=priv)
-    assert 起过 == [("sudo", "-n", str(priv.helper), "restart")]
+    assert 起过 == [], "有助手时 restart 同步跑、等结果,不 Popen"
+    assert 假.调用[-1] == "restart"
+
+
+def test_check通了但restart排队失败_接口不得说成功(rel_server, tmp_path):
+    """外部审核阻断项:原来 Popen 完就回 200,systemd-run 失败、单元名冲突、助手炸了
+    全都看不见。现在同步等助手的 restart 退 0;非零 → 500 说实话。"""
+    priv, 假 = _有助手的(tmp_path, {"restart": (1, "", "Failed to start transient service unit\n")})
+    rel_server._ctx.privileged = priv
+    rel_server._ctx.restart = partial(server_mod._spawn_restart, privileged=priv)
+    post(rel_server, "/api/release/install",
+         {"package": str(_pkg(tmp_path / "pkg", "2026-09-20-77b2de"))})
+    err = get_err(rel_server, "/api/release/activate", 500, method="POST",
+                  payload={"name": "2026-09-20-77b2de"})
+    assert "重启命令发不出去" in json.dumps(err, ensure_ascii=False)
+    assert "transient" in json.dumps(err, ensure_ascii=False)
+    assert 假.调用 == ["check", "install-unit 2026-09-20-77b2de", "check", "restart"]
 
 
 def test_没注入restart时默认绑的是ctx里的privileged(bridge, tmp_path):

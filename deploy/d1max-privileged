@@ -15,10 +15,10 @@
 #   install-unit <版本名>  把 /opt/d1max/releases/<版本名>/deploy/d1max-patrol.service
 #                         校验后装到 /etc/systemd/system/,daemon-reload。
 #                         打印 installed / unchanged。
-#   restart               用 systemd-run 起临时单元跑 restart-now(脱离服务自己的
-#                         cgroup,不然 stop 会把助手一起杀掉)。
-#   restart-now           stop → (没人写槽时)以 robot 跑 release migrate-data → start。
-#                         与 install.sh 7/7 同一条路。只由 restart 经 systemd-run 调。
+#   restart               用 systemd-run 起临时单元跑 /usr/local/sbin/d1max-restart-now
+#                         (stop → 搬槽内数据 → start)。那个脚本不在 sudo 白名单里,
+#                         robot 直接跑不了;放这儿的话 stop 会在服务自己的 cgroup 里
+#                         把助手一起杀掉。这里只等 systemd-run 把任务排进去。
 #   reboot                systemctl reboot。
 #
 # 开发机测试(非 root):必须显式给 --root <dir> --dest <file> --no-systemctl;
@@ -164,51 +164,40 @@ install_unit() {
   fi
   mv -f "$TMP" "$DEST"
   TMP=
-  $SYSTEMCTL daemon-reload
+  # 单元已经换上了;reload 失败要说清楚是这个状态,不是「没装上」。
+  $SYSTEMCTL daemon-reload || die "单元已写入 $DEST,但 daemon-reload 失败 —— 手工 systemctl daemon-reload"
   echo installed
 }
 
 # --------------------------------------------------------------- 重启
-# **restart 不能在自己的 cgroup 里停自己。** 服务用 Popen 起助手,sudo/bash 都
-# 还在 d1max-patrol.service 的 cgroup 里;`systemctl stop` 按 KillMode=
-# control-group 会把助手一起杀掉,migrate 和 start 永远跑不到 —— 显式 stop 不
-# 触发 Restart=always,OTA 之后服务停着不起。所以 restart 只做一件事:用
-# systemd-run 起一个临时单元(在 systemd 自己的 cgroup 树里)去跑 restart-now,
-# 真正的 stop → migrate → start 在那里面做。
-SELF=/usr/local/sbin/d1max-privileged
+# **restart 不能在自己的 cgroup 里停自己。** 服务起的 sudo/bash 都还在
+# d1max-patrol.service 的 cgroup 里;`systemctl stop` 按 KillMode=control-group 会把
+# 它们一起杀掉。所以真正的 stop → migrate → start 在 /usr/local/sbin/d1max-restart-now
+# 里,由 systemd-run 起在一个临时单元(systemd 自己的 cgroup 树)里跑;这里只等
+# systemd-run 把任务排进去 —— 排进去了才退 0,排不进去(systemd-run 不在、单元名
+# 冲突、systemd 拒绝)退非零,app 那边据此决定回不回「已重启」。
+RESTART_NOW=/usr/local/sbin/d1max-restart-now
 
 do_restart() {
   if [[ $TEST_MODE -eq 1 ]]; then
-    echo "would: systemd-run --collect -- $SELF restart-now"
+    echo "would: systemd-run --collect -- $RESTART_NOW"
     return 0
   fi
   systemd-run --quiet --collect --unit="d1max-restart-$(date +%s)-$$" \
     --description="d1max OTA 重启:stop → migrate-data → start" \
-    -- "$SELF" restart-now
+    -- "$RESTART_NOW"
 }
 
-do_restart_now() {
-  [[ $TEST_MODE -eq 1 ]] && die "restart-now 只在真机上由 systemd-run 调"
-  $SYSTEMCTL stop "$UNIT_NAME" || true
-  if $SYSTEMCTL is-active --quiet "$UNIT_NAME"; then
-    printf '  !! 服务停不掉,跳过数据迁移(搬的前提是没人在往槽里写)\n' >&2
-  else
-    # 跟 install.sh 7/7 一模一样:以服务用户搬,拷出来的文件才归 robot。
-    runuser -u "$RUN_USER" -- env D1MAX_RELEASE_ROOT="$RELEASE_ROOT" D1MAX_DATA_ROOT="$DATA_ROOT" \
-      "$RELEASE_ROOT/bin/python" -m d1max_patrol.cli release migrate-data \
-      || printf '  !! 槽内数据迁移没成功;没搬动的还在原槽里、原名不变,prune 不会删它们\n' >&2
-  fi
-  $SYSTEMCTL start "$UNIT_NAME"
-}
-
+# **参数个数严查。** sudoers 那一行不限参数,参数安全全由这里扛:每个子命令
+# 只接受它该有的那几个,多一个少一个都退 64。
 cmd=${1:-}
 [[ -n $cmd ]] || usage
 shift
 case "$cmd" in
-  check)        exit 0 ;;
-  install-unit) install_unit "${1:-}" ;;
-  restart)      do_restart ;;
-  restart-now)  do_restart_now ;;
-  reboot)       if [[ $TEST_MODE -eq 1 ]]; then echo "would: reboot"; else $SYSTEMCTL reboot; fi ;;
+  check)        [[ $# -eq 0 ]] || usage; exit 0 ;;
+  install-unit) [[ $# -eq 1 ]] || usage; install_unit "$1" ;;
+  restart)      [[ $# -eq 0 ]] || usage; do_restart ;;
+  reboot)       [[ $# -eq 0 ]] || usage
+                if [[ $TEST_MODE -eq 1 ]]; then echo "would: reboot"; else $SYSTEMCTL reboot; fi ;;
   *)            usage ;;
 esac

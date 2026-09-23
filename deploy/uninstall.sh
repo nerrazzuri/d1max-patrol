@@ -55,6 +55,7 @@ set -euo pipefail
 # @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
 # @删除 /usr/local/sbin/d1max-privileged                                 W01b 的特权助手
 # @删除 /etc/sudoers.d/d1max                                             W01b 的 sudo 白名单
+# @删除 /usr/local/sbin/d1max-restart-now                                W01b 重启的内部入口
 #
 # 带 --keep-data 时这几处留着,每一处的理由都要能说出口:
 #
@@ -168,6 +169,7 @@ rm_sys() {
     /etc/systemd/system/d1max-*.service) ;;
     /etc/systemd/system/*.target.wants/d1max-*.service) ;;
     /usr/local/sbin/d1max-privileged) ;;
+    /usr/local/sbin/d1max-restart-now) ;;
     /etc/sudoers.d/d1max) ;;
     *)
       warn "  拒绝删除 $target —— 不在允许的范围里。这是护栏,不是错误。"
@@ -378,6 +380,7 @@ stop_service() {
   # 的路径,谁在那一刻建出同名文件谁就是 root。
   rm_sys "/etc/sudoers.d/d1max" "sudo 白名单"
   rm_sys "/usr/local/sbin/d1max-privileged" "特权助手"
+  rm_sys "/usr/local/sbin/d1max-restart-now" "重启的内部入口"
   if [ "$DO_IT" = 1 ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl reset-failed "$MAIN_UNIT" >/dev/null 2>&1 || true
