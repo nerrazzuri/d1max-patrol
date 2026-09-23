@@ -115,6 +115,7 @@ from d1max_patrol.backends.map_bridge import MapBridgeClient
 from d1max_patrol.engine import backup
 from d1max_patrol.engine.alerts import AlertBook, AlertNotFound
 from d1max_patrol.engine.archive import (
+    STAMP_FMT,
     list_runs,
     read_events,
     read_manifest,
@@ -133,6 +134,9 @@ from d1max_patrol.engine.backup import (
     resolve_targets,
 )
 from d1max_patrol.engine.baselines import BASELINE_DIR_NAME, baselines_bytes
+from d1max_patrol.engine.bundle import (
+    MISSIONS_DIR as BUNDLE_MISSIONS_DIR,
+)
 from d1max_patrol.engine.bundle import (
     BundleError,
     active_bundle,
@@ -214,10 +218,12 @@ from d1max_patrol.engine.retention import (
     write_notice,
 )
 from d1max_patrol.engine.schedule import (
+    ScheduleEntry,
     Skew,
     clock_skew,
     decide,
     next_run,
+    pick,
 )
 from d1max_patrol.engine.selfcheck import (
     PrecheckInputs,
@@ -298,6 +304,9 @@ _TICK_S = 0.5
 #: 一拍没关系,停车不能晚),所以各写各的常量:哪天要把屏幕调慢省电,不该
 #: 顺手把闸门也调慢。
 _LEASE_WATCH_PERIOD_S = 0.5
+#: 排程执行器多久看一眼「到点了没」(W06)。排程的粒度是分钟、窗口几十分钟,
+#: 30 秒足够;测试里会把它拨小。**未验证:** 真机上没量过。
+_SCHEDULE_PERIOD_S = 30.0
 
 #: ``AlertSources.on_tick`` 那三条水位每多少拍看一次。60 拍 = 30 秒。
 #:
@@ -797,6 +806,28 @@ class AppContext:
         return Path(self.runs_root).parent / EXPORTS_DIR_NAME
 
 
+def _last_run_started_ms(runs_root: Path | str, mission: str) -> int | None:
+    """``runs/<任务>/`` 下最新那趟的起跑时刻(UTC 毫秒),按目录名解;没有就 None。
+
+    目录名就是 ``archive.STAMP_FMT`` 的 UTC 时间戳(``list_runs`` 也是按它排序
+    的),不看 mtime —— 事后补报告会把 mtime 搅乱。名字不合格式的目录跳过。
+    """
+    base = Path(runs_root) / mission
+    if not base.is_dir():
+        return None
+    best: int | None = None
+    for d in base.iterdir():
+        if not d.is_dir():
+            continue
+        try:
+            when = datetime.strptime(d.name, STAMP_FMT).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        ms = int(when.timestamp() * 1000)
+        best = ms if best is None or ms > best else best
+    return best
+
+
 def _run_rel(key: str) -> str:
     """从队列的 key 里切出那一趟的目录(相对 ``runs_root``)。
 
@@ -1155,6 +1186,13 @@ class _StateHub:
     def __init__(self, ctx: AppContext, control: ControlDesk) -> None:
         self._ctx = ctx
         self._control = control
+        # 排程执行器的账(W06)。``_sched_started`` 是"这条排程这一轮已经起过"
+        # 的内存记录;重启后靠 ``_last_run_started_ms`` 从归档回查补上。
+        self._sched_started: dict[str, int] = {}
+        self._sched_running_id: str | None = None
+        self._sched_last_tick_ms = 0
+        self._sched_last_skip = ""
+        self._sched_last_error = ""
         self.events: EventEmitter[dict[str, Any]] = EventEmitter()
         self._snapshot: dict[str, Any] = {}
         self._tasks: list[asyncio.Task[None]] = []
@@ -1249,6 +1287,9 @@ class _StateHub:
         闸门 = asyncio.create_task(self._lease_watchdog())
         闸门.add_done_callback(self._看门狗塌了)
         self._tasks.append(闸门)
+        执行器 = asyncio.create_task(self._schedule_runner())
+        执行器.add_done_callback(self._执行器塌了)
+        self._tasks.append(执行器)
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -1341,6 +1382,120 @@ class _StateHub:
                 await self._lease_once(水位=_该量水位了(self._lease_ticks))
             except (OSError, ValueError) as exc:
                 log.warning("租约看门狗这一拍出错了:%s", exc, exc_info=True)
+
+    # ------------------------------------------------ 排程执行器(W06)
+
+    def _executor_wire(self) -> dict[str, Any]:
+        return {"period_s": _SCHEDULE_PERIOD_S,
+                "last_tick_ms": self._sched_last_tick_ms,
+                "last_started": dict(self._sched_started),
+                "running": self._sched_running_id or "",
+                "last_skip": self._sched_last_skip,
+                "last_error": self._sched_last_error}
+
+    def _last_started(self, entry: ScheduleEntry) -> int | None:
+        """这条排程上一次真起跑是什么时候:内存里记的和归档里查到的,取晚的。
+
+        内存那份是本进程起跑时记的;归档那份是 ``runs/<任务>/<时刻>`` 目录名
+        (UTC 时间戳)回查出来的,重启后全靠它 —— 没有它就是「到了点每一轮都判
+        due,于是每一轮起一趟」。
+        """
+        mem = self._sched_started.get(entry.id)
+        disk = _last_run_started_ms(self._ctx.runs_root, entry.mission)
+        cands = [v for v in (mem, disk) if v is not None]
+        return max(cands) if cands else None
+
+    async def _schedule_runner(self) -> None:
+        """到点自动出发。**以前整个仓库里没有人做这件事**(见 ``_schedule``
+        的旧 docstring):``decide()`` 只是判据,没人轮询它、没人拿结论去
+        ``engine.start()``。这条协程就是那个人。
+
+        兜的是 ``OSError``/``ValueError``/``BundleError``/``MissionError``/
+        ``HomeError``/``EngineBusy``:都是"这一拍没起成,下一拍再看"的事,记进
+        ``last_error`` 给值守屏看;别的异常照样掀翻协程,由 ``_执行器塌了``
+        记 P1(跟租约看门狗同一套理由)。
+        """
+        while True:
+            await asyncio.sleep(_SCHEDULE_PERIOD_S)
+            try:
+                await self._schedule_once()
+            except (OSError, ValueError, BundleError, MissionError,
+                    HomeError, EngineBusy) as exc:
+                self._sched_last_error = f"{type(exc).__name__}: {exc}"
+                log.warning("排程这一拍没办成:%s", exc)
+
+    async def _schedule_once(self) -> None:
+        ctx = self._ctx
+        now_ms = ctx.clock()
+        self._sched_last_tick_ms = now_ms
+        where = active_bundle(ctx.bundles_root)
+        if where is None:
+            return
+        schedule = read_bundle_schedule(where)
+        now = datetime.fromtimestamp(now_ms / 1000, tz=schedule.tz())
+        decisions = [(e, decide(e, now=now, last_started_ms=self._last_started(e)))
+                     for e in schedule.entries]
+        if not ctx.engine.running:
+            self._sched_running_id = None
+        running = (self._sched_running_id or "manual") if ctx.engine.running else None
+        picked = pick(decisions, running=running)
+        if picked.chosen is None:
+            return
+        entry, decision = picked.chosen
+        # **有人握着控制权就不起。** 人正拿着手机开狗(或刚要开),排程不能从
+        # 他手里把腿抢走;还了再起 —— 窗口内每一拍都会再看一遍。
+        lease = self._control.sweep(now_ms=now_ms)
+        if lease.holder is not None:
+            who = lease.holder.operator or lease.holder.ref
+            self._sched_last_skip = f"有人握着控制权({who}),等还了再起"
+            return
+        mission = self._scheduled_mission(where, entry.mission)
+        try:
+            home = load_home(ctx.mapping.maps_dir, mission.map_id)
+        except HomeError:
+            home = None
+        report = await _preflight_with_scan(ctx, mission, home)
+        if not report.ok:
+            self._sched_last_skip = "起飞检查没过: " + ";".join(
+                f"{c.name}: {c.detail}" for c in report.failures)
+            return
+        await ctx.engine.start(mission, home=home)
+        self._sched_started[entry.id] = now_ms
+        self._sched_running_id = entry.id
+        self._sched_last_skip = ""
+        self._sched_last_error = ""
+        log.info("排程 %s 到点(%s),起跑任务 %s", entry.id, decision.kind.value,
+                 entry.mission)
+
+    def _scheduled_mission(self, bundle_dir: Path, mid: str) -> Mission:
+        """排程里的任务从**当前任务包**里拿(``missions/<id>.json``);包里没有
+        再退到手写的 ``missions_dir/<id>.yaml``。JSON 是 YAML 的子集,同一个
+        ``load_mission`` 读得了。"""
+        safe = _safe_id(mid, '任务名')
+        in_bundle = bundle_dir / BUNDLE_MISSIONS_DIR / f"{safe}.json"
+        if in_bundle.is_file():
+            return load_mission(in_bundle)
+        hand = Path(self._ctx.missions_dir) / f"{safe}.yaml"
+        if not hand.is_file():
+            raise MissionError(f"排程指的任务 {mid!r} 包里没有,手写目录里也没有")
+        return load_mission(hand)
+
+    def _执行器塌了(self, task: asyncio.Task[None]) -> None:
+        """排程执行器那条协程结束了。跟 ``_看门狗塌了`` 同一套理由:除了被
+        取消没有一种结束是正常的,而它死掉的后果是静默的 —— 从此到点没人起跑。"""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        log.error("排程执行器协程死了,从此到点没人起跑:%s", exc, exc_info=exc)
+        with contextlib.suppress(KeyError, ValueError, OSError):
+            self._ctx.alerts.raise_alert(
+                kind="watchdog_died", robot=self._ctx.identity.sn,
+                title="排程执行器那条协程死了",
+                detail=f"{type(exc).__name__}: {exc} —— 到点的巡逻从此不会自动出发,"
+                       "重启服务才能恢复(W06)。",
+                now_ms=self._ctx.clock())
 
     def _看门狗塌了(self, task: asyncio.Task[None]) -> None:
         """闸门那条协程结束了。**除了被取消,没有一种结束是正常的。**
@@ -3987,12 +4142,13 @@ class AppServer:
             下一轮 = next_run(entry, now=now)
             entries.append(entry.to_wire() | {
                 "decision": decide(entry, now=now,
-                                   last_started_ms=None).to_wire(),
+                                   last_started_ms=self._hub._last_started(entry)).to_wire(),
                 "next_run": 下一轮.isoformat() if 下一轮 is not None else "",
             })
         return json_response({"timezone": schedule.timezone,
                               "now": now.isoformat(),
-                              "entries": entries, "clock": clock})
+                              "entries": entries, "clock": clock,
+                              "executor": self._hub._executor_wire()})
 
     def _clock_skew(self, local_ms: int) -> Skew:
         """本地钟跟外头差多少。**没有参照就是「不知道」,不是 0。**

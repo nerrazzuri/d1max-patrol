@@ -9,11 +9,13 @@ from __future__ import annotations
 import contextlib
 import json
 import shutil
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
+import d1max_patrol.app.server as S
 from d1max_patrol.app.server import MAX_ROLLBACK_REASON_LEN, AppServer
 from d1max_patrol.engine.bundle import (
     LANDED,
@@ -22,6 +24,8 @@ from d1max_patrol.engine.bundle import (
     build_bundle,
     land,
 )
+from d1max_patrol.engine.homing import HomePoint, save_home
+from d1max_patrol.protocol.nav_types import Pose
 from tests.app.conftest import get_json, make_ctx, request
 
 吉隆坡 = ZoneInfo("Asia/Kuala_Lumpur")
@@ -667,3 +671,115 @@ def test_这条路由不会真起跑任何任务(装好):
     for _ in range(3):
         get_json(s, "/api/schedule")
     assert sorted(p.name for p in ctx.runs_root.iterdir()) == 之前
+
+
+def _post(server, path: str, payload=None):
+    code, body, _ = request(server, path, method="POST", payload=payload or {})
+    return code, body
+
+
+# ---- 排程执行器(W06) ---------------------------------------------------
+#
+# 以前 ``/api/schedule`` 那条路由的 docstring 写着「到点自动出发这件事,整个仓库里
+# 没有人做」。下面这几条钉的就是那件事:到点起跑、起过就不再起、重启后靠归档
+# 回查、正在跑/有人握着控制权就不起。
+
+
+夜巡原点 = HomePoint(map_id="floor1", pose=Pose.from_xy_yaw(0.0, 0.0),
+                 marked_at_ms=1_757_000_000_000)
+
+
+def _装好带原点(tmp_path, 起一台, *, clock, period: float = 0.3):
+    """包生效、任务的那张图标了原点(起飞门槛要)、执行器拨快。"""
+    root = tmp_path / "bundles"
+    land(root, 打包(tmp_path, "a", 1))
+    apply_bundle(root, "site-kl-1")
+    ctx, s = 起一台(bundles_root=root, clock=clock)
+    save_home(ctx.mapping.maps_dir, 夜巡原点)      # 在第一拍(period)之前
+    return ctx, s
+
+
+def _等到(条件, 秒: float = 5.0) -> None:
+    deadline = time.monotonic() + 秒
+    while time.monotonic() < deadline:
+        if 条件():
+            return
+        time.sleep(0.02)
+    raise AssertionError("等超时")
+
+
+def test_到点了执行器自己把任务起跑(tmp_path, 起一台, monkeypatch):
+    monkeypatch.setattr(S, "_SCHEDULE_PERIOD_S", 0.3)
+    ctx, s = _装好带原点(tmp_path, 起一台, clock=lambda: 毫秒(9, 7, 22, 10))
+    _等到(lambda: ctx.engine.running)
+    assert ctx.engine.snapshot.mission == "night"
+    body = get_json(s, "/api/schedule")
+    assert body["executor"]["last_started"]["night-1"] > 0
+    assert body["entries"][0]["decision"]["kind"] == "not_yet", "起过这一轮了,别再判 due"
+
+
+def test_起过一次就不再起_哪怕这趟跑完了(tmp_path, 起一台, monkeypatch):
+    monkeypatch.setattr(S, "_SCHEDULE_PERIOD_S", 0.3)
+    ctx, s = _装好带原点(tmp_path, 起一台, clock=lambda: 毫秒(9, 7, 22, 10))
+    _等到(lambda: ctx.engine.running)
+    ctx.bridge.call(lambda: ctx.engine.abort("测试:结束这趟"), timeout_s=10.0)
+    ctx.bridge.call(lambda: ctx.engine.wait_done(timeout_s=10.0), timeout_s=15.0)
+    time.sleep(1.0)                                       # 再过几拍
+    assert not ctx.engine.running, "同一轮起了第二次"
+
+
+def test_重启后靠归档回查_已经起过的那一轮不重复起(tmp_path, 起一台, monkeypatch):
+    """服务重启内存清零,``last_started`` 得从 runs 目录回查:22:05 已经跑过一趟,
+    22:10 起来的执行器不能再起。"""
+    monkeypatch.setattr(S, "_SCHEDULE_PERIOD_S", 0.3)
+    run = tmp_path / "runs" / "night" / "20260907T140500Z"     # 22:05 吉隆坡 = 14:05Z
+    run.mkdir(parents=True)
+    (run / "manifest.json").write_text("{}", encoding="utf-8")
+    ctx, s = _装好带原点(tmp_path, 起一台, clock=lambda: 毫秒(9, 7, 22, 10))
+    time.sleep(1.0)
+    assert not ctx.engine.running
+    assert get_json(s, "/api/schedule")["entries"][0]["decision"]["kind"] == "not_yet"
+
+
+def test_还没到点就不起(tmp_path, 起一台, monkeypatch):
+    monkeypatch.setattr(S, "_SCHEDULE_PERIOD_S", 0.3)
+    ctx, _s = _装好带原点(tmp_path, 起一台, clock=lambda: 毫秒(9, 7, 21, 0))
+    time.sleep(1.0)
+    assert not ctx.engine.running
+
+
+def test_有人握着控制权就不自动起跑(tmp_path, bridge, monkeypatch):
+    """人正拿着手机开狗(或刚要开),排程不能从他手里把腿抢走;等他还了再起。
+
+    执行器看的是 ``ControlDesk.sweep()`` 之后的租约簿 —— 没有活会话的租约会被
+    它当场释放,所以这里得用一台**设了 PIN** 的服务、换真 token、真取控制权。
+    """
+    monkeypatch.setattr(S, "_SCHEDULE_PERIOD_S", 0.3)
+    root = tmp_path / "bundles"
+    land(root, 打包(tmp_path, "a", 1))
+    apply_bundle(root, "site-kl-1")
+    now = 毫秒(9, 7, 22, 10)                         # 已经到点;钟不走,租约不会过期
+    ctx = make_ctx(bridge, tmp_path, bundles_root=root, clock=lambda: now)
+    s = AppServer(ctx, port=0, pin="246810")
+    s.start()
+    try:
+        save_home(ctx.mapping.maps_dir, 夜巡原点)
+        code, body, _ = request(s, "/api/auth", method="POST",
+                                payload={"pin": "246810", "operator": "张三"})
+        assert code == 200, body
+        tok = {"Authorization": f"Bearer {json.loads(body)['token']}"}
+        code, body, _ = request(s, "/api/control/acquire", method="POST",
+                                payload={}, headers=tok)
+        assert code == 200, body
+        time.sleep(1.0)
+        assert not ctx.engine.running, "有人握着控制权,排程不该起"
+        code, body, _ = request(s, "/api/schedule", headers=tok)
+        assert "控制权" in json.loads(body)["executor"]["last_skip"]
+        code, _, _ = request(s, "/api/control/release", method="POST", payload={},
+                             headers=tok)
+        assert code == 200
+        _等到(lambda: ctx.engine.running)
+    finally:
+        s.stop()
+        with contextlib.suppress(Exception):
+            bridge.call(ctx.engine.aclose, timeout_s=10.0)
