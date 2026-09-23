@@ -53,6 +53,8 @@ set -euo pipefail
 # @删除 /etc/systemd/system/d1max-patrol.service                         主单元
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 开机自启那条链
 # @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
+# @删除 /usr/local/sbin/d1max-privileged                                 W01b 的特权助手
+# @删除 /etc/sudoers.d/d1max                                             W01b 的 sudo 白名单
 #
 # 带 --keep-data 时这几处留着,每一处的理由都要能说出口:
 #
@@ -165,6 +167,8 @@ rm_sys() {
     /var/lib/d1max|/var/lib/d1max/*) ;;
     /etc/systemd/system/d1max-*.service) ;;
     /etc/systemd/system/*.target.wants/d1max-*.service) ;;
+    /usr/local/sbin/d1max-privileged) ;;
+    /etc/sudoers.d/d1max) ;;
     *)
       warn "  拒绝删除 $target —— 不在允许的范围里。这是护栏,不是错误。"
       return 0
@@ -370,6 +374,10 @@ stop_service() {
   rm_sys "$UNIT_DIR/$MAIN_UNIT" "主单元"
   rm_sys "$UNIT_DIR/$OLD_UNIT" "老的守卫单元,多数机器上本来就没有"
   rm_sys "$WANTS_LINK" "开机自启那条链"
+  # W01b:先删 sudoers 再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在
+  # 的路径,谁在那一刻建出同名文件谁就是 root。
+  rm_sys "/etc/sudoers.d/d1max" "sudo 白名单"
+  rm_sys "/usr/local/sbin/d1max-privileged" "特权助手"
   if [ "$DO_IT" = 1 ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl reset-failed "$MAIN_UNIT" >/dev/null 2>&1 || true

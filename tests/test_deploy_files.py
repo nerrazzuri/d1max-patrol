@@ -1207,3 +1207,46 @@ def test_起动次数上限那一行写在Unit段而不是Service段(服务单�
     # 顺手把「哪个键属于哪个段」的另外两个常错的也钉住,免得下次挪错方向。
     for 键 in ("Restart", "RestartSec", "ExecStart"):
         assert 键 in 段["[Service]"], f"{键} 是 [Service] 段的键"
+
+
+# ------------------------------------------------------------ W01b:特权助手与 sudoers
+
+def test_装机脚本把特权助手装到usr_local_sbin而不是opt_d1max_bin(装机脚本):
+    """sudo 白名单指着的脚本必须 root 拥有。``/opt/d1max/bin`` 整棵归 robot,
+    放那儿等于把 root 送给 robot。"""
+    assert 'install -m 0755 -o root -g root "$HELPER_SRC" /usr/local/sbin/d1max-privileged' in 装机脚本
+    代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
+    assert not any("d1max-privileged" in 行 and "$ROOT/bin" in 行 for 行 in 代码)
+
+
+def test_sudoers先visudo校验再落盘(装机脚本):
+    """一份坏 sudoers 会锁死整机的 sudo —— 现场就只剩重刷系统这一条路。"""
+    校验 = 装机脚本.index('visudo -cf "$SUDOERS_SRC"')
+    落盘 = 装机脚本.index('install -m 0440 -o root -g root "$SUDOERS_SRC" /etc/sudoers.d/d1max')
+    assert 校验 < 落盘
+
+
+def test_单元和助手优先取包内deploy(装机脚本):
+    """W01b 之后 ``deploy/`` 在包里;老包没带就退回脚本自己所在的目录。"""
+    assert 'UNIT_SRC="$PKG/deploy/d1max-patrol.service"' in 装机脚本
+    assert 'HELPER_SRC="$PKG/deploy/d1max-privileged"' in 装机脚本
+    assert 'SUDOERS_SRC="$PKG/deploy/sudoers-d1max"' in 装机脚本
+    assert '$(dirname "$0")/d1max-patrol.service' in 装机脚本, "老包的退路不能删"
+    assert 'install -m 0644 "$UNIT_SRC" /etc/systemd/system/' in 装机脚本
+
+
+def test_卸载脚本删助手和sudoers():
+    text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /usr/local/sbin/d1max-privileged" in text
+    assert "# @删除 /etc/sudoers.d/d1max" in text
+    assert 'rm_sys "/usr/local/sbin/d1max-privileged"' in text
+    assert 'rm_sys "/etc/sudoers.d/d1max"' in text
+    # rm_sys 的范围锁也要认得这两处,不然声明了也删不掉(它只会打一句「拒绝删除」)。
+    assert "/usr/local/sbin/d1max-privileged) ;;" in text
+    assert "/etc/sudoers.d/d1max) ;;" in text
+
+
+def test_足迹勘察覆盖助手和sudoers目录():
+    text = (DEPLOY / "footprint.sh").read_text(encoding="utf-8")
+    assert '"/usr/local/sbin:1"' in text
+    assert '"/etc/sudoers.d:1"' in text

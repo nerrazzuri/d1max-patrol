@@ -42,6 +42,9 @@ SURVEY_DIRS=(
   "/etc:1"
   "/usr/local/bin:1"
   "/usr/local/lib:2"
+  # W01b:特权助手与 sudo 白名单各占一处,深度 1 就看得见文件本身。
+  "/usr/local/sbin:1"
+  "/etc/sudoers.d:1"
 )
 
 # 我们自己占的四个端口。装机**之前**它们就有人占着的话,那是装机前就该发现

@@ -356,8 +356,14 @@ def test_范围只盖我们自己的东西():
     体 = 取函数体(读(卸载脚本), "rm_sys")
     形状 = re.findall(r"(?m)^\s*(/[^)\s|]+(?:\|/[^)\s|]+)*)\)\s*;;", 体)
     assert 形状, "rm_sys 里读不出白名单"
+    # W01b 的两处在 /opt、/etc/d1max 之外,但都是**精确路径、不带通配**,
+    # 而且名字里带 d1max —— 匹配不到别人的东西。
+    精确的 = {"/usr/local/sbin/d1max-privileged", "/etc/sudoers.d/d1max"}
     for 一组 in 形状:
         for 一条 in 一组.split("|"):
+            if 一条 in 精确的:
+                assert "*" not in 一条 and "d1max" in 一条
+                continue
             assert 一条.startswith("/opt/d1max") or 一条.startswith("/etc/d1max") \
                 or 一条.startswith("/var/lib/d1max") \
                 or 一条.startswith("/etc/systemd/system/"), f"白名单里有越界的形状:{一条}"

@@ -26,6 +26,8 @@ set -euo pipefail
 # @写盘 /etc/d1max/env                                                   设备 PIN 在这个文件里
 # @写盘 /etc/systemd/system/d1max-patrol.service                         install -m 0644 摆进去的单元
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service systemctl enable 生成的自启链
+# @写盘 /usr/local/sbin/d1max-privileged                                 W01b:robot 通过 sudo 白名单能跑的唯一 root 命令(装单元、restart、reboot)
+# @写盘 /etc/sudoers.d/d1max                                             W01b:那条白名单,只放行上面那个脚本
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的:
 #
@@ -262,8 +264,25 @@ if [[ ! -e "$SENTINEL" ]]; then
   chown "$RUN_USER":"$RUN_USER" "$SENTINEL"
 fi
 
-say "5/7 装 systemd 单元与环境文件"
-install -m 0644 "$(dirname "$0")/d1max-patrol.service" /etc/systemd/system/
+say "5/7 装 systemd 单元、特权助手与环境文件"
+# **单元、助手、sudoers 三样优先取包里的 deploy/**(W01b 起 release pack 带它),
+# 这样 install.sh 装的和 OTA 以后 release activate 装的是同一份来源。老包没带
+# deploy/ 就退回这个脚本自己所在的目录 —— 装机清单教现场 scp 的就是那份。
+UNIT_SRC="$PKG/deploy/d1max-patrol.service"
+[[ -f "$UNIT_SRC" ]] || UNIT_SRC="$(dirname "$0")/d1max-patrol.service"
+install -m 0644 "$UNIT_SRC" /etc/systemd/system/
+# 特权助手:robot 通过 sudo 白名单能跑的唯一 root 命令(OTA 装单元、restart、
+# reboot)。**必须装在 root 拥有的目录里**:/opt/d1max 整棵归 robot,sudo 白名单
+# 指着 robot 可写的脚本等于把 root 送给 robot。它不随 OTA 更新,改它重跑本脚本。
+HELPER_SRC="$PKG/deploy/d1max-privileged"
+[[ -f "$HELPER_SRC" ]] || HELPER_SRC="$(dirname "$0")/d1max-privileged"
+install -m 0755 -o root -g root "$HELPER_SRC" /usr/local/sbin/d1max-privileged
+# sudoers:**先 visudo -cf 校验再落盘**。一份坏 sudoers 会锁死整机的 sudo,
+# 现场就只剩重刷系统这一条路。
+SUDOERS_SRC="$PKG/deploy/sudoers-d1max"
+[[ -f "$SUDOERS_SRC" ]] || SUDOERS_SRC="$(dirname "$0")/sudoers-d1max"
+visudo -cf "$SUDOERS_SRC" >/dev/null
+install -m 0440 -o root -g root "$SUDOERS_SRC" /etc/sudoers.d/d1max
 # **老机器上的 d1max-bootguard.service 要清掉。** 守卫已经挪成主单元的
 # ExecStartPre=(理由见那个单元里那段注释:不带上装的机器升级走 systemctl
 # restart,根本不开机,挂在开机上的守卫永远不会重跑)。两处都留着的话,
