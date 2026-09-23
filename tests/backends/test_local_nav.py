@@ -386,8 +386,10 @@ async def test_限速低于死区_拒绝而不是回显(tmp_path):
     然后照样 0.5 走,上层看到零速、底层在动 —— 这是 D4 那条缺陷。现在明确拒绝。"""
     async with rig(tmp_path) as (_agent, _pose, backend):
         before = await backend.get_speed()
-        for bad in (0.0, 0.1, -1.0):
-            with pytest.raises(NavRequestError, match="死区"):
+        with pytest.raises(NavRequestError, match="死区"):
+            await backend.set_speed(0.1)
+        for bad in (0.0, -1.0):                 # 不倒退、不为零:要停用 stop
+            with pytest.raises(NavRequestError, match="stop"):
                 await backend.set_speed(bad)
         assert await backend.get_speed() == before
 

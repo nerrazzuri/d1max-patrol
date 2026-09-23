@@ -342,7 +342,13 @@ class NavBackend(EventEmitter[Event], ABC):
     @abstractmethod
     async def set_speed(self, x: float, y: float | None = None,
                         z: float | None = None) -> dict[str, float]:
-        """设置速度,返回设备回报的生效值(可能补齐了未传的分量)。"""
+        """设置速度,返回设备回报的生效值(可能补齐了未传的分量)。
+
+        单位 m/s 与 rad/s。**做不到的值要么夹住并回报夹住后的真值,要么明确
+        拒绝(``NavRequestError``),不许回显一个没生效的数**(架构规格 2.2)。
+        自建后端(``LocalNavBackend``)照这条做:超上限夹住、低于死区拒绝;
+        厂商后端把值原样交给厂商接口,厂商对 0 / 死区以下怎么处理未验证(W05)。
+        """
 
 
 # ------------------------------------------------------------------ 设备端口

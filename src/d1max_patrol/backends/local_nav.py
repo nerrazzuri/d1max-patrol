@@ -655,6 +655,9 @@ class LocalNavBackend(NavBackend):
         * 侧移本后端不做,``y`` 只接受 0/None。
         """
         p = self.params
+        if float(x) <= 0:
+            raise NavRequestError(
+                "set_speed", "自建导航不倒退,前进上限得是正数;要停用 stop")
         fwd = float(x) / p.fwd_speed_mps
         if fwd < p.min_fwd:
             raise NavRequestError(
