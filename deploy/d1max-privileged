@@ -21,13 +21,15 @@
 #                         把助手一起杀掉。这里只等 systemd-run 把任务排进去。
 #   reboot                systemctl reboot。
 #
-# 开发机测试(非 root):必须显式给 --root <dir> --dest <file> --no-systemctl;
-# root 下这三个参数一律拒绝 —— 真机上不接受任何改路径的口子。
+# 开发机测试(非 root):必须显式给 --root <dir> --dest <file> --no-systemctl(可再给
+# --restart-now <file> 指一个假的内部入口);root 下这几个参数一律拒绝 —— 真机上不
+# 接受任何改路径的口子。
 set -euo pipefail
 
 UNIT_NAME=d1max-patrol.service
 RELEASE_ROOT=/opt/d1max
 DEST=/etc/systemd/system/$UNIT_NAME
+RESTART_NOW=/usr/local/sbin/d1max-restart-now
 RUN_USER=robot
 DATA_ROOT=/var/lib/d1max
 SYSTEMCTL=systemctl
@@ -44,6 +46,7 @@ while [[ $# -gt 0 ]]; do
     --root)  [[ $# -ge 2 ]] || usage; RELEASE_ROOT=$2; TEST_MODE=1; shift 2 ;;
     --dest)  [[ $# -ge 2 ]] || usage; DEST=$2;         TEST_MODE=1; shift 2 ;;
     --no-systemctl) SYSTEMCTL=:; TEST_MODE=1; shift ;;
+    --restart-now) [[ $# -ge 2 ]] || usage; RESTART_NOW=$2; TEST_MODE=1; shift 2 ;;
     --) shift; break ;;
     -*) usage ;;
     *) break ;;
@@ -176,9 +179,14 @@ install_unit() {
 # 里,由 systemd-run 起在一个临时单元(systemd 自己的 cgroup 树)里跑;这里只等
 # systemd-run 把任务排进去 —— 排进去了才退 0,排不进去(systemd-run 不在、单元名
 # 冲突、systemd 拒绝)退非零,app 那边据此决定回不回「已重启」。
-RESTART_NOW=/usr/local/sbin/d1max-restart-now
-
+#
+# **排队之前先核对内部入口在且可执行。** 临时单元默认 Type=simple:fork 成功就算
+# 启动成功,execve 之前 systemd-run 就退 0 —— 内部脚本被挪走了它照样退 0,app 回
+# 「已重启」,服务却没动(外部审核阻断项)。/usr/local/sbin 归 root、脚本 0700
+# root:root,robot 在核对与执行之间换不了它,这个预检没有单元源文件那种 TOCTOU。
 do_restart() {
+  [[ -f $RESTART_NOW && -x $RESTART_NOW ]] \
+    || die "内部重启入口不存在或不可执行:$RESTART_NOW —— 重跑 deploy/install.sh"
   if [[ $TEST_MODE -eq 1 ]]; then
     echo "would: systemd-run --collect -- $RESTART_NOW"
     return 0

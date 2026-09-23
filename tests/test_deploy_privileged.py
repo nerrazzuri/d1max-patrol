@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import stat
 import subprocess
@@ -243,7 +244,7 @@ def test_真正的stop_migrate_start不在sudo白名单里的那个脚本里():
     robot 没有任何路能以 root 跑它。"""
     文本 = HELPER.read_text(encoding="utf-8")
     代码 = "\n".join(行 for 行 in 文本.splitlines() if not 行.lstrip().startswith("#"))
-    assert "restart-now)" not in 代码, "助手不许再有 restart-now 子命令"
+    assert not re.search(r"(?m)^\s*restart-now\)", 代码), "助手不许再有 restart-now 子命令"
     assert "systemctl stop" not in 代码, "stop/start 不许留在 sudo 白名单脚本里"
     assert RESTART_NOW.is_file()
     assert subprocess.run(["bash", "-n", str(RESTART_NOW)]).returncode == 0
@@ -263,11 +264,45 @@ def test_restart_now非root直接拒绝():
     assert "root" in got.stderr
 
 
-def test_测试模式下restart只打印计划(tmp_path):
+def _跑带内部入口(tmp_path, 内部入口, *args):
     root, dest = _机器(tmp_path)
-    got = _跑("restart", root=root, dest=dest)
+    return subprocess.run(
+        ["bash", str(HELPER), "--root", str(root), "--dest", str(dest), "--no-systemctl",
+         "--restart-now", str(内部入口), *args],
+        capture_output=True, text=True, timeout=20)
+
+
+def test_测试模式下restart只打印计划(tmp_path):
+    入口 = tmp_path / "d1max-restart-now"
+    入口.write_text("#!/bin/bash\n", encoding="utf-8")
+    入口.chmod(0o700)
+    got = _跑带内部入口(tmp_path, 入口, "restart")
     assert got.returncode == 0, got.stderr
-    assert "systemd-run" in got.stdout and "d1max-restart-now" in got.stdout
+    assert "systemd-run" in got.stdout and str(入口) in got.stdout
+
+
+@pytest.mark.parametrize("坏法", ["不存在", "不可执行", "是目录"])
+def test_内部入口缺失或不可执行时restart非零(tmp_path, 坏法):
+    """外部审核阻断项:systemd-run 的临时单元默认 Type=simple,fork 成功就算启动
+    成功、execve 之前就返回 0 —— 内部脚本被挪走了它照样退 0,app 回 200,服务却
+    没重启。所以排队之前先核对入口在且可执行;/usr/local/sbin 归 root,robot 换不了。"""
+    入口 = tmp_path / "d1max-restart-now"
+    if 坏法 == "不可执行":
+        入口.write_text("#!/bin/bash\n", encoding="utf-8")
+        入口.chmod(0o600)
+    elif 坏法 == "是目录":
+        入口.mkdir()
+    got = _跑带内部入口(tmp_path, 入口, "restart")
+    assert got.returncode != 0, 坏法
+    assert "systemd-run" not in got.stdout, "不许在核对之前就排队"
+    assert "内部重启入口" in got.stderr
+
+
+def test_root下不接受restart_now覆盖参数():
+    文本 = HELPER.read_text(encoding="utf-8")
+    assert "--restart-now)" in 文本
+    # 跟 --root/--dest/--no-systemctl 一样走 TEST_MODE=1,root 下整组被拒。
+    assert "--restart-now) [[ $# -ge 2 ]] || usage; RESTART_NOW=$2; TEST_MODE=1; shift 2 ;;" in 文本
 
 
 @pytest.mark.parametrize("argv", [
