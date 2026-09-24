@@ -119,6 +119,8 @@ class AgentRuntime:
         await self.hal.connect()
         await self.hal.acquire_control()
         if self.parts is not None:
+            # 两个桥各自记着「连上了」(老 HTTP 面的绿灯读它);HAL.connect 是幂等的。
+            await self.parts.device.connect()
             await self.parts.nav.connect()
         self.transport.set_will(
             self.topics.status,

@@ -6,8 +6,9 @@ HAL 拒速度或定位丢失 FAILED / ``stop()`` CANCELLED →(``terminal_hold_s
 → STANDBY。终态一进就 ``hal.stop()``;每一次状态变化都发 ``NavStatusEvent``,定位质量变化发
 ``LocStatusEvent``。
 
-只支持点到点导航与停/暂停/继续;建图、地图管理、路径、重定位都不支持(``capabilities``
-为空,对应方法抛 ``NavRequestError``)——总设计 §5:规划/避障上移到代理,适配器只留速度与里程。
+只支持点到点导航与停/暂停/继续;建图、地图管理、路径都不支持(``capabilities``
+为空,对应方法抛 ``NavRequestError``);重定位是空操作,见 ``reset_localization``。
+——总设计 §5:规划/避障上移到代理,适配器只留速度与里程。
 """
 
 from __future__ import annotations
@@ -69,9 +70,12 @@ class HalNavBackend(NavBackend):
             self._connected = True
 
     async def close(self) -> None:
+        """断开:目标与定时转移清掉,状态回 StandBy(不然再连上时卡在上一次的
+        Initializing/Cancelled 里,``goto`` 永远被拒)。"""
         self._connected = False
         self._target = None
         self._due = None
+        self._set_status(NavStatus.STANDBY)
 
     @property
     def connected(self) -> bool:
@@ -118,7 +122,10 @@ class HalNavBackend(NavBackend):
             raise NavRequestError("load_map", f"只加载了 {self._map_id!r},没有 {map_id!r}")
 
     async def reset_localization(self) -> None:
-        raise NavRequestError("reset_localization", "HAL 桥不做重定位")
+        """HAL 没有「重定位」原语(W00d 的 adapter-d1max 再映到厂商的重定位)。这里是空操作:
+        引擎随后停着等 ``CONTINUOUS_LOC``(自带 30 s 上限),定位回来就重发当前点;
+        拒绝的话,任何一次短暂的 LOC_LOST 都会让整趟中止。"""
+        log.info("reset_localization:HAL 桥不做重定位,停着等定位质量回来")
 
     async def loc_status(self) -> LocStatus | None:
         return self._loc
@@ -165,12 +172,22 @@ class HalNavBackend(NavBackend):
             raise NavRequestError("set_speed", "HAL 桥不做侧移,y 只能是 0")
         if not math.isfinite(x) or x <= 0:
             raise NavRequestError("set_speed", f"前进上限要是正的有限数,给的是 {x!r}")
+        if x < self._caps.deadband_vx:
+            # 速度环发出去的命令低于死区,HAL 会拒(或机器根本不动):任务会卡在 Active 里
+            # 一直走不到,不如在这里说清楚。
+            raise NavRequestError("set_speed", f"前进上限 {x!r} 低于这台机器的死区 "
+                                               f"{self._caps.deadband_vx!r} m/s")
         self._vmax = min(float(x), self._caps.max_vx)
         if z is not None:
             if not math.isfinite(z) or z <= 0:
                 raise NavRequestError("set_speed", f"转向上限要是正的有限数,给的是 {z!r}")
             self._wmax = min(float(z), self._caps.max_wz)
         return await self.get_speed()
+
+    async def reset_speed(self) -> None:
+        """回到 HAL 上限。每趟任务开始时由任务调:上一趟的限速不能带到下一趟。"""
+        self._vmax = self._caps.max_vx
+        self._wmax = self._caps.max_wz
 
     # ------------------------------------------------------------ 每拍
 

@@ -23,15 +23,16 @@ sudo D1MAX_PIP_ARGS='--no-index --find-links=/media/<U盘>/wheels-aarch64-py310'
 **不许只带一半** —— 现场会在没带的那一处停住，症状是「装到一半不动了」，
 最难查的那一种。
 
-## 里头是什么，为什么是这六个
+## 里头是什么，为什么是这七个
 
-三个是运行期真要用的依赖，版本**跟仿真里跑过全部用例的那一套完全一致**：
+四个是运行期真要用的依赖，版本**跟仿真里跑过全部用例的那一套完全一致**：
 
 | 包 | 版本 | 为什么钉这个版本 |
 | --- | --- | --- |
 | `websockets` | 16.0 | `pyproject.toml` 写的是 `>=13`，但**实际验证过的只有 16.0**。现场不是试新版本的地方。 |
 | `PyYAML` | 6.0.3 | 任务包和参数文件都靠它读。 |
 | `tzdata` | 2025.2 | 时区必须跟着我们的包走，不能靠系统的 `/usr/share/zoneinfo` —— 刷机、OTA、换主板都会把系统时区库一起抹掉。 |
+| `paho-mqtt` | 2.1.0 | W00b 起 `install.sh` 装 `packages/contract[mqtt]`（机器人代理连站点 broker 用）。**少了它 2/7 就断**。纯 Python，一份通吃。 |
 
 另外三个是 pip 自己装东西时要用的，少一个都会让 `--no-index` 那条路断在半道：
 
@@ -47,7 +48,7 @@ sudo D1MAX_PIP_ARGS='--no-index --find-links=/media/<U盘>/wheels-aarch64-py310'
 cd /media/<U盘>/wheels-aarch64-py310 && sha256sum -c SHA256SUMS.txt
 ```
 
-六行全是 `OK` 才算数。**U 盘在车上颠一路，坏一个字节 pip 报的错跟「网不通」
+七行全是 `OK` 才算数。**U 盘在车上颠一路，坏一个字节 pip 报的错跟「网不通」
 长得一模一样**，现场会往错的方向查半小时。
 
 ## 这些包是给谁的
@@ -61,7 +62,7 @@ platform`，照着下面重新取一份对的：
 
 ```sh
 pip download --dest wheels-aarch64-py310 --platform manylinux2014_aarch64 --python-version 310 --implementation cp --abi cp310 --only-binary=:all: 'websockets==16.0' 'PyYAML==6.0.3' 'tzdata==2025.2'
-pip download --dest wheels-aarch64-py310 --only-binary=:all: 'pip==25.3' 'setuptools==80.9.0' 'wheel==0.45.1'
+pip download --dest wheels-aarch64-py310 --only-binary=:all: 'pip==25.3' 'setuptools==80.9.0' 'wheel==0.45.1' 'paho-mqtt==2.1.0'
 ```
 
-（后一条不带 `--platform`：这三个是纯 Python 包，一份通吃。）
+（后一条不带 `--platform`：这四个是纯 Python 包，一份通吃。）

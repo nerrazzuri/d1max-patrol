@@ -81,6 +81,15 @@ def test_engine别名壳_两个名字是同一个模块对象():
         "壳里只许有 __init__.py,引擎代码不许再长回根包"
 
 
+def test_别名壳的名单等于真身目录_新模块不会漏挂():
+    """壳里的 ``_MODULES`` 是手写的;真身目录里新添一个模块而名单没跟上,
+    ``from d1max_patrol.engine import 新模块`` 就会拿到 ImportError(或者更糟:拿到另一份对象)。"""
+    import d1max_patrol.engine as shell
+    real = PKGS / "robot-agent" / "src" / "d1max_agent" / "engine"
+    stems = sorted(p.stem for p in real.glob("*.py") if p.stem != "__init__")
+    assert sorted(shell._MODULES) == stems
+
+
 def test_搬走的engine里没有旧包名():
     src = PKGS / "robot-agent" / "src" / "d1max_agent" / "engine"
     for py in src.glob("*.py"):

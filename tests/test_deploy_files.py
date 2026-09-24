@@ -1305,6 +1305,52 @@ def test_agent单元的形状():
     assert "WantedBy" in 段["[Install]"]
 
 
+def test_agent单元没有注册文件就不起_不在那儿每5秒崩一次():
+    单元 = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    assert "ConditionPathExists" in _按段(单元)["[Unit]"]
+    assert "\nConditionPathExists=/etc/d1max/registration.json\n" in 单元
+
+
+WHEELS = ROOT / "dist" / "wheels-aarch64-py310"
+
+
+def _轮子名(包: str) -> str:
+    return re.sub(r"[-_.]+", "_", 包).lower()
+
+
+def test_离线轮子覆盖三个包的外部依赖_含contract的mqtt扩展():
+    """install.sh 装 ``packages/contract[mqtt]``;``--no-index`` 下 paho-mqtt 没有轮子就在 2/7 断掉,
+    现场看到的是「装到一半不动了」。三个包的外部依赖(本仓的包除外)与 mqtt 扩展,每个都要有轮子,
+    而且 SHA256SUMS.txt 里要有它那一行、哈希对得上。"""
+    import hashlib
+    try:
+        import tomllib
+    except ImportError:                  # 3.10:pytest 自己依赖 tomli
+        import tomli as tomllib
+    本仓 = {"d1max-patrol", "d1max-contract", "d1max-adapter-sim", "d1max-robot-agent"}
+    要的: set[str] = set()
+    for 包 in ("contract", "adapter-sim", "robot-agent"):
+        proj = tomllib.loads((ROOT / "packages" / 包 / "pyproject.toml").read_text("utf-8"))
+        deps = list(proj["project"].get("dependencies", []))
+        if 包 == "contract":
+            deps += proj["project"]["optional-dependencies"]["mqtt"]
+        for d in deps:
+            名 = re.split(r"[<>=!~\[; ]", d, maxsplit=1)[0]
+            if 名 not in 本仓:
+                要的.add(_轮子名(名))
+    assert "paho_mqtt" in 要的
+    清单 = {}
+    for 行 in (WHEELS / "SHA256SUMS.txt").read_text("utf-8").splitlines():
+        哈希, 文件 = 行.split(" *", 1)
+        清单[文件] = 哈希
+    有的 = {_轮子名(w.name.split("-", 1)[0]): w for w in WHEELS.glob("*.whl")}
+    for 名 in sorted(要的):
+        assert 名 in 有的, f"{名} 在 {WHEELS.name} 里没有轮子"
+        w = 有的[名]
+        assert 清单.get(w.name) == hashlib.sha256(w.read_bytes()).hexdigest(), w.name
+    assert set(清单) == {w.name for w in WHEELS.glob("*.whl")}, "SHA256SUMS 与目录不一致"
+
+
 def test_agent入口在robot_agent的scripts里():
     toml = (ROOT / "packages" / "robot-agent" / "pyproject.toml").read_text(encoding="utf-8")
     assert 'd1max-agent = "d1max_agent.main:main"' in toml

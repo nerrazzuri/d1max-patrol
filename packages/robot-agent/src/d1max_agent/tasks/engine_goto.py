@@ -5,7 +5,9 @@
 ``engine.start()`` 一趟只有一个航点的 Mission → RunState 进终态:
 ``DONE`` → ``DONE``;``ABORTED`` 且是我们自己发的 abort → ``ABORTED``(``preempted`` 时
 ``PREEMPTED``);``ABORTED`` 是引擎自己收的尾(预飞没过、急停、定位丢、安全裁定)→
-``FAILED``,理由用引擎的 ``reason``。终态之前还要等 ``hal.stopped()`` 为真——停止请求与确认分开。
+``FAILED``,理由用引擎的 ``reason``。终态之前还要等 ``hal.stopped()`` 为真——停止请求与确认分开;
+还要等导航回到 StandBy:终态一出,资源就放给下一趟,下一趟的预飞 ``nav_ready`` 要看到 StandBy,
+导航还在 Cancelled/Succeed 的驻留期里的话,抢占就变成「旧的停了、新的也 failed」。
 ``on_offline(safe=False)`` → ``engine.pause()``;``on_online()`` → ``engine.resume()``。
 """
 
@@ -21,7 +23,7 @@ from d1max_agent.engine.mission import Mission, MissionWaypoint, Policy
 from d1max_agent.events import EventBook
 from d1max_agent.tasks.base import Task
 from d1max_contract.messages import MapPose, TaskState
-from d1max_patrol.protocol.nav_types import Pose
+from d1max_patrol.protocol.nav_types import NavStatus, Pose
 
 log = logging.getLogger(__name__)
 
@@ -48,11 +50,18 @@ class EngineGotoTask(Task):
 
     async def start(self) -> None:
         p = self._parts
-        if self._max_speed is not None:
-            try:
+        if self._abort_reason is not None:
+            # 还没起就被 abort / 抢占了:不动,直接终态。
+            self._finish_aborted()
+            return
+        try:
+            if self._max_speed is None:
+                await p.nav.reset_speed()            # 上一趟的限速不带到这一趟
+            else:
                 await p.nav.set_speed(self._max_speed)
-            except Exception as exc:  # noqa: BLE001 - 上限设不进去就按 HAL 上限走,记一笔
-                log.warning("速度上限 %.2f 没设进去(%s),按 HAL 上限走", self._max_speed, exc)
+        except Exception as exc:  # noqa: BLE001 - 设不进去就不走:按 HAL 上限走会比要求的快
+            self._fail(f"max_speed_mps {self._max_speed!r} 设不进去: {exc}")
+            return
         mission = Mission(
             mission=self.task_id, map_id=self.target.map_id,
             waypoints=(MissionWaypoint(
@@ -62,8 +71,11 @@ class EngineGotoTask(Task):
         try:
             await p.engine.start(mission, home=p.home)
         except EngineBusy as exc:
-            self.state = TaskState.FAILED
-            self.detail = {"reason": f"busy: {exc}"}
+            self._fail(f"busy: {exc}")
+            return
+        except Exception as exc:
+            log.exception("引擎起不来")
+            self._fail(f"engine start: {exc}")
             return
         self._started = True
         self.state = TaskState.RUNNING
@@ -98,6 +110,8 @@ class EngineGotoTask(Task):
             return
         if not await self._parts.hal.stopped():
             return                                   # 引擎收尾了,机器还在制动:等确认
+        if await self._parts.nav.nav_status() is not NavStatus.STANDBY:
+            return                                   # 导航还在终态驻留期:下一趟现在起会被预飞拒
         if snap.state is RunState.DONE:
             # 引擎的 DONE 是「这趟跑完了」,航点本身可能是按 retry_then_skip 跳过的;
             # 对只有一个航点的 goto,航点没到就是任务没成。
@@ -109,12 +123,20 @@ class EngineGotoTask(Task):
                 self.state = TaskState.DONE
                 self.detail = {"distance_m": round(dist, 3)}
         elif self._abort_reason is not None:
-            self.state = (TaskState.PREEMPTED if self._abort_reason == "preempted"
-                          else TaskState.ABORTED)
-            self.detail = {"reason": self._abort_reason}
+            self._finish_aborted()
         else:
             self.state = TaskState.FAILED
             self.detail = {"reason": snap.reason or "engine aborted"}
+
+    def _fail(self, reason: str) -> None:
+        self.state = TaskState.FAILED
+        self.detail = {"reason": reason}
+
+    def _finish_aborted(self) -> None:
+        assert self._abort_reason is not None
+        self.state = (TaskState.PREEMPTED if self._abort_reason == "preempted"
+                      else TaskState.ABORTED)
+        self.detail = {"reason": self._abort_reason}
 
     def _report(self, dist: float) -> None:
         if self._last_reported_m is None or abs(self._last_reported_m - dist) >= PROGRESS_EVERY_M:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import signal
 import sys
 import threading
 import time
@@ -119,7 +120,10 @@ class Assembled:
         while not self._stop.is_set():
             tick = getattr(self.hal, "tick", None)
             if tick is not None:                 # sim 自己要推进;真 HAL 没有 tick
-                tick(dt)
+                try:
+                    tick(dt)
+                except Exception:
+                    log.exception("HAL 的 tick 炸了,运行时这一拍照走")
             try:
                 await self.runtime.step(dt)
             except Exception:
@@ -152,6 +156,10 @@ def build(args: argparse.Namespace) -> Assembled:
     from d1max_patrol.app.bridge import LoopBridge
 
     registration = Registration.load(args.registration)
+    if args.legacy_http is not None:
+        # 拒绝启动要在起线程之前:SystemExit 之后不能留下一个没人收的事件循环线程。
+        from d1max_patrol.app.server import check_exposure
+        check_exposure(args.legacy_http[0], args.pin)
     broker = MemoryBroker() if args.transport == "memory://" else None
     bridge = LoopBridge()
     bridge.start()
@@ -189,11 +197,10 @@ def _legacy_http(args: argparse.Namespace, bridge: Any, parts: EngineParts,
     from d1max_patrol.app.identity import resolve
     from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
     from d1max_patrol.app.procs import ProcManager
-    from d1max_patrol.app.server import AppContext, AppServer, _make_teleop, check_exposure
+    from d1max_patrol.app.server import AppContext, AppServer, _make_teleop
     from d1max_patrol.backends.map_bridge import MapBridgeClient
 
-    host, port = args.legacy_http
-    check_exposure(host, args.pin)
+    host, port = args.legacy_http              # 暴露检查已在 build() 起线程之前做过
     store = Path(args.store_dir)
     procs = ProcManager(store / "logs")
     teleop = bridge.call(lambda: _make_teleop(parts.device, parts.engine, {}))
@@ -213,15 +220,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     args = parse_args(argv)
     assembled = build(args)
-    assembled.start()
+    try:
+        assembled.start()
+    except Exception as exc:  # noqa: BLE001 - 连不上 broker 之类:退非零,交给 systemd 重试
+        log.error("d1max-agent 起不来: %r", exc)
+        print(f"d1max-agent 起不来: {exc!r}", file=sys.stderr, flush=True)
+        assembled.stop()
+        return 1
+    got: list[str] = []
+
+    def _on_term(signum, frame):              # systemd 停服务发 SIGTERM:走同一条收尾路
+        got.append(signal.Signals(signum).name)
+        assembled._stop.set()
+
+    signal.signal(signal.SIGTERM, _on_term)
     print(f"d1max-agent 起来了:transport={args.transport} hal={args.hal} "
           f"robot={assembled.runtime.registration.robot_id}"
-          + (f" legacy-http={assembled.server.url}" if assembled.server else ""))
+          + (f" legacy-http={assembled.server.url}" if assembled.server else ""), flush=True)
     try:
         while not assembled._stop.wait(0.5):
             pass
+        if got:
+            print(f"收到 {got[0]},收尾中……", flush=True)
     except KeyboardInterrupt:
-        print("\n收到 Ctrl+C,收尾中……")
+        print("\n收到 Ctrl+C,收尾中……", flush=True)
     finally:
         assembled.stop()
     return 0

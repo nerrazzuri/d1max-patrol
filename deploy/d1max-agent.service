@@ -4,6 +4,8 @@ After=network-online.target
 Wants=network-online.target
 # 不限起动次数;配合 Restart=always/RestartSec=5。键属于 [Unit] 段(W01c 的教训)。
 StartLimitIntervalSec=0
+# 没有站点签发的注册文件就不起(W00c 才签发):不然 enable 之后每 5 秒崩一次、日志刷屏。
+ConditionPathExists=/etc/d1max/registration.json
 
 [Service]
 Type=simple
@@ -16,7 +18,8 @@ Environment=PYTHONUNBUFFERED=1
 # 站点地址、地图、原点这些现场值从 env 文件来(W00c 装站点时填):
 #   D1MAX_SITE_MQTT=mqtts://<站点>:8883   D1MAX_MAP=<map_id>:<version>   D1MAX_HOME=x,y,yaw
 EnvironmentFile=-/etc/d1max/env
-# W00b:装而不 enable。站点 broker 在 W00c 才有;现在起来只会每 5 秒重连一次连不上的地址。
+# W00b:装而不 enable。站点 broker 在 W00c 才有;现在起来连不上就退 1(约 10 s 超时),
+# 由 Restart=always 每 5 秒再起一次。
 # W00c 起用时把 --hal 换成 d1max(W00d 出适配器之后)。
 ExecStart=/opt/d1max/current/venv/bin/d1max-agent --transport ${D1MAX_SITE_MQTT} --hal sim --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent --runs-root /var/lib/d1max/runs --map ${D1MAX_MAP} --home ${D1MAX_HOME}
 Restart=always

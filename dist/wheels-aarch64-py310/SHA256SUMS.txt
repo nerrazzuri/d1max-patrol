@@ -1,3 +1,4 @@
+6db9ba9b34ed5bc6b6e3812718c7e06e2fd7444540df2455d2c51bd58808feee *paho_mqtt-2.1.0-py3-none-any.whl
 9655943313a94722b7774661c21049070f6bbb0a1516bf02f7c8d5d9201514cd *pip-25.3-py3-none-any.whl
 b30236e45cf30d2b8e7b3e85881719e98507abed1011bf463a8fa23e9c3e98a8 *pyyaml-6.0.3-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
 062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922 *setuptools-80.9.0-py3-none-any.whl

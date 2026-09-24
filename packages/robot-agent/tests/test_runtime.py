@@ -82,6 +82,12 @@ async def test_起来就发能力与状态_均retained(台子):
     assert sorted(got) == ["capabilities", "status"], "两份都 retained"
 
 
+async def test_起来之后设备桥也是连上的_老HTTP面的灯才是绿的(台子):
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+    assert rt.parts.device.connected is True and rt.parts.nav.connected is True
+
+
 async def test_断线LWT改写为offline_重连第一条是reconcile(台子):
     broker, c, r, ears, rt, _ = 台子
     await rt.start()

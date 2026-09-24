@@ -122,6 +122,92 @@ async def test_preempted终态(台子):
     assert t.state is TaskState.PREEMPTED
 
 
+async def test_抢占后新任务能走完_不撞导航的终态驻留(台子):
+    """旧任务终态之后资源就放了、新任务马上 start;这时导航若还在 Cancelled 的 0.5 s 驻留里,
+    新任务的预飞 nav_ready 会红,抢占就变成「旧的停了、新的也 failed」。"""
+    c, r, parts, book = 台子
+    t1 = EngineGotoTask(task_id="t1", target=_target(6.0, 0.0), max_speed_mps=0.8, parts=parts,
+                        events=book, now_ms=c, priority=0)
+    await t1.start()
+    await _跑(c, r, parts, t1, 15)
+    await t1.abort("preempted")
+    await _跑(c, r, parts, t1, 60)
+    assert t1.state is TaskState.PREEMPTED
+    t2 = EngineGotoTask(task_id="t2", target=_target(0.0, 0.0), max_speed_mps=0.8, parts=parts,
+                        events=book, now_ms=c, priority=5)
+    await t2.start()                        # 紧接着起,中间不多给一拍
+    await _跑(c, r, parts, t2, 400)
+    assert t2.state is TaskState.DONE, (t2.state, t2.detail)
+
+
+async def test_开始前就被abort_不动直接终态(台子):
+    c, r, parts, book = 台子
+    t = EngineGotoTask(task_id="t1", target=_target(6.0, 0.0), max_speed_mps=0.8, parts=parts,
+                       events=book, now_ms=c, priority=0)
+    await t.abort("preempted")
+    await t.start()
+    assert t.state is TaskState.PREEMPTED and t.detail["reason"] == "preempted"
+    await _跑(c, r, parts, t, 10)
+    assert parts.engine.state is RunState.IDLE
+    assert (await r.odometry()).x == 0.0
+
+
+async def test_engine_start炸了别的异常_任务failed不挂着(台子, monkeypatch):
+    c, r, parts, book = 台子
+
+    async def 炸(*a, **k):
+        raise RuntimeError("归档目录写不进去")
+
+    monkeypatch.setattr(parts.engine, "start", 炸)
+    t = EngineGotoTask(task_id="t1", target=_target(2.0, 0.0), max_speed_mps=0.8, parts=parts,
+                       events=book, now_ms=c, priority=0)
+    await t.start()
+    assert t.state is TaskState.FAILED and "归档目录写不进去" in t.detail["reason"]
+
+
+async def test_上一趟的限速不带到下一趟(台子):
+    c, r, parts, book = 台子
+    t1 = EngineGotoTask(task_id="t1", target=_target(1.0, 0.0), max_speed_mps=0.3, parts=parts,
+                        events=book, now_ms=c, priority=0)
+    await t1.start()
+    await _跑(c, r, parts, t1, 300)
+    assert t1.state is TaskState.DONE, (t1.state, t1.detail)
+    t2 = EngineGotoTask(task_id="t2", target=_target(6.0, 0.0), max_speed_mps=None, parts=parts,
+                        events=book, now_ms=c, priority=0)
+    await t2.start()
+    vmax = 0.0
+    for _ in range(60):
+        await _跑(c, r, parts, t2, 1)
+        vmax = max(vmax, (await r.odometry()).vx)
+    assert vmax > 0.5, "没给限速就该按 HAL 上限走,不能沿用上一趟的 0.3"
+
+
+async def test_限速低于死区_任务failed不假装在走(台子):
+    c, r, parts, book = 台子
+    t = EngineGotoTask(task_id="t1", target=_target(2.0, 0.0), max_speed_mps=0.01, parts=parts,
+                       events=book, now_ms=c, priority=0)
+    await t.start()
+    assert t.state is TaskState.FAILED and "max_speed" in t.detail["reason"]
+    assert parts.engine.state is RunState.IDLE
+
+
+async def test_定位短暂丢失_停下等回来再接着走到点(台子):
+    """HAL 没有「重定位」这个原语;桥的 reset_localization 若是拒绝,引擎会把任何一次
+    LOC_LOST 都当成整趟中止。应当是:停下 → 等定位回来(引擎自己限时 30 s)→ 重发当前点。"""
+    c, r, parts, book = 台子
+    t = EngineGotoTask(task_id="t1", target=_target(4.0, 0.0), max_speed_mps=0.8, parts=parts,
+                       events=book, now_ms=c, priority=0)
+    await t.start()
+    await _跑(c, r, parts, t, 15)
+    r.inject_loc_lost(True)
+    await _跑(c, r, parts, t, 20)
+    assert not t.done, (t.state, t.detail)
+    assert await r.stopped() is True, "定位丢了要停下来等"
+    r.inject_loc_lost(False)
+    await _跑(c, r, parts, t, 400)
+    assert t.state is TaskState.DONE, (t.state, t.detail)
+
+
 async def test_预飞没过就failed_理由带检查项(tmp_path):
     c = 钟()
     r = SimRobot(now_ms=c)

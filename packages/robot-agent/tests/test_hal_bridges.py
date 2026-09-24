@@ -12,6 +12,7 @@ from d1max_adapter_sim.robot import SimRobot
 from d1max_agent.bridges.hal_device import HalDeviceBackend
 from d1max_agent.bridges.hal_nav import HalNavBackend
 from d1max_patrol.backends.base import (
+    BatteryEvent,
     ControlLostEvent,
     DeviceBackendError,
     LocStatusEvent,
@@ -78,10 +79,10 @@ async def test_是NavBackend而且能力集为空(台子):
     with pytest.raises(NavRequestError):
         await nav.load_map("other")
     for call in (nav.remove_maps(["m"]), nav.rename_map("m", "n"), nav.start_mapping(),
-                 nav.stop_mapping(), nav.save_path("m", "p", []), nav.remove_path("m", "p"),
-                 nav.reset_localization()):
+                 nav.stop_mapping(), nav.save_path("m", "p", []), nav.remove_path("m", "p")):
         with pytest.raises(NavRequestError):
             await call
+    await nav.reset_localization()          # 空操作:引擎停着等定位回来,不因此中止整趟
     assert await nav.mapping_status() is None
     assert await nav.list_paths("m") == {}
     assert await nav.get_map_grid("m") == {}
@@ -291,3 +292,49 @@ async def test_终态一进就叫HAL停_不靠ttl到期(台子):
     await _步(c, r, nav, 1, dt=0.5)                       # 制动 0.2 s < 0.5 s:这一拍末已停
     assert await r.stopped() is True
     assert (await r.odometry()).x - x0 < 0.25, "stop 之后不该再走出去(ttl 还有 1 s 没到期)"
+
+
+async def test_close之后状态回StandBy_再连能直接goto(台子):
+    c, r, nav, dev = 台子
+    await nav.goto(Pose.from_xy_yaw(3.0, 0.0))
+    assert await nav.nav_status() is NavStatus.INITIALIZING
+    await nav.close()
+    assert await nav.nav_status() is NavStatus.STANDBY
+    await nav.connect()
+    await nav.goto(Pose.from_xy_yaw(3.0, 0.0))            # 不抛:不能卡在上一次的 Initializing
+
+
+async def test_限速低于死区被拒_不然命令发出去机器也不动(台子):
+    c, r, nav, dev = 台子
+    dead = r.hal_capabilities().deadband_vx
+    with pytest.raises(NavRequestError):
+        await nav.set_speed(dead / 2)
+    assert (await nav.get_speed())["x"] == r.hal_capabilities().max_vx
+
+
+async def test_reset_speed回到HAL上限(台子):
+    c, r, nav, dev = 台子
+    await nav.set_speed(0.3, z=0.5)
+    await nav.reset_speed()
+    caps = r.hal_capabilities()
+    assert await nav.get_speed() == {"x": caps.max_vx, "y": 0.0, "z": caps.max_wz}
+
+
+async def test_电量事件只在变化时发_不是每拍一条(台子):
+    """引擎暂停期间每条事件都落一笔 paused_event;每拍一条电量事件会把归档刷成流水账。"""
+    c, r, nav, dev = 台子
+    r.inject_battery(50.5)                                 # 离整数格远一点,20 拍的掉电跨不过去
+    q = dev.subscribe()
+    await _步(c, r, nav, 20, dev=dev)
+    got = []
+    while not q.empty():
+        got.append(q.get_nowait())
+    batt = [e for e in got if isinstance(e, BatteryEvent)]
+    assert len(batt) == 1, f"电量没变,只该有开头那一条,实际 {len(batt)}"
+    r.inject_battery(14.9)                                 # 跨过整数格(比如 15% 的返航线)立刻发
+    await _步(c, r, nav, 1, dev=dev)
+    got = []
+    while not q.empty():
+        got.append(q.get_nowait())
+    pcts = [e.percent for e in got if isinstance(e, BatteryEvent)]
+    assert pcts == [pytest.approx(14.9, abs=0.01)]

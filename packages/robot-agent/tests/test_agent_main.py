@@ -99,3 +99,81 @@ def test_legacy_http托管在同一进程_看得到MQTT派的那趟(tmp_path):
         assert run and run["mission"] == cmd.task_id, run
     finally:
         a.stop()
+
+
+def _命令行(tmp_path, transport="memory://"):
+    reg = tmp_path / "registration.json"
+    REG.save(reg)
+    return [sys.executable, "-m", "d1max_agent.main", "--transport", transport, "--hal", "sim",
+            "--registration", str(reg), "--store-dir", str(tmp_path / "store"),
+            "--runs-root", str(tmp_path / "runs"), "--map", "estate-1:7", "--home", "0,0,0"]
+
+
+def test_SIGTERM好好收尾_退0(tmp_path):
+    """systemd 停服务发的是 SIGTERM,不是 Ctrl+C:不接的话进程被直接杀掉,引擎归档不收口、
+    HAL 不停、LWT 之外站点什么都收不到。"""
+    import os
+    import signal
+    import threading
+    import time
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    p = subprocess.Popen(_命令行(tmp_path), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, env=env)
+    看门狗 = threading.Timer(90, p.kill)          # readline 会阻塞:超时由它来掐
+    看门狗.start()
+    try:
+        deadline = time.monotonic() + 60
+        line = ""
+        while time.monotonic() < deadline:
+            line = p.stdout.readline()
+            if "起来了" in line or not line:
+                break
+        assert "起来了" in line, line
+        p.send_signal(signal.SIGTERM)
+        out, _ = p.communicate(timeout=30)
+    finally:
+        看门狗.cancel()
+        if p.poll() is None:
+            p.kill()
+    assert p.returncode == 0, out
+    assert "收尾" in out, out
+
+
+def test_broker连不上_退1而不是挂着(tmp_path):
+    """连不上就退出非零,让 systemd 的 Restart=always/RestartSec=5 接手重试;挂着不退的话
+    systemd 以为它活着,一辈子不重试。"""
+    got = subprocess.run(_命令行(tmp_path, "mqtt://127.0.0.1:1"), capture_output=True,
+                         text=True, timeout=90)
+    assert got.returncode == 1, (got.returncode, got.stdout[-2000:], got.stderr[-2000:])
+    assert "起不来" in got.stderr + got.stdout
+
+
+def test_hal_tick炸了下一拍照走(tmp_path):
+    import time
+    a = agent_main.build(_args(tmp_path))
+    n = {"step": 0}
+    real_step = a.runtime.step
+
+    async def 数着(dt):
+        n["step"] += 1
+        await real_step(dt)
+
+    def 炸(dt):
+        raise RuntimeError("sim tick 炸了")
+
+    a.runtime.step = 数着
+    a.hal.tick = 炸
+    try:
+        a.start()
+        time.sleep(0.5)
+        assert n["step"] >= 5, n
+    finally:
+        a.stop()
+
+
+def test_legacy_http暴露检查在起线程之前(tmp_path):
+    import threading
+    before = threading.active_count()
+    with pytest.raises(SystemExit):
+        agent_main.build(_args(tmp_path, "--legacy-http", "0.0.0.0:0"))
+    assert threading.active_count() == before, "拒绝启动也不能留下事件循环线程"

@@ -3,13 +3,15 @@
 拍照不归它(媒体走 ``MediaSource``),``take_photo`` 抛 ``MediaError``;
 ``stand/lie/walk`` 是 SDK 级动作,桥不做;``halt`` = ``hal.stop()``。
 
-``step(dt)``:控制权由有变无 → ``ControlLostEvent``;每拍一条 ``BatteryEvent``
-(引擎的低电返航/中止靠它)。
+``step(dt)``:控制权由有变无 → ``ControlLostEvent``;电量跨过一个整数百分点或充电状态变了
+→ ``BatteryEvent``(引擎的低电返航/中止靠它;跨整数格就发,所以 15%/20% 这类门槛一跨过就到)。
+不每拍发:引擎暂停期间每条事件都落一笔 ``paused_event``,每拍一条会把归档刷成流水账。
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 
 from d1max_contract.hal import HalUnsupported, RobotHAL
@@ -33,6 +35,7 @@ class HalDeviceBackend(DeviceBackend):
         self._had_control = False
         self._light_warned = self._gimbal_warned = False
         self._connected = False
+        self._last_battery: tuple[int, bool] | None = None
 
     @property
     def connected(self) -> bool:
@@ -107,4 +110,7 @@ class HalDeviceBackend(DeviceBackend):
             self.emit(ControlLostEvent(reason="HAL 报控制权不在手里"))
         self._had_control = held
         b = await self._hal.battery()
-        self.emit(BatteryEvent(percent=b.percent, charging=b.charging))
+        key = (math.floor(b.percent), bool(b.charging))
+        if key != self._last_battery:
+            self._last_battery = key
+            self.emit(BatteryEvent(percent=b.percent, charging=b.charging))
