@@ -46,12 +46,12 @@
 | 报文 | 方向 / QoS / retained | W00 字段 | ✔ |
 |---|---|---|---|
 | `capabilities` | 狗→站，QoS 1，retained，掉线不清 | `robot_id agent adapter tasks{goto{max_speed_mps}} actuators sensing` —— 由代理**合成**（HAL 能力 × 软件 × 已加载地图 × 标定），W00 里 `tasks` 只有 `goto` | ✔ |
-| `status` | 狗→站，QoS 1，retained，LWT 改写为 `online:false` | `online boot_id ready{control motion estop loc} control_epoch last_seen task{task_id kind state}` | ✔ |
+| `status` | 狗→站，QoS 1，retained，LWT 改写为 `online:false` | `online boot_id ready{control motion estop_clear loc_ok} control_epoch last_seen task{task_id kind state}` | ✔ |
 | `cmd` | 站→狗，QoS 1，**不 retained** | `command_id task_id kind issued_at expires_at control_epoch precondition{expect_task_state} priority offline_policy payload` | ✔ |
 | `cmd/ack` | 狗→站，QoS 1 | `command_id task_id result ∈ accepted/rejected/expired/duplicate reason original(duplicate 时原结果)` | ✔ |
 | `event` | 狗→站，QoS 1 | `event_id seq boot_id stamp kind data`；W00 只有 `task_progress task_done task_failed task_preempted task_aborted` | ✔ |
-| `reconcile` | 狗→站，QoS 1，重连后第一条 | `boot_id control_epoch task{…} unacked_events{from_seq to_seq}` | ✔ |
-| `telemetry` | 狗→站，QoS 0，1 Hz | `pose{map_id map_version frame_id x y yaw} battery task_state loc_quality net` | ✔（最小字段） |
+| `reconcile` | 狗→站，QoS 1，重连后第一条 | `boot_id control_epoch task{…} unacked_from_seq unacked_to_seq`（0/0 = 没有） | ✔ |
+| `telemetry` | 狗→站，QoS 0，1 Hz | `stamp pose{map_id map_version frame_id x y yaw} battery_pct task_state loc_quality net` | ✔（最小字段） |
 
 `goto` 的 `payload`：`{"target":{"map_id","map_version","frame_id","x","y","yaw"},"max_speed_mps"}`；`map_id/map_version` 与代理已加载地图不一致 → `rejected(map_mismatch)`。`abort` 的 `payload`：`{"reason"}`；前置 `expect_task_state` 可选。
 
@@ -83,17 +83,18 @@ W00 需要并由 adapter-sim 实现：`connect/close/health`、`acquire_control/
 
 ```
 d1max_agent/
-  transport.py     Transport 接口 + 代理侧命名空间守卫(决定 4)
-  identity.py      Registration 装载(robot_id/site_id/凭证指纹)
-  commands.py      CommandProcessor: §2 校验顺序 → ack;调度到任务
+  transport.py     GuardedTransport:代理侧命名空间守卫(决定 4);Transport 接口本身在契约包
+  commands.py      CommandProcessor: §2 校验顺序 → ack;调度到任务;抢占(先停旧、等停止确认、再给新)
   idempotency.py   命令结果落盘/重放
-  events.py        (boot_id, seq) 事件簿 + outbox + reconcile 报文
-  resources.py     资源表 + 抢占(先停旧、等停止确认、再给新)
-  policy.py        断线策略表 + 断线时的判定
-  status.py        capabilities 合成、status(含 LWT)、telemetry 1 Hz
+  events.py        (boot_id, seq) 事件簿 + outbox;reconcile 报文由 runtime 组
+  resources.py     资源账本(表本身在契约包 resources.py)
+  status.py        capabilities 合成、status(含 LWT 那份)、telemetry
+  tasks/base.py    步进式任务的最小形状
   tasks/goto.py    最小 goto:按里程计向目标点走(P 控制,受 max_speed 与 HAL 上限夹),progress 事件,abort → stop → 等 stopped → task_aborted
-  runtime.py       把以上装起来的一个类:start()/stop()/on_transport_(dis)connected()
+  runtime.py       把以上装起来的一个类:start()/step(dt)/close();断线策略表(契约包 policy.py)在这里被用
 ```
+
+实施时的偏离:``Registration`` 装载与断线策略表都放在契约包(两侧都要认),代理里没有单独的 ``identity.py``/``policy.py``。``OfflinePolicy.queue_cmds``/``new_cmd_expires`` 与 ``Command.offline_policy`` 在 W00 里**只登记数据**:排队实际靠 broker 的 ``clean_session=False`` 离线收件箱,过期靠 ``expires_at``;这两个字段的消费者是 W00c 的派遣器(决定给哪类命令多长的 ttl、断线时要不要撤回)。
 
 站点侧 W00 只需要一个**派遣客户端库**（`d1max_contract.dispatch.DispatchClient`：发命令、等回执/进度、处理 reconcile、按 `(boot_id, seq)` 去重），验收测试当「站点」用；W00c 的派遣器在它上面长。
 

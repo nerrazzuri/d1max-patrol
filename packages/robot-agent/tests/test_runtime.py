@@ -146,3 +146,96 @@ async def test_断线期间事件攒着_重连后先reconcile再补发(台子):
     assert ears.order.index("reconcile") < ears.order.index("event")
     assert [d["seq"] for d in ears.by_topic["event"]] == [1, 2]
     assert rt.events.unacked_range() == (0, 0)
+
+
+async def test_断线又重连发生在同一拍之间_任务不会卡在holding(台子):
+    """paho 自动重连、网络抖动 <100 ms 是真机常态:断线与重连都发生在两拍之间。
+    原实现 step 先处理重连(on_online)再处理断线(on_offline)——已在线的任务被置 holding
+    且没人再解。"""
+    broker, c, r, ears, rt, site = 台子
+    await rt.start()
+    await broker.drain()
+    r.inject_loc_lost(True)                       # 让「不安全」成立
+    cmd = {"schema": "1.0", "command_id": "c1", "task_id": "t1", "kind": "goto",
+           "issued_at": c(), "expires_at": c() + 60_000, "control_epoch": 1, "priority": 0,
+           "offline_policy": "default", "precondition": None,
+           "payload": {"target": {"schema": "1.0", "map_id": "m", "map_version": "1",
+                                  "frame_id": "map", "x": 3.0, "y": 0.0, "yaw": 0.0}}}
+    r.inject_loc_lost(False)
+    await site.publish(T.cmd, json.dumps(cmd).encode())
+    await broker.drain()
+    await rt.step(0.1)
+    task = rt.processor.current
+    assert task is not None
+    r.inject_loc_lost(True)
+    broker.disconnect("dog")                      # 断
+    await rt.transport.connect()                  # 同一拍之间又连上了
+    await broker.drain()
+    await rt.step(0.1)
+    assert task._holding is False, "已经在线,不许按断线策略把任务停住"
+
+
+async def test_重连后命令先于reconcile到达也要先发reconcile(台子):
+    """MemoryBroker 上「reconcile 第一条」靠的是投递顺序;真 broker 下离线补投的 cmd 可能先到。
+    所以 _on_cmd 自己也要先把 reconcile 发掉。"""
+    broker, c, r, ears, rt, site = 台子
+    await rt.start()
+    await broker.drain()
+    ears.order.clear()
+    rt._reconnect_pending = True                  # 模拟「连上了但还没来得及 flush」
+    cmd = {"schema": "1.0", "command_id": "c1", "task_id": "t1", "kind": "dance",
+           "issued_at": c(), "expires_at": c() + 60_000, "control_epoch": 1, "priority": 0,
+           "offline_policy": "default", "precondition": None, "payload": {}}
+    await site.publish(T.cmd, json.dumps(cmd).encode())
+    await broker.drain()
+    assert ears.order.index("reconcile") < ears.order.index("cmd/ack")
+
+
+async def test_断线时不安全就停住_安全就继续(台子):
+    broker, c, r, ears, rt, site = 台子
+    await rt.start()
+    await broker.drain()
+    cmd = {"schema": "1.0", "command_id": "c1", "task_id": "t1", "kind": "goto",
+           "issued_at": c(), "expires_at": c() + 60_000, "control_epoch": 1, "priority": 0,
+           "offline_policy": "default", "precondition": None,
+           "payload": {"target": {"schema": "1.0", "map_id": "m", "map_version": "1",
+                                  "frame_id": "map", "x": 5.0, "y": 0.0, "yaw": 0.0}}}
+    await site.publish(T.cmd, json.dumps(cmd).encode())
+    await broker.drain()
+    for _ in range(5):
+        await rt.step(0.1)
+        r.tick(0.1)
+        c.advance(0.1)
+    r.inject_battery(10.0)                        # 低于底线 → 不安全
+    broker.disconnect("dog")
+    for _ in range(5):
+        await rt.step(0.1)
+        r.tick(0.1)
+        c.advance(0.1)
+    assert rt.processor.current._holding is True
+    assert (await r.odometry()).vx == 0.0
+
+
+async def test_空闲时status也要周期刷新last_seen(台子):
+    """总设计 §3.1 派遣条件要 last_seen 新鲜;只在变化时发的话静止在线的狗会被判不新鲜。"""
+    broker, c, r, ears, rt, site = 台子
+    await rt.start()
+    await broker.drain()
+    n = len(ears.by_topic["status"])
+    for _ in range(int(rt.status_period_ms / 100) + 2):
+        await rt.step(0.1)
+        r.tick(0.1)
+        c.advance(0.1)
+    await broker.drain()
+    assert len(ears.by_topic["status"]) > n
+    assert Status.from_wire(ears.by_topic["status"][-1]).last_seen > \
+        Status.from_wire(ears.by_topic["status"][n - 1]).last_seen
+
+
+async def test_LWT主题也过ACL(台子):
+    from d1max_agent.transport import GuardedTransport
+    from d1max_contract.topics import TopicAcl
+    broker, c, r, ears, rt, site = 台子
+    g = GuardedTransport(MemoryTransport(broker, "x"), TopicAcl(T))
+    with pytest.raises(PermissionError):
+        g.set_will(Topics(site_id="s", robot_id="OTHER").status, b"x")

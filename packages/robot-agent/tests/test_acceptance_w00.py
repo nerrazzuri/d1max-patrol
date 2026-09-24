@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 
 import pytest
@@ -115,13 +116,19 @@ async def test_W00_验收流程(台):
     assert x2 > x1 + 0.3, "断线但安全:继续走"
     assert len(t.events) == n_events_before, "断线期间站点收不到事件"
 
-    # 4. 断线期间:站点重复投递同一条 goto,并派一条 abort。两条都在 broker 里排队。
-    dup_task = site.send(cmd, timeout_s=5.0)
+    # 4. 断线期间:站点**真的发出**重复的 goto 和一条 abort(create_task,不是攥着协程),
+    #    两条都在 broker 的离线收件箱里排队;此时代理收不到、也回不了。
+    dup_task = asyncio.create_task(site.send(cmd, timeout_s=5.0))
     abort_cmd = site.new_command("abort", {"reason": "operator"}, ttl_ms=60_000, control_epoch=1,
                                  task_id=cmd.task_id,
                                  precondition=Precondition(expect_task_state=TaskState.RUNNING))
-    abort_task = site.send(abort_cmd, timeout_s=5.0)
+    abort_task = asyncio.create_task(site.send(abort_cmd, timeout_s=5.0))
+    await asyncio.sleep(0)
     await broker.drain()
+    n_acks = len(site.acks)
+    await t.run(3)
+    assert len(site.acks) == n_acks, "断线期间不该有任何回执回来"
+    assert not dup_task.done() and not abort_task.done()
     x3 = (await dog.odometry()).x
 
     # 5. 重连:第一条是 reconcile(任务 running、未确认区间含断线期间的进度事件)。
@@ -129,6 +136,7 @@ async def test_W00_验收流程(台):
     await t.agent.transport.connect()
     await broker.drain()
     rc = t.reconciles[n_rc]
+    assert site.acks[n_acks:] , "重连后排队的两条命令才被处理"
     assert rc.boot_id == "boot-1" and rc.task.task_id == cmd.task_id
     assert rc.task.state is TaskState.RUNNING
     assert rc.unacked_from_seq >= 1 and rc.unacked_to_seq >= rc.unacked_from_seq

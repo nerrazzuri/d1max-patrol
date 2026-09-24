@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from d1max_contract import SCHEMA
@@ -55,6 +56,9 @@ def as_float(d: dict[str, Any], key: str, what: str) -> float:
     v = need(d, key, what)
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise ContractError(f"{what}: {key} 要是数")
+    # json.loads 默认收 NaN/Infinity;喂进控制律会让距离永远算不出、速度取满值原地转圈。
+    if not math.isfinite(v):
+        raise ContractError(f"{what}: {key} 要是有限数,给的是 {v!r}")
     return float(v)
 
 

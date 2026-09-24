@@ -167,3 +167,28 @@ async def test_断线不安全时停住等待_重连后接着走(台子):
     await t2.on_offline(safe=True)
     await _跑(c, r, t2, 5)
     assert (await r.odometry()).vx > 0, "安全就按已获批的离线策略继续"
+
+
+async def test_命令上限低于死区时不越过站点给的上限(台子):
+    """max_speed_mps < HAL 死区:不能为了动起来偷偷超过站点给的上限;HAL 会按死区拒,
+    任务据此 failed(deadband),而不是静默跑得比要求快。"""
+    c, r, book = 台子
+    t = GotoTask(task_id="t1", target=_target(3.0, 0.0), max_speed_mps=0.02, hal=r, events=book,
+                 now_ms=c, priority=0)
+    await t.start()
+    await _跑(c, r, t, 5)
+    assert t.state is TaskState.FAILED and t.detail["reason"] == "deadband"
+    assert (await r.odometry()).x == 0.0
+
+
+async def test_在线时定位丢了也要停并failed(台子):
+    """总设计 §4.2:定位丢失高于一切命令,不只在断线策略里。"""
+    c, r, book = 台子
+    t = GotoTask(task_id="t1", target=_target(5.0, 0.0), max_speed_mps=0.8, hal=r, events=book,
+                 now_ms=c, priority=0)
+    await t.start()
+    await _跑(c, r, t, 5)
+    r.inject_loc_lost(True)
+    await _跑(c, r, t, 6)
+    assert t.state is TaskState.FAILED and t.detail["reason"] == "loc_lost"
+    assert await r.stopped() is True

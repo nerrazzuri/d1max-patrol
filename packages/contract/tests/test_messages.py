@@ -133,3 +133,14 @@ def test_事件seq和boot_id():
         Event(event_id="e", seq=0, boot_id="b", stamp=1, kind="x", data={})
     with pytest.raises(ContractError, match="boot_id"):
         Event(event_id="e", seq=1, boot_id="", stamp=1, kind="x", data={})
+
+
+def test_非有限数一律拒():
+    """json.loads 默认收 NaN/Infinity;喂进 goto 会让距离永远算不出来、速度取满值原地转圈。"""
+    import json as _json
+    for bad in ("NaN", "Infinity", "-Infinity"):
+        wire = _json.loads(_json.dumps(POSE.to_wire()).replace("1.5", bad, 1))
+        with pytest.raises(ContractError, match="x"):
+            MapPose.from_wire(wire)
+    with pytest.raises(ContractError):
+        MapPose(map_id="m", map_version="1", frame_id="map", x=float("nan"), y=0.0, yaw=0.0)

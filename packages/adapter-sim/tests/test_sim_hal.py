@@ -186,3 +186,14 @@ async def test_release_control后拒速度(台子):
     await r.release_control()
     got = await r.set_velocity(_v(vx=0.3))
     assert got.rejected and got.reason == "no_control"
+
+
+async def test_close撤控制权_断连即停止输出(台子):
+    """总设计 §2.1:SDK 断连即停止输出。"""
+    c, r = 台子
+    await _就绪(r)
+    await r.set_velocity(_v(vx=0.5, ttl_ms=10_000))
+    await r.close()
+    assert (await r.control_status()).held is False
+    got = await r.set_velocity(_v(vx=0.3, seq=2))
+    assert got.rejected and got.reason == "no_control"

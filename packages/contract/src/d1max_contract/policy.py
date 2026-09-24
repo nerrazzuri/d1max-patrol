@@ -1,4 +1,10 @@
-"""断线策略表(总设计 §4.3)。**按当前任务定义**,不是笼统的「照常完成」。"""
+"""断线策略表(总设计 §4.3)。**按当前任务定义**,不是笼统的「照常完成」。
+
+W00 里代理只用 ``on_disconnect``(runtime 在断线那一拍按它处理当前任务)。
+``queue_cmds``/``new_cmd_expires`` 在 W00 **只登记数据**:排队实际靠 broker 的
+``clean_session=False`` 离线收件箱,过期靠命令自己的 ``expires_at``;这两个字段的消费者
+是 W00c 的派遣器(给哪类命令多长的 ttl、断线时要不要撤回)。
+"""
 
 from __future__ import annotations
 

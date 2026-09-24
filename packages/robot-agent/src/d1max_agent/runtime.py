@@ -48,7 +48,8 @@ def _dumps(d: dict) -> bytes:
 class AgentRuntime:
     def __init__(self, *, transport: Transport, registration: Registration, hal: RobotHAL,
                  store_dir: Path, now_ms: Callable[[], int], loaded_map: tuple[str, str] | None,
-                 boot_id: str | None = None, telemetry_period_ms: int = 1000) -> None:
+                 boot_id: str | None = None, telemetry_period_ms: int = 1000,
+                 status_period_ms: int = 30_000) -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -56,6 +57,9 @@ class AgentRuntime:
         self._now = now_ms
         self.loaded_map = loaded_map
         self._telemetry_period = telemetry_period_ms
+        #: 空闲时也要周期刷 status 的 last_seen —— 派遣条件要「last_seen 新鲜」(总设计 §3.1)。
+        self.status_period_ms = status_period_ms
+        self._next_status_ms: int | None = None
         store_dir = Path(store_dir)
         self.events = EventBook(store_dir / "events.jsonl", boot_id=self.boot_id, now_ms=now_ms)
         self.idem = IdempotencyStore(store_dir / "idempotency.jsonl")
@@ -126,6 +130,9 @@ class AgentRuntime:
         任务为空、区间 0..0,站点由此知道这是干净起步)。"""
         self.online = True
         self._reconnect_pending = False
+        # 断线与重连发生在同一拍之间(真机上网络抖动是常态):既然已经连上,断线策略就不
+        # 该再执行 —— 不然已在线的任务被停住且没人再解。
+        self._went_offline = False
         lo, hi = self.events.unacked_range()
         rc = Reconcile(boot_id=self.boot_id, control_epoch=self.processor.control_epoch,
                        task=self.processor.task_summary(), unacked_from_seq=lo, unacked_to_seq=hi)
@@ -144,6 +151,9 @@ class AgentRuntime:
         except (ValueError, UnicodeDecodeError) as exc:
             log.warning("cmd 报文不是 JSON,丢弃: %s", exc)
             return
+        if self._reconnect_pending and self.transport.connected:
+            # 真 broker 下离线补投的 cmd 可能比我们的重连收尾先到:reconcile 必须是第一条。
+            await self._flush_reconnect()
         ack = await self.processor.handle(wire, m.topic)
         await self.transport.publish(self.topics.ack, _dumps(ack.to_wire()), qos=1)
         await self._publish_status()
@@ -195,9 +205,12 @@ class AgentRuntime:
                             task=self.processor.task_summary())
         wire = st.to_wire()
         key = {k: v for k, v in wire.items() if k != "last_seen"}
-        if not force and key == self._last_status_wire:
+        now = self._now()
+        due = self._next_status_ms is not None and now >= self._next_status_ms
+        if not force and not due and key == self._last_status_wire:
             return
         self._last_status_wire = key
+        self._next_status_ms = now + self.status_period_ms
         await self.transport.publish(self.topics.status, _dumps(wire), qos=1, retain=True)
 
     async def _maybe_telemetry(self) -> None:

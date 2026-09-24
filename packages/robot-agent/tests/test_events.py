@@ -45,3 +45,14 @@ def test_outbox落盘重放_同boot续号(tmp_path):
     again = EventBook(tmp_path / "events.jsonl", boot_id="b1", now_ms=lambda: 43)
     assert again.unacked_range() == (1, 2)
     assert again.emit("task_done", {}).seq == 3
+
+
+def test_坏行只丢那一行_包括是JSON但不是对象的(tmp_path, caplog):
+    p = tmp_path / "events.jsonl"
+    b = _book(tmp_path)
+    b.emit("task_progress", {})
+    with p.open("a", encoding="utf-8") as f:
+        f.write("[1,2]\n{garbage\n")
+    again = EventBook(p, boot_id="b1", now_ms=lambda: 1)
+    assert again.unacked_range() == (1, 1)
+    assert sum("坏" in r.getMessage() for r in caplog.records) >= 2

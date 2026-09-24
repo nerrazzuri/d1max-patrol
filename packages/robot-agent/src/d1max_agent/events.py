@@ -40,6 +40,8 @@ class EventBook:
                     continue
                 try:
                     rec = json.loads(line)
+                    if not isinstance(rec, dict):
+                        raise ValueError("不是对象")
                     if rec.get("op") == "ack":
                         if rec.get("boot_id") == self.boot_id:
                             upto = int(rec["seq"])

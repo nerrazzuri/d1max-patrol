@@ -164,3 +164,21 @@ async def test_drain之后没有挂起的投递(broker):
     assert len(收.got) == 50
     await asyncio.sleep(0)
     assert len(收.got) == 50
+
+
+async def test_同一client_id换新对象重连时旧订阅不再收(broker):
+    """真 MQTT 的持久会话路由到新连接;旧对象的 handler 若还挂着就成了僵尸双处理。"""
+    a = await _client(broker, "a")
+    old = MemoryTransport(broker, "dog")
+    await old.connect()
+    旧收 = _收()
+    await old.subscribe("t", 旧收)
+    broker.disconnect("dog")
+    new = MemoryTransport(broker, "dog")
+    await new.connect()
+    新收 = _收()
+    await new.subscribe("t", 新收)
+    await a.publish("t", b"x")
+    await broker.drain()
+    assert [m.payload for m in 新收.got] == [b"x"]
+    assert 旧收.got == []

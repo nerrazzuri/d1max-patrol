@@ -233,3 +233,58 @@ async def test_abort让当前任务停并释放资源(cp):
     assert cp.current is None
     assert cp.ledger.holder("motion") is None
     assert [e.kind for e in cp.events.pending()][-1] == "task_aborted"
+
+
+async def test_注册过期一律auth拒(tmp_path):
+    过期 = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
+                      expires_at=NOW - 1)
+    p = CommandProcessor(
+        registration=过期, now_ms=lambda: NOW, idem=IdempotencyStore(tmp_path / "i.jsonl"),
+        events=EventBook(tmp_path / "e.jsonl", boot_id="b", now_ms=lambda: NOW),
+        ledger=ResourceLedger(), supported_tasks={"goto"}, loaded_map=("m1", "3"),
+        state_path=tmp_path / "s.json", task_factory=lambda cmd: 假任务(cmd))
+    ack = await p.handle(_cmd().to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason == "auth"
+
+
+async def test_abort还没起跑的pending任务直接撤(cp):
+    await cp.handle(_cmd().to_wire(), TOPIC)
+    await cp.step(0.1)
+    ack = await cp.handle(_cmd(cid="c2", tid="t2", priority=5).to_wire(), TOPIC)   # 抢占,进 pending
+    assert ack.result is AckResult.ACCEPTED and cp.pending[0].task_id == "t2"
+    ack = await cp.handle(_cmd("abort", cid="c3", tid="t2", payload={"reason": "op"}).to_wire(),
+                          TOPIC)
+    assert ack.result is AckResult.ACCEPTED
+    assert cp.pending == [] and cp.finished[-1].task_id == "t2"
+    assert cp.finished[-1].state is TaskState.ABORTED
+    assert [e.kind for e in cp.events.pending()][-1] == "task_aborted"
+
+
+async def test_pending按优先级排_起跑前查过期(cp):
+    await cp.handle(_cmd().to_wire(), TOPIC)
+    await cp.step(0.1)
+    old = cp.current
+    await cp.handle(_cmd(cid="c2", tid="t2", priority=5, ttl=1_000).to_wire(), TOPIC)
+    await cp.handle(_cmd(cid="c3", tid="t3", priority=7).to_wire(), TOPIC)
+    assert [t.task_id for t in cp.pending] == ["t3", "t2"], "优先级高的排前面"
+    old.stop_confirmed = True
+    cp.clock["ms"] = NOW + 5_000                  # t2 已经过期
+    await cp.step(0.1)                            # old 进终态
+    await cp.step(0.1)                            # t3 起跑
+    assert cp.current.task_id == "t3"
+    cp.current.stop_confirmed = True
+    await cp.current.abort("op")
+    await cp.step(0.1)
+    await cp.step(0.1)                            # 轮到 t2:过期,不起跑
+    assert cp.current is None
+    assert cp.finished[-1].task_id == "t2" and cp.finished[-1].state is TaskState.FAILED
+    assert [e.kind for e in cp.events.pending()][-1] == "task_failed"
+    assert cp.events.pending()[-1].data["reason"] == "expired_before_start"
+
+
+def test_代次落盘是原子写(tmp_path):
+    import inspect
+
+    from d1max_agent import commands
+    src = inspect.getsource(commands.CommandProcessor._save_epoch)
+    assert "os.replace" in src, "写一半掉电会让代次倒退成 0"

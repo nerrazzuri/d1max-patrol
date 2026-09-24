@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -73,9 +74,11 @@ class CommandProcessor:
             return 0
 
     def _save_epoch(self) -> None:
+        """原子写:写一半掉电会让 ``_load_epoch`` 读回 0,代次倒退,旧代次命令重新被接受。"""
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        self._state_path.write_text(json.dumps({"control_epoch": self.control_epoch}),
-                                    encoding="utf-8")
+        tmp = self._state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"control_epoch": self.control_epoch}), encoding="utf-8")
+        os.replace(tmp, self._state_path)
 
     # ------------------------------------------------------------ 状态摘要
 
@@ -153,10 +156,13 @@ class CommandProcessor:
             return self._finish(self._rej(cmd, "busy"))
 
         task = self._factory(cmd)
+        task.expires_at = cmd.expires_at
         for b in blockers:
             if b is not None and not b.done:
                 await b.abort("preempted")
+        # pending 按优先级排(高的在前,同级按到达顺序)。
         self.pending.append(task)
+        self.pending.sort(key=lambda t: -t.priority)
         return self._finish(Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED))
 
     def _check_payload(self, cmd: Command) -> str:
@@ -215,13 +221,21 @@ class CommandProcessor:
                 self.current = None
                 self.events.emit(_event_for(cur.state),
                                  {"task_id": cur.task_id, **cur.detail})
-        if self.current is None and self.pending:
+        while self.current is None and self.pending:
             nxt = self.pending[0]
-            if not self.ledger.conflicts(nxt.kind):
-                self.pending.pop(0)
-                self.ledger.acquire(nxt.task_id, nxt.kind)
-                self.current = nxt
-                await nxt.start()
+            if self.ledger.conflicts(nxt.kind):
+                break
+            self.pending.pop(0)
+            if nxt.expires_at is not None and nxt.expires_at <= self._now():
+                # 在 pending 里等到过期了:不起跑。跟「不执行十分钟前的出动」同一条规矩。
+                nxt.state = TaskState.FAILED
+                nxt.detail = {"reason": "expired_before_start"}
+                self.finished.append(nxt)
+                self.events.emit("task_failed", {"task_id": nxt.task_id, **nxt.detail})
+                continue
+            self.ledger.acquire(nxt.task_id, nxt.kind)
+            self.current = nxt
+            await nxt.start()
 
 
 def _event_for(state: TaskState) -> str:

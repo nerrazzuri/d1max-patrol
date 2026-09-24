@@ -71,6 +71,11 @@ class MemoryBroker:
         if state is None:
             state = _ClientState(transport)
             self._clients[transport.client_id] = state
+        elif state.transport is not transport:
+            # 同一 client_id 换了对象重连(代理重启):持久会话路由到新连接,旧对象的 handler
+            # 不能再收 —— 不然新旧两个运行时都处理同一条命令(僵尸双处理)。离线收件箱保留。
+            state.transport = transport
+            state.subs.clear()
         else:
             state.transport = transport
         transport._mark(True)

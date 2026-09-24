@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -71,8 +72,8 @@ class MapPose:
                 raise ContractError(f"MapPose: {k} 不许为空")
         for k in ("x", "y", "yaw"):
             v = getattr(self, k)
-            if isinstance(v, bool) or not isinstance(v, (int, float)):
-                raise ContractError(f"MapPose: {k} 要是数")
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise ContractError(f"MapPose: {k} 要是有限数")
 
     def to_wire(self) -> dict[str, Any]:
         return _stamped({"map_id": self.map_id, "map_version": self.map_version,

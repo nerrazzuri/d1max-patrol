@@ -87,6 +87,10 @@ class GotoTask(Task):
                 self._stop_sent = True
             return
         odom = await self._hal.odometry()
+        if not odom.valid:
+            # 定位丢失高于一切命令(总设计 §4.2):停、确认、failed。
+            await self._settle(TaskState.FAILED, {"reason": "loc_lost"})
+            return
         dx, dy = self.target.x - odom.x, self.target.y - odom.y
         dist = math.hypot(dx, dy)
         self._report(dist)
@@ -99,8 +103,9 @@ class GotoTask(Task):
         if abs(bearing) > BEARING_THRESH_RAD:
             vx = 0.0
         else:
-            vx = min(self._vmax, K_LIN * dist)
-            vx = max(vx, self._deadband) if vx > 0 else 0.0
+            # 不低于死区(不然 HAL 拒),但**绝不**越过站点给的上限:上限本身低于死区时
+            # 让 HAL 按死区拒、任务 failed(deadband),而不是偷偷跑得比要求快。
+            vx = min(self._vmax, max(K_LIN * dist, self._deadband))
         self._seq += 1
         got = await self._hal.set_velocity(VelocityCommand(
             seq=self._seq, ttl_ms=max(300, int(dt_s * 3000)), frame="base", vx=vx, vy=0.0, wz=wz))

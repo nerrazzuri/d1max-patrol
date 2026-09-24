@@ -119,7 +119,9 @@ class SimRobot:
         self._connected = True
 
     async def close(self) -> None:
+        # SDK 断连即停止输出(总设计 §2.1):控制权也随链路一起没了。
         self._connected = False
+        self._control = False
         self._zero()
 
     async def health(self) -> Health:

@@ -21,6 +21,8 @@ class Task:
         self.state = TaskState.PENDING
         #: 终态时给事件用的说明。
         self.detail: dict = {}
+        #: 命令的过期时刻;在 pending 里等太久、起跑前就过期的任务不起跑(``failed``)。
+        self.expires_at: int | None = None
 
     @property
     def done(self) -> bool:
