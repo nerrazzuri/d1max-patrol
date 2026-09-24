@@ -54,6 +54,9 @@ class Principal(str):
         obj.role = role
         return obj
 
+    def __getnewargs__(self) -> tuple[str, str]:          # copy / pickle 要两个参数
+        return (str(self), self.role)
+
 
 def _hash(password: str, salt: bytes) -> bytes:
     return hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
@@ -77,7 +80,8 @@ class Accounts:
 
     # ------------------------------------------------------------ 账号
 
-    def add(self, name: str, password: str, *, role: str = "admin") -> None:
+    def add(self, name: str, password: str, *, role: str) -> None:
+        """``role`` 必须给:不给就默认成 admin 是个等着出事的坑。"""
         if not isinstance(name, str) or not _NAME.match(name):
             raise AuthError("账号名只许字母、数字、. _ -,1–64 个字符")
         self._check_role(role)
@@ -95,7 +99,7 @@ class Accounts:
 
     @staticmethod
     def _check_role(role: str) -> None:
-        if role not in ROLES:
+        if not isinstance(role, str) or role not in ROLES:
             raise AuthError(f"角色只有 {', '.join(sorted(ROLES))},给的是 {role!r}")
 
     @staticmethod
@@ -117,6 +121,35 @@ class Accounts:
     def _other_admins(c, name: str) -> int:
         return c.execute("SELECT count(*) AS n FROM accounts WHERE role='admin' AND disabled=0 "
                          "AND name<>?", (name,)).fetchone()["n"]
+
+    def update(self, name: str, *, role: str | None = None, disabled: bool | None = None,
+               password: str | None = None) -> None:
+        """一次改多项:**先全部校验,再在一个事务里一起改**。有一项不合规矩就一项都不改
+        (内部评审:原来逐项提交,后面一项 400 了前面的角色已经改了)。"""
+        if role is not None:
+            self._check_role(role)
+        if disabled is not None and not isinstance(disabled, bool):
+            raise AuthError("disabled 要是 true/false")
+        if password is not None:
+            self._check_password(password)
+        salt = secrets.token_bytes(16) if password is not None else None
+        digest = _hash(password, salt) if password is not None else None
+        with self.db.tx() as c:
+            row = self._get(c, name)
+            new_role = role if role is not None else row["role"]
+            new_disabled = disabled if disabled is not None else bool(row["disabled"])
+            was_admin = row["role"] == "admin" and not row["disabled"]
+            still_admin = new_role == "admin" and not new_disabled
+            if was_admin and not still_admin and self._other_admins(c, name) == 0:
+                raise AuthError("这是最后一个启用的 admin,不能停用或降级")
+            if role is not None:
+                c.execute("UPDATE accounts SET role=? WHERE name=?", (role, name))
+            if disabled is not None:
+                c.execute("UPDATE accounts SET disabled=? WHERE name=?", (int(disabled), name))
+            if password is not None:
+                c.execute("UPDATE accounts SET salt=?, pw_hash=? WHERE name=?",
+                          (salt, digest, name))
+            c.execute("DELETE FROM sessions WHERE name=?", (name,))
 
     def set_role(self, name: str, role: str) -> None:
         self._check_role(role)
@@ -147,14 +180,32 @@ class Accounts:
             c.execute("DELETE FROM sessions WHERE name=?", (name,))
 
     def change_password(self, name: str, old: str, new: str) -> None:
-        """自己改自己的口令:要旧口令。"""
+        """自己改自己的口令:要旧口令。**猜旧口令跟猜登录口令同一个计数**:不然拿着偷来的
+        令牌可以无限次地试,把真口令试出来。"""
+        if not isinstance(old, str) or not isinstance(new, str):
+            raise AuthError("old 与 new 要是字符串")
+        self._check_password(new)
+        now = self._now()
+        with self._lock:
+            until = self._locked_until.get(name, 0)
+            if now < until:
+                raise LockedOut(f"错太多次了,{(until - now) // 1000 + 1} 秒后再试")
+            recent = [t for t in self._fails.get(name, []) if now - t < FAIL_WINDOW_MS]
+            recent.append(now)
+            self._fails[name] = recent
+            if len(recent) >= FAIL_LIMIT:
+                self._locked_until[name] = now + LOCK_MS
+                self._fails[name] = []
         rows = self.db.query("SELECT salt, pw_hash FROM accounts WHERE name=?", (name,))
         if not rows:
             raise AuthError("账号或口令不对")
         with self._hash_slots:
-            ok = hmac.compare_digest(_hash(old or "", rows[0]["salt"]), rows[0]["pw_hash"])
+            ok = hmac.compare_digest(_hash(old, rows[0]["salt"]), rows[0]["pw_hash"])
         if not ok:
             raise AuthError("旧口令不对")
+        with self._lock:
+            self._fails.pop(name, None)
+            self._locked_until.pop(name, None)
         self.reset_password(name, new)
 
     # ------------------------------------------------------------ 登录

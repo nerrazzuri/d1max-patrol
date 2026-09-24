@@ -215,17 +215,20 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _handle(self, method: str) -> None:
         self._actor, self._status, self._resp = "", 0, {}
+        self._audit_target, self._audit_detail = "", {}
         path = self.path.split("?", 1)[0]
         try:
             self._route(method, path)
         finally:
-            if method != "GET" and self.site.audit is not None:
+            # 未登录的乱请求(401/413/400,不是登录也不是事件回调)不进审计:谁都能发,
+            # 记下来只会把表撑满(内部评审)。登录失败、事件回调照记。
+            if method != "GET" and self.site.audit is not None and self._actor:
                 detail = {k: self._resp[k] for k in ("command_id", "task_id", "error", "outcome")
-                          if k in self._resp}
+                          if k in self._resp} | self._audit_detail
                 try:
-                    self.site.audit.record(actor=self._actor or "-", action=f"{method} {path}",
-                                           status=self._status, detail=detail,
-                                           remote=self.client_address[0])
+                    self.site.audit.record(actor=self._actor, action=f"{method} {path}",
+                                           target=self._audit_target, status=self._status,
+                                           detail=detail, remote=self.client_address[0])
                 except Exception:
                     log.exception("审计写不进去")
 
@@ -336,7 +339,7 @@ class _Handler(BaseHTTPRequestHandler):
             if not isinstance(target, dict):
                 raise HttpError(400, "要 target(MapPose 对象)")
             result = self.site.dispatch(lambda: disp.goto(
-                robot_id, target, speed, issued_by=user, priority=MANUAL))
+                robot_id, target, speed, issued_by=str(user), priority=MANUAL))
         elif action == "patrol":
             mid = d.get("mission_id")
             if not isinstance(mid, str) or not mid:
@@ -346,13 +349,13 @@ class _Handler(BaseHTTPRequestHandler):
             if act is None or mid not in act.missions:
                 raise HttpError(404, f"当前任务包里没有任务 {mid!r}")
             wire = act.missions[mid].to_wire()
-            result = self.site.dispatch(lambda: disp.patrol(robot_id, wire, issued_by=user,
+            result = self.site.dispatch(lambda: disp.patrol(robot_id, wire, issued_by=str(user),
                                                             priority=MANUAL))
         else:
             task_id = d.get("task_id")
             if not isinstance(task_id, str) or not task_id:
                 raise HttpError(400, "要 task_id")
-            result = self.site.dispatch(lambda: disp.abort(robot_id, task_id, issued_by=user))
+            result = self.site.dispatch(lambda: disp.abort(robot_id, task_id, issued_by=str(user)))
         self._send_json(200, result)
 
     def _standby(self, method: str, robot_id: str, action: str, user: str) -> None:
@@ -363,7 +366,7 @@ class _Handler(BaseHTTPRequestHandler):
         if action == "standby/return":
             if method != "POST":
                 raise HttpError(405, "只支持 POST")
-            result = self.site.dispatch(lambda: stb.return_to(robot_id, issued_by=user))
+            result = self.site.dispatch(lambda: stb.return_to(robot_id, issued_by=str(user)))
             return self._send_json(200, result)
         if method == "GET":
             return self._send_json(200, {"points": stb.list(robot_id)})
@@ -389,6 +392,9 @@ class _Handler(BaseHTTPRequestHandler):
             if method != "POST":
                 raise HttpError(405, "只支持 GET/POST")
             d = self._body()
+            self._audit_target = str(d.get("name", ""))[:64]
+            self._audit_detail = {"new_account": self._audit_target,
+                                  "role": str(d.get("role", "guard"))[:16]}
             try:
                 acc.add(d.get("name"), d.get("password"), role=d.get("role", "guard"))
             except AuthError as exc:
@@ -398,23 +404,27 @@ class _Handler(BaseHTTPRequestHandler):
             raise HttpError(405, "只支持 POST")
         name = _ACCOUNT.match(path).group(1)
         d = self._body()
+        self._audit_target = name
+        self._audit_detail = ({"role": str(d["role"])[:16]} if "role" in d else {}) | (
+            {"disabled": d["disabled"]} if isinstance(d.get("disabled"), bool) else {}) | (
+            {"password_reset": True} if "password" in d else {})
+        if "password" in d and name == str(self._actor):
+            # 管理员的令牌被偷了,也不能靠这条路不验旧口令就把自己的账号改走。
+            raise HttpError(400, "改自己的口令走 /api/me/password(要旧口令)")
         try:
-            if "role" in d:
-                acc.set_role(name, d["role"])
-            if "disabled" in d:
-                if not isinstance(d["disabled"], bool):
-                    raise HttpError(400, "disabled 要是 true/false")
-                acc.set_disabled(name, d["disabled"])
-            if "password" in d:
-                acc.reset_password(name, d["password"])
+            acc.update(name, role=d.get("role"), disabled=d.get("disabled"),
+                       password=d.get("password"))
         except AuthError as exc:
             raise HttpError(400 if "没有账号" not in str(exc) else 404, str(exc)) from exc
         self._send_json(200, {"accounts": acc.list()})
 
     def _change_own_password(self, user: str) -> None:
         d = self._body()
+        self._audit_target, self._audit_detail = str(user), {"self_password_change": True}
         try:
             self.site.accounts.change_password(str(user), d.get("old"), d.get("new"))
+        except LockedOut as exc:
+            raise HttpError(429, str(exc)) from exc
         except AuthError as exc:
             raise HttpError(400, str(exc)) from exc
         self._send_json(200, {"ok": True, "note": "口令改了;所有会话已吊销,请重新登录"})
@@ -509,8 +519,9 @@ class _Handler(BaseHTTPRequestHandler):
             while not self.site.stopping:
                 if since_check >= self.site.sse_recheck_s:
                     since_check = 0.0
-                    if self.site.accounts.check(token) is None:
-                        break                        # 注销或过期了:流跟着断
+                    who = self.site.accounts.check(token)
+                    if who is None or not allowed(who.role, VIEW):
+                        break                        # 注销、过期、停用或降到没权看:流跟着断
                 tick = min(1.0, self.site.sse_recheck_s)
                 item = sub.get(timeout=tick)          # 常醒:站点停、令牌失效时别挂着
                 since_check += tick

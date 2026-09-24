@@ -20,7 +20,7 @@ def acc(tmp_path):
     db = SiteDB(tmp_path / "s.db")
     c = 钟()
     a = Accounts(db, now_ms=c)
-    a.add("alice", "correct-horse-battery")
+    a.add("alice", "correct-horse-battery", role="admin")
     yield a, c, db
     db.close()
 
@@ -37,11 +37,11 @@ def test_口令不存明文_令牌不存明文(acc):
 def test_名字与口令规矩(acc):
     a, _, _ = acc
     with pytest.raises(AuthError):
-        a.add("bob", "short")
+        a.add("bob", "short", role="admin")
     with pytest.raises(AuthError):
-        a.add("bad name", "long-enough-pass")
+        a.add("bad name", "long-enough-pass", role="admin")
     with pytest.raises(AuthError):
-        a.add("alice", "long-enough-pass")
+        a.add("alice", "long-enough-pass", role="admin")
 
 
 def test_闲置过期与绝对过期(acc):

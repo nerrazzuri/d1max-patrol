@@ -118,3 +118,90 @@ def test_账号层的规矩(tmp_path):
         c.execute("UPDATE accounts SET disabled=1 WHERE name='b'")
     assert acc.check(tok2) is None
     db.close()
+
+
+# ------------------------------------------------------------ 内部评审补的
+
+def _roles(s, tok):
+    return {a["name"]: a["role"] for a in s.req("GET", "/api/accounts", token=tok)[1]["accounts"]}
+
+
+def test_一次改多项_有一项不合规矩就全不改(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    code, d = s.req("POST", "/api/accounts/gina", {"role": "admin", "password": "short"},
+                    token=alice)
+    assert code == 400
+    roles = _roles(s, alice)
+    assert roles["gina"] == "guard", "口令不合格,角色也不许改"
+    code, _ = s.req("POST", "/api/accounts/gina", {"role": "owner", "disabled": "yes"},
+                    token=alice)
+    assert code == 400
+    roles = _roles(s, alice)
+    assert roles["gina"] == "guard"
+
+
+def test_审计写明改了谁_改成什么_不带口令(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    s.req("POST", "/api/accounts/gina", {"role": "admin"}, token=alice)
+    s.req("POST", "/api/accounts/gina", {"password": "another-long-pass"}, token=alice)
+    s.req("POST", "/api/accounts", {"name": "eve", "password": PW, "role": "owner"},
+          token=alice)
+    rows = s.req("GET", "/api/audit", token=alice)[1]["audit"]
+    by = [(r["target"], r["detail"]) for r in rows if r["action"].startswith("POST /api/accounts")]
+    assert ("gina", {"role": "admin"}) in by
+    assert ("gina", {"password_reset": True}) in by
+    assert ("eve", {"new_account": "eve", "role": "owner"}) in by
+    import json as _json
+    assert "another-long-pass" not in _json.dumps(rows) and PW not in _json.dumps(rows)
+
+
+def test_管理员不能从账号接口重设自己的口令(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    code, d = s.req("POST", "/api/accounts/alice", {"password": "hijacked-pass-1"}, token=alice)
+    assert code == 400 and "me/password" in d["error"]
+
+
+def test_参数类型不对回400不是500(站点):
+    s = 站点
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    assert s.req("POST", "/api/me/password", {"old": 12345, "new": "x" * 12}, token=gina)[0] == 400
+    assert s.req("POST", "/api/accounts/gina", {"role": ["admin"]}, token=alice)[0] == 400
+    assert s.req("POST", "/api/accounts", {"name": "z", "password": PW, "role": {"a": 1}},
+                 token=alice)[0] == 400
+
+
+def test_猜旧口令也计入锁定(站点):
+    s = 站点
+    gina = _登(s, "gina")
+    codes = [s.req("POST", "/api/me/password", {"old": f"wrong-{i:08d}", "new": "x" * 12},
+                   token=gina)[0] for i in range(7)]
+    assert 429 in codes, codes
+
+
+def test_未登录的乱请求不进审计_登录失败照记(站点):
+    s = 站点
+    for _ in range(5):
+        s.req("POST", "/api/robots/A/goto", {"target": target(0.3)})
+    s.req("POST", "/api/login", {"name": "alice", "password": "wrong-wrong-x"})
+    alice = _登(s, "alice")
+    rows = s.req("GET", "/api/audit", token=alice)[1]["audit"]
+    assert not [r for r in rows if r["actor"] in ("", "-")], "未登录的 401 不进审计"
+    assert any(r["actor"] == "login:alice" and r["status"] == 401 for r in rows)
+
+
+def test_Principal能复制能pickle_加账号必须给角色(tmp_path):
+    import copy
+    import pickle
+
+    from d1max_site.accounts import Principal
+    p = Principal("bob", "guard")
+    for q in (copy.copy(p), copy.deepcopy(p), pickle.loads(pickle.dumps(p))):
+        assert q == "bob" and q.role == "guard"
+    from d1max_site.db import SiteDB
+    db = SiteDB(tmp_path / "s.db")
+    with pytest.raises(TypeError):
+        Accounts(db, now_ms=wall).add("x", PW)          # 不给角色不许默认成 admin
+    db.close()

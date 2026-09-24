@@ -47,7 +47,7 @@ class 站:
         self.reg.enroll("A", fingerprint="sha256:a", issued_at=wall() - 1,
                         expires_at=wall() + 10**9)
         self.accounts = Accounts(self.db, now_ms=wall)
-        self.accounts.add("alice", PW)
+        self.accounts.add("alice", PW, role="admin")
         self._stop = False
 
         async def build():
