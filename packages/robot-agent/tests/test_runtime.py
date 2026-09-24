@@ -282,5 +282,92 @@ async def test_启动顺序_先登记cmd订阅再连接(台子):
     import inspect
 
     from d1max_agent import runtime as mod
-    src = inspect.getsource(mod.AgentRuntime.start)
+    src = inspect.getsource(mod.AgentRuntime._start)          # start() 只包了一层回滚
     assert src.index("subscribe(self.topics.cmd") < src.index("await self.transport.connect()")
+
+
+# ------------------------------------------------------------ HAL 生命周期(W00b 外审阻断项)
+
+
+async def _hal已放(r):
+    h = await r.health()
+    return h.link_ok is False and (await r.control_status()).held is False
+
+
+async def test_close之后HAL停了_控制权放了_链路关了(台子):
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+    assert (await r.control_status()).held is True
+    await rt.close()
+    assert await _hal已放(r)
+    assert await r.stopped() is True
+    assert rt.parts.device.connected is False and rt.parts.nav.connected is False
+
+
+async def test_连不上站点_已拿到的控制权要放掉(台子, monkeypatch):
+    broker, c, r, ears, rt, _ = 台子
+
+    async def 连不上():
+        raise TimeoutError("broker 不在")
+
+    monkeypatch.setattr(rt.transport._inner, "connect", 连不上)
+    with pytest.raises(TimeoutError):
+        await rt.start()
+    assert await _hal已放(r), "start 失败要回滚:控制权不能留在一个起不来的进程手里"
+
+
+async def test_清理某一步炸了_后面的照做(台子, monkeypatch):
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+
+    async def 炸():
+        raise RuntimeError("引擎关不掉")
+
+    closed = {"transport": False}
+    real_close = rt.transport._inner.close
+
+    async def 记着关(*a, **k):
+        closed["transport"] = True
+        await real_close(*a, **k)
+
+    monkeypatch.setattr(rt.parts.engine, "aclose", 炸)
+    monkeypatch.setattr(rt.transport._inner, "close", 记着关)
+    await rt.close()                                   # 不抛
+    assert await _hal已放(r) and closed["transport"]
+
+
+async def test_放控制权炸了_链路照样关(台子, monkeypatch):
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+
+    async def 炸():
+        raise RuntimeError("SDK 不理")
+
+    monkeypatch.setattr(r, "release_control", 炸)
+    await rt.close()
+    assert (await r.health()).link_ok is False
+
+
+async def test_没start就close_以及close两次都安全(台子):
+    broker, c, r, ears, rt, _ = 台子
+    await rt.close()
+    await rt.start()
+    await rt.close()
+    await rt.close()
+    assert await _hal已放(r)
+
+
+async def test_收尾顺序_先停再放控制权再关链路(台子, monkeypatch):
+    """sim 放控制权时顺手清零速度,看不出顺序;真 HAL 放了控制权之后就发不了停止。"""
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+    order: list[str] = []
+    for name in ("stop", "release_control", "close"):
+        real = getattr(r, name)
+
+        async def 记(*a, _n=name, _real=real, **k):
+            order.append(_n)
+            await _real(*a, **k)
+        monkeypatch.setattr(r, name, 记)
+    await rt.close()
+    assert order.index("stop") < order.index("release_control") < order.index("close")

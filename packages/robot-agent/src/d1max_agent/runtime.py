@@ -91,6 +91,9 @@ class AgentRuntime:
         self._last_status_wire: dict | None = None
         self._next_telemetry_ms: int | None = None
         self._started = False
+        #: HAL 碰过没有(connect 调过就算,哪怕它抛了)。close() 据此决定要不要收 HAL。
+        self._hal_touched = False
+        self._closed = False
         #: 命令按到达顺序串行处理:QoS 1 的重复可能几乎同时到,处理里一旦有 await,两条都会
         #: 先通过幂等查询。
         self._cmd_lock = asyncio.Lock()
@@ -115,7 +118,17 @@ class AgentRuntime:
     # ------------------------------------------------------------ 生命周期
 
     async def start(self) -> None:
+        """起不来就回滚:``close()`` 把已经拿到的控制权放掉、链路关掉,再把异常抛给调用方。"""
+        try:
+            await self._start()
+        except BaseException:
+            await self.close()
+            raise
+
+    async def _start(self) -> None:
         # HAL 的生死归代理(总设计 §2.2「谁连 SDK」):先连上、拿到厂商控制权,再对站点亮相。
+        self._closed = False
+        self._hal_touched = True
         await self.hal.connect()
         await self.hal.acquire_control()
         if self.parts is not None:
@@ -140,9 +153,32 @@ class AgentRuntime:
         await self._publish_status(force=True)
 
     async def close(self) -> None:
+        """收尾,顺序:引擎(停当前这趟)→ HAL 停 → 放控制权 → 关桥与 HAL 链路 → 关 transport。
+        每一步单独兜异常:哪一步炸了只记日志,后面的照做 —— 控制权不能因为引擎关不干净就
+        留在一个要退出的进程手里。可重入:没 start 过、start 到一半、调两次都安全。"""
+        if self._closed:
+            return
+        self._closed = True
+
+        async def _step(what: str, fn) -> None:
+            try:
+                await fn()
+            except Exception:
+                log.exception("收尾:%s 失败,后面的照做", what)
+
         if self.parts is not None:
-            await self.parts.engine.aclose()
-        await self.transport.close()
+            await _step("关引擎", self.parts.engine.aclose)
+        if self._hal_touched:
+            await _step("HAL 停", self.hal.stop)
+            await _step("放控制权", self.hal.release_control)
+            if self.parts is not None:
+                await _step("关导航桥", self.parts.nav.close)
+                await _step("关设备桥(连带 HAL 链路)", self.parts.device.close)
+            await _step("关 HAL 链路", self.hal.close)      # 幂等;设备桥那步炸了也要关到
+            self._hal_touched = False
+            log.info("HAL 已收尾:停、放控制权、关链路")
+        await _step("关 transport", self.transport.close)
+        self._started = False
 
     def _on_connection(self, up: bool) -> None:
         self.online = up

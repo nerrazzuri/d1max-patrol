@@ -137,6 +137,7 @@ def test_SIGTERM好好收尾_退0(tmp_path):
             p.kill()
     assert p.returncode == 0, out
     assert "收尾" in out, out
+    assert "HAL 已收尾" in out, "SIGTERM 要一路走到 HAL:停、放控制权、关链路"
 
 
 def test_broker连不上_退1而不是挂着(tmp_path):
@@ -177,3 +178,14 @@ def test_legacy_http暴露检查在起线程之前(tmp_path):
     with pytest.raises(SystemExit):
         agent_main.build(_args(tmp_path, "--legacy-http", "0.0.0.0:0"))
     assert threading.active_count() == before, "拒绝启动也不能留下事件循环线程"
+
+
+def test_stop之后HAL的控制权放了_链路关了(tmp_path):
+    a = agent_main.build(_args(tmp_path))
+    a.start()
+    hal = a.hal
+    a.stop()
+    import asyncio
+    h = asyncio.run(hal.health())
+    held = asyncio.run(hal.control_status()).held
+    assert h.link_ok is False and held is False
