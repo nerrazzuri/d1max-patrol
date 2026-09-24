@@ -371,3 +371,15 @@ async def test_收尾顺序_先停再放控制权再关链路(台子, monkeypatc
         monkeypatch.setattr(r, name, 记)
     await rt.close()
     assert order.index("stop") < order.index("release_control") < order.index("close")
+
+
+async def test_正常收尾先发retained的offline_status_站点不用等过期(台子):
+    """LWT 只在异常断线时由 broker 代发;正常退出(SIGTERM、停服务)要自己发,
+    不然站点一直当它在线,直到 last_seen 过期(90 s)。"""
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+    await broker.drain()
+    await rt.close()
+    await broker.drain()
+    last = Status.from_wire(ears.by_topic["status"][-1])
+    assert last.online is False and last.boot_id == rt.boot_id

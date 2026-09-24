@@ -177,6 +177,13 @@ class AgentRuntime:
             await _step("关 HAL 链路", self.hal.close)      # 幂等;设备桥那步炸了也要关到
             self._hal_touched = False
             log.info("HAL 已收尾:停、放控制权、关链路")
+        if self._started and self.transport.connected:
+            # LWT 只在异常断线时由 broker 代发;正常退出自己发一条,站点立刻知道。
+            async def _offline() -> None:
+                await self.transport.publish(self.topics.status, _dumps(offline_status(
+                    boot_id=self.boot_id, control_epoch=self.processor.control_epoch
+                ).to_wire()), qos=1, retain=True)
+            await _step("发 offline status", _offline)
         await _step("关 transport", self.transport.close)
         self._started = False
 
