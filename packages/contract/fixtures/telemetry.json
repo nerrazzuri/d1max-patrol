@@ -1,0 +1,19 @@
+{
+  "battery_pct": 87.5,
+  "loc_quality": 1.0,
+  "net": {
+    "rssi_dbm": -55
+  },
+  "pose": {
+    "frame_id": "map",
+    "map_id": "estate-1",
+    "map_version": "7",
+    "schema": "1.0",
+    "x": 12.5,
+    "y": -3.25,
+    "yaw": 1.5708
+  },
+  "schema": "1.0",
+  "stamp": 1760000012000,
+  "task_state": "running"
+}

@@ -1,0 +1,14 @@
+{
+  "boot_id": "boot-b1",
+  "control_epoch": 3,
+  "last_seen": 0,
+  "online": false,
+  "ready": {
+    "control": true,
+    "estop_clear": true,
+    "loc_ok": true,
+    "motion": true
+  },
+  "schema": "1.0",
+  "task": null
+}

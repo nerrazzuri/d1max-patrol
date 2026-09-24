@@ -1,0 +1,15 @@
+{
+  "command_id": "cmd-0001",
+  "original": {
+    "command_id": "cmd-0001",
+    "original": null,
+    "reason": "",
+    "result": "accepted",
+    "schema": "1.0",
+    "task_id": "task-0001"
+  },
+  "reason": "",
+  "result": "duplicate",
+  "schema": "1.0",
+  "task_id": "task-0001"
+}

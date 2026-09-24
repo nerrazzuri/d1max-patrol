@@ -1,0 +1,25 @@
+{
+  "actuators": {
+    "light": [],
+    "siren": false,
+    "speaker": false,
+    "spotlight": false
+  },
+  "adapter": "sim/0.1.0",
+  "agent": "0.1.0",
+  "robot_id": "D1MAX-C40011",
+  "schema": "1.0",
+  "sensing": {
+    "depth": false,
+    "foot_force": false,
+    "imu_hz": 0,
+    "joint_effort": false,
+    "lidar": false,
+    "thermal": false
+  },
+  "tasks": {
+    "goto": {
+      "max_speed_mps": 1.0
+    }
+  }
+}

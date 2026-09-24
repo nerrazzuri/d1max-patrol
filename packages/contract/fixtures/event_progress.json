@@ -1,0 +1,12 @@
+{
+  "boot_id": "boot-b1",
+  "data": {
+    "distance_m": 4.2,
+    "task_id": "task-0001"
+  },
+  "event_id": "evt-b1-000007",
+  "kind": "task_progress",
+  "schema": "1.0",
+  "seq": 7,
+  "stamp": 1760000012000
+}

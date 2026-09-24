@@ -1,0 +1,12 @@
+{
+  "boot_id": "boot-b1",
+  "data": {
+    "reason": "operator",
+    "task_id": "task-0001"
+  },
+  "event_id": "evt-b1-000009",
+  "kind": "task_aborted",
+  "schema": "1.0",
+  "seq": 9,
+  "stamp": 1760000015000
+}

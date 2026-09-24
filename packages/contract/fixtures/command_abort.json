@@ -1,0 +1,17 @@
+{
+  "command_id": "cmd-0002",
+  "control_epoch": 3,
+  "expires_at": 1760000070000,
+  "issued_at": 1760000010000,
+  "kind": "abort",
+  "offline_policy": "default",
+  "payload": {
+    "reason": "operator"
+  },
+  "precondition": {
+    "expect_task_state": "running"
+  },
+  "priority": 10,
+  "schema": "1.0",
+  "task_id": "task-0001"
+}

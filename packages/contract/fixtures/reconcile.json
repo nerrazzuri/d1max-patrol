@@ -1,0 +1,12 @@
+{
+  "boot_id": "boot-b1",
+  "control_epoch": 3,
+  "schema": "1.0",
+  "task": {
+    "kind": "goto",
+    "state": "running",
+    "task_id": "task-0001"
+  },
+  "unacked_from_seq": 6,
+  "unacked_to_seq": 9
+}

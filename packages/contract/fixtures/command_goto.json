@@ -1,0 +1,24 @@
+{
+  "command_id": "cmd-0001",
+  "control_epoch": 3,
+  "expires_at": 1760000060000,
+  "issued_at": 1760000000000,
+  "kind": "goto",
+  "offline_policy": "default",
+  "payload": {
+    "max_speed_mps": 0.8,
+    "target": {
+      "frame_id": "map",
+      "map_id": "estate-1",
+      "map_version": "7",
+      "schema": "1.0",
+      "x": 12.5,
+      "y": -3.25,
+      "yaw": 1.5708
+    }
+  },
+  "precondition": null,
+  "priority": 0,
+  "schema": "1.0",
+  "task_id": "task-0001"
+}
