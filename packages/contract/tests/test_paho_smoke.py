@@ -40,3 +40,40 @@ async def test_pub_sub_retained_lwt_qos1():
     assert got[-1] == b"offline"
     await site.publish(topic, b"", qos=1, retain=True)   # 清掉 retained
     await site.close()
+
+
+async def test_同一client_id跨进程恢复_离线命令不丢():
+    from d1max_contract.paho_transport import PahoTransport
+
+    tag = uuid.uuid4().hex[:8]
+    topic = f"d1max-test/{tag}/cmd"
+    got_old: list[bytes] = []
+    got_new: list[bytes] = []
+
+    async def 旧收(m):
+        got_old.append(m.payload)
+
+    async def 新收(m):
+        got_new.append(m.payload)
+
+    old = PahoTransport(URL, client_id=f"dog-{tag}")
+    await old.subscribe(topic, 旧收, qos=1)                 # 连接前登记
+    await old.connect()
+    await asyncio.sleep(0.3)
+    old._client.socket().close()                           # 非正常断开
+    old._client.loop_stop()
+    site = PahoTransport(URL, client_id=f"site-{tag}")
+    await site.connect()
+    await site.publish(topic, b"abort", qos=1)
+    await asyncio.sleep(0.3)
+    new = PahoTransport(URL, client_id=f"dog-{tag}")
+    await new.subscribe(topic, 新收, qos=1)                 # 先登记再连接
+    await new.connect()
+    for _ in range(40):
+        await asyncio.sleep(0.25)
+        if got_new:
+            break
+    assert got_new == [b"abort"]
+    assert got_old == []
+    await new.close()
+    await site.close()

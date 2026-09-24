@@ -239,3 +239,37 @@ async def test_LWT主题也过ACL(台子):
     g = GuardedTransport(MemoryTransport(broker, "x"), TopicAcl(T))
     with pytest.raises(PermissionError):
         g.set_will(Topics(site_id="s", robot_id="OTHER").status, b"x")
+
+
+async def test_同一命令并发投递只有一条accepted(台子, monkeypatch):
+    """QoS 1 的重复可能几乎同时到;处理里一旦有 await(W00b 接引擎后一定有),两条都会先
+    通过幂等查询。运行时的命令入口要串行化。这里给 handle 加一个 await 点来逼出竞态。"""
+    broker, c, r, ears, rt, site = 台子
+    await rt.start()
+    await broker.drain()
+    import asyncio
+
+    async def 让出(cmd):                      # 幂等查询之后的 await 点(W00b 这里是真 I/O)
+        await asyncio.sleep(0)
+    monkeypatch.setattr(rt.processor, "_admit", 让出)
+    cmd = {"schema": "1.0", "command_id": "c1", "task_id": "t1", "kind": "goto",
+           "issued_at": c(), "expires_at": c() + 60_000, "control_epoch": 1, "priority": 0,
+           "offline_policy": "default", "precondition": None,
+           "payload": {"target": {"schema": "1.0", "map_id": "m", "map_version": "1",
+                                  "frame_id": "map", "x": 3.0, "y": 0.0, "yaw": 0.0}}}
+    # 站点重发同一条命令(QoS 1 重投的等价物),两条投递在任一 handler 跑之前都已排进循环。
+    await site.publish(T.cmd, json.dumps(cmd).encode())
+    await site.publish(T.cmd, json.dumps(cmd).encode())
+    await broker.drain()
+    results = sorted(a["result"] for a in ears.by_topic["cmd/ack"])
+    assert results == ["accepted", "duplicate"]
+    assert len(rt.processor.pending) + (rt.processor.current is not None) == 1
+
+
+async def test_启动顺序_先登记cmd订阅再连接(台子):
+    """结构性钉住:runtime.start() 里 subscribe(cmd) 必须在 transport.connect() 之前。"""
+    import inspect
+
+    from d1max_agent import runtime as mod
+    src = inspect.getsource(mod.AgentRuntime.start)
+    assert src.index("subscribe(self.topics.cmd") < src.index("await self.transport.connect()")

@@ -182,3 +182,40 @@ async def test_同一client_id换新对象重连时旧订阅不再收(broker):
     await broker.drain()
     assert [m.payload for m in 新收.got] == [b"x"]
     assert 旧收.got == []
+
+
+async def test_进程重启_断线期间的QoS1命令恰好交给新对象一次(broker):
+    """外部审核阻断项:代理进程重启 = 同一 client_id 的**新** transport 对象。持久会话在
+    CONNACK 后立刻补投离线命令;若 handler 要等 connect() 返回后才订阅,补投的命令无人接收、
+    收件箱却已清空 —— abort 就这么丢了。所以订阅必须能在连接前登记,attach 时先装新订阅、
+    再投旧收件箱。"""
+    site = await _client(broker, "site")
+    old = MemoryTransport(broker, "dog")
+    await old.connect()
+    旧收 = _收()
+    await old.subscribe("site/s/robot/r/cmd", 旧收)
+    broker.disconnect("dog")                                  # 进程崩了
+    await site.publish("site/s/robot/r/cmd", b"abort", qos=1)  # 断线期间站点派命令
+    await broker.drain()
+    new = MemoryTransport(broker, "dog")                      # 新进程,同一 client_id
+    新收 = _收()
+    await new.subscribe("site/s/robot/r/cmd", 新收)             # **先登记,再连接**(生产顺序)
+    await new.connect()
+    await broker.drain()
+    assert [m.payload for m in 新收.got] == [b"abort"], "恰好一次,不多不少"
+    assert 旧收.got == [], "旧对象的 handler 不许再触发"
+    await site.publish("site/s/robot/r/cmd", b"next", qos=1)
+    await broker.drain()
+    assert [m.payload for m in 新收.got] == [b"abort", b"next"]
+
+
+async def test_连接前登记的订阅在连上后也收retained(broker):
+    a = await _client(broker, "a")
+    await a.publish("site/s/robot/r/status", b"v1", retain=True)
+    late = MemoryTransport(broker, "late")
+    收 = _收()
+    await late.subscribe("site/s/robot/r/status", 收)
+    assert 收.got == []
+    await late.connect()
+    await broker.drain()
+    assert [(m.payload, m.retain) for m in 收.got] == [(b"v1", True)]

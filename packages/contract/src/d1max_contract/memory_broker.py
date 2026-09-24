@@ -25,6 +25,8 @@ class _Sub:
     topic_filter: str
     qos: int
     handler: Handler
+    #: 这条订阅的 retained 已经投过一次(MQTT 只在 SUBSCRIBE 时投 retained,重连不再投)。
+    retained_done: bool = False
 
 
 @dataclass
@@ -71,15 +73,15 @@ class MemoryBroker:
         if state is None:
             state = _ClientState(transport)
             self._clients[transport.client_id] = state
-        elif state.transport is not transport:
-            # 同一 client_id 换了对象重连(代理重启):持久会话路由到新连接,旧对象的 handler
-            # 不能再收 —— 不然新旧两个运行时都处理同一条命令(僵尸双处理)。离线收件箱保留。
-            state.transport = transport
-            state.subs.clear()
-        else:
-            state.transport = transport
+        # 订阅的真理源是 transport 对象自己登记的那份(可以在连接前登记)。同一 client_id
+        # 换了对象重连(代理重启)时,旧对象的 handler 自然不在新对象的名单里 —— 不会僵尸
+        # 双处理;离线收件箱保留,而且**先装好新订阅、再投收件箱**,补投的命令才有人接。
+        state.transport = transport
+        state.subs = transport._subs
         transport._mark(True)
-        # 先补投断线期间攒下的(按序),再把它自己攒下的发出去。
+        for sub in state.subs:
+            if not sub.retained_done:
+                self._deliver_retained(state, sub)
         inbox, state.inbox = state.inbox, []
         for msg in inbox:
             self._deliver(state, msg)
@@ -92,13 +94,16 @@ class MemoryBroker:
         transport._mark(False)
         self._clients.pop(transport.client_id, None)
 
-    def _subscribe(self, client_id: str, topic_filter: str, qos: int, handler: Handler) -> None:
-        state = self._clients[client_id]
-        state.subs.append(_Sub(topic_filter, qos, handler))
+    def _subscribe_now(self, client_id: str, sub: _Sub) -> None:
+        """连着的时候登记一条订阅:立刻投 retained。名单本身在 transport 上。"""
+        self._deliver_retained(self._clients[client_id], sub)
+
+    def _deliver_retained(self, state: _ClientState, sub: _Sub) -> None:
+        sub.retained_done = True
         for topic, msg in self._retained.items():
-            if topic_matches(topic_filter, topic):
-                self._deliver(state, Message(msg.topic, msg.payload, min(msg.qos, qos), True),
-                              sub=state.subs[-1])
+            if topic_matches(sub.topic_filter, topic):
+                self._deliver(state, Message(msg.topic, msg.payload, min(msg.qos, sub.qos), True),
+                              sub=sub)
 
     def _publish(self, msg: Message, from_client: str | None) -> None:
         if msg.retain:
@@ -138,7 +143,8 @@ class MemoryBroker:
 
 
 class MemoryTransport:
-    """MemoryBroker 的客户端。``connect()`` 幂等;断线期间 ``publish`` 的 QoS 1 报文入队。"""
+    """MemoryBroker 的客户端。``connect()`` 幂等;断线期间 ``publish`` 的 QoS 1 报文入队;
+    ``subscribe()`` 可以在连接前登记(生产顺序:先登记 cmd handler,再连接)。"""
 
     def __init__(self, broker: MemoryBroker, client_id: str) -> None:
         self._broker = broker
@@ -147,6 +153,8 @@ class MemoryTransport:
         self._will: Message | None = None
         self._outbox: list[Message] = []
         self._cbs: list[ConnectionCallback] = []
+        #: 本对象登记的订阅。**可以在连接前登记**;attach 时先装它们、再投离线收件箱。
+        self._subs: list[_Sub] = []
 
     @property
     def connected(self) -> bool:
@@ -182,9 +190,10 @@ class MemoryTransport:
         self._broker._publish(msg, from_client=self.client_id)
 
     async def subscribe(self, topic_filter: str, handler: Handler, *, qos: int = 1) -> None:
-        if not self._connected:
-            raise RuntimeError("没连上就订阅:先 connect()")
-        self._broker._subscribe(self.client_id, topic_filter, qos, handler)
+        sub = _Sub(topic_filter, qos, handler)
+        self._subs.append(sub)
+        if self._connected:
+            self._broker._subscribe_now(self.client_id, sub)
 
     def on_connection(self, cb: ConnectionCallback) -> None:
         self._cbs.append(cb)

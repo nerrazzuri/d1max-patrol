@@ -131,6 +131,7 @@ class CommandProcessor:
         seen = self.idem.lookup(cmd.command_id)
         if seen is not None:
             return Ack(cmd.command_id, cmd.task_id, AckResult.DUPLICATE, original=seen.to_wire())
+        await self._admit(cmd)
 
         if cmd.kind == "abort":
             return self._finish(await self._handle_abort(cmd))
@@ -164,6 +165,11 @@ class CommandProcessor:
         self.pending.append(task)
         self.pending.sort(key=lambda t: -t.priority)
         return self._finish(Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED))
+
+    async def _admit(self, cmd: Command) -> None:
+        """幂等查询之后、真正处理之前的 await 点。W00 里什么都不做;W00b 接引擎后这里
+        就是真 I/O(问引擎状态、查地图)。**它存在是为了让串行化被测到**:两条重复命令
+        几乎同时到时,没有 runtime 那把锁,两条都会先通过上面的幂等查询。"""
 
     def _check_payload(self, cmd: Command) -> str:
         if cmd.kind != "goto":

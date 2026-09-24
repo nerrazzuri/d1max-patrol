@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -76,6 +77,9 @@ class AgentRuntime:
         self._last_status_wire: dict | None = None
         self._next_telemetry_ms: int | None = None
         self._started = False
+        #: 命令按到达顺序串行处理:QoS 1 的重复可能几乎同时到,处理里一旦有 await,两条都会
+        #: 先通过幂等查询。
+        self._cmd_lock = asyncio.Lock()
 
     # ------------------------------------------------------------ 合成
 
@@ -106,8 +110,10 @@ class AgentRuntime:
             qos=1, retain=True)
         self.transport.on_connection(self._on_connection)
         self._started = True
-        await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
+        # **先登记 cmd 的 handler,再连接。** 持久会话在 CONNACK 后立刻补投离线命令;handler
+        # 要等连上才登记的话,进程重启期间站点派的 abort 会在无人接收时被投掉、永久丢失。
         await self.transport.subscribe(self.topics.cmd, self._on_cmd, qos=1)
+        await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
         await self.transport.publish(self.topics.capabilities, _dumps(compose_capabilities(
             robot_id=self.registration.robot_id, hal_caps=self.hal.hal_capabilities(),
             adapter_id=self.adapter_id, loaded_map=self.loaded_map).to_wire()),
@@ -151,12 +157,13 @@ class AgentRuntime:
         except (ValueError, UnicodeDecodeError) as exc:
             log.warning("cmd 报文不是 JSON,丢弃: %s", exc)
             return
-        if self._reconnect_pending and self.transport.connected:
-            # 真 broker 下离线补投的 cmd 可能比我们的重连收尾先到:reconcile 必须是第一条。
-            await self._flush_reconnect()
-        ack = await self.processor.handle(wire, m.topic)
-        await self.transport.publish(self.topics.ack, _dumps(ack.to_wire()), qos=1)
-        await self._publish_status()
+        async with self._cmd_lock:
+            if self._reconnect_pending and self.transport.connected:
+                # 真 broker 下离线补投的 cmd 可能比我们的重连收尾先到:reconcile 必须是第一条。
+                await self._flush_reconnect()
+            ack = await self.processor.handle(wire, m.topic)
+            await self.transport.publish(self.topics.ack, _dumps(ack.to_wire()), qos=1)
+            await self._publish_status()
 
     # ------------------------------------------------------------ 每拍
 

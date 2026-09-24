@@ -71,8 +71,11 @@ class PahoTransport:
             await asyncio.get_running_loop().run_in_executor(None, info.wait_for_publish, 10)
 
     async def subscribe(self, topic_filter: str, handler: Handler, *, qos: int = 1) -> None:
+        """可以在连接前登记:handler 先在名单里,CONNACK 后 broker 补投的离线命令才有人接。
+        真正的 SUBSCRIBE 在 ``_on_connect`` 里统一发(重连也重发)。"""
         self._subs.append((topic_filter, qos, handler))
-        self._client.subscribe(topic_filter, qos=qos)
+        if self._connected:
+            self._client.subscribe(topic_filter, qos=qos)
 
     # ------------------------------------------------------------ paho 线程里的回调
 

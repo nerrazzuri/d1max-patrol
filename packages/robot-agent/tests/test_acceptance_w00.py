@@ -202,3 +202,27 @@ async def test_过期命令被拒_地图不符被拒(台):
     ack = await t.site.send(cmd, timeout_s=1.0)
     assert ack.result is AckResult.REJECTED and ack.reason == "map_mismatch"
     assert math.isclose((await t.dog.odometry()).x, 0.0)
+
+
+async def test_代理崩了再起_断线期间的abort不丢(台):
+    """进程重启(新 boot_id、新 transport 对象、同一 client_id)期间站点派的 abort 必须在
+    新进程连上后被处理一次;这是 QoS 1 + 持久会话对站点的承诺。"""
+    t = 台
+    cmd = _goto(t.site, 6.0, 0.0, epoch=1)
+    assert (await t.site.send(cmd, timeout_s=1.0)).result is AckResult.ACCEPTED
+    await t.run(5)
+    t.broker.disconnect("dog")                                # 崩了,没有 close()
+    await t.broker.drain()
+    abort_cmd = t.site.new_command("abort", {"reason": "operator"}, ttl_ms=60_000,
+                                   control_epoch=1, task_id=cmd.task_id)
+    abort_task = asyncio.create_task(t.site.send(abort_cmd, timeout_s=5.0))
+    await asyncio.sleep(0)
+    await t.broker.drain()
+    assert not abort_task.done()
+    t.dog = SimRobot(now_ms=t.clock)
+    await t.start_agent("boot-2")                             # 新进程
+    ack = await abort_task
+    # 新进程里那个任务已经不存在(任务不跨进程),所以 abort 被明确拒绝 —— 但**被处理了**,
+    # 站点拿到的是回执,不是永远等不到。
+    assert ack.result is AckResult.REJECTED and ack.reason == "no_such_task"
+    assert len([a for a in t.site.acks if a.command_id == abort_cmd.command_id]) == 1
