@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d1max-adapter-sim"
+version = "0.1.0"
+description = "RobotHAL 的假实现:平面运动学,代理与站点的测试全靠它"
+requires-python = ">=3.10"
+dependencies = ["d1max-contract"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
