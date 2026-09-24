@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -56,10 +57,16 @@ class DispatchClient:
         self._event_cbs: list[Callable[[Event], None]] = []
         self._reconcile_cbs: list[Callable[[Reconcile], None]] = []
         self._status_cbs: list[Callable[[Status], None]] = []
+        self._ack_cbs: list[Callable[[Ack], None]] = []
         self.status: Status | None = None
+        #: 最近一次收到**实时**(非 retained)status 的时刻,用**本端**的钟。新鲜度按它算,
+        #: 不按狗填的 ``last_seen``:狗的钟可能是错的(Orin 现场就错过)。retained 的那份
+        #: 可能是很久以前留下的,不算。
+        self.status_live_at: int | None = None
         self.capabilities: Capabilities | None = None
         self.reconcile: Reconcile | None = None
-        self.acks: list[Ack] = []
+        #: 最近的回执(有上限:站点是长跑进程)。
+        self.acks: deque[Ack] = deque(maxlen=1000)
 
     async def start(self) -> None:
         await self._t.connect()
@@ -112,6 +119,10 @@ class DispatchClient:
     def on_status(self, cb: Callable[[Status], None]) -> None:
         self._status_cbs.append(cb)
 
+    def on_ack(self, cb: Callable[[Ack], None]) -> None:
+        """每条回执都回调,包括等的人已经超时走了之后才到的那条。"""
+        self._ack_cbs.append(cb)
+
     async def _on_ack(self, m: Message) -> None:
         d = _decode(m.payload, "ack")
         if d is None:
@@ -125,6 +136,8 @@ class DispatchClient:
         fut = self._waiters.get(ack.command_id)
         if fut is not None and not fut.done():
             fut.set_result(ack)
+        for cb in list(self._ack_cbs):
+            cb(ack)
 
     async def _on_event(self, m: Message) -> None:
         d = _decode(m.payload, "event")
@@ -151,6 +164,8 @@ class DispatchClient:
         except ContractError as exc:
             log.warning("status 不合契约,丢弃: %s", exc)
             return
+        if not m.retain:
+            self.status_live_at = self._now()
         for cb in list(self._status_cbs):
             cb(self.status)
 

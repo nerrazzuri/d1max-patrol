@@ -79,3 +79,68 @@ def test_注销(acc):
     tok = a.login("alice", "correct-horse-battery")
     a.logout(tok)
     assert a.check(tok) is None
+
+
+def test_并发猜口令也只放过限额那么多次(acc):
+    """锁要在算哈希之前占位:先算完再记失败的话,40 个并发请求能猜 30 多次。"""
+    import threading
+    a, _, _ = acc
+    got: list[str] = []
+    lock = threading.Lock()
+
+    def guess():
+        try:
+            a.login("alice", "wrong-wrong-wrong")
+            r = "ok"
+        except LockedOut:
+            r = "locked"
+        except AuthError:
+            r = "wrong"
+        with lock:
+            got.append(r)
+
+    ts = [threading.Thread(target=guess) for _ in range(40)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(60)
+    assert got.count("wrong") <= 5, got.count("wrong")
+    assert got.count("locked") >= 35
+
+
+def test_同时算scrypt的不超过上限(acc, monkeypatch):
+    """scrypt 每次约 16 MiB:不限并发的话,未登录的人发一堆并发登录就能把内存吃光。"""
+    import threading
+    import time
+
+    import d1max_site.accounts as mod
+    a, _, _ = acc
+    now = {"n": 0, "max": 0}
+    lk = threading.Lock()
+    real = mod._hash
+
+    def 慢(pw, salt):
+        with lk:
+            now["n"] += 1
+            now["max"] = max(now["max"], now["n"])
+        time.sleep(0.05)
+        try:
+            return real(pw, salt)
+        finally:
+            with lk:
+                now["n"] -= 1
+
+    monkeypatch.setattr(mod, "_hash", 慢)
+    ts = [threading.Thread(target=lambda i=i: _try(a, f"user{i}")) for i in range(16)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(60)
+    assert 1 <= now["max"] <= mod.MAX_CONCURRENT_HASH
+
+
+def _try(a, name):
+    try:
+        a.login(name, "whatever-whatever")
+    except AuthError:
+        pass

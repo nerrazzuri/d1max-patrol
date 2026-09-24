@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -180,8 +181,9 @@ class CommandProcessor:
             return f"payload: target 不成形: {exc}"
         speed = cmd.payload.get("max_speed_mps", None)
         if speed is not None and (isinstance(speed, bool) or not isinstance(speed, (int, float))
-                                  or speed <= 0):
-            return "payload: max_speed_mps 要是正数"
+                                  or not math.isfinite(speed) or speed <= 0):
+            # isfinite:json 认 NaN/Infinity,而 NaN <= 0 为假。
+            return "payload: max_speed_mps 要是正的有限数"
         if self.loaded_map is None or (target.map_id, target.map_version) != self.loaded_map:
             return "map_mismatch"
         return ""

@@ -288,3 +288,11 @@ def test_代次落盘是原子写(tmp_path):
     from d1max_agent import commands
     src = inspect.getsource(commands.CommandProcessor._save_epoch)
     assert "os.replace" in src, "写一半掉电会让代次倒退成 0"
+
+
+async def test_限速是NaN或无穷_拒收(cp):
+    """json.loads 认 NaN/Infinity;NaN <= 0 为假,只查「正数」会放它过去一路到 set_speed。"""
+    for i, bad in enumerate((float("nan"), float("inf"))):
+        ack = await cp.handle(_cmd(cid=f"n{i}", payload={"target": POSE.to_wire(),
+                                                         "max_speed_mps": bad}).to_wire(), TOPIC)
+        assert ack.result is AckResult.REJECTED and ack.reason.startswith("payload"), bad

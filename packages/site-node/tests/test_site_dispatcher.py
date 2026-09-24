@@ -214,15 +214,99 @@ async def test_sync_robots把命令行新登记的狗挂上_吊销的不挂(台)
     assert await t.site.sync_robots() == []
 
 
-async def test_关了之后到的上行报文不落库也不炸(台, caplog):
-    import logging
+async def test_关了之后到的上行报文不落库也不炸(台):
+    """Paho 的回调是 call_soon_threadsafe 投回循环的:close() 之后还可能有排着队的上行
+    回调跑起来,那时库已经关了。直接投一份,确认既不落库也不抛。"""
+    import json as _json
+
+    from d1max_contract.messages import Ack, AckResult, Event
     t = 台
+    await t.run(5)
+    st = t.site.clients["A"].status
     await t.site.close()
     t.db.close()
-    with caplog.at_level(logging.ERROR):
-        await t.agent.close()                  # offline status 在路上
-        await t.broker.drain()
-    assert not [r for r in caplog.records if "时炸了" in r.getMessage()], \
-        "broker 会吞掉 handler 的异常,只在日志里看得出来"
+    t.site._on_status("A", st)
+    t.site._on_event("A", Event(event_id="e", seq=999, boot_id="b", stamp=1, kind="x",
+                                data={}))
+    t.site._record_ack(Ack(command_id="c", task_id="t", result=AckResult.ACCEPTED))
+    assert _json                                             # 只为别让 import 被当成没用
+    await t.agent.close()
+    await t.broker.drain()
     t.agent = None
     t.db = SiteDB(t.tmp / "site2.db")           # 夹具收尾要关一个库
+
+
+
+async def test_新鲜度看站点收到的时刻_不看狗的钟(tmp_path):
+    """Orin 的钟是错的(现场记录)。狗的钟慢 10 分钟,站点照样能派;
+    last_seen 是狗填的,拿站点的钟减它会误判。"""
+    t = 台子(tmp_path)
+    await t.site.start()
+    from d1max_contract.registration import Registration
+    reg = Registration(site_id=SITE, robot_id="A", credential_fingerprint="sha256:a",
+                       issued_at=0, expires_at=10**14)
+    dog_clock = lambda: t.clock() - 600_000                      # noqa: E731
+    t.dog = SimRobot(now_ms=dog_clock, max_vx=1.0, max_wz=1.5, stop_latency_s=0.2)
+    t.agent = AgentRuntime(transport=MemoryTransport(t.broker, "dogA"), registration=reg,
+                           hal=t.dog, store_dir=tmp_path / "agent", now_ms=dog_clock,
+                           loaded_map=MAP, boot_id="boot-1", home=Pose.from_xy_yaw(0.0, 0.0),
+                           monotonic=lambda: t.clock.mono)
+    await t.agent.start()
+    await t.broker.drain()
+    r = await t.send(t.site.goto("A", target(0.5), 0.8, issued_by="alice"))
+    assert r["ack"]["result"] in ("accepted", "expired"), r
+    assert t.site.robot_view("A")["fresh"] is True
+    await t.close()
+
+
+async def test_回执超时记timeout_晚到的回执再补上(tmp_path):
+    """狗收到了、但回执晚于超时:站点给人回 504,库里不能是空的;回执到了要补上。"""
+    import json as _json
+
+    from d1max_contract.dispatch import DispatchTimeout
+    from d1max_contract.messages import Ack, AckResult, Ready, Status
+    from d1max_contract.topics import Topics
+    t = 台子(tmp_path)
+    t.site.ack_timeout_s = 0.05
+    await t.site.start()
+    ta = Topics(site_id=SITE, robot_id="A")
+    fake = MemoryTransport(t.broker, "fakeA")
+    await fake.connect()
+    st = Status(online=True, boot_id="b", ready=Ready(True, True, True, True), control_epoch=1,
+                last_seen=t.clock(), task=None)
+    await fake.publish(ta.status, _json.dumps(st.to_wire()).encode(), qos=1)
+    await t.broker.drain()
+    with pytest.raises(DispatchTimeout):
+        await t.site.goto("A", target(0.5), 0.8, issued_by="alice")
+    row = t.site.commands("A")[0]
+    assert row["ack_result"] == "timeout"
+    ack = Ack(command_id=row["command_id"], task_id=row["task_id"], result=AckResult.ACCEPTED)
+    await fake.publish(ta.ack, _json.dumps(ack.to_wire()).encode(), qos=1)
+    await t.broker.drain()
+    assert t.site.commands("A")[0]["ack_result"] == "accepted"
+    await t.site.close()
+    t.db.close()
+
+
+async def test_重复事件不重复推给订阅者(台):
+    t = 台
+    import json as _json
+
+    from d1max_contract.messages import Event
+    await t.send(t.site.goto("A", target(0.3), 0.8, issued_by="alice"))
+    await t.run(40)
+    row = t.db.query("SELECT * FROM events LIMIT 1")[0]
+    sub = t.site.feed.subscribe()
+    dup = Event(event_id=row["event_id"], seq=row["seq"], boot_id=row["boot_id"],
+                stamp=row["stamp"], kind=row["kind"], data=_json.loads(row["data"]))
+    t.site._on_event("A", dup)
+    assert sub.get(0) is None
+
+
+async def test_订阅者跟不上_清掉积压再给快照(台):
+    t = 台
+    sub = t.site.feed.subscribe()
+    for i in range(1100):
+        t.site.feed.publish({"kind": "x", "i": i})
+    assert sub.lagged
+    assert sub.drain() == 1000 and sub.get(0) is None

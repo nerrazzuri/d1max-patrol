@@ -4,7 +4,10 @@
 - 口令:``hashlib.scrypt``(n=2^14, r=8, p=1),每个账号 16 字节随机盐;比较用常数时间。
   不存在的账号也照算一次哈希,不让响应时间泄露「有没有这个人」。
 - 令牌:32 字节随机数,库里只存它的 sha256;闲置 30 分钟、绝对 12 小时过期。
-- 限流:同一账号名 5 分钟内错 5 次,锁 5 分钟(内存里记,站点重启清零)。
+- 限流:同一账号名 5 分钟内试 5 次没成,锁 5 分钟(内存里记,站点重启清零)。**每次尝试在算哈希
+  之前就在锁里占位**:先算完再记失败的话,并发请求能在计数追上之前猜几十次。
+- 同时在算的 scrypt 不超过 ``MAX_CONCURRENT_HASH`` 个:每次约 16 MiB,不限的话未登录的人
+  发一堆并发登录就能吃光内存。
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ FAIL_WINDOW_MS = 5 * 60_000
 FAIL_LIMIT = 5
 LOCK_MS = 5 * 60_000
 MIN_PASSWORD = 10
+MAX_CONCURRENT_HASH = 4
 _NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DUMMY_SALT = b"\0" * 16
 
@@ -54,6 +58,7 @@ class Accounts:
         self._fails: dict[str, list[int]] = {}
         self._locked_until: dict[str, int] = {}
         self._lock = threading.Lock()
+        self._hash_slots = threading.BoundedSemaphore(MAX_CONCURRENT_HASH)
 
     # ------------------------------------------------------------ 账号
 
@@ -81,20 +86,24 @@ class Accounts:
             until = self._locked_until.get(name, 0)
             if now < until:
                 raise LockedOut(f"错太多次了,{(until - now) // 1000 + 1} 秒后再试")
+            # 先占位再算:这次尝试立刻计数,并发的第 FAIL_LIMIT+1 个请求直接被锁。
+            recent = [t for t in self._fails.get(name, []) if now - t < FAIL_WINDOW_MS]
+            recent.append(now)
+            self._fails[name] = recent
+            if len(recent) >= FAIL_LIMIT:
+                self._locked_until[name] = now + LOCK_MS
+                self._fails[name] = []
         rows = self.db.query("SELECT salt, pw_hash FROM accounts WHERE name=?", (name,))
         salt, stored = (rows[0]["salt"], rows[0]["pw_hash"]) if rows else (_DUMMY_SALT, b"")
-        ok = hmac.compare_digest(_hash(password or "", salt), stored) and bool(rows)
+        with self._hash_slots:
+            digest = _hash(password or "", salt)
+        ok = hmac.compare_digest(digest, stored) and bool(rows)
         if not ok:
-            with self._lock:
-                recent = [t for t in self._fails.get(name, []) if now - t < FAIL_WINDOW_MS]
-                recent.append(now)
-                self._fails[name] = recent
-                if len(recent) >= FAIL_LIMIT:
-                    self._locked_until[name] = now + LOCK_MS
-                    self._fails[name] = []
             raise AuthError("账号或口令不对")
         with self._lock:
+            # 成功:这个名字的失败计数与锁都清掉(占位的那次也算不上失败)。
             self._fails.pop(name, None)
+            self._locked_until.pop(name, None)
         token = secrets.token_urlsafe(32)
         with self.db.tx() as c:
             c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "

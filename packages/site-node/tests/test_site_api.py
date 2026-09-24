@@ -222,3 +222,84 @@ def test_绑非本机地址不带TLS拒绝启动(站点):
     with pytest.raises(SystemExit):
         SiteApi(host="0.0.0.0", port=0, loop=站点.loop, dispatcher=站点.disp,
                 accounts=站点.accounts)
+
+
+def _raw(api, data: bytes, read_timeout: float = 5.0) -> bytes:
+    import socket
+    host, port = api.httpd.server_address[:2]
+    s = socket.create_connection((host, port), timeout=read_timeout)
+    try:
+        s.sendall(data)
+        out = b""
+        while True:
+            try:
+                chunk = s.recv(65536)
+            except TimeoutError:
+                return out + b"<timeout>"
+            if not chunk:
+                return out
+            out += chunk
+            if b"\r\n\r\n" in out and b"Content-Length" in out:
+                head, _, body = out.partition(b"\r\n\r\n")
+                n = int(head.split(b"Content-Length: ")[1].split(b"\r\n")[0])
+                if len(body) >= n:
+                    return out
+    finally:
+        s.close()
+
+
+def test_负的Content_Length_立刻400_不读到EOF(站点):
+    out = _raw(站点.api, b"POST /api/login HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n"
+               + b"x" * 100_000, read_timeout=5.0)
+    assert out.startswith(b"HTTP/1.1 400"), out[:200]
+
+
+def test_慢客户端到点被断开(站点):
+    api = SiteApi(host="127.0.0.1", port=0, loop=站点.loop, dispatcher=站点.disp,
+                  accounts=站点.accounts, request_timeout_s=1.0)
+    api.start()
+    try:
+        t0 = time.monotonic()
+        out = _raw(api, b"POST /api/login HTTP/1.1\r\nHost: x\r\n", read_timeout=10.0)
+        assert b"<timeout>" not in out and time.monotonic() - t0 < 5.0
+    finally:
+        api.stop()
+
+
+def test_限速NaN或无穷_400(站点):
+    tok = 站点.login()
+    for bad in (b"NaN", b"Infinity"):
+        body = b'{"target": ' + json.dumps(target(1.0)).encode() + b', "max_speed_mps": ' \
+            + bad + b"}"
+        code, _ = 站点.req("POST", "/api/robots/A/goto", raw=body, token=tok)
+        assert code == 400, bad
+
+
+def test_URL里的robot_id要解码_怪字符404(站点):
+    tok = 站点.login()
+    assert 站点.req("GET", "/api/robots/%41", token=tok)[0] == 200      # %41 = A
+    assert 站点.req("GET", "/api/robots/a%09b", token=tok)[0] == 404
+
+
+def test_注销之后SSE也断(站点):
+    import http.client
+    api = SiteApi(host="127.0.0.1", port=0, loop=站点.loop, dispatcher=站点.disp,
+                  accounts=站点.accounts, sse_recheck_s=0.5)
+    api.start()
+    try:
+        tok = 站点.login()
+        host, port = api.httpd.server_address[:2]
+        conn = http.client.HTTPConnection(host, port, timeout=10)
+        conn.request("GET", "/api/events", headers={"Authorization": f"Bearer {tok}"})
+        resp = conn.getresponse()
+        assert resp.fp.readline().startswith(b"data: ")
+        站点.req("POST", "/api/logout", {}, token=tok)
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 8:
+            line = resp.fp.readline()
+            if not line:
+                break
+        assert not line, "注销之后 SSE 还开着"
+        conn.close()
+    finally:
+        api.stop()

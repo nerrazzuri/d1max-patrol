@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import ssl
 import threading
@@ -29,9 +30,11 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from d1max_contract.dispatch import DispatchTimeout
 from d1max_site.accounts import Accounts, AuthError, LockedOut
+from d1max_site.ca import SAFE_ID
 from d1max_site.dispatcher import Dispatcher, DispatchRefused
 from d1max_site.loop import LoopThread
 
@@ -39,6 +42,8 @@ log = logging.getLogger(__name__)
 
 MAX_BODY = 64 * 1024
 SSE_HEARTBEAT_S = 15.0
+#: 一个请求(含读请求头)多久没动静就断:慢速攻击(slowloris)不能一直占着线程。
+REQUEST_TIMEOUT_S = 30.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort))?$")
 
@@ -58,8 +63,12 @@ def check_exposure(host: str, tls: tuple[Path, Path] | None) -> None:
 
 class SiteApi:
     def __init__(self, *, host: str, port: int, loop: LoopThread, dispatcher: Dispatcher,
-                 accounts: Accounts, tls: tuple[Path, Path] | None = None) -> None:
+                 accounts: Accounts, tls: tuple[Path, Path] | None = None,
+                 request_timeout_s: float = REQUEST_TIMEOUT_S,
+                 sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
         check_exposure(host, tls)
+        #: SSE 长连多久重查一次令牌:注销、过期之后流要断。
+        self.sse_recheck_s = sse_recheck_s
         self.loop = loop
         self.dispatcher = dispatcher
         self.accounts = accounts
@@ -68,6 +77,7 @@ class SiteApi:
 
         class Handler(_Handler):
             site = api
+            timeout = request_timeout_s          # StreamRequestHandler:套接字超时
 
         self.httpd = ThreadingHTTPServer((host, port), Handler)
         self.httpd.daemon_threads = True
@@ -141,6 +151,8 @@ class _Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError as exc:
             raise HttpError(400, "Content-Length 不是数") from exc
+        if n < 0:
+            raise HttpError(400, "Content-Length 不能是负的")
         if n > MAX_BODY:
             raise HttpError(413, f"请求体超过 {MAX_BODY} 字节")
         raw = self.rfile.read(n) if n else b"{}"
@@ -177,7 +189,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._sse()
             m = _ROBOT.match(path)
             if m is not None:
-                return self._robot(method, m.group(1), m.group(2), user)
+                robot_id = unquote(m.group(1))
+                if not SAFE_ID.match(robot_id):
+                    raise HttpError(404, "没有这台狗")
+                return self._robot(method, robot_id, m.group(2), user)
             raise HttpError(404, f"没有 {method} {path}")
         except HttpError as exc:
             self.close_connection = True          # 请求体可能没读完(413),连接不能复用
@@ -224,8 +239,9 @@ class _Handler(BaseHTTPRequestHandler):
         if action == "goto":
             speed = d.get("max_speed_mps")
             if speed is not None and (isinstance(speed, bool)
-                                      or not isinstance(speed, (int, float)) or speed <= 0):
-                raise HttpError(400, "max_speed_mps 要是正数")
+                                      or not isinstance(speed, (int, float))
+                                      or not math.isfinite(speed) or speed <= 0):
+                raise HttpError(400, "max_speed_mps 要是正的有限数")
             prio = d.get("priority", 0)
             if isinstance(prio, bool) or not isinstance(prio, int):
                 raise HttpError(400, "priority 要是整数")
@@ -250,16 +266,25 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+        token = self._token()
         try:
             self._frame(self.site.snapshot())
-            idle = 0.0
+            idle = since_check = 0.0
             while not self.site.stopping:
-                item = sub.get(timeout=1.0)          # 1 s 醒一次:站点停的时候别挂着
+                if since_check >= self.site.sse_recheck_s:
+                    since_check = 0.0
+                    if self.site.accounts.check(token) is None:
+                        break                        # 注销或过期了:流跟着断
+                tick = min(1.0, self.site.sse_recheck_s)
+                item = sub.get(timeout=tick)          # 常醒:站点停、令牌失效时别挂着
+                since_check += tick
                 if sub.lagged:
                     sub.lagged = False
+                    sub.drain()                      # 先清积压,快照之后不再推旧的
                     self._frame(self.site.snapshot())
+                    continue
                 if item is None:
-                    idle += 1.0
+                    idle += tick
                     if idle >= SSE_HEARTBEAT_S:
                         idle = 0.0
                         self.wfile.write(b": keepalive\n\n")

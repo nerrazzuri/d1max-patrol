@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -25,9 +26,29 @@ from d1max_contract.topics import Topics
 
 DAY_MS = 86_400_000
 
+#: 站点这边对 robot_id 比契约更严:它要进证书 CN、openssl 的 index.txt(制表符分隔)、
+#: broker 的用户名与 ACL 的 %u。只许 ASCII 字母数字与 . _ -。
+SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+#: 主机名或 IP(IPv6 带冒号)。逗号、换行会注入到 SAN 扩展文件里。
+_SAFE_HOST = re.compile(r"^[A-Za-z0-9.:-]{1,253}$")
+#: 站点证书总带上本机:``serve`` 默认连 ``mqtts://127.0.0.1``,主机名校验要过。
+LOCAL_NAMES = ("127.0.0.1", "localhost")
+
 
 class CAError(RuntimeError):
     """CA 操作失败(openssl 报错、状态不对、名字不合规矩)。"""
+
+
+def check_robot_id(site_id: str, robot_id: str) -> None:
+    """站点侧的 robot_id 规矩:白名单字符 + 契约的主题规矩 + 不许是站点保留名。"""
+    if not isinstance(robot_id, str) or not SAFE_ID.match(robot_id):
+        raise CAError(f"robot_id 只许 ASCII 字母、数字、. _ -,1–64 个字符: {robot_id!r}")
+    try:
+        Topics(site_id=site_id, robot_id=robot_id)
+    except ContractError as exc:
+        raise CAError(f"robot_id 不合规矩: {exc}") from exc
+    if robot_id.startswith("site:"):
+        raise CAError(f"robot_id {robot_id!r} 是站点的保留名")
 
 
 def site_principal(site_id: str) -> str:
@@ -136,7 +157,8 @@ class SiteCA:
     # ------------------------------------------------------------ 初始化
 
     def init(self, site_id: str, *, days: int = 3650) -> None:
-        Topics(site_id=site_id, robot_id="x")                  # site_id 过主题规矩
+        if not SAFE_ID.match(site_id or ""):
+            raise CAError(f"site_id 只许 ASCII 字母、数字、. _ -: {site_id!r}")
         if self.ca_cert.exists() or self.ca_key.exists():
             raise CAError(f"{self.root} 已经有 CA 了,不覆盖(换 CA 等于让所有狗失联)")
         self.root.mkdir(parents=True, exist_ok=True)
@@ -187,12 +209,7 @@ class SiteCA:
 
     def issue_robot(self, robot_id: str, *, days: int, now_ms: int) -> RobotBundle:
         site_id = self.site_id
-        try:
-            Topics(site_id=site_id, robot_id=robot_id)
-        except ContractError as exc:
-            raise CAError(f"robot_id 不合规矩: {exc}") from exc
-        if robot_id == site_principal(site_id) or robot_id.startswith("site:"):
-            raise CAError(f"robot_id {robot_id!r} 是站点的保留名")
+        check_robot_id(site_id, robot_id)
         if robot_id in self._valid_subjects():
             raise CAError(f"{robot_id} 已有一张有效证书;先 revoke 再重签")
         d = self.robot_dir(robot_id)
@@ -213,10 +230,13 @@ class SiteCA:
         """站点服务证书:broker 的服务端证书,也是站点连 broker 的客户端证书。"""
         if not hostnames:
             raise CAError("站点证书至少要一个主机名或 IP")
+        for h in hostnames:
+            if not isinstance(h, str) or not _SAFE_HOST.match(h):
+                raise CAError(f"主机名只许字母、数字、. : -: {h!r}")
         d = self.root / "server"
         d.mkdir(exist_ok=True)
         san = []
-        for h in hostnames:
+        for h in dict.fromkeys([*hostnames, *LOCAL_NAMES]):     # 去重、保序
             is_ip = all(p.isdigit() for p in h.split(".")) and h.count(".") == 3
             san.append(f"IP:{h}" if is_ip or ":" in h else f"DNS:{h}")
         ext = d / "server_ext.cnf"

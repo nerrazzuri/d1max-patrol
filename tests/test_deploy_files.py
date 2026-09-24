@@ -1399,6 +1399,9 @@ def test_站点两个单元的形状():
         段 = _按段(u)
         assert "StartLimitIntervalSec" in 段["[Unit]"] and "ConditionPathExists" in 段["[Unit]"]
         assert "User=d1max-site" in u and "Restart=always" in u
+        for k in ("NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=yes",
+                  "PrivateTmp=yes", "ReadWritePaths=/var/lib/d1max-site"):
+            assert k in 段["[Service]"] or k in u, k
     assert "ExecStart=/usr/sbin/mosquitto -c /var/lib/d1max-site/broker/mosquitto.conf" in m
     assert "d1max-site --home /var/lib/d1max-site serve" in s
     assert "After=network-online.target d1max-mosquitto.service" in s
@@ -1410,6 +1413,7 @@ def test_站点安装脚本不碰狗_狗的安装脚本不碰站点():
     assert "d1max-site" not in dog and "site-node" not in dog and "mosquitto" not in dog
     assert "d1max-agent" not in site and "robot-agent" not in site
     assert "set -euo pipefail" in site
+    assert site.index("apt-get update") < site.index("apt-get install"), "新机器不 update 装不上"
     assert "enable --now d1max-mosquitto.service d1max-site.service" in site
     assert 'if [[ ! -f "$HOME_DIR/site.json" ]]' in site, "重跑不许重建 CA"
     assert 'packages/contract[mqtt]" "$PKG/packages/site-node"' in site

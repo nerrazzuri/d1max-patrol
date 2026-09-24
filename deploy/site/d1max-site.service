@@ -11,6 +11,12 @@ User=d1max-site
 Environment=PYTHONUNBUFFERED=1
 # 绑到局域网:站点 API 走 HTTPS(站点服务证书),口令不明文过网。连不上 broker 退 1,5 秒后重起。
 ExecStart=/opt/d1max-site/venv/bin/d1max-site --home /var/lib/d1max-site serve --api-host 0.0.0.0 --api-port 8443
+# 收紧:只许写站点目录;看不到 /home;不能提权。
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/d1max-site
 Restart=always
 RestartSec=5
 

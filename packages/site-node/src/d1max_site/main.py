@@ -62,9 +62,20 @@ def _load(home: Path) -> dict:
 # ------------------------------------------------------------ 子命令
 
 
+def _check_owner(home: Path) -> None:
+    """命令行必须以站点目录的属主跑(安装脚本里是 d1max-site)。root 跑的话,重写出来的
+    CRL、数据库都成了 root 的 0600,以 d1max-site 跑的 broker 与站点进程重启后读不了。"""
+    if home.exists() and os.geteuid() != home.stat().st_uid:
+        raise SiteError(f"要以 {home} 的属主跑(uid {home.stat().st_uid}),比如 "
+                        f"sudo -u d1max-site d1max-site …;现在是 uid {os.geteuid()}")
+
+
 def cmd_init(home: Path, site_id: str, hostnames: list[str], broker_port: int) -> None:
     if (home / "site.json").exists():
         raise SiteError(f"{home} 已经 init 过了")
+    if (home / "ca").exists():
+        raise SiteError(f"{home} 里有上一次 init 没做完留下的 ca/(没有 site.json)。确认这个站点"
+                        f"还没给任何狗签过证书之后,删掉 {home}/ca 再 init;签过的话别删,找人处理")
     home.mkdir(parents=True, exist_ok=True)
     os.chmod(home, 0o750)
     ca = SiteCA(home / "ca")
@@ -102,13 +113,24 @@ def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
 
 
 def cmd_revoke(home: Path, robot_id: str) -> None:
+    """注册表与 CA 各吊销各的:注册表先(派遣器立刻不再派单),CA 后(进 CRL)。任一边没有
+    这台狗都不拦另一边 —— enroll 半路失败会留下「有证书没登记」的狗,也得能吊销。"""
     cfg = _load(home)
     db = SiteDB(home / "site.db")
+    errors = []
     try:
-        Registry(db, site_id=cfg["site_id"]).revoke(robot_id)   # 先断派单
-        SiteCA(home / "ca").revoke(robot_id)                    # 再进 CRL
+        try:
+            Registry(db, site_id=cfg["site_id"]).revoke(robot_id)
+        except RegistryError as exc:
+            errors.append(str(exc))
+        try:
+            SiteCA(home / "ca").revoke(robot_id)
+        except CAError as exc:
+            errors.append(str(exc))
     finally:
         db.close()
+    if len(errors) == 2:
+        raise SiteError("; ".join(errors))
 
 
 def cmd_add_admin(home: Path, name: str, password: str) -> None:
@@ -232,6 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     home: Path = args.home
     try:
+        _check_owner(home)
         if args.cmd == "init":
             cmd_init(home, args.site_id, args.hostname, args.broker_port)
             print(f"站点目录建好了: {home}")

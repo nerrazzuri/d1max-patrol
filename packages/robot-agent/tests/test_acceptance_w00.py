@@ -143,7 +143,7 @@ async def test_W00_验收流程(台):
     await t.agent.transport.connect()
     await broker.drain()
     rc = t.reconciles[n_rc]
-    assert site.acks[n_acks:] , "重连后排队的两条命令才被处理"
+    assert list(site.acks)[n_acks:], "重连后排队的两条命令才被处理"
     assert rc.boot_id == "boot-1" and rc.task.task_id == cmd.task_id
     assert rc.task.state is TaskState.RUNNING
     assert rc.unacked_from_seq >= 1 and rc.unacked_to_seq >= rc.unacked_from_seq

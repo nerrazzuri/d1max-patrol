@@ -89,3 +89,22 @@ def test_没吊销就重签同一台_拒绝(ca):
     ca.revoke("D1MAX-001")
     b2 = ca.issue_robot("D1MAX-001", days=30, now_ms=NOW)          # 吊销后可以重签
     assert b2.fingerprint
+
+
+def test_站点证书总带本机地址_站点自己连127001不会被主机名校验挡住(ca):
+    """serve 默认连 mqtts://127.0.0.1;安装示例只给了局域网名字与 IP。"""
+    crt, _ = ca.issue_server(["site.local"])
+    san = _ossl("x509", "-in", str(crt), "-noout", "-ext", "subjectAltName").stdout
+    assert "DNS:site.local" in san and "IP Address:127.0.0.1" in san and "DNS:localhost" in san
+
+
+def test_robot_id只许安全字符(ca):
+    for bad in ("a\tb", "a\nb", "a\\b", "CN=x", "狗1", "a" * 65, "a,b"):
+        with pytest.raises(CAError):
+            ca.issue_robot(bad, days=1, now_ms=NOW)
+
+
+def test_主机名里有逗号换行_拒绝(ca):
+    for bad in ("a,DNS:evil", "a\nb", "a b", ""):
+        with pytest.raises(CAError):
+            ca.issue_server([bad])

@@ -30,6 +30,7 @@ done
   echo "用法: install-site.sh --site-id <id> --hostname <名字或IP> [--hostname …]" >&2; exit 2; }
 
 echo "[1/5] 系统包"
+apt-get update
 apt-get install -y mosquitto openssl python3-venv
 # 发行版自带的 mosquitto 实例我们不用(配置冲突、多开一个端口),停掉;我们跑自己的单元。
 systemctl disable --now mosquitto.service 2>/dev/null || true

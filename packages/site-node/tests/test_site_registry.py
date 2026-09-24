@@ -63,3 +63,9 @@ def test_control_epoch默认1_持久(reg, tmp_path):
 def test_吊销不存在的狗报错(reg):
     with pytest.raises(RegistryError):
         reg.revoke("ghost")
+
+
+def test_注册表也只认安全字符(reg):
+    for bad in ("a\tb", "a=b", "狗", "a" * 65):
+        with pytest.raises(RegistryError):
+            reg.enroll(bad, fingerprint="sha256:x", issued_at=T0, expires_at=T0 + 1)

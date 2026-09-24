@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from d1max_contract.dispatch import DispatchClient
+from d1max_contract.dispatch import DispatchClient, DispatchTimeout
 from d1max_contract.errors import ContractError
 from d1max_contract.messages import Ack, Event, MapPose, Reconcile, Status
 from d1max_contract.topics import Topics
@@ -26,7 +26,8 @@ from d1max_site.registry import Registry
 
 log = logging.getLogger(__name__)
 
-#: status 多久没刷新就算不新鲜。代理空闲时每 30 s 刷一次 last_seen。
+#: 多久没收到**实时** status 就算不新鲜(按站点自己的钟,见 ``DispatchClient.status_live_at``)。
+#: 代理空闲时每 30 s 发一次 status。
 STALE_MS = 90_000
 COMMAND_TTL_MS = 60_000
 
@@ -51,6 +52,17 @@ class FeedSub:
             return self.q.get(timeout=timeout)
         except queue.Empty:
             return None
+
+    def drain(self) -> int:
+        """清掉积压。跟不上之后先清再给全量快照:不然快照之后还会把旧的推一遍,把
+        客户端的状态往回倒。返回清掉的条数。"""
+        n = 0
+        while True:
+            try:
+                self.q.get_nowait()
+            except queue.Empty:
+                return n
+            n += 1
 
 
 class Feed:
@@ -132,6 +144,7 @@ class Dispatcher:
         c.on_status(lambda s, rid=robot_id: self._on_status(rid, s))
         c.on_event(lambda e, rid=robot_id: self._on_event(rid, e))
         c.on_reconcile(lambda r, rid=robot_id: self._on_reconcile(rid, r))
+        c.on_ack(self._record_ack)          # 包括等的人超时走了之后才到的回执
         self.clients[robot_id] = c
         await c.attach()
 
@@ -152,10 +165,13 @@ class Dispatcher:
         if self._closed:
             return
         with self.db.tx() as c:
-            c.execute("INSERT OR IGNORE INTO events(robot_id, boot_id, seq, event_id, kind, data, "
-                      "stamp, received_at) VALUES (?,?,?,?,?,?,?,?)",
-                      (robot_id, e.boot_id, e.seq, e.event_id, e.kind, json.dumps(e.data),
-                       e.stamp, self._now()))
+            cur = c.execute("INSERT OR IGNORE INTO events(robot_id, boot_id, seq, event_id, kind, "
+                            "data, stamp, received_at) VALUES (?,?,?,?,?,?,?,?)",
+                            (robot_id, e.boot_id, e.seq, e.event_id, e.kind, json.dumps(e.data),
+                             e.stamp, self._now()))
+            fresh = cur.rowcount == 1
+        if not fresh:
+            return                          # 站点重启后 broker 补投的旧事件:库里有了,不再推
         self.feed.publish({"kind": "event", "robot_id": robot_id, "event": e.to_wire()})
 
     def _on_reconcile(self, robot_id: str, r: Reconcile) -> None:
@@ -193,7 +209,8 @@ class Dispatcher:
 
     def _fresh(self, c: DispatchClient | None) -> bool:
         return (c is not None and c.status is not None and c.status.online
-                and self._now() - c.status.last_seen <= self.stale_ms)
+                and c.status_live_at is not None
+                and self._now() - c.status_live_at <= self.stale_ms)
 
     # ------------------------------------------------------------ 派单
 
@@ -213,9 +230,9 @@ class Dispatcher:
         s = c.status
         if s is None or not s.online:
             raise DispatchRefused(f"{robot_id} 不在线")
-        if self._now() - s.last_seen > self.stale_ms:
-            raise DispatchRefused(f"{robot_id} 的状态不新鲜(last_seen 超过 "
-                                  f"{self.stale_ms // 1000} s)")
+        if not self._fresh(c):
+            raise DispatchRefused(f"{robot_id} 的状态不新鲜({self.stale_ms // 1000} s 内没收到"
+                                  f"实时 status)")
         not_ready = [k for k, v in s.ready.to_wire().items() if k != "schema" and not v]
         if not_ready:
             raise DispatchRefused(f"{robot_id} 没就绪: {', '.join(sorted(not_ready))}")
@@ -249,14 +266,22 @@ class Dispatcher:
                        "issued_by, issued_at) VALUES (?,?,?,?,?,?,?)",
                        (cmd.command_id, cmd.task_id, robot_id, kind, json.dumps(payload),
                         issued_by, cmd.issued_at))
-        ack = await c.send(cmd, timeout_s=self.ack_timeout_s)
-        self._record_ack(ack)
+        try:
+            ack = await c.send(cmd, timeout_s=self.ack_timeout_s)
+        except DispatchTimeout:
+            # 狗可能收到了、可能没收到;记一笔,晚到的回执会经 on_ack 覆盖它。
+            with self.db.tx() as tx:
+                tx.execute("UPDATE commands SET ack_result='timeout' WHERE command_id=? "
+                           "AND ack_result IS NULL", (cmd.command_id,))
+            raise
         self.feed.publish({"kind": "ack", "robot_id": robot_id, "ack": ack.to_wire(),
                            "issued_by": issued_by})
         return {"command_id": cmd.command_id, "task_id": cmd.task_id,
                 "ack": ack.to_wire()}
 
     def _record_ack(self, ack: Ack) -> None:
+        if self._closed:
+            return
         with self.db.tx() as c:
             c.execute("UPDATE commands SET ack_result=?, ack_reason=? WHERE command_id=?",
                       (ack.result.value, ack.reason, ack.command_id))

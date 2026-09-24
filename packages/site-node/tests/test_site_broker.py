@@ -33,7 +33,8 @@ def test_配置要求客户端证书_禁匿名_路径有空白就拒(tmp_path):
                     crlfile=tmp_path / "crl", aclfile=tmp_path / "acl")
     conf = render_conf(port=8883, paths=p)
     for line in ("allow_anonymous false", "require_certificate true",
-                 "use_identity_as_username true", "listener 8883 0.0.0.0",
+                 "use_identity_as_username true", "use_username_as_clientid true",
+                 "max_packet_size 262144", "listener 8883 0.0.0.0",
                  f"crlfile {tmp_path / 'crl'}"):
         assert line in conf.splitlines(), line
     with pytest.raises(ValueError):
@@ -129,3 +130,63 @@ async def test_吊销后重启broker_A连不上_B照常(broker):
         await _连(broker, "A", **broker.robot_tls("A"))
     b = await _连(broker, "B", **broker.robot_tls("B"))
     await b.close()
+
+
+async def test_拿别人的client_id连_踢不掉站点也接管不了B的会话(broker):
+    """client_id 不跟证书绑的话:A 用 ``site:estate-1`` 连,会把站点踢下线;用 ``B`` 连,会接管 B 的
+    持久会话,B 离线期间攒着的 cmd(包括 abort)就丢了。broker 要用证书名当 client_id。"""
+    ups: list[bool] = []
+    site = PahoTransport(broker.url, client_id="site:estate-1", **broker.site_tls())  # 同生产
+    site.on_connection(ups.append)
+    await site.connect()
+    ups.clear()
+    b = PahoTransport(broker.url, client_id="B", **broker.robot_tls("B"))
+    b_ears = 收件()
+    tb = Topics(site_id=SITE, robot_id="B")
+    await b.subscribe(tb.cmd, b_ears)
+    await b.connect()
+    for fake in ("site:estate-1", "B"):
+        a = PahoTransport(broker.url, client_id=fake, **broker.robot_tls("A"))
+        await a.connect()
+        await asyncio.sleep(0.5)
+        await a.close()
+    await asyncio.sleep(0.5)
+    assert site.connected and False not in ups, "站点被踢过"
+    await site.publish(tb.cmd, b"to-B", qos=1)
+    await asyncio.sleep(0.8)
+    assert (tb.cmd, b"to-B") in b_ears.got, "B 的会话被接管了"
+    for t in (b, site):
+        await t.close()
+
+
+async def test_A订通配的cmd也收不到别人的(broker):
+    a = await _连(broker, "A", **broker.robot_tls("A"))
+    b = await _连(broker, "B", **broker.robot_tls("B"))
+    a_ears, b_ears = 收件(), 收件()
+    for f in (f"site/{SITE}/robot/+/cmd", "#", f"site/{SITE}/#"):
+        await a.subscribe(f, a_ears)
+    tb = Topics(site_id=SITE, robot_id="B")
+    await b.subscribe(tb.cmd, b_ears)
+    await asyncio.sleep(0.3)
+    site = await _连(broker, "site", **broker.site_tls())
+    await site.publish(tb.cmd, b"for-B", qos=1)
+    await asyncio.sleep(1.0)
+    assert b_ears.got and not [g for g in a_ears.got if g[1] == b"for-B"]
+    for t in (a, b, site):
+        await t.close()
+
+
+async def test_吊销后broker重启之前_A的上行仍被接受_这是已知窗口(broker):
+    """Mosquitto 只在启动时读 CRL。记下来:吊销到重启之间,已登记的证书还能连、还能发。
+    派遣器那边吊销是立刻生效的(注册表),broker 这边要重启(报告取舍 3)。"""
+    broker.ca.revoke("A")
+    site = await _连(broker, "site", **broker.site_tls())
+    ears = 收件()
+    await site.subscribe(f"site/{SITE}/robot/+/status", ears)
+    await asyncio.sleep(0.3)
+    a = await _连(broker, "A", **broker.robot_tls("A"))
+    await a.publish(Topics(site_id=SITE, robot_id="A").status, b"still", qos=1)
+    await asyncio.sleep(0.5)
+    assert (f"site/{SITE}/robot/A/status", b"still") in ears.got
+    for t in (a, site):
+        await t.close()

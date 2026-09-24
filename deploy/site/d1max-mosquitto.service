@@ -13,6 +13,12 @@ Type=simple
 User=d1max-site
 ExecStart=/usr/sbin/mosquitto -c /var/lib/d1max-site/broker/mosquitto.conf
 # CRL 只在启动时读:吊销之后 `systemctl restart d1max-mosquitto`。
+# 收紧:只许写站点目录;看不到 /home;不能提权。
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/d1max-site
 Restart=always
 RestartSec=5
 

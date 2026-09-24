@@ -56,6 +56,8 @@ def render_conf(*, port: int, paths: BrokerPaths, bind: str = "0.0.0.0",
         "# 由 d1max_site.broker_conf 生成,别手改。",
         "per_listener_settings false",
         "allow_anonymous false",
+        # 一台被攻破的狗往自己的主题上发超大 retained 报文:上限 256 KB。
+        "max_packet_size 262144",
         f"acl_file {_p(paths.aclfile, 'acl_file')}",
     ]
     if paths.persistence_dir is not None:
@@ -78,6 +80,9 @@ def render_conf(*, port: int, paths: BrokerPaths, bind: str = "0.0.0.0",
         f"crlfile {_p(paths.crlfile, 'crlfile')}",
         "require_certificate true",
         "use_identity_as_username true",
+        # client_id 也用证书名:不然 A 拿 "B" 或 "site:<id>" 当 client_id 就能把别人踢下线、
+        # 接管别人的持久会话(攒着的 cmd,包括 abort,就丢了)。
+        "use_username_as_clientid true",
         "tls_version tlsv1.2",
         "",
     ]

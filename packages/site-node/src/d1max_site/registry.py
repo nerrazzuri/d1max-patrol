@@ -5,8 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from d1max_contract.errors import ContractError
-from d1max_contract.topics import Topics
+from d1max_site.ca import CAError, check_robot_id
 from d1max_site.db import SiteDB
 
 
@@ -31,11 +30,9 @@ class Registry:
 
     def _check_id(self, robot_id: str) -> None:
         try:
-            Topics(site_id=self.site_id, robot_id=robot_id)
-        except ContractError as exc:
-            raise RegistryError(f"robot_id 不合规矩: {exc}") from exc
-        if robot_id.startswith("site:"):
-            raise RegistryError(f"robot_id {robot_id!r} 是站点的保留名")
+            check_robot_id(self.site_id, robot_id)
+        except CAError as exc:
+            raise RegistryError(str(exc)) from exc
 
     def enroll(self, robot_id: str, *, fingerprint: str, issued_at: int, expires_at: int,
                now_ms: int | None = None) -> None:
