@@ -112,25 +112,50 @@ def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
         db.close()
 
 
-def cmd_revoke(home: Path, robot_id: str) -> None:
-    """注册表与 CA 各吊销各的:注册表先(派遣器立刻不再派单),CA 后(进 CRL)。任一边没有
-    这台狗都不拦另一边 —— enroll 半路失败会留下「有证书没登记」的狗,也得能吊销。"""
+def cmd_revoke(home: Path, robot_id: str) -> str:
+    """注册表先吊销(派遣器立刻不再派单),CA 后吊销(进 CRL,broker 重启后拒连)。
+
+    - 某一侧**本来就没有**这台狗(enroll 半路失败留下的半状态):跳过那一侧,照做另一侧。
+    - 某一侧**有**、但吊销执行失败(openssl 出错、CRL 写不进、库被锁……):抛 ``SiteError``,
+      消息里说清楚哪一侧做完了、哪一侧失败了。**不许**部分成功却报成功:CRL 没更新的话,
+      重启 broker 之后那张证书照样能连。
+    - 两侧都没有:抛 ``SiteError``。
+
+    成功时返回一句给人看的总结。"""
     cfg = _load(home)
+    ca = SiteCA(home / "ca")
     db = SiteDB(home / "site.db")
-    errors = []
+    done: list[str] = []
+    failed: list[str] = []
     try:
-        try:
-            Registry(db, site_id=cfg["site_id"]).revoke(robot_id)
-        except RegistryError as exc:
-            errors.append(str(exc))
-        try:
-            SiteCA(home / "ca").revoke(robot_id)
-        except CAError as exc:
-            errors.append(str(exc))
+        reg = Registry(db, site_id=cfg["site_id"])
+        reg_present = reg.get(robot_id) is not None
+        ca_present = ca.has_valid(robot_id)
+        if not reg_present and not ca_present:
+            raise SiteError(f"注册表与 CA 里都没有 {robot_id}(或它的证书早已吊销)")
+        if reg_present:
+            try:
+                reg.revoke(robot_id)
+                done.append("注册表已吊销")
+            except Exception as exc:  # noqa: BLE001 - 哪一侧失败都要报出来
+                failed.append(f"注册表吊销失败: {exc}")
+        else:
+            done.append("注册表里本来就没有(跳过)")
+        if ca_present:
+            try:
+                ca.revoke(robot_id)
+                done.append("CRL 已更新")
+            except Exception as exc:  # noqa: BLE001
+                failed.append(f"CRL 更新失败: {exc}")
+        else:
+            done.append("CA 里没有有效证书(跳过)")
     finally:
         db.close()
-    if len(errors) == 2:
-        raise SiteError("; ".join(errors))
+    summary = ";".join(done)
+    if failed:
+        raise SiteError(f"{robot_id} 只吊销了一部分:{summary or '无'};" + ";".join(failed)
+                        + "。修好之后再跑一次 revoke(已完成的那一侧会被跳过或重做,不会出错)")
+    return summary
 
 
 def cmd_add_admin(home: Path, name: str, password: str) -> None:
@@ -263,8 +288,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"证书包: {d}\n拷到狗上: ca.crt robot.crt robot.key → /etc/d1max/tls/,"
                   f"registration.json → /etc/d1max/")
         elif args.cmd == "revoke":
-            cmd_revoke(home, args.robot_id)
-            print(f"已吊销 {args.robot_id}。重启 broker 才生效: systemctl restart d1max-mosquitto")
+            summary = cmd_revoke(home, args.robot_id)
+            print(f"已吊销 {args.robot_id}({summary})。重启 broker 才对 broker 生效: "
+                  f"systemctl restart d1max-mosquitto")
         elif args.cmd == "add-admin":
             pw = os.environ.get("D1MAX_SITE_PASSWORD") or getpass.getpass("口令: ")
             cmd_add_admin(home, args.name, pw)

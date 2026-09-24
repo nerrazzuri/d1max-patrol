@@ -145,3 +145,57 @@ def test_init到一半失败_再init说清楚怎么办(tmp_path, capsys):
                            "--hostname", "ok.local"]) == 2
     err = capsys.readouterr().err
     assert "上一次 init 没做完" in err
+
+
+def test_完整登记的狗_CA吊销失败_命令非零且不说已吊销(home, monkeypatch, capsys):
+    """外审阻断:注册表吊销成功、CRL 更新失败时原来静默返回成功,运维以为吊销了,
+    重启 broker 之后那张证书照样能连。"""
+    from d1max_site.ca import CAError, SiteCA
+    assert site_main.main(["--home", str(home), "enroll", "A"]) == 0
+    capsys.readouterr()
+
+    def 炸(self, robot_id):
+        raise CAError("openssl ca 失败: 模拟")
+
+    monkeypatch.setattr(SiteCA, "revoke", 炸)
+    assert site_main.main(["--home", str(home), "revoke", "A"]) != 0
+    out = capsys.readouterr()
+    assert "已吊销 A" not in out.out
+    assert "注册表已吊销" in out.err and "CRL" in out.err and "失败" in out.err
+    db = SiteDB(home / "site.db")
+    assert Registry(db, site_id="estate-1").get("A").revoked, "注册表那步照做(先停派单)"
+    db.close()
+    assert "A" in SiteCA(home / "ca")._valid_subjects(), "CA 这边确实没吊销"
+    monkeypatch.undo()                                       # 修好了,再跑一次
+    assert site_main.main(["--home", str(home), "revoke", "A"]) == 0
+    assert "A" not in SiteCA(home / "ca")._valid_subjects()
+
+
+def test_完整登记的狗_注册表吊销失败_命令非零并说明CRL已更新(home, monkeypatch, capsys):
+    import sqlite3
+    assert site_main.main(["--home", str(home), "enroll", "A"]) == 0
+    capsys.readouterr()
+
+    def 炸(self, robot_id):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(Registry, "revoke", 炸)
+    assert site_main.main(["--home", str(home), "revoke", "A"]) != 0
+    out = capsys.readouterr()
+    assert "已吊销 A" not in out.out
+    assert "CRL 已更新" in out.err and "注册表" in out.err and "失败" in out.err
+    from d1max_site.ca import SiteCA
+    assert "A" not in SiteCA(home / "ca")._valid_subjects()
+
+
+def test_两边都没有这台狗_非零(home, capsys):
+    assert site_main.main(["--home", str(home), "revoke", "ghost"]) != 0
+    assert "没有" in capsys.readouterr().err
+
+
+def test_完整吊销成功才打印已吊销(home, capsys):
+    assert site_main.main(["--home", str(home), "enroll", "A"]) == 0
+    capsys.readouterr()
+    assert site_main.main(["--home", str(home), "revoke", "A"]) == 0
+    out = capsys.readouterr().out
+    assert "已吊销 A" in out and "CRL 已更新" in out and "注册表已吊销" in out

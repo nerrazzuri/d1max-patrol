@@ -252,6 +252,11 @@ class SiteCA:
 
     # ------------------------------------------------------------ 吊销
 
+    def has_valid(self, robot_id: str) -> bool:
+        """CA 里这台狗有没有一张还有效(没吊销)的证书。"""
+        return (self.robot_dir(robot_id) / "robot.crt").is_file() and \
+            robot_id in self._valid_subjects()
+
     def revoke(self, robot_id: str) -> None:
         crt = self.robot_dir(robot_id) / "robot.crt"
         if not crt.is_file() or robot_id not in self._valid_subjects():
