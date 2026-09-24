@@ -150,17 +150,23 @@ class Command:
     @classmethod
     def from_wire(cls, d: Any) -> Command:
         d = check_schema(d, "Command")
+        # 先验 id 与时刻:不成形的命令也要回得出带 command_id/task_id 的回执,
+        # 报错文本里先出现的该是这几个字段。
+        command_id = as_str(d, "command_id", "Command", nonempty=True)
+        task_id = as_str(d, "task_id", "Command", nonempty=True)
+        kind = as_str(d, "kind", "Command", nonempty=True)
+        issued_at = as_int(d, "issued_at", "Command")
+        expires_at = as_int(d, "expires_at", "Command")
+        control_epoch = as_int(d, "control_epoch", "Command")
+        priority = as_int(d, "priority", "Command")
+        offline_policy = as_str(d, "offline_policy", "Command")
+        payload = as_dict(d, "payload", "Command")
         pre = as_opt_dict(d, "precondition", "Command")
-        return cls(command_id=as_str(d, "command_id", "Command", nonempty=True),
-                   task_id=as_str(d, "task_id", "Command", nonempty=True),
-                   kind=as_str(d, "kind", "Command", nonempty=True),
-                   issued_at=as_int(d, "issued_at", "Command"),
-                   expires_at=as_int(d, "expires_at", "Command"),
-                   control_epoch=as_int(d, "control_epoch", "Command"),
-                   priority=as_int(d, "priority", "Command"),
-                   offline_policy=as_str(d, "offline_policy", "Command"),
+        return cls(command_id=command_id, task_id=task_id, kind=kind, issued_at=issued_at,
+                   expires_at=expires_at, control_epoch=control_epoch, priority=priority,
+                   offline_policy=offline_policy,
                    precondition=Precondition.from_wire(pre) if pre is not None else None,
-                   payload=as_dict(d, "payload", "Command"))
+                   payload=payload)
 
 
 @dataclass(frozen=True)
