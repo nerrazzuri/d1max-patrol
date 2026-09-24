@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from d1max_agent.engine.homing import DEFAULT_RETURN_PARAMS
+from d1max_agent.engine.mission import Policy
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
@@ -23,8 +25,6 @@ from d1max_patrol.backends.base import (
     FaultEvent,
     LocStatusEvent,
 )
-from d1max_patrol.engine.homing import DEFAULT_RETURN_PARAMS
-from d1max_patrol.engine.mission import Policy
 from d1max_patrol.protocol.nav_types import (
     ALG_LIDAR_DISCONNECTED,
     ALG_NAV_BLOCKED,

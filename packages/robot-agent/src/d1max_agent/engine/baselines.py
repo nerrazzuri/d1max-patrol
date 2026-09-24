@@ -1,4 +1,7 @@
-"""基线集:判读拿来做比对基准的那一张。**独立于 run 目录,永不参与水位删除。**
+"""**借住**:总设计 §5 把这个模块归站点(site-node),W00c 搬走;W00b 只是随 engine/ 整棵进了
+robot-agent,内容未改。
+
+基线集:判读拿来做比对基准的那一张。**独立于 run 目录,永不参与水位删除。**
 
 `inspect/judge.py` 原先是这么找基准的:扫本地历史 run 目录,找同点位同相机
 最近的一张。**它读的是本地历史。** 一旦水位删除开始工作(spec §4.4),跨日期
@@ -17,7 +20,7 @@ from pathlib import Path
 
 # 只借它那条"临时文件名怎么起"的规矩(见 ``retention.unique_tmp``),
 # 不借任何保留策略 —— 基线永不参与水位删除,那一条没有变。
-from d1max_patrol.engine.retention import unique_tmp
+from d1max_agent.engine.retention import unique_tmp
 
 #: 基线目录的惯用名。放在 runs 根目录**旁边**,不是里面 —— 放里面迟早被
 #: 某个"清空 runs"的动作连坐。

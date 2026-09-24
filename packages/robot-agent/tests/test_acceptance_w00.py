@@ -19,6 +19,7 @@ from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
 from d1max_contract.messages import AckResult, MapPose, Precondition, TaskState
 from d1max_contract.registration import Registration
 from d1max_contract.topics import Topics
+from d1max_patrol.protocol.nav_types import Pose
 
 REG = Registration(site_id="penang-1", robot_id="D1MAX-C40011", credential_fingerprint="sha256:x",
                    issued_at=0, expires_at=10**13)
@@ -29,12 +30,14 @@ MAP = ("estate-1", "7")
 class 钟:
     def __init__(self) -> None:
         self.ms = 1_700_000_000_000
+        self.mono = 1000.0
 
     def __call__(self) -> int:
         return self.ms
 
     def advance(self, dt_s: float) -> None:
         self.ms += int(round(dt_s * 1000))
+        self.mono += dt_s
 
 
 class 台子:
@@ -53,7 +56,9 @@ class 台子:
     async def start_agent(self, boot_id: str) -> AgentRuntime:
         self.agent = AgentRuntime(transport=MemoryTransport(self.broker, "dog"), registration=REG,
                                   hal=self.dog, store_dir=self.store, now_ms=self.clock,
-                                  loaded_map=MAP, boot_id=boot_id)
+                                  loaded_map=MAP, boot_id=boot_id,
+                                  home=Pose.from_xy_yaw(0.0, 0.0),
+                                  monotonic=lambda: self.clock.mono)
         await self.agent.start()
         await self.broker.drain()
         return self.agent
@@ -63,6 +68,8 @@ class 台子:
             await self.agent.step(dt)
             self.dog.tick(dt)
             self.clock.advance(dt)
+            for _ in range(4):                   # 引擎自己的协程要几个循环轮次才消化完一条命令
+                await asyncio.sleep(0)
             await self.broker.drain()
 
     def kinds(self):

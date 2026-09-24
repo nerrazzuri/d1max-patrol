@@ -332,10 +332,11 @@ def test_引擎和判读都不import_http():
     反过来是允许的 —— app 依赖引擎。这一条要是破了,引擎就再也不能在没有
     HTTP 的地方(命令行、仿真、真机现场脚本)单独跑了。
     """
-    import d1max_patrol.engine
+    import d1max_agent.engine  # 引擎的真身(W00b 起住在 robot-agent 包里)
+    import d1max_patrol.engine  # 别名壳,下面顺带扫一遍它自己那一个文件
     import d1max_patrol.inspect
 
-    for pkg in (d1max_patrol.engine, d1max_patrol.inspect):
+    for pkg in (d1max_agent.engine, d1max_patrol.engine, d1max_patrol.inspect):
         for py in Path(pkg.__file__).parent.glob("*.py"):
             src = py.read_text(encoding="utf-8")
             for banned in ("import http", "socketserver", "d1max_patrol.app"):

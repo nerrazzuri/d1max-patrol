@@ -59,3 +59,32 @@ def test_包内tests目录不是包而且文件名不与根tests撞():
             assert f.name not in 根, f"{f} 与根 tests 里同名文件撞了"
             assert f.name not in 见过, f"{f} 与 {见过[f.name]} 同名(包与包之间也会撞)"
             见过[f.name] = f
+
+
+_ENGINE_MODULES = (
+    "alerts", "archive", "backup", "baselines", "bundle", "datadir", "export", "form",
+    "homing", "http_sink", "lease", "machine", "mission", "preflight", "privileged",
+    "release", "removable", "retention", "safety", "schedule", "selfcheck", "storage",
+    "uploader", "upload_queue",
+)
+
+
+def test_engine别名壳_两个名字是同一个模块对象():
+    """W00b 决定 1:engine/ 真身在 robot-agent,根包留壳;monkeypatch、私有名、isinstance 都
+    只有在「同一个对象」时才成立,所以断言 is。"""
+    for m in _ENGINE_MODULES:
+        a = importlib.import_module(f"d1max_patrol.engine.{m}")
+        b = importlib.import_module(f"d1max_agent.engine.{m}")
+        assert a is b, m
+    import d1max_patrol.engine as shell
+    assert sorted(p.name for p in Path(shell.__file__).parent.glob("*.py")) == ["__init__.py"], \
+        "壳里只许有 __init__.py,引擎代码不许再长回根包"
+
+
+def test_搬走的engine里没有旧包名():
+    src = PKGS / "robot-agent" / "src" / "d1max_agent" / "engine"
+    for py in src.glob("*.py"):
+        代码 = "\n".join(行 for 行 in py.read_text(encoding="utf-8").splitlines()
+                        if 行.lstrip().startswith(("from ", "import ")))
+        assert "d1max_patrol.engine" not in 代码, f"{py.name} 里还 import 旧包名"
+    assert 'd1max-patrol' in _toml("robot-agent"), "过渡性依赖要声明"

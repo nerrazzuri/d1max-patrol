@@ -21,8 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from d1max_patrol.engine.archive import STAMP_FMT
-from d1max_patrol.engine.retention import RunInfo, mark_exported, unique_tmp
+from d1max_agent.engine.archive import STAMP_FMT
+from d1max_agent.engine.retention import RunInfo, mark_exported, unique_tmp
 
 #: 导出包放在 runs 根目录**旁边**的这个目录里。放里面会被 ``scan_runs``
 #: 当成归档扫进去,然后被自己的水位删除删掉 —— 而它正是为了对抗删除才存在的。

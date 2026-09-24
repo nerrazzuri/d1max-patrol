@@ -32,7 +32,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from d1max_patrol.engine.export import sha256_file
+from d1max_agent.engine.export import sha256_file
 
 log = logging.getLogger(__name__)
 
@@ -409,7 +409,7 @@ def pack(src: Path | str, out_parent: Path | str, *, name: str | None = None,
     # ``from .release import point_link, tree_sha256`` —— 这里在顶部反向 import
     # 它就成了一个环,谁先被 import 谁就炸。分层没有被破坏:engine/ 内部互相
     # 用是允许的,只是这一对必须晚一点才连上。
-    from d1max_patrol.engine.bundle import BUNDLE_SCHEMA
+    from d1max_agent.engine.bundle import BUNDLE_SCHEMA
 
     src = Path(src)
     out_parent = Path(out_parent)

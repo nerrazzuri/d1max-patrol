@@ -426,13 +426,13 @@ def test_默认当成记过了():
 
 def _selfcheck日志(caplog, 级别=logging.WARNING):
     return [r for r in caplog.records
-            if r.name == "d1max_patrol.engine.selfcheck" and r.levelno >= 级别]
+            if r.name == "d1max_agent.engine.selfcheck" and r.levelno >= 级别]
 
 
 async def test_旁路进程没起来时抢会话只记一句人话_不带traceback(caplog):
     """真机(2026-09-22)点一下 /api/selfcheck,journal 里是三段 traceback,
     说的却只是「还没连上旁路进程」—— 后端自己会说人话的错,不该带栈。"""
-    caplog.set_level(logging.DEBUG, logger="d1max_patrol.engine.selfcheck")
+    caplog.set_level(logging.DEBUG, logger="d1max_agent.engine.selfcheck")
 
     class 没连上的:
         async def has_control(self) -> bool:
@@ -455,7 +455,7 @@ async def test_旁路进程没起来时抢会话只记一句人话_不带traceba
 
 async def test_抢会话遇到意料之外的异常仍然留traceback(caplog):
     """人话只给认识的错;不认识的错正是 bug 的线索,栈要留着。"""
-    caplog.set_level(logging.DEBUG, logger="d1max_patrol.engine.selfcheck")
+    caplog.set_level(logging.DEBUG, logger="d1max_agent.engine.selfcheck")
 
     class 会炸的:
         async def has_control(self) -> bool:
@@ -473,7 +473,7 @@ async def test_抢会话遇到意料之外的异常仍然留traceback(caplog):
 
 
 async def test_桥不应答时只记人话_不带traceback(caplog):
-    caplog.set_level(logging.DEBUG, logger="d1max_patrol.engine.selfcheck")
+    caplog.set_level(logging.DEBUG, logger="d1max_agent.engine.selfcheck")
 
     class 断了的导航:
         async def loc_status(self):
@@ -500,7 +500,7 @@ async def test_桥不应答时只记人话_不带traceback(caplog):
 
 
 async def test_桥探测遇到意料之外的异常仍然留traceback(caplog):
-    caplog.set_level(logging.DEBUG, logger="d1max_patrol.engine.selfcheck")
+    caplog.set_level(logging.DEBUG, logger="d1max_agent.engine.selfcheck")
 
     class 炸的导航:
         async def loc_status(self):

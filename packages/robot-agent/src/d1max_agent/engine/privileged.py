@@ -21,7 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from d1max_patrol.engine.selfcheck import RestartPlan
+from d1max_agent.engine.selfcheck import RestartPlan
 
 #: 助手装在哪。**必须是 root 拥有的目录** —— ``/opt/d1max`` 整棵归 robot,
 #: sudo 白名单指着 robot 可写的脚本等于把 root 送给 robot。

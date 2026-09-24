@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from d1max_patrol.engine.archive import STAMP_FMT, list_runs, read_manifest
+from d1max_agent.engine.archive import STAMP_FMT, list_runs, read_manifest
 
 #: 没写保留期时按这个算。跟 ``mission.Policy.retention_days`` 的默认值是
 #: 同一个数(spec §4.6「保留期默认 90 天」)。

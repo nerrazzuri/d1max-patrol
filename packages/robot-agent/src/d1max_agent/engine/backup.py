@@ -38,11 +38,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from d1max_patrol.engine.export import sha256_file
-from d1max_patrol.engine.removable import MARKER_REL, NO_IDENTITY, DiskRole, Removable
-from d1max_patrol.engine.retention import MIN_NOTICE_DAYS, RunInfo, run_key, scan_runs, unique_tmp
+from d1max_agent.engine.export import sha256_file
+from d1max_agent.engine.removable import MARKER_REL, NO_IDENTITY, DiskRole, Removable
+from d1max_agent.engine.retention import MIN_NOTICE_DAYS, RunInfo, run_key, scan_runs, unique_tmp
 
-#: 盘上记同步进度的文件。跟 :data:`~d1max_patrol.engine.removable.MARKER_REL`
+#: 盘上记同步进度的文件。跟 :data:`~d1max_agent.engine.removable.MARKER_REL`
 #: 挨着放,同一个隐藏目录里。
 STATE_REL = ".d1max-backup/state.json"
 

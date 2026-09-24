@@ -7,7 +7,10 @@ name = "d1max-robot-agent"
 version = "0.1.0"
 description = "跑在狗上的机器人代理:契约运行时(W00),engine/ 随 W00b 搬入"
 requires-python = ">=3.10"
-dependencies = ["d1max-contract"]
+# d1max-patrol 是**过渡性**依赖:engine/ 还用着根包的 protocol.nav_types 与
+# backends.base(NavBackend/DeviceBackend)。W00d 出 adapter-d1max、backends 按 RobotHAL
+# 重做之后切掉。
+dependencies = ["d1max-contract", "d1max-patrol"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

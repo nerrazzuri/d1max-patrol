@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any
 
-from d1max_patrol.engine.mission import Mission
+from d1max_agent.engine.mission import Mission
 
 #: 目录名与照片名共用的时间戳格式。UTC,因为跨时区看历史报告时本地时间没意义。
 STAMP_FMT = "%Y%m%dT%H%M%SZ"

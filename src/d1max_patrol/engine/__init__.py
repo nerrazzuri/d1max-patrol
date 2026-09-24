@@ -1,6 +1,31 @@
-"""任务引擎 —— 巡检任务的定义、归档、起飞检查、降级规则与状态机。
+"""``d1max_patrol.engine`` 的**别名壳**(W00b,决定 1)。
 
-**这一层不认识 HTTP。** 它是个纯库对象,能脱离 app 单独用、单独测。
-app 只是它的一个调用者;将来要把引擎抽成常驻守护进程,换的是调用方,
-不是这里。有一条测试(tests/app/test_server.py)会扫本包的源码来守这条约束。
+引擎的代码在 ``d1max_agent.engine``(robot-agent 包)。这里只把每个子模块的名字指到
+**同一个模块对象**上:``import d1max_patrol.engine.machine`` 与
+``import d1max_agent.engine.machine`` 拿到的是同一个东西 —— 私有名、monkeypatch、
+``isinstance`` 全都一致。81 个测试文件、``app/``、``cli.py`` 因此一字不改。
+
+**注意**:因为是同一个对象,logger 名、``__module__``、``__file__`` 都是
+``d1max_agent.engine.*``;按旧名字 ``caplog`` 的地方要改。
+
+这层壳在 W00c(手机改连站点、``server.py`` 退役)时删掉;那之前不要往这里加任何逻辑。
 """
+
+from __future__ import annotations
+
+import importlib
+import sys
+
+_MODULES = (
+    "alerts", "archive", "backup", "baselines", "bundle", "datadir", "export", "form",
+    "homing", "http_sink", "lease", "machine", "mission", "preflight", "privileged",
+    "release", "removable", "retention", "safety", "schedule", "selfcheck", "storage",
+    "uploader", "upload_queue",
+)
+
+for _name in _MODULES:
+    _mod = importlib.import_module(f"d1max_agent.engine.{_name}")
+    sys.modules[f"{__name__}.{_name}"] = _mod
+    globals()[_name] = _mod
+
+__all__ = list(_MODULES)

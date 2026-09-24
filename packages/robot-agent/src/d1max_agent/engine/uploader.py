@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from d1max_patrol.engine.upload_queue import QueueItem, UploadQueue, backoff_ms, classify
+from d1max_agent.engine.upload_queue import QueueItem, UploadQueue, backoff_ms, classify
 
 #: 一次发多少。**未验证:1 MiB 一块在客户的 4G 上是不是太大,没量过。**
 CHUNK_BYTES = 1_048_576

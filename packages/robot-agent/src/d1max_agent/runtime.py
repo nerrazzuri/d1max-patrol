@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from d1max_agent.assembly import EngineParts, build_engine
 from d1max_agent.commands import CommandProcessor
 from d1max_agent.events import EventBook
 from d1max_agent.idempotency import IdempotencyStore
@@ -30,7 +31,7 @@ from d1max_agent.status import (
     offline_status,
 )
 from d1max_agent.tasks.base import Task
-from d1max_agent.tasks.goto import BATTERY_FLOOR_PCT, GotoTask
+from d1max_agent.tasks.engine_goto import EngineGotoTask
 from d1max_agent.transport import GuardedTransport
 from d1max_contract.hal import RobotHAL
 from d1max_contract.messages import Command, MapPose, Reconcile
@@ -38,8 +39,12 @@ from d1max_contract.policy import policy_for
 from d1max_contract.registration import Registration
 from d1max_contract.topics import TopicAcl
 from d1max_contract.transport import Message, Transport
+from d1max_patrol.protocol.nav_types import Pose
 
 log = logging.getLogger(__name__)
+
+#: 电量低于这条线,断线时按「不安全」处理(停住等待)。
+BATTERY_FLOOR_PCT = 15.0
 
 
 def _dumps(d: dict) -> bytes:
@@ -50,7 +55,9 @@ class AgentRuntime:
     def __init__(self, *, transport: Transport, registration: Registration, hal: RobotHAL,
                  store_dir: Path, now_ms: Callable[[], int], loaded_map: tuple[str, str] | None,
                  boot_id: str | None = None, telemetry_period_ms: int = 1000,
-                 status_period_ms: int = 30_000) -> None:
+                 status_period_ms: int = 30_000, parts: EngineParts | None = None,
+                 home: Pose | None = None, runs_root: Path | None = None,
+                 monotonic: Callable[[], float] | None = None) -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -62,6 +69,13 @@ class AgentRuntime:
         self.status_period_ms = status_period_ms
         self._next_status_ms: int | None = None
         store_dir = Path(store_dir)
+        # W00b:goto 跑在 MissionEngine 上。parts 不给就按 loaded_map/home 现装一组。
+        if parts is None and loaded_map is not None:
+            import time
+            parts = build_engine(hal, runs_root=runs_root or (store_dir / "runs"), now_ms=now_ms,
+                                 monotonic=monotonic or time.monotonic, map_id=loaded_map[0],
+                                 home=home)
+        self.parts = parts
         self.events = EventBook(store_dir / "events.jsonl", boot_id=self.boot_id, now_ms=now_ms)
         self.idem = IdempotencyStore(store_dir / "idempotency.jsonl")
         self.processor = CommandProcessor(
@@ -89,9 +103,10 @@ class AgentRuntime:
 
     def _make_task(self, cmd: Command) -> Task:
         target = MapPose.from_wire(cmd.payload["target"])
-        return GotoTask(task_id=cmd.task_id, target=target,
-                        max_speed_mps=cmd.payload.get("max_speed_mps"), hal=self.hal,
-                        events=self.events, now_ms=self._now, priority=cmd.priority)
+        assert self.parts is not None, "有 loaded_map 就一定装了引擎"
+        return EngineGotoTask(task_id=cmd.task_id, target=target,
+                              max_speed_mps=cmd.payload.get("max_speed_mps"), parts=self.parts,
+                              events=self.events, now_ms=self._now, priority=cmd.priority)
 
     @property
     def adapter_id(self) -> str:
@@ -103,6 +118,8 @@ class AgentRuntime:
         # HAL 的生死归代理(总设计 §2.2「谁连 SDK」):先连上、拿到厂商控制权,再对站点亮相。
         await self.hal.connect()
         await self.hal.acquire_control()
+        if self.parts is not None:
+            await self.parts.nav.connect()
         self.transport.set_will(
             self.topics.status,
             _dumps(offline_status(boot_id=self.boot_id,
@@ -121,6 +138,8 @@ class AgentRuntime:
         await self._publish_status(force=True)
 
     async def close(self) -> None:
+        if self.parts is not None:
+            await self.parts.engine.aclose()
         await self.transport.close()
 
     def _on_connection(self, up: bool) -> None:
@@ -173,6 +192,8 @@ class AgentRuntime:
         if self._went_offline:
             self._went_offline = False
             await self._apply_offline_policy()
+        if self.parts is not None:
+            await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
         await self.processor.step(dt_s)
         await self._flush_events()
         await self._publish_status()

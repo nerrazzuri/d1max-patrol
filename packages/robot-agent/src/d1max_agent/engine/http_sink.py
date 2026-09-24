@@ -17,7 +17,7 @@ from http.client import HTTPException
 from typing import Any
 from urllib.parse import quote
 
-from d1max_patrol.engine.uploader import HTTP_TIMEOUT_S, PutReceipt, PutRequest, SinkError
+from d1max_agent.engine.uploader import HTTP_TIMEOUT_S, PutReceipt, PutRequest, SinkError
 
 WIRE_PATH = "/api/intake/put"
 

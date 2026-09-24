@@ -13,6 +13,7 @@ from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
 from d1max_contract.messages import Capabilities, Reconcile, Status, Telemetry
 from d1max_contract.registration import Registration
 from d1max_contract.topics import Topics
+from d1max_patrol.protocol.nav_types import Pose
 
 REG = Registration(site_id="s", robot_id="r", credential_fingerprint="f", issued_at=0,
                    expires_at=10**12)
@@ -22,12 +23,14 @@ T = Topics(site_id="s", robot_id="r")
 class 钟:
     def __init__(self) -> None:
         self.ms = 1_000_000
+        self.mono = 50.0
 
     def __call__(self) -> int:
         return self.ms
 
     def advance(self, dt_s: float) -> None:
         self.ms += int(round(dt_s * 1000))
+        self.mono += dt_s
 
 
 class 站点耳朵:
@@ -52,8 +55,10 @@ async def 台子(tmp_path):
     await site.subscribe(f"{T.prefix}/#", ears)
     rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=r,
                       store_dir=tmp_path / "agent", now_ms=c, loaded_map=("m", "1"),
-                      boot_id="boot-1")
-    return broker, c, r, ears, rt, site
+                      boot_id="boot-1", home=Pose.from_xy_yaw(0.0, 0.0),
+                      monotonic=lambda: c.mono)
+    yield broker, c, r, ears, rt, site
+    await rt.close()
 
 
 async def test_起来就发能力与状态_均retained(台子):

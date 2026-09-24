@@ -25,8 +25,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar
 
+from d1max_agent.engine.preflight import CheckResult
 from d1max_patrol.backends.base import DeviceBackendError, NavBackendError
-from d1max_patrol.engine.preflight import CheckResult
 
 #: 升级期间的电量下限。整机重启途中断电是最脏的一种坏法(§7.2)。
 #: 不带上装时不整机重启,这条门槛照样保留 —— 升级期间不该同时在换电池。
