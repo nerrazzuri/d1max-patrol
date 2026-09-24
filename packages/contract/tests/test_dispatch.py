@@ -127,3 +127,25 @@ async def test_坏报文只记日志不炸(台子, caplog):
     await broker.drain()
     assert site.status is None
     assert any("解析" in r.getMessage() or "schema" in r.getMessage() for r in caplog.records)
+
+
+async def test_attach只登记订阅不连接_站点一条连接挂多台狗():
+    from d1max_contract.dispatch import DispatchClient
+    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
+    from d1max_contract.topics import Topics
+
+    broker = MemoryBroker()
+    t = MemoryTransport(broker, "site")
+    a = DispatchClient(t, Topics(site_id="s", robot_id="A"), now_ms=lambda: 1)
+    b = DispatchClient(t, Topics(site_id="s", robot_id="B"), now_ms=lambda: 1)
+    await a.attach()
+    await b.attach()
+    assert t.connected is False
+    await t.connect()
+    dog = MemoryTransport(broker, "dogB")
+    await dog.connect()
+    await dog.publish(Topics(site_id="s", robot_id="B").capabilities,
+                      b'{"schema":"1.0","robot_id":"B","agent":"x","adapter":"y","tasks":{},'
+                      b'"actuators":{},"sensing":{}}', qos=1, retain=True)
+    await broker.drain()
+    assert b.capabilities is not None and a.capabilities is None

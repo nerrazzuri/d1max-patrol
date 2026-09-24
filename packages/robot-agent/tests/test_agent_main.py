@@ -189,3 +189,30 @@ def test_stop之后HAL的控制权放了_链路关了(tmp_path):
     h = asyncio.run(hal.health())
     held = asyncio.run(hal.control_status()).held
     assert h.link_ok is False and held is False
+
+
+def test_mqtts必须带齐三件证书_其他transport不许带(tmp_path):
+    tls = ["--tls-ca", "/e/ca.crt", "--tls-cert", "/e/r.crt", "--tls-key", "/e/r.key"]
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--transport", "mqtts://site:8883")
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--transport", "mqtts://site:8883", *tls[:4])
+    with pytest.raises(SystemExit):
+        _args(tmp_path, *tls)                                 # memory:// 带证书
+    a = _args(tmp_path, "--transport", "mqtts://site:8883", *tls)
+    assert (a.tls_ca, a.tls_cert, a.tls_key) == ("/e/ca.crt", "/e/r.crt", "/e/r.key")
+
+
+def test_证书交给PahoTransport(monkeypatch):
+    seen = {}
+
+    class 假:
+        def __init__(self, url, client_id, **kw):
+            seen.update(kw, url=url, client_id=client_id)
+
+    import d1max_contract.paho_transport as pt
+    monkeypatch.setattr(pt, "PahoTransport", 假)
+    agent_main._make_transport("mqtts://site:8883", "D1MAX-SIM", None,
+                               tls=("/e/ca.crt", "/e/r.crt", "/e/r.key"))
+    assert seen == {"url": "mqtts://site:8883", "client_id": "D1MAX-SIM", "tls_ca": "/e/ca.crt",
+                    "tls_cert": "/e/r.crt", "tls_key": "/e/r.key"}

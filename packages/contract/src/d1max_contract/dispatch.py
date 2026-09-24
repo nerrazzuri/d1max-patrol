@@ -63,6 +63,10 @@ class DispatchClient:
 
     async def start(self) -> None:
         await self._t.connect()
+        await self.attach()
+
+    async def attach(self) -> None:
+        """只登记订阅、不连接。站点在一条共享连接上给每台狗挂一个客户端(W00c1)。"""
         await self._t.subscribe(self.topics.ack, self._on_ack)
         await self._t.subscribe(self.topics.event, self._on_event)
         await self._t.subscribe(self.topics.status, self._on_status)

@@ -1298,6 +1298,8 @@ def test_agent单元的形状():
     段 = _按段(单元)
     assert "User" in 段["[Service]"] and "User=robot" in 单元
     assert "ExecStart=/opt/d1max/current/venv/bin/d1max-agent" in 单元
+    for f in ("ca.crt", "robot.crt", "robot.key"):            # W00c1:站点 broker 要 mTLS
+        assert f"/etc/d1max/tls/{f}" in 单元, f
     assert "Environment=D1MAX_DATA_ROOT=/var/lib/d1max" in 单元
     assert "EnvironmentFile=-/etc/d1max/env" in 单元
     assert "Restart=always" in 单元 and "RestartSec=" in 单元

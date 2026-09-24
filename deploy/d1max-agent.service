@@ -15,13 +15,14 @@ WorkingDirectory=-/opt/d1max/current
 Environment=D1MAX_RELEASE_ROOT=/opt/d1max
 Environment=D1MAX_DATA_ROOT=/var/lib/d1max
 Environment=PYTHONUNBUFFERED=1
-# 站点地址、地图、原点这些现场值从 env 文件来(W00c 装站点时填):
+# 站点地址、地图、原点这些现场值从 env 文件来(W00c 装站点时填);证书包由站点
+# `d1max-site enroll` 签发,拷到 /etc/d1max/tls/(W00c1):
 #   D1MAX_SITE_MQTT=mqtts://<站点>:8883   D1MAX_MAP=<map_id>:<version>   D1MAX_HOME=x,y,yaw
 EnvironmentFile=-/etc/d1max/env
 # W00b:装而不 enable。站点 broker 在 W00c 才有;现在起来连不上就退 1(约 10 s 超时),
 # 由 Restart=always 每 5 秒再起一次。
 # W00c 起用时把 --hal 换成 d1max(W00d 出适配器之后)。
-ExecStart=/opt/d1max/current/venv/bin/d1max-agent --transport ${D1MAX_SITE_MQTT} --hal sim --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent --runs-root /var/lib/d1max/runs --map ${D1MAX_MAP} --home ${D1MAX_HOME}
+ExecStart=/opt/d1max/current/venv/bin/d1max-agent --transport ${D1MAX_SITE_MQTT} --tls-ca /etc/d1max/tls/ca.crt --tls-cert /etc/d1max/tls/robot.crt --tls-key /etc/d1max/tls/robot.key --hal sim --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent --runs-root /var/lib/d1max/runs --map ${D1MAX_MAP} --home ${D1MAX_HOME}
 Restart=always
 RestartSec=5
 

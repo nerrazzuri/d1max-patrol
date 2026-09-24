@@ -89,11 +89,24 @@ def build_parser() -> argparse.ArgumentParser:
                    help="同一进程里托管老的 HTTP 面(手机/值守屏用),host:port")
     p.add_argument("--pin", default=None, help="legacy HTTP 绑到非本机地址时必须给")
     p.add_argument("--sn", default=None, help="机身序列号(legacy HTTP 的身份用)")
+    p.add_argument("--tls-ca", default=None, help="mqtts:站点 CA 证书")
+    p.add_argument("--tls-cert", default=None, help="mqtts:本机证书(站点 enroll 签发,CN=robot_id)")
+    p.add_argument("--tls-key", default=None, help="mqtts:本机私钥")
     return p
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    return build_parser().parse_args(argv)
+    p = build_parser()
+    args = p.parse_args(argv)
+    tls = (args.tls_ca, args.tls_cert, args.tls_key)
+    given = [t is not None for t in tls]
+    if args.transport.startswith("mqtts://"):
+        # 站点 broker 要双向认证(W00c1):缺哪一件都连不上,不如起动时就说清楚。
+        if not all(given):
+            p.error("mqtts:// 要带齐 --tls-ca、--tls-cert、--tls-key")
+    elif any(given):
+        p.error("--tls-* 只用于 mqtts://")
+    return args
 
 
 @dataclass
@@ -144,12 +157,16 @@ class Assembled:
         self.bridge.stop()
 
 
-def _make_transport(url: str, client_id: str, broker: MemoryBroker | None) -> Transport:
+def _make_transport(url: str, client_id: str, broker: MemoryBroker | None, *,
+                    tls: tuple[str | None, str | None, str | None] = (None, None, None)
+                    ) -> Transport:
     if url == "memory://":
         assert broker is not None
         return MemoryTransport(broker, client_id)
-    from d1max_contract.paho_transport import PahoTransport
-    return PahoTransport(url, client_id=client_id)
+    from d1max_contract import paho_transport
+    ca, cert, key = tls
+    return paho_transport.PahoTransport(url, client_id=client_id, tls_ca=ca, tls_cert=cert,
+                                        tls_key=key)
 
 
 def build(args: argparse.Namespace) -> Assembled:
@@ -172,7 +189,8 @@ def build(args: argparse.Namespace) -> Assembled:
             raise SystemExit(f"不认识的 HAL {args.hal!r}")
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
                              home=args.home)
-        transport = _make_transport(args.transport, registration.robot_id, broker)
+        transport = _make_transport(args.transport, registration.robot_id, broker,
+                                    tls=(args.tls_ca, args.tls_cert, args.tls_key))
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,
                                store_dir=args.store_dir, now_ms=wall_ms, loaded_map=args.map,
                                parts=parts)
