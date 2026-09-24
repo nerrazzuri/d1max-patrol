@@ -199,3 +199,12 @@ def test_完整吊销成功才打印已吊销(home, capsys):
     assert site_main.main(["--home", str(home), "revoke", "A"]) == 0
     out = capsys.readouterr().out
     assert "已吊销 A" in out and "CRL 已更新" in out and "注册表已吊销" in out
+
+
+def test_import_bundle命令(home, tmp_path, capsys):
+    from test_site_schedule import 打包
+    b = 打包(tmp_path, 1)
+    assert site_main.main(["--home", str(home), "import-bundle", str(b)]) == 0
+    assert "导入了 estate-kl v1" in capsys.readouterr().out
+    assert site_main.main(["--home", str(home), "import-bundle", str(b)]) == 2
+    assert "版本号只许往上走" in capsys.readouterr().err

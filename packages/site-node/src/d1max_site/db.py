@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -61,6 +61,41 @@ CREATE TABLE IF NOT EXISTS events (
     received_at INTEGER NOT NULL,
     PRIMARY KEY (robot_id, boot_id, seq)
 );
+CREATE TABLE IF NOT EXISTS bundles (
+    bundle_id      TEXT NOT NULL,
+    version        INTEGER NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    timezone       TEXT NOT NULL,
+    schedule       TEXT NOT NULL,
+    imported_at    INTEGER NOT NULL,
+    imported_by    TEXT NOT NULL,
+    active         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (bundle_id, version)
+);
+CREATE TABLE IF NOT EXISTS missions (
+    bundle_id  TEXT NOT NULL,
+    version    INTEGER NOT NULL,
+    mission_id TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    PRIMARY KEY (bundle_id, version, mission_id)
+);
+CREATE TABLE IF NOT EXISTS schedule_state (
+    entry_id        TEXT PRIMARY KEY,
+    last_started_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS schedule_runs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id     TEXT NOT NULL,
+    scheduled_ms INTEGER NOT NULL,
+    outcome      TEXT NOT NULL,
+    robot_id     TEXT,
+    task_id      TEXT,
+    result       TEXT,
+    note         TEXT NOT NULL DEFAULT '',
+    decided_at   INTEGER NOT NULL,
+    UNIQUE (entry_id, scheduled_ms, outcome)
+);
+CREATE INDEX IF NOT EXISTS schedule_runs_task ON schedule_runs(task_id);
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,
     status       TEXT,

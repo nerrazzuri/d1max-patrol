@@ -213,3 +213,23 @@ def test_解出来的东西是冻的():
     e = parse_schedule(一份()).entries[0]
     with pytest.raises((AttributeError, TypeError)):
         e.window_min = 1                                    # type: ignore[misc]
+
+
+def test_排程条目可以指定狗_不写时线格式不变():
+    """W00c2a:站点执行排程时用 ``robot`` 指定哪台跑。老包没这个字段,导出也不多出来。"""
+    from d1max_contract.schedule import parse_schedule
+    s = parse_schedule({"timezone": "Asia/Kuala_Lumpur", "entries": [
+        {"id": "a", "mission": "m", "at": "22:00", "days": ["mon"], "window_min": 30,
+         "on_missed": "skip", "robot": "D1MAX-001"},
+        {"id": "b", "mission": "m", "at": "23:00", "days": ["mon"], "window_min": 30,
+         "on_missed": "skip"}]})
+    a, b = s.entries
+    assert a.robot == "D1MAX-001" and a.to_wire()["robot"] == "D1MAX-001"
+    assert b.robot == "" and "robot" not in b.to_wire()
+    import pytest
+
+    from d1max_contract.schedule import ScheduleError
+    with pytest.raises(ScheduleError):
+        parse_schedule({"timezone": "UTC", "entries": [
+            {"id": "c", "mission": "m", "at": "01:00", "days": ["mon"], "window_min": 5,
+             "on_missed": "skip", "robot": 7}]})

@@ -175,6 +175,21 @@ def test_W00c1_端到端(现场):
     assert {c["issued_by"] for c in v["commands"]} == {"alice"}
     assert [c["kind"] for c in v["commands"]][:3] == ["abort", "goto", "goto"]
 
+    # W00c2a:导入任务包(命令行)→ 手动起一趟 patrol(带拍照动作,真 agent 进程用 sim 相机)
+    from test_site_schedule import 任务, 打包
+    带拍照 = json.loads(json.dumps(任务))
+    带拍照["waypoints"][0]["actions"] = [{"type": "photo", "camera": "front"}]
+    包 = 打包(ctx["home"].parent, 1, mission=带拍照)
+    r = site(ctx["home"], "import-bundle", str(包))
+    assert r.returncode == 0, r.stderr
+    code, pt = req(ctx, "POST", "/api/robots/A/patrol", {"mission_id": "loop"}, token=tok)
+    assert code == 200 and pt["ack"]["result"] == "accepted", pt
+    等(lambda: _task_event(ctx, tok, pt["task_id"], "task_done"), what="patrol task_done")
+    v = req(ctx, "GET", "/api/robots/A", token=tok)[1]
+    点 = [e for e in v["events"] if e["kind"] == "patrol_waypoint"
+         and e["data"].get("task_id") == pt["task_id"]]
+    assert sorted(e["data"]["name"] for e in 点) == ["a", "b"] and all(e["data"]["ok"] for e in 点)
+
     # 2. A 冒充 B:站点看不到 B 的 status
     home, bport = ctx["home"], ctx["bport"]
     a = home / "ca" / "issued" / "A"

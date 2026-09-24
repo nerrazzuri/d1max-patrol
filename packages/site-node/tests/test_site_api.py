@@ -303,3 +303,48 @@ def test_注销之后SSE也断(站点):
         conn.close()
     finally:
         api.stop()
+
+
+def _任务包(tmp_path, version=1):
+    from test_site_schedule import 打包
+    return 打包(tmp_path, version)
+
+
+def test_导入任务包_手动起一趟patrol走完(站点, tmp_path):
+    tok = 站点.login()
+    _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
+    code, d = 站点.req("POST", "/api/bundles", {"path": str(_任务包(tmp_path))}, token=tok)
+    assert code == 200 and d["missions"] == ["loop"], d
+    code, d = 站点.req("POST", "/api/robots/A/patrol", {"mission_id": "loop"}, token=tok)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    tid = d["task_id"]
+
+    def done():
+        v = 站点.req("GET", "/api/robots/A", token=tok)[1]
+        return any(e["kind"] == "task_done" and e["data"].get("task_id") == tid
+                   for e in v["events"])
+
+    _等(done, timeout=40)
+    v = 站点.req("GET", "/api/robots/A", token=tok)[1]
+    assert v["commands"][0]["kind"] == "patrol" and v["commands"][0]["issued_by"] == "alice"
+
+
+def test_任务包路由的错误(站点, tmp_path):
+    tok = 站点.login()
+    assert 站点.req("POST", "/api/bundles", {}, token=tok)[0] == 400
+    code, d = 站点.req("POST", "/api/bundles", {"path": str(tmp_path / "nope")}, token=tok)
+    assert code == 409 and "校验没过" in d["error"]
+    assert 站点.req("POST", "/api/robots/A/patrol", {"mission_id": "loop"}, token=tok)[0] == 404
+    assert 站点.req("POST", "/api/robots/A/patrol", {}, token=tok)[0] == 400
+    assert 站点.req("GET", "/api/schedule", token=tok)[0] == 404, "没开排程的站点"
+    assert 站点.req("POST", "/api/bundles", {"path": "x"})[0] == 401
+
+
+def test_排程视图(站点, tmp_path):
+    from d1max_site.scheduler import SiteScheduler
+    tok = 站点.login()
+    站点.req("POST", "/api/bundles", {"path": str(_任务包(tmp_path))}, token=tok)
+    站点.api.scheduler = SiteScheduler(站点.db, 站点.disp, now_ms=wall)
+    code, v = 站点.req("GET", "/api/schedule", token=tok)
+    assert code == 200 and v["bundle"]["bundle_id"] == "estate-kl"
+    assert v["entries"][0]["id"] == "nightly" and v["entries"][0]["next_run"]

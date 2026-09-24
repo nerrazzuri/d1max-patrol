@@ -13,6 +13,7 @@
     enroll    ROBOT_ID [--days 365]        → 打印证书包目录(拷到狗的 /etc/d1max/)
     revoke    ROBOT_ID                     → 吊销;要重启 d1max-mosquitto 才对 broker 生效
     add-admin NAME                         → 口令从 D1MAX_SITE_PASSWORD 或交互输入
+    import-bundle DIR                      → 导入任务包,成为当前包(W00c2a)
     serve     [--api-host 127.0.0.1] [--api-port 8443] [--broker mqtts://127.0.0.1:8883]
 """
 
@@ -158,6 +159,18 @@ def cmd_revoke(home: Path, robot_id: str) -> str:
     return summary
 
 
+def cmd_import_bundle(home: Path, bundle_dir: Path, imported_by: str) -> dict:
+    from d1max_site.catalog import CatalogError, import_bundle
+    _load(home)
+    db = SiteDB(home / "site.db")
+    try:
+        return import_bundle(db, bundle_dir, imported_by=imported_by, now_ms=wall_ms())
+    except CatalogError as exc:
+        raise SiteError(str(exc)) from exc
+    finally:
+        db.close()
+
+
 def cmd_add_admin(home: Path, name: str, password: str) -> None:
     _load(home)
     db = SiteDB(home / "site.db")
@@ -194,14 +207,31 @@ class Server:
                                   tls_ca=str(ca / "ca.crt"), tls_cert=str(server_crt),
                                   tls_key=str(server_key))
         self.dispatcher = Dispatcher(transport, self.db, self.registry, now_ms=wall_ms)
+        from d1max_site.scheduler import SiteScheduler
+        self.scheduler = SiteScheduler(self.db, self.dispatcher, now_ms=wall_ms)
         self.api = SiteApi(host=api_host, port=api_port, loop=self.loop,
-                           dispatcher=self.dispatcher, accounts=self.accounts, tls=tls)
+                           dispatcher=self.dispatcher, accounts=self.accounts, tls=tls,
+                           scheduler=self.scheduler, now_ms=wall_ms)
         self._stop = threading.Event()
 
     def start(self) -> None:
         self.loop.call(self.dispatcher.start, timeout_s=30)
         self.loop.submit(self._sync_loop)
+        self.loop.submit(self._schedule_loop)
         self.api.start()
+
+    async def _schedule_loop(self) -> None:
+        """排程执行器:每 30 s 一拍。一拍炸了记下来、下一拍照走(老 W06 执行器同一个理由:
+        它死掉的后果是静默的 —— 从此到点没人起跑)。"""
+        from d1max_site.scheduler import PERIOD_S
+        while not self._stop.is_set():
+            await asyncio.sleep(PERIOD_S)
+            try:
+                await self.scheduler.tick()
+                self.scheduler.last_error = ""
+            except Exception as exc:
+                self.scheduler.last_error = f"{type(exc).__name__}: {exc}"
+                log.exception("排程这一拍没办成")
 
     async def _sync_loop(self) -> None:
         while not self._stop.is_set():
@@ -264,6 +294,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--days", type=int, default=365)
     r = sub.add_parser("revoke", help="吊销一台狗(之后重启 d1max-mosquitto)")
     r.add_argument("robot_id")
+    b = sub.add_parser("import-bundle", help="导入任务包,成为当前包")
+    b.add_argument("bundle_dir", type=Path)
     a = sub.add_parser("add-admin", help="加管理员账号")
     a.add_argument("name")
     s = sub.add_parser("serve", help="跑站点:派遣器 + 站点 API")
@@ -291,6 +323,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             summary = cmd_revoke(home, args.robot_id)
             print(f"已吊销 {args.robot_id}({summary})。重启 broker 才对 broker 生效: "
                   f"systemctl restart d1max-mosquitto")
+        elif args.cmd == "import-bundle":
+            got = cmd_import_bundle(home, args.bundle_dir, f"cli:{getpass.getuser()}")
+            print(f"导入了 {got['bundle_id']} v{got['version']}:任务 {', '.join(got['missions'])};"
+                  f"排程 {', '.join(got['schedule_entries']) or '无'}({got['timezone']})")
         elif args.cmd == "add-admin":
             pw = os.environ.get("D1MAX_SITE_PASSWORD") or getpass.getpass("口令: ")
             cmd_add_admin(home, args.name, pw)

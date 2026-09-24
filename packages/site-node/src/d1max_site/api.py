@@ -8,6 +8,9 @@
 - ``GET  /api/robots/<id>`` → 视图 + 最近事件 + 最近命令
 - ``POST /api/robots/<id>/goto`` ``{"target":MapPose,"max_speed_mps"?,"priority"?}``
 - ``POST /api/robots/<id>/abort`` ``{"task_id"}``
+- ``POST /api/robots/<id>/patrol`` ``{"mission_id"}``:从当前任务包里起一趟(W00c2a)
+- ``POST /api/bundles`` ``{"path"}``:导入站点主机上的一个任务包目录(W00c2a)
+- ``GET  /api/schedule``:当前包的排程,每条下一轮何时、最近一次去向与结果(W00c2a)
 - ``GET  /api/events`` SSE:第一帧全量快照,之后是派遣器的 status/event/ack/reconcile;
   订阅者跟不上时补发一帧全量快照(``lagged``),不悄悄丢
 
@@ -45,7 +48,7 @@ SSE_HEARTBEAT_S = 15.0
 #: 一个请求(含读请求头)多久没动静就断:慢速攻击(slowloris)不能一直占着线程。
 REQUEST_TIMEOUT_S = 30.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-_ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort))?$")
+_ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol))?$")
 
 
 class HttpError(Exception):
@@ -64,6 +67,7 @@ def check_exposure(host: str, tls: tuple[Path, Path] | None) -> None:
 class SiteApi:
     def __init__(self, *, host: str, port: int, loop: LoopThread, dispatcher: Dispatcher,
                  accounts: Accounts, tls: tuple[Path, Path] | None = None,
+                 scheduler: Any = None, now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
         check_exposure(host, tls)
@@ -72,6 +76,8 @@ class SiteApi:
         self.loop = loop
         self.dispatcher = dispatcher
         self.accounts = accounts
+        self.scheduler = scheduler
+        self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         self._stopping = threading.Event()
         api = self
 
@@ -187,6 +193,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"robots": self.site.dispatcher.robots_view()})
             if method == "GET" and path == "/api/events":
                 return self._sse()
+            if method == "GET" and path == "/api/schedule":
+                if self.site.scheduler is None:
+                    raise HttpError(404, "这个站点没开排程")
+                return self._send_json(200, self.site.scheduler.view())
+            if method == "POST" and path == "/api/bundles":
+                return self._import_bundle(user)
             m = _ROBOT.match(path)
             if m is not None:
                 robot_id = unquote(m.group(1))
@@ -250,12 +262,35 @@ class _Handler(BaseHTTPRequestHandler):
                 raise HttpError(400, "要 target(MapPose 对象)")
             result = self.site.dispatch(lambda: disp.goto(
                 robot_id, target, speed, issued_by=user, priority=prio))
+        elif action == "patrol":
+            mid = d.get("mission_id")
+            if not isinstance(mid, str) or not mid:
+                raise HttpError(400, "要 mission_id")
+            from d1max_site.catalog import active_bundle
+            act = active_bundle(disp.db)
+            if act is None or mid not in act.missions:
+                raise HttpError(404, f"当前任务包里没有任务 {mid!r}")
+            wire = act.missions[mid].to_wire()
+            result = self.site.dispatch(lambda: disp.patrol(robot_id, wire, issued_by=user))
         else:
             task_id = d.get("task_id")
             if not isinstance(task_id, str) or not task_id:
                 raise HttpError(400, "要 task_id")
             result = self.site.dispatch(lambda: disp.abort(robot_id, task_id, issued_by=user))
         self._send_json(200, result)
+
+    def _import_bundle(self, user: str) -> None:
+        from d1max_site.catalog import CatalogError, import_bundle
+        d = self._body()
+        path = d.get("path")
+        if not isinstance(path, str) or not path:
+            raise HttpError(400, "要 path(站点主机上任务包目录的路径)")
+        try:
+            got = import_bundle(self.site.dispatcher.db, Path(path), imported_by=user,
+                                now_ms=self.site._now())
+        except CatalogError as exc:
+            raise HttpError(409, str(exc)) from exc
+        self._send_json(200, got)
 
     def _sse(self) -> None:
         feed = self.site.dispatcher.feed

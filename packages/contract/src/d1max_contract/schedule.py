@@ -62,9 +62,12 @@ class ScheduleEntry:
     window_min: int
     on_missed: str
     priority: int = 0
+    #: 指定哪台狗跑(W00c2a,站点执行排程时用)。空 = 站点挑一台能派的;站点有不止一台能派的
+    #: 狗而这里没写,站点不替人挑,按 ``alarm`` 记账。狗上的老执行器不看它。
+    robot: str = ""
 
     def to_wire(self) -> dict[str, Any]:
-        return {
+        out = {
             "id": self.id,
             "mission": self.mission,
             "at": f"{self.at_h:02d}:{self.at_m:02d}",
@@ -75,6 +78,9 @@ class ScheduleEntry:
             "on_missed": self.on_missed,
             "priority": self.priority,
         }
+        if self.robot:
+            out["robot"] = self.robot
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +143,10 @@ def _parse_entry(raw: Any, index: int) -> ScheduleEntry:
     _require(_是整数(priority),
              f"{where}(id={ident}) 的 priority 要是整数,实际为 {priority!r}")
 
+    robot = raw.get("robot", "")
+    _require(isinstance(robot, str),
+             f"{where}(id={ident}) 的 robot 要是字符串,实际为 {robot!r}")
+
     return ScheduleEntry(
         id=ident,                                   # type: ignore[arg-type]
         mission=mission,                            # type: ignore[arg-type]
@@ -145,6 +155,7 @@ def _parse_entry(raw: Any, index: int) -> ScheduleEntry:
         window_min=window,                          # type: ignore[arg-type]
         on_missed=on_missed,                        # type: ignore[arg-type]
         priority=priority,                          # type: ignore[arg-type]
+        robot=robot,
     )
 
 

@@ -19,6 +19,7 @@ from typing import Any
 from d1max_contract.dispatch import DispatchClient, DispatchTimeout
 from d1max_contract.errors import ContractError
 from d1max_contract.messages import Ack, Event, MapPose, Reconcile, Status
+from d1max_contract.mission import MissionError, parse_mission
 from d1max_contract.topics import Topics
 from d1max_contract.transport import Transport
 from d1max_site.db import SiteDB
@@ -110,6 +111,8 @@ class Dispatcher:
         self.ack_timeout_s = ack_timeout_s
         self.clients: dict[str, DispatchClient] = {}
         self.feed = Feed()
+        #: 新事件(去重之后)的回调:排程执行器靠它回写这一趟的结果。
+        self._event_cbs: list[Callable[[str, Event], None]] = []
         #: 关了之后还在路上的上行报文不再落库(库可能已经关了)。
         self._closed = False
 
@@ -172,7 +175,15 @@ class Dispatcher:
             fresh = cur.rowcount == 1
         if not fresh:
             return                          # 站点重启后 broker 补投的旧事件:库里有了,不再推
+        for cb in list(self._event_cbs):
+            try:
+                cb(robot_id, e)
+            except Exception:
+                log.exception("事件回调炸了(%s %s),其余照常", robot_id, e.kind)
         self.feed.publish({"kind": "event", "robot_id": robot_id, "event": e.to_wire()})
+
+    def on_event(self, cb: Callable[[str, Event], None]) -> None:
+        self._event_cbs.append(cb)
 
     def _on_reconcile(self, robot_id: str, r: Reconcile) -> None:
         self.feed.publish({"kind": "reconcile", "robot_id": robot_id,
@@ -224,9 +235,8 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 还没挂上派遣客户端")
         return c
 
-    async def goto(self, robot_id: str, target: dict[str, Any], max_speed_mps: float | None,
-                   *, issued_by: str, priority: int = 0) -> dict[str, Any]:
-        c = self._client_for(robot_id)
+    def _check_dispatchable(self, robot_id: str, c: DispatchClient, kind: str) -> None:
+        """派遣条件(总设计 §3.1):在线、新鲜、就绪、支持这种任务。"""
         s = c.status
         if s is None or not s.online:
             raise DispatchRefused(f"{robot_id} 不在线")
@@ -236,8 +246,28 @@ class Dispatcher:
         not_ready = [k for k, v in s.ready.to_wire().items() if k != "schema" and not v]
         if not_ready:
             raise DispatchRefused(f"{robot_id} 没就绪: {', '.join(sorted(not_ready))}")
-        if c.capabilities is not None and "goto" not in c.capabilities.tasks:
-            raise DispatchRefused(f"{robot_id} 不支持 goto")
+        if c.capabilities is not None and kind not in c.capabilities.tasks:
+            raise DispatchRefused(f"{robot_id} 不支持 {kind}")
+
+    def dispatchable(self, robot_id: str, kind: str) -> str:
+        """能不能给它派这种任务:能 → 空串;不能 → 理由。排程执行器选狗用。"""
+        try:
+            self._check_dispatchable(robot_id, self._client_for(robot_id), kind)
+        except DispatchRefused as exc:
+            return str(exc)
+        return ""
+
+    def busy(self, robot_id: str) -> str | None:
+        """狗上此刻在跑的任务 id(看它自己报的 status);没有 → None。"""
+        c = self.clients.get(robot_id)
+        if c is None or c.status is None or c.status.task is None:
+            return None
+        return c.status.task.task_id
+
+    async def goto(self, robot_id: str, target: dict[str, Any], max_speed_mps: float | None,
+                   *, issued_by: str, priority: int = 0) -> dict[str, Any]:
+        c = self._client_for(robot_id)
+        self._check_dispatchable(robot_id, c, "goto")
         try:
             MapPose.from_wire(target)
         except ContractError as exc:
@@ -247,6 +277,26 @@ class Dispatcher:
             payload["max_speed_mps"] = max_speed_mps
         return await self._send(c, robot_id, "goto", payload, issued_by=issued_by,
                                 priority=priority)
+
+    async def patrol(self, robot_id: str, mission: dict[str, Any], *, issued_by: str,
+                     priority: int = 0) -> dict[str, Any]:
+        """整趟巡检(W00c2a)。任务定义整份放进命令(设计决定二 A);``map_version`` 取狗在
+        能力报文里报的已加载地图,任务的 ``map_id`` 要跟它一致。"""
+        c = self._client_for(robot_id)
+        self._check_dispatchable(robot_id, c, "patrol")
+        try:
+            m = parse_mission(mission)
+        except (MissionError, ValueError) as exc:
+            raise DispatchRefused(f"任务定义不成形: {exc}") from exc
+        caps = c.capabilities.tasks.get("patrol", {}) if c.capabilities is not None else {}
+        loaded = (caps.get("map_id"), caps.get("map_version"))
+        if loaded[0] is None or loaded[1] is None:
+            raise DispatchRefused(f"{robot_id} 没报已加载的地图")
+        if m.map_id != loaded[0]:
+            raise DispatchRefused(f"任务用的地图 {m.map_id!r},{robot_id} 加载的是 {loaded[0]!r}")
+        return await self._send(c, robot_id, "patrol",
+                                {"mission": m.to_wire(), "map_version": loaded[1]},
+                                issued_by=issued_by, priority=priority)
 
     async def abort(self, robot_id: str, task_id: str, *, issued_by: str) -> dict[str, Any]:
         """abort 只要求登记有效:不在线也发(QoS 1 持久会话,重连后补投)。"""
