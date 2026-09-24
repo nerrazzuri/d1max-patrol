@@ -31,6 +31,9 @@ log = logging.getLogger(__name__)
 #: 代理空闲时每 30 s 发一次 status。
 STALE_MS = 90_000
 COMMAND_TTL_MS = 60_000
+#: 一趟巡检的任务定义进命令(设计决定二 A);broker 的报文上限是 256 KB,留余量。
+MAX_PATROL_BYTES = 200_000
+MAX_PATROL_WAYPOINTS = 500
 
 
 class DispatchRefused(RuntimeError):
@@ -113,6 +116,7 @@ class Dispatcher:
         self.feed = Feed()
         #: 新事件(去重之后)的回调:排程执行器靠它回写这一趟的结果。
         self._event_cbs: list[Callable[[str, Event], None]] = []
+        self._ack_cbs: list[Callable[[Ack], None]] = []
         #: 关了之后还在路上的上行报文不再落库(库可能已经关了)。
         self._closed = False
 
@@ -184,6 +188,10 @@ class Dispatcher:
 
     def on_event(self, cb: Callable[[str, Event], None]) -> None:
         self._event_cbs.append(cb)
+
+    def on_ack(self, cb: Callable[[Ack], None]) -> None:
+        """每条回执(包括超时之后才到的)落库之后回调。"""
+        self._ack_cbs.append(cb)
 
     def _on_reconcile(self, robot_id: str, r: Reconcile) -> None:
         self.feed.publish({"kind": "reconcile", "robot_id": robot_id,
@@ -279,7 +287,8 @@ class Dispatcher:
                                 priority=priority)
 
     async def patrol(self, robot_id: str, mission: dict[str, Any], *, issued_by: str,
-                     priority: int = 0) -> dict[str, Any]:
+                     priority: int = 0, task_id: str | None = None,
+                     before_send: Callable[[Any], None] | None = None) -> dict[str, Any]:
         """整趟巡检(W00c2a)。任务定义整份放进命令(设计决定二 A);``map_version`` 取狗在
         能力报文里报的已加载地图,任务的 ``map_id`` 要跟它一致。"""
         c = self._client_for(robot_id)
@@ -294,9 +303,14 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 没报已加载的地图")
         if m.map_id != loaded[0]:
             raise DispatchRefused(f"任务用的地图 {m.map_id!r},{robot_id} 加载的是 {loaded[0]!r}")
-        return await self._send(c, robot_id, "patrol",
-                                {"mission": m.to_wire(), "map_version": loaded[1]},
-                                issued_by=issued_by, priority=priority)
+        if len(m.waypoints) > MAX_PATROL_WAYPOINTS:
+            raise DispatchRefused(f"一趟最多 {MAX_PATROL_WAYPOINTS} 个航点,这趟 "
+                                  f"{len(m.waypoints)} 个")
+        payload = {"mission": m.to_wire(), "map_version": loaded[1]}
+        if len(json.dumps(payload).encode()) > MAX_PATROL_BYTES:
+            raise DispatchRefused(f"任务定义超过 {MAX_PATROL_BYTES} 字节")
+        return await self._send(c, robot_id, "patrol", payload, issued_by=issued_by,
+                                priority=priority, task_id=task_id, before_send=before_send)
 
     async def abort(self, robot_id: str, task_id: str, *, issued_by: str) -> dict[str, Any]:
         """abort 只要求登记有效:不在线也发(QoS 1 持久会话,重连后补投)。"""
@@ -304,8 +318,8 @@ class Dispatcher:
         return await self._send(c, robot_id, "abort", {}, issued_by=issued_by, task_id=task_id)
 
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
-                    *, issued_by: str, task_id: str | None = None,
-                    priority: int = 0) -> dict[str, Any]:
+                    *, issued_by: str, task_id: str | None = None, priority: int = 0,
+                    before_send: Callable[[Any], None] | None = None) -> dict[str, Any]:
         if not issued_by:
             raise DispatchRefused("没有已认证的派单人")
         cmd = c.new_command(kind, payload, ttl_ms=COMMAND_TTL_MS,
@@ -316,6 +330,10 @@ class Dispatcher:
                        "issued_by, issued_at) VALUES (?,?,?,?,?,?,?)",
                        (cmd.command_id, cmd.task_id, robot_id, kind, json.dumps(payload),
                         issued_by, cmd.issued_at))
+        if before_send is not None:
+            # 调用方要在命令**发出去之前**记账(排程执行器:这一轮算起跑过了)——回执可能丢,
+            # 狗可能收到了;发完再记的话,回执一丢就会再派一趟。
+            before_send(cmd)
         try:
             ack = await c.send(cmd, timeout_s=self.ack_timeout_s)
         except DispatchTimeout:
@@ -335,3 +353,8 @@ class Dispatcher:
         with self.db.tx() as c:
             c.execute("UPDATE commands SET ack_result=?, ack_reason=? WHERE command_id=?",
                       (ack.result.value, ack.reason, ack.command_id))
+        for cb in list(self._ack_cbs):
+            try:
+                cb(ack)
+            except Exception:
+                log.exception("回执回调炸了(%s),其余照常", ack.command_id)

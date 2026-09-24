@@ -208,3 +208,13 @@ def test_import_bundle命令(home, tmp_path, capsys):
     assert "导入了 estate-kl v1" in capsys.readouterr().out
     assert site_main.main(["--home", str(home), "import-bundle", str(b)]) == 2
     assert "版本号只许往上走" in capsys.readouterr().err
+
+
+def test_任务包里有命名管道_导入被拒而不是卡住(home, tmp_path, capsys):
+    import os
+
+    from test_site_schedule import 打包
+    b = 打包(tmp_path, 1)
+    os.mkfifo(b / "missions" / "trap.json")
+    assert site_main.main(["--home", str(home), "import-bundle", str(b)]) == 2
+    assert "不是普通文件" in capsys.readouterr().err

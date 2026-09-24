@@ -310,3 +310,13 @@ async def test_订阅者跟不上_清掉积压再给快照(台):
         t.site.feed.publish({"kind": "x", "i": i})
     assert sub.lagged
     assert sub.drain() == 1000 and sub.get(0) is None
+
+
+async def test_patrol太大_发之前就拒(台):
+    t = 台
+    pt = {"position": {"x": 0.1, "y": 0}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
+    big = {"mission": "big", "map_id": "estate-1", "policy": {},
+           "waypoints": [{"name": f"p{i}", "pose": pt} for i in range(501)]}
+    with pytest.raises(DispatchRefused, match="500"):
+        await t.site.patrol("A", big, issued_by="alice")
+    assert not [c for c in t.site.commands("A") if c["kind"] == "patrol"]

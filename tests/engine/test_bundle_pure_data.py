@@ -214,10 +214,23 @@ def test_verify会把问题带进报错里(tmp_path):
         verify_pure_data(d)
 
 
-def test_四道闸的名字都在(tmp_path):
-    """报上去的 ``gate`` 是接口的一部分:值守屏按它分类。"""
+def test_五道闸的名字都在(tmp_path):
+    """报上去的 ``gate`` 是接口的一部分:值守屏按它分类。W00c2a 加了第 0 道 ``special``。"""
     from d1max_patrol.engine.bundle import GATE_NAMES
-    assert GATE_NAMES == ("suffix", "symlink", "exec_bit", "shebang")
+    assert GATE_NAMES == ("special", "suffix", "symlink", "exec_bit", "shebang")
+
+
+def test_命名管道被special那道拒_不会卡在读头两个字节(tmp_path):
+    import os
+    import threading
+    d = 干净的包(tmp_path)
+    os.mkfifo(d / "missions" / "trap.json")
+    got = []
+    t = threading.Thread(target=lambda: got.append(scan_pure_data(d)), daemon=True)
+    t.start()
+    t.join(10)
+    assert not t.is_alive(), "扫描卡在命名管道上了"
+    assert [(v.gate, v.path) for v in got[0]] == [("special", "missions/trap.json")]
 
 
 def test_目录本身不参与后缀判断(tmp_path):

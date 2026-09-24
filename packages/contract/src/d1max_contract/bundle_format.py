@@ -238,7 +238,7 @@ _EXEC_BITS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
 _SHEBANG = b"#!"
 
 #: 报上去的分类。值守屏按它分类,**改一个字就是破坏兼容**。
-GATE_NAMES = ("suffix", "symlink", "exec_bit", "shebang")
+GATE_NAMES = ("special", "suffix", "symlink", "exec_bit", "shebang")
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +264,23 @@ def _走一遍(root: Path):
         for 名 in sorted(目录们) + sorted(文件们):
             p = base / 名
             yield p.relative_to(root).as_posix(), p, p.is_symlink()
+
+
+def _普通(p: Path) -> bool:
+    """普通文件(不跟链接)。命名管道、套接字、设备文件都不是 —— 后面几道闸会去 ``open()``
+    它,对命名管道那一下会永远阻塞。"""
+    try:
+        return stat.S_ISREG(os.lstat(p).st_mode)
+    except OSError:
+        return False
+
+
+def _gate_special(条目) -> list[Violation]:
+    """第 0 道:只许普通文件与目录。命名管道、套接字、设备文件一律拒(W00c2a:站点导入任务包时
+    内部评审发现,一个叫 ``missions/x.json`` 的命名管道能让 shebang 那道闸永远卡住)。"""
+    return [Violation("special", rel, "不是普通文件(命名管道、套接字或设备)")
+            for rel, p, 是链接 in 条目
+            if not 是链接 and not p.is_dir() and not _普通(p)]
 
 
 def _gate_suffix(条目) -> list[Violation]:
@@ -297,7 +314,7 @@ def _gate_exec_bit(条目, mode_of) -> list[Violation]:
     """
     out = []
     for rel, p, 是链接 in 条目:
-        if 是链接 or p.is_dir():
+        if 是链接 or p.is_dir() or not _普通(p):
             continue
         if mode_of(p) & _EXEC_BITS:
             out.append(Violation("exec_bit", rel, "带着可执行位"))
@@ -310,7 +327,7 @@ def _gate_shebang(条目) -> list[Violation]:
     """
     out = []
     for rel, p, 是链接 in 条目:
-        if 是链接 or p.is_dir():
+        if 是链接 or p.is_dir() or not _普通(p):
             continue
         with p.open("rb") as f:
             if f.read(2) == _SHEBANG:
@@ -332,7 +349,7 @@ def scan_pure_data(root: Path | str, *,
     root = Path(root)
     条目 = list(_走一遍(root))
     取mode = mode_of or (lambda p: os.stat(p).st_mode)
-    出 = (_gate_suffix(条目) + _gate_symlink(条目)
+    出 = (_gate_special(条目) + _gate_suffix(条目) + _gate_symlink(条目)
           + _gate_exec_bit(条目, 取mode) + _gate_shebang(条目))
     return tuple(出)
 

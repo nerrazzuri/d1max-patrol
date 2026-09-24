@@ -33,6 +33,7 @@ class CatalogError(RuntimeError):
 class ActiveBundle:
     bundle_id: str
     version: int
+    imported_at: int
     schedule: Schedule
     missions: dict[str, Mission]
 
@@ -42,7 +43,7 @@ def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
     bundle_dir = Path(bundle_dir)
     try:
         m = verify_bundle(bundle_dir)
-    except BundleError as exc:
+    except (BundleError, OSError) as exc:          # OSError:读不了(权限等),也是 409 不是 500
         raise CatalogError(f"任务包校验没过: {exc}") from exc
     missions: dict[str, Mission] = {}
     mdir = bundle_dir / MISSIONS_DIR
@@ -91,4 +92,5 @@ def active_bundle(db: SiteDB) -> ActiveBundle | None:
                                   "WHERE bundle_id=? AND version=?",
                                   (b["bundle_id"], b["version"]))}
     return ActiveBundle(bundle_id=b["bundle_id"], version=b["version"],
+                        imported_at=b["imported_at"],
                         schedule=parse_schedule(json.loads(b["schedule"])), missions=missions)

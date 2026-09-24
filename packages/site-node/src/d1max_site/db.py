@@ -117,7 +117,7 @@ class SiteDB:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_DDL)
-            self._conn.execute("INSERT OR IGNORE INTO meta VALUES ('schema', ?)",
+            self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
 
     @contextmanager
