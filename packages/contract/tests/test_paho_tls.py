@@ -69,3 +69,13 @@ async def test_连接失败回调_connect立刻抛错(monkeypatch):
     with pytest.raises(ConnectionError):
         await asyncio.wait_for(task, 5)
     assert t.connected is False
+
+
+async def test_CONNACK之前就断开_connect立刻抛错(monkeypatch):
+    t = PahoTransport("mqtt://127.0.0.1:1883", "r")
+    _假网络(t, monkeypatch)
+    task = asyncio.ensure_future(t.connect())
+    await asyncio.sleep(0.05)
+    threading.Thread(target=t._on_disconnect, args=(t._client, None, None, "handshake")).start()
+    with pytest.raises(ConnectionError):
+        await asyncio.wait_for(task, 5)

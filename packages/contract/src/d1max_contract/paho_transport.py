@@ -132,7 +132,11 @@ class PahoTransport:
             self._connect_fut.set_exception(exc)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None) -> None:
-        self._post(lambda: self._set_connected(False))
+        def go() -> None:
+            # 还没等到 CONNACK 就断了:TLS 1.3 下服务端拒客户端证书就是这个样子(握手表面上
+            # 成功,随即断开)。当成连接被拒,别让 connect() 干等到超时。
+            self._fail_connect(ConnectionError(f"连接在 CONNACK 之前断开: {reason_code}"))
+        self._post(go)
 
     def _on_message(self, client, userdata, message) -> None:
         msg = Message(message.topic, bytes(message.payload), message.qos, bool(message.retain))
