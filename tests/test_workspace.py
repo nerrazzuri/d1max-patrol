@@ -102,3 +102,42 @@ def test_搬走的engine里没有旧包名():
                         if 行.lstrip().startswith(("from ", "import ")))
         assert "d1max_patrol.engine" not in 代码, f"{py.name} 里还 import 旧包名"
     assert 'd1max-patrol' in _toml("robot-agent"), "过渡性依赖要声明"
+
+
+def test_几何类型在契约包里_根包转手的是同一个类():
+    """W00c2a:任务点位的 Pose 进契约(站点要解析任务)。根包、引擎、导航后端用的必须是
+    同一个类 —— 两种 Pose 混用,isinstance 与相等比较都会悄悄出错。"""
+    from d1max_contract import geometry
+    from d1max_patrol.protocol import nav_types
+    for name in ("Position", "Orientation", "Pose", "yaw_to_orientation", "orientation_to_yaw"):
+        assert getattr(nav_types, name) is getattr(geometry, name), name
+
+
+def test_任务与排程模块在契约包里_旧名字是同一个模块对象():
+    import d1max_contract.mission as cm
+    import d1max_contract.schedule as cs
+    for old in ("d1max_agent.engine.mission", "d1max_patrol.engine.mission"):
+        assert importlib.import_module(old) is cm, old
+    for old in ("d1max_agent.engine.schedule", "d1max_patrol.engine.schedule"):
+        assert importlib.import_module(old) is cs, old
+    assert "d1max_patrol" not in (PKGS / "contract" / "src" / "d1max_contract" / "mission.py"
+                                  ).read_text(encoding="utf-8")
+
+
+def test_任务包格式与指纹在契约包里_狗上用的是同一份():
+    from d1max_agent.engine import bundle, export, release
+    from d1max_contract import bundle_format, digest
+    for name in ("verify_bundle", "parse_manifest", "read_manifest", "verify_pure_data",
+                 "bundle_sha256", "read_bundle_schedule", "BundleError", "BundleManifest"):
+        assert getattr(bundle, name) is getattr(bundle_format, name), name
+    assert export.sha256_file is digest.sha256_file
+    assert release._tree_sha256 is digest.tree_sha256, "发布包与任务包只有一个指纹算法"
+
+
+def test_契约包不反向依赖根包与代理():
+    src = PKGS / "contract" / "src" / "d1max_contract"
+    for py in src.glob("*.py"):
+        text = py.read_text(encoding="utf-8")
+        for bad in ("import d1max_patrol", "from d1max_patrol", "import d1max_agent",
+                    "from d1max_agent", "import d1max_site", "from d1max_site"):
+            assert bad not in text, f"{py.name}: {bad}"

@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import zipfile
@@ -23,13 +22,13 @@ from typing import Any
 
 from d1max_agent.engine.archive import STAMP_FMT
 from d1max_agent.engine.retention import RunInfo, mark_exported, unique_tmp
+from d1max_contract.digest import sha256_file
 
 #: 导出包放在 runs 根目录**旁边**的这个目录里。放里面会被 ``scan_runs``
 #: 当成归档扫进去,然后被自己的水位删除删掉 —— 而它正是为了对抗删除才存在的。
 EXPORTS_DIR_NAME = "exports"
 
 #: 一次读这么多算哈希。包可能有好几个 G,不能整个读进内存 —— Orin 上没那么多。
-_CHUNK = 1024 * 1024
 
 #: 包名的形状。这个名字后面要从 HTTP 上收进来,不卡住就是一条目录穿越。
 _NAME = re.compile(r"^export-[0-9A-Za-z]+(-\d+)?\.zip$")
@@ -47,16 +46,7 @@ def safe_name(name: str) -> str:
     return name
 
 
-def sha256_file(path: Path | str) -> str:
-    """流式算文件的 sha256。**不整个读进内存** —— 包可能有好几个 G。"""
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        while True:
-            chunk = fh.read(_CHUNK)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
+
 
 
 @dataclass(frozen=True, slots=True)

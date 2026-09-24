@@ -7,7 +7,8 @@ name = "d1max-contract"
 version = "0.1.0"
 description = "狗 ↔ 站点的唯一契约:报文数据类、主题与 ACL、RobotHAL、Transport、派遣客户端"
 requires-python = ">=3.10"
-dependencies = []
+# W00c2a:任务与排程的解析(任务包里是 YAML)。狗上与站点上本来就有它。
+dependencies = ["PyYAML>=6.0"]
 
 [project.optional-dependencies]
 # PahoTransport 才用得着;MemoryBroker 和全部数据类不需要它。狗上离线装:

@@ -19,7 +19,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -32,7 +31,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from d1max_agent.engine.export import sha256_file
+from d1max_contract.digest import tree_sha256 as _tree_sha256
 
 log = logging.getLogger(__name__)
 
@@ -173,31 +172,9 @@ def safe_name(name: str) -> str:
 
 
 def tree_sha256(root: Path | str, *, skip: str = MANIFEST_NAME) -> str:
-    """整棵树的指纹:按相对路径排序,逐条喂「路径 + 这个文件的 sha256」。
-
-    **路径要进指纹。** 只把内容首尾相接算一遍的话,改个文件名、把 a 的内容
-    挪进 b,指纹一点不变 —— 那种改动就成了隐形的。
-
-    ``skip`` 那个文件自己不算 —— 它里头存着这个值,算自己是个死循环。默认是
-    ``release.json``;任务包传的是 ``bundle.yaml``(§3.2 的整包 content_hash
-    跟 §7.3 是同一套算法,**不该有第二个真理源**)。
-
-    排序按**相对路径的 posix 串**,不按 ``Path`` 对象:后者在 Windows 上按
-    ``parts`` 比,和 Linux 上的结果不保证一样,而两边算出不同指纹的那天,
-    整套对账就废了。
-    """
-    root = Path(root)
-    digest = hashlib.sha256()
-    files = sorted((p.relative_to(root).as_posix(), p)
-                   for p in root.rglob("*") if p.is_file())
-    for rel, path in files:
-        if rel == skip:
-            continue
-        digest.update(rel.encode())
-        digest.update(_CHUNK_JOIN)
-        digest.update(sha256_file(path).encode())
-        digest.update(_CHUNK_JOIN)
-    return digest.hexdigest()
+    """整棵树的指纹。算法住在契约包(``d1max_contract.digest``,站点收任务包也用它);这里只是
+    把默认跳过的自述文件定成 ``release.json``。"""
+    return _tree_sha256(root, skip=skip)
 
 
 @dataclass(frozen=True, slots=True)
