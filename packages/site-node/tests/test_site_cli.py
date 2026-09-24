@@ -266,3 +266,18 @@ def test_事件派遣的命令行(home, capsys):
     assert site_main.main(["--home", str(home), "zone", "yard", "nope"]) == 2
     assert site_main.main(["--home", str(home), "intercept", "x", "--map", "nover",
                            "--pose", "1,0,0"]) == 2
+
+
+def test_账号的命令行(home, monkeypatch, capsys):
+    monkeypatch.setenv("D1MAX_SITE_PASSWORD", "long-enough-pass")
+    assert site_main.main(["--home", str(home), "add-account", "gina", "--role", "guard"]) == 0
+    assert site_main.main(["--home", str(home), "add-admin", "alice"]) == 0
+    assert site_main.main(["--home", str(home), "set-role", "gina", "owner"]) == 0
+    assert site_main.main(["--home", str(home), "disable", "gina"]) == 0
+    assert site_main.main(["--home", str(home), "enable", "gina"]) == 0
+    assert site_main.main(["--home", str(home), "disable", "alice"]) == 2, "最后一个 admin"
+    from d1max_site.accounts import Accounts
+    db = SiteDB(home / "site.db")
+    assert {a["name"]: a["role"] for a in Accounts(db, now_ms=lambda: 0).list()} == {
+        "alice": "admin", "gina": "owner"}
+    db.close()

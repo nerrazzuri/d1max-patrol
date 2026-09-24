@@ -14,12 +14,15 @@
 - ``POST /api/incidents``:外部事件(**不要登录,要签名**,见 ``incidents.py``;W00c2c)
 - ``GET  /api/incidents``、``POST /api/intercepts``、``POST /api/zones``:
   事件账、拦截点、防区(W00c2c)
+- ``GET/POST /api/accounts``、``POST /api/accounts/<name>``、``POST /api/me/password``、
+  ``GET /api/audit``:账号、角色、审计(W00c3)
 - ``GET  /api/schedule``:当前包的排程,每条下一轮何时、最近一次去向与结果(W00c2a)
 - ``GET  /api/events`` SSE:第一帧全量快照,之后是派遣器的 status/event/ack/reconcile;
   订阅者跟不上时补发一帧全量快照(``lagged``),不悄悄丢
 
-状态码:派遣条件不满足 409(带理由)、等回执超时 504、未登录 401、锁定 429、请求体超过
-64 KB 413、JSON 坏 400。
+状态码:派遣条件不满足 409(带理由)、等回执超时 504、未登录 401、角色不够 403、锁定 429、
+请求体超过 64 KB 413、JSON 坏 400。每条路由要什么权限见 ``permissions.py``;改动类请求(非 GET)
+一律进审计(``audit.py``)。
 
 **绑到非本机地址必须带 TLS**(站点服务证书):账号口令不能在局域网上明文走。手机信任
 站点 CA 的事归 W00c4。
@@ -41,9 +44,19 @@ from urllib.parse import unquote
 
 from d1max_contract.dispatch import DispatchTimeout
 from d1max_site.accounts import Accounts, AuthError, LockedOut
+from d1max_site.audit import AuditLog
 from d1max_site.ca import SAFE_ID
 from d1max_site.dispatcher import Dispatcher, DispatchRefused
 from d1max_site.loop import LoopThread
+from d1max_site.permissions import (
+    ABORT,
+    DISPATCH,
+    MANAGE,
+    MANAGE_ACCOUNTS,
+    VIEW,
+    VIEW_AUDIT,
+    allowed,
+)
 from d1max_site.priorities import MANUAL
 
 log = logging.getLogger(__name__)
@@ -53,6 +66,7 @@ SSE_HEARTBEAT_S = 15.0
 #: 一个请求(含读请求头)多久没动静就断:慢速攻击(slowloris)不能一直占着线程。
 REQUEST_TIMEOUT_S = 30.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
 
 
@@ -86,6 +100,7 @@ class SiteApi:
         self.standby = standby
         self.incidents = incidents
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
+        self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
         self._stopping = threading.Event()
         api = self
 
@@ -151,7 +166,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ 输入输出
 
-    def _send_json(self, status: int, body: Any) -> None:
+    def _write_json(self, status: int, body: Any) -> None:
         raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -186,11 +201,36 @@ class _Handler(BaseHTTPRequestHandler):
         name = self.site.accounts.check(self._token())
         if name is None:
             raise HttpError(401, "没登录或登录已过期")
+        self._actor = name
         return name
 
+    def _need(self, user, perm: str) -> None:
+        if not allowed(getattr(user, "role", ""), perm):
+            raise HttpError(403, f"{getattr(user, 'role', '?')} 没有 {perm} 权限")
+
+    def _send_json(self, status: int, body: Any) -> None:
+        self._status = status
+        self._resp = body if isinstance(body, dict) else {}
+        self._write_json(status, body)
+
     def _handle(self, method: str) -> None:
+        self._actor, self._status, self._resp = "", 0, {}
+        path = self.path.split("?", 1)[0]
         try:
-            path = self.path.split("?", 1)[0]
+            self._route(method, path)
+        finally:
+            if method != "GET" and self.site.audit is not None:
+                detail = {k: self._resp[k] for k in ("command_id", "task_id", "error", "outcome")
+                          if k in self._resp}
+                try:
+                    self.site.audit.record(actor=self._actor or "-", action=f"{method} {path}",
+                                           status=self._status, detail=detail,
+                                           remote=self.client_address[0])
+                except Exception:
+                    log.exception("审计写不进去")
+
+    def _route(self, method: str, path: str) -> None:
+        try:
             if method == "POST" and path == "/api/login":
                 return self._login()
             if method == "POST" and path == "/api/incidents":
@@ -199,17 +239,31 @@ class _Handler(BaseHTTPRequestHandler):
             if method == "POST" and path == "/api/logout":
                 self.site.accounts.logout(self._token() or "")
                 return self._send_json(200, {"ok": True})
+            if method == "POST" and path == "/api/me/password":
+                return self._change_own_password(user)
+            if path == "/api/accounts" or _ACCOUNT.match(path):
+                self._need(user, MANAGE_ACCOUNTS)
+                return self._accounts(method, path)
+            if method == "GET" and path == "/api/audit":
+                self._need(user, VIEW_AUDIT)
+                return self._send_json(200, {"audit": self.site.audit.list()})
             if method == "GET" and path == "/api/robots":
+                self._need(user, VIEW)
                 return self._send_json(200, {"robots": self.site.dispatcher.robots_view()})
             if method == "GET" and path == "/api/events":
+                self._need(user, VIEW)
                 return self._sse()
             if method == "GET" and path == "/api/schedule":
+                self._need(user, VIEW)
                 if self.site.scheduler is None:
                     raise HttpError(404, "这个站点没开排程")
                 return self._send_json(200, self.site.scheduler.view())
             if method == "POST" and path == "/api/bundles":
+                self._need(user, MANAGE)
                 return self._import_bundle(user)
             if path in ("/api/incidents", "/api/intercepts", "/api/zones"):
+                self._need(user, VIEW if (method == "GET" and path == "/api/incidents")
+                           else MANAGE)
                 return self._incident_admin(method, path)
             m = _ROBOT.match(path)
             if m is not None:
@@ -238,6 +292,7 @@ class _Handler(BaseHTTPRequestHandler):
         name, pw = d.get("name"), d.get("password")
         if not isinstance(name, str) or not isinstance(pw, str):
             raise HttpError(400, "要 name 与 password 两个字符串")
+        self._actor = f"login:{name[:64]}"
         try:
             token = self.site.accounts.login(name, pw)
         except LockedOut as exc:
@@ -248,6 +303,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _robot(self, method: str, robot_id: str, action: str | None, user: str) -> None:
         disp = self.site.dispatcher
+        if method == "GET":
+            self._need(user, VIEW)
+        elif action == "abort":
+            self._need(user, ABORT)
+        elif action == "standby":
+            self._need(user, MANAGE)
+        else:
+            self._need(user, DISPATCH)
         if action is None:
             if method != "GET":
                 raise HttpError(405, "只支持 GET")
@@ -318,6 +381,44 @@ class _Handler(BaseHTTPRequestHandler):
             raise HttpError(400, str(exc)) from exc
         self._send_json(200, {"points": stb.list(robot_id)})
 
+    def _accounts(self, method: str, path: str) -> None:
+        acc = self.site.accounts
+        if path == "/api/accounts":
+            if method == "GET":
+                return self._send_json(200, {"accounts": acc.list()})
+            if method != "POST":
+                raise HttpError(405, "只支持 GET/POST")
+            d = self._body()
+            try:
+                acc.add(d.get("name"), d.get("password"), role=d.get("role", "guard"))
+            except AuthError as exc:
+                raise HttpError(400, str(exc)) from exc
+            return self._send_json(200, {"accounts": acc.list()})
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        name = _ACCOUNT.match(path).group(1)
+        d = self._body()
+        try:
+            if "role" in d:
+                acc.set_role(name, d["role"])
+            if "disabled" in d:
+                if not isinstance(d["disabled"], bool):
+                    raise HttpError(400, "disabled 要是 true/false")
+                acc.set_disabled(name, d["disabled"])
+            if "password" in d:
+                acc.reset_password(name, d["password"])
+        except AuthError as exc:
+            raise HttpError(400 if "没有账号" not in str(exc) else 404, str(exc)) from exc
+        self._send_json(200, {"accounts": acc.list()})
+
+    def _change_own_password(self, user: str) -> None:
+        d = self._body()
+        try:
+            self.site.accounts.change_password(str(user), d.get("old"), d.get("new"))
+        except AuthError as exc:
+            raise HttpError(400, str(exc)) from exc
+        self._send_json(200, {"ok": True, "note": "口令改了;所有会话已吊销,请重新登录"})
+
     def _desk(self):
         if self.site.incidents is None:
             raise HttpError(404, "这个站点没开事件派遣")
@@ -348,6 +449,7 @@ class _Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError) as exc:
             raise HttpError(400, f"JSON 解析不了: {exc}") from exc
         source = self.headers.get("X-D1MAX-Source") or ""
+        self._actor = f"source:{source}"
         try:
             desk.parse(body)
         except IncidentError as exc:

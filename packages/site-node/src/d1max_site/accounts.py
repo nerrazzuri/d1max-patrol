@@ -1,5 +1,8 @@
-"""站点账号的最小版(W00c1):账号 + 口令 + 会话令牌。角色体系(业主/保安/管理员)归 W00c3;
-这里只有 ``admin`` 一种,但从第一天起**每条命令都绑在一个已认证的账号上**(总设计 §5)。
+"""站点账号(W00c1 起;W00c3 加角色、停用、改口令)。**每条命令都绑在一个已认证的账号上**
+(总设计 §5)。角色见 ``permissions.py``:admin / guard / owner。
+
+- 停用、改角色、重设口令都**吊销这个账号的全部会话**(权限变了,旧令牌不能继续按旧权限用)。
+- **最后一个启用的 admin 不许停用、不许降级**:不然站点上就没人能管账号了。
 
 - 口令:``hashlib.scrypt``(n=2^14, r=8, p=1),每个账号 16 字节随机盐;比较用常数时间。
   不存在的账号也照算一次哈希,不让响应时间泄露「有没有这个人」。
@@ -20,6 +23,7 @@ import threading
 from collections.abc import Callable
 
 from d1max_site.db import SiteDB
+from d1max_site.permissions import ROLES
 
 IDLE_MS = 30 * 60_000
 ABS_MS = 12 * 3600_000
@@ -38,6 +42,17 @@ class AuthError(RuntimeError):
 
 class LockedOut(AuthError):
     pass
+
+
+class Principal(str):
+    """已认证的账号名,带着角色。是 ``str`` 的子类:老调用(当成名字用)不受影响。"""
+
+    role: str
+
+    def __new__(cls, name: str, role: str) -> Principal:
+        obj = super().__new__(cls, name)
+        obj.role = role
+        return obj
 
 
 def _hash(password: str, salt: bytes) -> bytes:
@@ -63,10 +78,10 @@ class Accounts:
     # ------------------------------------------------------------ 账号
 
     def add(self, name: str, password: str, *, role: str = "admin") -> None:
-        if not _NAME.match(name or ""):
+        if not isinstance(name, str) or not _NAME.match(name):
             raise AuthError("账号名只许字母、数字、. _ -,1–64 个字符")
-        if len(password) < MIN_PASSWORD:
-            raise AuthError(f"口令至少 {MIN_PASSWORD} 个字符")
+        self._check_role(role)
+        self._check_password(password)
         salt = secrets.token_bytes(16)
         with self.db.tx() as c:
             if c.execute("SELECT 1 FROM accounts WHERE name=?", (name,)).fetchone():
@@ -77,6 +92,70 @@ class Accounts:
 
     def names(self) -> list[str]:
         return [r["name"] for r in self.db.query("SELECT name FROM accounts ORDER BY name")]
+
+    @staticmethod
+    def _check_role(role: str) -> None:
+        if role not in ROLES:
+            raise AuthError(f"角色只有 {', '.join(sorted(ROLES))},给的是 {role!r}")
+
+    @staticmethod
+    def _check_password(password: str) -> None:
+        if not isinstance(password, str) or len(password) < MIN_PASSWORD:
+            raise AuthError(f"口令至少 {MIN_PASSWORD} 个字符")
+
+    def list(self) -> list[dict]:
+        return [{"name": r["name"], "role": r["role"], "disabled": bool(r["disabled"])}
+                for r in self.db.query("SELECT name, role, disabled FROM accounts ORDER BY name")]
+
+    def _get(self, c, name: str):
+        row = c.execute("SELECT * FROM accounts WHERE name=?", (name,)).fetchone()
+        if row is None:
+            raise AuthError(f"没有账号 {name}")
+        return row
+
+    @staticmethod
+    def _other_admins(c, name: str) -> int:
+        return c.execute("SELECT count(*) AS n FROM accounts WHERE role='admin' AND disabled=0 "
+                         "AND name<>?", (name,)).fetchone()["n"]
+
+    def set_role(self, name: str, role: str) -> None:
+        self._check_role(role)
+        with self.db.tx() as c:
+            row = self._get(c, name)
+            if row["role"] == "admin" and role != "admin" and not row["disabled"] \
+                    and self._other_admins(c, name) == 0:
+                raise AuthError("这是最后一个启用的 admin,不能降级")
+            c.execute("UPDATE accounts SET role=? WHERE name=?", (role, name))
+            c.execute("DELETE FROM sessions WHERE name=?", (name,))
+
+    def set_disabled(self, name: str, disabled: bool) -> None:
+        with self.db.tx() as c:
+            row = self._get(c, name)
+            if disabled and row["role"] == "admin" and self._other_admins(c, name) == 0:
+                raise AuthError("这是最后一个启用的 admin,不能停用")
+            c.execute("UPDATE accounts SET disabled=? WHERE name=?", (int(bool(disabled)), name))
+            c.execute("DELETE FROM sessions WHERE name=?", (name,))
+
+    def reset_password(self, name: str, password: str) -> None:
+        """管理员重设别人的口令。"""
+        self._check_password(password)
+        salt = secrets.token_bytes(16)
+        digest = _hash(password, salt)
+        with self.db.tx() as c:
+            self._get(c, name)
+            c.execute("UPDATE accounts SET salt=?, pw_hash=? WHERE name=?", (salt, digest, name))
+            c.execute("DELETE FROM sessions WHERE name=?", (name,))
+
+    def change_password(self, name: str, old: str, new: str) -> None:
+        """自己改自己的口令:要旧口令。"""
+        rows = self.db.query("SELECT salt, pw_hash FROM accounts WHERE name=?", (name,))
+        if not rows:
+            raise AuthError("账号或口令不对")
+        with self._hash_slots:
+            ok = hmac.compare_digest(_hash(old or "", rows[0]["salt"]), rows[0]["pw_hash"])
+        if not ok:
+            raise AuthError("旧口令不对")
+        self.reset_password(name, new)
 
     # ------------------------------------------------------------ 登录
 
@@ -93,11 +172,13 @@ class Accounts:
             if len(recent) >= FAIL_LIMIT:
                 self._locked_until[name] = now + LOCK_MS
                 self._fails[name] = []
-        rows = self.db.query("SELECT salt, pw_hash FROM accounts WHERE name=?", (name,))
+        rows = self.db.query("SELECT salt, pw_hash, disabled FROM accounts WHERE name=?",
+                             (name,))
         salt, stored = (rows[0]["salt"], rows[0]["pw_hash"]) if rows else (_DUMMY_SALT, b"")
         with self._hash_slots:
             digest = _hash(password or "", salt)
-        ok = hmac.compare_digest(digest, stored) and bool(rows)
+        # 停用的账号跟错口令同一个说法:不告诉外人「有这个账号但停用了」。
+        ok = hmac.compare_digest(digest, stored) and bool(rows) and not rows[0]["disabled"]
         if not ok:
             raise AuthError("账号或口令不对")
         with self._lock:
@@ -110,22 +191,24 @@ class Accounts:
                       "VALUES (?,?,?,?)", (_token_hash(token), name, now, now))
         return token
 
-    def check(self, token: str | None) -> str | None:
-        """令牌有效 → 账号名(并续闲置期);无效或过期 → None(过期的顺手删掉)。"""
+    def check(self, token: str | None) -> Principal | None:
+        """令牌有效 → 账号(``Principal``:名字 + 角色,并续闲置期);无效、过期或账号停用 → None。"""
         if not token:
             return None
         h = _token_hash(token)
         now = self._now()
         with self.db.tx() as c:
-            row = c.execute("SELECT name, created_at, last_used FROM sessions WHERE token_hash=?",
-                            (h,)).fetchone()
+            row = c.execute("SELECT s.name, s.created_at, s.last_used, a.role, a.disabled "
+                            "FROM sessions s JOIN accounts a ON a.name = s.name "
+                            "WHERE s.token_hash=?", (h,)).fetchone()
             if row is None:
                 return None
-            if now - row["last_used"] > self.idle_ms or now - row["created_at"] > self.abs_ms:
+            if (row["disabled"] or now - row["last_used"] > self.idle_ms
+                    or now - row["created_at"] > self.abs_ms):
                 c.execute("DELETE FROM sessions WHERE token_hash=?", (h,))
                 return None
             c.execute("UPDATE sessions SET last_used=? WHERE token_hash=?", (now, h))
-            return row["name"]
+            return Principal(row["name"], row["role"])
 
     def logout(self, token: str) -> None:
         with self.db.tx() as c:

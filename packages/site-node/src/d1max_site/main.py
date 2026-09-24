@@ -13,6 +13,8 @@
     enroll    ROBOT_ID [--days 365]        → 打印证书包目录(拷到狗的 /etc/d1max/)
     revoke    ROBOT_ID                     → 吊销;要重启 d1max-mosquitto 才对 broker 生效
     add-admin NAME                         → 口令从 D1MAX_SITE_PASSWORD 或交互输入
+    add-account NAME --role admin|guard|owner → 同上,带角色(W00c3)
+    set-role NAME ROLE / disable NAME / enable NAME → 账号管理(W00c3;都吊销那个账号的会话)
     import-bundle DIR                      → 导入任务包,成为当前包(W00c2a)
     standby ROBOT NAME --map M:VER --pose x,y,yaw [--default] → 登记待命点(W00c2b)
     source-add NAME                        → 登记事件源,打印共享密钥(只这一次;W00c2c)
@@ -234,11 +236,24 @@ def cmd_incident_admin(home: Path, what: str, **kw) -> str:
         db.close()
 
 
-def cmd_add_admin(home: Path, name: str, password: str) -> None:
+def cmd_add_admin(home: Path, name: str, password: str, role: str = "admin") -> None:
     _load(home)
     db = SiteDB(home / "site.db")
     try:
-        Accounts(db, now_ms=wall_ms).add(name, password)
+        Accounts(db, now_ms=wall_ms).add(name, password, role=role)
+    finally:
+        db.close()
+
+
+def cmd_account(home: Path, what: str, name: str, role: str = "") -> None:
+    _load(home)
+    db = SiteDB(home / "site.db")
+    try:
+        acc = Accounts(db, now_ms=wall_ms)
+        if what == "set-role":
+            acc.set_role(name, role)
+        else:
+            acc.set_disabled(name, what == "disable")
     finally:
         db.close()
 
@@ -382,6 +397,14 @@ def build_parser() -> argparse.ArgumentParser:
     zo.add_argument("intercept")
     a = sub.add_parser("add-admin", help="加管理员账号")
     a.add_argument("name")
+    aa = sub.add_parser("add-account", help="加账号(带角色)")
+    aa.add_argument("name")
+    aa.add_argument("--role", required=True, choices=("admin", "guard", "owner"))
+    sr = sub.add_parser("set-role", help="改账号的角色")
+    sr.add_argument("name")
+    sr.add_argument("role", choices=("admin", "guard", "owner"))
+    for verb in ("disable", "enable"):
+        sub.add_parser(verb, help=f"{verb} 账号").add_argument("name")
     s = sub.add_parser("serve", help="跑站点:派遣器 + 站点 API")
     s.add_argument("--api-host", default="127.0.0.1")
     s.add_argument("--api-port", type=int, default=8443)
@@ -425,10 +448,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.cmd == "zone":
             cmd_incident_admin(home, "zone", zone=args.zone, intercept=args.intercept)
             print(f"防区 {args.zone} → 拦截点 {args.intercept}")
-        elif args.cmd == "add-admin":
+        elif args.cmd in ("add-admin", "add-account"):
             pw = os.environ.get("D1MAX_SITE_PASSWORD") or getpass.getpass("口令: ")
-            cmd_add_admin(home, args.name, pw)
-            print(f"账号 {args.name} 加好了")
+            role = getattr(args, "role", "admin")
+            cmd_add_admin(home, args.name, pw, role)
+            print(f"账号 {args.name}({role})加好了")
+        elif args.cmd in ("set-role", "disable", "enable"):
+            cmd_account(home, args.cmd, args.name, getattr(args, "role", ""))
+            print(f"{args.cmd} {args.name}:好了(这个账号的会话已全部吊销)")
         else:
             return cmd_serve(home, args.api_host, args.api_port, args.broker)
     except (SiteError, CAError, RegistryError, AuthError) as exc:

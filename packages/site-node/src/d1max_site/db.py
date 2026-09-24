@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -30,7 +30,18 @@ CREATE TABLE IF NOT EXISTS accounts (
     role       TEXT NOT NULL,
     salt       BLOB NOT NULL,
     pw_hash    BLOB NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    disabled   INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS audit (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    at      INTEGER NOT NULL,
+    actor   TEXT NOT NULL,
+    action  TEXT NOT NULL,
+    target  TEXT NOT NULL DEFAULT '',
+    status  INTEGER NOT NULL DEFAULT 0,
+    detail  TEXT NOT NULL DEFAULT '{}',
+    remote  TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
@@ -158,6 +169,7 @@ _ADDED_COLUMNS = (
     ("commands", "priority", "INTEGER NOT NULL DEFAULT 0"),          # W00c2b
     ("standby_points", "map_version", "TEXT NOT NULL DEFAULT ''"),   # W00c2b 内部评审
     ("intercepts", "map_version", "TEXT NOT NULL DEFAULT ''"),       # W00c2c
+    ("accounts", "disabled", "INTEGER NOT NULL DEFAULT 0"),          # W00c3
 )
 
 
