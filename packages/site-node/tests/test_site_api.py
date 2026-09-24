@@ -1,0 +1,224 @@
+"""站点 API(W00c1 Task 5):真 HTTP、真线程、真钟;broker 用 MemoryBroker,狗是
+AgentRuntime + SimRobot,在同一个事件循环线程里每 20 ms 推一拍。"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+import urllib.error
+import urllib.request
+
+import pytest
+
+from d1max_adapter_sim.robot import SimRobot
+from d1max_agent.runtime import AgentRuntime
+from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
+from d1max_contract.messages import MapPose
+from d1max_contract.registration import Registration
+from d1max_patrol.protocol.nav_types import Pose
+from d1max_site.accounts import Accounts
+from d1max_site.api import SiteApi
+from d1max_site.db import SiteDB
+from d1max_site.dispatcher import Dispatcher
+from d1max_site.loop import LoopThread
+from d1max_site.registry import Registry
+
+SITE = "estate-1"
+MAP = ("estate-1", "7")
+PW = "correct-horse-battery"
+
+
+def wall() -> int:
+    return int(time.time() * 1000)
+
+
+def target(x: float) -> dict:
+    return MapPose(map_id=MAP[0], map_version=MAP[1], frame_id="map", x=x, y=0.0,
+                   yaw=0.0).to_wire()
+
+
+class 站:
+    def __init__(self, tmp_path) -> None:
+        self.loop = LoopThread()
+        self.loop.start()
+        self.db = SiteDB(tmp_path / "site.db")
+        self.reg = Registry(self.db, site_id=SITE)
+        self.reg.enroll("A", fingerprint="sha256:a", issued_at=wall() - 1,
+                        expires_at=wall() + 10**9)
+        self.accounts = Accounts(self.db, now_ms=wall)
+        self.accounts.add("alice", PW)
+        self._stop = False
+
+        async def build():
+            self.broker = MemoryBroker()
+            self.disp = Dispatcher(MemoryTransport(self.broker, "site"), self.db, self.reg,
+                                   now_ms=wall, ack_timeout_s=5.0)
+            await self.disp.start()
+            self.dog = SimRobot(now_ms=wall, max_vx=1.0, max_wz=1.5, stop_latency_s=0.1)
+            reg = Registration(site_id=SITE, robot_id="A", credential_fingerprint="sha256:a",
+                               issued_at=0, expires_at=10**14)
+            self.agent = AgentRuntime(transport=MemoryTransport(self.broker, "dogA"),
+                                      registration=reg, hal=self.dog,
+                                      store_dir=tmp_path / "agent", now_ms=wall,
+                                      loaded_map=MAP, home=Pose.from_xy_yaw(0.0, 0.0))
+            await self.agent.start()
+            self.driver = asyncio.ensure_future(self._drive())
+
+        self.loop.call(build)
+        self.api = SiteApi(host="127.0.0.1", port=0, loop=self.loop, dispatcher=self.disp,
+                           accounts=self.accounts)
+        self.api.start()
+
+    async def _drive(self) -> None:
+        while not self._stop:
+            self.dog.tick(0.02)
+            await self.agent.step(0.02)
+            await self.broker.drain()
+            await asyncio.sleep(0.02)
+
+    def close(self) -> None:
+        self._stop = True
+        self.api.stop()
+
+        async def down():
+            await self.agent.close()
+            await self.disp.close()
+
+        self.loop.call(down)
+        self.loop.stop()
+        self.db.close()
+
+    # ------------------------------------------------------------ HTTP
+
+    def req(self, method: str, path: str, body=None, token: str | None = None,
+            raw: bytes | None = None) -> tuple[int, dict]:
+        data = raw if raw is not None else (json.dumps(body).encode() if body is not None
+                                            else None)
+        r = urllib.request.Request(self.api.url + path, data=data, method=method)
+        r.add_header("Content-Type", "application/json")
+        if token:
+            r.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(r, timeout=15) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read() or b"{}")
+
+    def login(self) -> str:
+        code, d = self.req("POST", "/api/login", {"name": "alice", "password": PW})
+        assert code == 200, d
+        return d["token"]
+
+
+@pytest.fixture
+def 站点(tmp_path):
+    s = 站(tmp_path)
+    yield s
+    s.close()
+
+
+def _等(pred, timeout=20.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        v = pred()
+        if v:
+            return v
+        time.sleep(0.05)
+    raise AssertionError("等不到")
+
+
+def test_没登录一律401(站点):
+    for m, p in (("GET", "/api/robots"), ("GET", "/api/robots/A"),
+                 ("POST", "/api/robots/A/goto"), ("GET", "/api/events")):
+        code, d = 站点.req(m, p, {} if m == "POST" else None)
+        assert code == 401, (m, p, code)
+    code, _ = 站点.req("GET", "/api/robots", token="made-up")
+    assert code == 401
+
+
+def test_错口令401_连错五次锁429(站点):
+    for _ in range(5):
+        code, _ = 站点.req("POST", "/api/login", {"name": "alice", "password": "wrong-wrong!"})
+        assert code == 401
+    code, d = 站点.req("POST", "/api/login", {"name": "alice", "password": PW})
+    assert code == 429, d
+
+
+def test_登录后派goto走到_命令记着alice(站点):
+    tok = 站点.login()
+    _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
+    code, d = 站点.req("POST", "/api/robots/A/goto",
+                     {"target": target(0.5), "max_speed_mps": 0.8}, token=tok)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    task_id = d["task_id"]
+
+    def done():
+        v = 站点.req("GET", "/api/robots/A", token=tok)[1]
+        return v if any(e["data"].get("task_id") == task_id and e["kind"] == "task_done"
+                        for e in v["events"]) else None
+
+    v = _等(done)
+    assert v["commands"][0]["issued_by"] == "alice"
+
+
+def test_派遣条件不满足回409带理由(站点):
+    tok = 站点.login()
+    code, d = 站点.req("POST", "/api/robots/ghost/goto", {"target": target(1.0)}, token=tok)
+    assert code == 409 and "没有登记" in d["error"]
+
+
+def test_请求体坏_超限_参数不对(站点):
+    tok = 站点.login()
+    code, _ = 站点.req("POST", "/api/robots/A/goto", raw=b"{nope", token=tok)
+    assert code == 400
+    code, _ = 站点.req("POST", "/api/robots/A/goto", raw=b"x" * (70 * 1024), token=tok)
+    assert code == 413
+    code, _ = 站点.req("POST", "/api/robots/A/goto",
+                     {"target": target(1.0), "max_speed_mps": -1}, token=tok)
+    assert code == 400
+    code, _ = 站点.req("POST", "/api/robots/A/abort", {}, token=tok)
+    assert code == 400
+
+
+def test_注销之后令牌作废(站点):
+    tok = 站点.login()
+    assert 站点.req("POST", "/api/logout", {}, token=tok)[0] == 200
+    assert 站点.req("GET", "/api/robots", token=tok)[0] == 401
+
+
+def test_SSE第一帧是快照_之后看得到派单的回执(站点):
+    import http.client
+    tok = 站点.login()
+    _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
+    host, port = 站点.api.httpd.server_address[:2]
+    conn = http.client.HTTPConnection(host, port, timeout=10)
+    conn.request("GET", "/api/events", headers={"Authorization": f"Bearer {tok}"})
+    resp = conn.getresponse()
+    assert resp.status == 200 and "text/event-stream" in resp.getheader("Content-Type")
+
+    def frame():
+        while True:
+            line = resp.fp.readline().decode()
+            if line.startswith("data: "):
+                return json.loads(line[6:])
+
+    first = frame()
+    assert first["kind"] == "snapshot" and first["robots"][0]["robot_id"] == "A"
+    code, d = 站点.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=tok)
+    assert code == 200
+    seen = []
+    for _ in range(200):
+        f = frame()
+        seen.append(f["kind"])
+        if f["kind"] == "ack":
+            assert f["issued_by"] == "alice" and f["ack"]["command_id"] == d["command_id"]
+            break
+    assert "ack" in seen
+    conn.close()
+
+
+def test_绑非本机地址不带TLS拒绝启动(站点):
+    with pytest.raises(SystemExit):
+        SiteApi(host="0.0.0.0", port=0, loop=站点.loop, dispatcher=站点.disp,
+                accounts=站点.accounts)

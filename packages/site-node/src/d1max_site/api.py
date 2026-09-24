@@ -1,0 +1,276 @@
+"""站点 API 的最小版(W00c 设计决定四 A:标准库 ``ThreadingHTTPServer``)。
+
+路由(除登录外都要 ``Authorization: Bearer <令牌>``):
+
+- ``POST /api/login`` ``{"name","password"}`` → ``{"token","name"}``
+- ``POST /api/logout``
+- ``GET  /api/robots`` → ``{"robots":[…]}``
+- ``GET  /api/robots/<id>`` → 视图 + 最近事件 + 最近命令
+- ``POST /api/robots/<id>/goto`` ``{"target":MapPose,"max_speed_mps"?,"priority"?}``
+- ``POST /api/robots/<id>/abort`` ``{"task_id"}``
+- ``GET  /api/events`` SSE:第一帧全量快照,之后是派遣器的 status/event/ack/reconcile;
+  订阅者跟不上时补发一帧全量快照(``lagged``),不悄悄丢
+
+状态码:派遣条件不满足 409(带理由)、等回执超时 504、未登录 401、锁定 429、请求体超过
+64 KB 413、JSON 坏 400。
+
+**绑到非本机地址必须带 TLS**(站点服务证书):账号口令不能在局域网上明文走。手机信任
+站点 CA 的事归 W00c4。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import ssl
+import threading
+from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+from d1max_contract.dispatch import DispatchTimeout
+from d1max_site.accounts import Accounts, AuthError, LockedOut
+from d1max_site.dispatcher import Dispatcher, DispatchRefused
+from d1max_site.loop import LoopThread
+
+log = logging.getLogger(__name__)
+
+MAX_BODY = 64 * 1024
+SSE_HEARTBEAT_S = 15.0
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort))?$")
+
+
+class HttpError(Exception):
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def check_exposure(host: str, tls: tuple[Path, Path] | None) -> None:
+    if host not in LOCAL_HOSTS and tls is None:
+        raise SystemExit(f"拒绝启动:站点 API 绑到 {host} 会把账号口令明文暴露在网络上。"
+                         "加 --tls-cert/--tls-key(站点服务证书),或只绑 127.0.0.1。")
+
+
+class SiteApi:
+    def __init__(self, *, host: str, port: int, loop: LoopThread, dispatcher: Dispatcher,
+                 accounts: Accounts, tls: tuple[Path, Path] | None = None) -> None:
+        check_exposure(host, tls)
+        self.loop = loop
+        self.dispatcher = dispatcher
+        self.accounts = accounts
+        self._stopping = threading.Event()
+        api = self
+
+        class Handler(_Handler):
+            site = api
+
+        self.httpd = ThreadingHTTPServer((host, port), Handler)
+        self.httpd.daemon_threads = True
+        self._scheme = "http"
+        if tls is not None:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.load_cert_chain(str(tls[0]), str(tls[1]))
+            self.httpd.socket = ctx.wrap_socket(self.httpd.socket, server_side=True)
+            self._scheme = "https"
+        self._thread: threading.Thread | None = None
+
+    @property
+    def url(self) -> str:
+        host, port = self.httpd.server_address[:2]
+        return f"{self._scheme}://{host}:{port}"
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self.httpd.serve_forever, name="d1max-site-http",
+                                        daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stopping.set()
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        if self._thread is not None:
+            self._thread.join(10)
+
+    @property
+    def stopping(self) -> bool:
+        return self._stopping.is_set()
+
+    # ------------------------------------------------------------ 业务
+
+    def snapshot(self) -> dict[str, Any]:
+        return {"kind": "snapshot", "robots": self.dispatcher.robots_view()}
+
+    def dispatch(self, fn: Callable[[], Any]) -> Any:
+        try:
+            return self.loop.call(fn, timeout_s=self.dispatcher.ack_timeout_s + 5)
+        except DispatchRefused as exc:
+            raise HttpError(409, str(exc)) from exc
+        except (DispatchTimeout, TimeoutError) as exc:
+            raise HttpError(504, f"等狗的回执超时: {exc}") from exc
+
+
+class _Handler(BaseHTTPRequestHandler):
+    site: SiteApi
+    protocol_version = "HTTP/1.1"
+    server_version = "d1max-site"
+
+    def log_message(self, fmt: str, *args: Any) -> None:     # 走 logging,别打 stderr
+        log.info("%s %s", self.address_string(), fmt % args)
+
+    # ------------------------------------------------------------ 输入输出
+
+    def _send_json(self, status: int, body: Any) -> None:
+        raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _body(self) -> dict[str, Any]:
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError as exc:
+            raise HttpError(400, "Content-Length 不是数") from exc
+        if n > MAX_BODY:
+            raise HttpError(413, f"请求体超过 {MAX_BODY} 字节")
+        raw = self.rfile.read(n) if n else b"{}"
+        try:
+            d = json.loads(raw or b"{}")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise HttpError(400, f"JSON 解析不了: {exc}") from exc
+        if not isinstance(d, dict):
+            raise HttpError(400, "请求体要是 JSON 对象")
+        return d
+
+    def _token(self) -> str | None:
+        h = self.headers.get("Authorization") or ""
+        return h[7:].strip() if h.startswith("Bearer ") else None
+
+    def _user(self) -> str:
+        name = self.site.accounts.check(self._token())
+        if name is None:
+            raise HttpError(401, "没登录或登录已过期")
+        return name
+
+    def _handle(self, method: str) -> None:
+        try:
+            path = self.path.split("?", 1)[0]
+            if method == "POST" and path == "/api/login":
+                return self._login()
+            user = self._user()
+            if method == "POST" and path == "/api/logout":
+                self.site.accounts.logout(self._token() or "")
+                return self._send_json(200, {"ok": True})
+            if method == "GET" and path == "/api/robots":
+                return self._send_json(200, {"robots": self.site.dispatcher.robots_view()})
+            if method == "GET" and path == "/api/events":
+                return self._sse()
+            m = _ROBOT.match(path)
+            if m is not None:
+                return self._robot(method, m.group(1), m.group(2), user)
+            raise HttpError(404, f"没有 {method} {path}")
+        except HttpError as exc:
+            self.close_connection = True          # 请求体可能没读完(413),连接不能复用
+            self._send_json(exc.status, {"error": exc.message})
+        except Exception:                                    # 最后一道:别把栈回给客户端
+            log.exception("站点 API 处理 %s %s 炸了", method, self.path)
+            self._send_json(500, {"error": "站点内部错误"})
+
+    def do_GET(self) -> None:
+        self._handle("GET")
+
+    def do_POST(self) -> None:
+        self._handle("POST")
+
+    # ------------------------------------------------------------ 路由
+
+    def _login(self) -> None:
+        d = self._body()
+        name, pw = d.get("name"), d.get("password")
+        if not isinstance(name, str) or not isinstance(pw, str):
+            raise HttpError(400, "要 name 与 password 两个字符串")
+        try:
+            token = self.site.accounts.login(name, pw)
+        except LockedOut as exc:
+            raise HttpError(429, str(exc)) from exc
+        except AuthError as exc:
+            raise HttpError(401, str(exc)) from exc
+        self._send_json(200, {"token": token, "name": name})
+
+    def _robot(self, method: str, robot_id: str, action: str | None, user: str) -> None:
+        disp = self.site.dispatcher
+        if action is None:
+            if method != "GET":
+                raise HttpError(405, "只支持 GET")
+            view = disp.robot_view(robot_id)
+            if view is None:
+                raise HttpError(404, f"没有登记过 {robot_id}")
+            view["events"] = disp.recent_events(robot_id)
+            view["commands"] = disp.commands(robot_id)
+            return self._send_json(200, view)
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        d = self._body()
+        if action == "goto":
+            speed = d.get("max_speed_mps")
+            if speed is not None and (isinstance(speed, bool)
+                                      or not isinstance(speed, (int, float)) or speed <= 0):
+                raise HttpError(400, "max_speed_mps 要是正数")
+            prio = d.get("priority", 0)
+            if isinstance(prio, bool) or not isinstance(prio, int):
+                raise HttpError(400, "priority 要是整数")
+            target = d.get("target")
+            if not isinstance(target, dict):
+                raise HttpError(400, "要 target(MapPose 对象)")
+            result = self.site.dispatch(lambda: disp.goto(
+                robot_id, target, speed, issued_by=user, priority=prio))
+        else:
+            task_id = d.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                raise HttpError(400, "要 task_id")
+            result = self.site.dispatch(lambda: disp.abort(robot_id, task_id, issued_by=user))
+        self._send_json(200, result)
+
+    def _sse(self) -> None:
+        feed = self.site.dispatcher.feed
+        sub = feed.subscribe()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            self._frame(self.site.snapshot())
+            idle = 0.0
+            while not self.site.stopping:
+                item = sub.get(timeout=1.0)          # 1 s 醒一次:站点停的时候别挂着
+                if sub.lagged:
+                    sub.lagged = False
+                    self._frame(self.site.snapshot())
+                if item is None:
+                    idle += 1.0
+                    if idle >= SSE_HEARTBEAT_S:
+                        idle = 0.0
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                    continue
+                idle = 0.0
+                self._frame(item)
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLError, OSError):
+            pass                                              # 客户端走了
+        finally:
+            feed.unsubscribe(sub)
+
+    def _frame(self, item: dict[str, Any]) -> None:
+        self.wfile.write(b"data: " + json.dumps(item, ensure_ascii=False).encode("utf-8")
+                         + b"\n\n")
+        self.wfile.flush()
