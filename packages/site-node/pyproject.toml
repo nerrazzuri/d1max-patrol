@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d1max-site-node"
+version = "0.1.0"
+description = "现场节点(站点):broker 配置与设备认证、派遣器、站点 API(总设计 §1、W00c)"
+requires-python = ">=3.10"
+# 只依赖契约包;不依赖根包 d1max-patrol —— 老 HTTP 面归 W00c4 退役。
+dependencies = ["d1max-contract[mqtt]"]
+
+[project.scripts]
+d1max-site = "d1max_site.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

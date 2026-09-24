@@ -18,6 +18,7 @@ def test_三个包都能import():
     assert importlib.import_module("d1max_contract").SCHEMA == "1.0"
     importlib.import_module("d1max_adapter_sim")
     importlib.import_module("d1max_agent")
+    importlib.import_module("d1max_site")
 
 
 def test_包名与依赖方向():
@@ -28,6 +29,10 @@ def test_包名与依赖方向():
     assert "d1max-contract" in s and "d1max-contract" in a
     assert "d1max-patrol" not in c, "契约包不许依赖根包 —— 它是唯一被两侧同时依赖的东西"
     assert "paho" not in a and "paho" not in s
+    site = _toml("site-node")
+    deps = re.search(r"(?m)^dependencies\s*=\s*\[(.*)\]", site).group(1)
+    assert 'name = "d1max-site-node"' in site and deps.strip() == '"d1max-contract[mqtt]"', \
+        "站点只依赖契约包:不依赖根包(老 HTTP 面要在 W00c4 退役),也不依赖代理与适配器"
     assert re.search(r"(?ms)\[project\.optional-dependencies\].*mqtt\s*=\s*\[.*paho-mqtt", c), \
         "paho 只作为契约包的 mqtt 可选依赖"
 
@@ -35,13 +40,13 @@ def test_包名与依赖方向():
 def test_根pyproject把三处测试目录都收进来():
     root = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     for p in ("packages/contract/tests", "packages/adapter-sim/tests",
-              "packages/robot-agent/tests"):
+              "packages/robot-agent/tests", "packages/site-node/tests"):
         assert f'"{p}"' in root, p
 
 
 def test_每个包有src布局和tests目录():
     for name, mod in (("contract", "d1max_contract"), ("adapter-sim", "d1max_adapter_sim"),
-                      ("robot-agent", "d1max_agent")):
+                      ("robot-agent", "d1max_agent"), ("site-node", "d1max_site")):
         assert (PKGS / name / "src" / mod / "__init__.py").is_file(), name
         assert (PKGS / name / "tests").is_dir(), name
 

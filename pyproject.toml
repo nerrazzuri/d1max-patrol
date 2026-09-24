@@ -44,7 +44,7 @@ where = ["src"]
 asyncio_mode = "auto"
 # W00 决定 1:三个新包在 packages/ 下,各自的 tests/ 也收进同一条测试命令。
 testpaths = ["tests", "packages/contract/tests", "packages/adapter-sim/tests",
-             "packages/robot-agent/tests"]
+             "packages/robot-agent/tests", "packages/site-node/tests"]
 addopts = "-q"
 markers = [
     "contract: 实现无关的行为约定(后端 target、形态 target)",
@@ -72,4 +72,4 @@ select = ["E", "F", "I", "UP", "B", "BLE", "RUF100"]
 [tool.ruff.lint.isort]
 # W00:packages/ 下三个包也是我们自己的,import 分组要跟根包一样算第一方。
 known-first-party = ["d1max_patrol", "d1max_console", "d1max_sim",
-                     "d1max_contract", "d1max_adapter_sim", "d1max_agent"]
+                     "d1max_contract", "d1max_adapter_sim", "d1max_agent", "d1max_site"]
