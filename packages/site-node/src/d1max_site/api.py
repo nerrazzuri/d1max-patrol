@@ -443,7 +443,9 @@ class _Handler(BaseHTTPRequestHandler):
             desk.verify(self.headers.get("X-D1MAX-Source"), self.headers.get("X-D1MAX-Timestamp"),
                         self.headers.get("X-D1MAX-Signature"), raw)
         except IncidentAuthError as exc:
-            raise HttpError(401, f"验签没过: {exc}") from exc
+            # 对外只说「验签没过」:具体哪一步没过只进日志(不让人探出哪些源登记过)。
+            log.warning("事件回调验签没过(%s):%s", self.client_address[0], exc)
+            raise HttpError(401, "验签没过") from exc
         try:
             body = json.loads(raw or b"{}")
         except (ValueError, UnicodeDecodeError) as exc:

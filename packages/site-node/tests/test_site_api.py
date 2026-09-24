@@ -421,7 +421,10 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
             return exc.code, json.loads(exc.read() or b"{}")
 
     body = json.dumps({"event_id": "e1", "type": "intrusion", "zone": "yard"}).encode()
-    assert 报(body, sig="00" * 32)[0] == 401
+    bad = 报(body, sig="00" * 32)
+    expired = 报(body, ts=wall() - 10 * 60_000)
+    assert bad[0] == expired[0] == 401
+    assert bad[1] == expired[1] == {"error": "验签没过"}, "401 不说是哪一步没过(源名不可探测)"
     assert 报(b'{"event_id": ""}')[0] == 400
     code, d = 报(body)
     assert code == 200 and d["outcome"] == "dispatched" and d["robot_id"] == "A", d

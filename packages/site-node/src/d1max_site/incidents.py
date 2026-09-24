@@ -18,6 +18,7 @@ import hmac
 import json
 import logging
 import math
+import re
 import secrets
 import uuid
 from collections.abc import Callable
@@ -33,6 +34,11 @@ from d1max_site.priorities import EVENT, INCIDENT_PREFIX
 log = logging.getLogger(__name__)
 
 MAX_SKEW_MS = 5 * 60_000
+#: 一台狗派出去的事件任务多久没回结果就不再算它「在处理事件」(防一条丢了终态的任务永远占着狗)。
+OPEN_INCIDENT_MS = 30 * 60_000
+MAX_DETAIL_BYTES = 4000
+_HEX64 = re.compile(r"[0-9a-fA-F]{64}")
+_DIGITS = re.compile(r"[1-9][0-9]{0,15}")
 MERGE_WINDOW_MS = 60_000
 TYPES = frozenset({"intrusion"})
 _TERMINAL = {"task_done": "done", "task_failed": "failed", "task_aborted": "aborted",
@@ -97,6 +103,8 @@ class IncidentDesk:
     def map_zone(self, zone: str, intercept: str) -> None:
         if not isinstance(zone, str) or not SAFE_ID.match(zone):
             raise IncidentError(f"防区名只许 ASCII 字母、数字、. _ -: {zone!r}")
+        if not isinstance(intercept, str) or not SAFE_ID.match(intercept):
+            raise IncidentError(f"拦截点名不合规矩: {intercept!r}")
         if self.intercept(intercept) is None:
             raise IncidentError(f"没有拦截点 {intercept}")
         with self.db.tx() as c:
@@ -111,18 +119,24 @@ class IncidentDesk:
 
     def verify(self, source: str | None, timestamp: str | None, signature: str | None,
                body: bytes) -> None:
-        rows = self.db.query("SELECT secret FROM incident_sources WHERE name=?", (source or "",))
+        """验签。**失败的原因只进异常消息(站点记日志),对外一律「验签没过」**:不让人靠不同的
+        报错探出哪些事件源登记过。未登记的源也照算一次 HMAC,时间上也不露。
+        签的是**原样的时间戳头** + ``.`` + 原始请求体;时间戳只认十进制纯数字(毫秒)。"""
+        rows = self.db.query("SELECT secret FROM incident_sources WHERE name=?",
+                             (source if isinstance(source, str) else "",))
+        key = bytes.fromhex(rows[0]["secret"]) if rows else b"\0" * 32
+        stamp = timestamp if isinstance(timestamp, str) else ""
+        want = hmac.new(key, stamp.encode("latin-1", "replace") + b"." + body,
+                        hashlib.sha256).digest()
+        sig = signature if isinstance(signature, str) else ""
+        got = bytes.fromhex(sig) if _HEX64.fullmatch(sig) else b""
         if not rows:
             raise IncidentAuthError("事件源没登记")
-        try:
-            ts = int(timestamp or "")
-        except ValueError as exc:
-            raise IncidentAuthError("时间戳不是整数毫秒") from exc
-        if abs(self._now() - ts) > MAX_SKEW_MS:
+        if not _DIGITS.fullmatch(stamp):
+            raise IncidentAuthError("时间戳不是十进制纯数字毫秒")
+        if abs(self._now() - int(stamp)) > MAX_SKEW_MS:
             raise IncidentAuthError("时间戳离站点的钟太远(超过 5 分钟)")
-        want = hmac.new(bytes.fromhex(rows[0]["secret"]), str(ts).encode() + b"." + body,
-                        hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(want, (signature or "").lower()):
+        if not hmac.compare_digest(want, got):
             raise IncidentAuthError("签名对不上")
 
     # ------------------------------------------------------------ 处理
@@ -143,6 +157,9 @@ class IncidentDesk:
                 running = c.status.task.task_id if c.status and c.status.task else ""
                 if running.startswith(INCIDENT_PREFIX):
                     reason = f"{rid} 正在处理另一个事件 {running}"
+                elif rid in self._open_incident_robots():
+                    # 派了还没回结果(或正等回执):狗报的 status 可能还没跟上 —— 以账为准。
+                    reason = f"{rid} 正在处理另一个事件(已派出、未结束)"
             if not reason:
                 caps = c.capabilities.tasks.get("patrol", {}) if c.capabilities else {}
                 loaded = (caps.get("map_id"), caps.get("map_version"))
@@ -161,6 +178,14 @@ class IncidentDesk:
             return None, ";".join(why) or "没有登记的狗"
         return sorted(best)[0][2], ""
 
+    def _open_incident_robots(self) -> set[str]:
+        rows = self.db.query(
+            "SELECT DISTINCT robot_id FROM incidents WHERE outcome IN "
+            "('dispatching', 'dispatched') AND result IS NULL AND robot_id IS NOT NULL "
+            "AND received_at>=?",
+            (self._now() - OPEN_INCIDENT_MS,))
+        return {r["robot_id"] for r in rows}
+
     def _insert(self, source: str, ev: dict[str, Any], outcome: str, **kw: Any) -> int:
         with self.db.tx() as c:
             cur = c.execute(
@@ -170,7 +195,7 @@ class IncidentDesk:
                 (source, ev["event_id"], ev["type"], ev["zone"], kw.get("intercept"),
                  self._now(), ev.get("occurred_at"), outcome, kw.get("robot_id"),
                  kw.get("task_id"), kw.get("merged_into"), kw.get("note", ""),
-                 json.dumps(ev.get("detail") or {}, ensure_ascii=False)[:4000]))
+                 json.dumps(ev.get("detail") or {}, ensure_ascii=False)))
             return cur.lastrowid
 
     def _update(self, rid: int, **kw: Any) -> None:
@@ -189,13 +214,22 @@ class IncidentDesk:
         for k in ("event_id", "type", "zone"):
             if not isinstance(ev[k], str) or not ev[k] or len(ev[k]) > 128:
                 raise IncidentError(f"事件体要有 {k}(1–128 个字符的字符串)")
-        if ev["occurred_at"] is not None and (isinstance(ev["occurred_at"], bool)
-                                              or not isinstance(ev["occurred_at"], int)):
-            raise IncidentError("occurred_at 要是整数毫秒")
+        oa = ev["occurred_at"]
+        if oa is not None and (isinstance(oa, bool) or not isinstance(oa, int)
+                               or not 0 <= oa < 2**53):
+            raise IncidentError("occurred_at 要是 0..2^53 的整数毫秒")
+        if ev["detail"] is not None:
+            if len(json.dumps(ev["detail"], ensure_ascii=False).encode()) > MAX_DETAIL_BYTES:
+                ev["detail"] = {"truncated": True}      # 截一半的 JSON 读不回来,整个换掉
         return ev
 
     async def handle(self, source: str, body: Any) -> dict[str, Any]:
-        """**先验签再调它**(``verify``)。返回这条事件的账。"""
+        """**先验签再调它**(``verify``)。返回这条事件的账;每条都推给 SSE。"""
+        row = await self._handle(source, body)
+        self._publish(row)
+        return row
+
+    async def _handle(self, source: str, body: Any) -> dict[str, Any]:
         ev = self.parse(body)
         dup = self.db.query("SELECT id FROM incidents WHERE source=? AND event_id=?",
                             (source, ev["event_id"]))
@@ -207,6 +241,7 @@ class IncidentDesk:
         if not z:
             return self._row(self._insert(source, ev, "unmapped", note="防区没映射到拦截点"))
         point = self.intercept(z[0]["intercept"])
+        # 只并入**真派出去了**的那条(回执 accepted 或超时):失败的不算已出动。
         recent = self.db.query(
             "SELECT id FROM incidents WHERE zone=? AND outcome='dispatched' AND received_at>=? "
             "ORDER BY id DESC LIMIT 1", (ev["zone"], self._now() - self.merge_window_ms))
@@ -215,28 +250,30 @@ class IncidentDesk:
                                           merged_into=recent[0]["id"]))
         rid, why = self.pick_robot(point)
         if rid is None:
-            row = self._row(self._insert(source, ev, "no_robot", intercept=point["name"],
-                                         note=why))
-            self._publish(row)
-            return row
+            return self._row(self._insert(source, ev, "no_robot", intercept=point["name"],
+                                          note=why))
         task_id = f"{INCIDENT_PREFIX}{uuid.uuid4().hex[:12]}"
-        iid = self._insert(source, ev, "dispatched", intercept=point["name"], robot_id=rid,
-                           task_id=task_id, note="已发出")
+        # 先占住这台狗(dispatching),再 await 回执:同时到的另一条事件据此挑开它。
+        iid = self._insert(source, ev, "dispatching", intercept=point["name"], robot_id=rid,
+                           task_id=task_id, note="发送中")
         target = MapPose(map_id=point["map_id"], map_version=point["map_version"],
                          frame_id="map", x=point["x"], y=point["y"], yaw=point["yaw"]).to_wire()
         try:
             r = await self.dispatcher.goto(rid, target, None, issued_by=f"incident:{source}",
                                            priority=EVENT, task_id=task_id)
-            if r["ack"]["result"] != "accepted":
+            if r["ack"]["result"] == "accepted":
+                self._update(iid, outcome="dispatched", note="已出动")
+            else:
                 self._update(iid, outcome="dispatch_failed",
                              note=f"狗回 {r['ack']['result']}: {r['ack'].get('reason', '')}")
         except DispatchRefused as exc:
             self._update(iid, outcome="dispatch_failed", note=str(exc))
         except DispatchTimeout:
-            self._update(iid, note="回执超时:可能已在路上")
-        row = self._row(iid)
-        self._publish(row)
-        return row
+            self._update(iid, outcome="dispatched", note="回执超时:可能已在路上")
+        except Exception as exc:
+            log.exception("事件 %s 派单炸了", ev["event_id"])
+            self._update(iid, outcome="dispatch_failed", note=f"站点内部错误: {exc}")
+        return self._row(iid)
 
     def _publish(self, row: dict[str, Any]) -> None:
         self.dispatcher.feed.publish({"kind": "incident", "incident": row})
@@ -247,6 +284,8 @@ class IncidentDesk:
         if result and task_id and task_id.startswith(INCIDENT_PREFIX):
             with self.db.tx() as c:
                 c.execute("UPDATE incidents SET result=? WHERE task_id=?", (result, task_id))
+            for r in self.db.query("SELECT id FROM incidents WHERE task_id=?", (task_id,)):
+                self._publish(self._row(r["id"]))
 
     def list(self, limit: int = 100) -> list[dict[str, Any]]:
         return [dict(r) for r in self.db.query("SELECT * FROM incidents ORDER BY id DESC LIMIT ?",

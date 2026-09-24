@@ -6,6 +6,7 @@ SQLite 自己的线程检查关掉,串行化由这把锁负责。WAL 模式:读�
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -178,8 +179,12 @@ class SiteDB:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        fresh = not self.path.exists()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False,
                                      isolation_level=None)
+        # 库里有事件源的共享密钥与会话令牌的哈希:只许站点用户自己读。
+        if fresh or self.path.stat().st_mode & 0o077:
+            os.chmod(self.path, 0o600)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")

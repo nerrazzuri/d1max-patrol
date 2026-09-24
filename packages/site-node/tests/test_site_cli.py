@@ -250,6 +250,8 @@ def test_老库的commands表补上priority列(tmp_path):
     db = SiteDB(p)
     assert db.query("SELECT priority FROM commands")[0]["priority"] == 0
     assert "map_version" in {r[1] for r in db.query("PRAGMA table_info(standby_points)")}
+    import stat as _stat
+    assert _stat.S_IMODE(p.stat().st_mode) == 0o600, "库里有事件源密钥与会话"
     from d1max_site.db import SCHEMA_VERSION
     assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == str(SCHEMA_VERSION)
     db.close()
