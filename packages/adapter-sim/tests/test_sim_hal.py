@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
 from d1max_adapter_sim.robot import SimRobot
@@ -34,6 +32,12 @@ async def _就绪(r):
     await r.acquire_control()
 
 
+def _步(c, r, n=1, dt=0.1):
+    for _ in range(n):
+        r.tick(dt)
+        c.advance(dt)
+
+
 def _v(vx=0.0, wz=0.0, vy=0.0, seq=1, ttl_ms=500):
     return VelocityCommand(seq=seq, ttl_ms=ttl_ms, frame="base", vx=vx, vy=vy, wz=wz)
 
@@ -56,7 +60,10 @@ async def test_能力声明与入口一致(台子):
         with pytest.raises(HalUnsupported):
             await call
     assert await r.camera_sources() == ()
-    await r.odometry(); await r.battery(); await r.faults(); await r.health()
+    await r.odometry()
+    await r.battery()
+    await r.faults()
+    await r.health()
 
 
 async def test_没控制权先拒(台子):
@@ -88,9 +95,10 @@ async def test_ttl到期自停(台子):
     c, r = 台子
     await _就绪(r)
     await r.set_velocity(_v(vx=0.5, ttl_ms=300))
-    r.tick(0.1); c.advance(0.1)
+    _步(c, r)
     assert (await r.odometry()).vx == 0.5
-    c.advance(0.3); r.tick(0.1)
+    c.advance(0.3)
+    r.tick(0.1)
     assert (await r.odometry()).vx == 0.0, "ttl 过了没新命令,适配器自己停"
     assert await r.stopped() is True
 
@@ -99,26 +107,24 @@ async def test_位姿按速度积分(台子):
     c, r = 台子
     await _就绪(r)
     await r.set_velocity(_v(vx=1.0, ttl_ms=10_000))
-    for _ in range(10):
-        r.tick(0.1); c.advance(0.1)
+    _步(c, r, 10)
     o = await r.odometry()
     assert o.x == pytest.approx(1.0, abs=1e-6) and o.y == pytest.approx(0.0) and o.valid
-    await r.set_velocity(_v(vx=0.0, wz=math.pi / 2, seq=2, ttl_ms=10_000))
-    for _ in range(10):
-        r.tick(0.1); c.advance(0.1)
-    assert (await r.odometry()).yaw == pytest.approx(math.pi / 2, abs=1e-6)
+    await r.set_velocity(_v(vx=0.0, wz=1.0, seq=2, ttl_ms=10_000))   # 在 max_wz 之内
+    _步(c, r, 10)
+    assert (await r.odometry()).yaw == pytest.approx(1.0, abs=1e-6)
 
 
 async def test_stop请求与stopped确认分开(台子):
     c, r = 台子
     await _就绪(r)
     await r.set_velocity(_v(vx=0.8, ttl_ms=10_000))
-    r.tick(0.1); c.advance(0.1)
+    _步(c, r)
     await r.stop()
     assert await r.stopped() is False, "刚发请求,还在制动"
-    r.tick(0.1); c.advance(0.1)
+    _步(c, r)
     assert await r.stopped() is False
-    r.tick(0.1); c.advance(0.1)                 # 累计 0.2 s = stop_latency
+    _步(c, r)                 # 累计 0.2 s = stop_latency
     assert await r.stopped() is True
     assert (await r.odometry()).vx == 0.0
     got = await r.set_velocity(_v(vx=0.3, seq=3))
@@ -131,13 +137,13 @@ async def test_急停拒速度_复位不恢复(台子):
     await r.set_velocity(_v(vx=0.8, ttl_ms=10_000))
     await r.emergency_stop(True)
     assert await r.estop_status() is True
-    r.tick(0.1); c.advance(0.1)
+    _步(c, r)
     assert await r.stopped() is True and (await r.odometry()).vx == 0.0
     got = await r.set_velocity(_v(vx=0.3, seq=2))
     assert got.rejected and got.reason == "estop"
     await r.estop_reset()
     assert await r.estop_status() is False
-    r.tick(0.1); c.advance(0.1)
+    _步(c, r)
     assert (await r.odometry()).vx == 0.0, "复位不自动恢复任务"
     h = await r.health()
     assert h.estop is False and h.control is True
@@ -149,7 +155,7 @@ async def test_控制权被夺(台子):
     await r.set_velocity(_v(vx=0.5, ttl_ms=10_000))
     r.inject_control_lost()
     assert (await r.control_status()).held is False
-    r.tick(0.1); c.advance(0.1)
+    _步(c, r)
     assert (await r.odometry()).vx == 0.0
     got = await r.set_velocity(_v(vx=0.3, seq=2))
     assert got.rejected and got.reason == "no_control"
