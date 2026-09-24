@@ -34,7 +34,8 @@ def test_包名与依赖方向():
 
 def test_根pyproject把三处测试目录都收进来():
     root = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    for p in ("packages/contract/tests", "packages/adapter-sim/tests", "packages/robot-agent/tests"):
+    for p in ("packages/contract/tests", "packages/adapter-sim/tests",
+              "packages/robot-agent/tests"):
         assert f'"{p}"' in root, p
 
 
@@ -43,3 +44,15 @@ def test_每个包有src布局和tests目录():
                       ("robot-agent", "d1max_agent")):
         assert (PKGS / name / "src" / mod / "__init__.py").is_file(), name
         assert (PKGS / name / "tests").is_dir(), name
+
+
+def test_包内tests目录不是包而且文件名不与根tests撞():
+    """根 tests/ 是一个叫 ``tests`` 的包;packages/*/tests 若也放 ``__init__.py``,pytest 的
+    prepend 导入模式下两个 ``tests`` 包会互相覆盖(collection 时 ModuleNotFoundError)。
+    所以包内 tests 不带 ``__init__.py``,代价是测试文件基名必须全仓唯一。"""
+    根 = {p.name for p in (ROOT / "tests").rglob("test_*.py")}
+    for pkg in PKGS.iterdir():
+        t = pkg / "tests"
+        assert not (t / "__init__.py").exists(), f"{t} 不许是包"
+        for f in t.glob("test_*.py"):
+            assert f.name not in 根, f"{f} 与根 tests 里同名文件撞了"

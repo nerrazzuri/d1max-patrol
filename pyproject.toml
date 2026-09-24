@@ -68,3 +68,8 @@ target-version = "py310"
 # 于是"注解上写着的规则确实存在"这件事从此有人守。爆炸半径: 清掉那 5 处
 # 之后为 0 命中。
 select = ["E", "F", "I", "UP", "B", "BLE", "RUF100"]
+
+[tool.ruff.lint.isort]
+# W00:packages/ 下三个包也是我们自己的,import 分组要跟根包一样算第一方。
+known-first-party = ["d1max_patrol", "d1max_console", "d1max_sim",
+                     "d1max_contract", "d1max_adapter_sim", "d1max_agent"]
