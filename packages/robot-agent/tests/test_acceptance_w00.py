@@ -144,7 +144,10 @@ async def test_W00_验收流程(台):
     assert ab.result is AckResult.ACCEPTED
     await t.run(1)
     assert await dog.stopped() is False, "刚发 stop,还在制动"
-    await t.run(5)
+    await t.run(1)                                   # 这一拍 step 时制动还剩 0.1 s,拍末 tick 才停下
+    assert "task_aborted" not in t.kinds(), "停止没确认之前不许报 aborted"
+    assert site.status.task is not None and site.status.task.state is TaskState.RUNNING
+    await t.run(4)
     assert await dog.stopped() is True
     assert t.kinds()[-1] == "task_aborted"
     assert t.events[-1].data == {"task_id": cmd.task_id, "reason": "operator"}

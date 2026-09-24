@@ -208,6 +208,9 @@ async def test_抢占_先停旧等确认再给新(cp):
     assert old.aborted_with == "preempted", "先叫旧任务停"
     assert cp.ledger.holder("motion") == "t1", "旧任务还没确认停,motion 不许给新任务"
     assert cp.current is old
+    assert not cp.pending[0].started, "新任务在旧任务确认停之前不许 start"
+    await cp.step(0.1)                       # 再等一拍,旧任务仍没确认
+    assert cp.ledger.holder("motion") == "t1" and not cp.pending[0].started
     old.stop_confirmed = True
     await cp.step(0.1)                       # 旧任务此拍进入 PREEMPTED
     await cp.step(0.1)                       # 新任务此拍拿到 motion 起跑

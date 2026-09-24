@@ -109,11 +109,15 @@ async def test_abort先停再等确认再终态(台子):
     await t.step(0.1)                       # 这一拍发 stop
     assert t.state is TaskState.RUNNING, "还没确认停,不许进终态"
     assert await r.stopped() is False
-    for _ in range(3):
-        r.tick(0.1)
-        c.advance(0.1)
-        await t.step(0.1)
+    r.tick(0.1)
+    c.advance(0.1)
+    await t.step(0.1)                       # 制动还剩 0.1 s:仍未确认
+    assert await r.stopped() is False
+    assert t.state is TaskState.RUNNING, "stopped() 还是 False,不许进终态"
+    r.tick(0.1)
+    c.advance(0.1)                          # 累计 0.2 s = stop_latency,停了
     assert await r.stopped() is True
+    await t.step(0.1)
     assert t.state is TaskState.ABORTED and t.detail["reason"] == "operator"
     assert (await r.odometry()).vx == 0.0
 
