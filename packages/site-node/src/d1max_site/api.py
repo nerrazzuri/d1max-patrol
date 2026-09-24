@@ -2,7 +2,7 @@
 
 路由(除登录外都要 ``Authorization: Bearer <令牌>``):
 
-- ``POST /api/login`` ``{"name","password"}`` → ``{"token","name"}``
+- ``POST /api/login`` ``{"name","password"}`` → ``{"token","name","role"}``
 - ``POST /api/logout``
 - ``GET  /api/robots`` → ``{"robots":[…]}``
 - ``GET  /api/robots/<id>`` → 视图 + 最近事件 + 最近命令
@@ -302,7 +302,9 @@ class _Handler(BaseHTTPRequestHandler):
             raise HttpError(429, str(exc)) from exc
         except AuthError as exc:
             raise HttpError(401, str(exc)) from exc
-        self._send_json(200, {"token": token, "name": name})
+        who = self.site.accounts.check(token)
+        self._send_json(200, {"token": token, "name": name,
+                              "role": getattr(who, "role", "")})
 
     def _robot(self, method: str, robot_id: str, action: str | None, user: str) -> None:
         disp = self.site.dispatcher

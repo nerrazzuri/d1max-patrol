@@ -1,0 +1,58 @@
+{
+  "robots": [
+    {
+      "active": true,
+      "capabilities": {
+        "actuators": {
+          "light": [],
+          "siren": false,
+          "speaker": false,
+          "spotlight": false
+        },
+        "adapter": "sim/0.1.0",
+        "agent": "0.1.0",
+        "robot_id": "A",
+        "schema": "1.0",
+        "sensing": {
+          "depth": false,
+          "foot_force": false,
+          "imu_hz": 0,
+          "joint_effort": false,
+          "lidar": false,
+          "thermal": false
+        },
+        "tasks": {
+          "goto": {
+            "max_speed_mps": 1.0
+          },
+          "patrol": {
+            "map_id": "estate-1",
+            "map_version": "7"
+          }
+        }
+      },
+      "expires_at": 1791274639754,
+      "fresh": true,
+      "revoked": false,
+      "robot_id": "A",
+      "status": {
+        "boot_id": "boot-c3ed71b67c",
+        "control_epoch": 1,
+        "last_seen": 1790274640225,
+        "online": true,
+        "ready": {
+          "control": true,
+          "estop_clear": true,
+          "loc_ok": true,
+          "motion": true
+        },
+        "schema": "1.0",
+        "task": {
+          "kind": "goto",
+          "state": "running",
+          "task_id": "task-9d795c9c5c4e"
+        }
+      }
+    }
+  ]
+}

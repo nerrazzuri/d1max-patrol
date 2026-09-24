@@ -1,0 +1,21 @@
+{
+  "incidents": [
+    {
+      "detail": "{}",
+      "event_id": "e1",
+      "id": 1,
+      "intercept": "gate",
+      "merged_into": null,
+      "note": "已出动",
+      "occurred_at": null,
+      "outcome": "dispatched",
+      "received_at": 1790274640305,
+      "result": null,
+      "robot_id": "A",
+      "source": "nvr",
+      "task_id": "incident-828fb10a165e",
+      "type": "intrusion",
+      "zone": "yard"
+    }
+  ]
+}

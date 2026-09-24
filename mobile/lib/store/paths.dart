@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import 'registry_store.dart';
+import 'site_store.dart';
 
 /// 名册文件叫什么。
 const String rosterFileName = 'robots.json';
@@ -17,4 +18,12 @@ const String rosterFileName = 'robots.json';
 Future<RegistryStore> openRegistryStore() async {
   final dir = await getApplicationDocumentsDirectory();
   return JsonFileStore(File('${dir.path}/$rosterFileName'));
+}
+
+/// 站点列表文件（W00c4）。
+const String sitesFileName = 'sites.json';
+
+Future<SiteStore> openSiteStore() async {
+  final dir = await getApplicationDocumentsDirectory();
+  return JsonSiteStore(File('${dir.path}/$sitesFileName'));
 }

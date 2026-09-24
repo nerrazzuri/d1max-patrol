@@ -1,0 +1,34 @@
+{
+  "bundle": {
+    "bundle_id": "estate-kl",
+    "version": 1
+  },
+  "clock_checked": false,
+  "entries": [
+    {
+      "at": "22:00",
+      "days": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun"
+      ],
+      "id": "nightly",
+      "last": null,
+      "last_started_ms": null,
+      "mission": "loop",
+      "next_run": "2026-09-25T22:00:00+08:00",
+      "on_missed": "skip",
+      "priority": 0,
+      "window_min": 30
+    }
+  ],
+  "last_error": "",
+  "missions": [
+    "loop"
+  ],
+  "timezone": "Asia/Kuala_Lumpur"
+}

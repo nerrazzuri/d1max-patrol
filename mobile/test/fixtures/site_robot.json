@@ -1,0 +1,112 @@
+{
+  "active": true,
+  "capabilities": {
+    "actuators": {
+      "light": [],
+      "siren": false,
+      "speaker": false,
+      "spotlight": false
+    },
+    "adapter": "sim/0.1.0",
+    "agent": "0.1.0",
+    "robot_id": "A",
+    "schema": "1.0",
+    "sensing": {
+      "depth": false,
+      "foot_force": false,
+      "imu_hz": 0,
+      "joint_effort": false,
+      "lidar": false,
+      "thermal": false
+    },
+    "tasks": {
+      "goto": {
+        "max_speed_mps": 1.0
+      },
+      "patrol": {
+        "map_id": "estate-1",
+        "map_version": "7"
+      }
+    }
+  },
+  "commands": [
+    {
+      "ack_reason": "",
+      "ack_result": "accepted",
+      "command_id": "cmd-5451d54e5882",
+      "issued_at": 1790274640310,
+      "issued_by": "incident:nvr",
+      "kind": "goto",
+      "payload": {
+        "target": {
+          "frame_id": "map",
+          "map_id": "estate-1",
+          "map_version": "7",
+          "schema": "1.0",
+          "x": 0.2,
+          "y": 0.0,
+          "yaw": 0.0
+        }
+      },
+      "priority": 80,
+      "robot_id": "A",
+      "task_id": "incident-828fb10a165e"
+    },
+    {
+      "ack_reason": "",
+      "ack_result": "accepted",
+      "command_id": "cmd-7bac976751f3",
+      "issued_at": 1790274640204,
+      "issued_by": "alice",
+      "kind": "goto",
+      "payload": {
+        "target": {
+          "frame_id": "map",
+          "map_id": "estate-1",
+          "map_version": "7",
+          "schema": "1.0",
+          "x": 0.3,
+          "y": 0.0,
+          "yaw": 0.0
+        }
+      },
+      "priority": 60,
+      "robot_id": "A",
+      "task_id": "task-9d795c9c5c4e"
+    }
+  ],
+  "events": [
+    {
+      "boot_id": "boot-c3ed71b67c",
+      "data": {
+        "distance_m": 0.3,
+        "task_id": "task-9d795c9c5c4e"
+      },
+      "kind": "task_progress",
+      "seq": 1,
+      "stamp": 1790274640257
+    }
+  ],
+  "expires_at": 1791274639754,
+  "fresh": true,
+  "revoked": false,
+  "robot_id": "A",
+  "status": {
+    "boot_id": "boot-c3ed71b67c",
+    "control_epoch": 1,
+    "last_seen": 1790274640225,
+    "online": true,
+    "ready": {
+      "control": true,
+      "estop_clear": true,
+      "loc_ok": true,
+      "motion": true
+    },
+    "schema": "1.0",
+    "task": {
+      "kind": "goto",
+      "state": "running",
+      "task_id": "task-9d795c9c5c4e"
+    }
+  }
+}

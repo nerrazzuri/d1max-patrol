@@ -20,6 +20,7 @@
     source-add NAME                        → 登记事件源,打印共享密钥(只这一次;W00c2c)
     intercept NAME --map M:VER --pose x,y,yaw → 登记拦截点(W00c2c)
     zone ZONE INTERCEPT                    → 防区映射到拦截点(W00c2c)
+    fingerprint                            → 站点服务证书的 SHA-256(手机添加站点时核对;W00c4)
     serve     [--api-host 127.0.0.1] [--api-port 8443] [--broker mqtts://127.0.0.1:8883]
 """
 
@@ -99,6 +100,13 @@ def cmd_init(home: Path, site_id: str, hostnames: list[str], broker_port: int) -
     (home / "site.json").write_text(json.dumps({
         "site_id": site_id, "broker_port": broker_port, "hostnames": hostnames,
         "version": SITE_VERSION}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def cmd_fingerprint(home: Path) -> str:
+    """站点服务证书(DER)的 SHA-256,小写十六进制。手机钉的就是它(W00c4 设计决定二 A)。"""
+    _load(home)
+    fp = SiteCA(home / "ca").fingerprint(home / "ca" / "server" / "server.crt")
+    return fp.split(":", 1)[1]
 
 
 def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
@@ -373,6 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--hostname", action="append", required=True,
                    help="站点证书里的主机名或 IP(狗与手机用它连站点),可给多个")
     i.add_argument("--broker-port", type=int, default=8883)
+    sub.add_parser("fingerprint", help="打印站点服务证书的 SHA-256(手机添加站点时核对)")
     e = sub.add_parser("enroll", help="给一台狗签证书并登记")
     e.add_argument("robot_id")
     e.add_argument("--days", type=int, default=365)
@@ -422,6 +431,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.cmd == "init":
             cmd_init(home, args.site_id, args.hostname, args.broker_port)
             print(f"站点目录建好了: {home}")
+            print(f"站点证书指纹(手机添加站点时核对):{cmd_fingerprint(home)}")
+        elif args.cmd == "fingerprint":
+            print(cmd_fingerprint(home))
         elif args.cmd == "enroll":
             d = cmd_enroll(home, args.robot_id, args.days)
             print(f"证书包: {d}\n拷到狗上: ca.crt robot.crt robot.key → /etc/d1max/tls/,"

@@ -283,3 +283,14 @@ def test_账号的命令行(home, monkeypatch, capsys):
     assert {a["name"]: a["role"] for a in Accounts(db, now_ms=lambda: 0).list()} == {
         "alice": "admin", "gina": "owner"}
     db.close()
+
+
+def test_fingerprint就是站点服务证书DER的sha256(home, capsys):
+    import hashlib
+    import subprocess
+    capsys.readouterr()
+    assert site_main.main(["--home", str(home), "fingerprint"]) == 0
+    fp = capsys.readouterr().out.strip()
+    der = subprocess.run(["openssl", "x509", "-in", str(home / "ca" / "server" / "server.crt"),
+                          "-outform", "DER"], capture_output=True, check=True).stdout
+    assert fp == hashlib.sha256(der).hexdigest() and len(fp) == 64

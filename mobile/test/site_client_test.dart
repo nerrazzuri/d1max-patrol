@@ -1,0 +1,107 @@
+// 站点客户端（W00c4）：钉证书、登录、带令牌、错误统一成 SiteError、SSE。
+import 'dart:async';
+
+import 'package:d1max_patrol/net/site_client.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fake_site.dart';
+
+void main() {
+  late FakeSite site;
+
+  setUp(() async {
+    site = FakeSite();
+    await site.start();
+  });
+
+  tearDown(() async => site.close());
+
+  test('指纹对得上才连：登录拿到令牌和角色，之后的请求带令牌', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    final s = await c.login('alice', 'correct-horse-battery');
+    expect(s.token, isNotEmpty);
+    expect(s.role, 'guard');
+    final robots = await c.robots();
+    expect(robots.first['robot_id'], 'A');
+    expect(site.received.last.auth, 'Bearer ${s.token}');
+    expect(site.received.first.body, {'name': 'alice', 'password': 'correct-horse-battery'});
+    c.close();
+  });
+
+  test('指纹不对就断开，报出实际指纹', () async {
+    final c = SiteClient(site.url, 'ab' * 32);
+    await expectLater(
+        c.login('alice', 'x'),
+        throwsA(isA<SiteError>()
+            .having((e) => e.status, 'status', 0)
+            .having((e) => e.message, 'message', contains(testCertFingerprint()))));
+    expect(site.received, isEmpty, reason: '口令一个字节都不许发出去');
+    c.close();
+  });
+
+  test('指纹写法宽松：冒号、大写都认', () async {
+    final fp = testCertFingerprint();
+    final pretty = [for (var i = 0; i < 64; i += 2) fp.substring(i, i + 2)].join(':').toUpperCase();
+    final c = SiteClient(site.url, pretty);
+    await c.login('alice', 'x');
+    c.close();
+  });
+
+  test('不是 https、指纹不是 64 位十六进制：当场拒绝', () {
+    expect(() => SiteClient('http://127.0.0.1:1', testCertFingerprint()), throwsA(isA<SiteError>()));
+    expect(() => SiteClient(site.url, 'not-a-fingerprint'), throwsA(isA<SiteError>()));
+  });
+
+  test('401 之后令牌作废，要重新登录；403 原样报', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('olga', 'x');
+    site.statusCodes['/api/robots/A/patrol'] = 403;
+    await expectLater(c.patrol('A', 'loop'),
+        throwsA(isA<SiteError>().having((e) => e.status, 'status', 403)));
+    expect(c.session, isNotNull);
+    site.statusCodes['/api/robots'] = 401;
+    await expectLater(c.robots(), throwsA(isA<SiteError>().having((e) => e.status, 'status', 401)));
+    expect(c.session, isNull);
+    c.close();
+  });
+
+  test('派巡检、叫停、回待命点的请求形状', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('gina', 'x');
+    await c.patrol('A', 'loop');
+    await c.abort('A', 'task-9');
+    await c.returnToStandby('A');
+    final posts = site.received.where((r) => r.method == 'POST').skip(1).toList();
+    expect(posts.map((r) => r.path), [
+      '/api/robots/A/patrol',
+      '/api/robots/A/abort',
+      '/api/robots/A/standby/return',
+    ]);
+    expect(posts[0].body, {'mission_id': 'loop'});
+    expect(posts[1].body, {'task_id': 'task-9'});
+    c.close();
+  });
+
+  test('SSE：第一帧快照，之后照推', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('gina', 'x');
+    final frames = <Map<String, dynamic>>[];
+    final sub = c.events().listen(frames.add);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    site.sse.add({'kind': 'status', 'robot_id': 'A'});
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(frames.map((f) => f['kind']), ['snapshot', 'status']);
+    c.close(); // 先强关连接，事件流跟着结束
+    unawaited(sub.cancel());
+  });
+
+  test('排程与事件账读得出来（夹具来自真站点）', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('gina', 'x');
+    final s = await c.schedule();
+    expect(s['missions'], contains('loop'));
+    final inc = await c.incidents();
+    expect(inc.first['zone'], 'yard');
+    c.close();
+  });
+}
