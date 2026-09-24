@@ -216,6 +216,15 @@ if [[ "$(cat "$ROOT_SENTINEL" 2>/dev/null)" != "$ROOT_SENTINEL_WANT" ]]; then
   TMP_PKG=$(mktemp -d)
   cp -a "$PKG/." "$TMP_PKG/"
   "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_PKG"
+  # W00b:``d1max_patrol.engine`` 已是别名壳,import 就要 robot-agent 那三个包。boot-guard、
+  # bundle guard、3/7 的 release install、7/7 的 activate/migrate-data 全从这个解释器跑,
+  # 所以这里也装(顺序按依赖)。老包没带 packages/ 就跳过 —— 那一版的根包里 engine 还是真身。
+  if [[ -d "$TMP_PKG/packages/robot-agent" ]]; then
+    "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS \
+      "$TMP_PKG/packages/contract[mqtt]" \
+      "$TMP_PKG/packages/adapter-sim" \
+      "$TMP_PKG/packages/robot-agent"
+  fi
   printf '%s\n' "$ROOT_SENTINEL_WANT" > "$ROOT_SENTINEL"
 else
   echo "  根下这一版的依赖已经装齐了($REL_NAME),跳过 —— 离线重跑不需要网。"

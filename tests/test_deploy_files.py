@@ -783,8 +783,8 @@ def test_离线pip参数每一处pip都带上了(装机脚本):
     # 带离线参数的命令。判据是行首第一个非空字符是不是 ``#``。
     pip行 = [ln for ln in 装机脚本.splitlines()
              if "-m pip install" in ln and not ln.lstrip().startswith("#")]
-    # 今天是五条(2/7 两条、4/7 三条:根包一条 + W00b 三个包一条),我数过。
-    assert len(pip行) == 5, f"pip install 的条数变了:{pip行}"
+    # 今天是六条(2/7 三条、4/7 三条:各自根包一条 + W00b 三个包一条),我数过。
+    assert len(pip行) == 6, f"pip install 的条数变了:{pip行}"
     for 行 in pip行:
         assert "$PIP_ARGS" in 行, f"这一条 pip 没带离线参数:{行.strip()}"
     # 清单那一侧要写清楚怎么用,否则现场不知道有这个口子。
@@ -1315,3 +1315,25 @@ def test_卸载脚本删agent单元():
     assert "# @删除 /etc/systemd/system/d1max-agent.service" in text
     assert 'rm_sys "$UNIT_DIR/$AGENT_UNIT"' in text
     assert 'for u in "$MAIN_UNIT" "$AGENT_UNIT" "$OLD_UNIT"; do' in text
+
+
+def test_根下的解释器venv也装三个包_不然别名壳一import就炸(装机脚本):
+    """W00b 阻断项(自查):``d1max_patrol.engine`` 现在是别名壳,import 就要 ``d1max_agent``。
+    boot-guard、bundle guard、3/7 的 ``release install``、7/7 的 ``release activate`` /
+    ``migrate-data`` 都从 ``/opt/d1max/bin/python``(2/7 建的 bin-venv)跑 —— 那里只装根包的话,
+    装机在 3/7 就炸,开机守卫一次都跑不了。"""
+    行们 = 装机脚本.splitlines()
+
+    def 行号(片段: str, 起: int = 0) -> int:
+        命中 = [i for i, 行 in enumerate(行们)
+              if i >= 起 and 片段 in 行 and not 行.lstrip().startswith("#") and "[[ -d" not in 行]
+        assert 命中, f"装机脚本里没有 {片段!r}"
+        return 命中[0]
+
+    i_root = 行号('"$ROOT/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_PKG"')
+    i_c = 行号('"$TMP_PKG/packages/contract[mqtt]"', i_root)
+    i_s = 行号('"$TMP_PKG/packages/adapter-sim"', i_root)
+    i_a = 行号('"$TMP_PKG/packages/robot-agent"', i_root)
+    i_3of7 = 行号('say "3/7')
+    assert i_root < i_c < i_s < i_a < i_3of7, "2/7 里根包之后、3/7 之前,把三个包装进 bin-venv"
+    assert "$ROOT/bin/python" in 行们[i_c - 1], "装进的是 bin-venv,不是槽 venv"
