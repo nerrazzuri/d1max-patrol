@@ -23,6 +23,7 @@ from d1max_contract.mission import MissionError, parse_mission
 from d1max_contract.topics import Topics
 from d1max_contract.transport import Transport
 from d1max_site.db import SiteDB
+from d1max_site.priorities import STANDBY_PREFIX
 from d1max_site.registry import Registry
 
 log = logging.getLogger(__name__)
@@ -266,14 +267,18 @@ class Dispatcher:
         return ""
 
     def busy(self, robot_id: str) -> str | None:
-        """狗上此刻在跑的任务 id(看它自己报的 status);没有 → None。"""
+        """狗上此刻在跑的任务 id(看它自己报的 status);没有 → None。**回待命点不算忙**
+        (W00c2b:优先级最低,谁来都能抢)。"""
         c = self.clients.get(robot_id)
         if c is None or c.status is None or c.status.task is None:
+            return None
+        if c.status.task.task_id.startswith(STANDBY_PREFIX):
             return None
         return c.status.task.task_id
 
     async def goto(self, robot_id: str, target: dict[str, Any], max_speed_mps: float | None,
-                   *, issued_by: str, priority: int = 0) -> dict[str, Any]:
+                   *, issued_by: str, priority: int = 0,
+                   task_id: str | None = None) -> dict[str, Any]:
         c = self._client_for(robot_id)
         self._check_dispatchable(robot_id, c, "goto")
         try:
@@ -284,7 +289,7 @@ class Dispatcher:
         if max_speed_mps is not None:
             payload["max_speed_mps"] = max_speed_mps
         return await self._send(c, robot_id, "goto", payload, issued_by=issued_by,
-                                priority=priority)
+                                priority=priority, task_id=task_id)
 
     async def patrol(self, robot_id: str, mission: dict[str, Any], *, issued_by: str,
                      priority: int = 0, task_id: str | None = None,
@@ -327,9 +332,9 @@ class Dispatcher:
                             task_id=task_id, priority=priority)
         with self.db.tx() as tx:                    # 先落库:发出去之后进程死了也有账
             tx.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, "
-                       "issued_by, issued_at) VALUES (?,?,?,?,?,?,?)",
+                       "issued_by, issued_at, priority) VALUES (?,?,?,?,?,?,?,?)",
                        (cmd.command_id, cmd.task_id, robot_id, kind, json.dumps(payload),
-                        issued_by, cmd.issued_at))
+                        issued_by, cmd.issued_at, priority))
         if before_send is not None:
             # 调用方要在命令**发出去之前**记账(排程执行器:这一轮算起跑过了)——回执可能丢,
             # 狗可能收到了;发完再记的话,回执一丢就会再派一趟。

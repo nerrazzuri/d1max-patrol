@@ -348,3 +348,33 @@ def test_排程视图(站点, tmp_path):
     code, v = 站点.req("GET", "/api/schedule", token=tok)
     assert code == 200 and v["bundle"]["bundle_id"] == "estate-kl"
     assert v["entries"][0]["id"] == "nightly" and v["entries"][0]["next_run"]
+
+
+def test_请求体里的priority不起作用_手动派单一律按MANUAL(站点):
+    from d1max_site.priorities import MANUAL
+    tok = 站点.login()
+    _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
+    code, d = 站点.req("POST", "/api/robots/A/goto", {"target": target(0.3), "priority": 1000},
+                     token=tok)
+    assert code == 200, d
+    row = 站点.db.query("SELECT priority FROM commands WHERE command_id=?", (d["command_id"],))
+    assert row[0]["priority"] == MANUAL
+
+
+def test_待命点API(站点):
+    from d1max_site.standby import StandbyManager
+    tok = 站点.login()
+    assert 站点.req("GET", "/api/robots/A/standby", token=tok)[0] == 404, "没开待命点的站点"
+    站点.api.standby = StandbyManager(站点.db, 站点.disp, now_ms=wall)
+    code, d = 站点.req("POST", "/api/robots/A/standby",
+                     {"name": "dock", "map_id": "estate-1", "x": 0, "y": 0, "yaw": 0,
+                      "default": True}, token=tok)
+    assert code == 200, d
+    code, d = 站点.req("GET", "/api/robots/A/standby", token=tok)
+    assert code == 200 and d["points"][0]["name"] == "dock" and d["points"][0]["default"]
+    code, d = 站点.req("POST", "/api/robots/A/standby", {"name": "x"}, token=tok)
+    assert code == 400
+
+    _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
+    code, d = 站点.req("POST", "/api/robots/A/standby/return", {}, token=tok)
+    assert code == 200 and d["task_id"].startswith("standby-"), d

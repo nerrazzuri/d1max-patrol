@@ -112,6 +112,7 @@ async def test_到点派patrol_走完回写done(站):
     assert len(runs) == 1 and runs[0]["outcome"] == "started" and runs[0]["robot_id"] == "A"
     cmd = t.site.commands("A")[0]
     assert cmd["kind"] == "patrol" and cmd["issued_by"] == "schedule:nightly"
+    assert cmd["priority"] == 10, "排程巡检的优先级按站点的表(W00c2b),不是条目原样的 0"
     assert cmd["payload"]["map_version"] == "7"
     await t.run(600)
     assert t.sched.runs("nightly")[0]["result"] == "done", t.site.recent_events("A", 20)

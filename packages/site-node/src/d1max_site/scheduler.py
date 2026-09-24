@@ -46,6 +46,7 @@ from d1max_contract.schedule import (
 from d1max_site.catalog import ActiveBundle, active_bundle
 from d1max_site.db import SiteDB
 from d1max_site.dispatcher import Dispatcher, DispatchRefused
+from d1max_site.priorities import schedule_priority
 
 log = logging.getLogger(__name__)
 
@@ -194,7 +195,8 @@ class SiteScheduler:
         try:
             r = await self.dispatcher.patrol(rid, act.missions[entry.mission].to_wire(),
                                              issued_by=f"schedule:{entry.id}",
-                                             priority=entry.priority, task_id=task_id,
+                                             priority=schedule_priority(entry.priority),
+                                             task_id=task_id,
                                              before_send=发之前记账)
         except DispatchRefused as exc:                    # 发之前就被拦下:这一轮没消耗
             self._record(entry, scheduled_ms, "dispatch_failed", robot_id=rid, note=str(exc))

@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS commands (
     payload     TEXT NOT NULL,
     issued_by   TEXT NOT NULL,
     issued_at   INTEGER NOT NULL,
+    priority    INTEGER NOT NULL DEFAULT 0,
     ack_result  TEXT,
     ack_reason  TEXT
 );
@@ -96,6 +97,16 @@ CREATE TABLE IF NOT EXISTS schedule_runs (
     UNIQUE (entry_id, scheduled_ms, outcome)
 );
 CREATE INDEX IF NOT EXISTS schedule_runs_task ON schedule_runs(task_id);
+CREATE TABLE IF NOT EXISTS standby_points (
+    robot_id   TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    map_id     TEXT NOT NULL,
+    x          REAL NOT NULL,
+    y          REAL NOT NULL,
+    yaw        REAL NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (robot_id, name)
+);
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,
     status       TEXT,
@@ -117,6 +128,11 @@ class SiteDB:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_DDL)
+            # 老库补列(CREATE TABLE IF NOT EXISTS 不会给已有的表加列)。
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(commands)")}
+            if "priority" not in cols:
+                self._conn.execute("ALTER TABLE commands ADD COLUMN priority INTEGER NOT NULL "
+                                   "DEFAULT 0")
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
 

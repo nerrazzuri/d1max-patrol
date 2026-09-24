@@ -218,3 +218,31 @@ def test_任务包里有命名管道_导入被拒而不是卡住(home, tmp_path,
     os.mkfifo(b / "missions" / "trap.json")
     assert site_main.main(["--home", str(home), "import-bundle", str(b)]) == 2
     assert "不是普通文件" in capsys.readouterr().err
+
+
+def test_standby命令(home, capsys):
+    assert site_main.main(["--home", str(home), "enroll", "A"]) == 0
+    assert site_main.main(["--home", str(home), "standby", "A", "dock", "--map", "estate-1",
+                           "--pose", "1,2,0.5", "--default"]) == 0
+    assert "默认" in capsys.readouterr().out
+    assert site_main.main(["--home", str(home), "standby", "A", "x", "--map", "m",
+                           "--pose", "1,2"]) == 2
+    assert site_main.main(["--home", str(home), "standby", "ghost", "x", "--map", "m",
+                           "--pose", "1,2,3"]) == 2
+
+
+def test_老库的commands表补上priority列(tmp_path):
+    import sqlite3
+    p = tmp_path / "old.db"
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE commands (command_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, "
+              "robot_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, "
+              "issued_by TEXT NOT NULL, issued_at INTEGER NOT NULL, ack_result TEXT, "
+              "ack_reason TEXT)")
+    c.execute("INSERT INTO commands VALUES ('c','t','A','goto','{}','alice',1,NULL,NULL)")
+    c.commit()
+    c.close()
+    db = SiteDB(p)
+    assert db.query("SELECT priority FROM commands")[0]["priority"] == 0
+    assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == "3"
+    db.close()

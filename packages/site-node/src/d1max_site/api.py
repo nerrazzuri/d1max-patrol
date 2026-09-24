@@ -10,6 +10,7 @@
 - ``POST /api/robots/<id>/abort`` ``{"task_id"}``
 - ``POST /api/robots/<id>/patrol`` ``{"mission_id"}``:从当前任务包里起一趟(W00c2a)
 - ``POST /api/bundles`` ``{"path"}``:导入站点主机上的一个任务包目录(W00c2a)
+- ``GET/POST /api/robots/<id>/standby``、``POST /api/robots/<id>/standby/return``:待命点(W00c2b)
 - ``GET  /api/schedule``:当前包的排程,每条下一轮何时、最近一次去向与结果(W00c2a)
 - ``GET  /api/events`` SSE:第一帧全量快照,之后是派遣器的 status/event/ack/reconcile;
   订阅者跟不上时补发一帧全量快照(``lagged``),不悄悄丢
@@ -40,6 +41,7 @@ from d1max_site.accounts import Accounts, AuthError, LockedOut
 from d1max_site.ca import SAFE_ID
 from d1max_site.dispatcher import Dispatcher, DispatchRefused
 from d1max_site.loop import LoopThread
+from d1max_site.priorities import MANUAL
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +50,7 @@ SSE_HEARTBEAT_S = 15.0
 #: 一个请求(含读请求头)多久没动静就断:慢速攻击(slowloris)不能一直占着线程。
 REQUEST_TIMEOUT_S = 30.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-_ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol))?$")
+_ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
 
 
 class HttpError(Exception):
@@ -67,7 +69,8 @@ def check_exposure(host: str, tls: tuple[Path, Path] | None) -> None:
 class SiteApi:
     def __init__(self, *, host: str, port: int, loop: LoopThread, dispatcher: Dispatcher,
                  accounts: Accounts, tls: tuple[Path, Path] | None = None,
-                 scheduler: Any = None, now_ms: Callable[[], int] | None = None,
+                 scheduler: Any = None, standby: Any = None,
+                 now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
         check_exposure(host, tls)
@@ -77,6 +80,7 @@ class SiteApi:
         self.dispatcher = dispatcher
         self.accounts = accounts
         self.scheduler = scheduler
+        self.standby = standby
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         self._stopping = threading.Event()
         api = self
@@ -245,6 +249,8 @@ class _Handler(BaseHTTPRequestHandler):
             view["events"] = disp.recent_events(robot_id)
             view["commands"] = disp.commands(robot_id)
             return self._send_json(200, view)
+        if action in ("standby", "standby/return"):
+            return self._standby(method, robot_id, action, user)
         if method != "POST":
             raise HttpError(405, "只支持 POST")
         d = self._body()
@@ -254,14 +260,12 @@ class _Handler(BaseHTTPRequestHandler):
                                       or not isinstance(speed, (int, float))
                                       or not math.isfinite(speed) or speed <= 0):
                 raise HttpError(400, "max_speed_mps 要是正的有限数")
-            prio = d.get("priority", 0)
-            if isinstance(prio, bool) or not isinstance(prio, int):
-                raise HttpError(400, "priority 要是整数")
+            # 请求体里的 priority 不认:手动派单一律 MANUAL(W00c2b 设计决定一)。
             target = d.get("target")
             if not isinstance(target, dict):
                 raise HttpError(400, "要 target(MapPose 对象)")
             result = self.site.dispatch(lambda: disp.goto(
-                robot_id, target, speed, issued_by=user, priority=prio))
+                robot_id, target, speed, issued_by=user, priority=MANUAL))
         elif action == "patrol":
             mid = d.get("mission_id")
             if not isinstance(mid, str) or not mid:
@@ -271,13 +275,36 @@ class _Handler(BaseHTTPRequestHandler):
             if act is None or mid not in act.missions:
                 raise HttpError(404, f"当前任务包里没有任务 {mid!r}")
             wire = act.missions[mid].to_wire()
-            result = self.site.dispatch(lambda: disp.patrol(robot_id, wire, issued_by=user))
+            result = self.site.dispatch(lambda: disp.patrol(robot_id, wire, issued_by=user,
+                                                            priority=MANUAL))
         else:
             task_id = d.get("task_id")
             if not isinstance(task_id, str) or not task_id:
                 raise HttpError(400, "要 task_id")
             result = self.site.dispatch(lambda: disp.abort(robot_id, task_id, issued_by=user))
         self._send_json(200, result)
+
+    def _standby(self, method: str, robot_id: str, action: str, user: str) -> None:
+        from d1max_site.standby import StandbyError
+        stb = self.site.standby
+        if stb is None:
+            raise HttpError(404, "这个站点没开待命点")
+        if action == "standby/return":
+            if method != "POST":
+                raise HttpError(405, "只支持 POST")
+            result = self.site.dispatch(lambda: stb.return_to(robot_id, issued_by=user))
+            return self._send_json(200, result)
+        if method == "GET":
+            return self._send_json(200, {"points": stb.list(robot_id)})
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        d = self._body()
+        try:
+            stb.set(robot_id, d.get("name"), map_id=d.get("map_id"), x=d.get("x"),
+                    y=d.get("y"), yaw=d.get("yaw", 0.0), default=bool(d.get("default")))
+        except StandbyError as exc:
+            raise HttpError(400, str(exc)) from exc
+        self._send_json(200, {"points": stb.list(robot_id)})
 
     def _import_bundle(self, user: str) -> None:
         from d1max_site.catalog import CatalogError, import_bundle
