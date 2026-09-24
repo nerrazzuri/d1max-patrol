@@ -98,6 +98,8 @@ class Dispatcher:
         self.ack_timeout_s = ack_timeout_s
         self.clients: dict[str, DispatchClient] = {}
         self.feed = Feed()
+        #: 关了之后还在路上的上行报文不再落库(库可能已经关了)。
+        self._closed = False
 
     # ------------------------------------------------------------ 生命周期
 
@@ -109,7 +111,18 @@ class Dispatcher:
         await self._t.connect()
 
     async def close(self) -> None:
+        self._closed = True
         await self._t.close()
+
+    async def sync_robots(self) -> list[str]:
+        """注册表里新登记(且未吊销)的狗挂上客户端。``d1max-site enroll`` 是另一个进程写的库,
+        ``serve`` 定期调它。返回这次新挂上的。"""
+        added = []
+        for r in self.registry.list():
+            if not r.revoked and r.robot_id not in self.clients:
+                await self.add_robot(r.robot_id)
+                added.append(r.robot_id)
+        return added
 
     async def add_robot(self, robot_id: str) -> None:
         if robot_id in self.clients:
@@ -125,6 +138,8 @@ class Dispatcher:
     # ------------------------------------------------------------ 上行
 
     def _on_status(self, robot_id: str, s: Status) -> None:
+        if self._closed:
+            return
         wire = s.to_wire()
         with self.db.tx() as c:
             c.execute("INSERT INTO robot_state(robot_id, status, updated_at) VALUES (?,?,?) "
@@ -134,6 +149,8 @@ class Dispatcher:
         self.feed.publish({"kind": "status", "robot_id": robot_id, "status": wire})
 
     def _on_event(self, robot_id: str, e: Event) -> None:
+        if self._closed:
+            return
         with self.db.tx() as c:
             c.execute("INSERT OR IGNORE INTO events(robot_id, boot_id, seq, event_id, kind, data, "
                       "stamp, received_at) VALUES (?,?,?,?,?,?,?,?)",

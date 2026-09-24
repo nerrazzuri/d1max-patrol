@@ -92,7 +92,9 @@ class SiteApi:
 
     def stop(self) -> None:
         self._stopping.set()
-        self.httpd.shutdown()
+        if self._thread is not None:
+            # 没 start 过就 shutdown() 会永远等一个从没跑起来的 serve_forever。
+            self.httpd.shutdown()
         self.httpd.server_close()
         if self._thread is not None:
             self._thread.join(10)

@@ -1,0 +1,20 @@
+[Unit]
+Description=D1 Max 站点 MQTT broker(Mosquitto:mTLS + 按 robot_id 的 ACL)
+After=network-online.target
+Wants=network-online.target
+# 不限起动次数;配合 Restart=always/RestartSec=5。键属于 [Unit] 段(W01c 的教训)。
+StartLimitIntervalSec=0
+# 配置由 `d1max-site init` 生成;没 init 就不起。
+ConditionPathExists=/var/lib/d1max-site/broker/mosquitto.conf
+
+[Service]
+Type=simple
+# 与站点同一个用户:要读站点证书的私钥(0600)。端口 8883 > 1024,不需要 root。
+User=d1max-site
+ExecStart=/usr/sbin/mosquitto -c /var/lib/d1max-site/broker/mosquitto.conf
+# CRL 只在启动时读:吊销之后 `systemctl restart d1max-mosquitto`。
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

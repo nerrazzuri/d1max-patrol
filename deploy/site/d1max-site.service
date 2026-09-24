@@ -1,0 +1,18 @@
+[Unit]
+Description=D1 Max 站点(派遣器 + 站点 API)
+After=network-online.target d1max-mosquitto.service
+Wants=network-online.target d1max-mosquitto.service
+StartLimitIntervalSec=0
+ConditionPathExists=/var/lib/d1max-site/site.json
+
+[Service]
+Type=simple
+User=d1max-site
+Environment=PYTHONUNBUFFERED=1
+# 绑到局域网:站点 API 走 HTTPS(站点服务证书),口令不明文过网。连不上 broker 退 1,5 秒后重起。
+ExecStart=/opt/d1max-site/venv/bin/d1max-site --home /var/lib/d1max-site serve --api-host 0.0.0.0 --api-port 8443
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

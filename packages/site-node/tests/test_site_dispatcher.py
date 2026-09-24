@@ -87,6 +87,7 @@ class 台子:
     async def close(self) -> None:
         if self.agent is not None:
             await self.agent.close()
+        await self.broker.drain()
         await self.site.close()
         self.db.close()
 
@@ -199,3 +200,29 @@ async def test_登记之后add_robot就能派(台, tmp_path):
     assert "B" in t.site.clients
     with pytest.raises(DispatchRefused, match="不在线"):
         await t.site.goto("B", target(1.0), None, issued_by="alice")
+
+
+async def test_sync_robots把命令行新登记的狗挂上_吊销的不挂(台):
+    t = 台
+    t.reg.enroll("C", fingerprint="sha256:c", issued_at=t.clock.ms - 1,
+                 expires_at=t.clock.ms + 10**10)
+    t.reg.enroll("D", fingerprint="sha256:d", issued_at=t.clock.ms - 1,
+                 expires_at=t.clock.ms + 10**10)
+    t.reg.revoke("D")
+    added = await t.site.sync_robots()
+    assert added == ["C"] and "C" in t.site.clients and "D" not in t.site.clients
+    assert await t.site.sync_robots() == []
+
+
+async def test_关了之后到的上行报文不落库也不炸(台, caplog):
+    import logging
+    t = 台
+    await t.site.close()
+    t.db.close()
+    with caplog.at_level(logging.ERROR):
+        await t.agent.close()                  # offline status 在路上
+        await t.broker.drain()
+    assert not [r for r in caplog.records if "时炸了" in r.getMessage()], \
+        "broker 会吞掉 handler 的异常,只在日志里看得出来"
+    t.agent = None
+    t.db = SiteDB(t.tmp / "site2.db")           # 夹具收尾要关一个库

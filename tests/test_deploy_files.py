@@ -1385,3 +1385,38 @@ def test_根下的解释器venv也装三个包_不然别名壳一import就炸(�
     i_3of7 = 行号('say "3/7')
     assert i_root < i_c < i_s < i_a < i_3of7, "2/7 里根包之后、3/7 之前,把三个包装进 bin-venv"
     assert "$ROOT/bin/python" in 行们[i_c - 1], "装进的是 bin-venv,不是槽 venv"
+
+
+# ------------------------------------------------------------ W00c1:站点主机的部署文件
+
+SITE_DEPLOY = DEPLOY / "site"
+
+
+def test_站点两个单元的形状():
+    m = (SITE_DEPLOY / "d1max-mosquitto.service").read_text(encoding="utf-8")
+    s = (SITE_DEPLOY / "d1max-site.service").read_text(encoding="utf-8")
+    for u in (m, s):
+        段 = _按段(u)
+        assert "StartLimitIntervalSec" in 段["[Unit]"] and "ConditionPathExists" in 段["[Unit]"]
+        assert "User=d1max-site" in u and "Restart=always" in u
+    assert "ExecStart=/usr/sbin/mosquitto -c /var/lib/d1max-site/broker/mosquitto.conf" in m
+    assert "d1max-site --home /var/lib/d1max-site serve" in s
+    assert "After=network-online.target d1max-mosquitto.service" in s
+
+
+def test_站点安装脚本不碰狗_狗的安装脚本不碰站点():
+    site = (SITE_DEPLOY / "install-site.sh").read_text(encoding="utf-8")
+    dog = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "d1max-site" not in dog and "site-node" not in dog and "mosquitto" not in dog
+    assert "d1max-agent" not in site and "robot-agent" not in site
+    assert "set -euo pipefail" in site
+    assert "enable --now d1max-mosquitto.service d1max-site.service" in site
+    assert 'if [[ ! -f "$HOME_DIR/site.json" ]]' in site, "重跑不许重建 CA"
+    assert 'packages/contract[mqtt]" "$PKG/packages/site-node"' in site
+
+
+def test_站点安装脚本语法():
+    import subprocess
+    r = subprocess.run(["bash", "-n", str(SITE_DEPLOY / "install-site.sh")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
