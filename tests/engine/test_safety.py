@@ -6,6 +6,17 @@ from dataclasses import replace
 
 import pytest
 
+from d1max_agent.engine.mission import Policy
+from d1max_agent.engine.safety import (
+    BLOCKED_WAIT_S,
+    MAX_LOC_RESET,
+    WS_DOWN_PAUSE_S,
+    Decision,
+    SafetyContext,
+    battery_ruling,
+    return_line_pct,
+    rule,
+)
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
@@ -16,17 +27,6 @@ from d1max_patrol.backends.base import (
     FaultEvent,
     LocStatusEvent,
     NavStatusEvent,
-)
-from d1max_patrol.engine.mission import Policy
-from d1max_patrol.engine.safety import (
-    BLOCKED_WAIT_S,
-    MAX_LOC_RESET,
-    WS_DOWN_PAUSE_S,
-    Decision,
-    SafetyContext,
-    battery_ruling,
-    return_line_pct,
-    rule,
 )
 from d1max_patrol.protocol.nav_frames import AlgErrorItem
 from d1max_patrol.protocol.nav_types import (
@@ -316,7 +316,7 @@ def test_规则表不碰后端也不碰io():
     import inspect
     from pathlib import Path
 
-    from d1max_patrol.engine import safety
+    from d1max_agent.engine import safety
     src = Path(inspect.getfile(safety)).read_text(encoding="utf-8")
     for banned in ("async def", "await ", "import asyncio", "open("):
         assert banned not in src, f"safety.py 里不该出现 {banned!r}"

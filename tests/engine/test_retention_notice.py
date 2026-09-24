@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.retention import (
+from d1max_agent.engine.retention import (
     MIN_NOTICE_DAYS,
     NOTICE_REL,
     Forecast,

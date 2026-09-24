@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.homing import (
+from d1max_agent.engine.homing import (
     DEFAULT_RETURN_PARAMS,
     HomeError,
     HomePoint,

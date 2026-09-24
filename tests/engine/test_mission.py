@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_patrol.engine.mission import (
+from d1max_agent.engine.mission import (
     MIN_RETENTION_DAYS,
     MissionError,
     Policy,

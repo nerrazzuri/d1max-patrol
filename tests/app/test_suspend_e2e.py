@@ -18,6 +18,8 @@ from urllib.parse import quote
 
 import pytest
 
+from d1max_agent.engine.alerts import Level
+from d1max_agent.engine.machine import RunSnapshot, RunState, SuspendPoint
 from d1max_patrol.app.server import (
     _LEASE_WATCH_PERIOD_S,
     SUSPEND_STALE_MS,
@@ -27,8 +29,6 @@ from d1max_patrol.app.server import (
     _挂起超时了,
 )
 from d1max_patrol.app.teleop import HEARTBEAT_TIMEOUT_S, Teleop
-from d1max_patrol.engine.alerts import Level
-from d1max_patrol.engine.machine import RunSnapshot, RunState, SuspendPoint
 from tests.app.conftest import make_ctx, request
 from tests.app.test_run_suspend import _mission
 

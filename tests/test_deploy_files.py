@@ -1366,7 +1366,8 @@ def test_卸载脚本删agent单元():
 
 
 def test_根下的解释器venv也装三个包_不然别名壳一import就炸(装机脚本):
-    """W00b 阻断项(自查):``d1max_patrol.engine`` 现在是别名壳,import 就要 ``d1max_agent``。
+    """W00b 阻断项(自查):根包 import 引擎就要 ``d1max_agent``(W00b 起引擎在 robot-agent,
+    W00c4 删了根包里的别名壳)。
     boot-guard、bundle guard、3/7 的 ``release install``、7/7 的 ``release activate`` /
     ``migrate-data`` 都从 ``/opt/d1max/bin/python``(2/7 建的 bin-venv)跑 —— 那里只装根包的话,
     装机在 3/7 就炸,开机守卫一次都跑不了。"""

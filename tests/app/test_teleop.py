@@ -13,6 +13,8 @@ from unittest import mock
 
 import pytest
 
+from d1max_agent.engine.homing import HomePoint
+from d1max_agent.engine.machine import EngineBusy, MissionEngine, RunState
 from d1max_patrol.app import teleop as teleop_mod
 from d1max_patrol.app.teleop import (
     DEFAULT_PULSE_S,
@@ -30,8 +32,6 @@ from d1max_patrol.app.teleop import (
 )
 from d1max_patrol.backends.base import DeviceBackendError, Event, EventEmitter, NavStatusEvent
 from d1max_patrol.backends.sidecar_device import MAX_WALK_SECONDS
-from d1max_patrol.engine.homing import HomePoint
-from d1max_patrol.engine.machine import EngineBusy, MissionEngine, RunState
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 from tests.app.conftest import post, request
 from tests.conftest import NoDisks

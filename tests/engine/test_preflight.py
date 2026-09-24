@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from d1max_patrol.engine.form import STANDALONE, Form
-from d1max_patrol.engine.homing import HomePoint, ReturnParams
-from d1max_patrol.engine.mission import MissionWaypoint, Policy
-from d1max_patrol.engine.preflight import departure_line_pct, run_preflight
-from d1max_patrol.engine.removable import DiskRole, Removable
-from d1max_patrol.engine.safety import (
+from d1max_agent.engine.form import STANDALONE, Form
+from d1max_agent.engine.homing import HomePoint, ReturnParams
+from d1max_agent.engine.mission import MissionWaypoint, Policy
+from d1max_agent.engine.preflight import departure_line_pct, run_preflight
+from d1max_agent.engine.removable import DiskRole, Removable
+from d1max_agent.engine.safety import (
     Decision,
     SafetyContext,
     battery_ruling,
@@ -332,7 +332,7 @@ async def test_七项里随便哪一项炸了都只算那一项没过(tmp_path, 
     """
     async def boom(*args, **kw):
         raise RuntimeError(f"{name} 这一项炸了")
-    monkeypatch.setattr(f"d1max_patrol.engine.preflight._check_{name}", boom)
+    monkeypatch.setattr(f"d1max_agent.engine.preflight._check_{name}", boom)
     r = await _run(fake_nav, fake_device, sample_mission, tmp_path)
     assert [c.name for c in r.checks] == NAMES, "炸掉一项不许少报另外六项"
     assert [c.name for c in r.failures] == [name]

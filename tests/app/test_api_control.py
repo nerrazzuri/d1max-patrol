@@ -7,10 +7,10 @@ import time
 
 import pytest
 
+from d1max_agent.engine.lease import AUDIT_MAX, TAKEOVER_GRACE_MS
 from d1max_patrol.app.auth import proof_for
 from d1max_patrol.app.server import AppServer
 from d1max_patrol.app.teleop import REMOTE_CONFIRM
-from d1max_patrol.engine.lease import AUDIT_MAX, TAKEOVER_GRACE_MS
 from tests.app.conftest import get_err, get_json, make_ctx, request
 
 PIN = "428913"

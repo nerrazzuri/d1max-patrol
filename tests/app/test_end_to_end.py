@@ -25,6 +25,8 @@ from urllib.parse import quote
 
 import pytest
 
+from d1max_agent.engine.homing import HomePoint, save_home
+from d1max_agent.engine.machine import MissionEngine
 from d1max_patrol.app.bridge import LoopBridge
 from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
 from d1max_patrol.app.procs import ProcManager, ProcSpec
@@ -35,8 +37,6 @@ from d1max_patrol.backends.map_bridge import MapBridgeClient
 from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
 from d1max_patrol.backends.vendor_nav import VendorNavBackend
 from d1max_patrol.config.models import NavConfig
-from d1max_patrol.engine.homing import HomePoint, save_home
-from d1max_patrol.engine.machine import MissionEngine
 from d1max_patrol.protocol.agent_frames import MotionStatus
 from d1max_patrol.protocol.nav_types import LocStatus, MappingStatus, Pose
 from d1max_sim.agent_server import SimAgentServer

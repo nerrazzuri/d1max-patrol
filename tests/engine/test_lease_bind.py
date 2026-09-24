@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from d1max_patrol.engine.lease import Holder, LeaseBook
+from d1max_agent.engine.lease import Holder, LeaseBook
 
 T0 = 1_757_000_000_000
 
@@ -95,7 +95,7 @@ def test_钟往回跳时租约不会凭空续命():
 
 
 def test_导出的名字都在():
-    from d1max_patrol.engine import lease
+    from d1max_agent.engine import lease
 
     for name in ("LeaseBook", "LeaseState", "Holder", "AuditRecord",
                  "LeaseError", "LeaseBusy", "LeaseLost",

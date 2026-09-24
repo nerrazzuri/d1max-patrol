@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from d1max_patrol.engine.selfcheck import (
+from d1max_agent.engine.selfcheck import (
     BACKUP_NAG_DAYS,
     MIN_UPGRADE_BATTERY_PCT,
     UPGRADE_FREE_MARGIN_MB,

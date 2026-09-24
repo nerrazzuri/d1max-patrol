@@ -15,16 +15,16 @@ import contextlib
 
 import pytest
 
-from d1max_patrol.backends.base import BatteryEvent, DevicePoseEvent, NavStatusEvent
-from d1max_patrol.engine.archive import read_events
-from d1max_patrol.engine.machine import (
+from d1max_agent.engine.archive import read_events
+from d1max_agent.engine.machine import (
     _SUSPEND_UNSAFE_STATES,
     LOCALIZE_TIMEOUT_S,
     RETURN_TIMEOUT_S,
     MissionEngine,
     RunState,
 )
-from d1max_patrol.engine.mission import Policy
+from d1max_agent.engine.mission import Policy
+from d1max_patrol.backends.base import BatteryEvent, DevicePoseEvent, NavStatusEvent
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 from .conftest import _HOME, NEVER, make_mission, until, 原点

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.privileged import Privileged, PrivilegedError
-from d1max_patrol.engine.selfcheck import RestartPlan
+from d1max_agent.engine.privileged import Privileged, PrivilegedError
+from d1max_agent.engine.selfcheck import RestartPlan
 
 服务重启 = RestartPlan("service", ("systemctl", "restart", "d1max-patrol"), "没上装")
 整机重启 = RestartPlan("machine", ("systemctl", "reboot"), "有上装")
@@ -154,7 +154,7 @@ def test_restart非零_超时_炸了都是PrivilegedError(tmp_path):
 
 def test_没助手时restart退回后台起裸systemctl(tmp_path, monkeypatch):
     """裸 `systemctl restart` 会先把我们停掉、永远不正常返回 —— 只能 Popen 不等。"""
-    import d1max_patrol.engine.privileged as mod
+    import d1max_agent.engine.privileged as mod
     起过: list = []
     monkeypatch.setattr(mod.subprocess, "Popen", lambda argv, **kw: 起过.append(tuple(argv)))
     假 = _假sudo()

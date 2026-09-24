@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.release import (
+from d1max_agent.engine.release import (
     KEEP_RELEASES,
     MANIFEST_NAME,
     Layout,
@@ -78,7 +78,7 @@ def test_换链之前标记就已经在盘上了(tmp_path):
     activate(layout, "2026-09-06-a3f9c1", now_ms=NOW)
     commit(layout)
 
-    import d1max_patrol.engine.release as rel
+    import d1max_agent.engine.release as rel
 
     def 炸(_layout, _name):
         raise OSError("换到一半断电")

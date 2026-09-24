@@ -35,8 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from d1max_patrol.engine.archive import list_runs, read_manifest
-from d1max_patrol.engine.baselines import BaselineError, load_baseline, save_baseline
+from d1max_agent.engine.archive import list_runs, read_manifest
+from d1max_agent.engine.baselines import BaselineError, load_baseline, save_baseline
 
 #: 默认用的模型。判读要看图、要讲道理,给最能打的那个。
 DEFAULT_MODEL = "claude-opus-5"

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.backup import (
+from d1max_agent.engine.backup import (
     EMPTY_STATE,
     FREE_MARGIN_BYTES,
     BackupError,
@@ -31,8 +31,8 @@ from d1max_patrol.engine.backup import (
     verify_run,
     write_sync_state,
 )
-from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff, read_role
-from d1max_patrol.engine.retention import scan_runs
+from d1max_agent.engine.removable import DiskRole, Removable, blocks_takeoff, read_role
+from d1max_agent.engine.retention import scan_runs
 
 
 def test_写下的标记能被第一卷那个读取器读出来(tmp_path):
@@ -668,7 +668,7 @@ def test_源目录还在但文件被删光_不算拷成(tmp_path):
 def test_核对那一下炸了只赔这一趟_前面拷成的照样记账(tmp_path, monkeypatch):
     # 核对要把两边的文件从头读一遍,而"拷完那一刻盘被拔了"正是这一段最可能
     # 撞上的事。不接住的话,前面已经拷成的那几趟一趟都记不上账。
-    from d1max_patrol.engine import backup as B
+    from d1max_agent.engine import backup as B
 
     真核对 = B.verify_run
     炸过了 = []
@@ -692,7 +692,7 @@ def test_核对那一下炸了只赔这一趟_前面拷成的照样记账(tmp_pa
 def test_账本写不进去不算整趟失败_但要说清楚下次会重拷(tmp_path, monkeypatch):
     # 数据已经落在盘上了,只是"拷过了"这件事没记下。抛出去的那一边,调用方
     # 看到的是一次彻头彻尾的失败,连"哪几趟拷成了"都拿不到。
-    from d1max_patrol.engine import backup as B
+    from d1max_agent.engine import backup as B
 
     def _写不进去(mount, state):
         raise OSError("Read-only file system")
@@ -711,7 +711,7 @@ def test_账本写不进去不许盖掉_备份盘满了_那句话(tmp_path, monk
     这两件事同时发生的时候,``detail`` 要是赋值而不是追加,人看到的就只剩
     "下次会重拷" —— 照着它去查,永远查不到根因。
     """
-    from d1max_patrol.engine import backup as B
+    from d1max_agent.engine import backup as B
 
     def _写不进去(mount, state):
         raise OSError("No space left on device")
@@ -730,7 +730,7 @@ def test_账本写不进去不许盖掉_备份盘满了_那句话(tmp_path, monk
 def test_写标记的时候盘是只读的_出的是一句人话不是裸的_OSError(tmp_path, monkeypatch):
     # 调用方 app/server.py 的 _backup_init 只接 BackupError。漏出去的那一边,
     # 一块写保护的盘会变成一个 500 —— 人拿着盘站在狗边上,屏上是"服务器内部错误"。
-    from d1max_patrol.engine import backup as B
+    from d1max_agent.engine import backup as B
 
     def _只读(target, payload):
         raise OSError("Read-only file system")
@@ -751,7 +751,7 @@ def test_标记和进度都是_fsync_过才改名的(tmp_path, monkeypatch):
     """
     import os as _os
 
-    from d1max_patrol.engine import backup as B
+    from d1max_agent.engine import backup as B
 
     _落盘了 = []
     _真fsync = _os.fsync

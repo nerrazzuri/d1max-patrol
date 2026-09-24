@@ -27,12 +27,12 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
+from d1max_agent.engine.alerts import AlertBook
+from d1max_agent.engine.bundle import read_state
+from d1max_agent.engine.machine import RunSnapshot, RunState
+from d1max_agent.engine.schedule import clock_skew
+from d1max_agent.engine.storage import WARN_USED_RATIO
 from d1max_patrol.backends.base import FaultEvent, LocStatusEvent
-from d1max_patrol.engine.alerts import AlertBook
-from d1max_patrol.engine.bundle import read_state
-from d1max_patrol.engine.machine import RunSnapshot, RunState
-from d1max_patrol.engine.schedule import clock_skew
-from d1max_patrol.engine.storage import WARN_USED_RATIO
 from d1max_patrol.protocol.nav_types import LocStatus
 
 log = logging.getLogger(__name__)
@@ -316,7 +316,7 @@ class AlertSources:
         self._判定钟偏(now_ms)
 
     def _判定盘水位(self, now_ms: int) -> None:
-        """已用超过 :data:`~d1max_patrol.engine.storage.WARN_USED_RATIO`。
+        """已用超过 :data:`~d1max_agent.engine.storage.WARN_USED_RATIO`。
 
         水位线**用 ``engine/storage.py`` 那一个**,不在这儿再拍一个 0.8:
         起飞门槛和这条告警说的是同一件事,两处各存一份,调了一处另一处不

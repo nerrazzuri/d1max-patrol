@@ -6,7 +6,7 @@
 spec §4.3 那句"上传线程绝不阻塞巡检",在代码上的落实是:这个 pump 只读
 ``runs/`` 下的文件、只写 ``queue.jsonl``,**不碰 MissionEngine、不碰
 LoopBridge、不持有任何巡检用的锁**。它碰的唯一一个共享对象是自己那个
-:class:`~d1max_patrol.engine.upload_queue.UploadQueue`,而那个队列从头到尾
+:class:`~d1max_agent.engine.upload_queue.UploadQueue`,而那个队列从头到尾
 只有这一个线程在写。
 
 **这一层还是最后一道门(见 tick 的文档串)。** 下面那一层
@@ -31,11 +31,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from d1max_patrol.engine.upload_queue import backoff_ms
-from d1max_patrol.engine.uploader import Step, Uploader
+from d1max_agent.engine.upload_queue import backoff_ms
+from d1max_agent.engine.uploader import Step, Uploader
 
 if TYPE_CHECKING:
-    from d1max_patrol.engine.upload_queue import UploadQueue
+    from d1max_agent.engine.upload_queue import UploadQueue
 
 
 log = logging.getLogger(__name__)

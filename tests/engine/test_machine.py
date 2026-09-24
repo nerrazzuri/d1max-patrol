@@ -10,6 +10,10 @@ import asyncio
 
 import pytest
 
+from d1max_agent.engine.archive import read_events, read_manifest, read_state
+from d1max_agent.engine.homing import HomePoint, ReturnParams
+from d1max_agent.engine.machine import MissionEngine, RunState
+from d1max_agent.engine.mission import Action, MissionWaypoint, Policy
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BatteryEvent,
@@ -18,10 +22,6 @@ from d1max_patrol.backends.base import (
     LocStatusEvent,
     NavStatusEvent,
 )
-from d1max_patrol.engine.archive import read_events, read_manifest, read_state
-from d1max_patrol.engine.homing import HomePoint, ReturnParams
-from d1max_patrol.engine.machine import MissionEngine, RunState
-from d1max_patrol.engine.mission import Action, MissionWaypoint, Policy
 from d1max_patrol.protocol.nav_frames import AlgErrorItem
 from d1max_patrol.protocol.nav_types import (
     ALG_LIDAR_DISCONNECTED,
@@ -163,7 +163,7 @@ async def test_扫盘炸了不掀翻整份报告(make_engine, sample_mission):
 
 
 async def test_定位没收敛就等等不到就中止(make_engine, nav, monkeypatch):
-    import d1max_patrol.engine.machine as machine
+    import d1max_agent.engine.machine as machine
 
     monkeypatch.setattr(machine, "LOCALIZE_TIMEOUT_S", 0.2)
     # 起飞检查那一刻定位是好的,进了 LOCALIZING 就掉了,而且再没收敛回来。
@@ -488,7 +488,7 @@ async def test_定位丢了会重置并重发当前点(make_engine, nav):
 
 
 async def test_定位重置到上限就中止(make_engine, nav):
-    from d1max_patrol.engine.safety import MAX_LOC_RESET
+    from d1max_agent.engine.safety import MAX_LOC_RESET
 
     nav.on_goto = [LocStatusEvent(LocStatus.LOC_LOST)]
     engine = make_engine()
@@ -500,7 +500,7 @@ async def test_定位重置到上限就中止(make_engine, nav):
 
 
 async def test_重置之后收不敛就中止而不是干等(make_engine, nav, monkeypatch):
-    import d1max_patrol.engine.machine as machine
+    import d1max_agent.engine.machine as machine
 
     monkeypatch.setattr(machine, "LOCALIZE_TIMEOUT_S", 0.2)
     nav.reset_recovers = False
@@ -619,7 +619,7 @@ async def test_已经在跑的时候再开一趟被拒(make_engine, nav, sample_
     nav.on_goto = NEVER
     engine = make_engine()
     await engine.start(sample_mission, home=_HOME)
-    from d1max_patrol.engine.machine import EngineBusy
+    from d1max_agent.engine.machine import EngineBusy
 
     with pytest.raises(EngineBusy):
         await engine.start(sample_mission, home=_HOME)
@@ -639,7 +639,7 @@ async def test_已经在跑的时候再开一趟被拒也不动正在飞的原�
 
     other_home = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(9.0, 9.0),
                            marked_at_ms=2)
-    from d1max_patrol.engine.machine import EngineBusy
+    from d1max_agent.engine.machine import EngineBusy
 
     with pytest.raises(EngineBusy):
         await engine.start(sample_mission, home=other_home)
@@ -676,7 +676,7 @@ async def test_引擎不认识HTTP(make_engine):
     """它必须能脱离 app 单独用 —— 装了 web 框架的依赖就说明耦合进去了。"""
     import inspect
 
-    import d1max_patrol.engine.machine as machine
+    import d1max_agent.engine.machine as machine
 
     src = inspect.getsource(machine)
     for banned in ("aiohttp", "fastapi", "starlette", "uvicorn", "flask",

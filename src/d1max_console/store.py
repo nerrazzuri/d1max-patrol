@@ -1,7 +1,7 @@
 """服务器落盘。**§4.2 的服务器那一半在这儿:哈希是这儿算的。**
 
 这个包是**服务器侧**,跟 ``d1max_patrol`` 平级。它只许从
-``d1max_patrol.engine.*`` 里 import **纯数据函数**,
+``d1max_agent.engine.*`` 里 import **纯数据函数**,
 **不许 import ``d1max_patrol.app.*`` 或 ``d1max_patrol.backends.*``**,
 后两者带着"能让狗动起来"的东西,而 spec §5.5 说服务器上不许有那个能力。
 这条规矩由 ``tests/console/test_no_motion.py`` 盯着。
@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from d1max_patrol.engine.export import sha256_file
+from d1max_agent.engine.export import sha256_file
 
 #: 路径段里一律不许出现的字符。反斜杠和冒号是 Windows 的两个后门
 #: (``C:foo`` 盘符相对路径、``a\b`` 当分隔符),NUL 是 C 层截断,

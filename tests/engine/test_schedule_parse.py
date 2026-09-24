@@ -10,7 +10,7 @@ from datetime import datetime
 
 import pytest
 
-from d1max_patrol.engine.schedule import (
+from d1max_agent.engine.schedule import (
     DAYS,
     MAX_WINDOW_MIN,
     ON_MISSED,

@@ -32,8 +32,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from d1max_agent.engine.lease import AuditRecord, LeaseBook, LeaseState
 from d1max_patrol.app.auth import CHANNEL_LOCAL, Denied, Guard, Session
-from d1max_patrol.engine.lease import AuditRecord, LeaseBook, LeaseState
 
 #: 要 L1 控制权的那几条接口。**判据是"会改变这只狗正在做什么"**(§3.5 规
 #: 则 4), 不是"会不会让它动"。

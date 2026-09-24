@@ -23,6 +23,9 @@ from urllib.parse import quote
 
 import pytest
 
+from d1max_agent.engine.alerts import Level
+from d1max_agent.engine.lease import LEASE_TTL_MS
+from d1max_agent.engine.machine import RunState
 from d1max_patrol.app.server import (
     _LEASE_WATCH_PERIOD_S,
     _WATER_EVERY,
@@ -30,9 +33,6 @@ from d1max_patrol.app.server import (
     _该量水位了,
 )
 from d1max_patrol.app.teleop import Teleop
-from d1max_patrol.engine.alerts import Level
-from d1max_patrol.engine.lease import LEASE_TTL_MS
-from d1max_patrol.engine.machine import RunState
 from tests.app.conftest import make_ctx, request
 
 PIN = "428913"

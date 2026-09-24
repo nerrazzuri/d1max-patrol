@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from d1max_patrol.engine.schedule import (
+from d1max_agent.engine.schedule import (
     CLOCK_SKEW_ALARM_S,
     ScheduleEntry,
     clock_skew,

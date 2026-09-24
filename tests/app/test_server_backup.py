@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.archive import STAMP_FMT
-from d1max_patrol.engine.backup import init_target, read_marker, read_sync_state
-from d1max_patrol.engine.removable import DiskRole, Removable
+from d1max_agent.engine.archive import STAMP_FMT
+from d1max_agent.engine.backup import init_target, read_marker, read_sync_state
+from d1max_agent.engine.removable import DiskRole, Removable
 from tests.app import conftest as C
 from tests.conftest import SomeDisks
 

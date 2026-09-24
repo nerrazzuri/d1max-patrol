@@ -21,6 +21,9 @@ import time
 
 import pytest
 
+from d1max_agent.engine.homing import HomePoint
+from d1max_agent.engine.machine import MissionEngine
+from d1max_agent.engine.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_patrol.backends.base import (
     DeviceEvent,
     Event,
@@ -32,9 +35,6 @@ from d1max_patrol.backends.base import (
     NavBackendError,
     NavStatusEvent,
 )
-from d1max_patrol.engine.homing import HomePoint
-from d1max_patrol.engine.machine import MissionEngine
-from d1max_patrol.engine.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 from ..conftest import NoDisks

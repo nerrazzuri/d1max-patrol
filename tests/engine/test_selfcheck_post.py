@@ -7,13 +7,8 @@ import logging
 
 import pytest
 
-from d1max_patrol.backends.base import (
-    DeviceBackendError,
-    NavConnectionError,
-    NavTimeoutError,
-)
-from d1max_patrol.engine.preflight import CheckResult
-from d1max_patrol.engine.selfcheck import (
+from d1max_agent.engine.preflight import CheckResult
+from d1max_agent.engine.selfcheck import (
     BRIDGE_WAIT_S,
     GRAB_WAIT_S,
     MAX_BRIDGE_TRIES,
@@ -28,6 +23,11 @@ from d1max_patrol.engine.selfcheck import (
     postcheck_verdict,
     restart_plan,
     run_postcheck,
+)
+from d1max_patrol.backends.base import (
+    DeviceBackendError,
+    NavConnectionError,
+    NavTimeoutError,
 )
 
 

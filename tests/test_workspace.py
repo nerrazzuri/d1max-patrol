@@ -66,33 +66,18 @@ def test_包内tests目录不是包而且文件名不与根tests撞():
             见过[f.name] = f
 
 
-_ENGINE_MODULES = (
-    "alerts", "archive", "backup", "baselines", "bundle", "datadir", "export", "form",
-    "homing", "http_sink", "lease", "machine", "mission", "preflight", "privileged",
-    "release", "removable", "retention", "safety", "schedule", "selfcheck", "storage",
-    "uploader", "upload_queue",
-)
-
-
-def test_engine别名壳_两个名字是同一个模块对象():
-    """W00b 决定 1:engine/ 真身在 robot-agent,根包留壳;monkeypatch、私有名、isinstance 都
-    只有在「同一个对象」时才成立,所以断言 is。"""
-    for m in _ENGINE_MODULES:
-        a = importlib.import_module(f"d1max_patrol.engine.{m}")
-        b = importlib.import_module(f"d1max_agent.engine.{m}")
-        assert a is b, m
-    import d1max_patrol.engine as shell
-    assert sorted(p.name for p in Path(shell.__file__).parent.glob("*.py")) == ["__init__.py"], \
-        "壳里只许有 __init__.py,引擎代码不许再长回根包"
-
-
-def test_别名壳的名单等于真身目录_新模块不会漏挂():
-    """壳里的 ``_MODULES`` 是手写的;真身目录里新添一个模块而名单没跟上,
-    ``from d1max_patrol.engine import 新模块`` 就会拿到 ImportError(或者更糟:拿到另一份对象)。"""
-    import d1max_patrol.engine as shell
-    real = PKGS / "robot-agent" / "src" / "d1max_agent" / "engine"
-    stems = sorted(p.stem for p in real.glob("*.py") if p.stem != "__init__")
-    assert sorted(shell._MODULES) == stems
+def test_别名壳已删_全仓不再有旧名字():
+    """W00c4 设计决定三 A:根包里那层引擎别名壳删了,引擎只有一个名字
+    ``d1max_agent.engine``。旧名字再出现就是有人照着老代码抄。"""
+    import pytest
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("d1max_patrol" + ".engine")
+    assert not (ROOT / "src" / "d1max_patrol" / "engine").exists()
+    旧 = "d1max_patrol" + ".engine"
+    for base in ("src", "tests", "packages", "deploy"):
+        for f in (ROOT / base).rglob("*"):
+            if f.suffix in (".py", ".sh", ".service", ".toml") and f.is_file():
+                assert 旧 not in f.read_text(encoding="utf-8", errors="replace"), f
 
 
 def test_搬走的engine里没有旧包名():
@@ -100,7 +85,7 @@ def test_搬走的engine里没有旧包名():
     for py in src.glob("*.py"):
         代码 = "\n".join(行 for 行 in py.read_text(encoding="utf-8").splitlines()
                         if 行.lstrip().startswith(("from ", "import ")))
-        assert "d1max_patrol.engine" not in 代码, f"{py.name} 里还 import 旧包名"
+        assert "d1max_patrol" + ".engine" not in 代码, f"{py.name} 里还 import 旧包名"
     assert 'd1max-patrol' in _toml("robot-agent"), "过渡性依赖要声明"
 
 
@@ -116,9 +101,9 @@ def test_几何类型在契约包里_根包转手的是同一个类():
 def test_任务与排程模块在契约包里_旧名字是同一个模块对象():
     import d1max_contract.mission as cm
     import d1max_contract.schedule as cs
-    for old in ("d1max_agent.engine.mission", "d1max_patrol.engine.mission"):
+    for old in ("d1max_agent.engine.mission", "d1max_agent.engine.mission"):
         assert importlib.import_module(old) is cm, old
-    for old in ("d1max_agent.engine.schedule", "d1max_patrol.engine.schedule"):
+    for old in ("d1max_agent.engine.schedule", "d1max_agent.engine.schedule"):
         assert importlib.import_module(old) is cs, old
     assert "d1max_patrol" not in (PKGS / "contract" / "src" / "d1max_contract" / "mission.py"
                                   ).read_text(encoding="utf-8")

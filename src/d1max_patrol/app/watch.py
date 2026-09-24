@@ -54,16 +54,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from d1max_patrol.app.alert_sources import _落了但没生效
-from d1max_patrol.engine.backup import (
+from d1max_agent.engine.backup import (
     BackupError,
     TargetStatus,
     plan_sync,
     read_sync_state,
 )
-from d1max_patrol.engine.removable import DiskRole
-from d1max_patrol.engine.retention import scan_runs
-from d1max_patrol.engine.schedule import clock_skew
+from d1max_agent.engine.removable import DiskRole
+from d1max_agent.engine.retention import scan_runs
+from d1max_agent.engine.schedule import clock_skew
+from d1max_patrol.app.alert_sources import _落了但没生效
 
 if TYPE_CHECKING:                       # pragma: no cover - 只为标注,不进运行期
     from d1max_patrol.app.server import AppContext

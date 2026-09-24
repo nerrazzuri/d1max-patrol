@@ -19,8 +19,8 @@ from urllib.parse import quote
 
 import pytest
 
+from d1max_agent.engine.alerts import ESCALATE_AFTER_MS
 from d1max_patrol.app.server import AppServer
-from d1max_patrol.engine.alerts import ESCALATE_AFTER_MS
 from tests.app.conftest import get_json, make_ctx, request
 
 T0 = 1_757_000_000_000

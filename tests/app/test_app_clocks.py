@@ -26,9 +26,9 @@ from urllib.parse import quote
 
 import pytest
 
+from d1max_agent.engine.homing import load_home
 from d1max_patrol.app import server as S
 from d1max_patrol.app.server import AppContext, AppServer, _wall_ms, _归档钟
-from d1max_patrol.engine.homing import load_home
 
 from .conftest import make_ctx, request
 
@@ -139,7 +139,7 @@ def test_归档钟是墙钟而且故意不可注入(拨过钟的服务):
     确实是同一口钟。第三条要是哪天变了(``engine/archive.py`` 变成可注入),
     这条会红 —— 那正是"该把这摊也接上注入"的信号。
     """
-    from d1max_patrol.engine import archive
+    from d1max_agent.engine import archive
 
     前 = datetime.now(timezone.utc)
     得到 = _归档钟()
@@ -179,7 +179,7 @@ def test_过期判定读的是真墙钟不是注入钟(拨过钟的服务):
     —— 按真墙钟它早过期了, 该进预告名单。而注入钟停在一年多以前, 按它算这
     趟才存了不到 90 天, 名单会是空的。所以这条测试分得出这一摊读的是哪口钟。
     """
-    from d1max_patrol.engine.archive import STAMP_FMT
+    from d1max_agent.engine.archive import STAMP_FMT
 
     ctx = 拨过钟的服务._ctx
     assert ctx.clock() == _T0, "注入钟没接上, 这条测试就什么也没测"

@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from d1max_patrol.engine.retention import (
+from d1max_agent.engine.retention import (
     MIN_NOTICE_DAYS,
     RunInfo,
     apply_sweep,
@@ -236,7 +236,7 @@ def test_一条删不掉不挡住别的(tmp_path, monkeypatch):
             raise OSError("盘只读")
         return 真删(path, *args, **kwargs)
 
-    monkeypatch.setattr("d1max_patrol.engine.retention.shutil.rmtree", 第一条炸)
+    monkeypatch.setattr("d1max_agent.engine.retention.shutil.rmtree", 第一条炸)
     sweep = plan_sweep([a, b], now=NOW, has_upload=True, need_bytes=2000)
     assert apply_sweep(sweep, runs_root=tmp_path) == (b.path,)
     assert a.path.exists()

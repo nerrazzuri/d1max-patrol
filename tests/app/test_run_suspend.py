@@ -22,8 +22,8 @@ from urllib.parse import quote
 
 import pytest
 
+from d1max_agent.engine.machine import RunState
 from d1max_patrol.app.server import AppServer
-from d1max_patrol.engine.machine import RunState
 from tests.app.conftest import make_ctx, request
 
 PIN = "428913"

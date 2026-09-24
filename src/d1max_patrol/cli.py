@@ -17,24 +17,19 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
 
-from d1max_patrol.app.identity import SN_ENV, resolve
-from d1max_patrol.backends.base import NavBackendError, NavTimeoutError
-from d1max_patrol.backends.vendor_nav import VendorNavBackend
-from d1max_patrol.config.loader import ConfigError, load_config
-from d1max_patrol.conformance import DEFAULT_PROBES, nav_host_port, run_conformance
-from d1max_patrol.engine.bundle import (
+from d1max_agent.engine.bundle import (
     BundleGuard,
     BundleState,
     guard_bundle,
     read_state,
 )
-from d1max_patrol.engine.datadir import (
+from d1max_agent.engine.datadir import (
     DATA_ROOT_ENV,
     DEFAULT_DATA_ROOT,
     migrate_slot_data,
 )
-from d1max_patrol.engine.privileged import Privileged, PrivilegedError
-from d1max_patrol.engine.release import (
+from d1max_agent.engine.privileged import Privileged, PrivilegedError
+from d1max_agent.engine.release import (
     MAX_BOOT_ATTEMPTS,
     GuardAction,
     Layout,
@@ -49,6 +44,11 @@ from d1max_patrol.engine.release import (
     rollback,
     stage,
 )
+from d1max_patrol.app.identity import SN_ENV, resolve
+from d1max_patrol.backends.base import NavBackendError, NavTimeoutError
+from d1max_patrol.backends.vendor_nav import VendorNavBackend
+from d1max_patrol.config.loader import ConfigError, load_config
+from d1max_patrol.conformance import DEFAULT_PROBES, nav_host_port, run_conformance
 from d1max_patrol.protocol.nav_types import (
     LOC_HEALTHY,
     MappingStatus,

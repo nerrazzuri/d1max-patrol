@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_patrol.engine.bundle import (
+from d1max_agent.engine.bundle import (
     BundleRef,
     Divergence,
     DivergenceKind,
@@ -133,7 +133,7 @@ def test_空的那一边上线是null():
 
 def test_从一份自述直接构一个ref():
     """服务器和狗两头都是从 ``bundle.yaml`` 拿这三个字段的。"""
-    from d1max_patrol.engine.bundle import parse_manifest
+    from d1max_agent.engine.bundle import parse_manifest
     m = parse_manifest({"bundle_id": "site-kl", "version": 7, "schema": 1,
                         "content_sha256": "a" * 64,
                         "built_at": "2026-09-07T14:03:00+08:00"})

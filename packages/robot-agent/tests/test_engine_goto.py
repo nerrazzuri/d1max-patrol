@@ -10,10 +10,10 @@ import pytest
 
 from d1max_adapter_sim.robot import SimRobot
 from d1max_agent.assembly import build_engine
+from d1max_agent.engine.machine import RunState
 from d1max_agent.events import EventBook
 from d1max_agent.tasks.engine_goto import EngineGotoTask
 from d1max_contract.messages import MapPose, TaskState
-from d1max_patrol.engine.machine import RunState
 from d1max_patrol.protocol.nav_types import Pose
 
 

@@ -6,7 +6,7 @@ Linux 上写文件先进页缓存。人看到"同步完成"就伸手拔盘,而�
 
 from __future__ import annotations
 
-from d1max_patrol.engine.backup import DEFAULT_SYNC, eject
+from d1max_agent.engine.backup import DEFAULT_SYNC, eject
 
 
 def test_弹出会把缓冲刷到盘上_然后说可以拔了(tmp_path):

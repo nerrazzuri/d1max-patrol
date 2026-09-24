@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from d1max_patrol.engine.archive import read_manifest, read_state
+from d1max_agent.engine.archive import read_manifest, read_state
 
 #: 判读结论的中文说法。``pending`` 是"还没判",不是"判了但没结论"。
 VERDICT_CN = {

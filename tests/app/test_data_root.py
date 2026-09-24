@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from d1max_agent.engine.datadir import DATA_ROOT_ENV
 from d1max_patrol.app.server import _build_parser, _warn_if_data_in_slot
-from d1max_patrol.engine.datadir import DATA_ROOT_ENV
 
 
 def test_没设环境变量默认值不变(monkeypatch):

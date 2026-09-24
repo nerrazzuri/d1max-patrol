@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_patrol.engine.form import UploadTargetError
-from d1max_patrol.engine.storage import storage_verdict
+from d1max_agent.engine.form import UploadTargetError
+from d1max_agent.engine.storage import storage_verdict
 
 pytestmark = pytest.mark.contract
 

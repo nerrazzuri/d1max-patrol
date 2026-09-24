@@ -9,15 +9,15 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
-from d1max_patrol.engine.backup import (
+from d1max_agent.engine.backup import (
     BEHIND_PUSH_RUNS,
     NoticeLevel,
     TargetStatus,
     backup_notice,
 )
-from d1max_patrol.engine.homing import HomePoint
-from d1max_patrol.engine.preflight import run_preflight
-from d1max_patrol.engine.removable import DiskRole, Removable, blocks_takeoff
+from d1max_agent.engine.homing import HomePoint
+from d1max_agent.engine.preflight import run_preflight
+from d1max_agent.engine.removable import DiskRole, Removable, blocks_takeoff
 from d1max_patrol.protocol.nav_types import Pose
 
 _HOME = HomePoint(map_id="map_test", pose=Pose.from_xy_yaw(0.0, 0.0),

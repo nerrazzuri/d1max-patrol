@@ -35,8 +35,8 @@ from typing import Any
 
 import pytest
 
-from d1max_patrol.engine.http_sink import HttpSink
-from d1max_patrol.engine.uploader import PutReceipt, PutRequest, SinkError
+from d1max_agent.engine.http_sink import HttpSink
+from d1max_agent.engine.uploader import PutReceipt, PutRequest, SinkError
 
 _地址 = "http://console.example:8095"
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.bundle import (
+from d1max_agent.engine.bundle import (
     ALLOWED_SUFFIXES,
     BundleError,
     scan_pure_data,
@@ -216,7 +216,7 @@ def test_verify会把问题带进报错里(tmp_path):
 
 def test_五道闸的名字都在(tmp_path):
     """报上去的 ``gate`` 是接口的一部分:值守屏按它分类。W00c2a 加了第 0 道 ``special``。"""
-    from d1max_patrol.engine.bundle import GATE_NAMES
+    from d1max_agent.engine.bundle import GATE_NAMES
     assert GATE_NAMES == ("special", "suffix", "symlink", "exec_bit", "shebang")
 
 

@@ -21,6 +21,9 @@ from pathlib import Path
 
 import pytest
 
+from d1max_agent.engine.homing import HomePoint, save_home
+from d1max_agent.engine.machine import MissionEngine
+from d1max_agent.engine.privileged import Privileged
 from d1max_patrol.app.bridge import LoopBridge
 from d1max_patrol.app.identity import resolve
 from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
@@ -34,9 +37,6 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
 )
 from d1max_patrol.backends.sidecar_device import MAX_WALK_SECONDS
-from d1max_patrol.engine.homing import HomePoint, save_home
-from d1max_patrol.engine.machine import MissionEngine
-from d1max_patrol.engine.privileged import Privileged
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 from ..conftest import NoDisks

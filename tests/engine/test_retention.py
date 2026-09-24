@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from d1max_patrol.engine.mission import MIN_RETENTION_DAYS
-from d1max_patrol.engine.retention import (
+from d1max_agent.engine.mission import MIN_RETENTION_DAYS
+from d1max_agent.engine.retention import (
     DEFAULT_RETENTION_DAYS,
     EXPORTED_REL,
     MIN_NOTICE_DAYS,

@@ -11,8 +11,8 @@ from urllib.parse import unquote
 
 import pytest
 
-from d1max_patrol.engine.http_sink import HttpSink, build_body, parse_receipt
-from d1max_patrol.engine.uploader import PutReceipt, PutRequest, SinkError
+from d1max_agent.engine.http_sink import HttpSink, build_body, parse_receipt
+from d1max_agent.engine.uploader import PutReceipt, PutRequest, SinkError
 
 样例 = PutRequest(
     sn="D1MAX-TEST-01",

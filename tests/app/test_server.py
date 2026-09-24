@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from d1max_agent.engine.machine import RunState
 from d1max_patrol.app.server import (
     AppServer,
     HttpError,
@@ -22,7 +23,6 @@ from d1max_patrol.app.server import (
     json_response,
 )
 from d1max_patrol.backends.base import BatteryEvent, NavStatusEvent
-from d1max_patrol.engine.machine import RunState
 from d1max_patrol.protocol.nav_types import NavStatus
 from tests.app.conftest import FakeNav, get_err, get_json, request, sse, status
 
@@ -333,10 +333,9 @@ def test_引擎和判读都不import_http():
     HTTP 的地方(命令行、仿真、真机现场脚本)单独跑了。
     """
     import d1max_agent.engine  # 引擎的真身(W00b 起住在 robot-agent 包里)
-    import d1max_patrol.engine  # 别名壳,下面顺带扫一遍它自己那一个文件
     import d1max_patrol.inspect
 
-    for pkg in (d1max_agent.engine, d1max_patrol.engine, d1max_patrol.inspect):
+    for pkg in (d1max_agent.engine, d1max_patrol.inspect):
         for py in Path(pkg.__file__).parent.glob("*.py"):
             src = py.read_text(encoding="utf-8")
             for banned in ("import http", "socketserver", "d1max_patrol.app"):

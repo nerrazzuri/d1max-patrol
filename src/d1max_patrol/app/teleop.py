@@ -28,8 +28,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from d1max_agent.engine.machine import MissionEngine
 from d1max_patrol.backends.base import DeviceBackend
-from d1max_patrol.engine.machine import MissionEngine
 
 log = logging.getLogger(__name__)
 

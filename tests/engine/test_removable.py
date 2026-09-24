@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from d1max_patrol.engine.removable import (
+from d1max_agent.engine.removable import (
     MARKER_REL,
     NO_IDENTITY,
     DiskRole,

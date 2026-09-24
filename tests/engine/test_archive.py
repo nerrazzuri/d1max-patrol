@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from d1max_patrol.engine.archive import (
+from d1max_agent.engine.archive import (
     RunArchive,
     list_runs,
     read_events,

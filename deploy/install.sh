@@ -216,7 +216,7 @@ if [[ "$(cat "$ROOT_SENTINEL" 2>/dev/null)" != "$ROOT_SENTINEL_WANT" ]]; then
   TMP_PKG=$(mktemp -d)
   cp -a "$PKG/." "$TMP_PKG/"
   "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_PKG"
-  # W00b:``d1max_patrol.engine`` 已是别名壳,import 就要 robot-agent 那三个包。boot-guard、
+  # W00b 起引擎在 robot-agent 里(W00c4 删了根包的别名壳),根包 import 引擎就要那三个包。boot-guard、
   # bundle guard、3/7 的 release install、7/7 的 activate/migrate-data 全从这个解释器跑,
   # 所以这里也装(顺序按依赖)。老包没带 packages/ 就跳过 —— 那一版的根包里 engine 还是真身。
   if [[ -d "$TMP_PKG/packages/robot-agent" ]]; then

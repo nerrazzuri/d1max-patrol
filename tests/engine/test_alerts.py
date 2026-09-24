@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_patrol.engine.alerts import (
+from d1max_agent.engine.alerts import (
     ESCALATE_AFTER_MS,
     LEVEL_OF,
     AlertBook,

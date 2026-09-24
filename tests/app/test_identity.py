@@ -15,6 +15,8 @@ import json
 
 import pytest
 
+from d1max_agent.engine.archive import read_manifest
+from d1max_agent.engine.mission import parse_mission
 from d1max_patrol.app.identity import (
     UNKNOWN_SN,
     Identity,
@@ -25,8 +27,6 @@ from d1max_patrol.app.identity import (
 )
 from d1max_patrol.app.server import AppServer, _make_engine
 from d1max_patrol.backends.base import NavStatus, NavStatusEvent
-from d1max_patrol.engine.archive import read_manifest
-from d1max_patrol.engine.mission import parse_mission
 
 from ..conftest import NoDisks
 from . import conftest as C

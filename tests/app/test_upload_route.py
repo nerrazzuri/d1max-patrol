@@ -31,20 +31,20 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.app import server
-from d1max_patrol.app.control import needs_lease
-from d1max_patrol.app.server import AppServer, _run_finished, _run_rel, _补打可删
-from d1max_patrol.app.upload_pump import SCAN_EVERY_MS, UploadPump
-from d1max_patrol.engine import retention
-from d1max_patrol.engine.retention import (
+from d1max_agent.engine import retention
+from d1max_agent.engine.retention import (
     SETTLE_HOURS,
     UPLOADED_REL,
     mark_uploaded,
     plan_sweep,
     scan_runs,
 )
-from d1max_patrol.engine.upload_queue import PRIORITY_PHOTO, UploadQueue
-from d1max_patrol.engine.uploader import PutReceipt, Uploader
+from d1max_agent.engine.upload_queue import PRIORITY_PHOTO, UploadQueue
+from d1max_agent.engine.uploader import PutReceipt, Uploader
+from d1max_patrol.app import server
+from d1max_patrol.app.control import needs_lease
+from d1max_patrol.app.server import AppServer, _run_finished, _run_rel, _补打可删
+from d1max_patrol.app.upload_pump import SCAN_EVERY_MS, UploadPump
 
 from .conftest import get_json, make_ctx, request
 
@@ -578,7 +578,7 @@ def test_已标可删的一趟_报告重写重开后标记被撤掉_传完再打
     """
     import os
 
-    from d1max_patrol.engine.uploader import SinkError
+    from d1max_agent.engine.uploader import SinkError
 
     class 断网的服务器:
         def put(self, req):
@@ -615,8 +615,8 @@ def test_清盘看的是活队列和盘_标记在也要对得上才算已传(tmp
     """闸的第二道:``.uploaded`` 只是个异步打的标记,清盘拿方案时要对着活队列和
     盘上的文件重算。三种"不算":队列里有没传完的;盘上有该入队的文件队列里没有;
     队列记的 size/mtime 跟盘上对不上(改写过、pump 还没扫到)。"""
+    from d1max_agent.engine.retention import scan_runs
     from d1max_patrol.app.server import _mask_uploaded_by_queue
-    from d1max_patrol.engine.retention import scan_runs
     run = 摆一趟(tmp_path, "report.md")
     收工(run)
     mark_uploaded(run)

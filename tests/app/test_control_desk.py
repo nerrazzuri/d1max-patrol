@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from d1max_agent.engine.lease import LEASE_HEARTBEAT_MS, LEASE_TTL_MS
 from d1max_patrol.app.auth import Denied, Guard
 from d1max_patrol.app.control import CONTROLLED, ControlDesk, needs_lease
-from d1max_patrol.engine.lease import LEASE_HEARTBEAT_MS, LEASE_TTL_MS
 
 PIN = "428913"
 T0 = 1_757_000_000_000

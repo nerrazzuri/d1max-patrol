@@ -25,15 +25,15 @@ from urllib.parse import quote
 
 import pytest
 
-from d1max_patrol.engine.archive import STAMP_FMT
-from d1max_patrol.engine.retention import (
+from d1max_agent.engine.archive import STAMP_FMT
+from d1max_agent.engine.retention import (
     EXPORTED_REL,
     NOTICE_REL,
     UPLOADED_REL,
     mark_uploaded,
     read_notice,
 )
-from d1max_patrol.engine.upload_queue import PRIORITY_PHOTO, UploadQueue
+from d1max_agent.engine.upload_queue import PRIORITY_PHOTO, UploadQueue
 from tests.app import conftest as C
 
 #: 让每趟归档有点实际大小,好让 ``size_bytes`` 不是 0。

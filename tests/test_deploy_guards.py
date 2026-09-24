@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.release import _NAME_RE
+from d1max_agent.engine.release import _NAME_RE
 from tests.test_deploy_coexist import 有bash
 from tests.test_deploy_files import DEPLOY, ROOT, 交付文件, 六位数
 

@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.datadir import DataPaths, migrate_slot_data, resolve_paths
-from d1max_patrol.engine.release import Layout
+from d1max_agent.engine.datadir import DataPaths, migrate_slot_data, resolve_paths
+from d1max_agent.engine.release import Layout
 
 
 def test_没设数据根就是今天的相对路径():
@@ -154,7 +154,7 @@ def test_两个槽的上传队列并成一份_同key新槽赢(tmp_path):
     条目必须**并进**活动队列,否则切槽那刻它们就停传了(W01 工单原话)。
     同一个 key 两边都有时保留新槽的状态(offset/done),老槽那份原样改名进
     ``*.migrated`` 供核对。"""
-    from d1max_patrol.engine.upload_queue import UploadQueue
+    from d1max_agent.engine.upload_queue import UploadQueue
     root = tmp_path / "opt"
     data = tmp_path / "var"
     old = _slot(root, "2026-09-01-aaaaaa")
@@ -185,7 +185,7 @@ def test_两个槽的上传队列并成一份_同key新槽赢(tmp_path):
 
 
 def test_老槽队列里的坏行跳过不拦整体(tmp_path):
-    from d1max_patrol.engine.upload_queue import UploadQueue
+    from d1max_agent.engine.upload_queue import UploadQueue
     root = tmp_path / "opt"
     data = tmp_path / "var"
     old = _slot(root, "2026-09-01-aaaaaa")

@@ -10,8 +10,8 @@ import shutil
 
 import pytest
 
-from d1max_patrol.engine import bundle as bundle_mod
-from d1max_patrol.engine.bundle import (
+from d1max_agent.engine import bundle as bundle_mod
+from d1max_agent.engine.bundle import (
     CURRENT_LINK,
     LANDED,
     MAX_ROLLBACKS,
@@ -232,7 +232,7 @@ def test_手动把链改到别处proven就不算数(tmp_path, root):
     apply_bundle(root, 一)
     mark_proven(root)
     二 = 打包并落(tmp_path, root, 2)
-    from d1max_patrol.engine.release import point_link
+    from d1max_agent.engine.release import point_link
     point_link(root / CURRENT_LINK, root / 二)
     assert read_state(root).proven is False
 

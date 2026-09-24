@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine import release
-from d1max_patrol.engine.bundle import BUNDLE_SCHEMA
-from d1max_patrol.engine.release import (
+from d1max_agent.engine import release
+from d1max_agent.engine.bundle import BUNDLE_SCHEMA
+from d1max_agent.engine.release import (
     MANIFEST_NAME,
     ReleaseError,
     pack,

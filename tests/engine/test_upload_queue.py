@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.upload_queue import (
+from d1max_agent.engine.upload_queue import (
     PRIORITY_ALERT,
     PRIORITY_EVENTS,
     PRIORITY_PHOTO,
@@ -301,7 +301,7 @@ def test_wire_往返_带mtime() -> None:
 def test_改写型文件都在白名单里_不许只进一张表() -> None:
     """W02 定的规矩:会被原地改写的文件必须同时进 REWRITTEN_IN_PLACE 和 _EXACT。
     只进前者 = 判得出改写却根本不入队(W03 之前 findings/review/report.html 就是这样)。"""
-    from d1max_patrol.engine.upload_queue import REWRITTEN_IN_PLACE
+    from d1max_agent.engine.upload_queue import REWRITTEN_IN_PLACE
     for name in REWRITTEN_IN_PLACE:
         assert classify(name) is not None, name
 

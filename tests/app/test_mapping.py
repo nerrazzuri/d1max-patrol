@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from d1max_agent.engine.homing import HomeError, HomePoint, load_home, save_home
 from d1max_patrol.app.mapping import (
     RECORD_TOPICS,
     MappingConfig,
@@ -24,7 +25,6 @@ from d1max_patrol.app.mapping import (
     MappingOrchestrator,
 )
 from d1max_patrol.app.procs import ProcError, ProcSpec
-from d1max_patrol.engine.homing import HomeError, HomePoint, load_home, save_home
 from d1max_patrol.protocol.nav_types import Pose
 from tests.app.conftest import request
 

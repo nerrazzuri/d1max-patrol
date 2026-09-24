@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_patrol.engine.lease import (
+from d1max_agent.engine.lease import (
     LEASE_TTL_MS,
     TAKEOVER_GRACE_MS,
     Holder,

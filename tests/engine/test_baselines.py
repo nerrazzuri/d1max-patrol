@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from d1max_patrol.engine.baselines import (
+from d1max_agent.engine.baselines import (
     BaselineError,
     baseline_path,
     baselines_bytes,

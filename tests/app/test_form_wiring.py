@@ -7,8 +7,8 @@
 
 from __future__ import annotations
 
+from d1max_agent.engine.form import STANDALONE, Form
 from d1max_patrol.app.server import _make_engine
-from d1max_patrol.engine.form import STANDALONE, Form
 
 from ..conftest import NoDisks
 from . import conftest as C

@@ -6,13 +6,13 @@
 
 from __future__ import annotations
 
-from d1max_patrol.app.auth import TOKEN_IDLE_S
-from d1max_patrol.app.teleop import HEARTBEAT_TIMEOUT_S
-from d1max_patrol.engine.lease import (
+from d1max_agent.engine.lease import (
     LEASE_HEARTBEAT_MS,
     LEASE_TTL_MS,
     TAKEOVER_GRACE_MS,
 )
+from d1max_patrol.app.auth import TOKEN_IDLE_S
+from d1max_patrol.app.teleop import HEARTBEAT_TIMEOUT_S
 
 
 def test_三个尺度的值就是规格里写的那三个():

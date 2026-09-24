@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.upload_queue import UploadQueue
-from d1max_patrol.engine.uploader import (
+from d1max_agent.engine.upload_queue import UploadQueue
+from d1max_agent.engine.uploader import (
     PutReceipt,
     PutRequest,
     SinkError,

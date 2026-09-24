@@ -7,10 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.app.identity import CONFIRM_PHRASE
-from d1max_patrol.app.server import AppServer
-from d1max_patrol.engine.lease import LEASE_TTL_MS
-from d1max_patrol.engine.release import (
+from d1max_agent.engine.lease import LEASE_TTL_MS
+from d1max_agent.engine.release import (
     MANIFEST_NAME,
     Layout,
     commit,
@@ -18,6 +16,8 @@ from d1max_patrol.engine.release import (
     read_pending,
     tree_sha256,
 )
+from d1max_patrol.app.identity import CONFIRM_PHRASE
+from d1max_patrol.app.server import AppServer
 
 from .conftest import get_err, get_json, make_ctx, post, request
 
@@ -281,9 +281,9 @@ def test_改完之后身份立刻跟着变(rel_server):
 import subprocess  # noqa: E402
 from functools import partial  # noqa: E402
 
+from d1max_agent.engine.privileged import Privileged, PrivilegedError  # noqa: E402
+from d1max_agent.engine.selfcheck import RestartPlan  # noqa: E402
 from d1max_patrol.app import server as server_mod  # noqa: E402
-from d1max_patrol.engine.privileged import Privileged, PrivilegedError  # noqa: E402
-from d1max_patrol.engine.selfcheck import RestartPlan  # noqa: E402
 
 
 class _假sudo:
@@ -397,7 +397,7 @@ def test_回滚时单元装不回去也照样退回去(rel_server, tmp_path, cap
 
 
 def test_spawn_restart探到没权限就抛而不是Popen(tmp_path, monkeypatch):
-    import d1max_patrol.engine.privileged as priv_mod
+    import d1max_agent.engine.privileged as priv_mod
     起过: list = []
     monkeypatch.setattr(priv_mod.subprocess, "Popen",
                         lambda argv, **kw: 起过.append(tuple(argv)))

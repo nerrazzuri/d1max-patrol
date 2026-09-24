@@ -36,10 +36,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from d1max_agent.engine.machine import RunState
 from d1max_patrol.app.server import AppServer
 from d1max_patrol.app.video import CAMERAS, CameraFeed
 from d1max_patrol.backends.base import BatteryEvent, DevicePoseEvent
-from d1max_patrol.engine.machine import RunState
 from d1max_patrol.protocol.nav_types import Pose
 from tests.app.conftest import get_json, make_ctx, status
 
@@ -463,8 +463,8 @@ def test_夹具_值守汇总(bridge, tmp_path, monkeypatch):
     次,所以要轮询到"这两条都在了"再取这一屏,取早了签进去的是 ``0``,而
     ``0`` 会在别人机器上稳定地红。电量同理:那是个推过来的事件。
     """
+    import d1max_agent.engine.backup as _backup_mod
     import d1max_patrol.app.server as _server_mod
-    import d1max_patrol.engine.backup as _backup_mod
     monkeypatch.setattr(_server_mod, "_disk",
                         lambda _path: (830_000_000_000, 1_000_000_000_000))
     monkeypatch.setattr(_backup_mod, "_free_bytes",

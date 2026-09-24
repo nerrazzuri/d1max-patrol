@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from d1max_agent.engine.upload_queue import BACKOFF_BASE_MS, BACKOFF_JITTER, UploadQueue
+from d1max_agent.engine.uploader import PutReceipt, SinkError, Step, Uploader
 from d1max_patrol.app.upload_pump import IDLE_SLEEP_S, UploadPump
-from d1max_patrol.engine.upload_queue import BACKOFF_BASE_MS, BACKOFF_JITTER, UploadQueue
-from d1max_patrol.engine.uploader import PutReceipt, SinkError, Step, Uploader
 
 
 class 只会失败的服务器:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.baselines import load_baseline, save_baseline
+from d1max_agent.engine.baselines import load_baseline, save_baseline
 from d1max_patrol.inspect.judge import judge_run, read_findings
 
 from .test_judge import PHOTO, PHOTO2, FakeClient, _write_run

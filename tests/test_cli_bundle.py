@@ -22,10 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol import cli
-from d1max_patrol.cli import _bundles_root, main
-from d1max_patrol.engine import bundle as bundle_mod
-from d1max_patrol.engine.bundle import (
+from d1max_agent.engine import bundle as bundle_mod
+from d1max_agent.engine.bundle import (
     CURRENT_LINK,
     LANDED,
     MAX_ROLLBACKS,
@@ -36,6 +34,8 @@ from d1max_patrol.engine.bundle import (
     mark_proven,
     read_state,
 )
+from d1max_patrol import cli
+from d1max_patrol.cli import _bundles_root, main
 
 时刻 = "2026-09-07T14:03:00+08:00"
 

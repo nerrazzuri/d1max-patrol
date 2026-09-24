@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.release import (
+from d1max_agent.engine.release import (
     MANIFEST_NAME,
     Layout,
     Pending,

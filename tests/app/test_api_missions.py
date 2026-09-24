@@ -17,8 +17,8 @@ from urllib.parse import quote
 
 import pytest
 
-from d1max_patrol.engine.machine import RunState
-from d1max_patrol.engine.removable import DiskRole, Removable
+from d1max_agent.engine.machine import RunState
+from d1max_agent.engine.removable import DiskRole, Removable
 from tests.app import conftest as C
 from tests.conftest import BadDisks, SomeDisks
 

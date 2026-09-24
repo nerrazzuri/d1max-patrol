@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from d1max_patrol.engine.removable import DEFAULT_PROBE
+from d1max_agent.engine.removable import DEFAULT_PROBE
 
 
 def test_ctx的引擎用的不是真探针(ctx):

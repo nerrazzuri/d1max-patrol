@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.app.identity import CONFIRM_PHRASE, write_payload
-from d1max_patrol.app.server import AppServer
-from d1max_patrol.engine.release import (
+from d1max_agent.engine.release import (
     MANIFEST_NAME,
     Layout,
     activate,
@@ -19,6 +17,8 @@ from d1max_patrol.engine.release import (
     stage,
     tree_sha256,
 )
+from d1max_patrol.app.identity import CONFIRM_PHRASE, write_payload
+from d1max_patrol.app.server import AppServer
 
 from .conftest import get_json, make_ctx
 
@@ -343,7 +343,7 @@ def test_自检路由那一遍也走注入进来的sleep(装了两版):
 def test_自检路由给自检的是它自己的超时预算而不是默认10秒(装了两版, monkeypatch):
     """W01c 真机:没有旁路进程时 ``/api/selfcheck`` 10 s 就 504 「后端没在规定
     时间内回话」,而自检本身还在跑 —— 人得到的是一句超时,不是四项里哪项没过。"""
-    from d1max_patrol.engine.selfcheck import POSTCHECK_TIMEOUT_S
+    from d1max_agent.engine.selfcheck import POSTCHECK_TIMEOUT_S
 
     ctx, layout = 装了两版
     ctx.restart = lambda _plan: None
@@ -370,7 +370,7 @@ def test_开机自检没过回滚时也把上一版的单元装回去(装了两�
     配着新版的单元跑。"""
     import subprocess
 
-    from d1max_patrol.engine.privileged import Privileged
+    from d1max_agent.engine.privileged import Privileged
 
     ctx, layout = 装了两版
     ctx.nav.loc = None

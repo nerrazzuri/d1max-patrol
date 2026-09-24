@@ -25,19 +25,19 @@ from pathlib import Path
 
 import pytest
 
+from d1max_agent.engine.backup import (
+    SyncState,
+    init_target,
+    resolve_targets,
+    write_sync_state,
+)
+from d1max_agent.engine.removable import DiskRole, Removable
 from d1max_patrol.app import watch
 from d1max_patrol.app.alert_sources import _落了但没生效
 from d1max_patrol.app.control import needs_lease
 from d1max_patrol.app.server import AppServer, Request
 from d1max_patrol.app.watch import watch_summary
 from d1max_patrol.backends.base import BatteryEvent
-from d1max_patrol.engine.backup import (
-    SyncState,
-    init_target,
-    resolve_targets,
-    write_sync_state,
-)
-from d1max_patrol.engine.removable import DiskRole, Removable
 from tests.app import conftest as C
 from tests.conftest import SomeDisks
 

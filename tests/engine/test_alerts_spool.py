@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from d1max_patrol.engine.alerts import AlertBook
+from d1max_agent.engine.alerts import AlertBook
 
 
 def 读盘(path: Path) -> list[dict]:

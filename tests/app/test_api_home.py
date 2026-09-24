@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 import pytest
 
-from d1max_patrol.engine.homing import home_path, load_home
+from d1max_agent.engine.homing import home_path, load_home
 from tests.app import conftest as C
 
 _MISSION = {

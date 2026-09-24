@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.engine.export import (
+from d1max_agent.engine.export import (
     EXPORTS_DIR_NAME,
     ExportBundle,
     ExportError,
@@ -25,7 +25,7 @@ from d1max_patrol.engine.export import (
     read_bundle,
     sha256_file,
 )
-from d1max_patrol.engine.retention import EXPORTED_REL, UPLOADED_REL, RunInfo
+from d1max_agent.engine.retention import EXPORTED_REL, UPLOADED_REL, RunInfo
 
 NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
 

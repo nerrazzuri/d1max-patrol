@@ -8,8 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from d1max_patrol.cli import _release_root, build_parser, main
-from d1max_patrol.engine.release import (
+from d1max_agent.engine.release import (
     MANIFEST_NAME,
     MAX_BOOT_ATTEMPTS,
     Layout,
@@ -22,6 +21,7 @@ from d1max_patrol.engine.release import (
     tree_sha256,
     write_pending,
 )
+from d1max_patrol.cli import _release_root, build_parser, main
 
 NOW = 1_700_000_000_000
 
@@ -394,7 +394,7 @@ class _假助手:
         return self.在
 
     def install_unit(self, name: str) -> str:
-        from d1max_patrol.engine.privileged import PrivilegedError
+        from d1max_agent.engine.privileged import PrivilegedError
         if self.拒:
             raise PrivilegedError(self.拒)
         self.装过.append(name)

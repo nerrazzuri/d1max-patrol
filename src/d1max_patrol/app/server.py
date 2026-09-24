@@ -45,6 +45,133 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from d1max_agent.engine import backup
+from d1max_agent.engine.alerts import AlertBook, AlertNotFound
+from d1max_agent.engine.archive import (
+    STAMP_FMT,
+    list_runs,
+    read_events,
+    read_manifest,
+    read_state,
+)
+from d1max_agent.engine.backup import (
+    BackupError,
+    TargetStatus,
+    apply_sync,
+    backup_notice,
+    eject,
+    init_target,
+    marker_path,
+    plan_sync,
+    read_sync_state,
+    resolve_targets,
+)
+from d1max_agent.engine.baselines import BASELINE_DIR_NAME, baselines_bytes
+from d1max_agent.engine.bundle import (
+    MISSIONS_DIR as BUNDLE_MISSIONS_DIR,
+)
+from d1max_agent.engine.bundle import (
+    BundleError,
+    active_bundle,
+    apply_bundle,
+    denies,
+    read_bundle_schedule,
+    rollback_bundle,
+    verify_bundle,
+)
+from d1max_agent.engine.bundle import (
+    read_state as read_bundle_state,
+)
+from d1max_agent.engine.datadir import DATA_ROOT_ENV, resolve_paths
+from d1max_agent.engine.export import (
+    EXPORTS_DIR_NAME,
+    ExportError,
+    build_export,
+    confirm_bundle,
+    list_bundles,
+    pick_runs,
+    safe_name,
+)
+from d1max_agent.engine.form import STANDALONE, Form
+from d1max_agent.engine.homing import HomeError, HomePoint, load_home, save_home
+from d1max_agent.engine.http_sink import HttpSink
+from d1max_agent.engine.lease import (
+    AUDIT_MAX,
+    AuditRecord,
+    Holder,
+    LeaseBusy,
+    LeaseError,
+    LeaseLost,
+    LeaseState,
+)
+from d1max_agent.engine.machine import EngineBusy, MissionEngine, SuspendPoint
+from d1max_agent.engine.mission import (
+    Mission,
+    MissionError,
+    load_mission,
+    parse_mission,
+    save_mission,
+)
+from d1max_agent.engine.preflight import CheckResult, PreflightReport, run_preflight
+from d1max_agent.engine.privileged import Privileged, PrivilegedError
+from d1max_agent.engine.release import (
+    Layout,
+    ReleaseError,
+    ReleaseManifest,
+    activate,
+    clear_pending,
+    commit,
+    current_name,
+    installed,
+    read_pending,
+    rollback,
+    stage,
+)
+from d1max_agent.engine.release import (
+    read_manifest as read_release_manifest,
+)
+from d1max_agent.engine.removable import (
+    DEFAULT_PROBE,
+    DiskRole,
+    Removable,
+    RemovableProbe,
+    scan_or_unknown,
+)
+from d1max_agent.engine.retention import (
+    UPLOADED_REL,
+    RunInfo,
+    apply_sweep,
+    bytes_to_free,
+    forecast,
+    is_settled,
+    mark_uploaded,
+    plan_sweep,
+    read_notice,
+    scan_runs,
+    unmark_uploaded,
+    write_notice,
+)
+from d1max_agent.engine.schedule import (
+    ScheduleEntry,
+    Skew,
+    clock_skew,
+    decide,
+    next_run,
+    pick,
+)
+from d1max_agent.engine.selfcheck import (
+    POSTCHECK_TIMEOUT_S,
+    PrecheckInputs,
+    RestartPlan,
+    Verdict,
+    mission_schema_floor,
+    postcheck_verdict,
+    precheck,
+    restart_plan,
+    run_postcheck,
+)
+from d1max_agent.engine.upload_queue import UploadQueue, classify
+from d1max_agent.engine.uploader import Uploader
 from d1max_patrol.app.alert_sources import AlertSources
 from d1max_patrol.app.auth import (
     AUTH_PATH,
@@ -111,133 +238,6 @@ from d1max_patrol.backends.base import (
     NavStatusEvent,
 )
 from d1max_patrol.backends.map_bridge import MapBridgeClient
-from d1max_patrol.engine import backup
-from d1max_patrol.engine.alerts import AlertBook, AlertNotFound
-from d1max_patrol.engine.archive import (
-    STAMP_FMT,
-    list_runs,
-    read_events,
-    read_manifest,
-    read_state,
-)
-from d1max_patrol.engine.backup import (
-    BackupError,
-    TargetStatus,
-    apply_sync,
-    backup_notice,
-    eject,
-    init_target,
-    marker_path,
-    plan_sync,
-    read_sync_state,
-    resolve_targets,
-)
-from d1max_patrol.engine.baselines import BASELINE_DIR_NAME, baselines_bytes
-from d1max_patrol.engine.bundle import (
-    MISSIONS_DIR as BUNDLE_MISSIONS_DIR,
-)
-from d1max_patrol.engine.bundle import (
-    BundleError,
-    active_bundle,
-    apply_bundle,
-    denies,
-    read_bundle_schedule,
-    rollback_bundle,
-    verify_bundle,
-)
-from d1max_patrol.engine.bundle import (
-    read_state as read_bundle_state,
-)
-from d1max_patrol.engine.datadir import DATA_ROOT_ENV, resolve_paths
-from d1max_patrol.engine.export import (
-    EXPORTS_DIR_NAME,
-    ExportError,
-    build_export,
-    confirm_bundle,
-    list_bundles,
-    pick_runs,
-    safe_name,
-)
-from d1max_patrol.engine.form import STANDALONE, Form
-from d1max_patrol.engine.homing import HomeError, HomePoint, load_home, save_home
-from d1max_patrol.engine.http_sink import HttpSink
-from d1max_patrol.engine.lease import (
-    AUDIT_MAX,
-    AuditRecord,
-    Holder,
-    LeaseBusy,
-    LeaseError,
-    LeaseLost,
-    LeaseState,
-)
-from d1max_patrol.engine.machine import EngineBusy, MissionEngine, SuspendPoint
-from d1max_patrol.engine.mission import (
-    Mission,
-    MissionError,
-    load_mission,
-    parse_mission,
-    save_mission,
-)
-from d1max_patrol.engine.preflight import CheckResult, PreflightReport, run_preflight
-from d1max_patrol.engine.privileged import Privileged, PrivilegedError
-from d1max_patrol.engine.release import (
-    Layout,
-    ReleaseError,
-    ReleaseManifest,
-    activate,
-    clear_pending,
-    commit,
-    current_name,
-    installed,
-    read_pending,
-    rollback,
-    stage,
-)
-from d1max_patrol.engine.release import (
-    read_manifest as read_release_manifest,
-)
-from d1max_patrol.engine.removable import (
-    DEFAULT_PROBE,
-    DiskRole,
-    Removable,
-    RemovableProbe,
-    scan_or_unknown,
-)
-from d1max_patrol.engine.retention import (
-    UPLOADED_REL,
-    RunInfo,
-    apply_sweep,
-    bytes_to_free,
-    forecast,
-    is_settled,
-    mark_uploaded,
-    plan_sweep,
-    read_notice,
-    scan_runs,
-    unmark_uploaded,
-    write_notice,
-)
-from d1max_patrol.engine.schedule import (
-    ScheduleEntry,
-    Skew,
-    clock_skew,
-    decide,
-    next_run,
-    pick,
-)
-from d1max_patrol.engine.selfcheck import (
-    POSTCHECK_TIMEOUT_S,
-    PrecheckInputs,
-    RestartPlan,
-    Verdict,
-    mission_schema_floor,
-    postcheck_verdict,
-    precheck,
-    restart_plan,
-    run_postcheck,
-)
-from d1max_patrol.engine.upload_queue import UploadQueue, classify
-from d1max_patrol.engine.uploader import Uploader
 from d1max_patrol.inspect.judge import (
     judge_run,
     read_findings,
@@ -859,7 +859,7 @@ def _run_rel(key: str) -> str:
 
     **所以不许用 ``rsplit("/", 1)[0]``。** 那个写法在 ``events.jsonl`` 上碰巧
     对,在照片上给出的是 ``<任务>/<时刻>/photos`` —— 而
-    :func:`~d1max_patrol.engine.retention.mark_uploaded` 不做任何校验,拿到
+    :func:`~d1max_agent.engine.retention.mark_uploaded` 不做任何校验,拿到
     这么一个路径也照样 ``touch`` 成功。两个后果都不出声:那一趟永远进不了
     「可删」(``scan_runs`` 查的是 ``<run>/`` 底下那个标记),水位线于是扫不到
     东西可删,**真机上盘会满**;而「这一趟还剩几个没传完」的判据用的是同一个

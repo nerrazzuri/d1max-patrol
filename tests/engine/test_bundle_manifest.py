@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from d1max_patrol.engine.bundle import (
+from d1max_agent.engine.bundle import (
     BUNDLE_MANIFEST,
     BUNDLE_SCHEMA,
     MAX_VERSION,

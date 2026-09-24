@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from d1max_patrol.engine.release import (
+from d1max_agent.engine.release import (
     MANIFEST_NAME,
     MAX_BOOT_ATTEMPTS,
     GuardAction,
@@ -124,7 +124,7 @@ def test_链丢了也按盘上最新的一版修好(tmp_path):
 def test_有在途标记时修链要照标记修而不是照最新的修(tmp_path):
     """换链换了一半:标记写了,链没换成。这时候「最新的」正是那一版没验过的。"""
     layout = _两版(tmp_path)
-    import d1max_patrol.engine.release as rel
+    import d1max_agent.engine.release as rel
 
     def 炸(_layout, _name):
         raise OSError("换到一半断电")
@@ -158,7 +158,7 @@ def test_权限拒绝也不会把异常甩给调用方(tmp_path):
     for _ in range(MAX_BOOT_ATTEMPTS):
         boot_guard(layout, now_ms=NOW)
 
-    import d1max_patrol.engine.release as rel
+    import d1max_agent.engine.release as rel
 
     def 炸(_layout, _name):
         raise OSError(13, "permission denied")
@@ -175,7 +175,7 @@ def test_标记里的名字不合规也不会把异常甩给调用方(tmp_path):
     """pending.json 里的 to/from 要是不合规的名字(比如带路径穿越的),
     safe_name 会炸 ReleaseError —— 这也得被 boot_guard 兜住,而不是漏出去。"""
     layout = _两版(tmp_path)
-    from d1max_patrol.engine.release import Pending, write_pending
+    from d1max_agent.engine.release import Pending, write_pending
 
     write_pending(
         layout,
