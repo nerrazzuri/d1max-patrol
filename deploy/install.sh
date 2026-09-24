@@ -26,6 +26,7 @@ set -euo pipefail
 # @写盘 /etc/d1max/env                                                   设备 PIN 在这个文件里
 # @写盘 /etc/systemd/system/d1max-patrol.service                         install -m 0644 摆进去的单元
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service systemctl enable 生成的自启链
+# @写盘 /etc/systemd/system/d1max-agent.service                           W00b:robot-agent 的单元,装而不 enable(W00c 有站点 broker 了再起用)
 # @写盘 /usr/local/sbin/d1max-privileged                                 W01b:robot 通过 sudo 白名单能跑的唯一 root 命令(装单元、restart、reboot)
 # @写盘 /etc/sudoers.d/d1max                                             W01b:那条白名单,只放行上面那个脚本
 # @写盘 /usr/local/sbin/d1max-restart-now                                W01b:OTA 重启的内部入口(stop→搬数据→start),0700,不在白名单里,只由 systemd-run 调
@@ -259,6 +260,15 @@ if [[ ! -e "$SENTINEL" ]]; then
   sudo -u "$RUN_USER" "$SLOT/venv/bin/python" -m pip install --quiet $PIP_ARGS --upgrade pip \
     || echo "  (pip 没升上去,用 venv 自带的那个接着装 —— 不影响装机)"
   sudo -u "$RUN_USER" "$SLOT/venv/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_SLOT_PKG"
+  # W00b:robot-agent 三个包也装进这一版的 venv。顺序按依赖:contract → adapter-sim →
+  # robot-agent;contract 带 [mqtt](paho-mqtt,离线轮子目录里要有它)。老包没带 packages/
+  # 就跳过 —— 那一版本来也没有 agent。
+  if [[ -d "$TMP_SLOT_PKG/packages/robot-agent" ]]; then
+    sudo -u "$RUN_USER" "$SLOT/venv/bin/python" -m pip install --quiet $PIP_ARGS \
+      "$TMP_SLOT_PKG/packages/contract[mqtt]" \
+      "$TMP_SLOT_PKG/packages/adapter-sim" \
+      "$TMP_SLOT_PKG/packages/robot-agent"
+  fi
   # **最后一行才落哨兵。** 上面任何一步断了,set -e 会在这之前就退出,
   # 哨兵不在,下一趟整段重来 —— 这就是"依赖装完没有"这个判据的全部。
   printf 'd1max_patrol %s\n' "$REL_NAME" > "$SENTINEL"
@@ -272,6 +282,13 @@ say "5/7 装 systemd 单元、特权助手与环境文件"
 UNIT_SRC="$PKG/deploy/d1max-patrol.service"
 [[ -f "$UNIT_SRC" ]] || UNIT_SRC="$(dirname "$0")/d1max-patrol.service"
 install -m 0644 "$UNIT_SRC" /etc/systemd/system/
+# W00b:robot-agent 的单元**装而不 enable**。它要连站点的 broker,那东西 W00c 才有;
+# 现在 enable 只会得到一个每 5 秒重启一次、连不上任何东西的进程。老包没带就跳过。
+AGENT_UNIT_SRC="$PKG/deploy/d1max-agent.service"
+[[ -f "$AGENT_UNIT_SRC" ]] || AGENT_UNIT_SRC="$(dirname "$0")/d1max-agent.service"
+if [[ -f "$AGENT_UNIT_SRC" ]]; then
+  install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/
+fi
 # 特权助手:robot 通过 sudo 白名单能跑的唯一 root 命令(OTA 装单元、restart、
 # reboot)。**必须装在 root 拥有的目录里**:/opt/d1max 整棵归 robot,sudo 白名单
 # 指着 robot 可写的脚本等于把 root 送给 robot。它不随 OTA 更新,改它重跑本脚本。

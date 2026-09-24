@@ -53,6 +53,7 @@ set -euo pipefail
 # @删除 /etc/systemd/system/d1max-patrol.service                         主单元
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 开机自启那条链
 # @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
+# @删除 /etc/systemd/system/d1max-agent.service                           W00b 的 robot-agent 单元(装而不 enable)
 # @删除 /usr/local/sbin/d1max-privileged                                 W01b 的特权助手
 # @删除 /etc/sudoers.d/d1max                                             W01b 的 sudo 白名单
 # @删除 /usr/local/sbin/d1max-restart-now                                W01b 重启的内部入口
@@ -74,6 +75,7 @@ ETC_DIR=/etc/d1max
 UNIT_DIR=/etc/systemd/system
 MAIN_UNIT=d1max-patrol.service
 OLD_UNIT=d1max-bootguard.service
+AGENT_UNIT=d1max-agent.service
 WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-patrol.service
 
 say()  { printf '%s\n' "$*"; }
@@ -363,7 +365,7 @@ stop_service() {
     say "  (这台机器上没有 systemctl,整段跳过)"
     return 0
   fi
-  for u in "$MAIN_UNIT" "$OLD_UNIT"; do
+  for u in "$MAIN_UNIT" "$AGENT_UNIT" "$OLD_UNIT"; do
     if [ "$DO_IT" != 1 ]; then
       say "  [dry-run] 会 stop + disable $u"
       continue
@@ -374,6 +376,7 @@ stop_service() {
     say "  停了并关掉自启:$u(本来就没有的话,这一步什么也没发生)"
   done
   rm_sys "$UNIT_DIR/$MAIN_UNIT" "主单元"
+  rm_sys "$UNIT_DIR/$AGENT_UNIT" "robot-agent 单元(W00b,装而不 enable)"
   rm_sys "$UNIT_DIR/$OLD_UNIT" "老的守卫单元,多数机器上本来就没有"
   rm_sys "$WANTS_LINK" "开机自启那条链"
   # W01b:先删 sudoers 再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在

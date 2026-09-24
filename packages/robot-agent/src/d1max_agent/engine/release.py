@@ -94,14 +94,17 @@ _CHUNK_JOIN = b"\0"
 #: ``deploy`` 是 W01b 加进来的:OTA 升级(``release activate``)要从
 #: ``releases/<版本>/deploy/d1max-patrol.service`` 拿单元交给特权助手装到
 #: ``/etc/systemd/system``。不进包的话,机器上的单元永远是装机那天的版本。
-_PACK_INCLUDE = ("pyproject.toml", "src", "config", "deploy")
+#: ``packages`` 是 W00b 加的:robot-agent 三个包要在槽 venv 里装。各包的 ``tests/`` 不进
+#: (``_PACK_SKIP_DIRS``)。
+_PACK_INCLUDE = ("pyproject.toml", "src", "config", "deploy", "packages")
 
 #: 白名单收下的目录里头还要再筛一遍的噪声。**它们是构建/缓存产物,不是源码**,
 #: 而且同一份源码带不带它们会算出两个不同的 ``content_sha256``。
 #: ``*.egg-info/`` 尤其要紧:pip 就地构建会往源目录里写它(见 install.sh 的
 #: 2/7 那段注释),开发机上的 ``src/d1max_patrol.egg-info`` 就是这么来的。
 _PACK_SKIP_DIRS = frozenset({"__pycache__", ".git", ".venv", "venv",
-                             ".pytest_cache", ".ruff_cache", ".mypy_cache"})
+                             ".pytest_cache", ".ruff_cache", ".mypy_cache",
+                             "tests"})    # packages/*/tests 狗上跑不了,别占包体
 #: 按后缀筛,目录和文件都走这一条(``.egg-info`` 筛的是目录名)。
 _PACK_SKIP_SUFFIXES = (".pyc", ".pyo", ".tmp", ".egg-info")
 

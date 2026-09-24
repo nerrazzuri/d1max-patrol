@@ -78,6 +78,15 @@ def _源码树(root: Path, *, version: str = "0.3.0") -> Path:
     for 名 in ("d1max-patrol.service", "d1max-privileged", "d1max-restart-now",
               "sudoers-d1max", "install.sh"):
         (root / "deploy" / 名).write_text(f"# {名}\n", encoding="utf-8")
+    # W00b:packages/ 也进包(robot-agent 装进槽 venv);各包的 tests/ 不进。
+    for 包, 模块 in (("contract", "d1max_contract"), ("adapter-sim", "d1max_adapter_sim"),
+                   ("robot-agent", "d1max_agent")):
+        (root / "packages" / 包 / "src" / 模块).mkdir(parents=True, exist_ok=True)
+        (root / "packages" / 包 / "src" / 模块 / "__init__.py").write_text("", encoding="utf-8")
+        (root / "packages" / 包 / "pyproject.toml").write_text(f'[project]\nname = "{包}"\n',
+                                                              encoding="utf-8")
+        (root / "packages" / 包 / "tests").mkdir(parents=True, exist_ok=True)
+        (root / "packages" / 包 / "tests" / "test_x.py").write_text("", encoding="utf-8")
     for rel in 噪声:
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -170,10 +179,18 @@ def test_显式给的版本号赢过pyproject(tmp_path, 无git):
 # ----------------------------------------------------------- 包里装了什么
 
 
-def test_包里只有白名单那四样加一份自述(tmp_path, 无git):
+def test_包里只有白名单那五样加一份自述(tmp_path, 无git):
     dest = pack(_源码树(tmp_path / "树"), tmp_path / "出", now_ms=NOW_MS)
     assert {p.name for p in dest.iterdir()} == {
-        "pyproject.toml", "src", "config", "deploy", MANIFEST_NAME}
+        "pyproject.toml", "src", "config", "deploy", "packages", MANIFEST_NAME}
+
+
+def test_三个包随包走但它们的tests不进(tmp_path, 无git):
+    """W00b:装机 4/7 要在槽 venv 里 pip install 这三个包;tests/ 狗上跑不了,别占包体。"""
+    dest = pack(_源码树(tmp_path / "树"), tmp_path / "出", now_ms=NOW_MS)
+    for 包 in ("contract", "adapter-sim", "robot-agent"):
+        assert (dest / "packages" / 包 / "pyproject.toml").is_file(), 包
+        assert not (dest / "packages" / 包 / "tests").exists(), f"{包}/tests 不该进包"
 
 
 def test_单元文件和特权助手随包走(tmp_path, 无git):

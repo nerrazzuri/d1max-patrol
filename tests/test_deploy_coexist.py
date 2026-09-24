@@ -42,6 +42,7 @@ from tests.test_deploy_files import DEPLOY
     "UNIT_DIR": "/etc/systemd/system",
     "MAIN_UNIT": "d1max-patrol.service",
     "OLD_UNIT": "d1max-bootguard.service",
+    "AGENT_UNIT": "d1max-agent.service",
     "WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-patrol.service",
 }
 

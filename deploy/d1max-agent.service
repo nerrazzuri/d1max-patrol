@@ -1,0 +1,26 @@
+[Unit]
+Description=D1 Max 机器人代理(robot-agent)
+After=network-online.target
+Wants=network-online.target
+# 不限起动次数;配合 Restart=always/RestartSec=5。键属于 [Unit] 段(W01c 的教训)。
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=robot
+# 指着 current 链,不指任何一版 —— 双槽能换、能退的全部原因,跟 d1max-patrol.service 一样。
+WorkingDirectory=-/opt/d1max/current
+Environment=D1MAX_RELEASE_ROOT=/opt/d1max
+Environment=D1MAX_DATA_ROOT=/var/lib/d1max
+Environment=PYTHONUNBUFFERED=1
+# 站点地址、地图、原点这些现场值从 env 文件来(W00c 装站点时填):
+#   D1MAX_SITE_MQTT=mqtts://<站点>:8883   D1MAX_MAP=<map_id>:<version>   D1MAX_HOME=x,y,yaw
+EnvironmentFile=-/etc/d1max/env
+# W00b:装而不 enable。站点 broker 在 W00c 才有;现在起来只会每 5 秒重连一次连不上的地址。
+# W00c 起用时把 --hal 换成 d1max(W00d 出适配器之后)。
+ExecStart=/opt/d1max/current/venv/bin/d1max-agent --transport ${D1MAX_SITE_MQTT} --hal sim --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent --runs-root /var/lib/d1max/runs --map ${D1MAX_MAP} --home ${D1MAX_HOME}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -783,8 +783,8 @@ def test_离线pip参数每一处pip都带上了(装机脚本):
     # 带离线参数的命令。判据是行首第一个非空字符是不是 ``#``。
     pip行 = [ln for ln in 装机脚本.splitlines()
              if "-m pip install" in ln and not ln.lstrip().startswith("#")]
-    # 今天是四条(2/7 两条、4/7 两条),我数过。
-    assert len(pip行) == 4, f"pip install 的条数变了:{pip行}"
+    # 今天是五条(2/7 两条、4/7 三条:根包一条 + W00b 三个包一条),我数过。
+    assert len(pip行) == 5, f"pip install 的条数变了:{pip行}"
     for 行 in pip行:
         assert "$PIP_ARGS" in 行, f"这一条 pip 没带离线参数:{行.strip()}"
     # 清单那一侧要写清楚怎么用,否则现场不知道有这个口子。
@@ -1262,3 +1262,56 @@ def test_装机脚本把restart_now装成root专用且不进sudoers(装机脚本
     assert "# @删除 /usr/local/sbin/d1max-restart-now" in text
     assert 'rm_sys "/usr/local/sbin/d1max-restart-now"' in text
     assert "/usr/local/sbin/d1max-restart-now) ;;" in text
+
+
+# ------------------------------------------ W00b:robot-agent 装进槽、单元装而不 enable
+
+def test_装机脚本把三个包按依赖顺序装进槽venv(装机脚本):
+    行们 = 装机脚本.splitlines()
+
+    def 行号(片段: str) -> int:
+        命中 = [i for i, 行 in enumerate(行们)
+              if 片段 in 行 and not 行.lstrip().startswith("#") and "[[ -d" not in 行]
+        assert 命中, f"装机脚本里没有 {片段!r}"
+        return 命中[0]
+
+    i_root = 行号('pip install --quiet $PIP_ARGS "$TMP_SLOT_PKG"')
+    i_c = 行号('"$TMP_SLOT_PKG/packages/contract[mqtt]"')
+    i_s = 行号('"$TMP_SLOT_PKG/packages/adapter-sim"')
+    i_a = 行号('"$TMP_SLOT_PKG/packages/robot-agent"')
+    assert i_root < i_c < i_s < i_a, "先根包,再 contract、adapter-sim、robot-agent"
+    assert "$PIP_ARGS" in 行们[i_c - 1], "三个包那一条 pip 也要带离线参数"
+
+
+def test_agent单元装而不enable(装机脚本):
+    """站点 broker 在 W00c 才有,现在起了也连不上。装好、留着,W00c 一到就是 systemctl enable。"""
+    assert 'install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/' in 装机脚本
+    assert 'AGENT_UNIT_SRC="$PKG/deploy/d1max-agent.service"' in 装机脚本
+    代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
+    assert not any("enable" in 行 and "d1max-agent" in 行 for 行 in 代码), "W00b 不 enable"
+    assert not any("start d1max-agent" in 行 for 行 in 代码)
+    assert "# @写盘 /etc/systemd/system/d1max-agent.service" in 装机脚本
+
+
+def test_agent单元的形状():
+    单元 = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    段 = _按段(单元)
+    assert "User" in 段["[Service]"] and "User=robot" in 单元
+    assert "ExecStart=/opt/d1max/current/venv/bin/d1max-agent" in 单元
+    assert "Environment=D1MAX_DATA_ROOT=/var/lib/d1max" in 单元
+    assert "EnvironmentFile=-/etc/d1max/env" in 单元
+    assert "Restart=always" in 单元 and "RestartSec=" in 单元
+    assert "StartLimitIntervalSec" in 段["[Unit]"]
+    assert "WantedBy" in 段["[Install]"]
+
+
+def test_agent入口在robot_agent的scripts里():
+    toml = (ROOT / "packages" / "robot-agent" / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'd1max-agent = "d1max_agent.main:main"' in toml
+
+
+def test_卸载脚本删agent单元():
+    text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /etc/systemd/system/d1max-agent.service" in text
+    assert 'rm_sys "$UNIT_DIR/$AGENT_UNIT"' in text
+    assert 'for u in "$MAIN_UNIT" "$AGENT_UNIT" "$OLD_UNIT"; do' in text
