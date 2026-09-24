@@ -38,6 +38,9 @@ def wrap_angle(a: float) -> float:
 class SimRobot:
     """``now_ms`` 是注入的钟;``tick(dt_s)`` 推进一步。两者由调用方保持一致。"""
 
+    #: 代理合成能力时写进 ``adapter`` 字段。
+    adapter_id = ADAPTER_ID
+
     def __init__(self, *, now_ms: Callable[[], int], max_vx: float = 1.0, max_wz: float = 1.5,
                  deadband_vx: float = 0.05, stop_latency_s: float = 0.2,
                  battery_drain_pct_per_h: float = 8.0, frame_id: str = "odom") -> None:
