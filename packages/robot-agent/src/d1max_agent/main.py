@@ -187,8 +187,9 @@ def build(args: argparse.Namespace) -> Assembled:
             hal: Any = SimRobot(now_ms=wall_ms)
         else:  # pragma: no cover - 只有 sim
             raise SystemExit(f"不认识的 HAL {args.hal!r}")
+        from d1max_agent.bridges.sim_media import sim_media
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
-                             home=args.home)
+                             home=args.home, media=sim_media(wall_ms))
         transport = _make_transport(args.transport, registration.robot_id, broker,
                                     tls=(args.tls_ca, args.tls_cert, args.tls_key))
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,

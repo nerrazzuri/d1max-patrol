@@ -66,7 +66,8 @@ async def test_起来就发能力与状态_均retained(台子):
     await rt.start()
     await broker.drain()
     caps = Capabilities.from_wire(ears.by_topic["capabilities"][0])
-    assert caps.robot_id == "r" and list(caps.tasks) == ["goto"]
+    assert caps.robot_id == "r" and list(caps.tasks) == ["goto", "patrol"]
+    assert caps.tasks["patrol"] == {"map_id": "m", "map_version": "1"}
     assert caps.tasks["goto"]["max_speed_mps"] == r.max_vx
     assert caps.adapter.startswith("sim/")
     st = Status.from_wire(ears.by_topic["status"][-1])

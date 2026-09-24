@@ -43,7 +43,7 @@ class EngineParts:
 def build_engine(hal: RobotHAL, *, runs_root: Path, now_ms: Callable[[], int],
                  monotonic: Callable[[], float] = time.monotonic, map_id: str,
                  home: Pose | None, removable=None, init_delay_s: float = 0.3,
-                 terminal_hold_s: float = 0.5) -> EngineParts:
+                 terminal_hold_s: float = 0.5, media: dict | None = None) -> EngineParts:
     nav = HalNavBackend(hal, now_ms=now_ms, map_id=map_id, init_delay_s=init_delay_s,
                         terminal_hold_s=terminal_hold_s)
     home_point: HomePoint | None = None
@@ -52,7 +52,8 @@ def build_engine(hal: RobotHAL, *, runs_root: Path, now_ms: Callable[[], int],
         home_point = HomePoint(map_id=map_id, pose=home, marked_at_ms=now_ms(),
                                note="W00b:装配时给的原点")
     device = HalDeviceBackend(hal, now_ms=now_ms)
-    engine = MissionEngine(nav, device, {}, Path(runs_root), clock=monotonic, wall_ms=now_ms,
+    engine = MissionEngine(nav, device, dict(media or {}), Path(runs_root), clock=monotonic,
+                           wall_ms=now_ms,
                            removable=removable if removable is not None else NoRemovableProbe())
     return EngineParts(hal=hal, nav=nav, device=device, engine=engine, map_id=map_id,
                        home=home_point)

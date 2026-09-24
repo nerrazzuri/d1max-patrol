@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from d1max_contract.geometry import Pose
 from d1max_contract.messages import (
     Ack,
     AckResult,
@@ -27,6 +28,7 @@ from d1max_contract.messages import (
     TaskSummary,
     Telemetry,
 )
+from d1max_contract.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_contract.registration import Registration
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures"
@@ -44,6 +46,22 @@ def generate() -> dict[str, dict[str, Any]]:
             command_id="cmd-0001", task_id="task-0001", kind="goto", issued_at=1_760_000_000_000,
             expires_at=1_760_000_060_000, control_epoch=3, priority=0,
             payload={"target": POSE.to_wire(), "max_speed_mps": 0.8}).to_wire(),
+        "command_patrol": Command(
+            command_id="cmd-0005", task_id="task-0005", kind="patrol",
+            issued_at=1_760_000_100_000, expires_at=1_760_000_160_000, control_epoch=3,
+            priority=0, payload={"map_version": "7", "mission": Mission(
+                mission="night-loop", map_id="estate-1", policy=Policy(loops=1),
+                waypoints=(
+                    MissionWaypoint(name="gate", pose=Pose.from_xy_yaw(12.5, -3.25, 1.5708),
+                                    actions=(Action(type="photo", camera="front"),)),
+                    MissionWaypoint(name="pond", pose=Pose.from_xy_yaw(30.0, 4.0, 0.0),
+                                    actions=(Action(type="dwell", seconds=5.0),)),
+                )).to_wire()}).to_wire(),
+        "event_patrol_waypoint": Event(
+            event_id="evt-b1-000012", seq=12, boot_id="boot-b1", stamp=1_760_000_130_000,
+            kind="patrol_waypoint",
+            data={"task_id": "task-0005", "index": 0, "name": "gate", "ok": True,
+                  "note": ""}).to_wire(),
         "command_abort": Command(
             command_id="cmd-0002", task_id="task-0001", kind="abort",
             issued_at=1_760_000_010_000, expires_at=1_760_000_070_000, control_epoch=3,
@@ -68,7 +86,8 @@ def generate() -> dict[str, dict[str, Any]]:
                                      control_epoch=3, last_seen=0, task=None).to_wire(),
         "capabilities": Capabilities(
             robot_id="D1MAX-C40011", agent="0.1.0", adapter="sim/0.1.0",
-            tasks={"goto": {"max_speed_mps": 1.0}},
+            tasks={"goto": {"max_speed_mps": 1.0},
+                   "patrol": {"map_id": "estate-1", "map_version": "7"}},
             actuators={"light": [], "siren": False, "speaker": False, "spotlight": False},
             sensing={"lidar": False, "depth": False, "thermal": False, "imu_hz": 0,
                      "joint_effort": False, "foot_force": False}).to_wire(),

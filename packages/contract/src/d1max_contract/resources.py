@@ -12,6 +12,8 @@ RESOURCES: tuple[str, ...] = ("motion", "light", "sound", "spotlight", "head", "
 #: W00 只登记两种。其余任务类型(patrol/standoff/deter/…)各自工单再加。
 TASK_RESOURCES: dict[str, frozenset[str]] = {
     "goto": frozenset({"motion"}),
+    # W00c2a:整趟巡检。走、拍、开灯、转头;跟 goto 互斥,跟 abort 不冲突。
+    "patrol": frozenset({"motion", "camera", "light", "head"}),
     "abort": frozenset(),
 }
 

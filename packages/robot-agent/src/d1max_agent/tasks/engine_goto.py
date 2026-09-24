@@ -31,20 +31,29 @@ PROGRESS_EVERY_M = 0.5
 _TERMINAL = frozenset({RunState.DONE, RunState.ABORTED})
 
 
-class EngineGotoTask(Task):
-    def __init__(self, *, task_id: str, target: MapPose, max_speed_mps: float | None,
+class EngineMissionTask(Task):
+    """在 MissionEngine 上跑一趟 ``Mission`` 的任务(goto 与 patrol 共用)。子类给出这趟的
+    ``Mission``(``_mission``),可选地每拍报进度(``_progress``)。"""
+
+    def __init__(self, *, task_id: str, kind: str, max_speed_mps: float | None,
                  parts: EngineParts, events: EventBook, now_ms: Callable[[], int],
                  priority: int = 0) -> None:
-        super().__init__(task_id=task_id, kind="goto", priority=priority)
-        self.target = target
+        super().__init__(task_id=task_id, kind=kind, priority=priority)
         self._max_speed = max_speed_mps
         self._parts = parts
         self._events = events
         self._now = now_ms
         self._abort_reason: str | None = None
         self._holding = False
-        self._last_reported_m: float | None = None
         self._started = False
+        self._reported_results = 0
+
+    def _mission(self) -> Mission:
+        raise NotImplementedError
+
+    async def _progress(self) -> dict | None:
+        """每拍的进度;返回终态 detail 里要带的东西(goto 带 distance_m)。"""
+        return None
 
     # ------------------------------------------------------------ 生命周期
 
@@ -62,12 +71,7 @@ class EngineGotoTask(Task):
         except Exception as exc:  # noqa: BLE001 - 设不进去就不走:按 HAL 上限走会比要求的快
             self._fail(f"max_speed_mps {self._max_speed!r} 设不进去: {exc}")
             return
-        mission = Mission(
-            mission=self.task_id, map_id=self.target.map_id,
-            waypoints=(MissionWaypoint(
-                name="target", pose=Pose.from_xy_yaw(self.target.x, self.target.y,
-                                                     self.target.yaw)),),
-            policy=Policy())
+        mission = self._mission()
         try:
             await p.engine.start(mission, home=p.home)
         except EngineBusy as exc:
@@ -102,10 +106,9 @@ class EngineGotoTask(Task):
     async def step(self, dt_s: float) -> None:
         if self.state is not TaskState.RUNNING or not self._started:
             return
-        odom = await self._parts.hal.odometry()
-        dist = math.hypot(self.target.x - odom.x, self.target.y - odom.y)
-        self._report(dist)
+        extra = await self._progress()
         snap = self._parts.engine.snapshot
+        self._report_waypoints(snap.results)
         if snap.state not in _TERMINAL:
             return
         if not await self._parts.hal.stopped():
@@ -118,15 +121,22 @@ class EngineGotoTask(Task):
             bad = [r for r in snap.results if not r.ok]
             if bad:
                 self.state = TaskState.FAILED
-                self.detail = {"reason": bad[0].note or "waypoint failed"}
+                self.detail = {"reason": self._failed_reason(bad)}
             else:
                 self.state = TaskState.DONE
-                self.detail = {"distance_m": round(dist, 3)}
+                self.detail = dict(extra or {})
         elif self._abort_reason is not None:
             self._finish_aborted()
         else:
             self.state = TaskState.FAILED
             self.detail = {"reason": snap.reason or "engine aborted"}
+
+    def _failed_reason(self, bad) -> str:
+        return bad[0].note or "waypoint failed"
+
+    def _report_waypoints(self, results) -> None:
+        """引擎每走完(或跳过)一个航点,结果里多一条;子类决定要不要发事件。"""
+        self._reported_results = len(results)
 
     def _fail(self, reason: str) -> None:
         self.state = TaskState.FAILED
@@ -138,8 +148,32 @@ class EngineGotoTask(Task):
                       else TaskState.ABORTED)
         self.detail = {"reason": self._abort_reason}
 
-    def _report(self, dist: float) -> None:
+
+
+class EngineGotoTask(EngineMissionTask):
+    """``goto``:一个航点的 Mission。"""
+
+    def __init__(self, *, task_id: str, target: MapPose, max_speed_mps: float | None,
+                 parts: EngineParts, events: EventBook, now_ms: Callable[[], int],
+                 priority: int = 0) -> None:
+        super().__init__(task_id=task_id, kind="goto", max_speed_mps=max_speed_mps,
+                         parts=parts, events=events, now_ms=now_ms, priority=priority)
+        self.target = target
+        self._last_reported_m: float | None = None
+
+    def _mission(self) -> Mission:
+        return Mission(
+            mission=self.task_id, map_id=self.target.map_id,
+            waypoints=(MissionWaypoint(
+                name="target", pose=Pose.from_xy_yaw(self.target.x, self.target.y,
+                                                     self.target.yaw)),),
+            policy=Policy())
+
+    async def _progress(self) -> dict:
+        odom = await self._parts.hal.odometry()
+        dist = math.hypot(self.target.x - odom.x, self.target.y - odom.y)
         if self._last_reported_m is None or abs(self._last_reported_m - dist) >= PROGRESS_EVERY_M:
             self._last_reported_m = dist
             self._events.emit("task_progress", {"task_id": self.task_id,
                                                  "distance_m": round(dist, 3)})
+        return {"distance_m": round(dist, 3)}

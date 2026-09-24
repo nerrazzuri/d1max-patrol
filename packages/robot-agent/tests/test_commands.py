@@ -296,3 +296,27 @@ async def test_限速是NaN或无穷_拒收(cp):
         ack = await cp.handle(_cmd(cid=f"n{i}", payload={"target": POSE.to_wire(),
                                                          "max_speed_mps": bad}).to_wire(), TOPIC)
         assert ack.result is AckResult.REJECTED and ack.reason.startswith("payload"), bad
+
+
+def _patrol(cid, mission, version="3"):
+    return _cmd("patrol", cid=cid, payload={"mission": mission, "map_version": version})
+
+
+_MISSION = {"mission": "loop", "map_id": "m1", "waypoints": [
+    {"name": "a", "pose": {"position": {"x": 1, "y": 0}, "orientation": {"x": 0, "y": 0,
+                                                                           "z": 0, "w": 1}}}]}
+
+
+async def test_patrol的payload校验(cp):
+    assert cp.loaded_map == ("m1", "3"), "夹具的地图;下面的断言按它写"
+    cp.supported.add("patrol")
+    ack = await cp.handle(_patrol("p1", {"mission": "x"}).to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason.startswith("payload: mission")
+    ack = await cp.handle(_patrol("p2", _MISSION, version="4").to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason == "map_mismatch"
+    vendor = dict(_MISSION, route={"source": "vendor_path", "path_id": "x"})
+    ack = await cp.handle(_patrol("p3", vendor).to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and "inline" in ack.reason
+    ack = await cp.handle(_cmd("patrol", cid="p4", payload={"mission": _MISSION}).to_wire(),
+                          TOPIC)
+    assert ack.result is AckResult.REJECTED and "map_version" in ack.reason

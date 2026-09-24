@@ -16,6 +16,7 @@ from d1max_contract.messages import (
 from d1max_contract.registration import Registration
 
 解析器 = {"map_pose": MapPose, "command_goto": Command, "command_abort": Command,
+       "command_patrol": Command, "event_patrol_waypoint": Event,
        "ack_accepted": Ack, "ack_rejected": Ack, "ack_expired": Ack, "ack_duplicate": Ack,
        "event_progress": Event, "event_aborted": Event, "status_online": Status,
        "status_offline_lwt": Status, "capabilities": Capabilities, "reconcile": Reconcile,
@@ -45,3 +46,14 @@ def test_盘上夹具与生成结果一致():
 def test_夹具目录在包里而不是src里():
     assert fixtures.FIXTURES_DIR.name == "fixtures"
     assert fixtures.FIXTURES_DIR.parent.name == "contract"
+
+
+def test_patrol样本里的任务能被parse_mission读回():
+    """站点发、狗收的是同一份任务定义:夹具里的 mission 必须过 parse_mission 往返不变。"""
+    import json
+
+    from d1max_contract.fixtures import FIXTURES_DIR
+    from d1max_contract.mission import parse_mission
+    raw = json.loads((FIXTURES_DIR / "command_patrol.json").read_text(encoding="utf-8"))
+    m = parse_mission(raw["payload"]["mission"])
+    assert m.to_wire() == raw["payload"]["mission"] and raw["payload"]["map_version"] == "7"

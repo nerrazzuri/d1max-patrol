@@ -32,6 +32,9 @@ OFFLINE_POLICY: dict[str, OfflinePolicy] = {
     # 普通移动:定位、电量、安全条件满足 → 继续;否则停并等待。abort 排队。
     "goto": OfflinePolicy(on_disconnect="continue_if_safe", queue_cmds=frozenset({"abort"}),
                           new_cmd_expires=True),
+    # 巡检:同 goto —— 安全就走完这一趟,不安全就停下等;断线期间 abort 排队。
+    "patrol": OfflinePolicy(on_disconnect="continue_if_safe", queue_cmds=frozenset({"abort"}),
+                            new_cmd_expires=True),
     # abort 本身:本地执行,不排别的队,断线不影响它。
     "abort": OfflinePolicy(on_disconnect="execute_locally", queue_cmds=frozenset(),
                            new_cmd_expires=False),

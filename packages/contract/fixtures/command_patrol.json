@@ -1,0 +1,76 @@
+{
+  "command_id": "cmd-0005",
+  "control_epoch": 3,
+  "expires_at": 1760000160000,
+  "issued_at": 1760000100000,
+  "kind": "patrol",
+  "offline_policy": "default",
+  "payload": {
+    "map_version": "7",
+    "mission": {
+      "map_id": "estate-1",
+      "mission": "night-loop",
+      "policy": {
+        "battery_abort_pct": 25.0,
+        "battery_return_pct": 25.0,
+        "loops": 1,
+        "on_control_lost": "pause",
+        "on_loc_lost": "pause_then_abort",
+        "on_waypoint_failed": "retry_then_skip",
+        "retention_days": 90,
+        "waypoint_retry": 1,
+        "waypoint_timeout_s": 120.0
+      },
+      "waypoints": [
+        {
+          "actions": [
+            {
+              "camera": "front",
+              "type": "photo"
+            }
+          ],
+          "name": "gate",
+          "pose": {
+            "orientation": {
+              "w": 0.7071054825112363,
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.7071080798594735
+            },
+            "position": {
+              "x": 12.5,
+              "y": -3.25,
+              "z": 0.0
+            }
+          }
+        },
+        {
+          "actions": [
+            {
+              "seconds": 5.0,
+              "type": "dwell"
+            }
+          ],
+          "name": "pond",
+          "pose": {
+            "orientation": {
+              "w": 1.0,
+              "x": 0.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "position": {
+              "x": 30.0,
+              "y": 4.0,
+              "z": 0.0
+            }
+          }
+        }
+      ]
+    }
+  },
+  "precondition": null,
+  "priority": 0,
+  "schema": "1.0",
+  "task_id": "task-0005"
+}

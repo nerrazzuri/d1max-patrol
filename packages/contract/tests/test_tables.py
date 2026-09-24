@@ -51,3 +51,13 @@ def test_policy_for未知任务报错而不是猜():
     with pytest.raises(KeyError):
         policy_for("dance")
     assert policy_for("goto") is OFFLINE_POLICY["goto"]
+
+
+def test_patrol占移动_相机_灯_云台_断线继续并排队abort():
+    """W00c2a:整趟巡检要走、要拍、要开灯、要转头;与 goto 互斥,与 abort 不冲突。"""
+    assert TASK_RESOURCES["patrol"] == frozenset({"motion", "camera", "light", "head"})
+    assert conflicts("patrol", "goto") and conflicts("patrol", "patrol")
+    assert not conflicts("patrol", "abort")
+    assert policy_for("patrol") == OfflinePolicy(on_disconnect="continue_if_safe",
+                                                 queue_cmds=frozenset({"abort"}),
+                                                 new_cmd_expires=True)

@@ -102,11 +102,18 @@ class AgentRuntime:
 
     def _supported(self) -> set[str]:
         caps = self.hal.hal_capabilities()
-        return {"goto"} if (self.loaded_map is not None and caps.max_vx > 0) else set()
+        return ({"goto", "patrol"} if (self.loaded_map is not None and caps.max_vx > 0)
+                else set())
 
     def _make_task(self, cmd: Command) -> Task:
-        target = MapPose.from_wire(cmd.payload["target"])
         assert self.parts is not None, "有 loaded_map 就一定装了引擎"
+        if cmd.kind == "patrol":
+            from d1max_agent.tasks.patrol import PatrolTask
+            from d1max_contract.mission import parse_mission
+            return PatrolTask(task_id=cmd.task_id, mission=parse_mission(cmd.payload["mission"]),
+                              parts=self.parts, events=self.events, now_ms=self._now,
+                              priority=cmd.priority)
+        target = MapPose.from_wire(cmd.payload["target"])
         return EngineGotoTask(task_id=cmd.task_id, target=target,
                               max_speed_mps=cmd.payload.get("max_speed_mps"), parts=self.parts,
                               events=self.events, now_ms=self._now, priority=cmd.priority)

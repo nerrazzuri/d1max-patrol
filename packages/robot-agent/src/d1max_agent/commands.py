@@ -173,6 +173,8 @@ class CommandProcessor:
         几乎同时到时,没有 runtime 那把锁,两条都会先通过上面的幂等查询。"""
 
     def _check_payload(self, cmd: Command) -> str:
+        if cmd.kind == "patrol":
+            return self._check_patrol(cmd)
         if cmd.kind != "goto":
             return ""
         try:
@@ -185,6 +187,22 @@ class CommandProcessor:
             # isfinite:json 认 NaN/Infinity,而 NaN <= 0 为假。
             return "payload: max_speed_mps 要是正的有限数"
         if self.loaded_map is None or (target.map_id, target.map_version) != self.loaded_map:
+            return "map_mismatch"
+        return ""
+
+    def _check_patrol(self, cmd: Command) -> str:
+        """``{"mission": <任务定义>, "map_version": str}``(W00c2a 设计决定二 A)。"""
+        from d1max_contract.mission import MissionError, parse_mission
+        try:
+            mission = parse_mission(cmd.payload.get("mission"))
+        except (MissionError, ValueError) as exc:
+            return f"payload: mission 不成形: {exc}"
+        if mission.route_source != "inline":
+            return "payload: 只支持 inline 路线(厂商路径归 adapter-d1max)"
+        version = cmd.payload.get("map_version")
+        if not isinstance(version, str) or not version:
+            return "payload: 要 map_version"
+        if self.loaded_map is None or (mission.map_id, version) != self.loaded_map:
             return "map_mismatch"
         return ""
 
