@@ -277,3 +277,17 @@ async def test_设备桥有connected给老HTTP面画绿灯(台子):
     assert dev.connected is True
     await dev.close()
     assert dev.connected is False and await dev.has_control() is False
+
+
+async def test_终态一进就叫HAL停_不靠ttl到期(台子):
+    """停止靴子要真踢:``_enter_terminal`` 必须 ``hal.stop()``。拍长到 0.5 s、速度命令的 ttl
+    随之到 1.5 s,不主动停的话机器会照着上一条命令再走一秒半。"""
+    c, r, nav, dev = 台子
+    await nav.goto(Pose.from_xy_yaw(9.0, 0.0))
+    await _步(c, r, nav, 2, dt=0.5)                       # init 0.3 s 过了,Active,已发速度
+    assert (await r.odometry()).vx > 0
+    x0 = (await r.odometry()).x
+    await nav.stop()
+    await _步(c, r, nav, 1, dt=0.5)                       # 制动 0.2 s < 0.5 s:这一拍末已停
+    assert await r.stopped() is True
+    assert (await r.odometry()).x - x0 < 0.25, "stop 之后不该再走出去(ttl 还有 1 s 没到期)"
