@@ -14,7 +14,7 @@
     revoke    ROBOT_ID                     → 吊销;要重启 d1max-mosquitto 才对 broker 生效
     add-admin NAME                         → 口令从 D1MAX_SITE_PASSWORD 或交互输入
     import-bundle DIR                      → 导入任务包,成为当前包(W00c2a)
-    standby ROBOT NAME --map M --pose x,y,yaw [--default] → 登记待命点(W00c2b)
+    standby ROBOT NAME --map M:VER --pose x,y,yaw [--default] → 登记待命点(W00c2b)
     serve     [--api-host 127.0.0.1] [--api-port 8443] [--broker mqtts://127.0.0.1:8883]
 """
 
@@ -181,12 +181,15 @@ def cmd_standby(home: Path, robot_id: str, name: str, map_id: str, pose: str,
         x, y, yaw = (float(v) for v in pose.split(","))
     except ValueError as exc:
         raise SiteError(f"--pose 要写成 x,y,yaw: {pose!r}") from exc
+    mid, sep, ver = map_id.rpartition(":")
+    if not sep or not mid or not ver:
+        raise SiteError(f"--map 要写成 <map_id>:<version>: {map_id!r}")
     db = SiteDB(home / "site.db")
     try:
         disp = Dispatcher(transport=None, db=db,  # type: ignore[arg-type] - 只用注册表
                           registry=Registry(db, site_id=cfg["site_id"]), now_ms=wall_ms)
-        StandbyManager(db, disp, now_ms=wall_ms).set(robot_id, name, map_id=map_id, x=x, y=y,
-                                                      yaw=yaw, default=default)
+        StandbyManager(db, disp, now_ms=wall_ms).set(robot_id, name, map_id=mid, map_version=ver,
+                                                      x=x, y=y, yaw=yaw, default=default or None)
     except StandbyError as exc:
         raise SiteError(str(exc)) from exc
     finally:
@@ -270,6 +273,7 @@ class Server:
     def stop(self) -> None:
         self._stop.set()
         for what, fn in (("API", self.api.stop),
+                         ("待命点", lambda: self.loop.call(self.standby.close, 10)),
                          ("派遣器", lambda: self.loop.call(self.dispatcher.close, 10)),
                          ("事件循环", self.loop.stop), ("数据库", self.db.close)):
             try:
@@ -323,7 +327,7 @@ def build_parser() -> argparse.ArgumentParser:
     sb = sub.add_parser("standby", help="登记(或改)一台狗的待命点")
     sb.add_argument("robot_id")
     sb.add_argument("name")
-    sb.add_argument("--map", required=True)
+    sb.add_argument("--map", required=True, help="<map_id>:<version>")
     sb.add_argument("--pose", required=True, help="x,y,yaw")
     sb.add_argument("--default", action="store_true")
     a = sub.add_parser("add-admin", help="加管理员账号")

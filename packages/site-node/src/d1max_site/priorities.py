@@ -15,6 +15,8 @@ MANUAL = 60
 EVENT = 80
 #: 回待命点任务的 task_id 前缀:排程执行器据此把「正在回待命点」看成空闲。
 STANDBY_PREFIX = "standby-"
+#: 事件派遣任务的 task_id 前缀(W00c2c)。
+INCIDENT_PREFIX = "incident-"
 
 
 def schedule_priority(entry_priority: int) -> int:

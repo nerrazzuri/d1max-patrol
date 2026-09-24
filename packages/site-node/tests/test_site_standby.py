@@ -35,21 +35,27 @@ def test_优先级表():
 
 async def test_登记待命点_默认只有一个_不合规矩的拒(站):
     t = 站
-    t.stb.set("A", "dock", map_id="estate-1", x=0.0, y=0.0, yaw=0.0, default=True)
-    t.stb.set("A", "gate", map_id="estate-1", x=1.0, y=0.0, yaw=0.0, default=True)
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.stb.set("A", "gate", map_id="estate-1", map_version="7", x=1.0, y=0.0, yaw=0.0, default=True)
     assert t.stb.default("A")["name"] == "gate"
     assert sorted(p["name"] for p in t.stb.list("A")) == ["dock", "gate"]
     with pytest.raises(StandbyError):
-        t.stb.set("ghost", "x", map_id="estate-1", x=0, y=0, yaw=0)
+        t.stb.set("ghost", "x", map_id="estate-1", map_version="7", x=0, y=0, yaw=0)
     with pytest.raises(StandbyError):
-        t.stb.set("A", "bad name", map_id="estate-1", x=0, y=0, yaw=0)
+        t.stb.set("A", "bad name", map_id="estate-1", map_version="7", x=0, y=0, yaw=0)
     with pytest.raises(StandbyError):
-        t.stb.set("A", "nan", map_id="estate-1", x=float("nan"), y=0, yaw=0)
+        t.stb.set("A", "nan", map_id="estate-1", map_version="7", x=float("nan"), y=0, yaw=0)
+    with pytest.raises(StandbyError):
+        t.stb.set("A", "big", map_id="estate-1", map_version="7", x=10**400, y=0, yaw=0)
+    t.stb.set("A", "gate", map_id="estate-1", map_version="7", x=2.0, y=0.0, yaw=0.0)
+    assert t.stb.default("A")["name"] == "gate", "改点时没写 default,原来的默认标记保留"
+    t.stb.remove("A", "gate")
+    assert t.stb.default("A") is None and [p["name"] for p in t.stb.list("A")] == ["dock"]
 
 
 async def test_任务结束自动回默认待命点_回程结束不再回(站):
     t = 站
-    t.stb.set("A", "dock", map_id="estate-1", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
     await t.send(t.site.goto("A", target(0.8), 0.8, issued_by="alice", priority=MANUAL))
     await t.run(200)
     goto = _cmds(t, "goto")
@@ -70,7 +76,7 @@ async def test_没有默认待命点就不回(站):
 
 async def test_巡检被手动派单抢占_账记preempted_派单完了回待命点(站, tmp_path):
     t = 站
-    t.stb.set("A", "dock", map_id="estate-1", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
     远 = {"mission": "loop", "map_id": "estate-1", "policy": {}, "waypoints": [
         {"name": "far", "pose": {"position": {"x": 6.0, "y": 0.0},
                                  "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}}]}
@@ -90,7 +96,7 @@ async def test_巡检被手动派单抢占_账记preempted_派单完了回待命
 
 async def test_回待命点途中排程到点_照派并抢占回程(站, tmp_path):
     t = 站
-    t.stb.set("A", "dock", map_id="estate-1", x=-6.0, y=0.0, yaw=0.0, default=True)
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=-6.0, y=0.0, yaw=0.0, default=True)
     import_bundle(t.db, 打包(tmp_path, 1), imported_by="alice", now_ms=t.clock())
     s = SiteScheduler(t.db, t.site, now_ms=t.clock)
     await t.send(t.stb.return_to("A", issued_by="alice"))
@@ -101,5 +107,57 @@ async def test_回待命点途中排程到点_照派并抢占回程(站, tmp_pat
     await t.send(s.tick())
     assert s.runs("nightly")[0]["outcome"] == "started"
     await t.run(100)
-    events = [e["kind"] for e in reversed(t.site.recent_events("A", 200))]
-    assert "task_preempted" in events
+    evs = list(reversed(t.site.recent_events("A", 200)))
+    pre = [e for e in evs if e["kind"] == "task_preempted"]
+    assert pre and pre[0]["data"]["task_id"].startswith("standby-"), "被抢占的是回程"
+    patrol = [c for c in t.site.commands("A") if c["kind"] == "patrol"][0]
+    assert patrol["ack_result"] == "accepted"
+
+
+async def test_人按了abort_狗停在原地_不自动回(站):
+    """abort 是站点唯一的停止键:人按它是要狗停下,不是要它开去别处。"""
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0,
+              default=True)
+    r = await t.send(t.site.goto("A", target(3.0), 0.8, issued_by="alice", priority=MANUAL))
+    await t.run(20)
+    await t.send(t.site.abort("A", r["task_id"], issued_by="alice"))
+    await t.run(100)
+    assert len(_cmds(t, "goto")) == 1
+
+
+async def test_任务失败_不自动回_哪怕狗此刻看起来就绪(站, monkeypatch):
+    """失败可能是安全裁定(比如前面有人):狗的就绪标志不一定变,站点不能靠「没就绪」来拦。
+    这里让 HAL 拒速度(导航 Failed → 航点跳过 → goto failed),狗一直是就绪的。"""
+    from d1max_contract.hal import VelocityResult
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0,
+              default=True)
+
+    async def 拒(cmd):
+        return VelocityResult(0.0, 0.0, clamped=False, rejected=True, reason="blocked")
+
+    monkeypatch.setattr(t.dog, "set_velocity", 拒)
+    await t.send(t.site.goto("A", target(3.0), 0.8, issued_by="alice", priority=MANUAL))
+    await t.run(200)
+    kinds = [e["kind"] for e in reversed(t.site.recent_events("A", 100))]
+    assert "task_failed" in kinds, kinds
+    assert t.site.dispatchable("A", "goto") == "", "狗看起来是就绪的"
+    assert len(_cmds(t, "goto")) == 1
+
+
+async def test_待命点的地图版本对不上就不回(站):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="6", x=0.0, y=0.0, yaw=0.0,
+              default=True)
+    from d1max_site.dispatcher import DispatchRefused
+    with pytest.raises(DispatchRefused, match="版本"):
+        await t.send(t.stb.return_to("A", issued_by="alice"))
+    sub = t.site.feed.subscribe()
+    await t.send(t.site.goto("A", target(0.4), 0.8, issued_by="alice", priority=MANUAL))
+    await t.run(200)
+    assert len(_cmds(t, "goto")) == 1
+    got = []
+    while (item := sub.get(0)) is not None:
+        got.append(item["kind"])
+    assert "standby_failed" in got, "回不去要让值守的人看见"

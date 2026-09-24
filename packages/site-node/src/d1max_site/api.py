@@ -6,7 +6,7 @@
 - ``POST /api/logout``
 - ``GET  /api/robots`` → ``{"robots":[…]}``
 - ``GET  /api/robots/<id>`` → 视图 + 最近事件 + 最近命令
-- ``POST /api/robots/<id>/goto`` ``{"target":MapPose,"max_speed_mps"?,"priority"?}``
+- ``POST /api/robots/<id>/goto`` ``{"target":MapPose,"max_speed_mps"?}``(优先级由站点定,W00c2b)
 - ``POST /api/robots/<id>/abort`` ``{"task_id"}``
 - ``POST /api/robots/<id>/patrol`` ``{"mission_id"}``:从当前任务包里起一趟(W00c2a)
 - ``POST /api/bundles`` ``{"path"}``:导入站点主机上的一个任务包目录(W00c2a)
@@ -300,8 +300,12 @@ class _Handler(BaseHTTPRequestHandler):
             raise HttpError(405, "只支持 GET/POST")
         d = self._body()
         try:
-            stb.set(robot_id, d.get("name"), map_id=d.get("map_id"), x=d.get("x"),
-                    y=d.get("y"), yaw=d.get("yaw", 0.0), default=bool(d.get("default")))
+            if d.get("remove") is True:
+                stb.remove(robot_id, d.get("name"))
+            else:
+                stb.set(robot_id, d.get("name"), map_id=d.get("map_id"),
+                        map_version=d.get("map_version"), x=d.get("x"), y=d.get("y"),
+                        yaw=d.get("yaw", 0.0), default=d.get("default"))
         except StandbyError as exc:
             raise HttpError(400, str(exc)) from exc
         self._send_json(200, {"points": stb.list(robot_id)})

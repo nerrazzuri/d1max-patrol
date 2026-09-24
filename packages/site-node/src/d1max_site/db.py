@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -101,12 +101,48 @@ CREATE TABLE IF NOT EXISTS standby_points (
     robot_id   TEXT NOT NULL,
     name       TEXT NOT NULL,
     map_id     TEXT NOT NULL,
+    map_version TEXT NOT NULL DEFAULT '',
     x          REAL NOT NULL,
     y          REAL NOT NULL,
     yaw        REAL NOT NULL,
     is_default INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (robot_id, name)
 );
+CREATE TABLE IF NOT EXISTS incident_sources (
+    name       TEXT PRIMARY KEY,
+    secret     TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS intercepts (
+    name   TEXT PRIMARY KEY,
+    map_id TEXT NOT NULL,
+    x      REAL NOT NULL,
+    y      REAL NOT NULL,
+    yaw    REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS zones (
+    zone      TEXT PRIMARY KEY,
+    intercept TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS incidents (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    source       TEXT NOT NULL,
+    event_id     TEXT NOT NULL,
+    type         TEXT NOT NULL,
+    zone         TEXT NOT NULL,
+    intercept    TEXT,
+    received_at  INTEGER NOT NULL,
+    occurred_at  INTEGER,
+    outcome      TEXT NOT NULL,
+    robot_id     TEXT,
+    task_id      TEXT,
+    result       TEXT,
+    merged_into  INTEGER,
+    note         TEXT NOT NULL DEFAULT '',
+    detail       TEXT NOT NULL DEFAULT '{}',
+    UNIQUE (source, event_id)
+);
+CREATE INDEX IF NOT EXISTS incidents_task ON incidents(task_id);
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,
     status       TEXT,
@@ -114,6 +150,13 @@ CREATE TABLE IF NOT EXISTS robot_state (
     updated_at   INTEGER NOT NULL
 );
 """
+
+
+#: 建表之后才加的列:(表, 列, 声明)。老库打开时补上。
+_ADDED_COLUMNS = (
+    ("commands", "priority", "INTEGER NOT NULL DEFAULT 0"),          # W00c2b
+    ("standby_points", "map_version", "TEXT NOT NULL DEFAULT ''"),   # W00c2b 内部评审
+)
 
 
 class SiteDB:
@@ -129,10 +172,10 @@ class SiteDB:
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_DDL)
             # 老库补列(CREATE TABLE IF NOT EXISTS 不会给已有的表加列)。
-            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(commands)")}
-            if "priority" not in cols:
-                self._conn.execute("ALTER TABLE commands ADD COLUMN priority INTEGER NOT NULL "
-                                   "DEFAULT 0")
+            for table, col, decl in _ADDED_COLUMNS:
+                cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+                if col not in cols:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
 

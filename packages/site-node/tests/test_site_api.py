@@ -367,13 +367,17 @@ def test_待命点API(站点):
     assert 站点.req("GET", "/api/robots/A/standby", token=tok)[0] == 404, "没开待命点的站点"
     站点.api.standby = StandbyManager(站点.db, 站点.disp, now_ms=wall)
     code, d = 站点.req("POST", "/api/robots/A/standby",
-                     {"name": "dock", "map_id": "estate-1", "x": 0, "y": 0, "yaw": 0,
-                      "default": True}, token=tok)
+                     {"name": "dock", "map_id": "estate-1", "map_version": "7", "x": 0,
+                      "y": 0, "yaw": 0, "default": True}, token=tok)
     assert code == 200, d
     code, d = 站点.req("GET", "/api/robots/A/standby", token=tok)
     assert code == 200 and d["points"][0]["name"] == "dock" and d["points"][0]["default"]
     code, d = 站点.req("POST", "/api/robots/A/standby", {"name": "x"}, token=tok)
     assert code == 400
+    for bad in ({"x": 10**400}, {"default": "false"}):
+        body = {"name": "y", "map_id": "estate-1", "map_version": "7", "x": 0, "y": 0,
+                "yaw": 0} | bad
+        assert 站点.req("POST", "/api/robots/A/standby", body, token=tok)[0] == 400, bad
 
     _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
     code, d = 站点.req("POST", "/api/robots/A/standby/return", {}, token=tok)

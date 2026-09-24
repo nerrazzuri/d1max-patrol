@@ -222,12 +222,14 @@ def test_任务包里有命名管道_导入被拒而不是卡住(home, tmp_path,
 
 def test_standby命令(home, capsys):
     assert site_main.main(["--home", str(home), "enroll", "A"]) == 0
-    assert site_main.main(["--home", str(home), "standby", "A", "dock", "--map", "estate-1",
+    assert site_main.main(["--home", str(home), "standby", "A", "dock", "--map", "estate-1:7",
                            "--pose", "1,2,0.5", "--default"]) == 0
     assert "默认" in capsys.readouterr().out
-    assert site_main.main(["--home", str(home), "standby", "A", "x", "--map", "m",
+    assert site_main.main(["--home", str(home), "standby", "A", "x", "--map", "m:1",
                            "--pose", "1,2"]) == 2
-    assert site_main.main(["--home", str(home), "standby", "ghost", "x", "--map", "m",
+    assert site_main.main(["--home", str(home), "standby", "A", "x", "--map", "no-version",
+                           "--pose", "1,2,3"]) == 2
+    assert site_main.main(["--home", str(home), "standby", "ghost", "x", "--map", "m:1",
                            "--pose", "1,2,3"]) == 2
 
 
@@ -240,9 +242,14 @@ def test_老库的commands表补上priority列(tmp_path):
               "issued_by TEXT NOT NULL, issued_at INTEGER NOT NULL, ack_result TEXT, "
               "ack_reason TEXT)")
     c.execute("INSERT INTO commands VALUES ('c','t','A','goto','{}','alice',1,NULL,NULL)")
+    c.execute("CREATE TABLE standby_points (robot_id TEXT NOT NULL, name TEXT NOT NULL, "
+              "map_id TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, yaw REAL NOT NULL, "
+              "is_default INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (robot_id, name))")
     c.commit()
     c.close()
     db = SiteDB(p)
     assert db.query("SELECT priority FROM commands")[0]["priority"] == 0
-    assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == "3"
+    assert "map_version" in {r[1] for r in db.query("PRAGMA table_info(standby_points)")}
+    from d1max_site.db import SCHEMA_VERSION
+    assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == str(SCHEMA_VERSION)
     db.close()
