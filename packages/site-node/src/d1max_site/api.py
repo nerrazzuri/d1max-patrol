@@ -11,6 +11,9 @@
 - ``POST /api/robots/<id>/patrol`` ``{"mission_id"}``:从当前任务包里起一趟(W00c2a)
 - ``POST /api/bundles`` ``{"path"}``:导入站点主机上的一个任务包目录(W00c2a)
 - ``GET/POST /api/robots/<id>/standby``、``POST /api/robots/<id>/standby/return``:待命点(W00c2b)
+- ``POST /api/incidents``:外部事件(**不要登录,要签名**,见 ``incidents.py``;W00c2c)
+- ``GET  /api/incidents``、``POST /api/intercepts``、``POST /api/zones``:
+  事件账、拦截点、防区(W00c2c)
 - ``GET  /api/schedule``:当前包的排程,每条下一轮何时、最近一次去向与结果(W00c2a)
 - ``GET  /api/events`` SSE:第一帧全量快照,之后是派遣器的 status/event/ack/reconcile;
   订阅者跟不上时补发一帧全量快照(``lagged``),不悄悄丢
@@ -69,7 +72,7 @@ def check_exposure(host: str, tls: tuple[Path, Path] | None) -> None:
 class SiteApi:
     def __init__(self, *, host: str, port: int, loop: LoopThread, dispatcher: Dispatcher,
                  accounts: Accounts, tls: tuple[Path, Path] | None = None,
-                 scheduler: Any = None, standby: Any = None,
+                 scheduler: Any = None, standby: Any = None, incidents: Any = None,
                  now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
@@ -81,6 +84,7 @@ class SiteApi:
         self.accounts = accounts
         self.scheduler = scheduler
         self.standby = standby
+        self.incidents = incidents
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         self._stopping = threading.Event()
         api = self
@@ -189,6 +193,8 @@ class _Handler(BaseHTTPRequestHandler):
             path = self.path.split("?", 1)[0]
             if method == "POST" and path == "/api/login":
                 return self._login()
+            if method == "POST" and path == "/api/incidents":
+                return self._incident_in()          # 摄像头不登录:验签
             user = self._user()
             if method == "POST" and path == "/api/logout":
                 self.site.accounts.logout(self._token() or "")
@@ -203,6 +209,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json(200, self.site.scheduler.view())
             if method == "POST" and path == "/api/bundles":
                 return self._import_bundle(user)
+            if path in ("/api/incidents", "/api/intercepts", "/api/zones"):
+                return self._incident_admin(method, path)
             m = _ROBOT.match(path)
             if m is not None:
                 robot_id = unquote(m.group(1))
@@ -309,6 +317,64 @@ class _Handler(BaseHTTPRequestHandler):
         except StandbyError as exc:
             raise HttpError(400, str(exc)) from exc
         self._send_json(200, {"points": stb.list(robot_id)})
+
+    def _desk(self):
+        if self.site.incidents is None:
+            raise HttpError(404, "这个站点没开事件派遣")
+        return self.site.incidents
+
+    def _raw_body(self) -> bytes:
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError as exc:
+            raise HttpError(400, "Content-Length 不是数") from exc
+        if n < 0:
+            raise HttpError(400, "Content-Length 不能是负的")
+        if n > MAX_BODY:
+            raise HttpError(413, f"请求体超过 {MAX_BODY} 字节")
+        return self.rfile.read(n) if n else b""
+
+    def _incident_in(self) -> None:
+        from d1max_site.incidents import IncidentAuthError, IncidentError
+        desk = self._desk()
+        raw = self._raw_body()
+        try:
+            desk.verify(self.headers.get("X-D1MAX-Source"), self.headers.get("X-D1MAX-Timestamp"),
+                        self.headers.get("X-D1MAX-Signature"), raw)
+        except IncidentAuthError as exc:
+            raise HttpError(401, f"验签没过: {exc}") from exc
+        try:
+            body = json.loads(raw or b"{}")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise HttpError(400, f"JSON 解析不了: {exc}") from exc
+        source = self.headers.get("X-D1MAX-Source") or ""
+        try:
+            desk.parse(body)
+        except IncidentError as exc:
+            raise HttpError(400, str(exc)) from exc
+        row = self.site.dispatch(lambda: desk.handle(source, body))
+        self._send_json(200, row)
+
+    def _incident_admin(self, method: str, path: str) -> None:
+        from d1max_site.incidents import IncidentError
+        desk = self._desk()
+        if path == "/api/incidents":
+            if method != "GET":
+                raise HttpError(405, "只支持 GET")
+            return self._send_json(200, {"incidents": desk.list()})
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        d = self._body()
+        try:
+            if path == "/api/intercepts":
+                desk.set_intercept(d.get("name"), map_id=d.get("map_id"),
+                                   map_version=d.get("map_version"), x=d.get("x"), y=d.get("y"),
+                                   yaw=d.get("yaw", 0.0))
+            else:
+                desk.map_zone(d.get("zone"), d.get("intercept"))
+        except IncidentError as exc:
+            raise HttpError(400, str(exc)) from exc
+        self._send_json(200, {"ok": True})
 
     def _import_bundle(self, user: str) -> None:
         from d1max_site.catalog import CatalogError, import_bundle

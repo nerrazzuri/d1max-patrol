@@ -23,6 +23,7 @@ from d1max_contract.messages import (
     Event,
     Reconcile,
     Status,
+    Telemetry,
 )
 from d1max_contract.topics import Topics
 from d1max_contract.transport import Message, Transport
@@ -58,6 +59,9 @@ class DispatchClient:
         self._reconcile_cbs: list[Callable[[Reconcile], None]] = []
         self._status_cbs: list[Callable[[Status], None]] = []
         self._ack_cbs: list[Callable[[Ack], None]] = []
+        self._telemetry_cbs: list[Callable[[Telemetry], None]] = []
+        #: 最近一条遥测(W00c2c:站点按位姿选最近的狗)。
+        self.telemetry: Telemetry | None = None
         self.status: Status | None = None
         #: 最近一次收到**实时**(非 retained)status 的时刻,用**本端**的钟。新鲜度按它算,
         #: 不按狗填的 ``last_seen``:狗的钟可能是错的(Orin 现场就错过)。retained 的那份
@@ -79,6 +83,7 @@ class DispatchClient:
         await self._t.subscribe(self.topics.status, self._on_status)
         await self._t.subscribe(self.topics.capabilities, self._on_caps)
         await self._t.subscribe(self.topics.reconcile, self._on_reconcile)
+        await self._t.subscribe(self.topics.telemetry, self._on_telemetry, qos=0)
 
     async def close(self) -> None:
         await self._t.close()
@@ -118,6 +123,9 @@ class DispatchClient:
 
     def on_status(self, cb: Callable[[Status], None]) -> None:
         self._status_cbs.append(cb)
+
+    def on_telemetry(self, cb: Callable[[Telemetry], None]) -> None:
+        self._telemetry_cbs.append(cb)
 
     def on_ack(self, cb: Callable[[Ack], None]) -> None:
         """每条回执都回调,包括等的人已经超时走了之后才到的那条。"""
@@ -189,3 +197,15 @@ class DispatchClient:
             return
         for cb in list(self._reconcile_cbs):
             cb(self.reconcile)
+
+    async def _on_telemetry(self, m: Message) -> None:
+        d = _decode(m.payload, "telemetry")
+        if d is None:
+            return
+        try:
+            self.telemetry = Telemetry.from_wire(d)
+        except ContractError as exc:
+            log.warning("telemetry 不合契约,丢弃: %s", exc)
+            return
+        for cb in list(self._telemetry_cbs):
+            cb(self.telemetry)

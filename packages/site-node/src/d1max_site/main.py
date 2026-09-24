@@ -15,6 +15,9 @@
     add-admin NAME                         → 口令从 D1MAX_SITE_PASSWORD 或交互输入
     import-bundle DIR                      → 导入任务包,成为当前包(W00c2a)
     standby ROBOT NAME --map M:VER --pose x,y,yaw [--default] → 登记待命点(W00c2b)
+    source-add NAME                        → 登记事件源,打印共享密钥(只这一次;W00c2c)
+    intercept NAME --map M:VER --pose x,y,yaw → 登记拦截点(W00c2c)
+    zone ZONE INTERCEPT                    → 防区映射到拦截点(W00c2c)
     serve     [--api-host 127.0.0.1] [--api-port 8443] [--broker mqtts://127.0.0.1:8883]
 """
 
@@ -196,6 +199,41 @@ def cmd_standby(home: Path, robot_id: str, name: str, map_id: str, pose: str,
         db.close()
 
 
+def _desk(home: Path, db: SiteDB):
+    from d1max_site.dispatcher import Dispatcher
+    from d1max_site.incidents import IncidentDesk
+    cfg = _load(home)
+    disp = Dispatcher(transport=None, db=db,  # type: ignore[arg-type] - 只用注册表与库
+                      registry=Registry(db, site_id=cfg["site_id"]), now_ms=wall_ms)
+    return IncidentDesk(db, disp, now_ms=wall_ms)
+
+
+def cmd_incident_admin(home: Path, what: str, **kw) -> str:
+    from d1max_site.incidents import IncidentError
+    _load(home)
+    db = SiteDB(home / "site.db")
+    try:
+        desk = _desk(home, db)
+        if what == "source":
+            return desk.add_source(kw["name"])
+        if what == "intercept":
+            mid, sep, ver = kw["map"].rpartition(":")
+            if not sep or not mid or not ver:
+                raise SiteError(f"--map 要写成 <map_id>:<version>: {kw['map']!r}")
+            try:
+                x, y, yaw = (float(v) for v in kw["pose"].split(","))
+            except ValueError as exc:
+                raise SiteError(f"--pose 要写成 x,y,yaw: {kw['pose']!r}") from exc
+            desk.set_intercept(kw["name"], map_id=mid, map_version=ver, x=x, y=y, yaw=yaw)
+            return ""
+        desk.map_zone(kw["zone"], kw["intercept"])
+        return ""
+    except IncidentError as exc:
+        raise SiteError(str(exc)) from exc
+    finally:
+        db.close()
+
+
 def cmd_add_admin(home: Path, name: str, password: str) -> None:
     _load(home)
     db = SiteDB(home / "site.db")
@@ -236,9 +274,12 @@ class Server:
         self.scheduler = SiteScheduler(self.db, self.dispatcher, now_ms=wall_ms)
         from d1max_site.standby import StandbyManager
         self.standby = StandbyManager(self.db, self.dispatcher, now_ms=wall_ms)
+        from d1max_site.incidents import IncidentDesk
+        self.incidents = IncidentDesk(self.db, self.dispatcher, now_ms=wall_ms)
         self.api = SiteApi(host=api_host, port=api_port, loop=self.loop,
                            dispatcher=self.dispatcher, accounts=self.accounts, tls=tls,
-                           scheduler=self.scheduler, standby=self.standby, now_ms=wall_ms)
+                           scheduler=self.scheduler, standby=self.standby,
+                           incidents=self.incidents, now_ms=wall_ms)
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -330,6 +371,15 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--map", required=True, help="<map_id>:<version>")
     sb.add_argument("--pose", required=True, help="x,y,yaw")
     sb.add_argument("--default", action="store_true")
+    so = sub.add_parser("source-add", help="登记事件源,打印共享密钥")
+    so.add_argument("name")
+    ic = sub.add_parser("intercept", help="登记(或改)拦截点")
+    ic.add_argument("name")
+    ic.add_argument("--map", required=True, help="<map_id>:<version>")
+    ic.add_argument("--pose", required=True, help="x,y,yaw")
+    zo = sub.add_parser("zone", help="防区映射到拦截点")
+    zo.add_argument("zone")
+    zo.add_argument("intercept")
     a = sub.add_parser("add-admin", help="加管理员账号")
     a.add_argument("name")
     s = sub.add_parser("serve", help="跑站点:派遣器 + 站点 API")
@@ -365,6 +415,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             cmd_standby(home, args.robot_id, args.name, args.map, args.pose, args.default)
             print(f"{args.robot_id} 的待命点 {args.name} 登记好了"
                   + ("(默认)" if args.default else ""))
+        elif args.cmd == "source-add":
+            secret = cmd_incident_admin(home, "source", name=args.name)
+            print(f"事件源 {args.name} 登记好了。共享密钥"
+                  f"(只显示这一次,配到摄像头/NVR 的转发器上):\n{secret}")
+        elif args.cmd == "intercept":
+            cmd_incident_admin(home, "intercept", name=args.name, map=args.map, pose=args.pose)
+            print(f"拦截点 {args.name} 登记好了")
+        elif args.cmd == "zone":
+            cmd_incident_admin(home, "zone", zone=args.zone, intercept=args.intercept)
+            print(f"防区 {args.zone} → 拦截点 {args.intercept}")
         elif args.cmd == "add-admin":
             pw = os.environ.get("D1MAX_SITE_PASSWORD") or getpass.getpass("口令: ")
             cmd_add_admin(home, args.name, pw)

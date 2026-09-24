@@ -382,3 +382,48 @@ def test_待命点API(站点):
     _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
     code, d = 站点.req("POST", "/api/robots/A/standby/return", {}, token=tok)
     assert code == 200 and d["task_id"].startswith("standby-"), d
+
+
+def test_事件回调要签名_不要登录_管理路由要登录(站点):
+    import hashlib
+    import hmac
+    import urllib.error
+    import urllib.request
+
+    from d1max_site.incidents import IncidentDesk
+    tok = 站点.login()
+    assert 站点.req("GET", "/api/incidents", token=tok)[0] == 404, "没开事件派遣的站点"
+    desk = IncidentDesk(站点.db, 站点.disp, now_ms=wall)
+    站点.api.incidents = desk
+    secret = desk.add_source("nvr-1")
+    assert 站点.req("POST", "/api/intercepts", {"name": "gate", "map_id": "estate-1",
+                                              "map_version": "7", "x": 0.5, "y": 0, "yaw": 0},
+                  token=tok)[0] == 200
+    assert 站点.req("POST", "/api/zones", {"zone": "yard", "intercept": "gate"}, token=tok)[0] \
+        == 200
+    assert 站点.req("POST", "/api/zones", {"zone": "yard", "intercept": "nope"}, token=tok)[0] \
+        == 400
+    assert 站点.req("GET", "/api/incidents")[0] == 401
+    _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
+
+    def 报(body: bytes, sig: str | None = None, ts: int | None = None):
+        ts = wall() if ts is None else ts
+        sig = sig or hmac.new(bytes.fromhex(secret), str(ts).encode() + b"." + body,
+                              hashlib.sha256).hexdigest()
+        r = urllib.request.Request(站点.api.url + "/api/incidents", data=body, method="POST")
+        r.add_header("X-D1MAX-Source", "nvr-1")
+        r.add_header("X-D1MAX-Timestamp", str(ts))
+        r.add_header("X-D1MAX-Signature", sig)
+        try:
+            with urllib.request.urlopen(r, timeout=15) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read() or b"{}")
+
+    body = json.dumps({"event_id": "e1", "type": "intrusion", "zone": "yard"}).encode()
+    assert 报(body, sig="00" * 32)[0] == 401
+    assert 报(b'{"event_id": ""}')[0] == 400
+    code, d = 报(body)
+    assert code == 200 and d["outcome"] == "dispatched" and d["robot_id"] == "A", d
+    code, d = 站点.req("GET", "/api/incidents", token=tok)
+    assert code == 200 and d["incidents"][0]["event_id"] == "e1"

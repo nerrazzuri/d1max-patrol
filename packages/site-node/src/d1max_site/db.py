@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS incident_sources (
 CREATE TABLE IF NOT EXISTS intercepts (
     name   TEXT PRIMARY KEY,
     map_id TEXT NOT NULL,
+    map_version TEXT NOT NULL,
     x      REAL NOT NULL,
     y      REAL NOT NULL,
     yaw    REAL NOT NULL
@@ -156,6 +157,7 @@ CREATE TABLE IF NOT EXISTS robot_state (
 _ADDED_COLUMNS = (
     ("commands", "priority", "INTEGER NOT NULL DEFAULT 0"),          # W00c2b
     ("standby_points", "map_version", "TEXT NOT NULL DEFAULT ''"),   # W00c2b 内部评审
+    ("intercepts", "map_version", "TEXT NOT NULL DEFAULT ''"),       # W00c2c
 )
 
 

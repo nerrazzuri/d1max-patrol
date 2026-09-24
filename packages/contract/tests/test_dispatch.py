@@ -149,3 +149,28 @@ async def test_attach只登记订阅不连接_站点一条连接挂多台狗():
                       b'"actuators":{},"sensing":{}}', qos=1, retain=True)
     await broker.drain()
     assert b.capabilities is not None and a.capabilities is None
+
+
+async def test_遥测也订_存最近一条_回调(tmp_path):
+    """W00c2c:站点按狗最近的位姿选最近的一台去拦截点。"""
+    import json
+
+    from d1max_contract.dispatch import DispatchClient
+    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
+    from d1max_contract.messages import MapPose, Telemetry
+    from d1max_contract.topics import Topics
+    broker = MemoryBroker()
+    t = Topics(site_id="s", robot_id="A")
+    site = DispatchClient(MemoryTransport(broker, "site"), t, now_ms=lambda: 1)
+    got = []
+    site.on_telemetry(got.append)
+    await site.start()
+    dog = MemoryTransport(broker, "dog")
+    await dog.connect()
+    tel = Telemetry(stamp=5, pose=MapPose(map_id="m", map_version="1", frame_id="map", x=1.0,
+                                          y=2.0, yaw=0.0), battery_pct=80.0, task_state=None,
+                    loc_quality=1.0)
+    await dog.publish(t.telemetry, json.dumps(tel.to_wire()).encode(), qos=0)
+    await dog.publish(t.telemetry, b"not json", qos=0)
+    await broker.drain()
+    assert site.telemetry is not None and site.telemetry.pose.x == 1.0 and len(got) == 1

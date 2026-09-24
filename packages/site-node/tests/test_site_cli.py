@@ -253,3 +253,16 @@ def test_老库的commands表补上priority列(tmp_path):
     from d1max_site.db import SCHEMA_VERSION
     assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == str(SCHEMA_VERSION)
     db.close()
+
+
+def test_事件派遣的命令行(home, capsys):
+    assert site_main.main(["--home", str(home), "source-add", "nvr-1"]) == 0
+    out = capsys.readouterr().out
+    assert "共享密钥" in out and len(out.strip().splitlines()[-1]) == 64
+    assert site_main.main(["--home", str(home), "source-add", "nvr-1"]) == 2
+    assert site_main.main(["--home", str(home), "intercept", "gate", "--map", "estate-1:7",
+                           "--pose", "1,0,0"]) == 0
+    assert site_main.main(["--home", str(home), "zone", "yard", "gate"]) == 0
+    assert site_main.main(["--home", str(home), "zone", "yard", "nope"]) == 2
+    assert site_main.main(["--home", str(home), "intercept", "x", "--map", "nover",
+                           "--pose", "1,0,0"]) == 2
