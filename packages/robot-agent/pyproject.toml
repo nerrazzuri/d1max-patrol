@@ -12,5 +12,8 @@ requires-python = ">=3.10"
 # 重做之后切掉。
 dependencies = ["d1max-contract", "d1max-patrol"]
 
+[project.scripts]
+d1max-agent = "d1max_agent.main:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

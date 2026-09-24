@@ -32,12 +32,21 @@ class HalDeviceBackend(DeviceBackend):
         self._now = now_ms
         self._had_control = False
         self._light_warned = self._gimbal_warned = False
+        self._connected = False
+
+    @property
+    def connected(self) -> bool:
+        """老 HTTP 面(``_StateHub._build``)读它画绿灯;SidecarDeviceBackend 也有。"""
+        return self._connected
 
     async def connect(self) -> None:
         await self._hal.connect()
+        self._connected = True
 
     async def close(self) -> None:
         await self._hal.close()
+        self._connected = False
+        self._had_control = False
 
     async def acquire_control(self) -> None:
         await self._hal.acquire_control()

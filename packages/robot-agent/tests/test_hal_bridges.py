@@ -270,3 +270,10 @@ async def test_设备桥在控制权丢失时发ControlLostEvent(台子):
     while not q.empty():
         got.append(q.get_nowait())
     assert any(isinstance(e, ControlLostEvent) for e in got)
+
+
+async def test_设备桥有connected给老HTTP面画绿灯(台子):
+    c, r, nav, dev = 台子
+    assert dev.connected is True
+    await dev.close()
+    assert dev.connected is False and await dev.has_control() is False
