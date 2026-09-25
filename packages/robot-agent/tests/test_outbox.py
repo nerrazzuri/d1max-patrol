@@ -156,3 +156,27 @@ def test_狗传的跟站点收的是同一张单子():
     from d1max_contract.intake import dog_may_upload
     for rel in ("manifest.json", "events.jsonl", "telemetry.jsonl", "photos/P1__front__t.jpg"):
         assert classify(rel) is not None and dog_may_upload(rel), rel
+
+
+def test_传完之后原地改写_大小没变_下一次扫盘之前也不删(箱):
+    """队列里记着「传完了」,但盘上那份已经被原地改写(大小一样,修改时间变了),扫盘还没来得及看见:
+    这时候删,新写的那份就丢了。"""
+    box, site, clock = 箱
+    run = _一趟(box.root, finished=False)
+    _跑到空(box, clock, 3)
+    assert run.exists()
+    m = run / "manifest.json"
+    new = json.dumps({"fingerprint": {}, "summary": {"r": 1}})
+    short = json.dumps({"fingerprint": {}, "summary": {}})
+    old = short[:-1] + " " * (len(new) - len(short)) + "}"   # 没跑完的清单,补空白到同样长
+    assert len(old) == len(new) and json.loads(old)["summary"] == {}
+    m.write_text(old)
+    _跑到空(box, clock, 20)                           # 传上去了,但没跑完,不删
+    assert run.exists()
+    import os as _os
+    m.write_text(new)
+    st = m.stat()
+    _os.utime(m, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    assert m.stat().st_size == len(old)
+    box._prune()                                     # 扫盘之前
+    assert run.exists(), "盘上的已经不是传上去的那一份了"

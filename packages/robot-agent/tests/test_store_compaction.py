@@ -20,8 +20,7 @@ def test_事件簿_确认过的多了就压实_没确认的一条不丢(tmp_path
     b = EventBook(p, boot_id="b1", now_ms=lambda: 1)
     for i in range(200):
         b.emit("tick", {"i": i})
-        if i < 190:
-            b.mark_acked(i + 1)
+    b.mark_acked(190)                                # 这一下压实:手里还有 10 条没确认的
     assert _lines(p) < 60, "确认过的不该一直留着"
     again = EventBook(p, boot_id="b1", now_ms=lambda: 1)
     assert [e.seq for e in again.pending()] == list(range(191, 201))

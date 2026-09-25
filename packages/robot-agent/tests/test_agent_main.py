@@ -323,8 +323,9 @@ def test_发件箱参数_运行记录落发件箱_接收口默认跟着broker走
         agent_main.parse_args([
             "--transport", "memory://", "--registration", str(tmp_path / "registration.json"),
             "--store-dir", str(tmp_path / "s"), "--map", "estate-1:7"])
-    with pytest.raises(SystemExit):
-        _outbox_args(tmp_path, "--intake", "http://site:8444")   # 只认 https(mTLS)
+    with pytest.raises(SystemExit):                         # 只认 https(mTLS)
+        _outbox_args(tmp_path, "--transport", "mqtts://site.lan:8883", *tls,
+                     "--intake", "http://site:8444")
 
 
 def test_发件箱装上了_盘况进遥测(tmp_path):
