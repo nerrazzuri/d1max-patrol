@@ -41,6 +41,8 @@ log = logging.getLogger(__name__)
 STALE_MS = 90_000
 #: 遥控任务的 task_id 前缀(W00c5c)。
 TELEOP_TASK_PREFIX = "teleop-"
+#: 遥控授予命令的有效期 = 等回执的时间 + 这么多(毫秒)。
+TELEOP_GRANT_TTL_SLACK_MS = 2_000
 #: ``video`` 命令本身至少活多久(毫秒),跟推流的有效期分开。见 :meth:`Dispatcher.video`。
 VIDEO_COMMAND_TTL_MS = 30_000
 COMMAND_TTL_MS = 60_000
@@ -412,7 +414,10 @@ class Dispatcher:
         return await self._send(c, robot_id, "teleop", teleop_grant_payload(
             lease_epoch=lease_epoch, operator=operator, lease_ttl_ms=lease_ttl_ms),
             issued_by=issued_by, task_id=f"{TELEOP_TASK_PREFIX}{lease_epoch}",
-            priority=TELEOP_PRIORITY)
+            priority=TELEOP_PRIORITY,
+            # 授予的有效期只比等回执长一点(W00c5c 内部评审):站点等不到回执就当没开成,
+            # 晚到狗那儿的授予不许再起一趟没人握着的遥控、去抢占正在出警的任务。
+            ttl_ms=int(self.ack_timeout_s * 1000) + TELEOP_GRANT_TTL_SLACK_MS)
 
     async def teleop_lease(self, robot_id: str, lease: TeleopLease, *,
                            timeout_s: float) -> Ack:
@@ -442,10 +447,11 @@ class Dispatcher:
 
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
                     *, issued_by: str, task_id: str | None = None, priority: int = 0,
-                    before_send: Callable[[Any], None] | None = None) -> dict[str, Any]:
+                    before_send: Callable[[Any], None] | None = None,
+                    ttl_ms: int = COMMAND_TTL_MS) -> dict[str, Any]:
         if not issued_by:
             raise DispatchRefused("没有已认证的派单人")
-        cmd = c.new_command(kind, payload, ttl_ms=COMMAND_TTL_MS,
+        cmd = c.new_command(kind, payload, ttl_ms=ttl_ms,
                             control_epoch=self.registry.control_epoch(robot_id),
                             task_id=task_id, priority=priority)
         with self.db.tx() as tx:                    # 先落库:发出去之后进程死了也有账

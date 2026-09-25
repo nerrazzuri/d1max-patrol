@@ -137,7 +137,10 @@ class WsTeleopLink implements TeleopLink {
       if (m is! String) return;
       try {
         final d = jsonDecode(m);
-        if (d is Map<String, dynamic>) _ctl.add(d);
+        if (d is Map<String, dynamic>) {
+          if (d['kind'] == 'ended') _endedSeen = true;
+          _ctl.add(d);
+        }
       } on FormatException {
         return;
       }
@@ -149,11 +152,17 @@ class WsTeleopLink implements TeleopLink {
   final StreamController<Map<String, dynamic>> _ctl =
       StreamController<Map<String, dynamic>>.broadcast();
   bool _closed = false;
+  bool _endedSeen = false;
+
+  /// 帧的序号与发出时刻（本机单调钟，毫秒）：站点按它丢掉乱序、积压的帧（W00c5c 内部评审）。
+  int _seq = 0;
+  final Stopwatch _clock = Stopwatch()..start();
 
   void _done() {
     if (_closed) return;
     _closed = true;
-    _ctl.add(<String, dynamic>{'kind': 'ended', 'reason': 'disconnected'});
+    // 站点已经说了为什么结束（被接管、有人按了停……），就不再补一句笼统的「断了」盖掉它。
+    if (!_endedSeen) _ctl.add(<String, dynamic>{'kind': 'ended', 'reason': 'disconnected'});
     unawaited(_ctl.close());
     _io.close(force: true);
   }
@@ -166,7 +175,13 @@ class WsTeleopLink implements TeleopLink {
   @override
   void send(double vx, double wz) {
     if (_closed) return;
-    _ws.add(jsonEncode(<String, dynamic>{'vx': vx, 'wz': wz}));
+    _seq++;
+    _ws.add(jsonEncode(<String, dynamic>{
+      'seq': _seq,
+      't': _clock.elapsedMicroseconds / 1000.0,
+      'vx': vx,
+      'wz': wz,
+    }));
   }
 
   @override
@@ -420,7 +435,8 @@ class SiteClient implements SiteApi {
       }
       final sock = await resp.detachSocket();
       final ws = WebSocket.fromUpgradedSocket(sock, serverSide: false)
-        ..pingInterval = const Duration(seconds: 1);
+        // 3 s（跟站点判死一样长）：4G 上一次 pong 慢了 1 s 就断，遥控会三天两头掉。
+        ..pingInterval = const Duration(seconds: 3);
       return WsTeleopLink(ws, io);
     } on SocketException catch (e) {
       io.close(force: true);
@@ -431,6 +447,13 @@ class SiteClient implements SiteApi {
     } on TimeoutException {
       io.close(force: true);
       throw const SiteError(0, '连站点超时');
+    } on HttpException catch (e) {
+      // 握手半路断了（站点重启、4G 切基站）：也要落成 SiteError，页面才会说出来、不卡在「正在拿遥控」。
+      io.close(force: true);
+      throw SiteError(0, '遥控握手没完成：${e.message}');
+    } on WebSocketException catch (e) {
+      io.close(force: true);
+      throw SiteError(0, '遥控握手没完成：${e.message}');
     }
   }
 

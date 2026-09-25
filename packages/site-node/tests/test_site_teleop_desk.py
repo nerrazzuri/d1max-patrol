@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from types import SimpleNamespace
@@ -69,6 +70,26 @@ class _U(str):
     role = ""
 
 
+class _手机:
+    """一台手机的帧:序号从 1 起,发出时刻按它自己的钟(跟站点的钟差多少都行),每帧 100 ms。"""
+
+    def __init__(self) -> None:
+        self.seq = 0
+        self.t = 5_000_000.0                          # 手机的单调钟(毫秒)
+        self.rx = 100.0                               # 站点收到的时刻(秒,站点的单调钟)
+
+    def 帧(self, vx, wz=0, *, late_ms=0.0, seq=None):
+        self.seq += 1
+        self.t += 100
+        self.rx += 0.1
+        d = {"seq": self.seq if seq is None else seq, "t": self.t - late_ms, "vx": vx, "wz": wz}
+        return json.dumps(d)
+
+
+def _发(k, s, ph, vx, wz=0, **kw):
+    k.on_messages(s, [ph.帧(vx, wz, **kw)], rx=ph.rx)
+
+
 def _u(name, role):
     u = _U(name)
     u.role = role
@@ -127,10 +148,19 @@ def test_同一台狗同时开两个_一个开_另一个当场409(desk):
     assert got["s"].operator == "gina" and d.grants == 1
 
 
+def _等(cond, timeout=3.0):
+    t0 = time.monotonic()
+    while not cond():
+        if time.monotonic() - t0 > timeout:
+            raise AssertionError("等不到")
+        time.sleep(0.01)
+
+
 def test_结束之后晚到的摇杆帧不再发出去(desk):
     k, d = desk
     s = k.open("A", _u("gina", "guard"))
-    k.on_message(s, '{"vx": 0.3, "wz": 0}')
+    ph = _手机()
+    _发(k, s, ph, 0.3)
     inside = threading.Event()
     go = threading.Event()
 
@@ -139,7 +169,7 @@ def test_结束之后晚到的摇杆帧不再发出去(desk):
             inside.set()
             go.wait(2)
     d.frame_hook = _hook
-    t = threading.Thread(target=k.on_message, args=(s, '{"vx": 0.3, "wz": 0}'))
+    t = threading.Thread(target=_发, args=(k, s, ph, 0.3))
     t.start()
     assert inside.wait(2)
     closer = threading.Thread(target=k.close, args=(s, "disconnected"))
@@ -148,7 +178,7 @@ def test_结束之后晚到的摇杆帧不再发出去(desk):
     go.set()
     t.join(2)
     closer.join(2)
-    k.on_message(s, '{"vx": 0.3, "wz": 0}')         # 已经结束:丢掉
+    _发(k, s, ph, 0.3)                               # 已经结束:丢掉
     seqs = [f.seq for f in d.frames]
     assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), seqs
     assert d.frames[-1].vx == 0.0 and d.frames[-1].wz == 0.0, "最后一帧必须是零速"
@@ -158,6 +188,7 @@ def test_查过没结束_还没发出去就被结束了_这一帧也不发(desk)
     k, d = desk
     d.status.task = None
     s = k.open("A", _u("gina", "guard"))
+    ph = _手机()
     checked = threading.Event()
     go = threading.Event()
 
@@ -165,7 +196,7 @@ def test_查过没结束_还没发出去就被结束了_这一帧也不发(desk)
         checked.set()
         go.wait(2)
     d.video_hook = _卡住
-    t = threading.Thread(target=k.on_message, args=(s, '{"vx": 0.3, "wz": 0}'))
+    t = threading.Thread(target=_发, args=(k, s, ph, 0.3))
     t.start()
     assert checked.wait(2)
     d.video_hook = None
@@ -175,29 +206,66 @@ def test_查过没结束_还没发出去就被结束了_这一帧也不发(desk)
     assert [(f.vx, f.wz) for f in d.frames] == [(0.0, 0.0)], "结束之后不许再有运动帧"
 
 
-def test_没画面不转发_在动的话只发一次零速_告诉手机(desk):
+def test_没画面不转发_在动的话只发一次零速_画面回来要先松手(desk):
     k, d = desk
     s = k.open("A", _u("gina", "guard"))
+    ph = _手机()
     told = []
     s.ws = SimpleNamespace(send_text=told.append, close=lambda *a: None)
-    k.on_message(s, '{"vx": 0.3, "wz": 0}')
+    _发(k, s, ph, 0.3)
     d.video = False
     for _ in range(3):
-        k.on_message(s, '{"vx": 0.3, "wz": 0}')
+        _发(k, s, ph, 0.3)
     assert [(f.vx, f.wz) for f in d.frames] == [(0.3, 0.0), (0.0, 0.0)]
     assert told == ['{"kind": "video", "ok": false}']
     d.video = True
-    k.on_message(s, '{"vx": 0.3, "wz": 0}')
-    assert d.frames[-1].vx == 0.3 and told[-1] == '{"kind": "video", "ok": true}'
+    _发(k, s, ph, 0.3)                               # 杆值还卡在画面断之前:不转
+    _发(k, s, ph, 0.3)
+    assert [(f.vx, f.wz) for f in d.frames] == [(0.3, 0.0), (0.0, 0.0)], \
+        "画面回来之后要先收到一帧零速(松手),才转发运动"
+    assert told[-1] == '{"kind": "video", "ok": true}'
+    _发(k, s, ph, 0.0)
+    _发(k, s, ph, 0.3)
+    assert [(f.vx, f.wz) for f in d.frames][-2:] == [(0.0, 0.0), (0.3, 0.0)]
+
+
+def test_手机那一段也判帧_乱序积压的不转_一批里只转最新的(desk):
+    k, d = desk
+    s = k.open("A", _u("gina", "guard"))
+    ph = _手机()
+    for _ in range(5):
+        _发(k, s, ph, 0.1)                           # 基线:在途稳定
+    n = len(d.frames)
+    _发(k, s, ph, 0.4, late_ms=400)                  # 4G 憋住的旧帧:比基线多 400 ms
+    _发(k, s, ph, 0.4, seq=2)                        # 序号回退
+    assert len(d.frames) == n and s.phone_dropped == {"seq": 1, "late": 1, "rate": 0}
+    batch = [ph.帧(0.1), ph.帧(0.2), ph.帧(0.3)]     # 一次收下来三帧:只转最新的
+    k.on_messages(s, batch, rx=ph.rx)
+    assert [f.vx for f in d.frames][n:] == [0.3]
+    for bad in ('{"vx": 0.2, "wz": 0}', '{"seq": 99, "vx": 0.2, "wz": 0}',
+                '{"seq": 99, "t": "x", "vx": 0.2, "wz": 0}'):
+        k.on_messages(s, [bad], rx=ph.rx + 1)        # 没序号、没时刻的不收
+    assert [f.vx for f in d.frames][n:] == [0.3]
+
+
+def test_运动帧太密的不转_停的那一帧不压(desk):
+    k, d = desk
+    s = k.open("A", _u("gina", "guard"))
+    ph = _手机()
+    _发(k, s, ph, 0.3)
+    k.on_messages(s, [ph.帧(0.3)], rx=ph.rx - 0.09)  # 离上一帧才 10 ms
+    k.on_messages(s, [ph.帧(0.0)], rx=ph.rx - 0.19)  # 停:不压
+    assert [f.vx for f in d.frames] == [0.3, 0.0] and s.phone_dropped["rate"] == 1
 
 
 def test_站点自己夹一次限速_看不懂的帧丢掉(desk):
     k, d = desk
     s = k.open("A", _u("gina", "guard"))
-    k.on_message(s, '{"vx": 3.0, "wz": -9}')
-    k.on_message(s, '{"vx": true, "wz": 0}')
-    k.on_message(s, '{"vx": NaN, "wz": 0}')
-    k.on_message(s, '[1, 2]')
+    ph = _手机()
+    _发(k, s, ph, 3.0, -9)
+    k.on_messages(s, ['{"seq": 50, "t": 1, "vx": true, "wz": 0}'], rx=ph.rx + 1)
+    k.on_messages(s, ['{"seq": 51, "t": 1, "vx": NaN, "wz": 0}'], rx=ph.rx + 2)
+    k.on_messages(s, ['[1, 2]'], rx=ph.rx + 3)
     assert [(f.vx, f.wz) for f in d.frames] == [(0.5, -0.75)]
     assert d.frames[0].ttl_ms == 300 and d.frames[0].lease_epoch == 1
 
@@ -221,6 +289,7 @@ def test_续租连续两次续不上_结束说续不上(desk):
     k.step()
     assert not s.ended.is_set(), "一次续不上还不算"
     k.step()
+    _等(lambda: s.ended.is_set())
     assert s.end_reason == "lease_lost"
 
 
@@ -229,5 +298,76 @@ def test_狗掉线_遥控结束(desk):
     s = k.open("A", _u("gina", "guard"))
     d.status.online = False
     k.step()
+    _等(lambda: bool(d.leases))
     assert s.end_reason == "robot_offline"
     assert d.leases[-1].action == "release"
+
+
+def test_halt先收遥控再发_回执超时也已经收了(desk):
+    k, d = desk
+    s = k.open("A", _u("gina", "guard"))
+
+    async def 超时(robot_id, *, issued_by):
+        raise TimeoutError("狗没回话")
+    d.halt = 超时
+    with pytest.raises(TimeoutError):
+        k.halt("A", _u("olga", "owner"))
+    _等(lambda: bool(d.leases))                      # 收尾在别的线程:等它放完租
+    assert s.end_reason == "halt" and d.frames[-1].vx == 0.0
+
+
+def test_开租约的过程中有人按了停_这个租约不给(desk):
+    k, d = desk
+    d.grant_gate.clear()
+    got = {}
+
+    def _开():
+        try:
+            k.open("A", _u("gina", "guard"))
+        except TeleopRefused as exc:
+            got["refused"] = (exc.status, exc.message)
+    t = threading.Thread(target=_开)
+    t.start()
+    time.sleep(0.2)
+    k.halt("A", _u("olga", "owner"))
+    d.grant_gate.set()
+    t.join(5)
+    assert got["refused"][0] == 409 and "停车" in got["refused"][1]
+    assert k.active("A") is None and d.leases[-1].action == "release"
+
+
+def test_授予没等到回执_追发放租(desk):
+    k, d = desk
+
+    async def 超时(robot_id, **kw):
+        raise TimeoutError("狗没回话")
+    d.teleop_grant = 超时
+    with pytest.raises(TeleopRefused) as e:
+        k.open("A", _u("gina", "guard"))
+    assert e.value.status == 502
+    _等(lambda: bool(d.leases))
+    assert (d.leases[-1].action, d.leases[-1].lease_epoch) == ("release", 1)
+
+
+def test_同一个人刚放开又来_等狗那头上一趟停稳再给(desk):
+    k, d = desk
+    s = k.open("A", _u("gina", "guard"))
+    k.close(s, "released")                           # status.task 还是 teleop-1(狗在停)
+    threading.Timer(0.3, lambda: setattr(d.status, "task", None)).start()
+    t0 = time.monotonic()
+    s2 = k.open("A", _u("gina", "guard"))
+    assert time.monotonic() - t0 >= 0.25 and s2.epoch == 2
+
+
+def test_站点重启_上次没收尾的租约行记成site_restart_没接管不记理由(tmp_path):
+    db = SiteDB(tmp_path / "site.db")
+    d = _Disp(db)
+    k = TeleopDesk(d, _Loop(), audit=None, now_ms=lambda: 1, video_ok=lambda r: True,
+                   renew_s=60)
+    k.open("A", _u("gina", "guard"), takeover_reason="没人可接管")
+    rows = db.query("SELECT takeover_reason, ended_at FROM teleop_leases")
+    assert rows[0]["takeover_reason"] is None and rows[0]["ended_at"] is None
+    TeleopDesk(d, _Loop(), audit=None, now_ms=lambda: 2, video_ok=lambda r: True)
+    rows = db.query("SELECT end_reason, ended_at FROM teleop_leases")
+    assert (rows[0]["end_reason"], rows[0]["ended_at"]) == ("site_restart", 2)
+    k.close_all()

@@ -60,7 +60,8 @@ class TeleopTask(Task):
     async def start(self) -> None:
         self.state = TaskState.RUNNING
         self._until = self._now() + self._lease_ttl
-        log.info("遥控开始:%s 代次 %d(%s)", self.task_id, self.lease_epoch, self.operator)
+        # 操作者是谁只记在站点(审计);狗上的日志不留人名(决策 8)。
+        log.info("遥控开始:%s 代次 %d", self.task_id, self.lease_epoch)
 
     # ------------------------------------------------------------ 进来的东西
 

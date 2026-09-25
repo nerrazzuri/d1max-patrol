@@ -11,6 +11,11 @@
   站点发出时刻、300 ms 有效期,经 QoS 0 的专用主题发出去。**不缓存、不插值、不补发**。
 - **没画面不许动**:``video_ok(robot)`` 为假时不转发运动,只发一次零速并告诉手机。
 - **审计**:谁、哪台狗、租约起止、结束原因、接管人与理由。**不记每一帧摇杆值。**
+- **手机那一段也查帧**(W00c5c 内部评审):手机的每帧带自己的单调序号与发出时刻;站点按跟狗一样的
+  规矩丢掉乱序、积压的(4G 憋一下攒的旧摇杆值不许被站点当成新的转出去),积压里只转最新的一帧,
+  转发频率有上限。
+- **画面断过之后要先松手**:画面回来时手机上的杆值可能还卡在断之前(手指抬起被灰掉的杆吞了);
+  站点收到一帧零速之前不转发运动。
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,6 +40,12 @@ from d1max_contract.teleop import (
 from d1max_site.dispatcher import TELEOP_TASK_PREFIX, DispatchRefused
 
 log = logging.getLogger(__name__)
+
+#: 手机那一段:在途比基线多出这么多(毫秒)就算积压、丢掉(跟狗那头同一个数)。
+PHONE_MAX_TRANSIT_MS = 250
+PHONE_BASELINE_WINDOW = 50
+#: 转发频率上限:两帧运动之间至少隔这么久(毫秒)。手机 100 ms 一帧;更密的是坏客户端。
+MIN_FORWARD_GAP_MS = 50
 
 
 class TeleopRefused(RuntimeError):
@@ -62,6 +74,13 @@ class Session:
     end_reason: str = ""
     #: 发帧的锁:序号 + 发出去是一步(手机那条线程和续租线程都会发);结束之后只许发那一帧零速。
     send_lock: threading.Lock = field(default_factory=threading.Lock)
+    #: 手机那一段的判帧:上一帧的序号、在途基线(站点单调钟 − 手机单调钟 的滑动最小值)。
+    phone_seq: int = 0
+    phone_offsets: deque = field(default_factory=lambda: deque(maxlen=PHONE_BASELINE_WINDOW))
+    phone_dropped: dict = field(default_factory=lambda: {"seq": 0, "late": 0, "rate": 0})
+    last_fwd: float = 0.0
+    #: 画面断过:收到一帧零速之前不转发运动。
+    need_zero: bool = False
 
 
 class TeleopDesk:
@@ -84,6 +103,14 @@ class TeleopDesk:
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        #: 每台狗最近一次 halt 的时刻(单调钟):开租约的过程中有人按了停,这个租约不给。
+        self._halted_at: dict[str, float] = {}
+        # 上次站点崩了留下的「还开着」的租约行:狗那头早因租约到期停了,这里补上结束。
+        with dispatcher.db.tx() as c:
+            n = c.execute("UPDATE teleop_leases SET ended_at=?, end_reason='site_restart' "
+                          "WHERE ended_at IS NULL", (now_ms(),)).rowcount
+        if n:
+            log.warning("上次站点没收尾的遥控租约 %d 条,记成 site_restart", n)
 
     # ------------------------------------------------------------ 开
 
@@ -98,6 +125,7 @@ class TeleopDesk:
         锁里只做判断、占位;接管的等待(最多 ``wait_released_s``)和问狗都在锁外 —— 这段时间里
         同一台狗的停车、查询、别的狗的遥控都不许被挡住。"""
         name, role = str(user), getattr(user, "role", "")
+        t0 = time.monotonic()
         with self._lock:
             if robot_id in self._opening:
                 raise TeleopRefused(409, f"{robot_id} 正在开遥控,稍后再试")
@@ -110,13 +138,15 @@ class TeleopDesk:
             self._opening.add(robot_id)
         try:
             if cur is not None:
-                self._takeover(cur, by=name, reason=takeover_reason)
-            return self._grant(robot_id, name, takeover_reason)
+                self.close(cur, "taken_over", by=name, detail={"takeover_reason": takeover_reason})
+            # 接管、或者同一个人刚放开又来:狗那头上一趟遥控还在停,先等它停稳(先停车再移交)。
+            self._wait_released(robot_id)
+            return self._grant(robot_id, name, takeover_reason if cur is not None else "", t0)
         finally:
             with self._lock:
                 self._opening.discard(robot_id)
 
-    def _grant(self, robot_id: str, name: str, takeover_reason: str) -> Session:
+    def _grant(self, robot_id: str, name: str, takeover_reason: str, t0: float) -> Session:
         if not self._video_ok(robot_id):
             raise TeleopRefused(409, f"{robot_id} 没有画面:没画面不许动")
         caps = self._caps(robot_id)
@@ -129,7 +159,9 @@ class TeleopDesk:
             self._end_row(row_id, "refused")
             raise TeleopRefused(409, str(exc)) from exc
         except Exception as exc:
+            # 狗可能收到了、可能没有:授予命令的有效期很短,再追一条放租,晚到的授予也起不来。
             self._end_row(row_id, "refused")
+            self._release_async(robot_id, epoch)
             raise TeleopRefused(502, f"狗没回话: {type(exc).__name__}") from exc
         ack = r.get("ack", {})
         if ack.get("result") != AckResult.ACCEPTED.value:
@@ -142,8 +174,22 @@ class TeleopDesk:
             self._sessions[robot_id] = s
         self._audit(name, "teleop_start", robot_id, {"lease_epoch": epoch,
                                                      "takeover_reason": takeover_reason})
+        if self._halted_at.get(robot_id, -1.0) >= t0:
+            # 开的过程中有人按了停:这个租约当场收回。
+            self.close(s, "halt")
+            raise TeleopRefused(409, "开遥控的过程中有人按了停车")
         self._ensure_thread()
         return s
+
+    def _release_async(self, robot_id: str, epoch: int) -> None:
+        def _go() -> None:
+            try:
+                self.loop.call(lambda: self.dispatcher.teleop_lease(
+                    robot_id, TeleopLease(action="release", lease_epoch=epoch), timeout_s=2.0),
+                    timeout_s=5.0)
+            except Exception:  # noqa: BLE001 - 追发是尽力而为;授予命令本身有效期很短
+                log.info("没接上的授予(%s 代次 %d)追发放租也没回话", robot_id, epoch)
+        threading.Thread(target=_go, daemon=True, name="teleop-release").start()
 
     def _caps(self, robot_id: str) -> tuple[float, float]:
         c = self.dispatcher.clients.get(robot_id)
@@ -172,48 +218,89 @@ class TeleopDesk:
                       "takeover_by) WHERE id=? AND ended_at IS NULL",
                       (self._now(), reason, by or None, row_id))
 
-    def _takeover(self, cur: Session, *, by: str, reason: str) -> None:
-        """强制接管:旧连接先被告知、关掉,狗先停(旧租约放掉、等狗的遥控任务停稳)。"""
-        self.close(cur, "taken_over", by=by, detail={"takeover_reason": reason})
+    def _wait_released(self, robot_id: str) -> None:
+        """狗那头还在跑(或在停)上一趟遥控:等它停稳进终态,最多 ``wait_released_s``。"""
         deadline = time.monotonic() + self.wait_released_s
-        while time.monotonic() < deadline:
-            c = self.dispatcher.clients.get(cur.robot_id)
+        while True:
+            c = self.dispatcher.clients.get(robot_id)
             task = c.status.task if c is not None and c.status is not None else None
             if task is None or not task.task_id.startswith(TELEOP_TASK_PREFIX):
                 return
+            if time.monotonic() >= deadline:
+                raise TeleopRefused(409, f"{robot_id} 上一趟遥控还没停稳,稍后再试")
             time.sleep(0.1)
-        raise TeleopRefused(409, f"{cur.robot_id} 上一位的遥控还没停稳,稍后再试")
 
     # ------------------------------------------------------------ 帧
 
     def on_message(self, s: Session, text: str) -> None:
-        """手机发来的一条:``{"vx", "wz"}`` 或 ``{"kind": "release"}``。看不懂的丢掉。"""
-        if s.ended.is_set():
-            return
-        try:
-            d = json.loads(text)
-        except ValueError:
-            return
-        if not isinstance(d, dict):
-            return
-        if d.get("kind") == "release":
-            self.close(s, "released")
-            return
-        vx, wz = d.get("vx"), d.get("wz")
+        self.on_messages(s, [text])
+
+    def on_messages(self, s: Session, texts: list[str], *, rx: float | None = None) -> None:
+        """手机发来的一批(一次从连接上收下来的,旧的在前):``{"seq", "t", "vx", "wz"}`` 或
+        ``{"kind": "release"}``。看不懂的丢掉。**摇杆帧每一帧都过判帧(基线要看全),但只转发
+        最新的那一帧** —— 积压里的旧杆值不转。"""
+        rx_s = rx if rx is not None else time.monotonic()
+        rx_ms = rx_s * 1000.0
+        latest: tuple[float, float] | None = None
+        for text in texts:
+            if s.ended.is_set():
+                return
+            try:
+                d = json.loads(text)
+            except ValueError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            if d.get("kind") == "release":
+                self.close(s, "released")
+                return
+            v = self._phone_frame(s, d, rx_ms)
+            if v is not None:
+                latest = v
+        if latest is not None:
+            self._drive(s, *latest, rx_s)
+
+    def _phone_frame(self, s: Session, d: dict, rx_ms: float) -> tuple[float, float] | None:
+        """手机那一段的判帧(跟狗那头同一套规矩):序号严格递增;在途时间(站点单调钟 − 手机单调钟)
+        比滑动最小值多出 ``PHONE_MAX_TRANSIT_MS`` 就是积压,丢掉。收下返回夹过限速的 (vx, wz)。"""
+        seq, t, vx, wz = d.get("seq"), d.get("t"), d.get("vx"), d.get("wz")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+            return None
         if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
-                   for v in (vx, wz)):
-            return
-        vx = max(-s.max_vx, min(s.max_vx, float(vx)))
-        wz = max(-s.max_wz, min(s.max_wz, float(wz)))
+                   for v in (t, vx, wz)):
+            return None
+        if seq <= s.phone_seq:
+            s.phone_dropped["seq"] += 1
+            return None
+        s.phone_seq = seq
+        offset = rx_ms - float(t)
+        s.phone_offsets.append(offset)
+        if offset - min(s.phone_offsets) > PHONE_MAX_TRANSIT_MS:
+            s.phone_dropped["late"] += 1
+            return None
+        return (max(-s.max_vx, min(s.max_vx, float(vx))),
+                max(-s.max_wz, min(s.max_wz, float(wz))))
+
+    def _drive(self, s: Session, vx: float, wz: float, rx_s: float) -> None:
+        zero = vx == 0.0 and wz == 0.0
         ok = self._video_ok(s.robot_id)
         if ok != s.video_told:
             s.video_told = ok
             self._tell(s, {"kind": "video", "ok": ok})
         if not ok:
-            # 没画面不许动:不转发运动;在动的话发一次零速。
+            # 没画面不许动:不转发运动;在动的话发一次零速。画面回来之后要先收到一帧零速(松手)。
+            s.need_zero = True
             if s.moving:
                 self._send_frame(s, 0.0, 0.0)
             return
+        if s.need_zero:
+            if not zero:
+                return                             # 画面断过:杆值可能是断之前卡住的,先松手
+            s.need_zero = False
+        if not zero and (rx_s - s.last_fwd) * 1000.0 < MIN_FORWARD_GAP_MS:
+            s.phone_dropped["rate"] += 1           # 太密的运动帧不转;停的那一帧不压
+            return
+        s.last_fwd = rx_s
         self._send_frame(s, vx, wz)
 
     def _send_frame(self, s: Session, vx: float, wz: float, *, final: bool = False) -> None:
@@ -272,14 +359,20 @@ class TeleopDesk:
                      **(detail or {})})
 
     def halt(self, robot_id: str, user) -> dict[str, Any]:
-        """停车:走 ``cmd``,不走遥控连接;这台狗上的遥控租约也结束。"""
-        r = self.loop.call(lambda: self.dispatcher.halt(robot_id, issued_by=str(user)),
-                           timeout_s=self.dispatcher.ack_timeout_s + 5)
+        """停车:走 ``cmd``,不走遥控连接。**先**结束这台狗上的遥控(零速、放租,另一条线程里做,
+        不等狗回话)、记下这一刻(正在开的租约也不给了),**再**发 halt —— halt 回执超时了,遥控也
+        已经收了。超时的异常原样抛给调用方(API 回 504)。"""
+        with self._lock:
+            self._halted_at[robot_id] = time.monotonic()
         s = self.active(robot_id)
         if s is not None:
-            threading.Thread(target=self.close, args=(s, "halt"), kwargs={"by": str(user)},
-                             daemon=True).start()
-        return r
+            self._close_async(s, "halt", by=str(user))
+        return self.loop.call(lambda: self.dispatcher.halt(robot_id, issued_by=str(user)),
+                              timeout_s=self.dispatcher.ack_timeout_s + 5)
+
+    def _close_async(self, s: Session, reason: str, *, by: str = "") -> None:
+        threading.Thread(target=self.close, args=(s, reason), kwargs={"by": by},
+                         daemon=True, name="teleop-close").start()
 
     # ------------------------------------------------------------ 续租与守卫
 
@@ -288,12 +381,13 @@ class TeleopDesk:
         with self._lock:
             sessions = [s for s in self._sessions.values() if not s.ended.is_set()]
         for s in sessions:
+            # 收尾(零速、放租要等回话,掉线的狗要等满超时)放到别的线程:不拖别的狗的续租。
             if self.dispatcher.is_stale(s.robot_id):
-                self.close(s, "robot_offline")
+                self._close_async(s, "robot_offline")
                 continue
             c = self.dispatcher.clients.get(s.robot_id)
             if c is not None and c.status is not None and not c.status.online:
-                self.close(s, "robot_offline")
+                self._close_async(s, "robot_offline")
                 continue
             try:
                 ack = self.loop.call(lambda s=s: self.dispatcher.teleop_lease(
@@ -305,7 +399,7 @@ class TeleopDesk:
                 ok = False
             s.renew_failures = 0 if ok else s.renew_failures + 1
             if s.renew_failures >= 2:
-                self.close(s, "lease_lost")
+                self._close_async(s, "lease_lost")
 
     def _ensure_thread(self) -> None:
         if self._thread is not None and self._thread.is_alive():

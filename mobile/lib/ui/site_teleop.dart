@@ -90,9 +90,17 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> {
         });
         _tick ??= Timer.periodic(const Duration(milliseconds: 100), (_) => _sendNow());
       case 'video':
-        setState(() => _video = m['ok'] == true);
+        final ok = m['ok'] == true;
+        if (!ok) {
+          // 画面没了：杆变灰，手指抬起会被灰掉的杆吞掉 —— 这里当场归零并发一帧零速，
+          // 不让断之前的杆值卡着、等画面回来就开走（W00c5c 内部评审）。
+          _fwd = _turn = 0;
+          _link?.send(0, 0);
+        }
+        setState(() => _video = ok);
       case 'ended':
         _stopTicking();
+        _fwd = _turn = 0;
         setState(() {
           _ended = true;
           _granted = false;
@@ -105,7 +113,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> {
 
   void _sendNow() {
     final link = _link;
-    if (link == null || !_granted || _ended) return;
+    if (link == null || !_granted || _ended || !_video) return;
     link.send(_fwd * _maxVx, -_turn * _maxWz); // 右推 = 顺时针 = wz 为负
   }
 
@@ -115,8 +123,21 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> {
   }
 
   Future<void> _halt() async {
+    // 先在本机收手：不再发杆值、放租。halt 万一没发出去，手指还按在杆上也不会接着开。
+    _stopTicking();
     _fwd = _turn = 0;
-    _link?.send(0, 0);
+    final link = _link;
+    if (link != null) {
+      link.send(0, 0);
+      link.release();
+    }
+    if (mounted) {
+      setState(() {
+        _ended = true;
+        _granted = false;
+        _status = '你按了停车';
+      });
+    }
     try {
       await widget.api.halt(widget.robotId);
     } on SiteError catch (e) {

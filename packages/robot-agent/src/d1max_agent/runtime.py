@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -79,7 +80,6 @@ class AgentRuntime:
         store_dir = Path(store_dir)
         # W00b:goto 跑在 MissionEngine 上。parts 不给就按 loaded_map/home 现装一组。
         if parts is None and loaded_map is not None:
-            import time
             parts = build_engine(hal, runs_root=runs_root or (store_dir / "runs"), now_ms=now_ms,
                                  monotonic=monotonic or time.monotonic, map_id=loaded_map[0],
                                  home=home)
@@ -95,6 +95,8 @@ class AgentRuntime:
         self.video = video
         #: halt(W00c5c)当场停车。
         self.processor.halt_hook = hal.stop
+        #: 遥控的收帧时刻、帧有效期、租约走单调钟(W00c5c 内部评审):墙钟会被 NTP 往回拨。
+        self._mono = monotonic or time.monotonic
         #: 发件箱的盘况(W00c5d):随遥测每 ``STORAGE_EVERY_MS`` 带一次;满了不接巡检。
         self._storage = storage_facts
         self._next_storage_ms = 0
@@ -140,7 +142,7 @@ class AgentRuntime:
             from d1max_contract.teleop import parse_teleop_grant
             epoch, operator, ttl = parse_teleop_grant(cmd.payload)
             return TeleopTask(task_id=cmd.task_id, lease_epoch=epoch, operator=operator,
-                              lease_ttl_ms=ttl, hal=self.hal, now_ms=self._now,
+                              lease_ttl_ms=ttl, hal=self.hal, now_ms=self._mono_ms,
                               video_live=self._video_live, events=self.events,
                               priority=cmd.priority)
         assert self.parts is not None, "有 loaded_map 就一定装了引擎"
@@ -290,7 +292,10 @@ class AgentRuntime:
         except (ValueError, UnicodeDecodeError, ContractError):
             self.teleop_malformed += 1
             return
-        self.processor.on_teleop_frame(frame, rx_ms=self._now())
+        self.processor.on_teleop_frame(frame, rx_ms=self._mono_ms())
+
+    def _mono_ms(self) -> int:
+        return int(self._mono() * 1000)
 
     async def _on_cmd(self, m: Message) -> None:
         try:
@@ -298,6 +303,8 @@ class AgentRuntime:
         except (ValueError, UnicodeDecodeError) as exc:
             log.warning("cmd 报文不是 JSON,丢弃: %s", exc)
             return
+        if isinstance(wire, dict) and wire.get("kind") == "halt":
+            await self._halt_now(wire, m.topic)
         async with self._cmd_lock:
             if self._reconnect_pending and self.transport.connected:
                 # 真 broker 下离线补投的 cmd 可能比我们的重连收尾先到:reconcile 必须是第一条。
@@ -305,6 +312,23 @@ class AgentRuntime:
             ack = await self.processor.handle(wire, m.topic)
             await self.transport.publish(self.topics.ack, _dumps(ack.to_wire()), qos=1)
             await self._publish_status()
+
+    async def _halt_now(self, wire: dict, topic: str) -> None:
+        """halt 不排队(W00c5c 内部评审):前面的命令在等回执的 PUBACK(上行拥堵时好几秒),halt 不能
+        跟着等。主题是自己的 ``cmd``、报文成形、没过期 → 先让 HAL 停;中止任务、回执照旧排队去做。
+        过期的不抢先:那是重连补投的旧命令,停一下会打断重连后正常在跑的任务。"""
+        if topic != self.topics.cmd:
+            return
+        try:
+            cmd = Command.from_wire(wire)
+        except ContractError:
+            return
+        if cmd.expires_at <= self._now():
+            return
+        try:
+            await self.hal.stop()
+        except Exception:
+            log.exception("halt 抢先停车失败,排队那一步还会再停一次")
 
     # ------------------------------------------------------------ 每拍
 

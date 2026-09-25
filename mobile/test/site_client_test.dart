@@ -1,5 +1,6 @@
 // 站点客户端（W00c4）：钉证书、登录、带令牌、错误统一成 SiteError、SSE。
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -244,14 +245,20 @@ void main() {
     expect(site.received.last.auth, 'Bearer ${c.session!.token}');
     link.send(0.3, -0.2);
     link.release();
-    await _until(() => site.teleopGot.length >= 2);
-    expect(site.teleopGot, [
-      {'vx': 0.3, 'wz': -0.2},
-      {'kind': 'release'},
-    ]);
-    await site.teleopWs!.close();                    // 站点那头关了
+    link.send(0.1, 0);
+    await _until(() => site.teleopGot.length >= 3);
+    final f1 = site.teleopGot[0], f2 = site.teleopGot[2];
+    expect([f1['vx'], f1['wz'], f1['seq']], [0.3, -0.2, 1]);
+    expect(f2['seq'], 2, reason: '每帧带单调序号');
+    expect(f1['t'], isA<num>());
+    expect((f2['t'] as num) >= (f1['t'] as num), isTrue, reason: '发出时刻按本机单调钟');
+    expect(site.teleopGot[1], {'kind': 'release'});
+    site.teleopWs!.add(jsonEncode({'kind': 'ended', 'reason': 'taken_over'}));
+    await site.teleopWs!.close();                    // 站点说了原因再关
     await _until(() => link.closed);
-    expect(msgs.last, {'kind': 'ended', 'reason': 'disconnected'});
+    expect(msgs.where((m) => m['kind'] == 'ended').toList(),
+        [{'kind': 'ended', 'reason': 'taken_over'}],
+        reason: '站点说过为什么结束了,就不再补一句「断了」盖掉它');
     link.send(0.3, 0); // 关了之后发帧：不抛、不发
     await sub.cancel();
     c.close();

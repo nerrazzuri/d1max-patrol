@@ -38,6 +38,7 @@ import ssl
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import TimeoutError as FutureTimeout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -590,28 +591,30 @@ class _Handler(BaseHTTPRequestHandler):
         self._need(user, ABORT)
         self._body()
         self._audit_target = robot_id
-        if self.site.teleop is not None:
-            try:
+        try:
+            if self.site.teleop is not None:
                 r = self.site.teleop.halt(robot_id, user)
-            except DispatchRefused as exc:
-                raise HttpError(409, str(exc)) from exc
-        else:
-            try:
+            else:
                 r = self.site.loop.call(lambda: self.site.dispatcher.halt(
                     robot_id, issued_by=str(user)),
                     timeout_s=self.site.dispatcher.ack_timeout_s + 5)
-            except DispatchRefused as exc:
-                raise HttpError(409, str(exc)) from exc
+        except DispatchRefused as exc:
+            raise HttpError(409, str(exc)) from exc
+        except (DispatchTimeout, TimeoutError, FutureTimeout) as exc:
+            raise HttpError(504, "狗没回停车的回执:看不到它停了没有,按机身急停") from exc
         return self._send_json(200, r)
 
     def _teleop_ws(self, robot_id: str, user) -> None:
         """遥控(W00c5c):先开租约(拒绝回 HTTP 状态码),再升级成 WebSocket;连接就是租约的载体。"""
         from d1max_site.teleop import TeleopRefused
-        from d1max_site.ws import WsClosed, upgrade
+        from d1max_site.ws import WsClosed, check_upgrade, upgrade
         self._need(user, TELEOP)
         desk = self.site.teleop
         if desk is None:
             raise HttpError(404, "这个站点没开遥控")
+        if check_upgrade(self.headers) is None:
+            # 先查升级头再开租约:一个普通 GET 不许授予租约、抢占正在跑的巡检(W00c5c 内部评审)。
+            raise HttpError(400, "要 WebSocket 升级请求")
         q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
         reason = (q.get("takeover") or [""])[0].strip()[:200]
         try:
@@ -633,7 +636,14 @@ class _Handler(BaseHTTPRequestHandler):
             while not session.ended.is_set() and not self.site.stopping:
                 msg = ws.recv(timeout_s=0.5)
                 if msg is not None:
-                    desk.on_message(session, msg)
+                    # 连接上攒着的一并收下(4G 憋了一下):都过判帧,只转最新的那一帧。
+                    batch, rx = [msg], time.monotonic()
+                    while len(batch) < 64:
+                        more = ws.recv(timeout_s=0)
+                        if more is None:
+                            break
+                        batch.append(more)
+                    desk.on_messages(session, batch, rx=rx)
                 if time.monotonic() - checked >= self.site.sse_recheck_s:
                     checked = time.monotonic()
                     who = self.site.accounts.check(token)
@@ -643,6 +653,7 @@ class _Handler(BaseHTTPRequestHandler):
             pass
         finally:
             desk.close(session, "disconnected")    # 幂等:已经结束的不再结束一次
+            ws.close(1000, session.end_reason)     # 别的线程排给它的「结束了」由这条线程发出去
 
     def _video(self, robot_id: str, what: str, user) -> None:
         """视频经站点(W00c5b)。``health``:每路画面健康;``front``/``back``:MJPEG 长连(``view``)。

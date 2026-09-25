@@ -70,13 +70,48 @@ void main() {
     await t.pumpWidget(Container());
   });
 
-  testWidgets('「停」走 halt 不走遥控连接，同时发零速', (t) async {
+  testWidgets('「停」走 halt 不走遥控连接，同时发零速、本机先收手（不再发杆值、放租、杆变灰）', (t) async {
     final api = FakeApi('owner');
     await _open(t, api);
+    final g = await t.startGesture(t.getCenter(find.byType(Joystick).at(0)));
+    await g.moveBy(const Offset(0, -200));
+    await t.pump(const Duration(milliseconds: 150));
     await t.tap(find.byKey(SiteTeleopPage.stopKey));
     await t.pump();
     expect(api.calls, contains('halt A'));
     expect(api.link!.sent.last, <double>[0, 0]);
+    expect(api.link!.released, isTrue);
+    final n = api.link!.sent.length;
+    await t.pump(const Duration(milliseconds: 500));
+    expect(api.link!.sent.length, n, reason: '按了停之后手指还按在杆上也不许接着发');
+    expect(_stickEnabled(t, 0), isFalse);
+    await g.up();
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('按着杆时画面断了：当场发零速；画面回来也不接着开（手指早就松了）', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    final g = await t.startGesture(t.getCenter(find.byType(Joystick).at(0)));
+    await g.moveBy(const Offset(0, -200));
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], greaterThan(0));
+    api.link!.ctl.add(<String, dynamic>{'kind': 'video', 'ok': false});
+    await t.pump();
+    await t.pump();
+    expect(api.link!.sent.last, <double>[0, 0], reason: '画面一断当场零速');
+    final n = api.link!.sent.length;
+    await t.pump(const Duration(milliseconds: 300));
+    expect(api.link!.sent.length, n, reason: '没画面不发杆值');
+    await g.up();                                          // 手指抬起:被灰掉的杆吞了
+    await t.pump();
+    api.link!.ctl.add(<String, dynamic>{'kind': 'video', 'ok': true});
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 350));
+    final after = api.link!.sent.sublist(n);
+    expect(after, isNotEmpty);
+    expect(after.every((f) => f[0] == 0 && f[1] == 0), isTrue,
+        reason: '画面回来之后杆值是零,不许按断之前的值开走: $after');
     await t.pumpWidget(Container());
   });
 

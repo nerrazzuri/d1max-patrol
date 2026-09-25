@@ -551,3 +551,85 @@ async def test_盘况每10秒随遥测带一次_满了不接巡检(tmp_path):
     assert rt.processor.admit_hook(type("C", (), {"kind": "patrol"})()) == "storage_full"
     assert rt.processor.admit_hook(type("C", (), {"kind": "goto"})()) == ""
     await rt.close()
+
+
+async def test_halt不排队_先停车再排队去中止任务(台子):
+    """W00c5c 内部评审:上行拥堵时每条命令的回执要等 PUBACK,halt 排在后面要等好几秒。halt 一到
+    (主题对、没过期)先让 HAL 停,再排队去中止任务、回执。"""
+    import asyncio
+
+    from d1max_contract.messages import Command
+    from d1max_contract.transport import Message
+    broker, c, r, ears, rt, site = 台子
+    await rt.start()
+    stops = []
+    real = r.stop
+
+    async def 记():
+        stops.append(c.ms)
+        return await real()
+    r.stop = 记
+
+    def _halt(cid, *, expires_at):
+        cmd = Command(command_id=cid, task_id=f"halt-{cid}", kind="halt", issued_at=c.ms - 1000,
+                      expires_at=expires_at, control_epoch=1, payload={"reason": "operator"},
+                      priority=100)
+        return Message(T.cmd, json.dumps(cmd.to_wire()).encode(), 1, False)
+    async with rt._cmd_lock:                         # 前面一条命令正卡在等 PUBACK
+        t = asyncio.create_task(rt._on_cmd(_halt("h1", expires_at=c.ms + 60_000)))
+        await asyncio.sleep(0.05)
+        assert stops, "halt 被前面的命令挡住了"
+        stale = asyncio.create_task(rt._on_cmd(_halt("h0", expires_at=c.ms - 1)))
+        await asyncio.sleep(0.05)
+        assert len(stops) == 1, "过期的 halt(重连补投的旧命令)不许抢先停车"
+        wrong = Message(T.cmd.replace("/r/", "/x/"), _halt("h2", expires_at=c.ms + 60_000).payload,
+                        1, False)
+        other = asyncio.create_task(rt._on_cmd(wrong))
+        await asyncio.sleep(0.05)
+        assert len(stops) == 1, "别的狗的主题不认"
+    await asyncio.gather(t, stale, other)
+
+
+async def test_遥控用单调钟_墙钟往回跳也按时停(tmp_path):
+    """W00c5c 内部评审:Orin 的墙钟现场就错过;NTP 往回拨一下,按墙钟算的帧有效期、租约就一直「没到」。
+    遥控的收帧时刻、帧有效期、租约都走单调钟。"""
+    from d1max_contract.messages import Command
+    from d1max_contract.teleop import TeleopFrame, teleop_grant_payload
+    from d1max_contract.transport import Message
+    broker = MemoryBroker()
+    c = 钟()
+    r = SimRobot(now_ms=c)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=r,
+                      store_dir=tmp_path / "agent", now_ms=c, loaded_map=("m", "1"),
+                      boot_id="boot-1", home=Pose.from_xy_yaw(0.0, 0.0),
+                      monotonic=lambda: c.mono)
+    rt._video_live = lambda: True
+    await rt.start()
+    g = Command(command_id="g1", task_id="teleop-1", kind="teleop", issued_at=c.ms,
+                expires_at=c.ms + 60_000, control_epoch=1, priority=100,
+                payload=teleop_grant_payload(lease_epoch=1, operator="gina", lease_ttl_ms=5000))
+    await rt._on_cmd(Message(T.cmd, json.dumps(g.to_wire()).encode(), 1, False))
+    for _ in range(3):
+        await rt.step(0.1)
+        r.tick(0.1)
+        c.advance(0.1)
+    assert rt.processor.current is not None and rt.processor.current.kind == "teleop"
+    f = TeleopFrame(lease_epoch=1, seq=1, sent_at=5, ttl_ms=300, vx=0.3, wz=0.0)
+    await rt._on_teleop(Message(T.teleop, json.dumps(f.to_wire()).encode(), 0, False))
+    await rt.step(0.1)
+    r.tick(0.1)
+    c.advance(0.1)
+    assert (await r.odometry()).vx > 0
+    c.ms -= 60_000                                   # 墙钟往回拨一分钟;单调钟照走
+    for _ in range(10):                              # 1 s 没有帧
+        await rt.step(0.1)
+        r.tick(0.1)
+        c.advance(0.1)
+    assert await r.stopped(), "帧有效期按单调钟算:1 s 没帧就该停了"
+    for _ in range(60):                              # 再 6 s 没有续租
+        await rt.step(0.1)
+        r.tick(0.1)
+        c.advance(0.1)
+    assert rt.processor.current is None or rt.processor.current.kind != "teleop", \
+        "租约按单调钟算:5 s 没续就该结束"
+    await rt.close()

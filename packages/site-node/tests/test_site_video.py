@@ -218,7 +218,7 @@ def test_画面冻住了_站点不等SRT自己超时_先断给观众(tmp_path):
 
 # ------------------------------------------------------------ 内部评审补的(W00c5b)
 
-def test_续期按有效期的一半_不按帧率(站点):
+def test_续期按有效期的三分之一_不按帧率(站点):
     """评审阻断:续期线程跟收流线程共用条件变量,每来一帧就发一条命令。"""
     s = 站点
     tok = _登(s)
@@ -236,8 +236,8 @@ def test_续期按有效期的一半_不按帧率(站点):
         t0, n0 = time.monotonic(), n["req"]
         while time.monotonic() - t0 < 4.0:
             v.jpegs(1)
-        # ttl 2 s → 每 1 s 续一次;4 s 里最多 5 条,不是 5 fps × 4 s = 20 条
-        assert n["req"] - n0 <= 6, n["req"] - n0
+        # ttl 2 s → 每 0.67 s 续一次;4 s 里 6 条上下,不是 5 fps × 4 s = 20 条
+        assert 4 <= n["req"] - n0 <= 8, n["req"] - n0
     finally:
         v.close()
 
@@ -291,9 +291,10 @@ def test_续期偶尔失败一次不断画面(站点):
     v = 观众(s, tok)
     try:
         assert len(v.jpegs(2)) == 2
-        real, once = s.hub._send, {"left": 1}
+        real, once, calls = s.hub._send, {"left": 1}, []
 
         def 抖一下(rid, req, **kw):
+            calls.append(time.monotonic())
             if once["left"]:
                 once["left"] -= 1
                 return "等狗的回执超时"
@@ -303,6 +304,7 @@ def test_续期偶尔失败一次不断画面(站点):
         while time.monotonic() - t0 < 3.0:
             assert v.jpegs(1), "续期失败一次就把正在出画面的流收掉了"
         assert once["left"] == 0
+        assert calls[1] - calls[0] < 0.3, "续期没成要马上再续,不等满一轮(那样会跟狗那头有效期抢)"
     finally:
         v.close()
 

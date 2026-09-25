@@ -48,8 +48,12 @@ class 手机:
                 body += self.sock.recv(n - len(body))
             self.error = json.loads(body or b"{}").get("error", "")
         self.buf = b""
+        self.seq = 0
 
     def send(self, obj) -> None:
+        if "vx" in obj and "seq" not in obj:         # 摇杆帧带手机自己的序号与单调钟
+            self.seq += 1
+            obj = {"seq": self.seq, "t": time.monotonic() * 1000.0, **obj}
         self.sock.sendall(client_mask_frame(json.dumps(obj).encode()))
 
     def recv(self, timeout: float = 5.0):
@@ -162,7 +166,9 @@ def test_保安遥控_狗动_限速一半_松手停_断开就放租_审计有起
     assert ("gina", "teleop_start") in acts and ("gina", "teleop_end") in acts
 
 
-def test_站点到狗断了_狗在帧有效期里自己停(站点):
+def test_站点到狗的帧断了_狗在帧有效期里自己停(站点):
+    """帧那一段断了、别的都好好的(狗在线、租约照续、手机照推):能让狗停的只有狗那头的帧有效期。
+    (整条链路断开会先触发断线策略,测不到有效期 —— W00c5c 内部评审。)"""
     s = 站点
     tok = _登(s)
     _新鲜(s, tok)
@@ -170,13 +176,15 @@ def test_站点到狗断了_狗在帧有效期里自己停(站点):
     ph.wait_kind("granted")
     _推(ph, 0.4, seconds=0.8)
     assert _odom(s).vx > 0
-    async def _断():
-        s.broker.disconnect("dogA")                   # 站点↔狗那一段断了
-    s.loop.call(_断)
+
+    async def _丢(robot_id, frame):                  # 帧发出去了,路上丢了
+        return None
+    s.disp.teleop_frame = _丢
     t0 = time.monotonic()
-    _推(ph, 0.4, seconds=0.6)                         # 手机还在推,站点也照转 —— 狗收不到
+    _推(ph, 0.4, seconds=0.2)
     assert _等(lambda: _停了(s), timeout=3)
-    assert time.monotonic() - t0 < 1.5, "帧有效期 300 ms,狗要自己停"
+    assert time.monotonic() - t0 < 1.0, "帧有效期 300 ms,狗要自己停"
+    assert s.teleop.active("A") is not None, "租约还在:停下来的原因只能是帧有效期"
     ph.close()
 
 
@@ -254,7 +262,22 @@ def test_halt不走遥控连接_业主也能按_遥控跟着结束(站点):
     assert code == 200 and d["ack"]["result"] == "accepted", d
     assert ph.wait_kind("ended")["reason"] == "halt"
     assert _等(lambda: _停了(s), timeout=3)
+
+    def _狗说是halt停的():
+        evs = s.req("GET", "/api/robots/A", token=tok)[1]["events"]
+        return any(e["kind"] == "task_aborted" and (e.get("data") or {}).get("reason") == "halt"
+                   for e in evs)
+    assert _等(_狗说是halt停的, timeout=5), "狗那头要是 halt 中止的遥控,不是放租结束的"
     ph.close()
+
+
+def test_普通GET不给租约(站点):
+    s = 站点
+    tok = _登(s)
+    _新鲜(s, tok)
+    code, d = s.req("GET", "/api/robots/A/teleop", token=tok)
+    assert code == 400, (code, d)
+    assert s.db.query("SELECT * FROM teleop_leases") == []
 
 
 def test_巡检中遥控_先抢占再接手_遥控期间派单被挑开(站点):
@@ -326,3 +349,27 @@ def test_急停按着不给租约(站点):
 def test_halt接到了狗的停车上(站点):
     s = 站点
     assert s.agent.processor.halt_hook == s.dog.stop
+
+
+def test_授予命令的有效期很短_halt回执超时回504(站点):
+    """站点等不到回执的授予,晚到狗那儿也不许再起一趟没人握着的遥控(W00c5c 内部评审)。"""
+    s = 站点
+    tok = _登(s)
+    _新鲜(s, tok)
+    c = s.disp.clients["A"]
+    real, ttls = c.new_command, {}
+
+    def 记(kind, payload, **kw):
+        ttls.setdefault(kind, kw.get("ttl_ms"))
+        return real(kind, payload, **kw)
+    c.new_command = 记
+    ph = 手机(s, tok)
+    ph.wait_kind("granted")
+    assert ttls["teleop"] <= s.disp.ack_timeout_s * 1000 + 2000, ttls
+    ph.close()
+
+    async def 超时(robot_id, **kw):
+        raise TimeoutError("狗没回话")
+    s.disp.halt = 超时
+    code, d = s.req("POST", "/api/robots/A/halt", {}, token=tok)
+    assert code == 504 and "急停" in d["error"], (code, d)

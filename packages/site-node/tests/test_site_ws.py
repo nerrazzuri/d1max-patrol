@@ -97,6 +97,9 @@ def test_ping回pong_close回close(一对):
     _client_frame(b"x" * 5000),                            # 超长
     _client_frame(b"x", opcode=2),                         # 不收二进制
     _client_frame(b"\xff\xfe", opcode=1),                  # 不是 UTF-8
+    bytes([0xC1]) + _client_frame(b"x")[1:],               # RSV1 置了(没协商过扩展)
+    _client_frame(b"p" * 126, opcode=9),                   # 控制帧超过 125 字节
+    _client_frame(b"p", opcode=9, fin=False),              # 控制帧分片
 ])
 def test_不合规矩的帧_断开(一对, frame):
     ws, peer = 一对
@@ -134,3 +137,117 @@ def test_别的线程关_收的那头立刻醒(一对):
     assert not t.is_alive() and got
     op, data = _read_server_frame(peer)
     assert op == 8 and data[2:].decode() == "被接管"
+
+
+def test_TLS上_别的线程发和关_都由收的那条线程做(tmp_path):
+    """站点的 API 是 TLS:一个 SSLSocket 两条线程一读一写会读出假的「对面断了」(W00c5c 内部评审)。
+    别的线程发的、关的都排队,由收的那条发出去;对面照样一条不少地收到,最后收到 close。"""
+    import ssl
+    from pathlib import Path as _P
+    sup = _P(__file__).resolve().parents[3] / "mobile" / "test" / "support"
+    srv_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    srv_ctx.load_cert_chain(str(sup / "site_test.crt"), str(sup / "site_test.key"))
+    cli_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    cli_ctx.check_hostname = False
+    cli_ctx.verify_mode = ssl.CERT_NONE
+    a, b = socket.socketpair()
+    out: dict = {}
+
+    def _server():
+        s = srv_ctx.wrap_socket(a, server_side=True)
+        ws = WsConn(s, ping_every_s=10, dead_after_s=30)
+        out["ws"] = ws
+        got = []
+        try:
+            while True:
+                m = ws.recv(timeout_s=0.3)
+                if m is not None:
+                    got.append(m)
+        except WsClosed as exc:
+            out["why"] = str(exc)
+        out["got"] = got
+    t = threading.Thread(target=_server)
+    t.start()
+    c = cli_ctx.wrap_socket(b, server_hostname="x")
+    c.sendall(_client_frame(b"hello"))
+    deadline = time.monotonic() + 5
+    while "ws" not in out and time.monotonic() < deadline:
+        time.sleep(0.01)
+    ws = out["ws"]
+    senders = [threading.Thread(target=ws.send_text, args=(f"m{i}",)) for i in range(20)]
+    for x in senders:
+        x.start()
+    for x in senders:
+        x.join()
+    threading.Thread(target=ws.close, args=(1000, "结束了")).start()
+    frames = []
+    c.settimeout(5)
+    while True:
+        op, data = _read_server_frame(c)
+        frames.append((op, data))
+        if op == 8:
+            break
+    t.join(5)
+    assert sorted(d.decode() for op, d in frames if op == 1) == sorted(f"m{i}" for i in range(20))
+    assert frames[-1][0] == 8 and "结束了" in frames[-1][1][2:].decode()
+    assert out["got"] == ["hello"]
+    c.close()
+
+
+def test_不等待地收_已经到了的照样收下(一对):
+    """``recv(timeout_s=0)``:时间到了也非阻塞地读一次 —— 手机那头攒着的帧要一批收下(只转最新的)。"""
+    ws, peer = 一对
+    peer.sendall(_client_frame(b"a") + _client_frame(b"b"))
+    time.sleep(0.05)
+    assert ws.recv(timeout_s=0) == "a"
+    assert ws.recv(timeout_s=0) == "b"
+    assert ws.recv(timeout_s=0) is None
+
+
+class _记线程的套接字:
+    """包一层 socketpair 的一头:记下每次写、关是哪条线程做的。"""
+
+    def __init__(self, sock) -> None:
+        self._s = sock
+        self.who: list[tuple[str, int]] = []
+
+    def sendall(self, data):
+        self.who.append(("sendall", threading.get_ident()))
+        return self._s.sendall(data)
+
+    def shutdown(self, how):
+        self.who.append(("shutdown", threading.get_ident()))
+        return self._s.shutdown(how)
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+
+def test_套接字只由收的那条线程碰_别的线程的发与关都排队():
+    a, b = socket.socketpair()
+    rec = _记线程的套接字(a)
+    out: dict = {}
+    ready = threading.Event()
+
+    def _收():
+        ws = WsConn(rec, ping_every_s=10, dead_after_s=30)
+        out["ws"], out["owner"] = ws, threading.get_ident()
+        ready.set()
+        try:
+            while True:
+                ws.recv(timeout_s=0.3)
+        except WsClosed:
+            pass
+    t = threading.Thread(target=_收)
+    t.start()
+    assert ready.wait(2)
+    ws = out["ws"]
+    for i in range(5):
+        threading.Thread(target=ws.send_text, args=(f"m{i}",)).start()
+    time.sleep(0.05)
+    threading.Thread(target=ws.close, args=(1000, "bye")).start()
+    t.join(3)
+    assert rec.who, "该发的没发出去"
+    assert {tid for _, tid in rec.who} == {out["owner"]}, rec.who
+    b.close()
+    a.close()

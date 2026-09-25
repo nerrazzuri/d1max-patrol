@@ -32,6 +32,9 @@ from d1max_contract.video import CAMERAS, VideoRequest, scrub
 
 log = logging.getLogger(__name__)
 
+#: 续期没成之后隔多久再试(秒)。
+RETRY_AFTER_FAIL_S = 0.1
+
 MAX_VIEWERS = 6
 STALE_S = 2.0
 _SOI, _EOI = b"\xff\xd8", b"\xff\xd9"
@@ -257,9 +260,13 @@ class _Feed:
                 errs.close()
 
     def _renew(self, gen: int, req: VideoRequest, wake: threading.Event) -> None:
-        """发 ``video`` 命令,有观众期间每 ttl/2 续一次(**用自己的事件等**,不跟收流线程共用条件变量
-        —— 共用的话每来一帧就续一次)。第一条被拒是硬失败;之后偶尔失败只要画面还在来就是软失败
-        (续期回执最多等 ttl/2,不然等回执期间狗那头有效期先到了)。代次一变就退。"""
+        """发 ``video`` 命令,有观众期间每 ttl/3 续一次(**用自己的事件等**,不跟收流线程共用条件变量
+        —— 共用的话每来一帧就续一次)。第一条被拒是硬失败;之后偶尔失败只要画面还在来就是软失败,
+        **隔 0.1 s 就重试**,不等满一轮。续期回执最多等 ttl/4。
+
+        为什么是 ttl/3 + 失败即重试(W00c5c 期间测试抖出来的):按 ttl/2 续,失败一次之后下一条正好
+        落在狗那头有效期到的那一刻,两边抢,画面时断时不断。现在失败一次,最晚在
+        ttl/3 + ttl/4 + 0.1 s 重试,离有效期到还有富余。代次一变就退。"""
         first = True
         try:
             while True:
@@ -267,17 +274,19 @@ class _Feed:
                     if gen != self._gen:
                         return
                 why = self.hub._send(self.robot_id, req,
-                                     timeout_s=None if first else self.hub.ttl_ms / 2000.0)
+                                     timeout_s=None if first else self.hub.ttl_ms / 4000.0)
                 if why:
                     with self._ready:
                         flowing = self._online_locked()
                     if first or not flowing:
                         self.fail(gen, f"狗没接推流命令: {why}")
                         return
-                    log.warning("%s %s 续期没成(画面还在来,下一轮再续): %s",
+                    log.warning("%s %s 续期没成(画面还在来,马上再续): %s",
                                 self.robot_id, self.camera, why)
+                    wake.wait(RETRY_AFTER_FAIL_S)
+                    continue
                 first = False
-                wake.wait(self.hub.ttl_ms / 2000.0)
+                wake.wait(self.hub.ttl_ms / 3000.0)
         except Exception as exc:
             log.exception("续期线程炸了")
             self.fail(gen, f"站点发推流命令出错: {type(exc).__name__}: {exc}")

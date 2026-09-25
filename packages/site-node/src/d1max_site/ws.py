@@ -9,7 +9,11 @@ WebSocket;这里只实现遥控用得到的那一部分(RFC 6455):
   **半开的连接要看得出来**:连接就是租约的载体,判死 = 放租 = 狗停。
 
 读写直接走套接字,不走 ``BaseHTTPRequestHandler.rfile``:缓冲文件对象超时一次就再也读不了。
-写有锁:遥控台可能从别的线程关这条连接(被接管、狗掉线、画面没了)。
+
+**套接字只由一条线程碰**(建这条连接的那条,也就是收的那条;W00c5c 内部评审):站点的 API 是 TLS,
+一个 ``SSLSocket`` 两条线程一读一写会读出假的「对面断了」,读的那条设的短超时也会套到别的线程的写上。
+别的线程要发的(「画面没了」「结束了」)和要关的,都排进队列,由收的那条在下一次醒来时(至多
+0.2 s)发出去、关掉。
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import ssl
 import struct
 import threading
 import time
+from collections import deque
 from collections.abc import Mapping
 
 _GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -69,6 +74,10 @@ class WsConn:
         self._last_ping = time.monotonic()
         self.closed = False
         self.close_reason = ""
+        #: 碰套接字的那条线程(建连接的那条)。别的线程的发送与关闭排队给它。
+        self._owner = threading.get_ident()
+        self._outq: deque[str] = deque()
+        self._close_req: tuple[int, str] | None = None
 
     # ------------------------------------------------------------ 写
 
@@ -91,18 +100,42 @@ class WsConn:
                 raise WsClosed(self.close_reason) from exc
 
     def send_text(self, text: str) -> None:
+        """发一条文本。别的线程调:排队,由收的那条线程发。"""
+        if threading.get_ident() != self._owner:
+            if self.closed:
+                raise WsClosed(self.close_reason or "连接已关")
+            self._outq.append(text)
+            return
+        self._flush()
         self._send(1, text.encode("utf-8"))
 
     def close(self, code: int = 1000, reason: str = "") -> None:
-        """关连接(可以从别的线程调)。发 close 帧、关套接字:正在 ``recv`` 的那头立刻醒来
-        抛 WsClosed。"""
+        """关连接。收的那条线程调:把排着的发完、发 close 帧、关套接字。别的线程调:排一个关闭,
+        收的那条在下一次醒来时(至多 0.2 s)照办,正在 ``recv`` 的抛 WsClosed。"""
         if self.closed:
             return
+        if threading.get_ident() != self._owner:
+            if self._close_req is None:
+                self._close_req = (code, reason)
+            return
         with contextlib.suppress(WsClosed):
+            self._drain_out()
             self._send(8, struct.pack(">H", code) + reason.encode("utf-8")[:120])
         self._mark_closed(reason or f"关了({code})")
         with contextlib.suppress(OSError):
             self._sock.shutdown(socket.SHUT_RDWR)
+
+    def _drain_out(self) -> None:
+        while self._outq and not self.closed:
+            self._send(1, self._outq.popleft().encode("utf-8"))
+
+    def _flush(self) -> None:
+        """(收的那条线程)把别的线程排的发出去;有人要关就关。"""
+        self._drain_out()
+        req, self._close_req = self._close_req, None
+        if req is not None and not self.closed:
+            self.close(*req)
+            raise WsClosed(req[1] or f"关了({req[0]})")
 
     def _mark_closed(self, reason: str) -> None:
         if not self.closed:
@@ -116,16 +149,18 @@ class WsConn:
         while len(self._buf) < n:
             if self.closed:
                 raise WsClosed(self.close_reason)
+            self._flush()
             left = None if deadline is None else deadline - time.monotonic()
-            if left is not None and left <= 0:
-                return False
+            last = left is not None and left <= 0
             try:
-                self._sock.settimeout(0.2 if left is None else max(0.01, min(0.2, left)))
+                # 时间到了也再非阻塞地读一次:内核里已经到了的(TLS 那一层缓冲着的)不许漏看。
+                self._sock.settimeout(0.0 if last else 0.2 if left is None
+                                      else max(0.01, min(0.2, left)))
                 chunk = self._sock.recv(8192)
-            except TimeoutError:
+            except (TimeoutError, BlockingIOError, ssl.SSLWantReadError):
+                if last:
+                    return False
                 self._maybe_ping()
-                continue
-            except ssl.SSLWantReadError:
                 continue
             except (OSError, ssl.SSLError) as exc:
                 self._mark_closed(f"读不到了: {exc}")
@@ -159,6 +194,10 @@ class WsConn:
                 return None
             b0, b1 = self._buf[0], self._buf[1]
             fin, opcode, masked, n = b0 & 0x80, b0 & 0x0F, b1 & 0x80, b1 & 0x7F
+            if b0 & 0x70:
+                self._fail(1002, "没协商过扩展,RSV 位不许置")
+            if opcode >= 8 and (n > 125 or not fin):
+                self._fail(1002, "控制帧不许超过 125 字节、不许分片")
             head = 2
             if n == 126:
                 self._fill(4, None)
