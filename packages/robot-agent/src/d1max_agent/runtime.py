@@ -69,6 +69,9 @@ def _parse_home(v: Any) -> tuple[float, float, float] | None:
         out.append(float(x))
     return (out[0], out[1], out[2])
 
+#: 切版本、退版本要的电量(%)。切过去起不来,开机守卫还要再退、再起一次。
+RELEASE_MIN_BATTERY_PCT = 30.0
+
 #: 电量低于这条线,断线时按「不安全」处理(停住等待)。
 BATTERY_FLOOR_PCT = 15.0
 
@@ -255,7 +258,7 @@ class AgentRuntime:
         if kind not in self._extra_tasks():
             return "unsupported"
         if kind.startswith("release_"):
-            return self._release_command(cmd)
+            return await self._release_command(cmd)
         if kind == "outbox_retry":
             n = self._outbox_retry() if self._outbox_retry is not None else 0
             self.events.emit("outbox_retry", {"task_id": cmd.task_id, "released": n})
@@ -310,8 +313,9 @@ class AgentRuntime:
             self.events.emit("mapping_failed", {"task_id": task_id, "action": action,
                                                 "reason": f"{type(exc).__name__}: {exc}"[:200]})
 
-    def _release_command(self, cmd: Command) -> str:
-        """发布命令(W00c5d 第三部分):装在后台做;切、退要空闲(不跑任务、不在换图)。"""
+    async def _release_command(self, cmd: Command) -> str:
+        """发布命令(W00c5d 第三部分):装在后台做,盘满了不装;切、退要空闲(不跑任务、不在换图)、
+        电量不低于 ``RELEASE_MIN_BATTERY_PCT``。"""
         from d1max_contract.releases import ReleaseRef, check_release_name
         try:
             if cmd.kind == "release_install":
@@ -323,10 +327,15 @@ class AgentRuntime:
         if self._running(self._release_job) or self._running(self._map_job):
             return "busy"
         if cmd.kind == "release_install":
+            f = self._storage() if self._storage is not None else None
+            if f is not None and f.full():
+                return "storage_full"             # 装要下载、解开、建 venv:吃盘的是这一步
             job = self._release_install(ref, cmd.task_id)
         else:
             if not self._tasks_idle():
                 return "busy"                     # 重启那几秒里谁都停不了它:跑着任务不切、不退
+            if (await self.hal.battery()).percent < RELEASE_MIN_BATTERY_PCT:
+                return "low_battery"              # 切过去起不来还要再退、再起一次
             if cmd.kind == "release_activate":
                 if not self.releases.ready(name):
                     return "not_installed"

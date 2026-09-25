@@ -370,3 +370,38 @@ async def test_盘满了不录包_没在录不停_隔离的让它再传(tmp_path
     got = [e for e in ears.by["event"] if e["kind"] == "outbox_retry"]
     assert got[-1]["data"]["released"] == 3
     await rt.close()
+
+
+async def test_发布_电量不够不切不退_盘满了不装(tmp_path):
+    from d1max_contract.storage import StorageFacts
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rel = 假发布()
+    new = "2026-09-25-bbbbbb"
+    rel.installed.add(new)
+    dog = SimRobot(now_ms=c)
+    full = StorageFacts(disk_used_ratio=0.95, outbox_bytes=10, outbox_cap_bytes=100,
+                        backlog_files=0, backlog_bytes=0, oldest_backlog_s=None)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=dog,
+                      store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"), boot_id="b",
+                      home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono, releases=rel,
+                      storage_facts=lambda: full)
+    await rt.start()
+    await rt._on_cmd(_cmd("release_install", {"name": "2026-09-26-cccccc", "sha256": "a" * 64,
+                                              "size": 9}, "i1", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "storage_full", "装要下载、建 venv:盘满了不装"
+    dog.inject_battery(29.0)
+    for kind, payload in (("release_activate", {"name": new}), ("release_rollback", {})):
+        await rt._on_cmd(_cmd(kind, payload, f"{kind}-1", c))
+        await broker.drain()
+        assert ears.by["cmd/ack"][-1]["reason"] == "low_battery", kind
+    assert rel.calls == []
+    dog.inject_battery(31.0)
+    await rt._on_cmd(_cmd("release_activate", {"name": new}, "a2", c))
+    await _跑(rt, broker, n=3)
+    assert rel.calls == [("activate", new)]
+    await rt.close()
