@@ -32,6 +32,8 @@ log = logging.getLogger(__name__)
 #: 多久没收到**实时** status 就算不新鲜(按站点自己的钟,见 ``DispatchClient.status_live_at``)。
 #: 代理空闲时每 30 s 发一次 status。
 STALE_MS = 90_000
+#: ``video`` 命令本身至少活多久(毫秒),跟推流的有效期分开。见 :meth:`Dispatcher.video`。
+VIDEO_COMMAND_TTL_MS = 30_000
 COMMAND_TTL_MS = 60_000
 #: 一趟巡检的任务定义进命令(设计决定二 A);broker 的报文上限是 256 KB,留余量。
 MAX_PATROL_BYTES = 200_000
@@ -364,17 +366,21 @@ class Dispatcher:
         c = self._client_for(robot_id)
         return await self._send(c, robot_id, "abort", {}, issued_by=issued_by, task_id=task_id)
 
-    async def video(self, robot_id: str, req: VideoRequest) -> Ack:
+    async def video(self, robot_id: str, req: VideoRequest, *,
+                    timeout_s: float | None = None) -> Ack:
         """按需推流的命令(W00c5b)。**不是任务**:只要在线、新鲜(不看就绪 —— 急停时正是要看画面
         的时候);不进 ``commands`` 账、不推 SSE(有观众期间每 ttl/2 续一次,记账就是刷屏)。
-        命令本身的有效期就是这一次推流的有效期:补投到狗上时已经过期的,狗回 expired。"""
+        **命令的有效期跟推流的有效期分开**(至少 ``VIDEO_COMMAND_TTL_MS``):狗用自己的钟判命令过期,
+        狗的钟现场就错过 —— 命令有效期只给 10 s 的话,钟差十几秒所有画面都会回 expired。"""
         c = self._client_for(robot_id)
         if c.status is None or not c.status.online or not self._fresh(c):
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
-        cmd = c.new_command("video", req.to_payload(), ttl_ms=req.ttl_ms,
+        cmd = c.new_command("video", req.to_payload(),
+                            ttl_ms=max(VIDEO_COMMAND_TTL_MS, req.ttl_ms),
                             control_epoch=self.registry.control_epoch(robot_id),
                             task_id=f"video-{req.camera}")
-        return await c.send(cmd, timeout_s=self.ack_timeout_s)
+        return await c.send(cmd, timeout_s=self.ack_timeout_s if timeout_s is None
+                            else timeout_s)
 
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
                     *, issued_by: str, task_id: str | None = None, priority: int = 0,

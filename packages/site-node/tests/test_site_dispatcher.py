@@ -334,3 +334,24 @@ async def test_一直只收到过retained状态的狗_挂上超过时限就算�
     t.clock.advance(STALE_MS / 1000 + 1)
     assert t.site.is_stale("B")
     assert not t.site.is_stale("ghost"), "没登记的不算"
+
+
+async def test_video命令的有效期跟推流的有效期分开_至少30秒(台, monkeypatch):
+    """W00c5b 内部评审:狗用自己的钟判命令过期,狗钟偏十几秒时,只给 10 s 的命令全会 expired。"""
+    from d1max_contract.messages import Ack, AckResult
+    from d1max_contract.video import VideoRequest
+    from d1max_site.dispatcher import VIDEO_COMMAND_TTL_MS
+    t = 台
+    await t.run(3)
+    got = {}
+
+    async def 记下(cmd, timeout_s):
+        got["cmd"], got["timeout"] = cmd, timeout_s
+        return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
+    monkeypatch.setattr(t.site.clients["A"], "send", 记下)
+    req = VideoRequest(camera="front", url="srt://10.0.0.5:8890", passphrase="Q7kP2mX9vL4nR8tW",
+                       ttl_ms=10_000)
+    await t.site.video("A", req, timeout_s=2.5)
+    c = got["cmd"]
+    assert c.expires_at - c.issued_at == VIDEO_COMMAND_TTL_MS == 30_000
+    assert got["timeout"] == 2.5

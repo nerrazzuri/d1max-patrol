@@ -591,15 +591,15 @@ class _Handler(BaseHTTPRequestHandler):
         except VideoError as exc:
             raise HttpError(exc.status, exc.message) from exc
         boundary = b"frame"
-        self.send_response(200)
-        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.close_connection = True
         token = self._token()
         checked = time.monotonic()
         try:
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
             frame = first
             while not self.site.stopping:
                 self.wfile.write(b"--" + boundary + b"\r\nContent-Type: image/jpeg\r\n"

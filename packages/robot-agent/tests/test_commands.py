@@ -361,3 +361,11 @@ async def test_video载荷坏的拒_推流起不来如实拒_没有推流能力�
     cp.video = None
     ack = await cp.handle({**_video().to_wire(), "command_id": "c10"}, TOPIC)
     assert ack.result is AckResult.REJECTED and ack.reason == "unsupported"
+
+
+async def test_video命令不进幂等记录(cp):
+    """续期每 ttl/2 一条;记进幂等文件的话一路一天几十万行,代理起来还要全量重放。"""
+    cp.video = 假推流()
+    ack = await cp.handle({**_video().to_wire(), "command_id": "v-idem"}, TOPIC)
+    assert ack.result is AckResult.ACCEPTED
+    assert cp.idem.lookup("v-idem") is None

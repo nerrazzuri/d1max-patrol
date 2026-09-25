@@ -206,9 +206,16 @@ Stream<Uint8List> _mjpegFrames(Uri url,
   }
   final HttpClientResponse resp = await req.close();
   if (resp.statusCode != 200) {
-    await resp.drain<void>();
-    throw PatrolError(resp.statusCode, '这一路画面拉不下来',
-        '狗回了 ${resp.statusCode}');
+    // 对面（狗或站点）说了原因就把原因带上：站点会说「狗不在线」「第一帧等不到」这种人能照着查的话。
+    var why = '回了 ${resp.statusCode}';
+    try {
+      final body = await utf8.decoder.bind(resp).join().timeout(const Duration(seconds: 2));
+      final d = jsonDecode(body.length > 2000 ? body.substring(0, 2000) : body);
+      if (d is Map && d['error'] is String) why = d['error'] as String;
+    } on Object {
+      // 读不出原因就只报状态码
+    }
+    throw PatrolError(resp.statusCode, '这一路画面拉不下来', why);
   }
   final MjpegParser parser = MjpegParser.fromContentType(
       resp.headers.value(HttpHeaders.contentTypeHeader));
@@ -234,6 +241,7 @@ class LiveVideo extends StatefulWidget {
     this.token = '',
     this.streamPath,
     this.openClient,
+    this.firstFrameGrace = const Duration(seconds: 3),
   });
 
   final String baseUrl;
@@ -246,6 +254,10 @@ class LiveVideo extends StatefulWidget {
   /// 造 `HttpClient` 的方法。不给就是系统默认信任；站点模式给**钉住站点证书**的那个
   /// （`SiteApi.pinnedClient`）—— 画面走的是同一个站点，不许另开一条随便信证书的路。
   final HttpClient Function()? openClient;
+
+  /// 开流之后多久还没切出第一帧就认赔（见 `_LiveVideoState` 那条长注释）。直连狗 3 s；
+  /// 站点模式要长得多：站点得先让狗起推流、走 SRT 握手、等关键帧，冷启动常常超过 3 s。
+  final Duration firstFrameGrace;
 
   /// 「这一刻有没有画面」从这条流上来 —— 通常是 [VideoHealthPoller] 的。
   final Stream<VideoHealth> health;
@@ -306,7 +318,6 @@ class _LiveVideoState extends State<LiveVideo> {
   ///
   /// **只管第一帧。** 出过一帧就说明这条流是真的 MJPEG、地址也对，后面
   /// 卡多久都归 8 MiB 上限和退避管，不给正常的流再加一道超时。
-  static const Duration _firstFrameGrace = Duration(seconds: 3);
 
   /// 等第一帧的那个闹钟。第一帧到了就取消。
   Timer? _firstFrame;
@@ -426,7 +437,7 @@ class _LiveVideoState extends State<LiveVideo> {
         _reopenSoon();
       },
     );
-    _firstFrame = Timer(_firstFrameGrace, () {
+    _firstFrame = Timer(widget.firstFrameGrace, () {
       if (!mounted || gen != _gen) return;
       _fail(
           const PatrolError(0, '一直没收到画面数据',

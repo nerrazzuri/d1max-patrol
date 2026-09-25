@@ -51,3 +51,17 @@ def test_推流地址由代理拼_口令进参数():
     assert url.startswith("srt://10.0.0.5:8890?")
     assert "passphrase=" + "a" * 32 in url and "pbkeylen=16" in url and "latency=200000" in url
     assert "mode=listener" not in url
+
+
+def test_停止也是一条video命令_stop字段只认布尔():
+    r = parse_video_payload(_ok(stop=True))
+    assert r.stop is True and parse_video_payload(r.to_payload()) == r
+    assert parse_video_payload(_ok()).stop is False
+    with pytest.raises(ContractError):
+        parse_video_payload(_ok(stop="yes"))
+
+
+def test_抹掉口令():
+    from d1max_contract.video import scrub
+    assert scrub("srt://h:1?passphrase=abcDEF123456&pbkeylen=16: refused") == \
+        "srt://h:1?passphrase=***&pbkeylen=16: refused"

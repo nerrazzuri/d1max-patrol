@@ -118,11 +118,11 @@ def test_没登录401_相机名不认404(站点):
     assert s.req("GET", "/api/robots/A/video/health")[0] == 401
 
 
-def test_狗不在线_回502说清楚(站点):
+def test_没登记的狗_回404(站点):
     s = 站点
     tok = _登(s)
     code, d = s.req("GET", "/api/robots/ghost/video/front", token=tok)
-    assert code == 502 and "没接推流命令" in d["error"], d
+    assert code == 404 and "没有登记" in d["error"], d
 
 
 def test_狗不推视频_回502带狗的理由(tmp_path):
@@ -214,3 +214,110 @@ def test_画面冻住了_站点不等SRT自己超时_先断给观众(tmp_path):
             v.close()
     finally:
         s.close()
+
+
+# ------------------------------------------------------------ 内部评审补的(W00c5b)
+
+def test_续期按有效期的一半_不按帧率(站点):
+    """评审阻断:续期线程跟收流线程共用条件变量,每来一帧就发一条命令。"""
+    s = 站点
+    tok = _登(s)
+    _新鲜(s, tok)
+    n = {"req": 0}
+    real = s.pusher.request
+
+    def 数(req):
+        n["req"] += 1
+        return real(req)
+    s.pusher.request = 数
+    v = 观众(s, tok)
+    try:
+        assert len(v.jpegs(3)) == 3
+        t0, n0 = time.monotonic(), n["req"]
+        while time.monotonic() - t0 < 4.0:
+            v.jpegs(1)
+        # ttl 2 s → 每 1 s 续一次;4 s 里最多 5 条,不是 5 fps × 4 s = 20 条
+        assert n["req"] - n0 <= 6, n["req"] - n0
+    finally:
+        v.close()
+
+
+def test_正常收流不报推流失败_事件里也没有口令(tmp_path):
+    """有效期(10 s)比 SRT 对端空闲超时(约 5 s)长:站点收流时不先让狗停的话,狗那头推流进程会先因为
+    对端没了自己退、报一条假的推流失败。"""
+    s = _站(tmp_path, video={"ttl_ms": 10_000})
+    try:
+        tok = _登(s)
+        _新鲜(s, tok)
+        v = 观众(s, tok)
+        try:
+            assert len(v.jpegs(2)) == 2
+        finally:
+            v.close()
+        _等(lambda: s.pusher.running() == set(), timeout=15)
+        time.sleep(1)
+        evs = s.req("GET", "/api/robots/A", token=tok)[1]["events"]
+        assert not [e for e in evs if e["kind"] == "video_failed"], evs
+    finally:
+        s.close()
+
+
+def test_第一帧超时_这一路收掉_下一个观众重新起(tmp_path):
+    s = _站(tmp_path, video={"first_frame_timeout_s": 0.3})
+    try:
+        tok = _登(s)
+        _新鲜(s, tok)
+        assert s.req("GET", "/api/robots/A/video/front", token=tok)[0] == 504
+        f = s.hub.feed("A", "front")
+        assert not f._running, "起不来的那一路不许留着,狗上的推流也不许一直被续"
+        assert s.req("GET", "/api/robots/A/video/front", token=tok)[0] == 504
+        assert f.starts == 2
+    finally:
+        s.close()
+
+
+def test_没登记的狗_404_不建路不起进程(站点):
+    s = 站点
+    tok = _登(s)
+    assert s.req("GET", "/api/robots/nobody/video/front", token=tok)[0] == 404
+    assert s.req("GET", "/api/robots/nobody/video/health", token=tok)[0] == 404
+    assert ("nobody", "front") not in s.hub._feeds
+
+
+def test_续期偶尔失败一次不断画面(站点):
+    s = 站点
+    tok = _登(s)
+    _新鲜(s, tok)
+    v = 观众(s, tok)
+    try:
+        assert len(v.jpegs(2)) == 2
+        real, once = s.hub._send, {"left": 1}
+
+        def 抖一下(rid, req, **kw):
+            if once["left"]:
+                once["left"] -= 1
+                return "等狗的回执超时"
+            return real(rid, req, **kw)
+        s.hub._send = 抖一下
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 3.0:
+            assert v.jpegs(1), "续期失败一次就把正在出画面的流收掉了"
+        assert once["left"] == 0
+    finally:
+        v.close()
+
+
+def test_迟到的旧一代失败事件_不杀新一代(站点):
+    from d1max_contract.messages import Event
+    s = 站点
+    tok = _登(s)
+    _新鲜(s, tok)
+    v = 观众(s, tok)
+    try:
+        assert len(v.jpegs(2)) == 2
+        s.hub.on_event("A", Event(event_id="x", seq=999, boot_id="b", stamp=1, kind="video_failed",
+                                  data={"camera": "front", "url": "srt://127.0.0.1:1",
+                                        "reason": "旧的"}))
+        assert len(v.jpegs(3)) == 3, "别的端口(旧一代)的失败事件不许收掉当前这一路"
+    finally:
+        v.close()

@@ -150,3 +150,31 @@ def test_真狗的输入是相机RTSP_走TCP_默认不转码():
     assert cmd[-1].startswith("srt://127.0.0.1:9000?passphrase=")
     t = VideoPusher(source=rtsp_source("192.168.234.1"), transcode=True).argv(_req(9000))
     assert t[t.index("-c:v") + 1] == "libx264"
+
+
+def test_失败原因里没有口令(推):
+    p, c, events = 推
+    p.request(_req(_port()))
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and not events:
+        p.step()
+        time.sleep(0.2)
+    assert events and PW not in events[0][1]["reason"] and PW not in str(events[0][1])
+    assert events[0][1]["url"] .startswith("srt://127.0.0.1:"), events[0][1]
+
+
+def test_站点说停_安静地停_不报失败(推):
+    p, c, events = 推
+    port = _port()
+    site = 站点那头(port)
+    try:
+        p.request(_req(port))
+        assert site.jpegs(8.0) >= 1
+        p.request(VideoRequest(camera="front", url=f"srt://127.0.0.1:{port}", passphrase=PW,
+                               ttl_ms=10_000, stop=True))
+        assert p.running() == set()
+        for _ in range(10):
+            p.step()
+        assert events == []
+    finally:
+        site.close()

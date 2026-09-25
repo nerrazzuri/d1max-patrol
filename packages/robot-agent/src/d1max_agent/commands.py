@@ -141,7 +141,9 @@ class CommandProcessor:
         if cmd.kind == "abort":
             return self._finish(await self._handle_abort(cmd))
         if cmd.kind == "video":
-            return self._finish(self._handle_video(cmd))
+            # **不进幂等记录**:续期每 ttl/2 一条,记下来一路一天几十万行、代理起来还要全量重放。
+            # 重投的旧 video 命令至多把推流续到它自己的有效期,无害。
+            return self._handle_video(cmd)
         if cmd.kind not in self.supported:
             return self._finish(self._rej(cmd, "unsupported"))
         try:

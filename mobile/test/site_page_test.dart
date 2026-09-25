@@ -141,13 +141,29 @@ Future<void> openRobot(WidgetTester t, FakeApi api) async {
 }
 
 void main() {
+  test('画面开流看的是狗在不在线（新鲜），不是画面健康 —— 不然两头互相等，一次都起不来', () async {
+    final api = FakeApi('owner'); // 画面健康夹具里两路都是 offline，狗的视图是新鲜的
+    final p = SiteVideoHealthPoller(
+        api: api, robotId: 'A', period: const Duration(milliseconds: 50));
+    final h = await p.stream.first;
+    p.close();
+    expect(h.online, <String, bool>{'front': true, 'back': true});
+    expect(api.videoHealthCalls, 0, reason: '开流的判据不许是画面健康');
+    final stale = FakeApi('owner', robotView: <String, dynamic>{...siteFixture('site_robot'), 'fresh': false});
+    final p2 = SiteVideoHealthPoller(
+        api: stale, robotId: 'A', period: const Duration(milliseconds: 50));
+    final h2 = await p2.stream.first;
+    p2.close();
+    expect(h2.anyLive, isFalse, reason: '狗不新鲜就不去拉');
+  });
+
   testWidgets('单狗页有画面：前后切换、问站点的画面健康、取流走站点路径与钉证书的客户端', (t) async {
     final api = FakeApi('owner');
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
     await t.pump();
     await t.pump(const Duration(milliseconds: 100));
     expect(find.byKey(SiteVideo.cameraKey('front')), findsOneWidget);
-    expect(api.videoHealthCalls, greaterThan(0));
+    expect(api.robotCalls, greaterThan(1), reason: '开流看狗新不新鲜');
     var lv = t.widget<LiveVideo>(find.byType(LiveVideo));
     expect(lv.streamPath, '/api/robots/A/video/front');
     expect(lv.openClient, isNotNull);

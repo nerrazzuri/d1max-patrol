@@ -13,7 +13,11 @@ import '../net/site_client.dart';
 import '../net/wire.dart';
 import 'widget/live_video.dart';
 
-/// 按固定间隔问站点这台狗的画面健康，变成 `LiveVideo` 要的那条流。读不到当「都没有」。
+/// 按固定间隔问站点「这台狗在不在线、新不新鲜」，变成 `LiveVideo` 要的那条流。
+///
+/// **不问画面健康**：站点那头要有人来拉流才会让狗开始推，画面健康在那之前永远是「没有」——
+/// 拿它当开流的条件，两头就互相等，画面一次都起不来（W00c5b 内部评审阻断）。画面健康留给遥控的
+/// 「没画面不许动」用。读不到当「都不在」。**上一发还没回来就不再发**（每发都带超时）。
 class SiteVideoHealthPoller {
   SiteVideoHealthPoller({required SiteApi api, required this.robotId,
       this.period = const Duration(seconds: 2)})
@@ -32,14 +36,20 @@ class SiteVideoHealthPoller {
 
   Stream<VideoHealth> get stream => _ctl.stream;
 
+  bool _inFlight = false;
+
   Future<void> _tick() async {
+    if (_inFlight || _closed) return;
+    _inFlight = true;
     VideoHealth h;
     try {
-      h = VideoHealth.fromJson(await _api.videoHealth(robotId));
-    } on SiteError {
+      final v = await _api.robot(robotId).timeout(period * 3);
+      final up = v['fresh'] == true;
+      h = VideoHealth(<String, bool>{'front': up, 'back': up});
+    } on Object {
       h = const VideoHealth(<String, bool>{});
-    } on FormatException {
-      h = const VideoHealth(<String, bool>{});
+    } finally {
+      _inFlight = false;
     }
     if (!_closed) _ctl.add(h);
   }
@@ -95,6 +105,7 @@ class _SiteVideoState extends State<SiteVideo> {
           streamPath: '/api/robots/$id/video/$_camera',
           token: widget.api.session?.token ?? '',
           openClient: widget.api.pinnedClient,
+          firstFrameGrace: const Duration(seconds: 12),
           health: _poller.stream,
         ),
       ),

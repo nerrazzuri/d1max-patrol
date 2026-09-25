@@ -21,7 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import IO, Any
 
-from d1max_contract.video import VideoRequest, srt_push_url
+from d1max_contract.video import VideoRequest, scrub, srt_push_url
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +29,8 @@ Source = Callable[[str], list[str]]
 
 #: 报错时带多少 ffmpeg 的 stderr 尾巴。
 _ERR_TAIL = 300
+#: stderr 临时文件超过这么大就清空(libsrt 不管 -loglevel,丢包时会一直往 stderr 写)。
+_ERR_MAX = 256 * 1024
 
 
 def rtsp_source(host: str) -> Source:
@@ -53,9 +55,10 @@ class _Push:
 
 
 def _tail(f: IO[bytes]) -> str:
+    """stderr 的尾巴,**口令抹掉**:ffmpeg 报错会带出完整的推流地址。"""
     try:
         f.seek(0)
-        return f.read()[-_ERR_TAIL:].decode("utf-8", "replace").strip()
+        return scrub(f.read()[-_ERR_TAIL:].decode("utf-8", "replace").strip())
     except OSError:
         return ""
 
@@ -84,6 +87,9 @@ class VideoPusher:
 
     def request(self, req: VideoRequest) -> str:
         """收下一条 ``video`` 命令。返回空串 = 收下;否则是拒绝原因。"""
+        if req.stop:
+            self._stop(req.camera)                    # 站点收流之前说停:安静地停,不报失败
+            return ""
         now = self._clock()
         cur = self._push.get(req.camera)
         if cur is not None and cur.proc.poll() is None and cur.req.url == req.url \
@@ -92,7 +98,8 @@ class VideoPusher:
             return ""
         if cur is not None:
             self._stop(req.camera)
-        errs = tempfile.TemporaryFile()
+        # 追加模式:清空之后子进程接着往新的结尾写,不会留一个越来越大的空洞文件。
+        errs = tempfile.TemporaryFile(mode="a+b")
         try:
             proc = subprocess.Popen(self.argv(req), stdin=subprocess.DEVNULL,  # 自己拼的,没有 shell
                                     stdout=subprocess.DEVNULL, stderr=errs)
@@ -109,6 +116,9 @@ class VideoPusher:
         """每拍:到期没续的停;没到期就自己退了的报 ``video_failed``。"""
         now = self._clock()
         for cam, p in list(self._push.items()):
+            with contextlib.suppress(OSError):
+                if p.errs.seek(0, 2) > _ERR_MAX:
+                    p.errs.truncate(0)
             if now >= p.until:
                 log.info("%s 的推流到期没续,停", cam)
                 self._stop(cam)
@@ -118,7 +128,9 @@ class VideoPusher:
                 self._stop(cam)
                 log.warning("%s %s", cam, reason)
                 if self.emit is not None:
-                    self.emit("video_failed", {"camera": cam, "reason": reason})
+                    # url 不带口令:站点据此认出是不是当前这一代(端口)。
+                    self.emit("video_failed", {"camera": cam, "url": p.req.url,
+                                               "reason": reason})
 
     def running(self) -> set[str]:
         return {c for c, p in self._push.items() if p.proc.poll() is None}

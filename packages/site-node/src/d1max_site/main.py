@@ -311,6 +311,7 @@ class Server:
         from d1max_site.video import VideoHub, dispatcher_sender
         vcfg = cfg.get("video", {})
         self.video = VideoHub(send=dispatcher_sender(self.dispatcher, self.loop),
+                              known=lambda rid: rid in self.dispatcher.clients,
                               srt_host=vcfg.get("srt_host") or cfg["hostnames"][0],
                               ports=tuple(vcfg.get("ports", (8890, 8989))),
                               ffmpeg=vcfg.get("ffmpeg", "ffmpeg"))

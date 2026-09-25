@@ -83,6 +83,7 @@ class 站:
         if video is not None:                          # W00c5b:站点的视频扇出
             from d1max_site.video import VideoHub, dispatcher_sender
             self.hub = VideoHub(send=dispatcher_sender(self.disp, self.loop),
+                                known=lambda rid: rid in self.disp.clients,
                                 srt_host="127.0.0.1", bind_host="127.0.0.1", **video)
             self.disp.on_event(self.hub.on_event)
         self.api = SiteApi(host="127.0.0.1", port=0, loop=self.loop, dispatcher=self.disp,
