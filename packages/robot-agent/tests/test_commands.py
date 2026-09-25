@@ -463,6 +463,21 @@ async def test_halt中止一切并当场停车(tcp):
     assert tcp.halted == [True] and tcp.current.aborted_with == "halt"
 
 
+async def test_halt时停车失败_任务照样中止_回执说停车没成(tcp):
+    """W00c5e 内部评审:以前狗上的急停,停车失败回 502;halt 以前一律回 accepted,手机上说「停了」
+    其实没停。现在:任务照样中止(能做的都做),回执拒收、原因 stop_failed,
+    站点和手机说「按机身急停」。"""
+    def 坏():
+        raise RuntimeError("旁路进程没回")
+    tcp.halt_hook = 坏
+    await tcp.handle(_cmd(cid="g1", tid="goto-1").to_wire(), TOPIC)
+    await tcp.step(0.1)
+    ack = await tcp.handle(_cmd("halt", cid="h1", tid="halt-1", payload={"reason": "operator"},
+                                priority=0).to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason.startswith("stop_failed")
+    assert tcp.current.aborted_with == "halt", "停车没成也照样中止任务"
+
+
 async def test_遥控帧只交给当前这一趟遥控(tcp):
     from d1max_contract.teleop import TeleopFrame
     f = TeleopFrame(lease_epoch=2, seq=1, sent_at=NOW, ttl_ms=300, vx=0.1, wz=0.0)

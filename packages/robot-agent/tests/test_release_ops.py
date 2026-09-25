@@ -304,3 +304,21 @@ exit 0
     pips = [ln for ln in log.read_text().splitlines()[n:] if ln.startswith("-m pip")]
     assert pips and all("--no-index" in ln and "--find-links=" in ln and "/wheels" in ln
                         for ln in pips)
+
+
+def test_上一版不算老服务那一代(ops, tmp_path):
+    """老服务那一代的槽里没有代理的启动脚本,退过去代理起不来(W00c5e 内部评审阻断)。"""
+    o, served, restarts, built, layout = ops
+    (layout.release_dir(OLD) / "venv").mkdir(parents=True, exist_ok=True)
+    (layout.release_dir(OLD) / "venv" / SENTINEL).write_text("ok")
+    pkg = _包(tmp_path, NEW)
+    (pkg / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
+    raw = json.loads((pkg / "release.json").read_text())
+    raw["content_sha256"] = rel.tree_sha256(pkg)
+    (pkg / "release.json").write_text(json.dumps(raw))
+    o.install(_ref(served, NEW, _tar(pkg)))
+    o.activate(NEW)
+    assert o.commit_if_pending() == NEW
+    assert o.previous() is None and not o.can_roll_back()
+    with pytest.raises(ReleaseOpError):
+        o.rollback()

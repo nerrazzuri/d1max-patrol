@@ -319,14 +319,18 @@ class CommandProcessor:
         return cur.on_frame(frame, rx_ms=rx_ms)
 
     async def _handle_halt(self, cmd: Command) -> Ack:
-        """停车(W00c5c):**不走遥控连接**。当场让 HAL 停,中止当前与排队中的一切任务。"""
+        """停车(W00c5c):**不走遥控连接**。当场让 HAL 停,中止当前与排队中的一切任务。
+        停车本身失败的话任务照样中止,但回执**拒收**(``stop_failed``):不许让站点、手机说「停了」
+        而狗其实没停(W00c5e 内部评审)。"""
+        stop_failed = ""
         if self.halt_hook is not None:
             try:
                 r = self.halt_hook()
                 if hasattr(r, "__await__"):
                     await r
-            except Exception:
+            except Exception as exc:
                 log.exception("halt 时停车失败,任务照样中止")
+                stop_failed = f"stop_failed: {type(exc).__name__}: {exc}"[:120]
         for t in list(self.pending):
             self.pending.remove(t)
             t.state = TaskState.ABORTED
@@ -335,6 +339,8 @@ class CommandProcessor:
             self.events.emit("task_aborted", {"task_id": t.task_id, "reason": "halt"})
         if self.current is not None and not self.current.done:
             await self.current.abort("halt")
+        if stop_failed:
+            return self._rej(cmd, stop_failed)
         return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
 
     def _handle_video(self, cmd: Command) -> Ack:

@@ -127,9 +127,11 @@ class ReleaseOps:
         return (self.layout.release_dir(name) / "venv" / SENTINEL).is_file()
 
     def previous(self) -> str | None:
-        """「上一版」:比在跑的那版旧的、装好了的最新一版。没有回 None。"""
+        """「上一版」:比在跑的那版旧的、装好了的、退过去代理起得来的最新一版。没有回 None。
+        老服务那一代的槽(没有代理的启动脚本)不算(W00c5e 内部评审)。"""
         cur = self.current()
-        older = [n for n in rel.installed(self.layout) if n < cur and self.ready(n)]
+        older = [n for n in rel.installed(self.layout) if n < cur and self.ready(n)
+                 and rel.can_fall_back(self.layout, n, cur)]
         return older[-1] if older else None
 
     def can_roll_back(self) -> bool:

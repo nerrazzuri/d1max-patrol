@@ -178,6 +178,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_mig.add_argument("--data-root", default=None,
                        help=f"数据根,默认取 ${DATA_ROOT_ENV} 或 {DEFAULT_DATA_ROOT}")
 
+    bun = sub.add_parser("bundle", help="任务包:造包(**在笔记本上跑**,造好拿去站点导入)")
+    bun_sub = bun.add_subparsers(dest="bundle_command", required=True)
+    p_bp = bun_sub.add_parser(
+        "pack", help="把一个源目录(schedule.yaml、missions/、地图)打成任务包",
+        description=("把一个源目录打成任务包:四道纯数据闸、每个任务过一遍解析并盖 schema、"
+                     "算整包指纹、写 bundle.yaml。造好之后在站点主机上 "
+                     "d1max-site import-bundle <包目录>(W00c5e:狗上不再改任务、不再落包)。"))
+    p_bp.add_argument("src", help="源目录")
+    p_bp.add_argument("outdir", help="放包的父目录(包目录名是 <bundle_id>-<版本>)")
+    p_bp.add_argument("--id", dest="bundle_id", required=True, help="任务包 id,例如 site-kl")
+    p_bp.add_argument("--version", type=int, required=True, help="版本号,只许往上加")
+    p_bp.add_argument("--built-by", default="", help="谁编的")
+
 
     return parser
 
@@ -255,6 +268,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.full:
             sim_argv.append("--full")
         return sim_main(sim_argv)
+
+    if args.command == "bundle":
+        return _cmd_bundle_pack(args)
 
     if args.command == "release":
         # 跟 sim 同一条道理:装机时机器上根本没有后端可连,boot-guard 更是
@@ -591,6 +607,24 @@ def _cmd_release(args: argparse.Namespace) -> int:
     return _cmd_boot_guard(layout, now_ms)
 
 
+def _cmd_bundle_pack(args: argparse.Namespace) -> int:
+    """``bundle pack``(W00c5e):老服务退役后,改任务、造任务包只剩这一条路(站点导入它)。"""
+    from datetime import datetime, timezone
+
+    from d1max_contract.bundle_format import BundleError, build_bundle
+    built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        dest = build_bundle(args.src, args.outdir, bundle_id=args.bundle_id,
+                            version=args.version, built_at=built_at, built_by=args.built_by)
+    except (BundleError, OSError) as exc:
+        print(f"打不了任务包: {exc}", file=sys.stderr)
+        return 2
+    print(f"任务包目录 : {dest}")
+    print("下一步: 拷到站点主机上,跑")
+    print(f"  d1max-site import-bundle <拷过去的路径>/{dest.name}")
+    return 0
+
+
 def _cmd_release_pack(args: argparse.Namespace, now_ms: int) -> int:
     """`release pack`。造包的那一头,跑在笔记本上。
 
@@ -639,6 +673,8 @@ def _cmd_boot_guard(layout: Layout, now_ms: int) -> int:
             f"连着 {MAX_BOOT_ATTEMPTS} 次开机都没坐实,已退回上一版。",
         GuardAction.REPAIRED: "链断了,已经按在途标记(或盘上最新的一版)修好。",
         GuardAction.GAVE_UP: "装机那一次就没起来,没有上一版可退 —— 请人来看。",
+        GuardAction.NO_FALLBACK: "新版一直没坐实,可上一版是老服务那一代、退过去代理起不来 —— "
+                                 "留在新版,请人来看(网络、证书、站点地址)。",
         GuardAction.BROKEN: "盘上一版都没有 —— 这台机器要重装。",
     }
     文本 = (f"[守卫] {话.get(action, action.value)} 现在指着: "
@@ -646,7 +682,7 @@ def _cmd_boot_guard(layout: Layout, now_ms: int) -> int:
     # GAVE_UP / BROKEN 是"请人来看"的两种,打到 stderr 才不会被日常开机时
     # 收 stdout 的脚本悄悄吞掉。退出码仍然一律是 0(见本函数 docstring)——
     # 改的只是可见性,不是"这次开机算不算数"。
-    if action in (GuardAction.GAVE_UP, GuardAction.BROKEN):
+    if action in (GuardAction.GAVE_UP, GuardAction.BROKEN, GuardAction.NO_FALLBACK):
         print(文本, file=sys.stderr)
     else:
         print(文本)

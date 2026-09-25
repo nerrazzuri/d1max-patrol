@@ -128,6 +128,9 @@ class GuardAction(str, Enum):
     REPAIRED = "repaired"
     #: 装机那一次就没起来,没有上一版可退。标记清掉,让人来看。
     GAVE_UP = "gave_up"
+    #: 数够了,可上一版是老服务那一代(槽里没有代理的启动脚本),退过去代理起不来:
+    #: 留在新版,标记清掉,留条子,让人来看(W00c5e 内部评审)。
+    NO_FALLBACK = "no_fallback"
     #: 盘上一版都没有。这台机器没法起,得重装。
     BROKEN = "broken"
 
@@ -666,6 +669,18 @@ def commit(layout: Layout) -> tuple[str, ...]:
     return prune(layout)
 
 
+#: 代理的启动脚本(W00c5d:代理单元只指着这一版带的它)。
+AGENT_START = "deploy/d1max-agent-start"
+
+
+def can_fall_back(layout: Layout, src: str, to: str) -> bool:
+    """从 ``to`` 退回 ``src`` 起不起得来:``to`` 带代理的启动脚本而 ``src`` 不带,``src`` 就是
+    老服务那一代 —— 代理单元指着的启动脚本在那一版里不存在,退过去就再也没有服务(老服务的单元
+    也已经被装机脚本删了)。两版都不带(老服务那一代之间)照旧能退。"""
+    return (not (layout.releases / to / AGENT_START).is_file()
+            or (layout.releases / src / AGENT_START).is_file())
+
+
 def rollback(layout: Layout, *, now_ms: int) -> str:
     """退回上一版。**跟 activate 用同一个 ``_point_current``**,方向相反而已。
 
@@ -677,6 +692,9 @@ def rollback(layout: Layout, *, now_ms: int) -> str:
         raise ReleaseError("没有在途的升级 —— 没有该退回哪儿这回事")
     if not pending.src:
         raise ReleaseError("装机那一次没有上一版可退 —— 这台机器要人来看")
+    if not can_fall_back(layout, pending.src, pending.to):
+        raise ReleaseError(f"上一版 {pending.src} 里没有代理的启动脚本(老服务那一代),"
+                           "退过去代理起不来 —— 不退")
     _point_current(layout, pending.src)
     clear_pending(layout)
     return pending.src
@@ -793,6 +811,14 @@ def _boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
             # 清掉标记,让人来看:这台机器要重装,不是要回滚。
             clear_pending(layout)
             return GuardAction.GAVE_UP
+        if not can_fall_back(layout, pending.src, pending.to):
+            # 老服务那一代退不得(见 can_fall_back)。留在新版:网络、证书的事好了,代理自己就连上了;
+            # 新版真起不来,也比退到一个一定起不来的版本强。条子让站点知道这件事。
+            write_guard_note(layout, {"from": pending.to, "to": pending.to,
+                                      "attempts": pending.attempts, "at_ms": now_ms,
+                                      "no_fallback": True})
+            clear_pending(layout)
+            return GuardAction.NO_FALLBACK
         _point_current(layout, pending.src)
         # 退了要让站点知道(W00c5d 第三部分内部评审):守卫只写日志的话,管理员只看得见「版本没变」。
         # 留一张条子,代理起来连上站点时报 ``release_rolled_back``、删掉条子。

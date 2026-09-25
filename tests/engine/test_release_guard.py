@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from d1max_agent.engine.release import (
     MANIFEST_NAME,
     MAX_BOOT_ATTEMPTS,
     GuardAction,
     Layout,
+    ReleaseError,
     activate,
     boot_guard,
     commit,
@@ -189,3 +192,40 @@ def test_标记里的名字不合规也不会把异常甩给调用方(tmp_path):
                 attempts=MAX_BOOT_ATTEMPTS, at_ms=NOW, auto=False),
     )
     assert boot_guard(layout, now_ms=NOW) is GuardAction.BROKEN
+
+
+def _带启动脚本(root: Path, name: str) -> Path:
+    where = _pkg(root, name)
+    (where / "deploy").mkdir()
+    (where / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n", encoding="utf-8")
+    payload = json.loads((where / MANIFEST_NAME).read_text(encoding="utf-8"))
+    payload["content_sha256"] = tree_sha256(where, skip=MANIFEST_NAME)
+    (where / MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
+    return where
+
+
+def test_上一版是老服务那一代_守卫不退回去_留在新版并留条子(tmp_path):
+    """W00c5e 内部评审阻断:老狗升上来,上一版的槽里没有代理的启动脚本(老服务那一代),
+    老服务的单元也已经被装机脚本删了。新版代理连不上站点、没坐实,守卫数够次数退回老槽 ——
+    代理在那一版里起不来,狗就再也没有服务。**退不回去的就不退**:留在新版,清掉在途标记,
+    留一张条子说明,等人来看(网络好了代理自己就连上了)。"""
+    from d1max_agent.engine.release import rollback, take_guard_note
+    layout = Layout(root=tmp_path / "opt")
+    layout.releases.mkdir(parents=True)
+    old, new = "2026-09-06-a3f9c1", "2026-09-26-77b2de"
+    stage(layout, _pkg(tmp_path / "p1", old), now_ms=NOW)
+    stage(layout, _带启动脚本(tmp_path / "p2", new), now_ms=NOW)
+    activate(layout, old, now_ms=NOW)
+    commit(layout)
+    activate(layout, new, now_ms=NOW)
+    with pytest.raises(ReleaseError, match="启动脚本"):
+        rollback(layout, now_ms=NOW)
+    assert current_name(layout) == new and read_pending(layout) is not None
+    for _ in range(MAX_BOOT_ATTEMPTS):
+        assert boot_guard(layout, now_ms=NOW) is GuardAction.COUNTED
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.NO_FALLBACK
+    assert current_name(layout) == new, "留在新版"
+    assert read_pending(layout) is None
+    assert boot_guard(layout, now_ms=NOW) is GuardAction.OK, "下一次开机不再折腾"
+    note = take_guard_note(layout)
+    assert note is not None and note["no_fallback"] is True and note["from"] == new

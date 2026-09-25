@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -221,6 +221,12 @@ CREATE TABLE IF NOT EXISTS maps (
     PRIMARY KEY (map_id, version)
 );
 -- W00c5d 第三部分:站点的发布目录。包在 <站点目录>/releases/<版本名>.tar.gz。
+CREATE TABLE IF NOT EXISTS robot_holds (
+    robot_id TEXT PRIMARY KEY,
+    by       TEXT NOT NULL,
+    at_ms    INTEGER NOT NULL,
+    reason   TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS releases (
     name       TEXT PRIMARY KEY,
     version    TEXT NOT NULL,

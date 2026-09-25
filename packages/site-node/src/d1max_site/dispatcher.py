@@ -271,7 +271,7 @@ class Dispatcher:
         return {"robot_id": robot_id, "revoked": rec.revoked,
                 "active": self.registry.active(robot_id, now_ms=self._now()),
                 "expires_at": rec.expires_at, "status": status, "capabilities": caps,
-                "fresh": self._fresh(c)}
+                "fresh": self._fresh(c), "held": self.held(robot_id)}
 
     def robots_view(self) -> list[dict[str, Any]]:
         return [v for r in self.registry.list() if (v := self.robot_view(r.robot_id))]
@@ -304,8 +304,33 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 还没挂上派遣客户端")
         return c
 
+    # ------------------------------------------------------------ 叫停之后先不动(W00c5e)
+
+    def held(self, robot_id: str) -> dict[str, Any] | None:
+        """这只狗被叫停了、还没人点恢复:``{by, at_ms, reason}``;没有 → None。"""
+        rows = self.db.query("SELECT by, at_ms, reason FROM robot_holds WHERE robot_id=?",
+                             (robot_id,))
+        return dict(rows[0]) if rows else None
+
+    def resume(self, robot_id: str, *, by: str) -> bool:
+        """解除叫停。返回之前是不是真的停着。"""
+        with self.db.tx() as tx:
+            n = tx.execute("DELETE FROM robot_holds WHERE robot_id=?", (robot_id,)).rowcount
+        return n > 0
+
+    def _hold(self, robot_id: str, *, by: str, reason: str) -> None:
+        with self.db.tx() as tx:
+            tx.execute("INSERT OR REPLACE INTO robot_holds(robot_id, by, at_ms, reason) "
+                       "VALUES (?,?,?,?)", (robot_id, by, self._now(), reason[:64]))
+
+    def _check_held(self, robot_id: str) -> None:
+        h = self.held(robot_id)
+        if h is not None:
+            raise DispatchRefused(f"{robot_id} 被 {h['by']} 叫停了:先点「恢复」再派")
+
     def _check_dispatchable(self, robot_id: str, c: DispatchClient, kind: str) -> None:
-        """派遣条件(总设计 §3.1):在线、新鲜、就绪、支持这种任务。"""
+        """派遣条件(总设计 §3.1):在线、新鲜、就绪、支持这种任务;**没被叫停**(W00c5e)。"""
+        self._check_held(robot_id)
         s = c.status
         if s is None or not s.online:
             raise DispatchRefused(f"{robot_id} 不在线")
@@ -408,6 +433,7 @@ class Dispatcher:
         """授予遥控租约(一条任务命令,优先级最高)。要在线、新鲜、控制权与姿态就绪、急停已解除、
         支持遥控;**不要定位**(遥控不靠地图)。"""
         c = self._client_for(robot_id)
+        self._check_held(robot_id)
         s = c.status
         if s is None or not s.online or not self._fresh(c):
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
@@ -444,8 +470,13 @@ class Dispatcher:
 
     async def halt(self, robot_id: str, *, issued_by: str, reason: str = "operator"
                    ) -> dict[str, Any]:
-        """停车(不是任务、**不走遥控连接**)。只要登记有效就发:不在线也发(重连后补投,停车方向是安全的)。"""
+        """停车(不是任务、**不走遥控连接**)。只要登记有效就发:不在线也发(重连后补投,停车方向是安全的)。
+
+        **停下来之后站点不再给它派任何会让它动的东西**(派单、事件派遣、回待命点、遥控),直到有人
+        点恢复(W00c5e 内部评审:以前狗上的软急停要人解除才能再动;没有这一道,30 秒之后排程照样
+        把它派出去)。先记下来再发:回执等不到也照样算停着。"""
         c = self._client_for(robot_id)
+        self._hold(robot_id, by=issued_by, reason=reason)
         return await self._send(c, robot_id, "halt", {"reason": reason[:64]},
                                 issued_by=issued_by, task_id=f"halt-{uuid.uuid4().hex[:12]}",
                                 priority=TELEOP_PRIORITY)

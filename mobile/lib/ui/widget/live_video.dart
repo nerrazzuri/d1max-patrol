@@ -70,8 +70,7 @@ class MjpegParser {
 
   /// 从响应头的 `content-type` 里解 `boundary=`。
   ///
-  /// **不许写死一个常量。** 狗那头现在用的是 `d1maxframe`
-  /// (`app/server.py` 的 `_BOUNDARY`)，但那是它的私事：哪天换了一版，
+  /// **不许写死一个常量。** 站点那头用什么 boundary 是它的私事：哪天换了一版，
   /// 写死的实现会一帧都切不出来，而且黑得毫无线索 —— 画面空白、日志干净。
   factory MjpegParser.fromContentType(String? contentType) {
     final String ct = contentType ?? '';

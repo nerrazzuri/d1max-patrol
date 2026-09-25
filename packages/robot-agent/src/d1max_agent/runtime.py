@@ -540,7 +540,8 @@ class AgentRuntime:
             if note is not None:
                 # 新版起不来,开机守卫退回了上一版(W00c5d 第三部分内部评审):告诉站点。
                 self.events.emit("release_rolled_back", {k: note.get(k) for k in
-                                                         ("from", "to", "attempts", "at_ms")})
+                                                         ("from", "to", "attempts", "at_ms",
+                                                          "no_fallback")})
         await self._publish_status(force=True)
 
     async def close(self) -> None:

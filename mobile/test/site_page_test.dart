@@ -213,6 +213,11 @@ class FakeApi implements SiteApi {
     calls.add('halt $robotId');
     return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
   }
+  @override
+  Future<Map<String, dynamic>> resume(String robotId) async {
+    calls.add('resume $robotId');
+    return <String, dynamic>{'robot_id': robotId, 'was_held': true};
+  }
 
   /// 视频（W00c5b）。
   int videoHealthCalls = 0;
@@ -311,6 +316,25 @@ void main() {
     expect(find.byKey(const Key('btn-patrol')), findsNothing);
     expect(find.byKey(const Key('btn-standby')), findsNothing);
     expect(find.byKey(const Key('btn-abort')), findsOneWidget);
+  });
+
+  testWidgets('被叫停了：说清楚，保安有「恢复」，业主没有', (t) async {
+    final held = Map<String, dynamic>.of(siteFixture('site_robot'))
+      ..['held'] = <String, dynamic>{'by': 'olga', 'at_ms': 1, 'reason': 'operator'};
+    final guard = FakeApi('guard', robotView: held);
+    await openRobot(t, guard);
+    expect(find.byKey(const Key('robot-held')), findsOneWidget);
+    expect(find.textContaining('被 olga 叫停了'), findsOneWidget);
+    expect(find.textContaining('已叫停'), findsOneWidget);
+    await t.tap(find.byKey(const Key('btn-resume')));
+    await t.pumpAndSettle();
+    expect(guard.calls, contains('resume A'));
+    await t.pumpWidget(const SizedBox()); // 把上面那一页连同它的导航栈整个卸掉
+    await t.pumpWidget(MaterialApp(
+        home: SiteRobotPage(key: UniqueKey(), api: FakeApi('owner', robotView: held), robotId: 'A')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('robot-held')), findsOneWidget);
+    expect(find.byKey(const Key('btn-resume')), findsNothing);
   });
 
   testWidgets('没在跑任务就没有叫停按钮', (t) async {

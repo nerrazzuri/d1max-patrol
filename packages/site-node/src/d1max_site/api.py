@@ -78,7 +78,7 @@ ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
-_TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/(teleop|halt)$")
+_TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/(teleop|halt|resume)$")
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
@@ -323,6 +323,8 @@ class _Handler(TlsHandlerMixin):
                     raise HttpError(404, "没有这台狗")
                 if m.group(2) == "halt" and method == "POST":
                     return self._halt(robot_id, user)
+                if m.group(2) == "resume" and method == "POST":
+                    return self._resume(robot_id, user)
                 if m.group(2) == "teleop" and method == "GET":
                     return self._teleop_ws(robot_id, user)
                 raise HttpError(404, f"没有 {method} {path}")
@@ -628,7 +630,22 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(409, str(exc)) from exc
         except (DispatchTimeout, TimeoutError, FutureTimeout) as exc:
             raise HttpError(504, "狗没回停车的回执:看不到它停了没有,按机身急停") from exc
+        ack = r.get("ack") if isinstance(r, dict) else None
+        if isinstance(ack, dict) and ack.get("result") != "accepted":
+            # 狗说停车没成(W00c5e 内部评审):任务它中止了,腿停没停住不知道。
+            raise HttpError(502, f"狗说停车没成({ack.get('reason', '')}):按机身急停")
         return self._send_json(200, r)
+
+    def _resume(self, robot_id: str, user) -> None:
+        """解除叫停(W00c5e):之后站点才重新给这只狗派单。``dispatch`` 权限 —— 业主能停,不能恢复
+        (能不能让它再动,是会派它的人的事)。"""
+        self._need(user, DISPATCH)
+        self._body()
+        self._audit_target = robot_id
+        if self.site.dispatcher.registry.get(robot_id) is None:
+            raise HttpError(404, "没有这台狗")
+        was = self.site.dispatcher.resume(robot_id, by=str(user))
+        return self._send_json(200, {"robot_id": robot_id, "was_held": was})
 
     def _teleop_ws(self, robot_id: str, user) -> None:
         """遥控(W00c5c):先开租约(拒绝回 HTTP 状态码),再升级成 WebSocket;连接就是租约的载体。"""

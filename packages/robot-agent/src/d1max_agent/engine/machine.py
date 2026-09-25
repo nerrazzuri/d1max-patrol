@@ -167,7 +167,7 @@ log = logging.getLogger(__name__)
 def _now_ms() -> int:
     """墙钟的毫秒数(Unix epoch)。**引擎里唯一一处 ``time.time()``。**
 
-    时间戳要走墙钟不是洁癖:``SuspendPoint.at_ms`` 会被 ``app/server.py`` 拿去
+    时间戳要走墙钟不是洁癖:``SuspendPoint.at_ms`` 原来会被老服务 ``app/server.py``(W00c5e 退役)拿去
     跟它自己的 ``now_ms`` 相减判"挂起太久了"(P1 告警 ``suspend_stale``),两边
     得在同一条纪年上,单调钟那个数只在本进程内有意义。同理 ``_Live.started_ms``
     和 ``WaypointResult.arrived_ms`` 都是要写进归档给人看的时刻。
@@ -252,7 +252,7 @@ class SuspendPoint:
     #: 新建来保证,见 ``_go_home`` 里 ``live.suspend_total_ms = 0`` 边上的
     #: 注释)。
     #:
-    #: **不上线**,理由同 ``from_state``:判定在 ``app/server.py``
+    #: **不上线**,理由同 ``from_state``:判定原来在老服务 ``app/server.py``(W00c5e 退役)
     #: (``_挂起超时了``),它拿到的是这个对象本身,不是 wire 上那份。
     #:
     #: **没有默认值**:0 就是"这一趟还没挂起过",漏传只会让那条 P1 **晚**报
@@ -456,7 +456,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         ``engine.now_ms() - 点.at_ms`` 是一段**真实走过的时长**,狗上墙钟中途
         被校一下、或者压根没有 NTP,都不影响它。
 
-        **这是给 ``app/server.py::_挂起超时了`` 预备的。** 那边现在拿的是
+        **这原来是给老服务 ``app/server.py::_挂起超时了`` 预备的(W00c5e 退役)。** 那边当时拿的是
         ``self._ctx.clock()``(每次现问墙钟),跟 ``at_ms`` 一减就是"活墙钟 −
         锚定时刻",墙钟一跳这条 P1 的判据就跟着跳。那一半不在 engine 的地盘
         里,已写进报告等协调;这个方法先备好,那边改成 ``ctx.engine.now_ms()``
@@ -534,7 +534,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     home: HomePoint | None = None) -> None:
         """开一趟。已经在跑就拒绝 —— 两趟并行会把归档搅在一起。
 
-        引擎是按进程建的,原点却是按地图选的(见 ``app/server.py``):构造时
+        引擎是按进程建的,原点却是按地图选的(调用方按地图选):构造时
         给的那份只是初始值,真正对得上"这一趟跑哪张图"的那份,由调用方在
         这里换进来。**只在真的要开跑的这条路径上换**——挂在"已经在跑"或
         某个 ``_busy_checks`` 上的请求,不许动正在飞的那趟手里的原点。
@@ -651,7 +651,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         为什么不直接 ``int(time.time() * 1000)``:``SuspendPoint`` 的两个同胞
         字段原来跑在两条时基上 —— ``at_ms`` 是墙钟,``prior_suspend_ms`` 是
         ``self._clock()`` 这口可注入的单调钟,而它俩是同一个 ``finally`` 成对
-        收尾的。``app/server.py`` 判 ``suspend_stale``(P1 告警)算的是
+        收尾的。老服务(W00c5e 退役)判 ``suspend_stale``(P1 告警)算的是
         ``now_ms - 点.at_ms + 点.prior_suspend_ms`` —— 一个式子里把两条时基加
         在一起。现场没有 NTP,狗上墙钟一跳,这条 P1 的判据就跟着跳:往前跳
         误报一串 P1(2 分钟没人确认就 push、5 分钟出声),往后跳则该报的不报。

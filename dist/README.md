@@ -1,5 +1,11 @@
 # dist —— 带到现场的安装包
 
+> ⚠️ **2026-09-26（W00c5e）起，下面这个 `app-release.apk` 不能用了。** 它是老的「直连狗」版本：
+> 手机连狗的热点、输 PIN。狗上那一套服务已经退役，这个包装上之后**什么都连不上**。
+> 现在的 app 只连站点，要用 `mobile/` 现在的代码在装了 Android SDK 的机器上重编
+> （`cd mobile && flutter build apk --release`），编出来之后更新下面那张表。
+> 在那之前别把这个包带去现场。
+
 这个目录里的东西**是二进制,不是源码**。放进仓库只有一个理由:
 现场那台 Ubuntu 笔记本未必装了 Flutter 和 Android SDK,而
 `mobile/build/` 是 git 忽略的,`git clone` 拉不到包。把包放这儿,

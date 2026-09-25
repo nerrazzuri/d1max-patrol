@@ -39,6 +39,55 @@ void main() {
     await t.pumpWidget(Container());
   });
 
+  testWidgets('切到后台：零速、放租、关连接，屏上说遥控结束了（W00c5e 内部评审）', (t) async {
+    // 后台里定时器还在跑的话，手指按着的那个杆值会一直发出去，狗接着走 —— 而人已经不在看了。
+    final api = FakeApi('guard');
+    await _open(t, api);
+    final g = await t.startGesture(t.getCenter(find.byType(Joystick).at(0)));
+    await g.moveBy(const Offset(0, -200));
+    await t.pump(const Duration(milliseconds: 150));
+    expect(api.link!.sent.last[0], greaterThan(0));
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await t.pump(const Duration(milliseconds: 350));
+    expect(api.link!.sent.last, <double>[0, 0]);
+    final n = api.link!.sent.length;
+    await t.pump(const Duration(milliseconds: 500));
+    expect(api.link!.sent.length, n, reason: '后台里不再发帧');
+    expect(api.link!.released, isTrue);
+    expect(api.link!.isClosed, isTrue);
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await t.pump();
+    expect(find.textContaining('切到后台'), findsOneWidget);
+    expect(_stickEnabled(t, 0), isFalse, reason: '回来也不接着开：要重新进这一页');
+    await g.up();
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('通知栏拉一下（inactive）：杆值归零、只发零速，不结束遥控', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    final g = await t.startGesture(t.getCenter(find.byType(Joystick).at(0)));
+    await g.moveBy(const Offset(0, -200));
+    await t.pump(const Duration(milliseconds: 150));
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last, <double>[0, 0], reason: '手指多半被系统收走了:按零速发');
+    await g.up();
+    // 系统盖着的时候杆上又来了一下(新的一次按下):也只发零速。
+    final g2 = await t.startGesture(t.getCenter(find.byType(Joystick).at(0)));
+    await g2.moveBy(const Offset(0, -200));
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last, <double>[0, 0]);
+    expect(api.link!.released, isFalse);
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await t.pump();
+    expect(_stickEnabled(t, 0), isTrue);
+    await g2.up();
+    await t.pumpWidget(Container());
+  });
+
   testWidgets('右杆右推是顺时针（wz 为负）', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);

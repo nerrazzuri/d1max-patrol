@@ -211,6 +211,13 @@ class SiteAlertSources:
             self.desk.raise_alert(kind="release_failed", robot=rid,
                                   title=f"{what}没成:{d.get('name', '')}",
                                   detail=str(d.get("reason", ""))[:300])
+        elif e.kind == "release_rolled_back" and d.get("no_fallback"):
+            # 上一版是老服务那一代,退不回去,开机守卫把狗留在了新版(W00c5e 内部评审)。
+            self.desk.raise_alert(kind="release_failed", robot=rid,
+                                  title=f"新版 {d.get('from', '?')} 一直没坐实,上一版退不回去,"
+                                        "狗留在新版",
+                                  detail=f"开机守卫数了 {d.get('attempts', '?')} 次;看狗到站点的"
+                                         "网络、证书、站点地址")
         elif e.kind == "release_rolled_back":
             # 新版起不来,狗上的开机守卫退回了上一版(W00c5d 第三部分内部评审)。
             self.desk.raise_alert(kind="release_failed", robot=rid,

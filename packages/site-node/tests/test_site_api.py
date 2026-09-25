@@ -540,3 +540,49 @@ def test_TLS握手在每条连接自己的线程里_不发ClientHello的挡不�
     finally:
         idle.close()
         api.stop()
+
+
+def test_叫停之后站点不再派它_人点恢复才派_业主能停不能恢复(站点):
+    """W00c5e 内部评审:以前狗上的软急停按下去要人解除才能再动;站点的 halt 只是当场停车、中止
+    任务 —— 30 秒之后排程照样把它派出去。现在:叫停之后站点**不再给这只狗派任何会让它动的东西**
+    (派单、事件派遣、回待命点、遥控),直到有人(管理员、保安)点「恢复」。业主能按停,不能恢复。"""
+    s = 站点
+    alice = s.login()
+    s.accounts.add("olga", PW, role="owner")
+    olga = s.req("POST", "/api/login", {"name": "olga", "password": PW})[1]["token"]
+    _等(lambda: s.req("GET", "/api/robots/A", token=alice)[1].get("fresh"))
+    code, _ = s.req("POST", "/api/robots/A/halt", {}, token=olga)
+    assert code == 200
+    v = s.req("GET", "/api/robots/A", token=alice)[1]
+    assert v["held"] is not None and v["held"]["by"] == "olga"
+    code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
+    assert code == 409 and "叫停" in d["error"]
+    assert "叫停" in s.disp.dispatchable("A", "patrol"), "排程、事件派遣选狗时也跳过它"
+    from d1max_site.dispatcher import DispatchRefused
+
+    async def 开遥控():
+        return await s.disp.teleop_grant("A", lease_epoch=9, operator="alice",
+                                         lease_ttl_ms=5000, issued_by="alice")
+    with pytest.raises(DispatchRefused, match="叫停"):
+        s.loop.call(开遥控, timeout_s=10)
+    assert s.req("POST", "/api/robots/A/resume", {}, token=olga)[0] == 403
+    assert s.req("POST", "/api/robots/A/resume", {}, token=alice)[0] == 200
+    assert s.req("GET", "/api/robots/A", token=alice)[1]["held"] is None
+    code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    rows = s.db.query("SELECT * FROM audit WHERE action LIKE '%resume%'")
+    assert rows and rows[-1]["actor"] == "alice"
+
+
+def test_狗说停车没成_站点回502让人按机身急停(站点):
+    s = 站点
+    alice = s.login()
+    _等(lambda: s.req("GET", "/api/robots/A", token=alice)[1].get("fresh"))
+
+    async def 坏():
+        raise RuntimeError("旁路进程没回")
+    s.agent.processor.halt_hook = 坏
+    s.dog.stop = 坏
+    code, d = s.req("POST", "/api/robots/A/halt", {}, token=alice)
+    assert code == 502 and "机身急停" in d["error"], d
+    assert s.req("GET", "/api/robots/A", token=alice)[1]["held"] is not None, "照样算停着"

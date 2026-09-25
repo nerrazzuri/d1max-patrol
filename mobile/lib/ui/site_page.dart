@@ -35,7 +35,8 @@ String _statusLine(Map<String, dynamic> r) {
   final online = st['online'] == true && r['fresh'] == true;
   final task = st['task'];
   final taskText = task is Map ? '${task['kind']} ${task['state']}' : '空闲';
-  return online ? '在线 · $taskText' : '离线';
+  final held = r['held'] is Map ? '已叫停 · ' : '';
+  return held + (online ? '在线 · $taskText' : '离线');
 }
 
 // ------------------------------------------------------------ 站点列表
@@ -501,6 +502,22 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         onRefresh: _reload,
         child: ListView(padding: const EdgeInsets.all(12), children: [
           Text(v == null ? '加载中…' : _statusLine(v), key: const Key('robot-status')),
+          // 叫停之后站点不再派它（W00c5e）：说清楚，给能派单的人一个「恢复」。
+          if (v?['held'] is Map)
+            Card(
+              key: const Key('robot-held'),
+              color: Colors.orange.shade50,
+              child: ListTile(
+                title: Text('被 ${(v!['held'] as Map)['by']} 叫停了'),
+                subtitle: const Text('站点不会再派它（排程、事件、回待命点、遥控都不派），点「恢复」之后才派'),
+                trailing: (s?.canDispatch ?? false)
+                    ? FilledButton(
+                        key: const Key('btn-resume'),
+                        onPressed: () => _do(() => widget.api.resume(widget.robotId), '恢复'),
+                        child: const Text('恢复'))
+                    : null,
+              ),
+            ),
           if (_msg != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_msg!)),
           const SizedBox(height: 12),
           Wrap(spacing: 8, runSpacing: 8, children: [

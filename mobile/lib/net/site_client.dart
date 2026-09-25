@@ -124,8 +124,12 @@ abstract class SiteApi {
   /// [takeoverReason] 非空 = 管理员强制接管。
   Future<TeleopLink> teleop(String robotId, {String takeoverReason = ''});
 
-  /// 停车（W00c5c）：走站点的 `halt`，**不走遥控连接**。业主也能按。
+  /// 停车（W00c5c）：走站点的 `halt`，**不走遥控连接**。业主也能按。停下之后站点不再派它，
+  /// 直到有人 [resume]（W00c5e）。
   Future<Map<String, dynamic>> halt(String robotId);
+
+  /// 解除叫停（W00c5e）：之后站点才重新给这只狗派单。管理员、保安。
+  Future<Map<String, dynamic>> resume(String robotId);
 
   /// 运行记录（W00c5d，决策 8：证据都在站点）：最近的在前；[robotId] 给了只要这台狗的。
   /// 读不懂就抛 `FormatException`，不当成「没有记录」。
@@ -596,6 +600,9 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> halt(String robotId) async => _map(await _send(
       'POST', '/api/robots/${Uri.encodeComponent(robotId)}/halt', <String, dynamic>{}));
+  @override
+  Future<Map<String, dynamic>> resume(String robotId) async => _map(await _send(
+      'POST', '/api/robots/${Uri.encodeComponent(robotId)}/resume', <String, dynamic>{}));
 
   @override
   HttpClient pinnedClient() {

@@ -308,7 +308,9 @@ rm -f /usr/local/sbin/d1max-privileged /usr/local/sbin/d1max-restart-now
 rm -rf "$ROOT/bundles"
 # 现场值的唯一来源。**已经存在就绝不覆盖** —— 现场填过的值不能被重跑抹掉。
 mkdir -p /etc/d1max
+ENV_FRESH=0
 if [[ ! -e /etc/d1max/env ]]; then
+  ENV_FRESH=1
   # **先按 0600 建出空文件,再往里写。** `cat >` 在 root 的 umask 022 下建出来是 0644,
   # 同机别的账号都读得到。systemd 的 EnvironmentFile= 由 PID 1(root)读,不需要放宽。
   install -m 0600 /dev/null /etc/d1max/env
@@ -348,6 +350,18 @@ D1MAX_AGENT_ARGS=
 环境模板
 fi
 chmod 0600 /etc/d1max/env
+# **老机器的 env 是老服务那一代的模板**:没有站点地址、地图、原点、适配器这几行(模板只在文件不存在
+# 时写)。不动它,但把缺的键一个个说出来 —— 不说的话,现场照着清单填的时候找不到那一行。
+if [[ "$ENV_FRESH" == 0 ]]; then
+  LACKING=
+  for key in D1MAX_SITE_MQTT D1MAX_MAP D1MAX_HOME D1MAX_HAL; do
+    grep -qE "^[[:space:]]*$key=" /etc/d1max/env || LACKING="$LACKING $key"
+  done
+  if [[ -n "$LACKING" ]]; then
+    echo "  提示: /etc/d1max/env 是老模板,缺这几行:$LACKING"
+    echo "        照装机清单二补上;D1MAX_HAL 先写 sim(W00d 真机验收过了才改 d1max)。"
+  fi
+fi
 # 老机器的 env 里可能还有老服务用的几行(设备 PIN、回传地址与密钥):**不动它们**(不改人手写的
 # 配置文件),只说一声它们已经没人读了。
 if grep -qE '^[[:space:]]*D1MAX_(PIN|CONSOLE_URL|CONSOLE_TOKEN)=' /etc/d1max/env 2>/dev/null; then
@@ -433,9 +447,18 @@ for key in D1MAX_SITE_MQTT D1MAX_MAP D1MAX_HOME; do
     MISSING="$MISSING $key"
   fi
 done
+# 证书包要**代理的账号读得到**(代理以 $RUN_USER 跑,自己读私钥):root 拷进来的 0600 文件它读不了,
+# 一样是每 5 秒崩一次(W00c5e 内部评审)。
+for f in /etc/d1max/registration.json /etc/d1max/tls/ca.crt /etc/d1max/tls/robot.crt \
+         /etc/d1max/tls/robot.key; do
+  if [[ -f /etc/d1max/registration.json ]] && ! sudo -u "$RUN_USER" test -r "$f"; then
+    MISSING="$MISSING $f(不在,或者 $RUN_USER 读不了)"
+  fi
+done
 if [[ -f /etc/d1max/registration.json && -n "$MISSING" ]]; then
-  echo "  代理先不起:/etc/d1max/env 里这几样还空着:$MISSING" >&2
-  echo "  填好之后:sudo systemctl start d1max-agent(不用重跑这个脚本)。" >&2
+  echo "  代理先不起,这几样还不行:$MISSING" >&2
+  echo "  站点值填进 /etc/d1max/env;证书包 sudo chown -R $RUN_USER:$RUN_USER /etc/d1max/tls" >&2
+  echo "  /etc/d1max/registration.json。好了之后:sudo systemctl start d1max-agent(不用重跑这个脚本)。" >&2
 else
   systemctl start d1max-agent.service
 fi

@@ -4,6 +4,8 @@
 /// - 左杆前后（狗不横移），右杆只转向；按住每 100 ms 发一帧，松手发零速。站点和狗都会再夹限速。
 /// - **大红「停」走站点的 halt，不走遥控连接**（连接卡住的时候正是最需要停车的时候）；同时发零速。
 /// - 画面没了、租约结束、连接断了：屏上立刻说，杆变灰。
+/// - **切到后台就结束遥控**（零速、放租、关连接）；通知栏拉一下（inactive）只把杆值归零、
+///   照发零速。后台里定时器还在跑的话，手指按着的那个杆值会一直发出去（W00c5e 内部评审）。
 library;
 
 import 'dart:async';
@@ -42,7 +44,7 @@ class SiteTeleopPage extends StatefulWidget {
   State<SiteTeleopPage> createState() => _SiteTeleopPageState();
 }
 
-class _SiteTeleopPageState extends State<SiteTeleopPage> {
+class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObserver {
   TeleopLink? _link;
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _tick;
@@ -53,10 +55,50 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> {
   double _maxVx = 0, _maxWz = 0;
   double _fwd = 0, _turn = 0;
 
+  /// 通知栏拉下来、来电盖住这一类：手指多半被系统收走了，这段时间只发零速。
+  bool _inactive = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_open());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.inactive:
+        _inactive = true;
+        _fwd = _turn = 0;
+        _link?.send(0, 0);
+      case AppLifecycleState.resumed:
+        _inactive = false;
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        _endLocally('切到后台了，遥控已结束（狗已停）。要接着开，重新进这一页');
+    }
+  }
+
+  /// 本机收手：不再发杆值、零速、放租、关连接、杆变灰。
+  void _endLocally(String why) {
+    if (_ended) return;
+    _stopTicking();
+    _fwd = _turn = 0;
+    final link = _link;
+    if (link != null) {
+      link.send(0, 0);
+      link.release();
+      unawaited(link.close());
+    }
+    if (mounted) {
+      setState(() {
+        _ended = true;
+        _granted = false;
+        _status = why;
+      });
+    }
   }
 
   Future<void> _open() async {
@@ -114,6 +156,10 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> {
   void _sendNow() {
     final link = _link;
     if (link == null || !_granted || _ended || !_video) return;
+    if (_inactive) {
+      link.send(0, 0);
+      return;
+    }
     link.send(_fwd * _maxVx, -_turn * _maxWz); // 右推 = 顺时针 = wz 为负
   }
 
@@ -143,13 +189,14 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> {
     } on SiteError catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('停车命令没发出去：$e —— 按机身急停！')));
+            .showSnackBar(SnackBar(content: Text('停车没确认：$e —— 按机身急停！')));
       }
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _stopTicking();
     _sub?.cancel();
     final link = _link;

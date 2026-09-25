@@ -1,5 +1,5 @@
-"""``d1max-agent`` 入口(W00b 决定 3、4):装配 transport/HAL/引擎/运行时,可选托管老 AppServer
-共用同一台引擎。这里在进程内调 ``build()``,transport 用 memory://(站点客户端挂同一个 broker)。"""
+"""``d1max-agent`` 入口(W00b 决定 3、4):装配 transport/HAL/引擎/运行时(W00c5e 起不再托管老的
+HTTP 面)。这里在进程内调 ``build()``,transport 用 memory://(站点客户端挂同一个 broker)。"""
 
 from __future__ import annotations
 
