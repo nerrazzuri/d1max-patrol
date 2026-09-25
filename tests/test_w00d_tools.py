@@ -56,6 +56,8 @@ def test_探针只读_报版本控制权姿态电量里程(仿真旁路, tmp_pat
     assert got["sdk_motion"] == "LieDown" and got["hal_motion"] == "lying"
     assert got["battery"] == 71.0 and got["estop"] is False and got["odom"]["valid"]
     assert got["odom_hz"] > 5
+    assert got["estop_raw"] == {"software": "Recover", "hardware": "Recover"}
+    assert got["odom_speed_max"] == {"vx": 0.0, "vy": 0.0, "vyaw": 0.0}
     assert [c for c, _ in 仿真旁路.commands] == [], "探针一条命令都不发"
 
 
@@ -76,8 +78,8 @@ def test_运动检查不带在场声明_连都不连(仿真旁路, tmp_path, cap
 
 def test_运动检查的速度与时长有硬上限(tmp_path):
     mc = _load("w00d_motion_check")
-    for bad in (["--fwd-vx", "0.5"], ["--turn-wz", "0.8"], ["--fwd-s", "10"],
-                ["--deadband-fraction", "0.4"]):
+    for bad in (["--fwd-fraction", "0.4"], ["--fwd-fraction", "-0.3"], ["--turn-fraction", "-0.5"],
+                ["--turn-fraction", "nan"], ["--fwd-s", "10"], ["--deadband-fraction", "0.4"]):
         with pytest.raises(SystemExit):
             mc.main(["--i-am-present", "--log-dir", str(tmp_path), *bad])
 
@@ -91,13 +93,12 @@ def test_运动检查_趴着就不动(仿真旁路, tmp_path):
     assert "vel" not in [c for c, _ in 仿真旁路.commands]
 
 
-def test_运动检查_五步走完_给出换算建议(仿真旁路, tmp_path):
-    """仿真旁路里比例 1.0 折 1.2 m/s、1.5 rad/s,低于比例 0.2 不动:配置给对了,建议值就该
-    接近配置值;死区那一步不动。"""
+def test_运动检查_默认比例_五步走完_给出换算建议(仿真旁路, tmp_path):
+    """仿真旁路里比例 1.0 折 1.2 m/s、1.5 rad/s,低于比例 0.2 不动。工具按比例值发命令,**默认参数**
+    下不经过任何未实测的系数,建议值就该接近仿真的真值;死区那一步不动。"""
     仿真旁路.motion = SdkMotion.GENERAL
     mc = _load("w00d_motion_check")
     rc = mc.main(["--i-am-present", "--sidecar", f"127.0.0.1:{仿真旁路.port}",
-                  "--mps-per-unit", "1.2", "--radps-per-unit", "1.5", "--turn-wz", "0.45",
                   "--turn-s", "1", "--fwd-s", "1", "--log-dir", str(tmp_path)])
     got = json.loads(next(tmp_path.glob("w00d-motion-*.json")).read_text(encoding="utf-8"))
     assert rc == 0 and got["ok"], got
@@ -108,5 +109,7 @@ def test_运动检查_五步走完_给出换算建议(仿真旁路, tmp_path):
     assert abs(got["suggest"]["mps_per_unit"] - 1.2) < 0.3, got["suggest"]
     assert abs(got["suggest"]["radps_per_unit"] - 1.5) < 0.4, got["suggest"]
     assert got["suggest"]["invert_yaw"] is False
+    vels = [a for c, a in 仿真旁路.commands if c == "vel"]
+    assert max(abs(a["fwd"]) for a in vels) <= 0.3 + 1e-9, "发出去的比例不超过要求的比例"
     assert "shutdown" not in [c for c, _ in 仿真旁路.commands]
     assert 仿真旁路.commands[-1][0] == "halt", "最后一条是停车"

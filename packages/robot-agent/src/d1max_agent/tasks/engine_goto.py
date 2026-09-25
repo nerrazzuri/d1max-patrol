@@ -8,6 +8,7 @@
 ``FAILED``,理由用引擎的 ``reason``。终态之前还要等 ``hal.stopped()`` 为真——停止请求与确认分开;
 还要等导航回到 StandBy:终态一出,资源就放给下一趟,下一趟的预飞 ``nav_ready`` 要看到 StandBy,
 导航还在 Cancelled/Succeed 的驻留期里的话,抢占就变成「旧的停了、新的也 failed」。
+停止确认等不过 ``STOP_CONFIRM_TIMEOUT_S`` 就再发一次停、按 ``stop_unconfirmed`` 失败收尾。
 ``on_offline(safe=False)`` → ``engine.pause()``;``on_online()`` → ``engine.resume()``。
 """
 
@@ -28,6 +29,9 @@ from d1max_patrol.protocol.nav_types import NavStatus, Pose
 log = logging.getLogger(__name__)
 
 PROGRESS_EVERY_M = 0.5
+#: 引擎进终态之后,最多等这么久确认机器停了(秒)。等不到就再发一次停车、按 ``stop_unconfirmed``
+#: 失败收尾 —— 不然 ``stopped()`` 的阈值不合真机(W00d 待测)时任务永远卡在 RUNNING、资源不放。
+STOP_CONFIRM_TIMEOUT_S = 5.0
 _TERMINAL = frozenset({RunState.DONE, RunState.ABORTED})
 
 
@@ -47,6 +51,7 @@ class EngineMissionTask(Task):
         self._holding = False
         self._started = False
         self._reported_results = 0
+        self._unconfirmed_s = 0.0
 
     def _mission(self) -> Mission:
         raise NotImplementedError
@@ -112,7 +117,17 @@ class EngineMissionTask(Task):
         if snap.state not in _TERMINAL:
             return
         if not await self._parts.hal.stopped():
-            return                                   # 引擎收尾了,机器还在制动:等确认
+            self._unconfirmed_s += dt_s              # 引擎收尾了,机器还在制动:等确认
+            if self._unconfirmed_s < STOP_CONFIRM_TIMEOUT_S:
+                return
+            log.error("任务 %s:引擎收尾 %.1fs 了还确认不了停车,再发一次停,按失败收尾",
+                      self.task_id, self._unconfirmed_s)
+            try:
+                await self._parts.hal.stop()
+            except Exception:
+                log.exception("再发一次停车也失败了")
+            self._fail("stop_unconfirmed")
+            return
         if await self._parts.nav.nav_status() is not NavStatus.STANDBY:
             return                                   # 导航还在终态驻留期:下一趟现在起会被预飞拒
         if snap.state is RunState.DONE:

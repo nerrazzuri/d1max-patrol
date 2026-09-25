@@ -336,10 +336,11 @@ class SimAgentServer:
         """带有效期的持续速度:**立刻回执**;有效期内一直走,到期自停;新的覆盖旧的并续期;
         ``halt``/``estop`` 加停车代数,速度线程看见就停。"""
         self._need_control("vel")
-        if self.motion in (MotionStatus.LIE_DOWN, MotionStatus.UNKNOWN):
-            raise _Rejected("趴着走不了,先 stand")
-        if self.estop_software is EmergencyStatus.STOP:
-            raise _Rejected("软急停生效中,拒绝动作")
+        # 同 patrol_agent.cpp 的 DoVel:任一路急停、趴着/锁死/姿态未知都拒。
+        if EmergencyStatus.STOP in (self.estop_software, self.estop_hardware):
+            raise _Rejected("急停生效中,拒绝动作")
+        if self.motion in (MotionStatus.LIE_DOWN, MotionStatus.UNKNOWN, MotionStatus.LOCKED):
+            raise _Rejected("趴着/锁死/姿态未知,走不了,先 stand")
         try:
             fwd = float(args.get("fwd", 0.0))
             lat = float(args.get("lat", 0.0))

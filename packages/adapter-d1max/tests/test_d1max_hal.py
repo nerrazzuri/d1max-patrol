@@ -69,7 +69,8 @@ def test_能力_控制权不可释放_没有横移_只有灯():
 
 def test_参数不合理当场拒():
     for bad in ({"mps_per_unit": 0.0}, {"radps_per_unit": -1.0}, {"deadband_mps": -0.1},
-                {"max_fraction": 0.0}, {"max_fraction": 0.6}, {"mps_per_unit": float("nan")}):
+                {"max_fraction": 0.0}, {"max_fraction": 0.6}, {"mps_per_unit": float("nan")},
+                {"stopped_eps": 0.0}):
         with pytest.raises(ValueError):
             D1MaxHal(**bad)
 
@@ -183,13 +184,47 @@ async def _not(coro):
     return not await coro
 
 
-async def test_没控制权拒_旁路拒了也如实报():
+async def test_没控制权拒_趴着拒_旁路拒了也如实报(monkeypatch):
     async with _台子(held=False, stand=False) as (sim, hal):
         got = await hal.set_velocity(_v(vx=0.36))
         assert got.rejected and got.reason == "no_control"
     async with _台子(stand=False) as (sim, hal):
         got = await hal.set_velocity(_v(vx=0.36))
+        assert got.rejected and got.reason == "not_ready", "趴着的真狗收到 vel 会先 Gait:不下发"
+        assert "vel" not in [c for c, _ in sim.commands]
+
+        async def 假装待命():
+            return MotionStatus.READY
+        monkeypatch.setattr(hal, "motion_status", 假装待命)
+        got = await hal.set_velocity(_v(vx=0.36))
         assert got.rejected and got.reason.startswith("sidecar:") and "趴着" in got.reason
+
+
+async def test_急停有一路不知道_按急停算():
+    """旁路进程在客户端刚连上时先补一帧全零(Unknown)的占位状态:不知道就不许走。"""
+    from d1max_patrol.protocol.agent_frames import EmergencyStatus
+
+    async with _台子() as (sim, hal):
+        sim.estop_hardware = EmergencyStatus.UNKNOWN
+        assert await _等(hal.estop_status)
+        got = await hal.set_velocity(_v(vx=0.36))
+        assert got.rejected and got.reason == "estop"
+        assert (await hal.health()).estop
+        sim.estop_hardware = EmergencyStatus.RECOVER
+        assert await _等(lambda: _not(hal.estop_status()))
+
+
+async def test_vel回执等不过半秒_不冻住速度环(monkeypatch):
+    async with _台子() as (sim, hal):
+        seen = {}
+        real = hal._b.vel
+
+        async def 记着(*a, **k):
+            seen.update(k)
+            return await real(*a, **k)
+        monkeypatch.setattr(hal._b, "vel", 记着)
+        await hal.set_velocity(_v(vx=0.36))
+        assert seen["timeout_s"] == 0.5
 
 
 async def test_ttl到期自己停_里程记下走过的路():
@@ -300,3 +335,15 @@ async def test_其余站姿不算待命_锁死算趴着():
 
 async def _motion_is(hal, want):
     return await hal.motion_status() is want
+
+
+async def test_停了的阈值按配置():
+    """站着的里程噪声比默认阈值大时,配大一点就能确认停了(``--stopped-eps``)。"""
+    async with _台子(stopped_eps=0.2) as (sim, hal):
+        sim.vx = 0.1                                  # 仿真站着不动,但里程报 0.1 的噪声
+        await asyncio.sleep(0.15)
+        assert await hal.stopped()
+    async with _台子() as (sim, hal):
+        sim.vx = 0.1
+        await asyncio.sleep(0.15)
+        assert not await hal.stopped()

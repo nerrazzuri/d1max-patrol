@@ -75,7 +75,7 @@ def _hostport(text: str) -> tuple[str, int]:
 
 #: ``--hal d1max`` 的旁路进程与单位换算默认值(W00d 决定三 A:**都待真机实测**)。
 D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 0.4, "radps_per_unit": 1.0,
-                  "deadband": 0.05, "max_fraction": 0.5}
+                  "deadband": 0.05, "max_fraction": 0.5, "stopped_eps": 0.02}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="转向比例 1.0 对应的 rad/s,默认 1.0")
     d1.add_argument("--deadband", type=float, default=None, help="低于这个 m/s 拒,默认 0.05")
     d1.add_argument("--max-fraction", type=float, default=None, help="比例上限,默认 0.5")
+    d1.add_argument("--stopped-eps", type=float, default=None,
+                    help="里程速度低于它算停了(m/s、rad/s),默认 0.02;要大于站着时的噪声")
     d1.add_argument("--invert-yaw", action="store_true", help="转向方向跟 SDK 相反时翻过来")
     p.add_argument("--registration", type=Path, required=True, help="站点签发的注册文件")
     p.add_argument("--store-dir", type=Path, required=True, help="幂等记录、事件簿、代次落盘的目录")
@@ -219,7 +221,7 @@ def build(args: argparse.Namespace) -> Assembled:
             hal = D1MaxHal(host, port, mps_per_unit=args.mps_per_unit,
                            radps_per_unit=args.radps_per_unit, deadband_mps=args.deadband,
                            max_fraction=args.max_fraction, invert_yaw=args.invert_yaw,
-                           now_ms=wall_ms)
+                           stopped_eps=args.stopped_eps, now_ms=wall_ms)
             media = None                          # RTSP 取图归后面的工单
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
                              home=args.home, media=media)

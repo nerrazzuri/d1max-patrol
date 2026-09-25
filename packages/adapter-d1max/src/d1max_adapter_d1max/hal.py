@@ -42,6 +42,7 @@ from d1max_patrol.backends.sidecar_device import (
     VEL_TTL_MIN_MS,
     SidecarDeviceBackend,
 )
+from d1max_patrol.protocol.agent_frames import EmergencyStatus
 from d1max_patrol.protocol.agent_frames import MotionStatus as SdkMotion
 
 ADAPTER_ID = "d1max/0.1.0"
@@ -54,8 +55,12 @@ _LYING_MOTIONS = frozenset({SdkMotion.LIE_DOWN, SdkMotion.LOCKED})
 
 #: 里程多久没来算不新鲜(秒)。旁路进程 50 Hz 转发 ``OnMcData``,1 s 没来就是链路出事了。
 ODOM_STALE_S = 1.0
-#: 里程速度绝对值低于这个算停了(m/s、rad/s)。
+#: 里程速度绝对值低于这个算停了(m/s、rad/s)。**待测**:四足站着不动时里程速度的噪声没量过,
+#: 探针会记下观察窗口里的最大值;太小的话 ``stopped()`` 永远不成立(代理那头有兜底超时)。
 STOPPED_EPS = 0.02
+#: ``vel`` 等回执的上限(秒)。速度环 10 Hz,回执卡住就把整个代理的一拍冻住;超时按拒绝算,
+#: 狗那头最多再走一个 ``ttl`` 就自己停。
+VEL_ACK_TIMEOUT_S = 0.5
 #: 连上之后等第一帧状态与里程多久。等不到就是旁路进程不对劲,不接。
 FIRST_FRAME_TIMEOUT_S = 3.0
 #: 站起/趴下之后等状态帧跟上的上限。站起实测约 6 s(清单 #36)。
@@ -78,7 +83,8 @@ class D1MaxHal:
     def __init__(self, host: str = DEFAULT_AGENT_HOST, port: int = DEFAULT_AGENT_PORT, *,
                  mps_per_unit: float = 0.4, radps_per_unit: float = 1.0,
                  deadband_mps: float = 0.05, max_fraction: float = 0.5,
-                 invert_yaw: bool = False, frame_id: str = "odom",
+                 invert_yaw: bool = False, stopped_eps: float = STOPPED_EPS,
+                 frame_id: str = "odom",
                  now_ms: Callable[[], int] = wall_ms,
                  backend: SidecarDeviceBackend | None = None) -> None:
         for name, v in (("mps_per_unit", mps_per_unit), ("radps_per_unit", radps_per_unit)):
@@ -93,6 +99,9 @@ class D1MaxHal:
         self._deadband = deadband_mps
         self._frac = max_fraction
         self._yaw_sign = -1.0 if invert_yaw else 1.0
+        if not (math.isfinite(stopped_eps) and stopped_eps > 0):
+            raise ValueError(f"stopped_eps 要是正数,收到 {stopped_eps}")
+        self._stopped_eps = stopped_eps
         self._frame = frame_id
         self._now = now_ms
         self._monotonic: Callable[[], float] = time.monotonic
@@ -185,6 +194,8 @@ class D1MaxHal:
             return _reject("no_control")
         if self._estop_now():
             return _reject("estop")
+        if await self.motion_status() is not MotionStatus.READY:
+            return _reject("not_ready")          # 趴着、锁死、姿态未知、非待命站姿:不下发
         if not all(math.isfinite(v) for v in (cmd.vx, cmd.vy, cmd.wz)):
             return _reject("not_finite")
         if abs(cmd.vy) > 1e-9:
@@ -198,7 +209,7 @@ class D1MaxHal:
         yaw = _clamp(self._yaw_sign * wz / self._radps, self._frac)
         ttl = min(max(int(cmd.ttl_ms), VEL_TTL_MIN_MS), VEL_TTL_MAX_MS)
         try:
-            await self._b.vel(fwd, 0.0, yaw, ttl)
+            await self._b.vel(fwd, 0.0, yaw, ttl, timeout_s=VEL_ACK_TIMEOUT_S)
         except DeviceBackendError as exc:
             return _reject(f"sidecar: {exc}")
         self._vel_until = self._monotonic() + ttl / 1000.0
@@ -217,7 +228,7 @@ class D1MaxHal:
         o = self._b.last_odom
         if o is None or not self._odom_fresh():
             return False                              # 不知道,就不说停了
-        return max(abs(o.vx), abs(o.vy), abs(o.vyaw)) < STOPPED_EPS
+        return max(abs(o.vx), abs(o.vy), abs(o.vyaw)) < self._stopped_eps
 
     async def emergency_stop(self, on: bool) -> None:
         if on:
@@ -231,9 +242,13 @@ class D1MaxHal:
         await self._b.emergency_stop(False)
 
     def _estop_now(self) -> bool:
-        """没状态帧 = 不知道 = 按急停算:放行等于赌运气。"""
+        """软、硬两路**都**报「已解除」才算没急停。没状态帧、任一路 ``Unknown``(旁路进程在
+        客户端刚连上时会先补一帧全零的占位状态)都按急停算:不知道,放行等于赌运气。"""
         st = self._b.last_state
-        return True if st is None else st.emergency
+        if st is None:
+            return True
+        return not (st.estop_software is EmergencyStatus.RECOVER
+                    and st.estop_hardware is EmergencyStatus.RECOVER)
 
     # ------------------------------------------------------------ 感知
 

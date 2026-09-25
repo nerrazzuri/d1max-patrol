@@ -419,11 +419,23 @@ static Outcome DoWalk(double seconds, double fwd, double lat, double yaw,
   return Outcome{};
 }
 
+// SDK 枚举码(sdk_type.hpp 的声明顺序,同 agent_frames.py 的 MOTION_BY_CODE / EMERGENCY_BY_CODE)。
+static const int kMotionUnknown = 0, kMotionLieDown = 2, kMotionLocked = 4;
+static const int kEstopStop = 2;
+
 /// 持续速度(协议 v3)。**立刻回执**:真正发 Move 的是 VelLoop。
 ///
 /// **要控制权**(同 walk)。比例值与 walk 同一个上限 ±0.5;有效期 [50, 1000] ms。
+/// 趴着/锁死/姿态未知、任一路急停生效都拒 —— 急停期间收下的速度不许在急停解除后生效。
 static Outcome DoVel(double fwd, double lat, double yaw, double ttl_ms) {
   if (!g_held.load()) return DenyControl("vel");
+  {
+    std::lock_guard<std::mutex> lk(g_state_mtx);
+    if (g_estop_sw == kEstopStop || g_estop_hw == kEstopStop)
+      return Reject("急停生效中,拒绝动作");
+    if (g_motion == kMotionUnknown || g_motion == kMotionLieDown || g_motion == kMotionLocked)
+      return Reject("趴着/锁死/姿态未知,走不了,先 stand");
+  }
   if (!std::isfinite(fwd) || !std::isfinite(lat) || !std::isfinite(yaw) ||
       std::fabs(fwd) > kMaxWalkSpeed || std::fabs(lat) > kMaxWalkSpeed ||
       std::fabs(yaw) > kMaxWalkSpeed)
@@ -443,24 +455,41 @@ static Outcome DoVel(double fwd, double lat, double yaw, double ttl_ms) {
 
 /// 速度线程:有效期内、代数没变、还握着控制权 → 每 50ms 发一次 Move;从静止起步先 Gait
 /// 一次;过期、被叫停或控制权丢了 → 连发零速一次性收住,然后等下一条 vel。
+///
+/// 「还该不该走」在拿到 SDK 锁之后、Gait 回来之后**各再看一次**:等锁(可能排在一整段 walk
+/// 后面)或 Gait(2000) 阻塞期间有人 halt/estop、或者有效期过了,就不再发那条过期的 Move。
+/// 已知上限(同 walk):Gait(2000) 是 SDK 的阻塞调用,halt/estop 正好落在里面时要等它回来。
 static void VelLoop() {
   bool moving = false;
+  auto live_now = [](const VelTarget& t) {
+    return t.set && std::chrono::steady_clock::now() < t.until &&
+           g_cancel_gen.load() == t.gen && g_held.load();
+  };
   while (g_running.load()) {
     VelTarget t;
     {
       std::lock_guard<std::mutex> lk(g_vel_mtx);
       t = g_vel;
     }
-    const bool live = t.set && std::chrono::steady_clock::now() < t.until &&
-                      g_cancel_gen.load() == t.gen && g_held.load();
-    if (live) {
+    if (live_now(t)) {
       std::lock_guard<std::mutex> lk(g_sdk_mtx);
-      if (!moving) {
-        g_client->Gait(2000);
-        moving = true;
+      {
+        std::lock_guard<std::mutex> vk(g_vel_mtx);
+        t = g_vel;                       // 等锁期间可能来了新的 vel(续期或改速度)
       }
-      g_client->Move(static_cast<float>(t.lat), static_cast<float>(t.fwd),
-                     static_cast<float>(t.yaw));
+      if (live_now(t) && !moving) {
+        if (g_client->Gait(2000)) {
+          std::cerr << "[VEL] Gait 失败,这一拍不发 Move\n";
+        } else {
+          moving = true;
+        }
+      }
+      if (moving && live_now(t)) {
+        g_client->Move(static_cast<float>(t.lat), static_cast<float>(t.fwd),
+                       static_cast<float>(t.yaw));
+      } else if (moving) {
+        g_client->Move(0, 0, 0);          // 这一拍里被叫停/过期了:零速,下一拍走收尾
+      }
     } else if (moving) {
       {
         std::lock_guard<std::mutex> lk(g_sdk_mtx);
@@ -470,8 +499,9 @@ static void VelLoop() {
         }
       }
       moving = false;
+      // 只清掉「就是这条」过期/被叫停的目标:收尾那 150ms 里来的新 vel 已经回执成功,不能吞掉。
       std::lock_guard<std::mutex> lk(g_vel_mtx);
-      g_vel.set = false;
+      if (g_vel.until == t.until && g_vel.gen == t.gen) g_vel.set = false;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(kMoveIntervalMs));
   }

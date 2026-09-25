@@ -90,3 +90,29 @@ async def test_vel不排在walk后面():
         t0 = time.monotonic()
         ack = await client.call("vel", fwd=0.2, lat=0.0, yaw=0.0, ttl_ms=300)
         assert isinstance(ack, Ack) and time.monotonic() - t0 < 0.3
+
+
+async def test_锁死与硬急停也拒_跟CPP的DoVel一致():
+    from d1max_patrol.protocol.agent_frames import EmergencyStatus, MotionStatus
+
+    async with _client() as (sim, client):
+        await _站起(sim, client)
+        sim.motion = MotionStatus.LOCKED
+        ack = await client.call("vel", fwd=0.3, lat=0.0, yaw=0.0, ttl_ms=300)
+        assert not ack.ok and "锁死" in ack.error
+        sim.motion = MotionStatus.GENERAL
+        sim.estop_hardware = EmergencyStatus.STOP
+        ack = await client.call("vel", fwd=0.3, lat=0.0, yaw=0.0, ttl_ms=300)
+        assert not ack.ok and "急停" in ack.error
+
+
+def test_CPP的DoVel查姿态与两路急停():
+    src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
+    body = src[src.index("static Outcome DoVel("):src.index("static void VelLoop()")]
+    for must in ("g_estop_sw == kEstopStop", "g_estop_hw == kEstopStop", "kMotionLieDown",
+                 "kMotionLocked", "kMotionUnknown"):
+        assert must in body, must
+    loop = src[src.index("static void VelLoop()"):]
+    loop = loop[:loop.index("\n}\n")]
+    assert loop.count("live_now(t)") >= 3, "拿到 SDK 锁之后、Gait 之后要再看一次还该不该走"
+    assert "g_vel.until == t.until && g_vel.gen == t.gen" in loop, "收尾不许吞掉新来的 vel"

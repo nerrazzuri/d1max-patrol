@@ -397,7 +397,8 @@ class SidecarDeviceBackend(DeviceBackend):
         await self._command("walk", seconds=seconds, fwd=forward,
                             lat=lateral, yaw=yaw)
 
-    async def vel(self, forward: float, lateral: float, yaw: float, ttl_ms: int) -> None:
+    async def vel(self, forward: float, lateral: float, yaw: float, ttl_ms: int, *,
+                  timeout_s: float = URGENT_ACK_TIMEOUT_S) -> None:
         """带有效期的持续速度(协议 v3,W00d)。旁路进程**立刻回执**、插队执行;有效期内
         每 50 ms 发一次 ``Move``,到期自己连发零速停下。新的 ``vel`` 覆盖旧的并续期。
 
@@ -410,7 +411,7 @@ class SidecarDeviceBackend(DeviceBackend):
         if not VEL_TTL_MIN_MS <= ttl_ms <= VEL_TTL_MAX_MS:
             raise DeviceBackendError(
                 f"ttl_ms 要在 [{VEL_TTL_MIN_MS}, {VEL_TTL_MAX_MS}] 内,收到 {ttl_ms}")
-        await self._command("vel", timeout_s=URGENT_ACK_TIMEOUT_S, fwd=forward, lat=lateral,
+        await self._command("vel", timeout_s=timeout_s, fwd=forward, lat=lateral,
                             yaw=yaw, ttl_ms=int(ttl_ms))
 
     async def halt(self) -> None:

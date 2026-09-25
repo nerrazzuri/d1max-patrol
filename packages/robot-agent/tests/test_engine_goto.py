@@ -258,3 +258,37 @@ def test_旧的GotoTask已经删了():
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("d1max_agent.tasks.goto")
     assert json
+
+
+async def test_停止一直确认不了_超时按失败收尾并再发一次停(台子, monkeypatch):
+    """W00d 内审:``stopped()`` 的阈值没实测过,真狗站着的里程噪声若大于它,「停了」永远不成立,
+    任务会卡在 RUNNING、资源一直不放。兜底:引擎进终态后 ``STOP_CONFIRM_TIMEOUT_S`` 还确认不了,
+    再发一次停车,按 ``stop_unconfirmed`` 失败收尾。"""
+    from d1max_agent.tasks import engine_goto
+
+    c, r, parts, book = 台子
+
+    async def 永远没停():
+        return False
+    stops = []
+    real_stop = r.stop
+
+    async def 记着停():
+        stops.append(c.ms)
+        await real_stop()
+    monkeypatch.setattr(r, "stopped", 永远没停)
+    t = EngineGotoTask(task_id="t9", target=_target(0.5, 0.0), max_speed_mps=0.8, parts=parts,
+                       events=book, now_ms=c, priority=0)
+    await t.start()
+    for _ in range(300):
+        await _跑(c, r, parts, t, 1)
+        if parts.engine.snapshot.state in (RunState.DONE, RunState.ABORTED):
+            break
+    assert parts.engine.snapshot.state is RunState.DONE
+    monkeypatch.setattr(r, "stop", 记着停)
+    n = int(engine_goto.STOP_CONFIRM_TIMEOUT_S / 0.1)
+    await _跑(c, r, parts, t, n - 3)
+    assert not t.done and not stops, "引擎跑完了,但停止没确认:超时之前不许终态"
+    await _跑(c, r, parts, t, 8)
+    assert t.state is TaskState.FAILED and t.detail == {"reason": "stop_unconfirmed"}, t.detail
+    assert stops, "收尾前再发一次停车"

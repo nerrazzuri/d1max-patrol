@@ -65,12 +65,20 @@ async def probe(host: str, port: int, watch_s: float) -> dict[str, Any]:
         out["hal_motion"] = (await hal.motion_status()).value
         out["battery"] = (await hal.battery()).percent
         out["estop"] = await hal.estop_status()
+        # 两路原始值:硬急停没按时报 Recover 还是 Unknown,真机上要看(适配器要两路都 Recover)。
+        out["estop_raw"] = None if st is None else {"software": st.estop_software.value,
+                                                    "hardware": st.estop_hardware.value}
         frames, last, t_end = 0, b.last_odom, time.monotonic() + watch_s
+        peak = {"vx": 0.0, "vy": 0.0, "vyaw": 0.0}
         while time.monotonic() < t_end:
             if b.last_odom is not last:
                 frames, last = frames + 1, b.last_odom
+                for k in peak:
+                    peak[k] = max(peak[k], abs(getattr(last, k)))
             await asyncio.sleep(0.002)
         out["odom_hz"] = round(frames / watch_s, 1) if watch_s > 0 else None
+        # 站着不动时里程速度的噪声:适配器「停了」的阈值(stopped_eps,默认 0.02)要比它大。
+        out["odom_speed_max"] = {k: round(v, 4) for k, v in peak.items()}
         odom = await hal.odometry()
         out["odom"] = {"x": odom.x, "y": odom.y, "yaw": odom.yaw, "valid": odom.valid}
         out["faults"] = [{"code": f.code, "fatal": f.fatal, "text": f.text}
