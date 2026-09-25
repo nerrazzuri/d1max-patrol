@@ -61,6 +61,7 @@
 #include <vector>
 
 #include "robot_sdk/sdk_client.hpp"
+#include "vel_gate.hpp"
 
 using namespace robot_sdk;
 
@@ -81,9 +82,8 @@ static const int kMoveIntervalMs = 50;
 // 安全阀，不是调参项：现场旁边站着人。与 Python 侧 MAX_WALK_* 对齐。
 static const double kMaxWalkSeconds = 10.0;
 static const double kMaxWalkSpeed = 0.5;
-// vel 的有效期上下限:短于一拍没意义,长于 1s 断链时狗会多走一截。
-static const int kVelTtlMinMs = 50;
-static const int kVelTtlMaxMs = 1000;
+// vel 的有效期上下限与比例上限在 vel_gate.hpp(velgate::kTtlMinMs/kTtlMaxMs/kMaxFraction):
+// 短于一拍没意义,长于 1s 断链时狗会多走一截。
 // 里程 50Hz 太密，降到 20Hz 再往外发，省得把链路和日志都灌满。
 static const int64_t kOdomMinIntervalMs = 50;
 
@@ -227,15 +227,9 @@ static std::atomic<int64_t> g_last_odom_ms{0};
 // 排在队里还没轮到的 walk 也靠它作废：它们记下的代数早于那次叫停。
 static std::atomic<uint64_t> g_cancel_gen{0};
 
-// vel 的当前目标(比例值)、到期时刻、下达时的停车代数。速度线程每拍读一次。
-struct VelTarget {
-  double fwd = 0, lat = 0, yaw = 0;
-  std::chrono::steady_clock::time_point until{};
-  uint64_t gen = 0;
-  bool set = false;
-};
-static std::mutex g_vel_mtx;
-static VelTarget g_vel;
+// vel 的运动安全门(vel_gate.hpp):目标登记、halt/estop 作废、急停闩锁、状态变坏作废,
+// 同一把锁。速度线程每次要发 Move 之前都现问它。
+static velgate::Gate g_gate;
 
 static std::string StateFrame() {
   std::lock_guard<std::mutex> lk(g_state_mtx);
@@ -266,6 +260,10 @@ class DataCb : public IDataCallback {
       g_estop_sw = static_cast<int>(d.software_emergency_status);
       g_estop_hw = static_cast<int>(d.hardware_emergency_status);
     }
+    // 急停、趴下、锁死、姿态未知:立刻作废已有的速度目标(恢复了也不复活)。
+    g_gate.OnState(static_cast<int>(d.motion_status),
+                   static_cast<int>(d.software_emergency_status),
+                   static_cast<int>(d.hardware_emergency_status));
     Broadcast(StateFrame());
   }
 
@@ -419,90 +417,41 @@ static Outcome DoWalk(double seconds, double fwd, double lat, double yaw,
   return Outcome{};
 }
 
-// SDK 枚举码(sdk_type.hpp 的声明顺序,同 agent_frames.py 的 MOTION_BY_CODE / EMERGENCY_BY_CODE)。
-static const int kMotionUnknown = 0, kMotionLieDown = 2, kMotionLocked = 4;
-static const int kEstopStop = 2;
-
 /// 持续速度(协议 v3)。**立刻回执**:真正发 Move 的是 VelLoop。
 ///
-/// **要控制权**(同 walk)。比例值与 walk 同一个上限 ±0.5;有效期 [50, 1000] ms。
-/// 趴着/锁死/姿态未知、任一路急停生效都拒 —— 急停期间收下的速度不许在急停解除后生效。
+/// 检查(控制权、本地急停闩锁、两路急停、趴着/锁死/姿态未知、范围)与登记在运动安全门的
+/// 同一把锁里做完 —— halt/estop 插不进检查与登记之间。
 static Outcome DoVel(double fwd, double lat, double yaw, double ttl_ms) {
-  if (!g_held.load()) return DenyControl("vel");
-  {
-    std::lock_guard<std::mutex> lk(g_state_mtx);
-    if (g_estop_sw == kEstopStop || g_estop_hw == kEstopStop)
-      return Reject("急停生效中,拒绝动作");
-    if (g_motion == kMotionUnknown || g_motion == kMotionLieDown || g_motion == kMotionLocked)
-      return Reject("趴着/锁死/姿态未知,走不了,先 stand");
-  }
-  if (!std::isfinite(fwd) || !std::isfinite(lat) || !std::isfinite(yaw) ||
-      std::fabs(fwd) > kMaxWalkSpeed || std::fabs(lat) > kMaxWalkSpeed ||
-      std::fabs(yaw) > kMaxWalkSpeed)
-    return Reject("速度分量要在 ±0.5 内");
-  if (!std::isfinite(ttl_ms) || ttl_ms < kVelTtlMinMs || ttl_ms > kVelTtlMaxMs)
-    return Reject("ttl_ms 要在 [50, 1000] 内");
-  std::lock_guard<std::mutex> lk(g_vel_mtx);
-  g_vel.fwd = fwd;
-  g_vel.lat = lat;
-  g_vel.yaw = yaw;
-  g_vel.until = std::chrono::steady_clock::now() +
-                std::chrono::milliseconds(static_cast<int>(ttl_ms));
-  g_vel.gen = g_cancel_gen.load();
-  g_vel.set = true;
+  const std::string why =
+      g_gate.Register(fwd, lat, yaw, ttl_ms, g_held.load(), std::chrono::steady_clock::now());
+  if (why == "no_control") return DenyControl("vel");
+  if (!why.empty()) return Reject(why);
   return Outcome{};
 }
 
-/// 速度线程:有效期内、代数没变、还握着控制权 → 每 50ms 发一次 Move;从静止起步先 Gait
-/// 一次;过期、被叫停或控制权丢了 → 连发零速一次性收住,然后等下一条 vel。
-///
-/// 「还该不该走」在拿到 SDK 锁之后、Gait 回来之后**各再看一次**:等锁(可能排在一整段 walk
-/// 后面)或 Gait(2000) 阻塞期间有人 halt/estop、或者有效期过了,就不再发那条过期的 Move。
-/// 已知上限(同 walk):Gait(2000) 是 SDK 的阻塞调用,halt/estop 正好落在里面时要等它回来。
+/// 真 SDK 套一层给 velgate::Driver 用。
+struct SdkForVel {
+  int Gait(int timeout_ms) {
+    auto ec = g_client->Gait(timeout_ms);
+    if (ec) {
+      std::cerr << "[VEL] Gait 失败(" << ec.message() << "),这一拍不发 Move\n";
+      return 1;
+    }
+    return 0;
+  }
+  void Move(float lat, float fwd, float yaw) { g_client->Move(lat, fwd, yaw); }
+};
+
+/// 速度线程:每 50 ms 一拍,见 velgate::Driver::Tick —— 拿到 SDK 锁之后、Gait 回来之后、发 Move
+/// 之前都现问运动安全门;不该走了就连发零速收住。
 static void VelLoop() {
-  bool moving = false;
-  auto live_now = [](const VelTarget& t) {
-    return t.set && std::chrono::steady_clock::now() < t.until &&
-           g_cancel_gen.load() == t.gen && g_held.load();
-  };
+  SdkForVel sdk;
+  velgate::Driver<SdkForVel> drv(
+      g_gate, sdk, g_sdk_mtx, [] { return g_held.load(); },
+      [] { return std::chrono::steady_clock::now(); },
+      [](int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); });
   while (g_running.load()) {
-    VelTarget t;
-    {
-      std::lock_guard<std::mutex> lk(g_vel_mtx);
-      t = g_vel;
-    }
-    if (live_now(t)) {
-      std::lock_guard<std::mutex> lk(g_sdk_mtx);
-      {
-        std::lock_guard<std::mutex> vk(g_vel_mtx);
-        t = g_vel;                       // 等锁期间可能来了新的 vel(续期或改速度)
-      }
-      if (live_now(t) && !moving) {
-        if (g_client->Gait(2000)) {
-          std::cerr << "[VEL] Gait 失败,这一拍不发 Move\n";
-        } else {
-          moving = true;
-        }
-      }
-      if (moving && live_now(t)) {
-        g_client->Move(static_cast<float>(t.lat), static_cast<float>(t.fwd),
-                       static_cast<float>(t.yaw));
-      } else if (moving) {
-        g_client->Move(0, 0, 0);          // 这一拍里被叫停/过期了:零速,下一拍走收尾
-      }
-    } else if (moving) {
-      {
-        std::lock_guard<std::mutex> lk(g_sdk_mtx);
-        for (int i = 0; i < 3; ++i) {
-          g_client->Move(0, 0, 0);
-          std::this_thread::sleep_for(std::chrono::milliseconds(kMoveIntervalMs));
-        }
-      }
-      moving = false;
-      // 只清掉「就是这条」过期/被叫停的目标:收尾那 150ms 里来的新 vel 已经回执成功,不能吞掉。
-      std::lock_guard<std::mutex> lk(g_vel_mtx);
-      if (g_vel.until == t.until && g_vel.gen == t.gen) g_vel.set = false;
-    }
+    drv.Tick();
     std::this_thread::sleep_for(std::chrono::milliseconds(kMoveIntervalMs));
   }
 }
@@ -512,6 +461,7 @@ static void VelLoop() {
 /// **不要控制权。** 没握着控制权时本来也发不出 Move，而这时也不会有 walk
 /// 在走(DoWalk 进门就要控制权)，所以只作废队列、回 ok。
 static Outcome DoHalt() {
+  g_gate.Cancel();  // 先作废速度目标(与 vel 的登记同一把锁),再作废 walk
   g_cancel_gen.fetch_add(1);
   if (!g_held.load()) return Outcome{};
   std::lock_guard<std::mutex> lk(g_sdk_mtx);
@@ -526,11 +476,17 @@ static Outcome DoHalt() {
 static Outcome DoEstop(bool on) {
   // 急停不要控制权就能发 —— 它是安全动作，任何时候都得能出去。
   // 按下时先作废所有 walk：正在走的那一拍会在 50ms 内松开 SDK 锁。
-  if (on) g_cancel_gen.fetch_add(1);
+  // 按下:先闩上本地急停(作废速度目标、之后的 vel 一律拒),再跟 SDK 说 —— SDK 那头等锁、
+  // 通讯失败都不影响这把闩。解除:SDK 确认解除之后才松闩。
+  if (on) {
+    g_gate.LatchEstop(true);
+    g_cancel_gen.fetch_add(1);
+  }
   std::lock_guard<std::mutex> lk(g_sdk_mtx);
   // 返回值必须看。以前丢掉了，SDK 没发出去也回 ok，页面上写着「已急停」。
   auto ec = g_client->SoftEmergencyStop(on, 2000);
   if (ec) return Reject("SoftEmergencyStop 失败: " + ec.message());
+  if (!on) g_gate.LatchEstop(false);
   return Outcome{};
 }
 

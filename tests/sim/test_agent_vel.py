@@ -106,13 +106,71 @@ async def test_锁死与硬急停也拒_跟CPP的DoVel一致():
         assert not ack.ok and "急停" in ack.error
 
 
-def test_CPP的DoVel查姿态与两路急停():
+def test_CPP运动安全门_行为测试编译并通过(tmp_path):
+    """W00d 外审阻断 1:``motion/vel_gate.hpp`` 用假 SDK 跑行为测试(``motion/test_vel_gate.cpp``):
+    halt/急停与 vel 登记同一把锁、急停闩锁、状态变坏作废且不复活、拿锁后与 Gait 后现查、
+    并发压测。"""
+    import shutil
+    import subprocess
+
+    cxx = shutil.which("g++")
+    if cxx is None:
+        import pytest
+        pytest.skip("没有 g++")
+    exe = tmp_path / "test_vel_gate"
+    subprocess.run([cxx, "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
+                    "-o", str(exe), str(ROOT / "motion" / "test_vel_gate.cpp")],
+                   check=True, capture_output=True, timeout=180)
+    got = subprocess.run([str(exe)], capture_output=True, text=True, timeout=120)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert "全部通过" in got.stdout
+
+
+def test_旁路进程的vel全走运动安全门_常量两边一致():
+    from d1max_patrol.backends.sidecar_device import MAX_WALK_SPEED, VEL_TTL_MAX_MS, VEL_TTL_MIN_MS
+
+    hdr = (ROOT / "motion" / "vel_gate.hpp").read_text(encoding="utf-8")
+    for name, want in (("kMaxFraction", MAX_WALK_SPEED), ("kTtlMinMs", VEL_TTL_MIN_MS),
+                       ("kTtlMaxMs", VEL_TTL_MAX_MS)):
+        m = re.search(rf"constexpr \w+ {name} = ([0-9.]+);", hdr)
+        assert m and float(m.group(1)) == want, name
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
-    body = src[src.index("static Outcome DoVel("):src.index("static void VelLoop()")]
-    for must in ("g_estop_sw == kEstopStop", "g_estop_hw == kEstopStop", "kMotionLieDown",
-                 "kMotionLocked", "kMotionUnknown"):
-        assert must in body, must
-    loop = src[src.index("static void VelLoop()"):]
-    loop = loop[:loop.index("\n}\n")]
-    assert loop.count("live_now(t)") >= 3, "拿到 SDK 锁之后、Gait 之后要再看一次还该不该走"
-    assert "g_vel.until == t.until && g_vel.gen == t.gen" in loop, "收尾不许吞掉新来的 vel"
+
+    def body(sig: str) -> str:
+        i = src.index(sig)
+        return src[i:src.index("\n}\n", i)]
+    assert "g_gate.Register(" in body("static Outcome DoVel(")
+    assert "g_gate.Cancel()" in body("static Outcome DoHalt(")
+    estop = body("static Outcome DoEstop(")
+    assert estop.index("g_gate.LatchEstop(true)") < estop.index("SoftEmergencyStop"), \
+        "先闩本地急停,再跟 SDK 说"
+    assert estop.index("g_gate.LatchEstop(false)") > estop.index("SoftEmergencyStop")
+    assert "g_gate.OnState(" in body("void OnRobotStateData(")
+    assert "velgate::Driver<" in body("static void VelLoop(")
+    assert "g_vel_mtx" not in src and "g_client->Move" not in body("static void VelLoop(")
+
+
+async def test_走着的时候硬急停或趴下_目标作废_恢复了也不接着走():
+    from d1max_patrol.protocol.agent_frames import EmergencyStatus, MotionStatus
+
+    async with _client() as (sim, client):
+        await _站起(sim, client)
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=1000)).ok
+        await asyncio.sleep(0.12)
+        assert sim.vx > 0
+        sim.estop_hardware = EmergencyStatus.STOP
+        await asyncio.sleep(0.12)
+        assert sim.vx == 0.0
+        sim.estop_hardware = EmergencyStatus.RECOVER
+        await asyncio.sleep(0.2)
+        assert sim.vx == 0.0, "急停前收下的速度不许在解除后复活"
+    async with _client() as (sim, client):
+        await _站起(sim, client)
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=1000)).ok
+        await asyncio.sleep(0.12)
+        sim.motion = MotionStatus.LIE_DOWN
+        await asyncio.sleep(0.12)
+        assert sim.vx == 0.0
+        sim.motion = MotionStatus.GENERAL
+        await asyncio.sleep(0.2)
+        assert sim.vx == 0.0, "趴下前收下的速度不许在站起来后复活"

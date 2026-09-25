@@ -26,8 +26,15 @@ BINS := patrol_agent hold01 hold02 stand01 stand2 walk1 walkonly liedown \
 .PHONY: all clean
 all: $(BINS)
 
+# 运动安全门的行为测试(W00d 外审):不链接厂商 SDK,开发机上就能跑。
+test_vel_gate: test_vel_gate.cpp vel_gate.hpp
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -pthread -o $@ $<
+
+patrol_agent: patrol_agent.cpp vel_gate.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
+
 %: %.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 clean:
-	rm -f $(BINS)
+	rm -f $(BINS) test_vel_gate

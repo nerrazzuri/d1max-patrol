@@ -71,7 +71,7 @@ URGENT_ACK_TIMEOUT_S = 5.0
 MAX_WALK_SECONDS = 10.0
 MAX_WALK_SPEED = 0.5
 
-#: ``vel``(协议 v3)的有效期范围,同 ``patrol_agent.cpp`` 的 ``kVelTtl*``。
+#: ``vel``(协议 v3)的有效期范围,同 ``motion/vel_gate.hpp`` 的 ``kTtlMinMs/kTtlMaxMs``。
 VEL_TTL_MIN_MS = 50
 VEL_TTL_MAX_MS = 1000
 

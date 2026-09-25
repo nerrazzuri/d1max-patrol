@@ -39,3 +39,5 @@ motion/hold02
 
 # SDD 的工作区：账本、brief、报告、review 包 —— 全是过程产物
 .superpowers/
+
+motion/test_vel_gate

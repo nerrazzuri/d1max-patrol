@@ -57,7 +57,7 @@ WALK_CANCELLED = "行走被停车/急停打断"
 #: 插队执行的命令。跟 ``patrol_agent.cpp`` 的 ``IsUrgent`` 对齐。
 URGENT_COMMANDS = frozenset({"halt", "estop", "vel"})
 
-#: ``vel``(协议 v3)的边界:同 ``patrol_agent.cpp`` 的 ``kMaxWalkSpeed`` 与 ``kVelTtl*``。
+#: ``vel``(协议 v3)的边界:同 ``motion/vel_gate.hpp`` 的 ``kMaxFraction`` 与 ``kTtl*``。
 VEL_MAX = 0.5
 VEL_TTL_MIN_MS = 50
 VEL_TTL_MAX_MS = 1000
@@ -332,6 +332,11 @@ class SimAgentServer:
             return
         raise _Rejected(f"不认识的命令: {cmd}")
 
+    def _vel_unsafe(self) -> bool:
+        return (EmergencyStatus.STOP in (self.estop_software, self.estop_hardware)
+                or self.motion in (MotionStatus.LIE_DOWN, MotionStatus.UNKNOWN,
+                                   MotionStatus.LOCKED))
+
     def _start_vel(self, args: dict[str, Any]) -> None:
         """带有效期的持续速度:**立刻回执**;有效期内一直走,到期自停;新的覆盖旧的并续期;
         ``halt``/``estop`` 加停车代数,速度线程看见就停。"""
@@ -363,6 +368,10 @@ class SimAgentServer:
     async def _vel_loop(self, gen: int) -> None:
         try:
             while self._cancel_gen == gen and time.monotonic() < self._vel_until:
+                if self._vel_unsafe():
+                    # 同 vel_gate.hpp 的 OnState:急停、趴下、锁死 → 作废目标,恢复了也不复活。
+                    self._vel_until = 0.0
+                    break
                 fwd, lat, yaw = self._vel
                 if max(abs(fwd), abs(lat), abs(yaw)) < WALK_DEADBAND:
                     # 量太小只是原地蹭(清单 #37),不动;真机也不报错。

@@ -338,6 +338,7 @@ class Server:
         self._stop.set()
         for what, fn in (("API", self.api.stop),
                          ("待命点", lambda: self.loop.call(self.standby.close, 10)),
+                         ("事件台", lambda: self.loop.call(self.incidents.close, 10)),
                          ("派遣器", lambda: self.loop.call(self.dispatcher.close, 10)),
                          ("事件循环", self.loop.stop), ("数据库", self.db.close)):
             try:

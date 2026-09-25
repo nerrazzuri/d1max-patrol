@@ -6,6 +6,10 @@
 = ``hex(HMAC-SHA256(密钥, 时间戳 + "." + 原始请求体))``。时间差超 5 分钟拒;同一
 ``(source, event_id)`` 只处理一次;**同一防区 60 s 内的后续事件合并到第一条**,不重复出动。
 
+**占位是原子的**(外审阻断 2):事件身份入账(唯一约束冲突 → ``duplicate``)、同防区合并判定、
+选狗并占住它,在库的同一个事务、同一把锁里一步做完,中间没有 ``await``。还在等回执的
+(``dispatching``)也算合并目标;它最终派失败了,就把并进来的第一条**提升**成新的出动,其余的改并到它。
+
 每条事件都进 ``incidents`` 表,去向:``dispatched``、``merged``、``duplicate``、``unmapped``
 (防区没映射)、``ignored_type``(类型不认)、``no_robot``、``dispatch_failed``;派出去的那条,结果由
 事件回写 ``result``。
@@ -13,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -20,6 +25,7 @@ import logging
 import math
 import re
 import secrets
+import sqlite3
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -61,6 +67,8 @@ class IncidentDesk:
         self.dispatcher = dispatcher
         self._now = now_ms
         self.merge_window_ms = merge_window_ms
+        #: 首条派失败后把并进来的事件提升为新出动 —— 在后台跑,不拖住首条那个 HTTP 请求。
+        self._followups: set[asyncio.Task] = set()
         dispatcher.on_event(self._on_event)
 
     # ------------------------------------------------------------ 登记
@@ -186,18 +194,6 @@ class IncidentDesk:
             (self._now() - OPEN_INCIDENT_MS,))
         return {r["robot_id"] for r in rows}
 
-    def _insert(self, source: str, ev: dict[str, Any], outcome: str, **kw: Any) -> int:
-        with self.db.tx() as c:
-            cur = c.execute(
-                "INSERT INTO incidents(source, event_id, type, zone, intercept, received_at, "
-                "occurred_at, outcome, robot_id, task_id, merged_into, note, detail) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (source, ev["event_id"], ev["type"], ev["zone"], kw.get("intercept"),
-                 self._now(), ev.get("occurred_at"), outcome, kw.get("robot_id"),
-                 kw.get("task_id"), kw.get("merged_into"), kw.get("note", ""),
-                 json.dumps(ev.get("detail") or {}, ensure_ascii=False)))
-            return cur.lastrowid
-
     def _update(self, rid: int, **kw: Any) -> None:
         sets = ", ".join(f"{k}=?" for k in kw)
         with self.db.tx() as c:
@@ -231,36 +227,73 @@ class IncidentDesk:
 
     async def _handle(self, source: str, body: Any) -> dict[str, Any]:
         ev = self.parse(body)
-        dup = self.db.query("SELECT id FROM incidents WHERE source=? AND event_id=?",
-                            (source, ev["event_id"]))
-        if dup:
-            return self._row(dup[0]["id"]) | {"outcome": "duplicate"}
-        if ev["type"] not in TYPES:
-            return self._row(self._insert(source, ev, "ignored_type"))
-        z = self.db.query("SELECT intercept FROM zones WHERE zone=?", (ev["zone"],))
-        if not z:
-            return self._row(self._insert(source, ev, "unmapped", note="防区没映射到拦截点"))
-        point = self.intercept(z[0]["intercept"])
-        # 只并入**真派出去了**的那条(回执 accepted 或超时):失败的不算已出动。
-        recent = self.db.query(
-            "SELECT id FROM incidents WHERE zone=? AND outcome='dispatched' AND received_at>=? "
-            "ORDER BY id DESC LIMIT 1", (ev["zone"], self._now() - self.merge_window_ms))
-        if recent:
-            return self._row(self._insert(source, ev, "merged", intercept=point["name"],
-                                          merged_into=recent[0]["id"]))
+        got = self._claim(source, ev)
+        if isinstance(got, dict):
+            return got
+        await self._dispatch(got)
+        return self._row(got)
+
+    def _claim(self, source: str, ev: dict[str, Any]) -> dict[str, Any] | int:
+        """一步做完的占位(同一事务、同一把锁,中间不 await):事件身份入账 → 类型、防区 → 同防区
+        合并 → 选狗并占住。返回终局的账(不用派单),或要派单的那条事件的 id(已记 ``dispatching``)。"""
+        with self.db.tx() as c:
+            try:
+                iid = c.execute(
+                    "INSERT INTO incidents(source, event_id, type, zone, received_at, occurred_at, "
+                    "outcome, note, detail) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (source, ev["event_id"], ev["type"], ev["zone"], self._now(),
+                     ev.get("occurred_at"), "received", "",
+                     json.dumps(ev.get("detail") or {}, ensure_ascii=False))).lastrowid
+            except sqlite3.IntegrityError:
+                first = c.execute("SELECT * FROM incidents WHERE source=? AND event_id=?",
+                                  (source, ev["event_id"])).fetchone()
+                return dict(first) | {"outcome": "duplicate"}
+            if ev["type"] not in TYPES:
+                return self._set(c, iid, outcome="ignored_type")
+            z = c.execute("SELECT intercept FROM zones WHERE zone=?", (ev["zone"],)).fetchone()
+            if z is None:
+                return self._set(c, iid, outcome="unmapped", note="防区没映射到拦截点")
+            point = self.intercept(z["intercept"])
+            leader = self._merge_target(c, ev["zone"], exclude=iid)
+            if leader is not None:
+                return self._set(c, iid, outcome="merged", intercept=point["name"],
+                                 merged_into=leader)
+            return self._reserve(c, iid, point)
+
+    def _merge_target(self, c: sqlite3.Connection, zone: str, *, exclude: int) -> int | None:
+        """同防区窗口内**已出动或正在出动**(等回执)的那条。失败的不算。"""
+        row = c.execute(
+            "SELECT id FROM incidents WHERE zone=? AND id<>? AND outcome IN "
+            "('dispatching', 'dispatched') AND received_at>=? ORDER BY id DESC LIMIT 1",
+            (zone, exclude, self._now() - self.merge_window_ms)).fetchone()
+        return row["id"] if row else None
+
+    def _reserve(self, c: sqlite3.Connection, iid: int,
+                 point: dict[str, Any]) -> dict[str, Any] | int:
+        """选狗并占住(``dispatching``):同时到的另一条事件据此挑开它。"""
         rid, why = self.pick_robot(point)
         if rid is None:
-            return self._row(self._insert(source, ev, "no_robot", intercept=point["name"],
-                                          note=why))
-        task_id = f"{INCIDENT_PREFIX}{uuid.uuid4().hex[:12]}"
-        # 先占住这台狗(dispatching),再 await 回执:同时到的另一条事件据此挑开它。
-        iid = self._insert(source, ev, "dispatching", intercept=point["name"], robot_id=rid,
-                           task_id=task_id, note="发送中")
+            return self._set(c, iid, outcome="no_robot", intercept=point["name"], note=why)
+        self._set(c, iid, outcome="dispatching", intercept=point["name"], robot_id=rid,
+                  task_id=f"{INCIDENT_PREFIX}{uuid.uuid4().hex[:12]}", note="发送中")
+        return iid
+
+    @staticmethod
+    def _set(c: sqlite3.Connection, iid: int, **kw: Any) -> dict[str, Any]:
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE incidents SET {sets} WHERE id=?", (*kw.values(), iid))
+        return dict(c.execute("SELECT * FROM incidents WHERE id=?", (iid,)).fetchone())
+
+    async def _dispatch(self, iid: int) -> None:
+        """给已占位(``dispatching``)的那条派 ``goto``,按回执落账;派失败了提升并进来的事件。"""
+        row = self._row(iid)
+        point = self.intercept(row["intercept"])
         target = MapPose(map_id=point["map_id"], map_version=point["map_version"],
                          frame_id="map", x=point["x"], y=point["y"], yaw=point["yaw"]).to_wire()
         try:
-            r = await self.dispatcher.goto(rid, target, None, issued_by=f"incident:{source}",
-                                           priority=EVENT, task_id=task_id)
+            r = await self.dispatcher.goto(row["robot_id"], target, None,
+                                           issued_by=f"incident:{row['source']}",
+                                           priority=EVENT, task_id=row["task_id"])
             if r["ack"]["result"] == "accepted":
                 self._update(iid, outcome="dispatched", note="已出动")
             else:
@@ -271,9 +304,48 @@ class IncidentDesk:
         except DispatchTimeout:
             self._update(iid, outcome="dispatched", note="回执超时:可能已在路上")
         except Exception as exc:
-            log.exception("事件 %s 派单炸了", ev["event_id"])
+            log.exception("事件 %s 派单炸了", row["event_id"])
             self._update(iid, outcome="dispatch_failed", note=f"站点内部错误: {exc}")
-        return self._row(iid)
+        if self._row(iid)["outcome"] == "dispatch_failed":
+            self._promote_follower(iid)
+
+    def _promote_follower(self, failed: int) -> None:
+        """首条派失败:并进它的第一条提升为新的出动(重新选狗),其余的改并到这一条。"""
+        with self.db.tx() as c:
+            nxt = c.execute("SELECT id, intercept FROM incidents WHERE merged_into=? AND "
+                            "outcome='merged' ORDER BY id LIMIT 1", (failed,)).fetchone()
+            if nxt is None:
+                return
+            point = self.intercept(nxt["intercept"])
+            got = self._reserve(c, nxt["id"], point) if point else self._set(
+                c, nxt["id"], outcome="unmapped", note="拦截点没了")
+            c.execute("UPDATE incidents SET merged_into=? WHERE merged_into=? AND "
+                      "outcome='merged' AND id<>?", (nxt["id"], failed, nxt["id"]))
+            c.execute("UPDATE incidents SET merged_into=NULL WHERE id=?", (nxt["id"],))
+        self._publish(self._row(nxt["id"]))
+        if isinstance(got, int):
+            task = asyncio.get_running_loop().create_task(self._dispatch_and_publish(got))
+            self._followups.add(task)
+            task.add_done_callback(self._followups.discard)
+
+    async def _dispatch_and_publish(self, iid: int) -> None:
+        await self._dispatch(iid)
+        self._publish(self._row(iid))
+
+    async def close(self) -> None:
+        """收掉还在等回执的提升派单。在关派遣器之前调(同 ``StandbyManager.close``)。"""
+        for t in list(self._followups):
+            t.cancel()
+        for t in list(self._followups):
+            try:
+                await t
+            except BaseException:  # noqa: BLE001 - 取消与其他异常都只是收尾
+                pass
+
+    async def drain(self) -> None:
+        """等后台的提升派单都跑完(测试与收尾用)。"""
+        while self._followups:
+            await asyncio.gather(*list(self._followups), return_exceptions=True)
 
     def _publish(self, row: dict[str, Any]) -> None:
         self.dispatcher.feed.publish({"kind": "incident", "incident": row})

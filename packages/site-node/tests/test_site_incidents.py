@@ -288,3 +288,162 @@ async def test_每种去向都推SSE_结果回写也推(站):
     outs = [o for o, _ in got]
     assert "unmapped" in outs and "dispatched" in outs and "duplicate" in outs
     assert ("dispatched", "done") in got, got
+
+
+# ------------------------------------------------------------ 外审补的(W00 系列外审阻断 2)
+
+def _第二台狗(t):
+    """B 照抄 A 的在线状态与能力(没有真代理):派单由 ``_假派单`` 接住。"""
+    t.reg.enroll("B", fingerprint="sha256:b", issued_at=t.clock.ms - 1,
+                 expires_at=t.clock.ms + 10**10)
+
+
+async def _两台狗(t):
+    _第二台狗(t)
+    await t.site.add_robot("B")
+    await t.run(12)
+    a, b = t.site.clients["A"], t.site.clients["B"]
+    b.status, b.status_live_at, b.capabilities = a.status, t.clock(), a.capabilities
+
+
+class _假派单:
+    """替 ``dispatcher.goto``:回执由测试放行(``release``),结果按顺序给。"""
+
+    def __init__(self, results=("accepted",)):
+        import asyncio
+        self.calls: list[tuple[str, str]] = []
+        self.gate = asyncio.Event()
+        self.results = list(results)
+
+    async def __call__(self, rid, target, max_speed, *, issued_by, priority, task_id):
+        self.calls.append((rid, task_id))
+        await self.gate.wait()
+        res = self.results.pop(0) if self.results else "accepted"
+        return {"ack": {"result": res, "reason": "测试给的"}}
+
+
+def _签好(t, eid, zone="front-yard"):
+    body = json.dumps({"event_id": eid, "type": "intrusion", "zone": zone}).encode()
+    t.desk.verify("nvr-1", str(t.clock()), 签(t.secret, t.clock(), body), body)
+    return json.loads(body)
+
+
+async def test_两台狗_同防区两条事件并发_只出动一台(站, monkeypatch):
+    """第一条还在等回执(dispatching)时同防区第二条到了:并进第一条,不派第二台狗。"""
+    import asyncio
+    t = 站
+    await _两台狗(t)
+    fake = _假派单()
+    monkeypatch.setattr(t.site, "goto", fake)
+    h1 = asyncio.ensure_future(t.desk.handle("nvr-1", _签好(t, "e1")))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert len(fake.calls) == 1, "第一条已经在等回执"
+    r2 = await asyncio.wait_for(t.desk.handle("nvr-1", _签好(t, "e2")), 2)
+    assert r2["outcome"] == "merged", r2
+    fake.gate.set()
+    r1 = await asyncio.wait_for(h1, 2)
+    assert r1["outcome"] == "dispatched" and r2["merged_into"] == r1["id"]
+    assert len(fake.calls) == 1, "同一防区只出动一台"
+
+
+async def test_首条派遣失败_并进来的后续事件接着派(站, monkeypatch):
+    import asyncio
+    t = 站
+    await _两台狗(t)
+    fake = _假派单(results=("rejected", "accepted"))
+    monkeypatch.setattr(t.site, "goto", fake)
+    h1 = asyncio.ensure_future(t.desk.handle("nvr-1", _签好(t, "e1")))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    r2 = await asyncio.wait_for(t.desk.handle("nvr-1", _签好(t, "e2")), 2)
+    r3 = await asyncio.wait_for(t.desk.handle("nvr-1", _签好(t, "e3")), 2)
+    assert r2["outcome"] == r3["outcome"] == "merged"
+    fake.gate.set()
+    r1 = await asyncio.wait_for(h1, 2)
+    assert r1["outcome"] == "dispatch_failed"
+    await asyncio.wait_for(t.desk.drain(), 2)
+    rows = {r["event_id"]: r for r in t.desk.list()}
+    assert rows["e2"]["outcome"] == "dispatched", rows["e2"]
+    assert rows["e3"]["outcome"] == "merged" and rows["e3"]["merged_into"] == rows["e2"]["id"]
+    assert len(fake.calls) == 2 and fake.calls[1][1] == rows["e2"]["task_id"]
+
+
+async def test_相同事件并发提交_一条正常一条duplicate_不500(站, monkeypatch):
+    import asyncio
+    t = 站
+    fake = _假派单()
+    monkeypatch.setattr(t.site, "goto", fake)
+    ev = _签好(t, "same")
+    h1 = asyncio.ensure_future(t.desk.handle("nvr-1", dict(ev)))
+    h2 = asyncio.ensure_future(t.desk.handle("nvr-1", dict(ev)))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    fake.gate.set()
+    outs = sorted(r["outcome"] for r in await asyncio.wait_for(asyncio.gather(h1, h2), 2))
+    assert outs == ["dispatched", "duplicate"], outs
+    assert len(fake.calls) == 1
+
+
+def test_相同事件两个线程同时提交_一条正常一条duplicate(tmp_path):
+    """站点 API 的请求可能落在不同线程:占位要在库的锁里一步做完,唯一约束冲突转 duplicate。"""
+    import asyncio
+    import threading
+
+    from d1max_site.db import SiteDB
+
+    class 假派遣:
+        def on_event(self, cb):
+            pass
+
+    db = SiteDB(tmp_path / "s.db")
+    desk = IncidentDesk(db, 假派遣(), now_ms=lambda: 1_800_000_000_000)
+    desk.add_source("nvr")
+    ev = {"event_id": "same", "type": "intrusion", "zone": "nowhere"}   # 没映射:不派单
+    barrier = threading.Barrier(8)
+    outs, errs = [], []
+
+    def 提交():
+        barrier.wait()
+        try:
+            outs.append(asyncio.run(desk.handle("nvr", dict(ev)))["outcome"])
+        except Exception as exc:  # noqa: BLE001 - 断言里要看到是什么炸了
+            errs.append(exc)
+
+    class _feed:
+        @staticmethod
+        def publish(_):
+            pass
+    desk.dispatcher.feed = _feed
+    ts = [threading.Thread(target=提交) for _ in range(8)]
+    for th in ts:
+        th.start()
+    for th in ts:
+        th.join()
+    assert not errs, errs
+    assert sorted(outs) == ["duplicate"] * 7 + ["unmapped"], outs
+    db.close()
+
+
+async def test_收尾时收掉还在等回执的提升派单(站, monkeypatch):
+    import asyncio
+    t = 站
+    await _两台狗(t)
+    fake = _假派单(results=("rejected",))
+    monkeypatch.setattr(t.site, "goto", fake)
+    h1 = asyncio.ensure_future(t.desk.handle("nvr-1", _签好(t, "e1")))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    await asyncio.wait_for(t.desk.handle("nvr-1", _签好(t, "e2")), 2)
+    first, fake.gate = fake.gate, asyncio.Event()     # 提升出来的那条卡在新闸上等回执
+    first.set()
+    await asyncio.wait_for(h1, 2)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert len(fake.calls) == 2 and t.desk._followups
+    [pending] = list(t.desk._followups)
+    import time
+    t0 = time.monotonic()
+    await asyncio.wait_for(t.desk.close(), 2)
+    assert time.monotonic() - t0 < 0.5, "收尾是取消,不是干等回执"
+    assert pending.cancelled() and not t.desk._followups
