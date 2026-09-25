@@ -118,8 +118,10 @@ def test_哈希不对_包比说的大_包内指纹不对_都不落槽(ops, tmp_p
     assert not layout.release_dir(NEW).exists() and built == []
 
 
-@pytest.mark.parametrize("evil", ["../../etc/x", "/abs", "link"])
+@pytest.mark.parametrize("evil", ["../../etc/x", "/abs", "link", f"{NEW}/src/../src/y.py",
+                                  f"{NEW}/src\\y.py"])
 def test_包里的坏路径_链接_一律拒(ops, tmp_path, evil):
+    """``..`` 一律不许(哪怕绕回里面)、反斜杠不许:站点打的包里不会有这种名字,有就是被动过。"""
     o, served, restarts, built, layout = ops
     ti = tarfile.TarInfo(evil if evil != "link" else f"{NEW}/src/l")
     if evil == "link":
@@ -127,7 +129,7 @@ def test_包里的坏路径_链接_一律拒(ops, tmp_path, evil):
         ti.linkname = "/etc/shadow"
     else:
         ti.size = 1
-    with pytest.raises(ReleaseOpError):
+    with pytest.raises(ReleaseOpError, match="包里"):         # 解开那一关拒的,不是靠后面的指纹
         o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW), evil=[ti])))
     assert not layout.release_dir(NEW).exists()
     assert not (tmp_path / "etc").exists()
@@ -142,3 +144,92 @@ def test_没装好不切_装单元失败不切(ops, tmp_path):
     with pytest.raises(ReleaseOpError):
         o.activate(NEW)
     assert o.current() == OLD and restarts == [] and rel.read_pending(layout) is None
+
+
+def test_包里的setuid_解开时去掉(ops, tmp_path):
+    import os
+    import stat
+    o, served, restarts, built, layout = ops
+    pkg = _包(tmp_path, NEW)
+    buf = io.BytesIO()
+
+    def 加setuid(ti):
+        if ti.name.endswith("x.py"):
+            ti.mode = 0o6755
+        return ti
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        tf.add(pkg, arcname=pkg.name, filter=加setuid)
+    o.install(_ref(served, NEW, buf.getvalue()))
+    mode = os.stat(layout.release_dir(NEW) / "src" / "x.py").st_mode
+    assert not mode & (stat.S_ISUID | stat.S_ISGID) and mode & 0o100, "setuid 去掉,可执行位留着"
+
+
+def test_站点给的包比说的大_下到超了就停_不接着下(ops, tmp_path):
+    o, served, restarts, built, layout = ops
+    got = {"n": 0}
+
+    def 不停(name):
+        while True:
+            got["n"] += 1
+            yield b"x" * 1000
+    o._fetch = 不停
+    with pytest.raises(ReleaseOpError, match="大"):
+        o.install(ReleaseRef(name=NEW, sha256="0" * 64, size=5000))
+    assert got["n"] <= 6
+
+
+def test_venv没建成_落了槽也不许切(ops, tmp_path):
+    o, served, restarts, built, layout = ops
+
+    def 坏(pkg, slot):
+        raise ReleaseOpError("pip 装不上")
+    o._build = 坏
+    ref = _ref(served, NEW, _tar(_包(tmp_path, NEW)))
+    with pytest.raises(ReleaseOpError):
+        o.install(ref)
+    assert layout.release_dir(NEW).is_dir() and not o.ready(NEW)
+    with pytest.raises(ReleaseOpError):
+        o.activate(NEW)
+    assert o.current() == OLD and restarts == []
+
+
+def test_在跑的不是在途的那一版_不提交(ops, tmp_path):
+    o, served, restarts, built, layout = ops
+    o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
+    o.activate(NEW)
+    rel._point_current(layout, OLD)                         # 比如有人手工指回去了
+    assert o.commit_if_pending() is None and rel.read_pending(layout) is not None
+
+
+def test_建venv_哨兵最后落_失败不落_在了就跳过(tmp_path):
+    import os
+    import stat
+
+    from d1max_agent.release_ops import build_venv
+    log = tmp_path / "calls.log"
+    fake = tmp_path / "python3"
+    fake.write_text(f"""#!/bin/sh
+echo "$@" >> {log}
+if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then mkdir -p "$3/bin"; cp "$0" "$3/bin/python"; fi
+if [ -n "$FAIL_PIP" ] && [ "$2" = "pip" ]; then exit 1; fi
+exit 0
+""")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    pkg = _包(tmp_path, NEW)
+    (pkg / "packages" / "robot-agent").mkdir(parents=True)
+    slot = tmp_path / "slot"
+    os.environ["FAIL_PIP"] = "1"
+    try:
+        with pytest.raises(ReleaseOpError):
+            build_venv(pkg, slot, pip_args=["--no-index"], python=str(fake))
+    finally:
+        del os.environ["FAIL_PIP"]
+    assert not (slot / "venv" / SENTINEL).exists(), "装失败不落哨兵"
+    build_venv(pkg, slot, pip_args=["--no-index"], python=str(fake))
+    assert (slot / "venv" / SENTINEL).is_file()
+    pips = [ln for ln in log.read_text().splitlines() if ln.startswith("-m pip")]
+    assert len(pips) == 3 and all("--no-index" in ln for ln in pips), "包本身、代理那几个包"
+    assert "robot-agent" in pips[-1] and "adapter-sim" in pips[-1]
+    n = len(log.read_text().splitlines())
+    build_venv(pkg, slot, pip_args=[], python=str(fake))
+    assert len(log.read_text().splitlines()) == n, "哨兵在:跳过"

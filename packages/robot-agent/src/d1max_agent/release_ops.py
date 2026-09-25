@@ -145,8 +145,7 @@ class ReleaseOps:
             if not pkg.is_dir():
                 raise ReleaseOpError(f"包里没有 {ref.name}/ 这一层")
             try:
-                rel.verify_package(pkg)
-                rel.stage(self.layout, pkg, now_ms=self._now())
+                rel.stage(self.layout, pkg, now_ms=self._now())   # 先核包内指纹,不对一个字节都不落
             except rel.ReleaseError as exc:
                 raise ReleaseOpError(str(exc)) from exc
             self._build(pkg, self.layout.release_dir(ref.name))

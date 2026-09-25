@@ -76,6 +76,13 @@ def test_守卫在每一次服务启动之前跑一遍(服务单元):
     assert "/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard" in 服务单元
 
 
+def test_代理单元也挂开机守卫():
+    """W00c5d 第三部分:站点下发版本、代理自己切。新版代理起不来,守卫数够次数退回上一版。"""
+    unit = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    assert GUARD_LINE in unit
+    assert unit.index("ExecStartPre=") < unit.index("\nExecStart=")
+
+
 def test_任务包守卫也挂在每一次服务启动之前(服务单元):
     """**评审复评 finding 4:修复路径写好了,却没有任何一个地方调它。**
 

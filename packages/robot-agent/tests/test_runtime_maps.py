@@ -405,3 +405,46 @@ async def test_发布_电量不够不切不退_盘满了不装(tmp_path):
     await _跑(rt, broker, n=3)
     assert rel.calls == [("activate", new)]
     await rt.close()
+
+
+async def test_换图时不装版本(台):
+    import asyncio
+    import threading
+    broker, c, r, ears, rt, site, mk = 台
+    rt.releases = 假发布()
+    gate = threading.Event()
+    ref = site.add("m", "5", {"m.pgm": b"5", "home.json": b'{"x":0,"y":0,"yaw":0}'})
+    real = site.fetch
+
+    def 慢(map_id, version, name):
+        gate.wait(5)
+        yield from real(map_id, version, name)
+    rt.maps._fetch = 慢
+    await rt._on_cmd(_cmd("map_activate", ref, "w1", c))
+    await asyncio.sleep(0.05)
+    await rt._on_cmd(_cmd("release_install", {"name": "2026-09-25-bbbbbb", "sha256": "a" * 64,
+                                              "size": 9}, "w2", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "busy"
+    gate.set()
+    await _跑(rt, broker)
+    assert rt.releases.calls == []
+
+
+async def test_起来连上站点_在途的那次升级算成(tmp_path):
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rel = 假发布()
+    rel.commit_if_pending = lambda: "2026-09-25-bbbbbb"
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"),
+                      boot_id="b", home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono,
+                      releases=rel)
+    await rt.start()
+    await _跑(rt, broker, n=3)
+    got = [e for e in ears.by["event"] if e["kind"] == "release_committed"]
+    assert got and got[-1]["data"]["name"] == "2026-09-25-bbbbbb"
+    await rt.close()
