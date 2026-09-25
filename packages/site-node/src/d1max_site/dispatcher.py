@@ -450,6 +450,20 @@ class Dispatcher:
                                 issued_by=issued_by, task_id=f"halt-{uuid.uuid4().hex[:12]}",
                                 priority=TELEOP_PRIORITY)
 
+    # ------------------------------------------------------------ 地图(W00c5d 第二部分)
+
+    async def map_command(self, robot_id: str, kind: str, payload: dict[str, Any], *,
+                          issued_by: str) -> dict[str, Any]:
+        """``map_activate``/``mapping``/``map_build``:不是任务。要在线、新鲜、狗报了这项能力。
+        狗收下就回 accepted,后台做,做完发事件(``map_activated``/``map_built``/…_failed)。"""
+        c = self._client_for(robot_id)
+        if not self._fresh(c):
+            raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
+        if c.capabilities is None or kind not in c.capabilities.tasks:
+            raise DispatchRefused(f"{robot_id} 不支持 {kind}")
+        return await self._send(c, robot_id, kind, payload, issued_by=issued_by,
+                                task_id=f"{kind}-{uuid.uuid4().hex[:12]}")
+
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
                     *, issued_by: str, task_id: str | None = None, priority: int = 0,
                     before_send: Callable[[Any], None] | None = None,

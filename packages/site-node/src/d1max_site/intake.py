@@ -47,9 +47,11 @@ def server_context(*, cert: Path, key: Path, ca: Path, crl: Path | None) -> ssl.
 
 class IntakeServer:
     def __init__(self, *, host: str, port: int, ctx: ssl.SSLContext, db, store: EvidenceStore,
-                 now_ms: Callable[[], int]) -> None:
+                 now_ms: Callable[[], int], maps: Any = None) -> None:
         self.db = db
         self.store = store
+        #: W00c5d 第二部分:地图目录(收狗建的图、录包;给狗下载图)。
+        self.maps = maps
         self._now = now_ms
         intake = self
 
@@ -116,10 +118,32 @@ class _Handler(TlsHandlerMixin):
         self._reply(status, {"message": why})
 
     def do_GET(self) -> None:
-        self._refuse(404, "没有这个")
+        """狗下载站点下发的图:``/maps/<地图号>/<版本>/<文件名>``。只认登记过的狗。"""
+        from d1max_site.maps import MapError
+        parts = self.path.split("?", 1)[0].split("/")
+        robot = self.site.robot_for(self.connection.getpeercert(binary_form=True))
+        if robot is None:
+            return self._later(403, "证书不认识或已吊销")
+        if len(parts) != 5 or parts[1] != "maps" or self.site.maps is None:
+            return self._refuse(404, "没有这个")
+        try:
+            path = self.site.maps.file_path(unquote(parts[2]), unquote(parts[3]),
+                                            unquote(parts[4]))
+        except MapError as exc:
+            return self._refuse(404, str(exc))
+        size = path.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(size))
+        self.end_headers()
+        with open(path, "rb") as fh:
+            while chunk := fh.read(1 << 16):
+                self.wfile.write(chunk)
 
     def do_POST(self) -> None:
-        if self.path != WIRE_PATH:
+        kinds = {WIRE_PATH: "runs", "/maps" + WIRE_PATH: "maps", "/bags" + WIRE_PATH: "bags"}
+        kind = kinds.get(self.path)
+        if kind is None or (kind != "runs" and self.site.maps is None):
             self._drain()
             return self._refuse(404, "没有这个")
         robot = self.site.robot_for(self.connection.getpeercert(binary_form=True))
@@ -142,8 +166,11 @@ class _Handler(TlsHandlerMixin):
             return self._refuse(400, "body 没读全")
         run = unquote(self.headers.get(H_RUN, ""))
         rel = unquote(self.headers.get(H_REL, ""))
+        put = {"runs": self.site.store.put,
+               "maps": getattr(self.site.maps, "put_map_chunk", None),
+               "bags": getattr(self.site.maps, "put_bag_chunk", None)}[kind]
         try:
-            got = self.site.store.put(robot, run, rel, offset=offset, data=data, total=total)
+            got = put(robot, run, rel, offset=offset, data=data, total=total)
         except (PathRefused, ValueError) as exc:
             log.warning("%s 传来的 %s/%s 不收: %s", robot, run, rel, exc)
             return self._refuse(400, str(exc))

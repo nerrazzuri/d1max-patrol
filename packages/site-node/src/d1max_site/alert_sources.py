@@ -204,6 +204,11 @@ class SiteAlertSources:
                 # 人点的中止是 task_aborted,不报;失败(引擎自己收的尾)一律报,认不出原因也报。
                 self.desk.raise_alert(kind="run_abort", robot=rid, title="整趟中止了",
                                       detail=reason)
+        elif e.kind in ("map_activate_failed", "map_build_failed"):
+            what = "换图" if e.kind == "map_activate_failed" else "重建"
+            which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
+            self.desk.raise_alert(kind="map_failed", robot=rid, title=f"{what}没成:{which}",
+                                  detail=str(d.get("reason", ""))[:300])
         elif e.kind == "patrol_waypoint" and d.get("ok") is False:
             self.desk.raise_alert(kind="stuck", robot=rid, title=f"点位 {d.get('name', '?')} 没到",
                                   detail=str(d.get("note", "")))

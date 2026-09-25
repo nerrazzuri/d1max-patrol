@@ -84,6 +84,8 @@ _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
 _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,300}))?)?$")
 _EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
+#: W00c5d 第二部分:给狗下发图、录包、重建。
+_MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build)$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
 
 
@@ -110,7 +112,7 @@ class SiteApi:
                  accounts: Accounts, tls: tuple[Path, Path] | None = None,
                  scheduler: Any = None, standby: Any = None, incidents: Any = None,
                  alerts: Any = None, video: Any = None, teleop: Any = None,
-                 runs: Any = None, backup: Any = None,
+                 runs: Any = None, backup: Any = None, maps: Any = None,
                  now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
@@ -129,6 +131,8 @@ class SiteApi:
         #: W00c5d:运行记录台(看、判读、复核、导出)与站点自己的备份。
         self.runs = runs
         self.backup = backup
+        #: W00c5d 第二部分:地图目录。
+        self.maps = maps
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
         self._stopping = threading.Event()
@@ -303,6 +307,8 @@ class _Handler(TlsHandlerMixin):
                 return self._incident_admin(method, path)
             if path == "/api/runs" or path.startswith(("/api/runs/", "/api/exports")):
                 return self._runs(method, path, user)
+            if path == "/api/maps" or _MAPCMD.match(path):
+                return self._maps(method, path, user)
             m = _TELEOP.match(path)
             if m is not None:
                 robot_id = unquote(m.group(1))
@@ -736,6 +742,47 @@ class _Handler(TlsHandlerMixin):
             msg = str(exc)
             raise HttpError(404 if msg.startswith(("没有", "这一趟里没有")) else 400, msg) from exc
         raise HttpError(404, f"没有 {method} {path}")
+
+    def _maps(self, method: str, path: str, user) -> None:
+        """地图(W00c5d 第二部分,决策 8:站点是地图的唯一权威)。看:``view``;下发、录包、重建:
+        ``manage``(管理员)。命令狗收下就回,做完狗发事件,失败出 ``map_failed`` 告警。"""
+        from d1max_contract.errors import ContractError
+        from d1max_contract.maps import parse_map_build, parse_mapping
+        from d1max_site.maps import MapError
+        cat = self.site.maps
+        if cat is None:
+            raise HttpError(404, "这个站点没开地图目录")
+        if path == "/api/maps" and method == "GET":
+            self._need(user, VIEW)
+            return self._send_json(200, {"maps": cat.list(), "bags": cat.bags()})
+        m = _MAPCMD.match(path)
+        if m is None or method != "POST":
+            raise HttpError(404, f"没有 {method} {path}")
+        self._need(user, MANAGE)
+        robot_id, what = unquote(m.group(1)), m.group(2)
+        if not SAFE_ID.match(robot_id):
+            raise HttpError(404, "没有这台狗")
+        self._audit_target = robot_id
+        d = self._body()
+        try:
+            if what == "map":
+                ref = cat.get(str(d.get("map_id", "")), str(d.get("version", "")))
+                kind, payload = "map_activate", ref.to_wire()
+            elif what == "mapping":
+                action, name = parse_mapping(d)
+                kind, payload = "mapping", {"action": action, **({"name": name} if name else {})}
+            else:
+                bag, map_id, version = parse_map_build(d)
+                if any(r["map_id"] == map_id and r["version"] == version for r in cat.list()):
+                    raise HttpError(409, f"{map_id}:{version} 已经有了,换个版本号")
+                kind, payload = "map_build", {"bag": bag, "map_id": map_id, "version": version}
+        except MapError as exc:
+            raise HttpError(404, str(exc)) from exc
+        except ContractError as exc:
+            raise HttpError(400, str(exc)) from exc
+        self._audit_detail = {k: v for k, v in payload.items() if k != "files"}
+        return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
+            robot_id, kind, payload, issued_by=str(user))))
 
     def _send_file(self, path, content_type: str) -> None:
         size = path.stat().st_size

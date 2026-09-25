@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -203,6 +203,24 @@ CREATE TABLE IF NOT EXISTS runs (
     UNIQUE (robot_id, mission, stamp)
 );
 CREATE INDEX IF NOT EXISTS runs_by_robot ON runs (robot_id, stamp);
+-- W00c5d 第二部分:站点的地图目录与建图录包。文件在 <站点目录>/maps/、bags/ 下。
+CREATE TABLE IF NOT EXISTS maps (
+    map_id     TEXT NOT NULL,
+    version    TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    files      TEXT NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (map_id, version)
+);
+CREATE TABLE IF NOT EXISTS bags (
+    robot_id TEXT NOT NULL,
+    name     TEXT NOT NULL,
+    first_ms INTEGER NOT NULL,
+    last_ms  INTEGER NOT NULL,
+    bytes    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (robot_id, name)
+);
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,
     status       TEXT,

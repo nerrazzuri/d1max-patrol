@@ -294,3 +294,17 @@ def test_fingerprint就是站点服务证书DER的sha256(home, capsys):
     der = subprocess.run(["openssl", "x509", "-in", str(home / "ca" / "server" / "server.crt"),
                           "-outform", "DER"], capture_output=True, check=True).stdout
     assert fp == hashlib.sha256(der).hexdigest() and len(fp) == 64
+
+
+def test_map_import登记一张图_同版本再来退2(home, tmp_path, capsys):
+    src = tmp_path / "vendor-map"
+    src.mkdir()
+    (src / "estate-1.pgm").write_bytes(b"P5")
+    (src / "estate-1.yaml").write_text("resolution: 0.05")
+    args = ["--home", str(home), "map-import", str(src), "--map-id", "estate-1",
+            "--version", "8"]
+    assert site_main.main(args) == 0
+    assert "登记了 estate-1:8" in capsys.readouterr().out
+    assert site_main.main(args) == 2
+    assert site_main.main(["--home", str(home), "map-import", str(src), "--map-id", "../x",
+                           "--version", "8"]) == 2

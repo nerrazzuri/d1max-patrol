@@ -105,12 +105,19 @@ class Uploader:
         *,
         sn: str,
         rand: Callable[[], float] | None = None,
+        run_depth: int = 2,
+        classify: Callable[[str], int | None] = classify,
     ) -> None:
         self.runs_root = Path(runs_root)
         self.queue = queue
         self.sink = sink
         self.sn = sn
         self._rand = rand
+        #: 「一趟」是 runs_root 下几层目录(运行记录 ``<任务>/<时刻>`` 两层;
+        #: W00c5d 的建图录包一层)。
+        self.run_depth = run_depth
+        #: 相对「一趟」的文件名 → 优先级(None = 不传)。
+        self._classify = classify
 
     # ---- 扫 ----
 
@@ -129,10 +136,12 @@ class Uploader:
                 continue
             key = path.relative_to(self.runs_root).as_posix()
             parts = key.split("/")
-            if len(parts) < 3:
+            if len(parts) < self.run_depth + 1:
                 continue
-            rel = "/".join(parts[2:])
-            priority = classify(rel)
+            if any(p.startswith(".") for p in parts):
+                continue                            # 点开头的是临时、攒到一半的,不传
+            rel = "/".join(parts[self.run_depth:])
+            priority = self._classify(rel)
             if priority is None:
                 continue
             st = path.stat()
@@ -152,7 +161,8 @@ class Uploader:
         item = ready[0]
         path = self.runs_root / item.key
         parts = item.key.split("/")
-        run, rel = "/".join(parts[:2]), "/".join(parts[2:])
+        d = self.run_depth
+        run, rel = "/".join(parts[:d]), "/".join(parts[d:])
 
         # **不先 is_file() 再 open()** —— 两者之间有个检查-使用窗口,文件恰好在
         # 这中间被删的话,is_file() 判过之后 open() 照样能抛。直接 try open,

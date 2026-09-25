@@ -25,7 +25,8 @@ from d1max_contract.storage import StorageFacts
 
 def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id: str,
                          loaded_map: tuple[str, str] | None,
-                         agent_version: str = AGENT_VERSION) -> Capabilities:
+                         agent_version: str = AGENT_VERSION,
+                         extra_tasks: dict[str, dict[str, Any]] | None = None) -> Capabilities:
     tasks: dict[str, dict[str, Any]] = {}
     if loaded_map is not None and hal_caps.max_vx > 0:
         tasks["goto"] = {"max_speed_mps": hal_caps.max_vx}
@@ -34,6 +35,8 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
     if hal_caps.max_vx > 0:
         # W00c5c:遥控不要地图;限速是 HAL 能力的一半(决策 7 追加条件),站点与手机据此夹、显示。
         tasks["teleop"] = {"max_vx": hal_caps.max_vx / 2, "max_wz": hal_caps.max_wz / 2}
+    # W00c5d 第二部分:站点下发地图、建图(不是任务;站点据此决定给不给按钮)。
+    tasks.update(extra_tasks or {})
     return Capabilities(
         robot_id=robot_id, agent=agent_version, adapter=adapter_id, tasks=tasks,
         actuators={"light": [], "siren": bool(hal_caps.actuators.get("siren")),

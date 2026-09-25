@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'site_maps.dart';
 import 'site_runs.dart';
 import 'site_teleop.dart';
 import 'site_video.dart';
@@ -324,6 +325,12 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteWatchPage(api: widget.api)))),
         IconButton(
+            key: const Key('open-maps'),
+            tooltip: '地图',
+            icon: const Icon(Icons.map),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute<void>(builder: (_) => SiteMapsPage(api: widget.api)))),
+        IconButton(
             key: const Key('open-runs'),
             tooltip: '记录',
             icon: const Icon(Icons.photo_library),
@@ -410,6 +417,31 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     await _reload();
   }
 
+  /// 录包（W00c5d 第二部分，管理员）：给包起个名，之后经站点遥控开着狗走一圈，再停。
+  Future<void> _startRecord() async {
+    final ctl = TextEditingController(
+        text: 'rec-${DateTime.now().toUtc().toIso8601String().substring(0, 16).replaceAll(':', '')}');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('开始录包'),
+        content: TextField(
+            key: const Key('record-name'),
+            controller: ctl,
+            decoration: const InputDecoration(labelText: '包名（字母、数字、. _ -）')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+          FilledButton(
+              key: const Key('record-go'),
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('开始')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _do(() => widget.api.mapping(widget.robotId, 'start', name: ctl.text.trim()), '开始录包');
+  }
+
   /// 叫停之前**现取**正在跑的任务：页面上的可能是几秒前的，排程早换了一趟。
   Future<void> _abort() async {
     Map<String, dynamic> v;
@@ -485,6 +517,16 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                           builder: (_) =>
                               SiteTeleopPage(api: widget.api, robotId: widget.robotId))),
                   child: const Text('遥控')),
+            if (s?.canManageMaps ?? false) ...[
+              OutlinedButton(
+                  key: const Key('btn-record-start'),
+                  onPressed: _startRecord,
+                  child: const Text('开始录包')),
+              OutlinedButton(
+                  key: const Key('btn-record-stop'),
+                  onPressed: () => _do(() => widget.api.mapping(widget.robotId, 'stop'), '停止录包'),
+                  child: const Text('停止录包')),
+            ],
             if (s?.canDispatch ?? false)
               OutlinedButton(
                   key: const Key('btn-standby'),

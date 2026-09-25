@@ -41,7 +41,7 @@ def target(x: float) -> dict:
 class 站:
     def __init__(self, tmp_path, *, alerts: bool = False, video: dict | None = None,
                  agent_video: bool = True, teleop: dict | None = None,
-                 runs: dict | None = None) -> None:
+                 runs: dict | None = None, maps: dict | None = None) -> None:
         self.loop = LoopThread()
         self.loop.start()
         self.db = SiteDB(tmp_path / "site.db")
@@ -84,11 +84,22 @@ class 站:
                     def close(self):
                         pass
                 self.pusher = _假推流()
+            self.maps = keeper = None
+            if maps is not None:                       # W00c5d 第二部分:站点的地图目录
+                from d1max_agent.maps import MapKeeper
+                from d1max_site.maps import MapCatalog
+                self.maps = MapCatalog(tmp_path / "site", self.db, now_ms=wall)
+                cat = self.maps
+
+                def fetch(m, v, n):                    # 狗的下载:直接读站点的目录(不走 TLS)
+                    yield cat.file_path(m, v, n).read_bytes()
+                keeper = MapKeeper(tmp_path / "agent" / "maps", fetch=fetch)
             self.agent = AgentRuntime(transport=MemoryTransport(self.broker, "dogA"),
                                       registration=reg, hal=self.dog,
                                       store_dir=tmp_path / "agent", now_ms=wall,
                                       loaded_map=MAP, home=Pose.from_xy_yaw(0.0, 0.0),
-                                      video=self.pusher)
+                                      video=self.pusher, maps=keeper,
+                                      mapper=(maps or {}).get("mapper"))
             await self.agent.start()
             self.desk = self.sources = None
             if alerts:                      # W00c5a:告警台挂上派遣器
@@ -124,7 +135,8 @@ class 站:
                                      now_ms=wall, alerts=self.desk)
         self.api = SiteApi(host="127.0.0.1", port=0, loop=self.loop, dispatcher=self.disp,
                            accounts=self.accounts, alerts=self.desk, video=self.hub,
-                           teleop=self.teleop, runs=self.runs, backup=self.backup)
+                           teleop=self.teleop, runs=self.runs, backup=self.backup,
+                           maps=self.maps)
         if self.teleop is not None:
             self.teleop.audit = self.api.audit
         self.api.start()

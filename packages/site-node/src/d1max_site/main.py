@@ -189,6 +189,21 @@ def cmd_import_bundle(home: Path, bundle_dir: Path, imported_by: str) -> dict:
         db.close()
 
 
+def cmd_map_import(home: Path, src: Path, map_id: str, version: str, note: str) -> dict:
+    """W00c5d 第二部分:把一个目录里的地图文件登记进站点的地图目录(厂商图、离线建好的图)。"""
+    from d1max_site.maps import MapCatalog, MapError
+    _load(home)
+    db = SiteDB(home / "site.db")
+    try:
+        ref = MapCatalog(home, db, now_ms=wall_ms).import_dir(
+            src, map_id=map_id, version=version, source=f"cli:{getpass.getuser()}", note=note)
+        return ref.to_wire()
+    except MapError as exc:
+        raise SiteError(str(exc)) from exc
+    finally:
+        db.close()
+
+
 def cmd_standby(home: Path, robot_id: str, name: str, map_id: str, pose: str,
                 default: bool) -> None:
     from d1max_site.dispatcher import Dispatcher
@@ -329,6 +344,8 @@ class Server:
         from d1max_site.intake import DEFAULT_PORT, IntakeServer, server_context
         from d1max_site.runs import RunDesk
         self.evidence = EvidenceStore(home / "evidence", self.db, now_ms=wall_ms)
+        from d1max_site.maps import MapCatalog
+        self.maps = MapCatalog(home, self.db, now_ms=wall_ms)
         self.runs = RunDesk(self.evidence, home=home, now_ms=wall_ms, alerts=self.alerts)
         backup_dir = cfg.get("backup_dir")
         self.backup = SiteBackup(self.db, self.evidence.root,
@@ -339,13 +356,13 @@ class Server:
             host=icfg.get("host", "0.0.0.0"), port=int(icfg.get("port", DEFAULT_PORT)),
             ctx=server_context(cert=server_crt, key=server_key, ca=ca / "ca.crt",
                                crl=ca / "crl.pem"),
-            db=self.db, store=self.evidence, now_ms=wall_ms)
+            db=self.db, store=self.evidence, now_ms=wall_ms, maps=self.maps)
         self.api = SiteApi(host=api_host, port=api_port, loop=self.loop,
                            dispatcher=self.dispatcher, accounts=self.accounts, tls=tls,
                            scheduler=self.scheduler, standby=self.standby,
                            incidents=self.incidents, alerts=self.alerts, video=self.video,
                            teleop=self.teleop, runs=self.runs, backup=self.backup,
-                           now_ms=wall_ms)
+                           maps=self.maps, now_ms=wall_ms)
         self.teleop.audit = self.api.audit
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
@@ -475,6 +492,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("robot_id")
     b = sub.add_parser("import-bundle", help="导入任务包,成为当前包")
     b.add_argument("bundle_dir", type=Path)
+    mi = sub.add_parser("map-import", help="把一个目录里的地图文件登记成站点的一张图(W00c5d)")
+    mi.add_argument("dir", type=Path)
+    mi.add_argument("--map-id", required=True)
+    mi.add_argument("--version", required=True)
+    mi.add_argument("--note", default="")
     sb = sub.add_parser("standby", help="登记(或改)一台狗的待命点")
     sb.add_argument("robot_id")
     sb.add_argument("name")
@@ -532,6 +554,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             got = cmd_import_bundle(home, args.bundle_dir, f"cli:{getpass.getuser()}")
             print(f"导入了 {got['bundle_id']} v{got['version']}:任务 {', '.join(got['missions'])};"
                   f"排程 {', '.join(got['schedule_entries']) or '无'}({got['timezone']})")
+        elif args.cmd == "map-import":
+            got = cmd_map_import(home, args.dir, args.map_id, args.version, args.note)
+            print(f"登记了 {got['map_id']}:{got['version']}:"
+                  + ", ".join(f"{f['name']}({f['size']} 字节)" for f in got["files"]))
         elif args.cmd == "standby":
             cmd_standby(home, args.robot_id, args.name, args.map, args.pose, args.default)
             print(f"{args.robot_id} 的待命点 {args.name} 登记好了"

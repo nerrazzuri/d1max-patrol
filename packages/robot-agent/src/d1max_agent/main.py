@@ -115,6 +115,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="发件箱目录(运行记录落 <发件箱>/runs);可以指到临时硬盘")
     o.add_argument("--outbox-max-gb", type=float, default=20.0,
                    help="发件箱上限(GB),到了就不接新的巡检;默认 20")
+    o.add_argument("--mapping", action="store_true",
+                   help="开建图(W00c5d 第二部分:站点下 mapping/map_build);要本机有 ROS 2")
     o.add_argument("--intake", default=None,
                    help="站点的狗专用接收口 https://host:port;"
                         "mqtts 时默认 https://<broker 主机>:8444")
@@ -145,6 +147,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         p.error("--tls-* 只用于 mqtts://")
     if (args.outbox is None) == (args.runs_root is None):
         p.error("--outbox 与 --runs-root 给且只给一个(运行记录落在哪)")
+    if args.mapping and args.outbox is None:
+        p.error("--mapping 要配 --outbox(录包和生成的图都写进发件箱传给站点)")
     if args.outbox is not None:
         args.runs_root = args.outbox / "runs"
         if args.outbox_max_gb <= 0:
@@ -270,11 +274,14 @@ def build(args: argparse.Namespace) -> Assembled:
         from d1max_agent.video_push import VideoPusher, lavfi_source, rtsp_source
         source = lavfi_source if args.hal == "sim" else rtsp_source(args.camera_host)
         video = VideoPusher(source=source, ffmpeg=args.ffmpeg, transcode=args.video_transcode)
-        pump = _outbox(args, registration, parts) if args.outbox is not None else None
+        pump = keeper = mapper = None
+        if args.outbox is not None:
+            pump, keeper, mapper = _outbox(args, registration, parts)
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,
                                store_dir=args.store_dir, now_ms=wall_ms, loaded_map=args.map,
                                parts=parts, video=video,
-                               storage_facts=pump.facts if pump is not None else None)
+                               storage_facts=pump.facts if pump is not None else None,
+                               maps=keeper, mapper=mapper)
         return hal, parts, runtime, pump
 
     async def _in_loop():
@@ -298,25 +305,60 @@ class _NoIntake:
         raise SinkError("没有配站点接收口")
 
 
-def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineParts) -> Any:
-    """发件箱 + 后台线程。上传走站点的狗专用口,**mTLS**:跟 MQTT 同一套证书(身份就是证书)。"""
+def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineParts
+            ) -> tuple[Any, Any, Any]:
+    """发件箱 + 后台线程;站点下发地图、录包重建(W00c5d 第二部分)。
+
+    上传、下载都走站点的狗专用口,**mTLS**:跟 MQTT 同一套证书(身份就是证书)。发件箱分三块:
+    运行记录 ``runs``、建图录包 ``bags``、重建出来的图 ``maps``,各自一个队列,一条线程轮着传。
+    返回 (发件箱线程, 地图工作副本, 录包重建)。"""
     import ssl
 
     from d1max_agent.engine.http_sink import HttpSink
+    from d1max_agent.mapping import (
+        DONE,
+        MappingService,
+        bag_classify,
+        map_classify,
+        map_settled,
+    )
+    from d1max_agent.maps import MapKeeper, https_fetch
     from d1max_agent.outbox import Outbox, OutboxPump
-    sink: Any = _NoIntake()
+    cap = int(args.outbox_max_gb * 2**30)
+    sinks: list[Any] = [_NoIntake()] * 3
+    keeper = None
     if args.intake is not None:
         ctx = ssl.create_default_context(cafile=args.tls_ca)
         ctx.load_cert_chain(args.tls_cert, args.tls_key)
-        sink = HttpSink(args.intake, ssl_context=ctx)
-    box = Outbox(args.outbox, cap_bytes=int(args.outbox_max_gb * 2**30), sink=sink,
-                 sn=registration.robot_id, now_ms=wall_ms)
+        sinks = [HttpSink(args.intake, ssl_context=ctx),
+                 HttpSink(args.intake + "/bags", ssl_context=ctx),
+                 HttpSink(args.intake + "/maps", ssl_context=ctx)]
+        keeper = MapKeeper(Path(args.store_dir) / "maps", fetch=https_fetch(args.intake, ctx))
+    mapper = None
+    if args.mapping:
+        from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
+        from d1max_patrol.app.procs import ProcManager
+        store = Path(args.store_dir)
+        work = store / "mapwork"
+        orch = MappingOrchestrator(ProcManager(store / "logs"),
+                                   MappingConfig(bags_dir=args.outbox / "bags", maps_dir=work))
+        mapper = MappingService(orch, bags_root=args.outbox / "bags",
+                                maps_out=args.outbox / "maps", work_dir=work)
+    runs = Outbox(args.outbox, cap_bytes=cap, sink=sinks[0], sn=registration.robot_id,
+                  now_ms=wall_ms)
+    bags = Outbox(args.outbox, cap_bytes=cap, sink=sinks[1], sn=registration.robot_id,
+                  now_ms=wall_ms, sub="bags", run_depth=1, classify=bag_classify,
+                  settled=mapper.bag_settled if mapper is not None
+                  else (lambda p: (p / DONE).is_file()))
+    maps = Outbox(args.outbox, cap_bytes=cap, sink=sinks[2], sn=registration.robot_id,
+                  now_ms=wall_ms, sub="maps", run_depth=2, classify=map_classify,
+                  settled=map_settled)
 
     def _active() -> set[Path]:
         a = parts.engine.archive
         return {a.path} if a is not None else set()
-    box.active = _active
-    return OutboxPump(box)
+    runs.active = _active
+    return OutboxPump(runs, more=(bags, maps)), keeper, mapper
 
 
 def _legacy_http(args: argparse.Namespace, bridge: Any, parts: EngineParts,

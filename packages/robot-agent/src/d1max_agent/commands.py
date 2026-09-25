@@ -50,6 +50,9 @@ from d1max_contract.video import parse_video_payload
 
 log = logging.getLogger(__name__)
 
+#: 地图命令(W00c5d 第二部分):不是任务,进幂等记录,交给 ``map_hook``。
+MAP_KINDS = frozenset({"map_activate", "mapping", "map_build"})
+
 TaskFactory = Callable[[Command], Task]
 
 
@@ -80,6 +83,9 @@ class CommandProcessor:
         self.halt_hook: Callable[[], Any] | None = None
         #: 任务命令的准入(W00c5d):返回非空 = 拒绝原因(发件箱满了回 ``storage_full``)。
         self.admit_hook: Callable[[Command], str] | None = None
+        #: 地图命令(W00c5d 第二部分:``map_activate``/``mapping``/``map_build``,都不是任务):
+        #: 返回非空 = 拒绝原因;空串 = 收下(后台做,做完发事件)。
+        self.map_hook: Callable[[Command], Any] | None = None
 
     # ------------------------------------------------------------ 代次落盘
 
@@ -167,6 +173,12 @@ class CommandProcessor:
             # **不进幂等记录**:续期每 ttl/2 一条,记下来一路一天几十万行、代理起来还要全量重放。
             # 重投的旧 video 命令至多把推流续到它自己的有效期,无害。
             return self._handle_video(cmd)
+        if cmd.kind in MAP_KINDS:
+            if self.map_hook is None:
+                return self._finish(self._rej(cmd, "unsupported"))
+            reason = await self.map_hook(cmd)
+            return self._finish(self._rej(cmd, reason) if reason
+                                else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED))
         if cmd.kind not in self.supported:
             return self._finish(self._rej(cmd, "unsupported"))
         try:

@@ -50,9 +50,11 @@ class 站:
             self.reg.enroll(b.robot_id, fingerprint=b.fingerprint, issued_at=NOW - 1000,
                             expires_at=NOW + 10**9)
         self.store = EvidenceStore(tmp_path / "evidence", self.db, now_ms=lambda: NOW)
+        from d1max_site.maps import MapCatalog
+        self.maps = MapCatalog(tmp_path / "site", self.db, now_ms=lambda: NOW)
         ctx = server_context(cert=ca.srv[0], key=ca.srv[1], ca=ca.ca_cert, crl=ca.crl)
         self.intake = IntakeServer(host="127.0.0.1", port=0, ctx=ctx, db=self.db,
-                                   store=self.store, now_ms=lambda: NOW)
+                                   store=self.store, now_ms=lambda: NOW, maps=self.maps)
         self.intake.start()
 
     def close(self):
@@ -66,10 +68,14 @@ def 站点(tmp_path, ca):
     s.close()
 
 
-def _sink(site, ca, bundle, *, ca_cert=None):
+def _ctx(ca, bundle, *, ca_cert=None):
     ctx = ssl.create_default_context(cafile=str(ca_cert or ca.ca_cert))
     ctx.load_cert_chain(str(bundle.dir / "robot.crt"), str(bundle.dir / "robot.key"))
-    return HttpSink(site.intake.url, ssl_context=ctx)
+    return ctx
+
+
+def _sink(site, ca, bundle, *, ca_cert=None, sub=""):
+    return HttpSink(site.intake.url + sub, ssl_context=_ctx(ca, bundle, ca_cert=ca_cert))
 
 
 def _一趟(root: Path, *, photos=2, stamp=STAMP) -> Path:
@@ -180,3 +186,68 @@ def test_握手不做的连接挡不住别的狗(站点, ca, tmp_path):
         box.close()
     finally:
         idle.close()
+
+
+
+# ------------------------------------------------------------ W00c5d 第二部分:图与录包
+
+def test_狗建的图和录包传上来_站点收齐登记_别的狗下载核对装上(站点, ca, tmp_path):
+    import hashlib
+
+    from d1max_agent.mapping import DONE, bag_classify, map_classify, map_settled
+    from d1max_agent.maps import MapKeeper, https_fetch
+    from d1max_contract.maps import MapRef
+    root = tmp_path / "dogA"
+    bag = root / "bags" / "yard"
+    bag.mkdir(parents=True)
+    (bag / "yard_0.mcap").write_bytes(os.urandom(5000))
+    (bag / DONE).touch()
+    out = root / "maps" / "estate-1" / "9"
+    out.mkdir(parents=True)
+    files = {"estate-1.pgm": os.urandom(3000), "estate-1.yaml": b"resolution: 0.05"}
+    for n, d in files.items():
+        (out / n).write_bytes(d)
+    ref = MapRef.from_wire({"map_id": "estate-1", "version": "9", "files": [
+        {"name": n, "size": len(d), "sha256": hashlib.sha256(d).hexdigest()}
+        for n, d in files.items()]})
+    (out / "map.json").write_text(json.dumps(ref.to_wire()))
+    bags = Outbox(root, cap_bytes=2**30, sink=_sink(站点, ca, ca.a, sub="/bags"), sn="A",
+                  now_ms=lambda: NOW, sub="bags", run_depth=1, classify=bag_classify,
+                  settled=lambda p: (p / DONE).is_file())
+    maps = Outbox(root, cap_bytes=2**30, sink=_sink(站点, ca, ca.a, sub="/maps"), sn="A",
+                  now_ms=lambda: NOW, sub="maps", run_depth=2, classify=map_classify,
+                  settled=map_settled)
+    for _ in range(4):
+        bags.step()
+        maps.step()
+    assert not bag.exists() and not out.exists(), "站点确认了:狗上不留"
+    assert [b["name"] for b in 站点.maps.bags("A")] == ["yard"]
+    assert 站点.maps.get("estate-1", "9") == ref and 站点.maps.list()[0]["source"] == "A"
+    keeper = MapKeeper(tmp_path / "dogB-maps", fetch=https_fetch(站点.intake.url, _ctx(ca, ca.b)))
+    d = keeper.install(ref)
+    assert (d / "estate-1.pgm").read_bytes() == files["estate-1.pgm"]
+    stranger = MapKeeper(tmp_path / "x", fetch=https_fetch(站点.intake.url, _ctx(ca, ca.stranger)))
+    from d1max_agent.maps import MapInstallError
+    with pytest.raises(MapInstallError):
+        stranger.install(ref)
+    站点.reg.revoke("B")                              # TLS 过得去,登记表里吊销了:站点不给
+    with pytest.raises(MapInstallError):
+        MapKeeper(tmp_path / "y", fetch=https_fetch(站点.intake.url, _ctx(ca, ca.b))).install(ref)
+    bags.close()
+    maps.close()
+
+
+def test_图的路径不合规的不收_没登记的图下载不到(站点, ca, tmp_path):
+    for run, rel in (("estate-1", "a.pgm"), ("estate-1/../x", "a.pgm"), ("e/9", "../a"),
+                     ("e/9", "a/b")):
+        with pytest.raises(ValueError):
+            站点.maps.put_map_chunk("A", run, rel, offset=0, data=b"x", total=1)
+    for run, rel in (("a/b", "x"), ("yard", "../x")):
+        with pytest.raises(ValueError):
+            站点.maps.put_bag_chunk("A", run, rel, offset=0, data=b"x", total=1)
+    import urllib.error
+    import urllib.request
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(站点.intake.url + "/maps/estate-1/404/x.pgm",
+                               context=_ctx(ca, ca.a), timeout=5)
+    assert e.value.code == 404

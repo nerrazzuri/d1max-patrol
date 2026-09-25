@@ -53,6 +53,9 @@ class SimRobot:
         self._estop = False
         self._loc_lost = False
         self._faults: list[Fault] = []
+        #: W00c5d 第二部分:载入的图、注入的载入失败(非空 = 失败原因)。
+        self.loaded_map: tuple[str, str, str] | None = None
+        self.fail_load = ""
         # 位姿与速度
         self.x = self.y = self.yaw = 0.0
         self._vx = self._wz = 0.0                 # 当前实际速度
@@ -192,6 +195,12 @@ class SimRobot:
 
     async def estop_status(self) -> bool:
         return self._estop
+
+    async def load_map(self, map_id: str, version: str, path) -> None:
+        """W00c5d 第二部分:载入站点下发的一张图(仿真里只记下来;``fail_load`` 注入失败)。"""
+        if self.fail_load:
+            raise RuntimeError(self.fail_load)
+        self.loaded_map = (map_id, version, str(path))
 
     async def estop_reset(self) -> None:
         self._estop = False                      # 不恢复任务:速度仍为零,等新命令

@@ -62,7 +62,7 @@ def _collect(tmp_path) -> dict[str, object]:
             return {"verdict": "abnormal" if _模型.n % 2 else "normal", "confidence": 0.7,
                     "reason": "看过了", "evidence": "左下角"}
     s = 站(tmp_path, alerts=True, video={}, agent_video=False,
-          runs={"client": _模型, "backup_dir": tmp_path / "bak"})
+          runs={"client": _模型, "backup_dir": tmp_path / "bak"}, maps={})
     try:
         s.api.scheduler = SiteScheduler(s.db, s.disp, now_ms=wall)
         s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=wall)
@@ -138,6 +138,13 @@ def _collect(tmp_path) -> dict[str, object]:
                                                 storage=facts))
         s.loop.call(_盘况)
         s.backup.run_once()
+        # W00c5d 第二部分:一张导入的图、一个狗传上来的录包。
+        mdir = tmp_path / "vendor-map"
+        mdir.mkdir()
+        (mdir / "estate-1.pgm").write_bytes(b"P5")
+        (mdir / "estate-1.yaml").write_text("resolution: 0.05")
+        s.maps.import_dir(mdir, map_id="estate-1", version="8", note="厂商图")
+        s.maps.bag_done("A", "yard-0925", 5000)
         return {
             "site_alerts": alerts,
             "site_alert_frame": alert_frame,
@@ -157,6 +164,7 @@ def _collect(tmp_path) -> dict[str, object]:
                                 token="nope")[1],
             "site_runs": s.req("GET", "/api/runs", token=tok)[1],
             "site_run": s.req("GET", f"/api/runs/{rid}", token=tok)[1],
+            "site_maps": s.req("GET", "/api/maps", token=tok)[1],
         }
     finally:
         s.close()

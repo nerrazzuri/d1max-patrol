@@ -25,6 +25,7 @@
           "goto": {
             "max_speed_mps": 1.0
           },
+          "map_activate": {},
           "patrol": {
             "map_id": "estate-1",
             "map_version": "7"
@@ -35,14 +36,14 @@
           }
         }
       },
-      "expires_at": 1791341973768,
+      "expires_at": 1791343337124,
       "fresh": true,
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-00e806e791",
+        "boot_id": "boot-e48a95f70d",
         "control_epoch": 1,
-        "last_seen": 1790341974639,
+        "last_seen": 1790343337963,
         "online": true,
         "ready": {
           "control": true,

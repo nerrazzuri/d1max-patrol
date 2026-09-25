@@ -1,0 +1,32 @@
+{
+  "bags": [
+    {
+      "bytes": 5000,
+      "first_ms": 1790343338417,
+      "last_ms": 1790343338417,
+      "name": "yard-0925",
+      "robot_id": "A"
+    }
+  ],
+  "maps": [
+    {
+      "created_ms": 1790343338413,
+      "files": [
+        {
+          "name": "estate-1.pgm",
+          "sha256": "1c5e95f69bb22aef7c11683dbf81f2bab7bbf77b028014a112bc68e051ba1a79",
+          "size": 2
+        },
+        {
+          "name": "estate-1.yaml",
+          "sha256": "46411b0d9ab875c0921118a7043548d2693bdf2ec78b3d69f061991f176cbe8c",
+          "size": 16
+        }
+      ],
+      "map_id": "estate-1",
+      "note": "厂商图",
+      "source": "import",
+      "version": "8"
+    }
+  ]
+}

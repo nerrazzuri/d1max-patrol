@@ -74,40 +74,20 @@ class Stored:
     sha256: str
 
 
-class EvidenceStore:
-    def __init__(self, root: Path | str, db, *, now_ms: Callable[[], int]) -> None:
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.db = db
-        self._now = now_ms
+class ChunkWriter:
+    """按块落盘(三种偏移规矩见模块说明),返回站点对自己存下的字节算的哈希。证据库、地图、录包共用。"""
+
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         #: 按路径分 64 把锁(同一个文件的两块不许交错写;锁的个数有上限,不随文件数涨)。
         self._stripes = [threading.Lock() for _ in range(64)]
         #: 增量哈希:路径 → (已算到的长度, 哈希对象)。文件收完就扔掉。
         self._hashes: dict[Path, tuple[int, Any]] = {}
-        #: 收完一趟里一个文件之后调(判读排队用)。
-        self.on_file: list[Callable[[int, str], None]] = []
 
-    def _path_lock(self, path: Path) -> threading.Lock:
-        return self._stripes[hash(path) % len(self._stripes)]
-
-    def run_dir(self, robot_id: str, mission: str, stamp: str) -> Path:
-        return safe_join(self.root, robot_id, mission, stamp)
-
-    # ------------------------------------------------------------ 收
-
-    def put(self, robot_id: str, run: str, rel: str, *, offset: int, data: bytes,
-            total: int) -> Stored:
-        parts = split_run(run)
-        if parts is None:
-            raise PathRefused(f"一趟的目录名要是 <任务>/<时刻>:{run!r}")
-        if not dog_may_upload(rel):
-            raise PathRefused(f"站点不收这种文件:{rel!r}")
+    def write(self, path: Path, *, offset: int, data: bytes, total: int) -> Stored:
         if offset < 0 or total < 0 or offset + len(data) > total:
             raise ValueError(f"偏移或总长不对:offset={offset} len={len(data)} total={total}")
-        mission, stamp = parts
-        path = safe_join(self.root, robot_id, mission, stamp, rel)
-        with self._path_lock(path):
+        with self._stripes[hash(path) % len(self._stripes)]:
             path.parent.mkdir(parents=True, exist_ok=True)
             have = path.stat().st_size if path.exists() else 0
             if offset > have:
@@ -130,8 +110,6 @@ class EvidenceStore:
             if size >= total:
                 with self._lock:
                     self._hashes.pop(path, None)
-        if size >= total:
-            self._index(robot_id, mission, stamp, rel)
         return Stored(size=size, sha256=digest)
 
     def _full_hash(self, path: Path) -> str:
@@ -145,6 +123,36 @@ class EvidenceStore:
         with self._lock:
             self._hashes[path] = (n, h)
         return h.copy().hexdigest()
+
+
+class EvidenceStore:
+    def __init__(self, root: Path | str, db, *, now_ms: Callable[[], int]) -> None:
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.db = db
+        self._now = now_ms
+        self.writer = ChunkWriter()
+        #: 收完一趟里一个文件之后调(判读排队用)。
+        self.on_file: list[Callable[[int, str], None]] = []
+
+    def run_dir(self, robot_id: str, mission: str, stamp: str) -> Path:
+        return safe_join(self.root, robot_id, mission, stamp)
+
+    # ------------------------------------------------------------ 收
+
+    def put(self, robot_id: str, run: str, rel: str, *, offset: int, data: bytes,
+            total: int) -> Stored:
+        parts = split_run(run)
+        if parts is None:
+            raise PathRefused(f"一趟的目录名要是 <任务>/<时刻>:{run!r}")
+        if not dog_may_upload(rel):
+            raise PathRefused(f"站点不收这种文件:{rel!r}")
+        mission, stamp = parts
+        path = safe_join(self.root, robot_id, mission, stamp, rel)
+        got = self.writer.write(path, offset=offset, data=data, total=total)
+        if got.size >= total:
+            self._index(robot_id, mission, stamp, rel)
+        return got
 
     # ------------------------------------------------------------ 登记
 

@@ -66,7 +66,8 @@ class AgentRuntime:
                  status_period_ms: int = 30_000, parts: EngineParts | None = None,
                  home: Pose | None = None, runs_root: Path | None = None,
                  monotonic: Callable[[], float] | None = None, video: Any = None,
-                 storage_facts: Callable[[], StorageFacts | None] | None = None) -> None:
+                 storage_facts: Callable[[], StorageFacts | None] | None = None,
+                 maps: Any = None, mapper: Any = None) -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -101,6 +102,11 @@ class AgentRuntime:
         self._storage = storage_facts
         self._next_storage_ms = 0
         self.processor.admit_hook = self._admit
+        #: 地图(W00c5d 第二部分):正在用的那一张(``MapKeeper``)、录包与重建(``MappingService``)。
+        self.maps = maps
+        self.mapper = mapper
+        self._map_job: asyncio.Task | None = None
+        self.processor.map_hook = self._map_command
         #: 丢掉的遥控帧计数(不合契约的)。
         self.teleop_malformed = 0
         if video is not None:
@@ -159,11 +165,135 @@ class AgentRuntime:
 
     def _admit(self, cmd: Command) -> str:
         """发件箱满了(盘到停止水位或发件箱到上限)不接巡检 —— 绝不删没传完的来腾地方。
-        事件派遣的 ``goto``、遥控不拍照、不产生文件,照接。"""
+        事件派遣的 ``goto``、遥控不拍照、不产生文件,照接。正在换图时不接自动任务(遥控照接)。"""
+        if cmd.kind in ("goto", "patrol") and self._map_busy():
+            return "map_switching"
         if cmd.kind != "patrol" or self._storage is None:
             return ""
         f = self._storage()
         return "storage_full" if f is not None and f.full() else ""
+
+    # ------------------------------------------------------------ 地图(W00c5d 第二部分)
+
+    async def _load_active_map(self) -> None:
+        """起来时:狗上有站点下发过的正在用的那张图,交给适配器载入,就用它(覆盖 ``--map``)。
+        载不进去就照旧用 ``--map``,记一条。"""
+        ref = self.maps.active() if self.maps is not None else None
+        loader = getattr(self.hal, "load_map", None)
+        if ref is None or loader is None:
+            return
+        try:
+            await loader(ref.map_id, ref.version, self.maps.dir_of(ref))
+        except Exception:
+            log.exception("起来时载入正在用的图 %s:%s 失败,照旧用 --map", ref.map_id, ref.version)
+            return
+        self._switch_map(ref)
+
+    def _map_busy(self) -> bool:
+        return self._map_job is not None and not self._map_job.done()
+
+    def _tasks_idle(self) -> bool:
+        cur = self.processor.current
+        return (cur is None or cur.done) and not self.processor.pending
+
+    def _extra_tasks(self) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        if self.maps is not None and getattr(self.hal, "load_map", None) is not None:
+            out["map_activate"] = {}
+        if self.mapper is not None:
+            out["mapping"] = {}
+            out["map_build"] = {}
+        return out
+
+    async def _map_command(self, cmd: Command) -> str:
+        """地图命令:收下(空串)或拒绝原因。下载、载入、重建都在后台做,做完发事件。"""
+        from d1max_contract.maps import MapRef, parse_map_build, parse_mapping
+        kind = cmd.kind
+        if kind not in self._extra_tasks():
+            return "unsupported"
+        try:
+            if kind == "map_activate":
+                ref = MapRef.from_wire(cmd.payload)
+            elif kind == "mapping":
+                action, name = parse_mapping(cmd.payload)
+            else:
+                bag, map_id, version = parse_map_build(cmd.payload)
+        except ContractError as exc:
+            return f"payload: {exc}"
+        if self._map_busy():
+            return "busy"
+        if kind == "map_activate":
+            if not self._tasks_idle():
+                return "busy"                     # 跑着任务不换图:坐标系一换,手上这趟就全错了
+            self._map_job = asyncio.get_running_loop().create_task(
+                self._activate(ref, cmd.task_id))
+            return ""
+        if kind == "mapping":
+            try:
+                if action == "start":
+                    await self.mapper.start(name)
+                else:
+                    await self.mapper.stop()
+            except Exception as exc:  # noqa: BLE001 - 录包起不来/停不了:原因回给站点
+                return f"mapping: {exc}"[:120]
+            self.events.emit("mapping", {"task_id": cmd.task_id, "action": action,
+                                         "name": name or self.mapper.last_bag})
+            return ""
+        if not self._tasks_idle() or self.mapper.recording:
+            return "busy"                         # 重建吃 CPU:不跟巡检、录包抢
+        self._map_job = asyncio.get_running_loop().create_task(
+            self._build(bag, map_id, version, cmd.task_id))
+        return ""
+
+    async def _activate(self, ref, task_id: str) -> None:
+        from d1max_agent.maps import MapInstallError
+        base = {"task_id": task_id, "map_id": ref.map_id, "version": ref.version}
+        try:
+            dst = await asyncio.to_thread(self.maps.install, ref)
+            try:
+                await self.hal.load_map(ref.map_id, ref.version, dst)
+            except Exception as exc:
+                self.maps.discard(ref)
+                raise MapInstallError(f"适配器载不进去: {type(exc).__name__}: {exc}") from exc
+            self.maps.commit(ref)
+            self._switch_map(ref)
+            self.events.emit("map_activated", base)
+            await self._publish_caps()
+            log.info("换图了:%s:%s", ref.map_id, ref.version)
+        except MapInstallError as exc:
+            log.warning("换图没成(%s:%s):%s", ref.map_id, ref.version, exc)
+            self.events.emit("map_activate_failed", base | {"reason": str(exc)[:200]})
+        except Exception as exc:
+            log.exception("换图炸了")
+            self.events.emit("map_activate_failed",
+                             base | {"reason": f"{type(exc).__name__}: {exc}"[:200]})
+
+    async def _build(self, bag: str, map_id: str, version: str, task_id: str) -> None:
+        base = {"task_id": task_id, "bag": bag, "map_id": map_id, "version": version}
+        try:
+            await self.mapper.build(bag, map_id, version)
+            self.events.emit("map_built", base)
+        except Exception as exc:  # noqa: BLE001 - 重建失败:原因发给站点
+            log.warning("重建没成(%s → %s:%s):%s", bag, map_id, version, exc)
+            self.events.emit("map_build_failed",
+                             base | {"reason": f"{type(exc).__name__}: {exc}"[:200]})
+
+    def _switch_map(self, ref) -> None:
+        self.loaded_map = (ref.map_id, ref.version)
+        self.processor.loaded_map = self.loaded_map
+        self.processor.supported = self._supported()
+        if self.parts is not None:
+            home = self.maps.home_of(ref) if self.maps is not None else None
+            self.parts.switch_map(ref.map_id, None if home is None else Pose.from_xy_yaw(*home),
+                                  now_ms=self._now())
+
+    async def _publish_caps(self) -> None:
+        caps = compose_capabilities(
+            robot_id=self.registration.robot_id, hal_caps=self.hal.hal_capabilities(),
+            adapter_id=self.adapter_id, loaded_map=self.loaded_map,
+            extra_tasks=self._extra_tasks())
+        await self.transport.publish(self.topics.capabilities, _dumps(caps.to_wire()),
+                                     qos=1, retain=True)
 
     def _video_live(self) -> bool:
         """遥控「没画面不许动」在狗这头的那一道:本机推流器至少一路在推。站点那头还有一道。"""
@@ -207,10 +337,8 @@ class AgentRuntime:
         # 遥控帧(W00c5c):专用主题、QoS 0 —— 断线期间的帧不补投(决策 7:不许重放)。
         await self.transport.subscribe(self.topics.teleop, self._on_teleop, qos=0)
         await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
-        await self.transport.publish(self.topics.capabilities, _dumps(compose_capabilities(
-            robot_id=self.registration.robot_id, hal_caps=self.hal.hal_capabilities(),
-            adapter_id=self.adapter_id, loaded_map=self.loaded_map).to_wire()),
-            qos=1, retain=True)
+        await self._load_active_map()
+        await self._publish_caps()
         await self._publish_status(force=True)
 
     async def close(self) -> None:

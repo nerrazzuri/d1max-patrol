@@ -334,6 +334,24 @@ void main() {
       await site.close();
     }
   });
+
+  test('地图：目录、下发、录包、重建的请求形状', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('alice', 'pw');
+    final d = await c.maps();
+    expect((d['maps'] as List).first['map_id'], 'estate-1');
+    await c.activateMap('A 1', 'estate-1', '8');
+    expect(site.rawPaths.last, endsWith('/api/robots/A%201/map'));
+    expect(site.received.last.body, {'map_id': 'estate-1', 'version': '8'});
+    await c.mapping('A', 'start', name: 'yard');
+    expect(site.received.last.body, {'action': 'start', 'name': 'yard'});
+    await c.mapping('A', 'stop');
+    expect(site.received.last.body, {'action': 'stop'});
+    await c.buildMap('A', 'yard', 'estate-1', '9');
+    expect(site.received.last.path, '/api/robots/A/map_build');
+    expect(site.received.last.body, {'bag': 'yard', 'map_id': 'estate-1', 'version': '9'});
+    c.close();
+  });
 }
 
 Future<void> _until(bool Function() ok) async {

@@ -97,6 +97,8 @@ LEVEL_OF: dict[str, Level] = {
     "disk_80": Level.P2,
     # 站点自己的备份超过 25 小时没成(W00c5d):站点是唯一权威,盘坏了就什么都没了。
     "backup_stale": Level.P2,
+    # 站点下发的图没装上、在狗上重建没成(W00c5d 第二部分):狗照旧用原来那张,要人看原因。
+    "map_failed": Level.P2,
     "upload_backlog": Level.P2,
     "bundle_lag": Level.P2,
     "clock_skew": Level.P2,

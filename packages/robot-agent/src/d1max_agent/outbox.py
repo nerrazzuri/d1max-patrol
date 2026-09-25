@@ -39,14 +39,23 @@ MAX_PUTS_PER_STEP = 64
 class Outbox:
     def __init__(self, root: Path | str, *, cap_bytes: int, sink: UploadSink, sn: str,
                  now_ms: Callable[[], int],
-                 disk_usage: Callable[[Path], tuple[int, int, int]] = shutil.disk_usage
-                 ) -> None:
+                 disk_usage: Callable[[Path], tuple[int, int, int]] = shutil.disk_usage,
+                 sub: str = "runs", run_depth: int = 2,
+                 classify: Callable[[str], int | None] = classify,
+                 settled: Callable[[Path], bool] = is_settled) -> None:
+        """``sub``:发件箱里的哪一块(运行记录 ``runs``;W00c5d 第二部分的建图录包 ``bags``、生成的图
+        ``maps``),各自一个队列、各自的「一趟」层数、哪些文件要传、什么算安定。"""
         self.root = Path(root)
-        self.runs_root = self.root / "runs"
+        self.runs_root = self.root / sub
         self.runs_root.mkdir(parents=True, exist_ok=True)
         self.cap_bytes = cap_bytes
-        self.queue = UploadQueue(self.root / "queue.jsonl")
-        self.uploader = Uploader(self.runs_root, self.queue, sink, sn=sn)
+        self.run_depth = run_depth
+        self._settled = settled
+        self.queue = UploadQueue(self.root / ("queue.jsonl" if sub == "runs"
+                                              else f"queue-{sub}.jsonl"))
+        self.uploader = Uploader(self.runs_root, self.queue, sink, sn=sn, run_depth=run_depth,
+                                 classify=classify)
+        self._classify = classify
         self._now = now_ms
         self._disk_usage = disk_usage
         #: 引擎正在写的那一趟(运行时接上);这些目录一律不删。
@@ -77,23 +86,28 @@ class Outbox:
 
     # ------------------------------------------------------------ 删
 
+    def _runs(self) -> list[Path]:
+        level = [self.runs_root]
+        for _ in range(self.run_depth):
+            level = [c for d in level for c in _dirs(d)]
+        return level
+
     def _prune(self) -> None:
         active = {p.resolve() for p in self.active()}
-        for mission in _dirs(self.runs_root):
-            for run in _dirs(mission):
-                if run.resolve() in active or not is_settled(run):
-                    continue
-                key = f"{mission.name}/{run.name}"
-                if not self._confirmed(run, key):
-                    continue
-                shutil.rmtree(run, ignore_errors=True)
-                if run.exists():
-                    log.warning("发件箱里这一趟删不干净:%s", run)
-                    continue
-                self.queue.forget(key)
-                self.deleted_runs += 1
-                log.info("站点已确认,发件箱删掉这一趟:%s", key)
-            # 任务名那一层空了也不收:引擎建新的一趟时 mkdir(parents) 跟这里抢,会建不出来。
+        for run in self._runs():
+            if run.resolve() in active or not self._settled(run):
+                continue
+            key = run.relative_to(self.runs_root).as_posix()
+            if not self._confirmed(run, key):
+                continue
+            shutil.rmtree(run, ignore_errors=True)
+            if run.exists():
+                log.warning("发件箱里这一趟删不干净:%s", run)
+                continue
+            self.queue.forget(key)
+            self.deleted_runs += 1
+            log.info("站点已确认,发件箱删掉这一趟:%s", key)
+        # 上面几层(任务名)空了也不收:引擎建新的一趟时 mkdir(parents) 跟这里抢,会建不出来。
 
     def _confirmed(self, run: Path, key: str) -> bool:
         """盘上每个该传的文件都已确认、跟传上去的那份一样大、一样新。"""
@@ -102,7 +116,7 @@ class Outbox:
             if not path.is_file():
                 continue
             rel = path.relative_to(run).as_posix()
-            if classify(rel) is None:
+            if self._classify(rel) is None:
                 continue
             item = self.queue.get(f"{key}/{rel}")
             st = path.stat()
@@ -142,10 +156,12 @@ def _dirs(p: Path) -> list[Path]:
 
 
 class OutboxPump:
-    """后台线程:每 ``period_s`` 走一拍。上传等网络,不许卡在代理的事件循环里。"""
+    """后台线程:每 ``period_s`` 每一块发件箱各走一拍。上传等网络,不许卡在代理的事件循环里。"""
 
-    def __init__(self, box: Outbox, *, period_s: float = 1.0) -> None:
+    def __init__(self, box: Outbox, *, period_s: float = 1.0,
+                 more: tuple[Outbox, ...] = ()) -> None:
         self.box = box
+        self.boxes = (box, *more)
         self.period_s = period_s
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -156,19 +172,32 @@ class OutboxPump:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            try:
-                with self._lock:
-                    self.box.step()
-            except Exception:
-                log.exception("发件箱这一拍炸了")
+            for b in self.boxes:
+                try:
+                    with self._lock:
+                        b.step()
+                except Exception:
+                    log.exception("发件箱这一拍炸了(%s)", b.runs_root.name)
             self._stop.wait(self.period_s)
 
     def facts(self) -> StorageFacts | None:
-        return self.box._facts
+        """几块发件箱合起来的盘况:盘与发件箱总量是同一块盘、同一个目录;积压相加,最老的取最老。"""
+        got = [b._facts for b in self.boxes]
+        if any(f is None for f in got):
+            return None
+        first = got[0]
+        ages = [f.oldest_backlog_s for f in got if f.oldest_backlog_s is not None]
+        return StorageFacts(
+            disk_used_ratio=first.disk_used_ratio, outbox_bytes=first.outbox_bytes,
+            outbox_cap_bytes=first.outbox_cap_bytes,
+            backlog_files=sum(f.backlog_files for f in got),
+            backlog_bytes=sum(f.backlog_bytes for f in got),
+            oldest_backlog_s=max(ages) if ages else None)
 
     def stop(self, timeout_s: float = 10.0) -> None:
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(timeout_s)
         with self._lock:
-            self.box.close()
+            for b in self.boxes:
+                b.close()

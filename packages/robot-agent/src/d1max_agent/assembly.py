@@ -34,6 +34,15 @@ class EngineParts:
     #: 预飞检查 home 那一项会红,goto 变 failed。
     home: HomePoint | None
 
+    def switch_map(self, map_id: str, home: Pose | None, *, now_ms: int) -> None:
+        """换图(W00c5d 第二部分):导航桥认新的地图号;原点跟着图走(图里没带就是没标过)。"""
+        self.map_id = map_id
+        self.nav._map_id = map_id
+        self.nav._home = home
+        self.home = None if home is None else HomePoint(map_id=map_id, pose=home,
+                                                        marked_at_ms=now_ms,
+                                                        note="W00c5d:随图下发的原点")
+
     async def step(self, dt_s: float) -> None:
         """两个桥各推一拍。HAL 自己的推进(sim 的 ``tick``)由调用方负责。"""
         await self.nav.step(dt_s)

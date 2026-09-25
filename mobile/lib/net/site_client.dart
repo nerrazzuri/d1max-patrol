@@ -79,6 +79,9 @@ class SiteSession {
 
   /// 判读、复核照片（W00c5d）：值班的人（保安、管理员）；业主只看。
   bool get canReview => role == 'admin' || role == 'guard';
+
+  /// 下发地图、录包、重建（W00c5d 第二部分）：只有管理员。
+  bool get canManageMaps => role == 'admin';
   bool get canAbort => role == 'admin' || role == 'guard' || role == 'owner';
 }
 
@@ -131,6 +134,18 @@ abstract class SiteApi {
 
   /// 人工复核一张照片：[verdict] 是 normal / abnormal / unclear。
   Future<Map<String, dynamic>> reviewPhoto(int id, String photo, String verdict, String note);
+
+  /// 站点的地图目录与建图录包（W00c5d 第二部分）：`{maps: [...], bags: [...]}`。
+  Future<Map<String, dynamic>> maps();
+
+  /// 给一台狗下发一张图（狗后台下载、核对、载入，完了发事件）。
+  Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version);
+
+  /// 录包：[action] 是 start（要 [name]）/ stop。
+  Future<Map<String, dynamic>> mapping(String robotId, String action, {String name = ''});
+
+  /// 拿一个录包在狗上重建一张图。
+  Future<Map<String, dynamic>> buildMap(String robotId, String bag, String mapId, String version);
   Stream<Map<String, dynamic>> events();
   void close();
 }
@@ -446,6 +461,31 @@ class SiteClient implements SiteApi {
     }
     return out.takeBytes();
   }
+
+  @override
+  Future<Map<String, dynamic>> maps() async {
+    final d = _map(await _send('GET', '/api/maps'));
+    if (d['maps'] is! List || d['bags'] is! List) {
+      throw const FormatException('站点回的地图目录里没有 maps / bags');
+    }
+    return d;
+  }
+
+  @override
+  Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/map',
+          <String, dynamic>{'map_id': mapId, 'version': version}));
+
+  @override
+  Future<Map<String, dynamic>> mapping(String robotId, String action, {String name = ''}) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/mapping',
+          <String, dynamic>{'action': action, if (name.isNotEmpty) 'name': name}));
+
+  @override
+  Future<Map<String, dynamic>> buildMap(
+          String robotId, String bag, String mapId, String version) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/map_build',
+          <String, dynamic>{'bag': bag, 'map_id': mapId, 'version': version}));
 
   @override
   Future<Map<String, dynamic>> judgeRun(int id) async =>
