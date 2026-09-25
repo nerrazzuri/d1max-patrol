@@ -17,6 +17,7 @@ def _toml(name: str) -> str:
 def test_三个包都能import():
     assert importlib.import_module("d1max_contract").SCHEMA == "1.0"
     importlib.import_module("d1max_adapter_sim")
+    importlib.import_module("d1max_adapter_d1max")
     importlib.import_module("d1max_agent")
     importlib.import_module("d1max_site")
 
@@ -40,13 +41,15 @@ def test_包名与依赖方向():
 def test_根pyproject把三处测试目录都收进来():
     root = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     for p in ("packages/contract/tests", "packages/adapter-sim/tests",
-              "packages/robot-agent/tests", "packages/site-node/tests"):
+              "packages/adapter-d1max/tests", "packages/robot-agent/tests",
+              "packages/site-node/tests"):
         assert f'"{p}"' in root, p
 
 
 def test_每个包有src布局和tests目录():
     for name, mod in (("contract", "d1max_contract"), ("adapter-sim", "d1max_adapter_sim"),
-                      ("robot-agent", "d1max_agent"), ("site-node", "d1max_site")):
+                      ("adapter-d1max", "d1max_adapter_d1max"), ("robot-agent", "d1max_agent"),
+                      ("site-node", "d1max_site")):
         assert (PKGS / name / "src" / mod / "__init__.py").is_file(), name
         assert (PKGS / name / "tests").is_dir(), name
 
@@ -87,6 +90,9 @@ def test_搬走的engine里没有旧包名():
                         if 行.lstrip().startswith(("from ", "import ")))
         assert "d1max_patrol" + ".engine" not in 代码, f"{py.name} 里还 import 旧包名"
     assert 'd1max-patrol' in _toml("robot-agent"), "过渡性依赖要声明"
+    d = _toml("adapter-d1max")
+    assert 'name = "d1max-adapter-d1max"' in d and "d1max-contract" in d
+    assert "d1max-patrol" in d, "adapter-d1max 过渡性借根包的旁路进程客户端,要声明"
 
 
 def test_几何类型在契约包里_根包转手的是同一个类():

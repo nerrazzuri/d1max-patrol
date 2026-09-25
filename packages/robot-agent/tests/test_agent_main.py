@@ -74,6 +74,69 @@ def test_装配并跑通一条goto(tmp_path):
         a.stop()
 
 
+
+def test_hal_d1max的参数(tmp_path):
+    a = _args(tmp_path, "--hal", "d1max", "--sidecar", "127.0.0.1:9001", "--mps-per-unit", "0.42",
+              "--radps-per-unit", "0.9", "--deadband", "0.06", "--max-fraction", "0.3",
+              "--invert-yaw")
+    assert a.hal == "d1max" and a.sidecar == ("127.0.0.1", 9001)
+    assert (a.mps_per_unit, a.radps_per_unit, a.deadband, a.max_fraction, a.invert_yaw) == \
+        (0.42, 0.9, 0.06, 0.3, True)
+    d = _args(tmp_path, "--hal", "d1max")
+    assert d.sidecar == ("127.0.0.1", 8090) and d.mps_per_unit == 0.4 and not d.invert_yaw
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--hal", "d1max", "--sidecar", "nope")
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--sidecar", "127.0.0.1:9001"), "sim 不收 --sidecar"
+
+
+def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
+    """W00d 验收:代理 ``--hal d1max`` 接旁路进程(这里是仿真旁路)跑完一趟 goto。仿真旁路里
+    比例 1.0 折 1.2 m/s、转向折 1.5 rad/s,低于比例 0.2 原地蹭不动,参数照这个配。"""
+    import time
+
+    from d1max_patrol.app.bridge import LoopBridge
+    from d1max_patrol.protocol.agent_frames import MotionStatus as SdkMotion
+    from d1max_sim.agent_server import SimAgentServer
+
+    sim_loop = LoopBridge()
+    sim_loop.start()
+    sim = SimAgentServer(port=0)
+
+    async def _起():
+        await sim.start()
+        sim.motion = SdkMotion.GENERAL                # 站着待命:代理不替人站起
+    sim_loop.call(_起)
+    a = None
+    try:
+        args = _args(tmp_path, "--hal", "d1max", "--sidecar", f"127.0.0.1:{sim.port}",
+                     "--mps-per-unit", "1.2", "--radps-per-unit", "1.5", "--deadband", "0.25")
+        a = agent_main.build(args)
+        a.start()
+        site = DispatchClient(MemoryTransport(a.broker, "site"), T, now_ms=agent_main.wall_ms)
+        a.bridge.call(site.start)
+        target = MapPose(map_id="estate-1", map_version="7", frame_id="map", x=0.8, y=0.4,
+                         yaw=0.0)
+        cmd = site.new_command("goto", {"target": target.to_wire(), "max_speed_mps": 1.0},
+                               ttl_ms=60_000, control_epoch=1)
+        ack = a.bridge.call(lambda: site.send(cmd, timeout_s=5.0), timeout_s=10.0)
+        assert ack.result is AckResult.ACCEPTED, ack
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline and not a.runtime.processor.finished:
+            time.sleep(0.05)
+        fin = a.runtime.processor.finished[-1]
+        assert fin.task_id == cmd.task_id and fin.state is TaskState.DONE, (fin.state, fin.detail)
+        assert abs(sim.x - 0.8) < 0.2 and abs(sim.y - 0.4) < 0.2, (sim.x, sim.y)
+        assert "vel" in [c for c, _ in sim.commands]
+        caps = site.capabilities
+        assert caps is not None and caps.adapter == "d1max/0.1.0"
+    finally:
+        if a is not None:
+            a.stop()
+        assert "shutdown" not in [c for c, _ in sim.commands], "代理退出不许让旁路放控制权"
+        sim_loop.call(sim.stop)
+        sim_loop.stop()
+
 def test_legacy_http托管在同一进程_看得到MQTT派的那趟(tmp_path):
     args = _args(tmp_path, "--legacy-http", "127.0.0.1:0")
     a = agent_main.build(args)

@@ -384,3 +384,32 @@ async def test_正常收尾先发retained的offline_status_站点不用等过期
     await broker.drain()
     last = Status.from_wire(ears.by_topic["status"][-1])
     assert last.online is False and last.boot_id == rt.boot_id
+
+
+async def test_控制权不可释放的HAL_收尾不去放_其余照做(台子, monkeypatch):
+    """W00d 决定二 A:真狗的 SDK 控制权放了就得重启整机,适配器报 ``control_releasable=false``
+    且 ``release_control`` 抛不支持。收尾看能力,不去碰它 —— 不是靠吞异常。"""
+    import dataclasses
+
+    broker, c, r, ears, rt, _ = 台子
+    caps = dataclasses.replace(r.hal_capabilities(), control_releasable=False)
+    monkeypatch.setattr(r, "hal_capabilities", lambda: caps)
+    await rt.start()
+    calls = []
+
+    async def 不许放():
+        calls.append("release")
+        raise AssertionError("不该放")
+
+    stops = []
+    real_stop = r.stop
+
+    async def 记着停():
+        stops.append(1)
+        await real_stop()
+
+    monkeypatch.setattr(r, "release_control", 不许放)
+    monkeypatch.setattr(r, "stop", 记着停)
+    await rt.close()
+    assert calls == [] and stops, "停照发,控制权不碰"
+    assert (await r.health()).link_ok is False

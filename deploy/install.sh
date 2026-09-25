@@ -223,6 +223,7 @@ if [[ "$(cat "$ROOT_SENTINEL" 2>/dev/null)" != "$ROOT_SENTINEL_WANT" ]]; then
     "$ROOT/bin/python" -m pip install --quiet $PIP_ARGS \
       "$TMP_PKG/packages/contract[mqtt]" \
       "$TMP_PKG/packages/adapter-sim" \
+      "$TMP_PKG/packages/adapter-d1max" \
       "$TMP_PKG/packages/robot-agent"
   fi
   printf '%s\n' "$ROOT_SENTINEL_WANT" > "$ROOT_SENTINEL"
@@ -269,13 +270,14 @@ if [[ ! -e "$SENTINEL" ]]; then
   sudo -u "$RUN_USER" "$SLOT/venv/bin/python" -m pip install --quiet $PIP_ARGS --upgrade pip \
     || echo "  (pip 没升上去,用 venv 自带的那个接着装 —— 不影响装机)"
   sudo -u "$RUN_USER" "$SLOT/venv/bin/python" -m pip install --quiet $PIP_ARGS "$TMP_SLOT_PKG"
-  # W00b:robot-agent 三个包也装进这一版的 venv。顺序按依赖:contract → adapter-sim →
-  # robot-agent;contract 带 [mqtt](paho-mqtt,离线轮子目录里要有它)。老包没带 packages/
+  # W00b:robot-agent 这几个包也装进这一版的 venv。顺序按依赖:contract → adapter-sim →
+  # adapter-d1max(W00d)→ robot-agent;contract 带 [mqtt](paho-mqtt,离线轮子目录里要有它)。老包没带 packages/
   # 就跳过 —— 那一版本来也没有 agent。
   if [[ -d "$TMP_SLOT_PKG/packages/robot-agent" ]]; then
     sudo -u "$RUN_USER" "$SLOT/venv/bin/python" -m pip install --quiet $PIP_ARGS \
       "$TMP_SLOT_PKG/packages/contract[mqtt]" \
       "$TMP_SLOT_PKG/packages/adapter-sim" \
+      "$TMP_SLOT_PKG/packages/adapter-d1max" \
       "$TMP_SLOT_PKG/packages/robot-agent"
   fi
   # **最后一行才落哨兵。** 上面任何一步断了,set -e 会在这之前就退出,

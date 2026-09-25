@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d1max-adapter-d1max"
+version = "0.1.0"
+description = "真狗 D1 Max 的 RobotHAL:经 TCP 接常驻 SDK 旁路进程(patrol_agent)"
+requires-python = ">=3.10"
+# 过渡性依赖根包的 backends.sidecar_device 与 protocol.agent_frames(同 robot-agent)。
+dependencies = ["d1max-contract", "d1max-patrol"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

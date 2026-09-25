@@ -1278,8 +1278,11 @@ def test_装机脚本把三个包按依赖顺序装进槽venv(装机脚本):
     i_root = 行号('pip install --quiet $PIP_ARGS "$TMP_SLOT_PKG"')
     i_c = 行号('"$TMP_SLOT_PKG/packages/contract[mqtt]"')
     i_s = 行号('"$TMP_SLOT_PKG/packages/adapter-sim"')
+    i_d = 行号('"$TMP_SLOT_PKG/packages/adapter-d1max"')
     i_a = 行号('"$TMP_SLOT_PKG/packages/robot-agent"')
-    assert i_root < i_c < i_s < i_a, "先根包,再 contract、adapter-sim、robot-agent"
+    assert i_root < i_c < i_s < i_d < i_a, \
+        "先根包,再 contract、adapter-sim、adapter-d1max(W00d)、robot-agent"
+    assert '"$TMP_PKG/packages/adapter-d1max"' in 装机脚本, "根解释器那一份也要装"
     assert "$PIP_ARGS" in 行们[i_c - 1], "三个包那一条 pip 也要带离线参数"
 
 
@@ -1329,9 +1332,10 @@ def test_离线轮子覆盖三个包的外部依赖_含contract的mqtt扩展():
         import tomllib
     except ImportError:                  # 3.10:pytest 自己依赖 tomli
         import tomli as tomllib
-    本仓 = {"d1max-patrol", "d1max-contract", "d1max-adapter-sim", "d1max-robot-agent"}
+    本仓 = {"d1max-patrol", "d1max-contract", "d1max-adapter-sim", "d1max-adapter-d1max",
+          "d1max-robot-agent"}
     要的: set[str] = set()
-    for 包 in ("contract", "adapter-sim", "robot-agent"):
+    for 包 in ("contract", "adapter-sim", "adapter-d1max", "robot-agent"):
         proj = tomllib.loads((ROOT / "packages" / 包 / "pyproject.toml").read_text("utf-8"))
         deps = list(proj["project"].get("dependencies", []))
         if 包 == "contract":

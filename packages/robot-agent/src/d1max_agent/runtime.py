@@ -160,7 +160,8 @@ class AgentRuntime:
         await self._publish_status(force=True)
 
     async def close(self) -> None:
-        """收尾,顺序:引擎(停当前这趟)→ HAL 停 → 放控制权 → 关桥与 HAL 链路 → 关 transport。
+        """收尾,顺序:引擎(停当前这趟)→ HAL 停 → 放控制权(能放的才放)→ 关桥与 HAL 链路
+        → 关 transport。
         每一步单独兜异常:哪一步炸了只记日志,后面的照做 —— 控制权不能因为引擎关不干净就
         留在一个要退出的进程手里。可重入:没 start 过、start 到一半、调两次都安全。"""
         if self._closed:
@@ -177,7 +178,11 @@ class AgentRuntime:
             await _step("关引擎", self.parts.engine.aclose)
         if self._hal_touched:
             await _step("HAL 停", self.hal.stop)
-            await _step("放控制权", self.hal.release_control)
+            if self.hal.hal_capabilities().control_releasable:
+                await _step("放控制权", self.hal.release_control)
+            else:
+                # W00d:真狗的 SDK 控制权放了就得重启整机,常驻旁路进程一直握着。
+                log.info("这台机器的控制权不可释放,收尾不放")
             if self.parts is not None:
                 await _step("关导航桥", self.parts.nav.close)
                 await _step("关设备桥(连带 HAL 链路)", self.parts.device.close)

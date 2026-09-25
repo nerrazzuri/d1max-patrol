@@ -21,7 +21,9 @@ Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/d1max/env
 # W00b:装而不 enable。站点 broker 在 W00c 才有;现在起来连不上就退 1(约 10 s 超时),
 # 由 Restart=always 每 5 秒再起一次。
-# W00c 起用时把 --hal 换成 d1max(W00d 出适配器之后)。
+# 起用时把 --hal 换成 d1max(W00d,加 --sidecar 127.0.0.1:8090 与实测过的 --mps-per-unit 等)。
+# 旁路进程同一时刻只该有一个 Python 在开车:起用前先停 d1max-patrol.service,或用
+# --legacy-http 在同一进程里托管老 HTTP 面。
 ExecStart=/opt/d1max/current/venv/bin/d1max-agent --transport ${D1MAX_SITE_MQTT} --tls-ca /etc/d1max/tls/ca.crt --tls-cert /etc/d1max/tls/robot.crt --tls-key /etc/d1max/tls/robot.key --hal sim --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent --runs-root /var/lib/d1max/runs --map ${D1MAX_MAP} --home ${D1MAX_HOME}
 Restart=always
 RestartSec=5

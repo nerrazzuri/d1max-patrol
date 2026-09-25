@@ -442,3 +442,25 @@ def test_旁路进程地址解析(text, expected):
 def test_旁路进程地址解析拒绝垃圾(text, match):
     with pytest.raises(ValueError, match=match):
         parse_agent_endpoint(text)
+
+
+async def test_vel在本端就挡住越界_不发出去():
+    """W00d:``vel`` 的比例上限与 ttl 范围本端先查一遍,越界的一条都不发给旁路进程。"""
+    async with _pair() as (sim, backend):
+        await backend.acquire_control()
+        await backend.stand()
+        for fwd, yaw, ttl in ((MAX_WALK_SPEED + 0.01, 0.0, 300), (0.3, -0.6, 300),
+                              (float("nan"), 0.0, 300), (0.3, 0.0, 49), (0.3, 0.0, 1001)):
+            with pytest.raises(DeviceBackendError):
+                await backend.vel(fwd, 0.0, yaw, ttl)
+        assert "vel" not in [c for c, _ in sim.commands]
+        await backend.vel(0.3, 0.0, 0.0, 300)
+        assert [a for c, a in sim.commands if c == "vel"] == [
+            {"fwd": 0.3, "lat": 0.0, "yaw": 0.0, "ttl_ms": 300}]
+
+
+async def test_vel没控制权本端就拒():
+    async with _pair(held=False) as (sim, backend):
+        with pytest.raises(DeviceBackendError):
+            await backend.vel(0.3, 0.0, 0.0, 300)
+        assert "vel" not in [c for c, _ in sim.commands]

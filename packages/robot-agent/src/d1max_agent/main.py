@@ -1,7 +1,8 @@
 """``d1max-agent`` 的入口(W00b 决定 3、4)。
 
 装配:Transport(``mqtt://`` 走 Paho,``memory://`` 走进程内 broker —— 给演示与联调)
-× HAL(``sim`` 现在;``d1max`` 归 W00d)× 引擎(``assembly.build_engine``)× ``AgentRuntime``。
+× HAL(``sim``;``d1max`` 经 TCP 接常驻旁路进程,W00d)× 引擎(``assembly.build_engine``)
+× ``AgentRuntime``。
 一切都跑在 ``LoopBridge`` 的事件循环线程里,``asyncio.sleep(period)`` 每拍 ``step`` 一次。
 
 ``--legacy-http host:port`` 时在**同一进程**里起老的 ``AppServer``,与运行时共用同一台引擎、
@@ -68,8 +69,13 @@ def _transport_arg(text: str) -> str:
 def _hostport(text: str) -> tuple[str, int]:
     host, _, port = text.rpartition(":")
     if not host or not port.isdigit():
-        raise argparse.ArgumentTypeError(f"--legacy-http 要写成 host:port,收到 {text!r}")
+        raise argparse.ArgumentTypeError(f"要写成 host:port,收到 {text!r}")
     return host, int(port)
+
+
+#: ``--hal d1max`` 的旁路进程与单位换算默认值(W00d 决定三 A:**都待真机实测**)。
+D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 0.4, "radps_per_unit": 1.0,
+                  "deadband": 0.05, "max_fraction": 0.5}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,7 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
                                 description=f"D1 Max 机器人代理 {AGENT_VERSION}")
     p.add_argument("--transport", type=_transport_arg, required=True,
                    help="mqtt://host[:port]、mqtts://host[:port] 或 memory://(进程内,演示用)")
-    p.add_argument("--hal", choices=("sim",), default="sim", help="品牌适配器;d1max 归 W00d")
+    p.add_argument("--hal", choices=("sim", "d1max"), default="sim", help="品牌适配器")
+    d1 = p.add_argument_group("--hal d1max(比例换算的几个数都待真机实测)")
+    d1.add_argument("--sidecar", type=_hostport, default=None,
+                    help="旁路进程 host:port,默认 127.0.0.1:8090")
+    d1.add_argument("--mps-per-unit", type=float, default=None,
+                    help="Move 比例 1.0 对应的 m/s,默认 0.4")
+    d1.add_argument("--radps-per-unit", type=float, default=None,
+                    help="转向比例 1.0 对应的 rad/s,默认 1.0")
+    d1.add_argument("--deadband", type=float, default=None, help="低于这个 m/s 拒,默认 0.05")
+    d1.add_argument("--max-fraction", type=float, default=None, help="比例上限,默认 0.5")
+    d1.add_argument("--invert-yaw", action="store_true", help="转向方向跟 SDK 相反时翻过来")
     p.add_argument("--registration", type=Path, required=True, help="站点签发的注册文件")
     p.add_argument("--store-dir", type=Path, required=True, help="幂等记录、事件簿、代次落盘的目录")
     p.add_argument("--runs-root", type=Path, required=True, help="引擎归档目录(数据根下的 runs)")
@@ -106,6 +122,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             p.error("mqtts:// 要带齐 --tls-ca、--tls-cert、--tls-key")
     elif any(given):
         p.error("--tls-* 只用于 mqtts://")
+    d1max_only = [k for k in D1MAX_DEFAULTS if getattr(args, k) is not None]
+    if args.invert_yaw:
+        d1max_only.append("invert_yaw")
+    if args.hal == "d1max":
+        for k, v in D1MAX_DEFAULTS.items():
+            if getattr(args, k) is None:
+                setattr(args, k, v)
+    elif d1max_only:
+        p.error(f"{', '.join('--' + k.replace('_', '-') for k in d1max_only)} 只用于 --hal d1max")
     return args
 
 
@@ -182,14 +207,22 @@ def build(args: argparse.Namespace) -> Assembled:
     bridge.start()
 
     def _assemble() -> tuple[Any, EngineParts, AgentRuntime]:
+        media: dict | None
         if args.hal == "sim":
             from d1max_adapter_sim.robot import SimRobot
+            from d1max_agent.bridges.sim_media import sim_media
             hal: Any = SimRobot(now_ms=wall_ms)
-        else:  # pragma: no cover - 只有 sim
-            raise SystemExit(f"不认识的 HAL {args.hal!r}")
-        from d1max_agent.bridges.sim_media import sim_media
+            media = sim_media(wall_ms)
+        else:
+            from d1max_adapter_d1max.hal import D1MaxHal
+            host, port = args.sidecar
+            hal = D1MaxHal(host, port, mps_per_unit=args.mps_per_unit,
+                           radps_per_unit=args.radps_per_unit, deadband_mps=args.deadband,
+                           max_fraction=args.max_fraction, invert_yaw=args.invert_yaw,
+                           now_ms=wall_ms)
+            media = None                          # RTSP 取图归后面的工单
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
-                             home=args.home, media=sim_media(wall_ms))
+                             home=args.home, media=media)
         transport = _make_transport(args.transport, registration.robot_id, broker,
                                     tls=(args.tls_ca, args.tls_cert, args.tls_key))
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,

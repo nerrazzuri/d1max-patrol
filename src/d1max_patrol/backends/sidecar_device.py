@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
+import time
+from collections import deque
 from typing import Any
 
 from d1max_patrol.backends.base import (
@@ -69,6 +71,13 @@ URGENT_ACK_TIMEOUT_S = 5.0
 MAX_WALK_SECONDS = 10.0
 MAX_WALK_SPEED = 0.5
 
+#: ``vel``(协议 v3)的有效期范围,同 ``patrol_agent.cpp`` 的 ``kVelTtl*``。
+VEL_TTL_MIN_MS = 50
+VEL_TTL_MAX_MS = 1000
+
+#: 留多少条最近的故障帧给 HAL 读(``recent_faults``)。
+RECENT_FAULTS = 20
+
 
 class SidecarDeviceBackend(DeviceBackend):
     """通过 TCP + JSONL 驱动常驻 SDK 会话。
@@ -104,6 +113,10 @@ class SidecarDeviceBackend(DeviceBackend):
         self._held = False
         #: 上一次广播出去的电量,用来抑制"每帧都发一条 BatteryEvent"。
         self._last_battery: float | None = None
+        #: 最近一帧里程到达的时刻(``time.monotonic``)。HAL 拿它判里程新不新鲜。
+        self._odom_at: float | None = None
+        #: 最近的故障帧(有界)。事件流里的 ``FaultEvent`` 丢了 code,HAL 要原样的。
+        self._faults: deque[FaultFrame] = deque(maxlen=RECENT_FAULTS)
 
     # -------------------------------------------------------------- 生命周期
 
@@ -125,6 +138,16 @@ class SidecarDeviceBackend(DeviceBackend):
     def last_odom(self) -> OdomFrame | None:
         """最近一帧里程。没收到过是 None。"""
         return self._odom
+
+    @property
+    def last_odom_at(self) -> float | None:
+        """最近一帧里程到达的 ``time.monotonic()``。没收到过是 None。"""
+        return self._odom_at
+
+    @property
+    def recent_faults(self) -> tuple[FaultFrame, ...]:
+        """最近的故障帧,旧的在前。"""
+        return tuple(self._faults)
 
     async def connect(self) -> None:
         """接上旁路进程,并校验它的协议版本。
@@ -229,10 +252,12 @@ class SidecarDeviceBackend(DeviceBackend):
             return
         if isinstance(frame, OdomFrame):
             self._odom = frame
+            self._odom_at = time.monotonic()
             self.emit(DevicePoseEvent(
                 pose=Pose.from_xy_yaw(frame.x, frame.y, frame.yaw)))
             return
         if isinstance(frame, FaultFrame):
+            self._faults.append(frame)
             self.emit(FaultEvent(
                 items=(f"[level={frame.level} code={frame.code}] {frame.message}",),
                 # 厂商没给"哪些 level 算致命"的定义。取 level>=2 为致命是
@@ -371,6 +396,22 @@ class SidecarDeviceBackend(DeviceBackend):
                     f"{name} 要在 ±{MAX_WALK_SPEED} 内,收到 {value}")
         await self._command("walk", seconds=seconds, fwd=forward,
                             lat=lateral, yaw=yaw)
+
+    async def vel(self, forward: float, lateral: float, yaw: float, ttl_ms: int) -> None:
+        """带有效期的持续速度(协议 v3,W00d)。旁路进程**立刻回执**、插队执行;有效期内
+        每 50 ms 发一次 ``Move``,到期自己连发零速停下。新的 ``vel`` 覆盖旧的并续期。
+
+        单位同 ``walk``:比例值,不是 m/s。换算归 HAL(``d1max_adapter_d1max``)。
+        """
+        await self._require_control("持续速度")
+        for name, value in (("forward", forward), ("lateral", lateral), ("yaw", yaw)):
+            if not math.isfinite(value) or abs(value) > MAX_WALK_SPEED:
+                raise DeviceBackendError(f"{name} 要在 ±{MAX_WALK_SPEED} 内,收到 {value}")
+        if not VEL_TTL_MIN_MS <= ttl_ms <= VEL_TTL_MAX_MS:
+            raise DeviceBackendError(
+                f"ttl_ms 要在 [{VEL_TTL_MIN_MS}, {VEL_TTL_MAX_MS}] 内,收到 {ttl_ms}")
+        await self._command("vel", timeout_s=URGENT_ACK_TIMEOUT_S, fwd=forward, lat=lateral,
+                            yaw=yaw, ttl_ms=int(ttl_ms))
 
     async def halt(self) -> None:
         """停车。旁路进程**插队**执行:不排在还没走完的 walk 后面。
