@@ -90,11 +90,12 @@ class RunArchive:
         """
         base = root / mission
         base.mkdir(parents=True, exist_ok=True)
-        stamp = _stamp(started) + (f"-{suffix}" if suffix else "")
-        candidate = base / stamp
+        stamp = _stamp(started)
+        candidate = base / (f"{stamp}-{suffix}" if suffix else stamp)
         n = 2
         while candidate.exists():
-            candidate = base / f"{stamp}-{n}"
+            # 带后缀时序号并进后缀里(``…Z-0042172``):时刻后面只许一段数字,本地清理与站点都这么认。
+            candidate = base / (f"{stamp}-{suffix}{n}" if suffix else f"{stamp}-{n}")
             n += 1
         candidate.mkdir()
         return candidate

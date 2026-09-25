@@ -34,6 +34,10 @@ from pathlib import Path
 from d1max_agent.engine.homing import forget_home
 from d1max_patrol.app.procs import ProcError, ProcManager, ProcSpec
 
+#: 录包按这么大切成一个个文件(W00c5d:点云几十 MB/s,十分钟不切就过了站点单文件 8 GiB 的上限,
+#: 永远传不上去)。逐字照抄文档 §2 (a)。
+RECORD_SPLIT_BYTES = 2 * 1024 ** 3
+
 #: 录包录哪几个话题。逐字照抄文档 §2 (a)。
 RECORD_TOPICS: tuple[str, ...] = (
     "/front_lidar", "/tf", "/tf_static", "/odom/mc_odom", "/odom/current_pose",
@@ -308,8 +312,8 @@ class MappingOrchestrator:
         """文档 §2 (a)。录包走**实时域**,它要听的是真机现在发的话题。"""
         return ProcSpec(
             name=self.RECORD,
-            argv=("ros2", "bag", "record", "-s", "mcap", "-o", str(bag),
-                  *RECORD_TOPICS),
+            argv=("ros2", "bag", "record", "-s", "mcap", "-b", str(RECORD_SPLIT_BYTES),
+                  "-o", str(bag), *RECORD_TOPICS),
             env=self._live_env(),
             # 假设(待真机验证): rosbag2 humble 起来时会打这一行。接真机时
             # 用 runs/logs/bagrecord.log 核一下,不对就改这个正则。

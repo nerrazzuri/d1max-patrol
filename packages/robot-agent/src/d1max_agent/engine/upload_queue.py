@@ -281,6 +281,15 @@ class UploadQueue:
             QueueItem(**{**old.to_wire(), "attempts": old.attempts + 1, "next_ms": next_ms})
         )
 
+    def unrefuse_all(self) -> int:
+        """隔离了的全部重新排上(从头传)。返回几个。"""
+        keys = [k for k in self._order if self._items[k].refused]
+        for k in keys:
+            old = self._items[k]
+            self._write(QueueItem(**{**old.to_wire(), "refused": False, "offset": 0,
+                                     "attempts": 0, "next_ms": 0}))
+        return len(keys)
+
     def refuse(self, key: str) -> None:
         """站点说永远不收:隔离,不再重试。"""
         old = self._items[key]
@@ -324,5 +333,5 @@ class UploadQueue:
         return sorted(ready, key=lambda i: (i.priority, rank[i.key]))
 
     def backlog(self) -> int:
-        """还没传完的条数。**这个数要报进心跳**(spec §4.3)。"""
-        return sum(1 for i in self._items.values() if not i.done)
+        """还没传完的条数(隔离了的不算)。**这个数要报进心跳**(spec §4.3)。"""
+        return sum(1 for i in self._items.values() if not i.done and not i.refused)

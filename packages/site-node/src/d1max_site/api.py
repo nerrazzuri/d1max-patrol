@@ -85,7 +85,7 @@ _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,300}))?)?$")
 _EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
 #: W00c5d 第二部分:给狗下发图、录包、重建。
-_MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build)$")
+_MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build|outbox_retry)$")
 #: W00c5d 第三部分:给狗装、切、退版本。
 _RELCMD = re.compile(r"^/api/robots/([^/]{1,64})/release$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
@@ -776,13 +776,29 @@ class _Handler(TlsHandlerMixin):
             if what == "map":
                 ref = cat.get(str(d.get("map_id", "")), str(d.get("version", "")))
                 kind, payload = "map_activate", ref.to_wire()
+                if not any(f.name == "home.json" for f in ref.files):
+                    # 这台狗在这张图上的原点(待命点):图里没带就用站点登记的。都没有就不下发 ——
+                    # 狗换了坐标系没有原点,之后派什么都过不了起飞前检查(W00c5d 内部评审)。
+                    home = self._home_on(robot_id, ref.map_id, ref.version)
+                    if home is None:
+                        raise HttpError(409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上还没有"
+                                             "待命点(原点):先登记一个待命点再下发这张图")
+                    payload["home"] = home
             elif what == "mapping":
                 action, name = parse_mapping(d)
+                if len(name) > 40:
+                    raise HttpError(400, "包名最多 40 个字符(狗还要加录的时刻、文件名还要加后缀)")
                 kind, payload = "mapping", {"action": action, **({"name": name} if name else {})}
+            elif what == "outbox_retry":
+                # 站点改了收件规矩之后,让狗把隔离的文件再传一次(W00c5d 内部评审)。
+                kind, payload = "outbox_retry", {}
             else:
                 bag, map_id, version = parse_map_build(d)
-                if any(r["map_id"] == map_id and r["version"] == version for r in cat.list()):
-                    raise HttpError(409, f"{map_id}:{version} 已经有了,换个版本号")
+                if len(map_id) > 40 or len(version) > 16:
+                    raise HttpError(400, "地图号最多 40 个字符、版本最多 16 个(文件名里还要加后缀)")
+                if any(r["map_id"] == map_id and r["version"] == version for r in cat.list()) \
+                        or cat.build_in_flight(map_id, version):
+                    raise HttpError(409, f"{map_id}:{version} 已经有了(或正在建),换个版本号")
                 kind, payload = "map_build", {"bag": bag, "map_id": map_id, "version": version}
         except MapError as exc:
             raise HttpError(404, str(exc)) from exc
@@ -791,6 +807,12 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {k: v for k, v in payload.items() if k != "files"}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
+
+    def _home_on(self, robot_id: str, map_id: str, version: str) -> dict[str, float] | None:
+        rows = self.site.dispatcher.db.query(
+            "SELECT x, y, yaw FROM standby_points WHERE robot_id=? AND map_id=? AND map_version=? "
+            "ORDER BY is_default DESC, name LIMIT 1", (robot_id, map_id, version))
+        return {"x": rows[0]["x"], "y": rows[0]["y"], "yaw": rows[0]["yaw"]} if rows else None
 
     def _releases(self, method: str, path: str, user) -> None:
         """发布(W00c5d 第三部分)。看:``view``(每一版、每台狗在跑哪一版);装、切、退:``manage``。

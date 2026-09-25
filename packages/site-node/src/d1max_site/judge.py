@@ -20,7 +20,7 @@ import json
 import os
 import urllib.request
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -229,7 +229,8 @@ def _photos(run_dir: Path) -> list[str]:
 
 def _previous_photo(run_dir: Path, history_root: Path | None,
                     waypoint: str, camera: str,
-                    baselines_root: Path | None = None) -> bytes | None:
+                    baselines_root: Path | None = None,
+                    complete: Callable[[Path], bool] | None = None) -> bytes | None:
     """比对基准。**先问基线集,再退回历史 run。**
 
     基线集是判读的工具,不参与水位删除;历史 run 是证据,随时可能被删。两个
@@ -260,7 +261,8 @@ def _previous_photo(run_dir: Path, history_root: Path | None,
         if not folder.is_dir():
             continue
         candidates = sorted((p for p in folder.iterdir()
-                             if p.is_file() and p.name.startswith(prefix)),
+                             if p.is_file() and p.name.startswith(prefix)
+                             and (complete is None or complete(p))),   # 半张的不拿来比
                             reverse=True)
         for path in candidates:
             try:
@@ -386,7 +388,8 @@ def default_client() -> VlmClient | None:
 def judge_run(run_dir: Path, *, client: VlmClient | None = None,
               history_root: Path | None = None,
               baselines_root: Path | None = None,
-              only: set[str] | None = None) -> list[Finding]:
+              only: set[str] | None = None,
+              complete: Callable[[Path], bool] | None = None) -> list[Finding]:
     """判读一整趟的照片,结论写进 ``findings.json``,并返回。
 
     ``client`` 留空就按环境变量造一个;造不出来(没密钥)全部标 ``pending``。
@@ -427,7 +430,7 @@ def judge_run(run_dir: Path, *, client: VlmClient | None = None,
                                     reason=f"照片读不了: {exc}"))
             continue
         previous = _previous_photo(run_dir, history_root, waypoint, camera,
-                                   baselines_root)
+                                   baselines_root, complete)
         images = [data] if previous is None else [data, previous]
         prompt = build_prompt(waypoint, checks.get(waypoint, ""),
                               with_history=previous is not None)

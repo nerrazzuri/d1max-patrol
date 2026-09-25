@@ -58,3 +58,26 @@ def test_狗传上来的图_收齐而且哈希对上才登记(cat):
     _files(wrong, **{"map.json": json.dumps(ref).encode()})
     with pytest.raises(MapError):
         cat.take_uploaded("A", "estate-1", "10")
+
+
+def test_站点没让它建的图不收_版本撞了或文件对不上永远不收(cat):
+    import hashlib
+
+    from d1max_site.evidence import PathRefused
+    pgm = b"P5 new"
+    ref = {"map_id": "estate-1", "version": "9",
+           "files": [{"name": "estate-1.pgm", "size": len(pgm),
+                      "sha256": hashlib.sha256(pgm).hexdigest()}]}
+    body = json.dumps(ref).encode()
+    with pytest.raises(PathRefused):
+        cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
+    with cat.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
+                  (json.dumps({"bag": "b", "map_id": "estate-1", "version": "9"}),))
+    assert cat.build_in_flight("estate-1", "9")
+    cat.put_map_chunk("A", "estate-1/9", "estate-1.pgm", offset=0, data=b"P5 bad",
+                      total=len(b"P5 bad"))                   # 大小一样、内容不对
+    with pytest.raises(PathRefused):
+        cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
+    assert cat.list() == [], "不登记"

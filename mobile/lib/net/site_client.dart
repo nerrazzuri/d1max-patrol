@@ -85,6 +85,14 @@ class SiteSession {
   bool get canAbort => role == 'admin' || role == 'guard' || role == 'owner';
 }
 
+/// 这台狗报的能力里有没有这种任务（`robots()`、`robot()` 给的那一份）。没这个能力的按钮不显示：
+/// 狗会回 `unsupported`，按了也白按（W00c5d 第二部分内部评审）。
+bool robotCan(Map<String, dynamic>? view, String task) {
+  final caps = view?['capabilities'];
+  final tasks = caps is Map ? caps['tasks'] : null;
+  return tasks is Map && tasks.containsKey(task);
+}
+
 /// 站点的接口面。界面只认它，测试可以换成假的。
 abstract class SiteApi {
   SiteSession? get session;

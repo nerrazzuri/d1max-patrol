@@ -255,6 +255,20 @@ class EvidenceStore:
     def dir_of(self, run: dict[str, Any]) -> Path:
         return self.run_dir(run["robot_id"], run["mission"], run["stamp"])
 
+    def photo_complete(self, path: Path) -> bool:
+        """``<证据库>/<狗>/<任务>/<时刻>/photos/<名字>`` 这张照片收齐了没有
+        (判读拿历史照片比对用)。"""
+        try:
+            robot, mission, stamp, photos, name = path.resolve().relative_to(
+                self.root.resolve()).parts
+        except ValueError:
+            return False
+        if photos != "photos":
+            return False
+        return bool(self.db.query(
+            "SELECT 1 FROM run_photos p JOIN runs r ON r.id = p.run_id WHERE r.robot_id=? "
+            "AND r.mission=? AND r.stamp=? AND p.name=?", (robot, mission, stamp, name)))
+
     def done_photos(self, run_id: int) -> dict[str, int]:
         """收齐了的照片:名字 → 收齐的时刻。"""
         return {r["name"]: r["done_ms"] for r in self.db.query(

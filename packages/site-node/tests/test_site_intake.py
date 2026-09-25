@@ -196,6 +196,10 @@ def test_握手不做的连接挡不住别的狗(站点, ca, tmp_path):
 
 def test_狗建的图和录包传上来_站点收齐登记_别的狗下载核对装上(站点, ca, tmp_path):
     import hashlib
+    with 站点.db.tx() as c:                           # 站点让 A 建过这一张(不然不收)
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
+                  (json.dumps({"bag": "yard", "map_id": "estate-1", "version": "9"}),))
 
     from d1max_agent.mapping import DONE, bag_classify, map_classify, map_settled
     from d1max_agent.maps import MapKeeper, https_fetch
@@ -373,3 +377,44 @@ def test_狗从站点下载发布包_核对落槽_吊销的狗下不到(站点, 
     站点.reg.revoke("B")
     with pytest.raises(ReleaseOpError):
         ops(ca.b, "dogB").install(ref)
+
+
+def test_每个来源地址的连接数有上限(tmp_path):
+    import socket
+    import threading
+
+    from d1max_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
+    hold = threading.Event()
+
+    class H(TlsHandlerMixin):
+        def do_GET(self):
+            hold.wait(5)
+            self.send_response(200)
+            self.end_headers()
+    srv = TlsThreadingServer(("127.0.0.1", 0), H, ctx=None, max_connections=100, max_per_ip=2)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        socks = []
+        for _ in range(2):
+            s = socket.create_connection(srv.server_address)
+            s.sendall(b"GET / HTTP/1.0\r\n\r\n")
+            socks.append(s)
+        time.sleep(0.2)
+        third = socket.create_connection(srv.server_address)
+        third.settimeout(2)
+        assert third.recv(10) == b"", "同一个地址第三条:直接关"
+        hold.set()
+        for s in socks:
+            assert s.recv(20).startswith(b"HTTP/1.0 200")
+            s.close()
+        third.close()
+        time.sleep(0.2)
+        again = socket.create_connection(srv.server_address)       # 用完的位子还回来了
+        again.sendall(b"GET / HTTP/1.0\r\n\r\n")
+        again.settimeout(3)
+        assert again.recv(20).startswith(b"HTTP/1.0 200")
+        again.close()
+    finally:
+        hold.set()
+        srv.shutdown()
+        srv.server_close()

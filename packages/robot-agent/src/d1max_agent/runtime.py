@@ -50,6 +50,24 @@ log = logging.getLogger(__name__)
 
 #: 盘况随遥测多久带一次(毫秒)。
 STORAGE_EVERY_MS = 10_000
+#: 换图:下载好之后最多等多久让狗空下来(秒)。
+SWITCH_WAIT_S = 600.0
+
+
+def _parse_home(v: Any) -> tuple[float, float, float] | None:
+    """``map_activate`` 里站点给的原点(这台狗在这张图上的待命点):``{x, y, yaw}``。没给为 None。"""
+    import math
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise ContractError("map_activate: home 要是对象")
+    out = []
+    for k in ("x", "y", "yaw"):
+        x = v.get(k)
+        if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x):
+            raise ContractError(f"map_activate: home.{k} 要是有限数")
+        out.append(float(x))
+    return (out[0], out[1], out[2])
 
 #: 电量低于这条线,断线时按「不安全」处理(停住等待)。
 BATTERY_FLOOR_PCT = 15.0
@@ -107,7 +125,14 @@ class AgentRuntime:
         self.mapper = mapper
         #: 发布(W00c5d 第三部分):``ReleaseOps``。
         self.releases = releases
+        #: 各用各的后台槽:换图、录包、重建、发布。``_switching``:正在载入、切坐标系。
         self._map_job: asyncio.Task | None = None
+        self._rec_job: asyncio.Task | None = None
+        self._build_job: asyncio.Task | None = None
+        self._release_job: asyncio.Task | None = None
+        self._switching = False
+        #: 发件箱隔离的文件重新排上(站点改了规矩之后,管理员让它再传一次);主程序接上。
+        self._outbox_retry: Callable[[], int] | None = None
         self.processor.map_hook = self._map_command
         #: 丢掉的遥控帧计数(不合契约的)。
         self.teleop_malformed = 0
@@ -178,21 +203,28 @@ class AgentRuntime:
     # ------------------------------------------------------------ 地图(W00c5d 第二部分)
 
     async def _load_active_map(self) -> None:
-        """起来时:狗上有站点下发过的正在用的那张图,交给适配器载入,就用它(覆盖 ``--map``)。
-        载不进去就照旧用 ``--map``,记一条。"""
+        """起来时(连站点之前):狗上有站点下发过的正在用的那张图,交给适配器载入,就用它(覆盖
+        ``--map``)。载不进去就照旧用 ``--map``,并发一条 ``map_load_failed`` 让站点知道。"""
         ref = self.maps.active() if self.maps is not None else None
         loader = getattr(self.hal, "load_map", None)
         if ref is None or loader is None:
             return
         try:
             await loader(ref.map_id, ref.version, self.maps.dir_of(ref))
-        except Exception:
+        except Exception as exc:
             log.exception("起来时载入正在用的图 %s:%s 失败,照旧用 --map", ref.map_id, ref.version)
+            self.events.emit("map_load_failed", {"map_id": ref.map_id, "version": ref.version,
+                                                 "reason": f"{type(exc).__name__}: {exc}"[:200]})
             return
         self._switch_map(ref)
 
     def _map_busy(self) -> bool:
-        return self._map_job is not None and not self._map_job.done()
+        """正在**换**图(载入、切坐标系)那一小段:这时候不接自动任务。下载、重建都不算。"""
+        return self._switching
+
+    @staticmethod
+    def _running(job: asyncio.Task | None) -> bool:
+        return job is not None and not job.done()
 
     def _tasks_idle(self) -> bool:
         cur = self.processor.current
@@ -210,52 +242,76 @@ class AgentRuntime:
             out["release_install"] = {"current": self.releases.current()}
             out["release_activate"] = {}
             out["release_rollback"] = {}
+        if self._storage is not None:
+            out["outbox_retry"] = {}
         return out
 
     async def _map_command(self, cmd: Command) -> str:
-        """地图命令:收下(空串)或拒绝原因。下载、载入、重建都在后台做,做完发事件。"""
+        """地图、发布、发件箱命令:收下(空串)或拒绝原因。下载、载入、录包、重建都在后台做,做完发事件。
+        **各用各的后台槽**(W00c5d 第二部分内部评审):重建一小时、下载十几分钟都不许挡出警;
+        只有换图(载入、切坐标系)那一小段不接自动任务。"""
         from d1max_contract.maps import MapRef, parse_map_build, parse_mapping
         kind = cmd.kind
         if kind not in self._extra_tasks():
             return "unsupported"
         if kind.startswith("release_"):
             return self._release_command(cmd)
+        if kind == "outbox_retry":
+            n = self._outbox_retry() if self._outbox_retry is not None else 0
+            self.events.emit("outbox_retry", {"task_id": cmd.task_id, "released": n})
+            return ""
         try:
             if kind == "map_activate":
                 ref = MapRef.from_wire(cmd.payload)
+                home = _parse_home(cmd.payload.get("home"))
             elif kind == "mapping":
                 action, name = parse_mapping(cmd.payload)
             else:
                 bag, map_id, version = parse_map_build(cmd.payload)
         except ContractError as exc:
             return f"payload: {exc}"
-        if self._map_busy():
-            return "busy"
+        loop = asyncio.get_running_loop()
         if kind == "map_activate":
-            if not self._tasks_idle():
-                return "busy"                     # 跑着任务不换图:坐标系一换,手上这趟就全错了
-            self._map_job = asyncio.get_running_loop().create_task(
-                self._activate(ref, cmd.task_id))
+            if self._running(self._map_job) or self._running(self._release_job):
+                return "busy"
+            self._map_job = loop.create_task(self._activate(ref, home, cmd.task_id))
             return ""
         if kind == "mapping":
-            try:
-                if action == "start":
-                    await self.mapper.start(name)
-                else:
-                    await self.mapper.stop()
-            except Exception as exc:  # noqa: BLE001 - 录包起不来/停不了:原因回给站点
-                return f"mapping: {exc}"[:120]
-            self.events.emit("mapping", {"task_id": cmd.task_id, "action": action,
-                                         "name": name or self.mapper.last_bag})
+            if self._running(self._rec_job):
+                return "busy"
+            if action == "start":
+                if self.mapper.recording:
+                    return "busy"
+                f = self._storage() if self._storage is not None else None
+                if f is not None and f.full():
+                    return "storage_full"         # 录包很大:发件箱满了不录
+            elif not self.mapper.recording:
+                return "not_recording"
+            self._rec_job = loop.create_task(self._record(action, name, cmd.task_id))
             return ""
-        if not self._tasks_idle() or self.mapper.recording:
-            return "busy"                         # 重建吃 CPU:不跟巡检、录包抢
-        self._map_job = asyncio.get_running_loop().create_task(
-            self._build(bag, map_id, version, cmd.task_id))
+        if self._running(self._build_job) or self.mapper.recording:
+            return "busy"
+        if not self._tasks_idle():
+            return "busy"                         # 重建吃 CPU:开跑时不跟巡检抢(开跑后不挡出警)
+        self._build_job = loop.create_task(self._build(bag, map_id, version, cmd.task_id))
         return ""
 
+    async def _record(self, action: str, name: str, task_id: str) -> None:
+        """录包的开始、停止(在后台做:起、停 ros2 bag 要十几秒,不能在命令锁里等)。"""
+        try:
+            if action == "start":
+                await self.mapper.start(name)
+            else:
+                await self.mapper.stop()
+            self.events.emit("mapping", {"task_id": task_id, "action": action,
+                                         "name": self.mapper.last_bag})
+        except Exception as exc:  # noqa: BLE001 - 起不来/停不了:原因发给站点
+            log.warning("录包 %s 没成:%s", action, exc)
+            self.events.emit("mapping_failed", {"task_id": task_id, "action": action,
+                                                "reason": f"{type(exc).__name__}: {exc}"[:200]})
+
     def _release_command(self, cmd: Command) -> str:
-        """发布命令(W00c5d 第三部分):装在后台做;切、退要空闲(不跑任务、不在换图/装包)。"""
+        """发布命令(W00c5d 第三部分):装在后台做;切、退要空闲(不跑任务、不在换图)。"""
         from d1max_contract.releases import ReleaseRef, check_release_name
         try:
             if cmd.kind == "release_install":
@@ -264,7 +320,7 @@ class AgentRuntime:
                 name = check_release_name(cmd.payload.get("name"))
         except ContractError as exc:
             return f"payload: {exc}"
-        if self._map_busy():
+        if self._running(self._release_job) or self._running(self._map_job):
             return "busy"
         if cmd.kind == "release_install":
             job = self._release_install(ref, cmd.task_id)
@@ -277,7 +333,7 @@ class AgentRuntime:
                 job = self._release_switch("activate", name, cmd.task_id)
             else:
                 job = self._release_switch("rollback", "", cmd.task_id)
-        self._map_job = asyncio.get_running_loop().create_task(job)
+        self._release_job = asyncio.get_running_loop().create_task(job)
         return ""
 
     async def _release_install(self, ref, task_id: str) -> None:
@@ -304,28 +360,56 @@ class AgentRuntime:
             self.events.emit(f"release_{what}_failed",
                              base | {"reason": f"{type(exc).__name__}: {exc}"[:200]})
 
-    async def _activate(self, ref, task_id: str) -> None:
+    async def _activate(self, ref, home, task_id: str) -> None:
+        """下载(不挡任务)→ 等空闲(最多 ``SWITCH_WAIT_S``)→ 载入、切坐标系(这一小段不接自动任务)
+        → 记成正在用的。提交失败就把原来那张载回去;发不出能力不算换图失败。"""
         from d1max_agent.maps import MapInstallError
         base = {"task_id": task_id, "map_id": ref.map_id, "version": ref.version}
+        old = self.maps.active()
         try:
             dst = await asyncio.to_thread(self.maps.install, ref)
+            waited = 0.0
+            while not self._tasks_idle():
+                if waited >= SWITCH_WAIT_S:
+                    self.maps.discard(ref)
+                    raise MapInstallError(f"等了 {SWITCH_WAIT_S:g} s 狗一直有任务:没换")
+                await asyncio.sleep(1.0)
+                waited += 1.0
+            self._switching = True
             try:
-                await self.hal.load_map(ref.map_id, ref.version, dst)
-            except Exception as exc:
-                self.maps.discard(ref)
-                raise MapInstallError(f"适配器载不进去: {type(exc).__name__}: {exc}") from exc
-            self.maps.commit(ref)
-            self._switch_map(ref)
+                try:
+                    await self.hal.load_map(ref.map_id, ref.version, dst)
+                except Exception as exc:
+                    self.maps.discard(ref)
+                    raise MapInstallError(f"适配器载不进去: {type(exc).__name__}: {exc}") from exc
+                try:
+                    self.maps.commit(ref, home=home)
+                except Exception as exc:
+                    # 适配器已经是新图了,狗报的还是老版本:把原来那张载回去,不留这种两边不一致。
+                    if old is not None:
+                        try:
+                            await self.hal.load_map(old.map_id, old.version, self.maps.dir_of(old))
+                        except Exception:
+                            log.exception("提交失败后载回原来的图也失败了")
+                    raise MapInstallError(f"记不下正在用的图: {exc}") from exc
+                self._switch_map(ref)
+            finally:
+                self._switching = False
             self.events.emit("map_activated", base)
-            await self._publish_caps()
             log.info("换图了:%s:%s", ref.map_id, ref.version)
         except MapInstallError as exc:
             log.warning("换图没成(%s:%s):%s", ref.map_id, ref.version, exc)
             self.events.emit("map_activate_failed", base | {"reason": str(exc)[:200]})
+            return
         except Exception as exc:
             log.exception("换图炸了")
             self.events.emit("map_activate_failed",
                              base | {"reason": f"{type(exc).__name__}: {exc}"[:200]})
+            return
+        try:
+            await self._publish_caps()
+        except Exception:
+            log.exception("换图之后发能力没成(下次重连会再发)")
 
     async def _build(self, bag: str, map_id: str, version: str, task_id: str) -> None:
         base = {"task_id": task_id, "bag": bag, "map_id": map_id, "version": version}
@@ -395,8 +479,9 @@ class AgentRuntime:
         await self.transport.subscribe(self.topics.cmd, self._on_cmd, qos=1)
         # 遥控帧(W00c5c):专用主题、QoS 0 —— 断线期间的帧不补投(决策 7:不许重放)。
         await self.transport.subscribe(self.topics.teleop, self._on_teleop, qos=0)
-        await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
+        # 先载正在用的图,再连站点:连上之后进来的命令要按真的地图版本核对。
         await self._load_active_map()
+        await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
         await self._publish_caps()
         if self.releases is not None:
             # 起来、连上站点了:在途的那一次升级算成(W00c5d 第三部分)。起不来的那种,

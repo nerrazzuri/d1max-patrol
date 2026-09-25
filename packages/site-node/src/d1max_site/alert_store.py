@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -118,6 +119,10 @@ class LoopAlerts:
         self.loop = loop
 
     def raise_alert(self, **kw: Any) -> Any:
+        t = getattr(self.loop, "_thread", None)
+        if t is not None and t is threading.current_thread():
+            return self.desk.raise_alert(**kw)     # 已经在事件循环里:直接报(等自己会死锁)
+
         async def go() -> Any:
             return self.desk.raise_alert(**kw)
         return self.loop.call(go, timeout_s=10.0)

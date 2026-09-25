@@ -58,6 +58,7 @@ class _假发布:
 
 
 def _collect(tmp_path) -> dict[str, object]:
+    from test_site_maps_api import 假建图
     from test_site_schedule import 打包
 
     from d1max_site.incidents import IncidentDesk
@@ -70,7 +71,7 @@ def _collect(tmp_path) -> dict[str, object]:
             return {"verdict": "abnormal" if _模型.n % 2 else "normal", "confidence": 0.7,
                     "reason": "看过了", "evidence": "左下角"}
     s = 站(tmp_path, alerts=True, video={}, agent_video=False,
-          runs={"client": _模型, "backup_dir": tmp_path / "bak"}, maps={},
+          runs={"client": _模型, "backup_dir": tmp_path / "bak"}, maps={"mapper": 假建图()},
           releases={"ops": _假发布()})
     try:
         s.api.scheduler = SiteScheduler(s.db, s.disp, now_ms=wall)

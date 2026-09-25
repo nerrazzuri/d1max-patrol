@@ -82,12 +82,21 @@ def test_录包与重建的命令到狗_重建的版本不许撞(站点):
     s.maps.import_dir(_dir(s, "x"), map_id=MAP[0], version="10")
     assert s.req("POST", "/api/robots/A/map_build", {"bag": "yard", "map_id": MAP[0],
                                                      "version": "10"}, token=alice)[0] == 409
+    code, d = s.req("POST", "/api/robots/A/map_build", {"bag": "yard", "map_id": MAP[0],
+                                                        "version": "9"}, token=alice)
+    assert code == 409 and "正在建" in d["error"], "已经让狗建 9 了(还没收齐):不许再派一次"
+    assert s.req("POST", "/api/robots/A/map_build", {"bag": "yard", "map_id": "m" * 41,
+                                                     "version": "1"}, token=alice)[0] == 400
+    assert s.req("POST", "/api/robots/A/map_build", {"bag": "yard", "map_id": "m" * 40,
+                                                     "version": "1" * 17}, token=alice)[0] == 400
 
 
-def _dir(s, name):
+def _dir(s, name, *, home=True):
     d = s.maps.root.parent / name
     d.mkdir(exist_ok=True)
     (d / "m.pgm").write_bytes(b"x")
+    if home:
+        (d / "home.json").write_text('{"x": 0, "y": 0, "yaw": 0}')
     return d
 
 
@@ -117,3 +126,27 @@ def test_狗没报这项能力_站点不发(tmp_path):
         assert code == 409 and "不支持" in d["error"], (code, d)
     finally:
         s.close()
+
+
+def test_图里没带原点_用这台狗在这张图上的待命点_都没有不下发(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
+    s.maps.import_dir(_dir(s, "nohome", home=False), map_id=MAP[0], version="12")
+    code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "12"}, token=alice)
+    assert code == 409 and "待命点" in d["error"], (code, d)
+    with s.db.tx() as c:
+        c.execute("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
+                  "is_default) VALUES ('A', '门口', ?, '12', 1.5, 0, 0, 1)", (MAP[0],))
+    code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "12"}, token=alice)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "12", timeout=8)
+    assert s.agent.parts.home is not None and s.agent.parts.home.pose.position.x == 1.5
+
+
+def test_让狗把隔离的文件再传一次(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _caps(s) is not None)
+    code, d = s.req("POST", "/api/robots/A/outbox_retry", {}, token=alice)
+    assert code == 409 and "不支持" in d["error"], "这只仿真狗没有发件箱"

@@ -232,11 +232,6 @@ class Assembled:
 
     def stop(self) -> None:
         self._stop.set()
-        if self.pump is not None:
-            try:
-                self.pump.stop()
-            except Exception:
-                log.exception("发件箱停不干净")
         if self.server is not None:
             try:
                 self.server.stop()
@@ -246,6 +241,12 @@ class Assembled:
             self.bridge.call(self.runtime.close, timeout_s=10.0)
         except Exception:
             log.exception("运行时关不干净")
+        # 发件箱最后停(先把狗停好、控制权放掉;发件箱停不等手上那一块传完)。
+        if self.pump is not None:
+            try:
+                self.pump.stop()
+            except Exception:
+                log.exception("发件箱停不干净")
         self.bridge.stop()
 
 
@@ -304,6 +305,8 @@ def build(args: argparse.Namespace) -> Assembled:
                                storage_facts=pump.facts if pump is not None else None,
                                maps=keeper, mapper=mapper,
                                releases=_releases(args, registration))
+        if pump is not None:
+            runtime._outbox_retry = pump.retry_refused
         return hal, parts, runtime, pump
 
     async def _in_loop():
@@ -371,7 +374,8 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
     bags = Outbox(args.outbox, cap_bytes=cap, sink=sinks[1], sn=registration.robot_id,
                   now_ms=wall_ms, sub="bags", run_depth=1, classify=bag_classify,
                   settled=mapper.bag_settled if mapper is not None
-                  else (lambda p: (p / DONE).is_file()))
+                  else (lambda p: (p / DONE).is_file()),
+                  delete_lock=mapper.lock if mapper is not None else None)
     maps = Outbox(args.outbox, cap_bytes=cap, sink=sinks[2], sn=registration.robot_id,
                   now_ms=wall_ms, sub="maps", run_depth=2, classify=map_classify,
                   settled=map_settled)

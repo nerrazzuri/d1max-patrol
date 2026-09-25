@@ -130,3 +130,26 @@ def test_交接班那一张_截多少条写明白_limit不对400(站点):
 
 async def _raise(s, i):
     s.desk.raise_alert(kind="run_done", robot=f"R{i}", title="跑完了")
+
+
+def test_在事件循环里报告警_直接报不等自己(tmp_path):
+    """LoopAlerts 从循环线程里调(比如以后派遣器里报):跳回循环再等结果会等自己,等满 10 s 才炸。"""
+    import time as _t
+
+    from d1max_site.alert_store import AlertDesk, LoopAlerts
+    from d1max_site.db import SiteDB
+    from d1max_site.loop import LoopThread
+    lt = LoopThread()
+    lt.start()
+    try:
+        la = LoopAlerts(AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: 1), lt)
+
+        async def 在循环里():
+            return la.raise_alert(kind="backup_stale", robot="site", title="t")
+        t0 = _t.monotonic()
+        got = lt.call(在循环里, timeout_s=15)
+        assert got is not None and _t.monotonic() - t0 < 2
+        got = la.raise_alert(kind="disk_80", robot="A", title="t")
+        assert got is not None, "别的线程照样跳进去"
+    finally:
+        lt.stop()

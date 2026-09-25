@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 import threading
@@ -47,7 +48,8 @@ class Outbox:
                  disk_usage: Callable[[Path], tuple[int, int, int]] = shutil.disk_usage,
                  sub: str = "runs", run_depth: int = 2,
                  classify: Callable[[str], int | None] = classify,
-                 settled: Callable[[Path], bool] = is_settled) -> None:
+                 settled: Callable[[Path], bool] = is_settled,
+                 delete_lock: threading.Lock | None = None) -> None:
         """``sub``:发件箱里的哪一块(运行记录 ``runs``;W00c5d 第二部分的建图录包 ``bags``、生成的图
         ``maps``),各自一个队列、各自的「一趟」层数、哪些文件要传、什么算安定。"""
         self.root = Path(root)
@@ -56,6 +58,8 @@ class Outbox:
         self.cap_bytes = cap_bytes
         self.run_depth = run_depth
         self._settled = settled
+        #: 判「能不能删」和删在这把锁里一起做(建图的包:重建开跑时也拿它,不许删到一半)。
+        self._delete_lock = delete_lock
         self.queue = UploadQueue(self.root / ("queue.jsonl" if sub == "runs"
                                               else f"queue-{sub}.jsonl"))
         self.uploader = Uploader(self.runs_root, self.queue, sink, sn=sn, run_depth=run_depth,
@@ -122,12 +126,13 @@ class Outbox:
     def _prune(self) -> None:
         active = {p.resolve() for p in self.active()}
         for run in self._runs():
-            if run.resolve() in active or not self._settled(run):
-                continue
             key = run.relative_to(self.runs_root).as_posix()
-            if not self._confirmed(run, key):
-                continue
-            shutil.rmtree(run, ignore_errors=True)
+            with self._delete_lock or contextlib.nullcontext():
+                if run.resolve() in active or not self._settled(run):
+                    continue
+                if not self._confirmed(run, key):
+                    continue
+                shutil.rmtree(run, ignore_errors=True)
             if run.exists():
                 log.warning("发件箱里这一趟删不干净:%s", run)
                 continue
@@ -158,7 +163,8 @@ class Outbox:
     def _measure(self) -> StorageFacts:
         total, used, _free = self._disk_usage(self.root)
         outbox = sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
-        waiting = [i for i in self.queue.all() if not i.done]
+        # 站点永远不收、隔离了的不算积压(站点那头另有 upload_refused 告警)。
+        waiting = [i for i in self.queue.all() if not i.done and not i.refused]
         oldest = None
         now_s = self._now() / 1000.0
         for i in waiting:
@@ -224,9 +230,16 @@ class OutboxPump:
             oldest_backlog_s=max(ages) if ages else None)
 
     def stop(self, timeout_s: float = 10.0) -> None:
+        """叫停后台线程。**不等手上那一块传完**(一块可能要等满 30 s 的网络超时):线程是
+        daemon 的,队列每一步都落盘,进程退了下次接着传。线程停下来了才关队列文件。"""
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(timeout_s)
-        with self._lock:
+        if not self._thread.is_alive():
             for b in self.boxes:
                 b.close()
+
+    def retry_refused(self) -> int:
+        """站点改了规矩、管理员让隔离的文件再传一次:全部重新排上。返回排上几个。"""
+        with self._lock:
+            return sum(b.queue.unrefuse_all() for b in self.boxes)

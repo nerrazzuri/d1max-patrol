@@ -35,9 +35,12 @@ STALE_MS = 25 * 3600 * 1000
 
 class SiteBackup:
     def __init__(self, db, evidence_root: Path, dest: Path | None, *,
-                 now_ms: Callable[[], int], alerts: Any = None) -> None:
+                 now_ms: Callable[[], int], alerts: Any = None,
+                 more: dict[str, Path] | None = None) -> None:
         self.db = db
         self.evidence_root = Path(evidence_root)
+        #: 还要镜像的目录(W00c5d 内部评审:地图、录包也只在站点上有一份):``{备份里的名字: 目录}``。
+        self.more = {k: Path(v) for k, v in (more or {}).items()}
         self.dest = Path(dest) if dest is not None else None
         self._now = now_ms
         self.alerts = alerts
@@ -118,13 +121,16 @@ class SiteBackup:
 
     def _mirror(self) -> None:
         assert self.dest is not None
-        if not self.evidence_root.is_dir():
+        for name, root in {"evidence": self.evidence_root, **self.more}.items():
+            self._mirror_one(root, self.dest / name)
+
+    def _mirror_one(self, root: Path, out: Path) -> None:
+        if not root.is_dir():
             return
-        out = self.dest / "evidence"
-        for src in self.evidence_root.rglob("*"):
+        for src in root.rglob("*"):
             if not src.is_file() or src.name.endswith(".tmp"):
                 continue
-            dst = out / src.relative_to(self.evidence_root)
+            dst = out / src.relative_to(root)
             st = src.stat()
             try:
                 ds = dst.stat()

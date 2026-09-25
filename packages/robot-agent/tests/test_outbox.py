@@ -236,7 +236,35 @@ def test_落盘的名字安全_发件箱模式每趟带随机后缀(tmp_path):
     a = RunArchive(tmp_path, m, started_at=t, suffix="004217")
     assert a.path.parent.name == "a_b_.." and a.path.name == "20260925T010000Z-004217"
     b = RunArchive(tmp_path, m, started_at=t, suffix="004217")
-    assert b.path.name == "20260925T010000Z-004217-2", "撞了照样往后加序号"
+    assert b.path.name == "20260925T010000Z-0042172", "撞了照样往后加序号(并进后缀里)"
+    from d1max_contract.intake import split_run
+    assert split_run(f"a_b_../{b.path.name}") is not None, "站点与本地清理都认这个名字"
     assert safe_segment("..x") == "_.x" and safe_segment("") == "_"
     assert len(safe_segment("点" * 200).encode()) <= 120
     assert a.photo_name("p/1", "front").startswith("p_1__front__")
+
+
+def test_隔离的不算积压_管理员让它再传一次就重新排上(tmp_path):
+    from d1max_agent.engine.uploader import PutReceipt
+    from d1max_agent.outbox import OutboxPump
+
+    class 不收站点(假站点):
+        def put(self, req):
+            if "坏" in req.rel:
+                return PutReceipt(ok=False, stored=0, sha256="", refused=True)
+            return super().put(req)
+    clock = {"ms": int(time.time() * 1000)}
+    box = Outbox(tmp_path / "o", cap_bytes=2**30, sink=不收站点(), sn="A",
+                 now_ms=lambda: clock["ms"])
+    run = _一趟(box.root)
+    (run / "photos" / "坏.jpg").write_bytes(b"x")
+    for _ in range(3):
+        box.step()
+        clock["ms"] += 20_000
+    f = box.facts()
+    assert f.backlog_files == 0 and f.oldest_backlog_s is None, "隔离的不算积压"
+    assert run.exists(), "没全确认,不删"
+    pump = OutboxPump(box)
+    assert pump.retry_refused() == 1
+    assert box.queue.backlog() == 1
+    box.close()

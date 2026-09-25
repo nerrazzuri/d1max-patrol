@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi;
+import 'support/fake_site.dart';
 
 void main() {
   testWidgets('管理员点一张图、选狗、下发', (t) async {
@@ -16,8 +17,46 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('pick-A')));
     await t.pumpAndSettle();
+    expect(api.calls.where((c) => c.startsWith('map ')), isEmpty, reason: '换图先确认一次');
+    await t.tap(find.byKey(const Key('activate-go')));
+    await t.pumpAndSettle();
     expect(api.calls, contains('map A estate-1:8'));
     expect(find.textContaining('在下载、载入'), findsOneWidget);
+  });
+
+  testWidgets('没报这种能力的狗不列、不显示按钮', (t) async {
+    final api = FakeApi('admin');
+    api.robotsOverride = [
+      for (final r in (siteFixture('site_robots')['robots'] as List).cast<Map<String, dynamic>>())
+        {...r, 'capabilities': null},
+    ];
+    api.view = {...api.view, 'capabilities': null};
+    await t.pumpWidget(MaterialApp(home: SiteMapsPage(api: api)));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(SiteMapsPage.mapKey('estate-1', '8')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('pick-A')), findsNothing);
+    expect(find.textContaining('没有能换图的狗'), findsOneWidget);
+    await t.tap(find.byKey(SiteMapsPage.bagKey('A', 'yard-0925')));
+    await t.pumpAndSettle();
+    expect(find.byKey(SiteMapsPage.versionKey), findsNothing);
+    expect(find.textContaining('现在不能重建'), findsOneWidget);
+    await t.pumpWidget(MaterialApp(home: SiteRobotPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    expect(find.byKey(const Key('btn-record-start')), findsNothing);
+  });
+
+  testWidgets('换图确认时点算了：不下发', (t) async {
+    final api = FakeApi('admin');
+    await t.pumpWidget(MaterialApp(home: SiteMapsPage(api: api)));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(SiteMapsPage.mapKey('estate-1', '8')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pick-A')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('算了'));
+    await t.pumpAndSettle();
+    expect(api.calls.where((c) => c.startsWith('map ')), isEmpty);
   });
 
   testWidgets('管理员拿录包重建：给一个新版本号', (t) async {

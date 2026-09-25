@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,9 @@ from d1max_contract.errors import ContractError
 from d1max_contract.maps import MANIFEST, MapRef
 
 log = logging.getLogger(__name__)
+
+#: 一张图最多下多久(秒):4G 上几百 MB 的点云图也够;超了就算没下成,不在那儿一直挂着。
+DOWNLOAD_DEADLINE_S = 1800.0
 
 #: 下载:给地图号、版本、文件名,返回一块一块的字节(调用方在线程里跑它)。
 Fetch = Callable[[str, str, str], Iterable[bytes]]
@@ -59,21 +63,37 @@ class MapKeeper:
         return self.root / ref.map_id / ref.version
 
     def home_of(self, ref: MapRef) -> tuple[float, float, float] | None:
-        """图里带的原点;没带或读不懂返回 None。"""
-        try:
-            d = json.loads((self.dir_of(ref) / "home.json").read_text("utf-8"))
-            x, y, yaw = (float(d[k]) for k in ("x", "y", "yaw"))
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
-        return (x, y, yaw)
+        """这张图上的原点:先看站点下发时给的(记在 ``active.json`` 里,是这台狗在这张图上的待命点),
+        再看图里带的 ``home.json``。都没有返回 None。"""
+        sources = ((self.root / "active.json", "home"), (self.dir_of(ref) / "home.json", None))
+        for path, key in sources:
+            try:
+                d = json.loads(path.read_text("utf-8"))
+                if key is not None:
+                    if (d.get("map_id"), d.get("version")) != (ref.map_id, ref.version):
+                        continue
+                    d = d.get(key)
+                    if d is None:
+                        continue
+                x, y, yaw = (float(d[k]) for k in ("x", "y", "yaw"))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                continue
+            return (x, y, yaw)
+        return None
 
     # ------------------------------------------------------------ 装
 
     def install(self, ref: MapRef) -> Path:
-        """下载、逐个核对、装好(**阻塞,在线程里调**)。返回图的目录。不改 ``active.json``。"""
+        """下载、逐个核对、装好(**阻塞,在线程里调**)。返回图的目录。不改 ``active.json``。
+        要装的就是正在用的那张(文件都在):不重下 —— 先删了再下,半路断电就一张图都没了。"""
+        cur = self.active()
+        if cur is not None and (cur.map_id, cur.version) == (ref.map_id, ref.version) \
+                and cur.files == ref.files:
+            return self.dir_of(ref)
         tmp = self.root / ".incoming" / f"{ref.map_id}@{ref.version}"
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True)
+        deadline = time.monotonic() + DOWNLOAD_DEADLINE_S
         try:
             for f in ref.files:
                 h, n = hashlib.sha256(), 0
@@ -83,6 +103,8 @@ class MapKeeper:
                             n += len(chunk)
                             if n > f.size:
                                 raise MapInstallError(f"{f.name} 比清单里说的大")
+                            if time.monotonic() > deadline:
+                                raise MapInstallError(f"下载超过 {DOWNLOAD_DEADLINE_S:g} s 没下完")
                             h.update(chunk)
                             fh.write(chunk)
                     except MapInstallError:
@@ -104,10 +126,13 @@ class MapKeeper:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def commit(self, ref: MapRef) -> None:
-        """这张图载入成功了:记成正在用的,别的图都删掉(狗上只留这一张)。"""
+    def commit(self, ref: MapRef, *, home: tuple[float, float, float] | None = None) -> None:
+        """这张图载入成功了:记成正在用的(连同站点给的原点),别的图都删掉(狗上只留这一张)。"""
         tmp = self.root / "active.json.tmp"
-        tmp.write_text(json.dumps(ref.to_wire(), ensure_ascii=False), encoding="utf-8")
+        rec = ref.to_wire()
+        if home is not None:
+            rec["home"] = {"x": home[0], "y": home[1], "yaw": home[2]}
+        tmp.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self.root / "active.json")
         keep = self.dir_of(ref).resolve()
         for m in self.root.iterdir():

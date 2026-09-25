@@ -73,8 +73,12 @@ class FakeApi implements SiteApi {
       if (robotsError!.status == 401) session = null;
       throw robotsError!;
     }
-    return (siteFixture('site_robots')['robots'] as List).cast<Map<String, dynamic>>();
+    return robotsOverride ??
+        (siteFixture('site_robots')['robots'] as List).cast<Map<String, dynamic>>();
   }
+
+  /// 给了就用它当狗列表（比如一台没报能力的狗）。
+  List<Map<String, dynamic>>? robotsOverride;
   @override
   Future<Map<String, dynamic>> robot(String id) async {
     robotCalls++;

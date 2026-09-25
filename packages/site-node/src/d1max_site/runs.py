@@ -100,15 +100,16 @@ class RunDesk:
         r = self._run(run_id)
         d = self.store.dir_of(r)
         vlm = client if client is not None else self._client_factory()
-        done = set(self.store.done_photos(run_id))
         started = self._now()                     # 判读开始的时刻:判到一半又到的照片要再判一轮
+        done = set(self.store.done_photos(run_id))  # (先打点再取:夹在中间收齐的那张下一轮判)
         with self._judging:
             if not all_photos:
                 have = {f.photo: f.verdict for f in judge_mod.read_findings(d)}
                 done = {n for n in done if have.get(n) in (None, "pending")}
             findings = judge_mod.judge_run(
                 d, client=vlm, history_root=self.store.root / r["robot_id"],
-                baselines_root=self.baselines / r["robot_id"], only=done)
+                baselines_root=self.baselines / r["robot_id"], only=done,
+                complete=self.store.photo_complete)
         counts: dict[str, int] = {}
         for f in findings:
             counts[f.verdict] = counts.get(f.verdict, 0) + 1

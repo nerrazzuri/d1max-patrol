@@ -286,3 +286,27 @@ def test_导出不设条数上限(台):
     day = 1_790_294_400_000
     meta = desk.export(since_ms=day, until_ms=day + 86_400_000, wait=True)
     assert meta["runs"] == 1100 and meta["files"] == 1100
+
+
+
+def test_备份也镜像地图与录包(台, tmp_path):
+    c, store, desk, model, _ = 台
+    maps = tmp_path / "maps" / "estate-1" / "8"
+    maps.mkdir(parents=True)
+    (maps / "estate-1.pgm").write_bytes(b"P5")
+    b = SiteBackup(store.db, store.root, tmp_path / "bak", now_ms=c,
+                   more={"maps": tmp_path / "maps"})
+    assert b.run_once()
+    assert (tmp_path / "bak" / "maps" / "estate-1" / "8" / "estate-1.pgm").read_bytes() == b"P5"
+
+
+def test_别的趟里半张的照片不当上一次(台):
+    c, store, desk, model, _ = 台
+    _传(store, "A", S1, photos=("P1__front",))
+    big = os.urandom(3000)
+    store.put("A", f"巡检一/{S1}", f"photos/P2__front__{S1}.jpg", offset=0, data=big[:1000],
+              total=len(big))                          # 上一趟的 P2 只到了三分之一
+    _传(store, "A", S2, photos=("P2__front",))
+    id2 = [x for x in store.runs(robot_id="A") if x["stamp"] == S2][0]["id"]
+    desk.judge(id2)
+    assert model["m"].calls == [1], "上一趟那半张不拿来比"

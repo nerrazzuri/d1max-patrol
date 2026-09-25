@@ -81,10 +81,14 @@ def _cmd(kind, payload, cid, c):
     return Message(T.cmd, json.dumps(cmd.to_wire()).encode(), 1, False)
 
 
-async def _跑(rt, broker, n=20):
+async def _跑(rt, broker, n=20, r=None, c=None):
     import asyncio
     for _ in range(n):
         await rt.step(0.1)
+        if r is not None:                          # 仿真狗也往前走(停车要走完才算停稳)
+            r.tick(0.1)
+            c.ms += 100
+            c.mono += 0.1
         await asyncio.sleep(0.01)
     await broker.drain()
 
@@ -132,7 +136,7 @@ async def test_哈希不对_或适配器载不进_不换图_发失败事件(台)
                             if e["kind"] == "map_activate_failed"][-1]["data"]["reason"]
 
 
-async def test_跑着任务不换图_换图时不接自动任务_坏载荷拒(台):
+async def test_跑着任务先下载_等狗空下来才换_坏载荷拒(台):
     broker, c, r, ears, rt, site, mk = 台
     await rt._on_cmd(_cmd("map_activate", {"map_id": "../x"}, "c0", c))
     await broker.drain()
@@ -142,10 +146,18 @@ async def test_跑着任务不换图_换图时不接自动任务_坏载荷拒(�
                               yaw=0.0).to_wire()}
     await rt._on_cmd(_cmd("goto", goto, "c1", c))
     await rt.step(0.1)
-    ref = site.add("m", "5", {"m.pgm": b"5"})
+    ref = site.add("m", "5", {"m.pgm": b"5", "home.json": b'{"x":0,"y":0,"yaw":0}'})
     await rt._on_cmd(_cmd("map_activate", ref, "c2", c))
     await broker.drain()
-    assert ears.by["cmd/ack"][-1]["reason"] == "busy"
+    assert ears.by["cmd/ack"][-1]["result"] == "accepted", "收下:下载不挡任务"
+    await _跑(rt, broker, 10, r, c)
+    assert rt.loaded_map == ("m", "1"), "跑着任务不换坐标系"
+    await rt._on_cmd(_cmd("abort", {"task_id": "goto-c1"}, "c3", c))
+    for _ in range(80):
+        await _跑(rt, broker, 5, r, c)
+        if rt.loaded_map == ("m", "5"):
+            break
+    assert rt.loaded_map == ("m", "5"), "狗空下来就换"
 
 
 async def test_没有载入这一步的适配器_不报换图能力_命令回unsupported(tmp_path):
@@ -160,12 +172,12 @@ async def test_没有载入这一步的适配器_不报换图能力_命令回uns
     await rt.close()
 
 
-async def test_换图的时候不接自动任务(台):
+async def test_下载时照接任务_只有载入切坐标系那一小段不接(台):
     import asyncio
     import threading
     broker, c, r, ears, rt, site, mk = 台
     gate = threading.Event()
-    ref = site.add("m", "6", {"m.pgm": b"6"})
+    ref = site.add("m", "6", {"m.pgm": b"6", "home.json": b'{"x":0,"y":0,"yaw":0}'})
     real = site.fetch
 
     def 慢(map_id, version, name):
@@ -173,16 +185,36 @@ async def test_换图的时候不接自动任务(台):
         yield from real(map_id, version, name)
     rt.maps._fetch = 慢
     await rt._on_cmd(_cmd("map_activate", ref, "d1", c))
+    await asyncio.sleep(0.05)                     # 换图那一趟已经开跑、卡在下载里
     from d1max_contract.messages import MapPose
-    goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=1.0, y=0.0,
+    goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=0.2, y=0.0,
                               yaw=0.0).to_wire()}
     await rt._on_cmd(_cmd("goto", goto, "d2", c))
     await broker.drain()
-    assert ears.by["cmd/ack"][-1]["reason"] == "map_switching"
+    assert ears.by["cmd/ack"][-1]["result"] == "accepted", "下载不挡出警"
+    await rt._on_cmd(_cmd("abort", {"task_id": "goto-d2"}, "d2x", c))
+    await _跑(rt, broker, 30, r, c)
+    loading = asyncio.Event()
+    release = asyncio.Event()
+    real_load = r.load_map
+
+    async def 慢载(map_id, version, path):
+        loading.set()
+        await release.wait()
+        return await real_load(map_id, version, path)
+    r.load_map = 慢载
     gate.set()
+    for _ in range(200):
+        if loading.is_set():
+            break
+        await _跑(rt, broker, 1, r, c)
+    assert loading.is_set()
+    await rt._on_cmd(_cmd("goto", goto, "d3", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "map_switching"
+    release.set()
     await _跑(rt, broker)
     assert rt.loaded_map == ("m", "6")
-    await asyncio.sleep(0)
 
 
 class 假发布:
@@ -249,4 +281,92 @@ async def test_发布命令_装在后台_切要空闲要装好_能力里报在�
     await rt._on_cmd(_cmd("release_rollback", {}, "r5", c))
     await broker.drain()
     assert ears.by["cmd/ack"][-1]["reason"] == "busy"
+    await rt.close()
+
+
+async def test_原点随下发的命令走_记在正在用的图里_重启照样认(台):
+    broker, c, r, ears, rt, site, mk = 台
+    ref = site.add("m", "7", {"m.pgm": b"7"})               # 图里没带 home.json
+    await rt._on_cmd(_cmd("map_activate", ref | {"home": {"x": 2.0, "y": 1.0, "yaw": 0.5}},
+                          "e1", c))
+    await _跑(rt, broker)
+    assert rt.loaded_map == ("m", "7") and rt.parts.home.pose.position.x == 2.0
+    await rt.close()
+    rt2 = mk()
+    await rt2.start()
+    assert rt2.parts.home is not None and rt2.parts.home.pose.position.y == 1.0
+    await rt2._on_cmd(_cmd("map_activate", ref | {"home": {"x": "a"}}, "e2", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"].startswith("payload"), "原点不是数:拒"
+    await rt2.close()
+
+
+async def test_记不下正在用的图_把原来那张载回去(台):
+    broker, c, r, ears, rt, site, mk = 台
+    first = site.add("m", "8", {"m.pgm": b"8", "home.json": b'{"x":0,"y":0,"yaw":0}'})
+    await rt._on_cmd(_cmd("map_activate", first, "f1", c))
+    await _跑(rt, broker)
+    assert rt.loaded_map == ("m", "8")
+    ref = site.add("m", "9", {"m.pgm": b"9", "home.json": b'{"x":0,"y":0,"yaw":0}'})
+
+    def 坏(*a, **k):
+        raise OSError("盘满了")
+    rt.maps.commit = 坏
+    await rt._on_cmd(_cmd("map_activate", ref, "f2", c))
+    await _跑(rt, broker)
+    assert rt.loaded_map == ("m", "8") and r.loaded_map[:2] == ("m", "8"), "适配器也载回原来那张"
+    assert "记不下" in [e for e in ears.by["event"]
+                        if e["kind"] == "map_activate_failed"][-1]["data"]["reason"]
+
+
+class 假录包:
+    def __init__(self):
+        self.recording = False
+        self.last_bag = ""
+        self.calls = []
+
+    async def start(self, name):
+        self.calls.append(("start", name))
+        self.recording, self.last_bag = True, f"{name}-x"
+
+    async def stop(self):
+        self.calls.append(("stop",))
+        self.recording = False
+
+
+async def test_盘满了不录包_没在录不停_隔离的让它再传(tmp_path):
+    from d1max_contract.storage import StorageFacts
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    full = StorageFacts(disk_used_ratio=0.95, outbox_bytes=10, outbox_cap_bytes=100,
+                        backlog_files=0, backlog_bytes=0, oldest_backlog_s=None)
+    ok = StorageFacts(disk_used_ratio=0.5, outbox_bytes=10, outbox_cap_bytes=100,
+                      backlog_files=0, backlog_bytes=0, oldest_backlog_s=None)
+    facts = {"f": full}
+    rec = 假录包()
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"),
+                      boot_id="b", home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono,
+                      mapper=rec, storage_facts=lambda: facts["f"])
+    retried = []
+    rt._outbox_retry = lambda: retried.append(1) or 3
+    await rt.start()
+    await rt._on_cmd(_cmd("mapping", {"action": "stop", "name": "yard"}, "m1", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "not_recording"
+    await rt._on_cmd(_cmd("mapping", {"action": "start", "name": "yard"}, "m2", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "storage_full" and rec.calls == []
+    facts["f"] = ok
+    await rt._on_cmd(_cmd("mapping", {"action": "start", "name": "yard"}, "m3", c))
+    await _跑(rt, broker, n=3)
+    assert rec.calls == [("start", "yard")]
+    await rt._on_cmd(_cmd("outbox_retry", {}, "o1", c))
+    await _跑(rt, broker, n=3)
+    assert retried == [1] and ears.by["cmd/ack"][-1]["result"] == "accepted"
+    got = [e for e in ears.by["event"] if e["kind"] == "outbox_retry"]
+    assert got[-1]["data"]["released"] == 3
     await rt.close()

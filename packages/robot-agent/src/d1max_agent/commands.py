@@ -52,7 +52,8 @@ log = logging.getLogger(__name__)
 
 #: 地图命令(W00c5d 第二部分)与发布命令(第三部分):不是任务,进幂等记录,交给 ``map_hook``。
 MAP_KINDS = frozenset({"map_activate", "mapping", "map_build",
-                       "release_install", "release_activate", "release_rollback"})
+                       "release_install", "release_activate", "release_rollback",
+                       "outbox_retry"})
 
 TaskFactory = Callable[[Command], Task]
 

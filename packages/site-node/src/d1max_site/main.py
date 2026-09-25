@@ -368,7 +368,9 @@ class Server:
         backup_dir = cfg.get("backup_dir")
         self.backup = SiteBackup(self.db, self.evidence.root,
                                  Path(backup_dir) if backup_dir else None, now_ms=wall_ms,
-                                 alerts=loop_alerts)
+                                 alerts=loop_alerts,
+                                 more={"maps": home / "maps", "bags": home / "bags",
+                                       "releases": home / "releases"})
         icfg = cfg.get("intake", {})
         self.intake = IntakeServer(
             host=icfg.get("host", "0.0.0.0"), port=int(icfg.get("port", DEFAULT_PORT)),

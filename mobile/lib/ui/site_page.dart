@@ -21,6 +21,7 @@ import 'site_runs.dart';
 import 'site_teleop.dart';
 import 'site_video.dart';
 import 'site_watch_page.dart';
+import 'widget/fields_dialog.dart';
 
 /// 造一个站点客户端。测试换成假的。
 typedef SiteApiFactory = SiteApi Function(SiteEntry site);
@@ -426,27 +427,18 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
 
   /// 录包（W00c5d 第二部分，管理员）：给包起个名，之后经站点遥控开着狗走一圈，再停。
   Future<void> _startRecord() async {
-    final ctl = TextEditingController(
-        text: 'rec-${DateTime.now().toUtc().toIso8601String().substring(0, 16).replaceAll(':', '')}');
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: const Text('开始录包'),
-        content: TextField(
-            key: const Key('record-name'),
-            controller: ctl,
-            decoration: const InputDecoration(labelText: '包名（字母、数字、. _ -）')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
-          FilledButton(
-              key: const Key('record-go'),
-              onPressed: () => Navigator.pop(c, true),
-              child: const Text('开始')),
+    final got = await showFieldsDialog(context,
+        title: '开始录包',
+        fields: [
+          DialogField('包名（字母、数字、. _ -）',
+              key: const Key('record-name'),
+              initial:
+                  'rec-${DateTime.now().toUtc().toIso8601String().substring(0, 16).replaceAll(':', '')}'),
         ],
-      ),
-    );
-    if (ok != true) return;
-    await _do(() => widget.api.mapping(widget.robotId, 'start', name: ctl.text.trim()), '开始录包');
+        confirm: '开始',
+        confirmKey: const Key('record-go'));
+    if (got == null || got[0].isEmpty) return;
+    await _do(() => widget.api.mapping(widget.robotId, 'start', name: got[0]), '开始录包');
   }
 
   /// 叫停之前**现取**正在跑的任务：页面上的可能是几秒前的，排程早换了一趟。
@@ -524,7 +516,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                           builder: (_) =>
                               SiteTeleopPage(api: widget.api, robotId: widget.robotId))),
                   child: const Text('遥控')),
-            if (s?.canManageMaps ?? false) ...[
+            if ((s?.canManageMaps ?? false) && robotCan(v, 'mapping')) ...[
               OutlinedButton(
                   key: const Key('btn-record-start'),
                   onPressed: _startRecord,

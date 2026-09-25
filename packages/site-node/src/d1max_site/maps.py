@@ -62,14 +62,42 @@ class MapCatalog:
             check_name(rel, "文件名")
         except (ValueError, ContractError) as exc:
             raise PathRefused(f"地图的路径不对:{run!r}/{rel!r}") from exc
+        if not self._build_issued(robot_id, map_id, version):
+            # 只收站点让它建的那张(W00c5d 内部评审:不然随便哪台登记过的狗都能塞一张图进目录)。
+            raise PathRefused(f"站点没让 {robot_id} 建 {map_id}:{version}")
         got = self.writer.write(safe_join(self.incoming, robot_id, map_id, version, rel),
                                 offset=offset, data=data, total=total)
         if got.size >= total:
             try:
                 self.take_uploaded(robot_id, map_id, version)
             except MapError as exc:
-                log.warning("%s", exc)
+                # 收不下(版本撞了、清单跟文件对不上):**告诉狗永远不收**(它隔离、留着那份、站点出
+                # upload_refused 告警),而不是回 200 让它删掉 —— 那样这张图就悄悄没了。
+                raise PathRefused(str(exc)) from exc
         return got
+
+    def _build_issued(self, robot_id: str, map_id: str, version: str) -> bool:
+        rows = self.db.query("SELECT payload FROM commands WHERE robot_id=? AND kind='map_build'",
+                             (robot_id,))
+        for r in rows:
+            try:
+                p = json.loads(r["payload"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(p, dict) and (p.get("map_id"), p.get("version")) == (map_id, version):
+                return True
+        return False
+
+    def build_in_flight(self, map_id: str, version: str) -> bool:
+        """站点已经让某台狗建这个版本了(还没收齐登记):再派一台建同一个版本要挡。"""
+        for r in self.db.query("SELECT payload FROM commands WHERE kind='map_build'"):
+            try:
+                p = json.loads(r["payload"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(p, dict) and (p.get("map_id"), p.get("version")) == (map_id, version):
+                return True
+        return False
 
     def put_bag_chunk(self, robot_id: str, run: str, rel: str, *, offset: int, data: bytes,
                       total: int) -> Stored:
@@ -158,15 +186,21 @@ class MapCatalog:
             raise MapError(f"清单里写的是 {ref.map_id}:{ref.version},目录是 {map_id}:{version}")
         for f in ref.files:
             p = src / f.name
-            if not p.is_file() or p.stat().st_size != f.size or _sha256(p) != f.sha256:
-                return None                        # 还没收齐(或还在传)
+            if not p.is_file() or p.stat().st_size < f.size:
+                return None                        # 还没收齐(还在传)
+            if p.stat().st_size != f.size or _sha256(p) != f.sha256:
+                raise MapError(f"{robot_id} 传来的 {map_id}:{version} 里 {f.name} 跟清单对不上")
         with self._lock:
             dst = self._fresh_dir(map_id, version)
-            dst.mkdir(parents=True)
+            tmp = dst.with_name(dst.name + ".taking")
+            shutil.rmtree(tmp, ignore_errors=True)
+            tmp.mkdir(parents=True)
             for f in ref.files:
-                shutil.copy2(src / f.name, dst / f.name)
-            shutil.copy2(src / MANIFEST, dst / MANIFEST)
+                shutil.copy2(src / f.name, tmp / f.name)
+            shutil.copy2(src / MANIFEST, tmp / MANIFEST)
+            os.replace(tmp, dst)
             self._register(ref, source=robot_id, note="")
+        shutil.rmtree(src, ignore_errors=True)     # 收进目录了:收件那份不留
         log.info("%s 建的图收齐了:%s:%s", robot_id, map_id, version)
         return ref
 
@@ -188,6 +222,7 @@ class MapCatalog:
     # ------------------------------------------------------------ 录包
 
     def bag_done(self, robot_id: str, name: str, size: int) -> None:
+        """登记(或刷新)一个录包。狗那头的包名带录的时刻,同名不会是两个包。"""
         with self.db.tx() as c:
             c.execute("INSERT INTO bags(robot_id, name, first_ms, last_ms, bytes) "
                       "VALUES (?,?,?,?,?) ON CONFLICT(robot_id, name) DO UPDATE SET "
