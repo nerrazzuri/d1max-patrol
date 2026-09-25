@@ -28,17 +28,21 @@
           "patrol": {
             "map_id": "estate-1",
             "map_version": "7"
+          },
+          "teleop": {
+            "max_vx": 0.5,
+            "max_wz": 0.75
           }
         }
       },
-      "expires_at": 1791333454991,
+      "expires_at": 1791338792125,
       "fresh": true,
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-9e6fe1bfce",
+        "boot_id": "boot-28da842fd3",
         "control_epoch": 1,
-        "last_seen": 1790333455829,
+        "last_seen": 1790338792933,
         "online": true,
         "ready": {
           "control": true,

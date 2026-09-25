@@ -26,6 +26,10 @@
       "patrol": {
         "map_id": "estate-1",
         "map_version": "7"
+      },
+      "teleop": {
+        "max_vx": 0.5,
+        "max_wz": 0.75
       }
     }
   },
@@ -33,8 +37,8 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-065ef5e3954b",
-      "issued_at": 1790333455218,
+      "command_id": "cmd-e224943c4b94",
+      "issued_at": 1790338792320,
       "issued_by": "alice",
       "kind": "goto",
       "payload": {
@@ -50,28 +54,28 @@
       },
       "priority": 60,
       "robot_id": "A",
-      "task_id": "task-2ac0ef97a80e"
+      "task_id": "task-791e22db33e1"
     }
   ],
   "events": [
     {
-      "boot_id": "boot-9e6fe1bfce",
+      "boot_id": "boot-28da842fd3",
       "data": {
         "faults": []
       },
       "kind": "robot_fault",
       "seq": 1,
-      "stamp": 1790333455088
+      "stamp": 1790338792223
     }
   ],
-  "expires_at": 1791333454991,
+  "expires_at": 1791338792125,
   "fresh": true,
   "revoked": false,
   "robot_id": "A",
   "status": {
-    "boot_id": "boot-9e6fe1bfce",
+    "boot_id": "boot-28da842fd3",
     "control_epoch": 1,
-    "last_seen": 1790333455223,
+    "last_seen": 1790338792332,
     "online": true,
     "ready": {
       "control": true,
@@ -82,8 +86,8 @@
     "schema": "1.0",
     "task": {
       "kind": "goto",
-      "state": "pending",
-      "task_id": "task-2ac0ef97a80e"
+      "state": "running",
+      "task_id": "task-791e22db33e1"
     }
   }
 }

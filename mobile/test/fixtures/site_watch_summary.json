@@ -1,5 +1,5 @@
 {
-  "now_ms": 1790333456150,
+  "now_ms": 1790338793257,
   "robots": [
     {
       "alerts": {
@@ -8,13 +8,13 @@
         "P3": 1
       },
       "backup": null,
-      "battery_as_of_ms": 1790333456103,
-      "battery_pct": 99.99771777777778,
+      "battery_as_of_ms": 1790338793228,
+      "battery_pct": 99.99774222222223,
       "bundle_lag": null,
       "clock_skew_s": -0.0,
       "disk_used_ratio": null,
       "fresh": true,
-      "last_seen_ms": 1790333455846,
+      "last_seen_ms": 1790338792950,
       "online": true,
       "robot_id": "A",
       "upload_backlog": null,
