@@ -308,3 +308,12 @@ def test_map_import登记一张图_同版本再来退2(home, tmp_path, capsys):
     assert site_main.main(args) == 2
     assert site_main.main(["--home", str(home), "map-import", str(src), "--map-id", "../x",
                            "--version", "8"]) == 2
+
+
+def test_release_add登记一版_坏包退2(home, tmp_path, capsys):
+    from test_site_releases import NAME, 做包
+    pkg = 做包(tmp_path)
+    assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 0
+    assert f"登记了 {NAME}" in capsys.readouterr().out
+    assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 2
+    assert site_main.main(["--home", str(home), "release-add", str(tmp_path)]) == 2

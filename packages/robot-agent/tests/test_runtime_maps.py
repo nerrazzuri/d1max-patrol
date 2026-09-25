@@ -183,3 +183,70 @@ async def test_换图的时候不接自动任务(台):
     await _跑(rt, broker)
     assert rt.loaded_map == ("m", "6")
     await asyncio.sleep(0)
+
+
+class 假发布:
+    def __init__(self):
+        self.cur = "2026-09-20-aaaaaa"
+        self.installed = set()
+        self.calls = []
+
+    def current(self):
+        return self.cur
+
+    def ready(self, name):
+        return name in self.installed
+
+    def install(self, ref):
+        self.calls.append(("install", ref.name))
+        self.installed.add(ref.name)
+
+    def activate(self, name):
+        self.calls.append(("activate", name))
+        self.cur = name
+        return {"unit": "installed"}
+
+    def rollback(self):
+        self.calls.append(("rollback",))
+        return "2026-09-20-aaaaaa"
+
+    def commit_if_pending(self):
+        return None
+
+
+async def test_发布命令_装在后台_切要空闲要装好_能力里报在跑哪一版(tmp_path):
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rel = 假发布()
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"),
+                      boot_id="b", home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono,
+                      releases=rel)
+    await rt.start()
+    await broker.drain()
+    caps = Capabilities.from_wire(ears.by["capabilities"][-1])
+    assert caps.tasks["release_install"] == {"current": "2026-09-20-aaaaaa"}
+    new = "2026-09-25-bbbbbb"
+    await rt._on_cmd(_cmd("release_activate", {"name": new}, "r1", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "not_installed"
+    await rt._on_cmd(_cmd("release_install", {"name": new, "sha256": "a" * 64, "size": 9},
+                          "r2", c))
+    await _跑(rt, broker)
+    assert ("install", new) in rel.calls
+    assert any(e["kind"] == "release_installed" for e in ears.by["event"])
+    from d1max_contract.messages import MapPose
+    goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=5.0, y=0.0,
+                              yaw=0.0).to_wire()}
+    await rt._on_cmd(_cmd("goto", goto, "r3", c))
+    await rt.step(0.1)
+    await rt._on_cmd(_cmd("release_activate", {"name": new}, "r4", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "busy", "跑着任务不切版本"
+    await rt._on_cmd(_cmd("release_rollback", {}, "r5", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "busy"
+    await rt.close()

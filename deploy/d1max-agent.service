@@ -23,6 +23,9 @@ Environment=PYTHONUNBUFFERED=1
 # `d1max-site enroll` 签发,拷到 /etc/d1max/tls/(W00c1):
 #   D1MAX_SITE_MQTT=mqtts://<站点>:8883   D1MAX_MAP=<map_id>:<version>   D1MAX_HOME=x,y,yaw
 EnvironmentFile=-/etc/d1max/env
+# W00c5d:站点下发版本、代理自己切。新版起不来的话,每次重起前守卫数一次在途标记,
+# 数够就把 current 指回上一版(跟 d1max-patrol.service 同一个守卫)。
+ExecStartPre=-/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard
 # W00b:装而不 enable。站点 broker 在 W00c 才有;现在起来连不上就退 1(约 10 s 超时),
 # 由 Restart=always 每 5 秒再起一次。
 # 起用时把 --hal 换成 d1max(W00d,加 --sidecar 127.0.0.1:8090 与实测过的 --mps-per-unit 等)。

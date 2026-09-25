@@ -204,6 +204,19 @@ def cmd_map_import(home: Path, src: Path, map_id: str, version: str, note: str) 
         db.close()
 
 
+def cmd_release_add(home: Path, src: Path, note: str) -> dict:
+    """W00c5d 第三部分:把一个发布包目录(``release pack`` 的产物)登记进站点的发布目录。"""
+    from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
+    _load(home)
+    db = SiteDB(home / "site.db")
+    try:
+        return ReleaseCatalog(home, db, now_ms=wall_ms).add(src, note=note)
+    except ReleaseCatalogError as exc:
+        raise SiteError(str(exc)) from exc
+    finally:
+        db.close()
+
+
 def cmd_standby(home: Path, robot_id: str, name: str, map_id: str, pose: str,
                 default: bool) -> None:
     from d1max_site.dispatcher import Dispatcher
@@ -345,7 +358,9 @@ class Server:
         from d1max_site.runs import RunDesk
         self.evidence = EvidenceStore(home / "evidence", self.db, now_ms=wall_ms)
         from d1max_site.maps import MapCatalog
+        from d1max_site.releases import ReleaseCatalog
         self.maps = MapCatalog(home, self.db, now_ms=wall_ms)
+        self.releases = ReleaseCatalog(home, self.db, now_ms=wall_ms)
         # 判读、备份、接收口在别的线程里:告警要跳回事件循环去报(告警簿只许在循环里改)。
         from d1max_site.alert_store import LoopAlerts
         loop_alerts = LoopAlerts(self.alerts, self.loop)
@@ -360,6 +375,7 @@ class Server:
             ctx=server_context(cert=server_crt, key=server_key, ca=ca / "ca.crt",
                                crl=ca / "crl.pem"),
             db=self.db, store=self.evidence, now_ms=wall_ms, maps=self.maps)
+        self.intake.releases = self.releases
         self.intake.on_refused = lambda robot, run, rel, why: loop_alerts.raise_alert(
             kind="upload_refused", robot=robot, title=f"站点不收 {run}/{rel}",
             detail=f"{why}(那一趟留在狗上,不会自己删)")
@@ -368,7 +384,7 @@ class Server:
                            scheduler=self.scheduler, standby=self.standby,
                            incidents=self.incidents, alerts=self.alerts, video=self.video,
                            teleop=self.teleop, runs=self.runs, backup=self.backup,
-                           maps=self.maps, now_ms=wall_ms)
+                           maps=self.maps, releases=self.releases, now_ms=wall_ms)
         self.teleop.audit = self.api.audit
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
@@ -498,6 +514,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("robot_id")
     b = sub.add_parser("import-bundle", help="导入任务包,成为当前包")
     b.add_argument("bundle_dir", type=Path)
+    ra = sub.add_parser("release-add", help="登记一个发布包(W00c5d):之后可以给狗装、切")
+    ra.add_argument("dir", type=Path)
+    ra.add_argument("--note", default="")
     mi = sub.add_parser("map-import", help="把一个目录里的地图文件登记成站点的一张图(W00c5d)")
     mi.add_argument("dir", type=Path)
     mi.add_argument("--map-id", required=True)
@@ -560,6 +579,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             got = cmd_import_bundle(home, args.bundle_dir, f"cli:{getpass.getuser()}")
             print(f"导入了 {got['bundle_id']} v{got['version']}:任务 {', '.join(got['missions'])};"
                   f"排程 {', '.join(got['schedule_entries']) or '无'}({got['timezone']})")
+        elif args.cmd == "release-add":
+            got = cmd_release_add(home, args.dir, args.note)
+            print(f"登记了 {got['name']}({got['version']}):{got['size']} 字节,"
+                  f"sha256 {got['sha256']}")
         elif args.cmd == "map-import":
             got = cmd_map_import(home, args.dir, args.map_id, args.version, args.note)
             print(f"登记了 {got['map_id']}:{got['version']}:"

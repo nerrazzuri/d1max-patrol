@@ -119,6 +119,10 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--outbox-mount", default=os.environ.get("D1MAX_OUTBOX_MOUNT", ""),
                    help="发件箱所在的挂载点(临时硬盘);给了就要求它真的挂着,不然不起"
                         "(缺省读环境变量 D1MAX_OUTBOX_MOUNT)")
+    o.add_argument("--release-root", type=Path,
+                   default=Path(os.environ["D1MAX_RELEASE_ROOT"])
+                   if os.environ.get("D1MAX_RELEASE_ROOT") else None,
+                   help="双槽发布根目录(站点下发版本,W00c5d 第三部分);缺省读 D1MAX_RELEASE_ROOT")
     o.add_argument("--mapping", action="store_true",
                    help="开建图(W00c5d 第二部分:站点下 mapping/map_build);要本机有 ROS 2")
     o.add_argument("--intake", default=None,
@@ -298,7 +302,8 @@ def build(args: argparse.Namespace) -> Assembled:
                                store_dir=args.store_dir, now_ms=wall_ms, loaded_map=args.map,
                                parts=parts, video=video,
                                storage_facts=pump.facts if pump is not None else None,
-                               maps=keeper, mapper=mapper)
+                               maps=keeper, mapper=mapper,
+                               releases=_releases(args, registration))
         return hal, parts, runtime, pump
 
     async def _in_loop():
@@ -381,6 +386,37 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
     import secrets
     parts.engine.run_suffix = lambda: f"{secrets.randbelow(10 ** 6):06d}"
     return OutboxPump(runs, more=(bags, maps)), keeper, mapper
+
+
+def _releases(args: argparse.Namespace, registration: Registration) -> Any:
+    """站点下发版本(W00c5d 第三部分):有双槽根目录、有站点接收口才开。"""
+    if args.release_root is None or args.intake is None:
+        return None
+    import functools
+    import ssl
+
+    from d1max_agent.engine.privileged import Privileged
+    from d1max_agent.engine.release import Layout
+    from d1max_agent.release_ops import (
+        ReleaseOps,
+        build_venv,
+        default_python,
+        https_fetch,
+        pip_args_from_env,
+    )
+    ctx = ssl.create_default_context(cafile=args.tls_ca)
+    ctx.load_cert_chain(args.tls_cert, args.tls_key)
+
+    def restart() -> None:
+        # 代理单元是 Restart=always:自己好好退出,systemd 从新的 current 起来。等 3 秒,让回执与
+        # 「在切了」那条事件先出去。
+        threading.Timer(3.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    return ReleaseOps(Layout(root=args.release_root), fetch=https_fetch(args.intake, ctx),
+                      privileged=Privileged(),
+                      build=functools.partial(build_venv, pip_args=pip_args_from_env(),
+                                              python=default_python()),
+                      work=Path(args.store_dir) / "release-dl", now_ms=wall_ms,
+                      restart=restart, sn=registration.robot_id)
 
 
 def _legacy_http(args: argparse.Namespace, bridge: Any, parts: EngineParts,

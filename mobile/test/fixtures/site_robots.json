@@ -30,20 +30,25 @@
             "map_id": "estate-1",
             "map_version": "7"
           },
+          "release_activate": {},
+          "release_install": {
+            "current": "2026-09-20-aaaaaa"
+          },
+          "release_rollback": {},
           "teleop": {
             "max_vx": 0.5,
             "max_wz": 0.75
           }
         }
       },
-      "expires_at": 1791344107369,
+      "expires_at": 1791346247411,
       "fresh": true,
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-de34143841",
+        "boot_id": "boot-10d6769c91",
         "control_epoch": 1,
-        "last_seen": 1790344108171,
+        "last_seen": 1790346248216,
         "online": true,
         "ready": {
           "control": true,

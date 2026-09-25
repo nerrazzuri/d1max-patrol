@@ -28,6 +28,11 @@
         "map_id": "estate-1",
         "map_version": "7"
       },
+      "release_activate": {},
+      "release_install": {
+        "current": "2026-09-20-aaaaaa"
+      },
+      "release_rollback": {},
       "teleop": {
         "max_vx": 0.5,
         "max_wz": 0.75
@@ -38,8 +43,8 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-1d8787e6c1d6",
-      "issued_at": 1790344107578,
+      "command_id": "cmd-d4048294ff23",
+      "issued_at": 1790346247623,
       "issued_by": "alice",
       "kind": "goto",
       "payload": {
@@ -55,28 +60,28 @@
       },
       "priority": 60,
       "robot_id": "A",
-      "task_id": "task-693b9c14e5e9"
+      "task_id": "task-69c13b9e4d3a"
     }
   ],
   "events": [
     {
-      "boot_id": "boot-de34143841",
+      "boot_id": "boot-10d6769c91",
       "data": {
         "faults": []
       },
       "kind": "robot_fault",
       "seq": 1,
-      "stamp": 1790344107464
+      "stamp": 1790346247495
     }
   ],
-  "expires_at": 1791344107369,
+  "expires_at": 1791346247411,
   "fresh": true,
   "revoked": false,
   "robot_id": "A",
   "status": {
-    "boot_id": "boot-de34143841",
+    "boot_id": "boot-10d6769c91",
     "control_epoch": 1,
-    "last_seen": 1790344107593,
+    "last_seen": 1790346247635,
     "online": true,
     "ready": {
       "control": true,
@@ -88,7 +93,7 @@
     "task": {
       "kind": "goto",
       "state": "running",
-      "task_id": "task-693b9c14e5e9"
+      "task_id": "task-69c13b9e4d3a"
     }
   }
 }

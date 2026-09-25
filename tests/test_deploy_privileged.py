@@ -222,7 +222,7 @@ def test_校验的是root目录里的那份拷贝而不是源(tmp_path):
     assert 'validate_unit "$TMP"' in 文本
     assert 'validate_unit "$src"' not in 文本
     assert "cp -P" in 文本 or "cp --no-dereference" in 文本
-    assert 'mktemp "$DEST.XXXXXX"' in 文本
+    assert 'mktemp "$dest.XXXXXX"' in 文本
 
 
 RESTART_NOW = ROOT / "deploy" / "d1max-restart-now"
@@ -340,7 +340,7 @@ def test_daemon_reload失败时说清楚单元已经落盘():
     """外部审核观察 1:mv 之后才 daemon-reload,reload 失败时盘上的单元已经换了,
     报错不能让人以为「单元没装上」。"""
     文本 = HELPER.read_text(encoding="utf-8")
-    assert 'daemon-reload || die "单元已写入 $DEST,但 daemon-reload 失败' in 文本
+    assert 'daemon-reload || die "单元已写入 $dest,但 daemon-reload 失败' in 文本
 
 
 def test_不认识的子命令退64(tmp_path):
@@ -354,3 +354,50 @@ def test_sudoers只有那一行():
     if shutil.which("visudo"):
         got = subprocess.run(["visudo", "-cf", str(SUDOERS)], capture_output=True, text=True)
         assert got.returncode == 0, got.stderr + got.stdout
+
+
+# ------------------------------------------------------------ W00c5d:代理单元
+
+AGENT_UNIT = (ROOT / "deploy" / "d1max-agent.service").read_text(encoding="utf-8")
+
+
+def _代理机器(tmp_path: Path, *, unit: str = AGENT_UNIT) -> tuple[Path, Path]:
+    root = tmp_path / "opt"
+    src = root / "releases" / NAME / "deploy" / "d1max-agent.service"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(unit, encoding="utf-8")
+    dest = tmp_path / "etc" / "systemd" / "d1max-agent.service"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    return root, dest
+
+
+def test_代理单元_仓库里那份过得了校验_第二次unchanged(tmp_path):
+    root, dest = _代理机器(tmp_path)
+    got = _跑("install-agent-unit", NAME, root=root, dest=dest)
+    assert got.returncode == 0, got.stderr
+    assert got.stdout.strip().splitlines()[-1] == "installed"
+    assert dest.read_text(encoding="utf-8") == AGENT_UNIT
+    again = _跑("install-agent-unit", NAME, root=root, dest=dest)
+    assert again.stdout.strip().splitlines()[-1] == "unchanged"
+
+
+@pytest.mark.parametrize("bad", [
+    AGENT_UNIT.replace("ConditionPathExists=/etc/d1max/registration.json",
+                       "ConditionPathExists=/etc/shadow"),
+    AGENT_UNIT.replace("[Service]\n",
+                       "[Service]\nConditionPathExists=/etc/d1max/registration.json\n"),
+    AGENT_UNIT.replace("User=robot", "User=root"),
+    AGENT_UNIT.replace("ExecStartPre=-/opt/d1max/bin/python",
+                       "ExecStartPre=+/opt/d1max/bin/python"),
+])
+def test_代理单元_越权的写法照样拒(tmp_path, bad):
+    root, dest = _代理机器(tmp_path, unit=bad)
+    got = _跑("install-agent-unit", NAME, root=root, dest=dest)
+    assert got.returncode != 0 and not dest.exists(), got.stdout
+
+
+def test_代理单元_参数个数严查_版本名过闸(tmp_path):
+    root, dest = _代理机器(tmp_path)
+    assert _跑("install-agent-unit", root=root, dest=dest).returncode != 0
+    assert _跑("install-agent-unit", NAME, "x", root=root, dest=dest).returncode != 0
+    assert _跑("install-agent-unit", "../../etc", root=root, dest=dest).returncode != 0

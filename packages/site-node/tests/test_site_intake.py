@@ -55,6 +55,9 @@ class 站:
         ctx = server_context(cert=ca.srv[0], key=ca.srv[1], ca=ca.ca_cert, crl=ca.crl)
         self.intake = IntakeServer(host="127.0.0.1", port=0, ctx=ctx, db=self.db,
                                    store=self.store, now_ms=lambda: NOW, maps=self.maps)
+        from d1max_site.releases import ReleaseCatalog
+        self.releases = ReleaseCatalog(tmp_path / "site", self.db, now_ms=lambda: NOW)
+        self.intake.releases = self.releases
         self.intake.start()
 
     def close(self):
@@ -341,3 +344,32 @@ def test_站点永远不收的_狗隔离不再重试_这一趟留着_站点出�
     items = {i.key.split("/")[-1]: i for i in box.queue.all()}
     assert items["坏\x01名.jpg"].refused and items["events.jsonl"].done
     box.close()
+
+
+
+# ------------------------------------------------------------ W00c5d 第三部分:发布包
+
+def test_狗从站点下载发布包_核对落槽_吊销的狗下不到(站点, ca, tmp_path):
+    from test_site_releases import NAME, 做包
+
+    from d1max_agent.engine import release as rel
+    from d1max_agent.release_ops import SENTINEL, ReleaseOpError, ReleaseOps, https_fetch
+    站点.releases.add(做包(tmp_path))
+    ref = 站点.releases.get(NAME)
+
+    def build(pkg, slot):
+        (slot / "venv").mkdir(parents=True)
+        (slot / "venv" / SENTINEL).write_text("ok")
+
+    def ops(bundle, root):
+        return ReleaseOps(rel.Layout(root=tmp_path / root),
+                          fetch=https_fetch(站点.intake.url, _ctx(ca, bundle)), privileged=None,
+                          build=build, work=tmp_path / root / "dl", now_ms=lambda: NOW,
+                          restart=lambda: None)
+    a = ops(ca.a, "dogA")
+    a.install(ref)
+    assert a.ready(NAME)
+    assert (tmp_path / "dogA" / "releases" / NAME / "src" / "x.py").is_file()
+    站点.reg.revoke("B")
+    with pytest.raises(ReleaseOpError):
+        ops(ca.b, "dogB").install(ref)

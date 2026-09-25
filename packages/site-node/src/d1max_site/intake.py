@@ -60,6 +60,8 @@ class IntakeServer:
         self.store = store
         #: W00c5d 第二部分:地图目录(收狗建的图、录包;给狗下载图)。
         self.maps = maps
+        #: W00c5d 第三部分:发布目录(给狗下载发布包)。
+        self.releases = None
         #: 永远不收的一块:``(狗, 一趟, 文件, 原因)``(主程序接到告警台)。
         self.on_refused: Callable[[str, str, str, str], None] | None = None
         self._now = now_ms
@@ -134,6 +136,14 @@ class _Handler(TlsHandlerMixin):
         robot = self.site.robot_for(self.connection.getpeercert(binary_form=True))
         if robot is None:
             return self._later(403, "证书不认识或已吊销")
+        if len(parts) == 3 and parts[1] == "releases" and self.site.releases is not None \
+                and parts[2].endswith(".tar.gz"):
+            from d1max_site.releases import ReleaseCatalogError
+            try:
+                path = self.site.releases.file_path(unquote(parts[2])[:-len(".tar.gz")])
+            except ReleaseCatalogError as exc:
+                return self._refuse(404, str(exc))
+            return self._stream(path)
         if len(parts) != 5 or parts[1] != "maps" or self.site.maps is None:
             return self._refuse(404, "没有这个")
         try:
@@ -141,6 +151,9 @@ class _Handler(TlsHandlerMixin):
                                             unquote(parts[4]))
         except MapError as exc:
             return self._refuse(404, str(exc))
+        return self._stream(path)
+
+    def _stream(self, path) -> None:
         size = path.stat().st_size
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")

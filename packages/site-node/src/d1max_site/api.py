@@ -86,6 +86,8 @@ _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,30
 _EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
 #: W00c5d 第二部分:给狗下发图、录包、重建。
 _MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build)$")
+#: W00c5d 第三部分:给狗装、切、退版本。
+_RELCMD = re.compile(r"^/api/robots/([^/]{1,64})/release$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
 
 
@@ -113,6 +115,7 @@ class SiteApi:
                  scheduler: Any = None, standby: Any = None, incidents: Any = None,
                  alerts: Any = None, video: Any = None, teleop: Any = None,
                  runs: Any = None, backup: Any = None, maps: Any = None,
+                 releases: Any = None,
                  now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
@@ -133,6 +136,8 @@ class SiteApi:
         self.backup = backup
         #: W00c5d 第二部分:地图目录。
         self.maps = maps
+        #: W00c5d 第三部分:发布目录。
+        self.releases = releases
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
         self._stopping = threading.Event()
@@ -309,6 +314,8 @@ class _Handler(TlsHandlerMixin):
                 return self._runs(method, path, user)
             if path == "/api/maps" or _MAPCMD.match(path):
                 return self._maps(method, path, user)
+            if path == "/api/releases" or _RELCMD.match(path):
+                return self._releases(method, path, user)
             m = _TELEOP.match(path)
             if m is not None:
                 robot_id = unquote(m.group(1))
@@ -782,6 +789,49 @@ class _Handler(TlsHandlerMixin):
         except ContractError as exc:
             raise HttpError(400, str(exc)) from exc
         self._audit_detail = {k: v for k, v in payload.items() if k != "files"}
+        return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
+            robot_id, kind, payload, issued_by=str(user))))
+
+    def _releases(self, method: str, path: str, user) -> None:
+        """发布(W00c5d 第三部分)。看:``view``(每一版、每台狗在跑哪一版);装、切、退:``manage``。
+        狗收下就回,做完发事件,失败出 ``release_failed`` 告警;切、退要狗空闲(狗自己查)。"""
+        from d1max_contract.errors import ContractError
+        from d1max_contract.releases import check_release_name
+        from d1max_site.releases import ReleaseCatalogError
+        cat = self.site.releases
+        if cat is None:
+            raise HttpError(404, "这个站点没开发布目录")
+        if path == "/api/releases" and method == "GET":
+            self._need(user, VIEW)
+            robots = {rid: ((c.capabilities.tasks.get("release_install") or {}).get("current")
+                            if c.capabilities is not None else None)
+                      for rid, c in self.site.dispatcher.clients.items()}
+            return self._send_json(200, {"releases": cat.list(), "robots": robots})
+        m = _RELCMD.match(path)
+        if m is None or method != "POST":
+            raise HttpError(404, f"没有 {method} {path}")
+        self._need(user, MANAGE)
+        robot_id = unquote(m.group(1))
+        if not SAFE_ID.match(robot_id):
+            raise HttpError(404, "没有这台狗")
+        self._audit_target = robot_id
+        d = self._body()
+        action = d.get("action")
+        try:
+            if action == "install":
+                ref = cat.get(check_release_name(d.get("name")))
+                kind, payload = "release_install", ref.to_wire()
+            elif action == "activate":
+                kind, payload = "release_activate", {"name": check_release_name(d.get("name"))}
+            elif action == "rollback":
+                kind, payload = "release_rollback", {}
+            else:
+                raise HttpError(400, "action 只能是 install / activate / rollback")
+        except ReleaseCatalogError as exc:
+            raise HttpError(404, str(exc)) from exc
+        except ContractError as exc:
+            raise HttpError(400, str(exc)) from exc
+        self._audit_detail = {"action": action, "name": str(d.get("name", ""))[:32]}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
 

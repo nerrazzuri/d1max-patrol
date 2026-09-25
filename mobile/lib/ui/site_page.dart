@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
 import 'site_maps.dart';
+import 'site_releases.dart';
 import 'site_runs.dart';
 import 'site_teleop.dart';
 import 'site_video.dart';
@@ -324,6 +325,12 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
             icon: const Icon(Icons.notifications_active),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteWatchPage(api: widget.api)))),
+        IconButton(
+            key: const Key('open-releases'),
+            tooltip: '版本',
+            icon: const Icon(Icons.system_update),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute<void>(builder: (_) => SiteReleasesPage(api: widget.api)))),
         IconButton(
             key: const Key('open-maps'),
             tooltip: '地图',

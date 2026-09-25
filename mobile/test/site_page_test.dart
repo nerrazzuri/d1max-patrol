@@ -173,6 +173,14 @@ class FakeApi implements SiteApi {
   @override
   Future<Map<String, dynamic>> maps() async => siteFixture('site_maps');
   @override
+  Future<Map<String, dynamic>> releases() async => siteFixture('site_releases');
+  @override
+  Future<Map<String, dynamic>> releaseAction(String robotId, String action,
+      {String name = ''}) async {
+    calls.add('release $robotId $action $name');
+    return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
+  }
+  @override
   Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version) async {
     calls.add('map $robotId $mapId:$version');
     return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};

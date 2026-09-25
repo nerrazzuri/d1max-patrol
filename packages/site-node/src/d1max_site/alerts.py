@@ -101,6 +101,8 @@ LEVEL_OF: dict[str, Level] = {
     "map_failed": Level.P2,
     # 站点永远不收狗传来的某个文件(名字不合规、不是狗能产生的):那一趟留在狗上,要人看(W00c5d)。
     "upload_refused": Level.P2,
+    # 站点下发的版本没装上、切不过去、退不回去(W00c5d 第三部分):狗照旧跑原来那一版,要人看。
+    "release_failed": Level.P2,
     "upload_backlog": Level.P2,
     "bundle_lag": Level.P2,
     "clock_skew": Level.P2,

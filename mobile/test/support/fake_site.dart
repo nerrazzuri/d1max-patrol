@@ -145,6 +145,8 @@ class FakeSite {
       out = siteFixture('site_alerts');
     } else if (path == '/api/watch/summary') {
       out = siteFixture('site_watch_summary');
+    } else if (path == '/api/releases') {
+      out = siteFixture('site_releases');
     } else if (path == '/api/maps') {
       out = siteFixture('site_maps');
     } else if (path == '/api/runs') {

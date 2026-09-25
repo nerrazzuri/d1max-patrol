@@ -204,6 +204,13 @@ class SiteAlertSources:
                 # 人点的中止是 task_aborted,不报;失败(引擎自己收的尾)一律报,认不出原因也报。
                 self.desk.raise_alert(kind="run_abort", robot=rid, title="整趟中止了",
                                       detail=reason)
+        elif e.kind in ("release_install_failed", "release_activate_failed",
+                        "release_rollback_failed"):
+            what = {"release_install_failed": "装版本", "release_activate_failed": "切版本",
+                    "release_rollback_failed": "退版本"}[e.kind]
+            self.desk.raise_alert(kind="release_failed", robot=rid,
+                                  title=f"{what}没成:{d.get('name', '')}",
+                                  detail=str(d.get("reason", ""))[:300])
         elif e.kind in ("map_activate_failed", "map_build_failed"):
             what = "换图" if e.kind == "map_activate_failed" else "重建"
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"

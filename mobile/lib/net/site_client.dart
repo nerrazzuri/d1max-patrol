@@ -146,6 +146,12 @@ abstract class SiteApi {
 
   /// 拿一个录包在狗上重建一张图。
   Future<Map<String, dynamic>> buildMap(String robotId, String bag, String mapId, String version);
+
+  /// 站点的发布目录与每台狗在跑哪一版（W00c5d 第三部分）：`{releases: [...], robots: {id: 版本}}`。
+  Future<Map<String, dynamic>> releases();
+
+  /// 给一台狗装（install）、切（activate）、退（rollback）一版。
+  Future<Map<String, dynamic>> releaseAction(String robotId, String action, {String name = ''});
   Stream<Map<String, dynamic>> events();
   void close();
 }
@@ -486,6 +492,21 @@ class SiteClient implements SiteApi {
           String robotId, String bag, String mapId, String version) async =>
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/map_build',
           <String, dynamic>{'bag': bag, 'map_id': mapId, 'version': version}));
+
+  @override
+  Future<Map<String, dynamic>> releases() async {
+    final d = _map(await _send('GET', '/api/releases'));
+    if (d['releases'] is! List || d['robots'] is! Map) {
+      throw const FormatException('站点回的发布目录里没有 releases / robots');
+    }
+    return d;
+  }
+
+  @override
+  Future<Map<String, dynamic>> releaseAction(String robotId, String action,
+          {String name = ''}) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/release',
+          <String, dynamic>{'action': action, if (name.isNotEmpty) 'name': name}));
 
   @override
   Future<Map<String, dynamic>> judgeRun(int id) async =>

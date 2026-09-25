@@ -67,7 +67,7 @@ class AgentRuntime:
                  home: Pose | None = None, runs_root: Path | None = None,
                  monotonic: Callable[[], float] | None = None, video: Any = None,
                  storage_facts: Callable[[], StorageFacts | None] | None = None,
-                 maps: Any = None, mapper: Any = None) -> None:
+                 maps: Any = None, mapper: Any = None, releases: Any = None) -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -105,6 +105,8 @@ class AgentRuntime:
         #: 地图(W00c5d 第二部分):正在用的那一张(``MapKeeper``)、录包与重建(``MappingService``)。
         self.maps = maps
         self.mapper = mapper
+        #: 发布(W00c5d 第三部分):``ReleaseOps``。
+        self.releases = releases
         self._map_job: asyncio.Task | None = None
         self.processor.map_hook = self._map_command
         #: 丢掉的遥控帧计数(不合契约的)。
@@ -203,6 +205,11 @@ class AgentRuntime:
         if self.mapper is not None:
             out["mapping"] = {}
             out["map_build"] = {}
+        if self.releases is not None:
+            # 站点据此显示每台狗在跑哪一版。
+            out["release_install"] = {"current": self.releases.current()}
+            out["release_activate"] = {}
+            out["release_rollback"] = {}
         return out
 
     async def _map_command(self, cmd: Command) -> str:
@@ -211,6 +218,8 @@ class AgentRuntime:
         kind = cmd.kind
         if kind not in self._extra_tasks():
             return "unsupported"
+        if kind.startswith("release_"):
+            return self._release_command(cmd)
         try:
             if kind == "map_activate":
                 ref = MapRef.from_wire(cmd.payload)
@@ -244,6 +253,56 @@ class AgentRuntime:
         self._map_job = asyncio.get_running_loop().create_task(
             self._build(bag, map_id, version, cmd.task_id))
         return ""
+
+    def _release_command(self, cmd: Command) -> str:
+        """发布命令(W00c5d 第三部分):装在后台做;切、退要空闲(不跑任务、不在换图/装包)。"""
+        from d1max_contract.releases import ReleaseRef, check_release_name
+        try:
+            if cmd.kind == "release_install":
+                ref = ReleaseRef.from_wire(cmd.payload)
+            elif cmd.kind == "release_activate":
+                name = check_release_name(cmd.payload.get("name"))
+        except ContractError as exc:
+            return f"payload: {exc}"
+        if self._map_busy():
+            return "busy"
+        if cmd.kind == "release_install":
+            job = self._release_install(ref, cmd.task_id)
+        else:
+            if not self._tasks_idle():
+                return "busy"                     # 重启那几秒里谁都停不了它:跑着任务不切、不退
+            if cmd.kind == "release_activate":
+                if not self.releases.ready(name):
+                    return "not_installed"
+                job = self._release_switch("activate", name, cmd.task_id)
+            else:
+                job = self._release_switch("rollback", "", cmd.task_id)
+        self._map_job = asyncio.get_running_loop().create_task(job)
+        return ""
+
+    async def _release_install(self, ref, task_id: str) -> None:
+        base = {"task_id": task_id, "name": ref.name}
+        try:
+            await asyncio.to_thread(self.releases.install, ref)
+            self.events.emit("release_installed", base)
+        except Exception as exc:  # noqa: BLE001 - 装不上:原因发给站点
+            log.warning("装版本没成(%s):%s", ref.name, exc)
+            self.events.emit("release_install_failed",
+                             base | {"reason": f"{type(exc).__name__}: {exc}"[:200]})
+
+    async def _release_switch(self, what: str, name: str, task_id: str) -> None:
+        base = {"task_id": task_id, "name": name}
+        try:
+            if what == "activate":
+                got = await asyncio.to_thread(self.releases.activate, name)
+                self.events.emit("release_activating", base | {"unit": str(got.get("unit"))})
+            else:
+                back = await asyncio.to_thread(self.releases.rollback)
+                self.events.emit("release_rolling_back", base | {"name": back})
+        except Exception as exc:  # noqa: BLE001 - 切不过去:原因发给站点,照旧跑这一版
+            log.warning("%s 没成:%s", what, exc)
+            self.events.emit(f"release_{what}_failed",
+                             base | {"reason": f"{type(exc).__name__}: {exc}"[:200]})
 
     async def _activate(self, ref, task_id: str) -> None:
         from d1max_agent.maps import MapInstallError
@@ -339,6 +398,17 @@ class AgentRuntime:
         await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
         await self._load_active_map()
         await self._publish_caps()
+        if self.releases is not None:
+            # 起来、连上站点了:在途的那一次升级算成(W00c5d 第三部分)。起不来的那种,
+            # 开机守卫数够次数已经退回上一版了。
+            try:
+                done = self.releases.commit_if_pending()
+            except Exception:
+                log.exception("提交升级失败")
+                done = None
+            if done:
+                self.events.emit("release_committed", {"name": done})
+                await self._publish_caps()
         await self._publish_status(force=True)
 
     async def close(self) -> None:
