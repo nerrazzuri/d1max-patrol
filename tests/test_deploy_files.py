@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -1308,17 +1309,73 @@ def test_agent单元的形状():
     单元 = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
     段 = _按段(单元)
     assert "User" in 段["[Service]"] and "User=robot" in 单元
-    assert "ExecStart=/opt/d1max/current/venv/bin/d1max-agent" in 单元
+    # W00c5d 第三部分内部评审 B1:参数在这一版带的启动脚本里,单元只指着它(退回时参数跟着回来)。
+    assert "\nExecStart=/opt/d1max/current/deploy/d1max-agent-start\n" in 单元
+    脚本 = (DEPLOY / "d1max-agent-start").read_text(encoding="utf-8")
     for f in ("ca.crt", "robot.crt", "robot.key"):            # W00c1:站点 broker 要 mTLS
-        assert f"/etc/d1max/tls/{f}" in 单元, f
+        assert f"/etc/d1max/tls/{f}" in 脚本, f
     assert "Environment=D1MAX_DATA_ROOT=/var/lib/d1max" in 单元
     assert "EnvironmentFile=-/etc/d1max/env" in 单元
     # W00c5d(决策 8):运行记录落发件箱;缺省在数据根下,env 文件可以改到临时硬盘。
-    assert "--outbox ${D1MAX_OUTBOX}" in 单元 and "--runs-root" not in 单元
+    assert '--outbox "${D1MAX_OUTBOX:' in 脚本 and "--runs-root" not in 脚本
     assert 单元.index("Environment=D1MAX_OUTBOX=") < 单元.index("EnvironmentFile=")
     assert "Restart=always" in 单元 and "RestartSec=" in 单元
     assert "StartLimitIntervalSec" in 段["[Unit]"]
     assert "WantedBy" in 段["[Install]"]
+
+
+def _启动脚本跑一遍(tmp_path, env: dict[str, str]) -> subprocess.CompletedProcess:
+    """假的双槽:releases/<版本>/{deploy/d1max-agent-start, venv/bin/d1max-agent(打出参数)},
+    current 链指着它;从 current 那条路径起脚本(跟单元一样)。"""
+    import os
+    import shutil as _sh
+    slot = tmp_path / "opt" / "releases" / "2026-09-25-bbbbbb"
+    (slot / "deploy").mkdir(parents=True)
+    (slot / "venv" / "bin").mkdir(parents=True)
+    _sh.copy2(DEPLOY / "d1max-agent-start", slot / "deploy" / "d1max-agent-start")
+    fake = slot / "venv" / "bin" / "d1max-agent"
+    fake.write_text('#!/bin/sh\necho "$0"\nfor a in "$@"; do echo "$a"; done\n')
+    fake.chmod(0o755)
+    (tmp_path / "opt" / "current").symlink_to(slot)
+    return subprocess.run([str(tmp_path / "opt" / "current" / "deploy" / "d1max-agent-start")],
+                          capture_output=True, text=True, timeout=10,
+                          env={"PATH": os.environ["PATH"], **env})
+
+
+def test_agent启动脚本_用自己那一版的代码_参数从env来(tmp_path):
+    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
+            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0"}
+    got = _启动脚本跑一遍(tmp_path, base)
+    assert got.returncode == 0, got.stderr
+    lines = got.stdout.splitlines()
+    assert lines[0].endswith("/releases/2026-09-25-bbbbbb/venv/bin/d1max-agent"), \
+        "按脚本自己所在的那一版找代码,不再经过 current 链"
+    args = lines[1:]
+    assert args[args.index("--transport") + 1] == "mqtts://site:8883"
+    assert args[args.index("--hal") + 1] == "sim", "缺省仿真:W00d 真机验收过了才改"
+    assert args[args.index("--map") + 1] == "estate:1"
+    (tmp_path / "opt" / "current").unlink()
+    import shutil as _sh
+    _sh.rmtree(tmp_path / "opt")
+    more = {"D1MAX_HAL": "d1max", "D1MAX_AGENT_ARGS": "--mapping --sidecar 127.0.0.1:8090"}
+    got = _启动脚本跑一遍(tmp_path, base | more)
+    args = got.stdout.splitlines()[1:]
+    assert args[args.index("--hal") + 1] == "d1max"
+    assert args[-3:] == ["--mapping", "--sidecar", "127.0.0.1:8090"], "其余参数按空白拆开"
+
+
+def test_agent启动脚本_少了站点地址说清楚_不起(tmp_path):
+    got = _启动脚本跑一遍(tmp_path, {"D1MAX_OUTBOX": "/x", "D1MAX_MAP": "m:1",
+                                     "D1MAX_HOME": "0,0,0"})
+    assert got.returncode != 0 and "D1MAX_SITE_MQTT" in got.stderr and got.stdout == ""
+
+
+def test_agent启动脚本是可执行的_仓库里记着():
+    import os
+    assert os.access(DEPLOY / "d1max-agent-start", os.X_OK)
+    ls = subprocess.run(["git", "ls-files", "-s", "deploy/d1max-agent-start"], cwd=ROOT,
+                        capture_output=True, text=True).stdout
+    assert ls.startswith("100755"), "git 里要记成可执行:打包、下发之后还要能直接跑"
 
 
 def test_agent单元没有注册文件就不起_不在那儿每5秒崩一次():

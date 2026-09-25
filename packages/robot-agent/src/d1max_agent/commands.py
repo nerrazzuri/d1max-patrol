@@ -207,9 +207,18 @@ class CommandProcessor:
 
         task = self._factory(cmd)
         task.expires_at = cmd.expires_at
+        waited = False
         for b in blockers:
             if b is not None and not b.done:
                 await b.abort("preempted")
+                waited = True
+        if waited:
+            # 抢占要等(W00c5d 内部评审):等的时候可能开始换图、甚至换完了。醒来再查一遍地图版本
+            # 与准入,不然这一条按老地图排进去。
+            reason = self._check_payload(cmd) or \
+                (self.admit_hook(cmd) if self.admit_hook is not None else "")
+            if reason:
+                return self._finish(self._rej(cmd, reason))
         # pending 按优先级排(高的在前,同级按到达顺序)。
         self.pending.append(task)
         self.pending.sort(key=lambda t: -t.priority)

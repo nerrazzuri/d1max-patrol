@@ -81,6 +81,13 @@ def _cmd(kind, payload, cid, c):
     return Message(T.cmd, json.dumps(cmd.to_wire()).encode(), 1, False)
 
 
+def _abort(task_id, cid, c):
+    """中止按命令自己的 ``task_id`` 找任务。"""
+    cmd = Command(command_id=cid, task_id=task_id, kind="abort", issued_at=c.ms,
+                  expires_at=c.ms + 60_000, control_epoch=1, payload={})
+    return Message(T.cmd, json.dumps(cmd.to_wire()).encode(), 1, False)
+
+
 async def _跑(rt, broker, n=20, r=None, c=None):
     import asyncio
     for _ in range(n):
@@ -152,7 +159,7 @@ async def test_跑着任务先下载_等狗空下来才换_坏载荷拒(台):
     assert ears.by["cmd/ack"][-1]["result"] == "accepted", "收下:下载不挡任务"
     await _跑(rt, broker, 10, r, c)
     assert rt.loaded_map == ("m", "1"), "跑着任务不换坐标系"
-    await rt._on_cmd(_cmd("abort", {"task_id": "goto-c1"}, "c3", c))
+    await rt._on_cmd(_abort("goto-c1", "c3", c))
     for _ in range(80):
         await _跑(rt, broker, 5, r, c)
         if rt.loaded_map == ("m", "5"):
@@ -192,7 +199,7 @@ async def test_下载时照接任务_只有载入切坐标系那一小段不接(
     await rt._on_cmd(_cmd("goto", goto, "d2", c))
     await broker.drain()
     assert ears.by["cmd/ack"][-1]["result"] == "accepted", "下载不挡出警"
-    await rt._on_cmd(_cmd("abort", {"task_id": "goto-d2"}, "d2x", c))
+    await rt._on_cmd(_abort("goto-d2", "d2x", c))
     await _跑(rt, broker, 30, r, c)
     loading = asyncio.Event()
     release = asyncio.Event()
@@ -222,6 +229,20 @@ class 假发布:
         self.cur = "2026-09-20-aaaaaa"
         self.installed = set()
         self.calls = []
+        self.disk = True
+        self.rollable = True
+        self.note = None
+        self.fail = ""
+
+    def disk_ok(self, size):
+        return self.disk
+
+    def can_roll_back(self):
+        return self.rollable
+
+    def take_guard_note(self):
+        note, self.note = self.note, None
+        return note
 
     def current(self):
         return self.cur
@@ -235,8 +256,10 @@ class 假发布:
 
     def activate(self, name):
         self.calls.append(("activate", name))
+        if self.fail:
+            raise RuntimeError(self.fail)
         self.cur = name
-        return {"unit": "installed"}
+        return {"pending": {}}
 
     def rollback(self):
         self.calls.append(("rollback",))
@@ -352,7 +375,8 @@ async def test_盘满了不录包_没在录不停_隔离的让它再传(tmp_path
                       boot_id="b", home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono,
                       mapper=rec, storage_facts=lambda: facts["f"])
     retried = []
-    rt._outbox_retry = lambda: retried.append(1) or 3
+    import threading
+    rt._outbox_retry = lambda: retried.append(threading.current_thread()) or 3
     await rt.start()
     await rt._on_cmd(_cmd("mapping", {"action": "stop", "name": "yard"}, "m1", c))
     await broker.drain()
@@ -366,14 +390,14 @@ async def test_盘满了不录包_没在录不停_隔离的让它再传(tmp_path
     assert rec.calls == [("start", "yard")]
     await rt._on_cmd(_cmd("outbox_retry", {}, "o1", c))
     await _跑(rt, broker, n=3)
-    assert retried == [1] and ears.by["cmd/ack"][-1]["result"] == "accepted"
+    assert len(retried) == 1 and ears.by["cmd/ack"][-1]["result"] == "accepted"
+    assert retried[0] is not threading.main_thread(), "放隔离要等上传线程的锁:不在事件循环里等"
     got = [e for e in ears.by["event"] if e["kind"] == "outbox_retry"]
     assert got[-1]["data"]["released"] == 3
     await rt.close()
 
 
 async def test_发布_电量不够不切不退_盘满了不装(tmp_path):
-    from d1max_contract.storage import StorageFacts
     broker, c = MemoryBroker(), 钟()
     ears = 耳朵()
     st = MemoryTransport(broker, "site")
@@ -382,18 +406,20 @@ async def test_发布_电量不够不切不退_盘满了不装(tmp_path):
     rel = 假发布()
     new = "2026-09-25-bbbbbb"
     rel.installed.add(new)
+    rel.disk = False
     dog = SimRobot(now_ms=c)
-    full = StorageFacts(disk_used_ratio=0.95, outbox_bytes=10, outbox_cap_bytes=100,
-                        backlog_files=0, backlog_bytes=0, oldest_backlog_s=None)
     rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=dog,
                       store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"), boot_id="b",
-                      home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono, releases=rel,
-                      storage_facts=lambda: full)
+                      home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono, releases=rel)
     await rt.start()
     await rt._on_cmd(_cmd("release_install", {"name": "2026-09-26-cccccc", "sha256": "a" * 64,
                                               "size": 9}, "i1", c))
     await broker.drain()
-    assert ears.by["cmd/ack"][-1]["reason"] == "storage_full", "装要下载、建 venv:盘满了不装"
+    assert ears.by["cmd/ack"][-1]["reason"] == "storage_full", "双槽那块盘不够不装"
+    await rt._on_cmd(_cmd("release_activate", {"name": new}, "i2", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "storage_full", "切也要写在途标记:盘满不切"
+    rel.disk = True
     dog.inject_battery(29.0)
     for kind, payload in (("release_activate", {"name": new}), ("release_rollback", {})):
         await rt._on_cmd(_cmd(kind, payload, f"{kind}-1", c))
@@ -447,4 +473,92 @@ async def test_起来连上站点_在途的那次升级算成(tmp_path):
     await _跑(rt, broker, n=3)
     got = [e for e in ears.by["event"] if e["kind"] == "release_committed"]
     assert got and got[-1]["data"]["name"] == "2026-09-25-bbbbbb"
+    await rt.close()
+
+
+async def _发布台(tmp_path, **kw):
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rel = 假发布()
+    rel.installed.add("2026-09-25-bbbbbb")
+    dog = SimRobot(now_ms=c)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=dog,
+                      store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"), boot_id="b",
+                      home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono, releases=rel,
+                      **kw)
+    return broker, c, ears, rel, dog, rt
+
+
+async def test_切版本收下之后到重启前什么都不接_切不成就放开(tmp_path):
+    from d1max_contract.messages import MapPose
+    broker, c, ears, rel, dog, rt = await _发布台(tmp_path, mapper=假录包())
+    await rt.start()
+    new = "2026-09-25-bbbbbb"
+    goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=1.0, y=0.0,
+                              yaw=0.0).to_wire()}
+    rel.fail = "盘坏了"
+    await rt._on_cmd(_cmd("release_activate", {"name": new}, "s1", c))
+    await rt._on_cmd(_cmd("goto", goto, "s2", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "restarting", "收下切版本之后不接任务"
+    await _跑(rt, broker, n=3)
+    assert any(e["kind"] == "release_activate_failed" for e in ears.by["event"])
+    await rt._on_cmd(_cmd("goto", goto, "s3", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["result"] == "accepted", "切不成:放开"
+    await rt._on_cmd(_abort("goto-s3", "s3x", c))
+    await _跑(rt, broker, 30, dog, c)
+    assert rt._tasks_idle()
+    rel.fail = ""
+    await rt._on_cmd(_cmd("release_activate", {"name": new}, "s4", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["result"] == "accepted", ears.by["cmd/ack"][-1]["reason"]
+    await rt._on_cmd(_cmd("release_install", {"name": new, "sha256": "a" * 64, "size": 9},
+                          "s5", c))
+    await rt._on_cmd(_cmd("mapping", {"action": "start", "name": "x"}, "s6", c))
+    await broker.drain()
+    assert [a["reason"] for a in ears.by["cmd/ack"][-2:]] == ["restarting", "restarting"]
+    await rt.close()
+
+
+async def test_切版本_录包时不切_电量读不到不切_在跑的不切_没得退不退(tmp_path):
+    broker, c, ears, rel, dog, rt = await _发布台(tmp_path, mapper=假录包())
+    await rt.start()
+    new = "2026-09-25-bbbbbb"
+    rt.mapper.recording = True
+    await rt._on_cmd(_cmd("release_activate", {"name": new}, "a1", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "busy", "重启会悄悄掐掉录包"
+    rt.mapper.recording = False
+
+    async def 读不到():
+        raise RuntimeError("还没收到第一帧")
+    real = dog.battery
+    dog.battery = 读不到
+    await rt._on_cmd(_cmd("release_activate", {"name": new}, "a2", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "battery_unknown"
+    dog.battery = real
+    await rt._on_cmd(_cmd("release_activate", {"name": rel.cur}, "a3", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "already_running"
+    rel.rollable = False
+    await rt._on_cmd(_cmd("release_rollback", {}, "a4", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "nothing_to_roll_back"
+    assert rel.calls == []
+    await rt.close()
+
+
+async def test_开机守卫退回过_连上站点就报(tmp_path):
+    broker, c, ears, rel, dog, rt = await _发布台(tmp_path)
+    rel.note = {"from": "2026-09-25-bbbbbb", "to": "2026-09-20-aaaaaa", "attempts": 3,
+                "at_ms": 1}
+    await rt.start()
+    await _跑(rt, broker, n=3)
+    got = [e for e in ears.by["event"] if e["kind"] == "release_rolled_back"]
+    assert got and got[-1]["data"]["from"] == "2026-09-25-bbbbbb"
     await rt.close()

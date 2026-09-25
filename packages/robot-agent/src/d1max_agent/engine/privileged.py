@@ -85,26 +85,6 @@ class Privileged:
         lines = (got.stdout or "").strip().splitlines()
         return lines[-1] if lines else "installed"
 
-    def install_agent_unit(self, name: str) -> str:
-        """W00c5d:让助手把 ``releases/<name>/deploy/d1max-agent.service`` 装进系统(同一道校验)。
-        回 ``installed`` / ``unchanged``;助手不在回 ``skipped: …``;
-        被拒、超时 → :class:`PrivilegedError`。"""
-        if not self.present():
-            return ("skipped: 没有特权助手,代理单元没更新 —— "
-                    "重跑一次 deploy/install.sh 会装上它")
-        try:
-            got = self.runner(self._argv("install-agent-unit", name), capture_output=True,
-                              text=True, timeout=_INSTALL_TIMEOUT_S)
-        except subprocess.TimeoutExpired as exc:
-            raise PrivilegedError(f"装代理单元超时({_INSTALL_TIMEOUT_S:g}s)") from exc
-        except OSError as exc:
-            raise PrivilegedError(f"跑不起特权助手: {exc}") from exc
-        if got.returncode != 0:
-            why = (got.stderr or got.stdout or "").strip() or f"退出码 {got.returncode}"
-            raise PrivilegedError(why)
-        lines = (got.stdout or "").strip().splitlines()
-        return lines[-1] if lines else "installed"
-
     def restart_argv(self, plan: RestartPlan) -> tuple[str, ...]:
         """按方案给出真正要起的命令。助手在就走它;不在就是方案里那条裸命令。"""
         if not self.present():

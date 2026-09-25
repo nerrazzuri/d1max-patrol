@@ -36,6 +36,18 @@ class 假发布:
     def commit_if_pending(self):
         return None
 
+    def disk_ok(self, size):
+        return True
+
+    def can_roll_back(self):
+        return True
+
+    note = None
+
+    def take_guard_note(self):
+        note, self.note = self.note, None
+        return note
+
 
 @pytest.fixture
 def 站点(tmp_path):
@@ -83,3 +95,16 @@ def test_装不上_站点出告警(站点, tmp_path):
     got = _等(lambda: [a for a in s.req("GET", "/api/alerts", token=alice)[1]["alerts"]
                        if a["kind"] == "release_failed"], timeout=8)
     assert "盘满了" in got[0]["detail"]
+
+
+def test_狗上开机守卫退回了上一版_站点出告警(tmp_path):
+    ops = 假发布()
+    ops.note = {"from": NAME, "to": "2026-09-20-aaaaaa", "attempts": 3, "at_ms": 1}
+    s = 站(tmp_path, alerts=True, releases={"ops": ops})
+    try:
+        alice = _登(s, "alice")
+        got = _等(lambda: [a for a in s.req("GET", "/api/alerts", token=alice)[1]["alerts"]
+                           if a["kind"] == "release_failed"], timeout=8)
+        assert "退回" in got[0]["title"] and NAME in got[0]["title"]
+    finally:
+        s.close()

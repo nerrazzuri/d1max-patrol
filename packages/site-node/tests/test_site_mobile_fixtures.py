@@ -56,6 +56,9 @@ class _假发布:
     def commit_if_pending(self):
         return None
 
+    def take_guard_note(self):
+        return None
+
 
 def _collect(tmp_path) -> dict[str, object]:
     from test_site_maps_api import 假建图

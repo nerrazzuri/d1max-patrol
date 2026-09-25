@@ -89,13 +89,31 @@ class MapCatalog:
         return False
 
     def build_in_flight(self, map_id: str, version: str) -> bool:
-        """站点已经让某台狗建这个版本了(还没收齐登记):再派一台建同一个版本要挡。"""
-        for r in self.db.query("SELECT payload FROM commands WHERE kind='map_build'"):
+        """站点已经让某台狗建这个版本了(还没收齐登记):再派一台建同一个版本要挡。
+        狗回了 ``map_build_failed``(或者回执拒了)的那一次不算 —— 不然这个版本号就永远用不了了。"""
+        for r in self.db.query("SELECT robot_id, payload, ack_result FROM commands "
+                               "WHERE kind='map_build'"):
             try:
                 p = json.loads(r["payload"])
             except (TypeError, ValueError):
                 continue
-            if isinstance(p, dict) and (p.get("map_id"), p.get("version")) == (map_id, version):
+            if not isinstance(p, dict) or (p.get("map_id"), p.get("version")) != (map_id,
+                                                                                  version):
+                continue
+            if r["ack_result"] not in (None, "", "accepted"):
+                continue                          # 狗没接
+            if not self._build_failed(r["robot_id"], map_id, version):
+                return True
+        return False
+
+    def _build_failed(self, robot_id: str, map_id: str, version: str) -> bool:
+        for e in self.db.query("SELECT data FROM events WHERE robot_id=? "
+                               "AND kind='map_build_failed'", (robot_id,)):
+            try:
+                d = json.loads(e["data"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(d, dict) and (d.get("map_id"), d.get("version")) == (map_id, version):
                 return True
         return False
 

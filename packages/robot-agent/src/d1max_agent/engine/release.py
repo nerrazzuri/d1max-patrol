@@ -315,7 +315,7 @@ def _check_free(dest: Path, *, force: bool) -> None:
         raise ReleaseError(f"{dest} 已经存在而且不是空的 —— 要盖掉就加 --force")
 
 
-def _copy_tree_into(src: Path, staging: Path) -> str:
+def _copy_tree_into(src: Path, staging: Path, wheels: Path | None = None) -> str:
     """按白名单把 ``src`` 拷进 ``staging``,回整棵树的指纹。
 
     指纹在这儿算,**也就是拷完之后、写 ``release.json`` 之前**。顺序反了的话
@@ -335,6 +335,15 @@ def _copy_tree_into(src: Path, staging: Path) -> str:
         else:
             raise ReleaseError(f"源目录里少了 {entry},这棵树打出来的包"
                                f"在狗上起不来: {source}")
+    if wheels is not None:
+        # 离线轮子(W00c5d 第三部分内部评审):现场的狗上不了网,站点下发的版本建 venv 只能从包里
+        # 带的轮子装(``release_ops.build_venv`` 见到 ``wheels/`` 就 ``--no-index`` 只从它装)。
+        whl = sorted(Path(wheels).glob("*.whl"))
+        if not whl:
+            raise ReleaseError(f"{wheels} 里没有 .whl")
+        (staging / "wheels").mkdir()
+        for w in whl:
+            shutil.copy2(w, staging / "wheels" / w.name)
     return tree_sha256(staging)
 
 
@@ -355,7 +364,8 @@ def _write_manifest(where: Path, manifest: ReleaseManifest) -> None:
 
 
 def pack(src: Path | str, out_parent: Path | str, *, name: str | None = None,
-         version: str | None = None, now_ms: int, force: bool = False) -> Path:
+         version: str | None = None, now_ms: int, force: bool = False,
+         wheels: Path | str | None = None) -> Path:
     """把一棵源码树打成一个 ``deploy/install.sh`` 收得下的包目录。
 
     **这是造包的唯一真理源。** 在这之前,全仓库唯一会造包的是测试里的私有
@@ -383,6 +393,8 @@ def pack(src: Path | str, out_parent: Path | str, *, name: str | None = None,
     :param version: 默认从 ``src/pyproject.toml`` 的 ``[project] version`` 读。
     :param now_ms: 打包时刻。日期和 ``built_at`` 都从它来,**可注入**。
     :param force: 输出目录已经存在且非空时照打(先删掉它)。默认不覆盖。
+    :param wheels: 离线轮子目录(``*.whl``,要有 setuptools、wheel 与全部依赖,跟狗的
+        Python 与架构对得上)。给了就拷进包的 ``wheels/``,算进指纹。
     :return: 打好的包目录。
     """
     # **局部 import,不是随手写的。** ``bundle.py`` 在模块顶部
@@ -413,7 +425,7 @@ def pack(src: Path | str, out_parent: Path | str, *, name: str | None = None,
     staging = out_parent / _PACKING_DIR
     shutil.rmtree(staging, ignore_errors=True)
     try:
-        content = _copy_tree_into(src, staging)
+        content = _copy_tree_into(src, staging, None if wheels is None else Path(wheels))
         if name is None:
             # git 短哈希优先:它认得出"这包是哪次提交打的",内容哈希认不出。
             name = f"{stamp.strftime('%Y-%m-%d')}-{_git_short(src) or content[:8]}"
@@ -529,6 +541,34 @@ def write_pending(layout: Layout, pending: Pending) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, layout.pending)
+
+
+#: 开机守卫退回上一版时留的条子(W00c5d 第三部分):代理起来报给站点、删掉。
+GUARD_NOTE_FILE = "rolled_back.json"
+
+
+def write_guard_note(layout: Layout, note: dict) -> None:
+    tmp = layout.root / (GUARD_NOTE_FILE + ".tmp")
+    tmp.write_text(json.dumps(note, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, layout.root / GUARD_NOTE_FILE)
+
+
+def take_guard_note(layout: Layout) -> dict | None:
+    """读出并删掉守卫留的条子;没有(或读不懂)回 None —— 读不懂也删,不然每次起来都报一遍。"""
+    path = layout.root / GUARD_NOTE_FILE
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    try:
+        got = json.loads(raw)
+    except ValueError:
+        return {"unreadable": True}
+    return got if isinstance(got, dict) else {"unreadable": True}
 
 
 def clear_pending(layout: Layout) -> None:
@@ -763,6 +803,10 @@ def _boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
             clear_pending(layout)
             return GuardAction.GAVE_UP
         _point_current(layout, pending.src)
+        # 退了要让站点知道(W00c5d 第三部分内部评审):守卫只写日志的话,管理员只看得见「版本没变」。
+        # 留一张条子,代理起来连上站点时报 ``release_rolled_back``、删掉条子。
+        write_guard_note(layout, {"from": pending.to, "to": pending.src,
+                                  "attempts": pending.attempts, "at_ms": now_ms})
         clear_pending(layout)
         return GuardAction.ROLLED_BACK
 

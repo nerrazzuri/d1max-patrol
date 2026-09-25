@@ -1,0 +1,26 @@
+#!/bin/sh
+# d1max-agent 的启动脚本(W00c5d 第三部分内部评审 B1)。
+#
+# **启动参数归版本管,不归单元文件管。** 单元(d1max-agent.service)只指着
+# /opt/d1max/current/deploy/d1max-agent-start,装机时装一次,之后不随版本换。新版加了参数、
+# 自己又起不来的时候,开机守卫把 current 指回上一版 —— 上一版的参数也跟着这个脚本一起回来;
+# 要是参数写在单元里,单元还是新版的,上一版的代码不认新参数,就再也起不来。
+#
+# 用的代码是**这个脚本所在的那一版**的(按脚本自己的位置找,不再经过 current 链)。
+# 现场值从 /etc/d1max/env 来(单元的 EnvironmentFile):
+#   D1MAX_SITE_MQTT=mqtts://<站点>:8883   D1MAX_MAP=<map_id>:<version>   D1MAX_HOME=x,y,yaw
+#   D1MAX_HAL=sim|d1max(缺省 sim;W00d 真机验收过了才改 d1max)
+#   D1MAX_AGENT_ARGS=其余参数(比如 --mapping、--sidecar 127.0.0.1:8090 --mps-per-unit …)
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+# shellcheck disable=SC2086  # D1MAX_AGENT_ARGS 要按空白拆成几个参数
+exec "$here/venv/bin/d1max-agent" \
+  --transport "${D1MAX_SITE_MQTT:?/etc/d1max/env 里没有 D1MAX_SITE_MQTT(站点地址)}" \
+  --tls-ca /etc/d1max/tls/ca.crt --tls-cert /etc/d1max/tls/robot.crt \
+  --tls-key /etc/d1max/tls/robot.key \
+  --hal "${D1MAX_HAL:-sim}" \
+  --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent \
+  --outbox "${D1MAX_OUTBOX:?单元里应该有 D1MAX_OUTBOX}" \
+  --map "${D1MAX_MAP:?/etc/d1max/env 里没有 D1MAX_MAP(地图号:版本)}" \
+  --home "${D1MAX_HOME:?/etc/d1max/env 里没有 D1MAX_HOME(x,y,yaw)}" \
+  ${D1MAX_AGENT_ARGS:-}

@@ -367,7 +367,7 @@ def test_狗从站点下载发布包_核对落槽_吊销的狗下不到(站点, 
 
     def ops(bundle, root):
         return ReleaseOps(rel.Layout(root=tmp_path / root),
-                          fetch=https_fetch(站点.intake.url, _ctx(ca, bundle)), privileged=None,
+                          fetch=https_fetch(站点.intake.url, _ctx(ca, bundle)),
                           build=build, work=tmp_path / root / "dl", now_ms=lambda: NOW,
                           restart=lambda: None)
     a = ops(ca.a, "dogA")

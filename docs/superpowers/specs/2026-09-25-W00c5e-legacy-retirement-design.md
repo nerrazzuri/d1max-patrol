@@ -16,9 +16,9 @@
 - **代理的 `--legacy-http`**（`main.py`）：连同 `--pin`、`--sn`，拉进老服务的整套上下文。
 - **部署**：
   - `install.sh` 5/7 装老单元、生成 PIN、`enable d1max-patrol`；代理单元**装而不 enable**；6/7 用 `curl :8095` 验；7/7 PIN 为空就不往下走，切版本后停、搬数据、起老服务。
-  - 特权助手：`install-unit`（装老单元）、`restart`（经 `d1max-restart-now` 重启老服务）、`reboot` 只有老服务在用；`check`、`install-agent-unit` 代理在用。
+  - 特权助手：`install-unit`（装老单元）、`restart`（经 `d1max-restart-now` 重启老服务）、`reboot` 只有老服务在用；`check` 只有它们用。**代理一条都不用**（W00c5d 第三部分评审修复之后，切版本不装单元，代理运行时不需要 root）。
   - 命令行 `release activate/rollback` 装的是**老单元**。
-  - 代理单元 `ExecStart` 写死了 `--hal sim`。
+  - 代理单元已经指着这一版带的启动脚本 `deploy/d1max-agent-start`，适配器从 env 取（`D1MAX_HAL`，缺省 `sim`），其余参数 `D1MAX_AGENT_ARGS`（W00c5d 第三部分评审修复）。
 - **手机直连模式**：首屏二选一（`ModePage`）、名册、直连遥控、控制面板、盘况页、`PatrolClient`、名册与 PIN 存储（`flutter_secure_storage` 只有 PIN 用）。共用的：`widget/joystick.dart`、`widget/live_video.dart` 里的 MJPEG 解析与画面（站点画面在用，但抛的是 `PatrolClient` 的错误类型）、`wire.dart` 里的 `VideoHealth`。
 - **测试**：`tests/app/` 44 个文件约 1050 条，绝大多数测老服务；`tests/inspect/` 82 条；引擎里测死模块的几组；部署测试里约 20 条单元校验用老单元当样本。
 - **真狗上现在装的是老服务**（2026-09-22 装的）。仓库里删掉不影响它，**重跑 `install.sh` 才换成代理**。
@@ -34,15 +34,15 @@
 
 | 选项 | 内容 |
 |---|---|
-| **A（推荐，取）** | **狗上只有 `d1max-agent.service`**：<br>• `install.sh` 装它、`enable` 它（没有站点签发的 `registration.json` 就不起，`ConditionPathExists` 早就有）；<br>• 老单元若在：停、disable、删单元文件（装机脚本的 `@删除` 对账）；<br>• 适配器从 env 取：单元里 `--hal ${D1MAX_HAL}` 加 `$D1MAX_HAL_ARGS`，缺省 `D1MAX_HAL=sim`。**W00d 真机验收（§3b）过了之前不改成 `d1max`**：`sim` 的代理动不了真狗；装机脚本在 `/etc/d1max/env` 里写一行注释好的 `D1MAX_HAL=d1max` 与说明，验收过了由人打开；<br>• 6/7 的验证改成看代理单元状态与日志，不再 `curl :8095`；7/7 切版本后 `systemctl restart d1max-agent` |
+| **A（推荐，取）** | **狗上只有 `d1max-agent.service`**：<br>• `install.sh` 装它、`enable` 它（没有站点签发的 `registration.json` 就不起，`ConditionPathExists` 早就有）；<br>• 老单元若在：停、disable、删单元文件（装机脚本的 `@删除` 对账）；<br>• 适配器从 env 取（启动脚本已经这么做了）：`D1MAX_HAL`，缺省 `sim`，其余参数 `D1MAX_AGENT_ARGS`。**W00d 真机验收（§3b）过了之前不改成 `d1max`**：`sim` 的代理动不了真狗；装机脚本在 `/etc/d1max/env` 里写一行注释好的 `D1MAX_HAL=d1max` 与说明，验收过了由人打开；<br>• 6/7 的验证改成看代理单元状态与日志，不再 `curl :8095`；7/7 切版本后 `systemctl restart d1max-agent` |
 | B | 老单元留着不 enable。两套并存，旁路进程同一时刻只该有一个 Python 在开车，谁在开说不清 |
 
 ## 3. 决定三：特权助手与命令行
 
 | 选项 | 内容 |
 |---|---|
-| **A（推荐，取）** | 助手只留 `check` 与 `install-agent-unit`；`install-unit`、`restart`、`reboot` 与 `d1max-restart-now` 删掉（只有老服务用；代理重启靠自己退出、`Restart=always`）。sudoers 那一行不变（放行的是助手本身）。<br>命令行 `release activate/rollback` 改装**代理单元**。槽内数据搬迁留在装机脚本里（以服务用户跑）。<br>升级后的提交已经在代理里（连上站点才提交），老服务的 postcheck 随它删 |
-| B | 助手保留老子命令备用。白名单里多一条没人用的 root 路径 |
+| **A（推荐，取）** | **特权助手整个删**：`d1max-privileged`、`d1max-restart-now`、sudoers 那一行、`engine/privileged.py` 都删；装机脚本删掉 `@写盘` 里这几样并清掉已装的（`@删除` 对账）。代理运行时不需要 root：重启靠自己退出、`Restart=always`；单元由装机脚本（root）装一次。<br>命令行 `release activate/rollback` 不再装单元（启动参数在包里的启动脚本里）。槽内数据搬迁留在装机脚本里（以服务用户跑）。<br>升级后的提交已经在代理里（连上站点才提交），老服务的 postcheck 随它删 |
+| B | 助手留着备用。狗上多一条没人用的 root 路径 |
 
 ## 4. 决定四：手机
 
@@ -84,7 +84,7 @@
 - 全仓不再有 `server.py`、`d1max-app`、`--legacy-http`、`:8095`、`D1MAX_PIN` 的活引用（历史文档除外）；打出来的包里没有静态页。
 - 代理、站点、契约、仿真、部署几组测试全过；手机测试全过、`flutter analyze` 无问题。
 - 装机脚本在测试里（`--root` 假根）：装代理单元并 enable；老单元在就停、disable、删；不生成 PIN；已有 env 里的老行不动。
-- 助手：只认 `check`、`install-agent-unit`；别的子命令退 64。
-- 命令行 `release activate/rollback` 装的是代理单元。
+- 狗上没有特权助手、没有 sudoers 那一行；装机脚本清掉老的。
+- 命令行 `release activate/rollback` 不碰单元。
 - 手机打开就是站点列表，没有直连入口。
 - **真机项**：狗上重跑 `install.sh` 之后，老服务没了、代理在跑（`systemctl status d1max-agent`），站点上看得到这台狗（仿真适配器）；W00d 验收过了再把 `D1MAX_HAL` 改成 `d1max`。

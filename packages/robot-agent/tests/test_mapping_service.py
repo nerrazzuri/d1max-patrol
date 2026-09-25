@@ -180,3 +180,27 @@ async def test_重建只收这张图的那几个后缀_不捡同前缀别的图(
     (svc.work_dir / "estate-1.v2.pgm").write_bytes(b"other")
     ref = await svc.build(svc.last_bag, "estate-1", "9")
     assert "estate-1.v2.pgm" not in {f.name for f in ref.files}
+
+
+async def test_盘紧了传完的包不留着备重建(svc):
+    """W00c5d 第三部分内部评审:留着的包把发件箱撑满,巡检就被拒 storage_full。盘紧了就让位 ——
+    站点上有一份。"""
+    from d1max_agent.mapping import storage_pressure
+    from d1max_contract.storage import StorageFacts
+    await svc.start("yard")
+    await svc.stop()
+    bag = svc.bags_root / svc.last_bag
+    assert not svc.bag_settled(bag), "没重建、不满 7 天:留着"
+    facts = {"f": StorageFacts(disk_used_ratio=0.5, outbox_bytes=40, outbox_cap_bytes=100,
+                               backlog_files=0, backlog_bytes=0, oldest_backlog_s=None)}
+    svc.pressure = lambda: storage_pressure(facts["f"])
+    assert not svc.bag_settled(bag)
+    facts["f"] = StorageFacts(disk_used_ratio=0.5, outbox_bytes=51, outbox_cap_bytes=100,
+                              backlog_files=0, backlog_bytes=0, oldest_backlog_s=None)
+    assert svc.bag_settled(bag), "发件箱过了上限的一半:传完的包可以删"
+    facts["f"] = StorageFacts(disk_used_ratio=0.8, outbox_bytes=1, outbox_cap_bytes=100,
+                              backlog_files=0, backlog_bytes=0, oldest_backlog_s=None)
+    assert svc.bag_settled(bag), "盘用到八成:一样"
+    svc.held.add(bag.name)
+    assert not svc.bag_settled(bag), "正在拿它重建:照样不删"
+    assert storage_pressure(None) is False

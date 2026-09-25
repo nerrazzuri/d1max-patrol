@@ -15,11 +15,6 @@
 #   install-unit <版本名>  把 /opt/d1max/releases/<版本名>/deploy/d1max-patrol.service
 #                         校验后装到 /etc/systemd/system/,daemon-reload。
 #                         打印 installed / unchanged。
-#   install-agent-unit <版本名>
-#                         同上,装的是这一版带的 d1max-agent.service(W00c5d:站点下发版本,
-#                         代理自己切;同一道校验,只多认 [Unit] 里那一句
-#                         ConditionPathExists=/etc/d1max/registration.json)。
-#                         代理重启不要 root:单元是 Restart=always,代理自己好好退出就行。
 #   restart               用 systemd-run 起临时单元跑 /usr/local/sbin/d1max-restart-now
 #                         (stop → 搬槽内数据 → start)。那个脚本不在 sudo 白名单里,
 #                         robot 直接跑不了;放这儿的话 stop 会在服务自己的 cgroup 里
@@ -32,10 +27,8 @@
 set -euo pipefail
 
 UNIT_NAME=d1max-patrol.service
-AGENT_UNIT_NAME=d1max-agent.service
 RELEASE_ROOT=/opt/d1max
 DEST=/etc/systemd/system/$UNIT_NAME
-AGENT_DEST=/etc/systemd/system/$AGENT_UNIT_NAME
 RESTART_NOW=/usr/local/sbin/d1max-restart-now
 RUN_USER=robot
 DATA_ROOT=/var/lib/d1max
@@ -44,14 +37,14 @@ TEST_MODE=0
 
 die()  { printf 'd1max-privileged: %s\n' "$*" >&2; exit 1; }
 usage() {
-  printf '用法: d1max-privileged check | install-unit <版本名> | install-agent-unit <版本名> | restart | reboot\n' >&2
+  printf '用法: d1max-privileged check | install-unit <版本名> | restart | reboot\n' >&2
   exit 64
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root)  [[ $# -ge 2 ]] || usage; RELEASE_ROOT=$2; TEST_MODE=1; shift 2 ;;
-    --dest)  [[ $# -ge 2 ]] || usage; DEST=$2; AGENT_DEST=$2; TEST_MODE=1; shift 2 ;;
+    --dest)  [[ $# -ge 2 ]] || usage; DEST=$2;         TEST_MODE=1; shift 2 ;;
     --no-systemctl) SYSTEMCTL=:; TEST_MODE=1; shift ;;
     --restart-now) [[ $# -ge 2 ]] || usage; RESTART_NOW=$2; TEST_MODE=1; shift 2 ;;
     --) shift; break ;;
@@ -80,7 +73,7 @@ fi
 # 行看到的 User=robot 会被并进上一行;真单元里没有续行,见到就拒。
 # **拒的时候只说行号和键,不回显内容**:源可以被换成指向 root 才读得到的
 # 文件的链,stderr 会原样透传到 HTTP 409 的 body 里。
-UNIT_KEYS=" Description After Wants StartLimitIntervalSec ConditionPathExists "
+UNIT_KEYS=" Description After Wants StartLimitIntervalSec "
 SERVICE_KEYS=" Type User ExecStart ExecStartPre Restart RestartSec Environment EnvironmentFile WorkingDirectory "
 INSTALL_KEYS=" WantedBy "
 
@@ -115,10 +108,6 @@ validate_unit() {
       User)
         [[ $value == "$RUN_USER" ]] || die "第 $n 行:User 只能是 $RUN_USER"
         saw_user=1 ;;
-      ConditionPathExists)
-        # 代理单元那一句(W00c5d):只许这一个固定路径 —— 条件只决定起不起,不给别的口子。
-        [[ $value == "/etc/d1max/registration.json" ]] \
-          || die "第 $n 行:ConditionPathExists 只许 /etc/d1max/registration.json" ;;
       ExecStart|ExecStartPre)
         case "$value" in
           [+!:@]*) die "第 $n 行:$key 不许用 +/!/:/@ 前缀(那是以 root 跑)" ;;
@@ -147,17 +136,16 @@ cleanup() { if [[ -n ${TMP:-} ]]; then rm -f "$TMP"; fi; }
 trap cleanup EXIT
 
 install_unit() {
-  # $1 版本名;$2 单元文件名(d1max-patrol.service / d1max-agent.service);$3 装到哪。
-  local name=${1:-} unit=${2:-$UNIT_NAME} dest=${3:-$DEST} src size
+  local name=${1:-} src size
   [[ $name =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{6,12}$ ]] \
     || die "版本名不合规:${name:-(空)}"
-  src=$RELEASE_ROOT/releases/$name/deploy/$unit
+  src=$RELEASE_ROOT/releases/$name/deploy/$UNIT_NAME
   [[ -e $src || -L $src ]] || die "源不存在:$src(这一版的包没带 deploy/?)"
   # **只打开源一次:先 cp -P 进 root 拥有的目标目录,之后一切只看那份拷贝。**
   # 源在 robot 可写的槽里,校验源、再拷源之间有窗口,robot 可以在窗口里把文件
   # 换掉或换成指向 /etc/shadow 的链(TOCTOU)。-P 不跟链:拷出来还是链就拒。
   # 拷贝落在 /etc/systemd/system 底下,robot 碰不到;校验的和装进去的是同一份。
-  TMP=$(mktemp "$dest.XXXXXX")
+  TMP=$(mktemp "$DEST.XXXXXX")
   rm -f "$TMP"
   # 源可以是 robot 建的 FIFO:没有超时的话 root 的 cp 会永远阻塞在 open 上。
   timeout 5 cp -P -- "$src" "$TMP" || die "源拷不出来(不是普通文件,或 5 s 内读不完)"
@@ -173,14 +161,14 @@ install_unit() {
   fi
   validate_unit "$TMP"
   chmod 0644 "$TMP"
-  if [[ -f $dest ]] && cmp -s "$TMP" "$dest"; then
+  if [[ -f $DEST ]] && cmp -s "$TMP" "$DEST"; then
     echo unchanged
     return 0
   fi
-  mv -f "$TMP" "$dest"
+  mv -f "$TMP" "$DEST"
   TMP=
   # 单元已经换上了;reload 失败要说清楚是这个状态,不是「没装上」。
-  $SYSTEMCTL daemon-reload || die "单元已写入 $dest,但 daemon-reload 失败 —— 手工 systemctl daemon-reload"
+  $SYSTEMCTL daemon-reload || die "单元已写入 $DEST,但 daemon-reload 失败 —— 手工 systemctl daemon-reload"
   echo installed
 }
 
@@ -215,9 +203,7 @@ cmd=${1:-}
 shift
 case "$cmd" in
   check)        [[ $# -eq 0 ]] || usage; exit 0 ;;
-  install-unit) [[ $# -eq 1 ]] || usage; install_unit "$1" "$UNIT_NAME" "$DEST" ;;
-  install-agent-unit)
-                [[ $# -eq 1 ]] || usage; install_unit "$1" "$AGENT_UNIT_NAME" "$AGENT_DEST" ;;
+  install-unit) [[ $# -eq 1 ]] || usage; install_unit "$1" ;;
   restart)      [[ $# -eq 0 ]] || usage; do_restart ;;
   reboot)       [[ $# -eq 0 ]] || usage
                 if [[ $TEST_MODE -eq 1 ]]; then echo "would: reboot"; else $SYSTEMCTL reboot; fi ;;

@@ -389,7 +389,11 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
     # 每一趟带随机后缀:传完就删,狗的钟往回拨也不会跟站点上早就收齐的那一趟撞名(内部评审)。
     import secrets
     parts.engine.run_suffix = lambda: f"{secrets.randbelow(10 ** 6):06d}"
-    return OutboxPump(runs, more=(bags, maps)), keeper, mapper
+    pump = OutboxPump(runs, more=(bags, maps))
+    if mapper is not None:
+        from d1max_agent.mapping import storage_pressure
+        mapper.pressure = lambda: storage_pressure(pump.facts())
+    return pump, keeper, mapper
 
 
 def _releases(args: argparse.Namespace, registration: Registration) -> Any:
@@ -399,7 +403,6 @@ def _releases(args: argparse.Namespace, registration: Registration) -> Any:
     import functools
     import ssl
 
-    from d1max_agent.engine.privileged import Privileged
     from d1max_agent.engine.release import Layout
     from d1max_agent.release_ops import (
         ReleaseOps,
@@ -416,7 +419,6 @@ def _releases(args: argparse.Namespace, registration: Registration) -> Any:
         # 「在切了」那条事件先出去。
         threading.Timer(3.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
     return ReleaseOps(Layout(root=args.release_root), fetch=https_fetch(args.intake, ctx),
-                      privileged=Privileged(),
                       build=functools.partial(build_venv, pip_args=pip_args_from_env(),
                                               python=default_python()),
                       work=Path(args.store_dir) / "release-dl", now_ms=wall_ms,

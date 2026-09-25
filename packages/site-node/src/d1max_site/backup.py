@@ -128,17 +128,24 @@ class SiteBackup:
         if not root.is_dir():
             return
         for src in root.rglob("*"):
+            rel = src.relative_to(root)
+            # 搬到一半的目录(``*.taking``、``*.importing``、``*.staging``)不拷:搬完那份下一轮拷。
+            if any(p.endswith((".taking", ".importing", ".staging")) for p in rel.parts[:-1]):
+                continue
             if not src.is_file() or src.name.endswith(".tmp"):
                 continue
-            dst = out / src.relative_to(root)
-            st = src.stat()
+            dst = out / rel
             try:
-                ds = dst.stat()
-                if ds.st_size == st.st_size and int(ds.st_mtime) == int(st.st_mtime):
-                    continue
+                st = src.stat()
+                try:
+                    ds = dst.stat()
+                    if ds.st_size == st.st_size and int(ds.st_mtime) == int(st.st_mtime):
+                        continue
+                except FileNotFoundError:
+                    pass
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dst.with_name(dst.name + ".tmp")
+                shutil.copy2(src, tmp)
+                os.replace(tmp, dst)
             except FileNotFoundError:
-                pass
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            tmp = dst.with_name(dst.name + ".tmp")
-            shutil.copy2(src, tmp)
-            os.replace(tmp, dst)
+                continue                          # 拷的时候源没了(搬走、删掉):这一个跳过,别的照拷

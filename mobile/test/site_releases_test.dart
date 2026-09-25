@@ -33,6 +33,14 @@ void main() {
     expect(api.calls, contains('release A rollback '));
   });
 
+  testWidgets('狗没报在跑哪一版（不支持或不在线）：没有装切退按钮', (t) async {
+    final api = _TwoDogsApi();
+    await t.pumpWidget(MaterialApp(home: SiteReleasesPage(api: api)));
+    await t.pumpAndSettle();
+    expect(find.byKey(SiteReleasesPage.actionKey('A', 'install')), findsOneWidget);
+    expect(find.byKey(SiteReleasesPage.actionKey('B', 'install')), findsNothing);
+  });
+
   testWidgets('保安只看：没有装切退按钮', (t) async {
     final api = FakeApi('guard');
     await t.pumpWidget(MaterialApp(home: SiteReleasesPage(api: api)));
@@ -49,4 +57,14 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byType(SiteReleasesPage), findsOneWidget);
   });
+}
+
+/// 两台狗：A 报了在跑哪一版，B 没报（不支持站点下发版本，或者不在线）。
+class _TwoDogsApi extends FakeApi {
+  _TwoDogsApi() : super('admin');
+  @override
+  Future<Map<String, dynamic>> releases() async => {
+        'releases': <Object>[],
+        'robots': {'A': '2026-09-20-aaaaaa', 'B': null},
+      };
 }

@@ -41,18 +41,6 @@ def _tar(pkg: Path, *, evil: list[tarfile.TarInfo] | None = None) -> bytes:
     return buf.getvalue()
 
 
-class 假助手:
-    def __init__(self):
-        self.units = []
-        self.fail = ""
-
-    def install_agent_unit(self, name):
-        if self.fail:
-            raise RuntimeError(self.fail)
-        self.units.append(name)
-        return "installed"
-
-
 @pytest.fixture
 def ops(tmp_path):
     layout = rel.Layout(root=tmp_path / "opt")
@@ -67,9 +55,11 @@ def ops(tmp_path):
         built.append((pkg.name, slot.name))
         (slot / "venv").mkdir(parents=True, exist_ok=True)
         (slot / "venv" / SENTINEL).write_text("ok")
-    o = ReleaseOps(layout, fetch=lambda name: iter([served[name]]), privileged=假助手(),
+    free = {"b": 10 ** 12}
+    o = ReleaseOps(layout, fetch=lambda name: iter([served[name]]),
                    build=build, work=tmp_path / "work", now_ms=lambda: 5,
-                   restart=lambda: restarts.append(1))
+                   restart=lambda: restarts.append(1), disk_free=lambda p: free["b"])
+    o.free = free
     return o, served, restarts, built, layout
 
 
@@ -86,7 +76,7 @@ def test_装_切_起来提交(ops, tmp_path):
     assert not any((tmp_path / "work").iterdir()), "下载、解开的临时东西收掉"
     assert o.current() == OLD, "装不等于切"
     got = o.activate(NEW)
-    assert o.current() == NEW and restarts == [1] and o.privileged.units == [NEW]
+    assert o.current() == NEW and restarts == [1]
     assert got["pending"]["to"] == NEW and rel.read_pending(layout) is not None
     assert o.commit_if_pending() == NEW, "代理起来、连上站点:提交"
     assert rel.read_pending(layout) is None and o.commit_if_pending() is None
@@ -99,8 +89,75 @@ def test_切了之后退回上一版(ops, tmp_path):
     o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
     o.activate(NEW)
     assert o.rollback() == OLD and o.current() == OLD and restarts == [1, 1]
-    with pytest.raises(ReleaseOpError):
-        o.rollback()                                        # 没有在途的那次升级了
+    assert rel.read_pending(layout) is None
+
+
+def test_提交之后站点照样能退回上一版_一样连上才算(ops, tmp_path):
+    """W00c5d 第三部分内部评审:新版连上站点就提交了,之后站点点「退」要能退(切回盘上上一版)。"""
+    o, served, restarts, built, layout = ops
+    (layout.release_dir(OLD) / "venv").mkdir(parents=True, exist_ok=True)
+    (layout.release_dir(OLD) / "venv" / SENTINEL).write_text("ok")
+    o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
+    o.activate(NEW)
+    assert o.commit_if_pending() == NEW and rel.read_pending(layout) is None
+    assert o.previous() == OLD
+    assert o.rollback() == OLD and o.current() == OLD and restarts == [1, 1]
+    p = rel.read_pending(layout)
+    assert p is not None and (p.to, p.src) == (OLD, NEW), "退回去的那一版也要连上才算"
+    assert o.commit_if_pending() == OLD
+    assert o.previous() is None
+    with pytest.raises(ReleaseOpError, match="没有"):
+        o.rollback()
+
+
+def test_切到正在跑的那版_直接拒(ops, tmp_path):
+    o, served, restarts, built, layout = ops
+    (layout.release_dir(OLD) / "venv").mkdir(parents=True, exist_ok=True)
+    (layout.release_dir(OLD) / "venv" / SENTINEL).write_text("ok")
+    with pytest.raises(ReleaseOpError, match="在跑"):          # engine.release 自己就拒
+        o.activate(OLD)
+    assert restarts == [] and rel.read_pending(layout) is None
+
+
+def test_盘够不够_量的是双槽那块盘(ops, tmp_path):
+    o, served, restarts, built, layout = ops
+    assert o.disk_ok(10 ** 6)
+    o.free["b"] = 4 * 10 ** 6 + 100 * 1024 ** 2
+    assert not o.disk_ok(10 ** 6), "包的 4 倍再加 512 MiB 余量"
+    assert not o.disk_ok(0), "只切、只退也要留 512 MiB(在途标记、幂等记录、事件簿)"
+    o.free["b"] = 600 * 1024 ** 2
+    assert o.disk_ok(0)
+
+
+def test_装了好几版不切_多的删掉_在跑的上一版刚装的留着(ops, tmp_path):
+    o, served, restarts, built, layout = ops
+    names = ["2026-09-22-dddddd", "2026-09-23-eeeeee", "2026-09-21-cccccc"]  # 最后装的名字最旧
+    for n in names:
+        o.install(_ref(served, n, _tar(_包(tmp_path, n))))
+        assert n in set(rel.installed(layout)), "刚装的不许被删"
+    left = set(rel.installed(layout))
+    assert OLD in left and names[-1] in left, "在跑的、刚装的都留着"
+    assert len(left) <= rel.KEEP_RELEASES + 1
+
+
+def test_上一版是比在跑的旧的里面最新的那一版(ops, tmp_path):
+    o, served, restarts, built, layout = ops
+    older, newest = "2026-09-10-aaaaaa", "2026-09-25-bbbbbb"
+    for n in (older, newest):
+        o.install(_ref(served, n, _tar(_包(tmp_path, n))))
+    (layout.release_dir(OLD) / "venv").mkdir(parents=True, exist_ok=True)
+    (layout.release_dir(OLD) / "venv" / SENTINEL).write_text("ok")
+    o.activate(newest)
+    assert o.previous() == OLD, "不是最旧的那一版"
+
+
+def test_起来时清掉上次装到一半的临时文件(tmp_path):
+    work = tmp_path / "work"
+    (work / "x.x").mkdir(parents=True)
+    (work / "x.tar.gz").write_bytes(b"half")
+    ReleaseOps(rel.Layout(root=tmp_path / "opt"), fetch=lambda n: iter([]),
+               build=lambda p, s: None, work=work, now_ms=lambda: 1, restart=lambda: None)
+    assert not work.exists() or not any(work.iterdir())
 
 
 def test_哈希不对_包比说的大_包内指纹不对_都不落槽(ops, tmp_path):
@@ -135,12 +192,8 @@ def test_包里的坏路径_链接_一律拒(ops, tmp_path, evil):
     assert not (tmp_path / "etc").exists()
 
 
-def test_没装好不切_装单元失败不切(ops, tmp_path):
+def test_没装好不切(ops, tmp_path):
     o, served, restarts, built, layout = ops
-    with pytest.raises(ReleaseOpError):
-        o.activate(NEW)
-    o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
-    o.privileged.fail = "单元校验没过"
     with pytest.raises(ReleaseOpError):
         o.activate(NEW)
     assert o.current() == OLD and restarts == [] and rel.read_pending(layout) is None
@@ -201,6 +254,17 @@ def test_在跑的不是在途的那一版_不提交(ops, tmp_path):
     assert o.commit_if_pending() is None and rel.read_pending(layout) is not None
 
 
+def test_开机守卫退回了_条子读一次就没了(ops, tmp_path):
+    o, served, restarts, built, layout = ops
+    o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
+    o.activate(NEW)
+    for _ in range(rel.MAX_BOOT_ATTEMPTS + 1):
+        rel.boot_guard(layout, now_ms=9)
+    assert o.current() == OLD
+    note = o.take_guard_note()
+    assert note["from"] == NEW and note["to"] == OLD and o.take_guard_note() is None
+
+
 def test_建venv_哨兵最后落_失败不落_在了就跳过(tmp_path):
     import os
     import stat
@@ -233,3 +297,10 @@ exit 0
     n = len(log.read_text().splitlines())
     build_venv(pkg, slot, pip_args=[], python=str(fake))
     assert len(log.read_text().splitlines()) == n, "哨兵在:跳过"
+    (pkg / "wheels").mkdir()                                 # 包里带离线轮子:只从它装
+    (pkg / "wheels" / "x-1-py3-none-any.whl").write_bytes(b"w")
+    slot2 = tmp_path / "slot2"
+    build_venv(pkg, slot2, pip_args=[], python=str(fake))
+    pips = [ln for ln in log.read_text().splitlines()[n:] if ln.startswith("-m pip")]
+    assert pips and all("--no-index" in ln and "--find-links=" in ln and "/wheels" in ln
+                        for ln in pips)

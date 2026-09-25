@@ -53,6 +53,16 @@ def test_包里有链接不登记_狗那头解开会对不上指纹(cat, tmp_pat
         cat.add(pkg)
 
 
+def test_包里有硬链接也不登记(cat, tmp_path):
+    """硬链接打进 tar 是一条链接条目,狗那头不收,指纹永远对不上(W00c5d 第三部分内部评审)。"""
+    pkg = 做包(tmp_path, "2026-09-25-ffffff")
+    os.link(pkg / "src" / "x.py", pkg / "src" / "y.py")
+    (pkg / "release.json").write_text(json.dumps({
+        "name": pkg.name, "version": "1", "content_sha256": tree_sha256(pkg, skip="release.json")}))
+    with pytest.raises(ReleaseCatalogError, match="链接"):
+        cat.add(pkg)
+
+
 def test_指纹不对_名字不对_不是发布包_都不登记(cat, tmp_path):
     with pytest.raises(ReleaseCatalogError):
         cat.add(做包(tmp_path, sha="0" * 64))

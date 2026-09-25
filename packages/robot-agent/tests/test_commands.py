@@ -507,3 +507,35 @@ async def test_准入钩子拒了就回它给的原因_goto不受影响(cp):
     cp.admit_hook = lambda cmd: ""
     ack = await cp.handle(_patrol("s3", _MISSION).to_wire(), TOPIC)
     assert ack.result is not AckResult.REJECTED or ack.reason != "storage_full"
+
+
+async def test_抢占途中开始换图_这一条不排进去(cp):
+    """W00c5d 第三部分内部评审(第二部分遗留):准入过了、正在抢占前一个任务(await)的时候,
+    换图开始了(甚至换完了)。醒来之后要再查一遍地图版本与准入,不然这一条按老地图排进去。"""
+    import asyncio
+    gate = asyncio.Event()
+    switching = {"on": False}
+    ack = await cp.handle(_cmd(cid="c1", tid="t1", priority=0).to_wire(), TOPIC)
+    await cp.step(0.1)
+    running = cp.current
+
+    async def 慢慢停(reason):
+        running.aborted_with = reason
+        await gate.wait()
+    running.abort = 慢慢停
+    cp.admit_hook = lambda cmd: "map_switching" if switching["on"] else ""
+    job = asyncio.create_task(cp.handle(_cmd(cid="c2", tid="t2", priority=5).to_wire(), TOPIC))
+    await asyncio.sleep(0.01)
+    switching["on"] = True                                  # 换图开始了
+    gate.set()
+    ack = await job
+    assert ack.result is AckResult.REJECTED and ack.reason == "map_switching"
+    assert cp.pending == []
+    switching["on"] = False
+    cp.loaded_map = ("m1", "4")                             # 换完了:目标还是 3 版的
+    gate.clear()
+    job = asyncio.create_task(cp.handle(_cmd(cid="c3", tid="t3", priority=5).to_wire(), TOPIC))
+    await asyncio.sleep(0.01)
+    gate.set()
+    ack = await job
+    assert ack.result is AckResult.REJECTED and "map" in ack.reason, ack.reason

@@ -4,13 +4,15 @@
 这里只是把「包从哪来」换成站点的狗专用口(mTLS),把「谁来点」换成站点的命令。
 
 - ``install``:下载 tar.gz(**边下边算 sha256,大小对不上就停**)→ 安全解开(不许绝对路径、``..``、
-  链接、设备文件)→ ``verify_package``(包内指纹)→ ``stage``(落槽,不切)→ 建这一版自己的 venv
-  (跟 ``deploy/install.sh`` 4/7 一个做法:从包的临时副本装,哨兵最后才落)。
-- ``activate``:要空闲(调用方查);先装这一版带的代理单元(特权助手,要 root 的只有这一步),
-  再写在途标记、换链、**自己好好退出** —— 代理单元是 ``Restart=always``,systemd 5 秒后从新的
-  ``current`` 起来。**重启后连上站点才提交**(:meth:`commit_if_pending`);新版起不来,开机守卫
-  (单元的 ``ExecStartPre``)数够次数就退回上一版。
-- ``rollback``:退回上一版(要有在途的那一次升级)并重启。
+  链接、设备文件)→ ``stage``(先核包内指纹,再落槽,不切)→ 建这一版自己的 venv(跟
+  ``deploy/install.sh`` 4/7 一个做法:从包的临时副本装,哨兵最后才落;包里带 ``wheels/`` 就只从它装)。
+- ``activate``:要空闲(调用方查);写在途标记、换链、**自己好好退出** —— 代理单元是
+  ``Restart=always``,systemd 5 秒后从新的 ``current`` 起来。**不装单元**:单元只指着这一版带的
+  启动脚本 ``deploy/d1max-agent-start``,启动参数归版本管,退回上一版时参数跟着代码一起回来
+  (W00c5d 第三部分内部评审 B1)。**重启后连上站点才提交**(:meth:`commit_if_pending`);新版起不来,
+  开机守卫(单元的 ``ExecStartPre``)数够次数就退回上一版,并留条子(:meth:`take_guard_note`)。
+- ``rollback``:有在途的那一次升级就退它;已经提交了就切回盘上**上一版**(比在跑的那版旧的、
+  装好了的最新一版),同样写在途标记、重启、连上才提交。
 """
 
 from __future__ import annotations
@@ -38,6 +40,11 @@ Fetch = Callable[[str], Iterable[bytes]]
 BuildVenv = Callable[[Path, Path], None]
 #: 这一版的依赖装齐了的哨兵(跟 install.sh 同一个)。
 SENTINEL = ".deps-ok"
+#: 装一版要的盘:下载的 tar.gz、解开的一份、落槽的一份、venv,按包大小的几倍估,再加一段余量。
+INSTALL_DISK_FACTOR = 4
+DISK_MARGIN_BYTES = 512 * 1024 ** 2
+#: 包里带的离线轮子(``release pack --wheels``):有就只从它装(现场的狗上不了网)。
+WHEELS_DIR = "wheels"
 
 
 class ReleaseOpError(RuntimeError):
@@ -81,6 +88,8 @@ def build_venv(pkg: Path, slot: Path, *, pip_args: list[str],
     with tempfile.TemporaryDirectory() as tmp:
         copy = Path(tmp) / "pkg"
         shutil.copytree(pkg, copy)
+        if (copy / WHEELS_DIR).is_dir():
+            pip_args = ["--no-index", f"--find-links={copy / WHEELS_DIR}", *pip_args]
         run(python, "-m", "venv", str(venv))
         vpy = str(venv / "bin" / "python")
         run(vpy, "-m", "pip", "install", "--quiet", *pip_args, str(copy))
@@ -93,17 +102,19 @@ def build_venv(pkg: Path, slot: Path, *, pip_args: list[str],
 
 
 class ReleaseOps:
-    def __init__(self, layout: rel.Layout, *, fetch: Fetch, privileged: Any,
-                 build: BuildVenv, work: Path, now_ms: Callable[[], int],
-                 restart: Callable[[], None], sn: str = "") -> None:
+    def __init__(self, layout: rel.Layout, *, fetch: Fetch, build: BuildVenv, work: Path,
+                 now_ms: Callable[[], int], restart: Callable[[], None], sn: str = "",
+                 disk_free: Callable[[Path], int] | None = None) -> None:
         self.layout = layout
         self._fetch = fetch
-        self.privileged = privileged
         self._restart = restart
         self._build = build
         self.work = Path(work)
         self._now = now_ms
         self.sn = sn
+        self._disk_free = disk_free or _disk_free
+        # 上一次装到一半被停掉(systemd 等 90 s 就 SIGKILL)留下的下载、解开的东西:起来就清。
+        shutil.rmtree(self.work, ignore_errors=True)
 
     def current(self) -> str:
         try:
@@ -114,6 +125,28 @@ class ReleaseOps:
     def ready(self, name: str) -> bool:
         """这一版落了槽、venv 也建好了。"""
         return (self.layout.release_dir(name) / "venv" / SENTINEL).is_file()
+
+    def previous(self) -> str | None:
+        """「上一版」:比在跑的那版旧的、装好了的最新一版。没有回 None。"""
+        cur = self.current()
+        older = [n for n in rel.installed(self.layout) if n < cur and self.ready(n)]
+        return older[-1] if older else None
+
+    def can_roll_back(self) -> bool:
+        """有在途的那次升级,或者盘上有上一版。"""
+        return rel.read_pending(self.layout) is not None or self.previous() is not None
+
+    def disk_ok(self, size: int) -> bool:
+        """装 ``size`` 字节的包(0 = 只切、只退)盘够不够。**量的是双槽根与下载目录所在的盘**,
+        不是发件箱那块(W00c5d 第三部分内部评审:发件箱可能在临时硬盘上)。"""
+        need = INSTALL_DISK_FACTOR * size + DISK_MARGIN_BYTES
+        for where in (self.layout.root, self.work.parent):
+            try:
+                if self._disk_free(where) < need:
+                    return False
+            except OSError:
+                return False
+        return True
 
     # ------------------------------------------------------------ 装(阻塞,在线程里调)
 
@@ -152,30 +185,51 @@ class ReleaseOps:
         finally:
             tar.unlink(missing_ok=True)
             shutil.rmtree(top, ignore_errors=True)
+        self._prune(keep_also=ref.name)
+
+    def _prune(self, *, keep_also: str) -> None:
+        """狗上最多留 ``KEEP_RELEASES + 1`` 版(决策 8):在跑的、在途的、刚装的、上一版。
+        装了好几版不切的话,多出来的按名字从旧到新删。"""
+        keep = {self.current(), keep_also, self.previous() or ""}
+        p = rel.read_pending(self.layout)
+        if p is not None:
+            keep |= {p.to, p.src}
+        names = list(rel.installed(self.layout))
+        extra = [n for n in names if n not in keep]
+        while extra and len(names) > rel.KEEP_RELEASES + 1:
+            victim = extra.pop(0)
+            shutil.rmtree(self.layout.release_dir(victim), ignore_errors=True)
+            names.remove(victim)
+            log.info("狗上版本太多,删掉 %s", victim)
 
     # ------------------------------------------------------------ 切、退
 
     def activate(self, name: str) -> dict[str, Any]:
-        """装单元 → 写在途标记 → 换链 → 重启代理。**调用方先查空闲**。"""
+        """写在途标记 → 换链 → 重启代理。**调用方先查空闲**。"""
         if not self.ready(name):
             raise ReleaseOpError(f"{name} 还没装好(先 release_install)")
         try:
-            # 先装单元(新单元配老代码是安全的;反过来切了链单元没装上,就挂在「在途」里等人)。
-            unit = self.privileged.install_agent_unit(name)
             pending = rel.activate(self.layout, name, now_ms=self._now(), sn=self.sn)
         except rel.ReleaseError as exc:
             raise ReleaseOpError(str(exc)) from exc
-        except Exception as exc:
+        except OSError as exc:
             raise ReleaseOpError(f"没切:{exc}") from exc
         self._restart()
-        return {"pending": pending.to_wire(), "unit": unit}
+        return {"pending": pending.to_wire()}
 
     def rollback(self) -> str:
-        try:
-            back = rel.rollback(self.layout, now_ms=self._now())
-        except rel.ReleaseError as exc:
-            raise ReleaseOpError(str(exc)) from exc
-        self._restart()
+        """有在途的那次升级就退它;提交过了就切回上一版(一样写在途标记、连上才提交)。"""
+        if rel.read_pending(self.layout) is not None:
+            try:
+                back = rel.rollback(self.layout, now_ms=self._now())
+            except rel.ReleaseError as exc:
+                raise ReleaseOpError(str(exc)) from exc
+            self._restart()
+            return back
+        back = self.previous()
+        if back is None:
+            raise ReleaseOpError("盘上没有比在跑的这版更早、装好了的版本可退")
+        self.activate(back)
         return back
 
     def commit_if_pending(self) -> str | None:
@@ -185,6 +239,17 @@ class ReleaseOps:
             return None
         rel.commit(self.layout)
         return p.to
+
+    def take_guard_note(self) -> dict | None:
+        """开机守卫上次退回了上一版的话,它留的条子(读一次就删)。"""
+        return rel.take_guard_note(self.layout)
+
+
+def _disk_free(path: Path) -> int:
+    p = Path(path)
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return shutil.disk_usage(p).free
 
 
 def https_fetch(base_url: str, ssl_context: Any, *, timeout_s: float = 120.0) -> Fetch:

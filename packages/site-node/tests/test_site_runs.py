@@ -298,6 +298,30 @@ def test_备份也镜像地图与录包(台, tmp_path):
                    more={"maps": tmp_path / "maps"})
     assert b.run_once()
     assert (tmp_path / "bak" / "maps" / "estate-1" / "8" / "estate-1.pgm").read_bytes() == b"P5"
+    half = tmp_path / "maps" / "estate-1" / "9.taking"           # 正在搬进目录的那一份:不拷
+    half.mkdir()
+    (half / "estate-1.pgm").write_bytes(b"half")
+    assert b.run_once()
+    assert not (tmp_path / "bak" / "maps" / "estate-1" / "9.taking").exists()
+
+
+def test_备份拷的时候源没了_跳过这一个_别的照拷(台, tmp_path, monkeypatch):
+    import shutil
+    c, store, desk, model, _ = 台
+    root = tmp_path / "maps"
+    (root / "a").mkdir(parents=True)
+    (root / "a" / "gone.pgm").write_bytes(b"x")
+    (root / "a" / "stay.pgm").write_bytes(b"y")
+    real = shutil.copy2
+
+    def 半路没了(src, dst, *a, **k):
+        if str(src).endswith("gone.pgm"):
+            raise FileNotFoundError(src)
+        return real(src, dst, *a, **k)
+    monkeypatch.setattr(shutil, "copy2", 半路没了)
+    b = SiteBackup(store.db, store.root, tmp_path / "bak", now_ms=c, more={"maps": root})
+    assert b.run_once()
+    assert (tmp_path / "bak" / "maps" / "a" / "stay.pgm").read_bytes() == b"y"
 
 
 def test_别的趟里半张的照片不当上一次(台):

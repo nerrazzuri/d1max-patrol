@@ -21,6 +21,7 @@ import os
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,18 @@ DONE = ".done"
 BUILT = ".built"
 #: 没重建过的包,录完之后在狗上最多留几天(传完、站点确认之后才删)。
 BAG_KEEP_DAYS = 7
+#: **盘紧了就不留**(W00c5d 第三部分内部评审:留着的包把发件箱撑满,巡检就被拒 storage_full):
+#: 发件箱过了上限的这一份、或者盘用到这条线,传完了的包一律可以删 —— 站点上有一份。
+RETAIN_CAP_SHARE = 0.5
+RETAIN_DISK_RATIO = 0.8
+
+
+def storage_pressure(facts: Any) -> bool:
+    """盘况(``StorageFacts``)说盘紧了:留着备重建的包该让位了。"""
+    if facts is None:
+        return False
+    return (facts.outbox_bytes > facts.outbox_cap_bytes * RETAIN_CAP_SHARE
+            or facts.disk_used_ratio >= RETAIN_DISK_RATIO)
 #: 重建出来的图的文件(地图号 + 这几个后缀;不拿前缀去 glob,``yard`` 会捡到 ``yard.v2.*``)。
 MAP_EXTS = (".pgm", ".yaml", ".posegraph", ".data")
 
@@ -77,6 +90,8 @@ class MappingService:
         #: 正在拿来重建的包:不许删。跟发件箱删包用同一把锁(判「能不能删」和删在锁里一起做)。
         self.held: set[str] = set()
         self.lock = threading.Lock()
+        #: 盘紧不紧(主程序接到发件箱的盘况上):紧了传完的包不再留着备重建。
+        self.pressure: Callable[[], bool] = lambda: False
         self._cleanup()
 
     def _cleanup(self) -> None:
@@ -91,7 +106,7 @@ class MappingService:
     def bag_settled(self, run: Path) -> bool:
         if not (run / DONE).is_file() or run.name in self.held:
             return False
-        if (run / BUILT).is_file():
+        if (run / BUILT).is_file() or self.pressure():
             return True
         age_days = (time.time() - (run / DONE).stat().st_mtime) / 86400
         return age_days >= BAG_KEEP_DAYS

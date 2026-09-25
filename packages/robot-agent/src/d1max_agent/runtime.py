@@ -52,6 +52,8 @@ log = logging.getLogger(__name__)
 STORAGE_EVERY_MS = 10_000
 #: 换图:下载好之后最多等多久让狗空下来(秒)。
 SWITCH_WAIT_S = 600.0
+#: 起来时载入正在用的那张图最多等多久(秒);过了照旧用 ``--map``。
+LOAD_MAP_TIMEOUT_S = 120.0
 
 
 def _parse_home(v: Any) -> tuple[float, float, float] | None:
@@ -134,6 +136,9 @@ class AgentRuntime:
         self._build_job: asyncio.Task | None = None
         self._release_job: asyncio.Task | None = None
         self._switching = False
+        #: 切版本、退版本收下了、马上要重启:什么都不再接(W00c5d 第三部分内部评审:
+        #: 这几秒里收下的任务会被重启掐掉)。切不成就放开。
+        self._restarting = False
         #: 发件箱隔离的文件重新排上(站点改了规矩之后,管理员让它再传一次);主程序接上。
         self._outbox_retry: Callable[[], int] | None = None
         self.processor.map_hook = self._map_command
@@ -196,6 +201,8 @@ class AgentRuntime:
     def _admit(self, cmd: Command) -> str:
         """发件箱满了(盘到停止水位或发件箱到上限)不接巡检 —— 绝不删没传完的来腾地方。
         事件派遣的 ``goto``、遥控不拍照、不产生文件,照接。正在换图时不接自动任务(遥控照接)。"""
+        if self._restarting:
+            return "restarting"
         if cmd.kind in ("goto", "patrol") and self._map_busy():
             return "map_switching"
         if cmd.kind != "patrol" or self._storage is None:
@@ -213,7 +220,8 @@ class AgentRuntime:
         if ref is None or loader is None:
             return
         try:
-            await loader(ref.map_id, ref.version, self.maps.dir_of(ref))
+            await asyncio.wait_for(loader(ref.map_id, ref.version, self.maps.dir_of(ref)),
+                                   LOAD_MAP_TIMEOUT_S)
         except Exception as exc:
             log.exception("起来时载入正在用的图 %s:%s 失败,照旧用 --map", ref.map_id, ref.version)
             self.events.emit("map_load_failed", {"map_id": ref.map_id, "version": ref.version,
@@ -257,10 +265,14 @@ class AgentRuntime:
         kind = cmd.kind
         if kind not in self._extra_tasks():
             return "unsupported"
+        if self._restarting:
+            return "restarting"
         if kind.startswith("release_"):
             return await self._release_command(cmd)
         if kind == "outbox_retry":
-            n = self._outbox_retry() if self._outbox_retry is not None else 0
+            # 放隔离要拿上传线程的锁(它可能正卡在一次上传里):不在事件循环里等。
+            n = await asyncio.to_thread(self._outbox_retry) if self._outbox_retry is not None \
+                else 0
             self.events.emit("outbox_retry", {"task_id": cmd.task_id, "released": n})
             return ""
         try:
@@ -292,7 +304,8 @@ class AgentRuntime:
                 return "not_recording"
             self._rec_job = loop.create_task(self._record(action, name, cmd.task_id))
             return ""
-        if self._running(self._build_job) or self.mapper.recording:
+        if self._running(self._build_job) or self._running(self._rec_job) \
+                or self.mapper.recording:
             return "busy"
         if not self._tasks_idle():
             return "busy"                         # 重建吃 CPU:开跑时不跟巡检抢(开跑后不挡出警)
@@ -314,8 +327,9 @@ class AgentRuntime:
                                                 "reason": f"{type(exc).__name__}: {exc}"[:200]})
 
     async def _release_command(self, cmd: Command) -> str:
-        """发布命令(W00c5d 第三部分):装在后台做,盘满了不装;切、退要空闲(不跑任务、不在换图)、
-        电量不低于 ``RELEASE_MIN_BATTERY_PCT``。"""
+        """发布命令(W00c5d 第三部分):装在后台做,双槽所在的盘不够不装;切、退要空闲(不跑任务、
+        不在换图、录包、重建)、电量不低于 ``RELEASE_MIN_BATTERY_PCT``。收下切、退之后到重启之前
+        什么都不再接(``_restarting``)。"""
         from d1max_contract.releases import ReleaseRef, check_release_name
         try:
             if cmd.kind == "release_install":
@@ -327,21 +341,35 @@ class AgentRuntime:
         if self._running(self._release_job) or self._running(self._map_job):
             return "busy"
         if cmd.kind == "release_install":
-            f = self._storage() if self._storage is not None else None
-            if f is not None and f.full():
-                return "storage_full"             # 装要下载、解开、建 venv:吃盘的是这一步
+            if not self.releases.disk_ok(ref.size):
+                return "storage_full"             # 下载、解开、落槽、建 venv 都在系统盘上
             job = self._release_install(ref, cmd.task_id)
+            self._release_job = asyncio.get_running_loop().create_task(job)
+            return ""
+        if not self._tasks_idle():
+            return "busy"                         # 重启那几秒里谁都停不了它:跑着任务不切、不退
+        if self._running(self._build_job) or self._running(self._rec_job) or \
+                (self.mapper is not None and self.mapper.recording):
+            return "busy"                         # 重启会悄悄掐掉录包、重建
+        try:
+            battery = (await self.hal.battery()).percent
+        except Exception:  # noqa: BLE001 - 读不到电量(适配器还没收到第一帧):不切
+            return "battery_unknown"
+        if battery < RELEASE_MIN_BATTERY_PCT:
+            return "low_battery"                  # 切过去起不来还要再退、再起一次
+        if not self.releases.disk_ok(0):
+            return "storage_full"                 # 在途标记、幂等记录、事件簿都要写得进去
+        if cmd.kind == "release_activate":
+            if name == self.releases.current():
+                return "already_running"
+            if not self.releases.ready(name):
+                return "not_installed"
+            job = self._release_switch("activate", name, cmd.task_id)
         else:
-            if not self._tasks_idle():
-                return "busy"                     # 重启那几秒里谁都停不了它:跑着任务不切、不退
-            if (await self.hal.battery()).percent < RELEASE_MIN_BATTERY_PCT:
-                return "low_battery"              # 切过去起不来还要再退、再起一次
-            if cmd.kind == "release_activate":
-                if not self.releases.ready(name):
-                    return "not_installed"
-                job = self._release_switch("activate", name, cmd.task_id)
-            else:
-                job = self._release_switch("rollback", "", cmd.task_id)
+            if not self.releases.can_roll_back():
+                return "nothing_to_roll_back"
+            job = self._release_switch("rollback", "", cmd.task_id)
+        self._restarting = True                   # 跟上面的空闲检查之间没有 await:不会夹进任务
         self._release_job = asyncio.get_running_loop().create_task(job)
         return ""
 
@@ -359,12 +387,13 @@ class AgentRuntime:
         base = {"task_id": task_id, "name": name}
         try:
             if what == "activate":
-                got = await asyncio.to_thread(self.releases.activate, name)
-                self.events.emit("release_activating", base | {"unit": str(got.get("unit"))})
+                await asyncio.to_thread(self.releases.activate, name)
+                self.events.emit("release_activating", base)
             else:
                 back = await asyncio.to_thread(self.releases.rollback)
                 self.events.emit("release_rolling_back", base | {"name": back})
         except Exception as exc:  # noqa: BLE001 - 切不过去:原因发给站点,照旧跑这一版
+            self._restarting = False
             log.warning("%s 没成:%s", what, exc)
             self.events.emit(f"release_{what}_failed",
                              base | {"reason": f"{type(exc).__name__}: {exc}"[:200]})
@@ -503,6 +532,15 @@ class AgentRuntime:
             if done:
                 self.events.emit("release_committed", {"name": done})
                 await self._publish_caps()
+            try:
+                note = self.releases.take_guard_note()
+            except Exception:
+                log.exception("读开机守卫的条子失败")
+                note = None
+            if note is not None:
+                # 新版起不来,开机守卫退回了上一版(W00c5d 第三部分内部评审):告诉站点。
+                self.events.emit("release_rolled_back", {k: note.get(k) for k in
+                                                         ("from", "to", "attempts", "at_ms")})
         await self._publish_status(force=True)
 
     async def close(self) -> None:

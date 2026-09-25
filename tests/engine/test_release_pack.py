@@ -314,3 +314,23 @@ def test_验不过的包不留在盘上(tmp_path, 无git, monkeypatch):
     with pytest.raises(ReleaseError, match="哈希对不上"):
         pack(_源码树(tmp_path / "树"), 出, now_ms=NOW_MS)
     assert list(出.iterdir()) == []
+
+
+def test_带离线轮子打包_轮子进包算进指纹_没有轮子就拒(tmp_path, 无git):
+    """W00c5d 第三部分内部评审:现场的狗上不了网,站点下发的版本建 venv 只能从包里带的轮子装。"""
+    src = _源码树(tmp_path / "src")
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    (wheels / "paho_mqtt-2.1.0-py3-none-any.whl").write_bytes(b"whl")
+    (wheels / "readme.txt").write_text("不是轮子")
+    dest = pack(src, tmp_path / "out", now_ms=NOW_MS, wheels=wheels)
+    assert sorted(p.name for p in (dest / "wheels").iterdir()) == \
+        ["paho_mqtt-2.1.0-py3-none-any.whl"]
+    verify_package(dest)
+    plain = pack(src, tmp_path / "out2", now_ms=NOW_MS)
+    assert not (plain / "wheels").exists()
+    assert read_manifest(dest).content_sha256 != read_manifest(plain).content_sha256
+    empty = tmp_path / "空"
+    empty.mkdir()
+    with pytest.raises(ReleaseError, match="whl"):
+        pack(src, tmp_path / "out3", now_ms=NOW_MS, wheels=empty)

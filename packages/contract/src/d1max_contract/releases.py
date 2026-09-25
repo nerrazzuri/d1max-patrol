@@ -25,7 +25,7 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def check_release_name(v: Any) -> str:
-    if not isinstance(v, str) or not NAME_RE.match(v):
+    if not isinstance(v, str) or not NAME_RE.fullmatch(v):
         raise ContractError(f"版本名要形如 2026-09-20-77b2de:{v!r}")
     return v
 

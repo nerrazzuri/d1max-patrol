@@ -16,6 +16,7 @@ from d1max_agent.engine.release import (
     current_name,
     read_pending,
     stage,
+    take_guard_note,
     tree_sha256,
 )
 
@@ -69,6 +70,11 @@ def test_数够了就退回上一版(tmp_path):
     assert boot_guard(layout, now_ms=NOW) is GuardAction.ROLLED_BACK
     assert current_name(layout) == "2026-09-06-a3f9c1"
     assert read_pending(layout) is None
+    # 留一张条子给代理报站点(W00c5d 第三部分内部评审);读一次就没了。
+    note = take_guard_note(layout)
+    assert note is not None and (note["from"], note["to"]) == ("2026-09-20-77b2de",
+                                                             "2026-09-06-a3f9c1")
+    assert take_guard_note(layout) is None
 
 
 def test_退回去之后再开机就安生了(tmp_path):

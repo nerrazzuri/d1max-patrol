@@ -183,6 +183,9 @@ def build_parser() -> argparse.ArgumentParser:
                              "不是 git 仓库就退到整棵树指纹的前 8 位")
     p_pack.add_argument("--force", action="store_true",
                         help="输出目录已经存在且非空也照打(会先把它删掉)")
+    p_pack.add_argument("--wheels", default=None,
+                        help="离线轮子目录(*.whl):拷进包里,站点下发的版本在狗上"
+                             "建 venv 时只从它装(现场的狗上不了网)")
     p_ins = rel_sub.add_parser("install", help="把一个包落进槽里,不切换")
     p_ins.add_argument("package", help="包目录")
     _root_arg(p_ins)
@@ -658,7 +661,7 @@ def _cmd_release_pack(args: argparse.Namespace, now_ms: int) -> int:
     """
     try:
         dest = pack(args.src, args.outdir, name=args.name, now_ms=now_ms,
-                    force=args.force)
+                    force=args.force, wheels=args.wheels)
         manifest = read_manifest(dest)
     except (ReleaseError, OSError) as exc:
         print(f"打不了包: {exc}", file=sys.stderr)

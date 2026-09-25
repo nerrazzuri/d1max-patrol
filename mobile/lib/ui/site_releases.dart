@@ -101,8 +101,9 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
                 ListTile(
                   key: SiteReleasesPage.robotKey(e.key),
                   title: Text(e.key),
-                  subtitle: Text('${e.value ?? '不知道（狗没报）'}'),
-                  trailing: admin
+                  subtitle: Text('${e.value ?? '不知道（狗没报：不在线，或者不支持站点下发版本）'}'),
+                  // 狗没报在跑哪一版 = 没报发布能力（或者不在线）：按了也是 unsupported，不给按钮。
+                  trailing: admin && e.value != null
                       ? Wrap(spacing: 4, children: [
                           for (final (a, label) in [
                             ('install', '装'),

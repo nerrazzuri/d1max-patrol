@@ -76,6 +76,17 @@ def test_站点没让它建的图不收_版本撞了或文件对不上永远不�
                   "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
                   (json.dumps({"bag": "b", "map_id": "estate-1", "version": "9"}),))
     assert cat.build_in_flight("estate-1", "9")
+    with cat.db.tx() as c:                                    # 狗说这一次建失败了:这个版本号放开
+        c.execute("INSERT INTO events(robot_id, boot_id, seq, event_id, kind, data, stamp, "
+                  "received_at) VALUES ('A','b',1,'e1','map_build_failed',?,1,1)",
+                  (json.dumps({"map_id": "estate-1", "version": "9", "reason": "x"}),))
+    assert not cat.build_in_flight("estate-1", "9")
+    with cat.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at, priority, ack_result) VALUES ('c2','t2','B','map_build',?, 'alice',"
+                  " 2, 0, 'rejected')",
+                  (json.dumps({"bag": "b", "map_id": "estate-1", "version": "11"}),))
+    assert not cat.build_in_flight("estate-1", "11"), "狗没接的那次不算在建"
     cat.put_map_chunk("A", "estate-1/9", "estate-1.pgm", offset=0, data=b"P5 bad",
                       total=len(b"P5 bad"))                   # 大小一样、内容不对
     with pytest.raises(PathRefused):

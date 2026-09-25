@@ -43,8 +43,10 @@ class ReleaseCatalog:
         if name != pkg.name:
             raise ReleaseCatalogError(f"{MANIFEST} 写的是 {name},目录名却是 {pkg.name}")
         for p in pkg.rglob("*"):
-            if p.is_symlink() or not (p.is_file() or p.is_dir()):
-                # 狗那头只收普通文件与目录;带着链接登记,狗解开之后指纹对不上,永远装不上。
+            if p.is_symlink() or not (p.is_file() or p.is_dir()) or \
+                    (p.is_file() and p.stat().st_nlink > 1):
+                # 狗那头只收普通文件与目录;带着链接(软的、硬的)登记,打出来的包里是链接条目,
+                # 狗解开之后指纹对不上,永远装不上。
                 raise ReleaseCatalogError(f"包里有链接或特殊文件:{p.relative_to(pkg)}")
         got = tree_sha256(pkg, skip=MANIFEST)
         if got != raw.get("content_sha256"):

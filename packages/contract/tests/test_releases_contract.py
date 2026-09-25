@@ -17,5 +17,6 @@ def test_往返与坏载荷():
                 {"name": "2026-09-25-77b2de", "sha256": "a" * 64, "size": True}, []):
         with pytest.raises(ContractError):
             ReleaseRef.from_wire(bad)
-    with pytest.raises(ContractError):
-        check_release_name("2026-9-25-77b2de")
+    for bad in ("2026-9-25-77b2de", "2026-09-25-77b2de\n"):   # 带换行的也不认(fullmatch)
+        with pytest.raises(ContractError):
+            check_release_name(bad)

@@ -19,19 +19,17 @@ Environment=D1MAX_DATA_ROOT=/var/lib/d1max
 # 再写 D1MAX_OUTBOX_MOUNT=/mnt/<临时盘>:临时盘没挂上代理就不起,不会悄悄写到系统盘上。
 Environment=D1MAX_OUTBOX=/var/lib/d1max/outbox
 Environment=PYTHONUNBUFFERED=1
-# 站点地址、地图、原点这些现场值从 env 文件来(W00c 装站点时填);证书包由站点
-# `d1max-site enroll` 签发,拷到 /etc/d1max/tls/(W00c1):
-#   D1MAX_SITE_MQTT=mqtts://<站点>:8883   D1MAX_MAP=<map_id>:<version>   D1MAX_HOME=x,y,yaw
+# 站点地址、地图、原点、适配器这些现场值从 env 文件来(W00c 装站点时填);证书包由站点
+# `d1max-site enroll` 签发,拷到 /etc/d1max/tls/(W00c1)。要填哪几个见启动脚本的注释。
 EnvironmentFile=-/etc/d1max/env
 # W00c5d:站点下发版本、代理自己切。新版起不来的话,每次重起前守卫数一次在途标记,
-# 数够就把 current 指回上一版(跟 d1max-patrol.service 同一个守卫)。
+# 数够就把 current 指回上一版。
 ExecStartPre=-/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard
-# W00b:装而不 enable。站点 broker 在 W00c 才有;现在起来连不上就退 1(约 10 s 超时),
-# 由 Restart=always 每 5 秒再起一次。
-# 起用时把 --hal 换成 d1max(W00d,加 --sidecar 127.0.0.1:8090 与实测过的 --mps-per-unit 等)。
+# **启动参数在这一版带的启动脚本里,不在这儿**(W00c5d 第三部分内部评审 B1):单元装一次不再换,
+# 退回上一版时参数跟着代码一起回来。
+# 起用时在 /etc/d1max/env 里把 D1MAX_HAL 改成 d1max(W00d 真机验收过了才改);
 # 旁路进程同一时刻只该有一个 Python 在开车:起用前先停 d1max-patrol.service。
-# (--legacy-http 不能跟 --outbox 一起用,老 HTTP 面随 W00c5e 退役。)
-ExecStart=/opt/d1max/current/venv/bin/d1max-agent --transport ${D1MAX_SITE_MQTT} --tls-ca /etc/d1max/tls/ca.crt --tls-cert /etc/d1max/tls/robot.crt --tls-key /etc/d1max/tls/robot.key --hal sim --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent --outbox ${D1MAX_OUTBOX} --map ${D1MAX_MAP} --home ${D1MAX_HOME}
+ExecStart=/opt/d1max/current/deploy/d1max-agent-start
 Restart=always
 RestartSec=5
 
