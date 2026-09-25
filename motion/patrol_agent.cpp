@@ -70,13 +70,20 @@ using namespace robot_sdk;
 // 2:加了 halt,并且 halt/estop 改成**插队**执行(见 ServeClient)。旧的 1 号
 // 旁路进程会把 halt 回成「不认识的命令」、把急停排在几拍 walk 后面 ——
 // 新巡检程序配旧旁路进程时,停车会**无声地**不灵,所以必须在握手时就拒绝。
-static const int kProtoVersion = 2;
+//
+// 3(W00d):加了 vel —— 带有效期的持续速度。立刻回执;速度线程在有效期内每 50ms 发一次
+// Move,到期连发零速自停;新的 vel 覆盖旧的并续期;halt/estop 作废。机器人代理的速度环
+// (每拍一条、ttl 300ms)就靠它。2 号旁路进程不认识 vel,握手时就得拒。
+static const int kProtoVersion = 3;
 
 // 一次 Move 在机器上维持约 1s(清单 #38)，靠 50ms 连续下发维持行走。
 static const int kMoveIntervalMs = 50;
 // 安全阀，不是调参项：现场旁边站着人。与 Python 侧 MAX_WALK_* 对齐。
 static const double kMaxWalkSeconds = 10.0;
 static const double kMaxWalkSpeed = 0.5;
+// vel 的有效期上下限:短于一拍没意义,长于 1s 断链时狗会多走一截。
+static const int kVelTtlMinMs = 50;
+static const int kVelTtlMaxMs = 1000;
 // 里程 50Hz 太密，降到 20Hz 再往外发，省得把链路和日志都灌满。
 static const int64_t kOdomMinIntervalMs = 50;
 
@@ -219,6 +226,16 @@ static std::atomic<int64_t> g_last_odom_ms{0};
 // 走的过程中每一拍都看一眼 —— 代数变了就是「有人叫停了」，立刻收手。
 // 排在队里还没轮到的 walk 也靠它作废：它们记下的代数早于那次叫停。
 static std::atomic<uint64_t> g_cancel_gen{0};
+
+// vel 的当前目标(比例值)、到期时刻、下达时的停车代数。速度线程每拍读一次。
+struct VelTarget {
+  double fwd = 0, lat = 0, yaw = 0;
+  std::chrono::steady_clock::time_point until{};
+  uint64_t gen = 0;
+  bool set = false;
+};
+static std::mutex g_vel_mtx;
+static VelTarget g_vel;
 
 static std::string StateFrame() {
   std::lock_guard<std::mutex> lk(g_state_mtx);
@@ -402,6 +419,64 @@ static Outcome DoWalk(double seconds, double fwd, double lat, double yaw,
   return Outcome{};
 }
 
+/// 持续速度(协议 v3)。**立刻回执**:真正发 Move 的是 VelLoop。
+///
+/// **要控制权**(同 walk)。比例值与 walk 同一个上限 ±0.5;有效期 [50, 1000] ms。
+static Outcome DoVel(double fwd, double lat, double yaw, double ttl_ms) {
+  if (!g_held.load()) return DenyControl("vel");
+  if (!std::isfinite(fwd) || !std::isfinite(lat) || !std::isfinite(yaw) ||
+      std::fabs(fwd) > kMaxWalkSpeed || std::fabs(lat) > kMaxWalkSpeed ||
+      std::fabs(yaw) > kMaxWalkSpeed)
+    return Reject("速度分量要在 ±0.5 内");
+  if (!std::isfinite(ttl_ms) || ttl_ms < kVelTtlMinMs || ttl_ms > kVelTtlMaxMs)
+    return Reject("ttl_ms 要在 [50, 1000] 内");
+  std::lock_guard<std::mutex> lk(g_vel_mtx);
+  g_vel.fwd = fwd;
+  g_vel.lat = lat;
+  g_vel.yaw = yaw;
+  g_vel.until = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(static_cast<int>(ttl_ms));
+  g_vel.gen = g_cancel_gen.load();
+  g_vel.set = true;
+  return Outcome{};
+}
+
+/// 速度线程:有效期内、代数没变、还握着控制权 → 每 50ms 发一次 Move;从静止起步先 Gait
+/// 一次;过期、被叫停或控制权丢了 → 连发零速一次性收住,然后等下一条 vel。
+static void VelLoop() {
+  bool moving = false;
+  while (g_running.load()) {
+    VelTarget t;
+    {
+      std::lock_guard<std::mutex> lk(g_vel_mtx);
+      t = g_vel;
+    }
+    const bool live = t.set && std::chrono::steady_clock::now() < t.until &&
+                      g_cancel_gen.load() == t.gen && g_held.load();
+    if (live) {
+      std::lock_guard<std::mutex> lk(g_sdk_mtx);
+      if (!moving) {
+        g_client->Gait(2000);
+        moving = true;
+      }
+      g_client->Move(static_cast<float>(t.lat), static_cast<float>(t.fwd),
+                     static_cast<float>(t.yaw));
+    } else if (moving) {
+      {
+        std::lock_guard<std::mutex> lk(g_sdk_mtx);
+        for (int i = 0; i < 3; ++i) {
+          g_client->Move(0, 0, 0);
+          std::this_thread::sleep_for(std::chrono::milliseconds(kMoveIntervalMs));
+        }
+      }
+      moving = false;
+      std::lock_guard<std::mutex> lk(g_vel_mtx);
+      g_vel.set = false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(kMoveIntervalMs));
+  }
+}
+
 /// 停车：作废正在走和排着队的 walk，再连发几次零速。
 ///
 /// **不要控制权。** 没握着控制权时本来也发不出 Move，而这时也不会有 walk
@@ -493,6 +568,9 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
   if (cmd == "lie") return DoLie();
   if (cmd == "head")
     return DoHead(JsonNumField(line, "yaw", 0.0), JsonNumField(line, "pitch", 0.0));
+  if (cmd == "vel")
+    return DoVel(JsonNumField(line, "fwd", 0.0), JsonNumField(line, "lat", 0.0),
+                 JsonNumField(line, "yaw", 0.0), JsonNumField(line, "ttl_ms", 0.0));
   if (cmd == "walk")
     return DoWalk(JsonNumField(line, "seconds", 0.0),
                   JsonNumField(line, "fwd", 0.0),
@@ -512,7 +590,8 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
 /// 于是 walk 在 socket 里越积越多 —— 人按急停的时候，急停排在好几拍 walk
 /// 后面，要等它们一拍一拍走完才轮得到。
 static bool IsUrgent(const std::string& cmd) {
-  return cmd == "halt" || cmd == "estop";
+  // vel 也插队:它立刻回执,排在一拍 walk 后面的话速度环就断了。
+  return cmd == "halt" || cmd == "estop" || cmd == "vel";
 }
 
 static std::string AckFrame(int id, const Outcome& out) {
@@ -832,6 +911,8 @@ int main(int argc, char** argv) {
     std::thread(FifoLoop, fifo).detach();
     std::cout << "[agent] 人工通道: echo stand > " << fifo << "\n";
   }
+
+  std::thread(VelLoop).detach();
 
   std::thread([]() {
     // 心跳：定期续一次 TakeControl，并把状态刷进日志。上装那头一旦松手，

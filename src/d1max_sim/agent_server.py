@@ -55,7 +55,14 @@ WALK_DEADBAND = 0.2
 WALK_CANCELLED = "行走被停车/急停打断"
 
 #: 插队执行的命令。跟 ``patrol_agent.cpp`` 的 ``IsUrgent`` 对齐。
-URGENT_COMMANDS = frozenset({"halt", "estop"})
+URGENT_COMMANDS = frozenset({"halt", "estop", "vel"})
+
+#: ``vel``(协议 v3)的边界:同 ``patrol_agent.cpp`` 的 ``kMaxWalkSpeed`` 与 ``kVelTtl*``。
+VEL_MAX = 0.5
+VEL_TTL_MIN_MS = 50
+VEL_TTL_MAX_MS = 1000
+#: ``vel`` 在仿真里多久积分一次里程(旁路进程那头是 50 ms 发一次 ``Move``)。
+_VEL_TICK_S = 0.05
 
 #: walk 在仿真里睡的时候多久看一眼有没有被叫停。
 _CANCEL_POLL_S = 0.01
@@ -109,6 +116,11 @@ class SimAgentServer:
         self._cancel_gen = 0
         #: 被叫停打断(或排队时就作废)的 walk 有几条。测试断言用。
         self.cancelled_walks = 0
+
+        #: ``vel`` 的当前目标(比例值)与到期时刻(monotonic)。
+        self._vel = (0.0, 0.0, 0.0)
+        self._vel_until = 0.0
+        self._vel_task: asyncio.Task[None] | None = None
 
         self._server: asyncio.Server | None = None
         self._clients: set[asyncio.StreamWriter] = set()
@@ -308,6 +320,9 @@ class SimAgentServer:
         if cmd == "head":
             self._need_control("head")
             return
+        if cmd == "vel":
+            self._start_vel(args)
+            return
         if cmd == "walk":
             self._need_control("walk")
             if gen != self._cancel_gen:
@@ -316,6 +331,58 @@ class SimAgentServer:
             await self._walk(args, gen)
             return
         raise _Rejected(f"不认识的命令: {cmd}")
+
+    def _start_vel(self, args: dict[str, Any]) -> None:
+        """带有效期的持续速度:**立刻回执**;有效期内一直走,到期自停;新的覆盖旧的并续期;
+        ``halt``/``estop`` 加停车代数,速度线程看见就停。"""
+        self._need_control("vel")
+        if self.motion in (MotionStatus.LIE_DOWN, MotionStatus.UNKNOWN):
+            raise _Rejected("趴着走不了,先 stand")
+        if self.estop_software is EmergencyStatus.STOP:
+            raise _Rejected("软急停生效中,拒绝动作")
+        try:
+            fwd = float(args.get("fwd", 0.0))
+            lat = float(args.get("lat", 0.0))
+            yaw = float(args.get("yaw", 0.0))
+            ttl = int(args.get("ttl_ms", 0))
+        except (TypeError, ValueError) as exc:
+            raise _Rejected(f"vel 参数不对: {exc}") from exc
+        if not all(math.isfinite(v) and abs(v) <= VEL_MAX for v in (fwd, lat, yaw)):
+            raise _Rejected(f"速度分量要在 ±{VEL_MAX} 内")
+        if not VEL_TTL_MIN_MS <= ttl <= VEL_TTL_MAX_MS:
+            raise _Rejected(f"ttl_ms 要在 [{VEL_TTL_MIN_MS}, {VEL_TTL_MAX_MS}] 内")
+        self._vel = (fwd, lat, yaw)
+        self._vel_until = time.monotonic() + ttl / 1000.0
+        if self._vel_task is None or self._vel_task.done():
+            self._vel_task = asyncio.get_running_loop().create_task(
+                self._vel_loop(self._cancel_gen))
+            self._tasks.add(self._vel_task)
+            self._vel_task.add_done_callback(self._tasks.discard)
+
+    async def _vel_loop(self, gen: int) -> None:
+        try:
+            while self._cancel_gen == gen and time.monotonic() < self._vel_until:
+                fwd, lat, yaw = self._vel
+                if max(abs(fwd), abs(lat), abs(yaw)) < WALK_DEADBAND:
+                    # 量太小只是原地蹭(清单 #37),不动;真机也不报错。
+                    self.vx = self.vy = self.vyaw = 0.0
+                else:
+                    self.motion = MotionStatus.GAIT
+                    # 系数同 walk(待真机验证):满量程 1.0 折 1.2 m/s。
+                    self.vx, self.vy, self.vyaw = fwd * 1.2, lat * 1.0, yaw * 1.5
+                    self.yaw = _wrap(self.yaw + self.vyaw * _VEL_TICK_S)
+                    dx = (self.vx * math.cos(self.yaw) - self.vy * math.sin(self.yaw)) \
+                        * _VEL_TICK_S
+                    dy = (self.vx * math.sin(self.yaw) + self.vy * math.cos(self.yaw)) \
+                        * _VEL_TICK_S
+                    self.x += dx
+                    self.y += dy
+                    self.distance += math.hypot(dx, dy)
+                await asyncio.sleep(_VEL_TICK_S)
+        finally:
+            self.vx = self.vy = self.vyaw = 0.0
+            if self.motion is MotionStatus.GAIT:
+                self.motion = MotionStatus.GENERAL
 
     async def _transition(self, target: MotionStatus) -> None:
         """站起/趴下是**有过程的**,不是瞬间。见清单 #36。"""
