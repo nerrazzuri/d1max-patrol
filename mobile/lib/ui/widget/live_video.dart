@@ -1,6 +1,6 @@
 /// 一路实时画面，加上「这一刻到底有没有画面」的判定。
 ///
-/// **在线判定走 `/api/video/health` 轮询，不看图片加载状态。**
+/// **在线判定走健康轮询（调用方给的 `health` 流，站点那一份见 `site_video.dart`），不看图片加载状态。**
 /// 加载状态的回调只在第一帧上响；MJPEG 是一条不结束的响应，第一帧到了之后
 /// 它就再也不说话了 —— 画面冻住的时候它跟一切正常长得一模一样，而冻住的
 /// 画面正是 §5.9 要防的头号情况。
@@ -26,8 +26,31 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
-import '../../net/patrol_client.dart';
-import '../../net/wire.dart';
+/// 这一刻哪几路相机有画面（相机名 → 有没有）。由调用方的健康轮询给（站点那一份见
+/// `site_video.dart` 的 `SiteVideoHealthPoller`）。
+class VideoHealth {
+  final Map<String, bool> online;
+
+  const VideoHealth(this.online);
+
+  /// 一路都没有就不许开狗（遥控的「没画面不许动」在手机这头的样子）。
+  bool get anyLive => online.values.any((v) => v);
+}
+
+/// 这一路画面拉不下来 / 看不懂。`status` 是对面回的 HTTP 状态码，压根没连上是 0。
+class VideoError implements Exception {
+  final int status;
+  final String error;
+  final String detail;
+
+  const VideoError(this.status, this.error, [this.detail = '']);
+
+  @override
+  String toString() {
+    final head = status == 0 ? error : '$error（$status）';
+    return detail.isEmpty ? head : '$head：$detail';
+  }
+}
 
 /// `--` —— 每个 multipart 边界前面那两个横杠。
 const List<int> _dashes = <int>[0x2d, 0x2d];
@@ -59,7 +82,7 @@ class MjpegParser {
         if (b.isNotEmpty) return MjpegParser(b);
       }
     }
-    throw PatrolError(0, '狗回的画面看不懂',
+    throw VideoError(0, '回来的画面看不懂',
         'content-type 里没有 boundary：${ct.isEmpty ? '(空)' : ct}');
   }
 
@@ -96,7 +119,7 @@ class MjpegParser {
 
   /// 喂一段字节，拿回这一段里切得出来的所有整帧。切不满一帧就返回空表。
   ///
-  /// 攒过 [maxBuffer] 还切不出一帧就抛 `PatrolError`:那不是"还没收全"，
+  /// 攒过 [maxBuffer] 还切不出一帧就抛 `VideoError`:那不是"还没收全"，
   /// 是这条流坏了。抛出去让上层收连接、重开 —— **不许静默清掉缓冲接着等**，
   /// 那会变成"永远不出画面，而且没有人知道为什么"。
   List<Uint8List> add(List<int> chunk) {
@@ -135,7 +158,7 @@ class MjpegParser {
       final int n = _buf.length;
       _buf.clear();
       _resume = 0;
-      throw PatrolError(0, '这一路画面接不下去',
+      throw VideoError(0, '这一路画面接不下去',
           '攒了 $n 字节还没切出一帧，这条流不是 MJPEG 或者已经断在半句话上');
     }
     return out;
@@ -165,13 +188,10 @@ int _find(List<int> hay, List<int> needle, int from) {
 /// 理由见文件头那段 `Image.network` 为什么不行。
 ///
 /// **token 先走请求头** `Authorization: Bearer <token>`：请求是我们自己发的，
-/// 设得了头，token 就不必进 URL、不进日志、不进代理记录。狗那头
-/// (`app/auth.py` 的 `QUERY_TOKEN_PATHS`)确实也认 `?token=`，但那条是留给
-/// `<img src=>` 那种设不了头的地方的**降级路径** —— 头这条路真机上不通再
-/// 退过去，别反过来把这里"修"成查询串。
+/// 设得了头，token 就不必进 URL、不进日志、不进代理记录。
 ///
 /// `io` 是**调用方的**：要停这条流就取消订阅、再 `close(force: true)` 掉它。
-/// 这里不替调用方关，跟 `PatrolClient` 那头一个规矩。
+/// 这里不替调用方关。
 ///
 /// [abandoned] 是调用方说"这条流我已经不要了"的那个问句。**掐连接自己会
 /// 掀起一个错**(`Connection closed before full header was received` 之类)，
@@ -198,16 +218,15 @@ Stream<Uint8List> _mjpegFrames(Uri url,
     {required HttpClient io, String token = ''}) async* {
   final HttpClientRequest req = await io.openUrl('GET', url);
   // **不跟重定向。** 跟的话 302 会把下面这个 `Authorization: Bearer` 原样
-  // 带到重定向目标去 —— 热点上狗是唯一的主机，今天打不着，但那是"今天的
-  // 拓扑",不是这行代码的保证。狗从不发 3xx，跟不跟都不影响正常路径。
+  // 带到重定向目标去。站点从不发 3xx，跟不跟都不影响正常路径。
   req.followRedirects = false;
   if (token.isNotEmpty) {
     req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
   }
   final HttpClientResponse resp = await req.close();
   if (resp.statusCode != 200) {
-    // 对面（狗或站点）说了原因就把原因带上：站点会说「狗不在线」「第一帧等不到」这种人能照着查的话。
-    var why = '回了 ${resp.statusCode}';
+    // 站点说了原因就把原因带上：「狗不在线」「这台狗已经 6 个人在看了」这种人能照着查的话。
+    var why = '';
     try {
       final body = await utf8.decoder.bind(resp).join().timeout(const Duration(seconds: 2));
       final d = jsonDecode(body.length > 2000 ? body.substring(0, 2000) : body);
@@ -215,7 +234,7 @@ Stream<Uint8List> _mjpegFrames(Uri url,
     } on Object {
       // 读不出原因就只报状态码
     }
-    throw PatrolError(resp.statusCode, '这一路画面拉不下来', why);
+    throw VideoError(resp.statusCode, '这一路画面拉不下来', why);
   }
   final MjpegParser parser = MjpegParser.fromContentType(
       resp.headers.value(HttpHeaders.contentTypeHeader));
@@ -228,8 +247,8 @@ Stream<Uint8List> _mjpegFrames(Uri url,
 
 /// 一路画面。
 ///
-/// **收 `baseUrl` + `token`，不收 `PatrolClient`。** 它要的是一条 URL，
-/// 不是一个能 POST 的客户端；把整个能改狗的客户端递进一个只画画面的
+/// **收 `baseUrl` + `token`，不收整个站点客户端。** 它要的是一条 URL，
+/// 不是一个能 POST 的客户端；把能派单的客户端递进一个只画画面的
 /// widget，等于白送权限。`token` 默认空串是为了让 widget 测试不必造一个
 /// 会话。
 class LiveVideo extends StatefulWidget {
@@ -259,7 +278,7 @@ class LiveVideo extends StatefulWidget {
   /// 站点模式要长得多：站点得先让狗起推流、走 SRT 握手、等关键帧，冷启动常常超过 3 s。
   final Duration firstFrameGrace;
 
-  /// 「这一刻有没有画面」从这条流上来 —— 通常是 [VideoHealthPoller] 的。
+  /// 「这一刻有没有画面」从这条流上来 —— 站点模式里是 `SiteVideoHealthPoller` 的。
   final Stream<VideoHealth> health;
 
   final String token;
@@ -440,10 +459,9 @@ class _LiveVideoState extends State<LiveVideo> {
     _firstFrame = Timer(widget.firstFrameGrace, () {
       if (!mounted || gen != _gen) return;
       _fail(
-          const PatrolError(0, '一直没收到画面数据',
+          const VideoError(0, '一直没收到画面数据',
               '开了流之后 3 秒一帧都没切出来'),
-          say: '一直没收到画面数据。确认一下地址和端口对不对 —— '
-              '也可能是热点上有个登录页把这条流截下来了');
+          say: '一直没收到画面数据。看看站点上这台狗在不在线、相机有没有推流');
     });
   }
 
@@ -489,15 +507,18 @@ class _LiveVideoState extends State<LiveVideo> {
   /// 而 503 和"狗没起来"要做的事完全相反 —— 一个是等人退出来，一个是走
   /// 过去看那台狗。原文由 [_fail] 记进 `dart:developer` 的日志，屏幕上不留。
   String _human(Object e) {
-    if (e is PatrolError && e.status == HttpStatus.serviceUnavailable) {
-      return '这一路同时最多 6 个人看，现在满了。'
-          '等一会儿，或者让先看的人退出来';
+    if (e is VideoError && e.status == HttpStatus.unauthorized) {
+      return '站点不认这个登录了。退出去重新登录';
     }
-    if (e is PatrolError && e.status == HttpStatus.unauthorized) {
-      return '狗不认这个身份了。退出去重新输 PIN';
+    if (e is VideoError && e.detail.isNotEmpty && e.status != 0) {
+      // 站点说了原因（「狗不在线」「已经 6 个人在看了」这种）：原样给人看，人照着查。
+      return '这一路的画面拉不下来：${e.detail}。过一会儿会自己再试';
+    }
+    if (e is VideoError && e.status == HttpStatus.serviceUnavailable) {
+      return '站点那头现在接不了这一路（看的人满了，或者狗还没推上来）。过一会儿会自己再试';
     }
     return '这一路的画面断了，过几秒会自己再试一次。'
-        '一直是这句就走过去看看那台狗';
+        '一直是这句就看看站点上这台狗在不在线';
   }
 
   /// 掐掉当前这条流。
@@ -593,7 +614,7 @@ class _LiveVideoState extends State<LiveVideo> {
               ? '第一帧还没到。要是一直停在这句，这一路就是真的没起来'
               : _trouble);
     }
-    return _panel('${widget.camera} 没有画面', '开不了狗。看看还连着热点吗，或者走过去挪');
+    return _panel('${widget.camera} 没有画面', '站点说这台狗现在不在线。看看它的网络，或者走过去看看');
   }
 
   /// 没画面时那块板子。
@@ -616,95 +637,4 @@ class _LiveVideoState extends State<LiveVideo> {
           ],
         ),
       );
-}
-
-/// 定期问「现在有画面吗」。
-///
-/// **走 `/api/video/health` 轮询，不看图片加载状态**(理由见文件头)。
-///
-/// 2 秒一次：狗那头 `STALE_S` 也是 2 秒，问得比它还密没有更多信息，问得比
-/// 它稀就会在「画面已经冻了」和「摇杆变灰」之间留一段空窗。
-class VideoHealthPoller {
-  // `prefer_initializing_formals` 在这里给的建议(`required this._client`)是
-  // 写不出来的：Dart 不许命名参数以下划线开头(`private_optional_parameter`)。
-  // 要么把这个字段公开出去 —— 那等于把一个能改狗的客户端挂在轮询器的外面 ——
-  // 要么在这儿压掉这一条。选后者。
-  VideoHealthPoller({required PatrolClient client, this.period = defaultPeriod})
-      // ignore: prefer_initializing_formals
-      : _client = client {
-    _tick(); // 先问一次，不然头一个 2 秒里界面上什么都说不出来
-    _timer = Timer.periodic(period, (_) => _tick());
-  }
-
-  static const Duration defaultPeriod = Duration(seconds: 2);
-
-  /// 这条周期路径自己的超时窗口（必修 4）。见 `PatrolClient.get` 的
-  /// `deadline`：默认那 10 秒是给一次性请求的，2 秒一发的路上等满 10 秒，
-  /// 那一问的答案早就过期了。**超时之后那条连接是真的被掐掉的。**
-  static const Duration healthDeadline = Duration(seconds: 3);
-
-  final PatrolClient _client;
-  final Duration period;
-
-  /// 广播：前后两路画面加上摇杆，都要听同一份判定。
-  final StreamController<VideoHealth> _ctl =
-      StreamController<VideoHealth>.broadcast();
-
-  Timer? _timer;
-
-  /// 上一发还没回来（必修 4）。
-  ///
-  /// 这一条跟遥控屏那两条走在**同一个 `PatrolClient`（同一个 `HttpClient`）**
-  /// 上。狗那头 HTTP 线程卡住而 TCP 还接得上的时候（扫盘、写归档），不挡的
-  /// 话这条 2 秒一发的路会在超时窗口里堆出一串谁也不回收的连接，跟发拍和
-  /// 心跳一起把狗自己的热点上行挤死 —— 而那一串正是「看不见」这个结论的
-  /// 由来，人于是去修一台好好的相机。
-  bool _asking = false;
-
-  /// 上一次问到过哪几路相机。出错时拿它拼一份全 false 的 —— 保住相机名，
-  /// 界面上那两块板子不会因为一次问不到就凭空少一块。
-  Set<String> _seen = <String>{};
-
-  Stream<VideoHealth> get stream => _ctl.stream;
-
-  Future<void> _tick() async {
-    // **在途就跳过这一拍，但不 `_degrade()`。** 跳过说的是「上一问还没回来」，
-    // 不是「问不到狗」；这一拍报个全 false 的话，摇杆会在一条其实还活着的
-    // 链路上莫名其妙灰一下。
-    if (_asking) return;
-    _asking = true;
-    try {
-      final VideoHealth h = VideoHealth.fromJson(
-          await _client.get('/api/video/health', healthDeadline));
-      _seen = h.online.keys.toSet();
-      _emit(h);
-    } on PatrolError {
-      _degrade();
-    } catch (_) {
-      // 客户端契约上只抛 `PatrolError`；真漏出别的来，也不能让轮询这条线
-      // 悄悄断掉 —— 那正是「摇杆停在亮着」的那种坏法。
-      _degrade();
-    } finally {
-      _asking = false;
-    }
-  }
-
-  /// 问不到狗时**发一个全 false 的，不是把流关掉**。
-  ///
-  /// 问不到狗等于看不见，看不见就该变灰。关流的话摇杆会停在最后一个状态
-  /// 上，而那个状态很可能是「亮着」。
-  void _degrade() =>
-      _emit(VideoHealth(<String, bool>{for (final String k in _seen) k: false}));
-
-  void _emit(VideoHealth h) {
-    if (!_ctl.isClosed) _ctl.add(h);
-  }
-
-  /// 取消 Timer 并 close 掉 controller。人切走了还在问，就是在白耗电和白占
-  /// 热点带宽。
-  void stop() {
-    _timer?.cancel();
-    _timer = null;
-    _ctl.close();
-  }
 }

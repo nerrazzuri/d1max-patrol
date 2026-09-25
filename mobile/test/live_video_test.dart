@@ -1,6 +1,6 @@
 /// 视频屏与在线判定。
 ///
-/// **在线判定走 `/api/video/health` 轮询，不看图片加载状态。**
+/// **在线判定走健康轮询（调用方给的流），不看图片加载状态。**
 /// 加载状态的回调只在第一帧上响；MJPEG 是一条不结束的响应，第一帧到了之后
 /// 它就再也不说话了 —— 画面冻住的时候它跟一切正常长得一模一样，而冻住的
 /// 画面正是 §5.9 要防的头号情况。
@@ -25,8 +25,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:d1max_patrol/net/patrol_client.dart';
-import 'package:d1max_patrol/net/wire.dart';
 import 'package:d1max_patrol/ui/widget/live_video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -73,7 +71,11 @@ class FakeVideoDog {
     this.status = 200,
     this.feedForever = false,
     this.silent = false,
+    this.errorBody = '',
   });
+
+  /// 状态码不是 200 时回的 `{"error": …}`（站点说的原因）。空串就不回正文。
+  final String errorBody;
 
   /// 发完那几帧接着一直喂，直到客户端把连接掐了。
   ///
@@ -87,8 +89,7 @@ class FakeVideoDog {
   /// 模拟"连错端口 / 热点上有个登录门户"：头看着像那么回事，画面永远不来。
   final bool silent;
 
-  /// 回这个状态码。503 是狗那头满 6 个观众时的回法
-  /// (`video.py` 的 `MAX_VIEWERS` 到 `server.py` 的 503)。
+  /// 回这个状态码。503 是站点那头一路看的人满了（`video.py` 的 `MAX_VIEWERS`）时的回法。
   final int status;
 
   /// 发完那几帧就把响应关掉。
@@ -133,6 +134,10 @@ class FakeVideoDog {
       r.bufferOutput = false;
       if (status != 200) {
         r.statusCode = status;
+        if (errorBody.isNotEmpty) {
+          r.headers.contentType = ContentType.json;
+          r.write(jsonEncode(<String, String>{'error': errorBody}));
+        }
         await r.close();
         return;
       }
@@ -165,64 +170,6 @@ class FakeVideoDog {
   Future<void> stop() => _s.close(force: true);
 }
 
-/// 只记调用次数的假客户端。
-///
-/// Dart 每个类都自带一个隐式接口，所以 `implements PatrolClient` 就够了，
-/// 不用为这个测试单独抽一个抽象类。
-class CountingClient implements PatrolClient {
-  int calls = 0;
-
-  /// 真到设成 true 那一刻起，`get` 就抛 —— 用来测「问不到狗」那一支。
-  bool broken = false;
-
-  /// 挂着不回。**摆在这儿就是「这一问还在路上」**（必修 4 的在途闸要的局面）。
-  /// 谁都不 `complete` 的话它就一直挂着，正如一台正在扫盘的狗。
-  Completer<void>? hold;
-
-  @override
-  Future<Map<String, dynamic>> get(String path, [Duration? deadline]) async {
-    calls++;
-    final Completer<void>? h = hold;
-    if (h != null) await h.future;
-    if (broken) {
-      throw const PatrolError(0, '连不上狗', '热点掉了');
-    }
-    return <String, dynamic>{
-      'cameras': <String, dynamic>{
-        'front': <String, dynamic>{'online': true, 'viewers': 1},
-      },
-    };
-  }
-
-  @override
-  String get baseUrl => 'http://x';
-
-  @override
-  Duration get timeout => const Duration(seconds: 10);
-
-  @override
-  String? get token => null;
-
-  @override
-  void close({bool force = true}) {}
-
-  @override
-  Future<Map<String, dynamic>> post(String path,
-          [Object? body, Duration? deadline]) async =>
-      throw UnimplementedError();
-
-  @override
-  Future<Map<String, dynamic>> put(String path, [Object? body]) async =>
-      throw UnimplementedError();
-
-  @override
-  Future<String> setOperator(String name) async =>
-      throw UnimplementedError();
-
-  @override
-  Future<Session> unlock(String pin, {required String operator}) async =>
-      throw UnimplementedError();
-}
 
 /// 把这一格挂进一个**真的能推页面**的壳里，并把那个 `Navigator` 交出去。
 ///
@@ -319,7 +266,7 @@ void main() {
           blew = e;
         }
       }
-      expect(blew, isA<PatrolError>(),
+      expect(blew, isA<VideoError>(),
           reason: '喂了 $fed MiB 都不叫停的话，这台手机就是在等 OOM');
       expect(fed * (1 << 20),
           lessThanOrEqualTo(MjpegParser.maxBuffer + (1 << 20)));
@@ -327,7 +274,7 @@ void main() {
 
     test('响应头里没有 boundary 就明说，不是默默给张黑图', () {
       expect(() => MjpegParser.fromContentType('image/jpeg'),
-          throwsA(isA<PatrolError>()));
+          throwsA(isA<VideoError>()));
     });
   });
 
@@ -443,12 +390,36 @@ void main() {
     await teardown(t, ctl, dog.stop);
   });
 
-  testWidgets('一直被拒就越等越久，而且屏幕上说得出「人太多了」', (WidgetTester t) async {
-    // **满员(503)不能变成 0.5 Hz 的无限猛敲。** 狗那头一路最多 6 个观众，
-    // 第 7 个人的手机要是每 2 秒敲一次、敲到天荒地老，现场那条本来就不宽的
-    // 热点还要被它占着。屏幕也得说人话:满员该做的事(等一下、让人退出来)
-    // 跟「狗没起来」(走过去看)完全相反。
+  testWidgets('站点回 503 没说原因：说「接不了」，也不上异常文本', (WidgetTester t) async {
     final FakeVideoDog dog = FakeVideoDog(status: 503);
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    await pumpUntil(t, () => find.textContaining('看的人满了').evaluate().isNotEmpty,
+        '503 那句话');
+    expect(find.textContaining('503'), findsNothing, reason: '状态码只进日志，不上屏');
+    await teardown(t, ctl, dog.stop);
+  });
+
+  testWidgets('站点回 401：说重新登录（原因是令牌过期，不是狗坏了）', (WidgetTester t) async {
+    final FakeVideoDog dog = FakeVideoDog(status: 401, errorBody: '要登录');
+    await t.runAsync(dog.start);
+    final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
+    await t.pumpWidget(wrap(LiveVideo(
+        baseUrl: dog.baseUrl, camera: 'front', health: ctl.stream)));
+    ctl.add(const VideoHealth(<String, bool>{'front': true}));
+    await pumpUntil(t, () => find.textContaining('重新登录').evaluate().isNotEmpty, '401 那句话');
+    await teardown(t, ctl, dog.stop);
+  });
+
+  testWidgets('一直被拒就越等越久，而且屏幕上说得出「人太多了」', (WidgetTester t) async {
+    // **满员(503)不能变成 0.5 Hz 的无限猛敲。** 站点那头一路最多 6 个观众，
+    // 第 7 个人的手机要是每 2 秒敲一次、敲到天荒地老，站点还要一直应付它。
+    // 屏幕也得说人话:站点说了原因(「已经 6 个人在看了」)就原样给人看。
+    final FakeVideoDog dog =
+        FakeVideoDog(status: 503, errorBody: '这台狗已经 6 个人在看了,最多 6 个 —— 关掉一个再开');
     await t.runAsync(dog.start);
     final StreamController<VideoHealth> ctl = StreamController<VideoHealth>();
     await t.pumpWidget(wrap(LiveVideo(
@@ -469,8 +440,8 @@ void main() {
     expect(fake, greaterThanOrEqualTo(const Duration(seconds: 6)),
         reason: '2 秒起、每次翻倍的话第三次 GET 最早也在 2+4=6 秒；'
             '每次都只等 2 秒的话 4 秒出头就到了');
-    expect(find.textContaining('最多 6 个人看'), findsOneWidget,
-        reason: '满员跟「狗没起来」要做的事完全相反，不能共用一句话');
+    expect(find.textContaining('6 个人在看了'), findsOneWidget,
+        reason: '站点说了为什么拉不下来，就原样给人看');
     expect(find.textContaining('HttpException'), findsNothing,
         reason: '现场屏幕上要的是「该做什么」，不是 Dart 的异常文本');
 
@@ -662,7 +633,7 @@ void main() {
 
   testWidgets('一个字节都不来的时候三秒就断开重来，不是先烧 8 MiB 流量',
       (WidgetTester t) async {
-    // **连错端口、或者热点上有个登录门户**的时候，对面会给一个像模像样的
+    // **狗那头没在推、或者中间有东西把流截了**的时候，对面会给一个像模像样的
     // 头然后什么也不发(或者一直发不是 MJPEG 的字节)。光靠 8 MiB 那个上限
     // 的话，是攒满 8 MiB 才抛一次、退避重开、再攒 8 MiB —— 封顶 16 秒就是
     // 每 16 秒白烧 8 MiB 手机流量，而屏幕上还在说"过几秒自己再试"。
@@ -686,63 +657,10 @@ void main() {
     expect(fake, lessThan(const Duration(seconds: 7)),
         reason: '3 秒宽限 + 2 秒退避 ≈ 5 秒就该敲第二次;'
             '等 8 MiB 攒满的话这里根本走不到');
-    expect(find.textContaining('地址和端口'), findsOneWidget,
-        reason: '"地址不对"跟"狗没起来""人太多了"要做的事完全不同');
+    expect(find.textContaining('在不在线'), findsOneWidget,
+        reason: '"一直没画面"跟"人太多了"要做的事完全不同');
 
     await teardown(t, ctl, dog.stop);
   });
-
-  test('轮询器按周期问，停了就不再问', () async {
-    final CountingClient c = CountingClient();
-    final VideoHealthPoller p = VideoHealthPoller(
-        client: c, period: const Duration(milliseconds: 10));
-    await p.stream.first;
-    p.stop();
-    final int atStop = c.calls;
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    expect(c.calls, atStop,
-        reason: '人切走了还在问，就是在白耗电和白占热点带宽');
-  });
-
-  test('上一问还在路上的时候,这一拍不再问,而且不许当成掉线', () async {
-    /// 必修 4 的第三条周期路径。这条 2 秒一发的路跟发拍、心跳走在**同一个
-    /// `HttpClient`** 上：不挡的话，狗那头 HTTP 线程一卡（扫盘、写归档），
-    /// 超时窗口里就会堆出一串谁也不回收的连接，把狗自己的热点上行挤死 ——
-    /// 而「看不见」这个结论正是这么来的，人于是去修一台好好的相机。
-    ///
-    /// **跳过一拍不等于掉线。** 跳过的时候顺手报一份全 false 的话，摇杆会在
-    /// 一条其实还活着的链路上莫名其妙灰一下 —— 那比多问几次还糟。
-    final CountingClient c = CountingClient()..hold = Completer<void>();
-    final VideoHealthPoller p = VideoHealthPoller(
-        client: c, period: const Duration(milliseconds: 10));
-    final List<VideoHealth> seen = <VideoHealth>[];
-    final StreamSubscription<VideoHealth> sub = p.stream.listen(seen.add);
-    await Future<void>.delayed(const Duration(milliseconds: 200));
-    expect(c.calls, 1, reason: '没有在途闸的话，这 200 毫秒里会堆出十几条来');
-    expect(seen, isEmpty, reason: '跳过一拍被当成了掉线：屏上两根杆会白白灰一下');
-
-    c.hold!.complete();
-    c.hold = null;
-    await until(() => seen.isNotEmpty, '那一问回来之后的第一份健康结论');
-    expect(seen.first.anyLive, isTrue, reason: '狗好好的，报回来的却是看不见');
-    p.stop();
-    unawaited(sub.cancel());
-  });
-
-  test('轮询问不到狗时发全 false 的那一份，不许把流关掉', () async {
-    // 问不到狗等于看不见，看不见就该变灰。**把流关掉的话摇杆会停在最后一个
-    // 状态上，而那个状态很可能是「亮着」。**
-    final CountingClient c = CountingClient()..broken = true;
-    final VideoHealthPoller p = VideoHealthPoller(
-        client: c, period: const Duration(milliseconds: 10));
-
-    expect((await p.stream.first).anyLive, isFalse);
-
-    final Future<VideoHealth> next = p.stream.first;
-    c.broken = false;
-    expect((await next).anyLive, isTrue,
-        reason: '出一次错就把流关掉的话，狗回来了也没人知道');
-
-    p.stop();
-  });
 }
+

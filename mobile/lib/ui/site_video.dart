@@ -1,6 +1,6 @@
 /// 站点模式的画面（W00c5b）：画面经站点来，手机不直连狗。
 ///
-/// 前、后两路切换；在线判定走站点的 `video/health` 轮询（跟直连那一版同一个规矩：不看图片加载状态）；
+/// 前、后两路切换；在线判定走站点的轮询（不看图片加载状态，理由见 `LiveVideo`）；
 /// 取流用**钉住站点证书**的客户端。站点那头第一个观众来了才让狗开始推，最后一个走了才停 ——
 /// 所以这一格只在页面上时连着（`LiveVideo` 被盖住时自己断开，见它的 `_onstage`）。
 library;
@@ -10,7 +10,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../net/site_client.dart';
-import '../net/wire.dart';
 import 'widget/live_video.dart';
 
 /// 按固定间隔问站点「这台狗在不在线、新不新鲜」，变成 `LiveVideo` 要的那条流。

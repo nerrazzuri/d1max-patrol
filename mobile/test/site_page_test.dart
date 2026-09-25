@@ -6,8 +6,6 @@ import 'dart:typed_data';
 import 'package:d1max_patrol/main.dart';
 import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/net/site_client.dart';
-import 'package:d1max_patrol/store/pin_vault.dart';
-import 'package:d1max_patrol/store/registry_store.dart';
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_video.dart';
@@ -323,15 +321,12 @@ void main() {
     expect(find.byKey(const Key('btn-abort')), findsNothing);
   });
 
-  testWidgets('首屏二选一：站点 / 现场直连', (t) async {
-    await t.pumpWidget(MaterialApp(
-        home: ModePage(
-            store: _NoRegistry(), vault: _NoVault(), siteStore: MemorySiteStore())));
-    expect(find.byKey(const Key('mode-site')), findsOneWidget);
-    expect(find.byKey(const Key('mode-direct')), findsOneWidget);
-    await t.tap(find.byKey(const Key('mode-site')));
+  testWidgets('打开就是站点列表：没有直连入口（W00c5e）', (t) async {
+    await t.pumpWidget(PatrolApp(siteStore: MemorySiteStore()));
     await t.pumpAndSettle();
     expect(find.text('还没有站点。右下角添加。'), findsOneWidget);
+    expect(find.byKey(const Key('mode-direct')), findsNothing);
+    expect(find.textContaining('直连'), findsNothing);
   });
 
   testWidgets('添加站点存进去：指纹规范化，口令不存', (t) async {
@@ -466,16 +461,6 @@ void main() {
     expect(find.textContaining('nightly'), findsOneWidget);
     expect(find.textContaining('estate-kl'), findsOneWidget);
   });
-}
-
-class _NoRegistry implements RegistryStore {
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
-}
-
-class _NoVault implements PinVault {
-  @override
-  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
 }
 
 class _FailingApi extends FakeApi {
