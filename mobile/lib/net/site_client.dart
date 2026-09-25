@@ -14,6 +14,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 
@@ -68,6 +69,12 @@ class SiteSession {
 
   /// 确认、解决告警（W00c5a）：值班的人（保安、管理员）；业主只看。
   bool get canHandleAlerts => role == 'admin' || role == 'guard';
+
+  /// 遥控（W00c5c，决策 7）：保安、管理员；业主没有（业主能按「停」）。
+  bool get canTeleop => role == 'admin' || role == 'guard';
+
+  /// 强制接管别人的遥控：只有管理员，而且要写理由。
+  bool get canTakeover => role == 'admin';
   bool get canAbort => role == 'admin' || role == 'guard' || role == 'owner';
 }
 
@@ -97,8 +104,82 @@ abstract class SiteApi {
   /// 画面走的站点地址，与一个**钉住站点证书**的新 `HttpClient`（调用方用完关掉）。
   String get baseUrl;
   HttpClient pinnedClient();
+
+  /// 遥控（W00c5c）：开一条遥控连接（连接就是租约的载体）。被拒抛 [SiteError]，带站点给的原因。
+  /// [takeoverReason] 非空 = 管理员强制接管。
+  Future<TeleopLink> teleop(String robotId, {String takeoverReason = ''});
+
+  /// 停车（W00c5c）：走站点的 `halt`，**不走遥控连接**。业主也能按。
+  Future<Map<String, dynamic>> halt(String robotId);
   Stream<Map<String, dynamic>> events();
   void close();
+}
+
+final Random _rand = Random.secure();
+
+/// 一条遥控连接（W00c5c）。连着 = 握着租约；断了 = 放租，狗停。
+abstract class TeleopLink {
+  /// 站点发来的：`granted`（租约代次、限速）、`video`（画面有没有）、`ended`（为什么结束）。
+  Stream<Map<String, dynamic>> get messages;
+  bool get closed;
+
+  /// 一帧摇杆（m/s、rad/s）。站点会再夹一次限速；狗那头也夹。
+  void send(double vx, double wz);
+
+  /// 我不遥控了（放租）。
+  void release();
+  Future<void> close();
+}
+
+class WsTeleopLink implements TeleopLink {
+  WsTeleopLink(this._ws, this._io) {
+    _ws.listen((dynamic m) {
+      if (m is! String) return;
+      try {
+        final d = jsonDecode(m);
+        if (d is Map<String, dynamic>) _ctl.add(d);
+      } on FormatException {
+        return;
+      }
+    }, onDone: _done, onError: (Object _) => _done(), cancelOnError: true);
+  }
+
+  final WebSocket _ws;
+  final HttpClient _io;
+  final StreamController<Map<String, dynamic>> _ctl =
+      StreamController<Map<String, dynamic>>.broadcast();
+  bool _closed = false;
+
+  void _done() {
+    if (_closed) return;
+    _closed = true;
+    _ctl.add(<String, dynamic>{'kind': 'ended', 'reason': 'disconnected'});
+    unawaited(_ctl.close());
+    _io.close(force: true);
+  }
+
+  @override
+  Stream<Map<String, dynamic>> get messages => _ctl.stream;
+  @override
+  bool get closed => _closed;
+
+  @override
+  void send(double vx, double wz) {
+    if (_closed) return;
+    _ws.add(jsonEncode(<String, dynamic>{'vx': vx, 'wz': wz}));
+  }
+
+  @override
+  void release() {
+    if (_closed) return;
+    _ws.add(jsonEncode(<String, dynamic>{'kind': 'release'}));
+  }
+
+  @override
+  Future<void> close() async {
+    await _ws.close(1000, 'bye');
+    _done();
+  }
 }
 
 class SiteClient implements SiteApi {
@@ -300,6 +381,62 @@ class SiteClient implements SiteApi {
 
   @override
   String get baseUrl => base.toString().replaceAll(RegExp(r'/$'), '');
+
+  @override
+  Future<TeleopLink> teleop(String robotId, {String takeoverReason = ''}) async {
+    final uri = base.resolve('/api/robots/${Uri.encodeComponent(robotId)}/teleop').replace(
+        queryParameters: takeoverReason.isEmpty ? null : {'takeover': takeoverReason});
+    final io = pinnedClient()..connectionTimeout = const Duration(seconds: 5);
+    // 自己握手（不用 WebSocket.connect）：被拒的时候要拿到站点给的状态码和原因（「gina 正在遥控」）。
+    final key = base64.encode(List<int>.generate(16, (_) => _rand.nextInt(256)));
+    try {
+      final req = await io.openUrl('GET', uri).timeout(timeout);
+      req.followRedirects = false;
+      req.headers
+        ..set(HttpHeaders.connectionHeader, 'Upgrade')
+        ..set(HttpHeaders.upgradeHeader, 'websocket')
+        ..set('Sec-WebSocket-Key', key)
+        ..set('Sec-WebSocket-Version', '13');
+      final tok = session?.token;
+      if (tok != null) req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $tok');
+      final resp = await req.close().timeout(timeout);
+      if (resp.statusCode != 101) {
+        var why = '遥控开不了';
+        try {
+          final d = jsonDecode(await utf8.decoder.bind(resp).join());
+          if (d is Map && d['error'] is String) why = d['error'] as String;
+        } on FormatException {
+          // 没有原因就只报状态码
+        }
+        if (resp.statusCode == 401) session = null;
+        io.close(force: true);
+        throw SiteError(resp.statusCode, why);
+      }
+      final want = base64.encode(
+          sha1.convert(utf8.encode('${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11')).bytes);
+      if (resp.headers.value('Sec-WebSocket-Accept') != want) {
+        io.close(force: true);
+        throw const SiteError(0, '站点的遥控握手不对');
+      }
+      final sock = await resp.detachSocket();
+      final ws = WebSocket.fromUpgradedSocket(sock, serverSide: false)
+        ..pingInterval = const Duration(seconds: 1);
+      return WsTeleopLink(ws, io);
+    } on SocketException catch (e) {
+      io.close(force: true);
+      throw SiteError(0, '连不上站点：${e.message}');
+    } on HandshakeException {
+      io.close(force: true);
+      throw const SiteError(0, '站点的证书对不上');
+    } on TimeoutException {
+      io.close(force: true);
+      throw const SiteError(0, '连站点超时');
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>> halt(String robotId) async => _map(await _send(
+      'POST', '/api/robots/${Uri.encodeComponent(robotId)}/halt', <String, dynamic>{}));
 
   @override
   HttpClient pinnedClient() {

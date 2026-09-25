@@ -55,6 +55,7 @@ from d1max_site.permissions import (
     HANDLE_ALERTS,
     MANAGE,
     MANAGE_ACCOUNTS,
+    TELEOP,
     VIEW,
     VIEW_AUDIT,
     allowed,
@@ -73,6 +74,8 @@ _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
 ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
+#: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
+_TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/(teleop|halt)$")
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
@@ -100,7 +103,7 @@ class SiteApi:
     def __init__(self, *, host: str, port: int, loop: LoopThread, dispatcher: Dispatcher,
                  accounts: Accounts, tls: tuple[Path, Path] | None = None,
                  scheduler: Any = None, standby: Any = None, incidents: Any = None,
-                 alerts: Any = None, video: Any = None,
+                 alerts: Any = None, video: Any = None, teleop: Any = None,
                  now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
@@ -115,6 +118,7 @@ class SiteApi:
         self.incidents = incidents
         self.alerts = alerts
         self.video = video
+        self.teleop = teleop
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
         self._stopping = threading.Event()
@@ -286,6 +290,16 @@ class _Handler(BaseHTTPRequestHandler):
                 self._need(user, VIEW if (method == "GET" and path == "/api/incidents")
                            else MANAGE)
                 return self._incident_admin(method, path)
+            m = _TELEOP.match(path)
+            if m is not None:
+                robot_id = unquote(m.group(1))
+                if not SAFE_ID.match(robot_id):
+                    raise HttpError(404, "没有这台狗")
+                if m.group(2) == "halt" and method == "POST":
+                    return self._halt(robot_id, user)
+                if m.group(2) == "teleop" and method == "GET":
+                    return self._teleop_ws(robot_id, user)
+                raise HttpError(404, f"没有 {method} {path}")
             m = _VIDEO.match(path)
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
@@ -570,6 +584,65 @@ class _Handler(BaseHTTPRequestHandler):
         except CatalogError as exc:
             raise HttpError(409, str(exc)) from exc
         self._send_json(200, got)
+
+    def _halt(self, robot_id: str, user) -> None:
+        """停车(W00c5c):走 cmd,不走遥控连接。``abort`` 权限 —— 业主也能按。"""
+        self._need(user, ABORT)
+        self._body()
+        self._audit_target = robot_id
+        if self.site.teleop is not None:
+            try:
+                r = self.site.teleop.halt(robot_id, user)
+            except DispatchRefused as exc:
+                raise HttpError(409, str(exc)) from exc
+        else:
+            try:
+                r = self.site.loop.call(lambda: self.site.dispatcher.halt(
+                    robot_id, issued_by=str(user)),
+                    timeout_s=self.site.dispatcher.ack_timeout_s + 5)
+            except DispatchRefused as exc:
+                raise HttpError(409, str(exc)) from exc
+        return self._send_json(200, r)
+
+    def _teleop_ws(self, robot_id: str, user) -> None:
+        """遥控(W00c5c):先开租约(拒绝回 HTTP 状态码),再升级成 WebSocket;连接就是租约的载体。"""
+        from d1max_site.teleop import TeleopRefused
+        from d1max_site.ws import WsClosed, upgrade
+        self._need(user, TELEOP)
+        desk = self.site.teleop
+        if desk is None:
+            raise HttpError(404, "这个站点没开遥控")
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        reason = (q.get("takeover") or [""])[0].strip()[:200]
+        try:
+            session = desk.open(robot_id, user, takeover_reason=reason)
+        except TeleopRefused as exc:
+            raise HttpError(exc.status, exc.message) from exc
+        ws = upgrade(self)
+        if ws is None:
+            desk.close(session, "bad_upgrade")
+            return
+        session.ws = ws
+        token = self._token()
+        checked = time.monotonic()
+        try:
+            ws.send_text(json.dumps({"kind": "granted", "lease_epoch": session.epoch,
+                                     "operator": session.operator, "max_vx": session.max_vx,
+                                     "max_wz": session.max_wz, "frame_period_ms": 100},
+                                    ensure_ascii=False))
+            while not session.ended.is_set() and not self.site.stopping:
+                msg = ws.recv(timeout_s=0.5)
+                if msg is not None:
+                    desk.on_message(session, msg)
+                if time.monotonic() - checked >= self.site.sse_recheck_s:
+                    checked = time.monotonic()
+                    who = self.site.accounts.check(token)
+                    if who is None or not allowed(who.role, TELEOP):
+                        desk.close(session, "logged_out")
+        except WsClosed:
+            pass
+        finally:
+            desk.close(session, "disconnected")    # 幂等:已经结束的不再结束一次
 
     def _video(self, robot_id: str, what: str, user) -> None:
         """视频经站点(W00c5b)。``health``:每路画面健康;``front``/``back``:MJPEG 长连(``view``)。

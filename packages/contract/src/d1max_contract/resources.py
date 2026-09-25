@@ -15,6 +15,10 @@ TASK_RESOURCES: dict[str, frozenset[str]] = {
     # W00c2a:整趟巡检。走、拍、开灯、转头;跟 goto 互斥,跟 abort 不冲突。
     "patrol": frozenset({"motion", "camera", "light", "head"}),
     "abort": frozenset(),
+    # W00c5c:遥控。只占 motion —— 跟 goto/patrol 互斥,优先级最高,抢占它们。
+    "teleop": frozenset({"motion"}),
+    # W00c5c:停车。不是任务,不占资源(跟 abort 一样,任何时候都能进来)。
+    "halt": frozenset(),
 }
 
 

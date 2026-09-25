@@ -1,0 +1,17 @@
+{
+  "command_id": "cmd-0007",
+  "control_epoch": 3,
+  "expires_at": 1760000329000,
+  "issued_at": 1760000299000,
+  "kind": "teleop",
+  "offline_policy": "default",
+  "payload": {
+    "lease_epoch": 2,
+    "lease_ttl_ms": 5000,
+    "operator": "gina"
+  },
+  "precondition": null,
+  "priority": 100,
+  "schema": "1.0",
+  "task_id": "teleop-2"
+}

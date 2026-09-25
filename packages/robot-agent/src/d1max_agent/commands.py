@@ -15,6 +15,7 @@ schema 主版本 → 认证(主题里的 site/robot 与注册一致,注册在有
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import math
@@ -38,6 +39,12 @@ from d1max_contract.messages import (
 )
 from d1max_contract.registration import Registration
 from d1max_contract.resources import resources_for
+from d1max_contract.teleop import (
+    TELEOP_PRIORITY,
+    TeleopFrame,
+    parse_teleop_grant,
+    parse_teleop_lease,
+)
 from d1max_contract.topics import Topics
 from d1max_contract.video import parse_video_payload
 
@@ -69,6 +76,8 @@ class CommandProcessor:
         #: 按需推流(W00c5b,``VideoPusher``)。``None`` = 这台代理不推视频,
         #: ``video`` 命令回 unsupported。
         self.video: Any = None
+        #: ``halt`` 时当场停车(W00c5c)。运行时接到 ``hal.stop``。
+        self.halt_hook: Callable[[], Any] | None = None
 
     # ------------------------------------------------------------ 代次落盘
 
@@ -133,6 +142,16 @@ class CommandProcessor:
         if cmd.expires_at <= now:
             return self._finish(Ack(cmd.command_id, cmd.task_id, AckResult.EXPIRED))
 
+        # **优先级由代理定死**(W00c5c,决策 7 追加条件:人工遥控优先于所有自动任务):遥控一律
+        # TELEOP_PRIORITY,别的命令最多到它下面一档 —— 站点出错送来一条优先级 500 的 goto,
+        # 也抢不走遥控。
+        prio = TELEOP_PRIORITY if cmd.kind == "teleop" else min(cmd.priority, TELEOP_PRIORITY - 1)
+        if prio != cmd.priority:
+            cmd = dataclasses.replace(cmd, priority=prio)
+
+        if cmd.kind == "teleop_lease":
+            # 续租每秒一条:不进幂等记录(同 video)。
+            return self._handle_teleop_lease(cmd)
         seen = self.idem.lookup(cmd.command_id)
         if seen is not None:
             return Ack(cmd.command_id, cmd.task_id, AckResult.DUPLICATE, original=seen.to_wire())
@@ -140,6 +159,8 @@ class CommandProcessor:
 
         if cmd.kind == "abort":
             return self._finish(await self._handle_abort(cmd))
+        if cmd.kind == "halt":
+            return self._finish(await self._handle_halt(cmd))
         if cmd.kind == "video":
             # **不进幂等记录**:续期每 ttl/2 一条,记下来一路一天几十万行、代理起来还要全量重放。
             # 重投的旧 video 命令至多把推流续到它自己的有效期,无害。
@@ -183,6 +204,12 @@ class CommandProcessor:
     def _check_payload(self, cmd: Command) -> str:
         if cmd.kind == "patrol":
             return self._check_patrol(cmd)
+        if cmd.kind == "teleop":
+            try:
+                parse_teleop_grant(cmd.payload)
+            except ContractError as exc:
+                return f"payload: {exc}"
+            return ""
         if cmd.kind != "goto":
             return ""
         try:
@@ -231,6 +258,55 @@ class CommandProcessor:
             self.events.emit("task_aborted", {"task_id": t.task_id, "reason": reason})
             return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
         await t.abort(reason or "abort")
+        return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
+
+    def _teleop_task(self, epoch: int | None = None) -> Any:
+        """当前或排队中的遥控任务(``epoch`` 给了就要代次对得上)。"""
+        for t in ([self.current] if self.current is not None else []) + self.pending:
+            if t.kind == "teleop" and not t.done and (epoch is None
+                                                      or getattr(t, "lease_epoch", None) == epoch):
+                return t
+        return None
+
+    def _handle_teleop_lease(self, cmd: Command) -> Ack:
+        """续租、放租(W00c5c)。不是任务;找不到这一代的遥控就拒。"""
+        try:
+            lease = parse_teleop_lease(cmd.payload)
+        except ContractError as exc:
+            return self._rej(cmd, f"payload: {exc}")
+        t = self._teleop_task(lease.lease_epoch)
+        if t is None:
+            return self._rej(cmd, "no_such_lease")
+        if lease.action == "renew":
+            t.renew(lease.lease_ttl_ms)
+        else:
+            t.release()
+        return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
+
+    def on_teleop_frame(self, frame: TeleopFrame, *, rx_ms: int) -> str:
+        """一帧遥控(专用主题,QoS 0)。只交给**当前**那一趟遥控;收下返回空串,否则原因(不回执)。"""
+        cur = self.current
+        if cur is None or cur.kind != "teleop" or cur.done:
+            return "no_teleop"
+        return cur.on_frame(frame, rx_ms=rx_ms)
+
+    async def _handle_halt(self, cmd: Command) -> Ack:
+        """停车(W00c5c):**不走遥控连接**。当场让 HAL 停,中止当前与排队中的一切任务。"""
+        if self.halt_hook is not None:
+            try:
+                r = self.halt_hook()
+                if hasattr(r, "__await__"):
+                    await r
+            except Exception:
+                log.exception("halt 时停车失败,任务照样中止")
+        for t in list(self.pending):
+            self.pending.remove(t)
+            t.state = TaskState.ABORTED
+            t.detail = {"reason": "halt"}
+            self.finished.append(t)
+            self.events.emit("task_aborted", {"task_id": t.task_id, "reason": "halt"})
+        if self.current is not None and not self.current.done:
+            await self.current.abort("halt")
         return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
 
     def _handle_video(self, cmd: Command) -> Ack:

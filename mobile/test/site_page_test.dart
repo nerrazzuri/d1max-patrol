@@ -16,6 +16,24 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_site.dart';
 
+class FakeTeleopLink implements TeleopLink {
+  final StreamController<Map<String, dynamic>> ctl =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final List<List<double>> sent = <List<double>>[];
+  bool released = false;
+  bool isClosed = false;
+  @override
+  Stream<Map<String, dynamic>> get messages => ctl.stream;
+  @override
+  bool get closed => isClosed;
+  @override
+  void send(double vx, double wz) => sent.add(<double>[vx, wz]);
+  @override
+  void release() => released = true;
+  @override
+  Future<void> close() async => isClosed = true;
+}
+
 class FakeApi implements SiteApi {
   FakeApi(String role, {Map<String, dynamic>? robotView})
       : session = SiteSession('tok', 'u', role),
@@ -106,6 +124,22 @@ class FakeApi implements SiteApi {
     if (summaryError != null) throw summaryError!;
     return siteFixture('site_watch_summary');
   }
+  /// 遥控（W00c5c）。
+  FakeTeleopLink? link;
+  SiteError? teleopError;
+  String? lastTakeover;
+  @override
+  Future<TeleopLink> teleop(String robotId, {String takeoverReason = ''}) async {
+    lastTakeover = takeoverReason;
+    if (teleopError != null) throw teleopError!;
+    return link = FakeTeleopLink();
+  }
+  @override
+  Future<Map<String, dynamic>> halt(String robotId) async {
+    calls.add('halt $robotId');
+    return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
+  }
+
   /// 视频（W00c5b）。
   int videoHealthCalls = 0;
   @override

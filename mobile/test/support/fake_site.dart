@@ -30,6 +30,13 @@ class FakeSite {
   final StreamController<Map<String, dynamic>> sse = StreamController.broadcast();
   String role = 'guard';
 
+  /// 遥控连接（W00c5c）：拒绝时回的原因（配合 [statusCodes]）；握手时回一个错的
+  /// `Sec-WebSocket-Accept`；连上之后收到的每条消息；站点这头的那条 WebSocket（测试拿来关）。
+  String teleopRefusal = '';
+  bool teleopBadAccept = false;
+  final List<Map<String, dynamic>> teleopGot = <Map<String, dynamic>>[];
+  WebSocket? teleopWs;
+
   int get port => _s.port;
   String get url => 'https://127.0.0.1:$port';
 
@@ -60,6 +67,10 @@ class FakeSite {
     ));
     final code = statusCodes[path] ?? 200;
     final resp = req.response;
+    if (path.endsWith('/teleop')) {
+      await _teleop(req, code);
+      return;
+    }
     if (code >= 300 && code < 400) {
       resp.statusCode = code;
       resp.headers.set(HttpHeaders.locationHeader, 'http://127.0.0.1:1/elsewhere');
@@ -103,7 +114,11 @@ class FakeSite {
       return;
     }
     Map<String, dynamic> out;
-    if (bodies.containsKey(path)) {
+    if (path.endsWith('/halt')) {
+      out = <String, dynamic>{
+        'ack': <String, dynamic>{'result': 'accepted'}
+      };
+    } else if (bodies.containsKey(path)) {
       out = bodies[path]!;
     } else if (path.endsWith('/video/health')) {
       out = siteFixture('site_video_health');
@@ -131,5 +146,39 @@ class FakeSite {
     resp.headers.contentType = ContentType.json;
     resp.write(jsonEncode(out));
     await resp.close();
+  }
+
+  Future<void> _teleop(HttpRequest req, int code) async {
+    final resp = req.response;
+    if (code != 200) {
+      resp.statusCode = code;
+      resp.headers.contentType = ContentType.json;
+      resp.write(jsonEncode(<String, dynamic>{'error': teleopRefusal}));
+      await resp.close();
+      return;
+    }
+    if (teleopBadAccept) {
+      resp.statusCode = HttpStatus.switchingProtocols;
+      resp.headers
+        ..set(HttpHeaders.connectionHeader, 'Upgrade')
+        ..set(HttpHeaders.upgradeHeader, 'websocket')
+        ..set('Sec-WebSocket-Accept', base64.encode(List<int>.filled(20, 0)));
+      final sock = await resp.detachSocket();
+      await sock.close();
+      return;
+    }
+    final ws = await WebSocketTransformer.upgrade(req);
+    teleopWs = ws;
+    ws.add(jsonEncode(<String, dynamic>{
+      'kind': 'granted',
+      'lease_epoch': 1,
+      'operator': 'gina',
+      'max_vx': 0.5,
+      'max_wz': 0.75,
+      'frame_period_ms': 100,
+    }));
+    await for (final m in ws) {
+      if (m is String) teleopGot.add(jsonDecode(m) as Map<String, dynamic>);
+    }
   }
 }

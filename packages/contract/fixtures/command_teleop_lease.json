@@ -1,0 +1,17 @@
+{
+  "command_id": "cmd-0008",
+  "control_epoch": 3,
+  "expires_at": 1760000331000,
+  "issued_at": 1760000301000,
+  "kind": "teleop_lease",
+  "offline_policy": "default",
+  "payload": {
+    "action": "renew",
+    "lease_epoch": 2,
+    "lease_ttl_ms": 5000
+  },
+  "precondition": null,
+  "priority": 100,
+  "schema": "1.0",
+  "task_id": "teleop-2"
+}

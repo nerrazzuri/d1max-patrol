@@ -32,6 +32,14 @@ from d1max_contract.messages import (
 )
 from d1max_contract.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_contract.registration import Registration
+from d1max_contract.teleop import (
+    FRAME_TTL_DEFAULT_MS,
+    LEASE_TTL_DEFAULT_MS,
+    TELEOP_PRIORITY,
+    TeleopFrame,
+    TeleopLease,
+    teleop_grant_payload,
+)
 from d1max_contract.video import VideoRequest
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures"
@@ -79,6 +87,22 @@ def generate() -> dict[str, dict[str, Any]]:
             event_id="evt-b1-000014", seq=14, boot_id="boot-b1", stamp=1_760_000_205_000,
             kind="video_failed",
             data={"camera": "front", "reason": "推流进程退了: Connection refused"}).to_wire(),
+        "teleop_frame": TeleopFrame(lease_epoch=2, seq=41, sent_at=1_760_000_300_000,
+                                    ttl_ms=FRAME_TTL_DEFAULT_MS, vx=0.25, wz=-0.3).to_wire(),
+        "command_teleop": Command(
+            command_id="cmd-0007", task_id="teleop-2", kind="teleop",
+            issued_at=1_760_000_299_000, expires_at=1_760_000_329_000, control_epoch=3,
+            priority=TELEOP_PRIORITY, payload=teleop_grant_payload(
+                lease_epoch=2, operator="gina", lease_ttl_ms=LEASE_TTL_DEFAULT_MS)).to_wire(),
+        "command_teleop_lease": Command(
+            command_id="cmd-0008", task_id="teleop-2", kind="teleop_lease",
+            issued_at=1_760_000_301_000, expires_at=1_760_000_331_000, control_epoch=3,
+            priority=TELEOP_PRIORITY,
+            payload=TeleopLease(action="renew", lease_epoch=2).to_payload()).to_wire(),
+        "command_halt": Command(
+            command_id="cmd-0009", task_id="halt-1", kind="halt",
+            issued_at=1_760_000_302_000, expires_at=1_760_000_332_000, control_epoch=3,
+            priority=TELEOP_PRIORITY, payload={"reason": "operator"}).to_wire(),
         "command_abort": Command(
             command_id="cmd-0002", task_id="task-0001", kind="abort",
             issued_at=1_760_000_010_000, expires_at=1_760_000_070_000, control_epoch=3,

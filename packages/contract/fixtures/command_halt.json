@@ -1,0 +1,15 @@
+{
+  "command_id": "cmd-0009",
+  "control_epoch": 3,
+  "expires_at": 1760000332000,
+  "issued_at": 1760000302000,
+  "kind": "halt",
+  "offline_policy": "default",
+  "payload": {
+    "reason": "operator"
+  },
+  "precondition": null,
+  "priority": 100,
+  "schema": "1.0",
+  "task_id": "halt-1"
+}

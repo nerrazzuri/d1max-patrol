@@ -30,6 +30,9 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
         tasks["goto"] = {"max_speed_mps": hal_caps.max_vx}
         # W00c2a:站点据此填 patrol 命令的 map_version、核对任务的 map_id。
         tasks["patrol"] = {"map_id": loaded_map[0], "map_version": loaded_map[1]}
+    if hal_caps.max_vx > 0:
+        # W00c5c:遥控不要地图;限速是 HAL 能力的一半(决策 7 追加条件),站点与手机据此夹、显示。
+        tasks["teleop"] = {"max_vx": hal_caps.max_vx / 2, "max_wz": hal_caps.max_wz / 2}
     return Capabilities(
         robot_id=robot_id, agent=agent_version, adapter=adapter_id, tasks=tasks,
         actuators={"light": [], "siren": bool(hal_caps.actuators.get("siren")),

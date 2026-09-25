@@ -12,6 +12,7 @@ import json
 import logging
 import queue
 import threading
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -20,6 +21,12 @@ from d1max_contract.dispatch import DispatchClient, DispatchTimeout
 from d1max_contract.errors import ContractError
 from d1max_contract.messages import Ack, Event, MapPose, Reconcile, Status, Telemetry
 from d1max_contract.mission import MissionError, parse_mission
+from d1max_contract.teleop import (
+    TELEOP_PRIORITY,
+    TeleopFrame,
+    TeleopLease,
+    teleop_grant_payload,
+)
 from d1max_contract.topics import Topics
 from d1max_contract.transport import Transport
 from d1max_contract.video import VideoRequest
@@ -32,6 +39,8 @@ log = logging.getLogger(__name__)
 #: 多久没收到**实时** status 就算不新鲜(按站点自己的钟,见 ``DispatchClient.status_live_at``)。
 #: 代理空闲时每 30 s 发一次 status。
 STALE_MS = 90_000
+#: 遥控任务的 task_id 前缀(W00c5c)。
+TELEOP_TASK_PREFIX = "teleop-"
 #: ``video`` 命令本身至少活多久(毫秒),跟推流的有效期分开。见 :meth:`Dispatcher.video`。
 VIDEO_COMMAND_TTL_MS = 30_000
 COMMAND_TTL_MS = 60_000
@@ -301,6 +310,9 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 没就绪: {', '.join(sorted(not_ready))}")
         if c.capabilities is not None and kind not in c.capabilities.tasks:
             raise DispatchRefused(f"{robot_id} 不支持 {kind}")
+        if s.task is not None and s.task.task_id.startswith(TELEOP_TASK_PREFIX):
+            # W00c5c:人工遥控优先于一切自动任务 —— 狗那头会回 busy,这里先挑开(事件派遣去找别的狗)。
+            raise DispatchRefused(f"{robot_id} 正在遥控")
 
     def dispatchable(self, robot_id: str, kind: str) -> str:
         """能不能给它派这种任务:能 → 空串;不能 → 理由。排程执行器选狗用。"""
@@ -381,6 +393,52 @@ class Dispatcher:
                             task_id=f"video-{req.camera}")
         return await c.send(cmd, timeout_s=self.ack_timeout_s if timeout_s is None
                             else timeout_s)
+
+    # ------------------------------------------------------------ 遥控(W00c5c)
+
+    async def teleop_grant(self, robot_id: str, *, lease_epoch: int, operator: str,
+                           lease_ttl_ms: int, issued_by: str) -> dict[str, Any]:
+        """授予遥控租约(一条任务命令,优先级最高)。要在线、新鲜、控制权与姿态就绪、急停已解除、
+        支持遥控;**不要定位**(遥控不靠地图)。"""
+        c = self._client_for(robot_id)
+        s = c.status
+        if s is None or not s.online or not self._fresh(c):
+            raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
+        bad = [k for k in ("control", "motion", "estop_clear") if not getattr(s.ready, k)]
+        if bad:
+            raise DispatchRefused(f"{robot_id} 没就绪: {', '.join(bad)}")
+        if c.capabilities is not None and "teleop" not in c.capabilities.tasks:
+            raise DispatchRefused(f"{robot_id} 不支持遥控")
+        return await self._send(c, robot_id, "teleop", teleop_grant_payload(
+            lease_epoch=lease_epoch, operator=operator, lease_ttl_ms=lease_ttl_ms),
+            issued_by=issued_by, task_id=f"{TELEOP_TASK_PREFIX}{lease_epoch}",
+            priority=TELEOP_PRIORITY)
+
+    async def teleop_lease(self, robot_id: str, lease: TeleopLease, *,
+                           timeout_s: float) -> Ack:
+        """续租、放租(不是任务;每秒一条,不进账、不推 SSE)。"""
+        c = self._client_for(robot_id)
+        cmd = c.new_command("teleop_lease", lease.to_payload(), ttl_ms=VIDEO_COMMAND_TTL_MS,
+                            control_epoch=self.registry.control_epoch(robot_id),
+                            task_id=f"{TELEOP_TASK_PREFIX}{lease.lease_epoch}",
+                            priority=TELEOP_PRIORITY)
+        return await c.send(cmd, timeout_s=timeout_s)
+
+    async def teleop_frame(self, robot_id: str, frame: TeleopFrame) -> None:
+        """发一帧遥控:专用主题、**QoS 0、不保留**(断线期间的帧不许补投)。"""
+        c = self.clients.get(robot_id)
+        if c is None:
+            raise DispatchRefused(f"{robot_id} 还没挂上派遣客户端")
+        await self._t.publish(c.topics.teleop, json.dumps(frame.to_wire()).encode(), qos=0,
+                              retain=False)
+
+    async def halt(self, robot_id: str, *, issued_by: str, reason: str = "operator"
+                   ) -> dict[str, Any]:
+        """停车(不是任务、**不走遥控连接**)。只要登记有效就发:不在线也发(重连后补投,停车方向是安全的)。"""
+        c = self._client_for(robot_id)
+        return await self._send(c, robot_id, "halt", {"reason": reason[:64]},
+                                issued_by=issued_by, task_id=f"halt-{uuid.uuid4().hex[:12]}",
+                                priority=TELEOP_PRIORITY)
 
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
                     *, issued_by: str, task_id: str | None = None, priority: int = 0,

@@ -34,10 +34,12 @@ from d1max_agent.status import (
 from d1max_agent.tasks.base import Task
 from d1max_agent.tasks.engine_goto import EngineGotoTask
 from d1max_agent.transport import GuardedTransport
+from d1max_contract.errors import ContractError
 from d1max_contract.hal import Fault, HalUnsupported, RobotHAL
 from d1max_contract.messages import Command, MapPose, Reconcile, fault_event_data
 from d1max_contract.policy import policy_for
 from d1max_contract.registration import Registration
+from d1max_contract.teleop import TeleopFrame
 from d1max_contract.topics import TopicAcl
 from d1max_contract.transport import Message, Transport
 from d1max_patrol.protocol.nav_types import Pose
@@ -86,6 +88,10 @@ class AgentRuntime:
             task_factory=self._make_task)
         #: 按需推流(W00c5b)。``video_failed`` 进事件簿:断线时留在狗上、重连补投。
         self.video = video
+        #: halt(W00c5c)当场停车。
+        self.processor.halt_hook = hal.stop
+        #: 丢掉的遥控帧计数(不合契约的)。
+        self.teleop_malformed = 0
         if video is not None:
             video.emit = self.events.emit
             self.processor.video = video
@@ -113,10 +119,21 @@ class AgentRuntime:
 
     def _supported(self) -> set[str]:
         caps = self.hal.hal_capabilities()
-        return ({"goto", "patrol"} if (self.loaded_map is not None and caps.max_vx > 0)
-                else set())
+        kinds = ({"goto", "patrol"} if (self.loaded_map is not None and caps.max_vx > 0)
+                 else set())
+        if caps.max_vx > 0:
+            kinds.add("teleop")                    # W00c5c:遥控不要地图
+        return kinds
 
     def _make_task(self, cmd: Command) -> Task:
+        if cmd.kind == "teleop":
+            from d1max_agent.tasks.teleop import TeleopTask
+            from d1max_contract.teleop import parse_teleop_grant
+            epoch, operator, ttl = parse_teleop_grant(cmd.payload)
+            return TeleopTask(task_id=cmd.task_id, lease_epoch=epoch, operator=operator,
+                              lease_ttl_ms=ttl, hal=self.hal, now_ms=self._now,
+                              video_live=self._video_live, events=self.events,
+                              priority=cmd.priority)
         assert self.parts is not None, "有 loaded_map 就一定装了引擎"
         if cmd.kind == "patrol":
             from d1max_agent.tasks.patrol import PatrolTask
@@ -128,6 +145,11 @@ class AgentRuntime:
         return EngineGotoTask(task_id=cmd.task_id, target=target,
                               max_speed_mps=cmd.payload.get("max_speed_mps"), parts=self.parts,
                               events=self.events, now_ms=self._now, priority=cmd.priority)
+
+    def _video_live(self) -> bool:
+        """遥控「没画面不许动」在狗这头的那一道:本机推流器至少一路在推。站点那头还有一道。"""
+        v = self.video
+        return v is not None and bool(v.running())
 
     @property
     def adapter_id(self) -> str:
@@ -163,6 +185,8 @@ class AgentRuntime:
         # **先登记 cmd 的 handler,再连接。** 持久会话在 CONNACK 后立刻补投离线命令;handler
         # 要等连上才登记的话,进程重启期间站点派的 abort 会在无人接收时被投掉、永久丢失。
         await self.transport.subscribe(self.topics.cmd, self._on_cmd, qos=1)
+        # 遥控帧(W00c5c):专用主题、QoS 0 —— 断线期间的帧不补投(决策 7:不许重放)。
+        await self.transport.subscribe(self.topics.teleop, self._on_teleop, qos=0)
         await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
         await self.transport.publish(self.topics.capabilities, _dumps(compose_capabilities(
             robot_id=self.registration.robot_id, hal_caps=self.hal.hal_capabilities(),
@@ -241,6 +265,15 @@ class AgentRuntime:
             await self._publish_status(force=True)
 
     # ------------------------------------------------------------ 命令
+
+    async def _on_teleop(self, m: Message) -> None:
+        """一帧遥控。不合契约的丢掉、计数;合契约的交给当前那一趟遥控去判(代次、序号、在途)。"""
+        try:
+            frame = TeleopFrame.from_wire(json.loads(m.payload))
+        except (ValueError, UnicodeDecodeError, ContractError):
+            self.teleop_malformed += 1
+            return
+        self.processor.on_teleop_frame(frame, rx_ms=self._now())
 
     async def _on_cmd(self, m: Message) -> None:
         try:

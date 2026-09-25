@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'site_teleop.dart';
 import 'site_video.dart';
 import 'site_watch_page.dart';
 
@@ -468,6 +469,15 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             if (s?.canDispatch ?? false)
               FilledButton(
                   key: const Key('btn-patrol'), onPressed: _patrol, child: const Text('派巡检')),
+            if (s?.canTeleop ?? false)
+              FilledButton.tonal(
+                  key: const Key('btn-teleop'),
+                  onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                          builder: (_) =>
+                              SiteTeleopPage(api: widget.api, robotId: widget.robotId))),
+                  child: const Text('遥控')),
             if (s?.canDispatch ?? false)
               OutlinedButton(
                   key: const Key('btn-standby'),

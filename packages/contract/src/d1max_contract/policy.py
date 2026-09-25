@@ -38,6 +38,9 @@ OFFLINE_POLICY: dict[str, OfflinePolicy] = {
     # abort 本身:本地执行,不排别的队,断线不影响它。
     "abort": OfflinePolicy(on_disconnect="execute_locally", queue_cmds=frozenset(),
                            new_cmd_expires=False),
+    # W00c5c:遥控。断线 = 停车、结束,**不续**(决策 7:不在操作者断线后延续运动)。
+    "teleop": OfflinePolicy(on_disconnect="stop_and_wait", queue_cmds=frozenset(),
+                            new_cmd_expires=True),
 }
 
 

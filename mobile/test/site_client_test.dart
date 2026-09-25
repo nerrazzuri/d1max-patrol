@@ -231,4 +231,73 @@ void main() {
       await site.close();
     }
   });
+
+  test('遥控经站点：真 WebSocket 握手带令牌，收 granted、发摇杆帧和放租；站点关了就报 ended', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('gina', 'pw');
+    final link = await c.teleop('A');
+    final msgs = <Map<String, dynamic>>[];
+    final sub = link.messages.listen(msgs.add);
+    await _until(() => msgs.isNotEmpty);
+    expect(msgs.first['kind'], 'granted');
+    expect(site.received.last.path, '/api/robots/A/teleop');
+    expect(site.received.last.auth, 'Bearer ${c.session!.token}');
+    link.send(0.3, -0.2);
+    link.release();
+    await _until(() => site.teleopGot.length >= 2);
+    expect(site.teleopGot, [
+      {'vx': 0.3, 'wz': -0.2},
+      {'kind': 'release'},
+    ]);
+    await site.teleopWs!.close();                    // 站点那头关了
+    await _until(() => link.closed);
+    expect(msgs.last, {'kind': 'ended', 'reason': 'disconnected'});
+    link.send(0.3, 0); // 关了之后发帧：不抛、不发
+    await sub.cancel();
+    c.close();
+  });
+
+  test('遥控被拒：状态码和站点给的原因原样抛出；401 作废令牌', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('gus', 'pw');
+    site.statusCodes['/api/robots/A/teleop'] = 409;
+    site.teleopRefusal = 'gina 正在遥控 A';
+    await expectLater(
+        c.teleop('A'),
+        throwsA(isA<SiteError>()
+            .having((e) => e.status, 'status', 409)
+            .having((e) => e.message, 'message', 'gina 正在遥控 A')));
+    site.statusCodes['/api/robots/A/teleop'] = 401;
+    await expectLater(c.teleop('A'), throwsA(isA<SiteError>()));
+    expect(c.session, isNull);
+    c.close();
+  });
+
+  test('管理员接管把理由放进查询串；握手回的 Accept 不对就不认', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('alice', 'pw');
+    site.teleopBadAccept = true;
+    await expectLater(c.teleop('A', takeoverReason: '手机没电了 #2'),
+        throwsA(isA<SiteError>().having((e) => e.message, 'message', contains('握手'))));
+    expect(site.rawPaths.last, endsWith('/api/robots/A/teleop?takeover=%E6%89%8B%E6%9C%BA%E6%B2%A1%E7%94%B5%E4%BA%86+%232'));
+    c.close();
+  });
+
+  test('停车走站点的 halt，不走遥控连接', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('olga', 'pw');
+    final r = await c.halt('A');
+    expect(r['ack']['result'], 'accepted');
+    expect(site.received.last.method, 'POST');
+    expect(site.received.last.path, '/api/robots/A/halt');
+    c.close();
+  });
+}
+
+Future<void> _until(bool Function() ok) async {
+  final sw = Stopwatch()..start();
+  while (!ok()) {
+    if (sw.elapsed > const Duration(seconds: 5)) throw TimeoutException('等不到');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
 }

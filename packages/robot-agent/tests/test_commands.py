@@ -369,3 +369,127 @@ async def test_video命令不进幂等记录(cp):
     ack = await cp.handle({**_video().to_wire(), "command_id": "v-idem"}, TOPIC)
     assert ack.result is AckResult.ACCEPTED
     assert cp.idem.lookup("v-idem") is None
+
+
+# ------------------------------------------------------------ W00c5c:遥控、续放租、halt
+
+class 假遥控(假任务):
+    def __init__(self, cmd, **kw):
+        super().__init__(cmd, **kw)
+        self.lease_epoch = cmd.payload["lease_epoch"]
+        self.frames, self.renewed, self.released = [], [], False
+
+    def on_frame(self, frame, *, rx_ms):
+        self.frames.append(frame.seq)
+        return ""
+
+    def renew(self, ttl):
+        self.renewed.append(ttl)
+
+    def release(self):
+        self.released = True
+
+
+@pytest.fixture
+def tcp(tmp_path):
+    clock = {"ms": NOW}
+    halted = []
+    p = CommandProcessor(
+        registration=REG, now_ms=lambda: clock["ms"],
+        idem=IdempotencyStore(tmp_path / "idem.jsonl"),
+        events=EventBook(tmp_path / "events.jsonl", boot_id="b1", now_ms=lambda: clock["ms"]),
+        ledger=ResourceLedger(), supported_tasks={"goto", "teleop"},
+        loaded_map=("m1", "3"), state_path=tmp_path / "state.json",
+        task_factory=lambda cmd: 假遥控(cmd) if cmd.kind == "teleop" else 假任务(cmd))
+    p.halt_hook = lambda: halted.append(True)
+    p.halted = halted
+    return p
+
+
+def _teleop(epoch=2, *, cid=None, priority=0, **kw):
+    from d1max_contract.teleop import teleop_grant_payload
+    p = teleop_grant_payload(lease_epoch=epoch, operator="gina", lease_ttl_ms=5000) | kw
+    return _cmd("teleop", cid=cid or f"t{epoch}", tid=f"teleop-{epoch}", payload=p,
+                priority=priority)
+
+
+async def test_遥控抢占自动任务_优先级由代理定死(tcp):
+    assert (await tcp.handle(_cmd(cid="g1", tid="goto-1", priority=80).to_wire(), TOPIC)).result \
+        is AckResult.ACCEPTED
+    await tcp.step(0.1)
+    goto = tcp.current
+    ack = await tcp.handle(_teleop(priority=0).to_wire(), TOPIC)   # 站点给了 0 也按 100
+    assert ack.result is AckResult.ACCEPTED, ack
+    assert goto.aborted_with == "preempted"
+    await tcp.step(0.1)
+    assert tcp.current is goto, "被抢的先停稳才让位"
+    goto.stop_confirmed = True
+    await tcp.step(0.1)
+    await tcp.step(0.1)
+    assert tcp.current.kind == "teleop" and tcp.current.priority == 100
+
+
+async def test_遥控期间自动任务回busy_站点给多高都抢不走(tcp):
+    await tcp.handle(_teleop().to_wire(), TOPIC)
+    await tcp.step(0.1)
+    for i, prio in enumerate((80, 100, 500)):
+        ack = await tcp.handle(_cmd(cid=f"g{i}", tid=f"goto-{i}", priority=prio).to_wire(), TOPIC)
+        assert ack.result is AckResult.REJECTED and ack.reason == "busy", (prio, ack)
+
+
+async def test_续租放租找得到这一代才收_不进幂等记录(tcp):
+    from d1max_contract.teleop import TeleopLease
+    await tcp.handle(_teleop().to_wire(), TOPIC)
+    await tcp.step(0.1)
+    t = tcp.current
+    lease = lambda a, e, cid: _cmd("teleop_lease", cid=cid, tid=f"teleop-{e}",  # noqa: E731
+                                   payload=TeleopLease(action=a, lease_epoch=e).to_payload())
+    assert (await tcp.handle(lease("renew", 2, "l1").to_wire(), TOPIC)).result \
+        is AckResult.ACCEPTED
+    assert t.renewed == [5000] and tcp.idem.lookup("l1") is None
+    ack = await tcp.handle(lease("renew", 9, "l2").to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason == "no_such_lease"
+    assert (await tcp.handle(lease("release", 2, "l3").to_wire(), TOPIC)).result \
+        is AckResult.ACCEPTED
+    assert t.released
+
+
+async def test_halt中止一切并当场停车(tcp):
+    await tcp.handle(_cmd(cid="g1", tid="goto-1").to_wire(), TOPIC)
+    await tcp.step(0.1)
+    ack = await tcp.handle(_cmd("halt", cid="h1", tid="halt-1", payload={"reason": "operator"},
+                                priority=0).to_wire(), TOPIC)
+    assert ack.result is AckResult.ACCEPTED
+    assert tcp.halted == [True] and tcp.current.aborted_with == "halt"
+
+
+async def test_遥控帧只交给当前这一趟遥控(tcp):
+    from d1max_contract.teleop import TeleopFrame
+    f = TeleopFrame(lease_epoch=2, seq=1, sent_at=NOW, ttl_ms=300, vx=0.1, wz=0.0)
+    assert tcp.on_teleop_frame(f, rx_ms=NOW) == "no_teleop"
+    await tcp.handle(_teleop().to_wire(), TOPIC)
+    await tcp.step(0.1)
+    assert tcp.on_teleop_frame(f, rx_ms=NOW) == ""
+    assert tcp.current.frames == [1]
+
+
+async def test_遥控载荷坏的拒(tcp):
+    ack = await tcp.handle(_teleop(operator="").to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason.startswith("payload:")
+
+
+async def test_halt也中止排队中的遥控_帧不交给还在排队的遥控(tcp):
+    from d1max_contract.teleop import TeleopFrame
+    await tcp.handle(_cmd(cid="g1", tid="goto-1").to_wire(), TOPIC)
+    await tcp.step(0.1)
+    goto = tcp.current
+    await tcp.handle(_teleop().to_wire(), TOPIC)     # 抢占:goto 还在停,遥控排着
+    await tcp.step(0.1)
+    assert tcp.current is goto and [t.kind for t in tcp.pending] == ["teleop"]
+    f = TeleopFrame(lease_epoch=2, seq=1, sent_at=NOW, ttl_ms=300, vx=0.1, wz=0.0)
+    assert tcp.on_teleop_frame(f, rx_ms=NOW) == "no_teleop", "还没接手的遥控不收帧"
+    queued = tcp.pending[0]
+    assert queued.frames == []
+    await tcp.handle(_cmd("halt", cid="h1", tid="halt-1", payload={"reason": "operator"}
+                          ).to_wire(), TOPIC)
+    assert tcp.pending == [] and queued.state is TaskState.ABORTED

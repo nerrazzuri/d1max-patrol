@@ -17,14 +17,18 @@ SITE = "estate-1"
 
 def test_ACL里狗侧条目与契约TopicAcl出自同一张表():
     acl = render_acl(SITE)
-    writes = {ln.split()[2] for ln in acl.splitlines() if ln.startswith("pattern write")}
-    reads = {ln.split()[2] for ln in acl.splitlines() if ln.startswith("pattern read")}
+    pats = [ln.split() for ln in acl.splitlines() if ln.startswith("pattern ")]
+    assert {p[1] for p in pats} <= {"read", "write"}, "狗侧不许有 readwrite"
+    writes = {p[2] for p in pats if p[1] == "write"}
+    reads = {p[2] for p in pats if p[1] == "read"}
     t = Topics(site_id=SITE, robot_id="R")
     g = TopicAcl(t)
     assert {w.replace("%u", "R") for w in writes} == {t.of(k) for k in PUBLISH_KINDS}
     assert all(g.may_publish(w.replace("%u", "R")) for w in writes)
-    assert {r.replace("%u", "R") for r in reads} == {t.cmd}
+    assert {r.replace("%u", "R") for r in reads} == {t.cmd, t.teleop}, "W00c5c:遥控帧"
+    assert all(g.may_subscribe(r.replace("%u", "R")) for r in reads)
     assert "user site:estate-1" in acl and f"topic write site/{SITE}/robot/+/cmd" in acl
+    assert f"topic write site/{SITE}/robot/+/teleop" in acl
     assert f"topic read site/{SITE}/robot/+/cmd" not in acl.splitlines(), "站点不读 cmd"
 
 

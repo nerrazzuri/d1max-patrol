@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -173,6 +173,18 @@ CREATE TABLE IF NOT EXISTS alerts (
     escalated    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS alerts_last ON alerts(last_ms);
+CREATE TABLE IF NOT EXISTS teleop_leases (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id        TEXT NOT NULL,
+    epoch           INTEGER NOT NULL,
+    operator        TEXT NOT NULL,
+    started_at      INTEGER NOT NULL,
+    ended_at        INTEGER,
+    end_reason      TEXT,
+    takeover_by     TEXT,
+    takeover_reason TEXT,
+    UNIQUE (robot_id, epoch)
+);
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,
     status       TEXT,

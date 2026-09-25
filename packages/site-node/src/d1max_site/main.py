@@ -316,11 +316,16 @@ class Server:
                               ports=tuple(vcfg.get("ports", (8890, 8989))),
                               ffmpeg=vcfg.get("ffmpeg", "ffmpeg"))
         self.dispatcher.on_event(self.video.on_event)
+        # W00c5c:遥控经站点(决策 7)。「没画面不许动」读的就是上面那个视频的画面健康。
+        from d1max_site.teleop import TeleopDesk
+        self.teleop = TeleopDesk(self.dispatcher, self.loop, audit=None, now_ms=wall_ms,
+                                 video_ok=self._video_ok)
         self.api = SiteApi(host=api_host, port=api_port, loop=self.loop,
                            dispatcher=self.dispatcher, accounts=self.accounts, tls=tls,
                            scheduler=self.scheduler, standby=self.standby,
                            incidents=self.incidents, alerts=self.alerts, video=self.video,
-                           now_ms=wall_ms)
+                           teleop=self.teleop, now_ms=wall_ms)
+        self.teleop.audit = self.api.audit
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -369,9 +374,18 @@ class Server:
             except Exception:
                 log.exception("同步注册表失败,下一轮再试")
 
+    def _video_ok(self, robot_id: str) -> bool:
+        """这台狗至少一路画面在线(最近 2 s 内来过帧)。查不到就当没有。"""
+        from d1max_site.video import VideoError
+        try:
+            return any(c["online"] for c in self.video.health(robot_id).values())
+        except VideoError:
+            return False
+
     def stop(self) -> None:
         self._stop.set()
-        for what, fn in (("API", self.api.stop), ("视频", self.video.close),
+        for what, fn in (("遥控", self.teleop.close_all), ("API", self.api.stop),
+                         ("视频", self.video.close),
                          ("待命点", lambda: self.loop.call(self.standby.close, 10)),
                          ("事件台", lambda: self.loop.call(self.incidents.close, 10)),
                          ("派遣器", lambda: self.loop.call(self.dispatcher.close, 10)),

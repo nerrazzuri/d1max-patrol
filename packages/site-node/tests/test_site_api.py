@@ -40,7 +40,7 @@ def target(x: float) -> dict:
 
 class 站:
     def __init__(self, tmp_path, *, alerts: bool = False, video: dict | None = None,
-                 agent_video: bool = True) -> None:
+                 agent_video: bool = True, teleop: dict | None = None) -> None:
         self.loop = LoopThread()
         self.loop.start()
         self.db = SiteDB(tmp_path / "site.db")
@@ -63,6 +63,26 @@ class 站:
             if video is not None and agent_video:      # W00c5b:狗这头用 ffmpeg 测试图顶相机
                 from d1max_agent.video_push import VideoPusher, lavfi_source
                 self.pusher = VideoPusher(source=lavfi_source)
+            self.video_live = {"dog": True, "site": True}
+            if teleop is not None and self.pusher is None:
+                # W00c5c 的测试不起 ffmpeg:狗这头「有没有在推」、站点那头「有没有画面」都可以翻
+                live = self.video_live
+
+                class _假推流:
+                    emit = None
+
+                    def running(self):
+                        return {"front"} if live["dog"] else set()
+
+                    def request(self, req):
+                        return ""
+
+                    def step(self):
+                        pass
+
+                    def close(self):
+                        pass
+                self.pusher = _假推流()
             self.agent = AgentRuntime(transport=MemoryTransport(self.broker, "dogA"),
                                       registration=reg, hal=self.dog,
                                       store_dir=tmp_path / "agent", now_ms=wall,
@@ -86,8 +106,16 @@ class 站:
                                 known=lambda rid: rid in self.disp.clients,
                                 srt_host="127.0.0.1", bind_host="127.0.0.1", **video)
             self.disp.on_event(self.hub.on_event)
+        self.teleop = None
+        if teleop is not None:                         # W00c5c:遥控台
+            from d1max_site.teleop import TeleopDesk
+            self.teleop = TeleopDesk(self.disp, self.loop, audit=None, now_ms=wall,
+                                     video_ok=lambda rid: self.video_live["site"], **teleop)
         self.api = SiteApi(host="127.0.0.1", port=0, loop=self.loop, dispatcher=self.disp,
-                           accounts=self.accounts, alerts=self.desk, video=self.hub)
+                           accounts=self.accounts, alerts=self.desk, video=self.hub,
+                           teleop=self.teleop)
+        if self.teleop is not None:
+            self.teleop.audit = self.api.audit
         self.api.start()
 
     async def _drive(self) -> None:
@@ -99,6 +127,8 @@ class 站:
 
     def close(self) -> None:
         self._stop = True
+        if self.teleop is not None:
+            self.teleop.close_all()
         self.api.stop()
         if self.hub is not None:
             self.hub.close()
