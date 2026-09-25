@@ -36,6 +36,7 @@ import math
 import re
 import ssl
 import threading
+import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -72,6 +73,8 @@ _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
 ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
+#: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
+_VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
 
 
@@ -97,7 +100,8 @@ class SiteApi:
     def __init__(self, *, host: str, port: int, loop: LoopThread, dispatcher: Dispatcher,
                  accounts: Accounts, tls: tuple[Path, Path] | None = None,
                  scheduler: Any = None, standby: Any = None, incidents: Any = None,
-                 alerts: Any = None, now_ms: Callable[[], int] | None = None,
+                 alerts: Any = None, video: Any = None,
+                 now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
         check_exposure(host, tls)
@@ -110,6 +114,7 @@ class SiteApi:
         self.standby = standby
         self.incidents = incidents
         self.alerts = alerts
+        self.video = video
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
         self._stopping = threading.Event()
@@ -281,6 +286,12 @@ class _Handler(BaseHTTPRequestHandler):
                 self._need(user, VIEW if (method == "GET" and path == "/api/incidents")
                            else MANAGE)
                 return self._incident_admin(method, path)
+            m = _VIDEO.match(path)
+            if m is not None and method == "GET":
+                robot_id = unquote(m.group(1))
+                if not SAFE_ID.match(robot_id):
+                    raise HttpError(404, "没有这台狗")
+                return self._video(robot_id, m.group(2), user)
             m = _ROBOT.match(path)
             if m is not None:
                 robot_id = unquote(m.group(1))
@@ -559,6 +570,55 @@ class _Handler(BaseHTTPRequestHandler):
         except CatalogError as exc:
             raise HttpError(409, str(exc)) from exc
         self._send_json(200, got)
+
+    def _video(self, robot_id: str, what: str, user) -> None:
+        """视频经站点(W00c5b)。``health``:每路画面健康;``front``/``back``:MJPEG 长连(``view``)。
+        第一帧之前出的错回成 HTTP 状态码(502/504 带原因);之后断了就结束这条连接。"""
+        from d1max_site.video import VideoError
+        self._need(user, VIEW)
+        hub = self.site.video
+        if hub is None:
+            raise HttpError(404, "这个站点没开视频")
+        if what == "health":
+            try:
+                cams = hub.health(robot_id)
+            except VideoError as exc:
+                raise HttpError(exc.status, exc.message) from exc
+            return self._send_json(200, {"robot_id": robot_id, "cameras": cams})
+        try:
+            frames = hub.stream(robot_id, what)
+            first = next(frames)
+        except VideoError as exc:
+            raise HttpError(exc.status, exc.message) from exc
+        boundary = b"frame"
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        token = self._token()
+        checked = time.monotonic()
+        try:
+            frame = first
+            while not self.site.stopping:
+                self.wfile.write(b"--" + boundary + b"\r\nContent-Type: image/jpeg\r\n"
+                                 b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
+                                 + frame + b"\r\n")
+                self.wfile.flush()
+                if time.monotonic() - checked >= self.site.sse_recheck_s:
+                    checked = time.monotonic()
+                    who = self.site.accounts.check(token)
+                    if who is None or not allowed(who.role, VIEW):
+                        break                    # 注销、过期、停用:画面跟着断
+                try:
+                    frame = next(frames)
+                except (VideoError, StopIteration):
+                    break
+        except (BrokenPipeError, ConnectionResetError, ssl.SSLError, OSError):
+            pass                                  # 观众走了
+        finally:
+            frames.close()                        # 退场(可能连带收流)在生成器的 finally 里
 
     def _sse(self) -> None:
         feed = self.site.dispatcher.feed

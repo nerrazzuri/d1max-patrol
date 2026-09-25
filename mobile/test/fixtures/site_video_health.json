@@ -1,0 +1,17 @@
+{
+  "cameras": {
+    "back": {
+      "detail": "",
+      "last_frame_age_ms": null,
+      "online": false,
+      "viewers": 0
+    },
+    "front": {
+      "detail": "",
+      "last_frame_age_ms": null,
+      "online": false,
+      "viewers": 0
+    }
+  },
+  "robot_id": "A"
+}

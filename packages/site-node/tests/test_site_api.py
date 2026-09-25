@@ -39,7 +39,8 @@ def target(x: float) -> dict:
 
 
 class 站:
-    def __init__(self, tmp_path, *, alerts: bool = False) -> None:
+    def __init__(self, tmp_path, *, alerts: bool = False, video: dict | None = None,
+                 agent_video: bool = True) -> None:
         self.loop = LoopThread()
         self.loop.start()
         self.db = SiteDB(tmp_path / "site.db")
@@ -58,10 +59,15 @@ class 站:
             self.dog = SimRobot(now_ms=wall, max_vx=1.0, max_wz=1.5, stop_latency_s=0.1)
             reg = Registration(site_id=SITE, robot_id="A", credential_fingerprint="sha256:a",
                                issued_at=0, expires_at=10**14)
+            self.pusher = None
+            if video is not None and agent_video:      # W00c5b:狗这头用 ffmpeg 测试图顶相机
+                from d1max_agent.video_push import VideoPusher, lavfi_source
+                self.pusher = VideoPusher(source=lavfi_source)
             self.agent = AgentRuntime(transport=MemoryTransport(self.broker, "dogA"),
                                       registration=reg, hal=self.dog,
                                       store_dir=tmp_path / "agent", now_ms=wall,
-                                      loaded_map=MAP, home=Pose.from_xy_yaw(0.0, 0.0))
+                                      loaded_map=MAP, home=Pose.from_xy_yaw(0.0, 0.0),
+                                      video=self.pusher)
             await self.agent.start()
             self.desk = self.sources = None
             if alerts:                      # W00c5a:告警台挂上派遣器
@@ -73,8 +79,14 @@ class 站:
             self.driver = asyncio.ensure_future(self._drive())
 
         self.loop.call(build)
+        self.hub = None
+        if video is not None:                          # W00c5b:站点的视频扇出
+            from d1max_site.video import VideoHub, dispatcher_sender
+            self.hub = VideoHub(send=dispatcher_sender(self.disp, self.loop),
+                                srt_host="127.0.0.1", bind_host="127.0.0.1", **video)
+            self.disp.on_event(self.hub.on_event)
         self.api = SiteApi(host="127.0.0.1", port=0, loop=self.loop, dispatcher=self.disp,
-                           accounts=self.accounts, alerts=self.desk)
+                           accounts=self.accounts, alerts=self.desk, video=self.hub)
         self.api.start()
 
     async def _drive(self) -> None:
@@ -87,6 +99,8 @@ class 站:
     def close(self) -> None:
         self._stop = True
         self.api.stop()
+        if self.hub is not None:
+            self.hub.close()
 
         async def down():
             await self.agent.close()

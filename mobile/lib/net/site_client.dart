@@ -90,6 +90,13 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> ackAlert(String key);
   Future<Map<String, dynamic>> resolveAlert(String key);
   Future<Map<String, dynamic>> watchSummary();
+
+  /// 视频经站点（W00c5b）：每路画面健康（`{cameras: {front: {online, …}}}`）。
+  Future<Map<String, dynamic>> videoHealth(String robotId);
+
+  /// 画面走的站点地址，与一个**钉住站点证书**的新 `HttpClient`（调用方用完关掉）。
+  String get baseUrl;
+  HttpClient pinnedClient();
   Stream<Map<String, dynamic>> events();
   void close();
 }
@@ -286,6 +293,20 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> watchSummary() async =>
       _map(await _send('GET', '/api/watch/summary'));
+
+  @override
+  Future<Map<String, dynamic>> videoHealth(String robotId) async => _map(
+      await _send('GET', '/api/robots/${Uri.encodeComponent(robotId)}/video/health'));
+
+  @override
+  String get baseUrl => base.toString().replaceAll(RegExp(r'/$'), '');
+
+  @override
+  HttpClient pinnedClient() {
+    final io = HttpClient(context: SecurityContext(withTrustedRoots: false));
+    io.badCertificateCallback = (cert, host, port) => certSha256(cert) == fingerprint;
+    return io;
+  }
 
   /// SSE：第一帧是全量快照（`kind: snapshot`），之后是 status/event/ack/incident/alert……
   /// 流断了（站点重启、令牌过期）就结束；调用方决定要不要重连。

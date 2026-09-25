@@ -1,5 +1,6 @@
 // 站点模式的几屏（W00c4）：按角色显示按钮、列表与单狗页用真站点的夹具、首屏二选一、站点列表存取。
 import 'dart:async';
+import 'dart:io';
 
 import 'package:d1max_patrol/main.dart';
 import 'package:d1max_patrol/model/alert.dart';
@@ -8,6 +9,8 @@ import 'package:d1max_patrol/store/pin_vault.dart';
 import 'package:d1max_patrol/store/registry_store.dart';
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:d1max_patrol/ui/site_video.dart';
+import 'package:d1max_patrol/ui/widget/live_video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -103,6 +106,18 @@ class FakeApi implements SiteApi {
     if (summaryError != null) throw summaryError!;
     return siteFixture('site_watch_summary');
   }
+  /// 视频（W00c5b）。
+  int videoHealthCalls = 0;
+  @override
+  Future<Map<String, dynamic>> videoHealth(String robotId) async {
+    videoHealthCalls++;
+    return siteFixture('site_video_health');
+  }
+  @override
+  String get baseUrl => 'https://127.0.0.1:1';
+  @override
+  HttpClient pinnedClient() => HttpClient();
+
   @override
   Stream<Map<String, dynamic>> events() {
     eventsOpened++;
@@ -126,6 +141,23 @@ Future<void> openRobot(WidgetTester t, FakeApi api) async {
 }
 
 void main() {
+  testWidgets('单狗页有画面：前后切换、问站点的画面健康、取流走站点路径与钉证书的客户端', (t) async {
+    final api = FakeApi('owner');
+    await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(SiteVideo.cameraKey('front')), findsOneWidget);
+    expect(api.videoHealthCalls, greaterThan(0));
+    var lv = t.widget<LiveVideo>(find.byType(LiveVideo));
+    expect(lv.streamPath, '/api/robots/A/video/front');
+    expect(lv.openClient, isNotNull);
+    await t.tap(find.byKey(SiteVideo.cameraKey('back')));
+    await t.pump();
+    lv = t.widget<LiveVideo>(find.byType(LiveVideo));
+    expect(lv.streamPath, '/api/robots/A/video/back');
+    await t.pumpWidget(Container());
+  });
+
   testWidgets('狗的列表：来自真站点的夹具，显示在线与任务', (t) async {
     final api = FakeApi('guard');
     await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api)));
@@ -332,4 +364,5 @@ class _BrokenStore implements SiteStore {
   Future<List<SiteEntry>> load() async => throw const FormatException('站点文件的顶层应该是个数组');
   @override
   Future<void> save(List<SiteEntry> s) async => throw StateError('不许写');
+
 }

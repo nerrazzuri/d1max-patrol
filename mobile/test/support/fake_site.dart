@@ -89,9 +89,24 @@ class FakeSite {
       await resp.close();
       return;
     }
+    if (path.contains('/video/') && !path.endsWith('/health')) {
+      // 三帧假 JPEG（SOI … EOI），multipart 跟站点一个写法（最后一帧要等下一个边界才算完整）。
+      resp.headers.set(HttpHeaders.contentTypeHeader, 'multipart/x-mixed-replace; boundary=frame');
+      for (var i = 0; i < 3; i++) {
+        final jpeg = <int>[0xFF, 0xD8, 0xFF, 0xE0, i, 1, 2, 3, 0xFF, 0xD9];
+        resp.add(utf8.encode('--frame\r\nContent-Type: image/jpeg\r\n'
+            'Content-Length: ${jpeg.length}\r\n\r\n'));
+        resp.add(jpeg);
+        resp.add(utf8.encode('\r\n'));
+      }
+      await resp.close();
+      return;
+    }
     Map<String, dynamic> out;
     if (bodies.containsKey(path)) {
       out = bodies[path]!;
+    } else if (path.endsWith('/video/health')) {
+      out = siteFixture('site_video_health');
     } else if (path == '/api/login') {
       out = Map.of(siteFixture('site_login'))..['role'] = role;
     } else if (path == '/api/robots') {

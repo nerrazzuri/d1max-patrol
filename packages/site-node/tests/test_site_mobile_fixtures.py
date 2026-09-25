@@ -54,7 +54,7 @@ def _collect(tmp_path) -> dict[str, object]:
 
     from d1max_site.incidents import IncidentDesk
     from d1max_site.scheduler import SiteScheduler
-    s = 站(tmp_path, alerts=True)
+    s = 站(tmp_path, alerts=True, video={}, agent_video=False)
     try:
         s.api.scheduler = SiteScheduler(s.db, s.disp, now_ms=wall)
         s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=wall)
@@ -112,6 +112,7 @@ def _collect(tmp_path) -> dict[str, object]:
             "site_alert_ack": ack,
             "site_alerts_all": alerts_all,
             "site_watch_summary": s.req("GET", "/api/watch/summary", token=tok)[1],
+            "site_video_health": s.req("GET", "/api/robots/A/video/health", token=tok)[1],
             "site_login": login,
             "site_robots": s.req("GET", "/api/robots", token=tok)[1],
             "site_robot": s.req("GET", "/api/robots/A", token=tok)[1],

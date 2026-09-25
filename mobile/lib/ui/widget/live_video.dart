@@ -232,10 +232,20 @@ class LiveVideo extends StatefulWidget {
     required this.camera,
     required this.health,
     this.token = '',
+    this.streamPath,
+    this.openClient,
   });
 
   final String baseUrl;
   final String camera;
+
+  /// 画面的路径。不给就是直连狗的 `/api/video/<camera>`；站点模式（W00c5b）给
+  /// `/api/robots/<id>/video/<camera>`。
+  final String? streamPath;
+
+  /// 造 `HttpClient` 的方法。不给就是系统默认信任；站点模式给**钉住站点证书**的那个
+  /// （`SiteApi.pinnedClient`）—— 画面走的是同一个站点，不许另开一条随便信证书的路。
+  final HttpClient Function()? openClient;
 
   /// 「这一刻有没有画面」从这条流上来 —— 通常是 [VideoHealthPoller] 的。
   final Stream<VideoHealth> health;
@@ -380,11 +390,11 @@ class _LiveVideoState extends State<LiveVideo> {
     // 健康那头照常记着 [_live]，回到台上那一下 [didChangeDependencies] 再开。
     if (!_onstage) return;
     final int gen = _gen;
-    final HttpClient io = HttpClient()
+    final HttpClient io = (widget.openClient ?? HttpClient.new)()
       ..connectionTimeout = const Duration(seconds: 5);
     _io = io;
     _frames = mjpegFrames(
-      Uri.parse('${widget.baseUrl}/api/video/${widget.camera}'),
+      Uri.parse('${widget.baseUrl}${widget.streamPath ?? '/api/video/${widget.camera}'}'),
       io: io,
       token: widget.token,
       // 这一茬被换掉之后，那条连接掀起来的错就是我们自己掐出来的。
@@ -523,6 +533,7 @@ class _LiveVideoState extends State<LiveVideo> {
     super.didUpdateWidget(old);
     final bool healthSwapped = old.health != widget.health;
     final bool targetMoved = old.baseUrl != widget.baseUrl ||
+        old.streamPath != widget.streamPath ||
         old.camera != widget.camera ||
         old.token != widget.token;
     if (!healthSwapped && !targetMoved) return;

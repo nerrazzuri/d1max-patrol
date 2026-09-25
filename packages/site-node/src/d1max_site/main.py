@@ -2,7 +2,9 @@
 
 站点目录(``--home``,默认 ``/var/lib/d1max-site``)的布局::
 
-    site.json          site_id、broker 端口、主机名
+    site.json          site_id、broker 端口、主机名;可选 ``video``:``srt_host``(狗推流连的站点地址,
+                   默认第一个主机名,要跟狗连 MQTT 用的是同一个)、``ports``(SRT 端口段,默认
+                   8890–8989/UDP,防火墙要放行)、``ffmpeg``
     site.db            SQLite:注册表、账号、会话、命令、事件
     ca/                站点 CA(ca.key 0600)、签发过的证书、CRL;ca/server/ 是站点服务证书
     broker/            mosquitto.conf 与 acl(由 broker_conf 生成),d1max-mosquitto.service 用它
@@ -305,10 +307,19 @@ class Server:
         self.alerts = AlertDesk(self.db, now_ms=wall_ms, publish=self.dispatcher.feed.publish)
         self.alert_sources = SiteAlertSources(self.alerts, now_ms=wall_ms)
         self.alert_sources.attach(self.dispatcher)
+        # W00c5b:视频经站点。狗按需把相机推到这里(SRT),这里转 MJPEG 给观众。
+        from d1max_site.video import VideoHub, dispatcher_sender
+        vcfg = cfg.get("video", {})
+        self.video = VideoHub(send=dispatcher_sender(self.dispatcher, self.loop),
+                              srt_host=vcfg.get("srt_host") or cfg["hostnames"][0],
+                              ports=tuple(vcfg.get("ports", (8890, 8989))),
+                              ffmpeg=vcfg.get("ffmpeg", "ffmpeg"))
+        self.dispatcher.on_event(self.video.on_event)
         self.api = SiteApi(host=api_host, port=api_port, loop=self.loop,
                            dispatcher=self.dispatcher, accounts=self.accounts, tls=tls,
                            scheduler=self.scheduler, standby=self.standby,
-                           incidents=self.incidents, alerts=self.alerts, now_ms=wall_ms)
+                           incidents=self.incidents, alerts=self.alerts, video=self.video,
+                           now_ms=wall_ms)
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -359,7 +370,7 @@ class Server:
 
     def stop(self) -> None:
         self._stop.set()
-        for what, fn in (("API", self.api.stop),
+        for what, fn in (("API", self.api.stop), ("视频", self.video.close),
                          ("待命点", lambda: self.loop.call(self.standby.close, 10)),
                          ("事件台", lambda: self.loop.call(self.incidents.close, 10)),
                          ("派遣器", lambda: self.loop.call(self.dispatcher.close, 10)),

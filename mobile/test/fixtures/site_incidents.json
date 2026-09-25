@@ -9,11 +9,11 @@
       "note": "已出动",
       "occurred_at": null,
       "outcome": "dispatched",
-      "received_at": 1790333014128,
+      "received_at": 1790333455294,
       "result": "failed",
       "robot_id": "A",
       "source": "nvr",
-      "task_id": "incident-fd1121839eb1",
+      "task_id": "incident-ed77f8530721",
       "type": "intrusion",
       "zone": "yard"
     }

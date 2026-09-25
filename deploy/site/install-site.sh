@@ -4,7 +4,7 @@
 #
 #   sudo bash deploy/site/install-site.sh --site-id estate-1 --hostname site.local --hostname 192.168.1.10
 #
-# 做的事:装 mosquitto/openssl/python3-venv → 建系统用户 d1max-site → /opt/d1max-site/venv 装
+# 做的事:装 mosquitto/openssl/python3-venv/ffmpeg → 建系统用户 d1max-site → /opt/d1max-site/venv 装
 # contract[mqtt] 与 site-node → 没 init 过就 `d1max-site init` → 装两个单元并启用。
 # 之后:`d1max-site add-admin <名字>`、`d1max-site enroll <robot_id>`(见文末提示)。
 set -euo pipefail
@@ -31,7 +31,7 @@ done
 
 echo "[1/5] 系统包"
 apt-get update
-apt-get install -y mosquitto openssl python3-venv
+apt-get install -y mosquitto openssl python3-venv ffmpeg   # ffmpeg:视频经站点(W00c5b)
 # 发行版自带的 mosquitto 实例我们不用(配置冲突、多开一个端口),停掉;我们跑自己的单元。
 systemctl disable --now mosquitto.service 2>/dev/null || true
 

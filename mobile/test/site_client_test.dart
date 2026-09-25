@@ -4,6 +4,8 @@ import 'dart:async';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:d1max_patrol/ui/widget/live_video.dart';
+
 import 'support/fake_site.dart';
 
 void main() {
@@ -196,6 +198,34 @@ void main() {
       }
       expect(sw.elapsed, lessThan(const Duration(seconds: 5)), reason: '要自己结束，不许一直挂着');
       expect(got.first['kind'], 'snapshot');
+    } finally {
+      c.close();
+      await site.close();
+    }
+  });
+
+  test('画面经站点：钉证书的客户端 + 站点路径 + 令牌拉得到 MJPEG；指纹不对连不上', () async {
+    final site = FakeSite();
+    await site.start();
+    final c = SiteClient(site.url, testCertFingerprint());
+    try {
+      await c.login('gina', 'pw');
+      final h = await c.videoHealth('A');
+      expect((h['cameras'] as Map).keys, containsAll(<String>['front', 'back']));
+      final io = c.pinnedClient();
+      final frames = await mjpegFrames(Uri.parse('${c.baseUrl}/api/robots/A/video/front'),
+              io: io, token: c.session!.token)
+          .toList();
+      io.close(force: true);
+      expect(frames.length, greaterThanOrEqualTo(2));
+      expect(site.received.last.auth, 'Bearer ${c.session!.token}');
+      final bad = SiteClient(site.url, '00' * 32);
+      final io2 = bad.pinnedClient();
+      await expectLater(
+          mjpegFrames(Uri.parse('${bad.baseUrl}/api/robots/A/video/front'), io: io2).toList(),
+          throwsA(isA<Exception>()));
+      io2.close(force: true);
+      bad.close();
     } finally {
       c.close();
       await site.close();

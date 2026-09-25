@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'site_video.dart';
 import 'site_watch_page.dart';
 
 /// 造一个站点客户端。测试换成假的。
@@ -479,6 +480,10 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                   onPressed: _abort,
                   child: const Text('叫停')),
           ]),
+          const SizedBox(height: 12),
+          // 画面经站点来（W00c5b）：谁都能看（业主也是），站点那头有人看才让狗推。
+          // **放在按钮下面**：叫停要一眼就按得到，不许被画面挤出屏幕。
+          SiteVideo(api: widget.api, robotId: widget.robotId),
           const Divider(),
           for (final e in events.take(30))
             ListTile(dense: true, title: Text('${e['kind']}'), subtitle: Text('${e['data']}')),
