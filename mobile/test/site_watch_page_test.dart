@@ -171,4 +171,60 @@ void main() {
     expect(find.byKey(SiteWatchPage.liveLostKey), findsNothing, reason: '连上了就不再挂着');
     await t.pump(const Duration(seconds: 1));
   });
+
+  testWidgets('还没读到告警时 P1 写「还没读到」，不许写「没有」', (t) async {
+    final api = FakeApi('guard')
+      ..alertRows = <Map<String, dynamic>>[]
+      ..alertsGate = Completer<void>();
+    await t.pumpWidget(MaterialApp(home: SiteWatchPage(api: api)));
+    await t.pump();
+    expect(find.byKey(SiteWatchPage.p1LoadingKey), findsOneWidget);
+    expect(find.byKey(SiteWatchPage.p1NoneKey), findsNothing);
+    api.alertsGate!.complete();
+    await t.pumpAndSettle();
+    expect(find.byKey(SiteWatchPage.p1NoneKey), findsOneWidget);
+  });
+
+  testWidgets('每 30 s 自己再问一次（事件流错过的、半开没察觉的都靠它兜住）', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    final before = api.alertsCalls;
+    await t.pump(const Duration(seconds: 31));
+    await t.pumpAndSettle();
+    expect(api.alertsCalls, greaterThan(before));
+  });
+
+  testWidgets('狗列表页连上时补一次：有声音档没人确认的就响', (t) async {
+    final f = siteFixture('site_alerts_all');
+    final api = FakeApi('guard')..alertsBody = f;
+    var rang = 0;
+    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, ring: () => rang++)));
+    await t.pumpAndSettle();
+    api.sse.add(<String, dynamic>{'kind': 'snapshot', 'robots': <dynamic>[]});
+    await t.pump();
+    await t.pumpAndSettle();
+    expect(rang, 1, reason: '夹具里的跌倒升到了声音档、没人确认');
+    final quiet = FakeApi('guard');                   // 只有屏幕档的
+    var rang2 = 0;
+    await t.pumpWidget(Container());
+    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: quiet, ring: () => rang2++)));
+    await t.pumpAndSettle();
+    quiet.sse.add(<String, dynamic>{'kind': 'snapshot', 'robots': <dynamic>[]});
+    await t.pump();
+    await t.pumpAndSettle();
+    expect(rang2, 0);
+    await t.pump(const Duration(seconds: 1));
+  });
+
+  test('值守汇总读不懂就抛；计数缺一档就是不知道，不写 0', () {
+    expect(() => SiteWatchSummary.fromWire(const <String, dynamic>{'ok': true}),
+        throwsA(isA<FormatException>()));
+    expect(() => SiteWatchSummary.fromWire(const <String, dynamic>{'robots': <dynamic>[1]}),
+        throwsA(isA<FormatException>()));
+    final r = SiteWatchRobot.fromWire(const <String, dynamic>{
+      'robot_id': 'A',
+      'alerts': <String, dynamic>{'P1': 1, 'P2': 0}
+    });
+    expect(r.alerts, isNull);
+  });
 }

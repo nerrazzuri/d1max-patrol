@@ -115,8 +115,9 @@ class SidecarDeviceBackend(DeviceBackend):
         self._last_battery: float | None = None
         #: 最近一帧里程到达的时刻(``time.monotonic``)。HAL 拿它判里程新不新鲜。
         self._odom_at: float | None = None
-        #: 最近的故障帧(有界)。事件流里的 ``FaultEvent`` 丢了 code,HAL 要原样的。
-        self._faults: deque[FaultFrame] = deque(maxlen=RECENT_FAULTS)
+        #: 最近的故障帧(有界),带到达时刻(``time.monotonic``)。事件流里的 ``FaultEvent`` 丢了
+        #: code,HAL 要原样的;HAL 要的是「当前」故障,按到达时刻判(见 :meth:`current_faults`)。
+        self._faults: deque[tuple[float, FaultFrame]] = deque(maxlen=RECENT_FAULTS)
 
     # -------------------------------------------------------------- 生命周期
 
@@ -147,7 +148,22 @@ class SidecarDeviceBackend(DeviceBackend):
     @property
     def recent_faults(self) -> tuple[FaultFrame, ...]:
         """最近的故障帧,旧的在前。"""
-        return tuple(self._faults)
+        return tuple(f for _, f in self._faults)
+
+    def current_faults(self, max_age_s: float) -> tuple[FaultFrame, ...]:
+        """最近 ``max_age_s`` 秒内还报过的故障(同一条只留一份,先到的在前)。
+
+        **是「当前」,不是「历史」。** 旁路进程一帧一条地转发 SDK 的故障,不给「这一批就是全部」
+        的边界,也不报「消了」。所以按到达时刻判:一条故障不再报就老化掉 —— 不然狗跌倒过一次,
+        「跌倒」就永远挂在故障集合里,站点再也认不出下一次(W00c5a 内部评审阻断)。**待真机**:
+        SDK 是一直重报当前故障,还是只在变化时报一次;后者的话老化会把还在的故障提前清掉
+        (站点下一次收到它时再报,聚合窗口会把它合进同一条)。"""
+        now = time.monotonic()
+        seen: dict[tuple[int, int, str], FaultFrame] = {}
+        for at, f in self._faults:
+            if now - at <= max_age_s:
+                seen.setdefault((f.level, f.code, f.message), f)
+        return tuple(seen.values())
 
     async def connect(self) -> None:
         """接上旁路进程,并校验它的协议版本。
@@ -257,7 +273,7 @@ class SidecarDeviceBackend(DeviceBackend):
                 pose=Pose.from_xy_yaw(frame.x, frame.y, frame.yaw)))
             return
         if isinstance(frame, FaultFrame):
-            self._faults.append(frame)
+            self._faults.append((time.monotonic(), frame))
             self.emit(FaultEvent(
                 items=(f"[level={frame.level} code={frame.code}] {frame.message}",),
                 # 厂商没给"哪些 level 算致命"的定义。取 level>=2 为致命是

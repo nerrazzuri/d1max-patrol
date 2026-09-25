@@ -143,7 +143,9 @@ async def test_命令进来回执出去_越界主题不发(台子):
 async def test_断线期间事件攒着_重连后先reconcile再补发(台子):
     broker, c, r, ears, rt, _ = 台子
     await rt.start()
+    await rt.step(0.1)                    # 起来第一拍的 robot_fault(全集)先发掉、确认掉
     await broker.drain()
+    ears.by_topic.pop("event", None)
     broker.disconnect("dog")
     rt.events.emit("task_progress", {"task_id": "t", "distance_m": 1.0})
     rt.events.emit("task_progress", {"task_id": "t", "distance_m": 0.5})
@@ -154,9 +156,9 @@ async def test_断线期间事件攒着_重连后先reconcile再补发(台子):
     await rt.transport.connect()
     await broker.drain()
     rc = Reconcile.from_wire(ears.by_topic["reconcile"][-1])
-    assert (rc.unacked_from_seq, rc.unacked_to_seq) == (1, 2)
+    assert (rc.unacked_from_seq, rc.unacked_to_seq) == (2, 3)
     assert ears.order.index("reconcile") < ears.order.index("event")
-    assert [d["seq"] for d in ears.by_topic["event"]] == [1, 2]
+    assert [d["seq"] for d in ears.by_topic["event"]] == [2, 3]
     assert rt.events.unacked_range() == (0, 0)
 
 
@@ -422,18 +424,19 @@ async def test_HAL故障集合变了才发robot_fault_消了发空列表(台子)
     await rt.step(0.1)
     await broker.drain()
     faults = lambda: [d for d in ears.by_topic.get("event", []) if d["kind"] == "robot_fault"]  # noqa: E731
-    assert faults() == []
+    assert [f["data"] for f in faults()] == [{"faults": []}], \
+        "起来第一拍总发一次全集(空的也发):站点可能还记着重启前的故障"
     r.inject_fault("7", True, "左前腿过流")
     for _ in range(3):
         await rt.step(0.1)
     await broker.drain()
-    assert [f["data"] for f in faults()] == [
+    assert [f["data"] for f in faults()][1:] == [
         {"faults": [{"code": "7", "fatal": True, "text": "左前腿过流"}]}]
     r.clear_faults()
     await rt.step(0.1)
     await rt.step(0.1)
     await broker.drain()
-    assert [f["data"] for f in faults()][1:] == [{"faults": []}]
+    assert [f["data"] for f in faults()][2:] == [{"faults": []}]
 
 
 async def test_HAL没有故障接口_不发也不炸(台子, monkeypatch):
@@ -449,3 +452,65 @@ async def test_HAL没有故障接口_不发也不炸(台子, monkeypatch):
     await rt.step(0.1)
     await broker.drain()
     assert not [d for d in ears.by_topic.get("event", []) if d["kind"] == "robot_fault"]
+
+
+async def test_video命令经MQTT到推流_每拍步进_推流失败进事件簿_收尾停推流(tmp_path):
+    """W00c5b:``video`` 命令交给推流器;它报的 ``video_failed`` 走事件簿上站点。"""
+    broker = MemoryBroker()
+    c = 钟()
+    ears = 站点耳朵()
+    site = MemoryTransport(broker, "site")
+    await site.connect()
+    await site.subscribe(f"{T.prefix}/#", ears)
+
+    class 假推流:
+        def __init__(self):
+            self.emit = None
+            self.got, self.steps, self.closed = [], 0, False
+
+        def request(self, req):
+            self.got.append(req)
+            return ""
+
+        def step(self):
+            self.steps += 1
+
+        def close(self):
+            self.closed = True
+
+    v = 假推流()
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path / "agent", now_ms=c,
+                      loaded_map=("m", "1"), boot_id="boot-1", video=v)
+    await rt.start()
+    cmd = {"schema": "1.0", "command_id": "v1", "task_id": "video-front", "kind": "video",
+           "issued_at": c(), "expires_at": c() + 10_000, "control_epoch": 1, "priority": 0,
+           "offline_policy": "default", "precondition": None,
+           "payload": {"camera": "front", "url": "srt://10.0.0.5:8890",
+                       "passphrase": "Q7kP2mX9vL4nR8tW", "ttl_ms": 10_000}}
+    await site.publish(T.cmd, json.dumps(cmd).encode())
+    await broker.drain()
+    assert ears.by_topic["cmd/ack"][-1]["result"] == "accepted"
+    assert v.got[0].url == "srt://10.0.0.5:8890"
+    await rt.step(0.1)
+    assert v.steps == 1
+    v.emit("video_failed", {"camera": "front", "reason": "连不上"})
+    await rt.step(0.1)
+    await broker.drain()
+    assert any(e["kind"] == "video_failed" for e in ears.by_topic.get("event", []))
+    await rt.close()
+    assert v.closed
+
+
+
+async def test_HAL读故障一直报错_日志只记一条(台子, monkeypatch, caplog):
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+
+    async def 坏():
+        raise OSError("链路断了")
+    monkeypatch.setattr(r, "faults", 坏)
+    with caplog.at_level("ERROR"):
+        for _ in range(5):
+            await rt.step(0.1)
+    assert sum("读 HAL 故障失败" in m for m in caplog.messages) == 1

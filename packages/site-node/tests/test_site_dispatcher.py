@@ -320,3 +320,17 @@ async def test_patrol太大_发之前就拒(台):
     with pytest.raises(DispatchRefused, match="500"):
         await t.site.patrol("A", big, issued_by="alice")
     assert not [c for c in t.site.commands("A") if c["kind"] == "patrol"]
+
+
+async def test_一直只收到过retained状态的狗_挂上超过时限就算过期(台):
+    """W00c5a 内部评审:站点连着 broker 整机重启,没人发遗言,retained 里还写着在线 ——
+    不能永远不算过期。"""
+    from d1max_site.dispatcher import STALE_MS
+    t = 台
+    t.reg.enroll("B", fingerprint="sha256:b", issued_at=t.clock.ms - 1,
+                 expires_at=t.clock.ms + 10**10)
+    await t.site.add_robot("B")
+    assert not t.site.is_stale("B")
+    t.clock.advance(STALE_MS / 1000 + 1)
+    assert t.site.is_stale("B")
+    assert not t.site.is_stale("ghost"), "没登记的不算"

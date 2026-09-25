@@ -12,7 +12,8 @@ class SiteWatchRobot {
   final double? batteryPct;
   final int? batteryAsOfMs;
   final double? clockSkewS;
-  final Map<String, int> alerts;
+  /// 未解决告警按级别计数；站点没给就是 null（「不知道」，不写 0）。
+  final Map<String, int>? alerts;
   final double? diskUsedRatio;
   final int? uploadBacklog;
   final Object? bundleLag;
@@ -62,7 +63,7 @@ class SiteWatchSummary {
   /// 排程这一拍办成了没有；null = 这个站点没开排程。
   final bool? scheduleOk;
   final String scheduleError;
-  final Map<String, int> siteAlerts;
+  final Map<String, int>? siteAlerts;
   final Map<String, String> siteWhy;
 
   const SiteWatchSummary({
@@ -74,14 +75,20 @@ class SiteWatchSummary {
     required this.siteWhy,
   });
 
+  /// **读不懂就抛 `FormatException`**：没有 `robots` 那一段时屏上会画成「零台狗」，而且不报错。
   factory SiteWatchSummary.fromWire(Map<String, dynamic> m) {
+    final raw = m['robots'];
+    if (raw is! List) throw const FormatException('值守汇总里没有 robots 那一段，读不出');
     final site = (m['site'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
     return SiteWatchSummary(
       nowMs: (m['now_ms'] as num?)?.toInt() ?? 0,
-      robots: (m['robots'] as List? ?? const [])
-          .whereType<Map>()
-          .map((r) => SiteWatchRobot.fromWire(r.cast<String, dynamic>()))
-          .toList(),
+      robots: [
+        for (final r in raw)
+          if (r is Map)
+            SiteWatchRobot.fromWire(r.cast<String, dynamic>())
+          else
+            throw FormatException('值守汇总里有一行不是对象：${r.runtimeType}'),
+      ],
       scheduleOk: site['schedule_ok'] as bool?,
       scheduleError: '${site['schedule_error'] ?? ''}',
       siteAlerts: _counts(site['alerts']),
@@ -90,9 +97,15 @@ class SiteWatchSummary {
   }
 }
 
-Map<String, int> _counts(Object? raw) {
-  final m = (raw as Map?) ?? const {};
-  return {for (final k in const ['P1', 'P2', 'P3']) k: (m[k] as num?)?.toInt() ?? 0};
+Map<String, int>? _counts(Object? raw) {
+  if (raw is! Map) return null;
+  final out = <String, int>{};
+  for (final k in const ['P1', 'P2', 'P3']) {
+    final v = raw[k];
+    if (v is! num) return null; // 缺一档就整组「不知道」，不拿 0 补
+    out[k] = v.toInt();
+  }
+  return out;
 }
 
 Map<String, String> _why(Object? raw) =>

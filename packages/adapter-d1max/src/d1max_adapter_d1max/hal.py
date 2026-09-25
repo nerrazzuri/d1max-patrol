@@ -61,6 +61,8 @@ STOPPED_EPS = 0.02
 #: ``vel`` 等回执的上限(秒)。速度环 10 Hz,回执卡住就把整个代理的一拍冻住;超时按拒绝算,
 #: 狗那头最多再走一个 ``ttl`` 就自己停。
 VEL_ACK_TIMEOUT_S = 0.5
+#: 一条故障多久没再报就算消了(秒)。**待真机**:SDK 报故障的节奏没量过。
+FAULT_FRESH_S = 10.0
 #: 连上之后等第一帧状态与里程多久。等不到就是旁路进程不对劲,不接。
 FIRST_FRAME_TIMEOUT_S = 3.0
 #: 站起/趴下之后等状态帧跟上的上限。站起实测约 6 s(清单 #36)。
@@ -135,8 +137,8 @@ class D1MaxHal:
 
     async def health(self) -> Health:
         return Health(link_ok=self._b.connected, control=await self._b.has_control(),
-                      estop=self._estop_now(), faults=tuple(str(f.code) for f in
-                                                            self._b.recent_faults),
+                      estop=self._estop_now(),
+                      faults=tuple(str(f.code) for f in self._b.current_faults(FAULT_FRESH_S)),
                       loc_quality=1.0 if self._odom_fresh() else 0.0)
 
     # ------------------------------------------------------------ 控制权
@@ -290,9 +292,11 @@ class D1MaxHal:
         return Battery(percent=float(st.battery), charging=False)
 
     async def faults(self) -> tuple[Fault, ...]:
+        """**当前**故障:最近 ``FAULT_FRESH_S`` 秒内旁路进程还报过的(见旁路客户端
+        ``current_faults``)。不是历史 —— 历史里跌倒过一次就永远挂着,站点认不出下一次。"""
         # 厂商没说哪些 level 算致命;取 level>=2 是假设(待真机验证),同旁路客户端。
         return tuple(Fault(code=str(f.code), fatal=f.level >= 2, text=f.message)
-                     for f in self._b.recent_faults)
+                     for f in self._b.current_faults(FAULT_FRESH_S))
 
     # ------------------------------------------------------------ 执行器与媒体
 

@@ -181,4 +181,24 @@ void main() {
       await site.close();
     }
   });
+
+  test('事件流半开：一段时间一行都没来就结束，调用方好重连', () async {
+    final site = FakeSite()..sseSilent = true;
+    await site.start();
+    final c = SiteClient(site.url, testCertFingerprint(),
+        sseIdleTimeout: const Duration(milliseconds: 800));
+    try {
+      await c.login('gina', 'pw');
+      final got = <Map<String, dynamic>>[];
+      final sw = Stopwatch()..start();
+      await for (final f in c.events()) {
+        got.add(f);
+      }
+      expect(sw.elapsed, lessThan(const Duration(seconds: 5)), reason: '要自己结束，不许一直挂着');
+      expect(got.first['kind'], 'snapshot');
+    } finally {
+      c.close();
+      await site.close();
+    }
+  });
 }

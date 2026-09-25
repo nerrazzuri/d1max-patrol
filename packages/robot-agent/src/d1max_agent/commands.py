@@ -39,6 +39,7 @@ from d1max_contract.messages import (
 from d1max_contract.registration import Registration
 from d1max_contract.resources import resources_for
 from d1max_contract.topics import Topics
+from d1max_contract.video import parse_video_payload
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,9 @@ class CommandProcessor:
         #: 已接受、等资源的任务(抢占时的新任务)。
         self.pending: list[Task] = []
         self.finished: list[Task] = []
+        #: 按需推流(W00c5b,``VideoPusher``)。``None`` = 这台代理不推视频,
+        #: ``video`` 命令回 unsupported。
+        self.video: Any = None
 
     # ------------------------------------------------------------ 代次落盘
 
@@ -136,6 +140,8 @@ class CommandProcessor:
 
         if cmd.kind == "abort":
             return self._finish(await self._handle_abort(cmd))
+        if cmd.kind == "video":
+            return self._finish(self._handle_video(cmd))
         if cmd.kind not in self.supported:
             return self._finish(self._rej(cmd, "unsupported"))
         try:
@@ -223,6 +229,19 @@ class CommandProcessor:
             self.events.emit("task_aborted", {"task_id": t.task_id, "reason": reason})
             return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
         await t.abort(reason or "abort")
+        return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
+
+    def _handle_video(self, cmd: Command) -> Ack:
+        """``video``:不是任务,不占资源、不进调度。载荷由契约校验,推流交给 ``VideoPusher``。"""
+        if self.video is None:
+            return self._rej(cmd, "unsupported")
+        try:
+            req = parse_video_payload(cmd.payload)
+        except ContractError as exc:
+            return self._rej(cmd, f"payload: {exc}")
+        why = self.video.request(req)
+        if why:
+            return self._rej(cmd, why)
         return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
 
     def _rej(self, cmd: Command, reason: str) -> Ack:

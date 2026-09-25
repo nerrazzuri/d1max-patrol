@@ -78,9 +78,12 @@ class FakeApi implements SiteApi {
   SiteError? alertsError;
   SiteError? summaryError;
   int alertsCalls = 0;
+  /// 给了就等它完成再回（模拟还没读回来）。
+  Completer<void>? alertsGate;
   @override
   Future<List<Alert>> alerts({bool all = false}) async {
     alertsCalls++;
+    if (alertsGate != null) await alertsGate!.future;
     if (alertsError != null) throw alertsError!;
     return alertsFromWire(alertsBody ??
         (alertRows != null ? <String, dynamic>{'alerts': alertRows} : siteFixture('site_alerts')));

@@ -35,6 +35,7 @@ class SiteWatchPage extends StatefulWidget {
   const SiteWatchPage({super.key, required this.api, this.now = DateTime.now});
 
   static const Key p1NoneKey = Key('watch-p1-none');
+  static const Key p1LoadingKey = Key('watch-p1-loading');
   static const Key alertsErrorKey = Key('watch-alerts-error');
   static const Key summaryErrorKey = Key('watch-summary-error');
   static Key ackKey(String key) => Key('watch-ack-$key');
@@ -55,6 +56,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _debounce;
   Timer? _retry;
+  Timer? _poll;
   DateTime? _alertsAt;
   bool _live = true;
   bool _disposed = false;
@@ -64,6 +66,8 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
     super.initState();
     unawaited(_reload());
     _listen();
+    // 实时更新之外每 30 s 再问一次：事件流里错过的、半开没察觉的，都靠它兜住。
+    _poll = Timer.periodic(const Duration(seconds: 30), (_) => unawaited(_reload()));
   }
 
   void _listen() {
@@ -121,6 +125,8 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       });
     } on SiteError catch (e) {
       if (mounted) setState(() => _summaryError = '汇总读不到：$e');
+    } on FormatException catch (e) {
+      if (mounted) setState(() => _summaryError = '汇总读不懂：${e.message}');
     }
   }
 
@@ -141,6 +147,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
     _disposed = true;
     _debounce?.cancel();
     _retry?.cancel();
+    _poll?.cancel();
     _sub?.cancel();
     super.dispose();
   }
@@ -185,7 +192,9 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       r.online ? (r.fresh ? '在线' : '在线（状态过期）') : '掉线',
       '电量 ${_num(r.batteryPct?.toStringAsFixed(0), '%', r.whyFor('battery_pct'))}',
       '钟偏 ${_num(r.clockSkewS?.toStringAsFixed(1), ' 秒', r.whyFor('clock_skew_s'))}',
-      '未解决 P1 ${r.alerts['P1']} · P2 ${r.alerts['P2']} · P3 ${r.alerts['P3']}',
+      r.alerts == null
+          ? '未解决告警 不知道（站点没给）'
+          : '未解决 P1 ${r.alerts!['P1']} · P2 ${r.alerts!['P2']} · P3 ${r.alerts!['P3']}',
       '盘水位 ${_num(r.diskUsedRatio, '', r.whyFor('disk_used_ratio'))}',
       '证据积压 ${_num(r.uploadBacklog, ' 条', r.whyFor('upload_backlog'))}',
     ];
@@ -222,6 +231,9 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
             ListTile(
                 key: SiteWatchPage.alertsErrorKey,
                 title: Text(_alertsError!, style: const TextStyle(color: Colors.red)))
+          else if (_alertsAt == null)
+            // 还没读到过：**不许说「没有」** —— 那是这一屏能说的最坏的假话。
+            const ListTile(key: SiteWatchPage.p1LoadingKey, title: Text('还没读到'))
           else if (p1.isEmpty)
             const ListTile(key: SiteWatchPage.p1NoneKey, title: Text('没有'))
           else

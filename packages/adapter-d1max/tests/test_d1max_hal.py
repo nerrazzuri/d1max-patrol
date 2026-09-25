@@ -347,3 +347,18 @@ async def test_停了的阈值按配置():
         sim.vx = 0.1
         await asyncio.sleep(0.15)
         assert not await hal.stopped()
+
+
+async def test_故障是当前的不是历史_不再报就老化掉(monkeypatch):
+    """W00c5a 内部评审阻断:历史里跌倒过一次就永远挂着,站点认不出下一次跌倒。"""
+    import d1max_patrol.backends.sidecar_device as sd
+    from d1max_adapter_d1max import hal as hal_mod
+
+    async with _台子() as (sim, hal):
+        sim.push_fault(2, 3, "机身跌倒")
+        assert await _等(lambda: _n_faults(hal, 1))
+        real = sd.time.monotonic
+        monkeypatch.setattr(sd.time, "monotonic",
+                            lambda: real() + hal_mod.FAULT_FRESH_S + 1)
+        assert await hal.faults() == ()
+        assert (await hal.health()).faults == ()

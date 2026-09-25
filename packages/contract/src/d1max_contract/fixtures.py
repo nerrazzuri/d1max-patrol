@@ -32,6 +32,7 @@ from d1max_contract.messages import (
 )
 from d1max_contract.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_contract.registration import Registration
+from d1max_contract.video import VideoRequest
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures"
 
@@ -68,6 +69,16 @@ def generate() -> dict[str, dict[str, Any]]:
             event_id="evt-b1-000013", seq=13, boot_id="boot-b1", stamp=1_760_000_131_000,
             kind="robot_fault",
             data=fault_event_data((Fault(code="7", fatal=True, text="左前腿过流"),))).to_wire(),
+        "command_video": Command(
+            command_id="cmd-0006", task_id="video-front", kind="video",
+            issued_at=1_760_000_200_000, expires_at=1_760_000_210_000, control_epoch=3,
+            priority=0, payload=VideoRequest(camera="front", url="srt://10.20.0.1:8890",
+                                             passphrase="Q7kP2mX9vL4nR8tW", ttl_ms=10_000
+                                             ).to_payload()).to_wire(),
+        "event_video_failed": Event(
+            event_id="evt-b1-000014", seq=14, boot_id="boot-b1", stamp=1_760_000_205_000,
+            kind="video_failed",
+            data={"camera": "front", "reason": "推流进程退了: Connection refused"}).to_wire(),
         "command_abort": Command(
             command_id="cmd-0002", task_id="task-0001", kind="abort",
             issued_at=1_760_000_010_000, expires_at=1_760_000_070_000, control_epoch=3,

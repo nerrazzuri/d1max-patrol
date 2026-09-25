@@ -1,0 +1,12 @@
+{
+  "boot_id": "boot-b1",
+  "data": {
+    "camera": "front",
+    "reason": "推流进程退了: Connection refused"
+  },
+  "event_id": "evt-b1-000014",
+  "kind": "video_failed",
+  "schema": "1.0",
+  "seq": 14,
+  "stamp": 1760000205000
+}

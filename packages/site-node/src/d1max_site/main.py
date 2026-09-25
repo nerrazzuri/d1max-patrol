@@ -330,7 +330,12 @@ class Server:
             except Exception as exc:
                 self.scheduler.last_error = f"{type(exc).__name__}: {exc}"
                 log.exception("排程这一拍没办成")
-            self.alert_sources.on_site_error("schedule", self.scheduler.last_error)
+            try:
+                self.alert_sources.on_site_error("schedule", self.scheduler.last_error)
+            except Exception:
+                # 报告警本身失败(比如库锁住了)不许把排程协程带走 —— 那正是 schedule_died 要防的
+                # 静默死亡(W00c5a 内部评审)。
+                log.exception("排程没办成的告警记不下来")
 
     async def _alert_loop(self) -> None:
         """告警:每几秒看一次掉线、让 P1 未确认的升档。一拍炸了记下来、下一拍照走。"""

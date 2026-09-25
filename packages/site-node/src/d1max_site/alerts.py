@@ -225,9 +225,12 @@ class AlertBook:
         #: 修剪时内存里保留多少条已解决的(挂账 75)。剪掉的库里一条不少。
         self._keep_closed = keep_closed
 
-    def restore(self, alerts: Iterable[Alert]) -> None:
-        """站点重启:把库里的告警读回来。未解决、未确认的那条重新当作「正在吸收」的那条;
-        序号从每个 ``robot/kind`` 见过的最大号往后走,不撞号。只在开张时调一次。"""
+    def restore(self, alerts: Iterable[Alert], *, max_seq: dict[str, int] | None = None) -> None:
+        """站点重启:把库里的告警读回来(调用方只给未解决的与最近的,不是整张历史表)。未解决、未确认
+        的那条重新当作「正在吸收」的那条;序号从每个 ``robot/kind`` 见过的最大号往后走(``max_seq``
+        由调用方从整张表的键里算,读回的只是其中一部分),不撞号。只在开张时调一次。"""
+        for group, seq in (max_seq or {}).items():
+            self._seq[group] = max(self._seq.get(group, 0), seq)
         for a in sorted(alerts, key=lambda a: (a.first_ms, a.key)):
             self._by_key[a.key] = a
             group = f"{a.robot}/{a.kind}"
@@ -239,6 +242,8 @@ class AlertBook:
                     self._active[group] = a.key
 
     def _spill(self, alert: Alert) -> None:
+        """**先写出去,再改内存**(每个调用点都是这个顺序):写库失败抛出来的时候内存还没动 ——
+        不然接口回了 500,内存里却已经算确认、升级停了,库里没记,重启后又回到没确认。"""
         if self._sink is not None:
             self._sink(alert)
 
@@ -281,6 +286,7 @@ class AlertBook:
             and existing.acked_ms is None
             and now_ms - existing.last_ms <= self._window_ms
         )
+        seq = None
         if absorbs:
             alert = replace(
                 existing,
@@ -291,7 +297,6 @@ class AlertBook:
             )
         else:
             seq = self._seq.get(group, 0) + 1
-            self._seq[group] = seq
             alert = Alert(
                 key=_key(robot, kind, seq),
                 level=level,
@@ -308,9 +313,11 @@ class AlertBook:
                 resolved_ms=None,
                 escalated=0,
             )
+        self._spill(alert)
+        if seq is not None:
+            self._seq[group] = seq
             self._active[group] = alert.key
         self._by_key[alert.key] = alert
-        self._spill(alert)
         return alert
 
     def ack(self, key: str, *, who: str, now_ms: int) -> Alert:
@@ -325,8 +332,8 @@ class AlertBook:
         if existing is None:
             raise AlertNotFound(key)
         alert = replace(existing, acked_by=who, acked_ms=now_ms)
-        self._by_key[key] = alert
         self._spill(alert)
+        self._by_key[key] = alert
         return alert
 
     def resolve(self, key: str, *, who: str = "", now_ms: int) -> Alert:
@@ -342,8 +349,8 @@ class AlertBook:
         if existing is None:
             raise AlertNotFound(key)
         alert = replace(existing, resolved_by=who, resolved_ms=now_ms)
-        self._by_key[key] = alert
         self._spill(alert)
+        self._by_key[key] = alert
         return alert
 
     def due_escalations(self, *, now_ms: int) -> tuple[tuple[Alert, Channel], ...]:
@@ -369,8 +376,8 @@ class AlertBook:
                     tier = i + 1
             if tier > alert.escalated:
                 updated = replace(alert, escalated=tier)
-                self._by_key[alert.key] = updated
                 self._spill(updated)
+                self._by_key[alert.key] = updated
                 due.append((updated, _CHANNEL_BY_TIER[tier]))
         return tuple(due)
 

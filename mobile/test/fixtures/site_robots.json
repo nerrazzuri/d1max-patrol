@@ -31,14 +31,14 @@
           }
         }
       },
-      "expires_at": 1791328315496,
+      "expires_at": 1791333013832,
       "fresh": true,
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-19bb96da68",
+        "boot_id": "boot-7a01f72602",
         "control_epoch": 1,
-        "last_seen": 1790328316316,
+        "last_seen": 1790333014649,
         "online": true,
         "ready": {
           "control": true,

@@ -96,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
     d1.add_argument("--stopped-eps", type=float, default=None,
                     help="里程速度低于它算停了(m/s、rad/s),默认 0.02;要大于站着时的噪声")
     d1.add_argument("--invert-yaw", action="store_true", help="转向方向跟 SDK 相反时翻过来")
+    v = p.add_argument_group("视频经站点(W00c5b):站点要看时按需推 SRT")
+    v.add_argument("--camera-host", default="192.168.234.1",
+                   help="--hal d1max:相机 RTSP 所在主机(rtsp://<host>:8554/front|back)")
+    v.add_argument("--video-transcode", action="store_true",
+                   help="相机不是 H.264 时转成 H.264 再推(默认原样转封装,不占 CPU)")
+    v.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件")
     p.add_argument("--registration", type=Path, required=True, help="站点签发的注册文件")
     p.add_argument("--store-dir", type=Path, required=True, help="幂等记录、事件簿、代次落盘的目录")
     p.add_argument("--runs-root", type=Path, required=True, help="引擎归档目录(数据根下的 runs)")
@@ -227,9 +233,12 @@ def build(args: argparse.Namespace) -> Assembled:
                              home=args.home, media=media)
         transport = _make_transport(args.transport, registration.robot_id, broker,
                                     tls=(args.tls_ca, args.tls_cert, args.tls_key))
+        from d1max_agent.video_push import VideoPusher, lavfi_source, rtsp_source
+        source = lavfi_source if args.hal == "sim" else rtsp_source(args.camera_host)
+        video = VideoPusher(source=source, ffmpeg=args.ffmpeg, transcode=args.video_transcode)
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,
                                store_dir=args.store_dir, now_ms=wall_ms, loaded_map=args.map,
-                               parts=parts)
+                               parts=parts, video=video)
         return hal, parts, runtime
 
     async def _in_loop():

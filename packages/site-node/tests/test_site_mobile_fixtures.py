@@ -16,10 +16,17 @@ FIXTURES = Path(__file__).resolve().parents[3] / "mobile" / "test" / "fixtures"
 
 
 def _shape(v):
+    """键与值的类型,递归。**列表取所有元素形状的并集**:只看第一个的话,同一份列表(比如有的告警
+    确认过、有的没有)按顺序不同会比出不同的形状 —— 时过时不过,而且真变了形也可能照样过。"""
     if isinstance(v, dict):
-        return {k: _shape(x) for k, x in sorted(v.items())}
+        # 事件的 ``data`` 按种类各不相同(契约里就是自由对象):哪几种事件赶上了这一趟,不该让形状变。
+        return {k: ("obj" if k == "data" and isinstance(x, dict) else _shape(x))
+                for k, x in sorted(v.items())}
     if isinstance(v, list):
-        return [_shape(v[0])] if v else []
+        merged = None
+        for x in v:
+            merged = _merge(merged, _shape(x))
+        return [merged] if v else []
     if isinstance(v, bool):
         return "bool"
     if isinstance(v, (int, float)):
@@ -27,6 +34,19 @@ def _shape(v):
     if v is None:
         return "null"
     return "str"
+
+
+def _merge(a, b):
+    if a is None:
+        return b
+    if isinstance(a, dict) and isinstance(b, dict):
+        return {k: _merge(a.get(k), b.get(k)) if k in a and k in b else (a.get(k) or b.get(k))
+                for k in sorted(set(a) | set(b))}
+    if isinstance(a, list) and isinstance(b, list):
+        return [_merge(a[0] if a else None, b[0] if b else None)] if (a or b) else []
+    if isinstance(a, str) and isinstance(b, str):
+        return "|".join(sorted(set(a.split("|")) | set(b.split("|"))))
+    return f"{a!r}|{b!r}"
 
 
 def _collect(tmp_path) -> dict[str, object]:

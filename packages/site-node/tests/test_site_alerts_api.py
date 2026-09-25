@@ -110,3 +110,21 @@ def test_SSE里看得到告警的变化(站点):
     else:
         raise AssertionError("SSE 里没等到告警")
     conn.close()
+
+
+
+def test_交接班那一张_截多少条写明白_limit不对400(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    for i in range(3):
+        s.loop.call(lambda i=i: _raise(s, i))
+    code, d = s.req("GET", "/api/alerts?all=1&limit=2", token=alice)
+    assert code == 200 and len(d["alerts"]) == 2 and d["limit"] == 2 and d["truncated"] is True
+    code, d = s.req("GET", "/api/alerts?all=1", token=alice)
+    assert d["limit"] == 200 and d["truncated"] is False
+    for bad in ("0", "x", "99999"):
+        assert s.req("GET", f"/api/alerts?all=1&limit={bad}", token=alice)[0] == 400
+
+
+async def _raise(s, i):
+    s.desk.raise_alert(kind="run_done", robot=f"R{i}", title="跑完了")

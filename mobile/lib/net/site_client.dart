@@ -105,10 +105,14 @@ class SiteClient implements SiteApi {
   /// 握手时见到的证书指纹（最近一次）。钉扎失败时拿它给人看「实际是哪一张」。
   String? lastSeenFingerprint;
 
+  /// 事件流多久一行都没来就当断了（站点 15 s 一行心跳，默认给三倍余量）。
+  final Duration sseIdleTimeout;
+
   /// 站点等狗的回执最多 10 s（再加 5 s 余量）才回话；手机的超时要比它长，不然会把
   /// 「站点已经派出去了」报成超时，人再按一次就派了两趟。
   SiteClient(String baseUrl, String fingerprintRaw,
-      {this.timeout = const Duration(seconds: 25)})
+      {this.timeout = const Duration(seconds: 25),
+      this.sseIdleTimeout = const Duration(seconds: 45)})
       : base = _parseBase(baseUrl),
         fingerprint = _checkedFingerprint(fingerprintRaw),
         _io = HttpClient(context: SecurityContext(withTrustedRoots: false)) {
@@ -300,8 +304,12 @@ class SiteClient implements SiteApi {
       throw SiteError(resp.statusCode, '事件流开不了');
     }
     try {
-      await for (final line
-          in resp.transform(utf8.decoder).transform(const LineSplitter())) {
+      // **半开的连接要看得出来**：站点每 15 s 发一行心跳（注释行）；[sseIdleTimeout] 里一行都没来
+      // 就当断了、结束流，调用方照常重连。不这样的话，换网之后连接半开，屏上长期停在旧数据上。
+      await for (final line in resp
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .timeout(sseIdleTimeout, onTimeout: (sink) => sink.close())) {
         if (!line.startsWith('data: ')) continue;
         try {
           final d = jsonDecode(line.substring(6));

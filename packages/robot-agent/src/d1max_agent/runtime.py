@@ -17,6 +17,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from d1max_agent.assembly import EngineParts, build_engine
 from d1max_agent.commands import CommandProcessor
@@ -57,7 +58,7 @@ class AgentRuntime:
                  boot_id: str | None = None, telemetry_period_ms: int = 1000,
                  status_period_ms: int = 30_000, parts: EngineParts | None = None,
                  home: Pose | None = None, runs_root: Path | None = None,
-                 monotonic: Callable[[], float] | None = None) -> None:
+                 monotonic: Callable[[], float] | None = None, video: Any = None) -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -83,6 +84,11 @@ class AgentRuntime:
             ledger=ResourceLedger(), supported_tasks=self._supported(),
             loaded_map=loaded_map, state_path=store_dir / "state.json",
             task_factory=self._make_task)
+        #: 按需推流(W00c5b)。``video_failed`` 进事件簿:断线时留在狗上、重连补投。
+        self.video = video
+        if video is not None:
+            video.emit = self.events.emit
+            self.processor.video = video
         self.transport = GuardedTransport(transport, TopicAcl(self.topics),
                                           after_connect=self._flush_reconnect)
         self.online = False
@@ -93,8 +99,11 @@ class AgentRuntime:
         self._started = False
         #: HAL 碰过没有(connect 调过就算,哪怕它抛了)。close() 据此决定要不要收 HAL。
         self._hal_touched = False
-        #: 上一次报出去的 HAL 故障集合(W00c5a):变了才发一条 ``robot_fault``。
-        self._last_faults: tuple[Fault, ...] = ()
+        #: 上一次报出去的 HAL 故障集合(W00c5a):变了才发一条 ``robot_fault``。**起来第一拍总发一次
+        #: 全集**(``None``):站点记着的可能是重启前的故障(比如「跌倒」),不发的话它永远清不掉,
+        #: 下一次跌倒就认不出来(W00c5a 内部评审阻断)。
+        self._last_faults: tuple[Fault, ...] | None = None
+        self._faults_error = ""
         self._closed = False
         #: 命令按到达顺序串行处理:QoS 1 的重复可能几乎同时到,处理里一旦有 await,两条都会
         #: 先通过幂等查询。
@@ -178,6 +187,10 @@ class AgentRuntime:
 
         if self.parts is not None:
             await _step("关引擎", self.parts.engine.aclose)
+        if self.video is not None:
+            async def _video_off() -> None:
+                self.video.close()
+            await _step("停推流", _video_off)
         if self._hal_touched:
             await _step("HAL 停", self.hal.stop)
             if self.hal.hal_capabilities().control_releasable:
@@ -254,6 +267,8 @@ class AgentRuntime:
         if self.parts is not None:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
         await self.processor.step(dt_s)
+        if self.video is not None:
+            self.video.step()
         await self._watch_faults()
         await self._flush_events()
         await self._publish_status()
@@ -267,9 +282,14 @@ class AgentRuntime:
             now = tuple(await self.hal.faults())
         except HalUnsupported:
             return
-        except Exception:
-            log.exception("读 HAL 故障失败,这一拍不判")
+        except Exception as exc:
+            # 同一个毛病只在变的那一拍记一条(带栈):每拍一条会把日志刷满。
+            why = f"{type(exc).__name__}: {exc}"
+            if why != self._faults_error:
+                self._faults_error = why
+                log.exception("读 HAL 故障失败,这一拍不判")
             return
+        self._faults_error = ""
         if now != self._last_faults:
             self._last_faults = now
             self.events.emit("robot_fault", fault_event_data(now))

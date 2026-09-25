@@ -46,9 +46,10 @@ class TaskState(str, Enum):
 
 
 #: 狗报的事件类型。狗只报事实,判定在站点(总设计 §3.3)。``patrol_waypoint`` 是 W00c2a 的,
-#: ``robot_fault`` 是 W00c5a 的(HAL 故障集合变了才发一条;空列表 = 都消了)。
+#: ``robot_fault`` 是 W00c5a 的(HAL 故障集合变了才发一条;空列表 = 都消了);``video_failed`` 是
+#: W00c5b 的(推流进程没到期就退了,``{camera, reason}``)。
 EVENT_KINDS = ("task_progress", "task_done", "task_failed", "task_preempted", "task_aborted",
-               "patrol_waypoint", "robot_fault")
+               "patrol_waypoint", "robot_fault", "video_failed")
 
 
 def fault_event_data(faults: tuple[Fault, ...] | list[Fault]) -> dict[str, Any]:

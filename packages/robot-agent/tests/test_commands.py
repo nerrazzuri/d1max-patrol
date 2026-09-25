@@ -320,3 +320,44 @@ async def test_patrol的payload校验(cp):
     ack = await cp.handle(_cmd("patrol", cid="p4", payload={"mission": _MISSION}).to_wire(),
                           TOPIC)
     assert ack.result is AckResult.REJECTED and "map_version" in ack.reason
+
+
+# ------------------------------------------------------------ W00c5b:video 命令(不是任务)
+
+class 假推流:
+    def __init__(self):
+        self.got = []
+        self.refuse = ""
+
+    def request(self, req):
+        self.got.append(req)
+        return self.refuse
+
+
+def _video(**kw):
+    p = {"camera": "front", "url": "srt://10.0.0.5:8890", "passphrase": "Q7kP2mX9vL4nR8tW",
+         "ttl_ms": 10_000} | kw
+    return _cmd("video", tid="video-front", payload=p)
+
+
+async def test_video命令交给推流_不起任务不占资源(cp):
+    cp.video = 假推流()
+    ack = await cp.handle(_video().to_wire(), TOPIC)
+    assert ack.result is AckResult.ACCEPTED, ack
+    assert cp.video.got[0].camera == "front" and cp.video.got[0].ttl_ms == 10_000
+    await cp.step(0.1)
+    assert cp.current is None and not cp.pending, "video 不是任务"
+    ack = await cp.handle(_cmd(cid="c2").to_wire(), TOPIC)  # 同时派 goto 照常收
+    assert ack.result is AckResult.ACCEPTED
+
+
+async def test_video载荷坏的拒_推流起不来如实拒_没有推流能力拒(cp):
+    cp.video = 假推流()
+    ack = await cp.handle(_video(url="srt://x:1?mode=listener").to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason.startswith("payload:")
+    cp.video.refuse = "起不了 ffmpeg"
+    ack = await cp.handle({**_video().to_wire(), "command_id": "c9"}, TOPIC)
+    assert ack.result is AckResult.REJECTED and "ffmpeg" in ack.reason
+    cp.video = None
+    ack = await cp.handle({**_video().to_wire(), "command_id": "c10"}, TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason == "unsupported"

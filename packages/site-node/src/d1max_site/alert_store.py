@@ -18,6 +18,9 @@ from d1max_site.db import SiteDB
 
 log = logging.getLogger(__name__)
 
+#: 开张时内存里读回多少条最近的(已解决的也算);未解决的全读回。
+RESTORE_RECENT = 200
+
 _COLS = ("key", "level", "kind", "robot", "title", "detail", "first_ms", "last_ms", "count",
          "acked_by", "acked_ms", "resolved_by", "resolved_ms", "escalated")
 
@@ -37,7 +40,17 @@ class AlertDesk:
         self._now = now_ms
         self._publish = publish
         self.book = AlertBook(sink=self._write)
-        self.book.restore(_from_row(r) for r in db.query("SELECT * FROM alerts"))
+        # 只读回未解决的与最近 RESTORE_RECENT 条:整张历史表读进内存会一直涨,升级每 5 s 还要遍历。
+        # 序号从整张表的键里算(只读键),读回的只是一部分也不撞号。
+        max_seq: dict[str, int] = {}
+        for (key,) in db.query("SELECT key FROM alerts"):
+            group, _, seq = key.rpartition("#")
+            if seq.isdigit():
+                max_seq[group] = max(max_seq.get(group, 0), int(seq))
+        rows = db.query("SELECT * FROM alerts WHERE resolved_ms IS NULL UNION "
+                        "SELECT * FROM (SELECT * FROM alerts ORDER BY last_ms DESC LIMIT ?)",
+                        (RESTORE_RECENT,))
+        self.book.restore((_from_row(r) for r in rows), max_seq=max_seq)
 
     # ------------------------------------------------------------ 写穿
 
@@ -75,6 +88,10 @@ class AlertDesk:
     def open(self) -> list[dict[str, Any]]:
         """未解决的,P1 在最上面。"""
         return [a.to_wire() for a in self.book.open()]
+
+    def trim(self) -> int:
+        """内存里多余的已解决告警放掉(库里一条不少)。站点主循环每拍调。"""
+        return self.book.trim()
 
     def recent(self, limit: int = 200) -> list[dict[str, Any]]:
         """最近的(含已解决),按最后一次触发倒序。从库里读:内存里的已解决的会被修剪。"""

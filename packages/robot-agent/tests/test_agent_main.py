@@ -281,3 +281,16 @@ def test_证书交给PahoTransport(monkeypatch):
                                tls=("/e/ca.crt", "/e/r.crt", "/e/r.key"))
     assert seen == {"url": "mqtts://site:8883", "client_id": "D1MAX-SIM", "tls_ca": "/e/ca.crt",
                     "tls_cert": "/e/r.crt", "tls_key": "/e/r.key"}
+
+
+
+def test_视频参数_仿真用测试图_真狗拉相机RTSP(tmp_path):
+    from d1max_agent.video_push import lavfi_source
+    a = agent_main.build(_args(tmp_path))
+    try:
+        assert a.runtime.video is not None and a.runtime.video._source is lavfi_source
+    finally:
+        a.stop()
+    d = _args(tmp_path, "--hal", "d1max", "--camera-host", "10.1.2.3", "--video-transcode")
+    assert d.camera_host == "10.1.2.3" and d.video_transcode is True
+    assert _args(tmp_path).camera_host == "192.168.234.1"

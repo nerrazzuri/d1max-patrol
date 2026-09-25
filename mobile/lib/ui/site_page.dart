@@ -228,6 +228,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     _sub?.cancel();
     _sub = widget.api.events().listen((f) {
       if (!_live && mounted) setState(() => _live = true);
+      if (f['kind'] == 'snapshot') unawaited(_ringIfPending());
       if (alertWantsSound(f)) {
         widget.ring();
         final a = f['alert'] as Map;
@@ -238,6 +239,24 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       }
       _soon();
     }, onError: (Object _) => _lost(), onDone: _lost, cancelOnError: true);
+  }
+
+  /// 连上（或重连上）时补一次：升档那一帧可能正好落在断线期间，错过了就永远不响。
+  Future<void> _ringIfPending() async {
+    try {
+      final rows = await widget.api.alerts();
+      final pending = rows.where((a) =>
+          a.channel == 'sound' && a.ackedMs == null && a.resolvedMs == null);
+      if (pending.isEmpty || _disposed) return;
+      widget.ring();
+      final a = pending.first;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('${a.level} ${a.robot} · ${a.title}（没人确认）')));
+      }
+    } on Exception {
+      return; // 读不到就算了：值守屏自己会报读不到
+    }
   }
 
   void _lost() {

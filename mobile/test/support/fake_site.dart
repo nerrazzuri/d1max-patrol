@@ -22,6 +22,9 @@ class FakeSite {
   /// 按路径覆盖状态码（默认 200）。
   final Map<String, int> statusCodes = <String, int>{};
 
+  /// 真：事件流发完快照之后一声不吭（模拟半开的连接）。
+  bool sseSilent = false;
+
   /// 按路径覆盖 200 的回包（模拟站点回了一份读不懂的东西）。
   final Map<String, Map<String, dynamic>> bodies = <String, Map<String, dynamic>>{};
   final StreamController<Map<String, dynamic>> sse = StreamController.broadcast();
@@ -75,6 +78,10 @@ class FakeSite {
       resp.bufferOutput = false;
       resp.write('data: ${jsonEncode({"kind": "snapshot", "robots": []})}\n\n');
       await resp.flush();
+      if (sseSilent) {
+        // 半开：快照之后什么都不发，连接也不关（心跳也没有）。
+        await Future<void>.delayed(const Duration(seconds: 30));
+      }
       await for (final item in sse.stream) {
         resp.write('data: ${jsonEncode(item)}\n\n');
         await resp.flush();

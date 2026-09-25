@@ -68,6 +68,8 @@ SSE_HEARTBEAT_S = 15.0
 REQUEST_TIMEOUT_S = 30.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
+#: ``GET /api/alerts?all=1&limit=`` 的上限。
+ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
@@ -309,8 +311,17 @@ class _Handler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/alerts":
             self._need(user, VIEW)
             q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
-            fn = self.site.alerts.recent if q.get("all") == ["1"] else self.site.alerts.open
-            return self._send_json(200, {"alerts": self.site.loop.call(lambda: _sync(fn))})
+            if q.get("all") != ["1"]:
+                rows = self.site.loop.call(lambda: _sync(self.site.alerts.open))
+                return self._send_json(200, {"alerts": rows})
+            # 交接班那一张:最近的在前,**截多少条写在回包里**(不许悄悄截)。
+            raw = (q.get("limit") or ["200"])[0]
+            if not raw.isdigit() or not 1 <= int(raw) <= ALERTS_LIMIT_MAX:
+                raise HttpError(400, f"limit 要是 1–{ALERTS_LIMIT_MAX} 的整数")
+            n = int(raw)
+            rows = self.site.loop.call(lambda: _sync(self.site.alerts.recent, n))
+            return self._send_json(200, {"alerts": rows, "limit": n,
+                                         "truncated": len(rows) >= n})
         if method == "GET" and path == "/api/watch/summary":
             self._need(user, VIEW)
             from d1max_site.watch import watch_summary

@@ -48,6 +48,10 @@ SITE = "site"
 #: 站点主循环多久调一次 :meth:`SiteAlertSources.step`(秒)。升级时限是分钟级,5 s 够细。
 STEP_S = 5.0
 
+#: 掉线告警的迟滞:回来之后要连着在线这么久(毫秒),再掉线才另起一条。4G 抖一下就一条新 P1,
+#: 人很快就不看 P1 了;这段时间里又掉的,算同一次。
+OFFLINE_REARM_MS = 60_000
+
 
 def _hit(text: str, words: tuple[str, ...]) -> bool:
     low = text.lower()
@@ -65,6 +69,9 @@ class _Mem:
     offline: bool = False
     running: bool = False
     started: str = ""
+    boot_id: str = ""
+    #: 由掉线变回在线的时刻(站点的钟);``None`` = 还没掉过线。掉线告警的迟滞用它。
+    online_since: int | None = None
 
 
 class SiteAlertSources:
@@ -78,7 +85,18 @@ class SiteAlertSources:
         self._site_errors: dict[str, str] = {}
 
     def attach(self, dispatcher) -> None:
-        """挂到派遣器的三条上行回调上。"""
+        """挂到派遣器的三条上行回调上。挂之前先用库里**最后见过**的状态给每台狗的记忆做种:
+        站点重启后记忆是空的,不做种的话,重启前已经确认过、还按着的急停会另起一条没确认的 P1,
+        停机期间跑着任务掉线的狗会被报成空闲掉线(P2)(W00c5a 内部评审)。"""
+        import json
+
+        from d1max_contract.errors import ContractError as _CE
+        for row in dispatcher.db.query("SELECT robot_id, status FROM robot_state "
+                                       "WHERE status IS NOT NULL"):
+            try:
+                self.seed(row["robot_id"], Status.from_wire(json.loads(row["status"])))
+            except (_CE, ValueError, TypeError):
+                log.warning("%s 库里的状态读不懂,不做种", row["robot_id"])
         dispatcher.on_status(self.on_status)
         dispatcher.on_event(self.on_event)
         dispatcher.on_telemetry(self.on_telemetry)
@@ -86,6 +104,18 @@ class SiteAlertSources:
 
     def _m(self, rid: str) -> _Mem:
         return self._mem.setdefault(rid, _Mem())
+
+    def seed(self, rid: str, s: Status) -> None:
+        """用一份**已经知道**的状态给记忆做种,不报任何告警。"""
+        m = self._m(rid)
+        m.boot_id = s.boot_id
+        m.offline = not s.online
+        if s.online:
+            m.running = s.task is not None and s.task.state is TaskState.RUNNING
+            m.estop = not s.ready.estop_clear
+            m.loc_lost_running = m.running and not s.ready.loc_ok
+            if m.running:
+                m.started = s.task.task_id
 
     # ------------------------------------------------------------ 状态
 
@@ -95,6 +125,12 @@ class SiteAlertSources:
             # 遗言:ready 全是假,那不是急停、不是丢定位 —— 是掉线。
             self._offline(rid, m)
             return
+        if s.boot_id != m.boot_id:
+            # 狗重启过:它上一辈子的故障(跌倒)不再算数,起来第一拍它会报全集。
+            m.boot_id = s.boot_id
+            m.fallen = False
+        if m.offline:
+            m.online_since = self._now()
         m.offline = False
         running = s.task is not None and s.task.state is TaskState.RUNNING
         m.running = running
@@ -115,9 +151,10 @@ class SiteAlertSources:
                                   title=f"开跑:{s.task.kind} {s.task.task_id}")
 
     def step(self) -> None:
-        """站点主循环每 ``STEP_S`` 秒调一次:看掉线,再让 P1 未确认的升档。"""
+        """站点主循环每 ``STEP_S`` 秒调一次:看掉线,再让 P1 未确认的升档,再修剪内存。"""
         self.tick()
         self.desk.escalate()
+        self.desk.trim()
 
     def tick(self) -> None:
         """站点主循环每几秒调一次:状态过期 = 掉线(遗言也许没到)。"""
@@ -131,13 +168,16 @@ class SiteAlertSources:
         if m.offline:
             return
         m.offline = True
+        # 掉线期间的事看不见:回来之后重新从它报的状态认起。跌倒的记忆也清掉(狗可能被扶起、重启)。
+        m.estop = m.loc_lost_running = m.fallen = False
+        if m.online_since is not None and self._now() - m.online_since < OFFLINE_REARM_MS:
+            log.info("%s 回来不到 %d s 又掉线:算同一次,不另起告警", rid, OFFLINE_REARM_MS // 1000)
+            return
         if m.running:
             self.desk.raise_alert(kind="robot_offline", robot=rid, title="狗掉线了(跑着任务)",
                                   detail=f"最后在跑 {m.started}")
         else:
             self.desk.raise_alert(kind="robot_offline_idle", robot=rid, title="狗掉线了")
-        # 掉线期间的事看不见:回来之后重新从它报的状态认起。
-        m.estop = m.loc_lost_running = False
 
     # ------------------------------------------------------------ 事件
 

@@ -197,6 +197,7 @@ def test_掉线_跑着任务是P1_空闲是P2_回来了再掉再报(台):
     assert got == {"A": ("robot_offline", "P1"), "B": ("robot_offline_idle", "P2")}
     stale.discard("B")
     src.on_status("B", _status())
+    c.ms += 61_000                                    # 回来连着在线过了迟滞
     stale.add("B")
     src.tick()
     assert sum(a.count for a in desk.book.all() if a.robot == "B") == 2
@@ -248,3 +249,124 @@ def test_掉线回来之后从它报的状态重新认起_急停还按着就再�
     src.on_status("A", _status(estop_clear=False))
     n = sum(a.count for a in desk.book.all() if a.kind == "estop_pressed")
     assert n == 2
+
+
+
+def test_4G抖动_回来不到一分钟又掉_算同一次(台):
+    c, db, desk, src, pushed, stale = 台
+    src.on_status("A", _status())
+    src.on_status("A", _status(online=False))
+    a = [x for x in desk.book.all() if x.robot == "A"][0]
+    desk.ack(a.key, who="gina")
+    for _ in range(5):                                # 抖五次
+        c.ms += 10_000
+        src.on_status("A", _status())
+        c.ms += 5_000
+        src.on_status("A", _status(online=False))
+    assert len([x for x in desk.book.all() if x.robot == "A"]) == 1, \
+        "确认过的那条之后不许每抖一次就一条新 P1"
+    c.ms += 10_000
+    src.on_status("A", _status())
+    c.ms += 61_000
+    src.on_status("A", _status(online=False))
+    assert len([x for x in desk.book.all() if x.robot == "A"]) == 2, \
+        "稳定在线一分钟后再掉是新的一次"
+
+
+def test_狗重启过或掉线过_跌倒的记忆清掉_下一次跌倒照报(台):
+    """W00c5a 内部评审阻断:狗跌倒 → 扶起、重启 → 再跌倒,不许不报。"""
+    c, db, desk, src, *_ = 台
+    fall = fault_event_data((Fault(code="3", fatal=True, text="机身跌倒"),))
+    src.on_status("A", _status())
+    src.on_event("A", _ev("robot_fault", **fall))
+    [a] = desk.book.all()
+    desk.ack(a.key, who="gina")
+    # 扶起、重启:新的 boot_id(代理起来第一拍会报全集;这里故意不报,只靠 boot_id 也要清)
+    src.on_status("A", Status(online=True, boot_id="b2", ready=_ready(), control_epoch=1,
+                              last_seen=1, task=None))
+    src.on_event("A", _ev("robot_fault", **fall))
+    assert len([x for x in desk.book.all() if x.kind == "fallen"]) == 2
+    b = [x for x in desk.book.all() if x.kind == "fallen"][-1]
+    desk.ack(b.key, who="gina")
+    src.on_status("A", Status(online=False, boot_id="b2", ready=_ready(), control_epoch=1,
+                              last_seen=1, task=None))
+    c.ms += 61_000
+    src.on_status("A", Status(online=True, boot_id="b2", ready=_ready(), control_epoch=1,
+                              last_seen=1, task=None))
+    src.on_event("A", _ev("robot_fault", **fall))
+    assert len([x for x in desk.book.all() if x.kind == "fallen"]) == 3, "掉线回来后同样清"
+
+
+def test_站点重启_用库里最后见过的状态做种_不重复报也不降级(台, tmp_path):
+    """W00c5a 内部评审:重启前确认过、还按着的急停不许另起一条;停机期间跑着任务掉线要报 P1。"""
+    import json
+
+    c, db, desk, src, *_ = 台
+    with db.tx() as t:
+        for rid, st in (("A", _status(estop_clear=False)), ("B", _status(task=_running("t9")))):
+            t.execute("INSERT INTO robot_state(robot_id, status, updated_at) VALUES (?,?,?)",
+                      (rid, json.dumps(st.to_wire()), c.ms))
+
+    class 假派遣:
+        def __init__(self):
+            self.db = db
+
+        def on_status(self, cb):
+            pass
+
+        def on_event(self, cb):
+            pass
+
+        def on_telemetry(self, cb):
+            pass
+
+        def is_stale(self, rid):
+            return False
+
+    src2 = SiteAlertSources(desk, now_ms=c)
+    src2.attach(假派遣())
+    src2.on_status("A", _status(estop_clear=False))          # retained:急停还按着
+    src2.on_status("B", _status(online=False))               # 停机期间的遗言
+    src2.on_status("B", _status(online=False))
+    got = sorted((a.robot, a.kind) for a in desk.book.all())
+    assert got == [("B", "robot_offline")], got
+
+
+def test_写库失败_内存不动_接口报错之后仍是没确认(台, monkeypatch):
+    c, db, desk, *_ = 台
+    a = desk.raise_alert(kind="estop_pressed", robot="A", title="急停")
+
+    def 坏(_):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(desk, "_write", 坏)
+    desk.book._sink = 坏
+    with pytest.raises(RuntimeError):
+        desk.ack(a.key, who="gina")
+    assert desk.book.all()[0].acked_ms is None, "库里没记,内存也不许算确认"
+    with pytest.raises(RuntimeError):
+        desk.raise_alert(kind="fallen", robot="A", title="跌倒")
+    assert [x.kind for x in desk.book.all()] == ["estop_pressed"]
+
+
+def test_开张只读回未解决的与最近的_序号照样接着走(tmp_path):
+    """读回的只是一部分;没读回来的那些老告警的序号也不许撞(序号从整张表的键里算)。"""
+    from d1max_site import alert_store
+
+    db = SiteDB(tmp_path / "s.db")
+    c = 钟()
+    d = AlertDesk(db, now_ms=c)
+    for i in range(5):                                # 老的:run_done#1..#5,都解决了
+        c.ms += 1
+        d.resolve(d.raise_alert(kind="run_done", robot="A", title=f"{i}").key, who="")
+    for i in range(alert_store.RESTORE_RECENT + 10):  # 新的:把「最近 N 条」占满
+        c.ms += 1
+        d.resolve(d.raise_alert(kind="run_start", robot="A", title=f"{i}").key, who="")
+    keep = d.raise_alert(kind="estop_pressed", robot="A", title="还没解决")
+    d2 = AlertDesk(db, now_ms=c)
+    loaded = {x.key for x in d2.book.all()}
+    assert len(loaded) <= alert_store.RESTORE_RECENT + 1 and keep.key in loaded
+    assert not any(k.startswith("A/run_done#") for k in loaded), "老的那几条确实没读回来"
+    c.ms += 1
+    nxt = d2.raise_alert(kind="run_done", robot="A", title="新的")
+    assert nxt.key == "A/run_done#6", nxt.key
+    db.close()

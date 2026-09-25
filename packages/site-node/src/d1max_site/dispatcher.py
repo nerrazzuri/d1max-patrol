@@ -22,6 +22,7 @@ from d1max_contract.messages import Ack, Event, MapPose, Reconcile, Status, Tele
 from d1max_contract.mission import MissionError, parse_mission
 from d1max_contract.topics import Topics
 from d1max_contract.transport import Transport
+from d1max_contract.video import VideoRequest
 from d1max_site.db import SiteDB
 from d1max_site.priorities import STANDBY_PREFIX
 from d1max_site.registry import Registry
@@ -122,6 +123,8 @@ class Dispatcher:
         self._telemetry_cbs: list[Callable[[str, Telemetry], None]] = []
         #: 每台狗最近一次收到遥测的站点时刻(值守汇总用)。
         self.telemetry_at: dict[str, int] = {}
+        #: 每台狗挂上客户端的站点时刻:一直只收到过 retained 状态的狗,从这一刻起算过期。
+        self._attached_at: dict[str, int] = {}
         self._ack_cbs: list[Callable[[Ack], None]] = []
         #: 关了之后还在路上的上行报文不再落库(库可能已经关了)。
         self._closed = False
@@ -160,6 +163,7 @@ class Dispatcher:
         c.on_reconcile(lambda r, rid=robot_id: self._on_reconcile(rid, r))
         c.on_ack(self._record_ack)          # 包括等的人超时走了之后才到的回执
         self.clients[robot_id] = c
+        self._attached_at[robot_id] = self._now()
         await c.attach()
 
     # ------------------------------------------------------------ 上行
@@ -197,10 +201,15 @@ class Dispatcher:
         self._telemetry_cbs.append(cb)
 
     def is_stale(self, robot_id: str) -> bool:
-        """见过实时状态、但已经超过 ``stale_ms`` 没来了(按站点的钟)。没见过的不算过期。"""
+        """超过 ``stale_ms`` 没收到**实时**状态(按站点的钟)。一直只收到过 retained 的,从挂上客户端
+        那一刻起算 —— 站点连着 broker 一起整机重启时没人发遗言,retained 里还写着在线,不这样算的话
+        那台狗永远不会被判掉线(W00c5a 内部评审)。"""
         c = self.clients.get(robot_id)
-        return (c is not None and c.status_live_at is not None
-                and self._now() - c.status_live_at > self.stale_ms)
+        if c is None:
+            return False
+        since = c.status_live_at if c.status_live_at is not None \
+            else self._attached_at.get(robot_id)
+        return since is not None and self._now() - since > self.stale_ms
 
     def _on_event(self, robot_id: str, e: Event) -> None:
         if self._closed:
@@ -354,6 +363,18 @@ class Dispatcher:
         """abort 只要求登记有效:不在线也发(QoS 1 持久会话,重连后补投)。"""
         c = self._client_for(robot_id)
         return await self._send(c, robot_id, "abort", {}, issued_by=issued_by, task_id=task_id)
+
+    async def video(self, robot_id: str, req: VideoRequest) -> Ack:
+        """按需推流的命令(W00c5b)。**不是任务**:只要在线、新鲜(不看就绪 —— 急停时正是要看画面
+        的时候);不进 ``commands`` 账、不推 SSE(有观众期间每 ttl/2 续一次,记账就是刷屏)。
+        命令本身的有效期就是这一次推流的有效期:补投到狗上时已经过期的,狗回 expired。"""
+        c = self._client_for(robot_id)
+        if c.status is None or not c.status.online or not self._fresh(c):
+            raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
+        cmd = c.new_command("video", req.to_payload(), ttl_ms=req.ttl_ms,
+                            control_epoch=self.registry.control_epoch(robot_id),
+                            task_id=f"video-{req.camera}")
+        return await c.send(cmd, timeout_s=self.ack_timeout_s)
 
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
                     *, issued_by: str, task_id: str | None = None, priority: int = 0,
