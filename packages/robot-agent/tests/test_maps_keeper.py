@@ -87,6 +87,8 @@ def test_载不进去就扔掉_正在用的缺了文件就当没有(k, tmp_path)
     keeper.install(b)
     keeper.discard(b)
     assert not (tmp_path / "maps" / "m" / "2").exists() and keeper.active() == a
+    (tmp_path / "maps" / "m" / "1" / "x.pgm").write_bytes(b"goo")   # 大小不对了(写坏了一半)
+    assert keeper.active() is None, "大小对不上的工作副本不信"
     (tmp_path / "maps" / "m" / "1" / "x.pgm").unlink()
     assert keeper.active() is None
     (tmp_path / "maps" / "active.json").write_text(json.dumps({"map_id": "../x"}))

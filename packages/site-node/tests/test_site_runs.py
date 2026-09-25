@@ -225,6 +225,7 @@ def test_判读的时候又到了一张_下一轮还会判它(台):
     def 判到一半来了一张(prompt, images):
         store.put("A", f"巡检一/{S1}", f"photos/P3__front__{S1}.jpg", offset=0, data=b"late",
                   total=4)
+        c.ms += 5                                       # 判读还要一会儿才完
         model["m"].judge = real
         return real(prompt, images)
     model["m"].judge = 判到一半来了一张

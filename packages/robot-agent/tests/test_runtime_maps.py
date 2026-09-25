@@ -126,6 +126,8 @@ async def test_哈希不对_或适配器载不进_不换图_发失败事件(台)
     await rt._on_cmd(_cmd("map_activate", ref, "b2", c))
     await _跑(rt, broker)
     assert rt.loaded_map == ("m", "1")
+    from d1max_contract.maps import MapRef
+    assert not rt.maps.dir_of(MapRef.from_wire(ref)).exists(), "载不进去的扔掉,狗上不留"
     assert "定位起不来" in [e for e in ears.by["event"]
                             if e["kind"] == "map_activate_failed"][-1]["data"]["reason"]
 

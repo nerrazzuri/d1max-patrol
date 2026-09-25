@@ -371,3 +371,14 @@ def test_站点重启_上次没收尾的租约行记成site_restart_没接管不
     rows = db.query("SELECT end_reason, ended_at FROM teleop_leases")
     assert (rows[0]["end_reason"], rows[0]["ended_at"]) == ("site_restart", 2)
     k.close_all()
+
+
+
+def test_halt送到了就不放租_狗那头记的是halt(desk):
+    k, d = desk
+    s = k.open("A", _u("gina", "guard"))
+    k.halt("A", _u("olga", "owner"))
+    _等(lambda: bool(d.frames))                         # 零速发了(收尾在别的线程)
+    time.sleep(0.2)
+    assert s.end_reason == "halt" and d.leases == [], "halt 中止遥控任务;放租会抢在 halt 前面"
+    assert d.halts == 1
