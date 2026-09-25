@@ -42,12 +42,23 @@ class SiteListPage extends StatefulWidget {
 class _SiteListPageState extends State<SiteListPage> {
   List<SiteEntry> _sites = <SiteEntry>[];
 
+  /// 站点文件读不出来（坏了）。这时**不许**添加或删除：一保存就把坏文件里的其余站点覆盖掉了。
+  String? _loadError;
+
   @override
   void initState() {
     super.initState();
     widget.store.load().then((s) {
       if (mounted) setState(() => _sites = s);
+    }, onError: (Object e) {
+      if (mounted) setState(() => _loadError = '站点列表读不出来：$e');
     });
+  }
+
+  Future<void> _remove(SiteEntry s) async {
+    final next = [..._sites]..remove(s);
+    await widget.store.save(next);
+    if (mounted) setState(() => _sites = next);
   }
 
   Future<void> _add() async {
@@ -86,7 +97,13 @@ class _SiteListPageState extends State<SiteListPage> {
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
+    final bad = checkSiteEntry(url.text, fp.text);
+    if (bad != null || name.text.trim().isEmpty || user.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('没保存：${bad ?? '名字和账号要填'}')));
+      return;
+    }
     final entry = SiteEntry(
         name: name.text.trim(),
         url: url.text.trim(),
@@ -117,34 +134,50 @@ class _SiteListPageState extends State<SiteListPage> {
     if (ok != true || !mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     final nav = Navigator.of(context);
-    SiteApi api;
+    SiteApi? api;
     try {
       api = widget.apiFactory(s);
       await api.login(s.username, pw.text);
-    } on SiteError catch (e) {
+    } catch (e) {
+      api?.close();
       messenger.showSnackBar(SnackBar(content: Text('登录不了：$e')));
       return;
     }
-    await nav.push(MaterialPageRoute<void>(
-        builder: (_) => SiteRobotsPage(api: api, title: s.name)));
-    api.close();
+    final a = api;
+    final why = await nav.push<String>(MaterialPageRoute<String>(
+        builder: (_) => SiteRobotsPage(api: a, title: s.name)));
+    // 离开就注销：不然令牌在站点上还能用半小时。
+    try {
+      if (a.session != null) await a.logout();
+    } catch (_) {}
+    a.close();
+    if (why != null) messenger.showSnackBar(SnackBar(content: Text(why)));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('站点')),
-      floatingActionButton: FloatingActionButton(
-          key: const Key('site-add'), onPressed: _add, child: const Icon(Icons.add)),
-      body: _sites.isEmpty
-          ? const Center(child: Text('还没有站点。右下角添加。'))
-          : ListView(children: [
-              for (final s in _sites)
-                ListTile(
-                    title: Text(s.name),
-                    subtitle: Text('${s.url} · ${s.username}'),
-                    onTap: () => _open(s)),
-            ]),
+      floatingActionButton: _loadError != null
+          ? null
+          : FloatingActionButton(
+              key: const Key('site-add'), onPressed: _add, child: const Icon(Icons.add)),
+      body: _loadError != null
+          ? Center(child: Text(_loadError!, key: const Key('site-load-error')))
+          : _sites.isEmpty
+              ? const Center(child: Text('还没有站点。右下角添加。'))
+              : ListView(children: [
+                  for (final s in _sites)
+                    ListTile(
+                        title: Text(s.name),
+                        subtitle: Text('${s.url} · ${s.username}'),
+                        trailing: IconButton(
+                            key: Key('site-remove-${s.name}'),
+                            tooltip: '删掉（证书重签后删了重加）',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () => _remove(s)),
+                        onTap: () => _open(s)),
+                ]),
     );
   }
 }
@@ -165,12 +198,45 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
   String? _error;
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _debounce;
+  Timer? _retry;
+
+  /// 实时更新断了（换网、站点重启、令牌到期）：界面上要看得见，并且自己重连。
+  bool _live = false;
+  bool _disposed = false;
 
   @override
   void initState() {
     super.initState();
     _reload();
-    _sub = widget.api.events().listen((_) => _soon(), onError: (_) {}, cancelOnError: false);
+    _listen();
+  }
+
+  void _listen() {
+    _sub?.cancel();
+    _sub = widget.api.events().listen((_) {
+      if (!_live && mounted) setState(() => _live = true);
+      _soon();
+    }, onError: (Object _) => _lost(), onDone: _lost, cancelOnError: true);
+  }
+
+  void _lost() {
+    if (_disposed) return;
+    if (mounted) setState(() => _live = false);
+    if (widget.api.session == null) {
+      _backToLogin();
+      return;
+    }
+    _retry?.cancel();
+    _retry = Timer(const Duration(seconds: 5), () {
+      if (!_disposed) {
+        _listen();
+        _reload();
+      }
+    });
+  }
+
+  void _backToLogin() {
+    if (!_disposed && mounted) Navigator.of(context).pop('登录过期了，重新登录');
   }
 
   void _soon() {
@@ -189,13 +255,16 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
         });
       }
     } on SiteError catch (e) {
+      if (e.status == 401) return _backToLogin();
       if (mounted) setState(() => _error = e.toString());
     }
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _debounce?.cancel();
+    _retry?.cancel();
     _sub?.cancel();
     super.dispose();
   }
@@ -219,6 +288,11 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       body: RefreshIndicator(
         onRefresh: _reload,
         child: ListView(children: [
+          if (!_live)
+            const ListTile(
+                key: Key('live-lost'),
+                leading: Icon(Icons.sync_problem, color: Colors.orange),
+                title: Text('实时更新没连上，正在重连；下拉可以手动刷新')),
           if (_error != null)
             ListTile(title: Text(_error!, style: const TextStyle(color: Colors.red))),
           for (final r in _robots)
@@ -268,15 +342,41 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
   }
 
   Future<void> _do(Future<Map<String, dynamic>> Function() f, String what) async {
+    String msg;
     try {
       final r = await f();
       final ack = r['ack'];
-      final res = ack is Map ? '${ack['result']}' : 'ok';
-      setState(() => _msg = '$what：$res');
+      msg = '$what：${ack is Map ? '${ack['result']}' : 'ok'}';
     } on SiteError catch (e) {
-      setState(() => _msg = '$what 没成：$e');
+      msg = '$what 没成：$e';
     }
+    if (!mounted) return; // 派单要等回执，人可能早就退出这一页了
+    setState(() => _msg = msg);
     await _reload();
+  }
+
+  /// 叫停之前**现取**正在跑的任务：页面上的可能是几秒前的，排程早换了一趟。
+  Future<void> _abort() async {
+    Map<String, dynamic> v;
+    try {
+      v = await widget.api.robot(widget.robotId);
+    } on SiteError catch (e) {
+      if (mounted) setState(() => _msg = '叫停没成：$e');
+      return;
+    }
+    final st = v['status'];
+    final task = st is Map ? st['task'] : null;
+    final tid = task is Map ? task['task_id'] : null;
+    if (tid is! String || tid.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _view = v;
+          _msg = '它现在没在跑任务';
+        });
+      }
+      return;
+    }
+    await _do(() => widget.api.abort(widget.robotId, tid), '叫停');
   }
 
   Future<void> _patrol() async {
@@ -285,7 +385,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       final s = await widget.api.schedule();
       missions = (s['missions'] as List? ?? const []).map((e) => '$e').toList();
     } on SiteError catch (e) {
-      setState(() => _msg = '拿不到任务：$e');
+      if (mounted) setState(() => _msg = '拿不到任务：$e');
       return;
     }
     if (!mounted) return;
@@ -307,7 +407,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     final v = _view;
     final st = v?['status'];
     final task = st is Map ? st['task'] : null;
-    final taskId = task is Map ? '${task['task_id']}' : null;
+    final taskId = task is Map && task['task_id'] is String ? task['task_id'] as String : null;
     final events = (v?['events'] as List? ?? const []).whereType<Map>().toList();
     return Scaffold(
       appBar: AppBar(title: Text(widget.robotId)),
@@ -330,7 +430,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
               FilledButton(
                   key: const Key('btn-abort'),
                   style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                  onPressed: () => _do(() => widget.api.abort(widget.robotId, taskId), '叫停'),
+                  onPressed: _abort,
                   child: const Text('叫停')),
           ]),
           const Divider(),

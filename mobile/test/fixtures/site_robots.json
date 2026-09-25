@@ -31,14 +31,14 @@
           }
         }
       },
-      "expires_at": 1791274639754,
+      "expires_at": 1791315220959,
       "fresh": true,
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-c3ed71b67c",
+        "boot_id": "boot-5ca320a6d5",
         "control_epoch": 1,
-        "last_seen": 1790274640225,
+        "last_seen": 1790315221161,
         "online": true,
         "ready": {
           "control": true,
@@ -50,7 +50,7 @@
         "task": {
           "kind": "goto",
           "state": "running",
-          "task_id": "task-9d795c9c5c4e"
+          "task_id": "task-897e56438f8a"
         }
       }
     }

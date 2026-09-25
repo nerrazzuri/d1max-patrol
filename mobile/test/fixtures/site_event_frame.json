@@ -1,0 +1,22 @@
+{
+  "kind": "status",
+  "robot_id": "A",
+  "status": {
+    "boot_id": "boot-5ca320a6d5",
+    "control_epoch": 1,
+    "last_seen": 1790315221153,
+    "online": true,
+    "ready": {
+      "control": true,
+      "estop_clear": true,
+      "loc_ok": true,
+      "motion": true
+    },
+    "schema": "1.0",
+    "task": {
+      "kind": "goto",
+      "state": "pending",
+      "task_id": "task-897e56438f8a"
+    }
+  }
+}

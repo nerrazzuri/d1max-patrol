@@ -33,40 +33,6 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-443906527154",
-      "issued_at": 1790315221224,
-      "issued_by": "incident:nvr",
-      "kind": "goto",
-      "payload": {
-        "target": {
-          "frame_id": "map",
-          "map_id": "estate-1",
-          "map_version": "7",
-          "schema": "1.0",
-          "x": 0.2,
-          "y": 0.0,
-          "yaw": 0.0
-        }
-      },
-      "priority": 80,
-      "robot_id": "A",
-      "task_id": "incident-117802318cf7"
-    },
-    {
-      "ack_reason": "",
-      "ack_result": "accepted",
-      "command_id": "cmd-6cad620ead85",
-      "issued_at": 1790315221180,
-      "issued_by": "alice",
-      "kind": "abort",
-      "payload": {},
-      "priority": 0,
-      "robot_id": "A",
-      "task_id": "task-897e56438f8a"
-    },
-    {
-      "ack_reason": "",
-      "ack_result": "accepted",
       "command_id": "cmd-bf87edbd3152",
       "issued_at": 1790315221148,
       "issued_by": "alice",
@@ -87,18 +53,7 @@
       "task_id": "task-897e56438f8a"
     }
   ],
-  "events": [
-    {
-      "boot_id": "boot-5ca320a6d5",
-      "data": {
-        "distance_m": 4.0,
-        "task_id": "task-897e56438f8a"
-      },
-      "kind": "task_progress",
-      "seq": 1,
-      "stamp": 1790315221195
-    }
-  ],
+  "events": [],
   "expires_at": 1791315220959,
   "fresh": true,
   "revoked": false,

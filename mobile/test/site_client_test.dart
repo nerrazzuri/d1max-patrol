@@ -104,4 +104,43 @@ void main() {
     expect(inc.first['zone'], 'yard');
     c.close();
   });
+
+  test('从站点输出整段粘过来的 sha256: 前缀也认；添加前就能查出坏地址与坏指纹', () async {
+    final c = SiteClient(site.url, 'sha256:${testCertFingerprint()}');
+    await c.login('alice', 'x');
+    c.close();
+    expect(checkSiteEntry(site.url, testCertFingerprint()), isNull);
+    expect(checkSiteEntry('https://[x', testCertFingerprint()), isNotNull);
+    expect(checkSiteEntry('http://h:1', testCertFingerprint()), isNotNull);
+    expect(checkSiteEntry(site.url, 'abc'), isNotNull);
+    expect(() => SiteClient('https://[x', testCertFingerprint()), throwsA(isA<SiteError>()));
+  });
+
+  test('重定向不跟，当错处理', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('alice', 'x');
+    site.statusCodes['/api/robots'] = 302;
+    await expectLater(c.robots(), throwsA(isA<SiteError>().having((e) => e.status, 's', 302)));
+    expect(site.received.where((r) => r.path == '/elsewhere'), isEmpty);
+    c.close();
+  });
+
+  test('超时比站点等回执的时间长；注销清掉会话', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    expect(c.timeout, greaterThan(const Duration(seconds: 15)));
+    await c.login('alice', 'x');
+    await c.logout();
+    expect(c.session, isNull);
+    expect(site.received.last.path, '/api/logout');
+    c.close();
+  });
+
+  test('派单的回执用的是真站点的形状', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('gina', 'x');
+    final r = await c.patrol('A', 'loop');
+    expect(r['ack']['result'], 'accepted');
+    expect(r['task_id'], isA<String>());
+    c.close();
+  });
 }

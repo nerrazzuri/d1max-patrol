@@ -50,6 +50,12 @@ class FakeSite {
     ));
     final code = statusCodes[path] ?? 200;
     final resp = req.response;
+    if (code >= 300 && code < 400) {
+      resp.statusCode = code;
+      resp.headers.set(HttpHeaders.locationHeader, 'http://127.0.0.1:1/elsewhere');
+      await resp.close();
+      return;
+    }
     if (code != 200) {
       resp.statusCode = code;
       resp.headers.contentType = ContentType.json;
@@ -80,12 +86,10 @@ class FakeSite {
       out = siteFixture('site_schedule');
     } else if (path == '/api/incidents') {
       out = siteFixture('site_incidents');
+    } else if (path == '/api/logout') {
+      out = <String, dynamic>{'ok': true};
     } else {
-      out = <String, dynamic>{
-        'command_id': 'cmd-1',
-        'task_id': 'task-1',
-        'ack': {'result': 'accepted', 'command_id': 'cmd-1', 'task_id': 'task-1'}
-      };
+      out = siteFixture('site_dispatch'); // 真站点派单的回执
     }
     resp.headers.contentType = ContentType.json;
     resp.write(jsonEncode(out));

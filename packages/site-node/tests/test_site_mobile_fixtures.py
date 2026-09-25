@@ -42,7 +42,12 @@ def _collect(tmp_path) -> dict[str, object]:
         tok = login["token"]
         _等(lambda: s.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
         s.req("POST", "/api/bundles", {"path": str(打包(tmp_path, 1))}, token=tok)
-        s.req("POST", "/api/robots/A/goto", {"target": target(0.3)}, token=tok)
+        sub = s.disp.feed.subscribe()
+        code, dispatch = s.req("POST", "/api/robots/A/goto", {"target": target(4.0)}, token=tok)
+        busy = _等(lambda: (lambda v: v if (v["status"] or {}).get("task") else None)(
+            s.req("GET", "/api/robots/A", token=tok)[1]))
+        frame = _等(lambda: (lambda f: f if f and f["kind"] == "status" else None)(sub.get(1.0)))
+        s.req("POST", "/api/robots/A/abort", {"task_id": dispatch["task_id"]}, token=tok)
         _等(lambda: s.req("GET", "/api/robots/A", token=tok)[1]["events"])
         s.api.incidents.set_intercept("gate", map_id="estate-1", map_version="7", x=0.2, y=0.0,
                                       yaw=0.0)
@@ -54,6 +59,9 @@ def _collect(tmp_path) -> dict[str, object]:
             "site_login": login,
             "site_robots": s.req("GET", "/api/robots", token=tok)[1],
             "site_robot": s.req("GET", "/api/robots/A", token=tok)[1],
+            "site_robot_busy": busy,
+            "site_dispatch": dispatch,
+            "site_event_frame": frame,
             "site_schedule": s.req("GET", "/api/schedule", token=tok)[1],
             "site_incidents": s.req("GET", "/api/incidents", token=tok)[1],
             "site_error": s.req("POST", "/api/robots/A/goto", {"target": target(0.3)},
