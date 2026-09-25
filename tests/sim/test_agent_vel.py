@@ -146,6 +146,9 @@ def test_旁路进程的vel全走运动安全门_常量两边一致():
         "先闩本地急停,再跟 SDK 说"
     assert estop.index("g_gate.LatchEstop(false)") > estop.index("SoftEmergencyStop")
     assert "g_gate.OnState(" in body("void OnRobotStateData(")
+    lost = body("void OnControlLost(")
+    assert "g_gate.OnControlLost()" in lost and "g_cancel_gen.fetch_add(1)" in lost, \
+        "控制权丢了要作废速度目标与排队的 walk"
     assert "velgate::Driver<" in body("static void VelLoop(")
     assert "g_vel_mtx" not in src and "g_client->Move" not in body("static void VelLoop(")
 
@@ -174,3 +177,42 @@ async def test_走着的时候硬急停或趴下_目标作废_恢复了也不接
         sim.motion = MotionStatus.GENERAL
         await asyncio.sleep(0.2)
         assert sim.vx == 0.0, "趴下前收下的速度不许在站起来后复活"
+
+
+async def test_急停Unknown也拒_走着时变Unknown就停_恢复也不接着走():
+    """复审阻断 1:急停三态,两路都明确 Recover 才能走(同 vel_gate.hpp)。"""
+    from d1max_patrol.protocol.agent_frames import EmergencyStatus
+
+    async with _client() as (sim, client):
+        await _站起(sim, client)
+        sim.estop_software = EmergencyStatus.UNKNOWN
+        ack = await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=1000)
+        assert not ack.ok and "急停" in ack.error
+        sim.estop_software = EmergencyStatus.RECOVER
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=1000)).ok
+        await asyncio.sleep(0.12)
+        assert sim.vx > 0
+        sim.estop_hardware = EmergencyStatus.UNKNOWN
+        await asyncio.sleep(0.12)
+        assert sim.vx == 0.0
+        sim.estop_hardware = EmergencyStatus.RECOVER
+        await asyncio.sleep(0.2)
+        assert sim.vx == 0.0
+
+
+async def test_控制权丢了_速度作废_拿回来也不接着走_新的vel照常():
+    """复审阻断 2:控制权丢失是安全状态转换,不是暂停。"""
+    async with _client() as (sim, client):
+        await _站起(sim, client)
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=1000)).ok
+        await asyncio.sleep(0.12)
+        assert sim.vx > 0
+        sim.drop_control()
+        await asyncio.sleep(0.12)
+        assert sim.vx == 0.0
+        assert (await client.call("hold")).ok             # 重新拿到控制权
+        await asyncio.sleep(0.2)
+        assert sim.vx == 0.0, "丢控制权之前的速度不许复活"
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=1000)).ok
+        await asyncio.sleep(0.12)
+        assert sim.vx > 0

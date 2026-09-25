@@ -70,6 +70,11 @@ class IncidentDesk:
         #: 首条派失败后把并进来的事件提升为新出动 —— 在后台跑,不拖住首条那个 HTTP 请求。
         self._followups: set[asyncio.Task] = set()
         dispatcher.on_event(self._on_event)
+        # 上次站点停掉时还在等回执的(dispatching):没人再落账了,不收的话会占住狗与防区到
+        # OPEN_INCIDENT_MS。落成失败,写明狗可能已在路上(它的终态事件照样回写 result)。
+        with db.tx() as c:
+            c.execute("UPDATE incidents SET outcome='dispatch_failed', "
+                      "note='站点重启时还在等回执:狗可能已在路上' WHERE outcome='dispatching'")
 
     # ------------------------------------------------------------ 登记
 
@@ -303,6 +308,10 @@ class IncidentDesk:
             self._update(iid, outcome="dispatch_failed", note=str(exc))
         except DispatchTimeout:
             self._update(iid, outcome="dispatched", note="回执超时:可能已在路上")
+        except asyncio.CancelledError:
+            # 站点收尾时取消(IncidentDesk.close):不许一直挂在 dispatching。
+            self._update(iid, outcome="dispatch_failed", note="站点收尾时取消:狗可能已在路上")
+            raise
         except Exception as exc:
             log.exception("事件 %s 派单炸了", row["event_id"])
             self._update(iid, outcome="dispatch_failed", note=f"站点内部错误: {exc}")

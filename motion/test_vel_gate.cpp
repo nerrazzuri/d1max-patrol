@@ -239,6 +239,53 @@ static void halt插不进检查与登记之间() {
   }
 }
 
+// 复审阻断 1:急停是三态。两路都**明确** Recover 才算安全,Unknown 与 Stop 一样拒。
+static void 急停Unknown_登记就拒() {
+  for (auto [sw, hw] : {std::pair{kUnknown, kRecover}, std::pair{kRecover, kUnknown},
+                        std::pair{kUnknown, kUnknown}, std::pair{7, kRecover}}) {
+    Rig r;
+    r.gate.OnState(kGeneral, sw, hw);
+    CHECK(r.vel() != "");
+  }
+}
+
+static void 走着时一路急停变Unknown_目标作废_恢复Recover也不复活() {
+  for (auto [sw, hw] : {std::pair{kUnknown, kRecover}, std::pair{kRecover, kUnknown}}) {
+    Rig r;
+    CHECK(r.vel() == "");
+    r.drv.Tick();
+    CHECK(r.sdk.nonzero_moves() == 1);
+    r.gate.OnState(kGeneral, sw, hw);
+    CHECK(!r.gate.Live(true, r.now));
+    r.gate.OnState(kGeneral, kRecover, kRecover);
+    CHECK(!r.gate.Live(true, r.now));
+    r.drv.Tick();
+    CHECK(r.sdk.nonzero_moves() == 1 && !r.drv.moving());
+  }
+}
+
+// 复审阻断 2:控制权丢了是安全状态转换 —— 作废目标,不是暂停。重新拿到控制权之后,
+// 要一条新的 vel 才动。
+static void 控制权丢了_目标作废_拿回来也不复活_新目标照常() {
+  Rig r;
+  CHECK(r.vel(0.3, 1000) == "");
+  r.gate.OnControlLost();                      // 两拍之间丢了又拿回来:速度线程没看见 held=false
+  r.held = true;                               // OnControlAvailable 自动重新 TakeControl
+  CHECK(!r.gate.Live(true, r.now));
+  r.drv.Tick();
+  CHECK(r.sdk.nonzero_moves() == 0);
+  CHECK(r.vel() == "");
+  CHECK(r.gate.Live(true, r.now).has_value());
+}
+
+static void 两拍之间控制权短暂丢失_也不复活() {
+  // 回调漏了也兜得住:Live 看到过一次 held=false 就作废目标。
+  Rig r;
+  CHECK(r.vel(0.3, 1000) == "");
+  CHECK(!r.gate.Live(false, r.now));
+  CHECK(!r.gate.Live(true, r.now));
+}
+
 int main() {
   收下就走_到期自停();
   没收到过状态_不许走();
@@ -253,6 +300,10 @@ int main() {
   走着走着过期或急停_本拍零速_下一拍收尾();
   并发压测_急停闩上之后没有活目标();
   halt插不进检查与登记之间();
+  急停Unknown_登记就拒();
+  走着时一路急停变Unknown_目标作废_恢复Recover也不复活();
+  控制权丢了_目标作废_拿回来也不复活_新目标照常();
+  两拍之间控制权短暂丢失_也不复活();
   if (g_failed) {
     std::printf("%d 条失败\n", g_failed);
     return 1;

@@ -333,7 +333,9 @@ class SimAgentServer:
         raise _Rejected(f"不认识的命令: {cmd}")
 
     def _vel_unsafe(self) -> bool:
-        return (EmergencyStatus.STOP in (self.estop_software, self.estop_hardware)
+        """同 vel_gate.hpp:两路急停都**明确** Recover 才安全(Unknown 与 Stop 一样拒)。"""
+        return (not (self.estop_software is EmergencyStatus.RECOVER
+                     and self.estop_hardware is EmergencyStatus.RECOVER)
                 or self.motion in (MotionStatus.LIE_DOWN, MotionStatus.UNKNOWN,
                                    MotionStatus.LOCKED))
 
@@ -341,9 +343,10 @@ class SimAgentServer:
         """带有效期的持续速度:**立刻回执**;有效期内一直走,到期自停;新的覆盖旧的并续期;
         ``halt``/``estop`` 加停车代数,速度线程看见就停。"""
         self._need_control("vel")
-        # 同 patrol_agent.cpp 的 DoVel:任一路急停、趴着/锁死/姿态未知都拒。
-        if EmergencyStatus.STOP in (self.estop_software, self.estop_hardware):
-            raise _Rejected("急停生效中,拒绝动作")
+        # 同 vel_gate.hpp 的 Register:急停不是两路明确 Recover、趴着/锁死/姿态未知都拒。
+        if not (self.estop_software is EmergencyStatus.RECOVER
+                and self.estop_hardware is EmergencyStatus.RECOVER):
+            raise _Rejected("急停生效或状态未知,拒绝动作")
         if self.motion in (MotionStatus.LIE_DOWN, MotionStatus.UNKNOWN, MotionStatus.LOCKED):
             raise _Rejected("趴着/锁死/姿态未知,走不了,先 stand")
         try:
@@ -368,8 +371,9 @@ class SimAgentServer:
     async def _vel_loop(self, gen: int) -> None:
         try:
             while self._cancel_gen == gen and time.monotonic() < self._vel_until:
-                if self._vel_unsafe():
-                    # 同 vel_gate.hpp 的 OnState:急停、趴下、锁死 → 作废目标,恢复了也不复活。
+                if self._vel_unsafe() or not self._held:
+                    # 同 vel_gate.hpp 的 OnState/OnControlLost:急停、趴下、锁死、丢控制权 →
+                    # 作废目标,恢复了(拿回控制权)也不复活。
                     self._vel_until = 0.0
                     break
                 fwd, lat, yaw = self._vel
@@ -469,8 +473,11 @@ class SimAgentServer:
     # -------------------------------------------------------------- 注入
 
     def drop_control(self, reason: str = "上装收回控制权") -> None:
-        """立刻把控制权拿走并广播 —— 测试用的故障注入。"""
+        """立刻把控制权拿走并广播 —— 测试用的故障注入。同 patrol_agent.cpp 的 OnControlLost:
+        作废速度目标与排队的 walk(拿回控制权之后要新命令才动)。"""
         self._held = False
+        self._vel_until = 0.0
+        self._cancel_gen += 1
         self._broadcast({"t": "control_lost", "reason": reason})
 
     def push_fault(self, level: int, code: int, message: str) -> None:

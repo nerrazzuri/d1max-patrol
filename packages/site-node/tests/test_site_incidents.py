@@ -447,3 +447,26 @@ async def test_收尾时收掉还在等回执的提升派单(站, monkeypatch):
     await asyncio.wait_for(t.desk.close(), 2)
     assert time.monotonic() - t0 < 0.5, "收尾是取消,不是干等回执"
     assert pending.cancelled() and not t.desk._followups
+    rows = {r["event_id"]: r for r in t.desk.list()}
+    assert rows["e2"]["outcome"] == "dispatch_failed" and "收尾" in rows["e2"]["note"], \
+        "被取消的派单不许一直挂在 dispatching(会占住狗与防区)"
+
+
+def test_站点重启_遗留的dispatching落成失败_不占住狗和防区(tmp_path):
+    from d1max_site.db import SiteDB
+
+    class 假派遣:
+        def on_event(self, cb):
+            pass
+
+    db = SiteDB(tmp_path / "s.db")
+    desk = IncidentDesk(db, 假派遣(), now_ms=lambda: 1_800_000_000_000)
+    with db.tx() as c:
+        c.execute("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome, "
+                  "robot_id, task_id, note, detail) VALUES ('nvr','e1','intrusion','z',"
+                  "1800000000000,'dispatching','A','incident-x','发送中','{}')")
+    IncidentDesk(db, 假派遣(), now_ms=lambda: 1_800_000_000_000)     # 站点重启
+    row = desk.list()[0]
+    assert row["outcome"] == "dispatch_failed" and "重启" in row["note"], row
+    assert desk._open_incident_robots() == set()
+    db.close()

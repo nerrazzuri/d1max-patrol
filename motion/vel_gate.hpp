@@ -2,13 +2,15 @@
 //
 // 不依赖厂商 SDK:patrol_agent.cpp 用它,test_vel_gate.cpp 拿假 SDK 测它(W00d 外审阻断 1)。
 //
-// 一把锁管住四件事,互相之间没有缝:
+// 一把锁管住这几件事,互相之间没有缝:
 //   - Register:检查(控制权、本地急停闩锁、两路急停、姿态、范围)与登记目标在同一把锁里;
 //   - Cancel(halt)/LatchEstop(true):作废目标;
-//   - OnState(SDK 状态回调):任一路急停、趴着、锁死、姿态未知 → 作废目标;
+//   - OnState(SDK 状态回调):任一路急停不是明确的 Recover(Stop、Unknown、没见过的值)、
+//     趴着、锁死、姿态未知 → 作废目标;
+//   - OnControlLost:控制权丢了 → 作废目标(不是暂停:拿回控制权之后要新的 vel 才动);
 //   - Live:速度线程每次要发 Move 之前都问一次,上面这些条件现查。
 // 作废 = 代次加一。目标记着登记时的代次,代次对不上就永远不再生效 —— 急停解除、重新站起
-// 都不会让旧目标复活;只有之后新登记的 vel 才算数。
+// 、控制权拿回来都不会让旧目标复活;只有之后新登记的 vel 才算数。
 
 #pragma once
 
@@ -28,7 +30,8 @@ using Clock = std::chrono::steady_clock;
 constexpr int kMotionUnknown = 0;
 constexpr int kMotionLieDown = 2;
 constexpr int kMotionLocked = 4;
-constexpr int kEstopStop = 2;
+// EmergencyStatus 是三态:0 Unknown、1 Recover(已解除)、2 Stop。**只有 1 算安全。**
+constexpr int kEstopRecover = 1;
 
 constexpr double kMaxFraction = 0.5;
 constexpr int kTtlMinMs = 50;
@@ -74,7 +77,13 @@ class Gate {
     if (on) InvalidateLocked();
   }
 
-  /// SDK 状态回调。不安全(任一路急停生效、趴着、锁死、姿态未知)就作废目标。
+  /// 控制权丢了(SDK OnControlLost):作废目标。旁路进程会自动重新 TakeControl,旧目标不许跟着复活。
+  void OnControlLost() {
+    std::lock_guard<std::mutex> lk(mtx_);
+    InvalidateLocked();
+  }
+
+  /// SDK 状态回调。不安全(任一路急停不是明确的 Recover、趴着、锁死、姿态未知)就作废目标。
   void OnState(int motion, int estop_sw, int estop_hw) {
     std::lock_guard<std::mutex> lk(mtx_);
     motion_ = motion;
@@ -86,7 +95,11 @@ class Gate {
   /// 现在该按哪条目标走;不该走就是空。每次要发 Move 之前都问。
   std::optional<Target> Live(bool held, Clock::time_point now) {
     std::lock_guard<std::mutex> lk(mtx_);
-    if (!held || estop_latched_ || !UnsafeLocked().empty()) return std::nullopt;
+    if (!held) {
+      InvalidateLocked();  // 看到过一次没控制权就作废:OnControlLost 回调漏了也兜得住
+      return std::nullopt;
+    }
+    if (estop_latched_ || !UnsafeLocked().empty()) return std::nullopt;
     if (!target_ || target_->epoch != epoch_ || now >= target_->until) return std::nullopt;
     return target_;
   }
@@ -102,7 +115,8 @@ class Gate {
 
  private:
   std::string UnsafeLocked() const {
-    if (estop_sw_ == kEstopStop || estop_hw_ == kEstopStop) return "急停生效中,拒绝动作";
+    if (estop_sw_ != kEstopRecover || estop_hw_ != kEstopRecover)
+      return "急停生效或状态未知,拒绝动作";
     if (motion_ == kMotionUnknown || motion_ == kMotionLieDown || motion_ == kMotionLocked)
       return "趴着/锁死/姿态未知,走不了,先 stand";
     return "";

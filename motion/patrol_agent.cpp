@@ -303,6 +303,10 @@ class DataCb : public IDataCallback {
   void OnControlLost(const ControlLostInfo&) override {
     // ControlLostInfo 是空结构体 —— 厂商没给原因字段，只能自己凑一句。
     g_held = false;
+    // 控制权丢了是安全状态转换:作废速度目标与排队的 walk,不是暂停。OnControlAvailable 会
+    // 自动重新 TakeControl —— 拿回来之后要一条新的 vel 才动。
+    g_gate.OnControlLost();
+    g_cancel_gen.fetch_add(1);
     std::cout << "[!!] 控制权丢了。多半是上装收回去了(清单 #47)，"
                  "这条会话大概率救不回来，要重启 RK3588 重抢开机窗口。\n";
     Broadcast("{\"t\":\"control_lost\",\"reason\":"
