@@ -33,8 +33,8 @@ from d1max_agent.status import (
 from d1max_agent.tasks.base import Task
 from d1max_agent.tasks.engine_goto import EngineGotoTask
 from d1max_agent.transport import GuardedTransport
-from d1max_contract.hal import RobotHAL
-from d1max_contract.messages import Command, MapPose, Reconcile
+from d1max_contract.hal import Fault, HalUnsupported, RobotHAL
+from d1max_contract.messages import Command, MapPose, Reconcile, fault_event_data
 from d1max_contract.policy import policy_for
 from d1max_contract.registration import Registration
 from d1max_contract.topics import TopicAcl
@@ -93,6 +93,8 @@ class AgentRuntime:
         self._started = False
         #: HAL 碰过没有(connect 调过就算,哪怕它抛了)。close() 据此决定要不要收 HAL。
         self._hal_touched = False
+        #: 上一次报出去的 HAL 故障集合(W00c5a):变了才发一条 ``robot_fault``。
+        self._last_faults: tuple[Fault, ...] = ()
         self._closed = False
         #: 命令按到达顺序串行处理:QoS 1 的重复可能几乎同时到,处理里一旦有 await,两条都会
         #: 先通过幂等查询。
@@ -252,9 +254,25 @@ class AgentRuntime:
         if self.parts is not None:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
         await self.processor.step(dt_s)
+        await self._watch_faults()
         await self._flush_events()
         await self._publish_status()
         await self._maybe_telemetry()
+
+    async def _watch_faults(self) -> None:
+        """HAL 故障集合变了就发一条 ``robot_fault``(W00c5a)。狗只报事实:哪条算跌倒、算不算
+        P1,是站点的判定。故障帧是**状态**不是事件,厂商会一直重推同一组 —— 所以只在变的那一拍发。
+        事件走事件簿:断线期间留在狗上,重连补投、站点确认即清。"""
+        try:
+            now = tuple(await self.hal.faults())
+        except HalUnsupported:
+            return
+        except Exception:
+            log.exception("读 HAL 故障失败,这一拍不判")
+            return
+        if now != self._last_faults:
+            self._last_faults = now
+            self.events.emit("robot_fault", fault_event_data(now))
 
     async def _apply_offline_policy(self) -> None:
         cur = self.processor.current

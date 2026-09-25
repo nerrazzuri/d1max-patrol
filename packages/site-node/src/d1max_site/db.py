@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -156,6 +156,23 @@ CREATE TABLE IF NOT EXISTS incidents (
     UNIQUE (source, event_id)
 );
 CREATE INDEX IF NOT EXISTS incidents_task ON incidents(task_id);
+CREATE TABLE IF NOT EXISTS alerts (
+    key          TEXT PRIMARY KEY,
+    level        TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    robot        TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    detail       TEXT NOT NULL,
+    first_ms     INTEGER NOT NULL,
+    last_ms      INTEGER NOT NULL,
+    count        INTEGER NOT NULL,
+    acked_by     TEXT NOT NULL,
+    acked_ms     INTEGER,
+    resolved_by  TEXT NOT NULL,
+    resolved_ms  INTEGER,
+    escalated    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS alerts_last ON alerts(last_ms);
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,
     status       TEXT,

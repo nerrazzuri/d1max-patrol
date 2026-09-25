@@ -420,10 +420,6 @@ def test_页面和静态资源不拦(server_pin):
 @pytest.mark.parametrize("path", [
     "/api/state", "/api/missions", "/api/maps", "/api/runs", "/api/mapping",
     "/api/bundle", "/api/schedule",
-    # 值守屏那六项里有盘水位和电量 —— 那是运营信息,不是公开信息。
-    "/api/watch/summary",
-    # 告警的标题和明细里写着这台狗此刻出了什么事、在哪儿卡着。
-    "/api/alerts", "/api/alerts/all",
 ])
 def test_读的接口也得有token(server_pin, path):
     """现场照片是客户资产,比机器本身更敏感。读也要拦。"""
@@ -434,8 +430,6 @@ def test_读的接口也得有token(server_pin, path):
     "/api/estop", "/api/teleop", "/api/mapping/record/start",
     "/api/run/abort", "/api/run/suspend", "/api/pose/reset",
     "/api/bundle/apply", "/api/bundle/rollback",
-    # 记名确认会把升级停下来 —— 没解锁的人不许把声音关掉。
-    "/api/alerts/D1M-TEST/stuck/ack", "/api/alerts/D1M-TEST/stuck/resolve",
 ])
 def test_能动机器的接口更得有token(server_pin, path):
     assert status(server_pin, path, method="POST", payload={}) == 401

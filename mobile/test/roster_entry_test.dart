@@ -24,7 +24,6 @@ import 'package:d1max_patrol/store/registry_store.dart';
 import 'package:d1max_patrol/ui/roster_page.dart';
 import 'package:d1max_patrol/ui/storage_page.dart';
 import 'package:d1max_patrol/ui/teleop_page.dart';
-import 'package:d1max_patrol/ui/watch_page.dart';
 import 'package:d1max_patrol/ui/widget/operator_chip.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -347,17 +346,12 @@ void main() {
         '进到遥控屏', step: _step);
     await goBack(t, TeleopPage, rig);
 
-    await t.tap(find.byKey(RosterPage.watchKeyFor('C40221')));
-    await pumpUntil(t, () => find.byType(WatchPage).evaluate().isNotEmpty,
-        '进到值守屏', step: _step);
-    await goBack(t, WatchPage);
-
-    // 自洽：三屏是真的一个个进过的，否则下面那条断言断的是一件没发生过的事。
+    // 自洽：两屏是真的一个个进过的，否则下面那条断言断的是一件没发生过的事。
     expect(rig.dog.received.any((FakeCall c) => c.path == '/api/storage'), isTrue,
         reason: '盘况屏真的问过狗');
     expect(rig.dog.received.any((FakeCall c) => c.path == '/api/teleop'), isTrue,
         reason: '遥控屏真的发过拍');
-    expect(rig.unlocks, 1, reason: '进出三屏只许烧一个会话名额');
+    expect(rig.unlocks, 1, reason: '进出几屏只许烧一个会话名额');
     await unmount(t, rig);
   });
 

@@ -40,7 +40,7 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 
 from d1max_contract.dispatch import DispatchTimeout
 from d1max_site.accounts import Accounts, AuthError, LockedOut
@@ -51,6 +51,7 @@ from d1max_site.loop import LoopThread
 from d1max_site.permissions import (
     ABORT,
     DISPATCH,
+    HANDLE_ALERTS,
     MANAGE,
     MANAGE_ACCOUNTS,
     VIEW,
@@ -67,6 +68,8 @@ SSE_HEARTBEAT_S = 15.0
 REQUEST_TIMEOUT_S = 30.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
+#: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
+_ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
 
 
@@ -83,11 +86,16 @@ def check_exposure(host: str, tls: tuple[Path, Path] | None) -> None:
                          "加 --tls-cert/--tls-key(站点服务证书),或只绑 127.0.0.1。")
 
 
+async def _sync(fn: Callable[..., Any], *args: Any, **kw: Any) -> Any:
+    """在事件循环线程上跑一个同步函数:告警台与派遣器的内存状态只在那条线程上改、读。"""
+    return fn(*args, **kw)
+
+
 class SiteApi:
     def __init__(self, *, host: str, port: int, loop: LoopThread, dispatcher: Dispatcher,
                  accounts: Accounts, tls: tuple[Path, Path] | None = None,
                  scheduler: Any = None, standby: Any = None, incidents: Any = None,
-                 now_ms: Callable[[], int] | None = None,
+                 alerts: Any = None, now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
         check_exposure(host, tls)
@@ -99,6 +107,7 @@ class SiteApi:
         self.scheduler = scheduler
         self.standby = standby
         self.incidents = incidents
+        self.alerts = alerts
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
         self._stopping = threading.Event()
@@ -261,6 +270,8 @@ class _Handler(BaseHTTPRequestHandler):
                 if self.site.scheduler is None:
                     raise HttpError(404, "这个站点没开排程")
                 return self._send_json(200, self.site.scheduler.view())
+            if path == "/api/alerts" or path == "/api/watch/summary" or _ALERT.match(path):
+                return self._alerts(method, path, user)
             if method == "POST" and path == "/api/bundles":
                 self._need(user, MANAGE)
                 return self._import_bundle(user)
@@ -289,6 +300,39 @@ class _Handler(BaseHTTPRequestHandler):
         self._handle("POST")
 
     # ------------------------------------------------------------ 路由
+
+    def _alerts(self, method: str, path: str, user) -> None:
+        """告警与值守(W00c5a)。看:``view``;确认、解决:``handle_alerts``,人取登录账号。"""
+        if self.site.alerts is None:
+            raise HttpError(404, "这个站点没开告警")
+        from d1max_site.alerts import AlertNotFound
+        if method == "GET" and path == "/api/alerts":
+            self._need(user, VIEW)
+            q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            fn = self.site.alerts.recent if q.get("all") == ["1"] else self.site.alerts.open
+            return self._send_json(200, {"alerts": self.site.loop.call(lambda: _sync(fn))})
+        if method == "GET" and path == "/api/watch/summary":
+            self._need(user, VIEW)
+            from d1max_site.watch import watch_summary
+            return self._send_json(200, self.site.loop.call(lambda: _sync(
+                watch_summary, self.site.dispatcher, self.site.alerts,
+                now_ms=self.site._now(), scheduler=self.site.scheduler)))
+        m = _ALERT.match(path)
+        if method != "POST" or m is None:
+            raise HttpError(404, f"没有 {method} {path}")
+        self._need(user, HANDLE_ALERTS)
+        key = unquote(m.group(1))
+        self._audit_target = key[:256]
+        self._body()                                    # 读掉请求体;里面的 who 不信
+        try:
+            if m.group(2) == "ack":
+                a = self.site.loop.call(lambda: _sync(self.site.alerts.ack, key, who=str(user)))
+            else:
+                a = self.site.loop.call(
+                    lambda: _sync(self.site.alerts.resolve, key, who=str(user)))
+        except AlertNotFound as exc:
+            raise HttpError(404, "没有这条告警") from exc
+        return self._send_json(200, {"alert": a.to_wire()})
 
     def _login(self) -> None:
         d = self._body()

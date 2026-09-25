@@ -25,7 +25,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/net/patrol_client.dart';
 import 'package:d1max_patrol/net/wire.dart';
 import 'package:d1max_patrol/ui/widget/live_video.dart';
@@ -223,24 +222,6 @@ class CountingClient implements PatrolClient {
   @override
   Future<Session> unlock(String pin, {required String operator}) async =>
       throw UnimplementedError();
-
-  // 值守那几条（Task 10）。这个假件只数视频那一条 `get`，别的一律不该被碰到
-  // —— 碰到了就该当场炸，而不是安静地回一份空的。
-  @override
-  Future<List<Alert>> alertsOpen() async => throw UnimplementedError();
-
-  @override
-  Future<List<Alert>> alertsAll() async => throw UnimplementedError();
-
-  @override
-  Future<Alert> ackAlert(String key, {required String who}) async =>
-      throw UnimplementedError();
-
-  @override
-  Future<Alert> resolveAlert(String key) async => throw UnimplementedError();
-
-  @override
-  Future<WatchSummary> watchSummary() async => throw UnimplementedError();
 }
 
 /// 把这一格挂进一个**真的能推页面**的壳里，并把那个 `Navigator` 交出去。

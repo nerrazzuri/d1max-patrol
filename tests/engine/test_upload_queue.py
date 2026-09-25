@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from d1max_agent.engine.upload_queue import (
-    PRIORITY_ALERT,
     PRIORITY_EVENTS,
     PRIORITY_PHOTO,
     PRIORITY_TELEMETRY,
@@ -21,7 +20,6 @@ from d1max_agent.engine.upload_queue import (
 @pytest.mark.parametrize(
     ("rel", "want"),
     [
-        ("alerts.jsonl", PRIORITY_ALERT),
         ("events.jsonl", PRIORITY_EVENTS),
         ("manifest.json", PRIORITY_EVENTS),
         ("photos/P1__front__20260911T101500Z.jpg", PRIORITY_PHOTO),
@@ -32,8 +30,14 @@ from d1max_agent.engine.upload_queue import (
         ("telemetry.jsonl", PRIORITY_TELEMETRY),
     ],
 )
-def test_四级优先按文件名分(rel: str, want: int) -> None:
+def test_按文件名分级(rel: str, want: int) -> None:
     assert classify(rel) == want
+
+
+def test_告警文件不再入队() -> None:
+    """告警搬去站点了(W00c5a,决策 8),狗上不该再有 ``alerts.jsonl``;真冒出
+    来一份也不许悄悄传上去 —— 它不在白名单上。"""
+    assert classify("alerts.jsonl") is None
 
 
 def test_state_json_不入队() -> None:
@@ -131,10 +135,8 @@ def test_pending_按优先级再按入队顺序(tmp_path: Path) -> None:
     q.offer("d/telemetry.jsonl", PRIORITY_TELEMETRY, size=1)
     q.offer("a/events.jsonl", PRIORITY_EVENTS, size=1)
     q.offer("b/events.jsonl", PRIORITY_EVENTS, size=1)
-    q.offer("e/alerts.jsonl", PRIORITY_ALERT, size=1)
     keys = [i.key for i in q.pending(now_ms=0)]
     assert keys == [
-        "e/alerts.jsonl",
         "a/events.jsonl",
         "b/events.jsonl",
         "c/photos/x.jpg",

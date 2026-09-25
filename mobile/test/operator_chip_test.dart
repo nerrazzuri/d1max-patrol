@@ -34,7 +34,6 @@ import 'package:d1max_patrol/net/wire.dart';
 import 'package:d1max_patrol/store/registry_store.dart';
 import 'package:d1max_patrol/ui/control_panel.dart';
 import 'package:d1max_patrol/ui/teleop_page.dart';
-import 'package:d1max_patrol/ui/watch_page.dart';
 import 'package:d1max_patrol/ui/widget/operator_chip.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -128,31 +127,6 @@ Future<Rig> mountTeleop(WidgetTester t,
   return Rig(dog, c, health);
 }
 
-/// 把值守屏挂上去。同样，一次点击都不做。
-Future<Rig> mountWatch(WidgetTester t,
-    {String who = '老王', ValueChanged<String>? onChanged}) async {
-  final FakeDog dog = await startDog(t, who);
-  final PatrolClient c = PatrolClient(dog.baseUrl);
-  await t.runAsync(() => c.unlock('864209', operator: who));
-  dog.received.clear();
-  await t.pumpWidget(MaterialApp(
-      home: WatchPage(
-          client: c,
-          robot: const Robot(sn: 'C40221', name: '三号'),
-          operatorName: who,
-          onOperatorChanged: onChanged,
-          nowMs: () => DateTime.utc(2026, 9, 10, 7, 0).millisecondsSinceEpoch)));
-  // 等的是告警那一段（这一屏自己的内容），不是等 chip。理由同上。
-  await pumpUntil(
-      t,
-      () =>
-          find.byKey(WatchPage.alertsSectionKey).evaluate().isNotEmpty ||
-          find.byKey(WatchPage.alertsErrorKey).evaluate().isNotEmpty,
-      '值守屏的告警那一段问回来了',
-      step: const Duration(milliseconds: 20));
-  return Rig(dog, c, null);
-}
-
 /// 收摊。**客户端也要关**：一条没收的 `HttpClient` 会留着自己那个 15 秒空闲
 /// 计时器，`flutter_test` 的 `!timersPending` 会当场把测试打红。
 Future<void> unmount(WidgetTester t, Rig rig) async {
@@ -222,23 +196,9 @@ void main() {
     await unmount(t, rig);
   });
 
-  testWidgets('当前是谁在值守屏上是常显的,不用点开任何东西', (WidgetTester t) async {
-    final Rig rig = await mountWatch(t, who: '老王');
-    expect(find.byKey(WatchPage.p1NoneKey), findsOneWidget,
-        reason: '值守屏真的问回来了');
-    expectAlwaysVisible(t, '老王');
-    await unmount(t, rig);
-  });
-
   testWidgets('遥控屏上不许把这个自报的名字说成登录或者认证', (WidgetTester t) async {
     final Rig rig = await mountTeleop(t, who: '老王');
     expectNoLoginWords(screenText(t), '遥控屏');
-    await unmount(t, rig);
-  });
-
-  testWidgets('值守屏上不许把这个自报的名字说成登录或者认证', (WidgetTester t) async {
-    final Rig rig = await mountWatch(t, who: '老王');
-    expectNoLoginWords(screenText(t), '值守屏');
     await unmount(t, rig);
   });
 
@@ -246,10 +206,8 @@ void main() {
       (WidgetTester t) async {
     // **这一条是「不核实」那句话的唯一承重点。**
     //
-    // 值守屏上那句「不核实」来自 `watch_page.dart` 的 `signedAs()`（任务 10
-    // 就有），在值守屏上断它是恒真的：这一枚 chip 一个字都不改也绿。而换人
-    // 的框才是本次新增的、人真正会停下来读一句的地方 —— §6.3 那句实话必须
-    // 在这儿说出来，而且这儿也一样不许说成登录。
+    // 换人的框是人真正会停下来读一句的地方 —— §6.3 那句实话必须在这儿说出来，
+    // 而且这儿也一样不许说成登录。
     final Rig rig = await mountTeleop(t, who: '老王');
     await t.tap(find.byKey(OperatorChip.chipKey));
     await pumpUntil(

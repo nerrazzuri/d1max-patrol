@@ -1,0 +1,17 @@
+{
+  "boot_id": "boot-b1",
+  "data": {
+    "faults": [
+      {
+        "code": "7",
+        "fatal": true,
+        "text": "左前腿过流"
+      }
+    ]
+  },
+  "event_id": "evt-b1-000013",
+  "kind": "robot_fault",
+  "schema": "1.0",
+  "seq": 13,
+  "stamp": 1760000131000
+}

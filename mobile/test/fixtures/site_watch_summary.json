@@ -1,0 +1,39 @@
+{
+  "now_ms": 1790328316639,
+  "robots": [
+    {
+      "alerts": {
+        "P1": 3,
+        "P2": 0,
+        "P3": 1
+      },
+      "backup": null,
+      "battery_as_of_ms": 1790328316613,
+      "battery_pct": 99.99772666666667,
+      "bundle_lag": null,
+      "clock_skew_s": -0.0,
+      "disk_used_ratio": null,
+      "fresh": true,
+      "last_seen_ms": 1790328316336,
+      "online": true,
+      "robot_id": "A",
+      "upload_backlog": null,
+      "why": {
+        "backup": "狗上的存储情况还没接到站点,这一档是「不知道」,不是「没问题」",
+        "bundle_lag": "狗上的存储情况还没接到站点,这一档是「不知道」,不是「没问题」",
+        "disk_used_ratio": "狗上的存储情况还没接到站点,这一档是「不知道」,不是「没问题」",
+        "upload_backlog": "狗上的存储情况还没接到站点,这一档是「不知道」,不是「没问题」"
+      }
+    }
+  ],
+  "site": {
+    "alerts": {
+      "P1": 0,
+      "P2": 0,
+      "P3": 0
+    },
+    "schedule_error": "",
+    "schedule_ok": true,
+    "why": {}
+  }
+}

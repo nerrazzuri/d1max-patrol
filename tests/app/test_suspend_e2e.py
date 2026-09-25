@@ -1,5 +1,9 @@
 """挂起没人管要报警(12a),以及从路由挂起再从路由继续(12c)。
 
+12a 原来报的是告警簿上的 P1(``suspend_stale``);狗上不再记告警(决策 8),
+这条通知随 W00c5c 在站点重建,狗上只剩 ``server`` 那个 logger 上的一行
+ERROR。这一组断的就是那一行 —— 判据(何时报、报几次、读哪口钟)一个字没变。
+
 **这一组起的是真服务、打真 HTTP、等的是真后台协程。** 12a 要盯的那件事
 (人接管完忘了还回来,这趟就永远挂着)只会发生在没人操作的时候 —— 判定它
 的是 ``_StateHub`` 那条闸门协程,直接调处理函数一个字都测不到。
@@ -18,7 +22,6 @@ from urllib.parse import quote
 
 import pytest
 
-from d1max_agent.engine.alerts import Level
 from d1max_agent.engine.machine import RunSnapshot, RunState, SuspendPoint
 from d1max_patrol.app.server import (
     _LEASE_WATCH_PERIOD_S,
@@ -75,13 +78,12 @@ class 跟着墙走的钟:
 
     **这口钟不再参与 ``suspend_stale`` 的判据。** 那条 P1 的三个数现在全从
     引擎那口钟推(见 :class:`跟着表走的秒表` 和 ``server._挂起超时了``),
-    这口钟只剩下告警盖时刻、租约判 TTL 这些用途。拨它**只该**拨出「墙钟
-    跳了」这一幕 —— 见 ``test_墙钟往前跳不许因此报这条P1``。
+    这口钟只剩下租约判 TTL 这类用途。拨它**只该**拨出「墙钟跳了」这一幕 ——
+    见 ``test_墙钟往前跳不许因此报这条P1``。
 
-    **仍然不许换成别处那种冻住的 ``T0``。** ``AlertBook`` 的聚合窗口和
-    ``due_escalations`` 的升档都按这口钟算,而这一组起的是真服务;给它冻一个
-    2025 年的值,告警那一半会落在一条跟现实对不上的时间轴上。带偏移的真钟
-    保住「现在就是现在」,``前进`` 拨的是「从现在起又过了多久」。
+    **仍然不许换成别处那种冻住的 ``T0``。** 这一组起的是真服务,租约 TTL
+    按这口钟算;带偏移的真钟保住「现在就是现在」,``前进`` 拨的是「从现在起
+    又过了多久」。
     """
 
     def __init__(self) -> None:
@@ -225,14 +227,19 @@ def 跑起来的服务(服务):
     return srv
 
 
-def 挂起超时告警(srv) -> list:
-    """簿子里的 ``suspend_stale``。
+@pytest.fixture(autouse=True)
+def _收日志(caplog):
+    """原来的 P1 现在是 ``server`` 那个 logger 上的 ERROR,这一组靠它断言。"""
+    caplog.set_level(logging.WARNING, logger="d1max_patrol.app.server")
 
-    **按 kind 挑,不是整份比对。** 这台开发机的盘水位本来就过了 80% 的线,
-    起真服务就会合法地多一条 ``disk_80``(挂账 76)—— 那是环境,不是这一组
-    要测的事。
+
+def 挂起超时记录(caplog) -> list[logging.LogRecord]:
+    """日志里的 ``[suspend_stale]``(格式见 ``server._判定挂起超时``:``args``
+    就是 ``(标题, 正文)``)。**按 kind 挑** —— 没盖点那句 ERROR 是另一件事。
     """
-    return [a for a in srv.alerts.open() if a.kind == "suspend_stale"]
+    return [r for r in caplog.records
+            if r.name == "d1max_patrol.app.server"
+            and r.getMessage().startswith("[suspend_stale]")]
 
 
 def 让开腿(srv, reason: str = "人要接管") -> None:
@@ -244,10 +251,9 @@ def 让开腿(srv, reason: str = "人要接管") -> None:
 # ----------------------------------------------------- 12a 挂起太久没人管
 
 
-def test_挂起太久没人管升P1(跑起来的服务, 引擎秒表):
-    """挂账 67a:第 7 卷判过 ``SUSPENDED`` 期间无超时无强制放行,而**这一卷
-    的 alerts 就是来盯这个的**。人接管完忘了还回来,这趟就永远挂着,而屏幕上
-    一切如常。
+def test_挂起太久没人管记一条ERROR(跑起来的服务, 引擎秒表, caplog):
+    """挂账 67a:第 7 卷判过 ``SUSPENDED`` 期间无超时无强制放行,这条就是来
+    盯这个的。人接管完忘了还回来,这趟就永远挂着,而屏幕上一切如常。
 
     **拨的是引擎那口钟**(:class:`跟着表走的秒表`),不是 ``ctx.clock``:
     这条 P1 的三个数全从引擎那口钟推。拨墙钟**不该**让它报,那一格由
@@ -255,22 +261,24 @@ def test_挂起太久没人管升P1(跑起来的服务, 引擎秒表):
     """
     srv = 跑起来的服务
     让开腿(srv)
-    assert not 挂起超时告警(srv), \
+    assert not 挂起超时记录(caplog), \
         "钟还没拨就报了 —— 下面那句「到点了才报」什么也证明不了"
 
     引擎秒表.前进(SUSPEND_STALE_MS + 1)
-    assert 等到(lambda: 挂起超时告警(srv)), "挂起超过十分钟,一条告警都没有"
-    a = 挂起超时告警(srv)[0]
-    assert a.level is Level.P1, a
-    assert a.robot == srv.ctx.identity.sn, a
+    assert 等到(lambda: 挂起超时记录(caplog)), "挂起超过十分钟,一行 ERROR 都没有"
+    r = 挂起超时记录(caplog)[0]
+    assert r.levelno == logging.ERROR, r
     # 标题/正文里要说得出这是「人接管着没还回来」,不是一句「出错了」。
-    assert "接管" in (a.title + a.detail), a
+    assert "接管" in r.getMessage(), r.getMessage()
+    # 处置没变:狗还挂在那儿,没被谁 resume / abort。
+    assert srv.ctx.engine.state is RunState.SUSPENDED
 
 
-def test_挂起超时只报警不自己动狗(跑起来的服务, 引擎秒表):
+def test_挂起超时只报警不自己动狗(跑起来的服务, 引擎秒表, caplog):
     """人还在现场,狗自己动起来是这套系统里最不该发生的事(§5.8 同理)。
 
-    所以超时的处置是**升 P1**,不是自动 ``resume``、不是自动 ``abort``。
+    所以超时的处置是**记一笔**(原来是升 P1),不是自动 ``resume``、不是自动
+    ``abort``。
     """
     srv = 跑起来的服务
     ctx = srv.ctx
@@ -279,12 +287,12 @@ def test_挂起超时只报警不自己动狗(跑起来的服务, 引擎秒表):
     导过 = len(ctx.nav.goto_calls)
 
     引擎秒表.前进(SUSPEND_STALE_MS * 5)
-    assert 等到(lambda: 挂起超时告警(srv)), "先得真报出来,不然下面全是空转"
+    assert 等到(lambda: 挂起超时记录(caplog)), "先得真报出来,不然下面全是空转"
     # 报完之后要真的多给它几拍:自动 resume 是异步的,报警那一刻还没轮到它。
     #
     # **等的是闸门醒了几拍,不是墙上的半秒。** 原来写的是
     # ``最多等=0.5``,而 ``_LEASE_WATCH_PERIOD_S`` 正好也是 0.5 —— 观察窗口
-    # 跟被观察者的周期一样长,还踩着边界:上一句 ``等到(挂起超时告警)`` 是在
+    # 跟被观察者的周期一样长,还踩着边界:上一句 ``等到(挂起超时记录)`` 是在
     # 报警那一刹那返回的,这 0.5 秒最多覆盖到"下一拍"。有人把自动 resume 写
     # 成"先报警、下一拍再放行",或者写成一条投进引擎命令队列、要等引擎协程
     # 下一轮才处理的异步命令,实际放行落在报警后 0.5~1.0 秒 —— 这条断言有
@@ -301,7 +309,7 @@ def test_挂起超时只报警不自己动狗(跑起来的服务, 引擎秒表):
     assert ctx.device.walk_calls[走过:] == [], ctx.device.walk_calls[走过:]
 
 
-def test_没到点不报(跑起来的服务, 引擎秒表):
+def test_没到点不报(跑起来的服务, 引擎秒表, caplog):
     """差一分钟就报,等于把十分钟这个数写进了注释而没写进代码。
 
     拨的是引擎那口钟 —— 拨墙钟的话,这条在**判据换钟之后**永远是绿的
@@ -310,10 +318,10 @@ def test_没到点不报(跑起来的服务, 引擎秒表):
     srv = 跑起来的服务
     让开腿(srv)
     引擎秒表.前进(SUSPEND_STALE_MS - 60_000)
-    assert not 等到(lambda: 挂起超时告警(srv), 最多等=观察窗口), "还差一分钟就报了"
+    assert not 等到(lambda: 挂起超时记录(caplog), 最多等=观察窗口), "还差一分钟就报了"
 
 
-def test_墙钟往前跳不许因此报这条P1(跑起来的服务, 钟, 引擎秒表):
+def test_墙钟往前跳不许因此报这条P1(跑起来的服务, 钟, 引擎秒表, caplog):
     """**现场没有 NTP,狗上墙钟随时会被校一下 —— 校完不许挨一条 P1。**
 
     这一条是"判据换钟"这件事的回归守卫,摆的是换钟之后**才会出现**的那一格:
@@ -323,8 +331,8 @@ def test_墙钟往前跳不许因此报这条P1(跑起来的服务, 钟, 引擎�
     「人接管着没还回来」的 P1**。误报会很快教会人无视这条告警,然后真出事那
     一次也一起被无视掉。
 
-    把 ``server._判定挂起超时`` 里 ``now_ms=engine.now_ms()`` 换回
-    ``now_ms=now_ms``(形参那口墙钟),这一条必须红。
+    把 ``server._判定挂起超时`` 里 ``now_ms=engine.now_ms()`` 换成
+    ``now_ms=self._ctx.clock()``(那口墙钟),这一条必须红。
 
     **两个方向都摆在这儿。** 只断"墙钟拨了不报"的话,一个"这条 P1 整个哑了"
     的实现照样绿 —— 所以后半段把引擎那口钟拨过线,它必须报出来。
@@ -335,7 +343,7 @@ def test_墙钟往前跳不许因此报这条P1(跑起来的服务, 钟, 引擎�
     # 墙钟往前跳一大截(现场就是一次 NTP 对时、或者手动改了系统时间)。
     # 引擎那口钟一动不动 —— 人还站在狗边上,腿是刚让开的。
     钟.前进(SUSPEND_STALE_MS * 6)
-    assert not 等到(lambda: 挂起超时告警(srv), 最多等=观察窗口), (
+    assert not 等到(lambda: 挂起超时记录(caplog), 最多等=观察窗口), (
         "墙钟往前跳了一下,人就挨了一条「接管着没还回来」—— 判据那一边还在"
         "现问 ctx.clock(),而 SuspendPoint.at_ms 已经不跟着墙钟跳了。"
         "见 server._挂起超时了 的文档串。")
@@ -343,12 +351,12 @@ def test_墙钟往前跳不许因此报这条P1(跑起来的服务, 钟, 引擎�
     # 正向锚点:同一台服务、同一次挂起,只把引擎那口钟拨过线,它就必须报。
     # 没有这一段,上面那句 ``not`` 分不开"实现对"和"这条 P1 整个哑了"。
     引擎秒表.前进(SUSPEND_STALE_MS + 1)
-    assert 等到(lambda: 挂起超时告警(srv)), (
+    assert 等到(lambda: 挂起超时记录(caplog)), (
         "引擎那口钟都走过十分钟了还是没报 —— 上面那句 not 什么也没证明,"
         "这条 P1 本身就是哑的。")
 
 
-def test_没让开腿就不会有这条(跑起来的服务, 钟):
+def test_没让开腿就不会有这条(跑起来的服务, 钟, caplog):
     """任务正常跑着,墙钟拨多远都不该有这条。
 
     **挡的是「没让开腿也报」这一件事,别把名牌挂大了。** 一个照
@@ -374,24 +382,22 @@ def test_没让开腿就不会有这条(跑起来的服务, 钟):
     一类由 ``test_算的是让开腿那一刻不是开跑那一刻`` 接住 —— 那边用的是摆好
     的假引擎,拨钟不会带坏别的东西。
     """
-    srv = 跑起来的服务
-    钟.前进(SUSPEND_STALE_MS * 3)
-    assert not 等到(lambda: 挂起超时告警(srv), 最多等=观察窗口), "没让开腿也报了挂起超时"
+    钟.前进(SUSPEND_STALE_MS * 3)          # 跑起来的服务:只要它在跑,不用它本人
+    assert not 等到(lambda: 挂起超时记录(caplog), 最多等=观察窗口), "没让开腿也报了挂起超时"
 
 
-def test_一次挂起只报一条(跑起来的服务, 引擎秒表):
-    """闸门半秒醒一拍。报重了的话十分钟就是一千两百条,值守屏当场没法看。"""
+def test_一次挂起只报一条(跑起来的服务, 引擎秒表, caplog):
+    """闸门半秒醒一拍。报重了的话十分钟就是一千两百条,日志当场没法看。"""
     srv = 跑起来的服务
     让开腿(srv)
     引擎秒表.前进(SUSPEND_STALE_MS + 1)
-    assert 等到(lambda: 挂起超时告警(srv))
+    assert 等到(lambda: 挂起超时记录(caplog))
 
     起始拍 = srv.hub._lease_ticks
     assert 等到(lambda: srv.hub._lease_ticks >= 起始拍 + 拍数, 最多等=观察窗口), \
         "闸门没再醒过,下面那个 1 是因为它根本没机会报第二次"
-    条 = 挂起超时告警(srv)
-    assert len(条) == 1, 条
-    assert 条[0].count == 1, 条[0]
+    条 = 挂起超时记录(caplog)
+    assert len(条) == 1, [r.getMessage() for r in 条]
 
 
 def test_超时的边界正好在这个常量上():
@@ -449,7 +455,7 @@ def test_反复短接管按累计算不按单次算():
     assert _挂起超时了(第几次(3), now_ms=起 + 四分钟)
 
 
-def test_这条P1的三个数必须同源(没起的服务):
+def test_这条P1的三个数必须同源(没起的服务, caplog):
     """**``suspend_stale`` 的判据只许读引擎那一口钟,``ctx.clock`` 不许沾。**
 
     这条测试是换掉的:原来那条叫 ``test_闸门读的钟必须还是墙钟``,钉的是
@@ -468,9 +474,7 @@ def test_这条P1的三个数必须同源(没起的服务):
     2. **把引擎那口钟拨过线,它必须跟着变。** 只钉第 1 条的话,一个"这条 P1
        整个哑了"的实现照样全绿。
 
-    **不断言告警上盖的那个时刻。** 那一个仍然走 ``ctx.clock``,而且必须走
-    —— 升档("2 分钟没人确认就 push")是要跟现场的人对表的。这里断的是
-    **报不报**,不是**报在几点**。
+    这里断的是**报不报**,不是**报在几点**。
     """
     srv = 没起的服务
     ctx = srv.ctx
@@ -491,8 +495,8 @@ def test_这条P1的三个数必须同源(没起的服务):
         for 偏移 in (0, 别的纪元, -别的纪元):
             ctx.clock = lambda 偏移=偏移: 基准 + 偏移
             摆(引擎钟=基准, 让开腿于=基准 - SUSPEND_STALE_MS)
-            srv.hub._判定挂起超时(now_ms=ctx.clock())
-            assert not 挂起超时告警(srv), (
+            srv.hub._判定挂起超时()
+            assert not 挂起超时记录(caplog), (
                 f"ctx.clock 偏了 {偏移} 毫秒,这条 P1 就报了 —— 判据还在读它。"
                 "引擎那口钟说的是「才挂了十分钟整,差一毫秒没过线」。")
 
@@ -500,8 +504,8 @@ def test_这条P1的三个数必须同源(没起的服务):
         # 还读它,这里算出来是个大负数,永远不报),只把引擎那口钟往前拨过线。
         ctx.clock = lambda: 基准 - 别的纪元
         摆(引擎钟=基准 + 1, 让开腿于=基准 - SUSPEND_STALE_MS)
-        srv.hub._判定挂起超时(now_ms=ctx.clock())
-        assert 挂起超时告警(srv), (
+        srv.hub._判定挂起超时()
+        assert 挂起超时记录(caplog), (
             "引擎那口钟已经走过线了,这条 P1 还是没出来 —— 要么判据读的是"
             "ctx.clock(它被摆到一个过去的纪元上),要么这条 P1 本身是哑的。")
     finally:
@@ -509,7 +513,7 @@ def test_这条P1的三个数必须同源(没起的服务):
         ctx.clock = 真的钟
 
 
-def test_累计挂起也走引擎那口钟(没起的服务):
+def test_累计挂起也走引擎那口钟(没起的服务, caplog):
     """``prior_suspend_ms`` 是式子里的第三个数,它也在引擎那口钟上。
 
     反复短接管那一幕(狗在返航路上被拉开、放回、又被拉开)的判据是
@@ -540,16 +544,16 @@ def test_累计挂起也走引擎那口钟(没起的服务):
         ctx.engine = 假引擎(_快照(开跑=基准 - SUSPEND_STALE_MS * 100,
                                   让开腿于=基准 - 四分钟, 之前挂过=0),
                             引擎钟=基准)
-        srv.hub._判定挂起超时(now_ms=ctx.clock())
-        assert not 挂起超时告警(srv), "才挂了四分钟、之前没挂过,就报了"
+        srv.hub._判定挂起超时()
+        assert not 挂起超时记录(caplog), "才挂了四分钟、之前没挂过,就报了"
 
         # 同一次接管、同一刻,只把"之前累计挂过多久"补上,刚好过线一毫秒。
         ctx.engine = 假引擎(_快照(开跑=基准 - SUSPEND_STALE_MS * 100,
                                   让开腿于=基准 - 四分钟,
                                   之前挂过=SUSPEND_STALE_MS - 四分钟 + 1),
                             引擎钟=基准)
-        srv.hub._判定挂起超时(now_ms=ctx.clock())
-        assert 挂起超时告警(srv), (
+        srv.hub._判定挂起超时()
+        assert 挂起超时记录(caplog), (
             "这一趟累计已经过线了,还是没报 —— prior_suspend_ms 没被喂进判据"
             "(反复短接管那一幕就是这么一条都报不出来的),或者判据读的是"
             "被摆到过去纪元上的 ctx.clock。")
@@ -562,16 +566,15 @@ def test_生产缺省的那口墙钟还是墙钟(没起的服务):
     """``ctx.clock`` 不再管 ``suspend_stale``,但它**仍然**得是墙钟。
 
     原来这几句长在 ``test_闸门读的钟必须还是墙钟`` 里,理由是"挂起超时那条
-    减法靠它"。那个理由没了,**这几句本身没过期**:租约 TTL 判到期、告警盖
-    时刻、``due_escalations`` 升档("2 分钟没人确认就 push、5 分钟出声")全
-    按它算,而这些都是要跟现场的人对表的。换了纪元之后它们会一起悄悄失效,
-    所以留在这儿单独钉一次,**并且把理由改成真的那个**。
+    减法靠它"。那个理由没了,**这几句本身没过期**:租约 TTL 判到期、排程
+    到点都按它算,而这些都是要跟现场的人对表的。换了纪元之后它们会一起悄悄
+    失效,所以留在这儿单独钉一次,**并且把理由改成真的那个**。
     """
     ctx = 没起的服务.ctx
     差 = abs(ctx.clock() - time.time() * 1000)
     assert 差 < 5_000, (
-        f"ctx.clock() 跟墙上时钟差了 {差} 毫秒 —— 租约 TTL、告警时刻、"
-        "P1 升档节奏全按它算,换了纪元这些会一起悄悄失效。")
+        f"ctx.clock() 跟墙上时钟差了 {差} 毫秒 —— 租约 TTL、排程到点"
+        "全按它算,换了纪元这些会一起悄悄失效。")
     # 注进去的那份自己对得上,不代表真机上那条默认路径对得上:生产缺省也得
     # 是墙钟。
     assert AppContext.__dataclass_fields__["clock"].default is _wall_ms
@@ -584,7 +587,7 @@ def test_生产缺省的那口墙钟还是墙钟(没起的服务):
     本体差 = abs(_wall_ms() - time.time() * 1000)
     assert 本体差 < 5_000, (
         f"_wall_ms() 跟墙上时钟差了 {本体差} 毫秒 —— 它已经不是墙钟了。"
-        "租约 TTL、告警时刻、P1 升档节奏全按它算。")
+        "租约 TTL、排程到点全按它算。")
 
 
 class 假引擎:
@@ -694,7 +697,7 @@ def _惨叫(caplog) -> list:
     return [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
-def test_算的是让开腿那一刻不是开跑那一刻(没起的服务, 钟):
+def test_算的是让开腿那一刻不是开跑那一刻(没起的服务, 钟, caplog):
     """一趟任务可以跑一整天,人在最后一分钟才让开腿。
 
     拿 ``started_ms`` 算的实现,会在人刚把手机掏出来的那一秒就报 P1 —— 而
@@ -711,18 +714,18 @@ def test_算的是让开腿那一刻不是开跑那一刻(没起的服务, 钟):
     此刻 = 钟()
     真的 = ctx.engine
     try:
-        # ``引擎钟=此刻``:判据现在从 ``engine.now_ms()`` 取"现在",跟
-        # ``at_ms`` 同源。形参那个 ``now_ms`` 只剩下给告警盖时刻。
+        # ``引擎钟=此刻``:判据从 ``engine.now_ms()`` 取"现在",跟 ``at_ms``
+        # 同源。
         ctx.engine = 假引擎(_快照(开跑=此刻 - SUSPEND_STALE_MS * 100,
                                   让开腿于=此刻), 引擎钟=此刻)
-        srv.hub._判定挂起超时(now_ms=此刻)
-        assert not 挂起超时告警(srv), "刚让开腿就报了 —— 算的不是让开腿那一刻"
+        srv.hub._判定挂起超时()
+        assert not 挂起超时记录(caplog), "刚让开腿就报了 —— 算的不是让开腿那一刻"
 
         ctx.engine = 假引擎(_快照(开跑=此刻 - SUSPEND_STALE_MS * 100,
                                   让开腿于=此刻 - SUSPEND_STALE_MS - 1),
                             引擎钟=此刻)
-        srv.hub._判定挂起超时(now_ms=此刻)
-        assert 挂起超时告警(srv), "让开腿都超过十分钟了,还是没报"
+        srv.hub._判定挂起超时()
+        assert 挂起超时记录(caplog), "让开腿都超过十分钟了,还是没报"
     finally:
         ctx.engine = 真的
 
@@ -754,7 +757,7 @@ def test_让开腿了却没盖点不许静默走掉(没起的服务, 钟, caplog
         ctx.engine = 假引擎(_快照(开跑=此刻, 让开腿于=此刻, 挂着=False),
                             yielding=True)
         with caplog.at_level(logging.ERROR, logger="d1max_patrol.app.server"):
-            srv.hub._判定挂起超时(now_ms=此刻)
+            srv.hub._判定挂起超时()
         惨叫 = _惨叫(caplog)
         assert 惨叫, (
             "引擎说自己在让位、快照上却没盖点,而这一拍一声不吭地走掉了 —— "
@@ -768,8 +771,8 @@ def test_没盖点那句惨叫只喊一次(没起的服务, 钟, caplog):
     """上面那条 ERROR 守的是一个**会一直存在**的状态,而闸门半秒醒一拍。
 
     不节流就是 2 条 ERROR/秒、一夜二十万条。这在别的项目上只是吵,在这台狗上
-    是**自伤**:这条日志刷的盘,正是同一套值守在量 ``disk_used_ratio`` 的那块
-    盘 —— 一条诊断日志把自己的盘写满、然后触发一条 P1,比不报还糟。
+    是**自伤**:这条日志刷的盘,正是存证据的那块盘 —— 一条诊断日志把自己
+    的盘写满,比不报还糟。
 
     **两个方向都钉:** 连着两拍只喊一次;可是回到正常状态之后再出一次同样的
     问题,必须**还会再喊**。只钉前一半的话,一个"喊过就永远闭嘴"的实现照样
@@ -788,18 +791,18 @@ def test_没盖点那句惨叫只喊一次(没起的服务, 钟, caplog):
     try:
         with caplog.at_level(logging.ERROR, logger="d1max_patrol.app.server"):
             ctx.engine = 没盖点的()
-            srv.hub._判定挂起超时(now_ms=此刻)
-            srv.hub._判定挂起超时(now_ms=此刻)
+            srv.hub._判定挂起超时()
+            srv.hub._判定挂起超时()
             assert len(_惨叫(caplog)) == 1, (
                 f"连着两拍喊了 {len(_惨叫(caplog))} 声。闸门半秒醒一拍,"
-                "这么喊一夜就是二十万条 ERROR,写满的正是值守自己在量的那块盘。")
+                "这么喊一夜就是二十万条 ERROR,写满的正是存证据的那块盘。")
 
             # 接管结束(``yielding`` 落回假),账要清掉。
             ctx.engine = 假引擎(_快照(开跑=此刻, 让开腿于=此刻, 挂着=False),
                                 yielding=False)
-            srv.hub._判定挂起超时(now_ms=此刻)
+            srv.hub._判定挂起超时()
             ctx.engine = 没盖点的()
-            srv.hub._判定挂起超时(now_ms=此刻)
+            srv.hub._判定挂起超时()
             assert len(_惨叫(caplog)) == 2, (
                 "状态恢复过一次之后又坏了,这一次一声不吭 —— 节流写成了"
                 "「这辈子只喊一次」,重启之前的第二次故障从此没有任何痕迹。")
@@ -807,7 +810,7 @@ def test_没盖点那句惨叫只喊一次(没起的服务, 钟, caplog):
         ctx.engine = 真的
 
 
-def test_接管结束之后残留的挂起点不许再报(没起的服务, 钟):
+def test_接管结束之后残留的挂起点不许再报(没起的服务, 钟, caplog):
     """快照上留着一个陈旧的 ``suspended_at``,而人早就把腿还回来了。
 
     **这一条是 ``_判定挂起超时`` 里 ``if not engine.yielding: return`` 那道闸
@@ -834,8 +837,8 @@ def test_接管结束之后残留的挂起点不许再报(没起的服务, 钟):
                   让开腿于=此刻 - SUSPEND_STALE_MS * 3,
                   挂着=False, 盖着点=True),
             yielding=False, 引擎钟=此刻)
-        srv.hub._判定挂起超时(now_ms=此刻)
-        assert not 挂起超时告警(srv), (
+        srv.hub._判定挂起超时()
+        assert not 挂起超时记录(caplog), (
             "没有人在接管(yielding 是假),快照上那个挂起点是上一次接管留下的"
             "残渣 —— 照着它报了一条 P1。挡着这一条的只有 _判定挂起超时 里那句"
             "`if not engine.yielding: return`。")
@@ -843,11 +846,10 @@ def test_接管结束之后残留的挂起点不许再报(没起的服务, 钟):
         # **正向锚点:同样的服务、同样的一拍、同一份快照,只把 ``yielding``
         # 翻成真,这条 P1 就必须出现。**
         #
-        # 上面那句 ``not`` 是一条否定命题,它默认「告警链路在 ``没起的服务``
-        # 这个 fixture 上是活的」—— 而那个前提在它自己身上没有落锚:
-        # ``raise_alert`` 被改成空操作、``AlertBook`` 换成一个不记账的替身、
-        # 或者 fixture 装配漏了 alerts,上面那句照样绿,而它守的那道闸早就
-        # 没了。**断言否定命题的测试必须自己证明肯定方向能成立**,否则它不
+        # 上面那句 ``not`` 是一条否定命题,它默认「记日志那条路在 ``没起的
+        # 服务`` 这个 fixture 上是活的」—— 而那个前提在它自己身上没有落锚:
+        # 那一行被删掉、或者日志没接到 caplog 上,上面那句照样绿,而它守的
+        # 那道闸早就没了。**断言否定命题的测试必须自己证明肯定方向能成立**,否则它不
         # 区分「实现对」和「机器根本没在跑」。
         #
         # 形状照抄同文件的 ``test_算的是让开腿那一刻不是开跑那一刻``:
@@ -857,11 +859,10 @@ def test_接管结束之后残留的挂起点不许再报(没起的服务, 钟):
                   让开腿于=此刻 - SUSPEND_STALE_MS * 3,
                   挂着=False, 盖着点=True),
             yielding=True, 引擎钟=此刻)
-        srv.hub._判定挂起超时(now_ms=此刻)
-        assert 挂起超时告警(srv), (
+        srv.hub._判定挂起超时()
+        assert 挂起超时记录(caplog), (
             "同一份快照、同一拍,只把 yielding 翻成真,这条 P1 还是没出来 —— "
-            "告警链路本身就是断的(raise_alert 空转、或者这个 fixture 上压根"
-            "没装 alerts),上面那句 not 什么也没证明。")
+            "记日志那条路本身就是断的,上面那句 not 什么也没证明。")
     finally:
         ctx.engine = 真的
 

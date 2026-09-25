@@ -143,4 +143,42 @@ void main() {
     expect(r['task_id'], isA<String>());
     c.close();
   });
+
+  test('真 HTTPS：告警键整个编码成一段，列全部带 all=1', () async {
+    final site = FakeSite();
+    await site.start();
+    final c = SiteClient(site.url, testCertFingerprint());
+    try {
+      await c.login('gina', 'pw');
+      final rows = await c.alerts();
+      expect(rows.first.key, 'A/estop_pressed#1');
+      expect(rows.first.level, 'P1');
+      await c.ackAlert('A/estop_pressed#1');
+      await c.alerts(all: true);
+      final s = await c.watchSummary();
+      expect((s['robots'] as List).length, 1);
+      expect(site.rawPaths.any((u) => u.endsWith('/api/alerts/A%2Festop_pressed%231/ack')),
+          isTrue,
+          reason: site.rawPaths.join('\n'));
+      expect(site.rawPaths.any((u) => u.endsWith('/api/alerts?all=1')), isTrue);
+      expect(site.received.firstWhere((r) => r.path.endsWith('/ack')).body,
+          isEmpty, reason: '确认人由站点取登录账号，手机不传名字');
+    } finally {
+      c.close();
+      await site.close();
+    }
+  });
+
+  test('站点回了一份没有 alerts 的东西：抛读不懂，绝不当成空名单', () async {
+    final site = FakeSite()..bodies['/api/alerts'] = <String, dynamic>{'ok': true};
+    await site.start();
+    final c = SiteClient(site.url, testCertFingerprint());
+    try {
+      await c.login('gina', 'pw');
+      await expectLater(c.alerts(), throwsA(isA<FormatException>()));
+    } finally {
+      c.close();
+      await site.close();
+    }
+  });
 }

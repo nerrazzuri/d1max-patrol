@@ -18,7 +18,7 @@ from typing import Any
 
 from d1max_contract.dispatch import DispatchClient, DispatchTimeout
 from d1max_contract.errors import ContractError
-from d1max_contract.messages import Ack, Event, MapPose, Reconcile, Status
+from d1max_contract.messages import Ack, Event, MapPose, Reconcile, Status, Telemetry
 from d1max_contract.mission import MissionError, parse_mission
 from d1max_contract.topics import Topics
 from d1max_contract.transport import Transport
@@ -117,6 +117,11 @@ class Dispatcher:
         self.feed = Feed()
         #: 新事件(去重之后)的回调:排程执行器靠它回写这一趟的结果。
         self._event_cbs: list[Callable[[str, Event], None]] = []
+        #: 状态、遥测的回调(W00c5a:站点的告警来源靠它们)。
+        self._status_cbs: list[Callable[[str, Status], None]] = []
+        self._telemetry_cbs: list[Callable[[str, Telemetry], None]] = []
+        #: 每台狗最近一次收到遥测的站点时刻(值守汇总用)。
+        self.telemetry_at: dict[str, int] = {}
         self._ack_cbs: list[Callable[[Ack], None]] = []
         #: 关了之后还在路上的上行报文不再落库(库可能已经关了)。
         self._closed = False
@@ -151,6 +156,7 @@ class Dispatcher:
                            now_ms=self._now)
         c.on_status(lambda s, rid=robot_id: self._on_status(rid, s))
         c.on_event(lambda e, rid=robot_id: self._on_event(rid, e))
+        c.on_telemetry(lambda t, rid=robot_id: self._on_telemetry(rid, t))
         c.on_reconcile(lambda r, rid=robot_id: self._on_reconcile(rid, r))
         c.on_ack(self._record_ack)          # 包括等的人超时走了之后才到的回执
         self.clients[robot_id] = c
@@ -167,7 +173,34 @@ class Dispatcher:
                       "ON CONFLICT(robot_id) DO UPDATE SET status=excluded.status, "
                       "updated_at=excluded.updated_at",
                       (robot_id, json.dumps(wire), self._now()))
+        self._fire(self._status_cbs, robot_id, s, "状态")
         self.feed.publish({"kind": "status", "robot_id": robot_id, "status": wire})
+
+    def _on_telemetry(self, robot_id: str, t: Telemetry) -> None:
+        if self._closed:
+            return
+        self.telemetry_at[robot_id] = self._now()
+        self._fire(self._telemetry_cbs, robot_id, t, "遥测")
+
+    @staticmethod
+    def _fire(cbs: list, robot_id: str, x: Any, what: str) -> None:
+        for cb in list(cbs):
+            try:
+                cb(robot_id, x)
+            except Exception:
+                log.exception("%s回调炸了(%s),其余照常", what, robot_id)
+
+    def on_status(self, cb: Callable[[str, Status], None]) -> None:
+        self._status_cbs.append(cb)
+
+    def on_telemetry(self, cb: Callable[[str, Telemetry], None]) -> None:
+        self._telemetry_cbs.append(cb)
+
+    def is_stale(self, robot_id: str) -> bool:
+        """见过实时状态、但已经超过 ``stale_ms`` 没来了(按站点的钟)。没见过的不算过期。"""
+        c = self.clients.get(robot_id)
+        return (c is not None and c.status_live_at is not None
+                and self._now() - c.status_live_at > self.stale_ms)
 
     def _on_event(self, robot_id: str, e: Event) -> None:
         if self._closed:

@@ -15,6 +15,7 @@ from typing import Any
 
 from d1max_contract import SCHEMA
 from d1max_contract.errors import ContractError
+from d1max_contract.hal import Fault
 from d1max_contract.wire import (
     as_bool,
     as_dict,
@@ -44,8 +45,30 @@ class TaskState(str, Enum):
     PREEMPTED = "preempted"
 
 
-#: W00 的事件类型。狗只报事实,判定在站点(总设计 §3.3)。
-EVENT_KINDS = ("task_progress", "task_done", "task_failed", "task_preempted", "task_aborted")
+#: 狗报的事件类型。狗只报事实,判定在站点(总设计 §3.3)。``patrol_waypoint`` 是 W00c2a 的,
+#: ``robot_fault`` 是 W00c5a 的(HAL 故障集合变了才发一条;空列表 = 都消了)。
+EVENT_KINDS = ("task_progress", "task_done", "task_failed", "task_preempted", "task_aborted",
+               "patrol_waypoint", "robot_fault")
+
+
+def fault_event_data(faults: tuple[Fault, ...] | list[Fault]) -> dict[str, Any]:
+    """``robot_fault`` 事件的 ``data``。"""
+    return {"faults": [{"code": f.code, "fatal": f.fatal, "text": f.text} for f in faults]}
+
+
+def parse_fault_event_data(data: Any) -> tuple[Fault, ...]:
+    """读回 ``robot_fault`` 的 ``data``。形状不对抛 :class:`ContractError`,不猜。"""
+    items = data.get("faults") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise ContractError("robot_fault: 要有 faults 列表")
+    out = []
+    for it in items:
+        if not (isinstance(it, dict) and isinstance(it.get("code"), str)
+                and isinstance(it.get("fatal"), bool) and isinstance(it.get("text"), str)):
+            raise ContractError(
+                f"robot_fault: 故障项要是 {{code: str, fatal: bool, text: str}}: {it!r}")
+        out.append(Fault(code=it["code"], fatal=it["fatal"], text=it["text"]))
+    return tuple(out)
 
 
 def _stamped(d: dict[str, Any]) -> dict[str, Any]:

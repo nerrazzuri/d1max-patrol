@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:d1max_patrol/main.dart';
+import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/store/pin_vault.dart';
 import 'package:d1max_patrol/store/registry_store.dart';
@@ -69,6 +70,36 @@ class FakeApi implements SiteApi {
   @override
   Future<List<Map<String, dynamic>>> incidents() async =>
       (siteFixture('site_incidents')['incidents'] as List).cast<Map<String, dynamic>>();
+  /// 告警（W00c5a）。给了就用它，不给用真站点的夹具。
+  List<Map<String, dynamic>>? alertRows;
+
+  /// 给了就原样交给 `alertsFromWire`（模拟站点回了一份读不懂的东西）。
+  Map<String, dynamic>? alertsBody;
+  SiteError? alertsError;
+  SiteError? summaryError;
+  int alertsCalls = 0;
+  @override
+  Future<List<Alert>> alerts({bool all = false}) async {
+    alertsCalls++;
+    if (alertsError != null) throw alertsError!;
+    return alertsFromWire(alertsBody ??
+        (alertRows != null ? <String, dynamic>{'alerts': alertRows} : siteFixture('site_alerts')));
+  }
+  @override
+  Future<Map<String, dynamic>> ackAlert(String key) async {
+    calls.add('ack $key');
+    return siteFixture('site_alert_ack');
+  }
+  @override
+  Future<Map<String, dynamic>> resolveAlert(String key) async {
+    calls.add('resolve $key');
+    return siteFixture('site_alert_ack');
+  }
+  @override
+  Future<Map<String, dynamic>> watchSummary() async {
+    if (summaryError != null) throw summaryError!;
+    return siteFixture('site_watch_summary');
+  }
   @override
   Stream<Map<String, dynamic>> events() {
     eventsOpened++;

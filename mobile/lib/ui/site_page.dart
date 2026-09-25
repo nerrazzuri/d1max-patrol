@@ -1,5 +1,8 @@
 /// 站点模式的几屏（W00c4）：站点列表 → 登录 → 狗的列表（实时）→ 单狗页（派巡检、叫停、回待命点）；
-/// 事件账、排程各一页。
+/// 事件账、排程、值守（W00c5a）各一页。
+///
+/// **升到声音档、还没人确认的告警**（SSE `kind: alert`）：狗列表这一屏在栈底一直开着，由它响铃，
+/// 不管人此刻在看哪一页。App 没开时的系统推送不在 W00c5a 里。
 ///
 /// **按钮按角色显示**：业主（owner）只有「叫停」；保安（guard）与管理员（admin）能派单。真正的
 /// 权限在站点上（站点回 403），这里只是不给人一个注定被拒的按钮。
@@ -8,9 +11,11 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'site_watch_page.dart';
 
 /// 造一个站点客户端。测试换成假的。
 typedef SiteApiFactory = SiteApi Function(SiteEntry site);
@@ -184,10 +189,18 @@ class _SiteListPageState extends State<SiteListPage> {
 
 // ------------------------------------------------------------ 狗的列表
 
+/// 响铃：系统提示音 + 震动。测试换成计数的。
+void defaultRing() {
+  unawaited(SystemSound.play(SystemSoundType.alert));
+  unawaited(HapticFeedback.heavyImpact());
+}
+
 class SiteRobotsPage extends StatefulWidget {
   final SiteApi api;
   final String title;
-  const SiteRobotsPage({super.key, required this.api, this.title = '站点'});
+  final void Function() ring;
+  const SiteRobotsPage(
+      {super.key, required this.api, this.title = '站点', this.ring = defaultRing});
 
   @override
   State<SiteRobotsPage> createState() => _SiteRobotsPageState();
@@ -213,8 +226,16 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
 
   void _listen() {
     _sub?.cancel();
-    _sub = widget.api.events().listen((_) {
+    _sub = widget.api.events().listen((f) {
       if (!_live && mounted) setState(() => _live = true);
+      if (alertWantsSound(f)) {
+        widget.ring();
+        final a = f['alert'] as Map;
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('${a['level']} ${a['robot']} · ${a['title']}（没人确认）')));
+        }
+      }
       _soon();
     }, onError: (Object _) => _lost(), onDone: _lost, cancelOnError: true);
   }
@@ -274,6 +295,12 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     final role = widget.api.session?.role ?? '';
     return Scaffold(
       appBar: AppBar(title: Text('${widget.title}（$role）'), actions: [
+        IconButton(
+            key: const Key('open-watch'),
+            tooltip: '值守',
+            icon: const Icon(Icons.notifications_active),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute<void>(builder: (_) => SiteWatchPage(api: widget.api)))),
         IconButton(
             tooltip: '事件',
             icon: const Icon(Icons.warning_amber),

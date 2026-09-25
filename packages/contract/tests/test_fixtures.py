@@ -17,6 +17,7 @@ from d1max_contract.registration import Registration
 
 解析器 = {"map_pose": MapPose, "command_goto": Command, "command_abort": Command,
        "command_patrol": Command, "event_patrol_waypoint": Event,
+       "event_robot_fault": Event,
        "ack_accepted": Ack, "ack_rejected": Ack, "ack_expired": Ack, "ack_duplicate": Ack,
        "event_progress": Event, "event_aborted": Event, "status_online": Status,
        "status_offline_lwt": Status, "capabilities": Capabilities, "reconcile": Reconcile,

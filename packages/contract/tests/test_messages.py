@@ -144,3 +144,22 @@ def test_非有限数一律拒():
             MapPose.from_wire(wire)
     with pytest.raises(ContractError):
         MapPose(map_id="m", map_version="1", frame_id="map", x=float("nan"), y=0.0, yaw=0.0)
+
+
+def test_robot_fault事件的数据往返_坏的不收():
+    """W00c5a:代理只报故障事实(故障集合变了才发),判定在站点。"""
+    from d1max_contract.hal import Fault
+    from d1max_contract.messages import EVENT_KINDS, fault_event_data, parse_fault_event_data
+
+    assert "robot_fault" in EVENT_KINDS and "patrol_waypoint" in EVENT_KINDS
+    fs = (Fault(code="7", fatal=True, text="左前腿过流"), Fault(code="9", fatal=False, text=""))
+    d = fault_event_data(fs)
+    assert d == {"faults": [{"code": "7", "fatal": True, "text": "左前腿过流"},
+                            {"code": "9", "fatal": False, "text": ""}]}
+    assert parse_fault_event_data(d) == fs
+    assert parse_fault_event_data({"faults": []}) == ()
+    for bad in ({}, {"faults": None}, {"faults": [{"code": 7}]},
+                {"faults": [{"code": "7", "fatal": "yes", "text": ""}]},
+                {"faults": [{"code": "7", "fatal": True}]}, {"faults": ["x"]}):
+        with pytest.raises(ContractError):
+            parse_fault_event_data(bad)

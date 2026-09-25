@@ -76,8 +76,8 @@ def test_没配回传地址时_enabled是false(server):
     """单机档:客户没买服务器。**这一档不是错误,是一种正常形态。**"""
     份 = get_json(server, UPLOAD)
     assert 份["enabled"] is False
-    # backlog 是 None 不是 0 —— 跟 watch_summary 那一档同一个口径:
-    # 0 是「查过了没积压」, None 是「这台狗没有这个能力」。
+    # backlog 是 None 不是 0:0 是「查过了没积压」, None 是「这台狗没有
+    # 这个能力」。
     assert 份["backlog"] is None
     # 光秃秃一个 null 摆在那儿, 看的人分不清是没查还是查了没事。
     assert "不是「没有积压」" in 份["detail"]
@@ -87,8 +87,7 @@ def test_没配回传地址时_夹具服务器一条上传线程都不起(server
     """**这一条钉的是装配条件, 不是路由形状。**
 
     夹具默认不配回传地址 => ``ctx.upload is None`` => 现有那一大堆 app 测试
-    (含 ``test_wire_fixtures`` 里 ``upload_backlog is None`` 那条)一个字都
-    不用改。哪天有人把装配条件写成「无条件装」, 这一条当场红。
+    一个字都不用改。哪天有人把装配条件写成「无条件装」, 这一条当场红。
     """
     assert server.ctx.upload is None
 
@@ -143,19 +142,6 @@ def test_服务停下的时候pump也停(bridge, tmp_path):
     s.start()
     s.stop()
     assert threading.active_count() == before
-
-
-def test_接了回传之后值守屏那一格是个数不是null(bridge, tmp_path):
-    """路由和心跳报的是同一个口径 —— 两处分岔的那天, 现场没人知道信哪个。"""
-    c = make_ctx_with_console(bridge, tmp_path)
-    s = AppServer(c, port=0)
-    s.start()
-    try:
-        份 = get_json(s, "/api/watch/summary")
-    finally:
-        s.stop()
-    assert 份["upload_backlog"] == 0
-    assert "upload_backlog" not in 份["detail"]
 
 
 # ------------------------------------------- 一趟全传完了才打「可删」(§4.4)

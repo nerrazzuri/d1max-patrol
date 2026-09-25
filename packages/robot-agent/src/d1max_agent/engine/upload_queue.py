@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import Any
 
 #: spec §4.3 那张表。数字小的先走。
-PRIORITY_ALERT = 1
+#:
+#: 第 1 级(告警)原来靠狗上的告警簿往 run 目录落 ``alerts.jsonl`` 入队;告警
+#: 搬去站点(W00c5a,决策 8)之后狗上不再有这个文件,这一级跟着删了。**编号不
+#: 重排**:老队列文件里存的就是这几个数,重排等于悄悄改掉它们的先后。
 PRIORITY_EVENTS = 2
 PRIORITY_PHOTO = 3
 PRIORITY_TELEMETRY = 4
@@ -44,7 +47,6 @@ COMPACT_RATIO = 2.0
 #: 文件名 → 优先级。**白名单,不是黑名单** —— 将来加一种文件,必须有人显式
 #: 决定它是几级,而不是让它悄悄落进某个缺省档。
 _EXACT: dict[str, int] = {
-    "alerts.jsonl": PRIORITY_ALERT,
     "events.jsonl": PRIORITY_EVENTS,
     # manifest.json 是这一趟的身份(任务定义快照 + 环境指纹),跟事件流同级:
     # 没有它,服务器上那堆事件不知道是哪一趟、哪台机器、哪个版本产生的。

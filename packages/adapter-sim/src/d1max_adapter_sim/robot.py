@@ -80,6 +80,9 @@ class SimRobot:
     def inject_fault(self, code: str, fatal: bool, text: str = "") -> None:
         self._faults.append(Fault(code=code, fatal=fatal, text=text))
 
+    def clear_faults(self) -> None:
+        self._faults.clear()
+
     def teleport(self, x: float, y: float, yaw: float) -> None:
         self.x, self.y, self.yaw = x, y, yaw
 

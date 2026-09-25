@@ -16,8 +16,14 @@ class FakeSite {
   late HttpServer _s;
   final List<({String method, String path, String? auth, dynamic body})> received = [];
 
+  /// 原样的请求地址（含百分号编码与查询串）：告警键里的 `/`、`#` 必须编码成一段。
+  final List<String> rawPaths = <String>[];
+
   /// 按路径覆盖状态码（默认 200）。
   final Map<String, int> statusCodes = <String, int>{};
+
+  /// 按路径覆盖 200 的回包（模拟站点回了一份读不懂的东西）。
+  final Map<String, Map<String, dynamic>> bodies = <String, Map<String, dynamic>>{};
   final StreamController<Map<String, dynamic>> sse = StreamController.broadcast();
   String role = 'guard';
 
@@ -42,6 +48,7 @@ class FakeSite {
     final raw = await utf8.decodeStream(req);
     final body = raw.isEmpty ? null : jsonDecode(raw);
     final path = req.uri.path;
+    rawPaths.add(req.requestedUri.toString());
     received.add((
       method: req.method,
       path: path,
@@ -76,7 +83,9 @@ class FakeSite {
       return;
     }
     Map<String, dynamic> out;
-    if (path == '/api/login') {
+    if (bodies.containsKey(path)) {
+      out = bodies[path]!;
+    } else if (path == '/api/login') {
       out = Map.of(siteFixture('site_login'))..['role'] = role;
     } else if (path == '/api/robots') {
       out = siteFixture('site_robots');
@@ -86,6 +95,12 @@ class FakeSite {
       out = siteFixture('site_schedule');
     } else if (path == '/api/incidents') {
       out = siteFixture('site_incidents');
+    } else if (path == '/api/alerts') {
+      out = siteFixture('site_alerts');
+    } else if (path == '/api/watch/summary') {
+      out = siteFixture('site_watch_summary');
+    } else if (path.startsWith('/api/alerts/')) {
+      out = siteFixture('site_alert_ack');
     } else if (path == '/api/logout') {
       out = <String, dynamic>{'ok': true};
     } else {

@@ -28,20 +28,16 @@ Dart 那头的解析可能刚被这次改动打断。
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
-import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from d1max_agent.engine.machine import RunState
-from d1max_patrol.app.server import AppServer
 from d1max_patrol.app.video import CAMERAS, CameraFeed
-from d1max_patrol.backends.base import BatteryEvent, DevicePoseEvent
+from d1max_patrol.backends.base import DevicePoseEvent
 from d1max_patrol.protocol.nav_types import Pose
-from tests.app.conftest import get_json, make_ctx, status
+from tests.app.conftest import get_json, status
 
 # ``有pin的服务``/``墙钟`` 这两个名字在这个模块的普通代码里都不会被直接
 # 引用到 —— 它们只出现在测试函数的参数列表里,那是 pytest 按名字做依赖
@@ -51,20 +47,8 @@ from tests.app.conftest import get_json, make_ctx, status
 # 都挂 noqa,不改写法绕开它。
 from tests.app.test_api_control import auth, 墙钟, 打, 有pin的服务, 解锁  # noqa: F401
 from tests.app.test_video import fake_ffmpeg_freezes  # noqa: F401
-from tests.app.test_watch import 摆一趟, 摆包, 摆镜像盘
 
 夹具目录 = Path(__file__).resolve().parents[2] / "mobile" / "test" / "fixtures"
-
-#: 自己搭服务的那几份夹具统一用的那一刻(UTC 毫秒)。
-#:
-#: **跟 ``易变的键`` 里那个 ``at_ms`` 是同一个数**,也跟
-#: ``tests/app/test_watch.py`` 的 ``NOW_MS`` 是同一个数 —— 生成出来的文件里
-#: 凡是时刻就都对得上,读夹具的人不会以为两个不同的数是两个不同的时刻。
-#:
-#: 用它的那几条测试**把钟整个注进去**(``make_ctx(clock=...)``),不是在断言
-#: 里容忍一点误差:告警的 ``first_ms``/``last_ms``/``acked_ms`` 这几个键不在
-#: ``易变的键`` 那张表里,靠 ``定住()`` 换不掉,只能让它们从源头就是定值。
-T0 = 1_757_000_000_000
 
 #: 每跑一次(或者每台机器)都不一样的键 -> 换上去的定值。
 #:
@@ -308,208 +292,3 @@ def test_夹具_证明向量():
         "vectors": [{"pin": p, "nonce": n, "proof": proof_for(p, n)}
                     for p, n in 样本],
     })
-
-
-# ------------------------------------------------------ 值守屏那两份(裁决二十)
-
-
-async def _推(emitter, event) -> None:
-    """在循环线程里推一个事件出去。``EventEmitter`` 的订阅者列表不带锁。"""
-    emitter.emit(event)
-
-
-class _盘架:
-    """一个**能事后插盘**的探针替身。
-
-    ``ctx.removable`` 是个只读属性 —— 它转手给的是引擎手上那一个,赋不了值。
-    而摆一块镜像盘要先知道这台狗的序列号(``init_target`` 要往盘上写),那得
-    先有 ``ctx``。所以顺序只能是:先把这个空架子交给 ``make_ctx``,拿到 ``ctx``
-    之后再把盘插上来。跟 ``tests/conftest.py`` 的 ``SomeDisks`` 是同一个东西,
-    只是那个的盘在构造时就定死了。
-    """
-
-    def __init__(self) -> None:
-        self.disks: tuple[Any, ...] = ()
-
-    async def scan(self) -> tuple[Any, ...]:
-        return self.disks
-
-
-def _告警路径(key: str, 动作: str) -> str:
-    """把一个告警键拼成 URL。**整段转义** —— 键形如 ``robot/kind#seq``,里头
-    的 ``/`` 会把路由参数切断,``#`` 在客户端那一步就被当片段丢掉了。跟
-    ``tests/app/test_alert_routes.py`` 里那个 ``路径`` 同一个道理。
-    """
-    return f"/api/alerts/{quote(key, safe='')}/{动作}"
-
-
-@contextlib.contextmanager
-def _起一台(bridge, ctx):
-    """起真服务、跑完收干净。这两份夹具都要自己搭 ctx(钟、盘、时间参照全得
-    注进去),用不上 conftest 那个 ``server`` 夹具。
-    """
-    s = AppServer(ctx, port=0)
-    s.start()
-    try:
-        yield s
-    finally:
-        s.stop()
-        with contextlib.suppress(Exception):
-            bridge.call(ctx.engine.aclose, timeout_s=10.0)
-
-
-def test_夹具_告警名单(bridge, tmp_path, monkeypatch):
-    """``GET /api/alerts/all`` 那一份 —— 手机那头 ``alertsFromWire`` 收的就是
-    这个信封(``{"alerts": [...]}``)。
-
-    **取的是 ``/all`` 不是 ``/api/alerts``。** 两条路由的元素形状是同一个
-    ``Alert.to_wire()``,但只有 ``/all`` 里同时出得来三种局面:没人管的、有人
-    确认过的(``acked_ms`` 非空)、已经解决的(``resolved_ms`` 非空)。拿只
-    有未解决告警的那一份当夹具,``acked_ms``/``resolved_by`` 这几个键在文件里
-    永远是 ``null``/空串,Dart 那头就学不到它们非空时长什么样 —— 而
-    ``model/alert.dart`` 的 ``ackedMs`` 上那段注释("塌成 0 之后屏上写着
-    1970-01-01 已确认")说的正是解析这两个键出错的后果。
-
-    **四条都是真的走 ``AlertBook`` / 那两条路由记出来的**,不是手拼的字典:
-    ``count``、``escalated``、``channel``、``key`` 里那个 ``#seq``,每一个都是
-    簿子自己算的。手拼一份的话,``channel`` 会被写成人以为的那个值,而不是
-    ``escalated`` 真正算出来的那个(裁决十一要的就是这两个不许分叉)。
-
-    **``_disk`` 必须换掉。** 挂账 76:这台开发机的盘水位过了 ``disk_80`` 的
-    线,只要起真服务、租约看门狗跑到第一拍,簿子里就会多一条这台机器上才有的
-    P2 —— 那一条会原样签进夹具,而别人机器上重生成时它又不见了。换成一个
-    0.42 的固定读数,这一份就只剩下面这四条自己记的。
-
-    **钟整个注成定值。** ``first_ms``/``last_ms``/``acked_ms``/``resolved_ms``
-    都不在 ``易变的键`` 那张表里(它们的键名跟别处的 ``at_ms`` 不一样),
-    ``定住()`` 换不掉;唯一的办法是让它们从源头就是定值。顺带这也把升级链钉
-    死了:``due_escalations`` 从 ``first_ms`` 算起,钟不动,后台那条 ``_tick``
-    再跑多少遍算出来的档位都一样。
-    """
-    import d1max_patrol.app.server as _server_mod
-    monkeypatch.setattr(_server_mod, "_disk",
-                        lambda _path: (420_000_000_000, 1_000_000_000_000))
-    ctx = make_ctx(bridge, tmp_path, clock=lambda: T0)
-    狗 = ctx.identity.sn
-    with _起一台(bridge, ctx) as s:
-        簿 = ctx.alerts
-        # 一、六分钟前摔的,到现在没人吭声 —— 升到顶了(escalated=2,
-        # channel=sound)。这一条是"没人看见"那个事实在报文里的样子。
-        簿.raise_alert(kind="fallen", robot=狗, title="狗趴下了",
-                       detail="姿态报翻倒,得有人去现场把它扶起来",
-                       now_ms=T0 - 6 * 60_000)
-        # 升级是真跑出来的,不是手填的。跑完之后它就到顶了,后台那条 _tick
-        # 再调多少次也不会再动 —— 这一份夹具因此不看运气。
-        簿.due_escalations(now_ms=T0)
-        急停 = 簿.raise_alert(kind="estop_pressed", robot=狗, title="急停被按下",
-                             detail="现场有人按了急停,松开之前谁也开不走",
-                             now_ms=T0)
-        # 三、同一个 kind 报两次 —— 聚合窗口内合成一条,count=2,而且
-        # first_ms 跟 last_ms 是两个不同的数(手拼的夹具最容易把它们写成
-        # 同一个,于是 Dart 那头把两个键读串了也没人发现)。
-        落差 = 簿.raise_alert(kind="bundle_lag", robot=狗,
-                             title="任务包落好了但没生效",
-                             detail="盘上有 site-kl-4,current 还指着旧的",
-                             now_ms=T0 - 10 * 60_000)
-        簿.raise_alert(kind="bundle_lag", robot=狗, title="任务包落好了但没生效",
-                       detail="盘上有 site-kl-4,current 还指着旧的",
-                       now_ms=T0 - 2 * 60_000)
-        簿.raise_alert(kind="run_done", robot=狗, title="这一趟跑完了",
-                       detail="12 个点全过了,照片都归了档", now_ms=T0)
-        # 确认和解决走的是真路由,不是簿子上的方法:那两条路由自己还管着
-        # "确认必须记名"和"解决不许冒充确认",形状是它们定的。
-        assert status(s, _告警路径(急停.key, "ack"), method="POST",
-                      payload={"who": "老王"}) == 200
-        assert status(s, _告警路径(落差.key, "resolve"), method="POST",
-                      payload={"who": "小李"}) == 200
-        份 = get_json(s, "/api/alerts/all")
-        assert len(份["alerts"]) == 4, f"多出来的那条是哪儿来的: {份}"
-        按种 = {a["kind"]: a for a in 份["alerts"]}
-        assert 按种["fallen"]["escalated"] == 2
-        assert 按种["fallen"]["channel"] == "sound"
-        assert 按种["estop_pressed"]["acked_ms"] == T0
-        assert 按种["bundle_lag"]["count"] == 2
-        assert 按种["bundle_lag"]["resolved_ms"] == T0
-        assert 按种["run_done"]["acked_ms"] is None
-        对("alerts", 份)
-
-
-def test_夹具_值守汇总(bridge, tmp_path, monkeypatch):
-    """``GET /api/watch/summary`` 那一份(``app/watch.py`` 的六项)。
-
-    **每一项都摆非缺省值。** 全走默认的那一份里,``clock_skew_s`` 是
-    ``null``、``battery_pct`` 是 ``null``、``bundle_lag`` 是空列表、``mirror``
-    是 ``null`` —— 那样一份夹具能证明的只有"这几个键存在",证明不了 Dart 那头
-    把它们**解析对了**:``mirror`` 那个嵌套对象、``bundle_lag`` 那个字符串
-    列表、``detail`` 那个字符串字典,一个都没被真的走过。所以这一份把能摆出
-    非空的都摆上:盘 0.83、电量 36.0、钟偏 12.5 秒、盘上一个没生效的槽、一块
-    落后一趟的镜像盘。
-
-    **两处机器相关的读数换成定值,理由跟 ``test_夹具_盘况`` 那条一样。**
-
-    * ``_disk`` —— 不换的话夹具记的是生成它那台机器上 D 盘的水位。
-    * ``engine/backup._free_bytes`` —— ``plan_sync`` 拿镜像盘的剩余空间判
-      ``full``,而这里的"镜像盘"是临时目录,量到的是跑测试这台机器的真盘。
-      不换的话,一台快满的机器上生成出来的 ``mirror.full`` 是 ``true``,别人
-      机器上是 ``false``,而这条差别跟被测的那份形状毫无关系。
-
-    **``alerts_open`` 那一格是要轮询到位的,不是定长 sleep 等一等的。**
-    下面那个 ``time.sleep(0.05)`` 是**轮询的间隔**,不是"等 0.05 秒就该好了"
-    —— 退出条件是真实状态(电量到了、两条告警都在了),外加 20 秒硬上限兜底。
-    盘水位摆成 0.83 就
-    过了 ``disk_80`` 的报警线,盘上那个没生效的槽也会招来一条 ``bundle_lag``
-    —— 这两条**是这份局面的正确后果,不是污染**:同一份事实喂给值守屏和喂给
-    告警簿,本来就该同时出现在两处。但它们由租约看门狗那条协程隔半秒才量一
-    次,所以要轮询到"这两条都在了"再取这一屏,取早了签进去的是 ``0``,而
-    ``0`` 会在别人机器上稳定地红。电量同理:那是个推过来的事件。
-    """
-    import d1max_agent.engine.backup as _backup_mod
-    import d1max_patrol.app.server as _server_mod
-    monkeypatch.setattr(_server_mod, "_disk",
-                        lambda _path: (830_000_000_000, 1_000_000_000_000))
-    monkeypatch.setattr(_backup_mod, "_free_bytes",
-                        lambda _mount: 500_000_000_000)
-    包 = 摆包(tmp_path / "bundles", ["site-kl-3", "site-kl-4"],
-             current="site-kl-3")
-    盘架 = _盘架()
-    ctx = make_ctx(bridge, tmp_path, removable=盘架, clock=lambda: T0,
-                   # 本机钟比参照快 12.5 秒。**这个数够不着报警线**
-                   # (``CLOCK_SKEW_ALARM_S`` 是 60 秒),所以它只让屏上那一格
-                   # 有个真数,不会再多招一条 clock_skew 告警把下面那个
-                   # alerts_open 的等法搅浑。
-                   time_reference=lambda: (T0 - 12_500, "ntp"),
-                   bundles_root=包)
-    # 一趟没同步过去的归档 —— 镜像盘那一格的 behind 才会是 1 而不是 0。
-    摆一趟(ctx.runs_root, "巡逻", "20250904T000000Z")
-    盘架.disks = (摆镜像盘(ctx, tmp_path, "mirror",
-                          last_sync_ms=T0 - 3_600_000),)
-    with _起一台(bridge, ctx) as s:
-        ctx.bridge.spawn(lambda: _推(ctx.device, BatteryEvent(36.0)))
-        截止 = time.monotonic() + 20.0
-        while True:
-            份 = get_json(s, "/api/watch/summary")
-            if 份["battery_pct"] == 36.0 and 份["alerts_open"] == 2:
-                break
-            assert time.monotonic() < 截止, f"这一屏没安定下来: {份}"
-            time.sleep(0.05)
-        assert 份["disk_used_ratio"] == 0.83, "值域是 0-1,不是 0-100"
-        assert "disk_pct" not in 份, "旧键长回来了"
-        assert 份["clock_skew_s"] == 12.5
-        assert 份["bundle_lag"] == ["site-kl-4"]
-        assert 份["upload_backlog"] is None, "这一卷恒为 None,不是 0"
-        assert 份["battery_as_of_ms"] == T0
-        assert 份["mirror"]["behind"] == 1
-        assert 份["mirror"]["full"] is False
-        assert 份["mirror"]["last_sync_ms"] == T0 - 3_600_000
-        # 4153 = 4096 + 57:前者是 ``摆一趟()`` 默认的 ``size``(那张 a.jpg),
-        # 后者是它那份 ``manifest.json`` 的 UTF-8 字节数(``{"mission":
-        # {"name": "巡逻"}, "summary": {"photos": 1}}``,"巡逻"两个字各三字节)。
-        # **钉这一条不是怕跨平台漂**:a.jpg 走的是 ``write_bytes``,而
-        # ``json.dumps`` 不带 ``indent``,产出里一个换行符都没有,
-        # ``newline=None`` 也就没有字符可翻译 —— 这个数跟平台无关。
-        # 钉它是因为 ``摆一趟()`` 是**别的测试也在用的共享助手**:谁改了它的
-        # 默认大小、或者往 manifest 里多塞一个键,这份夹具就跟着变,而那时候
-        # 红的是下面 ``对()`` 的整份比对(读起来是"上线形状变了"),看的人会
-        # 去查协议改了什么 —— 协议其实一个字没动。这一条把误诊挡在源头。
-        assert 份["mirror"]["behind_bytes"] == 4153, "摆一趟() 摆的那两个文件变了"
-        对("watch_summary", 份)

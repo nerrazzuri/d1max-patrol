@@ -34,7 +34,7 @@ def _collect(tmp_path) -> dict[str, object]:
 
     from d1max_site.incidents import IncidentDesk
     from d1max_site.scheduler import SiteScheduler
-    s = 站(tmp_path)
+    s = 站(tmp_path, alerts=True)
     try:
         s.api.scheduler = SiteScheduler(s.db, s.disp, now_ms=wall)
         s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=wall)
@@ -55,7 +55,43 @@ def _collect(tmp_path) -> dict[str, object]:
         s.api.incidents.add_source("nvr")
         s.loop.call(lambda: s.api.incidents.handle("nvr", {"event_id": "e1",
                                                            "type": "intrusion", "zone": "yard"}))
+        # W00c5a:告警与值守。狗急停 → 站点出 P1,SSE 推一帧,保安确认。
+        s.loop.call(lambda: s.dog.emergency_stop(True))
+
+        def _alert_frame():
+            f = sub.get(1.0)
+            return f if f and f["kind"] == "alert" and f["alert"]["kind"] == "estop_pressed" \
+                else None
+        alert_frame = _等(_alert_frame)
+        alerts = _等(lambda: (lambda d: d if any(a["kind"] == "estop_pressed"
+                                                  for a in d["alerts"]) else None)(
+            s.req("GET", "/api/alerts", token=tok)[1]))
+        from urllib.parse import quote
+        estop = next(a for a in alerts["alerts"] if a["kind"] == "estop_pressed")
+        key = quote(estop["key"], safe="")
+        ack = s.req("POST", f"/api/alerts/{key}/ack", {}, token=tok)[1]
+        # 交接班那一张(?all=1)要同时有:没人管且升到顶的、有人确认的、聚合两次且已解决的。
+        def _seed():
+            async def go():
+                b = s.desk.book
+                b.raise_alert(kind="fallen", robot="A", title="狗跌倒了",
+                              now_ms=wall() - 6 * 60_000)
+                b.due_escalations(now_ms=wall())
+                b.raise_alert(kind="clock_skew", robot="A", title="狗的钟不准",
+                              now_ms=wall() - 60_000)
+                lag = b.raise_alert(kind="clock_skew", robot="A", title="狗的钟不准",
+                                    now_ms=wall())
+                b.resolve(lag.key, who="alice", now_ms=wall())
+            return go()
+        s.loop.call(_seed)
+        alerts_all = s.req("GET", "/api/alerts?all=1", token=tok)[1]
+        _等(lambda: s.disp.telemetry_at.get("A"))
         return {
+            "site_alerts": alerts,
+            "site_alert_frame": alert_frame,
+            "site_alert_ack": ack,
+            "site_alerts_all": alerts_all,
+            "site_watch_summary": s.req("GET", "/api/watch/summary", token=tok)[1],
             "site_login": login,
             "site_robots": s.req("GET", "/api/robots", token=tok)[1],
             "site_robot": s.req("GET", "/api/robots/A", token=tok)[1],

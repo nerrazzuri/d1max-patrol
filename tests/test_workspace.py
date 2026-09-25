@@ -83,6 +83,24 @@ def test_别名壳已删_全仓不再有旧名字():
                 assert 旧 not in f.read_text(encoding="utf-8", errors="replace"), f
 
 
+def test_狗上的告警与值守已删_全仓不再有旧名字():
+    """W00c5a 决定一 A(决策 8:业务信息不留在狗上):告警簿整个搬去站点
+    (``d1max_site.alerts``),狗上老服务的告警来源、值守汇总和那几条路由一起
+    删了。旧名字再出现就是有人照着老代码抄;站点包自己的同名路由不在扫描范围里。"""
+    import pytest
+    for mod in ("d1max_patrol.app." + "alert_sources", "d1max_patrol.app." + "watch",
+                "d1max_agent.engine." + "alerts"):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(mod)
+    旧 = ("d1max_agent.engine." + "alerts", "/api/watch/" + "summary")
+    for base in (ROOT / "src", PKGS / "robot-agent", ROOT / "tests"):
+        for f in base.rglob("*"):
+            if f.suffix in (".py", ".js", ".html", ".sh", ".service", ".toml") and f.is_file():
+                正文 = f.read_text(encoding="utf-8", errors="replace")
+                for s in 旧:
+                    assert s not in 正文, (f, s)
+
+
 def test_搬走的engine里没有旧包名():
     src = PKGS / "robot-agent" / "src" / "d1max_agent" / "engine"
     for py in src.glob("*.py"):

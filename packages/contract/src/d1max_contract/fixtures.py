@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from d1max_contract.geometry import Pose
+from d1max_contract.hal import Fault
 from d1max_contract.messages import (
     Ack,
     AckResult,
@@ -27,6 +28,7 @@ from d1max_contract.messages import (
     TaskState,
     TaskSummary,
     Telemetry,
+    fault_event_data,
 )
 from d1max_contract.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_contract.registration import Registration
@@ -62,6 +64,10 @@ def generate() -> dict[str, dict[str, Any]]:
             kind="patrol_waypoint",
             data={"task_id": "task-0005", "index": 0, "name": "gate", "ok": True,
                   "note": ""}).to_wire(),
+        "event_robot_fault": Event(
+            event_id="evt-b1-000013", seq=13, boot_id="boot-b1", stamp=1_760_000_131_000,
+            kind="robot_fault",
+            data=fault_event_data((Fault(code="7", fatal=True, text="左前腿过流"),))).to_wire(),
         "command_abort": Command(
             command_id="cmd-0002", task_id="task-0001", kind="abort",
             issued_at=1_760_000_010_000, expires_at=1_760_000_070_000, control_epoch=3,

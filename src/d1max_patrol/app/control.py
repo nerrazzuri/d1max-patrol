@@ -7,7 +7,7 @@
    token 指纹"交给 ``LeaseBook.keep_only``。
 2. **哪几条接口要控制权。** 判据是 §3.5 规则 4: "我能改变它正在做什么",
    不是"我能动它"。只读永远不要(规则 1), 急停永远不要(规则 2)。
-3. **把审计增量地推给事件流。** 值守屏和第 8 卷的告警都从那条流上读。
+3. **把审计增量地推给事件流。** 页面和手机都从那条流上读。
 
 **两个钟并存, 不许混。** 这个模块所有 ``now_ms`` 都是**墙上钟 UTC 毫秒**
 (``AppContext.clock``), 由调用方读一次传进来 —— 不是单调钟。理由是租约的
@@ -86,20 +86,6 @@ CONTROLLED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/api/run/(pause|resume|abort|suspend)$")),
     ("POST", re.compile(r"^/api/maps/load$")),
     ("POST", re.compile(r"^/api/pose/(initial|reset)$")),
-    # 告警的记名确认/解决(§5.3)。**这两条是这张表上唯一不让狗动腿的行**,
-    # 所以理由要说准: ``ack`` 会把 P1 的升级链停下来 —— 匿名的任何一个人
-    # 都能把声音关掉, 那条升级链就白做了; ``resolve`` 会把一条告警从值守
-    # 屏的主表上拿掉, 那是"这件事我处理完了"的签字。两条都是**记名的处置
-    # 动作**, 判据仍是 §3.5 规则 4 的那一句: 它改变的是这只狗接下来会不会
-    # 有人管。读那两张表(``GET /api/alerts``、``/api/alerts/all``)照旧不
-    # 要控制权 —— 规则 1, 看永远不要。
-    #
-    # ``.+`` 跨斜杠是有意的: 告警键形如 ``robot/kind#seq``, 键本身带斜杠
-    # (见 ``engine/alerts.py`` 的 ``_key``)。结尾的 ``$`` 也是必须的 ——
-    # ``needs_lease`` 用的是 ``re.Pattern.match``, 只锚开头不锚结尾, 少一个
-    # ``$`` 就会把 ``/api/alerts/x/ack/随便什么`` 也算成要控制权。
-    ("POST", re.compile(r"^/api/alerts/.+/ack$")),
-    ("POST", re.compile(r"^/api/alerts/.+/resolve$")),
 )
 
 

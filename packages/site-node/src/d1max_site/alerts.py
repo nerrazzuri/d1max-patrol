@@ -1,7 +1,6 @@
-"""**借住**:总设计 §5 把这个模块归站点(site-node),W00c 搬走;W00b 只是随 engine/ 整棵进了
-robot-agent,内容未改。
-
-告警的事实与三级判定(§5.2)。
+"""告警的事实与三级判定(§5.2)。W00c5a 从狗上(robot-agent 的 ``engine/``)整个搬到站点:
+总设计 §5 归站点,决策 8「信息都在服务器上」。判级表、聚合、升级规则原样;持久化从狗上的
+jsonl 换成站点库(``sink`` 写穿、``restore`` 读回,见 ``d1max_site.alert_store``)。
 
 **判据不是"有多严重",是"人的动作有什么不同"。** P1 要人立刻动身、P2 要人
 今天之内处理、P3 只记录。两个 kind 如果会让人做同一件事,那它们就是同一
@@ -10,7 +9,7 @@ robot-agent,内容未改。
 **这是纯状态机。** 不碰 IO、不认识 ``app/``,时间一律由调用方以 ``now_ms``
 传入(§8.5 第 2 条:时间必须可注入,绝不 ``sleep``/``datetime.now()``)。
 调用方是谁 —— 事件从哪来、什么时候升级提醒谁 —— 都不是这个模块的事;
-那些是 ``app/alert_sources.py``(任务 6)和确认/升级状态机(任务 5)的事。
+那些是 ``d1max_site.alert_sources``(站点从 MQTT 的事实里判)与 ``alert_store`` 的事。
 
 **聚合键是 ``robot/kind``。** 这是 §5.4 聚合的全部机制:同一只狗同一个类型
 就是同一条告警,``count`` 累加、``last_ms`` 前移;``robot`` 在键里,就是
@@ -21,11 +20,9 @@ robot-agent,内容未改。
 
 from __future__ import annotations
 
-import json
-import os
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 
@@ -91,6 +88,9 @@ LEVEL_OF: dict[str, Level] = {
     # 簿子按 robot/kind 聚合,同一个 kind 的话两条协程各死一次会合成一条、后死
     # 的把先死的诊断盖掉。处置同样只有"重启服务"。
     "schedule_died": Level.P1,
+    # 狗掉线(W00c5a,站点才看得见这件事)。**跑着任务时掉线是 P1**:狗可能停在半路、也可能按断线
+    # 策略还在自己走,人得去看;空闲时掉线是 P2:今天之内查网络就行。两件事人要做的不一样,分两个 kind。
+    "robot_offline": Level.P1,
     # P2:今天之内处理。不影响这一趟巡检能不能跑完,但拖久了会变成 P1
     # (盘满了继续拖,就会变成没法记录;上传积压继续拖,数据就旧到没用)。
     "finding": Level.P2,
@@ -98,6 +98,7 @@ LEVEL_OF: dict[str, Level] = {
     "upload_backlog": Level.P2,
     "bundle_lag": Level.P2,
     "clock_skew": Level.P2,
+    "robot_offline_idle": Level.P2,
     # P3:只记录。日常的正常事件,不需要谁去处理什么。
     "run_done": Level.P3,
     "run_start": Level.P3,
@@ -206,7 +207,7 @@ class AlertBook:
         self,
         *,
         window_ms: int = AGGREGATE_WINDOW_MS,
-        spool: Path | None = None,
+        sink: Callable[[Alert], None] | None = None,
         keep_closed: int = 200,
     ) -> None:
         self._window_ms = window_ms
@@ -218,33 +219,28 @@ class AlertBook:
         #: 每个 ``robot/kind`` 已经发出过的序号计数,只增不减,保证
         #: ``#seq`` 不会跟已经存在过的(哪怕已解决)撞上。
         self._seq: dict[str, int] = {}
-        #: 盘上那一份。**spec §4.3 第 1 级("告警",永不让路)要有一个真的文件**
-        #: 才能入上传队列 —— 只在内存里的话,``classify("alerts.jsonl")`` 永远
-        #: 匹配不到任何东西,第 1 级就是一句空话。
-        #:
-        #: ``None`` 时这个类的行为跟加这个参数之前**一模一样**:不写盘,也不
-        #: 修剪。已有的调用点一个都不用改。
-        self._spool = Path(spool) if spool is not None else None
-        if self._spool is not None:
-            self._spool.parent.mkdir(parents=True, exist_ok=True)
-        #: 修剪时内存里保留多少条已解决的(挂账 75)。剪掉的盘上一条不少。
+        #: 每一次变化(新起、吸收、确认、解决、升级)都交给它一份最新的 ``Alert``。站点把它
+        #: 接到库上(写穿)。``None`` 时只在内存里,也不修剪 —— 那时内存是唯一的一份。
+        self._sink = sink
+        #: 修剪时内存里保留多少条已解决的(挂账 75)。剪掉的库里一条不少。
         self._keep_closed = keep_closed
 
-    @property
-    def spool_path(self) -> Path | None:
-        return self._spool
+    def restore(self, alerts: Iterable[Alert]) -> None:
+        """站点重启:把库里的告警读回来。未解决、未确认的那条重新当作「正在吸收」的那条;
+        序号从每个 ``robot/kind`` 见过的最大号往后走,不撞号。只在开张时调一次。"""
+        for a in sorted(alerts, key=lambda a: (a.first_ms, a.key)):
+            self._by_key[a.key] = a
+            group = f"{a.robot}/{a.kind}"
+            seq = int(a.key.rsplit("#", 1)[1]) if "#" in a.key else 0
+            self._seq[group] = max(self._seq.get(group, 0), seq)
+            if a.resolved_ms is None and a.acked_ms is None:
+                cur = self._by_key.get(self._active.get(group, ""))
+                if cur is None or cur.last_ms <= a.last_ms:
+                    self._active[group] = a.key
 
     def _spill(self, alert: Alert) -> None:
-        """把这一拍的事实追加到盘上。**盘上是事件流,不是当前状态** ——
-        count 从 1 变成 2、被谁确认了、什么时候解决的,每一拍都留一行。
-        服务器那边按 ``key`` 归堆,最后一行就是最新状态。
-        """
-        if self._spool is None:
-            return
-        with open(self._spool, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(alert.to_wire(), ensure_ascii=False) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
+        if self._sink is not None:
+            self._sink(alert)
 
     def raise_alert(
         self,
@@ -390,17 +386,16 @@ class AlertBook:
     def trim(self) -> int:
         """把内存里多余的已解决告警放掉。返回清掉的条数。
 
-        **挂账 75 的解。** 第 8 卷推这条账时说"修剪策略取决于第 9 卷把告警
-        存哪儿,所以现在别定"。现在定了:存盘上。于是修剪不再是丢数据 ——
-        盘上一条不少,只是不再在内存里拿着。
+        **挂账 75 的解。** 告警存在站点库里(``sink``),修剪不是丢数据 —— 库里一条不少,
+        只是不再在内存里拿着。
 
-        **没有 spool 就不剪。** 那种情况下内存是唯一的一份,剪了就真丢了。
+        **没有 sink 就不剪。** 那种情况下内存是唯一的一份,剪了就真丢了。
 
         ``_seq`` 不跟着剪:它记的是"这个 robot/kind 发过几号",剪掉内存里的
         条目之后下一条的号还得往后走 —— 撞号会让服务器把两条不同的告警
         当成同一条。它每个 ``robot/kind`` 只占一个整数,不是挂账 75 说的那种增长。
         """
-        if self._spool is None:
+        if self._sink is None:
             return 0
         closed = [a for a in self._by_key.values() if a.resolved_ms is not None]
         if len(closed) <= self._keep_closed:

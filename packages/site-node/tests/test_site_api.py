@@ -39,7 +39,7 @@ def target(x: float) -> dict:
 
 
 class 站:
-    def __init__(self, tmp_path) -> None:
+    def __init__(self, tmp_path, *, alerts: bool = False) -> None:
         self.loop = LoopThread()
         self.loop.start()
         self.db = SiteDB(tmp_path / "site.db")
@@ -63,11 +63,18 @@ class 站:
                                       store_dir=tmp_path / "agent", now_ms=wall,
                                       loaded_map=MAP, home=Pose.from_xy_yaw(0.0, 0.0))
             await self.agent.start()
+            self.desk = self.sources = None
+            if alerts:                      # W00c5a:告警台挂上派遣器
+                from d1max_site.alert_sources import SiteAlertSources
+                from d1max_site.alert_store import AlertDesk
+                self.desk = AlertDesk(self.db, now_ms=wall, publish=self.disp.feed.publish)
+                self.sources = SiteAlertSources(self.desk, now_ms=wall)
+                self.sources.attach(self.disp)
             self.driver = asyncio.ensure_future(self._drive())
 
         self.loop.call(build)
         self.api = SiteApi(host="127.0.0.1", port=0, loop=self.loop, dispatcher=self.disp,
-                           accounts=self.accounts)
+                           accounts=self.accounts, alerts=self.desk)
         self.api.start()
 
     async def _drive(self) -> None:

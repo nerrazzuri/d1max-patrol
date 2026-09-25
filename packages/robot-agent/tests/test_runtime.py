@@ -413,3 +413,39 @@ async def test_控制权不可释放的HAL_收尾不去放_其余照做(台子, 
     await rt.close()
     assert calls == [] and stops, "停照发,控制权不碰"
     assert (await r.health()).link_ok is False
+
+
+async def test_HAL故障集合变了才发robot_fault_消了发空列表(台子):
+    """W00c5a:狗只报故障事实,判定(跌倒、急停……)在站点。同一组故障每拍都在,只在变的那一拍发。"""
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+    await rt.step(0.1)
+    await broker.drain()
+    faults = lambda: [d for d in ears.by_topic.get("event", []) if d["kind"] == "robot_fault"]  # noqa: E731
+    assert faults() == []
+    r.inject_fault("7", True, "左前腿过流")
+    for _ in range(3):
+        await rt.step(0.1)
+    await broker.drain()
+    assert [f["data"] for f in faults()] == [
+        {"faults": [{"code": "7", "fatal": True, "text": "左前腿过流"}]}]
+    r.clear_faults()
+    await rt.step(0.1)
+    await rt.step(0.1)
+    await broker.drain()
+    assert [f["data"] for f in faults()][1:] == [{"faults": []}]
+
+
+async def test_HAL没有故障接口_不发也不炸(台子, monkeypatch):
+    from d1max_contract.hal import HalUnsupported
+
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+
+    async def 不支持():
+        raise HalUnsupported("没有")
+    monkeypatch.setattr(r, "faults", 不支持)
+    await rt.step(0.1)
+    await rt.step(0.1)
+    await broker.drain()
+    assert not [d for d in ears.by_topic.get("event", []) if d["kind"] == "robot_fault"]

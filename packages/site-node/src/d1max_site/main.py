@@ -299,16 +299,23 @@ class Server:
         self.standby = StandbyManager(self.db, self.dispatcher, now_ms=wall_ms)
         from d1max_site.incidents import IncidentDesk
         self.incidents = IncidentDesk(self.db, self.dispatcher, now_ms=wall_ms)
+        # W00c5a:告警台挂上派遣器(状态、事件、遥测),经 SSE 推给值守屏。
+        from d1max_site.alert_sources import SiteAlertSources
+        from d1max_site.alert_store import AlertDesk
+        self.alerts = AlertDesk(self.db, now_ms=wall_ms, publish=self.dispatcher.feed.publish)
+        self.alert_sources = SiteAlertSources(self.alerts, now_ms=wall_ms)
+        self.alert_sources.attach(self.dispatcher)
         self.api = SiteApi(host=api_host, port=api_port, loop=self.loop,
                            dispatcher=self.dispatcher, accounts=self.accounts, tls=tls,
                            scheduler=self.scheduler, standby=self.standby,
-                           incidents=self.incidents, now_ms=wall_ms)
+                           incidents=self.incidents, alerts=self.alerts, now_ms=wall_ms)
         self._stop = threading.Event()
 
     def start(self) -> None:
         self.loop.call(self.dispatcher.start, timeout_s=30)
         self.loop.submit(self._sync_loop)
         self.loop.submit(self._schedule_loop)
+        self.loop.submit(self._alert_loop)
         self.api.start()
 
     async def _schedule_loop(self) -> None:
@@ -323,6 +330,17 @@ class Server:
             except Exception as exc:
                 self.scheduler.last_error = f"{type(exc).__name__}: {exc}"
                 log.exception("排程这一拍没办成")
+            self.alert_sources.on_site_error("schedule", self.scheduler.last_error)
+
+    async def _alert_loop(self) -> None:
+        """告警:每几秒看一次掉线、让 P1 未确认的升档。一拍炸了记下来、下一拍照走。"""
+        from d1max_site.alert_sources import STEP_S
+        while not self._stop.is_set():
+            await asyncio.sleep(STEP_S)
+            try:
+                self.alert_sources.step()
+            except Exception:
+                log.exception("告警这一拍没办成")
 
     async def _sync_loop(self) -> None:
         while not self._stop.is_set():

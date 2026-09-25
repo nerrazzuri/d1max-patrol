@@ -1,4 +1,8 @@
-"""租约到期 -> 就地停下 + 升 P1,**绝不自动续跑**(§5.8)。
+"""租约到期 -> 就地停下 + 记一条 ERROR,**绝不自动续跑**(§5.8)。
+
+原来那条是告警簿上的 P1(``lease_expired``);狗上不再记告警(决策 8),这条
+通知随 W00c5c 在站点重建。这一份钉的是**处置本身**(停腿、不续跑、判据),外加
+那一行日志:它现在是狗上唯一的痕迹。
 
 ``LeaseBook`` 是惰性结算的:没人问它,那 30 秒就"还没过去"。而 §5.8 要的
 恰恰是**没人在的时候**它自己动作 —— 所以必须有一条协程主动去问。这一份
@@ -16,22 +20,16 @@
 from __future__ import annotations
 
 import contextlib
-import itertools
 import json
+import logging
 import time
 from urllib.parse import quote
 
 import pytest
 
-from d1max_agent.engine.alerts import Level
 from d1max_agent.engine.lease import LEASE_TTL_MS
 from d1max_agent.engine.machine import RunState
-from d1max_patrol.app.server import (
-    _LEASE_WATCH_PERIOD_S,
-    _WATER_EVERY,
-    AppServer,
-    _该量水位了,
-)
+from d1max_patrol.app.server import _LEASE_WATCH_PERIOD_S, AppServer
 from d1max_patrol.app.teleop import Teleop
 from tests.app.conftest import make_ctx, request
 
@@ -90,6 +88,12 @@ class 假墙钟:
 @pytest.fixture
 def 墙钟() -> 假墙钟:
     return 假墙钟()
+
+
+@pytest.fixture(autouse=True)
+def _收日志(caplog):
+    """原来的 P1 现在是 ``server`` 那个 logger 上的 ERROR,这一份靠它断言。"""
+    caplog.set_level(logging.WARNING, logger="d1max_patrol.app.server")
 
 
 @pytest.fixture
@@ -181,25 +185,32 @@ def 看门狗看过一眼(srv: AppServer) -> None:
     assert 等到(lambda: srv.hub._lease_cursor > 0), "看门狗一拍都没醒"
 
 
-def 到期告警(srv: AppServer) -> list:
-    """簿子里的 ``lease_expired``。
+def 记录(caplog, kind: str) -> list[logging.LogRecord]:
+    """日志里以 ``[kind]`` 开头的那几条(``server`` 那个 logger)。
 
-    **按 kind 挑,不是整份比对。** 这台机器的盘水位可能本来就过 80%,那时
-    候簿子里会多一条完全正确的 ``disk_80`` P2(见 ``AlertSources.on_tick``)
-    —— 那是环境,不是这一组要测的事。
-
-    **但"挑"会把守卫挖松:多报出来的第三种告警从此没人看得见。** 所以
-    ``test_租约到期狗停下来并升P1`` 里另有一句整份比对
-    (``... - {"disk_80"} == {"lease_expired"}``)—— 环境那一条按名字扣掉,
-    剩下的必须一条不多。挑 kind 只用在"等它出现"和"数 count"的地方。
+    **按 kind 挑。** 但"挑"会把守卫挖松:多出来的别的 ERROR 从此没人看得见,
+    所以 ``test_租约到期狗停下来并记一条ERROR`` 里另有一句整份比对。
     """
-    return [a for a in srv.alerts.open() if a.kind == "lease_expired"]
+    return [r for r in caplog.records
+            if r.name == "d1max_patrol.app.server"
+            and r.getMessage().startswith(f"[{kind}]")]
+
+
+def 到期记录(caplog) -> list[logging.LogRecord]:
+    return 记录(caplog, "lease_expired")
+
+
+def 标题正文(r: logging.LogRecord) -> tuple[str, str]:
+    """``[kind] 标题:正文`` 那一行的两段。格式见 ``server._lease_gone``:
+    ``args`` 就是 ``(标题, 正文)``,不从拼好的字符串里切。"""
+    标题, 正文 = r.args  # type: ignore[misc]
+    return str(标题), str(正文)
 
 
 # ------------------------------------------------------------------ 正题
 
 
-def test_租约到期狗停下来并升P1(服务器夹具, 墙钟):
+def test_租约到期狗停下来并记一条ERROR(服务器夹具, 墙钟, caplog):
     srv = 服务器夹具
     token = 拿到租约(srv, operator="老王")
     开始遥控(srv, token)
@@ -208,14 +219,13 @@ def test_租约到期狗停下来并升P1(服务器夹具, 墙钟):
     墙钟.前进(LEASE_TTL_MS + 1)
     assert 等到(lambda: srv.ctx.teleop.active is False), "TTL 过了,狗还在遥控档上"
 
-    a = 到期告警(srv)
-    assert a[0].level is Level.P1
-    # 整份比对(见 ``到期告警`` 的 docstring):``disk_80`` 是这台机器的盘况,
-    # 按名字扣掉;除此之外多出来任何一条,这里都得红。
-    assert {x.kind for x in srv.alerts.open()} - {"disk_80"} == {"lease_expired"}
+    assert 等到(lambda: 到期记录(caplog)), "TTL 过了,一行 ERROR 都没有"
+    assert 到期记录(caplog)[0].levelno == logging.ERROR
+    # 整份比对(见 ``记录`` 的 docstring):除了这一条,别的 ERROR 一条都不许有。
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == 到期记录(caplog)
 
 
-def test_租约到期绝不自动续跑(服务器夹具, 墙钟):
+def test_租约到期绝不自动续跑(服务器夹具, 墙钟, caplog):
     """§5.8:最后已知状态是人正在接管,那它就不许自己动起来。
 
     "一只狗在最后已知状态是人正在接管的情况下自己动起来,是这套系统里最不
@@ -230,34 +240,33 @@ def test_租约到期绝不自动续跑(服务器夹具, 墙钟):
     assert ctx.engine.state is RunState.SUSPENDED
 
     墙钟.前进(LEASE_TTL_MS + 1)
-    assert 等到(lambda: 到期告警(srv)), "TTL 过了,一条 P1 都没有"
-    # **不是当场看一眼就完。** 告警那一拍和"续跑"那一拍不必是同一拍:看门狗
-    # 先报警、下一拍才 resume,当场断言照样绿。所以往后再守几拍
+    assert 等到(lambda: 到期记录(caplog)), "TTL 过了,一行 ERROR 都没有"
+    # **不是当场看一眼就完。** 记日志那一拍和"续跑"那一拍不必是同一拍:看门狗
+    # 先记、下一拍才 resume,当场断言照样绿。所以往后再守几拍
     # (见 :data:`守望窗口` —— 按周期的倍数写,不写死秒数)。
     assert not 等到(lambda: ctx.engine.state is not RunState.SUSPENDED,
                    最多等=守望窗口), "它自己动起来了"
 
 
-def test_到期只报一条不是每拍一条(服务器夹具, 墙钟):
+def test_到期只报一条不是每拍一条(服务器夹具, 墙钟, caplog):
     """看门狗每 :data:`_LEASE_WATCH_PERIOD_S` 秒醒一次,而事实只发生了一次。
 
-    **断言 ``count``,不只断言条数。** 去重失效时,重复的那些会被 §5.4 的
-    15 分钟聚合窗口收成同一条,``len()`` 照样是 1 —— 只有 ``count`` 说得出
-    到底报了几次。
+    原来重复的那些会被告警簿的聚合窗口收成一条、只在 ``count`` 上露馅;现在
+    没有簿子兜着了,每重报一次就是日志里多一行,直接数条数。
     """
     srv = 服务器夹具
     拿到租约(srv, operator="老王")
     墙钟.前进(LEASE_TTL_MS + 1)
-    assert 等到(lambda: 到期告警(srv))
+    assert 等到(lambda: 到期记录(caplog))
 
     墙钟.前进(int(_LEASE_WATCH_PERIOD_S * 3000))
-    assert not 等到(lambda: 到期告警(srv)[0].count > 1, 最多等=守望窗口), \
-        "每醒一次就报一条 —— 一个根因把真要紧的那条埋了"
-    assert 到期告警(srv)[0].count == 1
+    assert not 等到(lambda: len(到期记录(caplog)) > 1, 最多等=守望窗口), \
+        "每醒一次就记一条 —— 一个根因把真要紧的那条埋了"
+    assert len(到期记录(caplog)) == 1
 
 
-def test_正常释放不报警(服务器夹具):
-    """人自己交回来是正常动作,报 P1 会让人学会无视 P1。
+def test_正常释放不报警(服务器夹具, caplog):
+    """人自己交回来是正常动作,当成失主记一条 ERROR 会让人学会无视它。
 
     **这一条最容易漏。** 看门狗认的是"上一拍还有人握着、这一拍没了",而正常
     释放也是这个形状 —— 只能靠审计流水里 ``released`` / ``expired`` 的区别
@@ -267,16 +276,16 @@ def test_正常释放不报警(服务器夹具):
     token = 拿到租约(srv, operator="老王")
     看门狗看过一眼(srv)                    # 见这个函数自己的 docstring
     释放租约(srv, token)
-    assert not 等到(lambda: 到期告警(srv), 最多等=守望窗口), \
-        "人自己交回来的租约被报成了 P1"
+    assert not 等到(lambda: 到期记录(caplog), 最多等=守望窗口), \
+        "人自己交回来的租约被记成了到期"
 
 
-def test_到期时有人在排队接管_不算没人管(服务器夹具, 墙钟):
+def test_到期时有人在排队接管_不算没人管(服务器夹具, 墙钟, caplog):
     """到期的那一刻正好有人排着队,租约直接交给他 —— 狗没有失主。
 
     ``LeaseBook._settle`` 在这条路径上照样写一条 ``expired`` 审计(前任确实
     到期了),但接下来立刻 ``taken_over`` 给了排队的人。只认审计不看结果的
-    话,一次**正常的接管**会被报成 P1,而 §5.8 说的是"人揣着手机走了"。
+    话,一次**正常的接管**会被当成失主,而 §5.8 说的是"人揣着手机走了"。
     """
     srv = 服务器夹具
     甲 = 拿到租约(srv, operator="老王")
@@ -287,29 +296,8 @@ def test_到期时有人在排队接管_不算没人管(服务器夹具, 墙钟)
     墙钟.前进(LEASE_TTL_MS + 1)
     assert 等到(lambda: srv.control.book.state(now_ms=墙钟()).holder is not None
                 and srv.control.book.state(now_ms=墙钟()).holder.operator == "小李")
-    assert not 等到(lambda: 到期告警(srv), 最多等=守望窗口), \
+    assert not 等到(lambda: 到期记录(caplog), 最多等=守望窗口), \
         "换了个人接着开,不是没人管"
-
-
-def test_接线_周期事实真的会被这条协程带出来(bridge, tmp_path, 墙钟):
-    """三条 P2 周期事实(§5.2)挂在这条协程上,而不是挂在 ``_tick`` 上。
-
-    **用 ``bundle_lag`` 来证,不用 ``disk_80``。** 后者读的是跑测试这台机器
-    的真盘:开发机的盘本来就可能过了 80%,那样这条测试在"接线断了"的时候也
-    是绿的 —— 它证的会是这台机器的盘况,不是接线。任务包这一条只看 tmp 目录
-    里的两个空目录,判据完全在测试自己手里。
-    """
-    包 = tmp_path / "bundles"
-    (包 / "site-kl-1").mkdir(parents=True)      # 落好了,current 一条链都没有
-    ctx = make_ctx(bridge, tmp_path, clock=墙钟, bundles_root=包)
-    srv = AppServer(ctx, port=0, pin=PIN)
-    srv.start()
-    try:
-        assert 等到(lambda: [a for a in srv.alerts.open()
-                            if a.kind == "bundle_lag"]), \
-            "看门狗没把 on_tick 带上,盘上的滞后没人看得见"
-    finally:
-        srv.stop()
 
 
 def test_看门狗是独立的一条协程(服务器夹具):
@@ -353,7 +341,7 @@ def test_人揣着手机走了_遥控停下而且任务不自己接着跑(服务
                    最多等=守望窗口), "停完腿之后把任务交还着跑起来了"
 
 
-def test_到期告警不许在让开腿的时候承诺它会自己跑完(服务器夹具, 墙钟):
+def test_到期告警不许在让开腿的时候承诺它会自己跑完(服务器夹具, 墙钟, caplog):
     """**第二种假话:反过来的那一种。**
 
     局面是"取控制权 → 起一趟 → 按暂停接管 → 人走开 → TTL 到期",跟上面那条
@@ -390,35 +378,35 @@ def test_到期告警不许在让开腿的时候承诺它会自己跑完(服务�
     assert ctx.engine.yielding is True, "腿没让开,这就不是要打的那一格了"
 
     墙钟.前进(LEASE_TTL_MS + 1)
-    assert 等到(lambda: 到期告警(srv)), "TTL 过了,一条 P1 都没有"
-    a = 到期告警(srv)[0]
-    话 = a.title + a.detail
+    assert 等到(lambda: 到期记录(caplog)), "TTL 过了,一行 ERROR 都没有"
+    title, detail = 标题正文(到期记录(caplog)[0])
+    话 = title + detail
     # 不许说"它会自己接着跑"。这两句是"引擎在跑、腿没让开"那一格的原话,
     # 落到这一格上就是假话 —— 变异回去的话正是它们冒出来。
     for 假话 in ("会自己接着走", "把这趟跑完"):
         assert 假话 not in 话, (
-            f"腿已经让开了,这条告警却承诺「{假话}」—— 人会就这么走掉,"
-            f"这一趟从此挂死。title={a.title!r} detail={a.detail!r}")
+            f"腿已经让开了,这条记录却承诺「{假话}」—— 人会就这么走掉,"
+            f"这一趟从此挂死。title={title!r} detail={detail!r}")
     # **spec §5.8 那两句承诺必须还在。** "人接管完,手机往兜里一揣走了,
     # TTL 到期" 写的就是这一格,它的结论是"停在原地 + 升 P1。绝不自动续跑"
     # —— 在这一格里这两句都是真话(teleop.stop() 发了零速,引擎挂在
     # SUSPENDED 上不发运动指令,链路上没有 resume)。钉住它们,是防止以后
     # 有人把这一格整个换成"任务还在跑"那一格的说法。
-    assert "停在原地" in 话, f"§5.8 的「停在原地」丢了。title={a.title!r}"
-    assert "没有自动续跑" in a.detail, f"§5.8 的「绝不自动续跑」丢了:{a.detail!r}"
+    assert "停在原地" in 话, f"§5.8 的「停在原地」丢了。title={title!r}"
+    assert "没有自动续跑" in detail, f"§5.8 的「绝不自动续跑」丢了:{detail!r}"
     # 光把 §5.8 说全了还不够 —— 它没说"这趟还挂着"。得说出来:
     # 还挂着、要回来、回来之后二选一。
-    assert "挂" in a.title, a.title
-    assert "没跑完" in a.detail or "既没跑完" in a.detail, a.detail
-    assert "中止" in a.detail, a.detail
-    assert "继续" in a.detail, a.detail
-    assert "控制权" in a.detail, a.detail
+    assert "挂" in title, title
+    assert "没跑完" in detail or "既没跑完" in detail, detail
+    assert "中止" in detail, detail
+    assert "继续" in detail, detail
+    assert "控制权" in detail, detail
     # 在哪一档要摆出来,跟另外两格一个待遇。
-    assert ctx.engine.snapshot.state.value in a.detail, a.detail
+    assert ctx.engine.snapshot.state.value in detail, detail
 
 
-def test_到期告警不许在任务还在跑的时候说狗停了(服务器夹具, 墙钟):
-    """**这条告警原来会说一句会伤人的假话。**
+def test_到期告警不许在任务还在跑的时候说狗停了(服务器夹具, 墙钟, caplog):
+    """**这条告警原来会说一句会伤人的假话。**(现在它是一行 ERROR,文案原样。)
 
     ``_lease_gone`` 实际动作只有一句 ``teleop.stop()`` —— **只停遥控那一档,
     不停引擎正在跑的那趟任务**。而"取控制权 → 起一趟巡检 → 人走开 → TTL
@@ -441,26 +429,26 @@ def test_到期告警不许在任务还在跑的时候说狗停了(服务器夹�
         "任务都没起来,下面断的「还在跑的时候怎么说」是空的"
 
     墙钟.前进(LEASE_TTL_MS + 1)
-    assert 等到(lambda: 到期告警(srv)), "TTL 过了,一条 P1 都没有"
-    a = 到期告警(srv)[0]
-    话 = a.title + a.detail
+    assert 等到(lambda: 到期记录(caplog)), "TTL 过了,一行 ERROR 都没有"
+    title, detail = 标题正文(到期记录(caplog)[0])
+    话 = title + detail
     # 钉的是原来那套单一文案的两句原话("狗已停在原地" / "已经停下"),
     # 不是泛泛地禁"停"这个字 —— 正文里要劝人"回来把它停下来",那也带"停"。
     for 假话 in ("狗已停在原地", "已经停下"):
         assert 假话 not in 话, (
-            f"任务还在跑,这条告警却说「{假话}」—— 现场的人会照着它走过去。"
-            f"title={a.title!r} detail={a.detail!r}")
+            f"任务还在跑,这条记录却说「{假话}」—— 现场的人会照着它走过去。"
+            f"title={title!r} detail={detail!r}")
     # 光不说假话不够:得说出真话。任务没停这件事必须出现在人看得到的地方。
-    assert "没停" in a.title or "没有跟着停" in a.title, a.title
-    assert "还活着" in a.detail or "没停" in a.detail, a.detail
+    assert "没停" in title or "没有跟着停" in title, title
+    assert "还活着" in detail or "没停" in detail, detail
     # 引擎在哪一档要摆出来:``running`` 为真里头还有 PAUSED / SUSPENDED,
     # 光说"任务还活着"分不出腿这一刻在不在动,得让人自己看得见。
-    assert ctx.engine.snapshot.state.value in a.detail, a.detail
+    assert ctx.engine.snapshot.state.value in detail, detail
     # 人该干什么。
-    assert "控制权" in a.detail, a.detail
+    assert "控制权" in detail, detail
 
 
-def test_到期告警在没任务的时候还是说狗停在原地(服务器夹具, 墙钟):
+def test_到期告警在没任务的时候还是说狗停在原地(服务器夹具, 墙钟, caplog):
     """另一半:引擎压根没在跑,原来那句话是对的,**不许被新分支冲掉**。
 
     只钉上面那一条的话,一个"两边都改成『任务还在跑』"的实现照样绿,而它在
@@ -475,64 +463,32 @@ def test_到期告警在没任务的时候还是说狗停在原地(服务器夹�
         "这条要的是「没有任务在跑」那一格,引擎却在跑"
 
     墙钟.前进(LEASE_TTL_MS + 1)
-    assert 等到(lambda: 到期告警(srv)), "TTL 过了,一条 P1 都没有"
-    a = 到期告警(srv)[0]
-    assert "停在原地" in a.title, a.title
-    assert "没有自动续跑" in a.detail, a.detail
+    assert 等到(lambda: 到期记录(caplog)), "TTL 过了,一行 ERROR 都没有"
+    title, detail = 标题正文(到期记录(caplog)[0])
+    assert "停在原地" in title, title
+    assert "没有自动续跑" in detail, detail
 
 
-def test_闸门协程死了_这件事本身会被报出来(服务器夹具):
+def test_闸门协程死了_这件事本身会被报出来(服务器夹具, caplog):
     """看门狗的兜底只网 ``OSError`` / ``ValueError``,别的会静悄悄弄死它。
 
-    **不去拓宽 catch**(``except Exception`` 过不了 ruff 的 BLE,而且真要网
-    住 ``KeyError`` 也不对:告警注册表少一条 kind 是代码错,应该炸出来)。
-    要补的是另一件事:它死了得有人知道 —— 否则 ``self._tasks`` 要等到
-    ``stop()`` 才被 await,一台服务可以顶着一条死掉的闸门跑一整天,而 §5.8
-    的"人走了狗自己停"从此不成立,屏上还什么都不显示。
+    **不去拓宽 catch**(``except Exception`` 过不了 ruff 的 BLE,而且把代码
+    错一起吞掉也不对,应该炸出来)。要补的是另一件事:它死了得有人知道 ——
+    否则 ``self._tasks`` 要等到 ``stop()`` 才被 await,一台服务可以顶着一条
+    死掉的闸门跑一整天,而 §5.8 的"人走了狗自己停"从此不成立,屏上还什么都
+    不显示。原来这儿升一条 P1(``watchdog_died``);狗上不再记告警,只剩这一行
+    ERROR。
     """
     srv = 服务器夹具
 
     def 炸(*a, **k):
-        raise KeyError("这一拍撞上了一个没注册的 kind")
+        raise KeyError("网外的一个异常")
 
     srv.hub._lease_once = 炸                 # type: ignore[method-assign]
-    assert 等到(lambda: [a for a in srv.alerts.open()
-                        if a.kind == "watchdog_died"]), "闸门死了,没人吭一声"
-    a = [x for x in srv.alerts.open() if x.kind == "watchdog_died"][0]
-    assert a.level is Level.P1
-    assert "KeyError" in a.detail, "报了,但没说是什么弄死的"
-
-
-def test_水位不是每拍都量(服务器夹具):
-    """闸门 2 Hz 是为了"人走了赶紧停腿";水位那三条不该跟着 2 Hz 走。
-
-    它们里头有 ``shutil.disk_usage``、一次目录遍历、一次 ``landed.json``
-    读盘 —— **同步 I/O,而且就在 asyncio 那根线程上**。盘水位是分钟到小时
-    尺度的事实,2 Hz 去问它既拖 loop,又在盘被拔掉时按 2 Hz 刷日志。
-    """
-    srv = 服务器夹具
-    # 先让第 1 拍过去 —— 那一拍是**该**量的(见 ``_该量水位了`` 的起点),
-    # 装在它前面的话数出来的 1 次是对的,这条测试会变成一条假红。
-    assert 等到(lambda: srv.hub._lease_ticks >= 1), "看门狗一拍都没醒"
-    次数 = itertools.count()
-    srv.hub._alerts.on_tick = lambda: next(次数)   # type: ignore[method-assign]
-    起 = srv.hub._lease_ticks
-    assert 等到(lambda: srv.hub._lease_ticks >= 起 + 4), "看门狗不接着醒了"
-    assert next(次数) == 0, "水位还是每拍都量"
-
-
-def test_水位分频_第一拍就量_之后六十拍一次():
-    """分频的两头都要钉:**起点**和**间隔**。
-
-    起点:服务刚起来那一刻,盘满/包没生效/钟偏通常**已经**成立了。要是写成
-    "第 60 拍才第一次量",值守屏开机头 30 秒会显示一句它并不知道的"没事"。
-    间隔:600 拍(5 分钟)里正好 ``600 // _WATER_EVERY`` 次。
-    """
-    assert _该量水位了(1) is True
-    命中 = [拍 for 拍 in range(1, 601) if _该量水位了(拍)]
-    assert len(命中) == 600 // _WATER_EVERY
-    assert 命中[0] == 1
-    assert 命中[1] - 命中[0] == _WATER_EVERY
+    assert 等到(lambda: 记录(caplog, "watchdog_died")), "闸门死了,没人吭一声"
+    r = 记录(caplog, "watchdog_died")[0]
+    assert r.levelno == logging.ERROR
+    assert "KeyError" in 标题正文(r)[1], "记了,但没说是什么弄死的"
 
 
 # ------------------------------------------------------------------ 起飞

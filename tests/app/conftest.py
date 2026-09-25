@@ -225,13 +225,12 @@ def make_ctx(bridge, tmp_path: Path, nav=None, device=None,
     会串进测试。
 
     ``clock`` 和 ``engine_clock`` 是**两口不同的钟,别混**:前者是 app 那口
-    墙钟(``ctx.clock``,毫秒,给告警盖时刻、给租约判 TTL),后者是引擎那口
+    墙钟(``ctx.clock``,毫秒,给租约判 TTL、给排程看钟),后者是引擎那口
     单调钟(秒,见 :func:`_make_engine`)。两个都留空就全走各自的缺省。
 
     ``console_url`` 留空(默认)就是**单机档**:``ctx.upload is None``,一条
-    上传线程都不起,值守屏上那一格照旧是 ``null``。**这个默认是承重的** ——
-    全仓那一大堆 app 测试(含 ``test_wire_fixtures`` 里
-    ``assert 份["upload_backlog"] is None`` 那条)都靠它一个字不用改。
+    上传线程都不起,``/api/upload`` 上那一格照旧是 ``null``。**这个默认是承重
+    的** —— 全仓那一大堆 app 测试都靠它一个字不用改。
     """
     nav = nav if nav is not None else FakeNav()
     device = device if device is not None else FakeDevice()

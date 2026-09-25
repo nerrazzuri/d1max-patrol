@@ -46,7 +46,6 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from d1max_agent.engine import backup
-from d1max_agent.engine.alerts import AlertBook, AlertNotFound
 from d1max_agent.engine.archive import (
     STAMP_FMT,
     list_runs,
@@ -172,7 +171,6 @@ from d1max_agent.engine.selfcheck import (
 )
 from d1max_agent.engine.upload_queue import UploadQueue, classify
 from d1max_agent.engine.uploader import Uploader
-from d1max_patrol.app.alert_sources import AlertSources
 from d1max_patrol.app.auth import (
     AUTH_PATH,
     CHALLENGE_PATH,
@@ -217,7 +215,6 @@ from d1max_patrol.app.teleop import (
 )
 from d1max_patrol.app.upload_pump import UploadPump
 from d1max_patrol.app.video import CAMERAS, CameraFeed, RtspStill, VideoError
-from d1max_patrol.app.watch import NO_UPLOADER, watch_summary
 from d1max_patrol.backends.base import (
     AlgErrorEvent,
     BackendDisconnected,
@@ -278,6 +275,13 @@ CONSOLE_TOKEN_ENV = "D1MAX_CONSOLE_TOKEN"
 #: 本身当成一趟归档算进水位,更糟的是某天真删到它头上。
 QUEUE_FILE_NAME = "queue.jsonl"
 
+#: 没装回传时 ``/api/upload`` 上积压为什么是 ``None``。**这一句必须出现在响应
+#: 里** —— 光秃秃一个 ``null``,看的人分不清是没查还是查了没事。原来住在
+#: ``app/watch.py``,值守汇总搬去站点(W00c5a)后挪到这儿。这句话是给现场的人
+#: 看的,所以里面不许有排期黑话(「第 N 卷」那种)。
+NO_UPLOADER = ("这台狗还没装回传功能,现场证据全存在本机 —— "
+               "所以这一档是「不知道」,不是「没有积压」")
+
 #: 请求体上限。这些接口收的都是任务 JSON,几十 KB 顶天了。
 MAX_BODY = 4 * 1024 * 1024
 
@@ -309,22 +313,8 @@ _LEASE_WATCH_PERIOD_S = 0.5
 #: 30 秒足够;测试里会把它拨小。**未验证:** 真机上没量过。
 _SCHEDULE_PERIOD_S = 30.0
 
-#: ``AlertSources.on_tick`` 那三条水位每多少拍看一次。60 拍 = 30 秒。
-#:
-#: **它跟 ``_LEASE_WATCH_PERIOD_S`` 是两码事,所以要分频。** 上面那个数论证
-#: 的是"人走了到狗停下"的时间上界;而盘水位、任务包落差、钟偏的变化尺度是
-#: 分钟到小时 —— 半秒看一次不会更早发现任何东西,却要在事件循环里做一次同步
-#: ``shutil.disk_usage`` + 一趟目录遍历 + 一次读 ``landed.json``。盘慢或者
-#: SD 卡将坏的时候,整个 server 的事件循环每半秒被拖一次,而拖的是那条最要紧
-#: 的闸门自己。
-#:
-#: 30 秒的依据:这三件事里最急的是盘满(它会变成"没法记录证据"),而从 80%
-#: 到写不进去以小时计,晚半分钟看见没有代价。再稀就开始有代价了 —— 值守屏
-#: 上那几项是按秒刷的,人盯着屏等一分钟才看见变化会以为是屏卡了。
-_WATER_EVERY = 60
-
-#: 让开腿之后多久没人还回来,就升一条 P1(挂账 67a)。**先定 10 分钟,可改**
-#: —— 跟聚合窗口那几个数一样是拍的,真机清单里要量、按现场手感调。
+#: 让开腿之后多久没人还回来,就记一条 ERROR(挂账 67a;这条通知随 W00c5c 在
+#: 站点重建)。**先定 10 分钟,可改** —— 是拍的,真机清单里要量、按现场手感调。
 #:
 #: 上界的依据是"人接管一段路"这件事本身:现场绕开一堆箱子、把狗从台阶上抱
 #: 下来,几分钟是正常的;超过十分钟还挂着,压倒性的可能是人已经走开、忘了
@@ -333,7 +323,7 @@ _WATER_EVERY = 60
 #: 下界的依据是别把正常接管报成 P1:人很快就学会无视一个总在误报的 P1,
 #: 而它误报一次的代价,是下一次真的没人管时没人当回事。
 #:
-#: **超时的处置只有报警。** 不自动 ``resume``、不自动 ``abort``:一只狗在
+#: **超时的处置只有记一笔。** 不自动 ``resume``、不自动 ``abort``:一只狗在
 #: "最后已知状态是人正在接管"的情况下自己动起来,是这套系统里最不该发生
 #: 的事(§5.8 同理)。
 SUSPEND_STALE_MS = 10 * 60_000
@@ -448,18 +438,6 @@ def json_response(payload: Any, status: int = 200) -> Response:
 
 def _error_response(exc: HttpError) -> Response:
     return json_response(exc.to_wire(), exc.status)
-
-
-def _没这条告警(key: str) -> HttpError:
-    """``ack``/``resolve`` 点到一条已经不在的告警 —— **404,不是 500**。
-
-    ``AlertNotFound`` 是 ``engine/alerts.py`` 特意从裸 ``KeyError`` 里分出来
-    的那一支:前端点了一条刚被别人解决掉的告警是正常的用户误操作,而
-    ``raise_alert`` 撞上没登记的 kind 抛的裸 ``KeyError`` 是我们自己写错了
-    代码,那个该冒成 500。这里只翻前者。
-    """
-    return HttpError(404, f"没有这条告警:{key}",
-                     "多半是刚被别人确认或解决掉了。刷一下 /api/alerts。")
 
 
 Handler = Callable[["Request"], "Response | Stream | ByteStream"]
@@ -645,29 +623,18 @@ class _Route:
 def _compile(pattern: str) -> re.Pattern[str]:
     """``/api/runs/<run_id>/photos/<name>`` -> 正则。
 
-    占位符**不跨斜杠**。这一条顺手堵住了一类穿越:``/api/runs/r1/photos/
-    ..%2F..%2Fmanifest.json`` 解码之后带斜杠,于是根本匹配不上这条路由。
+    占位符**不跨斜杠,没有例外**。这一条顺手堵住了一类穿越:``/api/runs/r1/
+    photos/..%2F..%2Fmanifest.json`` 解码之后带斜杠,于是根本匹配不上这条路由
+    (``_dispatch`` 在匹配之前已经 ``unquote`` 过一道)。
 
-    **``<name*>`` 是唯一的例外,它跨斜杠**(贪婪的 ``.+``)。开这个口子是因为
-    告警键(``engine/alerts.py`` 的 ``_key``)形如 ``robot/kind#seq``,斜杠是
-    键本身的一部分:``/api/alerts/<key*>/ack`` 那一段收到的就是带斜杠的东西。
-    转义解决不了 —— ``_dispatch`` 在匹配之前已经 ``unquote`` 过一道,``%2F``
-    到这儿早变回斜杠了(这也正是上面那条穿越防线成立的原因)。
-
-    **这个口子只许开在不落地的参数上。** 告警键唯一的去处是
-    ``AlertBook`` 那本内存字典的一次 ``get``:不拼路径、不拼命令、不进
-    子进程,上面那条穿越顾虑在它身上不成立。凡是会被拼进文件路径的段
-    (``run_id``、``name``、``map_id``……)一律继续用不带星号的写法 —— 那些
-    地方"不跨斜杠"就是防线本身。
+    原来有个跨斜杠的 ``<name*>``,只给告警键(``robot/kind#seq``)用;告警搬
+    去站点(W00c5a,决策 8)之后没人用了,一并删掉 —— 少一个能让一段参数带着
+    斜杠进处理函数的口子。
     """
     parts = []
-    for chunk in re.split(r"(<[a-z_]+\*?>)", pattern):
+    for chunk in re.split(r"(<[a-z_]+>)", pattern):
         if chunk.startswith("<") and chunk.endswith(">"):
-            name = chunk[1:-1]
-            if name.endswith("*"):
-                parts.append(f"(?P<{name[:-1]}>.+)")
-            else:
-                parts.append(f"(?P<{name}>[^/]+)")
+            parts.append(f"(?P<{chunk[1:-1]}>[^/]+)")
         else:
             parts.append(re.escape(chunk))
     return re.compile("^" + "".join(parts) + "$")
@@ -778,15 +745,10 @@ class AppContext:
     clock: Callable[[], int] = _wall_ms
     #: 外头的时间参照:``(毫秒, 来源)``,拿不到就 ``None``(断网时就是)。
     time_reference: Callable[[], tuple[int, str] | None] = _no_time_reference
-    #: 告警簿(§5.2)。**跟 ``engine`` 同级挂在这儿,全进程只有这一份** ——
-    #: 认事实的(``app/alert_sources.py``)、看板(卷 8 的值守屏)、四条告警
-    #: 路由,问的必须是同一本簿子。各造各的,页面上确认掉的那条在别处还开
-    #: 着,升级照样往下走,而现场看到的是"我明明点过确认了,它还在响"。
-    alerts: AlertBook = field(default_factory=AlertBook)
     #: 回传那条后台线程。``None`` = **这台狗没装回传**(单机档,客户没买
-    #: 服务器),不是「装了但是空着」—— 值守屏上那一格的 ``None`` 和 ``0``
-    #: 差的就是这件事。装不装由 :func:`build_pump` 的调用方按有没有回传地址
-    #: 决定;**测试夹具默认不装**,所以现有那一堆 app 测试看到的照旧是
+    #: 服务器),不是「装了但是空着」—— ``/api/upload`` 上那一格的 ``None``
+    #: 和 ``0`` 差的就是这件事。装不装由 :func:`build_pump` 的调用方按有没有
+    #: 回传地址决定;**测试夹具默认不装**,所以现有那一堆 app 测试看到的照旧是
     #: ``null``。
     upload: UploadPump | None = None
 
@@ -1099,21 +1061,11 @@ async def _preflight_with_scan(ctx: AppContext, mission: Mission,
 _换手 = frozenset({"expired", "released", "acquired", "taken_over", "forced"})
 
 
-def _该量水位了(拍: int) -> bool:
-    """第 ``拍`` 拍该不该量一次水位。第 1 拍量,之后每 :data:`_WATER_EVERY` 拍一次。
-
-    **起飞那一拍就量。** 盘满、包落好了没生效、钟偏,这三件事在服务起来的那
-    一刻通常就已经成立了 —— 等半分钟才第一次去看,等于让值守屏在开机后的头
-    30 秒里说一句它并不知道的"没事"。
-
-    写成 ``(拍 - 1) % N`` 而不是 ``拍 % N == 1``:后者在 ``N == 1``(每拍都
-    量)时永远是假,是一个只在改常量那天才现形的坑。
-    """
-    return (拍 - 1) % _WATER_EVERY == 0
-
-
 def _挂起超时了(点: SuspendPoint | None, *, now_ms: int) -> bool:
     """让开腿之后没人还回来,超过 :data:`SUSPEND_STALE_MS` 了吗。
+
+    判到了由 :meth:`_StateHub._判定挂起超时` 记一条 ERROR。狗上不再记告警
+    (决策 8),这条通知随 W00c5c 在站点重建;下文说的「这条 P1」指的就是它。
 
     **算的是 ``SuspendPoint.at_ms``,不是这一趟的 ``started_ms``。** 一趟任务
     可以跑一整天,人在最后一分钟才让开腿 —— 拿开跑那一刻算,人刚把手机掏出
@@ -1124,7 +1076,7 @@ def _挂起超时了(点: SuspendPoint | None, *, now_ms: int) -> bool:
     跑着也会报,而这条告警的全部意思就是"有人接管了却没还回来"。
 
     严格大于:正好卡在 :data:`SUSPEND_STALE_MS` 上还不算超时,再多一毫秒才
-    算(跟 ``due_escalations`` 里那个 ``>`` 一个口径)。
+    算。
 
     **``now_ms`` 必须是 ``MissionEngine.now_ms()``,不许是 ``ctx.clock()``。**
     这个式子里的三个数 —— ``now_ms``、``点.at_ms``、``点.prior_suspend_ms``
@@ -1225,27 +1177,13 @@ class _StateHub:
         self._alg_errors: tuple[str, ...] = ()
         self._link_down: str = ""
         #: 最近一次电量遥测:``(百分比, 收到的时刻毫秒)``,一次也没收到就是
-        #: ``None``。**两件事存在一个字段里,不拆成两个** —— HTTP 线程要同时
-        #: 用到它俩(值守屏那一格既报电量也报「这个数多老了」),拆成两个字段
-        #: 的那一边,两次读之间夹进一个新事件,屏上就会出现「刚刚收到的」配着
-        #: 上一拍的数值。一个字段一次赋值,读到的永远是配对的。
+        #: ``None``。**两件事存在一个字段里,不拆成两个** —— 要同时用到它俩的
+        #: 那一边,两次读之间夹进一个新事件,就会读到「刚刚收到的」配着上一拍
+        #: 的数值。一个字段一次赋值,读到的永远是配对的。
         self._battery_at: tuple[float, int] | None = None
         self._faults: tuple[str, ...] = ()
         self._control_lost: str = ""
         self._pose: dict[str, float] | None = None
-        #: 把这三条汇流上的事实翻成告警(§5.2)。**只在这一处接**:这个类
-        #: 已经是全进程唯一一个同时看得见三条流的地方,再开一份订阅就等于
-        #: 多一条会跟快照说法不一致的路。判什么级不归这儿管,见
-        #: ``app/alert_sources.py``。
-        self._alerts = AlertSources(
-            ctx.alerts, robot=ctx.identity.sn, clock_ms=ctx.clock,
-            run_state=lambda: ctx.engine.snapshot.state,
-            # 后面这三个是 ``on_tick`` 那几条周期事实的取值口(盘水位、任务
-            # 包滞后、钟偏)。``disk=`` 传的就是 ``/api/storage`` 用的那一个
-            # 函数 —— 一个口径,两个出口。
-            disk=lambda: _disk(ctx.runs_root),
-            bundles_root=ctx.bundles_root,
-            time_reference=ctx.time_reference)
         #: 看门狗读到哪条留痕了。**自己一份游标,不借 ``ControlDesk.drain()``
         #: 那份** —— 那份是事件流的,借来读一次就把记录从 SSE 嘴里抢走了。
         #: ``LeaseBook.audit_since`` 是纯读,两个游标各走各的互不干扰。
@@ -1254,18 +1192,17 @@ class _StateHub:
         #: ``LeaseBook`` 只活在内存里,0 就是"空历史"。哪天审计流水改成落盘
         #: (值守场景多半要),这一行就得跟着改成"从簿子当前末尾起" ——
         #: 否则重启后第一拍会把历史里所有 ``expired`` 一次读进来,只要那一刻
-        #: 恰好没人握着租约,就凭空报一条 P1,而那些"到期"是上辈子的事。
+        #: 恰好没人握着租约,就凭空停一次腿、记一条 ERROR,而那些"到期"是上辈
+        #: 子的事。
         self._lease_cursor = 0
-        #: 闸门醒过几拍。只给分频和测试用 —— 它是这条协程"还活着"的唯一外部
+        #: 闸门醒过几拍。只给测试用 —— 它是这条协程"还活着"的唯一外部
         #: 迹象(判到期本身是静默的:没到期就什么也不发生)。
         self._lease_ticks = 0
         #: 哪一次让开腿已经报过"没人还回来"了,存的是那一次的
         #: ``SuspendPoint.at_ms``;没报过就是 ``None``。
         #:
-        #: **非有不可。** 闸门半秒醒一拍,而 ``raise_alert`` 在聚合窗口内会把
-        #: 同一条 ``robot/kind`` 吸收成一条并把 ``count`` 往上加 —— 不记这一
-        #: 笔的话,一次没人管的接管十分钟就能把 ``count`` 顶到一千二,值守屏上
-        #: 那一行看起来像是出了一千两百件事。
+        #: **非有不可。** 闸门半秒醒一拍 —— 不记这一笔的话,一次没人管的接管
+        #: 过了线之后每半秒就是一条同样的 ERROR,一夜几万条。
         #:
         #: 存 ``at_ms`` 而不是一个布尔:接管结束又让开一次腿是**另一次**接管,
         #: 那一次该重新报。
@@ -1274,9 +1211,8 @@ class _StateHub:
         #: 而且更急**:那件事是一个**会一直存在**的状态(不是瞬时竞态),而闸
         #: 门半秒醒一拍 —— 不记这一笔就是 2 条 ERROR/秒、通宵二十万条。
         #:
-        #: 这在别的项目上只是吵,在这台狗上是**自伤**:这条日志刷的盘,正是同
-        #: 一套值守在量 ``disk_used_ratio`` 的那块盘。一条诊断日志把自己的盘写
-        #: 满、然后触发一条 P1,比不报还糟。
+        #: 这在别的项目上只是吵,在这台狗上是**自伤**:这条日志刷的盘,正是存
+        #: 证据的那块盘。一条诊断日志把自己的盘写满,比不报还糟。
         #:
         #: 清账时机跟 ``_挂起报过`` 一致:回到正常状态(``not engine.yielding``)
         #: 时清掉,这样下一次真出问题还会再喊一声,不会喊过一次就永远闭嘴。
@@ -1286,8 +1222,8 @@ class _StateHub:
         #: 之内**如果 ``suspended_at`` 走了一趟 ``None → 有 → None``,第二次
         #: 的 ``None`` 一声不吭 —— 账还记着,而 ``yielding`` 从头到尾没落过。
         #: 今天摆不出这一幕(引擎在一次让位里只盖一次点、不中途抹),后果也
-        #: 有限(丢的是一条诊断日志,不是那条 P1 本身:``_挂起报过`` 是另一
-        #: 笔账,该报还是会报)。真要堵,判据得从"``yielding`` 落过没有"换成
+        #: 有限(丢的是一条诊断日志,不是挂起超时那条本身:``_挂起报过`` 是
+        #: 另一笔账,该报还是会报)。真要堵,判据得从"``yielding`` 落过没有"换成
         #: "这一次没盖点跟上一次是不是同一段",那要往这条协程里再存一个状态,
         #: 这一轮不值。
         self._没盖点喊过 = False
@@ -1298,7 +1234,7 @@ class _StateHub:
         self._rebuild(force=True)
         ctx = self._ctx
         self._tasks = [
-            asyncio.create_task(self._watch(ctx.engine, self._on_run)),
+            asyncio.create_task(self._watch(ctx.engine)),
             asyncio.create_task(self._watch(ctx.nav, self._on_nav)),
             asyncio.create_task(self._watch(ctx.device, self._on_device)),
             asyncio.create_task(self._tick()),
@@ -1340,7 +1276,7 @@ class _StateHub:
     async def _watch(self, emitter: Any,
                      on_event: Callable[[Any], None] | None = None) -> None:
         """跟一条事件流。引擎那条不用往快照里记什么 —— 它的状态在
-        ``engine.snapshot`` 里;但告警要认它,所以它也带了个回调。"""
+        ``engine.snapshot`` 里,所以它不带回调,只触发重建。"""
         with emitter.subscription() as inbox:
             while True:
                 event = await inbox.get()
@@ -1370,7 +1306,7 @@ class _StateHub:
             self._rebuild()
 
     async def _lease_watchdog(self) -> None:
-        """租约到期:停 + 升 P1,**绝不自动续跑**(§5.8)。
+        """租约到期:停 + 记 ERROR,**绝不自动续跑**(§5.8)。
 
         ``LeaseBook`` 是惰性结算的——没人问它就"还没过期"。而 §5.8 要的
         恰恰是**没人在的时候**它自己动作,所以必须有一条协程主动去问。
@@ -1379,15 +1315,9 @@ class _StateHub:
         和事件流,闸门不靠它"——显示晚一拍没关系,停车不能晚,两条相反的
         容忍度不该落在同一条协程上。
 
-        顺手也把 ``AlertSources.on_tick`` 那三条周期事实(盘水位、任务包滞
-        后、钟偏)带上:它们跟租约到期是同一类东西 —— **没有任何一条流会推
-        给我们,只能自己隔一会儿去看一眼**。
-
         **兜的是 ``OSError`` 和 ``ValueError`` 这两类,别的照样会把这条协程
-        掀翻。** 这是有意的,而且必须说清楚它兜不住什么:``raise_alert`` 撞上
-        没登记的 ``kind`` 抛的是 ``KeyError``,那是 ``alerts.py`` 特意设的
-        闸——"不许猜一个级别顶上";拓宽成 ``except Exception`` 会把那道闸和
-        一堆真 bug 一起吞掉(房规里 ``BLE`` 禁的就是这个)。
+        掀翻。** 这是有意的:拓宽成 ``except Exception`` 会把一堆真 bug 一起
+        吞掉(房规里 ``BLE`` 禁的就是这个)。
         ``asyncio.CancelledError`` 更不能进网(它是 ``BaseException``),不然
         ``stop()`` 取消不掉这条协程。
 
@@ -1401,7 +1331,7 @@ class _StateHub:
             await asyncio.sleep(_LEASE_WATCH_PERIOD_S)
             self._lease_ticks += 1
             try:
-                await self._lease_once(水位=_该量水位了(self._lease_ticks))
+                await self._lease_once()
             except (OSError, ValueError) as exc:
                 log.warning("租约看门狗这一拍出错了:%s", exc, exc_info=True)
 
@@ -1435,8 +1365,8 @@ class _StateHub:
 
         兜的是 ``OSError``/``ValueError``/``BundleError``/``MissionError``/
         ``HomeError``/``EngineBusy``:都是"这一拍没起成,下一拍再看"的事,记进
-        ``last_error`` 给值守屏看;别的异常照样掀翻协程,由 ``_执行器塌了``
-        记 P1(跟租约看门狗同一套理由)。
+        ``last_error``(``/api/schedule`` 上看得见);别的异常照样掀翻协程,由
+        ``_执行器塌了`` 记 ERROR(跟租约看门狗同一套理由)。
         """
         while True:
             await asyncio.sleep(_SCHEDULE_PERIOD_S)
@@ -1474,7 +1404,7 @@ class _StateHub:
         picked = pick(decisions, running=running)
         if picked.displaced:
             # 到点了但没轮到(有别的在跑/同一刻有更优先的)。**不能静默丢**:
-            # 值守屏要看得见"22:00 那趟没出发,因为 21:50 那趟还在跑"。
+            # ``/api/schedule`` 上要看得见"22:00 那趟没出发,因为 21:50 那趟还在跑"。
             # on_missed=alarm 的那几条按 W17 接告警;这里先记账 + 日志。
             names = ", ".join(f"{e.id}({d.kind.value})" for e, d in picked.displaced)
             self._sched_last_displaced = f"{names};正在跑:{running}"
@@ -1538,49 +1468,40 @@ class _StateHub:
         exc = task.exception()
         if exc is None:
             return
-        log.error("排程执行器协程死了,从此到点没人起跑:%s", exc, exc_info=exc)
-        with contextlib.suppress(KeyError, ValueError, OSError):
-            self._ctx.alerts.raise_alert(
-                kind="schedule_died", robot=self._ctx.identity.sn,
-                title="排程执行器那条协程死了",
-                detail=f"{type(exc).__name__}: {exc} —— 到点的巡逻从此不会自动出发,"
-                       "重启服务才能恢复(W06)。",
-                now_ms=self._ctx.clock())
+        # 狗上不再记告警(决策 8),原来那条 P1 只剩这条日志;站点的
+        # ``schedule_died`` 报的是站点自己的排程协程。
+        log.error("[schedule_died] %s:%s", "排程执行器那条协程死了",
+                  f"{type(exc).__name__}: {exc} —— 到点的巡逻从此不会自动出发,"
+                  "重启服务才能恢复(W06)。", exc_info=exc)
 
     def _看门狗塌了(self, task: asyncio.Task[None]) -> None:
         """闸门那条协程结束了。**除了被取消,没有一种结束是正常的。**
 
         它是个 ``while True``:正常情况下只有 ``stop()`` 的取消能让它出来。
         剩下的路只有一条 —— 抛了一个不在兜底网里的异常。那一刻起租约到期
-        没人处置,而屏幕上一切如常,所以这里既要 ``log.error``,也要在簿子上
-        留一条 P1:日志没人盯着,告警栏有人盯着。
+        没人处置,而屏幕上一切如常,所以这里要 ``log.error``。狗上不再记告警
+        (决策 8),原来那条 ``watchdog_died`` 的 P1 只剩这条日志。
 
         **回调自己不许再抛。** 它跑在事件循环的 ``call_soon`` 上,抛出去只会
-        进 loop 的异常处理器,又是一次静默。``raise_alert`` 那几条已知的抛法
-        (没登记的 kind、级别对不上、簿子写不动)都在这条 suppress 里。
+        进 loop 的异常处理器,又是一次静默。
         """
         if task.cancelled():
             return
         exc = task.exception()
         if exc is None:
             return
-        log.error("租约看门狗协程死了,从此没人再问 TTL 过没过去:%s", exc,
-                  exc_info=exc)
-        with contextlib.suppress(KeyError, ValueError, OSError):
-            self._ctx.alerts.raise_alert(
-                kind="watchdog_died", robot=self._ctx.identity.sn,
-                title="值守闸门那条协程死了",
-                detail=f"{type(exc).__name__}: {exc} —— 租约到期从此没人处置,"
-                       "遥控走了也不会自动停。重启服务才能恢复(§5.8)。",
-                now_ms=self._ctx.clock())
+        log.error("[watchdog_died] %s:%s", "值守闸门那条协程死了",
+                  f"{type(exc).__name__}: {exc} —— 租约到期从此没人处置,"
+                  "遥控走了也不会自动停。重启服务才能恢复(§5.8)。", exc_info=exc)
 
-    async def _lease_once(self, *, 水位: bool = True) -> None:
-        """看一眼:租约过期了没有;每 :data:`_WATER_EVERY` 拍再看一眼水位。
+    async def _lease_once(self) -> None:
+        """看一眼:租约过期了没有、让开腿的那一趟挂太久了没有。
 
         **判"到期"靠审计流水,不靠 ``holder`` 由有变无。** 人自己按了释放,
         ``holder`` 也是由有变无 —— 靠它分不开"走了"和"交回来了",而把一次
-        正常交接报成 P1,人很快就学会无视 P1。``AuditRecord.kind`` 里
-        ``released`` / ``expired`` / ``dropped`` 是分得清清楚楚的。
+        正常交接当成失主停一次腿、记一条 ERROR,就是在教人无视它。
+        ``AuditRecord.kind`` 里 ``released`` / ``expired`` / ``dropped`` 是分得
+        清清楚楚的。
 
         **还要"到期之后没有人接着"** —— 判据见 :func:`_失主了`,读的是这一
         批留痕里的先后顺序,不是"读完之后当下 holder 是谁"。后者有两个窟窿:
@@ -1601,30 +1522,16 @@ class _StateHub:
         self._lease_cursor, fresh = self._control.book.audit_since(
             self._lease_cursor)
         if _失主了(fresh):
-            await self._lease_gone(now_ms)
-        self._判定挂起超时(now_ms=now_ms)
-        # **这一行的副作用就是它存在的理由,返回值是故意丢掉的。**
-        # ``due_escalations`` 会把该升档的告警的 ``escalated`` 就地前移,而
-        # ``Alert.channel`` 是由 ``escalated`` 直接算出来的 property、
-        # ``to_wire()`` 两个都上线 —— 也就是说"该出声了"这件事一路推到手机
-        # 上,靠的全是这次调用改掉的那个整数,不需要在这儿再搭一条投递。
-        # 任务 12 之前**全仓没有一处生产代码调它**:一条没人确认的 P1 永远停
-        # 在 ``escalated=0`` / ``channel=screen``,声音一次也没响过,而
-        # engine 那一组测试全绿。看着像死代码就把它"顺手清掉"的话,线上会
-        # 静悄悄地退回那个样子(端到端的守卫见
-        # ``tests/app/test_alert_routes.py::test_升级真的有人在驱动``)。
-        self._ctx.alerts.due_escalations(now_ms=now_ms)
-        # 上面这两条都在 ``if 水位:`` **外面**,这是有意的:分频是为盘水位那
-        # 几件 I/O 活儿设的(见 :data:`_WATER_EVERY`),而这两条一条是读引擎
-        # 快照、一条是扫一本内存字典,半秒一次的开销可以忽略。挂进去等于把
-        # "人接管没还回来"和"P1 该出声了"的时机焊死在盘水位的轮询节拍上。
-        if 水位:
-            self._alerts.on_tick()
+            await self._lease_gone()
+        self._判定挂起超时()
 
-    def _判定挂起超时(self, *, now_ms: int) -> None:
-        """人点了「让开腿」接管,接管完忘了还回来 —— 报一条 P1(挂账 67a)。
+    def _判定挂起超时(self) -> None:
+        """人点了「让开腿」接管,接管完忘了还回来 —— 记一条 ERROR(挂账 67a)。
 
-        **只报警,不动狗。** 这里没有、也不许有任何一句 ``resume`` / ``abort``:
+        原来这儿升一条 P1(``suspend_stale``);狗上不再记告警(决策 8),这条
+        通知随 W00c5c 在站点重建,狗上只留日志。
+
+        **只记一笔,不动狗。** 这里没有、也不许有任何一句 ``resume`` / ``abort``:
         一只狗在"最后已知状态是人正在接管"的情况下自己动起来,是这套系统里
         最不该发生的事(理由跟 :meth:`_lease_gone` 那一条一样)。人还在现场,
         腿是他的。
@@ -1633,17 +1540,11 @@ class _StateHub:
         自己的 ``yielding``,不在外壳里比一遍状态表 —— "哪些状态算让位"是
         引擎的词汇,复刻一份迟早跟正主不一样。
 
-        **这一拍手里有两口钟,各管各的,不许互相顶替。**
-
-        * 判据那一口是 ``engine.now_ms()``:它跟 ``点.at_ms`` /
-          ``点.prior_suspend_ms`` 出自同一个锚点、同一口单调钟,墙钟怎么跳都
-          不影响这个差(为什么必须这样,见 :func:`_挂起超时了`)。
-        * 形参 ``now_ms``(调用方给的 ``ctx.clock()``,墙钟)只用来给告警**盖
-          时刻**:``AlertBook`` 的聚合窗口和 ``due_escalations`` 的升档(2 分钟
-          没人确认就 push、5 分钟出声)全按这口钟算,而"什么时候该出声"是要
-          跟现场的人对表的 —— 那一头必须留在墙钟上。拿引擎那口钟去盖告警,
-          一趟没在跑的时候引擎回的是墙钟、在跑的时候回的是锚点推出来的值,
-          升档的节奏会跟着开跑那一刻的钟偏走。
+        **判据那一口钟是 ``engine.now_ms()``,不是 ``ctx.clock()``**:它跟
+        ``点.at_ms`` / ``点.prior_suspend_ms`` 出自同一个锚点、同一口单调钟,
+        墙钟怎么跳都不影响这个差(为什么必须这样,见 :func:`_挂起超时了`)。
+        原来这儿还收一个墙钟 ``now_ms``,只用来给告警盖时刻;告警搬走之后一并
+        删了 —— 这一拍手里从此只有一口钟。
 
         **``engine.now_ms()`` 在这儿一定拿得到锚点,所以不加防御。** 走到这
         一句时 ``engine.yielding`` 已经为真,而 ``yielding`` 就是
@@ -1676,8 +1577,8 @@ class _StateHub:
             # 都不会留下。
             #
             # **只喊一次。** 这是一个会一直存在的状态,而闸门半秒醒一拍 ——
-            # 不节流就是 2 条 ERROR/秒、一夜二十万条,而且刷的正是同一套值守
-            # 在量 ``disk_used_ratio`` 的那块盘(见 :attr:`_没盖点喊过`)。
+            # 不节流就是 2 条 ERROR/秒、一夜二十万条,而且刷的正是存证据的
+            # 那块盘(见 :attr:`_没盖点喊过`)。
             if not self._没盖点喊过:
                 log.error("引擎说自己在让位(yielding),快照上却没有 suspended_at ——"
                           "挂起超时这条 P1 在这种状态下是哑的。state=%s",
@@ -1685,16 +1586,16 @@ class _StateHub:
                 self._没盖点喊过 = True
             self._挂起报过 = None
             return
-        # **判据那一口钟从引擎拿,不是形参那个 ``now_ms``。** 理由见上面的
+        # **判据那一口钟从引擎拿,不是 ``ctx.clock()``。** 理由见上面的
         # docstring 和 :func:`_挂起超时了`:``点.at_ms`` 已经是"开跑对表 +
         # 单调钟"盖的,再拿活墙钟去减它,墙钟一跳判据就跟着跳。
         if (self._挂起报过 == 点.at_ms
                 or not _挂起超时了(点, now_ms=engine.now_ms())):
             return
         self._挂起报过 = 点.at_ms
-        self._ctx.alerts.raise_alert(
-            kind="suspend_stale", robot=self._ctx.identity.sn,
-            title="人接管着没还回来,这趟一直挂着",
+        # 狗上不再记告警(决策 8);这条通知随 W00c5c 在站点重建。
+        log.error(
+            "[suspend_stale] %s:%s", "人接管着没还回来,这趟一直挂着",
             # **正文里那个数是真除不是整除。** ``//`` 的话
             # :data:`SUSPEND_STALE_MS` 一旦改成不整除 60 秒的数(它已经排进真
             # 机清单要量,改是排好期的),正文会说"1 分钟"而阈值其实是 1.5
@@ -1703,25 +1604,25 @@ class _StateHub:
             # **说"累计",不说"这一次"。** 反复短接管那一幕里,每一次都只有
             # 四五分钟,而正文如果写"已经超过十分钟没人点继续",现场的人会
             # 照着去对表,发现对不上,然后把这条 P1 当误报。
-            detail=f"让开腿的理由是「{点.reason}」,这一趟里累计已经超过 "
-                   f"{SUSPEND_STALE_MS / 60_000:g} 分钟没在跑(可能是被反复"
-                   "接管了好几次)。"
-                   "**狗停在原地没有自己动**(§5.8)—— 回去点「继续」接着"
-                   "跑,或者中止这一趟。",
-            now_ms=now_ms)
+            f"让开腿的理由是「{点.reason}」,这一趟里累计已经超过 "
+            f"{SUSPEND_STALE_MS / 60_000:g} 分钟没在跑(可能是被反复"
+            "接管了好几次)。"
+            "**狗停在原地没有自己动**(§5.8)—— 回去点「继续」接着"
+            "跑,或者中止这一趟。")
 
-    async def _lease_gone(self, now_ms: int) -> None:
+    async def _lease_gone(self) -> None:
         """人不在了。**停遥控,并且只停遥控**(§5.8)。
 
         这里没有、也不许有任何一句 ``resume``:一只狗在"最后已知状态是人正
         在接管"的情况下自己动起来,是这套系统里最不该发生的事(理由跟 §3.4
         那个不对称一样)。引擎停在哪一档就留在哪一档,等人回来自己决定。
 
-        **停在前、报在后,但报不许被停的失败吃掉。** 停腿是要紧的那一半,
-        所以先做;而它要是抛了(链路正好断了),更得有人知道 —— 那时候屏幕
-        上一条告警都没有,才是真正的静默失败。
+        **停在前、记在后,但记不许被停的失败吃掉。** 停腿是要紧的那一半,
+        所以先做;而它要是抛了(链路正好断了),更得有人知道 —— 那时候一行
+        痕迹都没有,才是真正的静默失败。原来这儿升一条 P1(``lease_expired``);
+        狗上不再记告警(决策 8),这条通知随 W00c5c 在站点重建,狗上只留日志。
 
-        **告警的文案分三套写,这不是措辞讲究。**
+        **文案分三套写,这不是措辞讲究。**
         上面那句 ``teleop.stop()`` 只停遥控那一档,**它不停引擎正在跑的那趟
         任务** —— 而"取控制权 → 起一趟巡检 → 人走开 → TTL 到期"是一串完全
         正常的动作,现场随时会发生。那种局面下 ``teleop.stop()`` 基本是空
@@ -1775,8 +1676,8 @@ class _StateHub:
                     f"在 {档位} 上,不会自己发任何一条运动指令。**但这趟巡检"
                     f"是「挂着」不是「结束了」**:既没跑完、也没被中止。不"
                     f"回来处理,它就一直这么挂着,再过 "
-                    f"{SUSPEND_STALE_MS / 60_000:g} 分钟屏上会开始刷「接管着"
-                    f"没还回来」那条 P1。要收尾,回来重新取一次控制权,然后"
+                    f"{SUSPEND_STALE_MS / 60_000:g} 分钟日志里会记「接管着"
+                    f"没还回来」。要收尾,回来重新取一次控制权,然后"
                     f"「继续」或者「中止」,二选一。")
         else:
             # **这一格故意不挂 §5.8。** §5.8 的结论是"绝不自动续跑",管的是
@@ -1789,9 +1690,8 @@ class _StateHub:
                     f"拍照。**不许默认它是静止的,别就这么走过去。** 要让它"
                     f"真停下来,回来重新取一次控制权,再按暂停或者中止;不管"
                     f"它的话它会自己把这趟跑完。")
-        self._ctx.alerts.raise_alert(
-            kind="lease_expired", robot=self._ctx.identity.sn,
-            title=标题, detail=正文, now_ms=now_ms)
+        # 狗上不再记告警(决策 8);这条通知随 W00c5c 在站点重建。
+        log.error("[lease_expired] %s:%s", 标题, 正文)
 
     def _on_nav(self, event: Any) -> None:
         if isinstance(event, NavStatusEvent):
@@ -1806,7 +1706,6 @@ class _StateHub:
             self._link_down = event.reason
         elif isinstance(event, BackendReconnected):
             self._link_down = ""
-        self._alerts.on_nav(event)
 
     def _on_device(self, event: Any) -> None:
         if isinstance(event, BatteryEvent):
@@ -1823,12 +1722,6 @@ class _StateHub:
             pose = event.pose
             self._pose = {"x": pose.position.x, "y": pose.position.y,
                           "yaw": pose.yaw}
-        self._alerts.on_device(event)
-
-    def _on_run(self, snapshot: Any) -> None:
-        """引擎快照。这儿**只**喂告警 —— 快照该长什么样由 ``_build`` 现问
-        ``engine.snapshot``,不在这条回调里抄一份。"""
-        self._alerts.on_run(snapshot)
 
     # ------------------------------------------------------------ 快照
 
@@ -1856,7 +1749,7 @@ class _StateHub:
                 # 快照里**只放数值,不放接收时刻**:``_rebuild`` 靠
                 # ``snap == self._snapshot`` 去重,时刻一进来每一拍电量事件都
                 # 会重建快照、再往 SSE 上推一帧,哪怕百分比一个数没变。要时刻
-                # 的那一处(值守屏)直接读 :attr:`battery_at`。
+                # 的直接读 :attr:`battery_at`。
                 "battery": self.battery_at[0] if self.battery_at else None,
                 "faults": list(self._faults),
                 "control_lost": self._control_lost,
@@ -2071,12 +1964,6 @@ class AppServer:
         """L1 控制权台。"""
         return self._control
 
-    @property
-    def alerts(self) -> AlertBook:
-        """告警簿(§5.2)。**转手 ``ctx`` 那一份,不另存** —— 存了就有两个
-        出处,而对不上的那天没有任何测试会红。"""
-        return self._ctx.alerts
-
     # ------------------------------------------------------------ 路由
 
     def route(self, method: str, pattern: str, handler: Handler) -> None:
@@ -2159,14 +2046,7 @@ class AppServer:
         self.route("POST", "/api/bundle/apply", self._bundle_apply)
         self.route("POST", "/api/bundle/rollback", self._bundle_rollback)
         self.route("GET", "/api/schedule", self._schedule)
-        self.route("GET", "/api/watch/summary", self._watch_summary)
         self.route("GET", "/api/upload", self._upload_get)
-        self.route("GET", "/api/alerts", self._alerts_open)
-        self.route("GET", "/api/alerts/all", self._alerts_all)
-        # ``<key*>`` 跨斜杠(见 ``_compile``)。两条都以 ``/ack``、
-        # ``/resolve`` 收尾,吃不到上面那两条 GET。
-        self.route("POST", "/api/alerts/<key*>/ack", self._alert_ack)
-        self.route("POST", "/api/alerts/<key*>/resolve", self._alert_resolve)
 
     def handle(self, method: str, path: str, query: Mapping[str, str],
                body: bytes, headers: Mapping[str, str] | None = None,
@@ -2722,7 +2602,7 @@ class AppServer:
           正巡检着把脚下这张图的原点删了。
 
         另外补一条**留痕**:谁、什么时候、删的哪张图,走 ``self._hub.events``
-        (跟 ``release.*`` 那几条同一条流),值守屏和第 8 卷的告警都读得到。
+        (跟 ``release.*`` 那几条同一条流),页面和手机都读得到。
         """
         body = req.json()
         bag_name = _text(body, "bag")
@@ -4242,49 +4122,14 @@ class AppServer:
         return clock_skew(local_ms=local_ms, reference_ms=reference_ms,
                           source=source)
 
-    # ------------------------------------------------------------ 值守屏
-
-    def _watch_summary(self, _req: Request) -> Response:
-        """值守屏那六项(§5.1)。**只读** —— 判据全在 ``app/watch.py``。
-
-        这儿只干一件事:把那三样 ``watch.py`` 自己够不着的事实取来递进去。
-
-        * 盘水位传的是 ``_disk`` 本人,不是模块 —— ``app/watch.py`` import
-          回这个模块就是一个环。跟 ``AlertSources`` 那个 ``disk=`` 同一个口径。
-        * 电量取 ``_StateHub`` 手上那份 ``battery_at``,**不现问后端**:厂商
-          后端上问一次电量是一次真实的链路往返,而这一屏是按秒刷的;那份是
-          事件推出来的,读它不花一分钱。**连同接收时刻一起取** —— 链路断了
-          它不会自己变回 ``None``,只会停在最后一个读数上,把时刻一并报上去
-          才轮得到看的人自己判断这个数多老了。
-        * 扫盘那一跳要过桥(``_scan_targets`` 的 docstring 说了为什么)。
-
-        **探针卡住不许把另外五项一起带走。** 值守屏是最后一块必须还能亮的
-        玻璃 —— 那五项里有盘水位和电量,正是盘出事、电快没了的时候人要看的。
-        扫不成就把镜像盘那一档报成「不知道」,这一屏照样答完。
-        """
-        ctx = self._ctx
-        try:
-            targets, _why = self._scan_targets()
-        except HttpError:
-            log.warning("扫盘没成,镜像盘那一档按不知道答", exc_info=True)
-            targets = None
-        battery_pct, battery_as_of_ms = self._hub.battery_at or (None, None)
-        return json_response(watch_summary(
-            ctx, now_ms=ctx.clock(),
-            disk=lambda: _disk(ctx.runs_root),
-            battery_pct=battery_pct, battery_as_of_ms=battery_as_of_ms,
-            targets=targets,
-            # 没装回传就是 ``None``,不是 ``UploadStats()`` —— 后者的
-            # ``backlog`` 是 0,而 0 在这一格上的意思是「查过了没积压」。
-            upload=ctx.upload.stats() if ctx.upload is not None else None))
-
     # ------------------------------------------------------------ 回传
 
     def _upload_get(self, _req: Request) -> Response:
         """回传这一档现在什么样。**只读 —— 这条路由按不动任何东西。**
 
-        没装回传的时候 ``backlog`` 是 ``None`` 不是 ``0``,口径跟
-        ``/api/watch/summary`` 上那一格完全一致(见 ``watch.NO_UPLOADER``)。
+        没装回传的时候 ``backlog`` 是 ``None`` 不是 ``0``,并且附上
+        :data:`NO_UPLOADER` 那句话 —— ``0`` 是「查过了没积压」,``None`` 是
+        「这台狗没有这个能力」。
 
         **它不进 ``OPEN_PATHS``,要 token。** 积压条数会泄露这台狗最近跑了
         多少趟、传没传出去 —— 跟值守屏同一个口径。**也不进 ``CONTROLLED``**:
@@ -4301,95 +4146,6 @@ class AppServer:
             "enabled": True, "backlog": st.backlog,
             "last_step": st.last_step, "last_ok_ms": st.last_ok_ms,
             "last_error": st.last_error, "sent_files": st.sent_files})
-
-    # ------------------------------------------------------------ 告警
-
-    def _alerts_open(self, _req: Request) -> Response:
-        """未解决的告警,P1 在最上面(§5.2)。值守屏的主表读这一条。
-
-        **顺序是 ``AlertBook.open()`` 给的,这儿不再排一遍。** 排法(先级别
-        再 ``last_ms`` 倒序)是判据的一部分,判据只许在 ``engine/`` 里说一
-        次;在这里再排一遍就是同一件事有两个出处,而对不上的那天,屏幕第一行
-        显示的不是该起身的那件事。
-        """
-        return json_response(
-            {"alerts": [a.to_wire() for a in self.alerts.open()]})
-
-    def _alerts_all(self, _req: Request) -> Response:
-        """连已确认、已解决的一起给 —— 交接班要看的是这一张。
-
-        **不做分页、不做截断。** 这本簿子活在内存里,一次开机的量级是几十
-        条;真要长到需要分页,那本身就是一件该被看见的事,不该被一条悄悄
-        截断的接口掩过去。
-        """
-        return json_response(
-            {"alerts": [a.to_wire() for a in self.alerts.all()]})
-
-    def _alert_ack(self, req: Request) -> Response:
-        """记名确认:"我看见了,我在处理"(§5.3)。
-
-        **记名是这条接口存在的理由。** 确认会把升级链停下来(``ack`` 之后
-        ``due_escalations`` 不再看这一条),匿名确认等于任何人都能把声音关
-        掉而没人负责 —— 所以空姓名是 400,不是"先记下来再说"。
-
-        ``who`` 只认请求体里传上来的。任务 11 负责让手机自动带上落盘的操作
-        员姓名;在那之前手机得自己填,这一层不去猜、也不拿会话上的
-        ``operator`` 顶替 —— 那个名字狗记下来但**不核实**(§6.3),拿它当
-        "谁确认的"会让屏幕上出现一个看着像被核实过的名字。
-        """
-        body = req.json()
-        if not isinstance(body, dict):
-            raise HttpError(400, "请求体要是个对象", '形如 {"who": "老王"}')
-        who = body.get("who")
-        who = who.strip() if isinstance(who, str) else ""
-        if not who:
-            raise HttpError(
-                400, "确认要记名",
-                '形如 {"who": "老王"}。确认会把升级停下来 —— 没有名字就没有'
-                "人负责,那条升级链就白做了(§5.3)。")
-        try:
-            alert = self.alerts.ack(req.params["key"], who=who,
-                                    now_ms=self._ctx.clock())
-        except AlertNotFound:
-            raise _没这条告警(req.params["key"]) from None
-        return json_response({"alert": alert.to_wire()})
-
-    def _alert_resolve(self, req: Request) -> Response:
-        """这件事没了。**解决记名,但不冒充确认。**
-
-        **一个名字都不许往 ``acked_*`` 里填。** 解决了不等于有人看见过 ——
-        "没人看见"正是 §5.3 要暴露出来的那个事实(升级只看有没有人确认),
-        在这里悄悄补一个确认,交接班那张表上就再也看不出这一班到底有没有人
-        在盯屏幕,而升级链会被一次"我顺手点了解决"整个关掉。所以名字落的是
-        ``resolved_by`` 这个独立字段,``acked_by`` / ``acked_ms`` 原样不动。
-
-        **记名是可选的,这一点跟 ``ack`` 不一样。** 空姓名的确认会把升级关
-        掉,所以那边空了就是 400;而空姓名的解决只是交接班那张表上少一个名
-        字 —— 拿它去挡住"这件事没了",代价大得多(手机端至今发的就是空体,
-        见 ``mobile/lib/net/patrol_client.dart`` 的 ``resolveAlert``)。
-
-        **但类型错了要说出来,不许静默当成没记名。** ``{"who": 123}`` 是前端
-        会犯的错:悄悄按"没记名"办,那次解决会安安静静地成功,而表上少的那
-        个名字谁也不知道少在哪儿。也不该 500 —— 那是把我们的锅甩给一个只是
-        拼错了类型的人。
-        """
-        body = req.json()
-        if not isinstance(body, dict):
-            raise HttpError(400, "请求体要是个对象",
-                            '形如 {"who": "老王"};不记名就发个空体。')
-        raw = body.get("who", "")
-        if not isinstance(raw, str):
-            raise HttpError(
-                400, "名字要是一串字",
-                f'"who" 给的是 {type(raw).__name__}。形如 {{"who": "老王"}};'
-                "不记名就别带这个字段 —— 但别拿一个不是字的东西当名字,"
-                "那样交接班那张表上会少一个名字而没人知道少在哪儿。")
-        try:
-            alert = self.alerts.resolve(req.params["key"], who=raw.strip(),
-                                        now_ms=self._ctx.clock())
-        except AlertNotFound:
-            raise _没这条告警(req.params["key"]) from None
-        return json_response({"alert": alert.to_wire()})
 
     # ------------------------------------------------------------ 起来之后那一遍
 
@@ -4898,7 +4654,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                      missions_dir=Path(args.missions_dir), runs_root=runs_root,
                      video=video, identity=who)
     # **装不装回传就看这一处。** 没配地址 => ``ctx.upload`` 留 ``None`` =>
-    # 一条上传线程都不起,值守屏上那一格是「没装回传」而不是 0。
+    # 一条上传线程都不起,``/api/upload`` 上那一格是「没装回传」而不是 0。
     if args.console_url:
         ctx.upload = build_pump(ctx, args.console_url,
                                 token=os.environ.get(CONSOLE_TOKEN_ENV, ""))

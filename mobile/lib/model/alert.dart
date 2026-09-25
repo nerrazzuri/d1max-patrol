@@ -125,135 +125,6 @@ class Alert {
 /// 立刻动身的那一档。**字符串常量，不是枚举** —— 见 [Alert.level]。
 const String levelP1 = 'P1';
 
-/// 镜像盘那一档（`app/watch.py` 的 `_镜像`）。
-///
-/// **整档是悲观聚合：最差的那块盘代表这台狗。** 想知道具体哪块盘落后多少，
-/// 看 `/api/backup`，那里是一块盘一行。
-class MirrorSummary {
-  /// 认到几块、其中声称能用几块、这一拍真的读出来了几块。
-  ///
-  /// [usable] 和 [measured] 不等的时候狗那侧的 `detail` 里必有一句话 ——
-  /// 在一块以消灭静默失败为职责的屏上，不许自己造一个静默失败。
-  final int disks;
-  final int usable;
-  final int measured;
-
-  /// 落后多少趟 / 多少字节。**一块盘都没有的时候是 `null` 而不是 0**：
-  /// 一块镜像盘都没有的时候，「落后 0 趟」是一句听着让人放心的假话。
-  final int? behind;
-  final int? behindBytes;
-
-  /// 有没有哪块镜像盘满了。量不出来就是 `null`。
-  final bool? full;
-
-  /// 最近一次同步（取几块盘里**最旧**的那个）。一趟也没同步过是 `null`，
-  /// 不是 0 —— 画出来是 1970-01-01，一个看着像真事的假时刻。
-  final int? lastSyncMs;
-
-  const MirrorSummary({
-    required this.disks,
-    required this.usable,
-    required this.measured,
-    required this.behind,
-    required this.behindBytes,
-    required this.full,
-    required this.lastSyncMs,
-  });
-
-  factory MirrorSummary.fromWire(Map<String, dynamic> m) => MirrorSummary(
-        disks: (m['disks'] as num?)?.toInt() ?? 0,
-        usable: (m['usable'] as num?)?.toInt() ?? 0,
-        measured: (m['measured'] as num?)?.toInt() ?? 0,
-        behind: (m['behind'] as num?)?.toInt(),
-        behindBytes: (m['behind_bytes'] as num?)?.toInt(),
-        full: m['full'] as bool?,
-        lastSyncMs: (m['last_sync_ms'] as num?)?.toInt(),
-      );
-}
-
-/// 值守屏那六项（`GET /api/watch/summary`，`app/watch.py` 的 `watch_summary`）。
-///
-/// 六项的共同点是**它们的失败都是静默的**：盘满了、包落好了没生效、钟漂了、
-/// 证据在狗上堆着、备份盘早就坏了 —— 每一件都不会自己冒出来喊一声。
-class WatchSummary {
-  /// 比 `current` 新的槽名。**空列表和 `null` 是两件事**：空列表是「翻过盘
-  /// 了，没有落差」，`null` 是「盘上那份局面读不出来」。
-  final List<String>? bundleLag;
-
-  /// 本地钟快了多少**秒**（正数 = 走快了）。没有外部参照就是 `null` ——
-  /// 报 0 等于说「钟是准的」（§3.3）。
-  final double? clockSkewS;
-
-  /// 还有多少条证据没传上去。**这一卷恒为 `null`**（这台狗还没装回传功能）。
-  final int? uploadBacklog;
-
-  /// 盘已用**比例 0-1**，不是 0-100。见文件头那段量纲。
-  final double? diskUsedRatio;
-
-  /// 电量**百分数 0-100**，不是 0-1。
-  final double? batteryPct;
-
-  /// 上面那个电量是**什么时候**收到的（UTC 毫秒）。
-  ///
-  /// **这一档不设阈值、不替人判「多久算旧」。** 电量是事件推出来的，链路断
-  /// 了它不会自己变回 `null`，只会一直停在最后一个读数上。一个不再更新的数
-  /// 比 `null` 更危险，因为它看起来像在更新。
-  final int? batteryAsOfMs;
-
-  /// 现在有几条未解决的告警。
-  final int alertsOpen;
-
-  final MirrorSummary? mirror;
-
-  /// 每一档报不出来时狗附的那句人话（键就是上面那几个字段的 wire 名）。
-  ///
-  /// **原样上屏，手机不重新组织。** 一个光秃秃的「不知道」摆在屏上，人分不
-  /// 清是「没查」还是「查了没事」—— 那本身就是一次新的静默失败。措辞归狗
-  /// 那头：手机这头硬编一句的话，狗改了措辞手机不跟。
-  final Map<String, String> detail;
-
-  const WatchSummary({
-    required this.bundleLag,
-    required this.clockSkewS,
-    required this.uploadBacklog,
-    required this.diskUsedRatio,
-    required this.batteryPct,
-    required this.batteryAsOfMs,
-    required this.alertsOpen,
-    required this.mirror,
-    required this.detail,
-  });
-
-  factory WatchSummary.fromWire(Map<String, dynamic> m) {
-    final Object? lag = m['bundle_lag'];
-    final Object? mir = m['mirror'];
-    final Object? why = m['detail'];
-    return WatchSummary(
-      bundleLag: lag is List
-          ? <String>[for (final Object? s in lag) '$s']
-          : null,
-      // `(x as num?)?.toDouble()`：钟正好对得上时狗那头发的是整数 `0`，
-      // 只认 `double` 的话那一拍会崩。
-      clockSkewS: (m['clock_skew_s'] as num?)?.toDouble(),
-      uploadBacklog: (m['upload_backlog'] as num?)?.toInt(),
-      diskUsedRatio: (m['disk_used_ratio'] as num?)?.toDouble(),
-      batteryPct: (m['battery_pct'] as num?)?.toDouble(),
-      batteryAsOfMs: (m['battery_as_of_ms'] as num?)?.toInt(),
-      alertsOpen: (m['alerts_open'] as num?)?.toInt() ?? 0,
-      mirror: mir is Map<String, dynamic> ? MirrorSummary.fromWire(mir) : null,
-      detail: why is Map
-          ? <String, String>{
-              for (final MapEntry<Object?, Object?> e in why.entries)
-                '${e.key}': '${e.value}',
-            }
-          : const <String, String>{},
-    );
-  }
-
-  /// 某一档那句为什么。没有就是空串。
-  String detailFor(String field) => detail[field] ?? '';
-}
-
 /// 一份告警名单（`{"alerts": [...]}`）。
 ///
 /// **顺序原样留着**，见文件头。
@@ -264,23 +135,21 @@ class WatchSummary {
 /// 留白只是分不清「太平」和「没加载」；这一句是**说了假话**，是这一屏
 /// 能犯的最坏的一种错。
 ///
-/// 这条路今天就走得到：`net/patrol_client.dart` 的 `_send` 吞掉
-/// `FormatException`（S-2，为了让状态码报得对），于是一份 200 + 一页强制
-/// 门户 HTML 会原样变成一个空的 `{}` 交到这儿。
+/// 这条路走得到：一份 200 + 一页强制门户 HTML、站点升级后改了形状，都会原样变成一份
+/// 没有 `alerts` 的东西交到这儿。
 ///
 /// **单条读不懂也是整份不算数**，不是悄悄少一条：少掉的那条正好是 P1 的
 /// 那天，屏上剩下的几条看着一切正常。跟 `store/registry_store.dart` 里
 /// 「名册里有条目不是对象」一个规矩 —— 那儿也是整份读不出，不是少一只狗。
 ///
 /// 抛的是 `FormatException`，跟 `model/robot.dart`、`store/registry_store.dart`
-/// 同一个类型：调用点（`ui/watch_page.dart` 的 `_loadAlerts`）本来就把
-/// 一切异常收进「读不到告警」那一支。
+/// 同一个类型：调用点（`ui/site_watch_page.dart` 的 `_loadAlerts`）把它收进「读不到告警」那一支。
 List<Alert> alertsFromWire(Map<String, dynamic> m) {
   final Object? raw = m['alerts'];
   if (raw is! List) {
     throw FormatException(m.containsKey('alerts')
-        ? '狗回的告警名单不是个名单：${raw.runtimeType}'
-        : '狗回的这份东西里没有 alerts 那一段，读不出告警');
+        ? '告警名单不是个名单：${raw.runtimeType}'
+        : '回的这份东西里没有 alerts 那一段，读不出告警');
   }
   return <Alert>[
     for (final Object? a in raw)

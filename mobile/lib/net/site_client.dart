@@ -17,6 +17,8 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
+import '../model/alert.dart';
+
 /// 跟站点说话时出的任何岔子。连不上、证书不对、超时是 0；站点回的 4xx/5xx 原样带状态码。
 class SiteError implements Exception {
   final int status;
@@ -63,6 +65,9 @@ class SiteSession {
   const SiteSession(this.token, this.name, this.role);
 
   bool get canDispatch => role == 'admin' || role == 'guard';
+
+  /// 确认、解决告警（W00c5a）：值班的人（保安、管理员）；业主只看。
+  bool get canHandleAlerts => role == 'admin' || role == 'guard';
   bool get canAbort => role == 'admin' || role == 'guard' || role == 'owner';
 }
 
@@ -78,6 +83,13 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> returnToStandby(String id);
   Future<Map<String, dynamic>> schedule();
   Future<List<Map<String, dynamic>>> incidents();
+
+  /// 告警（W00c5a）。默认只要未解决的，[all] 为真时连已解决的一起（最近的在前）。
+  /// **读不懂就抛 `FormatException`，绝不退回一份空名单**（见 `alertsFromWire`）。
+  Future<List<Alert>> alerts({bool all = false});
+  Future<Map<String, dynamic>> ackAlert(String key);
+  Future<Map<String, dynamic>> resolveAlert(String key);
+  Future<Map<String, dynamic>> watchSummary();
   Stream<Map<String, dynamic>> events();
   void close();
 }
@@ -254,7 +266,24 @@ class SiteClient implements SiteApi {
         .toList();
   }
 
-  /// SSE：第一帧是全量快照（`kind: snapshot`），之后是 status/event/ack/incident……
+  @override
+  Future<List<Alert>> alerts({bool all = false}) async =>
+      alertsFromWire(_map(await _send('GET', all ? '/api/alerts?all=1' : '/api/alerts')));
+
+  /// 告警键 `robot/kind#seq` 里有 `/` 和 `#`：整个键编码成一段。确认人由站点取登录账号。
+  @override
+  Future<Map<String, dynamic>> ackAlert(String key) async => _map(await _send(
+      'POST', '/api/alerts/${Uri.encodeComponent(key)}/ack', <String, dynamic>{}));
+
+  @override
+  Future<Map<String, dynamic>> resolveAlert(String key) async => _map(await _send(
+      'POST', '/api/alerts/${Uri.encodeComponent(key)}/resolve', <String, dynamic>{}));
+
+  @override
+  Future<Map<String, dynamic>> watchSummary() async =>
+      _map(await _send('GET', '/api/watch/summary'));
+
+  /// SSE：第一帧是全量快照（`kind: snapshot`），之后是 status/event/ack/incident/alert……
   /// 流断了（站点重启、令牌过期）就结束；调用方决定要不要重连。
   @override
   Stream<Map<String, dynamic>> events() async* {
