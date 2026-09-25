@@ -11,12 +11,8 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
-from d1max_agent.engine.archive import read_manifest
-from d1max_agent.engine.mission import parse_mission
 from d1max_patrol.app.identity import (
     UNKNOWN_SN,
     Identity,
@@ -25,11 +21,6 @@ from d1max_patrol.app.identity import (
     read_sn,
     resolve,
 )
-from d1max_patrol.app.server import AppServer, _make_engine
-from d1max_patrol.backends.base import NavStatus, NavStatusEvent
-
-from ..conftest import NoDisks
-from . import conftest as C
 
 PIN = "704311"
 
@@ -312,114 +303,6 @@ def test_指纹里不放mac列表():
 
 
 # ------------------------------------------------ 身份真的进了归档(最要紧的一条)
-
-
-class _ArrivingNav(C.FakeNav):
-    """到点就报"到了"。
-
-    ``conftest`` 里那个假导航是**故意**停在"走着"不动的 —— 它服务的是"测接口
-    形状"那批用例。这里要的是一整趟跑完之后落盘的 manifest,所以得让它到站。
-    """
-
-    async def goto(self, pose) -> None:
-        await super().goto(pose)
-        self.emit(NavStatusEvent(NavStatus.SUCCEED))
-
-
-
-def test_跑完一趟归档里写着是哪只狗(bridge, tmp_path):
-    """**这条不过,"归档不分目录"这个决定就没兑现。**
-
-    我们没有按机器分目录:一台狗上只会有它自己的数据,多那一层下面永远只有
-    一个兄弟。代价是"这是哪只狗跑的"必须写在 ``manifest.json`` 里 —— 日后
-    真把几只狗的归档倒到一处,认的就是这个字段。所以这里走的是生产代码里
-    那个 ``_make_engine``,不是测试自己另拼一个。
-    """
-    who = resolve("C40221", "三号", files=(tmp_path / "无",),
-                  net_root=tmp_path / "无")
-    nav, device = _ArrivingNav(), C.FakeDevice()
-    runs_root = tmp_path / "runs"
-    # removable 必须显式传:这条是真开跑、真过 preflight 的,而 `_make_engine`
-    # 的默认值是 DEFAULT_PROBE —— 它扫的是这台机器上真的 /media 和 /mnt。
-    engine = bridge.call(lambda: _make_engine(
-        nav, device, {}, runs_root, who.fingerprint(), removable=NoDisks()))
-    try:
-        bridge.call(lambda: engine.start(parse_mission(_MISSION)))
-        bridge.call(lambda: engine.wait_done(timeout_s=10.0))
-    finally:
-        bridge.call(engine.aclose, timeout_s=10.0)
-
-    fp = read_manifest(engine.archive.path)["fingerprint"]
-    assert fp["robot_sn"] == "C40221"
-    assert fp["robot_name"] == "三号"
-
-
-def test_没身份的时候归档也照样写得出来(bridge, tmp_path):
-    """指纹是空的不能把整趟跑挂掉 —— 归档比身份重要得多。"""
-    nav, device = _ArrivingNav(), C.FakeDevice()
-    engine = bridge.call(lambda: _make_engine(nav, device, {},
-                                              tmp_path / "runs", None,
-                                              removable=NoDisks()))
-    try:
-        bridge.call(lambda: engine.start(parse_mission(_MISSION)))
-        bridge.call(lambda: engine.wait_done(timeout_s=10.0))
-    finally:
-        bridge.call(engine.aclose, timeout_s=10.0)
-    assert read_manifest(engine.archive.path)["fingerprint"] == {}
-
-
-# ------------------------------------------------------------------ 接上真服务
-
-
-def test_接口把身份给出来(server, ctx):
-    body = C.get_json(server, "/api/identity")
-    assert body["sn"] == ctx.identity.sn
-    assert body["host"] == ctx.identity.host
-    assert "provisional" in body
-
-
-def test_身份里的mac是个数组(server):
-    """手机那边直接当列表用。单个 MAC 也得是数组,别时而字符串时而数组。"""
-    assert isinstance(C.get_json(server, "/api/identity")["macs"], list)
-
-
-def test_默认上下文自己会去查身份(ctx):
-    """没人显式给身份的时候也得有一个 —— 不能是 None,页面上会炸。"""
-    assert ctx.identity.sn
-
-
-# ------------------------------------------------------------------ 要不要 PIN
-
-
-@pytest.fixture
-def server_pin(ctx):
-    s = AppServer(ctx, port=0, pin=PIN)
-    s.start()
-    yield s
-    s.stop()
-
-
-def _token(server) -> str:
-    code, body, _ = C.request(server, "/api/auth", method="POST",
-                              payload={"pin": PIN})
-    assert code == 200, body
-    return json.loads(body)["token"]
-
-
-def test_没解锁看不到身份(server_pin):
-    """射程之内任何人都能连上狗热点(密码 12345678,还印在手册里)。
-
-    认狗这件事手机用热点的 BSSID 就够了 —— 连上之前就看得见,不用问服务端。
-    既然如此,没必要白送出机身序列号和一串网卡地址。
-    """
-    assert C.status(server_pin, "/api/identity") == 401
-
-
-def test_解锁之后看得到身份(server_pin, ctx):
-    token = _token(server_pin)
-    body = C.get_json(server_pin, "/api/identity",
-                      headers={"Authorization": "Bearer " + token})
-    assert body["sn"] == ctx.identity.sn
 
 
 # ---------------------------------------------------- §6.2:SN 必须手写

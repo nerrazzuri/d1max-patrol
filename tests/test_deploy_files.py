@@ -19,7 +19,8 @@ DEPLOY = ROOT / "deploy"
 
 @pytest.fixture
 def 服务单元() -> str:
-    return (DEPLOY / "d1max-patrol.service").read_text(encoding="utf-8")
+    """狗上唯一的单元(W00c5e:老服务 d1max-patrol.service 退役)。"""
+    return (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
 
 
 #: 守卫那一行的完整形状。前缀的 '-'、根下(不是 current 下)的解释器、
@@ -27,10 +28,6 @@ def 服务单元() -> str:
 GUARD_LINE = ("ExecStartPre=-/opt/d1max/bin/python "
               "-m d1max_patrol.cli release boot-guard")
 
-#: 任务包守卫那一行。**跟上面那条是两回事,两条都要**(评审复评 finding 4):
-#: 上面那条修版本目录的链,这条修 /opt/d1max/bundles 底下那两条链。
-BUNDLE_GUARD_LINE = ("ExecStartPre=-/opt/d1max/bin/python "
-                     "-m d1max_patrol.cli bundle guard")
 
 
 @pytest.fixture
@@ -38,19 +35,17 @@ def 装机脚本() -> str:
     return (DEPLOY / "install.sh").read_text(encoding="utf-8")
 
 
-def test_两个文件都在而且没有第二个单元(服务单元, 装机脚本):
-    """交付的单元**只剩一个**。
+def test_狗上只有代理一个单元(服务单元, 装机脚本):
+    """W00c5e:狗上只有 d1max-agent.service。老服务、老守卫单元、特权助手都不在仓里了。
 
-    d1max-bootguard.service 连同它 WantedBy=multi-user.target 的形态一起
-    删掉了:守卫挪成了主单元的 ExecStartPre=。两个单元同时存在的话,真开机
-    时守卫会被数两次(attempts 一次开机加二),第二次开机就把一版本来健康
-    的退掉 —— 比守卫根本没跑还危险,所以"仓里不再有它"本身是条硬约定。
+    两个服务同时开着的话,两个进程抢同一个旁路进程的控制权;两份守卫还会把在途标记数两次
+    (一次开机加二),第二次开机就把一版本来健康的退掉。
     """
     assert (DEPLOY / "install.sh").exists()
-    assert (DEPLOY / "d1max-patrol.service").exists()
-    assert not (DEPLOY / "d1max-bootguard.service").exists()
-    # fixture 本身已经证明这两个文件读得出内容,这里再显式断言一次,
-    # 免得将来有人把 fixture 换成别的来源却没人发现断言早就名不副实。
+    assert (DEPLOY / "d1max-agent.service").exists()
+    for 老 in ("d1max-patrol.service", "d1max-bootguard.service", "d1max-privileged",
+              "d1max-restart-now", "sudoers-d1max"):
+        assert not (DEPLOY / 老).exists(), f"deploy/{老} 应该随 W00c5e 退役"
     assert 服务单元
     assert 装机脚本
 
@@ -75,49 +70,6 @@ def test_守卫在每一次服务启动之前跑一遍(服务单元):
     assert 服务单元.index("ExecStartPre=") < 服务单元.index("\nExecStart=")
     # 守卫用的是根下那个跟版本无关的解释器,不是 current 下那一版自己的。
     assert "/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard" in 服务单元
-
-
-def test_代理单元也挂开机守卫():
-    """W00c5d 第三部分:站点下发版本、代理自己切。新版代理起不来,守卫数够次数退回上一版。"""
-    unit = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
-    assert GUARD_LINE in unit
-    assert unit.index("ExecStartPre=") < unit.index("\nExecStart=")
-
-
-def test_任务包守卫也挂在每一次服务启动之前(服务单元):
-    """**评审复评 finding 4:修复路径写好了,却没有任何一个地方调它。**
-
-    上面那条守的是版本目录(``/opt/d1max/releases`` + ``current`` 链)。
-    任务包是另一套链(``/opt/d1max/bundles`` 底下的 ``current``/``previous``),
-    ``engine/bundle.py`` 的 ``guard_bundle()`` 是「apply 连着换两条链,两次
-    之间断电」唯一的出路 —— 而 ``docs/任务包格式.md`` 已经对客户写着「开机时
-    照着它把链修回一个能用的样子」。没人调的话那句话就是假的,而现场看到的
-    是狗把盘上唯一那份好包拉黑之后再也装不回去。
-
-    **两条都要,而且都是 ExecStartPre。** 不带上装的机器升级走的是
-    ``systemctl restart``(见 ``engine/selfcheck.py`` 的 ``restart_plan()``),
-    根本不开机 —— 挂成独立的 oneshot 单元的话,守卫在最需要它的那条路上
-    永远不跑,这正是版本守卫当初挪过来的理由。
-    """
-    行 = [ln for ln in 服务单元.splitlines() if ln.startswith("ExecStartPre=")]
-    assert len(行) == 2                      # 版本一条,任务包一条,不多不少
-    # **断言的对象必须是从 service 文件里读出来的那一行**,不是本文件里的
-    # 字面量常量(评审复评第 3 轮 N7:原来那句
-    # ``BUNDLE_GUARD_LINE.startswith("ExecStartPre=-")`` 比的是同一个文件里的
-    # 常量跟它自己的前缀 —— **恒真**,跟 service 文件毫无关系,而它偏偏长在
-    # 交付面守卫的测试文件里)。
-    # 挑行用的是**不含那个 '-' 的弱特征**,所以真把 '-' 从 service 里拿掉时,
-    # 红的是下面那一句,而不是先被 ``BUNDLE_GUARD_LINE in 服务单元`` 拦掉。
-    任务包行 = [ln for ln in 行 if ln.endswith("d1max_patrol.cli bundle guard")]
-    assert len(任务包行) == 1
-    # 前缀的 '-' 跟版本守卫同一条理由:安全网不该比它防的问题更危险。
-    assert 任务包行[0].startswith("ExecStartPre=-")
-    assert BUNDLE_GUARD_LINE in 服务单元
-    assert 服务单元.index(BUNDLE_GUARD_LINE) < 服务单元.index("\nExecStart=")
-    # **根下那个跟版本无关的解释器**,不是 current 下的 —— 一个坏到解释器都
-    # 装歪了的版本,不该把自己的救生索也带坏。
-    assert "/opt/d1max/current/venv/bin/python -m d1max_patrol.cli" \
-        not in 服务单元
 
 
 def test_守卫自己挂了也不拦服务启动(服务单元):
@@ -173,24 +125,7 @@ def test_脚本不把口令写死在里头():
             assert 不该出现 not in text, f"{文件.name} 里不该出现 {不该出现!r}"
 
 
-def test_装机清单存在而且提到上装那一步():
-    """§7.1 纪律 1:上装属性必须是装机时被记下来的,不是靠人记得。"""
-    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    assert "上装" in text
-    assert "release install" in text
-
-
 # ------------------------------------------------------------- 裁定 1: ExecStart
-
-def test_服务的ExecStart指着真实存在的入口(服务单元):
-    """cli.py 的 build_parser() 里没有 serve 这个子命令 —— 指着它的话,
-
-    Restart=always 会让服务每 5 秒 SystemExit 2 一次,把日志刷成一堵墙。
-    真正的 HTTP 服务入口是 app/server.py 的 main(),pyproject.toml 里
-    注册成 d1max-app,这里直接用 -m 调那个模块。
-    """
-    assert "-m d1max_patrol.app.server" in 服务单元
-    assert "cli serve" not in 服务单元
 
 
 # ------------------------------------------------------------- 裁定 2: 槽内 venv
@@ -274,7 +209,7 @@ def test_单元里不再有对守卫单元的任何依赖(服务单元, 装机�
     # 清老单元要排在 daemon-reload 之前,不然这一次 reload 读到的还是它。
     assert (装机脚本.index("rm -f /etc/systemd/system/d1max-bootguard.service")
             < 装机脚本.index("systemctl daemon-reload"))
-    assert "systemctl enable d1max-patrol.service" in 装机脚本
+    assert "systemctl enable d1max-agent.service" in 装机脚本
 
 
 def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机脚本):
@@ -291,14 +226,12 @@ def test_脚本重跑到已经是这一版时跳过切换但仍然重启(装机�
     assert "已经是在跑的那一版了,跳过切换" in 装机脚本
     # stop 和 start 都不能被套进上面那个分支里 —— 顶格(不缩进)才说明它们在
     # if/else 的 fi 之后,两条路都会走到,不是只有切换成功那一路才走。
-    assert "\nsystemctl stop d1max-patrol.service || true" in 装机脚本
-    assert "\nsystemctl start d1max-patrol.service" in 装机脚本
+    assert "\nsystemctl stop d1max-agent.service || true" in 装机脚本
+    assert "systemctl start d1max-agent.service" in 装机脚本
 
 
 # --------------------------------------------------- fix2: 第 4 卷终评 A 组
 
-#: 我们的 HTTP 服务真正听的端口(``app/server.py`` 的 ``DEFAULT_PORT``)。
-HTTP_PORT = "8095"
 #: 厂商导航 WebSocket 的端口。**不是我们的** —— 交付文件里出现它就是错的。
 #: 早先这里是字面量 ``":10010"``,**带冒号** —— 于是"端口 10010""参见 10010
 #: 那条"这种更可能真的被写出来的形状全都逃得过(终评实测漏网)。改成看**数字
@@ -310,7 +243,8 @@ def 交付文件() -> tuple[Path, ...]:
     """会被发到客户现场那几份。**护栏都按这一份名单铺。**"""
     return (
         DEPLOY / "install.sh",
-        DEPLOY / "d1max-patrol.service",
+        DEPLOY / "d1max-agent.service",
+        DEPLOY / "d1max-agent-start",
         # 共存这一组也要发到现场:装机前后各跑一次 footprint.sh 留证据,
         # 撤场时跑 uninstall.sh。挂在同一份名单上,护栏(口令、端口、
         # PIN 字面量、厂商协议特征、骨架下界)就自动全都罩到它们头上。
@@ -334,64 +268,6 @@ def test_交付文件里不许出现厂商导航端口():
         text = 文件.read_text(encoding="utf-8")
         assert VENDOR_WS_PORT.search(text) is None, \
             f"{文件.name} 里不该出现厂商导航端口(不管带不带冒号)"
-
-
-def test_装机脚本和清单都用8095():
-    """光"没有 10010"不够 —— 得真的有人在说 8095,否则整段被删掉也照样绿。"""
-    assert HTTP_PORT in (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert HTTP_PORT in (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-
-
-def test_服务听在所有地址而不是只听本机(服务单元):
-    """``DEFAULT_HOST`` 是 127.0.0.1,而 ``--host`` **没有**环境变量兜底
-
-    (只有 --pin/--sn/--nickname 有)—— 不写在 ExecStart 上就没有第二个地方
-    能把它改掉。手机 app 连的是 192.168.168.100:8095,只听本机的机器它根本
-    连不上。
-    """
-    assert "--host 0.0.0.0" in 服务单元
-
-
-def test_装机脚本第一次写env时当场生成PIN(装机脚本):
-    """``--host 0.0.0.0`` 和 ``D1MAX_PIN`` 是一对,拆不开。
-
-    ``check_exposure()`` 见到非本机地址而没有 PIN 会 ``SystemExit``;配上
-    ``Restart=always`` + ``RestartSec=5``,那就是每 5 秒刷一条日志的启动
-    循环。所以模板里那一行不能留空,得当场生成一个填进去。
-    """
-    assert "secrets.randbelow" in 装机脚本
-    assert "D1MAX_PIN=%s" in 装机脚本            # printf 追加,不是留空的模板行
-    # **只在文件不存在时生成** —— 跟 D1MAX_SN 同一条纪律,现场填过的不许覆盖。
-    assert "-e /etc/d1max/env" in 装机脚本
-    # 生成完要大声打出来,不然现场的人不知道这台机器的 PIN 是什么。
-    assert "这台机器的设备 PIN 是" in 装机脚本
-
-
-def test_装机脚本在PIN空着时停下来而不是把机器丢进启动循环(装机脚本):
-    """跟 SN 那条警告不是一回事:SN 空只是**可能**被误判回滚,PIN 空是
-
-    **必定**起不来。让它崩成每 5 秒一条日志的启动循环,比停下来喊一声糟得多
-    —— 现场看到的是一堵日志墙。所以这里断言的是三样具体的东西:判据、
-    ``exit 3``、以及它排在 ``systemctl start``(W01 之前是 ``restart``)
-    **之前**。
-    """
-    # 判据测的是**解析出来的值**,不是「文件里有没有一行长这样」。
-    # 原来这里是 grep -qE '^D1MAX_PIN=.+',而 `D1MAX_PIN=   `(尾随空格)
-    # 它判「有 PIN」,systemd 剥完空白读出来却是空串 —— 守卫在,日志墙也在。
-    # (「不许退回去数行」那一条在 test_deploy_guards.py 里,那边有剥注释的工具 ——
-    #  这里的脚本正文是连注释一起读进来的,而注释里正写着原来那个形状。)
-    assert '[[ -z "${D1MAX_PIN_VALUE//[[:space:]]/}" ]]' in 装机脚本
-    assert "exit 3" in 装机脚本
-    assert (装机脚本.index("exit 3")
-            < 装机脚本.index("\nsystemctl start d1max-patrol.service"))
-
-
-def test_装机清单里有记PIN那一条():
-    """§7.9 第 2 步「设置设备 PIN」。之前整条规格项在交付面上一个字都没有。"""
-    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    assert "D1MAX_PIN" in text
-    assert "--host 0.0.0.0" in text          # 为什么必须有 PIN,得说清楚
-    assert "登记表" in text                   # 抄到哪儿去
 
 
 def test_装机脚本把填好的SN透传给activate(装机脚本):
@@ -423,16 +299,6 @@ def test_装机清单里有故意做坏的包那次演练():
     assert "release install" in text
     assert "拒收" in text                     # 看到拒收就是对的,得写明白
     assert "release.json" in text             # 改文件不改哈希,坏法要说清楚
-
-
-def test_装机清单验收里查provisional():
-    """§7.9 第 1 步:``provisional == true`` 的机器不许出厂。
-
-    ``true`` 说明 SN 还在拿 MAC 兜底,以后每次升级都会把好版本判成失败。
-    """
-    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    assert "provisional" in text
-    assert "/api/identity" in text
 
 
 def test_装机脚本从临时副本装不污染待哈希的包目录(装机脚本):
@@ -566,57 +432,6 @@ def test_值守与告警那份文档在名单上():
     assert ROOT / "docs" / "值守与告警.md" in 交付文件()
 
 
-def test_鉴权文档说清了三个时间尺度():
-    """§6.4:三个尺度不许混。文档上混了,现场的人就会去调错的那个数。"""
-    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
-    for 关键词 in ("0.6 秒", "30 秒", "12 小时", "30 分钟"):
-        assert 关键词 in text, f"三个时间尺度里少了 {关键词}"
-
-
-def test_鉴权文档说清了姓名不核实():
-    """§6.3:界面上不许把「张三报了个名」写成「已登录:张三」。"""
-    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
-    assert "不核实" in text
-    assert "operator_verified" in text
-
-
-def test_鉴权文档讲了热点是敌意网络():
-    """§6.5:不许假设「局域网 = 可信」。"""
-    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
-    assert "射程" in text
-    assert "只读" in text
-
-
-def test_鉴权文档没把热点说成只能看():
-    """**这一条挡的是一份会在应急通道上给出反向指引的文档。**
-
-    换到什么凭证是二维的:在哪个网 × 怎么解锁。``Guard.unlock``(明文 PIN)
-    才按通道判只读,``Guard.unlock_proof``(质询-应答)是**无条件**发完整凭证
-    —— 而手机 app 走的正是质询-应答,它是这个产品唯一的操作端。
-
-    文档要是只写"热点 → 只读 → 不能动机器",现场的人在客户网崩了的时候会
-    据此放弃热点这条应急通道,去派人进带电区抱狗 —— 而他掏出手机连热点本来
-    就能把狗开走。所以这里查的是:那张表上"热点 + 质询-应答 → 完整凭证"这
-    一行在不在。
-    """
-    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
-    行 = [ln for ln in text.splitlines()
-          if "热点" in ln and "质询-应答" in ln and "完整" in ln]
-    assert 行, "鉴权与控制权.md 没说清「热点上走质询-应答换到的是完整凭证」"
-
-
-def test_鉴权文档说破了热点上token也是明文的():
-    """``auth.py`` 早就承认"这条通道上 PIN 和 token 都要当成已经公开",
-
-    交付文档却只讲 PIN。而攻击者要的本来就是 token 不是 PIN:token 在同一条
-    没有 TLS 的链路上原样飞回手机,抄走一个正在用的就够了。不写这一句,第七
-    节"PIN 只有六位"那段会把人引向"把 PIN 加长"——那条路在热点上等于没做。
-    """
-    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
-    行 = [ln for ln in text.splitlines() if "token" in ln and "抄" in ln]
-    assert 行, "鉴权与控制权.md 没说破「热点上 token 本身也在明文链路上」"
-
-
 #: 「急停说过头」这条要查的,除了 ``交付文件()`` 名单还有这几份。**它们不是
 #: 交付件**,但同样会有人照着它们做判断:手机 app 那份是写给做 app 的人的,
 #: 内部安全说明是那句前提的出处。
@@ -649,18 +464,6 @@ def test_鉴权文档没把急停说过头():
                 f"{文件.name} 把急停说过头了 —— 得写明前提是「已经连上」"
 
 
-def test_鉴权文档写了通道判据的前提():
-    """待办 47:整套通道分档建立在「``client`` 是 TCP 对端地址」上。
-
-    哪天有人在前面加一层反向代理、改成读 ``X-Forwarded-For``,分档会静默
-    失效 —— 伪造一个头就能把自己抬成最信任的那一档,而且没有一条测试会红。
-    现场运维要动网络拓扑之前得先在这份文档里读到这句话。
-    """
-    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
-    assert "X-Forwarded-For" in text
-    assert "反向代理" in text
-
-
 #: 鉴权文档的九个小节标题。**关键词护栏挡不住"把正文删空、只留关键词"** ——
 #: 评审实证:把这份文档砍到 128 字节、只留几个关键词,上面那四条全绿。所以再
 #: 加一层查形状的:标题在不在、篇幅够不够。
@@ -669,64 +472,23 @@ def test_鉴权文档写了通道判据的前提():
     "## 五、", "## 六、", "## 七、", "## 八、",
 )
 
-#: 这份文档现在 6700 多字。定 6000 是留了余量的下界 —— 它不是在管字数,是在
+#: 这份文档 W00c5e 重写后 3900 字上下。定 3000 是留了余量的下界 —— 它不是在管字数,是在
 #: 拦"内容被掏空,只剩下够骗过关键词检查的骨架"。
-鉴权文档最少字数 = 6000
+鉴权文档最少字数 = 3000
 
 
 def test_鉴权文档没有被掏空():
-    """上面四条查的是关键词,而关键词是可以只留关键词的。
-
-    一份只剩「30 分钟 operator_verified 射程 X-Forwarded-For」的文档能让那
-    四条全绿,却对现场的人一点用都没有 —— 而这份文档是交付面上唯一讲清楚
-    「谁能动这台机器」的东西。所以这里查两件形状上的事:九个小节还在不在,
-    篇幅还够不够。
-    """
+    """关键词可以只留关键词。所以查形状:小节都在,篇幅够;再查几件这份文档非说清不可的事。"""
     text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
     for 标题 in 鉴权文档小节:
         assert 标题 in text, f"鉴权与控制权.md 少了小节 {标题}"
     assert len(text) > 鉴权文档最少字数, (
         f"鉴权与控制权.md 只剩 {len(text)} 字,像是被掏空了")
+    # 角色表、会话两条到期线、手机钉站点证书、狗的双向证书与吊销、遥控租约、叫停不走遥控通道。
+    for 词 in ("业主", "闲置 30 分钟", "12 小时", "指纹", "双向证书", "revoke", "租约",
+              "300 毫秒", "一半", "业主也能按", "硬件急停"):
+        assert 词 in text, f"鉴权与控制权.md 没说清「{词}」"
 
-
-def test_验收命令都带上了token():
-    """**这是在补一个真的缺陷。** 服务的 ExecStart 带 ``--host 0.0.0.0``,
-
-    于是 ``check_exposure()`` 逼着必须有 PIN;而 ``Guard.gate()`` 没有本机
-    豁免(``tests/app/test_auth.py`` 里有一条断言守着 127.0.0.1 也要 401)。
-    所以第三节里那几条裸 ``curl`` 今天在真机上全部返回 401 —— 装机的人会
-    以为服务坏了,或者更糟:以为「返回了东西」就算过了。
-    """
-    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    assert "/api/auth" in text                    # 先换 token
-    assert "$D1MAX_PIN" in text                   # 从 env 取,不写死
-    assert "Authorization: Bearer" in text
-    for 接口 in ("/api/release", "/api/selfcheck", "/api/identity"):
-        # 每一条验收 curl 都得带上 token,不能只改一条。
-        assert f"$TOKEN\" http://127.0.0.1:8095{接口}" in text \
-            or f"$TOKEN' http://127.0.0.1:8095{接口}" in text, \
-            f"{接口} 那条验收命令没带 token"
-
-
-def test_装机清单里没有裸curl():
-    """光"每条都带 token"不够 —— 漏掉的那一条是**裸的**,上面那条查不出。
-
-    第四节演练自动回滚那一步也要打 `/api/release`,它当年也是裸的。
-    """
-    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    for 行 in text.splitlines():
-        if "http://127.0.0.1:8095/api/" not in 行:
-            continue
-        assert "$TOKEN" in 行 or "/api/auth" in 行, f"这条 curl 没带 token:{行.strip()}"
-
-
-def test_装机清单验收里查手写的SN():
-    """§6.2:SN 必须装机时手写。``provisional`` 查不出这一条 —— 从设备树
-
-    读出来的模组序列号它算「不是临时的」,而那个号换一次主板就变。
-    """
-    text = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    assert "hand_written" in text
 
 
 # ------------------------------------------- fix3: 交付面终审必修 2/3/4/5
@@ -816,65 +578,36 @@ def test_清单和脚本对归档说的是同一句话(装机脚本):
     assert "不收归档" in 装机脚本                   # 脚本这一侧注明同一件事
 
 
-def test_装机清单说清了要跑两趟(装机脚本):
-    """必修 4:``/etc/d1max/env`` 是 5/7 才写出来的,而 5/7 到 7/7 是同一次
-
-    运行、中间不停 —— 人插不进去。清单原来把「填 ``D1MAX_SN``」排在 6/7 与
-    7/7 之间,照着做的人会得到一台顶着 MAC 假 SN 的机器,正是清单自己在同
-    一条勾选项里警告的那个后果。**脚本的注释早就写着「重跑这个脚本正是现场
-    『填完 SN 让它生效』的路子」,而清单从头到尾没有一处说要重跑。**
-
-    这条护栏钉的是「重跑」这件事本身 —— 免得将来又被改回一趟。
-    """
+def test_装机清单说清了装完放证书包_填现场值_再起代理(装机脚本):
+    """W00c5e:代理要站点签发的证书包、注册文件和几样现场值才起得来。清单要按脚本的实际顺序
+    说清楚:跑一趟 install.sh → 放证书包 → 填 env → 起代理;而且适配器先留仿真。"""
     清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    assert "两趟" in 清单
-    一趟 = 清单.index("### 第一趟")
-    填SN = 清单.index("### 两趟之间：填 SN")
-    二趟 = 清单.index("### 第二趟")
-    assert 一趟 < 填SN < 二趟, "两趟的顺序不对:填 SN 要夹在两趟之间"
-    # 第二趟为什么管用,要写出来 —— 不写的话下一个人会以为它是多余的一步。
-    assert "跳过切换" in 清单 and "无条件" in 清单
-    # 脚本那一侧的两个形状是这条路子成立的前提,一起钉住。
+    二 = 清单.split("## 二、")[1].split("## 三、")[0]
+    放 = 二.index("**放证书包**")
+    填 = 二.index("**填现场值**")
+    起 = 二.index("sudo systemctl restart d1max-agent")
+    assert 放 < 填 < 起
+    for 词 in ("/etc/d1max/tls", "registration.json", "D1MAX_SITE_MQTT", "D1MAX_MAP", "D1MAX_HOME"):
+        assert 词 in 二, f"装机清单二、里没说 {词}"
+    assert "D1MAX_HAL" in 二 and "sim" in 二 and "§3b" in 二, "适配器先留仿真、验收过了才改"
+    # 清单一里要先在站点上登记这只狗(enroll),不然二、里没有证书包可放。
+    assert "enroll" in 清单.split("## 二、")[0]
+    # 脚本那一侧:6/7 看证书包、7/7 站点值空着不起。
+    assert "/etc/d1max/registration.json" in 装机脚本
     assert "已经是在跑的那一版了,跳过切换" in 装机脚本
-    assert "\nsystemctl start d1max-patrol.service" in 装机脚本
 
 
-def test_装机清单把记上装挪到服务起来之后():
-    """必修 4 的另一半:``PUT /api/identity/payload`` 原来排在 6/7,
-
-    **可服务要到 7/7 才第一次起来** —— 首装机器在 6/7 那一刻端口上没人听,
-    照着敲只会得到「连不上」。
-    """
+def test_装机清单的验收看代理与站点_不再有PIN与8095():
     清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
-    记上装 = 清单.index("### 第二趟之后：记上装")
-    二趟 = 清单.index("### 第二趟")
-    assert 二趟 < 记上装, "记上装又排到第二趟之前去了 —— 那时候端口上没人听"
-    # 那条 PUT 要落在这一段里,不能还留在 6/7 那一条勾选项上。
-    assert 清单.index("/api/identity/payload", 记上装) > 记上装
+    三 = 清单.split("## 三、")[1].split("## 四、")[0]
+    assert "systemctl is-active d1max-agent" in 三
+    assert "journalctl -u d1max-agent" in 三
+    assert "站点" in 三
+    for 老 in ("8095", "D1MAX_PIN", "/api/auth", "provisional", "payload"):
+        assert 老 not in 清单, f"装机清单里还有老服务的 {老}"
+    # 老服务只许在「清掉老服务」「验收它没了」这两处被提到。
+    assert "systemctl status d1max-patrol` 说找不到" in 三
 
-
-def test_控制权到期两份文档互相限定():
-    """必修 5:两句在机制上都对 —— 一句讲**没人接管**时租约过期(任务照跑,
-
-    只停遥控那一路并报一条 P1),一句讲**接管中**过期(狗停在原地,绝不自己
-    接着走)。**但两句原来都用了无限定的全称写法**,一句还是小节标题。现场
-    同时拿到这两份,谁都不知道该信哪个 —— 而这件事错一次就是「以为狗会停,
-    结果它照跑」或者反过来。
-    """
-    鉴权 = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
-    值守 = (ROOT / "docs" / "值守与告警.md").read_text(encoding="utf-8")
-    # 鉴权这一侧:全称写法要带上限定词,并且指得到另一份的那一节。
-    for 行 in [ln for ln in 鉴权.splitlines() if "狗不会因此停下" in ln]:
-        assert "未接管时" in 行, f"这一行还是无限定的全称写法:{行.strip()}"
-    assert "值守与告警.md` 五、规矩三" in 鉴权
-    # 值守这一侧:规矩三的标题要说明白它讲的是接管中。
-    标题 = [ln for ln in 值守.splitlines() if ln.startswith("### 规矩三")]
-    assert len(标题) == 1, f"规矩三的标题不止一行:{标题}"
-    assert "接管中" in 标题[0], f"规矩三的标题还是全称写法:{标题[0]}"
-    assert "鉴权与控制权.md" in 值守
-    # 死指针:第 8 卷已经给了答案,「不是这一层的事」这句不许再留着。
-    assert "逻辑那一层的事" not in 鉴权
-    assert "teleop.emergency_stop" in 鉴权
 
 
 # --------------------------------------- fix4: 交付面终审必修 7/8/10(三)/11
@@ -932,48 +665,27 @@ def test_鉴权文档的交叉引用都指得到真的小节():
     assert 引用数 >= 5, f"只抽到 {引用数} 处交叉引用,像是正则跟文档脱节了"
 
 
-def test_鉴权文档零节的表跟正文指着同一批小节():
-    """必修 7 里最要命的那一处:**一节之内自相矛盾。**
-
-    第零节那张假想敌表给「同一栋楼里的人」标的是一列「挡他的是哪一节」,
-    而同一节正文里又自己说了一遍「挡他的是 PIN 本身……详见第 X 节」。
-    终审核出来的时候,表里写的是「第一、二、三节」,正文写的是
-    「第六、第七节」—— 两句话隔了二十几行,谁都不会同时读到。
-
-    **这条不查它们指的是哪一节**(那会把「今天这个答案」焊死,下次整份文档
-    重排小节就得改测试),只查**两处指的是同一批**。表和正文各自改各自的,
-    正是这种矛盾长出来的方式。
-    """
-    text = (ROOT / "docs" / "鉴权与控制权.md").read_text(encoding="utf-8")
-    零节 = text.split("## 一、")[0]
-    表行 = [行 for 行 in 零节.splitlines()
-           if 行.startswith("|") and "同一栋楼里的人" in 行]
-    assert len(表行) == 1, f"假想敌表里「同一栋楼里的人」那一行找不到或者不止一行:{表行}"
-    段 = [p for p in 零节.split("\n\n") if "挡他的是 PIN 本身" in p]
-    assert len(段) == 1, "第零节正文里「挡他的是 PIN 本身」那一段找不到或者不止一段"
-    表指 = 抽节号(表行[0])
-    正文指 = 抽节号(段[0])
-    assert 表指, "假想敌表那一行没指任何小节了"
-    assert 表指 == 正文指, (
-        f"第零节自相矛盾:表里说第 {sorted(表指)} 节,同一节正文说第 {sorted(正文指)} 节")
-
-
 def test_值守文档把守死人和看门狗说清了():
-    """必修 8:这份文档开篇写着「名词只有两个要先说清」,而正文里另外两个
+    """值守员读到「守死人」「值守的看门狗」这两个词的时候,得知道那是什么、该做什么。
 
-    只有我们自己知道的词从没解释过 —— 「守死人」(5.1 和第七节那张表)和
-    「值守的看门狗自己死了」(P1 典型事项里)。值守员读到它们的时候,既不知道
-    那是什么,也不知道该做什么。
-
-    所以这条查的是:**两个词都在开篇那段名词里出现过,而且各自带着一句能
-    照着做的话** —— 守死人得说出那 0.6 秒,看门狗得说出处置(重启服务)。
+    W00c5e 之后:守死人是遥控每一帧的有效期(300 毫秒,长在狗上);值守的看门狗是站点上的例行
+    检查,它死了的处置是重启站点服务。
     """
     值守 = (ROOT / "docs" / "值守与告警.md").read_text(encoding="utf-8")
     开篇 = 值守.split("## 一、")[0]
     for 词 in ("守死人", "值守的看门狗"):
         assert 词 in 开篇, f"开篇的名词那一段没说清「{词}」"
-    assert "0.6 秒" in 开篇, "「守死人」那句没说出它多久松手"
-    assert "重启" in 开篇, "「看门狗自己死了」那句没给处置"
+    assert "300 毫秒" in 开篇, "「守死人」那句没说出它多久停"
+    assert "重启站点服务" in 开篇, "「看门狗自己死了」那句没给处置"
+
+
+def test_值守文档说清了接管会结束正在跑的这一趟():
+    """W00c5e:遥控抢占巡检之后这一趟就结束了,不会自己接着跑(老服务是挂起、点继续)。
+    值班的人要是还以为「遥控完它会接着跑」,就会等一趟永远不会来的巡检。"""
+    值守 = (ROOT / "docs" / "值守与告警.md").read_text(encoding="utf-8")
+    五 = 值守.split("## 五、")[1].split("## 六、")[0]
+    assert "就此结束" in 五 and "重新派" in 五
+    assert "让开腿" not in 值守 and "0.6 秒" not in 值守, "老服务的接管规矩还留着"
 
 
 def test_值守文档把屏会撒谎那一条落成了现场处置():
@@ -1096,58 +808,6 @@ def test_交付件不许指向那份不发出去的文档():
          "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 
-def test_文档里白纸黑字的PIN位数跟生成器是同一个数():
-    """必修 10 的第三处:PIN 位数在**三处互不知情**的地方各被假设了一遍。
-
-    ``deploy/install.sh`` 的 ``randbelow(10**6)`` 决定它是几位;
-    ``六位数`` 那条泄密正则假设它是几位;**而两份交付文档和内部安全说明里
-    还有白纸黑字的「六位数字」「6 位数字」**。前两处已经被
-    ``tests/test_deploy_guards.py`` 的 ``PIN_位数`` 拴住了,第三处是这一条。
-
-    谁把生成器改成八位而没改文档,文档当场变成假话,**而在这条护栏之前一条
-    测试都不会红**。
-
-    ``PIN_位数`` 从那边 import,**不在这里再抄一个 6** —— 再抄一个就又多了
-    一处要同步的说法,正是这条要修的病。
-    **import 写在函数里是因为两份测试文件互相 import**:那边 import 这边的
-    ``交付文件()``,放到模块顶上就成环了。
-    """
-    from tests.test_deploy_guards import PIN_位数
-
-    要查 = 交付文件() + (内部安全说明,)
-    命中 = []
-    for 文件 in 要查:
-        text = 文件.read_text(encoding="utf-8")
-        for m in 位数说法.finditer(text):
-            原 = m.group(1)
-            说的是 = 中文数位[原] if 原 in 中文数位 else int(原)
-            assert 说的是 == PIN_位数, (
-                f"{文件.name} 里写着「{m.group()}」,而生成器给的是 "
-                f"{PIN_位数} 位 —— 这句话现在是假话")
-            命中.append(文件.name)
-    # **我在 diff 里数过:今天是三处**(install.sh 的 7/7 报错提示、
-    # docs/装机清单.md 记 PIN 那一条的 <六位数字>、docs/鉴权与控制权.md
-    # 第七节第一条),加上内部安全说明里搬过去的那一段,一共四处。
-    # 下界写 3 是留了余量的:这条护栏不是在管有几处,是在拦「一处都没有了,
-    # 于是它变成一条恒真的用例」。
-    assert len(命中) >= 3, f"只找到 {len(命中)} 处白纸黑字的位数说法:{命中}"
-
-
-def test_内部安全说明里那句一百万种也跟着位数走():
-    """「一百万种」是 PIN 位数的另一种写法,而它不长「位数字」这个样子,
-
-    上面那条正则收不到它。这一句是**六位**这个前提的直接产物:PIN 改成八位
-    的那天它一样变成假话,而它恰恰是那一节整段论证的落点。
-    """
-    from tests.test_deploy_guards import PIN_位数
-
-    text = 内部安全说明.read_text(encoding="utf-8")
-    if "一百万种" in text:
-        assert PIN_位数 == 6, (
-            "内部安全说明里还写着「一百万种」,而 PIN 位数已经不是 6 了 —— "
-            f"{PIN_位数} 位是 10 的 {PIN_位数} 次方种,那一段要重写")
-
-
 # ---------------------------------------------------------- W01:数据根
 
 def test_装机脚本建数据根并在停服务后起新版前把老槽的数据搬过去(装机脚本):
@@ -1158,17 +818,17 @@ def test_装机脚本建数据根并在停服务后起新版前把老槽的数�
     停不掉就跳过搬迁,不是 migrate → restart。"""
     assert re.search(r'mkdir -p .*"/var/lib/d1max"', 装机脚本)
     assert 'chown "$RUN_USER":"$RUN_USER" "/var/lib/d1max"' in 装机脚本
-    stop = 装机脚本.index("systemctl stop d1max-patrol.service")
-    is_active = 装机脚本.index("systemctl is-active --quiet d1max-patrol.service")
+    stop = 装机脚本.index("systemctl stop d1max-agent.service")
+    is_active = 装机脚本.index("systemctl is-active --quiet d1max-agent.service")
     mig = 装机脚本.index("release migrate-data")
-    start = 装机脚本.index("systemctl start d1max-patrol.service")
+    start = 装机脚本.index("systemctl start d1max-agent.service")
     assert stop < is_active < mig < start
     assert ('\n    "$ROOT/bin/python" -m d1max_patrol.cli release migrate-data'
            in 装机脚本)
     代码 = [行 for 行 in 装机脚本.splitlines()
           if 行.strip() and not 行.lstrip().startswith("#")
           and not 行.lstrip().startswith("echo")]
-    assert not any("systemctl restart d1max-patrol" in 行 for 行 in 代码)
+    assert not any("systemctl restart d1max-agent" in 行 for 行 in 代码)
 
 
 def test_卸载脚本默认删数据根而keep_data留着():
@@ -1220,29 +880,59 @@ def test_起动次数上限那一行写在Unit段而不是Service段(服务单�
 
 # ------------------------------------------------------------ W01b:特权助手与 sudoers
 
-def test_装机脚本把特权助手装到usr_local_sbin而不是opt_d1max_bin(装机脚本):
-    """sudo 白名单指着的脚本必须 root 拥有。``/opt/d1max/bin`` 整棵归 robot,
-    放那儿等于把 root 送给 robot。"""
-    assert ('install -m 0755 -o root -g root "$HELPER_SRC" /usr/local/sbin/d1max-privileged'
-            in 装机脚本)
+
+def test_单元优先取包内deploy(装机脚本):
+    """``deploy/`` 在包里;老包没带就退回脚本自己所在的目录。"""
+    assert 'AGENT_UNIT_SRC="$PKG/deploy/d1max-agent.service"' in 装机脚本
+    assert '$(dirname "$0")/d1max-agent.service' in 装机脚本, "老包的退路不能删"
+    assert 'install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/' in 装机脚本
+
+
+def test_装机脚本清掉老服务与特权助手_先停老服务再删sudoers再删助手(装机脚本):
+    """W00c5e:老机器上装过的老服务、特权助手、sudo 白名单要清干净。
+
+    顺序:先停老服务(两个进程不许同时抢旁路进程);sudoers 先于助手删 —— 反过来的话中间有一瞬
+    白名单指着一个不存在的路径,谁在那一刻建出同名文件谁就是 root。
+    """
+    停 = 装机脚本.index("systemctl disable --now d1max-patrol.service")
+    删单元 = 装机脚本.index("rm -f /etc/systemd/system/d1max-patrol.service")
+    删白名单 = 装机脚本.index("rm -f /etc/sudoers.d/d1max")
+    删助手 = 装机脚本.index("rm -f /usr/local/sbin/d1max-privileged")
+    assert 停 < 删单元 < 删白名单 < 删助手
+    assert 'rm -rf "$ROOT/bundles"' in 装机脚本
+    # 清老东西要在 daemon-reload 之前,不然这一次 reload 读到的还是它。
+    assert 删单元 < 装机脚本.index("systemctl daemon-reload")
     代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
-    assert not any("d1max-privileged" in 行 and "$ROOT/bin" in 行 for 行 in 代码)
+    for 老 in ("visudo", "install -m 0755 -o root", "install -m 0440", "d1max-restart-now\" "):
+        assert not any(老 in 行 for 行 in 代码), f"装机脚本还在装老东西:{老}"
 
 
-def test_sudoers先visudo校验再落盘(装机脚本):
-    """一份坏 sudoers 会锁死整机的 sudo —— 现场就只剩重刷系统这一条路。"""
-    校验 = 装机脚本.index('visudo -cf "$SUDOERS_SRC"')
-    落盘 = 装机脚本.index('install -m 0440 -o root -g root "$SUDOERS_SRC" /etc/sudoers.d/d1max')
-    assert 校验 < 落盘
+def test_装机脚本不再生成PIN_老env里的老行不动只提示(装机脚本):
+    """W00c5e:PIN 随老服务退役。新装不生成;老机器 env 里的老行不删(不改人手写的配置文件)。"""
+    代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
+    assert not any("secrets.randbelow" in 行 or "D1MAX_PIN=%s" in 行 for 行 in 代码)
+    assert "D1MAX_(PIN|CONSOLE_URL|CONSOLE_TOKEN)" in 装机脚本
+    assert "已经没人读了,可以删" in 装机脚本
+    assert not any(re.search(r"sed -i[^\n]*D1MAX_PIN", 行) for 行 in 代码)
 
 
-def test_单元和助手优先取包内deploy(装机脚本):
-    """W01b 之后 ``deploy/`` 在包里;老包没带就退回脚本自己所在的目录。"""
-    assert 'UNIT_SRC="$PKG/deploy/d1max-patrol.service"' in 装机脚本
-    assert 'HELPER_SRC="$PKG/deploy/d1max-privileged"' in 装机脚本
-    assert 'SUDOERS_SRC="$PKG/deploy/sudoers-d1max"' in 装机脚本
-    assert '$(dirname "$0")/d1max-patrol.service' in 装机脚本, "老包的退路不能删"
-    assert 'install -m 0644 "$UNIT_SRC" /etc/systemd/system/' in 装机脚本
+def test_装机脚本的env模板有站点那几样_适配器缺省仿真(装机脚本):
+    模板 = 装机脚本.split("<<'环境模板'")[1].split("环境模板")[0]
+    for 键 in ("D1MAX_SN=", "D1MAX_SITE_MQTT=", "D1MAX_MAP=", "D1MAX_HOME=", "D1MAX_AGENT_ARGS="):
+        assert f"\n{键}" in 模板, f"env 模板里少了 {键}"
+    assert "\nD1MAX_HAL=sim\n" in 模板, "W00d 真机验收过了之前,适配器缺省是仿真"
+    assert "D1MAX_PIN" not in 模板 and "CONSOLE" not in 模板
+
+
+def test_注册文件在但站点值空着就先不起代理(装机脚本):
+    """启动脚本见到空值就退出,Restart=always 会刷成每 5 秒一条的启动循环。"""
+    for 键 in ("D1MAX_SITE_MQTT", "D1MAX_MAP", "D1MAX_HOME"):
+        assert 键 in 装机脚本.split("MISSING=")[1][:400]
+    判 = 'if [[ -f /etc/d1max/registration.json && -n "$MISSING" ]]; then'
+    assert 判 in 装机脚本
+    段 = 装机脚本[装机脚本.index(判):]
+    assert 段.index("else") < 段.index("systemctl start d1max-agent.service"), \
+        "只有站点值都填了才起代理"
 
 
 def test_卸载脚本删助手和sudoers():
@@ -1260,17 +950,6 @@ def test_足迹勘察覆盖助手和sudoers目录():
     text = (DEPLOY / "footprint.sh").read_text(encoding="utf-8")
     assert '"/usr/local/sbin:1"' in text
     assert '"/etc/sudoers.d:1"' in text
-
-
-def test_装机脚本把restart_now装成root专用且不进sudoers(装机脚本):
-    """内部入口只能由 systemd-run(root)调;0700 root:root,sudoers 里没有它。"""
-    assert ('install -m 0700 -o root -g root "$RESTART_NOW_SRC" /usr/local/sbin/d1max-restart-now'
-            in 装机脚本)
-    assert 'RESTART_NOW_SRC="$PKG/deploy/d1max-restart-now"' in 装机脚本
-    text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
-    assert "# @删除 /usr/local/sbin/d1max-restart-now" in text
-    assert 'rm_sys "/usr/local/sbin/d1max-restart-now"' in text
-    assert "/usr/local/sbin/d1max-restart-now) ;;" in text
 
 
 # ------------------------------------------ W00b:robot-agent 装进槽、单元装而不 enable
@@ -1295,14 +974,13 @@ def test_装机脚本把三个包按依赖顺序装进槽venv(装机脚本):
     assert "$PIP_ARGS" in 行们[i_c - 1], "三个包那一条 pip 也要带离线参数"
 
 
-def test_agent单元装而不enable(装机脚本):
-    """站点 broker 在 W00c 才有,现在起了也连不上。装好、留着,W00c 一到就是 systemctl enable。"""
+def test_agent单元装上并开机自启(装机脚本):
+    """W00c5e:狗上只有代理;装机脚本装它、enable 它(没有注册文件时单元的
+    ConditionPathExists 让它不起,不会刷日志)。"""
     assert 'install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/' in 装机脚本
-    assert 'AGENT_UNIT_SRC="$PKG/deploy/d1max-agent.service"' in 装机脚本
-    代码 = [行 for 行 in 装机脚本.splitlines() if 行.strip() and not 行.lstrip().startswith("#")]
-    assert not any("enable" in 行 and "d1max-agent" in 行 for 行 in 代码), "W00b 不 enable"
-    assert not any("start d1max-agent" in 行 for 行 in 代码)
+    assert "\nsystemctl enable d1max-agent.service\n" in 装机脚本
     assert "# @写盘 /etc/systemd/system/d1max-agent.service" in 装机脚本
+    assert "# @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service" in 装机脚本
 
 
 def test_agent单元的形状():
@@ -1433,8 +1111,11 @@ def test_agent入口在robot_agent的scripts里():
 def test_卸载脚本删agent单元():
     text = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
     assert "# @删除 /etc/systemd/system/d1max-agent.service" in text
-    assert 'rm_sys "$UNIT_DIR/$AGENT_UNIT"' in text
-    assert 'for u in "$MAIN_UNIT" "$AGENT_UNIT" "$OLD_UNIT"; do' in text
+    assert "\nMAIN_UNIT=d1max-agent.service\n" in text
+    assert 'rm_sys "$UNIT_DIR/$MAIN_UNIT"' in text and 'rm_sys "$WANTS_LINK"' in text
+    # 没重跑过装机脚本的老机器上老服务还在:卸载照样要停、要删。
+    assert 'for u in "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do' in text
+    assert 'rm_sys "$UNIT_DIR/$LEGACY_UNIT"' in text
 
 
 def test_根下的解释器venv也装三个包_不然别名壳一import就炸(装机脚本):

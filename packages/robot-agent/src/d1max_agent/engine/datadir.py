@@ -12,8 +12,8 @@
   今天的相对路径**,开发机在仓库里跑的行为一个字不变。
 * :func:`migrate_slot_data` —— 老机器槽里已经有的数据,一次性搬到数据根。
 
-上传队列、基线、导出三处在 ``app/server.py`` 里是 ``runs_root.parent / <名字>``,
-所以 ``runs_root`` 落对了它们就跟着落对,这里不另算。
+(老服务 ``app/server.py`` 的上传队列、基线、导出三处是 ``runs_root.parent / <名字>``,
+随 W00c5e 退役;老机器槽里留下的这几样仍由 :func:`migrate_slot_data` 搬走。)
 """
 
 from __future__ import annotations
@@ -60,8 +60,8 @@ MIGRATED_SUFFIX = ".migrated"
 #: 巡检数据根往往跟系统盘是同一块盘,搬完把盘挤到 0 字节剩余,下一次写日志
 #: 都会失败。
 MIN_FREE_BYTES = 64 * 1024 * 1024
-#: 上传队列那一份**不是普通文件**,搬法不同(见 :func:`_merge_queue`)。名字跟
-#: ``app/server.py`` 的 ``QUEUE_FILE_NAME`` 一致,也在 ``SLOT_DATA_ITEMS`` 里。
+#: 上传队列那一份**不是普通文件**,搬法不同(见 :func:`_merge_queue`)。名字跟老服务的
+#: ``QUEUE_FILE_NAME`` 一致(W00c5e 退役),也在 ``SLOT_DATA_ITEMS`` 里。
 QUEUE_FILE = "queue.jsonl"
 
 

@@ -40,10 +40,11 @@ from tests.test_deploy_files import DEPLOY
     "ROOT": "/opt/d1max",
     "ETC_DIR": "/etc/d1max",
     "UNIT_DIR": "/etc/systemd/system",
-    "MAIN_UNIT": "d1max-patrol.service",
+    "MAIN_UNIT": "d1max-agent.service",
     "OLD_UNIT": "d1max-bootguard.service",
-    "AGENT_UNIT": "d1max-agent.service",
-    "WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-patrol.service",
+    "LEGACY_UNIT": "d1max-patrol.service",
+    "WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-agent.service",
+    "LEGACY_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-patrol.service",
 }
 
 
@@ -139,6 +140,17 @@ def test_每一处声明在卸载脚本的代码里真的出现过():
     正文 = 展开常量("\n".join(代码行(读(卸载脚本))))
     缺 = [路径 for 路径 in sorted(取声明(读(卸载脚本), "@删除")) if 路径 not in 正文]
     assert not 缺, f"这几条只在声明块里,代码里根本没删:{缺}"
+    # **光出现过不够,要真交给 rm_sys。** 常量的赋值行(``WANTS_LINK=/etc/...``)也是一行代码,
+    # 只查「出现过」的话,删掉那条 rm_sys 这里照样绿(W00c5e 突变)。每一条要么自己被 rm_sys,
+    # 要么它的某一级上级目录被 rm_sys(默认模式最后整个删 /opt/d1max、/etc/d1max)。
+    删的 = set()
+    for 行 in 正文.splitlines():
+        m = re.match(r'\s*rm_sys\s+"([^"]+)"', 行)
+        if m:
+            删的.add(m.group(1).rstrip("/"))
+    没交给rm = [路径 for 路径 in sorted(取声明(读(卸载脚本), "@删除"))
+               if not any(路径.rstrip("/") == 删 or 路径.startswith(删 + "/") for 删 in 删的)]
+    assert not 没交给rm, f"这几条声明了 @删除,却没有哪一条 rm_sys 删到它们:{没交给rm}"
 
 
 def test_卸载脚本的根目录常量是写死的():

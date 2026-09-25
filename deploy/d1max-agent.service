@@ -10,7 +10,7 @@ ConditionPathExists=/etc/d1max/registration.json
 [Service]
 Type=simple
 User=robot
-# 指着 current 链,不指任何一版 —— 双槽能换、能退的全部原因,跟 d1max-patrol.service 一样。
+# 指着 current 链,不指任何一版 —— 双槽能换、能退的全部原因。
 WorkingDirectory=-/opt/d1max/current
 Environment=D1MAX_RELEASE_ROOT=/opt/d1max
 Environment=D1MAX_DATA_ROOT=/var/lib/d1max
@@ -28,7 +28,7 @@ ExecStartPre=-/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard
 # **启动参数在这一版带的启动脚本里,不在这儿**(W00c5d 第三部分内部评审 B1):单元装一次不再换,
 # 退回上一版时参数跟着代码一起回来。
 # 起用时在 /etc/d1max/env 里把 D1MAX_HAL 改成 d1max(W00d 真机验收过了才改);
-# 旁路进程同一时刻只该有一个 Python 在开车:起用前先停 d1max-patrol.service。
+# 旁路进程同一时刻只该有一个 Python 在开车(老服务 d1max-patrol.service 由装机脚本清掉)。
 ExecStart=/opt/d1max/current/deploy/d1max-agent-start
 Restart=always
 RestartSec=5

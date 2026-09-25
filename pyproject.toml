@@ -29,16 +29,9 @@ dev = [
 
 [project.scripts]
 d1max = "d1max_patrol.cli:main"
-d1max-app = "d1max_patrol.app.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-# 网页面板的静态文件不是 .py, setuptools 默认不往 wheel 里放 —— 装机脚本
-# pip install 完, ``/`` 和 ``/static/*`` 就是 404。子目录要加就在这里加一行,
-# ``tests/test_packaging.py`` 会逐个核对 static 底下的文件都进了 wheel。
-[tool.setuptools.package-data]
-"d1max_patrol.app" = ["static/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -72,6 +65,6 @@ select = ["E", "F", "I", "UP", "B", "BLE", "RUF100"]
 
 [tool.ruff.lint.isort]
 # W00:packages/ 下三个包也是我们自己的,import 分组要跟根包一样算第一方。
-known-first-party = ["d1max_patrol", "d1max_console", "d1max_sim",
+known-first-party = ["d1max_patrol", "d1max_sim",
                      "d1max_contract", "d1max_adapter_sim", "d1max_adapter_d1max", "d1max_agent",
                      "d1max_site"]

@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
-import urllib.request
 
 import pytest
 
@@ -74,7 +72,6 @@ def test_装配并跑通一条goto(tmp_path):
         a.stop()
 
 
-
 def test_hal_d1max的参数(tmp_path):
     a = _args(tmp_path, "--hal", "d1max", "--sidecar", "127.0.0.1:9001", "--mps-per-unit", "0.42",
               "--radps-per-unit", "0.9", "--deadband", "0.06", "--max-fraction", "0.3",
@@ -138,32 +135,6 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
         assert "shutdown" not in [c for c, _ in sim.commands], "代理退出不许让旁路放控制权"
         sim_loop.call(sim.stop)
         sim_loop.stop()
-
-def test_legacy_http托管在同一进程_看得到MQTT派的那趟(tmp_path):
-    args = _args(tmp_path, "--legacy-http", "127.0.0.1:0")
-    a = agent_main.build(args)
-    try:
-        a.start()
-        assert a.server is not None
-        assert a.server.ctx.engine is a.runtime.parts.engine, "同一台引擎"
-        site = DispatchClient(MemoryTransport(a.broker, "site"), T, now_ms=agent_main.wall_ms)
-        a.bridge.call(site.start)
-        target = MapPose(map_id="estate-1", map_version="7", frame_id="map", x=3.0, y=0.0, yaw=0.0)
-        cmd = site.new_command("goto", {"target": target.to_wire(), "max_speed_mps": 0.3},
-                               ttl_ms=60_000, control_epoch=1)
-        ack = a.bridge.call(lambda: site.send(cmd, timeout_s=5.0), timeout_s=10.0)
-        assert ack.result is AckResult.ACCEPTED
-        import time
-        run = None
-        for _ in range(100):
-            with urllib.request.urlopen(f"{a.server.url}/api/state", timeout=5) as resp:
-                run = json.loads(resp.read())["run"]
-            if run.get("mission") == cmd.task_id and run.get("state") == "RUNNING":
-                break
-            time.sleep(0.05)
-        assert run and run["mission"] == cmd.task_id, run
-    finally:
-        a.stop()
 
 
 def _命令行(tmp_path, transport="memory://"):
@@ -237,14 +208,6 @@ def test_hal_tick炸了下一拍照走(tmp_path):
         a.stop()
 
 
-def test_legacy_http暴露检查在起线程之前(tmp_path):
-    import threading
-    before = threading.active_count()
-    with pytest.raises(SystemExit):
-        agent_main.build(_args(tmp_path, "--legacy-http", "0.0.0.0:0"))
-    assert threading.active_count() == before, "拒绝启动也不能留下事件循环线程"
-
-
 def test_stop之后HAL的控制权放了_链路关了(tmp_path):
     a = agent_main.build(_args(tmp_path))
     a.start()
@@ -281,7 +244,6 @@ def test_证书交给PahoTransport(monkeypatch):
                                tls=("/e/ca.crt", "/e/r.crt", "/e/r.key"))
     assert seen == {"url": "mqtts://site:8883", "client_id": "D1MAX-SIM", "tls_ca": "/e/ca.crt",
                     "tls_cert": "/e/r.crt", "tls_key": "/e/r.key"}
-
 
 
 def test_视频参数_仿真用测试图_真狗拉相机RTSP(tmp_path):
@@ -344,16 +306,16 @@ def test_发件箱装上了_盘况进遥测(tmp_path):
     assert not a.pump._thread.is_alive(), "收尾要停发件箱线程"
 
 
-def test_发件箱的路径要绝对_不跟legacy_http一起_要求的挂载点没挂就不起(tmp_path):
+def test_发件箱的路径要绝对_要求的挂载点没挂就不起_老HTTP面的参数不认了(tmp_path):
     reg = tmp_path / "registration.json"
     REG.save(reg)
     base = ["--transport", "memory://", "--registration", str(reg), "--store-dir",
             str(tmp_path / "s"), "--map", "estate-1:7"]
     with pytest.raises(SystemExit):
         agent_main.parse_args([*base, "--outbox", "relative/outbox"])
-    with pytest.raises(SystemExit):
-        agent_main.parse_args([*base, "--outbox", str(tmp_path / "o"), "--legacy-http",
-                               "127.0.0.1:0"])
+    for 老 in (["--legacy-http", "127.0.0.1:0"], ["--pin", "x"], ["--sn", "x"]):
+        with pytest.raises(SystemExit):                      # W00c5e:老 HTTP 面退役
+            agent_main.parse_args([*base, "--outbox", str(tmp_path / "o"), *老])
     with pytest.raises(SystemExit):                          # tmp_path 不是挂载点
         agent_main.parse_args([*base, "--outbox", str(tmp_path / "o"), "--outbox-mount",
                                str(tmp_path)])

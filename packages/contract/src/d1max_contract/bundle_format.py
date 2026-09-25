@@ -1,16 +1,18 @@
-"""任务包的格式与校验(W00c2a 起住在契约包)。站点收任务包(``d1max-site import-bundle``)与狗上
-落包(``d1max_agent.engine.bundle``)用的是同一份:自述(``bundle.yaml``)的解析、纯数据闸、
-整包指纹、排程文件的读取。**落盘、两份、回退留在狗上的 ``bundle.py``。**
+"""任务包的格式与校验(W00c2a 起住在契约包)。站点收任务包(``d1max-site import-bundle``)用它:
+自述(``bundle.yaml``)的解析、纯数据闸、整包指纹、排程文件的读取。狗上不落任务包(W00c5e 删了
+狗上那一套落包、回退、开机守卫):任务随命令从站点来。
 
 **包是纯数据。** 里头没有一行可执行的东西 —— 没有固件,没有代码,没有脚本。
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import stat
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +21,7 @@ from typing import Any
 import yaml
 
 from d1max_contract.digest import tree_sha256
+from d1max_contract.mission import MissionError, parse_mission
 from d1max_contract.schedule import Schedule, ScheduleError, parse_schedule
 
 #: 包的自述文件名。整包哈希不算它自己 —— 它里头存着那个值。
@@ -406,3 +409,71 @@ def verify_bundle(bundle_dir: Path | str) -> BundleManifest:
     return m
 
 
+# -------------------------------------------------------- 造包(笔记本上、测试里用)
+
+def _盖章(bundle_dir: Path, schema: int) -> None:
+    """把每个任务重写成规范形式,并盖上 ``schema``。
+
+    **盖章是打包器的活。** 一个手写的任务不该因为漏了一个版本号就把整台狗
+    的升级判据(§7.2 ``requires_mission_schema``)搞乱。顺带把任务过一遍
+    ``parse_mission`` —— 打包的时候发现坏任务,比半夜出发之后发现要好。
+
+    ``sort_keys=True`` 是为了可复现:同一棵源树打两遍必须是同一个指纹。
+    """
+    d = bundle_dir / MISSIONS_DIR
+    if not d.is_dir():
+        return
+    for p in sorted(d.glob("*.json")):
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            m = parse_mission(raw)
+        except (json.JSONDecodeError, MissionError, ValueError, OSError) as e:
+            raise BundleError(f"任务 {p.name} 不合规: {e}") from e
+        data = m.to_wire()
+        data["schema"] = schema
+        p.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True,
+                                indent=2) + "\n", encoding="utf-8")
+
+
+def build_bundle(src: Path | str, dest_root: Path | str, *,
+                 bundle_id: str, version: int, built_at: str,
+                 schema: int = BUNDLE_SCHEMA, built_by: str = "",
+                 targets: Sequence[str] = ()) -> Path:
+    """把一棵源树打成一个任务包,返回包目录。
+
+    §3.8:**这是个库,不是服务器的一个功能。** 编包、校验、算哈希这三件事,
+    狗上和服务器上跑的是同一段代码;服务器独占的只有规模。所以这儿一行
+    HTTP 都没有。
+    """
+    src, dest_root = Path(src), Path(dest_root)
+    # 先把版本号和 id 过一遍解析那道闸 —— 参数错了不该等到写自述才发现。
+    临 = parse_manifest({"bundle_id": bundle_id, "version": version,
+                         "schema": schema, "content_sha256": "0" * 64,
+                         "built_at": built_at, "built_by": built_by,
+                         "targets": list(targets)})
+    dest = dest_root / 临.slot_name
+    if dest.exists():
+        raise BundleError(f"{临.slot_name} 已经在 {dest_root} 底下了 —— "
+                          "版本号要单调递增,不许覆盖")
+
+    # verify_pure_data 对一个不存在的目录会静静地扫出零条违规(os.walk 对
+    # 不存在的路径就是空迭代)—— 那不是「干净」,是「没查」。自己先拦一道。
+    if not src.is_dir():
+        raise BundleError(f"源目录不存在: {src}")
+
+    # **拷之前先拦。** 拷完再拦的话,那个东西已经在盘上了。
+    verify_pure_data(src)
+    dest_root.mkdir(parents=True, exist_ok=True)
+    # symlinks=True:不解引用。上一行已经拒了所有链接,这里是第二层。
+    shutil.copytree(src, dest, symlinks=True)
+    try:
+        _盖章(dest, schema)
+        verify_pure_data(dest)          # 盖完再看一遍,拷/写这两步也得干净
+        m = BundleManifest(临.bundle_id, 临.version, schema,
+                           bundle_sha256(dest), built_at, 临.built_by,
+                           临.targets)
+        write_manifest(dest, m)
+    except BaseException:
+        shutil.rmtree(dest, ignore_errors=True)   # 半个包比没有包更糟
+        raise
+    return dest

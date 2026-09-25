@@ -19,28 +19,29 @@ set -euo pipefail
 # @写盘 /opt/d1max/bin                                                   跟版本无关的解释器 wrapper
 # @写盘 /opt/d1max/bin-venv                                              上面那个解释器的 venv
 # @写盘 /opt/d1max/current                                               release activate 摆的版本链
-# @写盘 /opt/d1max/bundles                                               任务包目录,服务跑起来后落在根下
-# @写盘 /opt/d1max/pending.json                                          在途升级标记,同上
-# @写盘 /var/lib/d1max                                                   巡检数据根(runs、上传队列、基线、导出),升级回滚都不碰它
-# @写盘 /etc/d1max                                                       配置目录
-# @写盘 /etc/d1max/env                                                   设备 PIN 在这个文件里
-# @写盘 /etc/systemd/system/d1max-patrol.service                         install -m 0644 摆进去的单元
-# @写盘 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service systemctl enable 生成的自启链
-# @写盘 /etc/systemd/system/d1max-agent.service                           W00b:robot-agent 的单元,装而不 enable(W00c 有站点 broker 了再起用)
-# @写盘 /usr/local/sbin/d1max-privileged                                 W01b:robot 通过 sudo 白名单能跑的唯一 root 命令(装单元、restart、reboot)
-# @写盘 /etc/sudoers.d/d1max                                             W01b:那条白名单,只放行上面那个脚本
-# @写盘 /usr/local/sbin/d1max-restart-now                                W01b:OTA 重启的内部入口(stop→搬数据→start),0700,不在白名单里,只由 systemd-run 调
+# @写盘 /opt/d1max/pending.json                                          在途升级标记,代理切版本时落在根下
+# @写盘 /opt/d1max/rolled_back.json                                      开机守卫退回上一版时留的条子,代理报给站点后删
+# @写盘 /var/lib/d1max                                                   数据根(代理的发件箱、事件簿、幂等记录),升级回滚都不碰它
+# @写盘 /etc/d1max                                                       配置目录(站点签发的证书包、注册文件也放这儿,由人拷来)
+# @写盘 /etc/d1max/env                                                   现场值:站点地址、地图、原点、适配器、SN
+# @写盘 /etc/systemd/system/d1max-agent.service                           代理单元(狗上只有它一个服务,W00c5e)
+# @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
 #
-# 这份脚本不写、但 uninstall.sh 要负责收掉的:
+# 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
 #
-# @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元;这里只 rm -f 它,从来不写它
+# @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元
+# @也删 /etc/systemd/system/d1max-patrol.service 老服务(W00c5e 退役)
+# @也删 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
+# @也删 /usr/local/sbin/d1max-privileged 特权助手(W00c5e 退役:代理运行时不需要 root)
+# @也删 /etc/sudoers.d/d1max 助手的 sudo 白名单
+# @也删 /usr/local/sbin/d1max-restart-now 老服务重启的内部入口
+# @也删 /opt/d1max/bundles 老服务的任务包目录(W00c5e:任务随命令从站点来,狗上不落任务包)
 #
 # **盘上只有以上这些。** 所有 pip install 都落在 /opt/d1max 底下的 venv 里,
 # python3 -m venv 只读系统 python3,不往系统 site-packages 里写东西。
 
 # **写死,不给环境变量覆盖。** systemd 单元里 /opt/d1max 是逐字写死的
-# (WorkingDirectory=、Environment=D1MAX_RELEASE_ROOT=、两条 Exec* 的解释器
-# 路径),app/server.py 里 AppContext.release_root 的默认值也是它。允许这里
+# (WorkingDirectory=、Environment=D1MAX_RELEASE_ROOT=、两条 Exec* 的路径)。允许这里
 # 被 D1MAX_ROOT 改而单元不跟着改,装出来的是一台脚本和服务各说各话的机器:
 # 包落在一个根下,服务读的是另一个根。**要换根目录,这里和单元一起改。**
 ROOT=/opt/d1max
@@ -286,191 +287,108 @@ if [[ ! -e "$SENTINEL" ]]; then
   chown "$RUN_USER":"$RUN_USER" "$SENTINEL"
 fi
 
-say "5/7 装 systemd 单元、特权助手与环境文件"
-# **单元、助手、sudoers 三样优先取包里的 deploy/**(W01b 起 release pack 带它),
-# 这样 install.sh 装的和 OTA 以后 release activate 装的是同一份来源。老包没带
-# deploy/ 就退回这个脚本自己所在的目录 —— 装机清单教现场 scp 的就是那份。
-UNIT_SRC="$PKG/deploy/d1max-patrol.service"
-[[ -f "$UNIT_SRC" ]] || UNIT_SRC="$(dirname "$0")/d1max-patrol.service"
-install -m 0644 "$UNIT_SRC" /etc/systemd/system/
-# W00b:robot-agent 的单元**装而不 enable**。它要连站点的 broker,那东西 W00c 才有;
-# 现在 enable 只会得到一个每 5 秒重启一次、连不上任何东西的进程。老包没带就跳过。
+say "5/7 装代理单元与环境文件;清掉老服务"
+# **狗上只有 d1max-agent.service 一个服务**(W00c5e:老的 HTTP 服务、手机直连、特权助手退役)。
+# 单元优先取包里的 deploy/,老包没带就退回这个脚本自己所在的目录。单元装一次不随版本换:
+# 启动参数在每一版带的 deploy/d1max-agent-start 里(W00c5d),退回上一版时参数跟着回来。
 AGENT_UNIT_SRC="$PKG/deploy/d1max-agent.service"
 [[ -f "$AGENT_UNIT_SRC" ]] || AGENT_UNIT_SRC="$(dirname "$0")/d1max-agent.service"
-if [[ -f "$AGENT_UNIT_SRC" ]]; then
-  install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/
-fi
-# 特权助手:robot 通过 sudo 白名单能跑的唯一 root 命令(OTA 装单元、restart、
-# reboot)。**必须装在 root 拥有的目录里**:/opt/d1max 整棵归 robot,sudo 白名单
-# 指着 robot 可写的脚本等于把 root 送给 robot。它不随 OTA 更新,改它重跑本脚本。
-HELPER_SRC="$PKG/deploy/d1max-privileged"
-[[ -f "$HELPER_SRC" ]] || HELPER_SRC="$(dirname "$0")/d1max-privileged"
-install -m 0755 -o root -g root "$HELPER_SRC" /usr/local/sbin/d1max-privileged
-# 重启的内部入口:stop → 搬槽内数据 → start。**不进 sudoers**,0700 只有 root 能读
-# 能跑;助手的 restart 用 systemd-run 把它起在服务 cgroup 外面。
-RESTART_NOW_SRC="$PKG/deploy/d1max-restart-now"
-[[ -f "$RESTART_NOW_SRC" ]] || RESTART_NOW_SRC="$(dirname "$0")/d1max-restart-now"
-install -m 0700 -o root -g root "$RESTART_NOW_SRC" /usr/local/sbin/d1max-restart-now
-# sudoers:**先 visudo -cf 校验再落盘**。一份坏 sudoers 会锁死整机的 sudo,
-# 现场就只剩重刷系统这一条路。
-SUDOERS_SRC="$PKG/deploy/sudoers-d1max"
-[[ -f "$SUDOERS_SRC" ]] || SUDOERS_SRC="$(dirname "$0")/sudoers-d1max"
-visudo -cf "$SUDOERS_SRC" >/dev/null
-install -m 0440 -o root -g root "$SUDOERS_SRC" /etc/sudoers.d/d1max
-# **老机器上的 d1max-bootguard.service 要清掉。** 守卫已经挪成主单元的
-# ExecStartPre=(理由见那个单元里那段注释:不带上装的机器升级走 systemctl
-# restart,根本不开机,挂在开机上的守卫永远不会重跑)。两处都留着的话,
-# 真开机时守卫会被数两次,pending.attempts 一次开机加二,第二次开机就把
-# 一版本来健康的退掉 —— 比守卫根本没跑还危险。
-# **失败不致命**:绝大多数机器上本来就没有这个单元,而这个脚本要能重跑。
+install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/
+# **老服务清掉。** 两个进程抢同一个旁路进程的控制权会出事,两个服务共用在途标记还会互相数
+# 开机次数、替对方提交。失败不致命:新机器上本来就没有这些。
+# 顺序:先停老服务、再删 sudoers、再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在
+# 的路径,谁在那一刻建出同名文件谁就是 root。
+systemctl disable --now d1max-patrol.service 2>/dev/null || true
+rm -f /etc/systemd/system/d1max-patrol.service
 systemctl disable --now d1max-bootguard.service 2>/dev/null || true
 rm -f /etc/systemd/system/d1max-bootguard.service
-# D1MAX_SN 的唯一来源。**已经存在就绝不覆盖** —— 现场填过的值不能被
-# 重跑抹掉。服务单元用 EnvironmentFile=-/etc/d1max/env 读它,7/7 步里这个
-# 脚本自己也按 systemd 的规矩解析同一份文件再把 D1MAX_SN 显式传给 release activate,
-# 两条路必须是同一个来源,否则重启后自检第四项(identity)会假失败,
-# 把一版好的自动回滚掉。
+rm -f /etc/sudoers.d/d1max
+rm -f /usr/local/sbin/d1max-privileged /usr/local/sbin/d1max-restart-now
+# 老服务的任务包目录(狗上不再落任务包,任务随命令从站点来)。
+rm -rf "$ROOT/bundles"
+# 现场值的唯一来源。**已经存在就绝不覆盖** —— 现场填过的值不能被重跑抹掉。
 mkdir -p /etc/d1max
 if [[ ! -e /etc/d1max/env ]]; then
-  # **先把空文件按 0600 建出来,再往里写。** 这份文件里有设备 PIN 和回传密钥
-  # (下面自己就写着"这一行是密钥,别抄进任何工单"),而 `cat >` 在 root 的
-  # umask 022 下建出来是 0644 —— 这台狗上还跑着厂商的上装、系统 Python 是
-  # 共用的,同机任何一个账号都读得到。
-  # **0600 root:root 两个读它的人都够用**:服务那条路是 systemd 的
-  # EnvironmentFile= 在读,由 PID 1(root)读完再降到 User=robot,不是 robot
-  # 自己去开这个文件;7/7 步这个脚本也是 root。文档教现场看 PIN 用的也是
-  # sudo grep。**别为了让 robot 读得到就放宽它** —— 没有哪一方需要。
-  # 下面的 `cat >` 和 5/7 末尾的 `printf >>` 都是重定向,不改已有文件的 mode,
-  # 所以这个 0600 保得住。
+  # **先按 0600 建出空文件,再往里写。** `cat >` 在 root 的 umask 022 下建出来是 0644,
+  # 同机别的账号都读得到。systemd 的 EnvironmentFile= 由 PID 1(root)读,不需要放宽。
   install -m 0600 /dev/null /etc/d1max/env
   cat > /etc/d1max/env <<'环境模板'
-# D1 Max 运行环境。装机脚本只在这个文件不存在时才写一次,以后重跑
-# install.sh 不会碰它 —— 现场填过的值放心填。
+# D1 Max 运行环境(代理 d1max-agent 读它)。装机脚本只在这个文件不存在时才写一次,
+# 以后重跑 install.sh 不会碰它 —— 现场填过的值放心填。
 
-# 这只狗的机身序列号。**厂商的 SDK 和导航 WebSocket 接口都不报这个
-# 字段**,只能靠现场贴在机身上的标签手填。不填的话,身份解析会兜底用
-# 网卡 MAC 凑一个 SN,重启后自检拿它跟 release activate 记的真 SN
-# 一比对不上,可能把一版好的自动回滚掉 —— 装机时务必先填这一行,
-# 再执行 release activate。
+# 这只狗的机身序列号(机身标签上抄)。只收字母、数字、点、下划线、减号。
 D1MAX_SN=
 
 # 版本根目录,一般不用改。
 D1MAX_RELEASE_ROOT=/opt/d1max
 
-# 手机 app 连这台机器要输的设备 PIN。装机脚本第一次写这份文件时**随机生成
-# 一个填在下面,不留空**:服务单元的 ExecStart 带 --host 0.0.0.0(手机 app
-# 连的是 192.168.168.100:8095,只听 127.0.0.1 的话它根本连不上),而
-# check_exposure() 见到非本机地址又没有 PIN 会直接 SystemExit 拒绝启动 ——
-# 配上 Restart=always + RestartSec=5,那就是每 5 秒刷一条日志的启动循环。
-# **这一行和单元里那个 --host 0.0.0.0 是一对,拆不开。**
-# 想换成好记的:直接改下面这一行,再 sudo systemctl restart d1max-patrol。
+# ---------------------------------------------------------------- 站点
+# 站点 broker 的地址,站点装好之后填:
+#   mqtts://<站点主机>:8883
+# 证书包(ca.crt、robot.crt、robot.key)拷到 /etc/d1max/tls/,注册文件拷成
+# /etc/d1max/registration.json。**没有注册文件代理就不起**(单元的 ConditionPathExists)。
+D1MAX_SITE_MQTT=
+# 狗上现在载着的地图 <map_id>:<version>,与这张图上的原点 x,y,yaw。站点下发过地图之后,
+# 代理以站点下发的那张为准,这两行只是第一次起来时的缺省。
+D1MAX_MAP=
+D1MAX_HOME=
 
-# ---------------------------------------------------------------- 回传(可选)
-# 买了服务器的才填这两行。**两行都留空 = 单机档**:证据全留在本机,
-# 靠 U 盘导出(见《值守与告警》)。单机档是正常形态,不是装坏了。
-#
-# 怎么确认自己在哪一档:装完之后 journalctl -u d1max-patrol | grep 回传。
-# 单机档会有一行"没配回传地址,这台狗按单机档跑";配上了就没有这一行。
-# 值守屏上那一格显示的是「没装回传」,不是 0 —— **别把它当成"传了 0 条"**。
-#
-# 地址填服务器的 https://<你们的服务器>:8096,填错或服务器没起来不会
-# 影响巡检 —— 上传线程永远不阻塞走路拍照,传不出去就一直在盘上排着。
-D1MAX_CONSOLE_URL=
+# ---------------------------------------------------------------- 适配器
+# sim = 仿真(动不了真狗)。**W00d 真机验收(庄园场景待真机测试 §3b)过了,才改成 d1max**,
+# 同时在 D1MAX_AGENT_ARGS 里带上实测过的换算参数,例如:
+#   D1MAX_AGENT_ARGS=--sidecar 127.0.0.1:8090 --mps-per-unit 0.4 --radps-per-unit 1.0
+D1MAX_HAL=sim
+# 其余参数(按空白拆开接在代理参数后面),例如建图:--mapping
+D1MAX_AGENT_ARGS=
 
-# 回传要带的钥匙,跟服务器上配的那把必须一模一样。填错的话上传会一直被
-# 服务器拒,队列积压条数会从心跳里报上来,值守屏看得见。
-# **这一行是密钥,别抄进任何工单、截图或聊天记录。**
-D1MAX_CONSOLE_TOKEN=
+# 发件箱(断网暂存):缺省在 /var/lib/d1max/outbox。临时硬盘到了改到它上面,并写挂载点
+# (没挂上代理就不起,不会悄悄写到系统盘上):
+#   D1MAX_OUTBOX=/mnt/<临时盘>/outbox
+#   D1MAX_OUTBOX_MOUNT=/mnt/<临时盘>
 环境模板
-  # 用根下那个跟版本无关的解释器生成,不依赖机器上有没有别的 python。
-  DEVICE_PIN=$("$ROOT/bin/python" -c 'import secrets; print(f"{secrets.randbelow(10**6):06d}")')
-  printf 'D1MAX_PIN=%s\n' "$DEVICE_PIN" >> /etc/d1max/env
-  say "这台机器的设备 PIN 是 $DEVICE_PIN"
-  echo "  手机 app 第一次连这台机器要输它。**记进现场登记表**,屏幕关了就找不回来了"
-  echo "  (还能在机器上看:sudo grep D1MAX_PIN /etc/d1max/env)。"
-  echo "  想换成好记的:编辑 /etc/d1max/env 里的 D1MAX_PIN= 那一行,再"
-  echo "  sudo systemctl restart d1max-patrol(只改 PIN 的话,不用重跑装机脚本)。"
 fi
-# **老机器重跑一次也要被收紧。** 上面那个 install -m 0600 只在文件不存在时走,
-# 而 2026-09-13 之前装出来的机器盘上躺着的是 0644 的那一份,里面同样有 PIN 和
-# 回传密钥。这一行放在 if 外面,重跑一次就把它们一起收掉。chmod 不动文件内容,
-# 现场填过的值一个字都不会变。
 chmod 0600 /etc/d1max/env
+# 老机器的 env 里可能还有老服务用的几行(设备 PIN、回传地址与密钥):**不动它们**(不改人手写的
+# 配置文件),只说一声它们已经没人读了。
+if grep -qE '^[[:space:]]*D1MAX_(PIN|CONSOLE_URL|CONSOLE_TOKEN)=' /etc/d1max/env 2>/dev/null; then
+  echo "  提示: /etc/d1max/env 里的 D1MAX_PIN / D1MAX_CONSOLE_URL / D1MAX_CONSOLE_TOKEN"
+  echo "        是老服务用的,已经没人读了,可以删掉(手机只连站点,W00c5e)。"
+fi
 systemctl daemon-reload
-systemctl enable d1max-patrol.service
+systemctl enable d1max-agent.service
 
-say "6/7 记下这台有没有装上装"
-cat <<'提示'
-  这一步没法替你做,因为只有站在机器旁边的人看得见(§7.1)。
-  装完之后在手机 app 里记一次;要用 curl 的话**先换 token** ——
-  服务带 --host 0.0.0.0 起,所以从 127.0.0.1 发过去也一样要 token,
-  没有"本机豁免"这回事。换 token 的那几行在 docs/装机清单.md 三节,
-  照那儿抄,别把 PIN 敲进命令里。换到之后:
-
-    curl -X PUT http://<机器 IP>:8095/api/identity/payload \
-      -H "Authorization: Bearer $TOKEN" \
-      -H 'Content-Type: application/json' \
-      -d '{"has_payload": false, "by": "你的名字",
-           "confirm": "我知道这会改掉升级方式"}'
-
-  没记过之前,这台机器**不许升级** —— 因为升级流程不知道该怎么重启它。
+say "6/7 看一眼站点签发的证书包与注册文件"
+if [[ -f /etc/d1max/registration.json && -f /etc/d1max/tls/ca.crt \
+      && -f /etc/d1max/tls/robot.crt && -f /etc/d1max/tls/robot.key ]]; then
+  echo "  都在:/etc/d1max/registration.json、/etc/d1max/tls/{ca.crt,robot.crt,robot.key}。"
+else
+  cat <<'提示'
+  还没有(没有注册文件代理就不起,不会刷日志)。先在站点主机上给这只狗登记(enroll,
+  见装机清单一),把给出的证书包拷到这台狗的 /etc/d1max/tls/,注册文件拷成 /etc/d1max/registration.json,
+  在 /etc/d1max/env 里填好 D1MAX_SITE_MQTT、D1MAX_MAP、D1MAX_HOME,再:
+    sudo systemctl start d1max-agent
 提示
+fi
 
-say "7/7 切到刚装的这一版并起服务"
-# **把 /etc/d1max/env 里要用的值读出来。** sudo 默认 env_reset,D1MAX_SN 不在
-# env_keep 里,而 root 自己的环境里本来也没有它 —— 不读的话,下面 release
-# activate 拿到的是空值,cli.py 的 resolve() 会落到设备树/MAC 兜底,而服务侧经
-# EnvironmentFile= 拿到的是人填的真值。两个值一不一样,重启后自检第四项
-# (identity)就恒红,postcheck_verdict 判 ROLLBACK,一版好的被退回去。
-# **docs/装机清单.md 里"不填 SN 会假失败"那段话,正是因为这里把这份文件读了、
-# 并在下面把变量显式传了下去,才是成立的。**
-#
-# **但绝不能 source 它。** 这份文件是 systemd 的 EnvironmentFile= 在读,systemd
-# 按字面量解析:等号右边就是值,不分词、不做命令替换、分号不是分隔符。而
-# `. /etc/d1max/env` 是让 bash 求值同一份文件,规矩根本不是一回事 —— 而这份
-# 文件是现场拿 nano 一个字一个字敲出来的,下面三种都是人手敲得出来的:
-#
-#   * D1MAX_SN=C4 0221              systemd 认;bash 去执行 `0221`,set -e 当场 127,
-#                                   装机死在 7/7,前六步全白跑
-#   * D1MAX_CONSOLE_TOKEN=a;reboot  systemd 认;bash **以 root 把 reboot 跑了**
-#   * D1MAX_PIN=$(id -u)            systemd 原样当字面量;bash 做命令替换
-#
-# 所以这里只把要用的两个键读出来,读法逐条对着 systemd 的解析(src/core/
-# execute.c 走 load_env_file_push,键名过 env_name_is_valid)对齐:
-#
-#   * 只认 `键=` 开头,键前面允许有空白 —— systemd 也跳过行首空白;
-#   * `#` 开头的注释行两边都不认(sed 那一条要求行首空白之后紧跟键名);
-#   * `export D1MAX_SN=x` 两边都不认 —— systemd 解出来的键名是 `export D1MAX_SN`,
-#     带空格,env_name_is_valid() 判非法,整行被忽略(只打一条警告)。这里跟着
-#     不认,是为了两边读出同一个值,不是漏掉了;
-#   * 同一个键写了两遍,**systemd 取最后一次**(basic/env-util.c 的
-#     strv_env_replace:后面的赋值替换前面的),所以这里 tail -n 1;
-#   * 值两边的空白 systemd 对不带引号的值会剥掉(\r 也算空白),这里跟着剥 ——
-#     现场用 nano 敲完常常多一个尾随空格,不剥的话下面的字符白名单会把一个
-#     systemd 明明认得的值判死,现场白挨一次 exit 3。
-#
-# 带引号的值(D1MAX_SN="C4 0221")这里**故意不还原**:引号会留在值里,被下面
-# 的白名单挡掉,让人改干净再来。与其在 shell 里重写一遍 systemd 的引号和转义
-# 规则(写歪一点就是两边各读各的值,而那正是这一步要防的事),不如停下来喊。
+say "7/7 切到刚装的这一版并起代理"
+# **把 /etc/d1max/env 里的 D1MAX_SN 读出来(不 source)。** sudo 默认 env_reset,下面
+# release activate 拿不到它;而这份文件是 systemd 的 EnvironmentFile= 在读,systemd 按
+# 字面量解析(等号右边就是值,不分词、不做命令替换、分号不是分隔符)。`. /etc/d1max/env`
+# 让 bash 求值同一份文件,规矩不是一回事 —— `D1MAX_SN=a;reboot` 这种人手敲得出来的行,
+# bash 会以 root 把 reboot 跑了。所以只读要用的键,读法对着 systemd 的规矩:只认行首空白
+# 之后紧跟 `键=`,同一个键写两遍取最后一次,值两边的空白剥掉。带引号的值不还原,被下面
+# 的白名单挡掉,让人改干净再来。
 read_env_value() {
   sed -n "s/^[[:space:]]*$1=//p" /etc/d1max/env 2>/dev/null \
     | tail -n 1 \
     | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 D1MAX_SN=
-D1MAX_PIN_VALUE=
 if [[ -f /etc/d1max/env ]]; then
   D1MAX_SN=$(read_env_value D1MAX_SN)
-  D1MAX_PIN_VALUE=$(read_env_value D1MAX_PIN)
 fi
-
-# **SN 的字符白名单,不干净就停下来喊。** 这个值会被原样塞进回传请求的
-# HTTP header(engine/http_sink.py 里 sn 不转义、原样进 header),填成中文的话
-# 上传线程每一条都 UnicodeEncodeError;带空格、引号、分号的值则说明这一行是
-# 手敲歪的,systemd 和这里读出来的多半已经不是同一个东西。"装机时挡住脏 sn"
-# 本来就记在配置自检这一层(挂账 142),这里正是那一层。
-# 白名单覆盖了本项目见过的所有真 SN(C40221、D1M-0007、D1MAX-TEST-01 之类),
-# 它挡的是空格和标点,不挡任何一种真序列号的写法。
+# **SN 的字符白名单,不干净就停下来喊。** 带空格、引号、分号的值说明这一行是手敲歪的,
+# systemd 和这里读出来的多半已经不是同一个东西。
 if [[ -n "$D1MAX_SN" && ! "$D1MAX_SN" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "错误: /etc/d1max/env 里的 D1MAX_SN 不干净: [$D1MAX_SN]" >&2
   echo "      只收字母、数字、点、下划线、减号 —— 空格、引号、分号、中文都不行。" >&2
@@ -478,56 +396,11 @@ if [[ -n "$D1MAX_SN" && ! "$D1MAX_SN" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "      **没有 stop/start**,现在跑着的还是上一版(如果有的话)。" >&2
   exit 3
 fi
-
-# **PIN 空着就停在这儿,不 stop/start。** 跟下面 SN 那条警告不是一回事:
-# SN 空只是"可能"被误判回滚,PIN 空是必定起不来。单元的 ExecStart 带
-# --host 0.0.0.0,check_exposure() 见到非本机地址又没 PIN 会 SystemExit;
-# 配上 Restart=always + RestartSec=5,机器会变成每 5 秒刷一条日志的启动
-# 循环,现场看到的是一堵日志墙,比停下来喊一声糟得多。
-# **测的是解析出来的值,不是"这一行非空"。** 原来这里是
-# grep -qE '^D1MAX_PIN=.+',它问的是"文件里有没有一行长这样",而
-# `D1MAX_PIN=   `(尾随几个空格)、`D1MAX_PIN=` 写了两遍第二遍是空的,
-# 这两种它都判"有 PIN",于是脚本照常往下 stop/start,机器照样进那个每 5 秒一条的
-# 启动循环 —— 守卫在,墙也在。现在测的是上面按 systemd 的规矩读出来的那个值。
-if [[ -z "${D1MAX_PIN_VALUE//[[:space:]]/}" ]]; then
-  echo "错误: /etc/d1max/env 里的 D1MAX_PIN 是空的,服务起不来。" >&2
-  echo "      单元的 ExecStart 带 --host 0.0.0.0(手机 app 要连它)," >&2
-  echo "      而没有 PIN 的话服务会拒绝启动;Restart=always + RestartSec=5" >&2
-  echo "      会把它刷成每 5 秒一条日志的启动循环。" >&2
-  echo "      先填好 D1MAX_PIN=(4 位以上,建议 6 位数字),再重跑这个脚本。" >&2
-  echo "      **没有 stop/start**,现在跑着的还是上一版(如果有的话)。" >&2
-  # **本次 enable 过了,得撤掉再退。** 5/7 已经 systemctl enable 过了:不撤的话
-  # 这次确实不 stop/start(上面那句话是真的),但**下一次开机** systemd 会照
-  # multi-user.target.wants 那条自启链把它拉起来,check_exposure() 见到
-  # --host 0.0.0.0 又没 PIN 就 SystemExit,Restart=always + RestartSec=5 +
-  # StartLimitIntervalSec=0 —— 这段守卫要防的那堵日志墙原样回来,只是推迟到了
-  # 现场没人看着的时候。填好 PIN 重跑一趟,5/7 会重新 enable 回去。
-  # 失败不致命:单元还没装上、systemd 不在的机器上也得能干净地退出来。
-  systemctl disable d1max-patrol.service >/dev/null 2>&1 || true
-  exit 3
-fi
-
-# SN 没填不致命(不 exit),但要喊出来 —— 打到 stderr,不吞在一堆 echo 里。
-# 不加交互确认(read -p 之类):install.sh 必须能在无人值守的 provisioning
-# 脚本里跑,一个会阻塞等输入的装机脚本比它要防的问题更麻烦,跟"安全网
-# 不该比它防的问题更危险"是同一条理由。
-# 同上,测的是解析出来的值 —— `D1MAX_SN=   ` 这种填了个寂寞的写法,
-# 原来那条 grep 判"填了",而 systemd 剥完空白读出来的是空串。
 if [[ -z "${D1MAX_SN//[[:space:]]/}" ]]; then
-  echo "警告: /etc/d1max/env 里的 D1MAX_SN 还没填。" >&2
-  echo "      不填的话自检的 identity 那一项会拿兜底的 MAC 值去比对," >&2
-  echo "      可能把这一版判成回滚。现场先填好再继续。" >&2
+  echo "警告: /etc/d1max/env 里的 D1MAX_SN 还没填(照着机身标签填上,再重跑一次)。" >&2
 fi
-# release activate 撞见"已经是在跑的这一版"会报错退出(这是对 HTTP 那条
-# 路正确的行为,不改它 —— 见 engine/release.py 的 activate())。但重跑这个
-# 脚本正是现场"填完 SN 让它生效"的路子 —— 跳过切换不能连 stop/start 也跳过,
-# **stop 和 start 必须无条件执行**。
-# **链不在就是空串,别拿 basename 的兜底值凑合。** readlink -f 在 current 这条
-# 链还不存在时什么也不输出,外面套一层 basename 得到的是字面量 "current" ——
-# 一个长得像版本名的假值。今天它碰巧咬不着人:_NAME_RE 不允许哪一版叫
-# current,所以下面那个相等判断一定不成立。但那是靠**别处**的规矩兜着的,
-# _NAME_RE 哪天松一点,这里就变成"第一次装机反而跳过了 activate"。
-# 写成显式的:没有链就是空,空串跟任何 REL_NAME 都不相等,该 activate 就 activate。
+# **链不在就是空串**:readlink -f 在 current 还不存在时什么也不输出,外面套 basename 会得到
+# 字面量 "current"。没有链就是空,跟任何 REL_NAME 都不相等,该 activate 就 activate。
 CURRENT_REL=
 if [[ -e "$ROOT/current" || -L "$ROOT/current" ]]; then
   CURRENT_REL=$(basename "$(readlink -f "$ROOT/current")")
@@ -539,34 +412,36 @@ else
   sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_SN="${D1MAX_SN:-}" \
     "$ROOT/bin/python" -m d1max_patrol.cli release activate "$REL_NAME"
 fi
-# **先停服务,再搬数据,再起新版。** W01 之前 --runs-root 落在槽里;新版起来后
-# 读的是 /var/lib/d1max,不搬的话历史全"消失"、待传队列停传。搬的时候老版本
-# 必须已经停了 —— 它还活着就可能正往 queue.jsonl / runs/ 追加,搬到一半的文件
-# 会被当成已完整拷走。所以不是 migrate → restart,是 stop → migrate → start,
-# **而且真没停掉就不搬**(见下面 is-active 那道闸)。
-# 可重跑:搬过的源会改名 *.migrated,第二次什么都不做。搬失败不拦装机 ——
-# 数据还在槽里没丢,prune 见到槽里有数据也不会删(engine/release.py)。
-# stop 加 '|| true':第一次装机服务还不存在,stop 会报错,不能让 set -e 死在这。
-systemctl stop d1max-patrol.service || true
-# **停不掉就别搬。** 搬的前提是没人在往槽里写;stop 超时/失败时老进程还活着。
-# is-active 对"没这个单元"也回非零,所以第一次装机照样走搬迁分支。
-if systemctl is-active --quiet d1max-patrol.service; then
-  echo "  !! 服务停不掉,跳过数据迁移(搬的前提是没人在往槽里写)。装完后手工:stop 服务,再跑 release migrate-data" >&2
+# **先停代理,再搬数据,再起新版。** W01 之前数据落在槽里,新版读的是 /var/lib/d1max。搬的时候
+# 谁都不能正往槽里写,所以是 stop → migrate → start,**而且真没停掉就不搬**。可重跑:搬过的源
+# 改名 *.migrated,第二次什么都不做。搬失败不拦装机 —— 数据还在槽里没丢,prune 见到槽里有数据
+# 也不会删。stop 加 '|| true':第一次装机服务还没起过。
+systemctl stop d1max-agent.service || true
+if systemctl is-active --quiet d1max-agent.service; then
+  echo "  !! 代理停不掉,跳过数据迁移(搬的前提是没人在往槽里写)。装完后手工:stop 代理,再跑 release migrate-data" >&2
 else
   sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" D1MAX_DATA_ROOT=/var/lib/d1max \
     "$ROOT/bin/python" -m d1max_patrol.cli release migrate-data \
-    || echo "  !! 槽内数据迁移没成功。没搬动的那几样还在原槽里、原名不变,prune 不会删它们;已经改名成 *.migrated 的不受保护。先 ls /opt/d1max/releases/*/ 看还有哪些原名的,再 stop 服务、手工跑 release migrate-data" >&2
+    || echo "  !! 槽内数据迁移没成功。没搬动的那几样还在原槽里、原名不变,prune 不会删它们;已经改名成 *.migrated 的不受保护。先 ls /opt/d1max/releases/*/ 看还有哪些原名的,再 stop 代理、手工跑 release migrate-data" >&2
 fi
-systemctl start d1max-patrol.service
+# 没有注册文件的话 systemd 按 ConditionPathExists 跳过,不算失败。**有注册文件、但站点地址、
+# 地图、原点三样有一样空着就先不起**:启动脚本见到空值就退出,Restart=always + RestartSec=5 会把它
+# 刷成每 5 秒一条日志的启动循环 —— 停下来说清楚要填什么,比留一堵日志墙好。
+MISSING=
+for key in D1MAX_SITE_MQTT D1MAX_MAP D1MAX_HOME; do
+  if [[ -z "$(read_env_value "$key")" ]]; then
+    MISSING="$MISSING $key"
+  fi
+done
+if [[ -f /etc/d1max/registration.json && -n "$MISSING" ]]; then
+  echo "  代理先不起:/etc/d1max/env 里这几样还空着:$MISSING" >&2
+  echo "  填好之后:sudo systemctl start d1max-agent(不用重跑这个脚本)。" >&2
+else
+  systemctl start d1max-agent.service
+fi
 
 say "装完了。看一眼:"
-echo "  systemctl status d1max-patrol"
+echo "  systemctl status d1max-agent"
+echo "  journalctl -u d1max-agent -f"
 echo ""
-echo "  下面三条要看的是 /api/release、/api/selfcheck、/api/identity,"
-echo "  但裸 curl 会全部返回 401 —— 服务带 --host 0.0.0.0 起,必须有 PIN,"
-echo "  而且从 127.0.0.1 发过去也一样要 token。先照 docs/装机清单.md 三节"
-echo "  换一个 TOKEN(那几行从 /etc/d1max/env 取 PIN,不用手敲),再:"
-echo ""
-echo "    curl -sS -H \"Authorization: Bearer \$TOKEN\" http://127.0.0.1:8095/api/release"
-echo "    curl -sS -H \"Authorization: Bearer \$TOKEN\" http://127.0.0.1:8095/api/selfcheck"
-echo "    curl -sS -H \"Authorization: Bearer \$TOKEN\" http://127.0.0.1:8095/api/identity"
+echo "  连上站点之后,手机(站点模式)的狗列表里看得到这只狗;能力里报的是 D1MAX_HAL 那个适配器。"

@@ -73,11 +73,13 @@ LEVEL_OF: dict[str, Level] = {
     "fallen": Level.P1,
     "loc_lost_paused": Level.P1,
     "estop_pressed": Level.P1,
+    # lease_expired、suspend_stale、watchdog_died 三类原来由狗上老服务报;W00c5e 之后没有来源
+    # (遥控租约在站点上、接管不挂起),种类留着是为了库里的老记录读得懂。
     "lease_expired": Level.P1,
     # 人点了"让开腿"接管,接管完忘了还回来 —— 这一趟从此永远挂着,而屏幕上
     # 一切如常(挂账 67a)。**处置是升 P1,不是自动 resume**:一只狗在"最后
     # 已知状态是人正在接管"的情况下自己动起来,是这套系统里最不该发生的事
-    # (§5.8 同理),判定在 ``app/server.py`` 的 ``_挂起超时了``。
+    # (§5.8 同理)。判定原来在老服务里;W00c5e 之后接管直接结束这一趟、不挂起,这一类没有来源了。
     "suspend_stale": Level.P1,
     # 值守那条闸门协程自己死了(``server._StateHub._lease_watchdog``)。
     # **这一条报的是"报警器坏了"**,所以它是 P1 而不是 P2:从它死的那一刻

@@ -10,7 +10,7 @@ from datetime import datetime
 
 import pytest
 
-from d1max_agent.engine.schedule import (
+from d1max_contract.schedule import (
     DAYS,
     MAX_WINDOW_MIN,
     ON_MISSED,

@@ -4,16 +4,16 @@
 1. **标定包(calibration)** —— 解决 IMU-雷达外参弱可观。**我用 SDK 脚本控制**做多轴激励动作。
 2. **整层室内地图(coverage)** —— 至少把室内扫清楚。**你用遥控器**慢速走遍全场。
 
-两个包都用 `record_bag.sh` 录(**含 `/front_lidar/imu`** —— app 自带录包漏了 IMU,标定包必须自己录)。
+两个包都用 `record_bag.sh` 录(**含 `/front_lidar/imu`** —— 代理自带的录包(站点下「开始录包」)漏了 IMU,标定包必须自己录)。
 
 ---
 
 ## 关键事实(已从代码/现场定死)
 - **运动接口** = `walk(时长, forward, lateral, yaw)`,开环脉冲,控制量是**百分比**,**死区 ~0.3**(0.3~0.5 才真走,<0.3 静默不动)。yaw 死区 `MIN_YAW=0.30`。
 - **没有身体 pitch/roll 命令**。只有 `stand()` / `lie()`(整体起立/趴下)和 `set_gimbal`(云台/头,不是身体)。
-- **控制走 app HTTP API**:`/api/control/acquire`(抢租约)→ `/api/teleop`(发脉冲,每拍要 `/api/teleop/heartbeat`,>0.6s 不发就停车)→ `/api/control/release`。
-- **stand/lie 没有 HTTP 路由** → 要用它做 pitch 激励,得现场直连 backend 或加一条路由(现场定)。
-- app 自带录包话题 = `/front_lidar,/tf,/tf_static,/odom/*`,**无 IMU** → 用本目录 `record_bag.sh` 代替。
+- **狗上老服务那套 HTTP 控制接口(`/api/control/*`、`/api/teleop`)W00c5e 退役了。** 本目录的 `calibrate_drive.py` 本来就不走它:直接连旁路进程(`SidecarDeviceBackend`,TCP 8090)。人手遥控改走站点(手机遥控页,决策 7:只有前后与转向)。
+- **stand/lie 只有旁路进程这一条路**(`SidecarDeviceBackend` 的 `stand/lie`,`calibrate_drive.py --stand-lie` 用的就是它);站点遥控不发 stand/lie。
+- 代理自带录包话题(`src/d1max_patrol/app/mapping.py` 的 `RECORD_TOPICS`)= `/front_lidar,/tf,/tf_static,/odom/*`,**无 IMU** → 用本目录 `record_bag.sh` 代替。
 
 ---
 

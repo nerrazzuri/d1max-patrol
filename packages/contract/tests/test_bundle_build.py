@@ -7,7 +7,7 @@ import shutil
 
 import pytest
 
-from d1max_agent.engine.bundle import (
+from d1max_contract.bundle_format import (
     BUNDLE_MANIFEST,
     BUNDLE_SCHEMA,
     BundleError,
@@ -88,16 +88,6 @@ def test_任务被盖上schema(tmp_path):
     出 = 打一个(tmp_path)
     落 = json.loads((出 / "missions" / "night.json").read_text(encoding="utf-8"))
     assert 落["schema"] == BUNDLE_SCHEMA
-
-
-def test_schema对得上selfcheck那个下限(tmp_path):
-    """跟 ``engine/selfcheck.py`` 的 ``mission_schema_floor`` 真的对一遍 ——
-    它的 docstring 里写着「等第 5 卷把它真加上,这个函数一个字都不用改」。
-    **这条就是那句话的对账。**
-    """
-    from d1max_agent.engine.selfcheck import mission_schema_floor
-    出 = 打一个(tmp_path)
-    assert mission_schema_floor(出 / "missions") == BUNDLE_SCHEMA
 
 
 def test_坏任务打不出包(tmp_path):

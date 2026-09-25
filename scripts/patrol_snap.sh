@@ -5,7 +5,7 @@
 #   分析交给 VLM（Claude）读这些帧出发现。配合 patrol_agent 定点巡检用。
 #
 #   用法: bash scripts/patrol_snap.sh [点位名]
-#   前提: 已连狗热点(192.168.234.1)；看板在 8095 跑（用来读当前定位坐标，可选）。
+#   前提: 已连狗热点(192.168.234.1)。当前坐标不读了（老看板 8095 随 W00c5e 退役），meta 里记空。
 # =====================================================================
 set -u
 cd "$(dirname "$0")/.."
@@ -17,9 +17,8 @@ mkdir -p "$OUT"
 
 echo "[snap] 抓拍点 '$NAME' → $OUT"
 
-# 1) 当前地图坐标（从看板 /events 读 loc_map 位姿；读不到就留空）
-POSE=$(timeout 4 curl -sN http://localhost:8095/events 2>/dev/null | grep -m1 'data:' | sed 's/^data: //')
-[ -z "$POSE" ] && POSE='{"ok":false}'
+# 1) 当前地图坐标：老看板退役后这里不再读，留空
+POSE='{"ok":false}'
 
 # 2) 抓前/后相机各一帧
 grab(){ # $1=stream $2=outfile

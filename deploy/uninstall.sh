@@ -4,15 +4,15 @@
 #
 #   用法:
 #     sudo bash deploy/uninstall.sh                      # 默认:全部清掉
-#     sudo bash deploy/uninstall.sh --keep-data          # 留 PIN 和数据
+#     sudo bash deploy/uninstall.sh --keep-data          # 留现场配置和数据
 #     sudo bash deploy/uninstall.sh --dry-run            # 只说要删什么,不动手
 #     sudo bash deploy/uninstall.sh --agent-root <目录>   # 指定放 runs/ 的那个目录
 #     sudo bash deploy/uninstall.sh --purge-agent-binary # 连编出来的二进制一起删
 #
 #   **默认就是彻底卸干净**:服务、单元、自启链、/opt/d1max 整个根、
-#   /etc/d1max 整个目录(含设备 PIN)、巡检数据、任务包,以及正在跑的
+#   /etc/d1max 整个目录(含站点证书包、注册文件、现场填的 env)、数据根,以及正在跑的
 #   patrol_agent 和它留下的管道 / pid 文件 / 现场日志。
-#   只想重装、不想让现场所有手机重输 PIN 的,用 --keep-data。
+#   只想重装、不想重新向站点登记这只狗的,用 --keep-data。
 #
 #   **没有二次确认。** 要的是"一键"。想先看一眼的人走 --dry-run ——
 #   脚本一上来就把要删的东西和不可逆的后果整块打在屏幕上,然后才动手。
@@ -45,26 +45,27 @@ set -euo pipefail
 # @删除 /opt/d1max/bin-venv                                              上面那个解释器的 venv
 # @删除 /opt/d1max/releases                                              版本槽(代码和 venv)
 # @删除 /opt/d1max/current                                               版本链
-# @删除 /opt/d1max/bundles                                               任务包
 # @删除 /opt/d1max/pending.json                                          在途升级标记
-# @删除 /var/lib/d1max                                                   巡检数据根
+# @删除 /opt/d1max/rolled_back.json                                      开机守卫退回上一版时留的条子
+# @删除 /var/lib/d1max                                                   数据根(发件箱、事件簿、幂等记录)
 # @删除 /etc/d1max                                                       整个配置目录
-# @删除 /etc/d1max/env                                                   里面有这台机器的设备 PIN
-# @删除 /etc/systemd/system/d1max-patrol.service                         主单元
-# @删除 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 开机自启那条链
+# @删除 /etc/d1max/env                                                   现场值(站点地址、地图、原点、适配器、SN)
+# @删除 /etc/systemd/system/d1max-agent.service                           代理单元
+# @删除 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  代理的开机自启链
 # @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
-# @删除 /etc/systemd/system/d1max-agent.service                           W00b 的 robot-agent 单元(装而不 enable)
-# @删除 /usr/local/sbin/d1max-privileged                                 W01b 的特权助手
-# @删除 /etc/sudoers.d/d1max                                             W01b 的 sudo 白名单
-# @删除 /usr/local/sbin/d1max-restart-now                                W01b 重启的内部入口
+# @删除 /etc/systemd/system/d1max-patrol.service                         老服务(W00c5e 退役;没重跑过装机脚本的老机器上还在)
+# @删除 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
+# @删除 /usr/local/sbin/d1max-privileged                                 老的特权助手
+# @删除 /etc/sudoers.d/d1max                                             老助手的 sudo 白名单
+# @删除 /usr/local/sbin/d1max-restart-now                                老服务重启的内部入口
+# @删除 /opt/d1max/bundles                                               老服务的任务包目录
 #
 # 带 --keep-data 时这几处留着,每一处的理由都要能说出口:
 #
-# @保留 /etc/d1max          配置目录留着,因为 env 在它底下
-# @保留 /etc/d1max/env      里面有设备 PIN,删了重装会换一个,现场所有手机都要重输
-# @保留 /opt/d1max          根目录本身留着,/opt/d1max/bundles 在它底下
-# @保留 /opt/d1max/bundles  任务包
-# @保留 /var/lib/d1max      巡检数据根:runs、上传队列、基线、导出
+# @保留 /etc/d1max          配置目录留着:站点签发的证书包、注册文件、env 都在它底下
+# @保留 /etc/d1max/env      现场填过的值(站点地址、地图、原点、SN),重装不用再填
+# @保留 /opt/d1max          根目录本身留着(只清里面的解释器、版本槽、链)
+# @保留 /var/lib/d1max      数据根:发件箱里还没传到站点的东西在这儿
 
 # ------------------------------------------------------------ 常量
 # **写死,不给环境变量覆盖**,跟 install.sh 第 11 行同一个口径。下面那些
@@ -73,10 +74,11 @@ set -euo pipefail
 ROOT=/opt/d1max
 ETC_DIR=/etc/d1max
 UNIT_DIR=/etc/systemd/system
-MAIN_UNIT=d1max-patrol.service
+MAIN_UNIT=d1max-agent.service
 OLD_UNIT=d1max-bootguard.service
-AGENT_UNIT=d1max-agent.service
-WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-patrol.service
+LEGACY_UNIT=d1max-patrol.service
+WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-agent.service
+LEGACY_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-patrol.service
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -84,7 +86,7 @@ warn() { printf '%s\n' "$*" >&2; }
 usage() {
   warn "用法:"
   warn "  sudo bash $0                      # 默认:全部清掉,不留痕迹"
-  warn "  sudo bash $0 --keep-data          # 只卸配置和服务,留 PIN 和数据"
+  warn "  sudo bash $0 --keep-data          # 只卸服务和代码,留现场配置和数据"
   warn "  sudo bash $0 --dry-run            # 只说要删什么,不动手"
   warn "  sudo bash $0 --agent-root <目录>   # patrol_agent 的 runs/ 在哪个目录下"
   warn "  sudo bash $0 --purge-agent-binary # 连编出来的 motion/patrol_agent 一起删"
@@ -365,7 +367,7 @@ stop_service() {
     say "  (这台机器上没有 systemctl,整段跳过)"
     return 0
   fi
-  for u in "$MAIN_UNIT" "$AGENT_UNIT" "$OLD_UNIT"; do
+  for u in "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do
     if [ "$DO_IT" != 1 ]; then
       say "  [dry-run] 会 stop + disable $u"
       continue
@@ -375,15 +377,16 @@ stop_service() {
     systemctl disable "$u" >/dev/null 2>&1 || true
     say "  停了并关掉自启:$u(本来就没有的话,这一步什么也没发生)"
   done
-  rm_sys "$UNIT_DIR/$MAIN_UNIT" "主单元"
-  rm_sys "$UNIT_DIR/$AGENT_UNIT" "robot-agent 单元(W00b,装而不 enable)"
+  rm_sys "$UNIT_DIR/$MAIN_UNIT" "代理单元"
+  rm_sys "$WANTS_LINK" "代理的开机自启链"
   rm_sys "$UNIT_DIR/$OLD_UNIT" "老的守卫单元,多数机器上本来就没有"
-  rm_sys "$WANTS_LINK" "开机自启那条链"
-  # W01b:先删 sudoers 再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在
+  rm_sys "$UNIT_DIR/$LEGACY_UNIT" "老服务(W00c5e 退役),重跑过装机脚本的机器上已经没有"
+  rm_sys "$LEGACY_WANTS_LINK" "老服务的自启链"
+  # 先删 sudoers 再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在
   # 的路径,谁在那一刻建出同名文件谁就是 root。
-  rm_sys "/etc/sudoers.d/d1max" "sudo 白名单"
-  rm_sys "/usr/local/sbin/d1max-privileged" "特权助手"
-  rm_sys "/usr/local/sbin/d1max-restart-now" "重启的内部入口"
+  rm_sys "/etc/sudoers.d/d1max" "老助手的 sudo 白名单"
+  rm_sys "/usr/local/sbin/d1max-privileged" "老的特权助手"
+  rm_sys "/usr/local/sbin/d1max-restart-now" "老服务重启的内部入口"
   if [ "$DO_IT" = 1 ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl reset-failed "$MAIN_UNIT" >/dev/null 2>&1 || true
@@ -403,7 +406,7 @@ wipe_disk() {
   real=$(readlink -f "$ROOT/current" 2>/dev/null) || real=
   if [ -n "$real" ] && [ "$real" != "$ROOT/current" ]; then
     say "  current 这条链现在指着:$real"
-    say "  巡检数据在 /var/lib/d1max,任务包在 $ROOT/bundles。"
+    say "  数据在 /var/lib/d1max(发件箱里可能还有没传到站点的东西)。"
   fi
 
   if [ "$KEEP_DATA" = 1 ]; then
@@ -412,6 +415,8 @@ wipe_disk() {
     rm_sys "$ROOT/bin-venv" "上面那个解释器的 venv"
     rm_sys "$ROOT/current" "版本链"
     rm_sys "$ROOT/pending.json" "在途升级标记"
+    rm_sys "$ROOT/rolled_back.json" "守卫的条子"
+    rm_sys "$ROOT/bundles" "老服务的任务包目录"
     # **releases 里可能还留着搬迁时因重名没搬进数据根的 *.migrated 副本。**
     # 那份数据只有这一处备份,--keep-data 图的就是不丢数据 —— 这时候把
     # releases 整个删掉,数据就真的没了。先看一眼槽里(每个槽目录底下)
@@ -422,24 +427,23 @@ wipe_disk() {
     else
       rm_sys "$ROOT/releases" "版本槽;数据不在里面了(W01 之后在 /var/lib/d1max)"
     fi
-    say "  留着:$ETC_DIR/env —— 里面有这台机器的设备 PIN。删了它,重装会生成"
-    say "        一个新的,现场所有手机都要重新输一遍。留着,重装还是原来那个。"
-    say "  留着:$ETC_DIR —— env 在它底下。"
-    say "  留着:/var/lib/d1max —— 巡检数据根:runs、上传队列、基线、导出。"
-    say "  留着:$ROOT/bundles —— 任务包。"
-    say "  留着:$ROOT —— 根目录本身,$ROOT/bundles 在它底下。"
+    say "  留着:$ETC_DIR/env —— 现场填过的站点地址、地图、原点、SN,重装不用再填。"
+    say "  留着:$ETC_DIR —— 站点签发的证书包、注册文件、env 都在它底下;删了要重新向站点登记。"
+    say "  留着:/var/lib/d1max —— 数据根:发件箱里还没传到站点的东西在这儿。"
+    say "  留着:$ROOT —— 根目录本身。"
   else
     say "  默认模式:全部清掉,不留痕迹。"
     rm_sys "$ROOT/current" "版本链"
     rm_sys "$ROOT/pending.json" "在途升级标记"
+    rm_sys "$ROOT/rolled_back.json" "守卫的条子"
     rm_sys "$ROOT/bin" "跟版本无关的解释器"
     rm_sys "$ROOT/bin-venv" "上面那个解释器的 venv"
     rm_sys "$ROOT/releases" "版本槽"
-    rm_sys "$ROOT/bundles" "任务包"
-    rm_sys "/var/lib/d1max" "巡检数据根"
+    rm_sys "$ROOT/bundles" "老服务的任务包目录"
+    rm_sys "/var/lib/d1max" "数据根"
     rm_sys "$ROOT" "整个根"
-    rm_sys "$ETC_DIR/env" "设备 PIN 就在这个文件里"
-    rm_sys "$ETC_DIR" "整个配置目录"
+    rm_sys "$ETC_DIR/env" "现场值"
+    rm_sys "$ETC_DIR" "整个配置目录(连同站点证书包、注册文件)"
   fi
 }
 
@@ -449,7 +453,7 @@ announce() {
   if [ "$DO_IT" != 1 ]; then
     say " D1 Max 巡检 · 卸载 —— **这是 dry-run,什么都不会动**"
   elif [ "$KEEP_DATA" = 1 ]; then
-    say " D1 Max 巡检 · 卸载(--keep-data:留 PIN 和数据)"
+    say " D1 Max 巡检 · 卸载(--keep-data:留现场配置和数据)"
   else
     say " D1 Max 巡检 · 卸载(默认:全部清掉,不留痕迹)"
   fi
@@ -464,13 +468,13 @@ announce() {
   say ""
   if [ "$KEEP_DATA" != 1 ]; then
     say "同时会删掉(默认模式):"
-    say "  $ROOT 整个根 —— 代码、版本槽、任务包"
-    say "  /var/lib/d1max —— **巡检数据**根:runs、上传队列、基线、导出"
-    say "  $ETC_DIR 整个目录 —— 包括这台机器的设备 PIN"
-    say "  $UNIT_DIR 底下我们那两个 d1max-* 单元和开机自启链"
+    say "  $ROOT 整个根 —— 代码、版本槽"
+    say "  /var/lib/d1max —— 数据根:**发件箱里还没传到站点的东西**也在这儿"
+    say "  $ETC_DIR 整个目录 —— 包括站点签发的证书包与注册文件"
+    say "  $UNIT_DIR 底下我们的 d1max-* 单元和开机自启链"
     say "  patrol_agent 的命令管道、pid 文件、现场日志"
     say ""
-    say "只想重装、不想让现场所有手机重输 PIN 的,按 Ctrl+C 停下来,"
+    say "只想重装、不想重新向站点登记这只狗的,按 Ctrl+C 停下来,"
     say "改用:sudo bash $0 --keep-data"
   else
     say "$ROOT/releases 会删掉,除非里面还有搬迁时没搬完的 *.migrated 副本 —— 有就留着,自己核对完再删。"
@@ -501,7 +505,7 @@ receipt() {
   fi
   say ""
   say "  **这几样这个脚本清不掉,要的话得人去做:**"
-  say "    1. systemd 的历史日志(journalctl -u d1max-patrol 还查得到)。"
+  say "    1. systemd 的历史日志(journalctl -u d1max-agent 还查得到)。"
   say "       要清得用 journalctl --vacuum-time= 之类,那会连别人的日志一起清,"
   say "       所以这个脚本不替你做这个决定。"
   say "    2. 装机时 pip 在 ~/.cache/pip 里留下的轮子缓存。"

@@ -11,8 +11,6 @@ ROS;二是就算有,一次真重建要跑几分钟,那不是单元测试该干�
 
 from __future__ import annotations
 
-import json
-import time
 from pathlib import Path
 
 import pytest
@@ -26,7 +24,6 @@ from d1max_patrol.app.mapping import (
 )
 from d1max_patrol.app.procs import ProcError, ProcSpec
 from d1max_patrol.protocol.nav_types import Pose
-from tests.app.conftest import request
 
 _PARAMS = """\
 slam_toolbox:
@@ -451,108 +448,3 @@ def test_状态里有相位也有清单(orch):
 
 
 # ------------------------------------------------------------------ HTTP
-
-
-def test_建图状态接口走得通(server):
-    status, body, _h = request(server, "/api/mapping")
-    assert status == 200
-    assert json.loads(body)["phase"] == "idle"
-
-
-def test_录包接口得给名字(server):
-    status, _, _h = request(server, "/api/mapping/record/start",
-                        method="POST", payload={})
-    assert status == 400
-
-
-def test_录包接口拒绝不合法的名字(server):
-    """名字要当目录名用,还要拼进命令行。"""
-    status, _, _h = request(server, "/api/mapping/record/start",
-                        method="POST", payload={"name": "../x"})
-    assert status == 400
-
-
-def test_没在录的时候停录给409(server):
-    status, _, _h = request(server, "/api/mapping/record/stop", method="POST")
-    assert status == 409
-
-
-def test_重建接口拒绝不合法的图名(server, ctx, tmp_path):
-    (tmp_path / "bags" / "w1").mkdir(parents=True)
-    status, _, _h = request(server, "/api/mapping/rebuild", method="POST",
-                        payload={"bag": "w1", "map_id": "../x"})
-    assert status == 400
-
-
-def test_重建接口包不在就当场说(server):
-    """不能等几分钟之后让人去 last_error 里翻 —— 填错名字要立刻知道。"""
-    status, body, _h = request(server, "/api/mapping/rebuild", method="POST",
-                           payload={"bag": "never-recorded", "map_id": "m1"})
-    assert status == 400
-    assert "不存在" in json.loads(body)["detail"]
-
-
-def test_重建接口立刻给202不等着(server, ctx, tmp_path):
-    """一次重建要跑几分钟到几十分钟,压在一个 HTTP 请求里必然超时。"""
-    calls: list[tuple[Path, str]] = []
-
-    async def fake_rebuild(bag: Path, map_id: str) -> Path:
-        calls.append((bag, map_id))
-        return bag
-
-    ctx.mapping.rebuild = fake_rebuild
-    (tmp_path / "bags" / "w1").mkdir(parents=True)
-    status, _, _h = request(server, "/api/mapping/rebuild", method="POST",
-                        payload={"bag": "w1", "map_id": "m1"})
-    assert status == 202
-    deadline = time.monotonic() + 3.0
-    while not calls and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert calls and calls[0][1] == "m1", "202 之后那趟重建得真的开始跑"
-
-
-def test_录包接口走得通(server, ctx):
-    started: list[str] = []
-
-    async def fake_start(name: str) -> Path:
-        started.append(name)
-        return Path(name)
-
-    ctx.mapping.start_record = fake_start
-    status, body, _h = request(server, "/api/mapping/record/start",
-                           method="POST", payload={"name": "w1"})
-    assert status == 200
-    assert started == ["w1"]
-    assert json.loads(body)["bag"] == "w1"
-
-
-def test_进程日志接口给的是文本(server, ctx):
-    ctx.procs.log_path("slam").write_text("起来了\n出错了\n", encoding="utf-8")
-    status, body, _h = request(server, "/api/procs/slam/log")
-    assert status == 200
-    assert "出错了" in body.decode("utf-8")
-
-
-def test_没跑过的进程日志给404(server):
-    status, _, _h = request(server, "/api/procs/slam/log")
-    assert status == 404
-
-
-def test_进程名不合法给400(server):
-    """名字要拼进文件名,松一点就是一条路径穿越。"""
-    status, _, _h = request(server, "/api/procs/a;b/log")
-    assert status == 400
-
-
-def test_日志只给尾巴(server, ctx):
-    """建图跑一小时的日志有几十兆,整个塞进响应体会把页面一起拖垮。"""
-    ctx.procs.log_path("slam").write_text("x" * 200_000, encoding="utf-8")
-    status, body, _h = request(server, "/api/procs/slam/log?bytes=100")
-    assert status == 200
-    assert len(body) == 100
-
-
-def test_日志字节数不是数给400(server, ctx):
-    ctx.procs.log_path("slam").write_text("x", encoding="utf-8")
-    status, _, _h = request(server, "/api/procs/slam/log?bytes=abc")
-    assert status == 400

@@ -18,7 +18,6 @@ from pathlib import Path
 import pytest
 
 from d1max_agent.engine import release
-from d1max_agent.engine.bundle import BUNDLE_SCHEMA
 from d1max_agent.engine.release import (
     MANIFEST_NAME,
     ReleaseError,
@@ -27,6 +26,7 @@ from d1max_agent.engine.release import (
     tree_sha256,
     verify_package,
 )
+from d1max_contract.bundle_format import BUNDLE_SCHEMA
 
 #: 打包时刻,固定住 —— 包名里有日期,不固定的话测试会在跨 UTC 零点时翻脸。
 NOW_MS = 1_789_000_000_000

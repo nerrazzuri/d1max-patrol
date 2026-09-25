@@ -127,19 +127,15 @@ def test_任务与排程模块在契约包里_旧名字是同一个模块对象(
     import d1max_contract.schedule as cs
     for old in ("d1max_agent.engine.mission", "d1max_agent.engine.mission"):
         assert importlib.import_module(old) is cm, old
-    for old in ("d1max_agent.engine.schedule", "d1max_agent.engine.schedule"):
-        assert importlib.import_module(old) is cs, old
+    # 排程只在契约包里(狗上那个旧名字随 W00c5e 删了)。
+    assert cs.parse_schedule is not None
     assert "d1max_patrol" not in (PKGS / "contract" / "src" / "d1max_contract" / "mission.py"
                                   ).read_text(encoding="utf-8")
 
 
-def test_任务包格式与指纹在契约包里_狗上用的是同一份():
-    from d1max_agent.engine import bundle, export, release
-    from d1max_contract import bundle_format, digest
-    for name in ("verify_bundle", "parse_manifest", "read_manifest", "verify_pure_data",
-                 "bundle_sha256", "read_bundle_schedule", "BundleError", "BundleManifest"):
-        assert getattr(bundle, name) is getattr(bundle_format, name), name
-    assert export.sha256_file is digest.sha256_file
+def test_任务包格式与指纹在契约包里_发布包用的是同一个指纹算法():
+    from d1max_agent.engine import release
+    from d1max_contract import digest
     assert release._tree_sha256 is digest.tree_sha256, "发布包与任务包只有一个指纹算法"
 
 

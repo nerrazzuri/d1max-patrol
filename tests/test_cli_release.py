@@ -92,17 +92,6 @@ def test_切版本记的sn跟环境变量对齐(tmp_path, monkeypatch):
     assert read_pending(layout).sn == "D1M-XYZ-9"
 
 
-def test_切版本提示升级前检查在这条路上没跑(tmp_path, capsys):
-    root = tmp_path / "opt"
-    main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
-          "--root", str(root)])
-    capsys.readouterr()
-    assert main(["release", "activate", "2026-09-20-77b2de",
-                 "--root", str(root)]) == 0
-    out = capsys.readouterr().out
-    assert "没跑" in out
-
-
 def test_切一个没装的版本退非零(tmp_path, capsys):
     root = tmp_path / "opt"
     layout = Layout(root=root)
@@ -379,105 +368,14 @@ def test_pack的帮助说清了它跑在笔记本上(capsys):
     assert "笔记本" in 帮助 and "狗" in 帮助
 
 
-# ------------------------------------------------------------ W01b:单元随包装
+# ------------------------------------------------------------ W00c5e:切版本不碰单元
 
-def _两版(tmp_path, root):
+def test_切版本不碰单元_说清要重启代理(tmp_path, capsys):
+    """代理单元只指着这一版带的启动脚本(启动参数随版本走),单元只由装机脚本装一次。"""
+    root = tmp_path / "opt"
     for name in ("2026-09-06-a3f9c1", "2026-09-20-77b2de"):
         main(["release", "install", str(_pkg(tmp_path / name, name)), "--root", str(root)])
-
-
-class _假助手:
-    def __init__(self, 在: bool = True, 拒: str | None = None) -> None:
-        self.在, self.拒, self.装过 = 在, 拒, []
-
-    def present(self) -> bool:
-        return self.在
-
-    def install_unit(self, name: str) -> str:
-        from d1max_agent.engine.privileged import PrivilegedError
-        if self.拒:
-            raise PrivilegedError(self.拒)
-        self.装过.append(name)
-        return "installed"
-
-
-def test_activate在有助手时先装单元(tmp_path, monkeypatch, capsys):
-    import d1max_patrol.cli as cli
-    助手 = _假助手()
-    monkeypatch.setattr(cli, "Privileged", lambda: 助手)
-    root = tmp_path / "opt"
-    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
-    _两版(tmp_path, root)
+    capsys.readouterr()
     assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
-    assert 助手.装过 == ["2026-09-20-77b2de"]
-    assert "单元文件: installed" in capsys.readouterr().out
-
-
-def test_activate没助手就提示并照常切(tmp_path, monkeypatch, capsys):
-    import d1max_patrol.cli as cli
-    助手 = _假助手(在=False)
-    monkeypatch.setattr(cli, "Privileged", lambda: 助手)
-    root = tmp_path / "opt"
-    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
-    _两版(tmp_path, root)
-    assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
-    assert 助手.装过 == []
-    assert "单元文件没更新" in capsys.readouterr().out
-    assert current_name(Layout(root=root)) == "2026-09-20-77b2de"
-
-
-def test_activate单元装不上退非零且不切链(tmp_path, monkeypatch, capsys):
-    import d1max_patrol.cli as cli
-    monkeypatch.setattr(cli, "Privileged", lambda: _假助手(拒="第 8 行:User 只能是 robot"))
-    root = tmp_path / "opt"
-    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
-    _两版(tmp_path, root)
-    assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 2
-    assert current_name(Layout(root=root)) == ""
-    assert read_pending(Layout(root=root)) is None
-    assert "User 只能是 robot" in capsys.readouterr().err
-
-
-def test_rollback也装回上一版单元(tmp_path, monkeypatch):
-    import d1max_patrol.cli as cli
-    助手 = _假助手()
-    monkeypatch.setattr(cli, "Privileged", lambda: 助手)
-    root = tmp_path / "opt"
-    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
-    layout = Layout(root=root)
-    _两版(tmp_path, root)
-    main(["release", "activate", "2026-09-06-a3f9c1", "--root", str(root)])
-    commit(layout)
-    main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)])
-    助手.装过.clear()
-    assert main(["release", "rollback", "--root", str(root)]) == 0
-    assert 助手.装过 == ["2026-09-06-a3f9c1"]
-
-
-def test_rollback单元装不回去也照样退回去(tmp_path, monkeypatch, capsys):
-    import d1max_patrol.cli as cli
-    root = tmp_path / "opt"
-    layout = Layout(root=root)
-    monkeypatch.setattr(cli, "_HELPER_RELEASE_ROOT", root)
-    monkeypatch.setattr(cli, "Privileged", lambda: _假助手(在=False))
-    _两版(tmp_path, root)
-    main(["release", "activate", "2026-09-06-a3f9c1", "--root", str(root)])
-    commit(layout)
-    main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)])
-    monkeypatch.setattr(cli, "Privileged", lambda: _假助手(拒="源不存在"))
-    assert main(["release", "rollback", "--root", str(root)]) == 0
-    assert current_name(layout) == "2026-09-06-a3f9c1"
-    assert "源不存在" in capsys.readouterr().err
-
-
-def test_版本根不是opt_d1max时不走助手(tmp_path, monkeypatch, capsys):
-    """助手只认真机上写死的 /opt/d1max;--root 指到别处时装的会是另一棵树的单元。"""
-    import d1max_patrol.cli as cli
-    助手 = _假助手()
-    monkeypatch.setattr(cli, "Privileged", lambda: 助手)      # 助手在,但根不对
-    root = tmp_path / "opt"
-    _两版(tmp_path, root)
-    assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
-    assert 助手.装过 == []
-    assert "特权助手只认" in capsys.readouterr().out
-    assert current_name(Layout(root=root)) == "2026-09-20-77b2de"
+    out = capsys.readouterr().out
+    assert "单元文件" not in out and "d1max-agent" in out

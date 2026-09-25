@@ -31,8 +31,8 @@ class Alert {
   ///
   /// **里面同时带着 `/` 和 `#`。** 拼进 URL 之前必须整段
   /// `Uri.encodeComponent` —— 不转义的话 `#` 会被 `Uri.parse` 当 fragment
-  /// 从请求里整段切掉，狗收到的路径连 `/ack` 都没有了。见
-  /// `net/patrol_client.dart` 的 `ackAlert`。
+  /// 从请求里整段切掉，站点收到的路径连 `/ack` 都没有了。见
+  /// `net/site_client.dart` 里确认告警那一处。
   final String key;
 
   /// `"P1"` / `"P2"` / `"P3"`。**原样留着字符串。**

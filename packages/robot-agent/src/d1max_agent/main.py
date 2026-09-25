@@ -5,11 +5,7 @@
 × ``AgentRuntime``。
 一切都跑在 ``LoopBridge`` 的事件循环线程里,``asyncio.sleep(period)`` 每拍 ``step`` 一次。
 
-``--legacy-http host:port`` 时在**同一进程**里起老的 ``AppServer``,与运行时共用同一台引擎、
-同一对后端:手机与值守屏照旧连它,站点经 MQTT 派的任务和手机发起的任务走同一台引擎、
-同一套资源仲裁。两个进程都想拿 sidecar 控制权会出事,所以必须同一进程。
-``server.py`` 自己不改,只是组装权从它的 ``main()`` 移到这里;旧入口 ``d1max-app`` 与
-``d1max-patrol.service`` 原样保留,等 W00c 手机改连站点后退役。
+狗上只有这一个进程在开车(W00c5e:老的 HTTP 面 ``server.py`` 与 ``--legacy-http`` 退役,手机只连站点)。
 """
 
 from __future__ import annotations
@@ -132,10 +128,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--home", type=_home_arg, default=None,
                    help="原点 x,y,yaw;不给的话预飞检查 home 那一项红,goto 一律 failed")
     p.add_argument("--period", type=float, default=0.1, help="每拍间隔(秒)")
-    p.add_argument("--legacy-http", type=_hostport, default=None,
-                   help="同一进程里托管老的 HTTP 面(手机/值守屏用),host:port")
-    p.add_argument("--pin", default=None, help="legacy HTTP 绑到非本机地址时必须给")
-    p.add_argument("--sn", default=None, help="机身序列号(legacy HTTP 的身份用)")
     p.add_argument("--tls-ca", default=None, help="mqtts:站点 CA 证书")
     p.add_argument("--tls-cert", default=None, help="mqtts:本机证书(站点 enroll 签发,CN=robot_id)")
     p.add_argument("--tls-key", default=None, help="mqtts:本机私钥")
@@ -160,10 +152,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.outbox is not None:
         if not args.outbox.is_absolute():
             p.error(f"--outbox 要是绝对路径(D1MAX_OUTBOX 没设?):{args.outbox!s}")
-        if args.legacy_http is not None:
-            # 老 HTTP 面自己判读、出报告、按自己的规矩清盘,写进发件箱的东西站点不收、它还会不等站点
-            # 确认就删 —— 两者不许同时开(W00c5d 内部评审;老 HTTP 面随 W00c5e 退役)。
-            p.error("--legacy-http 不能跟 --outbox 一起用")
         mount = args.outbox_mount
         if mount:
             m = Path(mount)
@@ -200,20 +188,16 @@ class Assembled:
     parts: EngineParts
     hal: Any
     broker: MemoryBroker | None
-    server: Any
-    ctx: Any
     period_s: float
     _stop: threading.Event
     pump: Any = None
 
     def start(self) -> None:
-        """在 bridge 的循环里起运行时,并开始每拍 step。legacy HTTP、发件箱一起起。"""
+        """在 bridge 的循环里起运行时,并开始每拍 step;发件箱一起起。"""
         self.bridge.call(self.runtime.start, timeout_s=30.0)
         self.bridge.spawn(lambda: self._drive())
         if self.pump is not None:
             self.pump.start()
-        if self.server is not None:
-            self.server.start(postcheck=False)
 
     async def _drive(self) -> None:
         dt = self.period_s
@@ -232,11 +216,6 @@ class Assembled:
 
     def stop(self) -> None:
         self._stop.set()
-        if self.server is not None:
-            try:
-                self.server.stop()
-            except Exception:
-                log.exception("legacy HTTP 停不干净")
         try:
             self.bridge.call(self.runtime.close, timeout_s=10.0)
         except Exception:
@@ -266,10 +245,6 @@ def build(args: argparse.Namespace) -> Assembled:
     from d1max_patrol.app.bridge import LoopBridge
 
     registration = Registration.load(args.registration)
-    if args.legacy_http is not None:
-        # 拒绝启动要在起线程之前:SystemExit 之后不能留下一个没人收的事件循环线程。
-        from d1max_patrol.app.server import check_exposure
-        check_exposure(args.legacy_http[0], args.pin)
     broker = MemoryBroker() if args.transport == "memory://" else None
     bridge = LoopBridge()
     bridge.start()
@@ -313,13 +288,8 @@ def build(args: argparse.Namespace) -> Assembled:
         return _assemble()
 
     hal, parts, runtime, pump = bridge.call(_in_loop, timeout_s=30.0)
-
-    server = ctx = None
-    if args.legacy_http is not None:
-        server, ctx = _legacy_http(args, bridge, parts, registration)
     return Assembled(bridge=bridge, runtime=runtime, parts=parts, hal=hal, broker=broker,
-                     server=server, ctx=ctx, period_s=args.period, _stop=threading.Event(),
-                     pump=pump)
+                     period_s=args.period, _stop=threading.Event(), pump=pump)
 
 
 class _NoIntake:
@@ -425,31 +395,6 @@ def _releases(args: argparse.Namespace, registration: Registration) -> Any:
                       restart=restart, sn=registration.robot_id)
 
 
-def _legacy_http(args: argparse.Namespace, bridge: Any, parts: EngineParts,
-                 registration: Registration) -> tuple[Any, Any]:
-    """老的 AppServer,共用同一台引擎与后端。组装照 ``server.main()`` 的样子,只是零件换成
-    桥出来的 nav/device 与已经装好的 engine。"""
-    from d1max_patrol.app.identity import resolve
-    from d1max_patrol.app.mapping import MappingConfig, MappingOrchestrator
-    from d1max_patrol.app.procs import ProcManager
-    from d1max_patrol.app.server import AppContext, AppServer, _make_teleop
-    from d1max_patrol.backends.map_bridge import MapBridgeClient
-
-    host, port = args.legacy_http              # 暴露检查已在 build() 起线程之前做过
-    store = Path(args.store_dir)
-    procs = ProcManager(store / "logs")
-    teleop = bridge.call(lambda: _make_teleop(parts.device, parts.engine, {}))
-    mapping = MappingOrchestrator(procs, MappingConfig(bags_dir=store / "bags",
-                                                       maps_dir=store / "maps"))
-    who = resolve(args.sn or registration.robot_id, None)
-    ctx = AppContext(bridge=bridge, engine=parts.engine, nav=parts.nav, device=parts.device,
-                     maps=MapBridgeClient("127.0.0.1", 8092), procs=procs, teleop=teleop,
-                     mapping=mapping, missions_dir=store / "missions",
-                     runs_root=Path(args.runs_root), video={}, identity=who)
-    server = AppServer(ctx, host=host, port=port, pin=args.pin)
-    return server, ctx
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -470,8 +415,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     signal.signal(signal.SIGTERM, _on_term)
     print(f"d1max-agent 起来了:transport={args.transport} hal={args.hal} "
-          f"robot={assembled.runtime.registration.robot_id}"
-          + (f" legacy-http={assembled.server.url}" if assembled.server else ""), flush=True)
+          f"robot={assembled.runtime.registration.robot_id}", flush=True)
     try:
         while not assembled._stop.wait(0.5):
             pass

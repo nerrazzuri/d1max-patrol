@@ -55,9 +55,12 @@ from tests.test_deploy_files import DEPLOY, ROOT, 交付文件, 六位数
     # 的对应物,少一步就是现场照着清单跑会跑空的那种错。
     DEPLOY / "install.sh": (
         ("1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"), 6000),
-    # 现状约 3600 字。systemd 单元的三个段,少一个这份单元就不是单元了。
-    DEPLOY / "d1max-patrol.service": (
-        ("[Unit]", "[Service]", "[Install]"), 2400),
+    # 现状约 1900 字。systemd 单元的三个段,少一个这份单元就不是单元了。
+    DEPLOY / "d1max-agent.service": (
+        ("[Unit]", "[Service]", "[Install]"), 1200),
+    # 现状约 1600 字。代理的启动参数都在这儿(W00c5d 第三部分内部评审 B1)。
+    DEPLOY / "d1max-agent-start": (
+        ("exec", "--transport", "--tls-key", "--hal", "--outbox", "D1MAX_AGENT_ARGS"), 1000),
     # 实测 8700 上下 —— 采集要覆盖 snapshot、diff 两条路和端口那一段,
     # 少于下界说明有人把兜底或者某一类采集删了
     DEPLOY / "footprint.sh": (
@@ -66,19 +69,19 @@ from tests.test_deploy_files import DEPLOY, ROOT, 交付文件, 六位数
     # "有人把 patrol_agent 那一段删掉" 这种改法
     DEPLOY / "uninstall.sh": (
         ("1/5", "2/5", "3/5", "4/5", "5/5", "--dry-run", "--keep-data"), 9000),
-    # 现状约 9400 字。六个编号小节。
+    # 现状约 12000 字(W00c5e 重写)。六个编号小节。
     ROOT / "docs" / "装机清单.md": (
         ("## 一、", "## 二、", "## 三、", "## 四、", "## 五、", "## 六、"), 6000),
-    # 现状约 7300 字。这一份的小节没有编号,骨架就是标题本身。
+    # 现状约 5000 字(W00c5e 删了狗上落包那两节)。这一份的小节没有编号,骨架就是标题本身。
     ROOT / "docs" / "任务包格式.md": (
         ("## bundle.yaml", "## schedule.yaml", "## missions/",
-         "## 哪些东西不进包", "## 狗上是什么局面", "## 接口"), 5000),
-    # 现状约 8700 字。九个编号小节 —— 跟 test_鉴权文档没有被掏空 是同一份判据,
-    # 这里重复一遍是因为这条是**遍历名单**的:那一份哪天被挪走或改名,这一份
+         "## 哪些东西不进包", "## 狗上没有任务包", "## 接口"), 3500),
+    # 现状约 3400 字(W00c5e 按站点那一套重写)。九个编号小节 —— 跟 test_鉴权文档没有被掏空
+    # 是同一份判据,这里重复一遍是因为这条是**遍历名单**的:那一份哪天被挪走或改名,这一份
     # 对鉴权文档的覆盖不该跟着一起没。
     ROOT / "docs" / "鉴权与控制权.md": (
         ("## 零、", "## 一、", "## 二、", "## 三、", "## 四、",
-         "## 五、", "## 六、", "## 七、", "## 八、"), 6000),
+         "## 五、", "## 六、", "## 七、", "## 八、"), 3000),
     # 现状约 7200 字。七个编号小节。**不钉那一节「附:……」** —— 它是给维护者
     # 看的、随时可能被整节移出交付面,钉住它等于拦着别人做对的事。
     ROOT / "docs" / "值守与告警.md": (
@@ -202,24 +205,6 @@ def test_厂商协议特征本身不是一段可用的样例():
 PIN_位数 = 6
 
 
-def test_装机脚本生成的PIN就是这么多位():
-    """``install.sh`` 那一行里有**两个**地方假设了位数,两个都要拴住。
-
-    ``randbelow(10**6)`` 决定了取值范围,``:06d`` 决定了补零之后的宽度。只钉
-    前一个的话,把它改成 ``10**8`` 配 ``:06d``,生成出来的是个七八位数被截成
-    六位宽的怪东西 —— 那种坏法在现场是「PIN 对不上,而 env 里明明写着」。
-
-    脚本是在这儿现读的,不借 ``test_deploy_files.py`` 那个同名 fixture:
-    fixture 不跨模块共享,而把它挪进 ``conftest.py`` 就得动别人的文件。
-    """
-    装机脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert f"randbelow(10**{PIN_位数})" in 装机脚本, (
-        f"install.sh 生成 PIN 的取值范围不是 {PIN_位数} 位了,"
-        f"那 六位数 那条泄密护栏和两份文档里的说法会一起变成假话")
-    assert f":0{PIN_位数}d" in 装机脚本, (
-        f"install.sh 给 PIN 补零的宽度不是 {PIN_位数} 位了")
-
-
 def test_泄密护栏认的就是这么多位():
     """那条 ``六位数`` 正则必须跟上面同一个常量走。
 
@@ -235,26 +220,6 @@ def test_泄密护栏认的就是这么多位():
         f"六位数 那条正则把 {PIN_位数 + 1} 位也收了,前后那两个断言失效了")
     assert 六位数.search("1" * (PIN_位数 - 1)) is None, (
         f"六位数 那条正则把 {PIN_位数 - 1} 位也收了,会误伤一批正当的数字")
-
-
-def test_改PIN位数的人要看的那张便条():
-    """**这一条不是护栏,是一张便条。它守不住第三处,只拦改常量的人。**
-
-    先说清楚它守不住什么:有人把文档里的「六位数字」改成「八位数字」而
-    没动 ``PIN_位数``, 这一条**照样绿**。别把它当成第三处的护栏。
-
-    上面两条把 ``install.sh`` 和泄密护栏拴在了一起。第三处 —— 两份交付文档里
-    「六位数字」「一百万种」那些白纸黑字的说法 —— **故意没有拴进来**:那两份
-    文档正在被另一条赛道改,而其中一处改法(把可利用性分析整段移进内部安全
-    说明)本来就会把「一百万种」那句话带走,拴上去等于拦着别人做对的事。
-
-    所以这里只钉一件事:``PIN_位数`` 改动时,改的人必须同时去看那两份文档。
-    把这句话写成一条会跑的测试,是因为写在注释里的叮嘱没有人会读第二遍。
-    """
-    assert PIN_位数 == 6, (
-        "PIN 位数变了。除了上面两条会自己变红的以外,还有两处白纸黑字要一起"
-        "改:docs/鉴权与控制权.md 里「六位数字、一百万种」那一段,以及"
-        "docs/装机清单.md 里记 PIN 那一条的 <六位数字>。改完把这里的 6 也改掉")
 
 
 # ------------------------------------------------- 四、shell 标识符一律 ASCII
@@ -787,28 +752,10 @@ def test_两道守卫测的是解析出来的值而不是行在不在():
     机器照样进那个每 5 秒刷一条日志的启动循环。**守卫在, 墙也在。**
     """
     脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    assert '[[ -z "${D1MAX_PIN_VALUE//[[:space:]]/}" ]]' in 脚本
     assert '[[ -z "${D1MAX_SN//[[:space:]]/}" ]]' in 脚本
+    assert '[[ -z "$(read_env_value "$key")" ]]' in 脚本, "站点值那一道也要按解析出来的值判"
     代码 = "\n".join(片段 for _, 片段 in 代码行(脚本))
     assert "grep -qE '^D1MAX_" not in 代码, "又退回去数行了, 要测的是解析出来的值"
-
-
-def test_PIN空着退出之前把自启链撤掉():
-    """5/7 已经 ``systemctl enable`` 过了, 7/7 因为 PIN 空而 ``exit 3``。
-
-    这次确实不 stop/start(脚本自己那句话是真的), 但**下一次开机** systemd 会照
-    ``multi-user.target.wants`` 那条自启链把它拉起来 → ``check_exposure()``
-    见到 ``--host 0.0.0.0`` 又没 PIN → ``SystemExit`` → ``Restart=always``
-    + ``RestartSec=5`` + ``StartLimitIntervalSec=0`` —— 这段守卫要防的那堵
-    日志墙原样回来, 只是推迟到了现场没人看着的时候。
-    """
-    脚本 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    撤 = 脚本.index("systemctl disable d1max-patrol.service")
-    # 紧跟在撤自启链后面的那个 exit 3 才是 PIN 守卫的那一个 —— 前面还有一个
-    # 是 SN 白名单的, 拿它比会比出个「顺序对了」的假绿。
-    退 = 脚本.index("  exit 3", 撤)
-    开 = 脚本.index("systemctl enable d1max-patrol.service")
-    assert 开 < 撤 < 退, "撤自启链的那一行不在 enable 之后、exit 3 之前"
 
 
 def test_env文件建出来就是0600():
@@ -925,7 +872,9 @@ def test_单元文件的行尾被钉成LF():
     属性 = (ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert re.search(r"(?m)^\*\.service\s+text\s+eol=lf\s*$", 属性), (
         ".gitattributes 里没把 *.service 钉成 LF")
-    单元们 = list(DEPLOY.glob("*.service"))
-    assert 单元们, "deploy/ 底下一个 .service 都没有?"
+    assert re.search(r"(?m)^deploy/d1max-agent-start\s+text\s+eol=lf\s*$", 属性), (
+        ".gitattributes 里没把代理的启动脚本钉成 LF(它没有 .sh 后缀,上面那几条盖不到它)")
+    单元们 = list(DEPLOY.glob("*.service")) + [DEPLOY / "d1max-agent-start"]
+    assert len(单元们) >= 2, "deploy/ 底下一个 .service 都没有?"
     for 路径 in 单元们:
         assert b"\r" not in 路径.read_bytes(), f"{路径.name} 里有回车符"

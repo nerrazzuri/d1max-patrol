@@ -266,16 +266,16 @@ class LiveVideo extends StatefulWidget {
   final String baseUrl;
   final String camera;
 
-  /// 画面的路径。不给就是直连狗的 `/api/video/<camera>`；站点模式（W00c5b）给
-  /// `/api/robots/<id>/video/<camera>`。
+  /// 画面的路径：站点给的 `/api/robots/<id>/video/<camera>`。不给就是 `/api/video/<camera>`
+  /// （只在测试里用）。
   final String? streamPath;
 
   /// 造 `HttpClient` 的方法。不给就是系统默认信任；站点模式给**钉住站点证书**的那个
   /// （`SiteApi.pinnedClient`）—— 画面走的是同一个站点，不许另开一条随便信证书的路。
   final HttpClient Function()? openClient;
 
-  /// 开流之后多久还没切出第一帧就认赔（见 `_LiveVideoState` 那条长注释）。直连狗 3 s；
-  /// 站点模式要长得多：站点得先让狗起推流、走 SRT 握手、等关键帧，冷启动常常超过 3 s。
+  /// 开流之后多久还没切出第一帧就认赔（见 `_LiveVideoState` 那条长注释）。缺省 3 s；
+  /// 站点那一路要长得多：站点得先让狗起推流、走 SRT 握手、等关键帧，冷启动常常超过 3 s。
   final Duration firstFrameGrace;
 
   /// 「这一刻有没有画面」从这条流上来 —— 站点模式里是 `SiteVideoHealthPoller` 的。

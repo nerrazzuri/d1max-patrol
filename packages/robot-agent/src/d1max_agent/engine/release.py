@@ -76,23 +76,18 @@ _CHUNK_JOIN = b"\0"
 #:   临时副本 ``pip install``,没有它 pip 连构建后端都找不到。
 #: * ``src/`` —— ``[tool.setuptools.packages.find] where = ["src"]``,包体在这儿。
 #: * ``config/`` —— systemd 单元里 ``WorkingDirectory=-/opt/d1max/current``,
-#:   也就是**包目录就是服务的工作目录**。``app/server.py`` 的 ``--params-file``
-#:   默认值 ``config/params/mapper_3d.yaml`` 是相对这里解析的
-#:   (``app/mapping.py`` 的 ``params_template`` 默认值是同一条路径)。
+#:   也就是**包目录就是服务的工作目录**。``app/mapping.py`` 的 ``params_template``
+#:   默认值 ``config/params/mapper_3d.yaml`` 是相对这里解析的。
 #:
-#: ``app/server.py`` 的 argparse 默认值逐条核过,剩下那几个相对路径**都不该
-#: 进包**:``--maps-dir runs/slam``、``--bags-dir runs/bags``、
-#: ``--runs-root runs``、``--missions-dir missions`` 全是运行时自己建的输出
-#: 目录,把仓库里的同名目录塞进去等于把开发机的录像和任务包一起带上狗。
-#: ``--log-dir`` 默认落在 ``<runs-root>/logs`` 下,同理。
+#: 仓库里的 ``runs/``、``missions/`` 这类运行时输出目录**都不该进包**:把它们塞进去等于把
+#: 开发机的录像和任务包一起带上狗。
 #:
 #: 已知的**一处**副作用:``conformance.py`` 的 golden fixture 在
 #: ``tests/protocol/fixtures`` 下,而 ``tests/`` 不进包(狗上没有 pytest,
 #: 离线 wheel 里也没备)。``load_fixtures()`` 对"目录不在"的处理是返回空字典,
 #: 所以狗上跑 ``d1max conform`` 只是少了对拍那一段,不会炸。
-#: ``deploy`` 是 W01b 加进来的:OTA 升级(``release activate``)要从
-#: ``releases/<版本>/deploy/d1max-patrol.service`` 拿单元交给特权助手装到
-#: ``/etc/systemd/system``。不进包的话,机器上的单元永远是装机那天的版本。
+#: ``deploy`` 是 W01b 加进来的:代理的启动脚本 ``deploy/d1max-agent-start`` 在里面
+#: (W00c5d:启动参数随版本走,单元只指着这一版的启动脚本),装机脚本也从包里取单元。
 #: ``packages`` 是 W00b 加的:robot-agent 三个包要在槽 venv 里装。各包的 ``tests/`` 不进
 #: (``_PACK_SKIP_DIRS``)。
 _PACK_INCLUDE = ("pyproject.toml", "src", "config", "deploy", "packages")
@@ -380,7 +375,7 @@ def pack(src: Path | str, out_parent: Path | str, *, name: str | None = None,
     * **指纹只有一个算法。** ``content_sha256`` 走的是本模块的 ``tree_sha256``,
       跟 ``verify_package()`` 校验时用的是同一个函数。两边各写一遍的那天,
       整套对账就废了。
-    * **``requires_mission_schema`` 复用 ``bundle.BUNDLE_SCHEMA``**,不在这儿
+    * **``requires_mission_schema`` 复用契约里的 ``BUNDLE_SCHEMA``**,不在这儿
       写第二个字面量 —— §7.2 的升级判据靠它对账,出现第二个真理源就是一个
       不会报错的升级误判。
     * **打完自己验一遍。** 一个造得出"验不过的包"的打包器等于没有;验不过就
@@ -397,11 +392,7 @@ def pack(src: Path | str, out_parent: Path | str, *, name: str | None = None,
         Python 与架构对得上)。给了就拷进包的 ``wheels/``,算进指纹。
     :return: 打好的包目录。
     """
-    # **局部 import,不是随手写的。** ``bundle.py`` 在模块顶部
-    # ``from .release import point_link, tree_sha256`` —— 这里在顶部反向 import
-    # 它就成了一个环,谁先被 import 谁就炸。分层没有被破坏:engine/ 内部互相
-    # 用是允许的,只是这一对必须晚一点才连上。
-    from d1max_agent.engine.bundle import BUNDLE_SCHEMA
+    from d1max_contract.bundle_format import BUNDLE_SCHEMA
 
     src = Path(src)
     out_parent = Path(out_parent)

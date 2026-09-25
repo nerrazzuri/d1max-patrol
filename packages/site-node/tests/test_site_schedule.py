@@ -10,8 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from test_site_dispatcher import SITE, 台子
 
-from d1max_agent.engine.bundle import build_bundle
-from d1max_contract.bundle_format import SCHEDULE_NAME
+from d1max_contract.bundle_format import SCHEDULE_NAME, build_bundle
 from d1max_site.catalog import CatalogError, active_bundle, import_bundle
 from d1max_site.scheduler import SiteScheduler
 

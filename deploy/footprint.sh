@@ -42,14 +42,15 @@ SURVEY_DIRS=(
   "/etc:1"
   "/usr/local/bin:1"
   "/usr/local/lib:2"
-  # W01b:特权助手与 sudo 白名单各占一处,深度 1 就看得见文件本身。
+  # 老的特权助手与 sudo 白名单(W00c5e 起装机脚本会清掉它们):盯着,看得见清没清干净。
   "/usr/local/sbin:1"
   "/etc/sudoers.d:1"
 )
 
-# 我们自己占的四个端口。装机**之前**它们就有人占着的话,那是装机前就该发现
-# 的冲突,不是装完才发现 —— snapshot 会当场在屏幕上喊出来。
-OUR_PORTS=(8090 8091 8092 8095)
+# 我们自己占的端口(旁路进程)。装机**之前**它们就有人占着的话,那是装机前就该发现
+# 的冲突,不是装完才发现 —— snapshot 会当场在屏幕上喊出来。代理只往外连站点,不监听端口
+# (老服务的 8095、建图桥的 8092 随 W00c5e 退役)。
+OUR_PORTS=(8090 8091)
 
 # 想顺带盯住别人的端口就填这个变量,空格分开:
 #   D1MAX_FOOTPRINT_PORTS='7447 8554' sudo bash deploy/footprint.sh snapshot x.txt
@@ -192,7 +193,7 @@ do_snapshot() {
     fi
   done
   if [ "$clash" = 0 ]; then
-    say "  我们那四个端口现在都空着,可以装。"
+    say "  我们那两个端口现在都空着,可以装。"
   fi
   return 0
 }

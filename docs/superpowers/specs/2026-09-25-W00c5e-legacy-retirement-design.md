@@ -9,7 +9,7 @@
 - **只有老服务在用的模块**：
   - `app/`：`auth`（除了 `identity` 借用的两个名字）、`control`、`gridmap`、`teleop`、`upload_pump`、`video`；
   - `inspect/judge.py`、`inspect/report.py`（站点有自己的一份判读）；
-  - `backends/map_bridge.py` 与仿真 `d1max_sim/map_server.py`（只有老服务和代理的 `--legacy-http` 用）；`backends/local_nav.py` 生产上只有老服务用；
+  - `backends/map_bridge.py`、`protocol/map_frames.py`、`tools/ros2_map_bridge.py` 与仿真 `d1max_sim/map_server.py`（建图时往老网页推实时栅格，只有老服务和代理的 `--legacy-http` 用）；`backends/local_nav.py` 生产上只有老服务用 —— **但它留下**（实施时改的）：它是自建图那一路的导航后端，真狗要载入自建的图时（另开工单）用得上，契约测试也拿它当参照实现；
   - 引擎：`backup`、`baselines`、`lease`、`schedule`（空壳）、`export`（另一个用它的 `d1max_console` 没有入口，是孤儿）；
   - 部分函数：`retention` 的扫盘、预告（发件箱只用 `is_settled`）；`selfcheck` 的 precheck、postcheck、`restart_plan`；`privileged` 的 `restart`；狗上的任务包落包、回滚、开机守卫（`engine/bundle.py` 的狗侧部分、`cli bundle guard`）。
 - **要留下的**：`app/bridge.py`（代理用）、`app/mapping.py` 与 `app/procs.py`（代理 `--mapping` 用）、`app/identity.py`（命令行 `release activate` 取 SN）、`backends/base.py`、`backends/sidecar_device.py`、`backends/vendor_nav.py`、`config/*`、`cli.py`（`release boot-guard` 两个单元都挂着）、引擎里代理用的那些（archive、datadir、homing、http_sink、machine、preflight、release、removable、safety、storage、uploader、upload_queue 等）、`d1max_sim` 除 `map_server` 以外的部分。

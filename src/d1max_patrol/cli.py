@@ -17,18 +17,11 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
 
-from d1max_agent.engine.bundle import (
-    BundleGuard,
-    BundleState,
-    guard_bundle,
-    read_state,
-)
 from d1max_agent.engine.datadir import (
     DATA_ROOT_ENV,
     DEFAULT_DATA_ROOT,
     migrate_slot_data,
 )
-from d1max_agent.engine.privileged import Privileged, PrivilegedError
 from d1max_agent.engine.release import (
     MAX_BOOT_ATTEMPTS,
     GuardAction,
@@ -59,25 +52,6 @@ from d1max_patrol.protocol.nav_types import (
 from d1max_patrol.recorder import FrameRecorder, default_recording_path
 
 log = logging.getLogger(__name__)
-
-#: 特权助手只认真机上写死的版本根。``release activate --root 别处``(或
-#: ``D1MAX_RELEASE_ROOT`` 指到别处)时助手仍会从 /opt/d1max 取单元 —— 那是
-#: 另一棵树的单元,装错版本或误报「源不存在」都不该发生,所以根不一致就跳过。
-_HELPER_RELEASE_ROOT = Path("/opt/d1max")
-
-
-def _helper_for(layout: Layout) -> Privileged | None:
-    """这条命令该不该走特权助手:助手在、而且版本根就是真机那一个。"""
-    priv = Privileged()
-    if not priv.present():
-        print("提示: 没有特权助手,单元文件没更新;要更新单元请重跑 deploy/install.sh")
-        return None
-    if Path(layout.root) != _HELPER_RELEASE_ROOT:
-        print(f"提示: 版本根是 {layout.root} 而不是 {_HELPER_RELEASE_ROOT},"
-              "特权助手只认后者,单元文件没更新")
-        return None
-    return priv
-
 
 DEFAULT_NAV_TIMEOUT_S = 120.0
 #: 等定位就绪的上限
@@ -153,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=10010)
     p.add_argument("--seed", action="store_true")
     p.add_argument("--full", action="store_true",
-                   help="导航之外再起旁路进程和建图桥 —— 彩排整个 app 用这个")
+                   help="导航之外再起一台仿真旁路进程(给 d1max-agent --hal d1max 联调用)")
 
     rel = sub.add_parser("release", help="装机、升级、回滚")
     rel_sub = rel.add_subparsers(dest="release_command", required=True)
@@ -204,14 +178,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_mig.add_argument("--data-root", default=None,
                        help=f"数据根,默认取 ${DATA_ROOT_ENV} 或 {DEFAULT_DATA_ROOT}")
 
-    bun = sub.add_parser("bundle", help="任务包:开机守卫")
-    bun_sub = bun.add_subparsers(dest="bundle_command", required=True)
-    p_guard = bun_sub.add_parser(
-        "guard",
-        help="任务包开机守卫:把换链换到一半的局面收拾成能用的终态")
-    p_guard.add_argument(
-        "--root", default=None,
-        help="任务包目录的根,默认取 $D1MAX_BUNDLES_ROOT 或 <版本根>/bundles")
 
     return parser
 
@@ -295,11 +261,6 @@ def main(argv: list[str] | None = None) -> int:
         # 在 systemd 把我们的服务拉起来之前就跑 —— 这条支路绝不许碰
         # `_backend()`/`_amain()`,那条路一上来就要建后端连接。
         return _cmd_release(args)
-
-    if args.command == "bundle":
-        # 同上:任务包守卫也挂在 systemd 的 ExecStartPre 上,跑在服务被拉起来
-        # **之前** —— 那会儿根本没有后端可连。
-        return _cmd_bundle(args)
 
     try:
         return asyncio.run(_amain(args))
@@ -584,33 +545,19 @@ def _cmd_release(args: argparse.Namespace) -> int:
         return 0
 
     if args.release_command == "activate":
-        # W01b:**先装这一版随包带的单元,再切链。** 单元只引用 current 和几条
-        # 稳定路径,新单元配老代码是安全的;反过来(切了链、单元没装上)正是
-        # OTA 升上来的机器单元永远停在装机那天的那个坏状态。助手不在(开发机、
-        # W01b 之前装的机器)就跳过并说一句怎么补 —— 装机脚本 5/7 自己也会装单元。
-        priv = _helper_for(layout)
-        if priv is not None:
-            try:
-                print(f"单元文件: {priv.install_unit(args.name)}")
-            except PrivilegedError as exc:
-                print(f"切不了: 新版单元文件没装上,没有切换 —— {exc}", file=sys.stderr)
-                return 2
+        # 不装单元(W00c5d/W00c5e):代理单元只指着这一版带的启动脚本,启动参数随版本走;
+        # 单元本身只由装机脚本装。
         try:
-            # 把当下的 SN 记进在途标记 —— 重启后自检第四项拿它比对(§7.2)。
-            # 这里要读 D1MAX_SN 而不是零参 resolve():现场设备树/DMI 里常常
-            # 没有真 SN,HTTP 服务侧(app/server.py 的 resolve(args.sn, ...),
-            # args.sn 默认就是这个环境变量)靠它拿到运维填的真值。两条路
-            # 必须用同一个来源定 SN,不然这里记下的是 MAC 兜底值,重启后
-            # 自检拿真 SN 一比对不上,把一版好的自动回滚掉。
+            # 把当下的 SN 记进在途标记(留档用)。读 D1MAX_SN 而不是零参 resolve():
+            # 现场设备树/DMI 里常常没有真 SN,运维填的真值在这个环境变量里。
             pending = activate(layout, args.name, now_ms=now_ms, auto=False,
                                sn=resolve(os.environ.get(SN_ENV)).sn)
         except (ReleaseError, OSError) as exc:
             print(f"切不了: {exc}", file=sys.stderr)
             return 2
         print(f"切到 {pending.to},上一版 {pending.src or '无'}。"
-              f"重启之后会自检,没过会自己退回去。")
-        print("提示: 升级前那七项检查(precheck)在命令行这条路上没跑,"
-              "只有 HTTP 那条路(POST /api/release/activate)才跑。")
+              f"重启代理(systemctl restart d1max-agent)之后连上站点才算成;"
+              f"起不来,开机守卫数够次数会自己退回去。")
         return 0
 
     if args.release_command == "migrate-data":
@@ -637,15 +584,7 @@ def _cmd_release(args: argparse.Namespace) -> int:
         except (ReleaseError, OSError) as exc:
             print(f"退不了: {exc}", file=sys.stderr)
             return 2
-        # W01b:把退回那一版的单元也装回去。**失败不拦回滚**:回到能跑的代码
-        # 比单元一致更要紧,单元向后兼容(只引用 current)。
-        priv = _helper_for(layout)
-        if priv is not None:
-            try:
-                print(f"单元文件: {priv.install_unit(back)}")
-            except PrivilegedError as exc:
-                print(f"退回去了,但 {back} 的单元没装回去: {exc}", file=sys.stderr)
-        print(f"退回 {back}。重启生效。")
+        print(f"退回 {back}。重启代理生效。")
         return 0
 
     # boot-guard
@@ -712,85 +651,6 @@ def _cmd_boot_guard(layout: Layout, now_ms: int) -> int:
     else:
         print(文本)
     return 0
-
-
-# --------------------------------------------------------------------- bundle
-
-
-def _bundles_root(arg: str | None) -> Path:
-    """任务包根在哪。显式参数赢,其次环境变量,最后跟着版本根走。
-
-    **默认值必须跟 ``app/server.py`` 的 ``AppContext.bundles_root``
-    (``/opt/d1max/bundles``)对得上。** 两边各说各话的话,守卫在一个根下修链、
-    服务读的是另一个根 —— 那比守卫根本没挂上还糟:它会报「链是好的」。
-    """
-    if arg:
-        return Path(arg)
-    env = os.environ.get("D1MAX_BUNDLES_ROOT", "").strip()
-    return Path(env) if env else _release_root(None) / "bundles"
-
-
-def _cmd_bundle(args: argparse.Namespace) -> int:
-    """bundle 子命令族。**这条支路跟 release 一样不连后端。**"""
-    return _cmd_bundle_guard(_bundles_root(getattr(args, "root", None)))
-
-
-def _cmd_bundle_guard(root: Path) -> int:
-    """任务包开机守卫。**照 ``_cmd_boot_guard`` 的形状做的**,理由也一样。
-
-    ``apply_bundle`` 连着换两条链(``previous``、``current``),两次之间断电
-    盘上就停在 ``current == previous`` 且 ``proven=False`` —— 第 8 卷那条自动
-    回退判据随即成立,把盘上唯一那份好包拉黑。``guard_bundle`` 是那条局面
-    唯一的出路,而它得有人调:评审复评 finding 4 逮到的正是「修复路径写好了,
-    真机上永远不会被执行」,而交付文档已经写着「开机时照着它把链修回一个能用
-    的样子」。这条子命令 + ``d1max-patrol.service`` 的 ``ExecStartPre`` 把那句
-    话变成真的。
-
-    它顺带**把老盘归一化一次**(见 ``guard_bundle``):截 ``rollbacks``、把
-    拉黑事实固化进 ``denied``。升级上来的狗开一次机就正常了。
-
-    **它永远退 0。** 跟版本守卫同一条理由:一个把机器挡在启动之外的安全网,
-    比它要防的问题更糟。``guard_bundle()`` 自己保证任何一条路都不抛异常
-    (最坏回 ``BundleGuard.BROKEN``),但**底下那句 ``read_state`` 不在那个
-    保证里**(评审复评第 3 轮 N3):同一份坏 ``landed.json`` 照样能让它抛,
-    于是「永远退 0」这句话不成立,而 ``BROKEN`` 的时候运维本来就只有 stderr
-    这一条线索 —— 拿到的却是一坨 traceback,不是那句人话。所以这儿单独包一层:
-    **状态读不出来不影响结论,更不该改变退出码。**
-
-    接的是 ``(OSError, ValueError, TypeError)`` 而不是 ``except Exception``:
-    这三样正是 ``guard_bundle`` 自己那张兜底网(``bundle._守卫兜底``),而
-    ``read_state`` 走的是同一批函数(``_链指向``、``_读记``、``_黑名单``、
-    ``_半成品``)。用 ``except Exception`` + ``# noqa`` 把 ruff 的 ``BLE`` 绕
-    过去,等于把「哪些坏法是预料之内的」这个信息一起抹掉。
-    """
-    结论 = guard_bundle(root)
-
-    话 = {
-        BundleGuard.OK: "没有换到一半的任务包,两条链是好的。",
-        BundleGuard.FINISHED: "有一次换链没换完,已经照标记换完。",
-        BundleGuard.UNDONE: "那一版换不过去,两条链已经放回换链之前的样子。",
-        BundleGuard.BROKEN:
-            "换链换到一半,两个方向都走不通 —— 标记留着,请人来看。",
-    }
-    try:
-        st: BundleState | None = read_state(root)
-    except (OSError, ValueError, TypeError):
-        st = None
-    if st is None:
-        尾 = "现在指着: (状态取不到 —— landed.json 或那两条链读不出来)"
-    else:
-        尾 = (f"现在指着: {st.current or '(没有)'}"
-              f"(上一版 {st.previous or '无'})")
-    文本 = f"[任务包守卫] {话.get(结论, 结论.value)} {尾}"
-    # BROKEN 是"请人来看"那一种,打到 stderr 才不会被日常开机时收 stdout 的
-    # 脚本悄悄吞掉。退出码仍然是 0(见本函数 docstring)。
-    # **状态读不出来也走 stderr**:那同样是一台该有人看一眼的机器。
-    if 结论 is BundleGuard.BROKEN or st is None:
-        print(文本, file=sys.stderr)
-    else:
-        print(文本)
-    return 0
-
 
 _COMMANDS = {
     "status": _cmd_status,
