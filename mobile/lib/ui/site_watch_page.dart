@@ -187,6 +187,20 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
 
   String _num(Object? v, String unit, String why) => v == null ? '不知道（$why）' : '$v$unit';
 
+  int? _pct(double? r) => r == null ? null : (r * 100).round();
+
+  String _ago(int s) => s < 120 ? '$s 秒' : s < 7200 ? '${s ~/ 60} 分钟' : '${s ~/ 3600} 小时';
+
+  /// 站点自己的备份（W00c5d）。
+  String _backupText(SiteWatchSummary s) {
+    final b = s.siteBackup;
+    if (b == null || b['configured'] != true) return '备份：${s.siteWhy['backup'] ?? '没配'}';
+    final ok = (b['last_ok_ms'] as num?)?.toInt();
+    final when = ok == null ? '还没成功过' : '上次成功在 ${_ago(((s.nowMs - ok) ~/ 1000).clamp(0, 1 << 31))}前';
+    final err = '${b['error'] ?? ''}';
+    return '备份：$when${b['stale'] == true ? '（过期了）' : ''}${err.isEmpty ? '' : '；$err'}';
+  }
+
   Widget _robotTile(SiteWatchRobot r) {
     final lines = <String>[
       r.online ? (r.fresh ? '在线' : '在线（状态过期）') : '掉线',
@@ -195,8 +209,9 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       r.alerts == null
           ? '未解决告警 不知道（站点没给）'
           : '未解决 P1 ${r.alerts!['P1']} · P2 ${r.alerts!['P2']} · P3 ${r.alerts!['P3']}',
-      '盘水位 ${_num(r.diskUsedRatio, '', r.whyFor('disk_used_ratio'))}',
-      '证据积压 ${_num(r.uploadBacklog, ' 条', r.whyFor('upload_backlog'))}',
+      '盘水位 ${_num(_pct(r.diskUsedRatio), '%', r.whyFor('disk_used_ratio'))}',
+      '证据积压 ${_num(r.uploadBacklog, ' 个文件', r.whyFor('upload_backlog'))}'
+          '${(r.oldestBacklogS ?? 0) > 0 ? '（最老的等了 ${_ago(r.oldestBacklogS!)}）' : ''}',
     ];
     return ListTile(
         key: SiteWatchPage.robotKey(r.robotId),
@@ -250,11 +265,11 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
             for (final r in s.robots) _robotTile(r),
             ListTile(
                 title: const Text('站点'),
-                subtitle: Text(s.scheduleOk == null
+                subtitle: Text('${s.scheduleOk == null
                     ? '排程：${s.siteWhy['schedule_ok'] ?? '不知道'}'
                     : s.scheduleOk!
                         ? '排程正常'
-                        : '排程没办成：${s.scheduleError}')),
+                        : '排程没办成：${s.scheduleError}'}\n${_backupText(s)}')),
           ],
         ]),
       ),

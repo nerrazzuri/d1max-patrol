@@ -299,6 +299,41 @@ void main() {
     expect(site.received.last.path, '/api/robots/A/halt');
     c.close();
   });
+
+  test('运行记录：列表带狗号、一趟、照片（钉证书带令牌）、复核与重判的请求形状', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('gina', 'pw');
+    final rows = await c.runs(robotId: 'A 1');
+    expect(rows.single['mission'], '巡检一');
+    expect(site.rawPaths.last, endsWith('/api/runs?robot=A+1'));
+    final d = await c.run(1);
+    expect((d['photos'] as List).length, 2);
+    final name = (d['photos'] as List).first['name'] as String;
+    final bytes = await c.runPhoto(1, name);
+    expect(bytes, site.photoBytes);
+    expect(site.received.last.auth, 'Bearer ${c.session!.token}');
+    await c.reviewPhoto(1, 'P #1.jpg', 'abnormal', '有人翻墙');
+    expect(site.rawPaths.last, endsWith('/api/runs/1/review/P%20%231.jpg'));
+    expect(site.received.last.body, {'verdict': 'abnormal', 'note': '有人翻墙'});
+    await c.judgeRun(1);
+    expect(site.received.last.path, '/api/runs/1/judge');
+    site.statusCodes['/api/runs/1/photos/$name'] = 404;
+    await expectLater(c.runPhoto(1, name), throwsA(isA<SiteError>()));
+    c.close();
+  });
+
+  test('站点回了一份没有 runs 的东西：抛读不懂，不当成「没有记录」', () async {
+    final site = FakeSite()..bodies['/api/runs'] = <String, dynamic>{'ok': true};
+    await site.start();
+    final c = SiteClient(site.url, testCertFingerprint());
+    try {
+      await c.login('gina', 'pw');
+      await expectLater(c.runs(), throwsA(isA<FormatException>()));
+    } finally {
+      c.close();
+      await site.close();
+    }
+  });
 }
 
 Future<void> _until(bool Function() ok) async {

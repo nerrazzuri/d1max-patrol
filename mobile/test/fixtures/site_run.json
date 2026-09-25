@@ -1,0 +1,53 @@
+{
+  "photos": [
+    {
+      "camera": "front",
+      "finding": {
+        "confidence": 0.7,
+        "evidence": "左下角",
+        "photo": "P1__front__20260925T010000Z.jpg",
+        "reason": "看过了",
+        "verdict": "abnormal",
+        "waypoint": "P1"
+      },
+      "name": "P1__front__20260925T010000Z.jpg",
+      "review": {
+        "note": "风吹的",
+        "verdict": "normal"
+      },
+      "waypoint": "P1"
+    },
+    {
+      "camera": "front",
+      "finding": {
+        "confidence": 0.7,
+        "evidence": "左下角",
+        "photo": "P2__front__20260925T010000Z.jpg",
+        "reason": "看过了",
+        "verdict": "normal",
+        "waypoint": "P2"
+      },
+      "name": "P2__front__20260925T010000Z.jpg",
+      "review": null,
+      "waypoint": "P2"
+    }
+  ],
+  "run": {
+    "bytes": 58,
+    "finished": true,
+    "first_ms": 1790341974908,
+    "id": 1,
+    "judged_ms": 1790341974966,
+    "last_ms": 1790341974943,
+    "mission": "巡检一",
+    "photos": 2,
+    "result": "done",
+    "reviewed": 1,
+    "robot_id": "A",
+    "stamp": "20260925T010000Z",
+    "verdicts": {
+      "abnormal": 1,
+      "normal": 1
+    }
+  }
+}

@@ -54,7 +54,15 @@ def _collect(tmp_path) -> dict[str, object]:
 
     from d1max_site.incidents import IncidentDesk
     from d1max_site.scheduler import SiteScheduler
-    s = 站(tmp_path, alerts=True, video={}, agent_video=False)
+    class _模型:
+        n = 0
+
+        def judge(self, prompt, images):
+            _模型.n += 1
+            return {"verdict": "abnormal" if _模型.n % 2 else "normal", "confidence": 0.7,
+                    "reason": "看过了", "evidence": "左下角"}
+    s = 站(tmp_path, alerts=True, video={}, agent_video=False,
+          runs={"client": _模型, "backup_dir": tmp_path / "bak"})
     try:
         s.api.scheduler = SiteScheduler(s.db, s.disp, now_ms=wall)
         s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=wall)
@@ -106,6 +114,30 @@ def _collect(tmp_path) -> dict[str, object]:
         s.loop.call(_seed)
         alerts_all = s.req("GET", "/api/alerts?all=1", token=tok)[1]
         _等(lambda: s.disp.telemetry_at.get("A"))
+        # W00c5d:一趟运行记录(两张照片,判过、复核过一张);狗报过盘况;站点备份过一次。
+        import json as _json
+
+        from d1max_contract.messages import TaskState, Telemetry
+        from d1max_contract.storage import StorageFacts
+        st = "20260925T010000Z"
+        for rel, data in ((f"photos/P1__front__{st}.jpg", b"\xff\xd8x\xff\xd9"),
+                          (f"photos/P2__front__{st}.jpg", b"\xff\xd8y\xff\xd9"),
+                          ("events.jsonl", b'{"kind":"start"}\n'),
+                          ("manifest.json", _json.dumps({"summary": {"result": "done"}}).encode())):
+            s.store.put("A", f"巡检一/{st}", rel, offset=0, data=data, total=len(data))
+        rid = s.store.runs(robot_id="A")[0]["id"]
+        s.req("POST", f"/api/runs/{rid}/judge", {}, token=tok)
+        s.req("POST", f"/api/runs/{rid}/review/P1__front__{st}.jpg",
+              {"verdict": "normal", "note": "风吹的"}, token=tok)
+        facts = StorageFacts(disk_used_ratio=0.42, outbox_bytes=10, outbox_cap_bytes=100,
+                             backlog_files=3, backlog_bytes=900, oldest_backlog_s=95)
+
+        async def _盘况():
+            s.disp._on_telemetry("A", Telemetry(stamp=wall(), pose=None, battery_pct=80.0,
+                                                task_state=TaskState.RUNNING, loc_quality=1.0,
+                                                storage=facts))
+        s.loop.call(_盘况)
+        s.backup.run_once()
         return {
             "site_alerts": alerts,
             "site_alert_frame": alert_frame,
@@ -123,6 +155,8 @@ def _collect(tmp_path) -> dict[str, object]:
             "site_incidents": s.req("GET", "/api/incidents", token=tok)[1],
             "site_error": s.req("POST", "/api/robots/A/goto", {"target": target(0.3)},
                                 token="nope")[1],
+            "site_runs": s.req("GET", "/api/runs", token=tok)[1],
+            "site_run": s.req("GET", f"/api/runs/{rid}", token=tok)[1],
         }
     finally:
         s.close()

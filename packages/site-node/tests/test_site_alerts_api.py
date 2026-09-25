@@ -85,8 +85,10 @@ def test_值守汇总_每台狗一行_狗上存储那几项是不知道而不是
     assert isinstance(r["battery_pct"], (int, float)) and r["battery_as_of_ms"] > 0
     assert abs(r["clock_skew_s"]) < 5
     assert r["alerts"] == {"P1": 0, "P2": 0, "P3": 0}
-    for k in ("disk_used_ratio", "upload_backlog", "bundle_lag", "backup"):
+    for k in ("disk_used_ratio", "upload_backlog"):                # W00c5d:狗还没报过盘况
         assert r[k] is None and "不知道" in r["why"][k], k
+    assert r["bundle_lag"] is None and "任务包" in r["why"]["bundle_lag"]
+    assert r["backup"] is None and "站点" in r["why"]["backup"]
     assert d["site"]["schedule_ok"] is None and "没开排程" in d["site"]["why"]["schedule_ok"]
 
 

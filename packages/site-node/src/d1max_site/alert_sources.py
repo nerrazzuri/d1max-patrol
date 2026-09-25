@@ -29,6 +29,7 @@ from d1max_contract.messages import (
     parse_fault_event_data,
 )
 from d1max_contract.schedule import clock_skew
+from d1max_contract.storage import WARN_RATIO
 from d1max_site.alert_store import AlertDesk
 
 log = logging.getLogger(__name__)
@@ -48,6 +49,12 @@ SITE = "site"
 #: 站点主循环多久调一次 :meth:`SiteAlertSources.step`(秒)。升级时限是分钟级,5 s 够细。
 STEP_S = 5.0
 
+#: 发件箱最老一条待传的等了这么久(秒)还没传上来,出 ``upload_backlog``;降到下面那个数以下才重新武装。
+BACKLOG_ALARM_S = 1800
+BACKLOG_CLEAR_S = 600
+#: 盘水位回落到这以下,``disk_80`` 才重新武装(迟滞:不在 80% 上下抖出一串告警)。
+DISK_CLEAR_RATIO = 0.75
+
 #: 掉线告警的迟滞:回来之后要连着在线这么久(毫秒),再掉线才另起一条。4G 抖一下就一条新 P1,
 #: 人很快就不看 P1 了;这段时间里又掉的,算同一次。
 OFFLINE_REARM_MS = 60_000
@@ -66,6 +73,8 @@ class _Mem:
     loc_lost_running: bool = False
     fallen: bool = False
     skew: bool = False
+    disk80: bool = False
+    backlog: bool = False
     offline: bool = False
     running: bool = False
     started: str = ""
@@ -220,6 +229,27 @@ class SiteAlertSources:
             self.desk.raise_alert(kind="clock_skew", robot=rid, title="狗的钟不准",
                                   detail=f"跟站点差 {skew.skew_s:.0f} 秒")
         m.skew = skew.alarm
+        if t.storage is not None:
+            self._storage(rid, m, t.storage)
+
+    def _storage(self, rid: str, m: _Mem, f) -> None:
+        """狗的发件箱(W00c5d,决策 8):盘到 80%、证据积压半小时,各报一次;回落之后才重新武装。"""
+        if f.disk_used_ratio >= WARN_RATIO and not m.disk80:
+            m.disk80 = True
+            self.desk.raise_alert(
+                kind="disk_80", robot=rid, title="狗的发件箱所在的盘快满了",
+                detail=f"已用 {f.disk_used_ratio:.0%};到 90% 狗就不接新的巡检(不删没传完的)")
+        elif f.disk_used_ratio < DISK_CLEAR_RATIO:
+            m.disk80 = False
+        oldest = f.oldest_backlog_s or 0
+        if oldest >= BACKLOG_ALARM_S and not m.backlog:
+            m.backlog = True
+            self.desk.raise_alert(
+                kind="upload_backlog", robot=rid, title="狗上的证据半小时没传上来",
+                detail=f"积压 {f.backlog_files} 个文件、{f.backlog_bytes // 1024} KB,"
+                       f"最老的等了 {oldest // 60} 分钟")
+        elif oldest < BACKLOG_CLEAR_S:
+            m.backlog = False
 
     # ------------------------------------------------------------ 站点自己
 

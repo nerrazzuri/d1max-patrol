@@ -39,7 +39,6 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import TimeoutError as FutureTimeout
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote
@@ -53,15 +52,18 @@ from d1max_site.loop import LoopThread
 from d1max_site.permissions import (
     ABORT,
     DISPATCH,
+    EXPORT,
     HANDLE_ALERTS,
     MANAGE,
     MANAGE_ACCOUNTS,
+    REVIEW,
     TELEOP,
     VIEW,
     VIEW_AUDIT,
     allowed,
 )
 from d1max_site.priorities import MANUAL
+from d1max_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +81,9 @@ _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
 _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/(teleop|halt)$")
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
+#: W00c5d:运行记录与导出。
+_RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,300}))?)?$")
+_EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
 
 
@@ -105,6 +110,7 @@ class SiteApi:
                  accounts: Accounts, tls: tuple[Path, Path] | None = None,
                  scheduler: Any = None, standby: Any = None, incidents: Any = None,
                  alerts: Any = None, video: Any = None, teleop: Any = None,
+                 runs: Any = None, backup: Any = None,
                  now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
@@ -120,6 +126,9 @@ class SiteApi:
         self.alerts = alerts
         self.video = video
         self.teleop = teleop
+        #: W00c5d:运行记录台(看、判读、复核、导出)与站点自己的备份。
+        self.runs = runs
+        self.backup = backup
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
         self._stopping = threading.Event()
@@ -129,15 +138,16 @@ class SiteApi:
             site = api
             timeout = request_timeout_s          # StreamRequestHandler:套接字超时
 
-        self.httpd = ThreadingHTTPServer((host, port), Handler)
-        self.httpd.daemon_threads = True
+        ctx = None
         self._scheme = "http"
         if tls is not None:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             ctx.load_cert_chain(str(tls[0]), str(tls[1]))
-            self.httpd.socket = ctx.wrap_socket(self.httpd.socket, server_side=True)
             self._scheme = "https"
+        # TLS 握手放在每条连接自己的线程里、带超时(W00c5d):包监听套接字的老办法在唯一那条
+        # 接连接的线程里握手,一个不发 ClientHello 的连接就能让手机全都连不上。
+        self.httpd = TlsThreadingServer((host, port), Handler, ctx=ctx)
         self._thread: threading.Thread | None = None
 
     @property
@@ -177,7 +187,7 @@ class SiteApi:
             raise HttpError(504, f"等狗的回执超时: {exc}") from exc
 
 
-class _Handler(BaseHTTPRequestHandler):
+class _Handler(TlsHandlerMixin):
     site: SiteApi
     protocol_version = "HTTP/1.1"
     server_version = "d1max-site"
@@ -291,6 +301,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._need(user, VIEW if (method == "GET" and path == "/api/incidents")
                            else MANAGE)
                 return self._incident_admin(method, path)
+            if path == "/api/runs" or path.startswith(("/api/runs/", "/api/exports")):
+                return self._runs(method, path, user)
             m = _TELEOP.match(path)
             if m is not None:
                 robot_id = unquote(m.group(1))
@@ -353,7 +365,8 @@ class _Handler(BaseHTTPRequestHandler):
             from d1max_site.watch import watch_summary
             return self._send_json(200, self.site.loop.call(lambda: _sync(
                 watch_summary, self.site.dispatcher, self.site.alerts,
-                now_ms=self.site._now(), scheduler=self.site.scheduler)))
+                now_ms=self.site._now(), scheduler=self.site.scheduler,
+                backup=self.site.backup)))
         m = _ALERT.match(path)
         if method != "POST" or m is None:
             raise HttpError(404, f"没有 {method} {path}")
@@ -654,6 +667,87 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             desk.close(session, "disconnected")    # 幂等:已经结束的不再结束一次
             ws.close(1000, session.end_reason)     # 别的线程排给它的「结束了」由这条线程发出去
+
+    def _runs(self, method: str, path: str, user) -> None:
+        """运行记录(W00c5d,决策 8:证据都在站点)。看:``view``(业主也能看);判读、复核:``review``
+        (管理员、保安);导出:``export``(管理员)。"""
+        from d1max_site.runs import RunError
+        desk = self.site.runs
+        if desk is None:
+            raise HttpError(404, "这个站点没开证据库")
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+
+        def num(k: str) -> int | None:
+            v = (q.get(k) or [""])[0]
+            if not v:
+                return None
+            if not v.isdigit():
+                raise HttpError(400, f"{k} 要是非负整数")
+            return int(v)
+        try:
+            if path == "/api/runs" and method == "GET":
+                self._need(user, VIEW)
+                robot = (q.get("robot") or [None])[0]
+                return self._send_json(200, {"runs": desk.store.runs(
+                    robot_id=robot, since_ms=num("since"), until_ms=num("until"),
+                    limit=num("limit") or 200)})
+            m = _RUN.match(path)
+            if m is not None:
+                rid, what, arg = int(m.group(1)), m.group(2), m.group(3)
+                self._audit_target = f"run/{rid}"
+                if method == "GET" and what is None:
+                    self._need(user, VIEW)
+                    return self._send_json(200, desk.detail(rid))
+                if method == "GET" and what == "photos" and arg:
+                    self._need(user, VIEW)
+                    return self._send_file(desk.photo(rid, unquote(arg)), "image/jpeg")
+                if method == "POST" and what == "judge" and arg is None:
+                    self._need(user, REVIEW)
+                    self._body()
+                    return self._send_json(200, {"findings": desk.judge(rid)})
+                if method == "POST" and what == "review" and arg:
+                    self._need(user, REVIEW)
+                    d = self._body()
+                    self._audit_detail = {"photo": unquote(arg)[:200],
+                                          "verdict": str(d.get("verdict", ""))[:16]}
+                    return self._send_json(200, desk.review(
+                        rid, unquote(arg), verdict=str(d.get("verdict", "")),
+                        note=str(d.get("note", ""))))
+            if path == "/api/exports":
+                self._need(user, EXPORT)
+                if method == "GET":
+                    return self._send_json(200, {"exports": desk.exports()})
+                if method == "POST":
+                    d = self._body()
+                    since, until = d.get("since_ms"), d.get("until_ms")
+                    if not all(isinstance(v, int) and not isinstance(v, bool)
+                               for v in (since, until)):
+                        raise HttpError(400, "since_ms、until_ms 要是整数")
+                    robot = d.get("robot_id")
+                    meta = desk.export(since_ms=since, until_ms=until,
+                                       robot_id=robot if isinstance(robot, str) else None)
+                    self._audit_detail = {"export": meta["name"], "runs": meta["runs"]}
+                    return self._send_json(200, meta)
+            m = _EXPORT.match(path)
+            if m is not None and method == "GET":
+                self._need(user, EXPORT)
+                return self._send_file(desk.export_path(unquote(m.group(1))), "application/zip")
+        except RunError as exc:
+            msg = str(exc)
+            raise HttpError(404 if msg.startswith(("没有", "这一趟里没有")) else 400, msg) from exc
+        raise HttpError(404, f"没有 {method} {path}")
+
+    def _send_file(self, path, content_type: str) -> None:
+        size = path.stat().st_size
+        self._status = 200
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with open(path, "rb") as fh:
+            while chunk := fh.read(1 << 16):
+                self.wfile.write(chunk)
 
     def _video(self, robot_id: str, what: str, user) -> None:
         """视频经站点(W00c5b)。``health``:每路画面健康;``front``/``back``:MJPEG 长连(``view``)。

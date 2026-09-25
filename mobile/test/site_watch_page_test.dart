@@ -51,15 +51,35 @@ void main() {
     expect(find.byKey(SiteWatchPage.p1NoneKey), findsNothing);
   });
 
-  testWidgets('狗上存储那几项印「不知道」和理由，不写 0', (t) async {
+  testWidgets('狗报了盘况：盘水位印百分比、积压印文件数和最老的等了多久；站点那一行印备份', (t) async {
     final api = FakeApi('owner');
     await _open(t, api);
     final tile = find.byKey(SiteWatchPage.robotKey('A'));
-    expect(tile, findsOneWidget);
+    final text = (t.widget<ListTile>(tile).subtitle! as Text).data!;
+    expect(text, contains('盘水位 42%'));
+    expect(text, contains('证据积压 3 个文件（最老的等了 95 秒）'));
+    expect(find.textContaining('备份：上次成功在', skipOffstage: false), findsOneWidget);
+  });
+
+  testWidgets('狗上存储那几项不知道就印「不知道」和理由，不写 0；站点没配备份就明说', (t) async {
+    final body = siteFixture('site_watch_summary');
+    final r = (body['robots'] as List).first as Map<String, dynamic>;
+    r['disk_used_ratio'] = null;
+    r['upload_backlog'] = null;
+    r['oldest_backlog_s'] = null;
+    (r['why'] as Map)['disk_used_ratio'] = '狗上的存储情况还没接到站点';
+    (r['why'] as Map)['upload_backlog'] = '狗上的存储情况还没接到站点';
+    final site = body['site'] as Map<String, dynamic>;
+    site['backup'] = null;
+    (site['why'] as Map)['backup'] = '站点没配备份目录';
+    final api = FakeApi('owner')..summaryBody = body;
+    await _open(t, api);
+    final tile = find.byKey(SiteWatchPage.robotKey('A'));
     final text = (t.widget<ListTile>(tile).subtitle! as Text).data!;
     expect(text, contains('盘水位 不知道（狗上的存储情况还没接到站点'));
     expect(text, contains('证据积压 不知道'));
     expect(text, contains('在线'));
+    expect(find.textContaining('备份：站点没配备份目录', skipOffstage: false), findsOneWidget);
   });
 
   testWidgets('告警读不到不把汇总带走，反过来也一样', (t) async {

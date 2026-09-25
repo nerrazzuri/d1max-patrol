@@ -95,6 +95,8 @@ LEVEL_OF: dict[str, Level] = {
     # (盘满了继续拖,就会变成没法记录;上传积压继续拖,数据就旧到没用)。
     "finding": Level.P2,
     "disk_80": Level.P2,
+    # 站点自己的备份超过 25 小时没成(W00c5d):站点是唯一权威,盘坏了就什么都没了。
+    "backup_stale": Level.P2,
     "upload_backlog": Level.P2,
     "bundle_lag": Level.P2,
     "clock_skew": Level.P2,

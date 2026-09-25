@@ -1,28 +1,28 @@
 {
-  "now_ms": 1790338793257,
+  "now_ms": 1790341975019,
   "robots": [
     {
       "alerts": {
         "P1": 3,
-        "P2": 0,
+        "P2": 1,
         "P3": 1
       },
       "backup": null,
-      "battery_as_of_ms": 1790338793228,
-      "battery_pct": 99.99774222222223,
+      "battery_as_of_ms": 1790341974991,
+      "battery_pct": 99.99774444444445,
       "bundle_lag": null,
-      "clock_skew_s": -0.0,
-      "disk_used_ratio": null,
+      "clock_skew_s": -0.1,
+      "disk_used_ratio": 0.42,
       "fresh": true,
-      "last_seen_ms": 1790338792950,
+      "last_seen_ms": 1790341974657,
+      "oldest_backlog_s": 95,
       "online": true,
       "robot_id": "A",
-      "upload_backlog": null,
+      "storage_as_of_ms": 1790341974991,
+      "upload_backlog": 3,
       "why": {
-        "backup": "狗上的存储情况还没接到站点,这一档是「不知道」,不是「没问题」",
-        "bundle_lag": "狗上的存储情况还没接到站点,这一档是「不知道」,不是「没问题」",
-        "disk_used_ratio": "狗上的存储情况还没接到站点,这一档是「不知道」,不是「没问题」",
-        "upload_backlog": "狗上的存储情况还没接到站点,这一档是「不知道」,不是「没问题」"
+        "backup": "备份在站点做(决策 8:数据都在站点),看站点那一行",
+        "bundle_lag": "任务随命令下发,狗上没有任务包,没有落差可言"
       }
     }
   ],
@@ -31,6 +31,13 @@
       "P1": 0,
       "P2": 0,
       "P3": 0
+    },
+    "backup": {
+      "configured": true,
+      "dest": "/tmp/pytest-of-liang/pytest-341/test_手机读的站点夹具跟真站点同形0/bak",
+      "error": "",
+      "last_ok_ms": 1790341975011,
+      "stale": false
     },
     "schedule_error": "",
     "schedule_ok": true,

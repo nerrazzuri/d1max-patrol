@@ -16,6 +16,9 @@ class SiteWatchRobot {
   final Map<String, int>? alerts;
   final double? diskUsedRatio;
   final int? uploadBacklog;
+
+  /// 狗的发件箱里最老一条待传的等了多久（秒，W00c5d）；没有积压或不知道都是 null。
+  final int? oldestBacklogS;
   final Object? bundleLag;
   final Object? backup;
   final Map<String, String> why;
@@ -31,6 +34,7 @@ class SiteWatchRobot {
     required this.alerts,
     required this.diskUsedRatio,
     required this.uploadBacklog,
+    this.oldestBacklogS,
     required this.bundleLag,
     required this.backup,
     required this.why,
@@ -47,6 +51,7 @@ class SiteWatchRobot {
         alerts: _counts(m['alerts']),
         diskUsedRatio: (m['disk_used_ratio'] as num?)?.toDouble(),
         uploadBacklog: (m['upload_backlog'] as num?)?.toInt(),
+        oldestBacklogS: (m['oldest_backlog_s'] as num?)?.toInt(),
         bundleLag: m['bundle_lag'],
         backup: m['backup'],
         why: _why(m['why']),
@@ -73,7 +78,11 @@ class SiteWatchSummary {
     required this.scheduleError,
     required this.siteAlerts,
     required this.siteWhy,
+    this.siteBackup,
   });
+
+  /// 站点自己的备份（W00c5d）：`{configured, dest, last_ok_ms, error, stale}`；null = 站点没开备份这一项。
+  final Map<String, dynamic>? siteBackup;
 
   /// **读不懂就抛 `FormatException`**：没有 `robots` 那一段时屏上会画成「零台狗」，而且不报错。
   factory SiteWatchSummary.fromWire(Map<String, dynamic> m) {
@@ -93,6 +102,7 @@ class SiteWatchSummary {
       scheduleError: '${site['schedule_error'] ?? ''}',
       siteAlerts: _counts(site['alerts']),
       siteWhy: _why(site['why']),
+      siteBackup: (site['backup'] as Map?)?.cast<String, dynamic>(),
     );
   }
 }

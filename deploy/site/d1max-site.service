@@ -9,7 +9,12 @@ ConditionPathExists=/var/lib/d1max-site/site.json
 Type=simple
 User=d1max-site
 Environment=PYTHONUNBUFFERED=1
+# W00c5d:照片判读的模型密钥(ANTHROPIC_API_KEY=…、可选 D1MAX_VLM_MODEL=…)写在这个文件里,0600。
+# 没有就不判,记录里是「待判读」。
+EnvironmentFile=-/etc/d1max-site/env
 # 绑到局域网:站点 API 走 HTTPS(站点服务证书),口令不明文过网。连不上 broker 退 1,5 秒后重起。
+# W00c5d:另开狗专用的接收口 8444/TCP(mTLS,只收站点 CA 签的狗证书;site.json 的 intake.port 可改),
+# 防火墙只对狗那一段放行。
 ExecStart=/opt/d1max-site/venv/bin/d1max-site --home /var/lib/d1max-site serve --api-host 0.0.0.0 --api-port 8443
 # 收紧:只许写站点目录;看不到 /home;不能提权。
 NoNewPrivileges=yes
@@ -17,6 +22,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadWritePaths=/var/lib/d1max-site
+# W00c5d:站点备份(site.json 的 backup_dir)。外接盘挂到这里;没挂也能起(前面的 - )。
+ReadWritePaths=-/var/lib/d1max-site-backup
 Restart=always
 RestartSec=5
 

@@ -52,6 +52,8 @@ log = logging.getLogger(__name__)
 
 DEFAULT_HOME = Path("/var/lib/d1max-site")
 SYNC_PERIOD_S = 10.0
+#: 后台杂事(自动判读、备份)多久一拍(秒)。
+CHORE_PERIOD_S = 30.0
 
 
 def wall_ms() -> int:
@@ -320,13 +322,34 @@ class Server:
         from d1max_site.teleop import TeleopDesk
         self.teleop = TeleopDesk(self.dispatcher, self.loop, audit=None, now_ms=wall_ms,
                                  video_ok=self._video_ok)
+        # W00c5d(决策 8):狗的运行记录经狗专用口(mTLS)传上来,落证据库;判读、复核、导出、备份
+        # 都在这儿。
+        from d1max_site.backup import SiteBackup
+        from d1max_site.evidence import EvidenceStore
+        from d1max_site.intake import DEFAULT_PORT, IntakeServer, server_context
+        from d1max_site.runs import RunDesk
+        self.evidence = EvidenceStore(home / "evidence", self.db, now_ms=wall_ms)
+        self.runs = RunDesk(self.evidence, home=home, now_ms=wall_ms, alerts=self.alerts)
+        backup_dir = cfg.get("backup_dir")
+        self.backup = SiteBackup(self.db, self.evidence.root,
+                                 Path(backup_dir) if backup_dir else None, now_ms=wall_ms,
+                                 alerts=self.alerts)
+        icfg = cfg.get("intake", {})
+        self.intake = IntakeServer(
+            host=icfg.get("host", "0.0.0.0"), port=int(icfg.get("port", DEFAULT_PORT)),
+            ctx=server_context(cert=server_crt, key=server_key, ca=ca / "ca.crt",
+                               crl=ca / "crl.pem"),
+            db=self.db, store=self.evidence, now_ms=wall_ms)
         self.api = SiteApi(host=api_host, port=api_port, loop=self.loop,
                            dispatcher=self.dispatcher, accounts=self.accounts, tls=tls,
                            scheduler=self.scheduler, standby=self.standby,
                            incidents=self.incidents, alerts=self.alerts, video=self.video,
-                           teleop=self.teleop, now_ms=wall_ms)
+                           teleop=self.teleop, runs=self.runs, backup=self.backup,
+                           now_ms=wall_ms)
         self.teleop.audit = self.api.audit
         self._stop = threading.Event()
+        self._chores = threading.Thread(target=self._chore_loop, daemon=True,
+                                        name="site-chores")
 
     def start(self) -> None:
         self.loop.call(self.dispatcher.start, timeout_s=30)
@@ -334,6 +357,18 @@ class Server:
         self.loop.submit(self._schedule_loop)
         self.loop.submit(self._alert_loop)
         self.api.start()
+        self.intake.start()
+        self._chores.start()
+
+    def _chore_loop(self) -> None:
+        """后台杂事(不在事件循环里:判读要等模型、备份要拷盘):每 30 s 自动判读一拍,
+        每拍看一眼备份到点没有。一拍炸了记下来、下一拍照走。"""
+        while not self._stop.wait(CHORE_PERIOD_S):
+            for what, fn in (("自动判读", self.runs.step), ("备份", self.backup.step)):
+                try:
+                    fn()
+                except Exception:
+                    log.exception("%s这一拍没办成", what)
 
     async def _schedule_loop(self) -> None:
         """排程执行器:每 30 s 一拍。一拍炸了记下来、下一拍照走(老 W06 执行器同一个理由:
@@ -385,6 +420,7 @@ class Server:
     def stop(self) -> None:
         self._stop.set()
         for what, fn in (("遥控", self.teleop.close_all), ("API", self.api.stop),
+                         ("接收口", self.intake.stop),
                          ("视频", self.video.close),
                          ("待命点", lambda: self.loop.call(self.standby.close, 10)),
                          ("事件台", lambda: self.loop.call(self.incidents.close, 10)),

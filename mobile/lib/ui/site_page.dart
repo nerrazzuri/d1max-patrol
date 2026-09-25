@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'site_runs.dart';
 import 'site_teleop.dart';
 import 'site_video.dart';
 import 'site_watch_page.dart';
@@ -322,6 +323,12 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
             icon: const Icon(Icons.notifications_active),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteWatchPage(api: widget.api)))),
+        IconButton(
+            key: const Key('open-runs'),
+            tooltip: '记录',
+            icon: const Icon(Icons.photo_library),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute<void>(builder: (_) => SiteRunsPage(api: widget.api)))),
         IconButton(
             tooltip: '事件',
             icon: const Icon(Icons.warning_amber),

@@ -15,6 +15,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
@@ -75,6 +76,9 @@ class SiteSession {
 
   /// 强制接管别人的遥控：只有管理员，而且要写理由。
   bool get canTakeover => role == 'admin';
+
+  /// 判读、复核照片（W00c5d）：值班的人（保安、管理员）；业主只看。
+  bool get canReview => role == 'admin' || role == 'guard';
   bool get canAbort => role == 'admin' || role == 'guard' || role == 'owner';
 }
 
@@ -111,6 +115,22 @@ abstract class SiteApi {
 
   /// 停车（W00c5c）：走站点的 `halt`，**不走遥控连接**。业主也能按。
   Future<Map<String, dynamic>> halt(String robotId);
+
+  /// 运行记录（W00c5d，决策 8：证据都在站点）：最近的在前；[robotId] 给了只要这台狗的。
+  /// 读不懂就抛 `FormatException`，不当成「没有记录」。
+  Future<List<Map<String, dynamic>>> runs({String? robotId});
+
+  /// 一趟：`{run: {...}, photos: [{name, waypoint, camera, finding, review}]}`。
+  Future<Map<String, dynamic>> run(int id);
+
+  /// 一张照片的字节（钉证书、带令牌）。
+  Future<Uint8List> runPhoto(int id, String name);
+
+  /// 让站点重判这一趟（保安、管理员）。
+  Future<Map<String, dynamic>> judgeRun(int id);
+
+  /// 人工复核一张照片：[verdict] 是 normal / abnormal / unclear。
+  Future<Map<String, dynamic>> reviewPhoto(int id, String photo, String verdict, String note);
   Stream<Map<String, dynamic>> events();
   void close();
 }
@@ -389,6 +409,53 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> watchSummary() async =>
       _map(await _send('GET', '/api/watch/summary'));
+
+  @override
+  Future<List<Map<String, dynamic>>> runs({String? robotId}) async {
+    final q = robotId == null ? '' : '?robot=${Uri.encodeQueryComponent(robotId)}';
+    final d = _map(await _send('GET', '/api/runs$q'));
+    final rows = d['runs'];
+    if (rows is! List) throw const FormatException('站点回的运行记录里没有 runs');
+    return rows.whereType<Map<String, dynamic>>().toList();
+  }
+
+  @override
+  Future<Map<String, dynamic>> run(int id) async => _map(await _send('GET', '/api/runs/$id'));
+
+  /// 照片最多这么大（字节）：站点回的东西不照单全收。
+  static const int maxPhotoBytes = 20 * 1024 * 1024;
+
+  @override
+  Future<Uint8List> runPhoto(int id, String name) async {
+    final req = await _io
+        .openUrl('GET', base.resolve('/api/runs/$id/photos/${Uri.encodeComponent(name)}'))
+        .timeout(timeout);
+    req.followRedirects = false;
+    final tok = session?.token;
+    if (tok != null) req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $tok');
+    final resp = await req.close().timeout(timeout);
+    if (resp.statusCode != 200) {
+      await resp.drain<void>();
+      if (resp.statusCode == 401) session = null;
+      throw SiteError(resp.statusCode, '照片拿不到');
+    }
+    final out = BytesBuilder(copy: false);
+    await for (final chunk in resp.timeout(timeout)) {
+      out.add(chunk);
+      if (out.length > maxPhotoBytes) throw const SiteError(0, '照片太大');
+    }
+    return out.takeBytes();
+  }
+
+  @override
+  Future<Map<String, dynamic>> judgeRun(int id) async =>
+      _map(await _send('POST', '/api/runs/$id/judge', <String, dynamic>{}));
+
+  @override
+  Future<Map<String, dynamic>> reviewPhoto(
+          int id, String photo, String verdict, String note) async =>
+      _map(await _send('POST', '/api/runs/$id/review/${Uri.encodeComponent(photo)}',
+          <String, dynamic>{'verdict': verdict, 'note': note}));
 
   @override
   Future<Map<String, dynamic>> videoHealth(String robotId) async => _map(

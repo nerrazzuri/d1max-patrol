@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -185,6 +185,24 @@ CREATE TABLE IF NOT EXISTS teleop_leases (
     takeover_reason TEXT,
     UNIQUE (robot_id, epoch)
 );
+-- W00c5d(决策 8):狗传上来的运行记录。文件在 <站点目录>/evidence/<狗>/<任务>/<时刻>/ 下。
+CREATE TABLE IF NOT EXISTS runs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id   TEXT NOT NULL,
+    mission    TEXT NOT NULL,
+    stamp      TEXT NOT NULL,
+    first_ms   INTEGER NOT NULL,
+    last_ms    INTEGER NOT NULL,
+    finished   INTEGER NOT NULL DEFAULT 0,
+    result     TEXT NOT NULL DEFAULT '',
+    photos     INTEGER NOT NULL DEFAULT 0,
+    bytes      INTEGER NOT NULL DEFAULT 0,
+    judged_ms  INTEGER,
+    verdicts   TEXT NOT NULL DEFAULT '{}',
+    reviewed   INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (robot_id, mission, stamp)
+);
+CREATE INDEX IF NOT EXISTS runs_by_robot ON runs (robot_id, stamp);
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,
     status       TEXT,
@@ -242,6 +260,17 @@ class SiteDB:
     def query(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:
             return list(self._conn.execute(sql, args))
+
+    def backup_to(self, path: Path) -> None:
+        """整库在线备份到 ``path``(sqlite 的 backup 接口,拿着库锁做:备份出来的是一个一致的快照)。"""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        dst = sqlite3.connect(str(path))
+        try:
+            with self._lock:
+                self._conn.backup(dst)
+        finally:
+            dst.close()
 
     def close(self) -> None:
         with self._lock:

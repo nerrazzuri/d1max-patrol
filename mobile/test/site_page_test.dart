@@ -1,6 +1,7 @@
 // 站点模式的几屏（W00c4）：按角色显示按钮、列表与单狗页用真站点的夹具、首屏二选一、站点列表存取。
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:d1max_patrol/main.dart';
 import 'package:d1max_patrol/model/alert.dart';
@@ -15,6 +16,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_site.dart';
+
+/// 1×1 的 PNG：照片解得出来（测试里的图片解码认真的）。
+final Uint8List onePixelPng = Uint8List.fromList(<int>[
+  0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+  0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+  0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+  0x44, 0xAE, 0x42, 0x60, 0x82,
+]);
 
 class FakeTeleopLink implements TeleopLink {
   final StreamController<Map<String, dynamic>> ctl =
@@ -119,10 +129,12 @@ class FakeApi implements SiteApi {
     calls.add('resolve $key');
     return siteFixture('site_alert_ack');
   }
+  /// 给了就用它，不给用真站点的夹具。
+  Map<String, dynamic>? summaryBody;
   @override
   Future<Map<String, dynamic>> watchSummary() async {
     if (summaryError != null) throw summaryError!;
-    return siteFixture('site_watch_summary');
+    return summaryBody ?? siteFixture('site_watch_summary');
   }
   /// 遥控（W00c5c）。
   FakeTeleopLink? link;
@@ -133,6 +145,34 @@ class FakeApi implements SiteApi {
     lastTakeover = takeoverReason;
     if (teleopError != null) throw teleopError!;
     return link = FakeTeleopLink();
+  }
+  /// 运行记录（W00c5d）：真站点的夹具。
+  SiteError? runsError;
+  @override
+  Future<List<Map<String, dynamic>>> runs({String? robotId}) async {
+    calls.add('runs ${robotId ?? '*'}');
+    if (runsError != null) throw runsError!;
+    return (siteFixture('site_runs')['runs'] as List).cast<Map<String, dynamic>>();
+  }
+  @override
+  Future<Map<String, dynamic>> run(int id) async {
+    calls.add('run $id');
+    return siteFixture('site_run');
+  }
+  @override
+  Future<Uint8List> runPhoto(int id, String name) async {
+    calls.add('photo $id $name');
+    return onePixelPng;
+  }
+  @override
+  Future<Map<String, dynamic>> judgeRun(int id) async {
+    calls.add('judge $id');
+    return <String, dynamic>{'findings': <dynamic>[]};
+  }
+  @override
+  Future<Map<String, dynamic>> reviewPhoto(int id, String photo, String verdict, String note) async {
+    calls.add('review $id $photo $verdict $note');
+    return <String, dynamic>{'photo': photo, 'verdict': verdict, 'reviewed': 1};
   }
   @override
   Future<Map<String, dynamic>> halt(String robotId) async {

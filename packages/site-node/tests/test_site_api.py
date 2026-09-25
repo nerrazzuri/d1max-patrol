@@ -40,7 +40,8 @@ def target(x: float) -> dict:
 
 class 站:
     def __init__(self, tmp_path, *, alerts: bool = False, video: dict | None = None,
-                 agent_video: bool = True, teleop: dict | None = None) -> None:
+                 agent_video: bool = True, teleop: dict | None = None,
+                 runs: dict | None = None) -> None:
         self.loop = LoopThread()
         self.loop.start()
         self.db = SiteDB(tmp_path / "site.db")
@@ -111,9 +112,19 @@ class 站:
             from d1max_site.teleop import TeleopDesk
             self.teleop = TeleopDesk(self.disp, self.loop, audit=None, now_ms=wall,
                                      video_ok=lambda rid: self.video_live["site"], **teleop)
+        self.runs = self.store = self.backup = None
+        if runs is not None:                           # W00c5d:证据库、运行记录台、站点备份
+            from d1max_site.backup import SiteBackup
+            from d1max_site.evidence import EvidenceStore
+            from d1max_site.runs import RunDesk
+            self.store = EvidenceStore(tmp_path / "evidence", self.db, now_ms=wall)
+            self.runs = RunDesk(self.store, home=tmp_path, now_ms=wall, alerts=self.desk,
+                                client_factory=runs.get("client", lambda: None))
+            self.backup = SiteBackup(self.db, self.store.root, runs.get("backup_dir"),
+                                     now_ms=wall, alerts=self.desk)
         self.api = SiteApi(host="127.0.0.1", port=0, loop=self.loop, dispatcher=self.disp,
                            accounts=self.accounts, alerts=self.desk, video=self.hub,
-                           teleop=self.teleop)
+                           teleop=self.teleop, runs=self.runs, backup=self.backup)
         if self.teleop is not None:
             self.teleop.audit = self.api.audit
         self.api.start()
@@ -482,3 +493,30 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
     assert code == 200 and d["outcome"] == "dispatched" and d["robot_id"] == "A", d
     code, d = 站点.req("GET", "/api/incidents", token=tok)
     assert code == 200 and d["incidents"][0]["event_id"] == "e1"
+
+
+def test_TLS握手在每条连接自己的线程里_不发ClientHello的挡不住手机(站点, tmp_path):
+    """W00c5d:包监听套接字的老办法在唯一那条接连接的线程里握手、没有超时 —— 一个连上来却不发
+    ClientHello 的(4G 上卡住的手机、扫端口的)就能让所有手机都连不上站点。"""
+    import socket
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    from d1max_site.ca import SiteCA
+    ca = SiteCA(tmp_path / "ca")
+    ca.init(SITE)
+    crt, key = ca.issue_server(["127.0.0.1"])
+    api = SiteApi(host="127.0.0.1", port=0, loop=站点.loop, dispatcher=站点.disp,
+                  accounts=站点.accounts, tls=(crt, key))
+    api.start()
+    idle = socket.create_connection(api.httpd.server_address[:2])
+    try:
+        ctx = ssl.create_default_context(cafile=str(ca.ca_cert))
+        t0 = time.monotonic()
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(api.url + "/api/robots", context=ctx, timeout=5)
+        assert e.value.code == 401 and time.monotonic() - t0 < 3
+    finally:
+        idle.close()
+        api.stop()

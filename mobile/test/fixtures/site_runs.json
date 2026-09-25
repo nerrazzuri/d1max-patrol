@@ -1,0 +1,22 @@
+{
+  "runs": [
+    {
+      "bytes": 58,
+      "finished": true,
+      "first_ms": 1790341974908,
+      "id": 1,
+      "judged_ms": 1790341974966,
+      "last_ms": 1790341974943,
+      "mission": "巡检一",
+      "photos": 2,
+      "result": "done",
+      "reviewed": 1,
+      "robot_id": "A",
+      "stamp": "20260925T010000Z",
+      "verdicts": {
+        "abnormal": 1,
+        "normal": 1
+      }
+    }
+  ]
+}

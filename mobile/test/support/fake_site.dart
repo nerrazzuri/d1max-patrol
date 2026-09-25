@@ -33,6 +33,9 @@ class FakeSite {
   /// 遥控连接（W00c5c）：拒绝时回的原因（配合 [statusCodes]）；握手时回一个错的
   /// `Sec-WebSocket-Accept`；连上之后收到的每条消息；站点这头的那条 WebSocket（测试拿来关）。
   String teleopRefusal = '';
+
+  /// 运行记录的照片（W00c5d）。
+  List<int> photoBytes = <int>[0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9];
   bool teleopBadAccept = false;
   final List<Map<String, dynamic>> teleopGot = <Map<String, dynamic>>[];
   WebSocket? teleopWs;
@@ -69,6 +72,12 @@ class FakeSite {
     final resp = req.response;
     if (path.endsWith('/teleop')) {
       await _teleop(req, code);
+      return;
+    }
+    if (path.startsWith('/api/runs/') && path.contains('/photos/') && code == 200) {
+      resp.headers.contentType = ContentType('image', 'jpeg');
+      resp.add(photoBytes);
+      await resp.close();
       return;
     }
     if (code >= 300 && code < 400) {
@@ -136,6 +145,14 @@ class FakeSite {
       out = siteFixture('site_alerts');
     } else if (path == '/api/watch/summary') {
       out = siteFixture('site_watch_summary');
+    } else if (path == '/api/runs') {
+      out = siteFixture('site_runs');
+    } else if (RegExp(r'^/api/runs/\d+$').hasMatch(path)) {
+      out = siteFixture('site_run');
+    } else if (path.startsWith('/api/runs/') && path.contains('/review/')) {
+      out = <String, dynamic>{'photo': path.split('/').last, 'verdict': 'x', 'reviewed': 1};
+    } else if (path.startsWith('/api/runs/') && path.endsWith('/judge')) {
+      out = <String, dynamic>{'findings': <dynamic>[]};
     } else if (path.startsWith('/api/alerts/')) {
       out = siteFixture('site_alert_ack');
     } else if (path == '/api/logout') {

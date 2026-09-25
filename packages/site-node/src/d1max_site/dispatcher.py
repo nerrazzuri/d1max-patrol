@@ -136,6 +136,8 @@ class Dispatcher:
         self._telemetry_cbs: list[Callable[[str, Telemetry], None]] = []
         #: 每台狗最近一次收到遥测的站点时刻(值守汇总用)。
         self.telemetry_at: dict[str, int] = {}
+        #: 每台狗最近一份盘况与收到的时刻(站点的钟)。
+        self.storage: dict[str, tuple[Any, int]] = {}
         #: 每台狗挂上客户端的站点时刻:一直只收到过 retained 状态的狗,从这一刻起算过期。
         self._attached_at: dict[str, int] = {}
         self._ack_cbs: list[Callable[[Ack], None]] = []
@@ -197,6 +199,9 @@ class Dispatcher:
         if self._closed:
             return
         self.telemetry_at[robot_id] = self._now()
+        if t.storage is not None:
+            # 盘况每 10 s 才带一次(W00c5d):单独记最近一份,值守汇总看的是它。
+            self.storage[robot_id] = (t.storage, self._now())
         self._fire(self._telemetry_cbs, robot_id, t, "遥测")
 
     @staticmethod
