@@ -27,13 +27,36 @@ def test_事件簿_确认过的多了就压实_没确认的一条不丢(tmp_path
     assert again.last_seq == 200
 
 
-def test_事件簿_换了boot之后上一个boot的整个清掉(tmp_path):
+def test_事件簿_换了boot_上一个boot没确认的带过来补发_确认过的清掉(tmp_path):
+    """决策 8:断网暂存的东西恢复后要传上去 ——
+    代理重启(新的 boot)不许把没确认的任务结果、故障丢了。"""
     p = tmp_path / "events.jsonl"
     b = EventBook(p, boot_id="b1", now_ms=lambda: 1)
     for i in range(5):
         b.emit("tick", {"i": i})
-    EventBook(p, boot_id="b2", now_ms=lambda: 1)
-    assert _lines(p) == 0
+    b.mark_acked(3)
+    b2 = EventBook(p, boot_id="b2", now_ms=lambda: 99)
+    got = b2.pending()
+    assert [e.data["i"] for e in got] == [3, 4] and [e.seq for e in got] == [1, 2]
+    assert all(e.boot_id == "b2" and e.stamp == 1 for e in got), "原来的时刻"
+    assert got[0].data["carried_from"].startswith("evt-b1-")
+    assert _lines(p) == 2
+    b3 = EventBook(p, boot_id="b3", now_ms=lambda: 99)
+    assert [e.data["i"] for e in b3.pending()] == [3, 4], "再重启:不重复带"
+    assert b3.pending()[0].data["carried_from"] == got[0].data["carried_from"]
+
+
+def test_事件簿_带到一半断电_不重复(tmp_path):
+    p = tmp_path / "events.jsonl"
+    b = EventBook(p, boot_id="b1", now_ms=lambda: 1)
+    first = b.emit("tick", {"i": 0})
+    b2 = EventBook(p, boot_id="b2", now_ms=lambda: 1)
+    carried = b2.pending()[0]
+    import json
+    with p.open("a", encoding="utf-8") as f:           # 模拟压实之前断电:老的那条还在文件里
+        f.write(json.dumps({"op": "event", "event": first.to_wire()}) + "\n")
+    b3 = EventBook(p, boot_id="b3", now_ms=lambda: 1)
+    assert [e.data.get("carried_from") for e in b3.pending()] == [carried.data["carried_from"]]
 
 
 def _ack(i):

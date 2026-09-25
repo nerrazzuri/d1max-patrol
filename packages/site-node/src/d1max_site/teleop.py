@@ -48,6 +48,10 @@ PHONE_BASELINE_WINDOW = 50
 MIN_FORWARD_GAP_MS = 50
 
 
+class _NoRelease(Exception):
+    """(内部)这一次收尾不放租。"""
+
+
 class TeleopRefused(RuntimeError):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(message)
@@ -329,8 +333,9 @@ class TeleopDesk:
     # ------------------------------------------------------------ 关
 
     def close(self, s: Session, reason: str, *, by: str = "",
-              detail: dict[str, Any] | None = None) -> None:
-        """结束这一个租约(幂等)。先发零速、放租,再告诉手机、关连接,最后记账。"""
+              detail: dict[str, Any] | None = None, release: bool = True) -> None:
+        """结束这一个租约(幂等)。先发零速、放租,再告诉手机、关连接,最后记账。``release`` 为假时
+        不放租(halt:狗那头由 halt 中止遥控任务,账上记的是「halt 停的」)。"""
         with self._lock:
             if s.ended.is_set():
                 return
@@ -341,9 +346,13 @@ class TeleopDesk:
         if s.moving or reason != "released":
             self._send_frame(s, 0.0, 0.0, final=True)
         try:
+            if not release:
+                raise _NoRelease
             self.loop.call(lambda: self.dispatcher.teleop_lease(
                 s.robot_id, TeleopLease(action="release", lease_epoch=s.epoch), timeout_s=2.0),
                 timeout_s=5.0)
+        except _NoRelease:
+            pass
         except Exception:
             log.warning("放租发不出去(%s 代次 %d),狗那头租约到期自己停", s.robot_id, s.epoch,
                         exc_info=True)
@@ -366,12 +375,20 @@ class TeleopDesk:
             self._halted_at[robot_id] = time.monotonic()
         s = self.active(robot_id)
         if s is not None:
-            self._close_async(s, "halt", by=str(user))
-        return self.loop.call(lambda: self.dispatcher.halt(robot_id, issued_by=str(user)),
-                              timeout_s=self.dispatcher.ack_timeout_s + 5)
+            # 零速、告诉手机、关连接;**不放租** —— 狗那头由 halt 中止遥控任务(账上记 halt)。
+            self._close_async(s, "halt", by=str(user), release=False)
+        try:
+            return self.loop.call(lambda: self.dispatcher.halt(robot_id, issued_by=str(user)),
+                                  timeout_s=self.dispatcher.ack_timeout_s + 5)
+        except BaseException:
+            if s is not None:
+                self._release_async(robot_id, s.epoch)   # halt 没送到:放租兜底,狗照样停
+            raise
 
-    def _close_async(self, s: Session, reason: str, *, by: str = "") -> None:
-        threading.Thread(target=self.close, args=(s, reason), kwargs={"by": by},
+    def _close_async(self, s: Session, reason: str, *, by: str = "",
+                     release: bool = True) -> None:
+        threading.Thread(target=self.close, args=(s, reason),
+                         kwargs={"by": by, "release": release},
                          daemon=True, name="teleop-close").start()
 
     # ------------------------------------------------------------ 续租与守卫

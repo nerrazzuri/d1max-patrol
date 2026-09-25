@@ -342,3 +342,40 @@ def test_发件箱装上了_盘况进遥测(tmp_path):
     finally:
         a.stop()
     assert not a.pump._thread.is_alive(), "收尾要停发件箱线程"
+
+
+def test_发件箱的路径要绝对_不跟legacy_http一起_要求的挂载点没挂就不起(tmp_path):
+    reg = tmp_path / "registration.json"
+    REG.save(reg)
+    base = ["--transport", "memory://", "--registration", str(reg), "--store-dir",
+            str(tmp_path / "s"), "--map", "estate-1:7"]
+    with pytest.raises(SystemExit):
+        agent_main.parse_args([*base, "--outbox", "relative/outbox"])
+    with pytest.raises(SystemExit):
+        agent_main.parse_args([*base, "--outbox", str(tmp_path / "o"), "--legacy-http",
+                               "127.0.0.1:0"])
+    with pytest.raises(SystemExit):                          # tmp_path 不是挂载点
+        agent_main.parse_args([*base, "--outbox", str(tmp_path / "o"), "--outbox-mount",
+                               str(tmp_path)])
+    ok = agent_main.parse_args([*base, "--outbox", "/o", "--outbox-mount", "/"])
+    assert ok.outbox_mount == "/"
+
+
+def test_引擎跑完之后_最后一趟不再算正在写(tmp_path):
+    from types import SimpleNamespace
+    a = agent_main.build(_outbox_args(tmp_path))
+    try:
+        eng = a.parts.engine
+        box = a.pump.box
+        eng._live = SimpleNamespace(archive=SimpleNamespace(path=tmp_path / "x"))
+        assert box.active() == set(), "引擎没在跑:上一趟可以删了"
+        import asyncio
+        loop = asyncio.new_event_loop()
+        fut = loop.create_future()
+        eng._task = fut
+        assert box.active() == {tmp_path / "x"}
+        loop.close()
+        assert eng.run_suffix().isdigit() and len(eng.run_suffix()) == 6
+    finally:
+        a.parts.engine._task = None
+        a.stop()

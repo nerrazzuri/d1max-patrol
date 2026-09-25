@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import shutil
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -32,8 +33,12 @@ log = logging.getLogger(__name__)
 
 #: 多久扫一次盘(毫秒)。
 SCAN_EVERY_MS = 15_000
-#: 一拍最多传几块(每块至多 1 MiB):一拍不能太长,关机时要等得起。
+#: 一拍最多传几块(每块至多 1 MiB)、最多走多久(秒):一拍不能太长 —— 4G 断了的时候每块都要等满
+#: 超时,不限时的话一拍能走半小时,盘况冻住、关不了机(W00c5d 内部评审)。
 MAX_PUTS_PER_STEP = 64
+STEP_BUDGET_S = 5.0
+#: 多久删一次、量一次盘(毫秒):每秒把整个发件箱走一遍太费。
+HOUSEKEEP_EVERY_MS = 10_000
 
 
 class Outbox:
@@ -61,7 +66,9 @@ class Outbox:
         #: 引擎正在写的那一趟(运行时接上);这些目录一律不删。
         self.active: Callable[[], set[Path]] = set
         self._next_scan = 0
+        self._next_housekeep = 0
         self._facts: StorageFacts | None = None
+        self._measure_failed = False
         #: 删掉了几趟(看得见才查得到)。
         self.deleted_runs = 0
 
@@ -70,19 +77,39 @@ class Outbox:
 
     # ------------------------------------------------------------ 一拍
 
-    def step(self) -> None:
+    def step(self, should_stop: Callable[[], bool] = lambda: False) -> None:
         now = self._now()
         if now >= self._next_scan:
             self.uploader.scan()
             self._next_scan = now + SCAN_EVERY_MS
+        deadline = time.monotonic() + STEP_BUDGET_S
         for _ in range(MAX_PUTS_PER_STEP):
+            if should_stop() or time.monotonic() > deadline:
+                break
             if self.uploader.run_once(self._now()).action == "idle":
                 break
-        self._prune()
-        self._facts = self._measure()
+        if now >= self._next_housekeep:
+            self._next_housekeep = now + HOUSEKEEP_EVERY_MS
+            self._prune()
+            self._facts = self._measure_safe()
+
+    def _measure_safe(self) -> StorageFacts:
+        """量不了(盘掉了、挂载点没了)就按「满了」报:不接巡检、站点出告警 ——
+        不拿上一次的好数字充数。"""
+        try:
+            f = self._measure()
+        except OSError as exc:
+            if not self._measure_failed:
+                log.error("发件箱量不了(盘掉了?):%s —— 按满了报", exc)
+            self._measure_failed = True
+            return StorageFacts(disk_used_ratio=1.0, outbox_bytes=self.cap_bytes,
+                                outbox_cap_bytes=self.cap_bytes, backlog_files=0,
+                                backlog_bytes=0, oldest_backlog_s=None)
+        self._measure_failed = False
+        return f
 
     def facts(self) -> StorageFacts:
-        return self._facts if self._facts is not None else self._measure()
+        return self._facts if self._facts is not None else self._measure_safe()
 
     # ------------------------------------------------------------ 删
 
@@ -173,9 +200,11 @@ class OutboxPump:
     def _run(self) -> None:
         while not self._stop.is_set():
             for b in self.boxes:
+                if self._stop.is_set():
+                    break
                 try:
                     with self._lock:
-                        b.step()
+                        b.step(self._stop.is_set)
                 except Exception:
                     log.exception("发件箱这一拍炸了(%s)", b.runs_root.name)
             self._stop.wait(self.period_s)

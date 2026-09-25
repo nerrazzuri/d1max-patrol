@@ -10,8 +10,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -25,10 +27,17 @@ from d1max_site.evidence import EvidenceStore, PathRefused, safe_join, sha256_fi
 
 log = logging.getLogger(__name__)
 
-#: 一趟跑完之后多久没新文件进来,才判读(毫秒)。
+#: 最后一张照片收齐之后多久没再来新照片,才判读(毫秒)。
 QUIET_MS = 60_000
+#: 上一轮有没判成的(模型调用失败):隔多久再试、最多几轮。
+RETRY_MS = 10 * 60_000
+MAX_TRIES = 3
 #: 导出留几天。
 EXPORT_KEEP_DAYS = 7
+
+
+def _stamp_of(ms: int) -> str:
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(ms / 1000))
 
 
 class RunError(ValueError):
@@ -47,6 +56,10 @@ class RunDesk:
         self._client_factory = client_factory
         self.alerts = alerts
         self._judging = threading.Lock()
+        #: ``review.json`` 是读、改、写:两个人同时复核不同的照片不许丢一条(内部评审)。
+        self._reviewing = threading.Lock()
+        #: 正在后台判的(同一趟不叠着判)。
+        self._judging_ids: set[int] = set()
 
     # ------------------------------------------------------------ 看
 
@@ -80,36 +93,76 @@ class RunDesk:
 
     # ------------------------------------------------------------ 判读
 
-    def judge(self, run_id: int, *, client: Any = None) -> list[dict[str, Any]]:
+    def judge(self, run_id: int, *, client: Any = None, all_photos: bool = True
+              ) -> list[dict[str, Any]]:
+        """判读一趟。**只判站点上收齐了的照片**(还在传的那张不判、不当基线)。``all_photos`` 为假时
+        只判还没判过或上次没判成(pending)的,别的结论原样留着(自动判读用)。"""
         r = self._run(run_id)
         d = self.store.dir_of(r)
         vlm = client if client is not None else self._client_factory()
+        done = set(self.store.done_photos(run_id))
+        started = self._now()                     # 判读开始的时刻:判到一半又到的照片要再判一轮
         with self._judging:
+            if not all_photos:
+                have = {f.photo: f.verdict for f in judge_mod.read_findings(d)}
+                done = {n for n in done if have.get(n) in (None, "pending")}
             findings = judge_mod.judge_run(
                 d, client=vlm, history_root=self.store.root / r["robot_id"],
-                baselines_root=self.baselines / r["robot_id"])
+                baselines_root=self.baselines / r["robot_id"], only=done)
         counts: dict[str, int] = {}
         for f in findings:
             counts[f.verdict] = counts.get(f.verdict, 0) + 1
         with self.db.tx() as c:
-            c.execute("UPDATE runs SET judged_ms=?, verdicts=? WHERE id=?",
-                      (self._now(), json.dumps(counts), run_id))
+            c.execute("UPDATE runs SET judged_ms=?, verdicts=?, judge_tries=judge_tries+1 "
+                      "WHERE id=?", (started, json.dumps(counts), run_id))
         if self.alerts is not None:
             for f in findings:
-                if f.verdict == "abnormal":
+                if f.verdict == "abnormal" and f.photo in done:
                     self.alerts.raise_alert(
                         kind="finding", robot=r["robot_id"],
                         title=f"判读有异常:{f.waypoint}",
                         detail=f"{r['mission']} {r['stamp']} {f.photo}:{f.reason}"[:300])
         return [f.to_wire() for f in findings]
 
+    def judge_async(self, run_id: int) -> dict[str, Any]:
+        """人点「重判」:后台判(模型一张一张看,几十张要好几分钟,手机等不起)。同一趟正在判就不再叠一轮。"""
+        self._run(run_id)
+        with self._reviewing:
+            if run_id in self._judging_ids:
+                return {"run_id": run_id, "state": "judging"}
+            self._judging_ids.add(run_id)
+
+        def go() -> None:
+            try:
+                self.judge(run_id)
+            except Exception:
+                log.exception("重判第 %d 趟炸了", run_id)
+            finally:
+                with self._reviewing:
+                    self._judging_ids.discard(run_id)
+        threading.Thread(target=go, daemon=True, name="judge").start()
+        return {"run_id": run_id, "state": "judging"}
+
     def pending_judge(self) -> list[int]:
-        """该判的:跑完了、一分钟没新文件、还没判过或判过之后又来了新文件。"""
-        cutoff = self._now() - QUIET_MS
-        rows = self.db.query("SELECT id FROM runs WHERE finished=1 AND photos>0 AND last_ms<? "
-                             "AND (judged_ms IS NULL OR judged_ms<last_ms) ORDER BY id",
-                             (cutoff,))
-        return [r["id"] for r in rows]
+        """该判的:跑完了、最后一张照片收齐之后一分钟没再来新照片,而且有收齐之后还没判过的照片;
+        或者上一轮有没判成的(调用失败),隔 ``RETRY_MS`` 再试,最多 ``MAX_TRIES`` 轮。"""
+        now = self._now()
+        rows = self.db.query(
+            "SELECT r.id, r.judged_ms, r.verdicts, r.judge_tries, MAX(p.done_ms) AS last_photo "
+            "FROM runs r JOIN run_photos p ON p.run_id = r.id "
+            "WHERE r.finished=1 GROUP BY r.id ORDER BY r.id")
+        out = []
+        for r in rows:
+            if r["last_photo"] > now - QUIET_MS:
+                continue                          # 照片还在来
+            judged = r["judged_ms"]
+            if judged is None or judged <= r["last_photo"]:
+                out.append(r["id"])
+                continue
+            pending = json.loads(r["verdicts"] or "{}").get("pending", 0)
+            if pending and r["judge_tries"] < MAX_TRIES and judged < now - RETRY_MS:
+                out.append(r["id"])
+        return out
 
     def step(self) -> int:
         """自动判读一拍(后台线程调)。没配模型密钥就不判。返回判了几趟。"""
@@ -119,7 +172,7 @@ class RunDesk:
         n = 0
         for run_id in self.pending_judge():
             try:
-                self.judge(run_id, client=client)
+                self.judge(run_id, client=client, all_photos=False)
                 n += 1
             except Exception:
                 log.exception("自动判读第 %d 趟炸了", run_id)
@@ -130,50 +183,80 @@ class RunDesk:
     def review(self, run_id: int, photo: str, *, verdict: str, note: str) -> dict[str, Any]:
         r = self._run(run_id)
         d = self.store.dir_of(r)
-        try:
-            judge_mod.save_review(d, photo, verdict, str(note)[:500])
-        except ValueError as exc:
-            raise RunError(str(exc)) from exc
-        n = len(judge_mod.read_reviews(d))
+        with self._reviewing:
+            try:
+                judge_mod.save_review(d, photo, verdict, str(note)[:500])
+            except ValueError as exc:
+                raise RunError(str(exc)) from exc
+            n = len(judge_mod.read_reviews(d))
         with self.db.tx() as c:
             c.execute("UPDATE runs SET reviewed=? WHERE id=?", (n, run_id))
         return {"photo": photo, "verdict": verdict, "reviewed": n}
 
     # ------------------------------------------------------------ 导出
 
-    def export(self, *, since_ms: int, until_ms: int, robot_id: str | None = None
-               ) -> dict[str, Any]:
+    def export(self, *, since_ms: int, until_ms: int, robot_id: str | None = None,
+               wait: bool = False) -> dict[str, Any]:
+        """按**这一趟开跑的时刻**(目录名上的 UTC 时刻)取一个时间段的记录,打成 zip。在后台打
+        (大的要好几分钟,手机等不起),先回一份 ``state: building`` 的说明;``wait`` 为真就打完再回。
+        每个文件的 sha256 是**写进 zip 的那份字节**算的(不是回头再读一遍)。不设条数上限。"""
         if until_ms <= since_ms:
             raise RunError("导出的时间段不对")
-        runs = self.store.runs(robot_id=robot_id, since_ms=since_ms, until_ms=until_ms,
-                               limit=1000)
+        runs = self.store.runs_in(robot_id=robot_id, since_stamp=_stamp_of(since_ms),
+                                  until_stamp=_stamp_of(until_ms))
         if not runs:
             raise RunError("这个时间段里没有记录")
         self.exports_dir.mkdir(parents=True, exist_ok=True)
         self._prune_exports()
         name = f"export-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(self._now() / 1000))}-" \
                f"{uuid.uuid4().hex[:6]}"
-        path = self.exports_dir / f"{name}.zip"
+        meta = {"name": f"{name}.zip", "state": "building", "runs": len(runs),
+                "since_ms": since_ms, "until_ms": until_ms, "robot_id": robot_id,
+                "created_ms": self._now()}
+        self._write_meta(meta)
+        if wait:
+            return self._build(meta, runs)
+        threading.Thread(target=self._build, args=(meta, runs), daemon=True,
+                         name="export").start()
+        return meta
+
+    def _write_meta(self, meta: dict[str, Any]) -> None:
+        p = (self.exports_dir / meta["name"]).with_suffix(".json")
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, p)
+
+    def _build(self, meta: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
+        path = self.exports_dir / meta["name"]
         tmp = path.with_name(path.name + ".tmp")
         listing = []
-        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as z:
-            for r in runs:
-                d = self.store.dir_of(r)
-                for f in sorted(p for p in d.rglob("*") if p.is_file()
-                                and not p.name.endswith(".tmp")):
-                    arc = f"{r['robot_id']}/{r['mission']}/{r['stamp']}/" \
-                          f"{f.relative_to(d).as_posix()}"
-                    z.write(f, arc)
-                    listing.append({"path": arc, "size": f.stat().st_size,
-                                    "sha256": sha256_file(f)})
-            z.writestr("清单.json", json.dumps({"since_ms": since_ms, "until_ms": until_ms,
-                                                "robot_id": robot_id, "files": listing},
-                                               ensure_ascii=False, indent=2))
-        tmp.replace(path)
-        meta = {"name": path.name, "size": path.stat().st_size, "sha256": sha256_file(path),
-                "runs": len(runs), "files": len(listing), "created_ms": self._now()}
-        path.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False),
-                                             encoding="utf-8")
+        try:
+            with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as z:
+                for r in runs:
+                    d = self.store.dir_of(r)
+                    for f in sorted(p for p in d.rglob("*") if p.is_file()
+                                    and not p.name.endswith(".tmp")):
+                        arc = f"{r['robot_id']}/{r['mission']}/{r['stamp']}/" \
+                              f"{f.relative_to(d).as_posix()}"
+                        h, n = hashlib.sha256(), 0
+                        with open(f, "rb") as src, z.open(arc, "w", force_zip64=True) as dst:
+                            while chunk := src.read(1 << 20):
+                                h.update(chunk)
+                                n += len(chunk)
+                                dst.write(chunk)
+                        listing.append({"path": arc, "size": n, "sha256": h.hexdigest()})
+                z.writestr("清单.json", json.dumps({
+                    "since_ms": meta["since_ms"], "until_ms": meta["until_ms"],
+                    "robot_id": meta["robot_id"], "runs": len(runs), "files": listing},
+                    ensure_ascii=False, indent=2))
+            os.replace(tmp, path)
+            meta = meta | {"state": "ready", "size": path.stat().st_size,
+                           "sha256": sha256_file(path), "files": len(listing)}
+        except Exception as exc:
+            log.exception("导出没成")
+            tmp.unlink(missing_ok=True)
+            meta = meta | {"state": "failed", "error": f"{type(exc).__name__}: {exc}"[:200]}
+        self._write_meta(meta)
         return meta
 
     def exports(self) -> list[dict[str, Any]]:
@@ -193,7 +276,7 @@ class RunDesk:
         except PathRefused as exc:
             raise RunError(str(exc)) from exc
         if not name.endswith(".zip") or not p.is_file():
-            raise RunError(f"没有这份导出: {name}")
+            raise RunError(f"没有这份导出(或还在打): {name}")
         return p
 
     def _prune_exports(self) -> None:

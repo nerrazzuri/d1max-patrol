@@ -159,9 +159,15 @@ class FakeApi implements SiteApi {
     calls.add('run $id');
     return siteFixture('site_run');
   }
+  /// 前几次拿照片失败（模拟 4G 抖）。
+  int photoErrors = 0;
   @override
   Future<Uint8List> runPhoto(int id, String name) async {
     calls.add('photo $id $name');
+    if (photoErrors > 0) {
+      photoErrors--;
+      throw const SiteError(0, '连不上站点');
+    }
     return onePixelPng;
   }
   @override

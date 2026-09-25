@@ -21,7 +21,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-from d1max_contract.intake import H_OFFSET, H_REL, H_RUN, H_TOTAL, MAX_CHUNK, WIRE_PATH
+from d1max_contract.intake import (
+    H_OFFSET,
+    H_REL,
+    H_RUN,
+    H_TOTAL,
+    MAX_CHUNK,
+    REFUSED_STATUS,
+    WIRE_PATH,
+)
 from d1max_site.evidence import EvidenceStore, PathRefused
 from d1max_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
 
@@ -52,6 +60,8 @@ class IntakeServer:
         self.store = store
         #: W00c5d 第二部分:地图目录(收狗建的图、录包;给狗下载图)。
         self.maps = maps
+        #: 永远不收的一块:``(狗, 一趟, 文件, 原因)``(主程序接到告警台)。
+        self.on_refused: Callable[[str, str, str, str], None] | None = None
         self._now = now_ms
         intake = self
 
@@ -59,7 +69,7 @@ class IntakeServer:
             site = intake
             timeout = REQUEST_TIMEOUT_S
 
-        self.httpd = TlsThreadingServer((host, port), Handler, ctx=ctx)
+        self.httpd = TlsThreadingServer((host, port), Handler, ctx=ctx, max_connections=64)
         self._thread: threading.Thread | None = None
 
     @property
@@ -171,11 +181,21 @@ class _Handler(TlsHandlerMixin):
                "bags": getattr(self.site.maps, "put_bag_chunk", None)}[kind]
         try:
             got = put(robot, run, rel, offset=offset, data=data, total=total)
-        except (PathRefused, ValueError) as exc:
-            log.warning("%s 传来的 %s/%s 不收: %s", robot, run, rel, exc)
+        except PathRefused as exc:
+            # 永远不收:告诉狗隔离这个文件、别再重试;站点出一条告警让人看。
+            log.warning("%s 传来的 %s/%s 永远不收: %s", robot, run, rel, exc)
+            if self.site.on_refused is not None:
+                try:
+                    self.site.on_refused(robot, run, rel, str(exc))
+                except Exception:
+                    log.exception("报「不收」的告警失败")
+            return self._reply(REFUSED_STATUS, {"ok": False, "stored": 0, "sha256": "",
+                                                "refused": True, "message": str(exc)})
+        except ValueError as exc:
+            log.warning("%s 传来的 %s/%s 这一块不对: %s", robot, run, rel, exc)
             return self._refuse(400, str(exc))
         except OSError as exc:
-            log.exception("证据库写不进去")
+            log.warning("证据库写不进去: %s", exc)
             return self._later(507, f"站点盘写不进去: {exc}")
         self._reply(200, {"ok": True, "stored": got.size, "sha256": got.sha256, "message": ""})
 

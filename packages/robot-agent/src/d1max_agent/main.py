@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 import threading
@@ -115,6 +116,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="发件箱目录(运行记录落 <发件箱>/runs);可以指到临时硬盘")
     o.add_argument("--outbox-max-gb", type=float, default=20.0,
                    help="发件箱上限(GB),到了就不接新的巡检;默认 20")
+    o.add_argument("--outbox-mount", default=os.environ.get("D1MAX_OUTBOX_MOUNT", ""),
+                   help="发件箱所在的挂载点(临时硬盘);给了就要求它真的挂着,不然不起"
+                        "(缺省读环境变量 D1MAX_OUTBOX_MOUNT)")
     o.add_argument("--mapping", action="store_true",
                    help="开建图(W00c5d 第二部分:站点下 mapping/map_build);要本机有 ROS 2")
     o.add_argument("--intake", default=None,
@@ -150,6 +154,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.mapping and args.outbox is None:
         p.error("--mapping 要配 --outbox(录包和生成的图都写进发件箱传给站点)")
     if args.outbox is not None:
+        if not args.outbox.is_absolute():
+            p.error(f"--outbox 要是绝对路径(D1MAX_OUTBOX 没设?):{args.outbox!s}")
+        if args.legacy_http is not None:
+            # 老 HTTP 面自己判读、出报告、按自己的规矩清盘,写进发件箱的东西站点不收、它还会不等站点
+            # 确认就删 —— 两者不许同时开(W00c5d 内部评审;老 HTTP 面随 W00c5e 退役)。
+            p.error("--legacy-http 不能跟 --outbox 一起用")
+        mount = args.outbox_mount
+        if mount:
+            m = Path(mount)
+            if not os.path.ismount(m):
+                p.error(f"发件箱要在 {m} 上,可它没挂上(临时硬盘没插好?)—— 不往系统盘上写")
+            if m.resolve() not in (args.outbox.resolve(), *args.outbox.resolve().parents):
+                p.error(f"--outbox {args.outbox} 不在 {m} 底下")
         args.runs_root = args.outbox / "runs"
         if args.outbox_max_gb <= 0:
             p.error("--outbox-max-gb 要大于 0")
@@ -355,9 +372,14 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
                   settled=map_settled)
 
     def _active() -> set[Path]:
+        # 引擎跑完之后 archive 还指着上一趟(W00c5d 内部评审):只有正在跑的那一趟算「正在写」,
+        # 不然最后一趟一直删不掉。
         a = parts.engine.archive
-        return {a.path} if a is not None else set()
+        return {a.path} if a is not None and parts.engine.running else set()
     runs.active = _active
+    # 每一趟带随机后缀:传完就删,狗的钟往回拨也不会跟站点上早就收齐的那一趟撞名(内部评审)。
+    import secrets
+    parts.engine.run_suffix = lambda: f"{secrets.randbelow(10 ** 6):06d}"
     return OutboxPump(runs, more=(bags, maps)), keeper, mapper
 
 

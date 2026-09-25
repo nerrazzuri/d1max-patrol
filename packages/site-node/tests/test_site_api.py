@@ -129,10 +129,12 @@ class 站:
             from d1max_site.evidence import EvidenceStore
             from d1max_site.runs import RunDesk
             self.store = EvidenceStore(tmp_path / "evidence", self.db, now_ms=wall)
-            self.runs = RunDesk(self.store, home=tmp_path, now_ms=wall, alerts=self.desk,
+            from d1max_site.alert_store import LoopAlerts
+            la = LoopAlerts(self.desk, self.loop) if self.desk is not None else None
+            self.runs = RunDesk(self.store, home=tmp_path, now_ms=wall, alerts=la,
                                 client_factory=runs.get("client", lambda: None))
             self.backup = SiteBackup(self.db, self.store.root, runs.get("backup_dir"),
-                                     now_ms=wall, alerts=self.desk)
+                                     now_ms=wall, alerts=la)
         self.api = SiteApi(host="127.0.0.1", port=0, loop=self.loop, dispatcher=self.disp,
                            accounts=self.accounts, alerts=self.desk, video=self.hub,
                            teleop=self.teleop, runs=self.runs, backup=self.backup,

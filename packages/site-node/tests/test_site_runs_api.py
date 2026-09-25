@@ -81,9 +81,11 @@ def test_保安判读复核_异常出告警_复核进审计(站点):
     rid, _ = _传一趟(s)
     gina = _登(s, "gina")
     code, d = s.req("POST", f"/api/runs/{rid}/judge", {}, token=gina)
-    assert code == 200 and d["findings"][0]["verdict"] == "abnormal"
-    kinds = [a["kind"] for a in s.req("GET", "/api/alerts", token=gina)[1]["alerts"]]
-    assert "finding" in kinds
+    assert code == 202 and d["state"] == "judging", d            # 后台判,手机不用等
+    _等(lambda: s.req("GET", f"/api/runs/{rid}", token=gina)[1]["photos"][0]["finding"])
+    kinds = _等(lambda: [a["kind"] for a in s.req("GET", "/api/alerts", token=gina)[1]["alerts"]
+                         if a["kind"] == "finding"])
+    assert kinds
     name = s.req("GET", f"/api/runs/{rid}", token=gina)[1]["photos"][0]["name"]
     code, d = s.req("POST", f"/api/runs/{rid}/review/{quote(name)}",
                     {"verdict": "normal", "note": "风吹的"}, token=gina)
@@ -103,7 +105,9 @@ def test_管理员导出_下载下来哈希对得上(站点):
     body = {"since_ms": 0, "until_ms": 2**53}
     assert s.req("POST", "/api/exports", body, token=gina)[0] == 403
     code, meta = s.req("POST", "/api/exports", body, token=alice)
-    assert code == 200 and meta["runs"] == 1, meta
+    assert code == 202 and meta["runs"] == 1 and meta["state"] == "building", meta
+    meta = _等(lambda: next((e for e in s.req("GET", "/api/exports", token=alice)[1]["exports"]
+                              if e["name"] == meta["name"] and e["state"] == "ready"), None))
     st, ctype, data = _get_raw(s, f"/api/exports/{meta['name']}", alice)
     assert st == 200 and ctype == "application/zip"
     assert hashlib.sha256(data).hexdigest() == meta["sha256"]

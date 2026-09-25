@@ -40,6 +40,7 @@ void main() {
     await t.tap(find.byKey(SiteRunPage.judgeKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('judge 1'));
+    expect(find.textContaining('站点开始重判了'), findsOneWidget);
     await t.pumpWidget(Container());
   });
 
@@ -85,5 +86,18 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byType(SiteRunsPage), findsOneWidget);
     await t.pumpWidget(Container());
+  });
+
+  testWidgets('照片拿不到先画个坏图标；再画的时候重拿，不记着那次失败', (t) async {
+    final api = FakeApi('guard')..photoErrors = 2;
+    await t.pumpWidget(MaterialApp(home: SiteRunPage(api: api, runId: 1)));
+    await t.pumpAndSettle();
+    expect(find.byIcon(Icons.broken_image), findsNWidgets(2));
+    await t.tap(find.byKey(const Key('photo-P1__front__20260925T010000Z.jpg')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(SitePhotoPage.reviewKey('normal')));
+    await t.pumpAndSettle();                               // 复核完回来:这一趟重新画
+    expect(find.byIcon(Icons.broken_image), findsNothing);
+    expect(api.calls.where((c) => c.startsWith('photo 1 ')).length, greaterThanOrEqualTo(4));
   });
 }

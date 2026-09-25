@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -203,6 +203,13 @@ CREATE TABLE IF NOT EXISTS runs (
     UNIQUE (robot_id, mission, stamp)
 );
 CREATE INDEX IF NOT EXISTS runs_by_robot ON runs (robot_id, stamp);
+-- W00c5d 内部评审:收齐了的照片(还在传的不算,不判读、不当基线)。
+CREATE TABLE IF NOT EXISTS run_photos (
+    run_id  INTEGER NOT NULL,
+    name    TEXT NOT NULL,
+    done_ms INTEGER NOT NULL,
+    PRIMARY KEY (run_id, name)
+);
 -- W00c5d 第二部分:站点的地图目录与建图录包。文件在 <站点目录>/maps/、bags/ 下。
 CREATE TABLE IF NOT EXISTS maps (
     map_id     TEXT NOT NULL,
@@ -236,6 +243,7 @@ _ADDED_COLUMNS = (
     ("standby_points", "map_version", "TEXT NOT NULL DEFAULT ''"),   # W00c2b 内部评审
     ("intercepts", "map_version", "TEXT NOT NULL DEFAULT ''"),       # W00c2c
     ("accounts", "disabled", "INTEGER NOT NULL DEFAULT 0"),          # W00c3
+    ("runs", "judge_tries", "INTEGER NOT NULL DEFAULT 0"),           # W00c5d 内部评审
 )
 
 

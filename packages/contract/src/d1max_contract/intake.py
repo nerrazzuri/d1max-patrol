@@ -13,16 +13,20 @@ from __future__ import annotations
 import re
 
 WIRE_PATH = "/api/intake/put"
+#: 站点**永远不收**这一块(名字不合规、不是狗能产生的文件、跟收齐的内容冲突):回这个状态码,
+#: 狗把这个文件隔离起来、不再重试(不然每 5 分钟重传 1 MiB,一天几百 MB 的 4G),这一趟留在狗上等人看。
+REFUSED_STATUS = 422
 #: 请求头(值用 URL 转义,见 http_sink)。
 H_RUN, H_REL, H_OFFSET, H_TOTAL = "X-D1Max-Run", "X-D1Max-Rel", "X-D1Max-Offset", "X-D1Max-Total"
 #: 一块最多多大(狗那头一块 1 MiB)。
 MAX_CHUNK = 2 * 1024 * 1024
 
 #: 一趟的目录名:``<任务>/<UTC 时刻>``,时刻形如 ``20260925T010000Z``。
-STAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
+#: 可以带数字后缀:同秒第二趟 ``-2``;发件箱模式每趟一个随机后缀(见 ``engine.archive``)。
+STAMP_RE = re.compile(r"^\d{8}T\d{6}Z(-\d{1,8})?$")
 #: 狗能上传的文件(相对这一趟的目录)。照片另算:``photos/<名字>.jpg``。
 DOG_FILES = frozenset({"manifest.json", "events.jsonl", "telemetry.jsonl"})
-_PHOTO_RE = re.compile(r"^photos/[^/]{1,200}\.(jpg|jpeg|png)$", re.IGNORECASE)
+_PHOTO_RE = re.compile(r"^photos/[^/]{1,250}\.(jpg|jpeg|png)$", re.IGNORECASE)
 
 
 def dog_may_upload(rel: str) -> bool:

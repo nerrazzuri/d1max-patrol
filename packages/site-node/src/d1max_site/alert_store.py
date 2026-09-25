@@ -106,3 +106,18 @@ class AlertDesk:
             per = out.setdefault(a.robot, {"P1": 0, "P2": 0, "P3": 0})
             per[a.level.value] += 1
         return out
+
+
+class LoopAlerts:
+    """别的线程(判读、备份、接收口)报告警用的:**跳到事件循环里去报**。告警簿只许在事件循环里改
+    (W00c5d 内部评审:别的线程直接改,循环里正在遍历的那一边会炸「字典在遍历时变了」,同一组两条
+    还可能撞同一个键丢一条)。"""
+
+    def __init__(self, desk: AlertDesk, loop) -> None:
+        self.desk = desk
+        self.loop = loop
+
+    def raise_alert(self, **kw: Any) -> Any:
+        async def go() -> Any:
+            return self.desk.raise_alert(**kw)
+        return self.loop.call(go, timeout_s=10.0)

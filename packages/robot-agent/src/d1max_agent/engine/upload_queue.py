@@ -121,6 +121,9 @@ class QueueItem:
     #: 它是"文件被原地改写了"的判据 —— report.md 每次判读/复核都被删掉重生成,
     #: 字节数常常一样甚至更小,只比 size 的话服务器上永远是旧结论(W02)。
     mtime_ns: int = 0
+    #: W00c5d:站点说这个文件永远不收 —— 不再重试(不算待传),也不算确认;文件一变(变长或改写)
+    #: 就重新排上。
+    refused: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         return asdict(self)
@@ -136,6 +139,7 @@ class QueueItem:
             next_ms=int(d.get("next_ms", 0)),
             done=bool(d.get("done", False)),
             mtime_ns=int(d.get("mtime_ns", 0)),
+            refused=bool(d.get("refused", False)),
         )
 
 
@@ -242,12 +246,12 @@ class UploadQueue:
         if size > old.size:
             # **长了就重新打开,哪怕它已经 done。** offset 原样留着接着传。
             self._write(QueueItem(**{**old.to_wire(), "size": size, "done": False,
-                                     "mtime_ns": mtime_ns or old.mtime_ns}))
+                                     "refused": False, "mtime_ns": mtime_ns or old.mtime_ns}))
             return False
         if mtime_ns and old.mtime_ns and mtime_ns != old.mtime_ns:
             # **原地改写:从头来。** 之前传的那些字节对应的是旧内容,一个都不算数。
             self._write(QueueItem(**{**old.to_wire(), "size": size, "offset": 0,
-                                     "done": False, "mtime_ns": mtime_ns}))
+                                     "done": False, "refused": False, "mtime_ns": mtime_ns}))
             return False
         if mtime_ns and not old.mtime_ns:
             if old.done and rewritten_in_place(key):
@@ -276,6 +280,11 @@ class UploadQueue:
         self._write(
             QueueItem(**{**old.to_wire(), "attempts": old.attempts + 1, "next_ms": next_ms})
         )
+
+    def refuse(self, key: str) -> None:
+        """站点说永远不收:隔离,不再重试。"""
+        old = self._items[key]
+        self._write(QueueItem(**{**old.to_wire(), "refused": True}))
 
     def finish(self, key: str) -> None:
         old = self._items[key]
@@ -309,7 +318,8 @@ class UploadQueue:
         ready = [
             self._items[k]
             for k in self._order
-            if not self._items[k].done and self._items[k].next_ms <= now_ms
+            if not self._items[k].done and not self._items[k].refused
+            and self._items[k].next_ms <= now_ms
         ]
         return sorted(ready, key=lambda i: (i.priority, rank[i.key]))
 

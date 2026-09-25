@@ -385,7 +385,8 @@ def default_client() -> VlmClient | None:
 
 def judge_run(run_dir: Path, *, client: VlmClient | None = None,
               history_root: Path | None = None,
-              baselines_root: Path | None = None) -> list[Finding]:
+              baselines_root: Path | None = None,
+              only: set[str] | None = None) -> list[Finding]:
     """判读一整趟的照片,结论写进 ``findings.json``,并返回。
 
     ``client`` 留空就按环境变量造一个;造不出来(没密钥)全部标 ``pending``。
@@ -402,8 +403,15 @@ def judge_run(run_dir: Path, *, client: VlmClient | None = None,
     vlm = client if client is not None else default_client()
     checks = _checks(run_dir)
     findings: list[Finding] = []
+    # W00c5d:``only`` 给了就只判这几张(站点上收齐了、还没判过的);别的照片上一次的结论原样留着,
+    # 还在传的照片既不判、也不当基线。
+    kept = {f.photo: f for f in read_findings(run_dir)} if only is not None else {}
 
     for name in _photos(run_dir):
+        if only is not None and name not in only:
+            if name in kept:
+                findings.append(kept[name])
+            continue
         waypoint, camera = _split_photo_name(name)
         if vlm is None:
             findings.append(Finding(

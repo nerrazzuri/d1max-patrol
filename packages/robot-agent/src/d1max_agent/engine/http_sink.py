@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import quote
 
 from d1max_agent.engine.uploader import HTTP_TIMEOUT_S, PutReceipt, PutRequest, SinkError
+from d1max_contract.intake import REFUSED_STATUS
 
 WIRE_PATH = "/api/intake/put"
 
@@ -201,11 +202,14 @@ def parse_receipt(status: int, body: bytes) -> PutReceipt:
         # json.loads 成功,但顶层不是对象(列表/null/裸字符串/裸数字)。
         # 同样是"读不懂服务器想说什么",不是"服务器明确说了话"。
         raise SinkError(f"回执不是 JSON 对象: {payload!r}")
+    ok = _认字段(payload, "ok", bool, _必填)
     return PutReceipt(
-        ok=_认字段(payload, "ok", bool, _必填) and status == 200,
+        ok=ok and status == 200,
         stored=_认字段(payload, "stored", int, 0, 非负=True),
         sha256=_认字段(payload, "sha256", str, ""),
         message=_认字段(payload, "message", str, ""),
+        # W00c5d:站点明确说「永远不收」(422 且 ok 为假):隔离这个文件,不再重试。
+        refused=(status == REFUSED_STATUS and not ok),
     )
 
 

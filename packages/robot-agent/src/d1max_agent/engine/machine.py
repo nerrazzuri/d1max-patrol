@@ -545,7 +545,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         if blocked:
             raise EngineBusy(blocked)
         self._home = home
-        archive = RunArchive(self._runs_root, mission)
+        suffix = getattr(self, "run_suffix", None)
+        archive = RunArchive(self._runs_root, mission, suffix=suffix() if suffix else "")
         archive.write_manifest(self._fingerprint)
         # 对表:墙钟这一趟只读这一次,后面所有时刻都从这个锚点按单调钟推。
         self._epoch_ms = self._wall_ms()

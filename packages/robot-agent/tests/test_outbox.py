@@ -180,3 +180,63 @@ def test_传完之后原地改写_大小没变_下一次扫盘之前也不删(�
     assert m.stat().st_size == len(old)
     box._prune()                                     # 扫盘之前
     assert run.exists(), "盘上的已经不是传上去的那一份了"
+
+
+def test_盘量不了就按满了报(箱, monkeypatch):
+    box, site, clock = 箱
+
+    def 掉了(p):
+        raise OSError("Input/output error")
+    box._disk_usage = 掉了
+    box._next_housekeep = 0
+    box.step()
+    f = box.facts()
+    assert f.full() and f.disk_used_ratio == 1.0, "不拿上一次的好数字充数"
+
+
+def test_一拍有时间上限_关机不用等满所有块(tmp_path, monkeypatch):
+    import threading
+
+    from d1max_agent import outbox as ob
+    from d1max_agent.engine.uploader import SinkError
+    from d1max_agent.outbox import OutboxPump
+    monkeypatch.setattr(ob, "STEP_BUDGET_S", 0.3)
+
+    class 慢站点:
+        def put(self, req):
+            import time as _t
+            _t.sleep(0.2)
+            raise SinkError("4G 断了")
+    clock = {"ms": int(time.time() * 1000)}
+    box = Outbox(tmp_path / "o", cap_bytes=2**30, sink=慢站点(), sn="A",
+                 now_ms=lambda: clock["ms"])
+    for i in range(10):
+        _一趟(box.root, stamp=f"20260925T0{i}0000Z")
+    pump = OutboxPump(box, period_s=0.01)
+    pump.start()
+    import time as _t
+    _t.sleep(0.5)
+    t0 = _t.monotonic()
+    th = threading.Thread(target=pump.stop)
+    th.start()
+    th.join(5)
+    assert not th.is_alive() and _t.monotonic() - t0 < 2.0, "关机要快"
+
+
+
+def test_落盘的名字安全_发件箱模式每趟带随机后缀(tmp_path):
+    from datetime import datetime, timezone
+
+    from d1max_agent.engine.archive import RunArchive, safe_segment
+    from d1max_contract.mission import parse_mission
+    m = parse_mission({"mission": "a/b\x01..", "map_id": "m", "waypoints": [
+        {"name": "p", "pose": {"position": {"x": 0, "y": 0},
+                               "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}}]})
+    t = datetime(2026, 9, 25, 1, tzinfo=timezone.utc)
+    a = RunArchive(tmp_path, m, started_at=t, suffix="004217")
+    assert a.path.parent.name == "a_b_.." and a.path.name == "20260925T010000Z-004217"
+    b = RunArchive(tmp_path, m, started_at=t, suffix="004217")
+    assert b.path.name == "20260925T010000Z-004217-2", "撞了照样往后加序号"
+    assert safe_segment("..x") == "_.x" and safe_segment("") == "_"
+    assert len(safe_segment("点" * 200).encode()) <= 120
+    assert a.photo_name("p/1", "front").startswith("p_1__front__")

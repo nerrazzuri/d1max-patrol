@@ -710,7 +710,7 @@ class _Handler(TlsHandlerMixin):
                 if method == "POST" and what == "judge" and arg is None:
                     self._need(user, REVIEW)
                     self._body()
-                    return self._send_json(200, {"findings": desk.judge(rid)})
+                    return self._send_json(202, desk.judge_async(rid))
                 if method == "POST" and what == "review" and arg:
                     self._need(user, REVIEW)
                     d = self._body()
@@ -733,7 +733,8 @@ class _Handler(TlsHandlerMixin):
                     meta = desk.export(since_ms=since, until_ms=until,
                                        robot_id=robot if isinstance(robot, str) else None)
                     self._audit_detail = {"export": meta["name"], "runs": meta["runs"]}
-                    return self._send_json(200, meta)
+                    # 在后台打:202,之后看 GET /api/exports 里它的 state(building → ready/failed)。
+                    return self._send_json(202, meta)
             m = _EXPORT.match(path)
             if m is not None and method == "GET":
                 self._need(user, EXPORT)

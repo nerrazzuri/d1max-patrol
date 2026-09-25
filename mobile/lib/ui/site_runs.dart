@@ -124,8 +124,15 @@ class _SiteRunPageState extends State<SiteRunPage> {
   final Map<String, Future<Uint8List>> _photos = <String, Future<Uint8List>>{};
   bool _judging = false;
 
-  Future<Uint8List> _photo(String name) =>
-      _photos.putIfAbsent(name, () => widget.api.runPhoto(widget.runId, name));
+  /// 一张照片的字节。拿不到的不记着（下次再画的时候重拿），拿到的留在这一页里。
+  Future<Uint8List> _photo(String name) => _photos.putIfAbsent(name, () {
+        final f = widget.api.runPhoto(widget.runId, name);
+        f.catchError((Object _) {
+          _photos.remove(name);
+          return Uint8List(0);
+        });
+        return f;
+      });
 
   void _reload() => setState(() {
         _detail = widget.api.run(widget.runId);
@@ -134,8 +141,9 @@ class _SiteRunPageState extends State<SiteRunPage> {
   Future<void> _judge() async {
     setState(() => _judging = true);
     try {
+      // 站点在后台判（几十张照片要好几分钟）：这里只是开个头，过一会儿下拉刷新看结论。
       await widget.api.judgeRun(widget.runId);
-      _reload();
+      _snack('站点开始重判了，过一会儿刷新看结论');
     } on SiteError catch (e) {
       _snack('判读没成：$e');
     } finally {
@@ -206,9 +214,10 @@ class _SiteRunPageState extends State<SiteRunPage> {
         height: 48,
         child: FutureBuilder<Uint8List>(
           future: _photo('${p['name']}'),
-          builder: (c, s) => s.hasData
-              ? Image.memory(s.data!, fit: BoxFit.cover, gaplessPlayback: true)
-              : const Icon(Icons.photo),
+          builder: (c, s) => s.hasData && s.data!.isNotEmpty
+              // 缩略图按小尺寸解码：几十张原图全尺寸解出来，手机内存吃不消。
+              ? Image.memory(s.data!, fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: 128)
+              : Icon(s.hasError ? Icons.broken_image : Icons.photo),
         ),
       ),
       title: Text('${p['waypoint']} · ${p['camera']} · ${verdictText(shown as String?)}'

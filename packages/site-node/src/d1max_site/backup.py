@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sqlite3
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -40,11 +41,27 @@ class SiteBackup:
         self.dest = Path(dest) if dest is not None else None
         self._now = now_ms
         self.alerts = alerts
-        self.started_ms = now_ms()
-        self.last_ok_ms: int | None = None
+        # 上次成功、从什么时候起配了备份,都记在库里:重启不能把「25 小时没成」的钟清零(内部评审)。
+        self.last_ok_ms: int | None = self._meta_int("backup_last_ok_ms")
+        since = self._meta_int("backup_since_ms")
+        if since is None and self.dest is not None:
+            since = now_ms()
+            self._meta_set("backup_since_ms", since)
+        self.started_ms = since if since is not None else now_ms()
         self.last_error = ""
         self._next_ms = 0
         self._stale_told = False
+
+    def _meta_int(self, key: str) -> int | None:
+        rows = self.db.query("SELECT value FROM meta WHERE key=?", (key,))
+        try:
+            return int(rows[0]["value"]) if rows else None
+        except (TypeError, ValueError):
+            return None
+
+    def _meta_set(self, key: str, value: int) -> None:
+        with self.db.tx() as c:
+            c.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, str(value)))
 
     def status(self) -> dict[str, Any]:
         return {"configured": self.dest is not None,
@@ -73,18 +90,29 @@ class SiteBackup:
     def run_once(self) -> bool:
         if self.dest is None:
             return False
+        local = Path(self.db.path).with_name(".backup-snapshot.db")
         try:
             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self._now() / 1000))
             dbdir = self.dest / "db"
-            self.db.backup_to(dbdir / f"site-{stamp}.db")
+            dbdir.mkdir(parents=True, exist_ok=True)
+            # 先在本机盘上拍一个一致的快照(拿着库锁,但本机盘很快),再慢慢拷到外接盘(不拿锁):
+            # 直接往外接盘上备份会一直拿着库锁,事件循环和接收口全卡住(内部评审)。
+            local.unlink(missing_ok=True)
+            self.db.backup_to(local)
+            tmp = dbdir / f".site-{stamp}.db.tmp"
+            shutil.copy2(local, tmp)
+            os.replace(tmp, dbdir / f"site-{stamp}.db")
             for old in sorted(dbdir.glob("site-*.db"))[:-KEEP_DB]:
                 old.unlink(missing_ok=True)
             self._mirror()
-        except OSError as exc:
+        except (OSError, sqlite3.Error) as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
             log.warning("站点备份没成: %s", self.last_error)
             return False
+        finally:
+            local.unlink(missing_ok=True)
         self.last_ok_ms = self._now()
+        self._meta_set("backup_last_ok_ms", self.last_ok_ms)
         self.last_error = ""
         return True
 

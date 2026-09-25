@@ -32,10 +32,13 @@ def test_未确认区间与确认(tmp_path):
 
 
 def test_重启换boot_id后seq归1(tmp_path):
+    """新的 boot 从 1 编号;上一个 boot 没确认的那条先带过来占 1(W00c5d:不因为重启丢事件)。"""
     _book(tmp_path).emit("task_progress", {})
     b2 = _book(tmp_path, boot="b2")
+    carried = b2.pending()[0]
+    assert carried.seq == 1 and carried.boot_id == "b2" and "carried_from" in carried.data
     e = b2.emit("task_progress", {})
-    assert e.seq == 1 and e.boot_id == "b2"
+    assert e.seq == 2 and e.boot_id == "b2"
 
 
 def test_outbox落盘重放_同boot续号(tmp_path):

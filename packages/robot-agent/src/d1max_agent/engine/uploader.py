@@ -77,6 +77,8 @@ class PutReceipt:
     stored: int
     sha256: str
     message: str = ""
+    #: W00c5d:站点说这个文件永远不收(名字不合规、跟收齐的内容冲突)。
+    refused: bool = False
 
 
 class UploadSink(Protocol):
@@ -85,10 +87,11 @@ class UploadSink(Protocol):
 
 @dataclass(frozen=True)
 class Step:
-    """走一步的结果。``action`` 只有六种,别加第七种而不改这行注释。
+    """走一步的结果。``action`` 只有七种,别加第八种而不改这行注释。
 
     idle 队列空或都在退避里 / sent 传了一块还没完 / done 这个文件对上了 /
-    deferred 发不出去,退避 / rewound 哈希对不上,从头再来 / gone 文件没了
+    deferred 发不出去,退避 / rewound 哈希对不上,从头再来 / gone 文件没了 /
+    refused 站点永远不收,隔离(W00c5d)
     """
 
     key: str
@@ -183,6 +186,12 @@ class Uploader:
             wait = backoff_ms(item.attempts + 1, rand=self._rand)
             self.queue.defer(item.key, next_ms=now_ms + wait)
             return Step(key=item.key, action="deferred", detail=f"{exc}(等 {wait} ms)")
+
+        if receipt.refused:
+            # 站点永远不收:隔离起来,不再重试(每 5 分钟重传 1 MiB 一天就是几百 MB 的 4G);这一趟
+            # 留在狗上(没确认就不删),站点那头已经出了告警等人看。
+            self.queue.refuse(item.key)
+            return Step(key=item.key, action="refused", detail=receipt.message or "站点不收")
 
         if not receipt.ok:
             # 服务器那边比我们以为的少 —— 换过盘、回滚过备份。**以服务器说的为准**,

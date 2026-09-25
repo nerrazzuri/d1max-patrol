@@ -251,3 +251,93 @@ def test_图的路径不合规的不收_没登记的图下载不到(站点, ca, 
         urllib.request.urlopen(站点.intake.url + "/maps/estate-1/404/x.pgm",
                                context=_ctx(ca, ca.a), timeout=5)
     assert e.value.code == 404
+
+
+
+def test_太大的文件永远不收_站点盘快满了先不收(站点, monkeypatch):
+    from d1max_site import evidence as ev
+    with pytest.raises(ev.PathRefused):
+        站点.store.put("A", "巡检一/" + STAMP, "events.jsonl", offset=0, data=b"x",
+                     total=ev.MAX_FILE_BYTES + 1)
+    import collections
+    usage = collections.namedtuple("u", "total used free")
+    monkeypatch.setattr(ev.shutil, "disk_usage", lambda p: usage(100 * 2**30, 99 * 2**30, 2**20))
+    with pytest.raises(ev.DiskFull):
+        站点.store.put("A", "巡检一/" + STAMP, "events.jsonl", offset=0, data=b"x", total=1)
+
+
+def test_同时连接数有上限_超了的直接关(tmp_path):
+    import socket
+    import threading
+
+    from d1max_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
+    hold = threading.Event()
+
+    class H(TlsHandlerMixin):
+        def do_GET(self):
+            hold.wait(5)
+            self.send_response(200)
+            self.end_headers()
+    srv = TlsThreadingServer(("127.0.0.1", 0), H, ctx=None, max_connections=2)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        socks = []
+        for _ in range(2):
+            s = socket.create_connection(srv.server_address)
+            s.sendall(b"GET / HTTP/1.0\r\n\r\n")
+            socks.append(s)
+        time.sleep(0.2)
+        third = socket.create_connection(srv.server_address)
+        third.settimeout(2)
+        assert third.recv(10) == b"", "第三条:直接关"
+        hold.set()
+        for s in socks:
+            assert s.recv(20).startswith(b"HTTP/1.0 200")
+            s.close()
+        third.close()
+    finally:
+        hold.set()
+        srv.shutdown()
+        srv.server_close()
+
+
+
+def test_狗能产生的名字站点都收(站点, ca, tmp_path):
+    """任务名里有冒号、空格(「夜巡 22:00」)、同秒第二趟 ``-2``、随机后缀、长照片名:都得传得上去、
+    传完就删(W00c5d 内部评审:站点按 Windows 的规矩拒了,狗就永远传不完)。"""
+    from d1max_agent.engine.archive import safe_segment
+    box = Outbox(tmp_path / "dog", cap_bytes=2**30, sink=_sink(站点, ca, ca.a), sn="A",
+                 now_ms=lambda: NOW)
+    mission = safe_segment("夜巡 22:00 ?*")
+    runs = []
+    for stamp in ("20260925T010000Z-2", "20260925T010000Z-123456"):
+        run = box.runs_root / mission / stamp
+        (run / "photos").mkdir(parents=True)
+        (run / "events.jsonl").write_text("{}\n")
+        (run / "photos" / ("点位" * 38 + "__front__x.jpg")).write_bytes(b"jpg")
+        (run / "manifest.json").write_text(json.dumps({"summary": {"result": "done"}}))
+        runs.append(run)
+    _跑(box, 3)
+    assert not any(r.exists() for r in runs), "都传上去、都删了"
+    assert sorted(r["stamp"] for r in 站点.store.runs(robot_id="A")) == \
+        ["20260925T010000Z-123456", "20260925T010000Z-2"]
+    box.close()
+
+
+def test_站点永远不收的_狗隔离不再重试_这一趟留着_站点出告警(站点, ca, tmp_path):
+    got = []
+    站点.intake.on_refused = lambda *a: got.append(a)
+    clock = {"ms": NOW}
+    box = Outbox(tmp_path / "dog", cap_bytes=2**30, sink=_sink(站点, ca, ca.a), sn="A",
+                 now_ms=lambda: clock["ms"])
+    run = _一趟(box.root)
+    (run / "photos" / "坏\x01名.jpg").write_bytes(b"x")     # 站点永远不收的名字
+    for _ in range(10):
+        box.step()
+        clock["ms"] += 600_000                                # 十分钟一拍:按老规矩早该重试好几次了
+    assert len(got) == 1 and "控制字符" in got[0][3], "隔离了:不再重试"
+    assert run.exists(), "没全确认:这一趟留在狗上"
+    items = {i.key.split("/")[-1]: i for i in box.queue.all()}
+    assert items["坏\x01名.jpg"].refused and items["events.jsonl"].done
+    box.close()

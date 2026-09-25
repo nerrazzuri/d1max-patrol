@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import socket
 import ssl
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 log = logging.getLogger(__name__)
@@ -24,9 +25,30 @@ HANDSHAKE_TIMEOUT_S = 10.0
 class TlsThreadingServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, addr, handler, *, ctx: ssl.SSLContext | None) -> None:
+    def __init__(self, addr, handler, *, ctx: ssl.SSLContext | None,
+                 max_connections: int = 128) -> None:
         self.ctx = ctx
+        #: 同时开着的连接上限(W00c5d 内部评审):一条连接一个线程,不设上限的话一串慢连接就能把
+        #: 站点主机的线程、内存吃光。超了的连接直接关掉。
+        self._slots = threading.BoundedSemaphore(max_connections)
         super().__init__(addr, handler)
+
+    def process_request(self, request, client_address) -> None:
+        if not self._slots.acquire(blocking=False):
+            log.warning("同时连接数到上限了,关掉 %s", client_address)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
     def get_request(self) -> tuple[socket.socket, object]:
         sock, addr = super().get_request()

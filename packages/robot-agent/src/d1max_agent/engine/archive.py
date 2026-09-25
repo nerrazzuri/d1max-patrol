@@ -31,6 +31,20 @@ from d1max_agent.engine.mission import Mission
 STAMP_FMT = "%Y%m%dT%H%M%SZ"
 
 
+def safe_segment(name: str, *, max_bytes: int = 120) -> str:
+    """任务名、点位名要当目录名、文件名用(W00c5d 内部评审):``/``、``\\``、控制字符换成 ``_``,
+    开头的点换掉(不当隐藏文件、不当 ``..``),UTF-8 超长截断。空了给 ``_``。
+    **只影响落盘的名字**:清单里的任务定义照旧是原样。"""
+    out = "".join("_" if c in "/\\" or ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF else c
+                  for c in name).strip()
+    while out.startswith("."):
+        out = "_" + out[1:]
+    raw = out.encode("utf-8")
+    if len(raw) > max_bytes:
+        out = raw[:max_bytes].decode("utf-8", "ignore")
+    return out or "_"
+
+
 def _stamp(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime(STAMP_FMT)
 
@@ -55,24 +69,28 @@ class RunArchive:
     """一次运行的落盘出口。引擎只往这里写,不自己碰文件。"""
 
     def __init__(self, root: Path, mission: Mission, *,
-                 started_at: datetime | None = None) -> None:
+                 started_at: datetime | None = None, suffix: str = "") -> None:
         self._mission = mission
         self._started = started_at or _now()
-        self._path = self._make_dir(Path(root), mission.mission, self._started)
+        self._path = self._make_dir(Path(root), safe_segment(mission.mission), self._started,
+                                    suffix)
         (self._path / "photos").mkdir(exist_ok=True)
         self._events: IO[str] | None = None
         self._telemetry: IO[str] | None = None
 
     @staticmethod
-    def _make_dir(root: Path, mission: str, started: datetime) -> Path:
+    def _make_dir(root: Path, mission: str, started: datetime, suffix: str = "") -> Path:
         """建目录。同秒撞车就往后加序号。
 
         现场手抖点两下"跑"是真会发生的,而两次运行的数据混在同一个目录里
         最难查 —— 事件流交织、照片互相覆盖。宁可多一个目录。
+
+        ``suffix``(W00c5d,数字):发件箱模式下每一趟都带一个随机后缀 —— 传完就删,狗的钟往回拨
+        之后同一个时刻可能再出现一次,不带后缀就会跟站点上早就收齐的那一趟撞名、把它覆盖掉。
         """
         base = root / mission
         base.mkdir(parents=True, exist_ok=True)
-        stamp = _stamp(started)
+        stamp = _stamp(started) + (f"-{suffix}" if suffix else "")
         candidate = base / stamp
         n = 2
         while candidate.exists():
@@ -84,6 +102,9 @@ class RunArchive:
     @property
     def path(self) -> Path:
         return self._path
+
+    def photo_name(self, waypoint: str, camera: str, at: datetime | None = None) -> str:
+        return f"{safe_segment(waypoint)}__{safe_segment(camera)}__{_stamp(at or _now())}.jpg"
 
     @property
     def mission(self) -> Mission:
@@ -120,8 +141,7 @@ class RunArchive:
     def photo_path(self, waypoint: str, camera: str,
                    at: datetime | None = None) -> Path:
         """照片路径。文件名里带点位名,所以同一点位跨日期的照片能天然聚合。"""
-        name = f"{waypoint}__{camera}__{_stamp(at or _now())}.jpg"
-        return self._path / "photos" / name
+        return self._path / "photos" / self.photo_name(waypoint, camera, at)
 
     def save_photo(self, waypoint: str, camera: str, data: bytes,
                    at: datetime | None = None) -> Path:

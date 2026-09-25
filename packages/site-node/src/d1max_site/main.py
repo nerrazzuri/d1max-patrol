@@ -346,17 +346,23 @@ class Server:
         self.evidence = EvidenceStore(home / "evidence", self.db, now_ms=wall_ms)
         from d1max_site.maps import MapCatalog
         self.maps = MapCatalog(home, self.db, now_ms=wall_ms)
-        self.runs = RunDesk(self.evidence, home=home, now_ms=wall_ms, alerts=self.alerts)
+        # 判读、备份、接收口在别的线程里:告警要跳回事件循环去报(告警簿只许在循环里改)。
+        from d1max_site.alert_store import LoopAlerts
+        loop_alerts = LoopAlerts(self.alerts, self.loop)
+        self.runs = RunDesk(self.evidence, home=home, now_ms=wall_ms, alerts=loop_alerts)
         backup_dir = cfg.get("backup_dir")
         self.backup = SiteBackup(self.db, self.evidence.root,
                                  Path(backup_dir) if backup_dir else None, now_ms=wall_ms,
-                                 alerts=self.alerts)
+                                 alerts=loop_alerts)
         icfg = cfg.get("intake", {})
         self.intake = IntakeServer(
             host=icfg.get("host", "0.0.0.0"), port=int(icfg.get("port", DEFAULT_PORT)),
             ctx=server_context(cert=server_crt, key=server_key, ca=ca / "ca.crt",
                                crl=ca / "crl.pem"),
             db=self.db, store=self.evidence, now_ms=wall_ms, maps=self.maps)
+        self.intake.on_refused = lambda robot, run, rel, why: loop_alerts.raise_alert(
+            kind="upload_refused", robot=robot, title=f"站点不收 {run}/{rel}",
+            detail=f"{why}(那一趟留在狗上,不会自己删)")
         self.api = SiteApi(host=api_host, port=api_port, loop=self.loop,
                            dispatcher=self.dispatcher, accounts=self.accounts, tls=tls,
                            scheduler=self.scheduler, standby=self.standby,

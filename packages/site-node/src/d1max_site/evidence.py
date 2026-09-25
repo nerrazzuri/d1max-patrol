@@ -17,7 +17,9 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,8 +29,8 @@ from d1max_contract.intake import dog_may_upload, split_run
 
 log = logging.getLogger(__name__)
 
-_BAD_CHARS = frozenset("\\:\x00*?<>|\"")
-_MAX_SEG = 255
+#: 一个路径段最多多少字节(Linux 的文件名上限)。
+_MAX_SEG_BYTES = 255
 
 
 class PathRefused(ValueError):
@@ -36,21 +38,21 @@ class PathRefused(ValueError):
 
 
 def safe_join(root: Path, *parts: str) -> Path:
-    """把网络上来的路径片段接到 ``root`` 底下。两道闸:逐段查(``..``、空段、控制字符、超长、尾随
-    空格或点、怪字符),接完 ``resolve()`` 再查一次还在 ``root`` 底下。"""
+    """把网络上来的路径片段接到 ``root`` 底下。两道闸:逐段查(空段、``.``、``..``、控制字符、
+    孤立代理、超过 255 字节),接完 ``resolve()`` 再查一次还在 ``root`` 底下。
+
+    按**站点主机(Linux)**的规矩查:中文、冒号、问号这些都是合法文件名(任务名「夜巡 22:00」),
+    不因为 Windows 不认就拒 —— 拒了狗那头就永远传不完(W00c5d 内部评审)。"""
     root = root.resolve()
     cur = root
     for part in parts:
         for seg in part.split("/"):
             if not seg or not seg.strip() or seg in {".", ".."}:
                 raise PathRefused(f"路径段不合规:{part!r}")
-            if len(seg.encode("utf-16-le", "surrogatepass")) // 2 > _MAX_SEG:
+            if any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in seg):
+                raise PathRefused(f"路径段里有控制字符或孤立代理:{seg!r}")
+            if len(seg.encode("utf-8")) > _MAX_SEG_BYTES:
                 raise PathRefused(f"路径段过长:{part!r}")
-            if seg != seg.rstrip(" ."):
-                raise PathRefused(f"路径段有尾随空格或点:{seg!r}")
-            if _BAD_CHARS & set(seg) or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF
-                                            for c in seg):
-                raise PathRefused(f"路径段里有不许出现的字符:{seg!r}")
             cur = cur / seg
     out = cur.resolve()
     if out != root and root not in out.parents:
@@ -74,6 +76,19 @@ class Stored:
     sha256: str
 
 
+#: 一个文件最大多少字节(录包最大;照片、事件远小于它)。超了永远不收。
+MAX_FILE_BYTES = 8 * 1024 ** 3
+#: 站点盘剩这么多就不再收(先让狗等着 —— 库也在这块盘上,写满了整个站点都停)。
+MIN_FREE_BYTES = 2 * 1024 ** 3
+MIN_FREE_RATIO = 0.02
+#: 增量哈希最多记多少个文件(追加型的 ``.jsonl`` 收完了也留着,下次追加不用整个重算)。
+HASH_CACHE = 256
+
+
+class DiskFull(OSError):
+    """站点盘快满了:这一块先不收,狗过一会儿再来。"""
+
+
 class ChunkWriter:
     """按块落盘(三种偏移规矩见模块说明),返回站点对自己存下的字节算的哈希。证据库、地图、录包共用。"""
 
@@ -81,12 +96,27 @@ class ChunkWriter:
         self._lock = threading.Lock()
         #: 按路径分 64 把锁(同一个文件的两块不许交错写;锁的个数有上限,不随文件数涨)。
         self._stripes = [threading.Lock() for _ in range(64)]
-        #: 增量哈希:路径 → (已算到的长度, 哈希对象)。文件收完就扔掉。
-        self._hashes: dict[Path, tuple[int, Any]] = {}
+        #: 增量哈希:路径 → (已算到的长度, 哈希对象)。有上限,最久没用的先扔。
+        self._hashes: OrderedDict[Path, tuple[int, Any]] = OrderedDict()
+
+    def _remember(self, path: Path, n: int, h: Any) -> None:
+        with self._lock:
+            self._hashes[path] = (n, h)
+            self._hashes.move_to_end(path)
+            while len(self._hashes) > HASH_CACHE:
+                self._hashes.popitem(last=False)
 
     def write(self, path: Path, *, offset: int, data: bytes, total: int) -> Stored:
         if offset < 0 or total < 0 or offset + len(data) > total:
             raise ValueError(f"偏移或总长不对:offset={offset} len={len(data)} total={total}")
+        if total > MAX_FILE_BYTES:
+            raise PathRefused(f"文件太大({total} 字节,上限 {MAX_FILE_BYTES})")
+        here = path.parent
+        while not here.exists() and here != here.parent:
+            here = here.parent
+        usage = shutil.disk_usage(here)
+        if usage.free < max(MIN_FREE_BYTES, usage.total * MIN_FREE_RATIO):
+            raise DiskFull(f"站点盘只剩 {usage.free // 2**20} MB")
         with self._stripes[hash(path) % len(self._stripes)]:
             path.parent.mkdir(parents=True, exist_ok=True)
             have = path.stat().st_size if path.exists() else 0
@@ -103,13 +133,13 @@ class ChunkWriter:
             if cached is not None and cached[0] == offset == have:
                 h = cached[1]
                 h.update(data)
-                self._hashes[path] = (size, h)
+                self._remember(path, size, h)
                 digest = h.copy().hexdigest()
             else:
                 digest = self._full_hash(path)
-            if size >= total:
+            if size >= total and not path.name.endswith(".jsonl"):
                 with self._lock:
-                    self._hashes.pop(path, None)
+                    self._hashes.pop(path, None)       # 照片这种收完就不会再变
         return Stored(size=size, sha256=digest)
 
     def _full_hash(self, path: Path) -> str:
@@ -120,8 +150,7 @@ class ChunkWriter:
                 for chunk in iter(lambda: fh.read(1 << 20), b""):
                     h.update(chunk)
                     n += len(chunk)
-        with self._lock:
-            self._hashes[path] = (n, h)
+        self._remember(path, n, h)
         return h.copy().hexdigest()
 
 
@@ -168,19 +197,23 @@ class EvidenceStore:
                     finished, result = 1, str(summary.get("result", ""))[:64]
             except (OSError, ValueError):
                 log.warning("%s/%s/%s 的清单读不懂", robot_id, mission, stamp)
-        photos = len([p for p in (run / "photos").glob("*") if p.is_file()]) \
-            if (run / "photos").is_dir() else 0
         size = sum(p.stat().st_size for p in run.rglob("*") if p.is_file())
         with self.db.tx() as c:
             c.execute("INSERT INTO runs(robot_id, mission, stamp, first_ms, last_ms) "
                       "VALUES (?,?,?,?,?) ON CONFLICT(robot_id, mission, stamp) DO NOTHING",
                       (robot_id, mission, stamp, now, now))
-            c.execute("UPDATE runs SET last_ms=?, photos=?, bytes=?, "
-                      "finished=COALESCE(?, finished), result=COALESCE(?, result) "
-                      "WHERE robot_id=? AND mission=? AND stamp=?",
-                      (now, photos, size, finished, result, robot_id, mission, stamp))
             row = c.execute("SELECT id FROM runs WHERE robot_id=? AND mission=? AND stamp=?",
                             (robot_id, mission, stamp)).fetchone()
+            if rel.startswith("photos/"):
+                # 收齐的照片才登记(还在传的那张不判读、更不当基线)。
+                c.execute("INSERT INTO run_photos(run_id, name, done_ms) VALUES (?,?,?) "
+                          "ON CONFLICT(run_id, name) DO UPDATE SET done_ms=excluded.done_ms",
+                          (row["id"], rel.split("/", 1)[1], now))
+            photos = c.execute("SELECT COUNT(*) AS n FROM run_photos WHERE run_id=?",
+                               (row["id"],)).fetchone()["n"]
+            c.execute("UPDATE runs SET last_ms=?, photos=?, bytes=?, "
+                      "finished=COALESCE(?, finished), result=COALESCE(?, result) WHERE id=?",
+                      (now, photos, size, finished, result, row["id"]))
         for cb in list(self.on_file):
             try:
                 cb(row["id"], rel)
@@ -205,12 +238,27 @@ class EvidenceStore:
         args.append(max(1, min(limit, 1000)))
         return [_row(r) for r in self.db.query(q, tuple(args))]
 
+    def runs_in(self, *, robot_id: str | None, since_stamp: str, until_stamp: str
+                ) -> list[dict[str, Any]]:
+        """按**开跑时刻**(目录名 ``<UTC 时刻>[-后缀]``,字典序就是时间序)取一段,不设上限。"""
+        q = "SELECT * FROM runs WHERE stamp>=? AND stamp<?"
+        args: list[Any] = [since_stamp, until_stamp]
+        if robot_id is not None:
+            q += " AND robot_id=?"
+            args.append(robot_id)
+        return [_row(r) for r in self.db.query(q + " ORDER BY stamp, id", tuple(args))]
+
     def run(self, run_id: int) -> dict[str, Any] | None:
         rows = self.db.query("SELECT * FROM runs WHERE id=?", (run_id,))
         return _row(rows[0]) if rows else None
 
     def dir_of(self, run: dict[str, Any]) -> Path:
         return self.run_dir(run["robot_id"], run["mission"], run["stamp"])
+
+    def done_photos(self, run_id: int) -> dict[str, int]:
+        """收齐了的照片:名字 → 收齐的时刻。"""
+        return {r["name"]: r["done_ms"] for r in self.db.query(
+            "SELECT name, done_ms FROM run_photos WHERE run_id=?", (run_id,))}
 
     def photo_path(self, run: dict[str, Any], name: str) -> Path:
         if "/" in name or not name:
