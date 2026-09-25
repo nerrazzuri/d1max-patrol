@@ -1306,6 +1306,9 @@ def test_agent单元的形状():
         assert f"/etc/d1max/tls/{f}" in 单元, f
     assert "Environment=D1MAX_DATA_ROOT=/var/lib/d1max" in 单元
     assert "EnvironmentFile=-/etc/d1max/env" in 单元
+    # W00c5d(决策 8):运行记录落发件箱;缺省在数据根下,env 文件可以改到临时硬盘。
+    assert "--outbox ${D1MAX_OUTBOX}" in 单元 and "--runs-root" not in 单元
+    assert 单元.index("Environment=D1MAX_OUTBOX=") < 单元.index("EnvironmentFile=")
     assert "Restart=always" in 单元 and "RestartSec=" in 单元
     assert "StartLimitIntervalSec" in 段["[Unit]"]
     assert "WantedBy" in 段["[Install]"]

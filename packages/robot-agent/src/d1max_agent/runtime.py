@@ -39,12 +39,16 @@ from d1max_contract.hal import Fault, HalUnsupported, RobotHAL
 from d1max_contract.messages import Command, MapPose, Reconcile, fault_event_data
 from d1max_contract.policy import policy_for
 from d1max_contract.registration import Registration
+from d1max_contract.storage import StorageFacts
 from d1max_contract.teleop import TeleopFrame
 from d1max_contract.topics import TopicAcl
 from d1max_contract.transport import Message, Transport
 from d1max_patrol.protocol.nav_types import Pose
 
 log = logging.getLogger(__name__)
+
+#: 盘况随遥测多久带一次(毫秒)。
+STORAGE_EVERY_MS = 10_000
 
 #: 电量低于这条线,断线时按「不安全」处理(停住等待)。
 BATTERY_FLOOR_PCT = 15.0
@@ -60,7 +64,8 @@ class AgentRuntime:
                  boot_id: str | None = None, telemetry_period_ms: int = 1000,
                  status_period_ms: int = 30_000, parts: EngineParts | None = None,
                  home: Pose | None = None, runs_root: Path | None = None,
-                 monotonic: Callable[[], float] | None = None, video: Any = None) -> None:
+                 monotonic: Callable[[], float] | None = None, video: Any = None,
+                 storage_facts: Callable[[], StorageFacts | None] | None = None) -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -90,6 +95,10 @@ class AgentRuntime:
         self.video = video
         #: halt(W00c5c)当场停车。
         self.processor.halt_hook = hal.stop
+        #: 发件箱的盘况(W00c5d):随遥测每 ``STORAGE_EVERY_MS`` 带一次;满了不接巡检。
+        self._storage = storage_facts
+        self._next_storage_ms = 0
+        self.processor.admit_hook = self._admit
         #: 丢掉的遥控帧计数(不合契约的)。
         self.teleop_malformed = 0
         if video is not None:
@@ -145,6 +154,14 @@ class AgentRuntime:
         return EngineGotoTask(task_id=cmd.task_id, target=target,
                               max_speed_mps=cmd.payload.get("max_speed_mps"), parts=self.parts,
                               events=self.events, now_ms=self._now, priority=cmd.priority)
+
+    def _admit(self, cmd: Command) -> str:
+        """发件箱满了(盘到停止水位或发件箱到上限)不接巡检 —— 绝不删没传完的来腾地方。
+        事件派遣的 ``goto``、遥控不拍照、不产生文件,照接。"""
+        if cmd.kind != "patrol" or self._storage is None:
+            return ""
+        f = self._storage()
+        return "storage_full" if f is not None and f.full() else ""
 
     def _video_live(self) -> bool:
         """遥控「没画面不许动」在狗这头的那一道:本机推流器至少一路在推。站点那头还有一道。"""
@@ -378,8 +395,14 @@ class AgentRuntime:
             return
         self._next_telemetry_ms = now + self._telemetry_period
         cur = self.processor.current
+        storage = None
+        if self._storage is not None and now >= self._next_storage_ms:
+            storage = self._storage()
+            if storage is not None:
+                self._next_storage_ms = now + STORAGE_EVERY_MS
         tele = compose_telemetry(
             now_ms=now, odom=await self.hal.odometry(), battery=await self.hal.battery(),
             health=await self.hal.health(), loaded_map=self.loaded_map,
-            task_state=cur.state if cur is not None else None, online=self.online)
+            task_state=cur.state if cur is not None else None, online=self.online,
+            storage=storage)
         await self.transport.publish(self.topics.telemetry, _dumps(tele.to_wire()), qos=0)

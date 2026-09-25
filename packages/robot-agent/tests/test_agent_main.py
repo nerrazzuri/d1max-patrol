@@ -294,3 +294,50 @@ def test_视频参数_仿真用测试图_真狗拉相机RTSP(tmp_path):
     d = _args(tmp_path, "--hal", "d1max", "--camera-host", "10.1.2.3", "--video-transcode")
     assert d.camera_host == "10.1.2.3" and d.video_transcode is True
     assert _args(tmp_path).camera_host == "192.168.234.1"
+
+
+# ------------------------------------------------------------ W00c5d:发件箱
+
+def _outbox_args(tmp_path, *extra):
+    reg = tmp_path / "registration.json"
+    REG.save(reg)
+    return agent_main.parse_args([
+        "--transport", "memory://", "--hal", "sim", "--registration", str(reg),
+        "--store-dir", str(tmp_path / "store"), "--outbox", str(tmp_path / "outbox"),
+        "--map", "estate-1:7", "--home", "0,0,0", "--period", "0.01", *extra])
+
+
+def test_发件箱参数_运行记录落发件箱_接收口默认跟着broker走(tmp_path):
+    a = _outbox_args(tmp_path)
+    assert a.runs_root == tmp_path / "outbox" / "runs" and a.outbox_max_gb == 20.0
+    assert a.intake is None, "memory:// 没有接收口:只攒不传"
+    tls = ["--tls-ca", "/e/ca.crt", "--tls-cert", "/e/r.crt", "--tls-key", "/e/r.key"]
+    m = _outbox_args(tmp_path, "--transport", "mqtts://site.lan:8883", *tls)
+    assert m.intake == "https://site.lan:8444"
+    m = _outbox_args(tmp_path, "--transport", "mqtts://site.lan:8883", *tls,
+                     "--intake", "https://10.0.0.2:9444")
+    assert m.intake == "https://10.0.0.2:9444"
+    with pytest.raises(SystemExit):                         # 两个都给:runs 到底落哪?
+        _outbox_args(tmp_path, "--runs-root", str(tmp_path / "runs"))
+    with pytest.raises(SystemExit):                         # 两个都不给
+        agent_main.parse_args([
+            "--transport", "memory://", "--registration", str(tmp_path / "registration.json"),
+            "--store-dir", str(tmp_path / "s"), "--map", "estate-1:7"])
+    with pytest.raises(SystemExit):
+        _outbox_args(tmp_path, "--intake", "http://site:8444")   # 只认 https(mTLS)
+
+
+def test_发件箱装上了_盘况进遥测(tmp_path):
+    a = agent_main.build(_outbox_args(tmp_path))
+    try:
+        assert a.pump is not None and a.pump.box.runs_root == tmp_path / "outbox" / "runs"
+        a.start()
+        import time
+        deadline = time.monotonic() + 10
+        while a.pump.facts() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        f = a.runtime._storage()
+        assert f is not None and f.outbox_cap_bytes == 20 * 2**30
+    finally:
+        a.stop()
+    assert not a.pump._thread.is_alive(), "收尾要停发件箱线程"

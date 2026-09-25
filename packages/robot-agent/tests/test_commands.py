@@ -493,3 +493,17 @@ async def test_halt也中止排队中的遥控_帧不交给还在排队的遥控
     await tcp.handle(_cmd("halt", cid="h1", tid="halt-1", payload={"reason": "operator"}
                           ).to_wire(), TOPIC)
     assert tcp.pending == [] and queued.state is TaskState.ABORTED
+
+
+# ------------------------------------------------------------ W00c5d:发件箱满了不接巡检
+
+async def test_准入钩子拒了就回它给的原因_goto不受影响(cp):
+    cp.supported.add("patrol")
+    cp.admit_hook = lambda cmd: "storage_full" if cmd.kind == "patrol" else ""
+    ack = await cp.handle(_patrol("s1", _MISSION).to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason == "storage_full"
+    ack = await cp.handle(_cmd(cid="s2").to_wire(), TOPIC)
+    assert ack.result is AckResult.ACCEPTED, ack
+    cp.admit_hook = lambda cmd: ""
+    ack = await cp.handle(_patrol("s3", _MISSION).to_wire(), TOPIC)
+    assert ack.result is not AckResult.REJECTED or ack.reason != "storage_full"

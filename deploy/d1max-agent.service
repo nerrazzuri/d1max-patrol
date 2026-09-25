@@ -14,6 +14,9 @@ User=robot
 WorkingDirectory=-/opt/d1max/current
 Environment=D1MAX_RELEASE_ROOT=/opt/d1max
 Environment=D1MAX_DATA_ROOT=/var/lib/d1max
+# W00c5d(决策 8):运行记录落发件箱、边跑边传、站点确认即删。发件箱可以指到临时硬盘:
+# 在 /etc/d1max/env 里写 D1MAX_OUTBOX=/mnt/<临时盘>/outbox(下面这行是缺省,env 文件覆盖它)。
+Environment=D1MAX_OUTBOX=/var/lib/d1max/outbox
 Environment=PYTHONUNBUFFERED=1
 # 站点地址、地图、原点这些现场值从 env 文件来(W00c 装站点时填);证书包由站点
 # `d1max-site enroll` 签发,拷到 /etc/d1max/tls/(W00c1):
@@ -24,7 +27,7 @@ EnvironmentFile=-/etc/d1max/env
 # 起用时把 --hal 换成 d1max(W00d,加 --sidecar 127.0.0.1:8090 与实测过的 --mps-per-unit 等)。
 # 旁路进程同一时刻只该有一个 Python 在开车:起用前先停 d1max-patrol.service,或用
 # --legacy-http 在同一进程里托管老 HTTP 面。
-ExecStart=/opt/d1max/current/venv/bin/d1max-agent --transport ${D1MAX_SITE_MQTT} --tls-ca /etc/d1max/tls/ca.crt --tls-cert /etc/d1max/tls/robot.crt --tls-key /etc/d1max/tls/robot.key --hal sim --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent --runs-root /var/lib/d1max/runs --map ${D1MAX_MAP} --home ${D1MAX_HOME}
+ExecStart=/opt/d1max/current/venv/bin/d1max-agent --transport ${D1MAX_SITE_MQTT} --tls-ca /etc/d1max/tls/ca.crt --tls-cert /etc/d1max/tls/robot.crt --tls-key /etc/d1max/tls/robot.key --hal sim --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent --outbox ${D1MAX_OUTBOX} --map ${D1MAX_MAP} --home ${D1MAX_HOME}
 Restart=always
 RestartSec=5
 

@@ -16,6 +16,7 @@ from typing import Any
 from d1max_contract import SCHEMA
 from d1max_contract.errors import ContractError
 from d1max_contract.hal import Fault
+from d1max_contract.storage import StorageFacts
 from d1max_contract.wire import (
     as_bool,
     as_dict,
@@ -421,13 +422,17 @@ class Telemetry:
     task_state: TaskState | None
     loc_quality: float
     net: dict[str, Any] = field(default_factory=dict)
+    #: W00c5d:狗的盘况(每 10 s 带一次;没有就不发这个键,老狗也不带)。
+    storage: StorageFacts | None = None
 
     def to_wire(self) -> dict[str, Any]:
-        return _stamped({"stamp": self.stamp,
-                         "pose": self.pose.to_wire() if self.pose else None,
-                         "battery_pct": self.battery_pct,
-                         "task_state": self.task_state.value if self.task_state else None,
-                         "loc_quality": self.loc_quality, "net": dict(self.net)})
+        d = {"stamp": self.stamp, "pose": self.pose.to_wire() if self.pose else None,
+             "battery_pct": self.battery_pct,
+             "task_state": self.task_state.value if self.task_state else None,
+             "loc_quality": self.loc_quality, "net": dict(self.net)}
+        if self.storage is not None:
+            d["storage"] = self.storage.to_wire()
+        return _stamped(d)
 
     @classmethod
     def from_wire(cls, d: Any) -> Telemetry:
@@ -440,4 +445,6 @@ class Telemetry:
                    task_state=as_enum(d, "task_state", "Telemetry", TaskState) if ts is not None
                    else None,
                    loc_quality=as_float(d, "loc_quality", "Telemetry"),
-                   net=as_dict(d, "net", "Telemetry"))
+                   net=as_dict(d, "net", "Telemetry"),
+                   storage=StorageFacts.from_wire(d["storage"]) if d.get("storage") is not None
+                   else None)

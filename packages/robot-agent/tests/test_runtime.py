@@ -517,3 +517,37 @@ async def test_HAL读故障一直报错_日志只记一条(台子, monkeypatch, 
         for _ in range(5):
             await rt.step(0.1)
     assert sum("读 HAL 故障失败" in m for m in caplog.messages) == 1
+
+
+async def test_盘况每10秒随遥测带一次_满了不接巡检(tmp_path):
+    """W00c5d:发件箱的水位上站点;满了代理自己拒巡检(storage_full),不删没传完的。"""
+    from d1max_contract.storage import StorageFacts
+    broker = MemoryBroker()
+    c = 钟()
+    r = SimRobot(now_ms=c)
+    ears = 站点耳朵()
+    site = MemoryTransport(broker, "site")
+    await site.connect()
+    await site.subscribe(f"{T.prefix}/#", ears)
+    facts = {"f": StorageFacts(disk_used_ratio=0.5, outbox_bytes=10, outbox_cap_bytes=100,
+                               backlog_files=1, backlog_bytes=10, oldest_backlog_s=3)}
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=r,
+                      store_dir=tmp_path / "agent", now_ms=c, loaded_map=("m", "1"),
+                      boot_id="boot-1", home=Pose.from_xy_yaw(0.0, 0.0),
+                      monotonic=lambda: c.mono, storage_facts=lambda: facts["f"])
+    await rt.start()
+    for _ in range(250):                             # 25 s
+        await rt.step(0.1)
+        r.tick(0.1)
+        c.advance(0.1)
+    await broker.drain()
+    tele = [Telemetry.from_wire(d) for d in ears.by_topic.get("telemetry", [])]
+    with_storage = [t for t in tele if t.storage is not None]
+    assert len(tele) >= 20 and 2 <= len(with_storage) <= 3, (len(tele), len(with_storage))
+    assert with_storage[0].storage == facts["f"]
+    assert rt.processor.admit_hook(type("C", (), {"kind": "patrol"})()) == ""
+    facts["f"] = StorageFacts(disk_used_ratio=0.95, outbox_bytes=10, outbox_cap_bytes=100,
+                              backlog_files=1, backlog_bytes=10, oldest_backlog_s=3)
+    assert rt.processor.admit_hook(type("C", (), {"kind": "patrol"})()) == "storage_full"
+    assert rt.processor.admit_hook(type("C", (), {"kind": "goto"})()) == ""
+    await rt.close()

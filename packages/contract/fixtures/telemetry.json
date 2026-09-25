@@ -15,5 +15,13 @@
   },
   "schema": "1.0",
   "stamp": 1760000012000,
+  "storage": {
+    "backlog_bytes": 8388608,
+    "backlog_files": 12,
+    "disk_used_ratio": 0.42,
+    "oldest_backlog_s": 95,
+    "outbox_bytes": 52428800,
+    "outbox_cap_bytes": 21474836480
+  },
   "task_state": "running"
 }

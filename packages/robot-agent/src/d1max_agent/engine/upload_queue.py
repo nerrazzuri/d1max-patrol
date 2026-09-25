@@ -281,6 +281,19 @@ class UploadQueue:
         old = self._items[key]
         self._write(QueueItem(**{**old.to_wire(), "offset": old.size, "done": True}))
 
+    def forget(self, run: str) -> int:
+        """这一趟(``<任务>/<时刻>``)整个从队列里拿掉 —— 发件箱在站点确认后删掉了这一趟
+        (W00c5d)。立刻重写队列文件(日志结构里没有「删除」这种行)。返回拿掉几条。"""
+        prefix = run.rstrip("/") + "/"
+        gone = [k for k in self._order if k.startswith(prefix)]
+        if not gone:
+            return 0
+        for k in gone:
+            del self._items[k]
+        self._order = [k for k in self._order if not k.startswith(prefix)]
+        self._compact()
+        return len(gone)
+
     # ---- 查 ----
 
     def get(self, key: str) -> QueueItem | None:

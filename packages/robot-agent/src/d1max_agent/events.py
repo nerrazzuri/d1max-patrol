@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -20,6 +21,9 @@ from d1max_contract.messages import Event
 
 log = logging.getLogger(__name__)
 
+#: 文件行数过了这个数、而且大半是确认过的,就压实一次(W00c5d,决策 8:狗上的东西不只增不减)。
+COMPACT_MIN_LINES = 2000
+
 
 class EventBook:
     def __init__(self, path: Path, *, boot_id: str, now_ms: Callable[[], int]) -> None:
@@ -28,7 +32,11 @@ class EventBook:
         self._now = now_ms
         self._seq = 0
         self._pending: dict[int, Event] = {}
+        self._lines = 0
         self._load()
+        # 起来时压实一次:上一个 boot 的、已确认的都不要了,只留这个 boot 没确认的。
+        if self._lines > len(self._pending):
+            self._compact()
 
     def _load(self) -> None:
         if not self._path.exists():
@@ -38,6 +46,7 @@ class EventBook:
                 line = line.strip()
                 if not line:
                     continue
+                self._lines += 1
                 try:
                     rec = json.loads(line)
                     if not isinstance(rec, dict):
@@ -61,6 +70,20 @@ class EventBook:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self._lines += 1
+
+    def _compact(self) -> None:
+        """重写成「这个 boot 还没确认的事件」。先写临时文件再换名:中途断电老文件还在。"""
+        tmp = self._path.with_name(self._path.name + ".tmp")
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with tmp.open("w", encoding="utf-8") as f:
+            for s in sorted(self._pending):
+                f.write(json.dumps({"op": "event", "event": self._pending[s].to_wire()},
+                                   ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self._path)
+        self._lines = len(self._pending)
 
     def emit(self, kind: str, data: dict[str, Any]) -> Event:
         self._seq += 1
@@ -78,6 +101,8 @@ class EventBook:
             del self._pending[s]
         if gone:
             self._append({"op": "ack", "boot_id": self.boot_id, "seq": seq})
+            if self._lines >= COMPACT_MIN_LINES and self._lines > 4 * len(self._pending):
+                self._compact()
 
     def pending(self) -> list[Event]:
         return [self._pending[s] for s in sorted(self._pending)]

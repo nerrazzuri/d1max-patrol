@@ -32,6 +32,7 @@ from d1max_contract.messages import (
 )
 from d1max_contract.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_contract.registration import Registration
+from d1max_contract.storage import StorageFacts
 from d1max_contract.teleop import (
     FRAME_TTL_DEFAULT_MS,
     LEASE_TTL_DEFAULT_MS,
@@ -136,7 +137,11 @@ def generate() -> dict[str, dict[str, Any]]:
                                unacked_from_seq=6, unacked_to_seq=9).to_wire(),
         "telemetry": Telemetry(stamp=1_760_000_012_000, pose=POSE, battery_pct=87.5,
                                task_state=TaskState.RUNNING, loc_quality=1.0,
-                               net={"rssi_dbm": -55}).to_wire(),
+                               net={"rssi_dbm": -55},
+                               storage=StorageFacts(disk_used_ratio=0.42, outbox_bytes=52_428_800,
+                                                    outbox_cap_bytes=21_474_836_480,
+                                                    backlog_files=12, backlog_bytes=8_388_608,
+                                                    oldest_backlog_s=95)).to_wire(),
         "registration": Registration(site_id="penang-1", robot_id="D1MAX-C40011",
                                      credential_fingerprint="sha256:0123456789abcdef",
                                      issued_at=1_759_000_000_000,

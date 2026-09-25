@@ -20,6 +20,7 @@ from d1max_contract.messages import (
     TaskSummary,
     Telemetry,
 )
+from d1max_contract.storage import StorageFacts
 
 
 def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id: str,
@@ -66,10 +67,10 @@ def offline_status(*, boot_id: str, control_epoch: int) -> Status:
 
 def compose_telemetry(*, now_ms: int, odom: Odometry, battery: Battery, health: Health,
                       loaded_map: tuple[str, str] | None, task_state: TaskState | None,
-                      online: bool) -> Telemetry:
+                      online: bool, storage: StorageFacts | None = None) -> Telemetry:
     pose = None
     if loaded_map is not None and odom.valid:
         pose = MapPose(map_id=loaded_map[0], map_version=loaded_map[1], frame_id="map",
                        x=odom.x, y=odom.y, yaw=odom.yaw)
     return Telemetry(stamp=now_ms, pose=pose, battery_pct=battery.percent, task_state=task_state,
-                     loc_quality=health.loc_quality, net={"online": online})
+                     loc_quality=health.loc_quality, net={"online": online}, storage=storage)

@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from d1max_agent import AGENT_VERSION
 from d1max_agent.assembly import EngineParts, build_engine
@@ -73,6 +74,9 @@ def _hostport(text: str) -> tuple[str, int]:
     return host, int(port)
 
 
+#: 站点狗专用接收口的默认端口(W00c5d)。
+INTAKE_PORT = 8444
+
 #: ``--hal d1max`` 的旁路进程与单位换算默认值(W00d 决定三 A:**都待真机实测**)。
 D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 0.4, "radps_per_unit": 1.0,
                   "deadband": 0.05, "max_fraction": 0.5, "stopped_eps": 0.02}
@@ -104,7 +108,16 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件")
     p.add_argument("--registration", type=Path, required=True, help="站点签发的注册文件")
     p.add_argument("--store-dir", type=Path, required=True, help="幂等记录、事件簿、代次落盘的目录")
-    p.add_argument("--runs-root", type=Path, required=True, help="引擎归档目录(数据根下的 runs)")
+    p.add_argument("--runs-root", type=Path, default=None,
+                   help="引擎归档目录(老路子,不上传);给了 --outbox 就不要再给")
+    o = p.add_argument_group("发件箱(W00c5d,决策 8):运行记录边跑边传,站点确认即删")
+    o.add_argument("--outbox", type=Path, default=None,
+                   help="发件箱目录(运行记录落 <发件箱>/runs);可以指到临时硬盘")
+    o.add_argument("--outbox-max-gb", type=float, default=20.0,
+                   help="发件箱上限(GB),到了就不接新的巡检;默认 20")
+    o.add_argument("--intake", default=None,
+                   help="站点的狗专用接收口 https://host:port;"
+                        "mqtts 时默认 https://<broker 主机>:8444")
     p.add_argument("--map", type=_map_arg, required=True, help="已加载地图 <map_id>:<version>")
     p.add_argument("--home", type=_home_arg, default=None,
                    help="原点 x,y,yaw;不给的话预飞检查 home 那一项红,goto 一律 failed")
@@ -130,6 +143,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             p.error("mqtts:// 要带齐 --tls-ca、--tls-cert、--tls-key")
     elif any(given):
         p.error("--tls-* 只用于 mqtts://")
+    if (args.outbox is None) == (args.runs_root is None):
+        p.error("--outbox 与 --runs-root 给且只给一个(运行记录落在哪)")
+    if args.outbox is not None:
+        args.runs_root = args.outbox / "runs"
+        if args.outbox_max_gb <= 0:
+            p.error("--outbox-max-gb 要大于 0")
+        if args.intake is None and args.transport.startswith("mqtts://"):
+            host = urlsplit(args.transport).hostname
+            args.intake = f"https://{host}:{INTAKE_PORT}"
+        if args.intake is not None and not args.intake.startswith("https://"):
+            p.error("--intake 只认 https://(狗的身份是 mTLS 证书)")
+        if args.intake is not None and not all(given):
+            p.error("--intake 要带 --tls-ca、--tls-cert、--tls-key(狗的身份是证书)")
     d1max_only = [k for k in D1MAX_DEFAULTS if getattr(args, k) is not None]
     if args.invert_yaw:
         d1max_only.append("invert_yaw")
@@ -153,11 +179,14 @@ class Assembled:
     ctx: Any
     period_s: float
     _stop: threading.Event
+    pump: Any = None
 
     def start(self) -> None:
-        """在 bridge 的循环里起运行时,并开始每拍 step。legacy HTTP 一起起。"""
+        """在 bridge 的循环里起运行时,并开始每拍 step。legacy HTTP、发件箱一起起。"""
         self.bridge.call(self.runtime.start, timeout_s=30.0)
         self.bridge.spawn(lambda: self._drive())
+        if self.pump is not None:
+            self.pump.start()
         if self.server is not None:
             self.server.start(postcheck=False)
 
@@ -178,6 +207,11 @@ class Assembled:
 
     def stop(self) -> None:
         self._stop.set()
+        if self.pump is not None:
+            try:
+                self.pump.stop()
+            except Exception:
+                log.exception("发件箱停不干净")
         if self.server is not None:
             try:
                 self.server.stop()
@@ -236,21 +270,53 @@ def build(args: argparse.Namespace) -> Assembled:
         from d1max_agent.video_push import VideoPusher, lavfi_source, rtsp_source
         source = lavfi_source if args.hal == "sim" else rtsp_source(args.camera_host)
         video = VideoPusher(source=source, ffmpeg=args.ffmpeg, transcode=args.video_transcode)
+        pump = _outbox(args, registration, parts) if args.outbox is not None else None
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,
                                store_dir=args.store_dir, now_ms=wall_ms, loaded_map=args.map,
-                               parts=parts, video=video)
-        return hal, parts, runtime
+                               parts=parts, video=video,
+                               storage_facts=pump.facts if pump is not None else None)
+        return hal, parts, runtime, pump
 
     async def _in_loop():
         return _assemble()
 
-    hal, parts, runtime = bridge.call(_in_loop, timeout_s=30.0)
+    hal, parts, runtime, pump = bridge.call(_in_loop, timeout_s=30.0)
 
     server = ctx = None
     if args.legacy_http is not None:
         server, ctx = _legacy_http(args, bridge, parts, registration)
     return Assembled(bridge=bridge, runtime=runtime, parts=parts, hal=hal, broker=broker,
-                     server=server, ctx=ctx, period_s=args.period, _stop=threading.Event())
+                     server=server, ctx=ctx, period_s=args.period, _stop=threading.Event(),
+                     pump=pump)
+
+
+class _NoIntake:
+    """没有接收口(memory:// 演示):只攒不传,文件都留在发件箱里。"""
+
+    def put(self, req):
+        from d1max_agent.engine.uploader import SinkError
+        raise SinkError("没有配站点接收口")
+
+
+def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineParts) -> Any:
+    """发件箱 + 后台线程。上传走站点的狗专用口,**mTLS**:跟 MQTT 同一套证书(身份就是证书)。"""
+    import ssl
+
+    from d1max_agent.engine.http_sink import HttpSink
+    from d1max_agent.outbox import Outbox, OutboxPump
+    sink: Any = _NoIntake()
+    if args.intake is not None:
+        ctx = ssl.create_default_context(cafile=args.tls_ca)
+        ctx.load_cert_chain(args.tls_cert, args.tls_key)
+        sink = HttpSink(args.intake, ssl_context=ctx)
+    box = Outbox(args.outbox, cap_bytes=int(args.outbox_max_gb * 2**30), sink=sink,
+                 sn=registration.robot_id, now_ms=wall_ms)
+
+    def _active() -> set[Path]:
+        a = parts.engine.archive
+        return {a.path} if a is not None else set()
+    box.active = _active
+    return OutboxPump(box)
 
 
 def _legacy_http(args: argparse.Namespace, bridge: Any, parts: EngineParts,

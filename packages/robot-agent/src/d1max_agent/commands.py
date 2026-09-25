@@ -78,6 +78,8 @@ class CommandProcessor:
         self.video: Any = None
         #: ``halt`` 时当场停车(W00c5c)。运行时接到 ``hal.stop``。
         self.halt_hook: Callable[[], Any] | None = None
+        #: 任务命令的准入(W00c5d):返回非空 = 拒绝原因(发件箱满了回 ``storage_full``)。
+        self.admit_hook: Callable[[Command], str] | None = None
 
     # ------------------------------------------------------------ 代次落盘
 
@@ -173,6 +175,9 @@ class CommandProcessor:
             return self._finish(self._rej(cmd, "unsupported"))
 
         reason = self._check_payload(cmd)
+        if reason:
+            return self._finish(self._rej(cmd, reason))
+        reason = self.admit_hook(cmd) if self.admit_hook is not None else ""
         if reason:
             return self._finish(self._rej(cmd, reason))
 
