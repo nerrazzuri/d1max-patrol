@@ -142,9 +142,12 @@ class FakeApi implements SiteApi {
   FakeTeleopLink? link;
   SiteError? teleopError;
   String? lastTakeover;
+  /// 给了就等它完成再回连接（模拟连接、授权还在路上）。
+  Completer<void>? teleopGate;
   @override
   Future<TeleopLink> teleop(String robotId, {String takeoverReason = ''}) async {
     lastTakeover = takeoverReason;
+    if (teleopGate != null) await teleopGate!.future;
     if (teleopError != null) throw teleopError!;
     return link = FakeTeleopLink();
   }

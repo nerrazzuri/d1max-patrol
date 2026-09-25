@@ -264,6 +264,23 @@ void main() {
     c.close();
   });
 
+  test('本机关连接的握手还没完就再发帧、放租：不抛，也不往外发（W00c5 修复内部评审）', () async {
+    // dart:io 调过 close() 之后再 add 会抛 StateError；关握手最长要等站点几秒。以前 _closed 要等握手
+    // 完才置上，这段时间里页面销毁（dispose 里先 send 再 release 再 close）会在第一句就炸掉，放租、
+    // 关连接都跳过。
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('gina', 'pw');
+    final link = await c.teleop('A');
+    await _until(() => site.teleopWs != null);
+    final closing = link.close();
+    expect(() => link.send(0, 0), returnsNormally);
+    expect(() => link.release(), returnsNormally);
+    await closing;
+    expect(link.closed, isTrue);
+    expect(site.teleopGot, isEmpty, reason: '关了之后的帧、放租不往外发');
+    c.close();
+  });
+
   test('遥控被拒：状态码和站点给的原因原样抛出；401 作废令牌', () async {
     final c = SiteClient(site.url, testCertFingerprint());
     await c.login('gus', 'pw');

@@ -17,7 +17,7 @@ from typing import Any
 
 from d1max_contract.digest import tree_sha256
 from d1max_contract.errors import ContractError
-from d1max_contract.releases import ReleaseRef, check_release_name
+from d1max_contract.releases import AGENT_START, ReleaseRef, check_release_name
 
 MANIFEST = "release.json"
 
@@ -48,6 +48,10 @@ class ReleaseCatalog:
                 # 狗那头只收普通文件与目录;带着链接(软的、硬的)登记,打出来的包里是链接条目,
                 # 狗解开之后指纹对不上,永远装不上。
                 raise ReleaseCatalogError(f"包里有链接或特殊文件:{p.relative_to(pkg)}")
+        if not (pkg / AGENT_START).is_file():
+            # 老服务那一代的包:狗上的代理不装它(装了也切不过去)。登记时就拒,别让管理员下发了
+            # 才在狗那头失败(W00c5 修复内部评审)。
+            raise ReleaseCatalogError(f"包里没有代理的启动脚本 {AGENT_START}(老服务那一代的包)")
         got = tree_sha256(pkg, skip=MANIFEST)
         if got != raw.get("content_sha256"):
             raise ReleaseCatalogError(f"包的指纹对不上:自述 {raw.get('content_sha256')},算出 {got}")

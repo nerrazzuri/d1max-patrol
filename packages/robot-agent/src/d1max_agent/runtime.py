@@ -364,6 +364,8 @@ class AgentRuntime:
                 return "already_running"
             if not self.releases.ready(name):
                 return "not_installed"
+            if not self.releases.can_switch_to(name):
+                return "no_agent_start"           # 切过去代理起不来(老服务那一代、启动脚本坏了)
             job = self._release_switch("activate", name, cmd.task_id)
         else:
             if not self.releases.can_roll_back():

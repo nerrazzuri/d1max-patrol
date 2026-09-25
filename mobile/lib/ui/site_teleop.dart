@@ -104,7 +104,12 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   Future<void> _open() async {
     try {
       final link = await widget.api.teleop(widget.robotId, takeoverReason: widget.takeoverReason);
-      if (!mounted) {
+      if (!mounted || _ended) {
+        // 连接还在路上的时候本机已经收手了（切后台、按了停、退出这一页）：刚回来的这条不许留下，
+        // 零速、放租、关掉 —— 不然站点上的租约一直占着，自动巡检、事件派遣、别人接管都派不了
+        // （W00c5 外审阻断 2）。
+        link.send(0, 0);
+        link.release();
         await link.close();
         return;
       }
@@ -121,7 +126,9 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   }
 
   void _onMsg(Map<String, dynamic> m) {
-    if (!mounted) return;
+    // 本机收过手（按了停、切后台、站点说结束）之后，晚到的一概不理：晚到的 granted 会把定时器
+    // 点起来、把屏上翻回「你在遥控」（W00c5 外审阻断 2）。
+    if (!mounted || _ended) return;
     switch (m['kind']) {
       case 'granted':
         setState(() {

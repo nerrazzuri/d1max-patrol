@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from d1max_contract.digest import tree_sha256 as _tree_sha256
+from d1max_contract.releases import AGENT_START
 
 log = logging.getLogger(__name__)
 
@@ -128,7 +130,7 @@ class GuardAction(str, Enum):
     REPAIRED = "repaired"
     #: 装机那一次就没起来,没有上一版可退。标记清掉,让人来看。
     GAVE_UP = "gave_up"
-    #: 数够了,可上一版是老服务那一代(槽里没有代理的启动脚本),退过去代理起不来:
+    #: 数够了,可上一版退过去代理起不来(老服务那一代、启动脚本坏了的,见 ``can_switch``):
     #: 留在新版,标记清掉,留条子,让人来看(W00c5e 内部评审)。
     NO_FALLBACK = "no_fallback"
     #: 盘上一版都没有。这台机器没法起,得重装。
@@ -587,6 +589,8 @@ def stage(layout: Layout, package: Path | str, *, now_ms: int) -> ReleaseManifes
     if dest.is_dir():
         # 已经落过了。这里不去比对盘上那份的哈希:那是 selfcheck 的活,
         # 而且落槽是个热路径 —— 装机脚本每跑一次就重算一遍整棵树不划算。
+        # 执行位照样补:以前从 U 盘落的槽可能是 0644,重跑装机脚本得能救回来。
+        ensure_agent_start_executable(dest)
         return manifest
     layout.releases.mkdir(parents=True, exist_ok=True)
     staging = layout.releases / (manifest.name + ".staging")
@@ -594,11 +598,45 @@ def stage(layout: Layout, package: Path | str, *, now_ms: int) -> ReleaseManifes
         shutil.rmtree(staging)
     try:
         shutil.copytree(package, staging)
+        ensure_agent_start_executable(staging)
         os.replace(staging, dest)
     except OSError:
         shutil.rmtree(staging, ignore_errors=True)
         raise
     return manifest
+
+
+def ensure_agent_start_executable(slot: Path) -> None:
+    """落槽时给代理的启动脚本补上执行位(W00c5 外审阻断 1 的配套)。
+
+    现场是 U 盘把包从笔记本带到狗上的(装机清单):FAT/exFAT 不存执行位,Ubuntu 自动挂载还带
+    ``showexec``,拷一趟就是 0644。代理单元的 ``ExecStart`` 就是这个脚本,``can_switch`` 也拒
+    没有执行位的 —— 不补的话,照清单装机就一定切不过去。执行位不进 ``tree_sha256``,补上不动
+    指纹。**只补普通文件**:链接不跟、不补,``can_switch`` 照拒。补不上(属主不对之类)不拦落槽,
+    切的时候那道会说清楚。
+
+    **查和改对的是同一个打开的文件**(``O_NOFOLLOW`` 打开、``fstat``、``fchmod``):先 ``lstat``
+    再按路径 ``chmod`` 的话,两步之间换成指向槽外的链接,``chmod`` 就跟过去改了槽外的文件
+    (W00c5 修复内部评审)。"""
+    path = slot / AGENT_START
+    if not hasattr(os, "fchmod"):
+        return                                   # 没有执行位这回事的系统(Windows 开发机)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except (FileNotFoundError, NotADirectoryError):
+        return                                   # 老服务那一代:没有这个脚本
+    except OSError as exc:                       # 是链接(ELOOP)、读不了:不补,can_switch 照拒
+        log.warning("代理启动脚本 %s 不补执行位: %s", path, exc)
+        return
+    try:
+        st = os.fstat(fd)
+        if stat.S_ISREG(st.st_mode) and (st.st_mode & 0o111) != 0o111:
+            os.fchmod(fd, stat.S_IMODE(st.st_mode) | 0o111)
+    except OSError as exc:
+        log.warning("代理启动脚本 %s 的执行位补不上: %s", path, exc)
+    finally:
+        os.close(fd)
 
 
 def point_link(link: Path, target: Path) -> None:
@@ -656,6 +694,8 @@ def activate(layout: Layout, name: str, *, now_ms: int,
     src = current_name(layout)
     if src == name:
         raise ReleaseError(f"{name} 已经是在跑的那一版了")
+    if not can_switch(layout, src, name):
+        raise ReleaseError(_unbootable(layout, name, "切"))
     pending = Pending(to=name, src=src, attempts=0, at_ms=now_ms,
                       auto=auto, sn=sn)
     write_pending(layout, pending)
@@ -669,16 +709,55 @@ def commit(layout: Layout) -> tuple[str, ...]:
     return prune(layout)
 
 
-#: 代理的启动脚本(W00c5d:代理单元只指着这一版带的它)。
-AGENT_START = "deploy/d1max-agent-start"
 
 
-def can_fall_back(layout: Layout, src: str, to: str) -> bool:
-    """从 ``to`` 退回 ``src`` 起不起得来:``to`` 带代理的启动脚本而 ``src`` 不带,``src`` 就是
-    老服务那一代 —— 代理单元指着的启动脚本在那一版里不存在,退过去就再也没有服务(老服务的单元
-    也已经被装机脚本删了)。两版都不带(老服务那一代之间)照旧能退。"""
-    return (not (layout.releases / to / AGENT_START).is_file()
-            or (layout.releases / src / AGENT_START).is_file())
+def is_agent_generation(layout: Layout, name: str) -> bool:
+    """``name`` 是不是代理那一代:槽里有代理的启动脚本(哪怕是坏的)。老服务那一代的槽里没有它。"""
+    return bool(name) and os.path.lexists(layout.releases / name / AGENT_START)
+
+
+def agent_start_ok(layout: Layout, name: str) -> bool:
+    """``name`` 的代理启动脚本 systemd 起得来:是普通文件(不是链接)、三个执行位都在(跟落槽时
+    补的一样;只看「有没有哪个执行位」的话 0o010 也算过,服务账号其实执行不了)。代理单元的
+    ``ExecStart`` 就是它,没有执行位是 203/EXEC;链接不认 —— 站点打包、狗上解包都不收链接,
+    槽里出现链接只可能是落槽之后被人换过。"""
+    try:
+        st = os.lstat(layout.releases / name / AGENT_START)
+    except (OSError, ValueError):
+        return False
+    return stat.S_ISREG(st.st_mode) and (st.st_mode & 0o111) == 0o111
+
+
+def can_switch(layout: Layout, frm: str, to: str) -> bool:
+    """链从 ``frm`` 换到 ``to`` 之后代理起不起得来。**所有换链的路都过这一道**(W00c5 外审阻断 1:
+    以前只有「上一版」和退回在查,点名切 —— 站点的切版本、命令行 ``release activate`` —— 照样
+    切到老服务那一代):``activate``、``rollback``、开机守卫退回、站点的「上一版」。
+
+    ``to`` 的启动脚本起得来 → 能换。``to`` 是代理那一代但启动脚本坏了 → 不换。``to`` 是老服务
+    那一代 → 只有 ``frm`` 也是才换(``frm`` 不知道是哪一版的,见 ``_frm_is_agent``):代理单元
+    指着 ``current`` 里的启动脚本,换到没有它的版本 systemd 就起不来,而老服务的单元已经被装机
+    脚本删了 —— 狗就再也没有服务。"""
+    if agent_start_ok(layout, to):
+        return True
+    return not is_agent_generation(layout, to) and not _frm_is_agent(layout, frm)
+
+
+def _frm_is_agent(layout: Layout, frm: str) -> bool:
+    """换链之前那一版是不是代理那一代。**不知道就往保守的方向判**(W00c5 修复内部评审):没有链、
+    链指着一个已经没了的槽时,盘上有代理那一代的槽就算 —— 那是装了代理单元的机器,换到老服务那一代
+    一样起不来。盘上一个代理那一代都没有(老服务那一代的机器、测试夹具)才不算。"""
+    if frm and (layout.releases / frm).is_dir():
+        return is_agent_generation(layout, frm)
+    return any(is_agent_generation(layout, n) for n in installed(layout))
+
+
+def _unbootable(layout: Layout, name: str, verb: str) -> str:
+    """``can_switch`` 不让换时给人看的话。"""
+    if is_agent_generation(layout, name):
+        return (f"{name} 的代理启动脚本({AGENT_START})不是带执行位的普通文件,"
+                f"{verb}过去代理起不来 —— 不{verb}")
+    return (f"{name} 里没有代理的启动脚本(老服务那一代),{verb}过去代理起不来,"
+            f"老服务也已经退役 —— 不{verb}")
 
 
 def rollback(layout: Layout, *, now_ms: int) -> str:
@@ -692,9 +771,8 @@ def rollback(layout: Layout, *, now_ms: int) -> str:
         raise ReleaseError("没有在途的升级 —— 没有该退回哪儿这回事")
     if not pending.src:
         raise ReleaseError("装机那一次没有上一版可退 —— 这台机器要人来看")
-    if not can_fall_back(layout, pending.src, pending.to):
-        raise ReleaseError(f"上一版 {pending.src} 里没有代理的启动脚本(老服务那一代),"
-                           "退过去代理起不来 —— 不退")
+    if not can_switch(layout, pending.to, pending.src):
+        raise ReleaseError("上一版 " + _unbootable(layout, pending.src, "退"))
     _point_current(layout, pending.src)
     clear_pending(layout)
     return pending.src
@@ -801,7 +879,11 @@ def _boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
         names = installed(layout)
         if not names:
             return GuardAction.BROKEN
-        _point_current(layout, names[-1])
+        # 修到**起得来的**最新一版(W00c5 修复内部评审):按名字排最后的那个可能是老服务那一代,
+        # 或者启动脚本坏了 —— 修过去下次开机守卫说 OK,代理却一直起不来。一版起得来的都没有
+        # (老服务那一代的机器、测试夹具),才按名字取最新的。
+        good = [n for n in names if agent_start_ok(layout, n)]
+        _point_current(layout, (good or names)[-1])
         return GuardAction.REPAIRED
 
     if pending.attempts >= MAX_BOOT_ATTEMPTS:
@@ -811,9 +893,10 @@ def _boot_guard(layout: Layout, *, now_ms: int) -> GuardAction:
             # 清掉标记,让人来看:这台机器要重装,不是要回滚。
             clear_pending(layout)
             return GuardAction.GAVE_UP
-        if not can_fall_back(layout, pending.src, pending.to):
-            # 老服务那一代退不得(见 can_fall_back)。留在新版:网络、证书的事好了,代理自己就连上了;
-            # 新版真起不来,也比退到一个一定起不来的版本强。条子让站点知道这件事。
+        if not can_switch(layout, pending.to, pending.src):
+            # 退过去起不来的不退(见 can_switch:老服务那一代、启动脚本坏了的)。留在新版:
+            # 网络、证书的事好了,代理自己就连上了;新版真起不来,也比退到一个一定起不来的版本强。
+            # 条子让站点知道这件事。
             write_guard_note(layout, {"from": pending.to, "to": pending.to,
                                       "attempts": pending.attempts, "at_ms": now_ms,
                                       "no_fallback": True})

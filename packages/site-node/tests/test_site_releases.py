@@ -20,6 +20,9 @@ def 做包(tmp, name=NAME, *, sha=None):
     d = tmp / "pkgs" / name
     (d / "src").mkdir(parents=True, exist_ok=True)
     (d / "src" / "x.py").write_text("print('hi')\n")
+    (d / "deploy").mkdir(exist_ok=True)
+    (d / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
+    (d / "deploy" / "d1max-agent-start").chmod(0o755)
     (d / "release.json").write_text(json.dumps({
         "name": name, "version": "0.9", "requires_mission_schema": 1,
         "content_sha256": sha or tree_sha256(d, skip="release.json")}))
@@ -76,3 +79,14 @@ def test_指纹不对_名字不对_不是发布包_都不登记(cat, tmp_path):
     for bad in ("../x", "2026-09-25-bbbbbb"):
         with pytest.raises(ReleaseCatalogError):
             cat.file_path(bad)
+
+
+def test_老服务那一代的包不登记_狗上的代理装了也切不过去(cat, tmp_path):
+    """W00c5 修复内部评审:站点登记时就拒,别让管理员下发了才在狗那头失败。"""
+    pkg = 做包(tmp_path)
+    (pkg / "deploy" / "d1max-agent-start").unlink()
+    (pkg / "release.json").write_text(json.dumps({
+        "name": pkg.name, "version": "1", "content_sha256": tree_sha256(pkg, skip="release.json")}))
+    with pytest.raises(ReleaseCatalogError, match="启动脚本"):
+        cat.add(pkg)
+    assert cat.list() == []

@@ -20,6 +20,9 @@ class 假发布:
     def ready(self, name):
         return name in self.done
 
+    def can_switch_to(self, name):
+        return True
+
     def install(self, ref):
         if self.fail:
             raise RuntimeError(self.fail)

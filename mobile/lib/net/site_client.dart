@@ -207,6 +207,10 @@ class WsTeleopLink implements TeleopLink {
   bool _closed = false;
   bool _endedSeen = false;
 
+  /// 本机已经开始关（``close()`` 调过了、握手还没完）。dart:io 调过 close 之后再 add 会抛 StateError，
+  /// 而关握手最长要等站点几秒 —— 这段时间里的 send / release 一律不发（W00c5 修复内部评审）。
+  bool _closing = false;
+
   /// 帧的序号与发出时刻（本机单调钟，毫秒）：站点按它丢掉乱序、积压的帧（W00c5c 内部评审）。
   int _seq = 0;
   final Stopwatch _clock = Stopwatch()..start();
@@ -227,7 +231,7 @@ class WsTeleopLink implements TeleopLink {
 
   @override
   void send(double vx, double wz) {
-    if (_closed) return;
+    if (_closed || _closing) return;
     _seq++;
     _ws.add(jsonEncode(<String, dynamic>{
       'seq': _seq,
@@ -239,12 +243,13 @@ class WsTeleopLink implements TeleopLink {
 
   @override
   void release() {
-    if (_closed) return;
+    if (_closed || _closing) return;
     _ws.add(jsonEncode(<String, dynamic>{'kind': 'release'}));
   }
 
   @override
   Future<void> close() async {
+    _closing = true;
     await _ws.close(1000, 'bye');
     _done();
   }

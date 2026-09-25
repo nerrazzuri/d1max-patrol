@@ -73,6 +73,7 @@ exit 0
     pkg = root / "pkg" / PKG_NAME
     (pkg / "deploy").mkdir(parents=True)
     shutil.copy2(DEPLOY / "d1max-agent.service", pkg / "deploy")
+    shutil.copy2(DEPLOY / "d1max-agent-start", pkg / "deploy")
     (pkg / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     return script
 
@@ -178,3 +179,19 @@ def test_证书读不到_代理先不起(tmp_path):
     assert got.returncode == 0, got.stdout + got.stderr
     assert "代理先不起" in got.stderr and "robot.key" in got.stderr
     assert "systemctl start d1max-agent.service" not in _调用(tmp_path)
+
+
+@pytest.mark.parametrize("坏法", ["没有", "链接"])
+def test_包里没有代理启动脚本_盘上一个字节都不动就停(tmp_path, 坏法):
+    """W00c5 外审阻断 1 的配套:老服务那一代的包 7/7 必被 ``release activate`` 拒,而那时候 5/7
+    已经把老服务清掉了 —— 要在动盘之前就停。"""
+    script = _准备(tmp_path)
+    start = tmp_path / "pkg" / PKG_NAME / "deploy" / "d1max-agent-start"
+    start.unlink()
+    if 坏法 == "链接":
+        start.symlink_to(DEPLOY / "d1max-agent-start")
+    got = _跑(tmp_path, script)
+    assert got.returncode == 2, got.stdout + got.stderr
+    assert "启动脚本" in got.stderr
+    assert not (tmp_path / "opt/d1max").exists(), "1/7 还没开始"
+    assert not (tmp_path / "calls").exists(), "systemctl、chown、python 一个都没跑"

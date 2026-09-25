@@ -131,6 +131,17 @@ if [[ ! "$REL_NAME" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{6,12}$ ]]; then
   exit 2
 fi
 
+# **包里的代理启动脚本也当场核一遍**(W00c5 外审阻断 1)。代理单元的 ExecStart 就是它;没有它的包
+# (老服务那一代)7/7 的 release activate 必拒 —— 而那时候 5/7 已经把老服务清掉了,狗上什么服务都
+# 没有。跟上面几条同一个理由:失败要早,盘上一个字节都还没动。执行位不在这儿查:U 盘(FAT/exFAT)
+# 拷一趟就没了,3/7 落槽时会补上。
+if [[ -L "$PKG/deploy/d1max-agent-start" || ! -f "$PKG/deploy/d1max-agent-start" ]]; then
+  echo "错误: 包里没有代理的启动脚本 deploy/d1max-agent-start(或者它是个链接): $PKG" >&2
+  echo "      这个装机脚本装的是代理,代理单元直接执行包里的这个脚本;老服务那一代的包" >&2
+  echo "      装不了。在笔记本上用现在的 master 重新 release pack 一个包。" >&2
+  exit 2
+fi
+
 if ! id -u "$RUN_USER" >/dev/null 2>&1; then
   echo "错误: 这台机器上没有账号 $RUN_USER,装不下去。" >&2
   echo "      systemd 单元里的 User= 也是写死 robot 的。客户那边账号不叫 robot" >&2

@@ -379,3 +379,26 @@ def test_切版本不碰单元_说清要重启代理(tmp_path, capsys):
     assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
     out = capsys.readouterr().out
     assert "单元文件" not in out and "d1max-agent" in out
+
+
+def test_命令行点名切回老服务那一代的槽_退非零链不动(tmp_path, capsys):
+    """W00c5 外审阻断 1:命令行 ``release activate`` 也走同一道判据。"""
+    root = tmp_path / "opt"
+    layout = Layout(root=root)
+    layout.releases.mkdir(parents=True)
+    old, new = "2026-09-06-a3f9c1", "2026-09-26-77b2de"
+    stage(layout, _pkg(tmp_path / "p1", old), now_ms=NOW)
+    pkg = tmp_path / "p2" / new
+    (pkg / "deploy").mkdir(parents=True)
+    (pkg / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n", encoding="utf-8")
+    (pkg / "deploy" / "d1max-agent-start").chmod(0o755)
+    (pkg / MANIFEST_NAME).write_text(json.dumps({
+        "name": new, "version": "0.3.0", "content_sha256": tree_sha256(pkg),
+        "requires_mission_schema": 1, "built_at": "2026-09-26T03:11:00Z"}), encoding="utf-8")
+    stage(layout, pkg, now_ms=NOW)
+    activate(layout, new, now_ms=NOW)
+    commit(layout)
+    assert main(["release", "activate", old, "--root", str(root)]) != 0
+    err = capsys.readouterr().err
+    assert "切不了" in err and "启动脚本" in err
+    assert current_name(layout) == new and read_pending(layout) is None

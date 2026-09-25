@@ -18,12 +18,18 @@ from d1max_contract.releases import ReleaseRef
 OLD, NEW = "2026-09-20-aaaaaa", "2026-09-25-bbbbbb"
 
 
-def _包(tmp: Path, name: str, *, extra: dict[str, bytes] | None = None) -> Path:
+def _包(tmp: Path, name: str, *, extra: dict[str, bytes] | None = None,
+       代理: bool = True, mode: int = 0o755) -> Path:
+    """发布包。默认是代理那一代:带 ``deploy/d1max-agent-start``,照真的那样有执行位(git 里是
+    100755);``代理=False`` 是老服务那一代,``mode`` 给坏的执行位用。"""
     d = tmp / "src" / name
     (d / "src").mkdir(parents=True, exist_ok=True)
     (d / "src" / "x.py").write_text(f"VERSION = {name!r}\n")
     (d / "deploy").mkdir(exist_ok=True)
     (d / "deploy" / "d1max-agent.service").write_text("[Unit]\n")
+    if 代理:
+        (d / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
+        (d / "deploy" / "d1max-agent-start").chmod(mode)
     for k, v in (extra or {}).items():
         (d / k).write_bytes(v)
     (d / "release.json").write_text(json.dumps({
@@ -306,19 +312,80 @@ exit 0
                         for ln in pips)
 
 
+def _老槽装好(layout) -> None:
+    """夹具里在跑的 OLD 改成老服务那一代(槽里没有代理的启动脚本),并且装好了(有哨兵)。"""
+    (layout.release_dir(OLD) / rel.AGENT_START).unlink()
+    (layout.release_dir(OLD) / "venv").mkdir(parents=True, exist_ok=True)
+    (layout.release_dir(OLD) / "venv" / SENTINEL).write_text("ok")
+
+
 def test_上一版不算老服务那一代(ops, tmp_path):
     """老服务那一代的槽里没有代理的启动脚本,退过去代理起不来(W00c5e 内部评审阻断)。"""
     o, served, restarts, built, layout = ops
-    (layout.release_dir(OLD) / "venv").mkdir(parents=True, exist_ok=True)
-    (layout.release_dir(OLD) / "venv" / SENTINEL).write_text("ok")
-    pkg = _包(tmp_path, NEW)
-    (pkg / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
-    raw = json.loads((pkg / "release.json").read_text())
-    raw["content_sha256"] = rel.tree_sha256(pkg)
-    (pkg / "release.json").write_text(json.dumps(raw))
-    o.install(_ref(served, NEW, _tar(pkg)))
+    _老槽装好(layout)
+    o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
     o.activate(NEW)
     assert o.commit_if_pending() == NEW
     assert o.previous() is None and not o.can_roll_back()
     with pytest.raises(ReleaseOpError):
         o.rollback()
+
+
+def test_新版在跑_点名切回老服务那一代的槽_拒_不切不重启(ops, tmp_path):
+    """W00c5 外审阻断 1:站点管理员能点名切任何装好了的版本。老槽有 ``.deps-ok``、没有代理的
+    启动脚本,``ready()`` 照样过 —— 以前就切过去、重启,代理单元找不到启动脚本,狗没有服务。"""
+    o, served, restarts, built, layout = ops
+    _老槽装好(layout)
+    o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
+    o.activate(NEW)
+    assert o.commit_if_pending() == NEW and restarts == [1]
+    assert o.ready(OLD), "前提:老槽是「装好了」的"
+    assert not o.can_switch_to(OLD)
+    with pytest.raises(ReleaseOpError, match="启动脚本"):
+        o.activate(OLD)
+    assert o.current() == NEW and rel.read_pending(layout) is None
+    assert restarts == [1], "拒了就不重启"
+
+
+def test_启动脚本经下载解包落槽_执行位还在_能切(ops, tmp_path):
+    """执行位一路要保住(站点打包、狗上解包、落槽):丢了的话每一版都会被上面那道拒掉。"""
+    o, served, restarts, built, layout = ops
+    o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
+    assert o.can_switch_to(NEW)
+    o.activate(NEW)
+    assert o.current() == NEW and restarts == [1]
+
+
+def test_槽里的启动脚本没有执行位_拒(ops, tmp_path):
+    """包里是 0644 的,落槽补上(执行位不进指纹);落槽之后被改掉的,切的时候拒。"""
+    o, served, restarts, built, layout = ops
+    o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW, mode=0o644))))
+    assert o.ready(NEW) and o.can_switch_to(NEW), "落槽补上了执行位"
+    (layout.release_dir(NEW) / "deploy" / "d1max-agent-start").chmod(0o644)
+    assert not o.can_switch_to(NEW)
+    with pytest.raises(ReleaseOpError, match="执行位"):
+        o.activate(NEW)
+    assert o.current() == OLD and rel.read_pending(layout) is None and restarts == []
+
+
+def test_老服务那一代的包_不装(ops, tmp_path):
+    """W00c5 修复内部评审:没有代理启动脚本的包落了槽也切不过去,白下、白建 venv,还占槽位,开机守卫
+    修链时还可能挑中它。解开之后、落槽之前就拒。"""
+    o, served, restarts, built, layout = ops
+    with pytest.raises(ReleaseOpError, match="启动脚本"):
+        o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW, 代理=False))))
+    assert not layout.release_dir(NEW).exists() and built == [] and not o.ready(NEW)
+
+
+def test_装好了的再装一次_不重下_执行位照样补(ops, tmp_path):
+    """以前落下的 0644 槽,站点再点一次「装」就能救回来,不用上狗重跑装机脚本。"""
+    o, served, restarts, built, layout = ops
+    ref = _ref(served, NEW, _tar(_包(tmp_path, NEW)))
+    o.install(ref)
+    start = layout.release_dir(NEW) / rel.AGENT_START
+    start.chmod(0o644)
+    assert not o.can_switch_to(NEW)
+    served[NEW] = b"not downloaded again"
+    o.install(ref)
+    assert start.stat().st_mode & 0o111 == 0o111 and o.can_switch_to(NEW)
+    assert built == [(NEW, NEW)], "装好了的不重建"

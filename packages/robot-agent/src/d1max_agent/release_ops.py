@@ -128,11 +128,16 @@ class ReleaseOps:
 
     def previous(self) -> str | None:
         """「上一版」:比在跑的那版旧的、装好了的、退过去代理起得来的最新一版。没有回 None。
-        老服务那一代的槽(没有代理的启动脚本)不算(W00c5e 内部评审)。"""
+        老服务那一代的槽、启动脚本坏了的槽不算(W00c5e 内部评审;判据见 ``rel.can_switch``)。"""
         cur = self.current()
         older = [n for n in rel.installed(self.layout) if n < cur and self.ready(n)
-                 and rel.can_fall_back(self.layout, n, cur)]
+                 and self.can_switch_to(n)]
         return older[-1] if older else None
+
+    def can_switch_to(self, name: str) -> bool:
+        """从在跑的这版切到 ``name``,代理起不起得来(W00c5 外审阻断 1)。``activate`` 自己也查
+        (``rel.activate``),这里给运行时在收下命令之前先拒。"""
+        return rel.can_switch(self.layout, self.current(), name)
 
     def can_roll_back(self) -> bool:
         """有在途的那次升级,或者盘上有上一版。"""
@@ -154,6 +159,9 @@ class ReleaseOps:
 
     def install(self, ref: ReleaseRef) -> None:
         if self.ready(ref.name):
+            # 装好了就不重下;启动脚本的执行位照样补一遍 —— 以前落下的 0644 槽,站点再点一次「装」
+            # 就能救回来,不用上狗重跑装机脚本(W00c5 修复内部评审)。
+            rel.ensure_agent_start_executable(self.layout.release_dir(ref.name))
             return
         self.work.mkdir(parents=True, exist_ok=True)
         tar = self.work / f"{ref.name}.tar.gz"
@@ -179,6 +187,11 @@ class ReleaseOps:
             pkg = top / ref.name
             if not pkg.is_dir():
                 raise ReleaseOpError(f"包里没有 {ref.name}/ 这一层")
+            if not (pkg / rel.AGENT_START).is_file():
+                # 老服务那一代的包:落了槽也切不过去(can_switch 拒),白下、白建 venv,还占一个槽位,
+                # 开机守卫修链时还可能挑中它(W00c5 修复内部评审)。站点登记时也拒。
+                raise ReleaseOpError(f"包里没有代理的启动脚本 {rel.AGENT_START}"
+                                     "(老服务那一代的包),不装")
             try:
                 rel.stage(self.layout, pkg, now_ms=self._now())   # 先核包内指纹,不对一个字节都不落
             except rel.ReleaseError as exc:

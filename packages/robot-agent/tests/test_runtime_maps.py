@@ -250,6 +250,9 @@ class 假发布:
     def ready(self, name):
         return name in self.installed
 
+    def can_switch_to(self, name):
+        return True
+
     def install(self, ref):
         self.calls.append(("install", ref.name))
         self.installed.add(ref.name)
@@ -550,6 +553,46 @@ async def test_切版本_录包时不切_电量读不到不切_在跑的不切_�
     await broker.drain()
     assert ears.by["cmd/ack"][-1]["reason"] == "nothing_to_roll_back"
     assert rel.calls == []
+    await rt.close()
+
+
+async def test_站点点名切回老服务那一代的槽_回执拒收_不切不重启(tmp_path):
+    """W00c5 外审阻断 1 的命令这一层:用真的 ``ReleaseOps``(不是假发布),新版在跑,盘上留着一个
+    装好了、没有代理启动脚本的老槽;站点点名切它 → 当场拒收(``no_agent_start``),链不动、不重启、
+    收下之后那段「什么都不接」也不进。"""
+    from d1max_agent.engine import release as relmod
+    from d1max_agent.release_ops import SENTINEL, ReleaseOps
+    old, new = "2026-09-20-aaaaaa", "2026-09-25-bbbbbb"
+    layout = relmod.Layout(root=tmp_path / "opt")
+    for name, agent in ((old, False), (new, True)):
+        pkg = tmp_path / "pkgs" / name
+        (pkg / "src").mkdir(parents=True)
+        (pkg / "src" / "x.py").write_text("x = 1\n")
+        if agent:
+            (pkg / "deploy").mkdir()
+            (pkg / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
+            (pkg / "deploy" / "d1max-agent-start").chmod(0o755)
+        (pkg / "release.json").write_text(json.dumps({
+            "name": name, "version": "0.9", "content_sha256": relmod.tree_sha256(pkg),
+            "requires_mission_schema": 1, "built_at": "2026-09-25T00:00:00Z"}))
+        relmod.stage(layout, pkg, now_ms=1)
+        (layout.release_dir(name) / "venv").mkdir()
+        (layout.release_dir(name) / "venv" / SENTINEL).write_text("ok")
+    relmod._point_current(layout, new)
+    restarts = []
+    ops = ReleaseOps(layout, fetch=lambda n: iter(()), build=lambda p, s: None,
+                     work=tmp_path / "work", now_ms=lambda: 5,
+                     restart=lambda: restarts.append(1), disk_free=lambda p: 10 ** 12)
+    broker, c, ears, _fake, dog, rt = await _发布台(tmp_path / "rt")
+    rt.releases = ops
+    await rt.start()
+    await rt._on_cmd(_cmd("release_activate", {"name": old}, "x1", c))
+    await broker.drain()
+    ack = ears.by["cmd/ack"][-1]
+    assert ack["result"] != "accepted" and ack["reason"] == "no_agent_start", ack
+    assert not rt._restarting
+    await _跑(rt, broker, n=3)
+    assert ops.current() == new and relmod.read_pending(layout) is None and restarts == []
     await rt.close()
 
 

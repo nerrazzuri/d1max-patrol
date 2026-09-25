@@ -673,8 +673,8 @@ def _cmd_boot_guard(layout: Layout, now_ms: int) -> int:
             f"连着 {MAX_BOOT_ATTEMPTS} 次开机都没坐实,已退回上一版。",
         GuardAction.REPAIRED: "链断了,已经按在途标记(或盘上最新的一版)修好。",
         GuardAction.GAVE_UP: "装机那一次就没起来,没有上一版可退 —— 请人来看。",
-        GuardAction.NO_FALLBACK: "新版一直没坐实,可上一版是老服务那一代、退过去代理起不来 —— "
-                                 "留在新版,请人来看(网络、证书、站点地址)。",
+        GuardAction.NO_FALLBACK: "新版一直没坐实,可上一版退过去代理起不来(老服务那一代、"
+                                 "或者启动脚本坏了)—— 留在新版,请人来看(网络、证书、站点地址)。",
         GuardAction.BROKEN: "盘上一版都没有 —— 这台机器要重装。",
     }
     文本 = (f"[守卫] {话.get(action, action.value)} 现在指着: "

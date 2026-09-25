@@ -1,5 +1,7 @@
 // 站点模式的遥控页（W00c5c）：按住发帧、松手零速、限速按站点给的、没画面杆变灰、「停」走 halt、
 // 结束原因说人话、退出放租。
+import 'dart:async';
+
 import 'package:d1max_patrol/net/site_client.dart' show SiteError;
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_teleop.dart';
@@ -184,5 +186,86 @@ void main() {
       expect(find.byKey(const Key('btn-teleop')), has ? findsOneWidget : findsNothing, reason: role);
       await t.pumpWidget(Container());
     }
+  });
+
+  testWidgets('连接还没回来就切后台：回来的那条连接当场零速、放租、关掉，不留租约（W00c5 外审阻断 2）',
+      (t) async {
+    // 以前 _open() 等到连接回来就照常存下、订阅 —— 手机上写着遥控结束了，站点上的租约却一直占着，
+    // 自动巡检、事件派遣、别人接管都派不了。
+    final api = FakeApi('guard')..teleopGate = Completer<void>();
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    expect(api.link, isNull, reason: '前提：连接还在路上');
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await t.pump();
+    api.teleopGate!.complete();
+    await t.pump();
+    await t.pump();
+    final link = api.link!;
+    expect(link.released, isTrue, reason: '回来的连接要放租');
+    expect(link.isClosed, isTrue, reason: '回来的连接要关掉');
+    expect(link.sent, <List<double>>[<double>[0, 0]], reason: '只发一帧零速');
+    link.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5,
+      'max_wz': 0.75});
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 500));
+    expect(link.sent.length, 1, reason: '晚到的 granted 不许把定时器点起来');
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await t.pump();
+    expect(find.textContaining('切到后台'), findsOneWidget);
+    expect(_stickEnabled(t, 0), isFalse);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('连接还没回来就按了「停」：halt 照发，回来的连接一样放租关掉', (t) async {
+    final api = FakeApi('guard')..teleopGate = Completer<void>();
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    await t.tap(find.byKey(SiteTeleopPage.stopKey));
+    await t.pump();
+    expect(api.calls, contains('halt A'));
+    api.teleopGate!.complete();
+    await t.pump();
+    await t.pump();
+    expect(api.link!.released, isTrue);
+    expect(api.link!.isClosed, isTrue);
+    expect(find.text('你按了停车'), findsOneWidget);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('连上了、还没授权就按了「停」：晚到的 granted 不许把页面翻回「你在遥控」', (t) async {
+    final api = FakeApi('guard');
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    await t.tap(find.byKey(SiteTeleopPage.stopKey));
+    await t.pump();
+    expect(api.link!.released, isTrue);
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5,
+      'max_wz': 0.75});
+    await t.pump();
+    await t.pump();
+    expect(find.text('你按了停车'), findsOneWidget);
+    expect(find.textContaining('你在遥控'), findsNothing);
+    final n = api.link!.sent.length;
+    await t.pump(const Duration(milliseconds: 500));
+    expect(api.link!.sent.length, n, reason: '定时器不许起来');
+    expect(_stickEnabled(t, 0), isFalse);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('连接还没回来就退出这一页：回来的那条连接放租、关掉（W00c5 修复内部评审）', (t) async {
+    // 最常见的交错：「正在拿遥控……」的时候按了返回。页面已经销毁，回来的连接不许留着租约。
+    final api = FakeApi('guard')..teleopGate = Completer<void>();
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    await t.pumpWidget(Container());
+    api.teleopGate!.complete();
+    await t.pump();
+    await t.pump();
+    expect(api.link!.released, isTrue);
+    expect(api.link!.isClosed, isTrue);
+    expect(api.link!.sent, <List<double>>[<double>[0, 0]]);
   });
 }
