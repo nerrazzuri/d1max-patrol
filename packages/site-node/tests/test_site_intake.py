@@ -139,7 +139,8 @@ def test_没有客户端证书连不上(站点, ca):
     req = urllib.request.Request(站点.intake.url + "/api/intake/put", data=b"x", method="POST")
     with pytest.raises((urllib.error.URLError, ssl.SSLError, ConnectionError, OSError)) as e:
         urllib.request.urlopen(req, context=ctx, timeout=5).read()
-    assert not isinstance(e.value, urllib.error.HTTPError), "要在 TLS 握手那一步就断,不是回个 HTTP 错"
+    assert not isinstance(e.value, urllib.error.HTTPError), \
+        "要在 TLS 握手那一步就断,不是回个 HTTP 错"
 
 
 def test_不收狗产生不了的文件_路径不合规的不收(站点):
