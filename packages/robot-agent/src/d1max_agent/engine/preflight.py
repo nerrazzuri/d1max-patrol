@@ -22,6 +22,7 @@ from d1max_agent.engine.homing import (
     HomePoint,
     ReturnParams,
     estimate_cost_pct,
+    path_kind,
     route_length_m,
 )
 from d1max_agent.engine.mission import Mission
@@ -32,7 +33,7 @@ from d1max_agent.engine.storage import (
     storage_verdict,
 )
 from d1max_patrol.backends.base import DeviceBackend, NavBackend
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus
+from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 #: 预计耗电要乘的安全系数。**1.5 不是保守,是因为预计耗电本身不准**
 #: (spec §1.2):地面摩擦、载重、温度、绕路,每一项都在往上抬。
@@ -125,7 +126,8 @@ async def _check_home(mission: Mission, home: HomePoint | None) -> CheckResult:
 
 def departure_line_pct(mission: Mission, home: HomePoint, *,
                        slack: float = ESTIMATE_SLACK,
-                       params: ReturnParams = DEFAULT_RETURN_PARAMS) -> float:
+                       params: ReturnParams = DEFAULT_RETURN_PARAMS,
+                       start: Pose | None = None, back: str = "home") -> float:
     """出发线:低于它就不出发(spec §1.2)。
 
     ::
@@ -145,16 +147,38 @@ def departure_line_pct(mission: Mission, home: HomePoint, *,
     校验的(它只查 ``abort <= return``):出发线算出来 29.5%,返航线 60%,
     30% 的电能起飞,第一帧电量遥测到达就该返航 —— **刚起飞就该回来。**
     所以这里再取一次 ``max``。
+
+    ``start``、``back`` 见 ``route_length_m``(W00c6b 内审):从狗现在在哪算起;直线后端回来是沿来路
+    倒着走;这一趟本身就是回家的路(``on_battery_low: continue``)就不算回来那段。
     """
     poses = [w.pose for w in mission.waypoints]
-    cost = estimate_cost_pct(route_length_m(home.pose, poses), params)
+    cost = estimate_cost_pct(route_length_m(home.pose, poses, start=start, back=back), params)
     return max(mission.policy.battery_return_pct,
                mission.policy.battery_abort_pct + cost * slack)
 
 
+async def _where(nav: NavBackend) -> Pose | None:
+    """狗现在在哪。报不出(老后端、测试替身、问的时候出错)就是 ``None``,按原点出发算。"""
+    fn = getattr(nav, "current_pose", None)
+    if fn is None:
+        return None
+    try:
+        return await fn()
+    except Exception:
+        log.warning("问导航后端当前位姿失败,出发线按原点出发算", exc_info=True)
+        return None
+
+
+def back_mode(nav: object, mission: Mission) -> str:
+    """全程里「回来」那段怎么走(见 ``homing.BACK_MODES``)。"""
+    if mission.policy.on_battery_low == "continue":
+        return "none"
+    return "retrace" if path_kind(nav) == "straight" else "home"
+
+
 async def _check_battery(device: DeviceBackend, mission: Mission,
                          home: HomePoint | None, slack: float,
-                         params: ReturnParams) -> CheckResult:
+                         params: ReturnParams, nav: NavBackend | None = None) -> CheckResult:
     """电量要够走完全程、回到家时还高于中止线。"""
     pct = await device.battery()
     if home is None or home.map_id != mission.map_id:
@@ -162,7 +186,9 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
         return CheckResult("battery", False,
                            f"电量 {pct:.1f}%,但算不出出发线:这张图的原点不可用"
                            f"(见 home 项)")
-    line = departure_line_pct(mission, home, slack=slack, params=params)
+    start = await _where(nav) if nav is not None else None
+    back = back_mode(nav, mission) if nav is not None else "home"
+    line = departure_line_pct(mission, home, slack=slack, params=params, start=start, back=back)
     ok = pct > line
     return CheckResult("battery", ok,
                        f"电量 {pct:.1f}%,出发线 {line:.1f}%" if ok
@@ -296,7 +322,7 @@ async def run_preflight(nav: NavBackend, device: DeviceBackend,
         await _guard("home", _check_home(mission, home)),
         await _guard("battery",
                      _check_battery(device, mission, home, estimate_slack,
-                                    return_params)),
+                                    return_params, nav)),
         await _guard("storage",
                      _check_storage(Path(runs_root), min_free_mb, form,
                                     last_upload_age_days)),

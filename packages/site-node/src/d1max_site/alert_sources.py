@@ -31,6 +31,7 @@ from d1max_contract.messages import (
 from d1max_contract.schedule import clock_skew
 from d1max_contract.storage import WARN_RATIO
 from d1max_site.alert_store import AlertDesk
+from d1max_site.priorities import STANDBY_PREFIX
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +110,8 @@ class SiteAlertSources:
         dispatcher.on_status(self.on_status)
         dispatcher.on_event(self.on_event)
         dispatcher.on_telemetry(self.on_telemetry)
+        # 站点自己推的「没回待命点」(W00c6b):以前只进 SSE 事件流,告警簿不收、值守屏看不见。
+        dispatcher.feed.listen(self.on_feed)
         self._is_stale = self._is_stale or dispatcher.is_stale
 
     def _m(self, rid: str) -> _Mem:
@@ -197,12 +200,17 @@ class SiteAlertSources:
             self.desk.raise_alert(kind="run_done", robot=rid, title=f"跑完了:{tid}")
         elif e.kind == "task_failed":
             reason = str(d.get("reason", ""))
+            # 站点自己派的回待命点那一趟(回程巡检)失败,狗停在半路;标题别说「整趟中止」
+            # (W00c6b 内审)。
+            back = str(tid).startswith(STANDBY_PREFIX)
             if _hit(reason, BATTERY_WORDS):
                 self.desk.raise_alert(kind="battery_abort", robot=rid,
-                                      title="电量不足,整趟中止", detail=reason)
+                                      title="电量不足,回待命点停在半路" if back
+                                      else "电量不足,整趟中止", detail=reason)
             else:
                 # 人点的中止是 task_aborted,不报;失败(引擎自己收的尾)一律报,认不出原因也报。
-                self.desk.raise_alert(kind="run_abort", robot=rid, title="整趟中止了",
+                self.desk.raise_alert(kind="run_abort", robot=rid,
+                                      title="回待命点没成,停在半路" if back else "整趟中止了",
                                       detail=reason)
         elif e.kind in ("release_install_failed", "release_activate_failed",
                         "release_rollback_failed"):
@@ -289,6 +297,15 @@ class SiteAlertSources:
             m.backlog = False
 
     # ------------------------------------------------------------ 站点自己
+
+    def on_feed(self, item: dict) -> None:
+        """站点推送流里的一条。只管 ``standby_failed``(自动回待命点没派成,狗停在原地)。"""
+        if item.get("kind") != "standby_failed":
+            return
+        self.desk.raise_alert(kind="standby_failed", robot=str(item.get("robot_id", SITE)),
+                              title="没回待命点",
+                              detail=f"{item.get('after', '?')} 结束后:"
+                                     f"{item.get('reason', '')}"[:300])
 
     def on_site_error(self, what: str, error: str) -> None:
         """站点自己的一条协程这一拍没办成(``error`` 非空)。只在由好变坏的那一刻报。"""

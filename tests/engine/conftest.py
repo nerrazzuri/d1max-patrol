@@ -139,6 +139,10 @@ class NavStub(EventEmitter[Event]):
     端口的完整性由 ``tests/backends`` 盯着。
     """
 
+    #: 它自己会 ``return_home``(W00c6b):回家的电按直线估。拒返航的用例要沿来路回的话自己改成
+    #: ``straight``。
+    PATH_KIND = "planned"
+
     def __init__(self) -> None:
         super().__init__()
         self.nav = NavStatus.STANDBY
@@ -165,6 +169,11 @@ class NavStub(EventEmitter[Event]):
         #: 被 ``清空下发记录()`` 归零的窗口,两个问题不一样,合成一个就会互相
         #: 拆台。
         self.下发过的目标点: list[Pose | str] = []
+        #: ``current_pose()`` 答什么(W00c6b)。``None`` = 报不出位姿,引擎按从原点出发算。
+        self.pose_now: Pose | None = None
+
+    async def current_pose(self) -> Pose | None:
+        return self.pose_now
 
     async def nav_status(self) -> NavStatus:
         if self.terminal_holds > 0:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -182,3 +183,41 @@ def test_只有一个点位也要算上回来那一段():
     home = Pose.from_xy_yaw(0.0, 0.0)
     wp = Pose.from_xy_yaw(3.0, 4.0)
     assert route_length_m(home, [wp]) == pytest.approx(10.0)
+
+
+# ------------------------------------------------ 从哪儿出发、怎么回(W00c6b 内审)
+
+
+def test_全程从出发点算_不是从原点():
+    """内审应修 1:站点的回程巡检从远端出发,以前全程按「原点出发」算,原点到第一个点那段白算一遍,
+    电够回来的狗被起飞检查拒、困在远端。"""
+    home = Pose.from_xy_yaw(0.0, 0.0)
+    wps = [Pose.from_xy_yaw(3.0, 4.0)]
+    assert route_length_m(home, wps, start=Pose.from_xy_yaw(3.0, 0.0)) == pytest.approx(4 + 5)
+
+
+def test_直线后端的全程_回来是沿来路倒着走():
+    home = Pose.from_xy_yaw(0.0, 0.0)
+    wps = [Pose.from_xy_yaw(3.0, 0.0), Pose.from_xy_yaw(3.0, 4.0)]
+    # 去 3 + 4,回 4 + 3,出发点就是原点
+    assert route_length_m(home, wps, back="retrace") == pytest.approx(14.0)
+    # 出发点不是原点:回到出发点再算上出发点到原点那一段(往费电的方向估)
+    start = Pose.from_xy_yaw(0.0, -1.0)
+    assert route_length_m(home, wps, start=start, back="retrace") == pytest.approx(
+        (math.hypot(3, 1) + 4) * 2 + 1)
+
+
+def test_回家这一趟本身不算回来那段():
+    home = Pose.from_xy_yaw(0.0, 0.0)
+    wps = [Pose.from_xy_yaw(3.0, 4.0), Pose.from_xy_yaw(0.0, 0.0)]
+    assert route_length_m(home, wps, start=Pose.from_xy_yaw(3.0, 0.0), back="none") \
+        == pytest.approx(4 + 5)
+    # 最后一个点不在原点上(回程巡检的终点是待命点,不是原点):也不补「回原点」那段
+    wps = [Pose.from_xy_yaw(3.0, 4.0)]
+    assert route_length_m(home, wps, start=Pose.from_xy_yaw(3.0, 0.0), back="none") \
+        == pytest.approx(4)
+
+
+def test_回来的走法不认识当场抛():
+    with pytest.raises(ValueError):
+        route_length_m(Pose.from_xy_yaw(0.0, 0.0), [Pose.from_xy_yaw(1.0, 0.0)], back="fly")

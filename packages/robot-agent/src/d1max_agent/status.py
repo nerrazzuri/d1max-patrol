@@ -27,7 +27,7 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
                          loaded_map: tuple[str, str] | None,
                          agent_version: str = AGENT_VERSION,
                          extra_tasks: dict[str, dict[str, Any]] | None = None,
-                         nav_path: str = "straight",
+                         nav_path: str,
                          autonomy: str) -> Capabilities:
     tasks: dict[str, dict[str, Any]] = {}
     if loaded_map is not None and hal_caps.max_vx > 0:

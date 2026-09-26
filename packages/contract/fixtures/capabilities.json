@@ -19,9 +19,12 @@
   },
   "tasks": {
     "goto": {
-      "max_speed_mps": 1.0
+      "autonomy": "supervised",
+      "max_speed_mps": 1.0,
+      "path": "straight"
     },
     "patrol": {
+      "autonomy": "supervised",
       "map_id": "estate-1",
       "map_version": "7"
     }

@@ -86,6 +86,19 @@ async def test_起来就发能力与状态_均retained(台子):
     assert sorted(got) == ["capabilities", "status"], "两份都 retained"
 
 
+async def test_能力里的导航走法照导航桥报_不是写死的默认值(台子):
+    """W00c6b 内审应修 6:以前删掉运行时传 ``nav_path`` 那一句没有测试红(``compose_capabilities``
+    有默认值 ``straight``,直线桥正好也是 ``straight``)。换成会规划的导航桥,能力要跟着变。"""
+    broker, c, r, ears, rt, _ = 台子
+    await rt.start()
+    await broker.drain()
+    assert ears.by_topic["capabilities"][-1]["tasks"]["goto"]["path"] == "straight"
+    rt.parts.nav.PATH_KIND = "planned"
+    await rt._publish_caps()
+    await broker.drain()
+    assert ears.by_topic["capabilities"][-1]["tasks"]["goto"]["path"] == "planned"
+
+
 async def test_起来之后设备桥也是连上的_老HTTP面的灯才是绿的(台子):
     broker, c, r, ears, rt, _ = 台子
     await rt.start()

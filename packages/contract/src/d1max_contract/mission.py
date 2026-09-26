@@ -39,6 +39,10 @@ ON_LOC_LOST = frozenset({"pause_then_abort", "abort"})
 #: (清单 #46/#47),不必直接判整趟失败。
 ON_CONTROL_LOST = frozenset({"pause", "abort"})
 
+#: 电量到返航线之后怎么办(W00c6b 内审)。``return_home`` 掉头回家;``continue`` 接着往前走 ——
+#: 这一趟本身就是回家的路(站点在巡检之后派的回程巡检),掉头是往远端走。低于中止线两种都原地停。
+ON_BATTERY_LOW = frozenset({"return_home", "continue"})
+
 #: 点位名里绝对不能出现的东西 —— 它会成为照片文件名的一部分。
 _NAME_FORBIDDEN = ("/", "\\", "..", "\x00")
 
@@ -127,9 +131,11 @@ class Policy:
     #: 迟早要在一堆标着永不删的目录上做决定,而那时它只剩两条路:违反
     #: 承诺,或者让盘满到狗停机。
     retention_days: int = 90
+    #: 电量到返航线之后怎么办,见 ``ON_BATTERY_LOW``。
+    on_battery_low: str = "return_home"
 
     def to_wire(self) -> dict[str, Any]:
-        return {
+        out = {
             "waypoint_timeout_s": self.waypoint_timeout_s,
             "on_waypoint_failed": self.on_waypoint_failed,
             "waypoint_retry": self.waypoint_retry,
@@ -140,6 +146,10 @@ class Policy:
             "loops": self.loops,
             "retention_days": self.retention_days,
         }
+        # 默认值不写:线格式对老夹具、老任务文件不变;老代理不认识也不会拒(未知字段不看)。
+        if self.on_battery_low != "return_home":
+            out["on_battery_low"] = self.on_battery_low
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,7 +275,8 @@ def _parse_policy(raw: Any) -> Policy:
                  f"(支持 {sorted(ON_WAYPOINT_FAILED)})")
         got["on_waypoint_failed"] = value
     for key, allowed in (("on_loc_lost", ON_LOC_LOST),
-                         ("on_control_lost", ON_CONTROL_LOST)):
+                         ("on_control_lost", ON_CONTROL_LOST),
+                         ("on_battery_low", ON_BATTERY_LOW)):
         if key in raw:
             value = raw[key]
             # 词表在这里卡死,而不是等到出事那一刻在安全规则表里才发现不认识

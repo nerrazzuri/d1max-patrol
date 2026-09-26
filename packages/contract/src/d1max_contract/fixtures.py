@@ -128,8 +128,10 @@ def generate() -> dict[str, dict[str, Any]]:
                                      control_epoch=3, last_seen=0, task=None).to_wire(),
         "capabilities": Capabilities(
             robot_id="D1MAX-C40011", agent="0.1.0", adapter="sim/0.1.0",
-            tasks={"goto": {"max_speed_mps": 1.0},
-                   "patrol": {"map_id": "estate-1", "map_version": "7"}},
+            # ``path``:导航走哪种路(W00c6b);``autonomy``:自主级别(W00c6i)。
+            tasks={"goto": {"max_speed_mps": 1.0, "path": "straight", "autonomy": "supervised"},
+                   "patrol": {"map_id": "estate-1", "map_version": "7",
+                              "autonomy": "supervised"}},
             actuators={"light": [], "siren": False, "speaker": False, "spotlight": False},
             sensing={"lidar": False, "depth": False, "thermal": False, "imu_hz": 0,
                      "joint_effort": False, "foot_force": False}).to_wire(),

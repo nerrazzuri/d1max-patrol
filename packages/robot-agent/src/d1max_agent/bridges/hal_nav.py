@@ -11,8 +11,10 @@ HAL 拒速度或定位丢失 FAILED / ``stop()`` CANCELLED →(``terminal_hold_s
 ——总设计 §5:规划/避障上移到代理,适配器只留速度与里程。
 
 **不认 ``return_home``**(W00c6b):这座桥走的是直线、不规划、不避障;直线回原点会穿墙。拒绝之后引擎走
-W04 的沿来路回(倒序各段 + 最后一段到原点,每一段都是巡检时走过的线段)。规划器上线(W10)之后,回家由
-新后端规划(W08 决定 6)。
+W04 的沿来路回:按这一趟真到过的点、点位失败时停在哪倒着走,回到出发点为止;出发点就在原点边上才走
+最后那一小段(见 ``MissionEngine._retrace_home``)。人接管过的那一段、``goto`` 半路返航(来路只有出发点
+到目标那一条线)不在此列 —— 前者是人开的,后者就是去程那条线倒着走。规划器上线(W10)之后,回家由
+新后端规划(W08 决定 6)。``current_pose`` 报运控里程(过渡期地图位姿就是里程,W08 决定 4)。
 """
 
 from __future__ import annotations
@@ -62,7 +64,6 @@ class HalNavBackend(NavBackend):
         self._status = NavStatus.STANDBY
         self._loc = LocStatus.CONTINUOUS_LOC
         self._target: Pose | None = None
-        self._home: Pose | None = None
         self._due: tuple[int, NavStatus] | None = None      # (时刻, 到时进入的状态)
         self._seq = 0
 
@@ -159,8 +160,10 @@ class HalNavBackend(NavBackend):
     async def nav_status(self) -> NavStatus | None:
         return self._status
 
-    def set_home(self, pose: Pose) -> None:
-        self._home = pose
+    async def current_pose(self) -> Pose:
+        """狗现在在哪:运控里程(引擎记出发点、来路用,W00c6b 内审)。"""
+        o = await self._hal.odometry()
+        return Pose.from_xy_yaw(o.x, o.y, o.yaw)
 
     #: 这座桥怎么走路(W00c6b):能力里报给站点(``tasks.goto.path``),站点据此决定巡检后怎么回待命点。
     PATH_KIND = "straight"

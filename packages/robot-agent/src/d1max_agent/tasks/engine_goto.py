@@ -160,7 +160,17 @@ class EngineMissionTask(Task):
             # 引擎的 DONE 是「这趟跑完了」,航点本身可能是按 retry_then_skip 跳过的;
             # 对只有一个航点的 goto,航点没到就是任务没成。
             bad = [r for r in snap.results if not r.ok]
-            if bad:
+            m = self._mission()
+            expected = len(m.waypoints) * m.policy.loops
+            if engine.returned:
+                # 半路返航(电量到线)回到了原点:引擎落 DONE,可点位没跑完(W00c6b 内审阻断 1)。报失败、
+                # 原因带上返航起因 —— 站点按电量告警,也不会当成「停在最后一个点」派回程巡检。
+                self.state = TaskState.FAILED
+                self.detail = {"reason": f"{engine.returned}(半路返航,已回到原点)"[:200]}
+            elif len(snap.results) < expected:
+                self.state = TaskState.FAILED
+                self.detail = {"reason": f"只跑了 {len(snap.results)}/{expected} 个点"}
+            elif bad:
                 self.state = TaskState.FAILED
                 self.detail = {"reason": self._failed_reason(bad)}
             else:

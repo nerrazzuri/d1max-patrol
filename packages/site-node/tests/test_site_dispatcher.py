@@ -355,3 +355,18 @@ async def test_video命令的有效期跟推流的有效期分开_至少30秒(�
     c = got["cmd"]
     assert c.expires_at - c.issued_at == VIDEO_COMMAND_TTL_MS == 30_000
     assert got["timeout"] == 2.5
+
+
+def test_推送流的同步监听_每条都调_监听炸了不挡订阅者():
+    """W00c6b:站点自己的告警源要听推送流(``standby_failed``);监听自己炸了,SSE 订阅者照样收得到。"""
+    from d1max_site.dispatcher import Feed
+    feed = Feed()
+    sub = feed.subscribe()
+    got = []
+
+    def 炸(item):
+        raise RuntimeError("监听炸了")
+    feed.listen(炸)
+    feed.listen(got.append)
+    feed.publish({"kind": "x"})
+    assert got == [{"kind": "x"}] and sub.get(0) == {"kind": "x"}

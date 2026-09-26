@@ -153,3 +153,16 @@ def test_在事件循环里报告警_直接报不等自己(tmp_path):
         assert got is not None, "别的线程照样跳进去"
     finally:
         lt.stop()
+
+
+def test_没回待命点_进告警簿P2_值守屏看得见(站点):
+    """W00c6b:``standby_failed`` 以前只推进 SSE 事件流,值守屏的告警簿不收、手机不显示 —— 报告里写的
+    「推给值守的人看」其实没人看得见。告警源挂到派遣器上时顺带听推送流。"""
+    s = 站点
+    gina = _登(s, "gina")
+    async def 推():
+        s.disp.feed.publish({"kind": "standby_failed", "robot_id": "A", "after": "sched-1",
+                             "reason": "来路不明"})
+    s.loop.call(推)
+    a = _等(lambda: _告警(s, gina, "standby_failed"))
+    assert a["level"] == "P2" and "待命点" in a["title"] and "来路不明" in a["detail"]

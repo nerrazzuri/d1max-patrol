@@ -38,7 +38,6 @@ class EngineParts:
         """换图(W00c5d 第二部分):导航桥认新的地图号;原点跟着图走(图里没带就是没标过)。"""
         self.map_id = map_id
         self.nav._map_id = map_id
-        self.nav._home = home
         self.home = None if home is None else HomePoint(map_id=map_id, pose=home,
                                                         marked_at_ms=now_ms,
                                                         note="W00c5d:随图下发的原点")
@@ -57,7 +56,6 @@ def build_engine(hal: RobotHAL, *, runs_root: Path, now_ms: Callable[[], int],
                         terminal_hold_s=terminal_hold_s)
     home_point: HomePoint | None = None
     if home is not None:
-        nav.set_home(home)
         home_point = HomePoint(map_id=map_id, pose=home, marked_at_ms=now_ms(),
                                note="W00b:装配时给的原点")
     device = HalDeviceBackend(hal, now_ms=now_ms)

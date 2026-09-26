@@ -243,3 +243,27 @@ def test_保留天数不合法要报错(bad):
 def test_保留天数下限正好是七天():
     assert MIN_RETENTION_DAYS == 7
     assert _parse_policy({"retention_days": MIN_RETENTION_DAYS}).retention_days == 7
+
+
+# ------------------------------------------------------------- 电量到返航线(W00c6b 内审)
+
+
+def test_电量到返航线默认是返航():
+    assert Policy().on_battery_low == "return_home"
+
+
+def test_电量到返航线的处置_默认不写进线格式_写了才有():
+    """老代理不认识这个字段也不会拒(未知字段不看);默认值不写,线格式对老夹具不变。"""
+    assert "on_battery_low" not in Policy().to_wire()
+    assert Policy(on_battery_low="continue").to_wire()["on_battery_low"] == "continue"
+
+
+def test_电量到返航线的处置读得进来():
+    assert _parse_policy({"on_battery_low": "continue"}).on_battery_low == "continue"
+    assert _parse_policy({"on_battery_low": "return_home"}).on_battery_low == "return_home"
+
+
+@pytest.mark.parametrize("bad", ["retrace", "", None, True])
+def test_不认识的电量处置被拒(bad):
+    with pytest.raises(MissionError, match="on_battery_low"):
+        _parse_policy({"on_battery_low": bad})

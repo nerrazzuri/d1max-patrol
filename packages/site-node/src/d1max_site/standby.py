@@ -13,9 +13,17 @@
 - **巡检跑完之后,直线的狗沿来路回**(W00c6b):狗在能力里报 ``goto.path``(直线桥是
   ``straight``,规划器上线后是 ``planned``;读不到按 ``straight``)。直线的狗跑完一趟巡检,
   不再派直线 ``goto`` —— 从最后一个巡检点直线走回待命点会穿墙 —— 而是派一趟回程巡检:
-  那一趟的航点倒序(只要位姿,不带动作)+ 最后一个点是待命点,点位失败就跳过。取不到那一趟
-  的任务定义就不回(推 ``standby_failed``),不退回直线。``goto`` 跑完、手动「回待命点」照旧
-  直线 ``goto``(过渡期受 W00c6i 的监护租约约束)。
+  那一趟的航点倒序(只要位姿,不带动作)+ 最后一个点是待命点。回程巡检**继承原任务的 policy**
+  (超时、电量线、丢定位/丢控制权的处置),只改三样(W00c6b 内审):点位失败就中止(原地停 ——
+  跳过一点就是一条没走过的直线)、只跑一圈、电量到返航线接着往前走(``on_battery_low:
+  continue`` —— 剩下的路就是回家的路,掉头是往远端走)。
+- 直线的狗**只在知道狗停在最后一个巡检点时才回**:那一趟的命令记录在(只看 ``patrol``/``goto``
+  两类 —— ``abort`` 用的也是这个 task_id)、原巡检的地图与版本跟待命点对得上、每个点都报了到
+  (条数 = 点数 × 圈数)。有一样不成就不回、推 ``standby_failed``,不退回直线。半路电量返航的
+  那一趟代理报的是 ``task_failed``,本来就不回。
+- ``goto`` 跑完、手动「回待命点」照旧直线 ``goto``(过渡期受 W00c6i 的监护租约约束)。遥控放租之后
+  (``teleop-`` 那一趟 ``task_done``),直线的狗**不自动回**:起点是人刚开到的任意位置;人在场、
+  知道狗在哪,要回就手动叫。会规划的狗照旧回。
 """
 
 from __future__ import annotations
@@ -26,15 +34,16 @@ import logging
 import math
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from d1max_contract.errors import ContractError
 from d1max_contract.geometry import Pose
 from d1max_contract.messages import Event, MapPose
-from d1max_contract.mission import Mission, MissionError, MissionWaypoint, Policy, parse_mission
+from d1max_contract.mission import Mission, MissionError, MissionWaypoint, parse_mission
 from d1max_site.ca import SAFE_ID
 from d1max_site.db import SiteDB
-from d1max_site.dispatcher import Dispatcher, DispatchRefused
+from d1max_site.dispatcher import TELEOP_TASK_PREFIX, Dispatcher, DispatchRefused
 from d1max_site.priorities import STANDBY_PREFIX, STANDBY_RETURN
 
 log = logging.getLogger(__name__)
@@ -157,37 +166,70 @@ class StandbyManager:
         caps = c.capabilities.tasks.get("goto", {}) if c and c.capabilities else {}
         return str(caps.get("path", "straight"))
 
-    def _route_back(self, robot_id: str, task_id: str) -> tuple[MissionWaypoint, ...] | None:
-        """跑完的那一趟要不要沿来路回、来路是什么。``None`` = 照旧直线 ``goto``(不是巡检,或者
-        狗会规划)。直线的狗跑完的巡检、却取不到那一趟的任务定义 → 抛 ``StandbyError``(不回,
-        不退回直线)。"""
+    def _route_back(self, robot_id: str, task_id: str) -> Mission | None:
+        """跑完的那一趟要不要沿来路回、来路是什么。``None`` = 照旧直线 ``goto``(狗会规划,或者跑完的
+        是 ``goto``)。直线的狗、却不能确定狗停在最后一个巡检点 → 抛 ``StandbyError``(不回,不退回
+        直线),见模块说明。"""
+        if self._path_kind(robot_id) == "planned":
+            return None
         rows = self.db.query("SELECT kind, payload FROM commands WHERE task_id=? AND robot_id=? "
-                             "ORDER BY issued_at DESC LIMIT 1", (task_id, robot_id))
-        if not rows or rows[0]["kind"] != "patrol" or self._path_kind(robot_id) == "planned":
+                             "AND kind IN ('patrol', 'goto') ORDER BY issued_at DESC LIMIT 1",
+                             (task_id, robot_id))
+        if not rows:
+            raise StandbyError(f"直线的狗要沿来路回待命点,{task_id} 的命令记录没了,来路不明")
+        if rows[0]["kind"] == "goto":
             return None
         try:
-            m = parse_mission(json.loads(rows[0]["payload"])["mission"])
+            payload = json.loads(rows[0]["payload"])
+            m = parse_mission(payload["mission"])
+            version = payload.get("map_version")
         except (ValueError, KeyError, TypeError, MissionError, ContractError) as exc:
             raise StandbyError(f"直线的狗要沿来路回待命点,取不到 {task_id} 的来路: {exc}") from exc
-        return m.waypoints
+        p = self._checked_default(robot_id)
+        if (m.map_id, version) != (p["map_id"], p["map_version"]):
+            raise StandbyError(f"{task_id} 跑在 {m.map_id}:{version},待命点 {p['name']} 登记在 "
+                               f"{p['map_id']}:{p['map_version']}(地图或版本对不上,来路坐标不可信)")
+        want = len(m.waypoints) * m.policy.loops
+        got = self._arrived(robot_id, task_id)
+        if got != want:
+            raise StandbyError(f"{task_id} 只报了 {got}/{want} 个点到了,不知道狗停在哪,不回")
+        return m
 
-    async def _return_along(self, robot_id: str, came: tuple[MissionWaypoint, ...]
-                            ) -> dict[str, Any]:
-        """回程巡检:来路倒序(只要位姿)+ 待命点;点位失败跳过、不重试。"""
+    def _arrived(self, robot_id: str, task_id: str) -> int:
+        rows = self.db.query("SELECT COUNT(*) AS n FROM events WHERE robot_id=? AND "
+                             "kind='patrol_waypoint' AND json_extract(data, '$.task_id')=? AND "
+                             "json_extract(data, '$.ok')=1", (robot_id, task_id))
+        return int(rows[0]["n"])
+
+    async def _return_along(self, robot_id: str, came: Mission) -> dict[str, Any]:
+        """回程巡检:来路倒序(只要位姿)+ 待命点;继承原任务的 policy,只改失败处置、圈数、电量处置。"""
         from d1max_site.dispatcher import MAX_PATROL_WAYPOINTS
         p = self._checked_default(robot_id)
-        if len(came) + 1 > MAX_PATROL_WAYPOINTS:
-            raise StandbyError(f"来路 {len(came)} 个航点,回程放不下")
+        if len(came.waypoints) + 1 > MAX_PATROL_WAYPOINTS:
+            raise StandbyError(f"来路 {len(came.waypoints)} 个航点,回程放不下")
         home = Pose.from_xy_yaw(p["x"], p["y"], p["yaw"])
-        wps = tuple(MissionWaypoint(name=w.name, pose=w.pose) for w in reversed(came))
-        wps += (MissionWaypoint(name=f"待命点·{p['name']}", pose=home),)
-        mission = Mission(mission=f"回待命点·{p['name']}", map_id=p["map_id"], waypoints=wps,
-                          policy=Policy(on_waypoint_failed="skip", waypoint_retry=0))
+        # 点位名不许带 ``..``(照片按点位名归档),待命点名许(``SAFE_ID``);也不许跟来路的点重名。
+        label = p["name"].replace(".", "_")
+        taken = {w.name for w in came.waypoints}
+        last, n = f"待命点·{label}", 1
+        while last in taken:
+            n += 1
+            last = f"待命点·{label}·{n}"
+        wps = tuple(MissionWaypoint(name=w.name, pose=w.pose) for w in reversed(came.waypoints))
+        wps += (MissionWaypoint(name=last, pose=home),)
+        policy = replace(came.policy, on_waypoint_failed="abort", loops=1,
+                         on_battery_low="continue")
+        mission = Mission(mission=f"回待命点·{label}", map_id=p["map_id"], waypoints=wps,
+                          policy=policy)
         return await self.dispatcher.patrol(robot_id, mission.to_wire(), issued_by="standby:auto",
                                      priority=STANDBY_RETURN,
                                      task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
 
     async def _auto(self, robot_id: str, after: str) -> None:
+        if after.startswith(TELEOP_TASK_PREFIX) and self._path_kind(robot_id) != "planned":
+            # 遥控放租之后直线的狗不自动回(W00c6b 内审):起点是人刚开到的任意位置,人在场。
+            log.info("%s 遥控放租之后不自动回待命点(直线的狗,人手动叫)", robot_id)
+            return
         try:
             why = self.refusal(robot_id) if self.refusal is not None else ""
             if why:

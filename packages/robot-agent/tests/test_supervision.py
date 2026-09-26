@@ -136,7 +136,8 @@ def test_真狗默认要人监护_仿真默认可自主_显式配置覆盖(argv,
 def test_能力里报自主级别():
     r = SimRobot(now_ms=lambda: 0)
     caps = compose_capabilities(robot_id="A", hal_caps=r.hal_capabilities(), adapter_id="sim",
-                                loaded_map=("m", "1"), autonomy="supervised")
+                                loaded_map=("m", "1"), nav_path="straight",
+                                autonomy="supervised")
     assert caps.tasks["goto"]["autonomy"] == "supervised"
     assert caps.tasks["patrol"]["autonomy"] == "supervised"
 

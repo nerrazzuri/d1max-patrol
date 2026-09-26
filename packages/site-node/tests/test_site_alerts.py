@@ -148,6 +148,27 @@ def test_开跑只报一次_跑完_失败分电量与其他_人点的中止不�
     assert "关节过温" in ra.detail and "电量" not in ra.title
 
 
+def test_回待命点那一趟失败_标题说是回待命点没成_不说整趟中止(台):
+    """W00c6b 内审小问题:回程巡检跳点、停在半路报 ``task_failed``,以前标题是「整趟中止了」。"""
+    c, db, desk, src, *_ = 台
+    src.on_event("A", _ev("task_failed", task_id="standby-ab12", reason="点位 b 失败: 到点超时"))
+    src.on_event("A", _ev("task_failed", task_id="standby-cd34",
+                          reason="电量 22% 低于中止线 25%,原地停止"))
+    got = {a.kind: a for a in desk.book.all()}
+    assert "回待命点" in got["run_abort"].title and "整趟" not in got["run_abort"].title
+    assert "回待命点" in got["battery_abort"].title
+
+
+def test_推送流里的没回待命点_记一条P2_别的推送不管(台):
+    c, db, desk, src, *_ = 台
+    src.on_feed({"kind": "alert", "alert": {}})
+    src.on_feed({"kind": "standby_failed", "robot_id": "A", "after": "t9",
+                 "reason": "A 要人现场监护"})
+    [a] = desk.book.all()
+    assert a.kind == "standby_failed" and a.robot == "A" and a.level.value == "P2"
+    assert "t9" in a.detail and "监护" in a.detail
+
+
 def test_点位没到报卡住_到了不报(台):
     c, db, desk, src, *_ = 台
     src.on_event("A", _ev("patrol_waypoint", task_id="t1", index=0, name="gate", ok=True, note=""))
@@ -309,7 +330,9 @@ def test_站点重启_用库里最后见过的状态做种_不重复报也不降
 
     class 假派遣:
         def __init__(self):
+            from d1max_site.dispatcher import Feed
             self.db = db
+            self.feed = Feed()
 
         def on_status(self, cb):
             pass

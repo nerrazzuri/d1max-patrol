@@ -195,7 +195,8 @@ async def test_巡检跑完_直线狗沿来路回待命点(站):
         (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)], "倒序 + 待命点"
     assert all("actions" not in w for w in wps), "回程不拍照、不停留"
     pol = back["payload"]["mission"]["policy"]
-    assert pol["on_waypoint_failed"] == "skip"
+    assert pol["on_waypoint_failed"] == "abort", "内审阻断 3:跳过一点就是一条没走过的直线"
+    assert pol["on_battery_low"] == "continue", "内审阻断 2:剩下的路就是回家的路"
     await t.run(400)
     assert len(_cmds(t, "patrol")) == 2, "回程结束不再回"
     o = await t.dog.odometry()
@@ -269,3 +270,134 @@ async def test_狗拒收回待命点_推standby_failed(站, monkeypatch):
         got.append(item)
     failed = [i for i in got if i["kind"] == "standby_failed"]
     assert failed and "unsupervised" in failed[-1]["reason"]
+
+
+async def test_回程巡检继承原任务的超时与电量线_只改失败处置(站):
+    """内审阻断 3:以前回程巡检的 policy 全是默认(每点 120 s),原任务给长腿的 400 s 丢了,长腿一超时
+    就跳点、斜穿。"""
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    m = dict(_巡检, policy={"waypoint_timeout_s": 400.0, "battery_return_pct": 40.0,
+                           "battery_abort_pct": 20.0, "on_loc_lost": "abort",
+                           "on_control_lost": "abort", "loops": 2, "retention_days": 30,
+                           "on_waypoint_failed": "skip", "waypoint_retry": 3})
+    await t.send(t.site.patrol("A", m, issued_by="alice", priority=MANUAL))
+    await t.run(800)
+    patrols = _cmds(t, "patrol")
+    assert len(patrols) == 2
+    pol = patrols[1]["payload"]["mission"]["policy"]
+    assert pol["waypoint_timeout_s"] == 400.0
+    assert (pol["battery_return_pct"], pol["battery_abort_pct"]) == (40.0, 20.0)
+    assert (pol["on_loc_lost"], pol["on_control_lost"]) == ("abort", "abort")
+    assert pol["retention_days"] == 30
+    assert pol["on_waypoint_failed"] == "abort" and pol["loops"] == 1
+    assert pol["on_battery_low"] == "continue"
+
+
+def _feed(sub) -> list[dict]:
+    got = []
+    while (item := sub.get(0)) is not None:
+        got.append(item)
+    return got
+
+
+async def _跑完一趟巡检_先不设待命点(t, mission=None) -> str:
+    """巡检跑完时还没有默认待命点 → 不自动回;返回那一趟的 task_id,好让测试自己改账再叫
+    ``_auto``。"""
+    await t.send(t.site.patrol("A", mission or _巡检, issued_by="alice", priority=MANUAL))
+    await t.run(400)
+    [row] = _cmds(t, "patrol")
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    return row["task_id"]
+
+
+async def test_命令记录没了_直线狗不回_不退回直线goto(站):
+    """内审应修 3:以前查不到行就落到直线 ``goto``。"""
+    t = 站
+    tid = await _跑完一趟巡检_先不设待命点(t)
+    with t.db.tx() as c:
+        c.execute("DELETE FROM commands WHERE task_id=?", (tid,))
+    sub = t.site.feed.subscribe()
+    await t.send(t.stb._auto("A", tid))
+    assert not _cmds(t, "goto") and not _cmds(t, "patrol")
+    failed = [i for i in _feed(sub) if i["kind"] == "standby_failed"]
+    assert failed and "来路" in failed[-1]["reason"]
+
+
+async def test_同一趟最新一条是abort_照样按巡检的来路回(站):
+    """内审应修 3:abort 用的是巡检的 task_id;狗跑完时正好有人按停止,最新一条就是 ``abort``,以前
+    查到的类型不是 ``patrol``,落到直线 ``goto``。"""
+    t = 站
+    tid = await _跑完一趟巡检_先不设待命点(t)
+    with t.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at) VALUES ('late-abort', ?, 'A', 'abort', '{}', 'bob', ?)",
+                  (tid, t.clock() + 10_000))
+    await t.send(t.stb._auto("A", tid))
+    assert not _cmds(t, "goto") and len(_cmds(t, "patrol")) == 2
+
+
+async def test_点位事件对不上_不知道狗停在哪_不回(站):
+    """内审阻断 1 的站点兜底:只有这一趟每个点都报了到,才当它是「跑完了、停在最后一个点」。"""
+    t = 站
+    tid = await _跑完一趟巡检_先不设待命点(t)
+    with t.db.tx() as c:
+        c.execute("DELETE FROM events WHERE rowid IN (SELECT rowid FROM events WHERE "
+                  "kind='patrol_waypoint' ORDER BY seq DESC LIMIT 1)")
+    sub = t.site.feed.subscribe()
+    await t.send(t.stb._auto("A", tid))
+    assert len(_cmds(t, "patrol")) == 1 and not _cmds(t, "goto")
+    failed = [i for i in _feed(sub) if i["kind"] == "standby_failed"]
+    assert failed and "1/2" in failed[-1]["reason"], failed
+
+
+async def test_原巡检的地图版本跟待命点对不上_不回(站):
+    """内审小问题:``_route_back`` 以前不核原巡检载荷里的地图;来路坐标是旧版本地图上的就不可信。"""
+    t = 站
+    tid = await _跑完一趟巡检_先不设待命点(t)
+    with t.db.tx() as c:
+        c.execute("UPDATE commands SET payload=json_set(payload, '$.map_version', '6') "
+                  "WHERE task_id=?", (tid,))
+    sub = t.site.feed.subscribe()
+    await t.send(t.stb._auto("A", tid))
+    assert len(_cmds(t, "patrol")) == 1 and not _cmds(t, "goto")
+    failed = [i for i in _feed(sub) if i["kind"] == "standby_failed"]
+    assert failed and "版本" in failed[-1]["reason"]
+
+
+async def test_遥控放租之后_直线狗不自动回待命点_也不报(站):
+    """内审应修 4:遥控放租报 ``task_done("teleop-N")``,以前站点照样派一条直线 goto —— 起点最随意
+    的一种自动回家。直线的狗不回(人刚开完,人知道狗在哪);会规划的狗照旧回。"""
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    sub = t.site.feed.subscribe()
+    await t.send(t.stb._auto("A", "teleop-7"))
+    assert not _cmds(t, "goto") and not _cmds(t, "patrol")
+    assert not [i for i in _feed(sub) if i["kind"] == "standby_failed"]
+    t.site.clients["A"].capabilities.tasks["goto"]["path"] = "planned"
+    await t.send(t.stb._auto("A", "teleop-8"))
+    assert len(_cmds(t, "goto")) == 1
+
+
+async def test_待命点名带两个点_回程巡检照样成形(站):
+    """内审小问题:``SAFE_ID`` 允许 ``a..b``,拼成航点名 ``待命点·a..b`` 被任务校验拒(点位名不许带
+    ``..``),每次都推 ``standby_failed``。"""
+    t = 站
+    t.stb.set("A", "a..b", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0,
+              default=True)
+    await t.send(t.site.patrol("A", _巡检, issued_by="alice", priority=MANUAL))
+    await t.run(400)
+    assert len(_cmds(t, "patrol")) == 2
+
+
+async def test_航点名跟待命点航点重名_回程照样成形(站):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    m = dict(_巡检, waypoints=[dict(_巡检["waypoints"][0], name="待命点·dock"),
+                              _巡检["waypoints"][1]])
+    await t.send(t.site.patrol("A", m, issued_by="alice", priority=MANUAL))
+    await t.run(400)
+    patrols = _cmds(t, "patrol")
+    assert len(patrols) == 2
+    names = [w["name"] for w in patrols[1]["payload"]["mission"]["waypoints"]]
+    assert len(set(names)) == len(names) == 3

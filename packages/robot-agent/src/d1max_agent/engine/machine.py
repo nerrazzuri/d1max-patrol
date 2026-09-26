@@ -30,9 +30,14 @@ from d1max_agent.engine.archive import RunArchive
 from d1max_agent.engine.form import STANDALONE, Form
 from d1max_agent.engine.homing import (
     DEFAULT_RETURN_PARAMS,
+    HOME_NEAR_M,
+    Crumb,
     HomePoint,
     ReturnParams,
     estimate_cost_pct,
+    loop_cut,
+    path_kind,
+    retrace_route_m,
 )
 from d1max_agent.engine.mission import Action, Mission, MissionWaypoint
 from d1max_agent.engine.preflight import PreflightReport, run_preflight
@@ -129,6 +134,8 @@ FINAL_STATES = frozenset({RunState.DONE, RunState.ABORTED})
 #: 人在返航路上要把狗牵开是个真需求。移走的前提是那条路真接得住继续 ——
 #: 见 ``_ResumeReturnHome``:人接管完是从狗**现在**停的地方重新规划回家,
 #: 不是接着跑发起返航时那一次 ``return_home``。
+#: **直线后端(W00c6b)这个前提不成立**:它不规划,接管完引擎沿来路接着走当前这一段 —— 从人把狗
+#: 放下的地方直线奔这一段的终点,那一小段没走过。人刚开过、人在场,记在已知限制里。
 #:
 #: ``LOCALIZING`` 原来是表里最后一项,2026-09-11 移走。旧理由是"挂起再继续,
 #: ``_RetryWaypoint`` 会从 ``_await_localized`` 漏给 ``_run`` 的兜底,整趟中止";
@@ -378,6 +385,13 @@ class _Live:
     #: ``_go_home`` 进入时清零,``_suspend_until_resumed`` 每次退出时累加。
     #: **用引擎自己的 ``clock`` 算**,不是墙钟:它是可注入的,测试才推得动。
     suspend_total_ms: int = 0
+    #: 开跑(进 RUNNING)那一刻狗在哪(W00c6b 内审)。``None`` = 后端报不出位姿,按从原点出发算。
+    start_pose: Pose | None = None
+    #: 来路:每到一个点记一笔 ``(序号, 位姿)``,点位失败时狗停在哪记 ``(None, 位姿)``。沿来路回按它
+    #: 倒着走,走完一段划掉一段(返航途中暂停再继续接着走,不从头来)。
+    trail: list[Crumb] = field(default_factory=list)
+    #: 这一趟半路返航了的话,返航的原因;没返航是空串。
+    returned: str = ""
 
 
 def _preflight_reason(report: PreflightReport) -> str:
@@ -447,6 +461,14 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    @property
+    def returned(self) -> str:
+        """这一趟半路返航了的话,返航的原因(比如电量到线);没返航是空串(W00c6b 内审)。
+
+        返航回到原点引擎落的是 DONE,但点位没跑完 —— 代理据此报失败,不报跑完(不然站点当成「停在
+        最后一个点」,派回程巡检让狗奔从没到过的最后一点)。"""
+        return self._live.returned if self._live is not None else ""
 
     @property
     def archive_error(self) -> str:
@@ -724,11 +746,15 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             await self._await_localized()
 
             await self._transition(RunState.RUNNING)
+            live.start_pose = await self._where()
             for _ in range(live.mission.policy.loops):
                 for i, wp in enumerate(live.mission.waypoints):
                     live.index = i
                     self._publish()
-                    live.results.append(await self._do_waypoint(wp))
+                    result = await self._do_waypoint(wp)
+                    live.results.append(result)
+                    if result.ok:
+                        live.trail.append((i, wp.pose))
             await self._transition(RunState.DONE)
         except _ReturnHome as exc:
             await self._go_home(exc.reason)
@@ -784,6 +810,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         # 是**同一个** ``_Live`` 内部「跑点位阶段 → 返航阶段」这一次切换,不是
         # 跨趟。
         live.suspend_total_ms = 0
+        live.returned = reason
         await self._transition(RunState.RETURNING, reason)
         while True:
             try:
@@ -860,31 +887,63 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 await self._do_abort(exc.reason)
                 return
             except (NavBackendError, _FailWaypoint, _ReturnHome) as exc:
-                await self._do_abort(f"返航失败: {exc}")
+                # 带上返航的起因(W00c6b 内审):电量返航没回成,站点要按电量告警。
+                await self._do_abort(f"返航失败: {exc}(返航起因: {reason})")
                 return
             break
         await self._transition(RunState.DONE, reason)
 
     async def _retrace_home(self) -> None:
-        """沿来路回原点:已到过的点位倒序各走一段,最后一段到原点。
+        """沿来路回(W04;W00c6b 内审改成按**真走过的路**):来路倒着走,每一段都是一次普通的
+        ``goto`` + 等终态;回到出发点后,出发点就在原点边上(``HOME_NEAR_M``)才走最后那一小段回原点。
 
-        每一段都是一次普通的 ``goto`` + 等终态,所以人在半路接管、暂停再继续
-        走的仍是 ``_go_home`` 那个循环(``_ResumeReturnHome``/``_RetryWaypoint``
-        从这儿一路抛上去),重来时按当时的 ``live.index`` 重算这条回路。
-        「已到过」按 ``live.index`` 算:它是正在去的那个点,前面的都到过(或试过);
-        没到过任何点就只剩原点这一段。原点没标的话没得回,交给上层按返航失败处理。
+        - 来路是 ``live.trail``:到过的点、点位失败时狗停在哪。去程没到的点不在里面(以前按
+          ``live.index`` 算,没到过的点也在回路里)。同一个点到过两次(跑两圈)就把中间那一圈抹掉。
+        - 走完一段划掉一段:人在半路暂停再继续、接管完再继续,走的仍是 ``_go_home`` 那个循环
+          (``_ResumeReturnHome``/``_RetryWaypoint`` 从这儿一路抛上去),回来接着走当前这一段,
+          不从头来(以前按 ``live.index`` 重算整条回路,狗掉头奔已经回过的点)。
+        - 出发点不是原点(站点的回程巡检从远端出发、上一趟中止后狗停在原地):出发点到原点那一段
+          没走过 —— 原地停,按返航失败收尾。后端报不出位姿(``start_pose`` 是 ``None``)按从原点
+          出发算。
+        - 原点没标的话没得回,交给上层按返航失败处理。
         """
         live = self._live
         assert live is not None
-        legs = [wp.pose for wp in live.mission.waypoints[:live.index]][::-1]
         if self._home is None:
             raise _FailWaypoint("没有原点,不知道该回哪儿")
-        legs.append(self._home.pose)
-        for pose in legs:
-            await self._stop_nav_quietly()
-            await self._await_nav_standby(self._clock() + NAV_STANDBY_TIMEOUT_S)
-            await self._nav.goto(pose)
-            await self._wait_nav_terminal(self._clock() + RETURN_TIMEOUT_S)
+        # 每一段的超时不短于这一趟自己的点位超时(内审:长腿的任务给了 600 s,固定 300 s 半路就
+        # 判超时)。
+        budget = max(RETURN_TIMEOUT_S, live.mission.policy.waypoint_timeout_s)
+        while live.trail:
+            await self._leg(live.trail[-1][1], budget)
+            del live.trail[loop_cut(live.trail, len(live.trail) - 1):]
+        home = self._home.pose
+        start = home if live.start_pose is None else live.start_pose
+        gap = start.distance_to(home)
+        if gap > HOME_NEAR_M:
+            await self._leg(start, budget)
+            raise _FailWaypoint(f"回到了出发点,出发点离原点 {gap:.1f} m —— 那一段没走过,不走直线,"
+                                f"原地停")
+        await self._leg(home, budget)
+
+    async def _leg(self, pose: Pose, budget_s: float) -> None:
+        await self._stop_nav_quietly()
+        await self._await_nav_standby(self._clock() + NAV_STANDBY_TIMEOUT_S)
+        await self._nav.goto(pose)
+        await self._wait_nav_terminal(self._clock() + budget_s)
+
+    async def _where(self) -> Pose | None:
+        """狗现在在哪(W00c6b 内审):后端报得出位姿用它,报不出退回最近一次设备位姿事件。"""
+        fn = getattr(self._nav, "current_pose", None)
+        if fn is not None:
+            try:
+                pose = await fn()
+            except Exception:
+                log.warning("问导航后端当前位姿失败", exc_info=True)
+                pose = None
+            if pose is not None:
+                return pose
+        return self._live.last_pose if self._live is not None else None
 
     async def _finish(self) -> None:
         """收尾。**一定走完**(W00c6a):以前这里一抛(写盘失败),``_done.set()`` 走不到,
@@ -1029,6 +1088,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             except _FailWaypoint as exc:
                 note = exc.reason
                 tried += 1
+                # 狗停在哪记进来路(W00c6b 内审):失败了的点没到过,不在回路里;接着往下一个点走的那段
+                # 是从这儿出发的。
+                where = await self._where()
+                if where is not None:
+                    live.trail.append((None, where))
                 self._note("waypoint_failed", waypoint=wp.name,
                            attempt=tried, reason=note)
         if policy.on_waypoint_failed == "abort":
@@ -1126,9 +1190,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def _return_cost_pct(self) -> float:
         """从"当前在哪"估回原点的电量成本。
 
-        **位置用"当前正要去的那个点",不用实时位姿。** NavBackend 没有位姿口子
-        (位姿走的是 8091 那座桥),而正要去的那个点比实际位置更远 —— 往
-        更费电的方向偏,正是我们要的方向。
+        **位置用"当前正要去的那个点",不用实时位姿。** 正要去的那个点比实际位置更远 —— 往更费电的
+        方向偏,正是我们要的方向。
+
+        **直线后端按沿来路的长度算**(W00c6b 内审):它回家是沿来路倒着走,比直线远得多;按直线估的话
+        掉头太晚,回程走到一半碰中止线。
 
         没标原点时返回 0,由 ``return_line_pct`` 退回静态返航线。
         起飞门槛(``preflight``)那一关会先把"没标原点"拦下来,所以跑到这里
@@ -1144,8 +1210,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             return 0.0
         index = min(live.index, len(live.mission.waypoints) - 1)
         here = live.mission.waypoints[index].pose
-        return estimate_cost_pct(home.pose.distance_to(here),
-                                 self._return_params)
+        if path_kind(self._nav) == "straight":
+            dist = retrace_route_m(here, live.trail, start=live.start_pose, home=home.pose)
+        else:
+            dist = home.pose.distance_to(here)
+        return estimate_cost_pct(dist, self._return_params)
 
     def _context(self) -> SafetyContext:
         live = self._live

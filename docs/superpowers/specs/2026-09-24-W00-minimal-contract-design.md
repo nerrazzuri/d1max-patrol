@@ -45,7 +45,7 @@
 
 | 报文 | 方向 / QoS / retained | W00 字段 | ✔ |
 |---|---|---|---|
-| `capabilities` | 狗→站，QoS 1，retained，掉线不清 | `robot_id agent adapter tasks{goto{max_speed_mps}} actuators sensing` —— 由代理**合成**（HAL 能力 × 软件 × 已加载地图 × 标定），W00 里 `tasks` 只有 `goto` | ✔ |
+| `capabilities` | 狗→站，QoS 1，retained，掉线不清 | `robot_id agent adapter tasks{goto{max_speed_mps}} actuators sensing` —— 由代理**合成**（HAL 能力 × 软件 × 已加载地图 × 标定），W00 里 `tasks` 只有 `goto`（后来加的：`goto.path` 导航走哪种路 `straight`/`planned`，W00c6b；`goto.autonomy`/`patrol.autonomy` 自主级别，W00c6i；`patrol`、`teleop` 等见各单） | ✔ |
 | `status` | 狗→站，QoS 1，retained，LWT 改写为 `online:false` | `online boot_id ready{control motion estop_clear loc_ok} control_epoch last_seen task{task_id kind state}` | ✔ |
 | `cmd` | 站→狗，QoS 1，**不 retained** | `command_id task_id kind issued_at expires_at control_epoch precondition{expect_task_state} priority offline_policy payload` | ✔ |
 | `cmd/ack` | 狗→站，QoS 1 | `command_id task_id result ∈ accepted/rejected/expired/duplicate reason original(duplicate 时原结果)` | ✔ |

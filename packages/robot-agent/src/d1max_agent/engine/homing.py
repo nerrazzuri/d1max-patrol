@@ -174,13 +174,71 @@ def estimate_cost_pct(distance_m: float,
     return max(params.floor_pct, hours * params.drain_pct_per_hour)
 
 
-def route_length_m(home: Pose, waypoints: Sequence[Pose]) -> float:
-    """全程:原点 → 各点 → 回原点。**回来那一段必须算进去。**
+#: 全程里「回来」那段怎么走(W00c6b 内审):``home`` 最后一个点直线回原点(后端自己规划回家);
+#: ``retrace`` 沿来路倒着回出发点、再回原点(直线后端);``none`` 不回 —— 这一趟本身就是回家的路。
+BACK_MODES = ("home", "retrace", "none")
+
+
+def route_length_m(home: Pose, waypoints: Sequence[Pose], *, start: Pose | None = None,
+                   back: str = "home") -> float:
+    """全程:出发点 → 各点 → 回来。**回来那一段必须算进去**(``back="none"`` 除外)。
 
     只算到最后一个点为止,等于假设狗可以停在场地尽头 —— 而它不能,它得回来换电池。
+
+    ``start`` 是狗现在在哪(W00c6b 内审:站点的回程巡检从远端出发,以前按原点出发算,原点到第一个点
+    那段白算一遍,电够回来的狗被拒、困在远端);不知道就按原点。
     """
+    if back not in BACK_MODES:
+        raise ValueError(f"回来的走法不认识: {back!r}(支持 {', '.join(BACK_MODES)})")
     if not waypoints:
         return 0.0
-    legs = [home, *waypoints, home]
+    s = home if start is None else start
+    legs = [s, *waypoints]
+    if back == "home":
+        legs.append(home)
+    elif back == "retrace":
+        legs += [*reversed(waypoints[:-1]), s, home]
     # B905: zip 必须显式写 strict。这里两个序列本来就差一个,只能 False。
+    return sum(a.distance_to(b) for a, b in zip(legs, legs[1:], strict=False))
+
+
+# ------------------------------------------------------------ 沿来路回(W00c6b 内审)
+
+#: 出发点离原点这么近,沿来路回到出发点之后才走最后那一小段回原点;再远就原地停(那一段没走过)。
+HOME_NEAR_M = 1.0
+
+#: 来路上的一笔:``(到过的点位序号, 位姿)``;点位失败时狗停在哪记成 ``(None, 位姿)``。
+Crumb = tuple[int | None, Pose]
+
+
+def path_kind(nav: object) -> str:
+    """导航后端回家怎么走:``planned`` 自己规划回家;``straight`` 不认 ``return_home``、引擎沿来路回。
+    没说的(测试替身)按 ``planned`` —— 回家的电照旧按直线估。"""
+    return str(getattr(nav, "PATH_KIND", "planned"))
+
+
+def loop_cut(trail: Sequence[Crumb], j: int) -> int:
+    """回到了 ``trail[j]`` 之后,来路从哪儿截断:同一个点位之前到过的话截到**第一次**到的地方 ——
+    中间那一圈不用再倒着走一遍(跑两圈的巡检)。点位失败的那一笔只此一处,截到它自己。"""
+    key = trail[j][0]
+    if key is None:
+        return j
+    return next(i for i, (k, _) in enumerate(trail) if k == key)
+
+
+def retrace_poses(trail: Sequence[Crumb]) -> list[Pose]:
+    """沿来路倒着回依次要去的位姿(不含出发点)。"""
+    out: list[Pose] = []
+    j = len(trail) - 1
+    while j >= 0:
+        out.append(trail[j][1])
+        j = loop_cut(trail, j) - 1
+    return out
+
+
+def retrace_route_m(here: Pose, trail: Sequence[Crumb], *, start: Pose | None,
+                    home: Pose) -> float:
+    """从 ``here`` 沿来路倒着回出发点、再回原点有多远(出发点离原点远时狗其实停在出发点,这里照样
+    算上最后那段 —— 往费电的方向估)。不知道出发点按原点。"""
+    legs = [here, *retrace_poses(trail), home if start is None else start, home]
     return sum(a.distance_to(b) for a, b in zip(legs, legs[1:], strict=False))

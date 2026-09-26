@@ -418,3 +418,70 @@ def test_出发线永远不低于同一刻的返航线(sample_mission, floor):
                         return_cost_pct=0.0, floor_pct=floor)
     assert return_line_pct(ctx) <= line
     assert battery_ruling(ctx).decision is not Decision.RETURN_HOME
+
+
+# ------------------------------------------------ 从哪儿出发、怎么回(W00c6b 内审)
+
+
+class _报位姿的导航:
+    """会报当前位姿、会说自己走哪种路的假导航。"""
+
+    def __init__(self, where: Pose | None, kind: str) -> None:
+        self.PATH_KIND = kind
+        self._where = where
+
+    async def nav_status(self) -> NavStatus:
+        return NavStatus.STANDBY
+
+    async def loc_status(self) -> LocStatus:
+        return LocStatus.CONTINUOUS_LOC
+
+    async def current_pose(self) -> Pose | None:
+        return self._where
+
+
+def _回程(**pol):
+    wps = (MissionWaypoint(name="A", pose=Pose.from_xy_yaw(100.0, 0.0)),
+           MissionWaypoint(name="dock", pose=Pose.from_xy_yaw(0.0, 0.0)))
+    return make_mission(waypoints=wps, policy=Policy(**pol))
+
+
+def test_出发线从出发点算():
+    m = _回程(on_battery_low="continue")
+    far = Pose.from_xy_yaw(150.0, 0.0)
+    assert departure_line_pct(m, _HOME, start=far, back="none") \
+        < departure_line_pct(m, _HOME)
+
+
+async def test_起飞检查用狗当前在哪_回家这一趟只算单程(tmp_path, fake_device):
+    """内审应修 1 的实验:狗在 200 m 外、电量 36.8%,直线回家大约只要 4%;以前回程巡检的出发线按
+    「原点出发 + 回原点」算成 38.0%,被拒,狗困在远端。"""
+    m = _回程(on_battery_low="continue", battery_return_pct=25.0, battery_abort_pct=25.0)
+    far = Pose.from_xy_yaw(150.0, 0.0)
+    nav = _报位姿的导航(far, "straight")
+    want = departure_line_pct(m, _HOME, start=far, back="none")
+    assert f"{want:.1f}" != f"{departure_line_pct(m, _HOME):.1f}", "前提:两种算法的线不一样"
+    fake_device.batt = want + 0.5
+    report = await _run(nav, fake_device, m, tmp_path / "runs")
+    battery = next(c for c in report.checks if c.name == "battery")
+    assert battery.ok, battery.detail
+    assert f"{want:.1f}%" in battery.detail
+
+
+async def test_起飞检查_直线后端按沿来路回估(tmp_path, fake_device):
+    m = make_mission(waypoints=(MissionWaypoint(name="A", pose=Pose.from_xy_yaw(100.0, 0.0)),
+                                MissionWaypoint(name="B", pose=Pose.from_xy_yaw(100.0, 100.0))))
+    nav = _报位姿的导航(_HOME.pose, "straight")
+    want = departure_line_pct(m, _HOME, start=_HOME.pose, back="retrace")
+    assert want > departure_line_pct(m, _HOME)
+    fake_device.batt = 99.0
+    report = await _run(nav, fake_device, m, tmp_path / "runs")
+    battery = next(c for c in report.checks if c.name == "battery")
+    assert f"{want:.1f}%" in battery.detail, battery.detail
+
+
+async def test_起飞检查_报不出位姿按原点出发(tmp_path, fake_nav, fake_device):
+    m = make_mission()
+    report = await _run(fake_nav, fake_device, m, tmp_path / "runs")
+    battery = next(c for c in report.checks if c.name == "battery")
+    assert f"{departure_line_pct(m, _HOME):.1f}%" in battery.detail

@@ -87,7 +87,14 @@ class FeedSub:
 class Feed:
     def __init__(self) -> None:
         self._subs: set[FeedSub] = set()
+        self._listeners: list[Callable[[dict[str, Any]], None]] = []
         self._lock = threading.Lock()
+
+    def listen(self, fn: Callable[[dict[str, Any]], None]) -> None:
+        """同步监听(站点自己的告警源用,W00c6b):每条推送都在推送的那个线程里调一次;监听炸了只记
+        日志,不挡 SSE 订阅者。"""
+        with self._lock:
+            self._listeners.append(fn)
 
     def subscribe(self) -> FeedSub:
         s = FeedSub()
@@ -102,11 +109,17 @@ class Feed:
     def publish(self, item: dict[str, Any]) -> None:
         with self._lock:
             subs = list(self._subs)
+            listeners = list(self._listeners)
         for s in subs:
             try:
                 s.q.put_nowait(item)
             except queue.Full:
                 s.lagged = True
+        for fn in listeners:
+            try:
+                fn(item)
+            except Exception:
+                log.exception("推送流的监听处理 %s 失败", item.get("kind"))
 
     def __len__(self) -> int:
         with self._lock:

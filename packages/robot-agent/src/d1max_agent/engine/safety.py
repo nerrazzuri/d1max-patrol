@@ -192,6 +192,11 @@ def battery_ruling(ctx: SafetyContext) -> Ruling:
                       f"电量 {ctx.battery_pct:.0f}% 低于中止线 "
                       f"{ctx.policy.battery_abort_pct:.0f}%,原地停止")
     line = return_line_pct(ctx)
+    if ctx.battery_pct < line and ctx.policy.on_battery_low == "continue":
+        # 这一趟本身就是回家的路(站点的回程巡检,W00c6b 内审):掉头是往远端走。接着走,到中止线再停。
+        return Ruling(Decision.CONTINUE,
+                      f"电量 {ctx.battery_pct:.0f}% 低于返航线 {line:.0f}%,"
+                      f"这一趟就是回家的路,接着走")
     if ctx.battery_pct < line:
         # 这句话是这一关唯一给人的解释,**两支各说各的**。静态下限赢的时候
         # 照印"中止线 + 回家",人读到的是"低于返航线 60%(中止线 25% +

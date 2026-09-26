@@ -343,3 +343,16 @@ def test_返航理由里的回家成本印的是引擎那份地板():
     r = battery_ruling(ctx)
     assert r.decision is Decision.RETURN_HOME
     assert "回家 8%" in r.reason
+
+
+def test_回家这一趟本身_电量到返航线接着走(ctx):
+    """W00c6b 内审:站点的回程巡检剩下的路就是回家的路;电量到返航线不掉头(掉头是往远端走)。"""
+    c = replace(ctx, policy=Policy(battery_return_pct=25.0, battery_abort_pct=15.0,
+                                    on_battery_low="continue"))
+    assert battery_ruling(replace(c, battery_pct=20.0)).decision is Decision.CONTINUE
+
+
+def test_回家这一趟本身_低于中止线照样中止(ctx):
+    c = replace(ctx, policy=Policy(battery_return_pct=25.0, battery_abort_pct=15.0,
+                                    on_battery_low="continue"))
+    assert battery_ruling(replace(c, battery_pct=14.0)).decision is Decision.ABORT
