@@ -71,6 +71,50 @@ void main() {
     await t.pumpWidget(const SizedBox());
   });
 
+  testWidgets('开录还在起（starting）：接着问；起来了换一趟（epoch 变了）从头画', (t) async {
+    final api = FakeApi('admin', robotView: _view())
+      ..trailReplies = [
+        {..._trail([[5, 5]], 0, 1, rec: false), 'starting': true, 'epoch': 3}, // 上一趟留下的
+        {..._trail([[0, 0]], 1, 1), 'epoch': 4}, // 新的一趟碰巧也是 1 个点
+        {..._trail([[0, 0]], 0, 1), 'epoch': 4},
+      ];
+    await t.pumpWidget(MaterialApp(home: SiteMappingTrailPage(api: api, robotId: 'A')));
+    await t.pump();
+    expect(find.textContaining('正在起'), findsOneWidget);
+    await t.pump(const Duration(seconds: 2));
+    await t.pump();
+    expect(api.trailSince, [0, 1, 0], reason: '换了一趟：不把新的一趟接在旧的后面');
+    expect(t.widget<CustomPaint>(find.byKey(SiteMappingTrailPage.canvasKey)).painter,
+        isA<TrailPainter>().having((p) => p.points, 'points', [Offset.zero]));
+    expect(find.textContaining('录包中'), findsOneWidget);
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('切到后台就不问，回来接着问', (t) async {
+    final api = FakeApi('admin', robotView: _view())
+      ..trailReplies = List.generate(30, (i) => _trail([], i, 0));
+    await t.pumpWidget(MaterialApp(home: SiteMappingTrailPage(api: api, robotId: 'A')));
+    await t.pump();
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    final n = api.trailSince.length;
+    await t.pump(const Duration(seconds: 10));
+    expect(api.trailSince.length, n);
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await t.pump(const Duration(seconds: 2));
+    expect(api.trailSince.length, greaterThan(n));
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('点满了、里程跳过：说清楚', (t) async {
+    final api = FakeApi('admin', robotView: _view())
+      ..trailReplies = [{..._trail([[0, 0], [1, 0]], 0, 2), 'full': true, 'jumps': 2}];
+    await t.pumpWidget(MaterialApp(home: SiteMappingTrailPage(api: api, robotId: 'A')));
+    await t.pump();
+    expect(find.textContaining('红点是记下的最后一点'), findsOneWidget);
+    expect(find.textContaining('跳过 2 次'), findsOneWidget);
+    await t.pumpWidget(const SizedBox());
+  });
+
   testWidgets('退出页面就不再取', (t) async {
     final api = FakeApi('admin', robotView: _view())
       ..trailReplies = List.generate(20, (i) => _trail([], i, i));
@@ -117,6 +161,15 @@ void main() {
     expect(find.byType(InteractiveViewer), findsOneWidget, reason: '能缩放');
   });
 
+  testWidgets('预览说用的是哪份 yaml；原点带转角有警告', (t) async {
+    final api = FakeApi('guard')..previewWarning = '地图 origin 带转角 0.300 rad,预览没按转角转';
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('yard.yaml'), findsOneWidget);
+    expect(find.textContaining('转角'), findsOneWidget);
+  });
+
   testWidgets('这张图没有栅格：说清楚', (t) async {
     final api = FakeApi('guard')..previewMissing = true;
     await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
@@ -134,6 +187,7 @@ void main() {
       expect(q.dy, inInclusiveRange(0, 120));
     }
     expect(m(const Offset(10, 5)).dy, lessThan(m(const Offset(10, 0)).dy), reason: 'y 朝上');
+    expect(m(const Offset(10, 0)).dx, greaterThan(m(Offset.zero).dx), reason: 'x 朝右（不左右镜像）');
   });
 
   test('解码用的 PNG 是真的（Image.memory 认得）', () {

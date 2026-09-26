@@ -29,26 +29,47 @@ class SiteMappingTrailPage extends StatefulWidget {
   State<SiteMappingTrailPage> createState() => _SiteMappingTrailPageState();
 }
 
-class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> {
+class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with WidgetsBindingObserver {
   final List<Offset> _pts = <Offset>[];
   bool _recording = true;
+  bool _starting = false;
   bool _full = false;
+  int _jumps = 0;
+
+  /// 狗上的「第几趟」（W00c6h 内审）：变了就是重新开录了，从头取。
+  int? _epoch;
   bool _asked = false;
   bool _busy = false;
+  bool _background = false;
   String _err = '';
   Timer? _timer;
+
+  bool get _live => (_recording || _starting) && !_background;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_poll());
     _timer = Timer.periodic(widget.period, (_) {
-      if (_recording) unawaited(_poll());
+      if (_live) unawaited(_poll());
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 切到后台就不问（W00c6h 内审）；回来马上问一次。拉一下通知栏（inactive）不算。
+    if (state == AppLifecycleState.resumed) {
+      _background = false;
+      if (_recording || _starting) unawaited(_poll());
+    } else if (state != AppLifecycleState.inactive) {
+      _background = true;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     super.dispose();
   }
@@ -58,8 +79,10 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> {
     _busy = true;
     try {
       var d = await widget.api.mappingTrail(widget.robotId, since: _pts.length);
-      if (((d['total'] as num?) ?? 0) < _pts.length) {
-        // 狗上重新开录了（清空过）：从头取。
+      final epoch = d['epoch'];
+      if ((epoch is int && _epoch != null && epoch != _epoch) ||
+          ((d['total'] as num?) ?? 0) < _pts.length) {
+        // 狗上换了一趟（重新开录、清空过）：从头取，不把新的一趟接在旧的后面。
         _pts.clear();
         d = await widget.api.mappingTrail(widget.robotId);
       }
@@ -70,8 +93,11 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> {
             _pts.add(Offset((p[0] as num).toDouble(), (p[1] as num).toDouble()));
           }
         }
+        if (d['epoch'] is int) _epoch = d['epoch'] as int;
         _recording = d['recording'] == true;
+        _starting = d['starting'] == true;
         _full = d['full'] == true;
+        _jumps = (d['jumps'] as num?)?.toInt() ?? 0;
         _asked = true;
         _err = '';
       });
@@ -89,8 +115,17 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> {
     final size = span == null
         ? ''
         : '，走过的范围约 ${span.width.toStringAsFixed(0)} × ${span.height.toStringAsFixed(0)} m';
-    final head = _recording ? '录包中：$n$size（每 ${widget.period.inSeconds} 秒更新）' : '没在录包（下面是最后一次录的轨迹）：$n$size';
-    return [head, if (_full) '点数到上限了，后面的不再记', if (_err.isNotEmpty) _err].join('\n');
+    final head = _recording
+        ? '录包中：$n$size（每 ${widget.period.inSeconds} 秒更新）'
+        : _starting
+            ? '录包正在起（要十几秒），起来了就开始记点……'
+            : '没在录包（下面是最后一次录的轨迹）：$n$size';
+    return [
+      head,
+      if (_full) '点数到上限了，后面的不再记：红点是记下的最后一点，不是狗现在的位置',
+      if (_jumps > 0) '里程跳过 $_jumps 次（运控重启、归零），轨迹在跳的地方接上了',
+      if (_err.isNotEmpty) _err,
+    ].join('\n');
   }
 
   @override
@@ -186,7 +221,7 @@ class TrailPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(TrailPainter old) => old.points.length != points.length;
+  bool shouldRepaint(TrailPainter old) => true; // 每次都是新的一份点（重取之后点数可能碰巧一样）
 }
 
 class SiteMapPreviewPage extends StatefulWidget {
@@ -262,6 +297,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               child: ListView(padding: const EdgeInsets.all(8), children: [
                 Text('一像素 ${mpp.toStringAsFixed(2)} m · 图 ${w.toInt()} × ${h.toInt()} 像素 · '
                     '约 ${(w * mpp).toStringAsFixed(0)} × ${(h * mpp).toStringAsFixed(0)} m'),
+                if (meta['source'] != null)
+                  Text('用的是 ${meta['source']}', style: const TextStyle(fontSize: 12)),
+                if (meta['warning'] != null)
+                  Text('${meta['warning']}', style: const TextStyle(color: Colors.deepOrange)),
                 const Divider(),
                 if (pts.isEmpty) const Text('这张图上还没有登记待命点'),
                 for (final p in pts)

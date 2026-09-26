@@ -23,6 +23,8 @@
    - **实现时定的**：点满 5000 不再记、回执报 `full`（不抽稀：抽稀会让手机手上的 `since` 对不上）；回执还带 `recording`（手机据此
      停止轮询）、`total`（比手机手上的少 = 狗上重新开录了，手机从头取）；里程读不到或不新鲜的那一拍不记；这条命令同 `proc_log`
      只读、不进幂等记录、回执不推事件流（每 2 s 一条，不然所有手机每 2 s 刷一次狗的列表）；手机上「开始录包」收下了就打开轨迹页。
+   - **内审之后**：开录成功当场清空、换 `epoch`，回执带 `epoch`、`starting`（录包还没起来）、`jumps`；手机按 `epoch` 判断换了一趟，
+     `starting` 时接着问，切后台不问；NaN 里程不记，里程跳了轨迹接上。
 3. **建好的图的预览**：站点把登记了的图（`.pgm` + `.yaml`）渲染成 PNG（未知灰、占据黑、空闲白，按分辨率标尺；最大边 1024 px），
    `GET /api/maps/<id>/<version>/preview.png`（查看权限）；手机地图页每一行点开看图（能缩放），同时画上这张图上登记的待命点。
    - **实现时定的**：站点主机上没有 PIL，纯 Python 解 PGM（P5/P2）、编 PNG；颜色照 `map_server` 三值；大图按整数倍缩，**一格里有占据
@@ -30,6 +32,8 @@
      `{width, height, m_per_px, left_x, top_y, standby: [{robot_id, name, x, y, yaw, default}]}`，地图 (x, y) 在图上是
      `((x − left_x) / m_per_px, (top_y − y) / m_per_px)`（「按分辨率标尺」由手机按 `m_per_px` 写）。同一版渲染一次、缓存最近 8 张。
      没有栅格（比如点云图）404，文件坏了 500 说是哪个文件。
+   - **内审之后**：先看文件大小再读（P5 按头算、P2 最多 8 MiB、yaml 最多 64 KB、最多 2500 万像素），渲染一次一张；预览 JSON 多带
+     `source`（用的哪份 yaml）、`warning`（origin 带转角）。
 4. 录包、重建的状态照旧走事件（`mapping_started`/`mapping_stopped`/`map_built`/`map_build_failed`），不变。
 
 ## 不做

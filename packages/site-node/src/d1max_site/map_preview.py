@@ -7,7 +7,10 @@
   再其次未知。
 - 给手机的坐标换算(``meta``):``m_per_px``(预览上一像素几米)、``left_x``(左边缘的地图 x)、``top_y``
   (上边缘的地图 y);地图 (x, y) 在预览上是 ``((x − left_x) / m_per_px, (top_y − y) / m_per_px)``。
-  ``origin`` 的转角不认(建图工具出的都是 0)。
+  ``origin`` 的转角不认(建图工具出的都是 0);不是 0 时 ``meta`` 里带一句 ``warning``。
+- **资源有上限**(W00c6h 内审):图最多 ``MAX_PIXELS`` 像素;P5 文件不许比头里说的大;P2(文本,一个像素
+  几个字节、解析吃内存)文件最多 ``MAX_P2_BYTES``;yaml 最多 ``MAX_YAML_BYTES``。调用方先按
+  :func:`pgm_limit` 看文件大小,再读。
 """
 
 from __future__ import annotations
@@ -19,8 +22,13 @@ import zlib
 from typing import Any
 
 MAX_SIDE = 1024
-#: 原图最多这么多像素(8000×8000 的 0.05 m 图是 400 m 见方,比庄园大得多):再大多半是坏的。
-MAX_PIXELS = 64_000_000
+#: 原图最多这么多像素(5000×5000 的 0.05 m 图是 250 m 见方,庄园约 106 m 见方):再大多半是坏的。
+MAX_PIXELS = 25_000_000
+#: 文本 PGM(P2)文件最多这么大(字节)。建图工具出的都是 P5。
+MAX_P2_BYTES = 8 * 1024 * 1024
+MAX_YAML_BYTES = 64 * 1024
+#: P5 正文之后容许的尾巴(比如多一个换行)。
+_P5_SLACK = 16
 
 _RANK_OCC, _RANK_FREE, _RANK_UNKNOWN = 0, 1, 2
 _COLORS = bytes([0, 254, 205]) + bytes(253)   # 名次 → 灰度(取 min 缩图:占据 < 空闲 < 未知)
@@ -63,6 +71,7 @@ def parse_map_yaml(text: str) -> dict[str, Any]:
         raise PreviewError("地图 yaml 的 origin 要是 [x, y, yaw]")
     return {"image": raw["image"], "resolution": res,
             "origin": (_num(origin[0], "origin"), _num(origin[1], "origin")),
+            "origin_yaw": _num(origin[2], "origin") if len(origin) > 2 and origin[2] else 0.0,
             "negate": raw.get("negate", "0") not in ("0", "false", "False"),
             "occupied_thresh": _num(raw.get("occupied_thresh", "0.65"), "occupied_thresh"),
             "free_thresh": _num(raw.get("free_thresh", "0.196"), "free_thresh")}
@@ -71,8 +80,8 @@ def parse_map_yaml(text: str) -> dict[str, Any]:
 _TOKEN = re.compile(rb"\s*(?:#[^\n]*\n\s*)*(\S+)")
 
 
-def parse_pgm(data: bytes) -> tuple[int, int, bytes]:
-    """→ (宽, 高, 每像素一个字节的栅格,从上往下)。认 P5(二进制)、P2(文本),最大值 ≤ 255。"""
+def _header(data: bytes) -> tuple[bytes, int, int, int, int]:
+    """PGM 头 → (类型, 宽, 高, 最大值, 头结束的位置)。"""
     pos, head = 0, []
     for _ in range(4):
         m = _TOKEN.match(data, pos)
@@ -91,11 +100,27 @@ def parse_pgm(data: bytes) -> tuple[int, int, bytes]:
         raise PreviewError(f"PGM 的宽高或最大值不对({w}×{h},{maxval})")
     if w * h > MAX_PIXELS:
         raise PreviewError(f"PGM 太大({w}×{h})")
+    return magic, w, h, maxval, pos
+
+
+def pgm_limit(head: bytes) -> int:
+    """按文件开头(头就在前几百字节)算这个 PGM 文件最多多大:调用方先比文件大小,超了不读。"""
+    magic, w, h, _, pos = _header(head)
+    return pos + 1 + w * h + _P5_SLACK if magic == b"P5" else MAX_P2_BYTES
+
+
+def parse_pgm(data: bytes) -> tuple[int, int, bytes]:
+    """→ (宽, 高, 每像素一个字节的栅格,从上往下)。认 P5(二进制)、P2(文本),最大值 ≤ 255。"""
+    magic, w, h, maxval, pos = _header(data)
     if magic == b"P5":
         body = data[pos + 1:pos + 1 + w * h]          # 头后面正好一个空白
         if len(body) != w * h:
             raise PreviewError(f"PGM 短了:要 {w * h} 字节,只有 {len(body)}")
+        if len(data) > pos + 1 + w * h + _P5_SLACK:
+            raise PreviewError(f"PGM 比头里说的大({len(data)} 字节,头里说 {w}×{h})")
     else:
+        if len(data) > MAX_P2_BYTES:
+            raise PreviewError(f"文本 PGM 太大({len(data)} 字节,最多 {MAX_P2_BYTES})")
         vals = data[pos:].split()
         if len(vals) < w * h:
             raise PreviewError(f"PGM 短了:要 {w * h} 个数,只有 {len(vals)}")
@@ -104,7 +129,7 @@ def parse_pgm(data: bytes) -> tuple[int, int, bytes]:
         except ValueError:
             raise PreviewError("PGM 的像素不是 0–255 的整数") from None
     if maxval != 255:
-        body = bytes(min(255, v * 255 // maxval) for v in body)
+        body = body.translate(bytes(min(255, v * 255 // maxval) for v in range(256)))
     return w, h, body
 
 
@@ -136,6 +161,9 @@ def render(pgm: bytes, meta: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
         rows.append(col.translate(_COLORS))
     res = meta["resolution"]
     ox, oy = meta["origin"]
-    info = {"width": len(rows[0]), "height": len(rows), "m_per_px": res * k, "left_x": ox,
-            "top_y": oy + h * res}
+    info: dict[str, Any] = {"width": len(rows[0]), "height": len(rows), "m_per_px": res * k,
+                            "left_x": ox, "top_y": oy + h * res}
+    if meta.get("origin_yaw"):
+        info["warning"] = (f"地图 origin 带转角 {meta['origin_yaw']:.3f} rad,预览没按转角转:"
+                           "待命点画的位置可能不准")
     return _png(info["width"], info["height"], rows), info

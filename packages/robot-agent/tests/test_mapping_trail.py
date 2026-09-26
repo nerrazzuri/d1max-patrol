@@ -32,15 +32,41 @@ def test_按距离和转角抽稀_以起点为原点():
     assert t.since(99)["points"] == [] and t.since(99)["total"] == 3
 
 
+def test_左边是正y_不镜像():
+    """内审应修 3:起点朝北,往西(起点的左手边)走 2 m → (0, +2)。以前 y 取反(左右镜像)测试
+    也是绿的。"""
+    t = MappingTrail()
+    for i in range(5):                                      # 一拍 0.5 m(一拍挪 1 m 以上算跳)
+        t.feed(10.0 - i * 0.5, 5.0, math.pi / 2)
+    assert t.since(0)["points"][-1] == [0.0, 2.0]
+
+
+def test_坏里程不记_里程跳了接上():
+    """内审小问题 1、2:NaN/无穷的里程不记(以前每拍一点,很快塞满、回执里是 NaN,手机解不开);
+    一拍挪 1 m 以上(运控重置、里程归零)当跳了:轨迹在跳的地方接上,不画一条长直线、后面整段错位。"""
+    t = MappingTrail()
+    t.feed(0.0, 0.0, 0.0)
+    t.feed(float("nan"), 0.0, 0.0)
+    t.feed(0.0, float("inf"), 0.0)
+    t.feed(0.5, 0.0, 0.0)
+    t.feed(100.0, 50.0, 1.0)                                # 里程重置到了别处
+    t.feed(100.0 + 0.5 * math.cos(1.0), 50.0 + 0.5 * math.sin(1.0), 1.0)   # 接着往前 0.5 m
+    d = t.since(0)
+    assert d["points"] == [[0.0, 0.0], [0.5, 0.0], [1.0, 0.0]], d
+    assert d["jumps"] == 1
+
+
 def test_清空_上限():
     t = MappingTrail()
     for i in range(MAX_POINTS + 10):
         t.feed(i * 0.5, 0.0, 0.0)
     d = t.since(0)
     assert d["total"] == MAX_POINTS and d["full"] is True
+    e = t.epoch
     t.reset()
     t.feed(3.0, 3.0, 0.0)
-    assert t.since(0) == {"points": [[0.0, 0.0]], "since": 0, "total": 1, "full": False}
+    assert t.since(0) == {"points": [[0.0, 0.0]], "since": 0, "total": 1, "full": False,
+                          "epoch": e + 1, "jumps": 0}
 
 
 class 假录包:
@@ -143,4 +169,62 @@ async def test_不进幂等记录(tmp_path):
     await broker.drain()
     assert [a["result"] for a in ears.by["cmd/ack"] if a["command_id"] == "i1"] == \
         ["accepted", "accepted"], "每 2 s 一条:记进幂等记录一天几万行"
+    await rt.close()
+
+
+class 慢录包:
+    """开录要一阵(ros2 bag 起来十几秒):``start`` 等放行才算录上。"""
+    def __init__(self):
+        import asyncio
+        self.recording = False
+        self.last_bag = ""
+        self.gate = asyncio.Event()
+        self.stop_gate = asyncio.Event()
+
+    async def start(self, name):
+        await self.gate.wait()
+        self.recording, self.last_bag = True, name
+
+    async def stop(self):
+        await self.stop_gate.wait()
+        self.recording = False
+
+
+async def test_开录还没起来_报starting_起来当场清空换一趟(tmp_path):
+    """内审应修 1:收下开录就回执,录包起来要十几秒。这段时间手机来问,以前回「没在录」+ 上一趟的
+    轨迹,手机就不问了;而且「哪一趟」只靠点数猜。现在回 starting,开录成功当场清空、换一个 epoch。"""
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    dog = SimRobot(now_ms=c)
+    m = 慢录包()
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=dog,
+                      store_dir=tmp_path / "agent", now_ms=c, loaded_map=("m", "1"), boot_id="b",
+                      home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono, mapper=m)
+    await rt.start()
+    rt.trail.feed(9.0, 9.0, 0.0)                               # 上一趟留下的
+    old = rt.trail.epoch
+    await rt._on_cmd(_cmd("mapping", {"action": "start", "name": "yard"}, "s1", c))
+    await _跑(rt, broker, n=1, r=dog, c=c)
+    await rt._on_cmd(_cmd("mapping_trail", {}, "t1", c))
+    await broker.drain()
+    d = _ack(ears, "t1")["data"]
+    assert d["starting"] is True and d["recording"] is False and d["epoch"] == old
+    m.gate.set()
+    await _跑(rt, broker, n=2, r=dog, c=c)
+    await rt._on_cmd(_cmd("mapping_trail", {}, "t2", c))
+    await broker.drain()
+    d = _ack(ears, "t2")["data"]
+    assert d["starting"] is False and d["recording"] is True
+    assert d["epoch"] == old + 1 and d["points"][0] == [0.0, 0.0] and d["total"] == 1, \
+        "开录成功当场清空(一趟一个 epoch)"
+    await rt._on_cmd(_cmd("mapping", {"action": "stop"}, "s2", c))
+    await _跑(rt, broker, n=1, r=dog, c=c)
+    await rt._on_cmd(_cmd("mapping_trail", {}, "t3", c))
+    await broker.drain()
+    assert _ack(ears, "t3")["data"]["starting"] is False, "在停不是在起"
+    m.stop_gate.set()
+    await _跑(rt, broker, n=2, r=dog, c=c)
     await rt.close()

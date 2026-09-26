@@ -56,6 +56,8 @@ class MapCatalog:
         #: 栅格预览(W00c6h):(地图号, 版本) → (PNG, 坐标换算)。一版登记了就不变,渲染一次缓存着。
         self._previews: dict[tuple[str, str], tuple[bytes, dict[str, Any]]] = {}
         self._preview_lock = threading.Lock()
+        #: 渲染一次只做一张(纯 Python,吃 CPU 和内存);同一版几个人一起点,后来的等着拿缓存。
+        self._render_lock = threading.Lock()
 
     # ------------------------------------------------------------ 收(接收口调)
 
@@ -166,15 +168,33 @@ class MapCatalog:
 
     def preview(self, map_id: str, version: str) -> tuple[bytes, dict[str, Any]]:
         """这张图的栅格预览(W00c6h):PNG 与给手机的坐标换算(``map_preview.render``)。缓存最近
-        ``PREVIEW_CACHE`` 张。没有这张图 ``MapError``;没有栅格 ``NoRaster``;文件坏了
-        ``PreviewError``。"""
-        from d1max_site import map_preview as mp
+        ``PREVIEW_CACHE`` 张。没有这张图 ``MapError``;没有栅格 ``NoRaster``;文件坏了、太大
+        ``PreviewError``。**先看大小再读**(W00c6h 内审:一台被攻破的狗传上来几个 GB,谁点一下
+        站点就 OOM)。"""
         key = (map_id, version)
+        hit = self._cached(key)
+        if hit is not None:
+            return hit
+        with self._render_lock:
+            hit = self._cached(key)                   # 等锁的时候别人渲好了
+            if hit is not None:
+                return hit
+            got = self._render(map_id, version)
+            with self._preview_lock:
+                self._previews[key] = got
+                while len(self._previews) > PREVIEW_CACHE:
+                    self._previews.pop(next(iter(self._previews)))
+            return got
+
+    def _cached(self, key: tuple[str, str]) -> tuple[bytes, dict[str, Any]] | None:
         with self._preview_lock:
             hit = self._previews.pop(key, None)
             if hit is not None:
                 self._previews[key] = hit             # 挪到最后:最近用的
-                return hit
+            return hit
+
+    def _render(self, map_id: str, version: str) -> tuple[bytes, dict[str, Any]]:
+        from d1max_site import map_preview as mp
         try:
             ref = self.get(check_name(map_id, "地图号"), check_name(version, "版本"))
         except ContractError as exc:
@@ -184,19 +204,24 @@ class MapCatalog:
         yamls = sorted(n for n in names if n.endswith(".yaml"))
         if not yamls:
             raise mp.NoRaster(f"{map_id}:{version} 没有栅格(.yaml + .pgm),没法预览")
-        meta = mp.parse_map_yaml((d / yamls[0]).read_text("utf-8", errors="replace"))
+        yp = d / yamls[0]
+        if yp.stat().st_size > mp.MAX_YAML_BYTES:
+            raise mp.PreviewError(f"{yamls[0]}:地图 yaml 太大")
+        meta = mp.parse_map_yaml(yp.read_text("utf-8", errors="replace"))
         image = Path(meta["image"]).name
         if image not in names:
             raise mp.PreviewError(f"{yamls[0]} 说图是 {image},这张图里没有它")
+        ip = d / image
         try:
-            got = mp.render((d / image).read_bytes(), meta)
+            with open(ip, "rb") as fh:
+                limit = mp.pgm_limit(fh.read(4096))
+            size = ip.stat().st_size
+            if size > limit:
+                raise mp.PreviewError(f"文件太大({size} 字节,按头里说的最多 {limit})")
+            png, info = mp.render(ip.read_bytes(), meta)
         except mp.PreviewError as exc:
             raise mp.PreviewError(f"{image}:{exc}") from exc
-        with self._preview_lock:
-            self._previews[key] = got
-            while len(self._previews) > PREVIEW_CACHE:
-                self._previews.pop(next(iter(self._previews)))
-        return got
+        return png, info | {"source": yamls[0]}
 
     # ------------------------------------------------------------ 登记
 

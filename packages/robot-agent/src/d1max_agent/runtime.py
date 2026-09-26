@@ -199,6 +199,8 @@ class AgentRuntime:
         #: 录包时的轨迹(W00c6h);``_trail_on``:上一拍在不在录(录包开始那一拍清空)。
         self.trail = MappingTrail()
         self._trail_on = False
+        #: 录包那个后台槽正在做的是开还是停(W00c6h 内审:开录要十几秒,这段时间报 ``starting``)。
+        self._rec_action = ""
         #: 发件箱隔离的文件重新排上(站点改了规矩之后,管理员让它再传一次);主程序接上。
         self._outbox_retry: Callable[[], int] | None = None
         self.processor.map_hook = self._map_command
@@ -348,7 +350,9 @@ class AgentRuntime:
             n = cmd.payload.get("since", 0)
             if isinstance(n, bool) or not isinstance(n, int) or n < 0:
                 return "payload: since 要是不小于 0 的整数"
-            return "", self.trail.since(n) | {"recording": bool(self.mapper.recording)}
+            starting = self._running(self._rec_job) and self._rec_action == "start"
+            return "", self.trail.since(n) | {"recording": bool(self.mapper.recording),
+                                              "starting": starting}
         if kind.startswith("release_"):
             return await self._release_command(cmd)
         if kind == "outbox_retry":
@@ -396,9 +400,13 @@ class AgentRuntime:
 
     async def _record(self, action: str, name: str, task_id: str) -> None:
         """录包的开始、停止(在后台做:起、停 ros2 bag 要十几秒,不能在命令锁里等)。"""
+        self._rec_action = action
         try:
             if action == "start":
                 await self.mapper.start(name)
+                # 录上了:当场清空、换一趟(W00c6h 内审:不靠每拍看边沿 —— 两拍之间又停又开会漏)。
+                self.trail.reset()
+                self._trail_on = True
             else:
                 await self.mapper.stop()
             self.events.emit("mapping", {"task_id": task_id, "action": action,

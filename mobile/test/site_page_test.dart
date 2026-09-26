@@ -116,8 +116,9 @@ class FakeApi implements SiteApi {
     return trailReplies.removeAt(0);
   }
 
-  /// 地图预览（W00c6h）。[previewMissing]：这张图没有栅格（站点回 404）。
+  /// 地图预览（W00c6h）。[previewMissing]：这张图没有栅格（站点回 404）；[previewWarning] 给了就带上。
   bool previewMissing = false;
+  String? previewWarning;
   @override
   Future<Map<String, dynamic>> mapPreview(String mapId, String version) async {
     calls.add('mapPreview $mapId:$version');
@@ -125,7 +126,8 @@ class FakeApi implements SiteApi {
       throw SiteError(404, '$mapId:$version 没有栅格(.yaml + .pgm),没法预览');
     }
     return <String, dynamic>{'width': 200, 'height': 100, 'm_per_px': 0.1, 'left_x': -10.0,
-      'top_y': 5.0, 'standby': <dynamic>[
+      'top_y': 5.0, 'source': 'yard.yaml', if (previewWarning != null) 'warning': previewWarning,
+      'standby': <dynamic>[
         {'robot_id': 'A', 'name': 'dock', 'x': 1.5, 'y': 2.0, 'yaw': 0.5, 'default': true},
       ]};
   }

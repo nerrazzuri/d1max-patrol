@@ -8,6 +8,7 @@ import struct
 import urllib.error
 import urllib.request
 import zlib
+from pathlib import Path
 
 import pytest
 from test_site_api import MAP, PW, 站
@@ -98,7 +99,7 @@ def test_坏的pgm_没有栅格():
     with pytest.raises(PreviewError):
         render(_pgm(4, 4, bytes(3)), y)                       # 短了
     with pytest.raises(PreviewError, match="太大"):
-        render(b"P5\n99999 99999\n255\n", y)                  # 太大:先看头,不去读
+        render(b"P5\n99999 99999\n255\n", y)                  # 太大:看头就拒
     with pytest.raises(PreviewError):
         parse_map_yaml("image: a.pgm\n")                     # 没分辨率
     with pytest.raises(PreviewError):
@@ -106,6 +107,20 @@ def test_坏的pgm_没有栅格():
     assert issubclass(NoRaster, PreviewError)
     got = parse_pgm(_pgm(2, 2, bytes(4), comment=False))
     assert got[:2] == (2, 2)
+
+
+def test_比头里说的大_P2太大_最大值不是255():
+    """内审应修 2:头里写 4×2、后面拖一大截的 PGM 以前整份照收;P2(文本)一个像素几个字节、解析吃内存,
+    单独一个小上限;最大值不是 255 的按比例换算。"""
+    import d1max_site.map_preview as mp
+    y = parse_map_yaml(_YAML)
+    with pytest.raises(PreviewError, match="比头里说的大"):
+        render(_pgm(4, 2, bytes(8) + b"x" * 1000), y)
+    big = b"P2\n2 1\n255\n" + b"0 " * (mp.MAX_P2_BYTES // 2 + 10)
+    with pytest.raises(PreviewError, match="太大"):
+        render(big, y)
+    png, _ = render(b"P5\n2 1\n100\n" + bytes([0, 100]), y)
+    assert _png_rows(png)[2][0] == bytes([0, 254]), "100/100 是白(空闲),0 是黑"
 
 
 # ------------------------------------------------------------ 站点接口
@@ -193,3 +208,72 @@ def test_同一版只渲染一次(站点, tmp_path, monkeypatch):
         assert s.req("GET", f"/api/maps/{MAP[0]}/11/preview", token=gina)[0] == 200
     assert _raw(s, f"/api/maps/{MAP[0]}/11/preview.png", gina)[0] == 200
     assert len(n) == 1, "图一版登记了就不变:渲染一次缓存着"
+
+
+def test_先看大小再读_yaml太大也拒(站点, tmp_path, monkeypatch):
+    """内审应修 2:以前先把整份文件读进来再看头 —— 一台被攻破的狗传上来几个 GB 的 .pgm,谁点一下
+    「看图」站点就 OOM。现在先看大小:PGM 不许超过最大像素数能装下的,yaml 不超过 64 KB。"""
+    import os
+
+    from d1max_site import map_preview as mp
+    s = 站点
+    d = tmp_path / "src-20"
+    d.mkdir()
+    (d / "yard.yaml").write_bytes(_YAML.encode())
+    with open(d / "yard.pgm", "wb") as fh:                      # 稀疏文件:不真占盘
+        fh.write(b"P5\n4 2\n255\n")
+        fh.truncate(mp.MAX_PIXELS + 64 * 1024)
+    s.maps.import_dir(d, map_id=MAP[0], version="20")
+    real = Path.read_bytes
+
+    def 不许整份读(self):
+        if self.name == "yard.pgm":
+            raise AssertionError("太大的文件不许整份读进来")
+        return real(self)
+    monkeypatch.setattr(Path, "read_bytes", 不许整份读)
+    with pytest.raises(PreviewError, match="太大"):
+        s.maps.preview(MAP[0], "20")
+    monkeypatch.undo()
+    d2 = tmp_path / "src-21"
+    d2.mkdir()
+    (d2 / "yard.yaml").write_bytes(_YAML.encode() + b"#" * (70 * 1024))
+    (d2 / "yard.pgm").write_bytes(_pgm(2, 1, bytes([0, 254])))
+    s.maps.import_dir(d2, map_id=MAP[0], version="21")
+    with pytest.raises(PreviewError, match="yaml"):
+        s.maps.preview(MAP[0], "21")
+    assert os.path.getsize(d / "yard.pgm") > mp.MAX_PIXELS
+
+
+def test_同一版几个人一起点_只渲染一次(站点, tmp_path, monkeypatch):
+    import threading
+    import time
+
+    import d1max_site.map_preview as mp
+    s = 站点
+    _导入(s, tmp_path, "22", {"yard.pgm": _pgm(2, 1, bytes([0, 254])), "yard.yaml": _YAML.encode()})
+    n = []
+    real = mp.render
+
+    def 慢(*a, **k):
+        n.append(1)
+        time.sleep(0.2)
+        return real(*a, **k)
+    monkeypatch.setattr(mp, "render", 慢)
+    ts = [threading.Thread(target=s.maps.preview, args=(MAP[0], "22")) for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(10)
+    assert len(n) == 1, "一起点的只渲一次(站点上渲染一次只做一张)"
+
+
+def test_原点带转角_给警告_几份yaml说用的哪份(站点, tmp_path):
+    s = 站点
+    gina = _登(s, "gina")
+    _导入(s, tmp_path, "23", {"yard.pgm": _pgm(2, 1, bytes([0, 254])),
+                              "yard.yaml": _YAML.replace("[-10.0, -5.0, 0.0]",
+                                                         "[-10.0, -5.0, 0.3]").encode(),
+                              "zz_edited.yaml": _YAML.encode()})
+    code, d = s.req("GET", f"/api/maps/{MAP[0]}/23/preview", token=gina)
+    assert code == 200 and d["source"] == "yard.yaml", d
+    assert "转角" in d["warning"], d
