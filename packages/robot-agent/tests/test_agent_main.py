@@ -108,8 +108,11 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
     sim_loop.call(_起)
     a = None
     try:
+        # 这条测的是旁路进程的运动链路;d1max 默认要人监护(W00c6i),
+        # 监护本身在 test_supervision.py 测。
         args = _args(tmp_path, "--hal", "d1max", "--sidecar", f"127.0.0.1:{sim.port}",
-                     "--mps-per-unit", "1.2", "--radps-per-unit", "1.5", "--deadband", "0.25")
+                     "--mps-per-unit", "1.2", "--radps-per-unit", "1.5", "--deadband", "0.25",
+                     "--autonomy", "autonomous")
         a = agent_main.build(args)
         a.start()
         site = DispatchClient(MemoryTransport(a.broker, "site"), T, now_ms=agent_main.wall_ms)

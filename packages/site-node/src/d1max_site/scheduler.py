@@ -152,6 +152,9 @@ class SiteScheduler:
                 taken.append(rid)
                 continue
             reason = self.dispatcher.dispatchable(rid, "patrol")
+            if not reason and self.dispatcher.autonomy(rid) != "autonomous":
+                # W00c6i:避障真机验收之前真狗要人监护 —— 排程是没人在场时也会到点的东西,不派。
+                reason = f"{rid} 要人监护,不接排程"
             if not reason and self.dispatcher.busy(rid) is not None:
                 reason = f"{rid} 正在跑 {self.dispatcher.busy(rid)}"
             if not reason:

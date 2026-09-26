@@ -2,15 +2,15 @@
   "bags": [
     {
       "bytes": 5000,
-      "first_ms": 1790391174544,
-      "last_ms": 1790391174544,
+      "first_ms": 1790392089201,
+      "last_ms": 1790392089201,
       "name": "yard-0925",
       "robot_id": "A"
     }
   ],
   "maps": [
     {
-      "created_ms": 1790391174541,
+      "created_ms": 1790392089197,
       "files": [
         {
           "name": "estate-1.pgm",

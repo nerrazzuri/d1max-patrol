@@ -365,7 +365,8 @@ async def test_狗明确拒收_记dispatch_failed_这一轮不再重发(tmp_path
     await fake.subscribe(ta.cmd, 回拒)
     await fake.connect()
     caps = Capabilities(robot_id="A", agent="x", adapter="y",
-                        tasks={"patrol": {"map_id": "estate-1", "map_version": "7"}},
+                        tasks={"patrol": {"map_id": "estate-1", "map_version": "7",
+                                          "autonomy": "autonomous"}},
                         actuators={}, sensing={})
     await fake.publish(ta.capabilities, json.dumps(caps.to_wire()).encode(), retain=True)
     t.clock.ms = 毫秒(22, 0, 30)
@@ -384,3 +385,26 @@ async def test_狗明确拒收_记dispatch_failed_这一轮不再重发(tmp_path
     assert got == ["patrol"], "被拒之后这一轮不再每拍重发"
     await t.site.close()
     t.db.close()
+
+
+async def test_要人监护的狗不接排程_记no_robot写明白(站):
+    """W00c6i:真狗在避障真机验收之前是 supervised —— 排程不派给它(没人在场时会被派出去)。"""
+    t = 站
+    for task in ("goto", "patrol"):
+        t.site.clients["A"].capabilities.tasks[task]["autonomy"] = "supervised"
+    t.clock.ms = 毫秒(22, 0, 30)
+    await t.run(1)
+    await _拍(t)
+    [r] = t.sched.runs("nightly")
+    assert r["outcome"] == "no_robot" and "监护" in r["note"]
+    assert not [c for c in t.site.commands("A") if c["kind"] == "patrol"]
+
+
+async def test_读不到自主级别按要人监护算(站):
+    t = 站
+    for task in ("goto", "patrol"):
+        t.site.clients["A"].capabilities.tasks[task].pop("autonomy", None)
+    t.clock.ms = 毫秒(22, 0, 30)
+    await t.run(1)
+    await _拍(t)
+    assert [r["outcome"] for r in t.sched.runs("nightly")] == ["no_robot"]

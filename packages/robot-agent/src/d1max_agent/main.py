@@ -79,12 +79,23 @@ D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 0.4, "radps_pe
                   "deadband": 0.05, "max_fraction": 0.5, "stopped_eps": 0.02}
 
 
+def resolve_autonomy(args: argparse.Namespace) -> str:
+    """自主级别(W00c6i):显式给了就用它;没给的话真狗(``--hal d1max``)要人监护,仿真可自主。"""
+    if args.autonomy is not None:
+        return args.autonomy
+    return "supervised" if args.hal == "d1max" else "autonomous"
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="d1max-agent",
                                 description=f"D1 Max 机器人代理 {AGENT_VERSION}")
     p.add_argument("--transport", type=_transport_arg, required=True,
                    help="mqtt://host[:port]、mqtts://host[:port] 或 memory://(进程内,演示用)")
     p.add_argument("--hal", choices=("sim", "d1max"), default="sim", help="品牌适配器")
+    p.add_argument("--autonomy", choices=("supervised", "autonomous"), default=None,
+                   help="自主级别(W00c6i):supervised = goto/巡检只在有人现场监护时才接;"
+                        "默认 --hal d1max 是 supervised、sim 是 autonomous。**真狗改成 autonomous "
+                        "要等 W11 避障真机验收过了、用户同意**")
     d1 = p.add_argument_group("--hal d1max(比例换算的几个数都待真机实测)")
     d1.add_argument("--sidecar", type=_hostport, default=None,
                     help="旁路进程 host:port,默认 127.0.0.1:8090")
@@ -276,7 +287,7 @@ def build(args: argparse.Namespace) -> Assembled:
             pump, keeper, mapper = _outbox(args, registration, parts)
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,
                                store_dir=args.store_dir, now_ms=wall_ms, loaded_map=args.map,
-                               parts=parts, video=video,
+                               parts=parts, video=video, autonomy=resolve_autonomy(args),
                                storage_facts=pump.facts if pump is not None else None,
                                maps=keeper, mapper=mapper,
                                releases=_releases(args, registration))

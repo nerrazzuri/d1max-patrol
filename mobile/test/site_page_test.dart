@@ -221,6 +221,16 @@ class FakeApi implements SiteApi {
     calls.add('resume $robotId');
     return <String, dynamic>{'robot_id': robotId, 'was_held': true};
   }
+  /// 监护心跳（W00c6i）。给了就按它回（模拟狗不接），不给回收下。
+  Map<String, dynamic>? superviseAck;
+  SiteError? superviseError;
+  @override
+  Future<Map<String, dynamic>> supervise(String robotId, String action) async {
+    calls.add('supervise $robotId $action');
+    if (superviseError != null && action == 'renew') throw superviseError!;
+    return <String, dynamic>{'robot_id': robotId,
+      'ack': superviseAck ?? <String, dynamic>{'result': 'accepted'}};
+  }
 
   /// 视频（W00c5b）。
   int videoHealthCalls = 0;

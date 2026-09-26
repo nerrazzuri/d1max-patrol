@@ -93,6 +93,26 @@ bool robotCan(Map<String, dynamic>? view, String task) {
   return tasks is Map && tasks.containsKey(task);
 }
 
+/// 这台狗要不要人现场监护（W00c6i）：避障真机验收之前真狗是 `supervised` —— goto、巡检只在有人
+/// 用「我在现场监护」时才收。**读不到按要人监护算**（跟站点一个口径）。没有 goto/巡检能力的狗谈不上。
+bool robotNeedsSupervision(Map<String, dynamic>? view) {
+  final caps = view?['capabilities'];
+  final tasks = caps is Map ? caps['tasks'] : null;
+  if (tasks is! Map || !(tasks.containsKey('goto') || tasks.containsKey('patrol'))) return false;
+  for (final k in const ['patrol', 'goto']) {
+    final t = tasks[k];
+    if (t is Map && t['autonomy'] == 'autonomous') return false;
+  }
+  return true;
+}
+
+/// 狗拒收的原因给人看的话（回执里的 `reason`）。认不出的原样给。
+String ackReasonText(String reason) => switch (reason) {
+      'unsupervised' => '它要人现场监护：先打开「我在现场监护」再派',
+      'busy' => '它正忙着别的',
+      _ => reason,
+    };
+
 /// 站点的接口面。界面只认它，测试可以换成假的。
 abstract class SiteApi {
   SiteSession? get session;
@@ -130,6 +150,9 @@ abstract class SiteApi {
 
   /// 解除叫停（W00c5e）：之后站点才重新给这只狗派单。管理员、保安。
   Future<Map<String, dynamic>> resume(String robotId);
+
+  /// 监护心跳（W00c6i）：[action] 是 `renew`（开着的时候每秒一次）或 `release`。管理员、保安。
+  Future<Map<String, dynamic>> supervise(String robotId, String action);
 
   /// 运行记录（W00c5d，决策 8：证据都在站点）：最近的在前；[robotId] 给了只要这台狗的。
   /// 读不懂就抛 `FormatException`，不当成「没有记录」。
@@ -608,6 +631,10 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> resume(String robotId) async => _map(await _send(
       'POST', '/api/robots/${Uri.encodeComponent(robotId)}/resume', <String, dynamic>{}));
+  @override
+  Future<Map<String, dynamic>> supervise(String robotId, String action) async => _map(await _send(
+      'POST', '/api/robots/${Uri.encodeComponent(robotId)}/supervise',
+      <String, dynamic>{'action': action}));
 
   @override
   HttpClient pinnedClient() {

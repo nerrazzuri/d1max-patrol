@@ -41,6 +41,7 @@ from d1max_contract.messages import Command, MapPose, Reconcile, fault_event_dat
 from d1max_contract.policy import policy_for
 from d1max_contract.registration import Registration
 from d1max_contract.storage import StorageFacts
+from d1max_contract.supervision import parse_supervise
 from d1max_contract.teleop import TeleopFrame
 from d1max_contract.topics import TopicAcl
 from d1max_contract.transport import Message, Transport
@@ -77,6 +78,9 @@ RELEASE_MIN_BATTERY_PCT = 30.0
 #: 电量低于这条线,断线时按「不安全」处理(停住等待)。
 BATTERY_FLOOR_PCT = 15.0
 
+#: 要人监护(W00c6i)时,只有这几种任务受监护租约约束(遥控、叫停、换图、发布照常)。
+_AUTONOMOUS_KINDS = frozenset({"goto", "patrol"})
+
 
 def _dumps(d: dict) -> bytes:
     return json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode()
@@ -90,7 +94,8 @@ class AgentRuntime:
                  home: Pose | None = None, runs_root: Path | None = None,
                  monotonic: Callable[[], float] | None = None, video: Any = None,
                  storage_facts: Callable[[], StorageFacts | None] | None = None,
-                 maps: Any = None, mapper: Any = None, releases: Any = None) -> None:
+                 maps: Any = None, mapper: Any = None, releases: Any = None,
+                 autonomy: str = "autonomous") -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -119,6 +124,16 @@ class AgentRuntime:
         self.video = video
         #: halt(W00c5c)当场停车;W00c6a 起先撤导航桥的目标再停 HAL,不依赖引擎。
         self.processor.halt_hook = self._stop_motion
+        #: 自主级别(W00c6i):``supervised`` 下 goto/巡检只在有人现场监护时才收,监护过期当场中止。
+        if autonomy not in ("supervised", "autonomous"):
+            raise ValueError(f"autonomy 要是 supervised 或 autonomous,给的是 {autonomy!r}")
+        self.autonomy = autonomy
+        #: 监护到什么时候(单调钟,秒);``None`` = 没人监护。
+        self._supervised_until: float | None = None
+        self._supervisor = ""
+        self.processor.supervise_hook = self._supervise
+        log.info("自主级别: %s%s", autonomy,
+                 "(goto/巡检只在有人现场监护时才收)" if autonomy == "supervised" else "")
         #: 遥控的收帧时刻、帧有效期、租约走单调钟(W00c5c 内部评审):墙钟会被 NTP 往回拨。
         self._mono = monotonic or time.monotonic
         #: 发件箱的盘况(W00c5d):随遥测每 ``STORAGE_EVERY_MS`` 带一次;满了不接巡检。
@@ -203,6 +218,9 @@ class AgentRuntime:
         事件派遣的 ``goto``、遥控不拍照、不产生文件,照接。正在换图时不接自动任务(遥控照接)。"""
         if self._restarting:
             return "restarting"
+        if cmd.kind in _AUTONOMOUS_KINDS and self.autonomy == "supervised" \
+                and not self._supervised_now():
+            return "unsupervised"                 # W00c6i:没人现场监护,真狗不自己动
         if cmd.kind in ("goto", "patrol") and self._map_busy():
             return "map_switching"
         if cmd.kind != "patrol" or self._storage is None:
@@ -475,7 +493,8 @@ class AgentRuntime:
             robot_id=self.registration.robot_id, hal_caps=self.hal.hal_capabilities(),
             adapter_id=self.adapter_id, loaded_map=self.loaded_map,
             extra_tasks=self._extra_tasks(),
-            nav_path=getattr(self.parts.nav, "PATH_KIND", "straight") if self.parts else "straight")
+            nav_path=getattr(self.parts.nav, "PATH_KIND", "straight") if self.parts else "straight",
+            autonomy=self.autonomy)
         await self.transport.publish(self.topics.capabilities, _dumps(caps.to_wire()),
                                      qos=1, retain=True)
 
@@ -674,6 +693,36 @@ class AgentRuntime:
             except Exception:
                 log.exception("halt 抢先中止任务失败,排队那一步还会再中止一次")
 
+    # ------------------------------------------------------------ 监护(W00c6i)
+
+    def _supervise(self, cmd: Command) -> str:
+        """监护心跳:续(收到时刻 + ``ttl_ms``,单调钟)或放。命令本身过期的,处理器已经拒了。"""
+        try:
+            sup = parse_supervise(cmd.payload)
+        except ContractError as exc:
+            return f"payload: {exc}"
+        if sup.action == "renew":
+            if not self._supervised_now():
+                log.info("有人现场监护了:%s", sup.operator or cmd.task_id)
+            self._supervised_until = self._mono() + sup.ttl_ms / 1000
+            self._supervisor = sup.operator
+        else:
+            if self._supervised_now():
+                log.info("监护放了:%s", sup.operator or self._supervisor)
+            self._supervised_until = None
+        return ""
+
+    def _supervised_now(self) -> bool:
+        until = self._supervised_until
+        return until is not None and self._mono() < until
+
+    async def _enforce_supervision(self) -> None:
+        """``supervised`` 级别下没人监护了:当场中止 goto/巡检(排队的一起清掉),走停车确认。"""
+        if self.autonomy != "supervised" or self._supervised_now():
+            return
+        if await self.processor.abort_kinds(_AUTONOMOUS_KINDS, "supervision_lost"):
+            log.warning("监护过期或放了,中止 goto/巡检")
+
     async def _stop_motion(self) -> None:
         """叫停(W00c6a):**先撤导航桥的目标**(桥进 Cancelled、从这一拍起不再发速度),再停 HAL。
 
@@ -700,6 +749,7 @@ class AgentRuntime:
         if self._went_offline:
             self._went_offline = False
             await self._apply_offline_policy()
+        await self._enforce_supervision()
         if self.parts is not None:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
         await self.processor.step(dt_s)

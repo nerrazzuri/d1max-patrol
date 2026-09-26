@@ -166,6 +166,9 @@ class IncidentDesk:
                 continue
             reason = self.dispatcher.dispatchable(rid, "goto")
             c = self.dispatcher.clients.get(rid)
+            if not reason and self.dispatcher.autonomy(rid) != "autonomous":
+                # W00c6i:事件多半在夜里、没人在场;要人监护的真狗不派。
+                reason = f"{rid} 要人监护,不接事件派遣"
             if not reason:
                 running = c.status.task.task_id if c.status and c.status.task else ""
                 if running.startswith(INCIDENT_PREFIX):

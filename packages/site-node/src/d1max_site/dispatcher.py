@@ -460,6 +460,23 @@ class Dispatcher:
                             priority=TELEOP_PRIORITY)
         return await c.send(cmd, timeout_s=timeout_s)
 
+    async def supervise(self, robot_id: str, sup: Any, *, timeout_s: float) -> Ack:
+        """监护心跳(W00c6i):续或放。不是任务;每秒一条,不进账、不推 SSE。命令的有效期就是租约的
+        有效期 —— 晚到的心跳狗照规矩拒收,断线重连补投的旧心跳续不上租约。"""
+        c = self._client_for(robot_id)
+        cmd = c.new_command("supervise", sup.to_payload(), ttl_ms=sup.ttl_ms,
+                            control_epoch=self.registry.control_epoch(robot_id),
+                            task_id=f"supervise-{robot_id}", priority=0)
+        return await c.send(cmd, timeout_s=timeout_s)
+
+    def autonomy(self, robot_id: str) -> str:
+        """狗报的自主级别(W00c6i);读不到按 ``supervised`` 算。排程与事件派遣只派给
+        ``autonomous``。"""
+        from d1max_contract.supervision import autonomy_of
+        c = self.clients.get(robot_id)
+        caps = c.capabilities.tasks.get("patrol") if c and c.capabilities else None
+        return autonomy_of(caps)
+
     async def teleop_frame(self, robot_id: str, frame: TeleopFrame) -> None:
         """发一帧遥控:专用主题、**QoS 0、不保留**(断线期间的帧不许补投)。"""
         c = self.clients.get(robot_id)

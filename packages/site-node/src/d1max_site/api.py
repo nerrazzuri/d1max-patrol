@@ -78,7 +78,7 @@ ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
-_TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/(teleop|halt|resume)$")
+_TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/(teleop|halt|resume|supervise)$")
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
@@ -139,6 +139,9 @@ class SiteApi:
         #: W00c5d 第三部分:发布目录。
         self.releases = releases
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
+        #: 监护心跳(W00c6i):只是转发,没有要配的,自己建一个。
+        from d1max_site.supervision import SupervisionDesk
+        self.supervision = SupervisionDesk(dispatcher, loop, now_ms=self._now)
         self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
         self._stopping = threading.Event()
         api = self
@@ -256,13 +259,16 @@ class _Handler(TlsHandlerMixin):
     def _handle(self, method: str) -> None:
         self._actor, self._status, self._resp = "", 0, {}
         self._audit_target, self._audit_detail = "", {}
+        #: 这一次请求不进审计(W00c6i:续着的监护心跳每秒一条,只记开始与结束)。
+        self._skip_audit = False
         path = self.path.split("?", 1)[0]
         try:
             self._route(method, path)
         finally:
             # 未登录的乱请求(401/413/400,不是登录也不是事件回调)不进审计:谁都能发,
             # 记下来只会把表撑满(内部评审)。登录失败、事件回调照记。
-            if method != "GET" and self.site.audit is not None and self._actor:
+            if method != "GET" and self.site.audit is not None and self._actor \
+                    and not self._skip_audit:
                 detail = {k: self._resp[k] for k in ("command_id", "task_id", "error", "outcome")
                           if k in self._resp} | self._audit_detail
                 try:
@@ -325,6 +331,8 @@ class _Handler(TlsHandlerMixin):
                     return self._halt(robot_id, user)
                 if m.group(2) == "resume" and method == "POST":
                     return self._resume(robot_id, user)
+                if m.group(2) == "supervise" and method == "POST":
+                    return self._supervise(robot_id, user)
                 if m.group(2) == "teleop" and method == "GET":
                     return self._teleop_ws(robot_id, user)
                 raise HttpError(404, f"没有 {method} {path}")
@@ -646,6 +654,32 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "没有这台狗")
         was = self.site.dispatcher.resume(robot_id, by=str(user))
         return self._send_json(200, {"robot_id": robot_id, "was_held": was})
+
+    def _supervise(self, robot_id: str, user) -> None:
+        """监护心跳(W00c6i):``{"action": "renew"|"release"}``。``dispatch`` 权限 —— 保安、
+        管理员;业主不行(在现场看着狗动,是会派它的人的事)。审计只记开始与结束,续着的心跳不记。"""
+        self._need(user, DISPATCH)
+        d = self._body()
+        action = d.get("action") if isinstance(d, dict) else None
+        if action not in ("renew", "release"):
+            raise HttpError(400, "action 要是 renew 或 release")
+        self._audit_target = robot_id
+        if self.site.dispatcher.registry.get(robot_id) is None:
+            raise HttpError(404, "没有这台狗")
+        desk = self.site.supervision
+        try:
+            if action == "renew":
+                ack, started = desk.renew(robot_id, str(user))
+                self._skip_audit = not started
+                self._audit_detail = {"supervise": "start"} if started else {}
+            else:
+                ack = desk.release(robot_id, str(user))
+                self._audit_detail = {"supervise": "stop"}
+        except DispatchRefused as exc:
+            raise HttpError(409, str(exc)) from exc
+        except (DispatchTimeout, TimeoutError, FutureTimeout) as exc:
+            raise HttpError(504, f"等狗的回执超时: {exc}") from exc
+        return self._send_json(200, {"robot_id": robot_id, "ack": ack})
 
     def _teleop_ws(self, robot_id: str, user) -> None:
         """遥控(W00c5c):先开租约(拒绝回 HTTP 状态码),再升级成 WebSocket;连接就是租约的载体。"""

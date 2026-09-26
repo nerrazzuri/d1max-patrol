@@ -70,7 +70,7 @@ async def test_起来就发能力与状态_均retained(台子):
     hal = r.hal_capabilities()
     assert caps.tasks["teleop"] == {"max_vx": hal.max_vx / 2, "max_wz": hal.max_wz / 2}, \
         "W00c5c:遥控限速是 HAL 能力的一半"
-    assert caps.tasks["patrol"] == {"map_id": "m", "map_version": "1"}
+    assert caps.tasks["patrol"] == {"map_id": "m", "map_version": "1", "autonomy": "autonomous"}
     assert caps.tasks["goto"]["max_speed_mps"] == r.max_vx
     assert caps.adapter.startswith("sim/")
     st = Status.from_wire(ears.by_topic["status"][-1])

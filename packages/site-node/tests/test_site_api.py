@@ -42,7 +42,7 @@ class 站:
     def __init__(self, tmp_path, *, alerts: bool = False, video: dict | None = None,
                  agent_video: bool = True, teleop: dict | None = None,
                  runs: dict | None = None, maps: dict | None = None,
-                 releases: dict | None = None) -> None:
+                 releases: dict | None = None, autonomy: str = "autonomous") -> None:
         self.loop = LoopThread()
         self.loop.start()
         self.db = SiteDB(tmp_path / "site.db")
@@ -101,7 +101,8 @@ class 站:
                                       loaded_map=MAP, home=Pose.from_xy_yaw(0.0, 0.0),
                                       video=self.pusher, maps=keeper,
                                       mapper=(maps or {}).get("mapper"),
-                                      releases=(releases or {}).get("ops"))
+                                      releases=(releases or {}).get("ops"),
+                                      autonomy=autonomy)
             await self.agent.start()
             self.desk = self.sources = None
             if alerts:                      # W00c5a:告警台挂上派遣器

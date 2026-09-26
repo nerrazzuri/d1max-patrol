@@ -470,3 +470,14 @@ def test_站点重启_遗留的dispatching落成失败_不占住狗和防区(tmp
     assert row["outcome"] == "dispatch_failed" and "重启" in row["note"], row
     assert desk._open_incident_robots() == set()
     db.close()
+
+
+async def test_要人监护的狗不接事件派遣(站):
+    """W00c6i:CCTV 事件夜里没人在场,要人监护的真狗不派。"""
+    t = 站
+    await t.run(12)
+    for task in ("goto", "patrol"):
+        t.site.clients["A"].capabilities.tasks[task]["autonomy"] = "supervised"
+    r = await _报(t)
+    assert r["outcome"] == "no_robot" and "监护" in r["note"]
+    assert not _gotos(t)

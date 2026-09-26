@@ -351,6 +351,10 @@ D1MAX_HOME=
 # 同时在 D1MAX_AGENT_ARGS 里带上实测过的换算参数,例如:
 #   D1MAX_AGENT_ARGS=--sidecar 127.0.0.1:8090 --mps-per-unit 0.4 --radps-per-unit 1.0
 D1MAX_HAL=sim
+# 自主级别(W00c6i):空着就按适配器定 —— d1max 是 supervised(goto、巡检只在有人用手机
+# 「我在现场监护」时才收,监护一断就停;站点的排程、事件派遣不派给它),sim 是 autonomous。
+# **真狗改成 autonomous 要等 W11 避障真机验收过了、用户同意**:
+#   D1MAX_AUTONOMY=autonomous
 # 其余参数(按空白拆开接在代理参数后面),例如建图:--mapping
 D1MAX_AGENT_ARGS=
 

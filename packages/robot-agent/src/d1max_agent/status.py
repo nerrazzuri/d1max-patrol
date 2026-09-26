@@ -27,14 +27,18 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
                          loaded_map: tuple[str, str] | None,
                          agent_version: str = AGENT_VERSION,
                          extra_tasks: dict[str, dict[str, Any]] | None = None,
-                         nav_path: str = "straight") -> Capabilities:
+                         nav_path: str = "straight",
+                         autonomy: str = "autonomous") -> Capabilities:
     tasks: dict[str, dict[str, Any]] = {}
     if loaded_map is not None and hal_caps.max_vx > 0:
         # W00c6b:``path`` 报导航走哪种路 —— 直线桥是 ``straight``,规划器上线后(W10)是 ``planned``。
         # 站点据此决定巡检跑完之后怎么回待命点(直线的狗沿来路回)。
-        tasks["goto"] = {"max_speed_mps": hal_caps.max_vx, "path": nav_path}
+        # W00c6i:``autonomy`` 报自主级别 —— ``supervised`` 的狗只在有人现场监护时才收 goto/巡检,
+        # 站点的排程与事件派遣不派给它。
+        tasks["goto"] = {"max_speed_mps": hal_caps.max_vx, "path": nav_path, "autonomy": autonomy}
         # W00c2a:站点据此填 patrol 命令的 map_version、核对任务的 map_id。
-        tasks["patrol"] = {"map_id": loaded_map[0], "map_version": loaded_map[1]}
+        tasks["patrol"] = {"map_id": loaded_map[0], "map_version": loaded_map[1],
+                           "autonomy": autonomy}
     if hal_caps.max_vx > 0:
         # W00c5c:遥控不要地图;限速是 HAL 能力的一半(决策 7 追加条件),站点与手机据此夹、显示。
         tasks["teleop"] = {"max_vx": hal_caps.max_vx / 2, "max_wz": hal_caps.max_wz / 2}

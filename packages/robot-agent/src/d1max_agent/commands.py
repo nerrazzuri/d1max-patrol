@@ -85,6 +85,10 @@ class CommandProcessor:
         self.halt_hook: Callable[[], Any] | None = None
         #: 任务命令的准入(W00c5d):返回非空 = 拒绝原因(发件箱满了回 ``storage_full``)。
         self.admit_hook: Callable[[Command], str] | None = None
+        #: ``supervise``(W00c6i,监护租约的续与放):运行时按单调钟记;回空串 = 收下,否则拒收的理由。
+        self.supervise_hook: Callable[[Command], str] | None = None
+        #: ``abort_kinds`` 请求过中止的当前任务(不重复请求)。
+        self._abort_requested: set[str] = set()
         #: 地图命令(W00c5d 第二部分:``map_activate``/``mapping``/``map_build``,都不是任务):
         #: 返回非空 = 拒绝原因;空串 = 收下(后台做,做完发事件)。
         self.map_hook: Callable[[Command], Any] | None = None
@@ -162,6 +166,13 @@ class CommandProcessor:
         if cmd.kind == "teleop_lease":
             # 续租每秒一条:不进幂等记录(同 video)。
             return self._handle_teleop_lease(cmd)
+        if cmd.kind == "supervise":
+            # 监护心跳每秒一条(W00c6i):不进幂等记录(同 teleop_lease)。
+            if self.supervise_hook is None:
+                return self._finish(self._rej(cmd, "unsupported"))
+            reason = self.supervise_hook(cmd)
+            return (self._rej(cmd, reason) if reason
+                    else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED))
         seen = self.idem.lookup(cmd.command_id)
         if seen is not None:
             return Ack(cmd.command_id, cmd.task_id, AckResult.DUPLICATE, original=seen.to_wire())
@@ -355,6 +366,26 @@ class CommandProcessor:
         if why:
             return self._rej(cmd, why)
         return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
+
+    async def abort_kinds(self, kinds: frozenset[str], reason: str) -> int:
+        """中止当前与排队中的这几种任务(W00c6i:监护过期时中止 goto/巡检)。排队的直接进终态、发事件;
+        当前的请求中止(任务在随后的拍里等停车确认再进终态)。同一个当前任务只请求一次。
+        返回动了几个。"""
+        n = 0
+        for t in [t for t in self.pending if t.kind in kinds]:
+            self.pending.remove(t)
+            t.state = TaskState.ABORTED
+            t.detail = {"reason": reason}
+            self.finished.append(t)
+            self.events.emit("task_aborted", {"task_id": t.task_id, "reason": reason})
+            n += 1
+        cur = self.current
+        if cur is not None and not cur.done and cur.kind in kinds \
+                and cur.task_id not in self._abort_requested:
+            self._abort_requested.add(cur.task_id)
+            await cur.abort(reason)
+            n += 1
+        return n
 
     def _rej(self, cmd: Command, reason: str) -> Ack:
         return Ack(cmd.command_id, cmd.task_id, AckResult.REJECTED, reason=reason)

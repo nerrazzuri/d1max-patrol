@@ -1040,6 +1040,18 @@ def test_agent启动脚本_用自己那一版的代码_参数从env来(tmp_path)
     args = got.stdout.splitlines()[1:]
     assert args[args.index("--hal") + 1] == "d1max"
     assert args[-3:] == ["--mapping", "--sidecar", "127.0.0.1:8090"], "其余参数按空白拆开"
+    assert "--autonomy" not in args, "没配自主级别就不传:代理按适配器定(d1max 要人监护)"
+
+
+def test_agent启动脚本_自主级别从env来(tmp_path):
+    """W00c6i:D1MAX_AUTONOMY 传成 --autonomy(真狗改 autonomous 要等 W11 真机验收、用户同意)。"""
+    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
+            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0", "D1MAX_HAL": "d1max",
+            "D1MAX_AUTONOMY": "autonomous"}
+    got = _启动脚本跑一遍(tmp_path, base)
+    assert got.returncode == 0, got.stderr
+    args = got.stdout.splitlines()[1:]
+    assert args[args.index("--autonomy") + 1] == "autonomous"
 
 
 def test_agent启动脚本_少了站点地址说清楚_不起(tmp_path):

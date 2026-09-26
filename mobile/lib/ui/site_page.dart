@@ -18,6 +18,7 @@ import '../store/site_store.dart';
 import 'site_maps.dart';
 import 'site_releases.dart';
 import 'site_runs.dart';
+import 'site_supervise.dart';
 import 'site_teleop.dart';
 import 'site_video.dart';
 import 'site_watch_page.dart';
@@ -417,7 +418,9 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     try {
       final r = await f();
       final ack = r['ack'];
-      msg = '$what：${ack is Map ? '${ack['result']}' : 'ok'}';
+      final reason = ack is Map ? '${ack['reason'] ?? ''}' : '';
+      msg = '$what：${ack is Map ? '${ack['result']}' : 'ok'}'
+          '${reason.isNotEmpty ? '（${ackReasonText(reason)}）' : ''}';
     } on SiteError catch (e) {
       msg = '$what 没成：$e';
     }
@@ -519,6 +522,9 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
               ),
             ),
           if (_msg != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_msg!)),
+          // 过渡期要人现场监护的狗（W00c6i）：能派单的人才有这个开关。
+          if ((s?.canDispatch ?? false) && robotNeedsSupervision(v))
+            SupervisionSwitch(api: widget.api, robotId: widget.robotId),
           const SizedBox(height: 12),
           Wrap(spacing: 8, runSpacing: 8, children: [
             if (s?.canDispatch ?? false)
