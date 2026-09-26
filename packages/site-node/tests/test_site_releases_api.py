@@ -23,6 +23,9 @@ class 假发布:
     def can_switch_to(self, name):
         return True
 
+    def check_package(self, name):
+        return ""
+
     def install(self, ref):
         if self.fail:
             raise RuntimeError(self.fail)
@@ -124,3 +127,110 @@ def test_上一版退不回去_狗留在新版_站点告警说清楚(tmp_path):
         assert "退不回去" in got[0]["title"] and "留在新版" in got[0]["title"]
     finally:
         s.close()
+
+
+
+# ------------------------------------------------------------ 升级前检查(W00c6d)
+
+
+def _能查(s):
+    _等(lambda: s.disp.clients["A"].capabilities is not None
+        and "release_precheck" in s.disp.clients["A"].capabilities.tasks)
+
+
+def _查(s, tok, name=NAME):
+    return s.req("POST", "/api/robots/A/release", {"action": "precheck", "name": name}, token=tok)
+
+
+def test_升级前检查_狗的清单合上站点那两项_保安不能查(站点, tmp_path):
+    s = 站点
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    s.rel_catalog.add(做包(tmp_path))
+    _能查(s)
+    assert _查(s, gina)[0] == 403
+    s.agent.releases.done.add(NAME)
+    code, d = _查(s, alice)
+    assert code == 200, d
+    got = {c["name"]: c for c in d["checks"]}
+    for n in ("busy", "battery", "package", "agent_start", "localizer", "schema", "backup"):
+        assert n in got, n
+    assert got["schema"]["ok"] and got["schema"]["blocking"]
+    assert not got["backup"]["blocking"], "备份只提示,不拦"
+    assert d["ok"] is True and d["blocking"] == [] and d["name"] == NAME
+    assert ("activate", NAME) not in s.agent.releases.calls, "只查,不切"
+
+
+def test_升级前检查_没登记的版本_404(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _能查(s)
+    assert _查(s, alice, "2026-01-01-000000")[0] == 404
+
+
+def test_新版要的任务包schema比站点当前包高_清单不过_切也不许(站点, tmp_path):
+    from test_site_schedule import 打包
+
+    from d1max_site.catalog import import_bundle
+    s = 站点
+    alice = _登(s, "alice")
+    import_bundle(s.db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
+    s.rel_catalog.add(做包(tmp_path, schema=2))
+    s.agent.releases.done.add(NAME)
+    _能查(s)
+    code, d = _查(s, alice)
+    got = {c["name"]: c for c in d["checks"]}
+    assert code == 200 and not got["schema"]["ok"] and "schema" in d["blocking"], d
+    assert d["ok"] is False
+    code, d = s.req("POST", "/api/robots/A/release", {"action": "activate", "name": NAME},
+                    token=alice)
+    assert code == 409 and "schema" in d["error"], d
+    assert ("activate", NAME) not in s.agent.releases.calls
+
+
+def test_站点没有任务包_schema这一项没有可比的_过(站点, tmp_path):
+    s = 站点
+    alice = _登(s, "alice")
+    s.rel_catalog.add(做包(tmp_path, schema=9))
+    _能查(s)
+    got = {c["name"]: c for c in _查(s, alice)[1]["checks"]}
+    assert got["schema"]["ok"] and "没有任务包" in got["schema"]["detail"]
+
+
+def test_狗拒了切版本_回执里带着清单(站点, tmp_path):
+    s = 站点
+    alice = _登(s, "alice")
+    s.rel_catalog.add(做包(tmp_path))
+    _能查(s)
+    code, d = s.req("POST", "/api/robots/A/release", {"action": "activate", "name": NAME},
+                    token=alice)
+    assert code == 200 and d["ack"]["reason"] == "not_installed", d
+    assert "installed" in d["ack"]["data"]["blocking"]
+
+
+def test_老代理不会回清单_站点说清楚(站点, tmp_path):
+    s = 站点
+    alice = _登(s, "alice")
+    s.rel_catalog.add(做包(tmp_path))
+    _能查(s)
+    s.disp.clients["A"].capabilities.tasks.pop("release_precheck")
+    code, d = _查(s, alice)
+    assert code == 409 and "release_precheck" in d["error"], d
+
+
+def test_站点当前任务包是新格式_新版要的也够_过(站点, tmp_path):
+    """任务包的 schema 按包记(不是写死 1):包写着 2、新版要 2,schema 这一项过。"""
+    import yaml
+    from test_site_schedule import 打包
+
+    from d1max_site.catalog import import_bundle
+    s = 站点
+    alice = _登(s, "alice")
+    b = 打包(tmp_path, 1)
+    raw = yaml.safe_load((b / "bundle.yaml").read_text(encoding="utf-8"))
+    raw["schema"] = 2
+    (b / "bundle.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    import_bundle(s.db, b, imported_by="alice", now_ms=1)
+    s.rel_catalog.add(做包(tmp_path, schema=2))
+    _能查(s)
+    got = {c["name"]: c for c in _查(s, alice)[1]["checks"]}
+    assert got["schema"]["ok"], got["schema"]

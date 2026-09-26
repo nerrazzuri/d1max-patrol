@@ -880,8 +880,11 @@ class _Handler(TlsHandlerMixin):
         return {"x": rows[0]["x"], "y": rows[0]["y"], "yaw": rows[0]["yaw"]} if rows else None
 
     def _releases(self, method: str, path: str, user) -> None:
-        """发布(W00c5d 第三部分)。看:``view``(每一版、每台狗在跑哪一版);装、切、退:``manage``。
-        狗收下就回,做完发事件,失败出 ``release_failed`` 告警;切、退要狗空闲(狗自己查)。"""
+        """发布(W00c5d 第三部分)。看:``view``(每一版、每台狗在跑哪一版);装、切、退、查:``manage``。
+        狗收下就回,做完发事件,失败出 ``release_failed`` 告警;切、退要狗空闲(狗自己查)。
+
+        W00c6d 升级前检查:``precheck`` 发 ``release_precheck``、拿回执里狗的清单,合上站点这边的两项
+        (新版要的任务包 schema、站点备份)回给人;``activate`` 之前站点先核 schema,不过就 409。"""
         from d1max_contract.errors import ContractError
         from d1max_contract.releases import check_release_name
         from d1max_site.releases import ReleaseCatalogError
@@ -905,15 +908,24 @@ class _Handler(TlsHandlerMixin):
         d = self._body()
         action = d.get("action")
         try:
+            if action == "precheck":
+                name = check_release_name(d.get("name"))
+                cat.get(name)                                 # 没登记的版本 404
+                self._audit_detail = {"action": action, "name": name}
+                return self._send_json(200, self._release_precheck(robot_id, name, user))
             if action == "install":
                 ref = cat.get(check_release_name(d.get("name")))
                 kind, payload = "release_install", ref.to_wire()
             elif action == "activate":
                 kind, payload = "release_activate", {"name": check_release_name(d.get("name"))}
+                bad = [c for c in self._release_site_checks(payload["name"])
+                       if not c["ok"] and c["blocking"]]
+                if bad:
+                    raise HttpError(409, bad[0]["detail"])
             elif action == "rollback":
                 kind, payload = "release_rollback", {}
             else:
-                raise HttpError(400, "action 只能是 install / activate / rollback")
+                raise HttpError(400, "action 只能是 install / activate / rollback / precheck")
         except ReleaseCatalogError as exc:
             raise HttpError(404, str(exc)) from exc
         except ContractError as exc:
@@ -921,6 +933,59 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {"action": action, "name": str(d.get("name", ""))[:32]}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
+
+    def _release_site_checks(self, name: str) -> list[dict[str, Any]]:
+        """升级前检查里站点这边的两项(W00c6d):新版要的任务包 schema(拦)、站点备份(只提示)。
+        没登记的版本不知道要几,schema 那项不列(狗那头照样查自己的)。"""
+        from d1max_site.catalog import active_bundle_schema
+        from d1max_site.releases import ReleaseCatalogError
+        out: list[dict[str, Any]] = []
+        try:
+            need: int | None = self.site.releases.requires_mission_schema(name)
+        except ReleaseCatalogError:
+            need = None
+        if need is not None:
+            cur = active_bundle_schema(self.site.dispatcher.db)
+            if cur is None:
+                out.append({"name": "schema", "ok": True, "blocking": True,
+                            "detail": f"新版要任务包 schema ≥ {need};站点没有任务包,"
+                                      "这一项没有可比的"})
+            else:
+                ok = need <= cur[1]
+                out.append({"name": "schema", "ok": ok, "blocking": True,
+                            "detail": f"新版要任务包 schema ≥ {need},站点当前任务包 {cur[0]} 是 "
+                                      f"{cur[1]}" + ("" if ok else " —— 先导入新格式的任务包")})
+        b = self.site.backup
+        st = b.status() if b is not None else {"configured": False}
+        if not st.get("configured"):
+            out.append({"name": "backup", "ok": False, "blocking": False,
+                        "detail": "站点没配备份盘 —— 建议先配上(提示,不拦)"})
+        elif st.get("last_ok_ms") is None:
+            out.append({"name": "backup", "ok": False, "blocking": False,
+                        "detail": "站点还没成功备份过 —— 建议先备份一次(提示,不拦)"})
+        else:
+            hours = max(0.0, (self.site._now() - st["last_ok_ms"]) / 3_600_000)
+            out.append({"name": "backup", "ok": not st.get("stale"), "blocking": False,
+                        "detail": f"站点上次备份是 {hours:.1f} 小时前"
+                                  + (" —— 过期了,建议先备份一次(提示,不拦)"
+                                     if st.get("stale") else "")})
+        return out
+
+    def _release_precheck(self, robot_id: str, name: str, user) -> dict[str, Any]:
+        r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
+            robot_id, "release_precheck", {"name": name}, issued_by=str(user)))
+        ack = r["ack"]
+        if ack["result"] not in ("accepted", "duplicate"):
+            raise HttpError(409, f"狗没查:{ack.get('reason') or ack['result']}")
+        data = ack.get("data") if ack["result"] == "accepted" else \
+            (ack.get("original") or {}).get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("checks"), list):
+            raise HttpError(502, "狗的回执里没有清单")
+        checks = [c for c in data["checks"] if isinstance(c, dict)] + \
+            self._release_site_checks(name)
+        blocking = [c.get("name") for c in checks if not c.get("ok") and c.get("blocking")]
+        return {"robot_id": robot_id, "name": name, "ok": not blocking, "blocking": blocking,
+                "checks": checks}
 
     def _send_file(self, path, content_type: str) -> None:
         size = path.stat().st_size

@@ -53,7 +53,7 @@ log = logging.getLogger(__name__)
 #: 地图命令(W00c5d 第二部分)与发布命令(第三部分):不是任务,进幂等记录,交给 ``map_hook``。
 MAP_KINDS = frozenset({"map_activate", "mapping", "map_build",
                        "release_install", "release_activate", "release_rollback",
-                       "outbox_retry"})
+                       "release_precheck", "outbox_retry"})
 
 TaskFactory = Callable[[Command], Task]
 
@@ -194,9 +194,12 @@ class CommandProcessor:
         if cmd.kind in MAP_KINDS:
             if self.map_hook is None:
                 return self._finish(self._rej(cmd, "unsupported"))
-            reason = await self.map_hook(cmd)
-            return self._finish(self._rej(cmd, reason) if reason
-                                else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED))
+            got = await self.map_hook(cmd)
+            # 钩子回拒绝原因(空串 = 收下),或者 ``(原因, 数据)``:数据放进回执(W00c6d 升级前检查)。
+            reason, data = got if isinstance(got, tuple) else (got, None)
+            return self._finish(
+                Ack(cmd.command_id, cmd.task_id, AckResult.REJECTED, reason=reason, data=data)
+                if reason else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED, data=data))
         if self._fence is not None and cmd.kind in _MOTION_KINDS:
             return self._finish(self._rej(cmd, "halting"))
         if cmd.kind not in self.supported:

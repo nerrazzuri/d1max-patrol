@@ -37,6 +37,7 @@
       "release_install": {
         "current": "2026-09-20-aaaaaa"
       },
+      "release_precheck": {},
       "release_rollback": {},
       "teleop": {
         "max_vx": 0.5,
@@ -48,8 +49,8 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-7050a4ce961f",
-      "issued_at": 1790392088164,
+      "command_id": "cmd-481469d8ab7d",
+      "issued_at": 1790401602874,
       "issued_by": "alice",
       "kind": "goto",
       "payload": {
@@ -65,29 +66,29 @@
       },
       "priority": 60,
       "robot_id": "A",
-      "task_id": "task-25aff1c1be2c"
+      "task_id": "task-b011cb70a7d7"
     }
   ],
   "events": [
     {
-      "boot_id": "boot-fdc9050f17",
+      "boot_id": "boot-2c623d0a85",
       "data": {
         "faults": []
       },
       "kind": "robot_fault",
       "seq": 1,
-      "stamp": 1790392088029
+      "stamp": 1790401602736
     }
   ],
-  "expires_at": 1791392087915,
+  "expires_at": 1791401602616,
   "fresh": true,
   "held": null,
   "revoked": false,
   "robot_id": "A",
   "status": {
-    "boot_id": "boot-fdc9050f17",
+    "boot_id": "boot-2c623d0a85",
     "control_epoch": 1,
-    "last_seen": 1790392088168,
+    "last_seen": 1790401602889,
     "online": true,
     "ready": {
       "control": true,
@@ -98,8 +99,8 @@
     "schema": "1.0",
     "task": {
       "kind": "goto",
-      "state": "pending",
-      "task_id": "task-25aff1c1be2c"
+      "state": "running",
+      "task_id": "task-b011cb70a7d7"
     }
   }
 }

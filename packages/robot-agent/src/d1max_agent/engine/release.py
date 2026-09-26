@@ -242,6 +242,26 @@ def verify_package(where: Path | str) -> ReleaseManifest:
     return manifest
 
 
+def _packed(rel: str) -> bool:
+    """这个相对路径打包时收不收(``_PACK_SKIP_DIRS``/``_PACK_SKIP_SUFFIXES``)。"""
+    return not any(part in _PACK_SKIP_DIRS or part.endswith(_PACK_SKIP_SUFFIXES)
+                   for part in rel.split("/"))
+
+
+def verify_slot(layout: Layout, name: str) -> ReleaseManifest:
+    """槽里这一版的包**现在**还对不对(W00c6d 升级前检查):装的时候核过,装好之后盘坏了、被人
+    改过就不再有人核。按打包时的规矩算指纹 —— 装好之后才长出来的 venv、``__pycache__`` 这些打包
+    本来就不收,不算进来。"""
+    where = layout.release_dir(safe_name(name))
+    manifest = read_manifest(where)
+    if manifest.name != name:
+        raise ReleaseError(f"{MANIFEST_NAME} 里写的是 {manifest.name},槽却是 {name}")
+    got = _tree_sha256(where, skip=MANIFEST_NAME, keep=_packed)
+    if got != manifest.content_sha256:
+        raise ReleaseError(f"槽里的包对不上: 自述写 {manifest.content_sha256},算出来是 {got}")
+    return manifest
+
+
 def _read_project_version(pyproject: Path) -> str:
     """从 ``pyproject.toml`` 的 ``[project]`` 段里读 ``version``。
 

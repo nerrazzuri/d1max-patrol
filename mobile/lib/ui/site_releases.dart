@@ -3,6 +3,8 @@
 /// - 站点上登记过的每一版；每台狗在跑哪一版（狗自己报的）。
 /// - 管理员：给一台狗**装**一版（狗后台下载、核对、落槽、建 venv，不切）→ **切**过去（狗要空闲；
 ///   重启代理，连上站点才算成，起不来自己退回）→ 不对劲就**退**回上一版。
+/// - **查**（W00c6d 升级前检查）：切之前看一张清单 —— 狗那边（空闲、电量、盘、装没装、槽里的包对不对、
+///   起不起得来、定位器/感知/外参）加站点这边（任务包 schema、备份）。切被狗拒的时候也把清单摆出来。
 library;
 
 import 'package:flutter/material.dart';
@@ -43,8 +45,21 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
       if (got == null) return;
       name = got;
     }
-    final what = {'install': '装', 'activate': '切到', 'rollback': '退回上一版'}[action];
+    final what = {
+      'install': '装',
+      'activate': '切到',
+      'rollback': '退回上一版',
+    }[action];
     if (!mounted) return;
+    if (action == 'precheck') {
+      try {
+        final r = await widget.api.releaseAction(robot, action, name: name);
+        await _showChecks('$robot 切到 $name 之前', r);
+      } on SiteError catch (e) {
+        _snack('查不了：$e');
+      }
+      return;
+    }
     if (action != 'install') {
       final ok = await showDialog<bool>(
         context: context,
@@ -68,10 +83,50 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
       _snack(ack['result'] == 'accepted'
           ? '$robot 收到了：$what $name（做完它会报，失败站点出告警）'
           : '$robot 没接：${ack['reason'] ?? ack['result']}');
+      final data = ack['data'];
+      if (ack['result'] != 'accepted' && data is Map<String, dynamic>) {
+        await _showChecks('$robot 没切：为什么', data);          // 狗拒切时回执里带着清单
+      }
     } on SiteError catch (e) {
       _snack('没发出去：$e');
     }
   }
+
+  /// 升级前检查的清单：拦住的在前，只是提示的标出来。
+  Future<void> _showChecks(String title, Map<String, dynamic> r) {
+    final checks = (r['checks'] as List? ?? const []).whereType<Map>().toList()
+      ..sort((a, b) => _rank(a).compareTo(_rank(b)));
+    final blocking = (r['blocking'] as List? ?? const []).length;
+    return showDialog<void>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(title),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(shrinkWrap: true, children: [
+            Text(r['ok'] == true ? '能切：拦的都过了' : '不能切：$blocking 项拦着',
+                key: const Key('precheck-verdict'),
+                style: TextStyle(color: r['ok'] == true ? Colors.green : Colors.red)),
+            for (final ch in checks)
+              ListTile(
+                key: Key('precheck-item-${ch['name']}'),
+                dense: true,
+                leading: Icon(ch['ok'] == true ? Icons.check_circle : Icons.cancel,
+                    color: ch['ok'] == true
+                        ? Colors.green
+                        : (ch['blocking'] == true ? Colors.red : Colors.orange)),
+                title: Text('${ch['name']}${ch['blocking'] == true ? '' : '（提示）'}'),
+                subtitle: Text('${ch['detail'] ?? ''}'),
+              ),
+          ]),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('知道了'))],
+      ),
+    );
+  }
+
+  /// 排序：拦住的不过项 → 提示的不过项 → 过了的。
+  static int _rank(Map ch) => ch['ok'] == true ? 2 : (ch['blocking'] == true ? 0 : 1);
 
   @override
   Widget build(BuildContext context) {
@@ -107,6 +162,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
                       ? Wrap(spacing: 4, children: [
                           for (final (a, label) in [
                             ('install', '装'),
+                            ('precheck', '查'),
                             ('activate', '切'),
                             ('rollback', '退'),
                           ])

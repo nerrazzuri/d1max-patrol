@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 
 _CHUNK = 1024 * 1024
@@ -23,7 +24,8 @@ def sha256_file(path: Path | str) -> str:
     return digest.hexdigest()
 
 
-def tree_sha256(root: Path | str, *, skip: str) -> str:
+def tree_sha256(root: Path | str, *, skip: str,
+                keep: Callable[[str], bool] | None = None) -> str:
     """整棵树的指纹:按相对路径排序,逐条喂「路径 + 这个文件的 sha256」。
 
     **路径要进指纹。** 只把内容首尾相接算一遍的话,改个文件名、把 a 的内容
@@ -36,13 +38,16 @@ def tree_sha256(root: Path | str, *, skip: str) -> str:
     排序按**相对路径的 posix 串**,不按 ``Path`` 对象:后者在 Windows 上按
     ``parts`` 比,和 Linux 上的结果不保证一样,而两边算出不同指纹的那天,
     整套对账就废了。
+
+    ``keep``(W00c6d):只算它说要的那些相对路径 —— 核槽里的包时跳过装好之后才长出来的 venv、
+    ``__pycache__``(打包时本来就不收)。不给就全算。
     """
     root = Path(root)
     digest = hashlib.sha256()
     files = sorted((p.relative_to(root).as_posix(), p)
                    for p in root.rglob("*") if p.is_file())
     for rel, path in files:
-        if rel == skip:
+        if rel == skip or (keep is not None and not keep(rel)):
             continue
         digest.update(rel.encode())
         digest.update(_CHUNK_JOIN)

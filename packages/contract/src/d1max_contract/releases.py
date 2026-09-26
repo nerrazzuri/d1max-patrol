@@ -7,6 +7,9 @@
   只指着这一版带的启动脚本 :data:`AGENT_START`);重启后连上站点才提交,起不来开机守卫数够次数就
   退回上一版。切过去代理起不来的(没有启动脚本的老服务那一代、启动脚本坏了的)一律不切。
 - 命令 ``release_rollback {}``:退回上一版(要有在途的那一次升级)。
+- 命令 ``release_precheck {name}``(W00c6d):升级前检查 —— 狗算一遍清单、什么都不做,清单放在
+  回执的 ``data`` 里(``{name, ok, blocking, checks: [{name, ok, blocking, detail}]}``);
+  ``release_activate`` 被拒时回执里也带这份清单。
 """
 
 from __future__ import annotations
@@ -19,7 +22,8 @@ from d1max_contract.errors import ContractError
 
 #: 版本名:日期 + 一截内容哈希(跟狗上 ``engine.release`` 的规矩一样,也是防路径穿越的闸)。
 NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[0-9a-f]{6,12}$")
-RELEASE_KINDS = frozenset({"release_install", "release_activate", "release_rollback"})
+RELEASE_KINDS = frozenset({"release_install", "release_activate", "release_rollback",
+                           "release_precheck"})
 #: 代理的启动脚本在包里(也是槽里)的位置。代理单元的 ``ExecStart`` 就是 ``current`` 里的它;
 #: 包里没有它的是老服务那一代,站点不登记、狗上不装也不切(W00c5 外审阻断 1)。
 AGENT_START = "deploy/d1max-agent-start"

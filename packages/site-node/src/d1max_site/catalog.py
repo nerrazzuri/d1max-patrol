@@ -70,9 +70,10 @@ def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
                                f"(这份是 v{m.version})")
         c.execute("UPDATE bundles SET active=0")
         c.execute("INSERT INTO bundles(bundle_id, version, content_sha256, timezone, schedule, "
-                  "imported_at, imported_by, active) VALUES (?,?,?,?,?,?,?,1)",
+                  "imported_at, imported_by, active, schema) VALUES (?,?,?,?,?,?,?,1,?)",
                   (m.bundle_id, m.version, m.content_sha256, schedule.timezone,
-                   json.dumps(schedule.to_wire(), ensure_ascii=False), now_ms, imported_by))
+                   json.dumps(schedule.to_wire(), ensure_ascii=False), now_ms, imported_by,
+                   m.schema))
         for mid, mission in missions.items():
             c.execute("INSERT INTO missions(bundle_id, version, mission_id, definition) "
                       "VALUES (?,?,?,?)", (m.bundle_id, m.version, mid,
@@ -80,6 +81,14 @@ def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
     return {"bundle_id": m.bundle_id, "version": m.version, "missions": sorted(missions),
             "schedule_entries": [e.id for e in schedule.entries],
             "timezone": schedule.timezone}
+
+
+def active_bundle_schema(db: SiteDB) -> tuple[str, int] | None:
+    """当前任务包是哪个、schema 几(W00c6d 升级前检查);没有当前包是 ``None``。"""
+    rows = db.query("SELECT bundle_id, version, schema FROM bundles WHERE active=1")
+    if not rows:
+        return None
+    return f"{rows[0]['bundle_id']} v{rows[0]['version']}", int(rows[0]["schema"])
 
 
 def active_bundle(db: SiteDB) -> ActiveBundle | None:

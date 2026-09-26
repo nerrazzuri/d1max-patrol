@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS bundles (
     imported_at    INTEGER NOT NULL,
     imported_by    TEXT NOT NULL,
     active         INTEGER NOT NULL DEFAULT 0,
+    schema         INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (bundle_id, version)
 );
 CREATE TABLE IF NOT EXISTS missions (
@@ -233,7 +234,8 @@ CREATE TABLE IF NOT EXISTS releases (
     sha256     TEXT NOT NULL,
     size       INTEGER NOT NULL,
     created_ms INTEGER NOT NULL,
-    note       TEXT NOT NULL DEFAULT ''
+    note       TEXT NOT NULL DEFAULT '',
+    requires_mission_schema INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS bags (
     robot_id TEXT NOT NULL,
@@ -259,6 +261,9 @@ _ADDED_COLUMNS = (
     ("intercepts", "map_version", "TEXT NOT NULL DEFAULT ''"),       # W00c2c
     ("accounts", "disabled", "INTEGER NOT NULL DEFAULT 0"),          # W00c3
     ("runs", "judge_tries", "INTEGER NOT NULL DEFAULT 0"),           # W00c5d 内部评审
+    # W00c6d 升级前检查:新版要的任务包 schema、每个任务包自己的 schema(老的都是 1)。
+    ("releases", "requires_mission_schema", "INTEGER NOT NULL DEFAULT 1"),
+    ("bundles", "schema", "INTEGER NOT NULL DEFAULT 1"),
 )
 
 

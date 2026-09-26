@@ -139,6 +139,16 @@ class ReleaseOps:
         (``rel.activate``),这里给运行时在收下命令之前先拒。"""
         return rel.can_switch(self.layout, self.current(), name)
 
+    def check_package(self, name: str) -> str:
+        """槽里这一版的包现在还对不对(W00c6d):空串 = 对,否则是为什么。读整棵槽,调用方放线程里。"""
+        try:
+            rel.verify_slot(self.layout, name)
+        except rel.ReleaseError as exc:
+            return str(exc)
+        except OSError as exc:
+            return f"读不了槽: {exc}"
+        return ""
+
     def can_roll_back(self) -> bool:
         """有在途的那次升级,或者盘上有上一版。"""
         return rel.read_pending(self.layout) is not None or self.previous() is not None

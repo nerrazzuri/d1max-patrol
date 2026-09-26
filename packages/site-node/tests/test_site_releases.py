@@ -16,7 +16,7 @@ from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
 NAME = "2026-09-25-bbbbbb"
 
 
-def 做包(tmp, name=NAME, *, sha=None):
+def 做包(tmp, name=NAME, *, sha=None, schema=1):
     d = tmp / "pkgs" / name
     (d / "src").mkdir(parents=True, exist_ok=True)
     (d / "src" / "x.py").write_text("print('hi')\n")
@@ -24,7 +24,7 @@ def 做包(tmp, name=NAME, *, sha=None):
     (d / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
     (d / "deploy" / "d1max-agent-start").chmod(0o755)
     (d / "release.json").write_text(json.dumps({
-        "name": name, "version": "0.9", "requires_mission_schema": 1,
+        "name": name, "version": "0.9", "requires_mission_schema": schema,
         "content_sha256": sha or tree_sha256(d, skip="release.json")}))
     return d
 
@@ -90,3 +90,51 @@ def test_老服务那一代的包不登记_狗上的代理装了也切不过去(
     with pytest.raises(ReleaseCatalogError, match="启动脚本"):
         cat.add(pkg)
     assert cat.list() == []
+
+
+
+def test_登记时记下新版要的任务包schema_列表里有(cat, tmp_path):
+    """W00c6d:升级前检查要拿它跟站点当前任务包的 schema 比。"""
+    cat.add(做包(tmp_path, schema=3))
+    assert cat.list()[0]["requires_mission_schema"] == 3
+    assert cat.requires_mission_schema(NAME) == 3
+
+
+@pytest.mark.parametrize("bad", ["2", 0, -1, True, None])
+def test_要的schema不像话_登记拒(cat, tmp_path, bad):
+    import json as _json
+    pkg = 做包(tmp_path)
+    raw = _json.loads((pkg / "release.json").read_text())
+    raw["requires_mission_schema"] = bad
+    (pkg / "release.json").write_text(_json.dumps(raw))
+    with pytest.raises(ReleaseCatalogError, match="requires_mission_schema"):
+        cat.add(pkg)
+
+
+def test_老库没有这一列_补上_老版本当1(tmp_path):
+    import sqlite3
+    db_path = tmp_path / "old.db"
+    c = sqlite3.connect(db_path)
+    c.execute("CREATE TABLE releases (name TEXT PRIMARY KEY, version TEXT NOT NULL, sha256 TEXT "
+              "NOT NULL, size INTEGER NOT NULL, created_ms INTEGER NOT NULL, note TEXT NOT NULL "
+              "DEFAULT '')")
+    c.execute("INSERT INTO releases VALUES ('2026-09-20-aaaaaa', '0.9', 'x', 1, 1, '')")
+    c.commit()
+    c.close()
+    cat = ReleaseCatalog(tmp_path / "site", SiteDB(db_path), now_ms=lambda: 7)
+    assert cat.requires_mission_schema("2026-09-20-aaaaaa") == 1
+
+
+def test_老库的任务包表也补上schema列(tmp_path):
+    import sqlite3
+    db_path = tmp_path / "old2.db"
+    c = sqlite3.connect(db_path)
+    c.execute("CREATE TABLE bundles (bundle_id TEXT NOT NULL, version INTEGER NOT NULL, "
+              "content_sha256 TEXT NOT NULL, timezone TEXT NOT NULL, schedule TEXT NOT NULL, "
+              "imported_at INTEGER NOT NULL, imported_by TEXT NOT NULL, active INTEGER NOT NULL "
+              "DEFAULT 0, PRIMARY KEY (bundle_id, version))")
+    c.execute("INSERT INTO bundles VALUES ('b', 1, 'x', 'UTC', '{}', 1, 'a', 1)")
+    c.commit()
+    c.close()
+    from d1max_site.catalog import active_bundle_schema
+    assert active_bundle_schema(SiteDB(db_path)) == ("b v1", 1)

@@ -163,3 +163,15 @@ def test_robot_fault事件的数据往返_坏的不收():
                 {"faults": [{"code": "7", "fatal": True}]}, {"faults": ["x"]}):
         with pytest.raises(ContractError):
             parse_fault_event_data(bad)
+
+
+def test_回执可以带数据_只在有的时候写_老报文照读():
+    """W00c6d:查询类命令(``release_precheck``)的答复、切版本被拒时的整份清单,都放在回执的
+    ``data``。"""
+    a = Ack(command_id="c", task_id="t", result=AckResult.ACCEPTED, data={"checks": [1]})
+    assert Ack.from_wire(a.to_wire()) == a
+    assert "data" not in ACK.to_wire(), "没有数据不写这个键,老夹具不变"
+    old = {k: v for k, v in a.to_wire().items() if k != "data"}
+    assert Ack.from_wire(old).data is None
+    with pytest.raises(ContractError, match="data"):
+        Ack.from_wire({**a.to_wire(), "data": [1]})

@@ -253,6 +253,10 @@ class 假发布:
     def can_switch_to(self, name):
         return True
 
+    def check_package(self, name):
+        """槽里的包现在还对不对(W00c6d):空串 = 对。"""
+        return getattr(self, "corrupt", "")
+
     def install(self, ref):
         self.calls.append(("install", ref.name))
         self.installed.add(ref.name)

@@ -2,9 +2,9 @@
   "kind": "status",
   "robot_id": "A",
   "status": {
-    "boot_id": "boot-fdc9050f17",
+    "boot_id": "boot-2c623d0a85",
     "control_epoch": 1,
-    "last_seen": 1790392088168,
+    "last_seen": 1790401602878,
     "online": true,
     "ready": {
       "control": true,
@@ -16,7 +16,7 @@
     "task": {
       "kind": "goto",
       "state": "pending",
-      "task_id": "task-25aff1c1be2c"
+      "task_id": "task-b011cb70a7d7"
     }
   }
 }

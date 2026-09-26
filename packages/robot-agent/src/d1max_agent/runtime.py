@@ -16,7 +16,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,7 @@ from d1max_agent.assembly import EngineParts, build_engine
 from d1max_agent.commands import CommandProcessor
 from d1max_agent.events import EventBook
 from d1max_agent.idempotency import IdempotencyStore
+from d1max_agent.release_precheck import MIN_BATTERY_PCT as _PRECHECK_MIN_BATTERY_PCT
 from d1max_agent.resources import ResourceLedger
 from d1max_agent.status import (
     compose_capabilities,
@@ -72,8 +73,8 @@ def _parse_home(v: Any) -> tuple[float, float, float] | None:
         out.append(float(x))
     return (out[0], out[1], out[2])
 
-#: 切版本、退版本要的电量(%)。切过去起不来,开机守卫还要再退、再起一次。
-RELEASE_MIN_BATTERY_PCT = 30.0
+#: 切版本、退版本要的电量(%)。切过去起不来,开机守卫还要再退、再起一次。跟升级前检查同一个数。
+RELEASE_MIN_BATTERY_PCT = _PRECHECK_MIN_BATTERY_PCT
 
 #: 电量低于这条线,断线时按「不安全」处理(停住等待)。
 BATTERY_FLOOR_PCT = 15.0
@@ -152,6 +153,9 @@ class AgentRuntime:
         self.mapper = mapper
         #: 发布(W00c5d 第三部分):``ReleaseOps``。
         self.releases = releases
+        #: 升级前检查的外部来源(W00c6d,W08 追加):W09 定位器、W11 感知与外参自检接上之后各挂一个
+        #: ``async () -> SourceCheck``;现在是空的,清单里那三项写「还没部署」。
+        self.precheck_sources: list[Callable[[], Awaitable[Any]]] = []
         #: 各用各的后台槽:换图、录包、重建、发布。``_switching``:正在载入、切坐标系。
         self._map_job: asyncio.Task | None = None
         self._rec_job: asyncio.Task | None = None
@@ -278,11 +282,12 @@ class AgentRuntime:
             out["release_install"] = {"current": self.releases.current()}
             out["release_activate"] = {}
             out["release_rollback"] = {}
+            out["release_precheck"] = {}        # W00c6d:升级前检查,清单在回执里
         if self._storage is not None:
             out["outbox_retry"] = {}
         return out
 
-    async def _map_command(self, cmd: Command) -> str:
+    async def _map_command(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
         """地图、发布、发件箱命令:收下(空串)或拒绝原因。下载、载入、录包、重建都在后台做,做完发事件。
         **各用各的后台槽**(W00c5d 第二部分内部评审):重建一小时、下载十几分钟都不许挡出警;
         只有换图(载入、切坐标系)那一小段不接自动任务。"""
@@ -351,18 +356,33 @@ class AgentRuntime:
             self.events.emit("mapping_failed", {"task_id": task_id, "action": action,
                                                 "reason": f"{type(exc).__name__}: {exc}"[:200]})
 
-    async def _release_command(self, cmd: Command) -> str:
+    async def _release_command(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
         """发布命令(W00c5d 第三部分):装在后台做,双槽所在的盘不够不装;切、退要空闲(不跑任务、
         不在换图、录包、重建)、电量不低于 ``RELEASE_MIN_BATTERY_PCT``。收下切、退之后到重启之前
-        什么都不再接(``_restarting``)。"""
+        什么都不再接(``_restarting``)。
+
+        W00c6d:切版本按升级前检查的清单判(``release_precheck``),被拒时回执里带整份清单;
+        ``release_precheck`` 只算清单、什么都不做。"""
+        from d1max_agent.release_precheck import first_block, report
         from d1max_contract.releases import ReleaseRef, check_release_name
         try:
             if cmd.kind == "release_install":
                 ref = ReleaseRef.from_wire(cmd.payload)
-            elif cmd.kind == "release_activate":
+            elif cmd.kind in ("release_activate", "release_precheck"):
                 name = check_release_name(cmd.payload.get("name"))
         except ContractError as exc:
             return f"payload: {exc}"
+        if cmd.kind == "release_precheck":
+            return "", report(name, await self._release_precheck(name))
+        if cmd.kind == "release_activate":
+            items = await self._release_precheck(name)
+            reason = first_block(items)
+            if reason:
+                return reason, report(name, items)
+            self._restarting = True               # 清单里的空闲是最后取的,取完到这儿没有让出
+            self._release_job = asyncio.get_running_loop().create_task(
+                self._release_switch("activate", name, cmd.task_id))
+            return ""
         if self._running(self._release_job) or self._running(self._map_job):
             return "busy"
         if cmd.kind == "release_install":
@@ -371,11 +391,8 @@ class AgentRuntime:
             job = self._release_install(ref, cmd.task_id)
             self._release_job = asyncio.get_running_loop().create_task(job)
             return ""
-        if not self._tasks_idle():
-            return "busy"                         # 重启那几秒里谁都停不了它:跑着任务不切、不退
-        if self._running(self._build_job) or self._running(self._rec_job) or \
-                (self.mapper is not None and self.mapper.recording):
-            return "busy"                         # 重启会悄悄掐掉录包、重建
+        if self._busy_reason():
+            return "busy"                         # 重启那几秒谁都停不了它;也会悄悄掐掉录包、重建
         try:
             battery = (await self.hal.battery()).percent
         except Exception:  # noqa: BLE001 - 读不到电量(适配器还没收到第一帧):不切
@@ -384,21 +401,54 @@ class AgentRuntime:
             return "low_battery"                  # 切过去起不来还要再退、再起一次
         if not self.releases.disk_ok(0):
             return "storage_full"                 # 在途标记、幂等记录、事件簿都要写得进去
-        if cmd.kind == "release_activate":
-            if name == self.releases.current():
-                return "already_running"
-            if not self.releases.ready(name):
-                return "not_installed"
-            if not self.releases.can_switch_to(name):
-                return "no_agent_start"           # 切过去代理起不来(老服务那一代、启动脚本坏了)
-            job = self._release_switch("activate", name, cmd.task_id)
-        else:
-            if not self.releases.can_roll_back():
-                return "nothing_to_roll_back"
-            job = self._release_switch("rollback", "", cmd.task_id)
-        self._restarting = True                   # 跟上面的空闲检查之间没有 await:不会夹进任务
-        self._release_job = asyncio.get_running_loop().create_task(job)
+        if not self.releases.can_roll_back():
+            return "nothing_to_roll_back"
+        if self._busy_reason():
+            return "busy"                         # 上面读电量让出过一次:收下之前再看一眼
+        self._restarting = True
+        self._release_job = asyncio.get_running_loop().create_task(
+            self._release_switch("rollback", "", cmd.task_id))
         return ""
+
+    def _busy_reason(self) -> str:
+        """在忙什么(升级前检查的「空闲」那一项);空串 = 空闲。"""
+        if self._running(self._release_job):
+            return "在装或在切版本"
+        if self._running(self._map_job):
+            return "在换图"
+        if not self._tasks_idle():
+            cur = self.processor.current
+            what = cur.task_id if cur is not None and not cur.done else "排着队的任务"
+            return f"在跑任务 {what}"
+        if self._running(self._build_job):
+            return "在重建地图"
+        if self._running(self._rec_job) or (self.mapper is not None and self.mapper.recording):
+            return "在录包"
+        return ""
+
+    async def _release_precheck(self, name: str):
+        """升级前检查(W00c6d):取好事实,交给纯函数算清单。核槽里的包要读整棵槽,放线程里。"""
+        from d1max_agent.release_precheck import PrecheckInputs, SourceCheck, precheck
+        rel = self.releases
+        try:
+            battery: float | None = (await self.hal.battery()).percent
+        except Exception:  # noqa: BLE001 - 读不到电量(适配器还没收到第一帧):清单里写读不到
+            battery = None
+        installed = rel.ready(name)
+        package_error = await asyncio.to_thread(rel.check_package, name) if installed else ""
+        sources: list[SourceCheck] = []
+        for src in self.precheck_sources:
+            try:
+                sources.append(await src())
+            except Exception as exc:  # noqa: BLE001 - 来源自己炸了:这一项按不健康
+                log.warning("升级前检查的来源炸了: %s", exc)
+                sources.append(SourceCheck(getattr(src, "check_name", "source"), False,
+                                           f"查不了: {type(exc).__name__}: {exc}"))
+        # 空闲放在最后取:上面有 await,取完空闲到调用方收下之间不再让出(不会夹进任务)。
+        return precheck(PrecheckInputs(
+            name=name, current=rel.current(), installed=installed, package_error=package_error,
+            can_switch=rel.can_switch_to(name), disk_ok=rel.disk_ok(0), battery_pct=battery,
+            busy=self._busy_reason(), sources=tuple(sources)))
 
     async def _release_install(self, ref, task_id: str) -> None:
         base = {"task_id": task_id, "name": ref.name}

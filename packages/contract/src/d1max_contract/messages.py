@@ -199,13 +199,15 @@ class Command:
 @dataclass(frozen=True)
 class Ack:
     """狗 → 站点的命令回执。``duplicate`` 必带 ``original``(原结果),其他不带;
-    ``rejected`` 必带 ``reason``。"""
+    ``rejected`` 必带 ``reason``。``data``(可选,W00c6d):这条命令的答复 —— 查询类命令
+    (``release_precheck``)的结果、切版本被拒时的整份清单;没有就不写这个键。"""
 
     command_id: str
     task_id: str
     result: AckResult
     reason: str = ""
     original: dict[str, Any] | None = None
+    data: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.result, AckResult):
@@ -218,18 +220,24 @@ class Ack:
             raise ContractError("Ack: rejected 必须给 reason")
 
     def to_wire(self) -> dict[str, Any]:
-        return _stamped({"command_id": self.command_id, "task_id": self.task_id,
-                         "result": self.result.value, "reason": self.reason,
-                         "original": dict(self.original) if self.original is not None else None})
+        out = {"command_id": self.command_id, "task_id": self.task_id,
+               "result": self.result.value, "reason": self.reason,
+               "original": dict(self.original) if self.original is not None else None}
+        if self.data is not None:
+            out["data"] = dict(self.data)
+        return _stamped(out)
 
     @classmethod
     def from_wire(cls, d: Any) -> Ack:
         d = check_schema(d, "Ack")
+        data = d.get("data")
+        if data is not None and not isinstance(data, dict):
+            raise ContractError("Ack: data 要是对象")
         return cls(command_id=as_str(d, "command_id", "Ack", nonempty=True),
                    task_id=as_str(d, "task_id", "Ack", nonempty=True),
                    result=as_enum(d, "result", "Ack", AckResult),
                    reason=as_str(d, "reason", "Ack"),
-                   original=as_opt_dict(d, "original", "Ack"))
+                   original=as_opt_dict(d, "original", "Ack"), data=data)
 
 
 # ------------------------------------------------------------------ 事件

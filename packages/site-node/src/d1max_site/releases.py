@@ -42,6 +42,11 @@ class ReleaseCatalog:
             raise ReleaseCatalogError(f"{pkg} 不像一个发布包:{exc}") from exc
         if name != pkg.name:
             raise ReleaseCatalogError(f"{MANIFEST} 写的是 {name},目录名却是 {pkg.name}")
+        schema = raw.get("requires_mission_schema", 1)
+        if isinstance(schema, bool) or not isinstance(schema, int) or schema < 1:
+            # 升级前检查拿它跟站点当前任务包的 schema 比(W00c6d)。
+            raise ReleaseCatalogError(f"{MANIFEST} 的 requires_mission_schema 要是 ≥1 的整数:"
+                                      f"{schema!r}")
         for p in pkg.rglob("*"):
             if p.is_symlink() or not (p.is_file() or p.is_dir()) or \
                     (p.is_file() and p.stat().st_nlink > 1):
@@ -67,10 +72,12 @@ class ReleaseCatalog:
                 h.update(chunk)
         os.replace(tmp, out)
         row = {"name": name, "version": str(raw.get("version", "")), "sha256": h.hexdigest(),
-               "size": out.stat().st_size, "created_ms": self._now(), "note": note[:200]}
+               "size": out.stat().st_size, "created_ms": self._now(), "note": note[:200],
+               "requires_mission_schema": schema}
         with self.db.tx() as c:
-            c.execute("INSERT INTO releases(name, version, sha256, size, created_ms, note) "
-                      "VALUES (:name, :version, :sha256, :size, :created_ms, :note)", row)
+            c.execute("INSERT INTO releases(name, version, sha256, size, created_ms, note, "
+                      "requires_mission_schema) VALUES (:name, :version, :sha256, :size, "
+                      ":created_ms, :note, :requires_mission_schema)", row)
         return row
 
     def list(self) -> list[dict[str, Any]]:
@@ -81,6 +88,13 @@ class ReleaseCatalog:
         if not rows:
             raise ReleaseCatalogError(f"没有这一版:{name}")
         return ReleaseRef(name=rows[0]["name"], sha256=rows[0]["sha256"], size=rows[0]["size"])
+
+    def requires_mission_schema(self, name: str) -> int:
+        """这一版要的任务包 schema(W00c6d 升级前检查)。"""
+        rows = self.db.query("SELECT requires_mission_schema FROM releases WHERE name=?", (name,))
+        if not rows:
+            raise ReleaseCatalogError(f"没有这一版:{name}")
+        return int(rows[0]["requires_mission_schema"])
 
     def file_path(self, name: str) -> Path:
         try:

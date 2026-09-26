@@ -39,6 +39,7 @@
           "release_install": {
             "current": "2026-09-20-aaaaaa"
           },
+          "release_precheck": {},
           "release_rollback": {},
           "teleop": {
             "max_vx": 0.5,
@@ -46,15 +47,15 @@
           }
         }
       },
-      "expires_at": 1791392087915,
+      "expires_at": 1791401602616,
       "fresh": true,
       "held": null,
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-fdc9050f17",
+        "boot_id": "boot-2c623d0a85",
         "control_epoch": 1,
-        "last_seen": 1790392088754,
+        "last_seen": 1790401603489,
         "online": true,
         "ready": {
           "control": true,
