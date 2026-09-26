@@ -92,6 +92,9 @@ LEVEL_OF: dict[str, Level] = {
     # 簿子按 robot/kind 聚合,同一个 kind 的话两条协程各死一次会合成一条、后死
     # 的把先死的诊断盖掉。处置同样只有"重启服务"。
     "schedule_died": Level.P1,
+    # 排程这一轮没跑(W00c6c):到点没狗可派、不止一台、钟不可信、狗没收、排程要求报警。本该有狗去
+    # 巡逻而没去,人要么自己去看、要么马上把狗弄好。
+    "schedule_missed": Level.P1,
     # 狗掉线(W00c5a,站点才看得见这件事)。**跑着任务时掉线是 P1**:狗可能停在半路、也可能按断线
     # 策略还在自己走,人得去看;空闲时掉线是 P2:今天之内查网络就行。两件事人要做的不一样,分两个 kind。
     "robot_offline": Level.P1,
@@ -112,6 +115,9 @@ LEVEL_OF: dict[str, Level] = {
     "upload_backlog": Level.P2,
     "bundle_lag": Level.P2,
     "clock_skew": Level.P2,
+    # 排程写了错过就跳过、这一轮跳过了;派出去没收到回执(W00c6c)。今天之内核一下。
+    "schedule_skipped": Level.P2,
+    "schedule_unconfirmed": Level.P2,
     "robot_offline_idle": Level.P2,
     # P3:只记录。日常的正常事件,不需要谁去处理什么。
     "run_done": Level.P3,

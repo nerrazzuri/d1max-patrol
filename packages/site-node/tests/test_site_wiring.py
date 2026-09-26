@@ -30,3 +30,7 @@ def srv(home):
 
 def test_没回待命点接到告警上(srv):
     assert srv.alert_sources.on_feed in srv.dispatcher.feed._listeners
+
+
+def test_排程这一轮没跑接到告警上(srv):
+    assert srv.scheduler.on_outcome == srv.alert_sources.on_schedule_outcome

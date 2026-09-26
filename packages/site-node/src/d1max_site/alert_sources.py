@@ -47,6 +47,19 @@ BATTERY_WORDS: tuple[str, ...] = ("电量", "电池", "battery")
 #: 站点自己那一行告警的 ``robot``。
 SITE = "site"
 
+#: 排程这一轮的去向 → (告警 kind, 人话)(W00c6c)。P1 ``schedule_missed``:本该有狗去巡逻而没去;
+#: P2 ``schedule_skipped``:排程自己写了错过就算了,但错过本身要知道;P2 ``schedule_unconfirmed``:
+#: 派出去了、回执没回来,狗可能在跑。``started``、``displaced`` 不在表里。
+_SCHEDULE_ALERTS: dict[str, tuple[str, str]] = {
+    "no_robot": ("schedule_missed", "到点没有能派的狗"),
+    "ambiguous": ("schedule_missed", "能派的狗不止一台,排程没写派哪台"),
+    "skew": ("schedule_missed", "站点的钟不可信,不起"),
+    "dispatch_failed": ("schedule_missed", "派了,狗没收"),
+    "alarm": ("schedule_missed", "错过了(排程要求报警)"),
+    "skip": ("schedule_skipped", "错过了,按排程跳过这一轮"),
+    "unconfirmed": ("schedule_unconfirmed", "派出去了,没收到回执,狗可能在跑"),
+}
+
 #: 站点主循环多久调一次 :meth:`SiteAlertSources.step`(秒)。升级时限是分钟级,5 s 够细。
 STEP_S = 5.0
 
@@ -297,6 +310,18 @@ class SiteAlertSources:
             m.backlog = False
 
     # ------------------------------------------------------------ 站点自己
+
+    def on_schedule_outcome(self, entry_id: str, robot_id: str | None, outcome: str,
+                            note: str) -> None:
+        """排程这一轮没跑(W00c6c)。执行器只在账里新记一行时调,这里按去向定告警。"""
+        hit = _SCHEDULE_ALERTS.get(outcome)
+        if hit is None:
+            return
+        kind, what = hit
+        self.desk.raise_alert(kind=kind, robot=robot_id or SITE,
+                              title=f"排程 {entry_id} 这一轮没跑:{what}"
+                              if kind == "schedule_missed" else f"排程 {entry_id}:{what}",
+                              detail=note[:300])
 
     def on_feed(self, item: dict) -> None:
         """站点推送流里的一条。只管 ``standby_failed``(自动回待命点没派成,狗停在原地)。"""

@@ -342,6 +342,8 @@ class Server:
         self.alerts = AlertDesk(self.db, now_ms=wall_ms, publish=self.dispatcher.feed.publish)
         self.alert_sources = SiteAlertSources(self.alerts, now_ms=wall_ms)
         self.alert_sources.attach(self.dispatcher)
+        # W00c6c:排程这一轮没跑,告诉值守的人。
+        self.scheduler.on_outcome = self.alert_sources.on_schedule_outcome
         # W00c5b:视频经站点。狗按需把相机推到这里(SRT),这里转 MJPEG 给观众。
         from d1max_site.video import VideoHub, dispatcher_sender
         vcfg = cfg.get("video", {})

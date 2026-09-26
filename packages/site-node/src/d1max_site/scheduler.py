@@ -20,6 +20,11 @@
 - 狗与站点断开时到点:``no_robot`` 记一笔;窗口过了 ``decide`` 给出 ``skip``/``alarm``,也记账。
   **站点不在狗离线时替它补跑**(设计决定三 A 的代价)。
 - 钟:给了参照(``time_reference``)且偏差超阈值就不起,沿用 ``clock_skew``。
+- **这一轮没跑要告诉人**(W00c6b 核查 C → W00c6c):账里**新记**一行 ``no_robot``/``ambiguous``/
+  ``skew``/``dispatch_failed``/``alarm``/``skip``(``started`` 被回执改成 ``dispatch_failed`` 也算),
+  或者回执超时(``unconfirmed``,账里还是 ``started``),就调一次 ``on_outcome(排程, 狗, 去向, 备注)``
+  —— 站点主程序接到告警源上。同一轮同一种去向只调一次(账的唯一键);``displaced`` 不调(这一轮后面照样
+  按 ``decide`` 判,窗口过了落成 ``skip``/``alarm`` 时再说)。回调炸了只记日志,不带走这一拍。
 
 不做:抢占规则、待命点(W00c2b)。正在跑的不打断 —— 选狗时跳过忙着的狗。
 """
@@ -51,14 +56,19 @@ from d1max_site.priorities import schedule_priority
 log = logging.getLogger(__name__)
 
 PERIOD_S = 30.0
+#: 「这一轮没跑」的去向:新记一行就告诉 ``on_outcome``(W00c6c)。
+TELL = frozenset({"no_robot", "ambiguous", "skew", "dispatch_failed", "alarm", "skip"})
 _TERMINAL = {"task_done": "done", "task_failed": "failed", "task_aborted": "aborted",
              "task_preempted": "preempted"}
 
 
 class SiteScheduler:
     def __init__(self, db: SiteDB, dispatcher: Dispatcher, *, now_ms: Callable[[], int],
-                 time_reference: Callable[[], tuple[int, str] | None] | None = None) -> None:
+                 time_reference: Callable[[], tuple[int, str] | None] | None = None,
+                 on_outcome: Callable[[str, str | None, str, str], None] | None = None) -> None:
         self.db = db
+        #: ``(排程 id, 狗或 None, 去向, 备注)``:这一轮没跑(W00c6c),见模块说明。
+        self.on_outcome = on_outcome
         self.dispatcher = dispatcher
         self._now = now_ms
         self._ref = time_reference
@@ -77,9 +87,22 @@ class SiteScheduler:
                 robot_id: str | None = None, task_id: str | None = None,
                 note: str = "") -> None:
         with self.db.tx() as c:
-            c.execute("INSERT OR IGNORE INTO schedule_runs(entry_id, scheduled_ms, outcome, "
-                      "robot_id, task_id, note, decided_at) VALUES (?,?,?,?,?,?,?)",
-                      (entry.id, scheduled_ms, outcome, robot_id, task_id, note, self._now()))
+            cur = c.execute("INSERT OR IGNORE INTO schedule_runs(entry_id, scheduled_ms, outcome, "
+                            "robot_id, task_id, note, decided_at) VALUES (?,?,?,?,?,?,?)",
+                            (entry.id, scheduled_ms, outcome, robot_id, task_id, note,
+                             self._now()))
+            fresh = cur.rowcount == 1
+        if fresh and outcome in TELL:
+            self._tell(entry.id, robot_id or entry.robot or None, outcome, note)
+
+    def _tell(self, entry_id: str, robot_id: str | None, outcome: str, note: str) -> None:
+        if self.on_outcome is None:
+            return
+        try:
+            self.on_outcome(entry_id, robot_id, outcome, note)
+        except Exception:
+            # 报告警本身失败不许带走排程这一拍(跟 schedule_died 的告警同一个理由)。
+            log.exception("排程 %s 这一轮 %s 的告警报不出去", entry_id, outcome)
 
     def runs(self, entry_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         if entry_id is None:
@@ -102,10 +125,14 @@ class SiteScheduler:
         """回执(包括超时之后才到的):狗明确没收,那一行从 started 改成 dispatch_failed。"""
         if ack.result in (AckResult.ACCEPTED, AckResult.DUPLICATE):
             return
+        note = f"狗回 {ack.result.value}: {ack.reason}"
         with self.db.tx() as c:
-            c.execute("UPDATE OR IGNORE schedule_runs SET outcome='dispatch_failed', note=? "
-                      "WHERE task_id=? AND outcome='started'",
-                      (f"狗回 {ack.result.value}: {ack.reason}", ack.task_id))
+            cur = c.execute("UPDATE OR IGNORE schedule_runs SET outcome='dispatch_failed', "
+                            "note=? WHERE task_id=? AND outcome='started'", (note, ack.task_id))
+            rows = (c.execute("SELECT entry_id, robot_id FROM schedule_runs WHERE task_id=?",
+                              (ack.task_id,)).fetchall() if cur.rowcount == 1 else [])
+        for r in rows:
+            self._tell(r["entry_id"], r["robot_id"], "dispatch_failed", note)
 
     # ------------------------------------------------------------ 每拍
 
@@ -205,9 +232,10 @@ class SiteScheduler:
             self._record(entry, scheduled_ms, "dispatch_failed", robot_id=rid, note=str(exc))
             return
         except DispatchTimeout:
+            note = f"{d.kind.value},回执超时:可能已在跑,这一轮不再派"
             with self.db.tx() as c:
-                c.execute("UPDATE schedule_runs SET note=? WHERE task_id=?",
-                          (f"{d.kind.value},回执超时:可能已在跑,这一轮不再派", task_id))
+                c.execute("UPDATE schedule_runs SET note=? WHERE task_id=?", (note, task_id))
+            self._tell(entry.id, rid, "unconfirmed", note)
             return
         if r["ack"]["result"] == "accepted":
             log.info("排程 %s 到点(%s),派 %s 给 %s", entry.id, d.kind.value, entry.mission, rid)
