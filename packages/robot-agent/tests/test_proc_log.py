@@ -312,3 +312,27 @@ async def test_过期的_要重启了_都不查(tmp_path):
     assert _ack(ears, "x2")["reason"] == "restarting"
     rt._restarting = False
     await rt.close()
+
+
+async def test_回执太大_不带数据只说原因_整包在broker上限以内(tmp_path, monkeypatch):
+    """外审(Qwen)第六节 2:各种带数据的回执各管各的大小,出口没有兜底;以后新加一种、忘了限,超过站点
+    broker 的单包上限(262144)狗就被断开。出口兜一道:超了就不带数据,原因里写多大。"""
+    from d1max_agent import proc_logs
+    from d1max_agent.runtime import ACK_MAX_BYTES, _dumps
+    broker, c, ears, rt, logs = await _台(tmp_path)
+    monkeypatch.setattr(proc_logs, "list_logs", lambda d: {"logs": ["x" * 400_000]})
+    await rt._on_cmd(_cmd("proc_log", {}, "g1", c))            # 锁外发的那一路
+    await broker.drain()
+    a = _ack(ears, "g1")
+    assert len(_dumps(a)) <= ACK_MAX_BYTES < 262144
+    assert "data" not in a and a["reason"].startswith("data_too_large"), a
+    assert a["result"] == "accepted"
+
+    async def 大(cmd):
+        return "", {"x": "y" * 400_000}
+    rt._mark_home = 大
+    await rt._on_cmd(_cmd("mark_home", {}, "g2", c))           # 锁里发的那一路
+    await broker.drain()
+    a = _ack(ears, "g2")
+    assert "data" not in a and a["reason"].startswith("data_too_large"), a
+    await rt.close()

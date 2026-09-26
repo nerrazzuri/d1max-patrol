@@ -92,6 +92,10 @@ _HOME_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
 #: 在当前位置标原点(W00c6f):定位偏差要不大于这个(米)。刚设过位置是 0.2 m,约走出 1.3 m 以内。
 HOME_MAX_SIGMA_M = 0.5
 
+#: 一条回执编码之后最多这么大(字节)。站点 broker 单包上限 262144(``max_packet_size``,超了狗被断开),
+#: 留出主题与包头。带数据的回执各自有上限(日志尾巴、轨迹),这里是出口的兜底(外审 Qwen 第六节 2)。
+ACK_MAX_BYTES = 240 * 1024
+
 #: 电量低于这条线,断线时按「不安全」处理(停住等待)。
 BATTERY_FLOOR_PCT = 15.0
 
@@ -103,6 +107,20 @@ _SESSION_MEMORY_S = 60.0
 
 def _dumps(d: dict) -> bytes:
     return json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode()
+
+
+def _ack_bytes(ack: Any) -> bytes:
+    """回执编码成报文;超过 ``ACK_MAX_BYTES`` 就不带数据(连重投里原结果的数据),原因里写多大。"""
+    w = ack.to_wire()
+    raw = _dumps(w)
+    if len(raw) <= ACK_MAX_BYTES:
+        return raw
+    log.warning("回执 %s 编码后 %d 字节,超过 %d:不带数据", ack.command_id, len(raw), ACK_MAX_BYTES)
+    w.pop("data", None)
+    if isinstance(w.get("original"), dict):
+        w["original"].pop("data", None)
+    w["reason"] = f"data_too_large: {len(raw)} 字节(上限 {ACK_MAX_BYTES})"
+    return _dumps(w)
 
 
 class AgentRuntime:
@@ -927,14 +945,14 @@ class AgentRuntime:
                 if isinstance(cid, str):
                     self.processor.unfence(cid)
             if not read:
-                await self.transport.publish(self.topics.ack, _dumps(ack.to_wire()), qos=1)
+                await self.transport.publish(self.topics.ack, _ack_bytes(ack), qos=1)
                 await self._publish_status()
         if read:
             # 只读查询(日志尾巴、录包轨迹)的回执可能上百 KB,发送要等 broker 收完整包 ——
             # 弱网上好几秒。
             # 放在锁外发(W00c6g 内审应修 1):不然这几秒里遥控续租、监护心跳都排在锁后面,租约会过期。
             # 它不改狗的状态,跟别的回执换个先后无害。
-            await self.transport.publish(self.topics.ack, _dumps(ack.to_wire()), qos=1)
+            await self.transport.publish(self.topics.ack, _ack_bytes(ack), qos=1)
 
     async def _halt_now(self, wire: dict, topic: str) -> None:
         """halt 不排队(W00c5c 内部评审):前面的命令在等回执的 PUBACK(上行拥堵时好几秒),halt 不能

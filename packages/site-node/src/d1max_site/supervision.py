@@ -39,7 +39,7 @@ class SupervisionDesk:
         ack = self._send(robot_id, Supervise("renew", self.ttl_ms, operator, session, seq))
         now = self._now()
         with self._lock:
-            sessions = self._active.setdefault(robot_id, {})
+            sessions = self._live(robot_id, now)
             prev = sessions.get(session)
             started = prev is None or prev[1] <= now
             if ack.get("result") == "accepted":
@@ -57,8 +57,15 @@ class SupervisionDesk:
         """站点这边看到的「谁在监护」(没有一个会话没到期就是 ``None``)。"""
         now = self._now()
         with self._lock:
-            live = [op for op, until in self._active.get(robot_id, {}).values() if until > now]
+            live = [op for op, _ in self._live(robot_id, now).values()]
         return live[0] if live else None
+
+    def _live(self, robot_id: str, now: int) -> dict[str, tuple[str, int]]:
+        """这条狗还没到期的会话(持锁调)。**顺手清掉到期的**(外审 Codex 建议修 2:手机崩了、断网了
+        没放开的会话以前一直留着,长期运行慢慢涨)。"""
+        live = {k: v for k, v in self._active.get(robot_id, {}).items() if v[1] > now}
+        self._active[robot_id] = live
+        return live
 
     def refusal(self, robot_id: str) -> str:
         """要让这条狗自主动之前问一句:``supervised`` 的狗没人监护 → 拒的理由;否则空串。

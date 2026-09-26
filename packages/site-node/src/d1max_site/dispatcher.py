@@ -560,7 +560,14 @@ class Dispatcher:
         if before_send is not None:
             # 调用方要在命令**发出去之前**记账(排程执行器:这一轮算起跑过了)——回执可能丢,
             # 狗可能收到了;发完再记的话,回执一丢就会再派一趟。
-            before_send(cmd)
+            try:
+                before_send(cmd)
+            except BaseException:
+                # 记账炸了、命令没发:删掉刚入的账,不留一条永远等不到回执的(外审 Qwen 第三节)。
+                if not quiet:
+                    with self.db.tx() as tx:
+                        tx.execute("DELETE FROM commands WHERE command_id=?", (cmd.command_id,))
+                raise
         try:
             ack = await c.send(cmd, timeout_s=self.ack_timeout_s)
         except DispatchTimeout:

@@ -140,3 +140,21 @@ def test_心跳命令有效期是30秒_租约3秒(监护站):
     finally:
         c.new_command = real
     assert seen == [(30_000, 3_000)]
+
+
+def test_过期的会话不留在站点的内存里():
+    """外审(Codex)建议修 2:会话只在手机正常放开时删;手机崩了、断网了,过期的会话一直留着,
+    长期运行、会话越开越多就慢慢涨。续约、查谁在监护的时候顺手清掉过期的。"""
+    from d1max_site.supervision import SupervisionDesk
+    t = [0]
+    desk = SupervisionDesk(dispatcher=None, loop=None, now_ms=lambda: t[0], ttl_ms=3000)
+    desk._send = lambda robot_id, sup: {"result": "accepted", "reason": ""}
+    for i in range(500):
+        desk.renew("A", "gina", f"p-{i}", 1)
+    t[0] = 10_000
+    assert desk.active("A") is None
+    desk.renew("A", "gina", "p-new", 1)
+    assert list(desk._active["A"]) == ["p-new"], "过期的都清了"
+    assert desk.active("A") == "gina"
+    t[0] = 20_000
+    assert desk.active("A") is None and not desk._active.get("A")

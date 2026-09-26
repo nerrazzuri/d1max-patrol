@@ -186,8 +186,17 @@ def _collect(tmp_path) -> dict[str, object]:
         s.close()
 
 
+#: 登录夹具里的会话令牌换成它(外审 Codex 应修 1):测试站点现发的是随机串,原样写进仓库每次都换、
+#: 还招 GitGuardian 报警。手机那侧只拿它原样带回去,值是什么都行。
+FIXTURE_TOKEN = "fixture_session_not_valid"
+
+
 def test_手机读的站点夹具跟真站点同形(tmp_path):
     got = _collect(tmp_path)
+    got["site_login"] = {**got["site_login"], "token": FIXTURE_TOKEN}
+    # 登录夹具每个字段都是定的(令牌换成了假值):写出来的跟仓库里的必须一模一样,不只是同形。
+    assert json.loads((FIXTURES / "site_login.json").read_text(encoding="utf-8")) == \
+        got["site_login"], "site_login.json 跟写出来的不一样:D1MAX_WRITE_FIXTURES=1 重生成"
     if os.environ.get("D1MAX_WRITE_FIXTURES") == "1":
         for k, v in got.items():
             (FIXTURES / f"{k}.json").write_text(
@@ -198,3 +207,33 @@ def test_手机读的站点夹具跟真站点同形(tmp_path):
         assert f.is_file(), f"{f.name} 没有:D1MAX_WRITE_FIXTURES=1 跑一次这条测试"
         assert _shape(json.loads(f.read_text(encoding="utf-8"))) == _shape(v), \
             f"{f.name} 跟站点现在的报文不同形:D1MAX_WRITE_FIXTURES=1 重生成,再修 Dart 那侧"
+
+
+def test_夹具里不留会话令牌这种随机串():
+    """外审(Codex)应修 1:登录夹具以前原样存测试站点现发的会话令牌(``secrets.token_urlsafe``),
+    每生成一次换一个,GitGuardian 次次报警、每次都是无意义的改动。写夹具时换成固定的假值;这里
+    钉住:仓库里的夹具没有像令牌、密钥那样的高熵串。"""
+    import collections
+    import math
+    import re
+
+    def 熵(t: str) -> float:
+        n = len(t)
+        return -sum(c / n * math.log2(c / n) for c in collections.Counter(t).values())
+
+    def 串(x):
+        if isinstance(x, dict):
+            for v in x.values():
+                yield from 串(v)
+        elif isinstance(x, list):
+            for v in x:
+                yield from 串(v)
+        elif isinstance(x, str):
+            yield x
+
+    login = json.loads((FIXTURES / "site_login.json").read_text(encoding="utf-8"))
+    assert login["token"] == FIXTURE_TOKEN
+    bad = [(f.name, t[:12]) for f in sorted(FIXTURES.glob("*.json"))
+           for t in 串(json.loads(f.read_text(encoding="utf-8")))
+           if len(t) >= 20 and re.fullmatch(r"[A-Za-z0-9_\-+/=]+", t) and 熵(t) > 4.0]
+    assert not bad, bad

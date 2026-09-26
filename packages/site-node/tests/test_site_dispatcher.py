@@ -370,3 +370,18 @@ def test_推送流的同步监听_每条都调_监听炸了不挡订阅者():
     feed.listen(got.append)
     feed.publish({"kind": "x"})
     assert got == [{"kind": "x"}] and sub.get(0) == {"kind": "x"}
+
+
+async def test_发之前记账炸了_命令不留账(台):
+    """外审(Qwen)第三节:「发之前记账」(排程执行器记这一轮起跑过)抛了异常,命令已经入了账却没发
+    出去 —— 命令账里留一条永远等不到回执的。现在删掉它再往上抛。"""
+    t = 台
+    pt = {"position": {"x": 0.1, "y": 0}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
+    m = {"mission": "m", "map_id": "estate-1", "policy": {},
+         "waypoints": [{"name": "p", "pose": pt}]}
+
+    def 炸(cmd):
+        raise RuntimeError("库写不进去")
+    with pytest.raises(RuntimeError, match="库写不进去"):
+        await t.site.patrol("A", m, issued_by="alice", before_send=炸)
+    assert not [c for c in t.site.commands("A") if c["kind"] == "patrol"]
