@@ -169,3 +169,16 @@ def test_参考在别的系里_只拿代理信的帧对齐_错的那一大段不
     m = replay.metrics(fr, msgs, view, FLAT, reference=ref, reference_same_frame=False)
     assert m["error_m"]["aligned_on"] == "trusted"
     assert m["error_m"]["trusted"]["max"] < 0.05, m["error_m"]
+
+
+def test_重定位后第一帧离得远_回放里照样模拟再请一次_不一直卡着():
+    """W09c 压缩实验踩到:回放里重定位没照办时没人再请,整段都不可信。"""
+    fr = []
+    for i in range(100):                                   # 开头 3 帧离初值 3 m(MOLA 还没对上)
+        off = 3.0 if i < 3 else 0.0
+        fr.append(replay.Frame(stamp=100.0 + 0.1 * i, p=(0.05 * i + off, 0.0, 0.0), q=_q(0.0),
+                               quality=0.97, proc_s=0.0))
+    msgs = replay.simulate(fr, FLAT, (0.0, 0.0, 0.0))
+    view = replay.agent_view(msgs)
+    m = replay.metrics(fr, msgs, view, FLAT)
+    assert m["agent_trusted_share"] > 0.8

@@ -48,6 +48,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                    help="装法上雷达系里的「朝前」(RS-Airy 是 Z),拿来核")
     c.add_argument("--sensor-in-base", type=lambda s: _floats(s, 2), default=(0.4043, 0.0),
                    help="雷达在狗身上的水平偏移(朝前,朝左,米;前雷达按 SDK 文档 2.10 节)")
+    b = sub.add_parser("build", help="从录包建一个地图版本(MOLA 建图 + 打包)")
+    b.add_argument("--bag", type=Path, required=True)
+    b.add_argument("--out", type=Path, required=True, help="版本文件放这儿")
+    b.add_argument("--work", type=Path, default=None, help="中间文件(默认 <out>.work)")
+    b.add_argument("--lidar-topic", default="/front_lidar")
+    b.add_argument("--prior-pack", default="none", help="none 或 regroup:<体素米>:<范围倍数>")
+    b.add_argument("--reuse", action="store_true", help="用 --work 里已有的 MOLA 输出,只打包")
     for name in ("replay", "sweep"):
         r = sub.add_parser(name)
         r.add_argument("--bag", type=Path, required=True)
@@ -68,7 +75,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _calibrate(a)
     if a.cmd == "replay":
         return _replay(a)
+    if a.cmd == "build":
+        return _build(a)
     return _sweep(a)
+
+
+def _build(a: argparse.Namespace) -> int:
+    from d1max_localizer import build
+    work = a.work or a.out.with_name(a.out.name + ".work")
+    timings = {} if a.reuse else build.run_mapping(a.bag, work, lidar_topic=a.lidar_topic)
+    files = build.package(work, a.out, prior_pack=build.PriorPack.parse(a.prior_pack),
+                          source=f"bag:{a.bag.name}", timings=timings)
+    print(json.dumps(json.loads((a.out / "build.json").read_text()), ensure_ascii=False,
+                     indent=2))
+    print("文件:", ", ".join(files))
+    return 0
 
 
 def _calibrate(a: argparse.Namespace) -> int:

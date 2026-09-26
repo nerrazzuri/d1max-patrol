@@ -9,6 +9,10 @@ description = "狗上的定位器节点(W09b):MOLA 只定位 + 定位质量,经�
 requires-python = ">=3.10"
 dependencies = ["d1max-contract"]
 
+[project.optional-dependencies]
+# 建图打包(build.py)画规划栅格要它;狗上用 ROS 系统 Python 里 apt 装的 python3-numpy
+build = ["numpy>=1.21"]
+
 [project.scripts]
 d1max-localizer = "d1max_localizer.main:main"
 d1max-loc = "d1max_localizer.tools:main"

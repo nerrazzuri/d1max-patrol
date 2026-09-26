@@ -169,6 +169,9 @@ def simulate(frames: Sequence[Frame], frames_cfg: Frames, init: tuple[float, flo
         core.on_scan()
         core.on_estimate(Estimate(stamp=f.stamp, p=f.p, q=f.q, quality=f.quality))
         core.tick()
+        w = core.want_reloc()                             # 核心要再请一次:当后端马上请了、MOLA 收下
+        if w is not None:                                 # (命令行跑的 MOLA 不受影响,后面的帧照旧)
+            core.relocalized(req=w.req, x=w.x, y=w.y, yaw=w.yaw, sigma=w.sigma, human=w.human)
         out.extend((at, m) for m in core.drain())
     return out
 

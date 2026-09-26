@@ -145,6 +145,10 @@ class Frames:
     def _L(self) -> Mat:
         return _level(_unit(self.up))
 
+    def level_matrix(self) -> Mat:
+        """MOLA 系 → 地图平面系的旋转(「上」对准 +Z);点云乘它,x、y 就是地图平面坐标、z 是高度。"""
+        return self._L
+
     def _sensor_basis(self) -> Mat:
         """雷达系里的(前、左、上)三根轴当列。"""
         u = _unit(self.sensor_up)
