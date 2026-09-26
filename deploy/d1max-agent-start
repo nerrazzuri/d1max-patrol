@@ -11,6 +11,8 @@
 #   D1MAX_SITE_MQTT=mqtts://<站点>:8883   D1MAX_MAP=<map_id>:<version>   D1MAX_HOME=x,y,yaw
 #   D1MAX_HAL=sim|d1max(缺省 sim;W00d 真机验收过了才改 d1max)
 #   D1MAX_AUTONOMY=supervised|autonomous(W00c6i;空着按适配器定:d1max 要人监护、sim 可自主)
+#   D1MAX_LOCALIZER=anchor|bridge(W09a;空着 = anchor 里程锚定。bridge 要本机定位桥上有定位器,
+#                    真狗等 W09b 的定位器验过再设)
 #   D1MAX_AGENT_ARGS=其余参数(比如 --mapping、--sidecar 127.0.0.1:8090 --mps-per-unit …)
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -21,6 +23,7 @@ exec "$here/venv/bin/d1max-agent" \
   --tls-key /etc/d1max/tls/robot.key \
   --hal "${D1MAX_HAL:-sim}" \
   ${D1MAX_AUTONOMY:+--autonomy} ${D1MAX_AUTONOMY:+"$D1MAX_AUTONOMY"} \
+  ${D1MAX_LOCALIZER:+--localizer} ${D1MAX_LOCALIZER:+"$D1MAX_LOCALIZER"} \
   --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent \
   --outbox "${D1MAX_OUTBOX:?单元里应该有 D1MAX_OUTBOX}" \
   --map "${D1MAX_MAP:?/etc/d1max/env 里没有 D1MAX_MAP(地图号:版本)}" \

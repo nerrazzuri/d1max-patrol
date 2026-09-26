@@ -355,6 +355,9 @@ D1MAX_HAL=sim
 # 「我在现场监护」时才收,监护一断就停;站点的排程、事件派遣不派给它),sim 是 autonomous。
 # **真狗改成 autonomous 要等 W11 避障真机验收过了、用户同意**:
 #   D1MAX_AUTONOMY=autonomous
+# 地图位姿从哪来(W09a):空着 = 里程锚定(人在手机上「设位置」)。**W09b 的定位器在这台狗上验过之后**
+# 才改成 bridge(定位器的 ROS 节点经本机定位桥给代理位姿):
+#   D1MAX_LOCALIZER=bridge
 # 其余参数(按空白拆开接在代理参数后面),例如建图:--mapping
 D1MAX_AGENT_ARGS=
 

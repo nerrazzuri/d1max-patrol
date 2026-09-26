@@ -349,3 +349,50 @@ def test_引擎跑完之后_最后一趟不再算正在写(tmp_path):
     finally:
         a.parts.engine._task = None
         a.stop()
+
+
+def test_仿真定位器要配仿真狗和本机定位桥(tmp_path):
+    """W09a:``--sim-localizer`` 只在 ``--hal sim --localizer bridge`` 时有意义。"""
+    assert _args(tmp_path).localizer == "anchor", "默认照旧里程锚定"
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--sim-localizer")
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--hal", "d1max", "--localizer", "bridge", "--sim-localizer")
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--localizer", "amcl")
+
+
+def test_仿真定位器经本机定位桥_跑通一条goto(tmp_path):
+    import shutil
+    import tempfile
+    import time
+    from pathlib import Path
+    d = Path(tempfile.mkdtemp(prefix="lm", dir="/tmp"))      # Unix 套接字路径要短
+    a = agent_main.build(_args(tmp_path, "--localizer", "bridge", "--sim-localizer",
+                               "--loc-socket", str(d / "loc.sock")))
+    try:
+        a.start()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not a.bridge.call(
+                lambda: _ok(a), timeout_s=5.0):
+            time.sleep(0.05)
+        assert a.bridge.call(lambda: _ok(a), timeout_s=5.0), "仿真定位器连上、定到位了"
+        site = DispatchClient(MemoryTransport(a.broker, "site"), T, now_ms=agent_main.wall_ms)
+        a.bridge.call(site.start)
+        target = MapPose(map_id="estate-1", map_version="7", frame_id="map", x=0.6, y=0.0, yaw=0.0)
+        cmd = site.new_command("goto", {"target": target.to_wire(), "max_speed_mps": 1.0},
+                               ttl_ms=60_000, control_epoch=1)
+        ack = a.bridge.call(lambda: site.send(cmd, timeout_s=5.0), timeout_s=10.0)
+        assert ack.result is AckResult.ACCEPTED, ack
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline and not a.runtime.processor.finished:
+            time.sleep(0.05)
+        fin = a.runtime.processor.finished[-1]
+        assert fin.state is TaskState.DONE, (fin.state, fin.detail)
+    finally:
+        a.stop()
+        shutil.rmtree(d, ignore_errors=True)
+
+
+async def _ok(a) -> bool:
+    return a.runtime.parts.nav.anchor.ok(True)

@@ -97,6 +97,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="自主级别(W00c6i):supervised = goto/巡检只在有人现场监护时才接;"
                         "默认 --hal d1max 是 supervised、sim 是 autonomous。**真狗改成 autonomous "
                         "要等 W11 避障真机验收过了、用户同意**")
+    p.add_argument("--localizer", choices=("anchor", "bridge"), default="anchor",
+                   help="地图位姿从哪来(W09a):anchor = 里程锚定(人给一次位置);bridge = "
+                        "本机定位桥上的定位器(W09b 的 ROS 节点,或 --sim-localizer)。"
+                        "**真狗在 W09b 的定位器验过之前不改**")
+    p.add_argument("--loc-socket", type=Path, default=None,
+                   help="本机定位桥的 Unix 套接字(默认 <store-dir>/loc.sock;只给代理这个账号)")
+    p.add_argument("--sim-localizer", action="store_true",
+                   help="仿真:在进程里起一个仿真定位器连本机定位桥"
+                        "(要 --hal sim --localizer bridge)")
     d1 = p.add_argument_group("--hal d1max(比例换算的几个数都待真机实测)")
     d1.add_argument("--sidecar", type=_hostport, default=None,
                     help="旁路进程 host:port,默认 127.0.0.1:8090")
@@ -181,6 +190,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             p.error("--intake 只认 https://(狗的身份是 mTLS 证书)")
         if args.intake is not None and not all(given):
             p.error("--intake 要带 --tls-ca、--tls-cert、--tls-key(狗的身份是证书)")
+    if args.sim_localizer and (args.hal != "sim" or args.localizer != "bridge"):
+        p.error("--sim-localizer 要配 --hal sim --localizer bridge")
     d1max_only = [k for k in D1MAX_DEFAULTS if getattr(args, k) is not None]
     if args.invert_yaw:
         d1max_only.append("invert_yaw")
@@ -203,13 +214,27 @@ class Assembled:
     period_s: float
     _stop: threading.Event
     pump: Any = None
+    #: 仿真定位器(``--sim-localizer``,W09a):运行时起来之后连本机定位桥、按 10 Hz 出位姿。
+    sim_loc: Any = None
 
     def start(self) -> None:
         """在 bridge 的循环里起运行时,并开始每拍 step;发件箱一起起。"""
         self.bridge.call(self.runtime.start, timeout_s=30.0)
         self.bridge.spawn(lambda: self._drive())
+        if self.sim_loc is not None:
+            self.bridge.spawn(lambda: self._sim_localize())
         if self.pump is not None:
             self.pump.start()
+
+    async def _sim_localize(self) -> None:
+        """仿真定位器:连上就按 10 Hz 出位姿;断了(被代理断开、代理重启桥)1 s 后重连。"""
+        while not self._stop.is_set():
+            try:
+                if await self.sim_loc.connect():
+                    await self.sim_loc.run(10.0)
+            except OSError as exc:
+                log.warning("仿真定位器连不上本机定位桥:%s", exc)
+            await asyncio.sleep(1.0)
 
     async def _drive(self) -> None:
         dt = self.period_s
@@ -228,6 +253,11 @@ class Assembled:
 
     def stop(self) -> None:
         self._stop.set()
+        if self.sim_loc is not None:
+            try:
+                self.bridge.call(self.sim_loc.close, timeout_s=5.0)
+            except Exception:
+                log.exception("仿真定位器关不干净")
         try:
             self.bridge.call(self.runtime.close, timeout_s=10.0)
         except Exception:
@@ -291,7 +321,8 @@ def build(args: argparse.Namespace) -> Assembled:
                                parts=parts, video=video, autonomy=resolve_autonomy(args),
                                storage_facts=pump.facts if pump is not None else None,
                                maps=keeper, mapper=mapper,
-                               releases=_releases(args, registration))
+                               releases=_releases(args, registration),
+                               localizer=args.localizer, loc_socket=args.loc_socket)
         if pump is not None:
             runtime._outbox_retry = pump.retry_refused
         return hal, parts, runtime, pump
@@ -300,8 +331,12 @@ def build(args: argparse.Namespace) -> Assembled:
         return _assemble()
 
     hal, parts, runtime, pump = bridge.call(_in_loop, timeout_s=30.0)
+    sim_loc = None
+    if args.sim_localizer:
+        from d1max_adapter_sim.localizer import SimLocalizer
+        sim_loc = SimLocalizer(hal, args.loc_socket or Path(args.store_dir) / "loc.sock")
     return Assembled(bridge=bridge, runtime=runtime, parts=parts, hal=hal, broker=broker,
-                     period_s=args.period, _stop=threading.Event(), pump=pump)
+                     period_s=args.period, _stop=threading.Event(), pump=pump, sim_loc=sim_loc)
 
 
 class _NoIntake:

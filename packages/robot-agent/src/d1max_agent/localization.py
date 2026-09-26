@@ -98,8 +98,9 @@ class OdomAnchor:
     def map_ref(self) -> tuple[str, str] | None:
         return self._map
 
-    def on_map(self, map_ref: tuple[str, str] | None) -> None:
-        """狗换了(或刚载入)一张图。锚定是按图的:换了图坐标就不一样了,作废(仿真按原样锚到新图)。"""
+    def on_map(self, map_ref: tuple[str, str] | None, dir: str = "") -> None:
+        """狗换了(或刚载入)一张图。锚定是按图的:换了图坐标就不一样了,作废(仿真按原样锚到新图)。
+        ``dir``(这张图在狗上的目录)锚定用不着,接口跟定位器一致(W09a)。"""
         if self.identity:
             self._map = map_ref
             self._T = (0.0, 0.0, 0.0) if map_ref is not None else None

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from d1max_agent.assembly import EngineParts, build_engine
+from d1max_agent.bridge_localizer import BridgeLocalizer
 from d1max_agent.commands import READ_KINDS, CommandProcessor
 from d1max_agent.engine.homing import HomePoint
 from d1max_agent.engine.machine import RunState
@@ -30,6 +31,7 @@ from d1max_agent.events import EventBook
 from d1max_agent.homes import HomeBook
 from d1max_agent.idempotency import IdempotencyStore
 from d1max_agent.localization import OdomAnchor
+from d1max_agent.locbridge import LocBridgeServer
 from d1max_agent.mapping_trail import MappingTrail
 from d1max_agent.release_precheck import MIN_BATTERY_PCT as _PRECHECK_MIN_BATTERY_PCT
 from d1max_agent.resources import ResourceLedger
@@ -132,7 +134,8 @@ class AgentRuntime:
                  monotonic: Callable[[], float] | None = None, video: Any = None,
                  storage_facts: Callable[[], StorageFacts | None] | None = None,
                  maps: Any = None, mapper: Any = None, releases: Any = None,
-                 autonomy: str | None = None, odom_identity: bool | None = None) -> None:
+                 autonomy: str | None = None, odom_identity: bool | None = None,
+                 localizer: str = "anchor", loc_socket: Path | None = None) -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -160,7 +163,21 @@ class AgentRuntime:
         # W00c6e:地图位姿来自里程锚定。仿真的里程就是真实位置(按原样);真狗开机要人给一次位置。
         if odom_identity is None:
             odom_identity = self.adapter_id.split("/")[0] == "sim"
-        if parts is not None:
+        #: 本机定位桥(W09a):配了定位器(``localizer="bridge"``)才有。
+        self._locsrv: LocBridgeServer | None = None
+        if localizer not in ("anchor", "bridge"):
+            raise ValueError(f"localizer 要是 anchor 或 bridge,给的是 {localizer!r}")
+        if parts is not None and localizer == "bridge":
+            # 地图位姿来自本机桥上的定位器(W09b 的 ROS 节点;仿真是仿真定位器)。
+            mono = monotonic or time.monotonic
+            src = BridgeLocalizer(monotonic=mono)
+            src.on_map(loaded_map)
+            self._locsrv = LocBridgeServer(loc_socket or store_dir / "loc.sock", src,
+                                           monotonic=mono)
+            src.link = self._locsrv
+            src.on_corrected = self._loc_corrected
+            parts.nav.use_anchor(src)
+        elif parts is not None:
             anchor = OdomAnchor(identity=odom_identity)
             anchor.on_map(loaded_map)
             parts.nav.use_anchor(anchor)
@@ -205,6 +222,8 @@ class AgentRuntime:
         #: ``(名字, async () -> SourceCheck)``;现在是空的,清单里那三项写「还没部署」。每个来源最多等
         #: ``PRECHECK_SOURCE_TIMEOUT_S``,炸了、卡住都按不健康(名字按登记的,不信来源自己报的)。
         self.precheck_sources: list[tuple[str, Callable[[], Awaitable[Any]]]] = []
+        if self._locsrv is not None:
+            self.precheck_sources.append(("定位器", self._loc_health))
         #: 各用各的后台槽:换图、录包、重建、发布。``_switching``:正在载入、切坐标系。
         self._map_job: asyncio.Task | None = None
         self._rec_job: asyncio.Task | None = None
@@ -530,9 +549,17 @@ class AgentRuntime:
             return "odom_invalid"                 # 先说里程读不到:这时 stopped() 也答不上来
         if not await self.hal.stopped():
             return "moving"
-        delta = self.parts.nav.anchor.anchor(m, pose, (o.x, o.y, o.yaw))
-        # 引擎记的出发点与来路按修正量挪过去(修正量给不出就来路作废);丢定位的次数从头算。
-        self.parts.engine.relocalized(delta)
+        loc = self.parts.nav.anchor
+        if isinstance(loc, BridgeLocalizer):
+            # 配了定位器(W09a):请它按人给的位置(初值)重定位;稳下来的时候修正量经 on_corrected
+            # 交给引擎。
+            why = await loc.relocalize(m, pose)
+            if why:
+                return why
+        else:
+            delta = loc.anchor(m, pose, (o.x, o.y, o.yaw))
+            # 引擎记的出发点与来路按修正量挪过去(修正量给不出就来路作废);丢定位的次数从头算。
+            self.parts.engine.relocalized(delta)
         self.events.emit("relocalized", {"task_id": cmd.task_id, "source": source,
                                          "map_id": m[0], "map_version": m[1],
                                          "x": round(pose[0], 3), "y": round(pose[1], 3),
@@ -593,6 +620,15 @@ class AgentRuntime:
             return str(exc)
         except OSError as exc:
             return f"read_failed: {exc}"[:200]
+
+    def _loc_corrected(self, delta: tuple[float, float, float] | None) -> None:
+        """定位器跳过之后稳下来、按人给的位置重定位完(W09a):同人工重设(W00c6e),来路、出发点按修正量
+        挪;给不出就来路作废。"""
+        if self.parts is not None:
+            self.parts.engine.relocalized(delta)
+
+    async def _loc_health(self) -> Any:
+        return self.parts.nav.anchor.health()
 
     def _home_busy(self) -> str:
         """标原点时在忙什么(W00c6f 内审应修 3);空串 = 可以标。遥控不算忙(「开过去再标」)。"""
@@ -760,7 +796,9 @@ class AgentRuntime:
                 home = self.maps.home_of(ref)
             self.parts.switch_map(ref.map_id, None if home is None else Pose.from_xy_yaw(*home),
                                   now_ms=self._now())
-            self.parts.nav.anchor.on_map(self.loaded_map)     # 换了图:锚定作废(W00c6e)
+            # 换了图:锚定作废(W00c6e);定位器换先验(W09a,带上这张图在狗上的目录)。
+            self.parts.nav.anchor.on_map(
+                self.loaded_map, str(self.maps.dir_of(ref)) if self.maps is not None else "")
 
     async def _publish_caps(self) -> None:
         caps = compose_capabilities(
@@ -801,6 +839,8 @@ class AgentRuntime:
             # 两个桥各自记着「连上了」(老 HTTP 面的绿灯读它);HAL.connect 是幂等的。
             await self.parts.device.connect()
             await self.parts.nav.connect()
+        if self._locsrv is not None:
+            await self._locsrv.start()              # 定位器可以先连上来,不等站点
         self.transport.set_will(
             self.topics.status,
             _dumps(offline_status(boot_id=self.boot_id,
@@ -857,6 +897,8 @@ class AgentRuntime:
 
         if self.parts is not None:
             await _step("关引擎", self.parts.engine.aclose)
+        if self._locsrv is not None:
+            await _step("关本机定位桥", self._locsrv.close)
         if self.video is not None:
             async def _video_off() -> None:
                 self.video.close()
@@ -1059,6 +1101,8 @@ class AgentRuntime:
             self._went_offline = False
             await self._apply_offline_policy()
         await self._enforce_supervision()
+        if self._locsrv is not None:
+            await self._locsrv.tick()            # 本机定位桥:心跳、定位器没声就当它断了
         if self.parts is not None:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
         await self._feed_trail()

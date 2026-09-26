@@ -81,14 +81,16 @@ def compose_telemetry(*, now_ms: int, odom: Odometry, battery: Battery, health: 
                       loaded_map: tuple[str, str] | None, task_state: TaskState | None,
                       online: bool, storage: StorageFacts | None = None,
                       anchor: Any = None) -> Telemetry:
-    """``anchor``(W00c6e):地图位姿 = 锚定 ∘ 里程(没锚过就没有位姿)、``loc_quality`` 看锚定、
-    带 ``loc`` 块。
+    """``anchor``(W00c6e 里程锚定、W09a 定位器):地图位姿来自它、``loc_quality`` 看它、带 ``loc``
+    块。
+    **定位不可信时不带地图位姿**(W08 决定 3:站点按位姿选狗、手机画位置都不该拿一个不可信的位置;
+    为什么不可信在 ``loc`` 里)。
     不给按原样(里程就是地图位姿)。"""
     if anchor is not None:
         odom_ok = health.loc_quality > 0.0 and odom.valid
         est = anchor.estimate((odom.x, odom.y, odom.yaw)) if odom.valid else None
         pose = None
-        if loaded_map is not None and est is not None:
+        if loaded_map is not None and est is not None and anchor.ok(odom_ok):
             pose = MapPose(map_id=loaded_map[0], map_version=loaded_map[1], frame_id="map",
                            x=est.x, y=est.y, yaw=est.yaw)
         return Telemetry(stamp=now_ms, pose=pose, battery_pct=battery.percent,

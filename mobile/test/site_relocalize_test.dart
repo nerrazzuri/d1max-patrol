@@ -25,6 +25,23 @@ Map<String, dynamic> _view(Map<String, dynamic>? loc, {bool canReloc = true}) {
 }
 
 void main() {
+  test('配了定位器的狗：设位置被拒的原因说人话（W09a）', () {
+    expect(ackReasonText('localizer_unavailable: 定位器没连上'), '定位器没连上或没回：定位器没连上');
+    expect(ackReasonText('localizer_refused: 初值离地图太远'), '定位器没接这个位置：初值离地图太远');
+  });
+
+  test('配了定位器的狗：定位状态按来源说人话（W09a）', () {
+    Map<String, dynamic> l(bool a, String reason, String source, [double s = 0.12]) =>
+        {'localizer': 'bridge', 'anchored': a, 'reason': reason, 'source': source, 'sigma_m': s};
+    expect(locText(l(false, '定位器没连上', 'localizer')), '定位：定位器还没给出位置 —— 定位器没连上');
+    expect(locText(l(true, '定位器跟里程对不上(位移差 0.54 m),等它稳下来', 'scan_match')),
+        '定位不可信：定位器跟里程对不上(位移差 0.54 m),等它稳下来');
+    expect(locText(l(true, '', 'scan_match')), '定位：点云匹配，偏差约 0.1 m');
+    expect(locText(l(true, '', 'rtk', 0.03)), '定位：RTK，偏差约 0.0 m');
+    expect(locText(l(true, '', 'fused')), '定位：融合，偏差约 0.1 m');
+    expect(locText(l(true, '', 'dead_reckoning', 0.3)), '定位：里程推算中（定位器一时没来），偏差约 0.3 m');
+  });
+
   test('定位状态的人话', () {
     expect(locText(null), '');
     expect(locText({'anchored': false, 'reason': '换了地图,要重新设位置', 'source': 'odom_anchor'}),

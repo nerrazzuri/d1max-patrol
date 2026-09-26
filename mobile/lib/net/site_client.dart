@@ -116,6 +116,13 @@ String ackReasonText(String reason) {
     final why = reason.contains(':') ? reason.substring(reason.indexOf(':') + 1).trim() : '';
     return '定位不够好${why.isEmpty ? '' : '：$why'}';
   }
+  // 配了定位器的狗（W09a）：设位置要经定位器。
+  if (reason.startsWith('localizer_unavailable')) {
+    return '定位器没连上或没回：${reason.substring(reason.indexOf(':') + 1).trim()}';
+  }
+  if (reason.startsWith('localizer_refused')) {
+    return '定位器没接这个位置：${reason.substring(reason.indexOf(':') + 1).trim()}';
+  }
   // 狗说了在忙什么（W00c6f 标原点：在跑任务、在换图……）。
   if (reason.startsWith('busy:')) return '它正忙着别的：${reason.substring(5).trim()}';
   if (reason.startsWith('persist_failed')) return '狗上记不下（盘满了？）：${reason.substring(14).replaceFirst(':', '').trim()}';
@@ -141,11 +148,29 @@ String _ackReasonText(String reason) => switch (reason) {
 String locText(Map<String, dynamic>? loc) {
   if (loc == null) return '';
   final reason = '${loc['reason'] ?? ''}';
+  if (loc['localizer'] == 'bridge') return _bridgeLocText(loc, reason);
   if (loc['anchored'] != true) return '定位：没设位置 —— ${reason.isEmpty ? '点「设位置」' : reason}';
   if (reason.isNotEmpty) return '定位不可信：$reason';
   if (loc['source'] == 'odom_identity') return '定位：仿真（里程就是位置）';
   final s = loc['sigma_m'];
   return '定位：偏差约 ${s is num ? s.toStringAsFixed(1) : '?'} m';
+}
+
+/// 配了定位器的狗（W09a，经本机定位桥）：来源说人话。
+String _bridgeLocText(Map<String, dynamic> loc, String reason) {
+  if (loc['anchored'] != true) {
+    return '定位：定位器还没给出位置${reason.isEmpty ? '' : ' —— $reason'}';
+  }
+  if (reason.isNotEmpty) return '定位不可信：$reason';
+  final src = switch ('${loc['source']}') {
+    'scan_match' => '点云匹配',
+    'rtk' => 'RTK',
+    'fused' => '融合',
+    'dead_reckoning' => '里程推算中（定位器一时没来）',
+    final other => other,
+  };
+  final s = loc['sigma_m'];
+  return '定位：$src，偏差约 ${s is num ? s.toStringAsFixed(1) : '?'} m';
 }
 
 /// 站点的接口面。界面只认它，测试可以换成假的。
