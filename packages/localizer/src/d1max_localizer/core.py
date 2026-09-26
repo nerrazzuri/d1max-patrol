@@ -62,6 +62,11 @@ STALL_S = 1.0
 START_TIMEOUT_S = 60.0
 #: 最后可信的位置:σ 不大于这个、没在丢定位。
 TRUST_SIGMA_M = 0.5
+#: 重定位之后第一帧离给的位置超过 max(3σ, 这个) 就当 MOLA 没照办(2026-09-27 实跑:MOLA 还没收到过
+#: 点云时收下的重定位,会被它第一帧点云上的「初始定位」按默认原点盖掉),再请;请
+#: :data:`RELOC_MAX_TRIES` 次不成就报丢。
+RELOC_MISS_M = 1.5
+RELOC_MAX_TRIES = 3
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,17 @@ class Estimate:
     p: tuple[float, float, float]                    # MOLA 系里雷达的位置
     q: tuple[float, float, float, float]             # MOLA 系里雷达的姿态(x, y, z, w)
     quality: float                                   # ICP 质量,0–1
+
+
+@dataclass(frozen=True)
+class RelocWant:
+    """核心要适配层去请 MOLA 重定位:没照办要再请一次,或者重启之后按最后可信的位置。"""
+    x: float
+    y: float
+    yaw: float
+    sigma: float
+    req: int | None
+    human: bool
 
 
 class LocalizerCore:
@@ -99,6 +115,12 @@ class LocalizerCore:
         self._good: tuple[float, float, float] | None = None
         self._restart = False
         self._want_reloc = False
+        self._down = ""
+        self._queued = False
+        self._target: RelocWant | None = None           # 最近一次重定位给的位置(核第一帧用)
+        self._retry: RelocWant | None = None
+        self._misses = 0
+        self._reloc_failed = ""
 
     # ------------------------------------------------------------ 进
 
@@ -107,6 +129,7 @@ class LocalizerCore:
         self._need_init = True
         self._good = None                               # 别的图:旧位置不能当初值
         self._want_reloc = False
+        self._forget_reloc()
 
     def prior_loaded(self, map_ref: tuple[str, str], frames: Frames) -> None:
         if map_ref != self._map:
@@ -114,9 +137,16 @@ class LocalizerCore:
         self._map, self._frames, self._loading = map_ref, frames, False
         self._need_init = True
         self._want_reloc = False
+        self._forget_reloc()
+
+    def backend_down(self, reason: str) -> None:
+        """MOLA 进程没了(退出、被杀):在它重新起来之前一帧都不信。"""
+        self._down = reason
+        self._need_init = True
 
     def backend_started(self) -> None:
         """MOLA(重新)起来了:它的位置作废,要重新给初值;有最后可信的位置就自己给。"""
+        self._down = ""
         self._restart = False
         self._need_init = True
         self._started_at = self._now()
@@ -128,8 +158,14 @@ class LocalizerCore:
     def relocalized(self, *, req: int | None, x: float, y: float, yaw: float, sigma: float,
                     human: bool) -> bool:
         """MOLA 收下了按 ``(x, y, yaw)`` 重定位(适配层调了它的服务)。没有先验回假(不收)。"""
-        if self._frames is None or self._loading:
+        if not self.can_relocalize():
             return False
+        want = RelocWant(float(x), float(y), float(yaw), float(sigma), req, human)
+        if self._retry is None or (self._retry.x, self._retry.y, self._retry.req) != (x, y, req):
+            self._misses = 0                             # 新的一次(不是没照办再请的)
+        self._target, self._retry = want, None
+        self._reloc_failed = ""
+        self._queued = False
         self._need_init = False
         self._want_reloc = False
         self._reloc_tag = (req,)
@@ -143,11 +179,16 @@ class LocalizerCore:
                  "人给的" if human else "自动")
         return True
 
+    def reloc_queued(self) -> None:
+        """人给了位置,但 MOLA 刚起来、还没出过位姿:适配层先记着,它出了第一帧再下发。"""
+        self._queued = True
+
     def on_scan(self) -> None:
         self._last_scan = self._now()
 
     def on_estimate(self, e: Estimate) -> None:
-        if self._frames is None or self._loading or self._need_init or self._map is None:
+        if (self._frames is None or self._loading or self._need_init or self._map is None
+                or self._down):
             return
         if self._stamp is not None and e.stamp <= self._stamp:
             return                                       # 同一帧、乱序
@@ -156,6 +197,8 @@ class LocalizerCore:
         self._last_est_at = now
         self._got_since_start = True
         x, y, yaw = self._frames.to_map2d(e.p, e.q)
+        if self._reloc_tag is not None and self._target is not None and self._missed(x, y):
+            return
         tag, self._reloc_tag = self._reloc_tag, None
         jump = tag is not None
         if not jump and self._last is not None:
@@ -190,6 +233,13 @@ class LocalizerCore:
 
     # ------------------------------------------------------------ 出
 
+    @property
+    def map_ref(self) -> tuple[str, str] | None:
+        return self._map
+
+    def can_relocalize(self) -> bool:
+        return self._frames is not None and not self._loading
+
     def drain(self) -> list[Any]:
         out, self._out = self._out, []
         return out
@@ -204,10 +254,12 @@ class LocalizerCore:
     def want_restart(self) -> bool:
         return self._restart
 
-    def want_reloc(self) -> tuple[float, float, float, float] | None:
+    def want_reloc(self) -> RelocWant | None:
+        if self._retry is not None:
+            return self._retry
         if not self._want_reloc or self._good is None:
             return None
-        return (*self._good, AUTO_RELOC_SIGMA_M)
+        return RelocWant(*self._good, AUTO_RELOC_SIGMA_M, None, False)
 
     # ------------------------------------------------------------ 内部
 
@@ -216,8 +268,19 @@ class LocalizerCore:
             return "initializing", "还没有先验"
         if self._loading or self._frames is None:
             return "initializing", "在载入先验"
+        if self._down:
+            return ("lost" if self._good is not None else "initializing"), self._down
+        if self._reloc_failed:
+            return "lost", self._reloc_failed
         if self._need_init:
-            why = "在按最后的位置重定位" if self._want_reloc else "等人给初始位置"
+            if self._queued:
+                why = "定位程序在起,起来就按人给的位置定位"
+            elif self._retry is not None:
+                why = "定位程序没照给的位置定位,再请一次"
+            elif self._want_reloc:
+                why = "在按最后的位置重定位"
+            else:
+                why = "等人给初始位置"
             return "initializing", why
         if self._last_scan is None or now - self._last_scan > NO_SCAN_S:
             ago = "" if self._last_scan is None else f" {now - self._last_scan:.0f} 秒"
@@ -238,6 +301,30 @@ class LocalizerCore:
         self._seq += 1
         self._out.append(State(seq=self._seq, state=state, reason=reason))
         log.info("定位器状态:%s %s", state, reason)
+
+    def _missed(self, x: float, y: float) -> bool:
+        """重定位之后第一帧:离给的位置太远就当 MOLA 没照办,这一帧不发,再请(或者报丢)。"""
+        t = self._target
+        assert t is not None
+        d = math.hypot(x - t.x, y - t.y)
+        if d <= max(3 * t.sigma, RELOC_MISS_M):
+            return False
+        self._misses += 1
+        self._need_init = True
+        self._reloc_tag = None
+        log.warning("重定位之后第一帧离给的位置 %.1f m:MOLA 没照办(第 %d 次)", d, self._misses)
+        if self._misses >= RELOC_MAX_TRIES:
+            self._reloc_failed = f"定位程序没按给的位置重定位(差 {d:.1f} m),请重新设位置"
+            self._retry = None
+        else:
+            self._retry = t
+        return True
+
+    def _forget_reloc(self) -> None:
+        self._queued = False
+        self._target = self._retry = None
+        self._misses = 0
+        self._reloc_failed = ""
 
     @staticmethod
     def _jumped(dt: float, dx: float, dy: float, dyaw: float) -> bool:

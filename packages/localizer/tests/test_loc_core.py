@@ -193,11 +193,10 @@ def test_点云在来_MOLA_不出位姿_要重启_重启后用最后可信的位
     assert t.core.want_restart() is True
     t.core.backend_started()                               # 适配层重启了 MOLA
     assert t.core.want_restart() is False
-    want = t.core.want_reloc()
-    assert want is not None
-    wx, wy, wyaw, sigma = want
-    assert (round(wx, 3), round(wy, 3), sigma) == (round(x, 3), 0.0, AUTO_RELOC_SIGMA_M)
-    assert t.core.relocalized(req=None, x=wx, y=wy, yaw=wyaw, sigma=sigma, human=False)
+    w = t.core.want_reloc()
+    assert w is not None and w.req is None and w.human is False
+    assert (round(w.x, 3), round(w.y, 3), w.sigma) == (round(x, 3), 0.0, AUTO_RELOC_SIGMA_M)
+    assert t.core.relocalized(req=None, x=w.x, y=w.y, yaw=w.yaw, sigma=w.sigma, human=False)
     assert t.core.want_reloc() is None
     t.step(x, 0.0)
     p = t.poses()[-1]
@@ -240,3 +239,55 @@ def test_状态没变不重复发_连上时要能再发一遍():
     assert len(t.states()) == n
     [s] = [m for m in t.core.hello() if isinstance(m, State)]
     assert s.state == "tracking"
+
+
+def test_定位程序退出了_说原因_起来之后照常():
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    x = t.walk(5)
+    t.core.backend_down("定位程序退出了(退出码 1),2 秒后重启")
+    t.core.tick()
+    assert [(m.state, m.reason) for m in t.core.drain() if isinstance(m, State)] == \
+        [("lost", "定位程序退出了(退出码 1),2 秒后重启")]
+    t.core.on_estimate(_est(x, 0.0, stamp=t.stamp + 1))  # 退出了还来的(不该有)不发
+    assert [m for m in t.core.drain() if isinstance(m, Pose)] == []
+    t.core.backend_started()
+    t.core.tick()
+    assert [m.reason for m in t.core.drain() if isinstance(m, State)] == ["在按最后的位置重定位"]
+
+
+def test_重定位之后第一帧离给的位置太远_当它没照办_不发_再请_三次不成报丢():
+    """2026-09-27 实跑:MOLA 还没收到过点云时收下的重定位,被它第一帧点云上的初始定位按默认原点盖掉了
+    —— 代理拿到的是原点附近的位置,还当它可信。"""
+    from d1max_localizer.core import RELOC_MAX_TRIES
+    t = 台(init=False)
+    assert t.core.relocalized(req=7, x=5.0, y=4.0, yaw=1.7, sigma=0.5, human=True)
+    t.step(0.0, 0.0)                                      # MOLA 在原点:没照办
+    assert t.poses() == []
+    assert t.states()[-1] == ("initializing", "定位程序没照给的位置定位,再请一次")
+    w = t.core.want_reloc()
+    assert (w.x, w.y, w.yaw, w.sigma, w.req, w.human) == (5.0, 4.0, 1.7, 0.5, 7, True)
+    for _ in range(RELOC_MAX_TRIES - 1):
+        t.core.relocalized(req=w.req, x=w.x, y=w.y, yaw=w.yaw, sigma=w.sigma, human=w.human)
+        t.step(0.0, 0.0)
+    state, reason = t.states()[-1]
+    assert state == "lost" and "没按给的位置重定位" in reason and t.core.want_reloc() is None
+    assert t.poses() == []
+    t.core.relocalized(req=8, x=0.0, y=0.0, yaw=0.0, sigma=0.5, human=True)   # 人重新给
+    t.step(0.05, 0.0)
+    assert t.poses()[-1].reloc_id == 8 and t.states()[-1] == ("tracking", "")
+
+
+def test_重定位之后第一帧在给的位置附近_照常():
+    t = 台(init=False)
+    t.core.relocalized(req=3, x=5.0, y=4.0, yaw=0.0, sigma=0.5, human=True)
+    t.step(5.8, 4.5)                                      # 差 0.94 m,在 1.5 m 以内
+    assert t.poses()[-1].reloc_id == 3
+
+
+def test_MOLA_还在起_人给的位置先记着():
+    t = 台(init=False)
+    t.core.reloc_queued()
+    t.core.tick()
+    assert [m.reason for m in t.core.drain() if isinstance(m, State)][-1] == \
+        "定位程序在起,起来就按人给的位置定位"
