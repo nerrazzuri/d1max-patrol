@@ -126,3 +126,69 @@ def test_遥测里的loc块():
     a.anchor(M, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
     w = a.to_wire(True)
     assert w["anchored"] and w["sigma_m"] == pytest.approx(SIGMA0_XY_M) and w["reason"] == ""
+
+
+
+def test_重设位置_回的是修正量_没锚过回None():
+    a = OdomAnchor()
+    a.on_map(M)
+    assert a.anchor(M, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)) is None
+    d = a.anchor(M, (1.0, 2.0, 0.0), (0.0, 0.0, 0.0))
+    assert d == pytest.approx((1.0, 2.0, 0.0))
+
+
+def test_里程不新鲜就作废_仿真不管():
+    a = OdomAnchor()
+    a.on_map(M)
+    a.anchor(M, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    a.update((0.0, 0.0, 0.0), odom_ok=False)
+    assert not a.anchored and "里程" in a.reason
+    s = OdomAnchor(identity=True)
+    s.on_map(M)
+    s.update((0.0, 0.0, 0.0), odom_ok=False)
+    assert s.anchored
+
+
+def test_仿真设过位置_来源不再说按原样():
+    a = OdomAnchor(identity=True)
+    a.on_map(M)
+    a.anchor(M, (5.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    assert a.source == "odom_anchor"
+
+
+def test_修正量带转角_顺序对():
+    """Δ = T_new ∘ T_old⁻¹:同一个里程下,旧地图位姿经 Δ 就是新的。"""
+    a = OdomAnchor()
+    a.on_map(M)
+    a.anchor(M, (1.0, 0.0, 0.0), (0.0, 0.0, 0.0))              # T_old = (1, 0, 0)
+    old = a.estimate((2.0, 0.0, 0.0))
+    d = a.anchor(M, (0.0, 0.0, math.pi / 2), (0.0, 0.0, 0.0))  # T_new = (0, 0, π/2)
+    new = a.estimate((2.0, 0.0, 0.0))
+    moved = compose(d, (old.x, old.y, old.yaw))
+    assert moved == pytest.approx((new.x, new.y, new.yaw))
+
+
+def test_导航桥_真狗默认不按原样_等人的时限():
+    from d1max_adapter_sim.robot import SimRobot
+    from d1max_agent.bridges.hal_nav import HUMAN_RELOCALIZE_WAIT_S, HalNavBackend
+    sim = HalNavBackend(SimRobot(now_ms=lambda: 0), now_ms=lambda: 0, map_id="m")
+    assert sim.anchor.identity and sim.RELOCALIZE_WAIT_S is None
+    real = SimRobot(now_ms=lambda: 0)
+    real.adapter_id = "d1max/0.1.0"
+    bridge = HalNavBackend(real, now_ms=lambda: 0, map_id="m")
+    assert not bridge.anchor.identity and bridge.RELOCALIZE_WAIT_S == HUMAN_RELOCALIZE_WAIT_S
+
+
+
+def test_合成的朝向回绕到正负π之间():
+    a = compose((0.0, 0.0, 3.0), (0.0, 0.0, 3.0))
+    assert -math.pi <= a[2] <= math.pi and a[2] == pytest.approx(6.0 - 2 * math.pi)
+
+
+def test_质量是一减偏差比线():
+    a = OdomAnchor()
+    a.on_map(M)
+    a.anchor(M, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    for i in range(1, 10):
+        a.update((i * 0.5, 0.0, 0.0))
+    assert a.quality(True) == pytest.approx(1.0 - a.sigma_xy / SIGMA_LOST_M)

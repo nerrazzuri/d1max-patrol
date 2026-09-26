@@ -54,7 +54,23 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('reloc-home')));
     await t.pumpAndSettle();
+    expect(api.calls.where((c) => c.startsWith('relocalize')), isEmpty, reason: '先确认');
+    await t.tap(find.byKey(const Key('reloc-home-go')));
+    await t.pumpAndSettle();
     expect(api.calls, contains('relocalize A home'));
+  });
+
+  testWidgets('狗在原点：确认框点「算了」不发', (t) async {
+    final api = FakeApi('guard', robotView: _view({'anchored': false, 'reason': 'x'}));
+    await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('btn-relocalize')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('reloc-home')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('算了'));
+    await t.pumpAndSettle();
+    expect(api.calls.where((c) => c.startsWith('relocalize')), isEmpty);
   });
 
   testWidgets('输坐标：朝向按度输，发出去是弧度；不是数字不发', (t) async {

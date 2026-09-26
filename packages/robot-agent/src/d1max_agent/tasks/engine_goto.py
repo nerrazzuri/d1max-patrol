@@ -228,8 +228,11 @@ class EngineGotoTask(EngineMissionTask):
             policy=Policy())
 
     async def _progress(self) -> dict:
-        odom = await self._parts.hal.odometry()
-        dist = math.hypot(self.target.x - odom.x, self.target.y - odom.y)
+        # 按地图位姿算(W00c6e 内审:以前按原始里程,锚在 (10, 5) 时报 12 m、真距离 2 m)。
+        here = await self._parts.nav.current_pose()
+        if here is None:
+            return {}
+        dist = math.hypot(self.target.x - here.position.x, self.target.y - here.position.y)
         if self._last_reported_m is None or abs(self._last_reported_m - dist) >= PROGRESS_EVERY_M:
             self._last_reported_m = dist
             self._events.emit("task_progress", {"task_id": self.task_id,

@@ -463,6 +463,22 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     );
     if (how == null || !mounted) return;
     if (how == 'home') {
+      // 点错了狗就按错的位置走（W00c6e 内审）：再确认一次。
+      final sure = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('狗现在就在原点？'),
+          content: const Text('要站在原点（充电桩）上、朝向跟标原点时一样。站在别处点了，狗会按错的位置走。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+            FilledButton(
+                key: const Key('reloc-home-go'),
+                onPressed: () => Navigator.pop(c, true),
+                child: const Text('在原点')),
+          ],
+        ),
+      );
+      if (sure != true) return;
       await _do(() => widget.api.relocalize(widget.robotId, atHome: true), '设位置');
       return;
     }
@@ -471,7 +487,8 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         fields: const [
           DialogField('x（米）', key: Key('reloc-x')),
           DialogField('y（米）', key: Key('reloc-y')),
-          DialogField('朝向（度，东为 0，逆时针）', key: Key('reloc-yaw'), initial: '0'),
+          // 地图的 x 轴不一定朝东（雷达建的图按建图起点定轴，W00c6e 内审）。
+          DialogField('朝向（度，地图 x 轴方向为 0，逆时针为正）', key: Key('reloc-yaw'), initial: '0'),
         ],
         confirm: '设',
         confirmKey: const Key('reloc-go'));

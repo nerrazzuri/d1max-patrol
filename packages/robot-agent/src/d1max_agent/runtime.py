@@ -24,6 +24,7 @@ from typing import Any
 
 from d1max_agent.assembly import EngineParts, build_engine
 from d1max_agent.commands import CommandProcessor
+from d1max_agent.engine.machine import RunState
 from d1max_agent.events import EventBook
 from d1max_agent.idempotency import IdempotencyStore
 from d1max_agent.localization import OdomAnchor
@@ -469,12 +470,20 @@ class AgentRuntime:
                 vals.append(float(v))
             pose = (vals[0], vals[1], vals[2])
             source = "manual"
-        if not await self.hal.stopped():
-            return "moving"
+        cur = self.processor.current
+        if cur is not None and not cur.done and cur.kind in ("goto", "patrol") \
+                and self.parts.engine.state not in (RunState.PAUSED, RunState.SUSPENDED):
+            # 任务跑着、狗只是一时停着(驻留、两段之间)不收:当场改了下一段怎么走(W00c6e 内审阻断 2)。
+            # 丢定位暂停、人工暂停/接管时收。
+            return "busy"
         o = await self.hal.odometry()
         if not o.valid:
-            return "odom_invalid"
-        self.parts.nav.anchor.anchor(m, pose, (o.x, o.y, o.yaw))
+            return "odom_invalid"                 # 先说里程读不到:这时 stopped() 也答不上来
+        if not await self.hal.stopped():
+            return "moving"
+        delta = self.parts.nav.anchor.anchor(m, pose, (o.x, o.y, o.yaw))
+        # 引擎记的出发点与来路按修正量挪过去(修正量给不出就来路作废);丢定位的次数从头算。
+        self.parts.engine.relocalized(delta)
         self.events.emit("relocalized", {"task_id": cmd.task_id, "source": source,
                                          "map_id": m[0], "map_version": m[1],
                                          "x": round(pose[0], 3), "y": round(pose[1], 3),

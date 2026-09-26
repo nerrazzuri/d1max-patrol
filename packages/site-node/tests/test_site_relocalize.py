@@ -79,3 +79,31 @@ def test_单狗视图带定位状态(站点):
     loc = s.req("GET", "/api/robots/A", token=alice)[1]["loc"]
     assert loc["source"] == "odom_identity" and loc["anchored"] is True
     assert loc["quality"] == 1.0 and loc["pose"] is not None and "x" in loc["pose"]
+
+
+def test_老代理没报定位块_单狗视图不猜():
+    """W00c6e 内审应修 4:老代理的遥测没有 ``loc``,以前视图还是给了 ``{quality, pose}``,手机就显示成
+    「没设位置」。"""
+    from types import SimpleNamespace
+
+    from d1max_contract.messages import Telemetry
+    from d1max_site.dispatcher import Dispatcher
+    old = Telemetry(stamp=1, pose=None, battery_pct=50.0, task_state=None, loc_quality=1.0, net={})
+    assert Dispatcher._loc_view(SimpleNamespace(telemetry=old)) is None
+    assert Dispatcher._loc_view(None) is None
+
+
+def test_设位置命令的有效期是30秒(站点, monkeypatch):
+    """W00c6e 内审:晚到的旧命令会把「当时的位置」锚到「现在」—— 有效期比一般命令(60 s)短。"""
+    s = 站点
+    gina = _登(s, "gina")
+    _能设(s)
+    seen = []
+    real = s.disp._send
+
+    async def 记(*a, **k):
+        seen.append(k.get("ttl_ms"))
+        return await real(*a, **k)
+    monkeypatch.setattr(s.disp, "_send", 记)
+    s.req("POST", "/api/robots/A/relocalize", {"x": 0, "y": 0, "yaw": 0}, token=gina)
+    assert seen == [30_000]

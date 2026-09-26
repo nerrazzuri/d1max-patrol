@@ -34,6 +34,9 @@ DRIFT_YAW_PER_M = 0.02
 SIGMA_LOST_M = 2.0
 #: 一拍里里程挪了这么多就当里程跳了(旁路进程重启、里程归零)。
 JUMP_M = 1.0
+#: 一拍里里程的朝向转了这么多也当跳了(W00c6e 内审:归零时离原点不到 1 m、只差朝向,光看平移查不出来)。
+#: 转得最快约 1.5 rad/s,一拍按最慢 0.5 s 算也就 0.75 rad。
+JUMP_YAW_RAD = 1.0
 
 
 def _wrap(a: float) -> float:
@@ -79,11 +82,13 @@ class OdomAnchor:
         self._map: tuple[str, str] | None = None
         self._dist = 0.0
         self._last: tuple[float, float, float] | None = None
+        #: 仿真里人设过位置:不再是「按原样」。
+        self._moved = False
         self.reason = "还没设位置:开机、换图之后要人给一次(或者说「狗在原点」)"
 
     @property
     def source(self) -> str:
-        return "odom_identity" if self.identity else "odom_anchor"
+        return "odom_identity" if self.identity and not self._moved else "odom_anchor"
 
     @property
     def anchored(self) -> bool:
@@ -104,13 +109,24 @@ class OdomAnchor:
             self.clear("换了地图,要重新设位置")
 
     def anchor(self, map_ref: tuple[str, str], pose: tuple[float, float, float],
-               odom: tuple[float, float, float]) -> None:
-        """人给的地图位姿 ``pose``,此刻的里程 ``odom``:锁定 ``T_map_odom``,σ 从头算。"""
-        self._T = compose(pose, inverse(odom))
+               odom: tuple[float, float, float]) -> tuple[float, float, float] | None:
+        """人给的地图位姿 ``pose``,此刻的里程 ``odom``:锁定 ``T_map_odom``,σ 从头算。
+
+        回**修正量** ``Δ = T_new ∘ T_old⁻¹``(同一个里程下,旧地图位姿 ∘ 上去就是新的):引擎据此挪
+        它记下的出发点与来路(W00c6e 内审)。之前没锚着(开机、换图、作废过)回 ``None`` —— 旧的坐标
+        没法换过来。"""
+        new = compose(pose, inverse(odom))
+        delta = None
+        if self._T is not None and self._map == map_ref:
+            delta = compose(new, inverse(self._T))
+        self._T = new
         self._map = map_ref
         self._dist = 0.0
         self._last = odom
         self.reason = ""
+        if self.identity:
+            self._moved = True
+        return delta
 
     def clear(self, reason: str) -> None:
         if self.identity:
@@ -118,14 +134,26 @@ class OdomAnchor:
         self._T = None
         self.reason = reason
 
-    def update(self, odom: tuple[float, float, float]) -> None:
-        """每拍喂一次里程:累计走过的距离;一拍挪太多就当里程跳了。"""
+    def update(self, odom: tuple[float, float, float], odom_ok: bool = True) -> None:
+        """每拍喂一次里程:累计走过的距离;一拍挪太多、转太多就当里程跳了。
+
+        **里程不新鲜过就作废**(W00c6e 内审):运控、旁路重启必然有一段不新鲜,回来时里程可能归零了 ——
+        归零点离原点不到 1 m、只差朝向时跳变查不出来,锚定会悄悄恢复「可信」。不新鲜的那几拍也
+        不累计。"""
+        if not odom_ok:
+            self._last = None
+            if not self.identity and self._T is not None:
+                self.clear("里程断过(运控或旁路重启?),里程可能归零了,要重新设位置")
+            return
         last, self._last = self._last, odom
         if last is None:
             return
         d = math.hypot(odom[0] - last[0], odom[1] - last[1])
-        if d > JUMP_M and not self.identity:
-            self.clear(f"里程一拍跳了 {d:.1f} m(旁路进程重启或里程归零),要重新设位置")
+        turned = abs(_wrap(odom[2] - last[2]))
+        if (d > JUMP_M or turned > JUMP_YAW_RAD) and not self.identity:
+            self.clear(f"里程一拍跳了 {d:.1f} m、{math.degrees(turned):.0f}°"
+                       f"(旁路进程重启或里程归零),"
+                       f"要重新设位置")
             return
         self._dist += d
 

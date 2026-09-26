@@ -695,8 +695,12 @@ class _Handler(TlsHandlerMixin):
         if caps.get("map_id") is not None:
             payload |= {"map_id": caps["map_id"], "map_version": caps.get("map_version")}
         self._audit_detail = {k: payload[k] for k in ("x", "y", "yaw", "at_home") if k in payload}
+        # 有效期短一点(W00c6e 内审):晚到的旧命令会把「当时的位置」锚到「现在」。30 s 同视频、
+        # 遥控续租
+        # (Orin 的钟不准,再短就收不下)。
+        from d1max_site.dispatcher import VIDEO_COMMAND_TTL_MS
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
-            robot_id, "relocalize", payload, issued_by=str(user))))
+            robot_id, "relocalize", payload, issued_by=str(user), ttl_ms=VIDEO_COMMAND_TTL_MS)))
 
     def _mark_home(self, robot_id: str, user) -> None:
         """在当前位置标原点(W00c6f):发 ``mark_home``,狗用它此刻锚定后的位置、定位不好就拒;站点把回执

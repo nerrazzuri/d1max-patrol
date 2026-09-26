@@ -392,6 +392,9 @@ class _Live:
     trail: list[Crumb] = field(default_factory=list)
     #: 这一趟半路返航了的话,返航的原因;没返航是空串。
     returned: str = ""
+    #: 来路作废的原因(W00c6e 内审):半路重设过位置、修正量又算不出来(锚定作废过,比如里程归零),
+    #: 记下的出发点与来路不在现在的坐标系里 —— 沿来路回时原地停、说清楚。空串 = 来路可用。
+    trail_invalid: str = ""
 
 
 def _preflight_reason(report: PreflightReport) -> str:
@@ -461,6 +464,31 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    def relocalized(self, delta: tuple[float, float, float] | None) -> None:
+        """人重新给了位置(W00c6e 内审)。**同步调用,不让出**(在事件循环里,引擎任务正停在某个
+        await 上)。
+
+        - 丢定位的重置次数从头算:人每次都把位置给回来了,不该累计到第 4 次就中止。
+        - 记下的出发点与来路是旧坐标系里的:``delta``(新锚定 ∘ 旧锚定⁻¹)给了就按它挪过去 —— 挪完是
+          这条狗
+          当时实际走过的地方在新坐标系里的样子;给不出(锚定作废过)就**来路作废**,沿来路回的时候原地停。"""
+        from d1max_agent.localization import compose
+        live = self._live
+        if live is None:
+            return
+        live.loc_reset_attempts = 0
+        if delta is None:
+            if live.trail or live.start_pose is not None:
+                live.trail_invalid = "半路重设过位置,之前记下的来路不在现在的坐标系里"
+            return
+
+        def move(p: Pose) -> Pose:
+            x, y, yaw = compose(delta, (p.position.x, p.position.y, p.yaw))
+            return Pose.from_xy_yaw(x, y, yaw)
+        live.trail = [(k, move(p)) for k, p in live.trail]
+        if live.start_pose is not None:
+            live.start_pose = move(live.start_pose)
 
     @property
     def returned(self) -> str:
@@ -911,6 +939,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         assert live is not None
         if self._home is None:
             raise _FailWaypoint("没有原点,不知道该回哪儿")
+        if live.trail_invalid:
+            raise _FailWaypoint(f"来路作废({live.trail_invalid}),不走没把握的线,原地停")
         # 每一段的超时不短于这一趟自己的点位超时(内审:长腿的任务给了 600 s,固定 300 s 半路就
         # 判超时)。
         budget = max(RETURN_TIMEOUT_S, live.mission.policy.waypoint_timeout_s)
@@ -1256,9 +1286,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             live.blocked_since = self._clock()
         if (isinstance(item, LocStatusEvent) and item.status is LocStatus.LOC_LOST
                 and ruling.decision is Decision.PAUSE
-                and self._state is RunState.RUNNING):
-            # 只在跑点位的时候做恢复。LOCALIZING 阶段本来就在等收敛,
-            # RETURNING 阶段插一脚重置只会把返航打断。
+                and self._state in (RunState.RUNNING, RunState.RETURNING)):
+            # 跑点位、返航的时候做恢复(LOCALIZING 阶段本来就在等收敛)。返航也恢复(W00c6e 内审):
+            # 以前直接「返航失败」—— 低电的狗停在半路,人给了位置也救不回来;恢复之后 ``_go_home``
+            # 接住 ``_RetryWaypoint`` 接着走当前这一段(W00c6b)。
             await self._recover_localization(ruling.reason)
             return
         self._apply(ruling, item)
@@ -1288,22 +1319,26 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         live = self._live
         assert live is not None
         live.loc_reset_attempts += 1
+        before = self._state
         await self._transition(RunState.PAUSED, reason)
         await self._stop_nav_quietly()
         try:
             await self._nav.reset_localization()
         except NavBackendError as exc:
             raise _AbortRun(f"定位重置被拒: {exc}") from exc
-        deadline = self._clock() + LOCALIZE_TIMEOUT_S
+        # 等多久由导航后端说(W00c6e 内审):里程锚定自己找不回位置、要等人到场给,30 s 不够。
+        wait = getattr(self._nav, "RELOCALIZE_WAIT_S", None) or LOCALIZE_TIMEOUT_S
+        deadline = self._clock() + wait
         while True:
             item = await self._next(deadline - self._clock())
             if item is None:
-                raise _AbortRun(f"定位重置后 {LOCALIZE_TIMEOUT_S:.0f}s 仍未收敛")
+                raise _AbortRun(f"定位重置后 {wait:.0f}s 仍未收敛")
             if (isinstance(item, LocStatusEvent)
                     and item.status is LocStatus.CONTINUOUS_LOC):
                 break
             await self._handle(item)
-        await self._transition(RunState.RUNNING, "定位已恢复")
+        await self._transition(RunState.RETURNING if before is RunState.RETURNING
+                               else RunState.RUNNING, "定位已恢复")
         raise _RetryWaypoint
 
     async def _handle_command(self, cmd: _Command) -> None:

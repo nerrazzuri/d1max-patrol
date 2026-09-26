@@ -121,7 +121,20 @@ async def test_坐标不像话_地图对不上_在走_都拒(tmp_path):
     await _跑(rt, broker, n=20, r=dog, c=c)
     await rt._on_cmd(_cmd("relocalize", {"x": 0, "y": 0, "yaw": 0}, "a2", c))
     await broker.drain()
-    assert _ack(ears)["reason"] == "moving", "在走的时候不改位置"
+    assert _ack(ears)["reason"] == "busy", "任务跑着不改位置(W00c6e 内审)"
+    await rt.close()
+
+
+async def test_没有任务_狗在动_不收(tmp_path):
+    """遥控开着走(直接下 HAL 速度,不经任务):狗在动就不收。"""
+    from d1max_contract.hal import VelocityCommand
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    await dog.set_velocity(VelocityCommand(seq=1, ttl_ms=5000, frame="base", vx=0.5, vy=0.0,
+                                           wz=0.0))
+    dog.tick(0.2)
+    await rt._on_cmd(_cmd("relocalize", {"x": 0, "y": 0, "yaw": 0}, "m1", c))
+    await broker.drain()
+    assert _ack(ears)["reason"] == "moving"
     await rt.close()
 
 
@@ -148,6 +161,7 @@ async def test_走远了丢定位_狗停下_人给了位置接着跑(tmp_path):
     await rt._on_cmd(_cmd("relocalize", {"x": o.x, "y": o.y, "yaw": o.yaw}, "r2", c))
     await broker.drain()
     assert _ack(ears)["result"] == "accepted"
+    assert rt.parts.engine._live.loc_reset_attempts == 0, "人给了位置:丢定位的次数从头算"
     for _ in range(60):
         await _跑(rt, broker, n=10, r=dog, c=c)
         if _事件(ears, "task_done") or _事件(ears, "task_failed"):
@@ -234,4 +248,101 @@ async def test_换了图_锚定作废_要重新设位置(tmp_path):
     await _跑(rt, broker, n=20, r=dog, c=c)
     assert rt.loaded_map == ("m", "2")
     assert not rt.parts.nav.anchor.anchored and "换了地图" in rt.parts.nav.anchor.reason
+    await rt.close()
+
+
+# ------------------------------------------------------------ W00c6e 内审修复
+
+
+async def test_里程不新鲜过_锚定作废_回来了也不可信(tmp_path):
+    """内审阻断 1:运控 / 旁路重启期间里程不新鲜,回来时里程可能归零了(离原点不到 1 m、只差朝向,
+    跳变查不出来)。
+    不新鲜过就作废,要人重新给位置。"""
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    await rt._on_cmd(_cmd("relocalize", {"x": 0.0, "y": 0.0, "yaw": 0.0}, "r", c))
+    for yaw in (0.0, 0.4, 0.8):                             # 慢慢挪、慢慢转(一拍转太多算跳)
+        dog.teleport(0.5, 0.0, yaw)
+        await _跑(rt, broker, n=1, r=dog, c=c)
+    assert rt.parts.nav.anchor.anchored
+    dog.inject_loc_lost(True)
+    await _跑(rt, broker, n=2, r=dog, c=c)
+    dog.inject_loc_lost(False)
+    dog.teleport(0.0, 0.0, 0.0)          # 里程归零:平移 0.5 m、朝向差 0.8 rad —— 都在跳变线以内
+    await _跑(rt, broker, n=3, r=dog, c=c)
+    a = rt.parts.nav.anchor
+    assert not a.anchored and "里程" in a.reason
+    assert _遥测(ears).pose is None
+    await rt.close()
+
+
+async def test_里程只转了朝向_也当跳了(tmp_path):
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    await rt._on_cmd(_cmd("relocalize", {"x": 0.0, "y": 0.0, "yaw": 0.0}, "r", c))
+    await _跑(rt, broker, n=2, r=dog, c=c)
+    dog.teleport(0.0, 0.0, 2.0)                              # 一拍转了 2 rad:转不了这么快
+    await _跑(rt, broker, n=2, r=dog, c=c)
+    assert not rt.parts.nav.anchor.anchored and "跳" in rt.parts.nav.anchor.reason
+    await rt.close()
+
+
+async def test_遥控开着走的距离也算(tmp_path):
+    """导航桥每拍都喂里程,不管是谁在让狗动(遥控直接下 HAL 速度)。"""
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    await rt._on_cmd(_cmd("relocalize", {"x": 0.0, "y": 0.0, "yaw": 0.0}, "r", c))
+    await _跑(rt, broker, n=2, r=dog, c=c)
+    s0 = rt.parts.nav.anchor.sigma_xy
+    for i in range(1, 9):
+        dog.teleport(i * 0.5, 0.0, 0.0)
+        await _跑(rt, broker, n=1, r=dog, c=c)
+    assert rt.parts.nav.anchor.sigma_xy > s0 + 3.0 * 2.0 / 9.0
+    await rt.close()
+
+
+async def test_里程无效时_不收设位置_说里程读不到(tmp_path):
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    dog.inject_loc_lost(True)
+    await _跑(rt, broker, n=2, r=dog, c=c)
+    await rt._on_cmd(_cmd("relocalize", {"x": 0.0, "y": 0.0, "yaw": 0.0}, "v", c))
+    await broker.drain()
+    assert _ack(ears)["reason"] == "odom_invalid"
+    await rt.close()
+
+
+async def test_在原点设位置_朝向也照原点的(tmp_path):
+    broker, c, ears, dog, rt = await _台(tmp_path, home=(3.0, 4.0, 0.7))
+    await rt._on_cmd(_cmd("relocalize", {"at_home": True}, "h", c))
+    await _跑(rt, broker, n=3, r=dog, c=c)
+    assert abs(_遥测(ears).pose.yaw - 0.7) < 1e-3
+    await rt.close()
+
+
+async def test_任务跑着_狗停着驻留_不收设位置_丢定位暂停时收(tmp_path):
+    """内审阻断 2:以前只看狗停没停 —— 巡检在点上驻留时点了「在原点」,当场改了下一段怎么走。"""
+    from d1max_contract.mission import Action, Mission, MissionWaypoint, Policy
+    from d1max_patrol.protocol.nav_types import Pose as P
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    await rt._on_cmd(_cmd("relocalize", {"x": 0.0, "y": 0.0, "yaw": 0.0}, "r", c))
+    m = Mission(mission="d", map_id="m", policy=Policy(), waypoints=(
+        MissionWaypoint(name="a", pose=P.from_xy_yaw(1.0, 0.0),
+                        actions=(Action(type="dwell", seconds=30.0),)),
+        MissionWaypoint(name="b", pose=P.from_xy_yaw(2.0, 0.0))))
+    await rt._on_cmd(_cmd("patrol", {"mission": m.to_wire(), "map_version": "1"}, "p", c))
+    for _ in range(200):
+        await _跑(rt, broker, n=1, r=dog, c=c)
+        if await dog.stopped() and abs((await dog.odometry()).x - 1.0) < 0.15:
+            break
+    await rt._on_cmd(_cmd("relocalize", {"at_home": True}, "r2", c))
+    await broker.drain()
+    assert _ack(ears)["reason"] == "busy", _ack(ears)
+    await rt.close()
+
+
+async def test_goto报的剩余距离按地图坐标(tmp_path):
+    """内审应修 2:以前按原始里程算 —— 锚在 (10, 5) 时报 12 m,真距离 2 m。"""
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    await rt._on_cmd(_cmd("relocalize", {"x": 10.0, "y": 5.0, "yaw": 0.0}, "r", c))
+    await rt._on_cmd(_goto(12.0, 5.0, "g", c))
+    await _跑(rt, broker, n=10, r=dog, c=c)
+    prog = _事件(ears, "task_progress")
+    assert prog and prog[0]["distance_m"] <= 2.1, prog[:2]
     await rt.close()

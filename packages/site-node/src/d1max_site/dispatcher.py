@@ -291,8 +291,8 @@ class Dispatcher:
     def _loc_view(c: DispatchClient | None) -> dict[str, Any] | None:
         """最近一份遥测里的定位状态(W00c6e):来源、锚了没有、偏差、为什么不可信、位姿、质量。"""
         t = c.telemetry if c is not None else None
-        if t is None:
-            return None
+        if t is None or t.loc is None:
+            return None                          # 老代理没报定位块:不猜(不然显示成「没设位置」)
         pose = None if t.pose is None else {"x": round(t.pose.x, 3), "y": round(t.pose.y, 3),
                                             "yaw": round(t.pose.yaw, 4)}
         return {**(t.loc or {}), "quality": t.loc_quality, "pose": pose}
@@ -526,7 +526,7 @@ class Dispatcher:
     # ------------------------------------------------------------ 地图(W00c5d 第二部分)
 
     async def map_command(self, robot_id: str, kind: str, payload: dict[str, Any], *,
-                          issued_by: str) -> dict[str, Any]:
+                          issued_by: str, ttl_ms: int = COMMAND_TTL_MS) -> dict[str, Any]:
         """``map_activate``/``mapping``/``map_build``:不是任务。要在线、新鲜、狗报了这项能力。
         狗收下就回 accepted,后台做,做完发事件(``map_activated``/``map_built``/…_failed)。"""
         c = self._client_for(robot_id)
@@ -535,7 +535,7 @@ class Dispatcher:
         if c.capabilities is None or kind not in c.capabilities.tasks:
             raise DispatchRefused(f"{robot_id} 不支持 {kind}")
         return await self._send(c, robot_id, kind, payload, issued_by=issued_by,
-                                task_id=f"{kind}-{uuid.uuid4().hex[:12]}")
+                                task_id=f"{kind}-{uuid.uuid4().hex[:12]}", ttl_ms=ttl_ms)
 
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
                     *, issued_by: str, task_id: str | None = None, priority: int = 0,

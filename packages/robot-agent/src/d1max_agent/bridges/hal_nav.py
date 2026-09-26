@@ -37,6 +37,8 @@ from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose, Waypoint
 log = logging.getLogger(__name__)
 
 POSITION_TOL_M = 0.1
+#: 里程锚定丢了定位,引擎等人给位置等多久(秒)。过渡期有人监护(W00c6i),监护一断任务本来就中止。
+HUMAN_RELOCALIZE_WAIT_S = 600.0
 BEARING_THRESH_RAD = 0.3
 K_LIN = 1.0
 K_ANG = 2.0
@@ -70,7 +72,10 @@ class HalNavBackend(NavBackend):
         self._seq = 0
         #: 最近一拍的里程新不新鲜(运控报的 ``loc_quality`` 改义为「里程新鲜」,W08 决定 9)。
         self.odom_ok = False
-        self.use_anchor(anchor if anchor is not None else OdomAnchor(identity=True))
+        # 不给锚定:仿真按原样,别的一律要人给位置(W00c6e 内审:默认放开的话,有人给真狗直接装这座桥
+        # 就会悄悄拿原始里程当地图位姿)。
+        sim = str(getattr(hal, "adapter_id", "")).split("/")[0] == "sim"
+        self.use_anchor(anchor if anchor is not None else OdomAnchor(identity=sim))
 
     def use_anchor(self, anchor: OdomAnchor) -> None:
         """地图位姿从哪来(W00c6e):里程锚定。仿真按原样(里程就是地图位姿);真狗没锚过就不可信。"""
@@ -179,6 +184,13 @@ class HalNavBackend(NavBackend):
         est = self.anchor.estimate((o.x, o.y, o.yaw))
         return None if est is None else Pose.from_xy_yaw(est.x, est.y, est.yaw)
 
+    @property
+    def RELOCALIZE_WAIT_S(self) -> float | None:
+        """丢定位之后引擎等多久(W00c6e 内审):里程锚定自己找不回位置,要等人到场给 —— 10 分钟;
+        仿真按原样,
+        用引擎的默认。"""
+        return None if self.anchor.identity else HUMAN_RELOCALIZE_WAIT_S
+
     #: 这座桥怎么走路(W00c6b):能力里报给站点(``tasks.goto.path``),站点据此决定巡检后怎么回待命点。
     PATH_KIND = "straight"
 
@@ -229,7 +241,7 @@ class HalNavBackend(NavBackend):
         health = await self._hal.health()
         odom = await self._hal.odometry()
         self.odom_ok = health.loc_quality > 0.0 and odom.valid
-        self.anchor.update((odom.x, odom.y, odom.yaw))
+        self.anchor.update((odom.x, odom.y, odom.yaw), self.odom_ok)
         loc = LocStatus.CONTINUOUS_LOC if self.anchor.ok(self.odom_ok) else LocStatus.LOC_LOST
         if loc is not self._loc:
             prev, self._loc = self._loc, loc
