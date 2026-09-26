@@ -94,6 +94,12 @@ class MappingService:
         self.pressure: Callable[[], bool] = lambda: False
         self._cleanup()
 
+    @property
+    def log_dir(self) -> Path | None:
+        """录包、重建子进程的日志目录(W00c6g:站点经 ``proc_log`` 看尾巴);编排没有就是 None。"""
+        d = getattr(self.orch, "log_dir", None)
+        return None if d is None else Path(d)
+
     def _cleanup(self) -> None:
         """起来时收拾:攒到一半的图(``.building``)扔掉;没打 ``.done`` 的包是上次录到一半进程没了,
         补上 ``.done``(它已经录不下去了,该传的照传)。"""

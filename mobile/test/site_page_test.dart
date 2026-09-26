@@ -103,6 +103,29 @@ class FakeApi implements SiteApi {
   @override
   Future<List<Map<String, dynamic>>> incidents() async =>
       (siteFixture('site_incidents')['incidents'] as List).cast<Map<String, dynamic>>();
+  /// 建图进程日志（W00c6g）。给了列表就用它；给了错误就抛。
+  List<Map<String, dynamic>>? procLogRows;
+  SiteError? procLogError;
+  @override
+  Future<Map<String, dynamic>> procLogs(String robotId) async {
+    calls.add('procLogs $robotId');
+    return <String, dynamic>{
+      'logs': procLogRows ??
+          <Map<String, dynamic>>[
+            {'name': 'slam', 'size': 5 * 1024 * 1024, 'mtime_ms': 1790400000000},
+            {'name': 'bagrecord', 'size': 900, 'mtime_ms': 1790300000000},
+          ],
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> procLog(String robotId, String name, {int bytes = 0}) async {
+    calls.add('procLog $robotId $name');
+    if (procLogError != null) throw procLogError!;
+    return <String, dynamic>{'name': name, 'size': 5 * 1024 * 1024, 'bytes': 65000,
+      'truncated': true, 'text': '[slam_toolbox] 回环 12 次\n[slam_toolbox] 存图\n'};
+  }
+
   /// 告警（W00c5a）。给了就用它，不给用真站点的夹具。
   List<Map<String, dynamic>>? alertRows;
 

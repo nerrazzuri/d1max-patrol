@@ -87,6 +87,9 @@ _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,30
 _EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
 #: W00c5d 第二部分:给狗下发图、录包、重建。
 _MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build|outbox_retry)$")
+#: W00c6g:狗上建图进程日志的列表、某一个的尾巴(``?bytes=``)。
+_LOGS = re.compile(r"^/api/robots/([^/]{1,64})/logs(?:/([^/]{1,64}))?$")
+_LOG_NAME = re.compile(r"[a-z0-9_.-]{1,48}")
 #: W00c5d 第三部分:给狗装、切、退版本。
 _RELCMD = re.compile(r"^/api/robots/([^/]{1,64})/release$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
@@ -344,6 +347,12 @@ class _Handler(TlsHandlerMixin):
                 if m.group(2) == "teleop" and method == "GET":
                     return self._teleop_ws(robot_id, user)
                 raise HttpError(404, f"没有 {method} {path}")
+            m = _LOGS.match(path)
+            if m is not None and method == "GET":
+                robot_id = unquote(m.group(1))
+                if not SAFE_ID.match(robot_id):
+                    raise HttpError(404, "没有这台狗")
+                return self._proc_logs(robot_id, m.group(2), user)
             m = _VIDEO.match(path)
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
@@ -771,6 +780,38 @@ class _Handler(TlsHandlerMixin):
                                    "data": data}) from exc
         point = next((p for p in stb.list(robot_id) if p["name"] == name), None)
         return self._send_json(200, {"ack": ack, "standby": point})
+
+    def _proc_logs(self, robot_id: str, name: str | None, user) -> None:
+        """建图进程日志(W00c6g):狗上录包、重建子进程日志的列表(``name`` 为空)与某一个的尾巴。
+        **管理员**(``manage``,跟录包、重建同一级:日志里有路径、参数)。站点不存,现取现给:发
+        ``proc_log``,回执里的数据原样回(事件流里推的回执不带它,见 ``Dispatcher``)。狗说没有这个
+        日志 404,别的拒收 409;老代理(没报这项能力)409。"""
+        self._need(user, MANAGE)
+        payload: dict[str, Any] = {}
+        if name is not None:
+            name = unquote(name)
+            if not _LOG_NAME.fullmatch(name):
+                raise HttpError(400, "日志名只许小写字母、数字、. _ -(1–48 字)")
+            payload["name"] = name
+            q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            if "bytes" in q:
+                try:
+                    n = int(q["bytes"][0])
+                except ValueError:
+                    raise HttpError(400, "bytes 要是正整数") from None
+                if n < 1:
+                    raise HttpError(400, "bytes 要是正整数")
+                payload["bytes"] = n
+        r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
+            robot_id, "proc_log", payload, issued_by=str(user)))
+        ack = r["ack"]
+        if ack.get("result") != "accepted":
+            reason = ack.get("reason") or ack.get("result")
+            raise HttpError(404 if reason == "no_such_log" else 409, f"狗没给:{reason}")
+        data = ack.get("data")
+        if not isinstance(data, dict):
+            raise HttpError(502, "狗的回执里没有日志")
+        return self._send_json(200, data)
 
     def _supervise(self, robot_id: str, user) -> None:
         """监护心跳(W00c6i):``{"action": "renew"|"release"}``。``dispatch`` 权限 —— 保安、

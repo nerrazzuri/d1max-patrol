@@ -313,6 +313,8 @@ class AgentRuntime:
             out["release_activate"] = {}
             out["release_rollback"] = {}
             out["release_precheck"] = {}        # W00c6d:升级前检查,清单在回执里
+        if self.mapper is not None and getattr(self.mapper, "log_dir", None) is not None:
+            out["proc_log"] = {}                # W00c6g:录包、重建子进程的日志(列表、尾巴)
         if self.parts is not None and self.loaded_map is not None:
             # W00c6e:设位置(里程锚定)。真狗要人给位置;仿真按原样,也收(测试挪坐标用)。
             out["relocalize"] = {"needs_pose": not self.parts.nav.anchor.identity}
@@ -335,6 +337,8 @@ class AgentRuntime:
             return await self._relocalize(cmd)
         if kind == "mark_home":
             return await self._mark_home(cmd)
+        if kind == "proc_log":
+            return await asyncio.to_thread(self._proc_log, cmd.payload)
         if kind.startswith("release_"):
             return await self._release_command(cmd)
         if kind == "outbox_retry":
@@ -540,6 +544,19 @@ class AgentRuntime:
                 "y": round(est.y, 3), "yaw": round(est.yaw, 4), "sigma_m": round(est.sigma_xy_m, 2)}
         self.events.emit("home_marked", {"task_id": cmd.task_id, "name": name, **data})
         return "", data
+
+    def _proc_log(self, payload: dict[str, Any]) -> str | tuple[str, dict[str, Any]]:
+        """建图进程日志(W00c6g,在线程里跑):``{}`` 列表,``{name, bytes?}`` 那一个的尾巴。"""
+        from d1max_agent import proc_logs
+        d = Path(self.mapper.log_dir)
+        if "name" not in payload:
+            return "", proc_logs.list_logs(d)
+        try:
+            return "", proc_logs.tail(d, payload)
+        except proc_logs.LogError as exc:
+            return str(exc)
+        except OSError as exc:
+            return f"read_failed: {exc}"[:200]
 
     def _home_busy(self) -> str:
         """标原点时在忙什么(W00c6f 内审应修 3);空串 = 可以标。遥控不算忙(「开过去再标」)。"""

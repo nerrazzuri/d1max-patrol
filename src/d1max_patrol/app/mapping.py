@@ -122,6 +122,11 @@ class MappingOrchestrator:
         self._map_id = ""
         self._error = ""
 
+    @property
+    def log_dir(self) -> Path:
+        """子进程(录包、重建)的日志目录(W00c6g)。"""
+        return self._procs.log_dir
+
     # ------------------------------------------------------------------ 状态
 
     @property

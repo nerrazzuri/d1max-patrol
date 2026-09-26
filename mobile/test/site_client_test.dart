@@ -370,6 +370,18 @@ void main() {
     c.close();
   });
 
+  test('建图日志：列表、尾巴的请求形状（名字编码、bytes 放查询串）', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('alice', 'pw');
+    site.bodies['/api/robots/A/logs'] = <String, dynamic>{'logs': <dynamic>[]};
+    expect((await c.procLogs('A'))['logs'], isEmpty);
+    expect(site.received.last.method, 'GET');
+    site.bodies['/api/robots/A/logs/slam.v2'] = <String, dynamic>{'name': 'slam.v2', 'text': 'x'};
+    expect((await c.procLog('A', 'slam.v2', bytes: 4096))['text'], 'x');
+    expect(site.rawPaths.last, endsWith('/api/robots/A/logs/slam.v2?bytes=4096'));
+    c.close();
+  });
+
   test('标原点：请求形状；站点回的错误体原样带在 SiteError 里（同名冲突要靠它再问一次）', () async {
     final c = SiteClient(site.url, testCertFingerprint());
     await c.login('alice', 'pw');

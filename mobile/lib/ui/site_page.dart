@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'site_logs.dart';
 import 'site_maps.dart';
 import 'site_releases.dart';
 import 'site_runs.dart';
@@ -689,6 +690,16 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                   key: const Key('btn-mark-home'),
                   onPressed: _markHome,
                   child: const Text('在这儿标原点')),
+            // 建图进程日志（W00c6g）：管理员看录包、重建子进程的日志，不用再 SSH 上狗。
+            if ((s?.canManageMaps ?? false) && robotCan(v, 'proc_log'))
+              OutlinedButton(
+                  key: const Key('btn-proc-logs'),
+                  onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                          builder: (_) =>
+                              SiteProcLogsPage(api: widget.api, robotId: widget.robotId))),
+                  child: const Text('建图日志')),
             if ((s?.canDispatch ?? false) && robotCan(v, 'relocalize'))
               OutlinedButton(
                   key: const Key('btn-relocalize'),

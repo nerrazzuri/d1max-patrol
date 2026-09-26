@@ -92,6 +92,11 @@ class ProcManager:
         self._reap()
         return sorted(self._procs)
 
+    @property
+    def log_dir(self) -> Path:
+        """日志都在这儿(W00c6g:站点经代理看它们的尾巴)。"""
+        return self._log_dir
+
     def log_path(self, name: str) -> Path:
         """这个名字的日志在哪。进程已经退了也还查得到 —— 出事之后才要看。"""
         return self._log_dir / f"{name}.log"

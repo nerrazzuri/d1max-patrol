@@ -235,6 +235,12 @@ abstract class SiteApi {
 
   /// 给一台狗装（install）、切（activate）、退（rollback）一版。
   Future<Map<String, dynamic>> releaseAction(String robotId, String action, {String name = ''});
+
+  /// 建图进程日志（W00c6g，管理员）：狗上录包、重建子进程的日志列表 `{logs: [{name, size, mtime_ms}]}`。
+  Future<Map<String, dynamic>> procLogs(String robotId);
+
+  /// 某一个日志的尾巴 `{name, size, bytes, truncated, text}`。[bytes] 为 0 用狗的默认（64 KB）。
+  Future<Map<String, dynamic>> procLog(String robotId, String name, {int bytes = 0});
   Stream<Map<String, dynamic>> events();
   void close();
 }
@@ -686,6 +692,15 @@ class SiteClient implements SiteApi {
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/supervise',
           <String, dynamic>{'action': action, 'session': session, 'seq': seq},
           const Duration(seconds: 3)));
+
+  @override
+  Future<Map<String, dynamic>> procLogs(String robotId) async =>
+      _map(await _send('GET', '/api/robots/${Uri.encodeComponent(robotId)}/logs'));
+
+  @override
+  Future<Map<String, dynamic>> procLog(String robotId, String name, {int bytes = 0}) async =>
+      _map(await _send('GET', '/api/robots/${Uri.encodeComponent(robotId)}/logs/'
+          '${Uri.encodeComponent(name)}${bytes > 0 ? '?bytes=$bytes' : ''}'));
 
   @override
   Future<Map<String, dynamic>> markHome(String robotId,

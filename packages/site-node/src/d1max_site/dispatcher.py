@@ -46,6 +46,9 @@ TELEOP_GRANT_TTL_SLACK_MS = 2_000
 #: ``video`` 命令本身至少活多久(毫秒),跟推流的有效期分开。见 :meth:`Dispatcher.video`。
 VIDEO_COMMAND_TTL_MS = 30_000
 COMMAND_TTL_MS = 60_000
+#: 只读查询(W00c6g 建图进程日志):回执不推给事件流 —— 事件流谁登录了都收得到(保安、业主也是),
+#: 日志只给要它的管理员;手机收到事件流的每一帧都会刷新狗的列表,查询不该让所有人跟着刷。
+_QUIET_KINDS = frozenset({"proc_log"})
 #: 一趟巡检的任务定义进命令(设计决定二 A);broker 的报文上限是 256 KB,留余量。
 MAX_PATROL_BYTES = 200_000
 MAX_PATROL_WAYPOINTS = 500
@@ -563,8 +566,9 @@ class Dispatcher:
                 tx.execute("UPDATE commands SET ack_result='timeout' WHERE command_id=? "
                            "AND ack_result IS NULL", (cmd.command_id,))
             raise
-        self.feed.publish({"kind": "ack", "robot_id": robot_id, "ack": ack.to_wire(),
-                           "issued_by": issued_by})
+        if kind not in _QUIET_KINDS:
+            self.feed.publish({"kind": "ack", "robot_id": robot_id, "ack": ack.to_wire(),
+                               "issued_by": issued_by})
         return {"command_id": cmd.command_id, "task_id": cmd.task_id,
                 "ack": ack.to_wire()}
 

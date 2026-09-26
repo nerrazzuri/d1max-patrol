@@ -39,6 +39,7 @@ class FakeProcs:
 
     def __init__(self, log_dir: Path) -> None:
         self._log_dir = log_dir
+        self.log_dir = log_dir
         self.started: list[ProcSpec] = []
         self.stopped: list[str] = []
         #: 名字 → 退出码。没写的都当 0。
@@ -448,3 +449,8 @@ def test_状态里有相位也有清单(orch):
 
 
 # ------------------------------------------------------------------ HTTP
+
+
+def test_日志目录_编排照进程管理器的报(orch, procs):
+    """W00c6g:站点要看录包、重建子进程的日志,代理经编排找到日志目录。"""
+    assert orch.log_dir == procs.log_dir

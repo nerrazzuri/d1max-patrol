@@ -2,6 +2,7 @@
 // （800×360，常见手机横过来的大小）都不溢出；遥控页两根杆在两边、画面在中间、「停」一直在屏幕里。
 import 'package:d1max_patrol/main.dart' show landscapeOnly, lockLandscape;
 import 'package:d1max_patrol/store/site_store.dart';
+import 'package:d1max_patrol/ui/site_logs.dart';
 import 'package:d1max_patrol/ui/site_maps.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_releases.dart';
@@ -163,5 +164,7 @@ void main() {
     await _show(t, SiteRunPage(api: api, runId: 1));
     await _show(t, SiteIncidentsPage(api: api));
     await _show(t, SiteSchedulePage(api: api));
+    await _show(t, SiteProcLogsPage(api: api, robotId: 'A'));
+    await _show(t, SiteProcLogPage(api: api, robotId: 'A', name: 'slam'));
   });
 }
