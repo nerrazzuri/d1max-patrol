@@ -298,13 +298,17 @@ class SiteScheduler:
         claimed[rid] = entry.id
         task_id = f"sched-{uuid.uuid4().hex[:12]}"
 
-        def 发之前记账(_cmd) -> None:
-            with self.db.tx() as c:
-                c.execute("INSERT INTO schedule_state(entry_id, last_started_ms) VALUES (?,?) "
-                          "ON CONFLICT(entry_id) DO UPDATE SET last_started_ms=excluded."
-                          "last_started_ms", (entry.id, now_ms))
-            self._record(entry, scheduled_ms, "started", robot_id=rid, task_id=task_id,
-                         note=f"{d.kind.value},已发出")
+        def 发之前记账(_cmd, tx) -> None:
+            # 用派遣器开的事务(跟命令入账同一个):哪一步炸了整个回滚 —— 这一轮不算起跑过、没有运行
+            # 记录、命令也不发(外审复查)。``started`` 不用报告警,不走 ``_record``(它自己开事务)。
+            tx.execute("INSERT INTO schedule_state(entry_id, last_started_ms) VALUES (?,?) "
+                       "ON CONFLICT(entry_id) DO UPDATE SET last_started_ms=excluded."
+                       "last_started_ms", (entry.id, now_ms))
+            tx.execute("INSERT OR IGNORE INTO schedule_runs(entry_id, scheduled_ms, outcome, "
+                       "robot_id, task_id, note, decided_at, told_ms) "
+                       "VALUES (?,?,'started',?,?,?,?,NULL)",
+                       (entry.id, scheduled_ms, rid, task_id, f"{d.kind.value},已发出",
+                        self._now()))
 
         try:
             r = await self.dispatcher.patrol(rid, act.missions[entry.mission].to_wire(),

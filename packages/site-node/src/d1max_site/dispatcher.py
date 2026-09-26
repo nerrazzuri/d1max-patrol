@@ -409,7 +409,7 @@ class Dispatcher:
 
     async def patrol(self, robot_id: str, mission: dict[str, Any], *, issued_by: str,
                      priority: int = 0, task_id: str | None = None,
-                     before_send: Callable[[Any], None] | None = None) -> dict[str, Any]:
+                     before_send: Callable[[Any, Any], None] | None = None) -> dict[str, Any]:
         """整趟巡检(W00c2a)。任务定义整份放进命令(设计决定二 A);``map_version`` 取狗在
         能力报文里报的已加载地图,任务的 ``map_id`` 要跟它一致。"""
         c = self._client_for(robot_id)
@@ -543,7 +543,7 @@ class Dispatcher:
 
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
                     *, issued_by: str, task_id: str | None = None, priority: int = 0,
-                    before_send: Callable[[Any], None] | None = None,
+                    before_send: Callable[[Any, Any], None] | None = None,
                     ttl_ms: int = COMMAND_TTL_MS) -> dict[str, Any]:
         if not issued_by:
             raise DispatchRefused("没有已认证的派单人")
@@ -551,23 +551,19 @@ class Dispatcher:
                             control_epoch=self.registry.control_epoch(robot_id),
                             task_id=task_id, priority=priority)
         quiet = kind in _QUIET_KINDS
-        if not quiet:
-            with self.db.tx() as tx:                # 先落库:发出去之后进程死了也有账
-                tx.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, "
-                           "issued_by, issued_at, priority) VALUES (?,?,?,?,?,?,?,?)",
-                           (cmd.command_id, cmd.task_id, robot_id, kind, json.dumps(payload),
-                            issued_by, cmd.issued_at, priority))
-        if before_send is not None:
-            # 调用方要在命令**发出去之前**记账(排程执行器:这一轮算起跑过了)——回执可能丢,
-            # 狗可能收到了;发完再记的话,回执一丢就会再派一趟。
-            try:
-                before_send(cmd)
-            except BaseException:
-                # 记账炸了、命令没发:删掉刚入的账,不留一条永远等不到回执的(外审 Qwen 第三节)。
+        if not quiet or before_send is not None:
+            # 先落库:发出去之后进程死了也有账。调用方要在命令**发出去之前**记账(排程执行器:这一轮
+            # 算起跑过了)—— 回执可能丢,狗可能收到了;发完再记的话,回执一丢就会再派一趟。命令入账
+            # 与调用方的记账**同一个事务**,提交之后才发(外审复查:以前分开提交,「这一轮起跑过」
+            # 提交了、后面的运行记录没写成,这一轮就被当成跑过、却没派出去)。
+            with self.db.tx() as tx:
                 if not quiet:
-                    with self.db.tx() as tx:
-                        tx.execute("DELETE FROM commands WHERE command_id=?", (cmd.command_id,))
-                raise
+                    tx.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, "
+                               "issued_by, issued_at, priority) VALUES (?,?,?,?,?,?,?,?)",
+                               (cmd.command_id, cmd.task_id, robot_id, kind, json.dumps(payload),
+                                issued_by, cmd.issued_at, priority))
+                if before_send is not None:
+                    before_send(cmd, tx)
         try:
             ack = await c.send(cmd, timeout_s=self.ack_timeout_s)
         except DispatchTimeout:

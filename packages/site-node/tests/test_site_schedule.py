@@ -117,6 +117,32 @@ async def test_到点派patrol_走完回写done(站):
     assert t.sched.runs("nightly")[0]["result"] == "done", t.site.recent_events("A", 20)
 
 
+async def test_记账写到一半失败_整个回滚_下一拍照样派(站):
+    """外审复查:命令入账、「这一轮起跑过」(``schedule_state``)、运行记录(``schedule_runs`` 的
+    ``started``)以前分三次提交。第二步成了、第三步失败:命令不发、命令账删了,可这一轮已经被当成
+    跑过 —— 下一拍不再派,也没有运行记录。现在三样在派遣器开的同一个事务里,哪一步失败整个回滚,
+    提交之后才发。"""
+    t = 站
+    t.clock.ms = 毫秒(22, 0, 30)
+    await t.run(2)
+    with t.db.tx() as c:                             # 第三步(运行记录)写不进去
+        c.execute("CREATE TRIGGER 写不进去 BEFORE INSERT ON schedule_runs "
+                  "WHEN NEW.outcome = 'started' BEGIN SELECT RAISE(ABORT, '库写不进去'); END")
+    with pytest.raises(Exception, match="库写不进去"):
+        await _拍(t)
+    assert t.sched.last_started("nightly") is None, "第二步跟着回滚:这一轮不算起跑过"
+    assert not t.sched.runs("nightly")
+    assert not [c for c in t.site.commands("A") if c["kind"] == "patrol"], "命令没入账"
+    with t.db.tx() as c:
+        c.execute("DROP TRIGGER 写不进去")
+    t.clock.ms = 毫秒(22, 1)
+    await t.run(1)
+    await _拍(t)
+    assert [r["outcome"] for r in t.sched.runs("nightly")] == ["started"], "下一拍照样派"
+    [cmd] = [c for c in t.site.commands("A") if c["kind"] == "patrol"]
+    assert cmd["ack_result"] == "accepted", "狗上没有一趟「发出去了、没记账」的在跑"
+
+
 async def test_站点重启后同一轮不起第二次(站):
     t = 站
     t.clock.ms = 毫秒(22, 0, 30)

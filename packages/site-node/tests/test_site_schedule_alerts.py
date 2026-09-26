@@ -313,7 +313,8 @@ def _丢回执(monkeypatch, t):
 
     async def 没发出去(*a, before_send=None, **k):
         if before_send is not None:
-            before_send(None)
+            with t.db.tx() as tx:                     # 派遣器给记账开的那个事务
+                before_send(None, tx)
         raise DispatchTimeout("回执丢了")
     monkeypatch.setattr(t.site, "_send", 没发出去)
 

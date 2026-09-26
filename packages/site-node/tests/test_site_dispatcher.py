@@ -372,16 +372,35 @@ def test_推送流的同步监听_每条都调_监听炸了不挡订阅者():
     assert got == [{"kind": "x"}] and sub.get(0) == {"kind": "x"}
 
 
-async def test_发之前记账炸了_命令不留账(台):
-    """外审(Qwen)第三节:「发之前记账」(排程执行器记这一轮起跑过)抛了异常,命令已经入了账却没发
-    出去 —— 命令账里留一条永远等不到回执的。现在删掉它再往上抛。"""
+async def test_发之前记账炸了_命令和记账一起回滚(台):
+    """外审(Qwen 第三节、复查):「发之前记账」跟命令入账在同一个事务里 —— 记账写了一半就炸,命令账和
+    记了的那一半一起回滚,命令不发。"""
     t = 台
     pt = {"position": {"x": 0.1, "y": 0}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
     m = {"mission": "m", "map_id": "estate-1", "policy": {},
          "waypoints": [{"name": "p", "pose": pt}]}
 
-    def 炸(cmd):
+    def 炸(cmd, tx):
+        tx.execute("INSERT INTO schedule_state(entry_id, last_started_ms) VALUES ('e', 1)")
         raise RuntimeError("库写不进去")
     with pytest.raises(RuntimeError, match="库写不进去"):
         await t.site.patrol("A", m, issued_by="alice", before_send=炸)
     assert not [c for c in t.site.commands("A") if c["kind"] == "patrol"]
+    assert not t.site.db.query("SELECT 1 FROM schedule_state"), "写了的那一半也回滚"
+
+
+async def test_命令入账失败_记账也回滚(台):
+    """反过来:记账写成了、命令入账失败 —— 也要一起回滚(不然这一轮算起跑过、却没有命令)。"""
+    t = 台
+    pt = {"position": {"x": 0.1, "y": 0}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
+    m = {"mission": "m", "map_id": "estate-1", "policy": {},
+         "waypoints": [{"name": "p", "pose": pt}]}
+    with t.site.db.tx() as c:
+        c.execute("CREATE TRIGGER 命令写不进去 BEFORE INSERT ON commands WHEN NEW.kind = 'patrol' "
+                  "BEGIN SELECT RAISE(ABORT, '命令写不进去'); END")
+
+    def 记账(cmd, tx):
+        tx.execute("INSERT INTO schedule_state(entry_id, last_started_ms) VALUES ('e', 1)")
+    with pytest.raises(Exception, match="命令写不进去"):
+        await t.site.patrol("A", m, issued_by="alice", before_send=记账)
+    assert not t.site.db.query("SELECT 1 FROM schedule_state")
