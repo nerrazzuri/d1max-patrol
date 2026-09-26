@@ -474,7 +474,8 @@ class AgentRuntime:
         caps = compose_capabilities(
             robot_id=self.registration.robot_id, hal_caps=self.hal.hal_capabilities(),
             adapter_id=self.adapter_id, loaded_map=self.loaded_map,
-            extra_tasks=self._extra_tasks())
+            extra_tasks=self._extra_tasks(),
+            nav_path=getattr(self.parts.nav, "PATH_KIND", "straight") if self.parts else "straight")
         await self.transport.publish(self.topics.capabilities, _dumps(caps.to_wire()),
                                      qos=1, retain=True)
 

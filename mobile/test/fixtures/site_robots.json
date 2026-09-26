@@ -23,7 +23,8 @@
         },
         "tasks": {
           "goto": {
-            "max_speed_mps": 1.0
+            "max_speed_mps": 1.0,
+            "path": "straight"
           },
           "map_activate": {},
           "map_build": {},
@@ -43,15 +44,15 @@
           }
         }
       },
-      "expires_at": 1791356433123,
+      "expires_at": 1791391173348,
       "fresh": true,
       "held": null,
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-daee4aa0f0",
+        "boot_id": "boot-3e0fc485d3",
         "control_epoch": 1,
-        "last_seen": 1790356433929,
+        "last_seen": 1790391174177,
         "online": true,
         "ready": {
           "control": true,

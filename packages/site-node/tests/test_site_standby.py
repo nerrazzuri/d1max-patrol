@@ -161,3 +161,77 @@ async def test_待命点的地图版本对不上就不回(站):
     while (item := sub.get(0)) is not None:
         got.append(item["kind"])
     assert "standby_failed" in got, "回不去要让值守的人看见"
+
+
+# ---------------------------------------------------- 巡检之后沿来路回(W00c6b)
+
+
+def _pose(x, y):
+    return {"position": {"x": x, "y": y}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
+
+
+_巡检 = {"mission": "L", "map_id": "estate-1", "policy": {},
+         "waypoints": [{"name": "a", "pose": _pose(1.0, 0.0),
+                        "actions": [{"type": "dwell", "seconds": 0.2}]},
+                       {"name": "b", "pose": _pose(1.0, 1.0)}]}
+
+
+async def test_巡检跑完_直线狗沿来路回待命点(站):
+    """W00c6b:以前巡检跑完,站点自动派一条直线 goto 回待命点 —— 每趟巡检之后、没人值守、
+    直线、不避障。直线的狗(能力里 ``goto.path == straight``)改成沿来路回:那一趟的航点倒序
+    + 待命点。"""
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    assert t.site.clients["A"].capabilities.tasks["goto"]["path"] == "straight"
+    await t.send(t.site.patrol("A", _巡检, issued_by="alice", priority=MANUAL))
+    await t.run(400)
+    patrols = _cmds(t, "patrol")
+    assert len(patrols) == 2 and not _cmds(t, "goto"), "回程是一趟巡检,不是直线 goto"
+    back = patrols[1]
+    assert back["task_id"].startswith("standby-") and back["issued_by"] == "standby:auto"
+    assert back["priority"] == STANDBY_RETURN
+    wps = back["payload"]["mission"]["waypoints"]
+    assert [(w["pose"]["position"]["x"], w["pose"]["position"]["y"]) for w in wps] == [
+        (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)], "倒序 + 待命点"
+    assert all("actions" not in w for w in wps), "回程不拍照、不停留"
+    pol = back["payload"]["mission"]["policy"]
+    assert pol["on_waypoint_failed"] == "skip"
+    await t.run(400)
+    assert len(_cmds(t, "patrol")) == 2, "回程结束不再回"
+    o = await t.dog.odometry()
+    assert abs(o.x) < 0.2 and abs(o.y) < 0.2
+
+
+async def test_巡检跑完_读不到path按直线算(站):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.site.clients["A"].capabilities.tasks["goto"].pop("path")
+    await t.send(t.site.patrol("A", _巡检, issued_by="alice", priority=MANUAL))
+    await t.run(400)
+    assert len(_cmds(t, "patrol")) == 2 and not _cmds(t, "goto")
+
+
+async def test_巡检跑完_规划的狗照旧派goto回待命点(站):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.site.clients["A"].capabilities.tasks["goto"]["path"] = "planned"
+    await t.send(t.site.patrol("A", _巡检, issued_by="alice", priority=MANUAL))
+    await t.run(400)
+    goto = _cmds(t, "goto")
+    assert len(goto) == 1 and goto[0]["task_id"].startswith("standby-")
+
+
+async def test_巡检跑完_取不到那一趟的任务定义_不回_推standby_failed(站):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    sub = t.site.feed.subscribe()
+    await t.send(t.site.patrol("A", _巡检, issued_by="alice", priority=MANUAL))
+    with t.db.tx() as c:
+        c.execute("UPDATE commands SET payload='{}' WHERE kind='patrol'")
+    await t.run(400)
+    assert len(_cmds(t, "patrol")) == 1 and not _cmds(t, "goto"), "不回,也不退回直线"
+    got = []
+    while (item := sub.get(0)) is not None:
+        got.append(item)
+    failed = [i for i in got if i["kind"] == "standby_failed"]
+    assert failed and "来路" in failed[-1]["reason"]

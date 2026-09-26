@@ -790,21 +790,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 await self._stop_nav_quietly()
                 # 返航也是一次 start_nav,一样只在 StandBy 下受理。
                 await self._await_nav_standby(self._clock() + NAV_STANDBY_TIMEOUT_S)
-                # **这里押的是:厂商的 ``start_nav_return_home`` 拿「当下位姿」
-                # 重新规划,而不是重放发起返航时缓存的那条路。**
-                #
-                # 整个任务 13(返航途中也能让开腿)的承重假设就是这一句。押对
-                # 了,人把狗牵到走廊另一头再点继续,这一圈重发的 ``return_home``
-                # 会从狗现在站的地方算一条新路;押错了,它会照着人接管**之前**
-                # 那条路走 —— 起点在一个没人知道的位置,狗要么原地不动等一个
-                # 永远不来的终态,要么沿着一条穿墙的路撞过去。**而这一整套测试
-                # 照样全绿**:假后端 ``NavStub.return_home`` 只记一次调用,它
-                # 不可能替真设备回答"重不重新规划"这个问题。
-                #
-                # 真机要验的那一条(已排进真机清单的阻断项):进返航后把狗遥控
-                # 挪开十几米,点继续,看它是从**新位置**起步回原点,还是掉头
-                # 走回原来那条路的起点。不通过的话,这个任务要退回"返航中拒绝
-                # 让开腿"。
+                # 后端会返航的(规划器上线后,W10),这一圈从狗**当下**的位置重新规划回家 —— 人接管过、
+                # 狗被挪开了,重新规划的起点就是新位置(W08 决定 6)。现在代理唯一的导航桥是直线桥,它
+                # 不认 ``return_home``(W00c6b),引擎走下面的沿来路回。
+                # (以前这里押的是厂商导航 ``start_nav_return_home`` 会不会重新规划;
+                # 代理不用厂商导航了。)
                 try:
                     await self._nav.return_home()
                 except NavRequestError as exc:

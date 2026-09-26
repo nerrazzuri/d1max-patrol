@@ -1,11 +1,11 @@
 {
   "releases": [
     {
-      "created_ms": 1790356434394,
+      "created_ms": 1790391174563,
       "name": "2026-09-25-bbbbbb",
       "note": "夜巡修了一个 bug",
-      "sha256": "6415860d729f73921f6fe8e62828e8a2765c6d50caef8343ec26ee02450ccce3",
-      "size": 415,
+      "sha256": "6d4d8fa01254f4f75604614634685c2b8ff2f5eb2cb1cfd88c954925bdb01e61",
+      "size": 511,
       "version": "0.9"
     }
   ],

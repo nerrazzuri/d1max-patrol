@@ -201,16 +201,11 @@ async def test_set_speed夹到HAL上限并返回实际值_侧移拒(台子):
     assert 0 < vmax <= 0.4 + 1e-9
 
 
-async def test_return_home走到登记的原点_没登记就拒(台子):
+async def test_直线桥不认return_home_没登记也拒(台子):
+    """W00c6b:直线桥不认返航,引擎沿来路回(登记了原点的情形见 ``test_straight_return.py``)。"""
     c, r, nav, dev = 台子
-    with pytest.raises(NavRequestError, match="原点"):
+    with pytest.raises(NavRequestError, match="沿来路"):
         await nav.return_home()
-    r.teleport(3.0, 0.0, 0.0)
-    nav.set_home(Pose.from_xy_yaw(0.0, 0.0))
-    await nav.return_home()
-    await _步(c, r, nav, 80)
-    o = await r.odometry()
-    assert abs(o.x) <= 0.15 and abs(o.y) <= 0.15
 
 
 async def test_goto非StandBy拒(台子):

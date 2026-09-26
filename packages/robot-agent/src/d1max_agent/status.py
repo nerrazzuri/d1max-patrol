@@ -26,10 +26,13 @@ from d1max_contract.storage import StorageFacts
 def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id: str,
                          loaded_map: tuple[str, str] | None,
                          agent_version: str = AGENT_VERSION,
-                         extra_tasks: dict[str, dict[str, Any]] | None = None) -> Capabilities:
+                         extra_tasks: dict[str, dict[str, Any]] | None = None,
+                         nav_path: str = "straight") -> Capabilities:
     tasks: dict[str, dict[str, Any]] = {}
     if loaded_map is not None and hal_caps.max_vx > 0:
-        tasks["goto"] = {"max_speed_mps": hal_caps.max_vx}
+        # W00c6b:``path`` 报导航走哪种路 —— 直线桥是 ``straight``,规划器上线后(W10)是 ``planned``。
+        # 站点据此决定巡检跑完之后怎么回待命点(直线的狗沿来路回)。
+        tasks["goto"] = {"max_speed_mps": hal_caps.max_vx, "path": nav_path}
         # W00c2a:站点据此填 patrol 命令的 map_version、核对任务的 map_id。
         tasks["patrol"] = {"map_id": loaded_map[0], "map_version": loaded_map[1]}
     if hal_caps.max_vx > 0:

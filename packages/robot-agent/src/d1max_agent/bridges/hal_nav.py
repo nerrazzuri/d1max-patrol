@@ -9,6 +9,10 @@ HAL 拒速度或定位丢失 FAILED / ``stop()`` CANCELLED →(``terminal_hold_s
 只支持点到点导航与停/暂停/继续;建图、地图管理、路径都不支持(``capabilities``
 为空,对应方法抛 ``NavRequestError``);重定位是空操作,见 ``reset_localization``。
 ——总设计 §5:规划/避障上移到代理,适配器只留速度与里程。
+
+**不认 ``return_home``**(W00c6b):这座桥走的是直线、不规划、不避障;直线回原点会穿墙。拒绝之后引擎走
+W04 的沿来路回(倒序各段 + 最后一段到原点,每一段都是巡检时走过的线段)。规划器上线(W10)之后,回家由
+新后端规划(W08 决定 6)。
 """
 
 from __future__ import annotations
@@ -158,10 +162,11 @@ class HalNavBackend(NavBackend):
     def set_home(self, pose: Pose) -> None:
         self._home = pose
 
+    #: 这座桥怎么走路(W00c6b):能力里报给站点(``tasks.goto.path``),站点据此决定巡检后怎么回待命点。
+    PATH_KIND = "straight"
+
     async def return_home(self) -> None:
-        if self._home is None:
-            raise NavRequestError("return_home", "没登记原点")
-        await self.goto(self._home)
+        raise NavRequestError("return_home", "直线桥不认返航,引擎沿来路回(W00c6b)")
 
     async def get_speed(self) -> dict[str, float]:
         return {"x": self._vmax, "y": 0.0, "z": self._wmax}

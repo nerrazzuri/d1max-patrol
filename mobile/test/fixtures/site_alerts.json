@@ -7,10 +7,10 @@
       "count": 1,
       "detail": "狗报急停没解除",
       "escalated": 0,
-      "first_ms": 1790356433458,
+      "first_ms": 1790391173688,
       "key": "A/estop_pressed#1",
       "kind": "estop_pressed",
-      "last_ms": 1790356433458,
+      "last_ms": 1790391173688,
       "level": "P1",
       "resolved_by": "",
       "resolved_ms": null,
@@ -24,15 +24,15 @@
       "count": 1,
       "detail": "",
       "escalated": 0,
-      "first_ms": 1790356433369,
+      "first_ms": 1790391173615,
       "key": "A/run_start#1",
       "kind": "run_start",
-      "last_ms": 1790356433369,
+      "last_ms": 1790391173615,
       "level": "P3",
       "resolved_by": "",
       "resolved_ms": null,
       "robot": "A",
-      "title": "开跑:goto task-a36947905f11"
+      "title": "开跑:goto task-b5c86b3be441"
     }
   ]
 }
