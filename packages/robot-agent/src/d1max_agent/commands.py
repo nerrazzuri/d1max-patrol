@@ -89,6 +89,9 @@ class CommandProcessor:
         self.supervise_hook: Callable[[Command], str] | None = None
         #: ``abort_kinds`` 请求过中止的当前任务(不重复请求)。
         self._abort_requested: set[str] = set()
+        #: 叫停栅栏(W00c6a 内审 B1):抢先那一路立起来、排队那一路处理完这条叫停撤掉。立着的时候不起新
+        #: 任务、运动类命令一律拒收 —— 不然叫停之后,排队里已收下的、排在锁前面的,照样起跑。
+        self._fence: str | None = None
         #: 地图命令(W00c5d 第二部分:``map_activate``/``mapping``/``map_build``,都不是任务):
         #: 返回非空 = 拒绝原因;空串 = 收下(后台做,做完发事件)。
         self.map_hook: Callable[[Command], Any] | None = None
@@ -192,6 +195,8 @@ class CommandProcessor:
             reason = await self.map_hook(cmd)
             return self._finish(self._rej(cmd, reason) if reason
                                 else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED))
+        if self._fence is not None and cmd.kind in _MOTION_KINDS:
+            return self._finish(self._rej(cmd, "halting"))
         if cmd.kind not in self.supported:
             return self._finish(self._rej(cmd, "unsupported"))
         try:
@@ -333,6 +338,8 @@ class CommandProcessor:
         """停车(W00c5c):**不走遥控连接**。当场让 HAL 停,中止当前与排队中的一切任务。
         停车本身失败的话任务照样中止,但回执**拒收**(``stop_failed``):不许让站点、手机说「停了」
         而狗其实没停(W00c5e 内部评审)。"""
+        # 先中止、再停车(W00c6a 内审 B2):见 ``abort_for_halt``。
+        await self.abort_for_halt()
         stop_failed = ""
         if self.halt_hook is not None:
             try:
@@ -342,14 +349,6 @@ class CommandProcessor:
             except Exception as exc:
                 log.exception("halt 时停车失败,任务照样中止")
                 stop_failed = f"stop_failed: {type(exc).__name__}: {exc}"[:120]
-        for t in list(self.pending):
-            self.pending.remove(t)
-            t.state = TaskState.ABORTED
-            t.detail = {"reason": "halt"}
-            self.finished.append(t)
-            self.events.emit("task_aborted", {"task_id": t.task_id, "reason": "halt"})
-        if self.current is not None and not self.current.done:
-            await self.current.abort("halt")
         if stop_failed:
             return self._rej(cmd, stop_failed)
         return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
@@ -366,6 +365,28 @@ class CommandProcessor:
         if why:
             return self._rej(cmd, why)
         return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)
+
+    def fence(self, command_id: str) -> None:
+        """立叫停栅栏(抢先的叫停)。"""
+        self._fence = command_id
+
+    def unfence(self, command_id: str) -> None:
+        """撤栅栏:排队那一路处理完**这一条**叫停(不管收下、过期还是重复)。"""
+        if self._fence == command_id:
+            self._fence = None
+
+    async def abort_for_halt(self) -> None:
+        """叫停要中止的:排队的直接进终态、发事件;当前的请求中止。**先于停车**(W00c6a 内审 B2):
+        中止请求先进引擎的队列,停车引出的导航 Cancelled 排在它后面 —— 引擎不会把 Cancelled 当
+        「这个点没到」去重发这个点(真 HAL 停车要等回执,这段时间足够引擎重发)。"""
+        for t in list(self.pending):
+            self.pending.remove(t)
+            t.state = TaskState.ABORTED
+            t.detail = {"reason": "halt"}
+            self.finished.append(t)
+            self.events.emit("task_aborted", {"task_id": t.task_id, "reason": "halt"})
+        if self.current is not None and not self.current.done:
+            await self.current.abort("halt")
 
     async def abort_kinds(self, kinds: frozenset[str], reason: str) -> int:
         """中止当前与排队中的这几种任务(W00c6i:监护过期时中止 goto/巡检)。排队的直接进终态、发事件;
@@ -409,7 +430,7 @@ class CommandProcessor:
                 self.current = None
                 self.events.emit(_event_for(cur.state),
                                  {"task_id": cur.task_id, **cur.detail})
-        while self.current is None and self.pending:
+        while self.current is None and self.pending and self._fence is None:
             nxt = self.pending[0]
             if self.ledger.conflicts(nxt.kind):
                 break
@@ -424,6 +445,10 @@ class CommandProcessor:
             self.ledger.acquire(nxt.task_id, nxt.kind)
             self.current = nxt
             await nxt.start()
+
+
+#: 叫停栅栏立着的时候拒收的命令(会让狗动的任务)。
+_MOTION_KINDS = frozenset({"goto", "patrol", "teleop"})
 
 
 def _event_for(state: TaskState) -> str:

@@ -216,7 +216,12 @@ class HalNavBackend(NavBackend):
         if loc is LocStatus.LOC_LOST:
             await self._enter_terminal(NavStatus.FAILED)
             return
-        assert self._target is not None
+        if self._target is None:
+            # 停车正在路上(``_enter_terminal`` 先清目标、再等 HAL 回执;真 HAL 最长等 5 s):
+            # 这一拍什么都不发,也不再叫一次停 —— 那会把这一拍也卡在回执上。停车抛错的话
+            # ``_enter_terminal`` 的 ``finally`` 照样进终态(W00c6a 内审 S1),以前这里是
+            # assert,每拍炸。
+            return
         odom = await self._hal.odometry()
         dx, dy = self._target.position.x - odom.x, self._target.position.y - odom.y
         dist = math.hypot(dx, dy)
@@ -245,6 +250,10 @@ class HalNavBackend(NavBackend):
 
     async def _enter_terminal(self, status: NavStatus) -> None:
         self._target = None
-        await self._hal.stop()
-        self._set_status(status)
-        self._due = (self._now() + self._hold_ms, NavStatus.STANDBY)
+        try:
+            await self._hal.stop()
+        finally:
+            # 停车抛错也要进终态(W00c6a 内审 S1):不然桥卡在「ACTIVE 却没有目标」,之后每拍炸,
+            # 运行时后面的步骤(任务看门、状态上报)一步都走不到。停车失败由调用方如实往上报。
+            self._set_status(status)
+            self._due = (self._now() + self._hold_ms, NavStatus.STANDBY)

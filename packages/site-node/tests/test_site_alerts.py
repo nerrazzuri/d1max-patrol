@@ -381,3 +381,11 @@ def test_狗上归档写不进去_报P1_证据缺了(台):
     [a] = desk.book.all()
     assert a.kind == "archive_failed" and a.level is Level.P1
     assert "Read-only" in a.detail and "t1" in a.title
+
+
+def test_点位照片存不下_不报没到_并进记录写不进去(台):
+    c, db, desk, src, *_ = 台
+    src.on_event("A", _ev("patrol_waypoint", task_id="t1", index=0, name="gate", ok=False,
+                          note="照片存不下: [Errno 28] No space left on device"))
+    [a] = desk.book.all()
+    assert a.kind == "archive_failed" and "照片存不下" in a.title and "没到" not in a.title

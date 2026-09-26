@@ -113,3 +113,45 @@ async def test_收尾路径自己炸了_状态落成ABORTED_先停导航_等得�
     assert nav.stop_calls > stops, "导航要停"
     assert not engine.running
     await engine.aclose()
+
+
+async def test_写失败的一趟_汇总里标着残缺(make_engine, sample_mission, nav, monkeypatch):
+    """W00c6a 内审 S4:盘恢复后 ``finish`` 写上汇总,这一趟就「安定」了、传完即删;站点收到的东西
+    缺了一截,清单里看不出来。汇总里带上归档写失败的信息。这里只让照片写失败一次,收尾写得进去。"""
+    import errno
+    real = arc.RunArchive.save_photo
+    n = {"left": 1}
+
+    def 照片存不下(self, *a, **k):
+        if n["left"]:
+            n["left"] -= 1
+            self._failed("photo", OSError(errno.ENOSPC, "No space left on device"))
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(self, *a, **k)
+    monkeypatch.setattr(arc.RunArchive, "save_photo", 照片存不下)
+    engine = make_engine()
+    await engine.start(sample_mission, home=_HOME)
+    await engine.wait_done(timeout_s=3.0)
+    await engine.aclose()
+    from d1max_agent.engine.archive import read_manifest
+    summary = read_manifest(engine.archive.path)["summary"]
+    assert summary["archive"]["write_failures"] == 1 and "No space" in summary["archive"]["error"]
+
+
+async def test_停导航抛非导航错_中止照样走完_原因不丢(make_engine, sample_mission, nav,
+                                            monkeypatch):
+    """W00c6a 内审 S1:HAL 停车超时这类错不是 ``NavBackendError``,以前 ``_stop_nav_quietly``
+    只接导航错,这种错把中止路径炸穿,最后靠收尾兜成「引擎收尾时出错」,人工中止的原因丢了。"""
+    engine = make_engine()
+    await engine.start(sample_mission, home=_HOME)
+    await engine.wait_state(RunState.RUNNING)
+
+    async def 停不了():
+        nav.stop_calls += 1
+        raise TimeoutError("旁路进程回不了停车回执")
+    monkeypatch.setattr(nav, "stop", 停不了)
+    await engine.abort("人工中止")
+    state = await engine.wait_done(timeout_s=3.0)
+    assert state is RunState.ABORTED and engine.snapshot.reason == "人工中止"
+    assert engine.crash == "" and nav.stop_calls >= 1
+    await engine.aclose()

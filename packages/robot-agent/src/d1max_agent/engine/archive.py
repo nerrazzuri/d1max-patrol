@@ -92,6 +92,8 @@ class RunArchive:
         self.write_failures = 0
         #: 写坏过、这一趟不再写的流(文件名)。
         self._dead: set[str] = set()
+        #: 环境指纹记在内存里(W00c6a 内审 S4):开跑时清单没写进去、收尾时盘好了,指纹照样落上。
+        self._fingerprint: dict[str, Any] | None = None
 
     @staticmethod
     def _make_dir(root: Path, mission: str, started: datetime, suffix: str = "") -> Path:
@@ -137,6 +139,14 @@ class RunArchive:
         # 每行都 flush。归档不是热路径(一次运行几百行),而少写一行就可能
         # 正好是"为什么停下来"的那一行。
         handle.flush()
+
+    def failure_summary(self) -> dict[str, Any] | None:
+        """这一趟归档写失败的情况(W00c6a 内审 S4),进汇总:站点、发件箱据此知道这一趟是残缺的。
+        一直写得进去就是 ``None``。"""
+        if not self.write_failures:
+            return None
+        return {"error": self.error, "write_failures": self.write_failures,
+                "stopped_streams": sorted(self._dead)}
 
     def _failed(self, what: str, exc: BaseException) -> None:
         self.write_failures += 1
@@ -205,12 +215,13 @@ class RunArchive:
 
     def write_manifest(self, fingerprint: dict[str, Any],
                        summary: dict[str, Any] | None = None) -> None:
-        """任务定义**快照** + 环境指纹 + 结果汇总。
+        """任务定义**快照** + 环境指纹 + 结果汇总。指纹同时记在内存里(见 ``finish``)。
 
         快照而不是引用:别人改了 ``missions/*.yaml``,历史报告不该跟着变
         (设计 spec §6.1)。指纹里放 SDK 版本 / 协议版本 / 地图 ID,
         让报告能追溯到当时的软件版本。
         """
+        self._fingerprint = fingerprint
         self._atomic(self._path / "manifest.json", json.dumps({
             "mission": self._mission.to_wire(),
             "started_at": _stamp(self._started),
@@ -220,15 +231,16 @@ class RunArchive:
 
     def finish(self, summary: dict[str, Any]) -> None:
         """收尾:把汇总补进 manifest,保留已有的指纹。"""
-        path = self._path / "manifest.json"
-        existing: dict[str, Any] = {}
-        try:
-            if path.exists():
-                existing = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            self._failed(path.name, exc)
-        self.write_manifest(existing.get("fingerprint", {}) if isinstance(existing, dict) else {},
-                            summary)
+        fingerprint = self._fingerprint
+        if fingerprint is None:                      # 没经过 write_manifest 的(老目录):读盘上的
+            path = self._path / "manifest.json"
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            except (OSError, ValueError) as exc:
+                log.warning("清单读不出来(%s),指纹记空", exc)
+                existing = {}
+            fingerprint = existing.get("fingerprint", {}) if isinstance(existing, dict) else {}
+        self.write_manifest(fingerprint, summary)
 
     def close(self) -> None:
         for name in ("_events", "_telemetry"):

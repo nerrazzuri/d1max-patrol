@@ -895,23 +895,29 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         live = self._live
         try:
             if self._state not in FINAL_STATES:
-                await self._stop_nav_quietly()
+                # 先把状态落成终态再停导航(W00c6a 内审 S1):停导航再抛,也不会停在 ABORTING。
                 self._state = RunState.ABORTED
                 self._seen.add(RunState.ABORTED)
                 try:
                     self._publish("引擎收尾时出错,按中止收尾")
                 except Exception:
                     log.exception("收尾时广播也失败了")
+                await self._stop_nav_quietly()
             if live is not None:
                 succeeded = sum(1 for r in live.results if r.ok)
-                live.archive.finish({
+                summary = {
                     "state": self._state.value,
                     "reason": self._snapshot.reason,
                     "succeeded": succeeded,
                     "failed": len(live.results) - succeeded,
                     "total": len(live.mission.waypoints) * live.mission.policy.loops,
                     "results": [r.to_wire() for r in live.results],
-                })
+                }
+                broken = live.archive.failure_summary()
+                if broken is not None:
+                    # 这一趟的归档是残缺的(W00c6a 内审 S4):照片、事件流后半截可能没有。
+                    summary["archive"] = broken
+                live.archive.finish(summary)
                 live.archive.close()
         except Exception:
             log.exception("引擎收尾出错(状态已落成 %s)", self._state.value)
@@ -1467,8 +1473,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         return ""
 
     async def _stop_nav_quietly(self) -> None:
-        """停导航。已经在收尾的路径上,停不下来也只能记一笔。"""
+        """停导航。已经在收尾的路径上,停不下来也只能记一笔 —— **接住一切**(W00c6a 内审 S1):
+        HAL 停车超时这类错不是 ``NavBackendError``,漏出去会把中止、收尾路径炸穿。"""
         try:
             await self._nav.stop()
-        except NavBackendError as exc:
-            self._note("stop_failed", reason=str(exc))
+        except Exception as exc:
+            log.exception("停导航失败")
+            self._note("stop_failed", reason=f"{type(exc).__name__}: {exc}")

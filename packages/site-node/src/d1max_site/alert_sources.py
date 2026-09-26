@@ -234,6 +234,13 @@ class SiteAlertSources:
             self.desk.raise_alert(kind="archive_failed", robot=rid,
                                   title=f"狗上这一趟的记录写不进去:{tid}",
                                   detail=str(d.get("reason", ""))[:300])
+        elif e.kind == "patrol_waypoint" and d.get("ok") is False \
+                and str(d.get("note", "")).startswith("照片存不下"):
+            # 到了、只是照片存不下(W00c6a 内审):不是「没到」;跟「记录写不进去」并成一类,
+            # 不每个点刷一条。
+            self.desk.raise_alert(kind="archive_failed", robot=rid,
+                                  title=f"点位 {d.get('name', '?')} 的照片存不下",
+                                  detail=str(d.get("note", "")))
         elif e.kind == "patrol_waypoint" and d.get("ok") is False:
             self.desk.raise_alert(kind="stuck", robot=rid, title=f"点位 {d.get('name', '?')} 没到",
                                   detail=str(d.get("note", "")))

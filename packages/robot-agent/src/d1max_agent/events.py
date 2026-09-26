@@ -33,6 +33,8 @@ class EventBook:
         self._seq = 0
         self._pending: dict[int, Event] = {}
         self._lines = 0
+        #: 事件簿最近一次写不进去的原因(W00c6a 内审 S3);空串 = 写得进去。
+        self.persist_error = ""
         #: 上一个(几个)进程没确认的事件:带到这个 boot 里补发(W00c5d 内部评审,决策 8:断网暂存的
         #: 东西恢复后要传上去,不许因为代理重启就丢了 —— 任务结果、故障都在里面)。
         self._other: dict[str, dict[int, Event]] = {}
@@ -99,13 +101,28 @@ class EventBook:
         return n
 
     def _append(self, rec: dict[str, Any]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        self._lines += 1
+        """落一行。**写不进去不往外抛**(W00c6a 内审 S3):盘满、只读重挂时,事件留在内存里照发、照等
+        确认,只是代理重启就丢了 —— 抛出去的话,那一拍的状态、遥测都不发,每条命令的回执(包括叫停)
+        也发不出去。只警告一次。"""
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with self._path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            self._lines += 1
+        except OSError as exc:
+            if not self.persist_error:
+                log.warning("事件簿写不进去(%s):事件只留在内存里,代理重启会丢", exc)
+            self.persist_error = str(exc)
 
     def _compact(self) -> None:
-        """重写成「这个 boot 还没确认的事件」。先写临时文件再换名:中途断电老文件还在。"""
+        """重写成「这个 boot 还没确认的事件」。先写临时文件再换名:中途断电老文件还在。
+        写不进去就算了(老文件还在,下次再压)。"""
+        try:
+            self._compact_now()
+        except OSError as exc:
+            log.warning("事件簿压缩写不进去,下次再试: %s", exc)
+
+    def _compact_now(self) -> None:
         tmp = self._path.with_name(self._path.name + ".tmp")
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with tmp.open("w", encoding="utf-8") as f:

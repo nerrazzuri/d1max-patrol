@@ -239,3 +239,31 @@ def test_关一个写坏了的句柄不抛(archive):
     archive._events = _坏句柄()
     archive.close()                                           # 收尾不因为关不上而炸
     assert archive._events is None
+
+
+def test_开跑时清单写不进去_收尾时盘好了_指纹不丢(archive, monkeypatch):
+    """W00c6a 内审 S4:``finish`` 以前从盘上重读指纹,开跑时没写进去的话最终清单里指纹是空的。"""
+    from d1max_agent.engine import archive as arc
+    real = arc.os.replace
+
+    def 换名失败(src, dst):
+        raise OSError(30, "Read-only file system")
+    monkeypatch.setattr(arc.os, "replace", 换名失败)
+    archive.write_manifest({"sdk": "0.2.0", "map": "m"})
+    monkeypatch.setattr(arc.os, "replace", real)
+    archive.finish({"state": "DONE"})
+    assert read_manifest(archive.path)["fingerprint"] == {"sdk": "0.2.0", "map": "m"}
+
+
+def test_写失败的信息进汇总_哪几条流停写了(archive):
+    archive.append_event("state", to="RUNNING")
+    archive._events = _坏句柄()
+    archive.append_event("nav", waypoint="P1")
+    got = archive.failure_summary()
+    assert got["write_failures"] == 1 and "No space" in got["error"]
+    assert got["stopped_streams"] == ["events.jsonl"]
+
+
+def test_一直写得进去_汇总里没有写失败这一项(archive):
+    archive.append_event("state", to="RUNNING")
+    assert archive.failure_summary() is None

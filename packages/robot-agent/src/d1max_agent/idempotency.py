@@ -27,6 +27,8 @@ class IdempotencyStore:
         self._path = Path(path)
         self._acks: dict[str, Ack] = {}
         self._lines = 0
+        #: 最近一次写不进去的原因(W00c6a 内审 S3);空串 = 写得进去。
+        self.persist_error = ""
         self._load()
         if self._lines > 2 * KEEP:
             self._compact()
@@ -54,13 +56,20 @@ class IdempotencyStore:
         if ack.command_id in self._acks:
             return
         self._acks[ack.command_id] = ack
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(ack.to_wire(), ensure_ascii=False) + "\n")
-            f.flush()
-        self._lines += 1
-        if self._lines > 2 * KEEP:
-            self._compact()
+        # **写不进去不往外抛**(W00c6a 内审 S3):盘满、只读重挂时,幂等只在内存里成立(代理重启就忘),
+        # 抛出去的话这条命令的回执(包括叫停)发不出去。只警告一次。
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with self._path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(ack.to_wire(), ensure_ascii=False) + "\n")
+                f.flush()
+            self._lines += 1
+            if self._lines > 2 * KEEP:
+                self._compact()
+        except OSError as exc:
+            if not self.persist_error:
+                log.warning("幂等记录写不进去(%s):只在内存里成立,代理重启会忘", exc)
+            self.persist_error = str(exc)
 
     def _compact(self) -> None:
         """只留最近 ``KEEP`` 条。先写临时文件再换名:中途断电老文件还在。"""

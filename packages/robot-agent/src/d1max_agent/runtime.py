@@ -658,11 +658,17 @@ class AgentRuntime:
             return
         if isinstance(wire, dict) and wire.get("kind") == "halt":
             await self._halt_now(wire, m.topic)
+        cid = wire.get("command_id") if isinstance(wire, dict) else None
         async with self._cmd_lock:
-            if self._reconnect_pending and self.transport.connected:
-                # 真 broker 下离线补投的 cmd 可能比我们的重连收尾先到:reconcile 必须是第一条。
-                await self._flush_reconnect()
-            ack = await self.processor.handle(wire, m.topic)
+            try:
+                if self._reconnect_pending and self.transport.connected:
+                    # 真 broker 下离线补投的 cmd 可能比我们的重连收尾先到:reconcile 必须是第一条。
+                    await self._flush_reconnect()
+                ack = await self.processor.handle(wire, m.topic)
+            finally:
+                # 这条叫停排队那一路处理完了(收下、过期、重复都算):撤掉抢先那一路立的栅栏。
+                if isinstance(cid, str):
+                    self.processor.unfence(cid)
             await self.transport.publish(self.topics.ack, _dumps(ack.to_wire()), qos=1)
             await self._publish_status()
 
@@ -678,20 +684,23 @@ class AgentRuntime:
             return
         if cmd.expires_at <= self._now():
             return
+        p = self.processor
+        # 重投的(回执会是 duplicate)、旧代次的(回执会是 stale_epoch)只停车,不中止任务、不立栅栏
+        # (W00c6a 内审 S2)—— 停车本身无条件,那是偏安全的方向。
+        fresh = p.idem.lookup(cmd.command_id) is None and cmd.control_epoch >= p.control_epoch
+        if fresh:
+            # **先立栅栏、清排队、中止当前的,再停车**(W00c6a 内审 B1、B2):只停车的话,活着的引擎
+            # 把导航的 Cancelled 当「这个点没到」重发这个点(真 HAL 停车要等回执);只中止当前的话,
+            # 排队里已收下的、排在锁前面的,照样起跑。栅栏等排队那一路处理完这条叫停才撤。
+            p.fence(cmd.command_id)
+            try:
+                await p.abort_for_halt()
+            except Exception:
+                log.exception("halt 抢先中止任务失败,排队那一步还会再中止一次")
         try:
             await self._stop_motion()
         except Exception:
             log.exception("halt 抢先停车失败,排队那一步还会再停一次")
-        # 当场请求中止当前任务(W00c6a):只停车的话,活着的引擎把导航的 Cancelled 当「这个点没到」,
-        # 0.5 s 后重发这个点,狗又走起来 —— 直到排队的那一步轮到(上行拥堵时好几秒)。中止请求进了
-        # 引擎的队列,重发之前就被处理掉。排队那一步照旧:清待办、中止、回执;这里重复的中止无害
-        # (任务收尾后不再理;引擎开新的一趟会清空队列)。
-        cur = self.processor.current
-        if cur is not None and not cur.done:
-            try:
-                await cur.abort("halt")
-            except Exception:
-                log.exception("halt 抢先中止任务失败,排队那一步还会再中止一次")
 
     # ------------------------------------------------------------ 监护(W00c6i)
 
@@ -737,6 +746,7 @@ class AgentRuntime:
                 await parts.nav.stop()
             except Exception as exc:  # noqa: BLE001 - 桥停不了也要接着停 HAL,最后再报
                 nav_exc = exc
+                log.warning("叫停时导航桥停不了(接着停 HAL): %s", exc)
         await self.hal.stop()
         if nav_exc is not None:
             raise nav_exc

@@ -54,6 +54,8 @@ class EngineMissionTask(Task):
         self._unconfirmed_s = 0.0
         #: 这一趟的「归档写不进去」报过没有(W00c6a:一趟报一条)。
         self._archive_reported = False
+        #: 引擎任务死了的原因(W00c6a 看门);非空之后按终态走:等停车确认、导航回待命,再报失败。
+        self._dead: str | None = None
 
     def _mission(self) -> Mission:
         raise NotImplementedError
@@ -123,12 +125,14 @@ class EngineMissionTask(Task):
             self._archive_reported = True
             self._events.emit("archive_write_failed", {"task_id": self.task_id,
                                                        "reason": err[:200]})
-        if snap.state not in _TERMINAL:
+        if snap.state not in _TERMINAL and self._dead is None:
             if not engine.running:
                 # 看门的最后一道(W00c6a):引擎任务已经结束、快照却不是终态。正常路径走不到
-                # (收尾一定落成终态);真走到了,不等一个死掉的引擎 —— 停车,按失败收尾。
+                # (收尾一定落成终态);真走到了,不等一个死掉的引擎 —— 停车,然后跟正常收尾一样
+                # 等停车确认、导航回待命,再按失败收尾(内审:不然下一趟在驻留期起跑、预飞变红)。
                 await self._engine_died(engine.crash or "引擎任务已经结束")
-            return
+            else:
+                return
         if not await self._parts.hal.stopped():
             self._unconfirmed_s += dt_s              # 引擎收尾了,机器还在制动:等确认
             if self._unconfirmed_s < STOP_CONFIRM_TIMEOUT_S:
@@ -143,7 +147,12 @@ class EngineMissionTask(Task):
             return
         if await self._parts.nav.nav_status() is not NavStatus.STANDBY:
             return                                   # 导航还在终态驻留期:下一趟现在起会被预飞拒
-        if snap.state is RunState.DONE:
+        if self._abort_reason is not None:
+            # 请求过中止(叫停、抢占、人工)就报中止,不让引擎恰好同时跑完的 DONE 抢先(W00c6a 内审)。
+            self._finish_aborted()
+        elif self._dead is not None:
+            self._fail(f"engine_died: {self._dead}"[:200])
+        elif snap.state is RunState.DONE:
             # 引擎的 DONE 是「这趟跑完了」,航点本身可能是按 retry_then_skip 跳过的;
             # 对只有一个航点的 goto,航点没到就是任务没成。
             bad = [r for r in snap.results if not r.ok]
@@ -153,8 +162,6 @@ class EngineMissionTask(Task):
             else:
                 self.state = TaskState.DONE
                 self.detail = dict(extra or {})
-        elif self._abort_reason is not None:
-            self._finish_aborted()
         else:
             self.state = TaskState.FAILED
             self.detail = {"reason": snap.reason or "engine aborted"}
@@ -171,13 +178,13 @@ class EngineMissionTask(Task):
         self.detail = {"reason": reason}
 
     async def _engine_died(self, why: str) -> None:
-        log.error("任务 %s:引擎任务死了(%s),停车、按失败收尾", self.task_id, why)
+        log.error("任务 %s:引擎任务死了(%s),停车、等停稳后按失败收尾", self.task_id, why)
+        self._dead = why
         for stop in (self._parts.nav.stop, self._parts.hal.stop):
             try:
                 await stop()
             except Exception:
                 log.exception("引擎死了之后停车失败")
-        self._fail(f"engine_died: {why}"[:200])
 
     def _finish_aborted(self) -> None:
         assert self._abort_reason is not None
