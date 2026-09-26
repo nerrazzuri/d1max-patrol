@@ -169,7 +169,8 @@ async def test_卡住了就重启_重启之后按最后可信的位置自己重�
         core.on_scan()
         core.tick()
         await be.check()
-    assert sup.restarts == ["定位程序卡住了,在重启"]
+        await _settle()
+    assert sup.restarts == ["定位程序卡住了,在重启"], "只重启一回"
     assert len(svc.calls) == 1, "重启之后 MOLA 还没出过位姿:先不请"
     be.mola_output()
     await be.check()
@@ -235,3 +236,63 @@ async def test_记着的重定位_换了图就作废(tmp_path):
     be.mola_output()
     await be.check()
     assert svc.calls == [], "旧图上给的位置不能拿到新图上用"
+
+
+async def test_换了图_旧_MOLA_出过位姿不算_新图上人给的位置先记着(tmp_path):
+    """W09b 内审应修 7:原来换图不清「出过位姿」,人给的位置发给了还在关的旧 MOLA,核心不收、后端却回
+    收下,也没记着。"""
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    be.mola_output()
+    await be.load_prior(("estate-1", "8"), str(_先验(tmp_path, name="m8")))
+    assert await be.relocalize(1.0, 2.0, 0.0, 0.5, req=4) == ""
+    assert svc.calls == [], "新图的 MOLA 还没出过位姿:记着"
+    await _settle()
+    be.mola_output()
+    await be.check()
+    assert len(svc.calls) == 1
+
+
+async def test_核心这会儿收不了_MOLA_收下的那次也记着(tmp_path):
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    be.mola_output()
+    core.prior_loading(M)                                 # 核心在载图(比如重启途中)
+    assert await be.relocalize(1.0, 2.0, 0.0, 0.5, req=4) == ""
+    core.prior_loaded(M, FLAT)
+    core.backend_started()
+    c.t += 2.0
+    await be.check()
+    assert len(svc.calls) == 2, "记着,核心收得了再下发"
+
+
+async def test_记着的重定位放太久就扔掉(tmp_path):
+    from d1max_localizer.backend import PENDING_MAX_S
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    assert await be.relocalize(1.0, 2.0, 0.0, 0.5, req=4) == ""
+    c.t += PENDING_MAX_S + 1
+    await be.check()
+    be.mola_output()
+    c.t += 2.0
+    await be.check()
+    assert svc.calls == []
+    core.tick()
+    assert [m.reason for m in core.drain() if isinstance(m, State)][-1] == \
+        "人给的位置放太久没用上,请重新设位置"
+
+
+async def test_起_MOLA_出错_不悄悄吞掉(tmp_path):
+    """W09b 内审应修 6。"""
+    c, core, sup, svc, be = _台(tmp_path)
+
+    async def 炸(prior):
+        raise RuntimeError("看管器坏了")
+    sup.start = 炸
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    core.tick()
+    assert "起 MOLA出错" in [m.reason for m in core.drain() if isinstance(m, State)][-1]

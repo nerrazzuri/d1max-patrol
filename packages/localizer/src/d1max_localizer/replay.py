@@ -146,8 +146,9 @@ class _Clock:
 
 def simulate(frames: Sequence[Frame], frames_cfg: Frames, init: tuple[float, float, float], *,
              sigma0: float = 0.5, latency_s: float = 0.0) -> list[tuple[float, Any]]:
-    """按到达时刻(时间戳 + 处理耗时 + ``latency_s``)把每帧喂给定位核心;回 ``[(到达时刻, 报文)]``。
-    开头当人在这里给了初值(``init``,σ ``sigma0``)。"""
+    """按到达时刻把每帧喂给定位核心;回 ``[(到达时刻, 报文)]``。MOLA 一帧一帧按顺序处理:这一帧
+    ``max(上一帧处理完, 它的时间戳) + 处理耗时`` 出来(再加 ``latency_s``)—— 处理慢的那帧会把后面的
+    都拖晚,不会被后面的超过(W09b 内审)。开头当人在这里给了初值(``init``,σ ``sigma0``)。"""
     if not frames:
         return []
     clock = _Clock()
@@ -158,7 +159,11 @@ def simulate(frames: Sequence[Frame], frames_cfg: Frames, init: tuple[float, flo
     core.backend_started()
     core.relocalized(req=1, x=init[0], y=init[1], yaw=init[2], sigma=sigma0, human=True)
     out: list[tuple[float, Any]] = []
-    events = sorted(((f.stamp + f.proc_s + latency_s, f) for f in frames), key=lambda e: e[0])
+    events = []
+    done = -1e18
+    for f in sorted(frames, key=lambda f: f.stamp):
+        done = max(done, f.stamp) + f.proc_s
+        events.append((done + latency_s, f))
     for at, f in events:
         clock.t = at
         core.on_scan()
@@ -317,17 +322,22 @@ def _errors(poses: Sequence[Pose], view: View, frames_cfg: Frames,
             pairs.append((m, r))
     if len(pairs) < 3:
         return {"matched": len(pairs)}
+    trusted_at = {st for _, ok, _, st in view if ok and st is not None}
+    aligned_on = "same_frame"
     if not same_frame:
-        th, tx, ty = align2d([(r[0], r[1]) for _, r in pairs], [(m.x, m.y) for m, _ in pairs])
+        # 只拿代理信的那些帧对齐(错的那几段不该把对齐带偏);太少就用全部。结果依赖对齐方式,报告里写明
+        base = [(m, r) for m, r in pairs if m.stamp_ns in trusted_at]
+        aligned_on = "trusted" if len(base) >= 10 else "all"
+        base = base if aligned_on == "trusted" else pairs
+        th, tx, ty = align2d([(r[0], r[1]) for _, r in base], [(m.x, m.y) for m, _ in base])
         c, s = math.cos(th), math.sin(th)
         pairs = [(m, (c * r[0] - s * r[1] + tx, s * r[0] + c * r[1] + ty, r[2] + th))
                  for m, r in pairs]
-    trusted_at = {st for _, ok, _, st in view if ok and st is not None}
     all_e = [math.hypot(m.x - r[0], m.y - r[1]) for m, r in pairs]
     ok_e = [math.hypot(m.x - r[0], m.y - r[1]) for m, r in pairs if m.stamp_ns in trusted_at]
     yaw_e = [abs(math.degrees(math.remainder(m.yaw - r[2], 2 * math.pi))) for m, r in pairs
              if m.stamp_ns in trusted_at]
-    return {"matched": len(pairs), "aligned": not same_frame,
+    return {"matched": len(pairs), "aligned": not same_frame, "aligned_on": aligned_on,
             "all": {"p50": round(statistics.median(all_e), 3), "p95": round(_pct(all_e, 95), 3),
                     "max": round(max(all_e), 3)},
             "trusted": {"n": len(ok_e),
@@ -348,7 +358,9 @@ def report_md(name: str, m: dict[str, Any]) -> str:
              f"- **代理判可信的时间占比 {m['agent_trusted_share']:.0%}**"]
     if "error_m" in m and "all" in m["error_m"]:
         e = m["error_m"]
-        lines.append(f"- 位置误差(对{'齐后的独立建图' if e['aligned'] else '同一系的建图轨迹'},"
+        how = ("齐后的独立建图(只拿代理信的帧对齐)" if e.get("aligned_on") == "trusted"
+               else "齐后的独立建图" if e["aligned"] else "同一系的建图轨迹")
+        lines.append(f"- 位置误差(对{how},"
                      f"{e['matched']} 帧):全部 p50 {e['all']['p50']} / p95 {e['all']['p95']} / "
                      f"最大 {e['all']['max']} m;**代理判可信的** p50 {e['trusted']['p50']} / "
                      f"p95 {e['trusted']['p95']} / 最大 {e['trusted']['max']} m,朝向 p95 "

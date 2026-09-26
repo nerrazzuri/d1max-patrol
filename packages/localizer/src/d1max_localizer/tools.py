@@ -62,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             r.add_argument("--reference", type=Path, default=None, help="参考轨迹(TUM)")
             r.add_argument("--reference-other-frame", action="store_true",
                            help="参考轨迹不在先验的系里(独立建图):按时间配对后平面对齐")
-            r.add_argument("--reuse", action="store_true", help="用 --out 里已有的 MOLA 输出")
+        r.add_argument("--reuse", action="store_true", help="用 --out 里已有的 MOLA 输出,只重算")
     a = p.parse_args(argv)
     if a.cmd == "calibrate":
         return _calibrate(a)
@@ -100,8 +100,9 @@ def _replay(a: argparse.Namespace) -> int:
 def _sweep(a: argparse.Namespace) -> int:
     frames_cfg = Frames.load(a.prior / FRAMES_FILE)
     base_dir = a.out / "base"
-    replay.run_mola(a.bag, a.prior, a.init, base_dir, lidar_topic=a.lidar_topic,
-                    only_first_n=a.only_first_n, skip_first_n=a.skip_first_n)
+    if not a.reuse:
+        replay.run_mola(a.bag, a.prior, a.init, base_dir, lidar_topic=a.lidar_topic,
+                        only_first_n=a.only_first_n, skip_first_n=a.skip_first_n)
     base = {round(f.stamp * 1000): frames_cfg.to_map2d(f.p, f.q)
             for f in replay.read_run(base_dir)}
     rows = []
@@ -109,8 +110,9 @@ def _sweep(a: argparse.Namespace) -> int:
         x, y, yaw = a.init
         init = (x + dx, y + dy, yaw + math.radians(dyaw))
         d = a.out / f"off_{dx:g}_{dy:g}_{dyaw:g}"
-        replay.run_mola(a.bag, a.prior, init, d, lidar_topic=a.lidar_topic,
-                        only_first_n=a.only_first_n, skip_first_n=a.skip_first_n)
+        if not a.reuse:
+            replay.run_mola(a.bag, a.prior, init, d, lidar_topic=a.lidar_topic,
+                            only_first_n=a.only_first_n, skip_first_n=a.skip_first_n)
         rows.append(((dx, dy, dyaw), sweep_row(base, replay.read_run(d), frames_cfg)))
     md = ["# 初值要多准(以初值不偏那一趟为参考)", "",
           "| 偏差(x m, y m, 朝向°) | 最后 10% 的误差(m) | 对上没有 | 第一次对上用了(s) "

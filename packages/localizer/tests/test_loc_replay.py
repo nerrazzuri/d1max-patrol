@@ -140,14 +140,32 @@ def test_可信时的误差只算代理信的那些帧():
     assert m["error_m"]["trusted"]["max"] < 0.01, "代理没信那几帧"
 
 
-def test_MOLA_处理慢了_那一帧晚到_落在后面几帧之后就丢掉():
-    """按到达时刻(时间戳 + 处理耗时)喂:一帧处理了 0.35 s,比后面三帧还晚到,核心按时间戳不涨
-    丢掉它。"""
+def test_MOLA_处理慢了_后面的帧都被拖晚_不会超过它():
+    """MOLA 一帧一帧按顺序处理(W09b 内审):一帧处理了 0.35 s,后面几帧都得等它,到达顺序不乱。"""
     fr = _frames(50)
     slow = replay.Frame(stamp=fr[20].stamp, p=fr[20].p, q=fr[20].q, quality=fr[20].quality,
                         proc_s=0.35)
     fr = [*fr[:20], slow, *fr[21:]]
     msgs = replay.simulate(fr, FLAT, (0.0, 0.0, 0.0))
+    arrive = {m.stamp_ns: at for at, m in msgs if hasattr(m, "stamp_ns")}
+    s20, s21 = round(fr[20].stamp * 1e9), round(fr[21].stamp * 1e9)
+    assert len(arrive) == 50, "一帧不丢"
+    assert arrive[s21] >= arrive[s20] + 0.04 >= fr[20].stamp + 0.35, "后面那帧被拖到它之后"
+
+
+def test_参考在别的系里_只拿代理信的帧对齐_错的那一大段不把对齐带偏():
+    """W09b 内审:对齐用全部配对的话,错的那几段会把对齐带偏,信的帧看起来也有误差。"""
+    fr = []
+    for i in range(300):                                   # 100–160 帧偏了 3 m、质量低(代理不信)
+        bad = 100 <= i < 160
+        fr.append(replay.Frame(stamp=100.0 + 0.1 * i, p=(0.05 * i, 3.0 if bad else 0.0, 0.0),
+                               q=_q(0.0), quality=0.3 if bad else 0.97, proc_s=0.0))
+    th, tx, ty = 0.7, 5.0, -3.0
+    c, s = math.cos(th), math.sin(th)
+    ref = [(f.stamp, (c * 0.05 * i + tx, s * 0.05 * i + ty, 0.0), _q(th))
+           for i, f in enumerate(fr)]
+    msgs = replay.simulate(fr, FLAT, (0.0, 0.0, 0.0))
     view = replay.agent_view(msgs)
-    m = replay.metrics(fr, msgs, view, FLAT)
-    assert m["poses_sent"] == 49
+    m = replay.metrics(fr, msgs, view, FLAT, reference=ref, reference_same_frame=False)
+    assert m["error_m"]["aligned_on"] == "trusted"
+    assert m["error_m"]["trusted"]["max"] < 0.05, m["error_m"]

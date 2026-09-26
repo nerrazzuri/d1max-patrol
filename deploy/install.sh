@@ -487,6 +487,9 @@ if [[ -f /etc/d1max/registration.json && -n "$MISSING" ]]; then
 else
   systemctl start d1max-agent.service
 fi
+# 定位器(W09b)只装不 enable;有人手工起过(真机验收时)的话,换了版本要跟着重启,不然还跑着旧代码。
+# try-restart:没在跑就什么也不做。
+systemctl try-restart d1max-localizer.service 2>/dev/null || true
 
 say "装完了。看一眼:"
 echo "  systemctl status d1max-agent"

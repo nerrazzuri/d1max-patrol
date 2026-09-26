@@ -182,7 +182,8 @@ def test_存成_json_读回来一样_坏的拒收(tmp_path):
     good = json.loads(path.read_text())
     for k, bad in (("up", [0.0, 0.0, 0.0]), ("up", [1.0, "x", 0.0]),
                    ("sensor_height", float("nan")), ("sensor_forward", [1.0, 0.0]),
-                   ("version", 99)):
+                   ("version", 99), ("sensor_in_base", 5), ("sensor_in_base", None),
+                   ("sensor_in_base", [100.0, 0.0]), ("sensor_height", 1e6)):
         d = dict(good)
         d[k] = bad
         path.write_text(json.dumps(d))

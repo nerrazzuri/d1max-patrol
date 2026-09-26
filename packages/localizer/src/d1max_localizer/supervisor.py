@@ -38,6 +38,9 @@ def mola_command(prior_mm: Path, *, lidar_topic: str = "/front_lidar") -> list[s
 
 
 class MolaSupervisor:
+    """起、停、重启、到点重起都在一把锁里串着做(W09b 内审:原来换图时取消了正在关旧进程的起动任务,
+    旧进程离了手成了孤儿;收尾时还可能又起一个);进程确认死了才放手。"""
+
     def __init__(self, *, command_for: Callable[[Path], Sequence[str]], on_up: Callable[[], None],
                  on_down: Callable[[str], None], backoff: Sequence[float] = BACKOFF_S,
                  env: dict[str, str] | None = None) -> None:
@@ -51,6 +54,7 @@ class MolaSupervisor:
         self._pending: asyncio.Task | None = None
         self._fails = 0
         self._stopping = False
+        self._lock = asyncio.Lock()
 
     @property
     def running(self) -> bool:
@@ -61,76 +65,98 @@ class MolaSupervisor:
         return self._prior
 
     async def start(self, prior: Path) -> None:
-        self._stopping = False
-        self._prior = prior
-        self._fails = 0
-        await self._kill()
-        await self._spawn()
+        """带这个先验(重)起;已经在跑就先关干净再起。"""
+        async with self._lock:
+            self._stopping = False
+            self._prior = prior
+            self._fails = 0
+            self._cancel_pending()
+            await self._kill()
+            await self._spawn()
 
     async def restart(self, why: str) -> None:
-        """关掉、按退避重起同一个先验。"""
-        if self._prior is None or self._stopping:
-            return
-        await self._kill()
-        self._schedule(why)
+        """关掉、按退避重起同一个先验。已经在等重起就不再排(去重)。"""
+        async with self._lock:
+            if self._prior is None or self._stopping:
+                return
+            if self._pending is not None and not self._pending.done():
+                return
+            await self._kill()
+            self._schedule(why)
 
     async def stop(self) -> None:
         self._stopping = True
-        await self._kill()
+        self._cancel_pending()
+        async with self._lock:
+            await self._kill()
 
-    # ------------------------------------------------------------ 内部
+    # ------------------------------------------------------------ 内部(持锁)
 
     async def _spawn(self) -> None:
         assert self._prior is not None
         cmd = list(self._command_for(self._prior))
         log.info("起 MOLA:%s", " ".join(cmd))
-        self._proc = await asyncio.create_subprocess_exec(
-            *cmd, env=self._env, start_new_session=True, stdin=asyncio.subprocess.DEVNULL)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, env=self._env, start_new_session=True, stdin=asyncio.subprocess.DEVNULL)
+        except OSError as exc:                            # 命令不在、没权限:说出来、过一会儿再试
+            self._schedule(f"定位程序起不来({exc})")
+            return
+        self._proc = proc
         self._on_up()
         loop = asyncio.get_running_loop()
-        self._watch = loop.create_task(self._wait(self._proc, loop.time()))
+        self._watch = loop.create_task(self._wait(proc, loop.time()))
 
     async def _wait(self, proc: asyncio.subprocess.Process, started: float) -> None:
         rc = await proc.wait()
-        if self._stopping or proc is not self._proc:
-            return
-        self._proc = None
-        if asyncio.get_running_loop().time() - started >= STABLE_S:
-            self._fails = 0
-        self._schedule(f"定位程序退出了(退出码 {rc})")
+        _signal_group(proc.pid, signal.SIGKILL)           # 它自己退了:组里剩下的(launch 底下的)收掉
+        async with self._lock:
+            if self._stopping or proc is not self._proc:
+                return
+            self._proc = None
+            if asyncio.get_running_loop().time() - started >= STABLE_S:
+                self._fails = 0
+            self._schedule(f"定位程序退出了(退出码 {rc})")
 
     def _schedule(self, why: str) -> None:
         delay = self._backoff[min(self._fails, len(self._backoff) - 1)]
         self._fails += 1
-        self._on_down(f"{why},{delay:g} 秒后重启" if "退出码" in why else why)
+        self._on_down(f"{why},{delay:g} 秒后重启")
         log.warning("%s;%g 秒后重启 MOLA", why, delay)
-        if self._pending is not None and not self._pending.done():
-            self._pending.cancel()
+        self._cancel_pending()
         self._pending = asyncio.get_running_loop().create_task(self._later(delay))
 
     async def _later(self, delay: float) -> None:
         await asyncio.sleep(delay)
-        if not self._stopping and not self.running:
+        async with self._lock:
+            if self._stopping or self.running:
+                return
+            self._pending = None
             await self._spawn()
 
-    async def _kill(self) -> None:
+    def _cancel_pending(self) -> None:
         if self._pending is not None and not self._pending.done():
             self._pending.cancel()
-        proc, self._proc = self._proc, None
+        self._pending = None
+
+    async def _kill(self) -> None:
+        proc = self._proc
         if self._watch is not None:
             self._watch.cancel()
             self._watch = None
-        if proc is None or proc.returncode is not None:
+        if proc is None:
             return
-        _signal_group(proc.pid, signal.SIGINT)
-        try:
-            await asyncio.wait_for(proc.wait(), KILL_AFTER_S)
-        except asyncio.TimeoutError:
-            log.warning("MOLA %s 秒没关掉,强杀", KILL_AFTER_S)
-            _signal_group(proc.pid, signal.SIGKILL)
-            await proc.wait()
+        if proc.returncode is None:
+            _signal_group(proc.pid, signal.SIGINT)
+            try:
+                await asyncio.wait_for(proc.wait(), KILL_AFTER_S)
+            except asyncio.TimeoutError:
+                log.warning("MOLA %s 秒没关掉,强杀", KILL_AFTER_S)
+                _signal_group(proc.pid, signal.SIGKILL)
+                await proc.wait()
         # 进程组里还剩的(launch 底下的节点)一并收掉
         _signal_group(proc.pid, signal.SIGKILL)
+        self._proc = None                                 # 确认死了才放手
 
 
 def _signal_group(pgid: int, sig: int) -> None:

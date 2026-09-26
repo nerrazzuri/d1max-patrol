@@ -115,8 +115,8 @@ async def test_换先验起_MOLA_人给位置_代理信_杀掉之后自己恢复
     await _等(lambda: len(list(pids.iterdir())) == 2)     # 退避 1 s 后重起
     ros = 假ROS.instances[-1]
     await _等(lambda: len(ros.relocs) == 2)               # 自己按最后可信的位置重定位
-    assert ros.relocs[-1][2] == 1.0
-    await _等(lambda: agent.ok(True), s=15.0)
+    assert ros.relocs[-1][2] == 1.5, "自动重定位的 σ 高于代理的线:稳定期里先不信"
+    await _等(lambda: agent.ok(True), s=25.0)
     e = agent.estimate((0.0, 0.0, 0.0))
     assert (round(e.x, 2), round(e.y, 2)) == (2.0, 1.0)
 

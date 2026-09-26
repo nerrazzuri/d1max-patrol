@@ -32,6 +32,10 @@ Vec = tuple[float, float, float]
 Quat = tuple[float, float, float, float]            # (x, y, z, w),跟 ROS 一样
 Mat = tuple[Vec, Vec, Vec]
 VERSION = 1
+#: frames.json 的合理范围(狗上的文件,写歪了要拒,不能让它算出离谱的位置):雷达离狗身中心的水平偏移、
+#: 建图时雷达的高度。
+MAX_SENSOR_OFFSET_M = 2.0
+MAX_SENSOR_HEIGHT_M = 100.0
 
 
 # ------------------------------------------------------------ 小工具
@@ -125,11 +129,13 @@ class Frames:
     def __post_init__(self) -> None:
         for k in ("up", "sensor_up", "sensor_forward"):
             _vec(getattr(self, k), k)
-        _finite(self.sensor_height, "sensor_height")
+        if abs(_finite(self.sensor_height, "sensor_height")) > MAX_SENSOR_HEIGHT_M:
+            raise ContractError(f"frames:sensor_height 超出 ±{MAX_SENSOR_HEIGHT_M:g} m")
         if not isinstance(self.sensor_in_base, (tuple, list)) or len(self.sensor_in_base) != 2:
             raise ContractError("frames:sensor_in_base 要两个数(朝前、朝左)")
         for v in self.sensor_in_base:
-            _finite(v, "sensor_in_base")
+            if abs(_finite(v, "sensor_in_base")) > MAX_SENSOR_OFFSET_M:
+                raise ContractError(f"frames:sensor_in_base 超出 ±{MAX_SENSOR_OFFSET_M:g} m")
         if abs(_dot(self.sensor_up, self.sensor_forward)) > 0.2:
             raise ContractError("frames:雷达的「上」跟「朝前」不垂直")
 
@@ -188,7 +194,7 @@ class Frames:
             return cls(up=_vec(d["up"], "up"), sensor_up=_vec(d["sensor_up"], "sensor_up"),
                        sensor_forward=_vec(d["sensor_forward"], "sensor_forward"),
                        sensor_height=_finite(d["sensor_height"], "sensor_height"),
-                       sensor_in_base=tuple(d.get("sensor_in_base", (0.0, 0.0))))
+                       sensor_in_base=_pair2(d.get("sensor_in_base", (0.0, 0.0))))
         except KeyError as exc:
             raise ContractError(f"frames:缺 {exc.args[0]}") from None
 
@@ -208,6 +214,12 @@ def _finite(v: Any, what: str) -> float:
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
         raise ContractError(f"frames:{what} 要是有限数:{v!r}")
     return float(v)
+
+
+def _pair2(v: Any) -> tuple[float, float]:
+    if not isinstance(v, (list, tuple)) or len(v) != 2:
+        raise ContractError("frames:sensor_in_base 要两个数(朝前、朝左)")
+    return (_finite(v[0], "sensor_in_base"), _finite(v[1], "sensor_in_base"))
 
 
 def _vec(v: Any, what: str) -> Vec:
