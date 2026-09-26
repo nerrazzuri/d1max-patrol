@@ -54,6 +54,7 @@ class _FieldsDialogState extends State<_FieldsDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true, // 横屏时键盘占掉一大半高：整个对话框能滚
       title: Text(widget.title),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
         for (var i = 0; i < widget.fields.length; i++)

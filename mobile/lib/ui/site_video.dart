@@ -95,17 +95,23 @@ class _SiteVideoState extends State<SiteVideo> {
         onSelectionChanged: (s) => setState(() => _camera = s.first),
       ),
       const SizedBox(height: 8),
-      AspectRatio(
-        aspectRatio: 16 / 9,
-        child: LiveVideo(
-          key: ValueKey<String>('site-live-$_camera'),
-          baseUrl: widget.api.baseUrl,
-          camera: _camera,
-          streamPath: '/api/robots/$id/video/$_camera',
-          token: widget.api.session?.token ?? '',
-          openClient: widget.api.pinnedClient,
-          firstFrameGrace: const Duration(seconds: 12),
-          health: _poller.stream,
+      // 横屏（app 只许横屏）：整宽的 16:9 比屏幕还高。最高到屏幕高的六成，居中、不拉伸。
+      Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.6),
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: LiveVideo(
+              key: ValueKey<String>('site-live-$_camera'),
+              baseUrl: widget.api.baseUrl,
+              camera: _camera,
+              streamPath: '/api/robots/$id/video/$_camera',
+              token: widget.api.session?.token ?? '',
+              openClient: widget.api.pinnedClient,
+              firstFrameGrace: const Duration(seconds: 12),
+              health: _poller.stream,
+            ),
+          ),
         ),
       ),
     ]);

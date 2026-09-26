@@ -624,16 +624,26 @@ class _LiveVideoState extends State<LiveVideo> {
         color: const Color(0xFF202124),
         alignment: Alignment.center,
         padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Text(title,
-                style: const TextStyle(color: Colors.white, fontSize: 18)),
-            const SizedBox(height: 8),
-            Text(hint,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70, fontSize: 13)),
-          ],
+        // 画面小的时候（横屏遥控页中间那一栏、窄手机）整块等比缩小：字照样全看得到，不溢出。
+        child: LayoutBuilder(
+          builder: (_, c) => FittedBox(
+            fit: BoxFit.scaleDown,
+            child: SizedBox(
+              width: c.maxWidth.isFinite ? c.maxWidth : 320,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(title,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 18)),
+                  const SizedBox(height: 8),
+                  Text(hint,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                ],
+              ),
+            ),
+          ),
         ),
       );
 }

@@ -218,29 +218,20 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   @override
   Widget build(BuildContext context) {
     final bad = _ended || !_video;
+    // 横屏（app 只许横屏）：两根杆在两边、拇指底下，画面在中间；大红「停」在右上，右手拇指一抬就按到。
+    // 状态钉在画面上头：停车按钮和「现在能不能动」任何时候都一眼看得见，只有画面那一栏会滚。
+    // 杆的圈半径 72：一栏至少 168 宽（去掉边距还放得下一整个圈）。
+    final side = (MediaQuery.sizeOf(context).width * 0.25).clamp(168.0, 240.0);
     return Scaffold(
       appBar: AppBar(title: Text('遥控 ${widget.robotId}')),
-      // **状态钉在顶上,「停」和摇杆钉在底下**,只有画面在中间滚:停车按钮和「现在能不能动」
-      // 任何时候都要一眼看得见。
-      body: Column(children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-          child: Text(
-            !_video && !_ended ? '没有画面：不许动（画面回来之前摇杆不起作用）' : _status,
-            key: SiteTeleopPage.statusKey,
-            style: TextStyle(color: bad ? Colors.red : null, fontWeight: FontWeight.bold),
-          ),
-        ),
-        Expanded(
-          child: ListView(padding: const EdgeInsets.all(12), children: [
-            SiteVideo(api: widget.api, robotId: widget.robotId),
-          ]),
-        ),
-        // 摇杆铺满给它的那块地方:要给定大小。
-        SizedBox(
-          height: 160,
-          child: Row(children: [
-            Expanded(
+      body: SafeArea(
+        top: false,
+        // 摇杆铺满给它的那块地方：要给定大小（整栏高）。
+        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          SizedBox(
+            width: side,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
               child: Joystick(
                 key: SiteTeleopPage.moveStickKey,
                 axis: JoystickAxis.translate,
@@ -248,34 +239,54 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                 onChanged: (v) => _fwd = v.dy,
               ),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Joystick(
-                key: SiteTeleopPage.turnStickKey,
-                axis: JoystickAxis.turn,
-                enabled: _canDrive,
-                onChanged: (v) => _turn = v.dx,
-              ),
-            ),
-          ]),
-        ),
-        SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: SizedBox(
-              height: 64,
-              width: double.infinity,
-              child: FilledButton(
-                key: SiteTeleopPage.stopKey,
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: _halt,
-                child: const Text('停', style: TextStyle(fontSize: 28)),
-              ),
-            ),
           ),
-        ),
-      ]),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+                child: Text(
+                  !_video && !_ended ? '没有画面：不许动（画面回来之前摇杆不起作用）' : _status,
+                  key: SiteTeleopPage.statusKey,
+                  style: TextStyle(color: bad ? Colors.red : null, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Expanded(
+                child: ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
+                  SiteVideo(api: widget.api, robotId: widget.robotId),
+                ]),
+              ),
+            ]),
+          ),
+          SizedBox(
+            width: side,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                child: SizedBox(
+                  height: 64,
+                  child: FilledButton(
+                    key: SiteTeleopPage.stopKey,
+                    style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                    onPressed: _halt,
+                    child: const Text('停', style: TextStyle(fontSize: 28)),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Joystick(
+                    key: SiteTeleopPage.turnStickKey,
+                    axis: JoystickAxis.turn,
+                    enabled: _canDrive,
+                    onChanged: (v) => _turn = v.dx,
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ]),
+      ),
     );
   }
 }

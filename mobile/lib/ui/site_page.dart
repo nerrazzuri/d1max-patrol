@@ -83,28 +83,28 @@ class _SiteListPageState extends State<SiteListPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
+        // 横屏时键盘占掉一大半高：整个对话框（标题连输入框）能滚，不然溢出。
+        scrollable: true,
         title: const Text('添加站点'),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(
-                key: const Key('site-name'),
-                controller: name,
-                decoration: const InputDecoration(labelText: '名字')),
-            TextField(
-                key: const Key('site-url'),
-                controller: url,
-                decoration: const InputDecoration(labelText: '地址（https://…:8443）')),
-            TextField(
-                key: const Key('site-fp'),
-                controller: fp,
-                decoration: const InputDecoration(
-                    labelText: '证书指纹（d1max-site fingerprint）')),
-            TextField(
-                key: const Key('site-user'),
-                controller: user,
-                decoration: const InputDecoration(labelText: '账号')),
-          ]),
-        ),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+              key: const Key('site-name'),
+              controller: name,
+              decoration: const InputDecoration(labelText: '名字')),
+          TextField(
+              key: const Key('site-url'),
+              controller: url,
+              decoration: const InputDecoration(labelText: '地址（https://…:8443）')),
+          TextField(
+              key: const Key('site-fp'),
+              controller: fp,
+              decoration: const InputDecoration(
+                  labelText: '证书指纹（d1max-site fingerprint）')),
+          TextField(
+              key: const Key('site-user'),
+              controller: user,
+              decoration: const InputDecoration(labelText: '账号')),
+        ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
           FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('保存')),
@@ -133,6 +133,7 @@ class _SiteListPageState extends State<SiteListPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
+        scrollable: true, // 横屏弹键盘
         title: Text('登录 ${s.name}'),
         content: TextField(
             key: const Key('site-password'),

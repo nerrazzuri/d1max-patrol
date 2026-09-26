@@ -7,16 +7,29 @@
 /// **手机只连站点，不直连狗**（总设计 §1；W00c5e 删掉了过渡用的「现场直连」）。打开就是站点列表
 /// （`ui/site_page.dart`）：登录、看狗、派巡检、叫停、值守与告警、画面、遥控（决策 7：经站点、
 /// 持租约）、记录与判读、地图、版本。站点地址与证书指纹存在 `store/site_store.dart`。
+///
+/// **只许横屏**（用户 2026-09-26）：遥控时两只手握着手机，两根杆在两边、画面在中间。安卓的
+/// 清单里也锁了（`sensorLandscape`），app 起来之前的启动画面就是横的。
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'store/paths.dart';
 import 'store/site_store.dart';
 import 'ui/site_page.dart';
 
+/// 横屏，两个方向都行（手机怎么拿都能转过来）。
+const landscapeOnly = <DeviceOrientation>[
+  DeviceOrientation.landscapeLeft,
+  DeviceOrientation.landscapeRight,
+];
+
+Future<void> lockLandscape() => SystemChrome.setPreferredOrientations(landscapeOnly);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await lockLandscape();
   runApp(PatrolApp(siteStore: await openSiteStore()));
 }
 

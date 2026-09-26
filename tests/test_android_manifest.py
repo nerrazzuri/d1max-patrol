@@ -25,3 +25,13 @@ def _permissions(path: Path) -> set[str]:
 
 def test_release包的清单里有网络权限():
     assert "android.permission.INTERNET" in _permissions(MAIN_MANIFEST)
+
+
+def test_主界面只许横屏():
+    """用户 2026-09-26「手机app需要改成横屏模式」。清单里锁住,启动画面(Flutter 起来之前)就是横的;
+    ``sensorLandscape``:两个横向都行,手机怎么拿都能转过来。Flutter 那边 ``lockLandscape`` 也锁。"""
+    root = ET.parse(MAIN_MANIFEST).getroot()
+    acts = root.findall("application/activity")
+    main = [a for a in acts if a.get(f"{ANDROID}name") == ".MainActivity"]
+    assert main, "找不到 MainActivity"
+    assert main[0].get(f"{ANDROID}screenOrientation") == "sensorLandscape"
