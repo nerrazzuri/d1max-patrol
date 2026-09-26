@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from d1max_agent.assembly import EngineParts, build_engine
-from d1max_agent.commands import CommandProcessor
+from d1max_agent.commands import READ_KINDS, CommandProcessor
 from d1max_agent.engine.homing import HomePoint
 from d1max_agent.engine.machine import RunState
 from d1max_agent.events import EventBook
@@ -559,9 +559,9 @@ class AgentRuntime:
         """建图进程日志(W00c6g,在线程里跑):``{}`` 列表,``{name, bytes?}`` 那一个的尾巴。"""
         from d1max_agent import proc_logs
         d = Path(self.mapper.log_dir)
-        if "name" not in payload:
-            return "", proc_logs.list_logs(d)
         try:
+            if "name" not in payload:
+                return "", proc_logs.list_logs(d)
             return "", proc_logs.tail(d, payload)
         except proc_logs.LogError as exc:
             return str(exc)
@@ -907,6 +907,7 @@ class AgentRuntime:
         if isinstance(wire, dict) and wire.get("kind") == "halt":
             await self._halt_now(wire, m.topic)
         cid = wire.get("command_id") if isinstance(wire, dict) else None
+        read = isinstance(wire, dict) and wire.get("kind") in READ_KINDS
         async with self._cmd_lock:
             try:
                 if self._reconnect_pending and self.transport.connected:
@@ -917,8 +918,15 @@ class AgentRuntime:
                 # 这条叫停排队那一路处理完了(收下、过期、重复都算):撤掉抢先那一路立的栅栏。
                 if isinstance(cid, str):
                     self.processor.unfence(cid)
+            if not read:
+                await self.transport.publish(self.topics.ack, _dumps(ack.to_wire()), qos=1)
+                await self._publish_status()
+        if read:
+            # 只读查询(日志尾巴、录包轨迹)的回执可能上百 KB,发送要等 broker 收完整包 ——
+            # 弱网上好几秒。
+            # 放在锁外发(W00c6g 内审应修 1):不然这几秒里遥控续租、监护心跳都排在锁后面,租约会过期。
+            # 它不改狗的状态,跟别的回执换个先后无害。
             await self.transport.publish(self.topics.ack, _dumps(ack.to_wire()), qos=1)
-            await self._publish_status()
 
     async def _halt_now(self, wire: dict, topic: str) -> None:
         """halt 不排队(W00c5c 内部评审):前面的命令在等回执的 PUBACK(上行拥堵时好几秒),halt 不能

@@ -194,3 +194,121 @@ async def test_尾巴封顶128KiB_列表最多50个(tmp_path):
     names = [x["name"] for x in _ack(ears, "c2")["data"]["logs"]]
     assert len(names) == 50 and names[0] == "p54", names[:3]
     await rt.close()
+
+
+async def test_大回执在锁外发_弱网上传的时候别的命令照样处理(tmp_path):
+    """内审应修 1:回执的发送要等 broker 收完整包(弱网上上百 KB 要好几秒)。读类命令的回执以前在命令
+    锁里发,这几秒里遥控续租、监护心跳都排在锁后面,租约会过期。"""
+    import asyncio
+
+    from test_runtime_maps import _abort
+    broker, c, ears, rt, logs = await _台(tmp_path)
+    (logs / "slam.log").write_text("x\n" * 1000)
+    gate, stuck = asyncio.Event(), asyncio.Event()
+    real = rt.transport.publish
+
+    async def 慢(topic, payload, **k):
+        if b'"command_id":"big"' in payload:
+            stuck.set()
+            await gate.wait()                          # 弱网:这个包一直在传
+        return await real(topic, payload, **k)
+    rt.transport.publish = 慢
+    big = asyncio.get_running_loop().create_task(
+        rt._on_cmd(_cmd("proc_log", {"name": "slam"}, "big", c)))
+    await asyncio.wait_for(stuck.wait(), 2.0)
+    await asyncio.wait_for(rt._on_cmd(_abort("nope", "ab1", c)), 2.0)   # 不许等那个大包
+    await broker.drain()
+    assert [a for a in ears.by["cmd/ack"] if a["command_id"] == "ab1"]
+    gate.set()
+    await asyncio.wait_for(big, 2.0)
+    await broker.drain()
+    assert _ack(ears, "big")["result"] == "accepted"
+    await rt.close()
+
+
+async def test_列表时文件没了_读不了_照样回执(tmp_path, monkeypatch):
+    """内审应修 2:列表那一路读目录出错以前没人接,命令不回回执(站点等到 504)。"""
+    from d1max_agent import proc_logs
+    broker, c, ears, rt, logs = await _台(tmp_path)
+    (logs / "a.log").write_text("x")
+    (logs / "b.log").write_text("y")
+    real = os.lstat
+
+    def 没了(p, *a, **k):
+        if str(p).endswith("a.log"):
+            raise FileNotFoundError(2, "没了", str(p))
+        return real(p, *a, **k)
+    monkeypatch.setattr(proc_logs.os, "lstat", 没了)
+    await rt._on_cmd(_cmd("proc_log", {}, "l1", c))
+    await broker.drain()
+    assert [x["name"] for x in _ack(ears, "l1")["data"]["logs"]] == ["b"], "那一个跳过"
+
+    def 炸(*a, **k):
+        raise PermissionError(13, "Permission denied " + "/很长的路径" * 80)
+    monkeypatch.setattr(proc_logs, "list_logs", 炸)
+    await rt._on_cmd(_cmd("proc_log", {}, "l2", c))
+    await broker.drain()
+    r = _ack(ears, "l2")["reason"]
+    assert r.startswith("read_failed") and len(r) <= 200, r
+    monkeypatch.setattr(proc_logs, "tail", 炸)
+    await rt._on_cmd(_cmd("proc_log", {"name": "b"}, "l3", c))
+    await broker.drain()
+    r = _ack(ears, "l3")["reason"]
+    assert r.startswith("read_failed") and len(r) <= 200, r
+    await rt.close()
+
+
+async def test_管道_硬链接_当没有_不会卡住(tmp_path):
+    """内审小问题 1:检查之后打开之前被换成管道(FIFO),以前在线程里 open 永远卡住、命令锁永远占着;
+    日志目录里放一个硬链接指到别处的文件,以前照读。现在按句柄核:只认普通文件、只有一个名字。"""
+    import asyncio
+    broker, c, ears, rt, logs = await _台(tmp_path)
+    os.mkfifo(logs / "pipe.log")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("key")
+    os.link(secret, logs / "hard.log")
+    for name, cid in (("pipe", "f1"), ("hard", "f2")):
+        await asyncio.wait_for(rt._on_cmd(_cmd("proc_log", {"name": name}, cid, c)), 3.0)
+        await broker.drain()
+        assert _ack(ears, cid)["reason"] == "no_such_log", _ack(ears, cid)
+    await rt._on_cmd(_cmd("proc_log", {}, "f3", c))
+    await broker.drain()
+    assert _ack(ears, "f3")["data"]["logs"] == [], "列表里也不列"
+    await rt.close()
+
+
+async def test_编码预算真的管用_整包在broker上限以内(tmp_path):
+    """内审小问题 2:以前的测试把预算放到 300 KiB 也是绿的。四分之一是控制字符的日志,128 KiB 原样
+    编码要约 290 KB,超过 broker 单包上限(262144):必须按预算裁。"""
+    from d1max_agent.runtime import _dumps
+    broker, c, ears, rt, logs = await _台(tmp_path)
+    line = b"\x01" * 25 + b"a" * 74 + b"\n"
+    (logs / "slam.log").write_bytes(line * 1400)                         # 140 KB
+    await rt._on_cmd(_cmd("proc_log", {"name": "slam", "bytes": 128 * 1024}, "e1", c))
+    await broker.drain()
+    a = _ack(ears, "e1")
+    assert len(_dumps(a)) < 200_000, len(_dumps(a))
+    assert a["data"]["truncated"] is True and a["data"]["text"].startswith("\x01")
+    await rt.close()
+
+
+async def test_过期的_要重启了_都不查(tmp_path):
+    import json
+
+    from test_runtime_maps import T
+
+    from d1max_contract.messages import Command
+    from d1max_contract.transport import Message
+    broker, c, ears, rt, logs = await _台(tmp_path)
+    (logs / "a.log").write_text("x")
+    old = Command(command_id="x1", task_id="t", kind="proc_log", issued_at=c.ms - 90_000,
+                  expires_at=c.ms - 30_000, control_epoch=1, payload={})
+    await rt._on_cmd(Message(T.cmd, json.dumps(old.to_wire()).encode(), 1, False))
+    await broker.drain()
+    assert _ack(ears, "x1")["result"] == "expired"
+    rt._restarting = True
+    await rt._on_cmd(_cmd("proc_log", {}, "x2", c))
+    await broker.drain()
+    assert _ack(ears, "x2")["reason"] == "restarting"
+    rt._restarting = False
+    await rt.close()

@@ -109,5 +109,18 @@ def test_真狗_日志经站点给管理员_事件流里不推(tmp_path):
         assert s.disp.feed is not None and any(
             (f or {}).get("kind") == "ack" for f in [sub.get(timeout=2.0)]), "别的回执照推"
         assert s.req("GET", "/api/robots/A/logs/nope", token=alice)[0] == 404
+        # 内审小问题 3:查询不记进命令账 —— 单狗视图里保安、业主看得到最近 50 条命令(日志名、
+        # 狗上的路径),
+        # 管理员一刷新还会把正经命令挤出去。
+        assert not s.db.query("SELECT 1 FROM commands WHERE kind='proc_log'")
+        gina_view = s.req("GET", "/api/robots/A", token=alice)[1]
+        assert not [x for x in gina_view["commands"] if x["kind"] == "proc_log"]
     finally:
         s.close()
+
+
+def test_狗收下了却没带数据_502(站点, monkeypatch):
+    s = 站点
+    alice = _登(s, "alice")
+    _假狗(s, monkeypatch, {"result": "accepted", "reason": ""})
+    assert s.req("GET", "/api/robots/A/logs", token=alice)[0] == 502

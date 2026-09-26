@@ -1,7 +1,9 @@
 """建图进程日志(W00c6g):录包、重建的子进程日志在狗上(``ProcManager`` 的日志目录,一个进程一个
 ``<名字>.log``)。站点经 ``proc_log`` 命令要列表或某一个的尾巴,放在回执里带回去。
 
-- 名字只许 ``[a-z0-9_.-]{1,48}``,只在日志目录里找;**链接一律当没有**(不许指到目录外面去)。
+- 名字只许 ``[a-z0-9_.-]{1,48}``,只在日志目录里找。**按句柄核**(W00c6g 内审):打开时不跟符号链接、
+  不等(管道)、打开之后只认普通文件、只有一个名字的(硬链接指到别处的不认)—— 先查路径再打开的话,
+  中间被换成管道,读的线程永远卡住、命令锁永远占着。
 - 尾巴默认 ``DEFAULT_BYTES``,最多 ``MAX_BYTES``:回执走 MQTT,站点 broker 单包上限 256 KB
   (``max_packet_size``,超了狗会被断开)。从行首截(丢掉被截断的半行),UTF-8 解、坏字节替换;
   **按编码之后的大小再裁**(控制字符在 JSON 里一个字节变六个,带颜色的日志会胀),裁到
@@ -10,8 +12,11 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -28,11 +33,22 @@ class LogError(ValueError):
     """查不了:消息就是回执的拒绝原因。"""
 
 
-def _real_log(d: Path, name: str) -> Path | None:
-    p = d / f"{name}.log"
-    if p.is_symlink() or not p.is_file():
+def _plain(st: os.stat_result) -> bool:
+    return stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+
+
+def _open_log(d: Path, name: str) -> int | None:
+    """打开一个日志:不跟链接、不等、只认只有一个名字的普通文件。没有(或不算)是 None。"""
+    try:
+        fd = os.open(d / f"{name}.log", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ELOOP, errno.ENOTDIR, errno.ENXIO):
+            return None
+        raise
+    if not _plain(os.fstat(fd)):
+        os.close(fd)
         return None
-    return p
+    return fd
 
 
 def list_logs(log_dir: Path) -> dict[str, Any]:
@@ -41,10 +57,15 @@ def list_logs(log_dir: Path) -> dict[str, Any]:
     if d.is_dir():
         for p in d.glob("*.log"):
             name = p.name[:-len(".log")]
-            if not NAME.fullmatch(name) or _real_log(d, name) is None:
+            if not NAME.fullmatch(name):
                 continue
-            st = p.stat()
-            out.append({"name": name, "size": st.st_size, "mtime_ms": int(st.st_mtime * 1000)})
+            try:
+                st = os.lstat(p)                      # 不跟链接
+            except OSError:
+                continue                              # 列的时候刚被删了:跳过这一个
+            if _plain(st):
+                out.append({"name": name, "size": st.st_size,
+                            "mtime_ms": int(st.st_mtime * 1000)})
     out.sort(key=lambda x: (-x["mtime_ms"], x["name"]))
     return {"logs": out[:MAX_LIST]}
 
@@ -61,10 +82,10 @@ def tail(log_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(want, bool) or not isinstance(want, int) or want < 1:
         raise LogError("payload: bytes 要是正整数")
     want = min(want, MAX_BYTES)
-    p = _real_log(Path(log_dir), name)
-    if p is None:
+    fd = _open_log(Path(log_dir), name)
+    if fd is None:
         raise LogError("no_such_log")
-    with open(p, "rb") as fh:
+    with os.fdopen(fd, "rb") as fh:
         size = fh.seek(0, 2)
         start = max(0, size - want)
         fh.seek(start)

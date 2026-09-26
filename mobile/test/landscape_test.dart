@@ -1,6 +1,6 @@
 // 横屏（用户 2026-09-26「手机app需要改成横屏模式」）：app 只许横屏；每一页在横屏的手机上
 // （800×360，常见手机横过来的大小）都不溢出；遥控页两根杆在两边、画面在中间、「停」一直在屏幕里。
-import 'package:d1max_patrol/main.dart' show landscapeOnly, lockLandscape;
+import 'package:d1max_patrol/main.dart' show PatrolApp, landscapeOnly, lockLandscape;
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/site_logs.dart';
 import 'package:d1max_patrol/ui/site_mapping.dart';
@@ -79,6 +79,30 @@ void main() {
     await g.up();
     await t.pump(const Duration(milliseconds: 150));
     expect(api.link!.sent.last, <double>[0, 0]);
+  });
+
+  testWidgets('遥控：有刘海、侧边导航栏时杆和「停」都躲开，「停」在右杆上面', (t) async {
+    _phone(t);
+    t.view.padding = const FakeViewPadding(left: 64, right: 96); // 物理像素：左 32、右 48
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(api: FakeApi('guard'), robotId: 'A')));
+    await t.pump();
+    final move = t.getRect(find.byType(Joystick).at(0));
+    final turn = t.getRect(find.byType(Joystick).at(1));
+    final stop = t.getRect(find.byKey(SiteTeleopPage.stopKey));
+    expect(move.left, greaterThanOrEqualTo(32));
+    expect(stop.right, lessThanOrEqualTo(_w - 48));
+    expect(turn.right, lessThanOrEqualTo(_w - 48));
+    expect(stop.bottom, lessThanOrEqualTo(turn.top), reason: '「停」在右杆上面（右上）');
+  });
+
+  testWidgets('别的页面也躲开侧边的导航栏（整个 app 包了一层安全区）', (t) async {
+    _phone(t);
+    t.view.padding = const FakeViewPadding(left: 64, right: 96);
+    await t.pumpWidget(PatrolApp(siteStore: MemorySiteStore()));
+    await t.pumpAndSettle();
+    final r = t.getRect(find.byType(Scaffold).first);
+    expect(r.left, greaterThanOrEqualTo(32));
+    expect(r.right, lessThanOrEqualTo(_w - 48));
   });
 
   testWidgets('最窄的手机（568 宽）：两边的杆还放得下一整个圈', (t) async {

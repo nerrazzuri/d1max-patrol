@@ -46,9 +46,9 @@ TELEOP_GRANT_TTL_SLACK_MS = 2_000
 #: ``video`` 命令本身至少活多久(毫秒),跟推流的有效期分开。见 :meth:`Dispatcher.video`。
 VIDEO_COMMAND_TTL_MS = 30_000
 COMMAND_TTL_MS = 60_000
-#: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹):回执不推给事件流 —— 事件流谁登录了都收得到
-#: (保安、业主也是),日志只给要它的管理员;手机收到事件流的每一帧都会刷新狗的列表,录包时每 2 s
-#: 查一次轨迹,不该让所有人跟着刷。
+#: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹):**不记进命令账、回执不推给事件流** —— 单狗视图
+#: 里看得到最近 50 条命令、事件流谁登录了都收得到(保安、业主也是),日志只给要它的管理员;手机收到
+#: 事件流的每一帧都会刷新狗的列表,录包时每 2 s 查一次轨迹,不该让所有人跟着刷、把正经命令挤出账。
 _QUIET_KINDS = frozenset({"proc_log", "mapping_trail"})
 #: 一趟巡检的任务定义进命令(设计决定二 A);broker 的报文上限是 256 KB,留余量。
 MAX_PATROL_BYTES = 200_000
@@ -550,11 +550,13 @@ class Dispatcher:
         cmd = c.new_command(kind, payload, ttl_ms=ttl_ms,
                             control_epoch=self.registry.control_epoch(robot_id),
                             task_id=task_id, priority=priority)
-        with self.db.tx() as tx:                    # 先落库:发出去之后进程死了也有账
-            tx.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, "
-                       "issued_by, issued_at, priority) VALUES (?,?,?,?,?,?,?,?)",
-                       (cmd.command_id, cmd.task_id, robot_id, kind, json.dumps(payload),
-                        issued_by, cmd.issued_at, priority))
+        quiet = kind in _QUIET_KINDS
+        if not quiet:
+            with self.db.tx() as tx:                # 先落库:发出去之后进程死了也有账
+                tx.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, "
+                           "issued_by, issued_at, priority) VALUES (?,?,?,?,?,?,?,?)",
+                           (cmd.command_id, cmd.task_id, robot_id, kind, json.dumps(payload),
+                            issued_by, cmd.issued_at, priority))
         if before_send is not None:
             # 调用方要在命令**发出去之前**记账(排程执行器:这一轮算起跑过了)——回执可能丢,
             # 狗可能收到了;发完再记的话,回执一丢就会再派一趟。
@@ -567,7 +569,7 @@ class Dispatcher:
                 tx.execute("UPDATE commands SET ack_result='timeout' WHERE command_id=? "
                            "AND ack_result IS NULL", (cmd.command_id,))
             raise
-        if kind not in _QUIET_KINDS:
+        if not quiet:
             self.feed.publish({"kind": "ack", "robot_id": robot_id, "ack": ack.to_wire(),
                                "issued_by": issued_by})
         return {"command_id": cmd.command_id, "task_id": cmd.task_id,

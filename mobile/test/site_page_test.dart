@@ -151,12 +151,16 @@ class FakeApi implements SiteApi {
     };
   }
 
+  /// 给了就用它当尾巴；[procLogGate] 给了就等它完成再回（模拟慢网）。
+  String? procLogText;
+  Completer<void>? procLogGate;
   @override
   Future<Map<String, dynamic>> procLog(String robotId, String name, {int bytes = 0}) async {
     calls.add('procLog $robotId $name');
+    if (procLogGate != null) await procLogGate!.future;
     if (procLogError != null) throw procLogError!;
     return <String, dynamic>{'name': name, 'size': 5 * 1024 * 1024, 'bytes': 65000,
-      'truncated': true, 'text': '[slam_toolbox] 回环 12 次\n[slam_toolbox] 存图\n'};
+      'truncated': true, 'text': procLogText ?? '[slam_toolbox] 回环 12 次\n[slam_toolbox] 存图\n'};
   }
 
   /// 告警（W00c5a）。给了就用它，不给用真站点的夹具。

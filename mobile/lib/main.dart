@@ -46,6 +46,8 @@ class PatrolApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
       ),
       home: SiteListPage(store: siteStore),
+      // 横屏时刘海、三键导航栏在左右两边（安卓 15 起强制全屏到边）：每一页都躲开。顶上归各页的 AppBar。
+      builder: (context, child) => SafeArea(top: false, child: child ?? const SizedBox.shrink()),
     );
   }
 }

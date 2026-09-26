@@ -76,5 +76,7 @@ def test_真狗_录着包取得到轨迹_事件流里不推(tmp_path):
                 break
             frames.append(f)
         assert not [f for f in frames if f.get("kind") == "ack"], frames
+        assert not s.db.query("SELECT 1 FROM commands WHERE kind='mapping_trail'"), \
+            "每 2 s 一条:不记进命令账"
     finally:
         s.close()

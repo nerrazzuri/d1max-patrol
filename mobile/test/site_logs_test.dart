@@ -1,5 +1,7 @@
 // 建图进程日志（W00c6g）：管理员在单狗页点「建图日志」→ 狗上录包、重建子进程的日志列表 → 点开看尾巴
 // （等宽字、能滚、有刷新）。日志经站点现取，站点不存。
+import 'dart:async';
+
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/ui/site_logs.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
@@ -70,6 +72,25 @@ void main() {
     await t.pumpAndSettle();
     expect(find.textContaining('取不到'), findsOneWidget);
     expect(find.textContaining('no_such_log'), findsOneWidget);
+  });
+
+  testWidgets('尾巴很长：打开就在最底下（最新的）；刷新时有进度条，内容换成新的', (t) async {
+    final api = FakeApi('admin', robotView: _view())
+      ..procLogText = [for (var i = 0; i < 300; i++) 'line $i'].join('\n');
+    await t.pumpWidget(MaterialApp(home: SiteProcLogPage(api: api, robotId: 'A', name: 'slam')));
+    await t.pumpAndSettle();
+    final pos = t.state<ScrollableState>(find.byType(Scrollable).first).position;
+    expect(pos.maxScrollExtent, greaterThan(0));
+    expect(pos.pixels, pos.maxScrollExtent, reason: '最新的在最底下，打开就停在那儿');
+    api.procLogGate = Completer<void>();
+    api.procLogText = '换过了';
+    await t.tap(find.byKey(SiteProcLogPage.refreshKey));
+    await t.pump();
+    expect(find.byType(LinearProgressIndicator), findsOneWidget, reason: '看得出在刷新');
+    api.procLogGate!.complete();
+    await t.pumpAndSettle();
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(find.textContaining('换过了'), findsOneWidget);
   });
 
   test('日志大小说人话', () {

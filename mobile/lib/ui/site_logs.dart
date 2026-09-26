@@ -97,8 +97,22 @@ class SiteProcLogPage extends StatefulWidget {
 
 class _SiteProcLogPageState extends State<SiteProcLogPage> {
   late Future<Map<String, dynamic>> _data = _fetch();
+  final ScrollController _scroll = ScrollController();
 
-  Future<Map<String, dynamic>> _fetch() => widget.api.procLog(widget.robotId, widget.name);
+  /// 取到了就滚到最底下：最新的在最后（W00c6g 内审）。
+  Future<Map<String, dynamic>> _fetch() async {
+    final d = await widget.api.procLog(widget.robotId, widget.name);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
+    return d;
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -122,13 +136,17 @@ class _SiteProcLogPageState extends State<SiteProcLogPage> {
           final d = snap.data!;
           final size = (d['size'] as num? ?? 0).toInt();
           final got = (d['bytes'] as num? ?? 0).toInt();
-          return ListView(padding: const EdgeInsets.all(12), children: [
+          // 刷新时旧的还摆着：钉在顶上一条进度条（不跟着滚），看得出在取。
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (snap.connectionState == ConnectionState.waiting) const LinearProgressIndicator(),
+            Expanded(child: ListView(controller: _scroll, padding: const EdgeInsets.all(12), children: [
             Text(d['truncated'] == true
                 ? '共 ${logSizeText(size)}，只显示最后 ${logSizeText(got)}（最新的在最底下）'
                 : '共 ${logSizeText(size)}'),
             const Divider(),
             SelectableText('${d['text'] ?? ''}',
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+            ])),
           ]);
         },
       ),

@@ -8,7 +8,9 @@
 
 **只许横屏**（用户 2026-09-26）：安卓清单里锁 `sensorLandscape`（启动画面就是横的），Flutter 起来再锁一次
 （`lib/main.dart` 的 `lockLandscape`）；两个横向都行。每一屏按横屏的手机（800×360，最窄 568×360）测过不溢出、
-弹键盘时输入框能滚（`test/landscape_test.dart`）。
+弹键盘时输入框能滚（`test/landscape_test.dart`）。整个 app 在 `MaterialApp.builder` 包了一层 `SafeArea(top: false)`：
+安卓 15 起强制全屏到边，横屏时刘海、三键导航栏在左右两边，每一页都躲开（顶上归各页的 AppBar）。
+**限制**：安卓 16 在平板、展开的折叠屏（最短边 ≥ 600dp）上不理方向锁，可能竖着显示；遥控页的竖屏布局没测过，普通手机不受影响。
 
 ---
 
