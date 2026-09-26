@@ -218,6 +218,20 @@ def test_位姿跟质量配对_谁先到都行_太久没配上的丢掉():
     pr.pose(10.2, (1.2, 0.0, 0.0), q, at=0.2)            # 这帧的质量没来
     pr.pose(10.3, (1.3, 0.0, 0.0), q, at=0.5)
     pr.quality(0.7, at=0.51)
+    pr.quality(0.6, at=0.6)                               # 质量来了,位姿 0.3 s 后才来:不配
+    pr.pose(10.4, (1.4, 0.0, 0.0), q, at=0.9)
     assert [(e.stamp, e.quality) for e in got] == [(10.0, 0.9), (10.1, 0.8), (10.3, 0.7)]
     assert all(isinstance(e, Estimate) for e in got)
     assert not [x for x in got if isinstance(x, Pose)]
+
+
+async def test_记着的重定位_换了图就作废(tmp_path):
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    assert await be.relocalize(1.0, 2.0, 0.0, 0.5, req=4) == ""      # MOLA 还没出过位姿:记着
+    await be.load_prior(("estate-1", "8"), str(_先验(tmp_path, name="m8")))
+    await _settle()
+    be.mola_output()
+    await be.check()
+    assert svc.calls == [], "旧图上给的位置不能拿到新图上用"

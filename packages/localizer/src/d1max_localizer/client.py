@@ -156,8 +156,6 @@ class BridgeClient:
     async def _reloc(self, m: Relocalize) -> dict[str, Any]:
         if self.core.map_ref != (m.map_id, m.map_version):
             return {"ok": False, "reason": "定位器载的不是这张图"}
-        if not self.core.can_relocalize():
-            return {"ok": False, "reason": "先验还没载好"}
         why = await self._ask(self.backend.relocalize(m.x, m.y, m.yaw, m.sigma_xy, req=m.req,
                                                       human=True))
         if why:

@@ -128,3 +128,26 @@ def test_标定子命令写出_frames_json(tmp_path):
     d = json.loads((tmp_path / "frames.json").read_text())
     assert d["sensor_in_base"] == [0.4, 0.0] and round(d["sensor_height"], 6) == 0.6
     assert [round(c, 6) for c in d["sensor_forward"]] == [1.0, 0.0, 0.0]
+
+
+def test_可信时的误差只算代理信的那些帧():
+    fr = _frames(jump_at={100, 102, 104})
+    msgs = replay.simulate(fr, FLAT, (0.0, 0.0, 0.0))
+    view = replay.agent_view(msgs)
+    ref = [(f.stamp, (f.p[0], 0.0, 0.0), f.q) for f in fr]     # 参考:没跳的那条
+    m = replay.metrics(fr, msgs, view, FLAT, reference=ref)
+    assert m["error_m"]["all"]["max"] >= 2.9, "跳出去的那几帧差 3 m"
+    assert m["error_m"]["trusted"]["max"] < 0.01, "代理没信那几帧"
+
+
+def test_MOLA_处理慢了_那一帧晚到_落在后面几帧之后就丢掉():
+    """按到达时刻(时间戳 + 处理耗时)喂:一帧处理了 0.35 s,比后面三帧还晚到,核心按时间戳不涨
+    丢掉它。"""
+    fr = _frames(50)
+    slow = replay.Frame(stamp=fr[20].stamp, p=fr[20].p, q=fr[20].q, quality=fr[20].quality,
+                        proc_s=0.35)
+    fr = [*fr[:20], slow, *fr[21:]]
+    msgs = replay.simulate(fr, FLAT, (0.0, 0.0, 0.0))
+    view = replay.agent_view(msgs)
+    m = replay.metrics(fr, msgs, view, FLAT)
+    assert m["poses_sent"] == 49

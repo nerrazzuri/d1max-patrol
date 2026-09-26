@@ -324,3 +324,49 @@ def test_不可信的σ明显高于代理那条线():
     t.walk(3)
     t.step(0.15, 0.0, q=0.3)
     assert t.poses()[-1].sigma_xy > SIGMA_LOST_M
+
+
+def test_来回跳_从最后一次跳起满_5_秒才恢复():
+    """三次跳隔开(0、2、4 s):窗口里不足 3 次不等于不跳了 —— 最后一次跳之后要满 5 s。"""
+    from d1max_localizer.core import JUMP_CLEAR_S
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    x = t.walk(5)
+    for _ in range(3):
+        t.step(x + 2.0, 0.0)                               # 跳过去
+        t.step(x, 0.0)                                     # 跳回来(也算跳)
+        x = t.walk(18, x0=x)
+    assert t.states()[-1] == ("lost", "匹配在来回跳")
+    t.walk(int((JUMP_CLEAR_S - 1.8 - 1.0) * 10), x0=x)    # 最后一次跳之后共 4 s:窗口里只剩 2 次,
+    assert t.states()[-1][0] == "lost"                     # 但不跳还没满 5 s,还丢着
+    t.walk(15, x0=x + 1.1)
+    assert t.states()[-1] == ("tracking", "")
+
+
+def test_跳的那一帧不当最后可信的位置():
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    x = t.walk(10)
+    t.step(x + 5.0, 0.0)                                   # 跳到 5 m 外
+    t.core.backend_down("定位程序退出了")
+    t.core.backend_started()
+    w = t.core.want_reloc()
+    assert w is not None and abs(w.x - x) < 0.01, "按跳之前的位置重定位,不按跳出去的"
+
+
+def test_重启之后不带着以前的低质量帧():
+    from d1max_localizer.core import LOWQ_Q, SIGMA_BAD_M
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    x = 0.0
+    for i in range(30):                                    # 低质量帧占一半
+        x += 0.05
+        t.step(x, 0.0, q=LOWQ_Q - 0.05 if i % 2 else 0.97)
+    assert t.poses()[-1].sigma_xy >= SIGMA_BAD_M
+    t.core.backend_down("定位程序退出了")
+    t.core.backend_started()
+    t.core.relocalized(req=None, x=x, y=0.0, yaw=0.0, sigma=0.5, human=False)
+    for _ in range(12):
+        x += 0.05
+        t.step(x, 0.0, q=0.97)
+    assert t.poses()[-1].sigma_xy < SIGMA_BAD_M

@@ -18,7 +18,9 @@ if sys.argv[3] == "crash":
     sys.exit(3)
 if sys.argv[3] == "child":                         # 像 ros2 launch:底下还有子进程
     import subprocess
-    c = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    c = subprocess.Popen([sys.executable, "-c",
+                          "import signal, time; signal.signal(signal.SIGINT, signal.SIG_IGN); "
+                          "time.sleep(60)"])            # 不理 SIGINT:只能整组强杀
     (d / f"child-{c.pid}").write_text("")
 time.sleep(60)
 """

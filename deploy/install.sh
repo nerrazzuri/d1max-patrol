@@ -30,6 +30,7 @@ set -euo pipefail
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
 #
+# @也删 /etc/systemd/system/multi-user.target.wants/d1max-localizer.service 定位器的自启链(装机只装不 enable;有人手工 enable 过才有)
 # @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元
 # @也删 /etc/systemd/system/d1max-patrol.service 老服务(W00c5e 退役)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链

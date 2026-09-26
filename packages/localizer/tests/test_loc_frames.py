@@ -115,6 +115,32 @@ def test_标定说得出它有多可信():
     assert "朝前" in why and "倒着走" not in why
     f, why = calibrate(_poses_backwards_mostly(), sensor_up=S_UP, forward_hint=S_FWD, explain=True)
     assert "倒着走" in why
+    assert all(math.isclose(a, b, abs_tol=1e-6)
+               for a, b in zip(f.sensor_forward, S_FWD, strict=True)), "按装法翻过来"
+
+
+def test_雷达装得有点歪_给的上不准_转过一圈也估得出():
+    """装法上说「上」是 X,实际歪了 8°:狗转一整圈,「上」在地图系里的平均还是竖直的,再反过来把雷达系里
+    的「上」校准。"""
+    tilt = math.radians(8.0)
+    true_up = (math.cos(tilt), math.sin(tilt), 0.0)       # 雷达系里真正的「上」
+    fwd = (0.0, 0.0, 1.0)
+    left = (true_up[1] * fwd[2] - true_up[2] * fwd[1], true_up[2] * fwd[0] - true_up[0] * fwd[2],
+            true_up[0] * fwd[1] - true_up[1] * fwd[0])
+    B = tuple(tuple((fwd, left, true_up)[j][i] for j in range(3)) for i in range(3))
+    L = _level(UP_MAP)
+    poses = []
+    for i in range(360):                                  # 原地转一整圈,边转边往前挪一点
+        yaw = math.radians(i)
+        h = (math.cos(yaw), math.sin(yaw), 0.0)
+        lf = (-math.sin(yaw), math.cos(yaw), 0.0)
+        A = tuple(tuple((h, lf, (0.0, 0.0, 1.0))[j][i2] for j in range(3)) for i2 in range(3))
+        R = _mul(_T(L), _mul(A, _T(B)))
+        poses.append((_apply(_T(L), (0.02 * i * math.cos(yaw), 0.02 * i * math.sin(yaw), 0.6)),
+                      mat_to_quat(R)))
+    f = calibrate(poses, sensor_up=S_UP)
+    assert all(math.isclose(a, b, abs_tol=1e-3) for a, b in zip(f.up, _unit(UP_MAP), strict=True))
+    assert all(math.isclose(a, b, abs_tol=1e-3) for a, b in zip(f.sensor_up, true_up, strict=True))
 
 
 def _poses_backwards_mostly():

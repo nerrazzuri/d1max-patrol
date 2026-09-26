@@ -199,9 +199,8 @@ class LocalizerCore:
         self._last_scan = self._now()
 
     def on_estimate(self, e: Estimate) -> None:
-        if (self._frames is None or self._loading or self._need_init or self._map is None
-                or self._down):
-            return
+        if self._frames is None or self._loading or self._need_init or self._map is None:
+            return                                       # MOLA 退出时 backend_down 也标了要给初值
         if self._stamp is not None and e.stamp <= self._stamp:
             return                                       # 同一帧、乱序
         now = self._now()

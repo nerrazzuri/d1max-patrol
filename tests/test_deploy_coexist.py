@@ -45,6 +45,8 @@ from tests.test_deploy_files import DEPLOY
     "LEGACY_UNIT": "d1max-patrol.service",
     "WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-agent.service",
     "LEGACY_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-patrol.service",
+    "LOC_UNIT": "d1max-localizer.service",
+    "LOC_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-localizer.service",
 }
 
 
