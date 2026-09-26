@@ -369,6 +369,28 @@ void main() {
     expect(site.received.last.body, {'bag': 'yard', 'map_id': 'estate-1', 'version': '9'});
     c.close();
   });
+
+  test('标原点：请求形状；站点回的错误体原样带在 SiteError 里（同名冲突要靠它再问一次）', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('alice', 'pw');
+    await c.markHome('A');
+    expect(site.received.last.path, '/api/robots/A/home/here');
+    expect(site.received.last.body, <String, dynamic>{});
+    await c.markHome('A', replace: true);
+    expect(site.received.last.body, {'replace': true});
+    site.statusCodes['/api/robots/A/home/here'] = 409;
+    site.bodies['/api/robots/A/home/here'] = <String, dynamic>{
+      'error': '待命点 home 登记在 other:9 上',
+      'name_taken': <String, dynamic>{'map_id': 'other', 'map_version': '9'},
+    };
+    await expectLater(
+        c.markHome('A'),
+        throwsA(isA<SiteError>()
+            .having((e) => e.status, 'status', 409)
+            .having((e) => e.message, 'message', contains('other:9'))
+            .having((e) => (e.body['name_taken'] as Map)['map_version'], 'name_taken', '9')));
+    c.close();
+  });
 }
 
 Future<void> _until(bool Function() ok) async {

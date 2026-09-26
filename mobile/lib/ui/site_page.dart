@@ -508,8 +508,8 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('在这儿标原点'),
-        content: Text('把 ${widget.robotId} 在这张图上的默认待命点（原点）换成它现在的位置？\n'
-            '狗会先核定位：没设位置、偏差大就不标。'),
+        content: Text('把 ${widget.robotId} 的默认待命点（原点，名字叫 home）换成它现在的位置？\n'
+            '狗会先核定位：没设位置、偏差大就不标；在跑任务、在换图也不标。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
           FilledButton(
@@ -522,15 +522,51 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     if (ok != true) return;
     String msg;
     try {
-      final r = await widget.api.markHome(widget.robotId);
+      Map<String, dynamic> r;
+      try {
+        r = await widget.api.markHome(widget.robotId);
+      } on SiteError catch (e) {
+        final taken = e.body['name_taken'];
+        if (e.status != 409 || taken is! Map || !mounted) rethrow;
+        // 同名的点登记在别的图上（比如重建之前那一版）：问清楚再搬（W00c6f 内审）。
+        final where = '${taken['map_id']}:${taken['map_version']}';
+        final move = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: const Text('替换旧的待命点？'),
+            content: Text('待命点 home 现在登记在 $where 上。换到狗现在用的这张图上（$where 上就没有它了）？'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+              FilledButton(
+                  key: const Key('mark-home-replace'),
+                  onPressed: () => Navigator.pop(c, true),
+                  child: const Text('替换')),
+            ],
+          ),
+        );
+        if (move != true) {
+          if (mounted) setState(() => _msg = '没标：待命点 home 还在 $where 上');
+          return;
+        }
+        r = await widget.api.markHome(widget.robotId, replace: true);
+      }
       final d = (r['ack'] as Map?)?['data'];
       msg = d is Map
           ? '原点标好了：(${(d['x'] as num).toStringAsFixed(1)}, ${(d['y'] as num).toStringAsFixed(1)})'
               '，偏差约 ${(d['sigma_m'] as num? ?? 0).toStringAsFixed(1)} m'
           : '原点标好了';
     } on SiteError catch (e) {
-      // 站点回的是「狗没标:<狗的原因>」：原因照拒收那一套说人话。
-      msg = '没标：${ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''))}';
+      final d = e.body['data'];
+      if (e.status == 500 && d is Map && d['x'] is num && d['y'] is num) {
+        // 狗上已经换了、站点没登记上：给坐标，好手工登记待命点。
+        msg = '${e.message}：狗上的原点在 ${d['map_id']}:${d['map_version']} 的 '
+            '(${(d['x'] as num).toStringAsFixed(1)}, ${(d['y'] as num).toStringAsFixed(1)})';
+      } else if (e.status == 409) {
+        // 站点回的是「狗没标:<狗的原因>」：原因照拒收那一套说人话。
+        msg = '没标：${ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''))}';
+      } else {
+        msg = e.toString(); // 504「狗可能已经标了」等：照站点说的
+      }
     }
     if (!mounted) return;
     setState(() => _msg = msg);

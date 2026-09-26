@@ -144,6 +144,22 @@ def test_图里没带原点_用这台狗在这张图上的待命点_都没有不
     assert s.agent.parts.home is not None and s.agent.parts.home.pose.position.x == 1.5
 
 
+def test_图里带了原点_这台狗在这张图上有待命点_按待命点下发(站点):
+    """内审应修 4(W00c6f):站点登记的待命点是权威(在当前位置标的原点就登记成它),图里的 ``home.json``
+    只是没登记时的垫底 —— 以前图里带了就不下发待命点,狗退回 ``home.json``,站点还以为是标的那个。"""
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
+    s.maps.import_dir(_dir(s, "withhome"), map_id=MAP[0], version="13")
+    with s.db.tx() as c:
+        c.execute("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
+                  "is_default) VALUES ('A', 'dock', ?, '13', 2.5, 0, 0, 1)", (MAP[0],))
+    code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "13"}, token=alice)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "13", timeout=8)
+    assert s.agent.parts.home.pose.position.x == 2.5
+
+
 def test_让狗把隔离的文件再传一次(站点):
     s = 站点
     alice = _登(s, "alice")

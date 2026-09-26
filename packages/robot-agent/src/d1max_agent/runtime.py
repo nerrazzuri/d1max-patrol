@@ -24,8 +24,10 @@ from typing import Any
 
 from d1max_agent.assembly import EngineParts, build_engine
 from d1max_agent.commands import CommandProcessor
+from d1max_agent.engine.homing import HomePoint
 from d1max_agent.engine.machine import RunState
 from d1max_agent.events import EventBook
+from d1max_agent.homes import HomeBook
 from d1max_agent.idempotency import IdempotencyStore
 from d1max_agent.localization import OdomAnchor
 from d1max_agent.release_precheck import MIN_BATTERY_PCT as _PRECHECK_MIN_BATTERY_PCT
@@ -129,6 +131,13 @@ class AgentRuntime:
                                  monotonic=monotonic or time.monotonic, map_id=loaded_map[0],
                                  home=home)
         self.parts = parts
+        #: 每张图上的原点(W00c6f 内审):标的、站点下发时带的都记在这儿,重启先看它(``--home`` 垫底)。
+        self.homes = HomeBook(store_dir / "homes.json")
+        if parts is not None and loaded_map is not None:
+            kept = self.homes.get(*loaded_map)
+            if kept is not None:
+                parts.home = HomePoint(map_id=loaded_map[0], pose=Pose.from_xy_yaw(*kept),
+                                       marked_at_ms=now_ms(), note="W00c6f:狗上记着的原点")
         # W00c6e:地图位姿来自里程锚定。仿真的里程就是真实位置(按原样);真狗开机要人给一次位置。
         if odom_identity is None:
             odom_identity = self.adapter_id.split("/")[0] == "sim"
@@ -491,16 +500,18 @@ class AgentRuntime:
         return ""
 
     async def _mark_home(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
-        """在当前位置标原点(W00c6f):用**此刻锚定后的地图位姿**当这张图上的原点。狗要停着;定位要好 ——
-        锚过、里程新鲜、偏差不大于 ``HOME_MAX_SIGMA_M``。收下:原点立即生效(返航目标、起飞检查),记进
-        正在用的那张图(重启照用),位置放在回执里给站点登记(站点是权威)。"""
-        from d1max_agent.engine.homing import HomePoint
+        """在当前位置标原点(W00c6f):用**此刻锚定后的地图位姿**当这张图上的原点。狗要停着、不在忙;定位
+        要好 —— 锚过、里程新鲜、偏差不大于 ``HOME_MAX_SIGMA_M``。收下:**先落盘**(``homes.json``,
+        重启照用;落不了盘就拒)再生效(返航目标、起飞检查),位置放在回执里给站点登记(站点是权威)。"""
         m = self.loaded_map
         if self.parts is None or m is None:
             return "no_map"
         name = cmd.payload.get("name", "home")
         if not isinstance(name, str) or not _HOME_NAME.fullmatch(name):
             return "payload: name 只许字母、数字、. _ -(1–64 字)"
+        busy = self._home_busy()
+        if busy:
+            return f"busy: {busy}"
         if not await self.hal.stopped():
             return "moving"
         h = await self.hal.health()
@@ -515,18 +526,33 @@ class AgentRuntime:
         est = anchor.estimate((o.x, o.y, o.yaw))
         if est is None:
             return "loc_poor: 报不出地图位姿"
-        pose = Pose.from_xy_yaw(est.x, est.y, est.yaw)
-        self.parts.home = HomePoint(map_id=m[0], pose=pose, marked_at_ms=self._now(),
+        if (est.map_id, est.map_version) != m or self.loaded_map != m:
+            return "busy: 刚换了图"
+        try:
+            self.homes.put(m[0], m[1], (est.x, est.y, est.yaw), now_ms=self._now())
+        except OSError as exc:
+            log.warning("标原点落不了盘:%s", exc)
+            return f"persist_failed: {exc}"[:200]
+        self.parts.home = HomePoint(map_id=m[0], pose=Pose.from_xy_yaw(est.x, est.y, est.yaw),
+                                    marked_at_ms=self._now(),
                                     note=f"W00c6f:在当前位置标的({name})")
-        if self.maps is not None:
-            from d1max_contract.maps import MapRef
-            active = self.maps.active()
-            if isinstance(active, MapRef) and (active.map_id, active.version) == m:
-                self.maps.set_home(active, (est.x, est.y, est.yaw))
         data = {"map_id": m[0], "map_version": m[1], "x": round(est.x, 3),
                 "y": round(est.y, 3), "yaw": round(est.yaw, 4), "sigma_m": round(est.sigma_xy_m, 2)}
         self.events.emit("home_marked", {"task_id": cmd.task_id, "name": name, **data})
         return "", data
+
+    def _home_busy(self) -> str:
+        """标原点时在忙什么(W00c6f 内审应修 3);空串 = 可以标。遥控不算忙(「开过去再标」)。"""
+        if self._running(self._release_job):
+            return "在装或在切版本"
+        if self._running(self._map_job) or self._switching:
+            return "在换图"
+        cur = self.processor.current
+        if cur is not None and not cur.done and cur.kind in ("goto", "patrol"):
+            return f"在跑任务 {cur.task_id}"
+        if any(t.kind in ("goto", "patrol") for t in self.processor.pending):
+            return "有任务排着队"
+        return ""
 
     def _busy_reason(self) -> str:
         """在忙什么(升级前检查的「空闲」那一项);空串 = 空闲。"""
@@ -631,6 +657,8 @@ class AgentRuntime:
                     self.maps.discard(ref)
                     raise MapInstallError(f"适配器载不进去: {type(exc).__name__}: {exc}") from exc
                 try:
+                    # 原点先记(站点是权威:带了就按它,没带就删掉标过的、按图里的 home.json)。
+                    self.homes.put(ref.map_id, ref.version, home, now_ms=self._now())
                     self.maps.commit(ref, home=home)
                 except Exception as exc:
                     # 适配器已经是新图了,狗报的还是老版本:把原来那张载回去,不留这种两边不一致。
@@ -674,7 +702,9 @@ class AgentRuntime:
         self.processor.loaded_map = self.loaded_map
         self.processor.supported = self._supported()
         if self.parts is not None:
-            home = self.maps.home_of(ref) if self.maps is not None else None
+            home = self.homes.get(ref.map_id, ref.version)
+            if home is None and self.maps is not None:
+                home = self.maps.home_of(ref)
             self.parts.switch_map(ref.map_id, None if home is None else Pose.from_xy_yaw(*home),
                                   now_ms=self._now())
             self.parts.nav.anchor.on_map(self.loaded_map)     # 换了图:锚定作废(W00c6e)

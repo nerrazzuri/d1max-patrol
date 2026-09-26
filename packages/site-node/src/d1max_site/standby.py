@@ -102,6 +102,34 @@ class StandbyManager:
                       "is_default=excluded.is_default",
                       (robot_id, name, map_id, map_version, *xs, int(flag)))
 
+    def mark(self, robot_id: str, name: str, data: Any) -> None:
+        """狗在当前位置标了原点(W00c6f):把它报的位置登记成这台狗的默认待命点。回执、``home_marked``
+        事件都走这里(同样的值登记两遍没事)。"""
+        if not isinstance(data, dict):
+            raise StandbyError("狗没报位置")
+        self.set(robot_id, name, map_id=data["map_id"], map_version=data["map_version"],
+                 x=data["x"], y=data["y"], yaw=data["yaw"], default=True)
+
+    def _on_home_marked(self, robot_id: str, d: dict[str, Any]) -> None:
+        """回执等超时了、狗其实标了(W00c6f 内审应修 1):按狗发的事件补登记。**只认这台狗最新那条没被
+        拒的** ``mark_home``(狗按收到的先后执行,之后那条狗收下了或者还没回话,就是那条算;那条被拒了、
+        过期了,狗上还是前一条的)。晚到的旧事件不许盖掉后来标的。"""
+        rows = self.db.query(
+            "SELECT task_id FROM commands WHERE robot_id=? AND kind='mark_home' AND "
+            "(ack_result IS NULL OR ack_result NOT IN ('rejected', 'expired')) "
+            "ORDER BY issued_at DESC, rowid DESC LIMIT 1", (robot_id,))
+        if not rows or rows[0]["task_id"] != d.get("task_id"):
+            log.info("%s 标原点的事件 %s 不是最新那条,不登记", robot_id, d.get("task_id"))
+            return
+        try:
+            self.mark(robot_id, str(d.get("name", "home")), d)
+        except (StandbyError, KeyError, TypeError) as exc:
+            log.warning("%s 标了原点,站点补登记待命点没成: %s", robot_id, exc)
+            self.dispatcher.feed.publish({"kind": "standby_failed", "robot_id": robot_id,
+                                          "after": d.get("task_id"),
+                                          "reason": "狗上的原点已经换了,站点登记待命点没成: "
+                                                    f"{exc}"})
+
     def remove(self, robot_id: str, name: str) -> None:
         with self.db.tx() as c:
             cur = c.execute("DELETE FROM standby_points WHERE robot_id=? AND name=?",
@@ -151,6 +179,8 @@ class StandbyManager:
                                           task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
 
     def _on_event(self, robot_id: str, e: Event) -> None:
+        if e.kind == "home_marked" and isinstance(e.data, dict):
+            return self._on_home_marked(robot_id, e.data)
         task_id = e.data.get("task_id") if isinstance(e.data, dict) else None
         if e.kind not in _RETURN_AFTER or not task_id or task_id.startswith(STANDBY_PREFIX):
             return

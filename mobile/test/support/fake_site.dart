@@ -89,7 +89,7 @@ class FakeSite {
     if (code != 200) {
       resp.statusCode = code;
       resp.headers.contentType = ContentType.json;
-      resp.write(jsonEncode(siteFixture('site_error')));
+      resp.write(jsonEncode(bodies[path] ?? siteFixture('site_error')));
       await resp.close();
       return;
     }

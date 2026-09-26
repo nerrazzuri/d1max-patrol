@@ -25,7 +25,10 @@ import '../model/alert.dart';
 class SiteError implements Exception {
   final int status;
   final String message;
-  const SiteError(this.status, this.message);
+
+  /// 站点回的整个错误体（除了 `error` 还可能带别的字段，比如标原点的 `name_taken`、`data`）。
+  final Map<String, dynamic> body;
+  const SiteError(this.status, this.message, {this.body = const <String, dynamic>{}});
 
   @override
   String toString() => status == 0 ? message : '$message（$status）';
@@ -113,6 +116,9 @@ String ackReasonText(String reason) {
     final why = reason.contains(':') ? reason.substring(reason.indexOf(':') + 1).trim() : '';
     return '定位不够好${why.isEmpty ? '' : '：$why'}';
   }
+  // 狗说了在忙什么（W00c6f 标原点：在跑任务、在换图……）。
+  if (reason.startsWith('busy:')) return '它正忙着别的：${reason.substring(5).trim()}';
+  if (reason.startsWith('persist_failed')) return '狗上记不下（盘满了？）：${reason.substring(14).replaceFirst(':', '').trim()}';
   return _ackReasonText(reason);
 }
 
@@ -123,7 +129,7 @@ String _ackReasonText(String reason) => switch (reason) {
       'stale_epoch' => '站点和狗的控制代次对不上，刷新一下再试',
       'stale_seq' => '这是一条迟到的旧心跳，狗没认',
       'halting' => '它正在叫停，稍后再派',
-      'moving' => '它在走：停下再设位置',
+      'moving' => '它在走：停稳了再试',
       'no_home' => '这张图没标过原点：输坐标',
       'map_mismatch' => '狗刚换了图：刷新一下再设',
       'no_map' => '狗没加载地图',
@@ -192,7 +198,9 @@ abstract class SiteApi {
 
   /// 在当前位置标原点（W00c6f，管理员）：狗用它此刻的位置当原点（定位不好就拒），站点登记成默认待命点（名字
   /// [name]，空就是 `home`）。返回 `{ack, standby}`。
-  Future<Map<String, dynamic>> markHome(String robotId, {String name = ''});
+  /// 在当前位置标原点（W00c6f）。同名的点登记在别的图上时站点回 409 带 `name_taken`，
+  /// 人确认之后 [replace] 为真再发一次。
+  Future<Map<String, dynamic>> markHome(String robotId, {String name = '', bool replace = false});
 
   /// 运行记录（W00c5d，决策 8：证据都在站点）：最近的在前；[robotId] 给了只要这台狗的。
   /// 读不懂就抛 `FormatException`，不当成「没有记录」。
@@ -423,7 +431,8 @@ class SiteClient implements SiteApi {
       if (resp.statusCode == 401) {
         session = null; // 令牌死了：要人重新登录
       }
-      throw SiteError(resp.statusCode, msg);
+      throw SiteError(resp.statusCode, msg,
+          body: decoded is Map<String, dynamic> ? decoded : const <String, dynamic>{});
     }
     return decoded;
   }
@@ -679,9 +688,10 @@ class SiteClient implements SiteApi {
           const Duration(seconds: 3)));
 
   @override
-  Future<Map<String, dynamic>> markHome(String robotId, {String name = ''}) async => _map(
-      await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/home/here',
-          <String, dynamic>{if (name.isNotEmpty) 'name': name}));
+  Future<Map<String, dynamic>> markHome(String robotId,
+          {String name = '', bool replace = false}) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/home/here',
+          <String, dynamic>{if (name.isNotEmpty) 'name': name, if (replace) 'replace': true}));
 
   @override
   Future<Map<String, dynamic>> relocalize(String robotId,
