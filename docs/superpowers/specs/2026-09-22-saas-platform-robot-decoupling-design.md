@@ -76,6 +76,11 @@
 | 媒体 | `camera_sources()`、`snapshot(source)`、`stream_url(source)`、可选 `depth()`/`thermal()`、可选 `audio_session()` | 声明了 depth/thermal/intercom 就必须有对应读取入口；D1 Max 无音频 API，则不声明 |
 | 回充 | 可选 `recharge_start()`、`recharge_stop()`、`undock()`、`recharge_status()` | 状态枚举：`idle / aligning / contacted / charging / failed(code) / undocking / undocked`。厂商不报成功的（D1 Max），适配器用电池充电状态合成 `charging` |
 
+> **修订（2026-09-26，W08 决定 9，用户确认）**：`imu()`、`lidar()` 不做 HAL 的拉取原语 —— 雷达、IMU 由**适配器包**
+> 提供 ROS 感知节点与机型描述（机体尺寸、传感器外参），经品牌无关的本机桥给代理；「换品牌只写适配器」照样成立。
+> `odometry()`、`ultrasonic()`、`joints()` 等仍在 HAL。`Health.loc_quality` 改义为「里程新鲜」，地图定位质量走定位桥。
+> 见 `docs/W08-导航架构决策记录.md`。
+
 ### 2.3 回充的两种实现边界
 
 - **厂商提供完整自动对接**：HAL 暴露上表的可选回充操作；代理负责导航到停靠位、触发、监视状态、重试与放弃。
