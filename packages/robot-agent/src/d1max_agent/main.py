@@ -234,6 +234,9 @@ class Assembled:
                     await self.sim_loc.run(10.0)
             except OSError as exc:
                 log.warning("仿真定位器连不上本机定位桥:%s", exc)
+            except Exception:                    # 别的毛病也不能让它悄悄停了、不再重连(W09a 内审)
+                log.exception("仿真定位器出错了,1 s 后重连")
+            await self.sim_loc.close()
             await asyncio.sleep(1.0)
 
     async def _drive(self) -> None:

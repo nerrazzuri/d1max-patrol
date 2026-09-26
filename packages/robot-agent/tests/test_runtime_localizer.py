@@ -24,7 +24,7 @@ from d1max_patrol.protocol.nav_types import Pose
 
 
 class 台子:
-    async def 起(self, tmp_path, *, localizer="bridge"):
+    async def 起(self, tmp_path, *, localizer="bridge", frame=(0.0, 0.0, 0.0)):
         self.d = Path(tempfile.mkdtemp(prefix="lr", dir="/tmp"))
         self.broker, self.c = MemoryBroker(), 钟()
         self.ears = 耳朵()
@@ -38,7 +38,7 @@ class 台子:
             home=Pose.from_xy_yaw(0.0, 0.0), monotonic=lambda: self.c.mono,
             telemetry_period_ms=100, localizer=localizer, loc_socket=self.d / "loc.sock")
         await self.rt.start()
-        self.loc = SimLocalizer(self.dog, self.d / "loc.sock")
+        self.loc = SimLocalizer(self.dog, self.d / "loc.sock", frame=frame)
         return self
 
     async def 拍(self, n=1):
@@ -53,8 +53,9 @@ class 台子:
         await self.broker.drain()
 
     async def 连(self):
+        """连上、换好先验、第一帧稳下来(内审应修 6:连上之后的第一帧也要稳)。"""
         assert await self.loc.connect(), self.loc.error
-        await self.拍(3)
+        await self.拍(SETTLE_FIXES + 3)
 
     async def 收(self):
         await self.loc.close()
@@ -110,24 +111,106 @@ async def test_定位器断了_停车暂停_连回来接着走(台):
     assert _事件(t.ears, "task_done"), t.ears.by.get("event")
 
 
-async def test_定位器自信地跳错_跟里程对不上_停下等它稳下来_修正量给引擎(台, monkeypatch):
-    t = 台
-    await t.连()
+def _记修正量(t, monkeypatch):
     got = []
     real = t.rt.parts.engine.relocalized
 
-    def 记(delta):
-        got.append(delta)
-        real(delta)
+    def 记(delta, **kw):
+        got.append((delta, kw))
+        real(delta, **kw)
     monkeypatch.setattr(t.rt.parts.engine, "relocalized", 记)
+    return got
+
+
+async def test_定位器自信地跳错_抓住停下_请它在推算的位置附近重定位_对回来接着走(台, monkeypatch):
+    """跳错被交叉校验抓住 → 导航桥停车、引擎按丢定位暂停并重置 → 重置 = 请定位器在最后可信的位置
+    (按里程推到此刻)附近重定位(W08 决定 4)→ 对回来,修正量约为零 → 接着走完。丢定位的次数不从头算
+    (不是人给的,内审应修 4)。"""
+    t = 台
+    await t.连()
+    got = _记修正量(t, monkeypatch)
     await t.rt._on_cmd(_goto(4.0, 0.0, "g1", t.c))
     await t.拍(10)
     t.loc.jump(0.8, 0.0, flag=False)                     # 不报 jump:自信地跳错
-    await t.拍(2)
-    assert t.rt.parts.nav.anchor.why_not(True).startswith("定位器跟里程对不上")
+    await t.拍(1)
+    assert not t.rt.parts.nav.anchor.ok(True)            # 对不上;引擎同一拍就请它重定位了
     assert t.rt.parts.engine.state is RunState.PAUSED or await t.dog.stopped()
     await t.拍(SETTLE_FIXES + 5)
-    assert len(got) == 1 and got[0] is not None and abs(got[0][0] - 0.8) < 0.15, got
+    [r] = t.loc.relocs
+    assert r.sigma_xy == 1.0 and abs(r.x - t.dog.x) < 0.2, (r, t.dog.x)
+    [(d, kw)] = got
+    assert kw == {"reset_attempts": False} and d is not None and abs(d[0]) < 0.15, got
+    assert t.rt.parts.engine._live.loc_reset_attempts == 1
+    await t.拍(80)
+    assert _事件(t.ears, "task_done"), t.ears.by.get("event")
+    assert abs(t.dog.x - 4.0) < 0.3
+
+
+async def test_定位器冻住了_狗在走_抓住停下_重置之后接着走(台):
+    """内审阻断 1:匹配线程死了、定时器还在重发最后那个位置。以前相邻两帧只差 0.1 m、在线内,狗拿着
+    停住的位置一直往前走。"""
+    t = 台
+    await t.连()
+    await t.rt._on_cmd(_goto(4.0, 0.0, "g1", t.c))
+    await t.拍(10)
+    x0 = t.dog.x
+    t.loc.freeze()
+    for _ in range(10):
+        await t.拍(1)
+        if not t.rt.parts.nav.anchor.ok(True):
+            break
+    assert not t.rt.parts.nav.anchor.ok(True)
+    assert t.dog.x - x0 < 0.8, "冻住之后没走出多远就停"
+    await t.拍(SETTLE_FIXES + 5)
+    assert t.loc.relocs and t.loc.frozen is None, "重置请它重定位,它对回来了"
+    await t.拍(80)
+    assert _事件(t.ears, "task_done"), t.ears.by.get("event")
+    assert abs(t.dog.x - 4.0) < 0.3
+
+
+async def test_定位器卡了一下一批一起到_不当跳_接着走(台, monkeypatch):
+    """内审应修 5:以前一批一起到的全配此刻的里程,第一帧当跳、修正量算错、来路被挪错。"""
+    t = 台
+    await t.连()
+    got = _记修正量(t, monkeypatch)
+    await t.rt._on_cmd(_goto(4.0, 0.0, "g1", t.c))
+    await t.拍(10)
+    t.loc.stall(6)
+    sources = []
+    for _ in range(12):
+        await t.拍(1)
+        assert t.rt.parts.nav.anchor.ok(True), t.rt.parts.nav.anchor.why_not(True)
+        sources.append(t.rt.parts.nav.anchor.source)
+    assert "dead_reckoning" in sources and sources[-1] == "scan_match", "卡着的时候在推算"
+    assert got == [] and not t.loc.relocs
+    await t.拍(60)
+    assert _事件(t.ears, "task_done"), t.ears.by.get("event")
+
+
+async def test_地图系跟里程系不重合_走到点_人给位置的修正量方向对(tmp_path, monkeypatch):
+    """内审应修 8:仿真里地图系就是里程系,修正量 compose 的先后反了也看不出。这里地图系 ← 里程系
+    转了 0.8 rad、平移 (3, -2)。"""
+    from d1max_agent.localization import compose
+    frame = (3.0, -2.0, 0.8)
+    t = await 台子().起(tmp_path, frame=frame)
+    try:
+        t.loc.offset = [0.25, 0.0, 0.0]                  # 定位器一直偏 0.25 m(地图系里)
+        await t.连()
+        got = _记修正量(t, monkeypatch)
+        tx, ty, _ = compose(frame, (1.5, 0.0, 0.0))
+        await t.rt._on_cmd(_goto(tx, ty, "g1", t.c))
+        await t.拍(80)
+        assert _事件(t.ears, "task_done"), t.ears.by.get("event")
+        assert abs(t.dog.x - 1.25) < 0.3 and abs(t.dog.y) < 0.3, (t.dog.x, t.dog.y)
+        truth = t.loc.truth()
+        await t.rt._on_cmd(_cmd("relocalize", {"x": truth[0], "y": truth[1], "yaw": truth[2]},
+                                "r1", t.c))
+        await t.拍(SETTLE_FIXES + 3)
+        [(d, kw)] = got
+        assert kw == {"reset_attempts": True}
+        assert abs(d[0] + 0.25) < 0.02 and abs(d[1]) < 0.02 and abs(d[2]) < 0.01, d
+    finally:
+        await t.收()
 
 
 async def test_设位置经定位器_不在线拒_拒了说原因_收下之后稳下来(台):
@@ -151,6 +234,23 @@ async def test_设位置经定位器_不在线拒_拒了说原因_收下之后�
     await t.拍(SETTLE_FIXES + 2)
     assert t.rt.parts.nav.anchor.ok(True)
     assert _事件(t.ears, "relocalized")[-1]["source"] == "manual"
+    await t.rt._on_cmd(_cmd("relocalize", {"x": 3.0, "y": 0.0, "yaw": 0.0}, "r3", t.c))
+    await t.broker.drain()
+    assert _ack(t.ears)["result"] == "accepted", "收下了;对不对得上看之后"
+    await t.拍(2)
+    assert "初值附近对不上" in t.rt.parts.nav.anchor.why_not(True)
+
+
+async def test_换图的时候不收设位置(台):
+    """内审应修 2:给的是这张图上的位置,换完图就作废;等定位器回复的时候换了图,以前还会卡住。"""
+    t = 台
+    await t.连()
+    t.rt._switching = True
+    await t.rt._on_cmd(_cmd("relocalize", {"x": 0.0, "y": 0.0, "yaw": 0.0}, "r1", t.c))
+    await t.broker.drain()
+    t.rt._switching = False
+    assert _ack(t.ears)["reason"] == "busy: 在换图"
+    assert not t.loc.relocs
 
 
 async def test_标原点用定位器的位置(台):
@@ -176,9 +276,9 @@ async def test_换图请定位器换先验_升级前检查有定位器这一项(
     ref = MapRef.from_wire({"map_id": "m", "version": "2", "files": [
         {"name": "m.pgm", "size": 1, "sha256": "0" * 64}]})
     t.rt._switch_map(ref)
-    await t.拍(3)
+    await t.拍(SETTLE_FIXES + 3)
     assert (t.loc.priors[-1].map_id, t.loc.priors[-1].map_version) == ("m", "2")
-    assert t.rt.parts.nav.anchor.ok(True), "定位器在新图上出位姿了"
+    assert t.rt.parts.nav.anchor.ok(True), "定位器在新图上出位姿了、稳下来了"
     await t.loc.close()
     await t.拍(25)
     got = await src()

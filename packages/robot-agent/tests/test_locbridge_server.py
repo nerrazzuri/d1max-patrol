@@ -211,6 +211,75 @@ async def test_请求等回复_超时_没连上_等的时候断了(桥):
         await pending
 
 
+async def test_定位器不读_心跳不卡住每拍_积多了断开(桥, monkeypatch):
+    """内审应修 3:以前每拍的心跳要等发送(drain),定位器只写不读的话,缓冲满了就把整个代理的
+    循环卡死。"""
+    import d1max_agent.locbridge as lb
+    srv, c, sink, path = 桥
+    monkeypatch.setattr(lb, "HB_EVERY_S", 0.0)
+    monkeypatch.setattr(lb, "MAX_WBUF", 1024)
+    r, w = await _连(path)                               # 只连、之后一个字都不读
+    await _等(lambda: srv.connected)
+
+    async def 狂发():
+        for _ in range(40000):
+            await srv.tick()
+            if not srv.connected:
+                return
+            await asyncio.sleep(0)
+    await asyncio.wait_for(狂发(), 10.0)
+    assert not srv.connected and sink.calls[-1] == "disconnect"
+    w.close()
+
+
+async def test_回hello就发不出去_不当它连上(桥, monkeypatch):
+    """内审小问题:以前回 hello 失败(已经 on_disconnect 了)之后还接着 on_connect,代理以为连着。"""
+    import d1max_agent.locbridge as lb
+    srv, c, sink, path = 桥
+    monkeypatch.setattr(lb, "MAX_WBUF", -1)              # 发什么都算积多了
+    r, w = await _连(path)
+    await _等(lambda: sink.calls)
+    await asyncio.sleep(0.05)
+    assert not srv.connected and "connect" not in sink.calls, sink.calls
+    w.close()
+
+
+async def test_交给代理的回调出错_不断开连接(桥):
+    srv, c, sink, path = 桥
+    炸 = [True]
+    real = sink.on_pose
+
+    def on_pose(p):
+        if 炸[0]:
+            炸[0] = False
+            raise RuntimeError("引擎那边炸了")
+        real(p)
+    sink.on_pose = on_pose
+    r, w = await _连(path)
+    await _读(r)
+    w.write(encode(_pose(1)) + encode(_pose(2)))
+    await w.drain()
+    await _等(lambda: ("pose", 2) in sink.calls)
+    assert srv.connected and "disconnect" not in sink.calls
+
+
+async def test_两个几乎同时连_后握手的不顶掉先握手的活连接(桥):
+    """内审小问题:两个连接都过了「旧的活着」那一关,晚握手的以前会把早握手的活连接顶掉。"""
+    srv, c, sink, path = 桥
+    ra, wa = await asyncio.open_unix_connection(str(path), limit=MAX_LINE * 4)   # 先连、先不握手
+    await asyncio.sleep(0.05)
+    rb, wb = await _连(path)
+    assert await _读(rb) == Hello(proto=PROTO)
+    wa.write(encode(_HELLO))
+    await wa.drain()
+    got = await _读(ra)
+    assert isinstance(got, Error) and "已经有" in got.reason
+    wb.write(encode(_pose(1)))
+    await wb.drain()
+    await _等(lambda: ("pose", 1) in sink.calls)
+    assert sink.calls == ["connect", ("pose", 1)]
+
+
 async def test_套接字只给自己_旧的套接字文件换掉_同名的普通文件不动():
     d = Path(tempfile.mkdtemp(prefix="lb", dir="/tmp"))
     try:

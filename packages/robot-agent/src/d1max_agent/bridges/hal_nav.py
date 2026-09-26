@@ -144,9 +144,13 @@ class HalNavBackend(NavBackend):
             raise NavRequestError("load_map", f"只加载了 {self._map_id!r},没有 {map_id!r}")
 
     async def reset_localization(self) -> None:
-        """HAL 没有「重定位」原语(W00d 的 adapter-d1max 再映到厂商的重定位)。这里是空操作:
-        引擎随后停着等 ``CONTINUOUS_LOC``(自带 30 s 上限),定位回来就重发当前点;
-        拒绝的话,任何一次短暂的 LOC_LOST 都会让整趟中止。"""
+        """配了定位器(W09a,W08 决定 4):请它在最后可信的位置附近重定位(不在线、拒了只记日志)。
+        里程锚定没有「重定位」原语,空操作。之后引擎停着等 ``CONTINUOUS_LOC``,定位回来就重发当前点;
+        这里不抛:拒绝的话,任何一次短暂的 LOC_LOST 都会让整趟中止。"""
+        reset = getattr(self.anchor, "reset", None)
+        if reset is not None:
+            await reset()
+            return
         log.info("reset_localization:HAL 桥不做重定位,停着等定位质量回来")
 
     async def loc_status(self) -> LocStatus | None:

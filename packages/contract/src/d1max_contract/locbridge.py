@@ -8,17 +8,25 @@
 
 - ``hello {proto, name, version}``
 - ``pose {seq, stamp_ns, map_id, map_version, x, y, yaw, sigma_xy, sigma_yaw, source, jump,
-  reloc_id?}``:地图位姿与不确定度(米、弧度);``source`` 是 ``scan_match``/``rtk``/``fused``;
-  ``jump`` 为真 = 这一帧跟上一帧不连续(比如刚重定位完);``reloc_id`` = 是哪一次重定位请求的结果。
-  ``stamp_ns`` 是定位器自己的时间戳(只作参考:新鲜不新鲜按代理收到的时刻判)。
+  reloc_id?, meas_age_ms?}``:地图位姿与不确定度(米、弧度);``source`` 是 ``scan_match``/``rtk``/
+  ``fused``;``jump`` 为真 = 这一帧跟上一帧不连续(比如刚重定位完);``reloc_id`` = 是哪一次
+  重定位请求的结果(收下重定位之后**第一帧要带上**,之后的可带可不带;代理收到不小于它在等的那个号就算
+  重定位完了)。
+  ``stamp_ns`` 是这一帧对应的**测量时刻**(那一帧点云的时间),定位器自己的钟,**要严格递增**(同一个
+  时间戳再来一遍当重发、不算新的;往回跳超过 1 s 代理当钟被拨过)。代理拿「收到时刻 − 时间戳」估这一帧
+  比平常晚到了多少,配那一刻的里程。``meas_age_ms`` = 离上一次真匹配过了多久(定位器匹配不上、自己拿
+  里程推着报的时候填;正常是 0),代理把它算进新鲜和推算上限。
+  版本 1 里多出不认识的字段整行拒收(加字段要升协议版本)。
 - ``status {seq, state, reason}``:``initializing``/``tracking``/``lost``
 - ``hb {seq}``:心跳,每秒一条
-- ``reply {req, ok, reason}``:对代理请求的回复
+- ``reply {req, ok, reason}``:对代理请求的回复。**只说收下没有、要快**(代理重定位只等 1 s):
+  换先验的载入进度走 ``status initializing``、重定位的结果看之后的帧。
 
 代理 → 定位器:``hello {proto}``、``set_prior {req, map_id, map_version, dir}``(换先验:这张图在狗上
-的目录;空 = 狗上没有这张图的目录(按启动参数载的图),定位器按自己的配置找)、
-``relocalize {req, map_id, map_version, x, y, yaw, sigma_xy}``(带初值重定位)、``hb {seq}``、
-``error {reason}``(握手不对,说完就断)。
+的目录;空 = 狗上没有这张图的目录(按启动参数载的图),定位器按自己的配置找;没回代理会再发,同一张图
+再来一遍当没事)、``relocalize {req, map_id, map_version, x, y, yaw, sigma_xy}``(带初值重定位;人设
+位置,或者丢定位后代理按最后可信的位置请它找回来)、``hb {seq}``、``error {reason}``(握手不对,
+说完就断)。
 """
 
 from __future__ import annotations
@@ -43,8 +51,12 @@ def _pos_int(v: Any, what: str, *, zero: bool = False) -> None:
 
 
 def _num(v: Any, what: str, *, nonneg: bool = False) -> None:
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
-        raise ContractError(f"定位桥:{what} 要是有限数:{v!r}")
+    try:
+        ok = not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
+    except OverflowError:                        # 几百位的整数
+        ok = False
+    if not ok:
+        raise ContractError(f"定位桥:{what} 要是有限数:{str(v)[:40]!r}")
     if nonneg and v < 0:
         raise ContractError(f"定位桥:{what} 不许为负:{v!r}")
 
@@ -82,10 +94,14 @@ class Pose:
     source: str
     jump: bool = False
     reloc_id: int | None = None
+    #: 这一帧离定位器上一次真匹配过了多久(毫秒;真匹配的那一帧是 0)。定位器匹配不上、拿自己的里程
+    #: 往前推的时候要照实说 —— 代理把它算进新鲜(W09a 内审阻断 1)。
+    meas_age_ms: int = 0
 
     def __post_init__(self) -> None:
         _pos_int(self.seq, "seq")
         _pos_int(self.stamp_ns, "stamp_ns", zero=True)
+        _pos_int(self.meas_age_ms, "meas_age_ms", zero=True)
         check_name(self.map_id, "定位桥:map_id")
         check_name(self.map_version, "定位桥:map_version")
         for k in ("x", "y", "yaw"):
@@ -207,5 +223,5 @@ def parse(line: bytes) -> Message:
         raise ContractError(f"定位桥:不认识的报文类型:{t!r}")
     try:
         return cls(**d)
-    except TypeError as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ContractError(f"定位桥:{cls.T} 的字段不对:{exc}") from None

@@ -11,6 +11,9 @@
   就当它断了。
 - 请求(换先验、重定位)带 ``req`` 号,等它的 ``reply``;没连上、等的时候断了抛
   ``LocalizerUnavailable``,超时抛 ``asyncio.TimeoutError``。
+- **发送不等**(不 ``drain``):``tick`` 在每拍的循环里,定位器不读的话等发送会把整个代理卡住(内审
+  应修 3)。发不出去的积在发送缓冲里,积过 :data:`MAX_WBUF` 就当定位器坏了、断开。
+- 交给 ``sink`` 的回调出了错只记日志,不断开连接。
 """
 
 from __future__ import annotations
@@ -48,6 +51,8 @@ log = logging.getLogger(__name__)
 HB_DEAD_S = 2.0
 HB_EVERY_S = 1.0
 HELLO_TIMEOUT_S = 2.0
+#: 给定位器的发送缓冲积过这么多(字节)就当它不读了、断开。
+MAX_WBUF = 64 * 1024
 
 
 @dataclass
@@ -103,7 +108,7 @@ class LocBridgeServer:
         self.path.unlink(missing_ok=True)
 
     async def tick(self) -> None:
-        """每拍:定位器没声太久就当它断了;每秒发一条心跳。"""
+        """每拍:定位器没声太久就当它断了;每秒发一条心跳。不等发送,不让出。"""
         conn = self._conn
         if conn is None:
             return
@@ -114,9 +119,10 @@ class LocBridgeServer:
         if now - self._hb_at >= HB_EVERY_S:
             self._hb_at = now
             self._hb_seq += 1
-            await self._say(conn, Heartbeat(seq=self._hb_seq))
+            self._say(conn, Heartbeat(seq=self._hb_seq))
 
     async def request(self, make: Callable[[int], Any], timeout_s: float) -> Reply:
+        """发一条请求(``make(req)`` 造),等它的回复;``timeout_s`` 管从发到回的全程。"""
         conn = self._conn
         if conn is None:
             raise LocalizerUnavailable("定位器没连上")
@@ -125,7 +131,7 @@ class LocBridgeServer:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[req] = fut
         try:
-            await self._say(conn, make(req))
+            self._say(conn, make(req))
             return await asyncio.wait_for(fut, timeout_s)
         finally:
             self._pending.pop(req, None)
@@ -144,32 +150,45 @@ class LocBridgeServer:
     def _alive(self, conn: _Conn) -> bool:
         return self._now() - conn.heard <= HB_DEAD_S
 
+    def _busy(self) -> bool:
+        return self._conn is not None and self._alive(self._conn)
+
+    def _sink(self, name: str, *args: Any) -> None:
+        try:
+            getattr(self.sink, name)(*args)
+        except Exception:
+            log.exception("本机定位桥:%s 处理出错(连接照旧)", name)
+
     async def _on_conn(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         uid = self._peer_uid(writer)
         if uid != self.allowed_uid:
             log.warning("本机定位桥:账号 %s 连上来了(只认 %s),断开", uid, self.allowed_uid)
             writer.close()
             return
-        old = self._conn
-        if old is not None and self._alive(old):
-            await self._refuse(writer, "已经有一个定位器连着")
+        if self._busy():
+            self._refuse(writer, "已经有一个定位器连着")
             return
         try:
             first = await asyncio.wait_for(reader.readline(), HELLO_TIMEOUT_S)
             hello = parse(first) if first else None
-        except (asyncio.TimeoutError, ValueError, ContractError) as exc:
-            await self._refuse(writer, f"握手不对:{exc}"[:200])
+        except (asyncio.TimeoutError, ValueError, ContractError, ConnectionError, OSError) as exc:
+            self._refuse(writer, f"握手不对:{exc}"[:200])
             return
         if not isinstance(hello, Hello) or hello.proto != PROTO:
-            await self._refuse(writer, f"第一行要是 hello(协议版本 {PROTO})")
+            self._refuse(writer, f"第一行要是 hello(协议版本 {PROTO})")
+            return
+        if self._busy():                              # 等它握手的时候别的定位器连上了
+            self._refuse(writer, "已经有一个定位器连着")
             return
         if self._conn is not None:
             self._drop(self._conn, "新的定位器连上来了,旧的没声了")
         conn = _Conn(reader=reader, writer=writer, heard=self._now())
         self._conn = conn
         log.info("定位器连上了:%s %s", hello.name, hello.version)
-        await self._say(conn, Hello(proto=PROTO))
-        self.sink.on_connect()
+        self._say(conn, Hello(proto=PROTO))
+        if self._conn is not conn:
+            return                                    # 回 hello 就发不出去:已经断了
+        self._sink("on_connect")
         try:
             await self._read(conn)
         finally:
@@ -205,23 +224,29 @@ class LocBridgeServer:
                 continue                              # 旧的、重的
             conn.seq = seq
             if isinstance(msg, Pose):
-                self.sink.on_pose(msg)
+                self._sink("on_pose", msg)
             elif isinstance(msg, State):
-                self.sink.on_state(msg)
+                self._sink("on_state", msg)
 
-    async def _say(self, conn: _Conn, msg: Any) -> None:
+    def _say(self, conn: _Conn, msg: Any) -> None:
+        """写进发送缓冲就走(不等);积多了当它不读、断开。"""
+        if conn.closed:
+            return
         try:
             conn.writer.write(encode(msg))
-            await conn.writer.drain()
-        except (ConnectionError, OSError) as exc:
-            if self._conn is conn:
-                self._drop(conn, f"给定位器发不出去:{exc}")
+        except (ConnectionError, OSError, RuntimeError) as exc:
+            self._drop(conn, f"给定位器发不出去:{exc}")
+            return
+        backlog = conn.writer.transport.get_write_buffer_size()
+        if backlog > MAX_WBUF:
+            self._drop(conn, f"定位器不读我们发的(积了 {backlog} 字节),断开")
 
-    async def _refuse(self, writer: asyncio.StreamWriter, why: str) -> None:
+    @staticmethod
+    def _refuse(writer: asyncio.StreamWriter, why: str) -> None:
+        """回一句错误就断(关的时候把这一句发完,不等)。"""
         try:
             writer.write(encode(Error(reason=why[:200])))
-            await writer.drain()
-        except (ConnectionError, OSError):
+        except (ConnectionError, OSError, RuntimeError):
             pass
         writer.close()
 
@@ -233,5 +258,5 @@ class LocBridgeServer:
             for fut in self._pending.values():
                 if not fut.done():
                     fut.set_exception(LocalizerUnavailable(why))
-            self.sink.on_disconnect()
+            self._sink("on_disconnect")
         conn.writer.close()

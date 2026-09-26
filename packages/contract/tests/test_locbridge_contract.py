@@ -92,3 +92,25 @@ def test_状态_回复_请求的边界():
         Hello(proto=0)
     with pytest.raises(ContractError):
         Hello(proto=1, name="x" * 65)
+
+
+def test_超大的数_当不成形_不炸():
+    """W09a 内审:400 位的整数让 ``math.isfinite`` 抛 ``OverflowError``,以前冒出去把读任务弄死、
+    连接断开。"""
+    with pytest.raises(ContractError):
+        parse(_pose(x=10**400))
+    with pytest.raises(ContractError):
+        parse(_pose(seq=10**400, sigma_xy=10**400))
+    with pytest.raises(ContractError):                   # 不经 parse、直接造(定位器节点那边这么用)
+        Pose(seq=1, stamp_ns=1, map_id="m", map_version="1", x=10**400, y=0.0, yaw=0.0,
+             sigma_xy=0.1, sigma_yaw=0.1, source="scan_match")
+
+
+def test_位姿可以说这一帧是它自己推了多久的():
+    """W09a 内审阻断 1:定位器匹配线程死了、拿自己的里程往前推,帧照发 —— 它要在 ``meas_age_ms`` 里说
+    离上一次真匹配过了多久(真匹配的那一帧是 0),代理把它算进新鲜。"""
+    assert parse(_pose()).meas_age_ms == 0
+    assert parse(_pose(meas_age_ms=1500)).meas_age_ms == 1500
+    for bad in (-1, 1.5, True):
+        with pytest.raises(ContractError):
+            parse(_pose(meas_age_ms=bad))

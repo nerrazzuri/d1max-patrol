@@ -465,11 +465,14 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def relocalized(self, delta: tuple[float, float, float] | None) -> None:
-        """人重新给了位置(W00c6e 内审)。**同步调用,不让出**(在事件循环里,引擎任务正停在某个
-        await 上)。
+    def relocalized(self, delta: tuple[float, float, float] | None, *,
+                    reset_attempts: bool = True) -> None:
+        """人重新给了位置(W00c6e 内审),或定位器跳过之后稳下来了(W09a)。**同步调用,不让出**(在事件
+        循环里,引擎任务正停在某个 await 上)。
 
-        - 丢定位的重置次数从头算:人每次都把位置给回来了,不该累计到第 4 次就中止。
+        - 丢定位的重置次数从头算(``reset_attempts``):人每次都把位置给回来了,不该累计到第 4 次就
+          中止。定位器自己跳、自己稳的**不**从头算(W09a 内审应修 4):来回跳的定位器要到上限中止,
+          不能一直走走停停。
         - 记下的出发点与来路是旧坐标系里的:``delta``(新锚定 ∘ 旧锚定⁻¹)给了就按它挪过去 —— 挪完是
           这条狗
           当时实际走过的地方在新坐标系里的样子;给不出(锚定作废过)就**来路作废**,沿来路回的时候原地停。"""
@@ -477,7 +480,8 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         live = self._live
         if live is None:
             return
-        live.loc_reset_attempts = 0
+        if reset_attempts:
+            live.loc_reset_attempts = 0
         if delta is None:
             if live.trail or live.start_pose is not None:
                 live.trail_invalid = "半路重设过位置,之前记下的来路不在现在的坐标系里"

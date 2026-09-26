@@ -521,6 +521,8 @@ class AgentRuntime:
         if "map_id" in p or "map_version" in p:
             if (p.get("map_id"), p.get("map_version")) != m:
                 return "map_mismatch"
+        if self._running(self._map_job) or self._switching:
+            return "busy: 在换图"                 # 给的是这张图上的位置,换完就作废(W09a 内审应修 2)
         if "at_home" in p:
             if p.get("at_home") is not True:
                 return "payload: at_home 只能是 true"
@@ -621,11 +623,11 @@ class AgentRuntime:
         except OSError as exc:
             return f"read_failed: {exc}"[:200]
 
-    def _loc_corrected(self, delta: tuple[float, float, float] | None) -> None:
-        """定位器跳过之后稳下来、按人给的位置重定位完(W09a):同人工重设(W00c6e),来路、出发点按修正量
-        挪;给不出就来路作废。"""
+    def _loc_corrected(self, delta: tuple[float, float, float] | None, human: bool) -> None:
+        """定位器跳过之后稳下来、重定位完(W09a):同人工重设(W00c6e),来路、出发点按修正量挪;给不出
+        就来路作废。只有人给的位置才把丢定位的次数从头算(内审应修 4)。"""
         if self.parts is not None:
-            self.parts.engine.relocalized(delta)
+            self.parts.engine.relocalized(delta, reset_attempts=human)
 
     async def _loc_health(self) -> Any:
         return self.parts.nav.anchor.health()
