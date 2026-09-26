@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d1max-localizer"
+version = "0.1.0"
+description = "狗上的定位器节点(W09b):MOLA 只定位 + 定位质量,经本机定位桥给代理;另带录包回放工具"
+requires-python = ">=3.10"
+dependencies = ["d1max-contract"]
+
+[project.scripts]
+d1max-localizer = "d1max_localizer.main:main"
+d1max-loc = "d1max_localizer.tools:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
