@@ -47,7 +47,10 @@ class StandbyError(RuntimeError):
 
 
 class StandbyManager:
-    def __init__(self, db: SiteDB, dispatcher: Dispatcher, *, now_ms: Callable[[], int]) -> None:
+    def __init__(self, db: SiteDB, dispatcher: Dispatcher, *, now_ms: Callable[[], int],
+                 refusal: Callable[[str], str] | None = None) -> None:
+        #: 站点这一道关(W00c6i):要人监护的狗没人监护时回理由,自动回待命点不派。
+        self.refusal = refusal
         self.db = db
         self.dispatcher = dispatcher
         self._now = now_ms
@@ -168,7 +171,8 @@ class StandbyManager:
             raise StandbyError(f"直线的狗要沿来路回待命点,取不到 {task_id} 的来路: {exc}") from exc
         return m.waypoints
 
-    async def _return_along(self, robot_id: str, came: tuple[MissionWaypoint, ...]) -> None:
+    async def _return_along(self, robot_id: str, came: tuple[MissionWaypoint, ...]
+                            ) -> dict[str, Any]:
         """回程巡检:来路倒序(只要位姿)+ 待命点;点位失败跳过、不重试。"""
         from d1max_site.dispatcher import MAX_PATROL_WAYPOINTS
         p = self._checked_default(robot_id)
@@ -179,17 +183,24 @@ class StandbyManager:
         wps += (MissionWaypoint(name=f"待命点·{p['name']}", pose=home),)
         mission = Mission(mission=f"回待命点·{p['name']}", map_id=p["map_id"], waypoints=wps,
                           policy=Policy(on_waypoint_failed="skip", waypoint_retry=0))
-        await self.dispatcher.patrol(robot_id, mission.to_wire(), issued_by="standby:auto",
+        return await self.dispatcher.patrol(robot_id, mission.to_wire(), issued_by="standby:auto",
                                      priority=STANDBY_RETURN,
                                      task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
 
     async def _auto(self, robot_id: str, after: str) -> None:
         try:
+            why = self.refusal(robot_id) if self.refusal is not None else ""
+            if why:
+                raise StandbyError(why)             # W00c6i:要人监护的狗没人监护,不自己回
             came = self._route_back(robot_id, after)
             if came is None:
-                await self.return_to(robot_id, issued_by="standby:auto")
+                r = await self.return_to(robot_id, issued_by="standby:auto")
             else:
-                await self._return_along(robot_id, came)
+                r = await self._return_along(robot_id, came)
+            ack = r.get("ack", {}) if isinstance(r, dict) else {}
+            if ack.get("result") not in (None, "accepted", "duplicate"):
+                # 狗拒收(没人监护、忙……)不是异常,以前不推;值守的人要看得见狗没回去(W00c6i 内审)。
+                raise StandbyError(f"狗没收回待命点: {ack.get('reason') or ack.get('result')}")
         except Exception as exc:  # noqa: BLE001 - 回不去:记日志、推给值守的人,下次任务完成再试
             log.warning("%s 在 %s 结束后回待命点没派成: %s", robot_id, after, exc)
             self.dispatcher.feed.publish({"kind": "standby_failed", "robot_id": robot_id,

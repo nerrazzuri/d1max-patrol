@@ -110,6 +110,10 @@ bool robotNeedsSupervision(Map<String, dynamic>? view) {
 String ackReasonText(String reason) => switch (reason) {
       'unsupervised' => '它要人现场监护：先打开「我在现场监护」再派',
       'busy' => '它正忙着别的',
+      'expired' => '命令到狗那儿已经过期了（狗的钟可能不准，或者网络太慢）',
+      'stale_epoch' => '站点和狗的控制代次对不上，刷新一下再试',
+      'stale_seq' => '这是一条迟到的旧心跳，狗没认',
+      'halting' => '它正在叫停，稍后再派',
       _ => reason,
     };
 
@@ -151,8 +155,11 @@ abstract class SiteApi {
   /// 解除叫停（W00c5e）：之后站点才重新给这只狗派单。管理员、保安。
   Future<Map<String, dynamic>> resume(String robotId);
 
-  /// 监护心跳（W00c6i）：[action] 是 `renew`（开着的时候每秒一次）或 `release`。管理员、保安。
-  Future<Map<String, dynamic>> supervise(String robotId, String action);
+  /// 监护心跳（W00c6i）：[action] 是 `renew`（开着的时候每秒一次）或 `release`；[session] 每次打开
+  /// 开关新起一个，[seq] 在会话里单调递增（狗据此不认迟到的旧心跳）。管理员、保安。**短超时**：
+  /// 慢了就当这一次没成，下一次再来。
+  Future<Map<String, dynamic>> supervise(String robotId, String action,
+      {required String session, required int seq});
 
   /// 运行记录（W00c5d，决策 8：证据都在站点）：最近的在前；[robotId] 给了只要这台狗的。
   /// 读不懂就抛 `FormatException`，不当成「没有记录」。
@@ -334,9 +341,9 @@ class SiteClient implements SiteApi {
 
   // ------------------------------------------------------------ 请求
 
-  Future<dynamic> _send(String method, String path, [Object? body]) async {
+  Future<dynamic> _send(String method, String path, [Object? body, Duration? within]) async {
     try {
-      return await _sendRaw(method, path, body).timeout(timeout);
+      return await _sendRaw(method, path, body).timeout(within ?? timeout);
     } on SiteError {
       rethrow;
     } on HandshakeException catch (e) {
@@ -632,9 +639,11 @@ class SiteClient implements SiteApi {
   Future<Map<String, dynamic>> resume(String robotId) async => _map(await _send(
       'POST', '/api/robots/${Uri.encodeComponent(robotId)}/resume', <String, dynamic>{}));
   @override
-  Future<Map<String, dynamic>> supervise(String robotId, String action) async => _map(await _send(
-      'POST', '/api/robots/${Uri.encodeComponent(robotId)}/supervise',
-      <String, dynamic>{'action': action}));
+  Future<Map<String, dynamic>> supervise(String robotId, String action,
+          {required String session, required int seq}) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/supervise',
+          <String, dynamic>{'action': action, 'session': session, 'seq': seq},
+          const Duration(seconds: 3)));
 
   @override
   HttpClient pinnedClient() {

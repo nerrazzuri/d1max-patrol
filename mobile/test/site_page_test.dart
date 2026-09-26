@@ -221,12 +221,18 @@ class FakeApi implements SiteApi {
     calls.add('resume $robotId');
     return <String, dynamic>{'robot_id': robotId, 'was_held': true};
   }
-  /// 监护心跳（W00c6i）。给了就按它回（模拟狗不接），不给回收下。
+  /// 监护心跳（W00c6i）。给了就按它回（模拟狗不接），不给回收下；[superviseGate] 给了就等它
+  /// 完成再回（模拟慢网）；[superviseSeqs] 记下每次的（动作、会话、序号）。
   Map<String, dynamic>? superviseAck;
   SiteError? superviseError;
+  Completer<void>? superviseGate;
+  final List<(String, String, int)> superviseSeqs = <(String, String, int)>[];
   @override
-  Future<Map<String, dynamic>> supervise(String robotId, String action) async {
+  Future<Map<String, dynamic>> supervise(String robotId, String action,
+      {required String session, required int seq}) async {
     calls.add('supervise $robotId $action');
+    superviseSeqs.add((action, session, seq));
+    if (superviseGate != null && action == 'renew') await superviseGate!.future;
     if (superviseError != null && action == 'renew') throw superviseError!;
     return <String, dynamic>{'robot_id': robotId,
       'ack': superviseAck ?? <String, dynamic>{'result': 'accepted'}};

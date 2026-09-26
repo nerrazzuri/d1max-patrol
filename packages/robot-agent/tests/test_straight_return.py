@@ -102,5 +102,5 @@ async def test_电量到线_引擎沿来路回原点_不走直线(台子):
 def test_能力里报导航走哪种路_直线桥报straight():
     r = SimRobot(now_ms=lambda: 0)
     caps = compose_capabilities(robot_id="A", hal_caps=r.hal_capabilities(), adapter_id="sim",
-                                loaded_map=("m", "1"))
+                                loaded_map=("m", "1"), autonomy="autonomous")
     assert caps.tasks["goto"]["path"] == "straight"

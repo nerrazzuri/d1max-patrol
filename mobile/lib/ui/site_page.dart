@@ -501,7 +501,14 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     final events = (v?['events'] as List? ?? const []).whereType<Map>().toList();
     return Scaffold(
       appBar: AppBar(title: Text(widget.robotId)),
-      body: RefreshIndicator(
+      // 「我在现场监护」钉在列表外面（W00c6i 内审）：放在按需构建的列表里，上面插一行提示或者往下一翻，
+      // 它的状态就被换掉、发出放租 —— 刚派出去的任务随即被中止。
+      body: Column(children: [
+        if ((s?.canDispatch ?? false) && robotNeedsSupervision(v))
+          SupervisionSwitch(
+              key: ValueKey('supervise-${widget.robotId}'), api: widget.api, robotId: widget.robotId),
+        Expanded(
+          child: RefreshIndicator(
         onRefresh: _reload,
         child: ListView(padding: const EdgeInsets.all(12), children: [
           Text(v == null ? '加载中…' : _statusLine(v), key: const Key('robot-status')),
@@ -522,9 +529,6 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
               ),
             ),
           if (_msg != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_msg!)),
-          // 过渡期要人现场监护的狗（W00c6i）：能派单的人才有这个开关。
-          if ((s?.canDispatch ?? false) && robotNeedsSupervision(v))
-            SupervisionSwitch(api: widget.api, robotId: widget.robotId),
           const SizedBox(height: 12),
           Wrap(spacing: 8, runSpacing: 8, children: [
             if (s?.canDispatch ?? false)
@@ -569,7 +573,9 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           for (final e in events.take(30))
             ListTile(dense: true, title: Text('${e['kind']}'), subtitle: Text('${e['data']}')),
         ]),
-      ),
+          ),
+        ),
+      ]),
     );
   }
 }

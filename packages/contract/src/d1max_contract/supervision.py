@@ -5,11 +5,13 @@ W11 避障真机验收之前,真狗的自主移动是直线、拿运控里程当
 
 - **自主级别**:代理在能力里报 ``tasks.goto.autonomy`` / ``tasks.patrol.autonomy``,
   ``supervised``(要人监护)或 ``autonomous``(可自主)。站点读不到一律按 ``supervised`` 算。
-- **监护租约**:手机上「我在现场监护」开着时每 1 s 心跳一次,站点转成一条**有效期很短**的
-  ``supervise`` 命令(``cmd`` 主题,不是任务):``{"action": "renew"|"release", "ttl_ms",
-  "operator"}``。代理按收到时刻 + ``ttl_ms``(单调钟)记「监护到什么时候」;``supervised``
-  级别下,没人监护就不收 ``goto``/``patrol``、跑着的时候监护过期就当场中止。命令本身过期代理
-  照规矩拒收 —— 断线重连补投的旧心跳续不上租约。
+- **监护租约**:手机上「我在现场监护」开着时每 1 s 心跳一次,站点转成一条 ``supervise`` 命令
+  (``cmd`` 主题,不是任务):``{"action": "renew"|"release", "ttl_ms", "operator", "session",
+  "seq"}``。代理按**收到时刻** + ``ttl_ms``(单调钟)记「这个会话监护到什么时候」;``supervised``
+  级别下,没有一个会话在监护就不收 ``goto``/``patrol``、跑着的时候监护过期就当场中止。
+- **防补投、防迟到**(W00c6i 内审):命令本身的有效期放宽(站点 30 s,同遥控续租 —— 按狗的墙钟判,
+  Orin 的钟不准);旧心跳靠**会话号 + 序号**挡:同一会话里序号不比见过的大的一律不认(断线补投的、
+  手机到站点这一段迟到的,都比放租那一条小)。会话号每次打开开关新起一个,谁放只放自己那个会话。
 """
 
 from __future__ import annotations
@@ -35,9 +37,13 @@ class Supervise:
     action: str
     ttl_ms: int
     operator: str
+    #: 手机每次打开开关新起的会话号(≤64 字);序号在会话里单调递增(≥1)。
+    session: str
+    seq: int
 
     def to_payload(self) -> dict[str, Any]:
-        return {"action": self.action, "ttl_ms": self.ttl_ms, "operator": self.operator}
+        return {"action": self.action, "ttl_ms": self.ttl_ms, "operator": self.operator,
+                "session": self.session, "seq": self.seq}
 
 
 def parse_supervise(payload: Any) -> Supervise:
@@ -55,7 +61,13 @@ def parse_supervise(payload: Any) -> Supervise:
     operator = payload.get("operator", "")
     if not isinstance(operator, str) or len(operator) > 64:
         raise ContractError("supervise: operator 要是 ≤64 字的字符串")
-    return Supervise(action=action, ttl_ms=ttl, operator=operator)
+    session = payload.get("session")
+    if not isinstance(session, str) or not 1 <= len(session) <= 64:
+        raise ContractError("supervise: session 要是 1–64 字的字符串")
+    seq = payload.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+        raise ContractError("supervise: seq 要是 ≥1 的整数")
+    return Supervise(action=action, ttl_ms=ttl, operator=operator, session=session, seq=seq)
 
 
 def autonomy_of(task_caps: dict[str, Any] | None) -> str:

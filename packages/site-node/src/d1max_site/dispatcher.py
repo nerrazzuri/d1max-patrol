@@ -461,10 +461,11 @@ class Dispatcher:
         return await c.send(cmd, timeout_s=timeout_s)
 
     async def supervise(self, robot_id: str, sup: Any, *, timeout_s: float) -> Ack:
-        """监护心跳(W00c6i):续或放。不是任务;每秒一条,不进账、不推 SSE。命令的有效期就是租约的
-        有效期 —— 晚到的心跳狗照规矩拒收,断线重连补投的旧心跳续不上租约。"""
+        """监护心跳(W00c6i):续或放。不是任务;每秒一条,不进账、不推 SSE。命令有效期放宽到 30 s
+        (同遥控续租:狗按自己的墙钟判,Orin 的钟不准);租约本身 3 s 由狗按收到时刻计,补投的、
+        迟到的旧心跳靠会话号 + 序号挡(W00c6i 内审)。"""
         c = self._client_for(robot_id)
-        cmd = c.new_command("supervise", sup.to_payload(), ttl_ms=sup.ttl_ms,
+        cmd = c.new_command("supervise", sup.to_payload(), ttl_ms=VIDEO_COMMAND_TTL_MS,
                             control_epoch=self.registry.control_epoch(robot_id),
                             task_id=f"supervise-{robot_id}", priority=0)
         return await c.send(cmd, timeout_s=timeout_s)

@@ -80,10 +80,11 @@ D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 0.4, "radps_pe
 
 
 def resolve_autonomy(args: argparse.Namespace) -> str:
-    """自主级别(W00c6i):显式给了就用它;没给的话真狗(``--hal d1max``)要人监护,仿真可自主。"""
+    """自主级别(W00c6i):显式给了就用它;没给的话**只有仿真**可自主,别的适配器一律要人监护
+    (内审:默认偏收紧,以后加的品牌也不例外)。"""
     if args.autonomy is not None:
         return args.autonomy
-    return "supervised" if args.hal == "d1max" else "autonomous"
+    return "autonomous" if args.hal == "sim" else "supervised"
 
 
 def build_parser() -> argparse.ArgumentParser:

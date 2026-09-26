@@ -235,3 +235,37 @@ async def test_巡检跑完_取不到那一趟的任务定义_不回_推standby_
         got.append(item)
     failed = [i for i in got if i["kind"] == "standby_failed"]
     assert failed and "来路" in failed[-1]["reason"]
+
+
+async def test_要人监护的狗没人监护_不自动回待命点_推standby_failed(站):
+    """W00c6i:站点这一道关也管巡检/任务后的自动回待命点(回滚到旧版代理时狗自己不查)。"""
+    t = 站
+    t.stb.refusal = lambda rid: f"{rid} 要人现场监护"
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    sub = t.site.feed.subscribe()
+    await t.send(t.site.goto("A", target(0.4), 0.8, issued_by="alice", priority=MANUAL))
+    await t.run(200)
+    assert len(_cmds(t, "goto")) == 1, "不自动回"
+    got = []
+    while (item := sub.get(0)) is not None:
+        got.append(item)
+    failed = [i for i in got if i["kind"] == "standby_failed"]
+    assert failed and "监护" in failed[-1]["reason"]
+
+
+async def test_狗拒收回待命点_推standby_failed(站, monkeypatch):
+    """以前 ``_auto`` 只在出异常时推 ``standby_failed``;狗拒收(回执不是收下)是正常返回,没人知道。"""
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+
+    async def 拒(*a, **k):
+        return {"ack": {"result": "rejected", "reason": "unsupervised"}}
+    monkeypatch.setattr(t.stb, "return_to", 拒)
+    sub = t.site.feed.subscribe()
+    await t.send(t.site.goto("A", target(0.4), 0.8, issued_by="alice", priority=MANUAL))
+    await t.run(200)
+    got = []
+    while (item := sub.get(0)) is not None:
+        got.append(item)
+    failed = [i for i in got if i["kind"] == "standby_failed"]
+    assert failed and "unsupervised" in failed[-1]["reason"]

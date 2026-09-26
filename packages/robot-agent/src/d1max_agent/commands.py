@@ -156,6 +156,15 @@ class CommandProcessor:
             self.control_epoch = cmd.control_epoch
             self._save_epoch()
 
+        if cmd.kind == "supervise":
+            # 监护心跳每秒一条(W00c6i):不进幂等记录(同 teleop_lease),过期的也不记。
+            if cmd.expires_at <= now:
+                return Ack(cmd.command_id, cmd.task_id, AckResult.EXPIRED)
+            if self.supervise_hook is None:
+                return self._rej(cmd, "unsupported")
+            reason = self.supervise_hook(cmd)
+            return (self._rej(cmd, reason) if reason
+                    else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED))
         if cmd.expires_at <= now:
             return self._finish(Ack(cmd.command_id, cmd.task_id, AckResult.EXPIRED))
 
@@ -169,13 +178,6 @@ class CommandProcessor:
         if cmd.kind == "teleop_lease":
             # 续租每秒一条:不进幂等记录(同 video)。
             return self._handle_teleop_lease(cmd)
-        if cmd.kind == "supervise":
-            # 监护心跳每秒一条(W00c6i):不进幂等记录(同 teleop_lease)。
-            if self.supervise_hook is None:
-                return self._finish(self._rej(cmd, "unsupported"))
-            reason = self.supervise_hook(cmd)
-            return (self._rej(cmd, reason) if reason
-                    else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED))
         seen = self.idem.lookup(cmd.command_id)
         if seen is not None:
             return Ack(cmd.command_id, cmd.task_id, AckResult.DUPLICATE, original=seen.to_wire())
@@ -401,7 +403,8 @@ class CommandProcessor:
             self.events.emit("task_aborted", {"task_id": t.task_id, "reason": reason})
             n += 1
         cur = self.current
-        if cur is not None and not cur.done and cur.kind in kinds \
+        # 已经在中止的(叫停、抢占)不再请求一次:不改写它的中止原因(W00c6i 内审)。
+        if cur is not None and not cur.done and cur.kind in kinds and not cur.aborting \
                 and cur.task_id not in self._abort_requested:
             self._abort_requested.add(cur.task_id)
             await cur.abort(reason)
@@ -428,6 +431,7 @@ class CommandProcessor:
                 self.ledger.release(cur.task_id)
                 self.finished.append(cur)
                 self.current = None
+                self._abort_requested.discard(cur.task_id)
                 self.events.emit(_event_for(cur.state),
                                  {"task_id": cur.task_id, **cur.detail})
         while self.current is None and self.pending and self._fence is None:

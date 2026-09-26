@@ -28,6 +28,11 @@ class Task:
     def done(self) -> bool:
         return self.state in TERMINAL
 
+    @property
+    def aborting(self) -> bool:
+        """已经请求过中止、还没进终态(子类据实回答;默认不知道就当没有)。"""
+        return False
+
     async def start(self) -> None:
         self.state = TaskState.RUNNING
 

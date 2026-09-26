@@ -328,7 +328,12 @@ class Server:
         from d1max_site.scheduler import SiteScheduler
         self.scheduler = SiteScheduler(self.db, self.dispatcher, now_ms=wall_ms)
         from d1max_site.standby import StandbyManager
-        self.standby = StandbyManager(self.db, self.dispatcher, now_ms=wall_ms)
+
+        # 监护台(W00c6i)一个,接口和待命点管理器共用:站点这一道关要看得见谁在监护。
+        from d1max_site.supervision import SupervisionDesk
+        self.supervision = SupervisionDesk(self.dispatcher, self.loop, now_ms=wall_ms)
+        self.standby = StandbyManager(self.db, self.dispatcher, now_ms=wall_ms,
+                                      refusal=self.supervision.refusal)
         from d1max_site.incidents import IncidentDesk
         self.incidents = IncidentDesk(self.db, self.dispatcher, now_ms=wall_ms)
         # W00c5a:告警台挂上派遣器(状态、事件、遥测),经 SSE 推给值守屏。
@@ -386,7 +391,8 @@ class Server:
                            scheduler=self.scheduler, standby=self.standby,
                            incidents=self.incidents, alerts=self.alerts, video=self.video,
                            teleop=self.teleop, runs=self.runs, backup=self.backup,
-                           maps=self.maps, releases=self.releases, now_ms=wall_ms)
+                           maps=self.maps, releases=self.releases,
+                           supervision=self.supervision, now_ms=wall_ms)
         self.teleop.audit = self.api.audit
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,

@@ -60,6 +60,10 @@ class EngineMissionTask(Task):
     def _mission(self) -> Mission:
         raise NotImplementedError
 
+    @property
+    def aborting(self) -> bool:
+        return self._abort_reason is not None and not self.done
+
     async def _progress(self) -> dict | None:
         """每拍的进度;返回终态 detail 里要带的东西(goto 带 distance_m)。"""
         return None

@@ -1,5 +1,7 @@
 // 「我在现场监护」（W00c6i）：只对要人监护的狗、只给能派单的人；开着每秒续、关掉放、离开页面放、
 // 切后台放；续不上、狗不接就说清楚、自己关掉；派单被 unsupervised 拒时说人话。
+import 'dart:async';
+
 import 'package:d1max_patrol/net/site_client.dart' show SiteError;
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_supervise.dart';
@@ -93,22 +95,72 @@ void main() {
     await t.pumpWidget(Container());
   });
 
-  testWidgets('续不上、狗不接：自己关掉、说清楚', (t) async {
+  testWidgets('续不上一次不关、连续两次才关；狗不接也一样', (t) async {
     final api = FakeApi('guard', robotView: _view('supervised'))
       ..superviseError = SiteError(504, '等狗的回执超时');
     await _open(t, api);
     await t.tap(find.byKey(SupervisionSwitch.switchKey));
     await t.pump();
     await t.pump();
+    expect(find.text('监护中'), findsOneWidget, reason: '丢一次还在');
+    expect(find.textContaining('再试一次'), findsWidgets);
+    await t.pump(const Duration(seconds: 1));
+    await t.pump();
     expect(find.textContaining('监护续不上'), findsOneWidget);
-    expect(find.text('我在现场监护'), findsOneWidget);
+    expect(find.text('我在现场监护'), findsOneWidget, reason: '连续两次才关');
     final api2 = FakeApi('guard', robotView: _view('supervised'))
       ..superviseAck = <String, dynamic>{'result': 'rejected', 'reason': 'unsupported'};
     await _open(t, api2);
     await t.tap(find.byKey(SupervisionSwitch.switchKey));
     await t.pump();
+    await t.pump(const Duration(seconds: 1));
     await t.pump();
     expect(find.textContaining('狗没接监护'), findsOneWidget);
+    expect(find.text('我在现场监护'), findsOneWidget);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('开着监护派单：开关不掉、不放租（以前提示文字一插进来开关就被换掉、发出放租）', (t) async {
+    final api = FakeApi('guard', robotView: _view('supervised'));
+    await _open(t, api);
+    await t.tap(find.byKey(SupervisionSwitch.switchKey));
+    await t.pump();
+    await t.tap(find.byKey(const Key('btn-standby')));
+    await t.pump();
+    await t.pump();
+    expect(find.text('监护中'), findsOneWidget);
+    expect(_count(api, 'release'), 0);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('同一时间只有一条心跳在路上；会话里序号递增、放租序号最大', (t) async {
+    final api = FakeApi('guard', robotView: _view('supervised'))..superviseGate = Completer<void>();
+    await _open(t, api);
+    await t.tap(find.byKey(SupervisionSwitch.switchKey));
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 3100));
+    expect(_count(api, 'renew'), 1, reason: '上一条还在路上，不叠');
+    api.superviseGate!.complete();
+    await t.pump();
+    await t.pump(const Duration(seconds: 1));
+    expect(_count(api, 'renew'), 2);
+    await t.tap(find.byKey(SupervisionSwitch.switchKey));
+    await t.pump();
+    final seqs = api.superviseSeqs;
+    expect(seqs.map((e) => e.$2).toSet().length, 1, reason: '同一个会话');
+    expect(seqs.map((e) => e.$3).toList(), <int>[1, 2, 3], reason: '序号递增、放租最大');
+    expect(seqs.last.$1, 'release');
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('能力里读不到级别：按要人监护显示开关', (t) async {
+    final v = _view('supervised');
+    final tasks = (v['capabilities'] as Map<String, dynamic>)['tasks'] as Map<String, dynamic>;
+    for (final k in const ['goto', 'patrol']) {
+      (tasks[k] as Map<String, dynamic>).remove('autonomy');
+    }
+    await _open(t, FakeApi('guard', robotView: v));
+    expect(find.byKey(SupervisionSwitch.switchKey), findsOneWidget);
     await t.pumpWidget(Container());
   });
 

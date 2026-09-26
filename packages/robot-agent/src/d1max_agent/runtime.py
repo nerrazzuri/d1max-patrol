@@ -80,6 +80,8 @@ BATTERY_FLOOR_PCT = 15.0
 
 #: 要人监护(W00c6i)时,只有这几种任务受监护租约约束(遥控、叫停、换图、发布照常)。
 _AUTONOMOUS_KINDS = frozenset({"goto", "patrol"})
+#: 放了、过期的监护会话留多久(秒):挡同一会话里迟到的旧心跳(站点的命令有效期 30 s,再多留一点)。
+_SESSION_MEMORY_S = 60.0
 
 
 def _dumps(d: dict) -> bytes:
@@ -95,7 +97,7 @@ class AgentRuntime:
                  monotonic: Callable[[], float] | None = None, video: Any = None,
                  storage_facts: Callable[[], StorageFacts | None] | None = None,
                  maps: Any = None, mapper: Any = None, releases: Any = None,
-                 autonomy: str = "autonomous") -> None:
+                 autonomy: str | None = None) -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -125,12 +127,17 @@ class AgentRuntime:
         #: halt(W00c5c)当场停车;W00c6a 起先撤导航桥的目标再停 HAL,不依赖引擎。
         self.processor.halt_hook = self._stop_motion
         #: 自主级别(W00c6i):``supervised`` 下 goto/巡检只在有人现场监护时才收,监护过期当场中止。
+        if autonomy is None:
+            # 没给就按适配器定(W00c6i 内审:默认偏收紧):只有仿真可自主,别的一律要人监护。
+            autonomy = "autonomous" if self.adapter_id.split("/")[0] == "sim" else "supervised"
         if autonomy not in ("supervised", "autonomous"):
             raise ValueError(f"autonomy 要是 supervised 或 autonomous,给的是 {autonomy!r}")
         self.autonomy = autonomy
-        #: 监护到什么时候(单调钟,秒);``None`` = 没人监护。
-        self._supervised_until: float | None = None
-        self._supervisor = ""
+        #: 监护会话(W00c6i 内审:多人各自续、各自放):会话号 → (谁, 见过的最大序号, 监护到什么时候,
+        #: 这条记录留到什么时候)。时刻都是单调钟秒。放了的会话留一阵(挡同一会话迟到的旧心跳)。
+        self._sessions: dict[str, tuple[str, int, float, float]] = {}
+        #: 这一次「没人监护」已经停过车了(不每拍都停一次)。
+        self._lapse_stopped = False
         self.processor.supervise_hook = self._supervise
         log.info("自主级别: %s%s", autonomy,
                  "(goto/巡检只在有人现场监护时才收)" if autonomy == "supervised" else "")
@@ -705,32 +712,49 @@ class AgentRuntime:
     # ------------------------------------------------------------ 监护(W00c6i)
 
     def _supervise(self, cmd: Command) -> str:
-        """监护心跳:续(收到时刻 + ``ttl_ms``,单调钟)或放。命令本身过期的,处理器已经拒了。"""
+        """监护心跳:续(收到时刻 + ``ttl_ms``,单调钟)或放。**按会话**记:多人各自续、各自放;同一会话
+        里序号不比见过的大的一律不认(断线补投的、手机到站点这一段迟到的旧心跳)。"""
         try:
             sup = parse_supervise(cmd.payload)
         except ContractError as exc:
             return f"payload: {exc}"
+        now = self._mono()
+        self._sessions = {k: v for k, v in self._sessions.items() if v[3] > now}
+        prev = self._sessions.get(sup.session)
+        if prev is not None and sup.seq <= prev[1]:
+            return "stale_seq"
+        # 放了的、过期的会话留 ``_SESSION_MEMORY_S``,挡同一会话里迟到的旧心跳
+        # (站点的命令有效期 30 s)。
         if sup.action == "renew":
             if not self._supervised_now():
-                log.info("有人现场监护了:%s", sup.operator or cmd.task_id)
-            self._supervised_until = self._mono() + sup.ttl_ms / 1000
-            self._supervisor = sup.operator
+                log.info("有人现场监护了:%s", sup.operator or sup.session)
+            until = now + sup.ttl_ms / 1000
+            self._sessions[sup.session] = (sup.operator, sup.seq, until, until + _SESSION_MEMORY_S)
         else:
-            if self._supervised_now():
-                log.info("监护放了:%s", sup.operator or self._supervisor)
-            self._supervised_until = None
+            log.info("监护放了:%s", sup.operator or sup.session)
+            self._sessions[sup.session] = (sup.operator, sup.seq, 0.0, now + _SESSION_MEMORY_S)
         return ""
 
     def _supervised_now(self) -> bool:
-        until = self._supervised_until
-        return until is not None and self._mono() < until
+        now = self._mono()
+        return any(v[2] > now for v in self._sessions.values())
 
     async def _enforce_supervision(self) -> None:
-        """``supervised`` 级别下没人监护了:当场中止 goto/巡检(排队的一起清掉),走停车确认。"""
+        """``supervised`` 级别下没人监护了:当场中止 goto/巡检(排队的一起清掉),**再停车**
+        (W00c6i 内审:顺序同叫停 —— 中止请求先进引擎队列;停车不依赖引擎,引擎卡住也停得住)。"""
         if self.autonomy != "supervised" or self._supervised_now():
+            self._lapse_stopped = False
             return
+        cur = self.processor.current
+        moving = cur is not None and not cur.done and cur.kind in _AUTONOMOUS_KINDS
         if await self.processor.abort_kinds(_AUTONOMOUS_KINDS, "supervision_lost"):
             log.warning("监护过期或放了,中止 goto/巡检")
+        if moving and not self._lapse_stopped:
+            self._lapse_stopped = True
+            try:
+                await self._stop_motion()
+            except Exception:
+                log.exception("监护过期时停车失败(任务照样中止)")
 
     async def _stop_motion(self) -> None:
         """叫停(W00c6a):**先撤导航桥的目标**(桥进 Cancelled、从这一拍起不再发速度),再停 HAL。

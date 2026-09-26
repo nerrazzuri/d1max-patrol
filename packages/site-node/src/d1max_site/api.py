@@ -115,7 +115,7 @@ class SiteApi:
                  scheduler: Any = None, standby: Any = None, incidents: Any = None,
                  alerts: Any = None, video: Any = None, teleop: Any = None,
                  runs: Any = None, backup: Any = None, maps: Any = None,
-                 releases: Any = None,
+                 releases: Any = None, supervision: Any = None,
                  now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
@@ -139,9 +139,10 @@ class SiteApi:
         #: W00c5d 第三部分:发布目录。
         self.releases = releases
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
-        #: 监护心跳(W00c6i):只是转发,没有要配的,自己建一个。
+        #: 监护心跳(W00c6i):站点主程序会传同一个给待命点管理器;不传就自己建一个(测试)。
         from d1max_site.supervision import SupervisionDesk
-        self.supervision = SupervisionDesk(dispatcher, loop, now_ms=self._now)
+        self.supervision = supervision if supervision is not None else \
+            SupervisionDesk(dispatcher, loop, now_ms=self._now)
         self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
         self._stopping = threading.Event()
         api = self
@@ -447,6 +448,11 @@ class _Handler(TlsHandlerMixin):
         if method != "POST":
             raise HttpError(405, "只支持 POST")
         d = self._body()
+        if action in ("goto", "patrol"):
+            # 站点这一道关(W00c6i 内审):要人监护的狗没人监护就不派 —— 回滚到旧版代理时狗自己不查。
+            why = self.site.supervision.refusal(robot_id)
+            if why:
+                raise HttpError(409, why)
         if action == "goto":
             speed = d.get("max_speed_mps")
             if speed is not None and (isinstance(speed, bool)
@@ -485,6 +491,9 @@ class _Handler(TlsHandlerMixin):
         if action == "standby/return":
             if method != "POST":
                 raise HttpError(405, "只支持 POST")
+            why = self.site.supervision.refusal(robot_id)
+            if why:
+                raise HttpError(409, why)
             result = self.site.dispatch(lambda: stb.return_to(robot_id, issued_by=str(user)))
             return self._send_json(200, result)
         if method == "GET":
@@ -663,18 +672,23 @@ class _Handler(TlsHandlerMixin):
         action = d.get("action") if isinstance(d, dict) else None
         if action not in ("renew", "release"):
             raise HttpError(400, "action 要是 renew 或 release")
+        session, seq = d.get("session"), d.get("seq")
+        if not isinstance(session, str) or not 1 <= len(session) <= 64:
+            raise HttpError(400, "要 session(1–64 字)")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+            raise HttpError(400, "要 seq(≥1 的整数)")
         self._audit_target = robot_id
         if self.site.dispatcher.registry.get(robot_id) is None:
             raise HttpError(404, "没有这台狗")
         desk = self.site.supervision
         try:
             if action == "renew":
-                ack, started = desk.renew(robot_id, str(user))
+                ack, started = desk.renew(robot_id, str(user), session, seq)
                 self._skip_audit = not started
-                self._audit_detail = {"supervise": "start"} if started else {}
+                self._audit_detail = {"supervise": "start", "session": session} if started else {}
             else:
-                ack = desk.release(robot_id, str(user))
-                self._audit_detail = {"supervise": "stop"}
+                ack = desk.release(robot_id, str(user), session, seq)
+                self._audit_detail = {"supervise": "stop", "session": session}
         except DispatchRefused as exc:
             raise HttpError(409, str(exc)) from exc
         except (DispatchTimeout, TimeoutError, FutureTimeout) as exc:

@@ -85,8 +85,17 @@ def _goto(x, cid, c):
                          "max_speed_mps": 0.8}, cid, c)
 
 
-def _监护(action, cid, c, *, ttl_ms=3000, cmd_ttl_ms=3000):
-    return _cmd("supervise", {"action": action, "ttl_ms": ttl_ms, "operator": "gina"}, cid, c,
+_序号 = {"n": 0}
+
+
+def _监护(action, cid, c, *, ttl_ms=3000, cmd_ttl_ms=30_000, session="s-gina", operator="gina",
+        seq=None):
+    """一条监护心跳。序号默认自增(同一会话里单调递增,跟手机一样)。"""
+    if seq is None:
+        _序号["n"] += 1
+        seq = _序号["n"]
+    return _cmd("supervise", {"action": action, "ttl_ms": ttl_ms, "operator": operator,
+                              "session": session, "seq": seq}, cid, c,
                 ttl_ms=cmd_ttl_ms, task_id="supervise-r")
 
 
@@ -184,9 +193,14 @@ async def test_放租立刻生效_跑着的当场中止(监护台):
 
 async def test_监护载荷不对就拒(监护台):
     broker, c, r, ears, rt, site = 监护台
-    await _发(site, broker, _cmd("supervise", {"action": "forever"}, "s1", c, ttl_ms=3000))
-    a = _回执(ears, "s1")
-    assert a["result"] != "accepted" and a["reason"].startswith("payload")
+    for i, bad in enumerate([{"action": "forever"},
+                             {"action": "renew", "ttl_ms": 3_600_000, "session": "x", "seq": 1},
+                             {"action": "renew", "operator": "g" * 65, "session": "x", "seq": 1},
+                             {"action": "renew", "session": "", "seq": 1},
+                             {"action": "renew", "session": "x", "seq": 0}]):
+        await _发(site, broker, _cmd("supervise", bad, f"b{i}", c, ttl_ms=3000))
+        a = _回执(ears, f"b{i}")
+        assert a["result"] != "accepted" and a["reason"].startswith("payload"), (bad, a)
 
 
 async def test_要人监护_叫停照收(监护台):
@@ -227,3 +241,95 @@ async def test_监护心跳不进幂等记录(监护台):
     for i in range(5):
         await _发(site, broker, _监护("renew", f"s{i}", c))
     assert all(rt.idem.lookup(f"s{i}") is None for i in range(5))
+
+
+
+async def test_多人监护_一个人放了_另一个人还在续就照跑(监护台):
+    """W00c6i 内审:以前只记一个「监护到什么时候」,谁放都清空。"""
+    broker, c, r, ears, rt, site = 监护台
+    await _发(site, broker, _监护("renew", "a1", c, session="s-gina"))
+    await _发(site, broker, _监护("renew", "b1", c, session="s-bob", operator="bob"))
+    await _发(site, broker, _goto(20.0, "g1", c))
+    assert _回执(ears, "g1")["result"] == "accepted"
+    await _发(site, broker, _监护("release", "a2", c, session="s-gina"))
+    await _跑(rt, r, c, broker, 2)                     # bob 这两拍不续:他上一次续的还在有效期里
+    for i in range(30):
+        if i % 10 == 0:
+            await _发(site, broker, _监护("renew", f"b{i + 2}", c, session="s-bob", operator="bob"))
+        await _跑(rt, r, c, broker, 1)
+    assert not [e for e in ears.by.get("event", []) if e["kind"] == "task_aborted"]
+
+
+async def test_同一会话序号不增的心跳不认_迟到的旧续约续不上(监护台):
+    """放租之后才到的旧续约(手机到站点慢网,或断线补投):序号比放租那一条小,不认。"""
+    broker, c, r, ears, rt, site = 监护台
+    await _发(site, broker, _监护("renew", "s1", c, seq=5))
+    await _发(site, broker, _监护("release", "s2", c, seq=6))
+    await _发(site, broker, _监护("renew", "s3", c, seq=4))
+    assert _回执(ears, "s3")["reason"] == "stale_seq"
+    await _发(site, broker, _goto(5.0, "g1", c))
+    assert _回执(ears, "g1")["reason"] == "unsupervised"
+
+
+async def test_狗的墙钟不准_监护照样能用_租约按单调钟(监护台):
+    """命令有效期按狗的墙钟判(站点给 30 s,同遥控续租);租约按收到时刻 + 3 s 的单调钟。"""
+    broker, c, r, ears, rt, site = 监护台
+    beat = _监护("renew", "s1", c)
+    c.ms += 5_000                                     # 狗的墙钟比站点快 5 s(单调钟不动)
+    await _发(site, broker, beat)
+    assert _回执(ears, "s1")["result"] == "accepted"
+    c.ms += 3_600_000                                 # 墙钟再往后跳一小时:租约不受影响
+    await _发(site, broker, _goto(5.0, "g1", c))
+    assert _回执(ears, "g1")["result"] == "accepted"
+
+
+async def test_要人监护_遥控不受监护约束(监护台):
+    from d1max_contract.teleop import teleop_grant_payload
+    broker, c, r, ears, rt, site = 监护台
+    grant = _cmd("teleop", teleop_grant_payload(lease_epoch=1, operator="gina",
+                                                lease_ttl_ms=5000), "t1", c, task_id="teleop-1")
+    grant["priority"] = 100
+    await _发(site, broker, grant)
+    assert _回执(ears, "t1")["result"] == "accepted", _回执(ears, "t1")
+
+
+async def test_引擎卡住时监护过期_照样停得住(监护台):
+    """W00c6i 内审阻断 2:以前监护过期只请求引擎中止,引擎卡住(活着但不读命令)时狗照样往前走。"""
+    broker, c, r, ears, rt, site = 监护台
+    await _发(site, broker, _监护("renew", "s1", c))
+    await _发(site, broker, _goto(20.0, "g1", c))
+    await _跑(rt, r, c, broker, 10)
+    assert (await r.odometry()).vx > 0.3
+
+    async def 卡住(_timeout):                         # 引擎活着,但再也不取下一个输入
+        await asyncio.Event().wait()
+    rt.parts.engine._next = 卡住
+    rt.parts.engine._queue = asyncio.Queue()           # 手上那一次取数也收不到之后来的东西
+    await _跑(rt, r, c, broker, 35)                   # 3 s 后过期
+    x0 = (await r.odometry()).x
+    await _跑(rt, r, c, broker, 20)
+    o = await r.odometry()
+    assert o.x - x0 < 0.05 and abs(o.vx) < 0.01, f"监护过期后又走了 {o.x - x0:.2f} m"
+
+
+async def test_叫停之后再放监护_中止原因还是叫停(监护台):
+    broker, c, r, ears, rt, site = 监护台
+    await _发(site, broker, _监护("renew", "s1", c))
+    await _发(site, broker, _goto(20.0, "g1", c))
+    await _跑(rt, r, c, broker, 10)
+    await _发(site, broker, _cmd("halt", {"reason": "operator"}, "h1", c))
+    await _发(site, broker, _监护("release", "s2", c))
+    await _跑(rt, r, c, broker, 30)
+    aborted = [e for e in ears.by.get("event", []) if e["kind"] == "task_aborted"]
+    assert aborted and aborted[-1]["data"]["reason"] == "halt"
+
+
+def test_没给级别时_只有仿真可自主(tmp_path):
+    class 别的狗(SimRobot):
+        adapter_id = "acme/1.0"
+    for hal, want in ((SimRobot(now_ms=lambda: 0), "autonomous"),
+                      (别的狗(now_ms=lambda: 0), "supervised")):
+        rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG,
+                          hal=hal, store_dir=tmp_path / want, now_ms=lambda: 0,
+                          loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0))
+        assert rt.autonomy == want

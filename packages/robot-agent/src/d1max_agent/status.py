@@ -28,7 +28,7 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
                          agent_version: str = AGENT_VERSION,
                          extra_tasks: dict[str, dict[str, Any]] | None = None,
                          nav_path: str = "straight",
-                         autonomy: str = "autonomous") -> Capabilities:
+                         autonomy: str) -> Capabilities:
     tasks: dict[str, dict[str, Any]] = {}
     if loaded_map is not None and hal_caps.max_vx > 0:
         # W00c6b:``path`` 报导航走哪种路 —— 直线桥是 ``straight``,规划器上线后(W10)是 ``planned``。
