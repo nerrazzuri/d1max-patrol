@@ -166,3 +166,76 @@ def test_关了之后再写会重新打开文件(archive):
     archive.close()
     archive.append_event("b")
     assert [e["kind"] for e in read_events(archive.path)] == ["a", "b"]
+
+
+# --------------------------------------------------------- 写盘失败(W00c6a)
+#
+# 盘满、eMMC 出错后只读重挂:归档的每一处写都可能抛 OSError。以前一抛就漏进引擎,
+# 兜底路径自己又要写、又抛,引擎任务死掉、快照停在 RUNNING。现在归档自己兜住:记下
+# 第一条错误,事件流、遥测流停写(不交错写出半行),原子写失败不留临时文件。
+
+
+class _坏句柄:
+    def __init__(self):
+        self.writes = 0
+
+    def write(self, _):
+        self.writes += 1
+        raise OSError(28, "No space left on device")
+
+    def flush(self):
+        pass
+
+    def close(self):
+        raise OSError(28, "No space left on device")
+
+
+def test_事件流写失败_不抛_这一趟这条流停写_记下第一条错误(archive):
+    archive.append_event("state", to="RUNNING")
+    bad = _坏句柄()
+    archive._events = bad
+    archive.append_event("nav", waypoint="P1")               # 不抛
+    assert "No space" in archive.error
+    archive.append_event("nav", waypoint="P2")
+    assert bad.writes == 1, "写坏过一次就停写:不往一个写坏了的流里接着写半行"
+    assert [e["kind"] for e in read_events(archive.path)] == ["state"]
+    archive.close()                                           # 关一个坏句柄也不抛
+
+
+def test_状态文件与清单写失败_不抛_不留临时文件_下一次照试(archive, monkeypatch):
+    from d1max_agent.engine import archive as arc
+    real = arc.os.replace
+
+    def 换名失败(src, dst):
+        raise OSError(30, "Read-only file system")
+    monkeypatch.setattr(arc.os, "replace", 换名失败)
+    archive.write_state({"state": "RUNNING"})
+    archive.finish({"state": "DONE"})
+    assert "Read-only" in archive.error
+    assert not list(archive.path.glob("*.tmp")), "临时文件收掉"
+    monkeypatch.setattr(arc.os, "replace", real)
+    archive.write_state({"state": "DONE"})                    # 盘好了:原子写照常
+    assert read_state(archive.path) == {"state": "DONE"}
+
+
+def test_照片写失败_删掉半截_照样抛给引擎(archive, monkeypatch):
+    from pathlib import Path
+    real = Path.write_bytes
+
+    def 写一半就满(self, data):
+        real(self, data[:3])
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(Path, "write_bytes", 写一半就满)
+    with pytest.raises(OSError):
+        archive.save_photo("P1", "front", b"0123456789")
+    monkeypatch.setattr(Path, "write_bytes", real)
+    assert not list((archive.path / "photos").iterdir()), "半截照片不留"
+    assert "No space" in archive.error
+
+
+def test_关一个写坏了的句柄不抛(archive):
+    archive.append_event("state", to="RUNNING")
+    archive._events.close()
+    archive._events = _坏句柄()
+    archive.close()                                           # 收尾不因为关不上而炸
+    assert archive._events is None

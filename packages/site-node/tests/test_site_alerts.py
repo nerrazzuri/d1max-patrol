@@ -370,3 +370,14 @@ def test_开张只读回未解决的与最近的_序号照样接着走(tmp_path)
     nxt = d2.raise_alert(kind="run_done", robot="A", title="新的")
     assert nxt.key == "A/run_done#6", nxt.key
     db.close()
+
+
+def test_狗上归档写不进去_报P1_证据缺了(台):
+    """W00c6a:盘满、只读重挂,那一趟照跑但照片、记录没存下 —— 证据缺了要让人知道。"""
+    from d1max_site.alerts import Level
+    c, db, desk, src, *_ = 台
+    src.on_event("A", _ev("archive_write_failed", task_id="t1",
+                          reason="events.jsonl: [Errno 30] Read-only file system"))
+    [a] = desk.book.all()
+    assert a.kind == "archive_failed" and a.level is Level.P1
+    assert "Read-only" in a.detail and "t1" in a.title

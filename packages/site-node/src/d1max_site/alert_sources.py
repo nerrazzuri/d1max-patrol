@@ -229,6 +229,11 @@ class SiteAlertSources:
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
             self.desk.raise_alert(kind="map_failed", robot=rid, title=f"{what}没成:{which}",
                                   detail=str(d.get("reason", ""))[:300])
+        elif e.kind == "archive_write_failed":
+            # 盘满、只读重挂(W00c6a):那一趟照跑,但照片、记录没存下 —— 证据缺了,多半是盘满或盘坏了。
+            self.desk.raise_alert(kind="archive_failed", robot=rid,
+                                  title=f"狗上这一趟的记录写不进去:{tid}",
+                                  detail=str(d.get("reason", ""))[:300])
         elif e.kind == "patrol_waypoint" and d.get("ok") is False:
             self.desk.raise_alert(kind="stuck", robot=rid, title=f"点位 {d.get('name', '?')} 没到",
                                   detail=str(d.get("note", "")))

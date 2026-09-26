@@ -70,6 +70,8 @@ LEVEL_OF: dict[str, Level] = {
     # 的方向支;而"认不出原因就不报"更坏:没人在的时候中止,狗就在原地站
     # 到天亮,一声不响。
     "run_abort": Level.P1,
+    #: 狗上归档写不进去(W00c6a):那一趟的照片、记录没存下,证据缺了。
+    "archive_failed": Level.P1,
     "fallen": Level.P1,
     "loc_lost_paused": Level.P1,
     "estop_pressed": Level.P1,

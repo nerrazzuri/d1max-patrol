@@ -14,7 +14,16 @@ import pytest
 from d1max_agent.engine.uploader import PutReceipt, SinkError
 from d1max_agent.outbox import Outbox
 
-STAMP = "20260925T010000Z"
+
+def _几小时前(hours: float) -> str:
+    """目录名上的起始时刻。**要相对「现在」算**:发件箱把起始超过 24 小时的一趟当成「没人在写了」
+    (``retention.is_settled``),写死一个日期的话,过了那个时刻一天,「没结束的一趟不删」这几条就
+    自己变红(2026-09-26 撞上过)。"""
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y%m%dT%H%M%SZ")
+
+
+STAMP = _几小时前(2)
 
 
 class 假站点:
@@ -78,7 +87,7 @@ def test_传完而且一趟结束了_狗上就删掉(箱):
 def test_没结束的一趟不删_正在写的那一趟不删(箱):
     box, site, clock = 箱
     run = _一趟(box.root, finished=False)
-    live = _一趟(box.root, stamp="20260925T020000Z")
+    live = _一趟(box.root, stamp=_几小时前(1))
     box.active = lambda: {live}
     _跑到空(box, clock, 5)
     assert run.exists() and live.exists()

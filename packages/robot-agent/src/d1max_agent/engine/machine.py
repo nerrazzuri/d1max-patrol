@@ -448,6 +448,21 @@ class MissionEngine(EventEmitter[RunSnapshot]):
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    @property
+    def archive_error(self) -> str:
+        """这一趟归档第一次写不进去的原因(W00c6a);空串 = 一直写得进去。代理据此报人。"""
+        return self._live.archive.error if self._live is not None else ""
+
+    @property
+    def crash(self) -> str:
+        """引擎任务带着异常结束了的话,是什么异常;否则空串。**正常路径走不到这儿**(收尾一定
+        落成终态),这是给代理看门用的最后一道(W00c6a)。"""
+        t = self._task
+        if t is None or not t.done() or t.cancelled():
+            return ""
+        exc = t.exception()
+        return f"{type(exc).__name__}: {exc}" if exc is not None else ""
+
     def now_ms(self) -> int:
         """引擎这一趟的"现在",Unix epoch 毫秒。**判"挂起多久了"该拿这个去减。**
 
@@ -738,9 +753,14 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             await self._finish()
 
     async def _do_abort(self, reason: str) -> None:
-        """中止 = 停止导航 + 记录 + 告警。**不含任何位移**(主规范 §6.4)。"""
-        await self._transition(RunState.ABORTING, reason)
-        await self._stop_nav_quietly()
+        """中止 = 停止导航 + 记录 + 告警。**不含任何位移**(主规范 §6.4)。
+
+        停导航放在 ``finally``(W00c6a):前面记状态出什么事,导航都要停 —— 以前第一步
+        记 ABORTING 就抛(写盘失败),停导航那一句根本没执行到。"""
+        try:
+            await self._transition(RunState.ABORTING, reason)
+        finally:
+            await self._stop_nav_quietly()
         await self._transition(RunState.ABORTED, reason)
 
     async def _go_home(self, reason: str) -> None:
@@ -877,20 +897,39 @@ class MissionEngine(EventEmitter[RunSnapshot]):
             await self._wait_nav_terminal(self._clock() + RETURN_TIMEOUT_S)
 
     async def _finish(self) -> None:
+        """收尾。**一定走完**(W00c6a):以前这里一抛(写盘失败),``_done.set()`` 走不到,
+        引擎任务带着异常死掉、对外快照停在 RUNNING,代理的任务永远等下去。
+
+        兜底路径自己炸了、走到这儿状态还不是终态:先停导航,再把状态落成 ABORTED(内存里
+        一定落上;广播、记档尽力而为)。"""
         live = self._live
-        if live is not None:
-            succeeded = sum(1 for r in live.results if r.ok)
-            live.archive.finish({
-                "state": self._state.value,
-                "reason": self._snapshot.reason,
-                "succeeded": succeeded,
-                "failed": len(live.results) - succeeded,
-                "total": len(live.mission.waypoints) * live.mission.policy.loops,
-                "results": [r.to_wire() for r in live.results],
-            })
-            live.archive.close()
-        await self._teardown()
-        self._done.set()
+        try:
+            if self._state not in FINAL_STATES:
+                await self._stop_nav_quietly()
+                self._state = RunState.ABORTED
+                self._seen.add(RunState.ABORTED)
+                try:
+                    self._publish("引擎收尾时出错,按中止收尾")
+                except Exception:
+                    log.exception("收尾时广播也失败了")
+            if live is not None:
+                succeeded = sum(1 for r in live.results if r.ok)
+                live.archive.finish({
+                    "state": self._state.value,
+                    "reason": self._snapshot.reason,
+                    "succeeded": succeeded,
+                    "failed": len(live.results) - succeeded,
+                    "total": len(live.mission.waypoints) * live.mission.policy.loops,
+                    "results": [r.to_wire() for r in live.results],
+                })
+                live.archive.close()
+        except Exception:
+            log.exception("引擎收尾出错(状态已落成 %s)", self._state.value)
+        finally:
+            try:
+                await self._teardown()
+            finally:
+                self._done.set()
 
     async def _teardown(self) -> None:
         for task in self._forwarders:
@@ -1068,7 +1107,12 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 frame = await source.grab()
             except MediaError as exc:
                 raise _FailWaypoint(f"{action.camera} 取图失败: {exc}") from exc
-            path = live.archive.save_photo(wp.name, action.camera or "", frame.data)
+            try:
+                path = live.archive.save_photo(wp.name, action.camera or "", frame.data)
+            except OSError as exc:
+                # 盘满、只读重挂(W00c6a):这个点按失败走任务包的策略,不整趟中止 ——
+                # 已经在跑的那一趟不因为盘满而停(storage.py),巡逻本身照样有价值。
+                raise _FailWaypoint(f"照片存不下: {exc}") from exc
             live.photos.append(path.name)
             self._note("photo", waypoint=wp.name, camera=action.camera,
                        file=path.name)

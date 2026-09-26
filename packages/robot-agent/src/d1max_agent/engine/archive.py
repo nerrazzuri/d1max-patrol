@@ -14,11 +14,18 @@
    事件等于没写 —— 而"跑到一半断电了,停在哪个点"恰恰是最需要知道的那次。
 2. ``state.json`` **整个换掉,不就地改**。它每次状态迁移都被重写,就地覆盖
    时断电正好断在中间就留下半个 JSON,读不出来等于没有恢复。
+3. **写失败不往外抛**(W00c6a)。盘满、eMMC 出错后只读重挂,归档的每一处写都可能抛
+   ``OSError``;以前一抛就漏进引擎,兜底路径自己又要写、又抛,引擎任务死掉、快照停在
+   RUNNING。现在:记下第一条错误(:attr:`RunArchive.error`,代理据此报人);事件流、遥测流
+   写坏一次就这一趟停写(不往一个写坏了的流里接着写半行);原子写失败不留临时文件、下一次照试。
+   **照片例外**:存不下照样抛给引擎(先删掉半截文件)——引擎按「这个点失败」处理。
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import os
 import shutil
 from datetime import datetime, timezone
@@ -26,6 +33,8 @@ from pathlib import Path
 from typing import IO, Any
 
 from d1max_agent.engine.mission import Mission
+
+log = logging.getLogger(__name__)
 
 #: 目录名与照片名共用的时间戳格式。UTC,因为跨时区看历史报告时本地时间没意义。
 STAMP_FMT = "%Y%m%dT%H%M%SZ"
@@ -77,6 +86,12 @@ class RunArchive:
         (self._path / "photos").mkdir(exist_ok=True)
         self._events: IO[str] | None = None
         self._telemetry: IO[str] | None = None
+        #: 第一条写失败(``"<文件>: <错误>"``);空串 = 一直写得进去。
+        self.error = ""
+        #: 一共失败了多少次写。
+        self.write_failures = 0
+        #: 写坏过、这一趟不再写的流(文件名)。
+        self._dead: set[str] = set()
 
     @staticmethod
     def _make_dir(root: Path, mission: str, started: datetime, suffix: str = "") -> Path:
@@ -123,19 +138,48 @@ class RunArchive:
         # 正好是"为什么停下来"的那一行。
         handle.flush()
 
+    def _failed(self, what: str, exc: BaseException) -> None:
+        self.write_failures += 1
+        if not self.error:
+            self.error = f"{what}: {exc}"
+            log.warning("归档 %s 写不进去(%s),这一趟的记录不全", self._path, self.error)
+
+    def _append(self, handle_name: str, filename: str, payload: dict[str, Any]) -> None:
+        """一行进流;写失败记账、这条流这一趟停写,不往外抛。"""
+        if filename in self._dead:
+            return
+        try:
+            self._line(handle_name, filename, payload)
+        except OSError as exc:
+            self._dead.add(filename)
+            self._failed(filename, exc)
+            handle = getattr(self, handle_name)
+            setattr(self, handle_name, None)
+            if handle is not None:
+                with contextlib.suppress(OSError):
+                    handle.close()
+
     def append_event(self, kind: str, **fields: Any) -> None:
-        self._line("_events", "events.jsonl",
-                   {"ts_ms": int(_now().timestamp() * 1000), "kind": kind, **fields})
+        self._append("_events", "events.jsonl",
+                     {"ts_ms": int(_now().timestamp() * 1000), "kind": kind, **fields})
 
     def append_telemetry(self, **fields: Any) -> None:
-        self._line("_telemetry", "telemetry.jsonl",
-                   {"ts_ms": int(_now().timestamp() * 1000), **fields})
+        self._append("_telemetry", "telemetry.jsonl",
+                     {"ts_ms": int(_now().timestamp() * 1000), **fields})
+
+    def _atomic(self, path: Path, text: str) -> None:
+        """原子写;失败记账、收掉临时文件,不往外抛(下一次照试)。"""
+        try:
+            _atomic_write(path, text)
+        except OSError as exc:
+            self._failed(path.name, exc)
+            with contextlib.suppress(OSError):
+                path.with_name(path.name + ".tmp").unlink(missing_ok=True)
 
     # ------------------------------------------------------------------- 状态
 
     def write_state(self, state: dict[str, Any]) -> None:
-        _atomic_write(self._path / "state.json",
-                      json.dumps(state, ensure_ascii=False, indent=2))
+        self._atomic(self._path / "state.json", json.dumps(state, ensure_ascii=False, indent=2))
 
     # ------------------------------------------------------------------- 照片
 
@@ -147,8 +191,14 @@ class RunArchive:
     def save_photo(self, waypoint: str, camera: str, data: bytes,
                    at: datetime | None = None) -> Path:
         path = self.photo_path(waypoint, camera, at)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        except OSError as exc:
+            self._failed(path.name, exc)
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)              # 写了半截的不留
+            raise
         return path
 
     # ------------------------------------------------------------- manifest
@@ -161,7 +211,7 @@ class RunArchive:
         (设计 spec §6.1)。指纹里放 SDK 版本 / 协议版本 / 地图 ID,
         让报告能追溯到当时的软件版本。
         """
-        _atomic_write(self._path / "manifest.json", json.dumps({
+        self._atomic(self._path / "manifest.json", json.dumps({
             "mission": self._mission.to_wire(),
             "started_at": _stamp(self._started),
             "fingerprint": fingerprint,
@@ -172,16 +222,21 @@ class RunArchive:
         """收尾:把汇总补进 manifest,保留已有的指纹。"""
         path = self._path / "manifest.json"
         existing: dict[str, Any] = {}
-        if path.exists():
-            existing = json.loads(path.read_text(encoding="utf-8"))
-        self.write_manifest(existing.get("fingerprint", {}), summary)
+        try:
+            if path.exists():
+                existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            self._failed(path.name, exc)
+        self.write_manifest(existing.get("fingerprint", {}) if isinstance(existing, dict) else {},
+                            summary)
 
     def close(self) -> None:
         for name in ("_events", "_telemetry"):
             handle = getattr(self, name)
             if handle is not None:
-                handle.close()
                 setattr(self, name, None)
+                with contextlib.suppress(OSError):
+                    handle.close()
 
 
 # --------------------------------------------------------------------- 读取

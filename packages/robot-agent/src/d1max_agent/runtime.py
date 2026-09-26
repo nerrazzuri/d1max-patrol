@@ -117,8 +117,8 @@ class AgentRuntime:
             task_factory=self._make_task)
         #: 按需推流(W00c5b)。``video_failed`` 进事件簿:断线时留在狗上、重连补投。
         self.video = video
-        #: halt(W00c5c)当场停车。
-        self.processor.halt_hook = hal.stop
+        #: halt(W00c5c)当场停车;W00c6a 起先撤导航桥的目标再停 HAL,不依赖引擎。
+        self.processor.halt_hook = self._stop_motion
         #: 遥控的收帧时刻、帧有效期、租约走单调钟(W00c5c 内部评审):墙钟会被 NTP 往回拨。
         self._mono = monotonic or time.monotonic
         #: 发件箱的盘况(W00c5d):随遥测每 ``STORAGE_EVERY_MS`` 带一次;满了不接巡检。
@@ -659,9 +659,37 @@ class AgentRuntime:
         if cmd.expires_at <= self._now():
             return
         try:
-            await self.hal.stop()
+            await self._stop_motion()
         except Exception:
             log.exception("halt 抢先停车失败,排队那一步还会再停一次")
+        # 当场请求中止当前任务(W00c6a):只停车的话,活着的引擎把导航的 Cancelled 当「这个点没到」,
+        # 0.5 s 后重发这个点,狗又走起来 —— 直到排队的那一步轮到(上行拥堵时好几秒)。中止请求进了
+        # 引擎的队列,重发之前就被处理掉。排队那一步照旧:清待办、中止、回执;这里重复的中止无害
+        # (任务收尾后不再理;引擎开新的一趟会清空队列)。
+        cur = self.processor.current
+        if cur is not None and not cur.done:
+            try:
+                await cur.abort("halt")
+            except Exception:
+                log.exception("halt 抢先中止任务失败,排队那一步还会再中止一次")
+
+    async def _stop_motion(self) -> None:
+        """叫停(W00c6a):**先撤导航桥的目标**(桥进 Cancelled、从这一拍起不再发速度),再停 HAL。
+
+        以前只停 HAL、指望引擎去停导航:引擎死了或卡住时,导航桥还在 ACTIVE,下一拍又发速度
+        (仿真实测:叫停后 5 秒又走了 4 m,回执还是「收下」)。引擎活着时它会收到 Cancelled 和随后
+        排进来的中止命令;重发下一个点之前要先等导航回待命(终态驻留),中止在那之前就处理掉了。
+        停车本身失败照抛(站点回 502)。"""
+        parts = self.parts
+        nav_exc: Exception | None = None
+        if parts is not None:
+            try:
+                await parts.nav.stop()
+            except Exception as exc:  # noqa: BLE001 - 桥停不了也要接着停 HAL,最后再报
+                nav_exc = exc
+        await self.hal.stop()
+        if nav_exc is not None:
+            raise nav_exc
 
     # ------------------------------------------------------------ 每拍
 

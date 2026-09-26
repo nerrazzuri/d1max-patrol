@@ -52,6 +52,8 @@ class EngineMissionTask(Task):
         self._started = False
         self._reported_results = 0
         self._unconfirmed_s = 0.0
+        #: 这一趟的「归档写不进去」报过没有(W00c6a:一趟报一条)。
+        self._archive_reported = False
 
     def _mission(self) -> Mission:
         raise NotImplementedError
@@ -112,9 +114,20 @@ class EngineMissionTask(Task):
         if self.state is not TaskState.RUNNING or not self._started:
             return
         extra = await self._progress()
-        snap = self._parts.engine.snapshot
+        engine = self._parts.engine
+        snap = engine.snapshot
         self._report_waypoints(snap.results)
+        err = engine.archive_error
+        if err and not self._archive_reported:
+            # 盘满、只读重挂(W00c6a):这一趟照跑,但照片、记录没存下 —— 要让人知道,证据缺了。
+            self._archive_reported = True
+            self._events.emit("archive_write_failed", {"task_id": self.task_id,
+                                                       "reason": err[:200]})
         if snap.state not in _TERMINAL:
+            if not engine.running:
+                # 看门的最后一道(W00c6a):引擎任务已经结束、快照却不是终态。正常路径走不到
+                # (收尾一定落成终态);真走到了,不等一个死掉的引擎 —— 停车,按失败收尾。
+                await self._engine_died(engine.crash or "引擎任务已经结束")
             return
         if not await self._parts.hal.stopped():
             self._unconfirmed_s += dt_s              # 引擎收尾了,机器还在制动:等确认
@@ -156,6 +169,15 @@ class EngineMissionTask(Task):
     def _fail(self, reason: str) -> None:
         self.state = TaskState.FAILED
         self.detail = {"reason": reason}
+
+    async def _engine_died(self, why: str) -> None:
+        log.error("任务 %s:引擎任务死了(%s),停车、按失败收尾", self.task_id, why)
+        for stop in (self._parts.nav.stop, self._parts.hal.stop):
+            try:
+                await stop()
+            except Exception:
+                log.exception("引擎死了之后停车失败")
+        self._fail(f"engine_died: {why}"[:200])
 
     def _finish_aborted(self) -> None:
         assert self._abort_reason is not None

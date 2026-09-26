@@ -347,8 +347,20 @@ def test_急停按着不给租约(站点):
 
 
 def test_halt接到了狗的停车上(站点):
+    """halt 的停车挂钩真的停到狗(W00c6a 起它先撤导航桥的目标、再停 HAL,不再直接是 ``dog.stop``)。"""
     s = 站点
-    assert s.agent.processor.halt_hook == s.dog.stop
+    stops = []
+    real = s.dog.stop
+
+    async def 记():
+        stops.append(1)
+        return await real()
+    s.dog.stop = 记
+    try:
+        s.loop.call(s.agent.processor.halt_hook, timeout_s=5)
+    finally:
+        s.dog.stop = real
+    assert stops, "halt 要停到狗"
 
 
 def test_授予命令的有效期很短_halt回执超时回504(站点):
