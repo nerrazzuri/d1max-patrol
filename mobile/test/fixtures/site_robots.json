@@ -30,6 +30,7 @@
           "map_activate": {},
           "map_build": {},
           "mapping": {},
+          "mark_home": {},
           "patrol": {
             "autonomy": "autonomous",
             "map_id": "estate-1",
@@ -50,7 +51,7 @@
           }
         }
       },
-      "expires_at": 1791405094718,
+      "expires_at": 1791407646883,
       "fresh": true,
       "held": null,
       "loc": {
@@ -68,9 +69,9 @@
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-7b60fa0869",
+        "boot_id": "boot-06f6d535cd",
         "control_epoch": 1,
-        "last_seen": 1790405095589,
+        "last_seen": 1790407647711,
         "online": true,
         "ready": {
           "control": true,

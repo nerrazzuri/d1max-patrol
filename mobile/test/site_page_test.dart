@@ -239,6 +239,19 @@ class FakeApi implements SiteApi {
   }
 
   @override
+  Future<Map<String, dynamic>> markHome(String robotId, {String name = ''}) async {
+    calls.add('markHome $robotId${name.isEmpty ? '' : ' $name'}');
+    return <String, dynamic>{
+      'ack': <String, dynamic>{
+        'result': 'accepted',
+        'data': <String, dynamic>{'map_id': 'm', 'map_version': '1', 'x': 1.5, 'y': -2.0,
+          'yaw': 0.0, 'sigma_m': 0.2},
+      },
+      'standby': <String, dynamic>{'name': 'home', 'default': true},
+    };
+  }
+
+  @override
   Future<Map<String, dynamic>> relocalize(String robotId,
       {bool atHome = false, double x = 0, double y = 0, double yaw = 0}) async {
     calls.add(atHome ? 'relocalize $robotId home' : 'relocalize $robotId $x $y $yaw');

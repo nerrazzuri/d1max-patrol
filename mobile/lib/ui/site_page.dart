@@ -485,6 +485,41 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         '设位置');
   }
 
+  /// 在当前位置标原点（W00c6f，管理员）：确认之后狗用它此刻的位置当原点，站点登记成默认待命点。
+  Future<void> _markHome() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('在这儿标原点'),
+        content: Text('把 ${widget.robotId} 在这张图上的默认待命点（原点）换成它现在的位置？\n'
+            '狗会先核定位：没设位置、偏差大就不标。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+          FilledButton(
+              key: const Key('mark-home-go'),
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('标')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    String msg;
+    try {
+      final r = await widget.api.markHome(widget.robotId);
+      final d = (r['ack'] as Map?)?['data'];
+      msg = d is Map
+          ? '原点标好了：(${(d['x'] as num).toStringAsFixed(1)}, ${(d['y'] as num).toStringAsFixed(1)})'
+              '，偏差约 ${(d['sigma_m'] as num? ?? 0).toStringAsFixed(1)} m'
+          : '原点标好了';
+    } on SiteError catch (e) {
+      // 站点回的是「狗没标:<狗的原因>」：原因照拒收那一套说人话。
+      msg = '没标：${ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''))}';
+    }
+    if (!mounted) return;
+    setState(() => _msg = msg);
+    await _reload();
+  }
+
   /// 叫停之前**现取**正在跑的任务：页面上的可能是几秒前的，排程早换了一趟。
   Future<void> _abort() async {
     Map<String, dynamic> v;
@@ -595,6 +630,11 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                   onPressed: () => _do(() => widget.api.mapping(widget.robotId, 'stop'), '停止录包'),
                   child: const Text('停止录包')),
             ],
+            if ((s?.canManageMaps ?? false) && robotCan(v, 'mark_home'))
+              OutlinedButton(
+                  key: const Key('btn-mark-home'),
+                  onPressed: _markHome,
+                  child: const Text('在这儿标原点')),
             if ((s?.canDispatch ?? false) && robotCan(v, 'relocalize'))
               OutlinedButton(
                   key: const Key('btn-relocalize'),

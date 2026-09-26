@@ -66,7 +66,8 @@ async def test_起来就发能力与状态_均retained(台子):
     await rt.start()
     await broker.drain()
     caps = Capabilities.from_wire(ears.by_topic["capabilities"][0])
-    assert caps.robot_id == "r" and list(caps.tasks) == ["goto", "patrol", "teleop", "relocalize"]
+    assert caps.robot_id == "r"
+    assert list(caps.tasks) == ["goto", "patrol", "teleop", "relocalize", "mark_home"]
     hal = r.hal_capabilities()
     assert caps.tasks["teleop"] == {"max_vx": hal.max_vx / 2, "max_wz": hal.max_wz / 2}, \
         "W00c5c:遥控限速是 HAL 能力的一半"

@@ -107,7 +107,16 @@ bool robotNeedsSupervision(Map<String, dynamic>? view) {
 }
 
 /// 狗拒收的原因给人看的话（回执里的 `reason`）。认不出的原样给。
-String ackReasonText(String reason) => switch (reason) {
+String ackReasonText(String reason) {
+  // 定位不够好（W00c6f 标原点）：狗在冒号后面说了为什么。
+  if (reason.startsWith('loc_poor')) {
+    final why = reason.contains(':') ? reason.substring(reason.indexOf(':') + 1).trim() : '';
+    return '定位不够好${why.isEmpty ? '' : '：$why'}';
+  }
+  return _ackReasonText(reason);
+}
+
+String _ackReasonText(String reason) => switch (reason) {
       'unsupervised' => '它要人现场监护：先打开「我在现场监护」再派',
       'busy' => '它正忙着别的',
       'expired' => '命令到狗那儿已经过期了（狗的钟可能不准，或者网络太慢）',
@@ -180,6 +189,10 @@ abstract class SiteApi {
   /// 设位置（W00c6e，里程锚定）：[atHome] 狗在原点；否则 [x]、[y]（米）、[yaw]（弧度），地图坐标。保安、管理员。
   Future<Map<String, dynamic>> relocalize(String robotId,
       {bool atHome = false, double x = 0, double y = 0, double yaw = 0});
+
+  /// 在当前位置标原点（W00c6f，管理员）：狗用它此刻的位置当原点（定位不好就拒），站点登记成默认待命点（名字
+  /// [name]，空就是 `home`）。返回 `{ack, standby}`。
+  Future<Map<String, dynamic>> markHome(String robotId, {String name = ''});
 
   /// 运行记录（W00c5d，决策 8：证据都在站点）：最近的在前；[robotId] 给了只要这台狗的。
   /// 读不懂就抛 `FormatException`，不当成「没有记录」。
@@ -664,6 +677,11 @@ class SiteClient implements SiteApi {
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/supervise',
           <String, dynamic>{'action': action, 'session': session, 'seq': seq},
           const Duration(seconds: 3)));
+
+  @override
+  Future<Map<String, dynamic>> markHome(String robotId, {String name = ''}) async => _map(
+      await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/home/here',
+          <String, dynamic>{if (name.isNotEmpty) 'name': name}));
 
   @override
   Future<Map<String, dynamic>> relocalize(String robotId,

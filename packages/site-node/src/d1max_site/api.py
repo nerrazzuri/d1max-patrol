@@ -78,7 +78,8 @@ ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
-_TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/(teleop|halt|resume|supervise|relocalize)$")
+_TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
+                     r"(teleop|halt|resume|supervise|relocalize|home/here)$")
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
@@ -336,6 +337,8 @@ class _Handler(TlsHandlerMixin):
                     return self._supervise(robot_id, user)
                 if m.group(2) == "relocalize" and method == "POST":
                     return self._relocalize(robot_id, user)
+                if m.group(2) == "home/here" and method == "POST":
+                    return self._mark_home(robot_id, user)
                 if m.group(2) == "teleop" and method == "GET":
                     return self._teleop_ws(robot_id, user)
                 raise HttpError(404, f"没有 {method} {path}")
@@ -694,6 +697,38 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {k: payload[k] for k in ("x", "y", "yaw", "at_home") if k in payload}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, "relocalize", payload, issued_by=str(user))))
+
+    def _mark_home(self, robot_id: str, user) -> None:
+        """在当前位置标原点(W00c6f):发 ``mark_home``,狗用它此刻锚定后的位置、定位不好就拒;站点把回执
+        里的位置登记成这只狗在这张图上的**默认待命点**(站点是权威,之后下发地图、回待命点都用它)。
+        管理员(``manage``,跟下发地图同一级)。狗拒了 409 带原因;狗收下了、站点登记失败 500(说清楚狗上
+        的原点已经换了)。"""
+        from d1max_site.standby import StandbyError
+        self._need(user, MANAGE)
+        self._audit_target = robot_id
+        stb = self.site.standby
+        if stb is None:
+            raise HttpError(404, "这个站点没开待命点")
+        d = self._body()
+        name = d.get("name", "home") if isinstance(d, dict) else "home"
+        if not isinstance(name, str) or not SAFE_ID.match(name):
+            raise HttpError(400, f"名字只许 ASCII 字母、数字、. _ -:{name!r}")
+        r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
+            robot_id, "mark_home", {"name": name}, issued_by=str(user)))
+        ack = r["ack"]
+        if ack.get("result") not in ("accepted", "duplicate"):
+            raise HttpError(409, f"狗没标:{ack.get('reason') or ack.get('result')}")
+        data = ack.get("data") if ack["result"] == "accepted" else \
+            (ack.get("original") or {}).get("data")
+        try:
+            stb.set(robot_id, name, map_id=data["map_id"], map_version=data["map_version"],
+                    x=data["x"], y=data["y"], yaw=data["yaw"], default=True)
+        except (StandbyError, KeyError, TypeError) as exc:
+            raise HttpError(500, f"狗上的原点已经换了,站点登记待命点没成:{exc}") from exc
+        self._audit_detail = {"name": name, "map": f"{data['map_id']}:{data['map_version']}",
+                              "x": data["x"], "y": data["y"]}
+        point = next((p for p in stb.list(robot_id) if p["name"] == name), None)
+        return self._send_json(200, {"ack": ack, "standby": point})
 
     def _supervise(self, robot_id: str, user) -> None:
         """监护心跳(W00c6i):``{"action": "renew"|"release"}``。``dispatch`` 权限 —— 保安、

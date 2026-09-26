@@ -144,6 +144,22 @@ class MapKeeper:
             if m.name != ref.map_id and not any(m.iterdir()):
                 m.rmdir()
 
+    def set_home(self, ref: MapRef, home: tuple[float, float, float]) -> bool:
+        """在正在用的这张图上换原点(W00c6f:在当前位置标原点):改 ``active.json`` 里记着的那份,重启
+        照用。正在用的不是这张图就不改,回 False。"""
+        path = self.root / "active.json"
+        try:
+            rec = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            return False
+        if (rec.get("map_id"), rec.get("version")) != (ref.map_id, ref.version):
+            return False
+        rec["home"] = {"x": home[0], "y": home[1], "yaw": home[2]}
+        tmp = self.root / "active.json.tmp"
+        tmp.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+
     def discard(self, ref: MapRef) -> None:
         """装好了但没载进去:删掉,狗上照旧用原来那张。"""
         cur = self.active()

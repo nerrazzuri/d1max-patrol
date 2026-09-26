@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -80,6 +81,12 @@ RELEASE_MIN_BATTERY_PCT = _PRECHECK_MIN_BATTERY_PCT
 
 #: 升级前检查每个外部来源(W09 定位器、W11 感知)最多等多久(W00c6d 内审:握着命令锁)。
 PRECHECK_SOURCE_TIMEOUT_S = 2.0
+
+#: 标原点时给的名字(站点拿它登记待命点,规矩同站点的待命点名)。
+_HOME_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+#: 在当前位置标原点(W00c6f):定位偏差要不大于这个(米)。刚设过位置是 0.2 m,约走出 1.3 m 以内。
+HOME_MAX_SIGMA_M = 0.5
 
 #: 电量低于这条线,断线时按「不安全」处理(停住等待)。
 BATTERY_FLOOR_PCT = 15.0
@@ -299,6 +306,7 @@ class AgentRuntime:
         if self.parts is not None and self.loaded_map is not None:
             # W00c6e:设位置(里程锚定)。真狗要人给位置;仿真按原样,也收(测试挪坐标用)。
             out["relocalize"] = {"needs_pose": not self.parts.nav.anchor.identity}
+            out["mark_home"] = {}               # W00c6f:在当前位置标原点(定位不好就拒)
         if self._storage is not None:
             out["outbox_retry"] = {}
         return out
@@ -315,6 +323,8 @@ class AgentRuntime:
             return "restarting"
         if kind == "relocalize":
             return await self._relocalize(cmd)
+        if kind == "mark_home":
+            return await self._mark_home(cmd)
         if kind.startswith("release_"):
             return await self._release_command(cmd)
         if kind == "outbox_retry":
@@ -470,6 +480,44 @@ class AgentRuntime:
                                          "x": round(pose[0], 3), "y": round(pose[1], 3),
                                          "yaw": round(pose[2], 4)})
         return ""
+
+    async def _mark_home(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
+        """在当前位置标原点(W00c6f):用**此刻锚定后的地图位姿**当这张图上的原点。狗要停着;定位要好 ——
+        锚过、里程新鲜、偏差不大于 ``HOME_MAX_SIGMA_M``。收下:原点立即生效(返航目标、起飞检查),记进
+        正在用的那张图(重启照用),位置放在回执里给站点登记(站点是权威)。"""
+        from d1max_agent.engine.homing import HomePoint
+        m = self.loaded_map
+        if self.parts is None or m is None:
+            return "no_map"
+        name = cmd.payload.get("name", "home")
+        if not isinstance(name, str) or not _HOME_NAME.fullmatch(name):
+            return "payload: name 只许字母、数字、. _ -(1–64 字)"
+        if not await self.hal.stopped():
+            return "moving"
+        h = await self.hal.health()
+        o = await self.hal.odometry()
+        anchor = self.parts.nav.anchor
+        why = anchor.why_not(h.loc_quality > 0.0 and o.valid)
+        if why:
+            return f"loc_poor: {why}"
+        if anchor.sigma_xy > HOME_MAX_SIGMA_M:
+            return (f"loc_poor: 位置偏差可能到 {anchor.sigma_xy:.1f} m(标原点要不大于 "
+                    f"{HOME_MAX_SIGMA_M:g} m),先在这儿设一次位置再标")
+        est = anchor.estimate((o.x, o.y, o.yaw))
+        if est is None:
+            return "loc_poor: 报不出地图位姿"
+        pose = Pose.from_xy_yaw(est.x, est.y, est.yaw)
+        self.parts.home = HomePoint(map_id=m[0], pose=pose, marked_at_ms=self._now(),
+                                    note=f"W00c6f:在当前位置标的({name})")
+        if self.maps is not None:
+            from d1max_contract.maps import MapRef
+            active = self.maps.active()
+            if isinstance(active, MapRef) and (active.map_id, active.version) == m:
+                self.maps.set_home(active, (est.x, est.y, est.yaw))
+        data = {"map_id": m[0], "map_version": m[1], "x": round(est.x, 3),
+                "y": round(est.y, 3), "yaw": round(est.yaw, 4), "sigma_m": round(est.sigma_xy_m, 2)}
+        self.events.emit("home_marked", {"task_id": cmd.task_id, "name": name, **data})
+        return "", data
 
     def _busy_reason(self) -> str:
         """在忙什么(升级前检查的「空闲」那一项);空串 = 空闲。"""
