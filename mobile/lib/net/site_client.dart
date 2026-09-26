@@ -241,6 +241,17 @@ abstract class SiteApi {
 
   /// 某一个日志的尾巴 `{name, size, bytes, truncated, text}`。[bytes] 为 0 用狗的默认（64 KB）。
   Future<Map<String, dynamic>> procLog(String robotId, String name, {int bytes = 0});
+
+  /// 录包时的轨迹（W00c6h，管理员）：第 [since] 个点起的 `{points: [[x, y]], since, total, full,
+  /// recording}`（录包起点为原点、起点朝向为 +x，米）。
+  Future<Map<String, dynamic>> mappingTrail(String robotId, {int since = 0});
+
+  /// 建好的图的预览（W00c6h，谁都能看）：`{width, height, m_per_px, left_x, top_y, standby: [...]}`；
+  /// 地图 (x, y) 在图上是 `((x − left_x) / m_per_px, (top_y − y) / m_per_px)`。
+  Future<Map<String, dynamic>> mapPreview(String mapId, String version);
+
+  /// 预览图（灰度 PNG）。
+  Future<Uint8List> mapPreviewPng(String mapId, String version);
   Stream<Map<String, dynamic>> events();
   void close();
 }
@@ -542,10 +553,17 @@ class SiteClient implements SiteApi {
   static const int maxPhotoBytes = 20 * 1024 * 1024;
 
   @override
-  Future<Uint8List> runPhoto(int id, String name) async {
-    final req = await _io
-        .openUrl('GET', base.resolve('/api/runs/$id/photos/${Uri.encodeComponent(name)}'))
-        .timeout(timeout);
+  Future<Uint8List> runPhoto(int id, String name) =>
+      _bytes('/api/runs/$id/photos/${Uri.encodeComponent(name)}', maxPhotoBytes, '照片');
+
+  @override
+  Future<Uint8List> mapPreviewPng(String mapId, String version) => _bytes(
+      '/api/maps/${Uri.encodeComponent(mapId)}/${Uri.encodeComponent(version)}/preview.png',
+      maxPhotoBytes, '地图预览');
+
+  /// 取一份字节（照片、预览图）：钉证书、带令牌、不跟重定向、有上限。
+  Future<Uint8List> _bytes(String path, int maxBytes, String what) async {
+    final req = await _io.openUrl('GET', base.resolve(path)).timeout(timeout);
     req.followRedirects = false;
     final tok = session?.token;
     if (tok != null) req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $tok');
@@ -553,12 +571,12 @@ class SiteClient implements SiteApi {
     if (resp.statusCode != 200) {
       await resp.drain<void>();
       if (resp.statusCode == 401) session = null;
-      throw SiteError(resp.statusCode, '照片拿不到');
+      throw SiteError(resp.statusCode, '$what拿不到');
     }
     final out = BytesBuilder(copy: false);
     await for (final chunk in resp.timeout(timeout)) {
       out.add(chunk);
-      if (out.length > maxPhotoBytes) throw const SiteError(0, '照片太大');
+      if (out.length > maxBytes) throw SiteError(0, '$what太大');
     }
     return out.takeBytes();
   }
@@ -692,6 +710,14 @@ class SiteClient implements SiteApi {
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/supervise',
           <String, dynamic>{'action': action, 'session': session, 'seq': seq},
           const Duration(seconds: 3)));
+
+  @override
+  Future<Map<String, dynamic>> mappingTrail(String robotId, {int since = 0}) async => _map(
+      await _send('GET', '/api/robots/${Uri.encodeComponent(robotId)}/mapping/trail?since=$since'));
+
+  @override
+  Future<Map<String, dynamic>> mapPreview(String mapId, String version) async => _map(await _send(
+      'GET', '/api/maps/${Uri.encodeComponent(mapId)}/${Uri.encodeComponent(version)}/preview'));
 
   @override
   Future<Map<String, dynamic>> procLogs(String robotId) async =>

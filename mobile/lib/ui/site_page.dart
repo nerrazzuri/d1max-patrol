@@ -17,6 +17,7 @@ import 'package:flutter/services.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
 import 'site_logs.dart';
+import 'site_mapping.dart';
 import 'site_maps.dart';
 import 'site_releases.dart';
 import 'site_runs.dart';
@@ -416,21 +417,28 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     }
   }
 
-  Future<void> _do(Future<Map<String, dynamic>> Function() f, String what) async {
+  /// 发一条、把结果写在页面上。狗收下了（或站点没带回执）回真。
+  Future<bool> _do(Future<Map<String, dynamic>> Function() f, String what) async {
     String msg;
+    var ok = false;
     try {
       final r = await f();
       final ack = r['ack'];
       final reason = ack is Map ? '${ack['reason'] ?? ''}' : '';
+      ok = ack is! Map || ack['result'] == 'accepted' || ack['result'] == 'duplicate';
       msg = '$what：${ack is Map ? '${ack['result']}' : 'ok'}'
           '${reason.isNotEmpty ? '（${ackReasonText(reason)}）' : ''}';
     } on SiteError catch (e) {
       msg = '$what 没成：$e';
     }
-    if (!mounted) return; // 派单要等回执，人可能早就退出这一页了
+    if (!mounted) return ok; // 派单要等回执，人可能早就退出这一页了
     setState(() => _msg = msg);
     await _reload();
+    return ok;
   }
+
+  void _openTrail() => Navigator.push(context,
+      MaterialPageRoute<void>(builder: (_) => SiteMappingTrailPage(api: widget.api, robotId: widget.robotId)));
 
   /// 录包（W00c5d 第二部分，管理员）：给包起个名，之后经站点遥控开着狗走一圈，再停。
   Future<void> _startRecord() async {
@@ -445,7 +453,9 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         confirm: '开始',
         confirmKey: const Key('record-go'));
     if (got == null || got[0].isEmpty) return;
-    await _do(() => widget.api.mapping(widget.robotId, 'start', name: got[0]), '开始录包');
+    final ok = await _do(() => widget.api.mapping(widget.robotId, 'start', name: got[0]), '开始录包');
+    // 收下了就打开录包轨迹（W00c6h）：边开边看哪儿走过了。录包在狗上后台起，起来之后才开始记点。
+    if (ok && mounted && robotCan(_view, 'mapping_trail')) _openTrail();
   }
 
   /// 设位置（W00c6e）：「狗在原点」一键，或者输地图坐标（朝向按度输）。
@@ -690,6 +700,9 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                   key: const Key('btn-mark-home'),
                   onPressed: _markHome,
                   child: const Text('在这儿标原点')),
+            if ((s?.canManageMaps ?? false) && robotCan(v, 'mapping_trail'))
+              OutlinedButton(
+                  key: const Key('btn-mapping-trail'), onPressed: _openTrail, child: const Text('录包轨迹')),
             // 建图进程日志（W00c6g）：管理员看录包、重建子进程的日志，不用再 SSH 上狗。
             if ((s?.canManageMaps ?? false) && robotCan(v, 'proc_log'))
               OutlinedButton(

@@ -87,9 +87,13 @@ _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,30
 _EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
 #: W00c5d 第二部分:给狗下发图、录包、重建。
 _MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build|outbox_retry)$")
+#: W00c6h:建好的图的栅格预览(坐标换算 + 待命点;PNG)。
+_MAPVIEW = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/(preview|preview\.png)$")
 #: W00c6g:狗上建图进程日志的列表、某一个的尾巴(``?bytes=``)。
 _LOGS = re.compile(r"^/api/robots/([^/]{1,64})/logs(?:/([^/]{1,64}))?$")
 _LOG_NAME = re.compile(r"[a-z0-9_.-]{1,48}")
+#: W00c6h:录包时的轨迹(``?since=`` 上次拿到的点数)。
+_TRAIL = re.compile(r"^/api/robots/([^/]{1,64})/mapping/trail$")
 #: W00c5d 第三部分:给狗装、切、退版本。
 _RELCMD = re.compile(r"^/api/robots/([^/]{1,64})/release$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
@@ -325,7 +329,7 @@ class _Handler(TlsHandlerMixin):
                 return self._incident_admin(method, path)
             if path == "/api/runs" or path.startswith(("/api/runs/", "/api/exports")):
                 return self._runs(method, path, user)
-            if path == "/api/maps" or _MAPCMD.match(path):
+            if path == "/api/maps" or _MAPCMD.match(path) or _MAPVIEW.match(path):
                 return self._maps(method, path, user)
             if path == "/api/releases" or _RELCMD.match(path):
                 return self._releases(method, path, user)
@@ -347,6 +351,12 @@ class _Handler(TlsHandlerMixin):
                 if m.group(2) == "teleop" and method == "GET":
                     return self._teleop_ws(robot_id, user)
                 raise HttpError(404, f"没有 {method} {path}")
+            m = _TRAIL.match(path)
+            if m is not None and method == "GET":
+                robot_id = unquote(m.group(1))
+                if not SAFE_ID.match(robot_id):
+                    raise HttpError(404, "没有这台狗")
+                return self._mapping_trail(robot_id, user)
             m = _LOGS.match(path)
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
@@ -781,6 +791,27 @@ class _Handler(TlsHandlerMixin):
         point = next((p for p in stb.list(robot_id) if p["name"] == name), None)
         return self._send_json(200, {"ack": ack, "standby": point})
 
+    def _mapping_trail(self, robot_id: str, user) -> None:
+        """录包时的轨迹(W00c6h,管理员 —— 录包本身就是管理员的事):发 ``mapping_trail {since}``,
+        回执里的点原样回(``{points, since, total, full, recording}``,录包起点为原点的里程系)。"""
+        self._need(user, MANAGE)
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        try:
+            since = int(q["since"][0]) if "since" in q else 0
+        except ValueError:
+            raise HttpError(400, "since 要是不小于 0 的整数") from None
+        if since < 0:
+            raise HttpError(400, "since 要是不小于 0 的整数")
+        r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
+            robot_id, "mapping_trail", {"since": since}, issued_by=str(user)))
+        ack = r["ack"]
+        if ack.get("result") != "accepted":
+            raise HttpError(409, f"狗没给:{ack.get('reason') or ack.get('result')}")
+        data = ack.get("data")
+        if not isinstance(data, dict):
+            raise HttpError(502, "狗的回执里没有轨迹")
+        return self._send_json(200, data)
+
     def _proc_logs(self, robot_id: str, name: str | None, user) -> None:
         """建图进程日志(W00c6g):狗上录包、重建子进程日志的列表(``name`` 为空)与某一个的尾巴。
         **管理员**(``manage``,跟录包、重建同一级:日志里有路径、参数)。站点不存,现取现给:发
@@ -977,6 +1008,10 @@ class _Handler(TlsHandlerMixin):
         if path == "/api/maps" and method == "GET":
             self._need(user, VIEW)
             return self._send_json(200, {"maps": cat.list(), "bags": cat.bags()})
+        m = _MAPVIEW.match(path)
+        if m is not None and method == "GET":
+            self._need(user, VIEW)
+            return self._map_preview(unquote(m.group(1)), unquote(m.group(2)), m.group(3))
         m = _MAPCMD.match(path)
         if m is None or method != "POST":
             raise HttpError(404, f"没有 {method} {path}")
@@ -1022,6 +1057,26 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {k: v for k, v in payload.items() if k != "files"}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
+
+    def _map_preview(self, map_id: str, version: str, what: str) -> None:
+        """建好的图的预览(W00c6h,``view``):``preview`` 是坐标换算 + 这张图这一版上登记的待命点
+        (每台狗的),``preview.png`` 是图。没有这张图、没有栅格 404;文件坏了 500(说是哪个文件)。"""
+        from d1max_site.map_preview import NoRaster, PreviewError
+        from d1max_site.maps import MapError
+        try:
+            png, info = self.site.maps.preview(map_id, version)
+        except (MapError, NoRaster) as exc:
+            raise HttpError(404, str(exc)) from exc
+        except (PreviewError, OSError) as exc:
+            raise HttpError(500, f"这张图预览不了:{exc}") from exc
+        if what == "preview.png":
+            return self._send_bytes(png, "image/png")
+        rows = self.site.dispatcher.db.query(
+            "SELECT robot_id, name, x, y, yaw, is_default FROM standby_points WHERE map_id=? AND "
+            "map_version=? ORDER BY robot_id, name", (map_id, version))
+        standby = [{"robot_id": r["robot_id"], "name": r["name"], "x": r["x"], "y": r["y"],
+                    "yaw": r["yaw"], "default": bool(r["is_default"])} for r in rows]
+        return self._send_json(200, info | {"standby": standby})
 
     def _home_on(self, robot_id: str, map_id: str, version: str) -> dict[str, float] | None:
         rows = self.site.dispatcher.db.query(
@@ -1147,6 +1202,15 @@ class _Handler(TlsHandlerMixin):
         blocking = [c.get("name") for c in checks if not c.get("ok") and c.get("blocking")]
         return {"robot_id": robot_id, "name": name, "ok": not blocking, "blocking": blocking,
                 "checks": checks}
+
+    def _send_bytes(self, data: bytes, content_type: str) -> None:
+        self._status = 200
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _send_file(self, path, content_type: str) -> None:
         size = path.stat().st_size

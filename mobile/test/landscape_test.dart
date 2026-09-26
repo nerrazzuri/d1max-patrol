@@ -3,6 +3,7 @@
 import 'package:d1max_patrol/main.dart' show landscapeOnly, lockLandscape;
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/site_logs.dart';
+import 'package:d1max_patrol/ui/site_mapping.dart';
 import 'package:d1max_patrol/ui/site_maps.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_releases.dart';
@@ -166,5 +167,21 @@ void main() {
     await _show(t, SiteSchedulePage(api: api));
     await _show(t, SiteProcLogsPage(api: api, robotId: 'A'));
     await _show(t, SiteProcLogPage(api: api, robotId: 'A', name: 'slam'));
+    await _show(t, SiteMapPreviewPage(api: api, mapId: 'estate-1', version: '8'));
+  });
+
+  testWidgets('横屏不溢出：录包轨迹（有点、没点）', (t) async {
+    final api = FakeApi('admin')
+      ..trailReplies = [
+        <String, dynamic>{'points': [[0, 0], [30, 0], [30, 12]], 'since': 0, 'total': 3,
+          'full': true, 'recording': true},
+      ];
+    _phone(t);
+    await t.pumpWidget(MaterialApp(home: SiteMappingTrailPage(api: api, robotId: 'A')));
+    await t.pump();
+    await t.pump();
+    expect(t.getRect(find.byKey(SiteMappingTrailPage.canvasKey)).height, greaterThan(150),
+        reason: '画布要占住大半屏');
+    await t.pumpWidget(const SizedBox());
   });
 }

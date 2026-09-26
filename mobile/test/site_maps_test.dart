@@ -1,4 +1,5 @@
 // 站点模式的地图（W00c5d 第二部分）：管理员下发图、拿录包重建、录包开始停止；别的角色只看。
+import 'package:d1max_patrol/ui/site_mapping.dart';
 import 'package:d1max_patrol/ui/site_maps.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:flutter/material.dart';
@@ -91,6 +92,9 @@ void main() {
     await t.tap(find.byKey(const Key('record-go')));
     await t.pumpAndSettle();
     expect(admin.calls, contains('mapping A start yard'));
+    expect(find.byType(SiteMappingTrailPage), findsOneWidget, reason: '收下了就打开录包轨迹（W00c6h）');
+    await t.pageBack();
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('btn-record-stop')));
     await t.pumpAndSettle();
     expect(admin.calls, contains('mapping A stop '));

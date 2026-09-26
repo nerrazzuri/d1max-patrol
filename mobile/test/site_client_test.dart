@@ -370,6 +370,21 @@ void main() {
     c.close();
   });
 
+  test('录包轨迹、地图预览的请求形状；预览图是字节', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('alice', 'pw');
+    site.bodies['/api/robots/A/mapping/trail'] = <String, dynamic>{'points': <dynamic>[]};
+    await c.mappingTrail('A', since: 12);
+    expect(site.rawPaths.last, endsWith('/api/robots/A/mapping/trail?since=12'));
+    site.bodies['/api/maps/estate-1/8/preview'] = <String, dynamic>{'width': 1, 'height': 1};
+    expect((await c.mapPreview('estate-1', '8'))['width'], 1);
+    final png = await c.mapPreviewPng('estate-1', '8');
+    expect(site.received.last.path, '/api/maps/estate-1/8/preview.png');
+    expect(site.received.last.auth, startsWith('Bearer '));
+    expect(png, fakePreviewPng);
+    c.close();
+  });
+
   test('建图日志：列表、尾巴的请求形状（名字编码、bytes 放查询串）', () async {
     final c = SiteClient(site.url, testCertFingerprint());
     await c.login('alice', 'pw');

@@ -9,6 +9,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../net/site_client.dart';
+import 'site_mapping.dart';
 import 'widget/fields_dialog.dart';
 
 class SiteMapsPage extends StatefulWidget {
@@ -17,6 +18,7 @@ class SiteMapsPage extends StatefulWidget {
 
   static Key mapKey(String id, String version) => Key('map-$id:$version');
   static Key bagKey(String robot, String name) => Key('bag-$robot/$name');
+  static Key previewKey(String id, String version) => Key('preview-$id:$version');
   static const Key versionKey = Key('build-version');
 
   @override
@@ -156,7 +158,21 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
                   title: Text('${m['map_id']}:${m['version']}'),
                   subtitle: Text('来自 ${m['source']} · ${(m['files'] as List).length} 个文件'
                       '${(m['note'] ?? '') != '' ? ' · ${m['note']}' : ''}'),
-                  trailing: admin ? const Icon(Icons.send_to_mobile) : null,
+                  // 看图（W00c6h）谁都能点；点这一行是下发（管理员）。
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    IconButton(
+                        key: SiteMapsPage.previewKey('${m['map_id']}', '${m['version']}'),
+                        tooltip: '看图',
+                        icon: const Icon(Icons.map_outlined),
+                        onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute<void>(
+                                builder: (_) => SiteMapPreviewPage(
+                                    api: widget.api,
+                                    mapId: '${m['map_id']}',
+                                    version: '${m['version']}')))),
+                    if (admin) const Icon(Icons.send_to_mobile),
+                  ]),
                   onTap: admin ? () => _activate(m) : null,
                 ),
               const Divider(),

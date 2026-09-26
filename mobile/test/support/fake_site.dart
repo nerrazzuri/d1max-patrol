@@ -6,6 +6,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 Map<String, dynamic> siteFixture(String name) =>
     jsonDecode(File('test/fixtures/$name.json').readAsStringSync()) as Map<String, dynamic>;
@@ -72,6 +73,12 @@ class FakeSite {
     final resp = req.response;
     if (path.endsWith('/teleop')) {
       await _teleop(req, code);
+      return;
+    }
+    if (path.endsWith('/preview.png') && code == 200) {
+      resp.headers.contentType = ContentType('image', 'png');
+      resp.add(fakePreviewPng);
+      await resp.close();
       return;
     }
     if (path.startsWith('/api/runs/') && path.contains('/photos/') && code == 200) {
@@ -203,3 +210,6 @@ class FakeSite {
     }
   }
 }
+
+/// 一张真的 1×1 灰度 PNG（W00c6h 地图预览的假图：`Image.memory` 认得）。
+final Uint8List fakePreviewPng = Uint8List.fromList(<int>[137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0, 58, 126, 155, 85, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 56, 11, 0, 0, 207, 0, 206, 160, 254, 41, 80, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]);

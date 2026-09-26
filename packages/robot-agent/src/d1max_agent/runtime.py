@@ -30,6 +30,7 @@ from d1max_agent.events import EventBook
 from d1max_agent.homes import HomeBook
 from d1max_agent.idempotency import IdempotencyStore
 from d1max_agent.localization import OdomAnchor
+from d1max_agent.mapping_trail import MappingTrail
 from d1max_agent.release_precheck import MIN_BATTERY_PCT as _PRECHECK_MIN_BATTERY_PCT
 from d1max_agent.resources import ResourceLedger
 from d1max_agent.status import (
@@ -195,6 +196,9 @@ class AgentRuntime:
         #: 切版本、退版本收下了、马上要重启:什么都不再接(W00c5d 第三部分内部评审:
         #: 这几秒里收下的任务会被重启掐掉)。切不成就放开。
         self._restarting = False
+        #: 录包时的轨迹(W00c6h);``_trail_on``:上一拍在不在录(录包开始那一拍清空)。
+        self.trail = MappingTrail()
+        self._trail_on = False
         #: 发件箱隔离的文件重新排上(站点改了规矩之后,管理员让它再传一次);主程序接上。
         self._outbox_retry: Callable[[], int] | None = None
         self.processor.map_hook = self._map_command
@@ -306,6 +310,7 @@ class AgentRuntime:
             out["map_activate"] = {}
         if self.mapper is not None:
             out["mapping"] = {}
+            out["mapping_trail"] = {}           # W00c6h:录包时的轨迹(手机画哪儿走过了)
             out["map_build"] = {}
         if self.releases is not None:
             # 站点据此显示每台狗在跑哪一版。
@@ -339,6 +344,11 @@ class AgentRuntime:
             return await self._mark_home(cmd)
         if kind == "proc_log":
             return await asyncio.to_thread(self._proc_log, cmd.payload)
+        if kind == "mapping_trail":
+            n = cmd.payload.get("since", 0)
+            if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+                return "payload: since 要是不小于 0 的整数"
+            return "", self.trail.since(n) | {"recording": bool(self.mapper.recording)}
         if kind.startswith("release_"):
             return await self._release_command(cmd)
         if kind == "outbox_retry":
@@ -1017,6 +1027,7 @@ class AgentRuntime:
         await self._enforce_supervision()
         if self.parts is not None:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
+        await self._feed_trail()
         await self.processor.step(dt_s)
         if self.video is not None:
             self.video.step()
@@ -1024,6 +1035,21 @@ class AgentRuntime:
         await self._flush_events()
         await self._publish_status()
         await self._maybe_telemetry()
+
+    async def _feed_trail(self) -> None:
+        """录包时的轨迹(W00c6h):录包开始那一拍清空,录着的每拍喂一帧里程(读不到、不新鲜不喂)。"""
+        rec = self.mapper is not None and bool(self.mapper.recording)
+        if rec and not self._trail_on:
+            self.trail.reset()
+        self._trail_on = rec
+        if not rec:
+            return
+        try:
+            o = await self.hal.odometry()
+        except Exception:  # noqa: BLE001 - 这一拍读不到:不记,下一拍再说
+            return
+        if o.valid:
+            self.trail.feed(o.x, o.y, o.yaw)
 
     async def _watch_faults(self) -> None:
         """HAL 故障集合变了就发一条 ``robot_fault``(W00c5a)。狗只报事实:哪条算跌倒、算不算

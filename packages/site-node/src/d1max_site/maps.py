@@ -26,6 +26,10 @@ from d1max_site.evidence import ChunkWriter, PathRefused, Stored, safe_join
 log = logging.getLogger(__name__)
 
 
+#: 栅格预览缓存几张(W00c6h;一张最大 1024×1024 灰度 PNG,几百 KB)。
+PREVIEW_CACHE = 8
+
+
 class MapError(ValueError):
     """这张图登记不了 / 找不到。"""
 
@@ -49,6 +53,9 @@ class MapCatalog:
         self._now = now_ms
         self._lock = threading.Lock()
         self.writer = ChunkWriter()
+        #: 栅格预览(W00c6h):(地图号, 版本) → (PNG, 坐标换算)。一版登记了就不变,渲染一次缓存着。
+        self._previews: dict[tuple[str, str], tuple[bytes, dict[str, Any]]] = {}
+        self._preview_lock = threading.Lock()
 
     # ------------------------------------------------------------ 收(接收口调)
 
@@ -156,6 +163,40 @@ class MapCatalog:
         if name not in {f.name for f in ref.files}:
             raise MapError(f"这张图里没有 {name}")
         return self.root / map_id / version / name
+
+    def preview(self, map_id: str, version: str) -> tuple[bytes, dict[str, Any]]:
+        """这张图的栅格预览(W00c6h):PNG 与给手机的坐标换算(``map_preview.render``)。缓存最近
+        ``PREVIEW_CACHE`` 张。没有这张图 ``MapError``;没有栅格 ``NoRaster``;文件坏了
+        ``PreviewError``。"""
+        from d1max_site import map_preview as mp
+        key = (map_id, version)
+        with self._preview_lock:
+            hit = self._previews.pop(key, None)
+            if hit is not None:
+                self._previews[key] = hit             # 挪到最后:最近用的
+                return hit
+        try:
+            ref = self.get(check_name(map_id, "地图号"), check_name(version, "版本"))
+        except ContractError as exc:
+            raise MapError(str(exc)) from exc
+        names = {f.name for f in ref.files}
+        d = self.root / map_id / version
+        yamls = sorted(n for n in names if n.endswith(".yaml"))
+        if not yamls:
+            raise mp.NoRaster(f"{map_id}:{version} 没有栅格(.yaml + .pgm),没法预览")
+        meta = mp.parse_map_yaml((d / yamls[0]).read_text("utf-8", errors="replace"))
+        image = Path(meta["image"]).name
+        if image not in names:
+            raise mp.PreviewError(f"{yamls[0]} 说图是 {image},这张图里没有它")
+        try:
+            got = mp.render((d / image).read_bytes(), meta)
+        except mp.PreviewError as exc:
+            raise mp.PreviewError(f"{image}:{exc}") from exc
+        with self._preview_lock:
+            self._previews[key] = got
+            while len(self._previews) > PREVIEW_CACHE:
+                self._previews.pop(next(iter(self._previews)))
+        return got
 
     # ------------------------------------------------------------ 登记
 

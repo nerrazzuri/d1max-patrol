@@ -30,6 +30,7 @@
           "map_activate": {},
           "map_build": {},
           "mapping": {},
+          "mapping_trail": {},
           "mark_home": {},
           "patrol": {
             "autonomy": "autonomous",

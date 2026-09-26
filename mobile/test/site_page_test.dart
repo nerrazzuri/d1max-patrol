@@ -103,6 +103,39 @@ class FakeApi implements SiteApi {
   @override
   Future<List<Map<String, dynamic>>> incidents() async =>
       (siteFixture('site_incidents')['incidents'] as List).cast<Map<String, dynamic>>();
+  /// 录包轨迹（W00c6h）：一次回一条；[trailSince] 记下每次的 since。回完了就说「没在录」。
+  List<Map<String, dynamic>> trailReplies = <Map<String, dynamic>>[];
+  final List<int> trailSince = <int>[];
+  @override
+  Future<Map<String, dynamic>> mappingTrail(String robotId, {int since = 0}) async {
+    trailSince.add(since);
+    if (trailReplies.isEmpty) {
+      return <String, dynamic>{'points': <dynamic>[], 'since': since, 'total': since,
+        'full': false, 'recording': false};
+    }
+    return trailReplies.removeAt(0);
+  }
+
+  /// 地图预览（W00c6h）。[previewMissing]：这张图没有栅格（站点回 404）。
+  bool previewMissing = false;
+  @override
+  Future<Map<String, dynamic>> mapPreview(String mapId, String version) async {
+    calls.add('mapPreview $mapId:$version');
+    if (previewMissing) {
+      throw SiteError(404, '$mapId:$version 没有栅格(.yaml + .pgm),没法预览');
+    }
+    return <String, dynamic>{'width': 200, 'height': 100, 'm_per_px': 0.1, 'left_x': -10.0,
+      'top_y': 5.0, 'standby': <dynamic>[
+        {'robot_id': 'A', 'name': 'dock', 'x': 1.5, 'y': 2.0, 'yaw': 0.5, 'default': true},
+      ]};
+  }
+
+  @override
+  Future<Uint8List> mapPreviewPng(String mapId, String version) async {
+    calls.add('mapPreviewPng $mapId:$version');
+    return fakePreviewPng;
+  }
+
   /// 建图进程日志（W00c6g）。给了列表就用它；给了错误就抛。
   List<Map<String, dynamic>>? procLogRows;
   SiteError? procLogError;
