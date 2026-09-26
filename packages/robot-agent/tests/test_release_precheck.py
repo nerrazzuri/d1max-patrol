@@ -53,6 +53,30 @@ def test_接上来源之后_不健康就拦():
     assert first_block(items) == "localizer"
 
 
+def test_不认识的来源_也列出来_不健康照样拦():
+    """W00c6d 内审应修 1:以前清单只认三个名字,别的名字(比如 gnss)不健康被悄悄丢掉、照样切。"""
+    from d1max_agent.release_precheck import SourceCheck
+    items = precheck(_好(sources=(SourceCheck("gnss", False, "没有固定解"),)))
+    got = _项(items)
+    assert "gnss" in got and not got["gnss"].ok and got["gnss"].blocking
+    assert first_block(items) == "gnss"
+
+
+def test_狗在忙_包和来源都没查_写明白_不装作过了():
+    got = _项(precheck(_好(busy="在跑任务 goto-1", skipped=True)))
+    assert not got["package"].ok and not got["package"].blocking and "没核" in got["package"].detail
+
+
+def test_站点给了任务包schema_槽里那一版要的更高_拦():
+    """W00c6d 内审应修 3:以前只有站点按自己的登记目录比,没登记的版本绕过去;现在狗按槽里的自述比。"""
+    items = precheck(_好(mission_schema=1, requires_mission_schema=2))
+    got = _项(items)
+    assert not got["schema"].ok and got["schema"].blocking
+    assert first_block(items) == "schema_mismatch"
+    assert _项(precheck(_好(mission_schema=2, requires_mission_schema=2)))["schema"].ok
+    assert "schema" not in _项(precheck(_好())), "站点没给就不列(老站点)"
+
+
 def test_每一项不过的原因码_跟以前切版本回的一样():
     cases = [(dict(busy="在跑任务 goto-1"), "busy"),
              (dict(battery_pct=None), "battery_unknown"),
@@ -109,6 +133,17 @@ def test_槽里的包_装好之后建了venv_跑出了pycache_照样认(tmp_path
     assert rel.verify_slot(layout, NEW).name == NEW
 
 
+def test_槽里自述的名字跟槽对不上_核不过(tmp_path):
+    import pytest
+    layout = _槽(tmp_path)
+    slot = layout.release_dir(NEW)
+    raw = json.loads((slot / "release.json").read_text())
+    raw["name"] = "2026-09-26-cccccc"
+    (slot / "release.json").write_text(json.dumps(raw))
+    with pytest.raises(rel.ReleaseError, match="槽却是"):
+        rel.verify_slot(layout, NEW)
+
+
 def test_槽里的包被改了一个字节_核不过(tmp_path):
     import pytest
     layout = _槽(tmp_path)
@@ -137,7 +172,7 @@ async def test_release_precheck_回执里带清单_什么都不做(tmp_path):
     d = ack["data"]
     assert d["name"] == NEW and d["ok"] is True and d["blocking"] == []
     assert {x["name"] for x in d["checks"]} >= {"busy", "battery", "package", "localizer"}
-    assert relops.calls == [] and not rt._restarting, "只查,不切"
+    assert [c for c in relops.calls if c[0] != "check"] == [] and not rt._restarting, "只查,不切"
     await rt.close()
 
 
@@ -160,7 +195,7 @@ async def test_切版本被拒_回执里带整份清单_原因码照旧(tmp_path
     await broker.drain()
     ack = _ack(ears)
     assert ack["reason"] == "storage_full" and ack["data"]["blocking"] == ["disk"]
-    assert relops.calls == []
+    assert [c for c in relops.calls if c[0] != "check"] == []
     await rt.close()
 
 
@@ -171,7 +206,8 @@ async def test_槽里的包坏了_不切(tmp_path):
     await rt._on_cmd(_cmd("release_activate", {"name": NEW}, "a2", c))
     await broker.drain()
     ack = _ack(ears)
-    assert ack["reason"] == "package_corrupt" and relops.calls == [] and not rt._restarting
+    assert ack["reason"] == "package_corrupt" and not rt._restarting
+    assert [c for c in relops.calls if c[0] != "check"] == []
     pkg = next(x for x in ack["data"]["checks"] if x["name"] == "package")
     assert "对不上" in pkg["detail"]
     await rt.close()
@@ -186,15 +222,20 @@ async def test_切版本都过_照旧收下_不带清单(tmp_path):
     await rt.close()
 
 
-async def test_接上健康来源_不健康就拦切版本_来源自己炸了也按不健康(tmp_path):
-    """W09/W11 接上之后的样子:运行时的 ``precheck_sources`` 里挂一个来源。"""
+async def test_接上健康来源_不健康就拦切版本_来源炸了卡住了都按不健康(tmp_path, monkeypatch):
+    """W09/W11 接上之后的样子:运行时的 ``precheck_sources`` 里按名字挂来源。内审应修 1:以前来源炸了
+    又没名字就被丢掉、照样切;来源卡住没有超时,握着命令锁把监护心跳也卡住。"""
+    import asyncio
+
+    import d1max_agent.runtime as runtime_mod
     from d1max_agent.release_precheck import SourceCheck
+    monkeypatch.setattr(runtime_mod, "PRECHECK_SOURCE_TIMEOUT_S", 0.05)
     broker, c, ears, relops, dog, rt = await _发布台(tmp_path)
     await rt.start()
 
     async def 定位器():
-        return SourceCheck("localizer", False, "3 s 没出位姿")
-    rt.precheck_sources.append(定位器)
+        return SourceCheck("whatever", False, "3 s 没出位姿")
+    rt.precheck_sources.append(("localizer", 定位器))
     await rt._on_cmd(_cmd("release_activate", {"name": NEW}, "s1", c))
     await broker.drain()
     ack = _ack(ears)
@@ -202,13 +243,65 @@ async def test_接上健康来源_不健康就拦切版本_来源自己炸了也
 
     async def 炸():
         raise RuntimeError("桥断了")
-    炸.check_name = "perception"
-    rt.precheck_sources[:] = [炸]
-    await rt._on_cmd(_cmd("release_precheck", {"name": NEW}, "s2", c))
+
+    async def 卡住():
+        await asyncio.sleep(10)
+    rt.precheck_sources[:] = [("perception", 炸), ("extrinsic", 卡住)]
+    await rt._on_cmd(_cmd("release_activate", {"name": NEW}, "s2", c))
     await broker.drain()
-    got = {x["name"]: x for x in _ack(ears)["data"]["checks"]}
+    ack = _ack(ears)
+    got = {x["name"]: x for x in ack["data"]["checks"]}
+    assert ack["result"] == "rejected"
     assert not got["perception"]["ok"] and "桥断了" in got["perception"]["detail"]
-    assert relops.calls == []
+    assert not got["extrinsic"]["ok"] and "没回" in got["extrinsic"]["detail"]
+    assert ("activate", NEW) not in relops.calls
+    await rt.close()
+
+
+async def test_核的是要切的那一版_不是在跑的(tmp_path):
+    broker, c, ears, relops, dog, rt = await _发布台(tmp_path)
+    await rt.start()
+    await rt._on_cmd(_cmd("release_precheck", {"name": NEW}, "k1", c))
+    await broker.drain()
+    assert ("check", NEW) in relops.calls
+    await rt.close()
+
+
+async def test_狗在忙_不核槽_不问来源_命令锁不卡(tmp_path):
+    """内审应修 2:狗在忙时切版本本来就会被拒,不该先把整个槽算一遍、把每个来源问一遍(握着命令锁)。"""
+    from d1max_contract.messages import MapPose
+    broker, c, ears, relops, dog, rt = await _发布台(tmp_path)
+    await rt.start()
+    asked = []
+
+    async def 来源():
+        asked.append(1)
+        from d1max_agent.release_precheck import SourceCheck
+        return SourceCheck("localizer", True, "好")
+    rt.precheck_sources.append(("localizer", 来源))
+    goto = {"target": MapPose(map_id="m", map_version="1", frame_id="map", x=5.0, y=0.0,
+                              yaw=0.0).to_wire()}
+    await rt._on_cmd(_cmd("goto", goto, "g1", c))
+    await rt.step(0.1)
+    await rt._on_cmd(_cmd("release_precheck", {"name": NEW}, "k2", c))
+    await broker.drain()
+    d = _ack(ears)["data"]
+    assert "busy" in d["blocking"] and asked == []
+    assert not any(x == ("check", NEW) for x in relops.calls)
+    await rt.close()
+
+
+async def test_站点给的任务包schema_狗按槽里的自述比(tmp_path):
+    broker, c, ears, relops, dog, rt = await _发布台(tmp_path)
+    await rt.start()
+    relops.schema = 2
+    await rt._on_cmd(_cmd("release_activate", {"name": NEW, "mission_schema": 1}, "m1", c))
+    await broker.drain()
+    ack = _ack(ears)
+    assert ack["reason"] == "schema_mismatch" and ack["data"]["requires_mission_schema"] == 2
+    await rt._on_cmd(_cmd("release_precheck", {"name": NEW, "mission_schema": "x"}, "m2", c))
+    await broker.drain()
+    assert _ack(ears)["reason"].startswith("payload"), "给的不像话:拒"
     await rt.close()
 
 

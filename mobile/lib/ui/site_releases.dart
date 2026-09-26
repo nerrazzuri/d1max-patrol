@@ -54,6 +54,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
     if (action == 'precheck') {
       try {
         final r = await widget.api.releaseAction(robot, action, name: name);
+        if (!mounted) return;
         await _showChecks('$robot 切到 $name 之前', r);
       } on SiteError catch (e) {
         _snack('查不了：$e');
@@ -84,7 +85,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
           ? '$robot 收到了：$what $name（做完它会报，失败站点出告警）'
           : '$robot 没接：${ack['reason'] ?? ack['result']}');
       final data = ack['data'];
-      if (ack['result'] != 'accepted' && data is Map<String, dynamic>) {
+      if (mounted && ack['result'] != 'accepted' && data is Map<String, dynamic>) {
         await _showChecks('$robot 没切：为什么', data);          // 狗拒切时回执里带着清单
       }
     } on SiteError catch (e) {
@@ -115,7 +116,8 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
                     color: ch['ok'] == true
                         ? Colors.green
                         : (ch['blocking'] == true ? Colors.red : Colors.orange)),
-                title: Text('${ch['name']}${ch['blocking'] == true ? '' : '（提示）'}'),
+                title: Text('${_label('${ch['name']}')}'
+                    '${ch['ok'] != true && ch['blocking'] != true ? '（提示，不拦）' : ''}'),
                 subtitle: Text('${ch['detail'] ?? ''}'),
               ),
           ]),
@@ -124,6 +126,24 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
       ),
     );
   }
+
+  /// 清单项的名字：狗与站点报的是英文键，给人看中文（不认识的原样显示）。
+  static String _label(String name) =>
+      const {
+        'busy': '空闲',
+        'battery': '电量',
+        'disk': '盘',
+        'version': '版本',
+        'installed': '装好了',
+        'package': '包没坏',
+        'schema': '任务包格式',
+        'agent_start': '切过去起得来',
+        'localizer': '定位器',
+        'perception': '感知',
+        'extrinsic': '外参',
+        'backup': '站点备份',
+      }[name] ??
+      name;
 
   /// 排序：拦住的不过项 → 提示的不过项 → 过了的。
   static int _rank(Map ch) => ch['ok'] == true ? 2 : (ch['blocking'] == true ? 0 : 1);

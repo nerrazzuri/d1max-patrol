@@ -149,6 +149,15 @@ class ReleaseOps:
             return f"读不了槽: {exc}"
         return ""
 
+    def requires_mission_schema(self, name: str) -> int | None:
+        """槽里这一版自述要的任务包 schema(W00c6d 内审:站点只按自己的登记目录比,没登记的版本
+        绕得过去)。
+        读不到是 ``None``。"""
+        try:
+            return rel.read_manifest(self.layout.release_dir(name)).requires_mission_schema
+        except (rel.ReleaseError, OSError):
+            return None
+
     def can_roll_back(self) -> bool:
         """有在途的那次升级,或者盘上有上一版。"""
         return rel.read_pending(self.layout) is not None or self.previous() is not None

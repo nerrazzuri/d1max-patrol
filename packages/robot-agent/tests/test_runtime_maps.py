@@ -254,8 +254,13 @@ class 假发布:
         return True
 
     def check_package(self, name):
-        """槽里的包现在还对不对(W00c6d):空串 = 对。"""
+        """槽里的包现在还对不对(W00c6d):空串 = 对。记下核的是哪一版。"""
+        self.calls.append(("check", name))
         return getattr(self, "corrupt", "")
+
+    def requires_mission_schema(self, name):
+        """槽里那一版自述要的任务包 schema(W00c6d 内审)。"""
+        return getattr(self, "schema", 1)
 
     def install(self, ref):
         self.calls.append(("install", ref.name))
@@ -432,11 +437,11 @@ async def test_发布_电量不够不切不退_盘满了不装(tmp_path):
         await rt._on_cmd(_cmd(kind, payload, f"{kind}-1", c))
         await broker.drain()
         assert ears.by["cmd/ack"][-1]["reason"] == "low_battery", kind
-    assert rel.calls == []
+    assert [c for c in rel.calls if c[0] != "check"] == []
     dog.inject_battery(31.0)
     await rt._on_cmd(_cmd("release_activate", {"name": new}, "a2", c))
     await _跑(rt, broker, n=3)
-    assert rel.calls == [("activate", new)]
+    assert [c for c in rel.calls if c[0] != "check"] == [("activate", new)]
     await rt.close()
 
 
@@ -556,7 +561,7 @@ async def test_切版本_录包时不切_电量读不到不切_在跑的不切_�
     await rt._on_cmd(_cmd("release_rollback", {}, "a4", c))
     await broker.drain()
     assert ears.by["cmd/ack"][-1]["reason"] == "nothing_to_roll_back"
-    assert rel.calls == []
+    assert [c for c in rel.calls if c[0] != "check"] == []
     await rt.close()
 
 

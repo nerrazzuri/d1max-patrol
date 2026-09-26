@@ -173,5 +173,6 @@ def test_回执可以带数据_只在有的时候写_老报文照读():
     assert "data" not in ACK.to_wire(), "没有数据不写这个键,老夹具不变"
     old = {k: v for k, v in a.to_wire().items() if k != "data"}
     assert Ack.from_wire(old).data is None
-    with pytest.raises(ContractError, match="data"):
-        Ack.from_wire({**a.to_wire(), "data": [1]})
+    # 数据不像话:丢掉数据、回执照收(W00c6d 内审:整条回执被拒,站点等到 504,连「已收下」都看不到)。
+    got = Ack.from_wire({**a.to_wire(), "data": [1]})
+    assert got.data is None and got.result is AckResult.ACCEPTED

@@ -61,6 +61,12 @@ class PrecheckInputs:
     busy: str
     #: 外部来源报的健康(W09/W11 之后才有)。
     sources: tuple[SourceCheck, ...] = ()
+    #: 站点当前任务包的 schema(站点在命令里给;老站点不给就是 ``None``,这一项不列)。
+    mission_schema: int | None = None
+    #: 槽里那一版自述要的任务包 schema;没装、读不到是 ``None``。
+    requires_mission_schema: int | None = None
+    #: 开查的时候狗在忙:槽没核、来源没问(W00c6d 内审:握着命令锁,别让监护心跳等)。
+    skipped: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,22 +113,38 @@ def precheck(inputs: PrecheckInputs) -> tuple[PrecheckItem, ...]:
                             else f"{i.name} 没装(或者 venv 没建成)—— 先装", "not_installed"))
     if not i.installed:
         out.append(PrecheckItem("package", False, True, "没装,没得核", "package_corrupt"))
+    elif i.skipped:
+        out.append(PrecheckItem("package", False, False, "狗在忙,槽里的包没核(空闲时再查)"))
     else:
         out.append(PrecheckItem("package", not i.package_error, True,
                                 "槽里的包跟自述的指纹对得上" if not i.package_error
                                 else f"{i.package_error} —— 重新装一遍", "package_corrupt"))
+    if i.mission_schema is not None and i.requires_mission_schema is not None:
+        # 没装(读不到自述)就不列:站点按自己的登记目录比的那一份补上。
+        ok = i.requires_mission_schema <= i.mission_schema
+        out.append(PrecheckItem("schema", ok, True,
+                                f"这一版要任务包 schema ≥ {i.requires_mission_schema},站点"
+                                f"当前任务包是 {i.mission_schema}"
+                                + ("" if ok else " —— 先导入新格式的任务包"),
+                                "schema_mismatch"))
     out.append(PrecheckItem("agent_start", i.can_switch, True,
                             "切过去代理起得来(启动脚本在)" if i.can_switch
                             else "切过去代理起不来(没有启动脚本、没有执行位,或者是老服务那一代)",
                             "no_agent_start"))
-    got = {s.name: s for s in i.sources}
+    labels = dict(SOURCE_ITEMS)
+    got = {s.name for s in i.sources}
     for name, label in SOURCE_ITEMS:
-        s = got.get(name)
-        if s is None:
+        if name in got:
+            continue
+        if i.skipped:
+            out.append(PrecheckItem(name, False, False, f"{label}:狗在忙,没问(空闲时再查)"))
+        else:
             out.append(PrecheckItem(name, True, False,
                                     f"{label}还没部署,这一项现在不查(接上之后不健康就拦)"))
-        else:
-            out.append(PrecheckItem(name, s.ok, True, f"{label}:{s.detail}", name))
+    # 接上来的来源一个不落地列出来(不认识的名字也列、也拦 —— 内审:以前被悄悄丢掉、照样切)。
+    for s in i.sources:
+        out.append(PrecheckItem(s.name, s.ok, True, f"{labels.get(s.name, s.name)}:{s.detail}",
+                                s.name))
     return tuple(out)
 
 
@@ -134,8 +156,10 @@ def first_block(items: tuple[PrecheckItem, ...]) -> str:
     return ""
 
 
-def report(name: str, items: tuple[PrecheckItem, ...]) -> dict[str, Any]:
-    """回执 ``data`` 里的那份清单。"""
+def report(name: str, items: tuple[PrecheckItem, ...],
+           requires_mission_schema: int | None = None) -> dict[str, Any]:
+    """回执 ``data`` 里的那份清单(带上槽里那一版自述要的任务包 schema,站点显示用)。"""
     blocking = [it.name for it in items if not it.ok and it.blocking]
     return {"name": name, "ok": not blocking, "blocking": blocking,
-            "checks": [it.to_wire() for it in items]}
+            "checks": [it.to_wire() for it in items],
+            "requires_mission_schema": requires_mission_schema}

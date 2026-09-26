@@ -26,6 +26,9 @@ class 假发布:
     def check_package(self, name):
         return ""
 
+    def requires_mission_schema(self, name):
+        return getattr(self, "schema", 1)
+
     def install(self, ref):
         if self.fail:
             raise RuntimeError(self.fail)
@@ -160,11 +163,65 @@ def test_升级前检查_狗的清单合上站点那两项_保安不能查(站�
     assert ("activate", NAME) not in s.agent.releases.calls, "只查,不切"
 
 
-def test_升级前检查_没登记的版本_404(站点):
+def test_升级前检查_没登记的版本_也能查_狗按槽里的自述比schema(站点, tmp_path):
+    """W00c6d 内审应修 3:U 盘装上去的版本站点没登记,以前查回 404、切却跳过 schema 检查。"""
+    from test_site_schedule import 打包
+
+    from d1max_site.catalog import import_bundle
+    s = 站点
+    alice = _登(s, "alice")
+    import_bundle(s.db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
+    other = "2026-01-01-000000"
+    s.agent.releases.done.add(other)
+    s.agent.releases.schema = 2
+    _能查(s)
+    code, d = _查(s, alice, other)
+    got = {c["name"]: c for c in d["checks"]}
+    assert code == 200 and not got["schema"]["ok"] and "schema" in d["blocking"], d
+    assert [c["name"] for c in d["checks"]].count("schema") == 1, "狗报了就不再加站点那一份"
+    code, d = s.req("POST", "/api/robots/A/release", {"action": "activate", "name": other},
+                    token=alice)
+    assert code == 200 and d["ack"]["reason"] == "schema_mismatch", d
+
+
+def test_重投的回执_清单在第一次的结果里(站点, monkeypatch):
     s = 站点
     alice = _登(s, "alice")
     _能查(s)
-    assert _查(s, alice, "2026-01-01-000000")[0] == 404
+    first = {"checks": [{"name": "busy", "ok": True, "blocking": True, "detail": "空闲"}]}
+
+    async def 重投(*a, **k):
+        return {"ack": {"result": "duplicate", "reason": "",
+                        "original": {"result": "accepted", "data": first}}}
+    monkeypatch.setattr(s.disp, "map_command", 重投)
+    code, d = _查(s, alice, NAME)
+    assert code == 200 and d["checks"][0]["name"] == "busy", d
+
+
+def test_回执里没有清单_502(站点, monkeypatch):
+    s = 站点
+    alice = _登(s, "alice")
+    _能查(s)
+
+    async def 没清单(*a, **k):
+        return {"ack": {"result": "accepted", "reason": ""}}
+    monkeypatch.setattr(s.disp, "map_command", 没清单)
+    assert _查(s, alice, NAME)[0] == 502
+
+
+def test_站点备份过期了_提示不拦(站点, tmp_path):
+    s = 站点
+    alice = _登(s, "alice")
+    s.rel_catalog.add(做包(tmp_path))
+    _能查(s)
+
+    class 过期的备份:
+        def status(self):
+            return {"configured": True, "last_ok_ms": 1, "stale": True}
+    s.api.backup = 过期的备份()
+    got = {c["name"]: c for c in _查(s, alice)[1]["checks"]}
+    assert not got["backup"]["ok"] and not got["backup"]["blocking"] and "过期" in \
+        got["backup"]["detail"]
 
 
 def test_新版要的任务包schema比站点当前包高_清单不过_切也不许(站点, tmp_path):
@@ -176,11 +233,14 @@ def test_新版要的任务包schema比站点当前包高_清单不过_切也不
     import_bundle(s.db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
     s.rel_catalog.add(做包(tmp_path, schema=2))
     s.agent.releases.done.add(NAME)
+    s.agent.releases.schema = 2                           # 狗槽里的自述跟登记的是同一个包
     _能查(s)
     code, d = _查(s, alice)
     got = {c["name"]: c for c in d["checks"]}
     assert code == 200 and not got["schema"]["ok"] and "schema" in d["blocking"], d
     assert d["ok"] is False
+    assert [c["name"] for c in d["checks"]].count("schema") == 1, \
+        "登记过的版本:狗按槽里比过了,站点那一份不再重复"
     code, d = s.req("POST", "/api/robots/A/release", {"action": "activate", "name": NAME},
                     token=alice)
     assert code == 409 and "schema" in d["error"], d

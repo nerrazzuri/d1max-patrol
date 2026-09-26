@@ -909,15 +909,16 @@ class _Handler(TlsHandlerMixin):
         action = d.get("action")
         try:
             if action == "precheck":
+                # 没在站点登记的版本(U 盘装上去的)也能查:狗按槽里的自述比 schema(W00c6d 内审)。
                 name = check_release_name(d.get("name"))
-                cat.get(name)                                 # 没登记的版本 404
                 self._audit_detail = {"action": action, "name": name}
                 return self._send_json(200, self._release_precheck(robot_id, name, user))
             if action == "install":
                 ref = cat.get(check_release_name(d.get("name")))
                 kind, payload = "release_install", ref.to_wire()
             elif action == "activate":
-                kind, payload = "release_activate", {"name": check_release_name(d.get("name"))}
+                kind, payload = "release_activate", {"name": check_release_name(d.get("name")),
+                                                     **self._mission_schema()}
                 bad = [c for c in self._release_site_checks(payload["name"])
                        if not c["ok"] and c["blocking"]]
                 if bad:
@@ -933,6 +934,13 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {"action": action, "name": str(d.get("name", ""))[:32]}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
+
+    def _mission_schema(self) -> dict[str, int]:
+        """站点当前任务包的 schema,放进 ``release_precheck``/``release_activate`` 给狗比(没有当前包
+        不给)。"""
+        from d1max_site.catalog import active_bundle_schema
+        cur = active_bundle_schema(self.site.dispatcher.db)
+        return {"mission_schema": cur[1]} if cur is not None else {}
 
     def _release_site_checks(self, name: str) -> list[dict[str, Any]]:
         """升级前检查里站点这边的两项(W00c6d):新版要的任务包 schema(拦)、站点备份(只提示)。
@@ -973,7 +981,8 @@ class _Handler(TlsHandlerMixin):
 
     def _release_precheck(self, robot_id: str, name: str, user) -> dict[str, Any]:
         r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
-            robot_id, "release_precheck", {"name": name}, issued_by=str(user)))
+            robot_id, "release_precheck", {"name": name, **self._mission_schema()},
+            issued_by=str(user)))
         ack = r["ack"]
         if ack["result"] not in ("accepted", "duplicate"):
             raise HttpError(409, f"狗没查:{ack.get('reason') or ack['result']}")
@@ -981,8 +990,10 @@ class _Handler(TlsHandlerMixin):
             (ack.get("original") or {}).get("data")
         if not isinstance(data, dict) or not isinstance(data.get("checks"), list):
             raise HttpError(502, "狗的回执里没有清单")
-        checks = [c for c in data["checks"] if isinstance(c, dict)] + \
-            self._release_site_checks(name)
+        checks = [c for c in data["checks"] if isinstance(c, dict)]
+        dog_has = {c.get("name") for c in checks}
+        # 狗按槽里的自述比过 schema 就用狗的;老代理没比,用站点按登记目录比的那一份。
+        checks += [c for c in self._release_site_checks(name) if c["name"] not in dog_has]
         blocking = [c.get("name") for c in checks if not c.get("ok") and c.get("blocking")]
         return {"robot_id": robot_id, "name": name, "ok": not blocking, "blocking": blocking,
                 "checks": checks}

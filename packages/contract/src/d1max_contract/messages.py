@@ -231,8 +231,10 @@ class Ack:
     def from_wire(cls, d: Any) -> Ack:
         d = check_schema(d, "Ack")
         data = d.get("data")
-        if data is not None and not isinstance(data, dict):
-            raise ContractError("Ack: data 要是对象")
+        if not isinstance(data, dict):
+            # 不像话的数据丢掉、回执照收(W00c6d 内审):整条拒掉的话站点等到超时,连「已收下」
+            # 都看不到。
+            data = None
         return cls(command_id=as_str(d, "command_id", "Ack", nonempty=True),
                    task_id=as_str(d, "task_id", "Ack", nonempty=True),
                    result=as_enum(d, "result", "Ack", AckResult),
