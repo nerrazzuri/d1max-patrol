@@ -1,0 +1,28 @@
+#!/bin/sh
+# d1max-localizer 的启动脚本(W09b,定位器节点)。跟 d1max-agent-start 一个道理:启动参数归版本管,
+# 单元只指着 /opt/d1max/current/deploy/d1max-localizer-start。
+#
+# 定位器跑在 **ROS 的系统 Python** 里(要 rclpy 和 MOLA 的消息),代码用这个脚本所在那一版带的
+# packages/localizer 与 packages/contract(纯 Python,按 PYTHONPATH 找,不进 venv)。它自己把 MOLA 当
+# 子进程拉起来,经本机定位桥(代理的 /var/lib/d1max/agent/loc.sock)把位姿交给代理。跟代理同一个账号
+# (桥按账号认)。
+#
+# 现场值从 /etc/d1max/env 来(单元的 EnvironmentFile):
+#   D1MAX_LOC_PRIOR=<目录>   代理没给先验目录时(狗按 --map 载的图)用的先验:里面要有 prior.mm、frames.json
+#   D1MAX_LOC_ROS_DOMAIN=24  雷达话题在哪个 ROS domain(W08 过渡期:读厂商的 domain 24)
+#   D1MAX_LOC_RMW=rmw_zenoh_cpp  跟厂商那边一样的中间件
+#   D1MAX_LOC_ARGS=其余参数(比如 --lidar-topic /front_lidar)
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+# ROS 的 setup 脚本里有未定义变量,关掉 -u 再 source
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export ROS_DOMAIN_ID="${D1MAX_LOC_ROS_DOMAIN:-24}"
+export RMW_IMPLEMENTATION="${D1MAX_LOC_RMW:-rmw_zenoh_cpp}"
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck disable=SC2086  # D1MAX_LOC_ARGS 要按空白拆成几个参数
+exec /usr/bin/python3 -m d1max_localizer.main \
+  --socket /var/lib/d1max/agent/loc.sock \
+  ${D1MAX_LOC_PRIOR:+--prior-dir} ${D1MAX_LOC_PRIOR:+"$D1MAX_LOC_PRIOR"} \
+  ${D1MAX_LOC_ARGS:-}

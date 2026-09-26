@@ -291,3 +291,36 @@ def test_MOLA_还在起_人给的位置先记着():
     t.core.tick()
     assert [m.reason for m in t.core.drain() if isinstance(m, State)][-1] == \
         "定位程序在起,起来就按人给的位置定位"
+
+
+def test_近几秒质量不高的帧多了_σ涨到代理不信_偶尔一帧不算():
+    """2026-09-27 回放:平滑地错到 2 m 的那几段,质量中位数照样很高,但低于 0.9 的帧占了 17–25%。"""
+    from d1max_localizer.core import LOWQ_Q, LOWQ_WINDOW_S, SIGMA_BAD_M
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    t.walk(40)
+    t.step(2.05, 0.0, q=LOWQ_Q - 0.05)                     # 偶尔一帧
+    t.walk(3, x0=2.05)
+    assert t.poses()[-1].sigma_xy < 0.5
+    x = 2.2
+    for i in range(int(LOWQ_WINDOW_S * 10)):               # 每 4 帧一帧质量不高(25%)
+        x += 0.05
+        t.step(x, 0.0, q=LOWQ_Q - 0.05 if i % 4 == 0 else 0.97)
+    assert t.poses()[-1].sigma_xy >= SIGMA_BAD_M
+    for _ in range(int(LOWQ_WINDOW_S * 10) + 2):           # 好了
+        x += 0.05
+        t.step(x, 0.0, q=0.97)
+    assert t.poses()[-1].sigma_xy < 0.5
+
+
+def test_不可信的σ明显高于代理那条线():
+    """代理 σ **大于** 1.0 m 才不信;给正好 1.0 的话代理照样信(2026-09-27 回放踩到)。"""
+    from d1max_localizer.core import SIGMA_BAD_M
+
+    from d1max_agent.bridge_localizer import SIGMA_LOST_M
+    assert SIGMA_BAD_M > SIGMA_LOST_M
+    t = 台()
+    t.c.t += RELOC_SETTLE_S
+    t.walk(3)
+    t.step(0.15, 0.0, q=0.3)
+    assert t.poses()[-1].sigma_xy > SIGMA_LOST_M

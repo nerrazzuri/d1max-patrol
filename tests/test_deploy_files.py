@@ -1137,9 +1137,38 @@ def test_卸载脚本删agent单元():
     assert "# @删除 /etc/systemd/system/d1max-agent.service" in text
     assert "\nMAIN_UNIT=d1max-agent.service\n" in text
     assert 'rm_sys "$UNIT_DIR/$MAIN_UNIT"' in text and 'rm_sys "$WANTS_LINK"' in text
-    # 没重跑过装机脚本的老机器上老服务还在:卸载照样要停、要删。
-    assert 'for u in "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do' in text
+    # 没重跑过装机脚本的老机器上老服务还在:卸载照样要停、要删。定位器(W09b)先停,它连着代理。
+    assert 'for u in "$LOC_UNIT" "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do' in text
     assert 'rm_sys "$UNIT_DIR/$LEGACY_UNIT"' in text
+
+
+def test_定位器的启动脚本与单元_只装不启用_卸载删干净():
+    """W09b:定位器节点跑在 ROS 的系统 Python 里、用这一版带的包;跟代理同一个账号(本机定位桥按
+    账号认);装机脚本只装单元、不 enable(真狗在 W09b 真机项验过之前不起);卸载连手工 enable 过的
+    自启链一起删。"""
+    import os
+    import subprocess
+    start = DEPLOY / "d1max-localizer-start"
+    assert os.access(start, os.X_OK)
+    subprocess.run(["sh", "-n", str(start)], check=True)
+    text = start.read_text(encoding="utf-8")
+    assert '. /opt/ros/humble/setup.sh' in text
+    assert '$here/packages/localizer/src:$here/packages/contract/src' in text
+    assert "--socket /var/lib/d1max/agent/loc.sock" in text, "代理的 --store-dir 下的 loc.sock"
+    assert "exec /usr/bin/python3 -m d1max_localizer.main" in text
+    单元 = (DEPLOY / "d1max-localizer.service").read_text(encoding="utf-8")
+    代理单元 = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    assert "User=robot" in 单元 and "User=robot" in 代理单元
+    assert "ExecStart=/opt/d1max/current/deploy/d1max-localizer-start" in 单元
+    assert "EnvironmentFile=-/etc/d1max/env" in 单元
+    assert "KillMode=control-group" in 单元, "MOLA 是它的子进程,停的时候一起停"
+    装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "# @写盘 /etc/systemd/system/d1max-localizer.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/d1max-localizer.service" /etc/systemd/system/' in 装
+    assert "enable d1max-localizer" not in 装 and "start d1max-localizer" not in 装
+    卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /etc/systemd/system/d1max-localizer.service" in 卸
+    assert 'rm_sys "$UNIT_DIR/$LOC_UNIT"' in 卸 and 'rm_sys "$LOC_WANTS_LINK"' in 卸
 
 
 def test_根下的解释器venv也装三个包_不然别名壳一import就炸(装机脚本):

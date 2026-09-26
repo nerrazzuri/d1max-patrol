@@ -26,6 +26,7 @@ set -euo pipefail
 # @写盘 /etc/d1max/env                                                   现场值:站点地址、地图、原点、适配器、SN
 # @写盘 /etc/systemd/system/d1max-agent.service                           代理单元(狗上只有它一个服务,W00c5e)
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
+# @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;只装不 enable)
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
 #
@@ -305,6 +306,11 @@ say "5/7 装代理单元与环境文件;清掉老服务"
 AGENT_UNIT_SRC="$PKG/deploy/d1max-agent.service"
 [[ -f "$AGENT_UNIT_SRC" ]] || AGENT_UNIT_SRC="$(dirname "$0")/d1max-agent.service"
 install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/
+# 定位器单元(W09b):**只装、不 enable** —— 真狗在 W09b 的真机项验过之前不起。开车的仍然只有代理:
+# 定位器只读雷达、经本机定位桥给代理位姿,不碰旁路进程。老包没带就跳过。
+if [[ -f "$PKG/deploy/d1max-localizer.service" ]]; then
+  install -m 0644 "$PKG/deploy/d1max-localizer.service" /etc/systemd/system/
+fi
 # **老服务清掉。** 两个进程抢同一个旁路进程的控制权会出事,两个服务共用在途标记还会互相数
 # 开机次数、替对方提交。失败不致命:新机器上本来就没有这些。
 # 顺序:先停老服务、再删 sudoers、再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在

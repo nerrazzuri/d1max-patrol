@@ -12,7 +12,7 @@ MOLA 给了一帧估计(:meth:`on_estimate`)、每拍(:meth:`tick`)。出::meth:
 - **初始化**:先验没载好 → ``initializing``;载好了、没给初值 → ``initializing``「等人给初始位置」
   (探路:MOLA 不给初值不能用),这期间 MOLA 的输出不发。
 - **σ_xy** = max(ICP 质量给的, 最近跳过给的, 重定位之后的):质量 ≥ :data:`Q_GOOD` 给
-  :data:`SIGMA_MIN_M`,往 :data:`Q_BAD` 线性涨到 :data:`SIGMA_BAD_M`(代理 1.0 m 就不信);
+  :data:`SIGMA_MIN_M`,往 :data:`Q_BAD` 线性涨到 :data:`SIGMA_BAD_M`(代理过 1.0 m 就不信);
   :data:`JUMP_MEMORY_S` 里跳过 → 不小于 :data:`SIGMA_JUMPED_M`;重定位之后从给的初值开始,
   :data:`RELOC_SETTLE_S` 里线性降下来(探路:初值偏大时会带着偏差、质量分还很高地跑一阵)。
 - **跳变**:相邻两帧挪得比狗能跑的还远、转得比能转的还快 → ``jump``;:data:`JUMP_WINDOW_S` 里跳
@@ -44,9 +44,19 @@ Q_GOOD = 0.8
 Q_BAD = 0.5
 Q_MATCH = 0.5
 SIGMA_MIN_M = 0.1
-SIGMA_BAD_M = 1.0
+#: 「不可信」的 σ:要**明显高于**代理的线(``BridgeLocalizer.SIGMA_LOST_M`` = 1.0,σ 大于它才不信 ——
+#: 2026-09-27 回放:原来给 1.0 正好压线,代理照样信)。
+SIGMA_BAD_M = 1.5
 SIGMA_JUMPED_M = 0.5
 JUMP_MEMORY_S = 5.0
+#: 近 :data:`LOWQ_WINDOW_S` 里 ICP 质量低于 :data:`LOWQ_Q` 的帧占比过 :data:`LOWQ_SHARE` → σ 不小于
+#: :data:`SIGMA_BAD_M`(代理不信)。2026-09-27 回放(coverage 放在 coverage2 的先验上):平滑地错到
+#: 2 m 的两段,质量中位数照样 0.96,但低于 0.9 的帧占 17–25%;对得上的几段只占 0–6%。单帧质量看不出来,
+#: 窗口占比看得出来。**只拿一个跨次录包定的线**,真机再标。
+LOWQ_Q = 0.9
+LOWQ_WINDOW_S = 3.0
+LOWQ_SHARE = 0.2
+LOWQ_MIN_FRAMES = 10
 #: 狗最快能跑多快、能转多快(米/秒、弧度/秒);一帧挪得比这还远,再加上余量,就算跳。
 MAX_SPEED_MPS = 1.5
 MAX_TURN_RPS = 2.0
@@ -108,6 +118,7 @@ class LocalizerCore:
         self._last: tuple[float, float, float, float] | None = None   # 上一帧:stamp, x, y, yaw
         self._last_match: float | None = None           # 最后一次真匹配的 stamp
         self._jumps: deque[float] = deque()
+        self._lowq: deque[tuple[float, bool]] = deque()   # 近几秒每帧:stamp, 质量低不低
         self._jump_lost = False
         self._reloc_tag: tuple[int | None] | None = None   # 下一帧要带的 (reloc_id,)
         self._reloc_sigma = 0.0
@@ -153,6 +164,7 @@ class LocalizerCore:
         self._got_since_start = False
         self._last = None
         self._stamp = None
+        self._lowq.clear()
         self._want_reloc = self._good is not None and self._frames is not None
 
     def relocalized(self, *, req: int | None, x: float, y: float, yaw: float, sigma: float,
@@ -207,6 +219,9 @@ class LocalizerCore:
             if jump:
                 self._jumps.append(now)
         self._last = (e.stamp, x, y, yaw)
+        self._lowq.append((e.stamp, e.quality < LOWQ_Q))
+        while e.stamp - self._lowq[0][0] > LOWQ_WINDOW_S:
+            self._lowq.popleft()
         if e.quality >= Q_MATCH or self._last_match is None:
             self._last_match = e.stamp
         age_ms = 0 if e.quality >= Q_MATCH else round((e.stamp - self._last_match) * 1000)
@@ -343,6 +358,9 @@ class LocalizerCore:
             s = SIGMA_MIN_M + (SIGMA_BAD_M - SIGMA_MIN_M) * (Q_GOOD - quality) / (Q_GOOD - Q_BAD)
         if any(now - t <= JUMP_MEMORY_S for t in self._jumps):
             s = max(s, SIGMA_JUMPED_M)
+        if (len(self._lowq) >= LOWQ_MIN_FRAMES
+                and sum(low for _, low in self._lowq) / len(self._lowq) >= LOWQ_SHARE):
+            s = max(s, SIGMA_BAD_M)
         since = now - self._reloc_at
         if 0 <= since < RELOC_SETTLE_S:
             s = max(s, self._reloc_sigma * (1.0 - since / RELOC_SETTLE_S))
