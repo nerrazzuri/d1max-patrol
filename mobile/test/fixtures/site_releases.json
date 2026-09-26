@@ -1,12 +1,12 @@
 {
   "releases": [
     {
-      "created_ms": 1790401603881,
+      "created_ms": 1790405096028,
       "name": "2026-09-25-bbbbbb",
       "note": "夜巡修了一个 bug",
       "requires_mission_schema": 1,
-      "sha256": "22bd5099372cde754e29b219346f17634efc50446902d6a2bf504f393bb51960",
-      "size": 510,
+      "sha256": "6b0282c72b6c5330a6263885257fa15d00af5f22f07c83eab61738f5cd4efe38",
+      "size": 507,
       "version": "0.9"
     }
   ],

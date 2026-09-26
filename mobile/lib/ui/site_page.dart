@@ -9,6 +9,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -445,6 +446,45 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     await _do(() => widget.api.mapping(widget.robotId, 'start', name: got[0]), '开始录包');
   }
 
+  /// 设位置（W00c6e）：「狗在原点」一键，或者输地图坐标（朝向按度输）。
+  Future<void> _relocalize() async {
+    final how = await showDialog<String>(
+      context: context,
+      builder: (c) => SimpleDialog(title: const Text('狗现在在哪'), children: [
+        SimpleDialogOption(
+            key: const Key('reloc-home'),
+            onPressed: () => Navigator.pop(c, 'home'),
+            child: const Text('在原点（充电桩）')),
+        SimpleDialogOption(
+            key: const Key('reloc-xy'),
+            onPressed: () => Navigator.pop(c, 'xy'),
+            child: const Text('输地图坐标')),
+      ]),
+    );
+    if (how == null || !mounted) return;
+    if (how == 'home') {
+      await _do(() => widget.api.relocalize(widget.robotId, atHome: true), '设位置');
+      return;
+    }
+    final got = await showFieldsDialog(context,
+        title: '狗现在在地图上哪儿',
+        fields: const [
+          DialogField('x（米）', key: Key('reloc-x')),
+          DialogField('y（米）', key: Key('reloc-y')),
+          DialogField('朝向（度，东为 0，逆时针）', key: Key('reloc-yaw'), initial: '0'),
+        ],
+        confirm: '设',
+        confirmKey: const Key('reloc-go'));
+    if (got == null) return;
+    final x = double.tryParse(got[0]), y = double.tryParse(got[1]), deg = double.tryParse(got[2]);
+    if (x == null || y == null || deg == null || !x.isFinite || !y.isFinite || !deg.isFinite) {
+      if (mounted) setState(() => _msg = '坐标、朝向要是数字');
+      return;
+    }
+    await _do(() => widget.api.relocalize(widget.robotId, x: x, y: y, yaw: deg * pi / 180),
+        '设位置');
+  }
+
   /// 叫停之前**现取**正在跑的任务：页面上的可能是几秒前的，排程早换了一趟。
   Future<void> _abort() async {
     Map<String, dynamic> v;
@@ -512,6 +552,8 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         onRefresh: _reload,
         child: ListView(padding: const EdgeInsets.all(12), children: [
           Text(v == null ? '加载中…' : _statusLine(v), key: const Key('robot-status')),
+          if (v?['loc'] is Map)
+            Text(locText((v!['loc'] as Map).cast<String, dynamic>()), key: const Key('robot-loc')),
           // 叫停之后站点不再派它（W00c5e）：说清楚，给能派单的人一个「恢复」。
           if (v?['held'] is Map)
             Card(
@@ -553,6 +595,11 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                   onPressed: () => _do(() => widget.api.mapping(widget.robotId, 'stop'), '停止录包'),
                   child: const Text('停止录包')),
             ],
+            if ((s?.canDispatch ?? false) && robotCan(v, 'relocalize'))
+              OutlinedButton(
+                  key: const Key('btn-relocalize'),
+                  onPressed: _relocalize,
+                  child: const Text('设位置')),
             if (s?.canDispatch ?? false)
               OutlinedButton(
                   key: const Key('btn-standby'),

@@ -176,3 +176,15 @@ def test_回执可以带数据_只在有的时候写_老报文照读():
     # 数据不像话:丢掉数据、回执照收(W00c6d 内审:整条回执被拒,站点等到 504,连「已收下」都看不到)。
     got = Ack.from_wire({**a.to_wire(), "data": [1]})
     assert got.data is None and got.result is AckResult.ACCEPTED
+
+
+def test_遥测可以带定位块_只在有的时候写_老报文照读():
+    """W00c6e:里程锚定的状态(来源、锚了没有、偏差、为什么不可信)。老站点不看,老狗不带。"""
+    loc = {"source": "odom_anchor", "anchored": True, "sigma_m": 0.6, "reason": ""}
+    t = Telemetry(stamp=1, pose=None, battery_pct=50.0, task_state=None, loc_quality=0.7,
+                  net={}, loc=loc)
+    assert Telemetry.from_wire(t.to_wire()) == t
+    assert "loc" not in TELE.to_wire()
+    old = {k: v for k, v in t.to_wire().items() if k != "loc"}
+    assert Telemetry.from_wire(old).loc is None
+    assert Telemetry.from_wire({**t.to_wire(), "loc": "x"}).loc is None

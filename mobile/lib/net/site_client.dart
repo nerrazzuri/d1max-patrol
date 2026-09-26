@@ -114,8 +114,24 @@ String ackReasonText(String reason) => switch (reason) {
       'stale_epoch' => '站点和狗的控制代次对不上，刷新一下再试',
       'stale_seq' => '这是一条迟到的旧心跳，狗没认',
       'halting' => '它正在叫停，稍后再派',
+      'moving' => '它在走：停下再设位置',
+      'no_home' => '这张图没标过原点：输坐标',
+      'map_mismatch' => '狗刚换了图：刷新一下再设',
+      'no_map' => '狗没加载地图',
+      'odom_invalid' => '狗的里程读不到（旁路进程断了？）',
       _ => reason,
     };
+
+/// 定位状态的人话（W00c6e，里程锚定）：单狗视图里的 `loc`（站点从狗的遥测取的）。没有就是空串。
+String locText(Map<String, dynamic>? loc) {
+  if (loc == null) return '';
+  final reason = '${loc['reason'] ?? ''}';
+  if (loc['anchored'] != true) return '定位：没设位置 —— ${reason.isEmpty ? '点「设位置」' : reason}';
+  if (reason.isNotEmpty) return '定位不可信：$reason';
+  if (loc['source'] == 'odom_identity') return '定位：仿真（里程就是位置）';
+  final s = loc['sigma_m'];
+  return '定位：偏差约 ${s is num ? s.toStringAsFixed(1) : '?'} m';
+}
 
 /// 站点的接口面。界面只认它，测试可以换成假的。
 abstract class SiteApi {
@@ -160,6 +176,10 @@ abstract class SiteApi {
   /// 慢了就当这一次没成，下一次再来。
   Future<Map<String, dynamic>> supervise(String robotId, String action,
       {required String session, required int seq});
+
+  /// 设位置（W00c6e，里程锚定）：[atHome] 狗在原点；否则 [x]、[y]（米）、[yaw]（弧度），地图坐标。保安、管理员。
+  Future<Map<String, dynamic>> relocalize(String robotId,
+      {bool atHome = false, double x = 0, double y = 0, double yaw = 0});
 
   /// 运行记录（W00c5d，决策 8：证据都在站点）：最近的在前；[robotId] 给了只要这台狗的。
   /// 读不懂就抛 `FormatException`，不当成「没有记录」。
@@ -644,6 +664,12 @@ class SiteClient implements SiteApi {
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/supervise',
           <String, dynamic>{'action': action, 'session': session, 'seq': seq},
           const Duration(seconds: 3)));
+
+  @override
+  Future<Map<String, dynamic>> relocalize(String robotId,
+          {bool atHome = false, double x = 0, double y = 0, double yaw = 0}) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/relocalize',
+          atHome ? <String, dynamic>{'at_home': true} : <String, dynamic>{'x': x, 'y': y, 'yaw': yaw}));
 
   @override
   HttpClient pinnedClient() {

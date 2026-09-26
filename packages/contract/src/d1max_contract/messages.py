@@ -435,6 +435,8 @@ class Telemetry:
     net: dict[str, Any] = field(default_factory=dict)
     #: W00c5d:狗的盘况(每 10 s 带一次;没有就不发这个键,老狗也不带)。
     storage: StorageFacts | None = None
+    #: W00c6e:定位状态 ``{"source", "anchored", "sigma_m", "reason"}``(没有就不发,老狗也不带)。
+    loc: dict[str, Any] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         d = {"stamp": self.stamp, "pose": self.pose.to_wire() if self.pose else None,
@@ -443,6 +445,8 @@ class Telemetry:
              "loc_quality": self.loc_quality, "net": dict(self.net)}
         if self.storage is not None:
             d["storage"] = self.storage.to_wire()
+        if self.loc is not None:
+            d["loc"] = dict(self.loc)
         return _stamped(d)
 
     @classmethod
@@ -458,4 +462,5 @@ class Telemetry:
                    loc_quality=as_float(d, "loc_quality", "Telemetry"),
                    net=as_dict(d, "net", "Telemetry"),
                    storage=StorageFacts.from_wire(d["storage"]) if d.get("storage") is not None
-                   else None)
+                   else None,
+                   loc=d["loc"] if isinstance(d.get("loc"), dict) else None)

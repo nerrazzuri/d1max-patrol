@@ -57,9 +57,11 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
                  "foot_force": bool(hal_caps.sensing.get("foot_force"))})
 
 
-def compose_ready(health: Health, motion: MotionStatus) -> Ready:
+def compose_ready(health: Health, motion: MotionStatus, *, loc_ok: bool | None = None) -> Ready:
+    """``loc_ok`` 给了就用它(W00c6e:定位可不可信看锚定);不给按运控的「里程新鲜」。"""
     return Ready(control=health.control, motion=motion is MotionStatus.READY,
-                 estop_clear=not health.estop, loc_ok=health.loc_quality > 0.0)
+                 estop_clear=not health.estop,
+                 loc_ok=health.loc_quality > 0.0 if loc_ok is None else loc_ok)
 
 
 def compose_status(*, online: bool, boot_id: str, ready: Ready, control_epoch: int,
@@ -77,7 +79,21 @@ def offline_status(*, boot_id: str, control_epoch: int) -> Status:
 
 def compose_telemetry(*, now_ms: int, odom: Odometry, battery: Battery, health: Health,
                       loaded_map: tuple[str, str] | None, task_state: TaskState | None,
-                      online: bool, storage: StorageFacts | None = None) -> Telemetry:
+                      online: bool, storage: StorageFacts | None = None,
+                      anchor: Any = None) -> Telemetry:
+    """``anchor``(W00c6e):地图位姿 = 锚定 ∘ 里程(没锚过就没有位姿)、``loc_quality`` 看锚定、
+    带 ``loc`` 块。
+    不给按原样(里程就是地图位姿)。"""
+    if anchor is not None:
+        odom_ok = health.loc_quality > 0.0 and odom.valid
+        est = anchor.estimate((odom.x, odom.y, odom.yaw)) if odom.valid else None
+        pose = None
+        if loaded_map is not None and est is not None:
+            pose = MapPose(map_id=loaded_map[0], map_version=loaded_map[1], frame_id="map",
+                           x=est.x, y=est.y, yaw=est.yaw)
+        return Telemetry(stamp=now_ms, pose=pose, battery_pct=battery.percent,
+                         task_state=task_state, loc_quality=anchor.quality(odom_ok),
+                         net={"online": online}, storage=storage, loc=anchor.to_wire(odom_ok))
     pose = None
     if loaded_map is not None and odom.valid:
         pose = MapPose(map_id=loaded_map[0], map_version=loaded_map[1], frame_id="map",

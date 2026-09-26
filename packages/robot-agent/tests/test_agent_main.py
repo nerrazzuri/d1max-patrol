@@ -117,6 +117,11 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
         a.start()
         site = DispatchClient(MemoryTransport(a.broker, "site"), T, now_ms=agent_main.wall_ms)
         a.bridge.call(site.start)
+        # W00c6e:真狗开机要人给一次位置(里程锚定)。仿真旁路的狗在原点。
+        reloc = site.new_command("relocalize", {"x": 0.0, "y": 0.0, "yaw": 0.0}, ttl_ms=60_000,
+                                 control_epoch=1)
+        ack = a.bridge.call(lambda: site.send(reloc, timeout_s=5.0), timeout_s=10.0)
+        assert ack.result is AckResult.ACCEPTED, ack
         target = MapPose(map_id="estate-1", map_version="7", frame_id="map", x=0.8, y=0.4,
                          yaw=0.0)
         cmd = site.new_command("goto", {"target": target.to_wire(), "max_speed_mps": 1.0},

@@ -24,6 +24,7 @@ import math
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from d1max_agent.localization import OdomAnchor
 from d1max_contract.hal import RobotHAL, VelocityCommand
 from d1max_patrol.backends.base import (
     LocStatusEvent,
@@ -49,7 +50,8 @@ def _wrap(a: float) -> float:
 
 class HalNavBackend(NavBackend):
     def __init__(self, hal: RobotHAL, *, now_ms: Callable[[], int], map_id: str,
-                 init_delay_s: float = 0.3, terminal_hold_s: float = 0.5) -> None:
+                 init_delay_s: float = 0.3, terminal_hold_s: float = 0.5,
+                 anchor: OdomAnchor | None = None) -> None:
         super().__init__()
         self._hal = hal
         self._now = now_ms
@@ -66,6 +68,16 @@ class HalNavBackend(NavBackend):
         self._target: Pose | None = None
         self._due: tuple[int, NavStatus] | None = None      # (时刻, 到时进入的状态)
         self._seq = 0
+        #: 最近一拍的里程新不新鲜(运控报的 ``loc_quality`` 改义为「里程新鲜」,W08 决定 9)。
+        self.odom_ok = False
+        self.use_anchor(anchor if anchor is not None else OdomAnchor(identity=True))
+
+    def use_anchor(self, anchor: OdomAnchor) -> None:
+        """地图位姿从哪来(W00c6e):里程锚定。仿真按原样(里程就是地图位姿);真狗没锚过就不可信。"""
+        self.anchor = anchor
+        if anchor.identity and anchor.map_ref is None:
+            anchor.on_map((self._map_id, ""))
+        self._loc = LocStatus.CONTINUOUS_LOC if anchor.anchored else LocStatus.LOC_LOST
 
     # ------------------------------------------------------------ 生命周期
 
@@ -160,10 +172,12 @@ class HalNavBackend(NavBackend):
     async def nav_status(self) -> NavStatus | None:
         return self._status
 
-    async def current_pose(self) -> Pose:
-        """狗现在在哪:运控里程(引擎记出发点、来路用,W00c6b 内审)。"""
+    async def current_pose(self) -> Pose | None:
+        """狗现在在地图上哪儿(引擎记出发点、来路用,W00c6b 内审):锚定后的地图位姿;没锚过是
+        ``None``。"""
         o = await self._hal.odometry()
-        return Pose.from_xy_yaw(o.x, o.y, o.yaw)
+        est = self.anchor.estimate((o.x, o.y, o.yaw))
+        return None if est is None else Pose.from_xy_yaw(est.x, est.y, est.yaw)
 
     #: 这座桥怎么走路(W00c6b):能力里报给站点(``tasks.goto.path``),站点据此决定巡检后怎么回待命点。
     PATH_KIND = "straight"
@@ -207,10 +221,16 @@ class HalNavBackend(NavBackend):
             self._set_status(nxt)
 
     async def step(self, dt_s: float) -> None:
-        """推进一拍:定时转移 + 定位质量 + 速度环。运行时每拍 ``await`` 一次。"""
+        """推进一拍:定时转移 + 定位质量 + 速度环。运行时每拍 ``await`` 一次。
+
+        定位(W00c6e):每拍都喂一次里程给锚定(遥控开着走的也算距离);可信 = 锚过、里程新鲜、
+        σ 没过线。"""
         self._advance_timers()
         health = await self._hal.health()
-        loc = LocStatus.CONTINUOUS_LOC if health.loc_quality > 0.0 else LocStatus.LOC_LOST
+        odom = await self._hal.odometry()
+        self.odom_ok = health.loc_quality > 0.0 and odom.valid
+        self.anchor.update((odom.x, odom.y, odom.yaw))
+        loc = LocStatus.CONTINUOUS_LOC if self.anchor.ok(self.odom_ok) else LocStatus.LOC_LOST
         if loc is not self._loc:
             prev, self._loc = self._loc, loc
             self.emit(LocStatusEvent(loc, prev))
@@ -225,13 +245,16 @@ class HalNavBackend(NavBackend):
             # ``_enter_terminal`` 的 ``finally`` 照样进终态(W00c6a 内审 S1),以前这里是
             # assert,每拍炸。
             return
-        odom = await self._hal.odometry()
-        dx, dy = self._target.position.x - odom.x, self._target.position.y - odom.y
+        here = self.anchor.estimate((odom.x, odom.y, odom.yaw))
+        if here is None:
+            await self._enter_terminal(NavStatus.FAILED)
+            return
+        dx, dy = self._target.position.x - here.x, self._target.position.y - here.y
         dist = math.hypot(dx, dy)
         if dist <= POSITION_TOL_M:
             await self._enter_terminal(NavStatus.SUCCEED)
             return
-        bearing = _wrap(math.atan2(dy, dx) - odom.yaw)
+        bearing = _wrap(math.atan2(dy, dx) - here.yaw)
         wz = max(-self._wmax, min(self._wmax, K_ANG * bearing))
         if abs(bearing) > BEARING_THRESH_RAD:
             vx = 0.0

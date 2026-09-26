@@ -78,7 +78,7 @@ ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
-_TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/(teleop|halt|resume|supervise)$")
+_TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/(teleop|halt|resume|supervise|relocalize)$")
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
@@ -334,6 +334,8 @@ class _Handler(TlsHandlerMixin):
                     return self._resume(robot_id, user)
                 if m.group(2) == "supervise" and method == "POST":
                     return self._supervise(robot_id, user)
+                if m.group(2) == "relocalize" and method == "POST":
+                    return self._relocalize(robot_id, user)
                 if m.group(2) == "teleop" and method == "GET":
                     return self._teleop_ws(robot_id, user)
                 raise HttpError(404, f"没有 {method} {path}")
@@ -663,6 +665,35 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "没有这台狗")
         was = self.site.dispatcher.resume(robot_id, by=str(user))
         return self._send_json(200, {"robot_id": robot_id, "was_held": was})
+
+    def _relocalize(self, robot_id: str, user) -> None:
+        """设位置(W00c6e,里程锚定):``{"x", "y", "yaw"}`` 或 ``{"at_home": true}``,转成
+        ``relocalize`` 命令;坐标按狗**当前加载的那张图**(命令里带上图号,狗核对)。``dispatch`` 权限
+        —— 保安、管理员。不受监护闸约束(不动)。狗在走、原点没标过这些由狗拒,回执原样回。"""
+        import math
+        self._need(user, DISPATCH)
+        self._audit_target = robot_id
+        d = self._body()
+        if not isinstance(d, dict):
+            raise HttpError(400, "要一个对象")
+        if "at_home" in d:
+            if d.get("at_home") is not True:
+                raise HttpError(400, "at_home 只能是 true")
+            payload: dict[str, Any] = {"at_home": True}
+        else:
+            payload = {}
+            for k in ("x", "y", "yaw"):
+                v = d.get(k)
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                    raise HttpError(400, f"{k} 要是有限数")
+                payload[k] = float(v)
+        c = self.site.dispatcher.clients.get(robot_id)
+        caps = c.capabilities.tasks.get("patrol", {}) if c and c.capabilities else {}
+        if caps.get("map_id") is not None:
+            payload |= {"map_id": caps["map_id"], "map_version": caps.get("map_version")}
+        self._audit_detail = {k: payload[k] for k in ("x", "y", "yaw", "at_home") if k in payload}
+        return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
+            robot_id, "relocalize", payload, issued_by=str(user))))
 
     def _supervise(self, robot_id: str, user) -> None:
         """监护心跳(W00c6i):``{"action": "renew"|"release"}``。``dispatch`` 权限 —— 保安、

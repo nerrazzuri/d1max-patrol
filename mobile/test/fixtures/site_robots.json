@@ -41,21 +41,36 @@
           },
           "release_precheck": {},
           "release_rollback": {},
+          "relocalize": {
+            "needs_pose": false
+          },
           "teleop": {
             "max_vx": 0.5,
             "max_wz": 0.75
           }
         }
       },
-      "expires_at": 1791401602616,
+      "expires_at": 1791405094718,
       "fresh": true,
       "held": null,
+      "loc": {
+        "anchored": true,
+        "pose": {
+          "x": 0.0,
+          "y": 0.0,
+          "yaw": 0.0
+        },
+        "quality": 1.0,
+        "reason": "",
+        "sigma_m": 0.0,
+        "source": "odom_identity"
+      },
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-2c623d0a85",
+        "boot_id": "boot-7b60fa0869",
         "control_epoch": 1,
-        "last_seen": 1790401603489,
+        "last_seen": 1790405095589,
         "online": true,
         "ready": {
           "control": true,

@@ -284,7 +284,18 @@ class Dispatcher:
         return {"robot_id": robot_id, "revoked": rec.revoked,
                 "active": self.registry.active(robot_id, now_ms=self._now()),
                 "expires_at": rec.expires_at, "status": status, "capabilities": caps,
-                "fresh": self._fresh(c), "held": self.held(robot_id)}
+                "fresh": self._fresh(c), "held": self.held(robot_id),
+                "loc": self._loc_view(c)}
+
+    @staticmethod
+    def _loc_view(c: DispatchClient | None) -> dict[str, Any] | None:
+        """最近一份遥测里的定位状态(W00c6e):来源、锚了没有、偏差、为什么不可信、位姿、质量。"""
+        t = c.telemetry if c is not None else None
+        if t is None:
+            return None
+        pose = None if t.pose is None else {"x": round(t.pose.x, 3), "y": round(t.pose.y, 3),
+                                            "yaw": round(t.pose.yaw, 4)}
+        return {**(t.loc or {}), "quality": t.loc_quality, "pose": pose}
 
     def robots_view(self) -> list[dict[str, Any]]:
         return [v for r in self.registry.list() if (v := self.robot_view(r.robot_id))]

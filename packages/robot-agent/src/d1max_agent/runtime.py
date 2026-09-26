@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -24,6 +25,7 @@ from d1max_agent.assembly import EngineParts, build_engine
 from d1max_agent.commands import CommandProcessor
 from d1max_agent.events import EventBook
 from d1max_agent.idempotency import IdempotencyStore
+from d1max_agent.localization import OdomAnchor
 from d1max_agent.release_precheck import MIN_BATTERY_PCT as _PRECHECK_MIN_BATTERY_PCT
 from d1max_agent.resources import ResourceLedger
 from d1max_agent.status import (
@@ -101,7 +103,7 @@ class AgentRuntime:
                  monotonic: Callable[[], float] | None = None, video: Any = None,
                  storage_facts: Callable[[], StorageFacts | None] | None = None,
                  maps: Any = None, mapper: Any = None, releases: Any = None,
-                 autonomy: str | None = None) -> None:
+                 autonomy: str | None = None, odom_identity: bool | None = None) -> None:
         self.registration = registration
         self.topics = registration.topics
         self.hal = hal
@@ -119,6 +121,13 @@ class AgentRuntime:
                                  monotonic=monotonic or time.monotonic, map_id=loaded_map[0],
                                  home=home)
         self.parts = parts
+        # W00c6e:地图位姿来自里程锚定。仿真的里程就是真实位置(按原样);真狗开机要人给一次位置。
+        if odom_identity is None:
+            odom_identity = self.adapter_id.split("/")[0] == "sim"
+        if parts is not None:
+            anchor = OdomAnchor(identity=odom_identity)
+            anchor.on_map(loaded_map)
+            parts.nav.use_anchor(anchor)
         self.events = EventBook(store_dir / "events.jsonl", boot_id=self.boot_id, now_ms=now_ms)
         self.idem = IdempotencyStore(store_dir / "idempotency.jsonl")
         self.processor = CommandProcessor(
@@ -287,6 +296,9 @@ class AgentRuntime:
             out["release_activate"] = {}
             out["release_rollback"] = {}
             out["release_precheck"] = {}        # W00c6d:升级前检查,清单在回执里
+        if self.parts is not None and self.loaded_map is not None:
+            # W00c6e:设位置(里程锚定)。真狗要人给位置;仿真按原样,也收(测试挪坐标用)。
+            out["relocalize"] = {"needs_pose": not self.parts.nav.anchor.identity}
         if self._storage is not None:
             out["outbox_retry"] = {}
         return out
@@ -301,6 +313,8 @@ class AgentRuntime:
             return "unsupported"
         if self._restarting:
             return "restarting"
+        if kind == "relocalize":
+            return await self._relocalize(cmd)
         if kind.startswith("release_"):
             return await self._release_command(cmd)
         if kind == "outbox_retry":
@@ -416,6 +430,45 @@ class AgentRuntime:
         self._restarting = True
         self._release_job = asyncio.get_running_loop().create_task(
             self._release_switch("rollback", "", cmd.task_id))
+        return ""
+
+    async def _relocalize(self, cmd: Command) -> str:
+        """设位置(W00c6e):人给一个地图位姿(或者「狗在原点」),同时记下此刻的里程,锁定锚定。**狗要停着**
+        (丢定位暂停时狗停着,可以给;正在走的时候不行)。坐标按狗当前加载的那张图;命令里带了图号就核。"""
+        p = cmd.payload
+        m = self.loaded_map
+        if self.parts is None or m is None:
+            return "no_map"
+        if "map_id" in p or "map_version" in p:
+            if (p.get("map_id"), p.get("map_version")) != m:
+                return "map_mismatch"
+        if "at_home" in p:
+            if p.get("at_home") is not True:
+                return "payload: at_home 只能是 true"
+            home = self.parts.home
+            if home is None:
+                return "no_home"
+            pose = (home.pose.position.x, home.pose.position.y, home.pose.yaw)
+            source = "home"
+        else:
+            vals = []
+            for k in ("x", "y", "yaw"):
+                v = p.get(k)
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                    return f"payload: {k} 要是有限数"
+                vals.append(float(v))
+            pose = (vals[0], vals[1], vals[2])
+            source = "manual"
+        if not await self.hal.stopped():
+            return "moving"
+        o = await self.hal.odometry()
+        if not o.valid:
+            return "odom_invalid"
+        self.parts.nav.anchor.anchor(m, pose, (o.x, o.y, o.yaw))
+        self.events.emit("relocalized", {"task_id": cmd.task_id, "source": source,
+                                         "map_id": m[0], "map_version": m[1],
+                                         "x": round(pose[0], 3), "y": round(pose[1], 3),
+                                         "yaw": round(pose[2], 4)})
         return ""
 
     def _busy_reason(self) -> str:
@@ -567,6 +620,7 @@ class AgentRuntime:
             home = self.maps.home_of(ref) if self.maps is not None else None
             self.parts.switch_map(ref.map_id, None if home is None else Pose.from_xy_yaw(*home),
                                   now_ms=self._now())
+            self.parts.nav.anchor.on_map(self.loaded_map)     # 换了图:锚定作废(W00c6e)
 
     async def _publish_caps(self) -> None:
         caps = compose_capabilities(
@@ -895,7 +949,7 @@ class AgentRuntime:
         if policy.on_disconnect == "continue_if_safe":
             h = await self.hal.health()
             b = await self.hal.battery()
-            safe = (not h.estop) and h.loc_quality > 0.0 and h.control \
+            safe = (not h.estop) and bool(await self._loc_ok(h)) and h.control \
                 and b.percent > BATTERY_FLOOR_PCT
             log.info("断线,当前任务 %s 按 continue_if_safe:%s", cur.task_id,
                      "继续" if safe else "停住等待")
@@ -903,6 +957,13 @@ class AgentRuntime:
         elif policy.on_disconnect == "stop_and_wait":
             await cur.on_offline(False)
         # execute_locally:什么都不做
+
+    async def _loc_ok(self, h) -> bool | None:
+        """定位可不可信(W00c6e):看锚定;没有引擎零件(没加载地图)就是 ``None``(按运控的里程新鲜)。"""
+        if self.parts is None:
+            return None
+        o = await self.hal.odometry()
+        return self.parts.nav.anchor.ok(h.loc_quality > 0.0 and o.valid)
 
     async def _flush_events(self) -> None:
         if not self.transport.connected:
@@ -916,7 +977,8 @@ class AgentRuntime:
             return
         h = await self.hal.health()
         motion = await self.hal.motion_status()
-        st = compose_status(online=True, boot_id=self.boot_id, ready=compose_ready(h, motion),
+        st = compose_status(online=True, boot_id=self.boot_id,
+                            ready=compose_ready(h, motion, loc_ok=await self._loc_ok(h)),
                             control_epoch=self.processor.control_epoch, now_ms=self._now(),
                             task=self.processor.task_summary())
         wire = st.to_wire()
@@ -947,5 +1009,5 @@ class AgentRuntime:
             now_ms=now, odom=await self.hal.odometry(), battery=await self.hal.battery(),
             health=await self.hal.health(), loaded_map=self.loaded_map,
             task_state=cur.state if cur is not None else None, online=self.online,
-            storage=storage)
+            storage=storage, anchor=self.parts.nav.anchor if self.parts is not None else None)
         await self.transport.publish(self.topics.telemetry, _dumps(tele.to_wire()), qos=0)

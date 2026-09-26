@@ -238,6 +238,13 @@ class FakeApi implements SiteApi {
       'ack': superviseAck ?? <String, dynamic>{'result': 'accepted'}};
   }
 
+  @override
+  Future<Map<String, dynamic>> relocalize(String robotId,
+      {bool atHome = false, double x = 0, double y = 0, double yaw = 0}) async {
+    calls.add(atHome ? 'relocalize $robotId home' : 'relocalize $robotId $x $y $yaw');
+    return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
+  }
+
   /// 视频（W00c5b）。
   int videoHealthCalls = 0;
   @override
