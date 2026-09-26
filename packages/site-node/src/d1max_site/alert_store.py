@@ -74,6 +74,9 @@ class AlertDesk:
         return self.book.raise_alert(kind=kind, robot=robot, title=title, detail=detail,
                                      now_ms=self._now())
 
+    def absorbing(self, robot: str, kind: str) -> Alert | None:
+        return self.book.absorbing(robot, kind, now_ms=self._now())
+
     def ack(self, key: str, *, who: str) -> Alert:
         return self.book.ack(key, who=who, now_ms=self._now())
 

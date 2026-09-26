@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS schedule_runs (
     result       TEXT,
     note         TEXT NOT NULL DEFAULT '',
     decided_at   INTEGER NOT NULL,
+    told_ms      INTEGER DEFAULT 0,
     UNIQUE (entry_id, scheduled_ms, outcome)
 );
 CREATE INDEX IF NOT EXISTS schedule_runs_task ON schedule_runs(task_id);
@@ -264,6 +265,8 @@ _ADDED_COLUMNS = (
     # W00c6d 升级前检查:新版要的任务包 schema、每个任务包自己的 schema(老的都是 1)。
     ("releases", "requires_mission_schema", "INTEGER NOT NULL DEFAULT 1"),
     ("bundles", "schema", "INTEGER NOT NULL DEFAULT 1"),
+    # W00c6c 内审:这一轮的「没跑」说过没有。老库里的行当说过了(0),新记的行写 NULL。
+    ("schedule_runs", "told_ms", "INTEGER DEFAULT 0"),
 )
 
 

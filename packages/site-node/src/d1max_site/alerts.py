@@ -115,9 +115,9 @@ LEVEL_OF: dict[str, Level] = {
     "upload_backlog": Level.P2,
     "bundle_lag": Level.P2,
     "clock_skew": Level.P2,
-    # 排程写了错过就跳过、这一轮跳过了;派出去没收到回执(W00c6c)。今天之内核一下。
+    # 排程写了错过就跳过、这一轮跳过了;狗要人监护、排程派不了(W00c6c)。今天之内核一下、改配置。
     "schedule_skipped": Level.P2,
-    "schedule_unconfirmed": Level.P2,
+    "schedule_blocked": Level.P2,
     "robot_offline_idle": Level.P2,
     # P3:只记录。日常的正常事件,不需要谁去处理什么。
     "run_done": Level.P3,
@@ -296,18 +296,9 @@ class AlertBook:
             )
 
         group = f"{robot}/{kind}"
-        active_key = self._active.get(group)
-        existing = self._by_key.get(active_key) if active_key is not None else None
-        # 三条任一成立,当前这条就不再吸收新事件,下面另起一条:
-        # 窗口过期(从 last_ms 算起)、已经被确认、已经被解决。
-        absorbs = (
-            existing is not None
-            and existing.resolved_ms is None
-            and existing.acked_ms is None
-            and now_ms - existing.last_ms <= self._window_ms
-        )
+        existing = self.absorbing(robot, kind, now_ms=now_ms)
         seq = None
-        if absorbs:
+        if existing is not None:
             alert = replace(
                 existing,
                 title=title,
@@ -339,6 +330,19 @@ class AlertBook:
             self._active[group] = alert.key
         self._by_key[alert.key] = alert
         return alert
+
+    def absorbing(self, robot: str, kind: str, *, now_ms: int) -> Alert | None:
+        """这一刻再报 ``(robot, kind)`` 会合进哪一条;会另起一条就是 ``None``。
+
+        三条任一成立,当前这条就不再吸收新事件、另起一条:窗口过期(从 last_ms 算起)、已经被确认、
+        已经被解决。告警源拿它把几次触发的要点并进标题(W00c6c 内审:几条排程没跑合成一条之后,
+        标题只剩最后那条)。"""
+        key = self._active.get(f"{robot}/{kind}")
+        a = self._by_key.get(key) if key is not None else None
+        if a is None or a.resolved_ms is not None or a.acked_ms is not None \
+                or now_ms - a.last_ms > self._window_ms:
+            return None
+        return a
 
     def ack(self, key: str, *, who: str, now_ms: int) -> Alert:
         """有人确认在处理了。只改 ``acked_by``/``acked_ms``,不碰 ``resolved_ms``。

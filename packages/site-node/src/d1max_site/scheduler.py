@@ -20,11 +20,17 @@
 - 狗与站点断开时到点:``no_robot`` 记一笔;窗口过了 ``decide`` 给出 ``skip``/``alarm``,也记账。
   **站点不在狗离线时替它补跑**(设计决定三 A 的代价)。
 - 钟:给了参照(``time_reference``)且偏差超阈值就不起,沿用 ``clock_skew``。
-- **这一轮没跑要告诉人**(W00c6b 核查 C → W00c6c):账里**新记**一行 ``no_robot``/``ambiguous``/
-  ``skew``/``dispatch_failed``/``alarm``/``skip``(``started`` 被回执改成 ``dispatch_failed`` 也算),
-  或者回执超时(``unconfirmed``,账里还是 ``started``),就调一次 ``on_outcome(排程, 狗, 去向, 备注)``
-  —— 站点主程序接到告警源上。同一轮同一种去向只调一次(账的唯一键);``displaced`` 不调(这一轮后面照样
-  按 ``decide`` 判,窗口过了落成 ``skip``/``alarm`` 时再说)。回调炸了只记日志,不带走这一拍。
+- **这一轮不会按时跑要告诉人**(核查 C → W00c6c;内审之后):调 ``on_outcome(排程, 狗, 去向, 备注)``
+  (站点主程序接到告警源上),**一轮只说一次**(账里 ``told_ms``;老库的行当说过了)。什么时候说:
+  - 狗在忙(跑着别的任务)、这一拍给了更优先的排程:记 ``busy``/``displaced``,**不说** —— 多半等一会儿
+    就跑了;窗口过了还没跑,由 ``skip``/``alarm`` 那一步说。
+  - ``no_robot``/``ambiguous``/``skew``:先等宽限期(半个窗口与 ``GRACE_MS`` 取小,从这一轮第一次派
+    不出去算),
+    还没起跑才说。
+  - ``dispatch_failed``(狗明确拒收或发之前被拦)、``alarm``/``skip``(窗口过了)、``supervised``(狗要人
+    监护,W00c6i):当场说。
+  - 回执超时:过 ``LOST_MS`` 还没见狗在跑这一趟、也没收到晚到的回执与结果,说 ``lost``。
+  - 回调炸了只记日志、不带走这一拍,下一拍再说(没记 ``told_ms``)。
 
 不做:抢占规则、待命点(W00c2b)。正在跑的不打断 —— 选狗时跳过忙着的狗。
 """
@@ -56,8 +62,17 @@ from d1max_site.priorities import schedule_priority
 log = logging.getLogger(__name__)
 
 PERIOD_S = 30.0
-#: 「这一轮没跑」的去向:新记一行就告诉 ``on_outcome``(W00c6c)。
-TELL = frozenset({"no_robot", "ambiguous", "skew", "dispatch_failed", "alarm", "skip"})
+#: 当场说的去向(W00c6c)。
+TELL_NOW = frozenset({"dispatch_failed", "alarm", "skip", "supervised"})
+#: 等宽限期再说的去向:短暂派不出去(狗刚重连、状态抖一下)多半一会儿就好。
+TELL_LATER = frozenset({"no_robot", "ambiguous", "skew"})
+#: 宽限期上限(窗口更短就按窗口)。
+GRACE_MS = 5 * 60_000
+#: 回执超时之后等多久还没见狗在跑这一趟,算派丢了。
+LOST_MS = 2 * 60_000
+#: 补说只看最近这么久的账(站点停机跨了几天,更老的不再翻出来)。
+TELL_HORIZON_MS = 24 * 3_600_000
+_TIMEOUT_NOTE = "回执超时"
 _TERMINAL = {"task_done": "done", "task_failed": "failed", "task_aborted": "aborted",
              "task_preempted": "preempted"}
 
@@ -88,21 +103,76 @@ class SiteScheduler:
                 note: str = "") -> None:
         with self.db.tx() as c:
             cur = c.execute("INSERT OR IGNORE INTO schedule_runs(entry_id, scheduled_ms, outcome, "
-                            "robot_id, task_id, note, decided_at) VALUES (?,?,?,?,?,?,?)",
+                            "robot_id, task_id, note, decided_at, told_ms) "
+                            "VALUES (?,?,?,?,?,?,?,NULL)",
                             (entry.id, scheduled_ms, outcome, robot_id, task_id, note,
                              self._now()))
-            fresh = cur.rowcount == 1
-        if fresh and outcome in TELL:
-            self._tell(entry.id, robot_id or entry.robot or None, outcome, note)
+            row_id = cur.lastrowid if cur.rowcount == 1 else None
+        if row_id is not None and outcome in TELL_NOW:
+            self._tell(row_id, entry.id, scheduled_ms, robot_id or entry.robot or None,
+                       outcome, note)
 
-    def _tell(self, entry_id: str, robot_id: str | None, outcome: str, note: str) -> None:
-        if self.on_outcome is None:
+    def _told(self, entry_id: str, scheduled_ms: int) -> bool:
+        return bool(self.db.query("SELECT 1 FROM schedule_runs WHERE entry_id=? AND "
+                                  "scheduled_ms=? AND told_ms IS NOT NULL LIMIT 1",
+                                  (entry_id, scheduled_ms)))
+
+    def _tell(self, row_id: int, entry_id: str, scheduled_ms: int, robot_id: str | None,
+              outcome: str, note: str) -> None:
+        """这一轮还没说过就说,说成了记在 ``row_id`` 那一行上。"""
+        if self.on_outcome is None or self._told(entry_id, scheduled_ms):
             return
         try:
             self.on_outcome(entry_id, robot_id, outcome, note)
         except Exception:
-            # 报告警本身失败不许带走排程这一拍(跟 schedule_died 的告警同一个理由)。
+            # 报告警本身失败不许带走排程这一拍(跟 schedule_died 的告警同一个理由);下一拍再说。
             log.exception("排程 %s 这一轮 %s 的告警报不出去", entry_id, outcome)
+            return
+        with self.db.tx() as c:
+            c.execute("UPDATE schedule_runs SET told_ms=? WHERE id=?", (self._now(), row_id))
+
+    def _sweep(self, act: ActiveBundle, now_ms: int) -> None:
+        """每拍补说:当场该说没说出去的、宽限期到了还没起跑的、回执超时之后派丢了的。"""
+        entries = {e.id: e for e in act.schedule.entries}
+        since = now_ms - TELL_HORIZON_MS
+
+        def robot_of(r) -> str | None:
+            e = entries.get(r["entry_id"])
+            return r["robot_id"] or (e.robot if e is not None else None) or None
+
+        for r in self.db.query(
+                "SELECT * FROM schedule_runs WHERE told_ms IS NULL AND decided_at>=? AND outcome "
+                f"IN ({','.join('?' * len(TELL_NOW))}) ORDER BY id", (since, *sorted(TELL_NOW))):
+            self._tell(r["id"], r["entry_id"], r["scheduled_ms"], robot_of(r), r["outcome"],
+                       r["note"])
+        for rd in self.db.query(
+                "SELECT entry_id, scheduled_ms, MIN(decided_at) AS first, MAX(id) AS last_id "
+                "FROM schedule_runs WHERE decided_at>=? AND outcome "
+                f"IN ({','.join('?' * len(TELL_LATER))}) GROUP BY entry_id, scheduled_ms",
+                (since, *sorted(TELL_LATER))):
+            e = entries.get(rd["entry_id"])
+            # 宽限期不超过窗口的一半:窗口一关,那一轮就落成 skip/alarm 当场说了,宽限期白等。
+            grace = min(GRACE_MS, e.window_min * 30_000) if e is not None else GRACE_MS
+            if now_ms - rd["first"] < grace or self._told(rd["entry_id"], rd["scheduled_ms"]):
+                continue
+            if self.db.query("SELECT 1 FROM schedule_runs WHERE entry_id=? AND scheduled_ms=? "
+                             "AND outcome='started'", (rd["entry_id"], rd["scheduled_ms"])):
+                continue                                   # 宽限期里恢复了、起跑了
+            [r] = self.db.query("SELECT * FROM schedule_runs WHERE id=?", (rd["last_id"],))
+            self._tell(r["id"], r["entry_id"], r["scheduled_ms"], robot_of(r), r["outcome"],
+                       r["note"])
+        for r in self.db.query(
+                "SELECT * FROM schedule_runs WHERE outcome='started' AND result IS NULL AND "
+                "told_ms IS NULL AND note LIKE ? AND decided_at<=? AND decided_at>=?",
+                (f"%{_TIMEOUT_NOTE}%", now_ms - LOST_MS, since)):
+            acks = self.db.query("SELECT ack_result FROM commands WHERE task_id=?",
+                                 (r["task_id"],))
+            if any(a["ack_result"] in ("accepted", "duplicate") for a in acks):
+                continue                                   # 晚到的回执说收下了
+            if self.dispatcher.busy(r["robot_id"]) == r["task_id"]:
+                continue                                   # 狗在跑它
+            self._tell(r["id"], r["entry_id"], r["scheduled_ms"], robot_of(r), "lost",
+                       f"{r['robot_id']} 回执超时,{LOST_MS // 60_000} 分钟了没见它跑这一趟")
 
     def runs(self, entry_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         if entry_id is None:
@@ -129,10 +199,12 @@ class SiteScheduler:
         with self.db.tx() as c:
             cur = c.execute("UPDATE OR IGNORE schedule_runs SET outcome='dispatch_failed', "
                             "note=? WHERE task_id=? AND outcome='started'", (note, ack.task_id))
-            rows = (c.execute("SELECT entry_id, robot_id FROM schedule_runs WHERE task_id=?",
-                              (ack.task_id,)).fetchall() if cur.rowcount == 1 else [])
+            rows = (c.execute("SELECT id, entry_id, scheduled_ms, robot_id FROM schedule_runs "
+                              "WHERE task_id=?", (ack.task_id,)).fetchall()
+                    if cur.rowcount == 1 else [])
         for r in rows:
-            self._tell(r["entry_id"], r["robot_id"], "dispatch_failed", note)
+            self._tell(r["id"], r["entry_id"], r["scheduled_ms"], r["robot_id"],
+                       "dispatch_failed", note)
 
     # ------------------------------------------------------------ 每拍
 
@@ -160,42 +232,49 @@ class SiteScheduler:
                     if d.kind in (DecisionKind.DUE, DecisionKind.LATE):
                         self._record(e, d.scheduled_ms or 0, "skew",
                                      note=f"站点的钟跟 {skew.source} 差 {skew.skew_s:.0f} 秒")
+                self._sweep(act, now_ms)
                 return
         picked = pick(decisions, running=None)
         order = ([picked.chosen] if picked.chosen is not None else []) + list(picked.displaced)
         claimed: dict[str, str] = {}                     # robot_id → 这一拍占了它的排程
         for e, d in order:
             await self._start(act, e, d, now_ms=now_ms, claimed=claimed)
+        self._sweep(act, now_ms)
 
     def _candidates(self, act: ActiveBundle, entry: ScheduleEntry,
-                    claimed: dict[str, str]) -> tuple[list[str], list[str], str]:
-        """→ (能派的, 本来能派但这一拍被占了的, 都不能派时的理由)。"""
+                    claimed: dict[str, str]) -> tuple[list[str], list[str], str, set[str]]:
+        """→ (能派的, 本来能派但这一拍被占了的, 都不能派时的理由, 不能派的是哪几类)。
+        类:``busy``(在跑别的任务,等它)、``supervised``(要人监护)、``other``(掉线、没就绪、地图不对……)。"""
         mission = act.missions[entry.mission]
         ids = [entry.robot] if entry.robot else [
             r.robot_id for r in self.dispatcher.registry.list() if not r.revoked]
-        ok, taken, why = [], [], []
+        ok, taken, why, kinds = [], [], [], set()
         for rid in ids:
             if rid in claimed:               # 这一拍刚派给了更优先的(它此刻已经报忙了)
                 taken.append(rid)
                 continue
-            reason = self.dispatcher.dispatchable(rid, "patrol")
+            reason, kind = self.dispatcher.dispatchable(rid, "patrol"), "other"
             if not reason and self.dispatcher.autonomy(rid) != "autonomous":
                 # W00c6i:避障真机验收之前真狗要人监护 —— 排程是没人在场时也会到点的东西,不派。
-                reason = f"{rid} 要人监护,不接排程"
+                reason, kind = f"{rid} 要人监护,不接排程", "supervised"
             if not reason and self.dispatcher.busy(rid) is not None:
-                reason = f"{rid} 正在跑 {self.dispatcher.busy(rid)}"
+                reason, kind = f"{rid} 正在跑 {self.dispatcher.busy(rid)}", "busy"
             if not reason:
                 caps = self.dispatcher.clients[rid].capabilities
                 loaded = caps.tasks.get("patrol", {}).get("map_id") if caps else None
                 if loaded != mission.map_id:
                     reason = f"{rid} 加载的地图是 {loaded!r},任务要 {mission.map_id!r}"
-            (why.append(reason) if reason else ok.append(rid))
-        return ok, taken, ";".join(why) or "没有登记的狗"
+            if reason:
+                why.append(reason)
+                kinds.add(kind)
+            else:
+                ok.append(rid)
+        return ok, taken, ";".join(why) or "没有登记的狗", kinds
 
     async def _start(self, act: ActiveBundle, entry: ScheduleEntry, d: Decision, *,
                      now_ms: int, claimed: dict[str, str]) -> None:
         scheduled_ms = d.scheduled_ms or 0
-        ok, taken, why = self._candidates(act, entry, claimed)
+        ok, taken, why, kinds = self._candidates(act, entry, claimed)
         if not ok:
             if taken:
                 self._record(entry, scheduled_ms, "displaced",
@@ -203,6 +282,11 @@ class SiteScheduler:
                                             for r in taken)
                              + (f"(on_missed={entry.on_missed})"
                                 if entry.on_missed == "alarm" else ""))
+            elif "busy" in kinds:
+                # 有狗在跑别的任务:等它跑完多半就派得出去(W00c6c 内审阻断 1),不当「没跑」。
+                self._record(entry, scheduled_ms, "busy", note=why)
+            elif kinds == {"supervised"}:
+                self._record(entry, scheduled_ms, "supervised", note=why)
             else:
                 self._record(entry, scheduled_ms, "no_robot", note=why)
             return
@@ -232,10 +316,10 @@ class SiteScheduler:
             self._record(entry, scheduled_ms, "dispatch_failed", robot_id=rid, note=str(exc))
             return
         except DispatchTimeout:
-            note = f"{d.kind.value},回执超时:可能已在跑,这一轮不再派"
+            # 狗可能收到了:这一轮不再派;过 LOST_MS 还没见它跑这一趟,``_sweep`` 说 ``lost``。
             with self.db.tx() as c:
-                c.execute("UPDATE schedule_runs SET note=? WHERE task_id=?", (note, task_id))
-            self._tell(entry.id, rid, "unconfirmed", note)
+                c.execute("UPDATE schedule_runs SET note=? WHERE task_id=?",
+                          (f"{d.kind.value},{_TIMEOUT_NOTE}:可能已在跑,这一轮不再派", task_id))
             return
         if r["ack"]["result"] == "accepted":
             log.info("排程 %s 到点(%s),派 %s 给 %s", entry.id, d.kind.value, entry.mission, rid)

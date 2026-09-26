@@ -48,17 +48,21 @@ BATTERY_WORDS: tuple[str, ...] = ("电量", "电池", "battery")
 SITE = "site"
 
 #: 排程这一轮的去向 → (告警 kind, 人话)(W00c6c)。P1 ``schedule_missed``:本该有狗去巡逻而没去;
-#: P2 ``schedule_skipped``:排程自己写了错过就算了,但错过本身要知道;P2 ``schedule_unconfirmed``:
-#: 派出去了、回执没回来,狗可能在跑。``started``、``displaced`` 不在表里。
+#: P2 ``schedule_skipped``:排程自己写了错过就算了,但错过本身要知道;P2 ``schedule_blocked``:狗要人
+#: 监护、排程派不了(过渡期,W00c6i —— 人要做的是改配置,不是立刻动身)。``started``、``displaced``、
+#: ``busy`` 不在表里。
 _SCHEDULE_ALERTS: dict[str, tuple[str, str]] = {
     "no_robot": ("schedule_missed", "到点没有能派的狗"),
     "ambiguous": ("schedule_missed", "能派的狗不止一台,排程没写派哪台"),
     "skew": ("schedule_missed", "站点的钟不可信,不起"),
     "dispatch_failed": ("schedule_missed", "派了,狗没收"),
     "alarm": ("schedule_missed", "错过了(排程要求报警)"),
+    "lost": ("schedule_missed", "派出去了,回执超时,狗一直没接"),
     "skip": ("schedule_skipped", "错过了,按排程跳过这一轮"),
-    "unconfirmed": ("schedule_unconfirmed", "派出去了,没收到回执,狗可能在跑"),
+    "supervised": ("schedule_blocked", "狗要人现场监护,排程派不了"),
 }
+_SCHEDULE_TITLE = {"schedule_missed": "这一轮没跑", "schedule_skipped": "跳过了一轮",
+                   "schedule_blocked": "派不了"}
 
 #: 站点主循环多久调一次 :meth:`SiteAlertSources.step`(秒)。升级时限是分钟级,5 s 够细。
 STEP_S = 5.0
@@ -106,6 +110,8 @@ class SiteAlertSources:
         self._is_stale = is_stale
         self._mem: dict[str, _Mem] = {}
         self._site_errors: dict[str, str] = {}
+        #: 排程告警合并进来的排程 id(按告警的键),拼标题用(W00c6c 内审)。
+        self._sched_entries: dict[str, list[str]] = {}
 
     def attach(self, dispatcher) -> None:
         """挂到派遣器的三条上行回调上。挂之前先用库里**最后见过**的状态给每台狗的记忆做种:
@@ -313,15 +319,26 @@ class SiteAlertSources:
 
     def on_schedule_outcome(self, entry_id: str, robot_id: str | None, outcome: str,
                             note: str) -> None:
-        """排程这一轮没跑(W00c6c)。执行器只在账里新记一行时调,这里按去向定告警。"""
+        """排程这一轮没按时跑(W00c6c)。执行器一轮只说一次,这里按去向定告警。
+
+        同一只狗(或站点)同一个 kind 的告警会合成一条(告警簿的规矩):标题把合进来的**每一条排程**
+        都列上(内审:以前标题只剩最后那条,前面没跑的那条从告警里消失);详情是最近那条的原因。"""
         hit = _SCHEDULE_ALERTS.get(outcome)
         if hit is None:
             return
         kind, what = hit
-        self.desk.raise_alert(kind=kind, robot=robot_id or SITE,
-                              title=f"排程 {entry_id} 这一轮没跑:{what}"
-                              if kind == "schedule_missed" else f"排程 {entry_id}:{what}",
-                              detail=note[:300])
+        robot = robot_id or SITE
+        prev = self.desk.absorbing(robot, kind)
+        ids = list(self._sched_entries.get(prev.key, ())) if prev is not None else []
+        if entry_id not in ids:
+            ids.append(entry_id)
+        names = "、".join(ids[:5]) + (f" 等 {len(ids)} 条" if len(ids) > 5 else "")
+        a = self.desk.raise_alert(kind=kind, robot=robot,
+                                  title=f"排程 {names} {_SCHEDULE_TITLE[kind]}:{what}",
+                                  detail=f"{entry_id}:{note}"[:300])
+        self._sched_entries[a.key] = ids
+        while len(self._sched_entries) > 200:            # 只为合并标题记着,老的放掉
+            self._sched_entries.pop(next(iter(self._sched_entries)))
 
     def on_feed(self, item: dict) -> None:
         """站点推送流里的一条。只管 ``standby_failed``(自动回待命点没派成,狗停在原地)。"""

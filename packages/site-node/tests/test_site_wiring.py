@@ -14,9 +14,14 @@ from d1max_site import main as site_main
 
 @pytest.fixture
 def home(tmp_path):
+    import json
     h = tmp_path / "site"
     assert site_main.main(["--home", str(h), "init", "--site-id", "estate-1",
                            "--hostname", "localhost", "--broker-port", "18883"]) == 0
+    # 狗专用的接收口一构造就绑端口:测试给 0(随便一个空闲的),别跟同时在跑的别的站点撞 8444。
+    cfg = json.loads((h / "site.json").read_text(encoding="utf-8"))
+    cfg["intake"] = {"host": "127.0.0.1", "port": 0}
+    (h / "site.json").write_text(json.dumps(cfg), encoding="utf-8")
     return h
 
 
