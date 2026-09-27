@@ -182,9 +182,19 @@ class MappingService:
         """停录。边走边建的:记下待打包(:meth:`finish`,调用方丢到后台),包先占住(打包要读它)。"""
         if not self.recording:
             raise MappingError("现在没在录包")
-        bag = Path(await self.orch.stop_record())
+        # 编排停录**先回闲着再报**其中一个停止的错(录包、在线建图都停过了):这边不管报不报错都按
+        # 「停了」收 —— 不然上层「在录」、下层「闲着」,之后停不了也开不了(外审复查阻断)。边走边建的
+        # 照样记待打包,错再往外报。
+        err: BaseException | None = None
+        try:
+            bag = Path(await self.orch.stop_record())
+        except Exception as exc:
+            err = exc
+            bag = self.bags_root / self.last_bag
         self.recording = False
         live, self.live = self.live, None
+        if err is not None and not bag.is_dir():
+            raise err
         (bag / DONE).touch()                      # 录完了:之后才算安定,传完即删
         # 先打完成标记再记待打包(内审应修 3:打标记炸了,待打包就永远挂着、之后每次开录都拒)
         if live is not None:
@@ -192,6 +202,8 @@ class MappingService:
                 self.held.add(bag.name)
             self.pending = (bag.name, *live)
             self.pending_task = self.live_task
+        if err is not None:
+            raise err
 
     async def shutdown(self) -> None:
         """代理收尾:正在录就好好停下(录包写完索引、在线建图 SIGINT 存盘),待打包的重启后接着做。"""

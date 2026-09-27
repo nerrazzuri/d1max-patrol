@@ -781,3 +781,29 @@ async def test_重建还在跑_带版本开录回忙_只录包照收(tmp_path):
     assert ears.by["cmd/ack"][-1]["result"] == "accepted"
     rt._build_job.cancel()
     await rt.close()
+
+
+async def test_停录报错_有待打包的照样去收尾_不卡住(tmp_path):
+    """外审复查:停录部分失败时服务层照样记了待打包 —— 代理要照样去收尾,不然待打包一直挂着、
+    之后都开不了。"""
+    rec = _假边走边建()
+
+    async def stop():
+        rec.recording = False
+        rec.pending, rec.pending_task = ("yard-x", "m", "5"), "mapping-s1"
+        raise OSError("mcap 索引没写完")
+
+    async def finish():
+        rec.pending = None
+        from d1max_contract.maps import MapRef
+        return MapRef.from_wire({"map_id": "m", "version": "5", "files": [
+            {"name": "x", "size": 1, "sha256": "a" * 64}]}), "bag"
+    rec.stop, rec.finish = stop, finish
+    rec.recording = True
+    broker, c, ears, rt = await _起(tmp_path, rec)
+    await rt._on_cmd(_cmd("mapping", {"action": "stop"}, "s2", c))
+    await _跑(rt, broker, n=5)
+    kinds = [e["kind"] for e in ears.by["event"]]
+    assert "mapping_failed" in kinds and "map_built" in kinds
+    assert rec.pending is None
+    await rt.close()

@@ -555,3 +555,66 @@ async def test_停录一个停不掉_另一个照样停_回到闲着(orch, procs
     with pytest.raises(OSError):
         await orch.stop_record()
     assert set(stopped) == {"bagrecord", "molamap"} and orch.phase == "idle"
+
+
+# ------------------------------------------------------------------ 停录部分失败(外审复查阻断)
+
+
+async def test_停录部分失败_服务层跟编排一起回到不在录_边走边建的照样待打包(orch, procs, cfg,
+                                                          monkeypatch, tmp_path):
+    """外审复查:编排先回闲着再抛其中一个停止异常,服务层原来只有正常返回才清 ``recording`` ——
+    上层「在录」、下层「闲着」,之后停不了、也开不了,只能重启。按真的语义:两个停止都做过、编排已回
+    闲着,再抛。"""
+    from d1max_agent.mapping import DONE, LIVE, MappingService
+    svc = MappingService(orch, bags_root=cfg.bags_dir, maps_out=tmp_path / "outbox" / "maps")
+    await svc.start("yard", target=("m1", "5"), task_id="t1")
+    bag = cfg.bags_dir / svc.last_bag
+    real = procs.stop
+
+    async def 录包停不干净(name, *, term_grace_s=3.0):
+        await real(name, term_grace_s=term_grace_s)
+        if name == "bagrecord":
+            raise OSError("mcap 索引没写完")
+    monkeypatch.setattr(procs, "stop", 录包停不干净)
+    with pytest.raises(OSError):
+        await svc.stop()
+    assert set(procs.stopped) >= {"bagrecord", "molamap"} and orch.phase == "idle"
+    assert not svc.recording and svc.live is None, "上下层一致:都不在录"
+    assert svc.pending == (bag.name, "m1", "5") and svc.pending_task == "t1", "照样待打包(不丢)"
+    assert (bag / DONE).is_file() and (bag / LIVE).is_file()
+    monkeypatch.setattr(procs, "stop", real)
+    with pytest.raises(Exception, match="还在打包"):
+        await svc.start("yard2")                       # 收尾之前不开新的(上一趟还没交代)
+    svc.pending = None                                 # (收尾在代理的后台槽里做,这里当它收完了)
+    await svc.start("yard2")
+    assert svc.recording and orch.phase == "recording"
+
+
+async def test_停录部分失败_只录包的_之后马上能再开(orch, procs, cfg, monkeypatch, tmp_path):
+    from d1max_agent.mapping import MappingService
+    svc = MappingService(orch, bags_root=cfg.bags_dir, maps_out=tmp_path / "outbox" / "maps")
+    await svc.start("yard")
+    real = procs.stop
+
+    async def 停不干净(name, *, term_grace_s=3.0):
+        await real(name, term_grace_s=term_grace_s)
+        raise OSError("停不了")
+    monkeypatch.setattr(procs, "stop", 停不干净)
+    with pytest.raises(OSError):
+        await svc.stop()
+    monkeypatch.setattr(procs, "stop", real)
+    assert not svc.recording and svc.pending is None
+    await svc.start("yard2")
+    assert svc.recording
+
+
+async def test_编排说没在录_服务层也不在录(orch, cfg, tmp_path):
+    """上下层万一对不上(编排已经闲着),停录也要让服务层回到不在录,不卡住。"""
+    from d1max_agent.mapping import MappingService
+    svc = MappingService(orch, bags_root=cfg.bags_dir, maps_out=tmp_path / "outbox" / "maps")
+    await svc.start("yard")
+    await orch.stop_record()                           # 下层先停了
+    with pytest.raises(Exception, match="没在录"):
+        await svc.stop()
+    assert not svc.recording
+    await svc.start("yard2")

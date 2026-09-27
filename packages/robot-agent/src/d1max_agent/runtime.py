@@ -462,10 +462,6 @@ class AgentRuntime:
                 await self.mapper.stop()
             self.events.emit("mapping", {"task_id": task_id, "action": action,
                                          "name": self.mapper.last_bag})
-            if action == "stop" and getattr(self.mapper, "pending", None) is not None:
-                # 边走边建的(W09c2):打包放到重建那个后台槽里(吃 CPU,跟重建一样不挡出警)
-                self._build_job = asyncio.get_running_loop().create_task(
-                    self._finish_live(task_id))
         except Exception as exc:  # noqa: BLE001 - 起不来/停不了:原因发给站点
             log.warning("录包 %s 没成:%s", action, exc)
             reason = f"{type(exc).__name__}: {exc}"[:200]
@@ -476,6 +472,12 @@ class AgentRuntime:
                 self.events.emit("map_build_failed", {"task_id": task_id, "bag": "",
                                                       "map_id": target[0], "version": target[1],
                                                       "reason": reason})
+        if action == "stop" and getattr(self.mapper, "pending", None) is not None \
+                and not self._running(self._build_job):
+            # 边走边建的(W09c2):打包放到重建那个后台槽里(吃 CPU,跟重建一样不挡出警)。停录报了错
+            # 也照样收尾(服务层照样记了待打包;不收的话它一直挂着、之后都开不了 —— 外审复查阻断)
+            self._build_job = asyncio.get_running_loop().create_task(
+                self._finish_live(task_id))
 
     async def _release_command(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
         """发布命令(W00c5d 第三部分):装在后台做,双槽所在的盘不够不装;切、退要空闲(不跑任务、
