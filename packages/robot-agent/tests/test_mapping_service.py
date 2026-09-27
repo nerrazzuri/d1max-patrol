@@ -252,7 +252,9 @@ async def test_边走边建_开录带目标_停下之后打包在线建好的_�
     await svc.stop()
     bag = svc.last_bag
     assert svc.pending == (bag, "estate-1", "5") and svc.live is None
+    svc.pressure = lambda: True                           # 盘紧了传完的包都能删 —— 这个不行
     assert not svc.bag_settled(svc.bags_root / bag), "要拿它打包(读逐帧扫描):不许删"
+    svc.pressure = lambda: False
     ref, mode = await svc.finish()
     assert mode == "live" and svc.orch.packaged[1] == "estate-1" and svc.orch.mode == "live"
     assert ref.version == "5" and map_settled(svc.maps_out / "estate-1" / "5")

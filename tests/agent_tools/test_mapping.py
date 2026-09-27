@@ -404,6 +404,11 @@ def test_录包经_ROS_包装脚本起(orch, cfg, tmp_path):
     assert spec.argv[0] == str(cfg.ros_wrapper) and spec.argv[1:4] == ("ros2", "bag", "record")
 
 
+def test_在线建图默认订_reliable(tmp_path):
+    """厂商前雷达发的是 reliable;best_effort 订的话开发机上丢 18% 的帧、图出重影。"""
+    assert MappingConfig(bags_dir=tmp_path, maps_dir=tmp_path).live_qos == "reliable"
+
+
 def test_在线建图的进程_实时域_存盘的环境变量都指向中间目录(orch, cfg):
     spec = orch.spec_for_live("m1")
     work = cfg.maps_dir / ".work" / "m1"
@@ -461,11 +466,19 @@ async def test_在线建图起不来_录包也收掉_说清楚(orch, procs):
     assert procs.running() == [] and orch.phase == "idle"
 
 
-async def test_打包在线建好的_不重跑_MOLA_不清中间目录(orch, procs, cfg, bag):
+async def test_打包在线建好的_不重跑_MOLA_不清中间目录(orch, procs, cfg, bag, monkeypatch):
     work = cfg.maps_dir / ".work" / "m1"
     work.mkdir(parents=True)
     (work / "traj.tum").write_text("在线建的")
+    seen = []
+    real = procs.start
+
+    async def 看(spec):
+        seen.append((work / "traj.tum").exists())
+        await real(spec)
+    monkeypatch.setattr(procs, "start", 看)
     out = await orch.package(bag, "m1")
+    assert seen == [True], "打包起来的时候在线建好的还在"
     spec = procs.started[-1]
     assert spec.name == "mappack" and spec.argv[-1] == "--reuse", "自己一份日志:退回重建不盖掉它"
     assert spec.argv[spec.argv.index("--work") + 1] == str(work)

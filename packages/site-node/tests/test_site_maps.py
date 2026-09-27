@@ -257,6 +257,11 @@ def test_边走边建的狗传上来的图也收(cat):
                   (json.dumps({"action": "start", "name": "y", "map_id": "estate-1",
                                "version": "5"}),))
     assert cat.build_in_flight("estate-1", "5")
+    with cat.db.tx() as c:                                # 停止录包不算让它建(契约也不许带)
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at, priority) VALUES ('c2','t2','B','mapping',?, 'alice', 1, 0)",
+                  (json.dumps({"action": "stop", "map_id": "estate-1", "version": "6"}),))
+    assert not cat.build_in_flight("estate-1", "6")
     cat.put_map_chunk("A", "estate-1/5", "x.pgm", offset=0, data=b"good", total=4)
     cat.put_map_chunk("A", "estate-1/5", "map.json", offset=0, data=body, total=len(body))
     assert cat.get("estate-1", "5").files[0].name == "x.pgm"
