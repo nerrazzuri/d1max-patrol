@@ -55,6 +55,10 @@ class BuildError(RuntimeError):
     """建图打包不成(说人话的原因)。"""
 
 
+class _ScanReadError(Exception):
+    """读逐帧扫描出错(没有 ROS、包坏了):退回模拟射线。栅格自己出错不算这个。"""
+
+
 @dataclass(frozen=True)
 class PriorPack:
     """先验怎么打包:``none`` 原样;``regroup`` = ``mm-kf-regroup`` 合并关键帧并按体素降采样。"""
@@ -86,8 +90,8 @@ def _plugin() -> list[str]:
 
 def run_mapping(bag: Path, work: Path, *, lidar_topic: str = "/front_lidar",
                 run: Runner = subprocess.run) -> dict[str, float]:
-    """MOLA 命令行在录包上建图:``work`` 里得到 ``raw_prior.mm``、``traj.tum``、``map.simplemap``。
-    回耗时。"""
+    """MOLA 命令行在录包上建图:``work`` 里得到 ``raw_prior.mm``、``traj.tum``、``map.simplemap``,
+    还有 ``mola.json``(MOLA 的版本、流水线、参数 —— 打包抄进 ``build.json``,给回放复现)。回耗时。"""
     work.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "MOLA_LIDAR_TOPIC": lidar_topic,
            "MOLA_TF_BASE_LINK": "rslidar_head" if lidar_topic == "/front_lidar" else "base_link",
@@ -98,6 +102,13 @@ def run_mapping(bag: Path, work: Path, *, lidar_topic: str = "/front_lidar",
            "--input-rosbag2", str(bag), "--lidar-sensor-label", lidar_topic,
            "--output-tum-path", str(work / "traj.tum"),
            "--output-simplemap", str(work / "map.simplemap"), "--progress-bar-period", "0"]
+    ver = run(["dpkg-query", "-W", "-f=${Version}", "ros-humble-mola-lidar-odometry"],
+              capture_output=True, text=True)
+    (work / "mola.json").write_text(json.dumps({
+        "version": (getattr(ver, "stdout", "") or "").strip()[:80],
+        "pipeline": cmd[2], "state_estimator": cmd[4],
+        "env": {k: env[k] for k in env if k.startswith("MOLA_")}}, ensure_ascii=False,
+        indent=2) + "\n")
     t0 = time.monotonic()
     _run(run, cmd, env, work / "mola.log", "MOLA 建图")
     return {"mapping_s": round(time.monotonic() - t0, 1)}
@@ -132,8 +143,11 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     frames.save(out / "frames.json")
     t0 = time.monotonic()
     body = np.array([frames.to_map2d(p, q)[:2] for _, p, q in traj])
-    g, rays = _render(points, sensor, frames, body, traj, bag, lidar_topic,
-                      read_scans or bag_scans)
+    try:
+        g, rays = _render(points, sensor, frames, body, traj, bag, lidar_topic,
+                          read_scans or bag_scans)
+    except grid.GridTooLarge as exc:
+        raise BuildError(str(exc)) from exc
     grid.write(g, out / "floor")
     timings["grid_s"] = round(time.monotonic() - t0, 1)
     t0 = time.monotonic()
@@ -147,7 +161,7 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
         prior_pack.label(), "frames": why, "frames_count": len(traj),
         "grid": {"res": g.res, "size": list(g.image.shape[::-1]), "origin": list(g.origin),
                  "rays": rays},
-        "timings_s": timings}, ensure_ascii=False, indent=2) + "\n")
+        "mola": _mola_info(work), "timings_s": timings}, ensure_ascii=False, indent=2) + "\n")
     return list(FILES)
 
 
@@ -166,18 +180,32 @@ def _render(points: Any, sensor: Any, frames: Frames, body: Any, traj: Sequence[
         used = [0]
 
         def counted() -> Iterator[Any]:
-            for s in read_scans(bag, traj, topic):
+            it = iter(read_scans(bag, traj, topic))
+            while True:
+                try:
+                    s = next(it)
+                except StopIteration:
+                    return
+                except Exception as exc:
+                    raise _ScanReadError(f"{type(exc).__name__}: {exc}") from exc
                 used[0] += 1
                 yield s
         try:
             g = grid.render(points, sensor, frames, scans=counted(), body_path=body)
-        except Exception as exc:               # noqa: BLE001 - 读不了扫描就退回,原因写进 build.json
-            why = f"读不了逐帧扫描:{type(exc).__name__}: {exc}"[:300]
+        except _ScanReadError as exc:
+            why = f"读不了逐帧扫描:{exc}"[:300]
         else:
             if used[0]:
                 return g, f"scans:{used[0]}"
             why = "录包里没有配得上轨迹的扫描"
     return grid.render(points, sensor, frames, body_path=body), f"synthetic:{why}"
+
+
+def _mola_info(work: Path) -> dict[str, Any]:
+    try:
+        return dict(json.loads((work / "mola.json").read_text()))
+    except (OSError, ValueError, TypeError):
+        return {}
 
 
 def cloud_xyz(msg: Any) -> Any:
@@ -275,17 +303,23 @@ def _points(work: Path, run: Runner) -> Any:
     plys = sorted(work.glob("points*.ply"))
     if not plys:
         raise BuildError("导出点云没出文件")
-    raw = plys[0].read_bytes()
+    with open(plys[0], "rb") as fh:
+        start = fh.read(4096)
     try:
-        head = raw.index(b"end_header\n") + len(b"end_header\n")
+        head = start.index(b"end_header\n") + len(b"end_header\n")
     except ValueError:
         raise BuildError("点云文件头不对") from None
-    return np.frombuffer(raw, dtype="<f4", offset=head).reshape(-1, 3).astype(float)
+    # 不先整个读成 bytes 再转(内审小 9:峰值是点云文件的好几倍)
+    return np.fromfile(plys[0], dtype="<f4", offset=head).reshape(-1, 3).astype(float)
 
 
 def _pack_prior(raw: Path, out: Path, pack: PriorPack, run: Runner, work: Path) -> None:
     if pack.mode == "none":
-        shutil.copy2(raw, out)
+        out.unlink(missing_ok=True)
+        try:
+            os.link(raw, out)                      # 几百 MB:不再拷一份(内审小 10)
+        except OSError:
+            shutil.copy2(raw, out)
         return
     _run(run, ["mm-kf-regroup", *_plugin(), "-i", str(raw), "-o", str(out), "--decimate-voxel",
                f"{pack.voxel:g}", "--extent-factor", f"{pack.extent:g}"], None,

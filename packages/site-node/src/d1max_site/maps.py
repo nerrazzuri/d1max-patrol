@@ -57,12 +57,21 @@ def _digest_path(path: Path) -> Path:
 
 
 def _digest_of(path: Path) -> str:
-    """收块时记下的哈希;没记(老的收件目录)就现算。"""
+    """收块时记下的哈希(「大小:修改时刻:哈希」);没记(老的收件目录)、或者之后盘上的字节又动过
+    (大小、修改时刻对不上 —— 旁注在块锁外面写,内审小 6)就现算。"""
     try:
-        d = _digest_path(path).read_text(encoding="ascii").strip()
-    except OSError:
-        return _sha256(path)
-    return d if len(d) == 64 else _sha256(path)
+        size, mtime, d = _digest_path(path).read_text(encoding="ascii").strip().split(":")
+        st = path.stat()
+        if (int(size), int(mtime)) == (st.st_size, st.st_mtime_ns) and len(d) == 64:
+            return d
+    except (OSError, ValueError):
+        pass
+    return _sha256(path)
+
+
+#: 「哪里有图」:``coverage.json`` 最大多少字节(20 万个点也就几 MB);缓存几个版本。
+MAX_COVERAGE_BYTES = 16 * 1024 ** 2
+REACH_CACHE = 8
 
 
 class MapCatalog:
@@ -105,7 +114,8 @@ class MapCatalog:
         # 没收完(包括从头重传)就作废 —— 盘上的字节变了。点开头:狗传不了这种名字。
         side = _digest_path(path)
         if got.size >= total:
-            side.write_text(got.sha256, encoding="ascii")
+            st = path.stat()
+            side.write_text(f"{st.st_size}:{st.st_mtime_ns}:{got.sha256}", encoding="ascii")
         else:
             side.unlink(missing_ok=True)
         if got.size >= total:
@@ -280,6 +290,7 @@ class MapCatalog:
         key = (map_id, version)
         with self._preview_lock:
             if key in self._reaches:
+                self._reaches[key] = self._reaches.pop(key)      # 挪到最后:最近用的
                 return self._reaches[key]
         try:
             ref = self.get(check_name(map_id, "地图号"), check_name(version, "版本"))
@@ -291,9 +302,24 @@ class MapCatalog:
             from d1max_site import map_preview as mp
             d = self.root / map_id / version
             try:
+                # 狗传上来的文件:先看大小再读(内审应修 2)
+                if (d / COVERAGE).stat().st_size > MAX_COVERAGE_BYTES:
+                    raise MapError(f"{COVERAGE} 太大")
+                if "floor.yaml" not in names or \
+                        (d / "floor.yaml").stat().st_size > mp.MAX_YAML_BYTES:
+                    raise MapError("floor.yaml 没有或太大")
                 cov = parse_coverage(json.loads((d / COVERAGE).read_text("utf-8")))
                 meta = mp.parse_map_yaml((d / "floor.yaml").read_text("utf-8"))
-                w, h, px = mp.parse_pgm((d / Path(meta["image"]).name).read_bytes())
+                image = Path(meta["image"]).name
+                if image not in names:
+                    raise MapError(f"floor.yaml 说图是 {image},这一版里没有它")
+                with open(d / image, "rb") as fh:
+                    limit = mp.pgm_limit(fh.read(4096))
+                if (d / image).stat().st_size > limit:
+                    raise MapError(f"{image} 比头里说的大")
+                w, h, px = mp.parse_pgm((d / image).read_bytes())
+            except MapError as exc:
+                raise MapError(f"{map_id}:{version} 的「哪里有图」读不了:{exc}") from exc
             except (OSError, ValueError, ContractError, mp.PreviewError) as exc:
                 raise MapError(f"{map_id}:{version} 的 coverage.json / 栅格读不了:{exc}") from exc
             ox, oy = meta["origin"]
@@ -311,6 +337,8 @@ class MapCatalog:
             got = (cov, free)
         with self._preview_lock:
             self._reaches[key] = got
+            while len(self._reaches) > REACH_CACHE:
+                self._reaches.pop(next(iter(self._reaches)))
         return got
 
     # ------------------------------------------------------------ 登记
@@ -369,11 +397,21 @@ class MapCatalog:
             tmp = dst.with_name(dst.name + ".taking")
             shutil.rmtree(tmp, ignore_errors=True)
             tmp.mkdir(parents=True)
-            for f in ref.files:                    # 同一块盘上改名(几百 MB 的先验不拷)
-                shutil.move(src / f.name, tmp / f.name)
-            shutil.copy2(src / MANIFEST, tmp / MANIFEST)
-            os.replace(tmp, dst)
-            self._register(ref, source=robot_id, note="")
+            moved: list[str] = []
+            try:
+                for f in ref.files:                # 同一块盘上改名(几百 MB 的先验不拷)
+                    shutil.move(src / f.name, tmp / f.name)
+                    moved.append(f.name)
+                shutil.copy2(src / MANIFEST, tmp / MANIFEST)
+                os.replace(tmp, dst)
+                self._register(ref, source=robot_id, note="")
+            except BaseException:
+                # 登记没成:文件挪回收件目录(不然狗重传清单时这边回「还没收齐」,狗就删了它那份)
+                back = dst if dst.exists() else tmp
+                for n in moved:
+                    shutil.move(back / n, src / n)
+                shutil.rmtree(back, ignore_errors=True)
+                raise
         shutil.rmtree(src, ignore_errors=True)     # 收进目录了:收件那份不留
         log.info("%s 建的图收齐了:%s:%s", robot_id, map_id, version)
         return ref

@@ -92,6 +92,8 @@ class MappingService:
         self.pressure: Callable[[], bool] = lambda: False
         #: 本地地图库(``MapKeeper``,主程序接上):建好的版本放进去,激活时不用从站点下回来。
         self.keeper: Any = None
+        #: 上一次建图的栅格用的哪种射线(``build.json`` 的 ``grid.rays``;``synthetic:…`` 是退回了)。
+        self.last_rays = ""
         self._cleanup()
 
     @property
@@ -149,6 +151,11 @@ class MappingService:
             files.append(MapFile(name=n, size=(tmp / n).stat().st_size,
                                  sha256=_sha256(tmp / n)))
         ref = MapRef(map_id=map_id, version=version, files=tuple(files))
+        try:
+            self.last_rays = str(json.loads((tmp / "build.json").read_text("utf-8"))
+                                 ["grid"]["rays"])[:200]
+        except (OSError, ValueError, KeyError, TypeError):
+            self.last_rays = ""
         out.parent.mkdir(parents=True, exist_ok=True)
         os.replace(tmp, out)
         # 在写清单**之前**放进本地库:有了清单发件箱就会传、传完就删。

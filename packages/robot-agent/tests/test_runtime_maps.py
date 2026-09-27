@@ -614,3 +614,27 @@ async def test_开机守卫退回过_连上站点就报(tmp_path):
     got = [e for e in ears.by["event"] if e["kind"] == "release_rolled_back"]
     assert got and got[-1]["data"]["from"] == "2026-09-25-bbbbbb"
     await rt.close()
+
+
+async def test_建好了的事件带着栅格用的哪种射线(tmp_path):
+    """内审应修 4:退回模拟射线原来只写在 build.json 里,没人看。"""
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rec = 假录包()
+
+    async def build(bag, map_id, version):
+        rec.last_rays = "synthetic:读不了逐帧扫描:ImportError"
+    rec.build = build
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"),
+                      boot_id="b", home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono,
+                      mapper=rec)
+    await rt.start()
+    await rt._build("yard-x", "m", "2", "t1")
+    await _跑(rt, broker, n=2)
+    got = [e for e in ears.by["event"] if e["kind"] == "map_built"]
+    assert got[-1]["data"]["grid_rays"].startswith("synthetic")
+    await rt.close()

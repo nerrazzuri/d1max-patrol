@@ -228,3 +228,79 @@ def test_站点不认Range_整个给回来_前面那段扔掉(tmp_path):
         assert b"".join(fetch("m", "1", "x")) == data
     finally:
         srv.shutdown()
+
+
+def test_换图提交不碰点开头的目录_清理出错不往外抛(k, tmp_path, monkeypatch):
+    """内审应修 5:建图收尾(收养)跟换图同时做 —— 提交的清理把正在收养的临时目录删了、或者
+    清理里 rmdir 抛了,``active.json`` 已经换了却当成「记不下」。"""
+    from pathlib import Path
+    keeper, site = k
+    a = site.add("m", "1", {"x.pgm": b"1"})
+    keeper.install(a)
+    adopting = tmp_path / "maps" / ".incoming" / "m@9.adopt"
+    adopting.mkdir(parents=True)
+    (adopting / "prior.mm").write_bytes(b"p")
+    b = site.add("n", "1", {"x.pgm": b"n"})
+    keeper.install(b)
+
+    def 不给删(self):
+        raise OSError("目录不空")
+    monkeypatch.setattr(Path, "rmdir", 不给删)
+    keeper.commit(a)                                      # m/1 正在用:清掉 n/1,n/ 删不掉也不抛
+    assert keeper.active() == a
+    assert (adopting / "prior.mm").exists()
+
+
+def test_收养来的留一份_等不到空闲扔掉时也不删_再收养一份才换掉(k, tmp_path):
+    """内审再议 12:建图的狗那份很容易被删(等空闲超时的 discard、下一次随便什么 commit),发件箱那份
+    传完也删了,再激活就要重下几百 MB。"""
+    keeper, site = k
+    a = site.add("m", "1", {"x.pgm": b"1"})
+    keeper.install(a)
+    keeper.commit(a)
+    out = tmp_path / "outbox"
+
+    def 建(v):
+        d = out / v
+        d.mkdir(parents=True)
+        (d / "prior.mm").write_bytes(v.encode())
+        return keeper.adopt(d, _ref("m", v, {"prior.mm": v.encode()})), _ref(
+            "m", v, {"prior.mm": v.encode()})
+
+    d2, r2 = 建("2")
+    keeper.commit(a)                                      # 比如重发了一次原点
+    assert keeper.local(r2) == d2
+    keeper.discard(r2)                                    # 等不到空闲
+    assert keeper.local(r2) == d2
+    d3, r3 = 建("3")
+    keeper.commit(a)
+    assert keeper.local(r3) == d3 and keeper.local(r2) is None, "只留最近收养的那一份"
+
+
+def test_站点回4xx_只有没有这个才算拒_证书一时认不出照样重试(tmp_path):
+    """内审小 8:站点狗专用口回 403 的意思是「证书一时认不出,过一会儿再来」。"""
+    import http.server
+    import threading
+
+    from d1max_agent.maps import https_fetch
+    codes = {"/maps/m/1/gone": 404, "/maps/m/1/cert": 403, "/maps/m/1/range": 416}
+
+    class 站(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(codes[self.path])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), 站)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        fetch = https_fetch(f"http://127.0.0.1:{srv.server_port}", None)
+        for name, refused in (("gone", True), ("range", True), ("cert", False)):
+            with pytest.raises(Exception) as e:
+                list(fetch("m", "1", name))
+            assert isinstance(e.value, FetchRefused) == refused, name
+    finally:
+        srv.shutdown()

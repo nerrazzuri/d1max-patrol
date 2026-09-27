@@ -170,3 +170,75 @@ def test_哪里有图_离走过的路太远或不在可通行格子上就说清�
     cat.import_dir(old, map_id="yard", version="0")
     assert cat.reach_problem("yard", "0", [("随便", 999.0, 0.0)]) == "", "老版本没有 coverage.json"
     assert cat.reach_problem("nope", "1", [("随便", 0.0, 0.0)]) == "", "站点不认识的版本:不挡"
+
+
+def _cov_version(cat, tmp_path, version, cov=None, yaml_image="floor.pgm"):
+    src = _files(tmp_path / f"cv{version}")
+    _floor(src, ["....", "....", "...."], origin=(-1.0, -1.0))
+    if yaml_image != "floor.pgm":
+        (src / "floor.yaml").write_text((src / "floor.yaml").read_text().replace(
+            "image: floor.pgm", f"image: {yaml_image}"))
+    (src / "coverage.json").write_text(json.dumps(cov or {"version": 1, "path": [[0.0, 0.0]]}))
+    cat.import_dir(src, map_id="yard", version=version)
+
+
+def test_哪里有图_文件太大不读_图名不在清单里不读_缓存有上限(cat, tmp_path, monkeypatch):
+    """内审应修 2:狗传上来的 coverage.json、栅格整个读进内存,没有上限;缓存从不清。"""
+    import d1max_site.maps as M
+    _cov_version(cat, tmp_path, "1", cov={"version": 1, "path": [[0.0, 0.0]] * 50})
+    monkeypatch.setattr(M, "MAX_COVERAGE_BYTES", 100)
+    with pytest.raises(MapError, match="太大"):
+        cat.reach_problem("yard", "1", [("p", 0.0, 0.0)])
+    monkeypatch.undo()
+    _cov_version(cat, tmp_path, "2", yaml_image="../../site.db")
+    with pytest.raises(MapError, match="没有"):
+        cat.reach_problem("yard", "2", [("p", 0.0, 0.0)])
+    for v in range(3, 3 + M.REACH_CACHE + 3):
+        _cov_version(cat, tmp_path, str(v))
+        assert cat.reach_problem("yard", str(v), [("p", 0.0, 0.0)]) == ""
+    assert len(cat._reaches) <= M.REACH_CACHE
+
+
+def test_收完之后盘上的字节又变了_记下的哈希不作数(cat):
+    """内审小 6:旁注在块锁外面写;记下「大小:修改时刻:哈希」,对不上就现算。"""
+    import os
+    import time as _t
+
+    from d1max_site.evidence import PathRefused
+    with cat.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
+                  (json.dumps({"bag": "b", "map_id": "estate-1", "version": "9"}),))
+    cat.put_map_chunk("A", "estate-1/9", "x.pgm", offset=0, data=b"good", total=4)
+    f = cat.incoming / "A" / "estate-1" / "9" / "x.pgm"
+    _t.sleep(0.01)
+    f.write_bytes(b"badd")                                   # 同样大小
+    os.utime(f, ns=(f.stat().st_atime_ns, f.stat().st_mtime_ns + 1_000_000))
+    body = json.dumps({"map_id": "estate-1", "version": "9", "files": [
+        {"name": "x.pgm", "size": 4, "sha256": hashlib.sha256(b"good").hexdigest()}]}).encode()
+    with pytest.raises(PathRefused):
+        cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
+
+
+def test_登记失败_文件挪回收件目录_下次还能收(cat, monkeypatch):
+    """内审小 7:改成挪文件之后,登记炸了文件已经离开收件目录,狗重传清单时站点回「还没收齐」(200),
+    狗就把自己那份删了。"""
+    with cat.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
+                  (json.dumps({"bag": "b", "map_id": "estate-1", "version": "9"}),))
+    cat.put_map_chunk("A", "estate-1/9", "x.pgm", offset=0, data=b"good", total=4)
+    body = json.dumps({"map_id": "estate-1", "version": "9", "files": [
+        {"name": "x.pgm", "size": 4, "sha256": hashlib.sha256(b"good").hexdigest()}]}).encode()
+    real = cat._register
+
+    def 库忙(*a, **k):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(cat, "_register", 库忙)
+    with pytest.raises(RuntimeError):
+        cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
+    assert (cat.incoming / "A" / "estate-1" / "9" / "x.pgm").read_bytes() == b"good"
+    assert not (cat.root / "estate-1" / "9").exists()
+    monkeypatch.setattr(cat, "_register", real)
+    cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
+    assert cat.get("estate-1", "9").files[0].name == "x.pgm"

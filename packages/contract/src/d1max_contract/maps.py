@@ -32,6 +32,8 @@ MANIFEST = "map.json"
 GEOMETRY_FILES = ("prior.mm", "frames.json", "floor.pgm", "floor.yaml", "coverage.json",
                   "build.json")
 COVERAGE = "coverage.json"
+#: 定位器要的那两样(W09b):配了定位器的狗只收带着它们的版本。
+PRIOR_FILES = ("prior.mm", "frames.json")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 

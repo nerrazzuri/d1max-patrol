@@ -400,8 +400,32 @@ async def test_配了定位器_仿真狗有载入这一步也不调(tmp_path):
     t.dog.load_map = 载入
     try:
         await t.连()
-        await t.rt._on_cmd(_cmd("map_activate", site.add("m", "2", {"x.pgm": b"2"}), "a1", t.c))
+        await t.rt._on_cmd(_cmd("map_activate", site.add(
+            "m", "2", {"prior.mm": b"p", "frames.json": b"{}"}), "a1", t.c))
         await _跑(t.rt, t.broker)
         assert t.rt.loaded_map == ("m", "2") and called == []
+    finally:
+        await t.收()
+
+
+async def test_配了定位器_不收没有先验的版本(tmp_path):
+    """内审应修 3:站点上 slam_toolbox 时期的老版本还在;激活它照样发 map_activated,定位器拒先验,
+    狗之后一直定不了位。"""
+    from test_runtime_maps import _跑, 站点
+
+    from d1max_agent.maps import MapKeeper
+    site = 站点()
+    t = 台子()
+    keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
+    await t.起(tmp_path / "agent", maps=keeper)
+    try:
+        await t.连()
+        old = site.add("m", "0", {"m.pgm": b"P5", "m.yaml": b"y", "m.posegraph": b"g"})
+        await t.rt._on_cmd(_cmd("map_activate", old, "a1", t.c))
+        await _跑(t.rt, t.broker)
+        failed = [e for e in t.ears.by["event"] if e["kind"] == "map_activate_failed"]
+        assert failed and "prior.mm" in failed[-1]["data"]["reason"]
+        assert t.rt.loaded_map == ("m", "1")
+        assert not (tmp_path / "keep" / "m" / "0").exists(), "下载之前就拒"
     finally:
         await t.收()

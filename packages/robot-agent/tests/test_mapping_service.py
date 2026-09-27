@@ -215,3 +215,19 @@ async def test_建好的图放进本地库_库那头出错不算没建成(svc):
     assert got == [(sorted(GEOMETRY_FILES), ref)]
     ref2 = await svc.build(svc.last_bag, "estate-1", "10")
     assert ref2.version == "10" and (svc.maps_out / "estate-1" / "10" / "map.json").is_file()
+
+
+async def test_建图用的哪种射线_记下来给事件用(svc):
+    """内审应修 4:退回模拟射线只写在 build.json 里,没人看。"""
+    await svc.start("yard")
+    await svc.stop()
+    svc.orch.made = GEOMETRY_FILES
+    real = svc.orch.rebuild
+
+    async def 出图(bag, map_id):
+        out = await real(bag, map_id)
+        (out / "build.json").write_text(json.dumps({"grid": {"rays": "synthetic:没给录包"}}))
+        return out
+    svc.orch.rebuild = 出图
+    await svc.build(svc.last_bag, "estate-1", "9")
+    assert svc.last_rays == "synthetic:没给录包"

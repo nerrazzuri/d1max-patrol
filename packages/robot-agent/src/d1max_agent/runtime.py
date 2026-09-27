@@ -47,6 +47,7 @@ from d1max_agent.tasks.engine_goto import EngineGotoTask
 from d1max_agent.transport import GuardedTransport
 from d1max_contract.errors import ContractError
 from d1max_contract.hal import Fault, HalUnsupported, RobotHAL
+from d1max_contract.maps import PRIOR_FILES
 from d1max_contract.messages import Command, MapPose, Reconcile, fault_event_data
 from d1max_contract.policy import policy_for
 from d1max_contract.registration import Registration
@@ -738,6 +739,13 @@ class AgentRuntime:
         base = {"task_id": task_id, "map_id": ref.map_id, "version": ref.version}
         old = self.maps.active()
         try:
+            if self._locsrv is not None:
+                # 配了定位器:这一版要带定位先验(站点上 slam_toolbox 时期的老版本没有;激活了定位器
+                # 拒先验,狗之后一直定不了位 —— 内审应修 3)。下载之前就拒。
+                missing = [n for n in PRIOR_FILES if n not in {f.name for f in ref.files}]
+                if missing:
+                    raise MapInstallError(f"这一版没有定位先验({', '.join(missing)}),"
+                                          "配了定位器的狗用不了:换一版狗上建的图")
             dst = await asyncio.to_thread(self.maps.install, ref)
             waited = 0.0
             while not self._tasks_idle():
@@ -794,7 +802,10 @@ class AgentRuntime:
         base = {"task_id": task_id, "bag": bag, "map_id": map_id, "version": version}
         try:
             await self.mapper.build(bag, map_id, version)
-            self.events.emit("map_built", base)
+            rays = getattr(self.mapper, "last_rays", "")
+            if rays.startswith("synthetic"):
+                log.warning("建图的栅格用的是模拟射线(跟着狗走的人清不掉):%s", rays)
+            self.events.emit("map_built", base | ({"grid_rays": rays} if rays else {}))
         except Exception as exc:  # noqa: BLE001 - 重建失败:原因发给站点
             log.warning("重建没成(%s → %s:%s):%s", bag, map_id, version, exc)
             self.events.emit("map_build_failed",

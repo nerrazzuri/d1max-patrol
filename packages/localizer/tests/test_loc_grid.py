@@ -187,3 +187,16 @@ def test_坡地_地面按走过的地方逐段算_上坡的地面不当障碍_�
     for x, y in ((8.0, 2.0), (9.5, -3.0), (3.0, 0.0)):
         assert g.image[g.cell_of(x, y)] == G.FREE, (x, y)
     assert g.image[g.cell_of(14.0, 0.0)] == G.OCCUPIED
+
+
+def test_栅格太大就放粗_粗到_0_2_m_还装不下就报错(monkeypatch):
+    """内审小 9:轨迹发散到几公里就申请巨大的数组(Orin 上 OOM 会连累定位器、代理);边长超过站点预览的
+    上限(2500 万格)站点也预览不了。"""
+    f = _frames()
+    P, T = _room(f, ghost=False)
+    monkeypatch.setattr(G, "MAX_CELLS", 20_000)
+    g = G.render(P, T, f)
+    assert g.res == 0.1 and g.image.size <= 20_000
+    monkeypatch.setattr(G, "MAX_CELLS", 500)
+    with pytest.raises(G.GridTooLarge, match="轨迹"):
+        G.render(P, T, f)

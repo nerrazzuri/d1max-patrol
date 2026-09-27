@@ -65,8 +65,10 @@ class 假MOLA:
     def __init__(self, points, fail=""):
         self.points, self.fail, self.calls = points, fail, []
 
-    def __call__(self, cmd, env=None, stdout=None, stderr=None):
+    def __call__(self, cmd, env=None, stdout=None, stderr=None, **kw):
         self.calls.append(cmd)
+        if cmd[0] == "dpkg-query":
+            return SimpleNamespace(returncode=0, stdout="1.2.3")
         if self.fail and cmd[0] == self.fail:
             stdout.write("出错了:内存不够\n")
             return SimpleNamespace(returncode=2)
@@ -100,6 +102,9 @@ def test_打包出版本的文件_上下装都标对_栅格跟定位同一个平
     assert ("倒装" in b["frames"]) == upside_down, b["frames"]
     assert b["source"] == "bag:t-1" and b["prior_pack"] == "none"
     assert (out / "prior.mm").read_bytes() == b"prior"
+    import os
+    assert os.stat(out / "prior.mm").st_ino == os.stat(work / "raw_prior.mm").st_ino, \
+        "不压缩就硬链接(内审小 10:530 MB 再拷一份)"
     cov = json.loads((out / "coverage.json").read_text())["path"]
     assert 15 <= len(cov) <= 20, "走了 8.3 m、每 0.5 m 一点"
     txt = (out / "floor.yaml").read_text()
@@ -146,11 +151,14 @@ def test_先验打包的写法():
             B.PriorPack.parse(bad)
 
 
-def test_MOLA_建图的命令(tmp_path):
+def test_MOLA_建图的命令_版本与参数记下来进_build_json(tmp_path):
+    """内审小 11:设计决定 2 要 build.json 里有 MOLA 版本与参数(给回放复现)。"""
     fake = 假MOLA(None)
     B.run_mapping(tmp_path / "bag", tmp_path / "w", run=fake)
-    [cmd] = fake.calls
-    assert cmd[0] == "mola-lidar-odometry-cli"
+    cmd = [c for c in fake.calls if c[0] == "mola-lidar-odometry-cli"][0]
+    mola = json.loads((tmp_path / "w" / "mola.json").read_text())
+    assert mola["version"] == "1.2.3" and mola["pipeline"].endswith("lidar3d-default.yaml")
+    assert mola["env"]["MOLA_LIDAR_TOPIC"] == "/front_lidar"
     assert cmd[cmd.index("--output-simplemap") + 1] == str(tmp_path / "w" / "map.simplemap")
     assert cmd[cmd.index("--output-tum-path") + 1] == str(tmp_path / "w" / "traj.tum")
 
@@ -273,3 +281,29 @@ def test_从真的mcap录包读逐帧扫描_按轨迹时刻配位姿(tmp_path):
     assert r.stdout.strip() == ("[([0.0, 0.0, 0.0], [[0.0, 1.0, 0.0]]), "
                                 "([2.0, 0.0, 0.0], [[2.0, 1.0, 0.0]]), "
                                 "([4.0, 0.0, 0.0], [[4.0, 1.0, 0.0]])]"), r.stdout
+
+
+def test_栅格自己出错不退回_照样算打包失败(tmp_path, monkeypatch):
+    """内审应修 4:原来 ``except Exception`` 把栅格的错(内存不够、越界)也当成「读不了扫描」
+    悄悄退回。"""
+    work, pts = _scene(tmp_path, False)
+
+    def 炸(*a, **k):
+        if k.get("scans") is not None:
+            list(k["scans"])
+            raise MemoryError("栅格太大")
+        raise AssertionError("不该退回模拟射线")
+    monkeypatch.setattr(G, "render", 炸)
+
+    def 读扫描(bag, traj, topic):
+        _, p, _ = traj[0]
+        yield np.array(p), pts[::10]
+    with pytest.raises(MemoryError):
+        B.package(work, tmp_path / "out", run=假MOLA(pts), bag=tmp_path / "bag", read_scans=读扫描)
+
+
+def test_打包把_MOLA_的版本与参数抄进_build_json(tmp_path):
+    work, pts = _scene(tmp_path, False)
+    (work / "mola.json").write_text(json.dumps({"version": "1.2.3", "pipeline": "x.yaml"}))
+    B.package(work, tmp_path / "out", run=假MOLA(pts))
+    assert json.loads((tmp_path / "out" / "build.json").read_text())["mola"]["version"] == "1.2.3"

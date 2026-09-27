@@ -60,6 +60,14 @@ MIN_RANGE_M = 0.3
 #: 狗身中心线两边这么宽一律可通行。
 FOOTPRINT_M = 0.25
 FREE, UNKNOWN, OCCUPIED = 254, 205, 0
+#: 栅格最多多少格(站点预览的上限也是 2500 万像素);超了一格放粗一倍,粗到 :data:`MAX_RES_M`
+#: 还超就报错。
+MAX_CELLS = 25_000_000
+MAX_RES_M = 0.2
+
+
+class GridTooLarge(ValueError):
+    """栅格大到放粗了也装不下(多半是轨迹发散了)。"""
 
 
 @dataclass
@@ -252,6 +260,12 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
     flr = ok & (h > FLOOR_BAND_M[0]) & (h < FLOOR_BAND_M[1])
     w, fl = q[wall, :2], q[flr, :2]
     both = np.vstack([w, fl, t[:, :2]])
+    span = both.max(0) - both.min(0)
+    while (span[0] / res + 4) * (span[1] / res + 4) > MAX_CELLS:      # 太大就放粗(内审小 9)
+        res *= 2
+        if res > MAX_RES_M + 1e-9:
+            raise GridTooLarge(f"栅格 {span[0]:.0f} × {span[1]:.0f} m,按 {MAX_RES_M:g} m 一格"
+                               f"也超过 {MAX_CELLS} 格:轨迹可能发散了")
     lo = both.min(0) - res
     hi = both.max(0) + res
     W = int((hi[0] - lo[0]) / res) + 2

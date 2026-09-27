@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -34,6 +35,10 @@ log = logging.getLogger(__name__)
 DOWNLOAD_DEADLINE_S = 1800.0
 #: 期限按这个速度算(1 Mbit/s):530 MB 的先验给 70 分钟。
 MIN_RATE_BPS = 125_000
+#: 收养来的版本目录里的标记(内容是收养的时刻,纳秒):换图时最近收养的那一份留着。
+ADOPTED = ".adopted"
+#: 站点回这几个才算「不给」(没有这个、Range 不对);别的 4xx(比如证书一时认不出的 403)照样重试。
+REFUSED_HTTP = (404, 410, 416)
 #: 一个文件连续几次没进展就放弃(每次有进展就重新数);两次之间退避 1、2、4… 秒,最多 30 秒。
 RESUME_TRIES = 5
 
@@ -61,6 +66,9 @@ class MapKeeper:
         self.root.mkdir(parents=True, exist_ok=True)
         self._fetch = fetch
         self._sleep = sleep
+        #: 收养(建图收尾,线程里)、装(下载,线程里)、提交与扔掉(事件循环里)改同一个目录:一把锁串着
+        #: (内审应修 5)。
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------ 现在是哪张
 
@@ -134,10 +142,15 @@ class MapKeeper:
                     shutil.copy2(Path(src) / f.name, tmp / f.name)
             (tmp / MANIFEST).write_text(json.dumps(ref.to_wire(), ensure_ascii=False),
                                         encoding="utf-8")
-            dst = self.dir_of(ref)
-            shutil.rmtree(dst, ignore_errors=True)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(tmp, dst)
+            (tmp / ADOPTED).write_text(str(time.time_ns()), encoding="ascii")
+            with self._lock:
+                cur = self.active()
+                if cur is not None and (cur.map_id, cur.version) == (ref.map_id, ref.version):
+                    return self.dir_of(ref)                 # 这当中被激活了:不动它
+                dst = self.dir_of(ref)
+                shutil.rmtree(dst, ignore_errors=True)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(tmp, dst)
             return dst
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -196,10 +209,11 @@ class MapKeeper:
                     raise MapInstallError(f"{f.name} 大小或哈希对不上")
             (tmp / MANIFEST).write_text(json.dumps(ref.to_wire(), ensure_ascii=False),
                                         encoding="utf-8")
-            dst = self.dir_of(ref)
-            shutil.rmtree(dst, ignore_errors=True)
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(tmp, dst)
+            with self._lock:
+                dst = self.dir_of(ref)
+                shutil.rmtree(dst, ignore_errors=True)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(tmp, dst)
             return dst
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -220,21 +234,45 @@ class MapKeeper:
             os.fsync(fd)
         finally:
             os.close(fd)
-        keep = self.dir_of(ref).resolve()
-        for m in self.root.iterdir():
-            if not m.is_dir():
+        # 正在用的已经记下了:之后的清理出什么错都只记一笔(不然调用方当成「记不下」,狗报的跟盘上的
+        # 不一致 —— 内审应修 5)。点开头的(收养、下载的临时目录)不碰;最近收养的那一份留着。
+        try:
+            with self._lock:
+                keep = {self.dir_of(ref).resolve()}
+                adopted = self._adopted()
+                if adopted:
+                    keep.add(adopted[-1].resolve())
+                for m in self.root.iterdir():
+                    if not m.is_dir() or m.name.startswith("."):
+                        continue
+                    for v in m.iterdir():
+                        if v.is_dir() and not v.name.startswith(".") and v.resolve() not in keep:
+                            shutil.rmtree(v, ignore_errors=True)
+                    if m.name != ref.map_id and not any(m.iterdir()):
+                        m.rmdir()
+        except OSError:
+            log.warning("换图之后清理旧图没清干净", exc_info=True)
+
+    def _adopted(self) -> list[Path]:
+        """收养来的版本目录,按收养先后排。"""
+        got = []
+        for mark in self.root.glob(f"*/*/{ADOPTED}"):
+            if mark.parent.parent.name.startswith("."):
                 continue
-            for v in m.iterdir():
-                if v.is_dir() and v.resolve() != keep:
-                    shutil.rmtree(v, ignore_errors=True)
-            if m.name != ref.map_id and not any(m.iterdir()):
-                m.rmdir()
+            try:
+                got.append((int(mark.read_text("ascii")), mark.parent))
+            except (OSError, ValueError):
+                continue
+        return [d for _, d in sorted(got)]
 
     def discard(self, ref: MapRef) -> None:
-        """装好了但没载进去:删掉,狗上照旧用原来那张。"""
-        cur = self.active()
-        if cur is None or (cur.map_id, cur.version) != (ref.map_id, ref.version):
-            shutil.rmtree(self.dir_of(ref), ignore_errors=True)
+        """装好了但没载进去:删掉,狗上照旧用原来那张。收养来的不删(建图的狗自己那份,删了要重下)。"""
+        with self._lock:
+            cur = self.active()
+            d = self.dir_of(ref)
+            if (cur is None or (cur.map_id, cur.version) != (ref.map_id, ref.version)) \
+                    and not (d / ADOPTED).exists():
+                shutil.rmtree(d, ignore_errors=True)
 
 
 def _sha256(path: Path) -> str:
@@ -260,7 +298,7 @@ def https_fetch(base_url: str, ssl_context: Any, *, timeout_s: float = 60.0) -> 
         try:
             r = urllib.request.urlopen(req, context=ssl_context, timeout=timeout_s)
         except urllib.error.HTTPError as exc:
-            if 400 <= exc.code < 500:
+            if exc.code in REFUSED_HTTP:
                 raise FetchRefused(f"站点回 {exc.code}") from exc
             raise
         with r:
