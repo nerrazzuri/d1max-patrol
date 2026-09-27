@@ -152,7 +152,7 @@ def _floor(d, rows, *, origin=(0.0, 0.0), res=1.0):
 def test_哪里有图_离走过的路太远或不在可通行格子上就说清楚_老版本不查(cat, tmp_path):
     """W09c 决定 5。栅格 20×3 格(1 m 一格),原点 (-1, -1);建图时沿 y=0 从 x=0 走到 x=3。"""
     src = _files(tmp_path / "v1")
-    _floor(src, ["...................?",
+    _floor(src, ["..#................?",
                  "......#.............",
                  "...................."], origin=(-1.0, -1.0))
     (src / "coverage.json").write_text(json.dumps(
@@ -163,6 +163,8 @@ def test_哪里有图_离走过的路太远或不在可通行格子上就说清�
     far = cat.reach_problem("yard", "1", [("门口", 1.0, 0.0), ("仓库", 11.0, 0.0)])
     assert "仓库" in far and "8.0 m" in far and "先把那里建进图" in far
     assert "墙" in cat.reach_problem("yard", "1", [("柱子", 5.5, 0.5)])
+    assert "墙" in cat.reach_problem("yard", "1", [("上面那排", 1.5, 1.5)]), "PGM 第一行是 y 最大的"
+    assert cat.reach_problem("yard", "1", [("下面那排", 1.5, -0.5)]) == ""
     assert "墙" in cat.reach_problem("yard", "1", [("图外", 3.0, 5.0)])
     old = _files(tmp_path / "v0", **{"yard.pgm": b"P5\n1 1\n255\n\x00", "yard.yaml": b"x"})
     cat.import_dir(old, map_id="yard", version="0")

@@ -99,6 +99,9 @@ def _walls_and_person(frames):
     walls = np.vstack(walls)
     rng = np.random.default_rng(3)
     floor = np.c_[rng.uniform([0, 0], [10, 6], (20000, 2)), np.zeros(20000)]
+    a = np.linspace(0, 2 * np.pi, 48, endpoint=False)
+    pillar = np.vstack([np.c_[5.0 + 0.15 * np.cos(a), 1.2 + 0.15 * np.sin(a), np.full(48, h)]
+                        for h in np.linspace(0.8, 1.6, 9)])   # 路和墙之间一根柱子(一直在)
     xs = np.linspace(1, 9, 80)
     sensor = np.c_[xs, np.full(80, 3.0), np.full(80, 0.6)]
     scans, people = [], []
@@ -107,8 +110,8 @@ def _walls_and_person(frames):
         person = np.c_[x - 0.5 + 0.15 * np.cos(a), 2.7 + 0.15 * np.sin(a), np.full(24, 1.2)]
         person = np.vstack([person + [0, 0, dz] for dz in (-0.4, 0.0, 0.4)])
         people.append(person)
-        scans.append((np.array([x, 3.0, 0.6]) @ L, np.vstack([walls, person]) @ L))
-    P = np.vstack([walls, floor, *people])
+        scans.append((np.array([x, 3.0, 0.6]) @ L, np.vstack([walls, floor, pillar, person]) @ L))
+    P = np.vstack([walls, floor, pillar, *people])
     return P @ L, sensor @ L, scans, np.c_[xs - 0.4, np.full(80, 3.0)]
 
 
@@ -123,17 +126,26 @@ def test_跟着狗走的人_真射线清得掉_走过的路和右边都是可通
         assert at(x - 0.5, 2.7) == G.FREE, "人站过的地方"
         assert at(x, 1.5) == G.FREE, "人右边那半间屋"
         assert at(x - 0.4, 3.0) == G.FREE, "狗身中心走过的路"
-    for x, y in ((5.0, 0.0), (5.0, 6.0), (0.0, 3.0), (10.0, 3.0)):
-        assert at(x, y) == G.OCCUPIED, (x, y)
+    for x, y in ((5.0, 0.0), (5.0, 6.0), (0.0, 3.0), (10.0, 3.0), (5.0, 1.05)):
+        assert at(x, y) == G.OCCUPIED, (x, y)            # (5, 1.05):柱子朝路的那一面
+    # 柱子后面的墙点跟柱子在同一个方位:每个方位只打最近的那个,不然射线穿过柱子把它清掉;
+    # 地面的点不打射线(它只说明地面上空,说明不了障碍层那个高度是空的)
     old = G.render(P, T, f)                               # 模拟射线:人那道「墙」还在
     assert old.image[old.cell_of(4.0, 2.7)] != G.FREE
 
 
-def test_狗身子占过的格子一律可通行():
+def test_狗身子占过的格子一律可通行_身宽两边各_0_25_m():
+    """没有一条射线的时候,可通行只来自狗身子走过的路;路上的障碍点(比如当时开着的门)也不算。"""
     f = _frames()
-    P, T, scans, body = _walls_and_person(f)
-    pillar = np.c_[np.full(50, 4.6), np.full(50, 3.0), np.linspace(0.8, 1.6, 50)] @ \
-        np.asarray(f.level_matrix())                    # 正好在狗走过的路上(比如当时开着的门)
-    g = G.render(np.vstack([P, pillar]), T, f, scans=scans[:1], body_path=body)
-    assert g.image[g.cell_of(4.6, 3.0)] == G.FREE
-    assert g.image[g.cell_of(4.6, 3.0 + 0.2)] == G.FREE, "身宽:中心线两边 0.25 m"
+    P, T, _, body = _walls_and_person(f)
+    L = np.asarray(f.level_matrix())
+    door = np.c_[np.full(50, 4.6), np.full(50, 3.0), np.linspace(0.8, 1.6, 50)] @ L
+    g = G.render(np.vstack([P, door]), T, f, scans=[], body_path=body)
+    at = lambda x, y: g.image[g.cell_of(x, y)]            # noqa: E731
+    for x in (1.0, 4.6, 8.0):
+        assert at(x, 3.0) == G.FREE, x
+    r, c = g.cell_of(4.6, 3.0)
+    assert (g.image[r - 1:r + 2, c - 1:c + 2] == G.FREE).all(), "门那几格(换算后可能差一格)"
+    assert at(4.0, 3.2) == G.FREE, "中心线旁边 0.2 m"
+    assert at(4.0, 3.4) != G.FREE, "0.4 m 以外不是身子"
+    assert g.cell_of(4.0, 1.5) is None or at(4.0, 1.5) != G.FREE, "没有射线:别处都不知道"

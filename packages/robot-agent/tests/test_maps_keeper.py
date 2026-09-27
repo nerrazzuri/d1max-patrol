@@ -109,12 +109,11 @@ def test_下载断了从断点接着下_哈希照样核(k):
     keeper, site = k
     big = bytes(range(256)) * 4
     a = site.add("m", "1", {"prior.mm": big, "floor.yaml": b"y"})
-    site.drop["prior.mm"] = [300, 600]                   # 断两次
+    site.drop["prior.mm"] = [150, 300, 450, 600, 750, 900]   # 断六次,每次都有进展:不算连着失败
     d = keeper.install(a)
     assert (d / "prior.mm").read_bytes() == big
-    assert [c for c in site.calls if c[0] == "prior.mm"] == [
-        ("prior.mm", 0), ("prior.mm", 300), ("prior.mm", 600)]
-    assert len(site.slept) == 2
+    assert [c[1] for c in site.calls if c[0] == "prior.mm"] == [0, 150, 300, 450, 600, 750, 900]
+    assert site.slept == [1.0] * 6, "有进展就重新数:退避从 1 s 起"
 
 
 def test_一直连不上_试几次就放弃_不挂满期限(k):
@@ -123,7 +122,7 @@ def test_一直连不上_试几次就放弃_不挂满期限(k):
     site.fail = True
     with pytest.raises(MapInstallError, match="连不上"):
         keeper.install(a)
-    assert 3 <= len(site.calls) <= 8 and site.slept == sorted(site.slept), "退避,不是死循环"
+    assert len(site.calls) == 5 and site.slept == [1.0, 2.0, 4.0, 8.0], "退避,不是死循环"
 
 
 def test_站点说没有这个_不重试(tmp_path):
@@ -183,5 +182,49 @@ def test_正在用的那张不被收养的覆盖(k, tmp_path):
     out = tmp_path / "outbox"
     out.mkdir()
     (out / "x.pgm").write_bytes(b"good")
+    import os
+    before = os.stat(keeper.dir_of(a) / "x.pgm").st_ino
     assert keeper.adopt(out, a) == keeper.dir_of(a)
     assert keeper.active() == a
+    assert os.stat(keeper.dir_of(a) / "x.pgm").st_ino == before, "正在用的那份不删了重建"
+
+
+def test_站点没说错却只给了一半_当断了接着下(tmp_path):
+    data = bytes(range(200))
+    calls = []
+
+    def fetch(map_id, version, name, offset=0):
+        calls.append(offset)
+        yield data[offset:offset + 120]                      # 每次只给 120 字节就结束
+
+    keeper = MapKeeper(tmp_path / "maps", fetch=fetch, sleep=lambda s: None)
+    d = keeper.install(_ref("m", "1", {"x.pgm": data}))
+    assert (d / "x.pgm").read_bytes() == data and calls == [0, 120]
+
+
+def test_站点不认Range_整个给回来_前面那段扔掉(tmp_path):
+    """老站点(W09c 之前)不认 ``Range``:回 200 整个文件。"""
+    import http.server
+    import threading
+
+    from d1max_agent.maps import https_fetch
+    data = bytes(range(256)) * 40
+
+    class 老站点(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), 老站点)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        fetch = https_fetch(f"http://127.0.0.1:{srv.server_port}", None)
+        assert b"".join(fetch("m", "1", "x", offset=3000)) == data[3000:]
+        assert b"".join(fetch("m", "1", "x")) == data
+    finally:
+        srv.shutdown()

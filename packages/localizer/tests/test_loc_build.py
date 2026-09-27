@@ -184,6 +184,38 @@ def test_有录包就用逐帧扫描打真射线_读不了退回模拟射线_写
     assert json.loads((tmp_path / "out3" / "build.json").read_text())["grid"]["rays"] == \
         "synthetic:没给录包"
 
+    def 一帧没配上(bag, traj, topic):
+        return iter(())
+
+    B.package(work, tmp_path / "out4", run=假MOLA(pts), bag=tmp_path / "bag",
+              read_scans=一帧没配上)
+    assert json.loads((tmp_path / "out4" / "build.json").read_text())["grid"]["rays"] == \
+        "synthetic:录包里没有配得上轨迹的扫描"
+    got.clear()
+    B.package(work, tmp_path / "out5", run=假MOLA(pts), bag=tmp_path / "bag", read_scans=读扫描,
+              lidar_topic="/rear_lidar")
+    assert got == [], "逐帧扫描只认前雷达(MOLA 跟的是它的坐标系)"
+    assert json.loads((tmp_path / "out5" / "build.json").read_text())["grid"]["rays"].startswith(
+        "synthetic:话题 /rear_lidar")
+
+
+def test_栅格拿到狗身中心走过的路(tmp_path, monkeypatch):
+    work, pts = _scene(tmp_path, False)
+    seen = []
+    real = G.render
+
+    def 看(*a, **k):
+        seen.append(k.get("body_path"))
+        return real(*a, **k)
+    monkeypatch.setattr(G, "render", 看)
+
+    def 读扫描(bag, traj, topic):
+        _, p, _ = traj[0]
+        yield np.array(p), pts[::10]
+    B.package(work, tmp_path / "out", run=假MOLA(pts), bag=tmp_path / "bag", read_scans=读扫描)
+    B.package(work, tmp_path / "out2", run=假MOLA(pts))
+    assert len(seen) == 2 and all(b is not None and len(b) == 120 for b in seen)
+
 
 def test_点云消息按字段偏移取xyz_丢掉NaN():
     names = ("x", "y", "z", "intensity", "ring")
@@ -216,9 +248,9 @@ def test_从真的mcap录包读逐帧扫描_按轨迹时刻配位姿(tmp_path):
                rosbag2_py.ConverterOptions("cdr", "cdr"))
         w.create_topic(rosbag2_py.TopicMetadata(name="/front_lidar",
                        type="sensor_msgs/msg/PointCloud2", serialization_format="cdr"))
-        for i in range(6):
+        for i in range(7):                            # 最后一帧的时刻轨迹上没有:不用
             m = PointCloud2()
-            m.header.stamp.sec, m.header.stamp.nanosec = 100 + i, 0
+            m.header.stamp.sec, m.header.stamp.nanosec = (100 + i if i < 6 else 300), 0
             m.header.frame_id = "rslidar_head"
             m.fields = [PointField(name=n, offset=4 * k, datatype=7, count=1)
                         for k, n in enumerate("xyz")]

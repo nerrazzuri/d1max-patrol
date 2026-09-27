@@ -435,7 +435,8 @@ def test_狗下载图能从断点接着下_Range(站点, ca, tmp_path):
     assert b"".join(fetch("estate-1", "3", "prior.mm")) == data
     assert b"".join(fetch("estate-1", "3", "prior.mm", offset=65536)) == data[65536:]
     url = 站点.intake.url + "/maps/estate-1/3/prior.mm"
-    for rng, want in (("bytes=10-19", data[10:20]), ("bytes=69990-", data[69990:])):
+    for rng, want in (("bytes=10-19", data[10:20]), ("bytes=69990-", data[69990:]),
+                      ("bytes=69990-99999", data[69990:])):
         req = urllib.request.Request(url, headers={"Range": rng})
         with urllib.request.urlopen(req, context=_ctx(ca, ca.a), timeout=5) as r:
             assert r.status == 206 and r.read() == want
