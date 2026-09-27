@@ -686,3 +686,93 @@ async def test_边走边建_开录带地图号与版本_停下后在后台收尾
     assert (got["map_id"], got["version"], got["mode"], got["bag"]) == ("m", "5", "live", "yard-x")
     assert got["grid_rays"] == "scans:9"
     await rt.close()
+
+
+def _假边走边建():
+    rec = 假录包()
+    rec.pending, rec.lost, rec.last_rays, rec.last_fallback = None, [], "", ""
+    rec.shut = 0
+
+    async def shutdown():
+        rec.shut += 1
+    rec.shutdown = shutdown
+    return rec
+
+
+async def _起(tmp_path, rec):
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"),
+                      boot_id="b", home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono,
+                      mapper=rec)
+    await rt.start()
+    return broker, c, ears, rt
+
+
+async def test_边走边建开录没成_发建图失败_站点放开这个版本(tmp_path):
+    """内审阻断 2:原来只发 ``mapping_failed``(不带地图号、版本),站点一直当这一版「在建」。"""
+    rec = _假边走边建()
+
+    async def start(name, target=None):
+        raise RuntimeError("在线建图起来就退了")
+    rec.start = start
+    broker, c, ears, rt = await _起(tmp_path, rec)
+    await rt._on_cmd(_cmd("mapping", {"action": "start", "name": "y", "map_id": "m",
+                                      "version": "5"}, "s1", c))
+    await _跑(rt, broker, n=3)
+    got = [e["data"] for e in ears.by["event"] if e["kind"] == "map_build_failed"]
+    assert got and (got[-1]["map_id"], got[-1]["version"]) == ("m", "5")
+    assert "起来就退了" in got[-1]["reason"]
+    await rt.close()
+
+
+async def test_起来时接着收尾上次没收完的边走边建_收不了的报失败(tmp_path):
+    rec = _假边走边建()
+    rec.pending = ("yard-x", "m", "5")
+    rec.lost = [("old-x", "m", "4")]
+    done = []
+
+    async def finish():
+        done.append(rec.pending)
+        rec.pending = None
+        from d1max_contract.maps import MapRef
+        return MapRef.from_wire({"map_id": "m", "version": "5", "files": [
+            {"name": "x", "size": 1, "sha256": "a" * 64}]}), "bag"
+    rec.finish = finish
+    broker, c, ears, rt = await _起(tmp_path, rec)
+    await _跑(rt, broker, n=5)
+    assert done == [("yard-x", "m", "5")]
+    kinds = {(e["kind"], e["data"].get("version")) for e in ears.by["event"]}
+    assert ("map_built", "5") in kinds and ("map_build_failed", "4") in kinds
+    await rt.close()
+
+
+async def test_收尾时停录_能力里说能边走边建(tmp_path):
+    from d1max_contract.messages import Capabilities
+    rec = _假边走边建()
+    broker, c, ears, rt = await _起(tmp_path, rec)
+    await broker.drain()
+    caps = Capabilities.from_wire(ears.by["capabilities"][-1])
+    assert caps.tasks["mapping"] == {"live": True}
+    await rt.close()
+    assert rec.shut == 1
+
+
+async def test_重建还在跑_带版本开录回忙_只录包照收(tmp_path):
+    import asyncio
+    rec = _假边走边建()
+    broker, c, ears, rt = await _起(tmp_path, rec)
+    rt._build_job = asyncio.get_running_loop().create_task(asyncio.sleep(30))
+    await rt._on_cmd(_cmd("mapping", {"action": "start", "name": "y", "map_id": "m",
+                                      "version": "5"}, "s1", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["reason"] == "busy"
+    await rt._on_cmd(_cmd("mapping", {"action": "start", "name": "y"}, "s2", c))
+    await broker.drain()
+    assert ears.by["cmd/ack"][-1]["result"] == "accepted"
+    rt._build_job.cancel()
+    await rt.close()

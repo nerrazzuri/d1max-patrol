@@ -190,3 +190,20 @@ def test_边走边建_开始录包带地图号与版本_到狗_版本不许撞(�
         code, d = s.req("POST", "/api/robots/A/mapping",
                         {"action": "start", "name": "yard2", **body}, token=alice)
         assert code == want, (body, d)
+
+
+def test_狗不能边走边建_带版本开录就拒(站点):
+    """内审应修 4:老版本的狗不认多出来的地图号、版本,只录包、回收下 —— 站点、手机都以为在建,版本号
+    就一直挂在「正在建」。先看狗的能力。"""
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _caps(s) is not None and "mapping" in _caps(s).tasks)
+    assert _caps(s).tasks["mapping"] == {"live": True}
+    s.disp.clients["A"].capabilities.tasks["mapping"] = {}          # 老狗
+    code, d = s.req("POST", "/api/robots/A/mapping",
+                    {"action": "start", "name": "yard", "map_id": MAP[0], "version": "20"},
+                    token=alice)
+    assert code == 409 and "边走边建" in d["error"], d
+    code, d = s.req("POST", "/api/robots/A/mapping", {"action": "start", "name": "yard"},
+                    token=alice)
+    assert code == 200, "只录包照旧"

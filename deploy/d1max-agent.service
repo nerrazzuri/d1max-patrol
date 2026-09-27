@@ -32,6 +32,11 @@ ExecStartPre=-/opt/d1max/bin/python -m d1max_patrol.cli release boot-guard
 ExecStart=/opt/d1max/current/deploy/d1max-agent-start
 Restart=always
 RestartSec=5
+# 停服务时只给代理发 SIGTERM(W09c2 内审):子进程由代理按各自的信号停 —— 在线建图的 mola-cli 只认
+# SIGINT(SIGTERM 它不存盘、挂着等强杀),录包要写完 mcap 的索引。默认的 control-group 对整组发
+# SIGTERM,两样都会坏。存盘要一会儿:给 180 s(之后 systemd 对剩下的强杀)。
+KillMode=mixed
+TimeoutStopSec=180
 
 [Install]
 WantedBy=multi-user.target

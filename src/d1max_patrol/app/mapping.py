@@ -18,6 +18,7 @@ W09c2)。
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shutil
 import signal
@@ -60,6 +61,13 @@ MOLA_LO_SHARE = "/opt/ros/humble/share/mola_lidar_odometry"
 #: 在线建图停的时候给多久存盘(开发机 4 分半的走动:simplemap 200 MB + 局部地图 150 MB,3.5 s;
 #: Orin 上盘慢,给足)。
 LIVE_SAVE_GRACE_S = 300.0
+#: 在线建图起完等这么久再看它还在不在(插件、路径、QoS 不对的话它起来就退;W09c2 内审应修 2)。
+LIVE_SETTLE_S = 3.0
+#: 在线建图的 ROS 命名空间:跟定位器的 MOLA(同一份配置、同一个域)不串 —— 位姿话题、重定位服务、
+#: /initialpose 这几个是绝对名,命名空间管不到,逐个改名(W09c2 内审阻断 1;开发机上核过)。
+LIVE_NS = "/d1max_mapping"
+_LIVE_RENAMES = ("/initialpose", "/relocalize_near_pose", "/lidar_odometry/pose",
+                 "/lidar_odometry/pose_quality")
 
 
 class MappingError(RuntimeError):
@@ -200,9 +208,18 @@ class MappingOrchestrator:
             forget_home(self._cfg.maps_dir, live_map_id)   # 坐标系要重建了
         await self._start(self.spec_for_record(bag))
         if live_map_id is not None:
+            spec = self.spec_for_live(live_map_id)
+            (work / "mola.json").write_text(json.dumps(
+                {"mode": "live", "pipeline": spec.argv[-1], "env": dict(spec.env)},
+                ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             try:
-                await self._start(self.spec_for_live(live_map_id))
+                await self._start(spec)
+                await asyncio.sleep(LIVE_SETTLE_S)
+                if self.LIVE not in self._procs.running():
+                    raise MappingError("在线建图起来就退了,日志见 "
+                                       f"{self._procs.log_path(self.LIVE)}")
             except MappingError:
+                await self._procs.stop(self.LIVE)
                 await self._procs.stop(self.RECORD, term_grace_s=_RECORD_GRACE_S)
                 raise
         self._phase = "recording"
@@ -339,7 +356,14 @@ class MappingOrchestrator:
                 "MOLA_SIMPLEMAP_OUTPUT": str(work / "map.simplemap"),
                 "MOLA_SAVE_TRAJECTORY": "true",
                 "MOLA_TUM_TRAJECTORY_OUTPUT": str(work / "traj.tum"),
-                "MOLA_SAVE_MM": str(work / "raw_prior.mm"), "MOLA_LOCAL_MAP_MAX_SIZE": "0"},
+                "MOLA_SAVE_MM": str(work / "raw_prior.mm"), "MOLA_LOCAL_MAP_MAX_SIZE": "0",
+                # 不跟定位器串:换命名空间、不发 /tf 与位姿、不往 ROS 上发越来越大的地图
+                "ROS_ARGS": json.dumps(["-r", f"__ns:={LIVE_NS}", *(
+                    x for n in _LIVE_RENAMES for x in ("-r", f"{n}:={LIVE_NS}{n}"))]),
+                "MOLA_LOCALIZATION_PUBLISH_TF": "false",
+                "MOLA_LOCALIZATION_PUBLISH_ODOM_MSGS": "false",
+                "MOLA_ROS2_TRANSFORM_PUBLISH_PERIOD": "0",
+                "MOLA_ROS2_PUBLISH_MAPS_PERIOD": "86400"},
             ready_pattern="",
             stop_signal=signal.SIGINT,          # SIGTERM 它不存盘(见 ProcSpec.stop_signal)
         )

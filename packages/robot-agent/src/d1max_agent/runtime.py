@@ -355,7 +355,7 @@ class AgentRuntime:
                                       or getattr(self.hal, "load_map", None) is not None):
             out["map_activate"] = {}
         if self.mapper is not None:
-            out["mapping"] = {}
+            out["mapping"] = {"live": True}     # W09c2:能边走边建(站点据此放行带版本的开录)
             out["mapping_trail"] = {}           # W00c6h:录包时的轨迹(手机画哪儿走过了)
             out["map_build"] = {}
         if self.releases is not None:
@@ -468,8 +468,14 @@ class AgentRuntime:
                     self._finish_live(task_id))
         except Exception as exc:  # noqa: BLE001 - 起不来/停不了:原因发给站点
             log.warning("录包 %s 没成:%s", action, exc)
+            reason = f"{type(exc).__name__}: {exc}"[:200]
             self.events.emit("mapping_failed", {"task_id": task_id, "action": action,
-                                                "reason": f"{type(exc).__name__}: {exc}"[:200]})
+                                                "reason": reason})
+            if target is not None:
+                # 这一版没建成:站点据此放开这个版本号(W09c2 内审阻断 2)
+                self.events.emit("map_build_failed", {"task_id": task_id, "bag": "",
+                                                      "map_id": target[0], "version": target[1],
+                                                      "reason": reason})
 
     async def _release_command(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
         """发布命令(W00c5d 第三部分):装在后台做,双槽所在的盘不够不装;切、退要空闲(不跑任务、
@@ -931,7 +937,20 @@ class AgentRuntime:
                 self.events.emit("release_rolled_back", {k: note.get(k) for k in
                                                          ("from", "to", "attempts", "at_ms",
                                                           "no_fallback")})
+        self._resume_live()
         await self._publish_status(force=True)
+
+    def _resume_live(self) -> None:
+        """上次没收完的边走边建(代理重启了,W09c2 内审应修 1):接着收尾;收不了的报「没建成」,站点
+        放开那个版本号。"""
+        if self.mapper is None:
+            return
+        for bag, map_id, version in getattr(self.mapper, "lost", []):
+            self.events.emit("map_build_failed", {"task_id": "", "bag": bag, "map_id": map_id,
+                                                  "version": version,
+                                                  "reason": "代理重启了,这一趟没收完"})
+        if getattr(self.mapper, "pending", None) is not None:
+            self._build_job = asyncio.get_running_loop().create_task(self._finish_live(""))
 
     async def close(self) -> None:
         """收尾,顺序:引擎(停当前这趟)→ HAL 停 → 放控制权(能放的才放)→ 关桥与 HAL 链路
@@ -956,6 +975,9 @@ class AgentRuntime:
             async def _video_off() -> None:
                 self.video.close()
             await _step("停推流", _video_off)
+        if self.mapper is not None and hasattr(self.mapper, "shutdown"):
+            # 正在录就好好停下:录包写完索引、在线建图 SIGINT 存盘(W09c2),重启后接着打包
+            await _step("停录包", self.mapper.shutdown)
         if self._hal_touched:
             await _step("HAL 停", self.hal.stop)
             if self.hal.hal_capabilities().control_releasable:

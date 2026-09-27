@@ -34,6 +34,9 @@ log = logging.getLogger(__name__)
 #: 包停录后打的标记;拿它重建成功后打的标记。
 DONE = ".done"
 BUILT = ".built"
+#: 边走边建的包(W09c2):开录时记下建哪一版(``{"map_id", "version"}``),收尾完了删。代理重启时按它
+#: 接着收尾(内审应修 1:待打包原来只在内存里,重启就丢,站点一直当它「在建」)。
+LIVE = ".live"
 #: 没重建过的包,录完之后在狗上最多留几天(传完、站点确认之后才删)。
 BAG_KEEP_DAYS = 7
 #: **盘紧了就不留**(W00c5d 第三部分内部评审:留着的包把发件箱撑满,巡检就被拒 storage_full):
@@ -99,6 +102,8 @@ class MappingService:
         self.live: tuple[str, str] | None = None
         self.pending: tuple[str, str, str] | None = None
         self.last_fallback = ""
+        #: 起来时找到的、没法接着收尾的边走边建(包, 地图号, 版本):调用方报「没建成」。
+        self.lost: list[tuple[str, str, str]] = []
         self._cleanup()
 
     @property
@@ -112,9 +117,22 @@ class MappingService:
         补上 ``.done``(它已经录不下去了,该传的照传)。"""
         shutil.rmtree(self.maps_out / ".building", ignore_errors=True)
         if self.bags_root.is_dir():
-            for b in self.bags_root.iterdir():
+            for b in sorted(self.bags_root.iterdir()):
                 if b.is_dir() and not (b / DONE).exists():
                     (b / DONE).touch()
+                # 边走边建的没收尾完(代理重启了):接着收尾。同一时刻只会有一趟;真有几个,前面的
+                # 交给调用方报「没建成」(``lost``)。
+                try:
+                    t = json.loads((b / LIVE).read_text("utf-8"))
+                    got = (b.name, str(t["map_id"]), str(t["version"]))
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+                if self.pending is not None:
+                    self.lost.append(self.pending)
+                    (self.bags_root / self.pending[0] / LIVE).unlink(missing_ok=True)
+                    self.held.discard(self.pending[0])
+                self.pending = got
+                self.held.add(b.name)
 
     def bag_settled(self, run: Path) -> bool:
         if not (run / DONE).is_file() or run.name in self.held:
@@ -136,7 +154,9 @@ class MappingService:
         if target is not None:
             if (self.maps_out / target[0] / target[1]).exists():
                 raise MappingError(f"{target[0]}:{target[1]} 狗上已经有一份在传了,换个版本号")
-            await self.orch.start_record(full, live_map_id=target[0])
+            bag = Path(await self.orch.start_record(full, live_map_id=target[0]))
+            (bag / LIVE).write_text(json.dumps({"map_id": target[0], "version": target[1]}),
+                                    encoding="utf-8")
         else:
             await self.orch.start_record(full)
         self.recording = True
@@ -149,12 +169,18 @@ class MappingService:
             raise MappingError("现在没在录包")
         bag = Path(await self.orch.stop_record())
         self.recording = False
-        if self.live is not None:
+        live, self.live = self.live, None
+        (bag / DONE).touch()                      # 录完了:之后才算安定,传完即删
+        # 先打完成标记再记待打包(内审应修 3:打标记炸了,待打包就永远挂着、之后每次开录都拒)
+        if live is not None:
             with self.lock:
                 self.held.add(bag.name)
-            self.pending = (bag.name, *self.live)
-            self.live = None
-        (bag / DONE).touch()                      # 录完了:之后才算安定,传完即删
+            self.pending = (bag.name, *live)
+
+    async def shutdown(self) -> None:
+        """代理收尾:正在录就好好停下(录包写完索引、在线建图 SIGINT 存盘),待打包的重启后接着做。"""
+        if self.recording:
+            await self.stop()
 
     async def finish(self) -> tuple[MapRef, str]:
         """把边走边建的这一版收尾:先打包在线建好的(``live``);不成(MOLA 半路没了、存下的不齐……)
@@ -179,6 +205,7 @@ class MappingService:
             return ref, mode
         finally:
             self.pending = None
+            (src / LIVE).unlink(missing_ok=True)
             with self.lock:
                 self.held.discard(bag)
 

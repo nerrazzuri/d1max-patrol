@@ -46,6 +46,10 @@ _POLL_S = 0.05
 _UNBUFFERED = {"PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
 
 
+#: 强杀之后最多再等多久(秒)。
+_KILLED_WAIT_S = 5.0
+
+
 class ProcError(RuntimeError):
     """进程起不来、等不到就绪,或者名字撞了。"""
 
@@ -204,7 +208,8 @@ class ProcManager:
             # 装死的进程 —— ros2 launch 偶尔就是这样。不强杀就永远等下去。
             self._signal(proc, getattr(signal, "SIGKILL", signal.SIGTERM))
             with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
-                await asyncio.wait_for(proc.wait(), term_grace_s)
+                # 强杀了:不再等满宽限(在线建图 300 s 的宽限,最坏要停 600 s —— W09c2 内审小 3)
+                await asyncio.wait_for(proc.wait(), min(term_grace_s, _KILLED_WAIT_S))
         self._close(entry)
 
     @staticmethod

@@ -1286,3 +1286,13 @@ def test_ROS_包装脚本_source_ROS_再执行后面的命令():
     r = subprocess.run([str(start), "sh", "-c", 'command -v ros2 && echo "$AMENT_PREFIX_PATH"'],
                        capture_output=True, text=True, env=env, timeout=60)
     assert r.returncode == 0 and "/opt/ros/humble" in r.stdout, r.stdout + r.stderr
+
+
+def test_代理服务停的时候只给代理发_SIGTERM_子进程由它按各自的信号停():
+    """W09c2 内审应修 1:默认 KillMode=control-group 对整组发 SIGTERM —— 在线建图的 mola-cli 收到
+    SIGTERM 不存盘、挂着等被强杀,录包的 mcap 也来不及写索引。mixed:只给代理发,代理按正常停录收
+    (在线建图 SIGINT);给足时间。"""
+    unit = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
+    assert "KillMode=mixed" in unit
+    t = [ln for ln in unit.splitlines() if ln.startswith("TimeoutStopSec=")]
+    assert t and int(t[0].split("=")[1]) >= 120

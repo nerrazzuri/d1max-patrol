@@ -63,6 +63,12 @@ class FakeProcs:
         return self.exit_codes.get(name, 0)
 
 
+@pytest.fixture(autouse=True)
+def _不等在线建图起稳(monkeypatch):
+    import d1max_patrol.app.mapping as M
+    monkeypatch.setattr(M, "LIVE_SETTLE_S", 0.0)
+
+
 @pytest.fixture
 def procs(tmp_path) -> FakeProcs:
     return FakeProcs(tmp_path / "logs")
@@ -430,6 +436,23 @@ def test_在线建图的进程_实时域_存盘的环境变量都指向中间目
     assert spec.stop_signal == signal.SIGINT, "SIGTERM 它不存盘(真实链路上踩到)"
 
 
+def test_在线建图跟定位器的_MOLA_不串_话题服务换到自己的命名空间_不发_TF(orch):
+    """内审阻断 1:两个 MOLA 同一份配置、同一个域 —— 位姿话题、/tf、重定位服务、/initialpose 都同名,
+    定位器会收到建图那边的位姿、重定位请求可能落到建图的 MOLA 上。"""
+    import json
+    env = orch.spec_for_live("m1").env
+    args = json.loads(env["ROS_ARGS"])
+    assert args[:2] == ["-r", "__ns:=/d1max_mapping"]
+    remaps = dict(a.split(":=") for a in args[1::2])
+    for name in ("/initialpose", "/relocalize_near_pose", "/lidar_odometry/pose",
+                 "/lidar_odometry/pose_quality"):
+        assert remaps[name] == "/d1max_mapping" + name, name
+    assert env["MOLA_LOCALIZATION_PUBLISH_TF"] == "false"
+    assert env["MOLA_LOCALIZATION_PUBLISH_ODOM_MSGS"] == "false"
+    assert env["MOLA_ROS2_TRANSFORM_PUBLISH_PERIOD"] == "0"
+    assert float(env["MOLA_ROS2_PUBLISH_MAPS_PERIOD"]) >= 3600, "不往 ROS 上发越来越大的地图"
+
+
 async def test_边走边建_录包的同时起在线建图_先清旧的_原点作废(orch, procs, cfg):
     save_home(cfg.maps_dir, HomePoint(map_id="m1", pose=Pose.from_xy_yaw(1.0, 2.0),
                                       marked_at_ms=1))
@@ -457,6 +480,30 @@ async def test_边走边建_停录两个一起停_在线建图给足存盘时间
     await orch.stop_record()
     assert set(grace) == {"bagrecord", "molamap"} and grace["molamap"] >= 120
     assert orch.phase == "idle" and orch.live_map is None
+
+
+async def test_在线建图起来就退了_录包也收掉_说清楚(orch, procs, monkeypatch):
+    """内审应修 2:原来起来就算,MOLA 一起来就退(插件、路径、QoS 不对)要等人走完一圈停下才知道。"""
+    real = procs.start
+
+    async def 起来就退(spec):
+        await real(spec)
+        if spec.name == "molamap":
+            procs.stopped.append("molamap")               # FakeProcs:当它退了
+    monkeypatch.setattr(procs, "start", 起来就退)
+    with pytest.raises(MappingError, match="起来就退了"):
+        await orch.start_record("w1", live_map_id="m1")
+    assert procs.running() == [] and orch.phase == "idle"
+
+
+async def test_开录时在中间目录记下在线建图的参数_打包抄进_build_json(orch, cfg):
+    """内审小 1:``--reuse`` 打包时中间目录里没有 mola.json,build.json 里不知道是在线建的、
+    用的什么参数。"""
+    import json
+    await orch.start_record("w1", live_map_id="m1")
+    m = json.loads((cfg.maps_dir / ".work" / "m1" / "mola.json").read_text())
+    assert m["mode"] == "live" and m["env"]["MOLA_LIDAR_QOS_RELIABILITY"] == cfg.live_qos
+    assert m["pipeline"].endswith("lidar_odometry_ros2.yaml")
 
 
 async def test_在线建图起不来_录包也收掉_说清楚(orch, procs):

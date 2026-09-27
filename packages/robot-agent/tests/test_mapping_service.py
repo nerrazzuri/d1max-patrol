@@ -286,3 +286,55 @@ async def test_边走边建的版本狗上已经有一份在传_开录就拒(svc
     with pytest.raises(MappingError, match="已经有一份"):
         await svc.start("yard", target=("estate-1", "5"))
     assert not svc.recording
+
+
+async def test_代理重启_边走边建的这一趟接着收尾_不丢(tmp_path):
+    """内审应修 1:待打包、正在在线建的只在内存里,代理重启(升级、崩了)就丢了,站点一直当它「在建」。
+    开录时在包目录记一个标记;起来时按它接着收尾(存下的在线那份打得成就打,不成从录包建)。"""
+    bags, work = tmp_path / "outbox" / "bags", tmp_path / "work"
+    svc = MappingService(假编排(bags, work), bags_root=bags, maps_out=tmp_path / "outbox" / "maps")
+    await svc.start("yard", target=("estate-1", "5"))
+    bag = svc.last_bag
+    assert json.loads((bags / bag / ".live").read_text()) == {"map_id": "estate-1", "version": "5"}
+    # 录着的时候代理没了(没停录):重启
+    again = MappingService(假编排(bags, work), bags_root=bags,
+                           maps_out=tmp_path / "outbox" / "maps")
+    assert again.pending == (bag, "estate-1", "5") and bag in again.held
+    assert (bags / bag / DONE).is_file(), "录不下去了:当录完"
+    ref, mode = await again.finish()
+    assert ref.version == "5" and not (bags / bag / ".live").exists()
+
+
+async def test_停录先打完成标记再记待打包(svc, monkeypatch):
+    """内审应修 3:先记待打包、再打完成标记;打标记炸了(盘满)待打包就永远挂着、之后每次开录都拒。"""
+    await svc.start("yard", target=("estate-1", "5"))
+    from pathlib import Path as P
+    real = P.touch
+
+    def 盘满(self, *a, **k):
+        if self.name == DONE:
+            raise OSError("盘满了")
+        return real(self, *a, **k)
+    monkeypatch.setattr(P, "touch", 盘满)
+    with pytest.raises(OSError):
+        await svc.stop()
+    assert svc.pending is None and not svc.held
+
+
+async def test_收尾时正在录就好好停下(svc):
+    """代理停服务:录包、在线建图按正常停录收(在线建图 SIGINT 存盘),重启后接着打包。"""
+    await svc.start("yard", target=("estate-1", "5"))
+    await svc.shutdown()
+    assert not svc.recording and svc.pending is not None
+    await svc.shutdown()                                  # 没在录:什么都不做
+
+
+async def test_上一趟还在打包_开录就拒_收尾时版本已在传也算没建成(svc):
+    await svc.start("yard", target=("estate-1", "5"))
+    await svc.stop()
+    with pytest.raises(MappingError, match="还在打包"):
+        await svc.start("yard2")
+    (svc.maps_out / "estate-1" / "5").mkdir(parents=True)
+    with pytest.raises(MappingError, match="已经有一份"):
+        await svc.finish()
+    assert svc.pending is None and not svc.held

@@ -1041,6 +1041,12 @@ class _Handler(TlsHandlerMixin):
                 kind, payload = "mapping", {"action": action, **({"name": name} if name else {})}
                 target = mapping_target(d)
                 if target is not None:           # W09c2:录包的同时在线建这一版
+                    c = self.site.dispatcher.clients.get(robot_id)
+                    caps = c.capabilities if c is not None else None
+                    if caps is None or not caps.tasks.get("mapping", {}).get("live"):
+                        # 老版本的狗不认地图号、版本:只录包、回收下,这一版就一直挂在「正在建」
+                        raise HttpError(409, f"{robot_id} 不能边走边建(先升级);只录包就别填"
+                                             "地图号、版本")
                     self._check_new_version(cat, *target)
                     payload |= {"map_id": target[0], "version": target[1]}
             elif what == "outbox_retry":
