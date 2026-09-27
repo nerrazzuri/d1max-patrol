@@ -228,7 +228,8 @@ def test_站点给的包比说的大_下到超了就停_不接着下(ops, tmp_pa
     got = {"n": 0}
 
     def 不停(name):
-        while True:
+        # 有上限:「超了就停」被改坏时测试失败就行,别一直往盘上写(2026-09-25 一次突变写出过 204 GB)
+        while got["n"] < 100:
             got["n"] += 1
             yield b"x" * 1000
     o._fetch = 不停
