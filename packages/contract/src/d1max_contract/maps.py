@@ -1,7 +1,8 @@
 """地图经站点的契约(W00c5d 第二部分,决策 8:站点是地图的唯一权威,狗上只有正在用的那一张)。
 
-- **一张图 = 一个地图号 + 版本 + 一组文件**(自建图:``.pgm``/``.yaml``/``.posegraph``/``.data``,
-  可选 ``home.json`` 原点)。每个文件带大小与 sha256,狗下载后逐个核对,对不上不载入。
+- **一张图 = 一个地图号 + 版本 + 一组文件**(狗上建的图::data:`GEOMETRY_FILES`,W09c1 起;之前的版本是
+  slam_toolbox 的 ``.pgm``/``.yaml``/``.posegraph``/``.data``;可选 ``home.json`` 原点)。每个文件
+  带大小与 sha256,狗下载后逐个核对,对不上不载入。
 - **下发**:命令 ``map_activate``(不是任务;有任务在跑回 busy)。狗收下就回 accepted,后台下载、核对、
   交给适配器载入,完了发事件 ``map_activated`` 或 ``map_activate_failed``;载入成功后能力里的
   ``loaded_map`` 跟着变,站点按新版本派单。
@@ -25,6 +26,11 @@ MAX_FILES = 16
 MAX_FILE_BYTES = 2 * 1024 ** 3
 #: 图的清单文件名(狗建完图最后写它;站点收齐这一份才登记)。
 MANIFEST = "map.json"
+#: 狗上建的地图版本里的几何文件(W08 决定 5、W09c1):定位先验(MOLA 的局部地图)、坐标换算、按同一平面
+#: 画的规划栅格、「哪里有图」(建图时走过的路)、怎么建的。站点、手机的预览照旧用 ``floor.*``。
+GEOMETRY_FILES = ("prior.mm", "frames.json", "floor.pgm", "floor.yaml", "coverage.json",
+                  "build.json")
+COVERAGE = "coverage.json"
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 

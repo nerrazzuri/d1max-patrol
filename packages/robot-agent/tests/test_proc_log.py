@@ -154,11 +154,10 @@ def test_日志目录_从进程管理器经编排报到录包服务(tmp_path):
 
     class 编排:
         log_dir = tmp_path / "logs"
-    svc = MappingService(编排(), bags_root=tmp_path / "b", maps_out=tmp_path / "m",
-                         work_dir=tmp_path / "w")
+    svc = MappingService(编排(), bags_root=tmp_path / "b", maps_out=tmp_path / "m")
     assert svc.log_dir == tmp_path / "logs"
-    assert MappingService(object(), bags_root=tmp_path / "b", maps_out=tmp_path / "m",
-                          work_dir=tmp_path / "w").log_dir is None
+    assert MappingService(object(), bags_root=tmp_path / "b",
+                          maps_out=tmp_path / "m").log_dir is None
 
 
 async def test_不进幂等记录_重投的再查一次(tmp_path):

@@ -78,8 +78,8 @@ _CHUNK_JOIN = b"\0"
 #:   临时副本 ``pip install``,没有它 pip 连构建后端都找不到。
 #: * ``src/`` —— ``[tool.setuptools.packages.find] where = ["src"]``,包体在这儿。
 #: * ``config/`` —— systemd 单元里 ``WorkingDirectory=-/opt/d1max/current``,
-#:   也就是**包目录就是服务的工作目录**。``app/mapping.py`` 的 ``params_template``
-#:   默认值 ``config/params/mapper_3d.yaml`` 是相对这里解析的。
+#:   也就是**包目录就是服务的工作目录**,``config/`` 下的相对路径是相对这里解析的
+#:   (W09c1 之前建图编排的 slam_toolbox 参数模板就是这么找的)。
 #:
 #: 仓库里的 ``runs/``、``missions/`` 这类运行时输出目录**都不该进包**:把它们塞进去等于把
 #: 开发机的录像和任务包一起带上狗。

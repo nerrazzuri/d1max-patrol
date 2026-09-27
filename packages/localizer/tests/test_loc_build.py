@@ -152,3 +152,8 @@ def test_MOLA_建图的命令(tmp_path):
     assert cmd[0] == "mola-lidar-odometry-cli"
     assert cmd[cmd.index("--output-simplemap") + 1] == str(tmp_path / "w" / "map.simplemap")
     assert cmd[cmd.index("--output-tum-path") + 1] == str(tmp_path / "w" / "traj.tum")
+
+
+def test_打包出的文件表就是契约里的那张():
+    from d1max_contract.maps import GEOMETRY_FILES
+    assert B.FILES == GEOMETRY_FILES

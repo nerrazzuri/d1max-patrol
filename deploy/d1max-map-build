@@ -1,0 +1,15 @@
+#!/bin/sh
+# 建图脚本(W09c1):代理的建图编排(map_build)起它,在录包上跑 MOLA 建图、打成地图版本的文件。
+# 参数原样交给 ``d1max-loc build``(--bag --out --work --lidar-topic --prior-pack)。
+#
+# 跟定位器一样跑在 **ROS 的系统 Python** 里(MOLA 的命令行、numpy 都在那边),代码用这个脚本所在那一版
+# 带的 packages/localizer 与 packages/contract(纯 Python,按 PYTHONPATH 找,不进 venv)。MOLA 命令行
+# 直接读录包,不上 ROS 网;编排给的是本机隔离域的环境变量。
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+# ROS 的 setup 脚本里有未定义变量,关掉 -u 再 source
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+exec /usr/bin/python3 -m d1max_localizer.tools build "$@"

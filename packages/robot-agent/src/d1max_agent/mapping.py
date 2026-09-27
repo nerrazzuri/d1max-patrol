@@ -2,13 +2,14 @@
 
 站点下命令 ``mapping``(开始 / 停止录包,人经站点遥控开着狗走)、``map_build``(拿录好的包在狗上
 离线重建一张图)。这里只是把现成的建图编排(``d1max_patrol.app.mapping.MappingOrchestrator``,
-录 mcap 包 → 隔离域里 slam_toolbox 离线重建 → 存图)接到发件箱上:
+录 mcap 包 → MOLA 离线建一个地图版本,W09c1)接到发件箱上:
 
 - **包**写进发件箱 ``bags/<包名>-<UTC 时刻>/``(带时刻:同名的包不会在站点上覆盖上一个);停录时打
   一个 ``.done``。**重建成功之后(``.built``)或录完满 ``BAG_KEEP_DAYS`` 天**,传完、站点确认才删 ——
   包是在狗上重建的原料,传完就删的话「拿这个包重建」几乎永远做不成(内部评审)。正在拿它重建的包不删。
-- **重建出来的图**写进发件箱 ``maps/<地图号>/<版本>/``,文件都写好之后**最后写** ``map.json``
-  (每个文件的大小与 sha256):站点收齐这一份、核对全部文件才登记;狗上传完就删。
+- **重建出来的图**(``GEOMETRY_FILES`` 那几样,缺一样都不算建成)挪进发件箱 ``maps/<地图号>/<版本>/``
+  (挪、不拷:先验几百 MB),文件都就位之后**最后写** ``map.json``(每个文件的大小与 sha256):站点
+  收齐这一份、核对全部文件才登记;狗上传完就删。
 - 包传完删了再想重建:这一张不做(在站点上重建要站点主机有 ROS,列进后续)。
 """
 
@@ -25,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from d1max_contract.maps import MANIFEST, MapFile, MapRef
+from d1max_contract.maps import GEOMETRY_FILES, MANIFEST, MapFile, MapRef
 
 log = logging.getLogger(__name__)
 
@@ -46,8 +47,6 @@ def storage_pressure(facts: Any) -> bool:
         return False
     return (facts.outbox_bytes > facts.outbox_cap_bytes * RETAIN_CAP_SHARE
             or facts.disk_used_ratio >= RETAIN_DISK_RATIO)
-#: 重建出来的图的文件(地图号 + 这几个后缀;不拿前缀去 glob,``yard`` 会捡到 ``yard.v2.*``)。
-MAP_EXTS = (".pgm", ".yaml", ".posegraph", ".data")
 
 
 class MappingError(RuntimeError):
@@ -79,12 +78,10 @@ def _sha256(path: Path) -> str:
 
 
 class MappingService:
-    def __init__(self, orchestrator: Any, *, bags_root: Path, maps_out: Path,
-                 work_dir: Path) -> None:
+    def __init__(self, orchestrator: Any, *, bags_root: Path, maps_out: Path) -> None:
         self.orch = orchestrator
         self.bags_root = Path(bags_root)
         self.maps_out = Path(maps_out)
-        self.work_dir = Path(work_dir)
         self.recording = False
         self.last_bag = ""
         #: 正在拿来重建的包:不许删。跟发件箱删包用同一把锁(判「能不能删」和删在锁里一起做)。
@@ -144,22 +141,19 @@ class MappingService:
         try:
             if out.exists():
                 raise MappingError(f"{map_id}:{version} 狗上已经有一份在传了,换个版本号")
-            for ext in MAP_EXTS:                          # 上一次同名的产物不许混进这一次
-                (self.work_dir / f"{map_id}{ext}").unlink(missing_ok=True)
-            await self.orch.rebuild(src, map_id)
-            made = [self.work_dir / f"{map_id}{ext}" for ext in MAP_EXTS
-                    if (self.work_dir / f"{map_id}{ext}").is_file()]
-            if not made:
-                raise MappingError("重建跑完了,没有出图")
+            made = Path(await self.orch.rebuild(src, map_id))   # 编排起建图前清掉上一次的产物
+            missing = [n for n in GEOMETRY_FILES if not (made / n).is_file()]
+            if missing:
+                raise MappingError(f"重建跑完了,缺 {', '.join(missing)}")
             # 先在点开头的目录里攒齐(上传器不看点开头的路径),再整个挪过去。
             tmp = self.maps_out / ".building" / f"{map_id}@{version}"
             shutil.rmtree(tmp, ignore_errors=True)
             tmp.mkdir(parents=True)
             files = []
-            for p in made:
-                shutil.copy2(p, tmp / p.name)
-                files.append(MapFile(name=p.name, size=(tmp / p.name).stat().st_size,
-                                     sha256=_sha256(tmp / p.name)))
+            for n in GEOMETRY_FILES:
+                shutil.move(made / n, tmp / n)            # 同一块盘上就是改名
+                files.append(MapFile(name=n, size=(tmp / n).stat().st_size,
+                                     sha256=_sha256(tmp / n)))
             ref = MapRef(map_id=map_id, version=version, files=tuple(files))
             out.parent.mkdir(parents=True, exist_ok=True)
             os.replace(tmp, out)

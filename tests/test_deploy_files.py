@@ -1233,3 +1233,31 @@ def test_站点安装脚本语法():
     r = subprocess.run(["bash", "-n", str(SITE_DEPLOY / "install-site.sh")],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_建图脚本_在ROS系统Python里跑这一版的d1max_loc_build():
+    """W09c1:代理的建图编排起它(``MappingConfig.map_builder``);MOLA、numpy 在 ROS 的系统 Python 里,
+    代码用这个脚本所在那一版带的 packages/localizer 与 packages/contract。"""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from d1max_patrol.app.mapping import MAP_BUILDER
+    start = DEPLOY / "d1max-map-build"
+    assert os.access(start, os.X_OK)
+    ls = subprocess.run(["git", "ls-files", "-s", str(start)], capture_output=True, text=True,
+                        cwd=DEPLOY, check=True).stdout
+    assert ls.startswith("100755"), "git 里要记成可执行:打包、下发之后还要能直接跑"
+    subprocess.run(["sh", "-n", str(start)], check=True)
+    text = start.read_text(encoding="utf-8")
+    assert '. /opt/ros/humble/setup.sh' in text
+    assert '$here/packages/localizer/src:$here/packages/contract/src' in text
+    assert 'exec /usr/bin/python3 -m d1max_localizer.tools build "$@"' in text
+    assert MAP_BUILDER == Path("/opt/d1max/current/deploy/d1max-map-build")
+    if not Path("/opt/ros/humble/setup.sh").is_file():
+        return
+    # 开发机上有 ROS:真跑一次(只看帮助),路径里带空格也找得到包
+    r = subprocess.run([str(start), "--help"], capture_output=True, text=True, timeout=60,
+                       env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
+    assert r.returncode == 0, r.stderr
+    assert "--prior-pack" in r.stdout

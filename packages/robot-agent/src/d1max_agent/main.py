@@ -388,7 +388,7 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
         orch = MappingOrchestrator(ProcManager(store / "logs"),
                                    MappingConfig(bags_dir=args.outbox / "bags", maps_dir=work))
         mapper = MappingService(orch, bags_root=args.outbox / "bags",
-                                maps_out=args.outbox / "maps", work_dir=work)
+                                maps_out=args.outbox / "maps")
     runs = Outbox(args.outbox, cap_bytes=cap, sink=sinks[0], sn=registration.robot_id,
                   now_ms=wall_ms)
     bags = Outbox(args.outbox, cap_bytes=cap, sink=sinks[1], sn=registration.robot_id,

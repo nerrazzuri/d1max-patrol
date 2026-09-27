@@ -1,37 +1,29 @@
-"""建图编排:录一段包 → 在隔离域里离线重建 → 存图。
+"""建图编排:录一段包 → 离线建一个地图版本。
 
-这个模块把 ``docs/建图定位与巡检管线.md`` §2 那串命令编码成 ``ProcSpec``。
-**命令行和环境变量是逐字照抄那份文档的** —— 现场是照着文档一条条敲通的,
-这里改了而文档没改,下次现场按文档敲就会跟 app 跑出不一样的结果。改一处
-要两处一起改。
+录包的命令行逐字照抄 ``docs/建图定位与巡检管线.md`` §2 (a);建图从 W09c1 起换成 MOLA(slam_toolbox
+那条退役,W08 决定 5):起一个建图脚本(``deploy/d1max-map-build`` → ``d1max-loc build``,在 ROS 的
+系统 Python 里跑),它在录包上跑 MOLA 建图、打成地图版本的几个文件(``d1max_contract.maps`` 的
+``GEOMETRY_FILES``)。日志照旧由进程管理器落盘,站点经 ``proc_log`` 看尾巴。
 
-三件事值得单独说:
+两件事值得单独说:
 
-**为什么重建是离线的。** ``/front_lidar`` 是 3D 点云,压平成 2D、喂给
-slam_toolbox、跑回环,这些都比实时慢。现场的做法是先录一段 mcap 包(机器
-上不占内存,流到笔记本),回来再放包重建 —— 慢多少都无所谓,反正没人等着。
+**为什么建图是离线的。** 先录一段 mcap 包,再在录包上建 —— 慢多少都无所谓,反正没人等着(边走边建是
+W09c2)。
 
-**为什么重建要换域、换 RMW。** 实时域走的是 zenoh,而 zenoh 传不了 latched
-话题(现场坑清单 #63),``/map`` 根本发不出去。重建时整个绕开它:
-``ROS_DOMAIN_ID=93`` + ``rmw_fastrtps_cpp`` + ``ROS_LOCALHOST_ONLY=1``,
-三条缺一不可 —— 换了域但没换 RMW,还是 zenoh;换了 RMW 但没换域,会和实时
-链路上的节点互相看见,放包放出来的旧 ``/tf`` 会污染实时定位。
-
-**为什么放包的进程最后起。** ``ros2 bag play`` 一起来就开始吐数据,slam
-还没订阅上的话,前几秒就喂给空气了 —— 而前几秒恰恰是建图的起点。文档里的
-``--delay 4`` 是同一个道理的第二道保险。
+**为什么建图在隔离域里。** MOLA 命令行直接读录包、本不上 ROS 网;万一哪个环节起了 ROS 节点,也只在
+本机的隔离域里(``ROS_DOMAIN_ID=93`` + ``rmw_fastrtps_cpp`` + ``ROS_LOCALHOST_ONLY=1``),不会跟实时
+链路互相看见 —— 录包里的旧 ``/tf`` 放出来会污染实时定位。
 """
 
 from __future__ import annotations
 
-import json
-import math
 import re
-import tempfile
-from dataclasses import dataclass, field
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from d1max_agent.engine.homing import forget_home
+from d1max_contract.maps import GEOMETRY_FILES
 from d1max_patrol.app.procs import ProcError, ProcManager, ProcSpec
 
 #: 录包按这么大切成一个个文件(W00c5d:点云几十 MB/s,十分钟不切就过了站点单文件 8 GiB 的上限,
@@ -43,22 +35,19 @@ RECORD_TOPICS: tuple[str, ...] = (
     "/front_lidar", "/tf", "/tf_static", "/odom/mc_odom", "/odom/current_pose",
 )
 
-#: 名字里只许有这些 —— 它要当目录名用,还要拼进命令行。
-_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+#: 名字里只许有这些 —— 它要当目录名用,还要拼进命令行。**字母或数字打头**(跟站点的契约一样):
+#: 重建要先删同名的旧版本目录,``..`` 就删到上一层去了;点开头的留给中间目录,``-`` 开头会被当成选项。
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 #: 录包进程停的时候多给一会儿。mcap 要把索引写完才算一个完整的包,
 #: 强杀出来的包放不回去,而那一段路是走不回来的。
 _RECORD_GRACE_S = 15.0
 
-#: 放包最多跑多久。一段走动录几分钟,重建比实时慢,给足一小时。
+#: 建图最多跑多久。一段走动录几分钟,MOLA 离线建图比实时慢,再加打包(点云、栅格),给足一小时。
 REBUILD_TIMEOUT_S = 3600.0
 
-#: 存图两步各自最多多久。
-_SAVE_TIMEOUT_S = 120.0
-
-#: 发一条初始位姿最多等多久。``ros2 topic pub --once`` 发完自己就退了,
-#: 给的时间够它把 ROS 上下文起起来即可。
-_INITPOSE_TIMEOUT_S = 30.0
+#: 建图脚本在狗上的位置(跟着这一版走)。
+MAP_BUILDER = Path("/opt/d1max/current/deploy/d1max-map-build")
 
 
 class MappingError(RuntimeError):
@@ -86,16 +75,11 @@ class MappingConfig:
     #: 离线域。重建单独占一个,免得和实时链路互相看见。
     offline_domain: str = "93"
     lidar_topic: str = "/front_lidar"
-    #: slam_toolbox 的参数模板。会被复制到一个**路径不带空格**的地方再传给
-    #: ROS —— 本仓库的路径里有空格("D1 Max"),而 ROS 对这个很敏感。
-    params_template: Path = Path("config/params/mapper_3d.yaml")
-    work_dir: Path = field(default_factory=lambda: Path(tempfile.gettempdir()))
-    #: 雷达外参。清单 #64:速腾前雷达疑似朝后装,建出的图内部朝向差 180°,
-    #: 根治就是把这个设成 3.14159 重建一次。默认留着文档里的 0 ——
-    #: 改这里等于改文档 §2,两处要一起改。
-    lidar_yaw: float = 0.0
-    #: 定位地图的坐标系名。发 ``/initialpose`` 时要填,逐字照抄文档 §4。
-    loc_frame: str = "loc_map"
+    #: 建图脚本(``d1max-loc build`` 的包装)。
+    map_builder: Path = MAP_BUILDER
+    #: 先验怎么打包(W09c 决定 4):``none`` 原样,``regroup:<体素米>:<范围倍数>`` 压缩 —— 压缩参数要
+    #: 用回放在这块场地的录包上验过再换。
+    prior_pack: str = "none"
 
 
 class MappingOrchestrator:
@@ -106,13 +90,7 @@ class MappingOrchestrator:
     """
 
     RECORD = "bagrecord"
-    SLAM = "slam"
-    STATIC_TF = "static_tf"
-    PC2SCAN = "pc2scan"
-    BAGPLAY = "bagplay"
-    MAP_SAVER = "map_saver"
-    SERIALIZE = "serialize"
-    INITPOSE = "initialpose"
+    BUILD = "mapbuild"
 
     def __init__(self, procs: ProcManager, cfg: MappingConfig) -> None:
         self._procs = procs
@@ -166,11 +144,13 @@ class MappingOrchestrator:
         return _list_dirs(self._cfg.bags_dir)
 
     def list_maps(self) -> list[str]:
-        """有 ``.posegraph`` 的才算一张图 —— 只有 pgm 的定位模式读不了。"""
+        """版本文件齐的目录才算一张图(建到一半的、中间目录都不算)。"""
         maps_dir = self._cfg.maps_dir
         if not maps_dir.is_dir():
             return []
-        return sorted(p.stem for p in maps_dir.glob("*.posegraph"))
+        return sorted(p.name for p in maps_dir.iterdir()
+                      if p.is_dir() and _SAFE_NAME.match(p.name)
+                      and all((p / f).is_file() for f in GEOMETRY_FILES))
 
     # ------------------------------------------------------------------ 录包
 
@@ -201,10 +181,9 @@ class MappingOrchestrator:
     # ------------------------------------------------------------------ 重建
 
     async def rebuild(self, bag: Path, map_id: str) -> Path:
-        """离线重建一张图。返回图的路径前缀(不带扩展名)。
+        """离线建一个地图版本。返回版本文件所在的目录。
 
-        这一步要跑几分钟到几十分钟。调用方(HTTP)应该把它丢到后台,靠
-        ``phase`` 和 ``last_error`` 看进展。
+        这一步要跑几分钟到几十分钟。调用方应该把它丢到后台,靠 ``phase`` 和 ``last_error`` 看进展。
         """
         self._require_idle("重建")
         _check_name(map_id, "图名")
@@ -221,76 +200,27 @@ class MappingOrchestrator:
         # 放在**开始之前**作废:重建崩在半路时图可能已经覆盖了一半,
         # 那时候留着旧原点是最坏的一种。
         forget_home(self._cfg.maps_dir, map_id)
-        started: list[str] = []
+        out, work = self._out(map_id)
+        started = False
         try:
-            self._write_params()
-            for spec in self.specs_for_rebuild(bag, map_id):
-                await self._start(spec)
-                started.append(spec.name)
-            await self._wait(self.BAGPLAY, REBUILD_TIMEOUT_S)
-            for spec in self.specs_for_save(map_id):
-                await self._start(spec)
-                started.append(spec.name)
-                await self._wait(spec.name, _SAVE_TIMEOUT_S)
+            # 打包按文件名收:上一次同名的产物、中间目录里旧的点云混进来,这一版就是拼出来的。
+            # 中间目录整个清(上一次没建成留着查的那份,几百 MB,不留到下一次之后)。
+            for d in (out, work.parent):
+                shutil.rmtree(d, ignore_errors=True)
+            await self._start(self.spec_for_build(bag, map_id))
+            started = True
+            await self._wait(self.BUILD, REBUILD_TIMEOUT_S)
+            # 建成了:中间文件(simplemap、点云)不留;没建成的留着 MOLA 的日志查原因。
+            shutil.rmtree(work.parent, ignore_errors=True)
         except Exception as exc:
             self._error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
-            # 起了什么就收什么。留一个 slam_toolbox 在隔离域里空转,下一次
-            # 重建会因为名字撞了直接失败,而现场根本看不出为什么。
-            for name in reversed(started):
-                await self._procs.stop(name)
+            # 超时的那条路上进程还挂着:不收掉,下一次建图撞名字直接失败,现场看不出为什么。
+            if started:
+                await self._procs.stop(self.BUILD)
             self._phase = "idle"
-        return self._cfg.maps_dir / map_id
-
-    # -------------------------------------------------------------- 初始位姿
-
-    async def publish_initial_pose(self, x: float, y: float,
-                                   yaw: float = 0.0) -> None:
-        """告诉定位"狗现在大概在这儿"。文档 §4 的最后一条命令。
-
-        机器不在图原点上开机时,slam_toolbox 的定位模式要有人给一个初始猜测
-        才收敛得回来。这件事**只能由人在看板上点** —— 自己猜一个位置的代价
-        是真的撞上去(同 ``LocalNavBackend.reset_localization`` 的理由)。
-
-        录包和重建期间不许发:那两个阶段要么正在实时域上录、要么整个跑在隔离
-        域里,这一条发出去只会搅乱正在进行的事。
-        """
-        self._require_idle("发初始位姿")
-        await self._start(self.spec_for_initial_pose(x, y, yaw))
-        try:
-            await self._wait(self.INITPOSE, _INITPOSE_TIMEOUT_S)
-        finally:
-            # 超时的那条路上进程还挂着。不收掉的话,下次再发会撞名字,
-            # 而现场只会看到"发不出去",看不出是被上一次卡住的。
-            await self._procs.stop(self.INITPOSE)
-
-    def spec_for_initial_pose(self, x: float, y: float, yaw: float) -> ProcSpec:
-        """文档 §4 最后那条 ``ros2 topic pub``。走**实时域** —— 定位跑在那儿。
-
-        消息体用 ``json.dumps`` 生成,不手写那串花括号:JSON 是 YAML 的子集,
-        ``ros2 topic pub`` 照收,而手拼一层套一层的映射是这类命令唯一真正会
-        写错的地方 —— 少一个花括号,报的错和位姿一点关系都没有。
-
-        朝向要写成四元数:绕 Z 轴转 ``yaw`` 就是
-        ``z = sin(yaw/2), w = cos(yaw/2)``。``w`` 必须写出来,默认值 0 是一个
-        非法姿态,发下去定位会当场炸。
-        """
-        message = json.dumps({
-            "header": {"frame_id": self._cfg.loc_frame},
-            "pose": {"pose": {
-                "position": {"x": x, "y": y, "z": 0.0},
-                "orientation": {"z": math.sin(yaw / 2.0),
-                                "w": math.cos(yaw / 2.0)},
-            }},
-        })
-        return ProcSpec(
-            name=self.INITPOSE,
-            argv=("ros2", "topic", "pub", "--once", "/initialpose",
-                  "geometry_msgs/msg/PoseWithCovarianceStamped", message),
-            env=self._live_env(),
-            ready_pattern="",       # 发一条就退,没有"起来了"这回事
-        )
+        return out
 
     async def snapshot(self) -> dict[str, object]:
         """给 HTTP 用的状态。做成协程是为了走线程桥,和别的读法保持一致。"""
@@ -326,91 +256,18 @@ class MappingOrchestrator:
             ready_timeout_s=30.0,
         )
 
-    def specs_for_rebuild(self, bag: Path, map_id: str) -> list[ProcSpec]:
-        """文档 §2 (b)。四个进程,**放包的排最后**。"""
+    def spec_for_build(self, bag: Path, map_id: str) -> ProcSpec:
+        """建图脚本:MOLA 在录包上建图 + 打成地图版本的文件(W09c1)。"""
+        out, work = self._out(map_id)
         cfg = self._cfg
-        env = self._offline_env()
-        params = self._params_path()
-        return [
-            ProcSpec(
-                name=self.SLAM,
-                argv=("ros2", "run", "slam_toolbox", "async_slam_toolbox_node",
-                      "--ros-args", "--params-file", str(params),
-                      "-p", "use_sim_time:=true"),
-                env=env,
-                # 假设(待真机验证): 就绪串取节点名。slam_toolbox 一起来就会
-                # 打带节点名的日志行。
-                ready_pattern=r"slam_toolbox",
-                ready_timeout_s=60.0,
-            ),
-            ProcSpec(
-                name=self.STATIC_TF,
-                argv=("ros2", "run", "tf2_ros", "static_transform_publisher",
-                      "--x", "0.2", "--y", "0", "--z", "0.18",
-                      "--roll", "0", "--pitch", "0",
-                      "--yaw", _num(cfg.lidar_yaw),
-                      "--frame-id", "base_link",
-                      "--child-frame-id", "rslidar_head"),
-                env=env,
-                # 假设(待真机验证): static_transform_publisher 起来后会打
-                # "Spinning until stopped"。
-                ready_pattern=r"Spinning until stopped|static_transform",
-                ready_timeout_s=20.0,
-            ),
-            ProcSpec(
-                name=self.PC2SCAN,
-                argv=("ros2", "run", "pointcloud_to_laserscan",
-                      "pointcloud_to_laserscan_node", "--ros-args",
-                      "-r", f"cloud_in:={cfg.lidar_topic}",
-                      "-r", "scan:=/scan_3d",
-                      "-p", "target_frame:=base_link",
-                      "-p", "min_height:=0.1", "-p", "max_height:=1.5",
-                      "-p", "range_min:=0.3", "-p", "range_max:=20.0",
-                      "-p", "angle_min:=-3.14159", "-p", "angle_max:=3.14159",
-                      "-p", "angle_increment:=0.0087",
-                      "-p", "use_sim_time:=true"),
-                env=env,
-                # 假设(待真机验证): 同上,取节点名。
-                ready_pattern=r"pointcloud_to_laserscan",
-                ready_timeout_s=30.0,
-            ),
-            ProcSpec(
-                name=self.BAGPLAY,
-                argv=("ros2", "bag", "play", str(bag), "--clock",
-                      "--delay", "4", "--topics",
-                      cfg.lidar_topic, "/tf", "/tf_static"),
-                env=env,
-                ready_pattern="",       # 起了就算,它自己会退
-            ),
-        ]
-
-    def specs_for_save(self, map_id: str) -> list[ProcSpec]:
-        """文档 §2 (c)。**两步都要**。
-
-        ``map_saver_cli`` 出 pgm + yaml 给导航用,``serialize_map`` 出
-        posegraph 给定位用。少了后者,slam_toolbox 的 localization 模式
-        没得读,这张图就只能看不能用。
-        """
-        prefix = (self._cfg.maps_dir / map_id).resolve()
-        env = self._offline_env()
-        return [
-            ProcSpec(
-                name=self.MAP_SAVER,
-                argv=("ros2", "run", "nav2_map_server", "map_saver_cli",
-                      "-f", str(prefix), "--ros-args",
-                      "-p", "save_map_timeout:=15.0"),
-                env=env,
-                ready_pattern="",
-            ),
-            ProcSpec(
-                name=self.SERIALIZE,
-                argv=("ros2", "service", "call", "/slam_toolbox/serialize_map",
-                      "slam_toolbox/srv/SerializePoseGraph",
-                      f"{{filename: '{_posix(prefix)}'}}"),
-                env=env,
-                ready_pattern="",
-            ),
-        ]
+        return ProcSpec(
+            name=self.BUILD,
+            argv=(str(cfg.map_builder), "--bag", str(bag), "--out", str(out),
+                  "--work", str(work), "--lidar-topic", cfg.lidar_topic,
+                  "--prior-pack", cfg.prior_pack),
+            env=self._offline_env(),
+            ready_pattern="",       # 跑完自己退
+        )
 
     # ------------------------------------------------------------------ 内部
 
@@ -424,19 +281,9 @@ class MappingOrchestrator:
                 "RMW_IMPLEMENTATION": "rmw_fastrtps_cpp",
                 "ROS_LOCALHOST_ONLY": "1"}
 
-    def _params_path(self) -> Path:
-        return self._cfg.work_dir / self._cfg.params_template.name
-
-    def _write_params(self) -> None:
-        """把参数模板复制到不带空格的路径下,顺便把 ``<REPO>`` 换成真路径。"""
-        src = self._cfg.params_template
-        if not src.is_file():
-            raise MappingError(f"参数模板不在:{src}")
-        text = src.read_text(encoding="utf-8")
-        text = text.replace("<REPO>", str(Path.cwd()).replace("\\", "/"))
-        dst = self._params_path()
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_text(text, encoding="utf-8")
+    def _out(self, map_id: str) -> tuple[Path, Path]:
+        """版本文件放哪、中间文件放哪(点开头的目录:不会跟哪张图同名)。"""
+        return self._cfg.maps_dir / map_id, self._cfg.maps_dir / ".work" / map_id
 
     def _require_idle(self, what: str) -> None:
         if self._phase != "idle":
@@ -460,23 +307,10 @@ class MappingOrchestrator:
 _CN = {"idle": "闲着", "recording": "录包", "rebuilding": "重建"}
 
 
-def _posix(path: Path) -> str:
-    """路径写成正斜杠。
-
-    ROS 的服务参数是一段 YAML,反斜杠在里面是转义符 —— Windows 路径原样塞
-    进去会被吃掉一半。
-    """
-    return str(path).replace("\\", "/")
-
-
-def _num(value: float) -> str:
-    """角度写成命令行参数。整数不留 ``.0`` —— 和文档里的写法对得上。"""
-    return f"{value:g}"
-
-
 def _check_name(name: str, what: str) -> None:
     if not name or not _SAFE_NAME.match(name):
-        raise MappingArgError(f"{what}只能用字母、数字、下划线、点和横杠,给的是 {name!r}")
+        raise MappingArgError(f"{what}只能用字母、数字、下划线、点和横杠(字母或数字打头),"
+                              f"给的是 {name!r}")
 
 
 def _list_dirs(root: Path) -> list[str]:

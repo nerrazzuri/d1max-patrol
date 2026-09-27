@@ -15,13 +15,14 @@ from d1max_agent.mapping import (
     map_settled,
 )
 from d1max_agent.outbox import Outbox
-from d1max_contract.maps import MapRef
+from d1max_contract.maps import GEOMETRY_FILES, MapRef
 
 
 class 假编排:
     def __init__(self, bags: object, work) -> None:
         self.bags, self.work = bags, work
         self.fail = ""
+        self.made = GEOMETRY_FILES
 
     async def start_record(self, name):
         (self.bags / name).mkdir(parents=True)
@@ -35,17 +36,17 @@ class 假编排:
     async def rebuild(self, bag, map_id):
         if self.fail:
             raise RuntimeError(self.fail)
-        self.work.mkdir(parents=True, exist_ok=True)
-        for ext, data in ((".pgm", b"P5"), (".yaml", b"res"), (".posegraph", b"g")):
-            (self.work / f"{map_id}{ext}").write_bytes(data)
-        return self.work / map_id
+        out = self.work / map_id
+        out.mkdir(parents=True, exist_ok=True)
+        for name in self.made:
+            (out / name).write_bytes(name.encode())
+        return out
 
 
 @pytest.fixture
 def svc(tmp_path):
     bags, work = tmp_path / "outbox" / "bags", tmp_path / "work"
-    return MappingService(假编排(bags, work), bags_root=bags, maps_out=tmp_path / "outbox" / "maps",
-                          work_dir=work)
+    return MappingService(假编排(bags, work), bags_root=bags, maps_out=tmp_path / "outbox" / "maps")
 
 
 async def test_录包_停了重建过才算安定_重建出一张图_清单最后写(svc):
@@ -62,8 +63,9 @@ async def test_录包_停了重建过才算安定_重建出一张图_清单最�
     out = svc.maps_out / "estate-1" / "9"
     assert map_settled(out)
     assert MapRef.from_wire(json.loads((out / "map.json").read_text())) == ref
-    assert sorted(f.name for f in ref.files) == ["estate-1.pgm", "estate-1.posegraph",
-                                                 "estate-1.yaml"]
+    assert [f.name for f in ref.files] == list(GEOMETRY_FILES)
+    assert (out / "prior.mm").read_bytes() == b"prior.mm"
+    assert not (svc.orch.work / "estate-1" / "prior.mm").exists(), "挪过去的,不是拷的(先验几百 MB)"
     with pytest.raises(MappingError):
         await svc.build(bag, "estate-1", "9")        # 同版本狗上已经有一份
     with pytest.raises(MappingError):
@@ -74,7 +76,7 @@ async def test_重建失败了放开_包照样留着(svc):
     await svc.start("yard")
     await svc.stop()
     bag = svc.last_bag
-    svc.orch.fail = "slam 起不来"
+    svc.orch.fail = "MOLA 起不来"
     with pytest.raises(RuntimeError):
         await svc.build(bag, "estate-1", "9")
     assert not svc.held and not svc.bag_settled(svc.bags_root / bag), "没重建成:原料留着"
@@ -131,13 +133,13 @@ async def test_重建期间这个包算没安定(svc):
     assert seen == [False, False], "重建过(有 .built)也一样:正在用就不删"
 
 
-async def test_上一次同名的产物不混进这一次(svc):
+async def test_产物缺一样就算没建成_不登记(svc):
     await svc.start("yard")
     await svc.stop()
-    svc.work_dir.mkdir(parents=True, exist_ok=True)
-    (svc.work_dir / "estate-1.data").write_bytes(b"old")   # 上一次留下的,这一次不会出
-    ref = await svc.build(svc.last_bag, "estate-1", "9")
-    assert "estate-1.data" not in {f.name for f in ref.files}
+    svc.orch.made = GEOMETRY_FILES[:-1]
+    with pytest.raises(MappingError, match="build.json"):
+        await svc.build(svc.last_bag, "estate-1", "9")
+    assert not (svc.maps_out / "estate-1" / "9").exists() and not svc.held
 
 
 async def test_发件箱删包跟重建占包是同一把锁(svc, tmp_path):
@@ -167,19 +169,9 @@ def test_起来时收拾_攒到一半的图扔掉_录到一半的包补上完成
     bags, maps = tmp_path / "outbox" / "bags", tmp_path / "outbox" / "maps"
     (maps / ".building" / "x@1").mkdir(parents=True)
     (bags / "yard-20260925T010000Z").mkdir(parents=True)
-    svc = MappingService(假编排(bags, tmp_path / "w"), bags_root=bags, maps_out=maps,
-                         work_dir=tmp_path / "w")
+    svc = MappingService(假编排(bags, tmp_path / "w"), bags_root=bags, maps_out=maps)
     assert not (maps / ".building").exists()
     assert (bags / "yard-20260925T010000Z" / DONE).exists() and not svc.recording
-
-
-async def test_重建只收这张图的那几个后缀_不捡同前缀别的图(svc):
-    await svc.start("yard")
-    await svc.stop()
-    svc.work_dir.mkdir(parents=True, exist_ok=True)
-    (svc.work_dir / "estate-1.v2.pgm").write_bytes(b"other")
-    ref = await svc.build(svc.last_bag, "estate-1", "9")
-    assert "estate-1.v2.pgm" not in {f.name for f in ref.files}
 
 
 async def test_盘紧了传完的包不留着备重建(svc):

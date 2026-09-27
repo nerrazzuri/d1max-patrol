@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from d1max_contract.maps import GEOMETRY_FILES
 from d1max_localizer.frames import Frames, calibrate
 from d1max_localizer.replay import MOLA_SHARE, read_tum
 
@@ -37,7 +38,7 @@ FRONT_LIDAR_IN_BASE = (0.4043, 0.0)
 SENSOR_UP_HINT = (1.0, 0.0, 0.0)
 SENSOR_FORWARD_HINT = (0.0, 0.0, 1.0)
 COVERAGE_STEP_M = 0.5
-FILES = ("prior.mm", "frames.json", "floor.pgm", "floor.yaml", "coverage.json", "build.json")
+FILES = GEOMETRY_FILES
 Runner = Callable[..., Any]
 
 

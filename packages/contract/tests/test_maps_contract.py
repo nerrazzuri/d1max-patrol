@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from d1max_contract.errors import ContractError
-from d1max_contract.maps import MapFile, MapRef, parse_map_build, parse_mapping
+from d1max_contract.maps import MANIFEST, MapFile, MapRef, parse_map_build, parse_mapping
 
 H = "a" * 64
 
@@ -48,3 +48,12 @@ def test_建图命令的载荷():
     with pytest.raises(ContractError):
         parse_map_build({"bag": "yard", "map_id": "estate-1"})
     assert MapFile.from_wire({"name": "home.json", "size": 0, "sha256": H}).size == 0
+
+
+def test_地图版本的几何文件_名字合法_不超数():
+    """W09c1:MOLA 建出来的一个版本就这几样;狗上收产物、站点查「哪里有图」都按这张表。"""
+    from d1max_contract.maps import COVERAGE, GEOMETRY_FILES, MAX_FILES, NAME_RE
+    assert GEOMETRY_FILES == ("prior.mm", "frames.json", "floor.pgm", "floor.yaml",
+                              "coverage.json", "build.json")
+    assert COVERAGE in GEOMETRY_FILES and MANIFEST not in GEOMETRY_FILES
+    assert all(NAME_RE.match(n) for n in GEOMETRY_FILES) and len(GEOMETRY_FILES) < MAX_FILES
