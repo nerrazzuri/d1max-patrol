@@ -42,6 +42,19 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _digest_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.sha256")
+
+
+def _digest_of(path: Path) -> str:
+    """收块时记下的哈希;没记(老的收件目录)就现算。"""
+    try:
+        d = _digest_path(path).read_text(encoding="ascii").strip()
+    except OSError:
+        return _sha256(path)
+    return d if len(d) == 64 else _sha256(path)
+
+
 class MapCatalog:
     def __init__(self, home: Path, db, *, now_ms: Callable[[], int]) -> None:
         self.root = Path(home) / "maps"
@@ -74,8 +87,15 @@ class MapCatalog:
         if not self._build_issued(robot_id, map_id, version):
             # 只收站点让它建的那张(W00c5d 内部评审:不然随便哪台登记过的狗都能塞一张图进目录)。
             raise PathRefused(f"站点没让 {robot_id} 建 {map_id}:{version}")
-        got = self.writer.write(safe_join(self.incoming, robot_id, map_id, version, rel),
-                                offset=offset, data=data, total=total)
+        path = safe_join(self.incoming, robot_id, map_id, version, rel)
+        got = self.writer.write(path, offset=offset, data=data, total=total)
+        # 收完一个文件:记下收块时算好的整个文件的哈希(狗也拿它核过),登记时不再重算(W09c 决定 9);
+        # 没收完(包括从头重传)就作废 —— 盘上的字节变了。点开头:狗传不了这种名字。
+        side = _digest_path(path)
+        if got.size >= total:
+            side.write_text(got.sha256, encoding="ascii")
+        else:
+            side.unlink(missing_ok=True)
         if got.size >= total:
             try:
                 self.take_uploaded(robot_id, map_id, version)
@@ -272,15 +292,15 @@ class MapCatalog:
             p = src / f.name
             if not p.is_file() or p.stat().st_size < f.size:
                 return None                        # 还没收齐(还在传)
-            if p.stat().st_size != f.size or _sha256(p) != f.sha256:
+            if p.stat().st_size != f.size or _digest_of(p) != f.sha256:
                 raise MapError(f"{robot_id} 传来的 {map_id}:{version} 里 {f.name} 跟清单对不上")
         with self._lock:
             dst = self._fresh_dir(map_id, version)
             tmp = dst.with_name(dst.name + ".taking")
             shutil.rmtree(tmp, ignore_errors=True)
             tmp.mkdir(parents=True)
-            for f in ref.files:
-                shutil.copy2(src / f.name, tmp / f.name)
+            for f in ref.files:                    # 同一块盘上改名(几百 MB 的先验不拷)
+                shutil.move(src / f.name, tmp / f.name)
             shutil.copy2(src / MANIFEST, tmp / MANIFEST)
             os.replace(tmp, dst)
             self._register(ref, source=robot_id, note="")

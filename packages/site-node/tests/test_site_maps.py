@@ -92,3 +92,47 @@ def test_站点没让它建的图不收_版本撞了或文件对不上永远不�
     with pytest.raises(PathRefused):
         cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
     assert cat.list() == [], "不登记"
+
+
+def test_收图不在请求里重算哈希_改名不拷贝(cat, monkeypatch):
+    """W09c 决定 9:几百 MB 的先验,最后一块的请求里再算一遍哈希、再拷一份,60 s 的请求超时不够稳。
+    收块时已经算过整个文件的哈希(狗也拿它核过),登记时用它;同一块盘上改名。"""
+    import os
+
+    import d1max_site.maps as M
+    with cat.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
+                  (json.dumps({"bag": "b", "map_id": "estate-1", "version": "9"}),))
+    prior = os.urandom(5000)
+    for off in range(0, len(prior), 1000):
+        cat.put_map_chunk("A", "estate-1/9", "prior.mm", offset=off, data=prior[off:off + 1000],
+                          total=len(prior))
+    ino = os.stat(cat.incoming / "A" / "estate-1" / "9" / "prior.mm").st_ino
+    body = json.dumps({"map_id": "estate-1", "version": "9", "files": [
+        {"name": "prior.mm", "size": len(prior),
+         "sha256": hashlib.sha256(prior).hexdigest()}]}).encode()
+
+    def 不许(p):
+        raise AssertionError(f"重算了 {p}")
+    monkeypatch.setattr(M, "_sha256", 不许)
+    cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
+    p = cat.file_path("estate-1", "9", "prior.mm")
+    assert p.read_bytes() == prior and os.stat(p).st_ino == ino
+    assert [f.name for f in cat.get("estate-1", "9").files] == ["prior.mm"]
+    assert not (cat.incoming / "A" / "estate-1" / "9").exists()
+
+
+def test_文件传了一半又重传_记下的哈希作废(cat):
+    with cat.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at, priority) VALUES ('c1','t1','A','map_build',?, 'alice', 1, 0)",
+                  (json.dumps({"bag": "b", "map_id": "estate-1", "version": "9"}),))
+    from d1max_site.evidence import PathRefused
+    cat.put_map_chunk("A", "estate-1/9", "x.pgm", offset=0, data=b"good", total=4)
+    cat.put_map_chunk("A", "estate-1/9", "x.pgm", offset=0, data=b"ba", total=4)   # 从头重传,没传完
+    (cat.incoming / "A" / "estate-1" / "9" / "x.pgm").write_bytes(b"badd")        # 盘上内容变了
+    body = json.dumps({"map_id": "estate-1", "version": "9", "files": [
+        {"name": "x.pgm", "size": 4, "sha256": hashlib.sha256(b"good").hexdigest()}]}).encode()
+    with pytest.raises(PathRefused):
+        cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
