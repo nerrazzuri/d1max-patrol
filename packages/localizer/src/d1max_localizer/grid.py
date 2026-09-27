@@ -45,7 +45,7 @@ WALL_TOP_M = 1.8
 TRAJ_MARGIN_M = 12.0
 GROUND_CELL_M = 1.0
 GROUND_WINDOW_M = 0.4
-GROUND_TIGHT_M = 0.12
+GROUND_BIN_M = 0.05
 GROUND_MIN_PTS = 10
 FLOOR_BAND_M = (-0.15, 0.25)
 MAX_RANGE_M = 12.0
@@ -119,9 +119,8 @@ def _floor_height(h: np.ndarray, sensor_h: np.ndarray) -> float:
 
 class _Ground:
     """当地地面高度:狗离地的高度(雷达高度的中位数 − 整体地面)不变,轨迹上每一处往下挪这么多就是脚下的
-    地面;按粗格子平均,再一圈一圈往外推 ``margin`` 米:新的一格先取已知邻格的平均当预估,格子里离预估
-    :data:`GROUND_WINDOW_M` 以内的点够多就用它们的平均(坡顺着点云往外走,墙、人不在这个窗里)。
-    推不到的地方没有地面(不要)。"""
+    地面;按粗格子平均(再按点云修:轨迹的高度会漂),再一圈一圈往外推 ``margin`` 米:新的一格先取已知
+    邻格的平均当预估,再按格子里的点修(:meth:`_refine`,坡顺着点云往外走)。推不到的地方没有地面。"""
 
     def __init__(self, sensor: np.ndarray, floor: float, margin: float,
                  points: np.ndarray) -> None:
@@ -157,17 +156,23 @@ class _Ground:
         self.z, self.known = z, known
 
     def _refine(self, prior: np.ndarray, cells: np.ndarray) -> np.ndarray:
-        """``cells`` 这些格子:格子里离预估不远的点够多就用它们的平均。两步:先宽窗(跟着坡走),再在它
-        附近的窄窗里重取(贴着地面的物体侧面、矮台子的点会把宽窗的平均往上拉)。"""
+        """``cells`` 这些格子:离预估 :data:`GROUND_WINDOW_M` 以内的点按 :data:`GROUND_BIN_M` 分层,
+        点够多就取最密的那一层(地面是一大片水平的点;取平均的话,墙从地面起那一截、矮台子的点会把它
+        往上拉 —— 内审后突变抓到的)。"""
         H, W = prior.shape
         sel = cells.ravel()[self._key]
         ks, zs = self._key[sel], self._pz[sel]
-        est = prior.ravel()
-        for half in (GROUND_WINDOW_M, GROUND_TIGHT_M):
-            win = np.abs(zs - est[ks]) < half
-            n = np.bincount(ks[win], minlength=H * W)
-            m = np.bincount(ks[win], weights=zs[win], minlength=H * W)
-            est = np.where(n >= GROUND_MIN_PTS, m / np.maximum(n, 1), est)
+        base = prior.ravel() - GROUND_WINDOW_M
+        nb = int(round(2 * GROUND_WINDOW_M / GROUND_BIN_M))
+        b = np.floor((zs - base[ks]) / GROUND_BIN_M).astype(int)
+        win = (b >= 0) & (b < nb)
+        hist = np.bincount(ks[win] * nb + b[win], minlength=H * W * nb).reshape(H * W, nb)
+        top = hist.argmax(1)
+        near = win & (np.abs(b - top[ks]) <= 1)             # 最密那层上下各一层里的点取平均
+        n = np.bincount(ks[near], minlength=H * W)
+        m = np.bincount(ks[near], weights=zs[near], minlength=H * W)
+        est = np.where((hist.sum(1) >= GROUND_MIN_PTS) & (n > 0), m / np.maximum(n, 1),
+                       prior.ravel())
         return est.reshape(H, W)
 
     def rel(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

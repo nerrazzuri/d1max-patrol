@@ -200,3 +200,47 @@ def test_栅格太大就放粗_粗到_0_2_m_还装不下就报错(monkeypatch):
     monkeypatch.setattr(G, "MAX_CELLS", 500)
     with pytest.raises(G.GridTooLarge, match="轨迹"):
         G.render(P, T, f)
+
+
+def test_离地_0_4_到_0_7_m_的矮东西也是障碍():
+    """修阻断 1 时顺带改的:障碍层原来从 0.7 m 起,newdog2 上 0.75 m 高的展台当地地面高一点就看不见;
+    长椅、花坛这种 0.5 m 的更是从来看不见。"""
+    f = _frames()
+    P, T = _field(f)
+    L = np.asarray(f.level_matrix())
+    a = np.linspace(0, 2 * np.pi, 60, endpoint=False)
+    bench = np.vstack([np.c_[5.0 + 0.3 * np.cos(a), 3.0 + 0.3 * np.sin(a), np.full(60, h)]
+                       for h in np.linspace(0.45, 0.6, 6)]) @ L
+    g = G.render(np.vstack([P, bench]), T, f, scans=[])
+    assert g.image[g.cell_of(5.0, 2.7)] == G.OCCUPIED
+
+
+def _bench(frames, x, y, r=0.2):
+    """0.45–0.52 m 高的凳子(刚过障碍层的下沿:地面估高 0.1 m 它就没了)。"""
+    a = np.linspace(0, 2 * np.pi, 60, endpoint=False)
+    return np.vstack([np.c_[x + r * np.cos(a), y + r * np.sin(a), np.full(60, h)]
+                      for h in np.linspace(0.45, 0.52, 6)]) @ np.asarray(frames.level_matrix())
+
+
+def test_轨迹高度漂了_走过的格子按点云修地面_路边的矮凳还是障碍():
+    """MOLA 的高度会漂(newdog2 上一处漂了 0.16 m):光按轨迹往下挪,地面就高了,矮东西掉出障碍层。"""
+    f = _frames()
+    P, T = _field(f)
+    L = np.asarray(f.level_matrix())
+    t = T @ L.T                                           # 回到地图平面系(L 是正交阵)
+    t[(t[:, 0] > 3) & (t[:, 0] < 7), 2] += 0.2            # 这一段轨迹高了 0.2 m
+    g = G.render(np.vstack([P, _bench(f, 5.0, 0.35)]), t @ L, f, scans=[])
+    assert g.image[g.cell_of(5.0, 0.15)] == G.OCCUPIED
+
+
+def test_墙根一堆侧面点不把地面抬高_旁边的矮凳还是障碍():
+    """宽窗里取平均的话,墙从地面起那一截的点把地面往上拉,旁边 0.5 m 高的凳子就掉出障碍层;
+    取最密的那一层(地面是一大片水平的点)。"""
+    f = _frames()
+    P, T = _field(f)
+    L = np.asarray(f.level_matrix())
+    zs, ys = np.arange(0.0, 1.2, 0.01), np.arange(-2.5, -1.5, 0.01)
+    wall = np.c_[np.full(len(zs) * len(ys), 14.0), np.repeat(ys, len(zs)),
+                 np.tile(zs, len(ys))] @ L                # 1 m 长、从地面起的墙,点很密
+    g = G.render(np.vstack([P, wall, _bench(f, 14.5, -2.0)]), T, f, scans=[])
+    assert g.image[g.cell_of(14.5, -2.2)] == G.OCCUPIED

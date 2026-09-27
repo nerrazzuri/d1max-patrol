@@ -307,3 +307,10 @@ def test_打包把_MOLA_的版本与参数抄进_build_json(tmp_path):
     (work / "mola.json").write_text(json.dumps({"version": "1.2.3", "pipeline": "x.yaml"}))
     B.package(work, tmp_path / "out", run=假MOLA(pts))
     assert json.loads((tmp_path / "out" / "build.json").read_text())["mola"]["version"] == "1.2.3"
+
+
+def test_栅格太大_打包失败说轨迹可能发散了(tmp_path, monkeypatch):
+    work, pts = _scene(tmp_path, False)
+    monkeypatch.setattr(G, "MAX_CELLS", 100)
+    with pytest.raises(B.BuildError, match="发散"):
+        B.package(work, tmp_path / "out", run=假MOLA(pts))
