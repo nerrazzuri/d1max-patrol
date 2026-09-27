@@ -85,7 +85,7 @@ def test_写出来是_map_server_的格式(tmp_path):
     assert -0.5 < ox < 0.0 and -0.5 < oy < 0.0, "屋角在原点附近"
 
 
-def _walls_and_person(frames):
+def _walls_and_person(frames, floor_x=(0.0, 10.0)):
     """屋子的墙 + 一个跟着狗走的人(狗后面 0.5 m、右边 0.3 m,离地 0.8–1.6 m)。回:合起来的点云、
     雷达走过的位置、逐帧扫描 [(雷达位置, 这一帧的点)](都在 MOLA 系)、狗身中心走过的路(地图平面)。"""
     L = np.asarray(frames.level_matrix())
@@ -98,7 +98,7 @@ def _walls_and_person(frames):
                   np.c_[np.full_like(ys, 10.0), ys, np.full_like(ys, h)]]
     walls = np.vstack(walls)
     rng = np.random.default_rng(3)
-    floor = np.c_[rng.uniform([0, 0], [10, 6], (20000, 2)), np.zeros(20000)]
+    floor = np.c_[rng.uniform([floor_x[0], 0], [floor_x[1], 6], (20000, 2)), np.zeros(20000)]
     a = np.linspace(0, 2 * np.pi, 48, endpoint=False)
     pillar = np.vstack([np.c_[5.0 + 0.15 * np.cos(a), 1.2 + 0.15 * np.sin(a), np.full(48, h)]
                         for h in np.linspace(0.8, 1.6, 9)])   # 路和墙之间一根柱子(一直在)
@@ -135,17 +135,55 @@ def test_跟着狗走的人_真射线清得掉_走过的路和右边都是可通
 
 
 def test_狗身子占过的格子一律可通行_身宽两边各_0_25_m():
-    """没有一条射线的时候,可通行只来自狗身子走过的路;路上的障碍点(比如当时开着的门)也不算。"""
+    """没有一条射线、测的地方也没看到地面的时候,可通行只来自狗身子走过的路;路上的障碍点(比如当时开着的
+    门)也不算。地面只铺在屋子最里头(x 8.5–10)。"""
     f = _frames()
-    P, T, _, body = _walls_and_person(f)
+    P, T, _, body = _walls_and_person(f, floor_x=(8.5, 10.0))
     L = np.asarray(f.level_matrix())
     door = np.c_[np.full(50, 4.6), np.full(50, 3.0), np.linspace(0.8, 1.6, 50)] @ L
     g = G.render(np.vstack([P, door]), T, f, scans=[], body_path=body)
     at = lambda x, y: g.image[g.cell_of(x, y)]            # noqa: E731
-    for x in (1.0, 4.6, 8.0):
+    for x in (1.0, 4.6, 7.0):
         assert at(x, 3.0) == G.FREE, x
     r, c = g.cell_of(4.6, 3.0)
     assert (g.image[r - 1:r + 2, c - 1:c + 2] == G.FREE).all(), "门那几格(换算后可能差一格)"
     assert at(4.0, 3.2) == G.FREE, "中心线旁边 0.2 m"
     assert at(4.0, 3.4) != G.FREE, "0.4 m 以外不是身子"
     assert g.cell_of(4.0, 1.5) is None or at(4.0, 1.5) != G.FREE, "没有射线:别处都不知道"
+
+
+def _field(frames, slope=0.0, wall_x=None):
+    """开阔地:24 × 16 m 的地面(没有齐腰高的东西),狗沿 y=0 从 x=0 走到 10;地面按 ``slope``
+    往 +x 升。"""
+    L = np.asarray(frames.level_matrix())
+    rng = np.random.default_rng(5)
+    g = rng.uniform([-6, -8], [18, 8], (400000, 2))
+    pts = [np.c_[g, slope * g[:, 0]]]
+    if wall_x is not None:                               # 一堵墙(离当地地面 0.8–1.6 m)
+        ys = np.arange(-4, 4, 0.02)
+        pts += [np.c_[np.full_like(ys, wall_x), ys, np.full_like(ys, slope * wall_x + h)]
+                for h in np.linspace(0.8, 1.6, 9)]
+    xs = np.linspace(0, 10, 60)
+    traj = np.c_[xs, np.zeros(60), slope * xs + 0.6]
+    return np.vstack(pts) @ L, traj @ L
+
+
+def test_开阔地_看到过地面又没有障碍就是可通行_不只走过的那条线():
+    """内审阻断 1:庄园的草坪、广场没有齐腰高的东西,射线没处打,原来只有走过的那一条线是可通行的,站点
+    把路边的点全拒了。"""
+    f = _frames()
+    P, T = _field(f)
+    for scans in (None, []):
+        g = G.render(P, T, f, scans=scans)
+        for x, y in ((5.0, 3.0), (5.0, -4.0), (12.0, 0.0), (-3.0, 2.0)):
+            assert g.cell_of(x, y) is not None and g.image[g.cell_of(x, y)] == G.FREE, (x, y)
+
+
+def test_坡地_地面按走过的地方逐段算_上坡的地面不当障碍_墙照样是墙():
+    """内审再议 14:整张图一个地面高度,坡上的地面落进障碍层。"""
+    f = _frames()
+    P, T = _field(f, slope=0.1, wall_x=14.0)              # 10 m 升 1 m
+    g = G.render(P, T, f, scans=[])
+    for x, y in ((8.0, 2.0), (9.5, -3.0), (3.0, 0.0)):
+        assert g.image[g.cell_of(x, y)] == G.FREE, (x, y)
+    assert g.image[g.cell_of(14.0, 0.0)] == G.OCCUPIED
