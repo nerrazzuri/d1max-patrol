@@ -24,22 +24,28 @@ from d1max_patrol.protocol.nav_types import Pose
 
 
 class 台子:
-    async def 起(self, tmp_path, *, localizer="bridge", frame=(0.0, 0.0, 0.0)):
+    async def 起(self, tmp_path, *, localizer="bridge", frame=(0.0, 0.0, 0.0), dog=None,
+                maps=None):
         self.d = Path(tempfile.mkdtemp(prefix="lr", dir="/tmp"))
         self.broker, self.c = MemoryBroker(), 钟()
         self.ears = 耳朵()
         st = MemoryTransport(self.broker, "site")
         await st.connect()
         await st.subscribe(f"{T.prefix}/#", self.ears)
-        self.dog = SimRobot(now_ms=self.c, max_vx=1.0, max_wz=1.5, stop_latency_s=0.2)
-        self.rt = AgentRuntime(
-            transport=MemoryTransport(self.broker, "dog"), registration=REG, hal=self.dog,
-            store_dir=tmp_path, now_ms=self.c, loaded_map=("m", "1"), boot_id="b",
-            home=Pose.from_xy_yaw(0.0, 0.0), monotonic=lambda: self.c.mono,
-            telemetry_period_ms=100, localizer=localizer, loc_socket=self.d / "loc.sock")
+        self.dog = (dog or SimRobot)(now_ms=self.c, max_vx=1.0, max_wz=1.5, stop_latency_s=0.2)
+        self.tmp, self.localizer, self.maps = tmp_path, localizer, maps
+        self.rt = self.新代理()
         await self.rt.start()
         self.loc = SimLocalizer(self.dog, self.d / "loc.sock", frame=frame)
         return self
+
+    def 新代理(self):
+        return AgentRuntime(
+            transport=MemoryTransport(self.broker, "dog"), registration=REG, hal=self.dog,
+            store_dir=self.tmp, now_ms=self.c, loaded_map=("m", "1"), boot_id="b",
+            home=Pose.from_xy_yaw(0.0, 0.0), monotonic=lambda: self.c.mono,
+            telemetry_period_ms=100, localizer=self.localizer, loc_socket=self.d / "loc.sock",
+            maps=self.maps)
 
     async def 拍(self, n=1):
         for _ in range(n):
@@ -339,3 +345,63 @@ async def test_定位不可信时遥测不带地图位姿(台):
     await t.拍(3)
     assert "偏差" in _遥测(t.ears).loc["reason"]
     assert _遥测(t.ears).pose is None
+
+
+
+class 真狗样(SimRobot):
+    """真狗(``adapter-d1max``)没有 ``load_map``(W00c5d 真机项 3c.22)。"""
+    load_map = None
+
+
+async def test_配了定位器的真狗_换图不经HAL_定位器换先验_重启接着用(tmp_path):
+    """W09c 决定 6(W08 决定 5):换图归代理的导航后端 —— 下载、等空闲、换地图号与原点、经桥请定位器
+    换先验;适配器没有载入这一步也照样宣告 ``map_activate``。"""
+    from test_runtime_maps import _跑, 站点
+
+    from d1max_agent.maps import MapKeeper
+    from d1max_contract.maps import MapRef
+    from d1max_contract.messages import Capabilities
+    site = 站点()
+    t = 台子()
+    keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
+    await t.起(tmp_path / "agent", dog=真狗样, maps=keeper)
+    try:
+        await t.连()
+        caps = Capabilities.from_wire(t.ears.by["capabilities"][-1])
+        assert "map_activate" in caps.tasks
+        wire = site.add("m", "2", {"prior.mm": b"p", "frames.json": b"{}"})
+        await t.rt._on_cmd(_cmd("map_activate", wire, "a1", t.c))
+        await _跑(t.rt, t.broker)
+        await t.拍(3)
+        assert [e["kind"] for e in t.ears.by["event"]][-1] == "map_activated"
+        ref = MapRef.from_wire(wire)
+        assert t.rt.loaded_map == ("m", "2")
+        assert t.loc.priors[-1].dir == str(keeper.dir_of(ref))
+        await t.rt.close()
+        t.rt = t.新代理()                                 # 重启:按站点下发的那张接着用
+        await t.rt.start()
+        assert t.rt.loaded_map == ("m", "2")
+    finally:
+        await t.收()
+
+
+async def test_配了定位器_仿真狗有载入这一步也不调(tmp_path):
+    from test_runtime_maps import _跑, 站点
+
+    from d1max_agent.maps import MapKeeper
+    site = 站点()
+    t = 台子()
+    keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
+    await t.起(tmp_path / "agent", maps=keeper)
+    called = []
+
+    async def 载入(*a):
+        called.append(a)
+    t.dog.load_map = 载入
+    try:
+        await t.连()
+        await t.rt._on_cmd(_cmd("map_activate", site.add("m", "2", {"x.pgm": b"2"}), "a1", t.c))
+        await _跑(t.rt, t.broker)
+        assert t.rt.loaded_map == ("m", "2") and called == []
+    finally:
+        await t.收()

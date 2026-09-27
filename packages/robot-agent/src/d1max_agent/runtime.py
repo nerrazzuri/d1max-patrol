@@ -318,8 +318,13 @@ class AgentRuntime:
         """起来时(连站点之前):狗上有站点下发过的正在用的那张图,交给适配器载入,就用它(覆盖
         ``--map``)。载不进去就照旧用 ``--map``,并发一条 ``map_load_failed`` 让站点知道。"""
         ref = self.maps.active() if self.maps is not None else None
+        if ref is None:
+            return
+        if self._locsrv is not None:                  # 配了定位器:换图不经 HAL(W09c 决定 6)
+            self._switch_map(ref)
+            return
         loader = getattr(self.hal, "load_map", None)
-        if ref is None or loader is None:
+        if loader is None:
             return
         try:
             await asyncio.wait_for(loader(ref.map_id, ref.version, self.maps.dir_of(ref)),
@@ -345,7 +350,8 @@ class AgentRuntime:
 
     def _extra_tasks(self) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
-        if self.maps is not None and getattr(self.hal, "load_map", None) is not None:
+        if self.maps is not None and (self._locsrv is not None
+                                      or getattr(self.hal, "load_map", None) is not None):
             out["map_activate"] = {}
         if self.mapper is not None:
             out["mapping"] = {}
@@ -743,7 +749,7 @@ class AgentRuntime:
             self._switching = True
             try:
                 try:
-                    await self.hal.load_map(ref.map_id, ref.version, dst)
+                    await self._hal_load(ref.map_id, ref.version, dst)
                 except Exception as exc:
                     self.maps.discard(ref)
                     raise MapInstallError(f"适配器载不进去: {type(exc).__name__}: {exc}") from exc
@@ -755,7 +761,7 @@ class AgentRuntime:
                     # 适配器已经是新图了,狗报的还是老版本:把原来那张载回去,不留这种两边不一致。
                     if old is not None:
                         try:
-                            await self.hal.load_map(old.map_id, old.version, self.maps.dir_of(old))
+                            await self._hal_load(old.map_id, old.version, self.maps.dir_of(old))
                         except Exception:
                             log.exception("提交失败后载回原来的图也失败了")
                     raise MapInstallError(f"记不下正在用的图: {exc}") from exc
@@ -777,6 +783,12 @@ class AgentRuntime:
             await self._publish_caps()
         except Exception:
             log.exception("换图之后发能力没成(下次重连会再发)")
+
+    async def _hal_load(self, map_id: str, version: str, d: Path) -> None:
+        """适配器载入一张图。配了定位器的狗不经 HAL(W09c 决定 6、W08 决定 5):换图归代理的导航后端,
+        先验经本机桥交给定位器(:meth:`_switch_map`)。"""
+        if self._locsrv is None:
+            await self.hal.load_map(map_id, version, d)
 
     async def _build(self, bag: str, map_id: str, version: str, task_id: str) -> None:
         base = {"task_id": task_id, "bag": bag, "map_id": map_id, "version": version}
