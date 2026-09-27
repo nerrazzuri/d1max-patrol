@@ -1,15 +1,15 @@
 {
   "alert": {
     "acked_by": "alice",
-    "acked_ms": 1790407647594,
+    "acked_ms": 1790508849053,
     "channel": "screen",
     "count": 1,
     "detail": "狗报急停没解除",
     "escalated": 0,
-    "first_ms": 1790407647243,
+    "first_ms": 1790508848700,
     "key": "A/estop_pressed#1",
     "kind": "estop_pressed",
-    "last_ms": 1790407647243,
+    "last_ms": 1790508848700,
     "level": "P1",
     "resolved_by": "",
     "resolved_ms": null,

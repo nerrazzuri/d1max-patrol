@@ -27,7 +27,9 @@
       },
       "map_activate": {},
       "map_build": {},
-      "mapping": {},
+      "mapping": {
+        "live": true
+      },
       "mapping_trail": {},
       "mark_home": {},
       "patrol": {
@@ -54,8 +56,8 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-d5705c03e1b0",
-      "issued_at": 1790407647202,
+      "command_id": "cmd-9f53e2dd13b6",
+      "issued_at": 1790508848662,
       "issued_by": "incident:nvr",
       "kind": "goto",
       "payload": {
@@ -71,25 +73,25 @@
       },
       "priority": 80,
       "robot_id": "A",
-      "task_id": "incident-ae5b12a39e4a"
+      "task_id": "incident-5af75afd5d1f"
     },
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-f195bfd93ab2",
-      "issued_at": 1790407647155,
+      "command_id": "cmd-1bed45235be8",
+      "issued_at": 1790508848619,
       "issued_by": "alice",
       "kind": "abort",
       "payload": {},
       "priority": 0,
       "robot_id": "A",
-      "task_id": "task-cd709aea1417"
+      "task_id": "task-091be699d86a"
     },
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-5ccfaf033935",
-      "issued_at": 1790407647116,
+      "command_id": "cmd-153f87dd01ea",
+      "issued_at": 1790508848586,
       "issued_by": "alice",
       "kind": "goto",
       "payload": {
@@ -105,61 +107,61 @@
       },
       "priority": 60,
       "robot_id": "A",
-      "task_id": "task-cd709aea1417"
+      "task_id": "task-091be699d86a"
     }
   ],
   "events": [
     {
-      "boot_id": "boot-06f6d535cd",
+      "boot_id": "boot-6376fc8d0e",
       "data": {
         "reason": "起飞前检查未通过: device_ready(急停处于按下状态)",
-        "task_id": "incident-ae5b12a39e4a"
+        "task_id": "incident-5af75afd5d1f"
       },
       "kind": "task_failed",
       "seq": 5,
-      "stamp": 1790407647710
+      "stamp": 1790508849175
     },
     {
-      "boot_id": "boot-06f6d535cd",
+      "boot_id": "boot-6376fc8d0e",
       "data": {
         "distance_m": 0.2,
-        "task_id": "incident-ae5b12a39e4a"
+        "task_id": "incident-5af75afd5d1f"
       },
       "kind": "task_progress",
       "seq": 4,
-      "stamp": 1790407647709
+      "stamp": 1790508849174
     },
     {
-      "boot_id": "boot-06f6d535cd",
+      "boot_id": "boot-6376fc8d0e",
       "data": {
         "reason": "preempted",
-        "task_id": "task-cd709aea1417"
+        "task_id": "task-091be699d86a"
       },
       "kind": "task_preempted",
       "seq": 3,
-      "stamp": 1790407647666
+      "stamp": 1790508849131
     },
     {
-      "boot_id": "boot-06f6d535cd",
+      "boot_id": "boot-6376fc8d0e",
       "data": {
         "distance_m": 4.0,
-        "task_id": "task-cd709aea1417"
+        "task_id": "task-091be699d86a"
       },
       "kind": "task_progress",
       "seq": 2,
-      "stamp": 1790407647168
+      "stamp": 1790508848637
     },
     {
-      "boot_id": "boot-06f6d535cd",
+      "boot_id": "boot-6376fc8d0e",
       "data": {
         "faults": []
       },
       "kind": "robot_fault",
       "seq": 1,
-      "stamp": 1790407646982
+      "stamp": 1790508848467
     }
   ],
-  "expires_at": 1791407646883,
+  "expires_at": 1791508848365,
   "fresh": true,
   "held": null,
   "loc": {
@@ -177,9 +179,9 @@
   "revoked": false,
   "robot_id": "A",
   "status": {
-    "boot_id": "boot-06f6d535cd",
+    "boot_id": "boot-6376fc8d0e",
     "control_epoch": 1,
-    "last_seen": 1790407647711,
+    "last_seen": 1790508849176,
     "online": true,
     "ready": {
       "control": true,

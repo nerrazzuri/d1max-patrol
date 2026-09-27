@@ -29,7 +29,9 @@
           },
           "map_activate": {},
           "map_build": {},
-          "mapping": {},
+          "mapping": {
+            "live": true
+          },
           "mapping_trail": {},
           "mark_home": {},
           "patrol": {
@@ -52,7 +54,7 @@
           }
         }
       },
-      "expires_at": 1791407646883,
+      "expires_at": 1791508848365,
       "fresh": true,
       "held": null,
       "loc": {
@@ -70,9 +72,9 @@
       "revoked": false,
       "robot_id": "A",
       "status": {
-        "boot_id": "boot-06f6d535cd",
+        "boot_id": "boot-6376fc8d0e",
         "control_epoch": 1,
-        "last_seen": 1790407647711,
+        "last_seen": 1790508849176,
         "online": true,
         "ready": {
           "control": true,
