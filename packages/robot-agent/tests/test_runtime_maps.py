@@ -654,14 +654,15 @@ async def test_边走边建_开录带地图号与版本_停下后在后台收尾
     rec.last_rays = "scans:9"
     rec.last_fallback = ""
 
-    async def start(name, target=None):
+    async def start(name, target=None, task_id=""):
         rec.calls.append(("start", name, target))
-        rec.recording, rec.last_bag, rec.live = True, f"{name}-x", target
+        rec.recording, rec.last_bag, rec.live, rec.live_task = True, f"{name}-x", target, task_id
 
     async def stop():
         rec.calls.append(("stop",))
         rec.recording = False
         rec.pending, rec.live = (rec.last_bag, *rec.live), None
+        rec.pending_task = rec.live_task
 
     async def finish():
         rec.calls.append(("finish",))
@@ -684,6 +685,7 @@ async def test_边走边建_开录带地图号与版本_停下后在后台收尾
     assert rec.calls[1:] == [("stop",), ("finish",)]
     got = [e for e in ears.by["event"] if e["kind"] == "map_built"][-1]["data"]
     assert (got["map_id"], got["version"], got["mode"], got["bag"]) == ("m", "5", "live", "yard-x")
+    assert got["task_id"] == "mapping-s1", "带开录那条命令的号(站点按它认是哪一次)"
     assert got["grid_rays"] == "scans:9"
     await rt.close()
 
@@ -717,7 +719,7 @@ async def test_边走边建开录没成_发建图失败_站点放开这个版本
     """内审阻断 2:原来只发 ``mapping_failed``(不带地图号、版本),站点一直当这一版「在建」。"""
     rec = _假边走边建()
 
-    async def start(name, target=None):
+    async def start(name, target=None, task_id=""):
         raise RuntimeError("在线建图起来就退了")
     rec.start = start
     broker, c, ears, rt = await _起(tmp_path, rec)
@@ -726,6 +728,7 @@ async def test_边走边建开录没成_发建图失败_站点放开这个版本
     await _跑(rt, broker, n=3)
     got = [e["data"] for e in ears.by["event"] if e["kind"] == "map_build_failed"]
     assert got and (got[-1]["map_id"], got[-1]["version"]) == ("m", "5")
+    assert got[-1]["task_id"] == "mapping-s1"
     assert "起来就退了" in got[-1]["reason"]
     await rt.close()
 
@@ -733,7 +736,7 @@ async def test_边走边建开录没成_发建图失败_站点放开这个版本
 async def test_起来时接着收尾上次没收完的边走边建_收不了的报失败(tmp_path):
     rec = _假边走边建()
     rec.pending = ("yard-x", "m", "5")
-    rec.lost = [("old-x", "m", "4")]
+    rec.lost = [("old-x", "m", "4", "mapping-o1")]
     done = []
 
     async def finish():
@@ -748,6 +751,8 @@ async def test_起来时接着收尾上次没收完的边走边建_收不了的�
     assert done == [("yard-x", "m", "5")]
     kinds = {(e["kind"], e["data"].get("version")) for e in ears.by["event"]}
     assert ("map_built", "5") in kinds and ("map_build_failed", "4") in kinds
+    lost = [e["data"] for e in ears.by["event"] if e["kind"] == "map_build_failed"][-1]
+    assert lost["task_id"] == "mapping-o1"
     await rt.close()
 
 

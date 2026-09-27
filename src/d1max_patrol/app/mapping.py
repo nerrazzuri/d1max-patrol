@@ -237,9 +237,13 @@ class MappingOrchestrator:
         stops = [self._procs.stop(self.RECORD, term_grace_s=_RECORD_GRACE_S)]
         if self._live is not None:
             stops.append(self._procs.stop(self.LIVE, term_grace_s=LIVE_SAVE_GRACE_S))
-        await asyncio.gather(*stops)
+        # 一个停不掉,另一个照样停(外审阻断 1:不许留一个进程在后台一直写盘)
+        got = await asyncio.gather(*stops, return_exceptions=True)
         self._phase = "idle"
         self._live = None
+        for g in got:
+            if isinstance(g, BaseException):
+                raise g
         return bag
 
     # ------------------------------------------------------------------ 重建

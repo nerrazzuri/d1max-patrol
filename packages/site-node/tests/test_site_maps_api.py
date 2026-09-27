@@ -13,7 +13,7 @@ class 假建图:
         self.last_bag = ""
         self.calls = []
 
-    async def start(self, name, target=None):
+    async def start(self, name, target=None, task_id=""):
         self.recording, self.last_bag = True, name
         self.calls.append(("start", name) if target is None else ("start", name, *target))
 

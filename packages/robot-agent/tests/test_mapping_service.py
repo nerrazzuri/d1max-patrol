@@ -295,7 +295,8 @@ async def test_代理重启_边走边建的这一趟接着收尾_不丢(tmp_path
     svc = MappingService(假编排(bags, work), bags_root=bags, maps_out=tmp_path / "outbox" / "maps")
     await svc.start("yard", target=("estate-1", "5"))
     bag = svc.last_bag
-    assert json.loads((bags / bag / ".live").read_text()) == {"map_id": "estate-1", "version": "5"}
+    assert json.loads((bags / bag / ".live").read_text()) == {"map_id": "estate-1", "version": "5",
+                                                            "task_id": ""}
     # 录着的时候代理没了(没停录):重启
     again = MappingService(假编排(bags, work), bags_root=bags,
                            maps_out=tmp_path / "outbox" / "maps")
@@ -338,3 +339,43 @@ async def test_上一趟还在打包_开录就拒_收尾时版本已在传也算
     with pytest.raises(MappingError, match="已经有一份"):
         await svc.finish()
     assert svc.pending is None and not svc.held
+
+
+async def test_恢复标记写不进去_回滚停掉录包与在线建图_之后还能再开(svc, monkeypatch):
+    """外审阻断 1:原来子进程已经起了、``.live`` 写不进去(盘满、只读重挂)就抛出去,``recording`` 还是
+    False —— 停不了、收尾也不停,两个进程一直写盘。"""
+    import errno
+    from pathlib import Path as P
+    stopped = []
+    real_stop = svc.orch.stop_record
+
+    async def 停(*a, **k):
+        stopped.append(True)
+        return await real_stop(*a, **k)
+    svc.orch.stop_record = 停
+    real = P.write_text
+
+    def 盘满(self, *a, **k):
+        if self.name == ".live":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(self, *a, **k)
+    monkeypatch.setattr(P, "write_text", 盘满)
+    with pytest.raises(OSError):
+        await svc.start("yard", target=("estate-1", "5"), task_id="t1")
+    assert stopped == [True] and not svc.recording and svc.live is None
+    monkeypatch.setattr(P, "write_text", real)
+    await svc.start("yard2", target=("estate-1", "5"), task_id="t2")
+    assert svc.recording
+
+
+async def test_边走边建记着开录那条命令的号_重启之后也在(tmp_path):
+    """外审阻断 3:站点按命令号认「这一次失败了没有」,狗上发的失败、建好了要带开录那条命令的号。"""
+    bags, work = tmp_path / "outbox" / "bags", tmp_path / "work"
+    svc = MappingService(假编排(bags, work), bags_root=bags, maps_out=tmp_path / "outbox" / "maps")
+    await svc.start("yard", target=("estate-1", "5"), task_id="mapping-s1")
+    assert json.loads((bags / svc.last_bag / ".live").read_text())["task_id"] == "mapping-s1"
+    await svc.stop()
+    assert svc.pending_task == "mapping-s1"
+    again = MappingService(假编排(bags, work), bags_root=bags,
+                           maps_out=tmp_path / "outbox" / "maps")
+    assert again.pending_task == "mapping-s1"

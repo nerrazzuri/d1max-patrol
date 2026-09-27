@@ -454,7 +454,7 @@ class AgentRuntime:
                 if target is None:
                     await self.mapper.start(name)
                 else:
-                    await self.mapper.start(name, target=target)
+                    await self.mapper.start(name, target=target, task_id=task_id)
                 # 录上了:当场清空、换一趟(W00c6h 内审:不靠每拍看边沿 —— 两拍之间又停又开会漏)。
                 self.trail.reset()
                 self._trail_on = True
@@ -819,7 +819,9 @@ class AgentRuntime:
         """边走边建的这一版收尾(W09c2):打包在线建好的,不成退回从录包建;发 ``map_built``(带是哪种
         建法、退回的原因)或 ``map_build_failed``。"""
         bag, map_id, version = self.mapper.pending
-        base = {"task_id": task_id, "bag": bag, "map_id": map_id, "version": version}
+        # 带开录那条命令的号(站点按它认是哪一次,外审阻断 3);没有(老的恢复标记)才用停录的
+        task = getattr(self.mapper, "pending_task", "") or task_id
+        base = {"task_id": task, "bag": bag, "map_id": map_id, "version": version}
         try:
             _, mode = await self.mapper.finish()
             rays = getattr(self.mapper, "last_rays", "")
@@ -945,8 +947,8 @@ class AgentRuntime:
         放开那个版本号。"""
         if self.mapper is None:
             return
-        for bag, map_id, version in getattr(self.mapper, "lost", []):
-            self.events.emit("map_build_failed", {"task_id": "", "bag": bag, "map_id": map_id,
+        for bag, map_id, version, task in getattr(self.mapper, "lost", []):
+            self.events.emit("map_build_failed", {"task_id": task, "bag": bag, "map_id": map_id,
                                                   "version": version,
                                                   "reason": "代理重启了,这一趟没收完"})
         if getattr(self.mapper, "pending", None) is not None:

@@ -148,25 +148,28 @@ class MapCatalog:
 
     def build_in_flight(self, map_id: str, version: str) -> bool:
         """站点已经让某台狗建这个版本了(还没收齐登记):再派一台建同一个版本要挡。
-        狗回了 ``map_build_failed``(或者回执拒了)的那一次不算 —— 不然这个版本号就永远用不了了。"""
-        for r in self.db.query("SELECT robot_id, kind, payload, ack_result FROM commands "
+        狗回了 ``map_build_failed``(或者回执拒了)的那一次不算 —— 不然这个版本号就永远用不了了。
+        失败按**这一次命令的号**认(外审阻断 3:原来任意一条历史失败都算,第一次失败后重试还在跑,
+        第三次也被放行)。"""
+        for r in self.db.query("SELECT robot_id, task_id, kind, payload, ack_result FROM commands "
                                "WHERE kind IN ('map_build', 'mapping')"):
             if _builds(r["kind"], r["payload"]) != (map_id, version):
                 continue
             if r["ack_result"] not in (None, "", "accepted"):
                 continue                          # 狗没接
-            if not self._build_failed(r["robot_id"], map_id, version):
+            if not self._build_failed(r["robot_id"], r["task_id"], map_id, version):
                 return True
         return False
 
-    def _build_failed(self, robot_id: str, map_id: str, version: str) -> bool:
+    def _build_failed(self, robot_id: str, task_id: str, map_id: str, version: str) -> bool:
         for e in self.db.query("SELECT data FROM events WHERE robot_id=? "
                                "AND kind='map_build_failed'", (robot_id,)):
             try:
                 d = json.loads(e["data"])
             except (TypeError, ValueError):
                 continue
-            if isinstance(d, dict) and (d.get("map_id"), d.get("version")) == (map_id, version):
+            if isinstance(d, dict) and (d.get("task_id"), d.get("map_id"), d.get("version")) \
+                    == (task_id, map_id, version):
                 return True
         return False
 

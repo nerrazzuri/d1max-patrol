@@ -540,3 +540,18 @@ async def test_打包失败留着中间目录_说日志在哪(orch, procs, cfg, 
     with pytest.raises(MappingError, match="mappack"):
         await orch.package(bag, "m1")
     assert work.is_dir() and orch.phase == "idle"
+
+
+async def test_停录一个停不掉_另一个照样停_回到闲着(orch, procs, monkeypatch):
+    """外审阻断 1:停录时录包那边炸了,在线建图也要尽力收掉。"""
+    stopped = []
+
+    async def fake_stop(name, *, term_grace_s=3.0):
+        stopped.append(name)
+        if name == "bagrecord":
+            raise OSError("停不了")
+    await orch.start_record("w1", live_map_id="m1")
+    monkeypatch.setattr(procs, "stop", fake_stop)
+    with pytest.raises(OSError):
+        await orch.stop_record()
+    assert set(stopped) == {"bagrecord", "molamap"} and orch.phase == "idle"

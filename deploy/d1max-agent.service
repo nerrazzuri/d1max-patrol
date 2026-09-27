@@ -34,9 +34,10 @@ Restart=always
 RestartSec=5
 # 停服务时只给代理发 SIGTERM(W09c2 内审):子进程由代理按各自的信号停 —— 在线建图的 mola-cli 只认
 # SIGINT(SIGTERM 它不存盘、挂着等强杀),录包要写完 mcap 的索引。默认的 control-group 对整组发
-# SIGTERM,两样都会坏。存盘要一会儿:给 180 s(之后 systemd 对剩下的强杀)。
+# SIGTERM,两样都会坏。在线建图最多给 300 s 存盘(LIVE_SAVE_GRACE_S),再给引擎、录包索引留余量:
+# 420 s(之后 systemd 对剩下的强杀;外审阻断 2:原来 180 s,比存盘时限还短)。
 KillMode=mixed
-TimeoutStopSec=180
+TimeoutStopSec=420
 
 [Install]
 WantedBy=multi-user.target

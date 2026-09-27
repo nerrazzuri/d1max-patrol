@@ -79,7 +79,8 @@ def test_站点没让它建的图不收_版本撞了或文件对不上永远不�
     with cat.db.tx() as c:                                    # 狗说这一次建失败了:这个版本号放开
         c.execute("INSERT INTO events(robot_id, boot_id, seq, event_id, kind, data, stamp, "
                   "received_at) VALUES ('A','b',1,'e1','map_build_failed',?,1,1)",
-                  (json.dumps({"map_id": "estate-1", "version": "9", "reason": "x"}),))
+                  (json.dumps({"task_id": "t1", "map_id": "estate-1", "version": "9",
+                               "reason": "x"}),))
     assert not cat.build_in_flight("estate-1", "9")
     with cat.db.tx() as c:
         c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
@@ -265,3 +266,29 @@ def test_边走边建的狗传上来的图也收(cat):
     cat.put_map_chunk("A", "estate-1/5", "x.pgm", offset=0, data=b"good", total=4)
     cat.put_map_chunk("A", "estate-1/5", "map.json", offset=0, data=body, total=len(body))
     assert cat.get("estate-1", "5").files[0].name == "x.pgm"
+
+
+def test_版本在建没有_按这一次命令的号认失败_历史失败不放开重试(cat):
+    """外审阻断 3:原来按(狗、地图号、版本)找任意一条历史失败 —— 第一次失败之后用同一版本重试,
+    重试还在跑时第三次请求也被放行,同一版本并发建、并发传。"""
+    def 发(cid, task):
+        with cat.db.tx() as c:
+            c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, "
+                      "issued_by, issued_at, priority) "
+                      "VALUES (?,?,'A','map_build',?, 'alice', 1, 0)",
+                      (cid, task, json.dumps({"bag": "b", "map_id": "estate", "version": "1"})))
+
+    def 失败(eid, task):
+        with cat.db.tx() as c:
+            c.execute("INSERT INTO events(robot_id, boot_id, seq, event_id, kind, data, stamp, "
+                      "received_at) VALUES ('A','b',?,?,'map_build_failed',?,1,1)",
+                      (int(eid[1:]), eid, json.dumps({"task_id": task, "map_id": "estate",
+                                                      "version": "1", "reason": "x"})))
+    发("c1", "t1")
+    assert cat.build_in_flight("estate", "1")
+    失败("e1", "t1")
+    assert not cat.build_in_flight("estate", "1"), "第一次失败:放开,允许重试"
+    发("c2", "t2")
+    assert cat.build_in_flight("estate", "1"), "重试还在跑:第三次要拒"
+    失败("e2", "t2")
+    assert not cat.build_in_flight("estate", "1"), "重试也失败:再放开"

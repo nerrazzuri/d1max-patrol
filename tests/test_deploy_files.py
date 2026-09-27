@@ -1292,7 +1292,10 @@ def test_代理服务停的时候只给代理发_SIGTERM_子进程由它按各�
     """W09c2 内审应修 1:默认 KillMode=control-group 对整组发 SIGTERM —— 在线建图的 mola-cli 收到
     SIGTERM 不存盘、挂着等被强杀,录包的 mcap 也来不及写索引。mixed:只给代理发,代理按正常停录收
     (在线建图 SIGINT);给足时间。"""
+    from d1max_patrol.app.mapping import LIVE_SAVE_GRACE_S
     unit = (DEPLOY / "d1max-agent.service").read_text(encoding="utf-8")
     assert "KillMode=mixed" in unit
     t = [ln for ln in unit.splitlines() if ln.startswith("TimeoutStopSec=")]
-    assert t and int(t[0].split("=")[1]) >= 120
+    # 外审阻断 2:原来 180 s,在线建图允许存 300 s —— systemd 先把整组强杀。跟存盘时限直接比,
+    # 再给引擎、录包索引、别的收尾留 60 s 以上
+    assert t and int(t[0].split("=")[1]) >= LIVE_SAVE_GRACE_S + 60

@@ -101,9 +101,12 @@ class MappingService:
         #: 打不成、退回从录包建的原因(W09c2)。
         self.live: tuple[str, str] | None = None
         self.pending: tuple[str, str, str] | None = None
+        #: 开录那条命令的号(正在录的、待打包的):建好、没建成的事件带它(外审阻断 3)。
+        self.live_task = ""
+        self.pending_task = ""
         self.last_fallback = ""
-        #: 起来时找到的、没法接着收尾的边走边建(包, 地图号, 版本):调用方报「没建成」。
-        self.lost: list[tuple[str, str, str]] = []
+        #: 起来时找到的、没法接着收尾的边走边建(包, 地图号, 版本, 命令号):调用方报「没建成」。
+        self.lost: list[tuple[str, str, str, str]] = []
         self._cleanup()
 
     @property
@@ -125,13 +128,14 @@ class MappingService:
                 try:
                     t = json.loads((b / LIVE).read_text("utf-8"))
                     got = (b.name, str(t["map_id"]), str(t["version"]))
-                except (OSError, ValueError, KeyError, TypeError):
+                    task = str(t.get("task_id", ""))
+                except (OSError, ValueError, KeyError, TypeError, AttributeError):
                     continue
                 if self.pending is not None:
-                    self.lost.append(self.pending)
+                    self.lost.append((*self.pending, self.pending_task))
                     (self.bags_root / self.pending[0] / LIVE).unlink(missing_ok=True)
                     self.held.discard(self.pending[0])
-                self.pending = got
+                self.pending, self.pending_task = got, task
                 self.held.add(b.name)
 
     def bag_settled(self, run: Path) -> bool:
@@ -142,8 +146,10 @@ class MappingService:
         age_days = (time.time() - (run / DONE).stat().st_mtime) / 86400
         return age_days >= BAG_KEEP_DAYS
 
-    async def start(self, name: str, target: tuple[str, str] | None = None) -> None:
-        """开录。给了 ``target``(地图号, 版本)就同时在线建这一版(W09c2 边走边建)。"""
+    async def start(self, name: str, target: tuple[str, str] | None = None,
+                    task_id: str = "") -> None:
+        """开录。给了 ``target``(地图号, 版本)就同时在线建这一版(W09c2 边走边建);``task_id`` 是开录
+        那条命令的号 —— 这一版建好、没建成的事件都带它(站点按它认是哪一次,外审阻断 3)。"""
         if self.recording:
             raise MappingError(f"正在录 {self.last_bag},先停")
         if self.pending is not None:
@@ -155,13 +161,22 @@ class MappingService:
             if (self.maps_out / target[0] / target[1]).exists():
                 raise MappingError(f"{target[0]}:{target[1]} 狗上已经有一份在传了,换个版本号")
             bag = Path(await self.orch.start_record(full, live_map_id=target[0]))
-            (bag / LIVE).write_text(json.dumps({"map_id": target[0], "version": target[1]}),
-                                    encoding="utf-8")
+            try:
+                (bag / LIVE).write_text(json.dumps({"map_id": target[0], "version": target[1],
+                                                    "task_id": task_id}), encoding="utf-8")
+            except BaseException:
+                # 记不下恢复标记(盘满、只读重挂):已经起了的录包、在线建图收掉再报(外审阻断 1)
+                try:
+                    await self.orch.stop_record()
+                except Exception:
+                    log.exception("记不下恢复标记之后停录也没成")
+                raise
         else:
             await self.orch.start_record(full)
         self.recording = True
         self.last_bag = full
         self.live = target
+        self.live_task = task_id
 
     async def stop(self) -> None:
         """停录。边走边建的:记下待打包(:meth:`finish`,调用方丢到后台),包先占住(打包要读它)。"""
@@ -176,6 +191,7 @@ class MappingService:
             with self.lock:
                 self.held.add(bag.name)
             self.pending = (bag.name, *live)
+            self.pending_task = self.live_task
 
     async def shutdown(self) -> None:
         """代理收尾:正在录就好好停下(录包写完索引、在线建图 SIGINT 存盘),待打包的重启后接着做。"""
@@ -205,6 +221,7 @@ class MappingService:
             return ref, mode
         finally:
             self.pending = None
+            self.pending_task = ""
             (src / LIVE).unlink(missing_ok=True)
             with self.lock:
                 self.held.discard(bag)
