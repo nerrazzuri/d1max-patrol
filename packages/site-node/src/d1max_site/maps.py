@@ -52,6 +52,20 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _builds(kind: str, payload: str) -> tuple[str, str] | None:
+    """这条命令让狗建哪一版:``map_build``,或者带地图号与版本的 ``mapping start``(W09c2
+    边走边建)。"""
+    try:
+        p = json.loads(payload)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(p, dict) or (kind == "mapping" and p.get("action") != "start"):
+        return None
+    if not isinstance(p.get("map_id"), str) or not isinstance(p.get("version"), str):
+        return None
+    return p["map_id"], p["version"]
+
+
 def _digest_path(path: Path) -> Path:
     return path.with_name(f".{path.name}.sha256")
 
@@ -128,28 +142,16 @@ class MapCatalog:
         return got
 
     def _build_issued(self, robot_id: str, map_id: str, version: str) -> bool:
-        rows = self.db.query("SELECT payload FROM commands WHERE robot_id=? AND kind='map_build'",
-                             (robot_id,))
-        for r in rows:
-            try:
-                p = json.loads(r["payload"])
-            except (TypeError, ValueError):
-                continue
-            if isinstance(p, dict) and (p.get("map_id"), p.get("version")) == (map_id, version):
-                return True
-        return False
+        rows = self.db.query("SELECT kind, payload FROM commands WHERE robot_id=? AND kind IN "
+                             "('map_build', 'mapping')", (robot_id,))
+        return any(_builds(r["kind"], r["payload"]) == (map_id, version) for r in rows)
 
     def build_in_flight(self, map_id: str, version: str) -> bool:
         """站点已经让某台狗建这个版本了(还没收齐登记):再派一台建同一个版本要挡。
         狗回了 ``map_build_failed``(或者回执拒了)的那一次不算 —— 不然这个版本号就永远用不了了。"""
-        for r in self.db.query("SELECT robot_id, payload, ack_result FROM commands "
-                               "WHERE kind='map_build'"):
-            try:
-                p = json.loads(r["payload"])
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(p, dict) or (p.get("map_id"), p.get("version")) != (map_id,
-                                                                                  version):
+        for r in self.db.query("SELECT robot_id, kind, payload, ack_result FROM commands "
+                               "WHERE kind IN ('map_build', 'mapping')"):
+            if _builds(r["kind"], r["payload"]) != (map_id, version):
                 continue
             if r["ack_result"] not in (None, "", "accepted"):
                 continue                          # 狗没接

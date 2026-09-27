@@ -1,0 +1,10 @@
+#!/bin/sh
+# ROS 包装脚本(W09c2):source ROS 再执行后面的命令。代理的服务(d1max-agent.service)里没有 source ROS,
+# ``ros2``、``mola-cli`` 不在 PATH 上、``rmw_zenoh_cpp`` 也找不到;建图编排起录包(``ros2 bag record``)、
+# 在线建图(``mola-cli``)都经它。用法:d1max-ros <命令> [参数...]
+set -eu
+# ROS 的 setup 脚本里有未定义变量,关掉 -u 再 source
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+exec "$@"

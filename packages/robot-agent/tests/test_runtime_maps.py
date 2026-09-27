@@ -638,3 +638,51 @@ async def test_建好了的事件带着栅格用的哪种射线(tmp_path):
     got = [e for e in ears.by["event"] if e["kind"] == "map_built"]
     assert got[-1]["data"]["grid_rays"].startswith("synthetic")
     await rt.close()
+
+
+
+async def test_边走边建_开录带地图号与版本_停下后在后台收尾_发建好了(tmp_path):
+    """W09c2:``mapping start`` 带地图号与版本 → 录包的同时在线建;停下之后在后台打包(或退回从录包建),
+    发 ``map_built``(带是哪种建法)。"""
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rec = 假录包()
+    rec.pending = None
+    rec.last_rays = "scans:9"
+    rec.last_fallback = ""
+
+    async def start(name, target=None):
+        rec.calls.append(("start", name, target))
+        rec.recording, rec.last_bag, rec.live = True, f"{name}-x", target
+
+    async def stop():
+        rec.calls.append(("stop",))
+        rec.recording = False
+        rec.pending, rec.live = (rec.last_bag, *rec.live), None
+
+    async def finish():
+        rec.calls.append(("finish",))
+        rec.pending = None
+        from d1max_contract.maps import MapRef
+        return MapRef.from_wire({"map_id": "m", "version": "5", "files": [
+            {"name": "x", "size": 1, "sha256": "a" * 64}]}), "live"
+    rec.start, rec.stop, rec.finish = start, stop, finish
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c), store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"),
+                      boot_id="b", home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono,
+                      mapper=rec)
+    await rt.start()
+    await rt._on_cmd(_cmd("mapping", {"action": "start", "name": "yard", "map_id": "m",
+                                      "version": "5"}, "s1", c))
+    await _跑(rt, broker, n=3)
+    assert rec.calls[0] == ("start", "yard", ("m", "5"))
+    await rt._on_cmd(_cmd("mapping", {"action": "stop"}, "s2", c))
+    await _跑(rt, broker, n=5)
+    assert rec.calls[1:] == [("stop",), ("finish",)]
+    got = [e for e in ears.by["event"] if e["kind"] == "map_built"][-1]["data"]
+    assert (got["map_id"], got["version"], got["mode"], got["bag"]) == ("m", "5", "live", "yard-x")
+    assert got["grid_rays"] == "scans:9"
+    await rt.close()

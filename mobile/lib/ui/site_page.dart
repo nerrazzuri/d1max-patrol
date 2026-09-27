@@ -441,6 +441,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       MaterialPageRoute<void>(builder: (_) => SiteMappingTrailPage(api: widget.api, robotId: widget.robotId)));
 
   /// 录包（W00c5d 第二部分，管理员）：给包起个名，之后经站点遥控开着狗走一圈，再停。
+  /// 填了地图号与版本就边走边建（W09c2）：停下之后狗上直接打包成这一版，不用再点「重建」。
   Future<void> _startRecord() async {
     final got = await showFieldsDialog(context,
         title: '开始录包',
@@ -449,11 +450,20 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
               key: const Key('record-name'),
               initial:
                   'rec-${DateTime.now().toUtc().toIso8601String().substring(0, 16).replaceAll(':', '')}'),
+          const DialogField('地图号（边走边建；空着只录包）', key: Key('record-map')),
+          const DialogField('版本', key: Key('record-version')),
         ],
         confirm: '开始',
         confirmKey: const Key('record-go'));
     if (got == null || got[0].isEmpty) return;
-    final ok = await _do(() => widget.api.mapping(widget.robotId, 'start', name: got[0]), '开始录包');
+    final mapId = got[1].trim(), version = got[2].trim();
+    if (mapId.isEmpty != version.isEmpty) {
+      setState(() => _msg = '边走边建：地图号与版本要一起填（只录包就都空着）');
+      return;
+    }
+    final ok = await _do(
+        () => widget.api.mapping(widget.robotId, 'start', name: got[0], mapId: mapId, version: version),
+        mapId.isEmpty ? '开始录包' : '开始录包并建图 $mapId:$version');
     // 收下了就打开录包轨迹（W00c6h）：边开边看哪儿走过了。录包在狗上后台起，起来之后才开始记点。
     if (ok && mounted && robotCan(_view, 'mapping_trail')) _openTrail();
   }

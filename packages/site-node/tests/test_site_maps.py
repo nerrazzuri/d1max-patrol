@@ -242,3 +242,21 @@ def test_登记失败_文件挪回收件目录_下次还能收(cat, monkeypatch)
     monkeypatch.setattr(cat, "_register", real)
     cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
     assert cat.get("estate-1", "9").files[0].name == "x.pgm"
+
+
+def test_边走边建的狗传上来的图也收(cat):
+    """W09c2:站点让它在录包时建这一版(``mapping start`` 带地图号与版本),传上来照样收。"""
+    from d1max_site.evidence import PathRefused
+    body = json.dumps({"map_id": "estate-1", "version": "5", "files": [
+        {"name": "x.pgm", "size": 4, "sha256": hashlib.sha256(b"good").hexdigest()}]}).encode()
+    with pytest.raises(PathRefused):
+        cat.put_map_chunk("A", "estate-1/5", "x.pgm", offset=0, data=b"good", total=4)
+    with cat.db.tx() as c:
+        c.execute("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+                  "issued_at, priority) VALUES ('c1','t1','A','mapping',?, 'alice', 1, 0)",
+                  (json.dumps({"action": "start", "name": "y", "map_id": "estate-1",
+                               "version": "5"}),))
+    assert cat.build_in_flight("estate-1", "5")
+    cat.put_map_chunk("A", "estate-1/5", "x.pgm", offset=0, data=b"good", total=4)
+    cat.put_map_chunk("A", "estate-1/5", "map.json", offset=0, data=body, total=len(body))
+    assert cat.get("estate-1", "5").files[0].name == "x.pgm"

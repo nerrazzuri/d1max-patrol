@@ -104,6 +104,28 @@ void main() {
     expect(find.byKey(const Key('btn-record-start')), findsNothing);
   });
 
+  testWidgets('录包时填了地图号与版本就边走边建；只填一个不发、说清楚', (t) async {
+    final admin = FakeApi('admin');
+    await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: admin, robotId: 'A')));
+    await t.pump();
+    await t.tap(find.byKey(const Key('btn-record-start')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('record-name')), 'yard');
+    await t.enterText(find.byKey(const Key('record-map')), 'estate-1');
+    await t.tap(find.byKey(const Key('record-go')));
+    await t.pumpAndSettle();
+    expect(admin.calls.where((c) => c.startsWith('mapping')), isEmpty);
+    expect(find.textContaining('地图号与版本要一起填'), findsOneWidget);
+    await t.tap(find.byKey(const Key('btn-record-start')));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('record-name')), 'yard');
+    await t.enterText(find.byKey(const Key('record-map')), 'estate-1');
+    await t.enterText(find.byKey(const Key('record-version')), '5');
+    await t.tap(find.byKey(const Key('record-go')));
+    await t.pumpAndSettle();
+    expect(admin.calls, contains('mapping A start yard estate-1:5'));
+  });
+
   testWidgets('狗列表页有「地图」入口', (t) async {
     final api = FakeApi('owner');
     await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, title: '庄园')));

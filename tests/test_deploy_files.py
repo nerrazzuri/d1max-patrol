@@ -1261,3 +1261,28 @@ def test_建图脚本_在ROS系统Python里跑这一版的d1max_loc_build():
                        env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
     assert r.returncode == 0, r.stderr
     assert "--prior-pack" in r.stdout
+
+
+def test_ROS_包装脚本_source_ROS_再执行后面的命令():
+    """W09c2:代理的服务里没有 source ROS(``ros2``、``mola-cli`` 不在 PATH 上,``rmw_zenoh_cpp``
+    也找不到);建图编排起录包、在线建图都经它。"""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from d1max_patrol.app.mapping import ROS_WRAPPER
+    start = DEPLOY / "d1max-ros"
+    assert os.access(start, os.X_OK)
+    ls = subprocess.run(["git", "ls-files", "-s", str(start)], capture_output=True, text=True,
+                        cwd=DEPLOY, check=True).stdout
+    assert ls.startswith("100755"), "git 里要记成可执行"
+    subprocess.run(["sh", "-n", str(start)], check=True)
+    text = start.read_text(encoding="utf-8")
+    assert '. /opt/ros/humble/setup.sh' in text and 'exec "$@"' in text
+    assert ROS_WRAPPER == Path("/opt/d1max/current/deploy/d1max-ros")
+    if not Path("/opt/ros/humble/setup.sh").is_file():
+        return
+    env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp")}   # 像服务里一样干净
+    r = subprocess.run([str(start), "sh", "-c", 'command -v ros2 && echo "$AMENT_PREFIX_PATH"'],
+                       capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 0 and "/opt/ros/humble" in r.stdout, r.stdout + r.stderr

@@ -1000,7 +1000,7 @@ class _Handler(TlsHandlerMixin):
         """地图(W00c5d 第二部分,决策 8:站点是地图的唯一权威)。看:``view``;下发、录包、重建:
         ``manage``(管理员)。命令狗收下就回,做完狗发事件,失败出 ``map_failed`` 告警。"""
         from d1max_contract.errors import ContractError
-        from d1max_contract.maps import parse_map_build, parse_mapping
+        from d1max_contract.maps import mapping_target, parse_map_build, parse_mapping
         from d1max_site.maps import MapError
         cat = self.site.maps
         if cat is None:
@@ -1039,16 +1039,16 @@ class _Handler(TlsHandlerMixin):
                 if len(name) > 40:
                     raise HttpError(400, "包名最多 40 个字符(狗还要加录的时刻、文件名还要加后缀)")
                 kind, payload = "mapping", {"action": action, **({"name": name} if name else {})}
+                target = mapping_target(d)
+                if target is not None:           # W09c2:录包的同时在线建这一版
+                    self._check_new_version(cat, *target)
+                    payload |= {"map_id": target[0], "version": target[1]}
             elif what == "outbox_retry":
                 # 站点改了收件规矩之后,让狗把隔离的文件再传一次(W00c5d 内部评审)。
                 kind, payload = "outbox_retry", {}
             else:
                 bag, map_id, version = parse_map_build(d)
-                if len(map_id) > 40 or len(version) > 16:
-                    raise HttpError(400, "地图号最多 40 个字符、版本最多 16 个(文件名里还要加后缀)")
-                if any(r["map_id"] == map_id and r["version"] == version for r in cat.list()) \
-                        or cat.build_in_flight(map_id, version):
-                    raise HttpError(409, f"{map_id}:{version} 已经有了(或正在建),换个版本号")
+                self._check_new_version(cat, map_id, version)
                 kind, payload = "map_build", {"bag": bag, "map_id": map_id, "version": version}
         except MapError as exc:
             raise HttpError(404, str(exc)) from exc
@@ -1057,6 +1057,15 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {k: v for k, v in payload.items() if k != "files"}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
+
+    @staticmethod
+    def _check_new_version(cat: Any, map_id: str, version: str) -> None:
+        """要狗建的这一版:名字不太长、站点上还没有、没有别的狗正在建。"""
+        if len(map_id) > 40 or len(version) > 16:
+            raise HttpError(400, "地图号最多 40 个字符、版本最多 16 个(文件名里还要加后缀)")
+        if any(r["map_id"] == map_id and r["version"] == version for r in cat.list()) \
+                or cat.build_in_flight(map_id, version):
+            raise HttpError(409, f"{map_id}:{version} 已经有了(或正在建),换个版本号")
 
     def _map_preview(self, map_id: str, version: str, what: str) -> None:
         """建好的图的预览(W00c6h,``view``):``preview`` 是坐标换算 + 这张图这一版上登记的待命点

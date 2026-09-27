@@ -13,9 +13,9 @@ class 假建图:
         self.last_bag = ""
         self.calls = []
 
-    async def start(self, name):
+    async def start(self, name, target=None):
         self.recording, self.last_bag = True, name
-        self.calls.append(("start", name))
+        self.calls.append(("start", name) if target is None else ("start", name, *target))
 
     async def stop(self):
         self.recording = False
@@ -166,3 +166,27 @@ def test_让狗把隔离的文件再传一次(站点):
     _等(lambda: _caps(s) is not None)
     code, d = s.req("POST", "/api/robots/A/outbox_retry", {}, token=alice)
     assert code == 409 and "不支持" in d["error"], "这只仿真狗没有发件箱"
+
+
+def test_边走边建_开始录包带地图号与版本_到狗_版本不许撞(站点):
+    """W09c2:``mapping start`` 带地图号与版本 = 录包的同时在线建这一版;站点像 map_build 一样
+    挡撞版本。"""
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _caps(s) is not None and "mapping" in _caps(s).tasks)
+    code, d = s.req("POST", "/api/robots/A/mapping",
+                    {"action": "start", "name": "yard", "map_id": MAP[0], "version": "12"},
+                    token=alice)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    _等(lambda: ("start", "yard", MAP[0], "12") in s.agent.mapper.calls)
+    assert s.maps.build_in_flight(MAP[0], "12"), "录着、建着(还没收齐):这个版本占住了"
+    code, d = s.req("POST", "/api/robots/A/map_build",
+                    {"bag": "yard", "map_id": MAP[0], "version": "12"}, token=alice)
+    assert code == 409 and "正在建" in d["error"]
+    s.maps.import_dir(_dir(s, "x"), map_id=MAP[0], version="13")
+    for body, want in (({"map_id": MAP[0], "version": "13"}, 409),
+                       ({"map_id": MAP[0]}, 400), ({"map_id": "m" * 41, "version": "1"}, 400),
+                       ({"map_id": MAP[0], "version": "1" * 17}, 400)):
+        code, d = s.req("POST", "/api/robots/A/mapping",
+                        {"action": "start", "name": "yard2", **body}, token=alice)
+        assert code == want, (body, d)

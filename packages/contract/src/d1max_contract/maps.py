@@ -160,3 +160,18 @@ def parse_coverage(d: Any) -> Coverage:
             raise ContractError(f"coverage.json 的点要是两个有限数:{p!r}")
         out.append((float(p[0]), float(p[1])))
     return Coverage(tuple(out))
+
+
+def mapping_target(p: Any) -> tuple[str, str] | None:
+    """``mapping start`` 带的地图号与版本(W09c2:录包的同时在线建这一版);没带是 None(只录包)。
+    两个要么都给、要么都不给;停止不带。"""
+    if not isinstance(p, dict):
+        raise ContractError("mapping: 载荷要是对象")
+    has = ("map_id" in p, "version" in p)
+    if not any(has):
+        return None
+    if p.get("action") != "start":
+        raise ContractError("mapping: 只有开始录包才带地图号与版本")
+    if not all(has):
+        raise ContractError("mapping: 地图号与版本要一起给")
+    return check_name(p.get("map_id"), "地图号"), check_name(p.get("version"), "版本")

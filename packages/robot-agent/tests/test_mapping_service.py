@@ -23,8 +23,12 @@ class 假编排:
         self.bags, self.work = bags, work
         self.fail = ""
         self.made = GEOMETRY_FILES
+        self.live = None
+        self.package_fail = ""
+        self.mode = ""
 
-    async def start_record(self, name):
+    async def start_record(self, name, live_map_id=None):
+        self.live = live_map_id
         (self.bags / name).mkdir(parents=True)
         (self.bags / name / "metadata.yaml").write_text("x")
         (self.bags / name / f"{name}_0.mcap").write_bytes(b"lidar" * 100)
@@ -33,7 +37,15 @@ class 假编排:
     async def stop_record(self):
         return sorted(self.bags.iterdir())[-1]
 
-    async def rebuild(self, bag, map_id):
+    async def package(self, bag, map_id):
+        self.packaged = (bag, map_id)
+        if self.package_fail:
+            from d1max_patrol.app.mapping import MappingError as OrchError
+            raise OrchError(self.package_fail)
+        return await self.rebuild(bag, map_id, _mode="live")
+
+    async def rebuild(self, bag, map_id, _mode="bag"):
+        self.mode = _mode
         if self.fail:
             raise RuntimeError(self.fail)
         out = self.work / map_id
@@ -231,3 +243,44 @@ async def test_建图用的哪种射线_记下来给事件用(svc):
     svc.orch.rebuild = 出图
     await svc.build(svc.last_bag, "estate-1", "9")
     assert svc.last_rays == "synthetic:没给录包"
+
+
+async def test_边走边建_开录带目标_停下之后打包在线建好的_放进本地库(svc):
+    """W09c2:录包的同时在线建;停下之后打包(不在录包上重跑 MOLA),跟重建一样收产物、写清单。"""
+    await svc.start("yard", target=("estate-1", "5"))
+    assert svc.orch.live == "estate-1" and svc.live == ("estate-1", "5")
+    await svc.stop()
+    bag = svc.last_bag
+    assert svc.pending == (bag, "estate-1", "5") and svc.live is None
+    assert not svc.bag_settled(svc.bags_root / bag), "要拿它打包(读逐帧扫描):不许删"
+    ref, mode = await svc.finish()
+    assert mode == "live" and svc.orch.packaged[1] == "estate-1" and svc.orch.mode == "live"
+    assert ref.version == "5" and map_settled(svc.maps_out / "estate-1" / "5")
+    assert svc.pending is None and svc.bag_settled(svc.bags_root / bag)
+
+
+async def test_在线那份打不成_退回从录包建(svc):
+    await svc.start("yard", target=("estate-1", "5"))
+    await svc.stop()
+    svc.orch.package_fail = "建图没出 traj.tum"
+    ref, mode = await svc.finish()
+    assert mode == "bag" and svc.orch.mode == "bag" and ref.version == "5"
+    assert "traj.tum" in svc.last_fallback
+
+
+async def test_退回从录包建也不成_这一版没建成_包留着(svc):
+    await svc.start("yard", target=("estate-1", "5"))
+    await svc.stop()
+    svc.orch.package_fail = "x"
+    svc.orch.fail = "MOLA 起不来"
+    with pytest.raises(RuntimeError):
+        await svc.finish()
+    assert svc.pending is None and not svc.held
+    assert not svc.bag_settled(svc.bags_root / svc.last_bag)
+
+
+async def test_边走边建的版本狗上已经有一份在传_开录就拒(svc):
+    (svc.maps_out / "estate-1" / "5").mkdir(parents=True)
+    with pytest.raises(MappingError, match="已经有一份"):
+        await svc.start("yard", target=("estate-1", "5"))
+    assert not svc.recording

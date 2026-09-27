@@ -250,7 +250,9 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version);
 
   /// 录包：[action] 是 start（要 [name]）/ stop。
-  Future<Map<String, dynamic>> mapping(String robotId, String action, {String name = ''});
+  /// 录包开始、停止（W00c5d）；开始时带地图号与版本 = 录包的同时在线建这一版（W09c2 边走边建）。
+  Future<Map<String, dynamic>> mapping(String robotId, String action,
+      {String name = '', String mapId = '', String version = ''});
 
   /// 拿一个录包在狗上重建一张图。
   Future<Map<String, dynamic>> buildMap(String robotId, String bag, String mapId, String version);
@@ -621,9 +623,15 @@ class SiteClient implements SiteApi {
           <String, dynamic>{'map_id': mapId, 'version': version}));
 
   @override
-  Future<Map<String, dynamic>> mapping(String robotId, String action, {String name = ''}) async =>
+  Future<Map<String, dynamic>> mapping(String robotId, String action,
+          {String name = '', String mapId = '', String version = ''}) async =>
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/mapping',
-          <String, dynamic>{'action': action, if (name.isNotEmpty) 'name': name}));
+          <String, dynamic>{
+            'action': action,
+            if (name.isNotEmpty) 'name': name,
+            if (mapId.isNotEmpty) 'map_id': mapId,
+            if (version.isNotEmpty) 'version': version,
+          }));
 
   @override
   Future<Map<String, dynamic>> buildMap(

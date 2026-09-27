@@ -362,6 +362,10 @@ void main() {
     expect(site.received.last.body, {'map_id': 'estate-1', 'version': '8'});
     await c.mapping('A', 'start', name: 'yard');
     expect(site.received.last.body, {'action': 'start', 'name': 'yard'});
+    await c.mapping('A', 'start', name: 'yard', mapId: 'estate-1', version: '9');
+    expect(site.received.last.body,
+        {'action': 'start', 'name': 'yard', 'map_id': 'estate-1', 'version': '9'},
+        reason: 'W09c2 边走边建：带地图号与版本');
     await c.mapping('A', 'stop');
     expect(site.received.last.body, {'action': 'stop'});
     await c.buildMap('A', 'yard', 'estate-1', '9');

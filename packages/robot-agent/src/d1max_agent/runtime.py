@@ -378,7 +378,7 @@ class AgentRuntime:
         """地图、发布、发件箱命令:收下(空串)或拒绝原因。下载、载入、录包、重建都在后台做,做完发事件。
         **各用各的后台槽**(W00c5d 第二部分内部评审):重建一小时、下载十几分钟都不许挡出警;
         只有换图(载入、切坐标系)那一小段不接自动任务。"""
-        from d1max_contract.maps import MapRef, parse_map_build, parse_mapping
+        from d1max_contract.maps import MapRef, mapping_target, parse_map_build, parse_mapping
         kind = cmd.kind
         if kind not in self._extra_tasks():
             return "unsupported"
@@ -411,6 +411,7 @@ class AgentRuntime:
                 home = _parse_home(cmd.payload.get("home"))
             elif kind == "mapping":
                 action, name = parse_mapping(cmd.payload)
+                target = mapping_target(cmd.payload)
             else:
                 bag, map_id, version = parse_map_build(cmd.payload)
         except ContractError as exc:
@@ -427,12 +428,14 @@ class AgentRuntime:
             if action == "start":
                 if self.mapper.recording:
                     return "busy"
+                if target is not None and self._running(self._build_job):
+                    return "busy"                 # 还在重建 / 打包上一趟:不同时在线建
                 f = self._storage() if self._storage is not None else None
                 if f is not None and f.full():
                     return "storage_full"         # 录包很大:发件箱满了不录
             elif not self.mapper.recording:
                 return "not_recording"
-            self._rec_job = loop.create_task(self._record(action, name, cmd.task_id))
+            self._rec_job = loop.create_task(self._record(action, name, cmd.task_id, target))
             return ""
         if self._running(self._build_job) or self._running(self._rec_job) \
                 or self.mapper.recording:
@@ -442,12 +445,16 @@ class AgentRuntime:
         self._build_job = loop.create_task(self._build(bag, map_id, version, cmd.task_id))
         return ""
 
-    async def _record(self, action: str, name: str, task_id: str) -> None:
+    async def _record(self, action: str, name: str, task_id: str,
+                      target: tuple[str, str] | None = None) -> None:
         """录包的开始、停止(在后台做:起、停 ros2 bag 要十几秒,不能在命令锁里等)。"""
         self._rec_action = action
         try:
             if action == "start":
-                await self.mapper.start(name)
+                if target is None:
+                    await self.mapper.start(name)
+                else:
+                    await self.mapper.start(name, target=target)
                 # 录上了:当场清空、换一趟(W00c6h 内审:不靠每拍看边沿 —— 两拍之间又停又开会漏)。
                 self.trail.reset()
                 self._trail_on = True
@@ -455,6 +462,10 @@ class AgentRuntime:
                 await self.mapper.stop()
             self.events.emit("mapping", {"task_id": task_id, "action": action,
                                          "name": self.mapper.last_bag})
+            if action == "stop" and getattr(self.mapper, "pending", None) is not None:
+                # 边走边建的(W09c2):打包放到重建那个后台槽里(吃 CPU,跟重建一样不挡出警)
+                self._build_job = asyncio.get_running_loop().create_task(
+                    self._finish_live(task_id))
         except Exception as exc:  # noqa: BLE001 - 起不来/停不了:原因发给站点
             log.warning("录包 %s 没成:%s", action, exc)
             self.events.emit("mapping_failed", {"task_id": task_id, "action": action,
@@ -797,6 +808,23 @@ class AgentRuntime:
         先验经本机桥交给定位器(:meth:`_switch_map`)。"""
         if self._locsrv is None:
             await self.hal.load_map(map_id, version, d)
+
+    async def _finish_live(self, task_id: str) -> None:
+        """边走边建的这一版收尾(W09c2):打包在线建好的,不成退回从录包建;发 ``map_built``(带是哪种
+        建法、退回的原因)或 ``map_build_failed``。"""
+        bag, map_id, version = self.mapper.pending
+        base = {"task_id": task_id, "bag": bag, "map_id": map_id, "version": version}
+        try:
+            _, mode = await self.mapper.finish()
+            rays = getattr(self.mapper, "last_rays", "")
+            extra = {"mode": mode, **({"grid_rays": rays} if rays else {})}
+            if self.mapper.last_fallback:
+                extra["fallback"] = self.mapper.last_fallback
+            self.events.emit("map_built", base | extra)
+        except Exception as exc:  # noqa: BLE001 - 建不成:原因发给站点
+            log.warning("边走边建的 %s:%s 没建成:%s", map_id, version, exc)
+            self.events.emit("map_build_failed",
+                             base | {"reason": f"{type(exc).__name__}: {exc}"[:200]})
 
     async def _build(self, bag: str, map_id: str, version: str, task_id: str) -> None:
         base = {"task_id": task_id, "bag": bag, "map_id": map_id, "version": version}

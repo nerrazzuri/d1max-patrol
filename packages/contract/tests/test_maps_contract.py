@@ -79,3 +79,19 @@ def test_哪里有图_解析与离路线多远():
                 {"version": 1, "path": [[0, 1, 2]]}, {"version": 1, "path": [[True, 0]]}):
         with pytest.raises(ContractError):
             parse_coverage(bad)
+
+
+def test_边走边建_开始录包可以带地图号和版本():
+    """W09c2(决策 17):``mapping start`` 带着地图号与版本 = 录包的同时在线建这一版;
+    不带照旧只录包。"""
+    from d1max_contract.maps import mapping_target
+    assert mapping_target({"action": "start", "name": "y", "map_id": "estate-1",
+                           "version": "3"}) == ("estate-1", "3")
+    assert mapping_target({"action": "start", "name": "y"}) is None
+    assert mapping_target({"action": "stop"}) is None
+    for bad in ({"action": "start", "name": "y", "map_id": "estate-1"},
+                {"action": "start", "name": "y", "version": "3"},
+                {"action": "start", "name": "y", "map_id": "../x", "version": "3"},
+                {"action": "stop", "map_id": "estate-1", "version": "3"}):
+        with pytest.raises(ContractError):
+            mapping_target(bad)

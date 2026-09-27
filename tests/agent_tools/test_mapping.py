@@ -52,7 +52,7 @@ class FakeProcs:
         if spec.name == "mapbuild":
             # 真的建图脚本会在 ``--work`` 里落 MOLA 的日志、中间文件。
             work = Path(spec.argv[spec.argv.index("--work") + 1])
-            work.mkdir(parents=True)
+            work.mkdir(parents=True, exist_ok=True)        # 边走边建的:中间目录本来就在
             (work / "mola.log").write_text("建图日志", encoding="utf-8")
         self.started.append(spec)
 
@@ -393,3 +393,88 @@ def test_状态里有相位也有清单(orch):
 def test_日志目录_编排照进程管理器的报(orch, procs):
     """W00c6g:站点要看录包、重建子进程的日志,代理经编排找到日志目录。"""
     assert orch.log_dir == procs.log_dir
+
+
+# ------------------------------------------------------------------ 边走边建(W09c2)
+
+
+def test_录包经_ROS_包装脚本起(orch, cfg, tmp_path):
+    """代理的服务里没有 source ROS:``ros2`` 不在 PATH 上。经 ``deploy/d1max-ros`` 起。"""
+    spec = orch.spec_for_record(tmp_path / "b")
+    assert spec.argv[0] == str(cfg.ros_wrapper) and spec.argv[1:4] == ("ros2", "bag", "record")
+
+
+def test_在线建图的进程_实时域_存盘的环境变量都指向中间目录(orch, cfg):
+    spec = orch.spec_for_live("m1")
+    work = cfg.maps_dir / ".work" / "m1"
+    assert spec.name == "molamap"
+    assert spec.argv[0] == str(cfg.ros_wrapper) and spec.argv[1].endswith("mola-cli")
+    assert spec.argv[2].endswith("lidar_odometry_ros2.yaml")
+    env = spec.env
+    assert env["ROS_DOMAIN_ID"] == "24" and env["RMW_IMPLEMENTATION"] == "rmw_zenoh_cpp"
+    assert env["MOLA_LIDAR_TOPIC"] == "/front_lidar" and env["MOLA_MAPPING_ENABLED"] == "true"
+    assert env["MOLA_WITH_GUI"] == "false" and env["MOLA_USE_FIXED_LIDAR_POSE"] == "true"
+    assert env["MOLA_SIMPLEMAP_OUTPUT"] == str(work / "map.simplemap")
+    assert env["MOLA_TUM_TRAJECTORY_OUTPUT"] == str(work / "traj.tum")
+    assert env["MOLA_SAVE_MM"] == str(work / "raw_prior.mm")
+    assert env["MOLA_GENERATE_SIMPLEMAP"] == "true" and env["MOLA_SAVE_TRAJECTORY"] == "true"
+    assert env["MOLA_LOCAL_MAP_MAX_SIZE"] == "0"
+    assert env["MOLA_STATE_ESTIMATOR_YAML"].endswith("state-estimation-simple.yaml")
+    assert env["MOLA_LIDAR_QOS_RELIABILITY"] == cfg.live_qos
+
+
+async def test_边走边建_录包的同时起在线建图_先清旧的_原点作废(orch, procs, cfg):
+    save_home(cfg.maps_dir, HomePoint(map_id="m1", pose=Pose.from_xy_yaw(1.0, 2.0),
+                                      marked_at_ms=1))
+    old = cfg.maps_dir / ".work" / "m1"
+    old.mkdir(parents=True)
+    (old / "traj.tum").write_text("旧的")
+    (cfg.maps_dir / "m1").mkdir()
+    await orch.start_record("w1", live_map_id="m1")
+    assert [s.name for s in procs.started] == ["bagrecord", "molamap"]
+    assert orch.phase == "recording" and orch.live_map == "m1"
+    assert not (old / "traj.tum").exists() and old.is_dir(), "清了,再建好给 MOLA 写"
+    assert not (cfg.maps_dir / "m1").exists()
+    with pytest.raises(HomeError):
+        load_home(cfg.maps_dir, "m1")
+
+
+async def test_边走边建_停录两个一起停_在线建图给足存盘时间(orch, procs, monkeypatch):
+    grace = {}
+
+    async def fake_stop(name, *, term_grace_s=3.0):
+        grace[name] = term_grace_s
+        procs.stopped.append(name)
+    monkeypatch.setattr(procs, "stop", fake_stop)
+    await orch.start_record("w1", live_map_id="m1")
+    await orch.stop_record()
+    assert set(grace) == {"bagrecord", "molamap"} and grace["molamap"] >= 120
+    assert orch.phase == "idle" and orch.live_map is None
+
+
+async def test_在线建图起不来_录包也收掉_说清楚(orch, procs):
+    procs.start_fails = {"molamap"}
+    with pytest.raises(MappingError, match="molamap"):
+        await orch.start_record("w1", live_map_id="m1")
+    assert procs.running() == [] and orch.phase == "idle"
+
+
+async def test_打包在线建好的_不重跑_MOLA_不清中间目录(orch, procs, cfg, bag):
+    work = cfg.maps_dir / ".work" / "m1"
+    work.mkdir(parents=True)
+    (work / "traj.tum").write_text("在线建的")
+    out = await orch.package(bag, "m1")
+    spec = procs.started[-1]
+    assert spec.name == "mapbuild" and spec.argv[-1] == "--reuse"
+    assert spec.argv[spec.argv.index("--work") + 1] == str(work)
+    assert out == cfg.maps_dir / "m1" and orch.phase == "idle"
+    assert not work.exists(), "打好了:中间文件不留"
+
+
+async def test_打包失败留着中间目录_说日志在哪(orch, procs, cfg, bag):
+    work = cfg.maps_dir / ".work" / "m1"
+    work.mkdir(parents=True)
+    procs.exit_codes["mapbuild"] = 2
+    with pytest.raises(MappingError, match="mapbuild"):
+        await orch.package(bag, "m1")
+    assert work.is_dir() and orch.phase == "idle"

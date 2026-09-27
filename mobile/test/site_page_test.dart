@@ -253,8 +253,9 @@ class FakeApi implements SiteApi {
     return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
   }
   @override
-  Future<Map<String, dynamic>> mapping(String robotId, String action, {String name = ''}) async {
-    calls.add('mapping $robotId $action $name');
+  Future<Map<String, dynamic>> mapping(String robotId, String action,
+      {String name = '', String mapId = '', String version = ''}) async {
+    calls.add('mapping $robotId $action $name${mapId.isEmpty ? '' : ' $mapId:$version'}');
     return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
   }
   @override

@@ -94,6 +94,11 @@ class MappingService:
         self.keeper: Any = None
         #: 上一次建图的栅格用的哪种射线(``build.json`` 的 ``grid.rays``;``synthetic:…`` 是退回了)。
         self.last_rays = ""
+        #: 正在边走边建的(地图号, 版本);停录之后待打包的(包, 地图号, 版本);上一次在线那份
+        #: 打不成、退回从录包建的原因(W09c2)。
+        self.live: tuple[str, str] | None = None
+        self.pending: tuple[str, str, str] | None = None
+        self.last_fallback = ""
         self._cleanup()
 
     @property
@@ -119,22 +124,63 @@ class MappingService:
         age_days = (time.time() - (run / DONE).stat().st_mtime) / 86400
         return age_days >= BAG_KEEP_DAYS
 
-    async def start(self, name: str) -> None:
+    async def start(self, name: str, target: tuple[str, str] | None = None) -> None:
+        """开录。给了 ``target``(地图号, 版本)就同时在线建这一版(W09c2 边走边建)。"""
         if self.recording:
             raise MappingError(f"正在录 {self.last_bag},先停")
+        if self.pending is not None:
+            raise MappingError(f"上一趟边走边建的 {self.pending[1]}:{self.pending[2]} 还在打包")
         full = f"{name}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
         if (self.bags_root / full).exists():
             raise MappingError(f"{full} 这个包已经在了,过一秒再来")
-        await self.orch.start_record(full)
+        if target is not None:
+            if (self.maps_out / target[0] / target[1]).exists():
+                raise MappingError(f"{target[0]}:{target[1]} 狗上已经有一份在传了,换个版本号")
+            await self.orch.start_record(full, live_map_id=target[0])
+        else:
+            await self.orch.start_record(full)
         self.recording = True
         self.last_bag = full
+        self.live = target
 
     async def stop(self) -> None:
+        """停录。边走边建的:记下待打包(:meth:`finish`,调用方丢到后台),包先占住(打包要读它)。"""
         if not self.recording:
             raise MappingError("现在没在录包")
         bag = Path(await self.orch.stop_record())
         self.recording = False
+        if self.live is not None:
+            with self.lock:
+                self.held.add(bag.name)
+            self.pending = (bag.name, *self.live)
+            self.live = None
         (bag / DONE).touch()                      # 录完了:之后才算安定,传完即删
+
+    async def finish(self) -> tuple[MapRef, str]:
+        """把边走边建的这一版收尾:先打包在线建好的(``live``);不成(MOLA 半路没了、存下的不齐……)
+        就退回在录包上从头建(``bag``)。回(图, 哪种)。"""
+        assert self.pending is not None
+        bag, map_id, version = self.pending
+        src = self.bags_root / bag
+        out = self.maps_out / map_id / version
+        try:
+            if out.exists():
+                raise MappingError(f"{map_id}:{version} 狗上已经有一份在传了,换个版本号")
+            try:
+                made, mode = Path(await self.orch.package(src, map_id)), "live"
+                self.last_fallback = ""
+            except Exception as exc:  # noqa: BLE001 - 在线那份打不成:退回从录包建,原因记着
+                self.last_fallback = f"{type(exc).__name__}: {exc}"[:300]
+                log.warning("边走边建的 %s:%s 打包没成(%s),退回从录包建", map_id, version,
+                            self.last_fallback)
+                made, mode = Path(await self.orch.rebuild(src, map_id)), "bag"
+            ref = await asyncio.to_thread(self._settle, made, map_id, version, out)
+            (src / BUILT).touch()
+            return ref, mode
+        finally:
+            self.pending = None
+            with self.lock:
+                self.held.discard(bag)
 
     def _settle(self, made: Path, map_id: str, version: str, out: Path) -> MapRef:
         """建出来的文件挪进发件箱、放进本地库(出错只记一笔,激活时从站点下)、最后写清单。"""
