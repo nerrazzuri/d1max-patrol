@@ -167,6 +167,23 @@ async def test_赖着不走的会被强杀(mgr):
     assert mgr.running() == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows 上没有 SIGINT 给进程组")
+async def test_停的信号可以指定_在线建图的_MOLA_只认_SIGINT(mgr, tmp_path):
+    """W09c2 真实链路上踩到的:``mola-cli`` 收到 SIGTERM 只让 rclcpp 关了、主循环不退,300 s 宽限
+    耗光被强杀,一个文件都没存;SIGINT 才存盘退出。"""
+    import signal
+    import time
+    done = tmp_path / "saved"
+    code = ("import signal,sys,time;signal.signal(signal.SIGTERM, lambda *a: None);"
+            f"signal.signal(signal.SIGINT, lambda *a: (open({str(done)!r},'w').write('1'), "
+            "sys.exit(0)));print('ARMED', flush=True);time.sleep(60)")
+    await mgr.start(ProcSpec("mola", _py(code), ready_pattern="ARMED", ready_timeout_s=10,
+                             stop_signal=signal.SIGINT))
+    t0 = time.monotonic()
+    await mgr.stop("mola", term_grace_s=20)
+    assert done.exists() and time.monotonic() - t0 < 5, "SIGINT 当场就退了、存了盘"
+
+
 async def test_停一个不认识的名字不会炸(mgr):
     await mgr.stop("从来没起过")
 

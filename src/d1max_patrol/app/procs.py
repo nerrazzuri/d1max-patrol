@@ -66,6 +66,9 @@ class ProcSpec:
     ready_pattern: str = ""
     ready_timeout_s: float = 30.0
     cwd: Path | None = None
+    #: 停的时候先发哪个信号(宽限期过了照样强杀)。在线建图的 ``mola-cli`` 只认 SIGINT:SIGTERM 只让
+    #: rclcpp 关了、主循环不退,不存盘(W09c2 真实链路上踩到)。
+    stop_signal: int = signal.SIGTERM
 
 
 @dataclass
@@ -194,7 +197,7 @@ class ProcManager:
     async def _kill(self, entry: _Proc, *, term_grace_s: float) -> None:
         proc = entry.proc
         if proc.returncode is None:
-            self._signal(proc, signal.SIGTERM)
+            self._signal(proc, entry.spec.stop_signal)
             with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
                 await asyncio.wait_for(proc.wait(), term_grace_s)
         if proc.returncode is None:
@@ -214,7 +217,7 @@ class ProcManager:
         """
         if os.name == "nt":
             with contextlib.suppress(ProcessLookupError, OSError):
-                if sig == signal.SIGTERM:
+                if sig != getattr(signal, "SIGKILL", None):
                     proc.terminate()
                 else:
                     proc.kill()

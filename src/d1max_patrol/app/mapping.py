@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import signal
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -106,6 +107,8 @@ class MappingOrchestrator:
 
     RECORD = "bagrecord"
     BUILD = "mapbuild"
+    #: 打包边走边建的:单独一个名字、单独一份日志 —— 打不成退回从录包建时,不盖掉打不成的原因。
+    PACK = "mappack"
     LIVE = "molamap"
 
     def __init__(self, procs: ProcManager, cfg: MappingConfig) -> None:
@@ -255,6 +258,7 @@ class MappingOrchestrator:
         self._map_id = map_id
         self._error = ""
         out, work = self._out(map_id)
+        name = self.PACK if reuse else self.BUILD
         started = False
         try:
             # 打包按文件名收:上一次同名的产物、中间目录里旧的点云混进来,这一版就是拼出来的。
@@ -264,10 +268,10 @@ class MappingOrchestrator:
                 shutil.rmtree(d, ignore_errors=True)
             spec = self.spec_for_build(bag, map_id)
             if reuse:
-                spec = replace(spec, argv=(*spec.argv, "--reuse"))
+                spec = replace(spec, name=name, argv=(*spec.argv, "--reuse"))
             await self._start(spec)
             started = True
-            await self._wait(self.BUILD, REBUILD_TIMEOUT_S)
+            await self._wait(name, REBUILD_TIMEOUT_S)
             # 建成了:中间文件(simplemap、点云)不留;没建成的留着 MOLA 的日志查原因。
             shutil.rmtree(work.parent, ignore_errors=True)
         except Exception as exc:
@@ -276,7 +280,7 @@ class MappingOrchestrator:
         finally:
             # 超时的那条路上进程还挂着:不收掉,下一次建图撞名字直接失败,现场看不出为什么。
             if started:
-                await self._procs.stop(self.BUILD)
+                await self._procs.stop(name)
             self._phase = "idle"
         return out
 
@@ -337,6 +341,7 @@ class MappingOrchestrator:
                 "MOLA_TUM_TRAJECTORY_OUTPUT": str(work / "traj.tum"),
                 "MOLA_SAVE_MM": str(work / "raw_prior.mm"), "MOLA_LOCAL_MAP_MAX_SIZE": "0"},
             ready_pattern="",
+            stop_signal=signal.SIGINT,          # SIGTERM 它不存盘(见 ProcSpec.stop_signal)
         )
 
     def spec_for_build(self, bag: Path, map_id: str) -> ProcSpec:

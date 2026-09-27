@@ -49,7 +49,7 @@ class FakeProcs:
         if spec.name == "bagrecord":
             # 真的 ``ros2 bag record`` 会把 ``-o`` 那个目录建出来,列表要靠它。
             Path(spec.argv[spec.argv.index("-o") + 1]).mkdir(parents=True)
-        if spec.name == "mapbuild":
+        if spec.name in ("mapbuild", "mappack"):
             # 真的建图脚本会在 ``--work`` 里落 MOLA 的日志、中间文件。
             work = Path(spec.argv[spec.argv.index("--work") + 1])
             work.mkdir(parents=True, exist_ok=True)        # 边走边建的:中间目录本来就在
@@ -421,6 +421,8 @@ def test_在线建图的进程_实时域_存盘的环境变量都指向中间目
     assert env["MOLA_LOCAL_MAP_MAX_SIZE"] == "0"
     assert env["MOLA_STATE_ESTIMATOR_YAML"].endswith("state-estimation-simple.yaml")
     assert env["MOLA_LIDAR_QOS_RELIABILITY"] == cfg.live_qos
+    import signal
+    assert spec.stop_signal == signal.SIGINT, "SIGTERM 它不存盘(真实链路上踩到)"
 
 
 async def test_边走边建_录包的同时起在线建图_先清旧的_原点作废(orch, procs, cfg):
@@ -465,7 +467,7 @@ async def test_打包在线建好的_不重跑_MOLA_不清中间目录(orch, pro
     (work / "traj.tum").write_text("在线建的")
     out = await orch.package(bag, "m1")
     spec = procs.started[-1]
-    assert spec.name == "mapbuild" and spec.argv[-1] == "--reuse"
+    assert spec.name == "mappack" and spec.argv[-1] == "--reuse", "自己一份日志:退回重建不盖掉它"
     assert spec.argv[spec.argv.index("--work") + 1] == str(work)
     assert out == cfg.maps_dir / "m1" and orch.phase == "idle"
     assert not work.exists(), "打好了:中间文件不留"
@@ -474,7 +476,7 @@ async def test_打包在线建好的_不重跑_MOLA_不清中间目录(orch, pro
 async def test_打包失败留着中间目录_说日志在哪(orch, procs, cfg, bag):
     work = cfg.maps_dir / ".work" / "m1"
     work.mkdir(parents=True)
-    procs.exit_codes["mapbuild"] = 2
-    with pytest.raises(MappingError, match="mapbuild"):
+    procs.exit_codes["mappack"] = 2
+    with pytest.raises(MappingError, match="mappack"):
         await orch.package(bag, "m1")
     assert work.is_dir() and orch.phase == "idle"
