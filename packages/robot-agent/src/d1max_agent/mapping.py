@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -89,6 +90,8 @@ class MappingService:
         self.lock = threading.Lock()
         #: 盘紧不紧(主程序接到发件箱的盘况上):紧了传完的包不再留着备重建。
         self.pressure: Callable[[], bool] = lambda: False
+        #: 本地地图库(``MapKeeper``,主程序接上):建好的版本放进去,激活时不用从站点下回来。
+        self.keeper: Any = None
         self._cleanup()
 
     @property
@@ -131,6 +134,36 @@ class MappingService:
         self.recording = False
         (bag / DONE).touch()                      # 录完了:之后才算安定,传完即删
 
+    def _settle(self, made: Path, map_id: str, version: str, out: Path) -> MapRef:
+        """建出来的文件挪进发件箱、放进本地库(出错只记一笔,激活时从站点下)、最后写清单。"""
+        missing = [n for n in GEOMETRY_FILES if not (made / n).is_file()]
+        if missing:
+            raise MappingError(f"重建跑完了,缺 {', '.join(missing)}")
+        # 先在点开头的目录里攒齐(上传器不看点开头的路径),再整个挪过去。
+        tmp = self.maps_out / ".building" / f"{map_id}@{version}"
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        files = []
+        for n in GEOMETRY_FILES:
+            shutil.move(made / n, tmp / n)                # 同一块盘上就是改名
+            files.append(MapFile(name=n, size=(tmp / n).stat().st_size,
+                                 sha256=_sha256(tmp / n)))
+        ref = MapRef(map_id=map_id, version=version, files=tuple(files))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(tmp, out)
+        # 在写清单**之前**放进本地库:有了清单发件箱就会传、传完就删。
+        if self.keeper is not None:
+            try:
+                self.keeper.adopt(out, ref)
+            except Exception:
+                log.warning("建好的 %s:%s 放不进本地库(激活时从站点下)", map_id, version,
+                            exc_info=True)
+        # 文件都就位了才写清单:站点(和发件箱)见到清单才算这张图完整。
+        m = out / (MANIFEST + ".tmp")
+        m.write_text(json.dumps(ref.to_wire(), ensure_ascii=False), encoding="utf-8")
+        os.replace(m, out / MANIFEST)
+        return ref
+
     async def build(self, bag: str, map_id: str, version: str) -> MapRef:
         src = self.bags_root / bag
         with self.lock:                                   # 先占住,再查在不在:发件箱删包也拿这把锁
@@ -142,25 +175,8 @@ class MappingService:
             if out.exists():
                 raise MappingError(f"{map_id}:{version} 狗上已经有一份在传了,换个版本号")
             made = Path(await self.orch.rebuild(src, map_id))   # 编排起建图前清掉上一次的产物
-            missing = [n for n in GEOMETRY_FILES if not (made / n).is_file()]
-            if missing:
-                raise MappingError(f"重建跑完了,缺 {', '.join(missing)}")
-            # 先在点开头的目录里攒齐(上传器不看点开头的路径),再整个挪过去。
-            tmp = self.maps_out / ".building" / f"{map_id}@{version}"
-            shutil.rmtree(tmp, ignore_errors=True)
-            tmp.mkdir(parents=True)
-            files = []
-            for n in GEOMETRY_FILES:
-                shutil.move(made / n, tmp / n)            # 同一块盘上就是改名
-                files.append(MapFile(name=n, size=(tmp / n).stat().st_size,
-                                     sha256=_sha256(tmp / n)))
-            ref = MapRef(map_id=map_id, version=version, files=tuple(files))
-            out.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(tmp, out)
-            # 文件都就位了才写清单:站点(和发件箱)见到清单才算这张图完整。
-            m = out / (MANIFEST + ".tmp")
-            m.write_text(json.dumps(ref.to_wire(), ensure_ascii=False), encoding="utf-8")
-            os.replace(m, out / MANIFEST)
+            # 挪文件、算几百 MB 的哈希放线程里:不卡住代理(心跳、命令)。
+            ref = await asyncio.to_thread(self._settle, made, map_id, version, out)
             (src / BUILT).touch()                         # 重建过了:这个包传完就可以删
             return ref
         finally:

@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from d1max_agent.maps import MapInstallError, MapKeeper
+from d1max_agent.maps import FetchRefused, MapInstallError, MapKeeper, download_deadline_s
 from d1max_contract.maps import MapRef
 
 
@@ -22,24 +22,33 @@ class 站点:
     def __init__(self):
         self.files: dict[tuple[str, str, str], bytes] = {}
         self.fail = False
+        self.calls: list[tuple[str, int]] = []
+        #: 文件名 → 这个文件前几次下到第几个字节就断
+        self.drop: dict[str, list[int]] = {}
 
     def add(self, map_id, version, files):
         for n, d in files.items():
             self.files[(map_id, version, n)] = d
         return _ref(map_id, version, files)
 
-    def fetch(self, map_id, version, name):
+    def fetch(self, map_id, version, name, offset=0):
+        self.calls.append((name, offset))
         if self.fail:
             raise ConnectionError("站点连不上")
         data = self.files[(map_id, version, name)]
-        for i in range(0, len(data), 3):
+        cut = self.drop.get(name, [])
+        stop = cut.pop(0) if cut else None
+        for i in range(offset, len(data), 3):
+            if stop is not None and i >= stop:
+                raise ConnectionResetError("WiFi 断了")
             yield data[i:i + 3]
 
 
 @pytest.fixture
 def k(tmp_path):
     s = 站点()
-    return MapKeeper(tmp_path / "maps", fetch=s.fetch), s
+    s.slept = []
+    return MapKeeper(tmp_path / "maps", fetch=s.fetch, sleep=s.slept.append), s
 
 
 def test_装好_提交_重启还认得_别的图删掉(k, tmp_path):
@@ -93,3 +102,86 @@ def test_载不进去就扔掉_正在用的缺了文件就当没有(k, tmp_path)
     assert keeper.active() is None
     (tmp_path / "maps" / "active.json").write_text(json.dumps({"map_id": "../x"}))
     assert keeper.active() is None
+
+
+def test_下载断了从断点接着下_哈希照样核(k):
+    """W09c 决定 8:几百 MB 的先验走 WiFi,断一下就从 0 重下是永远下不完的。"""
+    keeper, site = k
+    big = bytes(range(256)) * 4
+    a = site.add("m", "1", {"prior.mm": big, "floor.yaml": b"y"})
+    site.drop["prior.mm"] = [300, 600]                   # 断两次
+    d = keeper.install(a)
+    assert (d / "prior.mm").read_bytes() == big
+    assert [c for c in site.calls if c[0] == "prior.mm"] == [
+        ("prior.mm", 0), ("prior.mm", 300), ("prior.mm", 600)]
+    assert len(site.slept) == 2
+
+
+def test_一直连不上_试几次就放弃_不挂满期限(k):
+    keeper, site = k
+    a = site.add("m", "1", {"x.pgm": b"x"})
+    site.fail = True
+    with pytest.raises(MapInstallError, match="连不上"):
+        keeper.install(a)
+    assert 3 <= len(site.calls) <= 8 and site.slept == sorted(site.slept), "退避,不是死循环"
+
+
+def test_站点说没有这个_不重试(tmp_path):
+    calls = []
+
+    def fetch(*a, **k):
+        calls.append(a)
+        raise FetchRefused("404 没有这个")
+        yield b""
+
+    keeper = MapKeeper(tmp_path / "maps", fetch=fetch, sleep=lambda s: None)
+    with pytest.raises(MapInstallError, match="没有这个"):
+        keeper.install(_ref("m", "1", {"x.pgm": b"x"}))
+    assert len(calls) == 1
+
+
+def test_期限按大小算_至少半小时():
+    assert download_deadline_s(10) == 1800.0
+    assert download_deadline_s(530 * 10**6) == pytest.approx(530 * 8, rel=0.01), "按 1 Mbit/s"
+
+
+def test_建好的图放进本地库_硬链接不多占盘_发件箱删了还在(k, tmp_path):
+    """W09c 决定 7:建图的狗不再从站点下回来。"""
+    import os
+    keeper, site = k
+    out = tmp_path / "outbox" / "m" / "1"
+    out.mkdir(parents=True)
+    files = {"prior.mm": b"prior", "floor.pgm": b"P5"}
+    for n, d in files.items():
+        (out / n).write_bytes(d)
+    a = _ref("m", "1", files)
+    d = keeper.adopt(out, a)
+    assert os.stat(d / "prior.mm").st_ino == os.stat(out / "prior.mm").st_ino
+    for n in files:
+        (out / n).unlink()                                # 发件箱传完就删
+    assert keeper.install(a) == d and site.calls == [], "本地有、核得上:不下载"
+    assert (d / "prior.mm").read_bytes() == b"prior"
+
+
+def test_本地那份核不上就照样下载(k, tmp_path):
+    keeper, site = k
+    a = site.add("m", "1", {"prior.mm": b"prior"})
+    out = tmp_path / "outbox"
+    out.mkdir()
+    (out / "prior.mm").write_bytes(b"prior")
+    d = keeper.adopt(out, a)
+    (d / "prior.mm").write_bytes(b"PRIOR")                # 同样大小,内容坏了
+    keeper.install(a)
+    assert site.calls == [("prior.mm", 0)] and (d / "prior.mm").read_bytes() == b"prior"
+
+
+def test_正在用的那张不被收养的覆盖(k, tmp_path):
+    keeper, site = k
+    a = site.add("m", "1", {"x.pgm": b"good"})
+    keeper.install(a)
+    keeper.commit(a)
+    out = tmp_path / "outbox"
+    out.mkdir()
+    (out / "x.pgm").write_bytes(b"good")
+    assert keeper.adopt(out, a) == keeper.dir_of(a)
+    assert keeper.active() == a

@@ -196,3 +196,22 @@ async def test_盘紧了传完的包不留着备重建(svc):
     svc.held.add(bag.name)
     assert not svc.bag_settled(bag), "正在拿它重建:照样不删"
     assert storage_pressure(None) is False
+
+
+async def test_建好的图放进本地库_库那头出错不算没建成(svc):
+    """W09c 决定 7:建图的狗激活这一版时不用从站点下回来。"""
+    got = []
+
+    class 库:
+        def adopt(self, src, ref):
+            got.append((sorted(p.name for p in src.iterdir()), ref))   # 这时还没有清单:发件箱不动它
+            if len(got) > 1:
+                raise OSError("盘满了")
+
+    svc.keeper = 库()
+    await svc.start("yard")
+    await svc.stop()
+    ref = await svc.build(svc.last_bag, "estate-1", "9")
+    assert got == [(sorted(GEOMETRY_FILES), ref)]
+    ref2 = await svc.build(svc.last_bag, "estate-1", "10")
+    assert ref2.version == "10" and (svc.maps_out / "estate-1" / "10" / "map.json").is_file()

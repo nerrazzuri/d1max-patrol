@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import ssl
 import threading
 from collections.abc import Callable
@@ -39,6 +40,9 @@ log = logging.getLogger(__name__)
 DEFAULT_PORT = 8444
 #: 一条请求最多等多久(秒)。
 REQUEST_TIMEOUT_S = 60.0
+
+#: 只认一段:``bytes=起-`` 或 ``bytes=起-止``(狗续传只用前一种)。
+_RANGE = re.compile(r"^bytes=(\d{1,15})-(\d{0,15})$")
 
 
 def server_context(*, cert: Path, key: Path, ca: Path, crl: Path | None) -> ssl.SSLContext:
@@ -154,14 +158,35 @@ class _Handler(TlsHandlerMixin):
         return self._stream(path)
 
     def _stream(self, path) -> None:
+        """整个文件,或 ``Range: bytes=起-[止]`` 那一段(W09c 决定 8:狗断了从断点接着下)。"""
         size = path.stat().st_size
-        self.send_response(200)
+        start, end = 0, size - 1
+        rng = self.headers.get("Range")
+        if rng is not None:
+            m = _RANGE.match(rng.strip())
+            if m is None or int(m.group(1)) >= size or \
+                    (m.group(2) and int(m.group(2)) < int(m.group(1))):
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            start = int(m.group(1))
+            end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        else:
+            self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Accept-Ranges", "bytes")
         self.end_headers()
+        left = end - start + 1
         with open(path, "rb") as fh:
-            while chunk := fh.read(1 << 16):
+            fh.seek(start)
+            while left > 0 and (chunk := fh.read(min(1 << 16, left))):
                 self.wfile.write(chunk)
+                left -= len(chunk)
 
     def do_POST(self) -> None:
         kinds = {WIRE_PATH: "runs", "/maps" + WIRE_PATH: "maps", "/bags" + WIRE_PATH: "bags"}

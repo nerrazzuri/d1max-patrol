@@ -418,3 +418,32 @@ def test_每个来源地址的连接数有上限(tmp_path):
         hold.set()
         srv.shutdown()
         srv.server_close()
+
+
+def test_狗下载图能从断点接着下_Range(站点, ca, tmp_path):
+    """W09c 决定 8:几百 MB 的先验走 WiFi,断一下就从 0 重下是永远下不完的。"""
+    import urllib.error
+    import urllib.request
+
+    from d1max_agent.maps import FetchRefused, https_fetch
+    src = tmp_path / "src"
+    src.mkdir()
+    data = os.urandom(70000)
+    (src / "prior.mm").write_bytes(data)
+    站点.maps.import_dir(src, map_id="estate-1", version="3")
+    fetch = https_fetch(站点.intake.url, _ctx(ca, ca.a))
+    assert b"".join(fetch("estate-1", "3", "prior.mm")) == data
+    assert b"".join(fetch("estate-1", "3", "prior.mm", offset=65536)) == data[65536:]
+    url = 站点.intake.url + "/maps/estate-1/3/prior.mm"
+    for rng, want in (("bytes=10-19", data[10:20]), ("bytes=69990-", data[69990:])):
+        req = urllib.request.Request(url, headers={"Range": rng})
+        with urllib.request.urlopen(req, context=_ctx(ca, ca.a), timeout=5) as r:
+            assert r.status == 206 and r.read() == want
+            assert r.headers["Content-Range"].endswith(f"/{len(data)}")
+    for bad in ("bytes=70000-", "bytes=9-3", "items=1-"):
+        req = urllib.request.Request(url, headers={"Range": bad})
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req, context=_ctx(ca, ca.a), timeout=5)
+        assert e.value.code == 416, bad
+    with pytest.raises(FetchRefused):
+        list(fetch("estate-1", "3", "prior.mm", offset=70000))
