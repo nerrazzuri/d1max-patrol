@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -108,3 +109,52 @@ def parse_map_build(p: Any) -> tuple[str, str, str]:
         raise ContractError("map_build: 载荷要是对象")
     return (check_name(p.get("bag"), "包名"), check_name(p.get("map_id"), "地图号"),
             check_name(p.get("version"), "版本"))
+
+
+#: 巡检点、goto 的目标离建图时走过的路超过这么远就拒(W09c 决定 5:那里的先验是远处扫到的,
+#: 定位不可靠)。
+COVERAGE_RADIUS_M = 5.0
+#: ``coverage.json`` 最多几个点(每 0.5 m 一点,100 km 的路)。
+MAX_COVERAGE_POINTS = 200_000
+
+
+class Coverage:
+    """「哪里有图」:建图时走过的路(地图平面上的点)。按 :data:`COVERAGE_RADIUS_M` 见方分桶,近处查桶,
+    查不到再全扫(只在要拒的时候,提示里要说离多远)。"""
+
+    def __init__(self, points: tuple[tuple[float, float], ...]) -> None:
+        self.points = points
+        self._cell = COVERAGE_RADIUS_M
+        self._buckets: dict[tuple[int, int], list[tuple[float, float]]] = {}
+        for p in points:
+            self._buckets.setdefault(self._key(*p), []).append(p)
+
+    def _key(self, x: float, y: float) -> tuple[int, int]:
+        return math.floor(x / self._cell), math.floor(y / self._cell)
+
+    def gap(self, x: float, y: float) -> float:
+        """``(x, y)`` 离走过的路多远(米);一个点都没有是无穷大。"""
+        kx, ky = self._key(x, y)
+        near = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                for p in self._buckets.get((kx + dx, ky + dy), ())]
+        best = min((math.hypot(px - x, py - y) for px, py in near), default=math.inf)
+        if best <= self._cell:
+            return best
+        return min((math.hypot(px - x, py - y) for px, py in self.points), default=math.inf)
+
+
+def parse_coverage(d: Any) -> Coverage:
+    """``coverage.json``:``{"version": 1, "step_m": 0.5, "path": [[x, y], ...]}``。"""
+    if not isinstance(d, dict) or d.get("version") != 1 or not isinstance(d.get("path"), list):
+        raise ContractError("coverage.json 要是 {version: 1, path: [[x, y], ...]}")
+    path = d["path"]
+    if len(path) > MAX_COVERAGE_POINTS:
+        raise ContractError(f"coverage.json 点太多({len(path)})")
+    out = []
+    for p in path:
+        if not isinstance(p, list) or len(p) != 2 or not all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                for v in p):
+            raise ContractError(f"coverage.json 的点要是两个有限数:{p!r}")
+        out.append((float(p[0]), float(p[1])))
+    return Coverage(tuple(out))

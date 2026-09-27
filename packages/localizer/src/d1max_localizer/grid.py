@@ -11,8 +11,12 @@
 - 地面高度 = 雷达以下那部分点的高度直方图的峰;障碍 = 离地 :data:`FLOOR_CLEAR_M` 到
   :data:`WALL_TOP_M` 那一层(从狗身子以上起,狗自己的腿、近处的回波不进来);
 - 离建图路线 :data:`TRAJ_MARGIN_M` 以外的障碍点不要(远处玻璃的反射);
-- 从路线上的点往四周打射线,碰到墙停;格子的「被穿过次数」与「障碍点数」按 log-odds 判占据 /
-  可通行(人、玻璃反射这种一会儿有一会儿没的,穿过的次数多就判可通行);
+- 格子的「被穿过次数」与「障碍点数」按 log-odds 判占据 / 可通行(人、玻璃反射这种一会儿有一会儿没的,
+  穿过的次数多就判可通行)。「被穿过」**有逐帧扫描就用真射线**(每一帧从雷达到这一帧打到的障碍点;
+  :func:`render` 的 ``scans``):跟着狗走的人,他站过的地方在别的时刻被射线穿过,清得掉(W09c1 在
+  newdog2 上踩到:人连成一道「墙」,走过的路被判成墙、另一侧全成了「没扫到」)。没有逐帧扫描就退回
+  原型的模拟射线(从路线上的点往四周打,碰到墙停 —— 人那道「墙」清不掉);
+- 狗身中心走过的路(``body_path``)两边 :data:`FOOTPRINT_M` 以内一律可通行:狗的身子在那儿待过;
 - 可通行区做一次开运算(去掉透过没扫到的玻璃漏出去的细扇形);只留贴着可通行区的障碍(去掉悬在
   外面的鬼影)。
 
@@ -21,6 +25,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +40,14 @@ TRAJ_MARGIN_M = 12.0
 MAX_RANGE_M = 12.0
 RAYS = 540
 POSE_STRIDE_CELLS = 6
+#: 真射线:每帧按方位分这么多格,每格只打最近的那个障碍点(它就是这一帧看到的空地的边)。
+SCAN_BINS = 1440
+#: 真射线在打到的点之前这么远就停(那一格归「打到」,不归「穿过」)。
+RAY_STOP_SHORT_M = 0.1
+#: 离雷达这么近的点不打射线(狗自己的身子)。
+MIN_RANGE_M = 0.3
+#: 狗身中心线两边这么宽一律可通行。
+FOOTPRINT_M = 0.25
 FREE, UNKNOWN, OCCUPIED = 254, 205, 0
 
 
@@ -124,10 +137,53 @@ def _raytrace(walls: np.ndarray, poses: np.ndarray, max_cells: int) -> np.ndarra
     return passes
 
 
+def _raytrace_scans(scans: Iterable[tuple[np.ndarray, np.ndarray]], frames: Frames,
+                    lo: np.ndarray, shape: tuple[int, int], res: float, band: tuple[float, float],
+                    max_range: float) -> tuple[np.ndarray, int]:
+    """真射线:每一帧从雷达到这一帧障碍层里的点(每个方位格最近的那个),路过的格子各记一次。
+    回(每格被穿过的次数, 用了几帧)。"""
+    H, W = shape
+    passes = np.zeros(H * W, np.int32)
+    step = res / 2
+    used = 0
+    for origin, pts in scans:
+        o = level(np.asarray(origin, float).reshape(1, 3), frames)[0, :2]
+        q = level(np.asarray(pts, float), frames)
+        q = q[(q[:, 2] > band[0]) & (q[:, 2] < band[1]), :2] - o
+        r = np.hypot(q[:, 0], q[:, 1])
+        ok = (r > MIN_RANGE_M) & (r < max_range)
+        q, r = q[ok], r[ok]
+        used += 1
+        if not len(r):
+            continue
+        b = ((np.arctan2(q[:, 1], q[:, 0]) + np.pi) / (2 * np.pi) * SCAN_BINS).astype(int) \
+            % SCAN_BINS
+        order = np.lexsort((r, b))
+        b, r, q = b[order], r[order], q[order]
+        first = np.r_[True, b[1:] != b[:-1]]
+        q, r = q[first], r[first]
+        n = np.maximum(((r - RAY_STOP_SHORT_M) / step).astype(int), 1)
+        ray = np.repeat(np.arange(len(r)), n)
+        k = np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)
+        xy = o + q[ray] * (k * step / r[ray])[:, None]
+        c = ((xy - lo) / res).astype(int)
+        inside = (c[:, 0] >= 0) & (c[:, 0] < W) & (c[:, 1] >= 0) & (c[:, 1] < H)
+        cell = c[inside, 1] * W + c[inside, 0]
+        # 一条射线过一格只算一次(步长半格,同一格会落两次)
+        key = np.unique(ray[inside].astype(np.int64) * (H * W) + cell)
+        np.add.at(passes, key % (H * W), 1)
+    return passes.reshape(H, W), used
+
+
 def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: float = RES_M,
            floor_clear: float = FLOOR_CLEAR_M, wall_top: float = WALL_TOP_M,
-           traj_margin: float = TRAJ_MARGIN_M, max_range: float = MAX_RANGE_M) -> Grid:
-    """点云(MOLA 系,(N,3))+ 建图时雷达的位置(MOLA 系,(M,3))→ 栅格(地图平面系)。"""
+           traj_margin: float = TRAJ_MARGIN_M, max_range: float = MAX_RANGE_M,
+           scans: Iterable[tuple[np.ndarray, np.ndarray]] | None = None,
+           body_path: np.ndarray | None = None) -> Grid:
+    """点云(MOLA 系,(N,3))+ 建图时雷达的位置(MOLA 系,(M,3))→ 栅格(地图平面系)。
+
+    ``scans``:逐帧扫描 ``(雷达位置, 这一帧的点)``(都在 MOLA 系;给了就用真射线,见模块说明);
+    ``body_path``:狗身中心走过的路(地图平面,(K,2)),两边 :data:`FOOTPRINT_M` 一律可通行。"""
     q = level(np.asarray(points, float), frames)
     t = level(np.asarray(sensor_traj, float), frames)
     floor = _floor_height(q[:, 2], t[:, 2])
@@ -142,15 +198,27 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
     occ = np.zeros((H, W), np.int32)
     g = ((w - lo) / res).astype(int)
     np.add.at(occ, (g[:, 1], g[:, 0]), 1)
-    pc = ((t[:, :2] - lo) / res).astype(int)
-    key = (pc[:, 0] // POSE_STRIDE_CELLS) * 100000 + (pc[:, 1] // POSE_STRIDE_CELLS)
-    _, idx = np.unique(key, return_index=True)
-    poses = pc[np.sort(idx)]
-    passes = _raytrace(occ >= 3, poses, int(max_range / res))
+    if scans is not None:
+        passes, _ = _raytrace_scans(scans, frames, lo, (H, W), res,
+                                    (floor + floor_clear, floor + wall_top), max_range)
+    else:
+        pc = ((t[:, :2] - lo) / res).astype(int)
+        key = (pc[:, 0] // POSE_STRIDE_CELLS) * 100000 + (pc[:, 1] // POSE_STRIDE_CELLS)
+        _, idx = np.unique(key, return_index=True)
+        poses = pc[np.sort(idx)]
+        passes = _raytrace(occ >= 3, poses, int(max_range / res))
     ratio = occ / np.maximum(occ + passes, 1)
     occ_m = (occ >= 5) & (ratio > 0.25)
     free_m = (passes >= 1) & ~occ_m
     free_m = _dilate(_erode(free_m, 2), 2)                  # 开运算:去掉细扇形
+    if body_path is not None and len(body_path):            # 狗的身子待过的地方
+        bc = ((np.asarray(body_path, float)[:, :2] - lo) / res).astype(int)
+        bc = bc[(bc[:, 0] >= 0) & (bc[:, 0] < W) & (bc[:, 1] >= 0) & (bc[:, 1] < H)]
+        body = np.zeros((H, W), bool)
+        body[bc[:, 1], bc[:, 0]] = True
+        body = _dilate(body, int(round(FOOTPRINT_M / res)))
+        free_m |= body
+        occ_m &= ~body
     occ_m &= _dilate(free_m, int(0.5 / res))                # 只留贴着可通行区的障碍
     img = np.full((H, W), UNKNOWN, np.uint8)
     img[free_m] = FREE

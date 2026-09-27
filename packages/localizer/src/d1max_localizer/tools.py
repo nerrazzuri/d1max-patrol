@@ -85,7 +85,8 @@ def _build(a: argparse.Namespace) -> int:
     work = a.work or a.out.with_name(a.out.name + ".work")
     timings = {} if a.reuse else build.run_mapping(a.bag, work, lidar_topic=a.lidar_topic)
     files = build.package(work, a.out, prior_pack=build.PriorPack.parse(a.prior_pack),
-                          source=f"bag:{a.bag.name}", timings=timings)
+                          source=f"bag:{a.bag.name}", timings=timings, bag=a.bag,
+                          lidar_topic=a.lidar_topic)
     print(json.dumps(json.loads((a.out / "build.json").read_text()), ensure_ascii=False,
                      indent=2))
     print("文件:", ", ".join(files))

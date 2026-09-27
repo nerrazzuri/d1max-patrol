@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import threading
@@ -20,7 +21,16 @@ from pathlib import Path
 from typing import Any
 
 from d1max_contract.errors import ContractError
-from d1max_contract.maps import MANIFEST, MapFile, MapRef, check_name
+from d1max_contract.maps import (
+    COVERAGE,
+    COVERAGE_RADIUS_M,
+    MANIFEST,
+    Coverage,
+    MapFile,
+    MapRef,
+    check_name,
+    parse_coverage,
+)
 from d1max_site.evidence import ChunkWriter, PathRefused, Stored, safe_join
 
 log = logging.getLogger(__name__)
@@ -69,6 +79,8 @@ class MapCatalog:
         #: 栅格预览(W00c6h):(地图号, 版本) → (PNG, 坐标换算)。一版登记了就不变,渲染一次缓存着。
         self._previews: dict[tuple[str, str], tuple[bytes, dict[str, Any]]] = {}
         self._preview_lock = threading.Lock()
+        #: 「哪里有图」(W09c 决定 5):(地图号, 版本) → (走过的路, 可通行判定)或 None(老版本不查)。
+        self._reaches: dict[tuple[str, str], Any] = {}
         #: 渲染一次只做一张(纯 Python,吃 CPU 和内存);同一版几个人一起点,后来的等着拿缓存。
         self._render_lock = threading.Lock()
 
@@ -242,6 +254,64 @@ class MapCatalog:
         except mp.PreviewError as exc:
             raise mp.PreviewError(f"{image}:{exc}") from exc
         return png, info | {"source": yamls[0]}
+
+    # ------------------------------------------------------------ 哪里有图(W09c 决定 5)
+
+    def reach_problem(self, map_id: str, version: str,
+                      points: list[tuple[str, float, float]]) -> str:
+        """这些点(名字, x, y)在这一版图上去得去不得:离建图时走过的路超过
+        :data:`COVERAGE_RADIUS_M`、或者不在规划栅格的可通行格子上,回一句给人看的原因;都行回 ``""``。
+        没有 ``coverage.json`` 的老版本、站点不认识的版本不查。"""
+        reach = self._reach(map_id, version)
+        if reach is None:
+            return ""
+        cov, free = reach
+        for name, x, y in points:
+            gap = cov.gap(x, y)
+            if gap > COVERAGE_RADIUS_M:
+                return (f"{name} 离建图时走过的地方 {gap:.1f} m(超过 {COVERAGE_RADIUS_M:g} m),"
+                        "那里定位不可靠:先把那里建进图")
+            if not free(x, y):
+                return f"{name} 在图上不是可通行的地方(墙、障碍或没扫到)"
+        return ""
+
+    def _reach(self, map_id: str, version: str) -> tuple[Coverage, Callable[[float, float], bool]
+                                                         ] | None:
+        key = (map_id, version)
+        with self._preview_lock:
+            if key in self._reaches:
+                return self._reaches[key]
+        try:
+            ref = self.get(check_name(map_id, "地图号"), check_name(version, "版本"))
+        except (ContractError, MapError):
+            return None                                   # 站点不认识:不挡
+        names = {f.name for f in ref.files}
+        got = None
+        if COVERAGE in names:
+            from d1max_site import map_preview as mp
+            d = self.root / map_id / version
+            try:
+                cov = parse_coverage(json.loads((d / COVERAGE).read_text("utf-8")))
+                meta = mp.parse_map_yaml((d / "floor.yaml").read_text("utf-8"))
+                w, h, px = mp.parse_pgm((d / Path(meta["image"]).name).read_bytes())
+            except (OSError, ValueError, ContractError, mp.PreviewError) as exc:
+                raise MapError(f"{map_id}:{version} 的 coverage.json / 栅格读不了:{exc}") from exc
+            ox, oy = meta["origin"]
+            res = meta["resolution"]
+            # map_server 的判法:占据概率 = (255 - 灰度) / 255(negate 反过来),低于 free_thresh 才算空
+            thr = meta["free_thresh"]
+            neg = meta["negate"]
+
+            def free(x: float, y: float) -> bool:
+                c, r = math.floor((x - ox) / res), h - 1 - math.floor((y - oy) / res)
+                if not (0 <= c < w and 0 <= r < h):
+                    return False
+                v = px[r * w + c]
+                return (v if neg else 255 - v) / 255.0 < thr
+            got = (cov, free)
+        with self._preview_lock:
+            self._reaches[key] = got
+        return got
 
     # ------------------------------------------------------------ 登记
 

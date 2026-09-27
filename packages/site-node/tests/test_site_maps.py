@@ -136,3 +136,35 @@ def test_文件传了一半又重传_记下的哈希作废(cat):
         {"name": "x.pgm", "size": 4, "sha256": hashlib.sha256(b"good").hexdigest()}]}).encode()
     with pytest.raises(PathRefused):
         cat.put_map_chunk("A", "estate-1/9", "map.json", offset=0, data=body, total=len(body))
+
+
+def _floor(d, rows, *, origin=(0.0, 0.0), res=1.0):
+    """从上往下的行:``.`` 可通行、``#`` 墙、``?`` 没扫到。"""
+    v = {".": 254, "#": 0, "?": 205}
+    h, w = len(rows), len(rows[0])
+    (d / "floor.pgm").write_bytes(f"P5\n{w} {h}\n255\n".encode()
+                                  + bytes(v[c] for r in rows for c in r))
+    (d / "floor.yaml").write_text(f"image: floor.pgm\nresolution: {res}\n"
+                                  f"origin: [{origin[0]}, {origin[1]}, 0.0]\nnegate: 0\n"
+                                  "occupied_thresh: 0.65\nfree_thresh: 0.196\nmode: trinary\n")
+
+
+def test_哪里有图_离走过的路太远或不在可通行格子上就说清楚_老版本不查(cat, tmp_path):
+    """W09c 决定 5。栅格 20×3 格(1 m 一格),原点 (-1, -1);建图时沿 y=0 从 x=0 走到 x=3。"""
+    src = _files(tmp_path / "v1")
+    _floor(src, ["...................?",
+                 "......#.............",
+                 "...................."], origin=(-1.0, -1.0))
+    (src / "coverage.json").write_text(json.dumps(
+        {"version": 1, "step_m": 0.5, "path": [[0.5 * i, 0.0] for i in range(7)]}))
+    cat.import_dir(src, map_id="yard", version="1")
+    ok = cat.reach_problem("yard", "1", [("门口", 1.0, 0.0), ("远一点", 7.5, 0.5)])
+    assert ok == ""
+    far = cat.reach_problem("yard", "1", [("门口", 1.0, 0.0), ("仓库", 11.0, 0.0)])
+    assert "仓库" in far and "8.0 m" in far and "先把那里建进图" in far
+    assert "墙" in cat.reach_problem("yard", "1", [("柱子", 5.5, 0.5)])
+    assert "墙" in cat.reach_problem("yard", "1", [("图外", 3.0, 5.0)])
+    old = _files(tmp_path / "v0", **{"yard.pgm": b"P5\n1 1\n255\n\x00", "yard.yaml": b"x"})
+    cat.import_dir(old, map_id="yard", version="0")
+    assert cat.reach_problem("yard", "0", [("随便", 999.0, 0.0)]) == "", "老版本没有 coverage.json"
+    assert cat.reach_problem("nope", "1", [("随便", 0.0, 0.0)]) == "", "站点不认识的版本:不挡"

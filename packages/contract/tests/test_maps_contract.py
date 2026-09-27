@@ -57,3 +57,25 @@ def test_地图版本的几何文件_名字合法_不超数():
                               "coverage.json", "build.json")
     assert COVERAGE in GEOMETRY_FILES and MANIFEST not in GEOMETRY_FILES
     assert all(NAME_RE.match(n) for n in GEOMETRY_FILES) and len(GEOMETRY_FILES) < MAX_FILES
+
+
+def test_哪里有图_解析与离路线多远():
+    """W09c 决定 5:建图时走过的路(地图平面上每 0.5 m 一点)。"""
+    import math
+
+    from d1max_contract.maps import COVERAGE_RADIUS_M, Coverage, parse_coverage
+    assert COVERAGE_RADIUS_M == 5.0
+    cov = parse_coverage({"version": 1, "step_m": 0.5,
+                          "path": [[0.5 * i, 0.0] for i in range(41)] + [[100.0, 100.0]]})
+    assert isinstance(cov, Coverage) and len(cov.points) == 42
+    assert cov.gap(3.0, 0.0) == 0.0
+    assert cov.gap(3.0, 4.0) == pytest.approx(4.0)
+    assert cov.gap(-3.0, -4.0) == pytest.approx(5.0)
+    assert cov.gap(20.0 + 30.0, 0.0) == pytest.approx(30.0), "远的也要报准:提示里要说离多远"
+    assert cov.gap(100.0, 97.0) == pytest.approx(3.0)
+    assert math.isinf(parse_coverage({"version": 1, "path": []}).gap(0, 0))
+    for bad in (None, [], {"version": 2, "path": []}, {"version": 1},
+                {"version": 1, "path": [[0, "x"]]}, {"version": 1, "path": [[0, float("nan")]]},
+                {"version": 1, "path": [[0, 1, 2]]}, {"version": 1, "path": [[True, 0]]}):
+        with pytest.raises(ContractError):
+            parse_coverage(bad)

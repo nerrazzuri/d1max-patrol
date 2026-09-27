@@ -404,3 +404,39 @@ async def test_命令入账失败_记账也回滚(台):
     with pytest.raises(Exception, match="命令写不进去"):
         await t.site.patrol("A", m, issued_by="alice", before_send=记账)
     assert not t.site.db.query("SELECT 1 FROM schedule_state")
+
+
+async def test_图外的点_goto和巡检发之前就拒_按狗加载的那一版查(台):
+    """W09c 决定 5:离建图时走过的路太远、或者不在可通行格子上的点,定位不可靠,不派。"""
+    t = 台
+    asked = []
+
+    class 图库:
+        def reach_problem(self, map_id, version, points):
+            asked.append((map_id, version, points))
+            return "仓库 离建图时走过的地方 8.0 m" if any(n == "仓库" for n, *_ in points) \
+                else ""
+
+    t.site.maps = 图库()
+    await t.run(3)
+    r = await t.send(t.site.goto("A", target(1.0, 2.0), 0.8, issued_by="alice"))
+    assert r["ack"]["result"] == "accepted"
+    assert asked[-1] == ("estate-1", "7", [("目标点", 1.0, 2.0)])
+
+    def pt(x):
+        return {"position": {"x": x, "y": 0}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
+    m = {"mission": "m", "map_id": "estate-1", "policy": {},
+         "waypoints": [{"name": "门口", "pose": pt(1.0)}, {"name": "仓库", "pose": pt(11.0)}]}
+    n = len(t.site.commands("A"))
+    with pytest.raises(DispatchRefused, match="仓库.*8.0 m"):
+        await t.site.patrol("A", m, issued_by="alice")
+    assert asked[-1][:2] == ("estate-1", "7") and [p[0] for p in asked[-1][2]] == ["门口", "仓库"]
+    assert len(t.site.commands("A")) == n, "拒了不记账"
+
+    class 读不了:
+        def reach_problem(self, *a):
+            from d1max_site.maps import MapError
+            raise MapError("coverage.json 读不了")
+    t.site.maps = 读不了()
+    with pytest.raises(DispatchRefused, match="读不了"):
+        await t.site.goto("A", target(1.0), 0.8, issued_by="alice")

@@ -367,6 +367,7 @@ class Server:
         from d1max_site.maps import MapCatalog
         from d1max_site.releases import ReleaseCatalog
         self.maps = MapCatalog(home, self.db, now_ms=wall_ms)
+        self.dispatcher.maps = self.maps           # 派单前查点在不在「有图」的地方(W09c)
         self.releases = ReleaseCatalog(home, self.db, now_ms=wall_ms)
         # 判读、备份、接收口在别的线程里:告警要跳回事件循环去报(告警簿只许在循环里改)。
         from d1max_site.alert_store import LoopAlerts

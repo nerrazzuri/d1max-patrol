@@ -83,3 +83,57 @@ def test_写出来是_map_server_的格式(tmp_path):
     ox, oy = (float(v) for v in y.split("origin: [")[1].split("]")[0].split(",")[:2])
     assert (round(ox, 3), round(oy, 3)) == (round(g.origin[0], 3), round(g.origin[1], 3))
     assert -0.5 < ox < 0.0 and -0.5 < oy < 0.0, "屋角在原点附近"
+
+
+def _walls_and_person(frames):
+    """屋子的墙 + 一个跟着狗走的人(狗后面 0.5 m、右边 0.3 m,离地 0.8–1.6 m)。回:合起来的点云、
+    雷达走过的位置、逐帧扫描 [(雷达位置, 这一帧的点)](都在 MOLA 系)、狗身中心走过的路(地图平面)。"""
+    L = np.asarray(frames.level_matrix())
+    walls = []
+    for h in np.linspace(0.8, 1.6, 9):
+        xs, ys = np.arange(0, 10, 0.02), np.arange(0, 6, 0.02)
+        walls += [np.c_[xs, np.zeros_like(xs), np.full_like(xs, h)],
+                  np.c_[xs, np.full_like(xs, 6.0), np.full_like(xs, h)],
+                  np.c_[np.zeros_like(ys), ys, np.full_like(ys, h)],
+                  np.c_[np.full_like(ys, 10.0), ys, np.full_like(ys, h)]]
+    walls = np.vstack(walls)
+    rng = np.random.default_rng(3)
+    floor = np.c_[rng.uniform([0, 0], [10, 6], (20000, 2)), np.zeros(20000)]
+    xs = np.linspace(1, 9, 80)
+    sensor = np.c_[xs, np.full(80, 3.0), np.full(80, 0.6)]
+    scans, people = [], []
+    for x in xs:
+        a = np.linspace(0, 2 * np.pi, 24, endpoint=False)
+        person = np.c_[x - 0.5 + 0.15 * np.cos(a), 2.7 + 0.15 * np.sin(a), np.full(24, 1.2)]
+        person = np.vstack([person + [0, 0, dz] for dz in (-0.4, 0.0, 0.4)])
+        people.append(person)
+        scans.append((np.array([x, 3.0, 0.6]) @ L, np.vstack([walls, person]) @ L))
+    P = np.vstack([walls, floor, *people])
+    return P @ L, sensor @ L, scans, np.c_[xs - 0.4, np.full(80, 3.0)]
+
+
+def test_跟着狗走的人_真射线清得掉_走过的路和右边都是可通行_墙还在():
+    """W09c1 真数据(newdog2)上踩到的:人跟着狗走,他站过的地方连成一道「墙」,模拟射线碰到就停、永远
+    清不掉,走过的路被判成墙、右半边全成了「没扫到」。逐帧扫描的真射线:那一刻人不在的地方射线穿过去。"""
+    f = _frames()
+    P, T, scans, body = _walls_and_person(f)
+    g = G.render(P, T, f, scans=scans, body_path=body)
+    at = lambda x, y: g.image[g.cell_of(x, y)]            # noqa: E731
+    for x in (2.0, 4.5, 7.0):
+        assert at(x - 0.5, 2.7) == G.FREE, "人站过的地方"
+        assert at(x, 1.5) == G.FREE, "人右边那半间屋"
+        assert at(x - 0.4, 3.0) == G.FREE, "狗身中心走过的路"
+    for x, y in ((5.0, 0.0), (5.0, 6.0), (0.0, 3.0), (10.0, 3.0)):
+        assert at(x, y) == G.OCCUPIED, (x, y)
+    old = G.render(P, T, f)                               # 模拟射线:人那道「墙」还在
+    assert old.image[old.cell_of(4.0, 2.7)] != G.FREE
+
+
+def test_狗身子占过的格子一律可通行():
+    f = _frames()
+    P, T, scans, body = _walls_and_person(f)
+    pillar = np.c_[np.full(50, 4.6), np.full(50, 3.0), np.linspace(0.8, 1.6, 50)] @ \
+        np.asarray(f.level_matrix())                    # 正好在狗走过的路上(比如当时开着的门)
+    g = G.render(np.vstack([P, pillar]), T, f, scans=scans[:1], body_path=body)
+    assert g.image[g.cell_of(4.6, 3.0)] == G.FREE
+    assert g.image[g.cell_of(4.6, 3.0 + 0.2)] == G.FREE, "身宽:中心线两边 0.25 m"

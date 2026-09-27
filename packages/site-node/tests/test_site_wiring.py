@@ -39,3 +39,8 @@ def test_没回待命点接到告警上(srv):
 
 def test_排程这一轮没跑接到告警上(srv):
     assert srv.scheduler.on_outcome == srv.alert_sources.on_schedule_outcome
+
+
+def test_派单前查哪里有图_接的是站点的地图目录(srv):
+    """W09c 决定 5。"""
+    assert srv.dispatcher.maps is srv.maps and srv.maps is not None

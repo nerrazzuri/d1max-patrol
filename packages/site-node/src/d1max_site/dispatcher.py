@@ -146,6 +146,8 @@ class Dispatcher:
         self.ack_timeout_s = ack_timeout_s
         self.clients: dict[str, DispatchClient] = {}
         self.feed = Feed()
+        #: 站点的地图目录(``MapCatalog``,主程序接上):派单前查点在不在「有图」的地方(W09c 决定 5)。
+        self.maps: Any = None
         #: 新事件(去重之后)的回调:排程执行器靠它回写这一趟的结果。
         self._event_cbs: list[Callable[[str, Event], None]] = []
         #: 状态、遥测的回调(W00c5a:站点的告警来源靠它们)。
@@ -398,9 +400,10 @@ class Dispatcher:
         c = self._client_for(robot_id)
         self._check_dispatchable(robot_id, c, "goto")
         try:
-            MapPose.from_wire(target)
+            pose = MapPose.from_wire(target)
         except ContractError as exc:
             raise DispatchRefused(f"target 不成形: {exc}") from exc
+        self._check_reach(pose.map_id, pose.map_version, [("目标点", pose.x, pose.y)])
         payload: dict[str, Any] = {"target": target}
         if max_speed_mps is not None:
             payload["max_speed_mps"] = max_speed_mps
@@ -427,11 +430,26 @@ class Dispatcher:
         if len(m.waypoints) > MAX_PATROL_WAYPOINTS:
             raise DispatchRefused(f"一趟最多 {MAX_PATROL_WAYPOINTS} 个航点,这趟 "
                                   f"{len(m.waypoints)} 个")
+        self._check_reach(m.map_id, loaded[1], [(w.name, w.pose.position.x, w.pose.position.y)
+                                                for w in m.waypoints])
         payload = {"mission": m.to_wire(), "map_version": loaded[1]}
         if len(json.dumps(payload).encode()) > MAX_PATROL_BYTES:
             raise DispatchRefused(f"任务定义超过 {MAX_PATROL_BYTES} 字节")
         return await self._send(c, robot_id, "patrol", payload, issued_by=issued_by,
                                 priority=priority, task_id=task_id, before_send=before_send)
+
+    def _check_reach(self, map_id: str, version: str,
+                     points: list[tuple[str, float, float]]) -> None:
+        """点离建图时走过的路太远、或者不在可通行格子上:不派(W09c 决定 5)。"""
+        if self.maps is None:
+            return
+        from d1max_site.maps import MapError
+        try:
+            why = self.maps.reach_problem(map_id, version, points)
+        except MapError as exc:
+            raise DispatchRefused(str(exc)) from exc
+        if why:
+            raise DispatchRefused(why)
 
     async def abort(self, robot_id: str, task_id: str, *, issued_by: str) -> dict[str, Any]:
         """abort 只要求登记有效:不在线也发(QoS 1 持久会话,重连后补投)。"""

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -157,3 +158,86 @@ def test_MOLA_建图的命令(tmp_path):
 def test_打包出的文件表就是契约里的那张():
     from d1max_contract.maps import GEOMETRY_FILES
     assert B.FILES == GEOMETRY_FILES
+
+
+def test_有录包就用逐帧扫描打真射线_读不了退回模拟射线_写进build_json(tmp_path):
+    work, pts = _scene(tmp_path, False)
+    got = []
+
+    def 读扫描(bag, traj, topic):
+        got.append((bag, len(traj), topic))
+        _, p, _ = traj[0]
+        yield np.array(p), pts[::10]
+
+    B.package(work, tmp_path / "out", run=假MOLA(pts), bag=tmp_path / "bag", read_scans=读扫描)
+    assert got == [(tmp_path / "bag", 120, "/front_lidar")]
+    assert json.loads((tmp_path / "out" / "build.json").read_text())["grid"]["rays"] == "scans:1"
+
+    def 没有ROS(bag, traj, topic):
+        raise ImportError("No module named 'rosbag2_py'")
+        yield
+
+    B.package(work, tmp_path / "out2", run=假MOLA(pts), bag=tmp_path / "bag", read_scans=没有ROS)
+    rays = json.loads((tmp_path / "out2" / "build.json").read_text())["grid"]["rays"]
+    assert rays.startswith("synthetic") and "rosbag2_py" in rays
+    B.package(work, tmp_path / "out3", run=假MOLA(pts))
+    assert json.loads((tmp_path / "out3" / "build.json").read_text())["grid"]["rays"] == \
+        "synthetic:没给录包"
+
+
+def test_点云消息按字段偏移取xyz_丢掉NaN():
+    names = ("x", "y", "z", "intensity", "ring")
+    dt = np.dtype({"names": list(names), "formats": ["<f4", "<f4", "<f4", "<f4", "<u2"],
+                   "offsets": [0, 4, 8, 16, 20], "itemsize": 32})
+    a = np.zeros(3, dt)
+    a["x"], a["y"], a["z"] = [1, 2, np.nan], [3, 4, 5], [6, 7, 8]
+    msg = SimpleNamespace(fields=[SimpleNamespace(name=n, offset=o)
+                                  for n, o in zip(names, (0, 4, 8, 16, 20), strict=True)],
+                          point_step=32, data=a.tobytes(), is_bigendian=False)
+    assert B.cloud_xyz(msg).tolist() == [[1, 3, 6], [2, 4, 7]]
+
+
+@pytest.mark.skipif(not Path("/opt/ros/humble/setup.sh").is_file(), reason="要 ROS")
+def test_从真的mcap录包读逐帧扫描_按轨迹时刻配位姿(tmp_path):
+    """开发机上有 ROS:写一个三帧的 mcap 录包,在 ROS 的系统 Python 里读(狗上也是这么跑的)。"""
+    import os
+    import subprocess
+    import textwrap
+    repo = Path(__file__).resolve().parents[3]
+    script = textwrap.dedent(f"""
+        import numpy as np, rosbag2_py
+        from pathlib import Path
+        from rclpy.serialization import serialize_message
+        from sensor_msgs.msg import PointCloud2, PointField
+        from d1max_localizer import build as B
+        bag = Path({str(tmp_path / 'bag')!r})
+        w = rosbag2_py.SequentialWriter()
+        w.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id="mcap"),
+               rosbag2_py.ConverterOptions("cdr", "cdr"))
+        w.create_topic(rosbag2_py.TopicMetadata(name="/front_lidar",
+                       type="sensor_msgs/msg/PointCloud2", serialization_format="cdr"))
+        for i in range(6):
+            m = PointCloud2()
+            m.header.stamp.sec, m.header.stamp.nanosec = 100 + i, 0
+            m.header.frame_id = "rslidar_head"
+            m.fields = [PointField(name=n, offset=4 * k, datatype=7, count=1)
+                        for k, n in enumerate("xyz")]
+            m.point_step, m.height, m.width = 12, 1, 1
+            m.data = np.array([1.0, 0.0, 0.0], "<f4").tobytes()
+            w.write("/front_lidar", serialize_message(m), (100 + i) * 10**9)
+        del w
+        traj = [(100.0 + i, (float(i), 0.0, 0.0), (0.0, 0.0, 0.7071068, 0.7071068))
+                for i in range(6)]
+        got = list(B.bag_scans(bag, traj, "/front_lidar", every=2))
+        print([(o.tolist(), (p.round(3) + 0.0).tolist()) for o, p in got])  # -0.0 → 0.0
+    """)
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["OURS"] = f"{repo}/packages/localizer/src:{repo}/packages/contract/src"
+    r = subprocess.run(["bash", "-c", "set +u; . /opt/ros/humble/setup.bash; "
+                        'PYTHONPATH="$PYTHONPATH:$OURS" /usr/bin/python3 -'],
+                       input=script, capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 0, r.stderr
+    # 每 2 帧取 1 帧;绕 Z 转 90°:雷达系的 x 朝地图的 y
+    assert r.stdout.strip() == ("[([0.0, 0.0, 0.0], [[0.0, 1.0, 0.0]]), "
+                                "([2.0, 0.0, 0.0], [[2.0, 1.0, 0.0]]), "
+                                "([4.0, 0.0, 0.0], [[4.0, 1.0, 0.0]])]"), r.stdout

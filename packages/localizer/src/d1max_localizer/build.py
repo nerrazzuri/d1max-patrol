@@ -6,6 +6,8 @@
   要在雷达下面):光看轨迹分不出上下,新狗 C40011 的雷达就是 X 朝下装的,按「X 朝上」标出来的平面是
   镜像的,转向会反(2026-09-27 画 newdog2 的栅格时发现);
 - ``floor.pgm`` + ``floor.yaml``:按 ``frames.json`` 的平面画的规划栅格(:mod:`d1max_localizer.grid`);
+  有录包就从里面逐帧读扫描打真射线(:func:`bag_scans`,跟着狗走的人清得掉),读不了退回模拟射线,
+  ``build.json`` 的 ``grid.rays`` 写着用的哪种;
 - ``coverage.json``:「哪里有图」—— 建图时走过的路(地图平面上每 :data:`COVERAGE_STEP_M` 一点);
 - ``build.json``:怎么建的(来源、参数、各步耗时、标定说明)。
 
@@ -23,7 +25,7 @@ import os
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,13 @@ FRONT_LIDAR_IN_BASE = (0.4043, 0.0)
 SENSOR_UP_HINT = (1.0, 0.0, 0.0)
 SENSOR_FORWARD_HINT = (0.0, 0.0, 1.0)
 COVERAGE_STEP_M = 0.5
+#: 真射线每几帧扫描取一帧、每帧每几个点取一个(newdog2:676 帧,读包 11 s、打射线 10 s)。
+SCAN_EVERY = 3
+SCAN_POINT_STRIDE = 4
+#: 扫描的时刻跟轨迹上最近那一帧差多少以内才配得上。
+SCAN_MATCH_S = 0.05
+#: 逐帧扫描只认这个话题:MOLA 跟的就是它的坐标系(rslidar_head),点乘轨迹的位姿就进了地图。
+SCAN_TOPIC = "/front_lidar"
 FILES = GEOMETRY_FILES
 Runner = Callable[..., Any]
 
@@ -96,10 +105,11 @@ def run_mapping(bag: Path, work: Path, *, lidar_topic: str = "/front_lidar",
 
 def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
             sensor_in_base: tuple[float, float] = FRONT_LIDAR_IN_BASE, source: str = "",
-            run: Runner = subprocess.run, timings: dict[str, float] | None = None
-            ) -> list[str]:
+            run: Runner = subprocess.run, timings: dict[str, float] | None = None,
+            bag: Path | None = None, lidar_topic: str = SCAN_TOPIC,
+            read_scans: Callable[..., Iterator[Any]] | None = None) -> list[str]:
     """``work`` 里的 ``raw_prior.mm``、``traj.tum``、``map.simplemap`` → ``out`` 里的版本文件。回
-    文件名。"""
+    文件名。给了 ``bag``(建图的那个录包)就从里面逐帧读扫描打真射线。"""
     prior_pack = prior_pack or PriorPack()
     import numpy as np
 
@@ -121,7 +131,9 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     frames = frames.with_sensor_in_base(*sensor_in_base)
     frames.save(out / "frames.json")
     t0 = time.monotonic()
-    g = grid.render(points, sensor, frames)
+    body = np.array([frames.to_map2d(p, q)[:2] for _, p, q in traj])
+    g, rays = _render(points, sensor, frames, body, traj, bag, lidar_topic,
+                      read_scans or bag_scans)
     grid.write(g, out / "floor")
     timings["grid_s"] = round(time.monotonic() - t0, 1)
     t0 = time.monotonic()
@@ -133,9 +145,87 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     (out / "build.json").write_text(json.dumps({
         "version": 1, "source": source, "builder": "mola-lidar-odometry", "prior_pack":
         prior_pack.label(), "frames": why, "frames_count": len(traj),
-        "grid": {"res": g.res, "size": list(g.image.shape[::-1]), "origin": list(g.origin)},
+        "grid": {"res": g.res, "size": list(g.image.shape[::-1]), "origin": list(g.origin),
+                 "rays": rays},
         "timings_s": timings}, ensure_ascii=False, indent=2) + "\n")
     return list(FILES)
+
+
+def _render(points: Any, sensor: Any, frames: Frames, body: Any, traj: Sequence[Any],
+            bag: Path | None, topic: str, read_scans: Callable[..., Iterator[Any]]
+            ) -> tuple[Any, str]:
+    """画栅格:有录包用逐帧扫描的真射线,读不了(没有 ROS、话题不对、包坏了)退回模拟射线。回
+    (栅格, 用的哪种)。"""
+    from d1max_localizer import grid
+
+    if bag is None:
+        why = "没给录包"
+    elif topic != SCAN_TOPIC:
+        why = f"话题 {topic} 不是 {SCAN_TOPIC}"
+    else:
+        used = [0]
+
+        def counted() -> Iterator[Any]:
+            for s in read_scans(bag, traj, topic):
+                used[0] += 1
+                yield s
+        try:
+            g = grid.render(points, sensor, frames, scans=counted(), body_path=body)
+        except Exception as exc:               # noqa: BLE001 - 读不了扫描就退回,原因写进 build.json
+            why = f"读不了逐帧扫描:{type(exc).__name__}: {exc}"[:300]
+        else:
+            if used[0]:
+                return g, f"scans:{used[0]}"
+            why = "录包里没有配得上轨迹的扫描"
+    return grid.render(points, sensor, frames, body_path=body), f"synthetic:{why}"
+
+
+def cloud_xyz(msg: Any) -> Any:
+    """``sensor_msgs/PointCloud2`` → (N,3) 的 x、y、z(按字段偏移取,别的字段类型不管),丢掉 NaN。"""
+    import numpy as np
+
+    off = {f.name: f.offset for f in msg.fields}
+    order = ">" if getattr(msg, "is_bigendian", False) else "<"
+    dt = np.dtype({"names": ["x", "y", "z"], "formats": [order + "f4"] * 3,
+                   "offsets": [off["x"], off["y"], off["z"]], "itemsize": msg.point_step})
+    a = np.frombuffer(bytes(msg.data), dtype=dt)
+    xyz = np.stack([a["x"], a["y"], a["z"]], 1).astype(float)
+    return xyz[np.isfinite(xyz).all(1)]
+
+
+def bag_scans(bag: Path, traj: Sequence[Any], topic: str = SCAN_TOPIC, *,
+              every: int = SCAN_EVERY) -> Iterator[tuple[Any, Any]]:
+    """从录包逐帧读扫描(每 ``every`` 帧取一帧),按时刻配上轨迹里的位姿,回 ``(雷达位置, 这一帧的点)``
+    (MOLA 系)。要 ROS 的系统 Python(``rosbag2_py``)。"""
+    import numpy as np
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    from sensor_msgs.msg import PointCloud2
+
+    from d1max_localizer.frames import quat_to_mat
+
+    stamps = np.array([t for t, _, _ in traj])
+    storage = "mcap" if any(Path(bag).glob("*.mcap")) else "sqlite3"
+    r = rosbag2_py.SequentialReader()
+    r.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id=storage),
+           rosbag2_py.ConverterOptions("", ""))
+    r.set_filter(rosbag2_py.StorageFilter(topics=[topic]))
+    i = -1
+    while r.has_next():
+        _, raw, _ = r.read_next()
+        i += 1
+        if i % every:
+            continue
+        m = deserialize_message(raw, PointCloud2)
+        st = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
+        k = int(np.clip(np.searchsorted(stamps, st), 1, len(stamps) - 1))
+        k = k - 1 if abs(stamps[k - 1] - st) <= abs(stamps[k] - st) else k
+        if abs(stamps[k] - st) > SCAN_MATCH_S:
+            continue
+        _, p, q = traj[k]
+        R = np.array(quat_to_mat(q))
+        xyz = cloud_xyz(m)[::SCAN_POINT_STRIDE]
+        yield np.array(p, float), xyz @ R.T + np.array(p, float)
 
 
 def orient(points: Any, traj: Sequence[Any]) -> tuple[Frames, str]:
