@@ -466,3 +466,19 @@ async def test_钟差不大照派(台):
                                             task_state=None, loc_quality=1.0))
     r = await t.send(t.site.goto("A", target(1.0), 0.8, issued_by="alice"))
     assert r["ack"]["result"] == "accepted"
+
+
+async def test_值守汇总的钟差按一段遥测估_一条憋久了的不拉偏(台, tmp_path):
+    from d1max_site.alert_store import AlertDesk
+    from d1max_site.watch import watch_summary
+    t = 台
+    await t.run(2)
+    for _ in range(5):                                   # 狗快 3 s
+        t.site._on_telemetry("A", Telemetry(stamp=t.clock.ms + 3000, pose=None, battery_pct=80,
+                                            task_state=None, loc_quality=1.0))
+    t.site._on_telemetry("A", Telemetry(stamp=t.clock.ms - 8000, pose=None, battery_pct=80,
+                                        task_state=None, loc_quality=1.0))   # 在 broker 里憋了 11 s
+    desk = AlertDesk(t.db, now_ms=t.clock, publish=lambda x: None)
+    s = watch_summary(t.site, desk, now_ms=t.clock.ms)
+    [r] = [x for x in s["robots"] if x["robot_id"] == "A"]
+    assert r["clock_skew_s"] == pytest.approx(3.0, abs=0.2)

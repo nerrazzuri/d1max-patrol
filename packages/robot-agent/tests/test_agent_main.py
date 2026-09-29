@@ -412,6 +412,9 @@ def test_证书还没生效连不上_说是狗的钟可能不对():
     wrapped.__cause__ = e
     hint = clock_hint(wrapped, now_ms=1_772_841_600_000)          # 2026-03-07
     assert "钟" in hint and "2026-03-07" in hint and "W09d" in hint
+    e9 = ssl.SSLCertVerificationError(1, "证书校验没过")      # 按错误码认,不靠英文消息
+    e9.verify_code = 9
+    assert "钟" in clock_hint(e9, now_ms=1_772_841_600_000)
     e2 = ssl.SSLCertVerificationError(1, "certificate has expired")
     e2.verify_code = 10
     assert "钟" in clock_hint(e2, now_ms=1_772_841_600_000)

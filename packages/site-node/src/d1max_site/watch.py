@@ -45,14 +45,16 @@ def watch_summary(dispatcher: Dispatcher, desk: AlertDesk, *, now_ms: int,
                 why[k] = NO_DOG_STORAGE
         t = c.telemetry
         t_at = dispatcher.telemetry_at.get(rid)
-        battery = skew = None
+        battery = None
         if t is None or t_at is None:
             why["battery_pct"] = NO_BATTERY
-            why["clock_skew_s"] = NO_SKEW
         else:
             battery = t.battery_pct
-            skew = dispatcher.clock_skew_s(rid)             # W09d:按一段遥测估
-            skew = None if skew is None else round(skew, 1)
+        skew = dispatcher.clock_skew_s(rid)                 # W09d:按一段遥测估
+        if skew is None:
+            why["clock_skew_s"] = NO_SKEW
+        else:
+            skew = round(skew, 1)
         robots.append({
             "robot_id": rid,
             "online": bool(c.status and c.status.online),
