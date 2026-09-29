@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -43,6 +44,11 @@ BAG_KEEP_DAYS = 7
 #: 发件箱过了上限的这一份、或者盘用到这条线,传完了的包一律可以删 —— 站点上有一份。
 RETAIN_CAP_SHARE = 0.5
 RETAIN_DISK_RATIO = 0.8
+#: 建图预览(W09f):预览进程写的快照(``d1max_localizer.livemap.SNAPSHOT``)、原样转给手机的几项;
+#: base64 的 PNG 超过这么大不带(再加说明、轨迹还在回执的 240 KiB 以内;正常一层楼 20 KB 上下)。
+PREVIEW_FILE = "preview.json"
+PREVIEW_FIELDS = ("run", "res", "origin", "width", "height", "pose", "trail", "frames", "dropped")
+PREVIEW_PNG_MAX_B64 = 200 * 1024
 
 
 def storage_pressure(facts: Any) -> bool:
@@ -204,6 +210,38 @@ class MappingService:
             self.pending_task = self.live_task
         if err is not None:
             raise err
+
+    def preview(self, since: int) -> dict[str, Any]:
+        """建图预览(W09f,在线程里调):正在边走边建、或停了还没打包完的这一版的最新快照。没在边走边建
+        回 ``{"live": False}``(手机退回录包轨迹);还没第一张 ``seq`` 是 0;``seq`` 比 ``since`` 新才带
+        PNG(base64),说明(位姿、轨迹……)每次都给。``age_s`` 是快照多久没更新了(狗自己的钟比)。"""
+        if self.recording and self.live is not None:
+            map_id, version = self.live
+        elif self.pending is not None:
+            _, map_id, version = self.pending
+        else:
+            return {"live": False}
+        out: dict[str, Any] = {"live": True, "map_id": map_id, "version": version, "seq": 0,
+                               "recording": self.recording,
+                               "preview_error": str(getattr(self.orch, "preview_error", ""))}
+        try:
+            doc = json.loads((Path(self.orch.preview_dir(map_id)) / PREVIEW_FILE)
+                             .read_text("utf-8"))
+        except (OSError, ValueError):
+            return out
+        seq = doc.get("seq") if isinstance(doc, dict) else None
+        if isinstance(seq, bool) or not isinstance(seq, int):
+            return out
+        out |= {k: doc.get(k) for k in PREVIEW_FIELDS} | {"seq": seq}
+        with contextlib.suppress(KeyError, TypeError, ValueError):
+            out["age_s"] = round(max(0.0, time.time() - float(doc["written_at"])), 1)
+        png = doc.get("png")
+        if seq > since and isinstance(png, str):
+            if len(png) > PREVIEW_PNG_MAX_B64:
+                out["too_big"] = True
+            else:
+                out["png"] = png
+        return out
 
     async def shutdown(self) -> None:
         """代理收尾:正在录就好好停下(录包写完索引、在线建图 SIGINT 存盘),待打包的重启后接着做。"""

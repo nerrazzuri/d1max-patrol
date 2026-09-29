@@ -379,3 +379,95 @@ async def test_边走边建记着开录那条命令的号_重启之后也在(tmp
     again = MappingService(假编排(bags, work), bags_root=bags,
                            maps_out=tmp_path / "outbox" / "maps")
     assert again.pending_task == "mapping-s1"
+
+
+# ------------------------------------------------------------------ 建图预览(W09f)
+
+def _snap(svc, map_id, **kw):
+    """编排的预览进程写的快照(``d1max_localizer.livemap.Snapshots`` 的格式)。"""
+    d = svc.orch.preview_dir(map_id)
+    d.mkdir(parents=True, exist_ok=True)
+    doc = {"seq": 3, "run": "yard-x", "res": 0.1, "origin": [-2.0, -1.0], "width": 40,
+           "height": 30, "pose": [1.0, 2.0, 0.5], "trail": [[0.0, 0.0], [1.0, 2.0]],
+           "frames": 12, "dropped": 30, "written_at": 1000.0, "png": "iVBORw0KGgo="} | kw
+    (d / "preview.json").write_text(json.dumps(doc))
+    return doc
+
+
+def _preview_orch(svc, tmp_path):
+    svc.orch.preview_dir = lambda map_id: tmp_path / "work" / ".w" / map_id / "preview"
+    svc.orch.preview_error = ""
+
+
+async def test_预览_没在边走边建是_live_false(svc, tmp_path, monkeypatch):
+    _preview_orch(svc, tmp_path)
+    assert svc.preview(0) == {"live": False}
+    await svc.start("yard")                                   # 只录包
+    assert svc.preview(0) == {"live": False}
+
+
+async def test_预览_边走边建还没第一张_有了带图_since_相同不带图(svc, tmp_path, monkeypatch):
+    import d1max_agent.mapping as M
+    monkeypatch.setattr(M.time, "time", lambda: 1004.26)
+    _preview_orch(svc, tmp_path)
+    await svc.start("yard", ("estate-1", "9"))
+    d = svc.preview(0)
+    assert d["live"] is True and d["seq"] == 0 and d["recording"] is True
+    assert (d["map_id"], d["version"]) == ("estate-1", "9") and "png" not in d
+    doc = _snap(svc, "estate-1")
+    d = svc.preview(0)
+    assert d["png"] == doc["png"] and d["seq"] == 3 and d["age_s"] == 4.3
+    for k in ("run", "res", "origin", "width", "height", "pose", "trail", "frames", "dropped"):
+        assert d[k] == doc[k], k
+    assert "written_at" not in d, "给的是多久没更新,不是狗的钟"
+    d = svc.preview(3)
+    assert "png" not in d and d["seq"] == 3 and d["trail"] == doc["trail"], "没新图:说明照给"
+    assert "png" in svc.preview(2)
+
+
+async def test_预览_停录之后打包之前照给最后一张_打完了没有(svc, tmp_path):
+    _preview_orch(svc, tmp_path)
+    await svc.start("yard", ("estate-1", "9"))
+    _snap(svc, "estate-1")
+    await svc.stop()
+    d = svc.preview(0)
+    assert d["live"] is True and d["recording"] is False and d["seq"] == 3 and "png" in d
+    await svc.finish()
+    assert svc.preview(0) == {"live": False}
+
+
+async def test_预览_图太大不带_说太大(svc, tmp_path):
+    import d1max_agent.mapping as M
+    _preview_orch(svc, tmp_path)
+    await svc.start("yard", ("estate-1", "9"))
+    _snap(svc, "estate-1", png="A" * (M.PREVIEW_PNG_MAX_B64 + 4))
+    d = svc.preview(0)
+    assert "png" not in d and d["too_big"] is True
+
+
+@pytest.mark.parametrize("bad", ["不是 JSON", "[1, 2]", '{"seq": "3"}', '{"seq": true}'])
+async def test_预览_快照坏了当没有(svc, tmp_path, bad):
+    _preview_orch(svc, tmp_path)
+    await svc.start("yard", ("estate-1", "9"))
+    d = svc.orch.preview_dir("estate-1")
+    d.mkdir(parents=True)
+    (d / "preview.json").write_text(bad)
+    got = svc.preview(0)
+    assert got["live"] is True and got["seq"] == 0 and "png" not in got
+
+
+async def test_预览_进程没起来带上原因(svc, tmp_path):
+    _preview_orch(svc, tmp_path)
+    svc.orch.preview_error = "mapview 起不来"
+    await svc.start("yard", ("estate-1", "9"))
+    assert svc.preview(0)["preview_error"] == "mapview 起不来"
+
+
+async def test_预览_没写时刻不给多久_别的照给(svc, tmp_path):
+    _preview_orch(svc, tmp_path)
+    await svc.start("yard", ("estate-1", "9"))
+    d = svc.orch.preview_dir("estate-1")
+    d.mkdir(parents=True)
+    (d / "preview.json").write_text('{"seq": 2, "png": "QQ=="}')
+    got = svc.preview(0)
+    assert got["seq"] == 2 and got["png"] == "QQ==" and "age_s" not in got

@@ -357,6 +357,8 @@ class AgentRuntime:
         if self.mapper is not None:
             out["mapping"] = {"live": True}     # W09c2:能边走边建(站点据此放行带版本的开录)
             out["mapping_trail"] = {}           # W00c6h:录包时的轨迹(手机画哪儿走过了)
+            if callable(getattr(self.mapper, "preview", None)):
+                out["mapping_preview"] = {}     # W09f:边走边建时的预览(手机看正在长的图)
             out["map_build"] = {}
         if self.releases is not None:
             # 站点据此显示每台狗在跑哪一版。
@@ -397,6 +399,16 @@ class AgentRuntime:
             starting = self._running(self._rec_job) and self._rec_action == "start"
             return "", self.trail.since(n) | {"recording": bool(self.mapper.recording),
                                               "starting": starting}
+        if kind == "mapping_preview":
+            n = cmd.payload.get("since", 0)
+            if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+                return "payload: since 要是不小于 0 的整数"
+            try:
+                got = await asyncio.to_thread(self.mapper.preview, n)
+            except OSError as exc:
+                return f"read_failed: {exc}"[:200]
+            starting = self._running(self._rec_job) and self._rec_action == "start"
+            return "", got | {"starting": starting}
         if kind.startswith("release_"):
             return await self._release_command(cmd)
         if kind == "outbox_retry":
