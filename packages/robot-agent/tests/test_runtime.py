@@ -569,7 +569,8 @@ async def test_盘况每10秒随遥测带一次_满了不接巡检(tmp_path):
 
 async def test_halt不排队_先停车再排队去中止任务(台子):
     """W00c5c 内部评审:上行拥堵时每条命令的回执要等 PUBACK,halt 排在后面要等好几秒。halt 一到
-    (主题对、没过期)先让 HAL 停,再排队去中止任务、回执。"""
+    (主题对)先让 HAL 停,再排队去中止任务、回执。W09d 外审起**过期的也抢先停车**(狗的钟快过有效期时
+    站点刚发的叫停在狗看来就是过期的;重投的旧叫停最多让狗停一下,方向安全)。"""
     import asyncio
 
     from d1max_contract.messages import Command
@@ -595,12 +596,12 @@ async def test_halt不排队_先停车再排队去中止任务(台子):
         assert stops, "halt 被前面的命令挡住了"
         stale = asyncio.create_task(rt._on_cmd(_halt("h0", expires_at=c.ms - 1)))
         await asyncio.sleep(0.05)
-        assert len(stops) == 1, "过期的 halt(重连补投的旧命令)不许抢先停车"
+        assert len(stops) == 2, "过期的 halt 也抢先停车(W09d 外审)"
         wrong = Message(T.cmd.replace("/r/", "/x/"), _halt("h2", expires_at=c.ms + 60_000).payload,
                         1, False)
         other = asyncio.create_task(rt._on_cmd(wrong))
         await asyncio.sleep(0.05)
-        assert len(stops) == 1, "别的狗的主题不认"
+        assert len(stops) == 2, "别的狗的主题不认"
     await asyncio.gather(t, stale, other)
 
 

@@ -1077,15 +1077,15 @@ class AgentRuntime:
 
     async def _halt_now(self, wire: dict, topic: str) -> None:
         """halt 不排队(W00c5c 内部评审):前面的命令在等回执的 PUBACK(上行拥堵时好几秒),halt 不能
-        跟着等。主题是自己的 ``cmd``、报文成形、没过期 → 先让 HAL 停;中止任务、回执照旧排队去做。
-        过期的不抢先:那是重连补投的旧命令,停一下会打断重连后正常在跑的任务。"""
+        跟着等。主题是自己的 ``cmd``、报文成形 → 先让 HAL 停;中止任务、回执照旧排队去做。
+        **不判过期**(W09d 外审):排队那一路已经不判叫停过期(``NEVER_EXPIRE``);这里还按狗的墙钟判
+        的话,狗的钟快过有效期时站点刚发的叫停不抢先、只能排队。重投的旧叫停最多让狗停一下(下面只停车、
+        不中止、不立栅栏),方向是安全的。"""
         if topic != self.topics.cmd:
             return
         try:
             cmd = Command.from_wire(wire)
         except ContractError:
-            return
-        if cmd.expires_at <= self._now():
             return
         p = self.processor
         # 重投的(回执会是 duplicate)、旧代次的(回执会是 stale_epoch)只停车,不中止任务、不立栅栏

@@ -397,3 +397,31 @@ async def test_到了点_停稳之前来的叫停_报叫停中止(台子):
     await _跑(rt, r, c, broker, 20)
     ends = [e for e in ears.by.get("event", []) if e["kind"] in ("task_done", "task_aborted")]
     assert ends and ends[-1]["kind"] == "task_aborted" and ends[-1]["data"]["reason"] == "halt"
+
+
+async def test_狗的钟快_过期的叫停照样抢先停车_不等队列(台子):
+    """W09d 外审:排队那一路已经不判叫停过期(NEVER_EXPIRE),抢先那一路还按狗的墙钟判 —— 狗的钟
+    快过有效期时,站点刚发的叫停不抢先,只能等锁前面的命令、回执发完才停。"""
+    broker, c, r, ears, rt, site = 台子
+    await site.publish(T.cmd, json.dumps(_goto(20.0, "g1", c)).encode())
+    await _跑(rt, r, c, broker, 20)
+    assert (await r.odometry()).vx > 0.3
+    stops = []
+    real = rt._stop_motion
+
+    async def 记(*a, **k):
+        stops.append(True)
+        return await real(*a, **k)
+    rt._stop_motion = 记
+    halt = _cmd("halt", {"reason": "operator"}, "h1", c)
+    halt["issued_at"] -= 120_000                         # 按狗的钟:两分钟前签发、一分钟前就过期了
+    halt["expires_at"] -= 120_000
+    async with rt._cmd_lock:                             # 排队的那一路进不来
+        t = asyncio.create_task(rt._on_cmd(_msg(halt)))
+        await asyncio.sleep(0.05)
+        assert stops, "锁还没放,抢先那一路就停了车"
+        assert await rt.parts.nav.nav_status() is not NavStatus.ACTIVE
+    await t
+    await broker.drain()
+    acks = [a for a in ears.by.get("cmd/ack", []) if a["command_id"] == "h1"]
+    assert acks and acks[-1]["result"] != "expired", acks
