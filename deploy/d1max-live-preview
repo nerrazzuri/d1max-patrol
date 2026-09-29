@@ -1,0 +1,16 @@
+#!/bin/sh
+# 建图预览(W09f):边走边建时代理的建图编排跟在线建图一起起它,订实时雷达与在线建图的位姿,攒一张俯视
+# 栅格、每几秒写一张快照给手机看。参数原样交给 ``d1max_localizer.livemap``(--out --run --lidar-topic
+# --pose-topic)。
+#
+# 跟建图脚本一样跑在 **ROS 的系统 Python** 里(rclpy、numpy 在那边),代码用这个脚本所在那一版带的
+# packages/localizer 与 packages/contract(纯 Python,按 PYTHONPATH 找,不进 venv)。编排给的是实时域的
+# 环境变量。
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+# ROS 的 setup 脚本里有未定义变量,关掉 -u 再 source
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+exec /usr/bin/python3 -m d1max_localizer.livemap "$@"

@@ -448,7 +448,8 @@ def test_在线建图跟定位器的_MOLA_不串_话题服务换到自己的命�
                  "/lidar_odometry/pose_quality"):
         assert remaps[name] == "/d1max_mapping" + name, name
     assert env["MOLA_LOCALIZATION_PUBLISH_TF"] == "false"
-    assert env["MOLA_LOCALIZATION_PUBLISH_ODOM_MSGS"] == "false"
+    # W09f:位姿发(预览要),在自己的命名空间里,不跟定位器串;/tf 照旧不发
+    assert env["MOLA_LOCALIZATION_PUBLISH_ODOM_MSGS"] == "true"
     assert env["MOLA_ROS2_TRANSFORM_PUBLISH_PERIOD"] == "0"
     assert float(env["MOLA_ROS2_PUBLISH_MAPS_PERIOD"]) >= 3600, "不往 ROS 上发越来越大的地图"
 
@@ -461,7 +462,7 @@ async def test_边走边建_录包的同时起在线建图_先清旧的_原点�
     (old / "traj.tum").write_text("旧的")
     (cfg.maps_dir / "m1").mkdir()
     await orch.start_record("w1", live_map_id="m1")
-    assert [s.name for s in procs.started] == ["bagrecord", "molamap"]
+    assert [s.name for s in procs.started] == ["bagrecord", "molamap", "mapview"]
     assert orch.phase == "recording" and orch.live_map == "m1"
     assert not (old / "traj.tum").exists() and old.is_dir(), "清了,再建好给 MOLA 写"
     assert not (cfg.maps_dir / "m1").exists()
@@ -478,7 +479,7 @@ async def test_边走边建_停录两个一起停_在线建图给足存盘时间
     monkeypatch.setattr(procs, "stop", fake_stop)
     await orch.start_record("w1", live_map_id="m1")
     await orch.stop_record()
-    assert set(grace) == {"bagrecord", "molamap"} and grace["molamap"] >= 120
+    assert set(grace) == {"bagrecord", "molamap", "mapview"} and grace["molamap"] >= 120
     assert orch.phase == "idle" and orch.live_map is None
 
 
@@ -511,6 +512,73 @@ async def test_在线建图起不来_录包也收掉_说清楚(orch, procs):
     with pytest.raises(MappingError, match="molamap"):
         await orch.start_record("w1", live_map_id="m1")
     assert procs.running() == [] and orch.phase == "idle"
+
+
+# ------------------------------------------------------------------ 建图预览(W09f)
+
+
+def test_预览进程_实时域_写到中间目录_订建图那边的位姿(orch, cfg):
+    spec = orch.spec_for_preview("m1", "w1")
+    assert spec.name == "mapview"
+    assert spec.argv[0] == str(cfg.live_preview)
+    a = spec.argv
+
+    def arg(k):
+        return a[a.index(k) + 1]
+    assert arg("--out") == str(cfg.maps_dir / ".work" / "m1" / "preview")
+    assert orch.preview_dir("m1") == cfg.maps_dir / ".work" / "m1" / "preview"
+    assert arg("--run") == "w1"
+    assert arg("--lidar-topic") == cfg.lidar_topic
+    assert arg("--pose-topic") == "/d1max_mapping/lidar_odometry/pose"
+    assert spec.env["ROS_DOMAIN_ID"] == "24" and spec.env["RMW_IMPLEMENTATION"] == "rmw_zenoh_cpp"
+    assert spec.ready_pattern == "", "不等它就绪"
+    assert MappingConfig(bags_dir=cfg.bags_dir, maps_dir=cfg.maps_dir).live_preview == Path(
+        "/opt/d1max/current/deploy/d1max-live-preview")
+
+
+async def test_只录包不起预览(orch, procs):
+    await orch.start_record("w1")
+    assert [s.name for s in procs.started] == ["bagrecord"]
+    assert orch.preview_error == ""
+
+
+async def test_预览起不来_开录照样成_记下原因(orch, procs):
+    procs.start_fails = {"mapview"}
+    await orch.start_record("w1", live_map_id="m1")
+    assert orch.phase == "recording" and orch.live_map == "m1"
+    assert procs.running() == ["bagrecord", "molamap"]
+    assert "mapview" in orch.preview_error
+
+
+async def test_在线建图起不来_预览不起(orch, procs):
+    procs.start_fails = {"molamap"}
+    with pytest.raises(MappingError):
+        await orch.start_record("w1", live_map_id="m1")
+    assert "mapview" not in [s.name for s in procs.started]
+
+
+async def test_预览停不掉不碍停录(orch, procs, monkeypatch):
+    stopped = []
+
+    async def fake_stop(name, *, term_grace_s=3.0):
+        stopped.append(name)
+        if name == "mapview":
+            raise OSError("停不了")
+    await orch.start_record("w1", live_map_id="m1")
+    monkeypatch.setattr(procs, "stop", fake_stop)
+    bag = await orch.stop_record()
+    assert bag.name == "w1" and set(stopped) == {"bagrecord", "molamap", "mapview"}
+    assert orch.phase == "idle"
+
+
+async def test_再开一趟_上一趟预览起不来的原因清掉(orch, procs):
+    procs.start_fails = {"mapview"}
+    await orch.start_record("w1", live_map_id="m1")
+    await orch.stop_record()
+    procs.start_fails = set()
+    procs.stopped.clear()                                 # FakeProcs 按名字记「停过」
+    await orch.start_record("w2", live_map_id="m1")
+    assert orch.preview_error == ""
 
 
 async def test_打包在线建好的_不重跑_MOLA_不清中间目录(orch, procs, cfg, bag, monkeypatch):
@@ -554,7 +622,7 @@ async def test_停录一个停不掉_另一个照样停_回到闲着(orch, procs
     monkeypatch.setattr(procs, "stop", fake_stop)
     with pytest.raises(OSError):
         await orch.stop_record()
-    assert set(stopped) == {"bagrecord", "molamap"} and orch.phase == "idle"
+    assert set(stopped) == {"bagrecord", "molamap", "mapview"} and orch.phase == "idle"
 
 
 # ------------------------------------------------------------------ 停录部分失败(外审复查阻断)

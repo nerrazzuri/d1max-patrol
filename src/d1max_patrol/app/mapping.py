@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import shutil
 import signal
@@ -28,6 +29,8 @@ from pathlib import Path
 from d1max_agent.engine.homing import forget_home
 from d1max_contract.maps import GEOMETRY_FILES
 from d1max_patrol.app.procs import ProcError, ProcManager, ProcSpec
+
+log = logging.getLogger(__name__)
 
 #: 录包按这么大切成一个个文件(W00c5d:点云几十 MB/s,十分钟不切就过了站点单文件 8 GiB 的上限,
 #: 永远传不上去)。逐字照抄文档 §2 (a)。
@@ -57,6 +60,8 @@ ROS_WRAPPER = Path("/opt/d1max/current/deploy/d1max-ros")
 #: 在线建图(W09c2):直接起 ``mola-cli``(不经 ``ros2 launch`` —— 停 launch 时底下的 mola-cli 成了
 #: 孤儿、没存盘,开发机上实测),用 MOLA 自带的 ROS 2 配置。
 MOLA_CLI = "/opt/ros/humble/lib/mola_launcher/mola-cli"
+#: 建图预览(W09f):跟在线建图一起起的小进程(``d1max_localizer.livemap``),攒一张俯视栅格给手机看。
+LIVE_PREVIEW = Path("/opt/d1max/current/deploy/d1max-live-preview")
 MOLA_LO_SHARE = "/opt/ros/humble/share/mola_lidar_odometry"
 #: 在线建图停的时候给多久存盘(开发机 4 分半的走动:simplemap 200 MB + 局部地图 150 MB,3.5 s;
 #: Orin 上盘慢,给足)。
@@ -104,6 +109,7 @@ class MappingConfig:
     #: 在线建图订雷达的 QoS。厂商前雷达发的是 reliable(newdog2 录包的 metadata,depth 100);
     #: best_effort 订的话开发机上放包实测 18% 的帧在传输里丢了、图上出重影,reliable 99.5%。
     live_qos: str = "reliable"
+    live_preview: Path = LIVE_PREVIEW
 
 
 class MappingOrchestrator:
@@ -118,6 +124,8 @@ class MappingOrchestrator:
     #: 打包边走边建的:单独一个名字、单独一份日志 —— 打不成退回从录包建时,不盖掉打不成的原因。
     PACK = "mappack"
     LIVE = "molamap"
+    #: 建图预览(W09f):尽力而为,起不来、停不掉都不碍录包与在线建图。
+    PREVIEW = "mapview"
 
     def __init__(self, procs: ProcManager, cfg: MappingConfig) -> None:
         self._procs = procs
@@ -128,6 +136,8 @@ class MappingOrchestrator:
         self._error = ""
         #: 正在边走边建的图号(W09c2);没有是 None。
         self._live: str | None = None
+        #: 这一趟的预览没起来的原因(W09f);起来了是空串。
+        self.preview_error = ""
 
     @property
     def log_dir(self) -> Path:
@@ -222,6 +232,13 @@ class MappingOrchestrator:
                 await self._procs.stop(self.LIVE)
                 await self._procs.stop(self.RECORD, term_grace_s=_RECORD_GRACE_S)
                 raise
+        self.preview_error = ""
+        if live_map_id is not None:
+            try:
+                await self._start(self.spec_for_preview(live_map_id, name))
+            except MappingError as exc:
+                self.preview_error = str(exc)
+                log.warning("建图预览起不来(录包、在线建图照旧):%s", exc)
         self._phase = "recording"
         self._bag = bag
         self._live = live_map_id
@@ -237,6 +254,7 @@ class MappingOrchestrator:
         stops = [self._procs.stop(self.RECORD, term_grace_s=_RECORD_GRACE_S)]
         if self._live is not None:
             stops.append(self._procs.stop(self.LIVE, term_grace_s=LIVE_SAVE_GRACE_S))
+            stops.append(self._stop_preview())
         # 一个停不掉,另一个照样停(外审阻断 1:不许留一个进程在后台一直写盘)
         got = await asyncio.gather(*stops, return_exceptions=True)
         self._phase = "idle"
@@ -245,6 +263,13 @@ class MappingOrchestrator:
             if isinstance(g, BaseException):
                 raise g
         return bag
+
+    async def _stop_preview(self) -> None:
+        """预览停不掉只记一行:它不写要紧的东西,不碍停录。"""
+        try:
+            await self._procs.stop(self.PREVIEW)
+        except Exception as exc:  # noqa: BLE001 —— 尽力而为
+            log.warning("建图预览停不掉:%s", exc)
 
     # ------------------------------------------------------------------ 重建
 
@@ -365,11 +390,28 @@ class MappingOrchestrator:
                 "ROS_ARGS": json.dumps(["-r", f"__ns:={LIVE_NS}", *(
                     x for n in _LIVE_RENAMES for x in ("-r", f"{n}:={LIVE_NS}{n}"))]),
                 "MOLA_LOCALIZATION_PUBLISH_TF": "false",
-                "MOLA_LOCALIZATION_PUBLISH_ODOM_MSGS": "false",
+                # 位姿发(W09f 预览要):改过名、在 LIVE_NS 下,跟定位器的不串
+                "MOLA_LOCALIZATION_PUBLISH_ODOM_MSGS": "true",
                 "MOLA_ROS2_TRANSFORM_PUBLISH_PERIOD": "0",
                 "MOLA_ROS2_PUBLISH_MAPS_PERIOD": "86400"},
             ready_pattern="",
             stop_signal=signal.SIGINT,          # SIGTERM 它不存盘(见 ProcSpec.stop_signal)
+        )
+
+    def preview_dir(self, map_id: str) -> Path:
+        """建图预览的快照写在哪(W09f):这张图的中间目录底下。"""
+        return self._out(map_id)[1] / "preview"
+
+    def spec_for_preview(self, map_id: str, run: str) -> ProcSpec:
+        """建图预览(W09f):订实时域的雷达与在线建图的位姿,快照写进 :meth:`preview_dir`。
+        ``run`` 是这一趟的号(录包名),手机据此知道换了一趟。"""
+        return ProcSpec(
+            name=self.PREVIEW,
+            argv=(str(self._cfg.live_preview), "--out", str(self.preview_dir(map_id)),
+                  "--run", run, "--lidar-topic", self._cfg.lidar_topic,
+                  "--pose-topic", f"{LIVE_NS}/lidar_odometry/pose"),
+            env=self._live_env(),
+            ready_pattern="",
         )
 
     def spec_for_build(self, bag: Path, map_id: str) -> ProcSpec:
