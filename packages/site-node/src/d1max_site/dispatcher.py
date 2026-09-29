@@ -51,10 +51,11 @@ VIDEO_COMMAND_TTL_MS = 30_000
 COMMAND_TTL_MS = 60_000
 #: 钟差大时不发的非任务命令(W09d 内审):要有效期对得上。只读的(日志、轨迹)、停录、退版本不挡。
 _SKEW_GATED = frozenset({"map_activate", "map_build", "release_install", "release_activate"})
-#: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹):**不记进命令账、回执不推给事件流** —— 单狗视图
-#: 里看得到最近 50 条命令、事件流谁登录了都收得到(保安、业主也是),日志只给要它的管理员;手机收到
-#: 事件流的每一帧都会刷新狗的列表,录包时每 2 s 查一次轨迹,不该让所有人跟着刷、把正经命令挤出账。
-_QUIET_KINDS = frozenset({"proc_log", "mapping_trail"})
+#: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹、W09f 建图预览):**不记进命令账、回执不推给
+#: 事件流** —— 单狗视图里看得到最近 50 条命令、事件流谁登录了都收得到(保安、业主也是),日志只给要它
+#: 的管理员;手机收到事件流的每一帧都会刷新狗的列表,录包时每 2 s 查一次轨迹、每 3 s 查一次预览,
+#: 不该让所有人跟着刷、把正经命令挤出账。
+_QUIET_KINDS = frozenset({"proc_log", "mapping_trail", "mapping_preview"})
 #: 一趟巡检的任务定义进命令(设计决定二 A);broker 的报文上限是 256 KB,留余量。
 MAX_PATROL_BYTES = 200_000
 MAX_PATROL_WAYPOINTS = 500

@@ -93,7 +93,8 @@ _MAPVIEW = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/(preview|preview\.p
 _LOGS = re.compile(r"^/api/robots/([^/]{1,64})/logs(?:/([^/]{1,64}))?$")
 _LOG_NAME = re.compile(r"[a-z0-9_.-]{1,48}")
 #: W00c6h:录包时的轨迹(``?since=`` 上次拿到的点数)。
-_TRAIL = re.compile(r"^/api/robots/([^/]{1,64})/mapping/trail$")
+#: 录包轨迹(W00c6h)、建图预览(W09f):都是管理员经只读命令现取现给
+_TRAIL = re.compile(r"^/api/robots/([^/]{1,64})/mapping/(trail|preview)$")
 #: W00c5d 第三部分:给狗装、切、退版本。
 _RELCMD = re.compile(r"^/api/robots/([^/]{1,64})/release$")
 _ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
@@ -356,7 +357,7 @@ class _Handler(TlsHandlerMixin):
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
                     raise HttpError(404, "没有这台狗")
-                return self._mapping_trail(robot_id, user)
+                return self._mapping_read(robot_id, m.group(2), user)
             m = _LOGS.match(path)
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
@@ -791,9 +792,11 @@ class _Handler(TlsHandlerMixin):
         point = next((p for p in stb.list(robot_id) if p["name"] == name), None)
         return self._send_json(200, {"ack": ack, "standby": point})
 
-    def _mapping_trail(self, robot_id: str, user) -> None:
-        """录包时的轨迹(W00c6h,管理员 —— 录包本身就是管理员的事):发 ``mapping_trail {since}``,
-        回执里的点原样回(``{points, since, total, full, recording}``,录包起点为原点的里程系)。"""
+    def _mapping_read(self, robot_id: str, what: str, user) -> None:
+        """录包时的轨迹(W00c6h)、建图预览(W09f),管理员 —— 录包本身就是管理员的事:发
+        ``mapping_trail {since}`` / ``mapping_preview {since}``,回执里的数据原样回(轨迹:
+        ``{points, since, total, full, recording}``,录包起点为原点的里程系;预览:``{live, seq, png?,
+        res, origin, pose, trail, …}``,``since`` 是上次拿到的 ``seq``)。"""
         self._need(user, MANAGE)
         q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
         try:
@@ -802,14 +805,15 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, "since 要是不小于 0 的整数") from None
         if since < 0:
             raise HttpError(400, "since 要是不小于 0 的整数")
+        kind = f"mapping_{what}"
         r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
-            robot_id, "mapping_trail", {"since": since}, issued_by=str(user)))
+            robot_id, kind, {"since": since}, issued_by=str(user)))
         ack = r["ack"]
         if ack.get("result") != "accepted":
             raise HttpError(409, f"狗没给:{ack.get('reason') or ack.get('result')}")
         data = ack.get("data")
         if not isinstance(data, dict):
-            raise HttpError(502, "狗的回执里没有轨迹")
+            raise HttpError(502, "狗的回执里没有" + ("轨迹" if what == "trail" else "预览"))
         return self._send_json(200, data)
 
     def _proc_logs(self, robot_id: str, name: str | None, user) -> None:

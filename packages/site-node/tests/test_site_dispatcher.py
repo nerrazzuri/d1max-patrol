@@ -494,13 +494,13 @@ async def test_钟差大_换图建图装版本切版本也不发_只读与收尾
                                             task_state=None, loc_quality=1.0))
     caps = t.site.clients["A"].capabilities
     for kind in ("map_activate", "map_build", "mapping", "release_install", "release_activate",
-                 "release_rollback", "proc_log", "mapping_trail"):
+                 "release_rollback", "proc_log", "mapping_trail", "mapping_preview"):
         caps.tasks.setdefault(kind, {})
     for kind, payload in (("map_activate", {}), ("map_build", {}), ("mapping", {"action": "start"}),
                           ("release_install", {}), ("release_activate", {})):
         with pytest.raises(DispatchRefused, match="钟差"):
             await t.site.map_command("A", kind, payload, issued_by="alice")
     for kind, payload in (("mapping", {"action": "stop"}), ("release_rollback", {}),
-                          ("proc_log", {}), ("mapping_trail", {})):
+                          ("proc_log", {}), ("mapping_trail", {}), ("mapping_preview", {})):
         r = await t.send(t.site.map_command("A", kind, payload, issued_by="alice"))
         assert "ack" in r, kind
