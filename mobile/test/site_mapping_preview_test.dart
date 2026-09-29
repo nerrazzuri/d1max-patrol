@@ -128,6 +128,20 @@ void main() {
     await t.pumpWidget(const SizedBox());
   });
 
+  testWidgets('换了一趟、新的一趟还没第一张：不留上一趟的图', (t) async {
+    Map<String, dynamic> first() => <String, dynamic>{'live': true, 'seq': 0, 'run': 'yard-2',
+      'recording': true, 'map_id': 'm', 'version': '2', 'preview_error': ''};
+    final api = FakeApi('admin')..previewReplies = [_pv(5), first(), first()];
+    await _open(t, api);
+    expect(find.byKey(SiteMappingTrailPage.previewKey), findsOneWidget);
+    await t.pump(const Duration(seconds: 3));
+    await t.pump();
+    expect(api.previewSince, [0, 5, 0]);
+    expect(find.byKey(SiteMappingTrailPage.previewKey), findsNothing);
+    expect(_status(t), contains('等第一张'));
+    await t.pumpWidget(const SizedBox());
+  });
+
   testWidgets('连不上：留着上一张，说是多久前的', (t) async {
     final api = FakeApi('admin')..previewReplies = [_pv(1), const SiteError(0, '网络断了')];
     await _open(t, api);

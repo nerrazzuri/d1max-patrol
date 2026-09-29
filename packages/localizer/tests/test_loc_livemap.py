@@ -154,6 +154,19 @@ def test_画幅超了整体粗一倍_原来画上的还在():
     assert _cell(img, meta, 9.0, 0.0) == L.FREE
 
 
+def test_墙画上之后再粗化_障碍计数并过去_墙还在():
+    g = L.LiveGrid(max_side=80)                      # 0.1 m × 80 = 8 m:起点那一片(7.1 m)装得下
+    _feed(g, L.UP_FRAMES)
+    img, meta = g.render()
+    assert meta["res"] == pytest.approx(0.1) and _cell(img, meta, 5.05, 0.5) == L.OCC
+    for k in range(1, 5):                             # 走到 8 m:12 m 装不下,粗到 0.2
+        o, pts = _scene((2.0 * k, 0.0), wall=False)
+        g.add(o, I3, pts)
+    img, meta = g.render()
+    assert meta["res"] == pytest.approx(0.2)
+    assert _cell(img, meta, 5.05, 0.5) == L.OCC, "粗化时障碍计数要并过去"
+
+
 def test_出图的坐标_左下角与_y_朝上():
     g = L.LiveGrid()
     _feed(g, L.UP_FRAMES, wall=False)
@@ -180,8 +193,7 @@ def test_位姿与轨迹_0_3_m_一点_满了抽一半():
     tr = g.trail
     steps = [math.dist(a, b) for a, b in zip(tr, tr[1:], strict=False)]
     assert len(tr) <= 8
-    assert min(steps) >= 0.3 - 1e-9
-    assert max(steps) >= 0.6 - 1e-9                   # 抽过:间距翻倍
+    assert min(steps) >= 0.6 - 1e-6, "抽过之后新记的点也按翻倍的间距取"
     assert tr[-1][0] == pytest.approx(2.9, abs=0.65)
     # 狗朝平面 +y 转 90°
     o, pts = _scene((2.9, 0.0), wall=False)
