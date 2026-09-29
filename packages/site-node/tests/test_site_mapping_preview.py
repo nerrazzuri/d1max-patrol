@@ -45,13 +45,19 @@ def test_狗拒了409_老代理409_回执里没数据502(站点, monkeypatch):
     alice = _登(s, "alice")
     _等(lambda: s.disp.clients["A"].capabilities is not None)
     code, d = s.req("GET", "/api/robots/A/mapping/preview", token=alice)
-    assert code == 409 and "mapping_preview" in d["error"], d
+    assert code == 409 and "mapping_preview" in d["error"] and d["unsupported"] is True, d
+
+    async def 老狗(*a, **k):
+        return {"ack": {"result": "rejected", "reason": "unsupported"}}
+    monkeypatch.setattr(s.disp, "map_command", 老狗)
+    code, d = s.req("GET", "/api/robots/A/mapping/preview", token=alice)
+    assert code == 409 and d["unsupported"] is True
 
     async def 拒(*a, **k):
         return {"ack": {"result": "rejected", "reason": "read_failed: 盘坏了"}}
     monkeypatch.setattr(s.disp, "map_command", 拒)
     code, d = s.req("GET", "/api/robots/A/mapping/preview", token=alice)
-    assert code == 409 and "read_failed" in d["error"]
+    assert code == 409 and "read_failed" in d["error"] and "unsupported" not in d
 
     async def 空(*a, **k):
         return {"ack": {"result": "accepted", "reason": ""}}
@@ -87,3 +93,12 @@ def test_真狗_取得到预览_事件流里不推_不记命令账(tmp_path):
         assert not s.db.query("SELECT 1 FROM commands WHERE kind='mapping_preview'")
     finally:
         s.close()
+
+
+
+def test_狗不在线_409_不说不支持(站点):
+    """内审应修 1:不在线也是 409,手机不能当成老狗退回轨迹。"""
+    s = 站点
+    alice = _登(s, "alice")
+    code, d = s.req("GET", "/api/robots/NOPE/mapping/preview", token=alice)
+    assert code in (404, 409) and not d.get("unsupported"), d

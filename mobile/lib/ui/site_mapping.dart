@@ -146,16 +146,22 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
 
   Future<void> _pollPreview() async {
     Map<String, dynamic> d;
+    var newRun = false;
     try {
       d = await widget.api.mappingPreview(widget.robotId, since: _seq);
       final run = d['run'];
       if (d['live'] == true && run is String && _run != null && run != _run) {
         // 换了一趟：旧的 seq 对不上新的，从头取（不然新的一趟头几张拿不到图）。
         _seq = 0;
+        newRun = true;
         d = await widget.api.mappingPreview(widget.robotId);
       }
     } on SiteError catch (e) {
-      if (e.status == 409 && _mode == _Mode.probe) return _toTrail(); // 老狗：没有预览
+      // 老狗（站点说不支持）、老站点（没这个接口，404）：没有预览，看录包轨迹。别的 409（狗暂时不在线、
+      // 代理在重启）不算：接着问（W09f 内审应修 1）。
+      if (_mode == _Mode.probe && (e.status == 404 || e.body['unsupported'] == true)) {
+        return _toTrail();
+      }
       if (mounted) {
         setState(() {
           _staleS += widget.previewPeriod.inSeconds;
@@ -184,12 +190,14 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
       final png = d['png'];
       if (png is String) {
         try {
-          _png = base64Decode(png);
+          _setPng(base64Decode(png));
         } on FormatException {
           // 坏的就当这次没图，留着上一张
         }
+      } else if (newRun && _seq == 0) {
+        // 新的一趟还没第一张：不留上一趟的图。同一趟里回到 0（打包收了中间目录）留着最后一张（内审小 1）
+        _setPng(null);
       }
-      if (_seq == 0) _png = null;
       _staleS = 0;
       _err = '';
     });
@@ -223,6 +231,13 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
     } on SiteError catch (e) {
       if (mounted) setState(() => _err = '取不到轨迹：$e');
     }
+  }
+
+  /// 换图：旧的那张从图片缓存里清掉（每 3 秒一张新的，不清会一直攒到缓存上限；内审小 2）。
+  void _setPng(Uint8List? png) {
+    final old = _png;
+    if (old != null && !identical(old, png)) unawaited(MemoryImage(old).evict());
+    _png = png;
   }
 
   String _trailStatus() {
@@ -267,7 +282,9 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
                     '${w.toStringAsFixed(0)} × ${h.toStringAsFixed(0)} m（每 ${widget.previewPeriod.inSeconds} 秒更新）';
     return [
       head,
-      if (rec && !_pvDone && _seq > 0 && age > _staleAfterS)
+      if (rec && !_pvDone && d['preview_running'] == false)
+        '预览进程停了（日志 mapview.log），建图不受影响，停下后照样出图'
+      else if (rec && !_pvDone && _seq > 0 && age > _staleAfterS)
         '预览 ${age.toStringAsFixed(0)} 秒没更新（狗上的预览进程可能停了），建图不受影响',
       if (pvErr.isNotEmpty) '预览没起来：$pvErr（建图不受影响，停下后照样出图）',
       if (d['too_big'] == true) '图太大，狗没发（下面是上一张）',

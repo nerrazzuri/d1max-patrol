@@ -542,6 +542,13 @@ async def test_只录包不起预览(orch, procs):
     assert orch.preview_error == ""
 
 
+async def test_预览进程在不在(orch, procs):
+    await orch.start_record("w1", live_map_id="m1")
+    assert orch.preview_running() is True
+    procs.stopped.append("mapview")                       # FakeProcs:当它退了
+    assert orch.preview_running() is False
+
+
 async def test_预览起不来_开录照样成_记下原因(orch, procs):
     procs.start_fails = {"mapview"}
     await orch.start_record("w1", live_map_id="m1")

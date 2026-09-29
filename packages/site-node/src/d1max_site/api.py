@@ -47,7 +47,7 @@ from d1max_contract.dispatch import DispatchTimeout
 from d1max_site.accounts import Accounts, AuthError, LockedOut
 from d1max_site.audit import AuditLog
 from d1max_site.ca import SAFE_ID
-from d1max_site.dispatcher import Dispatcher, DispatchRefused
+from d1max_site.dispatcher import Dispatcher, DispatchRefused, Unsupported
 from d1max_site.loop import LoopThread
 from d1max_site.permissions import (
     ABORT,
@@ -205,6 +205,8 @@ class SiteApi:
     def dispatch(self, fn: Callable[[], Any]) -> Any:
         try:
             return self.loop.call(fn, timeout_s=self.dispatcher.ack_timeout_s + 5)
+        except Unsupported as exc:
+            raise HttpError(409, str(exc), extra={"unsupported": True}) from exc
         except DispatchRefused as exc:
             raise HttpError(409, str(exc)) from exc
         except (DispatchTimeout, TimeoutError) as exc:
@@ -810,7 +812,9 @@ class _Handler(TlsHandlerMixin):
             robot_id, kind, {"since": since}, issued_by=str(user)))
         ack = r["ack"]
         if ack.get("result") != "accepted":
-            raise HttpError(409, f"狗没给:{ack.get('reason') or ack.get('result')}")
+            reason = ack.get("reason") or ack.get("result")
+            raise HttpError(409, f"狗没给:{reason}",
+                            extra={"unsupported": True} if reason == "unsupported" else None)
         data = ack.get("data")
         if not isinstance(data, dict):
             raise HttpError(502, "狗的回执里没有" + ("轨迹" if what == "trail" else "预览"))

@@ -1280,7 +1280,7 @@ def test_建图预览脚本_在ROS系统Python里跑这一版的_livemap():
     text = start.read_text(encoding="utf-8")
     assert '. /opt/ros/humble/setup.sh' in text
     assert '$here/packages/localizer/src:$here/packages/contract/src' in text
-    assert 'exec /usr/bin/python3 -m d1max_localizer.livemap "$@"' in text
+    assert 'exec nice -n 10 /usr/bin/python3 -m d1max_localizer.livemap "$@"' in text
     assert LIVE_PREVIEW == Path("/opt/d1max/current/deploy/d1max-live-preview")
     if not Path("/opt/ros/humble/setup.sh").is_file():
         return

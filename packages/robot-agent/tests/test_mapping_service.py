@@ -471,3 +471,30 @@ async def test_预览_没写时刻不给多久_别的照给(svc, tmp_path):
     (d / "preview.json").write_text('{"seq": 2, "png": "QQ=="}')
     got = svc.preview(0)
     assert got["seq"] == 2 and got["png"] == "QQ==" and "age_s" not in got
+
+
+
+async def test_预览_在录但版本刚被停录清掉_不炸(svc, tmp_path):
+    """内审应修 6:在线程里判了 live 不空之后,事件循环那边停录把它清成 None,解包就抛 TypeError。"""
+    _preview_orch(svc, tmp_path)
+    svc.recording, svc.live, svc.pending = True, None, None
+    assert svc.preview(0) == {"live": False}
+
+
+async def test_预览_整条超预算去掉图_说明照给(svc, tmp_path, monkeypatch):
+    import d1max_agent.mapping as M
+    _preview_orch(svc, tmp_path)
+    await svc.start("yard", ("estate-1", "9"))
+    _snap(svc, "estate-1", png="A" * 400, trail=[[float(i), 0.0] for i in range(50)])
+    monkeypatch.setattr(M, "PREVIEW_MAX_BYTES", 600)
+    d = svc.preview(0)
+    assert "png" not in d and d["too_big"] is True and len(d["trail"]) == 50
+    monkeypatch.setattr(M, "PREVIEW_MAX_BYTES", 10_000)
+    assert "png" in svc.preview(0)
+
+
+def test_预览进程在不在_问编排_老编排当在(svc):
+    svc.orch.preview_running = lambda: False
+    assert svc.preview_alive() is False
+    del svc.orch.preview_running
+    assert svc.preview_alive() is True

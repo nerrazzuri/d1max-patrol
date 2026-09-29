@@ -68,13 +68,60 @@ void main() {
 
   testWidgets('老狗（409）：退回录包轨迹', (t) async {
     final api = FakeApi('admin')
-      ..previewReplies = [const SiteError(409, '狗没给：unsupported')]
+      ..previewReplies = [
+        const SiteError(409, '狗没给：unsupported', body: <String, dynamic>{'unsupported': true}),
+      ]
       ..trailReplies = [
         <String, dynamic>{'points': [[0, 0]], 'since': 0, 'total': 1, 'full': false, 'recording': true},
       ];
     await _open(t, api);
     expect(api.trailSince, [0]);
     expect(find.byKey(SiteMappingTrailPage.canvasKey), findsOneWidget);
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('老站点（没这个接口，404）：退回录包轨迹', (t) async {
+    final api = FakeApi('admin')..previewReplies = [const SiteError(404, '没有 GET')];
+    await _open(t, api);
+    expect(api.trailSince, [0]);
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('狗暂时不在线（409、不是不支持）：不退回轨迹，说连不上、接着问（内审应修 1）', (t) async {
+    final api = FakeApi('admin')
+      ..previewReplies = [const SiteError(409, 'A 不在线或状态不新鲜'), _pv(1)];
+    await _open(t, api);
+    expect(api.trailSince, isEmpty);
+    expect(_status(t), contains('不在线'));
+    await t.pump(const Duration(seconds: 3));
+    expect(api.previewSince, [0, 0]);
+    expect(find.byKey(SiteMappingTrailPage.previewKey), findsOneWidget);
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('同一趟里 seq 回到 0（打包收了中间目录）：留着最后一张（内审小 1）', (t) async {
+    final api = FakeApi('admin')
+      ..previewReplies = [
+        _pv(4, rec: false),
+        <String, dynamic>{'live': true, 'seq': 0, 'recording': false, 'map_id': 'estate-1',
+          'version': '9', 'preview_error': ''},
+      ];
+    await _open(t, api);
+    await t.pump(const Duration(seconds: 3));
+    expect(api.previewSince, [0, 4]);
+    expect(find.byKey(SiteMappingTrailPage.previewKey), findsOneWidget);
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('预览进程退了：说，建图不受影响（内审应修 5）', (t) async {
+    final api = FakeApi('admin')
+      ..previewReplies = [
+        <String, dynamic>{'live': true, 'seq': 0, 'recording': true, 'map_id': 'm', 'version': '1',
+          'preview_error': '', 'preview_running': false},
+      ];
+    await _open(t, api);
+    expect(_status(t), contains('预览进程停了'));
+    expect(_status(t), contains('建图不受影响'));
     await t.pumpWidget(const SizedBox());
   });
 

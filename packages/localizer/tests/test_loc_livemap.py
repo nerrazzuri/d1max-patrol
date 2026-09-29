@@ -8,6 +8,7 @@ import base64
 import json
 import math
 import struct
+import types
 import zlib
 
 import pytest
@@ -361,3 +362,91 @@ def test_不反序列化就读得出时间戳_大小端都认():
     be = b"\x00\x00\x00\x00" + struct.pack(">iI", 12, 500_000_000)
     assert L.cdr_stamp(le) == pytest.approx(1700000000.25)
     assert L.cdr_stamp(be) == pytest.approx(12.5)
+
+
+# ------------------------------------------------------------------ 内审修复
+
+def test_室内天花板比地面密_上照样按地面定():
+    """内审应修 4:定号窗口放到 ±2 m 时,离地 2.4 m 的天花板(雷达上方 1.9 m)落进来又更密,「上」翻了、
+    整张预览镜像。跟建图脚本一样只看 ±1.5 m。"""
+    g = L.LiveGrid()
+    floor = [_world(x, y, 0.0) for x in np.arange(-2, 2, 0.2) for y in np.arange(-2, 2, 0.2)]
+    ceil = [_world(x, y, 2.4) for x in np.arange(-2, 2, 0.05) for y in np.arange(-2, 2, 0.05)]
+    pts = np.array(floor + ceil)
+    o = _world(0.0, 0.0, H)
+    for _ in range(L.UP_FRAMES):
+        g.add(o, I3, pts)
+    assert np.allclose(g.up, [1, 0, 0])
+
+
+def test_时间戳往回跳_从那一帧重新算_不冻住():
+    f = L.Feeder(_Grid())
+    assert [f.want(t) for t in (1000.0, 1000.5, 1001.0, 10.0, 10.5, 11.0, 10.7, 10.8)] == \
+        [True, True, True, True, True, True, True, False]
+
+
+class _M:
+    """假的 ``nav_msgs/Odometry``。"""
+    def __init__(self, t, p, q):
+        ns = types.SimpleNamespace
+        self.header = ns(stamp=ns(sec=int(t), nanosec=int(round((t % 1) * 1e9))))
+        self.pose = ns(pose=ns(position=ns(x=p[0], y=p[1], z=p[2]),
+                               orientation=ns(x=q[0], y=q[1], z=q[2], w=q[3])))
+
+
+def _raw(t):
+    return b"\x00\x01\x00\x00" + struct.pack("<iI", int(t), int(round((t % 1) * 1e9)))
+
+
+def test_回调_坏消息丢掉计数_不往外抛_好的照收():
+    g = _Grid()
+    f = L.Feeder(g)
+
+    def decode(raw):
+        if raw.endswith(b"bad"):
+            raise KeyError("x")
+        return np.ones((8, 3))
+    h = L.Handlers(f, decode_cloud=decode)
+    h.on_scan(b"\x00\x01")                              # 太短
+    h.on_scan(_raw(5.0) + b"bad")                       # 缺字段
+    h.on_pose(_M(5.0, (float("nan"), 0, 0), (0, 0, 0, 1)))
+    h.on_pose(_M(5.0, (0, 0, 0), (0, 0, 0, 0)))         # 全零四元数
+    h.on_pose(object())                                 # 不像消息
+    assert h.bad == 5 and not g.added
+    h.on_scan(_raw(6.0))
+    h.on_pose(_M(6.0, (1, 2, 3), (0, 0, 0, 1)))
+    assert len(g.added) == 1 and np.allclose(g.added[0][0], [1, 2, 3])
+
+
+def test_快照不写_NaN(tmp_path):
+    g = L.LiveGrid()
+    _feed(g, L.UP_FRAMES)
+    g.pose = (float("nan"), 0.0, 0.0)
+    snap = L.Snapshots(tmp_path, run="r", now=lambda: 0.0)
+    assert snap.write(g) is False and snap.seq == 0
+    assert not (tmp_path / L.SNAPSHOT).exists()
+
+
+def test_PNG_太大先缩一半再发_障碍优先_左下角不动(tmp_path, monkeypatch):
+    g = L.LiveGrid()
+    _feed(g, L.UP_FRAMES)
+    img, meta = g.render()
+    monkeypatch.setattr(L, "PNG_MAX_BYTES", len(L.png(img)) - 1)
+    snap = L.Snapshots(tmp_path, run="r", now=lambda: 0.0)
+    assert snap.write(g) is True
+    d = json.loads((tmp_path / L.SNAPSHOT).read_text())
+    small = _png_decode(base64.b64decode(d["png"]))
+    assert d["res"] == pytest.approx(2 * meta["res"]) and d["origin"] == meta["origin"]
+    assert small.shape == (d["height"], d["width"]) == ((img.shape[0] + 1) // 2,
+                                                       (img.shape[1] + 1) // 2)
+    assert _cell(small, d, 5.05, 0.5) == L.OCC and _cell(small, d, 1.0, 0.5) == L.FREE
+
+
+def test_缩一半_奇数行补在上面():
+    img = np.array([[L.OCC, L.UNKNOWN, L.FREE],
+                    [L.UNKNOWN, L.UNKNOWN, L.UNKNOWN],
+                    [L.FREE, L.UNKNOWN, L.UNKNOWN]], np.uint8)
+    out, meta = L.halve(img, {"res": 0.1, "origin": [0.0, 0.0], "width": 3, "height": 3})
+    # 补一行在最上、一列在最右:下面两行并成第 1 行,第 0 行是最上那行
+    assert out.tolist() == [[L.OCC, L.FREE], [L.FREE, L.UNKNOWN]]
+    assert meta == {"res": 0.2, "origin": [0.0, 0.0], "width": 2, "height": 2}

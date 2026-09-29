@@ -13,4 +13,5 @@ set +u
 . /opt/ros/humble/setup.sh
 set -u
 export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
-exec /usr/bin/python3 -m d1max_localizer.livemap "$@"
+# 降一档优先级(内审小 4):预览是给人看的,CPU 紧的时候让着在线建图、录包、定位器
+exec nice -n 10 /usr/bin/python3 -m d1max_localizer.livemap "$@"

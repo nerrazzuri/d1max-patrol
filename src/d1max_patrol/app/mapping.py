@@ -398,6 +398,11 @@ class MappingOrchestrator:
             stop_signal=signal.SIGINT,          # SIGTERM 它不存盘(见 ProcSpec.stop_signal)
         )
 
+    def preview_running(self) -> bool:
+        """建图预览进程还在不在(W09f 内审应修 5:起来之后才退的,开录时记不下原因)。
+        在事件循环里调(会摘掉已退的进程)。"""
+        return self.PREVIEW in self._procs.running()
+
     def preview_dir(self, map_id: str) -> Path:
         """建图预览的快照写在哪(W09f):这张图的中间目录底下。"""
         return self._out(map_id)[1] / "preview"

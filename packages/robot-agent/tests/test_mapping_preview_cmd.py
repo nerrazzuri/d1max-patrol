@@ -19,10 +19,14 @@ class 假录包:
         self.recording = False
         self.last_bag = ""
         self.asked: list[int] = []
+        self.alive = True
 
     def preview(self, since):
         self.asked.append(since)
         return {"live": True, "seq": 5, "recording": self.recording}
+
+    def preview_alive(self):
+        return self.alive
 
 
 class 老录包:
@@ -110,4 +114,30 @@ async def test_服务读快照炸了_回拒绝不炸代理(tmp_path):
     await rt._on_cmd(_cmd("mapping_preview", {}, "e1", c))
     await broker.drain()
     assert _acks(ears, "e1")[-1]["reason"].startswith("read_failed")
+    await rt.close()
+
+
+
+async def test_在录时带上预览进程在不在(tmp_path):
+    """内审应修 5:预览进程起来之后才退的,开录时记不下原因,手机一直说「等第一张」。"""
+    m = 假录包()
+    m.recording, m.alive = True, False
+    broker, c, ears, rt = await _台(tmp_path, m)
+    await rt._on_cmd(_cmd("mapping_preview", {}, "a1", c))
+    await broker.drain()
+    assert _acks(ears, "a1")[-1]["data"]["preview_running"] is False
+    await rt.close()
+
+
+async def test_服务读快照抛别的错_也回拒绝(tmp_path):
+    """内审应修 6:原来只接 OSError,别的错这条命令没有回执、站点等到超时。"""
+    m = 假录包()
+
+    def 炸(since):
+        raise TypeError("cannot unpack")
+    m.preview = 炸
+    broker, c, ears, rt = await _台(tmp_path, m)
+    await rt._on_cmd(_cmd("mapping_preview", {}, "e2", c))
+    await broker.drain()
+    assert _acks(ears, "e2")[-1]["reason"].startswith("read_failed: TypeError")
     await rt.close()

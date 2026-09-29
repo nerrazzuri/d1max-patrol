@@ -404,9 +404,13 @@ class AgentRuntime:
             if isinstance(n, bool) or not isinstance(n, int) or n < 0:
                 return "payload: since 要是不小于 0 的整数"
             try:
+                alive_fn = getattr(self.mapper, "preview_alive", None)
+                alive = alive_fn() if callable(alive_fn) else True
                 got = await asyncio.to_thread(self.mapper.preview, n)
-            except OSError as exc:
-                return f"read_failed: {exc}"[:200]
+            except Exception as exc:  # noqa: BLE001 —— 回 read_failed,别让这条命令没回执
+                return f"read_failed: {type(exc).__name__}: {exc}"[:200]
+            if got.get("live") and got.get("recording"):
+                got["preview_running"] = alive
             starting = self._running(self._rec_job) and self._rec_action == "start"
             return "", got | {"starting": starting}
         if kind.startswith("release_"):

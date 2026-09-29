@@ -65,6 +65,11 @@ class DispatchRefused(RuntimeError):
     """派遣条件不满足。``reason`` 给人看,站点 API 原样回 409。"""
 
 
+class Unsupported(DispatchRefused):
+    """狗没报这项能力(老代理)。站点 API 照样回 409,另带 ``unsupported: true`` —— 手机据此跟「暂时
+    不在线」分开(W09f 内审应修 1:原来一律 409,狗断网几秒手机就当成老狗、退回录包轨迹回不来)。"""
+
+
 # ------------------------------------------------------------ 订阅(SSE 用)
 
 
@@ -578,7 +583,7 @@ class Dispatcher:
         if not self._fresh(c):
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
         if c.capabilities is None or kind not in c.capabilities.tasks:
-            raise DispatchRefused(f"{robot_id} 不支持 {kind}")
+            raise Unsupported(f"{robot_id} 不支持 {kind}")
         if kind in _SKEW_GATED or (kind == "mapping" and payload.get("action") == "start"):
             # W09d 内审:换图、建图、开录、装版本、切版本也要有效期对得上;只读的、停录、退版本不挡
             self._check_skew(robot_id)

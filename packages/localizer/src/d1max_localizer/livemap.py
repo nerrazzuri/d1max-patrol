@@ -54,6 +54,9 @@ PAIR_WINDOW_S = (-0.01, 0.08)
 KEEP_SCANS = 10                 # 等位姿的点云最多留几帧
 KEEP_POSES = 50
 PERIOD_S = 3.0                  # 多久写一张快照(有新帧才写)
+#: PNG 超过这么大就先把图缩一半再发(障碍优先),直到放得下 —— 回执有上限(代理那边 240 KiB),
+#: 不能因为图大就一直不发(内审再议 1)
+PNG_MAX_BYTES = 150 * 1024
 SNAPSHOT = "preview.json"
 UNKNOWN, FREE, OCC = 205, 254, 0   # 跟 floor.pgm 一个配色
 
@@ -114,11 +117,13 @@ class LiveGrid:
             d = p - o
             n = np.linalg.norm(d, axis=1)
             h = (d @ u)[(n >= RANGE_M[0]) & (n <= RANGE_M[1])]
-            rel.append(h[np.abs(h) < 2.0])
+            rel.append(h[np.abs(h) < 1.5])
         h = np.concatenate(rel) if rel else np.zeros(0)
         if len(h) == 0:
             return False
-        hist, edges = np.histogram(h, bins=80, range=(-2.0, 2.0))
+        # 跟建图脚本 ``build.orient`` 一样只看雷达上下 1.5 m(内审应修 4:放到 2 m,室内 2.4 m 的天花板
+        # 落进来、又比地面密,「上」就翻了、整张预览镜像)
+        hist, edges = np.histogram(h, bins=60, range=(-1.5, 1.5))
         k = int(np.argmax(hist))
         peak = (edges[k] + edges[k + 1]) / 2
         if peak > 0:
@@ -240,6 +245,19 @@ def png(img: Any) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
+def halve(img: Any, meta: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    """图缩一半:2 × 2 并一格,有障碍算障碍、否则有地面算地面。左下角不动(往上、往右补未知)。"""
+    h, w = img.shape
+    ph, pw = h % 2, w % 2
+    a = np.pad(img, ((ph, 0), (0, pw)), constant_values=UNKNOWN)      # 第 0 行在最上:补在上面
+    b = a.reshape(a.shape[0] // 2, 2, a.shape[1] // 2, 2)
+    out = np.full((b.shape[0], b.shape[2]), UNKNOWN, np.uint8)
+    out[(b == FREE).any(axis=(1, 3))] = FREE
+    out[(b == OCC).any(axis=(1, 3))] = OCC
+    return out, meta | {"res": meta["res"] * 2, "width": int(out.shape[1]),
+                        "height": int(out.shape[0])}
+
+
 class Snapshots:
     """把栅格写成快照(一个 JSON:说明 + base64 的 PNG,先写临时文件再改名 —— 读的人不会读到半张)。"""
 
@@ -258,17 +276,23 @@ class Snapshots:
         if r is None:
             return False
         img, meta = r
+        data = png(img)
+        while len(data) > PNG_MAX_BYTES and max(img.shape) > 16:
+            img, meta = halve(img, meta)
+            data = png(img)
         doc = meta | {"seq": self.seq + 1, "run": self.run, "frames": grid.frames,
                       "dropped": dropped, "written_at": self._now(),
                       "pose": [round(v, 3) for v in grid.pose] if grid.pose else None,
                       "trail": [[round(x, 2), round(y, 2)] for x, y in grid.trail],
-                      "png": base64.b64encode(png(img)).decode("ascii")}
+                      "png": base64.b64encode(data).decode("ascii")}
         tmp = self.out / f".{SNAPSHOT}.tmp"
         try:
             self.out.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(doc, separators=(",", ":")))
+            # 不许写 NaN:手机上的 JSON 解不开(内审应修 3)
+            text = json.dumps(doc, separators=(",", ":"), allow_nan=False)
+            tmp.write_text(text)
             os.replace(tmp, self.out / SNAPSHOT)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             log.warning("预览快照写不了(下次再试):%s", exc)
             return False
         self.seq += 1
@@ -290,7 +314,8 @@ class Feeder:
             maxlen=KEEP_POSES)
 
     def want(self, stamp: float) -> bool:
-        if self._last is not None and stamp - self._last < self._gap - 1e-9:
+        # 时间戳往回跳了(钟被校回去):从这一帧重新算,不然要等时间追上旧值才再收(内审应修 2)
+        if self._last is not None and 0 <= stamp - self._last < self._gap - 1e-9:
             self.dropped += 1
             return False
         self._last = stamp
@@ -322,6 +347,41 @@ class Feeder:
         self.grid.add(o, R, xyz @ R.T + o)
 
 
+class Handlers:
+    """ROS 回调(:func:`main` 接上):一条坏消息只丢它自己,不让预览进程退出(内审应修 3:短报文、
+    缺字段的点云、全零或 NaN 的位姿原来会一路抛出 ``spin_once``,进程退了也没人重启)。"""
+
+    def __init__(self, feeder: Feeder, *, decode_cloud: Callable[[bytes], Any]) -> None:
+        self.feeder = feeder
+        self._decode = decode_cloud
+        self.bad = 0
+
+    def _bad(self, what: str, exc: BaseException | None = None) -> None:
+        self.bad += 1
+        if self.bad == 1 or self.bad % 100 == 0:
+            log.warning("预览:丢了一条坏的%s(累计 %d):%s", what, self.bad, exc or "不是有限数")
+
+    def on_scan(self, raw: bytes) -> None:
+        try:
+            st = cdr_stamp(raw)
+            if self.feeder.want(st):
+                self.feeder.on_scan(st, self._decode(raw))
+        except Exception as exc:  # noqa: BLE001 —— 尽力而为,坏一帧丢一帧
+            self._bad("点云", exc)
+
+    def on_pose(self, m: Any) -> None:
+        try:
+            s, p, o = m.header.stamp, m.pose.pose.position, m.pose.pose.orientation
+            v = (p.x, p.y, p.z, o.x, o.y, o.z, o.w)
+            norm = o.x ** 2 + o.y ** 2 + o.z ** 2 + o.w ** 2
+            if not all(math.isfinite(c) for c in v) or norm < 1e-9:
+                self._bad("位姿")
+                return
+            self.feeder.on_pose(s.sec + s.nanosec * 1e-9, (p.x, p.y, p.z), (o.x, o.y, o.z, o.w))
+        except Exception as exc:  # noqa: BLE001
+            self._bad("位姿", exc)
+
+
 def _paired(scan_t: float, pose_t: float) -> bool:
     return PAIR_WINDOW_S[0] - 1e-9 <= pose_t - scan_t <= PAIR_WINDOW_S[1] + 1e-9
 
@@ -346,6 +406,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     import rclpy
     from nav_msgs.msg import Odometry
+    from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
     from rclpy.serialization import deserialize_message
     from sensor_msgs.msg import PointCloud2
@@ -370,29 +431,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     qos = QoSProfile(depth=2, history=HistoryPolicy.KEEP_LAST,
                      reliability=ReliabilityPolicy.BEST_EFFORT)
 
-    def on_scan(raw: bytes) -> None:
-        st = cdr_stamp(raw)
-        if feeder.want(st):
-            feeder.on_scan(st, cloud_xyz(deserialize_message(raw, PointCloud2)))
-
-    def on_pose(m: Any) -> None:
-        s, p, o = m.header.stamp, m.pose.pose.position, m.pose.pose.orientation
-        feeder.on_pose(s.sec + s.nanosec * 1e-9, (p.x, p.y, p.z), (o.x, o.y, o.z, o.w))
-
-    node.create_subscription(PointCloud2, a.lidar_topic, on_scan, qos, raw=True)
+    h = Handlers(feeder, decode_cloud=lambda raw: cloud_xyz(deserialize_message(raw, PointCloud2)))
+    node.create_subscription(PointCloud2, a.lidar_topic, h.on_scan, qos, raw=True)
     pose_qos = QoSProfile(depth=KEEP_POSES, reliability=ReliabilityPolicy.BEST_EFFORT)
-    node.create_subscription(Odometry, a.pose_topic, on_pose, pose_qos)
+    node.create_subscription(Odometry, a.pose_topic, h.on_pose, pose_qos)
+    # 一个执行器反复用(全局的那个每次 spin_once 都要加、摘节点;内审小 4)
+    ex = SingleThreadedExecutor()
+    ex.add_node(node)
     log.info("预览:订 %s + %s,写到 %s", a.lidar_topic, a.pose_topic, a.out)
     last = time.monotonic()
     try:
         while not stop and rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=0.2)
+            ex.spin_once(timeout_sec=0.2)
             if time.monotonic() - last >= a.period:
                 last = time.monotonic()
                 if snaps.write(grid, dropped=feeder.dropped):
-                    log.info("快照 %d:%d 帧、丢 %d", snaps.seq, grid.frames, feeder.dropped)
+                    log.info("快照 %d:%d 帧、限速丢 %d、坏的 %d", snaps.seq, grid.frames,
+                             feeder.dropped, h.bad)
     finally:
         snaps.write(grid, dropped=feeder.dropped)
+        ex.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
     return 0

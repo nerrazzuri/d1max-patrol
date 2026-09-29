@@ -49,6 +49,9 @@ RETAIN_DISK_RATIO = 0.8
 PREVIEW_FILE = "preview.json"
 PREVIEW_FIELDS = ("run", "res", "origin", "width", "height", "pose", "trail", "frames", "dropped")
 PREVIEW_PNG_MAX_B64 = 200 * 1024
+#: 整条预览数据编码后的预算(回执上限 240 KiB 再留出命令号、主题):超了去掉 PNG、标 ``too_big``,
+#: 说明与轨迹照给(内审小 5:原来超了整条数据被出口兜底去掉,站点 502、手机只说连不上)
+PREVIEW_MAX_BYTES = 230 * 1024
 
 
 def storage_pressure(facts: Any) -> bool:
@@ -215,14 +218,16 @@ class MappingService:
         """建图预览(W09f,在线程里调):正在边走边建、或停了还没打包完的这一版的最新快照。没在边走边建
         回 ``{"live": False}``(手机退回录包轨迹);还没第一张 ``seq`` 是 0;``seq`` 比 ``since`` 新才带
         PNG(base64),说明(位姿、轨迹……)每次都给。``age_s`` 是快照多久没更新了(狗自己的钟比)。"""
-        if self.recording and self.live is not None:
-            map_id, version = self.live
-        elif self.pending is not None:
-            _, map_id, version = self.pending
+        # 在线程里跑:事件循环那边随时可能停录、清掉这几个 —— 先各取一份再判(内审应修 6)
+        recording, live, pending = self.recording, self.live, self.pending
+        if recording and live is not None:
+            map_id, version = live
+        elif pending is not None:
+            _, map_id, version = pending
         else:
             return {"live": False}
         out: dict[str, Any] = {"live": True, "map_id": map_id, "version": version, "seq": 0,
-                               "recording": self.recording,
+                               "recording": recording,
                                "preview_error": str(getattr(self.orch, "preview_error", ""))}
         try:
             doc = json.loads((Path(self.orch.preview_dir(map_id)) / PREVIEW_FILE)
@@ -241,7 +246,15 @@ class MappingService:
                 out["too_big"] = True
             else:
                 out["png"] = png
+                if len(json.dumps(out, ensure_ascii=False)) > PREVIEW_MAX_BYTES:
+                    del out["png"]
+                    out["too_big"] = True
         return out
+
+    def preview_alive(self) -> bool:
+        """正在边走边建时预览进程还在不在(**在事件循环里调**:进程表只在那边动)。"""
+        f = getattr(self.orch, "preview_running", None)
+        return bool(f()) if callable(f) else True
 
     async def shutdown(self) -> None:
         """代理收尾:正在录就好好停下(录包写完索引、在线建图 SIGINT 存盘),待打包的重启后接着做。"""
