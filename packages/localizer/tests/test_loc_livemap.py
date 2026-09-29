@@ -443,10 +443,19 @@ def test_PNG_太大先缩一半再发_障碍优先_左下角不动(tmp_path, mon
 
 
 def test_缩一半_奇数行补在上面():
-    img = np.array([[L.OCC, L.UNKNOWN, L.FREE],
-                    [L.UNKNOWN, L.UNKNOWN, L.UNKNOWN],
-                    [L.FREE, L.UNKNOWN, L.UNKNOWN]], np.uint8)
+    img = np.array([[L.UNKNOWN, L.UNKNOWN, L.UNKNOWN],
+                    [L.OCC, L.UNKNOWN, L.UNKNOWN],
+                    [L.FREE, L.FREE, L.UNKNOWN]], np.uint8)
     out, meta = L.halve(img, {"res": 0.1, "origin": [0.0, 0.0], "width": 3, "height": 3})
-    # 补一行在最上、一列在最右:下面两行并成第 1 行,第 0 行是最上那行
-    assert out.tolist() == [[L.OCC, L.FREE], [L.FREE, L.UNKNOWN]]
+    # 补一行在最上、一列在最右:下面两行并成第 1 行(障碍与地面在一格里:算障碍),最上那行单独成第 0 行
+    assert out.tolist() == [[L.UNKNOWN, L.UNKNOWN], [L.OCC, L.UNKNOWN]]
     assert meta == {"res": 0.2, "origin": [0.0, 0.0], "width": 2, "height": 2}
+
+
+
+def test_定号时附近一个点都没有_先不定():
+    g = L.LiveGrid()
+    far = np.array([_world(10.0, 0.0, 3.0)] * 10)       # 都在雷达上方 2.5 m:不在 ±1.5 m 里
+    for _ in range(L.UP_FRAMES + 2):
+        g.add(_world(0.0, 0.0, H), I3, far)
+    assert g.up is None and g.frames == 0

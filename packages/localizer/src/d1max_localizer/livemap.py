@@ -116,14 +116,13 @@ class LiveGrid:
         for o, _, p in self._early:
             d = p - o
             n = np.linalg.norm(d, axis=1)
-            h = (d @ u)[(n >= RANGE_M[0]) & (n <= RANGE_M[1])]
-            rel.append(h[np.abs(h) < 1.5])
+            rel.append((d @ u)[(n >= RANGE_M[0]) & (n <= RANGE_M[1])])
         h = np.concatenate(rel) if rel else np.zeros(0)
-        if len(h) == 0:
-            return False
         # 跟建图脚本 ``build.orient`` 一样只看雷达上下 1.5 m(内审应修 4:放到 2 m,室内 2.4 m 的天花板
-        # 落进来、又比地面密,「上」就翻了、整张预览镜像)
+        # 落进来、又比地面密,「上」就翻了、整张预览镜像)。范围外的直方图自己不数。
         hist, edges = np.histogram(h, bins=60, range=(-1.5, 1.5))
+        if hist.max(initial=0) == 0:
+            return False
         k = int(np.argmax(hist))
         peak = (edges[k] + edges[k + 1]) / 2
         if peak > 0:
