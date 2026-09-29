@@ -51,7 +51,8 @@ def watch_summary(dispatcher: Dispatcher, desk: AlertDesk, *, now_ms: int,
             why["clock_skew_s"] = NO_SKEW
         else:
             battery = t.battery_pct
-            skew = round((t.stamp - t_at) / 1000.0, 1)
+            skew = dispatcher.clock_skew_s(rid)             # W09d:按一段遥测估
+            skew = None if skew is None else round(skew, 1)
         robots.append({
             "robot_id": rid,
             "online": bool(c.status and c.status.online),

@@ -396,3 +396,85 @@ def test_仿真定位器经本机定位桥_跑通一条goto(tmp_path):
 
 async def _ok(a) -> bool:
     return a.runtime.parts.nav.anchor.ok(True)
+
+
+def test_证书还没生效连不上_说是狗的钟可能不对():
+    """W09d:Orin 的钟慢了半年 → 站点证书「还没生效」,代理连不上;现场只看到一句 TLS 错误的话
+    找不到原因。"""
+    import ssl
+
+    from d1max_agent.main import clock_hint
+    e = ssl.SSLCertVerificationError(
+        1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+           "certificate is not yet valid (_ssl.c:1007)")
+    e.verify_code = 9
+    wrapped = RuntimeError("连不上 broker")
+    wrapped.__cause__ = e
+    hint = clock_hint(wrapped, now_ms=1_772_841_600_000)          # 2026-03-07
+    assert "钟" in hint and "2026-03-07" in hint and "W09d" in hint
+    e2 = ssl.SSLCertVerificationError(1, "certificate has expired")
+    e2.verify_code = 10
+    assert "钟" in clock_hint(e2, now_ms=1_772_841_600_000)
+    other = ssl.SSLCertVerificationError(1, "unable to get local issuer certificate")
+    other.verify_code = 20
+    assert clock_hint(other, now_ms=1) == "", "别的 TLS 错不乱说是钟"
+    assert clock_hint(OSError("Connection refused"), now_ms=1) == ""
+
+
+def test_起不来时自己再握一次手_拿到真的_TLS_错(tmp_path):
+    """paho 在自己的线程里握手,失败时回调里不带异常,传输层只说「TCP 或 TLS 握手失败」—— 原因丢了。
+    代理起不来时自己按同一套证书再握一次(W09d),拿到真的错再判是不是钟。"""
+    import socket
+    import ssl
+    import subprocess
+    import threading
+
+    from d1max_agent.main import clock_hint, tls_probe
+    key, crt = tmp_path / "k.pem", tmp_path / "c.pem"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
+                    "-out", str(crt), "-days", "1", "-subj", "/CN=127.0.0.1"],
+                   check=True, capture_output=True)
+    srv_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    srv_ctx.load_cert_chain(str(crt), str(key))
+    lsock = socket.socket()
+    lsock.bind(("127.0.0.1", 0))
+    lsock.listen(1)
+    port = lsock.getsockname()[1]
+
+    def serve():
+        conn, _ = lsock.accept()
+        try:
+            srv_ctx.wrap_socket(conn, server_side=True).close()
+        except (ssl.SSLError, OSError):
+            conn.close()
+    threading.Thread(target=serve, daemon=True).start()
+    other_ca = tmp_path / "other.pem"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout",
+                    str(tmp_path / "ok.pem"), "-out", str(other_ca), "-days", "1",
+                    "-subj", "/CN=other"], check=True, capture_output=True)
+    err = tls_probe(f"mqtts://127.0.0.1:{port}", str(other_ca), None, None, timeout_s=5)
+    lsock.close()
+    assert isinstance(err, ssl.SSLCertVerificationError)
+    assert clock_hint(err, now_ms=1) == "", "不是有效期的事:不说钟"
+    assert tls_probe("memory://", None, None, None) is None
+
+
+def test_起不来_握手说证书还没生效_启动失败的信息里带上钟的提示(monkeypatch, capsys):
+    import ssl
+    from types import SimpleNamespace
+
+    class 起不来:
+        def start(self):
+            raise ConnectionError("连不上 broker(TCP 或 TLS 握手失败)")
+
+        def stop(self):
+            pass
+    e = ssl.SSLCertVerificationError(1, "certificate is not yet valid")
+    e.verify_code = 9
+    monkeypatch.setattr(agent_main, "parse_args", lambda argv: SimpleNamespace(
+        transport="mqtts://site.local:8883", tls_ca="ca", tls_cert="c", tls_key="k"))
+    monkeypatch.setattr(agent_main, "build", lambda args: 起不来())
+    monkeypatch.setattr(agent_main, "tls_probe", lambda *a, **k: e)
+    assert agent_main.main([]) == 1
+    err = capsys.readouterr().err
+    assert "起不来" in err and "钟可能不对" in err

@@ -31,9 +31,20 @@ done
 
 echo "[1/5] 系统包"
 apt-get update
-apt-get install -y mosquitto openssl python3-venv ffmpeg   # ffmpeg:视频经站点(W00c5b)
+apt-get install -y mosquitto openssl python3-venv ffmpeg chrony   # ffmpeg:视频经站点(W00c5b);chrony:给狗对时(W09d)
 # 发行版自带的 mosquitto 实例我们不用(配置冲突、多开一个端口),停掉;我们跑自己的单元。
 systemctl disable --now mosquitto.service 2>/dev/null || true
+
+# 站点主机当狗的时间服务器(W09d):只给私网发;自己连不上外网也照样发它的钟(狗跟站点对上最要紧)。
+install -d -m 0755 /etc/chrony/conf.d
+cat > /etc/chrony/conf.d/d1max-site.conf <<'对时'
+# D1 Max 站点(W09d):给庄园局域网里的狗发时间
+allow 10.0.0.0/8
+allow 172.16.0.0/12
+allow 192.168.0.0/16
+local stratum 10
+对时
+systemctl restart chrony
 
 echo "[2/5] 用户与目录"
 id -u d1max-site >/dev/null 2>&1 || useradd --system --home-dir "$HOME_DIR" --shell /usr/sbin/nologin d1max-site

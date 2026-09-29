@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# 狗向站点主机对时(W09d):按 /etc/d1max/env 算出 systemd-timesyncd 的配置,打到标准输出;装机脚本把它写进
+# /etc/systemd/timesyncd.conf.d/d1max.conf。
+#
+#   d1max-timesync-conf [env 文件,缺省 /etc/d1max/env]
+#
+# 站点主机:优先 D1MAX_SITE_NTP,没有就从 D1MAX_SITE_MQTT(mqtts://<主机>:<端口>)里取。**不 source 这份文件**:
+# 它是 systemd 的 EnvironmentFile=,按字面量读(同装机脚本的 read_env_value)—— `a;reboot` 这种手敲歪的值
+# bash 一求值就以 root 跑了。主机名只认字母、数字、点、减号。
+# 退出码:0 打出了配置;3 两个都没填(装完填了站点地址再跑一遍装机脚本);4 值不干净。
+set -euo pipefail
+ENV_FILE="${1:-/etc/d1max/env}"
+
+read_env_value() {
+  sed -n "s/^[[:space:]]*$1=//p" "$ENV_FILE" 2>/dev/null \
+    | tail -n 1 \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+host=$(read_env_value D1MAX_SITE_NTP)
+if [[ -z "$host" ]]; then
+  mqtt=$(read_env_value D1MAX_SITE_MQTT)
+  host=${mqtt#*://}                       # 去掉 mqtts://
+  host=${host%%/*}                        # 去掉路径
+  host=${host%:*}                         # 去掉端口
+fi
+if [[ -z "$host" ]]; then
+  echo "对时:$ENV_FILE 里 D1MAX_SITE_NTP、D1MAX_SITE_MQTT 都没填,先不配(填了站点地址再跑一遍装机脚本)" >&2
+  exit 3
+fi
+if [[ ! "$host" =~ ^[A-Za-z0-9.-]+$ ]]; then
+  echo "对时:站点主机 [$host] 不干净(只收字母、数字、点、减号;等号两边不要加引号),先不配" >&2
+  exit 4
+fi
+printf '[Time]\nNTP=%s\nFallbackNTP=\n' "$host"

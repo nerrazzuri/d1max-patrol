@@ -224,19 +224,30 @@ def test_掉线_跑着任务是P1_空闲是P2_回来了再掉再报(台):
     assert sum(a.count for a in desk.book.all() if a.robot == "B") == 2
 
 
-def test_钟偏超过60秒报一次_回正了再偏再报(台):
+def test_狗的钟差_按一段遥测估_超过2秒报一次_回到1秒以内再武装(台):
+    """W09d:原来单条遥测、60 s 的线 —— 在途几秒就能误差几秒,只抓得住差半年那种。现在最近 30 条里
+    取「狗的时刻 − 站点收到的时刻」最大的(在途只会让它变小),2 s 报、1 s 以内重新武装。"""
     c, db, desk, src, *_ = 台
     pose = MapPose(map_id="m", map_version="1", frame_id="map", x=0, y=0, yaw=0)
 
-    def tele(off_s):
-        return Telemetry(stamp=c.ms + int(off_s * 1000), pose=pose, battery_pct=80,
+    def tele(skew_s, transit_s=0.05):
+        c.ms += 1000
+        return Telemetry(stamp=c.ms + int((skew_s - transit_s) * 1000), pose=pose, battery_pct=80,
                          task_state=None, loc_quality=1.0)
-    src.on_telemetry("A", tele(5))
-    src.on_telemetry("A", tele(90))
-    src.on_telemetry("A", tele(95))
-    assert _kinds(desk) == ["clock_skew"]
-    a = desk.book.all()[0]
-    assert "90" in a.detail
+    for _ in range(5):
+        src.on_telemetry("A", tele(0.2))
+    src.on_telemetry("A", tele(0.2, transit_s=8.0))     # 一条在 broker 里憋了 8 s:不误报
+    assert _kinds(desk) == []
+    for _ in range(3):
+        src.on_telemetry("A", tele(3.0))
+    assert _kinds(desk) == ["clock_skew"] and "3" in desk.book.all()[0].detail
+    for _ in range(40):                                  # 对上了(窗口滑过去)
+        src.on_telemetry("A", tele(0.1))
+    for _ in range(3):
+        src.on_telemetry("B", tele(-3.0))                # 狗慢 3 s 也报
+    assert sorted(a.robot for a in desk.book.all()) == ["A", "B"]
+    src.on_telemetry("A", tele(4.0))
+    assert sum(a.count for a in desk.book.all() if a.robot == "A") == 2, "回正过再偏:再报"
 
 
 def test_排程这一拍没办成报一次_好了再坏再报(台):

@@ -1299,3 +1299,46 @@ def test_代理服务停的时候只给代理发_SIGTERM_子进程由它按各�
     # 外审阻断 2:原来 180 s,在线建图允许存 300 s —— systemd 先把整组强杀。跟存盘时限直接比,
     # 再给引擎、录包索引、别的收尾留 60 s 以上
     assert t and int(t[0].split("=")[1]) >= LIVE_SAVE_GRACE_S + 60
+
+
+def test_对时配置_从env取站点主机_不求值_不干净的不写(tmp_path):
+    """W09d:狗向站点主机对时(systemd-timesyncd)。站点主机优先 D1MAX_SITE_NTP,没有从 D1MAX_SITE_MQTT
+    取主机;按 systemd 的规矩读(不 source,同 read_env_value)。"""
+    import subprocess
+    conf = DEPLOY / "d1max-timesync-conf"
+
+    def 跑(env_text):
+        f = tmp_path / "env"
+        f.write_text(env_text, encoding="utf-8")
+        return subprocess.run(["bash", str(conf), str(f)], capture_output=True, text=True,
+                              timeout=10)
+    r = 跑("D1MAX_SITE_MQTT=mqtts://site.local:8883\n")
+    assert r.returncode == 0 and r.stdout == "[Time]\nNTP=site.local\nFallbackNTP=\n", r.stderr
+    r = 跑("D1MAX_SITE_MQTT=mqtts://192.168.1.10:8883\nD1MAX_SITE_NTP= 10.0.0.2 \n")
+    assert r.returncode == 0 and "NTP=10.0.0.2\n" in r.stdout, "D1MAX_SITE_NTP 优先"
+    r = 跑("D1MAX_SITE_MQTT=\n")
+    assert r.returncode == 3 and r.stdout == "" and "D1MAX_SITE" in r.stderr
+    for bad in ("D1MAX_SITE_NTP=a;reboot\n", "D1MAX_SITE_MQTT=mqtts://$(id):8883\n",
+                "D1MAX_SITE_NTP=\"x\"\n"):
+        r = 跑(bad)
+        assert r.returncode == 4 and r.stdout == "", bad
+    subprocess.run(["bash", "-n", str(conf)], check=True)
+
+
+def test_装机写对时配置_卸载删掉_站点主机当_NTP_服务器_只给私网(装机脚本):
+    """W09d:狗上写 timesyncd 的配置、开 NTP、重启它;卸载删掉。站点主机装 chrony、只给私网发时间、
+    自己连不上外网也发(local stratum)。"""
+    assert "d1max-timesync-conf" in 装机脚本
+    assert "/etc/systemd/timesyncd.conf.d/d1max.conf" in 装机脚本
+    assert "timedatectl set-ntp true" in 装机脚本
+    assert "systemctl restart systemd-timesyncd" in 装机脚本
+    assert "# @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf" in 装机脚本
+    卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /etc/systemd/timesyncd.conf.d/d1max.conf" in 卸
+    assert 'rm_sys "/etc/systemd/timesyncd.conf.d/d1max.conf"' in 卸
+    站 = (SITE_DEPLOY / "install-site.sh").read_text(encoding="utf-8")
+    assert "chrony" in 站.split("apt-get install -y", 1)[1].splitlines()[0]
+    assert "/etc/chrony/conf.d/d1max-site.conf" in 站
+    for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
+        assert f"allow {net}" in 站
+    assert "local stratum 10" in 站 and "systemctl restart chrony" in 站

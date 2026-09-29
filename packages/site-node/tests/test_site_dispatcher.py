@@ -10,7 +10,7 @@ import pytest
 from d1max_adapter_sim.robot import SimRobot
 from d1max_agent.runtime import AgentRuntime
 from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
-from d1max_contract.messages import MapPose
+from d1max_contract.messages import MapPose, Telemetry
 from d1max_patrol.protocol.nav_types import Pose
 from d1max_site.db import SiteDB
 from d1max_site.dispatcher import Dispatcher, DispatchRefused
@@ -440,3 +440,29 @@ async def test_图外的点_goto和巡检发之前就拒_按狗加载的那一�
     t.site.maps = 读不了()
     with pytest.raises(DispatchRefused, match="读不了"):
         await t.site.goto("A", target(1.0), 0.8, issued_by="alice")
+
+
+
+async def test_狗的钟差大到命令有效期对不上_不派任务_叫停照发(台):
+    """W09d:命令有效期 60 s、狗按自己的钟判;钟差超过 30 s(一半),旧命令不过期或新命令一到就过期。"""
+    t = 台
+    await t.run(3)
+    for _ in range(5):                                   # 狗的钟快 40 s
+        t.site._on_telemetry("A", Telemetry(stamp=t.clock.ms + 40_000, pose=None, battery_pct=80,
+                                            task_state=None, loc_quality=1.0))
+    assert t.site.clock_skew_s("A") == pytest.approx(40.0, abs=0.5)
+    with pytest.raises(DispatchRefused, match=r"钟差 \+40 秒"):
+        await t.site.goto("A", target(1.0), 0.8, issued_by="alice")
+    assert "钟差" in t.site.dispatchable("A", "patrol")
+    r = await t.send(t.site.abort("A", "goto-x", issued_by="alice"))
+    assert r["ack"]["result"] in ("accepted", "rejected"), "叫停不挡"
+
+
+async def test_钟差不大照派(台):
+    t = 台
+    await t.run(3)
+    for _ in range(5):
+        t.site._on_telemetry("A", Telemetry(stamp=t.clock.ms + 10_000, pose=None, battery_pct=80,
+                                            task_state=None, loc_quality=1.0))
+    r = await t.send(t.site.goto("A", target(1.0), 0.8, issued_by="alice"))
+    assert r["ack"]["result"] == "accepted"

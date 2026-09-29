@@ -188,7 +188,7 @@ class MappingService:
         err: BaseException | None = None
         try:
             bag = Path(await self.orch.stop_record())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 什么错都先按「停了」收,再原样往外报
             err = exc
             bag = self.bags_root / self.last_bag
         self.recording = False

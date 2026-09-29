@@ -446,6 +446,52 @@ def _releases(args: argparse.Namespace, registration: Registration) -> Any:
                       restart=restart, sn=registration.robot_id)
 
 
+#: 证书「还没生效」「已过期」(OpenSSL 的 X509_V_ERR_CERT_NOT_YET_VALID / CERT_HAS_EXPIRED)。
+_CERT_TIME_ERRORS = (9, 10)
+
+
+def tls_probe(url: str, ca: str | None, cert: str | None, key: str | None, *,
+              timeout_s: float = 5.0) -> BaseException | None:
+    """按同一套证书跟站点 broker 握一次手,回握手的错(没错、不是 mqtts 回 None)。paho 在自己的线程里
+    握手,失败时回调里不带异常,传输层只说「TCP 或 TLS 握手失败」—— 代理起不来时靠它拿到真的原因
+    (W09d)。"""
+    import socket
+    import ssl
+    if not url.startswith("mqtts://"):
+        return None
+    parts = urlsplit(url)
+    host, port = parts.hostname or "", parts.port or 8883
+    try:
+        ctx = ssl.create_default_context(cafile=ca)
+        if cert and key:
+            ctx.load_cert_chain(cert, key)
+        with socket.create_connection((host, port), timeout=timeout_s) as raw, \
+                ctx.wrap_socket(raw, server_hostname=host):
+            return None
+    except Exception as exc:  # noqa: BLE001 - 要的就是这个错
+        return exc
+
+
+def clock_hint(exc: BaseException, *, now_ms: int) -> str:
+    """连站点失败、原因是证书的有效期(W09d):多半是狗的钟不对 —— Orin 没有 NTP 时钟能慢半年,
+    站点证书就「还没生效」。回一句给现场看的提示;别的错回空串。"""
+    import datetime as dt
+    import ssl
+    seen: set[int] = set()
+    e: BaseException | None = exc
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, ssl.SSLCertVerificationError) and (
+                getattr(e, "verify_code", None) in _CERT_TIME_ERRORS
+                or "not yet valid" in str(e) or "has expired" in str(e)):
+            now = dt.datetime.fromtimestamp(now_ms / 1000, tz=dt.timezone.utc)
+            return (f"站点证书的有效期对不上:狗的钟可能不对(现在是 {now:%Y-%m-%d %H:%M} UTC)。"
+                    "狗该向站点主机对时(W09d:/etc/d1max/env 填好站点地址后重跑装机脚本,"
+                    "timedatectl timesync-status 看)")
+        e = e.__cause__ or e.__context__
+    return ""
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -456,6 +502,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - 连不上 broker 之类:退非零,交给 systemd 重试
         log.error("d1max-agent 起不来: %r", exc)
         print(f"d1max-agent 起不来: {exc!r}", file=sys.stderr, flush=True)
+        probe = tls_probe(args.transport, args.tls_ca, args.tls_cert, args.tls_key)
+        hint = clock_hint(probe or exc, now_ms=wall_ms())
+        if hint:
+            log.error("%s", hint)
+            print(hint, file=sys.stderr, flush=True)
         assembled.stop()
         return 1
     got: list[str] = []

@@ -28,9 +28,11 @@ from d1max_contract.messages import (
     Telemetry,
     parse_fault_event_data,
 )
-from d1max_contract.schedule import clock_skew
 from d1max_contract.storage import WARN_RATIO
 from d1max_site.alert_store import AlertDesk
+from d1max_site.clockskew import ALARM_S as SKEW_ALARM_S
+from d1max_site.clockskew import CLEAR_S as SKEW_CLEAR_S
+from d1max_site.clockskew import ClockSkew
 from d1max_site.priorities import STANDBY_PREFIX
 
 log = logging.getLogger(__name__)
@@ -109,6 +111,7 @@ class SiteAlertSources:
         #: 这台狗的状态是不是过期了(派遣器按站点的钟算)。``None`` = 不看过期。
         self._is_stale = is_stale
         self._mem: dict[str, _Mem] = {}
+        self._skew = ClockSkew()
         self._site_errors: dict[str, str] = {}
         #: 排程告警合并进来的排程 id(按告警的键),拼标题用(W00c6c 内审)。
         self._sched_entries: dict[str, list[str]] = {}
@@ -287,12 +290,16 @@ class SiteAlertSources:
     # ------------------------------------------------------------ 遥测
 
     def on_telemetry(self, rid: str, t: Telemetry) -> None:
-        skew = clock_skew(local_ms=t.stamp, reference_ms=self._now(), source="站点")
+        # W09d:按最近一段遥测估(在途不拉偏),2 s 报、1 s 以内重新武装
+        self._skew.note(rid, t.stamp, self._now())
+        skew = self._skew.skew_s(rid) or 0.0
         m = self._m(rid)
-        if skew.alarm and not m.skew:
+        if abs(skew) > SKEW_ALARM_S and not m.skew:
+            m.skew = True
             self.desk.raise_alert(kind="clock_skew", robot=rid, title="狗的钟不准",
-                                  detail=f"跟站点差 {skew.skew_s:.0f} 秒")
-        m.skew = skew.alarm
+                                  detail=f"跟站点差 {skew:+.1f} 秒(狗该向站点主机对时,见 W09d)")
+        elif abs(skew) <= SKEW_CLEAR_S:
+            m.skew = False
         if t.storage is not None:
             self._storage(rid, m, t.storage)
 

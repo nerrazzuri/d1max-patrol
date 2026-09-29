@@ -31,6 +31,8 @@ from d1max_contract.teleop import (
 from d1max_contract.topics import Topics
 from d1max_contract.transport import Transport
 from d1max_contract.video import VideoRequest
+from d1max_site.clockskew import DISPATCH_MAX_S as SKEW_DISPATCH_MAX_S
+from d1max_site.clockskew import ClockSkew
 from d1max_site.db import SiteDB
 from d1max_site.priorities import STANDBY_PREFIX
 from d1max_site.registry import Registry
@@ -154,6 +156,8 @@ class Dispatcher:
         #: 状态、遥测的回调(W00c5a:站点的告警来源靠它们)。
         self._status_cbs: list[Callable[[str, Status], None]] = []
         self._telemetry_cbs: list[Callable[[str, Telemetry], None]] = []
+        #: 狗的钟跟站点差多少(W09d;按一段遥测估)。
+        self._skew = ClockSkew()
         #: 每台狗最近一次收到遥测的站点时刻(值守汇总用)。
         self.telemetry_at: dict[str, int] = {}
         #: 每台狗最近一份盘况与收到的时刻(站点的钟)。
@@ -219,6 +223,7 @@ class Dispatcher:
         if self._closed:
             return
         self.telemetry_at[robot_id] = self._now()
+        self._skew.note(robot_id, t.stamp, self.telemetry_at[robot_id])   # W09d
         if t.storage is not None:
             # 盘况每 10 s 才带一次(W00c5d):单独记最近一份,值守汇总看的是它。
             self.storage[robot_id] = (t.storage, self._now())
@@ -280,6 +285,10 @@ class Dispatcher:
 
     # ------------------------------------------------------------ 视图
 
+    def clock_skew_s(self, robot_id: str) -> float | None:
+        """狗的钟减站点的钟(秒,按最近一段遥测估);没收到过遥测是 ``None``。"""
+        return self._skew.skew_s(robot_id)
+
     def robot_view(self, robot_id: str) -> dict[str, Any] | None:
         rec = self.registry.get(robot_id)
         if rec is None:
@@ -292,7 +301,7 @@ class Dispatcher:
                 "active": self.registry.active(robot_id, now_ms=self._now()),
                 "expires_at": rec.expires_at, "status": status, "capabilities": caps,
                 "fresh": self._fresh(c), "held": self.held(robot_id),
-                "loc": self._loc_view(c)}
+                "loc": self._loc_view(c), "clock_skew_s": _round1(self.clock_skew_s(robot_id))}
 
     @staticmethod
     def _loc_view(c: DispatchClient | None) -> dict[str, Any] | None:
@@ -373,6 +382,11 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 没就绪: {', '.join(sorted(not_ready))}")
         if c.capabilities is not None and kind not in c.capabilities.tasks:
             raise DispatchRefused(f"{robot_id} 不支持 {kind}")
+        skew = self.clock_skew_s(robot_id)
+        if skew is not None and abs(skew) > SKEW_DISPATCH_MAX_S:
+            # W09d:命令有效期 60 s、狗按自己的钟判 —— 差一半以上,旧命令不过期、新命令一到就过期
+            raise DispatchRefused(f"{robot_id} 的钟差 {skew:+.0f} 秒:命令的有效期对不上,先对时"
+                                  "(狗向站点主机对时,见 W09d)")
         if s.task is not None and s.task.task_id.startswith(TELEOP_TASK_PREFIX):
             # W00c5c:人工遥控优先于一切自动任务 —— 狗那头会回 busy,这里先挑开(事件派遣去找别的狗)。
             raise DispatchRefused(f"{robot_id} 正在遥控")
@@ -610,3 +624,7 @@ class Dispatcher:
                 cb(ack)
             except Exception:
                 log.exception("回执回调炸了(%s),其余照常", ack.command_id)
+
+
+def _round1(v: float | None) -> float | None:
+    return None if v is None else round(v, 1)

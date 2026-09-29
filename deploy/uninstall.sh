@@ -54,6 +54,7 @@ set -euo pipefail
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  代理的开机自启链
 # @删除 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-localizer.service 定位器的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置(W09d;删了之后按系统原来的配置对时)
 # @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
 # @删除 /etc/systemd/system/d1max-patrol.service                         老服务(W00c5e 退役;没重跑过装机脚本的老机器上还在)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
@@ -385,6 +386,10 @@ stop_service() {
   rm_sys "$WANTS_LINK" "代理的开机自启链"
   rm_sys "$UNIT_DIR/$LOC_UNIT" "定位器单元(W09b)"
   rm_sys "$LOC_WANTS_LINK" "定位器的自启链,没 enable 过就没有"
+  rm_sys "/etc/systemd/timesyncd.conf.d/d1max.conf" "对时配置(W09d),站点地址没填过就没有"
+  if [ "$DO_IT" = 1 ]; then
+    systemctl try-restart systemd-timesyncd >/dev/null 2>&1 || true
+  fi
   rm_sys "$UNIT_DIR/$OLD_UNIT" "老的守卫单元,多数机器上本来就没有"
   rm_sys "$UNIT_DIR/$LEGACY_UNIT" "老服务(W00c5e 退役),重跑过装机脚本的机器上已经没有"
   rm_sys "$LEGACY_WANTS_LINK" "老服务的自启链"

@@ -27,6 +27,7 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/d1max-agent.service                           代理单元(狗上只有它一个服务,W00c5e)
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
 # @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;只装不 enable)
+# @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
 #
@@ -345,6 +346,9 @@ D1MAX_RELEASE_ROOT=/opt/d1max
 # ---------------------------------------------------------------- 站点
 # 站点 broker 的地址,站点装好之后填:
 #   mqtts://<站点主机>:8883
+# 狗向站点主机对时(W09d;装机脚本按这个地址写 timesyncd 的配置,填了之后再跑一遍装机脚本)。
+# 时间服务器不是这台主机的话另写:
+#   D1MAX_SITE_NTP=<主机>
 # 证书包(ca.crt、robot.crt、robot.key)拷到 /etc/d1max/tls/,注册文件拷成
 # /etc/d1max/registration.json。**没有注册文件代理就不起**(单元的 ConditionPathExists)。
 D1MAX_SITE_MQTT=
@@ -407,6 +411,23 @@ else
   在 /etc/d1max/env 里填好 D1MAX_SITE_MQTT、D1MAX_MAP、D1MAX_HOME,再:
     sudo systemctl start d1max-agent
 提示
+fi
+
+# 对时(W09d):狗向站点主机对时(Orin 的钟不准、没有 NTP;钟不对连 mTLS 都过不了 —— 站点证书「还没生效」)。
+# 配置按 /etc/d1max/env 算(站点主机:D1MAX_SITE_NTP,没有从 D1MAX_SITE_MQTT 取);站点地址还没填就先不配,
+# 填了再跑一遍这个脚本。用系统自带的 systemd-timesyncd,不另装包(狗上离线)。
+TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/d1max.conf
+if ts_conf=$(bash "$PKG/deploy/d1max-timesync-conf" /etc/d1max/env); then
+  install -d -m 0755 "$(dirname "$TIMESYNC_CONF")"
+  printf '%s\n' "$ts_conf" > "$TIMESYNC_CONF.tmp"
+  chmod 0644 "$TIMESYNC_CONF.tmp"
+  mv -f "$TIMESYNC_CONF.tmp" "$TIMESYNC_CONF"
+  timedatectl set-ntp true || echo "  !! timedatectl set-ntp 没成,对时可能没开" >&2
+  systemctl restart systemd-timesyncd \
+    || echo "  !! systemd-timesyncd 起不来(这台机器上没有?),对时没配上" >&2
+  echo "  对时:向 $(sed -n 's/^NTP=//p' <<<"$ts_conf") 对时(timedatectl timesync-status 看)"
+else
+  echo "  对时:先不配(原因见上一行)"
 fi
 
 say "7/7 切到刚装的这一版并起代理"
