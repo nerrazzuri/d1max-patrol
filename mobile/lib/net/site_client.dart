@@ -273,6 +273,11 @@ abstract class SiteApi {
   /// recording}`（录包起点为原点、起点朝向为 +x，米）。
   Future<Map<String, dynamic>> mappingTrail(String robotId, {int since = 0});
 
+  /// 建图预览（W09f，管理员）：边走边建时狗上攒的俯视图。`{live, seq, png?（base64）, res, origin: [x, y],
+  /// width, height, pose: [x, y, yaw], trail: [[x, y]], frames, age_s, recording, starting, run, …}`；
+  /// `png` 只在 `seq` 比 [since] 新时带。没在边走边建 `{live: false}`；老狗（没这项能力）409。
+  Future<Map<String, dynamic>> mappingPreview(String robotId, {int since = 0});
+
   /// 建好的图的预览（W00c6h，谁都能看）：`{width, height, m_per_px, left_x, top_y, standby: [...]}`；
   /// 地图 (x, y) 在图上是 `((x − left_x) / m_per_px, (top_y − y) / m_per_px)`。
   Future<Map<String, dynamic>> mapPreview(String mapId, String version);
@@ -747,6 +752,10 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> mappingTrail(String robotId, {int since = 0}) async => _map(
       await _send('GET', '/api/robots/${Uri.encodeComponent(robotId)}/mapping/trail?since=$since'));
+
+  @override
+  Future<Map<String, dynamic>> mappingPreview(String robotId, {int since = 0}) async => _map(
+      await _send('GET', '/api/robots/${Uri.encodeComponent(robotId)}/mapping/preview?since=$since'));
 
   @override
   Future<Map<String, dynamic>> mapPreview(String mapId, String version) async => _map(await _send(

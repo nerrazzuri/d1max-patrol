@@ -1,5 +1,7 @@
 // 横屏（用户 2026-09-26「手机app需要改成横屏模式」）：app 只许横屏；每一页在横屏的手机上
 // （800×360，常见手机横过来的大小）都不溢出；遥控页两根杆在两边、画面在中间、「停」一直在屏幕里。
+import 'dart:convert';
+
 import 'package:d1max_patrol/main.dart' show PatrolApp, landscapeOnly, lockLandscape;
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/site_logs.dart';
@@ -19,6 +21,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi, busyView;
+import 'support/fake_site.dart' show fakePreviewPng;
 
 const _w = 800.0, _h = 360.0;
 
@@ -192,6 +195,24 @@ void main() {
     await _show(t, SiteProcLogsPage(api: api, robotId: 'A'));
     await _show(t, SiteProcLogPage(api: api, robotId: 'A', name: 'slam'));
     await _show(t, SiteMapPreviewPage(api: api, mapId: 'estate-1', version: '8'));
+  });
+
+  testWidgets('横屏不溢出：边走边建的预览（W09f）', (t) async {
+    final api = FakeApi('admin')
+      ..previewReplies = [
+        <String, dynamic>{'live': true, 'seq': 3, 'map_id': 'estate-1', 'version': '9', 'run': 'r',
+          'res': 0.1, 'origin': [-2.0, -1.0], 'width': 1, 'height': 1, 'pose': [0.0, 0.0, 0.0],
+          'trail': [[0.0, 0.0]], 'frames': 120, 'age_s': 40.0, 'recording': true,
+          'preview_error': '一段很长很长的原因' * 6, 'too_big': true,
+          'png': base64Encode(fakePreviewPng)},
+      ];
+    _phone(t);
+    await t.pumpWidget(MaterialApp(home: SiteMappingTrailPage(api: api, robotId: 'A')));
+    await t.pump();
+    await t.pump();
+    expect(t.getRect(find.byKey(SiteMappingTrailPage.previewKey)).height, greaterThan(150),
+        reason: '图要占住大半屏');
+    await t.pumpWidget(const SizedBox());
   });
 
   testWidgets('横屏不溢出：录包轨迹（有点、没点）', (t) async {

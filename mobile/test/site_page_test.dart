@@ -116,6 +116,19 @@ class FakeApi implements SiteApi {
     return trailReplies.removeAt(0);
   }
 
+  /// 建图预览（W09f）：一次回一条（[SiteError] 就抛）；[previewSince] 记下每次的 since。回完了就说
+  /// 「没在边走边建」。
+  List<Object> previewReplies = <Object>[];
+  final List<int> previewSince = <int>[];
+  @override
+  Future<Map<String, dynamic>> mappingPreview(String robotId, {int since = 0}) async {
+    previewSince.add(since);
+    if (previewReplies.isEmpty) return <String, dynamic>{'live': false};
+    final r = previewReplies.removeAt(0);
+    if (r is SiteError) throw r;
+    return r as Map<String, dynamic>;
+  }
+
   /// 地图预览（W00c6h）。[previewMissing]：这张图没有栅格（站点回 404）；[previewWarning] 给了就带上。
   bool previewMissing = false;
   String? previewWarning;

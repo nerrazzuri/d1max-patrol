@@ -380,6 +380,9 @@ void main() {
     site.bodies['/api/robots/A/mapping/trail'] = <String, dynamic>{'points': <dynamic>[]};
     await c.mappingTrail('A', since: 12);
     expect(site.rawPaths.last, endsWith('/api/robots/A/mapping/trail?since=12'));
+    site.bodies['/api/robots/A/mapping/preview'] = <String, dynamic>{'live': false};
+    expect((await c.mappingPreview('A', since: 5))['live'], false);
+    expect(site.rawPaths.last, endsWith('/api/robots/A/mapping/preview?since=5'));
     site.bodies['/api/maps/estate-1/8/preview'] = <String, dynamic>{'width': 1, 'height': 1};
     expect((await c.mapPreview('estate-1', '8'))['width'], 1);
     final png = await c.mapPreviewPng('estate-1', '8');
