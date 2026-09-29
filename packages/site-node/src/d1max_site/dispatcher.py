@@ -49,6 +49,8 @@ TELEOP_GRANT_TTL_SLACK_MS = 2_000
 #: ``video`` 命令本身至少活多久(毫秒),跟推流的有效期分开。见 :meth:`Dispatcher.video`。
 VIDEO_COMMAND_TTL_MS = 30_000
 COMMAND_TTL_MS = 60_000
+#: 钟差大时不发的非任务命令(W09d 内审):要有效期对得上。只读的(日志、轨迹)、停录、退版本不挡。
+_SKEW_GATED = frozenset({"map_activate", "map_build", "release_install", "release_activate"})
 #: 只读查询(W00c6g 建图进程日志、W00c6h 录包轨迹):**不记进命令账、回执不推给事件流** —— 单狗视图
 #: 里看得到最近 50 条命令、事件流谁登录了都收得到(保安、业主也是),日志只给要它的管理员;手机收到
 #: 事件流的每一帧都会刷新狗的列表,录包时每 2 s 查一次轨迹,不该让所有人跟着刷、把正经命令挤出账。
@@ -157,7 +159,7 @@ class Dispatcher:
         self._status_cbs: list[Callable[[str, Status], None]] = []
         self._telemetry_cbs: list[Callable[[str, Telemetry], None]] = []
         #: 狗的钟跟站点差多少(W09d;按一段遥测估)。
-        self._skew = ClockSkew()
+        self._skew = ClockSkew(now_ms=self._now)
         #: 每台狗最近一次收到遥测的站点时刻(值守汇总用)。
         self.telemetry_at: dict[str, int] = {}
         #: 每台狗最近一份盘况与收到的时刻(站点的钟)。
@@ -382,14 +384,17 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 没就绪: {', '.join(sorted(not_ready))}")
         if c.capabilities is not None and kind not in c.capabilities.tasks:
             raise DispatchRefused(f"{robot_id} 不支持 {kind}")
+        self._check_skew(robot_id)
+        if s.task is not None and s.task.task_id.startswith(TELEOP_TASK_PREFIX):
+            # W00c5c:人工遥控优先于一切自动任务 —— 狗那头会回 busy,这里先挑开(事件派遣去找别的狗)。
+            raise DispatchRefused(f"{robot_id} 正在遥控")
+
+    def _check_skew(self, robot_id: str) -> None:
         skew = self.clock_skew_s(robot_id)
         if skew is not None and abs(skew) > SKEW_DISPATCH_MAX_S:
             # W09d:命令有效期 60 s、狗按自己的钟判 —— 差一半以上,旧命令不过期、新命令一到就过期
             raise DispatchRefused(f"{robot_id} 的钟差 {skew:+.0f} 秒:命令的有效期对不上,先对时"
                                   "(狗向站点主机对时,见 W09d)")
-        if s.task is not None and s.task.task_id.startswith(TELEOP_TASK_PREFIX):
-            # W00c5c:人工遥控优先于一切自动任务 —— 狗那头会回 busy,这里先挑开(事件派遣去找别的狗)。
-            raise DispatchRefused(f"{robot_id} 正在遥控")
 
     def dispatchable(self, robot_id: str, kind: str) -> str:
         """能不能给它派这种任务:能 → 空串;不能 → 理由。排程执行器选狗用。"""
@@ -573,6 +578,9 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
         if c.capabilities is None or kind not in c.capabilities.tasks:
             raise DispatchRefused(f"{robot_id} 不支持 {kind}")
+        if kind in _SKEW_GATED or (kind == "mapping" and payload.get("action") == "start"):
+            # W09d 内审:换图、建图、开录、装版本、切版本也要有效期对得上;只读的、停录、退版本不挡
+            self._check_skew(robot_id)
         return await self._send(c, robot_id, kind, payload, issued_by=issued_by,
                                 task_id=f"{kind}-{uuid.uuid4().hex[:12]}", ttl_ms=ttl_ms)
 

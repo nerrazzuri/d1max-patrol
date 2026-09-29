@@ -340,7 +340,8 @@ class Server:
         from d1max_site.alert_sources import SiteAlertSources
         from d1max_site.alert_store import AlertDesk
         self.alerts = AlertDesk(self.db, now_ms=wall_ms, publish=self.dispatcher.feed.publish)
-        self.alert_sources = SiteAlertSources(self.alerts, now_ms=wall_ms)
+        self.alert_sources = SiteAlertSources(self.alerts, now_ms=wall_ms,
+                                              skew_of=self.dispatcher.clock_skew_s)   # W09d:同一份
         self.alert_sources.attach(self.dispatcher)
         # W00c6c:排程这一轮没跑,告诉值守的人。
         self.scheduler.on_outcome = self.alert_sources.on_schedule_outcome

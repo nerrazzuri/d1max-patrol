@@ -554,3 +554,14 @@ async def test_抢占途中开始换图_这一条不排进去(cp):
     gate.set()
     ack = await job
     assert ack.result is AckResult.REJECTED and "map" in ack.reason, ack.reason
+
+
+async def test_叫停与中止不判过期_狗的钟快了也照停(cp):
+    """W09d 内审应修 3:狗按自己的钟判过期 —— 钟快 60 s 以上,站点刚发的叫停一到就「过期」,狗不停车,
+    站点却记成叫停了。叫停、中止重投一条旧的最多让狗停下,方向是安全的:不判过期。别的命令照判。"""
+    old = NOW - 3_600_000
+    for kind, cid in (("halt", "h1"), ("abort", "a1")):
+        ack = await cp.handle(_cmd(kind, cid=cid, tid=f"t-{cid}", issued=old).to_wire(), TOPIC)
+        assert ack.result is not AckResult.EXPIRED, kind
+    ack = await cp.handle(_cmd(cid="g1", tid="tg", issued=old).to_wire(), TOPIC)
+    assert ack.result is AckResult.EXPIRED

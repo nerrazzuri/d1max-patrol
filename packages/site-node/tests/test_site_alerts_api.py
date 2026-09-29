@@ -83,7 +83,8 @@ def test_值守汇总_每台狗一行_狗上存储那几项是不知道而不是
     [r] = d["robots"]
     assert r["robot_id"] == "A" and r["online"] is True and r["fresh"] is True
     assert isinstance(r["battery_pct"], (int, float)) and r["battery_as_of_ms"] > 0
-    assert abs(r["clock_skew_s"]) < 5
+    # W09d:狗慢的方向(在途让刚来的几条略负)要攒够 10 条才算,之前是「不知道」、说得出为什么
+    assert (r["clock_skew_s"] is None and r["why"]["clock_skew_s"]) or abs(r["clock_skew_s"]) < 5
     assert r["alerts"] == {"P1": 0, "P2": 0, "P3": 0}
     for k in ("disk_used_ratio", "upload_backlog"):                # W00c5d:狗还没报过盘况
         assert r[k] is None and "不知道" in r["why"][k], k

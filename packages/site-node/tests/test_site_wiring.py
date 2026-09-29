@@ -44,3 +44,9 @@ def test_排程这一轮没跑接到告警上(srv):
 def test_派单前查哪里有图_接的是站点的地图目录(srv):
     """W09c 决定 5。"""
     assert srv.dispatcher.maps is srv.maps and srv.maps is not None
+
+
+
+def test_告警用派遣器的钟差估计_站点只有一份(srv):
+    """W09d 内审:告警源、派遣器原来各算一份。"""
+    assert srv.alert_sources._skew_of == srv.dispatcher.clock_skew_s

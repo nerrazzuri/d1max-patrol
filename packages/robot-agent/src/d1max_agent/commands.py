@@ -62,6 +62,10 @@ READ_KINDS = frozenset({"proc_log", "mapping_trail"})
 TaskFactory = Callable[[Command], Task]
 
 
+#: 不判过期的命令(W09d 内审):叫停、中止重投一条旧的最多让狗停下,方向是安全的;狗的钟快了
+#: (比站点快过命令的有效期)时,判过期就是站点刚发的叫停一到就「过期」、狗不停车,站点却记成叫停了。
+NEVER_EXPIRE = frozenset({"halt", "abort"})
+
 class CommandProcessor:
     def __init__(self, *, registration: Registration, now_ms: Callable[[], int],
                  idem: IdempotencyStore, events: EventBook, ledger: ResourceLedger,
@@ -169,7 +173,7 @@ class CommandProcessor:
             reason = self.supervise_hook(cmd)
             return (self._rej(cmd, reason) if reason
                     else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED))
-        if cmd.expires_at <= now:
+        if cmd.expires_at <= now and cmd.kind not in NEVER_EXPIRE:
             return self._finish(Ack(cmd.command_id, cmd.task_id, AckResult.EXPIRED))
 
         # **优先级由代理定死**(W00c5c,决策 7 追加条件:人工遥控优先于所有自动任务):遥控一律

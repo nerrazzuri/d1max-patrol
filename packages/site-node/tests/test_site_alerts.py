@@ -243,8 +243,8 @@ def test_狗的钟差_按一段遥测估_超过2秒报一次_回到1秒以内再
     assert _kinds(desk) == ["clock_skew"] and "3" in desk.book.all()[0].detail
     for _ in range(40):                                  # 对上了(窗口滑过去)
         src.on_telemetry("A", tele(0.1))
-    for _ in range(3):
-        src.on_telemetry("B", tele(-3.0))                # 狗慢 3 s 也报
+    for _ in range(10):
+        src.on_telemetry("B", tele(-3.0))                # 狗慢 3 s 也报(狗慢的方向要攒够 10 条)
     assert sorted(a.robot for a in desk.book.all()) == ["A", "B"]
     src.on_telemetry("A", tele(4.0))
     assert sum(a.count for a in desk.book.all() if a.robot == "A") == 2, "回正过再偏:再报"
@@ -423,3 +423,23 @@ def test_点位照片存不下_不报没到_并进记录写不进去(台):
                           note="照片存不下: [Errno 28] No space left on device"))
     [a] = desk.book.all()
     assert a.kind == "archive_failed" and "照片存不下" in a.title and "没到" not in a.title
+
+
+
+def test_钟差估计_狗慢的方向要攒够样本_超过一分钟的样本不算():
+    """W09d 内审:样本 = 真钟差 − 在途,取最大是真钟差的下界 —— 估计 > 0 一定不虚报;估计 < 0 可能
+    只是在途长(站点刚起、事件循环卡了一下),攒够 10 条才算。样本按收到的时刻留 60 s(离线的狗
+    不一直挂着旧值)。"""
+    from d1max_site.clockskew import ClockSkew
+    now = {"ms": 1_000_000}
+    cs = ClockSkew(now_ms=lambda: now["ms"])
+    cs.note("A", now["ms"] - 3000, now["ms"])            # 第一条就 −3 s
+    assert cs.skew_s("A") is None
+    for _ in range(9):
+        now["ms"] += 1000
+        cs.note("A", now["ms"] - 3000, now["ms"])
+    assert cs.skew_s("A") == -3.0
+    cs.note("B", now["ms"] + 3000, now["ms"])            # 狗快:一条就算
+    assert cs.skew_s("B") == 3.0
+    now["ms"] += 61_000
+    assert cs.skew_s("A") is None and cs.skew_s("B") is None, "一分钟没新样本:不知道"

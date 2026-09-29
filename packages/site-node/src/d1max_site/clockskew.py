@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 
 #: 估计用最近几条遥测(1 Hz:半分钟)。
 WINDOW = 30
@@ -19,20 +20,39 @@ CLEAR_S = 1.0
 DISPATCH_MAX_S = 30.0
 
 
-class ClockSkew:
-    """一台一台狗地记;:meth:`skew_s` 没收到过遥测是 ``None``(不知道,不当它准)。"""
+#: 样本只留这么久(按站点收到的时刻):离线的狗不一直挂着旧值;NTP 把狗往回拨了,旧的大样本也很快滑走。
+MAX_AGE_MS = 60_000
+#: 估计是负的(狗慢)时至少要几条才算:样本 = 真钟差 − 在途,取最大是真钟差的**下界** —— 正的一定不虚报,
+#: 负的可能只是这几条在途长(站点刚起、事件循环卡了一下)。
+MIN_SAMPLES_BEHIND = 10
 
-    def __init__(self, window: int = WINDOW) -> None:
+
+class ClockSkew:
+    """一台一台狗地记;:meth:`skew_s` 不知道(没样本、狗慢的样本还不够)是 ``None``(不当它准)。"""
+
+    def __init__(self, *, now_ms: Callable[[], int], window: int = WINDOW) -> None:
+        self._now = now_ms
         self._window = window
-        self._samples: dict[str, deque[int]] = {}
+        self._samples: dict[str, deque[tuple[int, int]]] = {}
 
     def note(self, robot_id: str, dog_ms: int, received_ms: int) -> None:
         d = self._samples.setdefault(robot_id, deque(maxlen=self._window))
-        d.append(dog_ms - received_ms)
+        d.append((received_ms, dog_ms - received_ms))
 
     def skew_s(self, robot_id: str) -> float | None:
         d = self._samples.get(robot_id)
-        return None if not d else max(d) / 1000.0
+        if not d:
+            return None
+        cutoff = self._now() - MAX_AGE_MS
+        while d and d[0][0] < cutoff:
+            d.popleft()
+        if not d:
+            return None
+        best = max(x for _, x in d)
+        if best < 0 and len(d) < MIN_SAMPLES_BEHIND:
+            return None
+        return best / 1000.0
 
 
-__all__ = ["ALARM_S", "CLEAR_S", "DISPATCH_MAX_S", "WINDOW", "ClockSkew"]
+__all__ = ["ALARM_S", "CLEAR_S", "DISPATCH_MAX_S", "MAX_AGE_MS", "MIN_SAMPLES_BEHIND", "WINDOW",
+           "ClockSkew"]

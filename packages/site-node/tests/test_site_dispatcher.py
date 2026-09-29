@@ -482,3 +482,25 @@ async def test_值守汇总的钟差按一段遥测估_一条憋久了的不拉�
     s = watch_summary(t.site, desk, now_ms=t.clock.ms)
     [r] = [x for x in s["robots"] if x["robot_id"] == "A"]
     assert r["clock_skew_s"] == pytest.approx(3.0, abs=0.2)
+
+
+
+async def test_钟差大_换图建图装版本切版本也不发_只读与收尾照发(台):
+    """W09d 内审应修 2:这些命令不走 _check_dispatchable,原来照发。"""
+    t = 台
+    await t.run(3)
+    for _ in range(5):
+        t.site._on_telemetry("A", Telemetry(stamp=t.clock.ms + 40_000, pose=None, battery_pct=80,
+                                            task_state=None, loc_quality=1.0))
+    caps = t.site.clients["A"].capabilities
+    for kind in ("map_activate", "map_build", "mapping", "release_install", "release_activate",
+                 "release_rollback", "proc_log", "mapping_trail"):
+        caps.tasks.setdefault(kind, {})
+    for kind, payload in (("map_activate", {}), ("map_build", {}), ("mapping", {"action": "start"}),
+                          ("release_install", {}), ("release_activate", {})):
+        with pytest.raises(DispatchRefused, match="钟差"):
+            await t.site.map_command("A", kind, payload, issued_by="alice")
+    for kind, payload in (("mapping", {"action": "stop"}), ("release_rollback", {}),
+                          ("proc_log", {}), ("mapping_trail", {})):
+        r = await t.send(t.site.map_command("A", kind, payload, issued_by="alice"))
+        assert "ack" in r, kind

@@ -10,6 +10,10 @@
 # 退出码:0 打出了配置;3 两个都没填(装完填了站点地址再跑一遍装机脚本);4 值不干净。
 set -euo pipefail
 ENV_FILE="${1:-/etc/d1max/env}"
+if [[ ! -r "$ENV_FILE" ]]; then
+  echo "对时:$ENV_FILE 读不了(不在,或者没权限),先不配" >&2
+  exit 3
+fi
 
 read_env_value() {
   sed -n "s/^[[:space:]]*$1=//p" "$ENV_FILE" 2>/dev/null \
@@ -18,8 +22,10 @@ read_env_value() {
 }
 
 host=$(read_env_value D1MAX_SITE_NTP)
+raw=$host
 if [[ -z "$host" ]]; then
   mqtt=$(read_env_value D1MAX_SITE_MQTT)
+  raw=$mqtt
   host=${mqtt#*://}                       # 去掉 mqtts://
   host=${host%%/*}                        # 去掉路径
   host=${host%:*}                         # 去掉端口
@@ -28,8 +34,16 @@ if [[ -z "$host" ]]; then
   echo "对时:$ENV_FILE 里 D1MAX_SITE_NTP、D1MAX_SITE_MQTT 都没填,先不配(填了站点地址再跑一遍装机脚本)" >&2
   exit 3
 fi
-if [[ ! "$host" =~ ^[A-Za-z0-9.-]+$ ]]; then
-  echo "对时:站点主机 [$host] 不干净(只收字母、数字、点、减号;等号两边不要加引号),先不配" >&2
+if [[ "$raw" == \"* || "$raw" == \'* ]]; then
+  echo "对时:[$raw] 带了引号 —— 等号右边不要加引号(去掉引号再跑一遍装机脚本),先不配" >&2
+  exit 4
+fi
+if [[ "$host" == *[@\[\]]* || "$raw" == *://*@* ]]; then
+  echo "对时:站点主机 [$host] 只支持主机名或 IPv4(不带用户名;站点主机只给 IPv4 私网发时间),先不配" >&2
+  exit 4
+fi
+if [[ ! "$host" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
+  echo "对时:站点主机 [$host] 不干净(字母或数字打头,只收字母、数字、点、减号),先不配" >&2
   exit 4
 fi
 printf '[Time]\nNTP=%s\nFallbackNTP=\n' "$host"

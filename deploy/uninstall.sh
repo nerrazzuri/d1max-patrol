@@ -180,6 +180,7 @@ rm_sys() {
     /usr/local/sbin/d1max-privileged) ;;
     /usr/local/sbin/d1max-restart-now) ;;
     /etc/sudoers.d/d1max) ;;
+    /etc/systemd/timesyncd.conf.d/d1max.conf) ;;
     *)
       warn "  拒绝删除 $target —— 不在允许的范围里。这是护栏,不是错误。"
       return 0

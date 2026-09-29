@@ -1342,3 +1342,50 @@ def test_装机写对时配置_卸载删掉_站点主机当_NTP_服务器_只给
     for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
         assert f"allow {net}" in 站
     assert "local stratum 10" in 站 and "systemctl restart chrony" in 站
+
+
+
+def test_卸载清单里每条要删的路径_删除护栏都放行():
+    """W09d 内审阻断:对时配置记了 @删除、也调了 rm_sys,但 rm_sys 的白名单里没有它 —— 只打一行
+    「拒绝」、返回 0,文件留着。原来的测试只 grep 字符串。这里把 rm_sys 抠出来,拿清单里每条 @删除
+    在 dry-run 下真跑。"""
+    import re
+    import subprocess
+    卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    体 = 卸[卸.index("rm_sys() {"):]
+    体 = 体[:体.index("\n}\n") + 3]
+    paths = re.findall(r"(?m)^# @删除 (\S+)", 卸)
+    assert "/etc/systemd/timesyncd.conf.d/d1max.conf" in paths
+    for p in paths:
+        r = subprocess.run(["bash", "-c", 'warn() { echo "$*"; }; say() { echo "$*"; }; DO_IT=0\n'
+                            + 体 + '\nrm_sys "$1" x', "_", p],
+                           capture_output=True, text=True, timeout=10)
+        assert "拒绝" not in r.stdout, (p, r.stdout)
+
+
+def test_对时配置_边界_env缺了_带引号_IPv6_减号开头_都说清楚(tmp_path):
+    import subprocess
+    conf = DEPLOY / "d1max-timesync-conf"
+    r = subprocess.run(["bash", str(conf), str(tmp_path / "没有")], capture_output=True, text=True)
+    assert r.returncode == 3 and "读不了" in r.stderr
+
+    def 跑(env_text):
+        f = tmp_path / "env"
+        f.write_text(env_text, encoding="utf-8")
+        return subprocess.run(["bash", str(conf), str(f)], capture_output=True, text=True)
+    for bad, why in (('D1MAX_SITE_MQTT="mqtts://h:8883"\n', "引号"),
+                     ("D1MAX_SITE_MQTT=mqtts://[fd00::1]:8883\n", "IPv4"),
+                     ("D1MAX_SITE_MQTT=mqtts://user@h:8883\n", "IPv4"),
+                     ("D1MAX_SITE_NTP=-oops\n", "字母")):
+        r = 跑(bad)
+        assert r.returncode == 4 and why in r.stderr and r.stdout == "", (bad, r.stderr)
+
+
+def test_装机脚本对时_先看有没有_timesyncd_没配上就删旧的_成功才说成功(装机脚本):
+    """W09d 内审小 8。"""
+    段 = 装机脚本[装机脚本.index("TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/d1max.conf"):]
+    段 = 段[:段.index('say "7/7')]
+    assert "systemctl cat systemd-timesyncd" in 段
+    assert 'rm -f "$TIMESYNC_CONF"' in 段, "站点地址清空、改错了:不留指着旧主机的配置"
+    ok = 段.index("对时:向")
+    assert 段.rfind("if systemctl restart systemd-timesyncd", 0, ok) != -1, "重启成了才说对上"

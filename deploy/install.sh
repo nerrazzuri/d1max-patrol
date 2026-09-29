@@ -417,16 +417,24 @@ fi
 # 配置按 /etc/d1max/env 算(站点主机:D1MAX_SITE_NTP,没有从 D1MAX_SITE_MQTT 取);站点地址还没填就先不配,
 # 填了再跑一遍这个脚本。用系统自带的 systemd-timesyncd,不另装包(狗上离线)。
 TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/d1max.conf
-if ts_conf=$(bash "$PKG/deploy/d1max-timesync-conf" /etc/d1max/env); then
+if ! systemctl cat systemd-timesyncd >/dev/null 2>&1; then
+  # 装的是 chrony / ntp 的话 timedatectl 管的是它们,这份配置不生效(W09d 内审):说清楚,不假装配上了
+  echo "  !! 这台机器上没有 systemd-timesyncd,对时没配(真机项 3d.28:换 chrony 指着站点主机)" >&2
+elif ts_conf=$(bash "$PKG/deploy/d1max-timesync-conf" /etc/d1max/env); then
   install -d -m 0755 "$(dirname "$TIMESYNC_CONF")"
   printf '%s\n' "$ts_conf" > "$TIMESYNC_CONF.tmp"
   chmod 0644 "$TIMESYNC_CONF.tmp"
   mv -f "$TIMESYNC_CONF.tmp" "$TIMESYNC_CONF"
   timedatectl set-ntp true || echo "  !! timedatectl set-ntp 没成,对时可能没开" >&2
-  systemctl restart systemd-timesyncd \
-    || echo "  !! systemd-timesyncd 起不来(这台机器上没有?),对时没配上" >&2
-  echo "  对时:向 $(sed -n 's/^NTP=//p' <<<"$ts_conf") 对时(timedatectl timesync-status 看)"
+  if systemctl restart systemd-timesyncd; then
+    echo "  对时:向 $(sed -n 's/^NTP=//p' <<<"$ts_conf") 对时(timedatectl timesync-status 看)"
+  else
+    echo "  !! systemd-timesyncd 重启不了,对时没配上" >&2
+  fi
 else
+  # 站点地址清空了、改得不干净:不留指着旧主机的配置(W09d 内审)
+  rm -f "$TIMESYNC_CONF"
+  systemctl try-restart systemd-timesyncd >/dev/null 2>&1 || true
   echo "  对时:先不配(原因见上一行)"
 fi
 

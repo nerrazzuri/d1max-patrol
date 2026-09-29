@@ -105,13 +105,16 @@ class _Mem:
 
 class SiteAlertSources:
     def __init__(self, desk: AlertDesk, *, now_ms: Callable[[], int],
-                 is_stale: Callable[[str], bool] | None = None) -> None:
+                 is_stale: Callable[[str], bool] | None = None,
+                 skew_of: Callable[[str], float | None] | None = None) -> None:
         self.desk = desk
         self._now = now_ms
         #: 这台狗的状态是不是过期了(派遣器按站点的钟算)。``None`` = 不看过期。
         self._is_stale = is_stale
         self._mem: dict[str, _Mem] = {}
-        self._skew = ClockSkew()
+        #: 狗的钟差从哪来(W09d):主程序接派遣器的(站点只有一份);没接就自己按遥测算。
+        self._skew = ClockSkew(now_ms=now_ms)
+        self._skew_of = skew_of
         self._site_errors: dict[str, str] = {}
         #: 排程告警合并进来的排程 id(按告警的键),拼标题用(W00c6c 内审)。
         self._sched_entries: dict[str, list[str]] = {}
@@ -291,8 +294,12 @@ class SiteAlertSources:
 
     def on_telemetry(self, rid: str, t: Telemetry) -> None:
         # W09d:按最近一段遥测估(在途不拉偏),2 s 报、1 s 以内重新武装
-        self._skew.note(rid, t.stamp, self._now())
-        skew = self._skew.skew_s(rid) or 0.0
+        if self._skew_of is None:
+            self._skew.note(rid, t.stamp, self._now())
+            skew = self._skew.skew_s(rid)
+        else:
+            skew = self._skew_of(rid)
+        skew = skew or 0.0
         m = self._m(rid)
         if abs(skew) > SKEW_ALARM_S and not m.skew:
             m.skew = True
