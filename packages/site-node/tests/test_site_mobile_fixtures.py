@@ -160,6 +160,10 @@ def _collect(tmp_path) -> dict[str, object]:
         s.maps.bag_done("A", "yard-0925", 5000)
         from test_site_releases import 做包
         s.rel_catalog.add(做包(tmp_path), note="夜巡修了一个 bug")
+        # 急停把事件派遣那一趟打断了:等它收尾再抓单狗视图(W31:原来有时还在、有时已经收尾,
+        # CI 上夹具的形状对不上;「在跑任务」的形状另有 site_robot_busy 那一份)
+        _等(lambda: (s.req("GET", "/api/robots/A", token=tok)[1]["status"] or {}).get("task")
+            is None or None)
         return {
             "site_alerts": alerts,
             "site_alert_frame": alert_frame,

@@ -159,6 +159,9 @@ def test_保安遥控_狗动_限速一半_松手停_断开就放租_审计有起
     assert _等(lambda: _停了(s), timeout=3)
     ph.close()                                       # 手机断了
     _等(lambda: s.teleop.active("A") is None, timeout=5)
+    # 收尾在别的线程里写库:租约先没了、结束原因后写(W31:CI 上偶发查到 None)
+    _等(lambda: s.db.query("SELECT 1 FROM teleop_leases WHERE robot_id='A' "
+                           "AND end_reason IS NOT NULL"), timeout=10)
     rows = s.db.query("SELECT * FROM teleop_leases WHERE robot_id='A'")
     assert [(r["operator"], r["end_reason"]) for r in rows] == [("gina", "disconnected")]
     _等(lambda: (s.disp.clients["A"].status.task is None), timeout=8)
