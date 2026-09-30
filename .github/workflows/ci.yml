@@ -1,0 +1,104 @@
+# W31 CI 基线(设计稿 docs/superpowers/specs/2026-09-30-W31-ci-baseline-design.md)。
+#
+# 分层:
+#   必过候选(确定性):lint、py-contract、py-agent、py-site、py-core —— 运行器上不装 mosquitto / ffmpeg / ROS,
+#     依赖这些程序的测试自己跳过;
+#   手机:flutter(analyze + test);
+#   集成层:integration(装上 mosquitto、ffmpeg、g++ 跑全量)—— 不设必过,先看稳不稳。
+# 第三方 action 只用 GitHub 官方的两个,按提交哈希钉死;Flutter 按标签从官方仓库拉。
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.10"
+      - run: python -m pip install "ruff==0.16.5"
+      - run: ruff check packages src tests tools/w09f_live_preview_check.py
+
+  python:
+    name: py-${{ matrix.group }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: contract
+            paths: packages/contract/tests packages/adapter-sim/tests packages/adapter-d1max/tests packages/localizer/tests
+          - group: agent
+            paths: packages/robot-agent/tests
+          - group: site
+            paths: packages/site-node/tests
+          - group: core
+            paths: tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.10"
+      - name: 装(跟开发机的 .venv 一样,可编辑安装)
+        run: |
+          python -m pip install -e ".[dev]" -e "packages/contract[mqtt]" -e packages/adapter-sim \
+            -e packages/adapter-d1max -e "packages/localizer[build]" -e packages/robot-agent \
+            -e packages/site-node
+      - name: 测
+        run: python -m pytest -p no:cacheprovider --tb=short --durations=15 ${{ matrix.paths }}
+
+  flutter:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: 装 Flutter 3.47.5(官方仓库,按标签)
+        run: |
+          git clone --depth 1 --branch 3.47.5 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - run: flutter --version
+      - working-directory: mobile
+        run: flutter pub get
+      - working-directory: mobile
+        run: flutter analyze
+      - working-directory: mobile
+        run: flutter test --concurrency=1
+
+  integration:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    continue-on-error: true            # 集成层先不设必过(外审:先分层、看稳不稳)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.10"
+      - name: 装 mosquitto、ffmpeg、g++
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mosquitto ffmpeg g++
+      - name: 装
+        run: |
+          python -m pip install -e ".[dev]" -e "packages/contract[mqtt]" -e packages/adapter-sim \
+            -e packages/adapter-d1max -e "packages/localizer[build]" -e packages/robot-agent \
+            -e packages/site-node
+      - name: 测(全量)
+        run: python -m pytest -p no:cacheprovider --tb=short --durations=25
