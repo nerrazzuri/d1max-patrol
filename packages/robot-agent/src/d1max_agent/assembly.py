@@ -9,6 +9,7 @@ from pathlib import Path
 
 from d1max_agent.bridges.hal_device import HalDeviceBackend
 from d1max_agent.bridges.hal_nav import HalNavBackend
+from d1max_agent.bridges.planned_nav import PlannedNavBackend
 from d1max_agent.engine.homing import HomePoint
 from d1max_agent.engine.machine import MissionEngine
 from d1max_agent.engine.removable import Removable
@@ -51,9 +52,21 @@ class EngineParts:
 def build_engine(hal: RobotHAL, *, runs_root: Path, now_ms: Callable[[], int],
                  monotonic: Callable[[], float] = time.monotonic, map_id: str,
                  home: Pose | None, removable=None, init_delay_s: float = 0.3,
-                 terminal_hold_s: float = 0.5, media: dict | None = None) -> EngineParts:
-    nav = HalNavBackend(hal, now_ms=now_ms, map_id=map_id, init_delay_s=init_delay_s,
-                        terminal_hold_s=terminal_hold_s)
+                 terminal_hold_s: float = 0.5, media: dict | None = None,
+                 nav_kind: str = "straight", planner=None,
+                 robot_radius_m: float | None = None) -> EngineParts:
+    """``nav_kind``:``straight`` 直线桥(过渡期,默认);``planned`` 规划后端(W10)。"""
+    if nav_kind == "planned":
+        kw = {} if robot_radius_m is None else {"robot_radius_m": robot_radius_m}
+        nav: HalNavBackend = PlannedNavBackend(hal, now_ms=now_ms, map_id=map_id,
+                                               init_delay_s=init_delay_s,
+                                               terminal_hold_s=terminal_hold_s,
+                                               planner=planner, **kw)
+    elif nav_kind == "straight":
+        nav = HalNavBackend(hal, now_ms=now_ms, map_id=map_id, init_delay_s=init_delay_s,
+                            terminal_hold_s=terminal_hold_s)
+    else:
+        raise ValueError(f"导航后端只认 straight / planned,给的是 {nav_kind!r}")
     home_point: HomePoint | None = None
     if home is not None:
         home_point = HomePoint(map_id=map_id, pose=home, marked_at_ms=now_ms(),

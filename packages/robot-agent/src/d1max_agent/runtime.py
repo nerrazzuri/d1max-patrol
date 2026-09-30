@@ -46,6 +46,7 @@ from d1max_agent.status import (
 from d1max_agent.tasks.base import Task
 from d1max_agent.tasks.engine_goto import EngineGotoTask
 from d1max_agent.transport import GuardedTransport
+from d1max_agent.zonebook import ZoneBook
 from d1max_contract.errors import ContractError
 from d1max_contract.hal import Fault, HalUnsupported, RobotHAL
 from d1max_contract.maps import PRIOR_FILES
@@ -57,6 +58,7 @@ from d1max_contract.supervision import parse_supervise
 from d1max_contract.teleop import TeleopFrame
 from d1max_contract.topics import TopicAcl
 from d1max_contract.transport import Message, Transport
+from d1max_contract.zones import ZoneSet, tightens
 from d1max_patrol.protocol.nav_types import Pose
 
 log = logging.getLogger(__name__)
@@ -141,7 +143,8 @@ class AgentRuntime:
                  maps: Any = None, mapper: Any = None, releases: Any = None,
                  autonomy: str | None = None, odom_identity: bool | None = None,
                  localizer: str = "anchor", loc_socket: Path | None = None,
-                 rtk: Any = None) -> None:
+                 rtk: Any = None, nav: str = "straight",
+                 robot_radius_m: float | None = None) -> None:
         self.registration = registration
         #: RTK 来源(W09e,``d1max_agent.rtk``:自己的串口驱动或厂家的);没配是 None。
         self.rtk = rtk
@@ -166,8 +169,16 @@ class AgentRuntime:
         if parts is None and loaded_map is not None:
             parts = build_engine(hal, runs_root=runs_root or (store_dir / "runs"), now_ms=now_ms,
                                  monotonic=monotonic or time.monotonic, map_id=loaded_map[0],
-                                 home=home)
+                                 home=home, nav_kind=nav, robot_radius_m=robot_radius_m)
         self.parts = parts
+        #: 区域(W10):每个几何版本一份,落盘;``_zones`` 是正在用的那一份,``_zones_pending`` 是等狗空闲
+        #: 再换的放宽。
+        self.zonebook = ZoneBook(store_dir / "zones.json")
+        self._zones: ZoneSet | None = None
+        self._zones_pending: ZoneSet | None = None
+        self._grid_job: asyncio.Task | None = None
+        if parts is not None and hasattr(parts.nav, "on_event"):
+            parts.nav.on_event = self._nav_event
         #: 每张图上的原点(W00c6f 内审):标的、站点下发时带的都记在这儿,重启先看它(``--home`` 垫底)。
         self.homes = HomeBook(store_dir / "homes.json")
         if parts is not None and loaded_map is not None:
@@ -287,6 +298,8 @@ class AgentRuntime:
         caps = self.hal.hal_capabilities()
         kinds = ({"goto", "patrol"} if (self.loaded_map is not None and caps.max_vx > 0)
                  else set())
+        if self._planned and not self.parts.nav.plan_ok:
+            kinds -= {"goto", "patrol"}            # W10:规划后端没有规划栅格,不宣告能自主
         if caps.max_vx > 0:
             kinds.add("teleop")                    # W00c5c:遥控不要地图
         return kinds
@@ -421,6 +434,17 @@ class AgentRuntime:
             # W00c6e:设位置(里程锚定)。真狗要人给位置;仿真按原样,也收(测试挪坐标用)。
             out["relocalize"] = {"needs_pose": not self.parts.nav.anchor.identity}
             out["mark_home"] = {}               # W00c6f:在当前位置标原点(定位不好就拒)
+            # W10:区域修订号、守不守(直线桥不守禁行区)、能不能规划。站点按它补发、拒派。
+            nav = self.parts.nav
+            z: dict[str, Any] = {"rev": self._zones.revision if self._zones else 0,
+                                 "enforced": self._planned}
+            if self._zones_pending is not None:
+                z["pending_rev"] = self._zones_pending.revision
+            if self._planned:
+                z["plan_ok"] = bool(nav.plan_ok)
+                if nav.plan_problem:
+                    z["problem"] = nav.plan_problem
+            out["zones_set"] = z
         if self._storage is not None:
             out["outbox_retry"] = {}
         if self.rtk is not None:
@@ -441,6 +465,8 @@ class AgentRuntime:
             return await self._relocalize(cmd)
         if kind == "mark_home":
             return await self._mark_home(cmd)
+        if kind == "zones_set":
+            return await self._zones_set(cmd)
         if kind == "proc_log":
             return await asyncio.to_thread(self._proc_log, cmd.payload)
         if kind == "mapping_trail":
@@ -935,6 +961,77 @@ class AgentRuntime:
             # 换了图:锚定作废(W00c6e);定位器换先验(W09a,带上这张图在狗上的目录)。
             self.parts.nav.anchor.on_map(
                 self.loaded_map, str(self.maps.dir_of(ref)) if self.maps is not None else "")
+        # 区域跟着几何版本走(W10):换图就换成这一版记着的那份,等放宽的作废
+        self._zones = self.zonebook.get(ref.map_id, ref.version)
+        self._zones_pending = None
+        if self._planned:
+            nav = self.parts.nav
+            nav.load_grid(None)
+            nav.plan_problem = "规划栅格载入中"
+            d = self.maps.dir_of(ref) if self.maps is not None else None
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self._grid_job = loop.create_task(self._load_grid(d, self._zones))
+
+    @property
+    def _planned(self) -> bool:
+        return self.parts is not None and hasattr(self.parts.nav, "load_grid")
+
+    async def _load_grid(self, d: Path | None, zones: ZoneSet | None) -> None:
+        """换图后载规划栅格与区域(W10,在线程里读图);完了重发能力(``plan_ok`` 变了)。"""
+        nav = self.parts.nav
+        try:
+            await asyncio.to_thread(nav.load_grid, d)
+            await nav.set_zones(zones)
+        except Exception as exc:
+            log.exception("载规划栅格出错")
+            nav.load_grid(None)
+            nav.plan_problem = f"载规划栅格出错:{type(exc).__name__}: {exc}"[:200]
+        self.processor.supported = self._supported()
+        if self.transport.connected:
+            await self._publish_caps()
+
+    def _nav_event(self, kind: str, data: dict) -> None:
+        m = self.loaded_map or ("", "")
+        self.events.emit(kind, dict(data) | {"map_id": m[0], "map_version": m[1]})
+
+    async def _zones_set(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
+        """站点下发区域(W10):整份换。收紧的(或狗空闲)立刻换上;放宽的等狗空闲再换。
+        同一修订重发 = 收下不动;旧修订拒(``stale``);几何版本不是正在用的拒(``map_mismatch``)。"""
+        try:
+            zs = ZoneSet.from_wire(cmd.payload.get("zones"))
+        except ContractError as exc:
+            return f"payload: {exc}"
+        if self.loaded_map != (zs.map_id, zs.map_version):
+            return "map_mismatch"
+        cur = self._zones or ZoneSet(zs.map_id, zs.map_version, 0, ())
+        newest = self._zones_pending or cur
+        if zs.revision < newest.revision or (zs.revision == newest.revision and zs != newest):
+            return "stale"
+        if zs == newest:
+            return "", {"revision": zs.revision, "deferred": self._zones_pending is not None}
+        try:
+            await asyncio.to_thread(self.zonebook.put, zs)
+        except OSError as exc:
+            return f"store_failed: {exc}"[:200]
+        if tightens(cur, zs) or self._tasks_idle():
+            await self._apply_zones(zs)
+            return "", {"revision": zs.revision, "deferred": False}
+        log.info("区域修订 %d 是放宽:等狗空闲再换", zs.revision)
+        self._zones_pending = zs
+        if self.transport.connected:
+            await self._publish_caps()                # 站点看得到「等着换」的那一版
+        return "", {"revision": zs.revision, "deferred": True}
+
+    async def _apply_zones(self, zs: ZoneSet) -> None:
+        self._zones = zs
+        self._zones_pending = None
+        if self._planned:
+            await self.parts.nav.set_zones(zs)
+        if self.transport.connected:
+            await self._publish_caps()
 
     async def _publish_caps(self) -> None:
         caps = compose_capabilities(
@@ -993,6 +1090,10 @@ class AgentRuntime:
             self.rtk.start()
         # 先载正在用的图,再连站点:连上之后进来的命令要按真的地图版本核对。
         await self._load_active_map()
+        if self._zones is None and self.loaded_map is not None:
+            self._zones = self.zonebook.get(*self.loaded_map)
+            if self._planned and self._grid_job is None:
+                await self.parts.nav.set_zones(self._zones)
         if self._locsrv is not None:
             # 定位器可以先连上来,不等站点;但要在校验完正在用的图之后(W09g 内审应修 1:原来先开桥,
             # 校验几百 MB 的那几秒里定位器连上来,拿到的是命令行那张图的先验)
@@ -1052,6 +1153,12 @@ class AgentRuntime:
 
         if self.parts is not None:
             await _step("关引擎", self.parts.engine.aclose)
+        if self._planned:
+            async def _planner_off() -> None:
+                if self._grid_job is not None:
+                    self._grid_job.cancel()
+                self.parts.nav.close_planner()
+            await _step("关规划子进程", _planner_off)
         if self.rtk is not None:
             async def _rtk_off() -> None:
                 await asyncio.to_thread(self.rtk.close)
@@ -1372,6 +1479,8 @@ class AgentRuntime:
             log.exception("记 RTK 解出错")
         await self._check_rtk()
         await self.processor.step(dt_s)
+        if self._zones_pending is not None and self._tasks_idle():
+            await self._apply_zones(self._zones_pending)
         if self.video is not None:
             self.video.step()
         await self._watch_faults()

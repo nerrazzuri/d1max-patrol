@@ -265,6 +265,11 @@ class HalNavBackend(NavBackend):
         if here is None:
             await self._enter_terminal(NavStatus.FAILED)
             return
+        await self._drive(here, dt_s)
+
+    async def _drive(self, here: Any, dt_s: float) -> None:
+        """这一拍的速度环(``ACTIVE``、有目标、定位可信时):直线朝目标转、走。规划后端(W10)换成跟路径。"""
+        assert self._target is not None
         dx, dy = self._target.position.x - here.x, self._target.position.y - here.y
         dist = math.hypot(dx, dy)
         if dist <= POSITION_TOL_M:
@@ -276,6 +281,9 @@ class HalNavBackend(NavBackend):
             vx = 0.0
         else:
             vx = min(self._vmax, max(K_LIN * dist, self._caps.deadband_vx))
+        await self._send(vx, wz, dt_s)
+
+    async def _send(self, vx: float, wz: float, dt_s: float) -> None:
         self._seq += 1
         got = await self._hal.set_velocity(VelocityCommand(
             seq=self._seq, ttl_ms=max(300, int(dt_s * 3000)), frame="base", vx=vx, vy=0.0, wz=wz))

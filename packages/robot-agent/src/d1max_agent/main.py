@@ -106,6 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sim-localizer", action="store_true",
                    help="仿真:在进程里起一个仿真定位器连本机定位桥"
                         "(要 --hal sim --localizer bridge)")
+    p.add_argument("--nav", choices=("straight", "planned"), default="straight",
+                   help="导航后端(W10):straight = 直线桥(过渡期);planned = 在规划栅格上规划、"
+                        "守禁行区与限速区。**真狗在 W10 真机项验过之前不改**")
+    p.add_argument("--robot-radius", type=float, default=None,
+                   help="规划膨胀用的机体外接圆半径(米,默认 0.52:930 × 480 mm,W08 决定 6)")
     rk = p.add_argument_group("RTK(W09e;决策 21:自己的为主、厂家的可选)")
     rk.add_argument("--rtk", choices=("none", "own", "vendor"), default="none",
                     help="none = 不接;own = 我们自己的串口驱动(**要先停厂家的 sixents_gps_driver**,"
@@ -194,6 +199,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         p.error("--outbox 与 --runs-root 给且只给一个(运行记录落在哪)")
     if args.mapping and args.outbox is None:
         p.error("--mapping 要配 --outbox(录包和生成的图都写进发件箱传给站点)")
+    if args.robot_radius is not None and not (0.1 <= args.robot_radius <= 2.0):
+        p.error("--robot-radius 要在 0.1–2.0 米之间")
     if args.outbox is not None:
         if not args.outbox.is_absolute():
             p.error(f"--outbox 要是绝对路径(D1MAX_OUTBOX 没设?):{args.outbox!s}")
@@ -334,7 +341,8 @@ def build(args: argparse.Namespace) -> Assembled:
                            stopped_eps=args.stopped_eps, now_ms=wall_ms)
             media = None                          # RTSP 取图归后面的工单
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
-                             home=args.home, media=media)
+                             home=args.home, media=media, nav_kind=args.nav,
+                             robot_radius_m=args.robot_radius)
         transport = _make_transport(args.transport, registration.robot_id, broker,
                                     tls=(args.tls_ca, args.tls_cert, args.tls_key))
         from d1max_agent.video_push import VideoPusher, lavfi_source, rtsp_source

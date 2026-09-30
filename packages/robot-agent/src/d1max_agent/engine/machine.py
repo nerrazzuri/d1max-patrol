@@ -19,9 +19,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -854,6 +855,16 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 # 不认 ``return_home``(W00c6b),引擎走下面的沿来路回。
                 # (以前这里押的是厂商导航 ``start_nav_return_home`` 会不会重新规划;
                 # 代理不用厂商导航了。)
+                return_to = getattr(self._nav, "return_to", None)
+                if return_to is not None:
+                    # 规划后端(W10,W08 决定 6):引擎给原点、后端规划回去。规划不出来 = 原地停 +
+                    # 按返航失败中止(下面的 NavBackendError 那一支),不走沿来路回 —— 没路、没规划图时
+                    # 沿来路大概率同样走不通。
+                    if self._home is None:
+                        raise _AbortRun(f"返航失败: 没标原点(返航起因: {reason})")
+                    await return_to(self._home.pose)
+                    await self._wait_nav_terminal(self._clock() + self._return_budget_s())
+                    break
                 try:
                     await self._nav.return_home()
                 except NavRequestError as exc:
@@ -924,6 +935,14 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 return
             break
         await self._transition(RunState.DONE, reason)
+
+    def _return_budget_s(self) -> float:
+        """规划回家的超时(W08 决定 9):按规划出的路长、巡航速度的一半算,再加 60 s;
+        没有路长照旧 300 s。"""
+        length = getattr(self._nav, "planned_length_m", None)
+        if not isinstance(length, (int, float)) or not math.isfinite(length) or length < 0:
+            return RETURN_TIMEOUT_S
+        return length / self._return_params.cruise_speed_mps * 2.0 + 60.0
 
     async def _retrace_home(self) -> None:
         """沿来路回(W04;W00c6b 内审改成按**真走过的路**):来路倒着走,每一段都是一次普通的
@@ -1109,7 +1128,12 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 await self._await_nav_standby(min(
                     attempt_started + policy.waypoint_timeout_s,
                     self._clock() + NAV_STANDBY_TIMEOUT_S))
-                await self._nav.goto(wp.pose)
+                try:
+                    await self._nav.goto(wp.pose)
+                except NavRequestError as exc:
+                    # 规划后端当场拒(没路、终点在禁行区里,W10):这个点失败、按点位失败策略走;
+                    # 以前落到兜底,整趟按「引擎内部异常」中止。
+                    raise _FailWaypoint(f"导航拒了: {exc}") from None
                 self._note("nav", waypoint=wp.name, attempt=tried + 1)
                 await self._wait_nav_terminal(
                     attempt_started + policy.waypoint_timeout_s)
@@ -1247,6 +1271,12 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         if path_kind(self._nav) == "straight":
             dist = retrace_route_m(here, live.trail, start=live.start_pose, home=home.pose)
         else:
+            # 规划后端给得出路长(W10,后台算、算过才给)就按它,不再乘绕路系数;
+            # 给不出退回直线 × 绕路系数
+            hint = getattr(self._nav, "path_length_hint", None)
+            length = hint(here, home.pose) if hint is not None else None
+            if isinstance(length, (int, float)) and math.isfinite(length) and length >= 0:
+                return estimate_cost_pct(length, replace(self._return_params, detour_factor=1.0))
             dist = home.pose.distance_to(here)
         return estimate_cost_pct(dist, self._return_params)
 
