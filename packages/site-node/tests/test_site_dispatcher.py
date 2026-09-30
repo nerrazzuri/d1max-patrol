@@ -48,6 +48,8 @@ class 台子:
                         expires_at=self.clock.ms + 10**10)
         self.site = Dispatcher(MemoryTransport(self.broker, "site"), self.db, self.reg,
                                now_ms=self.clock, ack_timeout_s=5.0)
+        from conftest import 同钟
+        同钟(self.site)                    # W09h:同一个钟的台子,钟差还没估出来当 0
         self.dog = SimRobot(now_ms=self.clock, max_vx=1.0, max_wz=1.5, stop_latency_s=0.2)
         self.tmp = tmp_path
         self.agent: AgentRuntime | None = None

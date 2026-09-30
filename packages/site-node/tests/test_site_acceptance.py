@@ -156,6 +156,14 @@ def test_W00c1_端到端(现场):
     assert code == 200, d
     tok = d["token"]
     等(lambda: req(ctx, "GET", "/api/robots/A", token=tok)[1].get("fresh"), what="A 新鲜")
+    # W09h(决策 19):钟差估出来之前不派会动的命令 —— 真进程、真 broker,钟对得上时估计值略负,
+    # 要攒 10 条遥测(1 Hz,约 10 s)
+    code, early = req(ctx, "POST", "/api/robots/A/goto", {"target": target(0.5)}, token=tok)
+    assert code == 200 or (code == 409 and "钟差还不知道" in early["error"]), early
+    等(lambda: req(ctx, "GET", "/api/robots/A", token=tok)[1].get("clock_skew_s") is not None,
+      what="站点估出狗的钟差", timeout=30.0)
+    if code == 200:                                       # 碰巧已经估出来了:等它走完再往下
+        等(lambda: _task_event(ctx, tok, early["task_id"], "task_done"), what="task_done")
 
     # 1. goto → done
     code, d = req(ctx, "POST", "/api/robots/A/goto", {"target": target(0.5),

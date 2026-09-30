@@ -385,3 +385,51 @@ def test_授予命令的有效期很短_halt回执超时回504(站点):
     s.disp.halt = 超时
     code, d = s.req("POST", "/api/robots/A/halt", {}, token=tok)
     assert code == 504 and "急停" in d["error"], (code, d)
+
+
+class _钟差不知道:
+    """站点对这台狗的钟差估计变成「不知道」(样本过期、狗慢的样本不够……)。"""
+
+    _samples: dict = {}
+
+    def note(self, *a) -> None:
+        pass
+
+    def skew_s(self, robot_id):
+        return None
+
+
+def test_遥控中钟差变成不知道_续租被拒_这一趟收掉_狗按租约超时自己停(站点):
+    """W09h 外审 6(决策 19):续租是 gated,钟差不知道就不发;站点连续两次续不上收掉这一趟。放租这一路
+    也故意丢掉 —— 狗不靠站点的放租,按自己的租约超时停车。"""
+    from d1max_contract.messages import AckResult
+    s = 站点
+    tok = _登(s)
+    _新鲜(s, tok)
+    ph = 手机(s, tok)
+    ph.wait_kind("granted")
+    _推(ph, 0.4, seconds=0.8)
+    assert _odom(s).vx > 0
+    real = s.disp.teleop_lease
+    refused = []
+
+    async def 丢放租(robot_id, lease, *, timeout_s):
+        if lease.action == "release":                   # 放租路上丢了
+            from d1max_contract.messages import Ack
+            return Ack("x", "x", AckResult.ACCEPTED)
+        try:
+            return await real(robot_id, lease, timeout_s=timeout_s)
+        except Exception as exc:
+            refused.append(str(exc))
+            raise
+    s.disp.teleop_lease = 丢放租
+    s.disp._skew = _钟差不知道()
+    _推(ph, 0.4, seconds=0.3)
+    _等(lambda: s.teleop.active("A") is None, timeout=5)
+    assert refused and all("钟差还不知道" in r for r in refused)
+    rows = s.db.query("SELECT end_reason FROM teleop_leases WHERE robot_id='A'")
+    assert [r["end_reason"] for r in rows] == ["lease_lost"]
+    assert _等(lambda: _停了(s), timeout=5)
+    _等(lambda: s.db.query("SELECT 1 FROM events WHERE robot_id='A' AND kind='task_failed' "
+                           "AND data LIKE '%lease_expired%'"), timeout=10)
+    ph.close()

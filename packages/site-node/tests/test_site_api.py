@@ -57,6 +57,8 @@ class 站:
             self.broker = MemoryBroker()
             self.disp = Dispatcher(MemoryTransport(self.broker, "site"), self.db, self.reg,
                                    now_ms=wall, ack_timeout_s=5.0)
+            from conftest import 同钟
+            同钟(self.disp)                # W09h:同一个钟的台子,钟差还没估出来当 0
             await self.disp.start()
             self.dog = SimRobot(now_ms=wall, max_vx=1.0, max_wz=1.5, stop_latency_s=0.1)
             reg = Registration(site_id=SITE, robot_id="A", credential_fingerprint="sha256:a",

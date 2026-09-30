@@ -121,3 +121,36 @@ def broker(tmp_path):
     b.start()
     yield b
     b.stop()
+
+
+class 同钟钟差:
+    """进程内测试台子用的钟差估计(W09h):台子里狗跟站点用**同一个钟**(假钟或墙钟),钟差本来就是 0。
+    真的估计器在这种台子里要攒几条遥测(狗慢的方向 10 条)才算「知道」,而 W09h 起不知道就不派 —— 每条
+    派单的测试都得先等 10 s。这里:估计器说不知道就当 0,**有样本照真的算**(钟差大的测试照样拒)。
+    钟差本身怎么判(零样本、样本不够、样本过期)在 ``test_site_temporal.py`` 里用真的估计器测。"""
+
+    def __init__(self, real) -> None:
+        self.real = real
+
+    def note(self, robot_id, dog_ms, received_ms) -> None:
+        self.real.note(robot_id, dog_ms, received_ms)
+
+    def skew_s(self, robot_id):
+        got = self.real.skew_s(robot_id)
+        return 0.0 if got is None else got
+
+    @property
+    def _samples(self):
+        return self.real._samples
+
+
+def 同钟(dispatcher) -> None:
+    """把派遣器的钟差估计换成 :class:`同钟钟差`。"""
+    dispatcher._skew = 同钟钟差(dispatcher._skew)
+
+
+def 真钟差(dispatcher) -> None:
+    """换回真的估计器(测时间权威本身用)。"""
+    s = dispatcher._skew
+    if isinstance(s, 同钟钟差):
+        dispatcher._skew = s.real
