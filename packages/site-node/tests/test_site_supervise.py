@@ -102,9 +102,9 @@ def test_心跳不刷审计_只记开始和结束(监护站):
     s = 监护站
     tok = _登(s, "gina")
     _新鲜(s, tok)
-    for _ in range(5):
-        _心跳(s, tok)
-    _心跳(s, tok, "release")
+    got = [_心跳(s, tok) for _ in range(5)] + [_心跳(s, tok, "release")]
+    # 每一步都要成(W31:全量时偶发只记了一条 —— 某一步等回执超时之类,先让它说清楚是哪一步)
+    assert [c for c, _ in got] == [200] * 6, got
     rows = [r for r in s.api.audit.list() if "/supervise" in r["action"]]
     assert len(rows) == 2, rows
 

@@ -66,12 +66,15 @@ void useRealHttp() {
 ///
 /// `step` 是每轮推假时钟多久 —— 挂在假时钟上的定时器（重连退避、发拍周期）
 /// 靠它才到得了点，`pump()` 不带时长的话它们永远不响。
+///
+/// 上限 30 秒（W31：原来 10 秒，机器忙的时候——全量、CI 的小运行器——等真套接字关掉偶尔不够，
+/// `live_video_test` 全量时偶发过一次）。条件一成立立刻出去，所以正常时不变慢，只是真错了晚报。
 Future<void> pumpUntil(WidgetTester t, bool Function() ok, String why,
     {Duration step = const Duration(milliseconds: 200)}) async {
-  final DateTime deadline = DateTime.now().add(const Duration(seconds: 10));
+  final DateTime deadline = DateTime.now().add(const Duration(seconds: 30));
   while (!ok()) {
     if (DateTime.now().isAfter(deadline)) {
-      fail('等了 10 秒还没等到：$why');
+      fail('等了 30 秒还没等到：$why');
     }
     await t.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 5)));
