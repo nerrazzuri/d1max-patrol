@@ -257,6 +257,13 @@ class SiteAlertSources:
                                   title=f"新版 {d.get('from', '?')} 起不来,狗自己退回了 "
                                         f"{d.get('to', '?')}",
                                   detail=f"开机守卫数了 {d.get('attempts', '?')} 次")
+        elif e.kind == "map_integrity_failed":
+            # W09g:狗起来时正在用的图校验不过 —— 没载、不宣告能自主(不退回命令行的图)。
+            which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
+            self.desk.raise_alert(kind="map_failed", robot=rid,
+                                  title=f"狗上正在用的图坏了:{which},不能自主",
+                                  detail=f"{str(d.get('reason', ''))[:240]};"
+                                         "重新下发这一版(同一版也会重新下载、逐个核对)")
         elif e.kind in ("map_activate_failed", "map_build_failed"):
             what = "换图" if e.kind == "map_activate_failed" else "重建"
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"

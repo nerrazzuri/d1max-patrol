@@ -417,6 +417,18 @@ def test_狗上归档写不进去_报P1_证据缺了(台):
     assert "Read-only" in a.detail and "t1" in a.title
 
 
+def test_狗上正在用的图坏了_报图的告警_说重新下发这一版(台):
+    """W09g:起来时校验不过,狗不载、不宣告能自主 —— 站点要让人知道、怎么修。"""
+    c, db, desk, src, *_ = 台
+    src.on_event("A", _ev("map_integrity_failed", map_id="estate-1", version="7",
+                          reason="正在用的图 estate-1:7 的 prior.mm sha256 不对(内容坏了)"))
+    [a] = desk.book.all()
+    assert a.kind == "map_failed" and "estate-1:7" in a.title and "坏了" in a.title
+    assert "prior.mm" in a.detail and "重新下发" in a.detail
+    src.on_event("A", _ev("map_integrity_failed", reason="active.json 坏了: ..."))
+    assert any("?" in x.title or "active.json" in x.detail for x in desk.book.all())
+
+
 def test_点位照片存不下_不报没到_并进记录写不进去(台):
     c, db, desk, src, *_ = 台
     src.on_event("A", _ev("patrol_waypoint", task_id="t1", index=0, name="gate", ok=False,

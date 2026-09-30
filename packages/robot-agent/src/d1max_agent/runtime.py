@@ -143,6 +143,8 @@ class AgentRuntime:
         self.boot_id = boot_id or f"boot-{uuid.uuid4().hex[:10]}"
         self._now = now_ms
         self.loaded_map = loaded_map
+        #: 正在用的图校验不过的原因(W09g);空串 = 没问题。换图成功清掉。
+        self.map_problem = ""
         self._telemetry_period = telemetry_period_ms
         #: 空闲时也要周期刷 status 的 last_seen —— 派遣条件要「last_seen 新鲜」(总设计 §3.1)。
         self.status_period_ms = status_period_ms
@@ -316,9 +318,17 @@ class AgentRuntime:
     # ------------------------------------------------------------ 地图(W00c5d 第二部分)
 
     async def _load_active_map(self) -> None:
-        """起来时(连站点之前):狗上有站点下发过的正在用的那张图,交给适配器载入,就用它(覆盖
-        ``--map``)。载不进去就照旧用 ``--map``,并发一条 ``map_load_failed`` 让站点知道。"""
-        ref = self.maps.active() if self.maps is not None else None
+        """起来时(连站点之前):狗上有站点下发过的正在用的那张图,**先完整校验**(W09g,在线程里算
+        哈希),过了交给适配器载入,就用它(覆盖 ``--map``)。校验不过见 :meth:`_map_integrity_failed`
+        (不退回 ``--map``);载不进去就照旧用 ``--map``,并发一条 ``map_load_failed`` 让站点知道。"""
+        if self.maps is None:
+            return
+        from d1max_agent.maps import MapIntegrityError
+        try:
+            ref = await asyncio.to_thread(self.maps.verify_active)
+        except (MapIntegrityError, OSError) as exc:
+            self._map_integrity_failed(exc)
+            return
         if ref is None:
             return
         if self._locsrv is not None:                  # 配了定位器:换图不经 HAL(W09c 决定 6)
@@ -336,6 +346,23 @@ class AgentRuntime:
                                                  "reason": f"{type(exc).__name__}: {exc}"[:200]})
             return
         self._switch_map(ref)
+
+    def _map_integrity_failed(self, exc: BaseException) -> None:
+        """正在用的图校验不过(W09g):不载 HAL 地图、不给定位器先验,**也不退回 ``--map``** —— 站点以为
+        狗在它下发的那张图上。没有图:不报 goto、巡检、设位置、标原点,锚定与定位器作废。代理照常起来
+        连站点:叫停、遥控、日志、换图(站点再发一次同一版就是修)都能用。"""
+        decl = self.maps.active() if self.maps is not None else None
+        self.map_problem = str(exc)[:200] or type(exc).__name__
+        log.error("正在用的图校验不过,不载、不宣告能自主:%s", self.map_problem)
+        self.loaded_map = None
+        self.processor.loaded_map = None
+        self.processor.supported = self._supported()
+        if self.parts is not None:
+            self.parts.nav.anchor.on_map(None)
+        data: dict[str, Any] = {"reason": self.map_problem}
+        if decl is not None:
+            data |= {"map_id": decl.map_id, "version": decl.version}
+        self.events.emit("map_integrity_failed", data)
 
     def _map_busy(self) -> bool:
         """正在**换**图(载入、切坐标系)那一小段:这时候不接自动任务。下载、重建都不算。"""
@@ -772,7 +799,8 @@ class AgentRuntime:
         → 记成正在用的。提交失败就把原来那张载回去;发不出能力不算换图失败。"""
         from d1max_agent.maps import MapInstallError
         base = {"task_id": task_id, "map_id": ref.map_id, "version": ref.version}
-        old = self.maps.active()
+        # 原来那张校验不过(W09g):提交失败时不把它载回去
+        old = None if self.map_problem else self.maps.active()
         try:
             if self._locsrv is not None:
                 # 配了定位器:这一版要带定位先验(站点上 slam_toolbox 时期的老版本没有;激活了定位器
@@ -866,6 +894,7 @@ class AgentRuntime:
                              base | {"reason": f"{type(exc).__name__}: {exc}"[:200]})
 
     def _switch_map(self, ref) -> None:
+        self.map_problem = ""
         self.loaded_map = (ref.map_id, ref.version)
         self.processor.loaded_map = self.loaded_map
         self.processor.supported = self._supported()

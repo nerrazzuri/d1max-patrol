@@ -8,7 +8,13 @@ import json
 
 import pytest
 
-from d1max_agent.maps import FetchRefused, MapInstallError, MapKeeper, download_deadline_s
+from d1max_agent.maps import (
+    FetchRefused,
+    MapInstallError,
+    MapIntegrityError,
+    MapKeeper,
+    download_deadline_s,
+)
 from d1max_contract.maps import MapRef
 
 
@@ -87,7 +93,9 @@ def test_哈希或大小对不上_整张不装_照旧用原来的(k, tmp_path):
     assert keeper.active() == a
 
 
-def test_载不进去就扔掉_正在用的缺了文件就当没有(k, tmp_path):
+def test_载不进去就扔掉_正在用的只读声明_坏没坏归完整校验(k, tmp_path):
+    """W09g:``active()`` 只读 ``active.json`` 的声明(状态查询、周期里随便调,不碰文件);文件坏没坏由
+    ``verify_active()`` 判(原来大小不对就回 None,起来时悄悄退回 ``--map``)。"""
     keeper, site = k
     a = site.add("m", "1", {"x.pgm": b"good"})
     keeper.install(a)
@@ -97,11 +105,13 @@ def test_载不进去就扔掉_正在用的缺了文件就当没有(k, tmp_path)
     keeper.discard(b)
     assert not (tmp_path / "maps" / "m" / "2").exists() and keeper.active() == a
     (tmp_path / "maps" / "m" / "1" / "x.pgm").write_bytes(b"goo")   # 大小不对了(写坏了一半)
-    assert keeper.active() is None, "大小对不上的工作副本不信"
-    (tmp_path / "maps" / "m" / "1" / "x.pgm").unlink()
-    assert keeper.active() is None
+    assert keeper.active() == a, "声明还是它"
+    with pytest.raises(MapIntegrityError, match="x.pgm"):
+        keeper.verify_active()
     (tmp_path / "maps" / "active.json").write_text(json.dumps({"map_id": "../x"}))
     assert keeper.active() is None
+    with pytest.raises(MapIntegrityError, match="active.json"):
+        keeper.declared()
 
 
 def test_下载断了从断点接着下_哈希照样核(k):

@@ -5,7 +5,9 @@
   (适配器没有载入这一步的,这台狗就不报这项能力,站点也不会发)。
 - 狗上只留正在用的这一张:``<store>/maps/<地图号>/<版本>/``,旁边 ``active.json`` 记着是哪张;
   别的一律删。
-  重启时按 ``active.json`` 接着用(文件大小先核一遍,缺了就当没有)。
+  重启时按 ``active.json`` 接着用 —— **先完整校验**(:meth:`MapKeeper.verify_active`,W09g):清单跟
+  声明一样、每个文件是普通文件、大小与 sha256 都对;校验不过不载、不退回 ``--map``(见代理)。
+  :meth:`MapKeeper.active` 只读声明,不碰文件,状态查询里随便调。
 - 地图里可以带 ``home.json``(``{"x", "y", "yaw"}``):这张图上的原点。
 - **建图的狗不再下回来**(W09c 决定 7):刚建好的版本 :meth:`MapKeeper.adopt` 进本地库(硬链接,不多占
   盘);激活同一个版本时本地那份逐个核得上大小和 sha256 就不下载。
@@ -20,6 +22,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -59,6 +62,11 @@ class MapInstallError(RuntimeError):
     """这张图装不上(下载失败、大小或哈希对不上、适配器载不进去)。消息给站点看。"""
 
 
+class MapIntegrityError(RuntimeError):
+    """正在用的那张图校验不过(W09g):声明坏了、清单对不上、文件缺了、不是普通文件、大小或哈希不对。
+    消息说是哪个文件、哪一项,给站点看。"""
+
+
 class MapKeeper:
     def __init__(self, root: Path | str, *, fetch: Fetch,
                  sleep: Callable[[float], Any] = time.sleep) -> None:
@@ -73,18 +81,69 @@ class MapKeeper:
     # ------------------------------------------------------------ 现在是哪张
 
     def active(self) -> MapRef | None:
-        """``active.json`` 记着的那张;文件缺了或大小对不上就当没有(不信一个残缺的工作副本)。"""
+        """``active.json`` 声明的那张(**只读声明**,不碰图的文件:状态查询、周期里随便调)。没有、
+        解析不了都回 None。文件坏没坏归 :meth:`verify_active`。"""
         try:
-            ref = MapRef.from_wire(json.loads((self.root / "active.json").read_text("utf-8")))
-        except (OSError, ValueError, ContractError):
+            return self.declared()
+        except MapIntegrityError as exc:
+            log.warning("%s", exc)
             return None
-        d = self.dir_of(ref)
-        for f in ref.files:
-            p = d / f.name
-            if not p.is_file() or p.stat().st_size != f.size:
-                log.warning("正在用的图 %s:%s 缺了 %s,当没有", ref.map_id, ref.version, f.name)
-                return None
+
+    def declared(self) -> MapRef | None:
+        """同 :meth:`active`,但分得清「没有」(None)和「有、坏了」(抛
+        :class:`MapIntegrityError`)。"""
+        path = self.root / "active.json"
+        try:
+            text = path.read_text("utf-8")
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise MapIntegrityError(f"active.json 读不了: {exc}") from exc
+        try:
+            return MapRef.from_wire(json.loads(text))
+        except (ValueError, ContractError) as exc:
+            raise MapIntegrityError(f"active.json 坏了: {exc}") from exc
+
+    def verify_active(self) -> MapRef | None:
+        """正在用的那张完整校验(W09g,**阻塞、要算整张图的 sha256**:只在代理起来、激活时调)。没有
+        ``active.json`` 回 None;校验过了回它;不过抛 :class:`MapIntegrityError`。"""
+        ref = self.declared()
+        if ref is None:
+            return None
+        problem = self._problem(ref)
+        if problem:
+            raise MapIntegrityError(f"正在用的图 {ref.map_id}:{ref.version} {problem}")
         return ref
+
+    def _problem(self, ref: MapRef) -> str:
+        """``ref`` 在本地库里那份哪儿不对(空串 = 都对):版本目录在、不是符号链接;清单 ``map.json`` 跟
+        ``ref`` 一样;每个文件是普通文件(不跟符号链接)、大小、sha256 都对。"""
+        d = self.dir_of(ref)
+        try:
+            st = os.lstat(d)
+        except OSError:
+            return "的目录不在"
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            return "的目录是符号链接或不是目录"
+        try:
+            have = MapRef.from_wire(json.loads((d / MANIFEST).read_text("utf-8")))
+        except (OSError, ValueError, ContractError) as exc:
+            return f"的清单 {MANIFEST} 读不了或坏了: {exc}"[:200]
+        if have != ref:
+            return f"的清单 {MANIFEST} 跟声明的不一样"
+        for f in ref.files:
+            p = d / f.name                          # 名字契约里限死了(不许 / 与点开头):落在目录里
+            try:
+                fst = os.lstat(p)
+            except OSError:
+                return f"缺了 {f.name}"
+            if not stat.S_ISREG(fst.st_mode):
+                return f"的 {f.name} 不是普通文件(符号链接、目录、设备都不认)"
+            if fst.st_size != f.size:
+                return f"的 {f.name} 大小不对({fst.st_size},应为 {f.size})"
+            if _sha256(p) != f.sha256:
+                return f"的 {f.name} sha256 不对(内容坏了)"
+        return ""
 
     def dir_of(self, ref: MapRef) -> Path:
         return self.root / ref.map_id / ref.version
@@ -111,19 +170,13 @@ class MapKeeper:
     # ------------------------------------------------------------ 装
 
     def local(self, ref: MapRef) -> Path | None:
-        """本地库里已经有这个版本、每个文件的大小和 sha256 都核得上:回目录;不然 None。"""
-        d = self.dir_of(ref)
-        try:
-            have = MapRef.from_wire(json.loads((d / MANIFEST).read_text("utf-8")))
-        except (OSError, ValueError, ContractError):
+        """本地库里已经有这个版本、清单一样、每个文件是普通文件且大小和 sha256 都核得上:回目录;不然
+        None(**阻塞**,算哈希)。"""
+        problem = self._problem(ref)
+        if problem:
+            log.info("本地库里的 %s:%s %s:要下", ref.map_id, ref.version, problem)
             return None
-        if have != ref:
-            return None
-        for f in ref.files:
-            p = d / f.name
-            if not p.is_file() or p.stat().st_size != f.size or _sha256(p) != f.sha256:
-                return None
-        return d
+        return self.dir_of(ref)
 
     def adopt(self, src: Path, ref: MapRef) -> Path:
         """建图的狗把刚建好的版本(``src`` 里 ``ref`` 列的文件)放进本地库(W09c 决定 7;**阻塞**)。
@@ -157,12 +210,9 @@ class MapKeeper:
 
     def install(self, ref: MapRef) -> Path:
         """下载、逐个核对、装好(**阻塞,在线程里调**)。返回图的目录。不改 ``active.json``。
-        要装的就是正在用的那张(文件都在):不重下 —— 先删了再下,半路断电就一张图都没了。
-        本地库里已经有、核得上(这只狗自己建的):也不下。"""
-        cur = self.active()
-        if cur is not None and (cur.map_id, cur.version) == (ref.map_id, ref.version) \
-                and cur.files == ref.files:
-            return self.dir_of(ref)
+        本地库里已经有、逐个核得上(正在用的这一版、这只狗自己建的):不下。**正在用的这一版也逐个核**
+        (W09g:原来清单一样就直接回,内容坏了站点重新下发也修不了);核不上就下到 ``.incoming``、下完
+        核过了才换进去 —— 下载失败原来那份还在。"""
         have = self.local(ref)
         if have is not None:
             return have
