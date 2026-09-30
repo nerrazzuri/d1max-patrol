@@ -145,6 +145,40 @@ class FakeApi implements SiteApi {
       ]};
   }
 
+  /// 区域（W10）：站点那一份；[zonesConflict] 给了就让下一次存回 409。
+  Map<String, dynamic> zonesView = <String, dynamic>{
+    'revision': 0, 'zones': <dynamic>[], 'confirmed': null,
+    'confirm_text': '水体、落差(台阶下沿、路缘、池边)、陡坡、花坛都已画成禁行区'};
+  bool zonesConflict = false;
+  final List<List<Map<String, dynamic>>> savedZones = <List<Map<String, dynamic>>>[];
+  @override
+  Future<Map<String, dynamic>> mapZones(String mapId, String version) async {
+    calls.add('mapZones $mapId:$version');
+    return zonesView;
+  }
+
+  @override
+  Future<Map<String, dynamic>> saveZones(String mapId, String version,
+      List<Map<String, dynamic>> zones, int baseRevision) async {
+    calls.add('saveZones $mapId:$version base=$baseRevision');
+    if (zonesConflict) {
+      zonesConflict = false;
+      throw const SiteError(409, '区域已经被改过(现在是第 5 版,你看到的是第 0 版):重新拉一下再改');
+    }
+    savedZones.add(zones);
+    final rev = (zonesView['revision'] as int) + 1;
+    zonesView = <String, dynamic>{...zonesView, 'revision': rev, 'zones': zones};
+    return zonesView;
+  }
+
+  @override
+  Future<Map<String, dynamic>> confirmZones(String mapId, String version, int revision) async {
+    calls.add('confirmZones $mapId:$version rev=$revision');
+    zonesView = <String, dynamic>{...zonesView, 'confirmed': <String, dynamic>{
+      'revision': revision, 'by': 'u', 'at_ms': 1, 'current': true}};
+    return zonesView;
+  }
+
   @override
   Future<Uint8List> mapPreviewPng(String mapId, String version) async {
     calls.add('mapPreviewPng $mapId:$version');

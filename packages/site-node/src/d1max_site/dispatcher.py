@@ -158,6 +158,9 @@ class Dispatcher:
         self.feed = Feed()
         #: 站点的地图目录(``MapCatalog``,主程序接上):派单前查点在不在「有图」的地方(W09c 决定 5)。
         self.maps: Any = None
+        #: 禁行区、限速区(``NavZones``,W10):派单前核狗上的区域修订、补发没同步的。
+        self.zones: Any = None
+        self._zones_sent: dict[tuple[str, int], int] = {}
         #: 新事件(去重之后)的回调:排程执行器靠它回写这一趟的结果。
         self._event_cbs: list[Callable[[str, Event], None]] = []
         #: 状态、遥测的回调(W00c5a:站点的告警来源靠它们)。
@@ -392,9 +395,87 @@ class Dispatcher:
         if c.capabilities is not None and kind not in c.capabilities.tasks:
             raise DispatchRefused(f"{robot_id} 不支持 {kind}")
         self._check_skew(robot_id)
+        self._check_zones(robot_id, c, kind)
         if s.task is not None and s.task.task_id.startswith(TELEOP_TASK_PREFIX):
             # W00c5c:人工遥控优先于一切自动任务 —— 狗那头会回 busy,这里先挑开(事件派遣去找别的狗)。
             raise DispatchRefused(f"{robot_id} 正在遥控")
+
+    @staticmethod
+    def _loaded(c: DispatchClient | None) -> tuple[str, str] | None:
+        caps = c.capabilities.tasks.get("patrol") if c is not None and c.capabilities else None
+        if not caps or not isinstance(caps.get("map_id"), str) \
+                or not isinstance(caps.get("map_version"), str):
+            return None
+        return caps["map_id"], caps["map_version"]
+
+    def _check_zones(self, robot_id: str, c: DispatchClient, kind: str) -> None:
+        """区域(W10):狗上的区域修订要跟站点的一致;这张图上有禁行区,狗的导航就得守;规划后端没有规划
+        栅格不派。只管会自己走的(goto、巡检)。"""
+        if kind not in ("goto", "patrol") or self.zones is None:
+            return
+        loaded = self._loaded(c)
+        if loaded is None:
+            return
+        site = self.zones.current(*loaded)
+        z = c.capabilities.tasks.get("zones_set") if c.capabilities is not None else None
+        if z is None:
+            if site.revision > 0:
+                raise DispatchRefused(f"{robot_id} 不认区域(先升级),{loaded[0]}:{loaded[1]} 上"
+                                      "画了区域")
+            return
+        if z.get("plan_ok") is False:
+            raise DispatchRefused(f"{robot_id} 规划不了:{z.get('problem') or '没有规划栅格'}")
+        if site.nogo() and not z.get("enforced"):
+            raise DispatchRefused(f"{robot_id} 的导航不守禁行区(直线桥),{loaded[0]}:{loaded[1]} "
+                                  "上有禁行区")
+        if z.get("rev") != site.revision:
+            raise DispatchRefused(f"{robot_id} 的区域还没同步(狗上第 {z.get('rev')} 版,站点第 "
+                                  f"{site.revision} 版)")
+
+    async def push_zones(self, zs: Any, *, tighten: bool, issued_by: str) -> dict[str, str]:
+        """改了区域:发给在线、加载着这一版的狗 → {狗: 空串(收下)或原因}。发不出去的由
+        :meth:`sync_zones` 补发。"""
+        targets = [(rid, c) for rid, c in list(self.clients.items())
+                   if self._loaded(c) == (zs.map_id, zs.map_version) and self._fresh(c)
+                   and c.capabilities is not None and "zones_set" in c.capabilities.tasks]
+        got = await asyncio.gather(*(self._send_zones(rid, c, zs, tighten, issued_by)
+                                     for rid, c in targets))      # 一起发:多台狗不排队等回执
+        return {rid: why for (rid, _), why in zip(targets, got, strict=True)}
+
+    async def _send_zones(self, rid: str, c: DispatchClient, zs: Any, tighten: bool,
+                          issued_by: str) -> str:
+        self._zones_sent[(rid, zs.revision)] = self._now()
+        try:
+            r = await self._send(c, rid, "zones_set", {"zones": zs.to_wire(), "tighten": tighten},
+                                 issued_by=issued_by)
+        except Exception as exc:  # noqa: BLE001 —— 一台发不出去不挡别的,补发兜底
+            log.warning("给 %s 发区域第 %d 版没成:%s", rid, zs.revision, exc)
+            return str(exc)[:200] or type(exc).__name__
+        ack = r.get("ack", {})
+        return "" if ack.get("result") in ("accepted", "duplicate") else str(ack.get("reason"))
+
+    async def sync_zones(self, *, retry_ms: int = 30_000) -> list[str]:
+        """补发(W10):狗报的区域修订比站点的旧、也没在等着换这一版 → 再发一次(同一版 30 s 内不重发)。
+        返回这次发了的狗。"""
+        if self.zones is None:
+            return []
+        sent = []
+        now = self._now()
+        for rid, c in list(self.clients.items()):
+            loaded = self._loaded(c)
+            z = c.capabilities.tasks.get("zones_set") if c.capabilities is not None else None
+            if loaded is None or z is None or not self._fresh(c):
+                continue
+            site = self.zones.current(*loaded)
+            if not isinstance(z.get("rev"), int) or z["rev"] >= site.revision \
+                    or z.get("pending_rev") == site.revision:
+                continue
+            last = self._zones_sent.get((rid, site.revision))
+            if last is not None and now - last < retry_ms:
+                continue
+            await self._send_zones(rid, c, site, False, "site:zones_sync")
+            sent.append(rid)
+        return sent
 
     def _check_skew(self, robot_id: str, ttl_ms: int = COMMAND_TTL_MS) -> None:
         """钟差必须**已知**且在**这条命令**有效期的一半以内(最多 30 s)(W09h 决策 19:原来没有估计就

@@ -89,6 +89,8 @@ _EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
 _MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build|outbox_retry)$")
 #: W00c6h:建好的图的栅格预览(坐标换算 + 待命点;PNG)。
 _MAPVIEW = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/(preview|preview\.png)$")
+#: W10:``/api/maps/<id>/<版本>/zones``(看、整份改)与 ``…/zones/confirm``(发布前人工确认)。
+_ZONES = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/zones(/confirm)?$")
 #: W00c6g:狗上建图进程日志的列表、某一个的尾巴(``?bytes=``)。
 _LOGS = re.compile(r"^/api/robots/([^/]{1,64})/logs(?:/([^/]{1,64}))?$")
 _LOG_NAME = re.compile(r"[a-z0-9_.-]{1,48}")
@@ -126,7 +128,7 @@ class SiteApi:
                  scheduler: Any = None, standby: Any = None, incidents: Any = None,
                  alerts: Any = None, video: Any = None, teleop: Any = None,
                  runs: Any = None, backup: Any = None, maps: Any = None,
-                 releases: Any = None, supervision: Any = None,
+                 releases: Any = None, supervision: Any = None, zones: Any = None,
                  now_ms: Callable[[], int] | None = None,
                  request_timeout_s: float = REQUEST_TIMEOUT_S,
                  sse_recheck_s: float = SSE_HEARTBEAT_S) -> None:
@@ -150,6 +152,13 @@ class SiteApi:
         #: W00c5d 第三部分:发布目录。
         self.releases = releases
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
+        #: W10:禁行区、限速区。有地图目录就有(测试台子不传也现建一个,派遣器共用这一份)。
+        if zones is None and maps is not None:
+            from d1max_site.nav_zones import NavZones
+            zones = getattr(dispatcher, "zones", None) or NavZones(dispatcher.db, now_ms=self._now)
+        self.zones = zones
+        if zones is not None and getattr(dispatcher, "zones", None) is None:
+            dispatcher.zones = zones
         #: 监护心跳(W00c6i):站点主程序会传同一个给待命点管理器;不传就自己建一个(测试)。
         from d1max_site.supervision import SupervisionDesk
         self.supervision = supervision if supervision is not None else \
@@ -340,7 +349,8 @@ class _Handler(TlsHandlerMixin):
                 return self._incident_admin(method, path)
             if path == "/api/runs" or path.startswith(("/api/runs/", "/api/exports")):
                 return self._runs(method, path, user)
-            if path == "/api/maps" or _MAPCMD.match(path) or _MAPVIEW.match(path):
+            if path == "/api/maps" or _MAPCMD.match(path) or _MAPVIEW.match(path) \
+                    or _ZONES.match(path):
                 return self._maps(method, path, user)
             if path == "/api/releases" or _RELCMD.match(path):
                 return self._releases(method, path, user)
@@ -1028,6 +1038,10 @@ class _Handler(TlsHandlerMixin):
         if m is not None and method == "GET":
             self._need(user, VIEW)
             return self._map_preview(unquote(m.group(1)), unquote(m.group(2)), m.group(3))
+        m = _ZONES.match(path)
+        if m is not None:
+            return self._zones(method, unquote(m.group(1)), unquote(m.group(2)),
+                               bool(m.group(3)), user)
         m = _MAPCMD.match(path)
         if m is None or method != "POST":
             raise HttpError(404, f"没有 {method} {path}")
@@ -1040,6 +1054,12 @@ class _Handler(TlsHandlerMixin):
         try:
             if what == "map":
                 ref = cat.get(str(d.get("map_id", "")), str(d.get("version", "")))
+                if self.site.zones is not None and not self.site.zones.confirmed_current(ref.map_id,
+                                                                               ref.version):
+                    # W10(W08 决定 5):发布前人工确认水体、落差、陡坡、花坛都画成禁行区了
+                    raise HttpError(409, f"{ref.map_id}:{ref.version} 的禁行区还没确认(或改过之后"
+                                         "没重新确认):先在地图页画好、确认再下发",
+                                    extra={"reason": "zones_unconfirmed"})
                 kind, payload = "map_activate", ref.to_wire()
                 # 这台狗在这张图上的原点:站点登记的待命点是权威(在当前位置标的原点就登记成它),有就
                 # 下发、盖过图里的 home.json(W00c6f 内审应修 4);没有才按图里带的。都没有就不下发 ——
@@ -1080,6 +1100,45 @@ class _Handler(TlsHandlerMixin):
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
 
+    def _zones(self, method: str, map_id: str, version: str, confirm: bool, user) -> None:
+        """禁行区、限速区(W10):``GET`` 看(``view``);``POST`` 整份改(``manage``,带 ``base_revision``,
+        改完发给加载着这一版的狗);``POST …/confirm`` 发布前人工确认(``manage``)。"""
+        from d1max_site.maps import MapError
+        from d1max_site.nav_zones import ZonesConflict, ZonesError
+        if self.site.zones is None:
+            raise HttpError(404, "这个站点没开地图目录")
+        try:
+            self.site.maps.get(map_id, version)
+        except MapError as exc:
+            raise HttpError(404, str(exc)) from exc
+        if method == "GET" and not confirm:
+            self._need(user, VIEW)
+            return self._send_json(200, self.site.zones.view(map_id, version))
+        self._need(user, MANAGE)
+        self._audit_target = f"{map_id}:{version}"
+        d = self._body()
+        try:
+            if method == "POST" and confirm:
+                if d.get("confirm") is not True:
+                    raise HttpError(400, "要 confirm: true(确认那一句)")
+                self.site.zones.confirm(map_id, version, revision=d.get("revision"), by=str(user))
+                self._audit_detail = {"confirmed_rev": d.get("revision")}
+                return self._send_json(200, self.site.zones.view(map_id, version))
+            if method == "POST" and not confirm:
+                zs, tighten = self.site.zones.put(map_id, version, d.get("zones"),
+                                             base_revision=d.get("base_revision"), by=str(user))
+                self._audit_detail = {"revision": zs.revision, "tighten": tighten,
+                                      "zones": len(zs.zones)}
+                pushed = self.site.dispatch(lambda: self.site.dispatcher.push_zones(
+                    zs, tighten=tighten, issued_by=str(user)))
+                return self._send_json(200, self.site.zones.view(map_id, version)
+                                       | {"tighten": tighten, "pushed": pushed})
+        except ZonesConflict as exc:
+            raise HttpError(409, str(exc)) from exc
+        except ZonesError as exc:
+            raise HttpError(400, str(exc)) from exc
+        raise HttpError(404, f"没有 {method} 区域接口")
+
     @staticmethod
     def _check_new_version(cat: Any, map_id: str, version: str) -> None:
         """要狗建的这一版:名字不太长、站点上还没有、没有别的狗正在建。"""
@@ -1107,7 +1166,9 @@ class _Handler(TlsHandlerMixin):
             "map_version=? ORDER BY robot_id, name", (map_id, version))
         standby = [{"robot_id": r["robot_id"], "name": r["name"], "x": r["x"], "y": r["y"],
                     "yaw": r["yaw"], "default": bool(r["is_default"])} for r in rows]
-        return self._send_json(200, info | {"standby": standby})
+        zones = (self.site.zones.current(map_id, version).to_wire()["zones"]
+                 if self.site.zones is not None else [])
+        return self._send_json(200, info | {"standby": standby, "zones": zones})
 
     def _home_on(self, robot_id: str, map_id: str, version: str) -> dict[str, float] | None:
         rows = self.site.dispatcher.db.query(

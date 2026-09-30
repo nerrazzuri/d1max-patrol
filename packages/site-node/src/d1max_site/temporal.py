@@ -35,4 +35,7 @@ def temporal_class(kind: str, payload: dict[str, Any] | None = None) -> str:
         return SAFE if p.get("stop") is True else GATED
     if kind == "mapping":
         return SAFE if p.get("action") == "stop" else GATED
+    if kind == "zones_set":
+        # W10:只收紧(加禁行区、降限速)往安全方向,钟不对也照发;狗上自己再判一次是不是真收紧
+        return SAFE if p.get("tighten") is True else GATED
     return GATED

@@ -13,6 +13,8 @@
 #   D1MAX_AUTONOMY=supervised|autonomous(W00c6i;空着按适配器定:d1max 要人监护、sim 可自主)
 #   D1MAX_LOCALIZER=anchor|bridge(W09a;空着 = anchor 里程锚定。bridge 要本机定位桥上有定位器,
 #                    真狗等 W09b 的定位器验过再设)
+#   D1MAX_NAV=straight|planned(W10;空着 = straight 直线桥。planned 在规划栅格上规划、守禁行区,
+#              真狗等 W10 的真机项验过再设)
 #   D1MAX_AGENT_ARGS=其余参数(比如 --mapping、--sidecar 127.0.0.1:8090 --mps-per-unit …)
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -24,6 +26,7 @@ exec "$here/venv/bin/d1max-agent" \
   --hal "${D1MAX_HAL:-sim}" \
   ${D1MAX_AUTONOMY:+--autonomy} ${D1MAX_AUTONOMY:+"$D1MAX_AUTONOMY"} \
   ${D1MAX_LOCALIZER:+--localizer} ${D1MAX_LOCALIZER:+"$D1MAX_LOCALIZER"} \
+  ${D1MAX_NAV:+--nav} ${D1MAX_NAV:+"$D1MAX_NAV"} \
   --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent \
   --outbox "${D1MAX_OUTBOX:?单元里应该有 D1MAX_OUTBOX}" \
   --map "${D1MAX_MAP:?/etc/d1max/env 里没有 D1MAX_MAP(地图号:版本)}" \

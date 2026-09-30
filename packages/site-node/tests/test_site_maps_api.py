@@ -41,6 +41,13 @@ def _caps(s):
     return s.disp.clients["A"].capabilities
 
 
+def _确认(s, token, version, revision=0):
+    """W10:下发之前人工确认禁行区都画了(没什么要画的也要确认一次)。"""
+    code, d = s.req("POST", f"/api/maps/{MAP[0]}/{version}/zones/confirm",
+                    {"revision": revision, "confirm": True}, token=token)
+    assert code == 200, (code, d)
+
+
 def test_管理员下发一张图_狗装上_能力变了_按新版本派单(站点, tmp_path):
     s = 站点
     alice, gina = _登(s, "alice"), _登(s, "gina")
@@ -56,6 +63,9 @@ def test_管理员下发一张图_狗装上_能力变了_按新版本派单(站�
                  token=gina)[0] == 403, "下发图只给管理员"
     assert s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "99"},
                  token=alice)[0] == 404
+    code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "8"}, token=alice)
+    assert code == 409 and d["reason"] == "zones_unconfirmed", "W10:禁行区没确认不许下发"
+    _确认(s, alice, "8")
     code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "8"}, token=alice)
     assert code == 200 and d["ack"]["result"] == "accepted", d
     _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "8", timeout=8)
@@ -106,6 +116,7 @@ def test_狗报换图失败_站点出告警(站点):
     _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
     s.maps.import_dir(_dir(s, "bad"), map_id=MAP[0], version="11")
     s.dog.fail_load = "定位起不来"
+    _确认(s, alice, "11")
     code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "11"},
                     token=alice)
     assert code == 200
@@ -133,6 +144,7 @@ def test_图里没带原点_用这台狗在这张图上的待命点_都没有不
     alice = _登(s, "alice")
     _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
     s.maps.import_dir(_dir(s, "nohome", home=False), map_id=MAP[0], version="12")
+    _确认(s, alice, "12")
     code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "12"}, token=alice)
     assert code == 409 and "待命点" in d["error"], (code, d)
     with s.db.tx() as c:
@@ -151,6 +163,7 @@ def test_图里带了原点_这台狗在这张图上有待命点_按待命点下
     alice = _登(s, "alice")
     _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
     s.maps.import_dir(_dir(s, "withhome"), map_id=MAP[0], version="13")
+    _确认(s, alice, "13")
     with s.db.tx() as c:
         c.execute("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
                   "is_default) VALUES ('A', 'dock', ?, '13', 2.5, 0, 0, 1)", (MAP[0],))

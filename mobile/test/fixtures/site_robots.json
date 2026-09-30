@@ -51,11 +51,15 @@
           "teleop": {
             "max_vx": 0.5,
             "max_wz": 0.75
+          },
+          "zones_set": {
+            "enforced": false,
+            "rev": 0
           }
         }
       },
       "clock_skew_s": 0.0,
-      "expires_at": 1791737714859,
+      "expires_at": 1791785937923,
       "fresh": true,
       "held": null,
       "loc": {
@@ -74,9 +78,9 @@
       "robot_id": "A",
       "rtk": null,
       "status": {
-        "boot_id": "boot-9f2a59dba7",
+        "boot_id": "boot-1d3944f906",
         "control_epoch": 1,
-        "last_seen": 1790737715624,
+        "last_seen": 1790785938687,
         "online": true,
         "ready": {
           "control": true,

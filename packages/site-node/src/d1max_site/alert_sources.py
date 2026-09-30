@@ -267,6 +267,14 @@ class SiteAlertSources:
                                        ",基站要用固定坐标、或者重新建图配准"}[e.kind]
             self.desk.raise_alert(kind="rtk", robot=rid, title=title,
                                   detail=f"图 {d.get('map_id', '?')}:{d.get('map_version', '?')}")
+        elif e.kind == "inside_nogo":
+            # W10:狗在禁行区里 —— 原地停了,不自己往外走
+            zone = d.get("label") or d.get("zone", "?")
+            self.desk.raise_alert(kind="nogo", robot=rid,
+                                  title=f"狗在禁行区「{zone}」里,原地停着等人",
+                                  detail=f"位置 ({d.get('x', '?')}, {d.get('y', '?')}),图 "
+                                         f"{d.get('map_id', '?')}:{d.get('map_version', '?')};"
+                                         "人到场把它挪出来(遥控),或者核一下区域、定位")
         elif e.kind == "map_integrity_failed":
             # W09g:狗起来时正在用的图校验不过 —— 没载、不宣告能自主(不退回命令行的图)。
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"

@@ -171,6 +171,12 @@ def test_看图_谁都能看_待命点一起给(站点, tmp_path):
     assert code == 200 and (d["width"], d["height"]) == (4, 2), d
     assert d["standby"] == [{"robot_id": "A", "name": "dock", "x": 1.5, "y": 2.0, "yaw": 0.5,
                              "default": True}], "只给这张图这一版上的"
+    assert d["zones"] == []
+    s.disp.zones.put(MAP[0], "8",
+                     [{"id": "p", "kind": "nogo", "polygon": [[0, 0], [1, 0], [1, 1]]}],
+                     base_revision=0, by="alice")
+    d = s.req("GET", f"/api/maps/{MAP[0]}/8/preview", token=gina)[1]
+    assert [z["id"] for z in d["zones"]] == ["p"], "W10:预览带区域,手机画出来"
     code, ctype, body = _raw(s, f"/api/maps/{MAP[0]}/8/preview.png", gina)
     assert code == 200 and ctype == "image/png"
     assert _png_rows(body)[:2] == (4, 2)

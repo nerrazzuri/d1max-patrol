@@ -8,6 +8,8 @@
 ///   狗说停了就不再问，点刷新再看一次。
 /// - **图的预览**（`SiteMapPreviewPage`，谁都能看）：站点把建好的栅格图渲染成 PNG，这里能缩放，画上这张图上
 ///   登记的待命点 —— 建出来的图对不对、待命点落在哪。
+/// - **禁行区、限速区**（W10，同一页；管理员画、删、确认）：点图加顶点画多边形，存的时候带看到的修订号（别人
+///   先改了站点回 409）；**发布前人工确认**水体、落差、陡坡、花坛都画了，没确认的图下发不了。
 library;
 
 import 'dart:async';
@@ -526,6 +528,15 @@ class SiteMapPreviewPage extends StatefulWidget {
       {super.key, required this.api, required this.mapId, required this.version});
 
   static const Key overlayKey = Key('preview-overlay');
+  static const Key zonesKey = Key('preview-zones');
+  static const Key canvasKey = Key('preview-canvas');
+  static const Key drawNogoKey = Key('zone-draw-nogo');
+  static const Key drawSlowKey = Key('zone-draw-slow');
+  static const Key finishKey = Key('zone-finish');
+  static const Key undoKey = Key('zone-undo');
+  static const Key cancelKey = Key('zone-cancel');
+  static const Key confirmKey = Key('zone-confirm');
+  static Key deleteKey(String id) => Key('zone-del-$id');
 
   @override
   State<SiteMapPreviewPage> createState() => _SiteMapPreviewPageState();
@@ -534,10 +545,99 @@ class SiteMapPreviewPage extends StatefulWidget {
 class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
   late final Future<(Map<String, dynamic>, Uint8List)> _data = _load();
 
+  /// 区域（W10）：`GET …/zones` 那一份；取不到就只看图。
+  Map<String, dynamic>? _zones;
+  String? _zonesError;
+
+  /// 正在画的：种类（`nogo` / `slow`）与已经点下的顶点（地图坐标，米）。
+  String? _drawing;
+  final List<Offset> _draft = <Offset>[];
+  double _speed = 0.3;
+  bool _busy = false;
+  String? _msg;
+
   Future<(Map<String, dynamic>, Uint8List)> _load() async => (
         await widget.api.mapPreview(widget.mapId, widget.version),
         await widget.api.mapPreviewPng(widget.mapId, widget.version),
       );
+
+  @override
+  void initState() {
+    super.initState();
+    _loadZones();
+  }
+
+  Future<void> _loadZones() async {
+    try {
+      final z = await widget.api.mapZones(widget.mapId, widget.version);
+      if (mounted) {
+        setState(() {
+          _zones = z;
+          _zonesError = null;
+        });
+      }
+    } on SiteError catch (e) {
+      if (mounted) setState(() => _zonesError = e.message);
+    }
+  }
+
+  List<Map<String, dynamic>> get _zoneList =>
+      (_zones?['zones'] as List? ?? const []).cast<Map<String, dynamic>>();
+  int get _rev => (_zones?['revision'] as num? ?? 0).toInt();
+
+  /// 整份存（新加、删一个都走这里）；站点回什么就说什么（409 = 别人先改了）。
+  Future<void> _save(List<Map<String, dynamic>> zones, String done) async {
+    setState(() {
+      _busy = true;
+      _msg = null;
+    });
+    try {
+      await widget.api.saveZones(widget.mapId, widget.version, zones, _rev);
+      _msg = done;
+    } on SiteError catch (e) {
+      _msg = '没存上：${e.message}';
+    }
+    await _loadZones();
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _finish() async {
+    final kind = _drawing!;
+    var id = 'z${_rev + 1}';
+    while (_zoneList.any((z) => z['id'] == id)) {
+      id = '${id}x';
+    }
+    final zone = <String, dynamic>{
+      'id': id,
+      'kind': kind,
+      'label': kind == 'nogo' ? '禁行区' : '限速区',
+      'polygon': [
+        for (final p in _draft)
+          [double.parse(p.dx.toStringAsFixed(2)), double.parse(p.dy.toStringAsFixed(2))]
+      ],
+      if (kind == 'slow') 'max_speed_mps': double.parse(_speed.toStringAsFixed(1)),
+    };
+    setState(() {
+      _drawing = null;
+      _draft.clear();
+    });
+    await _save([..._zoneList, zone], '存好了：第 ${_rev + 1} 版（改过要重新确认）');
+  }
+
+  Future<void> _confirm() async {
+    setState(() {
+      _busy = true;
+      _msg = null;
+    });
+    try {
+      await widget.api.confirmZones(widget.mapId, widget.version, _rev);
+      _msg = '确认了第 $_rev 版';
+    } on SiteError catch (e) {
+      _msg = '没确认上：${e.message}';
+    }
+    await _loadZones();
+    if (mounted) setState(() => _busy = false);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -559,35 +659,64 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           final mpp = (meta['m_per_px'] as num? ?? 1).toDouble();
           final left = (meta['left_x'] as num? ?? 0).toDouble();
           final top = (meta['top_y'] as num? ?? 0).toDouble();
+          Offset px(double x, double y) => Offset((x - left) / mpp, (top - y) / mpp);
           final pts = (meta['standby'] as List? ?? const []).cast<Map<String, dynamic>>();
           final pixels = [
-            for (final p in pts)
-              Offset(((p['x'] as num).toDouble() - left) / mpp,
-                  (top - (p['y'] as num).toDouble()) / mpp),
+            for (final p in pts) px((p['x'] as num).toDouble(), (p['y'] as num).toDouble()),
           ];
-          // 横屏：左边是图（能缩放），右边一栏是待命点和比例。
+          // 区域：GET …/zones 那一份最新；取不到退回预览里带的。
+          final zones = _zones != null
+              ? _zoneList
+              : (meta['zones'] as List? ?? const []).cast<Map<String, dynamic>>();
+          final shapes = [
+            for (final z in zones)
+              ZoneShape(
+                  z['kind'] == 'nogo',
+                  [
+                    for (final v in (z['polygon'] as List? ?? const []))
+                      px(((v as List)[0] as num).toDouble(), (v[1] as num).toDouble())
+                  ]),
+          ];
+          final draft = [for (final p in _draft) px(p.dx, p.dy)];
+          final r = math.max(2.0, math.max(w, h) / 120);
+          // 横屏：左边是图（能缩放），右边一栏是待命点、区域和比例。
           return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Expanded(
               child: InteractiveViewer(
                 maxScale: 8,
                 child: FittedBox(
-                  child: SizedBox(
-                    width: w,
-                    height: h,
-                    child: Stack(children: [
-                      Image.memory(png,
-                          width: w, height: h, filterQuality: FilterQuality.none, gaplessPlayback: true),
-                      CustomPaint(
-                          key: SiteMapPreviewPage.overlayKey,
-                          size: Size(w, h),
-                          painter: StandbyPainter(pixels, radius: math.max(2.0, math.max(w, h) / 120))),
-                    ]),
+                  child: GestureDetector(
+                    key: SiteMapPreviewPage.canvasKey,
+                    // 画区域：点一下加一个顶点（图的像素 → 地图米）
+                    onTapUp: _drawing == null
+                        ? null
+                        : (d) => setState(() => _draft.add(Offset(
+                            left + d.localPosition.dx * mpp, top - d.localPosition.dy * mpp))),
+                    child: SizedBox(
+                      width: w,
+                      height: h,
+                      child: Stack(children: [
+                        Image.memory(png,
+                            width: w,
+                            height: h,
+                            filterQuality: FilterQuality.none,
+                            gaplessPlayback: true),
+                        CustomPaint(
+                            key: SiteMapPreviewPage.zonesKey,
+                            size: Size(w, h),
+                            painter: ZonesPainter(shapes, draft, radius: r)),
+                        CustomPaint(
+                            key: SiteMapPreviewPage.overlayKey,
+                            size: Size(w, h),
+                            painter: StandbyPainter(pixels, radius: r)),
+                      ]),
+                    ),
                   ),
                 ),
               ),
             ),
             SizedBox(
-              width: 220,
+              width: 240,
               child: ListView(padding: const EdgeInsets.all(8), children: [
                 Text('一像素 ${mpp.toStringAsFixed(2)} m · 图 ${w.toInt()} × ${h.toInt()} 像素 · '
                     '约 ${(w * mpp).toStringAsFixed(0)} × ${(h * mpp).toStringAsFixed(0)} m'),
@@ -600,6 +729,8 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                 for (final p in pts)
                   Text('${p['robot_id']} · ${p['name']}${p['default'] == true ? '（默认）' : ''}  '
                       '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
+                const Divider(),
+                ..._zonePanel(zones),
               ]),
             ),
           ]);
@@ -607,6 +738,136 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       ),
     );
   }
+
+  List<Widget> _zonePanel(List<Map<String, dynamic>> zones) {
+    final admin = widget.api.session?.canManageMaps ?? false;
+    if (_zonesError != null) return [Text('区域取不到：$_zonesError')];
+    if (_zones == null) return const [Text('区域取的中…')];
+    final conf = _zones!['confirmed'] as Map<String, dynamic>?;
+    final confirmed = conf != null && conf['current'] == true;
+    return [
+      Text('禁行区 / 限速区 · 第 $_rev 版', style: const TextStyle(fontWeight: FontWeight.bold)),
+      Text(
+          confirmed
+              ? '已确认（${conf['by']}）'
+              : conf == null
+                  ? '还没确认：这张图下发不了'
+                  : '改过之后没重新确认（确认的是第 ${conf['revision']} 版）：下发不了',
+          style: TextStyle(color: confirmed ? Colors.green : Colors.deepOrange)),
+      if (zones.isEmpty) const Text('没画区域'),
+      for (final z in zones)
+        Row(children: [
+          Expanded(
+              child: Text(z['kind'] == 'nogo'
+                  ? '禁行 · ${z['label'] ?? ''}（${z['id']}）'
+                  : '限速 ${z['max_speed_mps']} m/s · ${z['label'] ?? ''}（${z['id']}）')),
+          if (admin && _drawing == null)
+            IconButton(
+                key: SiteMapPreviewPage.deleteKey('${z['id']}'),
+                icon: const Icon(Icons.delete_outline),
+                tooltip: '删掉（放宽：狗空闲时才换上）',
+                onPressed: _busy
+                    ? null
+                    : () => _save([for (final o in zones) if (o['id'] != z['id']) o],
+                        '删了：第 ${_rev + 1} 版（改过要重新确认）')),
+        ]),
+      if (_msg != null) Text(_msg!),
+      if (admin && _drawing == null) ...[
+        Wrap(spacing: 4, children: [
+          OutlinedButton(
+              key: SiteMapPreviewPage.drawNogoKey,
+              onPressed: _busy ? null : () => setState(() => _drawing = 'nogo'),
+              child: const Text('画禁行区')),
+          OutlinedButton(
+              key: SiteMapPreviewPage.drawSlowKey,
+              onPressed: _busy ? null : () => setState(() => _drawing = 'slow'),
+              child: const Text('画限速区')),
+        ]),
+        if (!confirmed) ...[
+          Text('${_zones!['confirm_text'] ?? ''}', style: const TextStyle(fontSize: 12)),
+          FilledButton(
+              key: SiteMapPreviewPage.confirmKey,
+              onPressed: _busy ? null : _confirm,
+              child: Text('确认第 $_rev 版')),
+        ],
+      ],
+      if (_drawing != null) ...[
+        Text('${_drawing == 'nogo' ? '禁行区' : '限速区'}：点图加顶点，已 ${_draft.length} 个'),
+        if (_drawing == 'slow')
+          Row(children: [
+            Text('限速 ${_speed.toStringAsFixed(1)} m/s'),
+            Expanded(
+                child: Slider(
+                    value: _speed,
+                    min: 0.1,
+                    max: 1.0,
+                    divisions: 9,
+                    onChanged: (v) => setState(() => _speed = v))),
+          ]),
+        Wrap(spacing: 4, children: [
+          FilledButton(
+              key: SiteMapPreviewPage.finishKey,
+              onPressed: _draft.length >= 3 && !_busy ? _finish : null,
+              child: const Text('完成')),
+          OutlinedButton(
+              key: SiteMapPreviewPage.undoKey,
+              onPressed: _draft.isEmpty ? null : () => setState(_draft.removeLast),
+              child: const Text('撤销一点')),
+          TextButton(
+              key: SiteMapPreviewPage.cancelKey,
+              onPressed: () => setState(() {
+                    _drawing = null;
+                    _draft.clear();
+                  }),
+              child: const Text('不画了')),
+        ]),
+      ],
+    ];
+  }
+}
+
+/// 一个区域在图上的样子：禁行（红）还是限速（黄），顶点（图的像素坐标）。
+class ZoneShape {
+  const ZoneShape(this.nogo, this.pixels);
+  final bool nogo;
+  final List<Offset> pixels;
+}
+
+/// 画区域（W10）：禁行红、限速黄，半透明；正在画的那一个用虚一点的蓝线连着顶点。
+class ZonesPainter extends CustomPainter {
+  ZonesPainter(this.shapes, this.draft, {this.radius = 3});
+  final List<ZoneShape> shapes;
+  final List<Offset> draft;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final z in shapes) {
+      if (z.pixels.length < 3) continue;
+      final path = Path()..addPolygon(z.pixels, true);
+      final c = z.nogo ? Colors.red : Colors.amber;
+      canvas.drawPath(path, Paint()..color = c.withValues(alpha: 0.35));
+      canvas.drawPath(
+          path,
+          Paint()
+            ..color = c
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = radius / 2);
+    }
+    if (draft.isNotEmpty) {
+      final line = Paint()
+        ..color = Colors.blue
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = radius / 2;
+      canvas.drawPath(Path()..addPolygon(draft, draft.length >= 3), line);
+      for (final p in draft) {
+        canvas.drawCircle(p, radius / 1.5, Paint()..color = Colors.blue);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(ZonesPainter old) => true;
 }
 
 /// 在图上画待命点（图的像素坐标）。

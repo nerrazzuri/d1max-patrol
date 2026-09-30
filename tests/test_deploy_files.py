@@ -1066,6 +1066,18 @@ def test_agent启动脚本_定位来源从env来_没设不带(tmp_path):
     assert args[args.index("--localizer") + 1] == "bridge"
 
 
+def test_agent启动脚本_导航后端从env来_没设不带(tmp_path):
+    """W10:D1MAX_NAV 传成 --nav(真狗在 W10 真机项验过之前不设)。"""
+    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
+            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0"}
+    got = _启动脚本跑一遍(tmp_path, base)
+    assert got.returncode == 0, got.stderr
+    assert "--nav" not in got.stdout.splitlines()[1:]
+    got = _启动脚本跑一遍(tmp_path / "b", {**base, "D1MAX_NAV": "planned"})
+    args = got.stdout.splitlines()[1:]
+    assert args[args.index("--nav") + 1] == "planned"
+
+
 def test_agent启动脚本_少了站点地址说清楚_不起(tmp_path):
     got = _启动脚本跑一遍(tmp_path, {"D1MAX_OUTBOX": "/x", "D1MAX_MAP": "m:1",
                                      "D1MAX_HOME": "0,0,0"})

@@ -370,6 +370,9 @@ class Server:
         from d1max_site.releases import ReleaseCatalog
         self.maps = MapCatalog(home, self.db, now_ms=wall_ms)
         self.dispatcher.maps = self.maps           # 派单前查点在不在「有图」的地方(W09c)
+        from d1max_site.nav_zones import NavZones
+        self.zones = NavZones(self.db, now_ms=wall_ms)
+        self.dispatcher.zones = self.zones         # W10:派单前核区域修订、补发
         self.releases = ReleaseCatalog(home, self.db, now_ms=wall_ms)
         # 判读、备份、接收口在别的线程里:告警要跳回事件循环去报(告警簿只许在循环里改)。
         from d1max_site.alert_store import LoopAlerts
@@ -397,7 +400,7 @@ class Server:
                            incidents=self.incidents, alerts=self.alerts, video=self.video,
                            teleop=self.teleop, runs=self.runs, backup=self.backup,
                            maps=self.maps, releases=self.releases,
-                           supervision=self.supervision, now_ms=wall_ms)
+                           supervision=self.supervision, zones=self.zones, now_ms=wall_ms)
         self.teleop.audit = self.api.audit
         #: 基站改正数据转发(W09e):配了 ``--rtcm-source`` 才有。
         self.rtk = None
@@ -474,6 +477,9 @@ class Server:
                 added = await self.dispatcher.sync_robots()
                 if added:
                     log.info("新登记的狗挂上了: %s", ", ".join(added))
+                sent = await self.dispatcher.sync_zones()
+                if sent:
+                    log.info("补发区域给: %s", ", ".join(sent))
             except Exception:
                 log.exception("同步注册表失败,下一轮再试")
 

@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -245,6 +245,19 @@ CREATE TABLE IF NOT EXISTS bags (
     last_ms  INTEGER NOT NULL,
     bytes    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (robot_id, name)
+);
+-- W10:禁行区、限速区,挂在几何版本上;修订号每改 +1;发布前人工确认(确认的是哪一版修订)。
+CREATE TABLE IF NOT EXISTS nav_zones (
+    map_id        TEXT NOT NULL,
+    map_version   TEXT NOT NULL,
+    revision      INTEGER NOT NULL,
+    body          TEXT NOT NULL,
+    updated_by    TEXT NOT NULL,
+    updated_ms    INTEGER NOT NULL,
+    confirmed_rev INTEGER,
+    confirmed_by  TEXT,
+    confirmed_ms  INTEGER,
+    PRIMARY KEY (map_id, map_version)
 );
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,

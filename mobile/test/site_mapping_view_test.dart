@@ -190,6 +190,114 @@ void main() {
     expect(m(const Offset(10, 0)).dx, greaterThan(m(Offset.zero).dx), reason: 'x 朝右（不左右镜像）');
   });
 
+  testWidgets('区域（W10）：谁都能看，画在图上；保安没有画、删、确认的按钮', (t) async {
+    final api = FakeApi('guard')
+      ..zonesView = <String, dynamic>{
+        'revision': 2,
+        'zones': <dynamic>[
+          {'id': 'pond', 'kind': 'nogo', 'label': '池子',
+            'polygon': [[0, 0], [1, 0], [1, 1]]},
+          {'id': 'lawn', 'kind': 'slow', 'label': '草坪', 'max_speed_mps': 0.3,
+            'polygon': [[2, 0], [3, 0], [3, 1]]},
+        ],
+        'confirmed': {'revision': 2, 'by': 'alice', 'at_ms': 1, 'current': true},
+        'confirm_text': 'x'};
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('第 2 版'), findsOneWidget);
+    expect(find.textContaining('已确认（alice）'), findsOneWidget);
+    expect(find.textContaining('禁行 · 池子'), findsOneWidget);
+    expect(find.textContaining('限速 0.3 m/s · 草坪'), findsOneWidget);
+    final p = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter!
+        as ZonesPainter;
+    expect(p.shapes.map((s) => s.nogo), [true, false]);
+    // 左边缘 x = -10、上边缘 y = 5、一像素 0.1 m:(0, 0) 在 (100, 50)。
+    expect(p.shapes.first.pixels.first, const Offset(100, 50));
+    expect(find.byKey(SiteMapPreviewPage.drawNogoKey), findsNothing);
+    expect(find.byKey(SiteMapPreviewPage.confirmKey), findsNothing);
+    expect(find.byKey(SiteMapPreviewPage.deleteKey('pond')), findsNothing);
+  });
+
+  testWidgets('管理员画禁行区：点三下 → 完成 → 整份存（带看到的修订号）→ 确认这一版', (t) async {
+    final api = FakeApi('admin');
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('还没确认'), findsOneWidget);
+    await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+    await t.pump();
+    final rect = t.getRect(find.byKey(SiteMapPreviewPage.canvasKey));
+    final k = rect.width / 200;                      // 图 200 像素宽,画到屏上缩放了
+    for (final o in const [Offset(20, 10), Offset(60, 10), Offset(60, 40)]) {
+      await t.tapAt(rect.topLeft + o * k);
+      await t.pump();
+    }
+    expect(find.textContaining('已 3 个'), findsOneWidget);
+    await t.tap(find.byKey(SiteMapPreviewPage.undoKey));
+    await t.pump();
+    expect(find.textContaining('已 2 个'), findsOneWidget);
+    expect(t.widget<FilledButton>(find.byKey(SiteMapPreviewPage.finishKey)).onPressed, isNull,
+        reason: '不到三个点不能完成');
+    await t.tapAt(rect.topLeft + const Offset(60, 40) * k);
+    await t.pump();
+    await t.tap(find.byKey(SiteMapPreviewPage.finishKey));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('saveZones estate-1:8 base=0'));
+    final z = api.savedZones.single.single;
+    expect(z['kind'], 'nogo');
+    final poly = (z['polygon'] as List).cast<List>();
+    expect(poly.length, 3);
+    // 像素 (20, 10) → 地图 (-10 + 2, 5 - 1) = (-8, 4)
+    expect((poly[0][0] as num).toDouble(), closeTo(-8.0, 0.02));
+    expect((poly[0][1] as num).toDouble(), closeTo(4.0, 0.02));
+    expect(find.textContaining('存好了'), findsOneWidget);
+    await t.tap(find.byKey(SiteMapPreviewPage.confirmKey));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('confirmZones estate-1:8 rev=1'));
+    expect(find.textContaining('已确认'), findsOneWidget);
+  });
+
+  testWidgets('管理员画限速区带速度；删一个；别人先改了说清楚', (t) async {
+    final api = FakeApi('admin')
+      ..zonesView = <String, dynamic>{
+        'revision': 1,
+        'zones': <dynamic>[
+          {'id': 'pond', 'kind': 'nogo', 'label': '池子', 'polygon': [[0, 0], [1, 0], [1, 1]]},
+        ],
+        'confirmed': null, 'confirm_text': 'x'};
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(SiteMapPreviewPage.drawSlowKey));
+    await t.pump();
+    final rect = t.getRect(find.byKey(SiteMapPreviewPage.canvasKey));
+    final k = rect.width / 200;
+    for (final o in const [Offset(120, 10), Offset(160, 10), Offset(160, 40)]) {
+      await t.tapAt(rect.topLeft + o * k);
+      await t.pump();
+    }
+    await t.tap(find.byKey(SiteMapPreviewPage.finishKey));
+    await t.pumpAndSettle();
+    final saved = api.savedZones.single;
+    expect(saved.map((z) => z['id']), ['pond', 'z2']);
+    expect(saved.last['kind'], 'slow');
+    expect(saved.last['max_speed_mps'], 0.3);
+    await t.tap(find.byKey(SiteMapPreviewPage.deleteKey('pond')));
+    await t.pumpAndSettle();
+    expect(api.savedZones.last.map((z) => z['id']), ['z2']);
+    api.zonesConflict = true;
+    await t.tap(find.byKey(SiteMapPreviewPage.deleteKey('z2')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('没存上'), findsOneWidget);
+    expect(find.textContaining('重新拉一下'), findsOneWidget);
+    await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+    await t.pump();
+    await t.tap(find.byKey(SiteMapPreviewPage.cancelKey));
+    await t.pump();
+    expect(find.byKey(SiteMapPreviewPage.drawNogoKey), findsOneWidget, reason: '不画了回到按钮');
+  });
+
   test('解码用的 PNG 是真的（Image.memory 认得）', () {
     expect(fakePreviewPng.sublist(0, 8), Uint8List.fromList([137, 80, 78, 71, 13, 10, 26, 10]));
   });

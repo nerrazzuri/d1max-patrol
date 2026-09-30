@@ -60,43 +60,59 @@ def _escape(cost: bytes, hard: bytes, w: int, h: int, s: int) -> list[int]:
     raise PlanError("start_blocked", f"起点贴着障碍,{ESCAPE_CELLS} 格内走不出去")
 
 
-def line_cells(a: tuple[int, int], b: tuple[int, int]) -> list[tuple[int, int]]:
-    """两格心连线经过的格(超覆盖:正好斜穿格角时角两边的格都算)。"""
+def iter_line(a: tuple[int, int], b: tuple[int, int]):
+    """两格心连线经过的格(超覆盖:正好斜穿格角时角两边的格都算),边走边给。"""
     (r0, c0), (r1, c1) = a, b
     dr, dc = abs(r1 - r0), abs(c1 - c0)
     sr, sc = (1 if r1 > r0 else -1), (1 if c1 > c0 else -1)
     r, c = r0, c0
-    out = [(r, c)]
+    yield r, c
     ix = iy = 0
     while ix < dc or iy < dr:
         dec = (1 + 2 * ix) * dr - (1 + 2 * iy) * dc     # 先碰到竖边(<0)还是横边(>0)
         if dec == 0:
-            out.append((r, c + sc))
-            out.append((r + sr, c))
+            yield r, c + sc
+            yield r + sr, c
             r, c, ix, iy = r + sr, c + sc, ix + 1, iy + 1
         elif dec < 0:
             c, ix = c + sc, ix + 1
         else:
             r, iy = r + sr, iy + 1
-        out.append((r, c))
-    return out
+        yield r, c
 
 
-def smooth(path: list[int], cost: bytes, w: int) -> list[int]:
-    """视线剪枝:从当前点尽量连到最远的点,连线上的格都不致命、软代价不超过原来那段的最大值。"""
+def line_cells(a: tuple[int, int], b: tuple[int, int]) -> list[tuple[int, int]]:
+    return list(iter_line(a, b))
+
+
+def _clear(cost: bytes, w: int, a: int, b: int, limit: int) -> bool:
+    for r, c in iter_line(divmod(a, w), divmod(b, w)):
+        v = cost[r * w + c]
+        if v == LETHAL or v > limit:
+            return False
+    return True
+
+
+def smooth(path: list[int], cost: bytes, w: int, deadline: float | None = None) -> list[int]:
+    """视线剪枝(贪心):从当前点往后连,连线上的格都不致命、软代价不超过被替掉那段的最大值就接着往后试,
+    **第一次连不上就停**,取最后一个连得上的点。线性地往前走,不是两两都试(W10 内审前的版本是平方级,
+    一百米的迷宫路上剪枝要几分钟)。到了截止时刻就不剪了,剩下的原样接上。"""
     if len(path) <= 2:
         return path
     out = [path[0]]
     i = 0
-    while i < len(path) - 1:
+    n = len(path)
+    while i < n - 1:
+        if deadline is not None and time.monotonic() > deadline:
+            out.extend(path[i + 1:])
+            return out
         best = i + 1
         seg_max = cost[path[i + 1]]
-        for j in range(i + 2, len(path)):
+        for j in range(i + 2, n):
             seg_max = max(seg_max, cost[path[j]])
-            a, b = divmod(path[i], w), divmod(path[j], w)
-            if all(cost[r * w + c] != LETHAL and cost[r * w + c] <= seg_max
-                   for r, c in line_cells(a, b)):
-                best = j
+            if not _clear(cost, w, path[i], path[j], seg_max):
+                break
+            best = j
         out.append(path[best])
         i = best
     return out
@@ -163,6 +179,6 @@ def plan(cost: bytes, hard: bytes, w: int, h: int, start: tuple[int, int],
     while i != -1:
         rev.append(i)
         i = par[i]
-    body = smooth(rev[::-1], cost, w)
+    body = smooth(rev[::-1], cost, w, deadline)
     full = prefix[:-1] + body
     return [divmod(i, w) for i in full]
