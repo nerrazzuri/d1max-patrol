@@ -437,6 +437,9 @@ class Telemetry:
     storage: StorageFacts | None = None
     #: W00c6e:定位状态 ``{"source", "anchored", "sigma_m", "reason"}``(没有就不发,老狗也不带)。
     loc: dict[str, Any] | None = None
+    #: W09e:RTK 最新一条解 ``{"fix", "lat", "lon", "alt", "sats", "hdop", "std_h_m", "age_s",
+    #: "stamp_ms", "stale"?}``(没配 RTK 不发,老狗也不带)。
+    rtk: dict[str, Any] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         d = {"stamp": self.stamp, "pose": self.pose.to_wire() if self.pose else None,
@@ -447,6 +450,8 @@ class Telemetry:
             d["storage"] = self.storage.to_wire()
         if self.loc is not None:
             d["loc"] = dict(self.loc)
+        if self.rtk is not None:
+            d["rtk"] = dict(self.rtk)
         return _stamped(d)
 
     @classmethod
@@ -463,4 +468,5 @@ class Telemetry:
                    net=as_dict(d, "net", "Telemetry"),
                    storage=StorageFacts.from_wire(d["storage"]) if d.get("storage") is not None
                    else None,
-                   loc=d["loc"] if isinstance(d.get("loc"), dict) else None)
+                   loc=d["loc"] if isinstance(d.get("loc"), dict) else None,
+                   rtk=d["rtk"] if isinstance(d.get("rtk"), dict) else None)

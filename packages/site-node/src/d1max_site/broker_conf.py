@@ -40,13 +40,17 @@ def render_acl(site_id: str) -> str:
     Topics(site_id=site_id, robot_id="x")                       # site_id 过主题规矩
     base = f"site/{site_id}/robot"
     lines = ["# 由 d1max_site.broker_conf 生成,别手改。", "",
-             "# 站点:给任何一台狗发 cmd 与遥控帧(teleop,W00c5c),读所有狗的上行主题。",
+             "# 站点:给任何一台狗发 cmd、遥控帧(teleop,W00c5c)与基站改正(rtcm,W09e),",
+             "# 读所有狗的上行主题。",
              f"user {site_principal(site_id)}",
-             f"topic write {base}/+/cmd", f"topic write {base}/+/teleop"]
+             f"topic write {base}/+/cmd", f"topic write {base}/+/teleop",
+             f"topic write {base}/+/rtcm"]
     lines += [f"topic read {base}/+/{k}" for k in PUBLISH_KINDS]
-    lines += ["", "# 狗:用户名 = 证书 CN = robot_id;只发自己的上行主题,只订自己的 cmd 与遥控帧。"]
+    lines += ["", "# 狗:用户名 = 证书 CN = robot_id;只发自己的上行主题,",
+              "# 只订自己的 cmd、遥控帧与改正。"]
     lines += [f"pattern write {base}/%u/{k}" for k in PUBLISH_KINDS]
-    lines += [f"pattern read {base}/%u/cmd", f"pattern read {base}/%u/teleop", ""]
+    lines += [f"pattern read {base}/%u/cmd", f"pattern read {base}/%u/teleop",
+              f"pattern read {base}/%u/rtcm", ""]
     return "\n".join(lines)
 
 

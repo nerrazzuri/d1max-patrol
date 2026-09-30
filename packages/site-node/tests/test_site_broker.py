@@ -25,10 +25,12 @@ def test_ACL里狗侧条目与契约TopicAcl出自同一张表():
     g = TopicAcl(t)
     assert {w.replace("%u", "R") for w in writes} == {t.of(k) for k in PUBLISH_KINDS}
     assert all(g.may_publish(w.replace("%u", "R")) for w in writes)
-    assert {r.replace("%u", "R") for r in reads} == {t.cmd, t.teleop}, "W00c5c:遥控帧"
+    assert {r.replace("%u", "R") for r in reads} == {t.cmd, t.teleop, t.rtcm}, \
+        "W00c5c:遥控帧;W09e:基站改正"
     assert all(g.may_subscribe(r.replace("%u", "R")) for r in reads)
     assert "user site:estate-1" in acl and f"topic write site/{SITE}/robot/+/cmd" in acl
     assert f"topic write site/{SITE}/robot/+/teleop" in acl
+    assert f"topic write site/{SITE}/robot/+/rtcm" in acl
     assert f"topic read site/{SITE}/robot/+/cmd" not in acl.splitlines(), "站点不读 cmd"
 
 

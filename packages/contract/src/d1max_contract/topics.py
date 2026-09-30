@@ -11,8 +11,10 @@ from dataclasses import dataclass
 
 from d1max_contract.errors import ContractError
 
-KINDS = ("capabilities", "status", "cmd", "cmd/ack", "event", "reconcile", "telemetry", "teleop")
-#: 狗可以发的六种;``cmd`` 与 ``teleop``(W00c5c,遥控帧)只有站点能发、狗只订自己的。
+KINDS = ("capabilities", "status", "cmd", "cmd/ack", "event", "reconcile", "telemetry", "teleop",
+         "rtcm")
+#: 狗可以发的六种;``cmd``、``teleop``(W00c5c,遥控帧)与 ``rtcm``(W09e,基站改正数据)只有站点能发、
+#: 狗只订自己的。
 PUBLISH_KINDS = ("capabilities", "status", "cmd/ack", "event", "reconcile", "telemetry")
 
 
@@ -74,6 +76,11 @@ class Topics:
         """遥控帧(W00c5c):QoS 0、不保留,**绝不经 cmd**(持久会话会补投旧帧)。"""
         return self.of("teleop")
 
+    @property
+    def rtcm(self) -> str:
+        """基站改正数据(W09e):QoS 0、不保留 —— 过时的改正没用,不补投。"""
+        return self.of("rtcm")
+
     @staticmethod
     def parse(topic: str) -> tuple[str, str, str]:
         """``site/<s>/robot/<r>/<kind>`` → ``(s, r, kind)``。不成形抛 ContractError。"""
@@ -95,7 +102,7 @@ class TopicAcl:
     def __init__(self, topics: Topics) -> None:
         self._t = topics
         self._publish = frozenset(topics.of(k) for k in PUBLISH_KINDS)
-        self._subscribe = frozenset({topics.cmd, topics.teleop})
+        self._subscribe = frozenset({topics.cmd, topics.teleop, topics.rtcm})
 
     def may_publish(self, topic: str) -> bool:
         return topic in self._publish
