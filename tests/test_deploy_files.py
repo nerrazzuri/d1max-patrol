@@ -1264,8 +1264,8 @@ def test_建图脚本_在ROS系统Python里跑这一版的d1max_loc_build():
 
 
 def test_建图预览脚本_在ROS系统Python里跑这一版的_livemap():
-    """W09f:建图编排边走边建时起它(``MappingConfig.live_preview``);rclpy、numpy 在 ROS 的系统 Python 里,
-    代码用这个脚本所在那一版带的 packages/localizer 与 packages/contract。"""
+    """W09f:建图编排边走边建时起它(``MappingConfig.live_preview``);rclpy、numpy 在 ROS 的系统
+    Python 里,代码用这个脚本所在那一版带的 packages/localizer 与 packages/contract。"""
     import os
     import subprocess
     from pathlib import Path

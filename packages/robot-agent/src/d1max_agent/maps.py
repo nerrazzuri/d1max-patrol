@@ -94,15 +94,17 @@ class MapKeeper:
         :class:`MapIntegrityError`)。"""
         path = self.root / "active.json"
         try:
-            text = path.read_text("utf-8")
+            raw = path.read_bytes()
         except FileNotFoundError:
             return None
         except OSError as exc:
             raise MapIntegrityError(f"active.json 读不了: {exc}") from exc
         try:
-            return MapRef.from_wire(json.loads(text))
-        except (ValueError, ContractError) as exc:
-            raise MapIntegrityError(f"active.json 坏了: {exc}") from exc
+            # 断电、坏盘写出来的乱码:不是 UTF-8(UnicodeDecodeError 是 ValueError)、嵌套深到递归
+            # 超限 —— 都是「坏了」,不能让代理起不来(W09g 内审阻断 1)
+            return MapRef.from_wire(json.loads(raw.decode("utf-8")))
+        except (ValueError, RecursionError, ContractError) as exc:
+            raise MapIntegrityError(f"active.json 坏了: {type(exc).__name__}: {exc}"[:200]) from exc
 
     def verify_active(self) -> MapRef | None:
         """正在用的那张完整校验(W09g,**阻塞、要算整张图的 sha256**:只在代理起来、激活时调)。没有
@@ -119,12 +121,13 @@ class MapKeeper:
         """``ref`` 在本地库里那份哪儿不对(空串 = 都对):版本目录在、不是符号链接;清单 ``map.json`` 跟
         ``ref`` 一样;每个文件是普通文件(不跟符号链接)、大小、sha256 都对。"""
         d = self.dir_of(ref)
-        try:
-            st = os.lstat(d)
-        except OSError:
-            return "的目录不在"
-        if not stat.S_ISDIR(st.st_mode):              # lstat:符号链接不算目录
-            return "的目录是符号链接或不是目录"
+        for level in (d.parent, d):                   # 地图号、版本两级都不许是符号链接(内审小 2)
+            try:
+                st = os.lstat(level)
+            except OSError:
+                return "的目录不在"
+            if not stat.S_ISDIR(st.st_mode):          # lstat:符号链接不算目录
+                return "的目录是符号链接或不是目录"
         try:
             have = MapRef.from_wire(json.loads((d / MANIFEST).read_text("utf-8")))
         except (OSError, ValueError, ContractError) as exc:
@@ -141,7 +144,12 @@ class MapKeeper:
                 return f"的 {f.name} 不是普通文件(符号链接、目录、设备都不认)"
             if fst.st_size != f.size:
                 return f"的 {f.name} 大小不对({fst.st_size},应为 {f.size})"
-            if _sha256(p) != f.sha256:
+            try:
+                digest = _sha256(p)
+            except OSError as exc:
+                # 坏扇区、权限:读不了也是「坏了」,好让重新下来修(W09g 内审阻断 2)
+                return f"的 {f.name} 读不了: {exc}"[:200]
+            if digest != f.sha256:
                 return f"的 {f.name} sha256 不对(内容坏了)"
         return ""
 
@@ -261,9 +269,14 @@ class MapKeeper:
                                         encoding="utf-8")
             with self._lock:
                 dst = self.dir_of(ref)
-                shutil.rmtree(dst, ignore_errors=True)
+                # 先把旧的挪开再换进来(同一版重新下时,半路断电的空档只在两次改名之间;内审小 3)
+                old = self.root / ".incoming" / f"{ref.map_id}@{ref.version}.old"
+                shutil.rmtree(old, ignore_errors=True)
+                if dst.exists() or dst.is_symlink():
+                    os.replace(dst, old)
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(tmp, dst)
+                shutil.rmtree(old, ignore_errors=True)
             return dst
         finally:
             shutil.rmtree(tmp, ignore_errors=True)

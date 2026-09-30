@@ -179,3 +179,55 @@ def test_同一版本重新下失败_原来那份还在(k):
     with pytest.raises(MapInstallError):
         keeper.install(ref)
     assert (d / "prior.mm").read_bytes() == broken and keeper.active() == ref
+
+
+# ------------------------------------------------------------------ 内审修复
+
+@pytest.mark.parametrize("raw", [b'{"map_id":"m\xff"}', b"[" * 100_000 + b"]" * 100_000],
+                         ids=["不是UTF-8", "嵌套太深"])
+def test_active_json_乱码或嵌套太深_也是坏了_不往外抛别的(k, tmp_path, raw):
+    """内审阻断 1:UnicodeDecodeError(是 ValueError)、RecursionError 原来穿出去,代理起不来、
+    反复重启。"""
+    keeper, _, _, _ = k
+    (tmp_path / "maps" / "active.json").write_bytes(raw)
+    assert keeper.active() is None
+    with pytest.raises(MapIntegrityError, match="active.json 坏了"):
+        keeper.verify_active()
+
+
+def test_读不了_算校验不过_重新下能修(k, monkeypatch):
+    """内审阻断 2:读哈希时 EIO / 权限原来抛出去,install 走不到重新下那一步,站点重发也修不好。"""
+    keeper, site, ref, d = k
+    real = M._sha256
+    bad = {"n": 0}
+
+    def eio(p):
+        if p.name == "prior.mm" and bad["n"] == 0:
+            bad["n"] += 1
+            raise OSError(5, "Input/output error")
+        return real(p)
+    monkeypatch.setattr(M, "_sha256", eio)
+    site.calls.clear()
+    assert keeper.install(ref) == d
+    assert {c[0] for c in site.calls} == set(FILES), "读不了:重新下了"
+    assert keeper.verify_active() == ref
+
+
+def test_读不了_校验说读不了(k, monkeypatch):
+    keeper, _, _, _ = k
+
+    def eio(p):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(M, "_sha256", eio)
+    with pytest.raises(MapIntegrityError, match="读不了.*Permission"):
+        keeper.verify_active()
+    assert keeper.local(keeper.active()) is None
+
+
+def test_地图号那一级是符号链接_不认(k, tmp_path):
+    keeper, _, _, d = k
+    moved = tmp_path / "moved-map"
+    d.parent.rename(moved)
+    os.symlink(moved, d.parent)
+    with pytest.raises(MapIntegrityError, match="符号链接"):
+        keeper.verify_active()

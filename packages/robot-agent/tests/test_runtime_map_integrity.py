@@ -232,3 +232,101 @@ async def test_配了定位器_图坏了不给定位器先验(tmp_path):
         assert "relocalize" not in caps.tasks and "goto" not in caps.tasks
     finally:
         await t.收()
+
+
+# ------------------------------------------------------------------ 内审修复
+
+
+async def test_active_json_乱码_代理照样起来_记事件(t, tmp_path):
+    """内审阻断 1:原来 UnicodeDecodeError 穿出 start(),代理退出、systemd 反复拉起,站点收不到
+    事件。"""
+    (tmp_path / "agent" / "maps" / "active.json").write_bytes(b'{"map_id":"m\xff"}')
+    await t.重启()
+    assert t.rt.loaded_map is None
+    assert "active.json" in t.events("map_integrity_failed")[-1]["reason"]
+
+
+async def test_校验时别的错_也按坏了收_代理照样起来(t, monkeypatch):
+    def 炸():
+        raise MemoryError("爆了")
+    monkeypatch.setattr(t.keeper, "verify_active", 炸)
+    await t.重启()
+    assert t.rt.loaded_map is None
+    assert "MemoryError" in t.events("map_integrity_failed")[-1]["reason"]
+
+
+async def test_起来时读不了_站点再发同一版_修好(t, monkeypatch):
+    """内审阻断 2:原来读哈希时的 OSError 在 install 里抛出去,重新下发同一版修不好。"""
+    real = M._sha256
+    n = {"bad": 2}                                        # 起来时一次、再激活时 local() 一次
+
+    def eio(p):
+        if p.name == "m.pgm" and n["bad"] > 0:
+            n["bad"] -= 1
+            raise OSError(5, "Input/output error")
+        return real(p)
+    monkeypatch.setattr(M, "_sha256", eio)
+    await t.重启()
+    assert t.rt.loaded_map is None and "读不了" in t.events("map_integrity_failed")[-1]["reason"]
+    await t.换("2", "a9")
+    assert t.rt.loaded_map == ("m", "2") and t.events("map_activated")[-1]["task_id"] == \
+        "map_activate-a9"
+
+
+async def test_能力里带上图坏了的原因_修好就没了(t):
+    _flip(t.keeper.dir_of(t.keeper.active()) / "m.pgm")
+    await t.重启()
+    assert "m.pgm" in t.caps().tasks["map_activate"]["problem"]
+    await t.换("2", "a2")
+    assert t.caps().tasks["map_activate"] == {}
+
+
+async def test_配了定位器_校验的时候定位桥还没开_定位器拿不到命令行那张图的先验(tmp_path):
+    """内审应修 1:原来先开桥再校验,几百 MB 的那几秒里定位器连上来,拿到 --map 那张的先验。"""
+    from test_runtime_localizer import 台子 as 定位台
+    from test_runtime_localizer import 真狗样
+    site = 站点()
+    keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
+    t = 定位台()
+    await t.起(tmp_path / "agent", dog=真狗样, maps=keeper)
+    try:
+        await t.连()
+        wire = site.add("m", "2", {"prior.mm": bytes(range(100)), "frames.json": b"{}"})
+        await t.rt._on_cmd(_cmd("map_activate", wire, "a1", t.c))
+        await _跑(t.rt, t.broker)
+        await t.rt.close()
+        seen = []
+        real = keeper.verify_active
+
+        def 看(*a):
+            seen.append((t.d / "loc.sock").exists())
+            return real(*a)
+        keeper.verify_active = 看
+        t.rt = t.新代理()
+        await t.rt.start()
+        assert seen == [False], "校验的时候定位桥还没开"
+        assert (t.d / "loc.sock").exists(), "校验完照样开"
+    finally:
+        await t.收()
+
+
+async def test_配了定位器_起来时正在用的版本没有先验_按坏了处理(tmp_path):
+    """内审小 1:不配定位器时激活过一版不带先验的,后来配了定位器 —— 起来时要查,不能让定位器去读清单
+    之外(没校验过)的先验。"""
+    from test_runtime_localizer import 台子 as 定位台
+    from test_runtime_localizer import 真狗样
+    site = 站点()
+    keeper = MapKeeper(tmp_path / "keep", fetch=site.fetch)
+    from d1max_contract.maps import MapRef
+    ref = MapRef.from_wire(site.add("m", "2", {"m.pgm": b"P5"}))
+    keeper.install(ref)
+    keeper.commit(ref)
+    t = 定位台()
+    await t.起(tmp_path / "agent", dog=真狗样, maps=keeper)
+    try:
+        assert t.rt.loaded_map is None
+        await t.broker.drain()
+        got = [e["data"] for e in t.ears.by["event"] if e["kind"] == "map_integrity_failed"]
+        assert got and "先验" in got[-1]["reason"]
+    finally:
+        await t.收()

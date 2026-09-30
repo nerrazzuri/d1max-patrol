@@ -38,7 +38,8 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def check_name(v: Any, what: str) -> str:
-    if not isinstance(v, str) or not NAME_RE.match(v) or ".." in v:
+    # fullmatch:``$`` 让末尾的换行也能过(W09g 内审小 5)
+    if not isinstance(v, str) or not NAME_RE.fullmatch(v) or ".." in v:
         raise ContractError(f"{what} 只许字母、数字、. _ -,1–64 位,不许 ..:{v!r}")
     return v
 

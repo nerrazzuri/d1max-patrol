@@ -423,10 +423,11 @@ def test_狗上正在用的图坏了_报图的告警_说重新下发这一版(�
     src.on_event("A", _ev("map_integrity_failed", map_id="estate-1", version="7",
                           reason="正在用的图 estate-1:7 的 prior.mm sha256 不对(内容坏了)"))
     [a] = desk.book.all()
-    assert a.kind == "map_failed" and "estate-1:7" in a.title and "坏了" in a.title
+    assert a.kind == "map_integrity" and "estate-1:7" in a.title and "坏了" in a.title
     assert "prior.mm" in a.detail and "重新下发" in a.detail
-    src.on_event("A", _ev("map_integrity_failed", reason="active.json 坏了: ..."))
-    assert any("?" in x.title or "active.json" in x.detail for x in desk.book.all())
+    src.on_event("A", _ev("map_build_failed", map_id="estate-1", version="8", reason="x"))
+    kinds = sorted(x.kind for x in desk.book.all())
+    assert kinds == ["map_failed", "map_integrity"], "重建没成不盖掉「图坏了」那条"
 
 
 def test_点位照片存不下_不报没到_并进记录写不进去(台):

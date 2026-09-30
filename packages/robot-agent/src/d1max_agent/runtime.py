@@ -326,11 +326,19 @@ class AgentRuntime:
         from d1max_agent.maps import MapIntegrityError
         try:
             ref = await asyncio.to_thread(self.maps.verify_active)
-        except (MapIntegrityError, OSError) as exc:
-            self._map_integrity_failed(exc)
+        except Exception as exc:  # noqa: BLE001 —— 什么错都按「坏了」收,不让代理起不来(内审阻断 1)
+            self._map_integrity_failed(exc if isinstance(exc, (MapIntegrityError, OSError))
+                                       else MapIntegrityError(f"{type(exc).__name__}: {exc}"))
             return
         if ref is None:
             return
+        if self._locsrv is not None:
+            missing = [n for n in PRIOR_FILES if n not in {f.name for f in ref.files}]
+            if missing:                   # 定位器要读的先验不在清单里:没校验过(内审小 1)
+                self._map_integrity_failed(MapIntegrityError(
+                    f"正在用的图 {ref.map_id}:{ref.version} 没有定位先验({', '.join(missing)}),"
+                    "配了定位器的狗用不了"))
+                return
         if self._locsrv is not None:                  # 配了定位器:换图不经 HAL(W09c 决定 6)
             self._switch_map(ref)
             return
@@ -380,7 +388,8 @@ class AgentRuntime:
         out: dict[str, dict[str, Any]] = {}
         if self.maps is not None and (self._locsrv is not None
                                       or getattr(self.hal, "load_map", None) is not None):
-            out["map_activate"] = {}
+            # 正在用的图校验不过的原因(W09g 内审再议):告警被人手动解决之后,单狗视图里还看得到
+            out["map_activate"] = {"problem": self.map_problem} if self.map_problem else {}
         if self.mapper is not None:
             out["mapping"] = {"live": True}     # W09c2:能边走边建(站点据此放行带版本的开录)
             out["mapping_trail"] = {}           # W00c6h:录包时的轨迹(手机画哪儿走过了)
@@ -947,8 +956,6 @@ class AgentRuntime:
             # 两个桥各自记着「连上了」(老 HTTP 面的绿灯读它);HAL.connect 是幂等的。
             await self.parts.device.connect()
             await self.parts.nav.connect()
-        if self._locsrv is not None:
-            await self._locsrv.start()              # 定位器可以先连上来,不等站点
         self.transport.set_will(
             self.topics.status,
             _dumps(offline_status(boot_id=self.boot_id,
@@ -963,6 +970,10 @@ class AgentRuntime:
         await self.transport.subscribe(self.topics.teleop, self._on_teleop, qos=0)
         # 先载正在用的图,再连站点:连上之后进来的命令要按真的地图版本核对。
         await self._load_active_map()
+        if self._locsrv is not None:
+            # 定位器可以先连上来,不等站点;但要在校验完正在用的图之后(W09g 内审应修 1:原来先开桥,
+            # 校验几百 MB 的那几秒里定位器连上来,拿到的是命令行那张图的先验)
+            await self._locsrv.start()
         await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
         await self._publish_caps()
         if self.releases is not None:

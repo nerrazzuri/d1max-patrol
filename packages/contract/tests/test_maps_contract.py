@@ -97,3 +97,11 @@ def test_边走边建_开始录包可以带地图号和版本():
                 {"action": "stop", "map_id": "estate-1", "version": "3"}):
         with pytest.raises(ContractError):
             mapping_target(bad)
+
+
+@pytest.mark.parametrize("bad", ["v1\n", "m\n", "prior.mm\n"])
+def test_名字末尾带换行不认(bad):
+    """W09g 内审小 5:``NAME_RE.match`` 加 ``$`` 让末尾一个换行也能过。"""
+    from d1max_contract.maps import check_name
+    with pytest.raises(ContractError):
+        check_name(bad, "名字")

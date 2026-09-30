@@ -260,7 +260,7 @@ class SiteAlertSources:
         elif e.kind == "map_integrity_failed":
             # W09g:狗起来时正在用的图校验不过 —— 没载、不宣告能自主(不退回命令行的图)。
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
-            self.desk.raise_alert(kind="map_failed", robot=rid,
+            self.desk.raise_alert(kind="map_integrity", robot=rid,
                                   title=f"狗上正在用的图坏了:{which},不能自主",
                                   detail=f"{str(d.get('reason', ''))[:240]};"
                                          "重新下发这一版(同一版也会重新下载、逐个核对)")
