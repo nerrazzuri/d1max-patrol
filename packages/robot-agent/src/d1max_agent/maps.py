@@ -123,7 +123,7 @@ class MapKeeper:
             st = os.lstat(d)
         except OSError:
             return "的目录不在"
-        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        if not stat.S_ISDIR(st.st_mode):              # lstat:符号链接不算目录
             return "的目录是符号链接或不是目录"
         try:
             have = MapRef.from_wire(json.loads((d / MANIFEST).read_text("utf-8")))

@@ -106,8 +106,20 @@ async def test_坏了之后_goto_派不进_叫停照收(t):
     await t.rt._on_cmd(_cmd("halt", {}, "h1", t.c))
     await t.broker.drain()
     acks = {a["command_id"]: a for a in t.ears.by["cmd/ack"]}
-    assert acks["g1"]["result"] != "accepted"
+    assert acks["g1"]["reason"] == "unsupported", "没有图:不收 goto(不是等到核地图版本才拒)"
     assert acks["h1"]["result"] == "accepted"
+
+
+async def test_坏了之后_不宣告定位就绪_遥测不带地图位置(t):
+    """锚定要作废:不然状态照报「定位就绪」、狗像是在命令行那张图(m:1)上定着位。"""
+    from d1max_contract.messages import Status, Telemetry
+    _flip(t.keeper.dir_of(t.keeper.active()) / "m.pgm")
+    await t.重启()
+    await _跑(t.rt, t.broker, n=15, r=t.r, c=t.c)
+    await t.rt._publish_status(force=True)
+    await t.broker.drain()
+    assert Status.from_wire(t.ears.by["status"][-1]).ready.loc_ok is False
+    assert Telemetry.from_wire(t.ears.by["telemetry"][-1]).pose is None
 
 
 async def test_坏了之后_站点再发同一版_重新下_载入_能力回来(t):

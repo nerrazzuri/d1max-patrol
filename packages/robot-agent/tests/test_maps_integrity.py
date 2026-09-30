@@ -66,6 +66,18 @@ def test_文件缺了短了不是文件_校验不过(k, how):
         keeper.verify_active()
 
 
+def test_截短了_先说大小不对_不用算哈希(k, monkeypatch):
+    keeper, _, _, d = k
+    p = d / "frames.json"
+    p.write_bytes(p.read_bytes()[:-1])
+    hashed = []
+    real = M._sha256
+    monkeypatch.setattr(M, "_sha256", lambda q: (hashed.append(q.name), real(q))[1])
+    with pytest.raises(MapIntegrityError, match="frames.json 大小不对"):
+        keeper.verify_active()
+    assert "frames.json" not in hashed
+
+
 def test_文件换成符号链接_内容一样也不认(k, tmp_path):
     keeper, _, _, d = k
     other = tmp_path / "elsewhere.pgm"
