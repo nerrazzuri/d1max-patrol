@@ -81,6 +81,7 @@ def test_1005_解出基站坐标_换成经纬高():
     assert (la, lo) == pytest.approx((lat, lon), abs=1e-8)
     assert hh == pytest.approx(h, abs=1e-3), "1005 按 0.1 mm 量化"
     assert station_ecef(frame(_body(1077))) is None
+    assert station_ecef(_1005(0.0, 0.0, 0.0)) is None, "全零(基站还没测好):不算坐标"
 
 
 def test_下行主题rtcm_狗订得到_发不了():

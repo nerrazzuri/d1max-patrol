@@ -102,10 +102,12 @@ def station_ecef(f: bytes) -> tuple[float, float, float] | None:
     body = f[3:-3]
     if len(body) < 19:
         return None
-    x = _bits(body, 34, 38, signed=True)
-    y = _bits(body, 74, 38, signed=True)
-    z = _bits(body, 114, 38, signed=True)
-    return x * 1e-4, y * 1e-4, z * 1e-4
+    x = _bits(body, 34, 38, signed=True) * 1e-4
+    y = _bits(body, 74, 38, signed=True) * 1e-4
+    z = _bits(body, 114, 38, signed=True) * 1e-4
+    if not 6.3e6 < math.sqrt(x * x + y * y + z * z) < 6.5e6:   # 不在地表附近(全零、没测好):不算
+        return None
+    return x, y, z
 
 
 def ecef_to_llh(x: float, y: float, z: float) -> tuple[float, float, float]:

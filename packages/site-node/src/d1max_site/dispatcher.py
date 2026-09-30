@@ -571,6 +571,20 @@ class Dispatcher:
         caps = c.capabilities.tasks.get("patrol") if c and c.capabilities else None
         return autonomy_of(caps)
 
+    async def publish_rtcm(self, data: bytes) -> int:
+        """基站改正数据(W09e):发给每台在线、状态新鲜的狗(QoS 0、不保留 —— 过时的改正没用)。
+        回发了几台。"""
+        n = 0
+        for rid, c in list(self.clients.items()):
+            if c.status is None or not c.status.online or not self._fresh(c):
+                continue
+            try:
+                await self._t.publish(c.topics.rtcm, data, qos=0, retain=False)
+                n += 1
+            except Exception:                            # 一台发不出去不碍别的
+                log.warning("改正数据发给 %s 没成", rid, exc_info=True)
+        return n
+
     async def teleop_frame(self, robot_id: str, frame: TeleopFrame) -> None:
         """发一帧遥控:专用主题、**QoS 0、不保留**(断线期间的帧不许补投)。"""
         c = self.clients.get(robot_id)

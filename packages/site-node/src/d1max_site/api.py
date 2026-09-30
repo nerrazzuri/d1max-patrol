@@ -155,6 +155,8 @@ class SiteApi:
         self.supervision = supervision if supervision is not None else \
             SupervisionDesk(dispatcher, loop, now_ms=self._now)
         self.audit = AuditLog(dispatcher.db, now_ms=self._now) if dispatcher is not None else None
+        #: 基站改正数据转发(W09e,``RtcmRelay``);没配是 None。主程序接上。
+        self.rtk: Any = None
         self._stopping = threading.Event()
         api = self
 
@@ -316,6 +318,12 @@ class _Handler(TlsHandlerMixin):
             if method == "GET" and path == "/api/events":
                 self._need(user, VIEW)
                 return self._sse()
+            if method == "GET" and path == "/api/rtk":
+                # 自建基站的改正数据(W09e):源连没连上、多久没来数据、收了哪些报文、基站坐标
+                self._need(user, VIEW)
+                rtk = self.site.rtk
+                return self._send_json(200, {"configured": False} if rtk is None
+                                       else {"configured": True, **rtk.stats()})
             if method == "GET" and path == "/api/schedule":
                 self._need(user, VIEW)
                 if self.site.scheduler is None:

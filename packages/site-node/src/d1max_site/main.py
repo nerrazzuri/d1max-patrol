@@ -304,7 +304,8 @@ def cmd_account(home: Path, what: str, name: str, role: str = "") -> None:
 class Server:
     """站点进程:事件循环线程里跑 MQTT 与派遣器,HTTP 线程跑 API。"""
 
-    def __init__(self, home: Path, *, api_host: str, api_port: int, broker_url: str) -> None:
+    def __init__(self, home: Path, *, api_host: str, api_port: int, broker_url: str,
+                 rtcm_source: str | None = None) -> None:
         from d1max_contract.paho_transport import PahoTransport
         from d1max_site.api import SiteApi, check_exposure
         from d1max_site.dispatcher import Dispatcher
@@ -398,6 +399,13 @@ class Server:
                            maps=self.maps, releases=self.releases,
                            supervision=self.supervision, now_ms=wall_ms)
         self.teleop.audit = self.api.audit
+        #: 基站改正数据转发(W09e):配了 ``--rtcm-source`` 才有。
+        self.rtk = None
+        if rtcm_source:
+            from d1max_site.rtk_relay import RtcmRelay
+            self.rtk = RtcmRelay(rtcm_source, now_ms=wall_ms, publish=lambda b: self.loop.submit(
+                lambda: self.dispatcher.publish_rtcm(b)))
+        self.api.rtk = self.rtk
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
                                         name="site-chores")
@@ -410,6 +418,8 @@ class Server:
         self.api.start()
         self.intake.start()
         self._chores.start()
+        if self.rtk is not None:
+            self.rtk.start()
 
     def _chore_loop(self) -> None:
         """后台杂事(不在事件循环里:判读要等模型、备份要拷盘):每 30 s 自动判读一拍,
@@ -470,6 +480,8 @@ class Server:
 
     def stop(self) -> None:
         self._stop.set()
+        if self.rtk is not None:
+            self.rtk.close()
         for what, fn in (("遥控", self.teleop.close_all), ("API", self.api.stop),
                          ("接收口", self.intake.stop),
                          ("视频", self.video.close),
@@ -483,10 +495,19 @@ class Server:
                 log.exception("收尾:%s 失败,后面的照做", what)
 
 
-def cmd_serve(home: Path, api_host: str, api_port: int, broker_url: str | None) -> int:
+def cmd_serve(home: Path, api_host: str, api_port: int, broker_url: str | None,
+              rtcm_source: str | None = None) -> int:
     cfg = _load(home)
     url = broker_url or f"mqtts://127.0.0.1:{cfg['broker_port']}"
-    srv = Server(home, api_host=api_host, api_port=api_port, broker_url=url)
+    if rtcm_source:
+        from d1max_site.rtk_relay import SourceError, parse_source
+        try:
+            parse_source(rtcm_source)
+        except SourceError as exc:
+            print(f"d1max-site 起不来: {exc}", file=sys.stderr, flush=True)
+            return 2
+    srv = Server(home, api_host=api_host, api_port=api_port, broker_url=url,
+                 rtcm_source=rtcm_source)
     try:
         srv.start()
     except Exception as exc:  # noqa: BLE001 - 连不上 broker 之类:退 1,交给 systemd 重试
@@ -563,6 +584,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--api-host", default="127.0.0.1")
     s.add_argument("--api-port", type=int, default=8443)
     s.add_argument("--broker", default=None, help="默认 mqtts://127.0.0.1:<init 时的端口>")
+    s.add_argument("--rtcm-source", default=None,
+                   help="自建基站的改正数据(W09e):serial:<设备>:<波特率> 或 "
+                        "tcp:<主机>:<端口>;不给不转发")
     return p
 
 
@@ -622,7 +646,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             cmd_account(home, args.cmd, args.name, getattr(args, "role", ""))
             print(f"{args.cmd} {args.name}:好了(这个账号的会话已全部吊销)")
         else:
-            return cmd_serve(home, args.api_host, args.api_port, args.broker)
+            return cmd_serve(home, args.api_host, args.api_port, args.broker, args.rtcm_source)
     except (SiteError, CAError, RegistryError, AuthError) as exc:
         print(f"d1max-site: {exc}", file=sys.stderr)
         return 2
