@@ -28,7 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from d1max_contract.maps import GEOMETRY_FILES, MANIFEST, MapFile, MapRef
+from d1max_contract.maps import GEOMETRY_FILES, MANIFEST, OPTIONAL_FILES, MapFile, MapRef
 
 log = logging.getLogger(__name__)
 
@@ -299,7 +299,8 @@ class MappingService:
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True)
         files = []
-        for n in GEOMETRY_FILES:
+        optional = [n for n in OPTIONAL_FILES if (made / n).is_file()]   # W09e:geo.json 有才收
+        for n in (*GEOMETRY_FILES, *optional):
             shutil.move(made / n, tmp / n)                # 同一块盘上就是改名
             files.append(MapFile(name=n, size=(tmp / n).stat().st_size,
                                  sha256=_sha256(tmp / n)))

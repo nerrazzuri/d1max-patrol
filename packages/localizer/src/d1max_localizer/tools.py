@@ -55,6 +55,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     b.add_argument("--lidar-topic", default="/front_lidar")
     b.add_argument("--prior-pack", default="none", help="none 或 regroup:<体素米>:<范围倍数>")
     b.add_argument("--reuse", action="store_true", help="用 --work 里已有的 MOLA 输出,只打包")
+    b.add_argument("--rtk-antenna", type=lambda s: _floats(s, 2), default=(0.0, 0.0),
+                   help="RTK 天线在狗身上的水平位置(朝前,朝左,米;W09e 配经纬度用,真机量)")
     for name in ("replay", "sweep"):
         r = sub.add_parser(name)
         r.add_argument("--bag", type=Path, required=True)
@@ -86,7 +88,7 @@ def _build(a: argparse.Namespace) -> int:
     timings = {} if a.reuse else build.run_mapping(a.bag, work, lidar_topic=a.lidar_topic)
     files = build.package(work, a.out, prior_pack=build.PriorPack.parse(a.prior_pack),
                           source=f"bag:{a.bag.name}", timings=timings, bag=a.bag,
-                          lidar_topic=a.lidar_topic)
+                          lidar_topic=a.lidar_topic, rtk_antenna=tuple(a.rtk_antenna))
     print(json.dumps(json.loads((a.out / "build.json").read_text()), ensure_ascii=False,
                      indent=2))
     print("文件:", ", ".join(files))

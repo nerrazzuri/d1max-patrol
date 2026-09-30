@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from d1max_contract.geo import GEO_FILE
 from d1max_contract.maps import GEOMETRY_FILES
 from d1max_localizer.frames import Frames, calibrate
 from d1max_localizer.replay import MOLA_SHARE, read_tum
@@ -118,7 +119,8 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
             sensor_in_base: tuple[float, float] = FRONT_LIDAR_IN_BASE, source: str = "",
             run: Runner = subprocess.run, timings: dict[str, float] | None = None,
             bag: Path | None = None, lidar_topic: str = SCAN_TOPIC,
-            read_scans: Callable[..., Iterator[Any]] | None = None) -> list[str]:
+            read_scans: Callable[..., Iterator[Any]] | None = None,
+            rtk_antenna: tuple[float, float] = (0.0, 0.0)) -> list[str]:
     """``work`` 里的 ``raw_prior.mm``、``traj.tum``、``map.simplemap`` → ``out`` 里的版本文件。回
     文件名。给了 ``bag``(建图的那个录包)就从里面逐帧读扫描打真射线。"""
     prior_pack = prior_pack or PriorPack()
@@ -156,13 +158,33 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     cov = coverage(traj, frames)
     (out / "coverage.json").write_text(json.dumps({"version": 1, "step_m": COVERAGE_STEP_M,
                                                    "path": cov}) + "\n")
+    geo_info, files = _georeference(out, bag, traj, frames, rtk_antenna), list(FILES)
+    if geo_info.get("written"):
+        files.append(GEO_FILE)
     (out / "build.json").write_text(json.dumps({
         "version": 1, "source": source, "builder": "mola-lidar-odometry", "prior_pack":
         prior_pack.label(), "frames": why, "frames_count": len(traj),
         "grid": {"res": g.res, "size": list(g.image.shape[::-1]), "origin": list(g.origin),
                  "rays": rays},
-        "mola": _mola_info(work), "timings_s": timings}, ensure_ascii=False, indent=2) + "\n")
-    return list(FILES)
+        "mola": _mola_info(work), "geo": geo_info, "timings_s": timings}, ensure_ascii=False,
+        indent=2) + "\n")
+    return files
+
+
+def _georeference(out: Path, bag: Path | None, traj: Sequence[Any], frames: Frames,
+                  antenna: tuple[float, float]) -> dict[str, Any]:
+    """录包里有 ``rtk.jsonl``(代理录包时记的 RTK 解)就配经纬度,配得上写 ``geo.json``
+    (W09e 决定 6)。"""
+    from d1max_localizer.geo import georeference, read_rtk
+    (out / GEO_FILE).unlink(missing_ok=True)
+    rows = read_rtk(bag / "rtk.jsonl") if bag is not None else []
+    if not rows:
+        return {"written": False, "why": "录包里没有 RTK 解"}
+    g, why = georeference(traj, frames, rows, antenna_in_base=antenna)
+    if g is None:
+        return {"written": False, "why": why}
+    (out / GEO_FILE).write_text(json.dumps(g.to_wire(), indent=2) + "\n")
+    return {"written": True, "why": why, "rms_m": g.rms_m, "pairs": g.pairs}
 
 
 def _render(points: Any, sensor: Any, frames: Frames, body: Any, traj: Sequence[Any],

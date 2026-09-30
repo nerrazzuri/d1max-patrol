@@ -110,6 +110,8 @@ class MappingConfig:
     #: best_effort 订的话开发机上放包实测 18% 的帧在传输里丢了、图上出重影,reliable 99.5%。
     live_qos: str = "reliable"
     live_preview: Path = LIVE_PREVIEW
+    #: RTK 天线在狗身上的水平位置(朝前、朝左,米;W09e 配经纬度用,真机量了再配)。
+    rtk_antenna: tuple[float, float] = (0.0, 0.0)
 
 
 class MappingOrchestrator:
@@ -427,7 +429,8 @@ class MappingOrchestrator:
             name=self.BUILD,
             argv=(str(cfg.map_builder), "--bag", str(bag), "--out", str(out),
                   "--work", str(work), "--lidar-topic", cfg.lidar_topic,
-                  "--prior-pack", cfg.prior_pack),
+                  "--prior-pack", cfg.prior_pack,
+                  "--rtk-antenna", f"{cfg.rtk_antenna[0]:g},{cfg.rtk_antenna[1]:g}"),
             env=self._offline_env(),
             ready_pattern="",       # 跑完自己退
         )

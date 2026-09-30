@@ -498,3 +498,18 @@ def test_预览进程在不在_问编排_老编排当在(svc):
     assert svc.preview_alive() is False
     del svc.orch.preview_running
     assert svc.preview_alive() is True
+
+
+
+async def test_建好的图带geo_json就一起收进清单_没有照旧(svc):
+    """W09e:geo.json 是可选文件,有就收、跟着传、照样校验。"""
+    svc.orch.made = (*GEOMETRY_FILES, "geo.json")
+    await svc.start("yard")
+    await svc.stop()
+    ref = await svc.build(svc.last_bag, "estate-1", "9")
+    assert [f.name for f in ref.files] == [*GEOMETRY_FILES, "geo.json"]
+    svc.orch.made = GEOMETRY_FILES
+    await svc.start("yard2")
+    await svc.stop()
+    ref = await svc.build(svc.last_bag, "estate-1", "10")
+    assert "geo.json" not in [f.name for f in ref.files]

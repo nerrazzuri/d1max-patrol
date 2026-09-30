@@ -31,6 +31,9 @@ MANIFEST = "map.json"
 #: 画的规划栅格、「哪里有图」(建图时走过的路)、怎么建的。站点、手机的预览照旧用 ``floor.*``。
 GEOMETRY_FILES = ("prior.mm", "frames.json", "floor.pgm", "floor.yaml", "coverage.json",
                   "build.json")
+#: 可选的文件(W09e):有就收进清单、跟着传、照样校验;没有不影响这一版能用。``geo.json`` = 地图与
+#: 经纬度的配准(录包时有 RTK 固定解、配得上才有,见 ``d1max_contract.geo``)。
+OPTIONAL_FILES = ("geo.json",)
 COVERAGE = "coverage.json"
 #: 定位器要的那两样(W09b):配了定位器的狗只收带着它们的版本。
 PRIOR_FILES = ("prior.mm", "frames.json")

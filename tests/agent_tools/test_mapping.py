@@ -112,8 +112,12 @@ def test_建图起的是建图脚本_录包_输出_中间目录_雷达话题_先
                          "--out", str(cfg.maps_dir / "m1"),
                          "--work", str(cfg.maps_dir / ".work" / "m1"),
                          "--lidar-topic", "/front_lidar",
-                         "--prior-pack", "none")
+                         "--prior-pack", "none", "--rtk-antenna", "0,0")
     assert spec.ready_pattern == "", "跑完自己退,没有「起来了」这回事"
+    from dataclasses import replace
+    spec = MappingOrchestrator(orch._procs, replace(cfg, rtk_antenna=(0.3, -0.05))
+                               ).spec_for_build(tmp_path / "b", "m1")
+    assert spec.argv[-2:] == ("--rtk-antenna", "0.3,-0.05"), "W09e:天线杆臂给建图脚本配经纬度"
 
 
 def test_先验打包和雷达话题是可配的(procs, cfg, tmp_path):

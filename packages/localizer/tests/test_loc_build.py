@@ -314,3 +314,39 @@ def test_栅格太大_打包失败说轨迹可能发散了(tmp_path, monkeypatch
     monkeypatch.setattr(G, "MAX_CELLS", 100)
     with pytest.raises(B.BuildError, match="发散"):
         B.package(work, tmp_path / "out", run=假MOLA(pts))
+
+
+def test_录包里有RTK解_配经纬度写geo_json_没有就不写_build_json记原因(tmp_path):
+    """W09e 决定 6。合成场景的轨迹未必走够 10 m:写没写跟 build.json、文件表一致;写了朝向要对。"""
+    import math
+
+    from d1max_localizer.frames import Frames
+    from d1max_localizer.replay import read_tum
+
+    from d1max_contract.geo import GEO_FILE, GeoRef, enu_to_llh
+    work, pts = _scene(tmp_path, False)
+    bag = tmp_path / "bag"
+    bag.mkdir()
+    files = B.package(work, tmp_path / "out", run=假MOLA(pts), bag=bag,
+                      read_scans=lambda *a: iter(()))
+    info = json.loads((tmp_path / "out" / "build.json").read_text())["geo"]
+    assert info == {"written": False, "why": "录包里没有 RTK 解"} and GEO_FILE not in files
+    frames = Frames.load(tmp_path / "out" / "frames.json")
+    th = math.radians(25.0)
+    rows = []
+    for t, p, q in read_tum(work / "traj.tum"):
+        x, y, _ = frames.to_map2d(p, q)
+        e, n = math.cos(th) * x - math.sin(th) * y, math.sin(th) * x + math.cos(th) * y
+        lat, lon = enu_to_llh(e, n, 5.41, 100.32)
+        rows.append({"t": t, "fix": "fixed", "lat": lat, "lon": lon, "alt": 3.0})
+    (bag / "rtk.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    files = B.package(work, tmp_path / "out2", run=假MOLA(pts), bag=bag,
+                      read_scans=lambda *a: iter(()))
+    info = json.loads((tmp_path / "out2" / "build.json").read_text())["geo"]
+    written = (tmp_path / "out2" / GEO_FILE).is_file()
+    assert info["written"] is written and (GEO_FILE in files) is written, info
+    if written:
+        g = GeoRef.from_wire(json.loads((tmp_path / "out2" / GEO_FILE).read_text()))
+        assert g.yaw_deg == pytest.approx(25.0, abs=0.5) and g.rms_m < 0.05
+    else:
+        assert "范围" in info["why"], info
