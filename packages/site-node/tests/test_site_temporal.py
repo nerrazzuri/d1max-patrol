@@ -164,3 +164,34 @@ async def test_钟差超限_遥控续租视频监护也拒_放掉照发(台):
     ack = await t.send(t.site.teleop_lease("A", TeleopLease(action="release", lease_epoch=1),
                                            timeout_s=2.0))
     assert ack.result is not None
+
+
+async def test_门槛按这条命令的有效期_授予几秒_狗慢10秒就拒_goto照派(台):
+    """内审应修 1:原来一律 30 s。授予的有效期 = 等回执 + 2 s(台子里 7 s,现场约 12 s),狗慢 10 s
+    时晚到的授予在狗上还没过期;goto 60 s,照派。"""
+    t = 台
+    await t.run(3)
+    _no_samples(t)
+    for _ in range(10):
+        _tele(t, -10_000)
+    assert t.site.clock_skew_s("A") == pytest.approx(-10.0)
+    with pytest.raises(DispatchRefused, match=r"钟差 -10 秒:这条命令的有效期 7 秒"):
+        await t.site.teleop_grant("A", lease_epoch=1, operator="gina", lease_ttl_ms=1500,
+                                  issued_by="gina")
+    r = await t.send(t.site.goto("A", target(1.0), 0.8, issued_by="alice"))
+    assert r["ack"]["result"] == "accepted"
+
+
+async def test_续租视频监护按30秒的有效期_狗慢20秒就拒(台):
+    t = 台
+    await t.run(3)
+    _no_samples(t)
+    for _ in range(10):
+        _tele(t, -20_000)
+    with pytest.raises(DispatchRefused, match="有效期 30 秒"):
+        await t.site.teleop_lease("A", TeleopLease(action="renew", lease_epoch=1,
+                                                   lease_ttl_ms=1500), timeout_s=1.0)
+    with pytest.raises(DispatchRefused, match="有效期 30 秒"):
+        await t.site.supervise("A", Supervise(action="renew", ttl_ms=3000, operator="g",
+                                              session="s", seq=1), timeout_s=1.0)
+    assert "钟差" not in t.site.dispatchable("A", "goto"), "goto 60 s,20 s 照派"

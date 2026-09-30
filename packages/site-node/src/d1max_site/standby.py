@@ -48,6 +48,12 @@ from d1max_site.priorities import STANDBY_PREFIX, STANDBY_RETURN
 
 log = logging.getLogger(__name__)
 
+#: 自动回程碰上这些暂时性的拒绝(W09h 钟差还不知道;代理重连时状态还不新鲜 / 还没报在线)限时再试:
+#: 每 2 s 一次、最多 7 次(约 15 s,够攒齐钟差样本)。别的拒绝(没人监护、忙、地图对不上)不再试。
+_TRANSIENT_REFUSALS = ("钟差还不知道", "不新鲜", "不在线")
+STANDBY_TRANSIENT_RETRIES = 7
+STANDBY_RETRY_EVERY_S = 2.0
+
 _RETURN_AFTER = frozenset({"task_done"})
 
 
@@ -57,7 +63,10 @@ class StandbyError(RuntimeError):
 
 class StandbyManager:
     def __init__(self, db: SiteDB, dispatcher: Dispatcher, *, now_ms: Callable[[], int],
-                 refusal: Callable[[str], str] | None = None) -> None:
+                 refusal: Callable[[str], str] | None = None,
+                 sleep: Callable[[float], Any] = asyncio.sleep) -> None:
+        #: 自动回程碰上暂时性的拒绝(钟差还不知道、状态不新鲜)时隔多久再试(W09h 内审再议 1)。
+        self._sleep = sleep
         #: 站点这一道关(W00c6i):要人监护的狗没人监护时回理由,自动回待命点不派。
         self.refusal = refusal
         self.db = db
@@ -264,11 +273,7 @@ class StandbyManager:
             why = self.refusal(robot_id) if self.refusal is not None else ""
             if why:
                 raise StandbyError(why)             # W00c6i:要人监护的狗没人监护,不自己回
-            came = self._route_back(robot_id, after)
-            if came is None:
-                r = await self.return_to(robot_id, issued_by="standby:auto")
-            else:
-                r = await self._return_along(robot_id, came)
+            r = await self._dispatch_back(robot_id, after)
             ack = r.get("ack", {}) if isinstance(r, dict) else {}
             if ack.get("result") not in (None, "accepted", "duplicate"):
                 # 狗拒收(没人监护、忙……)不是异常,以前不推;值守的人要看得见狗没回去(W00c6i 内审)。
@@ -277,6 +282,26 @@ class StandbyManager:
             log.warning("%s 在 %s 结束后回待命点没派成: %s", robot_id, after, exc)
             self.dispatcher.feed.publish({"kind": "standby_failed", "robot_id": robot_id,
                                           "after": after, "reason": str(exc)})
+
+    async def _dispatch_back(self, robot_id: str, after: str) -> Any:
+        """派回程;碰上**暂时性**的拒绝限时再试(W09h 内审再议 1):代理重连时先补事件、后发状态,
+        补上来的「任务完成」触发回程时,站点还没估出钟差(重连后要攒十来条遥测)、状态还不新鲜 ——
+        原来只试一次、推一条 ``standby_failed``,狗就停在最后一个巡检点。"""
+        for attempt in range(STANDBY_TRANSIENT_RETRIES + 1):
+            try:
+                came = self._route_back(robot_id, after)
+                if came is None:
+                    return await self.return_to(robot_id, issued_by="standby:auto")
+                return await self._return_along(robot_id, came)
+            except DispatchRefused as exc:
+                if attempt < STANDBY_TRANSIENT_RETRIES and any(
+                        k in str(exc) for k in _TRANSIENT_REFUSALS):
+                    log.info("%s 回待命点暂时派不了(%s),%g s 后再试", robot_id, exc,
+                             STANDBY_RETRY_EVERY_S)
+                    await self._sleep(STANDBY_RETRY_EVERY_S)
+                    continue
+                raise
+        raise AssertionError("不会到这儿")
 
     async def close(self) -> None:
         """收掉还在等回执的自动回程。在关派遣器之前调。"""

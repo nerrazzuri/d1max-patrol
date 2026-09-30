@@ -323,3 +323,26 @@ def test_迟到的旧一代失败事件_不杀新一代(站点):
         assert len(v.jpegs(3)) == 3, "别的端口(旧一代)的失败事件不许收掉当前这一路"
     finally:
         v.close()
+
+
+def test_续期被时间权威闸拒了_不每零点一秒猛续(站点):
+    """W09h 内审小 5:钟差变成不知道,续期被闸拒 —— 马上再续也是拒;原来每 0.1 s 重试一次、
+    刷一行日志。"""
+    s = 站点
+    tok = _登(s)
+    _新鲜(s, tok)
+    v = 观众(s, tok)
+    try:
+        assert len(v.jpegs(2)) == 2
+        calls = []
+
+        def 钟差不知道(rid, req, **kw):
+            calls.append(time.monotonic())
+            return "A 的钟差还不知道:先不派会让它动、依赖命令有效期的命令"
+        s.hub._send = 钟差不知道
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 2.0:
+            v.jpegs(1)
+        assert 1 <= len(calls) <= 4, calls
+    finally:
+        v.close()

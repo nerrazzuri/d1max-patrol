@@ -394,22 +394,28 @@ class Dispatcher:
             # W00c5c:人工遥控优先于一切自动任务 —— 狗那头会回 busy,这里先挑开(事件派遣去找别的狗)。
             raise DispatchRefused(f"{robot_id} 正在遥控")
 
-    def _check_skew(self, robot_id: str) -> None:
-        """钟差必须**已知**且在命令有效期的一半以内(W09h 决策 19:原来没有估计就放行)。"""
+    def _check_skew(self, robot_id: str, ttl_ms: int = COMMAND_TTL_MS) -> None:
+        """钟差必须**已知**且在**这条命令**有效期的一半以内(最多 30 s)(W09h 决策 19:原来没有估计就
+        放行;内审应修 1:原来一律 30 s —— 有效期 12 s 的遥控授予在狗慢 20 s 时照发,晚到了在狗上还没
+        过期,起一趟没人握着的遥控)。"""
         skew = self.clock_skew_s(robot_id)
         if skew is None:
-            raise DispatchRefused(f"{robot_id} 的钟差还不知道(站点刚起来或狗刚连上,要攒几条遥测):"
-                                  "先不派会让它动、依赖命令有效期的命令")
-        if abs(skew) > SKEW_DISPATCH_MAX_S:
-            # W09d:命令有效期 60 s、狗按自己的钟判 —— 差一半以上,旧命令不过期、新命令一到就过期
-            raise DispatchRefused(f"{robot_id} 的钟差 {skew:+.0f} 秒:命令的有效期对不上,先对时"
-                                  "(狗向站点主机对时,见 W09d)")
+            raise DispatchRefused(f"{robot_id} 的钟差还不知道(站点刚起来、狗刚连上,或者最近一分钟没"
+                                  "收到它的遥测):先不派会让它动、依赖命令有效期的命令")
+        limit = min(SKEW_DISPATCH_MAX_S, ttl_ms / 2000.0)
+        if abs(skew) > limit:
+            # 狗按自己的钟判有效期 —— 差一半以上,旧命令不过期、新命令一到就过期
+            raise DispatchRefused(f"{robot_id} 的钟差 {skew:+.0f} 秒:这条命令的有效期 "
+                                  f"{ttl_ms / 1000:.0f} 秒,对不上,先对时(狗向站点主机对时,见 W09d)")
 
-    def _temporal_gate(self, robot_id: str, kind: str, payload: dict[str, Any]) -> None:
-        """发命令之前的时间权威闸(W09h):``gated`` 的要钟差已知且合格,停下、撤销、放掉、退回与只读
-        照发(:func:`d1max_site.temporal.temporal_class`)。所有发命令的口子都过这里。"""
+    def _temporal_gate(self, robot_id: str, kind: str, payload: dict[str, Any],
+                       ttl_ms: int) -> None:
+        """发命令之前的时间权威闸(W09h):``gated`` 的要钟差已知且在这条命令有效期的一半以内,停下、
+        撤销、放掉、退回与只读照发(:func:`d1max_site.temporal.temporal_class`)。所有发**命令**的口子
+        都过这里;遥控帧不是命令(QoS 0、不补投、不带墙钟有效期,狗只在租约有效时执行,授予与续租已经
+        过了闸),不过。"""
         if temporal_class(kind, payload) == GATED:
-            self._check_skew(robot_id)
+            self._check_skew(robot_id, ttl_ms)
 
     def dispatchable(self, robot_id: str, kind: str) -> str:
         """能不能给它派这种任务:能 → 空串;不能 → 理由。排程执行器选狗用。"""
@@ -502,7 +508,8 @@ class Dispatcher:
         c = self._client_for(robot_id)
         if c.status is None or not c.status.online or not self._fresh(c):
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
-        self._temporal_gate(robot_id, "video", req.to_payload())
+        self._temporal_gate(robot_id, "video", req.to_payload(),
+                            max(VIDEO_COMMAND_TTL_MS, req.ttl_ms))
         cmd = c.new_command("video", req.to_payload(),
                             ttl_ms=max(VIDEO_COMMAND_TTL_MS, req.ttl_ms),
                             control_epoch=self.registry.control_epoch(robot_id),
@@ -538,7 +545,7 @@ class Dispatcher:
                            timeout_s: float) -> Ack:
         """续租、放租(不是任务;每秒一条,不进账、不推 SSE)。"""
         c = self._client_for(robot_id)
-        self._temporal_gate(robot_id, "teleop_lease", lease.to_payload())
+        self._temporal_gate(robot_id, "teleop_lease", lease.to_payload(), VIDEO_COMMAND_TTL_MS)
         cmd = c.new_command("teleop_lease", lease.to_payload(), ttl_ms=VIDEO_COMMAND_TTL_MS,
                             control_epoch=self.registry.control_epoch(robot_id),
                             task_id=f"{TELEOP_TASK_PREFIX}{lease.lease_epoch}",
@@ -550,7 +557,7 @@ class Dispatcher:
         (同遥控续租:狗按自己的墙钟判,Orin 的钟不准);租约本身 3 s 由狗按收到时刻计,补投的、
         迟到的旧心跳靠会话号 + 序号挡(W00c6i 内审)。"""
         c = self._client_for(robot_id)
-        self._temporal_gate(robot_id, "supervise", sup.to_payload())
+        self._temporal_gate(robot_id, "supervise", sup.to_payload(), VIDEO_COMMAND_TTL_MS)
         cmd = c.new_command("supervise", sup.to_payload(), ttl_ms=VIDEO_COMMAND_TTL_MS,
                             control_epoch=self.registry.control_epoch(robot_id),
                             task_id=f"supervise-{robot_id}", priority=0)
@@ -605,7 +612,7 @@ class Dispatcher:
                     ttl_ms: int = COMMAND_TTL_MS) -> dict[str, Any]:
         if not issued_by:
             raise DispatchRefused("没有已认证的派单人")
-        self._temporal_gate(robot_id, kind, payload)
+        self._temporal_gate(robot_id, kind, payload, ttl_ms)
         cmd = c.new_command(kind, payload, ttl_ms=ttl_ms,
                             control_epoch=self.registry.control_epoch(robot_id),
                             task_id=task_id, priority=priority)

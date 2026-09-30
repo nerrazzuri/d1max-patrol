@@ -281,6 +281,13 @@ class _Feed:
                     if first or not flowing:
                         self.fail(gen, f"狗没接推流命令: {why}")
                         return
+                    if "钟差" in why:
+                        # 时间权威闸拒的(W09h):不是一时没回话,马上再续也是拒 —— 按正常节奏再试,
+                        # 不每 0.1 s 刷一行日志(内审小 5);画面按狗那头的推流有效期停
+                        log.warning("%s %s 续期被拒(钟差),按正常节奏再试: %s",
+                                    self.robot_id, self.camera, why)
+                        wake.wait(self.hub.ttl_ms / 3000.0)
+                        continue
                     log.warning("%s %s 续期没成(画面还在来,马上再续): %s",
                                 self.robot_id, self.camera, why)
                     wake.wait(RETRY_AFTER_FAIL_S)

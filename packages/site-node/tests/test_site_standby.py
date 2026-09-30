@@ -401,3 +401,63 @@ async def test_航点名跟待命点航点重名_回程照样成形(站):
     assert len(patrols) == 2
     names = [w["name"] for w in patrols[1]["payload"]["mission"]["waypoints"]]
     assert len(set(names)) == len(names) == 3
+
+
+async def test_任务完成时钟差还不知道_回程隔一会儿再试_估出来就回(站, monkeypatch):
+    """W09h 内审再议 1:代理重连时先补事件、后发状态;补上来的「任务完成」触发回程时站点还没估出
+    钟差 —— 原来只试一次、推 standby_failed,狗停在最后一个巡检点。"""
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    real = t.site._skew
+    waits = []
+
+    class 不知道:
+        _samples: dict = {}
+
+        def note(self, *a):
+            pass
+
+        def skew_s(self, rid):
+            return None
+
+    async def 等(s):
+        waits.append(s)
+        if len(waits) == 2:
+            t.site._skew = real                          # 两次之后估出来了
+
+    t.stb._sleep = 等
+    sub = t.site.feed.subscribe()
+    await t.send(t.site.goto("A", target(0.8), 0.8, issued_by="alice", priority=MANUAL))
+    t.site._skew = 不知道()
+    await t.run(200)
+    goto = _cmds(t, "goto")
+    assert len(goto) == 2 and goto[1]["task_id"].startswith("standby-"), goto
+    assert waits == [2.0, 2.0]
+    assert not [i for i in _feed(sub) if i["kind"] == "standby_failed"]
+
+
+async def test_钟差一直不知道_试够了才推standby_failed(站):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    waits = []
+
+    class 不知道:
+        _samples: dict = {}
+
+        def note(self, *a):
+            pass
+
+        def skew_s(self, rid):
+            return None
+
+    async def 等(s):
+        waits.append(s)
+    t.stb._sleep = 等
+    sub = t.site.feed.subscribe()
+    await t.send(t.site.goto("A", target(0.8), 0.8, issued_by="alice", priority=MANUAL))
+    t.site._skew = 不知道()
+    await t.run(200)
+    from d1max_site.standby import STANDBY_TRANSIENT_RETRIES
+    assert len(waits) == STANDBY_TRANSIENT_RETRIES
+    failed = [i for i in _feed(sub) if i["kind"] == "standby_failed"]
+    assert len(failed) == 1 and "钟差还不知道" in failed[0]["reason"]

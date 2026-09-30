@@ -171,6 +171,16 @@ void main() {
     expect(r.whyFor('disk_used_ratio'), isNotEmpty);
   });
 
+  test('汇总：钟差不知道（W09h：站点重启、狗重连后十来秒都是这样）不塌成 0，带上站点给的原因', () {
+    final r = SiteWatchRobot.fromWire(const <String, dynamic>{
+      'robot_id': 'A',
+      'clock_skew_s': null,
+      'why': <String, dynamic>{'clock_skew_s': '钟差还不知道：会动的命令都不派'},
+    });
+    expect(r.clockSkewS, isNull, reason: 'null 不许塌成 0（0 是「钟是准的」）');
+    expect(r.whyFor('clock_skew_s'), contains('不派'));
+  });
+
   testWidgets('屏上写着告警读于几点几分；实时更新断了看得见，并且自己重连', (t) async {
     final api = FakeApi('guard');
     await t.pumpWidget(MaterialApp(
