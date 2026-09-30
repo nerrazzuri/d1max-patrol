@@ -257,6 +257,16 @@ class SiteAlertSources:
                                   title=f"新版 {d.get('from', '?')} 起不来,狗自己退回了 "
                                         f"{d.get('to', '?')}",
                                   detail=f"开机守卫数了 {d.get('attempts', '?')} 次")
+        elif e.kind in ("rtk_disagree", "rtk_gave_up", "rtk_base_moved"):
+            # W09e:RTK 核对定位器
+            gap = d.get("gap_m")
+            title = {"rtk_disagree": f"RTK 说定位差 {gap} m:定位器不可信,在按 RTK 重定位",
+                     "rtk_gave_up": f"按 RTK 请了 {d.get('relocs', '?')} 次还对不上:交给人看"
+                                    "(RTK 假固定,还是定位器错了)",
+                     "rtk_base_moved": f"基站坐标跟建图时差 {d.get('moved_m')} m:不再拿 RTK 核对"
+                                       ",基站要用固定坐标、或者重新建图配准"}[e.kind]
+            self.desk.raise_alert(kind="rtk", robot=rid, title=title,
+                                  detail=f"图 {d.get('map_id', '?')}:{d.get('map_version', '?')}")
         elif e.kind == "map_integrity_failed":
             # W09g:狗起来时正在用的图校验不过 —— 没载、不宣告能自主(不退回命令行的图)。
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"

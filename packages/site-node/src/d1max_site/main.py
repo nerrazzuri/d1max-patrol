@@ -402,9 +402,16 @@ class Server:
         #: 基站改正数据转发(W09e):配了 ``--rtcm-source`` 才有。
         self.rtk = None
         if rtcm_source:
+            from d1max_site.alert_sources import SITE as SITE_ROBOT
             from d1max_site.rtk_relay import RtcmRelay
+
+            def _base_moved(m: float) -> None:
+                self.alerts.raise_alert(
+                    kind="rtk", robot=SITE_ROBOT,
+                    title=f"基站坐标跳了 {m:.2f} m",
+                    detail="基站要用固定坐标(自测平均每次重启都会漂);狗上的 RTK 核对会停用")
             self.rtk = RtcmRelay(rtcm_source, now_ms=wall_ms, publish=lambda b: self.loop.submit(
-                lambda: self.dispatcher.publish_rtcm(b)))
+                lambda: self.dispatcher.publish_rtcm(b)), on_base_moved=_base_moved)
         self.api.rtk = self.rtk
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,

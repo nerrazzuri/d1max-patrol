@@ -37,10 +37,14 @@ def test_天线在狗身前面_换回狗身中心():
 
 def test_往返与校验():
     g = GeoRef(LAT0, LON0, 12.5, 33.0, 1.0, 2.0, rms_m=0.04, pairs=120,
-               antenna_in_base=(0.2, 0.0))
+               antenna_in_base=(0.2, 0.0), base_ecef=(-1.1e6, 6.2e6, 6.0e5))
     assert GeoRef.from_wire(g.to_wire()) == g
+    old = g.to_wire()
+    del old["base_ecef"]
+    assert GeoRef.from_wire(old).base_ecef is None, "老的 geo.json 没有基站坐标"
     for bad in ({}, {"origin": {"lat": 1}}, g.to_wire() | {"yaw_deg": "x"},
                 g.to_wire() | {"tx": float("nan")},
-                g.to_wire() | {"origin": {"lat": 95, "lon": 0, "alt": 0}}):
+                g.to_wire() | {"origin": {"lat": 95, "lon": 0, "alt": 0}},
+                g.to_wire() | {"base_ecef": [1, 2]}, g.to_wire() | {"base_ecef": [1, 2, "nan"]}):
         with pytest.raises(ContractError):
             GeoRef.from_wire(bad)

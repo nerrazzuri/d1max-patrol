@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import socket
 import threading
@@ -24,6 +25,8 @@ log = logging.getLogger(__name__)
 RECONNECT_S = 3.0
 #: 一次读多少。
 READ_BYTES = 4096
+#: 基站坐标跳这么多算挪了(W09e 内审应修 3)。
+BASE_MOVED_M = 0.05
 
 class SourceError(ValueError):
     """``--rtcm-source`` 写得不对。"""
@@ -47,7 +50,10 @@ def parse_source(text: str) -> tuple[str, str, int]:
 
 class RtcmRelay:
     def __init__(self, source: str, *, publish: Callable[[bytes], Any],
-                 now_ms: Callable[[], int]) -> None:
+                 now_ms: Callable[[], int],
+                 on_base_moved: Callable[[float], Any] | None = None) -> None:
+        #: 基站坐标跳了 5 cm 以上时叫(W09e 内审应修 3:自测平均模式每次重启漂几米,全队配准对不上)。
+        self._on_base_moved = on_base_moved
         self.source = source
         self._kind, self._where, self._n = parse_source(source)
         self._publish = publish
@@ -59,6 +65,8 @@ class RtcmRelay:
         self._types: dict[int, int] = {}
         self._last_ms: int | None = None
         self._base: tuple[float, float, float] | None = None
+        self._base_ecef: tuple[float, float, float] | None = None
+        self._fd_lock = threading.Lock()
         self.connected = False
         self.error = ""
         self._close_fn: Callable[[], None] | None = None
@@ -71,14 +79,19 @@ class RtcmRelay:
 
     def close(self) -> None:
         self._stop.set()
-        fn = self._close_fn
+        self._close_source()
+        if self._thread is not None:
+            self._thread.join(5)
+
+    def _close_source(self) -> None:
+        """换出来再关:收尾线程与读线程各关一次同一个 fd 的话,中间 fd 号被复用就关错了(内审小)。"""
+        with self._fd_lock:
+            fn, self._close_fn = self._close_fn, None
         if fn is not None:
             try:
                 fn()
             except OSError:
                 pass
-        if self._thread is not None:
-            self._thread.join(5)
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -98,22 +111,19 @@ class RtcmRelay:
                 log.warning("基站改正数据源断了(%s),%g s 后重连", self.error, RECONNECT_S)
             finally:
                 self.connected = False
-                fn, self._close_fn = self._close_fn, None
-                if fn is not None:
-                    try:
-                        fn()
-                    except OSError:
-                        pass
+                self._close_source()
             self._stop.wait(RECONNECT_S)
 
     def _open(self) -> Callable[[], bytes]:
         if self._kind == "serial":
             fd = open_serial(self._where, self._n)
-            self._close_fn = lambda: os.close(fd)
+            with self._fd_lock:
+                self._close_fn = lambda: os.close(fd)
             return lambda: os.read(fd, READ_BYTES)
         s = socket.create_connection((self._where, self._n), timeout=10)
         s.settimeout(30)                                # 30 s 一个字节都没有:当断了
-        self._close_fn = s.close
+        with self._fd_lock:
+            self._close_fn = s.close
         return lambda: s.recv(READ_BYTES)
 
     # ------------------------------------------------------------ 处理
@@ -129,6 +139,16 @@ class RtcmRelay:
                 self._types[t] = self._types.get(t, 0) + 1
                 ecef = station_ecef(f)
                 if ecef is not None:
+                    if self._base_ecef is not None and \
+                            math.dist(ecef, self._base_ecef) > BASE_MOVED_M:
+                        moved = math.dist(ecef, self._base_ecef)
+                        log.warning("基站坐标跳了 %.2f m", moved)
+                        if self._on_base_moved is not None:
+                            try:
+                                self._on_base_moved(moved)
+                            except Exception:
+                                log.exception("基站坐标跳了,报告警没成")
+                    self._base_ecef = ecef
                     self._base = ecef_to_llh(*ecef)
             self._last_ms = self._now()
         try:

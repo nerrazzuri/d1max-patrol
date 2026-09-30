@@ -382,6 +382,11 @@ class BridgeLocalizer:
         """丢定位后引擎要重置(W08 决定 4:``reset_localization`` 的真实现):请定位器在最后可信的
         位置附近重定位。没有可信过的位置、不在线、拒了都只记日志 —— 引擎接着等定位回来。"""
         g, m = self._good, self._map
+        if self.rtk_disagree:
+            # RTK 说它不对:按 RTK 的位置重定位归代理的 RTK 核对那一路,这里不按(可能是错的)最后可信
+            # 位置再请一次、盖掉那一路(W09e 内审应修 2)
+            log.info("丢定位后的重置:RTK 说定位器不对,按 RTK 那一路重定位,这里不请")
+            return
         if g is None or m is None:
             log.info("丢定位后的重置:没有可信过的位置,等定位器自己找回来")
             return
@@ -445,7 +450,15 @@ class BridgeLocalizer:
                     path=path, dr0=dr0)
 
     def _trusted(self, f: _Fix) -> bool:
-        return f.sigma_xy <= SIGMA_LOST_M and self._state not in ("initializing", "lost")
+        # RTK 说它不对的时候不算「可信」:不然最后可信的位置一路跟着错的走,丢定位后的自动重定位
+        # 又把它拉回错处(W09e 内审应修 2)
+        return f.sigma_xy <= SIGMA_LOST_M and self._state not in ("initializing", "lost") \
+            and not self.rtk_disagree
+
+    @property
+    def busy(self) -> bool:
+        """正在重定位、或重定位 / 跳变之后还在等稳定(W09e:这时候不拿 RTK 核对)。"""
+        return self._reloc is not None or self._settle > 0
 
     def _send_prior(self) -> None:
         if not self._connected or self._map is None:

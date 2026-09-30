@@ -580,6 +580,9 @@ class Dispatcher:
         for rid, c in list(self.clients.items()):
             if c.status is None or not c.status.online or not self._fresh(c):
                 continue
+            rtk = c.capabilities.tasks.get("rtk") if c.capabilities is not None else None
+            if not isinstance(rtk, dict) or rtk.get("source") != "own":
+                continue                                 # 只给用自己驱动的狗(厂家的不用;内审小)
             try:
                 await self._t.publish(c.topics.rtcm, data, qos=0, retain=False)
                 n += 1

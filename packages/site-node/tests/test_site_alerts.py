@@ -430,6 +430,17 @@ def test_狗上正在用的图坏了_报图的告警_说重新下发这一版(�
     assert kinds == ["map_failed", "map_integrity"], "重建没成不盖掉「图坏了」那条"
 
 
+def test_RTK的三种事件_报RTK告警(台):
+    """W09e:RTK 说定位器不对、按 RTK 请了两次还对不上交给人、基站挪了。"""
+    c, db, desk, src, *_ = 台
+    src.on_event("A", _ev("rtk_disagree", gap_m=4.0, map_id="m", map_version="1"))
+    src.on_event("B", _ev("rtk_gave_up", relocs=2, gap_m=4.0, map_id="m", map_version="1"))
+    src.on_event("C", _ev("rtk_base_moved", moved_m=2.1, map_id="m", map_version="1"))
+    got = {a.robot: a for a in desk.book.all()}
+    assert {a.kind for a in got.values()} == {"rtk"}
+    assert "4.0 m" in got["A"].title and "交给人" in got["B"].title and "2.1 m" in got["C"].title
+
+
 def test_点位照片存不下_不报没到_并进记录写不进去(台):
     c, db, desk, src, *_ = 台
     src.on_event("A", _ev("patrol_waypoint", task_id="t1", index=0, name="gate", ok=False,

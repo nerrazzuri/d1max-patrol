@@ -341,7 +341,7 @@ def test_录包里有RTK解_配经纬度写geo_json_没有就不写_build_json�
         rows.append({"t": t, "fix": "fixed", "lat": lat, "lon": lon, "alt": 3.0})
     (bag / "rtk.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     files = B.package(work, tmp_path / "out2", run=假MOLA(pts), bag=bag,
-                      read_scans=lambda *a: iter(()))
+                      read_scans=lambda *a: iter(()), clock_offset=lambda b, t: 0.0)
     info = json.loads((tmp_path / "out2" / "build.json").read_text())["geo"]
     written = (tmp_path / "out2" / GEO_FILE).is_file()
     assert info["written"] is written and (GEO_FILE in files) is written, info
@@ -350,3 +350,22 @@ def test_录包里有RTK解_配经纬度写geo_json_没有就不写_build_json�
         assert g.yaw_deg == pytest.approx(25.0, abs=0.5) and g.rms_m < 0.05
     else:
         assert "范围" in info["why"], info
+
+
+
+def test_配准出错不让整次建图失败(tmp_path, monkeypatch):
+    """W09e 内审小:geo.json 是可选的。"""
+    import d1max_localizer.geo as G
+    work, pts = _scene(tmp_path, False)
+    bag = tmp_path / "bag"
+    bag.mkdir()
+    (bag / "rtk.jsonl").write_text('{"t": 1, "lat": 5, "lon": 100, "fix": "fixed"}\n')
+
+    def 炸(*a, **k):
+        raise ValueError("坏数")
+    monkeypatch.setattr(G, "georeference", 炸)
+    files = B.package(work, tmp_path / "out", run=假MOLA(pts), bag=bag,
+                      read_scans=lambda *a: iter(()), clock_offset=lambda b, t: 1.5)
+    info = json.loads((tmp_path / "out" / "build.json").read_text())["geo"]
+    assert info["written"] is False and "坏数" in info["why"] and info["clock_offset_s"] == 1.5
+    assert "geo.json" not in files

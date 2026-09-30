@@ -15,8 +15,9 @@ GEO = GeoRef(5.41, 100.32, 10.0, yaw_deg=0.0, tx=0.0, ty=0.0)
 class 假RTK:
     kind = "own"
 
-    def __init__(self):
+    def __init__(self, clock=lambda: 0):
         self.at = (0.0, 0.0)
+        self.clock = clock
 
     def start(self):
         pass
@@ -30,7 +31,7 @@ class 假RTK:
     def latest(self):
         lat, lon = enu_to_llh(self.at[0], self.at[1], GEO.lat0, GEO.lon0)
         return {"fix": "fixed", "lat": lat, "lon": lon, "std_h_m": 0.02, "age_s": 1.0,
-                "stale": False, "sats": 20}
+                "stale": False, "sats": 20, "stamp_ms": self.clock()}
 
 
 @pytest.fixture
@@ -44,7 +45,7 @@ async def test_定位器稳定地错了四米_RTK抓住_不可信_按RTK重定�
     """W09a 的已知限制:定位器自信地跳错、之后一直稳定地错,交叉校验(只跟里程比)抓不住。"""
     t = 台
     await t.连()
-    rtk = 假RTK()
+    rtk = 假RTK(t.c)
     t.rt.rtk = rtk
     t.rt._rtk_check.on_map(GEO)
     t.loc.jump(4.0, 0.0, flag=True)                      # 定位器报跳变、稳稳地错 4 m
@@ -63,7 +64,7 @@ async def test_定位器稳定地错了四米_RTK抓住_不可信_按RTK重定�
 async def test_RTK说不对的那几秒_遥测里说原因(台):
     t = 台
     await t.连()
-    rtk = 假RTK()
+    rtk = 假RTK(t.c)
     t.rt.rtk = rtk
     t.rt._rtk_check.on_map(GEO)
     t.loc.refuse_reloc = "测试:先不让它对回来"
@@ -74,12 +75,29 @@ async def test_RTK说不对的那几秒_遥测里说原因(台):
     await t.拍(40)
     assert "RTK 说位置差 4.0 m" in _遥测(t.ears).loc["reason"]
     assert not t.rt.parts.nav.anchor.ok(True)
+    evs = [e["data"] for e in t.ears.by.get("event", []) if e["kind"] == "rtk_disagree"]
+    assert len(evs) == 1 and evs[0]["gap_m"] == pytest.approx(4.0, abs=0.1), "发事件给站点"
+
+
+async def test_RTK的解太旧_不拿来比(台):
+    """W09e 内审小:两秒前的解跟此刻的位姿比会差出 v·Δt。"""
+    t = 台
+    await t.连()
+    rtk = 假RTK(lambda: t.c.ms - 1000)
+    t.rt.rtk = rtk
+    t.rt._rtk_check.on_map(GEO)
+    t.loc.jump(4.0, 0.0, flag=True)
+    await t.拍(30)
+    o = await t.dog.odometry()
+    rtk.at = (o.x, o.y)
+    await t.拍(40)
+    assert _遥测(t.ears).loc["reason"] == "" and not t.loc.relocs
 
 
 async def test_没有配准_不核(台):
     t = 台
     await t.连()
-    rtk = 假RTK()
+    rtk = 假RTK(t.c)
     rtk.at = (100.0, 100.0)
     t.rt.rtk = rtk
     await t.拍(40)

@@ -96,6 +96,9 @@ _HOME_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
 #: 在当前位置标原点(W00c6f):定位偏差要不大于这个(米)。刚设过位置是 0.2 m,约走出 1.3 m 以内。
 HOME_MAX_SIGMA_M = 0.5
 
+#: RTK 解跟此刻的位姿比,最多隔这么久(W09e 内审小:旧的解会差出 v·Δt)。
+RTK_FIX_MAX_AGE_MS = 300
+
 #: 一条回执编码之后最多这么大(字节)。站点 broker 单包上限 262144(``max_packet_size``,超了狗被断开),
 #: 留出主题与包头。带数据的回执各自有上限(日志尾巴、轨迹),这里是出口的兜底(外审 Qwen 第六节 2)。
 ACK_MAX_BYTES = 240 * 1024
@@ -648,6 +651,9 @@ class AgentRuntime:
             why = await loc.relocalize(m, pose)
             if why:
                 return why
+            # 人给的位置:RTK 核对之前的结论作废、一阵子不按 RTK 自动请(W09e 内审应修 4)
+            self._rtk_check.human_override(self._mono())
+            loc.rtk_disagree = ""
         else:
             delta = loc.anchor(m, pose, (o.x, o.y, o.yaw))
             # 引擎记的出发点与来路按修正量挪过去(修正量给不出就来路作废);丢定位的次数从头算。
@@ -1139,10 +1145,17 @@ class AgentRuntime:
         anchor = self.parts.nav.anchor
         if not hasattr(anchor, "rtk_disagree"):
             return
-        o = await self.hal.odometry()
-        est = anchor.estimate((o.x, o.y, o.yaw)) if o.valid else None
-        v = self._rtk_check.step(self.rtk.latest(),
-                                 None if est is None else (est.x, est.y, est.yaw), self._mono())
+        try:
+            v = await self._rtk_verdict(anchor)
+        except Exception:                             # 核对出错不许挡住这一拍后面的处理与发状态
+            log.exception("RTK 核对出错,这一拍跳过")
+            return
+        for ev in v[:-1]:                             # 最后一个是这一拍的结论,前面的是事件
+            self.events.emit(ev.event, (ev.data or {}) | {"map_id": self.loaded_map[0],
+                                                           "map_version": self.loaded_map[1]})
+        v = v[-1] if v else None
+        if v is None:
+            return
         if v.reason != anchor.rtk_disagree:
             log.warning("RTK 核对:%s", v.reason or "对回来了")
         anchor.rtk_disagree = v.reason
@@ -1155,6 +1168,29 @@ class AgentRuntime:
                 if why:
                     log.warning("按 RTK 请定位器重定位没成:%s", why)
             self._rtk_reloc = asyncio.get_running_loop().create_task(_reloc())
+
+    async def _rtk_verdict(self, anchor: Any) -> list[Any]:
+        """这一拍的结论(最后一个)与要发的事件(带 ``event`` 的那些)。解太旧(跟此刻的位姿比会差出
+        v·Δt)、定位器正在重定位 / 等稳定时不比(W09e 内审小)。"""
+        from d1max_agent.rtk_check import Verdict
+        out: list[Any] = []
+        base = getattr(self.rtk, "base_ecef", lambda: None)()
+        moved = self._rtk_check.on_base(base)
+        if moved is not None:
+            out.append(moved)
+        fix = self.rtk.latest()
+        if fix is not None and self._now() - int(fix.get("stamp_ms", 0)) > RTK_FIX_MAX_AGE_MS:
+            fix = None
+        est = None
+        if not getattr(anchor, "busy", False):
+            o = await self.hal.odometry()
+            e = anchor.estimate((o.x, o.y, o.yaw)) if o.valid else None
+            est = None if e is None else (e.x, e.y, e.yaw)
+        v = self._rtk_check.step(fix, est, self._mono())
+        if v.event:
+            out.append(v)
+        out.append(Verdict(v.reason, v.reloc, v.gap_m))
+        return out
 
     def _log_rtk(self) -> None:
         """录包时把 RTK 解按收到的时刻记进包目录 ``rtk.jsonl``(W09e 决定 5:建图脚本拿来配经纬度)。
@@ -1169,6 +1205,9 @@ class AgentRuntime:
         bag = Path(self.mapper.bags_root) / str(self.mapper.last_bag)
         rec = {"t": fix["stamp_ms"] / 1000.0} | {k: fix.get(k) for k in (
             "fix", "lat", "lon", "alt", "std_h_m", "sats")}
+        base = getattr(self.rtk, "base_ecef", lambda: None)()
+        if base is not None:
+            rec["base_ecef"] = [round(v, 4) for v in base]   # 建图时的基站坐标(内审应修 3)
         try:
             with open(bag / "rtk.jsonl", "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec) + "\n")
@@ -1327,7 +1366,10 @@ class AgentRuntime:
         if self.parts is not None:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
         await self._feed_trail()
-        self._log_rtk()
+        try:
+            self._log_rtk()
+        except Exception:                             # 记不下 RTK 解不许挡住这一拍
+            log.exception("记 RTK 解出错")
         await self._check_rtk()
         await self.processor.step(dt_s)
         if self.video is not None:

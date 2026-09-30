@@ -120,3 +120,26 @@ def test_读rtk_jsonl_坏行跳过(tmp_path):
     p = tmp_path / "rtk.jsonl"
     p.write_text('{"t": 1, "lat": 5, "lon": 100, "fix": "fixed"}\n坏行\n{"t": "x"}\n')
     assert len(read_rtk(p)) == 1 and read_rtk(tmp_path / "none") == []
+
+
+def test_两个钟差一千秒_给了钟差照样配上():
+    """W09e 内审应修 1:轨迹是雷达消息头的钟,RTK 是代理收到的时刻(本机钟)。"""
+    traj = _loop()
+    rows = _rtk(traj, 37.0, 0.0, 0.0, dt=1000.0)
+    g, why = georeference(traj, F, rows)
+    assert g is None and "对得上时刻" in why
+    g, why = georeference(traj, F, rows, clock_offset_s=1000.0)
+    assert g is not None and g.yaw_deg == pytest.approx(37.0, abs=0.1), why
+
+
+def test_建图时的基站坐标记进geo():
+    traj = _loop()
+    rows = [r | {"base_ecef": [-1.1e6, 6.2e6, 6.0e5]} for r in _rtk(traj, 0.0, 0, 0)]
+    g, _ = georeference(traj, F, rows)
+    assert g.base_ecef == (-1.1e6, 6.2e6, 6.0e5)
+
+
+def test_rtk_jsonl_里有NaN的行跳过(tmp_path):
+    p = tmp_path / "rtk.jsonl"
+    p.write_text('{"t": 1, "lat": NaN, "lon": 100}\n{"t": 1, "lat": 5, "lon": 100}\n')
+    assert len(read_rtk(p)) == 1

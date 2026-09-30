@@ -88,3 +88,109 @@ def test_差在一米以内不算():
     for t in range(10):
         v = c.step(_fix(10, 5), (10 + DIFF_M * 0.9, 5, 0.0), float(t))
     assert v.reason == ""
+
+
+def _flag(c, t0=0.0):
+    """让它判不可信(连续 4 s 差 4 m),回最后一拍的结论。"""
+    v = None
+    for i in range(5):
+        v = c.step(_fix(10, 5), (14, 5, 0.0), t0 + i)
+    return v
+
+
+def test_第一次判不可信发事件():
+    c = _check()
+    got = [c.step(_fix(10, 5), (14, 5, 0.0), float(t)) for t in range(5)]
+    evs = [v.event for v in got if v.event]
+    assert evs == ["rtk_disagree"]
+    first = next(v for v in got if v.event)
+    assert first.data["gap_m"] == pytest.approx(4.0, abs=0.01)
+
+
+def test_按RTK请了两次还对不上_不再请_发事件交给人():
+    """W09e 内审再议 1:RTK 的「假固定」时地图匹配很坚定,按 RTK 重定位完又回原处,来回拉扯。"""
+    c = _check()
+    relocs, events = [], []
+    t = 0.0
+    while t < 60:
+        v = c.step(_fix(10, 5), (14, 5, 0.0), t)
+        if v.reloc:
+            relocs.append(t)
+        if v.event:
+            events.append(v.event)
+        t += 1.0
+    assert len(relocs) == 2 and events == ["rtk_disagree", "rtk_gave_up"]
+    assert c.step(_fix(10, 5), (14, 5, 0.0), 61.0).reason, "还是不可信,只是不再自动请"
+
+
+def test_人给了位置_之前的结论作废_一分钟内不按RTK自动请():
+    c = _check()
+    assert _flag(c).reason
+    c.human_override(10.0)
+    assert c.step(_fix(10, 5), (14, 5, 0.0), 10.5).reason == ""
+    vs = [c.step(_fix(10, 5), (14, 5, 0.0), 10.0 + i) for i in range(1, 50)]
+    assert any(v.reason for v in vs), "还是会标不可信"
+    assert not any(v.reloc for v in vs), "但人刚给过位置:不自动请"
+    assert c.step(_fix(10, 5), (14, 5, 0.0), 71.0).reloc is not None
+
+
+def test_标了之后RTK一直用不上_半分钟后降级解除():
+    c = _check()
+    assert _flag(c).reason
+    for t in range(5, 30):
+        assert c.step(_fix(10, 5, fix="float"), (14, 5, 0.0), float(t)).reason
+    assert c.step(_fix(10, 5, fix="float"), (14, 5, 0.0), 36.0).reason == ""
+
+
+def test_定位器正在重定位时不算RTK用不上():
+    c = _check()
+    assert _flag(c).reason
+    for t in range(5, 60):
+        v = c.step(_fix(10, 5), None, float(t))              # est None:定位器在重定位
+    assert v.reason, "RTK 还好好的:不降级"
+
+
+def test_基站挪了_不核对_发一次事件():
+    import dataclasses
+    geo = dataclasses.replace(GEO, base_ecef=(-1.0e6, 6.2e6, 6.0e5))
+    c = RtkCheck()
+    c.on_map(geo)
+    assert c.on_base((-1.0e6, 6.2e6, 6.0e5 + 0.01)) is None, "差 1 cm:没挪"
+    ev = c.on_base((-1.0e6 + 2.0, 6.2e6, 6.0e5))
+    assert ev.event == "rtk_base_moved" and ev.data["moved_m"] == pytest.approx(2.0)
+    assert c.on_base((-1.0e6 + 2.0, 6.2e6, 6.0e5)) is None, "只发一次"
+    for t in range(10):
+        v = c.step(_fix(10, 5), (14, 5, 0.0), float(t))
+    assert v.reason == "" and v.reloc is None
+    c.on_base(None)
+    assert c.base_moved, "不知道的时候保持原判断"
+
+
+def test_标准差是NaN_不参与():
+    c = _check()
+    for t in range(10):
+        v = c.step(_fix(10, 5, std_h_m=float("nan")), (14, 5, 0.0), float(t))
+    assert v.reason == ""
+
+
+async def test_定位桥_RTK说不对时_最后可信的位置不跟着走_丢定位重置不按它请():
+    """W09e 内审应修 2:原来 _good 一路跟着错的位置走,引擎丢定位后的 reset() 又把它拉回错处。"""
+    from d1max_agent.bridge_localizer import BridgeLocalizer
+    b = BridgeLocalizer(monotonic=lambda: 0.0)
+    asked = []
+
+    async def relocalize(*a, **k):
+        asked.append(a)
+        return ""
+    b.relocalize = relocalize
+    b._good = object()
+    b._map = ("m", "1")
+    b.rtk_disagree = "RTK 说位置差 4.0 m,定位器不可信"
+    await b.reset()
+    assert asked == [], "RTK 那一路负责;这里不按最后可信位置再请"
+
+    class F:
+        sigma_xy = 0.1
+    assert b._trusted(F()) is False
+    b.rtk_disagree = ""
+    assert b._trusted(F()) is True

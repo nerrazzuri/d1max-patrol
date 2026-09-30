@@ -15,27 +15,39 @@
 
 from __future__ import annotations
 
+import collections
+import fcntl
 import json
 import logging
 import math
 import os
 import subprocess
+import termios
 import threading
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
 
 #: 多久没更新算过时。
 STALE_S = 2.0
-#: 串口断了多久再开。
+#: 串口断了多久再开;厂家辅助进程退了隔多久再起(翻倍,最多 :data:`BACKOFF_MAX_S`)。
 REOPEN_S = 3.0
+BACKOFF_MAX_S = 60.0
+#: GST(标准差)多久以内的才跟 GGA 配。
+GST_MAX_AGE_S = 1.5
+#: 等着写进模组的改正最多攒几批(满了丢最旧的:过时的改正没用)。
+FEED_QUEUE = 16
+#: 厂家驱动的进程名:``own`` 模式发现它在跑就不开串口(两个进程读同一个口,字节被分走)。
+VENDOR_DRIVER = "sixents_gps_driver"
 #: NMEA GGA 的定位质量 → 我们的说法。
 _GGA_FIX = {0: "none", 1: "single", 2: "dgps", 4: "fixed", 5: "float", 6: "none"}
 #: 厂家 ``/rtk_pvh`` 的 ``pos_type``(Unicore 风格)→ 我们的说法。
+#: 49 = WIDE_INT(宽巷固定)按浮点算,不当固定解(W09e 内审小)。
 _POS_TYPE = {0: "none", 16: "single", 17: "dgps", 18: "dgps", 32: "float", 33: "float",
-             34: "float", 48: "fixed", 49: "fixed", 50: "fixed"}
+             34: "float", 48: "fixed", 49: "float", 50: "fixed"}
 
 
 def _nmea_ok(line: str) -> str | None:
@@ -60,6 +72,8 @@ def _deg(v: str, hemi: str, width: int) -> float | None:
     try:
         d = int(v[:width]) + float(v[width:]) / 60.0
     except ValueError:
+        return None
+    if not math.isfinite(d):
         return None
     return -d if hemi in ("S", "W") else d
 
@@ -99,7 +113,8 @@ def parse_gst(body: str) -> float | None:
         slat, slon = float(f[6]), float(f[7])
     except ValueError:
         return None
-    return math.hypot(slat, slon)
+    v = math.hypot(slat, slon)
+    return v if math.isfinite(v) else None
 
 
 class _Base:
@@ -129,6 +144,10 @@ class _Base:
     def feed(self, data: bytes) -> None:
         raise NotImplementedError
 
+    def base_ecef(self) -> tuple[float, float, float] | None:
+        """改正数据里的基站坐标(ECEF,米);不知道是 None(厂家模式看不到改正)。"""
+        return None
+
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"rtk-{self.kind}")
         self._thread.start()
@@ -146,6 +165,23 @@ class _Base:
         raise NotImplementedError
 
 
+def vendor_driver_running(proc: Path = Path("/proc")) -> bool:
+    """厂家的 RTK 驱动在跑没有(看 ``/proc/*/cmdline``)。"""
+    try:
+        entries = list(proc.iterdir())
+    except OSError:
+        return False
+    for d in entries:
+        if not d.name.isdigit():
+            continue
+        try:
+            if VENDOR_DRIVER.encode() in (d / "cmdline").read_bytes():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 class OwnRtk(_Base):
     kind = "own"
 
@@ -156,27 +192,72 @@ class OwnRtk(_Base):
         from d1max_contract.serialport import BAUDS, open_serial
         if baud not in BAUDS:
             raise ValueError(f"RTK 串口的波特率 {baud} 不认")
+        from d1max_contract.rtcm import RtcmFramer
         self.device, self.baud, self.init = device, baud, list(init)
         self._open = open_port or open_serial
+        self._vendor_running = vendor_driver_running
         self._fd: int | None = None
         self._wlock = threading.Lock()
-        self._std: float | None = None
+        self._std: tuple[float, float] | None = None       # (标准差, 收到的时刻)
+        self._framer = RtcmFramer()
+        self._base: tuple[float, float, float] | None = None
+        self._q: collections.deque[bytes] = collections.deque(maxlen=FEED_QUEUE)
+        self._qcv = threading.Condition()
+        self._writer: threading.Thread | None = None
         self.fed_bytes = 0
         self.dropped_bytes = 0
 
     def feed(self, data: bytes) -> None:
-        """站点转来的 RTCM:原样写进模组。串口没开着就丢(过时的改正没用)。"""
-        with self._wlock:
-            fd = self._fd
-            if fd is None:
-                self.dropped_bytes += len(data)
-                return
-            try:
-                os.write(fd, data)
-                self.fed_bytes += len(data)
-            except OSError as exc:
-                self.dropped_bytes += len(data)
-                self.error = f"写改正没成: {exc}"[:200]
+        """站点转来的 RTCM(在事件循环里调,**不阻塞**):代理这头再按帧校验一遍,只把 CRC 对的帧交给
+        写线程(纵深防御:站点出错时任意字节 —— 比如模组的配置命令 —— 写不进去);队列满了丢最旧的。"""
+        frames = self._framer.feed(data)
+        if not frames:
+            return
+        from d1max_contract.rtcm import station_ecef
+        for f in frames:
+            e = station_ecef(f)
+            if e is not None:
+                self._base = e
+        with self._qcv:
+            if len(self._q) == self._q.maxlen:
+                self.dropped_bytes += len(self._q[0])
+            self._q.append(b"".join(frames))
+            self._qcv.notify()
+
+    def base_ecef(self) -> tuple[float, float, float] | None:
+        return self._base
+
+    def _write_loop(self) -> None:
+        while not self._stop.is_set():
+            with self._qcv:
+                while not self._q and not self._stop.is_set():
+                    self._qcv.wait(0.5)
+                if self._stop.is_set():
+                    return
+                data = self._q.popleft()
+            with self._wlock:
+                fd = self._fd
+                if fd is None:
+                    self.dropped_bytes += len(data)
+                    continue
+                try:
+                    os.write(fd, data)
+                    self.fed_bytes += len(data)
+                except OSError as exc:
+                    self.dropped_bytes += len(data)
+                    self.error = f"写改正没成: {exc}"[:200]
+
+    def start(self) -> None:
+        super().start()
+        self._writer = threading.Thread(target=self._write_loop, daemon=True, name="rtk-own-w")
+        self._writer.start()
+
+    def close(self) -> None:
+        super().close()
+        with self._qcv:
+            self._qcv.notify_all()
+        if self._writer is not None:
+            self._writer.join(5)
 
     def _closing(self) -> None:
         with self._wlock:
@@ -190,12 +271,20 @@ class OwnRtk(_Base):
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
+                if self._vendor_running():
+                    # 厂家驱动独占着这个口:两个进程读同一个口字节被分走、我们写的改正跟它的交错
+                    # (W09e 内审应修 5)。停厂家驱动归装机、由人定
+                    raise RuntimeError(f"厂家的 {VENDOR_DRIVER} 在跑:先停它再用 --rtk own")
                 fd = self._open(self.device, self.baud)
+                try:
+                    fcntl.ioctl(fd, termios.TIOCEXCL)   # 独占(挡不住 root,主要靠上面查进程)
+                except OSError:
+                    pass
+                for cmd in self.init:                   # 初始化命令(真机上核过再配);写完才放改正
+                    os.write(fd, (cmd.rstrip("\r\n") + "\r\n").encode("ascii"))
                 with self._wlock:
                     self._fd = fd
                 self.error = ""
-                for cmd in self.init:                   # 初始化命令(真机上核过再配)
-                    os.write(fd, (cmd.rstrip("\r\n") + "\r\n").encode("ascii"))
                 self._read(fd)
             except Exception as exc:  # noqa: BLE001 —— 串口断了、模组拔了:记下来、隔一会儿再开
                 if self._stop.is_set():
@@ -224,11 +313,14 @@ class OwnRtk(_Base):
         if body is None:
             return
         if body[2:5] == "GST":
-            self._std = parse_gst(body)
+            v = parse_gst(body)
+            self._std = None if v is None else (v, self._mono())
             return
         g = parse_gga(body)
         if g is not None:
-            self._set(g | {"std_h_m": self._std})
+            std = self._std
+            fresh = std is not None and self._mono() - std[1] <= GST_MAX_AGE_S
+            self._set(g | {"std_h_m": std[0] if fresh else None})
 
 
 class VendorRtk(_Base):
@@ -255,7 +347,9 @@ class VendorRtk(_Base):
                 p.kill()
 
     def _run(self) -> None:
+        wait = REOPEN_S
         while not self._stop.is_set():
+            started = self._mono()
             try:
                 self._proc = subprocess.Popen(self.argv, stdout=subprocess.PIPE, text=True,
                                               bufsize=1)
@@ -271,20 +365,28 @@ class VendorRtk(_Base):
                 self.error = f"{type(exc).__name__}: {exc}"[:200]
             finally:
                 self._closing()
+            # 起来就退(没有厂家消息包之类):隔的时间翻倍,不每 3 s 刷一行;跑过一阵再退的从头算
+            wait = REOPEN_S if self._mono() - started > BACKOFF_MAX_S else min(
+                wait * 2, BACKOFF_MAX_S)
             if not self._stop.is_set():
-                log.warning("厂家 RTK 辅助进程:%s;%g s 后再起", self.error, REOPEN_S)
-            self._stop.wait(REOPEN_S)
+                log.warning("厂家 RTK 辅助进程:%s;%g s 后再起", self.error, wait)
+            self._stop.wait(wait)
 
     def _line(self, line: str) -> None:
         try:
             d = json.loads(line)
             pt = int(d.get("pos_type", 0))
             lat, lon = float(d["lat"]), float(d["lon"])
-        except (ValueError, TypeError, KeyError, AttributeError):
+            sats = int(d.get("svs_num", 0) or 0)
+            slat, slon = d.get("lat_std"), d.get("lon_std")
+            std = math.hypot(float(slat), float(slon)) if isinstance(slat, (int, float)) and \
+                isinstance(slon, (int, float)) else None
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
             return
-        slat, slon = d.get("lat_std"), d.get("lon_std")
-        std = math.hypot(float(slat), float(slon)) if isinstance(slat, (int, float)) and \
-            isinstance(slon, (int, float)) else None
+        if not (math.isfinite(lat) and math.isfinite(lon)):
+            return
+        if std is not None and not math.isfinite(std):
+            std = None
         self._set({"fix": _POS_TYPE.get(pt, "none"), "lat": lat, "lon": lon,
-                   "alt": d.get("alt"), "sats": int(d.get("svs_num", 0) or 0), "hdop": None,
+                   "alt": d.get("alt"), "sats": sats, "hdop": None,
                    "std_h_m": std, "age_s": d.get("diff_age_s")})

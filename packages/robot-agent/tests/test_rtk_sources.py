@@ -8,7 +8,15 @@ import time
 
 import pytest
 
-from d1max_agent.rtk import OwnRtk, VendorRtk, _nmea_ok, parse_gga, parse_gst
+from d1max_agent.rtk import (
+    OwnRtk,
+    VendorRtk,
+    _nmea_ok,
+    parse_gga,
+    parse_gst,
+    vendor_driver_running,
+)
+from d1max_contract.rtcm import frame
 
 
 def _nmea(body: str) -> str:
@@ -71,6 +79,7 @@ def test_自己的驱动_pty当模组_读GGA与GST_改正原样写进去_初始�
     master, slave = os.openpty()
     r = OwnRtk(os.ttyname(slave), 460800, init=["GPGGA COM1 0.2", "GPGST COM1 1"],
                now_ms=lambda: 77)
+    r._vendor_running = lambda: False
     r.start()
     try:
         assert _等(lambda: r._fd is not None)
@@ -85,12 +94,14 @@ def test_自己的驱动_pty当模组_读GGA与GST_改正原样写进去_初始�
         fix = r.latest()
         assert fix["fix"] == "fixed" and fix["std_h_m"] == pytest.approx(0.015, abs=1e-3)
         assert fix["stamp_ms"] == 77 and fix["stale"] is False
-        r.feed(b"\xd3\x00\x13rtcm-bytes")
+        good = frame(b"\x43\x50" + bytes(20))
+        r.feed(b"SAVECONFIG\r\n" + good[:10])            # 不是帧的字节不写进模组;半帧先攒着
+        r.feed(good[10:])
         got = b""
         t0 = time.monotonic()
-        while len(got) < 13 and time.monotonic() - t0 < 3:
+        while len(got) < len(good) and time.monotonic() - t0 < 3:
             got += os.read(master, 1024)
-        assert got == b"\xd3\x00\x13rtcm-bytes" and r.fed_bytes == 13
+        assert got == good and r.fed_bytes == len(good), "只写 CRC 对的整帧"
     finally:
         r.close()
         os.close(master)
@@ -106,9 +117,10 @@ def test_自己的驱动_过时标上_串口开不了说原因不炸(monkeypatch
     assert r.latest()["stale"] is False
     t["now"] = 3.0
     assert r.latest()["stale"] is True
-    r.feed(b"x" * 10)
-    assert r.dropped_bytes == 10, "串口没开:改正丢掉"
+    r._vendor_running = lambda: False
     r.start()
+    r.feed(frame(bytes(12)))
+    assert _等(lambda: r.dropped_bytes > 0), "串口没开:改正丢掉"
     try:
         assert _等(lambda: "nope" in r.error or "No such" in r.error)
     finally:
@@ -152,3 +164,68 @@ def test_厂家的_辅助进程退了_隔一会儿再起(tmp_path, monkeypatch):
         assert _等(lambda: "returncode=3" in r.error)
     finally:
         r.close()
+
+
+def test_厂家驱动在跑_自己的驱动不开串口_说清楚(monkeypatch):
+    """W09e 内审应修 5:两个进程读同一个口,字节被分走、我们写的改正跟厂家的交错。"""
+    import d1max_agent.rtk as R
+    monkeypatch.setattr(R, "REOPEN_S", 0.05)
+    opened = []
+    r = OwnRtk("/dev/x", 460800, now_ms=lambda: 0,
+               open_port=lambda d, b: opened.append(d) or 99)
+    r._vendor_running = lambda: True
+    r.start()
+    try:
+        assert _等(lambda: "sixents_gps_driver" in r.error)
+        assert opened == []
+    finally:
+        r.close()
+
+
+def test_看得出厂家驱动在不在跑(tmp_path):
+    (tmp_path / "123").mkdir()
+    (tmp_path / "123" / "cmdline").write_bytes(b"/opt/runtime/bin/sixents_gps_driver\x00--x")
+    (tmp_path / "self").mkdir()
+    assert vendor_driver_running(tmp_path) is True
+    (tmp_path / "123" / "cmdline").write_bytes(b"python3\x00agent")
+    assert vendor_driver_running(tmp_path) is False
+    assert vendor_driver_running(tmp_path / "nope") is False
+
+
+def test_NaN与过期的标准差不要():
+    assert parse_gga(GGA_FIX.replace("0524.8460", "05nan")) is None
+    assert parse_gst("GNGST,1,0.9,0.01,0.01,45,nan,0.01,0.02") is None
+    t = {"now": 0.0}
+    r = OwnRtk("/dev/x", 460800, now_ms=lambda: 0, mono=lambda: t["now"])
+    r._line(_nmea(GST))
+    t["now"] = 5.0
+    r._line(_nmea(GGA_FIX))
+    assert r.latest()["std_h_m"] is None, "GST 是 5 s 前的:不跟这一条配"
+
+
+def test_厂家的_宽巷固定按浮点算_字段坏了不炸():
+    r = VendorRtk(["x"], now_ms=lambda: 0)
+    r._line('{"pos_type": 49, "lat": 5.4, "lon": 100.3}')
+    assert r.latest()["fix"] == "float"
+    r._line('{"pos_type": 50, "lat": 5.4, "lon": 100.3, "svs_num": "abc"}')
+    assert r.latest()["fix"] == "float", "坏的那条丢掉"
+    r._line('{"pos_type": 50, "lat": NaN, "lon": 100.3}')
+    assert r.latest()["fix"] == "float"
+
+
+def test_厂家的_起来就退_隔的时间翻倍(tmp_path, monkeypatch):
+    import d1max_agent.rtk as R
+    monkeypatch.setattr(R, "REOPEN_S", 0.01)
+    monkeypatch.setattr(R, "BACKOFF_MAX_S", 0.08)
+    waits = []
+    script = tmp_path / "dies.py"
+    script.write_text("import sys; sys.exit(3)\n")
+    r = VendorRtk([sys.executable, str(script)], now_ms=lambda: 0)
+    real = r._stop.wait
+    r._stop.wait = lambda s: (waits.append(s), real(s))[1]
+    r.start()
+    try:
+        assert _等(lambda: len(waits) >= 4, timeout=10)
+    finally:
+        r.close()
+    assert waits[:4] == [0.02, 0.04, 0.08, 0.08]

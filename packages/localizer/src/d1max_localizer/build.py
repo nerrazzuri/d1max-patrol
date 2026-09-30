@@ -120,7 +120,8 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
             run: Runner = subprocess.run, timings: dict[str, float] | None = None,
             bag: Path | None = None, lidar_topic: str = SCAN_TOPIC,
             read_scans: Callable[..., Iterator[Any]] | None = None,
-            rtk_antenna: tuple[float, float] = (0.0, 0.0)) -> list[str]:
+            rtk_antenna: tuple[float, float] = (0.0, 0.0),
+            clock_offset: Callable[[Path, str], float | None] | None = None) -> list[str]:
     """``work`` 里的 ``raw_prior.mm``、``traj.tum``、``map.simplemap`` → ``out`` 里的版本文件。回
     文件名。给了 ``bag``(建图的那个录包)就从里面逐帧读扫描打真射线。"""
     prior_pack = prior_pack or PriorPack()
@@ -158,7 +159,9 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     cov = coverage(traj, frames)
     (out / "coverage.json").write_text(json.dumps({"version": 1, "step_m": COVERAGE_STEP_M,
                                                    "path": cov}) + "\n")
-    geo_info, files = _georeference(out, bag, traj, frames, rtk_antenna), list(FILES)
+    geo_info = _georeference(out, bag, traj, frames, rtk_antenna, lidar_topic,
+                             clock_offset or bag_clock_offset)
+    files = list(FILES)
     if geo_info.get("written"):
         files.append(GEO_FILE)
     (out / "build.json").write_text(json.dumps({
@@ -171,8 +174,35 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     return files
 
 
+def bag_clock_offset(bag: Path, topic: str, n: int = 200) -> float | None:
+    """录包里雷达消息「本机收到的时刻 − 消息头的时刻」的中位数(秒):轨迹(消息头的钟)挪到代理的钟
+    (``rtk.jsonl`` 用的)要加的量。读不了(没有 ROS、没有这个话题)是 None。"""
+    try:
+        import rosbag2_py
+
+        from d1max_localizer.livemap import cdr_stamp
+    except ImportError:
+        return None
+    try:
+        storage = "mcap" if any(Path(bag).glob("*.mcap")) else "sqlite3"
+        r = rosbag2_py.SequentialReader()
+        r.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id=storage),
+               rosbag2_py.ConverterOptions("", ""))
+        r.set_filter(rosbag2_py.StorageFilter(topics=[topic]))
+        diffs = []
+        while r.has_next() and len(diffs) < n:
+            _, raw, t_ns = r.read_next()
+            diffs.append(t_ns * 1e-9 - cdr_stamp(raw))
+    except Exception:  # noqa: BLE001 —— 算不出来就按 0,build.json 里写着
+        return None
+    if not diffs:
+        return None
+    return sorted(diffs)[len(diffs) // 2]
+
+
 def _georeference(out: Path, bag: Path | None, traj: Sequence[Any], frames: Frames,
-                  antenna: tuple[float, float]) -> dict[str, Any]:
+                  antenna: tuple[float, float], topic: str,
+                  clock_offset: Callable[[Path, str], float | None]) -> dict[str, Any]:
     """录包里有 ``rtk.jsonl``(代理录包时记的 RTK 解)就配经纬度,配得上写 ``geo.json``
     (W09e 决定 6)。"""
     from d1max_localizer.geo import georeference, read_rtk
@@ -180,11 +210,19 @@ def _georeference(out: Path, bag: Path | None, traj: Sequence[Any], frames: Fram
     rows = read_rtk(bag / "rtk.jsonl") if bag is not None else []
     if not rows:
         return {"written": False, "why": "录包里没有 RTK 解"}
-    g, why = georeference(traj, frames, rows, antenna_in_base=antenna)
+    assert bag is not None
+    off = clock_offset(bag, topic)
+    try:                                              # geo.json 是可选的:配准出错不许让整次建图失败
+        g, why = georeference(traj, frames, rows, antenna_in_base=antenna,
+                              clock_offset_s=off or 0.0)
+    except Exception as exc:  # noqa: BLE001
+        return {"written": False, "why": f"配准出错: {type(exc).__name__}: {exc}"[:200],
+                "clock_offset_s": off}
     if g is None:
-        return {"written": False, "why": why}
+        return {"written": False, "why": why, "clock_offset_s": off}
     (out / GEO_FILE).write_text(json.dumps(g.to_wire(), indent=2) + "\n")
-    return {"written": True, "why": why, "rms_m": g.rms_m, "pairs": g.pairs}
+    return {"written": True, "why": why, "rms_m": g.rms_m, "pairs": g.pairs,
+            "clock_offset_s": off}
 
 
 def _render(points: Any, sensor: Any, frames: Frames, body: Any, traj: Sequence[Any],

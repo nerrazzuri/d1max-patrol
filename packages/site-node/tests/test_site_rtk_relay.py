@@ -132,6 +132,10 @@ async def test_派遣器_改正只发给在线新鲜的狗_QoS0不保留(tmp_pat
             heard.append((topic, payload, qos, retain))
             return await real(topic, payload, qos=qos, retain=retain)
         t.site._t.publish = 听
+        assert await t.site.publish_rtcm(b"x") == 0, "狗没报 rtk.source == own:不发"
+        t.site.clients["A"].capabilities.tasks["rtk"] = {"source": "vendor"}
+        assert await t.site.publish_rtcm(b"x") == 0, "厂家模式的狗不用我们的改正"
+        t.site.clients["A"].capabilities.tasks["rtk"] = {"source": "own"}
         n = await t.site.publish_rtcm(b"\xd3rtcm")
         assert n == 1 and heard == [("site/estate-1/robot/A/rtcm", b"\xd3rtcm", 0, False)]
         t.site.clients["A"].status_live_at = 0              # 状态不新鲜了
@@ -167,3 +171,26 @@ def test_命令行_源写错了当场退(tmp_path):
     from d1max_site.main import cmd_serve
     (tmp_path / "site.json").write_text(json.dumps({"site_id": "s", "broker_port": 1}))
     assert cmd_serve(tmp_path, "127.0.0.1", 0, None, "udp:x:1") == 2
+
+
+
+def _1005(x, y, z):
+    bits = format(1005, "012b") + format(0, "012b") + format(0, "006b") + "0000"
+    for v, tail in ((x, "00"), (y, "00"), (z, "")):
+        bits += format(round(v * 10000) & ((1 << 38) - 1), "038b") + tail
+    bits += "0" * (-len(bits) % 8)
+    return frame(int(bits, 2).to_bytes(len(bits) // 8, "big"))
+
+
+def test_基站坐标跳了_叫一声():
+    """W09e 内审应修 3:自测平均模式的基站每次重启漂几米,全队的配准都对不上。"""
+    moved = []
+    r = RtcmRelay("tcp:h:1", publish=lambda b: None, now_ms=lambda: 0,
+                  on_base_moved=moved.append)
+    base = (-1.1e6, 6.2e6, 6.0e5)
+    r.feed(_1005(*base))
+    r.feed(_1005(base[0] + 0.01, base[1], base[2]))
+    assert moved == [], "1 cm:没挪"
+    r.feed(_1005(base[0] + 2.0, base[1], base[2]))
+    assert len(moved) == 1 and moved[0] == pytest.approx(1.99, abs=1e-3), "跟上一次的比"
+    assert r.stats()["base"] is not None

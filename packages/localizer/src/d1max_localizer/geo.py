@@ -32,9 +32,10 @@ def read_rtk(path: Path) -> list[dict[str, Any]]:
     for line in text.splitlines():
         try:
             d = json.loads(line)
-            if all(isinstance(d.get(k), (int, float)) for k in ("t", "lat", "lon")):
+            if all(isinstance(d.get(k), (int, float)) and math.isfinite(d[k])
+                   for k in ("t", "lat", "lon")):
                 rows.append(d)
-        except ValueError:
+        except (ValueError, AttributeError):
             continue
     return rows
 
@@ -61,15 +62,25 @@ def fit_rigid2d(src: Sequence[Sequence[float]], dst: Sequence[Sequence[float]]
 
 
 def georeference(traj: Sequence[Any], frames: Frames, rows: Sequence[dict[str, Any]], *,
-                 antenna_in_base: tuple[float, float] = (0.0, 0.0)
+                 antenna_in_base: tuple[float, float] = (0.0, 0.0), clock_offset_s: float = 0.0
                  ) -> tuple[GeoRef | None, str]:
-    """→ (配准, 说明);配不上 (None, 为什么)。"""
+    """→ (配准, 说明);配不上 (None, 为什么)。
+
+    ``clock_offset_s``:轨迹时间戳(雷达消息头的钟)要加多少才到 ``rtk.jsonl`` 的钟(代理收到的时刻,
+    跟录包的接收时刻同一个本机钟)—— 两个钟不是一个钟(W09e 内审应修 1),见
+    :func:`build.bag_clock_offset`。"""
     fixed = [r for r in rows if r.get("fix") == "fixed"]
     if not fixed:
         return None, "没有 RTK 固定解"
-    stamps = [t for t, _, _ in traj]
+    stamps = [t + clock_offset_s for t, _, _ in traj]
     lat0, lon0 = float(fixed[0]["lat"]), float(fixed[0]["lon"])
-    alt0 = float(fixed[0].get("alt") or 0.0)
+    try:
+        alt0 = float(fixed[0].get("alt") or 0.0)
+    except (TypeError, ValueError):
+        alt0 = 0.0
+    alt0 = alt0 if math.isfinite(alt0) else 0.0
+    bases = [r["base_ecef"] for r in fixed if isinstance(r.get("base_ecef"), list)
+             and len(r["base_ecef"]) == 3]
     src, dst = [], []
     import bisect
     ax, ay = antenna_in_base
@@ -93,6 +104,10 @@ def georeference(traj: Sequence[Any], frames: Frames, rows: Sequence[dict[str, A
     th, tx, ty, rms = fit_rigid2d(src, dst)
     if rms > MAX_RMS_M:
         return None, f"残差 {rms:.2f} m(上限 {MAX_RMS_M:g} m):RTK 跟建图轨迹对不上"
+    base = None
+    if bases:                                         # 建图时的基站坐标(内审应修 3):取中间那个
+        b = sorted(bases)[len(bases) // 2]
+        base = (float(b[0]), float(b[1]), float(b[2]))
     g = GeoRef(lat0, lon0, alt0, yaw_deg=math.degrees(th), tx=tx, ty=ty, rms_m=round(rms, 3),
-               pairs=len(src), antenna_in_base=antenna_in_base)
+               pairs=len(src), antenna_in_base=antenna_in_base, base_ecef=base)
     return g, f"{len(src)} 对,残差 {rms:.3f} m"

@@ -51,11 +51,17 @@ class GeoRef:
     rms_m: float = 0.0
     pairs: int = 0
     antenna_in_base: tuple[float, float] = (0.0, 0.0)
+    #: 建图时基站的 ECEF(米;RTCM 1005 解出来的)。狗上改正里的基站坐标跟它差 5 cm 以上 → 基站挪过、
+    #: 这份配准对不上了,不拿 RTK 核对(W09e 内审应修 3)。不知道是 None。
+    base_ecef: tuple[float, float, float] | None = None
 
     def to_wire(self) -> dict[str, Any]:
-        return {"version": 1, "origin": {"lat": self.lat0, "lon": self.lon0, "alt": self.alt0},
-                "yaw_deg": self.yaw_deg, "tx": self.tx, "ty": self.ty, "rms_m": self.rms_m,
-                "pairs": self.pairs, "antenna_in_base": list(self.antenna_in_base)}
+        d = {"version": 1, "origin": {"lat": self.lat0, "lon": self.lon0, "alt": self.alt0},
+             "yaw_deg": self.yaw_deg, "tx": self.tx, "ty": self.ty, "rms_m": self.rms_m,
+             "pairs": self.pairs, "antenna_in_base": list(self.antenna_in_base)}
+        if self.base_ecef is not None:
+            d["base_ecef"] = list(self.base_ecef)
+        return d
 
     @classmethod
     def from_wire(cls, d: Any) -> GeoRef:
@@ -65,12 +71,17 @@ class GeoRef:
                                        d["ty"], d.get("rms_m", 0.0))]
             ant = tuple(float(v) for v in d.get("antenna_in_base", (0.0, 0.0)))
             pairs = int(d.get("pairs", 0))
+            base = d.get("base_ecef")
+            base_t = None if base is None else tuple(float(v) for v in base)
         except (KeyError, TypeError, ValueError) as exc:
             raise ContractError(f"geo.json 不成形: {exc}") from exc
         if not all(math.isfinite(v) for v in (*vals, *ant)) or len(ant) != 2 \
                 or not -90 <= vals[0] <= 90 or not -180 <= vals[1] <= 180:
             raise ContractError("geo.json 里有不是有限数、或经纬度越界的值")
-        return cls(*vals[:6], rms_m=vals[6], pairs=pairs, antenna_in_base=(ant[0], ant[1]))
+        if base_t is not None and (len(base_t) != 3 or not all(math.isfinite(v) for v in base_t)):
+            raise ContractError("geo.json 的 base_ecef 要是三个有限数")
+        return cls(*vals[:6], rms_m=vals[6], pairs=pairs, antenna_in_base=(ant[0], ant[1]),
+                   base_ecef=base_t)  # type: ignore[arg-type]
 
     def map_to_enu(self, x: float, y: float) -> tuple[float, float]:
         c, s = math.cos(math.radians(self.yaw_deg)), math.sin(math.radians(self.yaw_deg))
