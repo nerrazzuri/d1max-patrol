@@ -973,18 +973,20 @@ class AgentRuntime:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 return
-            self._grid_job = loop.create_task(self._load_grid(d, self._zones))
+            self._grid_job = loop.create_task(self._load_grid(d))
 
     @property
     def _planned(self) -> bool:
         return self.parts is not None and hasattr(self.parts.nav, "load_grid")
 
-    async def _load_grid(self, d: Path | None, zones: ZoneSet | None) -> None:
-        """换图后载规划栅格与区域(W10,在线程里读图);完了重发能力(``plan_ok`` 变了)。"""
+    async def _load_grid(self, d: Path | None) -> None:
+        """换图后载规划栅格与区域(W10,在线程里读图);完了重发能力(``plan_ok`` 变了)。
+        区域取读完图**那一刻**的(内审阻断 1:读图期间站点发来的新区域已经换上了,不许拿换图
+        那一刻的旧值盖回去)。"""
         nav = self.parts.nav
         try:
             await asyncio.to_thread(nav.load_grid, d)
-            await nav.set_zones(zones)
+            await nav.set_zones(self._zones)
         except Exception as exc:
             log.exception("载规划栅格出错")
             nav.load_grid(None)

@@ -52,6 +52,11 @@ class NavRequestError(NavBackendError):
         self.message = message
 
 
+class NavCancelledError(NavRequestError):
+    """受理之前就被叫停了(W10 内审应修 3:规划期间 ``stop()``)。**不是**这个点失败 —— 叫停的人
+    (中止、叫停、返航)的事件还在引擎队列里,引擎要先去处理它,不能接着派下一个点。"""
+
+
 # --------------------------------------------------------------------- 事件
 
 

@@ -267,3 +267,31 @@ async def test_直线桥_报不守区域(tmp_path):
         assert {"goto", "patrol"} <= rt.processor.supported
     finally:
         await rt.close()
+
+
+async def test_读规划栅格期间来了新区域_读完不拿旧的盖回去(台):
+    """内审阻断 1。"""
+    import time as _time
+    broker, c, r, ears, rt, site, mk = 台
+    nav = rt.parts.nav
+    real = nav.load_grid
+
+    def 慢(d):
+        _time.sleep(0.4)
+        real(d)
+    nav.load_grid = 慢
+    geo = {n: b"x" for n in GEOMETRY_FILES} | 地面() | {"home.json": b'{"x":1,"y":1,"yaw":0}'}
+    ref = site.add("m", "2", geo)
+    await rt._on_cmd(_cmd("map_activate", ref, "a2", c))
+    for _ in range(100):
+        await _跑(rt, broker, 1)
+        if rt.loaded_map == ("m", "2") and rt._grid_job is not None \
+                and not rt._grid_job.done():
+            break
+    await rt._on_cmd(_cmd("zones_set", _zs(1, [POND]), "z1", c))
+    for _ in range(100):
+        await _跑(rt, broker, 1)
+        if rt._grid_job.done():
+            break
+    assert nav.plan_ok and nav.zones is not None and nav.zones.revision == 1
+    assert nav.nogo_at(3.5, 1.5) is not None

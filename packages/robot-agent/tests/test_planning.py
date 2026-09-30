@@ -114,6 +114,10 @@ def test_膨胀_致命区按外接圆_软代价往外变便宜():
     cm = costmap.build(blocked, 0.1, (0.0, 0.0), robot_radius_m=0.52)
     assert cm.lethal[20, 25] and not cm.lethal[20, 26]      # 5 格 ≤ 5.2、6 格 > 5.2
     assert cm.lethal[24, 23] and not cm.lethal[24, 24]      # 5 ≤ 5.2 < 5.66
+    assert cm.lethal[21, 25] and cm.lethal[25, 21]          # √26 = 5.10 ≤ 5.2:圆盘边上那一圈也算
+    on = costmap.build(blocked, 0.1, (0.0, 0.0), robot_radius_m=0.5)
+    assert on.lethal[20, 25] and on.lethal[24, 23], "正好等于半径的格心也算(≤,不是 <)"
+    assert not on.lethal[21, 25]
     assert cm.cost[20, 25] == LETHAL
     assert 0 < cm.cost[20, 28] < cm.cost[20, 27] < cm.cost[20, 26] < LETHAL
     assert cm.cost[20, 32] == 0
@@ -259,6 +263,21 @@ def test_连线格():
     cs = line_cells((0, 0), (1, 3))
     assert cs == [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (1, 3)]      # 过格角
     assert line_cells((3, 3), (0, 0))[-1] == (0, 0)
+
+
+def test_剪枝不抄近路穿过贵格或致命格():
+    """路沿着边绕过中间一块;直连对角线会穿过中间。中间贵(软代价)不许抄,致命更不许。"""
+    for mid in (90, LETHAL):
+        cost = bytearray(25)
+        for r in (1, 2, 3):
+            for c in (1, 2, 3):
+                cost[r * 5 + c] = mid
+        path = [0, 1, 2, 3, 4, 9, 14, 19, 24]          # 上边一行,再右边一列
+        out = astar.smooth(path, bytes(cost), 5)
+        assert out[0] == 0 and out[-1] == 24 and len(out) >= 3, (mid, out)
+        for a, b in zip(out, out[1:], strict=False):
+            for r, c in line_cells(divmod(a, 5), divmod(b, 5)):
+                assert cost[r * 5 + c] == 0, (mid, out)
 
 
 def test_剪枝不让软代价变高():

@@ -53,11 +53,11 @@ def test_存储_修订号_并发_收紧判定_确认(tmp_path):
     assert z.current("m", "2").revision == 0                      # 别的版本各是各的
 
 
-def test_时间权威_收紧照发_其余过闸():
-    assert temporal_class("zones_set", {"tighten": True}) == SAFE
-    assert temporal_class("zones_set", {"tighten": False}) == GATED
-    assert temporal_class("zones_set", {"tighten": "yes"}) == GATED
-    assert temporal_class("zones_set", {}) == GATED
+def test_时间权威_区域一律照发():
+    # 内审应修 8:一律照发(修订号挡重放、放宽狗上等空闲)
+    for p in ({"tighten": True}, {"tighten": False}, {}):
+        assert temporal_class("zones_set", p) == SAFE
+    assert GATED != SAFE
 
 
 # ------------------------------------------------------------ 经站点 API 到仿真狗
@@ -124,6 +124,7 @@ def test_派单门槛_修订对不上拒_补发之后放行(站点):
     s = 站点
     alice = _登(s, "alice")
     _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
+    assert s.loop.call(lambda: s.disp.sync_zones()) == [], "都是第 0 版:不发"
     # 站点这头改了、没发出去(直接写库):狗上还是第 0 版
     s.disp.zones.put(MAP[0], MAP[1], [SLOW], base_revision=0, by="alice")
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
@@ -133,6 +134,9 @@ def test_派单门槛_修订对不上拒_补发之后放行(站点):
     assert s.loop.call(lambda: s.disp.sync_zones()) == [], "同一版 30 s 内不重发"
     _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
     assert s.loop.call(lambda: s.disp.sync_zones()) == [], "对上了不发"
+    code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
+    assert code == 409 and "不守区域" in d["error"], "直线桥不守限速区(内审小 11)"
+    _zcaps(s)["enforced"] = True                        # 当它是规划后端的狗
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
     assert code == 200 and d["ack"]["result"] == "accepted", (code, d)
 
@@ -145,8 +149,8 @@ def test_派单门槛_这张图有禁行区_直线桥的狗不派(站点):
     assert code == 200
     _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
-    assert code == 409 and "不守禁行区" in d["error"], (code, d)
-    assert "不守禁行区" in s.disp.dispatchable("A", "patrol")
+    assert code == 409 and "不守区域" in d["error"], (code, d)
+    assert "不守区域" in s.disp.dispatchable("A", "patrol")
     assert s.disp.dispatchable("A", "teleop") == "", "遥控是人开的:不挡"
 
 
@@ -163,3 +167,17 @@ def test_狗在禁行区里_出P1告警(站点):
 async def _emit(s):
     s.agent.events.emit("inside_nogo", {"zone": "pond", "label": "池子", "x": 5.5, "y": 5.5,
                                         "map_id": MAP[0], "map_version": MAP[1]})
+
+
+def test_补发_狗没收下_30秒内不重发_过了再发(站点):
+    s = 站点
+    _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
+
+    def 写不进(zs):
+        raise OSError("盘满了")
+    s.agent.zonebook.put = 写不进                        # 狗上落不了盘:回 store_failed,修订不变
+    s.disp.zones.put(MAP[0], MAP[1], [SLOW], base_revision=0, by="alice")
+    assert s.loop.call(lambda: s.disp.sync_zones()) == ["A"]
+    assert s.loop.call(lambda: s.disp.sync_zones()) == [], "同一版 30 s 内不重发"
+    assert _zcaps(s)["rev"] == 0
+    assert s.loop.call(lambda: s.disp.sync_zones(retry_ms=0)) == ["A"], "过了间隔再发"

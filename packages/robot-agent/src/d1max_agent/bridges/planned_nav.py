@@ -29,13 +29,14 @@ from typing import Any
 import numpy as np
 
 from d1max_agent.bridges.hal_nav import HalNavBackend, _wrap
+from d1max_agent.localization import DRIFT_XY_PER_M, OdomAnchor
 from d1max_agent.planning import costmap as cmod
 from d1max_agent.planning.astar import PlanError
 from d1max_agent.planning.costmap import Costmap, CostmapError
 from d1max_agent.planning.planner import PlannedPath, Planner
 from d1max_contract.hal import RobotHAL
-from d1max_contract.zones import Zone, ZoneSet, point_in_polygon
-from d1max_patrol.backends.base import NavRequestError
+from d1max_contract.zones import Zone, ZoneSet, distance_to_polygon
+from d1max_patrol.backends.base import NavCancelledError, NavRequestError
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 log = logging.getLogger(__name__)
@@ -44,7 +45,10 @@ LOOKAHEAD_M = 0.6
 ARRIVE_TOL_M = 0.15
 YAW_TOL_RAD = 0.15
 TURN_IN_PLACE_RAD = 0.5
-MAX_DEVIATION_M = 1.0
+#: 偏离路径多远就停下重规划(W10 内审应修 5:原来 1 m,比膨胀半径还大)。
+MAX_DEVIATION_M = 0.3
+#: 狗身中心离禁行区这么近就算压进去了(机身半宽 0.24 m;规划出的路离禁行区至少外接圆半径)。
+ZONE_STOP_M = 0.25
 MAX_REPLANS = 3
 MAX_SIGMA_MARGIN_M = 0.5
 K_LIN = 1.0
@@ -86,6 +90,12 @@ class PlannedNavBackend(HalNavBackend):
         self._len_task: asyncio.Task | None = None
         #: 运行时挂上来的事件出口 ``(kind, data)``。
         self.on_event: Callable[[str, dict], None] | None = None
+        #: 正在核对新区域(W10 内审阻断 2):核完之前原地等,不拿旧代价图沿旧路走。
+        self._hold = False
+        #: 禁行区的包围盒(每拍查「狗在不在禁行区里」先按它筛,内审小 13)。
+        self._boxes: list[tuple[float, float, float, float, Zone]] = []
+        #: 路长估计单用一个规划器(内审应修 7:不跟 goto、重规划抢同一个子进程)。
+        self._hint_planner: Planner | None = None
 
     # ------------------------------------------------------------ 图与区域
 
@@ -112,6 +122,8 @@ class PlannedNavBackend(HalNavBackend):
 
     def close_planner(self) -> None:
         self._planner.close()
+        if self._hint_planner is not None and self._hint_planner is not self._planner:
+            self._hint_planner.close()
 
     @property
     def plan_ok(self) -> bool:
@@ -125,8 +137,9 @@ class PlannedNavBackend(HalNavBackend):
             if base is None:
                 raise NavRequestError("goto", f"规划不了:{self.plan_problem}")
             blocked, res, origin = base
-            cm = cmod.build(blocked, res, origin, zs.zones if zs is not None else (),
-                            robot_radius_m=self.robot_radius_m, nogo_margin_m=key * 0.1)
+            cm = cmod.build(blocked, res, origin, self._effective(zs),
+                            robot_radius_m=self.robot_radius_m + cmod.INFLATE_MARGIN_M,
+                            nogo_margin_m=key * 0.1)
             cms[key] = cm                     # 写进算的时候那一份缓存:换过就是丢掉的那份
             if epoch != self._epoch:
                 raise _Stale()
@@ -141,35 +154,63 @@ class PlannedNavBackend(HalNavBackend):
                 continue
         raise NavRequestError("goto", "图或区域一直在换,代价图算不出来")
 
-    def nogo_at(self, x: float, y: float) -> Zone | None:
-        for z in self.zones.nogo() if self.zones is not None else ():
-            if point_in_polygon(x, y, z.polygon):
+    def _effective(self, zs: ZoneSet | None) -> tuple[Zone, ...]:
+        """规划用的区域:限速低于这台狗的前进死区的限速区守不住(再慢就不走了,内审应修 6),当禁行。"""
+        if zs is None:
+            return ()
+        dead = self._caps.deadband_vx
+        return tuple(Zone(z.id, "nogo", z.polygon, z.label)
+                     if z.kind == "slow" and (z.max_speed_mps or 0.0) < dead else z
+                     for z in zs.zones)
+
+    def _rebox(self) -> None:
+        self._boxes = [(min(p[0] for p in z.polygon), min(p[1] for p in z.polygon),
+                        max(p[0] for p in z.polygon), max(p[1] for p in z.polygon), z)
+                       for z in (self.zones.nogo() if self.zones is not None else ())]
+
+    def nogo_near(self, x: float, y: float, d: float = 0.0) -> Zone | None:
+        """离哪个禁行区不到 ``d`` 米(``d=0`` 就是在里面);先按包围盒筛。"""
+        for x0, y0, x1, y1, z in self._boxes:
+            if x0 - d <= x <= x1 + d and y0 - d <= y <= y1 + d \
+                    and distance_to_polygon(x, y, z.polygon) <= d:
                 return z
         return None
 
+    def nogo_at(self, x: float, y: float) -> Zone | None:
+        return self.nogo_near(x, y, 0.0)
+
     async def set_zones(self, zs: ZoneSet | None) -> None:
-        """换上一份区域(收紧还是放宽由运行时判;放宽的它等狗空闲再调)。正在走的:狗在新禁行区里 →
-        停、FAILED、发事件;路径碰上新的致命格 → 原地等、重规划。"""
+        """换上一份区域(收紧还是放宽由运行时判;放宽的它等狗空闲再调)。正在走的:核对完之前原地等
+        (内审阻断 2:算新代价图要零点几秒,期间不许沿旧路走进新禁行区);狗压进新禁行区 → 停、FAILED、
+        发事件;路径碰上新的致命格 → 重规划。空闲的狗被圈在里面:也发事件(内审小 17)。"""
         self.zones = zs
         self._invalidate()
-        if self._status not in (NavStatus.ACTIVE, NavStatus.PAUSE, NavStatus.INITIALIZING):
-            return
-        here = await self._here()
-        if here is not None:
-            z = self.nogo_at(here.x, here.y)
+        self._rebox()
+        moving = self._status in (NavStatus.ACTIVE, NavStatus.PAUSE, NavStatus.INITIALIZING)
+        if moving:
+            self._hold = True
+        try:
+            here = await self._here()
+            z = None if here is None else self.nogo_near(here.x, here.y, ZONE_STOP_M)
             if z is not None:
-                await self._inside_nogo(z, here)
+                if self._status in (NavStatus.ACTIVE, NavStatus.PAUSE, NavStatus.INITIALIZING):
+                    await self._inside_nogo(z, here)
+                else:
+                    self._report_nogo(z, here, idle=True)
                 return
-        if self._path is None or self._cm is None:
-            return
-        margin = self._margin(here)
-        cm = await self._costmap_async(margin)
-        if self._crosses(cm, here):
-            log.warning("新区域挡住了正在走的路,原地等、重规划")
+            if not moving:
+                return
+            cm = await self._costmap_async(self._margin(here, self._target))
+            if self._path is None or self._status not in (NavStatus.ACTIVE, NavStatus.PAUSE,
+                                                          NavStatus.INITIALIZING):
+                return                          # 核对期间走到头、失败、被叫停了
+            here = await self._here()
             self._cm = cm
-            self._start_replan()
-        else:
-            self._cm = cm
+            if self._crosses(cm, here):
+                log.warning("新区域挡住了正在走的路,原地等、重规划")
+                self._start_replan()
+        finally:
+            self._hold = False
 
     def _crosses(self, cm: Costmap, here: Any) -> bool:
         """剩下的路(从狗现在的位置起)有没有压上致命格。"""
@@ -189,11 +230,14 @@ class PlannedNavBackend(HalNavBackend):
             prev = rc
         return False
 
-    async def _inside_nogo(self, z: Zone, here: Any) -> None:
-        log.error("狗在禁行区 %s 里面:原地停,等人处理", z.id)
+    def _report_nogo(self, z: Zone, here: Any, *, idle: bool = False) -> None:
+        log.error("狗在禁行区 %s 里面(或压上了边):原地停,等人处理", z.id)
         if self.on_event is not None:
-            self.on_event("inside_nogo", {"zone": z.id, "label": z.label,
+            self.on_event("inside_nogo", {"zone": z.id, "label": z.label, "idle": idle,
                                           "x": round(here.x, 2), "y": round(here.y, 2)})
+
+    async def _inside_nogo(self, z: Zone, here: Any) -> None:
+        self._report_nogo(z, here)
         await self._enter_terminal(NavStatus.FAILED)
 
     # ------------------------------------------------------------ 规划
@@ -202,12 +246,18 @@ class PlannedNavBackend(HalNavBackend):
         o = await self._hal.odometry()
         return self.anchor.estimate((o.x, o.y, o.yaw))
 
-    @staticmethod
-    def _margin(est: Any) -> float:
+    def _margin(self, est: Any, goal: Pose | None = None) -> float:
+        """禁行区按定位 σ 加宽(W08 决定 4)。里程锚定的 σ 边走边涨(内审应修 4):按走到终点时的 σ 算
+        (现在的 σ + 每米漂移 × 直线距离),最多加宽 0.5 m。"""
         s = getattr(est, "sigma_xy_m", 0.0) if est is not None else 0.0
-        if not math.isfinite(s):
+        if not isinstance(s, (int, float)) or not math.isfinite(s):
             return MAX_SIGMA_MARGIN_M
-        return min(max(float(s), 0.0), MAX_SIGMA_MARGIN_M)
+        s = max(float(s), 0.0)
+        anchor = getattr(self, "anchor", None)
+        if goal is not None and est is not None and isinstance(anchor, OdomAnchor) \
+                and not anchor.identity:
+            s += DRIFT_XY_PER_M * math.hypot(goal.position.x - est.x, goal.position.y - est.y)
+        return min(s, MAX_SIGMA_MARGIN_M)
 
     async def _plan_from_here(self, pose: Pose, op: str) -> tuple[PlannedPath, Costmap]:
         if self._base is None:
@@ -220,7 +270,7 @@ class PlannedNavBackend(HalNavBackend):
             raise NavRequestError(op, f"狗在禁行区 {z.id} 里面,不自己往外走")
         for _ in range(3):
             epoch = self._epoch
-            cm = await self._costmap_async(self._margin(here))
+            cm = await self._costmap_async(self._margin(here, pose))
             try:
                 path = await self._planner.plan(cm, (here.x, here.y),
                                                 (pose.position.x, pose.position.y))
@@ -254,7 +304,7 @@ class PlannedNavBackend(HalNavBackend):
         finally:
             self._planning = False
         if gen != self._gen:
-            raise NavRequestError(op, "规划期间被叫停,结果作废")
+            raise NavCancelledError(op, "规划期间被叫停,结果作废")
         if self._status is not NavStatus.STANDBY:
             raise NavRequestError(op, f"规划完状态变了({self._status.value}),结果作废")
         self._path, self._cm, self._seg = path, cm, 0
@@ -269,7 +319,7 @@ class PlannedNavBackend(HalNavBackend):
         if self._replan is not None and not self._replan.done():
             return
         if self._replans >= MAX_REPLANS:
-            self._replan_out = ("fail", f"重规划了 {MAX_REPLANS} 次还是走不上路径")
+            self._replan_out = ("fail", f"重规划了 {MAX_REPLANS} 次还是走不上路径", 0)
             return
         self._replans += 1
         gen = self._gen
@@ -281,10 +331,10 @@ class PlannedNavBackend(HalNavBackend):
                 path, cm = await self._plan_from_here(target, "replan")
             except NavRequestError as exc:
                 if gen == self._gen:
-                    self._replan_out = ("fail", str(exc))
+                    self._replan_out = ("fail", str(exc), 0)
                 return
             if gen == self._gen:
-                self._replan_out = ("ok", (path, cm))
+                self._replan_out = ("ok", (path, cm), self._epoch)
         self._replan = asyncio.get_running_loop().create_task(run())
 
     async def stop(self) -> None:
@@ -344,7 +394,10 @@ class PlannedNavBackend(HalNavBackend):
     async def _drive(self, here: Any, dt_s: float) -> None:
         target = self._target
         assert target is not None
-        z = self.nogo_at(here.x, here.y)
+        if self._hold:
+            await self._send(0.0, 0.0, dt_s)            # 正在核对新区域:原地等
+            return
+        z = self.nogo_near(here.x, here.y, ZONE_STOP_M)
         if z is not None:
             await self._inside_nogo(z, here)
             return
@@ -353,6 +406,11 @@ class PlannedNavBackend(HalNavBackend):
             if out[0] == "fail":
                 log.warning("重规划没成:%s", out[1])
                 await self._enter_terminal(NavStatus.FAILED)
+                return
+            if out[2] != self._epoch:
+                # 重规划完到这一拍之间区域又换了(内审应修 9):旧区域上的路不装,再来一次
+                self._start_replan()
+                await self._send(0.0, 0.0, dt_s)
                 return
             self._path, self._cm = out[1]
             self._seg = 0
@@ -399,8 +457,14 @@ class PlannedNavBackend(HalNavBackend):
                                             b.position.x, b.position.y))
         if key in self._len_cache:
             return self._len_cache[key]
-        if self._base is None or (self._len_task is not None and not self._len_task.done()):
+        if self._base is None or self._planning \
+                or (self._len_task is not None and not self._len_task.done()):
             return None
+        if self._hint_planner is None:
+            # 测试注入的规划器(线程里跑)就共用;真跑的另起一个子进程,不跟 goto 抢
+            self._hint_planner = (self._planner if getattr(self._planner, "_in_process", False)
+                                  else Planner(timeout_s=10.0))
+        hp = self._hint_planner
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -410,8 +474,8 @@ class PlannedNavBackend(HalNavBackend):
             epoch = self._epoch
             try:
                 cm = await self._costmap_async(0.0)
-                p = await self._planner.plan(cm, (a.position.x, a.position.y),
-                                             (b.position.x, b.position.y))
+                p = await hp.plan(cm, (a.position.x, a.position.y),
+                                  (b.position.x, b.position.y))
             except (PlanError, NavRequestError):
                 return
             if epoch == self._epoch:

@@ -141,6 +141,7 @@ async def test_电量返航_规划回原点_绕墙_不沿来路(台子):
         if not hit["done"] and parts.engine.snapshot.waypoint_index == 1 and o.y > 3.0:
             r.inject_battery(35.0)
             hit["done"] = True
+            hit["at"] = len(track)
     await _跑完(c, r, parts, each=each)
     assert hit["done"]
     assert RunState.RETURNING in parts.engine._seen
@@ -149,6 +150,9 @@ async def test_电量返航_规划回原点_绕墙_不沿来路(台子):
     assert math.hypot(o.x - 2.0, o.y - 2.0) < 0.3
     # 一路没穿墙
     assert not [(x, y) for x, y in track if 5.3 < x < 6.7 and y < 6.0]
+    # 规划回家,不沿来路(沿来路要先回到 A 再回出发点)
+    back = track[hit["at"]:]
+    assert min(math.hypot(x - 10.0, y - 2.0) for x, y in back) > 0.8
 
 
 async def test_回家规划不出来_原地停_按返航失败中止(台子):
@@ -186,8 +190,11 @@ async def test_返航超时按路长(台子):
 
 
 async def test_返航电量按规划路长(台子):
+    from d1max_agent.engine.homing import ReturnParams
     c, r, parts = 台子
     eng = parts.engine
+    # 让路长决定电量(不被 3% 下限盖住)
+    eng._return_params = ReturnParams(drain_pct_per_hour=20000.0)
     await eng.start(_任务([("A", 10.0, 2.0)]), home=parts.home)
     straight = eng._return_cost_pct()                # 还没算出路长:直线 × 1.4
     for _ in range(100):
@@ -198,6 +205,55 @@ async def test_返航电量按规划路长(台子):
     L = parts.nav.path_length_hint(Pose.from_xy_yaw(10.0, 2.0), parts.home.pose)
     assert L > 12.0
     from d1max_agent.engine.homing import estimate_cost_pct
-    assert straight == pytest.approx(estimate_cost_pct(8.0))
-    assert planned == pytest.approx(estimate_cost_pct(L / 1.4))
+    p = eng._return_params
+    assert straight == pytest.approx(estimate_cost_pct(8.0, p))
+    assert planned == pytest.approx(estimate_cost_pct(L / 1.4, p))
+    assert planned > straight
     await eng.stop() if hasattr(eng, "stop") else None
+
+
+class 慢规划器(Planner):
+    def __init__(self):
+        super().__init__(in_process=True)
+        self.go = asyncio.Event()
+        self.calls = 0
+
+    async def plan(self, cm, start, goal):
+        self.calls += 1
+        await self.go.wait()
+        return await super().plan(cm, start, goal)
+
+
+async def test_规划期间被叫停_引擎不接着派下一个点(tmp_path):
+    """内审应修 3:叫停让 goto 抛出来,以前按点位失败走 skip、接着规划下一个点。"""
+    c = 钟()
+    r = SimRobot(now_ms=c, max_vx=0.6, max_wz=1.5, stop_latency_s=0.2)
+    await r.connect()
+    await r.acquire_control()
+    画图(tmp_path)
+    pl = 慢规划器()
+    parts = build_engine(r, runs_root=tmp_path / "runs", now_ms=c, monotonic=lambda: c.mono,
+                         map_id="m", home=Pose.from_xy_yaw(2.0, 2.0), nav_kind="planned",
+                         planner=pl)
+    parts.nav.load_grid(tmp_path)
+    await parts.nav.connect()
+    r.teleport(2.0, 2.0, 0.0)
+    try:
+        await parts.engine.start(_任务([("A", 5.0, 2.0), ("B", 5.0, 5.0)],
+                                       on_waypoint_failed="skip"), home=parts.home)
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if parts.nav._planning:
+                break
+        assert parts.nav._planning
+        await parts.nav.stop()                           # 叫停:导航先停
+        await parts.engine.abort("人叫停")               # 引擎的中止跟着进队列
+        pl.go.set()
+        for _ in range(300):
+            await asyncio.sleep(0.01)
+            if parts.engine.state in FINAL_STATES:
+                break
+        assert parts.engine.state is RunState.ABORTED, parts.engine.snapshot
+        assert pl.calls == 1, "没接着去规划下一个点"
+    finally:
+        await parts.engine.aclose()

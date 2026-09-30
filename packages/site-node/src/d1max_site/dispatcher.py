@@ -425,12 +425,13 @@ class Dispatcher:
             return
         if z.get("plan_ok") is False:
             raise DispatchRefused(f"{robot_id} 规划不了:{z.get('problem') or '没有规划栅格'}")
-        if site.nogo() and not z.get("enforced"):
-            raise DispatchRefused(f"{robot_id} 的导航不守禁行区(直线桥),{loaded[0]}:{loaded[1]} "
-                                  "上有禁行区")
         if z.get("rev") != site.revision:
             raise DispatchRefused(f"{robot_id} 的区域还没同步(狗上第 {z.get('rev')} 版,站点第 "
                                   f"{site.revision} 版)")
+        if site.zones and not z.get("enforced"):
+            # 限速区也一样(内审小 11):直线桥两样都不守
+            raise DispatchRefused(f"{robot_id} 的导航不守区域(直线桥),{loaded[0]}:{loaded[1]} "
+                                  "上画了禁行区或限速区")
 
     async def push_zones(self, zs: Any, *, tighten: bool, issued_by: str) -> dict[str, str]:
         """改了区域:发给在线、加载着这一版的狗 → {狗: 空串(收下)或原因}。发不出去的由

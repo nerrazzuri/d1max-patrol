@@ -22,6 +22,8 @@ from d1max_contract.zones import Zone
 
 PLAN_RES_M = 0.1
 ROBOT_RADIUS_M = 0.52
+#: 膨胀的余量(W08 决定 6「外接圆半径 + 余量」,内审应修 5):致命区 = 半径 + 余量。
+INFLATE_MARGIN_M = 0.05
 SOFT_BAND_M = 0.3
 SOFT_MAX = 100
 #: 规划栅格最多多少格(0.1 m 下 400 万格 = 4 万 m²,庄园约 1.1 万 m²)。

@@ -58,21 +58,14 @@ def segments_cross(a, b, c, d) -> bool:
 
 
 def is_simple(pts: tuple[tuple[float, float], ...]) -> bool:
-    """多边形的边不自交:不相邻的边没有公共点;相邻的边只在公共顶点相接(共线折回也算自交);
-    没有重复的相邻顶点。顶点数上限 64,两两查就够。"""
+    """多边形的边不自交:不相邻的边没有公共点(相邻的边共用一个顶点,不查)。顶点数上限 64,
+    两两查就够。共线折回、重复顶点不用单独查:折回去的那一端必然落在不相邻的边上,三个点的
+    退化形状面积为 0、另有面积那一关挡。"""
     n = len(pts)
-    if any(pts[i] == pts[(i + 1) % n] for i in range(n)):
-        return False
     for i in range(n):
-        for j in range(i + 1, n):
-            if j == i + 1 or (i == 0 and j == n - 1):
-                s_ = pts[j] if j == i + 1 else pts[i]                 # 公共顶点
-                p = pts[i] if j == i + 1 else pts[i + 1]              # 边 i 另一端
-                q = pts[(j + 1) % n] if j == i + 1 else pts[j]        # 边 j 另一端
-                dot = (p[0] - s_[0]) * (q[0] - s_[0]) + (p[1] - s_[1]) * (q[1] - s_[1])
-                if _orient(s_, p, q) == 0 and dot > 0:
-                    return False
-                continue
+        for j in range(i + 2, n):
+            if i == 0 and j == n - 1:
+                continue                          # 首尾两条边相邻
             if segments_cross(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n]):
                 return False
     return True

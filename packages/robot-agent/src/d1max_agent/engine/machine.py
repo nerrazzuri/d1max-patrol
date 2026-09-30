@@ -64,6 +64,7 @@ from d1max_patrol.backends.base import (
     MediaSource,
     NavBackend,
     NavBackendError,
+    NavCancelledError,
     NavRequestError,
     NavStatusEvent,
 )
@@ -754,6 +755,17 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         except _TIMEOUT:
             return None
 
+    async def _drain_after_cancel(self, name: str, wait_s: float = 2.0) -> None:
+        """导航受理之前被叫停:处理队列里跟过来的事件(``_handle`` 会按中止、叫停、返航抛出去);
+        ``wait_s`` 里什么都没等到,才按这个点失败往下走。"""
+        deadline = self._clock() + wait_s
+        while True:
+            item = await self._next(deadline - self._clock())
+            if item is None:
+                log.warning("点位 %s:导航受理之前被叫停,却没等到叫停的事件", name)
+                return
+            await self._handle(item)
+
     # --------------------------------------------------------------- 主流程
 
     async def _run(self) -> None:
@@ -1130,6 +1142,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     self._clock() + NAV_STANDBY_TIMEOUT_S))
                 try:
                     await self._nav.goto(wp.pose)
+                except NavCancelledError:
+                    # 规划期间被叫停了(W10 内审应修 3):叫停的那个事件还在队列里 —— 先去处理它
+                    # (中止、叫停、返航都在 ``_handle`` 里抛),不按点位失败接着派下一个点。
+                    await self._drain_after_cancel(wp.name)
+                    raise _FailWaypoint("导航受理之前被叫停") from None
                 except NavRequestError as exc:
                     # 规划后端当场拒(没路、终点在禁行区里,W10):这个点失败、按点位失败策略走;
                     # 以前落到兜底,整趟按「引擎内部异常」中止。

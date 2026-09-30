@@ -536,6 +536,7 @@ class SiteMapPreviewPage extends StatefulWidget {
   static const Key undoKey = Key('zone-undo');
   static const Key cancelKey = Key('zone-cancel');
   static const Key confirmKey = Key('zone-confirm');
+  static const Key confirmOkKey = Key('zone-confirm-ok');
   static Key deleteKey(String id) => Key('zone-del-$id');
 
   @override
@@ -625,6 +626,22 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
   }
 
   Future<void> _confirm() async {
+    // 二次确认（W10 内审小 15）：把确认的那句话念一遍，别跟画区域的按钮误触
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+              scrollable: true,
+              title: Text('确认第 $_rev 版区域'),
+              content: Text('${_zones?['confirm_text'] ?? ''}。\n确认之后这张图才能下发给狗。'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('再看看')),
+                FilledButton(
+                    key: SiteMapPreviewPage.confirmOkKey,
+                    onPressed: () => Navigator.pop(c, true),
+                    child: const Text('确认')),
+              ],
+            ));
+    if (ok != true || !mounted) return;
     setState(() {
       _busy = true;
       _msg = null;

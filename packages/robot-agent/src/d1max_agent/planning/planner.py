@@ -59,10 +59,21 @@ class Planner:
         h, w = cm.shape
         args = (cm.cost.tobytes(), cm.hard.astype("uint8").tobytes(), w, h, s, g, self.timeout_s)
         loop = asyncio.get_running_loop()
+        ex = self._executor()
+        cf = None
         try:
-            fut = loop.run_in_executor(self._executor(), _job, *args)
+            if ex is None:
+                fut = loop.run_in_executor(None, _job, *args)
+            else:
+                cf = ex.submit(_job, *args)
+                fut = asyncio.wrap_future(cf)
             # A* 自己在 timeout_s 收手;这里多等一点,防子进程起不来或卡住
             cells = await asyncio.wait_for(fut, self.timeout_s + 5.0)
+        except asyncio.CancelledError:
+            if cf is not None and cf.cancelled():
+                # 池子重起时排队的被取消了(内审应修 7):不是调用方被取消,别把 CancelledError 往上漏
+                raise PlanError("worker", "规划子进程重起了,这一次作废") from None
+            raise
         except asyncio.TimeoutError:
             self._reset()
             raise PlanError("timeout", "规划超时") from None
