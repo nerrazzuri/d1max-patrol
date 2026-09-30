@@ -55,7 +55,7 @@
         }
       },
       "clock_skew_s": 0.0,
-      "expires_at": 1791733355643,
+      "expires_at": 1791737714859,
       "fresh": true,
       "held": null,
       "loc": {
@@ -72,10 +72,11 @@
       },
       "revoked": false,
       "robot_id": "A",
+      "rtk": null,
       "status": {
-        "boot_id": "boot-ab5178b2b0",
+        "boot_id": "boot-9f2a59dba7",
         "control_epoch": 1,
-        "last_seen": 1790733356415,
+        "last_seen": 1790737715624,
         "online": true,
         "ready": {
           "control": true,

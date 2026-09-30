@@ -1291,6 +1291,24 @@ def test_建图预览脚本_在ROS系统Python里跑这一版的_livemap():
     assert "--pose-topic" in r.stdout
 
 
+def test_厂家RTK辅助脚本_在ROS系统Python里跑这一版的_rtkvendor():
+    """W09e:代理 --rtk vendor 时起它。"""
+    import os
+    import subprocess
+    start = DEPLOY / "d1max-rtk-vendor"
+    assert os.access(start, os.X_OK)
+    ls = subprocess.run(["git", "ls-files", "-s", str(start)], capture_output=True, text=True,
+                        cwd=DEPLOY, check=True).stdout
+    assert ls.startswith("100755")
+    subprocess.run(["sh", "-n", str(start)], check=True)
+    text = start.read_text(encoding="utf-8")
+    assert '. /opt/ros/humble/setup.sh' in text
+    assert 'exec /usr/bin/python3 -m d1max_localizer.rtkvendor "$@"' in text
+    from d1max_agent.main import build_parser
+    rtk = next(a for a in build_parser()._actions if a.dest == "rtk_vendor_cmd")
+    assert rtk.default == "/opt/d1max/current/deploy/d1max-rtk-vendor"
+
+
 def test_ROS_包装脚本_source_ROS_再执行后面的命令():
     """W09c2:代理的服务里没有 source ROS(``ros2``、``mola-cli`` 不在 PATH 上,``rmw_zenoh_cpp``
     也找不到);建图编排起录包、在线建图都经它。"""

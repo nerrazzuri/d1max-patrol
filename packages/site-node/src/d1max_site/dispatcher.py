@@ -308,7 +308,9 @@ class Dispatcher:
                 "active": self.registry.active(robot_id, now_ms=self._now()),
                 "expires_at": rec.expires_at, "status": status, "capabilities": caps,
                 "fresh": self._fresh(c), "held": self.held(robot_id),
-                "loc": self._loc_view(c), "clock_skew_s": _round1(self.clock_skew_s(robot_id))}
+                "loc": self._loc_view(c), "clock_skew_s": _round1(self.clock_skew_s(robot_id)),
+                # W09e:最近一份遥测里的 RTK 解(没配 RTK、老狗都是 None)
+                "rtk": c.telemetry.rtk if c is not None and c.telemetry is not None else None}
 
     @staticmethod
     def _loc_view(c: DispatchClient | None) -> dict[str, Any] | None:

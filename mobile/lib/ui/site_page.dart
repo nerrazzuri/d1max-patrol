@@ -664,6 +664,8 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           Text(v == null ? '加载中…' : _statusLine(v), key: const Key('robot-status')),
           if (v?['loc'] is Map)
             Text(locText((v!['loc'] as Map).cast<String, dynamic>()), key: const Key('robot-loc')),
+          if (v?['rtk'] is Map)
+            Text(rtkText((v!['rtk'] as Map).cast<String, dynamic>()), key: const Key('robot-rtk')),
           // 叫停之后站点不再派它（W00c5e）：说清楚，给能派单的人一个「恢复」。
           if (v?['held'] is Map)
             Card(

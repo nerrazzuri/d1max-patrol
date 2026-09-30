@@ -1,0 +1,12 @@
+#!/bin/sh
+# 厂家 RTK 的辅助进程(W09e,代理 --rtk vendor 时起它):订厂家驱动的 /rtk_pvh,一行一条 JSON 吐到标准输出。
+# 跑在 ROS 的系统 Python 里;厂家的消息包(robots_dog_msgs)在厂家的 ROS 环境里 —— 真机上看 source 哪一份
+# (真机项)。参数原样交给 d1max_localizer.rtkvendor(--topic)。
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+# ROS 的 setup 脚本里有未定义变量,关掉 -u 再 source
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+exec /usr/bin/python3 -m d1max_localizer.rtkvendor "$@"

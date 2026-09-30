@@ -10,12 +10,13 @@ from __future__ import annotations
 import logging
 import os
 import socket
-import termios
 import threading
 from collections.abc import Callable
 from typing import Any
 
 from d1max_contract.rtcm import RtcmFramer, ecef_to_llh, msg_type, station_ecef
+from d1max_contract.serialport import BAUDS as _BAUDS
+from d1max_contract.serialport import open_serial
 
 log = logging.getLogger(__name__)
 
@@ -23,11 +24,6 @@ log = logging.getLogger(__name__)
 RECONNECT_S = 3.0
 #: 一次读多少。
 READ_BYTES = 4096
-
-_BAUDS = {9600: termios.B9600, 19200: termios.B19200, 38400: termios.B38400,
-          57600: termios.B57600, 115200: termios.B115200, 230400: termios.B230400,
-          460800: termios.B460800, 921600: termios.B921600}
-
 
 class SourceError(ValueError):
     """``--rtcm-source`` 写得不对。"""
@@ -47,25 +43,6 @@ def parse_source(text: str) -> tuple[str, str, int]:
     if kind == "tcp" and not 0 < n < 65536:
         raise SourceError(f"端口 {n} 不对")
     return kind, where, n
-
-
-def open_serial(path: str, baud: int) -> int:
-    """裸模式打开串口(8N1、不回显、不改字节),回文件描述符。"""
-    fd = os.open(path, os.O_RDWR | os.O_NOCTTY)
-    try:
-        attrs = termios.tcgetattr(fd)
-        attrs[0] = 0                                   # iflag
-        attrs[1] = 0                                   # oflag
-        attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
-        attrs[3] = 0                                   # lflag
-        attrs[4] = attrs[5] = _BAUDS[baud]
-        attrs[6][termios.VMIN] = 1
-        attrs[6][termios.VTIME] = 0
-        termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
 
 
 class RtcmRelay:

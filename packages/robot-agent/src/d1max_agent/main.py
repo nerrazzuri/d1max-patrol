@@ -106,6 +106,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sim-localizer", action="store_true",
                    help="仿真:在进程里起一个仿真定位器连本机定位桥"
                         "(要 --hal sim --localizer bridge)")
+    rk = p.add_argument_group("RTK(W09e;决策 21:自己的为主、厂家的可选)")
+    rk.add_argument("--rtk", choices=("none", "own", "vendor"), default="none",
+                    help="none = 不接;own = 我们自己的串口驱动(**要先停厂家的 sixents_gps_driver**,"
+                         "它独占串口);vendor = 读厂家驱动的 /rtk_pvh(经辅助进程)")
+    rk.add_argument("--rtk-device", default="/dev/ttyTHS3")
+    rk.add_argument("--rtk-baud", type=int, default=460800)
+    rk.add_argument("--rtk-init", type=Path, default=None,
+                    help="起来时发给模组的命令,一行一条(模组命令真机核过再配)")
+    rk.add_argument("--rtk-vendor-cmd", default="/opt/d1max/current/deploy/d1max-rtk-vendor",
+                    help="厂家模式的辅助进程")
     d1 = p.add_argument_group("--hal d1max(比例换算的几个数都待真机实测)")
     d1.add_argument("--sidecar", type=_hostport, default=None,
                     help="旁路进程 host:port,默认 127.0.0.1:8090")
@@ -153,6 +163,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tls-cert", default=None, help="mqtts:本机证书(站点 enroll 签发,CN=robot_id)")
     p.add_argument("--tls-key", default=None, help="mqtts:本机私钥")
     return p
+
+
+def make_rtk(args: argparse.Namespace) -> Any:
+    """按 ``--rtk`` 起 RTK 来源(W09e);``none`` 回 None。"""
+    if args.rtk == "none":
+        return None
+    from d1max_agent.rtk import OwnRtk, VendorRtk
+    if args.rtk == "vendor":
+        return VendorRtk([args.rtk_vendor_cmd], now_ms=wall_ms)
+    init: list[str] = []
+    if args.rtk_init is not None:
+        init = [ln.strip() for ln in args.rtk_init.read_text("utf-8").splitlines()
+                if ln.strip() and not ln.lstrip().startswith("#")]
+    return OwnRtk(args.rtk_device, args.rtk_baud, init=init, now_ms=wall_ms)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -325,7 +349,8 @@ def build(args: argparse.Namespace) -> Assembled:
                                storage_facts=pump.facts if pump is not None else None,
                                maps=keeper, mapper=mapper,
                                releases=_releases(args, registration),
-                               localizer=args.localizer, loc_socket=args.loc_socket)
+                               localizer=args.localizer, loc_socket=args.loc_socket,
+                               rtk=make_rtk(args))
         if pump is not None:
             runtime._outbox_retry = pump.retry_refused
         return hal, parts, runtime, pump

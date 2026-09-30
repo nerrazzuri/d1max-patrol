@@ -1,5 +1,5 @@
 {
-  "now_ms": 1790733356837,
+  "now_ms": 1790737716043,
   "robots": [
     {
       "alerts": {
@@ -8,17 +8,17 @@
         "P3": 1
       },
       "backup": null,
-      "battery_as_of_ms": 1790733356792,
-      "battery_pct": 99.99772222222222,
+      "battery_as_of_ms": 1790737715998,
+      "battery_pct": 99.99773333333333,
       "bundle_lag": null,
       "clock_skew_s": 0.0,
       "disk_used_ratio": 0.42,
       "fresh": true,
-      "last_seen_ms": 1790733356431,
+      "last_seen_ms": 1790737715639,
       "oldest_backlog_s": 95,
       "online": true,
       "robot_id": "A",
-      "storage_as_of_ms": 1790733356792,
+      "storage_as_of_ms": 1790737715998,
       "upload_backlog": 3,
       "why": {
         "backup": "备份在站点做(决策 8:数据都在站点),看站点那一行",
@@ -34,9 +34,9 @@
     },
     "backup": {
       "configured": true,
-      "dest": "/tmp/pytest-of-liang/pytest-65/test_手机读的站点夹具跟真站点同形0/bak",
+      "dest": "/tmp/pytest-of-liang/pytest-101/test_手机读的站点夹具跟真站点同形0/bak",
       "error": "",
-      "last_ok_ms": 1790733356811,
+      "last_ok_ms": 1790737716018,
       "stale": false
     },
     "schedule_error": "",

@@ -25,6 +25,15 @@ Map<String, dynamic> _view(Map<String, dynamic>? loc, {bool canReloc = true}) {
 }
 
 void main() {
+  test('RTK 说人话（W09e）', () {
+    expect(rtkText(null), '');
+    expect(rtkText(<String, dynamic>{'fix': 'fixed', 'sats': 22, 'std_h_m': 0.012, 'age_s': 1.2}),
+        'RTK：固定解，卫星 22，精度约 1 cm，改正 1 秒前');
+    expect(rtkText(<String, dynamic>{'fix': 'single', 'sats': 8, 'std_h_m': 2.4, 'stale': true}),
+        'RTK：单点，卫星 8，精度约 2.4 m，（好一会儿没更新了）');
+    expect(rtkText(<String, dynamic>{'fix': 'none'}), 'RTK：没有定位');
+  });
+
   test('配了定位器的狗：设位置被拒的原因说人话（W09a）', () {
     expect(ackReasonText('localizer_unavailable: 定位器没连上'), '定位器没连上或没回：定位器没连上');
     expect(ackReasonText('localizer_refused: 初值离地图太远'), '定位器没接这个位置：初值离地图太远');

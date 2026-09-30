@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import math
@@ -136,8 +137,12 @@ class AgentRuntime:
                  storage_facts: Callable[[], StorageFacts | None] | None = None,
                  maps: Any = None, mapper: Any = None, releases: Any = None,
                  autonomy: str | None = None, odom_identity: bool | None = None,
-                 localizer: str = "anchor", loc_socket: Path | None = None) -> None:
+                 localizer: str = "anchor", loc_socket: Path | None = None,
+                 rtk: Any = None) -> None:
         self.registration = registration
+        #: RTK 来源(W09e,``d1max_agent.rtk``:自己的串口驱动或厂家的);没配是 None。
+        self.rtk = rtk
+        self._rtk_logged: int | None = None
         self.topics = registration.topics
         self.hal = hal
         self.boot_id = boot_id or f"boot-{uuid.uuid4().hex[:10]}"
@@ -410,6 +415,8 @@ class AgentRuntime:
             out["mark_home"] = {}               # W00c6f:在当前位置标原点(定位不好就拒)
         if self._storage is not None:
             out["outbox_retry"] = {}
+        if self.rtk is not None:
+            out["rtk"] = {"source": self.rtk.kind}  # W09e:站点、手机据此显示 RTK
         return out
 
     async def _map_command(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
@@ -968,6 +975,10 @@ class AgentRuntime:
         await self.transport.subscribe(self.topics.cmd, self._on_cmd, qos=1)
         # 遥控帧(W00c5c):专用主题、QoS 0 —— 断线期间的帧不补投(决策 7:不许重放)。
         await self.transport.subscribe(self.topics.teleop, self._on_teleop, qos=0)
+        if self.rtk is not None:
+            # 基站改正数据(W09e):QoS 0,过时的没用
+            await self.transport.subscribe(self.topics.rtcm, self._on_rtcm, qos=0)
+            self.rtk.start()
         # 先载正在用的图,再连站点:连上之后进来的命令要按真的地图版本核对。
         await self._load_active_map()
         if self._locsrv is not None:
@@ -1029,6 +1040,10 @@ class AgentRuntime:
 
         if self.parts is not None:
             await _step("关引擎", self.parts.engine.aclose)
+        if self.rtk is not None:
+            async def _rtk_off() -> None:
+                await asyncio.to_thread(self.rtk.close)
+            await _step("停 RTK", _rtk_off)
         if self._locsrv is not None:
             await _step("关本机定位桥", self._locsrv.close)
         if self.video is not None:
@@ -1088,6 +1103,32 @@ class AgentRuntime:
             await self._publish_status(force=True)
 
     # ------------------------------------------------------------ 命令
+
+    async def _on_rtcm(self, m: Message) -> None:
+        """站点转来的基站改正数据:交给 RTK 来源(自己的写进模组;厂家的不用)。"""
+        try:
+            self.rtk.feed(bytes(m.payload))
+        except Exception:                             # 一批写不进去就丢了(过时的改正没用)
+            log.warning("改正数据交给 RTK 没成", exc_info=True)
+
+    def _log_rtk(self) -> None:
+        """录包时把 RTK 解按收到的时刻记进包目录 ``rtk.jsonl``(W09e 决定 5:建图脚本拿来配经纬度)。
+        只记浮点、固定解;同一条不重记。"""
+        if self.rtk is None or self.mapper is None or not self.mapper.recording:
+            return
+        fix = self.rtk.latest()
+        if fix is None or fix.get("stale") or fix.get("fix") not in ("fixed", "float") \
+                or fix.get("stamp_ms") == self._rtk_logged:
+            return
+        self._rtk_logged = fix.get("stamp_ms")
+        bag = Path(self.mapper.bags_root) / str(self.mapper.last_bag)
+        rec = {"t": fix["stamp_ms"] / 1000.0} | {k: fix.get(k) for k in (
+            "fix", "lat", "lon", "alt", "std_h_m", "sats")}
+        try:
+            with open(bag / "rtk.jsonl", "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + "\n")
+        except OSError as exc:
+            log.warning("记 RTK 解没成:%s", exc)
 
     async def _on_teleop(self, m: Message) -> None:
         """一帧遥控。不合契约的丢掉、计数;合契约的交给当前那一趟遥控去判(代次、序号、在途)。"""
@@ -1241,6 +1282,7 @@ class AgentRuntime:
         if self.parts is not None:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
         await self._feed_trail()
+        self._log_rtk()
         await self.processor.step(dt_s)
         if self.video is not None:
             self.video.step()
@@ -1353,4 +1395,6 @@ class AgentRuntime:
             health=await self.hal.health(), loaded_map=self.loaded_map,
             task_state=cur.state if cur is not None else None, online=self.online,
             storage=storage, anchor=self.parts.nav.anchor if self.parts is not None else None)
+        if self.rtk is not None:
+            tele = dataclasses.replace(tele, rtk=self.rtk.latest())
         await self.transport.publish(self.topics.telemetry, _dumps(tele.to_wire()), qos=0)

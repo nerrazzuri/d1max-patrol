@@ -156,6 +156,28 @@ String locText(Map<String, dynamic>? loc) {
   return '定位：偏差约 ${s is num ? s.toStringAsFixed(1) : '?'} m';
 }
 
+/// RTK 的人话（W09e）：单狗视图里的 `rtk`（站点从狗的遥测取的）。没配 RTK、老狗是空串。
+String rtkText(Map<String, dynamic>? rtk) {
+  if (rtk == null) return '';
+  final fix = switch ('${rtk['fix']}') {
+    'fixed' => '固定解',
+    'float' => '浮点解',
+    'dgps' => '差分',
+    'single' => '单点',
+    _ => '没有定位',
+  };
+  final parts = <String>['RTK：$fix'];
+  if (rtk['sats'] is num) parts.add('卫星 ${(rtk['sats'] as num).toInt()}');
+  final std = rtk['std_h_m'];
+  if (std is num) {
+    parts.add(std < 1 ? '精度约 ${(std * 100).toStringAsFixed(0)} cm' : '精度约 ${std.toStringAsFixed(1)} m');
+  }
+  final age = rtk['age_s'];
+  if (age is num) parts.add('改正 ${age.toStringAsFixed(0)} 秒前');
+  if (rtk['stale'] == true) parts.add('（好一会儿没更新了）');
+  return parts.join('，');
+}
+
 /// 配了定位器的狗（W09a，经本机定位桥）：来源说人话。
 String _bridgeLocText(Map<String, dynamic> loc, String reason) {
   if (loc['anchored'] != true) {
