@@ -143,6 +143,8 @@ class BridgeLocalizer:
         #: 最近一帧可信的(σ 在线内、定位器没说丢):丢定位后自动重定位的初值。断开不清,换图清。
         self._good: _Fix | None = None
         self._wrong_map = False
+        #: RTK 核对说定位器不对(W09e,``RtkCheck``;代理每拍写):非空就不可信。
+        self.rtk_disagree = ""
         self._settle = 0
         self._settle_why = ""
         self._settle_human = False
@@ -237,6 +239,7 @@ class BridgeLocalizer:
             return
         if map_ref != self._map:
             self._ref = self._good = None            # 别的图:旧位置不能当参照
+            self.rtk_disagree = ""
         self._map, self._dir = map_ref, dir
         self._prior_ok = None
         self._prior_err = ""
@@ -310,6 +313,8 @@ class BridgeLocalizer:
             return "定位器在按人给的位置重定位" if self._reloc[1] else "定位器在重定位"
         if self._wrong_map:
             return "定位器在别的图上"
+        if self.rtk_disagree:
+            return self.rtk_disagree
         f = self._fix
         if f is None:
             return "定位器还没给出位置"

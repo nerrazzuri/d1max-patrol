@@ -143,6 +143,10 @@ class AgentRuntime:
         #: RTK 来源(W09e,``d1max_agent.rtk``:自己的串口驱动或厂家的);没配是 None。
         self.rtk = rtk
         self._rtk_logged: int | None = None
+        from d1max_agent.rtk_check import RtkCheck
+        #: RTK 核对定位器(W09e 决定 8):正在用的图有 geo.json、配了定位器的狗才核。
+        self._rtk_check = RtkCheck()
+        self._rtk_reloc: asyncio.Task | None = None
         self.topics = registration.topics
         self.hal = hal
         self.boot_id = boot_id or f"boot-{uuid.uuid4().hex[:10]}"
@@ -370,6 +374,7 @@ class AgentRuntime:
         self.loaded_map = None
         self.processor.loaded_map = None
         self.processor.supported = self._supported()
+        self._rtk_check.on_map(None)
         if self.parts is not None:
             self.parts.nav.anchor.on_map(None)
         data: dict[str, Any] = {"reason": self.map_problem}
@@ -911,6 +916,7 @@ class AgentRuntime:
 
     def _switch_map(self, ref) -> None:
         self.map_problem = ""
+        self._rtk_check.on_map(self._load_geo(ref))
         self.loaded_map = (ref.map_id, ref.version)
         self.processor.loaded_map = self.loaded_map
         self.processor.supported = self._supported()
@@ -1111,6 +1117,45 @@ class AgentRuntime:
         except Exception:                             # 一批写不进去就丢了(过时的改正没用)
             log.warning("改正数据交给 RTK 没成", exc_info=True)
 
+    def _load_geo(self, ref: Any) -> Any:
+        """这张图的地理配准(``geo.json``,可选);没有、坏了是 None(坏了记一笔)。"""
+        if self.maps is None:
+            return None
+        from d1max_contract.geo import GEO_FILE, GeoRef
+        p = Path(self.maps.dir_of(ref)) / GEO_FILE
+        try:
+            return GeoRef.from_wire(json.loads(p.read_text("utf-8")))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as exc:
+            log.warning("这张图的 geo.json 读不了,不拿 RTK 核对定位器:%s", exc)
+            return None
+
+    async def _check_rtk(self) -> None:
+        """RTK 核对定位器(W09e 决定 8):只核配了定位器的狗;不对就标不可信、请它在 RTK 的位置附近
+        重定位。"""
+        if self.rtk is None or self.parts is None or self.loaded_map is None:
+            return
+        anchor = self.parts.nav.anchor
+        if not hasattr(anchor, "rtk_disagree"):
+            return
+        o = await self.hal.odometry()
+        est = anchor.estimate((o.x, o.y, o.yaw)) if o.valid else None
+        v = self._rtk_check.step(self.rtk.latest(),
+                                 None if est is None else (est.x, est.y, est.yaw), self._mono())
+        if v.reason != anchor.rtk_disagree:
+            log.warning("RTK 核对:%s", v.reason or "对回来了")
+        anchor.rtk_disagree = v.reason
+        if v.reloc is not None and not self._running(self._rtk_reloc):
+            from d1max_agent.rtk_check import RELOC_SIGMA_M
+            m, pose = self.loaded_map, v.reloc
+
+            async def _reloc() -> None:
+                why = await anchor.relocalize(m, pose, RELOC_SIGMA_M, human=False)
+                if why:
+                    log.warning("按 RTK 请定位器重定位没成:%s", why)
+            self._rtk_reloc = asyncio.get_running_loop().create_task(_reloc())
+
     def _log_rtk(self) -> None:
         """录包时把 RTK 解按收到的时刻记进包目录 ``rtk.jsonl``(W09e 决定 5:建图脚本拿来配经纬度)。
         只记浮点、固定解;同一条不重记。"""
@@ -1283,6 +1328,7 @@ class AgentRuntime:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
         await self._feed_trail()
         self._log_rtk()
+        await self._check_rtk()
         await self.processor.step(dt_s)
         if self.video is not None:
             self.video.step()
