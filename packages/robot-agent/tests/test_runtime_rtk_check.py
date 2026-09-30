@@ -128,3 +128,41 @@ async def test_换图_读新图的geo_json(tmp_path):
         assert t.rt._rtk_check.geo is None, "新图没有 geo.json:不核"
     finally:
         await t.收()
+
+
+async def test_定位器正在重定位时不拿RTK比(台):
+    """W09e 内审小:重定位还没收敛又按 RTK 请一次,互相打架。"""
+    t = 台
+    await t.连()
+    rtk = 假RTK(t.c)
+    t.rt.rtk = rtk
+    t.rt._rtk_check.on_map(GEO)
+    anchor = t.rt.parts.nav.anchor
+    anchor._reloc = (999, True)                          # 人给的位置还在等定位器收敛
+    o = await t.dog.odometry()
+    rtk.at = (o.x + 4.0, o.y)
+    await t.拍(40)
+    assert t.rt._rtk_check._flagged == "" and not t.loc.relocs
+
+
+async def test_人给了位置_RTK的结论作废_一阵子不按RTK自动请(台):
+    """W09e 内审应修 4。"""
+    from test_runtime_maps import _cmd
+    t = 台
+    await t.连()
+    rtk = 假RTK(t.c)
+    t.rt.rtk = rtk
+    t.rt._rtk_check.on_map(GEO)
+    t.loc.refuse_reloc = "测试:先不让它对回来"
+    t.loc.jump(4.0, 0.0, flag=True)
+    await t.拍(30)
+    o = await t.dog.odometry()
+    rtk.at = (o.x, o.y)
+    await t.拍(40)
+    anchor = t.rt.parts.nav.anchor
+    assert anchor.rtk_disagree
+    t.loc.refuse_reloc = ""
+    await t.rt._on_cmd(_cmd("relocalize", {"x": o.x, "y": o.y, "yaw": 0.0}, "r1", t.c))
+    await t.broker.drain()
+    assert anchor.rtk_disagree == "", "人给的位置:结论作废"
+    assert t.rt._rtk_check._quiet_until > t.c.mono, "一阵子不按 RTK 自动请"

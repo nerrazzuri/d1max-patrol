@@ -229,3 +229,11 @@ def test_厂家的_起来就退_隔的时间翻倍(tmp_path, monkeypatch):
     finally:
         r.close()
     assert waits[:4] == [0.02, 0.04, 0.08, 0.08]
+
+
+@pytest.mark.parametrize("pt,want", [(0, "none"), (16, "single"), (17, "dgps"), (34, "float"),
+                                     (50, "fixed"), (99, "none")])
+def test_厂家的_pos_type对照(pt, want):
+    r = VendorRtk(["x"], now_ms=lambda: 0)
+    r._line(f'{{"pos_type": {pt}, "lat": 5.4, "lon": 100.3}}')
+    assert r.latest()["fix"] == want

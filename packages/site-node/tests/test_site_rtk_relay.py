@@ -194,3 +194,34 @@ def test_基站坐标跳了_叫一声():
     r.feed(_1005(base[0] + 2.0, base[1], base[2]))
     assert len(moved) == 1 and moved[0] == pytest.approx(1.99, abs=1e-3), "跟上一次的比"
     assert r.stats()["base"] is not None
+
+
+def test_读的时候抛了别的错_读线程不死_接着重连(monkeypatch):
+    """W09e 内审:读线程只接网络错的话,一个意外的异常就让它死了、再也不转发。"""
+    import d1max_site.rtk_relay as R
+    monkeypatch.setattr(R, "RECONNECT_S", 0.05)
+    got: list[bytes] = []
+    r = RtcmRelay("tcp:h:1", publish=got.append, now_ms=lambda: 0)
+    n = {"open": 0}
+
+    def 开(self=r):
+        n["open"] += 1
+        if n["open"] == 1:
+            def 读():
+                raise ValueError("怪数据")
+            return 读
+        chunks = [_msg(1077)]
+
+        def 读2():
+            if chunks:
+                return chunks.pop()
+            time.sleep(0.05)
+            return _msg(1087)
+        return 读2
+    monkeypatch.setattr(r, "_open", 开)
+    r.start()
+    try:
+        assert _等(lambda: len(got) >= 1), r.error
+        assert n["open"] >= 2
+    finally:
+        r.close()
