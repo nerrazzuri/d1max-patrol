@@ -204,6 +204,8 @@ class OwnRtk(_Base):
         self._q: collections.deque[bytes] = collections.deque(maxlen=FEED_QUEUE)
         self._qcv = threading.Condition()
         self._writer: threading.Thread | None = None
+        #: 写串口(测试里换成会短写的)。
+        self._os_write: Callable[[int, Any], int] = os.write
         self.fed_bytes = 0
         self.dropped_bytes = 0
 
@@ -235,17 +237,36 @@ class OwnRtk(_Base):
                 if self._stop.is_set():
                     return
                 data = self._q.popleft()
-            with self._wlock:
-                fd = self._fd
-                if fd is None:
-                    self.dropped_bytes += len(data)
-                    continue
-                try:
-                    os.write(fd, data)
-                    self.fed_bytes += len(data)
-                except OSError as exc:
-                    self.dropped_bytes += len(data)
-                    self.error = f"写改正没成: {exc}"[:200]
+            self._write_one(data)
+
+    def _write_all(self, fd: int, data: bytes) -> tuple[int, OSError | None]:
+        """写到写完为止(外审阻断 2:POSIX ``write`` 可以只写进一部分 —— 原来丢掉后半段、照样算整批
+        写进去,模组拿到截断的帧、监控看着正常)。回(写进去多少, 出错就是那个错;写进去 0 字节
+        也算错)。"""
+        view = memoryview(data)
+        n = 0
+        try:
+            while n < len(view):
+                k = self._os_write(fd, view[n:])
+                if not k:
+                    return n, OSError(f"串口写进去 0 字节(写了 {n}/{len(view)})")
+                n += k
+        except OSError as exc:
+            return n, exc
+        return n, None
+
+    def _write_one(self, data: bytes) -> None:
+        """写线程处理一批:写进去的算送达,没写进去的算丢。"""
+        with self._wlock:
+            fd = self._fd
+            if fd is None:
+                self.dropped_bytes += len(data)
+                return
+            n, err = self._write_all(fd, data)
+            self.fed_bytes += n
+            if err is not None:
+                self.dropped_bytes += len(data) - n
+                self.error = f"写改正没成: {err}"[:200]
 
     def start(self) -> None:
         super().start()
@@ -281,7 +302,10 @@ class OwnRtk(_Base):
                 except OSError:
                     pass
                 for cmd in self.init:                   # 初始化命令(真机上核过再配);写完才放改正
-                    os.write(fd, (cmd.rstrip("\r\n") + "\r\n").encode("ascii"))
+                    _, err = self._write_all(fd, (cmd.rstrip("\r\n") + "\r\n").encode("ascii"))
+                    if err is not None:
+                        os.close(fd)                    # 没写完:当串口坏了,重开(不放改正)
+                        raise err
                 with self._wlock:
                     self._fd = fd
                 self.error = ""

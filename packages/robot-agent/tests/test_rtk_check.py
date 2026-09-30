@@ -194,3 +194,49 @@ async def test_定位桥_RTK说不对时_最后可信的位置不跟着走_丢�
     assert b._trusted(F()) is False
     b.rtk_disagree = ""
     assert b._trusted(F()) is True
+
+
+# ------------------------------------------------------------------ 外审阻断 1:质量数据严格校验
+
+_BAD = [None, float("nan"), float("inf"), float("-inf"), -1.0, True, False, "0.02", "missing"]
+
+
+def _only(**kw):
+    f = _fix(10, 5)
+    for k, v in kw.items():
+        if v == "missing":
+            f.pop(k, None)
+        else:
+            f[k] = v
+    return f
+
+
+@pytest.mark.parametrize("field", ["age_s", "std_h_m"])
+@pytest.mark.parametrize("bad", _BAD, ids=repr)
+def test_龄期与标准差_缺了坏了负的布尔都不用_不比不报不重定位(field, bad):
+    """外审阻断 1:原来龄期缺失、None、NaN、负数,标准差负数都能通过,三秒后可能触发自动重定位。"""
+    c = _check()
+    f = _only(**{field: bad})
+    assert not c.usable(f)
+    for t in range(10):
+        v = c.step(f, (14, 5, 0.0), float(t))
+        assert v.reason == "" and v.reloc is None and v.gap_m is None and v.event is None
+
+
+@pytest.mark.parametrize("lat,lon", [(90.5, 100.3), (-91.0, 100.3), (5.4, 180.5),
+                                     (5.4, -181.0), (True, 100.3), (5.4, None)])
+def test_经纬度越界或不是数_不用(lat, lon):
+    c = _check()
+    f = _fix(10, 5) | {"lat": lat, "lon": lon}
+    assert not c.usable(f)
+    for t in range(10):
+        v = c.step(f, (14, 5, 0.0), float(t))
+        assert v.reason == "" and v.reloc is None and v.gap_m is None
+
+
+def test_边界上的值照用():
+    c = _check()
+    assert c.usable(_fix(10, 5) | {"std_h_m": 0.0, "age_s": 0.0})
+    assert c.usable(_fix(10, 5) | {"std_h_m": 0.10, "age_s": 5.0})
+    assert not c.usable(_fix(10, 5) | {"std_h_m": 0.1001})
+    assert not c.usable(_fix(10, 5) | {"age_s": 5.01})

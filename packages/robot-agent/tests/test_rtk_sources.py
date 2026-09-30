@@ -237,3 +237,101 @@ def test_厂家的_pos_type对照(pt, want):
     r = VendorRtk(["x"], now_ms=lambda: 0)
     r._line(f'{{"pos_type": {pt}, "lat": 5.4, "lon": 100.3}}')
     assert r.latest()["fix"] == want
+
+
+# ------------------------------------------------------------------ 外审阻断 2:串口短写
+
+
+class _短写:
+    """假 os.write:按给的节奏写(每次最多 n 个字节;0 = 写进去 0 个;异常 = 抛)。"""
+
+    def __init__(self, plan):
+        self.plan = list(plan)
+        self.out = b""
+
+    def __call__(self, fd, data):
+        step = self.plan.pop(0) if self.plan else len(data)
+        if isinstance(step, BaseException):
+            raise step
+        k = min(step, len(data))
+        self.out += bytes(data[:k])
+        return k
+
+
+def _own(writer):
+    r = OwnRtk("/dev/x", 460800, now_ms=lambda: 0)
+    r._os_write = writer
+    return r
+
+
+def test_短写_一次只写一部分_后面接着写完_字节完整顺序对():
+    w = _短写([3, 5, 1, 100])
+    r = _own(w)
+    data = frame(bytes(range(40)))
+    n, err = r._write_all(7, data)
+    assert (n, err) == (len(data), None) and w.out == data
+
+
+def test_连续很多次短写_照样写完():
+    w = _短写([1] * 200)
+    r = _own(w)
+    data = frame(bytes(60))
+    assert r._write_all(7, data) == (len(data), None) and w.out == data
+
+
+def test_写进去0字节_算失败_不死循环():
+    w = _短写([4, 0])
+    r = _own(w)
+    n, err = r._write_all(7, frame(bytes(20)))
+    assert n == 4 and isinstance(err, OSError)
+
+
+def test_中途出错_写进去的算成功_没写的算丢():
+    w = _短写([6, OSError(5, "Input/output error")])
+    r = _own(w)
+    data = frame(bytes(30))
+    r._fd = 7
+    r._write_one(data)                                  # 写线程处理一批
+    assert r.fed_bytes == 6 and r.dropped_bytes == len(data) - 6
+    assert "Input/output" in r.error
+
+
+def test_初始化命令也走写完为止():
+    master, slave = os.openpty()
+    try:
+        w = _短写([2, 3, 1, 4, 2, 100, 100])
+        r = OwnRtk(os.ttyname(slave), 460800, init=["GPGGA COM1 0.2"], now_ms=lambda: 0)
+        r._vendor_running = lambda: False
+        real = os.write
+
+        def 分段写(fd, data):
+            k = w(fd, data)
+            return real(fd, bytes(data[:k])) if k else 0
+        r._os_write = 分段写
+        r.start()
+        try:
+            got = b""
+            t0 = time.monotonic()
+            while b"\r\n" not in got and time.monotonic() - t0 < 3:
+                got += os.read(master, 1024)
+            assert got == b"GPGGA COM1 0.2\r\n"
+        finally:
+            r.close()
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_初始化命令写进去0字节_当串口坏了重开_不放改正(monkeypatch):
+    import d1max_agent.rtk as R
+    monkeypatch.setattr(R, "REOPEN_S", 0.05)
+    r = OwnRtk("/dev/x", 460800, init=["X"], now_ms=lambda: 0,
+               open_port=lambda d, b: os.open(os.devnull, os.O_WRONLY))
+    r._vendor_running = lambda: False
+    r._os_write = lambda fd, data: 0
+    r.start()
+    try:
+        assert _等(lambda: "0 字节" in r.error)
+        assert r._fd is None, "初始化没写完:不放改正"
+    finally:
+        r.close()

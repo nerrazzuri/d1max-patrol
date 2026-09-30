@@ -34,6 +34,11 @@ FLAG_TTL_S = 30.0
 BASE_MOVED_M = 0.05
 
 
+def _number(v: Any) -> bool:
+    """有限的数(布尔不算)。"""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 @dataclass(frozen=True)
 class Verdict:
     """这一拍的结论。``reason`` 非空 = 定位器不可信;``reloc`` 给了 = 请它在这个位置(x, y, yaw)
@@ -90,17 +95,17 @@ class RtkCheck:
         return None
 
     def usable(self, fix: dict[str, Any] | None) -> bool:
-        if self.geo is None or self.base_moved or not fix or fix.get("stale") \
+        """这条解能不能拿来核对:**缺了、坏了、越界一律不用**(fail-closed;外审阻断 1 —— 原来龄期
+        缺失、None、NaN、负数,标准差负数都能过,三秒后可能触发自动重定位)。"""
+        if self.geo is None or self.base_moved or not fix or fix.get("stale") is not False \
                 or fix.get("fix") != "fixed":
             return False
         std, age = fix.get("std_h_m"), fix.get("age_s")
-        if not isinstance(std, (int, float)) or not math.isfinite(std) or std > STD_MAX_M:
-            return False
-        if isinstance(age, (int, float)) and age > AGE_MAX_S:
-            return False
         lat, lon = fix.get("lat"), fix.get("lon")
-        return isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and \
-            math.isfinite(lat) and math.isfinite(lon)
+        return (_number(std) and 0.0 <= std <= STD_MAX_M
+                and _number(age) and 0.0 <= age <= AGE_MAX_S
+                and _number(lat) and -90.0 <= lat <= 90.0
+                and _number(lon) and -180.0 <= lon <= 180.0)
 
     def step(self, fix: dict[str, Any] | None, est: tuple[float, float, float] | None,
              now: float) -> Verdict:
