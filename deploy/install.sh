@@ -157,6 +157,13 @@ if ! id -u "$RUN_USER" >/dev/null 2>&1; then
   exit 2
 fi
 
+# W12 外审阻断:真狗的速度换算系数是老模板的猜测值(0.4 / 1.0)的话,限速区限不住。**什么都还没改就停**,
+# 让人先改 /etc/d1max/env(sim 不拦)。代理起来时也按同一个范围拒,这里只是早点说。老包没带这个脚本就跳过。
+if [[ -f "$PKG/deploy/d1max-units-check" ]] && ! sh "$PKG/deploy/d1max-units-check" /etc/d1max/env; then
+  echo "      没装:/etc/d1max/env 改好了再跑一次。" >&2
+  exit 2
+fi
+
 say "1/7 建目录 $ROOT 和数据根 /var/lib/d1max"
 mkdir -p "$ROOT/releases" "$ROOT/bin"
 chown -R "$RUN_USER":"$RUN_USER" "$ROOT"
@@ -417,12 +424,6 @@ fi
 if grep -qE '^[[:space:]]*D1MAX_(PIN|CONSOLE_URL|CONSOLE_TOKEN)=' /etc/d1max/env 2>/dev/null; then
   echo "  提示: /etc/d1max/env 里的 D1MAX_PIN / D1MAX_CONSOLE_URL / D1MAX_CONSOLE_TOKEN"
   echo "        是老服务用的,已经没人读了,可以删掉(手机只连站点,W00c5e)。"
-fi
-# W12:老模板的例子是 --mps-per-unit 0.4(没实测过的猜测;SDK 文档低速档是 1.0)。照抄进去的话代理以为自己
-# 只有 0.2 m/s、限速区限不住 —— 不改人手写的配置,只提示。
-if grep -qE -- '--mps-per-unit[[:space:]=]+0?\.4([^0-9]|$)' /etc/d1max/env 2>/dev/null; then
-  echo "  提示: /etc/d1max/env 里写着 --mps-per-unit 0.4(老模板的猜测值)。SDK 文档低速档是 1.0,"
-  echo "        真机用 tools/w00d_motion_check.py 量过再写实测值;不写就是 1.0(W12)。"
 fi
 systemctl daemon-reload
 systemctl enable d1max-agent.service

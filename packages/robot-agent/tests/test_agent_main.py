@@ -73,12 +73,12 @@ def test_装配并跑通一条goto(tmp_path):
 
 
 def test_hal_d1max的参数(tmp_path):
-    a = _args(tmp_path, "--hal", "d1max", "--sidecar", "127.0.0.1:9001", "--mps-per-unit", "0.42",
-              "--radps-per-unit", "0.9", "--deadband", "0.06", "--max-fraction", "0.3",
+    a = _args(tmp_path, "--hal", "d1max", "--sidecar", "127.0.0.1:9001", "--mps-per-unit", "1.08",
+              "--radps-per-unit", "1.4", "--deadband", "0.06", "--max-fraction", "0.3",
               "--invert-yaw", "--stopped-eps", "0.05")
     assert a.hal == "d1max" and a.sidecar == ("127.0.0.1", 9001)
     assert (a.mps_per_unit, a.radps_per_unit, a.deadband, a.max_fraction, a.invert_yaw) == \
-        (0.42, 0.9, 0.06, 0.3, True)
+        (1.08, 1.4, 0.06, 0.3, True)
     assert a.stopped_eps == 0.05
     d = _args(tmp_path, "--hal", "d1max")
     assert d.sidecar == ("127.0.0.1", 8090) and d.mps_per_unit == 1.0 and not d.invert_yaw
@@ -87,6 +87,24 @@ def test_hal_d1max的参数(tmp_path):
         _args(tmp_path, "--hal", "d1max", "--sidecar", "nope")
     with pytest.raises(SystemExit):
         _args(tmp_path, "--sidecar", "127.0.0.1:9001"), "sim 不收 --sidecar"
+
+
+def test_真狗的换算系数不在SDK低速档的范围里就不起_人确认过才起(tmp_path, capsys):
+    """W12 外审阻断:老机器 env 里照抄的老模板 0.4 / 1.0 会盖过新默认值,限速区照样限不住。"""
+    from d1max_agent.main import UNIT_RANGES
+    assert UNIT_RANGES == {"mps_per_unit": (0.7, 1.5), "radps_per_unit": (1.1, 2.0)}
+    for bad in (["--mps-per-unit", "0.4"], ["--radps-per-unit", "1.0"],
+                ["--mps-per-unit", "0.4", "--radps-per-unit", "1.0"], ["--mps-per-unit", "2.0"]):
+        with pytest.raises(SystemExit):
+            _args(tmp_path, "--hal", "d1max", *bad)
+        assert "不在 SDK 低速档的合理范围里" in capsys.readouterr().err
+    a = _args(tmp_path, "--hal", "d1max", "--mps-per-unit", "0.4", "--units-confirmed")
+    assert a.mps_per_unit == 0.4, "实测值、人核过:照用"
+    assert _args(tmp_path, "--hal", "d1max").mps_per_unit == 1.0, "删掉老参数:默认值能起"
+    assert _args(tmp_path, "--hal", "d1max", "--mps-per-unit", "1.08").mps_per_unit == 1.08
+    assert _args(tmp_path).hal == "sim", "sim 不查"
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--units-confirmed")                    # 只用于 --hal d1max
 
 
 def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):

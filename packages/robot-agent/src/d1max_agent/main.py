@@ -79,6 +79,11 @@ INTAKE_PORT = 8444
 #: m/s)。
 D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 1.0, "radps_per_unit": 1.5,
                   "deadband": 0.2, "max_fraction": 0.5, "stopped_eps": 0.02}
+#: 换算系数的合理范围(W12 外审阻断):SDK 文档低速档 1.0 m/s、1.5 rad/s 上下。老模板照抄的 0.4 / 1.0
+#: 是猜的,
+#: 照它换算代理以为的速度跟实际差一大截、限速区限不住 —— 不在范围里就不起,实测值真不在范围里要人加
+#: ``--units-confirmed``。``deploy/d1max-units-check``(装机前查)用同一个范围(测试核)。
+UNIT_RANGES = {"mps_per_unit": (0.7, 1.5), "radps_per_unit": (1.1, 2.0)}
 
 
 def resolve_autonomy(args: argparse.Namespace) -> str:
@@ -136,6 +141,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Move 比例 1.0 对应的 m/s,默认 1.0(SDK 文档低速档,W12)")
     d1.add_argument("--radps-per-unit", type=float, default=None,
                     help="转向比例 1.0 对应的 rad/s,默认 1.5(SDK 文档低速档)")
+    d1.add_argument("--units-confirmed", action="store_true",
+                    help="换算系数不在 SDK 低速档的合理范围里也起(实测值、人核过;W12)")
     d1.add_argument("--deadband", type=float, default=None,
                     help="低于这个 m/s 拒,默认 0.2(#37:比例 0.11 几乎不动)")
     d1.add_argument("--max-fraction", type=float, default=None, help="比例上限,默认 0.5")
@@ -237,10 +244,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     d1max_only = [k for k in D1MAX_DEFAULTS if getattr(args, k) is not None]
     if args.invert_yaw:
         d1max_only.append("invert_yaw")
+    if args.units_confirmed:
+        d1max_only.append("units_confirmed")
     if args.hal == "d1max":
         for k, v in D1MAX_DEFAULTS.items():
             if getattr(args, k) is None:
                 setattr(args, k, v)
+        bad = [f"--{k.replace('_', '-')} {getattr(args, k)}(要在 {lo}–{hi})"
+               for k, (lo, hi) in UNIT_RANGES.items()
+               if not lo <= getattr(args, k) <= hi]
+        if bad and not args.units_confirmed:
+            p.error("速度换算系数不在 SDK 低速档的合理范围里:" + "、".join(bad)
+                    + "。老模板的 0.4 / 1.0 是猜的(文档是 1.0 m/s、1.5 rad/s),照它换算限速区限不住;"
+                    "删掉用默认值、写实测值,实测值真不在范围里人核过之后加 --units-confirmed(W12)")
     elif d1max_only:
         p.error(f"{', '.join('--' + k.replace('_', '-') for k in d1max_only)} 只用于 --hal d1max")
     return args
