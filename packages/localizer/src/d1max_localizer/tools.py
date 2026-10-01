@@ -42,8 +42,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     c = sub.add_parser("calibrate", help="从建图轨迹标 frames.json")
     c.add_argument("traj", type=Path)
     c.add_argument("--out", type=Path, required=True)
-    c.add_argument("--sensor-up", type=lambda s: _floats(s, 3), default=(1.0, 0.0, 0.0),
-                   help="雷达系里的「上」(RS-Airy 是 X)")
+    c.add_argument("--sensor-up", type=lambda s: _floats(s, 3), default=(-1.0, 0.0, 0.0),
+                   help="雷达系里的「上」。C40011 的 RS-Airy 是 X **朝下**装的(W11 #64:录包里"
+                        "地面在 +X 0.5 m;按 +X 标出来的地图是镜像的,跟雷达自带陀螺的转向反相关 "
+                        "−0.98)。"
+                        "建图流水线(build.orient)按点云判,不靠这个")
     c.add_argument("--forward-hint", type=lambda s: _floats(s, 3), default=(0.0, 0.0, 1.0),
                    help="装法上雷达系里的「朝前」(RS-Airy 是 Z),拿来核")
     c.add_argument("--sensor-in-base", type=lambda s: _floats(s, 2), default=(0.4043, 0.0),
