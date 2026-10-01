@@ -114,6 +114,11 @@ class Gate {
     require_clearance_ = on;
   }
 
+  bool ClearanceRequired() {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return require_clearance_;
+  }
+
   /// 感知节点的许可:「到 until 为止前方是空的」。只往后延,不往前缩(晚到的旧许可不会把新的截短)。
   void SetClearance(Clock::time_point until) {
     std::lock_guard<std::mutex> lk(mtx_);

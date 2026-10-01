@@ -172,10 +172,12 @@ class PlannedNavBackend(HalNavBackend):
             if base is None:
                 raise NavRequestError("goto", f"规划不了:{self.plan_problem}")
             blocked, res, origin = base
-            if self._temp:
+            now = self._secs()
+            temp = [k for k, t in tuple(self._temp.items()) if t > now]   # 过期的不算(内审阻断 2)
+            if temp:
                 blocked = blocked.copy()
                 h, w = blocked.shape
-                for (r, c) in self._temp:
+                for (r, c) in temp:
                     if 0 <= r < h and 0 <= c < w:
                         blocked[r, c] = True
             cm = cmod.build(blocked, res, origin, self._effective(zs),
@@ -341,6 +343,7 @@ class PlannedNavBackend(HalNavBackend):
         raise NavRequestError("return_home", "规划后端要引擎给原点(return_to)")
 
     async def _go(self, pose: Pose, op: str) -> None:
+        self._expire_temp()
         if self._status is not NavStatus.STANDBY or self._planning:
             raise NavRequestError(op, f"只能在 StandBy 下启动,当前 {self._status.value}"
                                   + (",正在规划" if self._planning else ""))
@@ -396,6 +399,9 @@ class PlannedNavBackend(HalNavBackend):
         await super().stop()
 
     async def _enter_terminal(self, status: NavStatus) -> None:
+        if self._temp:
+            self._temp = {}                              # 这一段的临时障碍不带到下一段(内审阻断 2)
+            self._invalidate()
         self._creep_from = None
         self._crept = False
         self._blocked_since = None
@@ -548,7 +554,19 @@ class PlannedNavBackend(HalNavBackend):
             self.obstacles.note_odom(odom.x, odom.y, odom.yaw)
 
     def _secs(self) -> float:
+        """被挡计时、临时障碍的过期用单调钟(内审小:墙钟一对时就跳);没配避障就按后端的钟。"""
+        if self.obstacles is not None:
+            return float(self.obstacles.monotonic())
         return self._now() / 1000.0
+
+    def _expire_temp(self) -> None:
+        """临时障碍到期了就忘掉、代价图重算(内审阻断 2:原来只在下一次被挡时才清)。"""
+        if not self._temp:
+            return
+        now = self._secs()
+        if min(self._temp.values()) <= now:
+            self._temp = {k: t for k, t in self._temp.items() if t > now}
+            self._invalidate()
 
     async def _move(self, vx: float, wz: float, dt_s: float, here: Any) -> None:
         """一条会动的命令:配了避障就先过守卫(W08 决定 8 第一层);挡了原地等、自己计时、自己绕,
@@ -556,6 +574,7 @@ class PlannedNavBackend(HalNavBackend):
         if self.obstacles is None or self.guard is None:
             await self._send(vx, wz, dt_s)
             return
+        self._expire_temp()
         if self._creep_from is not None:
             moved = math.hypot(self._odom_pose[0] - self._creep_from[0],
                                self._odom_pose[1] - self._creep_from[1])
@@ -606,9 +625,10 @@ class PlannedNavBackend(HalNavBackend):
                 self.on_event("nav_blocked", {"reason": v.reason, "x": round(here.x, 2),
                                               "y": round(here.y, 2)})
         if (self._creep_from is None and not self._crept and not v.hits and abs(vx) < 1e-6
-                and waited >= BLOCK_DETOUR_S
+                and not self._aligning and waited >= BLOCK_DETOUR_S
                 and self.guard.check(CREEP_V, 0.0, self._v_meas, self.obstacles,
-                                     self._odom_pose).ok):
+                                     self._odom_pose).ok
+                and self._creep_clear(here)):
             # 原地转只被「看不见」挡住、前面看得清是空的:往前挪一个机身长再转
             log.info("原地转被看不见的格子挡住(机身两侧没看过):先往前挪 %.1f m", CREEP_M)
             self._creep_from = (self._odom_pose[0], self._odom_pose[1])
@@ -620,6 +640,27 @@ class PlannedNavBackend(HalNavBackend):
             self._next_detour = now + BLOCK_RETRY_S
             self._remember(v.hits, here, now)
             self._start_replan(detour=True)
+
+    def _creep_clear(self, here: Any) -> bool:
+        """往前挪那一段(挪的距离 + 机身前沿)在地图上也得能走:不碰致命格、离禁行区够远(内审阻断 1:
+        原来只看守卫,禁行区要等狗身中心压上去才停 —— 落差在真机验过之前只靠禁行区挡)。"""
+        cm = self._cm
+        if cm is None:
+            return False
+        from d1max_agent.planning.astar import LETHAL, iter_line
+        c, s = math.cos(here.yaw), math.sin(here.yaw)
+        reach = CREEP_M + self.guard.body_len / 2 + self.guard.margin
+        end = (here.x + c * CREEP_M, here.y + s * CREEP_M)
+        a, b = cm.cell_of(here.x, here.y), cm.cell_of(*end)
+        if a is None or b is None:
+            return False
+        if any(cm.cost[r, k] == LETHAL and not (r, k) == a for r, k in iter_line(a, b)):
+            return False
+        for i in range(int(reach / 0.05) + 1):
+            d = i * 0.05
+            if self.nogo_near(here.x + c * d, here.y + s * d, ZONE_STOP_M) is not None:
+                return False
+        return True
 
     def _remember(self, hits: Any, here: Any, now: float) -> None:
         """挡住的点(此刻狗身系)→ 地图规划栅格的格,记进临时障碍层(过 30 s 忘掉);

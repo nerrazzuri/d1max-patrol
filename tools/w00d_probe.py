@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
 async def probe(host: str, port: int, watch_s: float) -> dict[str, Any]:
     from d1max_adapter_d1max.hal import D1MaxHal
     from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
-    from d1max_patrol.protocol.agent_frames import PROTO_VERSION
+    from d1max_patrol.protocol.agent_frames import MIN_PROTO_VERSION, PROTO_VERSION
 
     b = SidecarDeviceBackend(host, port)
     hal = D1MaxHal(host, port, backend=b)
@@ -83,7 +83,8 @@ async def probe(host: str, port: int, watch_s: float) -> dict[str, Any]:
         out["odom"] = {"x": odom.x, "y": odom.y, "yaw": odom.yaw, "valid": odom.valid}
         out["faults"] = [{"code": f.code, "fatal": f.fatal, "text": f.text}
                          for f in await hal.faults()]
-        out["ok"] = bool(out["hello"] and out["hello"]["proto"] == PROTO_VERSION
+        out["ok"] = bool(out["hello"]
+                         and MIN_PROTO_VERSION <= out["hello"]["proto"] <= PROTO_VERSION
                          and out["held"] and odom.valid)
     finally:
         await hal.close()                     # 只断 Python 这头;控制权留在旁路进程里

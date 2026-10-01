@@ -18,6 +18,9 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
 
 from d1max_contract.obsbridge import Grid
 
@@ -27,7 +30,12 @@ from d1max_contract.obsbridge import Grid
 MEMORY_S = 10.0
 FRESH_S = 0.3
 LOST_S = 2.0
-ODOM_KEEP_S = 6.0
+ODOM_KEEP_S = 12.0
+#: 感知链路的延迟(秒,雷达帧 → 代理收到;待真机量):栅格配「收到时刻 − 它」那一刻的里程位姿
+#: (内审应修 4:配收到时刻的位姿,障碍会被往前多算 v·延迟)。
+PERCEPTION_LATENCY_S = 0.15
+#: 「狗自己刚站过的地方算空」只信这么久(内审再议:人可能跟着走进来)。
+SELF_SWEPT_S = 3.0
 
 
 def _compose(a: tuple[float, float, float], p: tuple[float, float]) -> tuple[float, float]:
@@ -46,9 +54,9 @@ def _inv(a: tuple[float, float, float], w: tuple[float, float]) -> tuple[float, 
 @dataclass
 class _Frame:
     at: float
-    pose: tuple[float, float, float]           # 收到时狗在里程系里的位姿
-    occ: bytes
-    known: bytes
+    pose: tuple[float, float, float]           # 这一帧那一刻狗在里程系里的位姿
+    occ: Any                                   # numpy uint8,size × size
+    known: Any
     size: int
     res: float
 
@@ -64,6 +72,7 @@ class ObstacleView:
     reason: str = ""
     rear: bool = False
     connected: bool = False
+    latency_s: float = PERCEPTION_LATENCY_S
 
     # ------------------------------------------------------------ 喂进来
 
@@ -92,12 +101,14 @@ class ObstacleView:
     def on_grid(self, g: Grid) -> None:
         now = self.monotonic()
         self.check, self.reason, self.rear = g.check, g.reason, g.rear
-        pose = self.pose_at(now)
+        pose = self.pose_at(now - self.latency_s)
         if pose is None or g.check != "ok":
             return                                   # 没有里程配不上;自检没过的不用
         occ, known = g.bits()
-        self.frames.appendleft(_Frame(at=now, pose=pose, occ=occ, known=known, size=g.size,
-                                      res=g.res))
+        self.frames.appendleft(_Frame(at=now, pose=pose,
+                                      occ=np.frombuffer(occ, dtype=np.uint8),
+                                      known=np.frombuffer(known, dtype=np.uint8),
+                                      size=g.size, res=g.res))
         while self.frames and now - self.frames[-1].at > self.memory_s:
             self.frames.pop()
 
@@ -128,46 +139,49 @@ class ObstacleView:
 
     def lookup(self, pts: list[tuple[float, float]], pose_now: tuple[float, float, float]
                ) -> tuple[list[int], list[int]]:
-        """此刻狗身系的点 → (挡的点的下标, 未知的点的下标)。"""
-        blocked: list[int] = []
-        unknown: list[int] = []
-        frames = list(self.frames)
-        for i, p in enumerate(pts):
-            w = _compose(pose_now, p)
-            hit = None
-            for f in frames:
-                lx, ly = _inv(f.pose, w)
-                r = math.floor(lx / f.res + f.size / 2)
-                c = math.floor(ly / f.res + f.size / 2)
-                if not (0 <= r < f.size and 0 <= c < f.size):
-                    continue
-                k = r * f.size + c
-                if f.known[k]:
-                    hit = bool(f.occ[k])
-                    break
-            if hit is None and self._self_swept(w):
-                hit = False
-            if hit is None:
-                unknown.append(i)
-            elif hit:
-                blocked.append(i)
-        return blocked, unknown
+        """此刻狗身系的点 → (挡的点的下标, 未知的点的下标)。numpy 一批算(内审应修 7:逐点逐帧
+        在狗上一拍要几十毫秒,事件循环上)。"""
+        if not pts:
+            return [], []
+        P = np.asarray(pts, dtype=float)
+        c0, s0 = math.cos(pose_now[2]), math.sin(pose_now[2])
+        wx = pose_now[0] + c0 * P[:, 0] - s0 * P[:, 1]
+        wy = pose_now[1] + s0 * P[:, 0] + c0 * P[:, 1]
+        res = np.full(len(P), -1, dtype=np.int8)          # -1 没看见过、0 空、1 挡
+        for f in list(self.frames):
+            todo = res < 0
+            if not todo.any():
+                break
+            c, s = math.cos(f.pose[2]), math.sin(f.pose[2])
+            dx, dy = wx - f.pose[0], wy - f.pose[1]
+            lx, ly = c * dx + s * dy, -s * dx + c * dy
+            r = np.floor(lx / f.res + f.size / 2).astype(int)
+            cc = np.floor(ly / f.res + f.size / 2).astype(int)
+            inb = todo & (r >= 0) & (r < f.size) & (cc >= 0) & (cc < f.size)
+            k = np.where(inb, r * f.size + cc, 0)
+            seen = inb & (f.known[k] == 1)
+            res[seen] = f.occ[k[seen]]
+        if (res < 0).any():
+            res[(res < 0) & self._self_swept(wx, wy)] = 0
+        return np.nonzero(res == 1)[0].tolist(), np.nonzero(res < 0)[0].tolist()
 
     #: 机身矩形的一半(查「狗自己刚站过的地方」用;跟守卫的机身尺寸一致)。
     body_hl: float = 0.465
     body_hw: float = 0.24
 
-    def _self_swept(self, w: tuple[float, float]) -> bool:
-        """这个点(里程系)是不是狗自己最近 :attr:`memory_s` 秒里机身占过的地方:雷达看不见机身底下和
-        机身两侧,急转时后角甩出去扫到的正是刚站过的地方 —— 狗刚站过,那里是空的。"""
+    def _self_swept(self, wx: Any, wy: Any) -> Any:
+        """这些点(里程系)是不是狗自己最近 :data:`SELF_SWEPT_S` 秒里机身占过的地方:雷达看不见机身
+        底下和机身两侧,急转时后角甩出去扫到的正是刚站过的地方 —— 狗刚站过,那里是空的。"""
         now = self.monotonic()
+        out = np.zeros(len(wx), dtype=bool)
         for at, pose in reversed(self.odom):
-            if now - at > self.memory_s:
+            if now - at > SELF_SWEPT_S:
                 break
-            lx, ly = _inv(pose, w)
-            if abs(lx) <= self.body_hl and abs(ly) <= self.body_hw:
-                return True
-        return False
+            c, s = math.cos(pose[2]), math.sin(pose[2])
+            dx, dy = wx - pose[0], wy - pose[1]
+            lx, ly = c * dx + s * dy, -s * dx + c * dy
+            out |= (np.abs(lx) <= self.body_hl) & (np.abs(ly) <= self.body_hw)
+        return out
 
 
 @dataclass(frozen=True)
@@ -209,7 +223,10 @@ class ObstacleGuard:
                         pts.add((round(x, 3), round(y, 3)))
             return self._outside_body(pts, hl, hw)
         dist = self.reach(max(abs(v_meas), abs(vx)))
-        k = max(1, int(dist / s))
+        corner = math.hypot(hl, hw)
+        turn = 0.0 if abs(vx) < 1e-6 else abs(wz) * dist / abs(vx)     # 推这一段转过的角度
+        # 步数按机身角点走过的弧长取,不只按中心的弧长(内审应修 3:急转时角点一步跨过好几格)
+        k = max(1, int(dist / s), int(math.ceil(turn * corner / s)))
         xs = [(i + 0.5) * s for i in range(int(-hl / s) - 1, int(hl / s) + 1)
               if abs((i + 0.5) * s) < hl] + [-hl, hl]
         ys = [(j + 0.5) * s for j in range(int(-hw / s) - 1, int(hw / s) + 1)
@@ -228,19 +245,30 @@ class ObstacleGuard:
             # 每一步机身的轮廓线(采样间距不大于一格,轮廓线扫过的就是整个扫掠区;起点那块是狗自己)
             for x, y in edge:
                 pts.add((round(px + c * x - sn * y, 3), round(py + sn * x + c * y, 3)))
+        if abs(wz) > 1e-6 and abs(vx / wz) < corner:
+            # 转弯半径比机身对角线还小:跟原地转差不多,把外接圆也并进来
+            n = int(corner / s) + 1
+            for i in range(-n, n):
+                for j in range(-n, n):
+                    x, y = (i + 0.5) * s, (j + 0.5) * s
+                    if x * x + y * y <= corner * corner:
+                        pts.add((round(x, 3), round(y, 3)))
         return self._outside_body(pts, hl, hw)
 
     @staticmethod
     def _outside_body(pts: set[tuple[float, float]], hl: float, hw: float
                       ) -> list[tuple[float, float]]:
         """机身此刻占着的那块(含余量)不查:那里只能是狗自己,雷达也看不见机身底下(感知把机身的点
-        滤掉了,那些格子永远是「未知」)。"""
+        滤掉了,那些格子永远是「未知」)。**分辨率**:采样间距 5 cm,紧贴这块边上不到 2 cm 的窄条可能
+        漏查 —— 落在 5 cm 的余量里(内审应修 3 的复核)。"""
         return sorted(p for p in pts if abs(p[0]) > hl + 1e-9 or abs(p[1]) > hw + 1e-9)
 
     def check(self, vx: float, wz: float, v_meas: float, view: ObstacleView,
               pose_now: tuple[float, float, float]) -> Verdict:
         if abs(vx) < 1e-6 and abs(wz) < 1e-6:
             return Verdict(True)                     # 原地等:不动就不会撞
+        if vx < 0:
+            return Verdict(False, "不许后退(没有后面的扫掠检查)")
         st = view.state()
         if st != "ok":
             return Verdict(False, f"障碍数据{_STATE_TEXT.get(st, st)}")

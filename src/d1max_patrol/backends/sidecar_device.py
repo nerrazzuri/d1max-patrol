@@ -33,6 +33,7 @@ from d1max_patrol.backends.base import (
     Frame,
 )
 from d1max_patrol.protocol.agent_frames import (
+    MIN_PROTO_VERSION,
     PROTO_VERSION,
     Ack,
     AgentProtocolError,
@@ -193,10 +194,11 @@ class SidecarDeviceBackend(DeviceBackend):
         if not isinstance(hello, Hello):
             await self._teardown()
             raise DeviceBackendError(f"第一帧应该是 hello,收到 {type(hello).__name__}")
-        if hello.proto != PROTO_VERSION:
+        if not MIN_PROTO_VERSION <= hello.proto <= PROTO_VERSION:
             await self._teardown()
             raise DeviceBackendError(
-                f"协议版本对不上: 旁路进程 {hello.proto},本端 {PROTO_VERSION}。"
+                f"协议版本对不上: 旁路进程 {hello.proto},"
+                f"本端认 {MIN_PROTO_VERSION}–{PROTO_VERSION}。"
                 f"重编 motion/patrol_agent 再来"
             )
         self._hello = hello
