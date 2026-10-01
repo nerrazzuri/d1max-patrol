@@ -416,3 +416,49 @@ async def test_机身系_SDK不跟着调头就不换算():
     finally:
         await hal.close()
         await sim.stop()
+
+
+async def test_速度档位不对就拒速度命令_旁路进程设回去之后照常():
+    """W12:换算只对旁路进程要的那一档成立。"""
+    async with _台子() as (sim, hal):
+        assert not (await hal.set_velocity(_v(vx=0.5))).rejected
+        await hal.stop()
+        sim.speed_level = 2
+        assert await _等(lambda: _拒(hal, "speed_level"))
+        assert await _等(lambda: _收(hal), timeout_s=3.0), "旁路进程 1 s 后设回低速"
+        await hal.stop()
+
+
+async def test_旁路进程不管档位就不核():
+    sim = SimAgentServer(port=0, speed_level_want=0)
+    await sim.start()
+    hal = D1MaxHal("127.0.0.1", sim.port)
+    try:
+        await hal.connect()
+        await hal.acquire_control()
+        await hal.set_motion_mode("stand")
+        sim.speed_level = 3
+        await asyncio.sleep(0.3)
+        assert not hal.speed_level_wrong()
+        assert not (await hal.set_velocity(_v(vx=0.4))).rejected
+        await hal.stop()
+    finally:
+        await hal.close()
+        await sim.stop()
+
+
+def test_默认换算按SDK文档的低速档():
+    """W12:比例 1.0 = 1.0 m/s、1.5 rad/s,上限 0.5:最快 0.5 m/s(跟原来的实际最快一样)。"""
+    hal = D1MaxHal("127.0.0.1", 1)
+    caps = hal.hal_capabilities()
+    assert caps.max_vx == pytest.approx(0.5) and caps.max_wz == pytest.approx(0.75)
+    assert caps.deadband_vx == pytest.approx(0.2)
+
+
+async def _拒(hal, why):
+    r = await hal.set_velocity(_v(vx=0.5))
+    return r.rejected and r.reason == why
+
+
+async def _收(hal):
+    return not (await hal.set_velocity(_v(vx=0.5))).rejected

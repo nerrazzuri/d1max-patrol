@@ -240,3 +240,16 @@ def test_状态帧带头尾方向_老旁路进程不报算不知道():
     assert decode_frame(json.dumps(base | {"head": 0})).head == "unknown"
     for bad in ({}, {"head": True}, {"head": 7}, {"head": "1"}):
         assert decode_frame(json.dumps(base | bad)).head == "unknown", bad
+
+
+def test_速度档位_7号旁路进程报档位与要的档_老的不报是None():
+    """W12:state.speed_level、hello.speed_level_want;没报、真假、负数都当没报。"""
+    base = {"t": "state", "motion": 5, "battery1": 70, "battery2": 0, "estop_sw": 1,
+            "estop_hw": 1, "ts_ms": 1}
+    assert decode_frame(json.dumps(base | {"speed_level": 2})).speed_level == 2
+    for bad in ({}, {"speed_level": True}, {"speed_level": -1}, {"speed_level": "1"}):
+        assert decode_frame(json.dumps(base | bad)).speed_level is None, bad
+    hello = {"t": "hello", "proto": 7, "sdk": "0.1.1", "held": True}
+    assert decode_frame(json.dumps(hello | {"speed_level_want": 1})).speed_level_want == 1
+    assert decode_frame(json.dumps(hello | {"speed_level_want": 0})).speed_level_want == 0
+    assert decode_frame(json.dumps(hello)).speed_level_want is None

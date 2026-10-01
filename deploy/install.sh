@@ -374,7 +374,8 @@ D1MAX_HOME=
 # ---------------------------------------------------------------- 适配器
 # sim = 仿真(动不了真狗)。**W00d 真机验收(庄园场景待真机测试 §3b)过了,才改成 d1max**,
 # 同时在 D1MAX_AGENT_ARGS 里带上实测过的换算参数,例如:
-#   D1MAX_AGENT_ARGS=--sidecar 127.0.0.1:8090 --mps-per-unit 0.4 --radps-per-unit 1.0
+#   D1MAX_AGENT_ARGS=--sidecar 127.0.0.1:8090 --mps-per-unit 1.0 --radps-per-unit 1.5
+# (W12:不写就是 SDK 文档低速档的 1.0 m/s、1.5 rad/s;旁路进程要 --speed-level 1,默认就是)
 D1MAX_HAL=sim
 # 自主级别(W00c6i):空着就按适配器定 —— d1max 是 supervised(goto、巡检只在有人用手机
 # 「我在现场监护」时才收,监护一断就停;站点的排程、事件派遣不派给它),sim 是 autonomous。
@@ -416,6 +417,12 @@ fi
 if grep -qE '^[[:space:]]*D1MAX_(PIN|CONSOLE_URL|CONSOLE_TOKEN)=' /etc/d1max/env 2>/dev/null; then
   echo "  提示: /etc/d1max/env 里的 D1MAX_PIN / D1MAX_CONSOLE_URL / D1MAX_CONSOLE_TOKEN"
   echo "        是老服务用的,已经没人读了,可以删掉(手机只连站点,W00c5e)。"
+fi
+# W12:老模板的例子是 --mps-per-unit 0.4(没实测过的猜测;SDK 文档低速档是 1.0)。照抄进去的话代理以为自己
+# 只有 0.2 m/s、限速区限不住 —— 不改人手写的配置,只提示。
+if grep -qE -- '--mps-per-unit[[:space:]=]+0?\.4([^0-9]|$)' /etc/d1max/env 2>/dev/null; then
+  echo "  提示: /etc/d1max/env 里写着 --mps-per-unit 0.4(老模板的猜测值)。SDK 文档低速档是 1.0,"
+  echo "        真机用 tools/w00d_motion_check.py 量过再写实测值;不写就是 1.0(W12)。"
 fi
 systemctl daemon-reload
 systemctl enable d1max-agent.service

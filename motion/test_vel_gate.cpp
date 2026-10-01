@@ -353,7 +353,28 @@ static void 净空许可_有效期内放行_过期置零_旧许可不截短新�
   CHECK(zero_fwd);
 }
 
+static void 速度档位_要了档位_档位不对就不走_对了才走() {
+  Rig r;
+  r.gate.SetSpeedWant(1);
+  CHECK(r.vel(0.3, 1000) == "");                // 登记照收(拒了代理当失败)
+  CHECK(!r.gate.Live(true, r.now));             // 没收到过档位:不走
+  r.gate.OnSpeedLevel(2);
+  CHECK(!r.gate.Live(true, r.now));             // 有人换成中速:不走(按低速换算的比例会快一倍)
+  r.gate.OnSpeedLevel(1);
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.3);
+  r.gate.OnSpeedLevel(3);
+  r.now += std::chrono::milliseconds(60);
+  r.drv.Tick();
+  bool moved = false;
+  for (auto& c : r.sdk.calls)
+    if (c.what == "move" && c.fwd != 0) moved = true;
+  CHECK(!moved);                                // 速度线程这一拍不发非零 Move
+  Rig q;                                        // 不要档位(0):照旧
+  CHECK(q.vel(0.3) == "" && q.gate.Live(true, q.now)->fwd == 0.3);
+}
+
 int main() {
+  速度档位_要了档位_档位不对就不走_对了才走();
   净空许可_开了门_调过头尾就不放行前进();
   净空许可分两头_往前走向哪头要哪头的许可();
   净空许可_没开不管_开了没许可只零前进_转向后退照常();

@@ -52,7 +52,7 @@ def test_探针只读_报版本控制权姿态电量里程(仿真旁路, tmp_pat
     [log] = tmp_path.glob("w00d-probe-*.json")
     got = json.loads(log.read_text(encoding="utf-8"))
     assert rc == 0 and got["ok"], got
-    assert got["hello"]["proto"] == got["proto_want"] == 6 and got["held"] is True
+    assert got["hello"]["proto"] == got["proto_want"] == 7 and got["held"] is True
     assert got["sdk_motion"] == "LieDown" and got["hal_motion"] == "lying"
     assert got["battery"] == 71.0 and got["estop"] is False and got["odom"]["valid"]
     assert got["odom_hz"] > 5

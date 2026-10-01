@@ -75,8 +75,10 @@ def _hostport(text: str) -> tuple[str, int]:
 INTAKE_PORT = 8444
 
 #: ``--hal d1max`` 的旁路进程与单位换算默认值(W00d 决定三 A:**都待真机实测**)。
-D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 0.4, "radps_per_unit": 1.0,
-                  "deadband": 0.05, "max_fraction": 0.5, "stopped_eps": 0.02}
+#: W12:按 SDK 文档的低速档(比例 1.0 = 1.0 m/s、1.5 rad/s),死区按 #37;比例上限 0.5 不变(最快约 0.5
+#: m/s)。
+D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 1.0, "radps_per_unit": 1.5,
+                  "deadband": 0.2, "max_fraction": 0.5, "stopped_eps": 0.02}
 
 
 def resolve_autonomy(args: argparse.Namespace) -> str:
@@ -131,10 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
     d1.add_argument("--sidecar", type=_hostport, default=None,
                     help="旁路进程 host:port,默认 127.0.0.1:8090")
     d1.add_argument("--mps-per-unit", type=float, default=None,
-                    help="Move 比例 1.0 对应的 m/s,默认 0.4")
+                    help="Move 比例 1.0 对应的 m/s,默认 1.0(SDK 文档低速档,W12)")
     d1.add_argument("--radps-per-unit", type=float, default=None,
-                    help="转向比例 1.0 对应的 rad/s,默认 1.0")
-    d1.add_argument("--deadband", type=float, default=None, help="低于这个 m/s 拒,默认 0.05")
+                    help="转向比例 1.0 对应的 rad/s,默认 1.5(SDK 文档低速档)")
+    d1.add_argument("--deadband", type=float, default=None,
+                    help="低于这个 m/s 拒,默认 0.2(#37:比例 0.11 几乎不动)")
     d1.add_argument("--max-fraction", type=float, default=None, help="比例上限,默认 0.5")
     d1.add_argument("--stopped-eps", type=float, default=None,
                     help="里程速度低于它算停了(m/s、rad/s),默认 0.02;要大于站着时的噪声")

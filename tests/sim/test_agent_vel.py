@@ -16,11 +16,11 @@ from tests.sim.test_agent_server import _client
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_协议是v6_跟C加加旁路进程的常量一致():
+def test_协议是v7_跟C加加旁路进程的常量一致():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     m = re.search(r"static const int kProtoVersion = (\d+);", src)
-    # W09i:clear 带 end、hello 带 follows_head
-    assert m and int(m.group(1)) == PROTO_VERSION == 6
+    # W12:state 带 speed_level、hello 带 speed_level_want
+    assert m and int(m.group(1)) == PROTO_VERSION == 7
 
 
 async def _站起(sim: SimAgentServer, client) -> None:
@@ -282,3 +282,24 @@ async def test_净空许可分两头_往前走向哪头要哪头的许可():
         assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
         await asyncio.sleep(0.15)
         assert sim.vx == 0.0, "SDK 不跟着调头:往前还是往狗头走,要狗头的许可"
+
+
+async def test_速度档位_被换掉就不走_过一会儿自己设回去():
+    """W12:同 vel_gate.hpp 的档位门 + patrol_agent 的档位线程。"""
+    async with _client() as (sim, client):
+        await _站起(sim, client)
+        sim.speed_level = 2                                   # 有人在厂家 App 上换成中速
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx == 0.0, "档位不对:不走(按低速换算的比例会快一倍)"
+        await asyncio.sleep(1.3)
+        assert sim.speed_level == 1, "过一会儿自己设回去"
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx > 0
+    async with _client(speed_level_want=0) as (sim, client):  # 不管档位
+        await _站起(sim, client)
+        sim.speed_level = 3
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx > 0 and sim.speed_level == 3

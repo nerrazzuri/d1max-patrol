@@ -39,6 +39,12 @@ from typing import Any
 #: 2:加了 ``halt``,并且 ``halt``/``estop`` 在旁路进程里**插队**执行、作废
 #: 正在走和排着队的 ``walk``。1 号旁路进程不认识 ``halt``、急停排在 walk
 #: 后面 —— 新巡检程序配它时停车会无声地不灵,所以握手时就拒。
+#: 7(W12):``state`` 带 ``speed_level``(SDK ``SpeedLevel``:0 未知、1 低速、2 中速、3 高速),
+#: ``hello`` 带
+#: ``speed_level_want``(旁路进程要的档,0 = 不管)。``Move`` 的比例值换成 m/s 全看档位;
+#: 档位不对旁路进程
+#: 不放行运动、自己再设回去,代理的 HAL 也拒速度命令(``speed_level``)。老旁路进程不报:不核。
+#:
 #: 6(W09i):``clear`` 带 ``end``(``head`` 默认 / ``tail``):净空许可分两头,SDK
 #: 的「往前」走向哪头要哪头的;
 #: ``hello`` 带 ``follows_head``(调头之后 SDK 的「往前」是不是变成狗尾那头;没报 = 是)—— 代理的 HAL
@@ -50,7 +56,7 @@ from typing import Any
 #:
 #: 4(W11):加了 ``clear`` —— 感知节点给的净空许可(``ms``、``dist``),旁路进程带
 #: ``--require-clearance`` 时没有有效许可就把前进分量置零(第二层刹停)。
-PROTO_VERSION = 6
+PROTO_VERSION = 7
 #: 代理(``sidecar_device``)能配的最老的旁路进程:代理只用到 ``vel``(3),``clear`` 是感知节点发的
 #: (W11 内审应修 1:严格等于 4 的话,只推新版代理、旁路进程还是 3 号时整机不能动)。
 MIN_PROTO_VERSION = 3
@@ -122,6 +128,8 @@ class Hello:
     robot: str = ""
     #: 调过头尾之后 SDK 的「往前」是不是跟着变成狗尾那头(6 号起报;没报 = 是)。
     follows_head: bool = True
+    #: 旁路进程要的速度档(7 号起报;None = 没报,不核;0 = 旁路进程不管档位)。
+    speed_level_want: int | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +154,8 @@ class StateFrame:
     ts_ms: int = 0
     #: 头尾方向:``head`` / ``tail`` / ``unknown``(W11a;4 号及更老的旁路进程不报 = ``unknown``)。
     head: str = "unknown"
+    #: 速度档(W12;0 未知、1 低速、2 中速、3 高速;None = 6 号及更老的旁路进程不报)。
+    speed_level: int | None = None
 
     @property
     def battery(self) -> float:
@@ -238,6 +248,11 @@ def decode_command(line: str | bytes) -> tuple[int, str, dict[str, Any]]:
 # ------------------------------------------------------------------ 下行解码
 
 
+def _int_or_none(v: Any) -> int | None:
+    """非负整数原样;没有、真假、坏值都是 None(当没报)。"""
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+
 def _load(line: str | bytes) -> dict[str, Any]:
     if isinstance(line, bytes):
         try:
@@ -305,6 +320,7 @@ def decode_frame(line: str | bytes) -> Downstream:
             held=bool(obj.get("held", False)),
             robot=str(obj.get("robot", "")),
             follows_head=obj.get("follows_head") is not False,
+            speed_level_want=_int_or_none(obj.get("speed_level_want")),
         )
     if kind == "ack":
         ack_id = obj.get("id")
@@ -323,6 +339,7 @@ def decode_frame(line: str | bytes) -> Downstream:
             head=HEAD_BY_CODE.get(obj.get("head"), "unknown")
             if isinstance(obj.get("head"), int) and not isinstance(obj.get("head"), bool)
             else "unknown",
+            speed_level=_int_or_none(obj.get("speed_level")),
         )
     if kind == "odom":
         return OdomFrame(
