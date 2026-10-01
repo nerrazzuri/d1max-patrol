@@ -277,8 +277,10 @@ async def test_挡的东西挪走了_接着走原来的路(tmp_path):
     await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
     await t.跑(2.0)
     t.world.dyn["person"] = (4.0, 3.6, 4.4, 4.4)
-    for _ in range(12):
+    for _ in range(50):                                      # 近障降速(W12):慢慢靠过去才被挡
         await t.一拍()
+        if t.nav._blocked_since is not None:
+            break
     assert t.nav._blocked_since is not None
     del t.world.dyn["person"]
     await t.跑(60.0)
@@ -563,3 +565,35 @@ async def test_半路调了头_导航桥自己停(tmp_path):
     t.r.inject_head("tail")                                   # 后雷达标过,狗尾为前本来也能走
     await t.一拍()
     assert t.status[-1] is NavStatus.FAILED, "行进方向变了:这一趟不接着走"
+
+
+# ------------------------------------------------------------ 近障降速(W12)
+
+def test_近障_只看行进方向前面那条带子里的挡_看不见不算():
+    from d1max_agent.obstacles import FRESH_S  # noqa: F401
+    v = _view_with([(30, 20)])                              # 40 格、0.1 m:x = 1.05、y = 0.05
+    assert v.near_ahead(1, 0.515, 0.79) == pytest.approx(1.05 - 0.515, abs=1e-6)
+    assert v.near_ahead(-1, 0.515, 0.79) == math.inf, "身后没有"
+    side = _view_with([(30, 35)])                           # y = 1.55:带子外
+    assert side.near_ahead(1, 0.515, 0.79) == math.inf
+    behind = _view_with([(9, 20)])                          # x = −1.05
+    assert behind.near_ahead(-1, 0.515, 0.79) == pytest.approx(1.05 - 0.515, abs=1e-6)
+    empty = ObstacleView(monotonic=lambda: 0.0)
+    assert empty.near_ahead(1, 0.5, 0.8) == math.inf
+
+
+async def test_近障降速_前面有人慢下来_离远了恢复(tmp_path):
+    t = 台子(tmp_path)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(3.0)
+    free = t.r.speed[0]
+    assert free > 0.5, "前提:空的时候走全速"
+    t.world.dyn["person"] = (t.r.x + 1.6, 4.6, t.r.x + 1.9, 4.9)  # 前面偏一点(不挡路、在带子里)
+    vs = []
+    for _ in range(15):
+        await t.一拍()
+        vs.append(t.r.speed[0])
+    assert min(vs) < free * 0.7 and min(vs) >= 0.2, vs
+    await t.跑(80.0)
+    assert NavStatus.SUCCEED in t.status and not t.crashed

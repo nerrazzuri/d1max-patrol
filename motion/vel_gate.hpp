@@ -11,6 +11,9 @@
 //   - Live:速度线程每次要发 Move 之前都问一次,上面这些条件现查;
 //   - 净空许可(W11 第二层,W08 决定 8):RequireClearance 打开之后,前进分量只在感知节点给的
 //     许可没过期时放行,过期就把前进分量置零(转向、后退照常;不在 Register 里拒 —— 拒了代理当失败)。
+//   - 速度档位(W12):SDK 的 Move 比例值换成 m/s 全看档位(低速 1.0 = 1 m/s、中速 1.0 = 2 m/s)。要了档位
+//     (SetSpeedWant > 0)之后,状态回调报的档位跟要的不一样(有人在厂家 App 上换了档、没收到过状态)就不放行
+//     任何运动 —— 代理按低速档的换算发的比例,换了档就快一倍;
 //     许可分两头(W09i):SDK 的「往前」走向哪一头,就要哪一头的许可 —— 狗头为前是狗头那头;狗尾为前
 //     时 SDK 跟着调头(默认,真机项核)是狗尾那头,不跟就还是狗头那头;头尾不知道:不放。
 // 作废 = 代次加一。目标记着登记时的代次,代次对不上就永远不再生效 —— 急停解除、重新站起
@@ -110,6 +113,7 @@ class Gate {
       return std::nullopt;
     }
     if (estop_latched_ || !UnsafeLocked().empty()) return std::nullopt;
+    if (speed_want_ > 0 && speed_level_ != speed_want_) return std::nullopt;  // 档位不对:不走
     if (!target_ || target_->epoch != epoch_ || now >= target_->until) return std::nullopt;
     Target t = *target_;
     if (require_clearance_ && t.fwd > 0) {
@@ -134,6 +138,18 @@ class Gate {
   bool ClearanceRequired() {
     std::lock_guard<std::mutex> lk(mtx_);
     return require_clearance_;
+  }
+
+  /// 要哪个速度档(旁路进程参数 --speed-level,默认 1 低速;0 = 不管档位)。
+  void SetSpeedWant(int level) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    speed_want_ = level;
+  }
+
+  /// SDK 状态回调报的当前档位(0 未知)。
+  void OnSpeedLevel(int level) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    speed_level_ = level;
   }
 
   /// 调过头尾之后 SDK 的「往前」是不是跟着变成狗尾那头(旁路进程参数 --sdk-follows-head,默认是)。
@@ -189,6 +205,8 @@ class Gate {
   bool require_clearance_ = false;
   int head_ = 0;
   bool follows_head_ = true;
+  int speed_want_ = 0;
+  int speed_level_ = 0;
   Clock::time_point clear_until_[2]{};
 };
 

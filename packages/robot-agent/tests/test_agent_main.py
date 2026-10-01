@@ -81,7 +81,7 @@ def test_hal_d1max的参数(tmp_path):
         (0.42, 0.9, 0.06, 0.3, True)
     assert a.stopped_eps == 0.05
     d = _args(tmp_path, "--hal", "d1max")
-    assert d.sidecar == ("127.0.0.1", 8090) and d.mps_per_unit == 0.4 and not d.invert_yaw
+    assert d.sidecar == ("127.0.0.1", 8090) and d.mps_per_unit == 1.0 and not d.invert_yaw
     assert d.stopped_eps == 0.02
     with pytest.raises(SystemExit):
         _args(tmp_path, "--hal", "d1max", "--sidecar", "nope")

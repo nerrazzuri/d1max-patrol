@@ -1519,3 +1519,13 @@ def test_前后雷达合并的启动脚本与单元_只装不启用_卸载删干
     assert "# @删除 /etc/systemd/system/d1max-lidar-merge.service" in 卸
     assert 'rm_sys "$UNIT_DIR/$MERGE_UNIT"' in 卸 and 'rm_sys "$MERGE_WANTS_LINK"' in 卸
     assert '"$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT"' in 卸, "先停吃合并话题的定位器,再停合并"
+
+
+def test_装机脚本_老模板的换算猜测值只提示不改():
+    """W12:老模板的例子写 --mps-per-unit 0.4;照抄进 env 的话代理以为自己只有 0.2 m/s、
+    限速区限不住。"""
+    装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "--mps-per-unit 1.0 --radps-per-unit 1.5" in 装
+    i = 装.index("--mps-per-unit 0.4(老模板的猜测值)")
+    assert "grep -qE -- '--mps-per-unit" in 装[i - 400:i]
+    assert "sed -i" not in 装[i - 400:i + 400], "不改人手写的配置"

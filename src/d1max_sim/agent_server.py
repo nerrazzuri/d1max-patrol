@@ -86,7 +86,13 @@ class SimAgentServer:
         telemetry_hz: float = TELEMETRY_HZ,
         require_clearance: bool = False,
         follows_head: bool = True,
+        speed_level_want: int = 1,
     ) -> None:
+        #: 同 ``patrol_agent --speed-level``(W12):要的速度档(0 = 不管);``speed_level`` 是此刻的档
+        #: (测试改它 = 有人在厂家 App 上换了档)。档位不对不放行运动,过 1 s 自己设回去。
+        self.speed_level_want = speed_level_want
+        self.speed_level = speed_level_want if speed_level_want > 0 else 1
+        self._speed_bad_since: float | None = None
         #: 同 ``patrol_agent --require-clearance``(W11 第二层):没有有效的净空许可,前进分量置零。
         self.require_clearance = require_clearance
         #: 净空许可分两头(W09i):[狗头那头, 狗尾那头] 到期时刻。
@@ -210,6 +216,7 @@ class SimAgentServer:
             self._send(writer, {
                 "t": "hello", "proto": PROTO_VERSION, "sdk": self._sdk,
                 "held": self._held, "robot": "sim://d1max", "follows_head": self.follows_head,
+                "speed_level_want": self.speed_level_want,
             })
             await writer.drain()
             telemetry = asyncio.create_task(self._telemetry_loop(writer))
@@ -249,8 +256,24 @@ class SimAgentServer:
 
     # -------------------------------------------------------------- 遥测
 
+    def _speed_wrong(self) -> bool:
+        return self.speed_level_want > 0 and self.speed_level != self.speed_level_want
+
+    def _reassert_speed(self) -> None:
+        """同 patrol_agent 的档位线程:档位被换掉、握着控制权,过 1 s 设回去。"""
+        if not self._speed_wrong() or not self._held:
+            self._speed_bad_since = None
+            return
+        now = time.monotonic()
+        if self._speed_bad_since is None:
+            self._speed_bad_since = now
+        elif now - self._speed_bad_since >= 1.0:
+            self.speed_level = self.speed_level_want
+            self._speed_bad_since = None
+
     async def _telemetry_loop(self, writer: asyncio.StreamWriter) -> None:
         while True:
+            self._reassert_speed()
             if (self._drop_after is not None and self._held
                     and time.monotonic() - self._started_at >= self._drop_after):
                 self._held = False
@@ -263,6 +286,7 @@ class SimAgentServer:
                 "estop_sw": self.estop_software.value,
                 "estop_hw": self.estop_hardware.value,
                 "head": self.head,
+                "speed_level": self.speed_level,
                 "ts_ms": int(time.time() * 1000),
             })
             self._send(writer, {
@@ -428,6 +452,8 @@ class SimAgentServer:
                     self._vel_until = 0.0
                     break
                 fwd, lat, yaw = self._vel
+                if self._speed_wrong():
+                    fwd = lat = yaw = 0.0             # 同 vel_gate.hpp 的 Live:档位不对不走
                 lead = self._lead_end()
                 if self.require_clearance and fwd > 0 and (
                         lead is None or time.monotonic() >= self._clear_until[lead]):

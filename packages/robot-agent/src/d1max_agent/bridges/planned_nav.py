@@ -74,6 +74,15 @@ MAX_REPLANS = 3
 MAX_SIGMA_MARGIN_M = 0.5
 K_LIN = 1.0
 K_ANG = 2.0
+#: 近障降速(W12,人也是障碍;认不出人):行进方向前面、机身两边各多 :data:`NEAR_BAND_M`
+#: 的带子里最近的「挡」
+#: 在 :data:`NEAR_SLOW_FROM_M` 以内就开始降,到 :data:`NEAR_SLOW_AT_M` 降到 :data:
+#: `NEAR_MIN_MPS`(线性)。
+#: 刹停归守卫(按实测速度);这里只是让狗在人边上不急着走。
+NEAR_BAND_M = 0.5
+NEAR_SLOW_FROM_M = 2.0
+NEAR_SLOW_AT_M = 0.5
+NEAR_MIN_MPS = 0.25
 
 
 def _heading(yaw: float, d: int) -> float:
@@ -548,11 +557,25 @@ class PlannedNavBackend(HalNavBackend):
             vx = 0.0
         else:
             limit = min(self._vmax, self._path_speed(seg, proj),
-                        self._cm.speed_at(here.x, here.y))
+                        self._cm.speed_at(here.x, here.y), self._near_cap(d))
             vx = d * max(min(limit, K_LIN * dgoal), self._caps.deadband_vx)
         await self._move(vx, wz, dt_s, here)
 
     # ------------------------------------------------------------ 避障(W11)
+
+    def _near_cap(self, d: int) -> float:
+        """近障降速(W12):前面最近的「挡」越近越慢;没配避障、前面没东西不限。"""
+        if self.obstacles is None or self.guard is None:
+            return math.inf
+        g = self.guard
+        margin = getattr(g, "margin", 0.05)
+        near = self.obstacles.near_ahead(d, getattr(g, "body_len", 0.93) / 2 + margin,
+                                         getattr(g, "body_wid", 0.48) / 2 + margin + NEAR_BAND_M)
+        if near >= NEAR_SLOW_FROM_M:
+            return math.inf
+        lo = max(NEAR_MIN_MPS, self._caps.deadband_vx)
+        f = max(0.0, (near - NEAR_SLOW_AT_M) / (NEAR_SLOW_FROM_M - NEAR_SLOW_AT_M))
+        return lo + (max(self._vmax, lo) - lo) * f
 
     def tail_ok(self) -> bool:
         """狗尾为前能不能自己走(W09i):配了避障、感知报后雷达外参标过 —— 标过它的「空」才算,

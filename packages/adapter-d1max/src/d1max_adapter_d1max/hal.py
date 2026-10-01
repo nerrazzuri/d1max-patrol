@@ -7,7 +7,11 @@
 
 - **单位**(决定三 A):HAL 说 m/s 与 rad/s,SDK 的 ``Move`` 收比例值。``mps_per_unit`` /
   ``radps_per_unit`` 是比例 1.0 对应的速度,``max_fraction`` 是比例上限,``deadband_mps`` 以下拒。
-  **这几个数都没实测过**(``docs/庄园场景待真机测试.md``),默认值取保守的,实测后改配置。
+  默认值按 **SDK 文档的低速档**(W12:比例 1.0 = 1.0 m/s、1.5 rad/s;#38 粗测每单位约 1.1 m/s),死区按
+  #37(0.11 几乎不动、0.3 明显走)取 0.2 m/s。比例上限 0.5 不变:实际最快仍约 0.5 m/s。真机用
+  ``tools/w00d_motion_check.py`` 量过后改配置。
+- **档位**(W12):换算只对旁路进程要的那一档成立。7 号旁路进程报此刻的档位与要的档位,对不上就拒速度
+  命令(``speed_level``;旁路进程自己会设回去);老旁路进程不报,不核。
 - **控制权**(决定二 A):``control_releasable = false``,``release_control()`` 抛
   :class:`HalUnsupported`。放一次 SDK 控制权就得重启整台 RK3588。
 - **停没停**:看旁路进程报上来的里程速度;刚发出的速度还在有效期里、或里程不新鲜,都不算停。
@@ -86,8 +90,8 @@ class D1MaxHal:
     adapter_id = ADAPTER_ID
 
     def __init__(self, host: str = DEFAULT_AGENT_HOST, port: int = DEFAULT_AGENT_PORT, *,
-                 mps_per_unit: float = 0.4, radps_per_unit: float = 1.0,
-                 deadband_mps: float = 0.05, max_fraction: float = 0.5,
+                 mps_per_unit: float = 1.0, radps_per_unit: float = 1.5,
+                 deadband_mps: float = 0.2, max_fraction: float = 0.5,
                  invert_yaw: bool = False, stopped_eps: float = STOPPED_EPS,
                  frame_id: str = "odom",
                  now_ms: Callable[[], int] = wall_ms,
@@ -202,6 +206,8 @@ class D1MaxHal:
             return _reject("estop")
         if await self.motion_status() is not MotionStatus.READY:
             return _reject("not_ready")          # 趴着、锁死、姿态未知、非待命站姿:不下发
+        if self.speed_level_wrong():
+            return _reject("speed_level")        # 换算只对要的那一档成立(W12)
         if not all(math.isfinite(v) for v in (cmd.vx, cmd.vy, cmd.wz)):
             return _reject("not_finite")
         if abs(cmd.vy) > 1e-9:
@@ -257,6 +263,14 @@ class D1MaxHal:
                     and st.estop_hardware is EmergencyStatus.RECOVER)
 
     # ------------------------------------------------------------ 感知
+
+    def speed_level_wrong(self) -> bool:
+        """旁路进程要了档位(7 号起)而此刻的档位不是它(或还不知道)。"""
+        hello, st = self._b.hello, self._b.last_state
+        want = hello.speed_level_want if hello is not None else None
+        if not want:
+            return False                          # 老旁路进程不报、或旁路进程不管档位
+        return st is None or st.speed_level != want
 
     def _sdk_sign(self) -> float:
         """SDK 的「往前」是机身的哪个方向:+1 狗头、-1 狗尾(狗尾为前且 SDK 跟着调头)。"""

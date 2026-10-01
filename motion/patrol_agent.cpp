@@ -87,7 +87,12 @@ using namespace robot_sdk;
 // 许可;hello 带 follows_head(参数 --sdk-follows-head 0|1,默认 1:调头之后 SDK 的「往前」变成狗尾那头,
 // 真机项核)—— 代理的 HAL 照它把里程、速度换成机身系。5 号旁路进程会把 end=tail 的许可当成狗头的,
 // 感知节点只对 ≥ 6 的发狗尾许可。
-static const int kProtoVersion = 6;
+//
+// 7(W12):state 带 speed_level(SDK RobotState.speed_level:0 未知、1 低速、2 中速、3 高速);hello 带
+// speed_level_want(参数 --speed-level,默认 1)。拿到控制权就 SetSpeed 到要的档,之后档位被换掉
+// (厂家 App)就每秒再设一次;档位不对的时候不放行任何运动(Move 的比例值换成 m/s 全看档位)。
+static const int kProtoVersion = 7;
+static int g_speed_want = 1;
 static bool g_follows_head = true;
 
 // 一次 Move 在机器上维持约 1s(清单 #38)，靠 50ms 连续下发维持行走。
@@ -236,6 +241,7 @@ static int g_motion = 0;
 static double g_batt1 = 0.0, g_batt2 = 0.0;
 static int g_estop_sw = 0, g_estop_hw = 0;
 static int g_head = 0;  // SDK HeadDirection:0 未知、1 狗头为前、2 狗尾为前
+static int g_speed = 0;  // SDK SpeedLevel:0 未知、1 低速、2 中速、3 高速
 static std::atomic<bool> g_held{false};
 static std::string g_robot_addr;
 static SDKClient* g_client = nullptr;
@@ -260,6 +266,7 @@ static std::string StateFrame() {
      << ",\"estop_sw\":" << g_estop_sw
      << ",\"estop_hw\":" << g_estop_hw
      << ",\"head\":" << g_head
+     << ",\"speed_level\":" << g_speed
      << ",\"ts_ms\":" << NowMs() << "}";
   return os.str();
 }
@@ -275,6 +282,7 @@ class DataCb : public IDataCallback {
       std::lock_guard<std::mutex> lk(g_state_mtx);
       g_motion = static_cast<int>(d.motion_status);
       g_head = static_cast<int>(d.head_direction);
+      g_speed = static_cast<int>(d.speed_level);
       // 不在位的电池 power 读数没意义，直接报 0，让 Python 那头的
       // "取两块里低的那块"跳过它(StateFrame.battery 只看 >0 的)。
       g_batt1 = d.battery.present1 ? d.battery.power1 : 0.0f;
@@ -287,6 +295,7 @@ class DataCb : public IDataCallback {
                    static_cast<int>(d.software_emergency_status),
                    static_cast<int>(d.hardware_emergency_status));
     g_gate.OnHead(static_cast<int>(d.head_direction));
+    g_gate.OnSpeedLevel(static_cast<int>(d.speed_level));
     Broadcast(StateFrame());
   }
 
@@ -684,6 +693,7 @@ static void ServeClient(int fd) {
   hello << "{\"t\":\"hello\",\"proto\":" << kProtoVersion
         << ",\"sdk\":\"0.1.1\",\"held\":" << (g_held.load() ? "true" : "false")
         << ",\"follows_head\":" << (g_follows_head ? "true" : "false")
+        << ",\"speed_level_want\":" << g_speed_want
         << ",\"robot\":\"" << JsonEscape(g_robot_addr) << "\"}";
   SendTo(fd, hello.str());
   // 立刻补一帧状态：客户端刚连上就该能读到电量和运动状态，不必干等到
@@ -843,7 +853,7 @@ int main(int argc, char** argv) {
   if (argc < 3) {
     std::cerr << "usage: " << argv[0]
               << " <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--require-clearance]"
-                 " [--sdk-follows-head 0|1]\n"
+                 " [--sdk-follows-head 0|1] [--speed-level 0|1|2|3]\n"
               << "  例: " << argv[0]
               << " 192.168.168.168 8082 --listen 127.0.0.1:8090"
                  " --fifo /tmp/d1max.cmd\n";
@@ -875,6 +885,13 @@ int main(int argc, char** argv) {
       }
       g_follows_head = v == "1";
       g_gate.SdkFollowsHead(g_follows_head);
+    } else if (arg == "--speed-level" && i + 1 < argc) {
+      const std::string v = argv[++i];
+      if (v != "0" && v != "1" && v != "2" && v != "3") {
+        std::cerr << "--speed-level 要是 0(不管)、1 低速、2 中速、3 高速\n";
+        return 2;
+      }
+      g_speed_want = std::atoi(v.c_str());
     } else {
       std::cerr << "未知参数: " << arg << "\n";
       return 2;
@@ -931,6 +948,11 @@ int main(int argc, char** argv) {
   if (ec)
     std::cout << "[!] 没拿到控制权。遥测大概还能读，但动不了。"
                  "重启 RK3588 再抢一次(清单 #46/#47)\n";
+  g_gate.SetSpeedWant(g_speed_want);
+  if (!ec && g_speed_want > 0) {
+    auto se = client.SetSpeed(g_speed_want, 2000);
+    std::cout << "[agent] SetSpeed(" << g_speed_want << "): " << (se ? se.message() : "ok") << "\n";
+  }
   client.SetMcConfig(true, 2000);
   client.SetSpeedReportConfig(true, 20, 2000);
   client.SetJointStateConfig(true, 2000);
@@ -953,6 +975,31 @@ int main(int argc, char** argv) {
   }
 
   std::thread(VelLoop).detach();
+
+  // 速度档位(W12):被换掉了(厂家 App)就每秒再设一次;换回来之前运动安全门不放行。
+  std::thread([]() {
+    int told = -1;
+    while (g_running.load()) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      if (g_speed_want <= 0 || !g_held.load()) continue;
+      int now;
+      {
+        std::lock_guard<std::mutex> lk(g_state_mtx);
+        now = g_speed;
+      }
+      if (now == g_speed_want) {
+        told = -1;
+        continue;
+      }
+      if (now != told) {
+        std::cout << "[!] 速度档位是 " << now << "(要 " << g_speed_want
+                  << "):不放行运动,再设一次\n";
+        told = now;
+      }
+      std::lock_guard<std::mutex> lk(g_sdk_mtx);
+      g_client->SetSpeed(g_speed_want, 0);
+    }
+  }).detach();
 
   std::thread([]() {
     // 心跳：定期续一次 TakeControl，并把状态刷进日志。上装那头一旦松手，

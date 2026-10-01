@@ -139,6 +139,24 @@ class ObstacleView:
             return "initializing"
         return "lost"
 
+    def near_ahead(self, travel: int, half_len: float, half_wid: float) -> float:
+        """最新一帧(新鲜的才算)里,行进方向上机身前沿往前、机身两边各宽 ``half_wid`` 的带子里,最近的
+        「挡」离前沿多远(米);没有是 inf。只看「挡」:「看不见」守卫管,
+        算进来的话侧面盲带会让狗一直慢。
+        近障降速用(W12),不管安全 —— 帧是此刻之前 ≤ :data:`FRESH_S` 的,差几厘米无所谓。"""
+        if not self.frames or self.age() > FRESH_S:
+            return math.inf
+        f = self.frames[0]
+        n = f.size
+        c = (np.arange(n) - n / 2 + 0.5) * f.res
+        occ = f.occ.reshape(n, n).astype(bool)
+        x = c[:, None] * (1.0 if travel >= 0 else -1.0)       # 行 → 行进方向上的前后
+        y = c[None, :]
+        band = occ & (x > half_len) & (np.abs(y) <= half_wid)
+        if not band.any():
+            return math.inf
+        return float((np.broadcast_to(x, band.shape)[band] - half_len).min())
+
     def lookup(self, pts: list[tuple[float, float]], pose_now: tuple[float, float, float]
                ) -> tuple[list[int], list[int]]:
         """此刻狗身系的点 → (挡的点的下标, 未知的点的下标)。numpy 一批算(内审应修 7:逐点逐帧
