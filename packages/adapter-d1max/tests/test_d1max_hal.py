@@ -362,3 +362,17 @@ async def test_故障是当前的不是历史_不再报就老化掉(monkeypatch)
                             lambda: real() + hal_mod.FAULT_FRESH_S + 1)
         assert await hal.faults() == ()
         assert (await hal.health()).faults == ()
+
+
+async def test_头尾方向从旁路进程的状态来():
+    """W11a:旁路进程报的 head 进 Health;调过来、不知道都如实报。"""
+    async with _台子() as (sim, hal):
+        assert (await hal.health()).head == "head"
+        sim.head = 2
+        assert await _等(lambda: _head(hal, "tail"))
+        sim.head = 0
+        assert await _等(lambda: _head(hal, "unknown"))
+
+
+async def _head(hal, want):
+    return (await hal.health()).head == want

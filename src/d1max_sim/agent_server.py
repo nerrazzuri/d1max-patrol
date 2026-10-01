@@ -104,6 +104,8 @@ class SimAgentServer:
         self.battery2 = battery
         self.estop_software = EmergencyStatus.RECOVER
         self.estop_hardware = EmergencyStatus.RECOVER
+        #: 头尾方向(W11a,SDK ``HeadDirection``):1 狗头为前、2 狗尾为前、0 未知。
+        self.head = 1
         #: 世界系里程,单位米/弧度。
         self.x = 0.0
         self.y = 0.0
@@ -230,6 +232,7 @@ class SimAgentServer:
                 "battery2": self.battery2,
                 "estop_sw": self.estop_software.value,
                 "estop_hw": self.estop_hardware.value,
+                "head": self.head,
                 "ts_ms": int(time.time() * 1000),
             })
             self._send(writer, {
@@ -391,7 +394,8 @@ class SimAgentServer:
                     self._vel_until = 0.0
                     break
                 fwd, lat, yaw = self._vel
-                if self.require_clearance and time.monotonic() >= self._clear_until and fwd > 0:
+                if self.require_clearance and fwd > 0 and (time.monotonic() >= self._clear_until
+                                                           or self.head != 1):
                     fwd = 0.0                     # 同 vel_gate.hpp 的 Live:没有净空许可不许往前
                 if max(abs(fwd), abs(lat), abs(yaw)) < WALK_DEADBAND:
                     # 量太小只是原地蹭(清单 #37),不动;真机也不报错。

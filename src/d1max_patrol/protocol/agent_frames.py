@@ -39,9 +39,13 @@ from typing import Any
 #: 2:加了 ``halt``,并且 ``halt``/``estop`` 在旁路进程里**插队**执行、作废
 #: 正在走和排着队的 ``walk``。1 号旁路进程不认识 ``halt``、急停排在 walk
 #: 后面 —— 新巡检程序配它时停车会无声地不灵,所以握手时就拒。
+#: 5(W11a):``state`` 帧带 ``head``(SDK ``RobotState.head_direction``:0 未知、1 狗头为前、
+#: 2 狗尾为前)。
+#: 4 号及更老的旁路进程不报,代理按「未知」处理(不许自己走)—— 能连,但要重编才能自主走。
+#:
 #: 4(W11):加了 ``clear`` —— 感知节点给的净空许可(``ms``、``dist``),旁路进程带
 #: ``--require-clearance`` 时没有有效许可就把前进分量置零(第二层刹停)。
-PROTO_VERSION = 4
+PROTO_VERSION = 5
 #: 代理(``sidecar_device``)能配的最老的旁路进程:代理只用到 ``vel``(3),``clear`` 是感知节点发的
 #: (W11 内审应修 1:严格等于 4 的话,只推新版代理、旁路进程还是 3 号时整机不能动)。
 MIN_PROTO_VERSION = 3
@@ -88,6 +92,9 @@ class EmergencyStatus(str, Enum):
 
 EMERGENCY_BY_CODE: dict[int, EmergencyStatus] = dict(enumerate(EmergencyStatus))
 
+#: SDK ``HeadDirection``:0 未知、1 狗头为前、2 狗尾为前(sdk_type.hpp)。
+HEAD_BY_CODE: dict[int, str] = {0: "unknown", 1: "head", 2: "tail"}
+
 
 class AgentProtocolError(Exception):
     """收到的行不是本协议能理解的东西。"""
@@ -130,6 +137,8 @@ class StateFrame:
     estop_software: EmergencyStatus
     estop_hardware: EmergencyStatus
     ts_ms: int = 0
+    #: 头尾方向:``head`` / ``tail`` / ``unknown``(W11a;4 号及更老的旁路进程不报 = ``unknown``)。
+    head: str = "unknown"
 
     @property
     def battery(self) -> float:
@@ -303,6 +312,9 @@ def decode_frame(line: str | bytes) -> Downstream:
             estop_software=_emergency(obj.get("estop_sw", 0)),
             estop_hardware=_emergency(obj.get("estop_hw", 0)),
             ts_ms=int(_num(obj, "ts_ms")),
+            head=HEAD_BY_CODE.get(obj.get("head"), "unknown")
+            if isinstance(obj.get("head"), int) and not isinstance(obj.get("head"), bool)
+            else "unknown",
         )
     if kind == "odom":
         return OdomFrame(

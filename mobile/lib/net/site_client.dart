@@ -178,6 +178,15 @@ String rtkText(Map<String, dynamic>? rtk) {
   return parts.join('，');
 }
 
+/// 头尾方向的人话（W11a）：不是狗头为前时说清楚（前后雷达合并之前不能自己走）。狗头为前、老狗是空串。
+String headText(Map<String, dynamic>? caps) {
+  final tasks = caps?['tasks'];
+  final h = tasks is Map ? tasks['head'] : null;
+  if (h is! Map || h['direction'] == 'head') return '';
+  final d = h['direction'] == 'tail' ? '狗尾为前' : '不知道';
+  return '头尾：$d（前后雷达合并之前不能自己走，遥控照常）';
+}
+
 /// 局部避障的人话（W11）：能力里的 `obstacles`（配了感知节点的狗才有）。不是「正常」的时候站点不派
 /// 会自己走的任务。没配是空串。
 String obstaclesText(Map<String, dynamic>? caps) {

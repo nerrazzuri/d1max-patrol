@@ -34,6 +34,8 @@ constexpr int kMotionLieDown = 2;
 constexpr int kMotionLocked = 4;
 // EmergencyStatus 是三态:0 Unknown、1 Recover(已解除)、2 Stop。**只有 1 算安全。**
 constexpr int kEstopRecover = 1;
+// HeadDirection:1 = 狗头为前(装前雷达的那一头)。
+constexpr int kHeadForward = 1;
 
 constexpr double kMaxFraction = 0.5;
 constexpr int kTtlMinMs = 50;
@@ -104,7 +106,8 @@ class Gate {
     if (estop_latched_ || !UnsafeLocked().empty()) return std::nullopt;
     if (!target_ || target_->epoch != epoch_ || now >= target_->until) return std::nullopt;
     Target t = *target_;
-    if (require_clearance_ && now >= clear_until_ && t.fwd > 0) t.fwd = 0;  // 没有净空许可:不许往前
+    if (require_clearance_ && (now >= clear_until_ || head_ != kHeadForward) && t.fwd > 0)
+      t.fwd = 0;  // 没有净空许可、或者调过头了(许可按前雷达那头算):不许往前
     return t;
   }
 
@@ -112,6 +115,13 @@ class Gate {
   void RequireClearance(bool on) {
     std::lock_guard<std::mutex> lk(mtx_);
     require_clearance_ = on;
+  }
+
+  /// 头尾方向(SDK 状态回调)。开了净空许可门时,不是「狗头为前」就不放行前进:感知的许可是按前雷达
+  /// 那头算的,调过头之后往前走是往后雷达那头走(W11a;前后雷达合并之前)。
+  void OnHead(int head) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    head_ = head;
   }
 
   bool ClearanceRequired() {
@@ -155,6 +165,7 @@ class Gate {
   int estop_sw_ = 0, estop_hw_ = 0;
   std::optional<Target> target_;
   bool require_clearance_ = false;
+  int head_ = 0;
   Clock::time_point clear_until_{};
 };
 

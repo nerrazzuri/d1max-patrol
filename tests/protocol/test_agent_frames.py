@@ -229,3 +229,14 @@ def test_两块都读不到时返回0而不是崩():
 ])
 def test_任一路急停生效即为急停(sw, hw, expected):
     assert _state(estop_software=sw, estop_hardware=hw).emergency is expected
+
+
+def test_状态帧带头尾方向_老旁路进程不报算不知道():
+    """W11a:``head``(SDK HeadDirection:0 未知、1 狗头为前、2 狗尾为前)。"""
+    base = {"t": "state", "motion": 5, "battery1": 70, "battery2": 0, "estop_sw": 1,
+            "estop_hw": 1, "ts_ms": 1}
+    assert decode_frame(json.dumps(base | {"head": 1})).head == "head"
+    assert decode_frame(json.dumps(base | {"head": 2})).head == "tail"
+    assert decode_frame(json.dumps(base | {"head": 0})).head == "unknown"
+    for bad in ({}, {"head": True}, {"head": 7}, {"head": "1"}):
+        assert decode_frame(json.dumps(base | bad)).head == "unknown", bad

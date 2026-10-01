@@ -286,6 +286,21 @@ static void 两拍之间控制权短暂丢失_也不复活() {
   CHECK(!r.gate.Live(true, r.now));
 }
 
+static void 净空许可_开了门_调过头尾就不放行前进() {
+  Rig r;
+  r.gate.RequireClearance(true);
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(300));
+  CHECK(r.vel(0.3, 1000) == "");
+  CHECK(r.gate.Live(true, r.now)->fwd == 0);   // 没收到过头尾方向 = 未知:不放
+  r.gate.OnHead(1);
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.3);
+  r.gate.OnHead(2);                             // 狗尾为前:许可是按前雷达那头算的
+  CHECK(r.gate.Live(true, r.now)->fwd == 0);
+  Rig q;                                        // 没开门:头尾不管
+  q.gate.OnHead(2);
+  CHECK(q.vel(0.3) == "" && q.gate.Live(true, q.now)->fwd == 0.3);
+}
+
 static void 净空许可_没开不管_开了没许可只零前进_转向后退照常() {
   Rig r;  // 没开:照旧
   CHECK(r.vel(0.3) == "");
@@ -302,6 +317,7 @@ static void 净空许可_没开不管_开了没许可只零前进_转向后退�
 static void 净空许可_有效期内放行_过期置零_旧许可不截短新的() {
   Rig r;
   r.gate.RequireClearance(true);
+  r.gate.OnHead(1);
   r.gate.SetClearance(r.now + std::chrono::milliseconds(300));
   CHECK(r.vel(0.3, 1000) == "");
   CHECK(r.gate.Live(true, r.now)->fwd == 0.3);
@@ -318,6 +334,7 @@ static void 净空许可_有效期内放行_过期置零_旧许可不截短新�
 }
 
 int main() {
+  净空许可_开了门_调过头尾就不放行前进();
   净空许可_没开不管_开了没许可只零前进_转向后退照常();
   净空许可_有效期内放行_过期置零_旧许可不截短新的();
   收下就走_到期自停();
