@@ -37,11 +37,13 @@ from d1max_agent.planning.planner import PlannedPath, Planner
 from d1max_contract.hal import RobotHAL
 from d1max_contract.zones import Zone, ZoneSet, distance_to_polygon
 from d1max_patrol.backends.base import (
+    AlgErrorEvent,
     NavCancelledError,
     NavNotLocalizedError,
     NavRequestError,
 )
-from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
+from d1max_patrol.protocol.nav_frames import AlgErrorItem
+from d1max_patrol.protocol.nav_types import ALG_LIDAR_DISCONNECTED, LocStatus, NavStatus, Pose
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +55,17 @@ SPEED_LOOK_M = 1.0
 ARRIVE_TOL_M = 0.15
 YAW_TOL_RAD = 0.15
 TURN_IN_PLACE_RAD = 0.5
+#: 被挡(W11,W08 决定 8):挡了这么久就把挡住的格子记进临时障碍层、绕;之后每隔这么久再试;
+#: 满这么久还没走成就放弃(FAILED,引擎按点位失败走);满这么久发一次事件。临时障碍这么久过期。
+BLOCK_DETOUR_S = 2.0
+BLOCK_RETRY_S = 5.0
+BLOCK_GIVEUP_S = 20.0
+BLOCK_REPORT_S = 5.0
+TEMP_OBSTACLE_S = 30.0
+#: 原地转被「看不见」挡住(机身两侧是两台半球雷达的盲带,刚起来、站久了没有记忆):前面看得清是空的,
+#: 就笔直往前挪这么远(这么快)再转 —— 挪过一个机身长,两侧就在刚才看过的范围里了。每次被挡最多挪一次。
+CREEP_M = 1.0
+CREEP_V = 0.2
 #: 偏离路径多远就停下重规划(W10 内审应修 5:原来 1 m,比膨胀半径还大)。
 MAX_DEVIATION_M = 0.3
 #: 狗身中心离禁行区这么近就算压进去了(机身半宽 0.24 m;规划出的路离禁行区至少外接圆半径)。
@@ -104,6 +117,20 @@ class PlannedNavBackend(HalNavBackend):
         self._boxes: list[tuple[float, float, float, float, Zone]] = []
         #: 路长估计单用一个规划器(内审应修 7:不跟 goto、重规划抢同一个子进程)。
         self._hint_planner: Planner | None = None
+        #: 局部避障(W11):感知的滚动记忆与守卫;``None`` = 没配(``--obstacles none``)。
+        self.obstacles: Any = None
+        self.guard: Any = None
+        self._v_meas = 0.0
+        self._odom_pose: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._blocked_since: float | None = None
+        self._next_detour = 0.0
+        self._blocked_told = False
+        self._detoured = False
+        self._replan_kind = ""
+        self._creep_from: tuple[float, float] | None = None
+        self._crept = False
+        #: 临时障碍层:地图规划栅格的格 → 过期时刻(秒,后端的钟)。
+        self._temp: dict[tuple[int, int], float] = {}
 
     # ------------------------------------------------------------ 图与区域
 
@@ -145,6 +172,12 @@ class PlannedNavBackend(HalNavBackend):
             if base is None:
                 raise NavRequestError("goto", f"规划不了:{self.plan_problem}")
             blocked, res, origin = base
+            if self._temp:
+                blocked = blocked.copy()
+                h, w = blocked.shape
+                for (r, c) in self._temp:
+                    if 0 <= r < h and 0 <= c < w:
+                        blocked[r, c] = True
             cm = cmod.build(blocked, res, origin, self._effective(zs),
                             robot_radius_m=self.robot_radius_m + cmod.INFLATE_MARGIN_M,
                             nogo_margin_m=key * 0.1)
@@ -270,6 +303,13 @@ class PlannedNavBackend(HalNavBackend):
     async def _plan_from_here(self, pose: Pose, op: str) -> tuple[PlannedPath, Costmap]:
         if self._base is None:
             raise NavRequestError(op, f"规划不了:{self.plan_problem}")
+        if self.obstacles is not None:
+            st = self.obstacles.state()
+            if st not in ("ok", "stale"):
+                from d1max_agent.obstacles import describe
+                raise NavRequestError(op, f"避障用不了:障碍数据{describe(st)}"
+                                          + (f"({self.obstacles.reason})"
+                                             if self.obstacles.reason else ""))
         here = await self._here()
         if here is None or self._loc is LocStatus.LOC_LOST:
             raise NavNotLocalizedError(op, "没有可信定位,不规划")
@@ -323,13 +363,17 @@ class PlannedNavBackend(HalNavBackend):
         log.info("%s:规划出 %d 个点、%.1f m", op, len(path.points), path.length_m)
         await super().goto(pose)
 
-    def _start_replan(self) -> None:
+    def _start_replan(self, *, detour: bool = False) -> None:
         if self._replan is not None and not self._replan.done():
             return
-        if self._replans >= MAX_REPLANS:
+        self._replan_kind = "detour" if detour else ""
+        if detour:
+            pass                         # 绕障不算偏离重规划的次数(被挡另有 20 s 的账)
+        elif self._replans >= MAX_REPLANS:
             self._replan_out = ("fail", f"重规划了 {MAX_REPLANS} 次还是走不上路径", 0)
             return
-        self._replans += 1
+        else:
+            self._replans += 1
         gen = self._gen
         target = self._target
         assert target is not None
@@ -352,6 +396,11 @@ class PlannedNavBackend(HalNavBackend):
         await super().stop()
 
     async def _enter_terminal(self, status: NavStatus) -> None:
+        self._creep_from = None
+        self._crept = False
+        self._blocked_since = None
+        self._blocked_told = False
+        self._detoured = False
         self._path = None
         self._aligning = False
         self._replan_out = None
@@ -436,6 +485,10 @@ class PlannedNavBackend(HalNavBackend):
         out, self._replan_out = self._replan_out, None
         if out is not None:
             if out[0] == "fail":
+                if self._replan_kind == "detour":
+                    log.info("绕不过去:%s;接着等、过一会儿再试", out[1])
+                    await self._send(0.0, 0.0, dt_s)
+                    return
                 log.warning("重规划没成:%s", out[1])
                 await self._enter_terminal(NavStatus.FAILED)
                 return
@@ -447,6 +500,8 @@ class PlannedNavBackend(HalNavBackend):
             self._path, self._cm = out[1]
             self._seg = 0
             self.planned_length_m = self._path.length_m
+            if self._replan_kind == "detour":
+                self._detoured = True
         if self._replan is not None and not self._replan.done():
             await self._send(0.0, 0.0, dt_s)            # 原地等新路径
             return
@@ -460,7 +515,7 @@ class PlannedNavBackend(HalNavBackend):
             if abs(err) <= YAW_TOL_RAD:
                 await self._enter_terminal(NavStatus.SUCCEED)
                 return
-            await self._send(0.0, self._turn(err), dt_s)
+            await self._move(0.0, self._turn(err), dt_s, here)
             return
         seg, dev, proj = self._project(here.x, here.y)
         if dev > MAX_DEVIATION_M:
@@ -482,7 +537,102 @@ class PlannedNavBackend(HalNavBackend):
             limit = min(self._vmax, self._path_speed(seg, proj),
                         self._cm.speed_at(here.x, here.y))
             vx = max(min(limit, K_LIN * dgoal), self._caps.deadband_vx)
-        await self._send(vx, wz, dt_s)
+        await self._move(vx, wz, dt_s, here)
+
+    # ------------------------------------------------------------ 避障(W11)
+
+    def _odom_seen(self, odom: Any) -> None:
+        self._v_meas = float(getattr(odom, "vx", 0.0) or 0.0)
+        self._odom_pose = (odom.x, odom.y, odom.yaw)
+        if self.obstacles is not None:
+            self.obstacles.note_odom(odom.x, odom.y, odom.yaw)
+
+    def _secs(self) -> float:
+        return self._now() / 1000.0
+
+    async def _move(self, vx: float, wz: float, dt_s: float, here: Any) -> None:
+        """一条会动的命令:配了避障就先过守卫(W08 决定 8 第一层);挡了原地等、自己计时、自己绕,
+        **不发 13330**;障碍数据断了太久发 13331(雷达掉线,引擎中止)。"""
+        if self.obstacles is None or self.guard is None:
+            await self._send(vx, wz, dt_s)
+            return
+        if self._creep_from is not None:
+            moved = math.hypot(self._odom_pose[0] - self._creep_from[0],
+                               self._odom_pose[1] - self._creep_from[1])
+            if moved < CREEP_M:
+                vx, wz = CREEP_V, 0.0                    # 往前挪着看两侧(守卫照样查)
+            else:
+                log.info("往前挪了 %.1f m,两侧看过了,接着转", moved)
+                self._creep_from = None
+        if self.obstacles.state() in ("lost", "extrinsic_bad", "none"):
+            from d1max_agent.obstacles import describe
+            why = f"障碍数据{describe(self.obstacles.state())}"
+            log.error("%s:停", why)
+            self.emit(AlgErrorEvent((AlgErrorItem(ALG_LIDAR_DISCONNECTED, why, 2),),
+                                    self._now()))
+            await self._enter_terminal(NavStatus.FAILED)
+            return
+        v = self.guard.check(vx, wz, self._v_meas, self.obstacles, self._odom_pose)
+        if v.ok:
+            if self._blocked_since is not None:
+                waited = self._secs() - self._blocked_since
+                if self.on_event is not None and (self._blocked_told or self._detoured):
+                    self.on_event("nav_unblocked", {"waited_s": round(waited, 1),
+                                                    "detour": self._detoured})
+                self._blocked_since = None
+                self._blocked_told = False
+                self._detoured = False
+                if self._creep_from is None:
+                    self._crept = False
+            await self._send(vx, wz, dt_s)
+            return
+        await self._blocked(v, here, dt_s, vx)
+
+    async def _blocked(self, v: Any, here: Any, dt_s: float, vx: float = 0.0) -> None:
+        now = self._secs()
+        if self._blocked_since is None:
+            self._blocked_since = now
+            self._next_detour = now + BLOCK_DETOUR_S
+            log.info("被挡:%s", v.reason)
+        waited = now - self._blocked_since
+        await self._send(0.0, 0.0, dt_s)                 # 原地等(零速保住步态)
+        if waited >= BLOCK_GIVEUP_S:
+            log.warning("被挡 %.0f s 还没走成:放弃这一段(%s)", waited, v.reason)
+            await self._enter_terminal(NavStatus.FAILED)
+            return
+        if waited >= BLOCK_REPORT_S and not self._blocked_told:
+            self._blocked_told = True
+            if self.on_event is not None:
+                self.on_event("nav_blocked", {"reason": v.reason, "x": round(here.x, 2),
+                                              "y": round(here.y, 2)})
+        if (self._creep_from is None and not self._crept and not v.hits and abs(vx) < 1e-6
+                and waited >= BLOCK_DETOUR_S
+                and self.guard.check(CREEP_V, 0.0, self._v_meas, self.obstacles,
+                                     self._odom_pose).ok):
+            # 原地转只被「看不见」挡住、前面看得清是空的:往前挪一个机身长再转
+            log.info("原地转被看不见的格子挡住(机身两侧没看过):先往前挪 %.1f m", CREEP_M)
+            self._creep_from = (self._odom_pose[0], self._odom_pose[1])
+            self._crept = True
+            return
+        if self._creep_from is not None:
+            self._creep_from = None                     # 挪的时候前面也挡了:不挪了,接着等
+        if now >= self._next_detour and v.hits and self._base is not None:
+            self._next_detour = now + BLOCK_RETRY_S
+            self._remember(v.hits, here, now)
+            self._start_replan(detour=True)
+
+    def _remember(self, hits: Any, here: Any, now: float) -> None:
+        """挡住的点(此刻狗身系)→ 地图规划栅格的格,记进临时障碍层(过 30 s 忘掉);
+        换了就得重算代价图。"""
+        assert self._base is not None
+        _, res, origin = self._base
+        c, s = math.cos(here.yaw), math.sin(here.yaw)
+        self._temp = {k: t for k, t in self._temp.items() if t > now}
+        for px, py in hits:
+            mx, my = here.x + c * px - s * py, here.y + s * px + c * py
+            self._temp[(int(math.floor((my - origin[1]) / res)),
+                        int(math.floor((mx - origin[0]) / res)))] = now + TEMP_OBSTACLE_S
+        self._invalidate()
 
     # ------------------------------------------------------------ 给引擎的路长估计
 

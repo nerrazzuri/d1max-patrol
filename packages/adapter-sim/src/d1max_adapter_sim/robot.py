@@ -43,9 +43,18 @@ class SimRobot:
 
     def __init__(self, *, now_ms: Callable[[], int], max_vx: float = 1.0, max_wz: float = 1.5,
                  deadband_vx: float = 0.05, stop_latency_s: float = 0.2,
-                 battery_drain_pct_per_h: float = 8.0, frame_id: str = "odom") -> None:
+                 battery_drain_pct_per_h: float = 8.0, frame_id: str = "odom",
+                 latency_s: float = 0.0, gait_start_s: float = 0.0,
+                 max_decel: float = math.inf, require_clearance: bool = False) -> None:
         self._now = now_ms
         self.max_vx, self.max_wz, self.deadband_vx = max_vx, max_wz, deadband_vx
+        #: W11 运动模型(W08 决定 10):链路延迟(命令晚这么久生效)、起步切步态(从站着到走要等这么久)、
+        #: 刹车减速度上限;旁路进程的净空许可门(``require_clearance``:没有有效许可,前进分量置零、转向照常)。
+        self.latency_s, self.gait_start_s, self.max_decel = latency_s, gait_start_s, max_decel
+        self.require_clearance = require_clearance
+        self._clear_until_ms = -1
+        self._pending: list[tuple[int, float, float, int]] = []    # (生效时刻, vx, wz, 截止)
+        self._gait_left_s: float | None = None
         self._stop_latency_s = stop_latency_s
         self._frame = frame_id
         self._connected = False
@@ -96,6 +105,10 @@ class SimRobot:
         if dt_s <= 0:
             return
         now = self._now()
+        while self._pending and self._pending[0][0] <= now:      # 链路延迟到了的命令生效
+            _, vx, wz, deadline = self._pending.pop(0)
+            self._cmd_vx, self._cmd_wz, self._cmd_deadline_ms = vx, wz, deadline
+            self._stopping_left_s = None
         if self._estop or not self._control:
             self._zero()
         elif self._cmd_deadline_ms is not None and now >= self._cmd_deadline_ms:
@@ -108,12 +121,30 @@ class SimRobot:
                 self._cmd_vx = self._cmd_wz = 0.0
                 self._cmd_deadline_ms = None
         else:
-            self._vx, self._wz = self._cmd_vx, self._cmd_wz
+            want_vx, want_wz = self._cmd_vx, self._cmd_wz
+            if self.require_clearance and now >= self._clear_until_ms:
+                want_vx = min(want_vx, 0.0)                      # 没有净空许可:不许往前
+            standing = self._vx == 0.0 and self._wz == 0.0
+            if standing and (want_vx or want_wz) and self.gait_start_s > 0:
+                if self._gait_left_s is None:
+                    self._gait_left_s = self.gait_start_s        # 从站着起步:先切步态
+                self._gait_left_s -= dt_s
+                if self._gait_left_s > 1e-9:
+                    want_vx = want_wz = 0.0
+                else:
+                    self._gait_left_s = None
+            if abs(want_vx) < abs(self._vx) and math.isfinite(self.max_decel):
+                step = self.max_decel * dt_s                     # 减速有上限(刹车距离)
+                want_vx = (max(want_vx, self._vx - step) if self._vx > 0
+                           else min(want_vx, self._vx + step))
+            self._vx, self._wz = want_vx, want_wz
         self.yaw = wrap_angle(self.yaw + self._wz * dt_s)
         self.x += self._vx * math.cos(self.yaw) * dt_s
         self.y += self._vx * math.sin(self.yaw) * dt_s
 
     def _zero(self) -> None:
+        self._pending.clear()                     # 路上的命令也作废(急停、丢控制权)
+        self._gait_left_s = None
         self._vx = self._wz = 0.0
         self._cmd_vx = self._cmd_wz = 0.0
         self._cmd_deadline_ms = None
@@ -171,10 +202,23 @@ class SimRobot:
         vx = max(-self.max_vx, min(self.max_vx, cmd.vx))
         wz = max(-self.max_wz, min(self.max_wz, cmd.wz))
         clamped = (vx != cmd.vx) or (wz != cmd.wz)
+        if self.latency_s > 0:
+            at = self._now() + int(self.latency_s * 1000)
+            self._pending.append((at, vx, wz, at + cmd.ttl_ms))
+            return VelocityResult(vx, wz, clamped=clamped, rejected=False)
         self._cmd_vx, self._cmd_wz = vx, wz
         self._cmd_deadline_ms = self._now() + cmd.ttl_ms
         self._stopping_left_s = None
         return VelocityResult(vx, wz, clamped=clamped, rejected=False)
+
+    def clear(self, ms: int) -> None:
+        """旁路进程的净空许可(W11 第二层):从现在起 ``ms`` 毫秒内前方是空的。"""
+        self._clear_until_ms = max(self._clear_until_ms, self._now() + int(ms))
+
+    @property
+    def speed(self) -> tuple[float, float]:
+        """此刻真实的 (vx, wz)(测试看刹车、看许可门)。"""
+        return self._vx, self._wz
 
     # ------------------------------------------------------------ 停止与急停
 

@@ -109,6 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--nav", choices=("straight", "planned"), default="straight",
                    help="导航后端(W10):straight = 直线桥(过渡期);planned = 在规划栅格上规划、"
                         "守禁行区与限速区。**真狗在 W10 真机项验过之前不改**")
+    p.add_argument("--obstacles", choices=("none", "bridge"), default="none",
+                   help="局部避障(W11):bridge = 本机障碍桥上的感知节点(d1max-obstacles)给局部栅格,"
+                        "规划后端每条速度命令先过守卫;要 --nav planned。"
+                        "**真狗在 W11 真机项验过之前不改**")
+    p.add_argument("--obs-socket", type=Path, default=None,
+                   help="本机障碍桥的 Unix 套接字(默认 <store-dir>/obs.sock)")
     p.add_argument("--robot-radius", type=float, default=None,
                    help="规划膨胀用的机体外接圆半径(米,默认 0.52:930 × 480 mm,W08 决定 6)")
     rk = p.add_argument_group("RTK(W09e;决策 21:自己的为主、厂家的可选)")
@@ -199,6 +205,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         p.error("--outbox 与 --runs-root 给且只给一个(运行记录落在哪)")
     if args.mapping and args.outbox is None:
         p.error("--mapping 要配 --outbox(录包和生成的图都写进发件箱传给站点)")
+    if args.obstacles == "bridge" and args.nav != "planned":
+        p.error("--obstacles bridge 要配 --nav planned(守卫在规划后端里)")
     if args.robot_radius is not None and not (0.1 <= args.robot_radius <= 2.0):
         p.error("--robot-radius 要在 0.1–2.0 米之间")
     if args.outbox is not None:
@@ -358,7 +366,8 @@ def build(args: argparse.Namespace) -> Assembled:
                                maps=keeper, mapper=mapper,
                                releases=_releases(args, registration),
                                localizer=args.localizer, loc_socket=args.loc_socket,
-                               rtk=make_rtk(args))
+                               rtk=make_rtk(args), obstacles=args.obstacles,
+                               obs_socket=args.obs_socket)
         if pump is not None:
             runtime._outbox_retry = pump.retry_refused
         return hal, parts, runtime, pump
