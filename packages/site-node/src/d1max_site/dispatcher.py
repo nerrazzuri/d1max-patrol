@@ -415,9 +415,10 @@ class Dispatcher:
         if kind not in ("goto", "patrol"):
             return
         obs = c.capabilities.tasks.get("obstacles") if c.capabilities is not None else None
-        if obs is not None and obs.get("state") != "ok":
+        if obs is not None and obs.get("state") not in ("ok", "stale"):
+            # 「不新鲜」是一两秒的事:狗那头原地等,跟后端一样放行(内审小)
             # W11:配了避障的狗,避障用不了(感知断了、外参自检没过、还在自检)就不派会自己走的
-            why = {"lost": "感知断了", "stale": "感知不新鲜", "extrinsic_bad": "外参自检没过",
+            why = {"lost": "感知断了", "extrinsic_bad": "外参自检没过",
                    "initializing": "感知还在自检"}.get(str(obs.get("state")), str(obs.get("state")))
             raise DispatchRefused(f"{robot_id} 的避障用不了:{why}"
                                   + (f"({obs.get('reason')})" if obs.get("reason") else ""))

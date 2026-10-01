@@ -31,10 +31,14 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 CHECK_FRAMES = 20
+GIVE_UP_FRAMES = 100
+REFIT_EVERY = 5
 MAX_TILT_DEG = 5.0
 HEIGHT_RANGE_M = (0.2, 1.0)
 MIN_GROUND_FRAC = 0.3
 PERMIT_MS = 300
+#: 旁路进程从协议 4 起认 ``clear``。
+CLEAR_PROTO = 4
 #: 地面候选平面跟「上」最多差 45°(对着墙起来时别把墙当地面;外参歪 5–45° 照样查得出来)。
 MIN_UP_COS = math.cos(math.radians(45.0))
 SIDECAR = ("127.0.0.1", 8090)
@@ -55,6 +59,7 @@ class Config:
     max_v: float = 0.6                  # 最快(W08 第一版 ≤ 0.6 m/s)
     latency: float = 0.2                # 链路延迟(秒,待 W00d 量)
     decel: float = 0.5                  # 刹车减速度(m/s²,待真机量)
+    frame_age: float = 0.2              # 一帧点云从扫到到算完(秒,待真机量)
 
     def stop_dist(self, v: float) -> float:
         return v * self.latency + v * v / (2.0 * self.decel)
@@ -155,17 +160,36 @@ def fit_ground(pts: Any, *, iters: int = 120, tol: float = 0.03, seed: int = 0
 
 
 class SelfCheck:
-    """启动自检:攒 :data:`CHECK_FRAMES` 帧的地面拟合,取中位数判。"""
+    """启动自检:攒 :data:`CHECK_FRAMES` 帧的地面拟合,取中位数判;:data:`GIVE_UP_FRAMES` 帧还攒不够
+    (一直找不到地面 —— 外参的「上」弄反了、对着墙)就判没过(内审应修 6:原来永远「还在自检」)。
+    过了之后**接着估离地高度**(每 :data:`REFIT_EVERY` 帧一次,取最近 :data:`CHECK_FRAMES` 次的
+    中位数):狗开机是趴着的,站起来高度变了,不跟着变的话近处地面全成了落差。"""
 
     def __init__(self, frames: int = CHECK_FRAMES) -> None:
         self.need = frames
         self.fits: list[tuple[float, float, float]] = []    # (倾角°, 高度, 内点占比)
+        self.tried = 0
         self.check = "initializing"
         self.reason = ""
         self.height: float | None = None
+        self._heights: list[float] = []
 
     def feed(self, pts_base: Any) -> None:
-        if self.check != "initializing":
+        self.tried += 1
+        if self.check == "extrinsic_bad":
+            return
+        if self.check == "ok":
+            if self.tried % REFIT_EVERY:
+                return
+            got = fit_ground(pts_base, seed=self.tried)
+            if got is None:
+                return
+            n, h, frac = got
+            tilt = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
+            if tilt <= MAX_TILT_DEG and frac >= MIN_GROUND_FRAC \
+                    and HEIGHT_RANGE_M[0] <= h <= HEIGHT_RANGE_M[1]:
+                self._heights = (self._heights + [h])[-self.need:]
+                self.height = sorted(self._heights)[len(self._heights) // 2]
             return
         got = fit_ground(pts_base, seed=len(self.fits))
         if got is not None:
@@ -174,6 +198,10 @@ class SelfCheck:
             self.fits.append((tilt, h, frac))
         if len(self.fits) >= self.need:
             self._judge()
+        elif self.tried >= GIVE_UP_FRAMES:
+            self.check = "extrinsic_bad"
+            self.reason = (f"{self.tried} 帧里只有 {len(self.fits)} 帧找得到地面(外参的「上」反了?"
+                           "对着墙?)")
 
     def _judge(self) -> None:
         def med(i: int) -> float:
@@ -188,6 +216,7 @@ class SelfCheck:
         if frac < MIN_GROUND_FRAC:
             why.append(f"地面点只占 {frac:.0%}(对着墙?)")
         self.height = h
+        self._heights = [f[1] for f in self.fits]
         self.check, self.reason = ("extrinsic_bad", ";".join(why)) if why else ("ok", "")
 
 
@@ -241,8 +270,10 @@ def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT) -> float:
 
 
 def permit(dist: float, cfg: Config = DEFAULT) -> int:
-    """够最快速度刹停 + 0.3 m 才给许可(毫秒);不够 0。"""
-    return PERMIT_MS if dist >= cfg.stop_dist(cfg.max_v) + 0.3 else 0
+    """许可有效期里最快速度走的 + 这一帧的帧龄里走的 + 刹停 + 0.3 m 都够,才给许可(毫秒);不够 0
+    (内审应修 2:原来只算刹停,0.3 m 余量被有效期、帧龄吃光)。"""
+    need = cfg.max_v * (PERMIT_MS / 1000.0 + cfg.frame_age) + cfg.stop_dist(cfg.max_v) + 0.3
+    return PERMIT_MS if dist >= need else 0
 
 
 # ------------------------------------------------------------ 发出去
@@ -251,8 +282,12 @@ class LineClient:
     """一行一个 JSON 的小客户端(阻塞套接字、发不出去就断开、下次再连)。``hello`` 是连上后的
     第一行。"""
 
-    def __init__(self, connect: Any, hello: dict | None, *, reconnect_s: float = 1.0) -> None:
+    def __init__(self, connect: Any, hello: dict | None, *, reconnect_s: float = 1.0,
+                 on_line: Any = None) -> None:
         self._connect = connect
+        #: 对面回的每一行(JSON 解开的)交给它;``None`` = 读掉丢弃。
+        self.on_line = on_line
+        self._buf = b""
         self._hello = hello
         self._sock: socket.socket | None = None
         self._next_try = 0.0
@@ -284,12 +319,36 @@ class LineClient:
         self.sent += 1
         return True
 
+    def poll(self) -> None:
+        """连着就把对面发来的读空(内审阻断 3:旁路进程每秒给所有客户端广播几十条遥测,不读的话它那头
+        的发送阻塞、攥着锁,所有客户端一起卡死)。**每帧都调**,不管这一帧发没发东西。"""
+        if self._sock is None:
+            return
+        try:
+            self._drain()
+        except OSError as exc:
+            log.warning("读不了,断开重连:%s", exc)
+            self._close()
+
     def _drain(self) -> None:
-        """对面回的(hello、回执)读掉丢弃,别让它的发送缓冲堵住。"""
+        """对面回的(hello、回执、遥测)读掉;``on_line`` 给了就一行一行交给它。对面关了就断开。"""
         assert self._sock is not None
         try:
-            while self._sock.recv(65536):
-                pass
+            while True:
+                chunk = self._sock.recv(65536)
+                if not chunk:
+                    self._close()                        # 对面关了
+                    return
+                if self.on_line is None:
+                    continue
+                self._buf += chunk
+                *lines, self._buf = self._buf.split(b"\n")
+                self._buf = self._buf[-65536:]
+                for ln in lines:
+                    try:
+                        self.on_line(json.loads(ln))
+                    except ValueError:
+                        continue
         except (BlockingIOError, InterruptedError):
             return
 
@@ -325,6 +384,10 @@ class Perception:
         self.rear_max_age_s = rear_max_age_s
         self._clock = clock
         self.last_clear = 0.0
+        self.sidecar_proto: int | None = None
+        self._rej_logged = -math.inf
+        if sidecar is not None and sidecar.on_line is None:
+            sidecar.on_line = self.on_sidecar
 
     def set_mount(self, front: Mount, rear: Mount | None) -> None:
         """换了图(外参跟着图走):换外参、重新自检。"""
@@ -337,20 +400,49 @@ class Perception:
             self._rear_pts = self.rear.to_base(pts_sensor)
             self._rear_at = self._clock()
 
+    def on_sidecar(self, msg: Any) -> None:
+        """旁路进程回的:``hello`` 核协议版本(要 ≥ 4 才认 ``clear``)、``clear`` 被拒记日志(限频)。
+        内审应修 1:原来不读、不看,版本对不上、许可全被拒也一声不响。"""
+        if not isinstance(msg, dict):
+            return
+        if msg.get("t") == "hello":
+            proto = msg.get("proto")
+            self.sidecar_proto = proto if isinstance(proto, int) else None
+            if not isinstance(proto, int) or proto < CLEAR_PROTO:
+                log.error("旁路进程的协议是 %r,不认 clear(要 ≥ %d):净空许可发了也没用,重编 "
+                          "motion/patrol_agent", proto, CLEAR_PROTO)
+        elif msg.get("t") == "ack" and msg.get("ok") is False:
+            now = self._clock()
+            if now - self._rej_logged > 60.0:
+                self._rej_logged = now
+                log.warning("旁路进程拒了净空许可:%s", msg.get("error", ""))
+
     def on_front(self, pts_sensor: Any, stamp_ns: int) -> dict | None:
-        import numpy as np
 
         from d1max_contract.obsbridge import pack_bits
+        if self.sidecar is not None:
+            self.sidecar.poll()                          # 每帧都读空(内审阻断 3)
         p = self.front.to_base(pts_sensor)
         self.check.feed(p)
+        n = self.cfg.size
         if self.check.height is None:
-            return None                                  # 还在自检
+            # 还在自检、自检没过:照样发一帧(全是未知)让代理知道是什么状态(内审应修 6)
+            empty = pack_bits(bytes(n * n), n)
+            self.seq += 1
+            grid = {"t": "grid", "seq": self.seq, "stamp_ns": max(0, int(stamp_ns)),
+                    "res": self.cfg.res, "size": n, "occ": empty, "known": empty, "rear": False,
+                    "check": self.check.check, "reason": self.check.reason[:200]}
+            if self.obs is not None:
+                self.obs.send(grid)
+            return grid
         rear = (self._rear_pts is not None
                 and self._clock() - self._rear_at <= self.rear_max_age_s)
-        if rear:
-            p = np.vstack([p, self._rear_pts])
         occ, known = classify(p, self.check.height, self.cfg)
-        n = self.cfg.size
+        if rear:
+            # 后雷达外参是猜的(前雷达的镜像):标定之前只用它的「挡」,不用它的「空」放行(内审再议)
+            occ_r, _ = classify(self._rear_pts, self.check.height, self.cfg)
+            occ = bytes(a | b for a, b in zip(occ, occ_r, strict=True))
+            known = bytes(a | b for a, b in zip(known, occ_r, strict=True))
         self.seq += 1
         grid = {"t": "grid", "seq": self.seq, "stamp_ns": max(0, int(stamp_ns)),
                 "res": self.cfg.res, "size": n, "occ": pack_bits(occ, n),

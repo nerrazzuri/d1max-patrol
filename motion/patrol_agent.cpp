@@ -202,7 +202,13 @@ static void SendTo(int fd, const std::string& obj) {
     // MSG_NOSIGNAL：客户端半路死掉时不要把 SIGPIPE 打到整个进程上——
     // 那会把还握着控制权的会话一起带走。
     ssize_t n = ::send(fd, line.data() + sent, line.size() - sent, MSG_NOSIGNAL);
-    if (n <= 0) return;
+    if (n <= 0) {
+      // 发不出去(对面断了,或者对面不读、发送缓冲满了 SO_SNDTIMEO 到点 —— W11 内审阻断 3):
+      // 关掉这条连接(它的读线程会收尾、把它从客户端集合里摘掉)。不能卡在这里:两把锁都还握着,
+      // 卡住就是所有客户端的回执、遥测、急停都出不去。之后再往这个 fd 发是立刻失败、不会阻塞。
+      ::shutdown(fd, SHUT_RDWR);
+      return;
+    }
     sent += static_cast<size_t>(n);
   }
 }
@@ -391,6 +397,9 @@ static Outcome DoWalk(double seconds, double fwd, double lat, double yaw,
       std::fabs(fwd) > kMaxWalkSpeed || std::fabs(lat) > kMaxWalkSpeed ||
       std::fabs(yaw) > kMaxWalkSpeed)
     return Reject("速度分量要在 ±0.5 内");
+  // 开了净空许可门:walk 绕过速度门直接 Move,不许往前(W11 内审应修 5;要往前用 vel,受许可管)
+  if (fwd > 0 && g_gate.ClearanceRequired())
+    return Reject("开了净空许可门(--require-clearance):walk 不许往前,用 vel");
 
   if (stop()) return Reject(kWalkCancelled);
   std::lock_guard<std::mutex> lk(g_sdk_mtx);
@@ -953,6 +962,9 @@ int main(int argc, char** argv) {
     }
     int yes = 1;
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+    // 一个不读的客户端不许把整个旁路进程卡死(W11 内审阻断 3):一次 send 最多等 200 ms,到点当它断了。
+    timeval snd{0, 200 * 1000};
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &snd, sizeof(snd));
     std::cout << "[i] 客户端接入 " << ::inet_ntoa(peer.sin_addr) << "\n";
     std::thread(ServeClient, fd).detach();
   }

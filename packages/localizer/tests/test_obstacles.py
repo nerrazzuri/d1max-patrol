@@ -184,12 +184,15 @@ def test_感知_自检完了才发_栅格合契约_许可只在够远时发():
                      sidecar=LineClient(lambda: side.a, None))
     per.check = SelfCheck(frames=2)
     sensor = 到雷达系(m, 场景(box=((2.0, 2.4), (-0.2, 0.2), 0.5)))
-    assert per.on_front(sensor, 10) is None
+    first = per.on_front(sensor, 10)
+    assert first["check"] == "initializing", "自检期间也发一帧(全是未知),代理知道是在自检"
+    assert not any(unpack_bits(first["known"], 80))
     g = per.on_front(sensor, 20)
     assert g is not None and g["check"] == "ok" and not g["rear"]
     got = obs.read()
     assert got[0] == {"t": "hello", "proto": 1}
-    grid = Grid(**{k: v for k, v in got[1].items() if k != "t"})
+    assert got[1]["check"] == "initializing"
+    grid = Grid(**{k: v for k, v in got[2].items() if k != "t"})
     occ, _ = grid.bits()
     assert occ[_cell(Config(), 2.2, 0.0)]
     cmds = side.read()
@@ -216,15 +219,16 @@ def test_后雷达_新鲜才合进来():
     t = [0.0]
     per = Perception(m, rear=m.mirrored(), clock=lambda: t[0])
     per.check = SelfCheck(frames=1)
-    back = 场景(back=True)
+    back = 场景(back=True, box=((-2.4, -2.0), (-0.2, 0.2), 0.5))
     back_only = back[back[:, 0] < -0.5]
     per.on_rear(到雷达系(m.mirrored(), back_only))
     g = per.on_front(到雷达系(m, 场景()), 1)
-    known = unpack_bits(g["known"], 80)
-    assert g["rear"] and known[_cell(Config(), -2.0, 0.0)]
+    occ, known = unpack_bits(g["occ"], 80), unpack_bits(g["known"], 80)
+    assert g["rear"] and occ[_cell(Config(), -2.2, 0.0)], "后雷达看见的挡算数"
+    assert not known[_cell(Config(), -3.0, 1.5)], "后雷达外参是猜的:它看见的「空」不算(标定之前)"
     t[0] = 1.0
     g2 = per.on_front(到雷达系(m, 场景()), 2)
-    assert not g2["rear"] and not unpack_bits(g2["known"], 80)[_cell(Config(), -2.0, 0.0)]
+    assert not g2["rear"] and not unpack_bits(g2["occ"], 80)[_cell(Config(), -2.2, 0.0)]
 
 
 def test_发不出去就断开_过一会儿再连():
@@ -262,3 +266,48 @@ def test_换图_换外参重新自检():
     assert per.check.check == "ok"
     per.set_mount(m.mirrored(), None)
     assert per.check.check == "initializing" and per.front.x == -m.x
+
+
+def test_自检_一直找不到地面_放弃_判没过():
+    ck = SelfCheck(frames=3)
+    for _ in range(99):
+        ck.feed(np.zeros((5, 3)))
+    assert ck.check == "initializing"
+    ck.feed(np.zeros((5, 3)))
+    assert ck.check == "extrinsic_bad" and "找得到地面" in ck.reason
+
+
+def test_自检过了接着估离地高度_趴着起来站起来跟着变():
+    ck = SelfCheck(frames=3)
+    lying = 场景()
+    lying[:, 2] += 0.15                                 # 趴着:雷达离地 0.25 m
+    for _ in range(3):
+        ck.feed(lying)
+    assert ck.check == "ok" and abs(ck.height - 0.25) < 0.01
+    for _ in range(40):                                 # 站起来了:0.40 m
+        ck.feed(场景())
+    assert abs(ck.height - H) < 0.01
+
+
+def test_许可门槛算上有效期和帧龄():
+    cfg = Config()
+    need = 0.6 * (0.3 + 0.2) + cfg.stop_dist(0.6) + 0.3
+    assert permit(need + 0.01, cfg) == 300 and permit(need - 0.01, cfg) == 0
+
+
+def test_旁路进程回的_每帧读空_协议不对记日志_被拒记日志(caplog):
+    m = Mount.from_frames(AIRY)
+    side = 假对端()
+    per = Perception(m, sidecar=LineClient(lambda: side.a, None))
+    per.check = SelfCheck(frames=1)
+    per.on_front(到雷达系(m, 场景()), 1)                 # 连上
+    side.b.sendall(b'{"t":"hello","proto":3}\n{"t":"ack","id":1,"ok":false,"error":"x"}\n'
+                   + b'{"t":"state"}\n' * 2000)
+    with caplog.at_level("WARNING"):
+        per.on_front(到雷达系(m, 场景()), 2)
+    assert per.sidecar_proto == 3
+    assert any("不认 clear" in r.message for r in caplog.records)
+    assert any("拒了净空许可" in r.message for r in caplog.records)
+    side.b.close()
+    per.on_front(到雷达系(m, 场景()), 3)
+    assert per.sidecar._sock is None, "对面关了:断开,下次再连"

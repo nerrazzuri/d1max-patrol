@@ -215,11 +215,13 @@ def test_避障用不了_不派会自己走的_遥控照常(站点):
     assert s.disp.dispatchable("A", "goto") == ""
     tasks = s.disp.clients["A"].capabilities.tasks
     for st, words in (("lost", "感知断了"), ("extrinsic_bad", "外参自检没过"),
-                      ("initializing", "还在自检"), ("stale", "不新鲜")):
+                      ("initializing", "还在自检")):
         tasks["obstacles"] = {"state": st, "rear": False, "reason": "雷达离地 2.9 m"}
         why = s.disp.dispatchable("A", "goto")
         assert "避障用不了" in why and words in why and "2.9" in why, why
         assert "避障用不了" in s.disp.dispatchable("A", "patrol")
         assert s.disp.dispatchable("A", "teleop") == ""
+    tasks["obstacles"] = {"state": "stale", "rear": True}
+    assert s.disp.dispatchable("A", "goto") == "", "不新鲜是一两秒的事:狗那头原地等"
     tasks["obstacles"] = {"state": "ok", "rear": True}
     assert s.disp.dispatchable("A", "goto") == ""

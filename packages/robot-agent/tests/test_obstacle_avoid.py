@@ -47,7 +47,7 @@ def _grid(cells_occ=(), cells_known=None, size=20, res=0.1, seq=1, check="ok"):
 
 def test_记忆_按里程挪_从新到旧_都没看见是未知():
     t = [0.0]
-    v = ObstacleView(monotonic=lambda: t[0])
+    v = ObstacleView(monotonic=lambda: t[0], latency_s=0.0)
     assert v.state() == "lost"
     v.note_odom(0.0, 0.0, 0.0)
     v.on_grid(_grid(cells_occ=[(15, 10)]))           # 狗身系 x = 0.55、y = 0.05 有东西
@@ -184,6 +184,7 @@ class 台子:
         self.nav.emit = 记
         self.perceive = True
         self.crashed = False
+        self._q: list = []
 
     async def start(self, x, y, yaw=0.0):
         await self.r.connect()
@@ -191,13 +192,22 @@ class 台子:
         await self.nav.connect()
         self.r.teleport(x, y, yaw)
         await self.nav.step(0.1)
+        for _ in range(3):                       # 第一帧路上要 0.15 s:先等它送到
+            self._feed()
+            self.c.ms += 100
+            await self.nav.step(0.1)
         self._feed()
 
     def _feed(self):
+        """假感知按此刻的真实位姿出栅格,**晚 0.15 s 才送到**(跟代理按「收到 − 延迟」配位姿对上;
+        内审应修 4:原来没延迟,测不出配错位姿)。"""
         if not self.perceive:
+            self._q.clear()
             return
         g = self.per.grid(self.r.x, self.r.y, self.r.yaw)
-        self.view.on_grid(g)
+        self._q.append((self.c.s() + 0.15, g))
+        while self._q and self._q[0][0] <= self.c.s() + 1e-9:
+            self.view.on_grid(self._q.pop(0)[1])
         if self.r.require_clearance:
             from d1max_localizer.obstacles import Config, permit
             ms = permit(self.per.净空(g), Config())
@@ -325,14 +335,104 @@ async def test_带链路延迟_起步切步态_刹车上限_也不撞(tmp_path):
     assert NavStatus.SUCCEED in t.status, t.status
 
 
-async def test_要掉头_身后看不见就不转_后雷达开着就转(tmp_path):
+async def test_要掉头_身后看不见就不转_后雷达开着先往前挪再转(tmp_path):
+    """内审测试漏洞:原来只跑 3 s。没后雷达:身后从没看见过,挪了也转不过去,等满 20 s 放弃、没撞;
+    有后雷达:身侧(两台雷达的盲带)没看过 —— 先往前挪一个机身长,再转、走到。"""
     blind = 台子(tmp_path, rear=False)
     await blind.start(5.0, 4.0, yaw=0.0)
     await blind.nav.goto(Pose.from_xy_yaw(2.0, 4.0))            # 目标在身后
     await blind.跑(3.0)
     assert abs(blind.r.yaw) < 0.05, "身后没看过:不原地转"
+    await blind.跑(60.0)
+    assert not blind.crashed and NavStatus.FAILED in blind.status
+    assert blind.r.x < 5.0 + 1.1, "最多往前挪一次、一个机身长"
     seeing = 台子(tmp_path, rear=True)
     await seeing.start(5.0, 4.0, yaw=0.0)
     await seeing.nav.goto(Pose.from_xy_yaw(2.0, 4.0))
-    await seeing.跑(40.0)
+    xs = []
+    for _ in range(600):
+        await seeing.一拍()
+        xs.append(seeing.r.x)
+        if seeing.status and seeing.status[-1] is NavStatus.STANDBY:
+            break
     assert NavStatus.SUCCEED in seeing.status and not seeing.crashed
+    assert max(xs) > 5.8, "先往前挪了一个机身长,再转"
+
+
+async def test_往前挪_前面是禁行区或墙就不挪_对朝向的时候不挪(tmp_path):
+    """内审阻断 1:挪之前看地图(致命格、禁行区),不只看守卫;到点对朝向时不挪(挪了就不在点上了)。"""
+    t = 台子(tmp_path, rear=True)
+    await t.nav.set_zones(_区域({"id": "pond", "kind": "nogo", "label": "池子",
+                               "polygon": [[6.0, 3.0], [7.0, 3.0], [7.0, 5.0], [6.0, 5.0]]}))
+    await t.start(5.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(2.0, 4.0))
+    await t.跑(30.0)
+    assert t.r.x < 5.0 + 0.05, "前面 1 m 加机身前沿碰着禁行区:不挪"
+    assert not t.nav._crept
+    t2 = 台子(tmp_path, rear=True)
+    await t2.start(5.0, 4.0, yaw=0.0)
+    await t2.nav.goto(Pose.from_xy_yaw(5.05, 4.0, math.pi))    # 已经在点上,只差掉头
+    await t2.跑(30.0)
+    assert abs(t2.r.x - 5.0) < 0.2, "对朝向的时候不往前挪"
+
+
+async def test_临时障碍过期_任务结束清掉(tmp_path):
+    """内审阻断 2:绕障记下的临时障碍 30 s 过期、到终态清空,不会让以后的 goto 一直绕开。"""
+    t = 台子(tmp_path)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(2.0)
+    t.world.dyn["box"] = (5.0, 3.5, 5.6, 4.5)
+    for _ in range(60):                                       # 被挡 2 s 之后才记
+        await t.一拍()
+    assert t.nav._temp, "被挡久了记下了临时障碍"
+    exp = max(t.nav._temp.values())
+    t.c.ms = int((exp + 1) * 1000)
+    t.nav._expire_temp()
+    assert not t.nav._temp, "过期就忘"
+    t.nav._temp = {(1, 1): t.c.s() + 99}
+    await t.nav._enter_terminal(NavStatus.CANCELLED)
+    assert not t.nav._temp, "到终态清空"
+
+
+def _区域(*zs):
+    from d1max_contract.zones import ZoneSet
+    return ZoneSet.from_wire({"map_id": "m", "map_version": "v", "revision": 1, "zones": list(zs)})
+
+
+def test_守卫_急转弯扫掠不漏格_不许后退():
+    """内审应修 3:步数按机身角点走过的弧长;转弯半径小于对角线时并上外接圆。"""
+    g = ObstacleGuard()
+    for vx, wz in ((0.1, 0.8), (0.15, 1.0), (0.3, 0.5)):
+        pts = g.swept(vx, wz, 0.0)
+        cells = {(math.floor(x / 0.1), math.floor(y / 0.1)) for x, y in pts}
+        # 逐点精确算一遍机身(不带余量)在这段里压过的格
+        dist = g.reach(vx)
+        n = 400
+        truth = set()
+        for i in range(n + 1):
+            d = dist * i / n
+            rad = vx / wz
+            th = d / rad
+            px, py = rad * math.sin(th), rad * (1 - math.cos(th))
+            c, s = math.cos(th), math.sin(th)
+            for u in [k * 0.02 - 0.465 for k in range(47)]:
+                for v in [k * 0.02 - 0.24 for k in range(25)]:
+                    x, y = px + c * u - s * v, py + s * u + c * v
+                    # 守卫的分辨率:机身(含 5 cm 余量)外不到 2 cm 的窄条可以漏(落在余量里)
+                    if abs(x) > 0.535 or abs(y) > 0.31:
+                        truth.add((math.floor(x / 0.1), math.floor(y / 0.1)))
+        assert truth <= cells, (vx, wz, sorted(truth - cells)[:5])
+    v = _view_with([])
+    assert not g.check(-0.2, 0.0, 0.0, v, (0, 0, 0)).ok
+
+
+def test_记忆_按收到时刻减延迟配位姿():
+    t = [0.0]
+    v = ObstacleView(monotonic=lambda: t[0], latency_s=0.2)
+    v.note_odom(0.0, 0.0, 0.0)
+    t[0] = 0.2
+    v.note_odom(0.2, 0.0, 0.0)
+    v.on_grid(_grid(cells_occ=[(15, 10)]))           # 这一帧是 0.0 那一刻扫的:x = 0.55
+    hit, _ = v.lookup([(0.35, 0.05)], (0.2, 0.0, 0.0))
+    assert hit == [0], "挡在里程 0.55 处,狗现在在 0.2:离狗 0.35"

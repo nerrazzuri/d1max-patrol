@@ -464,3 +464,23 @@ async def test_vel没控制权本端就拒():
         with pytest.raises(DeviceBackendError):
             await backend.vel(0.3, 0.0, 0.0, 300)
         assert "vel" not in [c for c, _ in sim.commands]
+
+
+async def test_旁路进程还是3号_代理照样能连_2号不行(monkeypatch):
+    """W11 内审应修 1:代理只用到 vel(3 号就有),clear 是感知节点发的 —— 只推新版代理、旁路进程还是
+    3 号时不能整机不能动;再老的 2 号没有 vel,照旧拒。"""
+    for proto, ok in ((3, True), (2, False)):
+        monkeypatch.setattr(agent_server, "PROTO_VERSION", proto)
+        sim = SimAgentServer(port=0)
+        await sim.start()
+        backend = SidecarDeviceBackend("127.0.0.1", sim.port, ack_timeout_s=2.0)
+        try:
+            if ok:
+                await backend.connect()
+                assert backend.connected
+            else:
+                with pytest.raises(DeviceBackendError, match="协议版本对不上"):
+                    await backend.connect()
+        finally:
+            await backend.close()
+            await sim.stop()

@@ -1502,6 +1502,8 @@ class AgentRuntime:
         if self._obs_srv is not None:
             self._obs_srv.tick()                 # 本机障碍桥:感知节点没声就当它断了
             st = self.obs_view.state()
+            # 只在「能用 / 不能用 / 原因」变了时重发(ok 与 stale 之间来回翻不发,内审小)
+            st = "ok" if st == "stale" else st
             if st != self._obs_state_told:
                 self._obs_state_told = st
                 if self.transport.connected:

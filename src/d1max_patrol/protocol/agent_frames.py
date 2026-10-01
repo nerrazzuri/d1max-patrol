@@ -42,6 +42,9 @@ from typing import Any
 #: 4(W11):加了 ``clear`` —— 感知节点给的净空许可(``ms``、``dist``),旁路进程带
 #: ``--require-clearance`` 时没有有效许可就把前进分量置零(第二层刹停)。
 PROTO_VERSION = 4
+#: 代理(``sidecar_device``)能配的最老的旁路进程:代理只用到 ``vel``(3),``clear`` 是感知节点发的
+#: (W11 内审应修 1:严格等于 4 的话,只推新版代理、旁路进程还是 3 号时整机不能动)。
+MIN_PROTO_VERSION = 3
 
 
 class MotionStatus(str, Enum):
