@@ -6,8 +6,11 @@
   在它自己的有效期(默认 300 ms)里按 ``set_velocity`` 执行;**帧不来了就停**(这边一拍一看,HAL 与
   旁路进程两层到期也自停)。
 - **限速**:HAL 能力的一半(决策 7 追加条件),站点也夹一次。
-- **人眼里的「往前」**(W09i):HAL 是机身系(x 朝狗头);遥控的「往前」跟着狗现在的头尾 —— 狗尾为前时
-  往狗尾那头走(跟 W09i 之前一样:那时 HAL 直接用 SDK 的「往前」)。
+- **人眼里的「往前」**(W09i):HAL 是机身系(x 朝狗头);遥控的「往前」朝**会话开始时**被选作头的那一头
+  —— 狗尾为前时往狗尾那头走(跟 W09i 之前一样:那时 HAL 直接用 SDK 的「往前」)。
+- **一次会话里头尾不许变**(W11/W11a/W09i 外审阻断):有人拿厂家遥控器、App 调了头(包括变成「不知道」),
+  有效期里的同一帧下一拍就成了反方向。每拍都核:变了就丢掉手上的帧、停车、结束(``head_changed``),
+  之后来的帧一律不执行;要接着遥控得重新拿租约(站点续租被拒两次就关掉这次会话)。
 - **没画面不动**:``video_live()`` 为假(狗上一路都没在推)就不下速度、在动就停 —— 站点那头还有一道。
 - **结束**(放租、halt、租约到期、断线、被中止):先停车、等停稳(最多 ``STOP_CONFIRM_TIMEOUT_S``),
   再进终态;结束中的帧一律不执行。断线 = 结束,**不续**。
@@ -58,9 +61,20 @@ class TeleopTask(Task):
         self._ending: tuple[TaskState, str] | None = None
         self._stop_sent = False
         self._stop_wait_s = 0.0
+        #: 会话开始时的头尾方向(``head`` / ``tail`` / ``unknown``:老旁路进程不报,
+        #: 照 SDK 的「往前」)。
+        self._head = "unknown"
+
+    async def _read_head(self) -> str:
+        try:
+            return str(getattr(await self._hal.health(), "head", "unknown"))
+        except Exception:
+            log.exception("遥控读不到头尾方向(按不知道算)")
+            return "unknown"
 
     async def start(self) -> None:
         self.state = TaskState.RUNNING
+        self._head = await self._read_head()
         self._until = self._now() + self._lease_ttl
         # 操作者是谁只记在站点(审计);狗上的日志不留人名(决策 8)。
         log.info("遥控开始:%s 代次 %d", self.task_id, self.lease_epoch)
@@ -103,6 +117,12 @@ class TeleopTask(Task):
         now = self._now()
         if self._ending is None and self._until is not None and now >= self._until:
             self._end(TaskState.FAILED, "lease_expired")
+        if self._ending is None:
+            head = await self._read_head()
+            if head != self._head:
+                # 头尾变了:手上那一帧的「往前」已经是另一头了,不许接着按它走
+                log.warning("遥控期间头尾从 %s 变成 %s:停车、结束这次遥控", self._head, head)
+                self._end(TaskState.ABORTED, "head_changed")
         if self._ending is not None:
             await self._finish(dt_s)
             return
@@ -118,7 +138,7 @@ class TeleopTask(Task):
         if live:
             self._vseq += 1
             ttl = max(_MIN_TTL_MS, min(c[3], c[2] - now))
-            if getattr(await self._hal.health(), "head", "head") == "tail":
+            if self._head == "tail":
                 vx = -vx                                  # 人眼里的「往前」是狗尾那头
             got = await self._hal.set_velocity(VelocityCommand(
                 seq=self._vseq, ttl_ms=ttl, frame="base", vx=vx, vy=0.0, wz=wz))
