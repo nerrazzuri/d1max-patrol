@@ -1,5 +1,11 @@
-"""待命点(W00c2b 设计决定三 A)。每台狗登记若干个命名待命点(地图、x、y、yaw),其中一个是
-**默认**。站点派的任务**正常完成**(``task_done``)后,站点自动给这台狗派一条回默认待命点的
+"""待命点(W00c2b 设计决定三 A)与原点(W13a,决策 16)。
+
+**原点与待命点是两样东西**(决策 16):原点是安全返航、回充的语义,每台狗每张图的每个版本一个(表
+``homes``),下发地图时发给狗;待命点是运营调度的语义,可以多个、可调(表 ``standby_points``)。
+「在这儿标原点」只改原点 —— 这张图上这台狗还没有待命点时,顺手用它建一个默认待命点(老库迁移时也是
+拿默认待命点抄成原点,两边起步一样);「在这儿设待命点」只改待命点、狗上的原点不动。
+
+每台狗登记若干个命名待命点(地图、x、y、yaw),其中一个是**默认**。站点派的任务**正常完成**(``task_done``)后,站点自动给这台狗派一条回默认待命点的
 ``goto``:优先级最低(``STANDBY_RETURN``),task_id 以 ``standby-`` 开头。
 
 - **只在 ``task_done`` 之后回**(内部评审):``task_aborted`` 是人按了停止键,要狗停在原地;
@@ -112,12 +118,74 @@ class StandbyManager:
                       (robot_id, name, map_id, map_version, *xs, int(flag)))
 
     def mark(self, robot_id: str, name: str, data: Any) -> None:
-        """狗在当前位置标了原点(W00c6f):把它报的位置登记成这台狗的默认待命点。回执、``home_marked``
-        事件都走这里(同样的值登记两遍没事)。"""
+        """狗在当前位置标了原点(W00c6f、W13a):登记成这台狗在这张图这个版本上的**原点**;这台狗在这张图
+        这个版本上还没有待命点,顺手用它建一个(这台狗没有默认待命点、或者默认的在别的图上,就设成默认)。
+        回执、``home_marked`` 事件都走这里(同样的值登记两遍没事)。"""
         if not isinstance(data, dict):
             raise StandbyError("狗没报位置")
-        self.set(robot_id, name, map_id=data["map_id"], map_version=data["map_version"],
-                 x=data["x"], y=data["y"], yaw=data["yaw"], default=True)
+        mid, ver = data["map_id"], data["map_version"]
+        self.set_home(robot_id, name, map_id=mid, map_version=ver, x=data["x"], y=data["y"],
+                      yaw=data["yaw"])
+        here = [p for p in self.list(robot_id) if (p["map_id"], p["map_version"]) == (mid, ver)]
+        if not here:
+            d = self.default(robot_id)
+            self.set(robot_id, name, map_id=mid, map_version=ver, x=data["x"], y=data["y"],
+                     yaw=data["yaw"],
+                     default=d is None or (d["map_id"], d["map_version"]) != (mid, ver))
+
+    def set_home(self, robot_id: str, name: str, *, map_id: str, map_version: str, x: float,
+                 y: float, yaw: float) -> None:
+        """登记或改这台狗在这张图这个版本上的原点(W13a)。"""
+        if self.dispatcher.registry.get(robot_id) is None:
+            raise StandbyError(f"没有登记过 {robot_id}")
+        if not isinstance(name, str) or not SAFE_ID.match(name):
+            raise StandbyError(f"原点名只许 ASCII 字母、数字、. _ -: {name!r}")
+        for k, v in (("map_id", map_id), ("map_version", map_version)):
+            if not isinstance(v, str) or not v:
+                raise StandbyError(f"要 {k}")
+        xs = []
+        for k, v in (("x", x), ("y", y), ("yaw", yaw)):
+            try:
+                ok = not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
+            except OverflowError:
+                ok = False
+            if not ok:
+                raise StandbyError(f"{k} 要是有限数")
+            xs.append(float(v))
+        with self.db.tx() as c:
+            c.execute("INSERT INTO homes(robot_id, map_id, map_version, name, x, y, yaw, "
+                      "marked_at_ms) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(robot_id, map_id, "
+                      "map_version) DO UPDATE SET name=excluded.name, x=excluded.x, "
+                      "y=excluded.y, yaw=excluded.yaw, marked_at_ms=excluded.marked_at_ms",
+                      (robot_id, map_id, map_version, name, *xs, int(self._now())))
+
+    def home(self, robot_id: str, map_id: str, map_version: str) -> dict[str, Any] | None:
+        rows = self.db.query("SELECT * FROM homes WHERE robot_id=? AND map_id=? AND map_version=?",
+                             (robot_id, map_id, map_version))
+        return self._home_row(rows[0]) if rows else None
+
+    def homes(self, robot_id: str) -> list[dict[str, Any]]:
+        return [self._home_row(r) for r in self.db.query(
+            "SELECT * FROM homes WHERE robot_id=? ORDER BY map_id, map_version", (robot_id,))]
+
+    @staticmethod
+    def _home_row(r) -> dict[str, Any]:
+        return {"name": r["name"], "map_id": r["map_id"], "map_version": r["map_version"],
+                "x": r["x"], "y": r["y"], "yaw": r["yaw"], "marked_at_ms": r["marked_at_ms"]}
+
+    def mark_standby(self, robot_id: str, name: str, data: Any,
+                     default: bool | None = None) -> None:
+        """狗在当前位置报了位置、只标待命点(W13a):登记成待命点,原点不动。``default=None``:这台狗
+        还没有默认待命点(或者默认的在别的图上)就设成默认,不然不动原来的默认标记。"""
+        if not isinstance(data, dict) or data.get("target") != "standby":
+            raise StandbyError("狗没按「只标待命点」回(老代理会把它当成标原点)")
+        mid, ver = data["map_id"], data["map_version"]
+        if default is None:
+            d = self.default(robot_id)
+            if d is None or (d["map_id"], d["map_version"]) != (mid, ver):
+                default = True
+        self.set(robot_id, name, map_id=mid, map_version=ver, x=data["x"], y=data["y"],
+                 yaw=data["yaw"], default=default)
 
     def _on_home_marked(self, robot_id: str, d: dict[str, Any]) -> None:
         """回执等超时了、狗其实标了(W00c6f 内审应修 1):按狗发的事件补登记。**只认这台狗最新那条没被
@@ -133,10 +201,10 @@ class StandbyManager:
         try:
             self.mark(robot_id, str(d.get("name", "home")), d)
         except (StandbyError, KeyError, TypeError) as exc:
-            log.warning("%s 标了原点,站点补登记待命点没成: %s", robot_id, exc)
+            log.warning("%s 标了原点,站点补登记原点没成: %s", robot_id, exc)
             self.dispatcher.feed.publish({"kind": "standby_failed", "robot_id": robot_id,
                                           "after": d.get("task_id"),
-                                          "reason": "狗上的原点已经换了,站点登记待命点没成: "
+                                          "reason": "狗上的原点已经换了,站点登记原点没成: "
                                                     f"{exc}"})
 
     def remove(self, robot_id: str, name: str) -> None:
@@ -163,11 +231,17 @@ class StandbyManager:
 
     # ------------------------------------------------------------ 回
 
-    def _checked_default(self, robot_id: str) -> dict[str, Any]:
-        """默认待命点,且狗加载的地图与版本对得上。对不上抛 ``DispatchRefused``。"""
-        p = self.default(robot_id)
-        if p is None:
-            raise DispatchRefused(f"{robot_id} 没有默认待命点")
+    def _checked_default(self, robot_id: str, name: str | None = None) -> dict[str, Any]:
+        """默认待命点(给了 ``name`` 就是那一个),且狗加载的地图与版本对得上。
+        不成抛 ``DispatchRefused``。"""
+        if name is None:
+            p = self.default(robot_id)
+            if p is None:
+                raise DispatchRefused(f"{robot_id} 没有默认待命点")
+        else:
+            p = next((q for q in self.list(robot_id) if q["name"] == name), None)
+            if p is None:
+                raise DispatchRefused(f"{robot_id} 没有待命点 {name}")
         c = self.dispatcher.clients.get(robot_id)
         caps = c.capabilities.tasks.get("patrol", {}) if c and c.capabilities else {}
         loaded = (caps.get("map_id"), caps.get("map_version"))
@@ -179,8 +253,9 @@ class StandbyManager:
                                   f"(地图或版本对不上)")
         return p
 
-    async def return_to(self, robot_id: str, *, issued_by: str) -> dict[str, Any]:
-        p = self._checked_default(robot_id)
+    async def return_to(self, robot_id: str, *, issued_by: str,
+                        name: str | None = None) -> dict[str, Any]:
+        p = self._checked_default(robot_id, name)
         target = MapPose(map_id=p["map_id"], map_version=p["map_version"], frame_id="map",
                          x=p["x"], y=p["y"], yaw=p["yaw"]).to_wire()
         return await self.dispatcher.goto(robot_id, target, None, issued_by=issued_by,

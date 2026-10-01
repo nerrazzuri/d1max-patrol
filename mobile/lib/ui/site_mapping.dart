@@ -681,6 +681,11 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           final pixels = [
             for (final p in pts) px((p['x'] as num).toDouble(), (p['y'] as num).toDouble()),
           ];
+          // 原点（W13a）：单独画（蓝方块），跟待命点（橙圆点）分开。
+          final homes = (meta['homes'] as List? ?? const []).cast<Map<String, dynamic>>();
+          final homePixels = [
+            for (final p in homes) px((p['x'] as num).toDouble(), (p['y'] as num).toDouble()),
+          ];
           // 区域：GET …/zones 那一份最新；取不到退回预览里带的。
           final zones = _zones != null
               ? _zoneList
@@ -725,7 +730,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                         CustomPaint(
                             key: SiteMapPreviewPage.overlayKey,
                             size: Size(w, h),
-                            painter: StandbyPainter(pixels, radius: r)),
+                            painter: StandbyPainter(pixels, radius: r, homes: homePixels)),
                       ]),
                     ),
                   ),
@@ -742,6 +747,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                 if (meta['warning'] != null)
                   Text('${meta['warning']}', style: const TextStyle(color: Colors.deepOrange)),
                 const Divider(),
+                for (final p in homes)
+                  Text('原点 · ${p['robot_id']} · ${p['name']}  '
+                      '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})',
+                      style: const TextStyle(color: Colors.blue)),
                 if (pts.isEmpty) const Text('这张图上还没有登记待命点'),
                 for (final p in pts)
                   Text('${p['robot_id']} · ${p['name']}${p['default'] == true ? '（默认）' : ''}  '
@@ -889,12 +898,24 @@ class ZonesPainter extends CustomPainter {
 
 /// 在图上画待命点（图的像素坐标）。
 class StandbyPainter extends CustomPainter {
-  StandbyPainter(this.pixels, {this.radius = 3});
+  StandbyPainter(this.pixels, {this.radius = 3, this.homes = const []});
   final List<Offset> pixels;
   final double radius;
+  /// 原点（W13a）：蓝方块。
+  final List<Offset> homes;
 
   @override
   void paint(Canvas canvas, Size size) {
+    for (final p in homes) {
+      final r = Rect.fromCenter(center: p, width: radius * 2.4, height: radius * 2.4);
+      canvas.drawRect(r, Paint()..color = Colors.blue);
+      canvas.drawRect(
+          r,
+          Paint()
+            ..color = Colors.black
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = radius / 3);
+    }
     for (final p in pixels) {
       canvas.drawCircle(p, radius, Paint()..color = Colors.orange);
       canvas.drawCircle(
@@ -908,5 +929,5 @@ class StandbyPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(StandbyPainter old) => old.pixels != pixels;
+  bool shouldRepaint(StandbyPainter old) => old.pixels != pixels || old.homes != homes;
 }

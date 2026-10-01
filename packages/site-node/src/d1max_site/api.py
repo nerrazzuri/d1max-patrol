@@ -10,7 +10,9 @@
 - ``POST /api/robots/<id>/abort`` ``{"task_id"}``
 - ``POST /api/robots/<id>/patrol`` ``{"mission_id"}``:从当前任务包里起一趟(W00c2a)
 - ``POST /api/bundles`` ``{"path"}``:导入站点主机上的一个任务包目录(W00c2a)
-- ``GET/POST /api/robots/<id>/standby``、``POST /api/robots/<id>/standby/return``:待命点(W00c2b)
+- ``GET/POST /api/robots/<id>/standby``、``POST /api/robots/<id>/standby/return``:待命点(W00c2b);
+  GET 也带这台狗的原点(``homes``,W13a);``standby/return`` 可带 ``name`` 回指定的那一个;
+  ``POST /api/robots/<id>/standby/here``:在当前位置设待命点(W13a,不动原点)
 - ``POST /api/incidents``:外部事件(**不要登录,要签名**,见 ``incidents.py``;W00c2c)
 - ``GET  /api/incidents``、``POST /api/intercepts``、``POST /api/zones``:
   事件账、拦截点、防区(W00c2c)
@@ -99,7 +101,8 @@ _LOG_NAME = re.compile(r"[a-z0-9_.-]{1,48}")
 _TRAIL = re.compile(r"^/api/robots/([^/]{1,64})/mapping/(trail|preview)$")
 #: W00c5d 第三部分:给狗装、切、退版本。
 _RELCMD = re.compile(r"^/api/robots/([^/]{1,64})/release$")
-_ROBOT = re.compile(r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return))?$")
+_ROBOT = re.compile(
+    r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return|standby/here))?$")
 
 
 class HttpError(Exception):
@@ -492,6 +495,10 @@ class _Handler(TlsHandlerMixin):
             return self._send_json(200, view)
         if action in ("standby", "standby/return"):
             return self._standby(method, robot_id, action, user)
+        if action == "standby/here":
+            if method != "POST":
+                raise HttpError(405, "只支持 POST")
+            return self._standby_here(robot_id, user)
         if method != "POST":
             raise HttpError(405, "只支持 POST")
         d = self._body()
@@ -541,10 +548,16 @@ class _Handler(TlsHandlerMixin):
             why = self.site.supervision.refusal(robot_id)
             if why:
                 raise HttpError(409, why)
-            result = self.site.dispatch(lambda: stb.return_to(robot_id, issued_by=str(user)))
+            d = self._body() or {}
+            name = d.get("name") if isinstance(d, dict) else None
+            if name is not None and (not isinstance(name, str) or not SAFE_ID.match(name)):
+                raise HttpError(400, f"名字只许 ASCII 字母、数字、. _ -:{name!r}")
+            result = self.site.dispatch(lambda: stb.return_to(robot_id, issued_by=str(user),
+                                                              name=name))
             return self._send_json(200, result)
         if method == "GET":
-            return self._send_json(200, {"points": stb.list(robot_id)})
+            return self._send_json(200, {"points": stb.list(robot_id),
+                                         "homes": stb.homes(robot_id)})
         if method != "POST":
             raise HttpError(405, "只支持 GET/POST")
         d = self._body()
@@ -805,10 +818,65 @@ class _Handler(TlsHandlerMixin):
         try:
             stb.mark(robot_id, name, data)
         except (StandbyError, KeyError, TypeError) as exc:
-            raise HttpError(500, f"狗上的原点已经换了,站点登记待命点没成:{exc}。"
+            raise HttpError(500, f"狗上的原点已经换了,站点登记原点没成:{exc}。"
                                  "按下面的位置手工登记",
                             extra={"command_id": r.get("command_id"), "task_id": r.get("task_id"),
                                    "data": data}) from exc
+        home = stb.home(robot_id, data["map_id"], data["map_version"])
+        point = next((p for p in stb.list(robot_id) if p["name"] == name), None)
+        return self._send_json(200, {"ack": ack, "home": home, "standby": point})
+
+    def _standby_here(self, robot_id: str, user) -> None:
+        """在当前位置设待命点(W13a,决策 16):发 ``mark_home {target: standby}``,
+        狗用此刻锚定后的位置、
+        检查跟标原点一样(停着、不忙、定位好),但**不动狗上的原点**;站点登记成待命点。跟标原点同一级
+        (``manage``)。老代理不认 ``target``、会当成标原点 —— 能力里没报 ``mark_home.standby``
+        就不发。
+        超时(504)不补登记:狗上什么都没改,再按一次就是。"""
+        from d1max_site.dispatcher import VIDEO_COMMAND_TTL_MS
+        from d1max_site.standby import StandbyError
+        self._need(user, MANAGE)
+        self._audit_target = robot_id
+        stb = self.site.standby
+        if stb is None:
+            raise HttpError(404, "这个站点没开待命点")
+        d = self._body()
+        if not isinstance(d, dict):
+            raise HttpError(400, "要一个对象")
+        name = d.get("name")
+        if not isinstance(name, str) or not SAFE_ID.match(name):
+            raise HttpError(400, f"名字只许 ASCII 字母、数字、. _ -:{name!r}")
+        default = d.get("default")
+        if default is not None and not isinstance(default, bool):
+            raise HttpError(400, "default 要是 true/false")
+        self._audit_detail = {"name": name}
+        c = self.site.dispatcher.clients.get(robot_id)
+        caps = c.capabilities.tasks if c and c.capabilities else {}
+        if not (caps.get("mark_home") or {}).get("standby"):
+            raise HttpError(409, f"{robot_id} 的代理不会只标待命点(老代理会把它当成标原点):"
+                                 "先升级狗上的版本")
+        try:
+            r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
+                robot_id, "mark_home", {"name": name, "target": "standby"},
+                issued_by=str(user), ttl_ms=VIDEO_COMMAND_TTL_MS))
+        except HttpError as exc:
+            if exc.status == 504:
+                raise HttpError(504, "等狗回话超时:狗上什么都没改,再按一次") from exc
+            raise
+        ack = r["ack"]
+        got = ack if ack.get("result") != "duplicate" else (ack.get("original") or {})
+        self._audit_detail |= {"command_id": r.get("command_id"), "task_id": r.get("task_id")}
+        if got.get("result") != "accepted":
+            raise HttpError(409, f"狗没标:{got.get('reason') or got.get('result')}")
+        data = got.get("data")
+        try:
+            stb.mark_standby(robot_id, name, data, default)
+        except (StandbyError, KeyError, TypeError) as exc:
+            raise HttpError(500, f"站点登记待命点没成:{exc}",
+                            extra={"data": data}) from exc
+        if isinstance(data, dict):
+            self._audit_detail |= {"map": f"{data.get('map_id')}:{data.get('map_version')}",
+                                   "x": data.get("x"), "y": data.get("y")}
         point = next((p for p in stb.list(robot_id) if p["name"] == name), None)
         return self._send_json(200, {"ack": ack, "standby": point})
 
@@ -1061,7 +1129,8 @@ class _Handler(TlsHandlerMixin):
                                          "没重新确认):先在地图页画好、确认再下发",
                                     extra={"reason": "zones_unconfirmed"})
                 kind, payload = "map_activate", ref.to_wire()
-                # 这台狗在这张图上的原点:站点登记的待命点是权威(在当前位置标的原点就登记成它),有就
+                # 这台狗在这张图上的原点:站点登记的是权威(原点表,W13a;没标过就拿这张图上的待命点),
+                # 有就
                 # 下发、盖过图里的 home.json(W00c6f 内审应修 4);没有才按图里带的。都没有就不下发 ——
                 # 狗换了坐标系没有原点,之后派什么都过不了起飞前检查(W00c5d 内部评审)。
                 home = self._home_on(robot_id, ref.map_id, ref.version)
@@ -1069,7 +1138,8 @@ class _Handler(TlsHandlerMixin):
                     payload["home"] = home
                 elif not any(f.name == "home.json" for f in ref.files):
                     raise HttpError(409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上还没有"
-                                         "待命点(原点):先登记一个待命点再下发这张图")
+                                         "原点(也没有待命点):先登记一个待命点再下发这张图,"
+                                         "下发之后再在原点那儿「标原点」")
             elif what == "mapping":
                 action, name = parse_mapping(d)
                 if len(name) > 40:
@@ -1166,14 +1236,25 @@ class _Handler(TlsHandlerMixin):
             "map_version=? ORDER BY robot_id, name", (map_id, version))
         standby = [{"robot_id": r["robot_id"], "name": r["name"], "x": r["x"], "y": r["y"],
                     "yaw": r["yaw"], "default": bool(r["is_default"])} for r in rows]
+        rows = self.site.dispatcher.db.query(
+            "SELECT robot_id, name, x, y, yaw FROM homes WHERE map_id=? AND map_version=? "
+            "ORDER BY robot_id", (map_id, version))
+        homes = [{"robot_id": r["robot_id"], "name": r["name"], "x": r["x"], "y": r["y"],
+                  "yaw": r["yaw"]} for r in rows]                 # W13a:原点单独画
         zones = (self.site.zones.current(map_id, version).to_wire()["zones"]
                  if self.site.zones is not None else [])
-        return self._send_json(200, info | {"standby": standby, "zones": zones})
+        return self._send_json(200, info | {"standby": standby, "homes": homes, "zones": zones})
 
     def _home_on(self, robot_id: str, map_id: str, version: str) -> dict[str, float] | None:
-        rows = self.site.dispatcher.db.query(
-            "SELECT x, y, yaw FROM standby_points WHERE robot_id=? AND map_id=? AND map_version=? "
-            "ORDER BY is_default DESC, name LIMIT 1", (robot_id, map_id, version))
+        """这台狗在这张图这个版本上的原点(W13a):原点表里的;没标过原点就退回到以前的做法 —— 这张图上
+        的待命点(默认的优先、再按名字),免得只登记了待命点的老流程下发不了图。"""
+        db = self.site.dispatcher.db
+        rows = db.query("SELECT x, y, yaw FROM homes WHERE robot_id=? AND map_id=? AND "
+                        "map_version=?", (robot_id, map_id, version))
+        if not rows:
+            rows = db.query(
+                "SELECT x, y, yaw FROM standby_points WHERE robot_id=? AND map_id=? AND "
+                "map_version=? ORDER BY is_default DESC, name LIMIT 1", (robot_id, map_id, version))
         return {"x": rows[0]["x"], "y": rows[0]["y"], "yaw": rows[0]["yaw"]} if rows else None
 
     def _releases(self, method: str, path: str, user) -> None:

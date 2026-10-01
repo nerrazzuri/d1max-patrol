@@ -96,6 +96,14 @@ bool robotCan(Map<String, dynamic>? view, String task) {
   return tasks is Map && tasks.containsKey(task);
 }
 
+/// 这台狗能不能「在这儿设待命点」（W13a）：代理报了 `mark_home.standby`。老代理不认、会当成标原点。
+bool robotCanStandbyHere(Map<String, dynamic>? view) {
+  final caps = view?['capabilities'];
+  final tasks = caps is Map ? caps['tasks'] : null;
+  final m = tasks is Map ? tasks['mark_home'] : null;
+  return m is Map && m['standby'] == true;
+}
+
 /// 这台狗要不要人现场监护（W00c6i）：避障真机验收之前真狗是 `supervised` —— goto、巡检只在有人
 /// 用「我在现场监护」时才收。**读不到按要人监护算**（跟站点一个口径）。没有 goto/巡检能力的狗谈不上。
 bool robotNeedsSupervision(Map<String, dynamic>? view) {
@@ -235,7 +243,15 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> robot(String id);
   Future<Map<String, dynamic>> patrol(String id, String missionId);
   Future<Map<String, dynamic>> abort(String id, String taskId);
-  Future<Map<String, dynamic>> returnToStandby(String id);
+  /// 回默认待命点；给了 [name] 就回那一个（W13a）。
+  Future<Map<String, dynamic>> returnToStandby(String id, {String? name});
+  /// 这台狗的待命点与原点（W13a）：`{points: [...], homes: [...]}`。
+  Future<Map<String, dynamic>> standbyPoints(String id);
+  /// 在当前位置设待命点（W13a，管理员）：不动原点。
+  Future<Map<String, dynamic>> standbyHere(String id, String name, {bool? isDefault});
+  /// 改一个待命点（设成默认）、删一个（管理员）。
+  Future<Map<String, dynamic>> setStandbyDefault(String id, Map<String, dynamic> point);
+  Future<Map<String, dynamic>> removeStandby(String id, String name);
   Future<Map<String, dynamic>> schedule();
   Future<List<Map<String, dynamic>>> incidents();
 
@@ -600,9 +616,30 @@ class SiteClient implements SiteApi {
           <String, dynamic>{'task_id': taskId}));
 
   @override
-  Future<Map<String, dynamic>> returnToStandby(String id) async => _map(await _send(
-      'POST', '/api/robots/${Uri.encodeComponent(id)}/standby/return',
-      <String, dynamic>{}));
+  Future<Map<String, dynamic>> returnToStandby(String id, {String? name}) async => _map(
+      await _send('POST', '/api/robots/${Uri.encodeComponent(id)}/standby/return',
+          <String, dynamic>{'name': ?name}));
+
+  @override
+  Future<Map<String, dynamic>> standbyPoints(String id) async =>
+      _map(await _send('GET', '/api/robots/${Uri.encodeComponent(id)}/standby'));
+
+  @override
+  Future<Map<String, dynamic>> standbyHere(String id, String name, {bool? isDefault}) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(id)}/standby/here',
+          <String, dynamic>{'name': name, 'default': ?isDefault}));
+
+  @override
+  Future<Map<String, dynamic>> setStandbyDefault(String id, Map<String, dynamic> point) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(id)}/standby', <String, dynamic>{
+        for (final k in const ['name', 'map_id', 'map_version', 'x', 'y', 'yaw']) k: point[k],
+        'default': true,
+      }));
+
+  @override
+  Future<Map<String, dynamic>> removeStandby(String id, String name) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(id)}/standby',
+          <String, dynamic>{'name': name, 'remove': true}));
 
   @override
   Future<Map<String, dynamic>> schedule() async =>

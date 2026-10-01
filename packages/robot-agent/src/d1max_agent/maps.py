@@ -157,7 +157,8 @@ class MapKeeper:
         return self.root / ref.map_id / ref.version
 
     def home_of(self, ref: MapRef) -> tuple[float, float, float] | None:
-        """这张图上的原点:先看站点下发时给的(记在 ``active.json`` 里,是这台狗在这张图上的待命点),
+        """这张图上的原点:先看站点下发时给的(记在 ``active.json`` 里,
+        站点登记的这台狗在这张图上的原点),
         再看图里带的 ``home.json``。都没有返回 None。"""
         sources = ((self.root / "active.json", "home"), (self.dir_of(ref) / "home.json", None))
         for path, key in sources:

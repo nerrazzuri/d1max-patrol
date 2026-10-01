@@ -197,14 +197,90 @@ def test_补登记只认这台狗最新那条没被拒的标原点(站点):
     stb._on_event("A", _标了(s, "mark_home-2", 2.0, 2))
     stb._on_event("A", _标了(s, "mark_home-1", 1.0, 1))              # 晚到的旧的
     [p] = s.stb_list("A")
-    assert p["x"] == 2.0 and p["default"]
+    assert p["x"] == 2.0 and p["default"], "这张图上还没有待命点:顺手用原点建一个默认的"
+    assert stb.homes("A")[0]["x"] == 2.0
     _命令(s, "c3", "mark_home-3", 3000, "rejected")
     _命令(s, "c4", "mark_home-4", 4000, None)
     stb._on_event("A", _标了(s, "mark_home-4", 4.0, 4))
-    assert s.stb_list("A")[0]["x"] == 4.0
+    assert stb.homes("A")[0]["x"] == 4.0
+    assert s.stb_list("A")[0]["x"] == 2.0, "W13a:改原点不动已有的待命点"
     with s.db.tx() as c:
         c.execute("UPDATE commands SET ack_result='expired' WHERE command_id='c4'")
     stb._on_event("A", _标了(s, "mark_home-2", 2.5, 5))
-    assert s.stb_list("A")[0]["x"] == 2.5, "3 被拒、4 过期:狗上是 2 那次的"
+    assert stb.homes("A")[0]["x"] == 2.5, "3 被拒、4 过期:狗上是 2 那次的"
     stb._on_event("A", _标了(s, "mark_home-9", 9.0, 6))
-    assert s.stb_list("A")[0]["x"] == 2.5, "站点没发过的不认"
+    assert stb.homes("A")[0]["x"] == 2.5, "站点没发过的不认"
+
+
+def test_W13a_标原点只改原点_已有待命点不动_GET带原点(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _能标(s)
+    caps = s.disp.clients["A"].capabilities.tasks["patrol"]
+    s.api.standby.set("A", "gate", map_id=caps["map_id"], map_version=caps["map_version"],
+                      x=7.0, y=7.0, yaw=0.0, default=True)
+    code, d = s.req("POST", "/api/robots/A/home/here", {"name": "dock"}, token=alice)
+    assert code == 200, d
+    assert d["home"]["name"] == "dock" and d["home"]["x"] == d["ack"]["data"]["x"]
+    assert d["standby"] is None, "这张图上已经有待命点:不另建"
+    [p] = s.stb_list("A")
+    assert (p["name"], p["x"], p["default"]) == ("gate", 7.0, True), "待命点不动"
+    code, g = s.req("GET", "/api/robots/A/standby", token=alice)
+    assert code == 200 and [h["name"] for h in g["homes"]] == ["dock"]
+
+
+def test_W13a_在这儿设待命点_不动原点_老代理不发(站点, monkeypatch):
+    s = 站点
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    _能标(s)
+    code, d = s.req("POST", "/api/robots/A/home/here", {"name": "dock"}, token=alice)
+    assert code == 200
+    home_before = s.api.standby.homes("A")
+    agent_home = s.agent.parts.home
+    assert s.req("POST", "/api/robots/A/standby/here", {"name": "gate"}, token=gina)[0] == 403
+    assert s.req("POST", "/api/robots/A/standby/here", {"name": "a b"}, token=alice)[0] == 400
+    code, d = s.req("POST", "/api/robots/A/standby/here", {"name": "gate", "default": True},
+                    token=alice)
+    assert code == 200 and d["standby"]["name"] == "gate" and d["standby"]["default"], d
+    assert d["ack"]["data"]["target"] == "standby"
+    assert s.api.standby.homes("A") == home_before, "站点上的原点不动"
+    assert s.agent.parts.home is agent_home, "狗上的原点不动"
+    assert {p["name"]: p["default"] for p in s.stb_list("A")} == {"dock": False, "gate": True}
+    assert s.req("GET", "/api/robots/A/standby/here", token=alice)[0] == 405
+    tasks = s.disp.clients["A"].capabilities.tasks
+    monkeypatch.setitem(tasks, "mark_home", {})                # 老代理:不认 target
+    code, d = s.req("POST", "/api/robots/A/standby/here", {"name": "x"}, token=alice)
+    assert code == 409 and "老代理" in d["error"], d
+    assert not s.db.query("SELECT 1 FROM commands WHERE kind='mark_home' AND payload LIKE "
+                          "'%\"x\"%'"), "没发给狗"
+
+
+def test_W13a_回指定的待命点(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _能标(s)
+    caps = s.disp.clients["A"].capabilities.tasks["patrol"]
+    for n, x in (("gate", 1.0), ("yard", 2.0)):
+        s.api.standby.set("A", n, map_id=caps["map_id"], map_version=caps["map_version"],
+                          x=x, y=0.0, yaw=0.0, default=(n == "gate"))
+    code, d = s.req("POST", "/api/robots/A/standby/return", {"name": "nope"}, token=alice)
+    assert code == 409 and "没有待命点 nope" in d["error"], d
+    code, d = s.req("POST", "/api/robots/A/standby/return", {"name": "yard"}, token=alice)
+    assert code == 200, d
+    [row] = s.db.query("SELECT payload FROM commands WHERE kind='goto' ORDER BY rowid DESC "
+                       "LIMIT 1")
+    import json
+    assert json.loads(row["payload"])["target"]["x"] == 2.0
+
+
+def test_W13a_狗回的不是只标待命点_站点不登记(站点):
+    """防老代理:回执里没有 ``target: standby``(当成标原点做了)就不登记成待命点。"""
+    from d1max_site.standby import StandbyError
+    s = 站点
+    _能标(s)
+    data = {"map_id": "m", "map_version": "1", "x": 1.0, "y": 2.0, "yaw": 0.0}
+    with pytest.raises(StandbyError, match="老代理"):
+        s.api.standby.mark_standby("A", "gate", data)
+    assert not [p for p in s.stb_list("A") if p["name"] == "gate"]
+    s.api.standby.mark_standby("A", "gate", data | {"target": "standby"})
+    assert [p["name"] for p in s.stb_list("A")] == ["gate"]

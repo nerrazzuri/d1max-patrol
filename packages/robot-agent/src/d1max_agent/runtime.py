@@ -453,7 +453,8 @@ class AgentRuntime:
         if self.parts is not None and self.loaded_map is not None:
             # W00c6e:设位置(里程锚定)。真狗要人给位置;仿真按原样,也收(测试挪坐标用)。
             out["relocalize"] = {"needs_pose": not self.parts.nav.anchor.identity}
-            out["mark_home"] = {}               # W00c6f:在当前位置标原点(定位不好就拒)
+            # W00c6f:在当前位置标原点(定位不好就拒);W13a:也能只标待命点(不动原点)
+            out["mark_home"] = {"standby": True}
             # W11a、W09i:头尾方向、这会儿能不能自己走(站点据此派不派会自己走的任务)
             head, blocked = self._head_key()
             out["head"] = {"direction": head, "autonomy": not blocked}
@@ -722,13 +723,20 @@ class AgentRuntime:
     async def _mark_home(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
         """在当前位置标原点(W00c6f):用**此刻锚定后的地图位姿**当这张图上的原点。狗要停着、不在忙;定位
         要好 —— 锚过、里程新鲜、偏差不大于 ``HOME_MAX_SIGMA_M``。收下:**先落盘**(``homes.json``,
-        重启照用;落不了盘就拒)再生效(返航目标、起飞检查),位置放在回执里给站点登记(站点是权威)。"""
+        重启照用;落不了盘就拒)再生效(返航目标、起飞检查),位置放在回执里给站点登记(站点是权威)。
+
+        ``target: "standby"``(W13a,决策 16:原点与待命点拆开):同样的检查、同样回位置,但**不动原点**
+        —— 站点拿它登记一个待命点。能力里 ``mark_home.standby`` 报了站点才发(老代理不认这个字段,
+        会当成标原点)。"""
         m = self.loaded_map
         if self.parts is None or m is None:
             return "no_map"
         name = cmd.payload.get("name", "home")
         if not isinstance(name, str) or not _HOME_NAME.fullmatch(name):
             return "payload: name 只许字母、数字、. _ -(1–64 字)"
+        target = cmd.payload.get("target", "home")
+        if target not in ("home", "standby"):
+            return "payload: target 只许 home 或 standby"
         busy = self._home_busy()
         if busy:
             return f"busy: {busy}"
@@ -748,6 +756,11 @@ class AgentRuntime:
             return "loc_poor: 报不出地图位姿"
         if (est.map_id, est.map_version) != m or self.loaded_map != m:
             return "busy: 刚换了图"
+        data = {"map_id": m[0], "map_version": m[1], "x": round(est.x, 3),
+                "y": round(est.y, 3), "yaw": round(est.yaw, 4), "sigma_m": round(est.sigma_xy_m, 2),
+                "target": target}
+        if target == "standby":
+            return "", data                       # 待命点归站点管:狗上什么都不改
         try:
             self.homes.put(m[0], m[1], (est.x, est.y, est.yaw), now_ms=self._now())
         except OSError as exc:
@@ -756,8 +769,6 @@ class AgentRuntime:
         self.parts.home = HomePoint(map_id=m[0], pose=Pose.from_xy_yaw(est.x, est.y, est.yaw),
                                     marked_at_ms=self._now(),
                                     note=f"W00c6f:在当前位置标的({name})")
-        data = {"map_id": m[0], "map_version": m[1], "x": round(est.x, 3),
-                "y": round(est.y, 3), "yaw": round(est.yaw, 4), "sigma_m": round(est.sigma_xy_m, 2)}
         self.events.emit("home_marked", {"task_id": cmd.task_id, "name": name, **data})
         return "", data
 

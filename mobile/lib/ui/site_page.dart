@@ -21,6 +21,7 @@ import 'site_mapping.dart';
 import 'site_maps.dart';
 import 'site_releases.dart';
 import 'site_runs.dart';
+import 'site_standby.dart';
 import 'site_supervise.dart';
 import 'site_teleop.dart';
 import 'site_video.dart';
@@ -524,13 +525,15 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         '设位置');
   }
 
-  /// 在当前位置标原点（W00c6f，管理员）：确认之后狗用它此刻的位置当原点，站点登记成默认待命点。
+  /// 在当前位置标原点（W00c6f，管理员）：确认之后狗用它此刻的位置当这张图上的原点（W13a：原点跟待命点
+  /// 分开了 —— 这张图上还没有待命点时，站点顺手用它建一个默认的）。
   Future<void> _markHome() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('在这儿标原点'),
-        content: Text('把 ${widget.robotId} 的默认待命点（原点，名字叫 home）换成它现在的位置？\n'
+        content: Text('把 ${widget.robotId} 在这张图上的原点（安全返航、回充用，名字叫 home）换成它现在的'
+            '位置？待命点不动（这张图上还没有待命点的话，顺手建一个默认的）。\n'
             '狗会先核定位：没设位置、偏差大就不标；在跑任务、在换图也不标。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
@@ -743,6 +746,18 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                   key: const Key('btn-standby'),
                   onPressed: () => _do(() => widget.api.returnToStandby(widget.robotId), '回待命点'),
                   child: const Text('回待命点')),
+            // 待命点与原点（W13a）：列表、回指定的一个；管理员在这儿设、设默认、删
+            if ((s?.canDispatch ?? false) || (s?.canManageMaps ?? false))
+              OutlinedButton(
+                  key: const Key('btn-standby-list'),
+                  onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                          builder: (_) => SiteStandbyPage(
+                              api: widget.api,
+                              robotId: widget.robotId,
+                              canMarkHere: robotCanStandbyHere(v)))),
+                  child: const Text('待命点…')),
             if ((s?.canAbort ?? false) && taskId != null)
               FilledButton(
                   key: const Key('btn-abort'),

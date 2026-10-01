@@ -94,9 +94,42 @@ class FakeApi implements SiteApi {
     return {'ack': {'result': 'accepted'}};
   }
   @override
-  Future<Map<String, dynamic>> returnToStandby(String id) async {
-    calls.add('standby $id');
+  Future<Map<String, dynamic>> returnToStandby(String id, {String? name}) async {
+    calls.add(name == null ? 'standby $id' : 'standby $id $name');
     return {'ack': {'result': 'accepted'}};
+  }
+  /// 待命点与原点（W13a）：测试改它；设、设默认、删都记在 [calls] 里、照着改它。
+  Map<String, dynamic> standby = <String, dynamic>{'points': <Map<String, dynamic>>[], 'homes': <Map<String, dynamic>>[]};
+  SiteError? standbyError;
+  @override
+  Future<Map<String, dynamic>> standbyPoints(String id) async => standby;
+  @override
+  Future<Map<String, dynamic>> standbyHere(String id, String name, {bool? isDefault}) async {
+    calls.add('standby-here $id $name ${isDefault ?? '-'}');
+    if (standbyError != null) throw standbyError!;
+    final pts = (standby['points'] as List).cast<Map<String, dynamic>>();
+    if (isDefault == true) {
+      for (final p in pts) {
+        p['default'] = false;
+      }
+    }
+    pts.add(<String, dynamic>{'name': name, 'map_id': 'm', 'map_version': '1', 'x': 1.0, 'y': 2.0,
+      'yaw': 0.0, 'default': isDefault ?? false});
+    return {'ack': {'result': 'accepted', 'data': {'target': 'standby'}}};
+  }
+  @override
+  Future<Map<String, dynamic>> setStandbyDefault(String id, Map<String, dynamic> point) async {
+    calls.add('standby-default $id ${point['name']}');
+    for (final p in (standby['points'] as List).cast<Map<String, dynamic>>()) {
+      p['default'] = p['name'] == point['name'];
+    }
+    return standby;
+  }
+  @override
+  Future<Map<String, dynamic>> removeStandby(String id, String name) async {
+    calls.add('standby-remove $id $name');
+    (standby['points'] as List).removeWhere((p) => (p as Map)['name'] == name);
+    return standby;
   }
   @override
   Future<Map<String, dynamic>> schedule() async => siteFixture('site_schedule');

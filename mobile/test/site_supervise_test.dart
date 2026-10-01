@@ -178,7 +178,8 @@ void main() {
 class _RejectingApi extends FakeApi {
   _RejectingApi(super.role, {super.robotView});
   @override
-  Future<Map<String, dynamic>> returnToStandby(String id) async => <String, dynamic>{
+  Future<Map<String, dynamic>> returnToStandby(String id, {String? name}) async =>
+      <String, dynamic>{
         'ack': <String, dynamic>{'result': 'rejected', 'reason': 'unsupervised'}
       };
 }
