@@ -1521,11 +1521,49 @@ def test_前后雷达合并的启动脚本与单元_只装不启用_卸载删干
     assert '"$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT"' in 卸, "先停吃合并话题的定位器,再停合并"
 
 
-def test_装机脚本_老模板的换算猜测值只提示不改():
-    """W12:老模板的例子写 --mps-per-unit 0.4;照抄进 env 的话代理以为自己只有 0.2 m/s、
-    限速区限不住。"""
+def _units(tmp_path, text):
+    import subprocess
+    f = tmp_path / "env"
+    f.write_text(text, encoding="utf-8")
+    return subprocess.run(["sh", str(DEPLOY / "d1max-units-check"), str(f)], capture_output=True,
+                          text=True)
+
+
+def test_换算系数检查_真狗用老模板的猜测值就不行_别的都放(tmp_path):
+    """W12 外审阻断:装机前查 /etc/d1max/env;范围跟代理的 UNIT_RANGES 一致。"""
+    import os
+    import subprocess
+    assert os.access(DEPLOY / "d1max-units-check", os.X_OK)
+    subprocess.run(["sh", "-n", str(DEPLOY / "d1max-units-check")], check=True)
+    d1 = "D1MAX_HAL=d1max\n"
+    for args in ("--sidecar 127.0.0.1:8090 --mps-per-unit 0.4 --radps-per-unit 1.0",
+                 "--mps-per-unit 0.4", "--radps-per-unit 1.0", "--mps-per-unit=0.4",
+                 "--mps-per-unit 2.5", "--mps-per-unit abc"):
+        for line in (f"D1MAX_AGENT_ARGS={args}\n", f'D1MAX_AGENT_ARGS="{args}"\n'):
+            r = _units(tmp_path, d1 + line)
+            assert r.returncode == 1, (line, r.stdout, r.stderr)
+            assert "不在 SDK 低速档的范围里" in r.stderr
+    for text in (d1 + "D1MAX_AGENT_ARGS=--sidecar 127.0.0.1:8090\n",             # 删掉了:默认值
+                 d1 + "D1MAX_AGENT_ARGS=--mps-per-unit 1.08 --radps-per-unit 1.42\n",  # 实测值
+                 d1 + "D1MAX_AGENT_ARGS=--mps-per-unit 0.4 --units-confirmed\n",   # 人核过
+                 "D1MAX_HAL=sim\nD1MAX_AGENT_ARGS=--mps-per-unit 0.4\n",           # sim 不拦
+                 "D1MAX_HAL=d1max\n",
+                 "# D1MAX_HAL=d1max\nD1MAX_AGENT_ARGS=--mps-per-unit 0.4\n"):     # 注释掉的不算
+        r = _units(tmp_path, text)
+        assert r.returncode == 0, (text, r.stderr)
+    r = subprocess.run(["sh", str(DEPLOY / "d1max-units-check"), str(tmp_path / "没有")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, "还没有 env(新机器)"
+    text = (DEPLOY / "d1max-units-check").read_text(encoding="utf-8")
+    assert 'check --mps-per-unit "$(val --mps-per-unit)" 0.7 1.5' in text
+    assert 'check --radps-per-unit "$(val --radps-per-unit)" 1.1 2.0' in text, \
+        "跟代理的 UNIT_RANGES 一致"
+
+
+def test_装机脚本_换算系数不对什么都不改就停():
     装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     assert "--mps-per-unit 1.0 --radps-per-unit 1.5" in 装
-    i = 装.index("--mps-per-unit 0.4(老模板的猜测值)")
-    assert "grep -qE -- '--mps-per-unit" in 装[i - 400:i]
+    i = 装.index('sh "$PKG/deploy/d1max-units-check" /etc/d1max/env')
+    assert i < 装.index('say "1/7 建目录'), "在动任何东西之前"
+    assert "exit 2" in 装[i:i + 300]
     assert "sed -i" not in 装[i - 400:i + 400], "不改人手写的配置"

@@ -1,0 +1,39 @@
+#!/bin/sh
+# d1max-units-check <env 文件> —— W12 外审阻断:真狗(D1MAX_HAL=d1max)的速度换算系数要在 SDK 低速档文档值附近,
+# 不然代理以为的速度跟实际差一大截,限速区、遥控限速全都限不住。老模板的例子 --mps-per-unit 0.4、
+# --radps-per-unit 1.0 是没实测过的猜测(文档是 1.0 m/s、1.5 rad/s),照抄过去的老机器就是这样。
+#
+# 范围跟代理 d1max_agent.main 的 UNIT_RANGES 一致(测试核):前进 0.7–1.5 m/s、转向 1.1–2.0 rad/s。
+# 实测值真不在范围里:人核过之后在 D1MAX_AGENT_ARGS 里加 --units-confirmed。
+#
+# 退出码:0 = 没事(没有 env、不是真狗、没写这两个参数、在范围里、人确认过);1 = 不行(说原因)。
+# install.sh 一开始就调它:不行就什么都不改、直接停。代理自己起来时也按同一个范围拒(真正的门)。
+set -eu
+f=${1:?用法: d1max-units-check <env 文件>}
+[ -f "$f" ] || exit 0
+last() { sed -n "s/^[[:space:]]*$1=//p" "$f" | tail -n 1 | tr -d "\"'"; }
+[ "$(last D1MAX_HAL | tr -d '[:space:]')" = d1max ] || exit 0
+args=$(last D1MAX_AGENT_ARGS)
+case " $args " in *" --units-confirmed "*) exit 0 ;; esac
+val() {
+  printf '%s\n' "$args" | tr '[:space:]' '\n' | awk -v k="$1" '
+    want { print; exit }
+    $0 == k { want = 1 }
+    index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }'
+}
+bad=
+check() {   # 参数名 值 下限 上限
+  [ -n "$2" ] || return 0
+  if ! awk -v v="$2" -v lo="$3" -v hi="$4" 'BEGIN { exit !(v + 0 == v && v >= lo && v <= hi) }'; then
+    bad="$bad
+  $1 $2(要在 $3–$4)"
+  fi
+}
+check --mps-per-unit "$(val --mps-per-unit)" 0.7 1.5
+check --radps-per-unit "$(val --radps-per-unit)" 1.1 2.0
+[ -z "$bad" ] && exit 0
+echo "错误: $f 是真狗(D1MAX_HAL=d1max),速度换算系数不在 SDK 低速档的范围里:$bad" >&2
+echo "      老模板的 0.4 / 1.0 是猜的(SDK 文档低速档是 1.0 m/s、1.5 rad/s);照它换算限速区限不住(W12)。" >&2
+echo "      改法:从 D1MAX_AGENT_ARGS 里删掉这两个参数(用默认值),或者写 tools/w00d_motion_check.py" >&2
+echo "      量出来的实测值;实测值真不在范围里,人核过之后加 --units-confirmed。" >&2
+exit 1
