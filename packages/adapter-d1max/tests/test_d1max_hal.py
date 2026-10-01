@@ -376,3 +376,43 @@ async def test_头尾方向从旁路进程的状态来():
 
 async def _head(hal, want):
     return (await hal.health()).head == want
+
+
+async def test_机身系_狗尾为前且SDK跟着调头_里程朝向不跳_往狗头走还是正速度():
+    """W09i §1:HAL 一律机身系。仿真旁路进程照「SDK 跟着调头」报里程(调头那一刻朝向跳 π)。"""
+    async with _台子() as (sim, hal):
+        before = await hal.odometry()
+        sim.head = 2
+        assert await _等(lambda: _head(hal, "tail"))
+        o = await hal.odometry()
+        assert abs(math.remainder(o.yaw - before.yaw, 2 * math.pi)) < 1e-9, "机身朝向不跳"
+        assert sim.yaw != before.yaw, "前提:SDK 报的跳了"
+        r = await hal.set_velocity(_v(vx=0.6))           # 机身系往狗头走
+        assert not r.rejected
+        await asyncio.sleep(0.2)
+        assert sim.vx < 0, "SDK 那头是往后(它的「往前」是狗尾)"
+        o = await hal.odometry()
+        assert o.vx > 0, "机身系的前进速度是正的"
+        await hal.stop()
+
+
+async def test_机身系_SDK不跟着调头就不换算():
+    sim = SimAgentServer(port=0, follows_head=False)
+    await sim.start()
+    hal = D1MaxHal("127.0.0.1", sim.port, mps_per_unit=1.2, radps_per_unit=1.5,
+                   deadband_mps=0.25)
+    try:
+        await hal.connect()
+        await hal.acquire_control()
+        await hal.set_motion_mode("stand")
+        y0 = (await hal.odometry()).yaw
+        sim.head = 2
+        assert await _等(lambda: _head(hal, "tail"))
+        assert (await hal.odometry()).yaw == y0
+        assert not (await hal.set_velocity(_v(vx=0.6))).rejected
+        await asyncio.sleep(0.2)
+        assert sim.vx > 0
+        await hal.stop()
+    finally:
+        await hal.close()
+        await sim.stop()

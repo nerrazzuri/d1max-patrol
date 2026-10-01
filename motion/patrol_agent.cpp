@@ -82,7 +82,13 @@ using namespace robot_sdk;
 //
 // 5(W11a):state 帧带 head(SDK RobotState.head_direction:0 未知、1 狗头为前、2 狗尾为前)。
 // 调过头尾(狗尾为前)时开了 --require-clearance 就不放行前进:感知的净空许可是按前雷达那头算的。
-static const int kProtoVersion = 5;
+//
+// 6(W09i):clear 带 end("head" 默认 / "tail"):许可分两头,SDK 的「往前」走向哪一头就要哪一头的
+// 许可;hello 带 follows_head(参数 --sdk-follows-head 0|1,默认 1:调头之后 SDK 的「往前」变成狗尾那头,
+// 真机项核)—— 代理的 HAL 照它把里程、速度换成机身系。5 号旁路进程会把 end=tail 的许可当成狗头的,
+// 感知节点只对 ≥ 6 的发狗尾许可。
+static const int kProtoVersion = 6;
+static bool g_follows_head = true;
 
 // 一次 Move 在机器上维持约 1s(清单 #38)，靠 50ms 连续下发维持行走。
 static const int kMoveIntervalMs = 50;
@@ -581,8 +587,12 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
   if (cmd == "clear") {
     const double ms = JsonNumField(line, "ms", 0.0);
     if (!std::isfinite(ms) || ms < 1 || ms > 1000) return Reject("ms 要在 [1, 1000] 内");
+    std::string end = "head";
+    JsonField(line, "end", &end);
+    if (end != "head" && end != "tail") return Reject("end 要是 head 或 tail");
     g_gate.SetClearance(std::chrono::steady_clock::now() +
-                        std::chrono::milliseconds(static_cast<int>(ms)));
+                            std::chrono::milliseconds(static_cast<int>(ms)),
+                        end == "tail" ? velgate::kEndTail : velgate::kEndHead);
     return Outcome{};
   }
   if (cmd == "vel")
@@ -673,6 +683,7 @@ static void ServeClient(int fd) {
   std::ostringstream hello;
   hello << "{\"t\":\"hello\",\"proto\":" << kProtoVersion
         << ",\"sdk\":\"0.1.1\",\"held\":" << (g_held.load() ? "true" : "false")
+        << ",\"follows_head\":" << (g_follows_head ? "true" : "false")
         << ",\"robot\":\"" << JsonEscape(g_robot_addr) << "\"}";
   SendTo(fd, hello.str());
   // 立刻补一帧状态：客户端刚连上就该能读到电量和运动状态，不必干等到
@@ -831,7 +842,8 @@ static void OnSig(int) {
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::cerr << "usage: " << argv[0]
-              << " <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--require-clearance]\n"
+              << " <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--require-clearance]"
+                 " [--sdk-follows-head 0|1]\n"
               << "  例: " << argv[0]
               << " 192.168.168.168 8082 --listen 127.0.0.1:8090"
                  " --fifo /tmp/d1max.cmd\n";
@@ -855,6 +867,14 @@ int main(int argc, char** argv) {
       fifo = argv[++i];
     } else if (arg == "--require-clearance") {
       g_gate.RequireClearance(true);  // W11 第二层:没有感知节点的净空许可不许往前
+    } else if (arg == "--sdk-follows-head" && i + 1 < argc) {
+      const std::string v = argv[++i];
+      if (v != "0" && v != "1") {
+        std::cerr << "--sdk-follows-head 要是 0 或 1\n";
+        return 2;
+      }
+      g_follows_head = v == "1";
+      g_gate.SdkFollowsHead(g_follows_head);
     } else {
       std::cerr << "未知参数: " << arg << "\n";
       return 2;

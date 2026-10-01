@@ -48,6 +48,9 @@ SCAN_POINT_STRIDE = 4
 SCAN_MATCH_S = 0.05
 #: 逐帧扫描只认这个话题:MOLA 跟的就是它的坐标系(rslidar_head),点乘轨迹的位姿就进了地图。
 SCAN_TOPIC = "/front_lidar"
+#: 在前雷达系里的话题:前雷达、前后雷达合并(W09i,``merge-bag`` 写的)。MOLA 的机身系就是前雷达,
+#: 打包画栅格能逐帧打真射线。
+FRONT_FRAME_TOPICS = (SCAN_TOPIC, "/d1max/merged_lidar")
 FILES = GEOMETRY_FILES
 Runner = Callable[..., Any]
 
@@ -95,7 +98,8 @@ def run_mapping(bag: Path, work: Path, *, lidar_topic: str = "/front_lidar",
     还有 ``mola.json``(MOLA 的版本、流水线、参数 —— 打包抄进 ``build.json``,给回放复现)。回耗时。"""
     work.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "MOLA_LIDAR_TOPIC": lidar_topic,
-           "MOLA_TF_BASE_LINK": "rslidar_head" if lidar_topic == "/front_lidar" else "base_link",
+           "MOLA_TF_BASE_LINK": ("rslidar_head" if lidar_topic in FRONT_FRAME_TOPICS
+                                 else "base_link"),
            "MOLA_SAVE_MM": str(work / "raw_prior.mm"), "MOLA_LOCAL_MAP_MAX_SIZE": "0"}
     cmd = ["mola-lidar-odometry-cli", "-c", str(MOLA_SHARE / "pipelines/lidar3d-default.yaml"),
            "--state-estimator-param-file",
@@ -234,8 +238,8 @@ def _render(points: Any, sensor: Any, frames: Frames, body: Any, traj: Sequence[
 
     if bag is None:
         why = "没给录包"
-    elif topic != SCAN_TOPIC:
-        why = f"话题 {topic} 不是 {SCAN_TOPIC}"
+    elif topic not in FRONT_FRAME_TOPICS:
+        why = f"话题 {topic} 不在前雷达系里"
     else:
         used = [0]
 

@@ -235,10 +235,13 @@ def test_头尾调过来了_不派会自己走的_遥控照常(站点):
     assert s.disp.dispatchable("A", "goto") == ""
     tasks = s.disp.clients["A"].capabilities.tasks
     for d, words in (("tail", "狗尾为前"), ("unknown", "不知道")):
-        tasks["head"] = {"direction": d}
-        why = s.disp.dispatchable("A", "goto")
-        assert "头尾方向" in why and words in why, why
-        assert "头尾方向" in s.disp.dispatchable("A", "patrol")
-        assert s.disp.dispatchable("A", "teleop") == ""
+        for h in ({"direction": d}, {"direction": d, "autonomy": False}):   # 老狗、新狗
+            tasks["head"] = h
+            why = s.disp.dispatchable("A", "goto")
+            assert "头尾方向" in why and words in why, why
+            assert "头尾方向" in s.disp.dispatchable("A", "patrol")
+            assert s.disp.dispatchable("A", "teleop") == ""
+    tasks["head"] = {"direction": "tail", "autonomy": True}    # W09i:后雷达标过
+    assert s.disp.dispatchable("A", "goto") == ""
     tasks["head"] = {"direction": "head"}
     assert s.disp.dispatchable("A", "goto") == ""

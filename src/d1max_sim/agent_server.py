@@ -85,10 +85,15 @@ class SimAgentServer:
         sdk: str = "0.1.1",
         telemetry_hz: float = TELEMETRY_HZ,
         require_clearance: bool = False,
+        follows_head: bool = True,
     ) -> None:
         #: 同 ``patrol_agent --require-clearance``(W11 第二层):没有有效的净空许可,前进分量置零。
         self.require_clearance = require_clearance
-        self._clear_until = -math.inf
+        #: 净空许可分两头(W09i):[狗头那头, 狗尾那头] 到期时刻。
+        self._clear_until = [-math.inf, -math.inf]
+        #: 同 ``patrol_agent --sdk-follows-head``:调过头尾之后 SDK 的「往前」(里程、速度)跟着变成
+        #: 狗尾那头。仿真照这个约定报里程:调头那一刻里程的朝向跳 π(真机怎么跳是真机项)。
+        self.follows_head = follows_head
         self._host = host
         self._port = port
         #: 旁路进程此刻是否握着控制权。
@@ -105,7 +110,7 @@ class SimAgentServer:
         self.estop_software = EmergencyStatus.RECOVER
         self.estop_hardware = EmergencyStatus.RECOVER
         #: 头尾方向(W11a,SDK ``HeadDirection``):1 狗头为前、2 狗尾为前、0 未知。
-        self.head = 1
+        self._head = 1
         #: 世界系里程,单位米/弧度。
         self.x = 0.0
         self.y = 0.0
@@ -132,6 +137,31 @@ class SimAgentServer:
         self._clients: set[asyncio.StreamWriter] = set()
         self._tasks: set[asyncio.Task[None]] = set()
         self._started_at = 0.0
+
+    @property
+    def head(self) -> int:
+        return self._head
+
+    @head.setter
+    def head(self, h: int) -> None:
+        """调头(遥控器、厂家 App 的 ReverseHeadTail)。SDK 跟着调头时,它报的里程是「往前那头」的:
+        机身没动,朝向跳 π。"""
+        before = self._sdk_flipped()
+        self._head = h
+        if self._sdk_flipped() != before:
+            self.yaw = _wrap(self.yaw + math.pi)
+
+    def _sdk_flipped(self) -> bool:
+        return self.follows_head and self._head == 2
+
+    def _lead_end(self) -> int | None:
+        """SDK 的「往前」走向哪一头(0 狗头、1 狗尾);头尾不知道 None。
+        同 vel_gate.hpp 的 ``LeadEndLocked``。"""
+        if self._head == 1:
+            return 0
+        if self._head == 2:
+            return 1 if self.follows_head else 0
+        return None
 
     # -------------------------------------------------------------- 生命周期
 
@@ -179,7 +209,7 @@ class SimAgentServer:
         try:
             self._send(writer, {
                 "t": "hello", "proto": PROTO_VERSION, "sdk": self._sdk,
-                "held": self._held, "robot": "sim://d1max",
+                "held": self._held, "robot": "sim://d1max", "follows_head": self.follows_head,
             })
             await writer.drain()
             telemetry = asyncio.create_task(self._telemetry_loop(writer))
@@ -337,8 +367,12 @@ class SimAgentServer:
                 raise _Rejected(f"clear 参数不对: {exc}") from exc
             if not (math.isfinite(ms) and 1 <= ms <= 1000):
                 raise _Rejected("ms 要在 [1, 1000] 内")
+            end = args.get("end", "head")
+            if end not in ("head", "tail"):
+                raise _Rejected("end 要是 head 或 tail")
+            i = 0 if end == "head" else 1
             # 同 vel_gate.hpp 的 SetClearance:只往后延
-            self._clear_until = max(self._clear_until, time.monotonic() + ms / 1000.0)
+            self._clear_until[i] = max(self._clear_until[i], time.monotonic() + ms / 1000.0)
             return
         if cmd == "walk":
             self._need_control("walk")
@@ -394,9 +428,10 @@ class SimAgentServer:
                     self._vel_until = 0.0
                     break
                 fwd, lat, yaw = self._vel
-                if self.require_clearance and fwd > 0 and (time.monotonic() >= self._clear_until
-                                                           or self.head != 1):
-                    fwd = 0.0                     # 同 vel_gate.hpp 的 Live:没有净空许可不许往前
+                lead = self._lead_end()
+                if self.require_clearance and fwd > 0 and (
+                        lead is None or time.monotonic() >= self._clear_until[lead]):
+                    fwd = 0.0                     # 同 vel_gate.hpp 的 Live:往前那头没有许可不许往前
                 if max(abs(fwd), abs(lat), abs(yaw)) < WALK_DEADBAND:
                     # 量太小只是原地蹭(清单 #37),不动;真机也不报错。
                     self.vx = self.vy = self.vyaw = 0.0

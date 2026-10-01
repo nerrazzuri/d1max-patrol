@@ -17,6 +17,7 @@ from d1max_localizer.obstacles import (  # noqa: E402
     LineClient,
     Mount,
     Perception,
+    RearMount,
     SelfCheck,
     active_frames,
     classify,
@@ -349,3 +350,80 @@ def test_图名带上一级目录的不认(tmp_path):
     assert active_frames(maps) is None
     (maps / "active.json").write_text(json.dumps({"map_id": "../x", "version": "2"}))
     assert active_frames(maps) is None
+
+
+def _后雷达(m, calibrated):
+    from d1max_localizer.lidars import geometry_guess
+    T = np.array(geometry_guess(m.up, m.fwd))
+    T[:3, 3] = [-2 * m.x * v for v in m.fwd]       # 两台雷达沿「前」相距 2 × 前雷达的偏移
+    return RearMount(front=m, T_front_rear=T, calibrated=calibrated)
+
+
+def _后雷达系(rear, base):
+    from d1max_localizer.merge import transform
+    return transform(np.linalg.inv(rear.T_front_rear), 到雷达系(rear.front, base))
+
+
+def test_后雷达外参_换进前雷达系再走前雷达的外参():
+    m = Mount.from_frames(AIRY)
+    rear = _后雷达(m, True)
+    base = np.array([[-2.0, 0.5, -H], [1.0, -0.3, 0.2]])
+    assert np.allclose(rear.to_base(_后雷达系(rear, base)), base)
+    assert np.allclose(m.mirrored().to_base(到雷达系(m.mirrored(), base)), base)
+
+
+def _两头(per, m, rear, *, back_box, seq=1):
+    back = 场景(back=True, box=back_box)
+    per.on_rear(_后雷达系(rear, back[back[:, 0] < -0.5]))
+    return per.on_front(到雷达系(m, 场景()), seq)
+
+
+def test_后雷达标过_它的空也算_狗尾那头的走廊与许可():
+    m = Mount.from_frames(AIRY)
+    rear = _后雷达(m, True)
+    side = 假对端()
+    per = Perception(m, rear=rear, sidecar=LineClient(lambda: side.a, None), clock=lambda: 0.0)
+    per.check = SelfCheck(frames=1)
+    g = _两头(per, m, rear, back_box=((-2.4, -2.0), (-0.2, 0.2), 0.5))
+    occ, known = unpack_bits(g["occ"], 80), unpack_bits(g["known"], 80)
+    assert g["rear"] and g["rear_cal"]
+    assert occ[_cell(Config(), -2.2, 0.0)] and known[_cell(Config(), -3.0, 1.5)], "标过:空也算"
+    assert per.last_clear_tail == pytest.approx(2.0 - Config().body_len / 2, abs=0.1)
+    assert per.last_clear > 3.0
+    side.b.sendall(b'{"t":"hello","proto":6}\n')
+    _两头(per, m, rear, back_box=((-2.4, -2.0), (-0.2, 0.2), 0.5), seq=2)
+    ends = [x.get("end", "head") for x in side.read() if x.get("cmd") == "clear"]
+    assert "tail" in ends and "head" in ends
+    side.lines.clear()
+    _两头(per, m, rear, back_box=((-1.0, -0.8), (-0.2, 0.2), 0.5), seq=3)
+    ends = [x.get("end", "head") for x in side.read() if x.get("cmd") == "clear"]
+    assert ends == ["head"], "狗尾那头太近:不发它的许可"
+
+
+def test_后雷达没标定_空不算_不发狗尾许可():
+    m = Mount.from_frames(AIRY)
+    rear = _后雷达(m, False)
+    side = 假对端()
+    per = Perception(m, rear=rear, sidecar=LineClient(lambda: side.a, None), clock=lambda: 0.0)
+    per.check = SelfCheck(frames=1)
+    g = _两头(per, m, rear, back_box=((-2.4, -2.0), (-0.2, 0.2), 0.5))
+    assert g["rear"] and not g["rear_cal"]
+    assert not unpack_bits(g["known"], 80)[_cell(Config(), -3.0, 1.5)]
+    assert per.last_clear_tail < 0.1, "身后看不见:走廊一出机身就到头"
+    side.b.sendall(b'{"t":"hello","proto":6}\n')
+    _两头(per, m, rear, back_box=((-2.4, -2.0), (-0.2, 0.2), 0.5), seq=2)
+    assert all("end" not in x for x in side.read())
+
+
+def test_旁路进程是5号_标过也不发狗尾许可():
+    """5 号旁路进程不认 end:会把狗尾的许可当成狗头的。"""
+    m = Mount.from_frames(AIRY)
+    rear = _后雷达(m, True)
+    side = 假对端()
+    per = Perception(m, rear=rear, sidecar=LineClient(lambda: side.a, None), clock=lambda: 0.0)
+    per.check = SelfCheck(frames=1)
+    _两头(per, m, rear, back_box=((-2.4, -2.0), (-0.2, 0.2), 0.5))
+    side.b.sendall(b'{"t":"hello","proto":5}\n')
+    _两头(per, m, rear, back_box=((-2.4, -2.0), (-0.2, 0.2), 0.5), seq=2)
+    assert per.sidecar_proto == 5
+    assert all("end" not in x for x in side.read())

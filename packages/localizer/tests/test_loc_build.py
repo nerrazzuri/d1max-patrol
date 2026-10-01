@@ -202,9 +202,12 @@ def test_有录包就用逐帧扫描打真射线_读不了退回模拟射线_写
     got.clear()
     B.package(work, tmp_path / "out5", run=假MOLA(pts), bag=tmp_path / "bag", read_scans=读扫描,
               lidar_topic="/rear_lidar")
-    assert got == [], "逐帧扫描只认前雷达(MOLA 跟的是它的坐标系)"
+    assert got == [], "逐帧扫描只认前雷达系的话题(MOLA 跟的是它的坐标系)"
     assert json.loads((tmp_path / "out5" / "build.json").read_text())["grid"]["rays"].startswith(
         "synthetic:话题 /rear_lidar")
+    B.package(work, tmp_path / "out6", run=假MOLA(pts), bag=tmp_path / "bag", read_scans=读扫描,
+              lidar_topic="/d1max/merged_lidar")
+    assert got, "前后雷达合并的话题(W09i)也在前雷达系里:照样打真射线"
 
 
 def test_栅格拿到狗身中心走过的路(tmp_path, monkeypatch):

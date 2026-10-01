@@ -417,11 +417,13 @@ class Dispatcher:
         if kind not in ("goto", "patrol"):
             return
         head = c.capabilities.tasks.get("head") if c.capabilities is not None else None
-        if head is not None and head.get("direction") != "head":
-            # W11a:调过头尾(或不知道)。前后雷达合并(W09i)之前定位、规划、避障都按前雷达那头是前算
+        if head is not None and not head.get("autonomy", head.get("direction") == "head"):
+            # W11a、W09i:狗报「这会儿不能自己走」就不派;老狗只报方向(那时只有狗头为前能走)
             d = head.get("direction")
-            raise DispatchRefused(f"{robot_id} 的头尾方向是「{_HEAD_TEXT.get(d, d)}」:前后雷达合并"
-                                  "之前只有狗头为前才能自己走(遥控照常)")
+            why = ("后雷达没标定或没配避障,看不清身后" if d == "tail"
+                   else "只有头尾方向确定才能自己走")
+            raise DispatchRefused(f"{robot_id} 的头尾方向是「{_HEAD_TEXT.get(d, d)}」:{why}"
+                                  "(遥控照常)")
         obs = c.capabilities.tasks.get("obstacles") if c.capabilities is not None else None
         if obs is not None and obs.get("state") not in ("ok", "stale"):
             # 「不新鲜」是一两秒的事:狗那头原地等,跟后端一样放行(内审小)

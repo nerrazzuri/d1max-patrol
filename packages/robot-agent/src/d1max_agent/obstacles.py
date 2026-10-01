@@ -6,7 +6,7 @@
   转身时身后、身侧刚看过的格子靠这个;狗自己刚站过的地方算空。
 - :class:`ObstacleGuard`:一条速度命令发出去之前,按这条命令把机身矩形(+ 余量)往前推「链路延迟 +
   刹停距离 + 余量」那么远(刹停按**里程实测速度**,W08 决定 8),原地转是外接圆;扫过的格子有挡或
-  未知 → 不发。机身此刻占着的那块不查。
+  未知 → 不发。机身此刻占着的那块不查。往后退(狗尾为前,W09i)一样,往后推。
 - 新鲜度按代理收到时的单调钟:最新一帧 ≤ :data:`FRESH_S` 算新鲜;没新鲜的 → 守卫当挡(原地等);
   超过 :data:`LOST_S` → 「雷达掉线」(后端发 13331,引擎中止)。
 """
@@ -71,6 +71,8 @@ class ObstacleView:
     check: str = "none"
     reason: str = ""
     rear: bool = False
+    #: 后雷达外参真标过(W09i;感知报的):狗尾为前才许自己走。
+    rear_cal: bool = False
     connected: bool = False
     latency_s: float = PERCEPTION_LATENCY_S
 
@@ -100,7 +102,7 @@ class ObstacleView:
 
     def on_grid(self, g: Grid) -> None:
         now = self.monotonic()
-        self.check, self.reason, self.rear = g.check, g.reason, g.rear
+        self.check, self.reason, self.rear, self.rear_cal = g.check, g.reason, g.rear, g.rear_cal
         pose = self.pose_at(now - self.latency_s)
         if pose is None or g.check != "ok":
             return                                   # 没有里程配不上;自检没过的不用
@@ -209,7 +211,8 @@ class ObstacleGuard:
 
     def swept(self, vx: float, wz: float, v_meas: float) -> list[tuple[float, float]]:
         """这条命令扫过的机身区域里的采样点(此刻狗身系)。往前走:沿这条命令的圆弧推
-        ``reach(max(实测, 命令))`` 米,每一步一个机身矩形;原地转(前进 ≈ 0、在转):外接圆。"""
+        ``reach(max(实测, 命令))`` 米,每一步一个机身矩形(往后退就往后推);原地转(前进 ≈ 0、在转):
+        外接圆。"""
         hl, hw = self.body_len / 2 + self.margin, self.body_wid / 2 + self.margin
         pts: set[tuple[float, float]] = set()
         s = self.step
@@ -233,8 +236,9 @@ class ObstacleGuard:
               if abs((j + 0.5) * s) < hw] + [-hw, hw]
         edge = [(x, y) for x in xs for y in ys
                 if abs(abs(x) - hl) < s or abs(abs(y) - hw) < s]      # 机身轮廓线
+        sign = -1.0 if vx < 0 else 1.0
         for t in range(k + 1):
-            d = dist * t / k
+            d = sign * dist * t / k                      # 走过的路(带方向):往后退是负的
             if abs(wz) < 1e-6 or abs(vx) < 1e-6:
                 px, py, th = d, 0.0, 0.0
             else:
@@ -267,8 +271,6 @@ class ObstacleGuard:
               pose_now: tuple[float, float, float]) -> Verdict:
         if abs(vx) < 1e-6 and abs(wz) < 1e-6:
             return Verdict(True)                     # 原地等:不动就不会撞
-        if vx < 0:
-            return Verdict(False, "不许后退(没有后面的扫掠检查)")
         st = view.state()
         if st != "ok":
             return Verdict(False, f"障碍数据{_STATE_TEXT.get(st, st)}")

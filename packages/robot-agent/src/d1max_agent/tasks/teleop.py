@@ -6,6 +6,8 @@
   在它自己的有效期(默认 300 ms)里按 ``set_velocity`` 执行;**帧不来了就停**(这边一拍一看,HAL 与
   旁路进程两层到期也自停)。
 - **限速**:HAL 能力的一半(决策 7 追加条件),站点也夹一次。
+- **人眼里的「往前」**(W09i):HAL 是机身系(x 朝狗头);遥控的「往前」跟着狗现在的头尾 —— 狗尾为前时
+  往狗尾那头走(跟 W09i 之前一样:那时 HAL 直接用 SDK 的「往前」)。
 - **没画面不动**:``video_live()`` 为假(狗上一路都没在推)就不下速度、在动就停 —— 站点那头还有一道。
 - **结束**(放租、halt、租约到期、断线、被中止):先停车、等停稳(最多 ``STOP_CONFIRM_TIMEOUT_S``),
   再进终态;结束中的帧一律不执行。断线 = 结束,**不续**。
@@ -116,6 +118,8 @@ class TeleopTask(Task):
         if live:
             self._vseq += 1
             ttl = max(_MIN_TTL_MS, min(c[3], c[2] - now))
+            if getattr(await self._hal.health(), "head", "head") == "tail":
+                vx = -vx                                  # 人眼里的「往前」是狗尾那头
             got = await self._hal.set_velocity(VelocityCommand(
                 seq=self._vseq, ttl_ms=ttl, frame="base", vx=vx, vy=0.0, wz=wz))
             if got.rejected:

@@ -39,13 +39,18 @@ from typing import Any
 #: 2:加了 ``halt``,并且 ``halt``/``estop`` 在旁路进程里**插队**执行、作废
 #: 正在走和排着队的 ``walk``。1 号旁路进程不认识 ``halt``、急停排在 walk
 #: 后面 —— 新巡检程序配它时停车会无声地不灵,所以握手时就拒。
+#: 6(W09i):``clear`` 带 ``end``(``head`` 默认 / ``tail``):净空许可分两头,SDK
+#: 的「往前」走向哪头要哪头的;
+#: ``hello`` 带 ``follows_head``(调头之后 SDK 的「往前」是不是变成狗尾那头;没报 = 是)—— 代理的 HAL
+#: 照它把里程、速度换成机身系。感知节点只对 ≥ 6 的发狗尾许可(5 号会当成狗头的)。
+#:
 #: 5(W11a):``state`` 帧带 ``head``(SDK ``RobotState.head_direction``:0 未知、1 狗头为前、
 #: 2 狗尾为前)。
 #: 4 号及更老的旁路进程不报,代理按「未知」处理(不许自己走)—— 能连,但要重编才能自主走。
 #:
 #: 4(W11):加了 ``clear`` —— 感知节点给的净空许可(``ms``、``dist``),旁路进程带
 #: ``--require-clearance`` 时没有有效许可就把前进分量置零(第二层刹停)。
-PROTO_VERSION = 5
+PROTO_VERSION = 6
 #: 代理(``sidecar_device``)能配的最老的旁路进程:代理只用到 ``vel``(3),``clear`` 是感知节点发的
 #: (W11 内审应修 1:严格等于 4 的话,只推新版代理、旁路进程还是 3 号时整机不能动)。
 MIN_PROTO_VERSION = 3
@@ -115,6 +120,8 @@ class Hello:
     held: bool
     #: 旁路进程连的机器地址,形如 "192.168.168.168:8082"。只作日志用。
     robot: str = ""
+    #: 调过头尾之后 SDK 的「往前」是不是跟着变成狗尾那头(6 号起报;没报 = 是)。
+    follows_head: bool = True
 
 
 @dataclass(frozen=True)
@@ -297,6 +304,7 @@ def decode_frame(line: str | bytes) -> Downstream:
             sdk=str(obj.get("sdk", "")),
             held=bool(obj.get("held", False)),
             robot=str(obj.get("robot", "")),
+            follows_head=obj.get("follows_head") is not False,
         )
     if kind == "ack":
         ack_id = obj.get("id")
