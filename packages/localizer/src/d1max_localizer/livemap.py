@@ -33,7 +33,8 @@ from d1max_localizer.frames import quat_to_mat
 
 log = logging.getLogger("d1max.livemap")
 
-#: 装法上的上、朝前(雷达系;RS-Airy X 朝上、Z 朝前 —— 跟建图脚本 ``build.SENSOR_*_HINT`` 一样)
+#: 装法上的上、朝前(雷达系;RS-Airy X 是竖直轴、Z 朝前 —— 跟建图脚本 ``build.SENSOR_*_HINT`` 一样;
+#: 「上」的正负号由 :meth:`LiveGrid._decide_up` 按地面判,C40011 上是 −X)
 SENSOR_UP_HINT = (1.0, 0.0, 0.0)
 SENSOR_FORWARD_HINT = (0.0, 0.0, 1.0)
 RES_M = 0.1
