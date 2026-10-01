@@ -49,7 +49,8 @@ class SimRobot:
         self._now = now_ms
         self.max_vx, self.max_wz, self.deadband_vx = max_vx, max_wz, deadband_vx
         #: W11 运动模型(W08 决定 10):链路延迟(命令晚这么久生效)、起步切步态(从站着到走要等这么久)、
-        #: 刹车减速度上限;旁路进程的净空许可门(``require_clearance``:没有有效许可,前进分量置零、转向照常)。
+        #: 刹车减速度上限;旁路进程的净空许可门(``require_clearance``:没有有效许可,前进分量置零、
+        #: 转向照常)。
         self.latency_s, self.gait_start_s, self.max_decel = latency_s, gait_start_s, max_decel
         self.require_clearance = require_clearance
         self._clear_until_ms = -1

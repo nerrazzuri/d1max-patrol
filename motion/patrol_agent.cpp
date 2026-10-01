@@ -75,7 +75,11 @@ using namespace robot_sdk;
 // 3(W00d):加了 vel —— 带有效期的持续速度。立刻回执;速度线程在有效期内每 50ms 发一次
 // Move,到期连发零速自停;新的 vel 覆盖旧的并续期;halt/estop 作废。机器人代理的速度环
 // (每拍一条、ttl 300ms)就靠它。2 号旁路进程不认识 vel,握手时就得拒。
-static const int kProtoVersion = 3;
+//
+// 4(W11):加了 clear —— 感知节点给的净空许可 {"ms": 有效毫秒, "dist": 前方空多远}。旁路进程带
+// --require-clearance 起来时,没有有效许可就把前进分量置零(第二层刹停,W08 决定 8)。3 号旁路进程
+// 不认识 clear,感知节点的许可发过去全被拒,开了 require 的话狗就只转不走 —— 握手就得拒。
+static const int kProtoVersion = 4;
 
 // 一次 Move 在机器上维持约 1s(清单 #38)，靠 50ms 连续下发维持行走。
 static const int kMoveIntervalMs = 50;
@@ -558,6 +562,13 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
   if (cmd == "lie") return DoLie();
   if (cmd == "head")
     return DoHead(JsonNumField(line, "yaw", 0.0), JsonNumField(line, "pitch", 0.0));
+  if (cmd == "clear") {
+    const double ms = JsonNumField(line, "ms", 0.0);
+    if (!std::isfinite(ms) || ms < 1 || ms > 1000) return Reject("ms 要在 [1, 1000] 内");
+    g_gate.SetClearance(std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(static_cast<int>(ms)));
+    return Outcome{};
+  }
   if (cmd == "vel")
     return DoVel(JsonNumField(line, "fwd", 0.0), JsonNumField(line, "lat", 0.0),
                  JsonNumField(line, "yaw", 0.0), JsonNumField(line, "ttl_ms", 0.0));
@@ -581,7 +592,8 @@ static Outcome RunCommand(const std::string& cmd, const std::string& line,
 /// 后面，要等它们一拍一拍走完才轮得到。
 static bool IsUrgent(const std::string& cmd) {
   // vel 也插队:它立刻回执,排在一拍 walk 后面的话速度环就断了。
-  return cmd == "halt" || cmd == "estop" || cmd == "vel";
+  // clear 也插队:每帧一条、立刻生效,排在 walk 后面许可就过期了。
+  return cmd == "halt" || cmd == "estop" || cmd == "vel" || cmd == "clear";
 }
 
 static std::string AckFrame(int id, const Outcome& out) {
@@ -803,7 +815,7 @@ static void OnSig(int) {
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::cerr << "usage: " << argv[0]
-              << " <ip> <port> [--listen HOST:PORT] [--fifo PATH]\n"
+              << " <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--require-clearance]\n"
               << "  例: " << argv[0]
               << " 192.168.168.168 8082 --listen 127.0.0.1:8090"
                  " --fifo /tmp/d1max.cmd\n";
@@ -825,6 +837,8 @@ int main(int argc, char** argv) {
       }
     } else if (arg == "--fifo" && i + 1 < argc) {
       fifo = argv[++i];
+    } else if (arg == "--require-clearance") {
+      g_gate.RequireClearance(true);  // W11 第二层:没有感知节点的净空许可不许往前
     } else {
       std::cerr << "未知参数: " << arg << "\n";
       return 2;

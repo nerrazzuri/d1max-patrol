@@ -178,6 +178,25 @@ String rtkText(Map<String, dynamic>? rtk) {
   return parts.join('，');
 }
 
+/// 局部避障的人话（W11）：能力里的 `obstacles`（配了感知节点的狗才有）。不是「正常」的时候站点不派
+/// 会自己走的任务。没配是空串。
+String obstaclesText(Map<String, dynamic>? caps) {
+  final tasks = caps?['tasks'];
+  final o = tasks is Map ? tasks['obstacles'] : null;
+  if (o is! Map) return '';
+  final state = switch ('${o['state']}') {
+    'ok' => '正常',
+    'stale' => '感知不新鲜',
+    'lost' => '感知断了（不派会自己走的任务）',
+    'extrinsic_bad' => '外参自检没过（不派会自己走的任务）',
+    'initializing' => '感知还在自检',
+    _ => '${o['state']}',
+  };
+  final reason = o['reason'] is String && (o['reason'] as String).isNotEmpty ? '：${o['reason']}' : '';
+  final rear = o['rear'] == true ? '' : '，后雷达没用上';
+  return '避障：$state$reason${o['state'] == 'ok' ? rear : ''}';
+}
+
 /// 配了定位器的狗（W09a，经本机定位桥）：来源说人话。
 String _bridgeLocText(Map<String, dynamic> loc, String reason) {
   if (loc['anchored'] != true) {

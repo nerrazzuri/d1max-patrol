@@ -39,7 +39,9 @@ from typing import Any
 #: 2:加了 ``halt``,并且 ``halt``/``estop`` 在旁路进程里**插队**执行、作废
 #: 正在走和排着队的 ``walk``。1 号旁路进程不认识 ``halt``、急停排在 walk
 #: 后面 —— 新巡检程序配它时停车会无声地不灵,所以握手时就拒。
-PROTO_VERSION = 3
+#: 4(W11):加了 ``clear`` —— 感知节点给的净空许可(``ms``、``dist``),旁路进程带
+#: ``--require-clearance`` 时没有有效许可就把前进分量置零(第二层刹停)。
+PROTO_VERSION = 4
 
 
 class MotionStatus(str, Enum):

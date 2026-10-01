@@ -1,0 +1,31 @@
+#!/bin/sh
+# d1max-obstacles 的启动脚本(W11,感知节点)。跟 d1max-localizer-start 一个道理:启动参数归版本管,
+# 单元只指着 /opt/d1max/current/deploy/d1max-obstacles-start。
+#
+# 感知节点跑在 **ROS 的系统 Python** 里(要 rclpy、sensor_msgs、numpy),代码用这个脚本所在那一版带的
+# packages/localizer 与 packages/contract(按 PYTHONPATH 找,不进 venv)。外参跟着代理正在用的图走
+# (/var/lib/d1max/agent/maps/active.json 那张图的 frames.json,换了图自己换、重新自检),局部栅格经本机
+# 障碍桥(/var/lib/d1max/agent/obs.sock)给代理。跟代理同一个账号(桥按账号认)。
+#
+# 现场值从 /etc/d1max/env 来(单元的 EnvironmentFile):
+#   D1MAX_LOC_ROS_DOMAIN=24      雷达话题在哪个 ROS domain(跟定位器一样)
+#   D1MAX_LOC_RMW=rmw_zenoh_cpp  中间件
+#   D1MAX_OBS_REAR=/rear_lidar   后雷达(空着 = 不用;后雷达没标定之前只用来看见「空」)
+#   D1MAX_OBS_SIDECAR=127.0.0.1:8090  给旁路进程发净空许可(空着 = 不发;旁路进程要带 --require-clearance
+#                                     才按许可管前进,W11 真机验收之前不开)
+#   D1MAX_OBS_ARGS=其余参数
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export ROS_DOMAIN_ID="${D1MAX_LOC_ROS_DOMAIN:-24}"
+export RMW_IMPLEMENTATION="${D1MAX_LOC_RMW:-rmw_zenoh_cpp}"
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck disable=SC2086  # D1MAX_OBS_ARGS 要按空白拆成几个参数
+exec /usr/bin/python3 -m d1max_localizer.obstacles \
+  --socket /var/lib/d1max/agent/obs.sock \
+  --maps-dir /var/lib/d1max/agent/maps \
+  ${D1MAX_OBS_REAR:+--rear-topic} ${D1MAX_OBS_REAR:+"$D1MAX_OBS_REAR"} \
+  ${D1MAX_OBS_SIDECAR:+--sidecar} ${D1MAX_OBS_SIDECAR:+"$D1MAX_OBS_SIDECAR"} \
+  ${D1MAX_OBS_ARGS:-}

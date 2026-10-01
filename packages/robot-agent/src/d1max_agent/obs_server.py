@@ -1,10 +1,8 @@
 """本机障碍桥,代理这一头(W11 设计稿 §3)。报文见 :mod:`d1max_contract.obsbridge`。
 
-跟定位桥(:mod:`d1max_agent.locbridge`)同一套规矩:Unix 流式套接字(0600)、
-**按对端账号认**(``SO_PEERCRED``,
-跟代理同一个账号)、第一行这一版的 ``hello``、一次只接一个感知节点(旧的还有声就拒新的)、
-一行超长断开、
-不成形的丢掉;``grid`` 的序号要递增。不发心跳以外的东西:感知只往这边说。
+跟定位桥(:mod:`d1max_agent.locbridge`)同一套规矩:Unix 流式套接字(0600)、**按对端账号认**
+(``SO_PEERCRED``,跟代理同一个账号)、第一行这一版的 ``hello``、一次只接一个感知节点(旧的还有声就
+拒新的)、一行超长断开、不成形的丢掉;``grid`` 的序号要递增。感知只往这边说,这边只回 ``hello``。
 """
 
 from __future__ import annotations
@@ -34,8 +32,8 @@ class ObsBridgeServer:
                  monotonic: Callable[[], float] = time.monotonic,
                  allowed_uid: int | None = None) -> None:
         self.path = Path(path)
-        #: ``on_grid``、``on_connect``、
-        #: ``on_disconnect``(:class:`d1max_agent.obstacles.ObstacleView`)。
+        #: 报文交给它(:class:`d1max_agent.obstacles.ObstacleView`):
+        #: ``on_grid``、``on_connect``、``on_disconnect``。
         self.sink = sink
         self._now = monotonic
         self.allowed_uid = os.getuid() if allowed_uid is None else allowed_uid

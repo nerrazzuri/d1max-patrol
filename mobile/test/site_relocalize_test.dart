@@ -34,6 +34,17 @@ void main() {
     expect(rtkText(<String, dynamic>{'fix': 'none'}), 'RTK：没有定位');
   });
 
+  test('避障说人话（W11）', () {
+    Map<String, dynamic> c(Map<String, dynamic> o) => {'tasks': {'obstacles': o}};
+    expect(obstaclesText(null), '');
+    expect(obstaclesText(<String, dynamic>{'tasks': <String, dynamic>{}}), '');
+    expect(obstaclesText(c({'state': 'ok', 'rear': true})), '避障：正常');
+    expect(obstaclesText(c({'state': 'ok', 'rear': false})), '避障：正常，后雷达没用上');
+    expect(obstaclesText(c({'state': 'extrinsic_bad', 'rear': false, 'reason': '雷达离地 2.9 m'})),
+        '避障：外参自检没过（不派会自己走的任务）：雷达离地 2.9 m');
+    expect(obstaclesText(c({'state': 'lost', 'rear': false})), '避障：感知断了（不派会自己走的任务）');
+  });
+
   test('配了定位器的狗：设位置被拒的原因说人话（W09a）', () {
     expect(ackReasonText('localizer_unavailable: 定位器没连上'), '定位器没连上或没回：定位器没连上');
     expect(ackReasonText('localizer_refused: 初值离地图太远'), '定位器没接这个位置：初值离地图太远');

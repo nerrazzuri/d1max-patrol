@@ -412,7 +412,16 @@ class Dispatcher:
         """区域(W10):这一版区域要人工确认过(外审 2);狗上的区域修订要跟站点的一致;这张图上有区域,
         狗的导航就得守;规划后端没有规划栅格不派。只管会自己走的(goto、巡检,排程、事件派遣、回待命点
         都经过它)。"""
-        if kind not in ("goto", "patrol") or self.zones is None:
+        if kind not in ("goto", "patrol"):
+            return
+        obs = c.capabilities.tasks.get("obstacles") if c.capabilities is not None else None
+        if obs is not None and obs.get("state") != "ok":
+            # W11:配了避障的狗,避障用不了(感知断了、外参自检没过、还在自检)就不派会自己走的
+            why = {"lost": "感知断了", "stale": "感知不新鲜", "extrinsic_bad": "外参自检没过",
+                   "initializing": "感知还在自检"}.get(str(obs.get("state")), str(obs.get("state")))
+            raise DispatchRefused(f"{robot_id} 的避障用不了:{why}"
+                                  + (f"({obs.get('reason')})" if obs.get("reason") else ""))
+        if self.zones is None:
             return
         loaded = self._loaded(c)
         if loaded is None:
