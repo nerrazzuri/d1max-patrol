@@ -155,3 +155,12 @@ async def test_速度命令的有效期不超过这一帧剩下的有效期(台,
     await _走(c, r, t, 1)                           # 帧到 0 ms,这一拍 ttl ≤ 200
     await _走(c, r, t, 1)                           # 100 ms 之后:剩 100
     assert ttls and max(ttls) <= 200 and ttls[-1] <= 100, ttls
+
+
+async def test_狗尾为前_人眼里的往前是狗尾那头(台):
+    """W09i:HAL 是机身系;遥控的「往前」跟着狗现在的头尾(跟 W09i 之前直接用 SDK 的「往前」一样)。"""
+    c, r, t, _ = 台
+    r.inject_head("tail")
+    await _走(c, r, t, 10, frame=lambda: _帧(c, vx=0.4))
+    o = await r.odometry()
+    assert o.vx < -0.3 and o.x < -0.1, "机身系往后 = 往狗尾那头"

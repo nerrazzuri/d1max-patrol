@@ -73,6 +73,8 @@ class HalNavBackend(NavBackend):
         #: 最近一拍的里程新不新鲜(运控报的 ``loc_quality`` 改义为「里程新鲜」,W08 决定 9)。
         self.odom_ok = False
         self.head = "unknown"
+        #: 这一趟的行进方向(``travel()`` 在起跑时的值;0 = 还没起跑)。半路变了就停。
+        self._dir = 0
         # 不给锚定:仿真按原样,别的一律要人给位置(W00c6e 内审:默认放开的话,有人给真狗直接装这座桥
         # 就会悄悄拿原始里程当地图位姿)。
         sim = str(getattr(hal, "adapter_id", "")).split("/")[0] == "sim"
@@ -156,6 +158,28 @@ class HalNavBackend(NavBackend):
 
     async def loc_status(self) -> LocStatus | None:
         return self._loc
+
+    # ------------------------------------------------------------ 头尾(W11a、W09i)
+
+    def tail_ok(self) -> bool:
+        """狗尾为前能不能自己走。这座桥(直线、不避障)不行;规划后端看后雷达标过没有、配没配避障。"""
+        return False
+
+    def travel(self) -> int:
+        """行进方向(机身系):+1 狗头为前;-1 狗尾为前(且 :meth:`tail_ok`);0 不许自己走。"""
+        if self.head == "head":
+            return 1
+        if self.head == "tail" and self.tail_ok():
+            return -1
+        return 0
+
+    def head_block(self) -> str:
+        """不许自己走的原因(人话);空 = 能走。"""
+        if self.travel():
+            return ""
+        if self.head == "tail":
+            return "狗尾为前:要后雷达标过、配了避障才能自己走"
+        return "头尾方向不知道"
 
     # ------------------------------------------------------------ 导航
 
@@ -246,7 +270,7 @@ class HalNavBackend(NavBackend):
         health = await self._hal.health()
         odom = await self._hal.odometry()
         self.odom_ok = health.loc_quality > 0.0 and odom.valid
-        #: 头尾方向(W11a):前后雷达合并(W09i)之前只有「狗头为前」时才自己走。
+        #: 头尾方向(W11a、W09i):狗头为前、或者狗尾为前且后雷达标过、配了避障,才自己走。
         self.head = getattr(health, "head", "unknown")
         self._odom_seen(odom)
         self.anchor.update((odom.x, odom.y, odom.yaw), self.odom_ok)
@@ -256,9 +280,12 @@ class HalNavBackend(NavBackend):
             self.emit(LocStatusEvent(loc, prev))
         if self._status is not NavStatus.ACTIVE:
             return
-        if self.head != "head":
-            # 调过头尾(或者不知道):定位、规划、避障都按前雷达那头是前算,往前走就是往错的方向走
-            log.error("头尾方向是 %s(不是狗头为前):停", self.head)
+        d = self.travel()
+        if not self._dir:
+            self._dir = d
+        if not d or d != self._dir:
+            # 不许自己走了(头尾不知道、狗尾为前但后面看不清),或者半路调了头(行进方向变了):停
+            log.error("头尾方向是 %s(%s):停", self.head, self.head_block() or "半路调了头")
             await self._enter_terminal(NavStatus.FAILED)
             return
         if loc is LocStatus.LOC_LOST:
@@ -287,12 +314,13 @@ class HalNavBackend(NavBackend):
         if dist <= POSITION_TOL_M:
             await self._enter_terminal(NavStatus.SUCCEED)
             return
-        bearing = _wrap(math.atan2(dy, dx) - here.yaw)
+        d = self._dir or 1                               # 狗尾为前:狗尾对着目标、往后退(W09i)
+        bearing = _wrap(math.atan2(dy, dx) - (here.yaw if d > 0 else here.yaw + math.pi))
         wz = max(-self._wmax, min(self._wmax, K_ANG * bearing))
         if abs(bearing) > BEARING_THRESH_RAD:
             vx = 0.0
         else:
-            vx = min(self._vmax, max(K_LIN * dist, self._caps.deadband_vx))
+            vx = d * min(self._vmax, max(K_LIN * dist, self._caps.deadband_vx))
         await self._send(vx, wz, dt_s)
 
     async def _send(self, vx: float, wz: float, dt_s: float) -> None:
@@ -307,6 +335,8 @@ class HalNavBackend(NavBackend):
 
     def _set_status(self, status: NavStatus) -> None:
         prev, self._status = self._status, status
+        if status is NavStatus.INITIALIZING:
+            self._dir = 0                                # 新的一趟:起跑时再定行进方向
         if status is not prev:
             self.emit(NavStatusEvent(status, prev))
 

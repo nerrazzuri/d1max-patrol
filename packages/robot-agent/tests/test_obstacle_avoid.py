@@ -155,20 +155,21 @@ def test_守卫_看不见当挡_机身底下不查_数据不新鲜当挡():
 
 class 台子:
     def __init__(self, tmp_path, *, walls=(), rear=True, guard=True, latency=0.0, gait=0.0,
-                 decel=math.inf, clearance=False, max_vx=0.6):
+                 decel=math.inf, clearance=False, max_vx=0.6, rear_cal=None, head="head"):
         self.c = 钟()
         self.world = 世界(walls=walls)
         self.world.地图(tmp_path)
         self.r = SimRobot(now_ms=self.c, max_vx=max_vx, max_wz=1.5, stop_latency_s=0.2,
                           latency_s=latency, gait_start_s=gait, max_decel=decel,
                           require_clearance=clearance)
+        self.r.inject_head(head)
         self.nav = PlannedNavBackend(self.r, now_ms=self.c, map_id="m",
                                      planner=Planner(in_process=True))
         self.nav.load_grid(tmp_path)
         self.view = ObstacleView(monotonic=self.c.s)
         self.nav.obstacles = self.view
         self.nav.guard = ObstacleGuard() if guard else _放行()
-        self.per = 假感知(self.world, rear=rear)
+        self.per = 假感知(self.world, rear=rear, rear_cal=rear_cal)
         self.events: list = []
         self.nav.on_event = lambda k, d: self.events.append((k, d))
         self.status: list = []
@@ -210,9 +211,10 @@ class 台子:
             self.view.on_grid(self._q.pop(0)[1])
         if self.r.require_clearance:
             from d1max_localizer.obstacles import Config, permit
-            ms = permit(self.per.净空(g), Config())
-            if ms:
-                self.r.clear(ms)
+            for end in ("head", "tail") if self.per.rear_cal else ("head",):
+                ms = permit(self.per.净空(g, end), Config())
+                if ms:
+                    self.r.clear(ms, end)
 
     async def 一拍(self, dt=0.1):
         for _ in range(2000):
@@ -400,7 +402,7 @@ def _区域(*zs):
     return ZoneSet.from_wire({"map_id": "m", "map_version": "v", "revision": 1, "zones": list(zs)})
 
 
-def test_守卫_急转弯扫掠不漏格_不许后退():
+def test_守卫_急转弯扫掠不漏格():
     """内审应修 3:步数按机身角点走过的弧长;转弯半径小于对角线时并上外接圆。"""
     g = ObstacleGuard()
     for vx, wz in ((0.1, 0.8), (0.15, 1.0), (0.3, 0.5)):
@@ -423,8 +425,20 @@ def test_守卫_急转弯扫掠不漏格_不许后退():
                     if abs(x) > 0.535 or abs(y) > 0.31:
                         truth.add((math.floor(x / 0.1), math.floor(y / 0.1)))
         assert truth <= cells, (vx, wz, sorted(truth - cells)[:5])
-    v = _view_with([])
-    assert not g.check(-0.2, 0.0, 0.0, v, (0, 0, 0)).ok
+
+
+def test_守卫_往后退往后扫_是往前扫的中心对称():
+    """W09i:狗尾为前时往后退。(−v, w) 扫过的 = (v, w) 扫过的绕机身中心转 180°(机身前后左右对称)。"""
+    g = ObstacleGuard()
+    for vx, wz, vm in ((0.3, 0.0, 0.0), (0.3, 0.5, 0.0), (0.15, 1.0, 0.0), (0.2, 0.0, 0.6)):
+        fwd = {(round(-x, 3), round(-y, 3)) for x, y in g.swept(vx, wz, vm)}
+        back = set(g.swept(-vx, wz, -vm))
+        assert fwd == back, (vx, wz)
+    behind = _view_with([(7, c) for c in range(15, 25)])          # 狗身系 x = −1.25
+    assert g.check(-0.1, 0.0, -0.1, behind, (0, 0, 0)).ok, "慢:够不着"
+    v = g.check(-0.1, 0.0, -0.6, behind, (0, 0, 0))
+    assert not v.ok and all(x < 0 for x, _ in v.hits), "实测快:往后扫够着了"
+    assert g.check(0.6, 0.0, 0.6, behind, (0, 0, 0)).ok, "往前走不管身后"
 
 
 def test_记忆_按收到时刻减延迟配位姿():
@@ -493,3 +507,59 @@ async def test_绕不过去_规划失败_接着等_不当场放弃(tmp_path):
             break
     assert failed_at is not None and failed_at - start >= 19.0, failed_at and failed_at - start
     assert not t.crashed
+
+
+# ------------------------------------------------------------ 狗尾为前(W09i)
+
+async def test_狗尾为前_后雷达标过_狗尾对着路倒着走_路上箱子照样停_绕过去(tmp_path):
+    t = 台子(tmp_path, head="tail")
+    await t.start(1.5, 4.0, yaw=math.pi)                     # 狗尾朝 +x
+    assert t.nav.travel() == -1
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0, math.pi))
+    vxs = []
+    for _ in range(20):
+        await t.一拍()
+        vxs.append(t.r.speed[0])
+    assert min(vxs) < -0.1 and max(vxs) <= 1e-9, "倒着走(机身系往后)"
+    assert abs(math.remainder(t.r.yaw - math.pi, 2 * math.pi)) < 0.2, "不掉头:狗尾对着路"
+    t.world.dyn["box"] = (5.0, 3.5, 5.6, 4.5)
+    await t.跑(80.0)
+    assert not t.crashed
+    assert NavStatus.SUCCEED in t.status, (t.status, t.events)
+    assert [k for k, _ in t.events if k == "nav_unblocked"], t.events
+    assert abs(math.remainder(t.r.yaw - math.pi, 2 * math.pi)) < 0.2, "到点对的是机身朝向"
+
+
+async def test_狗尾为前_后雷达没标定或没配避障_不许自己走(tmp_path):
+    t = 台子(tmp_path, head="tail", rear=True, rear_cal=False)
+    await t.start(1.5, 4.0, yaw=math.pi)
+    assert t.nav.travel() == 0 and "后雷达" in t.nav.head_block()
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0, math.pi))
+    await t.跑(3.0)
+    assert NavStatus.FAILED in t.status and abs(t.r.x - 1.5) < 0.05
+    bare = 台子(tmp_path, head="tail")
+    bare.nav.obstacles = None
+    assert bare.nav.travel() == 0, "没配避障:身后没人看"
+
+
+async def test_狗尾为前_第二层单独也停得住_狗尾那头的许可(tmp_path):
+    t = 台子(tmp_path, head="tail", guard=False, clearance=True)
+    await t.start(1.5, 4.0, yaw=math.pi)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0, math.pi))
+    await t.跑(2.0)
+    assert t.r.x > 1.6, "有狗尾的许可:走得动"
+    t.world.dyn["box"] = (5.0, 3.0, 5.6, 5.0)
+    await t.跑(15.0)
+    assert not t.crashed, "第一层关了,狗尾那头的许可门照样挡"
+    assert t.r.x < 5.0 - 0.465
+
+
+async def test_半路调了头_导航桥自己停(tmp_path):
+    t = 台子(tmp_path)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(2.0)
+    assert t.r.x > 2.0
+    t.r.inject_head("tail")                                   # 后雷达标过,狗尾为前本来也能走
+    await t.一拍()
+    assert t.status[-1] is NavStatus.FAILED, "行进方向变了:这一趟不接着走"

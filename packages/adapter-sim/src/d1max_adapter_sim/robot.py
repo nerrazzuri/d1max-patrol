@@ -53,7 +53,8 @@ class SimRobot:
         #: 转向照常)。
         self.latency_s, self.gait_start_s, self.max_decel = latency_s, gait_start_s, max_decel
         self.require_clearance = require_clearance
-        self._clear_until_ms = -1
+        #: 净空许可分两头(W09i):往前走向的那一头(狗头为前是狗头、狗尾为前是狗尾)要那一头的许可。
+        self._clear_until_ms = {"head": -1, "tail": -1}
         self._pending: list[tuple[int, float, float, int]] = []    # (生效时刻, vx, wz, 截止)
         self._gait_left_s: float | None = None
         self._stop_latency_s = stop_latency_s
@@ -128,8 +129,12 @@ class SimRobot:
                 self._cmd_deadline_ms = None
         else:
             want_vx, want_wz = self._cmd_vx, self._cmd_wz
-            if self.require_clearance and now >= self._clear_until_ms:
-                want_vx = min(want_vx, 0.0)                      # 没有净空许可:不许往前
+            lead = -1.0 if self.head_direction == "tail" else 1.0   # 往前那头(机身系)
+            end = "tail" if lead < 0 else "head"
+            if self.require_clearance and want_vx * lead > 0 and (
+                    self.head_direction not in ("head", "tail")
+                    or now >= self._clear_until_ms[end]):
+                want_vx = 0.0                                    # 往前那头没有净空许可:不许往前
             standing = self._vx == 0.0 and self._wz == 0.0
             if standing and (want_vx or want_wz) and self.gait_start_s > 0:
                 if self._gait_left_s is None:
@@ -217,9 +222,9 @@ class SimRobot:
         self._stopping_left_s = None
         return VelocityResult(vx, wz, clamped=clamped, rejected=False)
 
-    def clear(self, ms: int) -> None:
-        """旁路进程的净空许可(W11 第二层):从现在起 ``ms`` 毫秒内前方是空的。"""
-        self._clear_until_ms = max(self._clear_until_ms, self._now() + int(ms))
+    def clear(self, ms: int, end: str = "head") -> None:
+        """旁路进程的净空许可(W11 第二层):从现在起 ``ms`` 毫秒内 ``end`` 那一头是空的。"""
+        self._clear_until_ms[end] = max(self._clear_until_ms[end], self._now() + int(ms))
 
     @property
     def speed(self) -> tuple[float, float]:

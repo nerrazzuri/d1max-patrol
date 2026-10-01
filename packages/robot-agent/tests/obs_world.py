@@ -55,8 +55,10 @@ class 假感知:
     """按狗的真实位姿算狗身系局部栅格:前半球(机身前沿往前)4 m 以内看得见;
     ``rear`` 开着后面也看得见。"""
 
-    def __init__(self, world, *, size=80, res=0.1, rng=4.0, rear=False):
+    def __init__(self, world, *, size=80, res=0.1, rng=4.0, rear=False, rear_cal=None):
         self.world, self.size, self.res, self.rng, self.rear = world, size, res, rng, rear
+        #: 后雷达外参标过(W09i;默认跟 ``rear`` 一样:看得见就当标过)。
+        self.rear_cal = rear if rear_cal is None else rear_cal
         self.seq = 0
         self.check = "ok"
         n = size
@@ -89,10 +91,11 @@ class 假感知:
         return Grid(seq=self.seq, stamp_ns=stamp_ns, res=self.res, size=n,
                     occ=pack_bits(occ.ravel().tolist(), n),
                     known=pack_bits(known.ravel().tolist(), n), rear=self.rear,
+                    rear_cal=self.rear_cal,
                     check=self.check, reason="" if self.check == "ok" else "外参歪了")
 
-    def 净空(self, g: Grid) -> float:
-        """跟感知节点一样:机身前方走廊第一个挡 / 未知有多远。"""
+    def 净空(self, g: Grid, end: str = "head") -> float:
+        """跟感知节点一样:机身前方(``end="tail"``:后方)走廊第一个挡 / 未知有多远。"""
         from d1max_localizer.obstacles import Config, clear_distance
         occ, known = g.bits()
-        return clear_distance(occ, known, Config())
+        return clear_distance(occ, known, Config(), end=end)

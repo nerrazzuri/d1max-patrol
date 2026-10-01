@@ -49,6 +49,8 @@ from tests.test_deploy_files import DEPLOY
     "LOC_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-localizer.service",
     "OBS_UNIT": "d1max-obstacles.service",
     "OBS_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-obstacles.service",
+    "MERGE_UNIT": "d1max-lidar-merge.service",
+    "MERGE_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service",
 }
 
 

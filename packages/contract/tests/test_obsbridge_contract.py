@@ -48,7 +48,7 @@ def test_位图来回_位序():
 
 
 def test_栅格来回_80格一行装得下():
-    g = _grid(size=80, rear=True, check="ok")
+    g = _grid(size=80, rear=True, rear_cal=True, check="ok")
     raw = encode(g)
     assert len(raw) < MAX_LINE // 4
     back = parse(raw)
@@ -60,7 +60,7 @@ def test_栅格来回_80格一行装得下():
 @pytest.mark.parametrize("bad", [
     dict(seq=0), dict(seq=True), dict(stamp_ns=-1), dict(res=0.01), dict(res=0.6), dict(size=11),
     dict(res=float("nan")), dict(res=True), dict(size=9), dict(size=8), dict(size=122),
-    dict(rear=1), dict(check="good"), dict(reason="x" * 201), dict(occ=5),
+    dict(rear=1), dict(rear_cal=1), dict(check="good"), dict(reason="x" * 201), dict(occ=5),
     dict(occ="AAAA"), dict(known="not base64!"),
 ])
 def test_坏栅格拒(bad):

@@ -28,6 +28,7 @@
             "path": "straight"
           },
           "head": {
+            "autonomy": true,
             "direction": "head"
           },
           "map_activate": {},
@@ -62,7 +63,7 @@
         }
       },
       "clock_skew_s": 0.0,
-      "expires_at": 1791834909665,
+      "expires_at": 1791839174728,
       "fresh": true,
       "held": null,
       "loc": {
@@ -81,9 +82,9 @@
       "robot_id": "A",
       "rtk": null,
       "status": {
-        "boot_id": "boot-3a41e1c16b",
+        "boot_id": "boot-782382fe68",
         "control_epoch": 1,
-        "last_seen": 1790834910518,
+        "last_seen": 1790839176058,
         "online": true,
         "ready": {
           "control": true,

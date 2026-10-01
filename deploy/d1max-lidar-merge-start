@@ -1,0 +1,24 @@
+#!/bin/sh
+# d1max-lidar-merge 的启动脚本(W09i,前后雷达合并)。跟 d1max-localizer-start 一个道理:启动参数归版本管,
+# 单元只指着 /opt/d1max/current/deploy/d1max-lidar-merge-start。
+#
+# 跑在 **ROS 的系统 Python** 里(要 rclpy、sensor_msgs、numpy),代码用这个脚本所在那一版带的
+# packages/localizer 与 packages/contract。后雷达外参读 /etc/d1max/lidars.json(d1max-loc calibrate-rear
+# 在开发机上标好拷过来);没标过就只转发前雷达。
+#
+# 现场值从 /etc/d1max/env 来(单元的 EnvironmentFile):
+#   D1MAX_LOC_ROS_DOMAIN=24      雷达话题在哪个 ROS domain(跟定位器一样)
+#   D1MAX_LOC_RMW=rmw_zenoh_cpp  中间件
+#   D1MAX_MERGE_ARGS=其余参数(比如 --rear-topic /rear_lidar)
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export ROS_DOMAIN_ID="${D1MAX_LOC_ROS_DOMAIN:-24}"
+export RMW_IMPLEMENTATION="${D1MAX_LOC_RMW:-rmw_zenoh_cpp}"
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck disable=SC2086  # D1MAX_MERGE_ARGS 要按空白拆成几个参数
+exec /usr/bin/python3 -m d1max_localizer.merge \
+  --lidars /etc/d1max/lidars.json \
+  ${D1MAX_MERGE_ARGS:-}

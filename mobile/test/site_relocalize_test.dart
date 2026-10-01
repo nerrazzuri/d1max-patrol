@@ -38,8 +38,10 @@ void main() {
     Map<String, dynamic> c(String d) => {'tasks': {'head': {'direction': d}}};
     expect(headText(null), '');
     expect(headText(c('head')), '');
-    expect(headText(c('tail')), '头尾：狗尾为前（前后雷达合并之前不能自己走，遥控照常）');
-    expect(headText(c('unknown')), startsWith('头尾：不知道'));
+    expect(headText(c('tail')), '头尾：狗尾为前（后雷达没标定，不能自己走，遥控照常）');
+    expect(headText(c('unknown')), '头尾：不知道（不能自己走，遥控照常）');
+    expect(headText({'tasks': {'head': {'direction': 'tail', 'autonomy': true}}}),
+        '头尾：狗尾为前（后雷达标过，照常自己走）');
   });
 
   test('避障说人话（W11）', () {

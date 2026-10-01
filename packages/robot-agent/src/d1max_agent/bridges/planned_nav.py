@@ -76,6 +76,11 @@ K_LIN = 1.0
 K_ANG = 2.0
 
 
+def _heading(yaw: float, d: int) -> float:
+    """行进方向的朝向:狗头为前就是机身朝向,狗尾为前加 π。"""
+    return yaw if d >= 0 else _wrap(yaw + math.pi)
+
+
 class _Stale(Exception):
     """算代价图的时候图或区域换了:这张作废,重算。"""
 
@@ -535,17 +540,26 @@ class PlannedNavBackend(HalNavBackend):
             proj = pts[seg]
         self._seg = seg
         look = self._lookahead(seg, proj)
-        bearing = _wrap(math.atan2(look[1] - here.y, look[0] - here.x) - here.yaw)
+        # 行进方向(W09i):狗尾为前时拿狗尾那头对着路走(朝向加 π)、往后退;到点对朝向仍按机身(拍照方向)
+        d = self._dir or 1
+        bearing = _wrap(math.atan2(look[1] - here.y, look[0] - here.x) - _heading(here.yaw, d))
         wz = self._turn(bearing)
         if abs(bearing) > TURN_IN_PLACE_RAD:
             vx = 0.0
         else:
             limit = min(self._vmax, self._path_speed(seg, proj),
                         self._cm.speed_at(here.x, here.y))
-            vx = max(min(limit, K_LIN * dgoal), self._caps.deadband_vx)
+            vx = d * max(min(limit, K_LIN * dgoal), self._caps.deadband_vx)
         await self._move(vx, wz, dt_s, here)
 
     # ------------------------------------------------------------ 避障(W11)
+
+    def tail_ok(self) -> bool:
+        """狗尾为前能不能自己走(W09i):配了避障、感知报后雷达外参标过 —— 标过它的「空」才算,
+        守卫往后扫
+        才看得清;没标定的话身后全是「看不见」,守卫原地等到放弃,还不如一开始就不派。"""
+        return (self.obstacles is not None and self.guard is not None
+                and bool(getattr(self.obstacles, "rear_cal", False)))
 
     def _odom_seen(self, odom: Any) -> None:
         self._v_meas = float(getattr(odom, "vx", 0.0) or 0.0)
@@ -579,7 +593,7 @@ class PlannedNavBackend(HalNavBackend):
             moved = math.hypot(self._odom_pose[0] - self._creep_from[0],
                                self._odom_pose[1] - self._creep_from[1])
             if moved < CREEP_M:
-                vx, wz = CREEP_V, 0.0                    # 往前挪着看两侧(守卫照样查)
+                vx, wz = (self._dir or 1) * CREEP_V, 0.0  # 往前挪着看两侧(守卫照样查)
             else:
                 log.info("往前挪了 %.1f m,两侧看过了,接着转", moved)
                 self._creep_from = None
@@ -626,8 +640,8 @@ class PlannedNavBackend(HalNavBackend):
                                               "y": round(here.y, 2)})
         if (self._creep_from is None and not self._crept and not v.hits and abs(vx) < 1e-6
                 and not self._aligning and waited >= BLOCK_DETOUR_S
-                and self.guard.check(CREEP_V, 0.0, self._v_meas, self.obstacles,
-                                     self._odom_pose).ok
+                and self.guard.check((self._dir or 1) * CREEP_V, 0.0, self._v_meas,
+                                     self.obstacles, self._odom_pose).ok
                 and self._creep_clear(here)):
             # 原地转只被「看不见」挡住、前面看得清是空的:往前挪一个机身长再转
             log.info("原地转被看不见的格子挡住(机身两侧没看过):先往前挪 %.1f m", CREEP_M)
@@ -648,7 +662,8 @@ class PlannedNavBackend(HalNavBackend):
         if cm is None:
             return False
         from d1max_agent.planning.astar import LETHAL, iter_line
-        c, s = math.cos(here.yaw), math.sin(here.yaw)
+        h = _heading(here.yaw, self._dir or 1)
+        c, s = math.cos(h), math.sin(h)
         reach = CREEP_M + self.guard.body_len / 2 + self.guard.margin
         end = (here.x + c * CREEP_M, here.y + s * CREEP_M)
         a, b = cm.cell_of(here.x, here.y), cm.cell_of(*end)

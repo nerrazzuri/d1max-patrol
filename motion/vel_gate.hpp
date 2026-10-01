@@ -11,6 +11,8 @@
 //   - Live:速度线程每次要发 Move 之前都问一次,上面这些条件现查;
 //   - 净空许可(W11 第二层,W08 决定 8):RequireClearance 打开之后,前进分量只在感知节点给的
 //     许可没过期时放行,过期就把前进分量置零(转向、后退照常;不在 Register 里拒 —— 拒了代理当失败)。
+//     许可分两头(W09i):SDK 的「往前」走向哪一头,就要哪一头的许可 —— 狗头为前是狗头那头;狗尾为前
+//     时 SDK 跟着调头(默认,真机项核)是狗尾那头,不跟就还是狗头那头;头尾不知道:不放。
 // 作废 = 代次加一。目标记着登记时的代次,代次对不上就永远不再生效 —— 急停解除、重新站起
 // 、控制权拿回来都不会让旧目标复活;只有之后新登记的 vel 才算数。
 
@@ -34,8 +36,12 @@ constexpr int kMotionLieDown = 2;
 constexpr int kMotionLocked = 4;
 // EmergencyStatus 是三态:0 Unknown、1 Recover(已解除)、2 Stop。**只有 1 算安全。**
 constexpr int kEstopRecover = 1;
-// HeadDirection:1 = 狗头为前(装前雷达的那一头)。
+// HeadDirection:1 = 狗头为前(装前雷达的那一头)、2 = 狗尾为前。
 constexpr int kHeadForward = 1;
+constexpr int kHeadTail = 2;
+// 净空许可是哪一头的(W09i):狗头那头(前雷达)、狗尾那头(后雷达)。
+constexpr int kEndHead = 0;
+constexpr int kEndTail = 1;
 
 constexpr double kMaxFraction = 0.5;
 constexpr int kTtlMinMs = 50;
@@ -106,8 +112,10 @@ class Gate {
     if (estop_latched_ || !UnsafeLocked().empty()) return std::nullopt;
     if (!target_ || target_->epoch != epoch_ || now >= target_->until) return std::nullopt;
     Target t = *target_;
-    if (require_clearance_ && (now >= clear_until_ || head_ != kHeadForward) && t.fwd > 0)
-      t.fwd = 0;  // 没有净空许可、或者调过头了(许可按前雷达那头算):不许往前
+    if (require_clearance_ && t.fwd > 0) {
+      const int lead = LeadEndLocked();
+      if (lead < 0 || now >= clear_until_[lead]) t.fwd = 0;  // 往前走向的那一头没有许可:不许往前
+    }
     return t;
   }
 
@@ -117,8 +125,7 @@ class Gate {
     require_clearance_ = on;
   }
 
-  /// 头尾方向(SDK 状态回调)。开了净空许可门时,不是「狗头为前」就不放行前进:感知的许可是按前雷达
-  /// 那头算的,调过头之后往前走是往后雷达那头走(W11a;前后雷达合并之前)。
+  /// 头尾方向(SDK 状态回调)。开了净空许可门时,往前走向哪一头就要那一头的许可(W11a、W09i)。
   void OnHead(int head) {
     std::lock_guard<std::mutex> lk(mtx_);
     head_ = head;
@@ -129,10 +136,18 @@ class Gate {
     return require_clearance_;
   }
 
-  /// 感知节点的许可:「到 until 为止前方是空的」。只往后延,不往前缩(晚到的旧许可不会把新的截短)。
-  void SetClearance(Clock::time_point until) {
+  /// 调过头尾之后 SDK 的「往前」是不是跟着变成狗尾那头(旁路进程参数 --sdk-follows-head,默认是)。
+  void SdkFollowsHead(bool on) {
     std::lock_guard<std::mutex> lk(mtx_);
-    if (until > clear_until_) clear_until_ = until;
+    follows_head_ = on;
+  }
+
+  /// 感知节点的许可:「到 until 为止 end 那一头是空的」。只往后延,不往前缩(晚到的旧许可不会把新的
+  /// 截短)。
+  void SetClearance(Clock::time_point until, int end = kEndHead) {
+    if (end != kEndHead && end != kEndTail) return;
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (until > clear_until_[end]) clear_until_[end] = until;
   }
 
   /// 只给测试用:检查过了、还没登记时调(**锁还握着**)。测试在这里起一个线程去 halt,
@@ -158,6 +173,13 @@ class Gate {
     target_.reset();
   }
 
+  /// SDK 的「往前」走向哪一头;头尾不知道 -1。
+  int LeadEndLocked() const {
+    if (head_ == kHeadForward) return kEndHead;
+    if (head_ == kHeadTail) return follows_head_ ? kEndTail : kEndHead;
+    return -1;
+  }
+
   std::mutex mtx_;
   uint64_t epoch_ = 0;
   bool estop_latched_ = false;
@@ -166,7 +188,8 @@ class Gate {
   std::optional<Target> target_;
   bool require_clearance_ = false;
   int head_ = 0;
-  Clock::time_point clear_until_{};
+  bool follows_head_ = true;
+  Clock::time_point clear_until_[2]{};
 };
 
 /// 速度线程的一拍。Sdk 要有 ``int Gait(int)``(返回 0 = 成功)与 ``void Move(float, float, float)``。

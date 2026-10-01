@@ -16,10 +16,11 @@ from tests.sim.test_agent_server import _client
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_协议是v5_跟C加加旁路进程的常量一致():
+def test_协议是v6_跟C加加旁路进程的常量一致():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     m = re.search(r"static const int kProtoVersion = (\d+);", src)
-    assert m and int(m.group(1)) == PROTO_VERSION == 5          # W11a:state 带 head
+    # W09i:clear 带 end、hello 带 follows_head
+    assert m and int(m.group(1)) == PROTO_VERSION == 6
 
 
 async def _站起(sim: SimAgentServer, client) -> None:
@@ -246,7 +247,7 @@ def test_CPP的clear_插队_开关参数():
 
 
 async def test_净空许可门开着_调过头尾就不放行前进():
-    """W11a:许可是按前雷达那头算的,狗尾为前时往前走是往后雷达那头走。"""
+    """W11a:狗头的许可只管狗头那头;狗尾为前时往前走是往狗尾那头走。"""
     async with _client(require_clearance=True) as (sim, client):
         await _站起(sim, client)
         assert (await client.call("clear", ms=800, dist=2.0)).ok
@@ -258,3 +259,26 @@ async def test_净空许可门开着_调过头尾就不放行前进():
         assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
         await asyncio.sleep(0.15)
         assert sim.vx > 0
+
+
+async def test_净空许可分两头_往前走向哪头要哪头的许可():
+    """W09i:同 vel_gate.hpp 的 LeadEndLocked。"""
+    async with _client(require_clearance=True) as (sim, client):
+        await _站起(sim, client)
+        sim.head = 2
+        assert (await client.call("clear", ms=800, dist=2.0, end="tail")).ok
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx > 0, "狗尾为前、有狗尾的许可:放"
+        sim.head = 1
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx == 0.0, "狗头为前:狗尾的许可不算"
+        assert not (await client.call("clear", ms=800, dist=2.0, end="side")).ok
+    async with _client(require_clearance=True, follows_head=False) as (sim, client):
+        await _站起(sim, client)
+        sim.head = 2
+        assert (await client.call("clear", ms=800, dist=2.0, end="tail")).ok
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx == 0.0, "SDK 不跟着调头:往前还是往狗头走,要狗头的许可"

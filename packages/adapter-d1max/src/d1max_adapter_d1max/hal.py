@@ -11,6 +11,9 @@
 - **控制权**(决定二 A):``control_releasable = false``,``release_control()`` 抛
   :class:`HalUnsupported`。放一次 SDK 控制权就得重启整台 RK3588。
 - **停没停**:看旁路进程报上来的里程速度;刚发出的速度还在有效期里、或里程不新鲜,都不算停。
+- **机身系**(W09i 设计稿 §1):HAL 的里程、速度一律按机身(x 朝狗头、装前雷达那头),不随调头变。
+  狗尾为前、旁路进程报 ``follows_head``(SDK 的「往前」跟着变成狗尾那头)时,里程朝向加 π、前进速度
+  反号,发出去的前进速度也反号。SDK 调头时到底怎么变是真机项。
 """
 
 from __future__ import annotations
@@ -208,7 +211,7 @@ class D1MaxHal:
         vx, wz = _clamp(cmd.vx, self.max_vx), _clamp(cmd.wz, self.max_wz)
         clamped = (vx != cmd.vx) or (wz != cmd.wz)
         # 换算后再夹一次:浮点误差也不许越过旁路进程的上限(它越界就拒)。
-        fwd = _clamp(vx / self._mps, self._frac)
+        fwd = _clamp(self._sdk_sign() * vx / self._mps, self._frac)
         yaw = _clamp(self._yaw_sign * wz / self._radps, self._frac)
         ttl = min(max(int(cmd.ttl_ms), VEL_TTL_MIN_MS), VEL_TTL_MAX_MS)
         try:
@@ -255,6 +258,12 @@ class D1MaxHal:
 
     # ------------------------------------------------------------ 感知
 
+    def _sdk_sign(self) -> float:
+        """SDK 的「往前」是机身的哪个方向:+1 狗头、-1 狗尾(狗尾为前且 SDK 跟着调头)。"""
+        st, hello = self._b.last_state, self._b.hello
+        follows = hello.follows_head if hello is not None else True
+        return -1.0 if st is not None and st.head == "tail" and follows else 1.0
+
     def _odom_fresh(self) -> bool:
         at = self._b.last_odom_at
         return self._b.connected and at is not None and self._monotonic() - at <= ODOM_STALE_S
@@ -265,8 +274,10 @@ class D1MaxHal:
         if o is None:
             return Odometry(stamp_ms=self._now(), frame_id=self._frame, x=0.0, y=0.0, yaw=0.0,
                             vx=0.0, wz=0.0, valid=False)
-        return Odometry(stamp_ms=self._now(), frame_id=self._frame, x=o.x, y=o.y, yaw=o.yaw,
-                        vx=o.vx, wz=o.vyaw, valid=self._odom_fresh())
+        s = self._sdk_sign()
+        yaw = o.yaw if s > 0 else math.remainder(o.yaw + math.pi, 2 * math.pi)
+        return Odometry(stamp_ms=self._now(), frame_id=self._frame, x=o.x, y=o.y, yaw=yaw,
+                        vx=s * o.vx, wz=o.vyaw, valid=self._odom_fresh())
 
     async def imu(self) -> Any:
         raise HalUnsupported("W00d 不接 imu")

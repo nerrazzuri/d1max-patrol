@@ -28,12 +28,14 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
 # @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11;只装不 enable)
+# @写盘 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i;只装不 enable)
 # @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
 #
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-localizer.service 定位器的自启链(装机只装不 enable;有人手工 enable 过才有)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-obstacles.service 感知节点的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(同上)
 # @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元
 # @也删 /etc/systemd/system/d1max-patrol.service 老服务(W00c5e 退役)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
@@ -320,6 +322,11 @@ fi
 if [[ -f "$PKG/deploy/d1max-obstacles.service" ]]; then
   install -m 0644 "$PKG/deploy/d1max-obstacles.service" /etc/systemd/system/
 fi
+# 前后雷达合并单元(W09i):同样**只装、不 enable** —— 后雷达外参在真机上标过、W09i 的真机项验过之前不起。
+# 它只读两台雷达、发合并话题,不碰代理、不碰旁路进程。老包没带就跳过。
+if [[ -f "$PKG/deploy/d1max-lidar-merge.service" ]]; then
+  install -m 0644 "$PKG/deploy/d1max-lidar-merge.service" /etc/systemd/system/
+fi
 # **老服务清掉。** 两个进程抢同一个旁路进程的控制权会出事,两个服务共用在途标记还会互相数
 # 开机次数、替对方提交。失败不致命:新机器上本来就没有这些。
 # 顺序:先停老服务、再删 sudoers、再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在
@@ -533,6 +540,7 @@ fi
 # try-restart:没在跑就什么也不做。
 systemctl try-restart d1max-localizer.service 2>/dev/null || true
 systemctl try-restart d1max-obstacles.service 2>/dev/null || true
+systemctl try-restart d1max-lidar-merge.service 2>/dev/null || true
 
 say "装完了。看一眼:"
 echo "  systemctl status d1max-agent"

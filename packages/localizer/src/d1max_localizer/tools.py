@@ -8,6 +8,10 @@
   ``--reference-other-frame``(按时间对齐);``--reuse`` 用 ``OUT`` 里已有的 MOLA 输出,只重算;
 - ``sweep --bag B --prior DIR --init x,y,yaw --out OUT --only-first-n N``:初值加偏差各跑一遍,出
   「初值要多准」的表(手机「设位置」提示用)。
+- ``calibrate-rear --bag B --traj TRAJ.tum --out lidars.json``(W09i):前雷达建图轨迹当参照,标后雷达
+  相对前雷达的外参;过了守门才写(``calibrated: true``)。要 ROS 的系统 Python。
+- ``merge-bag --bag B --out B2``(W09i):照抄录包,另加前后雷达合并的话题 ``/d1max/merged_lidar``
+  (``build --lidar-topic /d1max/merged_lidar`` 拿它建图);``--traj`` 给了就补两台之间的运动。
 """
 
 from __future__ import annotations
@@ -60,6 +64,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     b.add_argument("--reuse", action="store_true", help="用 --work 里已有的 MOLA 输出,只打包")
     b.add_argument("--rtk-antenna", type=lambda s: _floats(s, 2), default=(0.0, 0.0),
                    help="RTK 天线在狗身上的水平位置(朝前,朝左,米;W09e 配经纬度用,真机量)")
+    cr = sub.add_parser("calibrate-rear", help="标后雷达外参(W09i)")
+    cr.add_argument("--bag", type=Path, required=True)
+    cr.add_argument("--traj", type=Path, required=True,
+                    help="前雷达建图轨迹(build 的 work/traj.tum)")
+    cr.add_argument("--out", type=Path, required=True, help="lidars.json(狗上 /etc/d1max/)")
+    cr.add_argument("--init", type=Path, default=None, help="初值的 lidars.json(默认几何初值)")
+    cr.add_argument("--every", type=int, default=5, help="每几个前雷达帧取一个")
+    for x in (cr,):
+        x.add_argument("--sensor-up", type=lambda s: _floats(s, 3), default=(-1.0, 0.0, 0.0),
+                       help="前雷达系里的「上」(几何初值用;C40011 是 X 朝下,#64)")
+        x.add_argument("--forward-hint", type=lambda s: _floats(s, 3), default=(0.0, 0.0, 1.0))
+        x.add_argument("--front-topic", default="/front_lidar")
+        x.add_argument("--rear-topic", default="/rear_lidar")
+    mb = sub.add_parser("merge-bag", help="录包加前后雷达合并的话题(W09i)")
+    mb.add_argument("--bag", type=Path, required=True)
+    mb.add_argument("--out", type=Path, required=True)
+    mb.add_argument("--lidars", type=Path, default=None, help="lidars.json(没有 = 几何初值)")
+    mb.add_argument("--traj", type=Path, default=None, help="前雷达建图轨迹:补两台之间的运动")
+    mb.add_argument("--sensor-up", type=lambda s: _floats(s, 3), default=(-1.0, 0.0, 0.0))
+    mb.add_argument("--forward-hint", type=lambda s: _floats(s, 3), default=(0.0, 0.0, 1.0))
+    mb.add_argument("--front-topic", default="/front_lidar")
+    mb.add_argument("--rear-topic", default="/rear_lidar")
     for name in ("replay", "sweep"):
         r = sub.add_parser(name)
         r.add_argument("--bag", type=Path, required=True)
@@ -82,7 +108,56 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _replay(a)
     if a.cmd == "build":
         return _build(a)
+    if a.cmd == "calibrate-rear":
+        return _calibrate_rear(a)
+    if a.cmd == "merge-bag":
+        return _merge_bag(a)
     return _sweep(a)
+
+
+def _calibrate_rear(a: argparse.Namespace) -> int:
+    import time
+
+    import numpy as np
+
+    from d1max_localizer import calib, dualbag
+    from d1max_localizer.lidars import Lidars, geometry_guess, load
+    T0 = np.array(load(a.init, up=a.sensor_up, forward=a.forward_hint).T_front_rear if a.init
+                  else geometry_guess(a.sensor_up, a.forward_hint))
+    off = dualbag.stamp_offset(a.bag, front_topic=a.front_topic, rear_topic=a.rear_topic)
+    print(f"两台雷达消息头时刻差(中位数):{off if off is None else round(off, 4)} s")
+    if off is not None and abs(off) > 0.05:
+        print("差得比半帧还多:有一台用了自己的钟?先核时间同步再标")
+        return 1
+    frames = dualbag.read_frames(a.bag, replay.read_tum(a.traj), front_topic=a.front_topic,
+                                 rear_topic=a.rear_topic, every=a.every)
+    print(f"{len(frames)} 帧配上了轨迹与后雷达")
+    r = calib.calibrate(frames, T0)
+    print(f"对上 {r.inlier:.0%}、残差中位数 {r.median_m * 100:.1f} cm、离初值 {r.shift_m:.3f} m / "
+          f"{r.turn_deg:.2f}°:{r.why}")
+    if not r.ok:
+        print("没写文件")
+        return 1
+    Lidars(T_front_rear=[[float(v) for v in row] for row in r.T], calibrated=True,
+           residual_m=round(r.median_m, 4), stamp_offset_s=off,
+           calibrated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+           note=f"{a.bag.name}:{r.frames} 帧").save(a.out)
+    print(f"写好了 {a.out}")
+    return 0
+
+
+def _merge_bag(a: argparse.Namespace) -> int:
+    from d1max_localizer import dualbag
+    from d1max_localizer.lidars import Lidars, geometry_guess, load
+    lid = (load(a.lidars, up=a.sensor_up, forward=a.forward_hint) if a.lidars
+           else Lidars(T_front_rear=geometry_guess(a.sensor_up, a.forward_hint)))
+    if not lid.calibrated:
+        print("后雷达外参没标定(几何初值):合并出来的图可能重影,先 calibrate-rear")
+    n = dualbag.write_merged(a.bag, a.out, lid.T_front_rear,
+                             traj=replay.read_tum(a.traj) if a.traj else None,
+                             front_topic=a.front_topic, rear_topic=a.rear_topic)
+    print(f"写好了 {a.out}:{n} 帧合并点云在 {dualbag.MERGED_TOPIC}")
+    return 0
 
 
 def _build(a: argparse.Namespace) -> int:

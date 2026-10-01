@@ -7,12 +7,13 @@
 感知 → 代理:
 
 - ``hello {proto, name, version}``
-- ``grid {seq, stamp_ns, res, size, occ, known, rear, check, reason}``:**狗身系**局部栅格
+- ``grid {seq, stamp_ns, res, size, occ, known, rear, rear_cal, check, reason}``:**狗身系**局部栅格
   (狗身中心居中,``size × size`` 格、每格 ``res`` 米)。格 ``(r, c)`` 的中心在狗身系
   ``x = (r − size/2 + 0.5)·res``(朝前)、``y = (c − size/2 + 0.5)·res``(朝左);
   第 ``i = r·size + c`` 格对应位图第 ``i`` 位(第 ``i // 8`` 个字节、从高位数第 ``i % 8`` 位)。
   ``occ``:挡(凸起障碍或落差);``known``:看见过(不在里面 = 未知 = 当挡);都是 base64。
-  ``rear``:后雷达用上了没有;``check``:启动自检 ``ok`` / ``extrinsic_bad`` / ``initializing``,
+  ``rear``:后雷达用上了没有;``rear_cal``:后雷达外参真标过(``lidars.json``,W09i)—— 标过才用它的
+  「空」,狗尾为前才许自己走;``check``:启动自检 ``ok`` / ``extrinsic_bad`` / ``initializing``,
   不是 ``ok`` 时 ``reason`` 写原因。
 - ``hb {seq}``:心跳,每秒一条。
 
@@ -97,6 +98,7 @@ class Grid:
     occ: str
     known: str
     rear: bool = False
+    rear_cal: bool = False
     check: str = "ok"
     reason: str = ""
 
@@ -109,8 +111,8 @@ class Grid:
         _pos_int(self.size, "size")
         if not MIN_SIZE <= self.size <= MAX_SIZE or self.size % 2:
             raise ContractError(f"障碍桥:size 要是 {MIN_SIZE}–{MAX_SIZE} 的偶数:{self.size!r}")
-        if not isinstance(self.rear, bool):
-            raise ContractError("障碍桥:rear 要是真假")
+        if not isinstance(self.rear, bool) or not isinstance(self.rear_cal, bool):
+            raise ContractError("障碍桥:rear、rear_cal 要是真假")
         if self.check not in CHECKS:
             raise ContractError(f"障碍桥:check 要是 {'/'.join(CHECKS)}:{self.check!r}")
         _text(self.reason, "reason", 200)

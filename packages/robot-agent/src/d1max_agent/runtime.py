@@ -186,7 +186,7 @@ class AgentRuntime:
         self._obs_srv: Any = None
         self.obs_view: Any = None
         self._obs_state_told = ""
-        self._head_told = ""
+        self._head_told: tuple[str, bool] | tuple[()] = ()
         if obstacles == "bridge":
             if parts is None or not hasattr(parts.nav, "guard"):
                 raise ValueError("--obstacles bridge 要配 --nav planned(守卫在规划后端里)")
@@ -353,9 +353,8 @@ class AgentRuntime:
             return "unsupervised"                 # W00c6i:没人现场监护,真狗不自己动
         if cmd.kind in ("goto", "patrol") and self._map_busy():
             return "map_switching"
-        if cmd.kind in _AUTONOMOUS_KINDS and self.parts is not None \
-                and getattr(self.parts.nav, "head", "head") != "head":
-            return "head_not_forward"             # W11a:调过头尾(或不知道),前后雷达合并之前不自己走
+        if cmd.kind in _AUTONOMOUS_KINDS and self.parts is not None and self._head_key()[1]:
+            return "head_not_forward"             # W11a、W09i:头尾不知道,或狗尾为前但后面看不清
         if cmd.kind != "patrol" or self._storage is None:
             return ""
         f = self._storage()
@@ -455,8 +454,9 @@ class AgentRuntime:
             # W00c6e:设位置(里程锚定)。真狗要人给位置;仿真按原样,也收(测试挪坐标用)。
             out["relocalize"] = {"needs_pose": not self.parts.nav.anchor.identity}
             out["mark_home"] = {}               # W00c6f:在当前位置标原点(定位不好就拒)
-            # W11a:头尾方向。不是 head 时站点不派会自己走的任务(前后雷达合并之前)
-            out["head"] = {"direction": getattr(self.parts.nav, "head", "unknown")}
+            # W11a、W09i:头尾方向、这会儿能不能自己走(站点据此派不派会自己走的任务)
+            head, blocked = self._head_key()
+            out["head"] = {"direction": head, "autonomy": not blocked}
             # W10:区域修订号、守不守(直线桥不守禁行区)、能不能规划。站点按它补发、拒派。
             nav = self.parts.nav
             z: dict[str, Any] = {"rev": self._zones.revision if self._zones else 0,
@@ -1105,7 +1105,7 @@ class AgentRuntime:
                 self.parts.nav.head = getattr(await self.hal.health(), "head", "unknown")
             except Exception:
                 log.exception("起来时读不到头尾方向")
-            self._head_told = self.parts.nav.head
+            self._head_told = self._head_key()
         if self.parts is not None:
             # 两个桥各自记着「连上了」(老 HTTP 面的绿灯读它);HAL.connect 是幂等的。
             await self.parts.device.connect()
@@ -1482,23 +1482,34 @@ class AgentRuntime:
             except Exception:
                 log.exception("监护过期时停车失败(任务照样中止)")
 
+    def _head_key(self) -> tuple[str, bool]:
+        """(头尾方向, 不许自己走)。"""
+        nav = self.parts.nav if self.parts is not None else None
+        head = getattr(nav, "head", "unknown")
+        block = getattr(nav, "head_block", None)
+        return head, bool(block()) if callable(block) else head != "head"
+
     async def _enforce_head(self) -> None:
-        """头尾方向(W11a):变了发事件、重发能力;不是「狗头为前」(调过头、或者不知道)就当场中止
-        goto/巡检、停车 —— 定位、规划、避障都按前雷达那头是前算(前后雷达合并是 W09i)。遥控照常。"""
-        head = getattr(self.parts.nav, "head", "head")
-        if head == self._head_told:
+        """头尾方向(W11a、W09i):变了发事件、重发能力,**当场中止 goto/巡检、
+        停车**(有人拿遥控器调了头:
+        人在干预,行进方向也变了);能不能自己走变了也重发能力,变成不能就同样中止。不能自己走:头尾
+        不知道,或者狗尾为前但后雷达没标定、没配避障。遥控照常。"""
+        head, blocked = key = self._head_key()
+        if key == self._head_told:
             return
-        prev, self._head_told = self._head_told, head
-        if prev:                                  # 起来后第一次读到不算「变了」
-            self.events.emit("head_changed", {"head": head, "previous": prev})
+        prev, self._head_told = self._head_told, key
+        changed = bool(prev) and prev[0] != head
+        if changed:                               # 起来后第一次读到不算「变了」
+            self.events.emit("head_changed", {"head": head, "previous": prev[0]})
         if self.transport.connected:
             await self._publish_caps()
-        if head == "head":
+        if not blocked and not changed:
             return
         cur = self.processor.current
         moving = cur is not None and not cur.done and cur.kind in _AUTONOMOUS_KINDS
         if await self.processor.abort_kinds(_AUTONOMOUS_KINDS, "head_not_forward"):
-            log.warning("头尾方向是 %s:中止 goto/巡检", head)
+            log.warning("头尾方向是 %s(%s):中止 goto/巡检", head,
+                        "调了头" if changed else "不能自己走")
         if moving:
             try:
                 await self._stop_motion()

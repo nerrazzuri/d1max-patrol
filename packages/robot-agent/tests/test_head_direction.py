@@ -75,7 +75,7 @@ async def test_起来就是狗尾为前_不收goto_能力里报(tmp_path):
     broker, c, r, ears, rt = await _台(tmp_path, head="tail")
     try:
         assert Capabilities.from_wire(ears.by["capabilities"][-1]).tasks["head"] == \
-            {"direction": "tail"}
+            {"direction": "tail", "autonomy": False}
         await rt._on_cmd(_goto("g1", c))
         await broker.drain()
         ack = ears.by["cmd/ack"][-1]
@@ -101,7 +101,7 @@ async def test_跑着的时候调过头尾_当场中止_狗停_发事件_调回�
         ev = [e for e in ears.by["event"] if e["kind"] == "head_changed"]
         assert ev and ev[-1]["data"] == {"head": "tail", "previous": "head"}
         assert Capabilities.from_wire(ears.by["capabilities"][-1]).tasks["head"] == \
-            {"direction": "tail"}
+            {"direction": "tail", "autonomy": False}
         r.inject_head("head")
         await _跑(rt, broker, r, c, 3)
         await rt._on_cmd(_goto("g2", c))
@@ -132,3 +132,53 @@ async def test_导航桥自己也停_不等运行时(tmp_path):
     await nav.step(0.1)
     assert (await nav.nav_status()) is NavStatus.FAILED
     await parts.engine.aclose()
+
+
+async def test_狗尾为前_后面看得清就照收_能力里报能走_看不清了当场中止(tmp_path):
+    """W09i:狗尾为前、导航后端说能走(后雷达标过、配了避障)就照收;半路后面看不清了(能力变成不能)就中止。"""
+    broker, c, r, ears, rt = await _台(tmp_path)
+    ok = {"v": True}
+    rt.parts.nav.tail_ok = lambda: ok["v"]
+    try:
+        r.inject_head("tail")
+        await _跑(rt, broker, r, c, 3)
+        assert Capabilities.from_wire(ears.by["capabilities"][-1]).tasks["head"] == \
+            {"direction": "tail", "autonomy": True}
+        await rt._on_cmd(_goto("g1", c, x=-8.0))
+        await broker.drain()
+        assert ears.by["cmd/ack"][-1]["result"] == "accepted"
+        await _跑(rt, broker, r, c, 15)
+        assert r.speed[0] < -0.1, "倒着走(狗尾对着路)"
+        ok["v"] = False
+        await _跑(rt, broker, r, c, 15)
+        assert abs(r.speed[0]) < 1e-9
+        assert Capabilities.from_wire(ears.by["capabilities"][-1]).tasks["head"] == \
+            {"direction": "tail", "autonomy": False}
+        ends = [e for e in ears.by["event"] if e["kind"] == "task_aborted"]
+        assert ends and ends[-1]["data"].get("reason") == "head_not_forward"
+        assert not [e for e in ears.by["event"] if e["kind"] == "head_changed"
+                    and e["data"]["head"] == "tail" and e["data"]["previous"] == "tail"]
+    finally:
+        await rt.close()
+
+
+async def test_调过去之后也能走_照样当场中止_算人在干预(tmp_path):
+    """W09i:狗头为前跑着,有人拿遥控器调成狗尾为前(后雷达标过、能走):运行时按 head_not_forward 中止,
+    不是等导航桥发现行进方向变了按失败收尾。"""
+    broker, c, r, ears, rt = await _台(tmp_path)
+    rt.parts.nav.tail_ok = lambda: True
+    try:
+        await rt._on_cmd(_goto("g1", c, x=8.0))
+        await _跑(rt, broker, r, c, 15)
+        assert abs(r.speed[0]) > 0.1
+        r.inject_head("tail")
+        await _跑(rt, broker, r, c, 15)
+        assert abs(r.speed[0]) < 1e-9
+        ends = [e for e in ears.by["event"] if e["kind"] in ("task_aborted", "task_failed")
+                and e["data"].get("task_id") == "t-g1"]
+        assert ends and ends[-1]["kind"] == "task_aborted" \
+            and ends[-1]["data"].get("reason") == "head_not_forward", ends[-1:]
+        assert Capabilities.from_wire(ears.by["capabilities"][-1]).tasks["head"] == \
+            {"direction": "tail", "autonomy": True}
+    finally:
+        await rt.close()

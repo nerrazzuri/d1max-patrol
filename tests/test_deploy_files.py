@@ -1150,7 +1150,8 @@ def test_卸载脚本删agent单元():
     assert "\nMAIN_UNIT=d1max-agent.service\n" in text
     assert 'rm_sys "$UNIT_DIR/$MAIN_UNIT"' in text and 'rm_sys "$WANTS_LINK"' in text
     # 没重跑过装机脚本的老机器上老服务还在:卸载照样要停、要删。定位器(W09b)先停,它连着代理。
-    assert 'for u in "$OBS_UNIT" "$LOC_UNIT" "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do' in text
+    assert ('for u in "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$MAIN_UNIT" "$LEGACY_UNIT" '
+            '"$OLD_UNIT"; do') in text
     assert 'rm_sys "$UNIT_DIR/$LEGACY_UNIT"' in text
 
 
@@ -1490,3 +1491,31 @@ def test_装机脚本对时_先看有没有_timesyncd_没配上就删旧的_成�
     assert 'rm -f "$TIMESYNC_CONF"' in 段, "站点地址清空、改错了:不留指着旧主机的配置"
     ok = 段.index("对时:向")
     assert 段.rfind("if systemctl restart systemd-timesyncd", 0, ok) != -1, "重启成了才说对上"
+
+
+def test_前后雷达合并的启动脚本与单元_只装不启用_卸载删干净():
+    """W09i:合并节点跟定位器、感知一样跑在 ROS 的系统 Python 里、用这一版带的包;
+    外参读 /etc/d1max/lidars.json;装机只装不 enable;卸载连手工 enable 过的自启链一起删;
+    先停定位器再停它。"""
+    import os
+    import subprocess
+    start = DEPLOY / "d1max-lidar-merge-start"
+    assert os.access(start, os.X_OK)
+    subprocess.run(["sh", "-n", str(start)], check=True)
+    text = start.read_text(encoding="utf-8")
+    assert '. /opt/ros/humble/setup.sh' in text
+    assert '$here/packages/localizer/src:$here/packages/contract/src' in text
+    assert "exec /usr/bin/python3 -m d1max_localizer.merge" in text
+    assert "--lidars /etc/d1max/lidars.json" in text
+    单元 = (DEPLOY / "d1max-lidar-merge.service").read_text(encoding="utf-8")
+    assert "ExecStart=/opt/d1max/current/deploy/d1max-lidar-merge-start" in 单元
+    assert "EnvironmentFile=-/etc/d1max/env" in 单元
+    装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "# @写盘 /etc/systemd/system/d1max-lidar-merge.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/d1max-lidar-merge.service" /etc/systemd/system/' in 装
+    assert "enable d1max-lidar-merge" not in 装 and "systemctl start d1max-lidar-merge" not in 装
+    assert "systemctl try-restart d1max-lidar-merge.service" in 装
+    卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /etc/systemd/system/d1max-lidar-merge.service" in 卸
+    assert 'rm_sys "$UNIT_DIR/$MERGE_UNIT"' in 卸 and 'rm_sys "$MERGE_WANTS_LINK"' in 卸
+    assert '"$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT"' in 卸, "先停吃合并话题的定位器,再停合并"

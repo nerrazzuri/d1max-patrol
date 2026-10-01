@@ -2,13 +2,15 @@
 
 - **外参**来自 ``frames.json``(``sensor_up``、``sensor_forward``、``sensor_in_base``:建图流水线按
   点云判上下、按狗走动的方向标前,不靠装法 —— #64 的「装反 180°」其实是「上」的正负号弄反了,见
-  ``docs/真机待验证清单.md`` #64);后雷达没有标定,用前雷达的镜像猜。
+  ``docs/真机待验证清单.md`` #64);后雷达按 ``lidars.json``(W09i:换进前雷达系再走前雷达的外参;
+  没有这份文件 = 头尾对称的几何初值、没标定)。**标过才用后雷达的「空」**,没标定只用它的「挡」。
 - **启动自检**:前 :data:`CHECK_FRAMES` 帧拟合地面,地面法向跟「上」夹角 ≤ 5°、雷达离地 0.2–1.0 m、
   地面内点够多,才 ``ok``;不然 ``extrinsic_bad``(代理据此不宣告能自主走)。离地高度取自检的中位数。
 - **每帧**:凸起障碍(离地 0.10–1.30 m)、落差(近处比地面低 0.15 m 以上)→ 挡;打到地面、矮草 → 看见了;
   别的格子 = 未知(代理当挡)。机身自己(腿)的点不算。
 - **净空**:机身前沿往前、机身宽 + 每边 0.05 m 的走廊里第一个「挡 / 未知」有多远 → 给旁路进程发许可
-  ``clear {ms, dist}``(第二层,只在够刹停的时候发)。
+  ``clear {ms, dist}``(第二层,只在够刹停的时候发)。狗尾那头同样算(W09i):后雷达标过、旁路进程
+  ≥ 6 号才发 ``clear {ms, dist, end: "tail"}``(5 号会把它当成狗头的许可)。
 - 栅格**不带记忆**:滚动记忆在代理里做(代理有里程)。
 
 核心纯 numpy(不 import ROS);ROS 只在 :func:`main` 里。
@@ -37,8 +39,9 @@ MAX_TILT_DEG = 5.0
 HEIGHT_RANGE_M = (0.2, 1.0)
 MIN_GROUND_FRAC = 0.3
 PERMIT_MS = 300
-#: 旁路进程从协议 4 起认 ``clear``。
+#: 旁路进程从协议 4 起认 ``clear``;6 起认 ``end``(狗尾那头的许可)。
 CLEAR_PROTO = 4
+TAIL_CLEAR_PROTO = 6
 #: 地面候选平面跟「上」最多差 45°(对着墙起来时别把墙当地面;外参歪 5–45° 照样查得出来)。
 MIN_UP_COS = math.cos(math.radians(45.0))
 SIDECAR = ("127.0.0.1", 8090)
@@ -99,6 +102,25 @@ class Mount:
         out[:, 0] += self.x
         out[:, 1] += self.y
         return out
+
+
+@dataclass(frozen=True)
+class RearMount:
+    """后雷达(W09i):先按 ``T_front_rear`` 换进前雷达系,再走前雷达的外参。"""
+
+    front: Mount
+    T_front_rear: Any                   # 4×4
+    calibrated: bool = False
+
+    @classmethod
+    def from_lidars(cls, front: Mount, frames: Any, lidars_path: Path | None) -> RearMount:
+        from d1max_localizer.lidars import load
+        lid = load(lidars_path, up=frames.sensor_up, forward=frames.sensor_forward)
+        return cls(front=front, T_front_rear=lid.T_front_rear, calibrated=lid.calibrated)
+
+    def to_base(self, pts: Any) -> Any:
+        from d1max_localizer.merge import transform
+        return self.front.to_base(transform(self.T_front_rear, pts))
 
 
 def _unit(v: Sequence[float]) -> tuple[float, float, float]:
@@ -249,8 +271,12 @@ def classify(pts_base: Any, height: float, cfg: Config = DEFAULT) -> tuple[bytes
     return occ.tobytes(), known.tobytes()
 
 
-def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT) -> float:
-    """机身前沿往前、机身宽 + 每边余量的走廊里,第一个「挡 / 未知」离机身前沿多远(米)。"""
+def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT, *,
+                   end: str = "head") -> float:
+    """机身前沿往前、机身宽 + 每边余量的走廊里,第一个「挡 / 未知」离机身前沿多远(米)。
+    ``end="tail"``:狗尾那头(栅格转 180°:第 ``i`` 格换成第 ``size² − 1 − i`` 格)。"""
+    if end == "tail":
+        occ, known = occ[::-1], known[::-1]
     n = cfg.size
     front = cfg.body_len / 2
     half = cfg.body_wid / 2 + cfg.margin
@@ -371,7 +397,8 @@ def _line(obj: dict) -> bytes:
 class Perception:
     """一帧一帧喂进来(前雷达;后雷达可选)→ 发栅格、发许可。不碰 ROS,测试直接喂。"""
 
-    def __init__(self, front: Mount, *, rear: Mount | None = None, cfg: Config = DEFAULT,
+    def __init__(self, front: Mount, *, rear: Mount | RearMount | None = None,
+                 cfg: Config = DEFAULT,
                  obs: LineClient | None = None, sidecar: LineClient | None = None,
                  rear_max_age_s: float = 0.3, clock: Any = time.monotonic) -> None:
         self.front, self.rear, self.cfg = front, rear, cfg
@@ -384,12 +411,18 @@ class Perception:
         self.rear_max_age_s = rear_max_age_s
         self._clock = clock
         self.last_clear = 0.0
+        self.last_clear_tail = 0.0
         self.sidecar_proto: int | None = None
         self._rej_logged = -math.inf
         if sidecar is not None and sidecar.on_line is None:
             sidecar.on_line = self.on_sidecar
 
-    def set_mount(self, front: Mount, rear: Mount | None) -> None:
+    @property
+    def rear_cal(self) -> bool:
+        """后雷达外参真标过(``lidars.json`` 的 ``calibrated``)。"""
+        return bool(getattr(self.rear, "calibrated", False))
+
+    def set_mount(self, front: Mount, rear: Mount | RearMount | None) -> None:
         """换了图(外参跟着图走):换外参、重新自检。"""
         self.front, self.rear = front, rear
         self.check = SelfCheck()
@@ -431,7 +464,8 @@ class Perception:
             self.seq += 1
             grid = {"t": "grid", "seq": self.seq, "stamp_ns": max(0, int(stamp_ns)),
                     "res": self.cfg.res, "size": n, "occ": empty, "known": empty, "rear": False,
-                    "check": self.check.check, "reason": self.check.reason[:200]}
+                    "rear_cal": self.rear_cal, "check": self.check.check,
+                    "reason": self.check.reason[:200]}
             if self.obs is not None:
                 self.obs.send(grid)
             return grid
@@ -439,23 +473,33 @@ class Perception:
                 and self._clock() - self._rear_at <= self.rear_max_age_s)
         occ, known = classify(p, self.check.height, self.cfg)
         if rear:
-            # 后雷达外参是猜的(前雷达的镜像):标定之前只用它的「挡」,不用它的「空」放行(内审再议)
-            occ_r, _ = classify(self._rear_pts, self.check.height, self.cfg)
+            # 没标定(几何初值):只用它的「挡」,不用它的「空」放行;标过(W09i)两样都用
+            occ_r, known_r = classify(self._rear_pts, self.check.height, self.cfg)
             occ = bytes(a | b for a, b in zip(occ, occ_r, strict=True))
-            known = bytes(a | b for a, b in zip(known, occ_r, strict=True))
+            seen = known_r if self.rear_cal else occ_r
+            known = bytes(a | b for a, b in zip(known, seen, strict=True))
         self.seq += 1
         grid = {"t": "grid", "seq": self.seq, "stamp_ns": max(0, int(stamp_ns)),
                 "res": self.cfg.res, "size": n, "occ": pack_bits(occ, n),
-                "known": pack_bits(known, n), "rear": bool(rear), "check": self.check.check,
-                "reason": self.check.reason[:200]}
+                "known": pack_bits(known, n), "rear": bool(rear), "rear_cal": self.rear_cal,
+                "check": self.check.check, "reason": self.check.reason[:200]}
         if self.obs is not None:
             self.obs.send(grid)
         self.last_clear = clear_distance(occ, known, self.cfg)
-        ms = permit(self.last_clear, self.cfg) if self.check.check == "ok" else 0
+        self.last_clear_tail = clear_distance(occ, known, self.cfg, end="tail")
+        ok = self.check.check == "ok"
+        ms = permit(self.last_clear, self.cfg) if ok else 0
         if self.sidecar is not None and ms:
             self._cmd += 1
             self.sidecar.send({"id": self._cmd, "cmd": "clear", "ms": ms,
                                "dist": round(self.last_clear, 2)})
+        # 狗尾那头:后雷达标过、这一帧用上了、旁路进程认 end(5 号会把它当成狗头的许可)
+        ms = permit(self.last_clear_tail, self.cfg) if ok and rear and self.rear_cal else 0
+        if (self.sidecar is not None and ms and self.sidecar_proto is not None
+                and self.sidecar_proto >= TAIL_CLEAR_PROTO):
+            self._cmd += 1
+            self.sidecar.send({"id": self._cmd, "cmd": "clear", "ms": ms,
+                               "dist": round(self.last_clear_tail, 2), "end": "tail"})
         return grid
 
 
@@ -485,7 +529,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="代理的地图目录(active.json 在这里);换了图外参跟着换、重新自检")
     ap.add_argument("--socket", type=Path, default=Path("/var/lib/d1max/agent/obs.sock"))
     ap.add_argument("--front-topic", default="/front_lidar")
-    ap.add_argument("--rear-topic", default="", help="后雷达(没标定:只用来看见「空」;空 = 不用)")
+    ap.add_argument("--rear-topic", default="",
+                    help="后雷达(空 = 不用;没标定只用它的「挡」,标过「空」也用)")
+    ap.add_argument("--lidars", type=Path, default=None,
+                    help="后雷达外参 lidars.json(默认 /etc/d1max/lidars.json;没有 = 几何初值)")
     ap.add_argument("--sidecar", default="", help="旁路进程 host:port(发净空许可;空 = 不发)")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -500,15 +547,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     from d1max_localizer.build import cloud_xyz
     from d1max_localizer.frames import Frames
 
-    def load() -> tuple[str, Mount] | None:
+    def mounts(f: Frames) -> tuple[Mount, RearMount | None]:
+        front = Mount.from_frames(f)
+        if not a.rear_topic:
+            return front, None
+        rear = RearMount.from_lidars(front, f, a.lidars)
+        log.info("后雷达外参:%s", "标过" if rear.calibrated else "几何初值(没标定:只用它的「挡」)")
+        return front, rear
+
+    def load() -> tuple[str, tuple[Mount, RearMount | None]] | None:
         if a.frames is not None:
-            return str(a.frames), Mount.from_frames(Frames.load(a.frames))
+            return str(a.frames), mounts(Frames.load(a.frames))
         got = active_frames(a.maps_dir)
         if got is None:
             return None
         try:
-            return got[0], Mount.from_frames(Frames.load(got[1]))
-        except Exception as exc:                         # noqa: BLE001 —— 坏的 frames.json:等换图
+            return got[0], mounts(Frames.load(got[1]))
+        except Exception as exc:                         # noqa: BLE001 —— 坏的外参:等换图
             log.error("外参读不了(%s):%s", got[1], exc)
             return None
 
@@ -517,14 +572,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         log.warning("还没有正在用的图的外参(%s),5 s 后再看", a.maps_dir)
         time.sleep(5.0)
         cur = load()
-    front = cur[1]
+    front, rear = cur[1]
     obs = LineClient(lambda: _unix(a.socket), {"t": "hello", "proto": PROTO,
                                                "name": "d1max-obstacles"})
     side = None
     if a.sidecar:
         host, port = a.sidecar.rsplit(":", 1)
         side = LineClient(lambda: socket.create_connection((host, int(port)), timeout=1.0), None)
-    per = Perception(front, rear=front.mirrored() if a.rear_topic else None, obs=obs, sidecar=side)
+    per = Perception(front, rear=rear, obs=obs, sidecar=side)
     rclpy.init(args=None)
     node = rclpy.create_node("d1max_obstacles")
     qos = QoSProfile(depth=2, history=HistoryPolicy.KEEP_LAST,
@@ -564,7 +619,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if nxt is not None and nxt[0] != cur[0]:
                     log.info("换图了(%s → %s):换外参、重新自检", cur[0], nxt[0])
                     cur = nxt
-                    per.set_mount(nxt[1], nxt[1].mirrored() if a.rear_topic else None)
+                    per.set_mount(*nxt[1])
     finally:
         ex.shutdown()
         node.destroy_node()
