@@ -245,6 +245,7 @@ class HalNavBackend(NavBackend):
         health = await self._hal.health()
         odom = await self._hal.odometry()
         self.odom_ok = health.loc_quality > 0.0 and odom.valid
+        self._odom_seen(odom)
         self.anchor.update((odom.x, odom.y, odom.yaw), self.odom_ok)
         loc = LocStatus.CONTINUOUS_LOC if self.anchor.ok(self.odom_ok) else LocStatus.LOC_LOST
         if loc is not self._loc:
@@ -266,6 +267,9 @@ class HalNavBackend(NavBackend):
             await self._enter_terminal(NavStatus.FAILED)
             return
         await self._drive(here, dt_s)
+
+    def _odom_seen(self, odom: Any) -> None:
+        """每拍读到的里程(规划后端拿来喂障碍记忆、取实测速度,W11)。"""
 
     async def _drive(self, here: Any, dt_s: float) -> None:
         """这一拍的速度环(``ACTIVE``、有目标、定位可信时):直线朝目标转、走。规划后端(W10)换成跟路径。"""

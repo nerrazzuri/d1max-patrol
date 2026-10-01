@@ -144,7 +144,8 @@ class AgentRuntime:
                  autonomy: str | None = None, odom_identity: bool | None = None,
                  localizer: str = "anchor", loc_socket: Path | None = None,
                  rtk: Any = None, nav: str = "straight",
-                 robot_radius_m: float | None = None) -> None:
+                 robot_radius_m: float | None = None, obstacles: str = "none",
+                 obs_socket: Path | None = None) -> None:
         self.registration = registration
         #: RTK 来源(W09e,``d1max_agent.rtk``:自己的串口驱动或厂家的);没配是 None。
         self.rtk = rtk
@@ -179,6 +180,22 @@ class AgentRuntime:
         self._grid_job: asyncio.Task | None = None
         if parts is not None and hasattr(parts.nav, "on_event"):
             parts.nav.on_event = self._nav_event
+        #: 局部避障(W11):感知节点经本机障碍桥(``obs.sock``)给局部栅格;规划后端的守卫用它。
+        if obstacles not in ("none", "bridge"):
+            raise ValueError(f"obstacles 要是 none 或 bridge,给的是 {obstacles!r}")
+        self._obs_srv: Any = None
+        self.obs_view: Any = None
+        self._obs_state_told = ""
+        if obstacles == "bridge":
+            if parts is None or not hasattr(parts.nav, "guard"):
+                raise ValueError("--obstacles bridge 要配 --nav planned(守卫在规划后端里)")
+            from d1max_agent.obs_server import ObsBridgeServer
+            from d1max_agent.obstacles import ObstacleGuard, ObstacleView
+            self.obs_view = ObstacleView(monotonic=monotonic or time.monotonic)
+            parts.nav.obstacles = self.obs_view
+            parts.nav.guard = ObstacleGuard()
+            self._obs_srv = ObsBridgeServer(obs_socket or store_dir / "obs.sock", self.obs_view,
+                                            monotonic=monotonic or time.monotonic)
         #: 每张图上的原点(W00c6f 内审):标的、站点下发时带的都记在这儿,重启先看它(``--home`` 垫底)。
         self.homes = HomeBook(store_dir / "homes.json")
         if parts is not None and loaded_map is not None:
@@ -445,6 +462,12 @@ class AgentRuntime:
                 if nav.plan_problem:
                     z["problem"] = nav.plan_problem
             out["zones_set"] = z
+        if self.obs_view is not None:
+            # W11:避障能不能用(``ok`` 才派会自己走的任务);外参自检没过带原因
+            o: dict[str, Any] = {"state": self.obs_view.state(), "rear": self.obs_view.rear}
+            if self.obs_view.reason:
+                o["reason"] = self.obs_view.reason[:200]
+            out["obstacles"] = o
         if self._storage is not None:
             out["outbox_retry"] = {}
         if self.rtk is not None:
@@ -1100,6 +1123,8 @@ class AgentRuntime:
             # 定位器可以先连上来,不等站点;但要在校验完正在用的图之后(W09g 内审应修 1:原来先开桥,
             # 校验几百 MB 的那几秒里定位器连上来,拿到的是命令行那张图的先验)
             await self._locsrv.start()
+        if self._obs_srv is not None:
+            await self._obs_srv.start()          # 感知节点(W11)也可以先连上来
         await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
         await self._publish_caps()
         if self.releases is not None:
@@ -1167,6 +1192,8 @@ class AgentRuntime:
             await _step("停 RTK", _rtk_off)
         if self._locsrv is not None:
             await _step("关本机定位桥", self._locsrv.close)
+        if self._obs_srv is not None:
+            await _step("关本机障碍桥", self._obs_srv.close)
         if self.video is not None:
             async def _video_off() -> None:
                 self.video.close()
@@ -1472,6 +1499,13 @@ class AgentRuntime:
         await self._enforce_supervision()
         if self._locsrv is not None:
             await self._locsrv.tick()            # 本机定位桥:心跳、定位器没声就当它断了
+        if self._obs_srv is not None:
+            self._obs_srv.tick()                 # 本机障碍桥:感知节点没声就当它断了
+            st = self.obs_view.state()
+            if st != self._obs_state_told:
+                self._obs_state_told = st
+                if self.transport.connected:
+                    await self._publish_caps()   # 避障能不能用变了:站点、手机要知道
         if self.parts is not None:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
         await self._feed_trail()
