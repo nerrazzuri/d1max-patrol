@@ -86,6 +86,12 @@ def 现场(tmp_path):
         assert r.returncode == 0, r.stderr
     r = site(home, "add-admin", "alice", env={"D1MAX_SITE_PASSWORD": PW})
     assert r.returncode == 0, r.stderr
+    # W10:狗用的那张图要在站点目录里(派单前要确认这一版区域)
+    src = tmp_path / "map-src"
+    src.mkdir()
+    (src / "m.pgm").write_bytes(b"x")
+    r = site(home, "map-import", str(src), "--map-id", "estate-1", "--version", "7")
+    assert r.returncode == 0, r.stderr
     procs: list[Proc] = []
 
     def mosq() -> Proc:
@@ -155,6 +161,10 @@ def test_W00c1_端到端(现场):
     code, d = req(ctx, "POST", "/api/login", {"name": "alice", "password": PW})
     assert code == 200, d
     tok = d["token"]
+    # W10 外审 2:这一版区域没人确认过不派自主走的任务
+    code, d = req(ctx, "POST", "/api/maps/estate-1/7/zones/confirm",
+                  {"revision": 0, "confirm": True}, token=tok)
+    assert code == 200, d
     等(lambda: req(ctx, "GET", "/api/robots/A", token=tok)[1].get("fresh"), what="A 新鲜")
     # W09h(决策 19):钟差估出来之前不派会动的命令 —— 真进程、真 broker,钟对得上时估计值略负,
     # 要攒 10 条遥测(1 Hz,约 10 s)

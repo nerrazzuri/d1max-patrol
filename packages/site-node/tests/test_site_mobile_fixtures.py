@@ -10,7 +10,7 @@ import json
 import os
 from pathlib import Path
 
-from test_site_api import PW, _等, target, wall, 站
+from test_site_api import MAP, PW, _等, target, wall, 站
 
 FIXTURES = Path(__file__).resolve().parents[3] / "mobile" / "test" / "fixtures"
 
@@ -81,6 +81,7 @@ def _collect(tmp_path) -> dict[str, object]:
         s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=wall)
         code, login = s.req("POST", "/api/login", {"name": "alice", "password": PW})
         tok = login["token"]
+        s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")   # W10:这一版区域确认过
         _等(lambda: s.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
         s.req("POST", "/api/bundles", {"path": str(打包(tmp_path, 1))}, token=tok)
         sub = s.disp.feed.subscribe()

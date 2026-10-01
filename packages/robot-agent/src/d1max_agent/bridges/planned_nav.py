@@ -36,12 +36,20 @@ from d1max_agent.planning.costmap import Costmap, CostmapError
 from d1max_agent.planning.planner import PlannedPath, Planner
 from d1max_contract.hal import RobotHAL
 from d1max_contract.zones import Zone, ZoneSet, distance_to_polygon
-from d1max_patrol.backends.base import NavCancelledError, NavRequestError
+from d1max_patrol.backends.base import (
+    NavCancelledError,
+    NavNotLocalizedError,
+    NavRequestError,
+)
 from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose
 
 log = logging.getLogger(__name__)
 
 LOOKAHEAD_M = 0.6
+#: 离拐点这么近就换下一段(W10 外审 1:前视点只在当前这一段上找,不越过拐点抄近路切角)。
+VERTEX_TOL_M = 0.1
+#: 限速看前面多长一段路(W10 外审 4:沿路逐格取最低,留出减速距离;0.6 m/s 刹停约 0.2 m)。
+SPEED_LOOK_M = 1.0
 ARRIVE_TOL_M = 0.15
 YAW_TOL_RAD = 0.15
 TURN_IN_PLACE_RAD = 0.5
@@ -264,7 +272,7 @@ class PlannedNavBackend(HalNavBackend):
             raise NavRequestError(op, f"规划不了:{self.plan_problem}")
         here = await self._here()
         if here is None or self._loc is LocStatus.LOC_LOST:
-            raise NavRequestError(op, "没有可信定位,不规划")
+            raise NavNotLocalizedError(op, "没有可信定位,不规划")
         z = self.nogo_at(here.x, here.y)
         if z is not None:
             raise NavRequestError(op, f"狗在禁行区 {z.id} 里面,不自己往外走")
@@ -371,18 +379,42 @@ class PlannedNavBackend(HalNavBackend):
         return best
 
     def _lookahead(self, seg: int, p: tuple[float, float]) -> tuple[float, float]:
+        """前视点:从投影点沿**当前这一段**往前 ``LOOKAHEAD_M``,不越过这一段的终点(拐点)——
+        越过拐点去追下一段的点,狗就从拐角内侧抄近路,离障碍比规划的近(W10 外审 1)。"""
         assert self._path is not None
+        end = self._path.points[seg + 1]
+        d = math.dist(p, end)
+        if d <= LOOKAHEAD_M:
+            return end
+        f = LOOKAHEAD_M / d
+        return (p[0] + f * (end[0] - p[0]), p[1] + f * (end[1] - p[1]))
+
+    def _path_speed(self, seg: int, p: tuple[float, float]) -> float:
+        """前面 ``SPEED_LOOK_M`` 这段路(沿路径,拐点也算)经过的每一格(超覆盖)里最低的限速:窄限速带
+        夹在现在的位置和前视点之间也跨不过去(W10 外审 4)。"""
+        from d1max_agent.planning.astar import iter_line
+        assert self._path is not None and self._cm is not None
+        cm = self._cm
         pts = self._path.points
-        left = LOOKAHEAD_M
+        best = math.inf
+        left = SPEED_LOOK_M
         cur = p
         for i in range(seg + 1, len(pts)):
-            d = math.dist(cur, pts[i])
-            if d >= left:
+            nxt = pts[i]
+            d = math.dist(cur, nxt)
+            if d > left:
                 f = left / d
-                return (cur[0] + f * (pts[i][0] - cur[0]), cur[1] + f * (pts[i][1] - cur[1]))
+                nxt = (cur[0] + f * (nxt[0] - cur[0]), cur[1] + f * (nxt[1] - cur[1]))
+            a, b = cm.cell_of(*cur), cm.cell_of(*nxt)
+            if a is not None and b is not None:
+                for r, c in iter_line(a, b):
+                    best = min(best, float(cm.speed[r, c]))
             left -= d
-            cur = pts[i]
-        return pts[-1]
+            cur = nxt
+            if left <= 0:
+                break
+        rc = cm.cell_of(*p)
+        return min(best, float(cm.speed[rc])) if rc is not None else best
 
     def _turn(self, err: float) -> float:
         wz = max(-self._wmax, min(self._wmax, K_ANG * err))
@@ -436,6 +468,10 @@ class PlannedNavBackend(HalNavBackend):
             self._start_replan()
             await self._send(0.0, 0.0, dt_s)
             return
+        pts = self._path.points
+        while seg + 2 < len(pts) and math.dist((here.x, here.y), pts[seg + 1]) <= VERTEX_TOL_M:
+            seg += 1                                     # 到了拐点:换下一段(对不准就原地转)
+            proj = pts[seg]
         self._seg = seg
         look = self._lookahead(seg, proj)
         bearing = _wrap(math.atan2(look[1] - here.y, look[0] - here.x) - here.yaw)
@@ -443,8 +479,8 @@ class PlannedNavBackend(HalNavBackend):
         if abs(bearing) > TURN_IN_PLACE_RAD:
             vx = 0.0
         else:
-            limit = min(self._vmax, self._cm.speed_at(here.x, here.y),
-                        self._cm.speed_at(*look))
+            limit = min(self._vmax, self._path_speed(seg, proj),
+                        self._cm.speed_at(here.x, here.y))
             vx = max(min(limit, K_LIN * dgoal), self._caps.deadband_vx)
         await self._send(vx, wz, dt_s)
 

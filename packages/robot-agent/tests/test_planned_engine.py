@@ -257,3 +257,36 @@ async def test_规划期间被叫停_引擎不接着派下一个点(tmp_path):
         assert pl.calls == 1, "没接着去规划下一个点"
     finally:
         await parts.engine.aclose()
+
+
+async def test_规划时没定位_走定位恢复_不把后面的点跑空(台子):
+    """W10 外审 3:skip 策略下,第二个点规划时没有可信定位 —— 以前当场记失败、接着第三个、第四个……
+    转眼跑空。现在停车、重定位、等恢复,然后重试当前点(不算一次重试)。"""
+    from d1max_patrol.backends.base import LocStatusEvent, NavNotLocalizedError
+    from d1max_patrol.protocol.nav_types import LocStatus
+    c, r, parts = 台子
+    nav = parts.nav
+    real = nav.goto
+    state = {"n": 0, "refused": False}
+
+    async def goto(pose):
+        state["n"] += 1
+        if state["n"] == 2:                               # 第二个点:这会儿没定位
+            state["refused"] = True
+            raise NavNotLocalizedError("goto", "没有可信定位,不规划")
+        await real(pose)
+    nav.goto = goto
+    await parts.engine.start(_任务([("A", 3.5, 2.0), ("B", 3.5, 4.0), ("C", 2.0, 4.0)],
+                                   on_waypoint_failed="skip"), home=parts.home)
+    for _ in range(2000):
+        await _一拍(c, r, parts)
+        if state["refused"]:
+            break
+    for _ in range(30):
+        await _一拍(c, r, parts)
+    assert parts.engine.state is RunState.PAUSED, parts.engine.snapshot
+    assert len(parts.engine._live.results) == 1, "B、C 没被当场记成失败"
+    nav.emit(LocStatusEvent(LocStatus.CONTINUOUS_LOC, LocStatus.LOC_LOST))   # 定位回来了
+    await _跑完(c, r, parts)
+    assert parts.engine.state is RunState.DONE, parts.engine.snapshot.reason
+    assert [x.ok for x in parts.engine._live.results] == [True, True, True]

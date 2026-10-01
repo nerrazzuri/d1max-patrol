@@ -409,13 +409,19 @@ class Dispatcher:
         return caps["map_id"], caps["map_version"]
 
     def _check_zones(self, robot_id: str, c: DispatchClient, kind: str) -> None:
-        """区域(W10):狗上的区域修订要跟站点的一致;这张图上有禁行区,狗的导航就得守;规划后端没有规划
-        栅格不派。只管会自己走的(goto、巡检)。"""
+        """区域(W10):这一版区域要人工确认过(外审 2);狗上的区域修订要跟站点的一致;这张图上有区域,
+        狗的导航就得守;规划后端没有规划栅格不派。只管会自己走的(goto、巡检,排程、事件派遣、回待命点
+        都经过它)。"""
         if kind not in ("goto", "patrol") or self.zones is None:
             return
         loaded = self._loaded(c)
         if loaded is None:
             return
+        if not self.zones.confirmed_current(*loaded):
+            # W10 外审 2:确认不只卡换图 —— 换图之后删了禁行区(放宽)、W10 之前就在用的图(修订 0),
+            # 这一版区域没人确认过,就不派自主走的任务(停止、遥控、安全降级不受影响)
+            raise DispatchRefused(f"{loaded[0]}:{loaded[1]} 当前的区域修订还没做安全确认:先在地图页"
+                                  "核对禁行区、确认这一版(图不在站点目录里就先导入)")
         site = self.zones.current(*loaded)
         z = c.capabilities.tasks.get("zones_set") if c.capabilities is not None else None
         if z is None:

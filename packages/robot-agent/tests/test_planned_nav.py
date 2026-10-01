@@ -49,8 +49,11 @@ def 画世界(tmp_path, walls=()):
 
 
 def 离墙(occ, x, y):
+    """到墙的实体(每个占用格是一整块)的最近距离(W10 外审 1:以前量到格心,量出来偏大)。"""
     ys, xs = np.nonzero(occ)
-    return float(np.min(np.hypot((xs + 0.5) * RES - x, (ys + 0.5) * RES - y)))
+    dx = np.maximum(np.abs(x - (xs + 0.5) * RES) - RES / 2, 0.0)
+    dy = np.maximum(np.abs(y - (ys + 0.5) * RES) - RES / 2, 0.0)
+    return float(np.min(np.hypot(dx, dy)))
 
 
 def 区域(*zs, rev=1):
@@ -128,7 +131,7 @@ async def test_绕墙到点_对朝向_一路不贴墙(tmp_path):
     assert NavStatus.SUCCEED in t.status
     assert math.hypot(o.x - 10.0, o.y - 2.0) <= 0.2
     assert abs(math.remainder(o.yaw - math.pi / 2, 2 * math.pi)) <= 0.2
-    assert t.min_clear >= 0.5, t.min_clear
+    assert t.min_clear >= 0.52, t.min_clear      # 机身外接圆不碰墙(路径本身 ≥ 0.57)
 
 
 async def test_绕禁行区_不进(tmp_path):
@@ -140,7 +143,7 @@ async def test_绕禁行区_不进(tmp_path):
     await t.走到头()
     o = await t.在()
     assert math.hypot(o.x - 10.0, o.y - 3.0) <= 0.2
-    assert t.min_zone >= 0.5, t.min_zone
+    assert t.min_zone >= 0.52, t.min_zone
 
 
 async def test_终点在禁行区_没图_没定位_都同步拒_狗不动(tmp_path):
@@ -195,7 +198,7 @@ async def test_热更收紧_挡住正在走的路_重规划绕开(tmp_path):
     o = await t.在()
     assert NavStatus.SUCCEED in t.status
     assert math.hypot(o.x - 10.5, o.y - 4.0) <= 0.2
-    assert t.min_zone >= 0.5
+    assert t.min_zone >= 0.52
 
 
 async def test_狗在新禁行区里_原地停_失败_发事件_不往外走(tmp_path):
@@ -291,7 +294,7 @@ async def test_回家_规划回去(tmp_path):
     await t.nav.return_to(Pose.from_xy_yaw(2.0, 2.0))
     await t.走到头()
     o = await t.在()
-    assert math.hypot(o.x - 2.0, o.y - 2.0) <= 0.2 and t.min_clear >= 0.5
+    assert math.hypot(o.x - 2.0, o.y - 2.0) <= 0.2 and t.min_clear >= 0.52
 
 
 async def test_路长估计_先给None_后台算完再给(tmp_path):
@@ -351,7 +354,7 @@ async def test_规划期间区域换了_按新的重算(tmp_path):
     await task
     await t.走到头()
     assert NavStatus.SUCCEED in t.status
-    assert t.min_zone >= 0.5, t.min_zone
+    assert t.min_zone >= 0.52, t.min_zone
 
 
 def test_定位不确定度加宽禁行区(tmp_path):
@@ -418,7 +421,7 @@ async def test_热更收紧_核对新区域期间原地等_不沿旧路走进去
     assert moved and max(moved) - o.x < 0.25, "核对期间只有刹车那一段"
     t.nav._costmap = slow
     await t.走到头()
-    assert NavStatus.SUCCEED in t.status and t.min_zone >= 0.5
+    assert NavStatus.SUCCEED in t.status and t.min_zone >= 0.52
 
 
 async def test_核对新区域期间走到头或被叫停_不炸(tmp_path):
@@ -500,3 +503,38 @@ async def test_新禁行区贴着机身画_没压中心也停(tmp_path):
     await t.nav.set_zones(区域({"id": "edge", "kind": "nogo", "polygon": [
         [o.x - 1, o.y + 0.15], [o.x + 1, o.y + 0.15], [o.x + 1, o.y + 1], [o.x - 1, o.y + 1]]}))
     assert t.status[-1] is NavStatus.FAILED and t.events[-1][0] == "inside_nogo"
+
+
+async def test_窄限速带_两端都在外面也减速_进带之前已经降下来(tmp_path):
+    """W10 外审 4:狗和 0.6 m 前视点都在一条 0.3 m 宽的限速带外面、中间穿过它;
+    剪枝后是一整条长线段。"""
+    t = 台子(tmp_path)
+    await t.nav.set_zones(区域(
+        {"id": "band", "kind": "slow", "max_speed_mps": 0.2,
+         "polygon": [[6.0, 0.2], [6.3, 0.2], [6.3, 7.8], [6.0, 7.8]]},
+        {"id": "inner", "kind": "slow", "max_speed_mps": 0.1,
+         "polygon": [[6.1, 3.5], [6.2, 3.5], [6.2, 4.5], [6.1, 4.5]]}))
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.5, 4.0))
+    assert len(t.nav._path.points) == 2, "一整条长线段(剪枝没被限速带打断)"
+    await t.走到头()
+    assert NavStatus.SUCCEED in t.status
+    in_band = [v for x, _, v in t.speeds if 6.0 <= x <= 6.3]
+    assert in_band and max(in_band) <= 0.1 + 1e-6, "叠着取最低"
+    before = [v for x, _, v in t.speeds if 5.9 <= x < 6.0]
+    assert before and max(before) <= 0.1 + 1e-6, "进带之前已经降到上限"
+    assert max(v for x, _, v in t.speeds if 2.5 <= x <= 4.0) > 0.4, "远处照常走"
+
+
+async def test_到了拐点就换下一段_不追着拐点本身走(tmp_path):
+    from d1max_agent.planning.planner import PlannedPath
+    t = 台子(tmp_path)
+    await t.start(2.0, 2.0)
+    await t.nav.goto(Pose.from_xy_yaw(5.0, 5.0))
+    for _ in range(4):
+        await t.一拍()
+    t.nav._path = PlannedPath(((2.0, 2.0), (4.0, 2.0), (4.0, 5.0), (5.0, 5.0)))
+    t.nav._seg = 0
+    t.r.teleport(3.95, 2.0, 0.0)                         # 离第一个拐点 5 cm
+    await t.一拍()
+    assert t.nav._seg == 1, "到了拐点就换下一段"

@@ -65,6 +65,7 @@ from d1max_patrol.backends.base import (
     NavBackend,
     NavBackendError,
     NavCancelledError,
+    NavNotLocalizedError,
     NavRequestError,
     NavStatusEvent,
 )
@@ -874,7 +875,11 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     # 沿来路大概率同样走不通。
                     if self._home is None:
                         raise _AbortRun(f"返航失败: 没标原点(返航起因: {reason})")
-                    await return_to(self._home.pose)
+                    try:
+                        await return_to(self._home.pose)
+                    except NavNotLocalizedError as exc:
+                        # 回家时没有可信定位:同样先恢复定位,恢复了从这儿重新规划回家(W10 外审 3)
+                        await self._recover_localization(f"规划回家时没有可信定位: {exc.message}")
                     await self._wait_nav_terminal(self._clock() + self._return_budget_s())
                     break
                 try:
@@ -1142,6 +1147,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     self._clock() + NAV_STANDBY_TIMEOUT_S))
                 try:
                     await self._nav.goto(wp.pose)
+                except NavNotLocalizedError as exc:
+                    # 没有可信定位(W10 外审 3):走定位恢复 —— 停车、重定位、等恢复,然后重试当前点
+                    # (``_RetryWaypoint``,不算一次重试);恢复不了按原来的规矩中止。
+                    await self._recover_localization(f"规划时没有可信定位: {exc.message}")
                 except NavCancelledError:
                     # 规划期间被叫停了(W10 内审应修 3):叫停的那个事件还在队列里 —— 先去处理它
                     # (中止、叫停、返航都在 ``_handle`` 里抛),不按点位失败接着派下一个点。

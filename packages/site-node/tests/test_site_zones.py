@@ -125,8 +125,13 @@ def test_派单门槛_修订对不上拒_补发之后放行(站点):
     alice = _登(s, "alice")
     _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
     assert s.loop.call(lambda: s.disp.sync_zones()) == [], "都是第 0 版:不发"
+    code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
+    assert code == 409 and "安全确认" in d["error"], "W10 之前就在用的图(修订 0)也要确认(外审 2)"
     # 站点这头改了、没发出去(直接写库):狗上还是第 0 版
     s.disp.zones.put(MAP[0], MAP[1], [SLOW], base_revision=0, by="alice")
+    code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
+    assert code == 409 and "安全确认" in d["error"], "改过之后没重新确认也不派"
+    s.disp.zones.confirm(MAP[0], MAP[1], revision=1, by="alice")
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
     assert code == 409 and "还没同步" in d["error"], (code, d)
     sent = s.loop.call(lambda: s.disp.sync_zones())
@@ -147,6 +152,7 @@ def test_派单门槛_这张图有禁行区_直线桥的狗不派(站点):
     _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
     code, d = s.req("POST", ZP, {"zones": [POND], "base_revision": 0}, token=alice)
     assert code == 200
+    s.disp.zones.confirm(MAP[0], MAP[1], revision=1, by="alice")
     _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
     assert code == 409 and "不守区域" in d["error"], (code, d)
@@ -181,3 +187,21 @@ def test_补发_狗没收下_30秒内不重发_过了再发(站点):
     assert s.loop.call(lambda: s.disp.sync_zones()) == [], "同一版 30 s 内不重发"
     assert _zcaps(s)["rev"] == 0
     assert s.loop.call(lambda: s.disp.sync_zones(retry_ms=0)) == ["A"], "过了间隔再发"
+
+
+def test_换图之后删光禁行区_没重新确认_不派自主任务_遥控照常(站点):
+    """W10 外审 2:确认不只卡换图。放宽(删禁行区)同步到狗之后,没重新确认,goto、巡检都不派;
+    遥控不受影响。"""
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
+    s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")
+    assert s.disp.dispatchable("A", "goto") == ""
+    code, d = s.req("POST", ZP, {"zones": [], "base_revision": 0}, token=alice)   # 修订 1,空的
+    assert code == 200
+    _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
+    assert "安全确认" in s.disp.dispatchable("A", "goto")
+    assert "安全确认" in s.disp.dispatchable("A", "patrol")
+    assert s.disp.dispatchable("A", "teleop") == ""
+    s.req("POST", ZP + "/confirm", {"revision": 1, "confirm": True}, token=alice)
+    assert s.disp.dispatchable("A", "goto") == ""

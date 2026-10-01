@@ -108,20 +108,56 @@ def test_凹多边形():
     assert m[5, 15] and not m[25, 15]
 
 
-def test_膨胀_致命区按外接圆_软代价往外变便宜():
+def test_膨胀_按格子实体算净空_软代价往外变便宜():
+    """W10 外审 1:致命区按两格之间最近两点的距离算(格子是一整块),不是格心到格心。"""
     blocked = 空地(40, 40)
     blocked[20, 20] = True
     cm = costmap.build(blocked, 0.1, (0.0, 0.0), robot_radius_m=0.52)
-    assert cm.lethal[20, 25] and not cm.lethal[20, 26]      # 5 格 ≤ 5.2、6 格 > 5.2
-    assert cm.lethal[24, 23] and not cm.lethal[24, 24]      # 5 ≤ 5.2 < 5.66
-    assert cm.lethal[21, 25] and cm.lethal[25, 21]          # √26 = 5.10 ≤ 5.2:圆盘边上那一圈也算
+    assert cm.lethal[20, 26] and not cm.lethal[20, 27]      # 格边距 0.5 < 0.52、0.6 不是
+    assert cm.lethal[24, 24] and not cm.lethal[25, 25]      # (3,3)×0.1 = 0.42、(4,4) = 0.57
+    assert cm.lethal[24, 25] and not cm.lethal[25, 26]      # (3,4) = 0.5、(4,5) = 0.64
     on = costmap.build(blocked, 0.1, (0.0, 0.0), robot_radius_m=0.5)
-    assert on.lethal[20, 25] and on.lethal[24, 23], "正好等于半径的格心也算(≤,不是 <)"
-    assert not on.lethal[21, 25]
-    assert cm.cost[20, 25] == LETHAL
-    assert 0 < cm.cost[20, 28] < cm.cost[20, 27] < cm.cost[20, 26] < LETHAL
-    assert cm.cost[20, 32] == 0
+    assert on.lethal[20, 25] and not on.lethal[20, 26], "格边距正好等于半径的算够(< 才致命)"
+    assert cm.cost[20, 26] == LETHAL
+    assert 0 < cm.cost[20, 29] < cm.cost[20, 28] < cm.cost[20, 27] < LETHAL
+    assert cm.cost[20, 33] == 0
     assert np.isinf(cm.speed).all()
+
+
+def _到实体(blocked, res, x, y):
+    """点 (x, y) 到所有挡住的格子(一整块正方形)的最近距离。"""
+    rs, cs = np.nonzero(blocked)
+    dx = np.maximum(np.abs(x - (cs + 0.5) * res) - res / 2, 0.0)
+    dy = np.maximum(np.abs(y - (rs + 0.5) * res) - res / 2, 0.0)
+    return float(np.min(np.hypot(dx, dy)))
+
+
+def test_规划出的路_连线扫过的机身圆离障碍实体够远():
+    """W10 外审 1:沿剪枝后的每一段连线密采样,离挡住的格子(实体)都 ≥ 半径 + 余量。"""
+    rng = np.random.default_rng(3)
+    checked = []
+    for k in range(6):
+        b = 空地(80, 80)
+        b[0, :] = b[-1, :] = b[:, 0] = b[:, -1] = True
+        for _ in range(12):
+            r0, c0 = rng.integers(5, 70, size=2)
+            b[r0:r0 + rng.integers(1, 10), c0:c0 + rng.integers(1, 10)] = True
+        R = costmap.ROBOT_RADIUS_M + costmap.INFLATE_MARGIN_M
+        cm = costmap.build(b, 0.1, (0.0, 0.0), robot_radius_m=R)
+        free = np.argwhere(~cm.lethal)
+        s, g = tuple(free[0]), tuple(free[-1])
+        try:
+            cells = _run(cm, (int(s[0]), int(s[1])), (int(g[0]), int(g[1])))
+        except PlanError:
+            continue
+        pts = [cm.center(r, c) for r, c in cells]
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:], strict=False):
+            n = max(2, int(math.hypot(x1 - x0, y1 - y0) / 0.01))
+            for t in np.linspace(0, 1, n):
+                d = _到实体(b, 0.1, x0 + t * (x1 - x0), y0 + t * (y1 - y0))
+                assert d >= R - 1e-9, (k, d)     # 连线只经过不致命的格:格里每一点都够远
+        checked.append(k)
+    assert len(checked) >= 3, "随机图里至少有几张规划得出来"
 
 
 def test_区域进代价图():

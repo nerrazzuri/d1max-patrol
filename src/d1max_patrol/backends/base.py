@@ -52,6 +52,11 @@ class NavRequestError(NavBackendError):
         self.message = message
 
 
+class NavNotLocalizedError(NavRequestError):
+    """没有可信定位,不受理(W10 外审 3)。**不是**这个点失败:引擎走定位恢复(停车、重定位、等恢复、
+    重试当前点,不算一次重试),不然 skip 策略下几个点转眼全记成失败,整趟跑空。"""
+
+
 class NavCancelledError(NavRequestError):
     """受理之前就被叫停了(W10 内审应修 3:规划期间 ``stop()``)。**不是**这个点失败 —— 叫停的人
     (中止、叫停、返航)的事件还在引擎队列里,引擎要先去处理它,不能接着派下一个点。"""

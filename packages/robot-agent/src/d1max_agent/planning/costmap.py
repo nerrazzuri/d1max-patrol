@@ -2,7 +2,9 @@
 「硬挡」「致命」「软代价」「限速」。
 
 - **硬挡** ``hard``:占用、未知、禁行区。起点在硬挡里不许规划(狗在禁行区里 → 停,W08 决定 5)。
-- **致命** ``lethal``:离硬挡的格心距离 ≤ 机体外接圆半径(W08 决定 6:要原地转)。
+- **致命** ``lethal``:这一格里**任何一点**离任何硬挡格(按整格的面积算)不到机体外接圆半径 + 余量
+  (W08 决定 6:要原地转)。狗在不致命的格里站哪儿都有这么多净空;路径的连线只经过不致命的格(超覆盖),
+  所以沿路径扫过的机身圆离障碍实体也至少这么远(W10 外审 1:原来按格心到格心算,实际只有 0.515 m)。
 - **软代价** ``cost``:致命区外 0.3 m 的带,越近越贵(0–100),让路径走中间;只影响选路,不影响能不能走。
 - **限速** ``speed``:每格的限速(m/s),不限是 ``inf``。
 
@@ -127,11 +129,20 @@ def _disk(r_cells: float) -> list[tuple[int, int]]:
             if dy * dy + dx * dx <= r_cells * r_cells + 1e-9]
 
 
-def dilate(mask: np.ndarray, r_cells: float) -> np.ndarray:
-    """格心距离 ≤ ``r_cells`` 格的都算上(圆盘,精确到格心)。"""
+def _clearance_offsets(r_cells: float) -> list[tuple[int, int]]:
+    """两格之间「最近两点」的距离(格)< ``r_cells`` 的偏移:两个格子各是一整块正方形,最近两点的距离是
+    ``hypot(max(|dx| − 1, 0), max(|dy| − 1, 0))``。"""
+    n = int(math.ceil(r_cells)) + 1
+    return [(dy, dx) for dy in range(-n, n + 1) for dx in range(-n, n + 1)
+            if max(abs(dx) - 1, 0) ** 2 + max(abs(dy) - 1, 0) ** 2 < r_cells * r_cells - 1e-9]
+
+
+def dilate(mask: np.ndarray, r_cells: float, *, clearance: bool = False) -> np.ndarray:
+    """格心距离 ≤ ``r_cells`` 格的都算上(圆盘,精确到格心);``clearance=True``:两格里最近两点的
+    距离 < ``r_cells`` 的都算上(按整格的面积,只往保守方向)。"""
     out = mask.copy()
     h, w = mask.shape
-    for dy, dx in _disk(r_cells):
+    for dy, dx in (_clearance_offsets(r_cells) if clearance else _disk(r_cells)):
         if dy == 0 and dx == 0:
             continue
         ys, yd = (slice(0, h - dy), slice(dy, h)) if dy >= 0 else (slice(-dy, h), slice(0, h + dy))
@@ -253,7 +264,7 @@ def build(blocked: np.ndarray, res: float, origin: tuple[float, float],
         else:
             m = polygon_mask(z.polygon, blocked.shape, res, origin)
             speed[m] = np.minimum(speed[m], np.float32(z.max_speed_mps))
-    lethal = dilate(hard, robot_radius_m / res)
+    lethal = dilate(hard, robot_radius_m / res, clearance=True)
     band = SOFT_BAND_M / res
     d = _chamfer(lethal, band + 1.0)
     soft = np.clip((band + 1.0 - d) / (band + 1.0) * SOFT_MAX, 0, SOFT_MAX).astype(np.uint8)
