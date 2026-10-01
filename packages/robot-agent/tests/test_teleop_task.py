@@ -157,10 +157,85 @@ async def test_速度命令的有效期不超过这一帧剩下的有效期(台,
     assert ttls and max(ttls) <= 200 and ttls[-1] <= 100, ttls
 
 
-async def test_狗尾为前_人眼里的往前是狗尾那头(台):
-    """W09i:HAL 是机身系;遥控的「往前」跟着狗现在的头尾(跟 W09i 之前直接用 SDK 的「往前」一样)。"""
-    c, r, t, _ = 台
-    r.inject_head("tail")
-    await _走(c, r, t, 10, frame=lambda: _帧(c, vx=0.4))
+async def _会话(tmp_path, head):
+    """头尾方向先定好、再开始遥控。"""
+    c = 钟()
+    r = SimRobot(now_ms=c, max_vx=1.0, max_wz=1.5, deadband_vx=0.05, stop_latency_s=0.2)
+    r.inject_head(head)
+    await r.connect()
+    await r.acquire_control()
+    book = EventBook(tmp_path / "ev.jsonl", boot_id="b", now_ms=c)
+    t = TeleopTask(task_id="teleop-9", lease_epoch=9, operator="gina", lease_ttl_ms=5000, hal=r,
+                   now_ms=c, video_live=lambda: True, events=book)
+    await t.start()
+    return c, r, t
+
+
+def _帧9(c, vx=0.0, wz=0.0):
+    _seq["n"] += 1
+    return TeleopFrame(lease_epoch=9, seq=_seq["n"], sent_at=c.ms - 30, ttl_ms=300, vx=vx, wz=wz)
+
+
+async def test_狗尾为前开的会话_人眼里的往前是狗尾那头(tmp_path):
+    """W09i:HAL 是机身系;遥控的「往前」朝会话开始时被选作头的那一头。外审定了:保留这个语义。"""
+    c, r, t = await _会话(tmp_path, "tail")
+    await _走(c, r, t, 10, frame=lambda: _帧9(c, vx=0.4))
     o = await r.odometry()
     assert o.vx < -0.3 and o.x < -0.1, "机身系往后 = 往狗尾那头"
+    assert t.state is TaskState.RUNNING
+
+
+async def test_老旁路进程不报头尾_照常遥控(tmp_path):
+    c, r, t = await _会话(tmp_path, "unknown")
+    await _走(c, r, t, 10, frame=lambda: _帧9(c, vx=0.4))
+    assert (await r.odometry()).vx > 0.3 and t.state is TaskState.RUNNING
+
+
+@pytest.mark.parametrize("before,after", [("head", "tail"), ("tail", "head"),
+                                          ("head", "unknown"), ("tail", "unknown"),
+                                          ("unknown", "tail")])
+async def test_遥控中头尾变了_停车_结束_摇杆一直推着也不反向_旧帧不复活(tmp_path, before, after):
+    """外审阻断:有效期里的同一帧不许在调头之后被当成反方向执行。"""
+    c, r, t = await _会话(tmp_path, before)
+    sign = -1.0 if before == "tail" else 1.0                  # 会话里「往前」在机身系的方向
+    await _走(c, r, t, 10, frame=lambda: _帧9(c, vx=0.4))
+    assert sign * (await r.odometry()).vx > 0.3, "前提:在走"
+    old = _帧9(c, vx=0.4)
+    r.inject_head(after)
+    vs, got = [], []
+    for _ in range(60):                                       # 摇杆一直推着,6 s
+        got.append((t.done, t.on_frame(_帧9(c, vx=0.4), rx_ms=c.ms)))
+        await t.step(0.1)
+        r.tick(0.1)
+        c.ms += 100
+        vs.append(sign * (await r.odometry()).vx)
+    assert min(vs) >= -1e-9, "一点都没往反方向走"
+    assert got[0][1] == "" and got[1] == (False, "ended"), "调头那一拍之后、停稳之前来的帧就不收"
+    assert await r.stopped()
+    assert t.state is TaskState.ABORTED and t.detail["reason"] == "head_changed", t.detail
+    assert t.on_frame(old, rx_ms=c.ms) == "ended", "迟到的旧帧不收"
+    assert t.on_frame(_帧9(c, vx=0.4), rx_ms=c.ms) == "ended", "同租约的新帧也不收:要重新拿租约"
+    await t.step(0.1)
+    r.tick(0.1)
+    assert await r.stopped()
+
+
+async def test_头尾变了停车却确认不了_照样进终态_标停车未确认(tmp_path, monkeypatch):
+    c, r, t = await _会话(tmp_path, "head")
+    await _走(c, r, t, 5, frame=lambda: _帧9(c, vx=0.4))
+
+    async def 停不了():
+        raise RuntimeError("停车失败")
+
+    async def 没停():
+        return False
+    monkeypatch.setattr(r, "stop", 停不了)
+    monkeypatch.setattr(r, "stopped", 没停)
+    r.inject_head("tail")
+    for _ in range(60):
+        await t.step(0.1)
+        c.ms += 100
+        if t.done:
+            break
+    assert t.state is TaskState.ABORTED
+    assert t.detail["reason"] == "head_changed; stop_unconfirmed", t.detail
