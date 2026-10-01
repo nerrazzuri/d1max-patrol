@@ -16,10 +16,10 @@ from tests.sim.test_agent_server import _client
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_协议是v4_跟C加加旁路进程的常量一致():
+def test_协议是v5_跟C加加旁路进程的常量一致():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     m = re.search(r"static const int kProtoVersion = (\d+);", src)
-    assert m and int(m.group(1)) == PROTO_VERSION == 4          # W11:加了 clear
+    assert m and int(m.group(1)) == PROTO_VERSION == 5          # W11a:state 带 head
 
 
 async def _站起(sim: SimAgentServer, client) -> None:
@@ -243,3 +243,18 @@ def test_CPP的clear_插队_开关参数():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     assert '|| cmd == "clear"' in src and "g_gate.SetClearance(" in src
     assert '"--require-clearance"' in src and "g_gate.RequireClearance(true)" in src
+
+
+async def test_净空许可门开着_调过头尾就不放行前进():
+    """W11a:许可是按前雷达那头算的,狗尾为前时往前走是往后雷达那头走。"""
+    async with _client(require_clearance=True) as (sim, client):
+        await _站起(sim, client)
+        assert (await client.call("clear", ms=800, dist=2.0)).ok
+        sim.head = 2
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx == 0.0
+        sim.head = 1
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx > 0

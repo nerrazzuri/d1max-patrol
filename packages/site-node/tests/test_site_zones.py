@@ -225,3 +225,20 @@ def test_避障用不了_不派会自己走的_遥控照常(站点):
     assert s.disp.dispatchable("A", "goto") == "", "不新鲜是一两秒的事:狗那头原地等"
     tasks["obstacles"] = {"state": "ok", "rear": True}
     assert s.disp.dispatchable("A", "goto") == ""
+
+
+def test_头尾调过来了_不派会自己走的_遥控照常(站点):
+    """W11a:能力里 head.direction 不是 head 就不派 goto、巡检。"""
+    s = 站点
+    _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
+    s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")
+    assert s.disp.dispatchable("A", "goto") == ""
+    tasks = s.disp.clients["A"].capabilities.tasks
+    for d, words in (("tail", "狗尾为前"), ("unknown", "不知道")):
+        tasks["head"] = {"direction": d}
+        why = s.disp.dispatchable("A", "goto")
+        assert "头尾方向" in why and words in why, why
+        assert "头尾方向" in s.disp.dispatchable("A", "patrol")
+        assert s.disp.dispatchable("A", "teleop") == ""
+    tasks["head"] = {"direction": "head"}
+    assert s.disp.dispatchable("A", "goto") == ""

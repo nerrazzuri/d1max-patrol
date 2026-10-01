@@ -40,6 +40,8 @@ from d1max_site.temporal import GATED, temporal_class
 
 log = logging.getLogger(__name__)
 
+_HEAD_TEXT = {"tail": "狗尾为前", "unknown": "不知道"}
+
 #: 多久没收到**实时** status 就算不新鲜(按站点自己的钟,见 ``DispatchClient.status_live_at``)。
 #: 代理空闲时每 30 s 发一次 status。
 STALE_MS = 90_000
@@ -414,6 +416,12 @@ class Dispatcher:
         都经过它)。"""
         if kind not in ("goto", "patrol"):
             return
+        head = c.capabilities.tasks.get("head") if c.capabilities is not None else None
+        if head is not None and head.get("direction") != "head":
+            # W11a:调过头尾(或不知道)。前后雷达合并(W09i)之前定位、规划、避障都按前雷达那头是前算
+            d = head.get("direction")
+            raise DispatchRefused(f"{robot_id} 的头尾方向是「{_HEAD_TEXT.get(d, d)}」:前后雷达合并"
+                                  "之前只有狗头为前才能自己走(遥控照常)")
         obs = c.capabilities.tasks.get("obstacles") if c.capabilities is not None else None
         if obs is not None and obs.get("state") not in ("ok", "stale"):
             # 「不新鲜」是一两秒的事:狗那头原地等,跟后端一样放行(内审小)

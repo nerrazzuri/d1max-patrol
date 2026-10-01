@@ -80,6 +80,10 @@ class Health:
     faults: tuple[str, ...]
     #: 0.0 = 定位不可用;1.0 = 好。
     loc_quality: float
+    #: 头尾方向(W11a):``head`` = 装前雷达的那一头是前、``tail`` = 调过头了(另一头是前)、
+    #: ``unknown``。前后雷达合并(W09i)之前,只有 ``head`` 时才许自己走 —— 定位、规划、避障都按
+    #: 前雷达那头是前算。
+    head: str = "unknown"
 
 
 @dataclass(frozen=True)

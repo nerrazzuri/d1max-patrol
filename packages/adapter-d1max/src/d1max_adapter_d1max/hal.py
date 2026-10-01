@@ -139,7 +139,8 @@ class D1MaxHal:
         return Health(link_ok=self._b.connected, control=await self._b.has_control(),
                       estop=self._estop_now(),
                       faults=tuple(str(f.code) for f in self._b.current_faults(FAULT_FRESH_S)),
-                      loc_quality=1.0 if self._odom_fresh() else 0.0)
+                      loc_quality=1.0 if self._odom_fresh() else 0.0,
+                      head=self._b.last_state.head if self._b.last_state is not None else "unknown")
 
     # ------------------------------------------------------------ 控制权
 

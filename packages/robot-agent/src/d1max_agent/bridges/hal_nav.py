@@ -72,6 +72,7 @@ class HalNavBackend(NavBackend):
         self._seq = 0
         #: 最近一拍的里程新不新鲜(运控报的 ``loc_quality`` 改义为「里程新鲜」,W08 决定 9)。
         self.odom_ok = False
+        self.head = "unknown"
         # 不给锚定:仿真按原样,别的一律要人给位置(W00c6e 内审:默认放开的话,有人给真狗直接装这座桥
         # 就会悄悄拿原始里程当地图位姿)。
         sim = str(getattr(hal, "adapter_id", "")).split("/")[0] == "sim"
@@ -245,6 +246,8 @@ class HalNavBackend(NavBackend):
         health = await self._hal.health()
         odom = await self._hal.odometry()
         self.odom_ok = health.loc_quality > 0.0 and odom.valid
+        #: 头尾方向(W11a):前后雷达合并(W09i)之前只有「狗头为前」时才自己走。
+        self.head = getattr(health, "head", "unknown")
         self._odom_seen(odom)
         self.anchor.update((odom.x, odom.y, odom.yaw), self.odom_ok)
         loc = LocStatus.CONTINUOUS_LOC if self.anchor.ok(self.odom_ok) else LocStatus.LOC_LOST
@@ -252,6 +255,11 @@ class HalNavBackend(NavBackend):
             prev, self._loc = self._loc, loc
             self.emit(LocStatusEvent(loc, prev))
         if self._status is not NavStatus.ACTIVE:
+            return
+        if self.head != "head":
+            # 调过头尾(或者不知道):定位、规划、避障都按前雷达那头是前算,往前走就是往错的方向走
+            log.error("头尾方向是 %s(不是狗头为前):停", self.head)
+            await self._enter_terminal(NavStatus.FAILED)
             return
         if loc is LocStatus.LOC_LOST:
             await self._enter_terminal(NavStatus.FAILED)

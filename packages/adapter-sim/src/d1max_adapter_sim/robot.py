@@ -62,6 +62,8 @@ class SimRobot:
         self._control = False
         self._estop = False
         self._loc_lost = False
+        #: 头尾方向(W11a):仿真默认狗头为前;测试用 :meth:`inject_head` 调。
+        self.head_direction = "head"
         self._faults: list[Fault] = []
         #: W00c5d 第二部分:载入的图、注入的载入失败(非空 = 失败原因)。
         self.loaded_map: tuple[str, str, str] | None = None
@@ -82,6 +84,9 @@ class SimRobot:
     def inject_control_lost(self) -> None:
         self._control = False
         self._zero()
+
+    def inject_head(self, head: str) -> None:
+        self.head_direction = head
 
     def inject_loc_lost(self, lost: bool) -> None:
         self._loc_lost = lost
@@ -165,7 +170,7 @@ class SimRobot:
     async def health(self) -> Health:
         return Health(link_ok=self._connected, control=self._control, estop=self._estop,
                       faults=tuple(f.code for f in self._faults),
-                      loc_quality=0.0 if self._loc_lost else 1.0)
+                      loc_quality=0.0 if self._loc_lost else 1.0, head=self.head_direction)
 
     # ------------------------------------------------------------ 控制权
 

@@ -79,7 +79,10 @@ using namespace robot_sdk;
 // 4(W11):加了 clear —— 感知节点给的净空许可 {"ms": 有效毫秒, "dist": 前方空多远}。旁路进程带
 // --require-clearance 起来时,没有有效许可就把前进分量置零(第二层刹停,W08 决定 8)。3 号旁路进程
 // 不认识 clear,感知节点的许可发过去全被拒,开了 require 的话狗就只转不走 —— 握手就得拒。
-static const int kProtoVersion = 4;
+//
+// 5(W11a):state 帧带 head(SDK RobotState.head_direction:0 未知、1 狗头为前、2 狗尾为前)。
+// 调过头尾(狗尾为前)时开了 --require-clearance 就不放行前进:感知的净空许可是按前雷达那头算的。
+static const int kProtoVersion = 5;
 
 // 一次 Move 在机器上维持约 1s(清单 #38)，靠 50ms 连续下发维持行走。
 static const int kMoveIntervalMs = 50;
@@ -226,6 +229,7 @@ static std::mutex g_state_mtx;
 static int g_motion = 0;
 static double g_batt1 = 0.0, g_batt2 = 0.0;
 static int g_estop_sw = 0, g_estop_hw = 0;
+static int g_head = 0;  // SDK HeadDirection:0 未知、1 狗头为前、2 狗尾为前
 static std::atomic<bool> g_held{false};
 static std::string g_robot_addr;
 static SDKClient* g_client = nullptr;
@@ -249,6 +253,7 @@ static std::string StateFrame() {
      << ",\"battery2\":" << JsonNum(g_batt2)
      << ",\"estop_sw\":" << g_estop_sw
      << ",\"estop_hw\":" << g_estop_hw
+     << ",\"head\":" << g_head
      << ",\"ts_ms\":" << NowMs() << "}";
   return os.str();
 }
@@ -263,6 +268,7 @@ class DataCb : public IDataCallback {
     {
       std::lock_guard<std::mutex> lk(g_state_mtx);
       g_motion = static_cast<int>(d.motion_status);
+      g_head = static_cast<int>(d.head_direction);
       // 不在位的电池 power 读数没意义，直接报 0，让 Python 那头的
       // "取两块里低的那块"跳过它(StateFrame.battery 只看 >0 的)。
       g_batt1 = d.battery.present1 ? d.battery.power1 : 0.0f;
@@ -274,6 +280,7 @@ class DataCb : public IDataCallback {
     g_gate.OnState(static_cast<int>(d.motion_status),
                    static_cast<int>(d.software_emergency_status),
                    static_cast<int>(d.hardware_emergency_status));
+    g_gate.OnHead(static_cast<int>(d.head_direction));
     Broadcast(StateFrame());
   }
 

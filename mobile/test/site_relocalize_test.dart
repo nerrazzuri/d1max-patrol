@@ -34,6 +34,14 @@ void main() {
     expect(rtkText(<String, dynamic>{'fix': 'none'}), 'RTK：没有定位');
   });
 
+  test('头尾方向说人话（W11a）', () {
+    Map<String, dynamic> c(String d) => {'tasks': {'head': {'direction': d}}};
+    expect(headText(null), '');
+    expect(headText(c('head')), '');
+    expect(headText(c('tail')), '头尾：狗尾为前（前后雷达合并之前不能自己走，遥控照常）');
+    expect(headText(c('unknown')), startsWith('头尾：不知道'));
+  });
+
   test('避障说人话（W11）', () {
     Map<String, dynamic> c(Map<String, dynamic> o) => {'tasks': {'obstacles': o}};
     expect(obstaclesText(null), '');

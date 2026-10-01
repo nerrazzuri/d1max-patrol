@@ -667,6 +667,10 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           if (v?['rtk'] is Map)
             Text(rtkText((v!['rtk'] as Map).cast<String, dynamic>()), key: const Key('robot-rtk')),
           if (v?['capabilities'] is Map &&
+              headText((v!['capabilities'] as Map).cast<String, dynamic>()).isNotEmpty)
+            Text(headText((v['capabilities'] as Map).cast<String, dynamic>()),
+                key: const Key('robot-head'), style: const TextStyle(color: Colors.deepOrange)),
+          if (v?['capabilities'] is Map &&
               obstaclesText((v!['capabilities'] as Map).cast<String, dynamic>()).isNotEmpty)
             Text(obstaclesText((v['capabilities'] as Map).cast<String, dynamic>()),
                 key: const Key('robot-obstacles')),
