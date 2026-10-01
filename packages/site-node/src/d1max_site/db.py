@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16                      # W13a:原点表(从待命点迁移)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -121,6 +121,19 @@ CREATE TABLE IF NOT EXISTS standby_points (
     yaw        REAL NOT NULL,
     is_default INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (robot_id, name)
+);
+-- 原点(W13a,决策 16):安全返航、回充的语义,每台狗每张图的每个版本一个;待命点(上面那张表)是运营调度
+-- 的语义,可以多个。站点下发地图时把原点发给狗(``map_activate.home``)。
+CREATE TABLE IF NOT EXISTS homes (
+    robot_id     TEXT NOT NULL,
+    map_id       TEXT NOT NULL,
+    map_version  TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    x            REAL NOT NULL,
+    y            REAL NOT NULL,
+    yaw          REAL NOT NULL,
+    marked_at_ms INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (robot_id, map_id, map_version)
 );
 CREATE TABLE IF NOT EXISTS incident_sources (
     name       TEXT PRIMARY KEY,
@@ -298,12 +311,23 @@ class SiteDB:
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
+            had_homes = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='homes'").fetchone()
             self._conn.executescript(_DDL)
             # 老库补列(CREATE TABLE IF NOT EXISTS 不会给已有的表加列)。
             for table, col, decl in _ADDED_COLUMNS:
                 cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
                 if col not in cols:
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            if not had_homes:
+                # W13a 迁移:以前没有原点表,下发地图时拿「这张图上的待命点(默认的优先、再按名字)
+                # 」当原点。
+                # 照同样的挑法把每台狗每张图每个版本的那一个抄成原点;
+                # 待命点原样留着(默认待命点还是它)。
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO homes(robot_id, map_id, map_version, name, x, y, yaw) "
+                    "SELECT robot_id, map_id, map_version, name, x, y, yaw FROM standby_points "
+                    "WHERE map_version != '' ORDER BY is_default DESC, name")
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
 

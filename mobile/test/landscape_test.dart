@@ -10,6 +10,7 @@ import 'package:d1max_patrol/ui/site_maps.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_releases.dart';
 import 'package:d1max_patrol/ui/site_runs.dart';
+import 'package:d1max_patrol/ui/site_standby.dart';
 import 'package:d1max_patrol/ui/site_teleop.dart';
 import 'package:d1max_patrol/ui/site_video.dart';
 import 'package:d1max_patrol/ui/site_watch_page.dart';
@@ -165,6 +166,27 @@ void main() {
     t.view.viewInsets = const FakeViewPadding(bottom: 400);
     await t.pumpAndSettle();
     expect(find.text('设'), findsOneWidget);
+  });
+
+  testWidgets('横屏不溢出：待命点与原点（W13a），「在这儿设」对话框键盘弹起来', (t) async {
+    final api = FakeApi('admin');
+    api.standby = <String, dynamic>{
+      'points': <Map<String, dynamic>>[
+        for (var i = 0; i < 8; i++)
+          <String, dynamic>{'name': 'point_with_a_long_name_$i', 'map_id': 'estate_main_map',
+            'map_version': '20261002', 'x': 123.4, 'y': -56.7, 'yaw': 0.0, 'default': i == 0},
+      ],
+      'homes': <Map<String, dynamic>>[
+        <String, dynamic>{'name': 'home', 'map_id': 'estate_main_map', 'map_version': '20261002',
+          'x': 1.0, 'y': 2.0, 'yaw': 0.0},
+      ],
+    };
+    await _show(t, SiteStandbyPage(api: api, robotId: 'A', canMarkHere: true));
+    await t.tap(find.byKey(SiteStandbyPage.hereKey));
+    await t.pumpAndSettle();
+    t.view.viewInsets = const FakeViewPadding(bottom: 400);
+    await t.pumpAndSettle();
+    expect(find.byKey(SiteStandbyPage.goKey), findsOneWidget);
   });
 
   testWidgets('横屏不溢出：狗列表', (t) async {

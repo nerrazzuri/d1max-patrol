@@ -37,7 +37,9 @@
             "live": true
           },
           "mapping_trail": {},
-          "mark_home": {},
+          "mark_home": {
+            "standby": true
+          },
           "patrol": {
             "autonomy": "autonomous",
             "map_id": "estate-1",
@@ -63,7 +65,7 @@
         }
       },
       "clock_skew_s": 0.0,
-      "expires_at": 1791839174728,
+      "expires_at": 1791897349784,
       "fresh": true,
       "held": null,
       "loc": {
@@ -82,9 +84,9 @@
       "robot_id": "A",
       "rtk": null,
       "status": {
-        "boot_id": "boot-782382fe68",
+        "boot_id": "boot-14e56ac179",
         "control_epoch": 1,
-        "last_seen": 1790839176058,
+        "last_seen": 1790897351773,
         "online": true,
         "ready": {
           "control": true,

@@ -31,7 +31,7 @@ class HomeError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class HomePoint:
-    """原点。同时是三样东西:换电位、待命位、返航目标(spec §1.3)。"""
+    """原点:换电位、返航目标(spec §1.3)。待命点是另一样东西(W13a,决策 16):站点管、可以多个。"""
 
     map_id: str
     pose: Pose

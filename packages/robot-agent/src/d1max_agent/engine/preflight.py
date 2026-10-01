@@ -108,7 +108,7 @@ async def _check_localized(nav: NavBackend) -> CheckResult:
 async def _check_home(mission: Mission, home: HomePoint | None) -> CheckResult:
     """原点必须标过,而且必须是这张图上的。
 
-    原点同时是换电位、待命位和返航目标(spec §1.3)。没有它,返航就没有目标,
+    原点是换电位和返航目标(spec §1.3;W13a 起待命点归站点另管,不是它)。没有它,返航就没有目标,
     出发线也算不出来。**一个别的图上的原点比没有原点更危险** —— 坐标在另一个
     坐标系里,狗不会拒绝,它会一声不吭地走到一个错地方。
     """

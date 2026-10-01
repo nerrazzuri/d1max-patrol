@@ -35,7 +35,9 @@
         "live": true
       },
       "mapping_trail": {},
-      "mark_home": {},
+      "mark_home": {
+        "standby": true
+      },
       "patrol": {
         "autonomy": "autonomous",
         "map_id": "estate-1",
@@ -65,8 +67,8 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-a439698ce1b9",
-      "issued_at": 1790839175427,
+      "command_id": "cmd-35fee14f1560",
+      "issued_at": 1790897350017,
       "issued_by": "alice",
       "kind": "goto",
       "payload": {
@@ -82,21 +84,21 @@
       },
       "priority": 60,
       "robot_id": "A",
-      "task_id": "task-0e9117290094"
+      "task_id": "task-699c3611bf24"
     }
   ],
   "events": [
     {
-      "boot_id": "boot-782382fe68",
+      "boot_id": "boot-14e56ac179",
       "data": {
         "faults": []
       },
       "kind": "robot_fault",
       "seq": 1,
-      "stamp": 1790839175038
+      "stamp": 1790897349886
     }
   ],
-  "expires_at": 1791839174728,
+  "expires_at": 1791897349784,
   "fresh": true,
   "held": null,
   "loc": null,
@@ -104,9 +106,9 @@
   "robot_id": "A",
   "rtk": null,
   "status": {
-    "boot_id": "boot-782382fe68",
+    "boot_id": "boot-14e56ac179",
     "control_epoch": 1,
-    "last_seen": 1790839175448,
+    "last_seen": 1790897350022,
     "online": true,
     "ready": {
       "control": true,
@@ -117,8 +119,8 @@
     "schema": "1.0",
     "task": {
       "kind": "goto",
-      "state": "running",
-      "task_id": "task-0e9117290094"
+      "state": "pending",
+      "task_id": "task-699c3611bf24"
     }
   }
 }

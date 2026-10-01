@@ -31,7 +31,7 @@ class EngineParts:
     device: HalDeviceBackend
     engine: MissionEngine
     map_id: str
-    #: 原点(换电位/待命位/返航目标),带地图 id 与标记时刻。``None`` = 没标过,
+    #: 原点(换电位/返航目标;待命点归站点,W13a),带地图 id 与标记时刻。``None`` = 没标过,
     #: 预飞检查 home 那一项会红,goto 变 failed。
     home: HomePoint | None
 

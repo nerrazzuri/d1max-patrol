@@ -275,3 +275,28 @@ def test_原点簿_按图号版本记_删_坏文件当没有(tmp_path):
     assert b.get("m", "8") is None
     b.put("m", "9", (0.0, 0.0, 0.0), now_ms=99)
     assert b.get("m", "9") == (0.0, 0.0, 0.0)
+
+
+async def test_只标待命点_同样的检查同样回位置_狗上的原点不动(tmp_path):
+    """W13a(决策 16):``target: standby`` —— 站点拿位置登记待命点,狗上的原点、homes.json 都不改。"""
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    assert ears.by["capabilities"][-1]["tasks"]["mark_home"] == {"standby": True}
+    await _设位置(rt, broker, dog, c)
+    await rt._on_cmd(_cmd("mark_home", {"name": "gate"}, "h1", c))       # 先标一个原点
+    await _跑(rt, broker, n=2, r=dog, c=c)
+    home = rt.parts.home
+    saved = rt.homes.get("m", "1")
+    await _设位置(rt, broker, dog, c, x=5.0, y=1.0, yaw=1.0)
+    await rt._on_cmd(_cmd("mark_home", {"name": "gate", "target": "standby"}, "s1", c))
+    await _跑(rt, broker, n=2, r=dog, c=c)
+    ack = [a for a in ears.by["cmd/ack"] if a["command_id"] == "s1"][-1]
+    assert ack["result"] == "accepted", ack
+    d = ack["data"]
+    assert d["target"] == "standby" and (round(d["x"], 2), round(d["y"], 2)) == (5.0, 1.0)
+    assert rt.parts.home is home and rt.homes.get("m", "1") == saved, "原点没动"
+    assert len(_事件(ears, "home_marked")) == 1, "只标待命点不发 home_marked"
+    await rt._on_cmd(_cmd("mark_home", {"target": "dock"}, "s2", c))
+    await _跑(rt, broker, n=2, r=dog, c=c)
+    ack = [a for a in ears.by["cmd/ack"] if a["command_id"] == "s2"][-1]
+    assert ack["result"] == "rejected" and "target" in ack["reason"]
+    await rt.close()
