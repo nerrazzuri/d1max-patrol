@@ -1150,7 +1150,7 @@ def test_卸载脚本删agent单元():
     assert "\nMAIN_UNIT=d1max-agent.service\n" in text
     assert 'rm_sys "$UNIT_DIR/$MAIN_UNIT"' in text and 'rm_sys "$WANTS_LINK"' in text
     # 没重跑过装机脚本的老机器上老服务还在:卸载照样要停、要删。定位器(W09b)先停,它连着代理。
-    assert 'for u in "$LOC_UNIT" "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do' in text
+    assert 'for u in "$OBS_UNIT" "$LOC_UNIT" "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do' in text
     assert 'rm_sys "$UNIT_DIR/$LEGACY_UNIT"' in text
 
 
@@ -1183,6 +1183,49 @@ def test_定位器的启动脚本与单元_只装不启用_卸载删干净():
     卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
     assert "# @删除 /etc/systemd/system/d1max-localizer.service" in 卸
     assert 'rm_sys "$UNIT_DIR/$LOC_UNIT"' in 卸 and 'rm_sys "$LOC_WANTS_LINK"' in 卸
+
+
+def test_感知节点的启动脚本与单元_只装不启用_卸载删干净():
+    """W11:感知节点跟定位器一样跑在 ROS 的系统 Python 里、用这一版带的包、跟代理同一个账号
+    (本机障碍桥按账号认);外参跟着代理正在用的图走;装机只装不 enable;卸载连手工 enable 过的
+    自启链一起删。"""
+    import os
+    import subprocess
+    start = DEPLOY / "d1max-obstacles-start"
+    assert os.access(start, os.X_OK)
+    subprocess.run(["sh", "-n", str(start)], check=True)
+    text = start.read_text(encoding="utf-8")
+    assert '. /opt/ros/humble/setup.sh' in text
+    assert '$here/packages/localizer/src:$here/packages/contract/src' in text
+    assert "--socket /var/lib/d1max/agent/obs.sock" in text
+    assert "--maps-dir /var/lib/d1max/agent/maps" in text, "外参跟着代理正在用的图走"
+    assert "exec /usr/bin/python3 -m d1max_localizer.obstacles" in text
+    单元 = (DEPLOY / "d1max-obstacles.service").read_text(encoding="utf-8")
+    assert "User=robot" in 单元
+    assert "ExecStart=/opt/d1max/current/deploy/d1max-obstacles-start" in 单元
+    assert "EnvironmentFile=-/etc/d1max/env" in 单元
+    装 = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "# @写盘 /etc/systemd/system/d1max-obstacles.service" in 装
+    assert 'install -m 0644 "$PKG/deploy/d1max-obstacles.service" /etc/systemd/system/' in 装
+    assert "enable d1max-obstacles" not in 装 and "systemctl start d1max-obstacles" not in 装
+    assert "systemctl try-restart d1max-obstacles.service" in 装
+    卸 = (DEPLOY / "uninstall.sh").read_text(encoding="utf-8")
+    assert "# @删除 /etc/systemd/system/d1max-obstacles.service" in 卸
+    assert 'rm_sys "$UNIT_DIR/$OBS_UNIT"' in 卸 and 'rm_sys "$OBS_WANTS_LINK"' in 卸
+    assert '"$OBS_UNIT" "$LOC_UNIT"' in 卸, "先停感知、再停定位器、再停代理"
+
+
+def test_agent启动脚本_避障从env来_没设不带(tmp_path):
+    """W11:D1MAX_OBSTACLES 传成 --obstacles(真狗在 W11 真机项验过之前不设)。"""
+    base = {"D1MAX_SITE_MQTT": "mqtts://site:8883", "D1MAX_OUTBOX": "/var/lib/d1max/outbox",
+            "D1MAX_MAP": "estate:1", "D1MAX_HOME": "0,0,0"}
+    got = _启动脚本跑一遍(tmp_path, base)
+    assert got.returncode == 0, got.stderr
+    assert "--obstacles" not in got.stdout.splitlines()[1:]
+    got = _启动脚本跑一遍(tmp_path / "b", {**base, "D1MAX_OBSTACLES": "bridge",
+                                           "D1MAX_NAV": "planned"})
+    args = got.stdout.splitlines()[1:]
+    assert args[args.index("--obstacles") + 1] == "bridge"
 
 
 def test_根下的解释器venv也装三个包_不然别名壳一import就炸(装机脚本):

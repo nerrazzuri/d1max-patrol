@@ -326,6 +326,12 @@ class Perception:
         self._clock = clock
         self.last_clear = 0.0
 
+    def set_mount(self, front: Mount, rear: Mount | None) -> None:
+        """换了图(外参跟着图走):换外参、重新自检。"""
+        self.front, self.rear = front, rear
+        self.check = SelfCheck()
+        self._rear_pts = None
+
     def on_rear(self, pts_sensor: Any) -> None:
         if self.rear is not None:
             self._rear_pts = self.rear.to_base(pts_sensor)
@@ -361,13 +367,30 @@ class Perception:
         return grid
 
 
+def active_frames(maps_dir: Path) -> tuple[str, Path] | None:
+    """狗上正在用的那张图的 ``frames.json``:``<maps>/active.json`` 声明的
+    ``<地图号>/<版本>/frames.json``。没有、读不了、名字不规矩都回 ``None``(感知就不出栅格 ——
+    代理看见「断了」,不宣告能自主走)。"""
+    try:
+        d = json.loads((maps_dir / "active.json").read_text("utf-8"))
+        mid, ver = d["map_id"], d["version"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not all(isinstance(v, str) and v and "/" not in v and ".." not in v for v in (mid, ver)):
+        return None
+    path = maps_dir / mid / ver / "frames.json"
+    return (f"{mid}:{ver}", path) if path.is_file() else None
+
+
 # ------------------------------------------------------------ ROS 节点
 
 def main(argv: Sequence[str] | None = None) -> int:
     """ROS 节点(系统 Python;``d1max-obstacles.service``)。"""
     ap = argparse.ArgumentParser(prog="d1max-obstacles")
-    ap.add_argument("--frames", required=True, type=Path,
-                    help="正在用的图的 frames.json(前雷达外参)")
+    ap.add_argument("--frames", type=Path, default=None,
+                    help="前雷达外参(frames.json);不给就跟着代理正在用的图(--maps-dir)走")
+    ap.add_argument("--maps-dir", type=Path, default=Path("/var/lib/d1max/agent/maps"),
+                    help="代理的地图目录(active.json 在这里);换了图外参跟着换、重新自检")
     ap.add_argument("--socket", type=Path, default=Path("/var/lib/d1max/agent/obs.sock"))
     ap.add_argument("--front-topic", default="/front_lidar")
     ap.add_argument("--rear-topic", default="", help="后雷达(没标定:只用来看见「空」;空 = 不用)")
@@ -385,7 +408,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     from d1max_localizer.build import cloud_xyz
     from d1max_localizer.frames import Frames
 
-    front = Mount.from_frames(Frames.load(a.frames))
+    def load() -> tuple[str, Mount] | None:
+        if a.frames is not None:
+            return str(a.frames), Mount.from_frames(Frames.load(a.frames))
+        got = active_frames(a.maps_dir)
+        if got is None:
+            return None
+        try:
+            return got[0], Mount.from_frames(Frames.load(got[1]))
+        except Exception as exc:                         # noqa: BLE001 —— 坏的 frames.json:等换图
+            log.error("外参读不了(%s):%s", got[1], exc)
+            return None
+
+    cur = load()
+    while cur is None:
+        log.warning("还没有正在用的图的外参(%s),5 s 后再看", a.maps_dir)
+        time.sleep(5.0)
+        cur = load()
+    front = cur[1]
     obs = LineClient(lambda: _unix(a.socket), {"t": "hello", "proto": PROTO,
                                                "name": "d1max-obstacles"})
     side = None
@@ -419,13 +459,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     ex.add_node(node)
     log.info("感知:订 %s%s → %s%s", a.front_topic, f" + {a.rear_topic}" if a.rear_topic else "",
              a.socket, f",许可 → {a.sidecar}" if a.sidecar else "")
-    hb = time.monotonic()
+    hb = look = time.monotonic()
     try:
         while rclpy.ok():
             ex.spin_once(timeout_sec=0.2)
             if time.monotonic() - hb >= 1.0:
                 hb = time.monotonic()
                 obs.send({"t": "hb", "seq": max(1, per.seq)})
+            if a.frames is None and time.monotonic() - look >= 5.0:
+                look = time.monotonic()
+                nxt = load()
+                if nxt is not None and nxt[0] != cur[0]:
+                    log.info("换图了(%s → %s):换外参、重新自检", cur[0], nxt[0])
+                    cur = nxt
+                    per.set_mount(nxt[1], nxt[1].mirrored() if a.rear_topic else None)
     finally:
         ex.shutdown()
         node.destroy_node()

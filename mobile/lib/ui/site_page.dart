@@ -666,6 +666,10 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             Text(locText((v!['loc'] as Map).cast<String, dynamic>()), key: const Key('robot-loc')),
           if (v?['rtk'] is Map)
             Text(rtkText((v!['rtk'] as Map).cast<String, dynamic>()), key: const Key('robot-rtk')),
+          if (v?['capabilities'] is Map &&
+              obstaclesText((v!['capabilities'] as Map).cast<String, dynamic>()).isNotEmpty)
+            Text(obstaclesText((v['capabilities'] as Map).cast<String, dynamic>()),
+                key: const Key('robot-obstacles')),
           // 叫停之后站点不再派它（W00c5e）：说清楚，给能派单的人一个「恢复」。
           if (v?['held'] is Map)
             Card(

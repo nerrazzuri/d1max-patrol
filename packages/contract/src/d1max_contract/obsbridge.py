@@ -1,17 +1,19 @@
 """本机障碍桥的报文(W11 设计稿 §3,W08 决定 8):感知节点(ROS 那一侧)→ 代理。
 
-跟定位桥(:mod:`d1max_contract.locbridge`)同一套规矩:Unix 套接字、**一行一个 JSON**(≤ :data:`MAX_LINE`)、
-第一行 ``hello``、未知字段整行拒。单开一个套接字(``obs.sock``):定位器、感知是两个进程。
+跟定位桥(:mod:`d1max_contract.locbridge`)同一套规矩:Unix 套接字、**一行一个 JSON**
+(≤ :data:`MAX_LINE`)、第一行 ``hello``、未知字段整行拒。单开一个套接字(``obs.sock``):
+定位器、感知是两个进程。
 
 感知 → 代理:
 
 - ``hello {proto, name, version}``
-- ``grid {seq, stamp_ns, res, size, occ, known, rear, check, reason}``:**狗身系**局部栅格(狗身中心居中,
-  ``size × size`` 格、每格 ``res`` 米)。格 ``(r, c)`` 的中心在狗身系 ``x = (r − size/2 + 0.5)·res``(朝前)、
-  ``y = (c − size/2 + 0.5)·res``(朝左);第 ``i = r·size + c`` 格对应位图第 ``i`` 位(第 ``i // 8`` 个字节、
-  从高位数第 ``i % 8`` 位)。``occ``:挡(凸起障碍或落差);``known``:看见过(不在里面 = 未知 =
-  当挡);都是 base64。``rear``:后雷达用上了没有;``check``:启动自检 ``ok`` / ``extrinsic_bad`` /
-  ``initializing``,不是 ``ok`` 时 ``reason`` 写原因。
+- ``grid {seq, stamp_ns, res, size, occ, known, rear, check, reason}``:**狗身系**局部栅格
+  (狗身中心居中,``size × size`` 格、每格 ``res`` 米)。格 ``(r, c)`` 的中心在狗身系
+  ``x = (r − size/2 + 0.5)·res``(朝前)、``y = (c − size/2 + 0.5)·res``(朝左);
+  第 ``i = r·size + c`` 格对应位图第 ``i`` 位(第 ``i // 8`` 个字节、从高位数第 ``i % 8`` 位)。
+  ``occ``:挡(凸起障碍或落差);``known``:看见过(不在里面 = 未知 = 当挡);都是 base64。
+  ``rear``:后雷达用上了没有;``check``:启动自检 ``ok`` / ``extrinsic_bad`` / ``initializing``,
+  不是 ``ok`` 时 ``reason`` 写原因。
 - ``hb {seq}``:心跳,每秒一条。
 
 代理 → 感知:``hello {proto}``、``error {reason}``(握手不对,说完就断)。

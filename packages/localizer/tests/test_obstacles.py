@@ -18,6 +18,7 @@ from d1max_localizer.obstacles import (  # noqa: E402
     Mount,
     Perception,
     SelfCheck,
+    active_frames,
     classify,
     clear_distance,
     fit_ground,
@@ -235,3 +236,29 @@ def test_发不出去就断开_过一会儿再连():
     c = LineClient(连不上, None, reconnect_s=10.0)
     assert not c.send({"a": 1}) and not c.send({"a": 2})
     assert len(calls) == 1, "没到重连间隔不再连"
+
+
+def test_跟着正在用的图找外参(tmp_path):
+    assert active_frames(tmp_path) is None
+    (tmp_path / "active.json").write_text(json.dumps({"map_id": "m", "version": "2"}))
+    assert active_frames(tmp_path) is None, "图目录里还没有 frames.json"
+    d = tmp_path / "m" / "2"
+    d.mkdir(parents=True)
+    (d / "frames.json").write_text("{}")
+    assert active_frames(tmp_path) == ("m:2", d / "frames.json")
+    for bad in ({"map_id": "../x", "version": "2"}, {"map_id": "m"}, [], {"map_id": 1,
+                                                                          "version": "2"}):
+        (tmp_path / "active.json").write_text(json.dumps(bad))
+        assert active_frames(tmp_path) is None, bad
+    (tmp_path / "active.json").write_text("坏")
+    assert active_frames(tmp_path) is None
+
+
+def test_换图_换外参重新自检():
+    m = Mount.from_frames(AIRY)
+    per = Perception(m)
+    per.check = SelfCheck(frames=1)
+    per.on_front(到雷达系(m, 场景()), 1)
+    assert per.check.check == "ok"
+    per.set_mount(m.mirrored(), None)
+    assert per.check.check == "initializing" and per.front.x == -m.x

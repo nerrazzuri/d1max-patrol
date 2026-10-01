@@ -47,6 +47,8 @@ from tests.test_deploy_files import DEPLOY
     "LEGACY_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-patrol.service",
     "LOC_UNIT": "d1max-localizer.service",
     "LOC_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-localizer.service",
+    "OBS_UNIT": "d1max-obstacles.service",
+    "OBS_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-obstacles.service",
 }
 
 

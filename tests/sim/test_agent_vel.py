@@ -16,10 +16,10 @@ from tests.sim.test_agent_server import _client
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_协议是v3_跟C加加旁路进程的常量一致():
+def test_协议是v4_跟C加加旁路进程的常量一致():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     m = re.search(r"static const int kProtoVersion = (\d+);", src)
-    assert m and int(m.group(1)) == PROTO_VERSION == 3
+    assert m and int(m.group(1)) == PROTO_VERSION == 4          # W11:加了 clear
 
 
 async def _站起(sim: SimAgentServer, client) -> None:
@@ -216,3 +216,30 @@ async def test_控制权丢了_速度作废_拿回来也不接着走_新的vel�
         assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=1000)).ok
         await asyncio.sleep(0.12)
         assert sim.vx > 0
+
+
+async def test_净空许可_开了没许可只转不走_有许可才往前_后来的旧许可不截短():
+    """W11 第二层(``--require-clearance``):同 ``vel_gate.hpp`` 的 ``Live``。"""
+    async with _client(require_clearance=True) as (sim, client):
+        await _站起(sim, client)
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.3, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx == 0.0 and sim.vyaw != 0.0, "没许可:前进置零、转向照常"
+        assert (await client.call("clear", ms=500, dist=2.0)).ok
+        assert (await client.call("clear", ms=50, dist=2.0)).ok      # 晚到的旧许可
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx > 0, "有许可:往前"
+        for bad in ({"ms": 0}, {"ms": 5000}, {"ms": "x"}):
+            assert not (await client.call("clear", **bad)).ok, bad
+    async with _client() as (sim, client):                      # 没开:照旧
+        await _站起(sim, client)
+        assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
+        await asyncio.sleep(0.15)
+        assert sim.vx > 0
+
+
+def test_CPP的clear_插队_开关参数():
+    src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
+    assert '|| cmd == "clear"' in src and "g_gate.SetClearance(" in src
+    assert '"--require-clearance"' in src and "g_gate.RequireClearance(true)" in src

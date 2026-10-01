@@ -205,3 +205,21 @@ def test_换图之后删光禁行区_没重新确认_不派自主任务_遥控�
     assert s.disp.dispatchable("A", "teleop") == ""
     s.req("POST", ZP + "/confirm", {"revision": 1, "confirm": True}, token=alice)
     assert s.disp.dispatchable("A", "goto") == ""
+
+
+def test_避障用不了_不派会自己走的_遥控照常(站点):
+    """W11:配了感知节点的狗,能力里 ``obstacles.state`` 不是 ``ok`` 就不派 goto、巡检。"""
+    s = 站点
+    _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
+    s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")
+    assert s.disp.dispatchable("A", "goto") == ""
+    tasks = s.disp.clients["A"].capabilities.tasks
+    for st, words in (("lost", "感知断了"), ("extrinsic_bad", "外参自检没过"),
+                      ("initializing", "还在自检"), ("stale", "不新鲜")):
+        tasks["obstacles"] = {"state": st, "rear": False, "reason": "雷达离地 2.9 m"}
+        why = s.disp.dispatchable("A", "goto")
+        assert "避障用不了" in why and words in why and "2.9" in why, why
+        assert "避障用不了" in s.disp.dispatchable("A", "patrol")
+        assert s.disp.dispatchable("A", "teleop") == ""
+    tasks["obstacles"] = {"state": "ok", "rear": True}
+    assert s.disp.dispatchable("A", "goto") == ""

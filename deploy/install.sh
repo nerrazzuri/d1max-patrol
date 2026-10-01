@@ -27,11 +27,13 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/d1max-agent.service                           代理单元(狗上只有它一个服务,W00c5e)
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
 # @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;只装不 enable)
+# @写盘 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11;只装不 enable)
 # @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
 #
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-localizer.service 定位器的自启链(装机只装不 enable;有人手工 enable 过才有)
+# @也删 /etc/systemd/system/multi-user.target.wants/d1max-obstacles.service 感知节点的自启链(同上)
 # @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元
 # @也删 /etc/systemd/system/d1max-patrol.service 老服务(W00c5e 退役)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
@@ -313,6 +315,11 @@ install -m 0644 "$AGENT_UNIT_SRC" /etc/systemd/system/
 if [[ -f "$PKG/deploy/d1max-localizer.service" ]]; then
   install -m 0644 "$PKG/deploy/d1max-localizer.service" /etc/systemd/system/
 fi
+# 感知节点单元(W11):同样**只装、不 enable** —— 真狗在 W11 的真机项验过之前不起。它只读雷达、给代理
+# 局部栅格(开了的话给旁路进程发净空许可),不发速度。老包没带就跳过。
+if [[ -f "$PKG/deploy/d1max-obstacles.service" ]]; then
+  install -m 0644 "$PKG/deploy/d1max-obstacles.service" /etc/systemd/system/
+fi
 # **老服务清掉。** 两个进程抢同一个旁路进程的控制权会出事,两个服务共用在途标记还会互相数
 # 开机次数、替对方提交。失败不致命:新机器上本来就没有这些。
 # 顺序:先停老服务、再删 sudoers、再删助手 —— 反过来的话中间有一瞬白名单指着一个不存在
@@ -372,6 +379,9 @@ D1MAX_HAL=sim
 # 导航后端(W10):空着 = 直线桥(过渡期)。**W10 的真机项(庄园场景待真机测试 §3e)验过之后**才改成
 # planned(在规划栅格上规划、守禁行区与限速区):
 #   D1MAX_NAV=planned
+# 局部避障(W11):空着 = 不用。**W11 的真机项(§3f)验过之后**、起了 d1max-obstacles 单元,才改成 bridge
+# (要 D1MAX_NAV=planned):
+#   D1MAX_OBSTACLES=bridge
 # 其余参数(按空白拆开接在代理参数后面),例如建图:--mapping
 D1MAX_AGENT_ARGS=
 
@@ -522,6 +532,7 @@ fi
 # 定位器(W09b)只装不 enable;有人手工起过(真机验收时)的话,换了版本要跟着重启,不然还跑着旧代码。
 # try-restart:没在跑就什么也不做。
 systemctl try-restart d1max-localizer.service 2>/dev/null || true
+systemctl try-restart d1max-obstacles.service 2>/dev/null || true
 
 say "装完了。看一眼:"
 echo "  systemctl status d1max-agent"

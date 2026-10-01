@@ -8,7 +8,9 @@
 //   - OnState(SDK 状态回调):任一路急停不是明确的 Recover(Stop、Unknown、没见过的值)、
 //     趴着、锁死、姿态未知 → 作废目标;
 //   - OnControlLost:控制权丢了 → 作废目标(不是暂停:拿回控制权之后要新的 vel 才动);
-//   - Live:速度线程每次要发 Move 之前都问一次,上面这些条件现查。
+//   - Live:速度线程每次要发 Move 之前都问一次,上面这些条件现查;
+//   - 净空许可(W11 第二层,W08 决定 8):RequireClearance 打开之后,前进分量只在感知节点给的
+//     许可没过期时放行,过期就把前进分量置零(转向、后退照常;不在 Register 里拒 —— 拒了代理当失败)。
 // 作废 = 代次加一。目标记着登记时的代次,代次对不上就永远不再生效 —— 急停解除、重新站起
 // 、控制权拿回来都不会让旧目标复活;只有之后新登记的 vel 才算数。
 
@@ -101,7 +103,21 @@ class Gate {
     }
     if (estop_latched_ || !UnsafeLocked().empty()) return std::nullopt;
     if (!target_ || target_->epoch != epoch_ || now >= target_->until) return std::nullopt;
-    return target_;
+    Target t = *target_;
+    if (require_clearance_ && now >= clear_until_ && t.fwd > 0) t.fwd = 0;  // 没有净空许可:不许往前
+    return t;
+  }
+
+  /// 净空许可开关(旁路进程参数 --require-clearance;W11 真机验收之前默认关)。
+  void RequireClearance(bool on) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    require_clearance_ = on;
+  }
+
+  /// 感知节点的许可:「到 until 为止前方是空的」。只往后延,不往前缩(晚到的旧许可不会把新的截短)。
+  void SetClearance(Clock::time_point until) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (until > clear_until_) clear_until_ = until;
   }
 
   /// 只给测试用:检查过了、还没登记时调(**锁还握着**)。测试在这里起一个线程去 halt,
@@ -133,6 +149,8 @@ class Gate {
   int motion_ = kMotionUnknown;  // 没收到过状态 = 姿态未知 = 不许走
   int estop_sw_ = 0, estop_hw_ = 0;
   std::optional<Target> target_;
+  bool require_clearance_ = false;
+  Clock::time_point clear_until_{};
 };
 
 /// 速度线程的一拍。Sdk 要有 ``int Gait(int)``(返回 0 = 成功)与 ``void Move(float, float, float)``。

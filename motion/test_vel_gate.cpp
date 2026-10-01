@@ -286,7 +286,40 @@ static void 两拍之间控制权短暂丢失_也不复活() {
   CHECK(!r.gate.Live(true, r.now));
 }
 
+static void 净空许可_没开不管_开了没许可只零前进_转向后退照常() {
+  Rig r;  // 没开:照旧
+  CHECK(r.vel(0.3) == "");
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.3);
+  Rig q;
+  q.gate.RequireClearance(true);
+  CHECK(q.gate.Register(0.3, 0, 0.2, 300, true, q.now) == "");  // 不在登记时拒(代理会当失败)
+  auto t = q.gate.Live(true, q.now);
+  CHECK(t.has_value() && t->fwd == 0 && t->yaw == 0.2);          // 没许可:前进置零,转向照常
+  CHECK(q.gate.Register(-0.2, 0, 0, 300, true, q.now) == "");
+  CHECK(q.gate.Live(true, q.now)->fwd == -0.2);                  // 后退不管(只管往前)
+}
+
+static void 净空许可_有效期内放行_过期置零_旧许可不截短新的() {
+  Rig r;
+  r.gate.RequireClearance(true);
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(300));
+  CHECK(r.vel(0.3, 1000) == "");
+  CHECK(r.gate.Live(true, r.now)->fwd == 0.3);
+  r.gate.SetClearance(r.now + std::chrono::milliseconds(100));  // 晚到的旧许可
+  CHECK(r.gate.Live(true, r.now + std::chrono::milliseconds(200))->fwd == 0.3);
+  CHECK(r.gate.Live(true, r.now + std::chrono::milliseconds(300))->fwd == 0);
+  // 速度线程:许可过期那一拍发的是零前进的 Move
+  r.now += std::chrono::milliseconds(350);
+  r.drv.Tick();
+  bool zero_fwd = false;
+  for (auto& c : r.sdk.calls)
+    if (c.what == "move" && c.fwd == 0) zero_fwd = true;
+  CHECK(zero_fwd);
+}
+
 int main() {
+  净空许可_没开不管_开了没许可只零前进_转向后退照常();
+  净空许可_有效期内放行_过期置零_旧许可不截短新的();
   收下就走_到期自停();
   没收到过状态_不许走();
   急停与姿态_登记时就拒();

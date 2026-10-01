@@ -1,0 +1,21 @@
+[Unit]
+Description=D1 Max 感知节点(雷达 → 狗身系局部栅格,经本机障碍桥给代理;净空许可给旁路进程;W11)
+# 装机脚本只装、不 enable:真狗在 W11 的真机项验过之前不起(代理也还用 --obstacles none)。
+# 起用:sudo systemctl enable --now d1max-obstacles,再在 /etc/d1max/env 里写 D1MAX_OBSTACLES=bridge。
+After=network-online.target d1max-agent.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# 跟代理同一个账号:本机障碍桥按对端进程的账号认(W11,同定位桥)。
+User=robot
+WorkingDirectory=-/opt/d1max/current
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/d1max/env
+ExecStart=/opt/d1max/current/deploy/d1max-obstacles-start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

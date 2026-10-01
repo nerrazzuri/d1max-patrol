@@ -55,7 +55,7 @@ WALK_DEADBAND = 0.2
 WALK_CANCELLED = "行走被停车/急停打断"
 
 #: 插队执行的命令。跟 ``patrol_agent.cpp`` 的 ``IsUrgent`` 对齐。
-URGENT_COMMANDS = frozenset({"halt", "estop", "vel"})
+URGENT_COMMANDS = frozenset({"halt", "estop", "vel", "clear"})
 
 #: ``vel``(协议 v3)的边界:同 ``motion/vel_gate.hpp`` 的 ``kMaxFraction`` 与 ``kTtl*``。
 VEL_MAX = 0.5
@@ -84,7 +84,11 @@ class SimAgentServer:
         battery: float = 71.0,
         sdk: str = "0.1.1",
         telemetry_hz: float = TELEMETRY_HZ,
+        require_clearance: bool = False,
     ) -> None:
+        #: 同 ``patrol_agent --require-clearance``(W11 第二层):没有有效的净空许可,前进分量置零。
+        self.require_clearance = require_clearance
+        self._clear_until = -math.inf
         self._host = host
         self._port = port
         #: 旁路进程此刻是否握着控制权。
@@ -323,6 +327,16 @@ class SimAgentServer:
         if cmd == "vel":
             self._start_vel(args)
             return
+        if cmd == "clear":
+            try:
+                ms = float(args.get("ms", 0))
+            except (TypeError, ValueError) as exc:
+                raise _Rejected(f"clear 参数不对: {exc}") from exc
+            if not (math.isfinite(ms) and 1 <= ms <= 1000):
+                raise _Rejected("ms 要在 [1, 1000] 内")
+            # 同 vel_gate.hpp 的 SetClearance:只往后延
+            self._clear_until = max(self._clear_until, time.monotonic() + ms / 1000.0)
+            return
         if cmd == "walk":
             self._need_control("walk")
             if gen != self._cancel_gen:
@@ -377,6 +391,8 @@ class SimAgentServer:
                     self._vel_until = 0.0
                     break
                 fwd, lat, yaw = self._vel
+                if self.require_clearance and time.monotonic() >= self._clear_until and fwd > 0:
+                    fwd = 0.0                     # 同 vel_gate.hpp 的 Live:没有净空许可不许往前
                 if max(abs(fwd), abs(lat), abs(yaw)) < WALK_DEADBAND:
                     # 量太小只是原地蹭(清单 #37),不动;真机也不报错。
                     self.vx = self.vy = self.vyaw = 0.0
