@@ -58,7 +58,7 @@ def test_栅格来回_80格一行装得下():
 
 
 @pytest.mark.parametrize("bad", [
-    dict(seq=0), dict(seq=True), dict(stamp_ns=-1), dict(res=0.01), dict(res=0.6),
+    dict(seq=0), dict(seq=True), dict(stamp_ns=-1), dict(res=0.01), dict(res=0.6), dict(size=11),
     dict(res=float("nan")), dict(res=True), dict(size=9), dict(size=8), dict(size=122),
     dict(rear=1), dict(check="good"), dict(reason="x" * 201), dict(occ=5),
     dict(occ="AAAA"), dict(known="not base64!"),

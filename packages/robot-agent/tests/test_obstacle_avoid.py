@@ -436,3 +436,60 @@ def test_记忆_按收到时刻减延迟配位姿():
     v.on_grid(_grid(cells_occ=[(15, 10)]))           # 这一帧是 0.0 那一刻扫的:x = 0.55
     hit, _ = v.lookup([(0.35, 0.05)], (0.2, 0.0, 0.0))
     assert hit == [0], "挡在里程 0.55 处,狗现在在 0.2:离狗 0.35"
+
+
+def test_记忆_新的说空_旧的说挡_还有别的点没查完也不被旧的盖掉():
+    t = [0.0]
+    v = ObstacleView(monotonic=lambda: t[0], latency_s=0.0)
+    v.note_odom(0.0, 0.0, 0.0)
+    v.on_grid(_grid(cells_occ=[(15, 10)]))           # 旧:x = 0.55 挡
+    t[0] = 0.1
+    v.note_odom(0.0, 0.0, 0.0)
+    v.on_grid(_grid(cells_known=[(15, 10)], seq=2))  # 新:那一格看见了,空;别的都没看见
+    hit, unk = v.lookup([(0.55, 0.05), (0.85, 0.35)], (0.0, 0.0, 0.0))
+    assert hit == [], "新的说了算(旧的那帧还要查第二个点,不许把第一个点盖回挡)"
+
+
+def test_记忆_狗自己3秒内站过的地方算空_再久不算():
+    t = [0.0]
+    v = ObstacleView(monotonic=lambda: t[0], latency_s=0.0)
+    v.note_odom(0.0, 0.0, 0.0)
+    v.on_grid(_grid(cells_known=[]))                 # 什么都没看见
+    t[0] = 1.0
+    v.note_odom(1.0, 0.0, 0.0)
+    _, unk = v.lookup([(-0.8, 0.0), (-0.8, 0.6)], (1.0, 0.0, 0.0))
+    assert unk == [1], "身后 0.8 m 是 1 s 前机身占着的地方:算空;旁边那点没站过:未知"
+    t[0] = 5.0
+    v.note_odom(1.0, 0.0, 0.0)
+    _, unk = v.lookup([(-0.8, 0.0)], (1.0, 0.0, 0.0))
+    assert unk == [0], "超过 3 s:不算了"
+
+
+async def test_临时障碍过期了不进代价图(tmp_path):
+    t = 台子(tmp_path)
+    await t.start(1.5, 4.0)
+    cell = (40, 80)                                  # (y = 4.0, x = 8.0) 那一格
+    t.nav._temp = {cell: t.c.s() - 1.0}
+    t.nav._invalidate()
+    assert not t.nav._costmap(0.0).hard[cell], "过期了:不算挡"
+    t.nav._temp = {cell: t.c.s() + 5.0}
+    t.nav._invalidate()
+    assert t.nav._costmap(0.0).hard[cell]
+
+
+async def test_绕不过去_规划失败_接着等_不当场放弃(tmp_path):
+    """内审阻断 1 附带:绕障规划不出来(通道整个被堵)时原地等、5 s 后再试,满 20 s 才放弃。"""
+    t = 台子(tmp_path, walls=[(0.0, 0.0, 12.0, 3.3), (0.0, 4.7, 12.0, 8.0)])   # 1.4 m 宽的通道
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(2.0)
+    t.world.dyn["box"] = (5.0, 3.3, 5.6, 4.7)
+    start = t.c.s()
+    failed_at = None
+    for _ in range(400):
+        await t.一拍()
+        if failed_at is None and NavStatus.FAILED in t.status:
+            failed_at = t.c.s()
+            break
+    assert failed_at is not None and failed_at - start >= 19.0, failed_at and failed_at - start
+    assert not t.crashed

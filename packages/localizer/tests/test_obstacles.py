@@ -126,13 +126,16 @@ def test_分类_凸起_落差_看不见_矮草_机身():
     cfg = Config()
     pts = 场景(box=((2.0, 2.4), (-0.2, 0.2), 0.5), drop=((1.5, 1.9), (1.0, 1.4)),
                hole=((2.5, 3.0), (-1.5, -1.0)))
-    grass = np.array([[1.0, -1.0, -H + 0.05]])
+    grass = np.array([[1.0, -1.0, -H + 0.05], [1.5, -1.5, -H + 0.09]])
     leg = np.array([[0.3, 0.1, -H + 0.2]])                       # 机身里(腿)的点
     occ, known = classify(np.vstack([pts, grass, leg]), H, cfg)
     assert occ[_cell(cfg, 2.2, 0.0)] and known[_cell(cfg, 2.2, 0.0)], "箱子挡"
     assert occ[_cell(cfg, 1.7, 1.2)], "落差挡"
     assert not known[_cell(cfg, 2.7, -1.2)] and not occ[_cell(cfg, 2.7, -1.2)], "打不到 = 未知"
     assert known[_cell(cfg, 1.0, -1.0)] and not occ[_cell(cfg, 1.0, -1.0)], "地面、矮草不挡"
+    hole = classify(np.array([[1.55, -1.55, -H + 0.09]]), H, cfg)
+    assert hole[1][_cell(cfg, 1.55, -1.55)] and not hole[0][_cell(cfg, 1.55, -1.55)], \
+        "比地面高一点、比障碍下沿低(0.08–0.10 m 的草):看见了、不挡"
     assert not occ[_cell(cfg, 0.3, 0.1)], "机身自己的点不算"
     assert not known[_cell(cfg, -2.0, 0.0)], "身后没看见"
     far_drop = 场景(drop=((3.5, 3.9), (0.0, 0.4)))
@@ -311,3 +314,38 @@ def test_旁路进程回的_每帧读空_协议不对记日志_被拒记日志(c
     side.b.close()
     per.on_front(到雷达系(m, 场景()), 3)
     assert per.sidecar._sock is None, "对面关了:断开,下次再连"
+
+
+def test_不发许可的帧也读空旁路进程那条连接():
+    m = Mount.from_frames(AIRY)
+    side = 假对端()
+    per = Perception(m, sidecar=LineClient(lambda: side.a, None))
+    per.check = SelfCheck(frames=1)
+    per.on_front(到雷达系(m, 场景()), 1)                 # 前面空:发许可,连上
+    near = 到雷达系(m, 场景(box=((0.6, 0.8), (0.0, 0.3), 0.5)))
+    side.b.sendall(b'{"t":"hello","proto":4}\n')
+    per.on_front(near, 2)                                # 前面太近:不发许可,照样读
+    assert per.sidecar_proto == 4
+
+
+def test_自检没过_不发许可_哪怕前面是空的():
+    m = Mount.from_frames(AIRY)
+    side = 假对端()
+    per = Perception(m, sidecar=LineClient(lambda: side.a, None))
+    per.check = SelfCheck(frames=1)
+    per.check.check, per.check.height, per.check.reason = "extrinsic_bad", H, "歪了"
+    g = per.on_front(到雷达系(m, 场景()), 1)
+    assert g["check"] == "extrinsic_bad" and per.last_clear > 2.0
+    assert side.read() == []
+
+
+def test_图名带上一级目录的不认(tmp_path):
+    maps = tmp_path / "maps"
+    maps.mkdir()
+    out = tmp_path / "x" / "2"
+    out.mkdir(parents=True)
+    (out / "frames.json").write_text("{}")
+    (maps / "active.json").write_text(json.dumps({"map_id": "..", "version": "x/2"}))
+    assert active_frames(maps) is None
+    (maps / "active.json").write_text(json.dumps({"map_id": "../x", "version": "2"}))
+    assert active_frames(maps) is None

@@ -224,9 +224,9 @@ class ObstacleGuard:
             return self._outside_body(pts, hl, hw)
         dist = self.reach(max(abs(v_meas), abs(vx)))
         corner = math.hypot(hl, hw)
-        turn = 0.0 if abs(vx) < 1e-6 else abs(wz) * dist / abs(vx)     # 推这一段转过的角度
-        # 步数按机身角点走过的弧长取,不只按中心的弧长(内审应修 3:急转时角点一步跨过好几格)
-        k = max(1, int(dist / s), int(math.ceil(turn * corner / s)))
+        # 角点走过的弧长只在转弯半径比机身对角线还小时才比中心的长 —— 那种急转下面直接并上外接圆
+        # (内审应修 3;突变里「按角点弧长取步数」跟「并外接圆」互相顶替,只留后一条)
+        k = max(1, int(dist / s))
         xs = [(i + 0.5) * s for i in range(int(-hl / s) - 1, int(hl / s) + 1)
               if abs((i + 0.5) * s) < hl] + [-hl, hl]
         ys = [(j + 0.5) * s for j in range(int(-hw / s) - 1, int(hw / s) + 1)
