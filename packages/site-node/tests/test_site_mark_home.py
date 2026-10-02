@@ -284,3 +284,17 @@ def test_W13a_狗回的不是只标待命点_站点不登记(站点):
     assert not [p for p in s.stb_list("A") if p["name"] == "gate"]
     s.api.standby.mark_standby("A", "gate", data | {"target": "standby"})
     assert [p["name"] for p in s.stb_list("A")] == ["gate"]
+
+
+def test_W13a_同样的原点登记两遍_标的时刻不变_换了位置才变(站点):
+    """回执与晚到的 ``home_marked`` 事件按同样的值登记两遍(W14 外审复查时 CI 碰上的时序)。"""
+    s = 站点
+    stb = s.api.standby
+    clock = [1000]
+    stb._now = lambda: clock[0]
+    stb.set_home("A", "dock", map_id="m", map_version="1", x=1.0, y=2.0, yaw=0.0)
+    clock[0] = 5000
+    stb.set_home("A", "dock", map_id="m", map_version="1", x=1.0, y=2.0, yaw=0.0)
+    assert stb.home("A", "m", "1")["marked_at_ms"] == 1000
+    stb.set_home("A", "dock", map_id="m", map_version="1", x=1.5, y=2.0, yaw=0.0)
+    assert stb.home("A", "m", "1")["marked_at_ms"] == 5000

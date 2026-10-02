@@ -161,7 +161,10 @@ class StandbyManager:
             c.execute("INSERT INTO homes(robot_id, map_id, map_version, name, x, y, yaw, "
                       "marked_at_ms) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(robot_id, map_id, "
                       "map_version) DO UPDATE SET name=excluded.name, x=excluded.x, "
-                      "y=excluded.y, yaw=excluded.yaw, marked_at_ms=excluded.marked_at_ms",
+                      "y=excluded.y, yaw=excluded.yaw, marked_at_ms=CASE WHEN "
+                      # 回执与晚到的 home_marked 事件按同样的值登记两遍:「什么时候标的」不跟着变
+                      "name=excluded.name AND x=excluded.x AND y=excluded.y AND yaw=excluded.yaw "
+                      "THEN marked_at_ms ELSE excluded.marked_at_ms END",
                       (robot_id, map_id, map_version, name, *xs, int(self._now())))
 
     def home(self, robot_id: str, map_id: str, map_version: str) -> dict[str, Any] | None:

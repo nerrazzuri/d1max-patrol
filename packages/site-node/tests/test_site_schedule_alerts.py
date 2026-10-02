@@ -559,7 +559,7 @@ async def test_W14_跑过的轮次不补记成错过(站, tmp_path):
     await t.run(2)
     await _拍(t)
     assert [r["outcome"] for r in t.sched.runs("hourly")] == ["started"]
-    t.clock.ms = 毫秒(23, 30)                                        # 站点一直没拍,23 点那一轮错过了
+    t.clock.ms = 毫秒(23, 30)                           # 站点一直没拍,23 点那一轮错过了
     await _拍(t)
     got = sorted((r["scheduled_ms"], r["outcome"]) for r in t.sched.runs("hourly", limit=50))
     assert got == [(毫秒(22, 0), "started"), (毫秒(23, 0), "alarm")], got
