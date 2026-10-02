@@ -100,7 +100,7 @@ jobs:
             out: build/windows/x64/runner/Release
           - os: macos-14
             target: macos
-            out: build/macos/Build/Products/Release
+            out: build/macos/Build/Products/Release/d1max_patrol.app
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:

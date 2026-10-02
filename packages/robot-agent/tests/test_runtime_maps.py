@@ -88,14 +88,27 @@ def _abort(task_id, cid, c):
     return Message(T.cmd, json.dumps(cmd.to_wire()).encode(), 1, False)
 
 
-async def _跑(rt, broker, n=20, r=None, c=None):
+async def _跑(rt, broker, n=20, r=None, c=None, settle_s=10.0):
+    """跑 ``n`` 拍;后台还在换图(下载、核哈希、载入、切坐标系)就接着跑,最多 ``settle_s`` 秒墙钟。
+    原来只跑固定的 ``n`` 拍(约 0.2 s 墙钟):CI 的慢机上后台换图来不及做完,断言「已经换上了」偶发失败
+    (W31 记的切图偶发,PR #8、#11、#13 碰上过)。等的是墙钟,不推仿真钟以外的东西。"""
     import asyncio
-    for _ in range(n):
-        await rt.step(0.1)
+    import time
+
+    def step_sim():
         if r is not None:                          # 仿真狗也往前走(停车要走完才算停稳)
             r.tick(0.1)
             c.ms += 100
             c.mono += 0.1
+
+    for _ in range(n):
+        await rt.step(0.1)
+        step_sim()
+        await asyncio.sleep(0.01)
+    deadline = time.monotonic() + settle_s
+    while (rt._running(rt._map_job) or rt._switching) and time.monotonic() < deadline:
+        await rt.step(0.1)
+        step_sim()
         await asyncio.sleep(0.01)
     await broker.drain()
 
@@ -157,11 +170,11 @@ async def test_跑着任务先下载_等狗空下来才换_坏载荷拒(台):
     await rt._on_cmd(_cmd("map_activate", ref, "c2", c))
     await broker.drain()
     assert ears.by["cmd/ack"][-1]["result"] == "accepted", "收下:下载不挡任务"
-    await _跑(rt, broker, 10, r, c)
+    await _跑(rt, broker, 10, r, c, settle_s=0)
     assert rt.loaded_map == ("m", "1"), "跑着任务不换坐标系"
     await rt._on_cmd(_abort("goto-c1", "c3", c))
     for _ in range(80):
-        await _跑(rt, broker, 5, r, c)
+        await _跑(rt, broker, 5, r, c, settle_s=0)
         if rt.loaded_map == ("m", "5"):
             break
     assert rt.loaded_map == ("m", "5"), "狗空下来就换"
@@ -200,7 +213,7 @@ async def test_下载时照接任务_只有载入切坐标系那一小段不接(
     await broker.drain()
     assert ears.by["cmd/ack"][-1]["result"] == "accepted", "下载不挡出警"
     await rt._on_cmd(_abort("goto-d2", "d2x", c))
-    await _跑(rt, broker, 30, r, c)
+    await _跑(rt, broker, 30, r, c, settle_s=0)
     loading = asyncio.Event()
     release = asyncio.Event()
     real_load = r.load_map
@@ -214,13 +227,13 @@ async def test_下载时照接任务_只有载入切坐标系那一小段不接(
     for _ in range(200):
         if loading.is_set():
             break
-        await _跑(rt, broker, 1, r, c)
+        await _跑(rt, broker, 1, r, c, settle_s=0)
     assert loading.is_set()
     await rt._on_cmd(_cmd("goto", goto, "d3", c))
     await broker.drain()
     assert ears.by["cmd/ack"][-1]["reason"] == "map_switching"
     release.set()
-    await _跑(rt, broker)
+    await _跑(rt, broker, settle_s=0)
     assert rt.loaded_map == ("m", "6")
 
 
@@ -807,3 +820,20 @@ async def test_停录报错_有待打包的照样去收尾_不卡住(tmp_path):
     assert "mapping_failed" in kinds and "map_built" in kinds
     assert rec.pending is None
     await rt.close()
+
+
+async def test_慢机上换图_跑完要等后台换完才断言(台):
+    """W31 切图偶发的回归测试:下载慢一点(CI 的慢机上核哈希、拷文件就这么慢),``_跑`` 原来只跑固定的
+    约 0.2 s 墙钟,后台还没换完就断言「已经换上了」。现在等后台换完(最多 10 s)。"""
+    import time
+    broker, c, r, ears, rt, site, mk = 台
+    ref = site.add("m", "7", {"m.pgm": b"7", "home.json": b'{"x":0,"y":0,"yaw":0}'})
+    real = site.fetch
+
+    def 慢(map_id, version, name):
+        time.sleep(0.6)
+        yield from real(map_id, version, name)
+    rt.maps._fetch = 慢
+    await rt._on_cmd(_cmd("map_activate", ref, "s1", c))
+    await _跑(rt, broker)
+    assert rt.loaded_map == ("m", "7"), "后台换完了才回来"
