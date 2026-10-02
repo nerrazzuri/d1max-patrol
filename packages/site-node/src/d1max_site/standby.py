@@ -27,9 +27,11 @@
   两类 —— ``abort`` 用的也是这个 task_id)、原巡检的地图与版本跟待命点对得上、每个点都报了到
   (条数 = 点数 × 圈数)。有一样不成就不回、推 ``standby_failed``,不退回直线。半路电量返航的
   那一趟代理报的是 ``task_failed``,本来就不回。
-- **回哪一个**(W14):排程派的那一趟(``sched-`` 开头),排程条目写了 ``standby`` 就回那一个;那个点
-  这台狗没有(删了、名字写错)就退回默认的并记日志 —— 停在最后一个巡检点过夜比回默认的那一个糟。别的
-  都回默认的。
+- **回哪一个**(W14):排程派的那一趟(``sched-`` 开头),排程条目写了 ``standby`` 就回那一个 ——
+  **按派单时记在运行记录里的**(``schedule_runs.standby_name``),跑着的时候换了任务包、改了或删了那条
+  排程都不影响这一趟(W14 外审)。这台狗**没有那个名字的点**(删了、写错)就退回默认的并记日志 —— 停在
+  最后一个巡检点过夜比回默认的那一个糟;**有这个点但登记在别的地图或版本上**:不退回默认的,跟默认点
+  对不上地图时一样不回、推 ``standby_failed``(坐标不可信)。别的都回默认的。
 - ``goto`` 跑完、手动「回待命点」照旧直线 ``goto``(过渡期受 W00c6i 的监护租约约束)。遥控放租之后
   (``teleop-`` 那一趟 ``task_done``),直线的狗**不自动回**:起点是人刚开到的任意位置;人在场、
   知道狗在哪,要回就手动叫。会规划的狗照旧回。
@@ -284,23 +286,18 @@ class StandbyManager:
         return str(caps.get("path", "straight"))
 
     def _target(self, robot_id: str, after: str) -> str | None:
-        """跑完 ``after`` 那一趟之后回哪个待命点(W14):排程条目指定了、这台狗有这个点就是它,
-        不然 ``None``(默认的)。"""
+        """跑完 ``after`` 那一趟之后回哪个待命点(W14):派单时记在运行记录里的;没记(不是排程派的、
+        老记录、排程没写)或这台狗没有这个名字的点 → ``None``(默认的)。不看当前任务包(W14 外审)。"""
         if not after.startswith("sched-"):
             return None
-        rows = self.db.query("SELECT entry_id FROM schedule_runs WHERE task_id=? LIMIT 1", (after,))
-        if not rows:
-            return None
-        from d1max_site.catalog import active_bundle
-        act = active_bundle(self.db)
-        entry = next((e for e in act.schedule.entries if e.id == rows[0]["entry_id"]),
-                     None) if act is not None else None
-        name = entry.standby if entry is not None else ""
+        rows = self.db.query("SELECT entry_id, standby_name FROM schedule_runs WHERE task_id=? "
+                             "AND outcome='started' LIMIT 1", (after,))
+        name = rows[0]["standby_name"] if rows else ""
         if not name:
             return None
         if not any(p["name"] == name for p in self.list(robot_id)):
             log.warning("%s 的排程 %s 要回待命点 %s,这台狗没有这个点:回默认的", robot_id,
-                        entry.id if entry else "?", name)
+                        rows[0]["entry_id"], name)
             return None
         return name
 

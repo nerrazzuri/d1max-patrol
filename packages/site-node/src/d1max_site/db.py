@@ -293,6 +293,8 @@ _ADDED_COLUMNS = (
     ("bundles", "schema", "INTEGER NOT NULL DEFAULT 1"),
     # W00c6c 内审:这一轮的「没跑」说过没有。老库里的行当说过了(0),新记的行写 NULL。
     ("schedule_runs", "told_ms", "INTEGER DEFAULT 0"),
+    # W14 外审:这一趟跑完回哪个待命点,派单时定下(空 = 默认的);老行没有,回默认的。
+    ("schedule_runs", "standby_name", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

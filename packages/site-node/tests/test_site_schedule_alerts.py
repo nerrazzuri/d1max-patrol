@@ -475,3 +475,92 @@ async def test_W14_排程巡检被手动派单打断_说这一轮没巡完_不�
     await _拍(t, 22, 5)
     assert len(t.heard) == 1, "一轮只说一次;也不续"
     assert [x["outcome"] for x in t.sched.runs("nightly")] == ["started"]
+
+
+# ------------------------------------------------------------ W14 外审:停机期间错过的轮次逐轮补记
+
+_夜里每小时 = """\
+timezone: Asia/Kuala_Lumpur
+entries:
+  - id: hourly
+    mission: loop
+    at: "22:00"
+    every_min: 60
+    until: "02:00"
+    days: [mon, tue, wed, thu, fri, sat, sun]
+    window_min: 20
+    on_missed: {on_missed}
+"""
+
+
+def _次日(时, 分, 秒=0):
+    return 毫秒(时, 分, 秒) + 24 * 3_600_000
+
+
+async def test_W14_站点停机跨午夜四个多小时_错过的轮次逐轮入账_各报一次_重复拍不再报(站, tmp_path):
+    t = 站
+    _换排程(t, tmp_path, _夜里每小时.format(on_missed="alarm"))      # 21:59 导入
+    t.clock.ms = _次日(2, 30)                                         # 站点 21:59 之后就没拍过
+    await _拍(t)
+    got = sorted((r["scheduled_ms"], r["outcome"]) for r in t.sched.runs("hourly", limit=50))
+    want = [(毫秒(22, 0), "alarm"), (毫秒(23, 0), "alarm"), (_次日(0, 0), "alarm"),
+            (_次日(1, 0), "alarm"), (_次日(2, 0), "alarm")]
+    assert got == want, got
+    assert [o for _, _, o in _去向(t)] == ["alarm"] * 5
+    t.clock.ms = _次日(2, 31)
+    await _拍(t)
+    assert len(t.heard) == 5, "重复的拍、重启都不再说"
+    assert len(t.sched.runs("hourly", limit=50)) == 5
+
+
+async def test_W14_站点重启也不重复补记(站, tmp_path):
+    t = 站
+    _换排程(t, tmp_path, _夜里每小时.format(on_missed="alarm"))
+    t.clock.ms = _次日(2, 30)
+    await _拍(t)
+    heard = list(t.heard)
+    again = SiteScheduler(t.db, t.site, now_ms=t.clock, on_outcome=lambda *a: heard.append(a))
+    await t.send(again.tick())
+    assert len(heard) == 5
+
+
+async def test_W14_skip的错过轮次记skip_run_late只补最近一轮_老的记skip(站, tmp_path):
+    t = 站
+    _换排程(t, tmp_path, _夜里每小时.format(on_missed="skip"))
+    t.clock.ms = _次日(0, 30)
+    await _拍(t)
+    assert sorted(r["outcome"] for r in t.sched.runs("hourly", limit=50)) == ["skip"] * 3
+    _换排程(t, tmp_path, _夜里每小时.format(on_missed="run_late").replace("hourly", "late"), v=3)
+    t.clock.ms = _次日(3, 0)                                          # 00:30 导入,停到 3 点
+    await t.run(2)
+    await _拍(t)
+    got = {r["scheduled_ms"]: (r["outcome"], r["note"]) for r in t.sched.runs("late", limit=50)}
+    assert set(got) == {_次日(1, 0), _次日(2, 0)}, "导入之前的 22、23、0 点不补"
+    assert got[_次日(1, 0)][0] == "skip" and "只补最近一轮" in got[_次日(1, 0)][1]
+    assert got[_次日(2, 0)][0] == "started", "最近一轮 run_late 照补"
+
+
+async def test_W14_任务包导入之前的轮次不补_当前窗口里的照常派(站, tmp_path):
+    t = 站
+    t.clock.ms = _次日(0, 45)
+    _换排程(t, tmp_path, _夜里每小时.format(on_missed="alarm"))       # 00:45 才导入
+    t.clock.ms = _次日(1, 5)
+    await t.run(2)
+    await _拍(t)
+    runs = t.sched.runs("hourly", limit=50)
+    assert [(r["scheduled_ms"], r["outcome"]) for r in runs] == [(_次日(1, 0), "started")]
+    assert t.heard == []
+
+
+async def test_W14_跑过的轮次不补记成错过(站, tmp_path):
+    t = 站
+    _换排程(t, tmp_path, _夜里每小时.format(on_missed="alarm"))
+    t.clock.ms = 毫秒(22, 0, 30)
+    await t.run(2)
+    await _拍(t)
+    assert [r["outcome"] for r in t.sched.runs("hourly")] == ["started"]
+    t.clock.ms = 毫秒(23, 30)                                        # 站点一直没拍,23 点那一轮错过了
+    await _拍(t)
+    got = sorted((r["scheduled_ms"], r["outcome"]) for r in t.sched.runs("hourly", limit=50))
+    assert got == [(毫秒(22, 0), "started"), (毫秒(23, 0), "alarm")], got
+    assert [o for _, _, o in _去向(t)] == ["alarm"], "跑过的那一轮不说"
