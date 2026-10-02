@@ -9,6 +9,34 @@ import 'site_page_test.dart' show FakeApi;
 import 'support/fake_site.dart';
 
 void main() {
+  testWidgets('这台狗在这张图上没有原点（W13a）：说后果，确认了才照样下发', (t) async {
+    final api = FakeApi('admin')..noHome = true;
+    await t.pumpWidget(MaterialApp(home: SiteMapsPage(api: api)));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(SiteMapsPage.mapKey('estate-1', '8')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pick-A')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('activate-go')));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('map A estate-1:8'));
+    expect(find.textContaining('还没有原点'), findsWidgets);
+    await t.tap(find.text('算了'));
+    await t.pumpAndSettle();
+    expect(api.calls.where((c) => c.endsWith('without_home')), isEmpty);
+    expect(find.textContaining('没下发'), findsOneWidget);
+    await t.tap(find.byKey(SiteMapsPage.mapKey('estate-1', '8')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('pick-A')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('activate-go')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('activate-without-home')));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('map A estate-1:8 without_home'));
+    expect(find.textContaining('在下载、载入'), findsOneWidget);
+  });
+
   testWidgets('管理员点一张图、选狗、下发', (t) async {
     final api = FakeApi('admin');
     await t.pumpWidget(MaterialApp(home: SiteMapsPage(api: api)));

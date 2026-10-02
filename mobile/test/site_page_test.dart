@@ -327,9 +327,16 @@ class FakeApi implements SiteApi {
     calls.add('release $robotId $action $name');
     return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
   }
+  /// 给了就当这台狗在这张图上没有原点（W13a）：不带 withoutHome 的下发回 409 no_home。
+  bool noHome = false;
   @override
-  Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version) async {
-    calls.add('map $robotId $mapId:$version');
+  Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version,
+      {bool withoutHome = false}) async {
+    calls.add('map $robotId $mapId:$version${withoutHome ? ' without_home' : ''}');
+    if (noHome && !withoutHome) {
+      throw const SiteError(409, 'A 在 estate-1:8 上还没有原点',
+          body: <String, dynamic>{'reason': 'no_home'});
+    }
     return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
   }
   @override

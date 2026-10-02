@@ -1129,17 +1129,25 @@ class _Handler(TlsHandlerMixin):
                                          "没重新确认):先在地图页画好、确认再下发",
                                     extra={"reason": "zones_unconfirmed"})
                 kind, payload = "map_activate", ref.to_wire()
-                # 这台狗在这张图上的原点:站点登记的是权威(原点表,W13a;没标过就拿这张图上的待命点),
-                # 有就
-                # 下发、盖过图里的 home.json(W00c6f 内审应修 4);没有才按图里带的。都没有就不下发 ——
-                # 狗换了坐标系没有原点,之后派什么都过不了起飞前检查(W00c5d 内部评审)。
+                # 这台狗在这张图上的原点:站点原点表里的是权威(W13a),有就下发、盖过图里的 home.json
+                # (W00c6f 内审应修 4);没有才按图里带的。**都没有**(新建的图、新版本):默认不下发,
+                # 管理员明说 ``without_home: true`` 才发 —— 狗上没有原点,起飞前检查拒 goto、巡检,
+                # 遥控、设位置、「在这儿标原点」照常(标原点要狗先载上这张图,所以不能一律拒)。
+                # 待命点不顶替原点(W13a 外审阻断)。
                 home = self._home_on(robot_id, ref.map_id, ref.version)
+                without = d.get("without_home", False)
+                if not isinstance(without, bool):
+                    raise HttpError(400, "without_home 要是 true/false")
                 if home is not None:
                     payload["home"] = home
                 elif not any(f.name == "home.json" for f in ref.files):
-                    raise HttpError(409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上还没有"
-                                         "原点(也没有待命点):先登记一个待命点再下发这张图,"
-                                         "下发之后再在原点那儿「标原点」")
+                    if not without:
+                        raise HttpError(
+                            409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上还没有原点:下发之后狗"
+                                 "不接 goto、巡检,要先把狗开到原点(充电桩前)、设好位置、"
+                                 "「在这儿标原点」。确认要这样下发就带上 without_home",
+                            extra={"reason": "no_home"})
+                    self._audit_detail = {"without_home": True}
             elif what == "mapping":
                 action, name = parse_mapping(d)
                 if len(name) > 40:
@@ -1166,7 +1174,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, str(exc)) from exc
         except ContractError as exc:
             raise HttpError(400, str(exc)) from exc
-        self._audit_detail = {k: v for k, v in payload.items() if k != "files"}
+        self._audit_detail |= {k: v for k, v in payload.items() if k != "files"}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
 
@@ -1246,15 +1254,11 @@ class _Handler(TlsHandlerMixin):
         return self._send_json(200, info | {"standby": standby, "homes": homes, "zones": zones})
 
     def _home_on(self, robot_id: str, map_id: str, version: str) -> dict[str, float] | None:
-        """这台狗在这张图这个版本上的原点(W13a):原点表里的;没标过原点就退回到以前的做法 —— 这张图上
-        的待命点(默认的优先、再按名字),免得只登记了待命点的老流程下发不了图。"""
-        db = self.site.dispatcher.db
-        rows = db.query("SELECT x, y, yaw FROM homes WHERE robot_id=? AND map_id=? AND "
-                        "map_version=?", (robot_id, map_id, version))
-        if not rows:
-            rows = db.query(
-                "SELECT x, y, yaw FROM standby_points WHERE robot_id=? AND map_id=? AND "
-                "map_version=? ORDER BY is_default DESC, name LIMIT 1", (robot_id, map_id, version))
+        """这台狗在这张图这个版本上的原点(W13a):**只看原点表**。待命点是运营调度的点、随时会加、挪、删,
+        不能顶替安全返航的原点(外审阻断);老库的兼容只靠 schema 16 那一次迁移。"""
+        rows = self.site.dispatcher.db.query(
+            "SELECT x, y, yaw FROM homes WHERE robot_id=? AND map_id=? AND map_version=?",
+            (robot_id, map_id, version))
         return {"x": rows[0]["x"], "y": rows[0]["y"], "yaw": rows[0]["yaw"]} if rows else None
 
     def _releases(self, method: str, path: str, user) -> None:
