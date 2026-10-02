@@ -142,6 +142,8 @@ class _SiteListPageState extends State<SiteListPage> {
             key: const Key('site-password'),
             controller: pw,
             obscureText: true,
+            autofocus: true, // 桌面版（W15）：弹出来就能打字，回车就登录
+            onSubmitted: (_) => Navigator.pop(c, true),
             decoration: InputDecoration(labelText: '${s.username} 的口令')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),

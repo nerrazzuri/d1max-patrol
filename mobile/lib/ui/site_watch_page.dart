@@ -43,6 +43,10 @@ class SiteWatchPage extends StatefulWidget {
   static Key robotKey(String id) => Key('watch-robot-$id');
   static const Key loadedAtKey = Key('watch-loaded-at');
   static const Key liveLostKey = Key('watch-live-lost');
+  static const Key alertsColumnKey = Key('watch-alerts-column');
+  static const Key robotsColumnKey = Key('watch-robots-column');
+  /// 窗口宽到这么多（逻辑像素）就分两栏（W15 桌面版）。横屏手机最宽也就 900 出头。
+  static const double wideAt = 1100;
 
   @override
   State<SiteWatchPage> createState() => _SiteWatchPageState();
@@ -225,53 +229,69 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
     final p1 = _alerts.where((a) => a.level == 'P1').toList();
     final rest = _alerts.where((a) => a.level != 'P1').toList();
     final s = _summary;
+    final alerts = <Widget>[
+      if (!_live)
+        const ListTile(
+            key: SiteWatchPage.liveLostKey,
+            leading: Icon(Icons.sync_problem, color: Colors.orange),
+            title: Text('实时更新断了，正在重连；下面的数可能是旧的，下拉可以再问一次')),
+      ListTile(
+          key: SiteWatchPage.loadedAtKey,
+          dense: true,
+          title: Text(_alertsAt == null
+              ? '告警还没读到过'
+              : '告警读于 ${_hms(_alertsAt!)}；下拉可以再问一次')),
+      const ListTile(title: Text('要立刻动身的（P1）')),
+      if (_alertsError != null)
+        ListTile(
+            key: SiteWatchPage.alertsErrorKey,
+            title: Text(_alertsError!, style: const TextStyle(color: Colors.red)))
+      else if (_alertsAt == null)
+        // 还没读到过：**不许说「没有」** —— 那是这一屏能说的最坏的假话。
+        const ListTile(key: SiteWatchPage.p1LoadingKey, title: Text('还没读到'))
+      else if (p1.isEmpty)
+        const ListTile(key: SiteWatchPage.p1NoneKey, title: Text('没有'))
+      else
+        for (final a in p1) _alertTile(a),
+      if (rest.isNotEmpty) const ListTile(title: Text('其余未解决的')),
+      for (final a in rest) _alertTile(a),
+    ];
+    final robots = <Widget>[
+      const ListTile(title: Text('每台狗')),
+      if (_summaryError != null)
+        ListTile(
+            key: SiteWatchPage.summaryErrorKey,
+            title: Text(_summaryError!, style: const TextStyle(color: Colors.red)))
+      else if (s != null) ...[
+        for (final r in s.robots) _robotTile(r),
+        ListTile(
+            title: const Text('站点'),
+            subtitle: Text('${s.scheduleOk == null
+                ? '排程：${s.siteWhy['schedule_ok'] ?? '不知道'}'
+                : s.scheduleOk!
+                    ? '排程正常'
+                    : '排程没办成：${s.scheduleError}'}\n${_backupText(s)}')),
+      ],
+    ];
     return Scaffold(
       appBar: AppBar(title: const Text('值守')),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: ListView(children: [
-          if (!_live)
-            const ListTile(
-                key: SiteWatchPage.liveLostKey,
-                leading: Icon(Icons.sync_problem, color: Colors.orange),
-                title: Text('实时更新断了，正在重连；下面的数可能是旧的，下拉可以再问一次')),
-          ListTile(
-              key: SiteWatchPage.loadedAtKey,
-              dense: true,
-              title: Text(_alertsAt == null
-                  ? '告警还没读到过'
-                  : '告警读于 ${_hms(_alertsAt!)}；下拉可以再问一次')),
-          const ListTile(title: Text('要立刻动身的（P1）')),
-          if (_alertsError != null)
-            ListTile(
-                key: SiteWatchPage.alertsErrorKey,
-                title: Text(_alertsError!, style: const TextStyle(color: Colors.red)))
-          else if (_alertsAt == null)
-            // 还没读到过：**不许说「没有」** —— 那是这一屏能说的最坏的假话。
-            const ListTile(key: SiteWatchPage.p1LoadingKey, title: Text('还没读到'))
-          else if (p1.isEmpty)
-            const ListTile(key: SiteWatchPage.p1NoneKey, title: Text('没有'))
-          else
-            for (final a in p1) _alertTile(a),
-          if (rest.isNotEmpty) const ListTile(title: Text('其余未解决的')),
-          for (final a in rest) _alertTile(a),
-          const Divider(),
-          const ListTile(title: Text('每台狗')),
-          if (_summaryError != null)
-            ListTile(
-                key: SiteWatchPage.summaryErrorKey,
-                title: Text(_summaryError!, style: const TextStyle(color: Colors.red)))
-          else if (s != null) ...[
-            for (final r in s.robots) _robotTile(r),
-            ListTile(
-                title: const Text('站点'),
-                subtitle: Text('${s.scheduleOk == null
-                    ? '排程：${s.siteWhy['schedule_ok'] ?? '不知道'}'
-                    : s.scheduleOk!
-                        ? '排程正常'
-                        : '排程没办成：${s.scheduleError}'}\n${_backupText(s)}')),
-          ],
-        ]),
+      // 宽屏（桌面版、值守大屏，W15）：告警一栏、每台狗一栏并排，一眼都看得见；窄的照旧一栏往下排。
+      body: LayoutBuilder(
+        builder: (context, box) => box.maxWidth >= SiteWatchPage.wideAt
+            ? Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Expanded(
+                    child: RefreshIndicator(
+                        onRefresh: _reload,
+                        child: ListView(key: SiteWatchPage.alertsColumnKey, children: alerts))),
+                const VerticalDivider(width: 1),
+                Expanded(
+                    child: RefreshIndicator(
+                        onRefresh: _reload,
+                        child: ListView(key: SiteWatchPage.robotsColumnKey, children: robots))),
+              ])
+            : RefreshIndicator(
+                onRefresh: _reload,
+                child: ListView(children: [...alerts, const Divider(), ...robots])),
       ),
     );
   }

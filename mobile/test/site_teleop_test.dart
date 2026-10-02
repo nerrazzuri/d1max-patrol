@@ -6,7 +6,9 @@ import 'package:d1max_patrol/net/site_client.dart' show SiteError;
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_teleop.dart';
 import 'package:d1max_patrol/ui/widget/joystick.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi;
@@ -24,6 +26,73 @@ Future<void> _open(WidgetTester t, FakeApi api) async {
 bool _stickEnabled(WidgetTester t, int i) => t.widget<Joystick>(find.byType(Joystick).at(i)).enabled;
 
 void main() {
+  testWidgets('键盘（W15）：W 前进、A 左转、松开就停；没拿到遥控之前按键不动', (t) async {
+    final api = FakeApi('guard');
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);       // 还没 granted
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5,
+      'max_wz': 0.75});
+    await t.pump();
+    await t.pump();
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.every((v) => v[0] == 0 && v[1] == 0), isTrue);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], closeTo(0.5, 1e-9));
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyA);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last, <double>[0.5, 0.75], reason: '左转 = 逆时针 = wz 为正');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyA);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last, <double>[0, 0], reason: '松开就停');
+    await t.sendKeyDownEvent(LogicalKeyboardKey.arrowDown);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last, <double>[-0.5, -0.75]);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.arrowDown);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('键盘（W15）：窗口失去焦点当场归零；Esc 是停车', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], greaterThan(0));
+    FocusManager.instance.primaryFocus?.unfocus();            // 切到别的窗口
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last, <double>[0, 0], reason: '松开的事件收不到了:当场归零');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5,
+      'max_wz': 0.75});
+    await t.pump();
+    await t.pump();
+    await t.sendKeyEvent(LogicalKeyboardKey.escape);
+    await t.pump();
+    expect(api.calls, contains('halt A'));
+    expect(find.text('你按了停车'), findsOneWidget);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('桌面上才显示键盘提示', (t) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final api = FakeApi('guard');
+    await _open(t, api);
+    expect(find.byKey(SiteTeleopPage.keysKey), findsOneWidget);
+    debugDefaultTargetPlatformOverride = null;
+    await t.pumpWidget(Container());
+    final phone = FakeApi('guard');
+    await _open(t, phone);
+    expect(find.byKey(SiteTeleopPage.keysKey), findsNothing);
+    await t.pumpWidget(Container());
+  });
+
   testWidgets('按住前推每 100 ms 一帧、速度按站点给的限速；松手发零速', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);
