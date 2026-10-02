@@ -315,8 +315,10 @@ abstract class SiteApi {
   /// 站点的地图目录与建图录包（W00c5d 第二部分）：`{maps: [...], bags: [...]}`。
   Future<Map<String, dynamic>> maps();
 
-  /// 给一台狗下发一张图（狗后台下载、核对、载入，完了发事件）。
-  Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version);
+  /// 给一台狗下发一张图（狗后台下载、核对、载入，完了发事件）。[withoutHome]：这台狗在这张图上还没有
+  /// 原点，管理员明说照样下发（W13a：下发之后狗不接 goto、巡检，要先「在这儿标原点」）。
+  Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version,
+      {bool withoutHome = false});
 
   /// 录包：[action] 是 start（要 [name]）/ stop。
   /// 录包开始、停止（W00c5d）；开始时带地图号与版本 = 录包的同时在线建这一版（W09c2 边走边建）。
@@ -742,9 +744,13 @@ class SiteClient implements SiteApi {
   }
 
   @override
-  Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version) async =>
-      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/map',
-          <String, dynamic>{'map_id': mapId, 'version': version}));
+  Future<Map<String, dynamic>> activateMap(String robotId, String mapId, String version,
+          {bool withoutHome = false}) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/map', <String, dynamic>{
+        'map_id': mapId,
+        'version': version,
+        if (withoutHome) 'without_home': true,
+      }));
 
   @override
   Future<Map<String, dynamic>> mapping(String robotId, String action,

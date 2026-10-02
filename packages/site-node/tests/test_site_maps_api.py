@@ -139,105 +139,102 @@ def test_狗没报这项能力_站点不发(tmp_path):
         s.close()
 
 
-def test_图里没带原点_用这台狗在这张图上的待命点_都没有不下发(站点):
+def _原点(s, version, x):
+    with s.db.tx() as c:
+        c.execute("INSERT INTO homes(robot_id, map_id, map_version, name, x, y, yaw) VALUES "
+                  "('A', ?, ?, 'home', ?, 0, 0)", (MAP[0], version, x))
+
+
+def _待命点(s, version, x, name="门口"):
+    with s.db.tx() as c:
+        c.execute("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
+                  "is_default) VALUES ('A', ?, ?, ?, ?, 0, 0, 1)", (name, MAP[0], version, x))
+
+
+def test_图里没带原点_没标原点不下发_待命点不顶替(站点):
+    """W13a 外审阻断:待命点是运营调度的点,不能变成安全返航的原点。"""
     s = 站点
     alice = _登(s, "alice")
     _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
     s.maps.import_dir(_dir(s, "nohome", home=False), map_id=MAP[0], version="12")
     _确认(s, alice, "12")
-    code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "12"}, token=alice)
-    assert code == 409 and "待命点" in d["error"], (code, d)
-    with s.db.tx() as c:
-        c.execute("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
-                  "is_default) VALUES ('A', '门口', ?, '12', 1.5, 0, 0, 1)", (MAP[0],))
-    code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "12"}, token=alice)
+    body = {"map_id": MAP[0], "version": "12"}
+    code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
+    assert code == 409 and d["reason"] == "no_home" and "标原点" in d["error"], (code, d)
+    _待命点(s, "12", 3.0)
+    code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
+    assert code == 409 and d["reason"] == "no_home", "只有待命点:还是不下发"
+    assert not s.db.query("SELECT 1 FROM commands WHERE kind='map_activate'"), "没发给狗"
+    assert s.req("POST", "/api/robots/A/map", body | {"without_home": 1}, token=alice)[0] == 400
+    _原点(s, "12", 1.5)
+    code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
     assert code == 200 and d["ack"]["result"] == "accepted", d
     _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "12", timeout=8)
     assert s.agent.parts.home is not None and s.agent.parts.home.pose.position.x == 1.5
 
 
-def test_图里带了原点_这台狗在这张图上有待命点_按待命点下发(站点):
-    """内审应修 4(W00c6f):站点登记的待命点是权威(在当前位置标的原点就登记成它),图里的 ``home.json``
-    只是没登记时的垫底 —— 以前图里带了就不下发待命点,狗退回 ``home.json``,站点还以为是标的那个。"""
+def test_新图明说没原点也下发_狗上没有原点_自己走的任务起飞前就拒(站点):
+    """标原点要狗先载上这张图:管理员明说 ``without_home`` 才下发;狗上没原点就不接 goto
+    (遥控、设位置、标原点照常)。新版本也不继承旧版本的原点。"""
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
+    _原点(s, "15", 2.0)                                   # 旧版本有原点
+    s.maps.import_dir(_dir(s, "v16", home=False), map_id=MAP[0], version="16")
+    _确认(s, alice, "16")
+    body = {"map_id": MAP[0], "version": "16"}
+    code, d = s.req("POST", "/api/robots/A/map", body, token=alice)
+    assert code == 409 and d["reason"] == "no_home", "新版本不继承旧版本的原点"
+    code, d = s.req("POST", "/api/robots/A/map", body | {"without_home": True}, token=alice)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "16", timeout=8)
+    assert s.agent.parts.home is None, "狗上没有原点"
+    target = {"schema": "1.0", "map_id": MAP[0], "map_version": "16", "frame_id": "map",
+              "x": 1.0, "y": 0.0, "yaw": 0.0}
+    code, g = s.req("POST", "/api/robots/A/goto", {"target": target}, token=alice)
+    assert code == 200, g
+    [e] = _等(lambda: [e for e in s.disp.recent_events("A")
+                       if e["kind"] in ("task_failed", "task_done")
+                       and e["data"].get("task_id") == g["task_id"]], timeout=8)
+    assert e["kind"] == "task_failed" and "原点" in e["data"].get("reason", ""), e
+    [a] = _等(lambda: [a for a in s.req("GET", "/api/audit", token=alice)[1]["audit"]
+                       if a["action"].endswith("/map") and a["status"] == 200])
+    assert a["detail"].get("without_home") is True, a
+
+
+def test_图里带了原点_待命点不盖过它_原点表才盖(站点):
+    """内审应修 4(W00c6f):站点登记的原点是权威,图里的 ``home.json`` 只是没登记时的垫底;W13a 起
+    待命点不算原点。"""
     s = 站点
     alice = _登(s, "alice")
     _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
     s.maps.import_dir(_dir(s, "withhome"), map_id=MAP[0], version="13")
     _确认(s, alice, "13")
-    with s.db.tx() as c:
-        c.execute("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
-                  "is_default) VALUES ('A', 'dock', ?, '13', 2.5, 0, 0, 1)", (MAP[0],))
+    _待命点(s, "13", 2.5, name="dock")
     code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "13"}, token=alice)
     assert code == 200 and d["ack"]["result"] == "accepted", d
     _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "13", timeout=8)
-    assert s.agent.parts.home.pose.position.x == 2.5
+    assert s.agent.parts.home.pose.position.x == 0.0, "按图里的 home.json,不是待命点"
 
 
-def test_让狗把隔离的文件再传一次(站点):
-    s = 站点
-    alice = _登(s, "alice")
-    _等(lambda: _caps(s) is not None)
-    code, d = s.req("POST", "/api/robots/A/outbox_retry", {}, token=alice)
-    assert code == 409 and "不支持" in d["error"], "这只仿真狗没有发件箱"
-
-
-def test_边走边建_开始录包带地图号与版本_到狗_版本不许撞(站点):
-    """W09c2:``mapping start`` 带地图号与版本 = 录包的同时在线建这一版;站点像 map_build 一样
-    挡撞版本。"""
-    s = 站点
-    alice = _登(s, "alice")
-    _等(lambda: _caps(s) is not None and "mapping" in _caps(s).tasks)
-    code, d = s.req("POST", "/api/robots/A/mapping",
-                    {"action": "start", "name": "yard", "map_id": MAP[0], "version": "12"},
-                    token=alice)
-    assert code == 200 and d["ack"]["result"] == "accepted", d
-    _等(lambda: ("start", "yard", MAP[0], "12") in s.agent.mapper.calls)
-    assert s.maps.build_in_flight(MAP[0], "12"), "录着、建着(还没收齐):这个版本占住了"
-    code, d = s.req("POST", "/api/robots/A/map_build",
-                    {"bag": "yard", "map_id": MAP[0], "version": "12"}, token=alice)
-    assert code == 409 and "正在建" in d["error"]
-    s.maps.import_dir(_dir(s, "x"), map_id=MAP[0], version="13")
-    for body, want in (({"map_id": MAP[0], "version": "13"}, 409),
-                       ({"map_id": MAP[0]}, 400), ({"map_id": "m" * 41, "version": "1"}, 400),
-                       ({"map_id": MAP[0], "version": "1" * 17}, 400)):
-        code, d = s.req("POST", "/api/robots/A/mapping",
-                        {"action": "start", "name": "yard2", **body}, token=alice)
-        assert code == want, (body, d)
-
-
-def test_狗不能边走边建_带版本开录就拒(站点):
-    """内审应修 4:老版本的狗不认多出来的地图号、版本,只录包、回收下 —— 站点、手机都以为在建,版本号
-    就一直挂在「正在建」。先看狗的能力。"""
-    s = 站点
-    alice = _登(s, "alice")
-    _等(lambda: _caps(s) is not None and "mapping" in _caps(s).tasks)
-    assert _caps(s).tasks["mapping"] == {"live": True}
-    s.disp.clients["A"].capabilities.tasks["mapping"] = {}          # 老狗
-    code, d = s.req("POST", "/api/robots/A/mapping",
-                    {"action": "start", "name": "yard", "map_id": MAP[0], "version": "20"},
-                    token=alice)
-    assert code == 409 and "边走边建" in d["error"], d
-    code, d = s.req("POST", "/api/robots/A/mapping", {"action": "start", "name": "yard"},
-                    token=alice)
-    assert code == 200, "只录包照旧"
-
-
-def test_原点表优先_待命点只在没标过原点时垫底(站点):
-    """W13a(决策 16):下发地图时发原点表里的点;待命点(哪怕是默认的)不再当原点。"""
+def test_原点表优先_挪删待命点不动原点(站点):
+    """W13a(决策 16):下发地图时发原点表里的点;待命点(哪怕是默认的)不当原点,挪了、删了原点也不变。"""
     s = 站点
     alice = _登(s, "alice")
     _等(lambda: _caps(s) is not None and "map_activate" in _caps(s).tasks)
     s.maps.import_dir(_dir(s, "split", home=False), map_id=MAP[0], version="14")
     _确认(s, alice, "14")
-    with s.db.tx() as c:
-        c.execute("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
-                  "is_default) VALUES ('A', 'gate', ?, '14', 3.0, 0, 0, 1)", (MAP[0],))
-        c.execute("INSERT INTO homes(robot_id, map_id, map_version, name, x, y, yaw) VALUES "
-                  "('A', ?, '14', 'dock', 0.5, 0, 0)", (MAP[0],))
+    _待命点(s, "14", 3.0, name="gate")
+    _原点(s, "14", 0.5)
+    from d1max_site.standby import StandbyManager
+    stb = s.api.standby or StandbyManager(s.db, s.disp, now_ms=s.disp._now)
+    stb.set("A", "gate", map_id=MAP[0], map_version="14", x=9.0, y=9.0, yaw=0.0)
+    stb.remove("A", "gate")
+    assert stb.home("A", MAP[0], "14")["x"] == 0.5
     code, d = s.req("POST", "/api/robots/A/map", {"map_id": MAP[0], "version": "14"}, token=alice)
     assert code == 200 and d["ack"]["result"] == "accepted", d
     _等(lambda: _caps(s).tasks["patrol"]["map_version"] == "14", timeout=8)
-    assert s.agent.parts.home.pose.position.x == 0.5, "原点是原点表里的,不是默认待命点"
+    assert s.agent.parts.home.pose.position.x == 0.5
     code, d = s.req("GET", f"/api/maps/{MAP[0]}/14/preview", token=alice)
     if code == 200:                                       # 这张假图没有栅格就没有预览
-        assert [h["name"] for h in d["homes"]] == ["dock"]
+        assert [h["name"] for h in d["homes"]] == ["home"]

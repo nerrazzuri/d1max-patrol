@@ -88,7 +88,34 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
     );
     if (ok != true) return;
     try {
-      final r = await widget.api.activateMap(robot, '${m['map_id']}', '${m['version']}');
+      Map<String, dynamic> r;
+      try {
+        r = await widget.api.activateMap(robot, '${m['map_id']}', '${m['version']}');
+      } on SiteError catch (e) {
+        // W13a：这台狗在这张图上还没有原点。说清楚后果，管理员确认了才照样下发（标原点要狗先载上这张图）。
+        if (e.status != 409 || e.body['reason'] != 'no_home' || !mounted) rethrow;
+        final go = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: Text('$robot 在 $label 上还没有原点'),
+            content: const Text('照样下发的话，狗载上这张图之后不接 goto、巡检（没有原点就没有安全返航的目标）；'
+                '遥控、设位置照常。要先把狗开到原点（充电桩前），设好位置，再点「在这儿标原点」。'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+              FilledButton(
+                  key: const Key('activate-without-home'),
+                  onPressed: () => Navigator.pop(c, true),
+                  child: const Text('照样下发')),
+            ],
+          ),
+        );
+        if (go != true) {
+          _snack('没下发：$robot 在 $label 上还没有原点');
+          return;
+        }
+        r = await widget.api.activateMap(robot, '${m['map_id']}', '${m['version']}',
+            withoutHome: true);
+      }
       _snack(_ackText(r, '$robot 在下载、载入 $label，好了它报的地图版本会变'));
     } on SiteError catch (e) {
       _snack('下发没成：$e');
