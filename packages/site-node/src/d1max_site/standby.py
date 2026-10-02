@@ -27,6 +27,9 @@
   两类 —— ``abort`` 用的也是这个 task_id)、原巡检的地图与版本跟待命点对得上、每个点都报了到
   (条数 = 点数 × 圈数)。有一样不成就不回、推 ``standby_failed``,不退回直线。半路电量返航的
   那一趟代理报的是 ``task_failed``,本来就不回。
+- **回哪一个**(W14):排程派的那一趟(``sched-`` 开头),排程条目写了 ``standby`` 就回那一个;那个点
+  这台狗没有(删了、名字写错)就退回默认的并记日志 —— 停在最后一个巡检点过夜比回默认的那一个糟。别的
+  都回默认的。
 - ``goto`` 跑完、手动「回待命点」照旧直线 ``goto``(过渡期受 W00c6i 的监护租约约束)。遥控放租之后
   (``teleop-`` 那一趟 ``task_done``),直线的狗**不自动回**:起点是人刚开到的任意位置;人在场、
   知道狗在哪,要回就手动叫。会规划的狗照旧回。
@@ -280,7 +283,29 @@ class StandbyManager:
         caps = c.capabilities.tasks.get("goto", {}) if c and c.capabilities else {}
         return str(caps.get("path", "straight"))
 
-    def _route_back(self, robot_id: str, task_id: str) -> Mission | None:
+    def _target(self, robot_id: str, after: str) -> str | None:
+        """跑完 ``after`` 那一趟之后回哪个待命点(W14):排程条目指定了、这台狗有这个点就是它,
+        不然 ``None``(默认的)。"""
+        if not after.startswith("sched-"):
+            return None
+        rows = self.db.query("SELECT entry_id FROM schedule_runs WHERE task_id=? LIMIT 1", (after,))
+        if not rows:
+            return None
+        from d1max_site.catalog import active_bundle
+        act = active_bundle(self.db)
+        entry = next((e for e in act.schedule.entries if e.id == rows[0]["entry_id"]),
+                     None) if act is not None else None
+        name = entry.standby if entry is not None else ""
+        if not name:
+            return None
+        if not any(p["name"] == name for p in self.list(robot_id)):
+            log.warning("%s 的排程 %s 要回待命点 %s,这台狗没有这个点:回默认的", robot_id,
+                        entry.id if entry else "?", name)
+            return None
+        return name
+
+    def _route_back(self, robot_id: str, task_id: str,
+                    name: str | None = None) -> Mission | None:
         """跑完的那一趟要不要沿来路回、来路是什么。``None`` = 照旧直线 ``goto``(狗会规划,或者跑完的
         是 ``goto``)。直线的狗、却不能确定狗停在最后一个巡检点 → 抛 ``StandbyError``(不回,不退回
         直线),见模块说明。"""
@@ -299,7 +324,7 @@ class StandbyManager:
             version = payload.get("map_version")
         except (ValueError, KeyError, TypeError, MissionError, ContractError) as exc:
             raise StandbyError(f"直线的狗要沿来路回待命点,取不到 {task_id} 的来路: {exc}") from exc
-        p = self._checked_default(robot_id)
+        p = self._checked_default(robot_id, name)
         if (m.map_id, version) != (p["map_id"], p["map_version"]):
             raise StandbyError(f"{task_id} 跑在 {m.map_id}:{version},待命点 {p['name']} 登记在 "
                                f"{p['map_id']}:{p['map_version']}(地图或版本对不上,来路坐标不可信)")
@@ -315,10 +340,11 @@ class StandbyManager:
                              "json_extract(data, '$.ok')=1", (robot_id, task_id))
         return int(rows[0]["n"])
 
-    async def _return_along(self, robot_id: str, came: Mission) -> dict[str, Any]:
+    async def _return_along(self, robot_id: str, came: Mission,
+                            name: str | None = None) -> dict[str, Any]:
         """回程巡检:来路倒序(只要位姿)+ 待命点;继承原任务的 policy,只改失败处置、圈数、电量处置。"""
         from d1max_site.dispatcher import MAX_PATROL_WAYPOINTS
-        p = self._checked_default(robot_id)
+        p = self._checked_default(robot_id, name)
         if len(came.waypoints) + 1 > MAX_PATROL_WAYPOINTS:
             raise StandbyError(f"来路 {len(came.waypoints)} 个航点,回程放不下")
         home = Pose.from_xy_yaw(p["x"], p["y"], p["yaw"])
@@ -362,12 +388,13 @@ class StandbyManager:
         """派回程;碰上**暂时性**的拒绝限时再试(W09h 内审再议 1):代理重连时先补事件、后发状态,
         补上来的「任务完成」触发回程时,站点还没估出钟差(重连后要攒十来条遥测)、状态还不新鲜 ——
         原来只试一次、推一条 ``standby_failed``,狗就停在最后一个巡检点。"""
+        name = self._target(robot_id, after)
         for attempt in range(STANDBY_TRANSIENT_RETRIES + 1):
             try:
-                came = self._route_back(robot_id, after)
+                came = self._route_back(robot_id, after, name)
                 if came is None:
-                    return await self.return_to(robot_id, issued_by="standby:auto")
-                return await self._return_along(robot_id, came)
+                    return await self.return_to(robot_id, issued_by="standby:auto", name=name)
+                return await self._return_along(robot_id, came, name)
             except DispatchRefused as exc:
                 if attempt < STANDBY_TRANSIENT_RETRIES and any(
                         k in str(exc) for k in _TRANSIENT_REFUSALS):

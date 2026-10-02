@@ -33,6 +33,8 @@ ON_MISSED: frozenset[str] = frozenset({"skip", "run_late", "alarm"})
 
 #: 迟到窗口的上界:一整天。比这还长等于「永远不算迟到」。
 MAX_WINDOW_MIN = 24 * 60
+#: 重复(W14,夜间加密)的间隔范围(分钟):最密 10 分钟一趟(一趟巡检本来就要好几分钟),最疏 12 小时。
+MIN_EVERY_MIN, MAX_EVERY_MIN = 10, 12 * 60
 
 _AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -65,6 +67,24 @@ class ScheduleEntry:
     #: 指定哪台狗跑(W00c2a,站点执行排程时用)。空 = 站点挑一台能派的;站点有不止一台能派的
     #: 狗而这里没写,站点不替人挑,按 ``alarm`` 记账。狗上的老执行器不看它。
     robot: str = ""
+    #: 重复(W14,夜间加密):``every_min`` > 0 时,从 ``at`` 起每隔这么多分钟一轮,到 ``until`` 为止
+    #: (含;``until`` 早于 ``at`` 就是跨过午夜到第二天)。每一轮各算各的窗口、各记各的账;
+    #: ``days`` 看的是第一轮那一天。0 = 一天一轮(只在 ``at``)。
+    every_min: int = 0
+    until_h: int = 0
+    until_m: int = 0
+    #: 这条排程的巡检正常跑完之后回哪个待命点(W14);空 = 回默认的。
+    standby: str = ""
+
+    def offsets_min(self) -> tuple[int, ...]:
+        """每一轮离第一轮那一天零点多少分钟(可能 ≥ 1440:跨过午夜的那几轮)。"""
+        start = self.at_h * 60 + self.at_m
+        if self.every_min <= 0:
+            return (start,)
+        end = self.until_h * 60 + self.until_m
+        if end < start:
+            end += 24 * 60
+        return tuple(range(start, end + 1, self.every_min))
 
     def to_wire(self) -> dict[str, Any]:
         out = {
@@ -80,6 +100,11 @@ class ScheduleEntry:
         }
         if self.robot:
             out["robot"] = self.robot
+        if self.every_min:
+            out["every_min"] = self.every_min
+            out["until"] = f"{self.until_h:02d}:{self.until_m:02d}"
+        if self.standby:
+            out["standby"] = self.standby
         return out
 
 
@@ -147,6 +172,31 @@ def _parse_entry(raw: Any, index: int) -> ScheduleEntry:
     _require(isinstance(robot, str),
              f"{where}(id={ident}) 的 robot 要是字符串,实际为 {robot!r}")
 
+    every = raw.get("every_min", 0)
+    until = raw.get("until")
+    until_hm = (0, 0)
+    if every != 0 or until is not None:
+        _require(_是整数(every) and MIN_EVERY_MIN <= every <= MAX_EVERY_MIN,
+                 f"{where}(id={ident}) 的 every_min 要是 {MIN_EVERY_MIN}..{MAX_EVERY_MIN} 的整数,"
+                 f"实际为 {every!r}")
+        um = _AT_RE.match(until) if isinstance(until, str) else None
+        _require(um is not None,
+                 f"{where}(id={ident}) 写了 every_min 就要写 until(HH:MM,到几点为止),"
+                 f"实际为 {until!r}")
+        assert um is not None
+        until_hm = (int(um.group(1)), int(um.group(2)))
+        _require(until_hm != (int(m.group(1)), int(m.group(2))),
+                 f"{where}(id={ident}) 的 until 跟 at 一样:那就只有一轮,别写 every_min")
+        # 窗口不小于间隔的话,上一轮还在窗口里下一轮就到了:同一时刻两轮都「到点」,迟了的那一轮
+        # 的告警会被新的一轮盖掉、永远不响。
+        _require(window < every,
+                 f"{where}(id={ident}) 的 window_min({window})要小于 every_min({every})"
+                 f" —— 不然上一轮还没过窗口下一轮就到了")
+
+    standby = raw.get("standby", "")
+    _require(isinstance(standby, str),
+             f"{where}(id={ident}) 的 standby 要是字符串,实际为 {standby!r}")
+
     return ScheduleEntry(
         id=ident,                                   # type: ignore[arg-type]
         mission=mission,                            # type: ignore[arg-type]
@@ -156,6 +206,9 @@ def _parse_entry(raw: Any, index: int) -> ScheduleEntry:
         on_missed=on_missed,                        # type: ignore[arg-type]
         priority=priority,                          # type: ignore[arg-type]
         robot=robot,
+        every_min=every,                            # type: ignore[arg-type]
+        until_h=until_hm[0], until_m=until_hm[1],
+        standby=standby,
     )
 
 
@@ -223,16 +276,21 @@ class Decision:
 _NOT_YET = Decision(DecisionKind.NOT_YET, None, None, 0)
 
 
-def _occurrence(entry: ScheduleEntry, day: date, tz: Any) -> datetime | None:
-    """``day`` 那天这条排程的那一刻。那天不在 ``days`` 里就回 ``None``。
+def _occurrences(entry: ScheduleEntry, day: date, tz: Any) -> list[datetime]:
+    """``day`` 那天起头的这条排程的每一轮(一天一轮的就一个;W14 重复的从 ``at`` 到 ``until``)。
+    那天不在 ``days`` 里就是空的。
 
-    **查的是 ``day`` 自己的星期几**,不是「今天」的 —— 跨午夜的那一轮属于
-    昨天(见 ``decide`` 的注释)。
+    **查的是 ``day`` 自己的星期几**,不是「今天」的 —— 跨午夜的那几轮属于
+    昨天(见 ``decide`` 的注释)。按墙上时间加:夏令时那一夜可能少一轮或差一小时(马来西亚没有夏令时)。
     """
     if DAYS[day.weekday()] not in entry.days:
-        return None
-    return datetime(day.year, day.month, day.day,
-                    entry.at_h, entry.at_m, tzinfo=tz)
+        return []
+    base = datetime(day.year, day.month, day.day, tzinfo=tz)
+    out = []
+    for off in entry.offsets_min():
+        d = base + timedelta(days=off // 1440)
+        out.append(datetime(d.year, d.month, d.day, (off % 1440) // 60, off % 60, tzinfo=tz))
+    return out
 
 
 def decide(entry: ScheduleEntry, *, now: datetime,
@@ -256,10 +314,9 @@ def decide(entry: ScheduleEntry, *, now: datetime,
     # 只有这条排程自己的窗口会跨过午夜时,才去看昨天那一轮 —— 否则一条
     # 22:00 + 45 分钟窗口的排程,会在第二天一整天里都被昨天那个早就该
     # 放弃的窗口占着,答出 SKIP/LATE/ALARM 而不是 NOT_YET。
-    跨午夜 = entry.at_h * 60 + entry.at_m + entry.window_min >= 24 * 60
+    跨午夜 = entry.offsets_min()[-1] + entry.window_min >= 24 * 60
     候选日 = (today, today - timedelta(days=1)) if 跨午夜 else (today,)
-    候选 = [c for c in (_occurrence(entry, d, now.tzinfo) for d in 候选日)
-           if c is not None and c <= now]
+    候选 = [c for d in 候选日 for c in _occurrences(entry, d, now.tzinfo) if c <= now]
     if not 候选:
         return _NOT_YET
     这一轮 = max(候选)
@@ -379,8 +436,9 @@ def next_run(entry: ScheduleEntry, *, now: datetime) -> datetime | None:
     """
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("next_run() 的 now 必须带时区")
-    for 往后 in range(_NEXT_RUN_HORIZON_DAYS):
-        那天 = _occurrence(entry, now.date() + timedelta(days=往后), now.tzinfo)
-        if 那天 is not None and 那天 >= now:
-            return 那天
+    # 从昨天看起:昨天起头、跨过午夜的那几轮可能还在后头(W14 重复)
+    for 往后 in range(-1, _NEXT_RUN_HORIZON_DAYS):
+        for 那一轮 in _occurrences(entry, now.date() + timedelta(days=往后), now.tzinfo):
+            if 那一轮 >= now:
+                return 那一轮
     return None

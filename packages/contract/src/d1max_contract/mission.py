@@ -42,6 +42,11 @@ ON_CONTROL_LOST = frozenset({"pause", "abort"})
 #: 电量到返航线之后怎么办(W00c6b 内审)。``return_home`` 掉头回家;``continue`` 接着往前走 ——
 #: 这一趟本身就是回家的路(站点在巡检之后派的回程巡检),掉头是往远端走。低于中止线两种都原地停。
 ON_BATTERY_LOW = frozenset({"return_home", "continue"})
+#: 巡检点的顺序(W14):``fixed`` 照写的顺序;``shuffle`` 每一趟站点派之前打乱
+#: (随机路线,让人摸不准规律)。
+#: **打乱归站点**:狗收到的永远是一个固定顺序的任务(老代理不受影响)。走直线的狗(``goto.path``
+#: 是 ``straight``)站点不打乱 —— 打乱之后点与点之间的直线没人走过,可能穿墙。
+ORDERS = frozenset({"fixed", "shuffle"})
 
 #: 点位名里绝对不能出现的东西 —— 它会成为照片文件名的一部分。
 _NAME_FORBIDDEN = ("/", "\\", "..", "\x00")
@@ -133,6 +138,8 @@ class Policy:
     retention_days: int = 90
     #: 电量到返航线之后怎么办,见 ``ON_BATTERY_LOW``。
     on_battery_low: str = "return_home"
+    #: 巡检点的顺序,见 ``ORDERS``(W14)。
+    order: str = "fixed"
 
     def to_wire(self) -> dict[str, Any]:
         out = {
@@ -149,6 +156,8 @@ class Policy:
         # 默认值不写:线格式对老夹具、老任务文件不变;老代理不认识也不会拒(未知字段不看)。
         if self.on_battery_low != "return_home":
             out["on_battery_low"] = self.on_battery_low
+        if self.order != "fixed":
+            out["order"] = self.order
         return out
 
 
@@ -276,7 +285,8 @@ def _parse_policy(raw: Any) -> Policy:
         got["on_waypoint_failed"] = value
     for key, allowed in (("on_loc_lost", ON_LOC_LOST),
                          ("on_control_lost", ON_CONTROL_LOST),
-                         ("on_battery_low", ON_BATTERY_LOW)):
+                         ("on_battery_low", ON_BATTERY_LOW),
+                         ("order", ORDERS)):
         if key in raw:
             value = raw[key]
             # 词表在这里卡死,而不是等到出事那一刻在安全规则表里才发现不认识

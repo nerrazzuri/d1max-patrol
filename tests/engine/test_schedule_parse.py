@@ -233,3 +233,16 @@ def test_排程条目可以指定狗_不写时线格式不变():
         parse_schedule({"timezone": "UTC", "entries": [
             {"id": "c", "mission": "m", "at": "01:00", "days": ["mon"], "window_min": 5,
              "on_missed": "skip", "robot": 7}]})
+
+
+def test_W14_任务的巡检点顺序_固定或打乱():
+    from d1max_contract.mission import MissionError, parse_mission
+    base = {"mission": "m", "map_id": "x", "waypoints": [
+        {"name": "a", "pose": {"position": {"x": 0, "y": 0},
+                                "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}}]}
+    assert parse_mission(base).policy.order == "fixed"
+    m = parse_mission(base | {"policy": {"order": "shuffle"}})
+    assert m.policy.order == "shuffle" and m.to_wire()["policy"]["order"] == "shuffle"
+    assert "order" not in parse_mission(base).to_wire()["policy"], "默认值不写,线格式不变"
+    with pytest.raises(MissionError):
+        parse_mission(base | {"policy": {"order": "random"}})

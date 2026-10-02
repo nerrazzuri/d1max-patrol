@@ -12,10 +12,11 @@ import asyncio
 import json
 import logging
 import queue
+import random
 import threading
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from d1max_contract.dispatch import DispatchClient, DispatchTimeout
@@ -154,6 +155,8 @@ class Dispatcher:
         self.registry = registry
         self.site_id = registry.site_id
         self._now = now_ms
+        #: 随机路线(W14)打乱巡检点用的;测试换成定了种子的。
+        self.rng: random.Random = random.SystemRandom()
         self.stale_ms = stale_ms
         self.ack_timeout_s = ack_timeout_s
         self.clients: dict[str, DispatchClient] = {}
@@ -581,6 +584,17 @@ class Dispatcher:
         if len(m.waypoints) > MAX_PATROL_WAYPOINTS:
             raise DispatchRefused(f"一趟最多 {MAX_PATROL_WAYPOINTS} 个航点,这趟 "
                                   f"{len(m.waypoints)} 个")
+        if m.policy.order == "shuffle":
+            # 随机路线(W14):站点打乱,狗收到的是一个固定顺序的任务(老代理不受影响)。
+            # 走直线的狗不打乱 ——
+            # 打乱之后点与点之间的直线没人走过,可能穿墙;照原来的顺序跑。
+            gcaps = c.capabilities.tasks.get("goto", {}) if c.capabilities is not None else {}
+            wps = list(m.waypoints)
+            if str(gcaps.get("path", "straight")) == "planned":
+                self.rng.shuffle(wps)
+            else:
+                log.info("%s 走直线:随机路线照原来的顺序跑", robot_id)
+            m = replace(m, waypoints=tuple(wps), policy=replace(m.policy, order="fixed"))
         await self._check_reach(m.map_id, loaded[1],
                                 [(w.name, w.pose.position.x, w.pose.position.y)
                                  for w in m.waypoints])

@@ -461,3 +461,108 @@ async def test_钟差一直不知道_试够了才推standby_failed(站):
     assert len(waits) == STANDBY_TRANSIENT_RETRIES
     failed = [i for i in _feed(sub) if i["kind"] == "standby_failed"]
     assert len(failed) == 1 and "钟差还不知道" in failed[0]["reason"]
+
+
+# ------------------------------------------------------------ W14
+
+
+def _带待命点的排程(standby):
+    return f"""\
+timezone: Asia/Kuala_Lumpur
+entries:
+  - id: nightly
+    mission: loop
+    at: "22:00"
+    days: [mon, tue, wed, thu, fri, sat, sun]
+    window_min: 30
+    on_missed: skip
+    standby: {standby}
+"""
+
+
+@pytest.mark.parametrize("path", ["straight", "planned"])
+async def test_W14_排程写了回哪个待命点_跑完回那一个(站, tmp_path, path):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.stb.set("A", "gate", map_id="estate-1", map_version="7", x=0.3, y=0.6, yaw=0.0)
+    t.site.clients["A"].capabilities.tasks["goto"]["path"] = path
+    import_bundle(t.db, 打包(tmp_path, 1, schedule=_带待命点的排程("gate")), imported_by="alice",
+                  now_ms=t.clock())
+    s = SiteScheduler(t.db, t.site, now_ms=t.clock)
+    t.clock.ms = 毫秒(22, 0, 30)
+    await t.run(2)
+    await t.send(s.tick())
+    await t.run(400)
+    back = [c for c in _cmds(t) if c["task_id"].startswith("standby-")]
+    assert len(back) == 1, _cmds(t)
+    if path == "planned":
+        assert (back[0]["payload"]["target"]["x"], back[0]["payload"]["target"]["y"]) == (0.3, 0.6)
+    else:
+        last = back[0]["payload"]["mission"]["waypoints"][-1]
+        assert last["name"] == "待命点·gate"
+
+
+async def test_W14_排程写的待命点这台狗没有_回默认的(站, tmp_path):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.site.clients["A"].capabilities.tasks["goto"]["path"] = "planned"
+    import_bundle(t.db, 打包(tmp_path, 1, schedule=_带待命点的排程("nope")), imported_by="alice",
+                  now_ms=t.clock())
+    s = SiteScheduler(t.db, t.site, now_ms=t.clock)
+    t.clock.ms = 毫秒(22, 0, 30)
+    await t.run(2)
+    await t.send(s.tick())
+    await t.run(400)
+    [back] = [c for c in _cmds(t, "goto") if c["task_id"].startswith("standby-")]
+    assert (back["payload"]["target"]["x"], back["payload"]["target"]["y"]) == (0.0, 0.0)
+
+
+async def test_W14_手动派的巡检照旧回默认的(站):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.stb.set("A", "gate", map_id="estate-1", map_version="7", x=0.3, y=0.6, yaw=0.0)
+    t.site.clients["A"].capabilities.tasks["goto"]["path"] = "planned"
+    await t.send(t.site.patrol("A", _巡检, issued_by="alice", priority=MANUAL))
+    await t.run(400)
+    [back] = _cmds(t, "goto")
+    assert (back["payload"]["target"]["x"], back["payload"]["target"]["y"]) == (0.0, 0.0)
+
+
+# ------------------------------------------------------------ W14 随机路线
+
+
+def _乱序巡检(n=6):
+    return {"mission": "R", "map_id": "estate-1", "policy": {"order": "shuffle"},
+            "waypoints": [{"name": f"p{i}", "pose": _pose(0.2 * i, 0.0)} for i in range(n)]}
+
+
+async def test_W14_随机路线_会规划的狗打乱_狗收到的是固定顺序(站):
+    import random
+    t = 站
+    t.site.clients["A"].capabilities.tasks["goto"]["path"] = "planned"
+    t.site.rng = random.Random(7)
+    orders = set()
+    for _ in range(3):
+        r = await t.send(t.site.patrol("A", _乱序巡检(), issued_by="alice", priority=MANUAL))
+        assert r["ack"]["result"] in ("accepted", "rejected"), r
+        m = _cmds(t, "patrol")[-1]["payload"]["mission"]
+        assert sorted(w["name"] for w in m["waypoints"]) == [f"p{i}" for i in range(6)]
+        assert "order" not in m["policy"], "狗收到的是固定顺序(老代理不受影响)"
+        orders.add(tuple(w["name"] for w in m["waypoints"]))
+        await t.run(20)
+        cur = t.site.busy("A")
+        if cur:
+            await t.send(t.site.abort("A", cur, issued_by="alice"))
+            await t.run(40)
+    assert len(orders) > 1, "每一趟打乱一次"
+
+
+async def test_W14_随机路线_走直线的狗不打乱(站):
+    import random
+    t = 站
+    assert t.site.clients["A"].capabilities.tasks["goto"]["path"] == "straight"
+    t.site.rng = random.Random(7)
+    await t.send(t.site.patrol("A", _乱序巡检(), issued_by="alice", priority=MANUAL))
+    m = _cmds(t, "patrol")[-1]["payload"]["mission"]
+    assert [w["name"] for w in m["waypoints"]] == [f"p{i}" for i in range(6)]
+    assert "order" not in m["policy"]

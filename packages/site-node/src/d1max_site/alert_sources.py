@@ -62,9 +62,11 @@ _SCHEDULE_ALERTS: dict[str, tuple[str, str]] = {
     "lost": ("schedule_missed", "派出去了,回执超时,狗一直没接"),
     "skip": ("schedule_skipped", "错过了,按排程跳过这一轮"),
     "supervised": ("schedule_blocked", "狗要人现场监护,排程派不了"),
+    # W14:被事件派遣、手动派单、遥控打断了,不续(W00c2b 决定 D2A,用户 2026-10-02 维持)
+    "preempted": ("schedule_interrupted", "跑到一半被更优先的任务打断了,这一轮没巡完、不续"),
 }
 _SCHEDULE_TITLE = {"schedule_missed": "这一轮没跑", "schedule_skipped": "跳过了一轮",
-                   "schedule_blocked": "派不了"}
+                   "schedule_blocked": "派不了", "schedule_interrupted": "这一轮没巡完"}
 
 #: 站点主循环多久调一次 :meth:`SiteAlertSources.step`(秒)。升级时限是分钟级,5 s 够细。
 STEP_S = 5.0
