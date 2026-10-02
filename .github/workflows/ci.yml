@@ -5,13 +5,15 @@
 #     依赖这些程序的测试自己跳过;
 #   手机:flutter(analyze + test);
 #   集成层:integration(装上 mosquitto、ffmpeg、g++ 跑全量)—— 不设必过,先看稳不稳。
-# 第三方 action 只用 GitHub 官方的两个,按提交哈希钉死;Flutter 按标签从官方仓库拉。
+#   桌面版:desktop(W15,Linux/Windows/macOS 三个包)—— 不设必过,只在 master、手动触发时跑。
+# 第三方 action 只用 GitHub 官方的(checkout、setup-python、upload-artifact),按提交哈希钉死;Flutter 按标签从官方仓库拉。
 name: ci
 
 on:
   push:
     branches: [master]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -34,7 +36,7 @@ jobs:
         with:
           python-version: "3.10"
       - run: python -m pip install "ruff==0.16.5"
-      - run: ruff check packages src tests tools/w09f_live_preview_check.py tools/w10_plan_bench.py tools/w11_obstacle_replay.py tools/w09i_sim_bag.py tools/w09i_merge_figure.py
+      - run: ruff check packages src tests tools/w09f_live_preview_check.py tools/w10_plan_bench.py tools/w11_obstacle_replay.py tools/w09i_sim_bag.py tools/w09i_merge_figure.py tools/site_demo.py
 
   python:
     name: py-${{ matrix.group }}
@@ -81,6 +83,47 @@ jobs:
         run: flutter analyze
       - working-directory: mobile
         run: flutter test --concurrency=1
+
+  # 桌面版(W15):同一套 Flutter 代码编 Linux / Windows / macOS 三个包,产物留 14 天可下载。
+  # 不设必过;只在合进 master、手动触发时跑(macOS 机器按十倍计费,不在每个 PR 上跑)。
+  desktop:
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux
+            out: build/linux/x64/release/bundle
+          - os: windows-2022
+            target: windows
+            out: build/windows/x64/runner/Release
+          - os: macos-14
+            target: macos
+            out: build/macos/Build/Products/Release
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Linux 桌面要的编译工具
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y clang ninja-build libgtk-3-dev
+      - name: 装 Flutter 3.47.5(官方仓库,按标签)
+        run: |
+          git clone --depth 1 --branch 3.47.5 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - working-directory: mobile
+        run: flutter config --enable-${{ matrix.target }}-desktop && flutter pub get
+      - working-directory: mobile
+        run: flutter build ${{ matrix.target }} --release
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: d1max-desktop-${{ matrix.target }}
+          path: mobile/${{ matrix.out }}
+          retention-days: 14
 
   integration:
     runs-on: ubuntu-22.04

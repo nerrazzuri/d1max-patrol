@@ -12,6 +12,7 @@
 /// 清单里也锁了（`sensorLandscape`），app 起来之前的启动画面就是横的。
 library;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -42,6 +43,13 @@ class PatrolApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'D1 Max 巡检',
+      // 桌面版（W15）：鼠标拖也能滚、能「下拉刷新」（Flutter 桌面默认只认触摸、触控板拖动）。
+      scrollBehavior: const MaterialScrollBehavior().copyWith(dragDevices: {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+        PointerDeviceKind.stylus,
+      }),
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
       ),

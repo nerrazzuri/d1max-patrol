@@ -4,13 +4,18 @@
 /// - 左杆前后（狗不横移），右杆只转向；按住每 100 ms 发一帧，松手发零速。站点和狗都会再夹限速。
 /// - **大红「停」走站点的 halt，不走遥控连接**（连接卡住的时候正是最需要停车的时候）；同时发零速。
 /// - 画面没了、租约结束、连接断了：屏上立刻说，杆变灰。
+/// - **键盘**（W15 桌面版；手机接了蓝牙键盘也一样）：W/↑ 前进、S/↓ 后退、A/← 左转、D/→ 右转，
+///   **松开就停**；Esc 是「停」（同大红按钮）。窗口失去焦点（切到别的窗口）当场归零。只认按下、松开，
+///   不认系统的连发；跟摇杆一样每 100 ms 发一帧、站点和狗再夹限速。
 /// - **切到后台就结束遥控**（零速、放租、关连接）；通知栏拉一下（inactive）只把杆值归零、
 ///   照发零速。后台里定时器还在跑的话，手指按着的那个杆值会一直发出去（W00c5e 内部评审）。
 library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../net/site_client.dart';
 import 'site_video.dart';
@@ -39,6 +44,7 @@ class SiteTeleopPage extends StatefulWidget {
   static const Key statusKey = Key('teleop-status');
   static const Key moveStickKey = Key('teleop-move');
   static const Key turnStickKey = Key('teleop-turn');
+  static const Key keysKey = Key('teleop-keys');
 
   @override
   State<SiteTeleopPage> createState() => _SiteTeleopPageState();
@@ -160,6 +166,42 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
 
   bool get _canDrive => _granted && !_ended && _video;
 
+  /// 键盘（W15）：按着的方向键 → 杆值。只认按下、松开（系统连发不算）；松开就是零。
+  final Set<LogicalKeyboardKey> _keys = <LogicalKeyboardKey>{};
+  static final _fwdKeys = {LogicalKeyboardKey.keyW, LogicalKeyboardKey.arrowUp};
+  static final _backKeys = {LogicalKeyboardKey.keyS, LogicalKeyboardKey.arrowDown};
+  static final _leftKeys = {LogicalKeyboardKey.keyA, LogicalKeyboardKey.arrowLeft};
+  static final _rightKeys = {LogicalKeyboardKey.keyD, LogicalKeyboardKey.arrowRight};
+
+  KeyEventResult _onKey(FocusNode _, KeyEvent e) {
+    final k = e.logicalKey;
+    if (e is KeyDownEvent && k == LogicalKeyboardKey.escape) {
+      unawaited(_halt());
+      return KeyEventResult.handled;
+    }
+    final mine = _fwdKeys.contains(k) || _backKeys.contains(k) || _leftKeys.contains(k) ||
+        _rightKeys.contains(k);
+    if (!mine) return KeyEventResult.ignored;
+    if (e is KeyDownEvent) _keys.add(k);
+    if (e is KeyUpEvent) _keys.remove(k);
+    double axis(Set<LogicalKeyboardKey> plus, Set<LogicalKeyboardKey> minus) =>
+        (_keys.any(plus.contains) ? 1.0 : 0.0) - (_keys.any(minus.contains) ? 1.0 : 0.0);
+    if (_canDrive) {
+      _fwd = axis(_fwdKeys, _backKeys);
+      _turn = axis(_rightKeys, _leftKeys);
+    } else {
+      _fwd = _turn = 0;
+    }
+    return KeyEventResult.handled;
+  }
+
+  void _lostFocus(bool has) {
+    if (has) return;
+    _keys.clear();
+    _fwd = _turn = 0; // 切到别的窗口：键松开的事件收不到了，当场归零
+    _link?.send(0, 0);
+  }
+
   void _sendNow() {
     final link = _link;
     if (link == null || !_granted || _ended || !_video) return;
@@ -222,7 +264,13 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     // 状态钉在画面上头：停车按钮和「现在能不能动」任何时候都一眼看得见，只有画面那一栏会滚。
     // 杆的圈半径 72：一栏至少 168 宽（去掉边距还放得下一整个圈）。
     final side = (MediaQuery.sizeOf(context).width * 0.25).clamp(168.0, 240.0);
-    return Scaffold(
+    final desktop = {TargetPlatform.linux, TargetPlatform.windows, TargetPlatform.macOS}
+        .contains(defaultTargetPlatform);
+    return Focus(
+      autofocus: true,
+      onKeyEvent: _onKey,
+      onFocusChange: _lostFocus,
+      child: Scaffold(
       appBar: AppBar(title: Text('遥控 ${widget.robotId}')),
       body: SafeArea(
         top: false,
@@ -250,6 +298,12 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                   style: TextStyle(color: bad ? Colors.red : null, fontWeight: FontWeight.bold),
                 ),
               ),
+              if (desktop)
+                const Padding(
+                  key: SiteTeleopPage.keysKey,
+                  padding: EdgeInsets.fromLTRB(4, 4, 4, 0),
+                  child: Text('键盘：W/S 前后，A/D 转向，松开就停；Esc 停车'),
+                ),
               Expanded(
                 child: ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
                   SiteVideo(api: widget.api, robotId: widget.robotId),
@@ -286,6 +340,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
             ]),
           ),
         ]),
+      ),
       ),
     );
   }

@@ -4,7 +4,8 @@
 它是唯一的权威：狗的状态、派单、告警、画面、遥控、运行记录与照片、地图、版本都在站点上。
 狗上只跑代理（`d1max-agent.service`），经 MQTT（mTLS）连站点；手机从头到尾不知道狗的地址。
 
-只做 Android。Flutter 3.47 / Dart 3.13（`pubspec.yaml` 要 Dart ≥ 3.13.2）。
+手机只做 Android。**同一套代码还出桌面版**（Windows / Linux / macOS，W15，决策 28），见下面「桌面版」一节。
+Flutter 3.47 / Dart 3.13（`pubspec.yaml` 要 Dart ≥ 3.13.2）。
 
 **只许横屏**（用户 2026-09-26）：安卓清单里锁 `sensorLandscape`（启动画面就是横的），Flutter 起来再锁一次
 （`lib/main.dart` 的 `lockLandscape`）；两个横向都行。每一屏按横屏的手机（800×360，最窄 568×360）测过不溢出、
@@ -119,6 +120,31 @@ W00c4 加站点模式的时候，直连狗的那几屏（狗的名册、设备 P
 老版本存在手机里的名册和 PIN 没人再读，不做迁移，卸载 app 时一起没了。
 
 ---
+
+## 桌面版（W15，决策 28）
+
+跟手机**同一套代码**（`mobile/`），多了 `linux/`、`windows/`、`macos/` 三个工程目录。功能一样：站点列表、狗、值守、
+画面、地图、排程、遥控；**照样钉住站点证书**（不靠操作系统信任证书，同手机）。桌面上不一样的地方：
+
+- **站点列表文件**放在 app 自己的支持目录（Linux `~/.local/share/com.d1max.d1max_patrol/`、Windows `%APPDATA%`、
+  Mac `Application Support`），不放用户的「文档」文件夹（`lib/store/paths.dart`）。
+- **值守屏**窗口宽到 1100 就分两栏：告警一栏、每台狗一栏（`site_watch_page.dart` 的 `wideAt`）。
+- **键盘遥控**：W/↑ 前进、S/↓ 后退、A/← 左转、D/→ 右转，**松开就停**；Esc 是「停」；窗口失去焦点当场归零
+  （`site_teleop.dart`）。只在桌面上显示这行提示；手机接了蓝牙键盘也认。
+- **鼠标拖也能滚**、能「下拉刷新」（`main.dart` 的 `scrollBehavior`）；登录口令框弹出来就能打字，回车就登录。
+- 测过两种窗口大小（1280×720、1920×1080）主要几页不溢出（`test/desktop_test.dart`）。
+
+**怎么编**：
+- Linux（这台开发机）：要 `clang ninja-build libgtk-3-dev`，然后 `flutter build linux --release`，包在
+  `build/linux/x64/release/bundle/`（整个目录拷走，跑里面的 `d1max_patrol`）。
+- Windows、macOS 不能在 Linux 上编：CI 的 `desktop` 作业（合进 master、手动触发时跑）在 Windows、Mac 机器上编，
+  三个包都在那一次运行的 Artifacts 里（留 14 天）。
+- **Mac 版没签名**：发给别人装，对方第一次要右键「打开」；正式分发要苹果开发者账号签名、公证（没做）。
+  Windows 版第一次运行可能被 SmartScreen 拦，点「仍要运行」。
+
+**没狗的时候试**：`.venv/bin/python tools/site_demo.py`（可加 `--map-dir <建好的图>`）在本机起一整套站点 + 仿真狗，
+打印地址（`https://127.0.0.2:8443`）、证书指纹、账号；桌面版里加这个站点就能登进去看。演示里没有画面转发，画面那一栏会报
+「拉不下来」，属正常。
 
 ## 在这台机器上怎么跑
 
