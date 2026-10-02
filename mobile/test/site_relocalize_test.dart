@@ -34,6 +34,12 @@ void main() {
     expect(rtkText(<String, dynamic>{'fix': 'none'}), 'RTK：没有定位');
   });
 
+  test('排程什么时候跑（W14）', () {
+    expect(scheduleWhen({'at': '08:00'}), '08:00');
+    expect(scheduleWhen({'at': '22:00', 'every_min': 60, 'until': '02:00'}), '22:00–02:00 每 60 分钟');
+    expect(scheduleWhen({'at': '22:00', 'standby': 'gate'}), '22:00，巡完回 gate');
+  });
+
   test('头尾方向说人话（W11a）', () {
     Map<String, dynamic> c(String d) => {'tasks': {'head': {'direction': d}}};
     expect(headText(null), '');

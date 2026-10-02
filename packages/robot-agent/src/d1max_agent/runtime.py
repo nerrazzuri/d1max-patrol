@@ -72,7 +72,8 @@ LOAD_MAP_TIMEOUT_S = 120.0
 
 
 def _parse_home(v: Any) -> tuple[float, float, float] | None:
-    """``map_activate`` 里站点给的原点(这台狗在这张图上的待命点):``{x, y, yaw}``。没给为 None。"""
+    """``map_activate`` 里站点给的原点(站点原点表里这台狗在这张图上的原点,W13a):``{x, y, yaw}``。
+    没给为 None。"""
     import math
     if v is None:
         return None

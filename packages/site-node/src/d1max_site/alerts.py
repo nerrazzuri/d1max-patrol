@@ -126,6 +126,8 @@ LEVEL_OF: dict[str, Level] = {
     # 排程写了错过就跳过、这一轮跳过了;狗要人监护、排程派不了(W00c6c)。今天之内核一下、改配置。
     "schedule_skipped": Level.P2,
     "schedule_blocked": Level.P2,
+    # 排程巡检跑到一半被更优先的任务打断(W14):打断它的事本身已经有人在管,这一轮补不补人定。
+    "schedule_interrupted": Level.P2,
     "robot_offline_idle": Level.P2,
     # P3:只记录。日常的正常事件,不需要谁去处理什么。
     "run_done": Level.P3,

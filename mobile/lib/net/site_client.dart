@@ -96,6 +96,14 @@ bool robotCan(Map<String, dynamic>? view, String task) {
   return tasks is Map && tasks.containsKey(task);
 }
 
+/// 一条排程什么时候跑（W14）：一天一轮就是 `at`；重复的是「22:00–02:00 每 60 分钟」；写了回哪个待命点也说。
+String scheduleWhen(Map<String, dynamic> e) {
+  final every = e['every_min'];
+  final when = every is num && every > 0 ? '${e['at']}–${e['until']} 每 $every 分钟' : '${e['at']}';
+  final stb = e['standby'];
+  return stb is String && stb.isNotEmpty ? '$when，巡完回 $stb' : when;
+}
+
 /// 这台狗能不能「在这儿设待命点」（W13a）：代理报了 `mark_home.standby`。老代理不认、会当成标原点。
 bool robotCanStandbyHere(Map<String, dynamic>? view) {
   final caps = view?['capabilities'];

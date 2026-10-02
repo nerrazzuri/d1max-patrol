@@ -30,6 +30,8 @@
   - ``dispatch_failed``(狗明确拒收或发之前被拦)、``alarm``/``skip``(窗口过了)、``supervised``(狗要人
     监护,W00c6i):当场说。
   - 回执超时:过 ``LOST_MS`` 还没见狗在跑这一趟、也没收到晚到的回执与结果,说 ``lost``。
+  - 跑到一半被更优先的任务(事件派遣、手动派单、遥控)打断(``task_preempted``,W14):当场说
+    ``preempted`` —— 这一轮没巡完、**不续**(W00c2b 决定 D2A,用户 2026-10-02 维持)。
   - 回调炸了只记日志、不带走这一拍,下一拍再说(没记 ``told_ms``)。
 
 不做:抢占规则、待命点(W00c2b)。正在跑的不打断 —— 选狗时跳过忙着的狗。
@@ -190,6 +192,15 @@ class SiteScheduler:
             return
         with self.db.tx() as c:
             c.execute("UPDATE schedule_runs SET result=? WHERE task_id=?", (result, task_id))
+            rows = (c.execute("SELECT id, entry_id, scheduled_ms, robot_id FROM schedule_runs "
+                              "WHERE task_id=? AND outcome='started'", (task_id,)).fetchall()
+                    if result == "preempted" else [])
+        for r in rows:
+            reason = e.data.get("reason", "") if isinstance(e.data, dict) else ""
+            self._tell(r["id"], r["entry_id"], r["scheduled_ms"], r["robot_id"], "preempted",
+                       f"{r['robot_id']} 这一趟被更优先的任务打断了" + (f"({reason})" if reason
+                                                                      and reason != "preempted"
+                                                                      else ""))
 
     def _on_ack(self, ack: Ack) -> None:
         """回执(包括超时之后才到的):狗明确没收,那一行从 started 改成 dispatch_failed。"""

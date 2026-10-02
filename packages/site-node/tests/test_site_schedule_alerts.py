@@ -412,7 +412,8 @@ def 告警(tmp_path):
     ("no_robot", "schedule_missed", "P1"), ("ambiguous", "schedule_missed", "P1"),
     ("skew", "schedule_missed", "P1"), ("dispatch_failed", "schedule_missed", "P1"),
     ("alarm", "schedule_missed", "P1"), ("lost", "schedule_missed", "P1"),
-    ("skip", "schedule_skipped", "P2"), ("supervised", "schedule_blocked", "P2")])
+    ("skip", "schedule_skipped", "P2"), ("supervised", "schedule_blocked", "P2"),
+    ("preempted", "schedule_interrupted", "P2")])
 def test_去向对应的告警与级别(告警, outcome, kind, level):
     desk, src = 告警
     src.on_schedule_outcome("nightly", "A", outcome, "A 不在线")
@@ -445,3 +446,32 @@ def test_几条排程合成一条告警_标题里都在(告警):
     [a] = desk.book.all()
     assert a.count == 3 and "nightly" in a.title and "gate" in a.title
     assert a.title.count("gate") == 1
+
+
+# ------------------------------------------------------------ W14:被打断了要说
+
+
+async def test_W14_排程巡检被手动派单打断_说这一轮没巡完_不续_一轮只说一次(站):
+    from d1max_site.priorities import MANUAL
+    t = 站
+    t.clock.ms = 毫秒(22, 0, 30)
+    await t.run(2)
+    await _拍(t)
+    [run] = t.sched.runs("nightly")
+    assert run["outcome"] == "started"
+    await t.run(5)
+    caps = t.site.clients["A"].capabilities.tasks["patrol"]
+    target = {"schema": "1.0", "map_id": "estate-1", "map_version": caps["map_version"],
+              "frame_id": "map", "x": 0.0, "y": 0.6, "yaw": 0.0}
+    r = await t.send(t.site.goto("A", target, None, issued_by="alice", priority=MANUAL))
+    assert r["ack"]["result"] == "accepted", r
+    for _ in range(40):
+        await t.run(5)
+        if t.sched.runs("nightly")[0]["result"] == "preempted":
+            break
+    assert t.sched.runs("nightly")[0]["result"] == "preempted"
+    assert [(e, rr, o) for e, rr, o in _去向(t)] == [("nightly", "A", "preempted")]
+    assert "打断" in t.heard[0][3]
+    await _拍(t, 22, 5)
+    assert len(t.heard) == 1, "一轮只说一次;也不续"
+    assert [x["outcome"] for x in t.sched.runs("nightly")] == ["started"]

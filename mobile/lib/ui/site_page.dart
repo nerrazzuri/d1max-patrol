@@ -834,7 +834,7 @@ class SiteSchedulePage extends StatelessWidget {
                 subtitle: Text('时区 ${d['timezone']}')),
             for (final e in entries)
               ListTile(
-                title: Text('${e['id']} · ${e['at']} · ${e['mission']}'),
+                title: Text('${e['id']} · ${scheduleWhen(e.cast<String, dynamic>())} · ${e['mission']}'),
                 subtitle: Text('下一轮 ${e['next_run']}'
                     '${e['last'] is Map ? ' · 上一次 ${(e['last'] as Map)['outcome']} ${(e['last'] as Map)['result'] ?? ''}' : ''}'),
               ),
