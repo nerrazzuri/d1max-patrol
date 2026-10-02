@@ -337,6 +337,25 @@ def decide(entry: ScheduleEntry, *, now: datetime,
     return Decision(kind, 这一轮, 这一轮毫秒, 迟了)
 
 
+def occurrences_between(entry: ScheduleEntry, start: datetime,
+                        end: datetime) -> list[datetime]:
+    """``[start, end]`` 里这条排程的每一轮,早的在前。**纯函数。** 两端都要带时区(同 ``decide``)。
+
+    ``decide`` 只看「不晚于现在的最新一轮」;站点停机、执行器很久没跑之后,中间那几轮就没人记账了
+    (W14 外审)。执行器拿它把窗口已过、还没定论的轮次逐轮补记。"""
+    for t in (start, end):
+        if t.tzinfo is None or t.utcoffset() is None:
+            raise ValueError("occurrences_between() 的两端必须带时区")
+    if end < start:
+        return []
+    out: list[datetime] = []
+    day = start.date() - timedelta(days=1)          # 前一天起头、跨过午夜的那几轮
+    while day <= end.date():
+        out += [o for o in _occurrences(entry, day, start.tzinfo) if start <= o <= end]
+        day += timedelta(days=1)
+    return sorted(out)
+
+
 # ---------------------------------------------------------------- 单队列
 
 #: 进得了队列的两种决定。别的都是 ``decide()`` 已经判了不跑的。

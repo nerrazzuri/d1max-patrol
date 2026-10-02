@@ -566,3 +566,42 @@ async def test_W14_随机路线_走直线的狗不打乱(站):
     m = _cmds(t, "patrol")[-1]["payload"]["mission"]
     assert [w["name"] for w in m["waypoints"]] == [f"p{i}" for i in range(6)]
     assert "order" not in m["policy"]
+
+
+@pytest.mark.parametrize("改成", ["garage", None])
+async def test_W14外审_跑着的时候换了任务包_照派单时的排程回(站, tmp_path, 改成):
+    """新包把同名排程改成回别的点(``garage``),或者干脆删了那条(``None``):这一趟照旧回 gate。"""
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.stb.set("A", "gate", map_id="estate-1", map_version="7", x=0.3, y=0.6, yaw=0.0)
+    t.stb.set("A", "garage", map_id="estate-1", map_version="7", x=-0.3, y=0.0, yaw=0.0)
+    t.site.clients["A"].capabilities.tasks["goto"]["path"] = "planned"
+    import_bundle(t.db, 打包(tmp_path, 1, schedule=_带待命点的排程("gate")), imported_by="alice",
+                  now_ms=t.clock())
+    s = SiteScheduler(t.db, t.site, now_ms=t.clock)
+    t.clock.ms = 毫秒(22, 0, 30)
+    await t.run(2)
+    await t.send(s.tick())
+    assert s.runs("nightly")[0]["outcome"] == "started"
+    await t.run(3)
+    新排程 = (_带待命点的排程(改成) if 改成 else
+            _带待命点的排程("x").replace("id: nightly", "id: other"))
+    import_bundle(t.db, 打包(tmp_path, 2, schedule=新排程), imported_by="alice", now_ms=t.clock())
+    await t.run(400)
+    [back] = [c for c in _cmds(t, "goto") if c["task_id"].startswith("standby-")]
+    assert (back["payload"]["target"]["x"], back["payload"]["target"]["y"]) == (0.3, 0.6)
+
+
+async def test_W14外审_站点重启之后晚到的结束事件_照派单时的目标(站, tmp_path):
+    t = 站
+    t.stb.set("A", "gate", map_id="estate-1", map_version="7", x=0.3, y=0.6, yaw=0.0)
+    with t.db.tx() as c:
+        c.execute("INSERT INTO schedule_runs(entry_id, scheduled_ms, outcome, robot_id, task_id, "
+                  "note, decided_at, standby_name) VALUES ('nightly', 1, 'started', 'A', "
+                  "'sched-abc', '', 1, 'gate')")
+        c.execute("INSERT INTO schedule_runs(entry_id, scheduled_ms, outcome, robot_id, task_id, "
+                  "note, decided_at) VALUES ('nightly', 2, 'started', 'A', 'sched-old', '', 1)")
+    重启后 = StandbyManager(t.db, t.site, now_ms=t.clock)          # 没有任务包也认
+    assert 重启后._target("A", "sched-abc") == "gate"
+    assert 重启后._target("A", "sched-old") is None, "老记录没写:回默认的"
+    assert 重启后._target("A", "task-1") is None

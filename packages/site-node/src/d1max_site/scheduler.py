@@ -54,6 +54,7 @@ from d1max_contract.schedule import (
     clock_skew,
     decide,
     next_run,
+    occurrences_between,
     pick,
 )
 from d1max_site.catalog import ActiveBundle, active_bundle
@@ -74,6 +75,11 @@ GRACE_MS = 5 * 60_000
 LOST_MS = 2 * 60_000
 #: 补说只看最近这么久的账(站点停机跨了几天,更老的不再翻出来)。
 TELL_HORIZON_MS = 24 * 3_600_000
+#: 补记错过的轮次往回看多远(W14 外审):站点停机、执行器很久没跑,中间那几轮逐轮记账。跟补说一样一天;
+#: 更早的不补(停机好几天是另一件事,站点起来时 ``site_restarted`` 那一类告警管)。
+CATCHUP_MS = TELL_HORIZON_MS
+#: 有定论的去向:这几种之一记过了,那一轮就不再补记。
+_SETTLED = ("started", "skip", "alarm")
 _TIMEOUT_NOTE = "回执超时"
 _TERMINAL = {"task_done": "done", "task_failed": "failed", "task_aborted": "aborted",
              "task_preempted": "preempted"}
@@ -235,6 +241,8 @@ class SiteScheduler:
             if d.kind in (DecisionKind.SKIP, DecisionKind.ALARM) and d.scheduled_ms is not None:
                 self._record(e, d.scheduled_ms, d.kind.value,
                              note=f"迟了 {d.late_min} 分钟,按 on_missed={e.on_missed}")
+        for e in act.schedule.entries:
+            self._catch_up(e, act, now, now_ms)
         ref = self._ref() if self._ref is not None else None
         if ref is not None:
             skew = clock_skew(local_ms=now_ms, reference_ms=ref[0], source=ref[1])
@@ -251,6 +259,32 @@ class SiteScheduler:
         for e, d in order:
             await self._start(act, e, d, now_ms=now_ms, claimed=claimed)
         self._sweep(act, now_ms)
+
+    def _catch_up(self, entry: ScheduleEntry, act: ActiveBundle, now: datetime,
+                  now_ms: int) -> None:
+        """补记错过的轮次(W14 外审):``decide`` 只看最新一轮,站点停机、执行器很久没跑之后,中间那几轮
+        不会进账、也不告警。这里把回看范围里(不早于任务包导入、不早于 ``CATCHUP_MS``)**窗口已过、
+        又不是最新一轮**、还没有定论(``started``/``skip``/``alarm``)的轮次逐轮按 ``on_missed`` 记账
+        (``run_late`` 的老轮次被后面一轮取代了,记 ``skip``)。同一轮同一种去向只记一次、只说一次,
+        重启、重复的拍不会再说。最新那一轮照旧归 ``decide``(在窗口里就派)。"""
+        since = max(act.imported_at, now_ms - CATCHUP_MS)
+        start = datetime.fromtimestamp(since / 1000, tz=now.tzinfo)
+        rounds = occurrences_between(entry, start, now)
+        for occ in rounds[:-1]:                       # 最后一轮(不晚于现在的最新一轮)归 decide
+            occ_ms = int(occ.timestamp() * 1000)
+            late = int((now - occ).total_seconds() // 60)
+            if late <= entry.window_min:
+                continue                              # 还在窗口里(window < every 时不会有)
+            if self.db.query(
+                    "SELECT 1 FROM schedule_runs WHERE entry_id=? AND scheduled_ms=? AND outcome "
+                    f"IN ({','.join('?' * len(_SETTLED))}) LIMIT 1",
+                    (entry.id, occ_ms, *_SETTLED)):
+                continue
+            kind = "alarm" if entry.on_missed == "alarm" else "skip"
+            note = (f"迟了 {late} 分钟,按 on_missed={entry.on_missed}(站点那时没在排程:补记)"
+                    if entry.on_missed != "run_late" else
+                    f"迟了 {late} 分钟,后面还有一轮,run_late 只补最近一轮(补记)")
+            self._record(entry, occ_ms, kind, note=note)
 
     def _candidates(self, act: ActiveBundle, entry: ScheduleEntry,
                     claimed: dict[str, str]) -> tuple[list[str], list[str], str, set[str]]:
@@ -315,11 +349,12 @@ class SiteScheduler:
             tx.execute("INSERT INTO schedule_state(entry_id, last_started_ms) VALUES (?,?) "
                        "ON CONFLICT(entry_id) DO UPDATE SET last_started_ms=excluded."
                        "last_started_ms", (entry.id, now_ms))
+            # 回哪个待命点也在这时定下(W14 外审):跑着的时候换了任务包,这一趟照派单时的排程回。
             tx.execute("INSERT OR IGNORE INTO schedule_runs(entry_id, scheduled_ms, outcome, "
-                       "robot_id, task_id, note, decided_at, told_ms) "
-                       "VALUES (?,?,'started',?,?,?,?,NULL)",
+                       "robot_id, task_id, note, decided_at, told_ms, standby_name) "
+                       "VALUES (?,?,'started',?,?,?,?,NULL,?)",
                        (entry.id, scheduled_ms, rid, task_id, f"{d.kind.value},已发出",
-                        self._now()))
+                        self._now(), entry.standby))
 
         try:
             r = await self.dispatcher.patrol(rid, act.missions[entry.mission].to_wire(),
