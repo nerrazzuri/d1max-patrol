@@ -137,9 +137,10 @@ jobs:
           git clone --depth 1 --branch 3.47.5 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
       - working-directory: mobile
-        env:
-          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
-        run: flutter pub get && flutter build apk --release
+        # 运行机自带 JDK 17,路径在 shell 变量 JAVA_HOME_17_X64 里(不是工作流的 env 上下文);默认的 11 Gradle 不认
+        run: |
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          flutter pub get && flutter build apk --release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: d1max-android
