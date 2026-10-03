@@ -127,7 +127,8 @@ W00c4 加站点模式的时候，直连狗的那几屏（狗的名册、设备 P
 画面、地图、排程、遥控；**照样钉住站点证书**（不靠操作系统信任证书，同手机）。桌面上不一样的地方：
 
 - **站点列表文件**放在 app 自己的支持目录（Linux `~/.local/share/com.d1max.d1max_patrol/`、Windows `%APPDATA%`、
-  Mac `Application Support`），不放用户的「文档」文件夹（`lib/store/paths.dart`）。
+  Mac `Application Support`），不放用户的「文档」文件夹（`lib/store/paths.dart`）。这只是防误删误改、不摆在用户眼前，
+  **不是安全边界**：同一个系统用户照样能改它（手机上 app 私有目录才是真隔开的）。
 - **值守屏**窗口宽到 1100 就分两栏：告警一栏、每台狗一栏（`site_watch_page.dart` 的 `wideAt`）。
 - **键盘遥控**：W/↑ 前进、S/↓ 后退、A/← 左转、D/→ 右转，**松开就停**；Esc 是「停」；窗口失去焦点当场归零
   （`site_teleop.dart`）。只在桌面上显示这行提示；手机接了蓝牙键盘也认。

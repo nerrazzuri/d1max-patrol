@@ -57,6 +57,161 @@ void main() {
     await t.pumpWidget(Container());
   });
 
+  // ------------------------------------------------------------ W15 外审：按键只在能开的那一段算数
+
+  Future<void> grant(WidgetTester t, FakeApi api) async {
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5,
+      'max_wz': 0.75});
+    await t.pump();
+    await t.pump();
+  }
+
+  Future<void> video(WidgetTester t, FakeApi api, bool ok) async {
+    api.link!.ctl.add(<String, dynamic>{'kind': 'video', 'ok': ok});
+    await t.pump();
+    await t.pump();
+  }
+
+  bool still(FakeApi api) => api.link!.sent.last[0] == 0 && api.link!.sent.last[1] == 0;
+
+  testWidgets('外审：授权前按住 W，授权到了加连发也不动；松开再按才动', (t) async {
+    final api = FakeApi('guard');
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await grant(t, api);
+    for (var i = 0; i < 3; i++) {
+      await t.sendKeyRepeatEvent(LogicalKeyboardKey.keyW);
+      await t.pump(const Duration(milliseconds: 120));
+    }
+    expect(still(api), isTrue, reason: '按着不放等授权到：不接着开');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], closeTo(0.5, 1e-9), reason: '重新按下才动');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('外审：画面断了按住 W，画面回来加连发也不动', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], greaterThan(0));
+    await video(t, api, false);
+    await video(t, api, true);
+    for (var i = 0; i < 3; i++) {
+      await t.sendKeyRepeatEvent(LogicalKeyboardKey.keyW);
+      await t.pump(const Duration(milliseconds: 120));
+    }
+    expect(still(api), isTrue, reason: '画面回来不接着开');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('外审：画面断着的时候按下的键，画面回来也不算', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    await video(t, api, false);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await video(t, api, true);
+    await t.sendKeyRepeatEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(still(api), isTrue);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('外审：inactive 回来、失去焦点之后，连发都不恢复运动', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await t.pump(const Duration(milliseconds: 150));
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await t.sendKeyRepeatEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(still(api), isTrue, reason: 'inactive 之后');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(api.link!.sent.last[0], greaterThan(0));
+    FocusManager.instance.primaryFocus?.unfocus();
+    await t.pump();
+    await t.sendKeyRepeatEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 250));
+    expect(still(api), isTrue, reason: '失去焦点之后');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('外审：连发不改当前杆值（松开别的键之后不会被连发捡回来）', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyA);
+    await t.pump(const Duration(milliseconds: 150));
+    expect(api.link!.sent.last, <double>[0.5, 0.75]);
+    await t.sendKeyRepeatEvent(LogicalKeyboardKey.keyA);
+    await t.pump(const Duration(milliseconds: 150));
+    expect(api.link!.sent.last, <double>[0.5, 0.75], reason: '连发不改杆值');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyA);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('外审：连发不重算杆值（按着 W 时摇杆往后拉，连发不把它改回前进）', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 150));
+    final g = await t.startGesture(t.getCenter(find.byType(Joystick).at(0)));
+    await g.moveBy(const Offset(0, 200));                     // 摇杆往后拉满
+    await t.pump(const Duration(milliseconds: 150));
+    expect(api.link!.sent.last[0], closeTo(-0.5, 1e-9));
+    await t.sendKeyRepeatEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 150));
+    expect(api.link!.sent.last[0], closeTo(-0.5, 1e-9), reason: '连发不改杆值');
+    await g.up();
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('外审：结束、停车之后，晚到的键盘事件都不能恢复运动', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 150));
+    api.link!.ctl.add(<String, dynamic>{'kind': 'ended', 'reason': 'taken_over'});
+    await t.pump();
+    await t.pump();
+    final n = api.link!.sent.length;
+    await t.sendKeyRepeatEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyD);
+    await t.pump(const Duration(milliseconds: 300));
+    expect(api.link!.sent.skip(n).every((v) => v[0] == 0 && v[1] == 0), isTrue,
+        reason: '结束之后不发非零');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyD);
+    final api2 = FakeApi('guard');
+    await _open(t, api2);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyW);
+    await t.pump(const Duration(milliseconds: 150));
+    await t.sendKeyEvent(LogicalKeyboardKey.escape);
+    await t.pump();
+    final m = api2.link!.sent.length;
+    await t.sendKeyRepeatEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyDownEvent(LogicalKeyboardKey.keyS);
+    await t.pump(const Duration(milliseconds: 300));
+    expect(api2.link!.sent.skip(m).every((v) => v[0] == 0 && v[1] == 0), isTrue,
+        reason: '停车之后不发非零');
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyW);
+    await t.sendKeyUpEvent(LogicalKeyboardKey.keyS);
+    await t.pumpWidget(Container());
+  });
+
   testWidgets('键盘（W15）：窗口失去焦点当场归零；Esc 是停车', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);

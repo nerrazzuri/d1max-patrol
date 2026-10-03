@@ -5,8 +5,10 @@
 /// - **大红「停」走站点的 halt，不走遥控连接**（连接卡住的时候正是最需要停车的时候）；同时发零速。
 /// - 画面没了、租约结束、连接断了：屏上立刻说，杆变灰。
 /// - **键盘**（W15 桌面版；手机接了蓝牙键盘也一样）：W/↑ 前进、S/↓ 后退、A/← 左转、D/→ 右转，
-///   **松开就停**；Esc 是「停」（同大红按钮）。窗口失去焦点（切到别的窗口）当场归零。只认按下、松开，
-///   不认系统的连发；跟摇杆一样每 100 ms 发一帧、站点和狗再夹限速。
+///   **松开就停**；Esc 是「停」（同大红按钮）。跟摇杆一样每 100 ms 发一帧、站点和狗再夹限速。
+///   **按键只在「能开」的那一段里算数**（W15 外审阻断）：系统连发一律不认；不能开的时候按下的不记；
+///   每过一道边界 —— 拿到遥控、画面断了或回来、切走（失去焦点、inactive、后台）、结束、停车、退出 ——
+///   都清空键盘输入、发一帧零速。之后要动，得**重新按下**：按着不放等授权到、等画面回来不会接着开。
 /// - **切到后台就结束遥控**（零速、放租、关连接）；通知栏拉一下（inactive）只把杆值归零、
 ///   照发零速。后台里定时器还在跑的话，手指按着的那个杆值会一直发出去（W00c5e 内部评审）。
 library;
@@ -76,13 +78,13 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     switch (state) {
       case AppLifecycleState.inactive:
         _inactive = true;
-        _fwd = _turn = 0;
-        _link?.send(0, 0);
+        _clearKeys();
       case AppLifecycleState.resumed:
         _inactive = false;
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
+        _clearKeys();
         _endLocally('切到后台了，遥控已结束（狗已停）。要接着开，重新进这一页');
     }
   }
@@ -91,7 +93,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   void _endLocally(String why) {
     if (_ended) return;
     _stopTicking();
-    _fwd = _turn = 0;
+    _clearKeys();
     final link = _link;
     if (link != null) {
       link.send(0, 0);
@@ -137,6 +139,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     if (!mounted || _ended) return;
     switch (m['kind']) {
       case 'granted':
+        _clearKeys(); // 授权前按着的键不算：拿到遥控之后要重新按下
         setState(() {
           _granted = true;
           _maxVx = (m['max_vx'] as num?)?.toDouble() ?? 0;
@@ -146,6 +149,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
         _tick ??= Timer.periodic(const Duration(milliseconds: 100), (_) => _sendNow());
       case 'video':
         final ok = m['ok'] == true;
+        _clearKeys(); // 画面断了、回来了：按着的键都不算，回来之后要重新按下
         if (!ok) {
           // 画面没了：杆变灰，手指抬起会被灰掉的杆吞掉 —— 这里当场归零并发一帧零速，
           // 不让断之前的杆值卡着、等画面回来就开走（W00c5c 内部评审）。
@@ -155,7 +159,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
         setState(() => _video = ok);
       case 'ended':
         _stopTicking();
-        _fwd = _turn = 0;
+        _clearKeys();
         setState(() {
           _ended = true;
           _granted = false;
@@ -182,7 +186,11 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     final mine = _fwdKeys.contains(k) || _backKeys.contains(k) || _leftKeys.contains(k) ||
         _rightKeys.contains(k);
     if (!mine) return KeyEventResult.ignored;
-    if (e is KeyDownEvent) _keys.add(k);
+    if (e is KeyRepeatEvent) return KeyEventResult.handled; // 系统连发：不认，杆值不动
+    if (e is KeyDownEvent) {
+      if (!_canDrive) return KeyEventResult.handled; // 不能开的时候按下的不记
+      _keys.add(k);
+    }
     if (e is KeyUpEvent) _keys.remove(k);
     double axis(Set<LogicalKeyboardKey> plus, Set<LogicalKeyboardKey> minus) =>
         (_keys.any(plus.contains) ? 1.0 : 0.0) - (_keys.any(minus.contains) ? 1.0 : 0.0);
@@ -190,16 +198,21 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       _fwd = axis(_fwdKeys, _backKeys);
       _turn = axis(_rightKeys, _leftKeys);
     } else {
+      _keys.clear();
       _fwd = _turn = 0;
     }
     return KeyEventResult.handled;
   }
 
-  void _lostFocus(bool has) {
-    if (has) return;
+  /// 清空键盘输入、杆值归零、发一帧零速（W15 外审阻断）。之后要动得重新按下。
+  void _clearKeys() {
     _keys.clear();
-    _fwd = _turn = 0; // 切到别的窗口：键松开的事件收不到了，当场归零
-    _link?.send(0, 0);
+    _fwd = _turn = 0;
+    if (!_ended) _link?.send(0, 0);
+  }
+
+  void _lostFocus(bool has) {
+    if (!has) _clearKeys(); // 切到别的窗口：键松开的事件收不到了，当场归零
   }
 
   void _sendNow() {
@@ -220,7 +233,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   Future<void> _halt() async {
     // 先在本机收手：不再发杆值、放租。halt 万一没发出去，手指还按在杆上也不会接着开。
     _stopTicking();
-    _fwd = _turn = 0;
+    _clearKeys();
     final link = _link;
     if (link != null) {
       link.send(0, 0);
@@ -247,6 +260,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _stopTicking();
+    _keys.clear();
     _sub?.cancel();
     final link = _link;
     if (link != null) {
