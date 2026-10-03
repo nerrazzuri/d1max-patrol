@@ -312,7 +312,8 @@ def test_halt先收遥控再发_回执超时也已经收了(desk):
     d.halt = 超时
     with pytest.raises(TimeoutError):
         k.halt("A", _u("olga", "owner"))
-    _等(lambda: bool(d.leases))                      # 收尾在别的线程:等它放完租
+    # 零速帧在收尾线程里发、放租在另一条线程里发(halt 超时兜底),谁先谁后不定:两样都等到
+    _等(lambda: bool(d.leases) and bool(d.frames))
     assert s.end_reason == "halt" and d.frames[-1].vx == 0.0
 
 

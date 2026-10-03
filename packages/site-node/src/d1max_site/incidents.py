@@ -26,6 +26,7 @@ import math
 import re
 import secrets
 import sqlite3
+import threading
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -55,6 +56,8 @@ ALERT_OUTCOMES = frozenset({"dispatched", "merged", "no_robot", "unmapped", "dis
 #: 每个事件源每分钟最多收这么多条(W16,W00c2c 取舍 6):摄像头抽风、密钥漏了被人刷,不能把站点和狗
 #: 拖垮。超了回 429,记日志,报一次告警(``on_throttled``)。一个庄园的入侵事件远到不了这个数。
 RATE_PER_MIN = 30
+#: 告警没报成的入侵,补报多久以内的(W16 外审)。
+RETELL_MS = 24 * 3600_000
 _TERMINAL = {"task_done": "done", "task_failed": "failed", "task_aborted": "aborted",
              "task_preempted": "preempted"}
 
@@ -77,11 +80,18 @@ class IncidentDesk:
         self.merge_window_ms = merge_window_ms
         #: 首条派失败后把并进来的事件提升为新出动 —— 在后台跑,不拖住首条那个 HTTP 请求。
         self._followups: set[asyncio.Task] = set()
-        #: 一条入侵有了去向就报告警(W16):``(这一条的账)``。站点主程序接到告警源上。每条只报一次。
+        #: 一条入侵有了去向就报告警(W16):``(这一条的账)``。站点主程序接到告警源上。每条只报一次:
+        #: **报成了**才在账里记 ``told_ms``;报不出去的(告警库一时写不进)留着,``retell`` 每拍补
+        #: (W16 外审:原先报之前就记「说过了」,一失败这条入侵就再没有告警)。
         self.on_outcome: Callable[[dict[str, Any]], None] | None = None
-        self._told: set[int] = set()
+        self._tell_lock = threading.Lock()
+        self._telling: set[int] = set()                # 正在报的(接口线程与事件循环都会报)
         #: 事件源被限流了(W16):``(事件源名)``。
         self.on_throttled: Callable[[str], None] | None = None
+        #: 每个事件源最近一分钟收过的时刻。接口是多线程的:「清掉一分钟前的、判断、
+        #: 记一笔」得在一把锁里
+        #: 一次做完(W16 外审:不加锁 40 个并发请求全放行)。
+        self._rate_lock = threading.Lock()
         self._recent: dict[str, list[int]] = {}
         dispatcher.on_event(self._on_event)
         # 上次站点停掉时还在等回执的(dispatching):没人再落账了,不收的话会占住狗与防区到
@@ -126,22 +136,23 @@ class IncidentDesk:
     def allow(self, source: str) -> bool:
         """这个事件源这一分钟还能不能再收一条(W16 限流)。验签过了再调。超了报一次(``on_throttled``,
         这一分钟里只报第一下)。"""
-        now = self._now()
-        hits = [t for t in self._recent.get(source, []) if now - t < 60_000]
-        if len(hits) >= RATE_PER_MIN:
-            if len(hits) == RATE_PER_MIN:              # 第一下超:记一笔(之后同一分钟不再说)
+        first_over = False
+        with self._rate_lock:
+            now = self._now()
+            hits = [t for t in self._recent.get(source, []) if now - t < 60_000]
+            ok = len(hits) < RATE_PER_MIN
+            if ok or len(hits) == RATE_PER_MIN:        # 收下的,或第一下超(之后同一分钟不再说)
+                first_over = not ok
                 hits.append(now)
-                log.warning("事件源 %s 一分钟超过 %d 条:限流", source, RATE_PER_MIN)
-                if self.on_throttled is not None:
-                    try:
-                        self.on_throttled(source)
-                    except Exception:
-                        log.exception("事件源 %s 限流的告警报不出去", source)
             self._recent[source] = hits
-            return False
-        hits.append(now)
-        self._recent[source] = hits
-        return True
+        if first_over:                                 # 写日志、报告警在锁外:不在锁里碰库
+            log.warning("事件源 %s 一分钟超过 %d 条:限流", source, RATE_PER_MIN)
+            if self.on_throttled is not None:
+                try:
+                    self.on_throttled(source)
+                except Exception:
+                    log.exception("事件源 %s 限流的告警报不出去", source)
+        return ok
 
     def set_intercept(self, name: str, *, map_id: str, map_version: str, x: float, y: float,
                       yaw: float) -> None:
@@ -324,7 +335,7 @@ class IncidentDesk:
             try:
                 iid = c.execute(
                     "INSERT INTO incidents(source, event_id, type, zone, received_at, occurred_at, "
-                    "outcome, note, detail) VALUES (?,?,?,?,?,?,?,?,?)",
+                    "outcome, note, detail, told_ms) VALUES (?,?,?,?,?,?,?,?,?,NULL)",
                     (source, ev["event_id"], ev["type"], ev["zone"], self._now(),
                      ev.get("occurred_at"), "received", "",
                      json.dumps(ev.get("detail") or {}, ensure_ascii=False))).lastrowid
@@ -437,17 +448,48 @@ class IncidentDesk:
 
     def _publish(self, row: dict[str, Any]) -> None:
         self.dispatcher.feed.publish({"kind": "incident", "incident": row})
-        if row.get("outcome") in ALERT_OUTCOMES and row.get("id") not in self._told \
-                and self.on_outcome is not None:
-            self._told.add(row["id"])
+        if row.get("outcome") in ALERT_OUTCOMES:
+            self._tell(row["id"])
+
+    def _tell(self, rid: int) -> bool:
+        """报这条入侵的告警,报成了记 ``told_ms``。已经说过的、别的线程正在报的不报。
+        报告警失败不许带走
+        派遣(同排程):记日志、不记 ``told_ms``,``retell`` 下一拍再报。回报成了没有。"""
+        if self.on_outcome is None:
+            return False
+        with self._tell_lock:
+            row = self._row(rid)
+            if rid in self._telling or row.get("told_ms") is not None \
+                    or row.get("outcome") not in ALERT_OUTCOMES:
+                return False
+            self._telling.add(rid)
+        try:
             if row.get("outcome") == "merged" and row.get("merged_into") is not None:
                 lead = self._row(row["merged_into"])        # 并进来的:说是谁在去
                 row = row | {"robot_id": lead.get("robot_id")}
             try:
                 self.on_outcome(row)
             except Exception:
-                # 报告警本身失败不许带走派遣(同排程);这一条不再报(在推送流、事件页里照样看得见)
-                log.exception("入侵 %s 的告警报不出去", row.get("id"))
+                log.exception("入侵 %s 的告警报不出去:下一拍再报", rid)
+                return False
+            with self.db.tx() as c:
+                c.execute("UPDATE incidents SET told_ms=? WHERE id=?", (self._now(), rid))
+            return True
+        finally:
+            with self._tell_lock:
+                self._telling.discard(rid)
+
+    def retell(self) -> int:
+        """补报告警没报成的入侵(上次报不出去的、站点重启前没来得及报的)。只补最近 ``RETELL_MS``
+        里的:
+        更早的再报出来也只是噪音(事件页里看得见)。站点告警循环每拍调。回补成了几条。"""
+        if self.on_outcome is None:
+            return 0
+        rows = self.db.query(
+            f"SELECT id FROM incidents WHERE told_ms IS NULL AND received_at>=? AND outcome IN "
+            f"({','.join('?' * len(ALERT_OUTCOMES))}) ORDER BY id",
+            (self._now() - RETELL_MS, *sorted(ALERT_OUTCOMES)))
+        return sum(self._tell(r["id"]) for r in rows)
 
     def _on_event(self, robot_id: str, e: Event) -> None:
         result = _TERMINAL.get(e.kind)
