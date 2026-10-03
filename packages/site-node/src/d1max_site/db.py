@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 17                      # W16 外审:入侵的告警说过没有(incidents.told_ms)
+SCHEMA_VERSION = 18                      # W17:告警带现场(alerts.context)、值守令牌(sessions.scope)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     name       TEXT NOT NULL REFERENCES accounts(name),
     created_at INTEGER NOT NULL,
-    last_used  INTEGER NOT NULL
+    last_used  INTEGER NOT NULL,
+    scope      TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS commands (
     command_id  TEXT PRIMARY KEY,
@@ -186,7 +187,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     acked_ms     INTEGER,
     resolved_by  TEXT NOT NULL,
     resolved_ms  INTEGER,
-    escalated    INTEGER NOT NULL
+    escalated    INTEGER NOT NULL,
+    context      TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS alerts_last ON alerts(last_ms);
 CREATE TABLE IF NOT EXISTS teleop_leases (
@@ -299,6 +301,10 @@ _ADDED_COLUMNS = (
     # W16 外审:这条入侵的告警报成了没有。老库里的行当说过了(0,升级不把历史入侵全报一遍),新记的行写
     # NULL。
     ("incidents", "told_ms", "INTEGER DEFAULT 0"),
+    # W17:告警带现场(狗在哪、哪一趟、拦截点),JSON。老行没有。
+    ("alerts", "context", "TEXT NOT NULL DEFAULT '{}'"),
+    # W17:会话的用途,'' 普通、'watch' 值守令牌(只能看告警、30 天)。老行都是普通会话。
+    ("sessions", "scope", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

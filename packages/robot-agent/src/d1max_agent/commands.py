@@ -289,6 +289,12 @@ class CommandProcessor:
                                   or not math.isfinite(speed) or speed <= 0):
             # isfinite:json 认 NaN/Infinity,而 NaN <= 0 为假。
             return "payload: max_speed_mps 要是正的有限数"
+        photo = cmd.payload.get("photo", None)
+        if photo is not None:
+            from d1max_contract.mission import CAMERAS
+            if not isinstance(photo, str) or photo not in CAMERAS:
+                # W17:到了拍一张(事件派遣的现场照片);相机名不认识就拒,不猜
+                return f"payload: photo 要是 {sorted(CAMERAS)} 之一"
         if self.loaded_map is None or (target.map_id, target.map_version) != self.loaded_map:
             return "map_mismatch"
         return ""

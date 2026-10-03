@@ -1233,6 +1233,28 @@ class MissionEngine(EventEmitter[RunSnapshot]):
         for action in wp.actions:
             await self._do_action(wp, action)
 
+    async def _photo(self, wp: MissionWaypoint, action: Action) -> Path:
+        live = self._live
+        assert live is not None
+        source = self._media.get(action.camera or "")
+        if source is None:
+            raise _FailWaypoint(f"没有配 {action.camera!r} 这路相机的取流")
+        try:
+            frame = await source.grab()
+        except MediaError as exc:
+            raise _FailWaypoint(f"{action.camera} 取图失败: {exc}") from exc
+        try:
+            return live.archive.save_photo(wp.name, action.camera or "", frame.data)
+        except OSError as exc:
+            # 盘满、只读重挂(W00c6a):这个点按失败走任务包的策略,不整趟中止 ——
+            # 已经在跑的那一趟不因为盘满而停(storage.py),巡逻本身照样有价值。
+            raise _FailWaypoint(f"照片存不下: {exc}") from exc
+
+    @property
+    def cameras(self) -> list[str]:
+        """配了取流的相机(W17:代理据此宣告 goto 能用哪几路拍现场照片)。"""
+        return sorted(self._media)
+
     async def _do_action(self, wp: MissionWaypoint, action: Action) -> None:
         live = self._live
         assert live is not None
@@ -1244,19 +1266,15 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                     await self._handle(item)
             return
         if action.type == "photo":
-            source = self._media.get(action.camera or "")
-            if source is None:
-                raise _FailWaypoint(f"没有配 {action.camera!r} 这路相机的取流")
             try:
-                frame = await source.grab()
-            except MediaError as exc:
-                raise _FailWaypoint(f"{action.camera} 取图失败: {exc}") from exc
-            try:
-                path = live.archive.save_photo(wp.name, action.camera or "", frame.data)
-            except OSError as exc:
-                # 盘满、只读重挂(W00c6a):这个点按失败走任务包的策略,不整趟中止 ——
-                # 已经在跑的那一趟不因为盘满而停(storage.py),巡逻本身照样有价值。
-                raise _FailWaypoint(f"照片存不下: {exc}") from exc
+                path = await self._photo(wp, action)
+            except _FailWaypoint as exc:
+                if not live.mission.policy.photo_optional:
+                    raise
+                # W17:goto 的现场照片拍不成不算没到 —— 记一笔,照样算到了
+                self._note("photo_failed", waypoint=wp.name, camera=action.camera,
+                           reason=exc.reason)
+                return
             live.photos.append(path.name)
             self._note("photo", waypoint=wp.name, camera=action.camera,
                        file=path.name)

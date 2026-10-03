@@ -223,11 +223,16 @@ class EvidenceStore:
     # ------------------------------------------------------------ 查
 
     def runs(self, *, robot_id: str | None = None, since_ms: int | None = None,
-             until_ms: int | None = None, limit: int = 200) -> list[dict[str, Any]]:
+             until_ms: int | None = None, limit: int = 200,
+             mission: str | None = None) -> list[dict[str, Any]]:
+        """``mission``:只要这个任务的(W17:告警带的 ``task_id``,goto 一趟的任务名就是它)。"""
         q, args = "SELECT * FROM runs WHERE 1=1", []
         if robot_id is not None:
             q += " AND robot_id=?"
             args.append(robot_id)
+        if mission is not None:
+            q += " AND mission=?"
+            args.append(mission)
         if since_ms is not None:
             q += " AND first_ms>=?"
             args.append(since_ms)

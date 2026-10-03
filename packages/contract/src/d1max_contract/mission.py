@@ -140,6 +140,9 @@ class Policy:
     on_battery_low: str = "return_home"
     #: 巡检点的顺序,见 ``ORDERS``(W14)。
     order: str = "fixed"
+    #: 拍照失败算不算这个点失败(W17)。巡检:算(照片就是这一趟的产出)。代理自己拼的 goto 现场照片:
+    #: 不算 —— 狗到了就是到了,照片拍不成只记一笔。不进线格式:任务包里不许写,只有代理内部用。
+    photo_optional: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         out = {

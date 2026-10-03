@@ -98,6 +98,14 @@ class FakeApi implements SiteApi {
     calls.add(name == null ? 'standby $id' : 'standby $id $name');
     return {'ack': {'result': 'accepted'}};
   }
+  /// 值守令牌（W17）。
+  SiteError? watchTokenError;
+  @override
+  Future<Map<String, dynamic>> watchToken() async {
+    calls.add('watch-token');
+    if (watchTokenError != null) throw watchTokenError!;
+    return <String, dynamic>{'token': 'watch-tok', 'expires_at': 1};
+  }
   /// 拦截点与防区（W16）：测试改它；设、绑、取消、删都记在 [calls] 里、照着改它。
   Map<String, dynamic> intercepted = <String, dynamic>{
     'intercepts': <Map<String, dynamic>>[], 'zones': <Map<String, dynamic>>[]};
@@ -328,10 +336,11 @@ class FakeApi implements SiteApi {
   /// 运行记录（W00c5d）：真站点的夹具。
   SiteError? runsError;
   @override
-  Future<List<Map<String, dynamic>>> runs({String? robotId}) async {
-    calls.add('runs ${robotId ?? '*'}');
+  Future<List<Map<String, dynamic>>> runs({String? robotId, String? mission}) async {
+    calls.add(mission == null ? 'runs ${robotId ?? '*'}' : 'runs mission=$mission');
     if (runsError != null) throw runsError!;
-    return (siteFixture('site_runs')['runs'] as List).cast<Map<String, dynamic>>();
+    final all = (siteFixture('site_runs')['runs'] as List).cast<Map<String, dynamic>>();
+    return mission == null ? all : [for (final r in all) if (r['mission'] == mission) r];
   }
   @override
   Future<Map<String, dynamic>> run(int id) async {

@@ -121,6 +121,23 @@ W00c4 加站点模式的时候，直连狗的那几屏（狗的名册、设备 P
 
 ---
 
+## 后台值守与告警现场（W17，决策 29、30）
+
+- **后台值守（只有 Android）**：登录站点就开，站点页右上的盾牌是开关（绿 = 开着）。手机向站点领一个**值守令牌**
+  （只能看告警：事件流、告警名单、值守汇总；30 天到期；注销、改口令、停用、改角色当场作废），交给原生的前台服务
+  `WatchService.kt`。这个服务自己连站点、自己钉证书指纹，app 退到后台、锁屏、被划掉都照样值守：
+  - P1 没人确认的弹系统通知；到了响铃那一档（入侵一来就是），用**闹钟声一直响**到有人点开或确认；
+  - 确认了、解决了的通知自己收回；
+  - 连不上站点超过两分钟弹「值守断了」；令牌失效弹「值守停了，打开 app 重新登录」，服务停掉。
+  
+  离开站点页（注销）、点盾牌、点常驻通知上的「停止值守」都会停，并注销值守令牌。第一次开会要通知权限（Android 13+），
+  再问一次「不限制省电」：**值守的手机要选「不限制」**，不然有的手机过一阵就把服务杀了。
+- **一直响到确认**：app 开着时，响铃那一档的告警每 4 秒再响一次（系统提示音 + 震动），有人确认就停。app 在后台时
+  由后台值守的通知响，不叠着响。
+- **告警现场**：值守屏上点一条告警进现场页：防区、拦截点、狗最后在哪（几秒前报的）、那一趟。「在图上看」把狗（红）
+  和拦截点（紫）标在地图预览上；「现场照片」按那一趟找运行记录（派去拦截的狗到了拍的那张在里面）。
+- 桌面版没有后台服务：开着窗口就是值守（W15）。
+
 ## 桌面版（W15，决策 28）
 
 跟手机**同一套代码**（`mobile/`），多了 `linux/`、`windows/`、`macos/` 三个工程目录。功能一样：站点列表、狗、值守、
@@ -160,9 +177,16 @@ flutter analyze                  # 期望：No issues found!
 flutter test --concurrency=1     # 期望：退出码 0，一条不红
 ```
 
-**这台 Ubuntu 机器编不了 APK**：`/usr/lib/android-sdk` 里只有 `platform-tools`（adb），没有构建工具和平台。
-编包要在装了 Android SDK 和 JDK 的机器上跑 `flutter build apk --release`。原来那台 Windows 开发机是这么配的
-（Android SDK 和 JDK 用 Android Studio 自带的那套）：
+**编 APK**（W17 起这台 Ubuntu 机器也能编了：JDK 17 用 apt 装的，Android SDK 在 `~/Android/Sdk`，命令行
+工具装的）：
+
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ANDROID_HOME=$HOME/Android/Sdk
+flutter build apk --release      # 第一次要下 Gradle、NDK，十来分钟；之后一两分钟
+```
+
+CI 的 `android` 作业每次都编一个 release 包（产物 `d1max-android`，留 14 天），没有编包环境的直接从那儿下。
+原来那台 Windows 开发机是这么配的（Android SDK 和 JDK 用 Android Studio 自带的那套）：
 
 ```powershell
 $env:PATH = "D:\toolchain\flutter\bin;$env:PATH"

@@ -63,6 +63,11 @@ def test_业主看得到记录与照片_不能复核不能导出(站点):
     olga = _登(s, "olga")
     code, d = s.req("GET", "/api/runs?robot=A", token=olga)
     assert code == 200 and [r["id"] for r in d["runs"]] == [rid]
+    # W17:告警带的 task_id 就是这一趟的任务名,手机按它找到到了拍的照片
+    mission = d["runs"][0]["mission"]
+    assert [r["id"] for r in s.req("GET", f"/api/runs?mission={quote(mission)}",
+                                   token=olga)[1]["runs"]] == [rid]
+    assert s.req("GET", "/api/runs?mission=nope", token=olga)[1]["runs"] == []
     code, d = s.req("GET", f"/api/runs/{rid}", token=olga)
     assert code == 200 and d["photos"][0]["waypoint"] == "P1"
     name = d["photos"][0]["name"]

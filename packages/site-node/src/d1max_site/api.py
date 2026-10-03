@@ -46,7 +46,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote
 
 from d1max_contract.dispatch import DispatchTimeout
-from d1max_site.accounts import Accounts, AuthError, LockedOut
+from d1max_site.accounts import WATCH_PATHS, Accounts, AuthError, LockedOut
 from d1max_site.audit import AuditLog
 from d1max_site.ca import SAFE_ID
 from d1max_site.dispatcher import Dispatcher, DispatchRefused, Unsupported
@@ -314,6 +314,13 @@ class _Handler(TlsHandlerMixin):
             if method == "POST" and path == "/api/incidents":
                 return self._incident_in()          # 摄像头不登录:验签
             user = self._user()
+            if getattr(user, "scope", "") == "watch" and (method, path) not in WATCH_PATHS:
+                raise HttpError(403, "值守令牌只能看告警")
+            if method == "POST" and path == "/api/watch/token":
+                # W17:手机后台值守领一个只能看告警的长期令牌(普通会话 12 小时就到期)
+                self._need(user, VIEW)
+                token, expires = self.site.accounts.issue_watch_token(str(user))
+                return self._send_json(200, {"token": token, "expires_at": expires})
             if method == "POST" and path == "/api/logout":
                 self.site.accounts.logout(self._token() or "")
                 return self._send_json(200, {"ok": True})
@@ -1090,7 +1097,7 @@ class _Handler(TlsHandlerMixin):
                 robot = (q.get("robot") or [None])[0]
                 return self._send_json(200, {"runs": desk.store.runs(
                     robot_id=robot, since_ms=num("since"), until_ms=num("until"),
-                    limit=num("limit") or 200)})
+                    limit=num("limit") or 200, mission=(q.get("mission") or [None])[0])})
             m = _RUN.match(path)
             if m is not None:
                 rid, what, arg = int(m.group(1)), m.group(2), m.group(3)

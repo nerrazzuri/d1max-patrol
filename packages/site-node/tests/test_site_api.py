@@ -601,3 +601,20 @@ def test_狗说停车没成_站点回502让人按机身急停(站点):
     code, d = s.req("POST", "/api/robots/A/halt", {}, token=alice)
     assert code == 502 and "机身急停" in d["error"], d
     assert s.req("GET", "/api/robots/A", token=alice)[1]["held"] is not None, "照样算停着"
+
+
+def test_W17_值守令牌只能看告警_注销即作废(站点):
+    tok = 站点.login()
+    code, d = 站点.req("POST", "/api/watch/token", {}, token=tok)
+    assert code == 200 and len(d["token"]) > 30 and d["expires_at"] > 0
+    w = d["token"]
+    for path in ("/api/alerts", "/api/watch/summary"):    # 这个台子没接告警台:跟普通会话一样回
+        assert 站点.req("GET", path, token=w)[0] == 站点.req("GET", path, token=tok)[0] != 403
+    for method, path in (("GET", "/api/robots"), ("POST", "/api/watch/token"),
+                         ("GET", "/api/runs"), ("POST", "/api/alerts/x/ack"),
+                         ("POST", "/api/robots/A/halt")):
+        code, d = 站点.req(method, path, {} if method == "POST" else None, token=w)
+        assert code == 403 and "值守令牌" in d["error"], (method, path, code, d)
+    assert 站点.req("POST", "/api/logout", {}, token=w)[0] == 200
+    assert 站点.req("GET", "/api/alerts", token=w)[0] == 401
+    assert 站点.req("GET", "/api/robots", token=tok)[0] == 200, "普通会话不受影响"

@@ -20,7 +20,7 @@ from collections.abc import Callable
 
 from d1max_agent.assembly import EngineParts
 from d1max_agent.engine.machine import EngineBusy, RunState
-from d1max_agent.engine.mission import Mission, MissionWaypoint, Policy
+from d1max_agent.engine.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_agent.events import EventBook
 from d1max_agent.tasks.base import Task
 from d1max_contract.messages import MapPose, TaskState
@@ -209,14 +209,16 @@ class EngineMissionTask(Task):
 
 
 class EngineGotoTask(EngineMissionTask):
-    """``goto``:一个航点的 Mission。"""
+    """``goto``:一个航点的 Mission。``photo`` 给了相机名就到了拍一张(W17:事件派遣的现场照片,
+    跟巡检点位的照片一样归档、传站点,站点按这一趟的 ``task_id`` 找)。"""
 
     def __init__(self, *, task_id: str, target: MapPose, max_speed_mps: float | None,
                  parts: EngineParts, events: EventBook, now_ms: Callable[[], int],
-                 priority: int = 0) -> None:
+                 priority: int = 0, photo: str | None = None) -> None:
         super().__init__(task_id=task_id, kind="goto", max_speed_mps=max_speed_mps,
                          parts=parts, events=events, now_ms=now_ms, priority=priority)
         self.target = target
+        self.photo = photo
         self._last_reported_m: float | None = None
 
     def _mission(self) -> Mission:
@@ -224,8 +226,9 @@ class EngineGotoTask(EngineMissionTask):
             mission=self.task_id, map_id=self.target.map_id,
             waypoints=(MissionWaypoint(
                 name="target", pose=Pose.from_xy_yaw(self.target.x, self.target.y,
-                                                     self.target.yaw)),),
-            policy=Policy())
+                                                     self.target.yaw),
+                actions=((Action(type="photo", camera=self.photo),) if self.photo else ())),),
+            policy=Policy(photo_optional=True))
 
     async def _progress(self) -> dict:
         # 按地图位姿算(W00c6e 内审:以前按原始里程,锚在 (10, 5) 时报 12 m、真距离 2 m)。

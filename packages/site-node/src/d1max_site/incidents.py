@@ -56,6 +56,8 @@ ALERT_OUTCOMES = frozenset({"dispatched", "merged", "no_robot", "unmapped", "dis
 #: 每个事件源每分钟最多收这么多条(W16,W00c2c 取舍 6):摄像头抽风、密钥漏了被人刷,不能把站点和狗
 #: 拖垮。超了回 429,记日志,报一次告警(``on_throttled``)。一个庄园的入侵事件远到不了这个数。
 RATE_PER_MIN = 30
+#: 狗到了拦截点拍一张,用哪个相机(W17:现场照片挂在告警上)。狗没报能拍就不拍。
+ARRIVAL_CAMERA = "front"
 #: 告警没报成的入侵,补报多久以内的(W16 外审)。
 RETELL_MS = 24 * 3600_000
 _TERMINAL = {"task_done": "done", "task_failed": "failed", "task_aborted": "aborted",
@@ -388,7 +390,8 @@ class IncidentDesk:
         try:
             r = await self.dispatcher.goto(row["robot_id"], target, None,
                                            issued_by=f"incident:{row['source']}",
-                                           priority=EVENT, task_id=row["task_id"])
+                                           priority=EVENT, task_id=row["task_id"],
+                                           photo=ARRIVAL_CAMERA)
             if r["ack"]["result"] == "accepted":
                 self._update(iid, outcome="dispatched", note="已出动")
             else:
@@ -465,8 +468,12 @@ class IncidentDesk:
             self._telling.add(rid)
         try:
             if row.get("outcome") == "merged" and row.get("merged_into") is not None:
-                lead = self._row(row["merged_into"])        # 并进来的:说是谁在去
-                row = row | {"robot_id": lead.get("robot_id")}
+                lead = self._row(row["merged_into"])        # 并进来的:说是谁在去、哪一趟
+                row = row | {"robot_id": lead.get("robot_id"), "task_id": lead.get("task_id")}
+            point = self.intercept(row["intercept"]) if row.get("intercept") else None
+            if point is not None:                           # 告警带拦截点在图上的位置(W17)
+                row = row | {"intercept_pose": {k: point[k] for k in (
+                    "name", "map_id", "map_version", "x", "y", "yaw")}}
             try:
                 self.on_outcome(row)
             except Exception:

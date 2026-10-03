@@ -342,7 +342,8 @@ class AgentRuntime:
         target = MapPose.from_wire(cmd.payload["target"])
         return EngineGotoTask(task_id=cmd.task_id, target=target,
                               max_speed_mps=cmd.payload.get("max_speed_mps"), parts=self.parts,
-                              events=self.events, now_ms=self._now, priority=cmd.priority)
+                              events=self.events, now_ms=self._now, priority=cmd.priority,
+                              photo=cmd.payload.get("photo"))
 
     def _admit(self, cmd: Command) -> str:
         """发件箱满了(盘到停止水位或发件箱到上限)不接巡检 —— 绝不删没传完的来腾地方。
@@ -456,6 +457,12 @@ class AgentRuntime:
             out["relocalize"] = {"needs_pose": not self.parts.nav.anchor.identity}
             # W00c6f:在当前位置标原点(定位不好就拒);W13a:也能只标待命点(不动原点)
             out["mark_home"] = {"standby": True}
+            # W17:goto 到了能拍一张(事件派遣的现场照片,跟巡检点位的照片一样归档、传站点)。只报配了
+            # 取流的相机;一路都没有就不报(站点不带 photo)。
+            from d1max_contract.mission import CAMERAS
+            cams = [c for c in self.parts.engine.cameras if c in CAMERAS]
+            if cams:
+                out["goto_photo"] = {"cameras": cams}
             # W11a、W09i:头尾方向、这会儿能不能自己走(站点据此派不派会自己走的任务)
             head, blocked = self._head_key()
             out["head"] = {"direction": head, "autonomy": not blocked}

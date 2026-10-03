@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 import '../model/alert.dart';
 import '../model/site_watch.dart';
 import '../net/site_client.dart';
+import 'site_alert_scene.dart';
 
 /// 这一帧 SSE 是不是「升到声音档、还没人确认」的告警——手机该响铃。
 bool alertWantsSound(Map<String, dynamic> frame) {
@@ -39,6 +40,7 @@ class SiteWatchPage extends StatefulWidget {
   static const Key alertsErrorKey = Key('watch-alerts-error');
   static const Key summaryErrorKey = Key('watch-summary-error');
   static Key ackKey(String key) => Key('watch-ack-$key');
+  static Key alertKey(String key) => Key('watch-alert-$key');
   static Key resolveKey(String key) => Key('watch-resolve-$key');
   static Key robotKey(String id) => Key('watch-robot-$id');
   static const Key loadedAtKey = Key('watch-loaded-at');
@@ -169,6 +171,10 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
     return Card(
       color: a.level == 'P1' ? Colors.red.shade50 : null,
       child: ListTile(
+        key: SiteWatchPage.alertKey(a.key),
+        // 点开看现场（W17）：狗在哪、拦截点、到了拍的照片
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute<void>(builder: (_) => SiteAlertScenePage(api: widget.api, alert: a))),
         title: Text('${a.level} ${a.robot} · ${a.title}'),
         subtitle: Text([if (a.detail.isNotEmpty) a.detail, state].join('\n')),
         isThreeLine: a.detail.isNotEmpty,

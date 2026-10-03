@@ -103,6 +103,9 @@ class _Mem:
     boot_id: str = ""
     #: 由掉线变回在线的时刻(站点的钟);``None`` = 还没掉过线。掉线告警的迟滞用它。
     online_since: int | None = None
+    #: 最后一次遥测里的地图位姿(``MapPose`` 的报文)与收到的时刻(站点的钟),告警带现场用(W17)。
+    pose: dict | None = None
+    pose_ms: int = 0
 
 
 class SiteAlertSources:
@@ -122,6 +125,21 @@ class SiteAlertSources:
         self._sched_entries: dict[str, list[str]] = {}
         #: 入侵告警合并进来的防区(按告警的键),拼标题用(W16)。
         self._incident_zones: dict[str, list[str]] = {}
+        #: 每条狗的告警都带上狗最后在哪、在跑哪一趟(W17)。
+        desk.context_for = self.here
+
+    def here(self, robot: str) -> dict:
+        """这台狗的现场(W17):最后一次报的地图位姿(带站点收到的时刻)、正在跑的那一趟。站点那一行、
+        没见过的狗:空的。"""
+        m = self._mem.get(robot)
+        if m is None:
+            return {}
+        out: dict = {}
+        if m.pose is not None:
+            out["pose"] = dict(m.pose) | {"at_ms": m.pose_ms}
+        if m.running and m.started:
+            out["task_id"] = m.started
+        return out
 
     def attach(self, dispatcher) -> None:
         """挂到派遣器的三条上行回调上。挂之前先用库里**最后见过**的状态给每台狗的记忆做种:
@@ -330,6 +348,8 @@ class SiteAlertSources:
             skew = self._skew_of(rid)
         skew = skew or 0.0
         m = self._m(rid)
+        if t.pose is not None:
+            m.pose, m.pose_ms = t.pose.to_wire(), self._now()
         if abs(skew) > SKEW_ALARM_S and not m.skew:
             m.skew = True
             self.desk.raise_alert(kind="clock_skew", robot=rid, title="狗的钟不准",
@@ -407,7 +427,13 @@ class SiteAlertSources:
                  else f"防区 {names} 有入侵,没狗去:{what}")
         detail = (f"事件源 {row.get('source', '?')} · {row.get('type', '?')} · "
                   f"{row.get('note') or ''}")
-        a = self.desk.raise_alert(kind=kind, robot=robot, title=title[:200], detail=detail[:300])
+        ctx: dict = {"zone": zone}
+        if row.get("intercept_pose"):
+            ctx["intercept"] = row["intercept_pose"]
+        if kind == "intrusion" and row.get("task_id"):
+            ctx["task_id"] = row["task_id"]                # 到了拍的照片在这一趟的记录里
+        a = self.desk.raise_alert(kind=kind, robot=robot, title=title[:200], detail=detail[:300],
+                                  context=ctx)
         self._incident_zones[a.key] = zones
         while len(self._incident_zones) > 200:
             self._incident_zones.pop(next(iter(self._incident_zones)))

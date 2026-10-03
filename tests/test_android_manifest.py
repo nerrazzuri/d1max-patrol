@@ -35,3 +35,20 @@ def test_主界面只许横屏():
     main = [a for a in acts if a.get(f"{ANDROID}name") == ".MainActivity"]
     assert main, "找不到 MainActivity"
     assert main[0].get(f"{ANDROID}screenOrientation") == "sensorLandscape"
+
+
+def test_W17_后台值守的前台服务与权限():
+    """后台值守(W17,决策 30):前台服务(Android 14 要声明类型)、弹通知(13+ 要权限)、CPU 别睡死。
+    少一条:要么一开就崩(没声明类型、没前台服务权限),要么一声不响(没通知权限)。"""
+    perms = _permissions(MAIN_MANIFEST)
+    for p in ("FOREGROUND_SERVICE", "FOREGROUND_SERVICE_SPECIAL_USE", "POST_NOTIFICATIONS",
+              "WAKE_LOCK"):
+        assert f"android.permission.{p}" in perms, p
+    root = ET.parse(MAIN_MANIFEST).getroot()
+    svc = [s for s in root.findall("application/service")
+           if s.get(f"{ANDROID}name") == ".WatchService"]
+    assert svc, "找不到 WatchService"
+    assert svc[0].get(f"{ANDROID}foregroundServiceType") == "specialUse"
+    assert svc[0].get(f"{ANDROID}exported") == "false", "别的 app 不许启停值守"
+    props = {p.get(f"{ANDROID}name") for p in svc[0].findall("property")}
+    assert "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" in props
