@@ -315,7 +315,7 @@ class _假派单:
         self.gate = asyncio.Event()
         self.results = list(results)
 
-    async def __call__(self, rid, target, max_speed, *, issued_by, priority, task_id):
+    async def __call__(self, rid, target, max_speed, *, issued_by, priority, task_id, photo=None):
         self.calls.append((rid, task_id))
         await self.gate.wait()
         res = self.results.pop(0) if self.results else "accepted"
@@ -735,3 +735,61 @@ async def test_W16外审_站点告警循环每拍都补报_补报炸了不带走
     fake._stop, fake.alert_sources, fake.incidents = _Stop(), _Src(), _Desk()
     await asyncio.wait_for(site_main.Server._alert_loop(fake), 5)
     assert calls == ["step", "retell"] * 3
+
+
+# ------------------------------------------------------------ W17:入侵一来就响、带现场、到了拍照
+
+
+async def test_W17_入侵一来就到最高档响铃_确认之后再来一条照样响(带告警):
+    t = 带告警
+    await t.run(12)
+    await _报(t, "e1")
+    [a] = _开着的(t)
+    assert a["channel"] == "sound" and a["escalated"] == 2, "入侵不等 5 分钟"
+    t.alerts.ack(a["key"], who="gina")
+    t.clock.ms += 120_000
+    await t.run(200)                                   # 狗到了、回来
+    await _报(t, "e2", zone="front-yard")
+    new = [x for x in _开着的(t) if x["acked_ms"] is None and x["kind"].startswith("intrusion")]
+    assert len(new) == 1 and new[0]["key"] != a["key"] and new[0]["channel"] == "sound"
+    t.alerts.raise_alert(kind="stuck", robot="A", title="别的 P1")
+    stuck = [x for x in _开着的(t) if x["kind"] == "stuck"][0]
+    assert stuck["channel"] == "screen", "别的 P1 照旧从屏幕开始升档"
+
+
+async def test_W17_入侵告警带现场_防区_拦截点_哪一趟(带告警):
+    t = 带告警
+    await t.run(12)
+    r = await _报(t, "e1")
+    [a] = _开着的(t)
+    ctx = a["context"]
+    assert ctx["zone"] == "front-yard" and ctx["task_id"] == r["task_id"]
+    assert ctx["intercept"] == {"name": "gate", "map_id": "estate-1", "map_version": "7",
+                                "x": 1.0, "y": 0.0, "yaw": 0.0}
+    t.desk.set_intercept("back", map_id="estate-1", map_version="99", x=0.0, y=0.0, yaw=0.0)
+    t.desk.map_zone("back-yard", "back")
+    await _报(t, "e2", zone="back-yard")               # 没狗去:有拦截点、没有哪一趟
+    u = [x for x in _开着的(t) if x["kind"] == "intrusion_unanswered"][0]
+    assert u["context"]["intercept"]["name"] == "back" and "task_id" not in u["context"]
+
+
+async def test_W17_狗报能拍_派去拦截的goto带photo_不报就不带(站):
+    from d1max_agent.bridges.sim_media import sim_media
+    t = 站
+    await t.run(12)
+    await _报(t, "e1")
+    assert "photo" not in _gotos(t)[0]["payload"], "狗没报 goto_photo(老代理、真狗还没取流)"
+    await t.run(200)
+    t.agent.parts.engine._media = sim_media(t.clock)     # 给这只仿真狗装上相机、重报能力
+    await t.agent._publish_caps()
+    await t.run(10)
+    assert t.site.clients["A"].capabilities.tasks["goto_photo"]["cameras"] == ["front"]
+    t.clock.ms += 120_000                                # 出了合并窗口;再让遥测新鲜起来
+    await t.run(12)
+    r = await _报(t, "e2")
+    assert r["outcome"] == "dispatched", r
+    assert _gotos(t)[-1]["payload"]["photo"] == "front", _gotos(t)
+    await t.run(200)
+    assert t.desk.list()[0]["result"] == "done"
+    shots = list((t.tmp / "agent").rglob("*.jpg")) + list(t.tmp.rglob("runs/**/*.jpg"))
+    assert shots, "到了拍的那张在这一趟的归档里"

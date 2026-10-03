@@ -27,6 +27,15 @@ from d1max_site.permissions import ROLES
 
 IDLE_MS = 30 * 60_000
 ABS_MS = 12 * 3600_000
+#: 值守令牌(W17,决策 30):手机后台值守用,**只能看告警**(事件流、告警名单、值守汇总、注销自己)。
+#: 30 天到期、没有闲置期(后台连着的流每 30 s 复查一次令牌,复查不算「用」);改角色、停用、改口令
+#: 时跟会话一起作废。普通会话 12 小时就到期,后台值守用它的话过一夜就断了。
+WATCH_ABS_MS = 30 * 86400_000
+#: 一个账号最多留几个值守令牌(每次登录手机都会领一个;多出来的删最旧的)。
+WATCH_MAX = 5
+#: 值守令牌能走的接口。
+WATCH_PATHS = frozenset({("GET", "/api/events"), ("GET", "/api/alerts"),
+                         ("GET", "/api/watch/summary"), ("POST", "/api/logout")})
 FAIL_WINDOW_MS = 5 * 60_000
 FAIL_LIMIT = 5
 LOCK_MS = 5 * 60_000
@@ -48,10 +57,13 @@ class Principal(str):
     """已认证的账号名,带着角色。是 ``str`` 的子类:老调用(当成名字用)不受影响。"""
 
     role: str
+    #: ``""`` 普通会话;``"watch"`` 值守令牌(只能看告警,见 ``WATCH_PATHS``)。
+    scope: str
 
-    def __new__(cls, name: str, role: str) -> Principal:
+    def __new__(cls, name: str, role: str, scope: str = "") -> Principal:
         obj = super().__new__(cls, name)
         obj.role = role
+        obj.scope = scope
         return obj
 
     def __getnewargs__(self) -> tuple[str, str]:          # copy / pickle 要两个参数
@@ -249,17 +261,33 @@ class Accounts:
         h = _token_hash(token)
         now = self._now()
         with self.db.tx() as c:
-            row = c.execute("SELECT s.name, s.created_at, s.last_used, a.role, a.disabled "
-                            "FROM sessions s JOIN accounts a ON a.name = s.name "
+            row = c.execute("SELECT s.name, s.created_at, s.last_used, s.scope, a.role, "
+                            "a.disabled FROM sessions s JOIN accounts a ON a.name = s.name "
                             "WHERE s.token_hash=?", (h,)).fetchone()
             if row is None:
                 return None
-            if (row["disabled"] or now - row["last_used"] > self.idle_ms
-                    or now - row["created_at"] > self.abs_ms):
+            watch = row["scope"] == "watch"
+            expired = (now - row["created_at"] > WATCH_ABS_MS if watch
+                       else now - row["last_used"] > self.idle_ms
+                       or now - row["created_at"] > self.abs_ms)
+            if row["disabled"] or expired:
                 c.execute("DELETE FROM sessions WHERE token_hash=?", (h,))
                 return None
             c.execute("UPDATE sessions SET last_used=? WHERE token_hash=?", (now, h))
-            return Principal(row["name"], row["role"])
+            return Principal(row["name"], row["role"], row["scope"])
+
+    def issue_watch_token(self, name: str) -> tuple[str, int]:
+        """给这个账号发一个值守令牌(W17)。回 ``(令牌, 到期时刻)``。令牌只出现这一次,库里只存
+        哈希。"""
+        token = secrets.token_urlsafe(32)
+        now = self._now()
+        with self.db.tx() as c:
+            c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used, scope) "
+                      "VALUES (?,?,?,?, 'watch')", (_token_hash(token), name, now, now))
+            c.execute("DELETE FROM sessions WHERE scope='watch' AND name=? AND token_hash NOT IN "
+                      "(SELECT token_hash FROM sessions WHERE scope='watch' AND name=? "
+                      "ORDER BY created_at DESC, rowid DESC LIMIT ?)", (name, name, WATCH_MAX))
+        return token, now + WATCH_ABS_MS
 
     def logout(self, token: str) -> None:
         with self.db.tx() as c:

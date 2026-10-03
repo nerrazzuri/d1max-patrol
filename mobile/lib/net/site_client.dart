@@ -277,6 +277,8 @@ abstract class SiteApi {
   Future<List<Map<String, dynamic>>> incidents();
   /// 拦截点与防区（W16）：`{intercepts: [...], zones: [...]}`。
   Future<Map<String, dynamic>> intercepts();
+  /// 领一个值守令牌（W17）：`{token, expires_at}`。只能看告警，给后台值守用。
+  Future<Map<String, dynamic>> watchToken();
   /// 在狗现在的位置设拦截点（W16，管理员；狗上什么都不改）。回拦截点与防区。
   Future<Map<String, dynamic>> interceptHere(String robotId, String name);
   /// 防区绑到拦截点 / 防区不再派狗 / 删拦截点（W16，管理员）。都回拦截点与防区。
@@ -325,9 +327,10 @@ abstract class SiteApi {
   /// 人确认之后 [replace] 为真再发一次。
   Future<Map<String, dynamic>> markHome(String robotId, {String name = '', bool replace = false});
 
-  /// 运行记录（W00c5d，决策 8：证据都在站点）：最近的在前；[robotId] 给了只要这台狗的。
+  /// 运行记录（W00c5d，决策 8：证据都在站点）：最近的在前；[robotId] 给了只要这台狗的；[mission]
+  /// 给了只要这个任务的（W17：告警带的 `task_id`，到了拍的现场照片在那一趟里）。
   /// 读不懂就抛 `FormatException`，不当成「没有记录」。
-  Future<List<Map<String, dynamic>>> runs({String? robotId});
+  Future<List<Map<String, dynamic>>> runs({String? robotId, String? mission});
 
   /// 一趟：`{run: {...}, photos: [{name, waypoint, camera, finding, review}]}`。
   Future<Map<String, dynamic>> run(int id);
@@ -677,6 +680,10 @@ class SiteClient implements SiteApi {
       _map(await _send('GET', '/api/schedule'));
 
   @override
+  Future<Map<String, dynamic>> watchToken() async =>
+      _map(await _send('POST', '/api/watch/token', <String, dynamic>{}));
+
+  @override
   Future<Map<String, dynamic>> intercepts() async => _map(await _send('GET', '/api/intercepts'));
 
   @override
@@ -722,9 +729,12 @@ class SiteClient implements SiteApi {
       _map(await _send('GET', '/api/watch/summary'));
 
   @override
-  Future<List<Map<String, dynamic>>> runs({String? robotId}) async {
-    final q = robotId == null ? '' : '?robot=${Uri.encodeQueryComponent(robotId)}';
-    final d = _map(await _send('GET', '/api/runs$q'));
+  Future<List<Map<String, dynamic>>> runs({String? robotId, String? mission}) async {
+    final q = <String>[
+      if (robotId != null) 'robot=${Uri.encodeQueryComponent(robotId)}',
+      if (mission != null) 'mission=${Uri.encodeQueryComponent(mission)}',
+    ];
+    final d = _map(await _send('GET', '/api/runs${q.isEmpty ? '' : '?${q.join('&')}'}'));
     final rows = d['runs'];
     if (rows is! List) throw const FormatException('站点回的运行记录里没有 runs');
     return rows.whereType<Map<String, dynamic>>().toList();

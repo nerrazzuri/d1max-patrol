@@ -77,6 +77,10 @@ class Alert {
   /// 那次没出声。
   final String channel;
 
+  /// 现场（W17）：`pose`（狗最后在哪：`map_id`、`map_version`、`x`、`y`、`yaw`、`at_ms`）、
+  /// `task_id`（哪一趟，照片在那一趟的记录里）、`intercept`（拦截点）、`zone`。老站点不发：空的。
+  final Map<String, dynamic> context;
+
   const Alert({
     required this.key,
     required this.level,
@@ -92,6 +96,7 @@ class Alert {
     required this.resolvedMs,
     required this.escalated,
     required this.channel,
+    this.context = const <String, dynamic>{},
   });
 
   factory Alert.fromWire(Map<String, dynamic> m) => Alert(
@@ -111,6 +116,9 @@ class Alert {
         resolvedMs: (m['resolved_ms'] as num?)?.toInt(),
         escalated: (m['escalated'] as num?)?.toInt() ?? 0,
         channel: (m['channel'] as String?) ?? '',
+        context: (m['context'] is Map)
+            ? Map<String, dynamic>.from(m['context'] as Map)
+            : const <String, dynamic>{},
       );
 
   /// 要人立刻动身的那一档（§5.2）。

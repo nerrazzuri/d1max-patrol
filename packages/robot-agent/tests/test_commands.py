@@ -565,3 +565,14 @@ async def test_叫停与中止不判过期_狗的钟快了也照停(cp):
         assert ack.result is not AckResult.EXPIRED, kind
     ack = await cp.handle(_cmd(cid="g1", tid="tg", issued=old).to_wire(), TOPIC)
     assert ack.result is AckResult.EXPIRED
+
+
+async def test_W17_goto的photo只认已知相机(cp):
+    ok = await cp.handle(_cmd(payload={"target": POSE.to_wire(), "photo": "front"}).to_wire(),
+                         TOPIC)
+    assert ok.result is AckResult.ACCEPTED, ok
+    for bad in ("side", 1, ""):
+        ack = await cp.handle(_cmd(cid=f"c-{bad}", tid=f"t-{bad}",
+                                   payload={"target": POSE.to_wire(), "photo": bad}).to_wire(),
+                              TOPIC)
+        assert ack.result is AckResult.REJECTED and ack.reason.startswith("payload: photo"), ack

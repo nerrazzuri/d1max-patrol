@@ -21,7 +21,7 @@ jsonl 换成站点库(``sink`` 写穿、``restore`` 读回,见 ``d1max_site.aler
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
@@ -153,6 +153,14 @@ ESCALATE_AFTER_MS: tuple[int, ...] = (2 * 60_000, 5 * 60_000)
 #: 升级档位 -> 通道,下标就是 ``Alert.escalated`` 的值。
 _CHANNEL_BY_TIER: tuple[Channel, ...] = (Channel.SCREEN, Channel.PUSH, Channel.SOUND)
 
+#: 新起一条时从哪一档开始(没登记的从 0 档)。入侵一来就到最高档:弹通知、一直响到有人确认(W17,
+#: 决策 29)。有人闯进来,等 5 分钟才响就晚了;别的 P1 照旧 2/5 分钟升档。确认过的不再吸收新事件,
+#: 之后再有入侵另起一条、照样从最高档响。
+START_TIER: dict[str, int] = {
+    "intrusion": len(_CHANNEL_BY_TIER) - 1,
+    "intrusion_unanswered": len(_CHANNEL_BY_TIER) - 1,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class Alert:
@@ -183,6 +191,10 @@ class Alert:
     resolved_by: str
     resolved_ms: int | None
     escalated: int
+    #: 现场(W17):狗在哪(``pose``:``map_id``、``map_version``、``x``、``y``、``yaw``)、哪一趟
+    #: (``task_id``,照片在那一趟的记录里)、拦截点(``intercept``)。只给手机看,不参与判级、聚合。
+    #: 吸收时新的盖旧的(最近一次触发的现场)。
+    context: dict[str, Any] = field(default_factory=dict)
 
     @property
     def channel(self) -> Channel:
@@ -215,6 +227,7 @@ class Alert:
             "resolved_ms": self.resolved_ms,
             "escalated": self.escalated,
             "channel": self.channel.value,
+            "context": dict(self.context),
         }
 
 
@@ -291,6 +304,7 @@ class AlertBook:
         detail: str = "",
         now_ms: int,
         level: Level | None = None,
+        context: dict[str, Any] | None = None,
     ) -> Alert:
         """记一条告警。
 
@@ -320,6 +334,7 @@ class AlertBook:
                 detail=detail,
                 last_ms=now_ms,
                 count=existing.count + 1,
+                context=dict(context) if context is not None else existing.context,
             )
         else:
             seq = self._seq.get(group, 0) + 1
@@ -337,7 +352,8 @@ class AlertBook:
                 acked_ms=None,
                 resolved_by="",
                 resolved_ms=None,
-                escalated=0,
+                escalated=START_TIER.get(kind, 0),
+                context=dict(context or {}),
             )
         self._spill(alert)
         if seq is not None:

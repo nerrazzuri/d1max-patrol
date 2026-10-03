@@ -550,7 +550,9 @@ class Dispatcher:
 
     async def goto(self, robot_id: str, target: dict[str, Any], max_speed_mps: float | None,
                    *, issued_by: str, priority: int = 0,
-                   task_id: str | None = None) -> dict[str, Any]:
+                   task_id: str | None = None, photo: str | None = None) -> dict[str, Any]:
+        """``photo``:到了拍一张(相机名,W17)。狗没报能用这个相机拍(``goto_photo``,老代理)就不带:
+        老代理不看这个键,照走不拍,带上只会让人以为有照片。"""
         c = self._client_for(robot_id)
         self._check_dispatchable(robot_id, c, "goto")
         try:
@@ -561,6 +563,9 @@ class Dispatcher:
         payload: dict[str, Any] = {"target": target}
         if max_speed_mps is not None:
             payload["max_speed_mps"] = max_speed_mps
+        if photo is not None and photo in ((c.capabilities.tasks.get("goto_photo") or {})
+                                           .get("cameras") or ()):
+            payload["photo"] = photo
         return await self._send(c, robot_id, "goto", payload, issued_by=issued_by,
                                 priority=priority, task_id=task_id)
 

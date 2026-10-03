@@ -520,12 +520,29 @@ class TrailPainter extends CustomPainter {
   bool shouldRepaint(TrailPainter old) => true; // 每次都是新的一份点（重取之后点数可能碰巧一样）
 }
 
+/// 图上额外标的一个点（W17：告警现场 —— 狗在哪、拦截点在哪）。
+class MapMark {
+  final String label;
+  final double x;
+  final double y;
+  final Color color;
+  const MapMark(this.label, this.x, this.y, this.color);
+}
+
 class SiteMapPreviewPage extends StatefulWidget {
   final SiteApi api;
   final String mapId;
   final String version;
+  /// 告警现场（W17）：大红圈标出来、右栏最上面列出来。
+  final List<MapMark> marks;
   const SiteMapPreviewPage(
-      {super.key, required this.api, required this.mapId, required this.version});
+      {super.key,
+      required this.api,
+      required this.mapId,
+      required this.version,
+      this.marks = const []});
+
+  static const Key marksKey = Key('preview-marks');
 
   static const Key overlayKey = Key('preview-overlay');
   static const Key zonesKey = Key('preview-zones');
@@ -731,6 +748,13 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                             key: SiteMapPreviewPage.overlayKey,
                             size: Size(w, h),
                             painter: StandbyPainter(pixels, radius: r, homes: homePixels)),
+                        if (widget.marks.isNotEmpty)
+                          CustomPaint(
+                              key: SiteMapPreviewPage.marksKey,
+                              size: Size(w, h),
+                              painter: MarksPainter([
+                                for (final m in widget.marks) (px(m.x, m.y), m.color),
+                              ], radius: r * 2.5)),
                       ]),
                     ),
                   ),
@@ -740,6 +764,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
             SizedBox(
               width: 240,
               child: ListView(padding: const EdgeInsets.all(8), children: [
+                for (final m in widget.marks)
+                  Text('${m.label}  (${m.x.toStringAsFixed(1)}, ${m.y.toStringAsFixed(1)})',
+                      style: TextStyle(color: m.color, fontWeight: FontWeight.bold)),
+                if (widget.marks.isNotEmpty) const Divider(),
                 Text('一像素 ${mpp.toStringAsFixed(2)} m · 图 ${w.toInt()} × ${h.toInt()} 像素 · '
                     '约 ${(w * mpp).toStringAsFixed(0)} × ${(h * mpp).toStringAsFixed(0)} m'),
                 if (meta['source'] != null)
@@ -897,6 +925,30 @@ class ZonesPainter extends CustomPainter {
 }
 
 /// 在图上画待命点（图的像素坐标）。
+/// 告警现场的点（W17）：粗圈，圈心一个实点，远看也找得到。
+class MarksPainter extends CustomPainter {
+  MarksPainter(this.marks, {this.radius = 8});
+  final List<(Offset, Color)> marks;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final (p, c) in marks) {
+      canvas.drawCircle(
+          p,
+          radius,
+          Paint()
+            ..color = c
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = radius / 3);
+      canvas.drawCircle(p, radius / 3, Paint()..color = c);
+    }
+  }
+
+  @override
+  bool shouldRepaint(MarksPainter old) => old.marks != marks;
+}
+
 class StandbyPainter extends CustomPainter {
   StandbyPainter(this.pixels, {this.radius = 3, this.homes = const []});
   final List<Offset> pixels;

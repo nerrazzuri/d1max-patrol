@@ -144,3 +144,38 @@ def _try(a, name):
         a.login(name, "whatever-whatever")
     except AuthError:
         pass
+
+
+def test_W17_值守令牌_30天_没有闲置期_只存哈希_每人最多5个(acc):
+    from d1max_site.accounts import WATCH_ABS_MS, WATCH_MAX
+    a, c, db = acc
+    tok, exp = a.issue_watch_token("alice")
+    assert exp == c.ms + WATCH_ABS_MS
+    assert tok not in "\n".join(str(tuple(r)) for r in db.query("SELECT * FROM sessions"))
+    who = a.check(tok)
+    assert who == "alice" and who.scope == "watch" and who.role == "admin"
+    c.ms += 3 * IDLE_MS                               # 手机离线一阵:没有闲置期
+    assert a.check(tok) == "alice"
+    c.ms += ABS_MS * 2                                # 普通会话早过期了,值守令牌还在
+    assert a.check(tok) == "alice"
+    while c.ms < exp:                                 # 一直连着(流每 30 s 复查一次)也有 30 天的头
+        c.ms += IDLE_MS // 2
+        a.check(tok)
+    c.ms = exp + 1
+    assert a.check(tok) is None, "30 天到期"
+    toks = [a.issue_watch_token("alice")[0] for _ in range(WATCH_MAX + 2)]
+    assert [a.check(t) is not None for t in toks] == [False] * 2 + [True] * WATCH_MAX
+    normal = a.login("alice", "correct-horse-battery")
+    assert a.check(normal).scope == ""
+
+
+def test_W17_值守令牌_停用改角色改口令一起作废(acc):
+    a, c, _ = acc
+    a.add("gina", "guard-pass-12345", role="guard")
+    tok, _ = a.issue_watch_token("gina")
+    a.set_disabled("gina", True)
+    assert a.check(tok) is None
+    a.set_disabled("gina", False)
+    tok, _ = a.issue_watch_token("gina")
+    a.reset_password("gina", "another-pass-123")
+    assert a.check(tok) is None

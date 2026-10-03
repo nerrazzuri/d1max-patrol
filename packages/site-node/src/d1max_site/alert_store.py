@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Callable
@@ -23,7 +24,7 @@ log = logging.getLogger(__name__)
 RESTORE_RECENT = 200
 
 _COLS = ("key", "level", "kind", "robot", "title", "detail", "first_ms", "last_ms", "count",
-         "acked_by", "acked_ms", "resolved_by", "resolved_ms", "escalated")
+         "acked_by", "acked_ms", "resolved_by", "resolved_ms", "escalated", "context")
 
 
 def _from_row(r: Any) -> Alert:
@@ -31,7 +32,16 @@ def _from_row(r: Any) -> Alert:
                  title=r["title"], detail=r["detail"], first_ms=r["first_ms"],
                  last_ms=r["last_ms"], count=r["count"], acked_by=r["acked_by"],
                  acked_ms=r["acked_ms"], resolved_by=r["resolved_by"],
-                 resolved_ms=r["resolved_ms"], escalated=r["escalated"])
+                 resolved_ms=r["resolved_ms"], escalated=r["escalated"],
+                 context=_context(r["context"]))
+
+
+def _context(raw: Any) -> dict[str, Any]:
+    try:
+        got = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return got if isinstance(got, dict) else {}
 
 
 class AlertDesk:
@@ -40,6 +50,8 @@ class AlertDesk:
         self.db = db
         self._now = now_ms
         self._publish = publish
+        #: 一台狗的现场(W17):告警源接上(狗最后在哪、在跑哪一趟)。调用方给的 ``context`` 盖在上面。
+        self.context_for: Callable[[str], dict[str, Any]] | None = None
         self.book = AlertBook(sink=self._write)
         # 只读回未解决的与最近 RESTORE_RECENT 条:整张历史表读进内存会一直涨,升级每 5 s 还要遍历。
         # 序号从整张表的键里算(只读键),读回的只是一部分也不撞号。
@@ -57,7 +69,8 @@ class AlertDesk:
 
     def _write(self, a: Alert) -> None:
         w = a.to_wire()
-        vals = tuple(w[c] for c in _COLS)
+        vals = tuple(json.dumps(w[c], ensure_ascii=False) if c == "context" else w[c]
+                     for c in _COLS)
         with self.db.tx() as c:
             c.execute(f"INSERT INTO alerts({', '.join(_COLS)}) VALUES "
                       f"({', '.join('?' * len(_COLS))}) ON CONFLICT(key) DO UPDATE SET "
@@ -70,9 +83,17 @@ class AlertDesk:
 
     # ------------------------------------------------------------ 操作
 
-    def raise_alert(self, *, kind: str, robot: str, title: str, detail: str = "") -> Alert:
+    def raise_alert(self, *, kind: str, robot: str, title: str, detail: str = "",
+                    context: dict[str, Any] | None = None) -> Alert:
+        ctx: dict[str, Any] = {}
+        if self.context_for is not None:
+            try:
+                ctx.update(self.context_for(robot) or {})
+            except Exception:                        # 现场拿不到不许挡住告警
+                log.exception("%s 的现场拿不到", robot)
+        ctx.update(context or {})
         return self.book.raise_alert(kind=kind, robot=robot, title=title, detail=detail,
-                                     now_ms=self._now())
+                                     now_ms=self._now(), context=ctx)
 
     def absorbing(self, robot: str, kind: str) -> Alert | None:
         return self.book.absorbing(robot, kind, now_ms=self._now())

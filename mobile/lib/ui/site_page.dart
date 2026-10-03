@@ -14,6 +14,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../net/background_watch.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
 import 'site_logs.dart';
@@ -50,8 +51,13 @@ String _statusLine(Map<String, dynamic> r) {
 class SiteListPage extends StatefulWidget {
   final SiteStore store;
   final SiteApiFactory apiFactory;
+  /// 后台值守（W17）：测试换成假的。
+  final BackgroundWatch watch;
   const SiteListPage(
-      {super.key, required this.store, this.apiFactory = defaultSiteApi});
+      {super.key,
+      required this.store,
+      this.apiFactory = defaultSiteApi,
+      this.watch = const ChannelBackgroundWatch()});
 
   @override
   State<SiteListPage> createState() => _SiteListPageState();
@@ -166,7 +172,7 @@ class _SiteListPageState extends State<SiteListPage> {
     }
     final a = api;
     final why = await nav.push<String>(MaterialPageRoute<String>(
-        builder: (_) => SiteRobotsPage(api: a, title: s.name)));
+        builder: (_) => SiteRobotsPage(api: a, title: s.name, entry: s, watch: widget.watch)));
     // 离开就注销：不然令牌在站点上还能用半小时。
     try {
       if (a.session != null) await a.logout();
@@ -215,8 +221,21 @@ class SiteRobotsPage extends StatefulWidget {
   final SiteApi api;
   final String title;
   final void Function() ring;
+  /// 后台值守（W17，决策 30）：登录进来就开（有 [entry] 且平台支持），离开这一页（注销）就停。
+  final BackgroundWatch watch;
+  final SiteEntry? entry;
+  /// 响铃那一档、没人确认：每隔这么久再响一次，直到确认（W17）。
+  final Duration ringEvery;
   const SiteRobotsPage(
-      {super.key, required this.api, this.title = '站点', this.ring = defaultRing});
+      {super.key,
+      required this.api,
+      this.title = '站点',
+      this.ring = defaultRing,
+      this.watch = const ChannelBackgroundWatch(),
+      this.entry,
+      this.ringEvery = const Duration(seconds: 4)});
+
+  static const Key bgWatchKey = Key('btn-bg-watch');
 
   @override
   State<SiteRobotsPage> createState() => _SiteRobotsPageState();
@@ -238,6 +257,10 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     super.initState();
     _reload();
     _listen();
+    // 后台值守（决策 30）：登录进来就开
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_bgStart());
+    });
   }
 
   void _listen() {
@@ -245,6 +268,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     _sub = widget.api.events().listen((f) {
       if (!_live && mounted) setState(() => _live = true);
       if (f['kind'] == 'snapshot') unawaited(_ringIfPending());
+      if (f['kind'] == 'alert' && f['alert'] is Map) {
+        _track(Map<String, dynamic>.from(f['alert'] as Map));
+      }
       if (alertWantsSound(f)) {
         widget.ring();
         final a = f['alert'] as Map;
@@ -263,7 +289,12 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       final rows = await widget.api.alerts();
       final pending = rows.where((a) =>
           a.channel == 'sound' && a.ackedMs == null && a.resolvedMs == null);
-      if (pending.isEmpty || _disposed) return;
+      if (_disposed) return;
+      _ringing
+        ..clear()
+        ..addAll(pending.map((a) => a.key));
+      _bellOnOff();
+      if (pending.isEmpty) return;
       widget.ring();
       final a = pending.first;
       if (mounted) {
@@ -316,12 +347,88 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     }
   }
 
+  // ------------------------------------------------------------ 一直响到有人确认（W17）
+
+  /// 正在响的：响铃那一档、还没人确认、没解决的告警的键。
+  final Set<String> _ringing = <String>{};
+  Timer? _bell;
+
+  void _track(Map<String, dynamic> a) {
+    final key = '${a['key']}';
+    final want = a['channel'] == 'sound' && a['acked_ms'] == null && a['resolved_ms'] == null;
+    if (want) {
+      _ringing.add(key);
+    } else {
+      _ringing.remove(key);
+    }
+    _bellOnOff();
+  }
+
+  void _bellOnOff() {
+    if (_ringing.isEmpty || _disposed) {
+      _bell?.cancel();
+      _bell = null;
+    } else {
+      _bell ??= Timer.periodic(widget.ringEvery, (_) {
+        // 退到后台了由后台值守的通知响（闹钟声一直响），这边不叠着响
+        final state = WidgetsBinding.instance.lifecycleState;
+        if (_ringing.isNotEmpty && (state == null || state == AppLifecycleState.resumed)) {
+          widget.ring();
+        }
+      });
+    }
+  }
+
+  // ------------------------------------------------------------ 后台值守（W17）
+
+  bool _bgOn = false;
+  bool _bgBusy = false;
+
+  Future<void> _bgStart() async {
+    final e = widget.entry;
+    if (e == null || !widget.watch.supported) return;
+    setState(() => _bgBusy = true);
+    String? why;
+    try {
+      final t = await widget.api.watchToken();
+      await widget.watch.start(
+          site: e.name, url: e.url, fingerprint: e.fingerprint, token: '${t['token']}');
+      _bgOn = true;
+    } on SiteError catch (err) {
+      why = '后台值守开不了：$err';
+    } on PlatformException catch (err) {
+      why = '后台值守开不了：${err.message}';
+    }
+    if (!mounted) return;
+    setState(() => _bgBusy = false);
+    if (why != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(why)));
+  }
+
+  Future<void> _bgToggle() async {
+    if (_bgOn) {
+      setState(() => _bgBusy = true);
+      await widget.watch.stop();
+      if (mounted) {
+        setState(() {
+          _bgOn = false;
+          _bgBusy = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('后台值守关了：app 退到后台就收不到告警')));
+      }
+    } else {
+      await _bgStart();
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
     _debounce?.cancel();
     _retry?.cancel();
     _sub?.cancel();
+    _bell?.cancel();
+    if (_bgOn) unawaited(widget.watch.stop()); // 离开就注销（站点列表那边）：后台值守跟着停
     super.dispose();
   }
 
@@ -330,6 +437,13 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     final role = widget.api.session?.role ?? '';
     return Scaffold(
       appBar: AppBar(title: Text('${widget.title}（$role）'), actions: [
+        if (widget.watch.supported && widget.entry != null)
+          IconButton(
+              key: SiteRobotsPage.bgWatchKey,
+              tooltip: _bgOn ? '后台值守：开着（点了关）' : '后台值守：关着（点了开）',
+              icon: Icon(_bgOn ? Icons.shield : Icons.shield_outlined,
+                  color: _bgOn ? Colors.green : null),
+              onPressed: _bgBusy ? null : _bgToggle),
         IconButton(
             key: const Key('open-watch'),
             tooltip: '值守',
