@@ -480,6 +480,10 @@ class Server:
                 self.alert_sources.step()
             except Exception:
                 log.exception("告警这一拍没办成")
+            try:
+                self.incidents.retell()                # W16 外审:入侵的告警上次没报成的,补
+            except Exception:
+                log.exception("入侵告警补报这一拍没办成")
 
     async def _sync_loop(self) -> None:
         while not self._stop.is_set():

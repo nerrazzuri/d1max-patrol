@@ -601,3 +601,137 @@ async def test_W16_拦截点与防区_列出_有防区指着不许删_防区取�
     assert t.desk.intercepts() == {"intercepts": [], "zones": []}
     with pytest.raises(IncidentError):
         t.desk.unmap_zone("front-yard")
+
+
+# ------------------------------------------------------------ W16 外审:限流并发、告警报不出去要补
+
+
+def test_W16外审_40个线程同时进来_严格只放30个_只报一次(tmp_path):
+    """接口是多线程的。让「读出最近一分钟」与「写回」之间让出 CPU(字典的 get 睡一下),把并发逼出来:
+    不加锁 40 个全放行(外审复现)。"""
+    import threading
+    import time
+
+    from d1max_site.db import SiteDB
+    from d1max_site.incidents import RATE_PER_MIN
+
+    class _慢(dict):
+        def get(self, *a):
+            got = super().get(*a)
+            time.sleep(0.002)
+            return got
+
+    class _D:
+        feed = None
+
+        def on_event(self, _):
+            pass
+    desk = IncidentDesk(SiteDB(tmp_path / "s.db"), _D(), now_ms=lambda: 1_000_000)
+    desk._recent = _慢()
+    told: list[str] = []
+    desk.on_throttled = told.append
+    barrier = threading.Barrier(40)
+    got: list[bool] = []
+
+    def go():
+        barrier.wait()
+        got.append(desk.allow("nvr-1"))
+    ts = [threading.Thread(target=go) for _ in range(40)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert got.count(True) == RATE_PER_MIN and got.count(False) == 40 - RATE_PER_MIN
+    assert told == ["nvr-1"]
+
+
+async def test_W16外审_告警第一次报不出去_派遣照常_下一拍补报_只报一次(带告警):
+    t = 带告警
+    await t.run(12)
+    real = t.desk.on_outcome
+    tries = []
+
+    def 头一回炸(row):
+        tries.append(row["id"])
+        if len(tries) == 1:
+            raise RuntimeError("告警库一时写不进")
+        real(row)
+    t.desk.on_outcome = 头一回炸
+    r = await _报(t, "e1")
+    assert r["outcome"] == "dispatched" and len(_gotos(t)) == 1, "派遣照常"
+    assert not _开着的(t) and t.desk.list()[0]["told_ms"] is None, "没报成:不记说过"
+    assert t.desk.retell() == 1
+    [a] = _开着的(t)
+    assert a["kind"] == "intrusion" and a["count"] == 1
+    assert t.desk.list()[0]["told_ms"] is not None
+    assert t.desk.retell() == 0
+    await t.run(200)                                  # 狗到了:结果回写又推一遍,不再报
+    assert t.desk.list()[0]["result"] == "done"
+    assert _开着的(t)[0]["count"] == 1 and len(tries) == 2
+
+
+async def test_W16外审_站点重启_没报成的入侵补报_一天以前的不补(带告警):
+    from d1max_site.alert_sources import SiteAlertSources
+    from d1max_site.alert_store import AlertDesk
+    t = 带告警
+    t.desk.on_outcome = None                          # 「重启前」:告警还没接上就停了
+    await _报(t, "old", zone="pond")
+    t.clock.ms += 25 * 3600_000
+    await _报(t, "e1", zone="pond")
+    await _报(t, "e2", zone="lake")
+    assert [r["told_ms"] for r in t.desk.list()] == [None, None, None]
+    desk2 = IncidentDesk(t.db, t.site, now_ms=t.clock)        # 重启
+    alerts2 = AlertDesk(t.db, now_ms=t.clock, publish=lambda _: None)
+    desk2.on_outcome = SiteAlertSources(alerts2, now_ms=t.clock).on_incident
+    assert desk2.retell() == 2
+    [a] = alerts2.open()
+    assert a["kind"] == "intrusion_unanswered" and "pond" in a["title"] and "lake" in a["title"]
+    old = [r for r in desk2.list() if r["event_id"] == "old"][0]
+    assert old["told_ms"] is None, "一天以前的不补"
+    assert desk2.retell() == 0
+
+
+def test_W16外审_老库升级_历史入侵当说过了_不补报(tmp_path):
+    import sqlite3
+
+    from d1max_site.db import SiteDB
+    p = tmp_path / "s.db"
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE incidents (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, "
+              "event_id TEXT NOT NULL, type TEXT NOT NULL, zone TEXT NOT NULL, intercept TEXT, "
+              "received_at INTEGER NOT NULL, occurred_at INTEGER, outcome TEXT NOT NULL, "
+              "robot_id TEXT, task_id TEXT, result TEXT, merged_into INTEGER, "
+              "note TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '{}', "
+              "UNIQUE (source, event_id))")
+    c.execute("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome) "
+              "VALUES ('nvr-1', 'e0', 'intrusion', 'yard', 1, 'no_robot')")
+    c.commit()
+    c.close()
+    db = SiteDB(p)
+    assert db.query("SELECT told_ms FROM incidents")[0]["told_ms"] == 0
+
+
+async def test_W16外审_站点告警循环每拍都补报_补报炸了不带走告警(monkeypatch):
+    import asyncio
+
+    import d1max_site.alert_sources as als
+    from d1max_site import main as site_main
+    monkeypatch.setattr(als, "STEP_S", 0.01)
+    calls: list[str] = []
+
+    class _Stop:
+        def is_set(self):
+            return len(calls) >= 6
+
+    class _Src:
+        def step(self):
+            calls.append("step")
+
+    class _Desk:
+        def retell(self):
+            calls.append("retell")
+            raise RuntimeError("库锁住了")
+    fake = type("F", (), {})()
+    fake._stop, fake.alert_sources, fake.incidents = _Stop(), _Src(), _Desk()
+    await asyncio.wait_for(site_main.Server._alert_loop(fake), 5)
+    assert calls == ["step", "retell"] * 3

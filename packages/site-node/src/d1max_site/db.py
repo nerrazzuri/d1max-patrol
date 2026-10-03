@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 16                      # W13a:原点表(从待命点迁移)
+SCHEMA_VERSION = 17                      # W16 外审:入侵的告警说过没有(incidents.told_ms)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS incidents (
     merged_into  INTEGER,
     note         TEXT NOT NULL DEFAULT '',
     detail       TEXT NOT NULL DEFAULT '{}',
+    told_ms      INTEGER DEFAULT 0,
     UNIQUE (source, event_id)
 );
 CREATE INDEX IF NOT EXISTS incidents_task ON incidents(task_id);
@@ -295,6 +296,9 @@ _ADDED_COLUMNS = (
     ("schedule_runs", "told_ms", "INTEGER DEFAULT 0"),
     # W14 外审:这一趟跑完回哪个待命点,派单时定下(空 = 默认的);老行没有,回默认的。
     ("schedule_runs", "standby_name", "TEXT NOT NULL DEFAULT ''"),
+    # W16 外审:这条入侵的告警报成了没有。老库里的行当说过了(0,升级不把历史入侵全报一遍),新记的行写
+    # NULL。
+    ("incidents", "told_ms", "INTEGER DEFAULT 0"),
 )
 
 
