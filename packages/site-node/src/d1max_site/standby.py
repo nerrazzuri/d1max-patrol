@@ -43,6 +43,7 @@ import asyncio
 import json
 import logging
 import math
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
@@ -81,6 +82,12 @@ class StandbyManager:
         #: 站点这一道关(W00c6i):要人监护的狗没人监护时回理由,自动回待命点不派。
         self.refusal = refusal
         self.db = db
+        #: 标原点的回执(接口线程)与晚到的 ``home_marked`` 事件(事件循环)会同时调 ``mark``:
+        #: 「这张图上还没有
+        #: 待命点 → 建一个默认的」得一把锁做完(W16 时查出的竞态:两边都建,
+        #: 后建的那次看见前一次已经设了默认,
+        #: 把同一个点又写成「不是默认」)。
+        self._mark_lock = threading.Lock()
         self.dispatcher = dispatcher
         self._now = now_ms
         self._tasks: set[asyncio.Task] = set()
@@ -129,14 +136,16 @@ class StandbyManager:
         if not isinstance(data, dict):
             raise StandbyError("狗没报位置")
         mid, ver = data["map_id"], data["map_version"]
-        self.set_home(robot_id, name, map_id=mid, map_version=ver, x=data["x"], y=data["y"],
-                      yaw=data["yaw"])
-        here = [p for p in self.list(robot_id) if (p["map_id"], p["map_version"]) == (mid, ver)]
-        if not here:
-            d = self.default(robot_id)
-            self.set(robot_id, name, map_id=mid, map_version=ver, x=data["x"], y=data["y"],
-                     yaw=data["yaw"],
-                     default=d is None or (d["map_id"], d["map_version"]) != (mid, ver))
+        with self._mark_lock:
+            self.set_home(robot_id, name, map_id=mid, map_version=ver, x=data["x"], y=data["y"],
+                          yaw=data["yaw"])
+            here = [p for p in self.list(robot_id)
+                    if (p["map_id"], p["map_version"]) == (mid, ver)]
+            if not here:
+                d = self.default(robot_id)
+                self.set(robot_id, name, map_id=mid, map_version=ver, x=data["x"], y=data["y"],
+                         yaw=data["yaw"],
+                         default=d is None or (d["map_id"], d["map_version"]) != (mid, ver))
 
     def set_home(self, robot_id: str, name: str, *, map_id: str, map_version: str, x: float,
                  y: float, yaw: float) -> None:

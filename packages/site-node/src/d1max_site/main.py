@@ -20,6 +20,7 @@
     import-bundle DIR                      → 导入任务包,成为当前包(W00c2a)
     standby ROBOT NAME --map M:VER --pose x,y,yaw [--default] → 登记待命点(W00c2b)
     source-add NAME                        → 登记事件源,打印共享密钥(只这一次;W00c2c)
+    source-rotate NAME / source-rm NAME / source-list → 换密钥、删、列出事件源(W16)
     intercept NAME --map M:VER --pose x,y,yaw → 登记拦截点(W00c2c)
     zone ZONE INTERCEPT                    → 防区映射到拦截点(W00c2c)
     fingerprint                            → 站点服务证书的 SHA-256(手机添加站点时核对;W00c4)
@@ -258,6 +259,13 @@ def cmd_incident_admin(home: Path, what: str, **kw) -> str:
         desk = _desk(home, db)
         if what == "source":
             return desk.add_source(kw["name"])
+        if what == "source-rotate":                      # W16
+            return desk.rotate_secret(kw["name"])
+        if what == "source-rm":
+            desk.remove_source(kw["name"])
+            return ""
+        if what == "source-list":
+            return "\n".join(s["name"] for s in desk.sources())
         if what == "intercept":
             mid, sep, ver = kw["map"].rpartition(":")
             if not sep or not mid or not ver:
@@ -346,6 +354,9 @@ class Server:
         self.alert_sources.attach(self.dispatcher)
         # W00c6c:排程这一轮没跑,告诉值守的人。
         self.scheduler.on_outcome = self.alert_sources.on_schedule_outcome
+        # W16:入侵有了去向(派出去了、没狗去)、事件源被限流,告诉值守的人。
+        self.incidents.on_outcome = self.alert_sources.on_incident
+        self.incidents.on_throttled = self.alert_sources.on_incident_throttled
         # W00c5b:视频经站点。狗按需把相机推到这里(SRT),这里转 MJPEG 给观众。
         from d1max_site.video import VideoHub, dispatcher_sender
         vcfg = cfg.get("video", {})
@@ -576,6 +587,11 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--default", action="store_true")
     so = sub.add_parser("source-add", help="登记事件源,打印共享密钥")
     so.add_argument("name")
+    sr = sub.add_parser("source-rotate", help="换事件源的共享密钥(旧的当场作废),打印新的")
+    sr.add_argument("name")
+    sm = sub.add_parser("source-rm", help="删事件源(它的回调从此验签不过)")
+    sm.add_argument("name")
+    sub.add_parser("source-list", help="列出登记过的事件源(不显示密钥)")
     ic = sub.add_parser("intercept", help="登记(或改)拦截点")
     ic.add_argument("name")
     ic.add_argument("--map", required=True, help="<map_id>:<version>")
@@ -644,6 +660,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             secret = cmd_incident_admin(home, "source", name=args.name)
             print(f"事件源 {args.name} 登记好了。共享密钥"
                   f"(只显示这一次,配到摄像头/NVR 的转发器上):\n{secret}")
+        elif args.cmd == "source-rotate":
+            secret = cmd_incident_admin(home, "source-rotate", name=args.name)
+            print(f"事件源 {args.name} 的密钥换好了,旧的已经作废。新密钥"
+                  f"(只显示这一次,配到摄像头/NVR 的转发器上):\n{secret}")
+        elif args.cmd == "source-rm":
+            cmd_incident_admin(home, "source-rm", name=args.name)
+            print(f"事件源 {args.name} 删了:它的回调从此验签不过")
+        elif args.cmd == "source-list":
+            print(cmd_incident_admin(home, "source-list") or "(还没有事件源)")
         elif args.cmd == "intercept":
             cmd_incident_admin(home, "intercept", name=args.name, map=args.map, pose=args.pose)
             print(f"拦截点 {args.name} 登记好了")

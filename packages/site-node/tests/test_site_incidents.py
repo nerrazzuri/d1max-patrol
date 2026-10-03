@@ -481,3 +481,123 @@ async def test_要人监护的狗不接事件派遣(站):
     r = await _报(t)
     assert r["outcome"] == "no_robot" and "监护" in r["note"]
     assert not _gotos(t)
+
+
+# ------------------------------------------------------------ W16:告诉值守的人、事件源管理、限流
+
+
+@pytest.fixture
+async def 带告警(站):
+    from d1max_site.alert_sources import SiteAlertSources
+    from d1max_site.alert_store import AlertDesk
+    t = 站
+    t.alerts = AlertDesk(t.db, now_ms=t.clock, publish=lambda _: None)
+    t.src = SiteAlertSources(t.alerts, now_ms=t.clock)
+    t.desk.on_outcome = t.src.on_incident
+    t.desk.on_throttled = t.src.on_incident_throttled
+    return t
+
+
+def _开着的(t):
+    return t.alerts.open()
+
+
+async def test_W16_入侵派出去了_报P1有入侵谁去了_合并进来的同一条(带告警):
+    t = 带告警
+    await t.run(12)
+    r = await _报(t, "e1")
+    assert r["outcome"] == "dispatched"
+    [a] = _开着的(t)
+    assert a["kind"] == "intrusion" and a["level"] == "P1" and a["robot"] == "A"
+    assert "front-yard" in a["title"] and "A 已出动" in a["title"]
+    m = await _报(t, "e2")
+    assert m["outcome"] == "merged"
+    assert len(_开着的(t)) == 1, "合并进已出动的那条,不另起"
+    assert _开着的(t)[0]["count"] == 2, "并进来的那条算一次"
+    await t.run(200)                                      # 狗到了:结果回写、这两条又推一遍
+    assert t.desk.list()[-1]["result"] == "done"
+    assert _开着的(t)[0]["count"] == 2, "同一条事件只报一次,结果回写不再报"
+
+
+async def test_W16_入侵没狗去_报P1没狗去_防区合在标题里(带告警):
+    t = 带告警
+    t.desk.set_intercept("back", map_id="estate-1", map_version="99", x=0.0, y=0.0, yaw=0.0)
+    t.desk.map_zone("back-yard", "back")                    # 版本对不上:没狗可派
+    r = await _报(t, "e1", zone="back-yard")
+    assert r["outcome"] == "no_robot"
+    r2 = await _报(t, "e2", zone="pond")                    # 没映射
+    assert r2["outcome"] == "unmapped"
+    [a] = _开着的(t)
+    assert a["kind"] == "intrusion_unanswered" and a["level"] == "P1" and a["robot"] == "site"
+    assert "back-yard" in a["title"] and "pond" in a["title"] and "没狗去" in a["title"]
+
+
+async def test_W16_重复的_不认的类型_不报(站):
+    t = 站
+    told = []
+    t.desk.on_outcome = told.append
+    await t.run(12)
+    await _报(t, "e1")
+    assert [r["outcome"] for r in told] == ["dispatched"]
+    assert (await _报(t, "e1"))["outcome"] == "duplicate"
+    assert (await _报(t, "e3", typ="tamper"))["outcome"] == "ignored_type"
+    assert [r["outcome"] for r in told] == ["dispatched"], "重复的、不认的类型都不报"
+
+
+async def test_W16_告警报不出去_不带走派遣(站):
+    t = 站
+    await t.run(12)
+
+    def 炸(_row):
+        raise RuntimeError("告警台坏了")
+    t.desk.on_outcome = 炸
+    r = await _报(t, "e1")
+    assert r["outcome"] == "dispatched" and len(_gotos(t)) == 1
+
+
+async def test_W16_每个事件源每分钟有上限_超了不收_报一次P2(带告警):
+    from d1max_site.incidents import RATE_PER_MIN
+    t = 带告警
+    assert all(t.desk.allow("nvr-1") for _ in range(RATE_PER_MIN))
+    assert not t.desk.allow("nvr-1") and not t.desk.allow("nvr-1")
+    flood = [a for a in _开着的(t) if a["kind"] == "incident_flood"]
+    assert len(flood) == 1 and flood[0]["level"] == "P2" and "nvr-1" in flood[0]["title"]
+    assert t.desk.allow("nvr-2"), "别的事件源不受影响"
+    t.clock.ms += 61_000
+    assert t.desk.allow("nvr-1"), "过了一分钟又收"
+
+
+async def test_W16_事件源换密钥_旧的当场作废_删了验签不过(站):
+    t = 站
+    body = b'{"event_id":"x","type":"intrusion","zone":"front-yard"}'
+    ts = t.clock()
+    new = t.desk.rotate_secret("nvr-1")
+    assert new != t.secret
+    with pytest.raises(IncidentAuthError):
+        t.desk.verify("nvr-1", str(ts), 签(t.secret, ts, body), body)
+    t.desk.verify("nvr-1", str(ts), 签(new, ts, body), body)
+    assert [s["name"] for s in t.desk.sources()] == ["nvr-1"]
+    assert "secret" not in t.desk.sources()[0]
+    t.desk.remove_source("nvr-1")
+    with pytest.raises(IncidentAuthError):
+        t.desk.verify("nvr-1", str(ts), 签(new, ts, body), body)
+    from d1max_site.incidents import IncidentError
+    with pytest.raises(IncidentError):
+        t.desk.rotate_secret("nvr-1")
+    with pytest.raises(IncidentError):
+        t.desk.remove_source("nvr-1")
+
+
+async def test_W16_拦截点与防区_列出_有防区指着不许删_防区取消映射(站):
+    from d1max_site.incidents import IncidentError
+    t = 站
+    got = t.desk.intercepts()
+    assert [i["name"] for i in got["intercepts"]] == ["gate"]
+    assert got["zones"] == [{"zone": "front-yard", "intercept": "gate"}]
+    with pytest.raises(IncidentError, match="front-yard"):
+        t.desk.remove_intercept("gate")
+    t.desk.unmap_zone("front-yard")
+    t.desk.remove_intercept("gate")
+    assert t.desk.intercepts() == {"intercepts": [], "zones": []}
+    with pytest.raises(IncidentError):
+        t.desk.unmap_zone("front-yard")

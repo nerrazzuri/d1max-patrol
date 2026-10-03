@@ -516,6 +516,18 @@ def test_事件回调要签名_不要登录_管理路由要登录(站点):
     assert code == 200 and d["outcome"] == "dispatched" and d["robot_id"] == "A", d
     code, d = 站点.req("GET", "/api/incidents", token=tok)
     assert code == 200 and d["incidents"][0]["event_id"] == "e1"
+    # W16:看拦截点与防区、删防区、删拦截点;事件源每分钟有上限,超了 429
+    code, d = 站点.req("GET", "/api/intercepts", token=tok)
+    assert code == 200 and [i["name"] for i in d["intercepts"]] == ["gate"]
+    assert d["zones"] == [{"zone": "yard", "intercept": "gate"}]
+    code, d = 站点.req("POST", "/api/intercepts", {"name": "gate", "remove": True}, token=tok)
+    assert code == 400 and "yard" in d["error"], "防区还指着它"
+    code, d = 站点.req("POST", "/api/zones", {"zone": "yard", "remove": True}, token=tok)
+    assert code == 200 and d["zones"] == []
+    from d1max_site.incidents import RATE_PER_MIN
+    desk._recent["nvr-1"] = [wall()] * RATE_PER_MIN
+    code, d = 报(json.dumps({"event_id": "e9", "type": "intrusion", "zone": "yard"}).encode())
+    assert code == 429, (code, d)
 
 
 def test_TLS握手在每条连接自己的线程里_不发ClientHello的挡不住手机(站点, tmp_path):

@@ -120,6 +120,8 @@ class SiteAlertSources:
         self._site_errors: dict[str, str] = {}
         #: 排程告警合并进来的排程 id(按告警的键),拼标题用(W00c6c 内审)。
         self._sched_entries: dict[str, list[str]] = {}
+        #: 入侵告警合并进来的防区(按告警的键),拼标题用(W16)。
+        self._incident_zones: dict[str, list[str]] = {}
 
     def attach(self, dispatcher) -> None:
         """挂到派遣器的三条上行回调上。挂之前先用库里**最后见过**的状态给每台狗的记忆做种:
@@ -380,6 +382,41 @@ class SiteAlertSources:
         self._sched_entries[a.key] = ids
         while len(self._sched_entries) > 200:            # 只为合并标题记着,老的放掉
             self._sched_entries.pop(next(iter(self._sched_entries)))
+
+    def on_incident(self, row: dict) -> None:
+        """一条入侵有了去向(W16):派出去了、并进已出动的,说「有入侵、谁去了」(记在那只狗名下);没狗、
+        防区没映射、派失败,说「有入侵、没狗去」(记在站点名下)。都是 P1:要人动身。同一只狗(或站点)
+        同一个 kind 合成一条,标题列上合进来的每个防区(同排程)。"""
+        zone = str(row.get("zone") or "?")
+        outcome = row.get("outcome")
+        if outcome in ("dispatched", "merged") and row.get("robot_id"):
+            kind, robot = "intrusion", str(row["robot_id"])
+            what = f"{robot} 已出动去 {row.get('intercept') or '拦截点'}"
+        elif outcome in ("no_robot", "unmapped", "dispatch_failed", "merged"):
+            kind, robot = "intrusion_unanswered", SITE
+            what = {"no_robot": "没有能派的狗", "unmapped": "防区没映射到拦截点",
+                    "dispatch_failed": "派了,狗没收"}.get(str(outcome), "没狗去")
+        else:
+            return
+        prev = self.desk.absorbing(robot, kind)
+        zones = list(self._incident_zones.get(prev.key, ())) if prev is not None else []
+        if zone not in zones:
+            zones.append(zone)
+        names = "、".join(zones[:5]) + (f" 等 {len(zones)} 个防区" if len(zones) > 5 else "")
+        title = (f"防区 {names} 有入侵:{what}" if kind == "intrusion"
+                 else f"防区 {names} 有入侵,没狗去:{what}")
+        detail = (f"事件源 {row.get('source', '?')} · {row.get('type', '?')} · "
+                  f"{row.get('note') or ''}")
+        a = self.desk.raise_alert(kind=kind, robot=robot, title=title[:200], detail=detail[:300])
+        self._incident_zones[a.key] = zones
+        while len(self._incident_zones) > 200:
+            self._incident_zones.pop(next(iter(self._incident_zones)))
+
+    def on_incident_throttled(self, source: str) -> None:
+        """事件源一分钟超了上限被限流(W16):摄像头抽风,或者密钥漏了被人刷。"""
+        self.desk.raise_alert(kind="incident_flood", robot=SITE,
+                              title=f"事件源 {source} 一分钟内报得太多,超出的不收",
+                              detail="看看是摄像头误报成串,还是密钥漏了(d1max-site source-rotate)")
 
     def on_feed(self, item: dict) -> None:
         """站点推送流里的一条。只管 ``standby_failed``(自动回待命点没派成,狗停在原地)。"""
