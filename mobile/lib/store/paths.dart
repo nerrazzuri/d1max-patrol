@@ -16,6 +16,7 @@ const String sitesFileName = 'sites.json';
 Future<SiteStore> openSiteStore() async {
   // 桌面版（W15）：documents 是用户的「文档」文件夹（~/Documents、我的文档），谁都看得见、改得了；
   // 用 app 自己的支持目录（Linux ~/.local/share/<应用>、Windows %APPDATA%、Mac Application Support）。
+  // 这只防误删误改、不摆在用户眼前，不是安全边界：同一个系统用户照样能改（外审备注）。
   final dir = Platform.isLinux || Platform.isWindows || Platform.isMacOS
       ? await getApplicationSupportDirectory()
       : await getApplicationDocumentsDirectory();
