@@ -298,3 +298,57 @@ def test_W13a_同样的原点登记两遍_标的时刻不变_换了位置才变(
     assert stb.home("A", "m", "1")["marked_at_ms"] == 1000
     stb.set_home("A", "dock", map_id="m", map_version="1", x=1.5, y=2.0, yaw=0.0)
     assert stb.home("A", "m", "1")["marked_at_ms"] == 5000
+
+
+def test_W16_在这儿设拦截点_狗上什么都不改_老代理不发(站点, monkeypatch):
+    from d1max_site.incidents import IncidentDesk
+    s = 站点
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    _能标(s)
+    s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=s.disp._now)
+    agent_home = s.agent.parts.home
+    assert s.req("POST", "/api/robots/A/intercept/here", {"name": "gate"}, token=gina)[0] == 403
+    assert s.req("POST", "/api/robots/A/intercept/here", {"name": "a b"}, token=alice)[0] == 400
+    code, d = s.req("POST", "/api/robots/A/intercept/here", {"name": "gate"}, token=alice)
+    assert code == 200, d
+    [i] = d["intercepts"]
+    caps = s.disp.clients["A"].capabilities.tasks["patrol"]
+    assert (i["name"], i["map_id"], i["map_version"]) == ("gate", caps["map_id"],
+                                                           caps["map_version"])
+    assert (i["x"], i["y"]) == (d["ack"]["data"]["x"], d["ack"]["data"]["y"])
+    assert s.agent.parts.home is agent_home, "狗上的原点不动"
+    assert s.req("GET", "/api/robots/A/intercept/here", token=alice)[0] == 405
+    monkeypatch.setitem(s.disp.clients["A"].capabilities.tasks, "mark_home", {})
+    code, d = s.req("POST", "/api/robots/A/intercept/here", {"name": "x"}, token=alice)
+    assert code == 409 and "老代理" in d["error"], d
+
+
+def test_回执与晚到的事件同时登记_这张图上的默认待命点不会被写丢(站点):
+    """W16 时查出的竞态(W13a 留下的):接口线程(回执)与事件循环(``home_marked``)同时 ``mark``。
+    坏的先后:
+    回执那边刚看完「这张图上还没有待命点」,事件那边整个做完(建了默认的),回执这边接着建 ——
+    看见已经有默认的,
+    把同一个点写成「不是默认」。这里在第一次看完之后让另一个线程跑完整个 ``mark``(有锁的话它进不来,
+    等 1 s
+    放行)。"""
+    import threading
+    s = 站点
+    stb = s.api.standby
+    real = stb.list
+    data = {"map_id": "m", "map_version": "1", "x": 1.0, "y": 2.0, "yaw": 0.0}
+    other: list[threading.Thread] = []
+
+    def 看完之后事件插进来(robot_id):
+        got = real(robot_id)
+        if not other:
+            t = threading.Thread(target=stb.mark, args=("A", "home", data))
+            other.append(t)
+            t.start()
+            t.join(timeout=1.0)
+        return got
+    stb.list = 看完之后事件插进来
+    stb.mark("A", "home", data)
+    other[0].join()
+    stb.list = real
+    [p] = stb.list("A")
+    assert p["default"], "这张图上的默认待命点还在"

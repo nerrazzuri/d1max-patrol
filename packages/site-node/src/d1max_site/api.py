@@ -102,7 +102,8 @@ _TRAIL = re.compile(r"^/api/robots/([^/]{1,64})/mapping/(trail|preview)$")
 #: W00c5d 第三部分:给狗装、切、退版本。
 _RELCMD = re.compile(r"^/api/robots/([^/]{1,64})/release$")
 _ROBOT = re.compile(
-    r"^/api/robots/([^/]+)(?:/(goto|abort|patrol|standby|standby/return|standby/here))?$")
+    r"^/api/robots/([^/]+)"
+    r"(?:/(goto|abort|patrol|standby|standby/return|standby/here|intercept/here))?$")
 
 
 class HttpError(Exception):
@@ -347,8 +348,7 @@ class _Handler(TlsHandlerMixin):
                 self._need(user, MANAGE)
                 return self._import_bundle(user)
             if path in ("/api/incidents", "/api/intercepts", "/api/zones"):
-                self._need(user, VIEW if (method == "GET" and path == "/api/incidents")
-                           else MANAGE)
+                self._need(user, VIEW if method == "GET" else MANAGE)
                 return self._incident_admin(method, path)
             if path == "/api/runs" or path.startswith(("/api/runs/", "/api/exports")):
                 return self._runs(method, path, user)
@@ -499,6 +499,10 @@ class _Handler(TlsHandlerMixin):
             if method != "POST":
                 raise HttpError(405, "只支持 POST")
             return self._standby_here(robot_id, user)
+        if action == "intercept/here":
+            if method != "POST":
+                raise HttpError(405, "只支持 POST")
+            return self._intercept_here(robot_id, user)
         if method != "POST":
             raise HttpError(405, "只支持 POST")
         d = self._body()
@@ -650,6 +654,8 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, f"JSON 解析不了: {exc}") from exc
         source = self.headers.get("X-D1MAX-Source") or ""
         self._actor = f"source:{source}"
+        if not desk.allow(source):                       # W16:每个事件源每分钟有上限
+            raise HttpError(429, "这个事件源一分钟内报得太多,超出的不收")
         try:
             desk.parse(body)
         except IncidentError as exc:
@@ -664,19 +670,27 @@ class _Handler(TlsHandlerMixin):
             if method != "GET":
                 raise HttpError(405, "只支持 GET")
             return self._send_json(200, {"incidents": desk.list()})
+        if method == "GET":                              # W16:拦截点与防区(手机用)
+            return self._send_json(200, desk.intercepts())
         if method != "POST":
-            raise HttpError(405, "只支持 POST")
+            raise HttpError(405, "只支持 GET/POST")
         d = self._body()
+        if not isinstance(d, dict):
+            raise HttpError(400, "要一个对象")
         try:
-            if path == "/api/intercepts":
+            if path == "/api/intercepts" and d.get("remove") is True:
+                desk.remove_intercept(str(d.get("name")))
+            elif path == "/api/intercepts":
                 desk.set_intercept(d.get("name"), map_id=d.get("map_id"),
                                    map_version=d.get("map_version"), x=d.get("x"), y=d.get("y"),
                                    yaw=d.get("yaw", 0.0))
+            elif d.get("remove") is True:
+                desk.unmap_zone(str(d.get("zone")))
             else:
                 desk.map_zone(d.get("zone"), d.get("intercept"))
         except IncidentError as exc:
             raise HttpError(400, str(exc)) from exc
-        self._send_json(200, {"ok": True})
+        self._send_json(200, {"ok": True} | desk.intercepts())
 
     def _import_bundle(self, user: str) -> None:
         from d1max_site.catalog import CatalogError, import_bundle
@@ -826,6 +840,58 @@ class _Handler(TlsHandlerMixin):
         point = next((p for p in stb.list(robot_id) if p["name"] == name), None)
         return self._send_json(200, {"ack": ack, "home": home, "standby": point})
 
+    def _here_pose(self, robot_id: str, user, name: str) -> dict:
+        """狗此刻锚定后的地图位姿(``mark_home {target: standby}``:检查同标原点,狗上什么都不改)。
+        能力里没报 ``mark_home.standby`` 的老代理不发(它会当成标原点)。不成就抛 ``HttpError``。"""
+        from d1max_site.dispatcher import VIDEO_COMMAND_TTL_MS
+        c = self.site.dispatcher.clients.get(robot_id)
+        caps = c.capabilities.tasks if c and c.capabilities else {}
+        if not (caps.get("mark_home") or {}).get("standby"):
+            raise HttpError(409, f"{robot_id} 的代理报不了「只要位置」(老代理会把它当成标原点):"
+                                 "先升级狗上的版本")
+        try:
+            r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
+                robot_id, "mark_home", {"name": name, "target": "standby"},
+                issued_by=str(user), ttl_ms=VIDEO_COMMAND_TTL_MS))
+        except HttpError as exc:
+            if exc.status == 504:
+                raise HttpError(504, "等狗回话超时:狗上什么都没改,再按一次") from exc
+            raise
+        ack = r["ack"]
+        got = ack if ack.get("result") != "duplicate" else (ack.get("original") or {})
+        self._audit_detail |= {"command_id": r.get("command_id"), "task_id": r.get("task_id")}
+        if got.get("result") != "accepted":
+            raise HttpError(409, f"狗没标:{got.get('reason') or got.get('result')}")
+        data = got.get("data")
+        if not isinstance(data, dict) or data.get("target") != "standby":
+            raise HttpError(500, "狗没按「只要位置」回(老代理会把它当成标原点),什么都没登记")
+        return data
+
+    def _intercept_here(self, robot_id: str, user) -> None:
+        """在狗现在的位置设拦截点(W16):位置同「在这儿设待命点」(狗用此刻锚定后的位姿、定位不好就拒,
+        狗上什么都不改);写进拦截点(地图、版本跟着狗现在用的那张)。管理员。"""
+        from d1max_site.incidents import IncidentError
+        self._need(user, MANAGE)
+        self._audit_target = robot_id
+        d = self._body()
+        if not isinstance(d, dict):
+            raise HttpError(400, "要一个对象")
+        name = d.get("name")
+        if not isinstance(name, str) or not SAFE_ID.match(name):
+            raise HttpError(400, f"名字只许 ASCII 字母、数字、. _ -:{name!r}")
+        self._audit_detail = {"intercept": name}
+        desk = self._desk()
+        data = self._here_pose(robot_id, user, name)
+        try:
+            desk.set_intercept(name, map_id=data["map_id"], map_version=data["map_version"],
+                               x=data["x"], y=data["y"], yaw=data["yaw"])
+        except (IncidentError, KeyError) as exc:
+            raise HttpError(500, f"站点登记拦截点没成:{exc}", extra={"data": data}) from exc
+        self._audit_detail |= {"map": f"{data['map_id']}:{data['map_version']}",
+                               "x": data["x"], "y": data["y"]}
+        return self._send_json(200, {"ack": {"result": "accepted", "data": data}}
+                               | desk.intercepts())
+
     def _standby_here(self, robot_id: str, user) -> None:
         """在当前位置设待命点(W13a,决策 16):发 ``mark_home {target: standby}``,
         狗用此刻锚定后的位置、
@@ -833,7 +899,6 @@ class _Handler(TlsHandlerMixin):
         (``manage``)。老代理不认 ``target``、会当成标原点 —— 能力里没报 ``mark_home.standby``
         就不发。
         超时(504)不补登记:狗上什么都没改,再按一次就是。"""
-        from d1max_site.dispatcher import VIDEO_COMMAND_TTL_MS
         from d1max_site.standby import StandbyError
         self._need(user, MANAGE)
         self._audit_target = robot_id
@@ -850,25 +915,7 @@ class _Handler(TlsHandlerMixin):
         if default is not None and not isinstance(default, bool):
             raise HttpError(400, "default 要是 true/false")
         self._audit_detail = {"name": name}
-        c = self.site.dispatcher.clients.get(robot_id)
-        caps = c.capabilities.tasks if c and c.capabilities else {}
-        if not (caps.get("mark_home") or {}).get("standby"):
-            raise HttpError(409, f"{robot_id} 的代理不会只标待命点(老代理会把它当成标原点):"
-                                 "先升级狗上的版本")
-        try:
-            r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
-                robot_id, "mark_home", {"name": name, "target": "standby"},
-                issued_by=str(user), ttl_ms=VIDEO_COMMAND_TTL_MS))
-        except HttpError as exc:
-            if exc.status == 504:
-                raise HttpError(504, "等狗回话超时:狗上什么都没改,再按一次") from exc
-            raise
-        ack = r["ack"]
-        got = ack if ack.get("result") != "duplicate" else (ack.get("original") or {})
-        self._audit_detail |= {"command_id": r.get("command_id"), "task_id": r.get("task_id")}
-        if got.get("result") != "accepted":
-            raise HttpError(409, f"狗没标:{got.get('reason') or got.get('result')}")
-        data = got.get("data")
+        data = self._here_pose(robot_id, user, name)
         try:
             stb.mark_standby(robot_id, name, data, default)
         except (StandbyError, KeyError, TypeError) as exc:
@@ -878,7 +925,8 @@ class _Handler(TlsHandlerMixin):
             self._audit_detail |= {"map": f"{data.get('map_id')}:{data.get('map_version')}",
                                    "x": data.get("x"), "y": data.get("y")}
         point = next((p for p in stb.list(robot_id) if p["name"] == name), None)
-        return self._send_json(200, {"ack": ack, "standby": point})
+        return self._send_json(200, {"ack": {"result": "accepted", "data": data},
+                                     "standby": point})
 
     def _mapping_read(self, robot_id: str, what: str, user) -> None:
         """录包时的轨迹(W00c6h)、建图预览(W09f),管理员 —— 录包本身就是管理员的事:发

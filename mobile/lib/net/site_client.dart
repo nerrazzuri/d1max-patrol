@@ -104,6 +104,19 @@ String scheduleWhen(Map<String, dynamic> e) {
   return stb is String && stb.isNotEmpty ? '$when，巡完回 $stb' : when;
 }
 
+/// 一条事件的去向说人话（W16）。
+String incidentOutcomeText(String outcome) => switch (outcome) {
+      'dispatched' => '已出动',
+      'dispatching' => '正在派',
+      'merged' => '并进已出动的',
+      'duplicate' => '重复（同一条事件）',
+      'unmapped' => '防区没映射到拦截点，没狗去',
+      'no_robot' => '没有能派的狗',
+      'dispatch_failed' => '派了，狗没收',
+      'ignored_type' => '不是入侵，只记账',
+      _ => outcome,
+    };
+
 /// 这台狗能不能「在这儿设待命点」（W13a）：代理报了 `mark_home.standby`。老代理不认、会当成标原点。
 bool robotCanStandbyHere(Map<String, dynamic>? view) {
   final caps = view?['capabilities'];
@@ -262,6 +275,14 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> removeStandby(String id, String name);
   Future<Map<String, dynamic>> schedule();
   Future<List<Map<String, dynamic>>> incidents();
+  /// 拦截点与防区（W16）：`{intercepts: [...], zones: [...]}`。
+  Future<Map<String, dynamic>> intercepts();
+  /// 在狗现在的位置设拦截点（W16，管理员；狗上什么都不改）。回拦截点与防区。
+  Future<Map<String, dynamic>> interceptHere(String robotId, String name);
+  /// 防区绑到拦截点 / 防区不再派狗 / 删拦截点（W16，管理员）。都回拦截点与防区。
+  Future<Map<String, dynamic>> mapZone(String zone, String intercept);
+  Future<Map<String, dynamic>> unmapZone(String zone);
+  Future<Map<String, dynamic>> removeIntercept(String name);
 
   /// 告警（W00c5a）。默认只要未解决的，[all] 为真时连已解决的一起（最近的在前）。
   /// **读不懂就抛 `FormatException`，绝不退回一份空名单**（见 `alertsFromWire`）。
@@ -654,6 +675,26 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> schedule() async =>
       _map(await _send('GET', '/api/schedule'));
+
+  @override
+  Future<Map<String, dynamic>> intercepts() async => _map(await _send('GET', '/api/intercepts'));
+
+  @override
+  Future<Map<String, dynamic>> interceptHere(String robotId, String name) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/intercept/here',
+          <String, dynamic>{'name': name}));
+
+  @override
+  Future<Map<String, dynamic>> mapZone(String zone, String intercept) async =>
+      _map(await _send('POST', '/api/zones', <String, dynamic>{'zone': zone, 'intercept': intercept}));
+
+  @override
+  Future<Map<String, dynamic>> unmapZone(String zone) async =>
+      _map(await _send('POST', '/api/zones', <String, dynamic>{'zone': zone, 'remove': true}));
+
+  @override
+  Future<Map<String, dynamic>> removeIntercept(String name) async =>
+      _map(await _send('POST', '/api/intercepts', <String, dynamic>{'name': name, 'remove': true}));
 
   @override
   Future<List<Map<String, dynamic>>> incidents() async {

@@ -62,6 +62,9 @@ LEVEL_OF: dict[str, Level] = {
     # P1:立刻动身。狗动不了、狗倒了、狗失控、控制权没了 —— 这些事拖到"今
     # 天之内"处理,狗可能已经在原地卡了一整天,或者没人管的情况下继续乱动。
     "stuck": Level.P1,
+    # 入侵(W16):有人闯进防区,狗出动了要人跟上,没狗去更要人去。
+    "intrusion": Level.P1,
+    "intrusion_unanswered": Level.P1,
     "battery_abort": Level.P1,
     # 不是因为没电的整趟中止(关节过温、导航反复失败……)。**跟
     # ``battery_abort`` 分成两个 kind,不合并**:两条告警要让人做的事不一
@@ -128,6 +131,8 @@ LEVEL_OF: dict[str, Level] = {
     "schedule_blocked": Level.P2,
     # 排程巡检跑到一半被更优先的任务打断(W14):打断它的事本身已经有人在管,这一轮补不补人定。
     "schedule_interrupted": Level.P2,
+    # 事件源被限流(W16):摄像头误报成串,或者密钥漏了被人刷;今天之内看一下。
+    "incident_flood": Level.P2,
     "robot_offline_idle": Level.P2,
     # P3:只记录。日常的正常事件,不需要谁去处理什么。
     "run_done": Level.P3,

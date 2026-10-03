@@ -98,6 +98,38 @@ class FakeApi implements SiteApi {
     calls.add(name == null ? 'standby $id' : 'standby $id $name');
     return {'ack': {'result': 'accepted'}};
   }
+  /// 拦截点与防区（W16）：测试改它；设、绑、取消、删都记在 [calls] 里、照着改它。
+  Map<String, dynamic> intercepted = <String, dynamic>{
+    'intercepts': <Map<String, dynamic>>[], 'zones': <Map<String, dynamic>>[]};
+  SiteError? interceptError;
+  @override
+  Future<Map<String, dynamic>> intercepts() async => intercepted;
+  @override
+  Future<Map<String, dynamic>> interceptHere(String robotId, String name) async {
+    calls.add('intercept-here $robotId $name');
+    if (interceptError != null) throw interceptError!;
+    (intercepted['intercepts'] as List).add(<String, dynamic>{'name': name, 'map_id': 'estate-1',
+      'map_version': '8', 'x': 1.0, 'y': 2.0, 'yaw': 0.0});
+    return intercepted;
+  }
+  @override
+  Future<Map<String, dynamic>> mapZone(String zone, String intercept) async {
+    calls.add('zone $zone $intercept');
+    (intercepted['zones'] as List).add(<String, dynamic>{'zone': zone, 'intercept': intercept});
+    return intercepted;
+  }
+  @override
+  Future<Map<String, dynamic>> unmapZone(String zone) async {
+    calls.add('unzone $zone');
+    (intercepted['zones'] as List).removeWhere((z) => (z as Map)['zone'] == zone);
+    return intercepted;
+  }
+  @override
+  Future<Map<String, dynamic>> removeIntercept(String name) async {
+    calls.add('rm-intercept $name');
+    (intercepted['intercepts'] as List).removeWhere((z) => (z as Map)['name'] == name);
+    return intercepted;
+  }
   /// 待命点与原点（W13a）：测试改它；设、设默认、删都记在 [calls] 里、照着改它。
   Map<String, dynamic> standby = <String, dynamic>{'points': <Map<String, dynamic>>[], 'homes': <Map<String, dynamic>>[]};
   SiteError? standbyError;

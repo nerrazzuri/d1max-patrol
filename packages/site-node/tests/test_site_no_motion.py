@@ -60,8 +60,10 @@ def _command_kinds() -> dict[str, list[str]]:
                     if isinstance(tgt, ast.Name) and tgt.id == "kind" \
                             and isinstance(node.value, ast.Constant):
                         add(node.value.value, path.name)
-                    if isinstance(tgt, ast.Tuple) and tgt.elts \
+                    # 只认 ``kind, payload = …``(发命令的写法);告警的 ``kind, robot = …`` 不是命令
+                    if isinstance(tgt, ast.Tuple) and len(tgt.elts) >= 2 \
                             and isinstance(tgt.elts[0], ast.Name) and tgt.elts[0].id == "kind" \
+                            and isinstance(tgt.elts[1], ast.Name) and tgt.elts[1].id == "payload" \
                             and isinstance(node.value, ast.Tuple) and node.value.elts \
                             and isinstance(node.value.elts[0], ast.Constant):
                         add(node.value.elts[0].value, path.name)

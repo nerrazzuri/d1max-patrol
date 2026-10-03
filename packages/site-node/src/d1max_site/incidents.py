@@ -47,6 +47,14 @@ _HEX64 = re.compile(r"[0-9a-fA-F]{64}")
 _DIGITS = re.compile(r"[1-9][0-9]{0,15}")
 MERGE_WINDOW_MS = 60_000
 TYPES = frozenset({"intrusion"})
+#: 告诉值守的人(W16):一条入侵落到这几种去向之一就报一次告警(``on_outcome``)。出动了的、
+#: 合并进已出动的,
+#: 说「有入侵、谁去了」;没狗、没映射、派失败,说「有入侵、没狗去」。``duplicate``、``ignored_type``
+#: 不报。
+ALERT_OUTCOMES = frozenset({"dispatched", "merged", "no_robot", "unmapped", "dispatch_failed"})
+#: 每个事件源每分钟最多收这么多条(W16,W00c2c 取舍 6):摄像头抽风、密钥漏了被人刷,不能把站点和狗
+#: 拖垮。超了回 429,记日志,报一次告警(``on_throttled``)。一个庄园的入侵事件远到不了这个数。
+RATE_PER_MIN = 30
 _TERMINAL = {"task_done": "done", "task_failed": "failed", "task_aborted": "aborted",
              "task_preempted": "preempted"}
 
@@ -69,6 +77,12 @@ class IncidentDesk:
         self.merge_window_ms = merge_window_ms
         #: 首条派失败后把并进来的事件提升为新出动 —— 在后台跑,不拖住首条那个 HTTP 请求。
         self._followups: set[asyncio.Task] = set()
+        #: 一条入侵有了去向就报告警(W16):``(这一条的账)``。站点主程序接到告警源上。每条只报一次。
+        self.on_outcome: Callable[[dict[str, Any]], None] | None = None
+        self._told: set[int] = set()
+        #: 事件源被限流了(W16):``(事件源名)``。
+        self.on_throttled: Callable[[str], None] | None = None
+        self._recent: dict[str, list[int]] = {}
         dispatcher.on_event(self._on_event)
         # 上次站点停掉时还在等回执的(dispatching):没人再落账了,不收的话会占住狗与防区到
         # OPEN_INCIDENT_MS。落成失败,写明狗可能已在路上(它的终态事件照样回写 result)。
@@ -88,6 +102,46 @@ class IncidentDesk:
                 raise IncidentError(f"事件源 {name} 已经登记过了")
             c.execute("INSERT INTO incident_sources VALUES (?,?,?)", (name, secret, self._now()))
         return secret
+
+    def rotate_secret(self, name: str) -> str:
+        """换一个事件源的共享密钥(W16):旧的当场作废,返回新的(只这一次给出)。"""
+        secret = secrets.token_hex(32)
+        with self.db.tx() as c:
+            cur = c.execute("UPDATE incident_sources SET secret=? WHERE name=?", (secret, name))
+            if cur.rowcount == 0:
+                raise IncidentError(f"没有事件源 {name}")
+        return secret
+
+    def remove_source(self, name: str) -> None:
+        """删一个事件源(W16):它的回调从此验签不过。已经入账的事件留着。"""
+        with self.db.tx() as c:
+            if c.execute("DELETE FROM incident_sources WHERE name=?", (name,)).rowcount == 0:
+                raise IncidentError(f"没有事件源 {name}")
+
+    def sources(self) -> list[dict[str, Any]]:
+        """登记过的事件源(不带密钥)。"""
+        return [{"name": r["name"], "created_at": r["created_at"]} for r in self.db.query(
+            "SELECT name, created_at FROM incident_sources ORDER BY name")]
+
+    def allow(self, source: str) -> bool:
+        """这个事件源这一分钟还能不能再收一条(W16 限流)。验签过了再调。超了报一次(``on_throttled``,
+        这一分钟里只报第一下)。"""
+        now = self._now()
+        hits = [t for t in self._recent.get(source, []) if now - t < 60_000]
+        if len(hits) >= RATE_PER_MIN:
+            if len(hits) == RATE_PER_MIN:              # 第一下超:记一笔(之后同一分钟不再说)
+                hits.append(now)
+                log.warning("事件源 %s 一分钟超过 %d 条:限流", source, RATE_PER_MIN)
+                if self.on_throttled is not None:
+                    try:
+                        self.on_throttled(source)
+                    except Exception:
+                        log.exception("事件源 %s 限流的告警报不出去", source)
+            self._recent[source] = hits
+            return False
+        hits.append(now)
+        self._recent[source] = hits
+        return True
 
     def set_intercept(self, name: str, *, map_id: str, map_version: str, x: float, y: float,
                       yaw: float) -> None:
@@ -123,6 +177,28 @@ class IncidentDesk:
         with self.db.tx() as c:
             c.execute("INSERT INTO zones VALUES (?,?) ON CONFLICT(zone) DO UPDATE SET "
                       "intercept=excluded.intercept", (zone, intercept))
+
+    def intercepts(self) -> dict[str, list[dict[str, Any]]]:
+        """拦截点与防区(W16,手机用)。"""
+        return {"intercepts": [dict(r) for r in self.db.query(
+                    "SELECT * FROM intercepts ORDER BY name")],
+                "zones": [dict(r) for r in self.db.query("SELECT * FROM zones ORDER BY zone")]}
+
+    def remove_intercept(self, name: str) -> None:
+        """删一个拦截点(W16)。还有防区指着它就不删(不然那几个防区的入侵就成了「没映射」,不知不觉)。"""
+        with self.db.tx() as c:
+            zs = [r["zone"] for r in c.execute("SELECT zone FROM zones WHERE intercept=?",
+                                               (name,)).fetchall()]
+            if zs:
+                raise IncidentError(f"防区 {'、'.join(zs)} 还指着拦截点 {name}:先改那几个防区")
+            if c.execute("DELETE FROM intercepts WHERE name=?", (name,)).rowcount == 0:
+                raise IncidentError(f"没有拦截点 {name}")
+
+    def unmap_zone(self, zone: str) -> None:
+        """防区不再派狗(W16):之后这个防区的入侵记「没映射」、照样报告警。"""
+        with self.db.tx() as c:
+            if c.execute("DELETE FROM zones WHERE zone=?", (zone,)).rowcount == 0:
+                raise IncidentError(f"没有防区 {zone}")
 
     def intercept(self, name: str) -> dict[str, Any] | None:
         rows = self.db.query("SELECT * FROM intercepts WHERE name=?", (name,))
@@ -361,6 +437,17 @@ class IncidentDesk:
 
     def _publish(self, row: dict[str, Any]) -> None:
         self.dispatcher.feed.publish({"kind": "incident", "incident": row})
+        if row.get("outcome") in ALERT_OUTCOMES and row.get("id") not in self._told \
+                and self.on_outcome is not None:
+            self._told.add(row["id"])
+            if row.get("outcome") == "merged" and row.get("merged_into") is not None:
+                lead = self._row(row["merged_into"])        # 并进来的:说是谁在去
+                row = row | {"robot_id": lead.get("robot_id")}
+            try:
+                self.on_outcome(row)
+            except Exception:
+                # 报告警本身失败不许带走派遣(同排程);这一条不再报(在推送流、事件页里照样看得见)
+                log.exception("入侵 %s 的告警报不出去", row.get("id"))
 
     def _on_event(self, robot_id: str, e: Event) -> None:
         result = _TERMINAL.get(e.kind)

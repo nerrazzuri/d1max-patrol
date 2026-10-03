@@ -20,6 +20,7 @@ import 'site_logs.dart';
 import 'site_mapping.dart';
 import 'site_maps.dart';
 import 'site_releases.dart';
+import 'site_intercepts.dart';
 import 'site_runs.dart';
 import 'site_standby.dart';
 import 'site_supervise.dart';
@@ -791,7 +792,14 @@ class SiteIncidentsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('事件')),
+      appBar: AppBar(title: const Text('事件'), actions: [
+        // 拦截点与防区（W16）：谁都能看，管理员能改
+        TextButton(
+            key: const Key('btn-intercepts'),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute<void>(builder: (_) => SiteInterceptsPage(api: api))),
+            child: const Text('拦截点…')),
+      ]),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: api.incidents(),
         builder: (c, snap) {
@@ -802,7 +810,7 @@ class SiteIncidentsPage extends StatelessWidget {
           return ListView(children: [
             for (final r in rows)
               ListTile(
-                title: Text('${r['zone']} · ${r['outcome']}'),
+                title: Text('${r['zone']} · ${incidentOutcomeText('${r['outcome']}')}'),
                 subtitle: Text('${r['source']} ${r['event_id']} → '
                     '${r['robot_id'] ?? '-'} ${r['result'] ?? ''}'),
               ),

@@ -268,6 +268,19 @@ def test_事件派遣的命令行(home, capsys):
     assert site_main.main(["--home", str(home), "zone", "yard", "nope"]) == 2
     assert site_main.main(["--home", str(home), "intercept", "x", "--map", "nover",
                            "--pose", "1,0,0"]) == 2
+    # W16:换密钥、列出、删
+    capsys.readouterr()
+    assert site_main.main(["--home", str(home), "source-rotate", "nvr-1"]) == 0
+    out = capsys.readouterr().out
+    assert "旧的已经作废" in out and len(out.strip().splitlines()[-1]) == 64
+    assert site_main.main(["--home", str(home), "source-list"]) == 0
+    assert capsys.readouterr().out.strip() == "nvr-1"
+    assert site_main.main(["--home", str(home), "source-rm", "nvr-1"]) == 0
+    assert site_main.main(["--home", str(home), "source-rm", "nvr-1"]) == 2
+    assert site_main.main(["--home", str(home), "source-rotate", "nvr-1"]) == 2
+    capsys.readouterr()
+    assert site_main.main(["--home", str(home), "source-list"]) == 0
+    assert "还没有事件源" in capsys.readouterr().out
 
 
 def test_账号的命令行(home, monkeypatch, capsys):
