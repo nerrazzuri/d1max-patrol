@@ -338,6 +338,10 @@ class _Handler(TlsHandlerMixin):
             if method == "GET" and path == "/api/events":
                 self._need(user, VIEW)
                 return self._sse()
+            if method == "GET" and path == "/api/watch/events":
+                # W17 外审:只有告警的流(后台值守用;值守令牌只能走这一条)
+                self._need(user, VIEW)
+                return self._sse(alerts_only=True)
             if method == "GET" and path == "/api/rtk":
                 # 自建基站的改正数据(W09e):源连没连上、多久没来数据、收了哪些报文、基站坐标
                 self._need(user, VIEW)
@@ -1505,8 +1509,18 @@ class _Handler(TlsHandlerMixin):
         finally:
             frames.close()                        # 退场(可能连带收流)在生成器的 finally 里
 
-    def _sse(self) -> None:
+    def _alert_snapshot(self) -> dict[str, Any]:
+        """告警流的首帧(W17 外审):未解决的告警,不带狗的视图。"""
+        desk = self.site.alerts
+        # 告警簿只在事件循环里读(同 GET /api/alerts)
+        rows = [] if desk is None else self.site.loop.call(lambda: _sync(desk.open))
+        return {"kind": "snapshot", "alerts": rows}
+
+    def _sse(self, *, alerts_only: bool = False) -> None:
+        """事件流。``alerts_only``:只有告警(首帧是未解决的告警,之后只转 ``kind == "alert"`` 的帧与
+        心跳),给值守令牌用。"""
         feed = self.site.dispatcher.feed
+        snapshot = self._alert_snapshot if alerts_only else self.site.snapshot
         sub = feed.subscribe()
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1516,7 +1530,7 @@ class _Handler(TlsHandlerMixin):
         self.close_connection = True
         token = self._token()
         try:
-            self._frame(self.site.snapshot())
+            self._frame(snapshot())
             idle = since_check = 0.0
             while not self.site.stopping:
                 if since_check >= self.site.sse_recheck_s:
@@ -1530,7 +1544,7 @@ class _Handler(TlsHandlerMixin):
                 if sub.lagged:
                     sub.lagged = False
                     sub.drain()                      # 先清积压,快照之后不再推旧的
-                    self._frame(self.site.snapshot())
+                    self._frame(snapshot())
                     continue
                 if item is None:
                     idle += tick
@@ -1540,6 +1554,8 @@ class _Handler(TlsHandlerMixin):
                         self.wfile.flush()
                     continue
                 idle = 0.0
+                if alerts_only and item.get("kind") != "alert":
+                    continue
                 self._frame(item)
         except (BrokenPipeError, ConnectionResetError, ssl.SSLError, OSError):
             pass                                              # 客户端走了

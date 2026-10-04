@@ -608,9 +608,10 @@ def test_W17_值守令牌只能看告警_注销即作废(站点):
     code, d = 站点.req("POST", "/api/watch/token", {}, token=tok)
     assert code == 200 and len(d["token"]) > 30 and d["expires_at"] > 0
     w = d["token"]
-    for path in ("/api/alerts", "/api/watch/summary"):    # 这个台子没接告警台:跟普通会话一样回
-        assert 站点.req("GET", path, token=w)[0] == 站点.req("GET", path, token=tok)[0] != 403
+    # 只有告警流(/api/watch/events,真连 SSE 的测试在 test_site_alerts_api.py)和注销
     for method, path in (("GET", "/api/robots"), ("POST", "/api/watch/token"),
+                         ("GET", "/api/events"), ("GET", "/api/alerts"),
+                         ("GET", "/api/watch/summary"),
                          ("GET", "/api/runs"), ("POST", "/api/alerts/x/ack"),
                          ("POST", "/api/robots/A/halt")):
         code, d = 站点.req(method, path, {} if method == "POST" else None, token=w)

@@ -1,12 +1,14 @@
 package com.d1max.d1max_patrol
 
-// 后台值守（W17，决策 30）：app 退到后台、锁屏、被划掉之后，照样连着站点的事件流，P1 告警弹系统通知；
-// 到了「响铃」那一档（入侵一来就是，决策 29），用闹钟声一直响到有人点开。
+// 后台值守（W17，决策 30）：app 退到后台、锁屏、被划掉之后，照样连着站点的告警流，P1 告警弹系统通知；
+// 到了「响铃」那一档（入侵一来就是，决策 29），用闹钟声一直响到**站点说有人确认了**（点开、划掉都不算，
+// 见 [AlertBell]）。
 //
 // 为什么是原生服务、不是 Flutter 那边的连接：app 被划掉时 Flutter 引擎跟着没了，后台值守要的正是那个
 // 时候还在。Android 要求后台长连接是前台服务，通知栏常驻一条「值守中」。
 //
-// 凭据是站点发的**值守令牌**：只能看告警（事件流、告警名单），30 天到期，注销即作废。存在 app 私有的
+// 凭据是站点发的**值守令牌**：只能连告警流（`/api/watch/events`：首帧是没解决的告警，之后只有告警帧），
+// 30 天到期，注销即作废。存在 app 私有的
 // SharedPreferences 里（服务被系统杀掉重启时要读回来）。证书照手机 app 一样钉指纹（SHA-256，DER）：
 // 系统信不信这张证书都不算数。
 //
@@ -45,6 +47,8 @@ class WatchService : Service() {
     companion object {
         const val ACTION_START = "com.d1max.watch.START"
         const val ACTION_STOP = "com.d1max.watch.STOP"
+        /** 一条告警通知被划掉了（deleteIntent），extra `key`。 */
+        const val ACTION_DISMISSED = "com.d1max.watch.DISMISSED"
         const val PREFS = "d1max_watch"
         private const val TAG = "D1MaxWatch"
         private const val CH_ONGOING = "watch_ongoing"
@@ -72,8 +76,10 @@ class WatchService : Service() {
     private var fingerprint = ""
     private var token = ""
 
-    /** 每条告警已经弹到第几档（同一档不重复弹；升档再弹）。 */
-    private val shown = HashMap<String, Int>()
+    /** 该弹、该收、该重弹（纯判断，JUnit 测）。 */
+    private val bell = AlertBell()
+    /** 每条挂着的告警最近一次的报文：重弹时照着写标题。 */
+    private val last = HashMap<String, JSONObject>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -81,6 +87,12 @@ class WatchService : Service() {
         channels()
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         when (intent?.action) {
+            ACTION_DISMISSED -> {
+                // 服务一直在跑（通知是它弹的）:只处理这一条,不动连接
+                val key = intent.getStringExtra("key") ?: ""
+                apply(bell.onDismissed(key))
+                return START_STICKY
+            }
             ACTION_STOP -> {
                 // 用 startForegroundService 送进来的:先 startForeground,不然系统按超时崩掉
                 foreground("停止中")
@@ -150,10 +162,8 @@ class WatchService : Service() {
         }
         worker?.interrupt()
         val nm = getSystemService(NotificationManager::class.java)
-        synchronized(shown) {
-            for (k in shown.keys) nm.cancel(k.hashCode())
-            shown.clear()
-        }
+        for (k in bell.clear()) nm.cancel(k.hashCode())
+        synchronized(last) { last.clear() }
         nm.cancel(ID_STATE)
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE) else stopForeground(true)
         stopSelf()
@@ -166,7 +176,7 @@ class WatchService : Service() {
         var lostTold = false
         while (!stopping) {
             try {
-                val c = open("$url/api/events", token, fingerprint)
+                val c = open("$url/api/watch/events", token, fingerprint)
                 c.readTimeout = READ_TIMEOUT_MS
                 val code = c.responseCode
                 if (code == 401 || code == 403) {
@@ -182,7 +192,6 @@ class WatchService : Service() {
                     getSystemService(NotificationManager::class.java).cancel(ID_STATE)
                 }
                 foreground("连着站点")
-                catchUp()
                 BufferedReader(InputStreamReader(c.inputStream, Charsets.UTF_8)).use { r ->
                     while (!stopping) {
                         val line = r.readLine() ?: break
@@ -216,62 +225,75 @@ class WatchService : Service() {
         }
     }
 
-    /** 连上（重连上）补一次：没确认的 P1，断线期间升了档的，要补弹、补响。 */
-    private fun catchUp() {
-        try {
-            val c = open("$url/api/alerts", token, fingerprint)
-            c.readTimeout = READ_TIMEOUT_MS
-            if (c.responseCode != 200) {
-                c.disconnect()
-                return
-            }
-            val body = c.inputStream.bufferedReader(Charsets.UTF_8).readText()
-            c.disconnect()
-            val rows: JSONArray = JSONObject(body).optJSONArray("alerts") ?: return
-            for (i in 0 until rows.length()) alert(rows.getJSONObject(i))
-        } catch (e: Exception) {
-            Log.w(TAG, "补读告警没成", e)
-        }
-    }
-
+    /** 首帧（`snapshot`）是没解决的告警全量：连上、重连上都会来，断线期间漏的、升了档的靠它补。 */
     private fun frame(f: JSONObject) {
-        if (f.optString("kind") == "alert") f.optJSONObject("alert")?.let { alert(it) }
+        when (f.optString("kind")) {
+            "alert" -> f.optJSONObject("alert")?.let { a ->
+                remember(a)
+                apply(bell.onAlert(facts(a)))
+            }
+            "snapshot" -> {
+                val rows: JSONArray = f.optJSONArray("alerts") ?: JSONArray()
+                val list = ArrayList<AlertFacts>()
+                for (i in 0 until rows.length()) {
+                    val a = rows.getJSONObject(i)
+                    remember(a)
+                    list.add(facts(a))
+                }
+                for (act in bell.onSnapshot(list)) apply(act)
+            }
+        }
     }
 
-    /** 一条告警：P1、没人确认、没解决的弹出来；确认了、解决了的收回去。 */
-    private fun alert(a: JSONObject) = synchronized(shown) { alertLocked(a) }
+    private fun facts(a: JSONObject) = AlertFacts(
+        key = a.optString("key"),
+        p1 = a.optString("level") == "P1",
+        done = !a.isNull("acked_ms") || !a.isNull("resolved_ms"),
+        tier = a.optInt("escalated", 0),
+        sound = a.optString("channel") == "sound",
+    )
 
-    private fun alertLocked(a: JSONObject) {
+    private fun remember(a: JSONObject) {
         val key = a.optString("key")
-        if (key.isEmpty()) return
+        if (key.isNotEmpty()) synchronized(last) { last[key] = a }
+    }
+
+    private fun apply(act: BellAction) {
         val nm = getSystemService(NotificationManager::class.java)
-        val done = !a.isNull("acked_ms") || !a.isNull("resolved_ms")
-        if (done || a.optString("level") != "P1") {
-            if (shown.remove(key) != null) nm.cancel(key.hashCode())
-            return
+        when (act) {
+            is BellAction.Cancel -> {
+                nm.cancel(act.key.hashCode())
+                synchronized(last) { last.remove(act.key) }
+            }
+            is BellAction.Post -> synchronized(last) { last[act.key] }?.let { post(nm, it, act.sound) }
+            BellAction.None -> {}
         }
-        val tier = a.optInt("escalated", 0)
-        val before = shown[key]
-        if (before != null && before >= tier) return
-        shown[key] = tier
+    }
+
+    private fun post(nm: NotificationManager, a: JSONObject, sound: Boolean) {
+        val key = a.optString("key")
         val title = "${a.optString("level")} ${a.optString("robot")} · ${a.optString("title")}"
         val text = a.optString("detail").ifEmpty { "没人确认：打开 app 处理" }
-        val sound = a.optString("channel") == "sound"
+        val dismissed = Intent(this, WatchService::class.java).setAction(ACTION_DISMISSED).putExtra("key", key)
         val b = builder(if (sound) CH_ALARM else CH_P1)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(openApp())
-            .setAutoCancel(true)
+            // 响铃档：点开不收、划不掉（Android 14 起常驻的也划得掉 —— 划掉了 deleteIntent 叫回来重弹）；
+            // 只有站点推来确认、解决才收。别的档：点开就收，划掉也行（之后升档会再弹）。
+            .setAutoCancel(!sound)
+            .setOngoing(sound)
+            .setDeleteIntent(PendingIntent.getService(this, key.hashCode(), dismissed,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .setCategory(if (sound) Notification.CATEGORY_ALARM else Notification.CATEGORY_MESSAGE)
         if (Build.VERSION.SDK_INT < 26) {
             b.setPriority(Notification.PRIORITY_MAX)
             if (sound) b.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM))
         }
         val n = b.build()
-        // 响铃那一档：一直响，直到有人点开、划掉或在 app 里确认（站点推来确认就收回去）
-        if (sound) n.flags = n.flags or Notification.FLAG_INSISTENT
+        if (sound) n.flags = n.flags or Notification.FLAG_INSISTENT   // 声音一直循环
         nm.notify(key.hashCode(), n)
     }
 
