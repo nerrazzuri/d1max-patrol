@@ -402,6 +402,14 @@ class Server:
                                crl=ca / "crl.pem"),
             db=self.db, store=self.evidence, now_ms=wall_ms, maps=self.maps)
         self.intake.releases = self.releases
+        # W18:连续录像。不进备份(30 天两路录像要 TB 级;留存与盘的规矩见 recordings)。
+        from d1max_site.alert_sources import SITE as _SITE
+        from d1max_site.recordings import RecordingStore
+        self.recordings = RecordingStore(self.db, home / "recordings", now_ms=wall_ms)
+        self.recordings.on_trimmed = lambda n, oldest: loop_alerts.raise_alert(
+            kind="recording_trimmed", robot=_SITE, title=f"站点盘紧,删了最旧的 {n} 段录像",
+            detail="不到 30 天就删了:站点盘小,加盘或少录几路")
+        self.intake.recordings = self.recordings
         self.intake.on_refused = lambda robot, run, rel, why: loop_alerts.raise_alert(
             kind="upload_refused", robot=robot, title=f"站点不收 {run}/{rel}",
             detail=f"{why}(那一趟留在狗上,不会自己删)")
@@ -427,6 +435,7 @@ class Server:
             self.rtk = RtcmRelay(rtcm_source, now_ms=wall_ms, publish=lambda b: self.loop.submit(
                 lambda: self.dispatcher.publish_rtcm(b)), on_base_moved=_base_moved)
         self.api.rtk = self.rtk
+        self.api.recordings = self.recordings
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
                                         name="site-chores")
@@ -446,11 +455,22 @@ class Server:
         """后台杂事(不在事件循环里:判读要等模型、备份要拷盘):每 30 s 自动判读一拍,
         每拍看一眼备份到点没有。一拍炸了记下来、下一拍照走。"""
         while not self._stop.wait(CHORE_PERIOD_S):
-            for what, fn in (("自动判读", self.runs.step), ("备份", self.backup.step)):
+            for what, fn in (("自动判读", self.runs.step), ("备份", self.backup.step),
+                             ("录像留存", self._prune_recordings)):
                 try:
                     fn()
                 except Exception:
                     log.exception("%s这一拍没办成", what)
+
+    _next_rec_prune = 0.0
+
+    def _prune_recordings(self) -> None:
+        """录像留存(W18):每 10 分钟删一次过期的、盘紧时删最旧的。"""
+        now = time.monotonic()
+        if now < self._next_rec_prune:
+            return
+        self._next_rec_prune = now + 600
+        self.recordings.prune()
 
     async def _schedule_loop(self) -> None:
         """排程执行器:每 30 s 一拍。一拍炸了记下来、下一拍照走(老 W06 执行器同一个理由:

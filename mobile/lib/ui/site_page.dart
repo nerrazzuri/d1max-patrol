@@ -22,6 +22,7 @@ import 'site_mapping.dart';
 import 'site_maps.dart';
 import 'site_releases.dart';
 import 'site_intercepts.dart';
+import 'site_recordings.dart';
 import 'site_runs.dart';
 import 'site_standby.dart';
 import 'site_supervise.dart';
@@ -816,6 +817,14 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             if (s?.canDispatch ?? false)
               FilledButton(
                   key: const Key('btn-patrol'), onPressed: _patrol, child: const Text('派巡检')),
+            // 连续录像（W18）：谁都能看
+            OutlinedButton(
+                key: const Key('btn-recordings'),
+                onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                        builder: (_) => SiteRecordingsPage(api: widget.api, robotId: widget.robotId))),
+                child: const Text('录像')),
             if (s?.canTeleop ?? false)
               FilledButton.tonal(
                   key: const Key('btn-teleop'),

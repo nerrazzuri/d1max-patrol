@@ -98,6 +98,29 @@ class FakeApi implements SiteApi {
     calls.add(name == null ? 'standby $id' : 'standby $id $name');
     return {'ack': {'result': 'accepted'}};
   }
+  /// 连续录像（W18）：测试改它；下载、标留着记在 [calls] 里。
+  List<Map<String, dynamic>> recordingRows = <Map<String, dynamic>>[];
+  SiteError? recordingsError;
+  @override
+  Future<List<Map<String, dynamic>>> recordings(
+      {String? robotId, String? camera, int? since, int? until, int? limit}) async {
+    calls.add('recordings ${robotId ?? '*'} ${camera ?? '*'} ${since ?? '-'} ${until ?? '-'}');
+    if (recordingsError != null) throw recordingsError!;
+    return [for (final r in recordingRows) if (camera == null || r['camera'] == camera) r];
+  }
+  @override
+  Future<Uint8List> recordingBytes(int id) async {
+    calls.add('recording-bytes $id');
+    return Uint8List.fromList([1, 2, 3]);
+  }
+  @override
+  Future<Map<String, dynamic>> setRecordingKeep(int id, bool keep) async {
+    calls.add('keep $id $keep');
+    for (final r in recordingRows) {
+      if (r['id'] == id) r['keep'] = keep ? 1 : 0;
+    }
+    return <String, dynamic>{'recording': recordingRows.firstWhere((r) => r['id'] == id)};
+  }
   /// 值守令牌（W17）。
   SiteError? watchTokenError;
   @override

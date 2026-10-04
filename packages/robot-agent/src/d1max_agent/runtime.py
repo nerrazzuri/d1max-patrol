@@ -140,6 +140,7 @@ class AgentRuntime:
                  status_period_ms: int = 30_000, parts: EngineParts | None = None,
                  home: Pose | None = None, runs_root: Path | None = None,
                  monotonic: Callable[[], float] | None = None, video: Any = None,
+                 recorder: Any = None,
                  storage_facts: Callable[[], StorageFacts | None] | None = None,
                  maps: Any = None, mapper: Any = None, releases: Any = None,
                  autonomy: str | None = None, odom_identity: bool | None = None,
@@ -235,6 +236,10 @@ class AgentRuntime:
             task_factory=self._make_task)
         #: 按需推流(W00c5b)。``video_failed`` 进事件簿:断线时留在狗上、重连补投。
         self.video = video
+        #: 连续录像(W18,决策 31)。``recording_failed/ok/dropped`` 进事件簿。
+        self.recorder = recorder
+        if recorder is not None:
+            recorder.emit = self.events.emit
         #: halt(W00c5c)当场停车;W00c6a 起先撤导航桥的目标再停 HAL,不依赖引擎。
         self.processor.halt_hook = self._stop_motion
         #: 自主级别(W00c6i):``supervised`` 下 goto/巡检只在有人现场监护时才收,监护过期当场中止。
@@ -444,6 +449,8 @@ class AgentRuntime:
             if callable(getattr(self.mapper, "preview", None)):
                 out["mapping_preview"] = {}     # W09f:边走边建时的预览(手机看正在长的图)
             out["map_build"] = {}
+        if self.recorder is not None:
+            out["recording"] = self.recorder.caps()  # W18:在录哪几路、一段多长(站点、手机据此显示)
         if self.releases is not None:
             # 站点据此显示每台狗在跑哪一版。
             out["release_install"] = {"current": self.releases.current()}
@@ -1113,6 +1120,15 @@ class AgentRuntime:
             raise
 
     async def _start(self) -> None:
+        # 录像(W18)不靠 HAL 也不靠站点:先起,连不上站点期间照录、攒着。起不来(目录建不了)不许
+        # 连累代理:报一条、照常起(每拍还会重试起 ffmpeg)
+        if self.recorder is not None:
+            try:
+                self.recorder.start()
+            except Exception as exc:
+                log.exception("录像起不来")
+                self.events.emit("recording_failed",
+                                 {"camera": "*", "reason": f"起不来:{exc}"[:300]})
         # HAL 的生死归代理(总设计 §2.2「谁连 SDK」):先连上、拿到厂商控制权,再对站点亮相。
         self._closed = False
         self._hal_touched = True
@@ -1230,6 +1246,10 @@ class AgentRuntime:
             async def _video_off() -> None:
                 self.video.close()
             await _step("停推流", _video_off)
+        if self.recorder is not None:
+            async def _rec_off() -> None:
+                self.recorder.close()
+            await _step("停录像", _rec_off)
         if self.mapper is not None and hasattr(self.mapper, "shutdown"):
             # 正在录就好好停下:录包写完索引、在线建图 SIGINT 存盘(W09c2),重启后接着打包
             await _step("停录包", self.mapper.shutdown)
@@ -1588,6 +1608,11 @@ class AgentRuntime:
             await self._apply_zones(self._zones_pending)
         if self.video is not None:
             self.video.step()
+        if self.recorder is not None:
+            try:
+                self.recorder.step()
+            except Exception:                     # 录像出毛病不许带走这一拍(狗照样巡检、遥控)
+                log.exception("录像这一拍炸了")
         await self._watch_faults()
         await self._flush_events()
         await self._publish_status()

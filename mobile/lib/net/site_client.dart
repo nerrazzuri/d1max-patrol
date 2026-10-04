@@ -277,6 +277,13 @@ abstract class SiteApi {
   Future<List<Map<String, dynamic>>> incidents();
   /// 拦截点与防区（W16）：`{intercepts: [...], zones: [...]}`。
   Future<Map<String, dynamic>> intercepts();
+  /// 连续录像（W18）：一分钟一段，最新的在前。[since]/[until] 毫秒，按「这一段盖住的时间」算。
+  Future<List<Map<String, dynamic>>> recordings(
+      {String? robotId, String? camera, int? since, int? until, int? limit});
+  /// 一段录像的字节（钉证书、带令牌；一段一分钟，几十 MB）。
+  Future<Uint8List> recordingBytes(int id);
+  /// 标「留着」（过了 30 天也不删）：值班的人、管理员。
+  Future<Map<String, dynamic>> setRecordingKeep(int id, bool keep);
   /// 领一个值守令牌（W17）：`{token, expires_at}`。只能看告警，给后台值守用。
   Future<Map<String, dynamic>> watchToken();
   /// 在狗现在的位置设拦截点（W16，管理员；狗上什么都不改）。回拦截点与防区。
@@ -772,6 +779,33 @@ class SiteClient implements SiteApi {
   Future<Uint8List> mapPreviewPng(String mapId, String version) => _bytes(
       '/api/maps/${Uri.encodeComponent(mapId)}/${Uri.encodeComponent(version)}/preview.png',
       maxPhotoBytes, '地图预览');
+
+  @override
+  Future<List<Map<String, dynamic>>> recordings(
+      {String? robotId, String? camera, int? since, int? until, int? limit}) async {
+    final q = <String>[
+      if (robotId != null) 'robot=${Uri.encodeQueryComponent(robotId)}',
+      if (camera != null) 'camera=${Uri.encodeQueryComponent(camera)}',
+      if (since != null) 'since=$since',
+      if (until != null) 'until=$until',
+      if (limit != null) 'limit=$limit',
+    ];
+    final d = _map(await _send('GET', '/api/recordings${q.isEmpty ? '' : '?${q.join('&')}'}'));
+    final rows = d['recordings'];
+    if (rows is! List) throw const FormatException('站点回的录像里没有 recordings');
+    return rows.whereType<Map<String, dynamic>>().toList();
+  }
+
+  /// 一段录像最大多少字节（一分钟；真狗的码率没量过，给足余量）。
+  static const int maxRecordingBytes = 200 * 1024 * 1024;
+
+  @override
+  Future<Uint8List> recordingBytes(int id) =>
+      _bytes('/api/recordings/$id/video', maxRecordingBytes, '这段录像');
+
+  @override
+  Future<Map<String, dynamic>> setRecordingKeep(int id, bool keep) async =>
+      _map(await _send('POST', '/api/recordings/$id/keep', <String, dynamic>{'keep': keep}));
 
   /// 取一份字节（照片、预览图）：钉证书、带令牌、不跟重定向、有上限。
   Future<Uint8List> _bytes(String path, int maxBytes, String what) async {

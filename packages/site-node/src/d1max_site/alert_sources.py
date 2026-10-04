@@ -309,6 +309,18 @@ class SiteAlertSources:
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
             self.desk.raise_alert(kind="map_failed", robot=rid, title=f"{what}没成:{which}",
                                   detail=str(d.get("reason", ""))[:300])
+        elif e.kind == "recording_failed":
+            # W18:这一路录像断了(相机不通、盘写不进),狗每 10 s 重试;录回来报 recording_ok
+            self.desk.raise_alert(kind="recording_failed", robot=rid,
+                                  title=f"{d.get('camera', '?')} 录像断了",
+                                  detail=str(d.get("reason", ""))[:300])
+        elif e.kind == "recording_dropped":
+            why = "狗的盘紧" if d.get("reason") == "disk" else "攒满配额"
+            # W18:断网太久,狗上攒的录像超了配额(或盘紧),删了最旧的几段 —— 那几段站点上没有
+            self.desk.raise_alert(kind="recording_dropped", robot=rid,
+                                  title=f"狗上的录像没传到站点,删了 {d.get('count', '?')} 段",
+                                  detail=f"从 {d.get('oldest', '?')} 起;"
+                                         f"{why}:WiFi 断了太久,或者站点收不进")
         elif e.kind == "archive_write_failed":
             # 盘满、只读重挂(W00c6a):那一趟照跑,但照片、记录没存下 —— 证据缺了,多半是盘满或盘坏了。
             self.desk.raise_alert(kind="archive_failed", robot=rid,

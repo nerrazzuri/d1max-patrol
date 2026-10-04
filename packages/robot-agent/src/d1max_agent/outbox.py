@@ -49,10 +49,13 @@ class Outbox:
                  sub: str = "runs", run_depth: int = 2,
                  classify: Callable[[str], int | None] = classify,
                  settled: Callable[[Path], bool] = is_settled,
-                 delete_lock: threading.Lock | None = None) -> None:
+                 delete_lock: threading.Lock | None = None,
+                 not_counted: tuple[str, ...] = ()) -> None:
         """``sub``:发件箱里的哪一块(运行记录 ``runs``;W00c5d 第二部分的建图录包 ``bags``、生成的图
         ``maps``),各自一个队列、各自的「一趟」层数、哪些文件要传、什么算安定。"""
         self.root = Path(root)
+        #: 发件箱根下这几个目录不算进「发件箱用了多少」(W18:录像有自己的配额,攒多了不该让狗拒巡检)。
+        self._not_counted = frozenset(not_counted)
         self.runs_root = self.root / sub
         self.runs_root.mkdir(parents=True, exist_ok=True)
         self.cap_bytes = cap_bytes
@@ -162,7 +165,8 @@ class Outbox:
 
     def _measure(self) -> StorageFacts:
         total, used, _free = self._disk_usage(self.root)
-        outbox = sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
+        outbox = sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file()
+                     and p.relative_to(self.root).parts[0] not in self._not_counted)
         # 站点永远不收、隔离了的不算积压(站点那头另有 upload_refused 告警)。
         waiting = [i for i in self.queue.all() if not i.done and not i.refused]
         oldest = None
@@ -192,9 +196,12 @@ class OutboxPump:
     """后台线程:每 ``period_s`` 每一块发件箱各走一拍。上传等网络,不许卡在代理的事件循环里。"""
 
     def __init__(self, box: Outbox, *, period_s: float = 1.0,
-                 more: tuple[Outbox, ...] = ()) -> None:
+                 more: tuple[Outbox, ...] = (), uncounted: tuple[Outbox, ...] = ()) -> None:
+        """``uncounted``:照样轮着传,但不算进盘况(W18 的录像:它有自己的配额、满了删最旧的,攒多了不该
+        让狗拒巡检)。"""
         self.box = box
-        self.boxes = (box, *more)
+        self._counted = (box, *more)
+        self.boxes = (box, *more, *uncounted)
         self.period_s = period_s
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -217,7 +224,7 @@ class OutboxPump:
 
     def facts(self) -> StorageFacts | None:
         """几块发件箱合起来的盘况:盘与发件箱总量是同一块盘、同一个目录;积压相加,最老的取最老。"""
-        got = [b._facts for b in self.boxes]
+        got = [b._facts for b in self._counted]
         if any(f is None for f in got):
             return None
         first = got[0]

@@ -66,6 +66,8 @@ class IntakeServer:
         self.maps = maps
         #: W00c5d 第三部分:发布目录(给狗下载发布包)。
         self.releases = None
+        #: W18:连续录像(收狗传上来的一分钟一段)。
+        self.recordings: Any = None
         #: 永远不收的一块:``(狗, 一趟, 文件, 原因)``(主程序接到告警台)。
         self.on_refused: Callable[[str, str, str, str], None] | None = None
         self._now = now_ms
@@ -189,9 +191,11 @@ class _Handler(TlsHandlerMixin):
                 left -= len(chunk)
 
     def do_POST(self) -> None:
-        kinds = {WIRE_PATH: "runs", "/maps" + WIRE_PATH: "maps", "/bags" + WIRE_PATH: "bags"}
+        kinds = {WIRE_PATH: "runs", "/maps" + WIRE_PATH: "maps", "/bags" + WIRE_PATH: "bags",
+                 "/video" + WIRE_PATH: "video"}
         kind = kinds.get(self.path)
-        if kind is None or (kind != "runs" and self.site.maps is None):
+        if kind is None or (kind in ("maps", "bags") and self.site.maps is None) \
+                or (kind == "video" and self.site.recordings is None):
             self._drain()
             return self._refuse(404, "没有这个")
         robot = self.site.robot_for(self.connection.getpeercert(binary_form=True))
@@ -216,7 +220,8 @@ class _Handler(TlsHandlerMixin):
         rel = unquote(self.headers.get(H_REL, ""))
         put = {"runs": self.site.store.put,
                "maps": getattr(self.site.maps, "put_map_chunk", None),
-               "bags": getattr(self.site.maps, "put_bag_chunk", None)}[kind]
+               "bags": getattr(self.site.maps, "put_bag_chunk", None),
+               "video": getattr(self.site.recordings, "put", None)}[kind]
         try:
             got = put(robot, run, rel, offset=offset, data=data, total=total)
         except PathRefused as exc:

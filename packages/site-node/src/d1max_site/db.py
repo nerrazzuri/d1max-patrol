@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 18                      # W17:告警带现场(alerts.context)、值守令牌(sessions.scope)
+SCHEMA_VERSION = 19                      # W18:连续录像(recordings)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -173,6 +173,19 @@ CREATE TABLE IF NOT EXISTS incidents (
     UNIQUE (source, event_id)
 );
 CREATE INDEX IF NOT EXISTS incidents_task ON incidents(task_id);
+CREATE TABLE IF NOT EXISTS recordings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id    TEXT NOT NULL,
+    camera      TEXT NOT NULL,
+    stamp       TEXT NOT NULL,
+    start_ms    INTEGER NOT NULL,
+    bytes       INTEGER NOT NULL,
+    sha256      TEXT NOT NULL,
+    received_ms INTEGER NOT NULL,
+    keep        INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (robot_id, camera, stamp)
+);
+CREATE INDEX IF NOT EXISTS recordings_start ON recordings(start_ms);
 CREATE TABLE IF NOT EXISTS alerts (
     key          TEXT PRIMARY KEY,
     level        TEXT NOT NULL,

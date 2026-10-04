@@ -39,3 +39,21 @@ def split_run(run: str) -> tuple[str, str] | None:
     if len(parts) != 2 or not parts[0] or not STAMP_RE.match(parts[1]):
         return None
     return parts[0], parts[1]
+
+
+# ------------------------------------------------------------ 连续录像(W18,决策 31)
+
+#: 录像片段:``<相机>/<UTC 时刻>`` 一个目录,里面只有 ``video.mp4``(一分钟一段,分片 mp4:断电、
+#: 被杀掉的那段
+#: 照样能放到断的地方)。时刻是**狗的钟**(UTC),秒级,不带后缀。
+VIDEO_FILE = "video.mp4"
+_VIDEO_STAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
+
+
+def split_video(run: str) -> tuple[str, str] | None:
+    """``<相机>/<时刻>`` → (相机, 时刻);相机不是已知的那几路、形状不对返回 None。"""
+    from d1max_contract.video import CAMERAS
+    parts = run.split("/")
+    if len(parts) != 2 or parts[0] not in CAMERAS or not _VIDEO_STAMP_RE.match(parts[1]):
+        return None
+    return parts[0], parts[1]

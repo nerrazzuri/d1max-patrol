@@ -155,6 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--video-transcode", action="store_true",
                    help="相机不是 H.264 时转成 H.264 再推(默认原样转封装,不占 CPU)")
     v.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件")
+    v.add_argument("--record", default="auto",
+                   help="连续录像(W18):录哪几路相机,逗号分隔(front,back);none 不录;auto(缺省)"
+                        "真狗录 front,back、仿真不录。要 --outbox:片段从录像发件箱传站点")
+    v.add_argument("--record-max-gb", type=float, default=30.0,
+                   help="狗上攒着没传的录像最多多少(GB),超了删最旧的并报站点;默认 30")
     p.add_argument("--registration", type=Path, required=True, help="站点签发的注册文件")
     p.add_argument("--store-dir", type=Path, required=True, help="幂等记录、事件簿、代次落盘的目录")
     p.add_argument("--runs-root", type=Path, default=None,
@@ -375,12 +380,23 @@ def build(args: argparse.Namespace) -> Assembled:
         from d1max_agent.video_push import VideoPusher, lavfi_source, rtsp_source
         source = lavfi_source if args.hal == "sim" else rtsp_source(args.camera_host)
         video = VideoPusher(source=source, ffmpeg=args.ffmpeg, transcode=args.video_transcode)
-        pump = keeper = mapper = None
+        pump = keeper = mapper = recorder = None
+        cams = record_cameras(args)
         if args.outbox is not None:
-            pump, keeper, mapper = _outbox(args, registration, parts)
+            pump, keeper, mapper = _outbox(args, registration, parts, record=bool(cams))
+            if cams:
+                from d1max_agent.recording import Recorder
+                recorder = Recorder(video_root(args), cams, source=source,
+                                    encode=args.video_transcode,
+                                    quota_bytes=int(args.record_max_gb * 2**30),
+                                    emit=lambda k, d: None, monotonic=time.monotonic,
+                                    ffmpeg=args.ffmpeg)
+        elif cams:
+            log.warning("给了 --record 但没有 --outbox:不录(片段要从录像发件箱传站点)")
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,
                                store_dir=args.store_dir, now_ms=wall_ms, loaded_map=args.map,
-                               parts=parts, video=video, autonomy=resolve_autonomy(args),
+                               parts=parts, video=video, recorder=recorder,
+                               autonomy=resolve_autonomy(args),
                                storage_facts=pump.facts if pump is not None else None,
                                maps=keeper, mapper=mapper,
                                releases=_releases(args, registration),
@@ -411,8 +427,30 @@ class _NoIntake:
         raise SinkError("没有配站点接收口")
 
 
-def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineParts
-            ) -> tuple[Any, Any, Any]:
+def record_cameras(args: argparse.Namespace) -> list[str]:
+    """``--record`` → 录哪几路(W18)。``auto``:真狗前后两路、仿真不录;``none``/空:不录。"""
+    from d1max_contract.video import CAMERAS
+    raw = (args.record or "").strip()
+    if raw == "auto":
+        return list(CAMERAS) if args.hal == "d1max" else []
+    if raw in ("", "none"):
+        return []
+    cams = [c.strip() for c in raw.split(",") if c.strip()]
+    bad = [c for c in cams if c not in CAMERAS]
+    if bad:
+        raise SystemExit(f"--record 不认识的相机 {bad}(只有 {list(CAMERAS)})")
+    return cams
+
+
+def video_root(args: argparse.Namespace) -> Path:
+    """录像(W18)就在发件箱里:``<发件箱>/video``(传)、``<发件箱>/.rec``(正在录)。跟发件箱同一块盘、
+    同一套权限(另开一个目录的话,发件箱在临时盘上时那一层未必写得进,代理就起不来了);运行记录那一块
+    量用量时不算这两个目录(``not_counted``)。"""
+    return Path(args.outbox)
+
+
+def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineParts,
+            *, record: bool = False) -> tuple[Any, Any, Any]:
     """发件箱 + 后台线程;站点下发地图、录包重建(W00c5d 第二部分)。
 
     上传、下载都走站点的狗专用口,**mTLS**:跟 MQTT 同一套证书(身份就是证书)。发件箱分三块:
@@ -431,14 +469,15 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
     from d1max_agent.maps import MapKeeper, https_fetch
     from d1max_agent.outbox import Outbox, OutboxPump
     cap = int(args.outbox_max_gb * 2**30)
-    sinks: list[Any] = [_NoIntake()] * 3
+    sinks: list[Any] = [_NoIntake()] * 4
     keeper = None
     if args.intake is not None:
         ctx = ssl.create_default_context(cafile=args.tls_ca)
         ctx.load_cert_chain(args.tls_cert, args.tls_key)
         sinks = [HttpSink(args.intake, ssl_context=ctx),
                  HttpSink(args.intake + "/bags", ssl_context=ctx),
-                 HttpSink(args.intake + "/maps", ssl_context=ctx)]
+                 HttpSink(args.intake + "/maps", ssl_context=ctx),
+                 HttpSink(args.intake + "/video", ssl_context=ctx)]
         keeper = MapKeeper(Path(args.store_dir) / "maps", fetch=https_fetch(args.intake, ctx))
     mapper = None
     if args.mapping:
@@ -451,8 +490,9 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
         mapper = MappingService(orch, bags_root=args.outbox / "bags",
                                 maps_out=args.outbox / "maps")
         mapper.keeper = keeper                            # 建好的图放进本地库(W09c 决定 7)
+    from d1max_agent.recording import STAGING, SUB
     runs = Outbox(args.outbox, cap_bytes=cap, sink=sinks[0], sn=registration.robot_id,
-                  now_ms=wall_ms)
+                  now_ms=wall_ms, not_counted=(SUB, STAGING))
     bags = Outbox(args.outbox, cap_bytes=cap, sink=sinks[1], sn=registration.robot_id,
                   now_ms=wall_ms, sub="bags", run_depth=1, classify=bag_classify,
                   settled=mapper.bag_settled if mapper is not None
@@ -471,7 +511,13 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
     # 每一趟带随机后缀:传完就删,狗的钟往回拨也不会跟站点上早就收齐的那一趟撞名(内部评审)。
     import secrets
     parts.engine.run_suffix = lambda: f"{secrets.randbelow(10 ** 6):06d}"
-    pump = OutboxPump(runs, more=(bags, maps))
+    video = ()
+    if record:
+        from d1max_agent.recording import video_classify
+        video = (Outbox(video_root(args), cap_bytes=int(args.record_max_gb * 2**30),
+                        sink=sinks[3], sn=registration.robot_id, now_ms=wall_ms, sub=SUB,
+                        run_depth=2, classify=video_classify, settled=lambda p: True),)
+    pump = OutboxPump(runs, more=(bags, maps), uncounted=video)
     if mapper is not None:
         from d1max_agent.mapping import storage_pressure
         mapper.pressure = lambda: storage_pressure(pump.facts())
