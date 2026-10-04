@@ -20,7 +20,9 @@ def _shape(v):
     确认过、有的没有)按顺序不同会比出不同的形状 —— 时过时不过,而且真变了形也可能照样过。"""
     if isinstance(v, dict):
         # 事件的 ``data`` 按种类各不相同(契约里就是自由对象):哪几种事件赶上了这一趟,不该让形状变。
-        return {k: ("obj" if k == "data" and isinstance(x, dict) else _shape(x))
+        # 告警的 ``context``(W17)同理:狗那一刻在不在跑任务、报没报位姿,带的键不一样(手机按键挑着读)
+        # 。
+        return {k: ("obj" if k in ("data", "context") and isinstance(x, dict) else _shape(x))
                 for k, x in sorted(v.items())}
     if isinstance(v, list):
         merged = None
