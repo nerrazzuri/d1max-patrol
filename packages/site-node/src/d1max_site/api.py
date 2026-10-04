@@ -85,6 +85,8 @@ _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
+#: 连续录像(W18):一段 ``/api/recordings/<id>/video``、标留着 ``/api/recordings/<id>/keep``。
+_REC = re.compile(r"^/api/recordings/(\d{1,12})/(video|keep)$")
 _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,300}))?)?$")
 _EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
 #: W00c5d 第二部分:给狗下发图、录包、重建。
@@ -155,6 +157,8 @@ class SiteApi:
         self.maps = maps
         #: W00c5d 第三部分:发布目录。
         self.releases = releases
+        #: W18:连续录像(站点主程序接上)。
+        self.recordings: Any = None
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         #: W10:禁行区、限速区。有地图目录就有(测试台子不传也现建一个,派遣器共用这一份)。
         if zones is None and maps is not None:
@@ -363,6 +367,8 @@ class _Handler(TlsHandlerMixin):
                 return self._incident_admin(method, path)
             if path == "/api/runs" or path.startswith(("/api/runs/", "/api/exports")):
                 return self._runs(method, path, user)
+            if path == "/api/recordings" or _REC.match(path):
+                return self._recordings(method, path, user)
             if path == "/api/maps" or _MAPCMD.match(path) or _MAPVIEW.match(path) \
                     or _ZONES.match(path):
                 return self._maps(method, path, user)
@@ -1447,6 +1453,54 @@ class _Handler(TlsHandlerMixin):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def _recordings(self, method: str, path: str, user) -> None:
+        """连续录像(W18)。看、放:``view``;标「留着」(过了 30 天也不删):``review``(值班的人
+        判断留证据)。"""
+        from d1max_site.recordings import SEGMENT_S
+        store = self.site.recordings
+        if store is None:
+            raise HttpError(404, "这个站点没开录像")
+        if path == "/api/recordings":
+            if method != "GET":
+                raise HttpError(405, "只收 GET")
+            self._need(user, VIEW)
+            q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+
+            def num(k: str) -> int | None:
+                v = (q.get(k) or [None])[0]
+                if v is None:
+                    return None
+                if not v.isdigit():
+                    raise HttpError(400, f"{k} 要是非负整数")
+                return int(v)
+            rows = store.list(robot_id=(q.get("robot") or [None])[0],
+                              camera=(q.get("camera") or [None])[0], since_ms=num("since"),
+                              until_ms=num("until"), limit=num("limit") or 500)
+            return self._send_json(200, {"recordings": rows, "segment_s": SEGMENT_S})
+        m = _REC.match(path)
+        assert m is not None
+        rid, what = int(m.group(1)), m.group(2)
+        self._audit_target = f"recording/{rid}"
+        row = store.get(rid)
+        if row is None:
+            raise HttpError(404, "没有这一段(过了留存期删了?)")
+        if what == "video":
+            if method != "GET":
+                raise HttpError(405, "只收 GET")
+            self._need(user, VIEW)
+            p = store.path(row)
+            if not p.is_file():
+                raise HttpError(404, "这一段的文件不在了")
+            return self._send_file(p, "video/mp4")
+        if method != "POST":
+            raise HttpError(405, "只收 POST")
+        self._need(user, REVIEW)
+        body = self._body()
+        if not isinstance(body.get("keep"), bool):
+            raise HttpError(400, "要 keep: true/false")
+        self._audit_detail = {"keep": body["keep"]}
+        return self._send_json(200, {"recording": store.set_keep(rid, body["keep"])})
 
     def _send_file(self, path, content_type: str) -> None:
         size = path.stat().st_size

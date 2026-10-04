@@ -107,6 +107,10 @@ LEVEL_OF: dict[str, Level] = {
     # P2:今天之内处理。不影响这一趟巡检能不能跑完,但拖久了会变成 P1
     # (盘满了继续拖,就会变成没法记录;上传积压继续拖,数据就旧到没用)。
     "finding": Level.P2,
+    # 录像(W18):断了、没传到站点就删了、站点为腾盘删了。不影响巡检能不能跑,但证据缺了,今天之内处理。
+    "recording_failed": Level.P2,
+    "recording_dropped": Level.P2,
+    "recording_trimmed": Level.P2,
     "disk_80": Level.P2,
     # 站点自己的备份超过 25 小时没成(W00c5d):站点是唯一权威,盘坏了就什么都没了。
     "backup_stale": Level.P2,

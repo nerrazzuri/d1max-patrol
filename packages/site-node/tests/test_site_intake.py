@@ -58,6 +58,9 @@ class 站:
         from d1max_site.releases import ReleaseCatalog
         self.releases = ReleaseCatalog(tmp_path / "site", self.db, now_ms=lambda: NOW)
         self.intake.releases = self.releases
+        from d1max_site.recordings import RecordingStore
+        self.recordings = RecordingStore(self.db, tmp_path / "recordings", now_ms=lambda: NOW)
+        self.intake.recordings = self.recordings
         self.intake.start()
 
     def close(self):
@@ -448,3 +451,65 @@ def test_狗下载图能从断点接着下_Range(站点, ca, tmp_path):
         assert e.value.code == 416, bad
     with pytest.raises(FetchRefused):
         list(fetch("estate-1", "3", "prior.mm", offset=70000))
+
+
+# ------------------------------------------------------------ W18:连续录像(决策 31)
+
+
+def _录像箱(root: Path, sink, now=lambda: NOW) -> Outbox:
+    from d1max_agent.recording import SUB, video_classify
+    return Outbox(root, cap_bytes=2**30, sink=sink, sn="A", now_ms=now, sub=SUB,
+                  run_depth=2, classify=video_classify, settled=lambda p: True)
+
+
+def _一段(root: Path, camera="front", stamp="20261004T013000Z", n=3000) -> tuple[Path, bytes]:
+    p = root / "video" / camera / stamp / "video.mp4"
+    p.parent.mkdir(parents=True)
+    data = os.urandom(n)
+    p.write_bytes(data)
+    return p, data
+
+
+def test_W18_录像一段一段传上来_站点登记_狗上删掉(站点, ca, tmp_path):
+    root = tmp_path / "dogA-video"
+    box = _录像箱(root, _sink(站点, ca, ca.a, sub="/video"))
+    p1, d1 = _一段(root, "front", "20261004T013000Z", 2_500_000)   # 不止一块(1 MiB 一块)
+    p2, d2 = _一段(root, "back", "20261004T013000Z")
+    _跑(box, 10)
+    assert not p1.parent.exists() and not p2.parent.exists(), "站点确认了:狗上不留"
+    rows = 站点.recordings.list(robot_id="A")
+    assert {(r["camera"], r["stamp"], r["bytes"]) for r in rows} == {
+        ("front", "20261004T013000Z", len(d1)), ("back", "20261004T013000Z", len(d2))}
+    front = next(r for r in rows if r["camera"] == "front")
+    assert 站点.recordings.path(front).read_bytes() == d1
+    assert front["start_ms"] == 1791077400000             # 2026-10-04 01:30:00 UTC
+    box.close()
+
+
+def test_W18_站点连不上_狗上攒着_回来补传_传完清掉(站点, ca, tmp_path):
+    root = tmp_path / "dogA-video"
+    t = [NOW]
+    dead = HttpSink("https://127.0.0.1:9", ssl_context=_ctx(ca, ca.a))      # WiFi 断了
+    box = _录像箱(root, dead, now=lambda: t[0])
+    segs = [_一段(root, "front", f"20261004T01{m:02d}00Z") for m in range(3)]
+    _跑(box, 5)
+    assert all(p.exists() for p, _ in segs), "传不上去:一段都不删"
+    assert 站点.recordings.list() == []
+    box.close()
+    box = _录像箱(root, _sink(站点, ca, ca.a, sub="/video"), now=lambda: t[0])  # WiFi 回来了
+    for _ in range(10):
+        t[0] += 400_000                                   # 过了退避(最长 300 s)
+        box.step()
+    assert not any(p.exists() for p, _ in segs), "补传完了清掉"
+    assert len(站点.recordings.list(robot_id="A")) == 3
+    box.close()
+
+
+def test_W18_录像的路径不合规的不收(站点):
+    from d1max_site.evidence import PathRefused
+    for run, rel in (("side/20261004T013000Z", "video.mp4"), ("front/20261004", "video.mp4"),
+                     ("front/20261004T013000Z", "x.mp4"), ("front/../x", "video.mp4"),
+                     ("front/20261004T013000Z-2", "video.mp4")):
+        with pytest.raises(PathRefused):
+            站点.recordings.put("A", run, rel, offset=0, data=b"x", total=1)
+    assert 站点.recordings.list() == []

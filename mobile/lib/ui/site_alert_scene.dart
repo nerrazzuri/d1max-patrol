@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../model/alert.dart';
 import '../net/site_client.dart';
 import 'site_mapping.dart';
+import 'site_recordings.dart';
 import 'site_runs.dart';
 
 class SiteAlertScenePage extends StatefulWidget {
@@ -20,6 +21,7 @@ class SiteAlertScenePage extends StatefulWidget {
   static const Key mapKey = Key('scene-map');
   static const Key photoKey = Key('scene-photo');
   static const Key msgKey = Key('scene-msg');
+  static const Key videoKey = Key('scene-video');
 
   @override
   State<SiteAlertScenePage> createState() => _SiteAlertScenePageState();
@@ -116,6 +118,16 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                     MaterialPageRoute<void>(
                         builder: (_) => SiteMapPreviewPage(
                             api: widget.api, mapId: marks.$1, version: marks.$2, marks: marks.$3)))),
+          if (a.robot != 'site')
+            OutlinedButton.icon(
+                key: SiteAlertScenePage.videoKey,
+                icon: const Icon(Icons.videocam_outlined),
+                label: const Text('现场录像'),
+                onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                        builder: (_) => SiteRecordingsPage(
+                            api: widget.api, robotId: a.robot, aroundMs: a.firstMs)))),
           if (taskId != null)
             OutlinedButton.icon(
                 key: SiteAlertScenePage.photoKey,
