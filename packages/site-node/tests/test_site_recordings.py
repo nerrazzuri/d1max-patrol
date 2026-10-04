@@ -68,6 +68,7 @@ def test_留30天_标了留着的不删(库):
 def test_盘紧了从最旧的删_删到够_报一次(库):
     s = 库
     for m in range(5):
+        s.now[0] = T0 + m * 60_000                        # 一分钟收齐一段
         _存(s, stamp=f"20261004T01{m:02d}00Z")
     s.set_keep(s.list()[-1]["id"], True)                  # 最旧那段标了留着:跳过
     told = []
@@ -161,3 +162,80 @@ def test_狗报录像断了_删了没传的_站点为腾盘删了_都是P2(tmp_p
     assert "盘紧" in got["recording_dropped"]["detail"]
     desk.raise_alert(kind="recording_trimmed", robot="site", title="x")
     assert {a["kind"] for a in desk.open()} >= {"recording_trimmed"}
+
+
+
+# ------------------------------------------------------------ W18 外审:留存按站点收齐的时刻;
+# 删不掉不算
+
+
+HALF_YEAR = 182 * 86400_000
+
+
+def test_W18外审_狗钟慢半年快半年_都从站点收齐那天起留30天(库):
+    s = 库
+    slow = "20260404T010000Z"                             # 狗钟慢半年
+    fast = "20270404T010000Z"                             # 狗钟快半年
+    _存(s, robot="A", stamp=slow)
+    _存(s, robot="B", stamp=fast)
+    assert s.prune() == (0, 0), "刚收到的:慢半年的不许当成过期"
+    s.now[0] = T0 + KEEP_DAYS * 86400_000 - 1
+    assert s.prune() == (0, 0)
+    s.now[0] = T0 + KEEP_DAYS * 86400_000 + 1
+    assert s.prune() == (2, 0), "快半年的也是 30 天到期,不多留"
+    assert s.list() == []
+
+
+def test_W18外审_几只狗钟差不同_盘紧按收齐先后删(库):
+    s = 库
+    s.now[0] = T0
+    _存(s, robot="A", stamp="20261004T010000Z")           # 先收到,钟准
+    s.now[0] = T0 + 60_000
+    _存(s, robot="B", stamp="20260404T010100Z")           # 后收到,钟慢半年
+    def usage(p):                                         # 删一段就够
+        n = len(s.list())
+        return (1000, 950 if n == 2 else 800, 50 if n == 2 else 200)
+    s._disk_usage = usage
+    assert s.prune() == (0, 1)
+    [left] = s.list()
+    assert left["robot_id"] == "B", "先删的是先收齐的那段,不是狗钟最慢的那段"
+
+
+def test_W18外审_重传不刷新留存起点(库):
+    s = 库
+    _存(s, stamp="20261004T010000Z")
+    s.now[0] = T0 + 20 * 86400_000
+    _存(s, stamp="20261004T010000Z")                       # 同一段又传了一遍
+    [r] = s.list()
+    assert r["received_ms"] == T0
+    s.now[0] = T0 + KEEP_DAYS * 86400_000 + 1
+    assert s.prune() == (1, 0)
+
+
+def test_W18外审_文件删不掉_登记留着_不算腾了_报一次_好了之后下一拍删掉(库, monkeypatch):
+    from pathlib import Path
+    s = 库
+    for m in range(3):
+        s.now[0] = T0 + m * 60_000
+        _存(s, stamp=f"20261004T01{m:02d}00Z")
+    s.disk[0] = (1000, 950, 50)                           # 盘紧
+    real = Path.unlink
+    broken = [True]
+
+    def 只读(self, missing_ok=False):
+        if broken[0]:
+            raise PermissionError("只读挂载")
+        return real(self, missing_ok=missing_ok)
+    monkeypatch.setattr(Path, "unlink", 只读)
+    stuck = []
+    s.on_stuck = lambda n, why: stuck.append((n, why))
+    trimmed = []
+    s.on_trimmed = lambda n, oldest: trimmed.append(n)
+    s.now[0] = T0 + KEEP_DAYS * 86400_000 + 10 * 60_000
+    assert s.prune() == (0, 0), "一段都没删掉:按期的、腾盘的都不算"
+    assert len(s.list()) == 3 and len(list(s.root.rglob("*.mp4"))) == 3, "登记、文件都还在"
+    assert trimmed == [] and stuck == [(3, "只读挂载")]
+    broken[0] = False
+    s.disk[0] = (1000, 500, 500)
+    assert s.prune() == (3, 0), "好了之后下一拍照样删掉"
+    assert s.list() == [] and not list(s.root.rglob("*.mp4"))
