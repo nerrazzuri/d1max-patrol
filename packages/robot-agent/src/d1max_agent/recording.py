@@ -72,7 +72,11 @@ class Recorder:
         self._encode = encode or bool(getattr(source, "raw", False))
         self.segment_s = segment_s
         self.quota_bytes = quota_bytes
-        self._emit = emit
+        #: 报事件:``(种类, 数据)``。运行时接到事件簿(``runtime`` 里 ``recorder.emit =
+        #: events.emit``)。
+        #: **只有这一个字段**(W18 外审:原先内部用的是带下划线的另一个名字,接线写到这个名字上,
+        #: 事件全丢了)。
+        self.emit = emit
         self._mono = monotonic
         self._disk_usage = disk_usage
         self._popen = popen
@@ -142,7 +146,7 @@ class Recorder:
         if not s.failed:
             s.failed = True
             log.warning("%s 录像断了:%s", camera, why)
-            self._emit("recording_failed", {"camera": camera, "reason": why[:300]})
+            self.emit("recording_failed", {"camera": camera, "reason": why[:300]})
 
     # ------------------------------------------------------------ 每拍
 
@@ -159,7 +163,7 @@ class Recorder:
                 if self._collect(c, include_newest=False) and s.failed:
                     s.failed = False                     # 又切出新的一段:录回来了
                     log.info("%s 录像恢复", c)
-                    self._emit("recording_ok", {"camera": c})
+                    self.emit("recording_ok", {"camera": c})
         self._enforce_quota()
 
     def _collect(self, camera: str, *, include_newest: bool) -> int:
@@ -210,8 +214,11 @@ class Recorder:
         dropped: list[str] = []
         while segs and (total > self.quota_bytes or ratio >= WARN_RATIO):
             p = segs.pop(0)
-            total -= sizes[p]
             shutil.rmtree(p, ignore_errors=True)
+            if p.exists():                               # 删不掉(权限、只读):不算删了,换下一段试
+                log.warning("录像段删不掉:%s", p)
+                continue
+            total -= sizes[p]
             dropped.append(f"{p.parent.name}/{p.name}")
             if ratio >= WARN_RATIO:
                 with contextlib.suppress(OSError):
@@ -222,7 +229,7 @@ class Recorder:
             if not self._dropping:
                 self._dropping = True
                 log.warning("录像攒太多(没传到站点),删了最旧的 %d 段", len(dropped))
-                self._emit("recording_dropped", {
+                self.emit("recording_dropped", {
                     "count": len(dropped), "oldest": dropped[0], "newest": dropped[-1],
                     "reason": "disk" if ratio >= WARN_RATIO else "quota"})
         elif self._dropping and total < self.quota_bytes * 0.8:

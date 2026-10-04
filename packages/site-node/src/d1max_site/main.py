@@ -409,6 +409,9 @@ class Server:
         self.recordings.on_trimmed = lambda n, oldest: loop_alerts.raise_alert(
             kind="recording_trimmed", robot=_SITE, title=f"站点盘紧,删了最旧的 {n} 段录像",
             detail="不到 30 天就删了:站点盘小,加盘或少录几路")
+        self.recordings.on_stuck = lambda n, why: loop_alerts.raise_alert(
+            kind="recording_delete_failed", robot=_SITE, title=f"站点盘紧,{n} 段录像删不掉",
+            detail=f"{why[:200]};盘到底线后巡检的照片、记录也传不上来:查录像目录的权限、挂载")
         self.intake.recordings = self.recordings
         self.intake.on_refused = lambda robot, run, rel, why: loop_alerts.raise_alert(
             kind="upload_refused", robot=robot, title=f"站点不收 {run}/{rel}",

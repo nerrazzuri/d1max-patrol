@@ -264,3 +264,58 @@ async def test_运行时_报录像能力_每拍走_关的时候停(tmp_path):
     assert rt._extra_tasks()["recording"] == {"cameras": ["front"], "segment_s": 60}
     await rt.close()
     assert rec.calls[0] == "start" and rec.calls.count("step") == 3 and rec.calls[-1] == "close"
+
+
+async def test_W18外审_真的Recorder接进运行时_录像断了和删了没传的都进事件簿(tmp_path):
+    """外审:接线写的字段跟 Recorder 自己用的不是一个,事件全丢 —— 上面那条用的假对象盖不住。
+    这里用真的。"""
+    from d1max_adapter_sim.robot import SimRobot
+    from d1max_agent.runtime import AgentRuntime
+    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
+    from d1max_contract.registration import Registration
+    procs = []
+
+    def popen(argv, **kw):
+        p = _假进程(argv, **kw)
+        procs.append(p)
+        return p
+    rec = Recorder(tmp_path / "ob", ["front"], source=lambda c: ["-i", "x"], quota_bytes=1500,
+                   emit=lambda k, d: None, monotonic=lambda: 0.0,
+                   disk_usage=lambda p: (1000, 100, 900), popen=popen)
+    clock = [1_800_000_000_000]
+    reg = Registration(site_id="s", robot_id="A", credential_fingerprint="sha256:a",
+                       issued_at=0, expires_at=10**14)
+    rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dogA"), registration=reg,
+                      hal=SimRobot(now_ms=lambda: clock[0]), store_dir=tmp_path / "st",
+                      now_ms=lambda: clock[0], loaded_map=None, recorder=rec)
+    await rt.start()
+    for i in range(3):
+        _段(rec, "front", f"20261004T01{i:02d}00Z", 1000)
+    procs[0].returncode = 1                               # ffmpeg 退了
+    await rt.step(0.1)
+    await rt.close()
+    log = (tmp_path / "st" / "events.jsonl").read_text()
+    assert "recording_failed" in log, "录像断了要进事件簿(站点据此出告警)"
+    assert "recording_dropped" in log, "删了没传的要进事件簿"
+
+
+def test_W18外审_狗上删不掉的段不算删了(录, monkeypatch):
+    import d1max_agent.recording as recmod
+    r = 录
+    r.start()
+    for i in range(12):
+        _段(r, "front", f"20261004T01{i:02d}00Z", 1000)
+    _段(r, "front", "20261004T015900Z", 1000)
+    stuck = r.out / "front" / "20261004T010000Z"
+    real = recmod.shutil.rmtree
+
+    def 只读(p, ignore_errors=False):
+        if p == stuck:
+            return                                        # 删不掉(只读挂载)
+        real(p, ignore_errors=ignore_errors)
+    monkeypatch.setattr(recmod.shutil, "rmtree", 只读)
+    r.step()
+    assert stuck.exists()
+    [(kind, d)] = r.events
+    assert kind == "recording_dropped" and d["count"] == 2, d
+    assert d["oldest"] == "front/20261004T010100Z", "删不掉的那段不算"

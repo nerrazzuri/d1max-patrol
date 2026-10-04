@@ -3,7 +3,8 @@
 狗一分钟切一段,从录像发件箱传上来(狗专用口 ``/video/api/intake/put``,mTLS,分块续传,站点按自己存下
 的字节回哈希)。收齐一段就登记进 ``recordings`` 表:哪只狗、哪路相机、开头时刻(**狗的钟**,UTC)。
 
-- **留 30 天**(决策 32):过了就删(文件和登记一起);标了「留着」的不删(``keep``)。
+- **留 30 天**(决策 32):从站点**第一次收齐**算(``received_ms``,不按狗的钟),过了就删(文件真删掉了才删
+  登记);标了「留着」的不删(``keep``)。
 - **盘先让给证据**:站点盘剩不到 ``LOW_FREE`` 就从最旧的(没标留着的)删起,删到 ``OK_FREE`` 为止,报一次
   ``recording_trimmed``。30 天两路连续录像要 2–3 TB,站点盘未必有;不先删录像的话,盘到了收件口的底线
   (``MIN_FREE``,见 ``evidence``)所有上传都停 —— 巡检的照片、记录也传不上来了。
@@ -54,8 +55,11 @@ class RecordingStore:
         self.keep_days = keep_days
         self._disk_usage = disk_usage
         self.writer = ChunkWriter()
-        #: 为了腾盘删了录像(``(删了几段, 最旧的那段的开头)``):站点主程序接到告警源上。
+        #: 为了腾盘删了录像(``(删了几段, 最早收齐的那段的收齐时刻)``):站点主程序接到告警源上。
         self.on_trimmed: Callable[[int, int], None] | None = None
+        #: 盘紧又删不掉(``(删不掉几段, 最后一个错误)``):不处理的话盘到底线,巡检证据也传不上来了。
+        self.on_stuck: Callable[[int, str], None] | None = None
+        self.last_delete_error = ""
 
     # ------------------------------------------------------------ 收
 
@@ -74,8 +78,8 @@ class RecordingStore:
                 c.execute(
                     "INSERT INTO recordings(robot_id, camera, stamp, start_ms, bytes, sha256, "
                     "received_ms) VALUES (?,?,?,?,?,?,?) ON CONFLICT(robot_id, camera, stamp) "
-                    "DO UPDATE SET bytes=excluded.bytes, sha256=excluded.sha256, "
-                    "received_ms=excluded.received_ms",
+                    # 重传不刷新 received_ms:留存从第一次收齐算(W18 外审)
+                    "DO UPDATE SET bytes=excluded.bytes, sha256=excluded.sha256",
                     (robot_id, camera, stamp, start, stored.size, stored.sha256, self._now()))
         return stored
 
@@ -119,41 +123,58 @@ class RecordingStore:
 
     # ------------------------------------------------------------ 删
 
-    def _delete(self, row: dict[str, Any]) -> None:
+    def _delete(self, row: dict[str, Any]) -> bool:
+        """删一段:**文件真没了才删登记**(W18 外审:删不掉也删登记的话,录像在界面上消失、以后再也
+        清不到,盘没腾出来却报「腾了」)。回删成了没有。"""
         try:
             self.path(row).unlink(missing_ok=True)
-        except (OSError, PathRefused):
-            log.warning("录像删不掉:%s", row)
+        except (OSError, PathRefused) as exc:
+            log.warning("录像删不掉(%s):%s", exc, row.get("id"))
+            self.last_delete_error = str(exc)
+            return False
         with self.db.tx() as c:
             c.execute("DELETE FROM recordings WHERE id=?", (row["id"],))
+        return True
 
     def _free_ratio(self) -> float:
         total, _used, free = self._disk_usage(self.root)
         return free / total if total else 0.0
 
     def prune(self) -> tuple[int, int]:
-        """过了留存期的删掉;盘紧了再从最旧的删。回 ``(按期删了几段, 为腾盘删了几段)``。站点循环
-        定时调。"""
+        """过了留存期的删掉;盘紧了再从最旧的删。回 ``(按期删了几段, 为腾盘删了几段)``,只算真删掉的。
+        站点循环定时调。
+
+        **留存与「最旧」都按站点第一次收齐的时刻**(``received_ms``),不按片段名里狗的钟(W18 外审:狗的
+        钟慢半年时刚收到的就被当成过期删了,快半年时留远超 30 天;几只狗钟差不同时,盘紧先删钟最慢
+        那只的新录像)。狗的钟只用来排时间线、查某一刻前后。"""
         cutoff = self._now() - self.keep_days * 86400_000
         old = [dict(r) for r in self.db.query(
-            "SELECT * FROM recordings WHERE keep=0 AND start_ms<? ORDER BY start_ms", (cutoff,))]
-        for r in old:
-            self._delete(r)
+            "SELECT * FROM recordings WHERE keep=0 AND received_ms<? ORDER BY received_ms, id",
+            (cutoff,))]
+        aged = sum(self._delete(r) for r in old)
         trimmed = 0
         oldest = 0
+        failed: set[int] = set()
         if self._free_ratio() < LOW_FREE:
             while self._free_ratio() < OK_FREE:
                 rows = [dict(r) for r in self.db.query(
-                    "SELECT * FROM recordings WHERE keep=0 ORDER BY start_ms, id LIMIT 50")]
+                    "SELECT * FROM recordings WHERE keep=0 ORDER BY received_ms, id LIMIT ?",
+                    (50 + len(failed),)) if r["id"] not in failed][:50]
                 if not rows:
                     break
+                freed = False
                 for r in rows:
+                    if not self._delete(r):
+                        failed.add(r["id"])
+                        continue
                     if not trimmed:
-                        oldest = r["start_ms"]
-                    self._delete(r)
+                        oldest = r["received_ms"]
                     trimmed += 1
+                    freed = True
                     if self._free_ratio() >= OK_FREE:
                         break
+                if not freed:                            # 这一轮一段都删不掉:别空转
+                    break
             if trimmed:
                 log.warning("站点盘紧:删了最旧的 %d 段录像", trimmed)
                 if self.on_trimmed is not None:
@@ -161,4 +182,11 @@ class RecordingStore:
                         self.on_trimmed(trimmed, oldest)
                     except Exception:
                         log.exception("报「为腾盘删了录像」失败")
-        return len(old), trimmed
+            if failed and self._free_ratio() < OK_FREE:
+                log.error("站点盘紧,%d 段录像删不掉", len(failed))
+                if self.on_stuck is not None:
+                    try:
+                        self.on_stuck(len(failed), self.last_delete_error)
+                    except Exception:
+                        log.exception("报「录像删不掉」失败")
+        return aged, trimmed
