@@ -33,9 +33,12 @@ ABS_MS = 12 * 3600_000
 WATCH_ABS_MS = 30 * 86400_000
 #: 一个账号最多留几个值守令牌(每次登录手机都会领一个;多出来的删最旧的)。
 WATCH_MAX = 5
-#: 值守令牌能走的接口。
-WATCH_PATHS = frozenset({("GET", "/api/events"), ("GET", "/api/alerts"),
-                         ("GET", "/api/watch/summary"), ("POST", "/api/logout")})
+#: 值守令牌能走的接口:**只有告警流**(``/api/watch/events``:首帧是未解决的告警、之后只有告警帧与心跳)
+#: 和注销自己。W17 外审:原先放行通用的 ``/api/events``,首帧是全部狗的视图、之后是状态、任务事件、
+#: 回执、
+#: 入侵账 —— 偷到一个 30 天的值守令牌就能一直看整个站点。告警名单、值守汇总也不放(汇总里有狗的状态)
+#: 。
+WATCH_PATHS = frozenset({("GET", "/api/watch/events"), ("POST", "/api/logout")})
 FAIL_WINDOW_MS = 5 * 60_000
 FAIL_LIMIT = 5
 LOCK_MS = 5 * 60_000

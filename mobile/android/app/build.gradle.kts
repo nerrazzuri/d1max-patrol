@@ -47,3 +47,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // 后台值守的纯判断(AlertBell)用 JUnit 测:cd android && ./gradlew :app:testReleaseUnitTest(W17 外审)
+    testImplementation("junit:junit:4.13.2")
+}

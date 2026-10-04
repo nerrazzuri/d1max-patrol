@@ -167,3 +167,45 @@ def test_没回待命点_进告警簿P2_值守屏看得见(站点):
     s.loop.call(推)
     a = _等(lambda: _告警(s, gina, "standby_failed"))
     assert a["level"] == "P2" and "待命点" in a["title"] and "来路不明" in a["detail"]
+
+
+def test_W17外审_值守令牌只有告警流_首帧不带狗_别的帧一律不转(站点):
+    """真连 SSE。外审:原先值守令牌走通用的 /api/events,首帧是全部狗的视图、之后是状态、任务事件、
+    回执、入侵账 —— 偷到一个 30 天的令牌就能一直看整个站点。"""
+    import http.client
+    s = 站点
+    gina = _登(s, "gina")
+    s.loop.call(lambda: _raise(s, 0))                   # 先有一条没解决的:首帧里要有它
+    code, d = s.req("POST", "/api/watch/token", {}, token=gina)
+    assert code == 200, d
+    w = d["token"]
+    for path in ("/api/events", "/api/alerts", "/api/watch/summary", "/api/robots"):
+        assert s.req("GET", path, token=w)[0] == 403, path
+    host, port = s.api.httpd.server_address[:2]
+    conn = http.client.HTTPConnection(host, port, timeout=10)
+    conn.request("GET", "/api/watch/events", headers={"Authorization": f"Bearer {w}"})
+    resp = conn.getresponse()
+    assert resp.status == 200
+
+    def 下一帧():
+        for _ in range(200):
+            line = resp.fp.readline().decode()
+            if line.startswith("data:"):
+                return json.loads(line[5:])
+        raise AssertionError("没等到下一帧")
+    first = 下一帧()
+    assert first["kind"] == "snapshot" and "robots" not in first
+    assert [a["robot"] for a in first["alerts"]] == ["R0"]
+    feed = s.disp.feed
+    for kind in ("status", "event", "ack", "reconcile", "incident", "snapshot"):
+        feed.publish({"kind": kind, "robots": ["A"], "robot_id": "A", "secret": kind})
+    s.loop.call(lambda: _raise(s, 1))
+    got = 下一帧()
+    assert got["kind"] == "alert" and got["alert"]["robot"] == "R1", got
+    conn.close()
+    # 普通会话照旧是全量流
+    conn = http.client.HTTPConnection(host, port, timeout=10)
+    conn.request("GET", "/api/events", headers={"Authorization": f"Bearer {gina}"})
+    resp = conn.getresponse()
+    assert "robots" in 下一帧()
+    conn.close()

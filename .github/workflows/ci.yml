@@ -141,6 +141,8 @@ jobs:
         run: |
           export JAVA_HOME="$JAVA_HOME_17_X64"
           flutter pub get && flutter build apk --release
+          # 后台值守的纯判断(AlertBell,W17 外审):该弹、该收、该重弹
+          cd android && ./gradlew -q :app:testDebugUnitTest
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: d1max-android
