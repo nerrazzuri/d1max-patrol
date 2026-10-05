@@ -274,6 +274,9 @@ class _假订阅:
     def stop(self):
         self.stopped = True
 
+    def join(self, timeout=None):
+        self.joined = True
+
 
 def test_照库起停_改了重起_断五分钟报一次P2_口令不出站(tmp_path):
     db = SiteDB(tmp_path / "s.db")
@@ -298,8 +301,7 @@ def test_照库起停_改了重起_断五分钟报一次P2_口令不出站(tmp_p
     m.sync()
     m.sync()
     assert [a["kind"] for a in alerts] == ["cctv_offline"] and "gate-cam" in alerts[0]["title"]
-    m.watches["gate-cam"].status.connected = True
-    m.watches["gate-cam"].status.offline_told = False
+    assert alerts[0]["robot"] == "cctv:gate-cam", "每台摄像头一条,不合在站点名下"
     remove_camera(db, "gate-cam")
     m.sync()
     assert m.watches == {}
@@ -345,7 +347,8 @@ def test_实时画面_观众共用一条_都走了收掉():
     fa, fb = next(a), next(b)
     assert fa.startswith(b"\xff\xd8") and fb.startswith(b"\xff\xd8")
     assert len(procs) == 1, "两个观众共用一条 ffmpeg"
-    assert "rtsp://admin:cam-pass@10.0.0.9/s1" in procs[0][0]
+    argv = procs[0][0]
+    assert not any("cam-pass" in a for a in argv), "口令不进命令行(ps、/proc 看得到)"
     a.close()
     b.close()
     _等(lambda: procs[0][1].poll() is not None, timeout=5)
@@ -438,3 +441,222 @@ def test_命令行_加_列_删_口令不显示(tmp_path, monkeypatch, capsys):
     db.close()
     assert site_main.main(["--home", str(home), "camera-rm", "gate-cam"]) == 0
     assert site_main.main(["--home", str(home), "camera-rm", "gate-cam"]) == 2
+
+
+
+# ------------------------------------------------------------ W19 外审:告警、线程、进程、口令
+
+
+def test_W19外审_两台同时断各一条_只恢复一台解决一台_删掉断着的也解决(tmp_path):
+    db = SiteDB(tmp_path / "s.db")
+    now = [1_000_000]
+    alerts, resolved = [], []
+    m = CctvManager(db, report=lambda c, e: None, now_ms=lambda: now[0],
+                    alert=lambda **kw: alerts.append(kw["robot"]),
+                    resolve=lambda robot, kind: resolved.append((robot, kind)),
+                    watch_factory=_假订阅)
+    for n in ("a", "b", "c"):
+        add_camera(db, Camera(n, "http://x", "", "", "z"), now_ms=1)
+    m.sync()
+    now[0] += 301_000
+    m.sync()
+    assert sorted(alerts) == ["cctv:a", "cctv:b", "cctv:c"], "各一条,不合并、不互相盖"
+    m.sync()
+    assert len(alerts) == 3, "不重报"
+    m.watches["a"].status.connected = True
+    m.sync()
+    assert resolved == [("cctv:a", "cctv_offline")], "只解决恢复的那一台"
+    m.watches["b"].status.connected = True
+    m.sync()
+    assert ("cctv:b", "cctv_offline") in resolved and len(resolved) == 2
+    remove_camera(db, "c")
+    m.sync()
+    assert ("cctv:c", "cctv_offline") in resolved, "删掉断着的:它的告警不再挂着"
+    m.watches["a"].status.connected = False
+    m.watches["a"].status.since_ms = now[0]
+    now[0] += 301_000
+    m.sync()
+    assert alerts.count("cctv:a") == 2, "恢复后再断:再报"
+
+
+class _卡住的客户端:
+    """PullMessages 卡着,测试放行时回一条入侵。"""
+
+    def __init__(self):
+        self.release = threading.Event()
+        self.pulling = threading.Event()
+
+    def events_url(self):
+        return "e"
+
+    def subscribe(self, url):
+        return "s"
+
+    def pull(self, sub):
+        import xml.etree.ElementTree as ET
+        self.pulling.set()
+        self.release.wait(10)
+        root = ET.fromstring(ENV.format(_msg(FIELD, "false") + _msg(FIELD, "true")))
+        return [m for m in root.iter() if m.tag.endswith("NotificationMessage")]
+
+    def renew(self, sub):
+        pass
+
+    def unsubscribe(self, sub):
+        pass
+
+
+def test_W19外审_删除时正卡在拉消息里_回来的入侵不派_删除等旧线程退干净(tmp_path):
+    db = SiteDB(tmp_path / "s.db")
+    reported = []
+    client = _卡住的客户端()
+
+    def factory(cam, *, on_intrusion, now_ms):
+        return CameraWatch(cam, on_intrusion=on_intrusion, now_ms=now_ms, client=client)
+    m = CctvManager(db, report=lambda c, e: reported.append(c.name), now_ms=lambda: 1,
+                    watch_factory=factory)
+    add_camera(db, _cam(80), now_ms=1)
+    m.sync()
+    assert client.pulling.wait(5)
+    old = m.watches["gate-cam"]
+    remove_camera(db, "gate-cam")
+    t = threading.Thread(target=m.sync)
+    t.start()
+    time.sleep(0.2)
+    assert t.is_alive(), "删除要等旧订阅退干净"
+    client.release.set()                                  # 这时候一条入侵回来了
+    t.join(10)
+    assert not t.is_alive() and not old._thread.is_alive()
+    assert reported == [], "已经删了的摄像头:不派"
+
+
+def test_W19外审_站点收尾等订阅线程退出(tmp_path):
+    db = SiteDB(tmp_path / "s.db")
+    client = _卡住的客户端()
+    m = CctvManager(db, report=lambda c, e: None, now_ms=lambda: 1,
+                    watch_factory=lambda cam, **kw: CameraWatch(cam, client=client, **kw))
+    add_camera(db, _cam(80), now_ms=1)
+    m.sync()
+    assert client.pulling.wait(5)
+    w = m.watches["gate-cam"]
+    threading.Timer(0.3, client.release.set).start()
+    m.close()
+    assert not w._thread.is_alive()
+
+
+def _ffmpeg(frames: bytes, then_sleep: float = 0.0):
+    """假 ffmpeg:吐几帧(可选再挂着)。"""
+    code = ("import sys,time\n"
+            f"sys.stdout.buffer.write({frames!r}); sys.stdout.flush()\n"
+            f"time.sleep({then_sleep})\n")
+    procs = []
+
+    def popen(argv, **kw):
+        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
+                             stderr=kw["stderr"])
+        procs.append((argv, p, kw["stderr"]))
+        return p
+    return popen, procs
+
+
+def test_W19外审_ffmpeg自己退了_回收进程_关文件_删清单(tmp_path):
+    import os
+    popen, procs = _ffmpeg(b"\xff\xd8A\xff\xd9")
+    v = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 4)
+    it = v.frames()
+    assert next(it) == b"\xff\xd8A\xff\xd9"
+    assert list(it) == [], "断了:流结束"
+    argv, p, err = procs[0]
+    listing = argv[argv.index("-i") + 1]
+    _等(lambda: p.returncode is not None)
+    assert err.closed and not os.path.exists(listing)
+    assert v._proc is None and v._frame is None
+
+
+def test_W19外审_重起不给上一轮的旧画面(tmp_path):
+    popen, procs = _ffmpeg(b"\xff\xd8OLD\xff\xd9")
+    v = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 4)
+    assert next(v.frames()) == b"\xff\xd8OLD\xff\xd9"
+    _等(lambda: v._proc is None)
+    popen2, procs2 = _ffmpeg(b"", then_sleep=5)            # 摄像头断了:一帧都不出
+    v._popen = popen2
+    with pytest.raises(TimeoutError):
+        next(v.frames(first_timeout_s=0.5))
+    v.close()
+
+
+def test_W19外审_站点收尾收掉画面进程_幂等(站点):
+    s = 站点
+    add_camera(s.db, _cam(80, rtsp_url="rtsp://10.0.0.9/s1"), now_ms=1)
+    s.cctv.sync()
+    popen, procs = _ffmpeg(b"\xff\xd8x\xff\xd9", then_sleep=30)
+    v = CctvView(s.cctv.camera("gate-cam"), popen=popen, idle_s=60, major=lambda f: 4)
+    s.api._cctv_views["gate-cam"] = v
+    it = v.frames()
+    next(it)
+    s.api.close_cctv_views()
+    _等(lambda: procs[0][1].returncode is not None)
+    v.close()                                             # 再关一次:没事
+    with pytest.raises(TimeoutError):
+        next(v.frames())
+
+
+def test_W19外审_口令不进命令行_清单只许本用户读_出画面就删_v5带tcp(tmp_path):
+    import os
+    import stat
+    seen = {}
+
+    def popen(argv, **kw):
+        listing = argv[argv.index("-i") + 1]
+        seen["mode"] = stat.S_IMODE(os.stat(listing).st_mode)
+        seen["text"] = open(listing).read()
+        return subprocess.Popen([sys.executable, "-c",
+                                 "import sys,time;sys.stdout.buffer.write(b'\\xff\\xd8z\\xff\\xd9')"
+                                 ";sys.stdout.flush();time.sleep(3)"],
+                                stdout=subprocess.PIPE, stderr=kw["stderr"])
+    v = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 6)
+    it = v.frames()
+    next(it)
+    assert seen["mode"] == 0o600
+    assert "rtsp://admin:cam-pass@10.0.0.9/s1" in seen["text"]
+    assert "option rtsp_transport tcp" in seen["text"], "ffmpeg 5 起走 TCP"
+    assert v._list is None, "画面出来了:清单删掉"
+    it.close()
+    v.close()
+    v4 = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 4)
+    next(v4.frames())
+    assert "option" not in seen["text"], "4.x 不认这一句"
+    v4.close()
+
+
+def test_W19外审_报错里的口令抹掉_日志和接口都不出现(站点, caplog):
+    from d1max_site.cctv import scrub
+    assert scrub("rtsp://admin:cam-pass@10.0.0.9/s1: 401") == "rtsp://***@10.0.0.9/s1: 401"
+    assert scrub("http://u:p@h x rtsp://a:b@c") == "http://***@h x rtsp://***@c"
+    code = ("import sys;sys.stderr.write('rtsp://admin:cam-pass@10.0.0.9/s1: 401 Unauthorized')")
+
+    def popen(argv, **kw):
+        return subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
+                                stderr=kw["stderr"])
+    v = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 4)
+    with caplog.at_level("WARNING"), pytest.raises((TimeoutError, StopIteration)):
+        next(v.frames(first_timeout_s=3))
+    _等(lambda: "401" in caplog.text)
+    assert "cam-pass" not in caplog.text and "***@" in caplog.text
+    s = 站点
+    add_camera(s.db, _cam(80), now_ms=1)
+    s.cctv.sync()
+    s.cctv.watches["gate-cam"].status.error = "rtsp://admin:cam-pass@x 连不上"
+    assert "cam-pass" not in str(s.cctv.view())
+
+
+
+def test_W19外审_告警台按这一位这一种解决_别的摄像头的不动(tmp_path):
+    from d1max_site.alert_store import AlertDesk
+    desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: 1)
+    for n in ("a", "b"):
+        desk.raise_alert(kind="cctv_offline", robot=f"cctv:{n}", title=f"{n} 连不上")
+    desk.raise_alert(kind="robot_offline_idle", robot="cctv:a", title="别的种类")
+    assert desk.resolve_all("cctv:a", "cctv_offline", who="站点") == 1
+    left = {(a["robot"], a["kind"]) for a in desk.open()}
+    assert left == {("cctv:b", "cctv_offline"), ("cctv:a", "robot_offline_idle")}
