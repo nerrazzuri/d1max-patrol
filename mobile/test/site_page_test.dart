@@ -98,6 +98,15 @@ class FakeApi implements SiteApi {
     calls.add(name == null ? 'standby $id' : 'standby $id $name');
     return {'ack': {'result': 'accepted'}};
   }
+  /// 固定摄像头（W19）。
+  List<Map<String, dynamic>> cameraRows = <Map<String, dynamic>>[];
+  SiteError? camerasError;
+  @override
+  Future<List<Map<String, dynamic>>> cameras() async {
+    calls.add('cameras');
+    if (camerasError != null) throw camerasError!;
+    return cameraRows;
+  }
   /// 连续录像（W18）：测试改它；下载、标留着记在 [calls] 里。
   List<Map<String, dynamic>> recordingRows = <Map<String, dynamic>>[];
   SiteError? recordingsError;

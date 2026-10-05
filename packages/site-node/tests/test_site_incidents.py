@@ -793,3 +793,29 @@ async def test_W17_狗报能拍_派去拦截的goto带photo_不报就不带(站)
     assert t.desk.list()[0]["result"] == "done"
     shots = list((t.tmp / "agent").rglob("*.jpg")) + list(t.tmp.rglob("runs/**/*.jpg"))
     assert shots, "到了拍的那张在这一趟的归档里"
+
+
+# ------------------------------------------------------------ W19:固定摄像头报的入侵
+
+
+async def test_W19_摄像头报入侵_派最近的狗去_来源是cctv_照样限流(站):
+    import asyncio
+
+    from d1max_site.cctv import Camera, OnvifEvent, incident_reporter
+    t = 站
+    await t.run(12)
+    pending = []
+    report = incident_reporter(t.desk, lambda f: pending.append(asyncio.ensure_future(f())),
+                               now_ms=t.clock)
+    cam = Camera("gate-cam", "http://x", "", "", "front-yard")
+    report(cam, OnvifEvent("tns1:RuleEngine/FieldDetector/ObjectsInside", "Changed", {},
+                           {"IsInside": "true"}))
+    await asyncio.gather(*pending)
+    [row] = t.desk.list()
+    assert row["source"] == "cctv-gate-cam" and row["outcome"] == "dispatched"
+    assert row["robot_id"] == "A" and _gotos(t)[0]["issued_by"] == "incident:cctv-gate-cam"
+    t.clock.ms += 1000                                   # 不同的事件号(不是重复的那一条)
+    t.desk._recent["cctv-gate-cam"] = [t.clock()] * 1000             # 抽风刷屏
+    report(cam, OnvifEvent("x/FieldDetector", "Changed", {}, {"IsInside": "true"}))
+    await asyncio.gather(*pending)
+    assert len(t.desk.list()) == 1, "超了限流的不收"

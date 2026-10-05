@@ -85,6 +85,8 @@ _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
+#: 固定摄像头的实时画面(W19)。
+_CAM = re.compile(r"^/api/cameras/([A-Za-z0-9._-]{1,64})/live$")
 #: 连续录像(W18):一段 ``/api/recordings/<id>/video``、标留着 ``/api/recordings/<id>/keep``。
 _REC = re.compile(r"^/api/recordings/(\d{1,12})/(video|keep)$")
 _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,300}))?)?$")
@@ -159,6 +161,10 @@ class SiteApi:
         self.releases = releases
         #: W18:连续录像(站点主程序接上)。
         self.recordings: Any = None
+        #: W19:固定摄像头(站点主程序接上);实时画面每台一个 ``CctvView``,观众共用。
+        self.cctv: Any = None
+        self._cctv_views: dict[str, Any] = {}
+        self._cctv_lock = threading.Lock()
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         #: W10:禁行区、限速区。有地图目录就有(测试台子不传也现建一个,派遣器共用这一份)。
         if zones is None and maps is not None:
@@ -369,6 +375,8 @@ class _Handler(TlsHandlerMixin):
                 return self._runs(method, path, user)
             if path == "/api/recordings" or _REC.match(path):
                 return self._recordings(method, path, user)
+            if path == "/api/cameras" or _CAM.match(path):
+                return self._cameras(method, path, user)
             if path == "/api/maps" or _MAPCMD.match(path) or _MAPVIEW.match(path) \
                     or _ZONES.match(path):
                 return self._maps(method, path, user)
@@ -1454,6 +1462,38 @@ class _Handler(TlsHandlerMixin):
         self.end_headers()
         self.wfile.write(data)
 
+    def _cameras(self, method: str, path: str, user) -> None:
+        """固定摄像头(W19):列出、状态(``view``,不带口令);实时画面 MJPEG(``view``)。加、删只走
+        命令行。"""
+        from d1max_site.cctv import CctvView
+        if method != "GET":
+            raise HttpError(405, "只收 GET(加、删摄像头在站点主机上用命令行)")
+        self._need(user, VIEW)
+        mgr = self.site.cctv
+        if mgr is None:
+            raise HttpError(404, "这个站点没开摄像头")
+        if path == "/api/cameras":
+            return self._send_json(200, {"cameras": mgr.view()})
+        m = _CAM.match(path)
+        assert m is not None
+        cam = mgr.camera(m.group(1))
+        if cam is None:
+            raise HttpError(404, "没有这台摄像头")
+        if not cam.rtsp_url:
+            raise HttpError(404, "这台摄像头没登记画面地址(camera-add --rtsp)")
+        with self.site._cctv_lock:
+            v = self.site._cctv_views.get(cam.name)
+            if v is None or v.cam != cam:                # 改过地址、口令:换一个
+                v = self.site._cctv_views[cam.name] = CctvView(cam)
+        frames = v.frames()
+        try:
+            first = next(frames)
+        except TimeoutError as exc:
+            raise HttpError(504, f"摄像头没出画面:{v.error or exc}") from exc
+        except StopIteration as exc:
+            raise HttpError(502, f"摄像头画面拉不下来:{v.error}") from exc
+        self._mjpeg(frames, first)
+
     def _recordings(self, method: str, path: str, user) -> None:
         """连续录像(W18)。看、放:``view``;标「留着」(过了 30 天也不删):``review``(值班的人
         判断留证据)。"""
@@ -1533,6 +1573,11 @@ class _Handler(TlsHandlerMixin):
             first = next(frames)
         except VideoError as exc:
             raise HttpError(exc.status, exc.message) from exc
+        self._mjpeg(frames, first, VideoError)
+
+    def _mjpeg(self, frames, first: bytes, *errors: type[BaseException]) -> None:
+        """一条 MJPEG 长连(狗的画面、固定摄像头共用)。令牌每隔一会儿复查:注销、过期、停用,
+        画面跟着断。"""
         boundary = b"frame"
         token = self._token()
         checked = time.monotonic()
@@ -1556,7 +1601,7 @@ class _Handler(TlsHandlerMixin):
                         break                    # 注销、过期、停用:画面跟着断
                 try:
                     frame = next(frames)
-                except (VideoError, StopIteration):
+                except (*errors, StopIteration):
                     break
         except (BrokenPipeError, ConnectionResetError, ssl.SSLError, OSError):
             pass                                  # 观众走了
