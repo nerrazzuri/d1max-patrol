@@ -156,25 +156,26 @@ class RecordingStore:
         oldest = 0
         failed: set[int] = set()
         if self._free_ratio() < LOW_FREE:
+            # 按收齐先后往后走(游标),每段只试一次:删掉的没了,删不掉的跳过、接着试后面的 —— 前面一批
+            # 删不掉不许把后面能删的饿死(W18 外审复查)。到 OK_FREE 或者没有可试的了才停。
+            cursor = (-1, -1)
             while self._free_ratio() < OK_FREE:
                 rows = [dict(r) for r in self.db.query(
-                    "SELECT * FROM recordings WHERE keep=0 ORDER BY received_ms, id LIMIT ?",
-                    (50 + len(failed),)) if r["id"] not in failed][:50]
+                    "SELECT * FROM recordings WHERE keep=0 AND (received_ms>? OR "
+                    "(received_ms=? AND id>?)) ORDER BY received_ms, id LIMIT 50",
+                    (cursor[0], cursor[0], cursor[1]))]
                 if not rows:
                     break
-                freed = False
                 for r in rows:
+                    cursor = (r["received_ms"], r["id"])
                     if not self._delete(r):
                         failed.add(r["id"])
                         continue
                     if not trimmed:
                         oldest = r["received_ms"]
                     trimmed += 1
-                    freed = True
                     if self._free_ratio() >= OK_FREE:
                         break
-                if not freed:                            # 这一轮一段都删不掉:别空转
-                    break
             if trimmed:
                 log.warning("站点盘紧:删了最旧的 %d 段录像", trimmed)
                 if self.on_trimmed is not None:
@@ -182,7 +183,7 @@ class RecordingStore:
                         self.on_trimmed(trimmed, oldest)
                     except Exception:
                         log.exception("报「为腾盘删了录像」失败")
-            if failed and self._free_ratio() < OK_FREE:
+            if failed:                                   # 腾出来了也报:删不掉本身就是毛病
                 log.error("站点盘紧,%d 段录像删不掉", len(failed))
                 if self.on_stuck is not None:
                     try:

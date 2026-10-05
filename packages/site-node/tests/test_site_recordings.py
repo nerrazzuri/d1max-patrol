@@ -239,3 +239,30 @@ def test_W18外审_文件删不掉_登记留着_不算腾了_报一次_好了之
     s.disk[0] = (1000, 500, 500)
     assert s.prune() == (3, 0), "好了之后下一拍照样删掉"
     assert s.list() == [] and not list(s.root.rglob("*.mp4"))
+
+
+
+def test_W18复查_前50段删不掉_第51段照样删_不被饿死(库, monkeypatch):
+    from pathlib import Path
+    s = 库
+    for m in range(51):
+        s.now[0] = T0 + m * 60_000
+        _存(s, stamp=f"20261004T{1 + m // 60:02d}{m % 60:02d}00Z")
+    rows = sorted(s.list(), key=lambda r: r["received_ms"])
+    bad = {s.path(r) for r in rows[:50]}
+    real = Path.unlink
+
+    def 只读(self, missing_ok=False):
+        if self in bad:
+            raise PermissionError("只读")
+        return real(self, missing_ok=missing_ok)
+    monkeypatch.setattr(Path, "unlink", 只读)
+    s._disk_usage = lambda p: (1000, 950, 50) if len(s.list()) == 51 else (1000, 800, 200)
+    stuck, trimmed = [], []
+    s.on_stuck = lambda n, why: stuck.append(n)
+    s.on_trimmed = lambda n, oldest: trimmed.append(n)
+    assert s.prune() == (0, 1), "第 51 段删掉、算进腾盘"
+    left = {r["id"] for r in s.list()}
+    assert left == {r["id"] for r in rows[:50]}, "前 50 段(删不掉的)登记还在"
+    assert all(p.exists() for p in bad)
+    assert trimmed == [1] and stuck == [50], "删不掉的报一次"
