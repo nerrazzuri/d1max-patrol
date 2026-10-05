@@ -113,6 +113,8 @@ LEVEL_OF: dict[str, Level] = {
     "recording_failed": Level.P2,
     "recording_dropped": Level.P2,
     "recording_trimmed": Level.P2,
+    # 固定摄像头连不上(W19):这一路的入侵收不到了。不影响狗,但防区少了一只眼,今天之内修。
+    "cctv_offline": Level.P2,
     "disk_80": Level.P2,
     # 站点自己的备份超过 25 小时没成(W00c5d):站点是唯一权威,盘坏了就什么都没了。
     "backup_stale": Level.P2,

@@ -20,6 +20,8 @@
     import-bundle DIR                      → 导入任务包,成为当前包(W00c2a)
     standby ROBOT NAME --map M:VER --pose x,y,yaw [--default] → 登记待命点(W00c2b)
     source-add NAME                        → 登记事件源,打印共享密钥(只这一次;W00c2c)
+    camera-add NAME --onvif URL --zone Z   → 登记固定摄像头(ONVIF 事件 → 入侵派遣;W19)
+    camera-rm NAME / camera-list
     source-rotate NAME / source-rm NAME / source-list → 换密钥、删、列出事件源(W16)
     intercept NAME --map M:VER --pose x,y,yaw → 登记拦截点(W00c2c)
     zone ZONE INTERCEPT                    → 防区映射到拦截点(W00c2c)
@@ -251,6 +253,30 @@ def _desk(home: Path, db: SiteDB):
     return IncidentDesk(db, disp, now_ms=wall_ms)
 
 
+def cmd_camera(home: Path, what: str, **kw) -> object:
+    """固定摄像头(W19)。口令存在站点库里(只许站点用户读),``list`` 不显示。"""
+    from d1max_site.cctv import Camera, add_camera, load_cameras, remove_camera
+    _load(home)
+    db = SiteDB(home / "site.db")
+    try:
+        if what == "add":
+            try:
+                add_camera(db, Camera(name=kw["name"], onvif_url=kw["onvif"], username=kw["user"],
+                                      password=kw["password"], zone=kw["zone"],
+                                      rtsp_url=kw["rtsp"], motion=kw["motion"]),
+                           now_ms=wall_ms())
+            except ValueError as exc:
+                raise SiteError(str(exc)) from exc
+            return ""
+        if what == "rm":
+            return remove_camera(db, kw["name"])
+        return "\n".join(f"{c.name}  防区 {c.zone}  {c.onvif_url}"
+                         + ("  有画面" if c.rtsp_url else "") + ("  动了也算" if c.motion else "")
+                         for c in load_cameras(db))
+    finally:
+        db.close()
+
+
 def cmd_incident_admin(home: Path, what: str, **kw) -> str:
     from d1max_site.incidents import IncidentError
     _load(home)
@@ -413,6 +439,12 @@ class Server:
             kind="recording_delete_failed", robot=_SITE, title=f"站点盘紧,{n} 段录像删不掉",
             detail=f"{why[:200]};盘到底线后巡检的照片、记录也传不上来:查录像目录的权限、挂载")
         self.intake.recordings = self.recordings
+        # W19:固定摄像头自带的入侵检测(ONVIF 事件)→ 入侵派遣。订阅在各自的线程里;
+        # 报入侵跳回事件循环。
+        from d1max_site.cctv import CctvManager, incident_reporter
+        self.cctv = CctvManager(self.db, report=incident_reporter(self.incidents, self.loop.submit,
+                                                                  wall_ms), now_ms=wall_ms,
+                                alert=loop_alerts.raise_alert)
         self.intake.on_refused = lambda robot, run, rel, why: loop_alerts.raise_alert(
             kind="upload_refused", robot=robot, title=f"站点不收 {run}/{rel}",
             detail=f"{why}(那一趟留在狗上,不会自己删)")
@@ -439,6 +471,7 @@ class Server:
                 lambda: self.dispatcher.publish_rtcm(b)), on_base_moved=_base_moved)
         self.api.rtk = self.rtk
         self.api.recordings = self.recordings
+        self.api.cctv = self.cctv
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
                                         name="site-chores")
@@ -451,6 +484,10 @@ class Server:
         self.api.start()
         self.intake.start()
         self._chores.start()
+        try:
+            self.cctv.sync()                       # 起来就连摄像头,不等第一拍杂事
+        except Exception:
+            log.exception("摄像头起不来")
         if self.rtk is not None:
             self.rtk.start()
 
@@ -459,7 +496,8 @@ class Server:
         每拍看一眼备份到点没有。一拍炸了记下来、下一拍照走。"""
         while not self._stop.wait(CHORE_PERIOD_S):
             for what, fn in (("自动判读", self.runs.step), ("备份", self.backup.step),
-                             ("录像留存", self._prune_recordings)):
+                             ("录像留存", self._prune_recordings),
+                             ("摄像头", self.cctv.sync)):
                 try:
                     fn()
                 except Exception:
@@ -536,6 +574,7 @@ class Server:
         for what, fn in (("遥控", self.teleop.close_all), ("API", self.api.stop),
                          ("接收口", self.intake.stop),
                          ("视频", self.video.close),
+                         ("摄像头", self.cctv.close),
                          ("待命点", lambda: self.loop.call(self.standby.close, 10)),
                          ("事件台", lambda: self.loop.call(self.incidents.close, 10)),
                          ("派遣器", lambda: self.loop.call(self.dispatcher.close, 10)),
@@ -612,6 +651,17 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--map", required=True, help="<map_id>:<version>")
     sb.add_argument("--pose", required=True, help="x,y,yaw")
     sb.add_argument("--default", action="store_true")
+    ca = sub.add_parser("camera-add", help="登记(或改)固定摄像头:它自带的入侵检测 → 入侵派遣(W19)")
+    ca.add_argument("name")
+    ca.add_argument("--onvif", required=True, help="摄像头或 NVR 的地址(http://ip[:端口])")
+    ca.add_argument("--user", default="", help="ONVIF 账号;口令从 D1MAX_CAMERA_PASSWORD 或交互输入")
+    ca.add_argument("--zone", required=True, help="这台摄像头报的入侵算哪个防区(W16 的防区)")
+    ca.add_argument("--rtsp", default="", help="看实时画面用的 RTSP 地址(不给就没有画面)")
+    ca.add_argument("--motion", action="store_true",
+                    help="普通「画面动了」也算入侵(默认不算:树影、车灯太容易误报)")
+    cr = sub.add_parser("camera-rm", help="删固定摄像头")
+    cr.add_argument("name")
+    sub.add_parser("camera-list", help="列出固定摄像头(不显示口令)")
     so = sub.add_parser("source-add", help="登记事件源,打印共享密钥")
     so.add_argument("name")
     sr = sub.add_parser("source-rotate", help="换事件源的共享密钥(旧的当场作废),打印新的")
@@ -683,6 +733,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             cmd_standby(home, args.robot_id, args.name, args.map, args.pose, args.default)
             print(f"{args.robot_id} 的待命点 {args.name} 登记好了"
                   + ("(默认)" if args.default else ""))
+        elif args.cmd == "camera-add":
+            pw = ""
+            if args.user:
+                pw = os.environ.get("D1MAX_CAMERA_PASSWORD") or getpass.getpass("摄像头口令: ")
+            cmd_camera(home, "add", name=args.name, onvif=args.onvif, user=args.user,
+                       password=pw, zone=args.zone, rtsp=args.rtsp, motion=args.motion)
+            print(f"摄像头 {args.name} 登记好了(防区 {args.zone});站点 30 s 内连上它")
+        elif args.cmd == "camera-rm":
+            if not cmd_camera(home, "rm", name=args.name):
+                raise SiteError(f"没有摄像头 {args.name}")
+            print(f"摄像头 {args.name} 删了")
+        elif args.cmd == "camera-list":
+            print(cmd_camera(home, "list") or "(还没有摄像头)")
         elif args.cmd == "source-add":
             secret = cmd_incident_admin(home, "source", name=args.name)
             print(f"事件源 {args.name} 登记好了。共享密钥"

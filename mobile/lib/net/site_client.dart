@@ -284,6 +284,8 @@ abstract class SiteApi {
   Future<Uint8List> recordingBytes(int id);
   /// 标「留着」（过了 30 天也不删）：值班的人、管理员。
   Future<Map<String, dynamic>> setRecordingKeep(int id, bool keep);
+  /// 固定摄像头（W19）：名字、防区、连没连上、最近一次报的什么。不带口令。
+  Future<List<Map<String, dynamic>>> cameras();
   /// 领一个值守令牌（W17）：`{token, expires_at}`。只能看告警，给后台值守用。
   Future<Map<String, dynamic>> watchToken();
   /// 在狗现在的位置设拦截点（W16，管理员；狗上什么都不改）。回拦截点与防区。
@@ -793,6 +795,14 @@ class SiteClient implements SiteApi {
     final d = _map(await _send('GET', '/api/recordings${q.isEmpty ? '' : '?${q.join('&')}'}'));
     final rows = d['recordings'];
     if (rows is! List) throw const FormatException('站点回的录像里没有 recordings');
+    return rows.whereType<Map<String, dynamic>>().toList();
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> cameras() async {
+    final d = _map(await _send('GET', '/api/cameras'));
+    final rows = d['cameras'];
+    if (rows is! List) throw const FormatException('站点回的摄像头里没有 cameras');
     return rows.whereType<Map<String, dynamic>>().toList();
   }
 

@@ -21,6 +21,7 @@ import 'site_logs.dart';
 import 'site_mapping.dart';
 import 'site_maps.dart';
 import 'site_releases.dart';
+import 'site_cameras.dart';
 import 'site_intercepts.dart';
 import 'site_recordings.dart';
 import 'site_runs.dart';
@@ -917,6 +918,12 @@ class SiteIncidentsPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('事件'), actions: [
         // 拦截点与防区（W16）：谁都能看，管理员能改
+        // 固定摄像头（W19）：自带的入侵检测报到站点
+        TextButton(
+            key: const Key('btn-cameras'),
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute<void>(builder: (_) => SiteCamerasPage(api: api))),
+            child: const Text('摄像头…')),
         TextButton(
             key: const Key('btn-intercepts'),
             onPressed: () => Navigator.push(context,
