@@ -199,6 +199,13 @@ class SiteApi:
         self.httpd = TlsThreadingServer((host, port), Handler, ctx=ctx)
         self._thread: threading.Thread | None = None
 
+    def close_cctv_views(self) -> None:
+        """站点收尾:摄像头画面的 ffmpeg 全收掉(有观众的、在空闲等待里的都算)。"""
+        with self._cctv_lock:
+            views, self._cctv_views = list(self._cctv_views.values()), {}
+        for v in views:
+            v.close()
+
     @property
     def url(self) -> str:
         host, port = self.httpd.server_address[:2]
@@ -1483,7 +1490,10 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "这台摄像头没登记画面地址(camera-add --rtsp)")
         with self.site._cctv_lock:
             v = self.site._cctv_views.get(cam.name)
-            if v is None or v.cam != cam:                # 改过地址、口令:换一个
+            if v is not None and v.cam != cam:           # 改过地址、口令:旧的收干净再换
+                v.close()
+                v = None
+            if v is None:
                 v = self.site._cctv_views[cam.name] = CctvView(cam)
         frames = v.frames()
         try:

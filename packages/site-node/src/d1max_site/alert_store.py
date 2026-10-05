@@ -104,6 +104,15 @@ class AlertDesk:
     def resolve(self, key: str, *, who: str) -> Alert:
         return self.book.resolve(key, who=who, now_ms=self._now())
 
+    def resolve_all(self, robot: str, kind: str, *, who: str) -> int:
+        """这一位(狗、站点、``cctv:<名字>``)这一种还没解决的告警全解决(W19:摄像头恢复、删了)。回几条。"""
+        n = 0
+        for a in self.book.open():
+            if a.robot == robot and a.kind == kind:
+                self.book.resolve(a.key, who=who, now_ms=self._now())
+                n += 1
+        return n
+
     def escalate(self) -> list[tuple[Alert, Channel]]:
         """P1 未确认的,到时限就升一档(换通道)。站点主循环每 5 s 调一次。"""
         return list(self.book.due_escalations(now_ms=self._now()))

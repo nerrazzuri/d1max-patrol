@@ -278,7 +278,6 @@ class CamStatus:
     last_event_ms: int | None = None
     last_topic: str = ""
     error: str = ""
-    offline_told: bool = False
     states: dict[str, bool] = field(default_factory=dict)
     last_fire: float = -1e9
 
@@ -304,8 +303,10 @@ class CameraWatch:
     def stop(self) -> None:
         self._stop.set()
 
-    def join(self, timeout: float = 5.0) -> None:
-        self._thread.join(timeout)
+    def join(self, timeout: float = PULL_WAIT_S + 15) -> None:
+        """等订阅线程退出。它可能正卡在一次 PullMessages 里(最长 ``PULL_WAIT_S`` 加网络超时)。"""
+        if self._thread.is_alive():
+            self._thread.join(timeout)
 
     def _set(self, connected: bool, error: str = "") -> None:
         st = self.status
@@ -313,11 +314,13 @@ class CameraWatch:
             st.since_ms = self._now()
         st.connected = connected
         st.error = error
-        if connected:
-            st.offline_told = False
 
     def handle(self, ev: OnvifEvent) -> bool:
-        """一条通知。回报没报入侵。只认「由无到有」的那一下;订阅一开始报的现状只记下来。"""
+        """一条通知。回报没报入侵。只认「由无到有」的那一下;订阅一开始报的现状只记下来。
+        **停了就不报**(W19 外审:删掉、改了防区之后,旧线程从卡着的 PullMessages 回来还会按旧的
+        派)。"""
+        if self._stop.is_set():
+            return False
         st = self.status
         if not self.cam.wants(ev.topic):
             return False
@@ -347,6 +350,8 @@ class CameraWatch:
                 renew_at = self._mono() + RENEW_EVERY_S
                 while not self._stop.is_set():
                     for m in self.client.pull(sub):
+                        if self._stop.is_set():          # 拉回来的时候已经叫停了:一条都不处理
+                            break
                         self.handle(parse_event(m))
                     if self._mono() >= renew_at:
                         self.client.renew(sub)
@@ -392,30 +397,64 @@ def remove_camera(db: SiteDB, name: str) -> bool:
         return c.execute("DELETE FROM cameras WHERE name=?", (name,)).rowcount > 0
 
 
+def alert_robot(name: str) -> str:
+    """一台摄像头的告警记在谁名下:每台一个(两台同时断不合成一条,恢复了各自解决)。"""
+    return f"cctv:{name}"
+
+
 class CctvManager:
-    """站点里的摄像头:按库起停订阅、出状态、断太久报告警。``report`` 把入侵交给事件派遣
-    (跳到事件循环)。"""
+    """站点里的摄像头:按库起停订阅、出状态、断太久报告警、恢复了自动解决。``report``
+    把入侵交给事件派遣
+    (跳到事件循环)。``resolve(robot, kind)`` 解决这台摄像头的那条告警(也跳到事件循环)。"""
 
     def __init__(self, db: SiteDB, *, report: Callable[[Camera, OnvifEvent], None],
                  now_ms: Callable[[], int], alert: Callable[..., Any] | None = None,
+                 resolve: Callable[[str, str], Any] | None = None,
                  watch_factory: Callable[..., CameraWatch] = CameraWatch) -> None:
         self.db = db
         self._report = report
         self._now = now_ms
         self._alert = alert
+        self._resolve = resolve
         self._factory = watch_factory
         self._lock = threading.Lock()
         self.watches: dict[str, CameraWatch] = {}
+        #: 报过「连不上」、还没解决的摄像头(按名字;换了订阅也记着)。
+        self._offline: set[str] = set()
+
+    def _stop_join(self, gone: list[CameraWatch]) -> None:
+        """锁外等旧订阅退出(W19 外审:不等的话,删掉、改了防区之后它从卡着的 PullMessages
+        回来还会按旧的
+        派一次狗;新旧订阅也会重叠)。"""
+        for w in gone:
+            w.join()
+
+    def _resolved(self, name: str) -> None:
+        if name not in self._offline:
+            return
+        self._offline.discard(name)
+        if self._resolve is not None:
+            try:
+                self._resolve(alert_robot(name), "cctv_offline")
+            except Exception:
+                log.exception("解决「摄像头连不上」失败")
 
     def sync(self) -> None:
-        """照库里的摄像头起停订阅(命令行加、删、改了之后,这一拍就跟上)。顺手看断太久的报告警。"""
+        """照库里的摄像头起停订阅(命令行加、删、改了之后,这一拍就跟上)。断太久的报告警,连上了、删掉了的
+        自动解决。"""
         want = {c.name: c for c in load_cameras(self.db)}
+        gone: list[CameraWatch] = []
         with self._lock:
             for name in list(self.watches):
                 w = self.watches[name]
                 if name not in want or want[name] != w.cam:
                     w.stop()
-                    del self.watches[name]
+                    gone.append(self.watches.pop(name))
+        self._stop_join(gone)                            # 旧的退干净了才起新的:不重叠
+        for w in gone:
+            if w.cam.name not in want:
+                self._resolved(w.cam.name)               # 删掉的摄像头:它的「连不上」不再挂着
+        with self._lock:
             for name, cam in want.items():
                 if name not in self.watches:
                     w = self._factory(cam, on_intrusion=self._report, now_ms=self._now)
@@ -424,14 +463,15 @@ class CctvManager:
             watches = list(self.watches.values())
         now = self._now()
         for w in watches:
-            st = w.status
-            if not st.connected and not st.offline_told \
-                    and now - st.since_ms >= OFFLINE_ALERT_S * 1000:
-                st.offline_told = True
+            st, name = w.status, w.cam.name
+            if st.connected:
+                self._resolved(name)
+            elif name not in self._offline and now - st.since_ms >= OFFLINE_ALERT_S * 1000:
+                self._offline.add(name)
                 if self._alert is not None:
                     try:
-                        self._alert(kind="cctv_offline", robot="site",
-                                    title=f"摄像头 {w.cam.name} 连不上(防区 {w.cam.zone})",
+                        self._alert(kind="cctv_offline", robot=alert_robot(name),
+                                    title=f"摄像头 {name} 连不上(防区 {w.cam.zone})",
                                     detail=f"{st.error or '连不上'};这一路的入侵现在收不到")
                     except Exception:
                         log.exception("报「摄像头连不上」失败")
@@ -443,7 +483,7 @@ class CctvManager:
         return [{"name": w.cam.name, "zone": w.cam.zone, "motion": w.cam.motion,
                  "live": bool(w.cam.rtsp_url), "connected": w.status.connected,
                  "since_ms": w.status.since_ms, "last_event_ms": w.status.last_event_ms,
-                 "last_topic": w.status.last_topic, "error": w.status.error}
+                 "last_topic": w.status.last_topic, "error": scrub(w.status.error)}
                 for w in sorted(watches, key=lambda w: w.cam.name)]
 
     def camera(self, name: str) -> Camera | None:
@@ -452,10 +492,13 @@ class CctvManager:
         return w.cam if w is not None else None
 
     def close(self) -> None:
+        """叫停全部订阅并等它们退出(站点收尾:不许退出之后还往收掉的事件循环里交入侵)。"""
         with self._lock:
-            for w in self.watches.values():
+            gone = list(self.watches.values())
+            for w in gone:
                 w.stop()
             self.watches.clear()
+        self._stop_join(gone)
 
 
 def incident_body(cam: Camera, ev: OnvifEvent, now_ms: int) -> dict[str, Any]:
@@ -480,8 +523,18 @@ def incident_reporter(incidents: Any, submit: Callable[[Callable[[], Any]], Any]
 # ------------------------------------------------------------ 实时画面
 
 
+_CRED_RE = re.compile(r"(\w+://)[^/@\s'\"]+@")
+
+
+def scrub(text: str) -> str:
+    """把地址里的账号口令抹掉(``rtsp://user:pw@host`` → ``rtsp://***@host``):日志、错误、接口一律过它。"""
+    return _CRED_RE.sub(r"\1***@", text or "")
+
+
 def _rtsp_with_auth(url: str, user: str, password: str) -> str:
-    """地址里没带账号就把这台摄像头的账号塞进去(``rtsp://user:pw@host/...``)。"""
+    """地址里没带账号就把这台摄像头的账号塞进去(``rtsp://user:pw@host/...``)。**只写进 0600
+    的临时文件
+    交给 ffmpeg,不进命令行**(见 ``CctvView``)。"""
     if not user or "@" in url.split("//", 1)[-1].split("/", 1)[0]:
         return url
     from urllib.parse import quote
@@ -489,84 +542,191 @@ def _rtsp_with_auth(url: str, user: str, password: str) -> str:
     return f"{scheme}//{quote(user, safe='')}:{quote(password, safe='')}@{rest}"
 
 
+_FFMPEG_MAJOR: dict[str, int] = {}
+
+
+def ffmpeg_major(ffmpeg: str) -> int:
+    """ffmpeg 的大版本(问一次记住)。5 起 concat 文件里能给每个输入带选项(``option``)。"""
+    if ffmpeg not in _FFMPEG_MAJOR:
+        try:
+            out = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True,
+                                 timeout=10).stdout
+            m = re.search(r"version n?(\d+)\.", out)
+            _FFMPEG_MAJOR[ffmpeg] = int(m.group(1)) if m else 0
+        except (OSError, subprocess.TimeoutExpired):
+            _FFMPEG_MAJOR[ffmpeg] = 0
+    return _FFMPEG_MAJOR[ffmpeg]
+
+
 class CctvView:
     """一台摄像头的实时画面:一条 ffmpeg 拉 RTSP、出 MJPEG,观众共用;最后一个观众走了 ``idle_s``
-    收掉。"""
+    收掉。
+
+    - **口令不进命令行**(W19 外审:同机别的用户 ``ps``、``/proc/<pid>/cmdline`` 看得到)。
+      带账号的地址写进
+      一个只许站点用户读(0600)的 concat 清单,ffmpeg 从清单里打开;画面出来就删清单。ffmpeg 5 起清单里
+      再带 ``rtsp_transport tcp``;4.x(Ubuntu 22.04)不认这一句,用 ffmpeg 默认的(先 UDP,收不到转 TCP)
+      。
+    - **一代一条进程**:每起一条新的就换一代,清掉上一代的画面(摄像头已经断了的话,新观众不许先看到
+      上一轮缓存的那张,以为画面还活着);旧一代的读线程改不了新一代的状态。
+    - **收尾都走一处**(``_reap``):ffmpeg 自己退了、没人看了、改了配置、站点收尾 —— 杀进程、回收、
+      关管道、
+      关错误输出的临时文件、删清单。``close`` 幂等。
+    """
 
     def __init__(self, cam: Camera, *, ffmpeg: str = "ffmpeg", idle_s: float = 10.0,
-                 popen: Callable[..., Any] = subprocess.Popen) -> None:
+                 popen: Callable[..., Any] = subprocess.Popen,
+                 major: Callable[[str], int] = ffmpeg_major) -> None:
         self.cam = cam
         self._ffmpeg = ffmpeg
         self._idle_s = idle_s
         self._popen = popen
+        self._major = major
         self._cond = threading.Condition()
+        self._gen = 0
         self._proc: Any = None
+        self._err: IO[bytes] | None = None
+        self._list: str | None = None
         self._frame: bytes | None = None
         self._seq = 0
         self._viewers = 0
-        self._err: IO[bytes] | None = None
+        self._closed = False
         self.error = ""
 
-    def _argv(self) -> list[str]:
+    def _write_list(self) -> str:
         url = _rtsp_with_auth(self.cam.rtsp_url, self.cam.username, self.cam.password)
+        fd, path = tempfile.mkstemp(prefix="d1max-cam-", suffix=".ffconcat")   # 0600
+        lines = ["ffconcat version 1.0", "file '" + url.replace("'", "'\\''") + "'"]
+        if self._major(self._ffmpeg) >= 5:
+            lines.append("option rtsp_transport tcp")
+        with os.fdopen(fd, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        return path
+
+    def _argv(self, listing: str) -> list[str]:
         return [self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-rtsp_transport", "tcp", "-i", url, "-an", "-vf", "scale=-2:'min(720,ih)'",
+                "-f", "concat", "-safe", "0",
+                "-protocol_whitelist", "file,rtsp,rtsps,rtp,srtp,udp,tcp,tls,http,https",
+                "-i", listing, "-an", "-vf", "scale=-2:'min(720,ih)'",
                 "-r", "8", "-q:v", "6", "-f", "mjpeg", "pipe:1"]
 
     def _start_locked(self) -> None:
         from d1max_site.video import _frames
+        self._gen += 1
+        gen = self._gen
+        self._frame = None                               # 上一代的画面不给新观众
+        self.error = ""
+        self._list = self._write_list()
         self._err = tempfile.TemporaryFile()
-        self._proc = self._popen(self._argv(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                 stderr=self._err)
+        try:
+            self._proc = self._popen(self._argv(self._list), stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=self._err)
+        except OSError as exc:
+            self.error = f"起不来 ffmpeg:{exc}"
+            self._reap_locked()
+            return
         proc = self._proc
 
         def pump() -> None:
+            first = True
             for f in _frames(proc.stdout):
                 with self._cond:
-                    if self._proc is not proc:
+                    if self._gen != gen:
                         return
                     self._frame, self._seq = f, self._seq + 1
+                    if first:                            # 画面出来了:清单(带口令)不用了
+                        first = False
+                        self._drop_list_locked()
                     self._cond.notify_all()
             with self._cond:
-                if self._proc is proc:
-                    self.error = "画面断了"
-                    self._proc = None
-                    self._cond.notify_all()
+                if self._gen != gen:
+                    return
+                self.error = "画面断了"
+                tail = self._tail_locked()
+                if tail:
+                    log.warning("摄像头 %s 的画面断了:%s", self.cam.name, scrub(tail))
+                self._reap_locked()
+                self._cond.notify_all()
         threading.Thread(target=pump, daemon=True, name=f"cctv-view-{self.cam.name}").start()
 
-    def frames(self, *, first_timeout_s: float = 15.0) -> Iterator[bytes]:
+    def _tail_locked(self) -> str:
+        if self._err is None:
+            return ""
+        with contextlib.suppress(OSError, ValueError):
+            self._err.seek(0)
+            return self._err.read()[-300:].decode("utf-8", "replace").strip()
+        return ""
+
+    def _drop_list_locked(self) -> None:
+        if self._list is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(self._list)
+            self._list = None
+
+    def _reap_locked(self) -> None:
+        """这一代收干净:杀、回收、关管道、关错误输出、删清单。(锁里调;杀进程不会卡太久。)"""
         from d1max_site.video import _kill
+        p, self._proc = self._proc, None
+        self._gen += 1                                   # 读线程看见换代就不再动状态
+        if p is not None:
+            _kill(p)
+            with contextlib.suppress(Exception):
+                p.wait(5)
+            if getattr(p, "stdout", None) is not None:
+                with contextlib.suppress(OSError):
+                    p.stdout.close()
+        if self._err is not None:
+            with contextlib.suppress(OSError):
+                self._err.close()
+            self._err = None
+        self._drop_list_locked()
+        self._frame = None
+
+    def close(self) -> None:
+        """站点收尾、换了配置:收掉,之后不再起。幂等。"""
         with self._cond:
+            self._closed = True
+            self._reap_locked()
+            self._cond.notify_all()
+
+    def frames(self, *, first_timeout_s: float = 15.0) -> Iterator[bytes]:
+        with self._cond:
+            if self._closed:
+                raise TimeoutError("这台摄像头的画面已经关了")
             self._viewers += 1
             if self._proc is None:
-                self.error = ""
                 self._start_locked()
-        seen = 0
+            seen = 0                                     # 这一代的最新那张马上给(换代时已清空)
+            gen = self._gen
         try:
             deadline = time.monotonic() + first_timeout_s
+            got_any = False
             while True:
                 with self._cond:
-                    while self._seq == seen and self._proc is not None:
-                        left = deadline - time.monotonic() if seen == 0 else 5.0
+                    while self._seq == seen and self._proc is not None and self._gen == gen:
+                        left = deadline - time.monotonic() if not got_any else 5.0
                         if left <= 0 or not self._cond.wait(left):
-                            if seen == 0:
+                            if not got_any:
                                 raise TimeoutError("摄像头没出画面")
                             break
-                    if self._proc is None and self._seq == seen:
-                        return
+                    if self._gen != gen or self._proc is None:
+                        return                           # 这一代没了(断了、关了)
+                    if self._seq == seen:
+                        continue
                     seen, frame = self._seq, self._frame
                 if frame is not None:
+                    got_any = True
                     yield frame
         finally:
             with self._cond:
                 self._viewers -= 1
                 idle = self._viewers == 0
+                idle_gen = self._gen
             if idle:
                 def later() -> None:
                     time.sleep(self._idle_s)
                     with self._cond:
-                        if self._viewers or self._proc is None:
+                        if self._viewers or self._gen != idle_gen or self._proc is None:
                             return
-                        p, self._proc = self._proc, None
-                    _kill(p)
+                        self._reap_locked()
                 threading.Thread(target=later, daemon=True).start()
