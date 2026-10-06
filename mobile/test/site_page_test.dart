@@ -170,6 +170,31 @@ class FakeApi implements SiteApi {
     (intercepted['intercepts'] as List).removeWhere((z) => (z as Map)['name'] == name);
     return intercepted;
   }
+  /// 布防模式（W20）：默认用真站点的夹具（访客）；切、改防区记在 [calls] 里、照着改它。
+  Map<String, dynamic> modeView = Map<String, dynamic>.from(siteFixture('site_mode'));
+  SiteError? modeError;
+  @override
+  Future<Map<String, dynamic>> mode() async {
+    if (modeError != null) throw modeError!;
+    return modeView;
+  }
+  @override
+  Future<Map<String, dynamic>> setMode(String mode, {List<String>? zones, int? minutes}) async {
+    calls.add('mode $mode${zones == null ? '' : ' ${zones.join(',')}'}${minutes == null ? '' : ' $minutes'}');
+    if (modeError != null) throw modeError!;
+    modeView = <String, dynamic>{...modeView, 'mode': mode, 'visitor_zones': zones ?? <String>[],
+      'until_ms': minutes == null ? null : 1791313273350};
+    return modeView;
+  }
+  @override
+  Future<Map<String, dynamic>> setZoneHome(String zone, bool homeArmed) async {
+    calls.add('zone-home $zone $homeArmed');
+    modeView = <String, dynamic>{...modeView, 'zones': [
+      for (final z in (modeView['zones'] as List).cast<Map<String, dynamic>>())
+        z['zone'] == zone ? <String, dynamic>{...z, 'home_armed': homeArmed} : z,
+    ]};
+    return modeView;
+  }
   /// 待命点与原点（W13a）：测试改它；设、设默认、删都记在 [calls] 里、照着改它。
   Map<String, dynamic> standby = <String, dynamic>{'points': <Map<String, dynamic>>[], 'homes': <Map<String, dynamic>>[]};
   SiteError? standbyError;

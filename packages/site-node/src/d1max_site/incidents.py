@@ -11,8 +11,8 @@
 (``dispatching``)也算合并目标;它最终派失败了,就把并进来的第一条**提升**成新的出动,其余的改并到它。
 
 每条事件都进 ``incidents`` 表,去向:``dispatched``、``merged``、``duplicate``、``unmapped``
-(防区没映射)、``ignored_type``(类型不认)、``no_robot``、``dispatch_failed``;派出去的那条,结果由
-事件回写 ``result``。
+(防区没映射)、``ignored_type``(类型不认)、``disarmed``(W20:这个防区按当前模式撤防,只记账、不派狗、
+不报告警)、``no_robot``、``dispatch_failed``;派出去的那条,结果由事件回写 ``result``。
 """
 
 from __future__ import annotations
@@ -90,6 +90,8 @@ class IncidentDesk:
         self._telling: set[int] = set()                # 正在报的(接口线程与事件循环都会报)
         #: 事件源被限流了(W16):``(事件源名)``。
         self.on_throttled: Callable[[str], None] | None = None
+        #: 布防模式(W20,``modes.ArmingDesk``)。没接(老测试、命令行)就当全布防。
+        self.arming: Any = None
         #: 每个事件源最近一分钟收过的时刻。接口是多线程的:「清掉一分钟前的、判断、
         #: 记一笔」得在一把锁里
         #: 一次做完(W16 外审:不加锁 40 个并发请求全放行)。
@@ -347,6 +349,12 @@ class IncidentDesk:
                 return dict(first) | {"outcome": "duplicate"}
             if ev["type"] not in TYPES:
                 return self._set(c, iid, outcome="ignored_type")
+            if self.arming is not None:
+                on, mode = self.arming.armed(ev["zone"])
+                if not on:
+                    from d1max_site.modes import LABEL
+                    return self._set(c, iid, outcome="disarmed",
+                                     note=f"{LABEL[mode]}模式:这个防区撤防,只记录")
             z = c.execute("SELECT intercept FROM zones WHERE zone=?", (ev["zone"],)).fetchone()
             if z is None:
                 return self._set(c, iid, outcome="unmapped", note="防区没映射到拦截点")

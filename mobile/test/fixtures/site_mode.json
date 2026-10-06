@@ -1,0 +1,23 @@
+{
+  "label": "访客",
+  "mode": "visitor",
+  "prev_mode": "armed",
+  "set_by": "alice",
+  "set_ms": 1791309687473,
+  "until_ms": 1791313287473,
+  "visitor_zones": [
+    "drive"
+  ],
+  "zones": [
+    {
+      "armed": false,
+      "home_armed": true,
+      "zone": "drive"
+    },
+    {
+      "armed": false,
+      "home_armed": false,
+      "zone": "yard"
+    }
+  ]
+}

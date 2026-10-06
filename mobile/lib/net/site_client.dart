@@ -67,12 +67,21 @@ class SiteSession {
   /// admin / guard / owner。界面据此决定显示哪些按钮；**真正的权限在站点上**，这里只是不让
   /// 人按一个注定 403 的按钮。
   final String role;
-  const SiteSession(this.token, this.name, this.role);
+
+  /// 给人看的真名（W20 操作人实名）；站点没设就是账号名。
+  final String displayName;
+  const SiteSession(this.token, this.name, this.role, {this.displayName = ''});
 
   bool get canDispatch => role == 'admin' || role == 'guard';
 
-  /// 确认、解决告警（W00c5a）：值班的人（保安、管理员）；业主只看。
-  bool get canHandleAlerts => role == 'admin' || role == 'guard';
+  /// 确认、解决告警（W00c5a）：值班的人（保安、管理员）；业主也行（W20：在家时自己看到了点「我知道了」）。
+  bool get canHandleAlerts => role == 'admin' || role == 'guard' || role == 'owner';
+
+  /// 切到布防（W20）：谁都能。
+  bool get canArm => role == 'admin' || role == 'guard' || role == 'owner';
+
+  /// 切到在家、访客（撤防，W20）：业主、管理员；保安不能。
+  bool get canSetMode => role == 'admin' || role == 'owner';
 
   /// 遥控（W00c5c，决策 7）：保安、管理员；业主没有（业主能按「停」）。
   bool get canTeleop => role == 'admin' || role == 'guard';
@@ -104,6 +113,21 @@ String scheduleWhen(Map<String, dynamic> e) {
   return stb is String && stb.isNotEmpty ? '$when，巡完回 $stb' : when;
 }
 
+/// 布防模式说人话（W20）：`布防` / `在家` / `访客（到 21:30）`。
+String modeText(Map<String, dynamic> m) {
+  final label = switch (m['mode']) {
+    'armed' => '布防',
+    'home' => '在家',
+    'visitor' => '访客',
+    _ => '${m['mode']}',
+  };
+  final until = m['until_ms'];
+  if (m['mode'] != 'visitor' || until is! num) return label;
+  final t = DateTime.fromMillisecondsSinceEpoch(until.toInt());
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '$label（到 ${two(t.hour)}:${two(t.minute)}）';
+}
+
 /// 一条事件的去向说人话（W16）。
 String incidentOutcomeText(String outcome) => switch (outcome) {
       'dispatched' => '已出动',
@@ -114,6 +138,7 @@ String incidentOutcomeText(String outcome) => switch (outcome) {
       'no_robot' => '没有能派的狗',
       'dispatch_failed' => '派了，狗没收',
       'ignored_type' => '不是入侵，只记账',
+      'disarmed' => '撤防中，只记录（没派狗、没响铃）',
       _ => outcome,
     };
 
@@ -294,6 +319,13 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> mapZone(String zone, String intercept);
   Future<Map<String, dynamic>> unmapZone(String zone);
   Future<Map<String, dynamic>> removeIntercept(String name);
+
+  /// 布防模式（W20）：当前模式、访客到几点、每个防区现在布不布防。站点没开回 404。
+  Future<Map<String, dynamic>> mode();
+  /// 切模式：`armed`（谁都能）、`home`、`visitor`（业主、管理员；访客带 [zones] 和 [minutes]）。
+  Future<Map<String, dynamic>> setMode(String mode, {List<String>? zones, int? minutes});
+  /// 这个防区在家时布不布防（管理员）。
+  Future<Map<String, dynamic>> setZoneHome(String zone, bool homeArmed);
 
   /// 告警（W00c5a）。默认只要未解决的，[all] 为真时连已解决的一起（最近的在前）。
   /// **读不懂就抛 `FormatException`，绝不退回一份空名单**（见 `alertsFromWire`）。
@@ -619,7 +651,7 @@ class SiteClient implements SiteApi {
     final d = _map(await _send('POST', '/api/login',
         <String, dynamic>{'name': name, 'password': password}));
     final s = SiteSession(d['token'] as String? ?? '', d['name'] as String? ?? name,
-        d['role'] as String? ?? '');
+        d['role'] as String? ?? '', displayName: d['display_name'] as String? ?? '');
     if (s.token.isEmpty) {
       throw const SiteError(0, '站点没给令牌');
     }
@@ -703,6 +735,22 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> mapZone(String zone, String intercept) async =>
       _map(await _send('POST', '/api/zones', <String, dynamic>{'zone': zone, 'intercept': intercept}));
+
+  @override
+  Future<Map<String, dynamic>> mode() async => _map(await _send('GET', '/api/mode'));
+
+  @override
+  Future<Map<String, dynamic>> setMode(String mode, {List<String>? zones, int? minutes}) async =>
+      _map(await _send('POST', '/api/mode', <String, dynamic>{
+        'mode': mode,
+        'zones': ?zones,
+        'minutes': ?minutes,
+      }));
+
+  @override
+  Future<Map<String, dynamic>> setZoneHome(String zone, bool homeArmed) async =>
+      _map(await _send('POST', '/api/mode/zones',
+          <String, dynamic>{'zone': zone, 'home_armed': homeArmed}));
 
   @override
   Future<Map<String, dynamic>> unmapZone(String zone) async =>

@@ -20,6 +20,7 @@ import '../store/site_store.dart';
 import 'site_logs.dart';
 import 'site_mapping.dart';
 import 'site_maps.dart';
+import 'site_mode.dart';
 import 'site_releases.dart';
 import 'site_cameras.dart';
 import 'site_intercepts.dart';
@@ -238,6 +239,7 @@ class SiteRobotsPage extends StatefulWidget {
       this.ringEvery = const Duration(seconds: 4)});
 
   static const Key bgWatchKey = Key('btn-bg-watch');
+  static const Key modeKey = Key('mode-banner');
 
   @override
   State<SiteRobotsPage> createState() => _SiteRobotsPageState();
@@ -245,6 +247,9 @@ class SiteRobotsPage extends StatefulWidget {
 
 class _SiteRobotsPageState extends State<SiteRobotsPage> {
   List<Map<String, dynamic>> _robots = <Map<String, dynamic>>[];
+
+  /// 布防模式（W20）；站点没开（老站点 404）就是 null，不显示那一行。
+  Map<String, dynamic>? _mode;
   String? _error;
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _debounce;
@@ -272,6 +277,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       if (f['kind'] == 'snapshot') unawaited(_ringIfPending());
       if (f['kind'] == 'alert' && f['alert'] is Map) {
         _track(Map<String, dynamic>.from(f['alert'] as Map));
+      }
+      if (f['kind'] == 'mode' && f['mode'] is Map && mounted) {
+        setState(() => _mode = Map<String, dynamic>.from(f['mode'] as Map));
       }
       if (alertWantsSound(f)) {
         widget.ring();
@@ -346,6 +354,12 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     } on SiteError catch (e) {
       if (e.status == 401) return _backToLogin();
       if (mounted) setState(() => _error = e.toString());
+    }
+    try {
+      final m = await widget.api.mode();
+      if (mounted) setState(() => _mode = m);
+    } on SiteError {
+      return; // 老站点没有布防模式（404）；读不到就不显示那一行
     }
   }
 
@@ -491,6 +505,18 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                 title: Text('实时更新没连上，正在重连；下拉可以手动刷新')),
           if (_error != null)
             ListTile(title: Text(_error!, style: const TextStyle(color: Colors.red))),
+          if (_mode != null)
+            ListTile(
+              key: SiteRobotsPage.modeKey,
+              leading: Icon(modeIcon('${_mode!['mode']}'), color: modeColor('${_mode!['mode']}')),
+              title: Text('模式：${modeText(_mode!)}'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                await Navigator.push(
+                    context, MaterialPageRoute<void>(builder: (_) => SiteModePage(api: widget.api)));
+                await _reload();
+              },
+            ),
           for (final r in _robots)
             ListTile(
               key: Key('robot-${r['robot_id']}'),

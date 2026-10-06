@@ -430,8 +430,9 @@ def test_遥控中钟差变成不知道_续租被拒_这一趟收掉_狗按租�
     _推(ph, 0.4, seconds=0.3)
     _等(lambda: s.teleop.active("A") is None, timeout=5)
     assert refused and all("钟差还不知道" in r for r in refused)
-    rows = s.db.query("SELECT end_reason FROM teleop_leases WHERE robot_id='A'")
-    assert [r["end_reason"] for r in rows] == ["lease_lost"]
+    # 收掉这一趟是先从内存摘下、最后才记账(``TeleopDesk.close``):等账记上再看
+    assert _等(lambda: [r["end_reason"] for r in s.db.query(
+        "SELECT end_reason FROM teleop_leases WHERE robot_id='A'")] == ["lease_lost"], timeout=5)
     assert _等(lambda: _停了(s), timeout=5)
     _等(lambda: s.db.query("SELECT 1 FROM events WHERE robot_id='A' AND kind='task_failed' "
                            "AND data LIKE '%lease_expired%'"), timeout=10)

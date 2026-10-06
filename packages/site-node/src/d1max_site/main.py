@@ -15,7 +15,8 @@
     enroll    ROBOT_ID [--days 365]        → 打印证书包目录(拷到狗的 /etc/d1max/)
     revoke    ROBOT_ID                     → 吊销;要重启 d1max-mosquitto 才对 broker 生效
     add-admin NAME                         → 口令从 D1MAX_SITE_PASSWORD 或交互输入
-    add-account NAME --role admin|guard|owner → 同上,带角色(W00c3)
+    add-account NAME --role admin|guard|owner [--display-name 真名] → 同上,带角色(W00c3)、
+                     显示名(W20 操作人实名:一人一个账号)
     set-role NAME ROLE / disable NAME / enable NAME → 账号管理(W00c3;都吊销那个账号的会话)
     import-bundle DIR                      → 导入任务包,成为当前包(W00c2a)
     standby ROBOT NAME --map M:VER --pose x,y,yaw [--default] → 登记待命点(W00c2b)
@@ -310,11 +311,12 @@ def cmd_incident_admin(home: Path, what: str, **kw) -> str:
         db.close()
 
 
-def cmd_add_admin(home: Path, name: str, password: str, role: str = "admin") -> None:
+def cmd_add_admin(home: Path, name: str, password: str, role: str = "admin",
+                  display_name: str = "") -> None:
     _load(home)
     db = SiteDB(home / "site.db")
     try:
-        Accounts(db, now_ms=wall_ms).add(name, password, role=role)
+        Accounts(db, now_ms=wall_ms).add(name, password, role=role, display_name=display_name)
     finally:
         db.close()
 
@@ -383,6 +385,10 @@ class Server:
         # W16:入侵有了去向(派出去了、没狗去)、事件源被限流,告诉值守的人。
         self.incidents.on_outcome = self.alert_sources.on_incident
         self.incidents.on_throttled = self.alert_sources.on_incident_throttled
+        # W20:布防模式。撤防的防区来了入侵只记账、不派狗、不报告警。
+        from d1max_site.modes import ArmingDesk
+        self.arming = ArmingDesk(self.db, now_ms=wall_ms, publish=self.dispatcher.feed.publish)
+        self.incidents.arming = self.arming
         # W00c5b:视频经站点。狗按需把相机推到这里(SRT),这里转 MJPEG 给观众。
         from d1max_site.video import VideoHub, dispatcher_sender
         vcfg = cfg.get("video", {})
@@ -456,6 +462,10 @@ class Server:
                            maps=self.maps, releases=self.releases,
                            supervision=self.supervision, zones=self.zones, now_ms=wall_ms)
         self.teleop.audit = self.api.audit
+        self.api.arming = self.arming
+        self.arming.on_expired = lambda back, row: self.api.audit.record(
+            actor="site", action="mode visitor_expired", target=back, status=200,
+            detail={"visitor_zones": row["visitor_zones"], "set_by": row["set_by"]}, remote="")
         #: 基站改正数据转发(W09e):配了 ``--rtcm-source`` 才有。
         self.rtk = None
         if rtcm_source:
@@ -546,6 +556,10 @@ class Server:
                 self.incidents.retell()                # W16 外审:入侵的告警上次没报成的,补
             except Exception:
                 log.exception("入侵告警补报这一拍没办成")
+            try:
+                self.arming.tick()                     # W20:访客到点退回原来的模式
+            except Exception:
+                log.exception("访客到点退回这一拍没办成")
 
     async def _sync_loop(self) -> None:
         while not self._stop.is_set():
@@ -683,6 +697,7 @@ def build_parser() -> argparse.ArgumentParser:
     aa = sub.add_parser("add-account", help="加账号(带角色)")
     aa.add_argument("name")
     aa.add_argument("--role", required=True, choices=("admin", "guard", "owner"))
+    aa.add_argument("--display-name", default="", help="给人看的真名(W20)")
     sr = sub.add_parser("set-role", help="改账号的角色")
     sr.add_argument("name")
     sr.add_argument("role", choices=("admin", "guard", "owner"))
@@ -770,7 +785,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.cmd in ("add-admin", "add-account"):
             pw = os.environ.get("D1MAX_SITE_PASSWORD") or getpass.getpass("口令: ")
             role = getattr(args, "role", "admin")
-            cmd_add_admin(home, args.name, pw, role)
+            cmd_add_admin(home, args.name, pw, role, getattr(args, "display_name", ""))
             print(f"账号 {args.name}({role})加好了")
         elif args.cmd in ("set-role", "disable", "enable"):
             cmd_account(home, args.cmd, args.name, getattr(args, "role", ""))

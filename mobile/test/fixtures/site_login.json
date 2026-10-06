@@ -1,4 +1,5 @@
 {
+  "display_name": "alice",
   "name": "alice",
   "role": "admin",
   "token": "fixture_session_not_valid"
