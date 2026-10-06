@@ -276,14 +276,46 @@ class _假订阅:
 
     def join(self, timeout=None):
         self.joined = True
+        return True
+
+
+class _告警:
+    """真的告警台(落库),同步调;``fail`` 里的那几样这一下抛错(测重试)。"""
+
+    def __init__(self, db, now):
+        from d1max_site.alert_store import AlertDesk
+        self.desk = AlertDesk(db, now_ms=lambda: now[0])
+        self.fail: set[str] = set()
+        self.calls: list[str] = []
+
+    def _go(self, what, fn, *a, **kw):
+        self.calls.append(what)
+        if what in self.fail:
+            raise RuntimeError(f"{what} 炸了")
+        return fn(*a, **kw)
+
+    def raise_alert(self, **kw):
+        return self._go("raise", self.desk.raise_alert, **kw)
+
+    def resolve_all(self, robot, kind, *, who):
+        return self._go("resolve", self.desk.resolve_all, robot, kind, who=who)
+
+    def resolve_except(self, kind, prefix, keep, *, who):
+        return self._go("resolve_except", self.desk.resolve_except, kind, prefix, keep, who=who)
+
+    def has_open(self, robot, kind):
+        return self._go("has_open", self.desk.has_open, robot, kind)
+
+    def offline(self):
+        return sorted(a["robot"] for a in self.desk.open() if a["kind"] == "cctv_offline")
 
 
 def test_照库起停_改了重起_断五分钟报一次P2_口令不出站(tmp_path):
     db = SiteDB(tmp_path / "s.db")
     now = [1_000_000]
-    alerts = []
-    m = CctvManager(db, report=lambda c, e: None, now_ms=lambda: now[0],
-                    alert=lambda **kw: alerts.append(kw), watch_factory=_假订阅)
+    al = _告警(db, now)
+    m = CctvManager(db, report=lambda c, e: None, now_ms=lambda: now[0], alerts=al,
+                    watch_factory=_假订阅)
     add_camera(db, _cam(80), now_ms=now[0])
     m.sync()
     w = m.watches["gate-cam"]
@@ -296,12 +328,13 @@ def test_照库起停_改了重起_断五分钟报一次P2_口令不出站(tmp_p
     assert w.stopped and m.watches["gate-cam"] is not w, "改了:换一条订阅"
     now[0] += 299_000
     m.sync()
-    assert alerts == []
+    assert al.offline() == []
     now[0] += 2_000
     m.sync()
     m.sync()
-    assert [a["kind"] for a in alerts] == ["cctv_offline"] and "gate-cam" in alerts[0]["title"]
-    assert alerts[0]["robot"] == "cctv:gate-cam", "每台摄像头一条,不合在站点名下"
+    [a] = [x for x in al.desk.open() if x["kind"] == "cctv_offline"]
+    assert a["robot"] == "cctv:gate-cam" and "gate-cam" in a["title"] and a["level"] == "P2"
+    assert a["count"] == 1, "不重报"
     remove_camera(db, "gate-cam")
     m.sync()
     assert m.watches == {}
@@ -364,6 +397,7 @@ def 站点(tmp_path):
     s.cctv = CctvManager(s.db, report=lambda c, e: None, now_ms=lambda: 1,
                          watch_factory=_假订阅)
     s.api.cctv = s.cctv
+    s.cctv.on_changed = s.api.drop_cctv_view              # 同站点主程序的接线
     s.accounts.add("olga", PW, role="owner")
     s.PW = PW
     yield s
@@ -450,33 +484,85 @@ def test_命令行_加_列_删_口令不显示(tmp_path, monkeypatch, capsys):
 def test_W19外审_两台同时断各一条_只恢复一台解决一台_删掉断着的也解决(tmp_path):
     db = SiteDB(tmp_path / "s.db")
     now = [1_000_000]
-    alerts, resolved = [], []
-    m = CctvManager(db, report=lambda c, e: None, now_ms=lambda: now[0],
-                    alert=lambda **kw: alerts.append(kw["robot"]),
-                    resolve=lambda robot, kind: resolved.append((robot, kind)),
+    al = _告警(db, now)
+    m = CctvManager(db, report=lambda c, e: None, now_ms=lambda: now[0], alerts=al,
                     watch_factory=_假订阅)
     for n in ("a", "b", "c"):
         add_camera(db, Camera(n, "http://x", "", "", "z"), now_ms=1)
     m.sync()
     now[0] += 301_000
     m.sync()
-    assert sorted(alerts) == ["cctv:a", "cctv:b", "cctv:c"], "各一条,不合并、不互相盖"
+    assert al.offline() == ["cctv:a", "cctv:b", "cctv:c"], "各一条,不合并、不互相盖"
     m.sync()
-    assert len(alerts) == 3, "不重报"
+    assert al.calls.count("raise") == 3, "不重报"
     m.watches["a"].status.connected = True
     m.sync()
-    assert resolved == [("cctv:a", "cctv_offline")], "只解决恢复的那一台"
+    assert al.offline() == ["cctv:b", "cctv:c"], "只解决恢复的那一台"
     m.watches["b"].status.connected = True
     m.sync()
-    assert ("cctv:b", "cctv_offline") in resolved and len(resolved) == 2
+    assert al.offline() == ["cctv:c"]
     remove_camera(db, "c")
     m.sync()
-    assert ("cctv:c", "cctv_offline") in resolved, "删掉断着的:它的告警不再挂着"
+    assert al.offline() == [], "删掉断着的:它的告警不再挂着"
     m.watches["a"].status.connected = False
     m.watches["a"].status.since_ms = now[0]
     now[0] += 301_000
     m.sync()
-    assert alerts.count("cctv:a") == 2, "恢复后再断:再报"
+    assert al.offline() == ["cctv:a"], "恢复后再断:再报"
+
+
+def test_W19复查_重启之后_已经连上的解决旧告警_还断着的不重报_停机时删的也解决(tmp_path):
+    db = SiteDB(tmp_path / "s.db")
+    now = [1_000_000]
+    al = _告警(db, now)
+    m = CctvManager(db, report=lambda c, e: None, now_ms=lambda: now[0], alerts=al,
+                    watch_factory=_假订阅)
+    for n in ("a", "b", "c"):
+        add_camera(db, Camera(n, "http://x", "", "", "z"), now_ms=1)
+    m.sync()
+    now[0] += 301_000
+    m.sync()
+    assert al.offline() == ["cctv:a", "cctv:b", "cctv:c"]
+    m.close()                                             # 站点停了
+    remove_camera(db, "c")                                # 停机期间删了 c
+    al2 = _告警(db, now)                                  # 重启:告警台从库里读回来,内存是空的
+    m2 = CctvManager(db, report=lambda c, e: None, now_ms=lambda: now[0], alerts=al2,
+                     watch_factory=_假订阅)
+    m2.sync()
+    m2.watches["a"].status.connected = True               # a 恢复了;b 还断着
+    m2.sync()
+    assert al2.offline() == ["cctv:b"], "a 的旧告警解决了;停机时删的 c 也解决了"
+    now[0] += 301_000
+    m2.sync()
+    assert al2.calls.count("raise") == 0, "b 还断着:库里已经挂着,不重报"
+    assert [a["count"] for a in al2.desk.open() if a["robot"] == "cctv:b"] == [1]
+
+
+def test_W19复查_报不出去_解决不了_下一拍重试(tmp_path):
+    db = SiteDB(tmp_path / "s.db")
+    now = [1_000_000]
+    al = _告警(db, now)
+    m = CctvManager(db, report=lambda c, e: None, now_ms=lambda: now[0], alerts=al,
+                    watch_factory=_假订阅)
+    add_camera(db, Camera("a", "http://x", "", "", "z"), now_ms=1)
+    m.sync()
+    now[0] += 301_000
+    al.fail = {"raise"}
+    m.sync()
+    assert al.offline() == []
+    al.fail = set()
+    m.sync()
+    assert al.offline() == ["cctv:a"], "上一拍没报成:这一拍报"
+    m.watches["a"].status.connected = True
+    al.fail = {"resolve"}
+    m.sync()
+    assert al.offline() == ["cctv:a"]
+    al.fail = set()
+    m.sync()
+    assert al.offline() == [], "上一拍没解决成:这一拍解决"
+    n = al.calls.count("resolve")
+    m.sync()
+    assert al.calls.count("resolve") == n, "确认解决了:不每拍都去问"
 
 
 class _卡住的客户端:
@@ -660,3 +746,61 @@ def test_W19外审_告警台按这一位这一种解决_别的摄像头的不动
     assert desk.resolve_all("cctv:a", "cctv_offline", who="站点") == 1
     left = {(a["robot"], a["kind"]) for a in desk.open()}
     assert left == {("cctv:b", "cctv_offline"), ("cctv:a", "robot_offline_idle")}
+
+
+
+def test_W19复查_有人在看时删掉摄像头_画面当场结束_ffmpeg收掉(站点):
+    s = 站点
+    add_camera(s.db, _cam(80, rtsp_url="rtsp://10.0.0.9/s1"), now_ms=1)
+    s.cctv.sync()
+    popen, procs = _ffmpeg(b"\xff\xd8x\xff\xd9" * 3, then_sleep=30)
+    v = CctvView(s.cctv.camera("gate-cam"), popen=popen, idle_s=60, major=lambda f: 4)
+    s.api._cctv_views["gate-cam"] = v
+    it = v.frames()
+    next(it)
+    remove_camera(s.db, "gate-cam")
+    s.cctv.sync()                                         # 不等谁再打开画面
+    assert list(it) == [], "正在看的流当场结束"
+    _等(lambda: procs[0][1].returncode is not None)
+    assert "gate-cam" not in s.api._cctv_views
+    with pytest.raises(TimeoutError):
+        next(v.frames())
+
+
+def test_W19复查_有人在看时改了地址_旧流关掉_再打开按新配置(站点):
+    s = 站点
+    add_camera(s.db, _cam(80, rtsp_url="rtsp://10.0.0.9/old"), now_ms=1)
+    s.cctv.sync()
+    popen, procs = _ffmpeg(b"\xff\xd8x\xff\xd9", then_sleep=30)
+    v = CctvView(s.cctv.camera("gate-cam"), popen=popen, idle_s=60, major=lambda f: 4)
+    s.api._cctv_views["gate-cam"] = v
+    it = v.frames()
+    next(it)
+    add_camera(s.db, _cam(80, rtsp_url="rtsp://10.0.0.9/new"), now_ms=2)
+    s.cctv.sync()
+    _等(lambda: procs[0][1].returncode is not None)
+    assert "gate-cam" not in s.api._cctv_views, "旧的摘掉了"
+    assert s.cctv.camera("gate-cam").rtsp_url == "rtsp://10.0.0.9/new"
+    import urllib.request
+    procs2 = []
+
+    def popen2(argv, **kw):                               # 一直出帧(观众只拿最新那张)
+        p = subprocess.Popen([sys.executable, "-c",
+                              "import sys,time\n"
+                              "for i in range(1500):\n"
+                              "    sys.stdout.buffer.write(b'\\xff\\xd8n\\xff\\xd9')\n"
+                              "    sys.stdout.flush(); time.sleep(0.02)"],
+                             stdout=subprocess.PIPE, stderr=kw["stderr"])
+        procs2.append((argv, p))
+        return p
+    s.api.cctv_view_factory = lambda cam: CctvView(cam, popen=popen2, idle_s=60,
+                                                   major=lambda f: 4)
+    tok = s.req("POST", "/api/login", {"name": "olga", "password": s.PW})[1]["token"]
+    host, port = s.api.httpd.server_address[:2]
+    req = urllib.request.Request(f"http://{host}:{port}/api/cameras/gate-cam/live",
+                                 headers={"Authorization": f"Bearer {tok}"})
+    with urllib.request.urlopen(req, timeout=10) as resp:     # 再打开:按新配置起
+        assert b"\xff\xd8n" in resp.read(200)
+    assert s.api._cctv_views["gate-cam"].cam.rtsp_url == "rtsp://10.0.0.9/new"
+    s.api.close_cctv_views()
+    _等(lambda: procs2[0][1].returncode is not None)

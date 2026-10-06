@@ -113,6 +113,20 @@ class AlertDesk:
                 n += 1
         return n
 
+    def resolve_except(self, kind: str, prefix: str, keep: set[str], *, who: str) -> int:
+        """这一种、记在 ``<prefix><名字>`` 名下、名字不在 ``keep`` 里的没解决的全解决(W19 复查:
+        站点停机期间删掉的摄像头,它的「连不上」不能一直挂着)。回几条。"""
+        n = 0
+        for a in self.book.open():
+            if a.kind == kind and a.robot.startswith(prefix) and a.robot[len(prefix):] not in keep:
+                self.book.resolve(a.key, who=who, now_ms=self._now())
+                n += 1
+        return n
+
+    def has_open(self, robot: str, kind: str) -> bool:
+        """这一位这一种有没有还没解决的(持久化的告警簿说了算,不看谁的内存)。"""
+        return any(a.robot == robot and a.kind == kind for a in self.book.open())
+
     def escalate(self) -> list[tuple[Alert, Channel]]:
         """P1 未确认的,到时限就升一档(换通道)。站点主循环每 5 s 调一次。"""
         return list(self.book.due_escalations(now_ms=self._now()))
@@ -151,11 +165,24 @@ class LoopAlerts:
         self.desk = desk
         self.loop = loop
 
-    def raise_alert(self, **kw: Any) -> Any:
+    def _on_loop(self, fn: Any, *args: Any, **kw: Any) -> Any:
+        """在事件循环里跑完、回结果;出错照样抛给调用方(调用方据此决定下一拍重试)。"""
         t = getattr(self.loop, "_thread", None)
         if t is not None and t is threading.current_thread():
-            return self.desk.raise_alert(**kw)     # 已经在事件循环里:直接报(等自己会死锁)
+            return fn(*args, **kw)                 # 已经在事件循环里:直接调(等自己会死锁)
 
         async def go() -> Any:
-            return self.desk.raise_alert(**kw)
+            return fn(*args, **kw)
         return self.loop.call(go, timeout_s=10.0)
+
+    def raise_alert(self, **kw: Any) -> Any:
+        return self._on_loop(self.desk.raise_alert, **kw)
+
+    def resolve_all(self, robot: str, kind: str, *, who: str) -> int:
+        return self._on_loop(self.desk.resolve_all, robot, kind, who=who)
+
+    def resolve_except(self, kind: str, prefix: str, keep: set[str], *, who: str) -> int:
+        return self._on_loop(self.desk.resolve_except, kind, prefix, keep, who=who)
+
+    def has_open(self, robot: str, kind: str) -> bool:
+        return self._on_loop(self.desk.has_open, robot, kind)

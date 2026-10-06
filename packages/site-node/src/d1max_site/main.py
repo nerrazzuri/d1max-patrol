@@ -442,13 +442,9 @@ class Server:
         # W19:固定摄像头自带的入侵检测(ONVIF 事件)→ 入侵派遣。订阅在各自的线程里;
         # 报入侵跳回事件循环。
         from d1max_site.cctv import CctvManager, incident_reporter
-        def _cctv_resolve(robot: str, kind: str) -> None:
-            async def _go() -> None:                     # 告警簿只在事件循环里改
-                self.alerts.resolve_all(robot, kind, who="站点:摄像头恢复或已删除")
-            self.loop.submit(_go)
         self.cctv = CctvManager(self.db, report=incident_reporter(self.incidents, self.loop.submit,
                                                                   wall_ms), now_ms=wall_ms,
-                                alert=loop_alerts.raise_alert, resolve=_cctv_resolve)
+                                alerts=loop_alerts)
         self.intake.on_refused = lambda robot, run, rel, why: loop_alerts.raise_alert(
             kind="upload_refused", robot=robot, title=f"站点不收 {run}/{rel}",
             detail=f"{why}(那一趟留在狗上,不会自己删)")
@@ -476,6 +472,7 @@ class Server:
         self.api.rtk = self.rtk
         self.api.recordings = self.recordings
         self.api.cctv = self.cctv
+        self.cctv.on_changed = self.api.drop_cctv_view   # 删了、改了:正在看的旧画面当场关
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
                                         name="site-chores")
