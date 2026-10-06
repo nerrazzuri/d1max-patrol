@@ -165,6 +165,8 @@ class SiteApi:
         self.cctv: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
+        #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
+        self.cctv_view_factory: Callable[[Any], Any] | None = None
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         #: W10:禁行区、限速区。有地图目录就有(测试台子不传也现建一个,派遣器共用这一份)。
         if zones is None and maps is not None:
@@ -198,6 +200,14 @@ class SiteApi:
         # 接连接的线程里握手,一个不发 ClientHello 的连接就能让手机全都连不上。
         self.httpd = TlsThreadingServer((host, port), Handler, ctx=ctx)
         self._thread: threading.Thread | None = None
+
+    def drop_cctv_view(self, name: str) -> None:
+        """这台摄像头删了、改了配置(W19 复查):正在看的旧画面当场关,不等下一次有人打开。删了的再也
+        打不开;改了的下一次打开按新配置起。"""
+        with self._cctv_lock:
+            v = self._cctv_views.pop(name, None)
+        if v is not None:
+            v.close()
 
     def close_cctv_views(self) -> None:
         """站点收尾:摄像头画面的 ffmpeg 全收掉(有观众的、在空闲等待里的都算)。"""
@@ -1494,7 +1504,8 @@ class _Handler(TlsHandlerMixin):
                 v.close()
                 v = None
             if v is None:
-                v = self.site._cctv_views[cam.name] = CctvView(cam)
+                make = self.site.cctv_view_factory or CctvView
+                v = self.site._cctv_views[cam.name] = make(cam)
         frames = v.frames()
         try:
             first = next(frames)

@@ -303,10 +303,12 @@ class CameraWatch:
     def stop(self) -> None:
         self._stop.set()
 
-    def join(self, timeout: float = PULL_WAIT_S + 15) -> None:
-        """等订阅线程退出。它可能正卡在一次 PullMessages 里(最长 ``PULL_WAIT_S`` 加网络超时)。"""
+    def join(self, timeout: float = PULL_WAIT_S + 15) -> bool:
+        """等订阅线程退出。它可能正卡在一次 PullMessages 里(最长 ``PULL_WAIT_S`` 加网络超时)。
+        回真的退了没有(超时就是没退,别当成退了)。"""
         if self._thread.is_alive():
             self._thread.join(timeout)
+        return not self._thread.is_alive()
 
     def _set(self, connected: bool, error: str = "") -> None:
         st = self.status
@@ -403,45 +405,77 @@ def alert_robot(name: str) -> str:
 
 
 class CctvManager:
-    """站点里的摄像头:按库起停订阅、出状态、断太久报告警、恢复了自动解决。``report``
-    把入侵交给事件派遣
-    (跳到事件循环)。``resolve(robot, kind)`` 解决这台摄像头的那条告警(也跳到事件循环)。"""
+    """站点里的摄像头:按库起停订阅、出状态、断太久报告警、恢复了自动解决。``report`` 把入侵交给
+    事件派遣(跳到事件循环)。
+
+    ``alerts``(``LoopAlerts``,同步、出错抛)管告警:``raise_alert``、``resolve_all``、
+    ``resolve_except``、``has_open``。**告警簿(落库的)才是真理源**(W19 复查):站点重启之后内存是
+    空的,但断着时报的那条还在库里 —— 摄像头连着就去解决它,不看内存里记没记过;报之前先看库里是不是
+    已经挂着。报、解决**成了**才在内存里记一笔(省得每拍都去问),失败下一拍重试。
+
+    ``on_changed(名字)``:这台摄像头删了、改了配置(站点主程序接到 API:当场关掉正在看的旧画面)。"""
 
     def __init__(self, db: SiteDB, *, report: Callable[[Camera, OnvifEvent], None],
-                 now_ms: Callable[[], int], alert: Callable[..., Any] | None = None,
-                 resolve: Callable[[str, str], Any] | None = None,
+                 now_ms: Callable[[], int], alerts: Any = None,
                  watch_factory: Callable[..., CameraWatch] = CameraWatch) -> None:
         self.db = db
         self._report = report
         self._now = now_ms
-        self._alert = alert
-        self._resolve = resolve
+        self._alerts = alerts
         self._factory = watch_factory
         self._lock = threading.Lock()
         self.watches: dict[str, CameraWatch] = {}
-        #: 报过「连不上」、还没解决的摄像头(按名字;换了订阅也记着)。
-        self._offline: set[str] = set()
+        #: 这一回连上之后,库里的「连不上」确认解决了的(省得每拍去问);断了就划掉。
+        self._clean: set[str] = set()
+        #: 这一回断了之后,库里确认挂着「连不上」的(报成了、或者本来就挂着);连上了就划掉。
+        self._told: set[str] = set()
+        self.on_changed: Callable[[str], None] | None = None
 
     def _stop_join(self, gone: list[CameraWatch]) -> None:
-        """锁外等旧订阅退出(W19 外审:不等的话,删掉、改了防区之后它从卡着的 PullMessages
-        回来还会按旧的
-        派一次狗;新旧订阅也会重叠)。"""
+        """锁外等旧订阅退出(W19 外审:不等的话,删掉、改了防区之后它从卡着的 PullMessages 回来还会
+        按旧的派一次狗;新旧订阅也会重叠)。等不到(超时)记一条错:那条线程还在,只是 ``handle`` 叫停
+        之后不再派。"""
         for w in gone:
-            w.join()
+            if not w.join():
+                log.error("摄像头 %s 的旧订阅线程没在时限内退出(叫停了、不会再派)", w.cam.name)
 
-    def _resolved(self, name: str) -> None:
-        if name not in self._offline:
-            return
-        self._offline.discard(name)
-        if self._resolve is not None:
+    def _changed(self, name: str) -> None:
+        if self.on_changed is not None:
             try:
-                self._resolve(alert_robot(name), "cctv_offline")
+                self.on_changed(name)
             except Exception:
-                log.exception("解决「摄像头连不上」失败")
+                log.exception("通知「摄像头 %s 删了 / 改了」失败", name)
+
+    def _resolve(self, name: str) -> None:
+        if name in self._clean or self._alerts is None:
+            return
+        try:
+            self._alerts.resolve_all(alert_robot(name), "cctv_offline",
+                                     who="站点:摄像头连上了")
+        except Exception:
+            log.exception("解决「摄像头 %s 连不上」失败,下一拍再试", name)
+            return
+        self._clean.add(name)
+
+    def _raise(self, w: CameraWatch) -> None:
+        name, st = w.cam.name, w.status
+        if name in self._told or self._alerts is None:
+            return
+        robot = alert_robot(name)
+        try:
+            if not self._alerts.has_open(robot, "cctv_offline"):
+                self._alerts.raise_alert(
+                    kind="cctv_offline", robot=robot,
+                    title=f"摄像头 {name} 连不上(防区 {w.cam.zone})",
+                    detail=f"{scrub(st.error) or '连不上'};这一路的入侵现在收不到")
+        except Exception:
+            log.exception("报「摄像头 %s 连不上」失败,下一拍再试", name)
+            return
+        self._told.add(name)
 
     def sync(self) -> None:
-        """照库里的摄像头起停订阅(命令行加、删、改了之后,这一拍就跟上)。断太久的报告警,连上了、删掉了的
-        自动解决。"""
+        """照库里的摄像头起停订阅(命令行加、删、改了之后,这一拍就跟上)。断太久的报告警,连上了的、库里已经
+        没有了的,把告警簿里的「连不上」解决掉。"""
         want = {c.name: c for c in load_cameras(self.db)}
         gone: list[CameraWatch] = []
         with self._lock:
@@ -450,10 +484,19 @@ class CctvManager:
                 if name not in want or want[name] != w.cam:
                     w.stop()
                     gone.append(self.watches.pop(name))
+        for w in gone:
+            self._changed(w.cam.name)                    # 正在看的旧画面当场关(不等下一次打开)
         self._stop_join(gone)                            # 旧的退干净了才起新的:不重叠
         for w in gone:
             if w.cam.name not in want:
-                self._resolved(w.cam.name)               # 删掉的摄像头:它的「连不上」不再挂着
+                self._clean.discard(w.cam.name)
+                self._told.discard(w.cam.name)
+        if self._alerts is not None:
+            try:                                         # 库里没有了的(含站点停机期间删的)
+                self._alerts.resolve_except("cctv_offline", "cctv:", set(want),
+                                            who="站点:摄像头已删除")
+            except Exception:
+                log.exception("解决已删除摄像头的「连不上」失败,下一拍再试")
         with self._lock:
             for name, cam in want.items():
                 if name not in self.watches:
@@ -465,16 +508,12 @@ class CctvManager:
         for w in watches:
             st, name = w.status, w.cam.name
             if st.connected:
-                self._resolved(name)
-            elif name not in self._offline and now - st.since_ms >= OFFLINE_ALERT_S * 1000:
-                self._offline.add(name)
-                if self._alert is not None:
-                    try:
-                        self._alert(kind="cctv_offline", robot=alert_robot(name),
-                                    title=f"摄像头 {name} 连不上(防区 {w.cam.zone})",
-                                    detail=f"{st.error or '连不上'};这一路的入侵现在收不到")
-                    except Exception:
-                        log.exception("报「摄像头连不上」失败")
+                self._told.discard(name)
+                self._resolve(name)
+            else:
+                self._clean.discard(name)
+                if now - st.since_ms >= OFFLINE_ALERT_S * 1000:
+                    self._raise(w)
 
     def view(self) -> list[dict[str, Any]]:
         """给手机看的(不带口令、不带地址里的口令)。"""
