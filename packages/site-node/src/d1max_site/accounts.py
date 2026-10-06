@@ -95,19 +95,21 @@ class Accounts:
 
     # ------------------------------------------------------------ 账号
 
-    def add(self, name: str, password: str, *, role: str) -> None:
-        """``role`` 必须给:不给就默认成 admin 是个等着出事的坑。"""
+    def add(self, name: str, password: str, *, role: str, display_name: str = "") -> None:
+        """``role`` 必须给:不给就默认成 admin 是个等着出事的坑。``display_name`` 是给人看的真名
+        (W20 操作人实名:一人一个账号,账号名就是操作人,显示名让审计、告警里看得出是谁)。"""
         if not isinstance(name, str) or not _NAME.match(name):
             raise AuthError("账号名只许字母、数字、. _ -,1–64 个字符")
         self._check_role(role)
         self._check_password(password)
+        self._check_display(display_name)
         salt = secrets.token_bytes(16)
         with self.db.tx() as c:
             if c.execute("SELECT 1 FROM accounts WHERE name=?", (name,)).fetchone():
                 raise AuthError(f"账号 {name} 已存在")
-            c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at) "
-                      "VALUES (?,?,?,?,?)", (name, role, salt, _hash(password, salt),
-                                             self._now()))
+            c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, display_name) "
+                      "VALUES (?,?,?,?,?,?)", (name, role, salt, _hash(password, salt),
+                                               self._now(), display_name.strip()))
 
     def names(self) -> list[str]:
         return [r["name"] for r in self.db.query("SELECT name FROM accounts ORDER BY name")]
@@ -118,13 +120,26 @@ class Accounts:
             raise AuthError(f"角色只有 {', '.join(sorted(ROLES))},给的是 {role!r}")
 
     @staticmethod
+    def _check_display(display_name: str) -> None:
+        if not isinstance(display_name, str) or len(display_name.strip()) > 64 \
+                or any(ord(ch) < 0x20 for ch in display_name):
+            raise AuthError("显示名最多 64 个字符,不许有控制字符")
+
+    def display_name(self, name: str) -> str:
+        """给人看的名字;没设就是账号名。"""
+        rows = self.db.query("SELECT display_name FROM accounts WHERE name=?", (name,))
+        return (rows[0]["display_name"] if rows else "") or name
+
+    @staticmethod
     def _check_password(password: str) -> None:
         if not isinstance(password, str) or len(password) < MIN_PASSWORD:
             raise AuthError(f"口令至少 {MIN_PASSWORD} 个字符")
 
     def list(self) -> list[dict]:
-        return [{"name": r["name"], "role": r["role"], "disabled": bool(r["disabled"])}
-                for r in self.db.query("SELECT name, role, disabled FROM accounts ORDER BY name")]
+        return [{"name": r["name"], "role": r["role"], "disabled": bool(r["disabled"]),
+                 "display_name": r["display_name"]}
+                for r in self.db.query(
+                    "SELECT name, role, disabled, display_name FROM accounts ORDER BY name")]
 
     def _get(self, c, name: str):
         row = c.execute("SELECT * FROM accounts WHERE name=?", (name,)).fetchone()
@@ -138,7 +153,7 @@ class Accounts:
                          "AND name<>?", (name,)).fetchone()["n"]
 
     def update(self, name: str, *, role: str | None = None, disabled: bool | None = None,
-               password: str | None = None) -> None:
+               password: str | None = None, display_name: str | None = None) -> None:
         """一次改多项:**先全部校验,再在一个事务里一起改**。有一项不合规矩就一项都不改
         (内部评审:原来逐项提交,后面一项 400 了前面的角色已经改了)。"""
         if role is not None:
@@ -147,6 +162,8 @@ class Accounts:
             raise AuthError("disabled 要是 true/false")
         if password is not None:
             self._check_password(password)
+        if display_name is not None:
+            self._check_display(display_name)
         salt = secrets.token_bytes(16) if password is not None else None
         digest = _hash(password, salt) if password is not None else None
         with self.db.tx() as c:
@@ -164,7 +181,12 @@ class Accounts:
             if password is not None:
                 c.execute("UPDATE accounts SET salt=?, pw_hash=? WHERE name=?",
                           (salt, digest, name))
-            c.execute("DELETE FROM sessions WHERE name=?", (name,))
+            if display_name is not None:
+                c.execute("UPDATE accounts SET display_name=? WHERE name=?",
+                          (display_name.strip(), name))
+            # 改角色、停用、改口令:旧会话作废。只改显示名不动会话(不是权限变化)。
+            if role is not None or disabled is not None or password is not None:
+                c.execute("DELETE FROM sessions WHERE name=?", (name,))
 
     def set_role(self, name: str, role: str) -> None:
         self._check_role(role)

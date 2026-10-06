@@ -34,24 +34,23 @@ def _键(a):
     return quote(a["key"], safe="")
 
 
-def test_狗急停_站点出P1_保安确认记登录账号_业主只能看(站点):
+def test_狗急停_站点出P1_确认记登录账号_业主也能确认(站点):
     s = 站点
     alice, gina, olga = _登(s, "alice"), _登(s, "gina"), _登(s, "olga")
     _等(lambda: s.req("GET", "/api/robots/A", token=alice)[1].get("fresh"))
     s.loop.call(lambda: s.dog.emergency_stop(True))
     a = _等(lambda: _告警(s, olga, "estop_pressed"))
     assert a["level"] == "P1" and a["robot"] == "A" and a["acked_by"] == ""
+    # W20:业主在家时自己看到了,能点「我知道了」
     code, d = s.req("POST", f"/api/alerts/{_键(a)}/ack", {"who": "mallory"}, token=olga)
-    assert code == 403, d
-    code, d = s.req("POST", f"/api/alerts/{_键(a)}/ack", {"who": "mallory"}, token=gina)
-    assert code == 200 and d["alert"]["acked_by"] == "gina", "确认人取登录账号,不信请求体"
+    assert code == 200 and d["alert"]["acked_by"] == "olga", "确认人取登录账号,不信请求体"
     code, d = s.req("POST", f"/api/alerts/{_键(a)}/resolve", {}, token=gina)
     assert code == 200 and d["alert"]["resolved_by"] == "gina"
     assert _告警(s, alice, "estop_pressed") is None, "默认只列未解决的"
     code, d = s.req("GET", "/api/alerts?all=1", token=alice)
     assert any(x["key"] == a["key"] and x["resolved_by"] == "gina" for x in d["alerts"])
     audit = s.req("GET", "/api/audit", token=alice)[1]["audit"]
-    assert any(r["actor"] == "gina" and "/ack" in r["action"] and r["target"] == a["key"]
+    assert any(r["actor"] == "olga" and "/ack" in r["action"] and r["target"] == a["key"]
                for r in audit), audit[:3]
 
 

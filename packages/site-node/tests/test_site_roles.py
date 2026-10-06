@@ -44,7 +44,8 @@ def test_管理员加账号_改角色_停用_令牌立刻作废(站点):
     alice, gina = _登(s, "alice"), _登(s, "gina")
     code, d = s.req("POST", "/api/accounts", {"name": "ben", "password": PW, "role": "owner"},
                     token=alice)
-    assert code == 200 and {"name": "ben", "role": "owner", "disabled": False} in d["accounts"]
+    assert code == 200 and {"name": "ben", "role": "owner", "disabled": False,
+                            "display_name": ""} in d["accounts"]
     assert s.req("POST", "/api/accounts", {"name": "x", "password": PW, "role": "god"},
                  token=alice)[0] == 400
     assert s.req("POST", "/api/accounts/gina", {"role": "owner"}, token=alice)[0] == 200

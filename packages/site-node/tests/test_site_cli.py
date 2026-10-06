@@ -285,7 +285,8 @@ def test_事件派遣的命令行(home, capsys):
 
 def test_账号的命令行(home, monkeypatch, capsys):
     monkeypatch.setenv("D1MAX_SITE_PASSWORD", "long-enough-pass")
-    assert site_main.main(["--home", str(home), "add-account", "gina", "--role", "guard"]) == 0
+    assert site_main.main(["--home", str(home), "add-account", "gina", "--role", "guard",
+                           "--display-name", "王保安"]) == 0
     assert site_main.main(["--home", str(home), "add-admin", "alice"]) == 0
     assert site_main.main(["--home", str(home), "set-role", "gina", "owner"]) == 0
     assert site_main.main(["--home", str(home), "disable", "gina"]) == 0
@@ -293,6 +294,8 @@ def test_账号的命令行(home, monkeypatch, capsys):
     assert site_main.main(["--home", str(home), "disable", "alice"]) == 2, "最后一个 admin"
     from d1max_site.accounts import Accounts
     db = SiteDB(home / "site.db")
+    assert Accounts(db, now_ms=lambda: 0).display_name("gina") == "王保安"       # W20
+    assert Accounts(db, now_ms=lambda: 0).display_name("alice") == "alice", "没设就是账号名"
     assert {a["name"]: a["role"] for a in Accounts(db, now_ms=lambda: 0).list()} == {
         "alice": "admin", "gina": "owner"}
     db.close()

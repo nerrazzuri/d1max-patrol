@@ -50,3 +50,16 @@ def test_派单前查哪里有图_接的是站点的地图目录(srv):
 def test_告警用派遣器的钟差估计_站点只有一份(srv):
     """W09d 内审:告警源、派遣器原来各算一份。"""
     assert srv.alert_sources._skew_of == srv.dispatcher.clock_skew_s
+
+
+def test_布防模式接到事件派遣和接口上_访客到点退回记审计(srv):
+    """W20:事件派遣、接口用同一份模式台;访客到点退回时记一笔审计(谁都没点,是站点自己退的)。"""
+    assert srv.incidents.arming is srv.arming and srv.api.arming is srv.arming
+    t = [srv.arming._now()]
+    srv.arming._now = lambda: t[0]
+    srv.arming.set_mode("visitor", by="olga", zones=["drive"], minutes=1)
+    t[0] += 60_000
+    assert srv.arming.tick() is True
+    rows = srv.api.audit.list()
+    assert rows[0]["actor"] == "site" and rows[0]["action"] == "mode visitor_expired"
+    assert rows[0]["target"] == "armed"

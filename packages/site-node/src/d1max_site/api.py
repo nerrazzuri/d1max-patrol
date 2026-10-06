@@ -53,12 +53,14 @@ from d1max_site.dispatcher import Dispatcher, DispatchRefused, Unsupported
 from d1max_site.loop import LoopThread
 from d1max_site.permissions import (
     ABORT,
+    ARM,
     DISPATCH,
     EXPORT,
     HANDLE_ALERTS,
     MANAGE,
     MANAGE_ACCOUNTS,
     REVIEW,
+    SET_MODE,
     TELEOP,
     VIEW,
     VIEW_AUDIT,
@@ -163,6 +165,8 @@ class SiteApi:
         self.recordings: Any = None
         #: W19:固定摄像头(站点主程序接上);实时画面每台一个 ``CctvView``,观众共用。
         self.cctv: Any = None
+        #: 布防模式(W20,``modes.ArmingDesk``)。站点主程序接上;没接的站点 /api/mode 回 404。
+        self.arming: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -385,6 +389,8 @@ class _Handler(TlsHandlerMixin):
             if method == "POST" and path == "/api/bundles":
                 self._need(user, MANAGE)
                 return self._import_bundle(user)
+            if path in ("/api/mode", "/api/mode/zones"):
+                return self._mode(method, path, user)
             if path in ("/api/incidents", "/api/intercepts", "/api/zones"):
                 self._need(user, VIEW if method == "GET" else MANAGE)
                 return self._incident_admin(method, path)
@@ -514,7 +520,8 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(401, str(exc)) from exc
         who = self.site.accounts.check(token)
         self._send_json(200, {"token": token, "name": name,
-                              "role": getattr(who, "role", "")})
+                              "role": getattr(who, "role", ""),
+                              "display_name": self.site.accounts.display_name(name)})
 
     def _robot(self, method: str, robot_id: str, action: str | None, user: str) -> None:
         disp = self.site.dispatcher
@@ -630,7 +637,8 @@ class _Handler(TlsHandlerMixin):
             self._audit_detail = {"new_account": self._audit_target,
                                   "role": str(d.get("role", "guard"))[:16]}
             try:
-                acc.add(d.get("name"), d.get("password"), role=d.get("role", "guard"))
+                acc.add(d.get("name"), d.get("password"), role=d.get("role", "guard"),
+                        display_name=d.get("display_name", ""))
             except AuthError as exc:
                 raise HttpError(400, str(exc)) from exc
             return self._send_json(200, {"accounts": acc.list()})
@@ -641,13 +649,14 @@ class _Handler(TlsHandlerMixin):
         self._audit_target = name
         self._audit_detail = ({"role": str(d["role"])[:16]} if "role" in d else {}) | (
             {"disabled": d["disabled"]} if isinstance(d.get("disabled"), bool) else {}) | (
-            {"password_reset": True} if "password" in d else {})
+            {"password_reset": True} if "password" in d else {}) | (
+            {"display_name": str(d["display_name"])[:64]} if "display_name" in d else {})
         if "password" in d and name == str(self._actor):
             # 管理员的令牌被偷了,也不能靠这条路不验旧口令就把自己的账号改走。
             raise HttpError(400, "改自己的口令走 /api/me/password(要旧口令)")
         try:
             acc.update(name, role=d.get("role"), disabled=d.get("disabled"),
-                       password=d.get("password"))
+                       password=d.get("password"), display_name=d.get("display_name"))
         except AuthError as exc:
             raise HttpError(400 if "没有账号" not in str(exc) else 404, str(exc)) from exc
         self._send_json(200, {"accounts": acc.list()})
@@ -704,6 +713,37 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, str(exc)) from exc
         row = self.site.dispatch(lambda: desk.handle(source, body))
         self._send_json(200, row)
+
+    def _mode(self, method: str, path: str, user) -> None:
+        """布防模式(W20)。看:``view``。切到布防:``arm``(保安也行);切到在家、访客:``set_mode``
+        (业主、管理员)。哪些防区在家时撤防:``manage``。"""
+        from d1max_site.modes import ModeError
+        desk = self.site.arming
+        if desk is None:
+            raise HttpError(404, "这个站点没开布防模式")
+        if method == "GET":
+            if path != "/api/mode":
+                raise HttpError(405, "只支持 POST")
+            self._need(user, VIEW)
+            return self._send_json(200, desk.view())
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        d = self._body()
+        try:
+            if path == "/api/mode/zones":
+                self._need(user, MANAGE)
+                self._audit_target = str(d.get("zone", ""))[:128]
+                self._audit_detail = {"home_armed": d.get("home_armed")}
+                return self._send_json(200, desk.set_zone_home(d.get("zone"),
+                                                               d.get("home_armed")))
+            mode = d.get("mode")
+            self._need(user, ARM if mode == "armed" else SET_MODE)
+            self._audit_target = str(mode)[:16]
+            self._audit_detail = {k: d[k] for k in ("zones", "minutes") if k in d}
+            return self._send_json(200, desk.set_mode(mode, by=str(user), zones=d.get("zones"),
+                                                      minutes=d.get("minutes")))
+        except ModeError as exc:
+            raise HttpError(400, str(exc)) from exc
 
     def _incident_admin(self, method: str, path: str) -> None:
         from d1max_site.incidents import IncidentError

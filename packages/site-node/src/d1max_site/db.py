@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 20                      # W19:CCTV 摄像头(cameras)
+SCHEMA_VERSION = 21                      # W20:布防模式(site_mode、zone_arming)、账号显示名
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -298,6 +298,20 @@ CREATE TABLE IF NOT EXISTS nav_zones (
     confirmed_ms  INTEGER,
     PRIMARY KEY (map_id, map_version)
 );
+-- W20:全站一个当前模式(一行);在家时撤防的防区(没有这一行的防区一律布防)。
+CREATE TABLE IF NOT EXISTS site_mode (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    mode          TEXT NOT NULL,
+    prev_mode     TEXT NOT NULL DEFAULT '',
+    visitor_zones TEXT NOT NULL DEFAULT '[]',
+    until_ms      INTEGER,
+    set_by        TEXT NOT NULL DEFAULT '',
+    set_ms        INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS zone_arming (
+    zone       TEXT PRIMARY KEY,
+    home_armed INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,
     status       TEXT,
@@ -328,6 +342,8 @@ _ADDED_COLUMNS = (
     ("alerts", "context", "TEXT NOT NULL DEFAULT '{}'"),
     # W17:会话的用途,'' 普通、'watch' 值守令牌(只能看告警、30 天)。老行都是普通会话。
     ("sessions", "scope", "TEXT NOT NULL DEFAULT ''"),
+    # W20:操作人实名。账号名是登录用的,显示名是给人看的(「张三」);老账号空着,显示账号名。
+    ("accounts", "display_name", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

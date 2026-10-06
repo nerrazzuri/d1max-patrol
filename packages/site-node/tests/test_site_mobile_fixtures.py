@@ -81,6 +81,8 @@ def _collect(tmp_path) -> dict[str, object]:
     try:
         s.api.scheduler = SiteScheduler(s.db, s.disp, now_ms=wall)
         s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=wall)
+        from d1max_site.modes import ArmingDesk  # W20:布防模式
+        s.api.arming = ArmingDesk(s.db, now_ms=wall)
         code, login = s.req("POST", "/api/login", {"name": "alice", "password": PW})
         tok = login["token"]
         s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")   # W10:这一版区域确认过
@@ -96,6 +98,11 @@ def _collect(tmp_path) -> dict[str, object]:
         s.api.incidents.set_intercept("gate", map_id="estate-1", map_version="7", x=0.2, y=0.0,
                                       yaw=0.0)
         s.api.incidents.map_zone("yard", "gate")
+        s.req("POST", "/api/mode/zones", {"zone": "yard", "home_armed": False}, token=tok)
+        s.req("POST", "/api/mode", {"mode": "visitor", "zones": ["drive"], "minutes": 60},
+              token=tok)
+        mode = s.req("GET", "/api/mode", token=tok)[1]
+        s.req("POST", "/api/mode", {"mode": "armed"}, token=tok)       # 下面的入侵照常派
         s.api.incidents.add_source("nvr")
         s.loop.call(lambda: s.api.incidents.handle("nvr", {"event_id": "e1",
                                                            "type": "intrusion", "zone": "yard"}))
@@ -188,6 +195,7 @@ def _collect(tmp_path) -> dict[str, object]:
             "site_run": s.req("GET", f"/api/runs/{rid}", token=tok)[1],
             "site_maps": s.req("GET", "/api/maps", token=tok)[1],
             "site_releases": s.req("GET", "/api/releases", token=tok)[1],
+            "site_mode": mode,
         }
     finally:
         s.close()
