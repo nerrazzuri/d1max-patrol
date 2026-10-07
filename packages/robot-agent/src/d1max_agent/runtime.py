@@ -209,7 +209,7 @@ class AgentRuntime:
             raise ValueError(f"persons 要是 none 或 bridge,给的是 {persons!r}")
         self.person_view: Any = None
         self._pers_srv: Any = None
-        self._pers_state_told = ""
+        self._pers_state_told: tuple = ()
         if persons == "bridge":
             from d1max_agent.pers_server import PersonBridgeServer
             from d1max_agent.persons import PersonView
@@ -1666,8 +1666,8 @@ class AgentRuntime:
         if self._pers_srv is not None:
             self._pers_srv.tick()                # 本机人员桥:检测节点没声就当它断了
             self.person_view.tick()              # 人走了没有
-            pst = self.person_view.state()
-            if pst != self._pers_state_told:     # 人员检测在不在看变了:站点据此联动驱离
+            pst = self.person_view.key()
+            if pst != self._pers_state_told:     # 在不在看、有没有人、近不近变了:站点据此对账驱离
                 self._pers_state_told = pst
                 if self.transport.connected:
                     await self._publish_caps()

@@ -8,17 +8,16 @@
       "incident_id": 1,
       "label": "语音警告",
       "level": 2,
-      "level_ms": 1791361653736,
+      "level_ms": 1791364842611,
       "next_in_s": 24,
       "persons": {
-        "at_ms": 1791361658736,
-        "bearing_deg": -12.0,
-        "camera": "front",
+        "at_ms": 1791364847611,
         "count": 2,
+        "near": false,
         "nearest_m": 7.5
       },
       "robot_id": "A",
-      "started_ms": 1791361598736,
+      "started_ms": 1791364787611,
       "task_id": "incident-abc",
       "zone": "yard"
     }

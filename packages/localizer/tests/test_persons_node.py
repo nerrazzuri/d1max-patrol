@@ -140,3 +140,55 @@ def test_没检测器报no_model_坏帧报no_camera_序号递增():
     m2 = _过契约(n2.on_image("front", b"x", 1))
     assert m2.check == "no_camera" and "解不开" in m2.reason
     assert _过契约(n2.on_image("front", b"x", 2)).seq == 2
+
+
+# ------------------------------------------------------------ W24 外审
+
+
+def test_外审2_一小时前的点云不拿来量_时间对不上也不量():
+    c = 钟()
+    n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.9)]), monotonic=c)
+    n.on_cloud(_人(3.0, 0.0), stamp_ns=1_000_000_000)
+    c.t += 3600                                           # 雷达停了一小时
+    m = _过契约(n.on_image("front", b"x", 3601 * 10**9))
+    assert m.people[0].range_m is None, "旧点云不用:距离未知"
+    n.on_cloud(_人(3.0, 0.0), stamp_ns=10 * 10**9)
+    m = _过契约(n.on_image("front", b"x", 12 * 10**9))
+    assert m.people[0].range_m is None, "跟画面差 2 秒:不是同一时刻"
+    m = _过契约(n.on_image("front", b"x", 10 * 10**9 + 200_000_000))
+    assert m.people[0].range_m == pytest.approx(3.0, abs=0.05)
+
+
+def test_外审_后相机看到的人用后雷达量():
+    c = 钟()
+    n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.9)]), monotonic=c)
+    n.on_cloud(_人(9.0, 0.0), source="front")              # 前面 9 m 有东西
+    n.on_cloud(_人(4.0, 180.0), source="rear")             # 后面 4 m 有人
+    m = _过契约(n.on_image("back", b"x", 0))
+    assert m.people[0].bearing_deg == -180.0 or m.people[0].bearing_deg == 180.0
+    assert m.people[0].range_m == pytest.approx(4.0, abs=0.05)
+    m = _过契约(n.on_image("front", b"x", 0))
+    assert m.people[0].range_m == pytest.approx(9.0, abs=0.05)
+
+
+def test_外审5_截图目录有上限_多了删最旧的(tmp_path):
+    import os
+
+    from d1max_localizer.persons import MAX_SNAPSHOTS
+    c = 钟()
+    n = PersonNode(假检测器([Box(0, 0, 10, 10, 0.9)]), snapshot_dir=tmp_path, monotonic=c,
+                   settings=Settings(snapshot_every_s=1))
+    for i in range(MAX_SNAPSHOTS + 5):
+        c.t += 2
+        name = _过契约(n.on_image("front", b"x", i)).snapshot
+        os.utime(tmp_path / name, (1000 + i, 1000 + i))
+    left = sorted(tmp_path.glob("*.jpg"))
+    assert len(left) == MAX_SNAPSHOTS
+
+
+def test_外审2_点云没带时间戳_也按收到多久判旧():
+    c = 钟()
+    n = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.9)]), monotonic=c)
+    n.on_cloud(_人(3.0, 0.0))                              # 不带时间戳
+    c.t += 3600
+    assert _过契约(n.on_image("front", b"x", 0)).people[0].range_m is None

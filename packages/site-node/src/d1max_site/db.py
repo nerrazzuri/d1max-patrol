@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 24                      # W23:拦截点走不走得到(intercepts.reach*)
+SCHEMA_VERSION = 25                      # W24 外审:驱离看到过人、人员告警报成(deter_sessions)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -367,6 +367,9 @@ _ADDED_COLUMNS = (
     ("intercepts", "reach", "TEXT NOT NULL DEFAULT ''"),
     ("intercepts", "reach_note", "TEXT NOT NULL DEFAULT ''"),
     ("intercepts", "reach_key", "TEXT NOT NULL DEFAULT ''"),
+    # W24 外审:这一场看到过人没有、人员告警报成了没有(站点重启后接着对账、接着报)
+    ("deter_sessions", "person_seen", "INTEGER NOT NULL DEFAULT 0"),
+    ("deter_sessions", "person_alerted", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
