@@ -472,16 +472,61 @@ async def test_外审3_播放器不存在_当场报错_不回调(tmp_path):
     assert not p.playing() and ends == []
 
 
-async def test_外审3_TTS退出码不对_当场报错(tmp_path):
+async def test_外审3_TTS退出码不对_回调失败_不放(tmp_path):
     log: list = []
+    ends: list = []
 
     async def run(*args, **kw):
         return 坏进程(log, args, 0.01, 1)
     p = Payload(PayloadConfig(audio_device="hw:1", tts_command="espeak-ng -w {wav} {text}"),
                 run=run)
-    with pytest.raises(PayloadError, match="TTS 合成失败"):
-        await p.sound("tts:en:hello", 5)
+    p.on_sound_end = lambda ok, why: ends.append((ok, why))
+    await p.sound("tts:en:hello", 5)
+    assert await _等到(lambda: ends)
+    assert ends[0][0] is False and "TTS 合成失败" in ends[0][1]
     assert len(log) == 1, "合成失败就不放"
+
+
+async def test_复查2_TTS合成不占着调用方_合成中关掉_掐掉合成_也不再放(tmp_path):
+    log: list = []
+    ends: list = []
+    p = Payload(PayloadConfig(audio_device="hw:1", tts_command="espeak-ng -w {wav} {text}"),
+                run=_假跑(log, 30))                       # 合成要 30 秒
+    p.on_sound_end = lambda ok, why: ends.append((ok, why))
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await p.sound("tts:zh:请离开", 60)
+    assert loop.time() - t0 < 0.5, "不在调用方里等合成"
+    tts_proc = p._proc
+    assert tts_proc.args[0] == "espeak-ng" and tts_proc.returncode is None
+    await p.stop_sound()                                  # 合成中关喇叭
+    assert tts_proc.returncode == -9, "合成进程当场掐掉"
+    await asyncio.sleep(0.2)
+    assert [a[0] for a in log] == ["espeak-ng"], "关掉之后不许再起播放器"
+    assert ends == [] and not p.playing()
+
+
+async def test_复查2_合成完了正要起播放器时被关_起出来的也掐掉(tmp_path):
+    log: list = []
+    spawned: list = []
+    gate = asyncio.Event()
+
+    async def run(*args, **kw):
+        if args[0] == "aplay":
+            await gate.wait()                             # 起播放器这一下卡住
+        pr = 假进程(log, args, 0.01 if args[0] != "aplay" else 30)
+        spawned.append(pr)
+        return pr
+    p = Payload(PayloadConfig(audio_device="hw:1", tts_command="espeak-ng -w {wav} {text}"),
+                run=run)
+    await p.sound("tts:zh:请离开", 60)
+    await asyncio.sleep(0.1)                              # 合成完了,卡在起播放器
+    stop = asyncio.ensure_future(p.stop_sound())
+    await asyncio.sleep(0.05)
+    gate.set()
+    await stop
+    await asyncio.sleep(0.05)
+    assert spawned[-1].args[0] == "aplay" and spawned[-1].returncode == -9
 
 
 async def test_外审3_放完_放坏了_到点_都回调_被打断的不回调(tmp_path):

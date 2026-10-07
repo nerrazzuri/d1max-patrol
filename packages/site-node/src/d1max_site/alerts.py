@@ -106,6 +106,11 @@ LEVEL_OF: dict[str, Level] = {
     "nogo": Level.P1,
     # 站点盘紧、录像又删不掉(W18 外审):再拖下去盘到收件口的底线,巡检的照片、记录都传不上来了。
     "recording_delete_failed": Level.P1,
+    # 上装关不上、状态不明(W21 复查):夜里警笛、聚光灯一直开着,人得去看。每一路一个 kind(簿子按
+    # robot/kind 聚合,合成一条的话后报的一路把先报的盖掉;恢复也要一路一路地解决)。
+    "payload_strobe": Level.P1,
+    "payload_siren": Level.P1,
+    "payload_spotlight": Level.P1,
     # P2:今天之内处理。不影响这一趟巡检能不能跑完,但拖久了会变成 P1
     # (盘满了继续拖,就会变成没法记录;上传积压继续拖,数据就旧到没用)。
     "finding": Level.P2,

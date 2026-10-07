@@ -205,6 +205,12 @@ class PayloadConfig:
 # ------------------------------------------------------------ 上装
 
 
+class _Ended(Exception):
+    def __init__(self, ok: bool, why: str) -> None:
+        super().__init__(why)
+        self.ok, self.why = ok, why
+
+
 class Payload:
     """上装的异步入口(HAL 调它)。
 
@@ -218,8 +224,8 @@ class Payload:
     - 每一路一把锁:到点关与新来的命令不交叉。
     - 状态不明(关不上、没确认)的那几路由 :meth:`problems` 报出来,HAL 当故障报给站点。
 
-    **喇叭**:当场起播放进程(TTS 先当场合成、查退出码),起不来就报错;放完、放坏了、到点了都回调
-    ``on_sound_end(ok, 原因)``,代理据此当场放开优先级、记事件。被新的一段打断的不回调。
+    **喇叭**:当场起进程(TTS 是合成进程,不等它合成完),起不来就报错;合成失败、放坏了、放完了、
+    到点了都回调 ``on_sound_end(ok, 原因)``,代理据此当场放开优先级、记事件。被新的一段打断的不回调。
     """
 
     RETRY_S = 0.5
@@ -362,9 +368,10 @@ class Payload:
         return None, str(p)
 
     async def sound(self, clip_or_tts: str, max_s: float) -> None:
-        """放一段(打断正在放的)。**当场**起进程:TTS 先合成完、退出码不是 0 就报错;
-        播放器起不来就报错。
-        放的过程在后台,放完、放坏了、到点都回调 ``on_sound_end``。"""
+        """放一段(打断正在放的)。参数不对、没有这段、进程起不来当场报错;**不在这里等 TTS 合成**
+        (W21 复查:合成最长要几十秒,这期间代理的命令锁被占着,「关喇叭」得排队)。合成、播放都在后台,
+        合成失败、播放器退出码不对、放完、到点都回调 ``on_sound_end``;被新的一段打断、被关的不回调,
+        正在合成的被关掉就不再起播放。"""
         if not self.cfg.audio_device:
             raise PayloadError("上装没接喇叭")
         if not 0 < max_s <= MAX_ON_S:
@@ -374,42 +381,53 @@ class Payload:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max_s
         try:
-            if tts is not None:
-                self._proc = await self._run(*tts, stdout=asyncio.subprocess.DEVNULL,
-                                             stderr=asyncio.subprocess.DEVNULL)
-                try:
-                    rc = await asyncio.wait_for(self._proc.wait(),
-                                                max(0.1, min(30.0, deadline - loop.time())))
-                except asyncio.TimeoutError as exc:
-                    raise PayloadError("TTS 合成超时") from exc
-                if rc != 0:
-                    raise PayloadError(f"TTS 合成失败(退出码 {rc})")
-            self._proc = await self._run(self.cfg.player, "-q", "-D", self.cfg.audio_device, wav,
-                                         stdout=asyncio.subprocess.DEVNULL,
-                                         stderr=asyncio.subprocess.DEVNULL)
+            first = await self._run(*(tts or [self.cfg.player, "-q", "-D",
+                                               self.cfg.audio_device, wav]),
+                                    stdout=asyncio.subprocess.DEVNULL,
+                                    stderr=asyncio.subprocess.DEVNULL)
         except OSError as exc:
-            self._kill()
             raise PayloadError(f"喇叭放不出来: {exc}") from exc
-        except BaseException:
-            self._kill()
-            raise
-        self._sound = loop.create_task(self._play(self._proc, deadline))
+        self._proc = first
+        self._sound = loop.create_task(self._play(first, wav if tts else None, deadline))
 
-    async def _play(self, proc: Any, deadline: float) -> None:
+    async def _play(self, first: Any, then_wav: str | None, deadline: float) -> None:
+        """``first`` 是合成进程(``then_wav`` 给了)或播放进程。"""
         loop = asyncio.get_running_loop()
         ok, why = True, "放完了"
+        proc = first
         try:
+            if then_wav is not None:
+                rc = await asyncio.wait_for(first.wait(), max(0.1, deadline - loop.time()))
+                if rc != 0:
+                    raise _Ended(False, f"TTS 合成失败(退出码 {rc})")
+                spawn = asyncio.ensure_future(self._run(
+                    self.cfg.player, "-q", "-D", self.cfg.audio_device, then_wav,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL))
+                try:
+                    proc = await asyncio.shield(spawn)
+                except asyncio.CancelledError:
+                    # 起播放器的那一下被关掉了:起出来的进程也要掐,不许留着放
+                    try:
+                        (await spawn).kill()
+                    except Exception:            # noqa: BLE001 - 起不来就没什么可掐的
+                        pass
+                    raise
+                except OSError as exc:
+                    raise _Ended(False, f"喇叭放不出来: {exc}") from exc
+                self._proc = proc
             rc = await asyncio.wait_for(proc.wait(), max(0.1, deadline - loop.time()))
             if rc != 0:
-                ok, why = False, f"播放器退出码 {rc}(设备不对、文件坏了?)"
-                log.warning("喇叭没放成: %s", why)
+                raise _Ended(False, f"播放器退出码 {rc}(设备不对、文件坏了?)")
+        except _Ended as e:
+            ok, why = e.ok, e.why
+            log.warning("喇叭没放成: %s", why)
         except asyncio.TimeoutError:
             why = "到点了"
         except asyncio.CancelledError:
             self._kill()
             raise                                         # 被新的一段打断、被关:不回调
         finally:
-            if self._proc is proc:
+            if self._proc is proc or self._proc is first:
                 self._kill()
         if self.on_sound_end is not None:
             try:

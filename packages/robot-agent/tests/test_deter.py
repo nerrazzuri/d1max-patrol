@@ -209,3 +209,66 @@ async def test_外审3_短话术放完了_当场放开优先级_记一条结束�
     assert await desk.handle(_喇叭命令("warn-en", 10, "c3")) == ""
     hal.listener(False, "播放器退出码 1")
     assert ev[-1][1]["ended"] == "failed" and desk.playing() is None
+
+
+async def test_复查2_TTS合成中_关喇叭不排队_合成当场掐掉(tmp_path):
+    """真代理(命令锁)+ 仿真狗,喇叭换成真的上装驱动、TTS 合成要 30 秒:开那一条当场回,
+    关那一条也当场做,合成进程掐掉、不再起播放器。"""
+    import asyncio
+
+    from d1max_adapter_d1max.payload import Payload, PayloadConfig
+
+    procs: list = []
+
+    class 慢进程:
+        def __init__(self, args):
+            self.args, self.returncode = args, None
+            self._done = asyncio.Event()
+            procs.append(self)
+
+        async def wait(self):
+            await self._done.wait()
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+            self._done.set()
+
+    async def run(*args, **kw):
+        return 慢进程(args)                                # 合成、播放都一直不完
+    pay = Payload(PayloadConfig(audio_device="hw:1", tts_command="espeak-ng -w {wav} {text}"),
+                  run=run)
+
+    class 带喇叭的狗(SimRobot):
+        async def sound(self, clip_or_tts, max_s):
+            if not clip_or_tts or max_s <= 0:
+                await pay.stop_sound()
+            else:
+                await pay.sound(clip_or_tts, max_s)
+
+        def set_sound_listener(self, fn):
+            pay.on_sound_end = fn
+
+    broker, c = MemoryBroker(), 钟()
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    dog = 带喇叭的狗(now_ms=c, max_vx=1.0, max_wz=1.5, stop_latency_s=0.2, payload=True)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=dog,
+                      store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"), boot_id="b",
+                      home=Pose.from_xy_yaw(0.0, 0.0), monotonic=lambda: c.mono,
+                      odom_identity=True, telemetry_period_ms=100)
+    await rt.start()
+    await broker.drain()
+    on = {"output": "speaker", "on": True, "max_s": 60, "clip": "tts:zh:请离开", "priority": 80}
+    ack = await asyncio.wait_for(_发(rt, broker, ears, on, "t1", c), 2)
+    assert ack["result"] == "accepted"
+    assert procs and procs[0].args[0] == "espeak-ng" and procs[0].returncode is None
+    ack = await asyncio.wait_for(_发(rt, broker, ears, {"output": "speaker", "on": False},
+                                     "t2", c), 2)
+    assert ack["result"] == "accepted", "关不排在合成后面"
+    assert procs[0].returncode == -9
+    await asyncio.sleep(0.1)
+    assert [p.args[0] for p in procs] == ["espeak-ng"], "关掉之后不再起播放器"
+    await rt.close()

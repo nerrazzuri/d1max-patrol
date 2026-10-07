@@ -88,3 +88,24 @@ def test_狗报的上装能力_站点原样给手机(站点):
     caps = s.req("GET", "/api/robots/A", token=gina)[1]["capabilities"]["tasks"]["deter"]
     assert caps["outputs"] == ["strobe", "siren", "spotlight", "speaker"]
     assert caps["clips"] == ["warn-zh", "warn-en"]
+
+
+def test_W21复查_狗报上装关不上_站点出P1_好了自己解决(tmp_path):
+    """端到端:仿真狗报 ``payload_siren`` 故障 → 真代理发 robot_fault → 真站点告警源出告警;
+    消了就解决。"""
+    from d1max_contract.hal import Fault
+    s = 站(tmp_path, payload=True, alerts=True)
+    try:
+        tok = s.login()
+        _新鲜(s, tok)
+        s.dog._faults = [Fault(code="payload_siren", fatal=False, text="上装警笛状态不明")]
+
+        def 开着的():
+            return [a for a in s.req("GET", "/api/alerts", token=tok)[1]["alerts"]
+                    if a["kind"] == "payload_siren"]
+        [a] = _等(开着的)
+        assert a["level"] == "P1" and a["robot"] == "A"
+        s.dog._faults = []
+        _等(lambda: not 开着的())
+    finally:
+        s.close()
