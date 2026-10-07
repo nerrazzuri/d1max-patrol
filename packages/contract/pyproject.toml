@@ -14,6 +14,9 @@ dependencies = ["PyYAML>=6.0"]
 # PahoTransport 才用得着;MemoryBroker 和全部数据类不需要它。狗上离线装:
 # paho_mqtt-2.x 是一个 py3-none-any 轮子。
 mqtt = ["paho-mqtt>=2.1"]
+# W23:规划代价图(``d1max_contract.planning.costmap``)要 numpy。狗上根包本来就带;站点设拦截点时查
+# 「从待命点走得到」也要它。
+planning = ["numpy>=1.21"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

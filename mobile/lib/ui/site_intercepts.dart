@@ -206,8 +206,19 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
                   key: Key('intercept-${p['name']}'),
                   dense: true,
                   title: Text('${p['name']}'),
-                  subtitle: Text('${p['map_id']}:${p['map_version']}  (${(p['x'] as num).toStringAsFixed(1)}, '
-                      '${(p['y'] as num).toStringAsFixed(1)})'),
+                  subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${p['map_id']}:${p['map_version']}  (${(p['x'] as num).toStringAsFixed(1)}, '
+                        '${(p['y'] as num).toStringAsFixed(1)})'),
+                    // W23：走不到（入侵来了不派狗）、没查成的、图有新版本要重设
+                    if ('${p['reach'] ?? ''}'.isNotEmpty)
+                      Text('走不到，入侵来了不派狗：${p['reach']}',
+                          key: Key('intercept-reach-${p['name']}'), style: const TextStyle(color: Colors.red)),
+                    if ('${p['reach_note'] ?? ''}'.isNotEmpty)
+                      Text('${p['reach_note']}', style: const TextStyle(color: Colors.grey)),
+                    if (p['newer_version'] is String)
+                      Text('图有新版本 ${p['newer_version']}：要在新图上重设',
+                          key: Key('intercept-newer-${p['name']}'), style: const TextStyle(color: Colors.orange)),
+                  ]),
                   trailing: manage
                       ? IconButton(
                           key: Key('intercept-remove-${p['name']}'),

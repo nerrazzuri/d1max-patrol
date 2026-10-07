@@ -96,7 +96,20 @@ void main() {
     expect(find.byType(SiteInterceptsPage), findsOneWidget);
   });
 
+  testWidgets('W23：走不到的标红、没查成的写明、图有新版本要重设', (t) async {
+    final api = _api('guard');
+    (api.intercepted['intercepts'] as List).add(<String, dynamic>{'name': 'pond', 'map_id': 'estate-1',
+      'map_version': '7', 'x': 1.0, 'y': 1.0, 'yaw': 0.0, 'reach': '从待命点走不到 pond（门太窄）',
+      'reach_note': '', 'newer_version': '8'});
+    await _open(t, api);
+    expect(find.byKey(const Key('intercept-reach-pond')), findsOneWidget);
+    expect(find.textContaining('门太窄'), findsOneWidget);
+    expect(find.byKey(const Key('intercept-newer-pond')), findsOneWidget);
+    expect(find.byKey(const Key('intercept-reach-gate')), findsNothing);
+  });
+
   test('去向说人话', () {
+    expect(incidentOutcomeText('unreachable'), '拦截点走不到，没狗去');
     expect(incidentOutcomeText('no_robot'), '没有能派的狗');
     expect(incidentOutcomeText('dispatched'), '已出动');
     expect(incidentOutcomeText('weird'), 'weird');

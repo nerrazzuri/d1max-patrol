@@ -32,7 +32,9 @@ def test_包名与依赖方向():
     assert "paho" not in a and "paho" not in s
     site = _toml("site-node")
     deps = re.search(r"(?m)^dependencies\s*=\s*\[(.*)\]", site).group(1)
-    assert 'name = "d1max-site-node"' in site and deps.strip() == '"d1max-contract[mqtt]"', \
+    # W23:多了契约包自己的 planning 可选依赖(numpy,跟狗用同一份规划查拦截点走不走得到)
+    want = '"d1max-contract[mqtt,planning]"'
+    assert 'name = "d1max-site-node"' in site and deps.strip() == want, \
         "站点只依赖契约包:不依赖根包(老 HTTP 面要在 W00c4 退役),也不依赖代理与适配器"
     assert re.search(r"(?ms)\[project\.optional-dependencies\].*mqtt\s*=\s*\[.*paho-mqtt", c), \
         "paho 只作为契约包的 mqtt 可选依赖"

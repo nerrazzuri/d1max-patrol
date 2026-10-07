@@ -421,6 +421,9 @@ class Server:
         self.dispatcher.maps = self.maps           # 派单前查点在不在「有图」的地方(W09c)
         from d1max_site.nav_zones import NavZones
         self.zones = NavZones(self.db, now_ms=wall_ms)
+        # W23:拦截点走不走得到(跟狗同一份规划);设的时候查,杂事线程每拍对账
+        from d1max_site.intercept_reach import InterceptReach
+        self.incidents.reach = InterceptReach(self.db, self.maps, self.zones)
         self.dispatcher.zones = self.zones         # W10:派单前核区域修订、补发
         self.releases = ReleaseCatalog(home, self.db, now_ms=wall_ms)
         # 判读、备份、接收口在别的线程里:告警要跳回事件循环去报(告警簿只许在循环里改)。
@@ -515,7 +518,8 @@ class Server:
         while not self._stop.wait(CHORE_PERIOD_S):
             for what, fn in (("自动判读", self.runs.step), ("备份", self.backup.step),
                              ("录像留存", self._prune_recordings),
-                             ("摄像头", self.cctv.sync)):
+                             ("摄像头", self.cctv.sync),
+                             ("拦截点对账", self.incidents.recheck_intercepts)):
                 try:
                     fn()
                 except Exception:
