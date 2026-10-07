@@ -64,7 +64,7 @@ def test_一帧误检不算_三帧里两帧才算有人_只报一次():
     v.on_persons(_帧(8.0))
     v.on_persons(_帧(7.5))
     assert [k for k, _ in ev] == ["person_seen"] and v.present is True
-    assert ev[0][1] == {"camera": "front", "count": 1, "bearing_deg": 5.0, "nearest_m": 7.5}
+    assert ev[0][1] == {"count": 1, "nearest_m": 7.5}
     v.on_persons(_帧(7.0))
     assert len(ev) == 1, "一直有人不重报"
     assert v.caps() == {"state": "ok", "present": True, "near": False, "count": 1,
@@ -106,9 +106,10 @@ def test_外审1_断开60秒再连上_一帧空画面不算人走了_要重新�
     v.on_connect()
     v.on_persons(_帧())
     v.tick()
-    assert v.present is True and [k for k, _ in ev] == ["person_seen"], "中断不累计没人的时间"
+    assert v.present is None and [k for k, _ in ev] == ["person_seen"], \
+        "中断:不知道(不是确认没人),不累计没人的时间"
     _空帧(c, v, GONE_S - 2)
-    assert v.present is True
+    assert v.present is None
     _空帧(c, v, 3)
     assert v.present is False
 
@@ -120,7 +121,7 @@ def test_外审1_后相机停了_前相机一直报空_不算人走了():
     v.on_persons(_帧(9.0, camera="front"))
     assert v.present is True
     _空帧(c, v, 60, cameras=("front",))                   # 后相机一帧都不报了
-    assert v.present is True and [k for k, _ in ev] == ["person_seen"]
+    assert v.present is None and [k for k, _ in ev] == ["person_seen"], "不知道,不是走了"
 
 
 def test_外审1_检测节点报no_model_中断_不数():
@@ -131,7 +132,7 @@ def test_外审1_检测节点报no_model_中断_不数():
     v.on_persons(_帧(check="no_model"))
     v.tick()
     _空帧(c, v, 12)
-    assert v.present is True, "no_model 那一下打断了,重新数还不满 20 秒"
+    assert v.present is None, "no_model 那一下打断了,重新数还不满 20 秒"
 
 
 def test_检测节点不在_能力里说清楚():
@@ -237,7 +238,7 @@ def test_外审1_断开马上重连_中间没走拍_也不累计():
     v.on_disconnect()
     v.on_connect()                                        # 马上连回来,中间没 tick
     _空帧(c, v, 10)
-    assert v.present is True, "断开那一下就重新数:10 秒不够"
+    assert v.present is None, "断开那一下就重新数:10 秒不够"
 
 
 def test_外审1_后相机停着时不开始数_它回来以后从头数():
@@ -250,4 +251,54 @@ def test_外审1_后相机停着时不开始数_它回来以后从头数():
         v.on_persons(_帧(camera="front"))
     v.on_persons(_帧(camera="back"))                      # 后相机回来了
     v.tick()
-    assert v.present is True, "停着那段不算,刚回来不够 20 秒"
+    assert v.present is None, "停着那段不算,刚回来不够 20 秒"
+
+
+
+# ------------------------------------------------------------ W24 复查
+
+
+def test_复查1_断开重连_只有前相机回来_持续空画面_不确认没人():
+    c, ev, v = _台()
+    v.on_persons(_帧(camera="front"))
+    v.on_persons(_帧(9.0, camera="back"))
+    v.on_persons(_帧(9.0, camera="back"))
+    assert v.present is True
+    v.on_disconnect()
+    v.on_connect()
+    _空帧(c, v, 60, cameras=("front",))                   # 后相机一直没回来
+    assert v.present is None and "person_gone" not in [k for k, _ in ev]
+    _空帧(c, v, GONE_S + 1, cameras=("front", "back"))    # 后相机回来了、一起空满 20 秒
+    assert v.present is False
+
+
+def test_复查1_中断之后旧人数距离近都作废():
+    c, ev, v = _台()
+    v.on_persons(_帧(3.0))
+    v.on_persons(_帧(3.0))
+    assert v.caps()["near"] is True
+    v.on_disconnect()
+    assert v.caps() == {"state": "off", "present": None, "near": False}
+    assert v.count == 0 and v.nearest_m is None
+
+
+def test_复查2_前相机近_后相机远_后相机最后报也照样算近():
+    c, ev, v = _台()
+    for _ in range(4):
+        v.on_persons(_帧(3.0, camera="front"))
+        v.on_persons(_帧(9.0, camera="back"))
+    caps = v.caps()
+    assert caps["near"] is True and caps["nearest_m"] == 3.0 and caps["count"] == 2
+    assert [k for k, _ in ev] == ["person_seen", "person_near"]
+
+
+def test_复查2_前相机看到的人走出画面_近就不算了():
+    c, ev, v = _台()
+    for _ in range(3):
+        v.on_persons(_帧(3.0, camera="front"))
+        v.on_persons(_帧(9.0, camera="back"))
+    for _ in range(3):
+        v.on_persons(_帧(camera="front"))
+        v.on_persons(_帧(9.0, camera="back"))
+    caps = v.caps()
+    assert caps["near"] is False and caps["nearest_m"] == 9.0 and caps["present"] is True

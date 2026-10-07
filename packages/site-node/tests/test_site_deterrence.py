@@ -707,12 +707,40 @@ async def test_W24外审6_告警报不出去_下一拍接着报_重启后也接�
     _人员(t, True)
     await t.desk.tick()
     await t.desk.tick()
-    assert t.desk.alerts.raised == [] and not t.desk.sessions["A"].person_alerted
+    assert t.desk.alerts.raised == []
+    assert len(t.db.query("SELECT 1 FROM pending_alerts")) == 1, "要报的意图落了库"
     desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)   # 站点重启
     desk2.alerts = t.desk.alerts
-    assert desk2.sessions["A"].seen_person and not desk2.sessions["A"].person_alerted
     await desk2.tick()
-    assert len(t.desk.alerts.raised) == 1 and desk2.sessions["A"].person_alerted
+    assert len(t.desk.alerts.raised) == 1 and not t.db.query("SELECT 1 FROM pending_alerts")
+
+
+async def test_W24复查3_告警没报成_人马上走了_会话收了_告警照样报出去(台):
+    t = 台
+    t.desk.alerts = 假告警台(fail=1)
+    await _到场(t)
+    _人员(t, True)
+    await t.desk.tick()                                   # 看到人,报不出去
+    _人员(t, False)
+    await t.desk.tick()                                   # 确认没人:收场
+    assert "A" not in t.desk.sessions
+    assert len(t.desk.alerts.raised) == 1, "会话收了,没报成的告警照样报"
+    assert t.desk.alerts.raised[0]["context"]["task_id"] == "incident-abc"
+    assert not t.db.query("SELECT 1 FROM pending_alerts")
+
+
+async def test_W24复查3_看到过人和要报的告警一起落库_落不了都不记(台, monkeypatch):
+    t = 台
+    t.desk.alerts = 假告警台()
+    await _到场(t)
+    real = t.db.tx
+    monkeypatch.setattr(t.db, "tx", lambda: (_ for _ in ()).throw(RuntimeError("库锁住了")))
+    _人员(t, True)
+    await t.desk.tick()
+    assert not t.desk.sessions["A"].seen_person and t.desk.alerts.raised == []
+    monkeypatch.setattr(t.db, "tx", real)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].seen_person and len(t.desk.alerts.raised) == 1
 
 
 async def test_W24_狗不新鲜_人员状态不算(台):

@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 25                      # W24 外审:驱离看到过人、人员告警报成(deter_sessions)
+SCHEMA_VERSION = 26                      # W24 复查:待报的告警(pending_alerts)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -326,6 +326,16 @@ CREATE TABLE IF NOT EXISTS deter_sessions (
     human_ms    INTEGER NOT NULL DEFAULT 0,
     auto        INTEGER NOT NULL DEFAULT 1,
     by          TEXT NOT NULL DEFAULT ''
+);
+-- W24 复查:要报、还没报成的告警(连内容一起)。报成才删;人走了、驱离结束都不动它。
+CREATE TABLE IF NOT EXISTS pending_alerts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,
+    robot      TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    context    TEXT NOT NULL DEFAULT '{}',
+    created_ms INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,
