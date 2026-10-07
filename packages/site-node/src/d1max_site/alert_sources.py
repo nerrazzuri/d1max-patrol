@@ -42,6 +42,8 @@ log = logging.getLogger(__name__)
 #: 是有人半夜开车出门。
 FALLEN_WORDS: tuple[str, ...] = ("跌倒", "摔倒", "倒地", "fallen", "fall down", "falldown",
                                  "tipped over")
+#: 上装接在继电器上的几路(W21):``payload_<哪一路>`` 故障 → 同名告警。
+PAYLOAD_OUTPUTS = {"strobe": "警灯", "siren": "警笛", "spotlight": "聚光灯"}
 
 #: 失败理由里出现这些词才认作「没电中止」。代理引擎那条理由原文是「电量 22% 低于中止线 25%」。
 BATTERY_WORDS: tuple[str, ...] = ("电量", "电池", "battery")
@@ -348,6 +350,23 @@ class SiteAlertSources:
             if fallen and not m.fallen:
                 self.desk.raise_alert(kind="fallen", robot=rid, title="狗跌倒了", detail=text)
             m.fallen = fallen
+            self._payload_faults(rid, faults)
+
+    def _payload_faults(self, rid: str, faults: tuple) -> None:
+        """上装关不上、状态不明(W21 复查,狗报 ``payload_<哪一路>``)。
+        **告警簿说了算**(同 W19 摄像头):
+        这一路在故障里、簿子里还没挂着就报;不在了就解决 —— 重复上报不重复报,站点重启后也对得上。
+        ``robot_fault`` 是整个集合(变了才发、代理起来先发一次全集),所以没出现就是好了。"""
+        present = {f.code for f in faults}
+        for out, name in PAYLOAD_OUTPUTS.items():
+            kind = f"payload_{out}"
+            if kind in present:
+                if not self.desk.has_open(rid, kind):
+                    self.desk.raise_alert(
+                        kind=kind, robot=rid, title=f"上装{name}关不上或状态不明",
+                        detail="继电器板没确认(串口、板子供电?);狗上在接着关。去现场看是不是还开着")
+            else:
+                self.desk.resolve_all(rid, kind, who="site:payload_ok")
 
     # ------------------------------------------------------------ 遥测
 
