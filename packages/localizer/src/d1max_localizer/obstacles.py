@@ -8,6 +8,7 @@
   地面内点够多,才 ``ok``;不然 ``extrinsic_bad``(代理据此不宣告能自主走)。离地高度取自检的中位数。
 - **每帧**:凸起障碍(离地 0.10–1.30 m)、落差(近处比地面低 0.15 m 以上)→ 挡;打到地面、矮草 → 看见了;
   别的格子 = 未知(代理当挡)。机身自己(腿)的点不算。
+- **滤雨点**(W29):凸起的格子只有一个点、周围 8 格都没有凸起的,当雨滴丢掉(不挡、也不算看见)。
 - **净空**:机身前沿往前、机身宽 + 每边 0.05 m 的走廊里第一个「挡 / 未知」有多远 → 给旁路进程发许可
   ``clear {ms, dist}``(第二层,只在够刹停的时候发)。狗尾那头同样算(W09i):后雷达标过、旁路进程
   ≥ 6 号才发 ``clear {ms, dist, end: "tail"}``(5 号会把它当成狗头的许可)。
@@ -59,6 +60,9 @@ class Config:
     body_len: float = 0.93
     body_wid: float = 0.48
     margin: float = 0.05
+    #: 滤雨点(W29):凸起的格子里只有一个点、周围 8 格也都没有凸起 → 当雨滴、飞虫,不算挡也不算看见。
+    #: 真的东西(杆子、人)竖着有好几线打到,不会只剩孤零零一个点。
+    speckle: bool = True
     max_v: float = 0.6                  # 最快(W08 第一版 ≤ 0.6 m/s)
     latency: float = 0.2                # 链路延迟(秒,待 W00d 量)
     decel: float = 0.5                  # 刹车减速度(m/s²,待真机量)
@@ -264,6 +268,13 @@ def classify(pts_base: Any, height: float, cfg: Config = DEFAULT) -> tuple[bytes
     ground = inside & (np.abs(h) <= cfg.ground_tol)
     low = inside & (h > cfg.ground_tol) & (h < cfg.h_lo)            # 矮草、碎石:看见了、不挡
     bump = inside & (h >= cfg.h_lo) & (h <= cfg.h_hi)
+    if cfg.speckle and bump.any():
+        cnt = np.bincount(idx[bump], minlength=n * n).reshape(n, n)
+        has = np.pad(cnt > 0, 1)
+        nb = sum(has[1 + dr:n + 1 + dr, 1 + dc:n + 1 + dc].astype(int)
+                 for dr in (-1, 0, 1) for dc in (-1, 0, 1) if dr or dc)
+        lone = ((cnt == 1) & (nb == 0)).ravel()
+        bump = bump & ~lone[np.where(inside, idx, 0)]
     dist = np.hypot(p[:, 0], p[:, 1])
     drop = inside & (h < -cfg.drop) & (dist <= cfg.near)
     known[idx[ground | low | bump | drop]] = 1

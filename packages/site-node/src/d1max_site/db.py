@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 28                      # W25 外审:驱离的拦截点(deter_sessions.standoff_center)
+SCHEMA_VERSION = 29                      # W29:天气(weather)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -326,6 +326,18 @@ CREATE TABLE IF NOT EXISTS deter_sessions (
     human_ms    INTEGER NOT NULL DEFAULT 0,
     auto        INTEGER NOT NULL DEFAULT 1,
     by          TEXT NOT NULL DEFAULT ''
+);
+-- W29:天气(一行)。手动切的(带到点时刻)、联网查的(带查的时刻、原因)。
+CREATE TABLE IF NOT EXISTS weather (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    manual          TEXT NOT NULL DEFAULT '',
+    manual_until_ms INTEGER,
+    manual_by       TEXT NOT NULL DEFAULT '',
+    manual_ms       INTEGER,
+    auto            TEXT NOT NULL DEFAULT '',
+    auto_ms         INTEGER,
+    auto_detail     TEXT NOT NULL DEFAULT '',
+    auto_error      TEXT NOT NULL DEFAULT ''
 );
 -- W24 复查:要报、还没报成的告警(连内容一起)。报成才删;人走了、驱离结束都不动它。
 CREATE TABLE IF NOT EXISTS pending_alerts (

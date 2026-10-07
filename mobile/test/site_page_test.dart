@@ -197,6 +197,18 @@ class FakeApi implements SiteApi {
     calls.add('deter $robotId $output $on${maxS == null ? '' : ' $maxS'}${clip == null ? '' : ' $clip'}');
     return <String, dynamic>{'ack': deterAck};
   }
+  /// 天气（W29）：默认用真站点的夹具（手动切成下雨）；切记在 [calls] 里。
+  Map<String, dynamic> weatherView = Map<String, dynamic>.from(siteFixture('site_weather'));
+  @override
+  Future<Map<String, dynamic>> weather() async => weatherView;
+  @override
+  Future<Map<String, dynamic>> setWeather(String condition, {int? hours}) async {
+    calls.add('weather $condition${hours == null ? '' : ' $hours'}');
+    weatherView = <String, dynamic>{...weatherView, 'condition': condition, 'source': 'manual',
+      'label': {'normal': '正常', 'rain': '下雨', 'storm': '雷暴'}[condition] ?? condition,
+      'patrols_paused': condition == 'storm'};
+    return weatherView;
+  }
   /// 布防模式（W20）：默认用真站点的夹具（访客）；切、改防区记在 [calls] 里、照着改它。
   Map<String, dynamic> modeView = Map<String, dynamic>.from(siteFixture('site_mode'));
   SiteError? modeError;

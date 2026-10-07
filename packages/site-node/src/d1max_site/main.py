@@ -403,6 +403,16 @@ class Server:
         self.standby.hold = self.deterrence.holds
         self.deterrence.alerts = self.alerts           # W24:驱离中看到人报告警
         self.incidents.busy = self.deterrence.busy
+        # W29:全天候。天气(联网查 + 手动切):雷暴停排程巡检、照派入侵;下雨、雷暴全狗限速。
+        from d1max_site.weather import WeatherDesk, parse_latlon
+        latlon = parse_latlon(cfg.get("weather", {}).get("latlon")
+                              or os.environ.get("D1MAX_SITE_LATLON"))
+        self.weather = WeatherDesk(self.db, self.dispatcher, now_ms=wall_ms, latlon=latlon,
+                                   publish=self.dispatcher.feed.publish)
+        self.scheduler.weather = self.weather
+        self.alert_sources.weather = self.weather
+        log.info("天气:%s", f"联网查(坐标 {latlon[0]:.2f},{latlon[1]:.2f})" if latlon
+                 else "没配坐标,只能手动切")
         # W00c5b:视频经站点。狗按需把相机推到这里(SRT),这里转 MJPEG 给观众。
         from d1max_site.video import VideoHub, dispatcher_sender
         vcfg = cfg.get("video", {})
@@ -481,6 +491,7 @@ class Server:
         self.teleop.audit = self.api.audit
         self.api.arming = self.arming
         self.api.deterrence = self.deterrence
+        self.api.weather = self.weather
         self.arming.on_expired = lambda back, row: self.api.audit.record(
             actor="site", action="mode visitor_expired", target=back, status=200,
             detail={"visitor_zones": row["visitor_zones"], "set_by": row["set_by"]}, remote="")
@@ -579,6 +590,10 @@ class Server:
                 await self.deterrence.tick()           # W22:驱离到点收、自动升、续声光
             except Exception:
                 log.exception("驱离这一拍没办成")
+            try:
+                await self.weather.tick()              # W29:查天气、雷暴撤排程巡检、对账限速
+            except Exception:
+                log.exception("天气这一拍没办成")
             try:
                 self.arming.tick()                     # W20:访客到点退回原来的模式
             except Exception:

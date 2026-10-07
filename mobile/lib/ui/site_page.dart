@@ -21,6 +21,7 @@ import 'site_logs.dart';
 import 'site_mapping.dart';
 import 'site_maps.dart';
 import 'site_mode.dart';
+import 'site_weather.dart';
 import 'site_releases.dart';
 import 'site_cameras.dart';
 import 'site_deter.dart';
@@ -242,6 +243,7 @@ class SiteRobotsPage extends StatefulWidget {
 
   static const Key bgWatchKey = Key('btn-bg-watch');
   static const Key modeKey = Key('mode-banner');
+  static const Key weatherKey = Key('weather-banner');
 
   @override
   State<SiteRobotsPage> createState() => _SiteRobotsPageState();
@@ -252,6 +254,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
 
   /// 布防模式（W20）；站点没开（老站点 404）就是 null，不显示那一行。
   Map<String, dynamic>? _mode;
+  Map<String, dynamic>? _weather;
 
   /// 正在进行的驱离（W22），按狗。站点推 `deterrence` 帧当场换。
   Map<String, Map<String, dynamic>> _deter = <String, Map<String, dynamic>>{};
@@ -285,6 +288,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       }
       if (f['kind'] == 'mode' && f['mode'] is Map && mounted) {
         setState(() => _mode = Map<String, dynamic>.from(f['mode'] as Map));
+      }
+      if (f['kind'] == 'weather' && f['weather'] is Map && mounted) {
+        setState(() => _weather = Map<String, dynamic>.from(f['weather'] as Map));
       }
       if (f['kind'] == 'deterrence' && f['robot_id'] is String && mounted) {
         setState(() {
@@ -375,6 +381,12 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       if (mounted) setState(() => _mode = m);
     } on SiteError {
       // 老站点没有布防模式（404）；读不到就不显示那一行
+    }
+    try {
+      final w = await widget.api.weather();
+      if (mounted) setState(() => _weather = w);
+    } on SiteError {
+      // 老站点没有天气（404）
     }
     try {
       final d = await widget.api.deterrence();
@@ -535,6 +547,18 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
               onTap: () async {
                 await Navigator.push(
                     context, MaterialPageRoute<void>(builder: (_) => SiteModePage(api: widget.api)));
+                await _reload();
+              },
+            ),
+          if (_weather != null)
+            ListTile(
+              key: SiteRobotsPage.weatherKey,
+              leading: Icon(weatherIcon('${_weather!['condition']}'), color: weatherColor('${_weather!['condition']}')),
+              title: Text(weatherText(_weather!)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                await Navigator.push(
+                    context, MaterialPageRoute<void>(builder: (_) => SiteWeatherPage(api: widget.api)));
                 await _reload();
               },
             ),

@@ -171,6 +171,8 @@ class SiteApi:
         self.arming: Any = None
         #: 分级驱离(W22,``deterrence.DeterrenceDesk``)。
         self.deterrence: Any = None
+        #: 天气(W29,``weather.WeatherDesk``)。没接的站点 /api/weather 回 404。
+        self.weather: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -397,6 +399,8 @@ class _Handler(TlsHandlerMixin):
                 return self._deterrence(method, path, user)
             if path in ("/api/mode", "/api/mode/zones"):
                 return self._mode(method, path, user)
+            if path == "/api/weather":
+                return self._weather(method, user)
             if path in ("/api/incidents", "/api/intercepts", "/api/zones"):
                 self._need(user, VIEW if method == "GET" else MANAGE)
                 return self._incident_admin(method, path)
@@ -784,6 +788,28 @@ class _Handler(TlsHandlerMixin):
             return self._send_json(200, desk.set_mode(mode, by=str(user), zones=d.get("zones"),
                                                       minutes=d.get("minutes")))
         except ModeError as exc:
+            raise HttpError(400, str(exc)) from exc
+
+    def _weather(self, method: str, user) -> None:
+        """天气(W29)。看:``view``。手动切(正常 / 下雨 / 雷暴 / 回到自动):``arm``(值班的保安、业主、
+        管理员都能;切成雷暴会停巡检,切回正常会恢复,都记审计)。"""
+        from d1max_site.weather import WeatherError
+        desk = self.site.weather
+        if desk is None:
+            raise HttpError(404, "这个站点没开天气")
+        if method == "GET":
+            self._need(user, VIEW)
+            return self._send_json(200, desk.view())
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        self._need(user, ARM)
+        d = self._body()
+        self._audit_target = str(d.get("condition"))[:16]
+        self._audit_detail = {k: d[k] for k in ("hours",) if k in d}
+        try:
+            return self._send_json(200, desk.set_manual(d.get("condition"), by=str(user),
+                                                        hours=d.get("hours")))
+        except WeatherError as exc:
             raise HttpError(400, str(exc)) from exc
 
     def _incident_admin(self, method: str, path: str) -> None:

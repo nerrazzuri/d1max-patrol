@@ -436,3 +436,23 @@ async def test_读不到自主级别按要人监护算(站):
     await t.run(1)
     await _拍(t)
     assert [r["outcome"] for r in t.sched.runs("nightly")] == ["supervised"]
+
+
+async def test_W29_雷暴到点不起跑_记weather_雷暴过了窗口里照跑(站):
+    from types import SimpleNamespace
+    t = 站
+    storm = [True]
+    t.sched.weather = SimpleNamespace(storm=lambda: storm[0])
+    await t.run(15)
+    t.clock.ms = 毫秒(22, 0, 30)
+    await t.run(1)
+    await _拍(t)
+    await _拍(t)
+    runs = t.sched.runs("nightly")
+    assert [r["outcome"] for r in runs] == ["weather"] and "雷暴" in runs[0]["note"]
+    assert t.site.commands("A") == [], "雷暴:不派"
+    storm[0] = False
+    t.clock.ms = 毫秒(22, 5)
+    await t.run(1)
+    await _拍(t)
+    assert "started" in [r["outcome"] for r in t.sched.runs("nightly")], "雷暴过了:窗口里照跑"

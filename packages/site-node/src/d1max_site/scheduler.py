@@ -92,6 +92,8 @@ class SiteScheduler:
         self.db = db
         #: ``(排程 id, 狗或 None, 去向, 备注)``:这一轮没跑(W00c6c),见模块说明。
         self.on_outcome = on_outcome
+        #: 天气(W29,``weather.WeatherDesk``):雷暴时到点不起跑。站点主程序接上。
+        self.weather: Any = None
         self.dispatcher = dispatcher
         self._now = now_ms
         self._ref = time_reference
@@ -253,6 +255,13 @@ class SiteScheduler:
                                      note=f"站点的钟跟 {skew.source} 差 {skew.skew_s:.0f} 秒")
                 self._sweep(act, now_ms)
                 return
+        if self.weather is not None and self.weather.storm():
+            # W29(决策 41):雷暴暂停排程巡检。到点的这一轮记一笔(``weather``),不起跑、不告警
+            for e, d in decisions:
+                if d.kind in (DecisionKind.DUE, DecisionKind.LATE):
+                    self._record(e, d.scheduled_ms or 0, "weather", note="雷暴:排程巡检暂停")
+            self._sweep(act, now_ms)
+            return
         picked = pick(decisions, running=None)
         order = ([picked.chosen] if picked.chosen is not None else []) + list(picked.displaced)
         claimed: dict[str, str] = {}                     # robot_id → 这一拍占了它的排程

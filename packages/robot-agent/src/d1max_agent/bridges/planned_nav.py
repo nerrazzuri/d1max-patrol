@@ -83,6 +83,8 @@ NEAR_BAND_M = 0.5
 NEAR_SLOW_FROM_M = 2.0
 NEAR_SLOW_AT_M = 0.5
 NEAR_MIN_MPS = 0.25
+#: 限着速(W29 下雨、雷暴)时近障减速从多远开始的倍数。
+WET_NEAR_SCALE = 1.5
 
 
 def _heading(yaw: float, d: int) -> float:
@@ -556,7 +558,7 @@ class PlannedNavBackend(HalNavBackend):
         if abs(bearing) > TURN_IN_PLACE_RAD:
             vx = 0.0
         else:
-            limit = min(self._vmax, self._path_speed(seg, proj),
+            limit = min(self._vlim(), self._path_speed(seg, proj),
                         self._cm.speed_at(here.x, here.y), self._near_cap(d))
             vx = d * max(min(limit, K_LIN * dgoal), self._caps.deadband_vx)
         await self._move(vx, wz, dt_s, here)
@@ -571,11 +573,13 @@ class PlannedNavBackend(HalNavBackend):
         margin = getattr(g, "margin", 0.05)
         near = self.obstacles.near_ahead(d, getattr(g, "body_len", 0.93) / 2 + margin,
                                          getattr(g, "body_wid", 0.48) / 2 + margin + NEAR_BAND_M)
-        if near >= NEAR_SLOW_FROM_M:
+        # 限着速(W29 下雨)时近障从更远就开始减速:湿地刹车距离长
+        start = NEAR_SLOW_FROM_M * (WET_NEAR_SCALE if math.isfinite(self.speed_cap) else 1.0)
+        if near >= start:
             return math.inf
         lo = max(NEAR_MIN_MPS, self._caps.deadband_vx)
-        f = max(0.0, (near - NEAR_SLOW_AT_M) / (NEAR_SLOW_FROM_M - NEAR_SLOW_AT_M))
-        return lo + (max(self._vmax, lo) - lo) * f
+        f = max(0.0, (near - NEAR_SLOW_AT_M) / (start - NEAR_SLOW_AT_M))
+        return lo + (max(self._vlim(), lo) - lo) * f
 
     def tail_ok(self) -> bool:
         """狗尾为前能不能自己走(W09i):配了避障、感知报后雷达外参标过 —— 标过它的「空」才算,

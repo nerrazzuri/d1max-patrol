@@ -282,6 +282,11 @@ class AgentRuntime:
         self.deter = DeterDesk(self.hal, emit=self.events.emit,
                                monotonic=monotonic or time.monotonic)
         self.processor.deter_hook = self.deter.handle
+        #: 全狗限速(W29,站点下雨、雷暴时发):(限多少 m/s, 到哪一刻(单调钟毫秒));None = 没限。
+        self._speed_cap: tuple[float, int] | None = None
+        self._speed_cap_told: tuple = (None,)              # 起来时没限速:不用多发一次能力
+        if self.parts is not None:
+            self.processor.speed_cap_hook = self._on_speed_cap
         log.info("自主级别: %s%s", autonomy,
                  "(goto/巡检只在有人现场监护时才收)" if autonomy == "supervised" else "")
         #: 遥控的收帧时刻、帧有效期、租约走单调钟(W00c5c 内部评审):墙钟会被 NTP 往回拨。
@@ -592,10 +597,42 @@ class AgentRuntime:
             out["persons"] = self.person_view.caps()  # W24:人员检测在不在看(站点据此联动驱离)
         if self._standoff_ok():
             out["standoff"] = self._standoff_caps()   # W25:在不在守、在不在退、是不是无路可退
+        if self.parts is not None:
+            out["speed_cap"] = self._speed_cap_caps()  # W29:全狗限速(站点下雨、雷暴时发)
         deter = self.deter.caps()
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术
         return out
+
+    def _on_speed_cap(self, cmd: Command) -> str:
+        """全狗限速(W29):记下、马上用上。``null`` 取消。"""
+        from d1max_contract.errors import ContractError
+        from d1max_contract.speedcap import parse_speed_cap
+        try:
+            req = parse_speed_cap(cmd.payload)
+        except ContractError as exc:
+            return f"payload: {exc}"
+        self._speed_cap = (None if req.max_speed_mps is None
+                           else (req.max_speed_mps, self._mono_ms() + req.ttl_s * 1000))
+        log.info("全狗限速:%s", "取消" if req.max_speed_mps is None
+                 else f"{req.max_speed_mps} m/s,{req.ttl_s} 秒")
+        self._apply_speed_cap()
+        return ""
+
+    def _apply_speed_cap(self) -> tuple:
+        """到点就取消;交给导航。回能力里那一份的指纹(变了要重发)。"""
+        if self._speed_cap is not None and self._mono_ms() >= self._speed_cap[1]:
+            log.info("全狗限速到点取消(站点没续)")
+            self._speed_cap = None
+        if self.parts is not None:
+            self.parts.nav.speed_cap = math.inf if self._speed_cap is None else self._speed_cap[0]
+        return (None,) if self._speed_cap is None else (self._speed_cap[0],)
+
+    def _speed_cap_caps(self) -> dict[str, Any]:
+        if self._speed_cap is None:
+            return {"max_speed_mps": None}
+        return {"max_speed_mps": self._speed_cap[0],
+                "left_s": max(0, (self._speed_cap[1] - self._mono_ms()) // 1000)}
 
     def _standoff_caps(self) -> dict[str, Any]:
         t = self._standoff_task()
@@ -1718,6 +1755,11 @@ class AgentRuntime:
                 if self.transport.connected:
                     await self._publish_caps()
         if self.parts is not None:
+            sc = self._apply_speed_cap()         # W29:全狗限速到点取消
+            if sc != self._speed_cap_told:
+                self._speed_cap_told = sc
+                if self.transport.connected:
+                    await self._publish_caps()
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
             await self._enforce_head()
         await self._feed_trail()
