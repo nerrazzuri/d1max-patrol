@@ -23,6 +23,7 @@ import 'site_maps.dart';
 import 'site_mode.dart';
 import 'site_releases.dart';
 import 'site_cameras.dart';
+import 'site_deter.dart';
 import 'site_intercepts.dart';
 import 'site_recordings.dart';
 import 'site_runs.dart';
@@ -889,6 +890,19 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                           builder: (_) =>
                               SiteProcLogsPage(api: widget.api, robotId: widget.robotId))),
                   child: const Text('建图日志')),
+            // 上装（W21）：警灯、警笛、聚光灯、喇叭。保安、管理员；狗报了 deter 才有
+            if ((s?.canDispatch ?? false) && robotCan(v, 'deter'))
+              OutlinedButton(
+                  key: const Key('btn-deter'),
+                  onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                          builder: (_) => SiteDeterPage(
+                              api: widget.api,
+                              robotId: widget.robotId,
+                              caps: Map<String, dynamic>.from(
+                                  ((v?['capabilities'] as Map)['tasks'] as Map)['deter'] as Map)))),
+                  child: const Text('上装…')),
             if ((s?.canDispatch ?? false) && robotCan(v, 'relocalize'))
               OutlinedButton(
                   key: const Key('btn-relocalize'),

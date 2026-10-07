@@ -33,6 +33,9 @@ def temporal_class(kind: str, payload: dict[str, Any] | None = None) -> str:
         return SAFE if p.get("action") == "release" else GATED
     if kind == "video":
         return SAFE if p.get("stop") is True else GATED
+    if kind == "deter":
+        # W21:关一路声光永远放行(让它安静);开要钟差合格(同视频)
+        return SAFE if p.get("on") is False else GATED
     if kind == "mapping":
         return SAFE if p.get("action") == "stop" else GATED
     if kind == "zones_set":

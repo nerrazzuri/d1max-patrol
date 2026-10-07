@@ -28,7 +28,7 @@ METHODS = {
     "急停": ("emergency_stop", "estop_status", "estop_reset"),
     "感知流": ("odometry", "imu", "lidar", "ultrasonic", "joints", "contacts"),
     "电池与故障": ("battery", "faults"),
-    "执行器": ("light", "strobe", "sound", "spotlight", "head"),
+    "执行器": ("light", "strobe", "siren", "sound", "spotlight", "head"),
     "媒体": ("camera_sources", "snapshot", "stream_url", "depth", "thermal", "audio_session"),
     "回充": ("recharge_start", "recharge_stop", "undock", "recharge_status"),
     "能力": ("hal_capabilities",),
@@ -60,7 +60,8 @@ def test_能力往返():
                            control_releasable=True, recharge_mode="none",
                            sensing={"lidar": False, "depth": False, "thermal": False, "imu": False,
                                     "joint_effort": False, "foot_force": False},
-                           actuators={"light": False, "siren": False, "speaker": False,
+                           actuators={"light": False, "strobe": False, "siren": False,
+                                      "speaker": False,
                                       "spotlight": False, "head": False})
     assert HalCapabilities.from_wire(caps.to_wire()) == caps
     with pytest.raises(ContractError, match="recharge_mode"):

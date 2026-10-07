@@ -15,6 +15,9 @@
 - **控制权**(决定二 A):``control_releasable = false``,``release_control()`` 抛
   :class:`HalUnsupported`。放一次 SDK 控制权就得重启整台 RK3588。
 - **停没停**:看旁路进程报上来的里程速度;刚发出的速度还在有效期里、或里程不新鲜,都不算停。
+- **上装**(W21,决策 36):警灯、警笛、聚光灯走 RS485 Modbus 继电器板,喇叭走 USB 声卡(``payload.py``)。
+  没给 ``payload``(没有 ``/etc/d1max/payload.json``)就是没装,能力全报 false、入口抛
+  :class:`HalUnsupported`。连上时先全关一遍,断开时全关。
 - **机身系**(W09i 设计稿 §1):HAL 的里程、速度一律按机身(x 朝狗头、装前雷达那头),不随调头变。
   狗尾为前、旁路进程报 ``follows_head``(SDK 的「往前」跟着变成狗尾那头)时,里程朝向加 π、前进速度
   反号,发出去的前进速度也反号。SDK 调头时到底怎么变是真机项。
@@ -28,6 +31,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from d1max_adapter_d1max.payload import Payload
 from d1max_contract.hal import (
     Battery,
     ControlStatus,
@@ -95,7 +99,8 @@ class D1MaxHal:
                  invert_yaw: bool = False, stopped_eps: float = STOPPED_EPS,
                  frame_id: str = "odom",
                  now_ms: Callable[[], int] = wall_ms,
-                 backend: SidecarDeviceBackend | None = None) -> None:
+                 backend: SidecarDeviceBackend | None = None,
+                 payload: Payload | None = None) -> None:
         for name, v in (("mps_per_unit", mps_per_unit), ("radps_per_unit", radps_per_unit)):
             if not (math.isfinite(v) and v > 0):
                 raise ValueError(f"{name} 要是正数,收到 {v}")
@@ -104,6 +109,8 @@ class D1MaxHal:
         if not (math.isfinite(max_fraction) and 0 < max_fraction <= MAX_WALK_SPEED):
             raise ValueError(f"max_fraction 要在 (0, {MAX_WALK_SPEED}],收到 {max_fraction}")
         self._b = backend or SidecarDeviceBackend(host, port)
+        self._payload = payload
+        self._payload_up = False
         self._mps, self._radps = mps_per_unit, radps_per_unit
         self._deadband = deadband_mps
         self._frac = max_fraction
@@ -128,6 +135,9 @@ class D1MaxHal:
     # ------------------------------------------------------------ 生命周期
 
     async def connect(self) -> None:
+        if self._payload is not None and not self._payload_up:
+            self._payload_up = True                # 幂等:只在第一次连上时全关一遍
+            await self._payload.start()
         await self._b.connect()
         deadline = self._monotonic() + FIRST_FRAME_TIMEOUT_S
         while self._b.last_state is None or self._b.last_odom is None:
@@ -140,6 +150,9 @@ class D1MaxHal:
     async def close(self) -> None:
         """只断 Python 这头。SDK 会话与控制权留在旁路进程里(清单 #47)。"""
         self._vel_until = None
+        if self._payload is not None and self._payload_up:
+            self._payload_up = False
+            await self._payload.close()            # 断开:声光全关(不许一直响)
         await self._b.close()
 
     async def health(self) -> Health:
@@ -333,14 +346,39 @@ class D1MaxHal:
             raise ValueError(f"灯只有 front/back/both,收到 {channel!r}")
         await setter(on)
 
+    def _up(self, output: str) -> Payload:
+        if self._payload is None or not self._payload.has(output):
+            raise HalUnsupported(f"没装上装的 {output}")
+        return self._payload
+
     async def strobe(self, channel: str, pattern: str, max_s: float) -> None:
-        raise HalUnsupported("W00d 不做爆闪")
+        """上装警灯(只有一路,``channel`` 不看)。闪法由灯自己的模式定,这里只管开关。"""
+        on = pattern != "off" and max_s > 0
+        await self._up("strobe").set("strobe", on, max_s)
+
+    async def siren(self, on: bool, max_s: float) -> None:
+        await self._up("siren").set("siren", on and max_s > 0, max_s)
 
     async def sound(self, clip_or_tts: str, max_s: float) -> None:
-        raise HalUnsupported("W00d 不接喇叭")
+        p = self._up("speaker")
+        if not clip_or_tts or max_s <= 0:
+            await p.stop_sound()
+            return
+        await p.sound(clip_or_tts, max_s)
+
+    def sound_clips(self) -> tuple[str, ...]:
+        """喇叭能放的话术(``clips_dir`` 下的 ``*.wav``,不带后缀)。没接喇叭就是空。"""
+        if self._payload is None or not self._payload.has("speaker"):
+            return ()
+        from pathlib import Path
+        d = Path(self._payload.cfg.clips_dir)
+        return tuple(sorted(p.stem for p in d.glob("*.wav"))) if d.is_dir() else ()
+
+    def sound_tts(self) -> bool:
+        return self._payload is not None and bool(self._payload.cfg.tts_command)
 
     async def spotlight(self, on: bool, max_s: float) -> None:
-        raise HalUnsupported("D1 Max 没有探照灯")
+        await self._up("spotlight").set("spotlight", on and max_s > 0, max_s)
 
     async def head(self, pan: float, tilt: float) -> None:
         raise HalUnsupported("ControlHead 的单位与方向没验过,先不开")
@@ -385,5 +423,6 @@ class D1MaxHal:
             control_releasable=False, recharge_mode="none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": False,
                      "joint_effort": False, "foot_force": False},
-            actuators={"light": True, "siren": False, "speaker": False, "spotlight": False,
-                       "head": False})
+            actuators={"light": True, "head": False} | {
+                k: self._payload is not None and self._payload.has(k)
+                for k in ("strobe", "siren", "speaker", "spotlight")})

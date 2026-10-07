@@ -20,7 +20,7 @@ from d1max_contract.teleop import TeleopFrame
        "command_patrol": Command, "event_patrol_waypoint": Event,
        "event_robot_fault": Event, "command_video": Command, "event_video_failed": Event,
        "teleop_frame": TeleopFrame, "command_teleop": Command, "command_teleop_lease": Command,
-       "command_halt": Command,
+       "command_halt": Command, "command_deter": Command,
        "ack_accepted": Ack, "ack_rejected": Ack, "ack_expired": Ack, "ack_duplicate": Ack,
        "event_progress": Event, "event_aborted": Event, "status_online": Status,
        "status_offline_lwt": Status, "capabilities": Capabilities, "reconcile": Reconcile,

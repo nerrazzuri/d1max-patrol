@@ -124,6 +124,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="本机障碍桥的 Unix 套接字(默认 <store-dir>/obs.sock)")
     p.add_argument("--robot-radius", type=float, default=None,
                    help="规划膨胀用的机体外接圆半径(米,默认 0.52:930 × 480 mm,W08 决定 6)")
+    pl = p.add_argument_group("上装(W21,决策 36:RS485 Modbus 继电器板 + USB 声卡)")
+    pl.add_argument("--payload", type=Path,
+                    default=Path(os.environ.get("D1MAX_PAYLOAD", "/etc/d1max/payload.json")),
+                    help="上装配置(JSON:relay.port/baud/slave/coils、audio.device/clips_dir/"
+                         "tts_command);文件不在就是没装上装,能力全报 false")
+    pl.add_argument("--sim-payload", action="store_true",
+                    help="仿真狗装上上装(警灯、警笛、聚光灯、喇叭;演示与测试用)")
     rk = p.add_argument_group("RTK(W09e;决策 21:自己的为主、厂家的可选)")
     rk.add_argument("--rtk", choices=("none", "own", "vendor"), default="none",
                     help="none = 不接;own = 我们自己的串口驱动(**要先停厂家的 sixents_gps_driver**,"
@@ -362,15 +369,22 @@ def build(args: argparse.Namespace) -> Assembled:
         if args.hal == "sim":
             from d1max_adapter_sim.robot import SimRobot
             from d1max_agent.bridges.sim_media import sim_media
-            hal: Any = SimRobot(now_ms=wall_ms)
+            hal: Any = SimRobot(now_ms=wall_ms, payload=args.sim_payload)
             media = sim_media(wall_ms)
         else:
             from d1max_adapter_d1max.hal import D1MaxHal
             host, port = args.sidecar
+            payload = None
+            if args.payload.is_file():
+                from d1max_adapter_d1max.payload import Payload, PayloadConfig
+                payload = Payload(PayloadConfig.load(args.payload))
+                log.info("上装配置 %s:接了 %s", args.payload,
+                         "、".join(o for o in ("strobe", "siren", "spotlight", "speaker")
+                                  if payload.has(o)) or "(一路都没有)")
             hal = D1MaxHal(host, port, mps_per_unit=args.mps_per_unit,
                            radps_per_unit=args.radps_per_unit, deadband_mps=args.deadband,
                            max_fraction=args.max_fraction, invert_yaw=args.invert_yaw,
-                           stopped_eps=args.stopped_eps, now_ms=wall_ms)
+                           stopped_eps=args.stopped_eps, now_ms=wall_ms, payload=payload)
             media = None                          # RTSP 取图归后面的工单
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
                              home=args.home, media=media, nav_kind=args.nav,

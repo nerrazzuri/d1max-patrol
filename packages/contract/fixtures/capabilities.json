@@ -3,7 +3,8 @@
     "light": [],
     "siren": false,
     "speaker": false,
-    "spotlight": false
+    "spotlight": false,
+    "strobe": false
   },
   "adapter": "sim/0.1.0",
   "agent": "0.1.0",

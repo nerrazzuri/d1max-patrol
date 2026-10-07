@@ -1,0 +1,343 @@
+"""上装(W21):Modbus RTU 继电器板(假板子挂在 pty 上)、到点自己关、起来与收尾全关、
+喇叭放话术与 TTS。"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import struct
+import threading
+import tty
+
+import pytest
+
+from d1max_adapter_d1max.payload import (
+    ModbusRelay,
+    Payload,
+    PayloadConfig,
+    PayloadError,
+    crc16,
+    frame,
+)
+
+
+class 假板子:
+    """pty 另一头的 Modbus RTU 从站:8 个线圈,认 01 / 05。``mute`` 时不回,``garble`` 时 CRC 错。"""
+
+    def __init__(self, slave: int = 1) -> None:
+        self.master, self.slave_fd = os.openpty()
+        tty.setraw(self.slave_fd)
+        tty.setraw(self.master)
+        self.slave = slave
+        self.coils = [False] * 8
+        self.mute = False
+        self.garble = False
+        self.exception = False
+        self.writes: list[tuple[int, bool]] = []
+        self._stop = False
+        self.t = threading.Thread(target=self._serve, daemon=True)
+        self.t.start()
+
+    def open(self) -> int:
+        return os.dup(self.slave_fd)
+
+    def _serve(self) -> None:
+        import select
+        buf = b""
+        while not self._stop:
+            r, _, _ = select.select([self.master], [], [], 0.05)
+            if not r:
+                continue
+            try:
+                buf += os.read(self.master, 64)
+            except OSError:
+                return
+            while len(buf) >= 8:
+                req, buf = buf[:8], buf[8:]
+                if struct.unpack("<H", req[-2:])[0] != crc16(req[:-2]) or req[0] != self.slave:
+                    continue
+                if self.mute:
+                    continue
+                fn = req[1]
+                if self.exception:
+                    os.write(self.master, frame(bytes([self.slave, fn | 0x80, 0x02])))
+                    continue
+                if fn == 0x05:
+                    _, _, coil, val = struct.unpack(">BBHH", req[:6])
+                    self.coils[coil] = val == 0xFF00
+                    self.writes.append((coil, val == 0xFF00))
+                    resp = frame(req[:6])
+                elif fn == 0x01:
+                    _, _, start, n = struct.unpack(">BBHH", req[:6])
+                    bits = sum(1 << i for i in range(n) if self.coils[start + i])
+                    nb = (n + 7) // 8
+                    resp = frame(bytes([self.slave, 1, nb]) + bits.to_bytes(nb, "little"))
+                else:
+                    continue
+                if self.garble:
+                    resp = resp[:-1] + bytes([resp[-1] ^ 0xFF])
+                os.write(self.master, resp)
+
+    def close(self) -> None:
+        self._stop = True
+        self.t.join(1)
+        os.close(self.master)
+        os.close(self.slave_fd)
+
+
+@pytest.fixture
+def 板子():
+    b = 假板子()
+    yield b
+    b.close()
+
+
+def test_CRC按Modbus算():
+    # 标准例子:01 03 00 00 00 0A → CRC C5CD(报文里低字节在前:CD C5)
+    assert frame(bytes.fromhex("01030000000A")).hex() == "01030000000ac5cd"
+
+
+def test_写线圈_读线圈(板子):
+    r = ModbusRelay(板子.open, timeout_s=0.3)
+    r.write_coil(2, True)
+    r.write_coil(5, True)
+    assert 板子.coils[2] and 板子.coils[5]
+    assert r.read_coils(0, 8) == [False, False, True, False, False, True, False, False]
+    r.write_coil(2, False)
+    assert not 板子.coils[2]
+    r.close()
+
+
+def test_板子不回_CRC错_回异常码_都报错不当成成了(板子):
+    r = ModbusRelay(板子.open, timeout_s=0.1, retries=1)
+    板子.mute = True
+    with pytest.raises(PayloadError, match="没回|不全"):
+        r.write_coil(0, True)
+    板子.mute, 板子.garble = False, True
+    with pytest.raises(PayloadError, match="CRC"):
+        r.write_coil(0, True)
+    板子.garble, 板子.exception = False, True
+    with pytest.raises(PayloadError, match="异常码"):
+        r.write_coil(0, True)
+    r.close()
+
+
+def test_站号不对的应答不认(板子):
+    r = ModbusRelay(板子.open, slave=2, timeout_s=0.1, retries=0)
+    with pytest.raises(PayloadError):
+        r.write_coil(0, True)                        # 板子是 1 号,不理 2 号的请求
+    r.close()
+
+
+def test_配置_只认三路_线圈不许重复(tmp_path):
+    p = tmp_path / "payload.json"
+    p.write_text(json.dumps({"relay": {"coils": {"strobe": 0, "siren": 1, "spotlight": 2},
+                                       "baud": 9600, "slave": 3},
+                             "audio": {"device": "plughw:1,0"}}))
+    c = PayloadConfig.load(p)
+    assert c.coils == {"strobe": 0, "siren": 1, "spotlight": 2} and c.slave == 3
+    assert c.port == "/dev/ttyCH9344USB5" and c.audio_device == "plughw:1,0"
+    for bad in ({"relay": {"coils": {"horn": 0}}}, {"relay": {"coils": {"siren": 0, "strobe": 0}}},
+                {"relay": {"coils": {"siren": -1}}}, [1]):
+        p.write_text(json.dumps(bad))
+        with pytest.raises(PayloadError):
+            PayloadConfig.load(p)
+
+
+def _上装(板子, **audio) -> Payload:
+    cfg = PayloadConfig(coils={"strobe": 0, "siren": 1, "spotlight": 2}, **audio)
+    return Payload(cfg, relay=ModbusRelay(板子.open, timeout_s=0.3))
+
+
+async def test_开一路带最长时间_到点自己关_再开从现在重算(板子):
+    p = _上装(板子)
+    await p.set("siren", True, 0.3)
+    assert 板子.coils[1] and p.state()["siren"] is True
+    await asyncio.sleep(0.2)
+    await p.set("siren", True, 0.3)                  # 再开一次:从现在重算
+    await asyncio.sleep(0.2)
+    assert 板子.coils[1], "重开之后不该按第一次的时间关"
+    await asyncio.sleep(0.3)
+    assert not 板子.coils[1] and p.state()["siren"] is False
+    await p.close()
+
+
+async def test_没接的一路_时长不对_都拒(板子):
+    p = Payload(PayloadConfig(coils={"siren": 1}), relay=ModbusRelay(板子.open))
+    with pytest.raises(PayloadError, match="没接"):
+        await p.set("spotlight", True, 5)
+    for bad in (0, -1, 601):
+        with pytest.raises(PayloadError, match="max_s"):
+            await p.set("siren", True, bad)
+    assert not p.has("speaker") and p.has("siren") and not p.has("strobe")
+    await p.close()
+
+
+async def test_起来先全关_收尾也全关(板子):
+    板子.coils[:3] = [True, True, True]              # 上次进程死掉时开着的
+    p = _上装(板子)
+    await p.start()
+    assert 板子.coils[:3] == [False, False, False]
+    await p.set("strobe", True, 60)
+    await p.set("spotlight", True, 60)
+    await p.close()
+    assert 板子.coils[:3] == [False, False, False]
+
+
+async def test_到点关不掉_过一秒再关(板子):
+    p = _上装(板子)
+    await p.set("spotlight", True, 0.1)
+    板子.mute = True
+    await asyncio.sleep(0.6)                          # 到点那一下关不掉(板子不回)
+    assert 板子.coils[2]
+    板子.mute = False
+    await asyncio.sleep(1.2)
+    assert not 板子.coils[2], "关不掉要接着关"
+    await p.close()
+
+
+class 假进程:
+    def __init__(self, log, args, secs):
+        self.args, self.returncode = args, None
+        self._done = asyncio.Event()
+        log.append(args)
+        asyncio.get_running_loop().call_later(secs, self._finish)
+
+    def _finish(self):
+        if self.returncode is None:
+            self.returncode = 0
+            self._done.set()
+
+    async def wait(self):
+        await self._done.wait()
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+        self._done.set()
+
+
+def _假跑(log, secs=0.05):
+    async def run(*args, **kw):
+        return 假进程(log, args, secs)
+    return run
+
+
+async def test_喇叭放录好的话术_话术名不许带路径(tmp_path):
+    (tmp_path / "warn-zh.wav").write_bytes(b"RIFF")
+    log: list = []
+    p = Payload(PayloadConfig(audio_device="plughw:1,0", clips_dir=str(tmp_path)), run=_假跑(log))
+    await p.sound("warn-zh", 5)
+    await asyncio.sleep(0.1)
+    assert log == [("aplay", "-q", "-D", "plughw:1,0", str(tmp_path / "warn-zh.wav"))]
+    for bad in ("../etc/passwd", "a/b", ".hidden", "nope"):
+        with pytest.raises(PayloadError):
+            await p.sound(bad, 5)
+    await p.close()
+
+
+async def test_喇叭到点掐掉_新的一段打断旧的(tmp_path):
+    (tmp_path / "long.wav").write_bytes(b"RIFF")
+    log: list = []
+    p = Payload(PayloadConfig(audio_device="hw:1", clips_dir=str(tmp_path)), run=_假跑(log, 10))
+    await p.sound("long", 0.2)
+    await asyncio.sleep(0.05)
+    assert p.playing()
+    proc = p._proc
+    await asyncio.sleep(0.3)
+    assert not p.playing() and proc.returncode == -9, "到点要掐掉播放进程"
+    await p.sound("long", 5)
+    await asyncio.sleep(0.05)
+    first = p._proc
+    await p.sound("long", 5)
+    assert first.returncode == -9, "新的一段打断旧的"
+    await p.close()
+    assert not p.playing()
+
+
+async def test_TTS_没配就拒_配了先合成再放(tmp_path):
+    log: list = []
+    p = Payload(PayloadConfig(audio_device="hw:1"), run=_假跑(log))
+    with pytest.raises(PayloadError, match="没配 TTS"):
+        await p.sound("tts:zh:请离开", 5)
+    p = Payload(PayloadConfig(audio_device="hw:1",
+                              tts_command="espeak-ng -v {lang} -w {wav} {text}"), run=_假跑(log))
+    await p.sound("tts:en:Please leave now", 5)
+    await asyncio.sleep(0.2)
+    assert log[0][:4] == ("espeak-ng", "-v", "en", "-w") and log[0][5] == "Please leave now"
+    assert log[1][0] == "aplay" and log[1][-1] == log[0][4]
+    for bad in ("tts:zh:", "tts:中文:hi", "tts:en:" + "x" * 301):
+        with pytest.raises(PayloadError):
+            await p.sound(bad, 5)
+    await p.close()
+
+
+async def test_没接喇叭_放就拒(tmp_path):
+    p = Payload(PayloadConfig())
+    with pytest.raises(PayloadError, match="没接喇叭"):
+        await p.sound("x", 5)
+
+
+async def test_真狗HAL装上上装_能力照实报_入口走继电器板和喇叭(板子, tmp_path):
+    from d1max_adapter_d1max.hal import D1MaxHal
+    from d1max_contract.hal import HalUnsupported
+    (tmp_path / "warn-zh.wav").write_bytes(b"RIFF")
+    log: list = []
+    p = Payload(PayloadConfig(coils={"strobe": 0, "siren": 1}, audio_device="hw:1",
+                              clips_dir=str(tmp_path)),
+                relay=ModbusRelay(板子.open, timeout_s=0.3), run=_假跑(log))
+    hal = D1MaxHal(backend=object(), payload=p)               # type: ignore[arg-type]
+    acts = hal.hal_capabilities().actuators
+    assert acts["strobe"] and acts["siren"] and acts["speaker"] and not acts["spotlight"]
+    await hal.siren(True, 5)
+    await hal.strobe("warn", "flash", 5)
+    assert 板子.coils[0] and 板子.coils[1]
+    await hal.siren(False, 0)
+    await hal.strobe("warn", "off", 0)
+    assert not 板子.coils[0] and not 板子.coils[1]
+    with pytest.raises(HalUnsupported):
+        await hal.spotlight(True, 5)
+    await hal.sound("warn-zh", 5)
+    await asyncio.sleep(0.1)
+    assert log and log[-1][-1].endswith("warn-zh.wav")
+    await hal.sound("", 0)
+    assert not p.playing()
+    assert hal.sound_clips() == ("warn-zh",) and hal.sound_tts() is False
+    await p.close()
+
+
+def test_真狗HAL没装上装_四路都报没有():
+    from d1max_adapter_d1max.hal import D1MaxHal
+    hal = D1MaxHal(backend=object())                          # type: ignore[arg-type]
+    acts = hal.hal_capabilities().actuators
+    assert not any(acts[k] for k in ("strobe", "siren", "speaker", "spotlight"))
+    assert hal.sound_clips() == ()
+
+
+async def test_话术名不许越出话术目录(tmp_path):
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    (tmp_path / "secret.wav").write_bytes(b"RIFF")             # 话术目录外面真有这个文件
+    log: list = []
+    p = Payload(PayloadConfig(audio_device="hw:1", clips_dir=str(clips)), run=_假跑(log))
+    for bad in ("../secret", "..", "/tmp/x"):
+        with pytest.raises(PayloadError, match="话术名"):
+            await p.sound(bad, 5)
+    assert log == []
+
+
+async def test_真狗HAL断开_上装全关(板子):
+    from d1max_adapter_d1max.hal import D1MaxHal
+
+    class 假旁路:
+        async def close(self):
+            pass
+    p = _上装(板子)
+    hal = D1MaxHal(backend=假旁路(), payload=p)                 # type: ignore[arg-type]
+    hal._payload_up = True                                     # 当它连上过(连接要真旁路进程)
+    await hal.siren(True, 60)
+    await hal.spotlight(True, 60)
+    assert 板子.coils[1] and 板子.coils[2]
+    await hal.close()
+    assert not any(板子.coils[:3]), "断开:声光全关"

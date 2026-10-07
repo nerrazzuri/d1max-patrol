@@ -362,6 +362,10 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> relocalize(String robotId,
       {bool atHome = false, double x = 0, double y = 0, double yaw = 0});
 
+  /// 上装（W21）：开（带 [maxS] 秒，到点狗上自己关）/ 关一路：`strobe` 警灯、`siren` 警笛、`spotlight` 聚光灯、
+  /// `speaker` 喇叭（开要 [clip]：话术名或 `tts:<语言>:<文字>`）。返回 `{ack}`。
+  Future<Map<String, dynamic>> deter(String robotId, String output, bool on, {double? maxS, String? clip});
+
   /// 在当前位置标原点（W00c6f，管理员）：狗用它此刻的位置当原点（定位不好就拒），站点登记成默认待命点（名字
   /// [name]，空就是 `home`）。返回 `{ack, standby}`。
   /// 在当前位置标原点（W00c6f）。同名的点登记在别的图上时站点回 409 带 `name_taken`，
@@ -1051,6 +1055,16 @@ class SiteClient implements SiteApi {
           {String name = '', bool replace = false}) async =>
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/home/here',
           <String, dynamic>{if (name.isNotEmpty) 'name': name, if (replace) 'replace': true}));
+
+  @override
+  Future<Map<String, dynamic>> deter(String robotId, String output, bool on,
+          {double? maxS, String? clip}) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/deter', <String, dynamic>{
+        'output': output,
+        'on': on,
+        if (on) 'max_s': ?maxS,
+        if (on) 'clip': ?clip,
+      }));
 
   @override
   Future<Map<String, dynamic>> relocalize(String robotId,

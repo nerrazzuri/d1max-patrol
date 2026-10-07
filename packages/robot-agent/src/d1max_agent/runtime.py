@@ -255,6 +255,11 @@ class AgentRuntime:
         #: 这一次「没人监护」已经停过车了(不每拍都停一次)。
         self._lapse_stopped = False
         self.processor.supervise_hook = self._supervise
+        #: 上装(W21):警灯、警笛、聚光灯、喇叭。不是任务;喇叭的优先级仲裁在 ``DeterDesk`` 里。
+        from d1max_agent.deter import DeterDesk
+        self.deter = DeterDesk(self.hal, emit=self.events.emit,
+                               monotonic=monotonic or time.monotonic)
+        self.processor.deter_hook = self.deter.handle
         log.info("自主级别: %s%s", autonomy,
                  "(goto/巡检只在有人现场监护时才收)" if autonomy == "supervised" else "")
         #: 遥控的收帧时刻、帧有效期、租约走单调钟(W00c5c 内部评审):墙钟会被 NTP 往回拨。
@@ -494,6 +499,9 @@ class AgentRuntime:
             out["outbox_retry"] = {}
         if self.rtk is not None:
             out["rtk"] = {"source": self.rtk.kind}  # W09e:站点、手机据此显示 RTK
+        deter = self.deter.caps()
+        if deter is not None:
+            out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术
         return out
 
     async def _map_command(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:

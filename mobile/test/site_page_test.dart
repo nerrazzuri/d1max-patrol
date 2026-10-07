@@ -170,6 +170,13 @@ class FakeApi implements SiteApi {
     (intercepted['intercepts'] as List).removeWhere((z) => (z as Map)['name'] == name);
     return intercepted;
   }
+  /// 上装（W21）：记在 [calls] 里；[deterAck] 是狗回的回执。
+  Map<String, dynamic> deterAck = <String, dynamic>{'result': 'accepted'};
+  @override
+  Future<Map<String, dynamic>> deter(String robotId, String output, bool on, {double? maxS, String? clip}) async {
+    calls.add('deter $robotId $output $on${maxS == null ? '' : ' $maxS'}${clip == null ? '' : ' $clip'}');
+    return <String, dynamic>{'ack': deterAck};
+  }
   /// 布防模式（W20）：默认用真站点的夹具（访客）；切、改防区记在 [calls] 里、照着改它。
   Map<String, dynamic> modeView = Map<String, dynamic>.from(siteFixture('site_mode'));
   SiteError? modeError;

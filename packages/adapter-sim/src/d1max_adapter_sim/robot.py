@@ -45,8 +45,14 @@ class SimRobot:
                  deadband_vx: float = 0.05, stop_latency_s: float = 0.2,
                  battery_drain_pct_per_h: float = 8.0, frame_id: str = "odom",
                  latency_s: float = 0.0, gait_start_s: float = 0.0,
-                 max_decel: float = math.inf, require_clearance: bool = False) -> None:
+                 max_decel: float = math.inf, require_clearance: bool = False,
+                 payload: bool = False) -> None:
         self._now = now_ms
+        #: 上装(W21):开了就有警灯、警笛、聚光灯、喇叭。每一路记「开到几点」(按仿真的钟),到点算关。
+        self.payload = payload
+        self.deter_until: dict[str, int] = {}
+        self.deter_clip = ""
+        self.clips: tuple[str, ...] = ("warn-zh", "warn-en") if payload else ()
         self.max_vx, self.max_wz, self.deadband_vx = max_vx, max_wz, deadband_vx
         #: W11 运动模型(W08 决定 10):链路延迟(命令晚这么久生效)、起步切步态(从站着到走要等这么久)、
         #: 刹车减速度上限;旁路进程的净空许可门(``require_clearance``:没有有效许可,前进分量置零、
@@ -291,19 +297,38 @@ class SimRobot:
     async def faults(self) -> tuple[Fault, ...]:
         return tuple(self._faults)
 
-    # ------------------------------------------------------------ 执行器与媒体(都没有)
+    # ------------------------------------------------------------ 执行器与媒体(上装可选,W21)
 
     async def light(self, channel: str, on: bool) -> None:
         raise HalUnsupported("sim 没有灯")
 
+    def _deter(self, output: str, on: bool, max_s: float) -> None:
+        if not self.payload:
+            raise HalUnsupported("sim 没装上装")
+        self.deter_until[output] = self._now() + int(max_s * 1000) if on and max_s > 0 else 0
+
+    def deter_on(self, output: str) -> bool:
+        """这一路现在开着没有(到点就算关)。"""
+        return self._now() < self.deter_until.get(output, 0)
+
     async def strobe(self, channel: str, pattern: str, max_s: float) -> None:
-        raise HalUnsupported("sim 没有灯")
+        self._deter("strobe", pattern != "off", max_s)
+
+    async def siren(self, on: bool, max_s: float) -> None:
+        self._deter("siren", on, max_s)
 
     async def sound(self, clip_or_tts: str, max_s: float) -> None:
-        raise HalUnsupported("sim 没有喇叭")
+        if self.payload and clip_or_tts and not clip_or_tts.startswith("tts:") \
+                and clip_or_tts not in self.clips:
+            raise ValueError(f"没有这段话术: {clip_or_tts}")
+        self._deter("speaker", bool(clip_or_tts), max_s)
+        self.deter_clip = clip_or_tts if clip_or_tts else ""
+
+    def sound_clips(self) -> tuple[str, ...]:
+        return self.clips
 
     async def spotlight(self, on: bool, max_s: float) -> None:
-        raise HalUnsupported("sim 没有探照灯")
+        self._deter("spotlight", on, max_s)
 
     async def head(self, pan: float, tilt: float) -> None:
         raise HalUnsupported("sim 没有云台")
@@ -348,5 +373,5 @@ class SimRobot:
             control_releasable=True, recharge_mode="none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": False,
                      "joint_effort": False, "foot_force": False},
-            actuators={"light": False, "siren": False, "speaker": False, "spotlight": False,
-                       "head": False})
+            actuators={"light": False, "strobe": self.payload, "siren": self.payload,
+                       "speaker": self.payload, "spotlight": self.payload, "head": False})
