@@ -141,6 +141,26 @@ class SiteBackup:
         assert self.dest is not None
         for name, root in {"evidence": self.evidence_root, **self.more}.items():
             self._mirror_one(root, self.dest / name)
+        if self.box is not None:
+            self._seal_leftovers()
+
+    def _seal_leftovers(self) -> int:
+        """加密之前留下的明文备份(W30 外审 2):**整个备份目录**里不是密文的文件都加密、删掉明文 ——
+        包括站点上已经删了的照片、地图(镜像只跟着现有的源走,碰不到它们)。回处理了几个。"""
+        assert self.dest is not None and self.box is not None
+        n = 0
+        for f in sorted(self.dest.rglob("*")):
+            if not f.is_file() or f.is_symlink() or f.name.endswith((SEALED, ".tmp", ".part")):
+                continue
+            st = f.stat()
+            sealed = f.with_name(f.name + SEALED)
+            self.box.seal_file(f, sealed)
+            os.utime(sealed, (st.st_atime, st.st_mtime))
+            f.unlink()
+            n += 1
+        if n:
+            log.info("备份里 %d 个以前的明文文件加密了", n)
+        return n
 
     def _mirror_one(self, root: Path, out: Path) -> None:
         if not root.is_dir():

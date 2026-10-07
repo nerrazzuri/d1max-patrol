@@ -92,6 +92,9 @@ cat <<TXT
   证书包在 $HOME_DIR/ca/issued/<robot_id>/,拷到狗上:
     ca.crt robot.crt robot.key → /etc/d1max/tls/   registration.json → /etc/d1max/
 
-**备份密钥 /etc/d1max-site/backup.key 现在就离线另存一份**(U 盘、保险柜):备份是加密的,
-站点主机坏了、没有这把钥匙,备份就恢复不了(d1max-site backup-open)。
+**两把密钥现在就离线另存一份**(U 盘、保险柜;两把都不在备份里):
+  /etc/d1max-site/backup.key   备份是用它加密的:站点主机坏了、没有它,备份就解不开(d1max-site backup-open)
+  /etc/d1max-site/secrets.key  库里的摄像头口令、事件源密钥是用它加密的:恢复到新主机时要放回原来这一把,
+                               不然库能打开、口令解不开(摄像头连不上、事件源验签全拒)
+恢复步骤见 docs/W30-完工报告.md「换新主机恢复」。
 TXT

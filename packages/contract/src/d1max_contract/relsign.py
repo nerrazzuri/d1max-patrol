@@ -1,5 +1,6 @@
-"""发布包签名(W30,决策 43):发行方私钥签、狗上固化公钥验。**调系统 ``openssl``**(Ed25519,
-``pkeyutl -rawin``,OpenSSL ≥ 1.1.1),不引 Python 依赖。
+"""发布包签名(W30,决策 43):发行方私钥签、狗上固化公钥验。Ed25519,**纯 Python**
+(:mod:`d1max_contract.ed25519`,只用标准库;W30 外审 1:狗上 OpenSSL 1.1.1 的 ``pkeyutl`` 不支持
+Ed25519,原来调 ``openssl`` 的做法在狗上合法的包也验不过)。密钥文件是跟 OpenSSL 一样的 PEM。
 
 签的是 ``release.json`` 里这几项的规范 JSON:``name``、``version``、``content_sha256``
 (整棵包的指纹,不含 ``release.json`` 本身)、``requires_mission_schema``。签名(base64)写回
@@ -14,11 +15,10 @@ from __future__ import annotations
 
 import base64
 import json
-import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any
+
+from d1max_contract import ed25519
 
 SIGNED_FIELDS = ("name", "version", "content_sha256", "requires_mission_schema")
 DEFAULT_PUBKEY = Path("/etc/d1max/release-pub.pem")
@@ -36,38 +36,26 @@ def message(manifest: dict[str, Any]) -> bytes:
                                            ensure_ascii=False).encode("utf-8")
 
 
-def _openssl(args: list[str], *, openssl: str | None = None) -> subprocess.CompletedProcess:
-    exe = openssl or shutil.which("openssl") or "openssl"
-    try:
-        return subprocess.run([exe, *args], capture_output=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SignError(f"openssl 跑不起来: {exc}") from exc
-
-
 def keygen(private: Path, public: Path) -> None:
-    """生成一对 Ed25519 密钥(私钥 0600)。私钥已经在就拒(不许盖掉)。"""
+    """生成一对 Ed25519 密钥(私钥 0600,PEM 跟 OpenSSL 一样)。私钥已经在就拒(不许盖掉)。"""
+    import os
     if private.exists():
         raise SignError(f"{private} 已经有了,不盖")
     private.parent.mkdir(parents=True, exist_ok=True)
-    got = _openssl(["genpkey", "-algorithm", "ed25519", "-out", str(private)])
-    if got.returncode != 0:
-        raise SignError(f"生成私钥失败: {got.stderr.decode(errors='replace')[:200]}")
-    private.chmod(0o600)
-    got = _openssl(["pkey", "-in", str(private), "-pubout", "-out", str(public)])
-    if got.returncode != 0:
-        raise SignError(f"导出公钥失败: {got.stderr.decode(errors='replace')[:200]}")
+    seed = ed25519.new_seed()
+    fd = os.open(private, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(ed25519.private_pem(seed))
+    public.parent.mkdir(parents=True, exist_ok=True)
+    public.write_bytes(ed25519.public_pem(ed25519.public_key(seed)))
 
 
 def sign(manifest: dict[str, Any], private: Path) -> str:
-    with tempfile.TemporaryDirectory() as d:
-        msg = Path(d) / "msg"
-        msg.write_bytes(message(manifest))
-        out = Path(d) / "sig"
-        got = _openssl(["pkeyutl", "-sign", "-rawin", "-inkey", str(private), "-in", str(msg),
-                        "-out", str(out)])
-        if got.returncode != 0:
-            raise SignError(f"签名失败: {got.stderr.decode(errors='replace')[:200]}")
-        return base64.b64encode(out.read_bytes()).decode("ascii")
+    try:
+        seed = ed25519.seed_from_pem(Path(private).read_bytes())
+    except (OSError, ValueError) as exc:
+        raise SignError(f"读不了私钥 {private}: {exc}") from exc
+    return base64.b64encode(ed25519.sign(seed, message(manifest))).decode("ascii")
 
 
 def verify(manifest: dict[str, Any], public: Path) -> None:
@@ -81,13 +69,11 @@ def verify(manifest: dict[str, Any], public: Path) -> None:
         raise SignError("签名不是 base64") from exc
     if not Path(public).is_file():
         raise SignError(f"没有发行公钥 {public}")
-    with tempfile.TemporaryDirectory() as d:
-        msg, sf = Path(d) / "msg", Path(d) / "sig"
-        msg.write_bytes(message(manifest))
-        sf.write_bytes(raw)
-        got = _openssl(["pkeyutl", "-verify", "-pubin", "-inkey", str(public), "-rawin",
-                        "-in", str(msg), "-sigfile", str(sf)])
-    if got.returncode != 0:
+    try:
+        pub = ed25519.pub_from_pem(Path(public).read_bytes())
+    except (OSError, ValueError) as exc:
+        raise SignError(f"发行公钥读不了: {exc}") from exc
+    if not ed25519.verify(pub, message(manifest), raw):
         raise SignError("签名对不上(不是我们发行的,或者包被改过)")
 
 

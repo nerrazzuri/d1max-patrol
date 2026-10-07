@@ -58,6 +58,8 @@ class RunDesk:
         self._judging = threading.Lock()
         #: ``review.json`` 是读、改、写:两个人同时复核不同的照片不许丢一条(内部评审)。
         self._reviewing = threading.Lock()
+        #: 导出「打完换上」跟「删证据时连导出一起删」互斥(W30 外审 3):打完先核一遍里面的记录都还在。
+        self._export_lock = threading.Lock()
         #: 正在后台判的(同一趟不叠着判)。
         self._judging_ids: set[int] = set()
 
@@ -212,6 +214,7 @@ class RunDesk:
         name = f"export-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(self._now() / 1000))}-" \
                f"{uuid.uuid4().hex[:6]}"
         meta = {"name": f"{name}.zip", "state": "building", "runs": len(runs),
+                "run_ids": [r["id"] for r in runs],
                 "since_ms": since_ms, "until_ms": until_ms, "robot_id": robot_id,
                 "created_ms": self._now()}
         self._write_meta(meta)
@@ -250,7 +253,12 @@ class RunDesk:
                     "since_ms": meta["since_ms"], "until_ms": meta["until_ms"],
                     "robot_id": meta["robot_id"], "runs": len(runs), "files": listing},
                     ensure_ascii=False, indent=2))
-            os.replace(tmp, path)
+            with self._export_lock:
+                # 打的时候有记录被删了(当事人要求删除、过了留存期):这份作废,不留副本(W30 外审 3)
+                gone = [r["id"] for r in runs if self.store.run(r["id"]) is None]
+                if gone:
+                    raise RunError(f"打包时这几趟记录被删了:{gone[:10]},这份导出作废")
+                os.replace(tmp, path)
             meta = meta | {"state": "ready", "size": path.stat().st_size,
                            "sha256": sha256_file(path), "files": len(listing)}
         except Exception as exc:
@@ -279,6 +287,29 @@ class RunDesk:
         if not name.endswith(".zip") or not p.is_file():
             raise RunError(f"没有这份导出(或还在打): {name}")
         return p
+
+    def drop_exports(self, run_ids: set[int]) -> int:
+        """删证据时连导出一起删(W30 外审 3):里面有这几趟的导出(zip、说明)都删;老的导出没记是哪几趟,
+        也删(宁可多删,它们本来就只留 7 天)。正在打的,打完核一遍时自己作废。回删了几份。"""
+        if not run_ids or not self.exports_dir.is_dir():
+            return 0
+        n = 0
+        with self._export_lock:
+            for m in self.exports_dir.glob("export-*.json"):
+                try:
+                    meta = json.loads(m.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    meta = {}
+                ids = meta.get("run_ids")
+                if isinstance(ids, list) and not set(ids) & run_ids:
+                    continue
+                zp = m.with_suffix(".zip")
+                for p in (zp, m):
+                    p.unlink(missing_ok=True)
+                n += 1
+        if n:
+            log.info("删证据连带删了 %d 份导出", n)
+        return n
 
     def _prune_exports(self) -> None:
         cutoff = time.time() - EXPORT_KEEP_DAYS * 86400

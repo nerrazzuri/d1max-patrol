@@ -7,6 +7,8 @@
 - **按时间段删**(当事人要求删除时;只能按时间、地点 —— 第一版不认人脸,认不出哪张是谁):
   ``d1max-site privacy-purge``,删这段时间里的运行记录和录像(连备份),标了「留着」的不删、单独列出来;
   记审计。
+- **删证据连导出一起删**(到期删、按时间段删都是;W30 外审 3):里面有被删的那几趟的导出包删掉;
+  正在打的,打完核一遍,里面有被删的就作废。
 - **谁看过、导出过**:看照片、看一趟的记录、放录像、看实时画面、下载导出包,都记审计(同一个人看同一样
   东西 10 分钟内只记一次),见 ``api``。
 """
@@ -28,8 +30,10 @@ DAY_MS = 86_400_000
 class PrivacyDesk:
     def __init__(self, db: Any, evidence: Any, *, now_ms: Callable[[], int],
                  recordings: Any = None, backup_dest: Path | None = None,
-                 keep_days: int = KEEP_DAYS) -> None:
+                 keep_days: int = KEEP_DAYS, exports: Any = None) -> None:
         self.db = db
+        #: 导出(``runs.RunDesk``):删证据时连里面有这几趟的导出一起删(W30 外审 3)。
+        self.exports = exports
         self.evidence = evidence
         self.recordings = recordings
         self.backup_dest = Path(backup_dest) if backup_dest else None
@@ -59,7 +63,9 @@ class PrivacyDesk:
         cutoff = self._now() - self.keep_days * DAY_MS
         rows = [dict(r) for r in self.db.query(
             "SELECT * FROM runs WHERE keep=0 AND last_ms<? ORDER BY last_ms LIMIT 500", (cutoff,))]
-        n = sum(self._delete_run(r) for r in rows)
+        done = {r["id"] for r in rows if self._delete_run(r)}
+        self._drop_exports(done)
+        n = len(done)
         if n:
             log.info("运行记录过了 %d 天留存期:删了 %d 趟", self.keep_days, n)
         return n
@@ -77,13 +83,16 @@ class PrivacyDesk:
             args.append(robot_id)
         out: dict[str, Any] = {"runs": 0, "recordings": 0, "held_runs": [],
                                "held_recordings": [], "failed": 0}
+        done: set[int] = set()
         for r in [dict(x) for x in self.db.query(q, tuple(args))]:
             if r["keep"]:
                 out["held_runs"].append(r["id"])
             elif self._delete_run(r):
                 out["runs"] += 1
+                done.add(r["id"])
             else:
                 out["failed"] += 1
+        out["exports"] = self._drop_exports(done)
         if self.recordings is not None:
             q = "SELECT * FROM recordings WHERE start_ms>=? AND start_ms<?"
             args = [since_ms, until_ms]
@@ -98,6 +107,11 @@ class PrivacyDesk:
                 else:
                     out["failed"] += 1
         return out
+
+    def _drop_exports(self, run_ids: set[int]) -> int:
+        if self.exports is None or not run_ids:
+            return 0
+        return self.exports.drop_exports(run_ids)
 
     def set_keep(self, run_id: int, keep: bool) -> dict[str, Any]:
         with self.db.tx() as c:
