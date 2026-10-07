@@ -59,6 +59,8 @@ class _Frame:
     known: Any
     size: int
     res: float
+    #: 可疑的格子(W29 复查,决策 42):这一帧可疑 = 挡,旧帧的「空」补不上来。
+    suspect: Any = None
 
 
 @dataclass
@@ -110,7 +112,8 @@ class ObstacleView:
         self.frames.appendleft(_Frame(at=now, pose=pose,
                                       occ=np.frombuffer(occ, dtype=np.uint8),
                                       known=np.frombuffer(known, dtype=np.uint8),
-                                      size=g.size, res=g.res))
+                                      size=g.size, res=g.res,
+                                      suspect=np.frombuffer(g.suspect_bits(), dtype=np.uint8)))
         while self.frames and now - self.frames[-1].at > self.memory_s:
             self.frames.pop()
 
@@ -181,6 +184,10 @@ class ObstacleView:
             k = np.where(inb, r * f.size + cc, 0)
             seen = inb & (f.known[k] == 1)
             res[seen] = f.occ[k[seen]]
+            if f.suspect is not None:
+                # 这一帧说这一格可疑(孤立凸起点,可能是细杆子):当挡,不往更旧的帧找(决策 42)
+                sus = inb & (f.suspect[k] == 1)
+                res[sus] = 1
         if (res < 0).any():
             res[(res < 0) & self._self_swept(wx, wy)] = 0
         return np.nonzero(res == 1)[0].tolist(), np.nonzero(res < 0)[0].tolist()

@@ -45,6 +45,8 @@ class 假派遣:
         self.clients = dogs
         self.aborts, self.caps = [], []
         self.fail = False
+        self.pushed: list[dict] = []
+        self.feed = SimpleNamespace(publish=self.pushed.append)
 
     def _fresh(self, c):
         return c.fresh
@@ -239,9 +241,12 @@ def test_接口_保安业主都能切_切成雷暴记审计_不合规矩400_没�
 
 class 假待命:
     def __init__(self):
-        self.back, self.fail, self.reject = [], 0, 0
+        self.back, self.fail, self.reject, self.unsafe = [], 0, 0, ""
 
-    async def return_to(self, rid, *, issued_by):
+    async def return_after_once(self, rid, after, *, issued_by):
+        if self.unsafe:
+            from d1max_site.standby import StandbyError
+            raise StandbyError(self.unsafe)
         if self.fail:
             self.fail -= 1
             raise RuntimeError("狗没就绪")
@@ -331,3 +336,19 @@ async def test_外审2_限速_狗不重发能力也按时续_站点重启先补�
     t.clock.go(15)
     await desk3.tick()
     assert t.disp.caps[-2:] == [("A", "拒"), ("A", "拒")], "被拒不算发成:15 秒后再发"
+
+
+
+async def test_W29复查_回不得_意图作废_报没回待命点_不再派(台):
+    t = 台
+    t.desk.standby = stb = 假待命()
+    stb.unsafe = "sched-1 只报了 1/3 个点到了,不知道狗停在哪,不回"
+    t.disp.clients = {"A": _狗("sched-1")}
+    t.desk.set_manual("storm", by="gina")
+    await t.desk.tick()
+    _任务(t, "A", "sched-1", "aborted")
+    t.clock.go(15)
+    await t.desk.tick()
+    assert stb.back == [] and not t.db.query("SELECT 1 FROM weather_returns")
+    [f] = [i for i in t.disp.pushed if i["kind"] == "standby_failed"]
+    assert f["robot_id"] == "A" and "原地等" in f["reason"] and "不知道狗停在哪" in f["reason"]
