@@ -471,3 +471,20 @@ def test_W29外审4_稀疏的真东西_同格有地面点_滤掉后是未知不�
     ground_only = classify(np.array([[2.05, 0.05, -H]]), H, cfg)
     assert ground_only[1][_cell(cfg, 2.05, 0.05)] and not ground_only[0][_cell(cfg, 2.05, 0.05)], \
         "只有地面点:看见了、空"
+
+
+def test_W29复查_感知节点把可疑格子报给代理_没有可疑就不带():
+    m = Mount.from_frames(AIRY)
+    obs = 假对端()
+    per = Perception(m, cfg=Config(), obs=LineClient(lambda: obs.a, {"t": "hello", "proto": 1}))
+    per.check = SelfCheck(frames=2)
+    lone = np.array([[1.55, 0.55, -H + 0.5]])
+    sensor = 到雷达系(m, np.vstack([场景(), lone]))
+    per.on_front(sensor, 10)
+    g = per.on_front(sensor, 20)
+    assert g["check"] == "ok" and "suspect" in g
+    grid = Grid(**{k: v for k, v in obs.read()[-1].items() if k != "t"})
+    sus = grid.suspect_bits()
+    assert sus[_cell(Config(), 1.55, 0.55)] and sum(sus) == 1
+    clean = per.on_front(到雷达系(m, 场景()), 30)
+    assert "suspect" not in clean, "没有可疑:不带(老代理照收)"

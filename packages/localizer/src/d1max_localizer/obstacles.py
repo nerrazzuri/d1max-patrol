@@ -253,13 +253,20 @@ class SelfCheck:
 def classify(pts_base: Any, height: float, cfg: Config = DEFAULT) -> tuple[bytes, bytes]:
     """狗身系的点(z 相对雷达)→ (挡, 看见过) 两张 ``size × size`` 的 0 / 1 位图
     (行 = x 朝前,列 = y 朝左)。"""
+    occ, known, _ = classify_full(pts_base, height, cfg)
+    return occ, known
+
+
+def classify_full(pts_base: Any, height: float, cfg: Config = DEFAULT
+                  ) -> tuple[bytes, bytes, bytes]:
+    """同 :func:`classify`,多一张「可疑」(滤雨点滤掉的格子;W29 复查,决策 42:代理当挡)。"""
     import numpy as np
     p = np.asarray(pts_base, dtype=float)
     n = cfg.size
     occ = np.zeros(n * n, dtype=np.uint8)
     known = np.zeros(n * n, dtype=np.uint8)
     if len(p) == 0:
-        return occ.tobytes(), known.tobytes()
+        return occ.tobytes(), known.tobytes(), bytes(n * n)
     h = p[:, 2] + height
     hl, hw = cfg.body_len / 2 + cfg.margin, cfg.body_wid / 2 + cfg.margin
     body = (np.abs(p[:, 0]) <= hl) & (np.abs(p[:, 1]) <= hw) & (h < cfg.h_hi)
@@ -286,7 +293,8 @@ def classify(pts_base: Any, height: float, cfg: Config = DEFAULT) -> tuple[bytes
         # 滤掉的格子**算没看见**(W29 外审 4):那一格打到了地面也不能当空 —— 可能是稀疏的真东西
         # (细杆子)。雨滴一闪就没,代理的滚动记忆往回找得到前几帧看见过的;真东西每帧都这样,一直是未知
         known[lone & (occ == 0)] = 0
-    return occ.tobytes(), known.tobytes()
+    sus = (lone & (occ == 0)).astype(np.uint8) if lone is not None else np.zeros(n * n, np.uint8)
+    return occ.tobytes(), known.tobytes(), sus.tobytes()
 
 
 def clear_distance(occ: bytes, known: bytes, cfg: Config = DEFAULT, *,
@@ -489,18 +497,22 @@ class Perception:
             return grid
         rear = (self._rear_pts is not None
                 and self._clock() - self._rear_at <= self.rear_max_age_s)
-        occ, known = classify(p, self.check.height, self.cfg)
+        occ, known, sus = classify_full(p, self.check.height, self.cfg)
         if rear:
             # 没标定(几何初值):只用它的「挡」,不用它的「空」放行;标过(W09i)两样都用
-            occ_r, known_r = classify(self._rear_pts, self.check.height, self.cfg)
+            occ_r, known_r, sus_r = classify_full(self._rear_pts, self.check.height, self.cfg)
             occ = bytes(a | b for a, b in zip(occ, occ_r, strict=True))
             seen = known_r if self.rear_cal else occ_r
             known = bytes(a | b for a, b in zip(known, seen, strict=True))
+            sus = bytes(a | b for a, b in zip(sus, sus_r, strict=True))
+        sus = bytes(s & (1 - o) for s, o in zip(sus, occ, strict=True))   # 已经挡的不用再标
         self.seq += 1
         grid = {"t": "grid", "seq": self.seq, "stamp_ns": max(0, int(stamp_ns)),
                 "res": self.cfg.res, "size": n, "occ": pack_bits(occ, n),
                 "known": pack_bits(known, n), "rear": bool(rear), "rear_cal": self.rear_cal,
                 "check": self.check.check, "reason": self.check.reason[:200]}
+        if any(sus):
+            grid["suspect"] = pack_bits(sus, n)
         if self.obs is not None:
             self.obs.send(grid)
         self.last_clear = clear_distance(occ, known, self.cfg)

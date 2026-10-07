@@ -605,3 +605,42 @@ async def test_W14外审_站点重启之后晚到的结束事件_照派单时的
     assert 重启后._target("A", "sched-abc") == "gate"
     assert 重启后._target("A", "sched-old") is None, "老记录没写:回默认的"
     assert 重启后._target("A", "task-1") is None
+
+
+async def _雷暴撤了一半的巡检(t):
+    """巡检跑到一半被撤(雷暴撤巡检那样):回程意图落库、撤、等停稳。回 task_id。"""
+    from d1max_site.weather import WeatherDesk
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    r = await t.send(t.site.patrol("A", _巡检, issued_by="schedule:x", priority=MANUAL))
+    tid = r["task_id"]
+    await t.run(15)
+    with t.db.tx() as c:
+        c.execute("INSERT INTO weather_returns(robot_id, task_id, created_ms) VALUES ('A',?,0)",
+                  (tid,))
+    await t.send(t.site.abort("A", tid, issued_by="weather"))
+    await t.run(60)
+    w = WeatherDesk(t.db, t.site, now_ms=t.clock, latlon=None)
+    w.standby = t.stb
+    return tid, w
+
+
+async def test_W29复查_雷暴撤了一半_直线狗来路不明_不回_原地等_报没回待命点(站):
+    t = 站
+    tid, w = await _雷暴撤了一半的巡检(t)
+    sub = t.site.feed.subscribe()
+    await t.send(w.tick())
+    assert not _cmds(t, "goto") and len(_cmds(t, "patrol")) == 1, "不派直线回程,也不派回程巡检"
+    failed = [i for i in _feed(sub) if i["kind"] == "standby_failed"]
+    assert failed and "雷暴" in failed[-1]["reason"] and "原地等" in failed[-1]["reason"]
+    assert not t.db.query("SELECT 1 FROM weather_returns"), "回不得:意图作废(已经告警叫人)"
+
+
+async def test_W29复查_雷暴撤了一半_会规划的狗规划回去(站):
+    t = 站
+    t.site.clients["A"].capabilities.tasks["goto"]["path"] = "planned"
+    tid, w = await _雷暴撤了一半的巡检(t)
+    await t.send(w.tick())
+    gotos = _cmds(t, "goto")
+    assert len(gotos) == 1 and gotos[0]["task_id"].startswith("standby-")
+    assert gotos[0]["issued_by"] == "weather:storm"
+    assert not t.db.query("SELECT 1 FROM weather_returns")

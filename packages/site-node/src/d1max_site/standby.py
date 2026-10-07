@@ -398,6 +398,21 @@ class StandbyManager:
             self.dispatcher.feed.publish({"kind": "standby_failed", "robot_id": robot_id,
                                           "after": after, "reason": str(exc)})
 
+    async def return_after_once(self, robot_id: str, after: str, *,
+                                issued_by: str) -> dict[str, Any]:
+        """``after`` 那一趟**被撤了**之后回待命点(W29 复查:雷暴撤巡检)。跟跑完自动回**同一套规矩**:
+        要人监护的不回;会规划的狗规划回去;直线的狗只沿来路回,**来路确认不了**(巡检半路被撤,
+        不知道停在哪)抛 :class:`StandbyError` —— 调用方让狗原地等、告警。
+        不重试(调用方过一阵再来)。"""
+        why = self.refusal(robot_id) if self.refusal is not None else ""
+        if why:
+            raise StandbyError(why)
+        name = self._target(robot_id, after)
+        came = self._route_back(robot_id, after, name)
+        if came is None:
+            return await self.return_to(robot_id, issued_by=issued_by, name=name)
+        return await self._return_along(robot_id, came, name)
+
     async def _dispatch_back(self, robot_id: str, after: str) -> Any:
         """派回程;碰上**暂时性**的拒绝限时再试(W09h 内审再议 1):代理重连时先补事件、后发状态,
         补上来的「任务完成」触发回程时,站点还没估出钟差(重连后要攒十来条遥测)、状态还不新鲜 ——

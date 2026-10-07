@@ -20,7 +20,8 @@
   撤掉的是 ``task_aborted``):撤之前先把「这台狗撤完要回待命点」落库(``weather_returns``)。
   每拍对账:那一趟还在跑 → 等;狗空了(没任务,或者任务是那一趟、已经结束)→ 派回待命点,
   派成了才删;**狗在跑别的了(人派的、入侵派的)→ 作废**,不抢。派不成每 15 秒再派。
-  站点重启后照样接着办。
+  站点重启后照样接着办。**回程走待命点管理器的那一套规矩**(W29 复查):会规划的狗规划回去;
+  直线的狗只沿来路回,巡检半路被撤、来路确认不了 → 不回,狗原地等,报「没回待命点」叫人。
 - 每拍对每台在线、新鲜、报了 ``speed_cap`` 的狗:狗上的限速跟该有的不一样就发;一样的话,
   **按站点自己记的上次发成的时刻**,过了有效期的一半就续(W29 外审 2:狗只在限速变了时重发能力,
   能力里的 ``left_s`` 是那时的快照,不是倒计时)。站点重启后不知道上次什么时候发的:先补发一次。
@@ -252,8 +253,19 @@ class WeatherDesk:
             if now - self._back_ms.get(rid, -10**12) < RESEND_S * 1000:
                 continue
             self._back_ms[rid] = now
+            from d1max_site.standby import StandbyError
             try:
-                got = await self.standby.return_to(rid, issued_by="weather:storm")
+                got = await self.standby.return_after_once(rid, tid, issued_by="weather:storm")
+            except StandbyError as exc:
+                # 回不得(直线的狗来路不明、要人监护……):不回,原地等,告诉值守的人(W29 复查)
+                self._drop_return(rid, f"回不得,原地等:{exc}")
+                try:
+                    self.dispatcher.feed.publish({
+                        "kind": "standby_failed", "robot_id": rid, "after": tid,
+                        "reason": f"雷暴撤了巡检,不能安全回待命点({exc}),狗原地等,要人到场"})
+                except Exception:
+                    log.exception("回不得的告警推不出去")
+                continue
             except Exception as exc:  # noqa: BLE001 - 不在线、没就绪:过一会儿再派
                 log.warning("雷暴撤巡检后 %s 回待命点没派成(%d 秒后再派):%s", rid, RESEND_S, exc)
                 continue

@@ -101,6 +101,9 @@ class Grid:
     rear_cal: bool = False
     check: str = "ok"
     reason: str = ""
+    #: 可疑的格子(W29 复查,决策 42):孤立的凸起点被当雨点滤掉的格子。base64 位图,空串 = 没有。
+    #: 代理那头**这一帧可疑就当挡**,旧帧看见过的「空」不许补上来。
+    suspect: str = ""
 
     def __post_init__(self) -> None:
         _pos_int(self.seq, "seq")
@@ -121,6 +124,14 @@ class Grid:
             if not isinstance(v, str):
                 raise ContractError(f"障碍桥:{name} 要是 base64 字符串")
             unpack_bits(v, self.size)                 # 长度、编码都核一遍
+        if not isinstance(self.suspect, str):
+            raise ContractError("障碍桥:suspect 要是 base64 字符串")
+        if self.suspect:
+            unpack_bits(self.suspect, self.size)
+
+    def suspect_bits(self) -> bytes:
+        """→ 可疑的格子,``size × size`` 个 0 / 1(没带就全 0)。"""
+        return unpack_bits(self.suspect, self.size) if self.suspect else bytes(self.size ** 2)
 
     def bits(self) -> tuple[bytes, bytes]:
         """→ (挡, 看见过),各 ``size × size`` 个 0 / 1。"""
