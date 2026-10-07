@@ -352,3 +352,24 @@ def test_回执与晚到的事件同时登记_这张图上的默认待命点不�
     stb.list = real
     [p] = stb.list("A")
     assert p["default"], "这张图上的默认待命点还在"
+
+
+def test_W23_在这儿设拦截点_走不到就不收_409带原因(站点):
+    from types import SimpleNamespace
+
+    from d1max_site.incidents import IncidentDesk
+    s = 站点
+    alice = _登(s, "alice")
+    _能标(s)
+    s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=s.disp._now)
+
+    class 走不到:
+        def check(self, name, map_id, version, x, y):
+            return SimpleNamespace(problem=f"从待命点走不到 {name}(门太窄)", note="")
+
+        def key(self, *a):
+            return "k"
+    s.api.incidents.reach = 走不到()
+    code, d = s.req("POST", "/api/robots/A/intercept/here", {"name": "gate"}, token=alice)
+    assert code == 409 and "门太窄" in d["error"], d
+    assert s.api.incidents.intercept("gate") is None

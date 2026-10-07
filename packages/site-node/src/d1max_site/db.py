@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 23                      # W22 复查:驱离的收尾意图落库(deter_sessions.ending)
+SCHEMA_VERSION = 24                      # W23:拦截点走不走得到(intercepts.reach*)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -362,6 +362,11 @@ _ADDED_COLUMNS = (
     # W22 复查:这一场要收尾了(原因);空 = 没在收尾。站点重启读到就只接着收尾,不再开任何东西。
     ("deter_sessions", "ending", "TEXT NOT NULL DEFAULT ''"),
     ("deter_sessions", "ending_back", "INTEGER NOT NULL DEFAULT 0"),
+    # W23:拦截点走不走得到。reach 非空 = 走不到(派单不派);reach_note = 查不了的那几样;reach_key =
+    # 查的时候的指纹(点、区域修订、待命点、图),变了站点重查。老行空着:下一拍对账时查。
+    ("intercepts", "reach", "TEXT NOT NULL DEFAULT ''"),
+    ("intercepts", "reach_note", "TEXT NOT NULL DEFAULT ''"),
+    ("intercepts", "reach_key", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

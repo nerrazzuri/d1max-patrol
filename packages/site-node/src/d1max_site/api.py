@@ -1028,7 +1028,10 @@ class _Handler(TlsHandlerMixin):
         try:
             desk.set_intercept(name, map_id=data["map_id"], map_version=data["map_version"],
                                x=data["x"], y=data["y"], yaw=data["yaw"])
-        except (IncidentError, KeyError) as exc:
+        except IncidentError as exc:
+            # W23:狗站的这个位置走不到、站不下、不在图上:不收,原因原样给人
+            raise HttpError(409, str(exc), extra={"data": data}) from exc
+        except KeyError as exc:
             raise HttpError(500, f"站点登记拦截点没成:{exc}", extra={"data": data}) from exc
         self._audit_detail |= {"map": f"{data['map_id']}:{data['map_version']}",
                                "x": data["x"], "y": data["y"]}

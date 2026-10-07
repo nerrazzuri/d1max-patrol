@@ -1281,7 +1281,7 @@ def test_站点安装脚本不碰狗_狗的安装脚本不碰站点():
     assert site.index("apt-get update") < site.index("apt-get install"), "新机器不 update 装不上"
     assert "enable --now d1max-mosquitto.service d1max-site.service" in site
     assert 'if [[ ! -f "$HOME_DIR/site.json" ]]' in site, "重跑不许重建 CA"
-    assert 'packages/contract[mqtt]" "$PKG/packages/site-node"' in site
+    assert 'packages/contract[mqtt,planning]" "$PKG/packages/site-node"' in site
 
 
 def test_站点安装脚本语法():

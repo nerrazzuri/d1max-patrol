@@ -139,6 +139,7 @@ String incidentOutcomeText(String outcome) => switch (outcome) {
       'dispatch_failed' => '派了，狗没收',
       'ignored_type' => '不是入侵，只记账',
       'disarmed' => '撤防中，只记录（没派狗、没响铃）',
+      'unreachable' => '拦截点走不到，没狗去',
       _ => outcome,
     };
 

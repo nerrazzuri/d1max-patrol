@@ -11,7 +11,7 @@
 (``dispatching``)也算合并目标;它最终派失败了,就把并进来的第一条**提升**成新的出动,其余的改并到它。
 
 每条事件都进 ``incidents`` 表,去向:``dispatched``、``merged``、``duplicate``、``unmapped``
-(防区没映射)、``ignored_type``(类型不认)、``disarmed``(W20:这个防区按当前模式撤防,只记账、不派狗、
+(防区没映射)、``unreachable``(W23:拦截点走不到)、``ignored_type``(类型不认)、``disarmed``(W20:这个防区按当前模式撤防,只记账、不派狗、
 不报告警)、``no_robot``、``dispatch_failed``;派出去的那条,结果由事件回写 ``result``。
 """
 
@@ -52,7 +52,8 @@ TYPES = frozenset({"intrusion"})
 #: 合并进已出动的,
 #: 说「有入侵、谁去了」;没狗、没映射、派失败,说「有入侵、没狗去」。``duplicate``、``ignored_type``
 #: 不报。
-ALERT_OUTCOMES = frozenset({"dispatched", "merged", "no_robot", "unmapped", "dispatch_failed"})
+ALERT_OUTCOMES = frozenset({"dispatched", "merged", "no_robot", "unmapped", "dispatch_failed",
+                            "unreachable"})
 #: 每个事件源每分钟最多收这么多条(W16,W00c2c 取舍 6):摄像头抽风、密钥漏了被人刷,不能把站点和狗
 #: 拖垮。超了回 429,记日志,报一次告警(``on_throttled``)。一个庄园的入侵事件远到不了这个数。
 RATE_PER_MIN = 30
@@ -94,6 +95,8 @@ class IncidentDesk:
         self.arming: Any = None
         #: 正在驱离的狗(W22,``DeterrenceDesk.busy``):不派它去别的拦截点。
         self.busy: Callable[[], set[str]] | None = None
+        #: 拦截点走不走得到(W23,``intercept_reach.InterceptReach``)。没接(命令行、老测试)就不查。
+        self.reach: Any = None
         #: 每个事件源最近一分钟收过的时刻。接口是多线程的:「清掉一分钟前的、判断、
         #: 记一笔」得在一把锁里
         #: 一次做完(W16 外审:不加锁 40 个并发请求全放行)。
@@ -177,12 +180,40 @@ class IncidentDesk:
             if not ok:
                 raise IncidentError(f"{k} 要是有限数")
             xs.append(float(v))
+        problem = note = key = ""
+        if self.reach is not None:
+            # W23:设的时候就查;走不到、站不下、不在图上的不收(说原因)
+            r = self.reach.check(name, map_id, map_version, xs[0], xs[1])
+            if r.problem:
+                raise IncidentError(f"拦截点 {name} 设不了:{r.problem}")
+            note, key = r.note, self.reach.key(map_id, map_version, xs[0], xs[1])
         with self.db.tx() as c:
-            c.execute("INSERT INTO intercepts(name, map_id, map_version, x, y, yaw) "
-                      "VALUES (?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
-                      "map_id=excluded.map_id, map_version=excluded.map_version, "
-                      "x=excluded.x, y=excluded.y, yaw=excluded.yaw",
-                      (name, map_id, map_version, *xs))
+            c.execute("INSERT INTO intercepts(name, map_id, map_version, x, y, yaw, reach, "
+                      "reach_note, reach_key) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO "
+                      "UPDATE SET map_id=excluded.map_id, map_version=excluded.map_version, "
+                      "x=excluded.x, y=excluded.y, yaw=excluded.yaw, reach=excluded.reach, "
+                      "reach_note=excluded.reach_note, reach_key=excluded.reach_key",
+                      (name, map_id, map_version, *xs, problem, note, key))
+
+    def recheck_intercepts(self) -> int:
+        """站点每 30 秒(杂事线程)对账一次:指纹变了的(地图、禁行区、待命点改过)重查。回重查了几个。
+        派单只读这里查好的结果 —— 事件循环里不规划。"""
+        if self.reach is None:
+            return 0
+        n = 0
+        for p in self.db.query("SELECT * FROM intercepts"):
+            key = self.reach.key(p["map_id"], p["map_version"], p["x"], p["y"])
+            if key == p["reach_key"]:
+                continue
+            r = self.reach.check(p["name"], p["map_id"], p["map_version"], p["x"], p["y"])
+            with self.db.tx() as c:
+                c.execute("UPDATE intercepts SET reach=?, reach_note=?, reach_key=? WHERE name=? "
+                          "AND x=? AND y=? AND map_version=?",
+                          (r.problem, r.note, key, p["name"], p["x"], p["y"], p["map_version"]))
+            if r.problem and r.problem != p["reach"]:
+                log.warning("拦截点 %s 现在走不到了: %s", p["name"], r.problem)
+            n += 1
+        return n
 
     def map_zone(self, zone: str, intercept: str) -> None:
         if not isinstance(zone, str) or not SAFE_ID.match(zone):
@@ -197,9 +228,20 @@ class IncidentDesk:
 
     def intercepts(self) -> dict[str, list[dict[str, Any]]]:
         """拦截点与防区(W16,手机用)。"""
-        return {"intercepts": [dict(r) for r in self.db.query(
-                    "SELECT * FROM intercepts ORDER BY name")],
+        latest = self._latest_versions()
+        return {"intercepts": [dict(r) | {"newer_version": latest.get(r["map_id"])
+                                          if latest.get(r["map_id"]) not in (None, r["map_version"])
+                                          else None}
+                               for r in self.db.query("SELECT * FROM intercepts ORDER BY name")],
                 "zones": [dict(r) for r in self.db.query("SELECT * FROM zones ORDER BY zone")]}
+
+    def _latest_versions(self) -> dict[str, str]:
+        """每张图站点上最新的那一版(W23:拦截点登记在旧版本上的,手机上标「要在新图上重设」)。"""
+        try:
+            rows = self.db.query("SELECT map_id, version FROM maps ORDER BY created_ms")
+        except sqlite3.Error:
+            return {}
+        return {r["map_id"]: r["version"] for r in rows}
 
     def remove_intercept(self, name: str) -> None:
         """删一个拦截点(W16)。还有防区指着它就不删(不然那几个防区的入侵就成了「没映射」,不知不觉)。"""
@@ -363,6 +405,10 @@ class IncidentDesk:
             if z is None:
                 return self._set(c, iid, outcome="unmapped", note="防区没映射到拦截点")
             point = self.intercept(z["intercept"])
+            if point.get("reach"):
+                # W23:查好的结果说走不到(地图、禁行区改过之后):不派,照样报「没狗去」
+                return self._set(c, iid, outcome="unreachable", intercept=point["name"],
+                                 note=f"拦截点走不到:{point['reach']}")
             leader = self._merge_target(c, ev["zone"], exclude=iid)
             if leader is not None:
                 return self._set(c, iid, outcome="merged", intercept=point["name"],

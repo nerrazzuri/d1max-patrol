@@ -52,7 +52,7 @@ install -d -m 0750 -o d1max-site -g d1max-site "$HOME_DIR"
 
 echo "[3/5] Python 环境"
 [[ -x "$VENV/bin/python" ]] || python3 -m venv "$VENV"
-"$VENV/bin/pip" install --upgrade "$PKG/packages/contract[mqtt]" "$PKG/packages/site-node"
+"$VENV/bin/pip" install --upgrade "$PKG/packages/contract[mqtt,planning]" "$PKG/packages/site-node"
 
 echo "[4/5] 站点目录"
 if [[ ! -f "$HOME_DIR/site.json" ]]; then
