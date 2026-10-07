@@ -1,5 +1,7 @@
 // 布防模式（W20）：首页那一行；保安只能切到布防、业主能切在家和访客（挑防区、挑时长）、管理员改「在家时撤防」；
 // 站点推「模式变了」当场换；事件页的「撤防中」说人话。横屏 800×360。
+import 'dart:async';
+
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/ui/site_mode.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
@@ -95,6 +97,30 @@ void main() {
     expect(find.textContaining('切到在家没成'), findsOneWidget);
     await _open(t, FakeApi('owner')..modeError = const SiteError(404, '没开'));
     expect(find.text('这个站点没开布防模式'), findsOneWidget);
+  });
+
+  testWidgets('模式页：别的手机撤防了，站点推一帧，当场换、布防按钮能按了（W20 外审）', (t) async {
+    final api = FakeApi('guard')..modeView = <String, dynamic>{...siteFixture('site_mode'), 'mode': 'armed'};
+    await _open(t, api);
+    expect(find.text('现在：布防'), findsOneWidget);
+    expect(t.widget<ButtonStyleButton>(find.byKey(SiteModePage.armKey)).onPressed, isNull);
+    api.sse.add(<String, dynamic>{'kind': 'mode', 'mode': <String, dynamic>{...api.modeView, 'mode': 'home'}});
+    await t.pump(const Duration(milliseconds: 50));
+    expect(find.text('现在：在家'), findsOneWidget);
+    expect(t.widget<ButtonStyleButton>(find.byKey(SiteModePage.armKey)).onPressed, isNotNull);
+  });
+
+  testWidgets('模式页：断线重连后重新拉一次（断线期间错过的切换补上）', (t) async {
+    final api = FakeApi('guard')..modeView = <String, dynamic>{...siteFixture('site_mode'), 'mode': 'armed'};
+    await _open(t, api);
+    final opened = api.eventsOpened;
+    final old = api.sse;
+    api.sse = StreamController<Map<String, dynamic>>.broadcast();
+    api.modeView = <String, dynamic>{...api.modeView, 'mode': 'home'}; // 断线期间业主撤防了
+    await old.close();
+    await t.pump(const Duration(seconds: 6));
+    expect(api.eventsOpened, greaterThan(opened));
+    expect(find.text('现在：在家'), findsOneWidget);
   });
 
   testWidgets('首页：模式那一行；站点推「模式变了」当场换；点进去是模式页', (t) async {

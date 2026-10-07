@@ -7,7 +7,7 @@ import json
 import pytest
 from test_site_api import PW, 站
 from test_site_dispatcher import 台子
-from test_site_incidents import _gotos, _报
+from test_site_incidents import _gotos, _两台狗, _假派单, _报, _签好
 
 from d1max_site.db import SiteDB
 from d1max_site.incidents import IncidentDesk
@@ -154,6 +154,100 @@ async def test_访客撤的防区不派_别的防区照派(事件台):
     assert (await _报(t, "e2", zone="back"))["outcome"] == "dispatched"
 
 
+async def _首单卡住_并进几条(t, monkeypatch, n=2):
+    """布防时首单派出去在等回执,同防区又来 ``n`` 条并进它。回 (假派单, 首单那个 handle)。"""
+    import asyncio
+    await _两台狗(t)
+    fake = _假派单(results=("rejected",))
+    monkeypatch.setattr(t.site, "goto", fake)
+    h1 = asyncio.ensure_future(t.desk.handle("nvr-1", _签好(t, "e1")))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    for i in range(n):
+        r = await asyncio.wait_for(t.desk.handle("nvr-1", _签好(t, f"e{i + 2}")), 2)
+        assert r["outcome"] == "merged"
+    return fake, h1
+
+
+async def _放行首单(t, fake, h1):
+    import asyncio
+    fake.gate.set()                                  # 首单:狗拒了 → 派失败 → 走提升
+    await asyncio.wait_for(h1, 2)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    await asyncio.wait_for(t.desk.drain(), 2)
+
+
+async def test_W20外审_合并之后撤防_首单派失败_并进来的都不再派(事件台, monkeypatch):
+    t = 事件台
+    t.desk.arming = ArmingDesk(t.db, now_ms=t.clock)
+    t.desk.arming.set_zone_home("front-yard", False)
+    fake, h1 = await _首单卡住_并进几条(t, monkeypatch, n=2)
+    t.desk.arming.set_mode("home", by="olga")        # 业主撤防
+    await _放行首单(t, fake, h1)
+    assert len(fake.calls) == 1, "撤防之后不许再派"
+    rows = {r["event_id"]: r for r in t.desk.list()}
+    assert rows["e1"]["outcome"] == "dispatch_failed"
+    assert [rows[e]["outcome"] for e in ("e2", "e3")] == ["disarmed", "disarmed"]
+    assert "撤防" in rows["e2"]["note"] and rows["e2"]["robot_id"] is None
+    assert not t.desk._open_incident_robots(), "撤防的不占着狗"
+
+
+async def test_W20外审_访客撤的是别的防区_首单派失败照样提升(事件台, monkeypatch):
+    t = 事件台
+    t.desk.arming = ArmingDesk(t.db, now_ms=t.clock)
+    fake, h1 = await _首单卡住_并进几条(t, monkeypatch, n=2)
+    t.desk.arming.set_mode("visitor", by="olga", zones=["back"], minutes=60)
+    await _放行首单(t, fake, h1)
+    assert len(fake.calls) == 2, "这个防区还布防:提升出来的照派"
+    rows = {r["event_id"]: r for r in t.desk.list()}
+    assert rows["e2"]["outcome"] == "dispatched" and rows["e3"]["outcome"] == "merged"
+    assert rows["e3"]["merged_into"] == rows["e2"]["id"]
+
+
+# ------------------------------------------------------------ 审计
+
+
+def test_W20外审_访客防区很多_审计照样读得出来(台):
+    from d1max_site.audit import AuditLog
+    log = AuditLog(台.db, now_ms=台.clock)
+    zones = [f"zone-{i:02d}-" + "x" * 110 for i in range(25)]
+    台.set_mode("visitor", by="olga", zones=zones, minutes=60)
+    log.record(actor="olga", action="POST /api/mode", target="visitor",
+               detail={"zones": zones, "minutes": 60})
+    台.on_expired = lambda back, row: log.record(
+        actor="site", action="mode visitor_expired", target=back,
+        detail={"visitor_zones": row["visitor_zones"]})
+    台.clock.t += 3_600_000
+    台.tick()
+    rows = log.list()
+    assert [r["action"] for r in rows] == ["mode visitor_expired", "POST /api/mode"]
+    d = rows[1]["detail"]
+    assert d["minutes"] == 60 and d["zones"][0].startswith("zone-00-")
+    assert d["zones"][-1] == "…共 25 项"
+    assert rows[0]["detail"]["visitor_zones"][-1] == "…共 25 项"
+    raw = [r["detail"] for r in 台.db.query("SELECT detail FROM audit")]
+    assert all(len(x) <= 2000 and json.loads(x) for x in raw)
+
+
+def test_审计详情_放得下原样_放不下先缩_再放不下只留键名_老的坏行也读得出来(台):
+    from d1max_site.audit import AuditLog, encode_detail
+    assert json.loads(encode_detail({"a": 1})) == {"a": 1}
+    huge = {"blob": "y" * 5000, "more": {f"k{i}": "z" * 150 for i in range(40)}}
+    out = encode_detail(huge)
+    assert len(out) <= 2000 and json.loads(out) == {"truncated": True, "keys": ["blob", "more"]}
+    台.db.query("INSERT INTO audit(at, actor, action, detail) "
+                "VALUES (1, 'x', 'old', '{\"zones\": [\"a')")
+    rows = AuditLog(台.db, now_ms=台.clock).list()
+    assert rows[0]["detail"]["unreadable"] is True
+
+
+def test_访客一次最多撤64个防区(台):
+    with pytest.raises(ModeError):
+        台.set_mode("visitor", by="olga", zones=[f"z{i}" for i in range(65)], minutes=60)
+    台.set_mode("visitor", by="olga", zones=[f"z{i}" for i in range(64)], minutes=60)
+
+
 # ------------------------------------------------------------ 接口与角色
 
 
@@ -192,6 +286,16 @@ def test_保安只能切到布防_业主随便切_防区配置只有管理员(�
     actions = [(a["actor"], a["action"], a["target"]) for a in s.api.audit.list()]
     assert ("olga", "POST /api/mode", "visitor") in actions
     assert ("gina", "POST /api/mode", "armed") in actions
+
+
+def test_W20外审_经接口开带25个长防区名的访客_审计接口照样能读(站点):
+    s = 站点
+    olga, alice = _登(s, "olga")[0], _登(s, "alice")[0]
+    zones = [f"zone-{i:02d}-" + "x" * 110 for i in range(25)]
+    assert s.req("POST", "/api/mode", {"mode": "visitor", "zones": zones, "minutes": 60},
+                 token=olga)[0] == 200
+    code, d = s.req("GET", "/api/audit", token=alice)
+    assert code == 200 and d["audit"][0]["detail"]["zones"][-1] == "…共 25 项"
 
 
 def test_没开布防模式的站点_接口404(站点):
