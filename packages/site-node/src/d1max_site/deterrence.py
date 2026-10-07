@@ -426,33 +426,10 @@ class DeterrenceDesk:
             self._flush_alerts()
 
     def _flush_alerts(self) -> int:
-        """把 ``pending_alerts`` 里的告警报出去,报成才删(W24 复查)。告警簿里这台狗这一种还挂着的
-        当报过了(不重报)。每拍都调,跟有没有会话无关。回报成了几条。
-
-        **按意图去重**(W24 复查二):报的时候把意图号(``pending_alerts:<id>``)写进告警的现场。
-        报成了、删待报那一下没成,下一拍(哪怕保安已经把那条告警解决了、站点重启了)在告警表里查到
-        这个意图号,就只删待报、不再报一次。意图号自增、不复用。"""
-        if self.alerts is None:
-            return 0
-        n = 0
-        has_open = getattr(self.alerts, "has_open", None)
-        for r in self.db.query("SELECT * FROM pending_alerts ORDER BY id"):
-            intent = f"pending_alerts:{r['id']}"
-            try:
-                done = bool(self.db.query(
-                    "SELECT 1 FROM alerts WHERE robot=? AND kind=? "
-                    "AND json_extract(context, '$.intent')=? LIMIT 1",
-                    (r["robot"], r["kind"], intent)))
-                if not done and not (callable(has_open) and has_open(r["robot"], r["kind"])):
-                    self.alerts.raise_alert(kind=r["kind"], robot=r["robot"], title=r["title"],
-                                            detail=r["detail"],
-                                            context=json.loads(r["context"]) | {"intent": intent})
-                with self.db.tx() as c:
-                    c.execute("DELETE FROM pending_alerts WHERE id=?", (r["id"],))
-                n += 1
-            except Exception:
-                log.exception("%s 的 %s 告警还没报成(下一拍再报)", r["robot"], r["kind"])
-        return n
+        """把 ``pending_alerts`` 里的告警报出去,报成才删(W24 复查;按意图去重,见
+        :mod:`d1max_site.pending_alerts`)。每拍都调,跟有没有会话无关。回报成了几条。"""
+        from d1max_site.pending_alerts import flush
+        return flush(self.db, self.alerts)
 
     # ------------------------------------------------------------ 人
 
