@@ -113,7 +113,9 @@ ACK_MAX_BYTES = 240 * 1024
 BATTERY_FLOOR_PCT = 15.0
 
 #: 要人监护(W00c6i)时,只有这几种任务受监护租约约束(遥控、叫停、换图、发布照常)。
-_AUTONOMOUS_KINDS = frozenset({"goto", "patrol"})
+_AUTONOMOUS_KINDS = frozenset({"goto", "patrol", "standoff"})
+#: 保持距离(W25):退的落点离禁行区至少这么远(米)。
+STANDOFF_NOGO_M = 0.3
 #: 放了、过期的监护会话留多久(秒):挡同一会话里迟到的旧心跳(站点的命令有效期 30 s,再多留一点)。
 _SESSION_MEMORY_S = 60.0
 
@@ -353,7 +355,28 @@ class AgentRuntime:
             kinds -= {"goto", "patrol"}            # W10:规划后端没有规划栅格,不宣告能自主
         if caps.max_vx > 0:
             kinds.add("teleop")                    # W00c5c:遥控不要地图
+        if self._standoff_ok():
+            kinds.add("standoff")                  # W25:要规划后端(避障守卫、禁行区)+ 人员检测
         return kinds
+
+    def _standoff_ok(self) -> bool:
+        return (self._planned and self.obs_view is not None and self.person_view is not None
+                and self.hal.hal_capabilities().max_vx > 0)
+
+    def _standoff_task(self) -> Any:
+        cur = self.processor.current
+        return cur if cur is not None and cur.kind == "standoff" and not cur.done else None
+
+    def _standoff_nogo(self, dx: float, dy: float) -> str:
+        """保持距离:从此刻往狗身系 (dx, dy) 那儿退,进不进禁行区(按地图位姿;定位不可信算不行)。"""
+        nav = self.parts.nav
+        est = nav.anchor.estimate(nav._odom_pose)
+        ok = getattr(nav.anchor, "ok", None)
+        if est is None or (callable(ok) and not ok(getattr(nav, "odom_ok", True))):
+            return "定位不可信,查不了禁行区"
+        c, sn = math.cos(est.yaw), math.sin(est.yaw)
+        z = nav.nogo_near(est.x + c * dx - sn * dy, est.y + sn * dx + c * dy, STANDOFF_NOGO_M)
+        return f"再退就进禁行区「{z.label or z.id}」" if z is not None else ""
 
     def _make_task(self, cmd: Command) -> Task:
         if cmd.kind == "teleop":
@@ -364,6 +387,16 @@ class AgentRuntime:
                               lease_ttl_ms=ttl, hal=self.hal, now_ms=self._mono_ms,
                               video_live=self._video_live, events=self.events,
                               priority=cmd.priority)
+        if cmd.kind == "standoff":
+            from d1max_agent.tasks.standoff import StandoffTask
+            from d1max_contract.standoff import parse_standoff
+            nav = self.parts.nav
+            return StandoffTask(
+                task_id=cmd.task_id, req=parse_standoff(cmd.payload), hal=self.hal,
+                now_ms=self._mono_ms, target=self.person_view.target,
+                check=lambda vx, wz: nav.guard.check(vx, wz, nav._v_meas, nav.obstacles,
+                                                     nav._odom_pose),
+                odom=lambda: nav._odom_pose, nogo=self._standoff_nogo, priority=cmd.priority)
         assert self.parts is not None, "有 loaded_map 就一定装了引擎"
         if cmd.kind == "patrol":
             from d1max_agent.tasks.patrol import PatrolTask
@@ -556,10 +589,21 @@ class AgentRuntime:
             out["rtk"] = {"source": self.rtk.kind}  # W09e:站点、手机据此显示 RTK
         if self.person_view is not None:
             out["persons"] = self.person_view.caps()  # W24:人员检测在不在看(站点据此联动驱离)
+        if self._standoff_ok():
+            out["standoff"] = self._standoff_caps()   # W25:在不在守、在不在退、是不是无路可退
         deter = self.deter.caps()
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术
         return out
+
+    def _standoff_caps(self) -> dict[str, Any]:
+        t = self._standoff_task()
+        if t is None:
+            return {"state": "idle"}
+        d: dict[str, Any] = {"state": t.mode, "task_id": t.task_id}
+        if t.mode == "cornered" and t.why:
+            d["reason"] = t.why[:200]
+        return d
 
     async def _map_command(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
         """地图、发布、发件箱命令:收下(空串)或拒绝原因。下载、载入、录包、重建都在后台做,做完发事件。
@@ -1666,7 +1710,8 @@ class AgentRuntime:
         if self._pers_srv is not None:
             self._pers_srv.tick()                # 本机人员桥:检测节点没声就当它断了
             self.person_view.tick()              # 人走了没有
-            pst = self.person_view.key()
+            pst = self.person_view.key() + (
+                tuple(self._standoff_caps().values()) if self._standoff_ok() else ())
             if pst != self._pers_state_told:     # 在不在看、有没有人、近不近变了:站点据此对账驱离
                 self._pers_state_told = pst
                 if self.transport.connected:

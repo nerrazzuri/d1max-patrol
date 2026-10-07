@@ -288,6 +288,13 @@ class CommandProcessor:
             except ContractError as exc:
                 return f"payload: {exc}"
             return ""
+        if cmd.kind == "standoff":
+            from d1max_contract.standoff import parse_standoff
+            try:
+                parse_standoff(cmd.payload)
+            except ContractError as exc:
+                return f"payload: {exc}"
+            return ""
         if cmd.kind != "goto":
             return ""
         try:
@@ -490,7 +497,7 @@ class CommandProcessor:
 
 
 #: 叫停栅栏立着的时候拒收的命令(会让狗动的任务)。
-_MOTION_KINDS = frozenset({"goto", "patrol", "teleop"})
+_MOTION_KINDS = frozenset({"goto", "patrol", "teleop", "standoff"})
 
 
 def _event_for(state: TaskState) -> str:

@@ -3,21 +3,23 @@
     {
       "auto": true,
       "by": "",
+      "cornered": false,
       "ends_in_s": 539,
       "human_ms": 0,
       "incident_id": 1,
       "label": "语音警告",
       "level": 2,
-      "level_ms": 1791364842611,
+      "level_ms": 1791375195404,
       "next_in_s": 24,
       "persons": {
-        "at_ms": 1791364847611,
+        "at_ms": 1791375200404,
         "count": 2,
         "near": false,
         "nearest_m": 7.5
       },
       "robot_id": "A",
-      "started_ms": 1791364787611,
+      "standoff": "retreat",
+      "started_ms": 1791375140404,
       "task_id": "incident-abc",
       "zone": "yard"
     }

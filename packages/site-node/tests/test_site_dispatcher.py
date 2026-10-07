@@ -506,3 +506,49 @@ async def test_钟差大_换图建图装版本切版本也不发_只读与收尾
                           ("proc_log", {}), ("mapping_trail", {}), ("mapping_preview", {})):
         r = await t.send(t.site.map_command("A", kind, payload, issued_by="alice"))
         assert "ack" in r, kind
+
+
+async def test_W25_保持距离_真派遣到真代理_人近就退_撤了就停(tmp_path):
+    """派遣器 → 真代理(规划后端 + 障碍桥 + 人员桥)→ 仿真狗:
+    派 standoff、能力里报在守、人在 2 m 往后退。"""
+    from d1max_contract.registration import Registration
+    from d1max_contract.standoff import StandoffRequest
+    t = 台子(tmp_path)
+    await t.site.start()
+    reg = Registration(site_id=SITE, robot_id="A", credential_fingerprint="sha256:a",
+                       issued_at=0, expires_at=10**14)
+    t.agent = AgentRuntime(transport=MemoryTransport(t.broker, "dogA"), registration=reg,
+                           hal=t.dog, store_dir=t.tmp / "agent", now_ms=t.clock, loaded_map=MAP,
+                           boot_id="boot-1", home=Pose.from_xy_yaw(0.0, 0.0),
+                           monotonic=lambda: t.clock.mono, odom_identity=True, nav="planned",
+                           obstacles="bridge", obs_socket=t.tmp / "o.sock",
+                           persons="bridge", persons_socket=t.tmp / "p.sock")
+    await t.agent.start()
+    await t.broker.drain()
+    try:
+        from test_standoff_helpers import 喂
+        t.agent.obs_view.on_connect()
+        t.agent.person_view.on_connect()
+        for _ in range(3):
+            喂(t.agent, person=None)
+            await t.run(1)
+        assert t.site.clients["A"].capabilities.tasks["standoff"] == {"state": "idle"}
+        r = await t.send(t.site.standoff("A", "standoff-x", StandoffRequest(max_s=60),
+                                         issued_by="deterrence"))
+        assert r["ack"]["result"] == "accepted", r
+        x0 = (await t.dog.odometry()).x
+        for _ in range(10):
+            喂(t.agent, person=2.0)
+            await t.run(1)
+        assert (await t.dog.odometry()).x < x0 - 0.1
+        st = t.site.clients["A"].capabilities.tasks["standoff"]
+        assert st == {"state": "retreat", "task_id": "standoff-x"}, st
+        a = await t.send(t.site.abort("A", "standoff-x", issued_by="deterrence"))
+        assert a["ack"]["result"] == "accepted"
+        for _ in range(20):
+            喂(t.agent, person=2.0)
+            await t.run(1)
+        assert await t.dog.stopped() is True
+        assert t.site.clients["A"].capabilities.tasks["standoff"] == {"state": "idle"}
+    finally:
+        await t.close()

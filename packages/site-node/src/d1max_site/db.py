@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 26                      # W24 复查:待报的告警(pending_alerts)
+SCHEMA_VERSION = 27                      # W25:驱离无路可退过(deter_sessions.cornered)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -380,6 +380,8 @@ _ADDED_COLUMNS = (
     # W24 外审:这一场看到过人没有、人员告警报成了没有(站点重启后接着对账、接着报)
     ("deter_sessions", "person_seen", "INTEGER NOT NULL DEFAULT 0"),
     ("deter_sessions", "person_alerted", "INTEGER NOT NULL DEFAULT 0"),
+    # W25:这一场无路可退过没有(报过 P1 意图)
+    ("deter_sessions", "cornered", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

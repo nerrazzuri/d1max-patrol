@@ -37,6 +37,15 @@ void main() {
     expect(deterPersonsText(<String, dynamic>{'persons': <String, dynamic>{'count': 1}}), '看到 1 个人');
   });
 
+  test('保持距离说人话（W25）', () {
+    expect(deterStandoffText(_rows().first), '人太近，在往后退');
+    expect(deterStandoffText(<String, dynamic>{'standoff': 'cornered'}), '无路可退，原地站定');
+    expect(deterStandoffText(<String, dynamic>{'standoff': 'idle'}), '');
+    expect(deterStandoffText(<String, dynamic>{'standoff': null}), '');
+    expect(deterSceneText(_rows().first), ' · 看到 2 个人，最近 7.5 m · 人太近，在往后退');
+    expect(deterSceneText(<String, dynamic>{}), '');
+  });
+
   testWidgets('驱离页显示看到的人', (t) async {
     await _open(t, FakeApi('guard')..deterRows = _rows());
     expect(find.textContaining('看到 2 个人，最近 7.5 m'), findsOneWidget);

@@ -53,6 +53,7 @@ class _Cam:
     win: deque = field(default_factory=lambda: deque(maxlen=WINDOW))
     count: int = 0
     nearest: float | None = None
+    bearing: float = 0.0
     near: bool = False
 
     def sees(self) -> bool:
@@ -117,6 +118,18 @@ class PersonView:
             d["reason"] = self.reason[:200]
         return d
 
+    def target(self) -> tuple[float, float] | None:
+        """最近的那个人(W25 保持距离用):``(方向°, 距离 m)``,狗身系(朝前 0°、朝左为正)。只看此刻
+        确认看到人、测到距离的相机;不是「有人」、没测到距离都回 ``None``(不知道在哪:原地不动)。"""
+        if self.present is not True:
+            return None
+        got = [(c.nearest, c.bearing) for k, c in self._cams.items()
+               if self._healthy(k) and c.sees() and c.nearest is not None]
+        if not got:
+            return None
+        r, b = min(got)
+        return (b, r)
+
     def key(self) -> tuple:
         """能力该重发的时候(这几样变了)。人数、距离天天变,不在里面(站点按 ``near`` 判)。"""
         return (self.state(), self.present, self.present is True and self.near)
@@ -140,13 +153,14 @@ class PersonView:
         self._last_check, self.reason = m.check, m.reason
         if not c.ok:
             c.win.clear()
-            c.count, c.nearest, c.near = 0, None, False
+            c.count, c.nearest, c.near, c.bearing = 0, None, False, 0.0
         else:
             self._watch.add(m.camera)
             c.win.append(bool(m.people))
             near = m.nearest()
             c.count = len(m.people)
             c.nearest = near.range_m if near is not None else None
+            c.bearing = near.bearing_deg if near is not None else 0.0
             if c.nearest is not None and c.nearest <= NEAR_M:
                 c.near = True
             elif c.nearest is None or c.nearest > NEAR_CLEAR_M:

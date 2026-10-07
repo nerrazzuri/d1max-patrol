@@ -35,6 +35,23 @@ String deterPersonsText(Map<String, dynamic> s) {
   return '看到 ${n ?? '?'} 个人${near is num ? '，最近 ${near.toStringAsFixed(1)} m' : ''}';
 }
 
+/// 保持距离（W25）说人话：`守着` / `人太近，在往后退` / `无路可退，原地站定` / 空（狗不支持或没在守）。
+String deterStandoffText(Map<String, dynamic> s) {
+  switch (s['standoff']) {
+    case 'hold':
+      return '守着';
+    case 'retreat':
+      return '人太近，在往后退';
+    case 'cornered':
+      return '无路可退，原地站定';
+  }
+  return '';
+}
+
+/// 一场驱离的现场（看到的人、保持距离）拼成一串，每样前面带「 · 」；都没有就是空串。
+String deterSceneText(Map<String, dynamic> s) =>
+    [deterPersonsText(s), deterStandoffText(s)].where((t) => t.isNotEmpty).map((t) => ' · $t').join();
+
 class SiteDeterrencePage extends StatefulWidget {
   final SiteApi api;
   final String robotId;
@@ -145,8 +162,7 @@ class _SiteDeterrencePageState extends State<SiteDeterrencePage> {
             key: const Key('deterrence-now'),
             leading: const Icon(Icons.campaign, color: Colors.red),
             title: Text(deterSessionText(s)),
-            subtitle: Text('防区 ${s['zone']} · ${s['ends_in_s']} 秒后自动收'
-                '${deterPersonsText(s).isEmpty ? '' : ' · ${deterPersonsText(s)}'}',
+            subtitle: Text('防区 ${s['zone']} · ${s['ends_in_s']} 秒后自动收${deterSceneText(s)}',
                 key: const Key('deterrence-persons')),
           ),
           if (sess?.canDispatch ?? false)

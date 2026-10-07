@@ -544,8 +544,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
               tileColor: Colors.red.withValues(alpha: 0.12),
               leading: const Icon(Icons.campaign, color: Colors.red),
               title: Text('${e.key} 驱离中 · ${deterSessionText(e.value)}'),
-              subtitle: Text('防区 ${e.value['zone']}'
-                  '${deterPersonsText(e.value).isEmpty ? '' : ' · ${deterPersonsText(e.value)}'}'),
+              subtitle: Text('防区 ${e.value['zone']}${deterSceneText(e.value)}'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.push(context,
                   MaterialPageRoute<void>(builder: (_) => SiteDeterrencePage(api: widget.api, robotId: e.key))),
