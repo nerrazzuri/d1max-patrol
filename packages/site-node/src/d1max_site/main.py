@@ -251,7 +251,14 @@ def _desk(home: Path, db: SiteDB):
     cfg = _load(home)
     disp = Dispatcher(transport=None, db=db,  # type: ignore[arg-type] - 只用注册表与库
                       registry=Registry(db, site_id=cfg["site_id"]), now_ms=wall_ms)
-    return IncidentDesk(db, disp, now_ms=wall_ms)
+    desk = IncidentDesk(db, disp, now_ms=wall_ms)
+    # W23 外审:命令行设拦截点也查走不走得到(同接口)
+    from d1max_site.intercept_reach import InterceptReach
+    from d1max_site.maps import MapCatalog
+    from d1max_site.nav_zones import NavZones
+    desk.reach = InterceptReach(db, MapCatalog(home, db, now_ms=wall_ms),
+                                NavZones(db, now_ms=wall_ms))
+    return desk
 
 
 def cmd_camera(home: Path, what: str, **kw) -> object:
