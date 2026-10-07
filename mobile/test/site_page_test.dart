@@ -170,6 +170,26 @@ class FakeApi implements SiteApi {
     (intercepted['intercepts'] as List).removeWhere((z) => (z as Map)['name'] == name);
     return intercepted;
   }
+  /// 分级驱离（W22）：默认没有；测试改 [deterRows]。
+  List<Map<String, dynamic>> deterRows = <Map<String, dynamic>>[];
+  SiteError? deterrenceError;
+  @override
+  Future<List<Map<String, dynamic>>> deterrence() async {
+    if (deterrenceError != null) throw deterrenceError!;
+    return deterRows;
+  }
+  @override
+  Future<Map<String, dynamic>> deterLevel(String robotId, int level) async {
+    calls.add('deter-level $robotId $level');
+    final s = <String, dynamic>{...deterRows.first, 'level': level, 'auto': false, 'by': 'u', 'next_in_s': null};
+    deterRows = [s];
+    return <String, dynamic>{'session': s};
+  }
+  @override
+  Future<void> deterRelease(String robotId) async {
+    calls.add('deter-release $robotId');
+    deterRows = <Map<String, dynamic>>[];
+  }
   /// 上装（W21）：记在 [calls] 里；[deterAck] 是狗回的回执。
   Map<String, dynamic> deterAck = <String, dynamic>{'result': 'accepted'};
   @override

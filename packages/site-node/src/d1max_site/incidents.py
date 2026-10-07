@@ -92,6 +92,8 @@ class IncidentDesk:
         self.on_throttled: Callable[[str], None] | None = None
         #: 布防模式(W20,``modes.ArmingDesk``)。没接(老测试、命令行)就当全布防。
         self.arming: Any = None
+        #: 正在驱离的狗(W22,``DeterrenceDesk.busy``):不派它去别的拦截点。
+        self.busy: Callable[[], set[str]] | None = None
         #: 每个事件源最近一分钟收过的时刻。接口是多线程的:「清掉一分钟前的、判断、
         #: 记一笔」得在一把锁里
         #: 一次做完(W16 外审:不加锁 40 个并发请求全放行)。
@@ -267,6 +269,8 @@ class IncidentDesk:
                 elif rid in self._open_incident_robots():
                     # 派了还没回结果(或正等回执):狗报的 status 可能还没跟上 —— 以账为准。
                     reason = f"{rid} 正在处理另一个事件(已派出、未结束)"
+            if not reason and self.busy is not None and rid in self.busy():
+                reason = f"{rid} 正在驱离(W22)"
             if not reason:
                 caps = c.capabilities.tasks.get("patrol", {}) if c.capabilities else {}
                 loaded = (caps.get("map_id"), caps.get("map_version"))

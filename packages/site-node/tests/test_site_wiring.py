@@ -63,3 +63,10 @@ def test_布防模式接到事件派遣和接口上_访客到点退回记审计(
     rows = srv.api.audit.list()
     assert rows[0]["actor"] == "site" and rows[0]["action"] == "mode visitor_expired"
     assert rows[0]["target"] == "armed"
+
+
+def test_驱离接到待命点_事件派遣_接口上(srv):
+    """W22:到了拦截点由驱离接管回程,驱离中的狗不派去别的拦截点,接口看得到。"""
+    assert srv.standby.hold == srv.deterrence.holds
+    assert srv.incidents.busy == srv.deterrence.busy
+    assert srv.api.deterrence is srv.deterrence

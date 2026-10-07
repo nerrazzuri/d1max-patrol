@@ -1,0 +1,362 @@
+"""分级驱离(W22,决策 37)。站点这一层:到了拦截点开一场 → 每 30 秒自动升到 L3 → 按级开、续、关声光、
+轮放话术 → 人跳级、往回退之后不再自动升 → 解除、10 分钟到点收(全关、回待命点)→ 狗被派去干别的就收 →
+站点重启接着管。假派遣器 + 可控的钟;最后两条走真 HTTP → 真代理 → 仿真狗。"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from d1max_contract.messages import Event
+from d1max_site.db import SiteDB
+from d1max_site.deterrence import CAP_S, KEEP_S, DeterrenceDesk, DeterrenceError
+from d1max_site.priorities import EVENT
+
+CAPS = {"outputs": ["strobe", "siren", "spotlight", "speaker"], "max_s": 600.0,
+        "clips": ["warn-zh", "warn-en", "warn-ms", "notified-zh", "notified-en"], "tts": False}
+
+
+class 钟:
+    def __init__(self):
+        self.ms = 1_000_000
+
+    def __call__(self):
+        return self.ms
+
+    def go(self, s):
+        self.ms += int(s * 1000)
+
+
+class 假派遣:
+    def __init__(self, caps=CAPS):
+        self.clients = {"A": SimpleNamespace(
+            capabilities=SimpleNamespace(tasks={"deter": caps} if caps else {}),
+            status=SimpleNamespace(task=None))}
+        self.cbs = []
+        self.sent: list[tuple[str, dict, int]] = []
+        self.fail = False
+        self.feed = SimpleNamespace(publish=lambda item: self.pushed.append(item))
+        self.pushed: list[dict] = []
+
+    def on_event(self, cb):
+        self.cbs.append(cb)
+
+    async def deter(self, rid, payload, *, issued_by, priority):
+        if self.fail:
+            raise RuntimeError("狗不在线")
+        self.sent.append((rid, payload, priority))
+        return {"ack": {"result": "accepted"}}
+
+    def on(self):
+        """每一路最后一次是开还是关。"""
+        last: dict[str, bool] = {}
+        for _, p, _ in self.sent:
+            last[p["output"]] = p["on"]
+        return {k for k, v in last.items() if v}
+
+
+class 假待命:
+    def __init__(self):
+        self.back: list[str] = []
+
+    async def return_to(self, rid, *, issued_by):
+        self.back.append(rid)
+
+
+def _到了(desk_or_disp, task_id="incident-abc", rid="A"):
+    disp = desk_or_disp
+    e = Event(event_id="e1", seq=1, boot_id="b", stamp=1, kind="task_done",
+              data={"task_id": task_id})
+    for cb in disp.cbs:
+        cb(rid, e)
+
+
+@pytest.fixture
+def 台(tmp_path):
+    db = SiteDB(tmp_path / "site.db")
+    db.query("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome, robot_id, "
+             "task_id, note, detail) VALUES ('nvr','e1','intrusion','front',1,'dispatched','A',"
+             "'incident-abc','','{}')")
+    clock, disp, stb = 钟(), 假派遣(), 假待命()
+    desk = DeterrenceDesk(db, disp, now_ms=clock, standby=stb)
+    yield SimpleNamespace(db=db, clock=clock, disp=disp, stb=stb, desk=desk)
+    db.close()
+
+
+async def test_到了拦截点开一场_L0什么都不开_待命点先别回_事件派遣不选它(台):
+    t = 台
+    assert t.desk.holds("A", "incident-abc") and not t.desk.holds("A", "sched-x")
+    _到了(t.disp)
+    [s] = t.desk.view()
+    assert (s["robot_id"], s["level"], s["zone"], s["auto"]) == ("A", 0, "front", True)
+    assert s["next_in_s"] == 30 and s["ends_in_s"] == CAP_S
+    await t.desk.tick()
+    assert t.disp.sent == [] and t.desk.busy() == {"A"}
+    assert t.disp.pushed[-1]["kind"] == "deterrence"
+
+
+async def test_每30秒自动升_最多到L3_按级开声光_话术轮放_优先级是事件档(台):
+    t = 台
+    _到了(t.disp)
+    t.clock.go(30)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 1 and t.disp.on() == {"strobe", "spotlight"}
+    assert all(p["max_s"] == KEEP_S for _, p, _ in t.disp.sent if p["on"])
+    t.clock.go(30)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 2
+    clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker"]
+    assert clips == ["warn-zh"]
+    assert {pr for _, p, pr in t.disp.sent if p["output"] == "speaker"} == {EVENT}
+    for _ in range(2):
+        t.clock.go(10)
+        await t.desk.tick()
+    clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker"]
+    assert clips == ["warn-zh", "warn-en", "warn-ms"], "中文、英文、马来文轮放"
+    t.clock.go(10)                                       # 到 L2 之后 30 秒:升 L3,话术从头
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 3 and "siren" in t.disp.on()
+    for _ in range(2):
+        t.clock.go(10)
+        await t.desk.tick()
+    clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker"]
+    assert clips[3:] == ["notified-zh", "notified-en", "notified-zh"], \
+        "L3 放「已通知保安」;没录马来文的就跳过"
+    t.clock.go(120)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 3, "自动最多到 L3,L4 只能人进"
+
+
+async def test_声光每20秒续一次_不多发(台):
+    t = 台
+    _到了(t.disp)
+    t.clock.go(30)
+    await t.desk.tick()
+    n = len(t.disp.sent)
+    t.clock.go(5)
+    await t.desk.tick()
+    assert len(t.disp.sent) == n, "没到 20 秒不续"
+    t.clock.go(16)
+    await t.desk.tick()
+    renewed = [p["output"] for _, p, _ in t.disp.sent[n:]]
+    assert sorted(renewed) == ["spotlight", "strobe"]
+
+
+async def test_人跳级往回退_不再自动升_不该开的关掉(台):
+    t = 台
+    _到了(t.disp)
+    await t.desk.set_level("A", 3, by="gina")
+    assert {"strobe", "spotlight", "siren"} <= t.disp.on()
+    v = await t.desk.set_level("A", 1, by="gina")
+    assert v["auto"] is False and v["by"] == "gina" and v["next_in_s"] is None
+    assert t.disp.on() == {"strobe", "spotlight"}, "退回 L1:警笛、喇叭关"
+    t.clock.go(120)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 1, "人动过就不再自动升"
+    await t.desk.set_level("A", 4, by="gina")
+    assert t.desk.sessions["A"].level == 4
+    for bad in (5, -1, "2", True):
+        with pytest.raises(DeterrenceError):
+            await t.desk.set_level("A", bad, by="gina")
+    with pytest.raises(DeterrenceError, match="没在驱离"):
+        await t.desk.set_level("B", 1, by="gina")
+
+
+async def test_解除_全关_回待命点_库里删掉(台):
+    t = 台
+    _到了(t.disp)
+    await t.desk.set_level("A", 3, by="gina")
+    await t.desk.release("A", by="olga")
+    assert t.disp.on() == set() and t.stb.back == ["A"]
+    assert t.desk.view() == [] and not t.db.query("SELECT 1 FROM deter_sessions")
+    assert t.disp.pushed[-1]["session"] is None and "olga" in t.disp.pushed[-1]["ended"]
+    with pytest.raises(DeterrenceError):
+        await t.desk.release("A", by="olga")
+
+
+async def test_10分钟到点自动收_人动过从那时重算(台):
+    t = 台
+    _到了(t.disp)
+    t.clock.go(CAP_S - 60)
+    await t.desk.set_level("A", 2, by="gina")          # 人动了:从现在再算 10 分钟
+    t.clock.go(CAP_S - 1)
+    await t.desk.tick()
+    assert "A" in t.desk.sessions
+    t.clock.go(1)
+    await t.desk.tick()
+    assert "A" not in t.desk.sessions and t.disp.on() == set() and t.stb.back == ["A"]
+
+
+async def test_狗被派去干别的_收掉_不派回程(台):
+    t = 台
+    _到了(t.disp)
+    t.clock.go(30)
+    await t.desk.tick()
+    t.disp.clients["A"].status.task = SimpleNamespace(task_id="incident-other",
+                                                       state=SimpleNamespace(value="running"))
+    await t.desk.tick()
+    assert "A" not in t.desk.sessions and t.disp.on() == set() and t.stb.back == []
+
+
+async def test_站点重启接着管(台, tmp_path):
+    t = 台
+    _到了(t.disp)
+    await t.desk.set_level("A", 2, by="gina")
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
+    [s] = desk2.view()
+    assert (s["level"], s["auto"], s["by"], s["zone"]) == (2, False, "gina", "front")
+    n = len(t.disp.sent)
+    await desk2.tick()
+    assert {p["output"] for _, p, _ in t.disp.sent[n:]} >= {"strobe", "spotlight", "speaker"}, \
+        "重启后的第一拍把该开的重新开上(新的台没记着发过什么)"
+
+
+async def test_发不出去_下一拍再发(台):
+    t = 台
+    _到了(t.disp)
+    t.clock.go(30)
+    t.disp.fail = True
+    await t.desk.tick()
+    assert t.disp.sent == []
+    t.disp.fail = False
+    t.clock.go(5)
+    await t.desk.tick()
+    assert t.disp.on() == {"strobe", "spotlight"}
+
+
+async def test_没装上装的狗_不开场_照常回待命点(tmp_path):
+    db = SiteDB(tmp_path / "site.db")
+    disp = 假派遣(caps=None)
+    desk = DeterrenceDesk(db, disp, now_ms=钟(), standby=假待命())
+    assert not desk.holds("A", "incident-abc")
+    _到了(disp)
+    assert desk.view() == []
+    db.close()
+
+
+async def test_不是事件任务_不开场_同一台不开第二场(台):
+    t = 台
+    _到了(t.disp, task_id="sched-1")
+    assert t.desk.view() == []
+    _到了(t.disp)
+    first = t.desk.sessions["A"].started_ms
+    t.clock.go(5)
+    _到了(t.disp)
+    assert t.desk.sessions["A"].started_ms == first
+
+
+async def test_只有部分路_只开有的_没话术不放(tmp_path):
+    db = SiteDB(tmp_path / "site.db")
+    db.query("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome, robot_id, "
+             "task_id, note, detail) VALUES ('nvr','e1','intrusion','f',1,'dispatched','A',"
+             "'incident-abc','','{}')")
+    clock = 钟()
+    disp = 假派遣(caps={"outputs": ["strobe", "speaker"], "clips": [], "tts": False})
+    desk = DeterrenceDesk(db, disp, now_ms=clock, standby=假待命())
+    _到了(disp)
+    await desk.set_level("A", 3, by="gina")
+    assert {p["output"] for _, p, _ in disp.sent} == {"strobe"}
+    db.close()
+
+
+# ------------------------------------------------------------ 接口(真 HTTP → 真代理 → 仿真狗)
+
+
+def test_接口_保安跳级_狗上真开了_业主能解除不能跳级_没在驱离404(tmp_path):
+    from test_site_api import PW, _等, 站
+
+    from d1max_site.standby import StandbyManager
+    s = 站(tmp_path, payload=True)
+    try:
+        s.accounts.add("gina", PW, role="guard")
+        s.accounts.add("olga", PW, role="owner")
+        stb = StandbyManager(s.db, s.disp, now_ms=s.api._now)
+        desk = s.loop.call(lambda: _建(s, stb))
+        s.api.deterrence = desk
+
+        def 登(n):
+            return s.req("POST", "/api/login", {"name": n, "password": PW})[1]["token"]
+        gina, olga = 登("gina"), 登("olga")
+        _等(lambda: "deter" in ((s.req("GET", "/api/robots/A", token=gina)[1].get("capabilities")
+                                 or {}).get("tasks") or {}))
+        s.db.query("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome, "
+                   "robot_id, task_id, note, detail) VALUES ('nvr','e1','intrusion','front',1,"
+                   "'dispatched','A','incident-abc','','{}')")
+        s.loop.call(lambda: _开场(desk))
+        assert s.req("GET", "/api/deterrence", token=olga)[1]["sessions"][0]["level"] == 0
+        assert s.req("POST", "/api/deterrence/A/level", {"level": 1}, token=olga)[0] == 403
+        code, d = s.req("POST", "/api/deterrence/A/level", {"level": 1}, token=gina)
+        assert code == 200 and d["session"]["level"] == 1 and d["session"]["auto"] is False
+        assert s.dog.deter_on("strobe") and s.dog.deter_on("spotlight")
+        assert s.req("POST", "/api/deterrence/A/level", {"level": 9}, token=gina)[0] == 400
+        assert s.req("POST", "/api/deterrence/A/release", {}, token=olga)[0] == 200
+        assert not s.dog.deter_on("strobe") and not s.dog.deter_on("spotlight")
+        assert s.req("POST", "/api/deterrence/A/release", {}, token=olga)[0] == 404
+        acts = [(r["actor"], r["action"]) for r in s.api.audit.list()]
+        assert ("gina", "POST /api/deterrence/A/level") in acts
+        assert ("olga", "POST /api/deterrence/A/release") in acts
+    finally:
+        s.close()
+
+
+async def _建(s, stb):
+    return DeterrenceDesk(s.db, s.disp, now_ms=s.api._now, standby=stb)
+
+
+async def _开场(desk):
+    e = Event(event_id="x", seq=1, boot_id="b", stamp=1, kind="task_done",
+              data={"task_id": "incident-abc"})
+    desk._on_event("A", e)
+
+
+def test_接口_没开驱离的站点404(tmp_path):
+    from test_site_api import 站
+    s = 站(tmp_path)
+    try:
+        assert s.req("GET", "/api/deterrence", token=s.login())[0] == 404
+    finally:
+        s.close()
+
+
+# ------------------------------------------------------------ 跟待命点、事件派遣接上
+
+
+async def test_接线_到了拦截点_待命点不自动回_驱离结束才回(tmp_path):
+    """真派遣器 + 真代理 + 仿真狗(装了上装):事件任务到了拦截点,待命点管理器不派回程。"""
+    from test_site_dispatcher import 台子
+
+    from d1max_site.incidents import IncidentDesk
+    from d1max_site.standby import StandbyManager
+    t = 台子(tmp_path)
+    t.dog.payload = True                                  # 上装(仿真狗)
+    await t.start()
+    try:
+        stb = StandbyManager(t.db, t.site, now_ms=t.clock)
+        stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0,
+                default=True)
+        desk = DeterrenceDesk(t.db, t.site, now_ms=t.clock, standby=stb)
+        stb.hold = desk.holds
+        inc = IncidentDesk(t.db, t.site, now_ms=t.clock)
+        inc.busy = desk.busy
+        inc.set_intercept("gate", map_id="estate-1", map_version="7", x=1.0, y=0.0, yaw=0.0)
+        inc.map_zone("front", "gate")
+        await t.run(12)
+        r = await t.send(inc.handle("nvr", {"event_id": "e1", "type": "intrusion",
+                                            "zone": "front"}))
+        assert r["outcome"] == "dispatched"
+        await t.run(200)
+        assert desk.busy() == {"A"}, "到了拦截点:开驱离"
+        gotos = [c for c in t.site.commands("A", 50) if c["kind"] == "goto"]
+        assert not any(c["task_id"].startswith("standby-") for c in gotos), "不自动回待命点"
+        # 驱离中:同一台狗不去别的防区
+        inc.map_zone("back", "gate")
+        r2 = await t.send(inc.handle("nvr", {"event_id": "e2", "type": "intrusion",
+                                             "zone": "back"}))
+        assert r2["outcome"] == "no_robot" and "正在驱离" in r2["note"]
+        await t.send(desk.release("A", by="gina"))
+        await t.run(5)
+        gotos = [c for c in t.site.commands("A", 50) if c["kind"] == "goto"]
+        assert any(c["task_id"].startswith("standby-") for c in gotos), "解除之后回待命点"
+    finally:
+        await t.close()

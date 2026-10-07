@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 21                      # W20:布防模式(site_mode、zone_arming)、账号显示名
+SCHEMA_VERSION = 22                      # W22:分级驱离(deter_sessions)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -313,6 +313,19 @@ CREATE TABLE IF NOT EXISTS site_mode (
 CREATE TABLE IF NOT EXISTS zone_arming (
     zone       TEXT PRIMARY KEY,
     home_armed INTEGER NOT NULL
+);
+-- W22:正在进行的驱离(一台狗一场)。站点重启接着管;结束就删。
+CREATE TABLE IF NOT EXISTS deter_sessions (
+    robot_id    TEXT PRIMARY KEY,
+    incident_id INTEGER NOT NULL,
+    zone        TEXT NOT NULL,
+    task_id     TEXT NOT NULL,
+    level       INTEGER NOT NULL,
+    started_ms  INTEGER NOT NULL,
+    level_ms    INTEGER NOT NULL,
+    human_ms    INTEGER NOT NULL DEFAULT 0,
+    auto        INTEGER NOT NULL DEFAULT 1,
+    by          TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS robot_state (
     robot_id     TEXT PRIMARY KEY,

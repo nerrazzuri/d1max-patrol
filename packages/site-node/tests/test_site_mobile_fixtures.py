@@ -102,6 +102,13 @@ def _collect(tmp_path) -> dict[str, object]:
         s.req("POST", "/api/mode", {"mode": "visitor", "zones": ["drive"], "minutes": 60},
               token=tok)
         mode = s.req("GET", "/api/mode", token=tok)[1]
+        # W22:一场驱离(到了拦截点、自动升到 L2)
+        from d1max_site.deterrence import DeterrenceDesk, Session
+        s.api.deterrence = s.loop.call(lambda: _sync_make(DeterrenceDesk, s))
+        s.api.deterrence.sessions["A"] = Session(
+            robot_id="A", incident_id=1, zone="yard", task_id="incident-abc", level=2,
+            started_ms=wall() - 60_000, level_ms=wall() - 5_000)
+        deterrence = s.req("GET", "/api/deterrence", token=tok)[1]
         s.req("POST", "/api/mode", {"mode": "armed"}, token=tok)       # 下面的入侵照常派
         s.api.incidents.add_source("nvr")
         s.loop.call(lambda: s.api.incidents.handle("nvr", {"event_id": "e1",
@@ -196,9 +203,15 @@ def _collect(tmp_path) -> dict[str, object]:
             "site_maps": s.req("GET", "/api/maps", token=tok)[1],
             "site_releases": s.req("GET", "/api/releases", token=tok)[1],
             "site_mode": mode,
+            "site_deterrence": deterrence,
         }
     finally:
         s.close()
+
+
+async def _sync_make(cls, s):
+    """驱离台要在事件循环里建(它挂派遣器的事件回调)。"""
+    return cls(s.db, s.disp, now_ms=wall, standby=None)
 
 
 #: 登录夹具里的会话令牌换成它(外审 Codex 应修 1):测试站点现发的是随机串,原样写进仓库每次都换、

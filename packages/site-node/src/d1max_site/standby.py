@@ -91,6 +91,9 @@ class StandbyManager:
         self.dispatcher = dispatcher
         self._now = now_ms
         self._tasks: set[asyncio.Task] = set()
+        #: 这一趟跑完先别自动回(W22:到了拦截点要驱离,驱离结束时派回程)。
+        #: ``(狗, 任务号) → 真 = 先别回``。
+        self.hold: Callable[[str, str], bool] | None = None
         dispatcher.on_event(self._on_event)
 
     # ------------------------------------------------------------ 登记
@@ -285,6 +288,8 @@ class StandbyManager:
         task_id = e.data.get("task_id") if isinstance(e.data, dict) else None
         if e.kind not in _RETURN_AFTER or not task_id or task_id.startswith(STANDBY_PREFIX):
             return
+        if self.hold is not None and self.hold(robot_id, task_id):
+            return                      # W22:到了拦截点要驱离,回程由驱离结束时派
         if self.default(robot_id) is None:
             return
         # 事件回调在事件循环里、同步地跑;派单要 await 回执,另起一个协程。
