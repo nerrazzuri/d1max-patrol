@@ -999,7 +999,7 @@ async def test_W25外审2_每次派都带同一个拦截点_补派_重启都一�
         assert req.center.to_wire() == INTERCEPT
 
 
-async def test_W25外审2_取不到拦截点_不派_收场也不用撤(台):
+async def test_W25外审2_取不到拦截点_不派_收场照样按任务号撤(台):
     t = 台
     t.db.query("DELETE FROM commands")
     _会守(t)
@@ -1007,7 +1007,24 @@ async def test_W25外审2_取不到拦截点_不派_收场也不用撤(台):
     await t.desk.tick()
     assert t.disp.standoffs == [] and t.desk.view()[0]["standoff"] is None
     await t.desk.release("A", by="gina")
-    assert t.disp.aborts == [] and "A" not in t.desk.sessions
+    assert t.disp.aborts == [("A", "standoff-incident-abc")] and "A" not in t.desk.sessions
+
+
+async def test_W25复查_升级前的旧会话_拦截点是空的_狗上旧任务在跑_解除照样撤_撤成才删(台):
+    t = 台
+    _会守(t, abort_fail=1)
+    await _到场(t)
+    t.db.query("UPDATE deter_sessions SET standoff_center=''")   # 库迁移:旧会话的拦截点是空的
+    t.disp.clients["A"].capabilities.tasks["standoff"] = {"state": "retreat",
+                                                          "task_id": "standoff-incident-abc"}
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)   # 升级后的站点
+    assert desk2.sessions["A"].center == ""
+    await desk2.release("A", by="gina")
+    assert t.disp.aborts == [("A", "standoff-incident-abc")]
+    assert "A" in desk2.sessions and t.stb.back == [], "回执没到:不删,停在收尾中"
+    t.clock.go(15)
+    await desk2.tick()
+    assert "A" not in desk2.sessions and t.stb.back == ["A"] and len(t.disp.aborts) == 2
 
 
 async def test_W25外审1_撤被拒_不是没这个任务_当没撤成接着撤(台):
