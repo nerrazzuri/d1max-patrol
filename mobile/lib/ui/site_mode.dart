@@ -6,7 +6,12 @@
 /// - **访客**：在「在家」的基础上再撤几个防区，必须有结束时间（默认 4 小时），到点自动回去。业主、管理员能切。
 ///
 /// 下面列每个防区现在布不布防；管理员能改「在家时也布防」。撤防的防区来了入侵只记录（事件页看得见）。
+///
+/// 别的手机切了、访客到点退回：站点推一帧 `mode`，这一页当场换（W20 外审）；断了 5 秒后重连并重新拉一次，
+/// 另外每 30 秒再问一次兜底。
 library;
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -31,11 +36,47 @@ const List<int> visitorHours = <int>[1, 2, 4, 8, 12, 24];
 class _SiteModePageState extends State<SiteModePage> {
   Map<String, dynamic>? _mode;
   String _msg = '';
+  StreamSubscription<Map<String, dynamic>>? _sub;
+  Timer? _retry;
+  Timer? _poll;
+  bool _disposed = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _listen();
+    _poll = Timer.periodic(const Duration(seconds: 30), (_) => unawaited(_load()));
+  }
+
+  void _listen() {
+    _sub?.cancel();
+    _sub = widget.api.events().listen((f) {
+      if (f['kind'] == 'mode' && f['mode'] is Map && mounted) {
+        setState(() => _mode = Map<String, dynamic>.from(f['mode'] as Map));
+      } else if (f['kind'] == 'snapshot') {
+        unawaited(_load()); // 连上（重连上）的第一帧：断线期间可能错过了切换
+      }
+    }, onError: (Object _) => _lost(), onDone: _lost, cancelOnError: true);
+  }
+
+  void _lost() {
+    if (_disposed) return;
+    _retry?.cancel();
+    _retry = Timer(const Duration(seconds: 5), () {
+      if (_disposed) return;
+      _listen();
+      unawaited(_load());
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _retry?.cancel();
+    _poll?.cancel();
+    _sub?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {

@@ -29,6 +29,8 @@ MODES = ("armed", "home", "visitor")
 LABEL = {"armed": "布防", "home": "在家", "visitor": "访客"}
 DEFAULT_VISITOR_MIN = 4 * 60
 MAX_VISITOR_MIN = 24 * 60
+#: 访客一次最多撤这么多个防区(一个庄园远到不了;防一个请求塞几千个名字进库)。
+MAX_VISITOR_ZONES = 64
 #: 防区名跟事件派遣收的一样:1–128 个字符(摄像头、NVR 报什么就是什么)。
 _ZONE = re.compile(r"[^\x00-\x1f]{1,128}")
 
@@ -119,6 +121,8 @@ class ArmingDesk:
                     isinstance(z, str) and _ZONE.fullmatch(z) for z in zones):
                 raise ModeError("zones 要是防区名的列表")
             vz = sorted(set(zones))
+            if len(vz) > MAX_VISITOR_ZONES:
+                raise ModeError(f"访客一次最多撤 {MAX_VISITOR_ZONES} 个防区")
             until = self._now() + minutes * 60_000
         elif zones is not None or minutes is not None:
             raise ModeError("只有访客模式带 zones、minutes")

@@ -420,18 +420,35 @@ class IncidentDesk:
             self._promote_follower(iid)
 
     def _promote_follower(self, failed: int) -> None:
-        """首条派失败:并进它的第一条提升为新的出动(重新选狗),其余的改并到这一条。"""
+        """首条派失败:并进它的第一条提升为新的出动(重新选狗),其余的改并到这一条。
+        **提升也是一次新的出动,要再看一次模式**(W20 外审):并进来的时候布防、首条失败时已经撤防的,
+        并进它的全部改记 ``disarmed``,一条都不派(同防区才会合并,所以是一起撤的)。"""
+        disarmed: list[int] = []
         with self.db.tx() as c:
-            nxt = c.execute("SELECT id, intercept FROM incidents WHERE merged_into=? AND "
+            nxt = c.execute("SELECT id, intercept, zone FROM incidents WHERE merged_into=? AND "
                             "outcome='merged' ORDER BY id LIMIT 1", (failed,)).fetchone()
             if nxt is None:
                 return
-            point = self.intercept(nxt["intercept"])
-            got = self._reserve(c, nxt["id"], point) if point else self._set(
-                c, nxt["id"], outcome="unmapped", note="拦截点没了")
-            c.execute("UPDATE incidents SET merged_into=? WHERE merged_into=? AND "
-                      "outcome='merged' AND id<>?", (nxt["id"], failed, nxt["id"]))
-            c.execute("UPDATE incidents SET merged_into=NULL WHERE id=?", (nxt["id"],))
+            on, mode = self.arming.armed(nxt["zone"]) if self.arming is not None else (True, "")
+            if not on:
+                from d1max_site.modes import LABEL
+                disarmed = [r["id"] for r in c.execute(
+                    "SELECT id FROM incidents WHERE merged_into=? AND outcome='merged' ORDER BY id",
+                    (failed,)).fetchall()]
+                c.execute("UPDATE incidents SET outcome='disarmed', note=? WHERE merged_into=? "
+                          "AND outcome='merged'",
+                          (f"首条没派成时已是{LABEL[mode]}模式:这个防区撤防,不再派", failed))
+            else:
+                point = self.intercept(nxt["intercept"])
+                got = self._reserve(c, nxt["id"], point) if point else self._set(
+                    c, nxt["id"], outcome="unmapped", note="拦截点没了")
+                c.execute("UPDATE incidents SET merged_into=? WHERE merged_into=? AND "
+                          "outcome='merged' AND id<>?", (nxt["id"], failed, nxt["id"]))
+                c.execute("UPDATE incidents SET merged_into=NULL WHERE id=?", (nxt["id"],))
+        if disarmed:
+            for i in disarmed:
+                self._publish(self._row(i))
+            return
         self._publish(self._row(nxt["id"]))
         if isinstance(got, int):
             task = asyncio.get_running_loop().create_task(self._dispatch_and_publish(got))
