@@ -752,7 +752,8 @@ class _Handler(TlsHandlerMixin):
             self.site.loop.call(lambda: desk.release(robot_id, by=str(user)), timeout_s=30)
             return self._send_json(200, {"ok": True})
         except DeterrenceError as exc:
-            raise HttpError(404 if "没在驱离" in str(exc) else 400, str(exc)) from exc
+            raise HttpError(404 if "没在驱离" in str(exc) else 503 if "落进库" in str(exc)
+                            or "落库没成" in str(exc) else 400, str(exc)) from exc
 
     def _mode(self, method: str, path: str, user) -> None:
         """布防模式(W20)。看:``view``。切到布防:``arm``(保安也行);切到在家、访客:``set_mode``

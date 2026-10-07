@@ -398,7 +398,7 @@ async def test_外审2_开的回执丢了_降级照样关(台):
     assert t.disp.on() == set(), "没记到成了,不等于没开"
 
 
-async def test_外审3_解除时删库没成_先全关_标收尾中_下一拍接着收(台, monkeypatch):
+async def test_外审3_解除时库整个写不进_先全关_标收尾中_回报错_下一拍接着收(台, monkeypatch):
     t = 台
     _到了(t.disp)
     await t.desk.set_level("A", 3, by="gina")
@@ -410,7 +410,8 @@ async def test_外审3_解除时删库没成_先全关_标收尾中_下一拍接
             raise RuntimeError("库锁住了")
         return real()
     monkeypatch.setattr(t.db, "tx", tx)
-    await t.desk.release("A", by="olga")
+    with pytest.raises(DeterrenceError, match="没落进库"):
+        await t.desk.release("A", by="olga")              # 解除回报错:让人知道没落进库
     assert t.disp.on() == set(), "删库没成也先全关"
     assert t.desk.view() == [] and t.desk.busy() == {"A"}, "收尾中:不显示、也不派别的活"
     assert t.stb.back == [] and t.db.query("SELECT level FROM deter_sessions")[0]["level"] == 3
@@ -424,6 +425,87 @@ async def test_外审3_解除时删库没成_先全关_标收尾中_下一拍接
     await t.desk.tick()
     assert t.desk.busy() == set() and t.stb.back == ["A"]
     assert not t.db.query("SELECT 1 FROM deter_sessions")
+
+
+def _删不掉(monkeypatch, db, bad):
+    """库能写(标收尾中成),就是删 ``deter_sessions`` 那一句没成。"""
+    from contextlib import contextmanager
+    real = db.tx
+
+    class 连接:
+        def __init__(self, c):
+            self._c = c
+
+        def execute(self, sql, *a):
+            if bad["on"] and sql.startswith("DELETE FROM deter_sessions"):
+                raise RuntimeError("盘忙")
+            return self._c.execute(sql, *a)
+
+    @contextmanager
+    def tx():
+        with real() as c:
+            yield 连接(c)
+    monkeypatch.setattr(db, "tx", tx)
+
+
+async def test_复查_解除时删库没成_马上重启_只接着收尾_不再开(台, monkeypatch):
+    t = 台
+    _到了(t.disp)
+    await t.desk.set_level("A", 3, by="gina")
+    bad = {"on": True}
+    _删不掉(monkeypatch, t.db, bad)
+    await t.desk.release("A", by="olga")                  # 「收尾中」落进库了:不报错
+    assert t.disp.on() == set() and t.desk.view() == []
+    assert t.db.query("SELECT ending FROM deter_sessions")[0]["ending"] == "olga 解除"
+    # 站点马上重启(库删不掉的毛病也还在)
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
+    assert desk2.view() == [] and desk2.busy() == {"A"}, "收尾中:不显示,仍不派别的活"
+    n = len(t.disp.sent)
+    t.clock.go(30)
+    await desk2.tick()
+    assert not [p for _, p, _ in t.disp.sent[n:] if p["on"]], "重启之后一条「开」都不发"
+    assert t.disp.on() == set()
+    with pytest.raises(DeterrenceError):
+        await desk2.set_level("A", 3, by="gina")
+    bad["on"] = False
+    await desk2.tick()
+    assert desk2.busy() == set() and t.stb.back == ["A"], "库好了:收完、派回程"
+    assert not t.db.query("SELECT 1 FROM deter_sessions")
+
+
+async def test_复查_到点收也先落收尾_删库没成重启照样只收尾(台, monkeypatch):
+    t = 台
+    _到了(t.disp)
+    await t.desk.set_level("A", 2, by="gina")
+    bad = {"on": True}
+    _删不掉(monkeypatch, t.db, bad)
+    t.clock.go(CAP_S)
+    await t.desk.tick()                                   # 10 分钟到点:收尾,删库没成
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
+    n = len(t.disp.sent)
+    await desk2.tick()
+    assert not [p for _, p, _ in t.disp.sent[n:] if p["on"]]
+
+
+def test_复查_接口_解除没落进库回503_切级落库没成也是503(tmp_path):
+    from test_site_api import 站
+
+    class 库坏了的台:
+        async def release(self, rid, *, by):
+            raise DeterrenceError("声光已全关,但「解除」没落进库(站点重启可能恢复这一场):"
+                                  "稍后再按一次")
+
+        async def set_level(self, rid, level, *, by):
+            raise DeterrenceError("落库没成,级别没改: 库锁住了")
+    s = 站(tmp_path)
+    try:
+        s.api.deterrence = 库坏了的台()
+        tok = s.login()
+        code, d = s.req("POST", "/api/deterrence/A/release", {}, token=tok)
+        assert code == 503 and "稍后再按一次" in d["error"]
+        assert s.req("POST", "/api/deterrence/A/level", {"level": 1}, token=tok)[0] == 503
+    finally:
+        s.close()
 
 
 async def test_外审3_切级落库没成_不改_自动升落库没成_下一拍再升(台, monkeypatch):
