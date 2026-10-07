@@ -15,8 +15,9 @@
   **连续满 20 秒**变成**确认没人**。
 
 **靠近**(``near``):**每个相机各自判**(进到 :data:`NEAR_M` 5 米以内算近、退到 :data:`NEAR_CLEAR_M`
-以外才算不近),有一个健康的相机近就算近 —— 远处一个人不许把另一边近处的人盖掉。
-人数是各个健康相机看到的加起来,最近的距离取各个相机里最近的。
+以外才算不近),有一个**确认看到人的**相机近就算近 —— 远处一个人不许把另一边近处的人盖掉。
+人数是各个确认看到人的相机加起来,最近的距离取它们里最近的。**只有确认了的相机才算数**(W24 复查二):
+另一台相机一帧误检出 3 米,不许把「近」带进来。
 
 **截图**:检测节点每存一张(``persons {snapshot}``)这里就收一张,存成归档传站点、删掉原文件,不管这一帧
 是不是「刚看到人」那一下(W24 外审 5)。存不下的留着,检测节点那头有张数上限。
@@ -160,13 +161,13 @@ class PersonView:
     def _update(self, m: Persons | None = None) -> None:
         now = self._now()
         live = [c for k, c in self._cams.items() if self._healthy(k)]
-        if any(c.sees() for c in live):
-            seeing = [c for c in live if c.count]
-            self.count = sum(c.count for c in seeing)
-            ranged = [c.nearest for c in seeing if c.nearest is not None]
+        sure = [c for c in live if c.sees()]               # 确认看到人的相机(三帧里两帧、这帧也有)
+        if sure:
+            self.count = sum(c.count for c in sure)
+            ranged = [c.nearest for c in sure if c.nearest is not None]
             self.nearest_m = min(ranged) if ranged else None
             was_near = self.near and self.present is True
-            self.near = any(c.near for c in live)
+            self.near = any(c.near for c in sure)
             self._empty_since = None
             if self.present is not True:
                 self.present = True

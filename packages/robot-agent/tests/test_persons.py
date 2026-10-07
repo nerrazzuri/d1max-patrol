@@ -302,3 +302,16 @@ def test_复查2_前相机看到的人走出画面_近就不算了():
         v.on_persons(_帧(9.0, camera="back"))
     caps = v.caps()
     assert caps["near"] is False and caps["nearest_m"] == 9.0 and caps["present"] is True
+
+
+def test_复查二1_后相机确认远处的人_前相机一帧误检3米_不算近():
+    c, ev, v = _台()
+    for _ in range(3):
+        v.on_persons(_帧(9.0, camera="back"))
+    v.on_persons(_帧(3.0, camera="front"))                # 前相机一帧误检
+    caps = v.caps()
+    assert caps["near"] is False and caps["nearest_m"] == 9.0 and caps["count"] == 1
+    assert "person_near" not in [k for k, _ in ev]
+    v.on_persons(_帧(camera="front"))
+    v.on_persons(_帧(3.0, camera="front"))                # 三帧里只有两帧、这一帧有:确认了
+    assert v.caps()["near"] is True and v.caps()["count"] == 2
