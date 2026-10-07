@@ -154,3 +154,58 @@ async def test_代理只派接上的那几路_没接的不碰设备():
     assert await desk.handle(cmd({"output": "siren", "on": True, "max_s": 5})) == ""
     assert hal.calls == [("siren", True)]
     assert desk.caps() == {"outputs": ["siren"], "max_s": 600.0}
+
+
+class _有回调的喇叭:
+    """像真狗 HAL:放完、放坏了经 ``set_sound_listener`` 回调;``fail`` 时当场起不来。"""
+
+    def __init__(self):
+        self.listener = None
+        self.fail = ""
+        self.clips = []
+
+    def hal_capabilities(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(actuators={"speaker": True})
+
+    def set_sound_listener(self, fn):
+        self.listener = fn
+
+    async def sound(self, clip, max_s):
+        if self.fail:
+            raise RuntimeError(self.fail)
+        self.clips.append(clip)
+
+
+def _喇叭命令(clip, prio, cid="c"):
+    from d1max_contract.messages import Command
+    p = {"output": "speaker", "on": True, "max_s": 60, "clip": clip, "priority": prio}
+    return Command(command_id=cid, task_id=f"deter-{cid}", kind="deter", issued_at=1,
+                   expires_at=2, control_epoch=1, payload=p)
+
+
+async def test_外审3_喇叭起不来_回拒绝_不记开_不占优先级():
+    from d1max_agent.deter import DeterDesk
+    hal, ev = _有回调的喇叭(), []
+    desk = DeterDesk(hal, emit=lambda k, d: ev.append((k, d)))
+    hal.fail = "喇叭放不出来: aplay 不在"
+    why = await desk.handle(_喇叭命令("warn-zh", 90))
+    assert why.startswith("device:") and "aplay" in why
+    assert ev == [] and desk.playing() is None
+    hal.fail = ""
+    assert await desk.handle(_喇叭命令("warn-en", 10, "c2")) == "", "没占着:低的照样能放"
+
+
+async def test_外审3_短话术放完了_当场放开优先级_记一条结束事件():
+    from d1max_agent.deter import DeterDesk
+    hal, ev = _有回调的喇叭(), []
+    desk = DeterDesk(hal, emit=lambda k, d: ev.append((k, d)))
+    assert await desk.handle(_喇叭命令("warn-zh", 90)) == ""
+    assert await desk.handle(_喇叭命令("warn-en", 10, "c2")) == "busy"
+    hal.listener(True, "放完了")                          # 3 秒的话术放完了,远没到 max_s
+    assert desk.playing() is None
+    assert ev[-1] == ("deter", {"output": "speaker", "on": False, "ended": "done",
+                                "reason": "放完了"})
+    assert await desk.handle(_喇叭命令("warn-en", 10, "c3")) == ""
+    hal.listener(False, "播放器退出码 1")
+    assert ev[-1][1]["ended"] == "failed" and desk.playing() is None

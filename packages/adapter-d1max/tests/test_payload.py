@@ -34,6 +34,8 @@ class 假板子:
         self.mute = False
         self.garble = False
         self.exception = False
+        #: 执行了、应答丢了(W21 外审):线圈照改,不回。
+        self.drop_reply = False
         self.writes: list[tuple[int, bool]] = []
         self._stop = False
         self.t = threading.Thread(target=self._serve, daemon=True)
@@ -67,6 +69,8 @@ class 假板子:
                     _, _, coil, val = struct.unpack(">BBHH", req[:6])
                     self.coils[coil] = val == 0xFF00
                     self.writes.append((coil, val == 0xFF00))
+                    if self.drop_reply:
+                        continue
                     resp = frame(req[:6])
                 elif fn == 0x01:
                     _, _, start, n = struct.unpack(">BBHH", req[:6])
@@ -341,3 +345,167 @@ async def test_真狗HAL断开_上装全关(板子):
     assert 板子.coils[1] and 板子.coils[2]
     await hal.close()
     assert not any(板子.coils[:3]), "断开:声光全关"
+
+
+# -------------------------------------------- W21 外审:关闭保障、起来全关、喇叭的真结果
+
+
+async def _等到(pred, timeout=5.0):
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while loop.time() < end:
+        if pred():
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
+def _快(p: Payload) -> Payload:
+    p.RETRY_S = 0.1                                       # 看护循环快一点,测试别等太久
+    p.relay.timeout_s, p.relay.retries = 0.1, 0
+    return p
+
+
+async def test_外审1_开着时手动关失败_原截止时间过了照样关(板子):
+    p = _快(_上装(板子))
+    await p.set("siren", True, 0.5)
+    板子.mute = True
+    with pytest.raises(PayloadError):
+        await p.set("siren", False, 0)                  # 关的那一下板子没回
+    assert 板子.coils[1] and "siren" in p.problems()
+    await asyncio.sleep(0.6)                              # 原截止时间也过了
+    板子.mute = False
+    assert await _等到(lambda: not 板子.coils[1]), "关没成要一直接着关"
+    assert await _等到(lambda: p.problems() == [])
+    await p.close()
+
+
+async def test_外审1_再开一次失败_不丢关闭保障(板子):
+    p = _快(_上装(板子))
+    await p.set("spotlight", True, 60)
+    板子.mute = True
+    with pytest.raises(PayloadError):
+        await p.set("spotlight", True, 60)               # 再开(续时间)没成
+    板子.mute = False
+    assert await _等到(lambda: not 板子.coils[2]), "开没成就当「要关」接着关"
+    await p.close()
+
+
+async def test_外审1_板子执行了开_应答丢了_照样关上(板子):
+    p = _快(_上装(板子))
+    await p.start()                                       # 先确认过「关」:之后才真靠「不明」来补关
+    assert p.state()["strobe"] is False
+    板子.drop_reply = True
+    with pytest.raises(PayloadError):
+        await p.set("strobe", True, 60)
+    assert p.state()["strobe"] is None, "应答丢了:状态不明"
+    assert 板子.coils[0], "板子其实开了"
+    板子.drop_reply = False
+    assert await _等到(lambda: not 板子.coils[0])
+    await p.close()
+
+
+async def test_外审1_到点关与新命令不交叉_新开的按新截止时间(板子):
+    p = _快(_上装(板子))
+    await p.set("siren", True, 0.3)
+    await asyncio.sleep(0.25)
+    await p.set("siren", True, 1.0)                       # 快到点时又开:按新的算
+    await asyncio.sleep(0.3)
+    assert 板子.coils[1], "旧的到点不许把新开的关掉"
+    assert await _等到(lambda: not 板子.coils[1], 2.0)
+    await p.close()
+
+
+async def test_外审2_起来全关失败_接着关_期间报故障(板子):
+    板子.coils[:3] = [True, True, True]                   # 上次进程死掉时开着的
+    板子.mute = True
+    p = _快(_上装(板子))
+    await p.start()                                       # 不挡代理起来
+    assert sorted(p.problems()) == ["siren", "spotlight", "strobe"]
+    assert 板子.coils[:3] == [True, True, True]
+    板子.mute = False
+    assert await _等到(lambda: 板子.coils[:3] == [False, False, False]), "通了之后接着关"
+    assert await _等到(lambda: p.problems() == [])
+    await p.close()
+
+
+async def test_外审2_真狗HAL把关不上的几路当故障报(板子):
+    from d1max_adapter_d1max.hal import D1MaxHal
+
+    class 假旁路:
+        def current_faults(self, fresh_s):
+            return []
+    板子.mute = True
+    p = _快(_上装(板子))
+    await p.start()
+    hal = D1MaxHal(backend=假旁路(), payload=p)            # type: ignore[arg-type]
+    codes = sorted(f.code for f in await hal.faults())
+    assert codes == ["payload_siren", "payload_spotlight", "payload_strobe"]
+    assert all(not f.fatal and "接着关" in f.text for f in await hal.faults())
+    板子.mute = False
+    assert await _等到(lambda: p.problems() == [])
+    assert await hal.faults() == ()
+    await p.close()
+
+
+class 坏进程(假进程):
+    def __init__(self, log, args, secs, rc):
+        super().__init__(log, args, secs)
+        self._rc = rc
+
+    def _finish(self):
+        if self.returncode is None:
+            self.returncode = self._rc
+            self._done.set()
+
+
+async def test_外审3_播放器不存在_当场报错_不回调(tmp_path):
+    (tmp_path / "w.wav").write_bytes(b"RIFF")
+
+    async def 没有播放器(*args, **kw):
+        raise FileNotFoundError("aplay")
+    ends: list = []
+    p = Payload(PayloadConfig(audio_device="hw:1", clips_dir=str(tmp_path)), run=没有播放器)
+    p.on_sound_end = lambda ok, why: ends.append((ok, why))
+    with pytest.raises(PayloadError, match="放不出来"):
+        await p.sound("w", 5)
+    assert not p.playing() and ends == []
+
+
+async def test_外审3_TTS退出码不对_当场报错(tmp_path):
+    log: list = []
+
+    async def run(*args, **kw):
+        return 坏进程(log, args, 0.01, 1)
+    p = Payload(PayloadConfig(audio_device="hw:1", tts_command="espeak-ng -w {wav} {text}"),
+                run=run)
+    with pytest.raises(PayloadError, match="TTS 合成失败"):
+        await p.sound("tts:en:hello", 5)
+    assert len(log) == 1, "合成失败就不放"
+
+
+async def test_外审3_放完_放坏了_到点_都回调_被打断的不回调(tmp_path):
+    (tmp_path / "w.wav").write_bytes(b"RIFF")
+    ends: list = []
+    log: list = []
+    rcs = iter([0, 1])
+
+    async def run(*args, **kw):
+        return 坏进程(log, args, 0.05, next(rcs, 0))
+    p = Payload(PayloadConfig(audio_device="hw:1", clips_dir=str(tmp_path)), run=run)
+    p.on_sound_end = lambda ok, why: ends.append((ok, why))
+    await p.sound("w", 5)                                 # 短话术:0.05 s 放完
+    assert await _等到(lambda: len(ends) == 1)
+    assert ends[0] == (True, "放完了")
+    await p.sound("w", 5)                                 # 退出码 1
+    assert await _等到(lambda: len(ends) == 2)
+    assert ends[1][0] is False and "退出码 1" in ends[1][1]
+    p._run = _假跑(log, 10)
+    await p.sound("w", 0.1)                               # 到点
+    assert await _等到(lambda: len(ends) == 3) and ends[2] == (True, "到点了")
+    await p.sound("w", 5)
+    await asyncio.sleep(0.05)
+    await p.sound("w", 5)                                 # 打断上一段:上一段不回调
+    await p.stop_sound()                                  # 关:也不回调
+    await asyncio.sleep(0.1)
+    assert len(ends) == 3

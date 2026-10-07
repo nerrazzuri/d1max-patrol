@@ -334,8 +334,14 @@ class D1MaxHal:
         """**当前**故障:最近 ``FAULT_FRESH_S`` 秒内旁路进程还报过的(见旁路客户端
         ``current_faults``)。不是历史 —— 历史里跌倒过一次就永远挂着,站点认不出下一次。"""
         # 厂商没说哪些 level 算致命;取 level>=2 是假设(待真机验证),同旁路客户端。
-        return tuple(Fault(code=str(f.code), fatal=f.level >= 2, text=f.message)
-                     for f in self._b.current_faults(FAULT_FRESH_S))
+        sdk = tuple(Fault(code=str(f.code), fatal=f.level >= 2, text=f.message)
+                    for f in self._b.current_faults(FAULT_FRESH_S))
+        # 上装(W21 外审):状态不明、关不上的几路当故障报(站点出告警);看护循环还在接着关
+        names = {"strobe": "警灯", "siren": "警笛", "spotlight": "聚光灯"}
+        up = tuple(Fault(code=f"payload_{o}", fatal=False,
+                         text=f"上装{names.get(o, o)}状态不明或关不上(继电器板没确认,正在接着关)")
+                   for o in (self._payload.problems() if self._payload is not None else ()))
+        return sdk + up
 
     # ------------------------------------------------------------ 执行器与媒体
 
@@ -373,6 +379,11 @@ class D1MaxHal:
         from pathlib import Path
         d = Path(self._payload.cfg.clips_dir)
         return tuple(sorted(p.stem for p in d.glob("*.wav"))) if d.is_dir() else ()
+
+    def set_sound_listener(self, fn: Callable[[bool, str], Any]) -> None:
+        """喇叭放完、放坏了、到点了回调 ``fn(ok, 原因)``(代理据此放开优先级、记事件)。"""
+        if self._payload is not None:
+            self._payload.on_sound_end = fn
 
     def sound_tts(self) -> bool:
         return self._payload is not None and bool(self._payload.cfg.tts_command)
