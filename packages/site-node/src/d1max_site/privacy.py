@@ -56,6 +56,9 @@ class PrivacyDesk:
         with self.db.tx() as c:
             c.execute("DELETE FROM run_photos WHERE run_id=?", (run["id"],))
             c.execute("DELETE FROM runs WHERE id=?", (run["id"],))
+            # 「这一趟的导出要删」跟删登记同一个事务落库(W30 复查):导出删成了才清
+            c.execute("INSERT OR IGNORE INTO export_purges(run_id, created_ms) VALUES (?,?)",
+                      (run["id"], self._now()))
         return True
 
     def prune(self) -> int:
@@ -64,7 +67,7 @@ class PrivacyDesk:
         rows = [dict(r) for r in self.db.query(
             "SELECT * FROM runs WHERE keep=0 AND last_ms<? ORDER BY last_ms LIMIT 500", (cutoff,))]
         done = {r["id"] for r in rows if self._delete_run(r)}
-        self._drop_exports(done)
+        self._drop_exports()                            # 连以前没删成的导出一起接着删
         n = len(done)
         if n:
             log.info("运行记录过了 %d 天留存期:删了 %d 趟", self.keep_days, n)
@@ -92,7 +95,7 @@ class PrivacyDesk:
                 done.add(r["id"])
             else:
                 out["failed"] += 1
-        out["exports"] = self._drop_exports(done)
+        out["exports"] = self._drop_exports()
         if self.recordings is not None:
             q = "SELECT * FROM recordings WHERE start_ms>=? AND start_ms<?"
             args = [since_ms, until_ms]
@@ -108,10 +111,22 @@ class PrivacyDesk:
                     out["failed"] += 1
         return out
 
-    def _drop_exports(self, run_ids: set[int]) -> int:
-        if self.exports is None or not run_ids:
+    def _drop_exports(self) -> int:
+        """把 ``export_purges`` 里记着的那几趟的导出删掉,删成了才清记录;删不掉(权限、盘)留着,
+        下一次删除、定时清理、站点重启接着删(W30 复查)。回删了几份。"""
+        if self.exports is None:
             return 0
-        return self.exports.drop_exports(run_ids)
+        ids = {r["run_id"] for r in self.db.query("SELECT run_id FROM export_purges")}
+        if not ids:
+            return 0
+        try:
+            n = self.exports.drop_exports(ids)
+        except OSError as exc:
+            log.warning("导出删不掉(%s):记着,下次接着删", exc)
+            return 0
+        with self.db.tx() as c:
+            c.executemany("DELETE FROM export_purges WHERE run_id=?", [(i,) for i in ids])
+        return n
 
     def set_keep(self, run_id: int, keep: bool) -> dict[str, Any]:
         with self.db.tx() as c:

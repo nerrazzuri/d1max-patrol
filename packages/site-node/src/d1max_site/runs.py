@@ -304,7 +304,7 @@ class RunDesk:
                 if isinstance(ids, list) and not set(ids) & run_ids:
                     continue
                 zp = m.with_suffix(".zip")
-                for p in (zp, m):
+                for p in (zp, m):         # 先 zip 后说明:删不掉抛,说明还在,下次接着删
                     p.unlink(missing_ok=True)
                 n += 1
         if n:

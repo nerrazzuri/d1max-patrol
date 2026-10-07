@@ -146,11 +146,21 @@ class SiteBackup:
 
     def _seal_leftovers(self) -> int:
         """加密之前留下的明文备份(W30 外审 2):**整个备份目录**里不是密文的文件都加密、删掉明文 ——
-        包括站点上已经删了的照片、地图(镜像只跟着现有的源走,碰不到它们)。回处理了几个。"""
+        包括站点上已经删了的照片、地图(镜像只跟着现有的源走,碰不到它们)。回处理了几个。
+
+        ``.tmp``、``.part``(以前拷到一半、加密到一半被打断留下的,可能是明文):**删掉**(W30 复查)。
+        备份只在杂事线程里一趟一趟地跑,走到这儿时这一趟自己的临时文件都已经换名了,剩下的都是残骸;
+        源目录里的 ``.tmp`` 镜像本来就不拷,备份里不会有正经的这种文件。"""
         assert self.dest is not None and self.box is not None
         n = 0
         for f in sorted(self.dest.rglob("*")):
-            if not f.is_file() or f.is_symlink() or f.name.endswith((SEALED, ".tmp", ".part")):
+            if not f.is_file() or f.is_symlink():
+                continue
+            if f.name.endswith((".tmp", ".part")):
+                f.unlink(missing_ok=True)               # 半截的残骸:删,不留原文
+                n += 1
+                continue
+            if f.name.endswith(SEALED):
                 continue
             st = f.stat()
             sealed = f.with_name(f.name + SEALED)

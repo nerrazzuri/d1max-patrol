@@ -404,3 +404,67 @@ def test_外审4_换新主机恢复_两把密钥都放回_口令照样解得开_
     db2.sealbox = SealBox(load_or_create_key(skey))      # 放回离线另存的那一把
     assert load_cameras(db2)[0].password == "Cam#1"
     db2.close()
+
+
+# ------------------------------------------------------------ W30 复查
+
+
+def test_复查1_导出删不掉_记着_下次删除或定时清理接着删(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from d1max_site.runs import RunDesk, RunError
+    c, db, store, rec, desk = _台(tmp_path)
+    runs = RunDesk(store, home=tmp_path, now_ms=c)
+    desk.exports = runs
+    _传(store, stamp=S1, photo=b"PHOTO-1")
+    meta = runs.export(since_ms=0, until_ms=2_000_000_000_000, wait=True)
+    real = Path.unlink
+
+    def 删不掉(self, missing_ok=False):
+        if self.suffix == ".zip":
+            raise PermissionError("只读")
+        return real(self, missing_ok=missing_ok)
+    monkeypatch.setattr(Path, "unlink", 删不掉)
+    got = desk.purge(since_ms=c.ms - 1000, until_ms=c.ms + 1000)
+    assert got["runs"] == 1 and got["exports"] == 0
+    assert runs.export_path(meta["name"]).is_file(), "这一次没删成"
+    assert db.query("SELECT run_id FROM export_purges"), "记着要删"
+    monkeypatch.setattr(Path, "unlink", real)
+    assert desk.purge(since_ms=c.ms - 1000, until_ms=c.ms + 1000)["exports"] == 1, \
+        "再跑一次:运行记录已经没了,照样按记着的删"
+    with pytest.raises(RunError):
+        runs.export_path(meta["name"])
+    assert not db.query("SELECT 1 FROM export_purges"), "删成了才清"
+
+
+def test_复查1_站点重启后定时清理接着删导出(tmp_path, monkeypatch):
+    from d1max_site.runs import RunDesk, RunError
+    c, db, store, rec, desk = _台(tmp_path)
+    runs = RunDesk(store, home=tmp_path, now_ms=c)
+    _传(store, stamp=S1)
+    meta = runs.export(since_ms=0, until_ms=2_000_000_000_000, wait=True)
+    desk.purge(since_ms=c.ms - 1000, until_ms=c.ms + 1000)    # 没接导出(像旧站点):只记着
+    assert runs.export_path(meta["name"]).is_file()
+    desk2 = PrivacyDesk(db, store, now_ms=c, exports=runs)    # 重启
+    desk2.prune()
+    with pytest.raises(RunError):
+        runs.export_path(meta["name"])
+
+
+def test_复查2_旧备份里拷到一半的明文临时文件_删掉(箱, tmp_path):
+    c = 钟()
+    db, store = _证据(tmp_path, c)
+    _传(store)
+    dest = tmp_path / "bak"
+    junk = [dest / "evidence" / "A" / "old-photo.jpg.tmp", dest / "maps" / "m" / "floor.pgm.part",
+            dest / "db" / ".site-x.db.tmp"]
+    for j in junk:
+        j.parent.mkdir(parents=True, exist_ok=True)
+        j.write_bytes(b"PLAIN-HALF")
+    b = SiteBackup(db, store.root, dest, now_ms=c,
+                   box=SealBox(load_or_create_key(tmp_path / "keys" / "backup.key")))
+    assert b.run_once(), b.last_error
+    assert not any(j.exists() for j in junk)
+    assert not any(b"PLAIN-HALF" in p.read_bytes() for p in dest.rglob("*") if p.is_file())
+    assert [p for p in dest.rglob("*") if p.is_file() and not p.name.endswith(SEALED)] == []
+    db.close()
