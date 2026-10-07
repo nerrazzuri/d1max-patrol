@@ -83,7 +83,7 @@ ALERTS_LIMIT_MAX = 2000
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
 _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
-                     r"(teleop|halt|resume|supervise|relocalize|home/here)$")
+                     r"(teleop|halt|resume|supervise|relocalize|home/here|deter)$")
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
@@ -418,6 +418,8 @@ class _Handler(TlsHandlerMixin):
                     return self._supervise(robot_id, user)
                 if m.group(2) == "relocalize" and method == "POST":
                     return self._relocalize(robot_id, user)
+                if m.group(2) == "deter" and method == "POST":
+                    return self._deter(robot_id, user)
                 if m.group(2) == "home/here" and method == "POST":
                     return self._mark_home(robot_id, user)
                 if m.group(2) == "teleop" and method == "GET":
@@ -819,6 +821,26 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "没有这台狗")
         was = self.site.dispatcher.resume(robot_id, by=str(user))
         return self._send_json(200, {"robot_id": robot_id, "was_held": was})
+
+    def _deter(self, robot_id: str, user) -> None:
+        """上装(W21):``{"output", "on", "max_s"?, "clip"?}``。``dispatch`` 权限(保安、管理员)。
+        喇叭的优先级站点定成「人手动的」(``MANUAL``);请求体里的 ``priority`` 不认。"""
+        from d1max_site.priorities import MANUAL
+        self._need(user, DISPATCH)
+        self._audit_target = robot_id
+        d = self._body()
+        if not isinstance(d, dict):
+            raise HttpError(400, "要一个对象")
+        d = {k: d[k] for k in ("output", "on", "max_s", "clip") if k in d}
+        self._audit_detail = {k: str(v)[:80] for k, v in d.items()}
+        from d1max_contract.deter import parse_deter
+        from d1max_contract.errors import ContractError
+        try:
+            parse_deter(d)
+        except ContractError as exc:
+            raise HttpError(400, str(exc)) from exc
+        return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.deter(
+            robot_id, d, issued_by=str(user), priority=MANUAL)))
 
     def _relocalize(self, robot_id: str, user) -> None:
         """设位置(W00c6e,里程锚定):``{"x", "y", "yaw"}`` 或 ``{"at_home": true}``,转成

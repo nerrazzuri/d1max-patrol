@@ -50,12 +50,12 @@ async def test_能力声明与入口一致(台子):
     assert caps.lateral is False and caps.recharge_mode == "none"
     assert caps.sensing == {"lidar": False, "depth": False, "thermal": False, "imu": False,
                             "joint_effort": False, "foot_force": False}
-    assert caps.actuators == {"light": False, "siren": False, "speaker": False,
+    assert caps.actuators == {"light": False, "strobe": False, "siren": False, "speaker": False,
                               "spotlight": False, "head": False}
     for call in (r.imu(), r.lidar(), r.ultrasonic(), r.joints(), r.contacts(), r.depth(),
                  r.thermal(), r.audio_session(), r.recharge_start(), r.recharge_stop(), r.undock(),
                  r.recharge_status(), r.light("front", True), r.strobe("front", "x", 1.0),
-                 r.sound("x", 1.0), r.spotlight(True, 1.0), r.head(0.0, 0.0),
+                 r.siren(True, 1.0), r.sound("x", 1.0), r.spotlight(True, 1.0), r.head(0.0, 0.0),
                  r.snapshot("front"), r.stream_url("front")):
         with pytest.raises(HalUnsupported):
             await call
@@ -197,3 +197,23 @@ async def test_close撤控制权_断连即停止输出(台子):
     assert (await r.control_status()).held is False
     got = await r.set_velocity(_v(vx=0.3, seq=2))
     assert got.rejected and got.reason == "no_control"
+
+
+async def test_上装_开了带最长时间_到点算关_关就关(台子):
+    """W21:仿真狗装上上装(``payload=True``),四路都报能力;到点按仿真的钟算关。"""
+    clock, _ = 台子
+    r = SimRobot(now_ms=clock, payload=True)
+    caps = r.hal_capabilities().actuators
+    assert caps["strobe"] and caps["siren"] and caps["speaker"] and caps["spotlight"]
+    await r.siren(True, 2.0)
+    await r.strobe("warn", "flash", 5.0)
+    await r.sound("warn-zh", 3.0)
+    assert r.deter_on("siren") and r.deter_on("strobe") and r.deter_clip == "warn-zh"
+    clock.advance(2.5)
+    assert not r.deter_on("siren") and r.deter_on("strobe") and r.deter_on("speaker")
+    await r.strobe("warn", "off", 0)
+    await r.sound("", 0)
+    assert not r.deter_on("strobe") and not r.deter_on("speaker")
+    with pytest.raises(ValueError):
+        await r.sound("nope", 3.0)
+    assert r.sound_clips() == ("warn-zh", "warn-en")

@@ -107,6 +107,8 @@ class CommandProcessor:
         #: 地图命令(W00c5d 第二部分:``map_activate``/``mapping``/``map_build``,都不是任务):
         #: 返回非空 = 拒绝原因;空串 = 收下(后台做,做完发事件)。
         self.map_hook: Callable[[Command], Any] | None = None
+        #: 上装(W21,``deter``):不是任务。回空串 = 做了,否则拒收的理由。
+        self.deter_hook: Callable[[Command], Any] | None = None
 
     # ------------------------------------------------------------ 代次落盘
 
@@ -210,6 +212,14 @@ class CommandProcessor:
             # **不进幂等记录**:续期每 ttl/2 一条,记下来一路一天几十万行、代理起来还要全量重放。
             # 重投的旧 video 命令至多把推流续到它自己的有效期,无害。
             return self._handle_video(cmd)
+        if cmd.kind == "deter":
+            # **不进幂等记录**(同 video):重投的旧命令至多把那一路从现在再开 max_s,有上限;
+            # 关的重投无害。
+            if self.deter_hook is None:
+                return self._rej(cmd, "unsupported")
+            why = await self.deter_hook(cmd)
+            return self._rej(cmd, why) if why else Ack(cmd.command_id, cmd.task_id,
+                                                         AckResult.ACCEPTED)
         if cmd.kind in MAP_KINDS:
             if self.map_hook is None:
                 return self._finish(self._rej(cmd, "unsupported"))

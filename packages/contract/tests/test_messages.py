@@ -35,7 +35,8 @@ STATUS = Status(online=True, boot_id="b-1", ready=READY, control_epoch=3, last_s
                 task=TaskSummary(task_id="t-1", kind="goto", state=TaskState.RUNNING))
 CAPS = Capabilities(robot_id="D1MAX-C40011", agent="0.1.0", adapter="sim/0.1.0",
                     tasks={"goto": {"max_speed_mps": 1.0}},
-                    actuators={"light": [], "siren": False, "speaker": False, "spotlight": False},
+                    actuators={"light": [], "strobe": False, "siren": False, "speaker": False,
+                               "spotlight": False},
                     sensing={"lidar": False, "depth": False, "thermal": False, "imu_hz": 0,
                              "joint_effort": False, "foot_force": False})
 RECON = Reconcile(boot_id="b-1", control_epoch=3, task=STATUS.task,

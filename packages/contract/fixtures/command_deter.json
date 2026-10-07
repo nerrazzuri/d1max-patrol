@@ -1,0 +1,19 @@
+{
+  "command_id": "cmd-0010",
+  "control_epoch": 3,
+  "expires_at": 1760000410000,
+  "issued_at": 1760000400000,
+  "kind": "deter",
+  "offline_policy": "default",
+  "payload": {
+    "clip": "warn-zh",
+    "max_s": 30.0,
+    "on": true,
+    "output": "speaker",
+    "priority": 60
+  },
+  "precondition": null,
+  "priority": 0,
+  "schema": "1.0",
+  "task_id": "deter-speaker"
+}

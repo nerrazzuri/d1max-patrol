@@ -27,6 +27,8 @@ ALLOWED_KINDS = frozenset({
     "outbox_retry", "release", "release_activate", "release_install", "release_rollback",
     "snapshot", "video", "mark_home", "relocalize", "supervise", "resume", "zones_set",
     "teleop_lease", "proc_log", "release_precheck", "mapping_trail",
+    # W21:上装的声光(警灯、警笛、聚光灯、喇叭),带最长时间、到点狗上自己关;不动腿
+    "deter",
 })
 #: 直接速度、运动原语:站点永远不许发。
 FORBIDDEN_KINDS = frozenset({"vel", "walk", "move", "stand", "lie", "estop_off", "gait"})

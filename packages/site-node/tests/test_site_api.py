@@ -42,7 +42,8 @@ class 站:
     def __init__(self, tmp_path, *, alerts: bool = False, video: dict | None = None,
                  agent_video: bool = True, teleop: dict | None = None,
                  runs: dict | None = None, maps: dict | None = None,
-                 releases: dict | None = None, autonomy: str = "autonomous") -> None:
+                 releases: dict | None = None, autonomy: str = "autonomous",
+                 payload: bool = False) -> None:
         self.loop = LoopThread()
         self.loop.start()
         self.db = SiteDB(tmp_path / "site.db")
@@ -60,7 +61,8 @@ class 站:
             from conftest import 同钟
             同钟(self.disp)                # W09h:同一个钟的台子,钟差还没估出来当 0
             await self.disp.start()
-            self.dog = SimRobot(now_ms=wall, max_vx=1.0, max_wz=1.5, stop_latency_s=0.1)
+            self.dog = SimRobot(now_ms=wall, max_vx=1.0, max_wz=1.5, stop_latency_s=0.1,
+                                payload=payload)
             reg = Registration(site_id=SITE, robot_id="A", credential_fingerprint="sha256:a",
                                issued_at=0, expires_at=10**14)
             self.pusher = None

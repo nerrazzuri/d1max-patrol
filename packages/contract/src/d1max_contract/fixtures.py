@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from d1max_contract.deter import DeterRequest
 from d1max_contract.geometry import Pose
 from d1max_contract.hal import Fault
 from d1max_contract.messages import (
@@ -104,6 +105,12 @@ def generate() -> dict[str, dict[str, Any]]:
             command_id="cmd-0009", task_id="halt-1", kind="halt",
             issued_at=1_760_000_302_000, expires_at=1_760_000_332_000, control_epoch=3,
             priority=TELEOP_PRIORITY, payload={"reason": "operator"}).to_wire(),
+        # W21:上装。喇叭放一段话术,带优先级;到点狗上自己掐。
+        "command_deter": Command(
+            command_id="cmd-0010", task_id="deter-speaker", kind="deter",
+            issued_at=1_760_000_400_000, expires_at=1_760_000_410_000, control_epoch=3,
+            priority=0, payload=DeterRequest(output="speaker", on=True, max_s=30.0,
+                                             clip="warn-zh", priority=60).to_payload()).to_wire(),
         "command_abort": Command(
             command_id="cmd-0002", task_id="task-0001", kind="abort",
             issued_at=1_760_000_010_000, expires_at=1_760_000_070_000, control_epoch=3,
@@ -132,7 +139,8 @@ def generate() -> dict[str, dict[str, Any]]:
             tasks={"goto": {"max_speed_mps": 1.0, "path": "straight", "autonomy": "supervised"},
                    "patrol": {"map_id": "estate-1", "map_version": "7",
                               "autonomy": "supervised"}},
-            actuators={"light": [], "siren": False, "speaker": False, "spotlight": False},
+            actuators={"light": [], "strobe": False, "siren": False, "speaker": False,
+                       "spotlight": False},
             sensing={"lidar": False, "depth": False, "thermal": False, "imu_hz": 0,
                      "joint_effort": False, "foot_force": False}).to_wire(),
         "reconcile": Reconcile(boot_id="boot-b1", control_epoch=3, task=task,

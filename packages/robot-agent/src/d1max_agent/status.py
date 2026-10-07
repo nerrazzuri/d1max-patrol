@@ -46,7 +46,8 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
     tasks.update(extra_tasks or {})
     return Capabilities(
         robot_id=robot_id, agent=agent_version, adapter=adapter_id, tasks=tasks,
-        actuators={"light": [], "siren": bool(hal_caps.actuators.get("siren")),
+        actuators={"light": [], "strobe": bool(hal_caps.actuators.get("strobe")),
+                   "siren": bool(hal_caps.actuators.get("siren")),
                    "speaker": bool(hal_caps.actuators.get("speaker")),
                    "spotlight": bool(hal_caps.actuators.get("spotlight"))},
         sensing={"lidar": bool(hal_caps.sensing.get("lidar")),

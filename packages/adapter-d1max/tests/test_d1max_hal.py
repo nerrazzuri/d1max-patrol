@@ -62,7 +62,7 @@ def test_能力_控制权不可释放_没有横移_只有灯():
     assert caps.recharge_mode == "none"
     assert math.isclose(caps.max_vx, 0.2) and math.isclose(caps.max_wz, 0.5)
     assert caps.deadband_vx == 0.05
-    assert caps.actuators == {"light": True, "siren": False, "speaker": False,
+    assert caps.actuators == {"light": True, "strobe": False, "siren": False, "speaker": False,
                               "spotlight": False, "head": False}
     assert not any(caps.sensing.values())
 
@@ -306,7 +306,7 @@ async def test_灯按通道开关_其余执行器与感知抛不支持():
         for call in (hal.imu(), hal.lidar(), hal.ultrasonic(), hal.joints(), hal.contacts(),
                      hal.depth(), hal.thermal(), hal.audio_session(), hal.recharge_start(),
                      hal.recharge_stop(), hal.undock(), hal.recharge_status(),
-                     hal.strobe("front", "x", 1.0), hal.sound("x", 1.0),
+                     hal.strobe("front", "x", 1.0), hal.siren(True, 1.0), hal.sound("x", 1.0),
                      hal.spotlight(True, 1.0), hal.head(0.0, 0.0), hal.snapshot("front"),
                      hal.stream_url("front")):
             with pytest.raises(HalUnsupported):
