@@ -291,10 +291,12 @@ class CommandProcessor:
         if cmd.kind == "standoff":
             from d1max_contract.standoff import parse_standoff
             try:
-                parse_standoff(cmd.payload)
+                req = parse_standoff(cmd.payload)
             except ContractError as exc:
                 return f"payload: {exc}"
-            return ""
+            c = req.center                          # 拦截点要在狗加载的这张图上
+            return "" if self.loaded_map is not None and (c.map_id, c.map_version) \
+                == self.loaded_map else "map_mismatch"
         if cmd.kind != "goto":
             return ""
         try:

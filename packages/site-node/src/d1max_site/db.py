@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 27                      # W25:驱离无路可退过(deter_sessions.cornered)
+SCHEMA_VERSION = 28                      # W25 外审:驱离的拦截点(deter_sessions.standoff_center)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -382,6 +382,8 @@ _ADDED_COLUMNS = (
     ("deter_sessions", "person_alerted", "INTEGER NOT NULL DEFAULT 0"),
     # W25:这一场无路可退过没有(报过 P1 意图)
     ("deter_sessions", "cornered", "INTEGER NOT NULL DEFAULT 0"),
+    # W25 外审:这一场的拦截点(保持距离的拴绳中心,补派、重启都按它)
+    ("deter_sessions", "standoff_center", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

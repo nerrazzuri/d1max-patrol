@@ -533,7 +533,10 @@ async def test_W25_保持距离_真派遣到真代理_人近就退_撤了就停(
             喂(t.agent, person=None)
             await t.run(1)
         assert t.site.clients["A"].capabilities.tasks["standoff"] == {"state": "idle"}
-        r = await t.send(t.site.standoff("A", "standoff-x", StandoffRequest(max_s=60),
+        center = MapPose(map_id=MAP[0], map_version=MAP[1], frame_id="map", x=0.0, y=0.0,
+                         yaw=0.0)
+        r = await t.send(t.site.standoff("A", "standoff-x",
+                                         StandoffRequest(max_s=60, center=center),
                                          issued_by="deterrence"))
         assert r["ack"]["result"] == "accepted", r
         x0 = (await t.dog.odometry()).x

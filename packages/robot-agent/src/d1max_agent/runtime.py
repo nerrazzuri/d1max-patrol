@@ -114,8 +114,6 @@ BATTERY_FLOOR_PCT = 15.0
 
 #: 要人监护(W00c6i)时,只有这几种任务受监护租约约束(遥控、叫停、换图、发布照常)。
 _AUTONOMOUS_KINDS = frozenset({"goto", "patrol", "standoff"})
-#: 保持距离(W25):退的落点离禁行区至少这么远(米)。
-STANDOFF_NOGO_M = 0.3
 #: 放了、过期的监护会话留多久(秒):挡同一会话里迟到的旧心跳(站点的命令有效期 30 s,再多留一点)。
 _SESSION_MEMORY_S = 60.0
 
@@ -367,16 +365,19 @@ class AgentRuntime:
         cur = self.processor.current
         return cur if cur is not None and cur.kind == "standoff" and not cur.done else None
 
-    def _standoff_nogo(self, dx: float, dy: float) -> str:
-        """保持距离:从此刻往狗身系 (dx, dy) 那儿退,进不进禁行区(按地图位姿;定位不可信算不行)。"""
+    def _standoff_here(self) -> tuple[float, float, float] | None:
+        """保持距离:此刻的地图位姿;定位不可信回 ``None``(拴绳、禁行区都查不了,不退)。"""
         nav = self.parts.nav
         est = nav.anchor.estimate(nav._odom_pose)
         ok = getattr(nav.anchor, "ok", None)
         if est is None or (callable(ok) and not ok(getattr(nav, "odom_ok", True))):
-            return "定位不可信,查不了禁行区"
-        c, sn = math.cos(est.yaw), math.sin(est.yaw)
-        z = nav.nogo_near(est.x + c * dx - sn * dy, est.y + sn * dx + c * dy, STANDOFF_NOGO_M)
-        return f"再退就进禁行区「{z.label or z.id}」" if z is not None else ""
+            return None
+        return (est.x, est.y, est.yaw)
+
+    def _standoff_nogo(self, x: float, y: float, d: float) -> str:
+        """地图上 (x, y) 离禁行区不到 ``d`` 米:回原因。"""
+        z = self.parts.nav.nogo_near(x, y, d)
+        return f"再退就碰禁行区「{z.label or z.id}」" if z is not None else ""
 
     def _make_task(self, cmd: Command) -> Task:
         if cmd.kind == "teleop":
@@ -396,7 +397,7 @@ class AgentRuntime:
                 now_ms=self._mono_ms, target=self.person_view.target,
                 check=lambda vx, wz: nav.guard.check(vx, wz, nav._v_meas, nav.obstacles,
                                                      nav._odom_pose),
-                odom=lambda: nav._odom_pose, nogo=self._standoff_nogo, priority=cmd.priority)
+                here=self._standoff_here, nogo=self._standoff_nogo, priority=cmd.priority)
         assert self.parts is not None, "有 loaded_map 就一定装了引擎"
         if cmd.kind == "patrol":
             from d1max_agent.tasks.patrol import PatrolTask
