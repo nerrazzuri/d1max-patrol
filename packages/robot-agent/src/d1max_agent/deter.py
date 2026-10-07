@@ -31,6 +31,16 @@ class DeterDesk:
         self._mono = monotonic
         #: 正在放的那一段:(优先级, 放到单调钟几点)。放完了、被关了就是 None。
         self._sound: tuple[int, float] | None = None
+        #: 喇叭放完、放坏了、到点了(W21 外审):HAL 回调过来,当场放开优先级、记一条事件。
+        #: HAL 不报(仿真狗)就按 ``max_s`` 算。
+        listen = getattr(hal, "set_sound_listener", None)
+        if callable(listen):
+            listen(self._sound_ended)
+
+    def _sound_ended(self, ok: bool, why: str) -> None:
+        self._sound = None
+        self._emit("deter", {"output": "speaker", "on": False,
+                             "ended": "done" if ok else "failed", "reason": why[:200]})
 
     def outputs(self) -> list[str]:
         acts = self.hal.hal_capabilities().actuators
