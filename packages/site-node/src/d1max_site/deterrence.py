@@ -62,6 +62,8 @@ RELAYS = {0: frozenset(), 1: frozenset({"strobe", "spotlight"}),
           3: frozenset({"strobe", "spotlight", "siren"}),
           4: frozenset({"strobe", "spotlight", "siren"})}
 CLIPS = {0: None, 1: None, 2: "warn", 3: "notified", 4: "notified"}
+#: 狗上人员检测报的事实(W24)。
+PERSON_KINDS = frozenset({"person_seen", "person_near", "person_gone"})
 
 
 class DeterrenceError(ValueError):
@@ -85,6 +87,9 @@ class Session:
     off: set[str] = field(default_factory=set)
     clip_i: int = 0
     clip_ms: int = 0
+    #: 人员检测(W24,不落库):最近一次报的人数、最近的距离、时刻;这一场看到过人没有。
+    persons: dict[str, Any] | None = None
+    seen_person: bool = False
     #: 收尾中(落库没成,下一拍接着收):``(原因, 回不回待命点)``。收尾中不再开任何东西。
     ending: tuple[str, bool] | None = None
     #: 「收尾中」落进库了没有(没落进去的话站点重启会把这一场当成还在驱离)。
@@ -96,7 +101,8 @@ class Session:
 
     def view(self, now_ms: int) -> dict[str, Any]:
         d = {k: v for k, v in asdict(self).items()
-             if k not in ("sent", "off", "clip_i", "clip_ms", "ending", "ending_saved")}
+             if k not in ("sent", "off", "clip_i", "clip_ms", "ending", "ending_saved",
+                          "seen_person")}
         d["label"] = LABEL[self.level]
         d["next_in_s"] = (max(0, (self.level_ms + STEP_S * 1000 - now_ms) // 1000)
                           if self.auto and self.level < AUTO_MAX else None)
@@ -112,6 +118,8 @@ class DeterrenceDesk:
         self.dispatcher = dispatcher
         self._now = now_ms
         self.standby = standby
+        #: 告警台(W24:驱离中看到人报 ``intrusion_person``)。站点主程序接上;没接就不报。
+        self.alerts: Any = None
         self.sessions: dict[str, Session] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         for r in db.query("SELECT * FROM deter_sessions"):
@@ -146,6 +154,10 @@ class DeterrenceDesk:
         return bool(c and c.capabilities and "deter" in c.capabilities.tasks)
 
     def _on_event(self, robot_id: str, e: Event) -> None:
+        if e.kind in PERSON_KINDS and isinstance(e.data, dict):
+            # W24:人员检测的事实(看到人、靠近、走了);判定要拿锁,另起一个协程
+            asyncio.get_running_loop().create_task(self._person(robot_id, e.kind, dict(e.data)))
+            return
         task_id = e.data.get("task_id") if isinstance(e.data, dict) else None
         if e.kind != "task_done" or not isinstance(task_id, str) \
                 or not task_id.startswith(INCIDENT_PREFIX) or not self._can(robot_id):
@@ -204,6 +216,61 @@ class DeterrenceDesk:
         if s is None or s.ending is not None:
             raise DeterrenceError(f"{rid} 没在驱离")
         return s
+
+    # ------------------------------------------------------------ 人员检测(W24)
+
+    async def _person(self, rid: str, kind: str, d: dict[str, Any]) -> None:
+        """驱离中的狗报人员检测的事实:
+        - ``person_seen``:报一条 ``intrusion_person`` 告警(人数、距离、截图),记下「看到过人」;
+        - ``person_near``(进到 5 米):系统还在自动升的话直接升到 L3;
+        - ``person_gone``(20 秒没看到):看到过人、系统还在自动管的话,收场(全关、回待命点)。
+        **人接手了(跳过级、退过级)就只记、只显示,不替人做主。** 不在驱离的狗:只记事件,不报不动。"""
+        try:
+            async with self._lock(rid):
+                s = self.sessions.get(rid)
+                if s is None or s.ending is not None:
+                    return
+                now = self._now()
+                if kind == "person_gone":
+                    s.persons = {"count": 0, "at_ms": now, "gone": True}
+                    self._publish(s)
+                    if s.seen_person and s.auto:
+                        await self._end(rid, "人走了(看到过人,20 秒没再看到)", go_back=True)
+                    return
+                s.persons = {k: d[k] for k in ("count", "nearest_m", "bearing_deg", "camera")
+                             if k in d} | {"at_ms": now}
+                if kind == "person_seen":
+                    s.seen_person = True
+                    self._alert_person(s, d)
+                if kind == "person_near" and s.auto and s.level < AUTO_MAX:
+                    new = Session(**{**asdict(s), "level": AUTO_MAX, "level_ms": now})
+                    try:
+                        self._save(new)
+                    except Exception:
+                        log.exception("%s 有人靠近要升 L%d,落库没成", rid, AUTO_MAX)
+                    else:
+                        s.level, s.level_ms, s.clip_i, s.clip_ms = AUTO_MAX, now, 0, 0
+                        log.info("%s 有人进到 5 米内:驱离直接升到 L%d", rid, AUTO_MAX)
+                        await self._apply(s)
+                self._publish(s)
+        except Exception:
+            log.exception("%s 的人员检测事件处理不了", rid)
+
+    def _alert_person(self, s: Session, d: dict[str, Any]) -> None:
+        if self.alerts is None:
+            return
+        n = d.get("count", 1)
+        near = d.get("nearest_m")
+        title = f"拦截点看到 {n} 个人" + (f",最近 {near} m" if near is not None else "")
+        try:
+            self.alerts.raise_alert(
+                kind="intrusion_person", robot=s.robot_id, title=title,
+                detail=f"防区 {s.zone};驱离 L{s.level} {LABEL[s.level]}",
+                context={"task_id": d.get("snapshot_run") or s.task_id,
+                         "persons": {k: d[k] for k in ("count", "nearest_m", "bearing_deg",
+                                                       "camera") if k in d}})
+        except Exception:
+            log.exception("%s 看到人的告警报不出去", s.robot_id)
 
     # ------------------------------------------------------------ 人
 

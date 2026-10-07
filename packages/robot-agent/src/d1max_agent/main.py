@@ -122,6 +122,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "**真狗在 W11 真机项验过之前不改**")
     p.add_argument("--obs-socket", type=Path, default=None,
                    help="本机障碍桥的 Unix 套接字(默认 <store-dir>/obs.sock)")
+    p.add_argument("--persons", choices=("none", "bridge"), default="none",
+                   help="人员检测(W24):bridge = 本机人员桥上的检测节点(d1max-persons)报看到的人,"
+                        "代理判有没有人、记事件给站点(告警、联动驱离)")
+    p.add_argument("--persons-socket", type=Path, default=None,
+                   help="本机人员桥的 Unix 套接字(默认 <store-dir>/persons.sock)")
+    p.add_argument("--persons-snapshots", type=Path, default=None,
+                   help="检测节点存截图的目录(默认 <store-dir>/person-snapshots)")
     p.add_argument("--robot-radius", type=float, default=None,
                    help="规划膨胀用的机体外接圆半径(米,默认 0.52:930 × 480 mm,W08 决定 6)")
     pl = p.add_argument_group("上装(W21,决策 36:RS485 Modbus 继电器板 + USB 声卡)")
@@ -416,7 +423,9 @@ def build(args: argparse.Namespace) -> Assembled:
                                releases=_releases(args, registration),
                                localizer=args.localizer, loc_socket=args.loc_socket,
                                rtk=make_rtk(args), obstacles=args.obstacles,
-                               obs_socket=args.obs_socket)
+                               obs_socket=args.obs_socket, persons=args.persons,
+                               persons_socket=args.persons_socket,
+                               persons_snapshots=args.persons_snapshots)
         if pump is not None:
             runtime._outbox_retry = pump.retry_refused
         return hal, parts, runtime, pump

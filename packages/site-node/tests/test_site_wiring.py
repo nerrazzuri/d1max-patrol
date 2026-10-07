@@ -70,3 +70,8 @@ def test_驱离接到待命点_事件派遣_接口上(srv):
     assert srv.standby.hold == srv.deterrence.holds
     assert srv.incidents.busy == srv.deterrence.busy
     assert srv.api.deterrence is srv.deterrence
+
+
+def test_驱离接到告警台上(srv):
+    """W24:驱离中看到人要报告警。"""
+    assert srv.deterrence.alerts is srv.alerts

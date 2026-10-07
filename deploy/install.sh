@@ -28,6 +28,7 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
 # @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11;只装不 enable)
+# @写盘 /etc/systemd/system/d1max-persons.service                         人员检测节点单元(W24;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i;只装不 enable)
 # @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
 #
@@ -35,6 +36,7 @@ set -euo pipefail
 #
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-localizer.service 定位器的自启链(装机只装不 enable;有人手工 enable 过才有)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-obstacles.service 感知节点的自启链(同上)
+# @也删 /etc/systemd/system/multi-user.target.wants/d1max-persons.service 人员检测节点的自启链(同上)
 # @也删 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(同上)
 # @也删 /etc/systemd/system/d1max-bootguard.service 老的守卫单元
 # @也删 /etc/systemd/system/d1max-patrol.service 老服务(W00c5e 退役)
@@ -329,6 +331,11 @@ fi
 if [[ -f "$PKG/deploy/d1max-obstacles.service" ]]; then
   install -m 0644 "$PKG/deploy/d1max-obstacles.service" /etc/systemd/system/
 fi
+# 人员检测节点单元(W24):同样**只装、不 enable** —— 检测模型、推理环境在真狗上装好、W24 的真机项验过之前
+# 不起。它只读相机、雷达,经本机人员桥报看到的人,不发速度。老包没带就跳过。
+if [[ -f "$PKG/deploy/d1max-persons.service" ]]; then
+  install -m 0644 "$PKG/deploy/d1max-persons.service" /etc/systemd/system/
+fi
 # 前后雷达合并单元(W09i):同样**只装、不 enable** —— 后雷达外参在真机上标过、W09i 的真机项验过之前不起。
 # 它只读两台雷达、发合并话题,不碰代理、不碰旁路进程。老包没带就跳过。
 if [[ -f "$PKG/deploy/d1max-lidar-merge.service" ]]; then
@@ -397,6 +404,9 @@ D1MAX_HAL=sim
 # 局部避障(W11):空着 = 不用。**W11 的真机项(§3f)验过之后**、起了 d1max-obstacles 单元,才改成 bridge
 # (要 D1MAX_NAV=planned):
 #   D1MAX_OBSTACLES=bridge
+# 人员检测(W24):空着 = 不用。检测模型放到 /etc/d1max/person.onnx、起了 d1max-persons 单元、
+# **W24 的真机项(§3m)验过之后**才改成 bridge:
+#   D1MAX_PERSONS=bridge
 # 其余参数(按空白拆开接在代理参数后面),例如建图:--mapping
 D1MAX_AGENT_ARGS=
 
@@ -548,6 +558,7 @@ fi
 # try-restart:没在跑就什么也不做。
 systemctl try-restart d1max-localizer.service 2>/dev/null || true
 systemctl try-restart d1max-obstacles.service 2>/dev/null || true
+systemctl try-restart d1max-persons.service 2>/dev/null || true
 systemctl try-restart d1max-lidar-merge.service 2>/dev/null || true
 
 say "装完了。看一眼:"

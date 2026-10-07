@@ -1,0 +1,30 @@
+#!/bin/sh
+# d1max-persons 的启动脚本(W24,人员检测节点)。跟 d1max-obstacles-start 一个道理:启动参数归版本管,
+# 单元只指着 /opt/d1max/current/deploy/d1max-persons-start。
+#
+# 检测节点跑在 **ROS 的系统 Python** 里(要 rclpy、sensor_msgs、numpy;检测模型要 onnxruntime 与 OpenCV
+# —— 真机项,没装上就报 no_model,代理据此不判「人走了」)。代码用这个脚本所在那一版带的
+# packages/localizer 与 packages/contract(按 PYTHONPATH 找,不进 venv)。雷达外参跟着代理正在用的图走,
+# 结果经本机人员桥(/var/lib/d1max/agent/persons.sock)给代理,截图存在 /var/lib/d1max/agent/person-snapshots
+# (代理存成归档传站点后删掉)。跟代理同一个账号(桥按账号认)。
+#
+# 现场值从 /etc/d1max/env 来(单元的 EnvironmentFile):
+#   D1MAX_LOC_ROS_DOMAIN=24        相机、雷达话题在哪个 ROS domain(跟定位器一样)
+#   D1MAX_LOC_RMW=rmw_zenoh_cpp    中间件
+#   D1MAX_PERSONS_MODEL=/etc/d1max/person.onnx  检测模型
+#   D1MAX_PERSONS_ARGS=其余参数(--fps、--hfov、--lens、--z-min、--z-max、--back-topic …)
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+set +u
+. /opt/ros/humble/setup.sh
+set -u
+export ROS_DOMAIN_ID="${D1MAX_LOC_ROS_DOMAIN:-24}"
+export RMW_IMPLEMENTATION="${D1MAX_LOC_RMW:-rmw_zenoh_cpp}"
+export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck disable=SC2086  # D1MAX_PERSONS_ARGS 要按空白拆成几个参数
+exec /usr/bin/python3 -m d1max_localizer.persons \
+  --socket /var/lib/d1max/agent/persons.sock \
+  --snapshots /var/lib/d1max/agent/person-snapshots \
+  --maps-dir /var/lib/d1max/agent/maps \
+  --model "${D1MAX_PERSONS_MODEL:-/etc/d1max/person.onnx}" \
+  ${D1MAX_PERSONS_ARGS:-}

@@ -25,6 +25,16 @@ String deterSessionText(Map<String, dynamic> s) {
   return 'L$lv $name$tail';
 }
 
+/// 驱离时狗上看到的人（W24）说人话：`看到 2 个人，最近 7.5 m` / `人走了` / 空（没检测或还没看到）。
+String deterPersonsText(Map<String, dynamic> s) {
+  final p = s['persons'];
+  if (p is! Map) return '';
+  if (p['gone'] == true) return '人走了';
+  final n = p['count'];
+  final near = p['nearest_m'];
+  return '看到 ${n ?? '?'} 个人${near is num ? '，最近 ${near.toStringAsFixed(1)} m' : ''}';
+}
+
 class SiteDeterrencePage extends StatefulWidget {
   final SiteApi api;
   final String robotId;
@@ -135,7 +145,9 @@ class _SiteDeterrencePageState extends State<SiteDeterrencePage> {
             key: const Key('deterrence-now'),
             leading: const Icon(Icons.campaign, color: Colors.red),
             title: Text(deterSessionText(s)),
-            subtitle: Text('防区 ${s['zone']} · ${s['ends_in_s']} 秒后自动收'),
+            subtitle: Text('防区 ${s['zone']} · ${s['ends_in_s']} 秒后自动收'
+                '${deterPersonsText(s).isEmpty ? '' : ' · ${deterPersonsText(s)}'}',
+                key: const Key('deterrence-persons')),
           ),
           if (sess?.canDispatch ?? false)
             Wrap(spacing: 6, children: [

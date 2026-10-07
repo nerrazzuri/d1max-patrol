@@ -65,6 +65,9 @@ LEVEL_OF: dict[str, Level] = {
     # 入侵(W16):有人闯进防区,狗出动了要人跟上,没狗去更要人去。
     "intrusion": Level.P1,
     "intrusion_unanswered": Level.P1,
+    # 拦截点上看到人了(W24):驱离中的狗的相机看到人,带人数、距离、截图。入侵告警已经响过铃(决策 29),
+    # 这一条是现场情况,照普通 P1 升档。
+    "intrusion_person": Level.P1,
     "battery_abort": Level.P1,
     # 不是因为没电的整趟中止(关节过温、导航反复失败……)。**跟
     # ``battery_abort`` 分成两个 kind,不合并**:两条告警要让人做的事不一

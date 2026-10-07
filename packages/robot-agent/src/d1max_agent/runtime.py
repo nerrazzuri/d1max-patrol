@@ -63,6 +63,9 @@ from d1max_patrol.protocol.nav_types import Pose
 
 log = logging.getLogger(__name__)
 
+#: 站点事件派遣的任务号前缀(站点 ``priorities.INCIDENT_PREFIX``;代理不依赖站点包,这里照抄)。
+INCIDENT_TASK_PREFIX = "incident-"
+
 #: 盘况随遥测多久带一次(毫秒)。
 STORAGE_EVERY_MS = 10_000
 #: 换图:下载好之后最多等多久让狗空下来(秒)。
@@ -147,6 +150,8 @@ class AgentRuntime:
                  localizer: str = "anchor", loc_socket: Path | None = None,
                  rtk: Any = None, nav: str = "straight",
                  robot_radius_m: float | None = None, obstacles: str = "none",
+                 persons: str = "none", persons_socket: Path | None = None,
+                 persons_snapshots: Path | None = None,
                  obs_socket: Path | None = None) -> None:
         self.registration = registration
         #: RTK 来源(W09e,``d1max_agent.rtk``:自己的串口驱动或厂家的);没配是 None。
@@ -199,6 +204,23 @@ class AgentRuntime:
             parts.nav.guard = ObstacleGuard()
             self._obs_srv = ObsBridgeServer(obs_socket or store_dir / "obs.sock", self.obs_view,
                                             monotonic=monotonic or time.monotonic)
+        #: 人员检测(W24,决策 39):检测节点经本机人员桥报帧,这里判有没有人、记事件。
+        if persons not in ("none", "bridge"):
+            raise ValueError(f"persons 要是 none 或 bridge,给的是 {persons!r}")
+        self.person_view: Any = None
+        self._pers_srv: Any = None
+        self._pers_state_told = ""
+        if persons == "bridge":
+            from d1max_agent.pers_server import PersonBridgeServer
+            from d1max_agent.persons import PersonView
+            self.person_view = PersonView(
+                emit=lambda kind, data: self.events.emit(kind, data),
+                monotonic=monotonic or time.monotonic,
+                snapshot_dir=persons_snapshots or store_dir / "person-snapshots",
+                save_snapshot=self._save_person_snapshot)
+            self._pers_srv = PersonBridgeServer(persons_socket or store_dir / "persons.sock",
+                                                self.person_view,
+                                                monotonic=monotonic or time.monotonic)
         #: 每张图上的原点(W00c6f 内审):标的、站点下发时带的都记在这儿,重启先看它(``--home`` 垫底)。
         self.homes = HomeBook(store_dir / "homes.json")
         if parts is not None and loaded_map is not None:
@@ -442,6 +464,39 @@ class AgentRuntime:
         cur = self.processor.current
         return (cur is None or cur.done) and not self.processor.pending
 
+    def _save_person_snapshot(self, path: Path, camera: str) -> str:
+        """看到人的截图(W24)存成一趟只有一张照片的归档,跟别的归档一样传站点。**归到最近一趟事件任务
+        名下**(到拦截点的 goto):手机看那条入侵告警的现场时,跟到了拍的那张一起看得到。没有事件任务
+        就归到 ``persons``。回那一趟的名字(空 = 没存成)。"""
+        from d1max_agent.engine.archive import RunArchive
+        from d1max_contract.mission import Mission, MissionWaypoint, Policy
+        if self.parts is None:
+            return ""
+        name = "persons"
+        procs = self.processor
+        for t in [procs.current, *reversed(procs.finished)]:
+            if t is not None and t.task_id.startswith(INCIDENT_TASK_PREFIX):
+                name = t.task_id
+                break
+        data = path.read_bytes()
+        eng = self.parts.engine
+        suffix = getattr(eng, "run_suffix", None)
+        mission = Mission(mission=name, map_id=(self.loaded_map or ("-",))[0],
+                          waypoints=(MissionWaypoint(name="person", pose=Pose.from_xy_yaw(0, 0)),),
+                          policy=Policy(photo_optional=True))
+        arch = RunArchive(eng._runs_root, mission, suffix=suffix() if suffix else "")
+        try:
+            arch.save_photo("person", camera, data)
+            arch.write_manifest(getattr(eng, "_fingerprint", {}) or {},
+                                {"result": "done", "kind": "person_snapshot"})
+        finally:
+            arch.close()
+        try:
+            path.unlink()                       # 存进归档了:检测节点的截图目录不留
+        except OSError:
+            pass
+        return name
+
     def _extra_tasks(self) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
         if self.maps is not None and (self._locsrv is not None
@@ -499,6 +554,8 @@ class AgentRuntime:
             out["outbox_retry"] = {}
         if self.rtk is not None:
             out["rtk"] = {"source": self.rtk.kind}  # W09e:站点、手机据此显示 RTK
+        if self.person_view is not None:
+            out["persons"] = self.person_view.caps()  # W24:人员检测在不在看(站点据此联动驱离)
         deter = self.deter.caps()
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术
@@ -1181,6 +1238,8 @@ class AgentRuntime:
             await self._locsrv.start()
         if self._obs_srv is not None:
             await self._obs_srv.start()          # 感知节点(W11)也可以先连上来
+        if self._pers_srv is not None:
+            await self._pers_srv.start()         # 人员检测节点(W24)
         await self.transport.connect()          # 首次连接:after_connect 会走 _flush_reconnect
         await self._publish_caps()
         if self.releases is not None:
@@ -1250,6 +1309,8 @@ class AgentRuntime:
             await _step("关本机定位桥", self._locsrv.close)
         if self._obs_srv is not None:
             await _step("关本机障碍桥", self._obs_srv.close)
+        if self._pers_srv is not None:
+            await _step("关本机人员桥", self._pers_srv.close)
         if self.video is not None:
             async def _video_off() -> None:
                 self.video.close()
@@ -1602,6 +1663,14 @@ class AgentRuntime:
                 self._obs_state_told = st
                 if self.transport.connected:
                     await self._publish_caps()   # 避障能不能用变了:站点、手机要知道
+        if self._pers_srv is not None:
+            self._pers_srv.tick()                # 本机人员桥:检测节点没声就当它断了
+            self.person_view.tick()              # 人走了没有
+            pst = self.person_view.state()
+            if pst != self._pers_state_told:     # 人员检测在不在看变了:站点据此联动驱离
+                self._pers_state_told = pst
+                if self.transport.connected:
+                    await self._publish_caps()
         if self.parts is not None:
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
             await self._enforce_head()
