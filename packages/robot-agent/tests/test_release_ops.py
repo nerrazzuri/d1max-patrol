@@ -390,3 +390,88 @@ def test_装好了的再装一次_不重下_执行位照样补(ops, tmp_path):
     o.install(ref)
     assert start.stat().st_mode & 0o111 == 0o111 and o.can_switch_to(NEW)
     assert built == [(NEW, NEW)], "装好了的不重建"
+
+
+# ------------------------------------------------------------ W30:发行方签名(决策 43)
+
+
+@pytest.fixture
+def 钥匙(tmp_path):
+    from d1max_contract import relsign
+    k, pub = tmp_path / "keys" / "rel.key", tmp_path / "keys" / "rel.pub"
+    relsign.keygen(k, pub)
+    return k, pub
+
+
+def _签(pkg: Path, key: Path) -> Path:
+    from d1max_contract import relsign
+    m = json.loads((pkg / "release.json").read_text())
+    m["signature"] = relsign.sign(m, key)
+    (pkg / "release.json").write_text(json.dumps(m))
+    return pkg
+
+
+def _验(o, pub, *, allow=False):
+    from d1max_contract import relsign
+    o._sigcheck = lambda pkg: relsign.check_package(pkg, pub, allow_unsigned=allow)
+
+
+def test_W30_签了名的装得上(ops, tmp_path, 钥匙):
+    o, served, restarts, built, layout = ops
+    _验(o, 钥匙[1])
+    o.install(_ref(served, NEW, _tar(_签(_包(tmp_path, NEW), 钥匙[0]))))
+    assert o.ready(NEW)
+
+
+def test_W30_没签名_签名不对_别人的钥匙签的_改过的_都不装(ops, tmp_path, 钥匙):
+    from d1max_contract import relsign
+    o, served, restarts, built, layout = ops
+    _验(o, 钥匙[1])
+    with pytest.raises(ReleaseOpError, match="没有签名"):
+        o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
+    other = (tmp_path / "evil.key", tmp_path / "evil.pub")
+    relsign.keygen(*other)
+    with pytest.raises(ReleaseOpError, match="签名对不上"):
+        o.install(_ref(served, NEW, _tar(_签(_包(tmp_path, NEW), other[0]))))
+    pkg = _签(_包(tmp_path, NEW), 钥匙[0])
+    m = json.loads((pkg / "release.json").read_text())
+    m["requires_mission_schema"] = 2                       # 改了签名覆盖的一项
+    (pkg / "release.json").write_text(json.dumps(m))
+    with pytest.raises(ReleaseOpError, match="签名对不上"):
+        o.install(_ref(served, NEW, _tar(pkg)))
+    assert not o.ready(NEW) and built == [], "验不过:一个字节都不落槽、不建 venv"
+
+
+def test_W30_狗上没装公钥_不装_开发放行才装(ops, tmp_path):
+    o, served, restarts, built, layout = ops
+    _验(o, tmp_path / "nope.pub")
+    with pytest.raises(ReleaseOpError, match="没装发行公钥"):
+        o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
+    _验(o, tmp_path / "nope.pub", allow=True)
+    o.install(_ref(served, NEW, _tar(_包(tmp_path, NEW))))
+    assert o.ready(NEW)
+
+
+def test_W30_命令行_keygen_sign_install验签(tmp_path, 钥匙):
+    import subprocess
+    import sys
+    pkg = _包(tmp_path, NEW)
+    root = tmp_path / "root"
+
+    def cli(*a, env=None):
+        import os
+        return subprocess.run([sys.executable, "-m", "d1max_patrol.cli", "release", *a],
+                              capture_output=True, text=True,
+                              env={**os.environ, "D1MAX_RELEASE_ROOT": str(root), **(env or {})})
+    got = cli("install", "--pubkey", str(钥匙[1]), str(pkg))
+    assert got.returncode == 2 and "没有签名" in got.stderr
+    got = cli("sign", str(pkg), "--key", str(钥匙[0]))
+    assert got.returncode == 0, got.stderr
+    got = cli("install", "--pubkey", str(钥匙[1]), str(pkg))
+    assert got.returncode == 0, got.stderr
+    nk = tmp_path / "k2"
+    got = cli("keygen", str(nk), str(tmp_path / "k2.pub"))
+    assert got.returncode == 0 and (nk.stat().st_mode & 0o777) == 0o600
+    assert cli("keygen", str(nk), str(tmp_path / "k3.pub")).returncode == 2, "私钥在了不盖"
+    got = cli("install", "--pubkey", str(tmp_path / "none.pub"), str(_包(tmp_path, OLD)))
+    assert got.returncode == 2 and "没装发行公钥" in got.stderr

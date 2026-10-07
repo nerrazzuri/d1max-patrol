@@ -150,3 +150,32 @@ def test_值守汇总_狗的盘况与站点的备份(站点):
     s.backup.run_once()
     d = s.req("GET", "/api/watch/summary", token=olga)[1]
     assert d["site"]["backup"]["last_ok_ms"] is not None
+
+
+def test_W30_看照片看记录记审计_10分钟内同一样只记一次_下载导出也记(站点, monkeypatch):
+    from d1max_site.privacy import PrivacyDesk
+    s = 站点
+    s.api.privacy = PrivacyDesk(s.db, s.store, now_ms=s.api._now)
+    rid, _photo = _传一趟(s)
+    olga, gina = _登(s, "olga"), _登(s, "gina")
+    name = s.req("GET", f"/api/runs/{rid}", token=olga)[1]["photos"][0]["name"]
+    for _ in range(3):
+        _get_raw(s, f"/api/runs/{rid}/photos/{quote(name)}", olga)
+    s.req("GET", f"/api/runs/{rid}", token=olga)
+
+    def views():
+        return [(a["actor"], a["action"], a["target"]) for a in s.api.audit.list()
+                if a["action"] in ("VIEW", "DOWNLOAD")]
+    assert views().count(("olga", "VIEW", f"run/{rid}")) == 1
+    assert len([v for v in views() if "/photo/" in v[2]]) == 1, "10 分钟内同一张只记一次"
+    import d1max_site.api as api_mod
+    monkeypatch.setattr(api_mod, "VIEW_AUDIT_EVERY_MS", 0)
+    _get_raw(s, f"/api/runs/{rid}/photos/{quote(name)}", gina)
+    assert ("gina", "VIEW", f"run/{rid}/photo/{name}") in views()
+    # 标「留着」:保安能、业主不能
+    assert s.req("POST", f"/api/runs/{rid}/keep", {"keep": True}, token=olga)[0] == 403
+    code, d = s.req("POST", f"/api/runs/{rid}/keep", {"keep": True}, token=gina)
+    assert code == 200 and d == {"id": rid, "keep": True}
+    assert s.req("GET", f"/api/runs/{rid}", token=gina)[1]["run"]["keep"] in (1, True)
+    assert s.req("POST", f"/api/runs/{rid}/keep", {"keep": "yes"}, token=gina)[0] == 400
+    assert s.req("POST", "/api/runs/999/keep", {"keep": True}, token=gina)[0] == 404

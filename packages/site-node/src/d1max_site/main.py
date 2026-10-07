@@ -68,6 +68,14 @@ class SiteError(RuntimeError):
     pass
 
 
+def _open_db(home: Path, cfg: dict) -> SiteDB:
+    """站点库,接上口令密钥(W30,决策 43:摄像头口令、事件源密钥加密落库)。"""
+    from d1max_site.sealbox import site_box
+    db = SiteDB(home / "site.db")
+    db.sealbox = site_box(cfg, "secrets")
+    return db
+
+
 def _load(home: Path) -> dict:
     try:
         return json.loads((home / "site.json").read_text(encoding="utf-8"))
@@ -211,14 +219,82 @@ def cmd_map_import(home: Path, src: Path, map_id: str, version: str, note: str) 
 def cmd_release_add(home: Path, src: Path, note: str) -> dict:
     """W00c5d 第三部分:把一个发布包目录(``release pack`` 的产物)登记进站点的发布目录。"""
     from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
-    _load(home)
+    cfg = _load(home)
     db = SiteDB(home / "site.db")
     try:
-        return ReleaseCatalog(home, db, now_ms=wall_ms).add(src, note=note)
+        pub = Path(cfg.get("release_pubkey") or "/etc/d1max-site/release-pub.pem")
+        return ReleaseCatalog(home, db, now_ms=wall_ms, pubkey=pub).add(src, note=note)
     except ReleaseCatalogError as exc:
         raise SiteError(str(exc)) from exc
     finally:
         db.close()
+
+
+def cmd_privacy_purge(home: Path, since: str, until: str, robot: str | None,
+                      reason: str) -> dict:
+    """按时间段删证据和录像(W30,PDPA:当事人要求删除)。标了留着的不删;记审计。"""
+    from datetime import datetime
+
+    from d1max_site.audit import AuditLog
+    from d1max_site.evidence import EvidenceStore
+    from d1max_site.privacy import PrivacyDesk
+    from d1max_site.recordings import RecordingStore
+    cfg = _load(home)
+    if not reason.strip():
+        raise SiteError("要写为什么删(--reason):谁要求的、哪一条请求")
+    try:
+        since_ms = int(datetime.fromisoformat(since).timestamp() * 1000)
+        until_ms = int(datetime.fromisoformat(until).timestamp() * 1000)
+    except ValueError as exc:
+        raise SiteError(f"时刻要写成 2026-10-08T21:00+08:00 这样:{exc}") from exc
+    db = SiteDB(home / "site.db")
+    try:
+        backup = cfg.get("backup_dir")
+        desk = PrivacyDesk(db, EvidenceStore(home / "evidence", db, now_ms=wall_ms),
+                           now_ms=wall_ms,
+                           recordings=RecordingStore(db, home / "recordings", now_ms=wall_ms),
+                           backup_dest=Path(backup) if backup else None)
+        try:
+            got = desk.purge(since_ms=since_ms, until_ms=until_ms, robot_id=robot)
+        except ValueError as exc:
+            raise SiteError(str(exc)) from exc
+        AuditLog(db, now_ms=wall_ms).record(
+            actor=f"cli:{os.environ.get('USER', '?')}", action="privacy purge",
+            target=robot or "*", status=200,
+            detail={"since": since, "until": until, "reason": reason[:200],
+                    "runs": got["runs"], "recordings": got["recordings"],
+                    "held": len(got["held_runs"]) + len(got["held_recordings"])})
+        return got
+    finally:
+        db.close()
+
+
+def cmd_backup_open(src: Path, dst: Path, key: Path) -> int:
+    """把加密的备份目录解开到另一个目录(W30;恢复用)。回解开了几个文件。"""
+    from d1max_site.backup import SEALED
+    from d1max_site.sealbox import SealBox, SealError, load_or_create_key
+    if not key.is_file():
+        raise SiteError(f"没有备份密钥 {key}(装机时离线另存的那一份)")
+    if dst.exists() and any(dst.iterdir()):
+        raise SiteError(f"{dst} 不是空的")
+    box = SealBox(load_or_create_key(key))
+    n = 0
+    for f in sorted(src.rglob("*")):
+        if not f.is_file():
+            continue
+        rel = f.relative_to(src)
+        out = dst / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if f.name.endswith(SEALED):
+                box.open_file(f, out.with_name(out.name[:-len(SEALED)]))
+                n += 1
+            else:
+                import shutil
+                shutil.copy2(f, out)
+        except SealError as exc:
+            raise SiteError(f"{rel} 解不开:{exc}") from exc
+    return n
 
 
 def cmd_standby(home: Path, robot_id: str, name: str, map_id: str, pose: str,
@@ -264,8 +340,7 @@ def _desk(home: Path, db: SiteDB):
 def cmd_camera(home: Path, what: str, **kw) -> object:
     """固定摄像头(W19)。口令存在站点库里(只许站点用户读),``list`` 不显示。"""
     from d1max_site.cctv import Camera, add_camera, load_cameras, remove_camera
-    _load(home)
-    db = SiteDB(home / "site.db")
+    db = _open_db(home, _load(home))
     try:
         if what == "add":
             try:
@@ -287,8 +362,7 @@ def cmd_camera(home: Path, what: str, **kw) -> object:
 
 def cmd_incident_admin(home: Path, what: str, **kw) -> str:
     from d1max_site.incidents import IncidentError
-    _load(home)
-    db = SiteDB(home / "site.db")
+    db = _open_db(home, _load(home))
     try:
         desk = _desk(home, db)
         if what == "source":
@@ -359,7 +433,11 @@ class Server:
             home / "ca" / "server" / "server.key"
         tls = None if api_host in ("127.0.0.1", "localhost", "::1") else (server_crt, server_key)
         check_exposure(api_host, tls)                     # 起线程之前拒
-        self.db = SiteDB(home / "site.db")
+        self.db = _open_db(home, cfg)
+        from d1max_site.sealbox import migrate_plaintext
+        n = migrate_plaintext(self.db)                     # W30:老库里的明文口令就地加密
+        if n:
+            log.info("老库里的 %d 条明文口令加密了", n)
         self.registry = Registry(self.db, site_id=cfg["site_id"])
         self.accounts = Accounts(self.db, now_ms=wall_ms)
         self.loop = LoopThread()
@@ -451,11 +529,13 @@ class Server:
         loop_alerts = LoopAlerts(self.alerts, self.loop)
         self.runs = RunDesk(self.evidence, home=home, now_ms=wall_ms, alerts=loop_alerts)
         backup_dir = cfg.get("backup_dir")
+        from d1max_site.sealbox import site_box
         self.backup = SiteBackup(self.db, self.evidence.root,
                                  Path(backup_dir) if backup_dir else None, now_ms=wall_ms,
                                  alerts=loop_alerts,
                                  more={"maps": home / "maps", "bags": home / "bags",
-                                       "releases": home / "releases"})
+                                       "releases": home / "releases"},
+                                 box=site_box(cfg, "backup") if backup_dir else None)
         icfg = cfg.get("intake", {})
         self.intake = IntakeServer(
             host=icfg.get("host", "0.0.0.0"), port=int(icfg.get("port", DEFAULT_PORT)),
@@ -466,7 +546,15 @@ class Server:
         # W18:连续录像。不进备份(30 天两路录像要 TB 级;留存与盘的规矩见 recordings)。
         from d1max_site.alert_sources import SITE as _SITE
         from d1max_site.recordings import RecordingStore
-        self.recordings = RecordingStore(self.db, home / "recordings", now_ms=wall_ms)
+        rcfg = cfg.get("retention", {})
+        self.recordings = RecordingStore(self.db, home / "recordings", now_ms=wall_ms,
+                                         keep_days=int(rcfg.get("recordings_days", 30)))
+        # W30(决策 43,PDPA):证据留存期、按时间段删
+        from d1max_site.privacy import KEEP_DAYS, PrivacyDesk
+        self.privacy = PrivacyDesk(self.db, self.evidence, now_ms=wall_ms,
+                                   recordings=self.recordings,
+                                   backup_dest=Path(backup_dir) if backup_dir else None,
+                                   keep_days=int(rcfg.get("evidence_days", KEEP_DAYS)))
         self.recordings.on_trimmed = lambda n, oldest: loop_alerts.raise_alert(
             kind="recording_trimmed", robot=_SITE, title=f"站点盘紧,删了最旧的 {n} 段录像",
             detail="不到 30 天就删了:站点盘小,加盘或少录几路")
@@ -494,6 +582,7 @@ class Server:
         self.api.arming = self.arming
         self.api.deterrence = self.deterrence
         self.api.weather = self.weather
+        self.api.privacy = self.privacy                # W30:运行记录标「留着」
         self.arming.on_expired = lambda back, row: self.api.audit.record(
             actor="site", action="mode visitor_expired", target=back, status=200,
             detail={"visitor_zones": row["visitor_zones"], "set_by": row["set_by"]}, remote="")
@@ -555,6 +644,7 @@ class Server:
             return
         self._next_rec_prune = now + 600
         self.recordings.prune()
+        self.privacy.prune()                           # W30:证据过了留存期删(连备份)
 
     async def _schedule_loop(self) -> None:
         """排程执行器:每 30 s 一拍。一拍炸了记下来、下一拍照走(老 W06 执行器同一个理由:
@@ -718,6 +808,18 @@ def build_parser() -> argparse.ArgumentParser:
     cr = sub.add_parser("camera-rm", help="删固定摄像头")
     cr.add_argument("name")
     sub.add_parser("camera-list", help="列出固定摄像头(不显示口令)")
+    pp = sub.add_parser("privacy-purge",
+                        help="按时间段删证据和录像(W30,PDPA:当事人要求删除;连备份;标了留着的不删)")
+    pp.add_argument("--since", required=True,
+                    help="开始(ISO 时刻,带时区,如 2026-10-08T21:00+08:00)")
+    pp.add_argument("--until", required=True, help="结束(同上)")
+    pp.add_argument("--robot", default=None, help="只删这台狗的(不给就是所有狗)")
+    pp.add_argument("--reason", required=True, help="为什么删:谁要求的、哪一条请求(记审计)")
+    bo = sub.add_parser("backup-open", help="把加密的备份解开到另一个目录(W30,恢复用)")
+    bo.add_argument("src", help="备份目录(或其中的一部分)")
+    bo.add_argument("dst", help="解到哪儿(要空目录)")
+    bo.add_argument("--key", default="/etc/d1max-site/backup.key",
+                    help="备份密钥(装机时离线另存的那一份)")
     so = sub.add_parser("source-add", help="登记事件源,打印共享密钥")
     so.add_argument("name")
     sr = sub.add_parser("source-rotate", help="换事件源的共享密钥(旧的当场作废),打印新的")
@@ -801,6 +903,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not cmd_camera(home, "rm", name=args.name):
                 raise SiteError(f"没有摄像头 {args.name}")
             print(f"摄像头 {args.name} 删了")
+        elif args.cmd == "privacy-purge":
+            got = cmd_privacy_purge(home, args.since, args.until, args.robot, args.reason)
+            print(f"删了 {got['runs']} 趟运行记录、{got['recordings']} 段录像"
+                  + (f";标了留着没删:运行记录 {got['held_runs']}、录像 {got['held_recordings']}"
+                     if got["held_runs"] or got["held_recordings"] else "")
+                  + (f";{got['failed']} 样删不掉(看日志,再跑一次)" if got["failed"] else ""))
+        elif args.cmd == "backup-open":
+            n = cmd_backup_open(Path(args.src), Path(args.dst), Path(args.key))
+            print(f"解开了 {n} 个文件 → {args.dst}")
         elif args.cmd == "camera-list":
             print(cmd_camera(home, "list") or "(还没有摄像头)")
         elif args.cmd == "source-add":

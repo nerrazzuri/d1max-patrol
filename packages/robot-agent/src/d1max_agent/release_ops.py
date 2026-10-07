@@ -104,8 +104,12 @@ def build_venv(pkg: Path, slot: Path, *, pip_args: list[str],
 class ReleaseOps:
     def __init__(self, layout: rel.Layout, *, fetch: Fetch, build: BuildVenv, work: Path,
                  now_ms: Callable[[], int], restart: Callable[[], None], sn: str = "",
-                 disk_free: Callable[[Path], int] | None = None) -> None:
+                 disk_free: Callable[[Path], int] | None = None,
+                 signature_check: Callable[[Path], str] | None = None) -> None:
         self.layout = layout
+        #: 验发行方签名(W30,决策 43):包目录 → 空串(可以装)或为什么不能装。代理起来时接上;
+        #: ``None`` 只给测试用。
+        self._sigcheck = signature_check
         self._fetch = fetch
         self._restart = restart
         self._build = build
@@ -211,6 +215,10 @@ class ReleaseOps:
                 # 开机守卫修链时还可能挑中它(W00c5 修复内部评审)。站点登记时也拒。
                 raise ReleaseOpError(f"包里没有代理的启动脚本 {rel.AGENT_START}"
                                      "(老服务那一代的包),不装")
+            if self._sigcheck is not None:
+                why = self._sigcheck(pkg)                  # 先验发行方签名(W30):不是我们发的不装
+                if why:
+                    raise ReleaseOpError(why)
             try:
                 rel.stage(self.layout, pkg, now_ms=self._now())   # 先核包内指纹,不对一个字节都不落
             except rel.ReleaseError as exc:

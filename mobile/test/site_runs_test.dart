@@ -59,11 +59,23 @@ void main() {
     await t.pumpWidget(Container());
   });
 
-  testWidgets('业主只看：没有复核按钮、没有重判', (t) async {
+  testWidgets('W30 保安标「留着」', (t) async {
+    final api = FakeApi('guard');
+    await t.pumpWidget(MaterialApp(home: SiteRunPage(api: api, runId: 1)));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(SiteRunPage.keepKey));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('run-keep 1 true'));
+    expect(find.textContaining('过了留存期也不删'), findsWidgets);
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('业主只看：没有复核按钮、没有重判、不能标留着', (t) async {
     final api = FakeApi('owner');
     await t.pumpWidget(MaterialApp(home: SiteRunPage(api: api, runId: 1)));
     await t.pumpAndSettle();
     expect(find.byKey(SiteRunPage.judgeKey), findsNothing);
+    expect(find.byKey(SiteRunPage.keepKey), findsNothing);
     await t.tap(find.byKey(const Key('photo-P1__front__20260925T010000Z.jpg')));
     await t.pumpAndSettle();
     expect(find.byKey(SitePhotoPage.reviewKey('normal')), findsNothing);

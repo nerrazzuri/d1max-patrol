@@ -569,11 +569,18 @@ def _releases(args: argparse.Namespace, registration: Registration) -> Any:
         # 代理单元是 Restart=always:自己好好退出,systemd 从新的 current 起来。等 3 秒,让回执与
         # 「在切了」那条事件先出去。
         threading.Timer(3.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    from d1max_contract import relsign
+    pub = Path(os.environ.get("D1MAX_RELEASE_PUBKEY") or relsign.DEFAULT_PUBKEY)
+    unsigned_ok = os.environ.get("D1MAX_RELEASE_UNSIGNED_OK") == "1"
+    if unsigned_ok:
+        log.warning("D1MAX_RELEASE_UNSIGNED_OK=1:没装发行公钥时不验签名(只许开发、仿真用)")
     return ReleaseOps(Layout(root=args.release_root), fetch=https_fetch(args.intake, ctx),
                       build=functools.partial(build_venv, pip_args=pip_args_from_env(),
                                               python=default_python()),
                       work=Path(args.store_dir) / "release-dl", now_ms=wall_ms,
-                      restart=restart, sn=registration.robot_id)
+                      restart=restart, sn=registration.robot_id,
+                      signature_check=lambda pkg: relsign.check_package(
+                          pkg, pub, allow_unsigned=unsigned_ok))
 
 
 #: 证书「还没生效」「已过期」(OpenSSL 的 X509_V_ERR_CERT_NOT_YET_VALID / CERT_HAS_EXPIRED)。

@@ -310,6 +310,8 @@ abstract class SiteApi {
   Future<Uint8List> recordingBytes(int id);
   /// 标「留着」（过了 30 天也不删）：值班的人、管理员。
   Future<Map<String, dynamic>> setRecordingKeep(int id, bool keep);
+  /// 这一趟运行记录标「留着」（W30，PDPA：过了留存期、按时间段删都不删；值班的人留证据）。
+  Future<Map<String, dynamic>> setRunKeep(int id, bool keep);
   /// 固定摄像头（W19）：名字、防区、连没连上、最近一次报的什么。不带口令。
   Future<List<Map<String, dynamic>>> cameras();
   /// 领一个值守令牌（W17）：`{token, expires_at}`。只能看告警，给后台值守用。
@@ -888,6 +890,10 @@ class SiteClient implements SiteApi {
   @override
   Future<Map<String, dynamic>> setRecordingKeep(int id, bool keep) async =>
       _map(await _send('POST', '/api/recordings/$id/keep', <String, dynamic>{'keep': keep}));
+
+  @override
+  Future<Map<String, dynamic>> setRunKeep(int id, bool keep) async =>
+      _map(await _send('POST', '/api/runs/$id/keep', <String, dynamic>{'keep': keep}));
 
   /// 取一份字节（照片、预览图）：钉证书、带令牌、不跟重定向、有上限。
   Future<Uint8List> _bytes(String path, int maxBytes, String what) async {

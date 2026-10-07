@@ -43,21 +43,21 @@ def _pkg(root: Path, name: str, *, 弄坏: bool = False) -> Path:
 def test_装第一版(tmp_path, capsys):
     root = tmp_path / "opt"
     pkg = _pkg(tmp_path / "pkg", "2026-09-20-77b2de")
-    assert main(["release", "install", str(pkg), "--root", str(root)]) == 0
+    assert main(["release", "install", "--unsigned", str(pkg), "--root", str(root)]) == 0
     assert "2026-09-20-77b2de" in capsys.readouterr().out
 
 
 def test_装坏包退非零而且不留半个目录(tmp_path):
     root = tmp_path / "opt"
     pkg = _pkg(tmp_path / "pkg", "2026-09-20-77b2de", 弄坏=True)
-    assert main(["release", "install", str(pkg), "--root", str(root)]) != 0
+    assert main(["release", "install", "--unsigned", str(pkg), "--root", str(root)]) != 0
     assert list((root / "releases").glob("*")) == []
 
 
 def test_列出装了哪几版(tmp_path, capsys):
     root = tmp_path / "opt"
     for name in ("2026-09-06-a3f9c1", "2026-09-20-77b2de"):
-        main(["release", "install", str(_pkg(tmp_path / name, name)),
+        main(["release", "install", "--unsigned", str(_pkg(tmp_path / name, name)),
               "--root", str(root)])
     capsys.readouterr()
     assert main(["release", "list", "--root", str(root)]) == 0
@@ -67,7 +67,7 @@ def test_列出装了哪几版(tmp_path, capsys):
 
 def test_切版本会换链并留下在途标记(tmp_path):
     root = tmp_path / "opt"
-    main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
+    main(["release", "install", "--unsigned", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
           "--root", str(root)])
     assert main(["release", "activate", "2026-09-20-77b2de",
                  "--root", str(root)]) == 0
@@ -84,7 +84,7 @@ def test_切版本记的sn跟环境变量对齐(tmp_path, monkeypatch):
     """
     root = tmp_path / "opt"
     monkeypatch.setenv("D1MAX_SN", "D1M-XYZ-9")
-    main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
+    main(["release", "install", "--unsigned", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
           "--root", str(root)])
     assert main(["release", "activate", "2026-09-20-77b2de",
                  "--root", str(root)]) == 0
@@ -106,7 +106,7 @@ def test_守卫在没有在途标记时放行(tmp_path):
     """绝大多数开机走这条。它必须便宜、安静、退 0,而且不能碰链。"""
     root = tmp_path / "opt"
     layout = Layout(root=root)
-    main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
+    main(["release", "install", "--unsigned", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
           "--root", str(root)])
     main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)])
     commit(layout)
@@ -200,7 +200,7 @@ def test_根路径也能从环境变量来(tmp_path, monkeypatch, capsys):
     """systemd 单元里写环境变量比写一长串参数干净。"""
     root = tmp_path / "opt"
     monkeypatch.setenv("D1MAX_RELEASE_ROOT", str(root))
-    main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de"))])
+    main(["release", "install", "--unsigned", str(_pkg(tmp_path / "p", "2026-09-20-77b2de"))])
     capsys.readouterr()
     assert main(["release", "list"]) == 0
     assert "2026-09-20-77b2de" in capsys.readouterr().out
@@ -210,7 +210,7 @@ def test_rollback成功退回上一版(tmp_path):
     root = tmp_path / "opt"
     layout = Layout(root=root)
     for name in ("2026-09-06-a3f9c1", "2026-09-20-77b2de"):
-        main(["release", "install", str(_pkg(tmp_path / name, name)),
+        main(["release", "install", "--unsigned", str(_pkg(tmp_path / name, name)),
               "--root", str(root)])
     main(["release", "activate", "2026-09-06-a3f9c1", "--root", str(root)])
     commit(layout)
@@ -221,7 +221,7 @@ def test_rollback成功退回上一版(tmp_path):
 
 def test_rollback没有上一版可退时退非零(tmp_path, capsys):
     root = tmp_path / "opt"
-    main(["release", "install", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
+    main(["release", "install", "--unsigned", str(_pkg(tmp_path / "p", "2026-09-20-77b2de")),
           "--root", str(root)])
     capsys.readouterr()
     assert main(["release", "rollback", "--root", str(root)]) == 2
@@ -333,7 +333,7 @@ def test_pack打出来的包能被install真的收下(tmp_path, capsys):
     assert main(["release", "pack", str(_源码树(tmp_path / "树")), str(出)]) == 0
     包 = next(p for p in 出.iterdir() if p.is_dir())
     capsys.readouterr()
-    assert main(["release", "install", str(包), "--root", str(root)]) == 0
+    assert main(["release", "install", "--unsigned", str(包), "--root", str(root)]) == 0
     assert "落槽了" in capsys.readouterr().out
     assert (root / "releases" / 包.name / MANIFEST_NAME).is_file()
     # 排除规则在 CLI 这条路上也得是活的。
@@ -374,7 +374,8 @@ def test_切版本不碰单元_说清要重启代理(tmp_path, capsys):
     """代理单元只指着这一版带的启动脚本(启动参数随版本走),单元只由装机脚本装一次。"""
     root = tmp_path / "opt"
     for name in ("2026-09-06-a3f9c1", "2026-09-20-77b2de"):
-        main(["release", "install", str(_pkg(tmp_path / name, name)), "--root", str(root)])
+        main(["release", "install", "--unsigned", str(_pkg(tmp_path / name, name)),
+              "--root", str(root)])
     capsys.readouterr()
     assert main(["release", "activate", "2026-09-20-77b2de", "--root", str(root)]) == 0
     out = capsys.readouterr().out

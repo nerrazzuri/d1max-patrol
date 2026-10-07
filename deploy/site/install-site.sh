@@ -50,6 +50,22 @@ echo "[2/5] 用户与目录"
 id -u d1max-site >/dev/null 2>&1 || useradd --system --home-dir "$HOME_DIR" --shell /usr/sbin/nologin d1max-site
 install -d -m 0750 -o d1max-site -g d1max-site "$HOME_DIR"
 
+# W30(决策 43):口令密钥、备份密钥 —— 不跟库放一起(站点服务对 /etc 只读),只有站点用户能读。
+# **已经有了绝不重新生成**:换了钥匙,库里加密的口令、以前的加密备份就都打不开了。
+install -d -m 0750 -o root -g d1max-site /etc/d1max-site
+for k in secrets backup; do
+  if [[ ! -f /etc/d1max-site/$k.key ]]; then
+    ( umask 077; head -c 32 /dev/urandom > /etc/d1max-site/$k.key )
+    echo "  生成了 /etc/d1max-site/$k.key"
+  fi
+  chown root:d1max-site /etc/d1max-site/$k.key
+  chmod 0440 /etc/d1max-site/$k.key
+done
+# 发行公钥:仓库里有就装(登记发布包时先验签名;狗上也会验)
+if [[ -f "$PKG/deploy/release-pub.pem" ]]; then
+  install -m 0644 "$PKG/deploy/release-pub.pem" /etc/d1max-site/release-pub.pem
+fi
+
 echo "[3/5] Python 环境"
 [[ -x "$VENV/bin/python" ]] || python3 -m venv "$VENV"
 "$VENV/bin/pip" install --upgrade "$PKG/packages/contract[mqtt,planning]" "$PKG/packages/site-node"
@@ -75,4 +91,7 @@ cat <<TXT
   sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR enroll <robot_id>
   证书包在 $HOME_DIR/ca/issued/<robot_id>/,拷到狗上:
     ca.crt robot.crt robot.key → /etc/d1max/tls/   registration.json → /etc/d1max/
+
+**备份密钥 /etc/d1max-site/backup.key 现在就离线另存一份**(U 盘、保险柜):备份是加密的,
+站点主机坏了、没有这把钥匙,备份就恢复不了(d1max-site backup-open)。
 TXT
