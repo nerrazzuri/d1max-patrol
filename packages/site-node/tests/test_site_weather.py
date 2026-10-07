@@ -61,6 +61,7 @@ class 假派遣:
         self.clients[rid].capabilities.tasks["speed_cap"] = (
             {"max_speed_mps": cap.max_speed_mps, "left_s": cap.ttl_s}
             if cap.max_speed_mps is not None else {"max_speed_mps": None})
+        return {"ack": {"result": "accepted"}}
 
 
 @pytest.fixture
@@ -176,10 +177,12 @@ async def test_限速对账_不一样就发_快到点续_雨停了取消_不认�
     assert t.disp.caps == [("A", 0.3)]
     await t.desk.tick()
     assert len(t.disp.caps) == 1, "一样了:不发"
-    t.disp.clients["A"].capabilities.tasks["speed_cap"]["left_s"] = CAP_TTL_S // 2 - 1
-    t.clock.go(15)
+    t.clock.go(CAP_TTL_S // 2 - 1)
     await t.desk.tick()
-    assert t.disp.caps == [("A", 0.3), ("A", 0.3)], "快到点了:续"
+    assert len(t.disp.caps) == 1, "不到一半:不续"
+    t.clock.go(1)
+    await t.desk.tick()
+    assert t.disp.caps == [("A", 0.3), ("A", 0.3)], "到一半了:续(按站点自己记的发成时刻)"
     t.desk.set_manual("normal", by="gina")
     t.clock.go(15)
     await t.desk.tick()
@@ -231,3 +234,100 @@ def test_接口_保安业主都能切_切成雷暴记审计_不合规矩400_没�
         assert ("olga", "POST /api/weather", "auto") in acts
     finally:
         s.close()
+
+
+
+class 假待命:
+    def __init__(self):
+        self.back, self.fail, self.reject = [], 0, 0
+
+    async def return_to(self, rid, *, issued_by):
+        if self.fail:
+            self.fail -= 1
+            raise RuntimeError("狗没就绪")
+        if self.reject:
+            self.reject -= 1
+            return {"ack": {"result": "rejected", "reason": "busy"}}
+        self.back.append(rid)
+        return {"ack": {"result": "accepted"}}
+
+
+def _任务(t, rid, task, state):
+    t.disp.clients[rid].status.task = (None if task is None else SimpleNamespace(
+        task_id=task, state=SimpleNamespace(value=state)))
+
+
+async def test_外审1_雷暴撤了巡检_停稳了派回待命点_派成才删_重启接着办(台):
+    t = 台
+    t.desk.standby = stb = 假待命()
+    stb.fail, stb.reject = 1, 1
+    t.disp.clients = {"A": _狗("sched-1")}
+    t.desk.set_manual("storm", by="gina")
+    await t.desk.tick()
+    assert t.disp.aborts == [("A", "sched-1")] and stb.back == [], "还在撤:先不派"
+    _任务(t, "A", "sched-1", "aborted")                  # 撤停了
+    t.clock.go(15)
+    await t.desk.tick()                                   # 第一次:狗没就绪(抛)
+    t.clock.go(15)
+    await t.desk.tick()                                   # 第二次:被拒
+    assert stb.back == [] and t.db.query("SELECT 1 FROM weather_returns")
+    desk2 = WeatherDesk(t.db, t.disp, now_ms=t.clock, latlon=None)   # 站点重启
+    desk2.standby = stb
+    await desk2.tick()
+    assert stb.back == ["A"] and not t.db.query("SELECT 1 FROM weather_returns")
+    t.clock.go(15)
+    await desk2.tick()
+    assert stb.back == ["A"], "派成了就不再派"
+
+
+async def test_外审1_撤完狗被派去干别的了_回程作废_不抢(台):
+    t = 台
+    t.desk.standby = stb = 假待命()
+    t.disp.clients = {"A": _狗("sched-1")}
+    t.desk.set_manual("storm", by="gina")
+    await t.desk.tick()
+    _任务(t, "A", "incident-9", "running")               # 撤完马上被入侵派走了
+    t.clock.go(15)
+    await t.desk.tick()
+    assert stb.back == [] and not t.db.query("SELECT 1 FROM weather_returns")
+
+
+async def test_外审1_撤完狗没任务了_也派回去(台):
+    t = 台
+    t.desk.standby = stb = 假待命()
+    t.disp.clients = {"A": _狗("sched-1")}
+    t.desk.set_manual("storm", by="gina")
+    await t.desk.tick()
+    _任务(t, "A", None, "")
+    t.clock.go(15)
+    await t.desk.tick()
+    assert stb.back == ["A"]
+
+
+async def test_外审2_限速_狗不重发能力也按时续_站点重启先补发_被拒不算发成(台):
+    t = 台
+    t.disp.clients = {"A": _狗()}
+    t.desk.set_manual("rain", by="gina")
+    await t.desk.tick()
+    assert t.disp.caps == [("A", 0.3)]
+    for _ in range(19):                                   # 狗的能力一直是最初那份(left_s 600)
+        t.clock.go(15)
+        await t.desk.tick()
+    assert len(t.disp.caps) == 1, "285 秒:不续"
+    t.clock.go(15)
+    await t.desk.tick()
+    assert len(t.disp.caps) == 2, "300 秒:续了"
+    desk2 = WeatherDesk(t.db, t.disp, now_ms=t.clock, latlon=None)   # 站点重启
+    t.clock.go(15)
+    await desk2.tick()
+    assert len(t.disp.caps) == 3, "重启不知道上次什么时候发的:先补发"
+
+    async def 拒(rid, cap, *, issued_by):
+        t.disp.caps.append((rid, "拒"))
+        return {"ack": {"result": "rejected", "reason": "unsupported"}}
+    t.disp.speed_cap = 拒
+    desk3 = WeatherDesk(t.db, t.disp, now_ms=t.clock, latlon=None)
+    await desk3.tick()
+    t.clock.go(15)
+    await desk3.tick()
+    assert t.disp.caps[-2:] == [("A", "拒"), ("A", "拒")], "被拒不算发成:15 秒后再发"

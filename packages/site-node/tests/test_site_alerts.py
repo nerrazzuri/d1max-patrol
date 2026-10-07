@@ -496,3 +496,31 @@ def test_钟差估计_狗慢的方向要攒够样本_超过一分钟的样本不
     assert cs.skew_s("B") == 3.0
     now["ms"] += 61_000
     assert cs.skew_s("A") is None and cs.skew_s("B") is None, "一分钟没新样本:不知道"
+
+
+
+def test_W29外审3_站点重启前就在丢定位_重启后照样计30秒报P1(台):
+    c, db, desk, src, *_ = 台
+    src.seed("A", _status(task=_running(), loc_ok=False))  # 重启:读回库里的状态做种
+    src.on_status("A", _status(task=_running(), loc_ok=False))
+    c.ms += 30_000
+    src.tick()
+    assert "loc_lost_paused" in _kinds(desk)
+
+
+def test_W29外审3_P1写不进去_下一拍接着报(台, monkeypatch):
+    c, db, desk, src, *_ = 台
+    src.on_status("A", _status(task=_running(), loc_ok=False))
+    c.ms += 30_000
+    real = desk.raise_alert
+
+    def 炸(**kw):
+        if kw["kind"] == "loc_lost_paused":
+            raise RuntimeError("库锁住了")
+        return real(**kw)
+    monkeypatch.setattr(desk, "raise_alert", 炸)
+    src.tick()
+    assert "loc_lost_paused" not in _kinds(desk)
+    monkeypatch.setattr(desk, "raise_alert", real)
+    src.tick()
+    assert "loc_lost_paused" in _kinds(desk)
