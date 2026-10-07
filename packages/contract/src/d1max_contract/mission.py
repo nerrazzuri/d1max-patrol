@@ -143,6 +143,9 @@ class Policy:
     #: 拍照失败算不算这个点失败(W17)。巡检:算(照片就是这一趟的产出)。代理自己拼的 goto 现场照片:
     #: 不算 —— 狗到了就是到了,照片拍不成只记一笔。不进线格式:任务包里不许写,只有代理内部用。
     photo_optional: bool = False
+    #: 去充电桩的这一趟(W13)。出发线只看中止线:去充是电量唯一能回来的路,原地不动只会耗干;路上照样
+    #: 到中止线就停。不进线格式:只有代理自己拼的回充 goto 用。
+    charging_trip: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         out = {

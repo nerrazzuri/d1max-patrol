@@ -27,6 +27,7 @@ class SiteStandbyPage extends StatefulWidget {
   static const Key defaultKey = Key('standby-here-default');
   static const Key goKey = Key('standby-here-go');
   static const Key msgKey = Key('standby-msg');
+  static const Key chargerKey = Key('standby-charger-here');
 
   @override
   State<SiteStandbyPage> createState() => _SiteStandbyPageState();
@@ -150,6 +151,34 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
       '${p['map_id']}:${p['map_version']}  (${(p['x'] as num).toStringAsFixed(1)}, '
       '${(p['y'] as num).toStringAsFixed(1)})';
 
+  /// W13：狗现在站的地方登记成充电桩对准点（领到桩前约 1.5 米、正对桩）。
+  Future<void> _charger() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        scrollable: true,
+        title: const Text('把狗现在的位置设成充电桩对准点？'),
+        content: const Text('先把狗领到充电桩正前方约 1.5 米、头朝着桩。之后电量低于 30% 它会自己走到这儿对桩充电。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
+          FilledButton(
+              key: const Key('standby-charger-go'),
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('设')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    String msg;
+    try {
+      final d = await widget.api.setChargerHere(widget.robotId);
+      msg = '充电桩对准点设好了（${(d['x'] as num).toStringAsFixed(1)}, ${(d['y'] as num).toStringAsFixed(1)}）';
+    } on SiteError catch (e) {
+      msg = '没设成：$e';
+    }
+    if (mounted) setState(() => _msg = msg);
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = widget.api.session;
@@ -164,6 +193,12 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
               key: SiteStandbyPage.hereKey,
               onPressed: _here,
               child: const Text('在这儿设待命点'),
+            ),
+          if (manage)
+            TextButton(
+              key: SiteStandbyPage.chargerKey,
+              onPressed: _charger,
+              child: const Text('在这儿设充电桩'),
             ),
         ],
       ),

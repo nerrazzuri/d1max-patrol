@@ -297,6 +297,13 @@ class CommandProcessor:
             except ContractError as exc:
                 return f"payload: {exc}"
             return ""
+        if cmd.kind == "dock":
+            from d1max_contract.charging import parse_dock
+            try:
+                parse_dock(cmd.payload)
+            except ContractError as exc:
+                return f"payload: {exc}"
+            return ""
         if cmd.kind == "standoff":
             from d1max_contract.standoff import parse_standoff
             try:
@@ -317,6 +324,8 @@ class CommandProcessor:
                                   or not math.isfinite(speed) or speed <= 0):
             # isfinite:json 认 NaN/Infinity,而 NaN <= 0 为假。
             return "payload: max_speed_mps 要是正的有限数"
+        if "charge" in cmd.payload and not isinstance(cmd.payload["charge"], bool):
+            return "payload: charge 要是 true/false"     # W13:去充电桩的这一趟
         photo = cmd.payload.get("photo", None)
         if photo is not None:
             from d1max_contract.mission import CAMERAS
@@ -508,7 +517,7 @@ class CommandProcessor:
 
 
 #: 叫停栅栏立着的时候拒收的命令(会让狗动的任务)。
-_MOTION_KINDS = frozenset({"goto", "patrol", "teleop", "standoff"})
+_MOTION_KINDS = frozenset({"goto", "patrol", "teleop", "standoff", "dock"})
 
 
 def _event_for(state: TaskState) -> str:

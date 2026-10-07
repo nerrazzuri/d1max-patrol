@@ -21,6 +21,8 @@ TASK_RESOURCES: dict[str, frozenset[str]] = {
     "halt": frozenset(),
     # W25:保持距离。只占 motion;优先级最低,谁来都抢得走。
     "standoff": frozenset({"motion"}),
+    # W13:对桩、充电、出桩。只占 motion(对桩、出桩都要动腿)。
+    "dock": frozenset({"motion"}),
 }
 
 

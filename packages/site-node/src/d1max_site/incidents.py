@@ -95,6 +95,8 @@ class IncidentDesk:
         self.arming: Any = None
         #: 正在驱离的狗(W22,``DeterrenceDesk.busy``):不派它去别的拦截点。
         self.busy: Callable[[], set[str]] | None = None
+        #: 回充(W13,``ChargeDesk.refuse``):正在回充、电量不够的不派 → 理由;能派 → 空串。
+        self.charging: Callable[[str], str] | None = None
         #: 拦截点走不走得到(W23,``intercept_reach.InterceptReach``)。没接(命令行、老测试)就不查。
         self.reach: Any = None
         #: 每个事件源最近一分钟收过的时刻。接口是多线程的:「清掉一分钟前的、判断、
@@ -320,6 +322,8 @@ class IncidentDesk:
                     reason = f"{rid} 正在处理另一个事件(已派出、未结束)"
             if not reason and self.busy is not None and rid in self.busy():
                 reason = f"{rid} 正在驱离(W22)"
+            if not reason and self.charging is not None:
+                reason = self.charging(rid)              # W13:在充电、电量不到 50% 不派(决策 45)
             if not reason:
                 caps = c.capabilities.tasks.get("patrol", {}) if c.capabilities else {}
                 loaded = (caps.get("map_id"), caps.get("map_version"))
