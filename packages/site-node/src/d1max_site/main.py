@@ -411,6 +411,7 @@ class Server:
                                    publish=self.dispatcher.feed.publish)
         self.scheduler.weather = self.weather
         self.weather.standby = self.standby            # 雷暴撤了巡检派回待命点(W29 外审 1)
+        self.weather.alerts = self.alerts              # 回不得报「没回待命点」(W29 复查二)
         self.alert_sources.weather = self.weather
         log.info("天气:%s", f"联网查(坐标 {latlon[0]:.2f},{latlon[1]:.2f})" if latlon
                  else "没配坐标,只能手动切")

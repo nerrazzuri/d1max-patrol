@@ -21,7 +21,8 @@
   每拍对账:那一趟还在跑 → 等;狗空了(没任务,或者任务是那一趟、已经结束)→ 派回待命点,
   派成了才删;**狗在跑别的了(人派的、入侵派的)→ 作废**,不抢。派不成每 15 秒再派。
   站点重启后照样接着办。**回程走待命点管理器的那一套规矩**(W29 复查):会规划的狗规划回去;
-  直线的狗只沿来路回,巡检半路被撤、来路确认不了 → 不回,狗原地等,报「没回待命点」叫人。
+  直线的狗只沿来路回,巡检半路被撤、来路确认不了 → 不回,狗原地等,报「没回待命点」叫人
+  (作废回程和要报的告警同一个事务落库,告警报成才删;W29 复查二)。
 - 每拍对每台在线、新鲜、报了 ``speed_cap`` 的狗:狗上的限速跟该有的不一样就发;一样的话,
   **按站点自己记的上次发成的时刻**,过了有效期的一半就续(W29 外审 2:狗只在限速变了时重发能力,
   能力里的 ``left_s`` 是那时的快照,不是倒计时)。站点重启后不知道上次什么时候发的:先补发一次。
@@ -113,6 +114,8 @@ class WeatherDesk:
         self._back_ms: dict[str, int] = {}              # 狗 → 上次派回程的时刻
         #: 待命点(``standby.StandbyManager``):雷暴撤了巡检派回去。站点主程序接上。
         self.standby: Any = None
+        #: 告警台:回不得要报「没回待命点」(经 ``pending_alerts``,报成才删)。站点主程序接上。
+        self.alerts: Any = None
         self._aborted: dict[str, int] = {}              # 任务 → 上次撤的时刻
         self._told: str = ""
         with db.tx() as c:
@@ -211,6 +214,7 @@ class WeatherDesk:
             self._changed()
         if cond == "storm":
             await self._stop_patrols()
+        self._flush()                                   # 上一拍没报成的,接着报
         await self._returns()
         await self._caps()
 
@@ -257,14 +261,21 @@ class WeatherDesk:
             try:
                 got = await self.standby.return_after_once(rid, tid, issued_by="weather:storm")
             except StandbyError as exc:
-                # 回不得(直线的狗来路不明、要人监护……):不回,原地等,告诉值守的人(W29 复查)
-                self._drop_return(rid, f"回不得,原地等:{exc}")
+                # 回不得(直线的狗来路不明、要人监护……):不回,原地等,告诉值守的人(W29 复查)。
+                # 「作废回程」和「要报的告警」同一个事务落库;告警每拍补报,报成才删(复查二)
+                from d1max_site.pending_alerts import queue
                 try:
-                    self.dispatcher.feed.publish({
-                        "kind": "standby_failed", "robot_id": rid, "after": tid,
-                        "reason": f"雷暴撤了巡检,不能安全回待命点({exc}),狗原地等,要人到场"})
+                    with self.db.tx() as tx:
+                        tx.execute("DELETE FROM weather_returns WHERE robot_id=?", (rid,))
+                        queue(tx, kind="standby_failed", robot=rid, title="没回待命点",
+                              detail=f"雷暴撤了巡检 {tid},不能安全回待命点({exc}),"
+                                     "狗原地等,要人到场"[:300],
+                              context={"task_id": tid}, now_ms=now)
                 except Exception:
-                    log.exception("回不得的告警推不出去")
+                    log.exception("%s 回不得,落库没成(下一拍再来)", rid)
+                    continue
+                log.info("雷暴撤巡检后 %s 回不得,原地等:%s", rid, exc)
+                self._flush()
                 continue
             except Exception as exc:  # noqa: BLE001 - 不在线、没就绪:过一会儿再派
                 log.warning("雷暴撤巡检后 %s 回待命点没派成(%d 秒后再派):%s", rid, RESEND_S, exc)
@@ -275,6 +286,13 @@ class WeatherDesk:
                             ack.get("reason"), RESEND_S)
                 continue
             self._drop_return(rid, "派回待命点了")
+
+    def _flush(self) -> None:
+        from d1max_site.pending_alerts import flush
+        try:
+            flush(self.db, self.alerts)
+        except Exception:
+            log.exception("待报的告警这一拍没办成")
 
     def _drop_return(self, rid: str, why: str) -> None:
         with self.db.tx() as tx:

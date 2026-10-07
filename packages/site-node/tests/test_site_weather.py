@@ -340,8 +340,10 @@ async def test_外审2_限速_狗不重发能力也按时续_站点重启先补�
 
 
 async def test_W29复查_回不得_意图作废_报没回待命点_不再派(台):
+    from d1max_site.alert_store import AlertDesk
     t = 台
     t.desk.standby = stb = 假待命()
+    t.desk.alerts = AlertDesk(t.db, now_ms=t.clock)
     stb.unsafe = "sched-1 只报了 1/3 个点到了,不知道狗停在哪,不回"
     t.disp.clients = {"A": _狗("sched-1")}
     t.desk.set_manual("storm", by="gina")
@@ -350,5 +352,39 @@ async def test_W29复查_回不得_意图作废_报没回待命点_不再派(台
     t.clock.go(15)
     await t.desk.tick()
     assert stb.back == [] and not t.db.query("SELECT 1 FROM weather_returns")
-    [f] = [i for i in t.disp.pushed if i["kind"] == "standby_failed"]
-    assert f["robot_id"] == "A" and "原地等" in f["reason"] and "不知道狗停在哪" in f["reason"]
+    [a] = t.desk.alerts.open()
+    assert a["kind"] == "standby_failed" and a["robot"] == "A"
+    assert "原地等" in a["detail"] and "不知道狗停在哪" in a["detail"]
+    assert a["context"]["task_id"] == "sched-1"
+
+
+async def test_W29复查二_回不得的告警写不进去_下一拍补_重启也补_不重复(台, monkeypatch):
+    from d1max_site.alert_store import AlertDesk
+    t = 台
+    t.desk.standby = stb = 假待命()
+    t.desk.alerts = desk = AlertDesk(t.db, now_ms=t.clock)
+    stb.unsafe = "来路不明"
+    t.disp.clients = {"A": _狗("sched-1")}
+    t.desk.set_manual("storm", by="gina")
+    await t.desk.tick()
+    _任务(t, "A", "sched-1", "aborted")
+    real = desk.raise_alert
+
+    def 炸(**kw):
+        raise RuntimeError("告警库写不进")
+    monkeypatch.setattr(desk, "raise_alert", 炸)
+    t.clock.go(15)
+    await t.desk.tick()
+    assert desk.open() == [] and len(t.db.query("SELECT 1 FROM pending_alerts")) == 1, \
+        "告警没写成:意图留着"
+    await t.desk.tick()
+    assert desk.open() == []
+    monkeypatch.setattr(desk, "raise_alert", real)
+    desk2 = WeatherDesk(t.db, t.disp, now_ms=t.clock, latlon=None)    # 站点重启
+    desk2.alerts = AlertDesk(t.db, now_ms=t.clock)
+    desk2.standby = stb
+    await desk2.tick()
+    assert [a["kind"] for a in desk2.alerts.open()] == ["standby_failed"]
+    assert not t.db.query("SELECT 1 FROM pending_alerts")
+    await desk2.tick()
+    assert len(desk2.alerts.open()) == 1 and desk2.alerts.open()[0]["count"] == 1, "不重复报"

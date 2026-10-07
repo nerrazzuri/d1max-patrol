@@ -625,14 +625,15 @@ async def _雷暴撤了一半的巡检(t):
 
 
 async def test_W29复查_雷暴撤了一半_直线狗来路不明_不回_原地等_报没回待命点(站):
+    from d1max_site.alert_store import AlertDesk
     t = 站
     tid, w = await _雷暴撤了一半的巡检(t)
-    sub = t.site.feed.subscribe()
+    w.alerts = AlertDesk(t.db, now_ms=t.clock)
     await t.send(w.tick())
     assert not _cmds(t, "goto") and len(_cmds(t, "patrol")) == 1, "不派直线回程,也不派回程巡检"
-    failed = [i for i in _feed(sub) if i["kind"] == "standby_failed"]
-    assert failed and "雷暴" in failed[-1]["reason"] and "原地等" in failed[-1]["reason"]
-    assert not t.db.query("SELECT 1 FROM weather_returns"), "回不得:意图作废(已经告警叫人)"
+    [a] = w.alerts.open()
+    assert a["kind"] == "standby_failed" and "雷暴" in a["detail"] and "原地等" in a["detail"]
+    assert not t.db.query("SELECT 1 FROM weather_returns"), "回不得:意图作废(告警报成了)"
 
 
 async def test_W29复查_雷暴撤了一半_会规划的狗规划回去(站):
