@@ -328,6 +328,11 @@ abstract class SiteApi {
   /// 这个防区在家时布不布防（管理员）。
   Future<Map<String, dynamic>> setZoneHome(String zone, bool homeArmed);
 
+  /// 天气（W29）：现在按什么管（正常 / 下雨 / 雷暴 / 不知道）、手动切的、联网查的。
+  Future<Map<String, dynamic>> weather();
+  /// 手动切天气：`normal`、`rain`、`storm`（带 [hours]，默认 3 小时），或者 `auto` 回到联网查的。
+  Future<Map<String, dynamic>> setWeather(String condition, {int? hours});
+
   /// 告警（W00c5a）。默认只要未解决的，[all] 为真时连已解决的一起（最近的在前）。
   /// **读不懂就抛 `FormatException`，绝不退回一份空名单**（见 `alertsFromWire`）。
   Future<List<Alert>> alerts({bool all = false});
@@ -750,6 +755,13 @@ class SiteClient implements SiteApi {
 
   @override
   Future<Map<String, dynamic>> mode() async => _map(await _send('GET', '/api/mode'));
+
+  @override
+  Future<Map<String, dynamic>> weather() async => _map(await _send('GET', '/api/weather'));
+
+  @override
+  Future<Map<String, dynamic>> setWeather(String condition, {int? hours}) async =>
+      _map(await _send('POST', '/api/weather', <String, dynamic>{'condition': condition, 'hours': ?hours}));
 
   @override
   Future<Map<String, dynamic>> setMode(String mode, {List<String>? zones, int? minutes}) async =>

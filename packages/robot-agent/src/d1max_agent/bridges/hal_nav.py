@@ -39,6 +39,9 @@ log = logging.getLogger(__name__)
 POSITION_TOL_M = 0.1
 #: 里程锚定丢了定位,引擎等人给位置等多久(秒)。过渡期有人监护(W00c6i),监护一断任务本来就中止。
 HUMAN_RELOCALIZE_WAIT_S = 600.0
+#: 定位器自己能找回来(雷达定位):丢了 / 打滑(跟里程对不上)等多久(秒),等不回来整趟中止、站点报 P1
+#: (W29,决策 41:原地停、等恢复,超时叫人,不靠不准的定位自己摸回去)。
+AUTO_RELOCALIZE_WAIT_S = 30.0
 BEARING_THRESH_RAD = 0.3
 K_LIN = 1.0
 K_ANG = 2.0
@@ -64,6 +67,8 @@ class HalNavBackend(NavBackend):
         self._caps = caps
         self._vmax = caps.max_vx
         self._wmax = caps.max_wz
+        #: 全狗限速(W29,站点下雨、雷暴时发;运行时按有效期管,没限是无穷大)。不随任务重置。
+        self.speed_cap = math.inf
         self._connected = False
         self._status = NavStatus.STANDBY
         self._loc = LocStatus.CONTINUOUS_LOC
@@ -218,13 +223,20 @@ class HalNavBackend(NavBackend):
         """丢定位之后引擎等多久(W00c6e 内审):里程锚定自己找不回位置,要等人到场给 —— 10 分钟;
         仿真按原样,
         用引擎的默认。"""
-        return None if self.anchor.identity else HUMAN_RELOCALIZE_WAIT_S
+        if self.anchor.identity:
+            return None
+        return AUTO_RELOCALIZE_WAIT_S if getattr(self.anchor, "AUTO_RECOVERS", False) \
+            else HUMAN_RELOCALIZE_WAIT_S
 
     #: 这座桥怎么走路(W00c6b):能力里报给站点(``tasks.goto.path``),站点据此决定巡检后怎么回待命点。
     PATH_KIND = "straight"
 
     async def return_home(self) -> None:
         raise NavRequestError("return_home", "直线桥不认返航,引擎沿来路回(W00c6b)")
+
+    def _vlim(self) -> float:
+        """这一拍的前进上限:任务给的 ∧ 全狗限速(W29;不低于死区,不然走不动)。"""
+        return min(self._vmax, max(self.speed_cap, self._caps.deadband_vx))
 
     async def get_speed(self) -> dict[str, float]:
         return {"x": self._vmax, "y": 0.0, "z": self._wmax}
@@ -320,7 +332,7 @@ class HalNavBackend(NavBackend):
         if abs(bearing) > BEARING_THRESH_RAD:
             vx = 0.0
         else:
-            vx = d * min(self._vmax, max(K_LIN * dist, self._caps.deadband_vx))
+            vx = d * min(self._vlim(), max(K_LIN * dist, self._caps.deadband_vx))
         await self._send(vx, wz, dt_s)
 
     async def _send(self, vx: float, wz: float, dt_s: float) -> None:

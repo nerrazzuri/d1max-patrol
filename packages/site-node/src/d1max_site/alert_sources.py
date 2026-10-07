@@ -20,6 +20,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from d1max_contract.errors import ContractError
 from d1max_contract.messages import (
@@ -90,12 +91,19 @@ def _hit(text: str, words: tuple[str, ...]) -> bool:
     return any(w in low for w in words)
 
 
+#: 定位变差、打滑(W29):先报 P2,这么多秒还没恢复再报 P1。
+LOC_P1_S = 30
+
+
 @dataclass
 class _Mem:
     """一台狗的「上次是什么」。"""
 
     estop: bool = False
     loc_lost_running: bool = False
+    #: 跑着任务、定位不行从哪一刻起(站点的钟;W29:先报 P2,30 秒还没好再报 P1)。
+    loc_since: int | None = None
+    loc_p1: bool = False
     fallen: bool = False
     skew: bool = False
     disk80: bool = False
@@ -115,6 +123,8 @@ class SiteAlertSources:
     def __init__(self, desk: AlertDesk, *, now_ms: Callable[[], int],
                  is_stale: Callable[[str], bool] | None = None,
                  skew_of: Callable[[str], float | None] | None = None) -> None:
+        #: 天气(W29,``weather.WeatherDesk``):雷暴中出动的入侵告警写明。站点主程序接上。
+        self.weather: Any = None
         self.desk = desk
         self._now = now_ms
         #: 这台狗的状态是不是过期了(派遣器按站点的钟算)。``None`` = 不看过期。
@@ -205,11 +215,17 @@ class SiteAlertSources:
             self.desk.raise_alert(kind="estop_pressed", robot=rid, title="急停被按下",
                                   detail="狗报急停没解除")
         m.estop = estop
-        # 代理的引擎丢定位就暂停:「跑着任务 + 定位不行」就是原来的「定位丢失后暂停」。
+        # 代理的引擎丢定位就暂停(W29,决策 41):「跑着任务 + 定位不行」= 定位变差或打滑(跟里程对不上),
+        # 狗原地停、等恢复。先报 P2;**30 秒还没好**再报 P1「定位丢失后暂停」叫人(``tick`` 里看)。
         loc = running and not s.ready.loc_ok
         if loc and not m.loc_lost_running:
-            self.desk.raise_alert(kind="loc_lost_paused", robot=rid, title="定位丢失后暂停",
-                                  detail=f"任务 {s.task.task_id} 在跑,狗报定位不行")
+            m.loc_since, m.loc_p1 = self._now(), False
+            self.desk.raise_alert(kind="loc_degraded", robot=rid,
+                                  title="定位变差或打滑:原地停下等恢复",
+                                  detail=f"任务 {s.task.task_id} 在跑,狗报定位不行;"
+                                         f"{LOC_P1_S} 秒内恢复就接着走")
+        if not loc:
+            m.loc_since = None
         m.loc_lost_running = loc
         if running and s.task.task_id != m.started:
             m.started = s.task.task_id
@@ -230,6 +246,13 @@ class SiteAlertSources:
         for rid, m in list(self._mem.items()):
             if not m.offline and self._is_stale(rid):
                 self._offline(rid, m)
+            elif m.loc_since is not None and not m.loc_p1 \
+                    and self._now() - m.loc_since >= LOC_P1_S * 1000:
+                m.loc_p1 = True                           # 30 秒还没恢复:叫人(W29)
+                self.desk.raise_alert(kind="loc_lost_paused", robot=rid,
+                                      title="定位丢失后暂停,30 秒没恢复:要人到场",
+                                      detail="狗原地停着,不靠不准的定位自己走;到场重新给位置,"
+                                             "或者遥控挪到看得清的地方")
 
     def _offline(self, rid: str, m: _Mem) -> None:
         if m.offline:
@@ -237,6 +260,7 @@ class SiteAlertSources:
         m.offline = True
         # 掉线期间的事看不见:回来之后重新从它报的状态认起。跌倒的记忆也清掉(狗可能被扶起、重启)。
         m.estop = m.loc_lost_running = m.fallen = False
+        m.loc_since = None
         if m.online_since is not None and self._now() - m.online_since < OFFLINE_REARM_MS:
             log.info("%s 回来不到 %d s 又掉线:算同一次,不另起告警", rid, OFFLINE_REARM_MS // 1000)
             return
@@ -488,6 +512,8 @@ class SiteAlertSources:
         if outcome in ("dispatched", "merged") and row.get("robot_id"):
             kind, robot = "intrusion", str(row["robot_id"])
             what = f"{robot} 已出动去 {row.get('intercept') or '拦截点'}"
+            if self.weather is not None and self.weather.storm():
+                what += "(雷暴中出动)"                     # W29:雷暴照派,写明
         elif outcome in ("no_robot", "unmapped", "dispatch_failed", "merged"):
             kind, robot = "intrusion_unanswered", SITE
             what = {"no_robot": "没有能派的狗", "unmapped": "防区没映射到拦截点",

@@ -427,3 +427,33 @@ def test_旁路进程是5号_标过也不发狗尾许可():
     _两头(per, m, rear, back_box=((-2.4, -2.0), (-0.2, 0.2), 0.5), seq=2)
     assert per.sidecar_proto == 5
     assert all("end" not in x for x in side.read())
+
+
+def test_W29_滤雨点_孤零零一个点不挡_杆子挡_两个挨着的也挡():
+    cfg = Config()
+    ground = 场景()
+    rng = np.random.default_rng(1)
+    rain = np.column_stack([rng.uniform(1.0, 3.5, 40), rng.uniform(-3.5, 3.5, 40),
+                            rng.uniform(-H + 0.2, -H + 1.2, 40)])
+    # 雨滴之间隔得开(每格一个、周围没有):挑出彼此不挨着的
+    cells, keep = {(20, 0), (12, -21), (13, -21)}, []         # 杆子、那一对占的格子:雨滴别挨着
+    for i, (x, y, _) in enumerate(rain):
+        c = (math.floor(x / cfg.res), math.floor(y / cfg.res))
+        if all((c[0] + a, c[1] + b) not in cells for a in (-2, -1, 0, 1, 2)
+               for b in (-2, -1, 0, 1, 2)):
+            cells.add(c)
+            keep.append(i)
+    rain = rain[keep]
+    pole = np.array([[2.05, 0.05, -H + z] for z in (0.3, 0.6, 0.9)])         # 竖着三个点
+    pair = np.array([[1.25, -2.05, -H + 0.5], [1.35, -2.05, -H + 0.5]])      # 两格挨着,各一个点
+    occ, known = classify(np.vstack([ground, rain, pole, pair]), H, cfg)
+    for x, y, _ in rain:
+        assert not occ[_cell(cfg, x, y)], ("雨滴不挡", x, y)
+        assert known[_cell(cfg, x, y)], "那一格地面照样看见了"
+    assert occ[_cell(cfg, 2.05, 0.05)], "杆子挡"
+    assert occ[_cell(cfg, 1.25, -2.05)] and occ[_cell(cfg, 1.35, -2.05)], "挨着的两个点挡"
+    lone_air = classify(np.array([[2.55, 1.55, -H + 0.5]]), H, cfg)
+    assert not lone_air[0][_cell(cfg, 2.55, 1.55)] and not lone_air[1][_cell(cfg, 2.55, 1.55)], \
+        "只有一个雨滴、没打到地面:不挡、也不算看见"
+    off = classify(np.array([[2.55, 1.55, -H + 0.5]]), H, Config(speckle=False))
+    assert off[0][_cell(cfg, 2.55, 1.55)], "关掉滤雨点:照旧挡"

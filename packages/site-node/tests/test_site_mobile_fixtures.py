@@ -111,6 +111,12 @@ def _collect(tmp_path) -> dict[str, object]:
             persons={"count": 2, "nearest_m": 7.5, "near": False, "at_ms": wall()},
             standoff="retreat")
         deterrence = s.req("GET", "/api/deterrence", token=tok)[1]
+        # W29:天气(联网查过一次是正常,手动切成下雨 3 小时)
+        from d1max_site.weather import WeatherDesk
+        s.api.weather = WeatherDesk(s.db, s.disp, now_ms=wall, latlon=(3.14, 101.69),
+                                    fetch=lambda a, b: {"weather_code": 3, "precipitation": 0.0})
+        s.loop.call(s.api.weather.poll)
+        weather = s.req("POST", "/api/weather", {"condition": "rain"}, token=tok)[1]
         s.req("POST", "/api/mode", {"mode": "armed"}, token=tok)       # 下面的入侵照常派
         s.api.incidents.add_source("nvr")
         s.loop.call(lambda: s.api.incidents.handle("nvr", {"event_id": "e1",
@@ -206,6 +212,7 @@ def _collect(tmp_path) -> dict[str, object]:
             "site_releases": s.req("GET", "/api/releases", token=tok)[1],
             "site_mode": mode,
             "site_deterrence": deterrence,
+            "site_weather": weather,
         }
     finally:
         s.close()

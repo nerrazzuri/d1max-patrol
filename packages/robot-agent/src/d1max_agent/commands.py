@@ -109,6 +109,8 @@ class CommandProcessor:
         self.map_hook: Callable[[Command], Any] | None = None
         #: 上装(W21,``deter``):不是任务。回空串 = 做了,否则拒收的理由。
         self.deter_hook: Callable[[Command], Any] | None = None
+        #: 全狗限速(W29):收下回空串,不收回原因。
+        self.speed_cap_hook: Callable[[Command], Any] | None = None
 
     # ------------------------------------------------------------ 代次落盘
 
@@ -218,6 +220,13 @@ class CommandProcessor:
             if self.deter_hook is None:
                 return self._rej(cmd, "unsupported")
             why = await self.deter_hook(cmd)
+            return self._rej(cmd, why) if why else Ack(cmd.command_id, cmd.task_id,
+                                                         AckResult.ACCEPTED)
+        if cmd.kind == "speed_cap":
+            # **不进幂等记录**(同 deter):站点每隔一阵续一次;重投的旧命令至多按它自己的有效期限一阵速
+            if self.speed_cap_hook is None:
+                return self._rej(cmd, "unsupported")
+            why = self.speed_cap_hook(cmd)
             return self._rej(cmd, why) if why else Ack(cmd.command_id, cmd.task_id,
                                                          AckResult.ACCEPTED)
         if cmd.kind in MAP_KINDS:

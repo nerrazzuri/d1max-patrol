@@ -31,6 +31,8 @@ ALLOWED_KINDS = frozenset({
     "deter",
     # W25:保持距离。任务级(站点只派、只撤,带 max_s、拴绳);退不退、往哪退全在狗上判,站点不发速度
     "standoff",
+    # W29:全狗限速(下雨、雷暴)。只是给狗自己走的定上限、带有效期,不发速度
+    "speed_cap",
 })
 #: 直接速度、运动原语:站点永远不许发。
 FORBIDDEN_KINDS = frozenset({"vel", "walk", "move", "stand", "lie", "estop_off", "gait"})

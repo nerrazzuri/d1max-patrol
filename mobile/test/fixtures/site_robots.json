@@ -55,6 +55,9 @@
           "relocalize": {
             "needs_pose": false
           },
+          "speed_cap": {
+            "max_speed_mps": null
+          },
           "teleop": {
             "max_vx": 0.5,
             "max_wz": 0.75
@@ -66,7 +69,7 @@
         }
       },
       "clock_skew_s": 0.0,
-      "expires_at": 1792334636514,
+      "expires_at": 1792382879510,
       "fresh": true,
       "held": null,
       "loc": {
@@ -85,9 +88,9 @@
       "robot_id": "A",
       "rtk": null,
       "status": {
-        "boot_id": "boot-69cb218637",
+        "boot_id": "boot-ded701c0ff",
         "control_epoch": 1,
-        "last_seen": 1791334637169,
+        "last_seen": 1791382880186,
         "online": true,
         "ready": {
           "control": true,

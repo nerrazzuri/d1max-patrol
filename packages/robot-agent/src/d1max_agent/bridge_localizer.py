@@ -120,6 +120,8 @@ class _Fix:
 
 class BridgeLocalizer:
     identity = False
+    #: 丢了能自己找回来(雷达定位;W29:引擎只等 30 秒,等不回来叫人)。
+    AUTO_RECOVERS = True
 
     def __init__(self, *, monotonic: Callable[[], float]) -> None:
         self._now = monotonic

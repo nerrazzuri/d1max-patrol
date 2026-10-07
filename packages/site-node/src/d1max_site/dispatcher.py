@@ -785,6 +785,17 @@ class Dispatcher:
                                 task_id=f"deter-{req.output}-{uuid.uuid4().hex[:8]}",
                                 ttl_ms=VIDEO_COMMAND_TTL_MS)
 
+    async def speed_cap(self, robot_id: str, cap: Any, *, issued_by: str) -> dict[str, Any]:
+        """全狗限速(W29,下雨、雷暴):不是任务。要狗报了 ``speed_cap``、状态新鲜。"""
+        c = self._client_for(robot_id)
+        if c.capabilities is None or "speed_cap" not in c.capabilities.tasks:
+            raise Unsupported(f"{robot_id} 不认全狗限速")
+        if not self._fresh(c):
+            raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
+        return await self._send(c, robot_id, "speed_cap", cap.to_payload(), issued_by=issued_by,
+                                task_id=f"speedcap-{uuid.uuid4().hex[:8]}",
+                                ttl_ms=VIDEO_COMMAND_TTL_MS)
+
     async def _send(self, c: DispatchClient, robot_id: str, kind: str, payload: dict[str, Any],
                     *, issued_by: str, task_id: str | None = None, priority: int = 0,
                     before_send: Callable[[Any, Any], None] | None = None,

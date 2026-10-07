@@ -178,17 +178,46 @@ def test_点位没到报卡住_到了不报(台):
     assert a.kind == "stuck" and "pond" in a.title and a.detail == "导航失败"
 
 
-def test_跑着任务时丢定位报一次_空闲时丢不报(台):
+def test_跑着任务时丢定位_先P2_30秒没好再P1_空闲时丢不报(台):
+    """W29(决策 41):定位变差、打滑 → 狗原地停等恢复,先报 P2;30 秒还没好再报 P1 叫人。"""
     c, db, desk, src, *_ = 台
     src.on_status("A", _status(loc_ok=False))
     assert _kinds(desk) == []
     src.on_status("A", _status(task=_running(), loc_ok=False))
     src.on_status("A", _status(task=_running(), loc_ok=False))
-    assert _kinds(desk).count("loc_lost_paused") == 1
-    src.on_status("A", _status(task=_running()))
+    loc = [a for a in desk.book.all() if a.kind.startswith("loc_")]
+    assert [a.kind for a in loc] == ["loc_degraded"] and loc[0].level.value == "P2"
+    c.ms += 29_000
+    src.tick()
+    assert "loc_lost_paused" not in _kinds(desk), "30 秒内:只是 P2"
+    c.ms += 1_000
+    src.tick()
+    src.tick()
+    assert _kinds(desk).count("loc_lost_paused") == 1, "30 秒还没好:P1,只报一次"
+    src.on_status("A", _status(task=_running()))            # 恢复了
     src.on_status("A", _status(task=_running(), loc_ok=False))
-    n = sum(a.count for a in desk.book.all() if a.kind == "loc_lost_paused")
+    n = sum(a.count for a in desk.book.all() if a.kind == "loc_degraded")
     assert n == 2, "恢复过再丢是新的一次(聚合窗口里合进同一条,count 加一)"
+    c.ms += 10_000
+    src.on_status("A", _status(task=_running()))            # 10 秒就好了
+    c.ms += 60_000
+    src.tick()
+    p1 = sum(a.count for a in desk.book.all() if a.kind == "loc_lost_paused")
+    assert p1 == 1, "30 秒内恢复的不报 P1"
+
+
+def test_W29_雷暴中派出去的入侵告警写明(台):
+    from types import SimpleNamespace
+    c, db, desk, src, *_ = 台
+    src.weather = SimpleNamespace(storm=lambda: True)
+    src.on_incident({"zone": "front", "outcome": "dispatched", "robot_id": "A",
+                     "intercept": "gate", "task_id": "incident-1"})
+    [a] = desk.book.all()
+    assert "雷暴中出动" in a.title
+    src.weather = SimpleNamespace(storm=lambda: False)
+    src.on_incident({"zone": "back", "outcome": "dispatched", "robot_id": "B",
+                     "intercept": "gate", "task_id": "incident-2"})
+    assert "雷暴" not in [x for x in desk.book.all() if x.robot == "B"][0].title
 
 
 def test_故障里有跌倒字样才报_同一组不重复_消了再来再报(台):

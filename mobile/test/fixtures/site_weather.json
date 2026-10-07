@@ -1,0 +1,20 @@
+{
+  "auto": {
+    "at_ms": 1791382879695,
+    "condition": "normal",
+    "detail": "天气码 3,降水 0.0 mm",
+    "enabled": true,
+    "error": ""
+  },
+  "condition": "rain",
+  "label": "下雨",
+  "manual": {
+    "at_ms": 1791382879701,
+    "by": "alice",
+    "condition": "rain",
+    "until_ms": 1791393679701
+  },
+  "patrols_paused": false,
+  "source": "manual",
+  "speed_cap_mps": 0.3
+}
