@@ -35,6 +35,11 @@ def wrap_angle(a: float) -> float:
     return math.pi if wrapped == -math.pi else wrapped
 
 
+#: 假充电桩(W13):对桩、出桩各要多久(秒,仿真的钟)。
+DOCK_S = 5.0
+UNDOCK_S = 3.0
+
+
 class SimRobot:
     """``now_ms`` 是注入的钟;``tick(dt_s)`` 推进一步。两者由调用方保持一致。"""
 
@@ -46,8 +51,19 @@ class SimRobot:
                  battery_drain_pct_per_h: float = 8.0, frame_id: str = "odom",
                  latency_s: float = 0.0, gait_start_s: float = 0.0,
                  max_decel: float = math.inf, require_clearance: bool = False,
-                 payload: bool = False) -> None:
+                 payload: bool = False,
+                 charger: tuple[float, float, float] | None = None,
+                 charge_pct_per_h: float = 60.0) -> None:
         self._now = now_ms
+        #: 假充电桩(W13):桩前对准点的位姿(x, y, yaw)。给了就会对桩:站在对准点 0.4 m、20° 内调
+        #: ``recharge_start``,过 :data:`DOCK_S` 秒上桩、充电;``undock`` 过 :data:`UNDOCK_S` 秒出桩。
+        #: 没站准就一直上不了桩(跟厂家回充一样不报失败)。
+        self.charger = charger
+        self._charge_rate = charge_pct_per_h
+        self.docked = False
+        self._dock_at: int | None = None
+        self._undock_at: int | None = None
+        self.undock_calls = 0
         #: 上装(W21):开了就有警灯、警笛、聚光灯、喇叭。每一路记「开到几点」(按仿真的钟),到点算关。
         self.payload = payload
         self.deter_until: dict[str, int] = {}
@@ -101,6 +117,26 @@ class SimRobot:
     def inject_battery(self, pct: float) -> None:
         self._battery_pct = pct
         self._battery_t0 = self._now()
+
+    def _battery_now(self) -> float:
+        hours = max(0, self._now() - self._battery_t0) / 3_600_000
+        rate = self._charge_rate if self.docked else -self._battery_drain
+        return max(0.0, min(100.0, self._battery_pct + hours * rate))
+
+    def _rebase_battery(self) -> None:
+        """充没充电变了:电量从这一刻接着算(充是涨、不充是掉)。"""
+        self._battery_pct, self._battery_t0 = self._battery_now(), self._now()
+
+    def _dock_tick(self) -> None:
+        now = self._now()
+        if self._dock_at is not None and now >= self._dock_at:
+            self._dock_at = None
+            self._rebase_battery()
+            self.docked = True
+        if self._undock_at is not None and now >= self._undock_at:
+            self._undock_at = None
+            self._rebase_battery()
+            self.docked = False
 
     def inject_fault(self, code: str, fatal: bool, text: str = "") -> None:
         self._faults.append(Fault(code=code, fatal=fatal, text=text))
@@ -290,9 +326,8 @@ class SimRobot:
     # ------------------------------------------------------------ 电池与故障
 
     async def battery(self) -> Battery:
-        hours = max(0, self._now() - self._battery_t0) / 3_600_000
-        pct = max(0.0, self._battery_pct - hours * self._battery_drain)
-        return Battery(percent=pct, charging=False)
+        self._dock_tick()
+        return Battery(percent=self._battery_now(), charging=self.docked)
 
     async def faults(self) -> tuple[Fault, ...]:
         return tuple(self._faults)
@@ -351,26 +386,42 @@ class SimRobot:
     async def audio_session(self) -> Any:
         raise HalUnsupported("sim 没有音频")
 
-    # ------------------------------------------------------------ 回充(没有)
+    # ------------------------------------------------------------ 回充(W13:假充电桩)
 
     async def recharge_start(self) -> None:
-        raise HalUnsupported("sim 不回充")
+        if self.charger is None:
+            raise HalUnsupported("sim 没配充电桩")
+        cx, cy, cyaw = self.charger
+        aligned = (math.hypot(self.x - cx, self.y - cy) <= 0.4
+                   and abs(math.remainder(self.yaw - cyaw, 2 * math.pi)) <= math.radians(20))
+        if aligned and not self.docked:
+            self._dock_at = self._now() + int(DOCK_S * 1000)
 
     async def recharge_stop(self) -> None:
-        raise HalUnsupported("sim 不回充")
+        if self.charger is None:
+            raise HalUnsupported("sim 没配充电桩")
+        self._dock_at = None
 
     async def undock(self) -> None:
-        raise HalUnsupported("sim 不回充")
+        if self.charger is None:
+            raise HalUnsupported("sim 没配充电桩")
+        self.undock_calls += 1
+        if self.docked:
+            self._undock_at = self._now() + int(UNDOCK_S * 1000)
 
     async def recharge_status(self) -> str:
-        raise HalUnsupported("sim 不回充")
+        if self.charger is None:
+            raise HalUnsupported("sim 没配充电桩")
+        self._dock_tick()
+        return "docked" if self.docked else ("docking" if self._dock_at else "idle")
 
     # ------------------------------------------------------------ 能力
 
     def hal_capabilities(self) -> HalCapabilities:
         return HalCapabilities(
             max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self.deadband_vx, lateral=False,
-            control_releasable=True, recharge_mode="none",
+            control_releasable=True,
+            recharge_mode="vendor_dock" if self.charger is not None else "none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": False,
                      "joint_effort": False, "foot_force": False},
             actuators={"light": False, "strobe": self.payload, "siren": self.payload,

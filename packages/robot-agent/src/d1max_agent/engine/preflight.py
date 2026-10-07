@@ -186,6 +186,13 @@ async def _check_battery(device: DeviceBackend, mission: Mission,
         return CheckResult("battery", False,
                            f"电量 {pct:.1f}%,但算不出出发线:这张图的原点不可用"
                            f"(见 home 项)")
+    if mission.policy.charging_trip:
+        # 去充电桩(W13):去充是电量唯一能回来的路,高于中止线就走(路上到中止线照样停)
+        line = mission.policy.battery_abort_pct
+        ok = pct > line
+        return CheckResult("battery", ok,
+                           f"去充电:电量 {pct:.1f}%,中止线 {line:.0f}%" if ok
+                           else f"电量 {pct:.1f}%,不到中止线 {line:.0f}%:去充电也走不动了")
     start = await _where(nav) if nav is not None else None
     back = back_mode(nav, mission) if nav is not None else "home"
     line = departure_line_pct(mission, home, slack=slack, params=params, start=start, back=back)

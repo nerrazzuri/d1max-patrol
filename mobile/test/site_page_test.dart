@@ -123,6 +123,11 @@ class FakeApi implements SiteApi {
     return Uint8List.fromList([1, 2, 3]);
   }
   @override
+  Future<Map<String, dynamic>> setChargerHere(String robotId) async {
+    calls.add('charger-here $robotId');
+    return <String, dynamic>{'robot_id': robotId, 'x': 2.0, 'y': 0.5};
+  }
+  @override
   Future<Map<String, dynamic>> setRunKeep(int id, bool keep) async {
     calls.add('run-keep $id $keep');
     return <String, dynamic>{'id': id, 'keep': keep};

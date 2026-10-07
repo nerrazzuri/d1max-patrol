@@ -118,4 +118,28 @@ void main() {
     expect(find.byType(SiteStandbyPage), findsOneWidget);
     expect(siteFixture('site_robot'), isNotNull);
   });
+
+  testWidgets('W13 管理员在这儿设充电桩：先说清站哪儿，确认了才设', (t) async {
+    final api = FakeApi('admin');
+    await _open(t, api);
+    await t.tap(find.byKey(SiteStandbyPage.chargerKey));
+    await t.pumpAndSettle();
+    expect(find.textContaining('正前方约 1.5 米'), findsOneWidget);
+    await t.tap(find.byKey(const Key('standby-charger-go')));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('charger-here A'));
+    expect(find.textContaining('充电桩对准点设好了（2.0, 0.5）'), findsOneWidget);
+  });
+
+  testWidgets('W13 保安没有设充电桩', (t) async {
+    await _open(t, FakeApi('guard'));
+    expect(find.byKey(SiteStandbyPage.chargerKey), findsNothing);
+  });
+
+  test('W13 回充那几趟说人话', () {
+    expect(taskLabel(<String, dynamic>{'kind': 'dock', 'task_id': 'charge-dock-1', 'state': 'running'}),
+        '充电中（对桩、充电、出桩）');
+    expect(taskLabel(<String, dynamic>{'kind': 'goto', 'task_id': 'charge-goto-1', 'state': 'running'}), '去充电');
+    expect(taskLabel(<String, dynamic>{'kind': 'goto', 'task_id': 'x', 'state': 'running'}), 'goto running');
+  });
 }

@@ -214,11 +214,14 @@ class EngineGotoTask(EngineMissionTask):
 
     def __init__(self, *, task_id: str, target: MapPose, max_speed_mps: float | None,
                  parts: EngineParts, events: EventBook, now_ms: Callable[[], int],
-                 priority: int = 0, photo: str | None = None) -> None:
+                 priority: int = 0, photo: str | None = None, charge: bool = False) -> None:
         super().__init__(task_id=task_id, kind="goto", max_speed_mps=max_speed_mps,
                          parts=parts, events=events, now_ms=now_ms, priority=priority)
         self.target = target
         self.photo = photo
+        #: 去充电桩的这一趟(W13):本身就是「回家的路」—— 低电量不掉头回原点、接着走,到中止线才停;
+        #: 出发线也不算回来那一段(同站点的回程巡检,``on_battery_low: continue``)。
+        self.charge = charge
         self._last_reported_m: float | None = None
 
     def _mission(self) -> Mission:
@@ -228,7 +231,8 @@ class EngineGotoTask(EngineMissionTask):
                 name="target", pose=Pose.from_xy_yaw(self.target.x, self.target.y,
                                                      self.target.yaw),
                 actions=((Action(type="photo", camera=self.photo),) if self.photo else ())),),
-            policy=Policy(photo_optional=True))
+            policy=Policy(photo_optional=True, charging_trip=self.charge,
+                          on_battery_low="continue" if self.charge else "return_home"))
 
     async def _progress(self) -> dict:
         # 按地图位姿算(W00c6e 内审:以前按原始里程,锚在 (10, 5) 时报 12 m、真距离 2 m)。

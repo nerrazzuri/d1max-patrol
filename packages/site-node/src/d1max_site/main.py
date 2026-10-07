@@ -480,7 +480,17 @@ class Server:
         from d1max_site.deterrence import DeterrenceDesk
         self.deterrence = DeterrenceDesk(self.db, self.dispatcher, now_ms=wall_ms,
                                          standby=self.standby)
-        self.standby.hold = self.deterrence.holds
+        # W13:自动回充(决策 25、45)。回充这几趟结束时待命点管理器不派回程;入侵派遣问它能不能派。
+        from d1max_site.charging import ChargeDesk
+        ccfg = cfg.get("charging", {})
+        self.charge = ChargeDesk(self.db, self.dispatcher, now_ms=wall_ms,
+                                 low_pct=float(ccfg.get("low_pct", 30)),
+                                 resume_pct=float(ccfg.get("resume_pct", 90)))
+        self.charge.alerts = self.alerts
+        self.charge.busy = self.deterrence.busy
+        self.incidents.charging = self.charge.refuse
+        self.standby.hold = lambda rid, tid: (self.deterrence.holds(rid, tid)
+                                              or self.charge.holds(rid, tid))
         self.deterrence.alerts = self.alerts           # W24:驱离中看到人报告警
         self.incidents.busy = self.deterrence.busy
         # W29:全天候。天气(联网查 + 手动切):雷暴停排程巡检、照派入侵;下雨、雷暴全狗限速。
@@ -586,6 +596,7 @@ class Server:
         self.api.deterrence = self.deterrence
         self.api.weather = self.weather
         self.api.privacy = self.privacy                # W30:运行记录标「留着」
+        self.api.charge = self.charge                  # W13:充电桩
         self.arming.on_expired = lambda back, row: self.api.audit.record(
             actor="site", action="mode visitor_expired", target=back, status=200,
             detail={"visitor_zones": row["visitor_zones"], "set_by": row["set_by"]}, remote="")
@@ -685,6 +696,10 @@ class Server:
                 await self.deterrence.tick()           # W22:驱离到点收、自动升、续声光
             except Exception:
                 log.exception("驱离这一拍没办成")
+            try:
+                await self.charge.tick()               # W13:低电量去充、对桩、充满出桩、接着充
+            except Exception:
+                log.exception("回充这一拍没办成")
             try:
                 await self.weather.tick()              # W29:查天气、雷暴撤排程巡检、对账限速
             except Exception:

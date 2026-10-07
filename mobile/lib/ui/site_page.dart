@@ -47,9 +47,17 @@ String _statusLine(Map<String, dynamic> r) {
   if (st is! Map) return '没有状态';
   final online = st['online'] == true && r['fresh'] == true;
   final task = st['task'];
-  final taskText = task is Map ? '${task['kind']} ${task['state']}' : '空闲';
+  final taskText = task is Map ? taskLabel(task) : '空闲';
   final held = r['held'] is Map ? '已叫停 · ' : '';
   return held + (online ? '在线 · $taskText' : '离线');
+}
+
+/// 一趟任务说人话（W13：回充那几趟）；别的照原样 `kind state`。
+String taskLabel(Map task) {
+  final id = '${task['task_id'] ?? ''}';
+  if (task['kind'] == 'dock') return '充电中（对桩、充电、出桩）';
+  if (task['kind'] == 'goto' && id.startsWith('charge-')) return '去充电';
+  return '${task['kind']} ${task['state']}';
 }
 
 // ------------------------------------------------------------ 站点列表

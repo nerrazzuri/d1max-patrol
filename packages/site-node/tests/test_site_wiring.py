@@ -67,8 +67,13 @@ def test_布防模式接到事件派遣和接口上_访客到点退回记审计(
 
 def test_驱离接到待命点_事件派遣_接口上(srv):
     """W22:到了拦截点由驱离接管回程,驱离中的狗不派去别的拦截点,接口看得到。"""
-    assert srv.standby.hold == srv.deterrence.holds
+    # W13:待命点的「别派回程」= 驱离接管的 或 回充那几趟
+    srv.deterrence.holds = lambda rid, tid: tid == "incident-x"
+    assert srv.standby.hold("A", "incident-x") and srv.standby.hold("A", "charge-dock-1")
+    assert not srv.standby.hold("A", "sched-1")
     assert srv.incidents.busy == srv.deterrence.busy
+    assert srv.incidents.charging == srv.charge.refuse and srv.api.charge is srv.charge
+    assert srv.charge.busy == srv.deterrence.busy and srv.charge.alerts is srv.alerts
     assert srv.api.deterrence is srv.deterrence
 
 

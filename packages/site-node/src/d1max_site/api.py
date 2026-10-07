@@ -93,6 +93,8 @@ _CAM = re.compile(r"^/api/cameras/([A-Za-z0-9._-]{1,64})/live$")
 _DETER = re.compile(r"^/api/deterrence/([^/]{1,64})/(level|release)$")
 #: 连续录像(W18):一段 ``/api/recordings/<id>/video``、标留着 ``/api/recordings/<id>/keep``。
 _REC = re.compile(r"^/api/recordings/(\d{1,12})/(video|keep)$")
+#: 充电桩(W13):``/api/chargers/<robot_id>``。
+_CHARGER = re.compile(r"^/api/chargers/([^/]{1,128})$")
 #: 看证据的审计(W30):同一个人看同一样东西多久记一次(毫秒)。
 VIEW_AUDIT_EVERY_MS = 600_000
 _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review|keep)(?:/([^/]{1,300}))?)?$")
@@ -169,6 +171,8 @@ class SiteApi:
         self.recordings: Any = None
         #: 个人数据(W30,``privacy.PrivacyDesk``):运行记录标「留着」。
         self.privacy: Any = None
+        #: 自动回充(W13,``charging.ChargeDesk``):充电桩登记、回充进度。
+        self.charge: Any = None
         #: 谁看过什么(W30,PDPA):``(账号, 东西) → 上次记审计的时刻``;
         #: 10 分钟内同一个人看同一样只记一次。
         self._viewed: dict[tuple[str, str], int] = {}
@@ -409,6 +413,8 @@ class _Handler(TlsHandlerMixin):
                 return self._mode(method, path, user)
             if path == "/api/weather":
                 return self._weather(method, user)
+            if path == "/api/chargers" or _CHARGER.match(path):
+                return self._chargers(method, path, user)
             if path in ("/api/incidents", "/api/intercepts", "/api/zones"):
                 self._need(user, VIEW if method == "GET" else MANAGE)
                 return self._incident_admin(method, path)
@@ -796,6 +802,52 @@ class _Handler(TlsHandlerMixin):
             return self._send_json(200, desk.set_mode(mode, by=str(user), zones=d.get("zones"),
                                                       minutes=d.get("minutes")))
         except ModeError as exc:
+            raise HttpError(400, str(exc)) from exc
+
+    def _chargers(self, method: str, path: str, user) -> None:
+        """充电桩(W13)。看:``view``(带每台狗这一轮回充走到哪一步);登记、改桩前对准点
+        (``{map_id, map_version, x, y, yaw}``,或者 ``{here: true}`` 用狗现在的位姿)、
+        删(``{remove: true}``):``manage``。"""
+        from d1max_site.charging import ChargeError
+        desk = self.site.charge
+        if desk is None:
+            raise HttpError(404, "这个站点没开自动回充")
+        if path == "/api/chargers":
+            if method != "GET":
+                raise HttpError(405, "只支持 GET")
+            self._need(user, VIEW)
+            return self._send_json(200, desk.view())
+        m = _CHARGER.match(path)
+        assert m is not None
+        rid = unquote(m.group(1))
+        if not SAFE_ID.match(rid):
+            raise HttpError(404, "没有这台狗")
+        self._need(user, MANAGE)
+        self._audit_target = rid
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        d = self._body()
+        if d.get("remove") is True:                       # 删桩(这台狗以后不自动回充)
+            self._audit_detail = {"remove": True}
+            return self._send_json(200, {"removed": desk.remove_charger(rid)})
+        if d.get("here") is True:
+            # 狗现在站的地方(人把它领到桩前约 1.5 m、正对桩):按它最近一份新鲜的遥测位姿
+            c = self.site.dispatcher.clients.get(rid)
+            pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
+            if pose is None or not self.site.dispatcher._fresh(c):
+                raise HttpError(409, f"{rid} 不在线、没有新鲜的位姿:领到桩前、等它报了位置再设")
+            d = {"map_id": pose.map_id, "map_version": pose.map_version, "x": pose.x,
+                 "y": pose.y, "yaw": pose.yaw}
+        vals = [d.get(k) for k in ("x", "y", "yaw")]
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals) or \
+                not isinstance(d.get("map_id"), str) or not isinstance(d.get("map_version"), str):
+            raise HttpError(400, "要 map_id、map_version、x、y、yaw")
+        self._audit_detail = {k: d[k] for k in ("map_id", "map_version", "x", "y", "yaw")}
+        try:
+            return self._send_json(200, desk.set_charger(
+                rid, map_id=d["map_id"], map_version=d["map_version"], x=float(vals[0]),
+                y=float(vals[1]), yaw=float(vals[2]), by=str(user)))
+        except ChargeError as exc:
             raise HttpError(400, str(exc)) from exc
 
     def _weather(self, method: str, user) -> None:

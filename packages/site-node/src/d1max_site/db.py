@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 32                      # W30 复查:要删的导出(export_purges)
+SCHEMA_VERSION = 33                      # W13:充电桩、回充进度(chargers、charge_cycles)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -345,6 +345,26 @@ CREATE TABLE IF NOT EXISTS weather_returns (
     robot_id   TEXT PRIMARY KEY,
     task_id    TEXT NOT NULL,
     created_ms INTEGER NOT NULL
+);
+-- W13:每台狗的桩前对准点(桩前约 1.5 m、正对桩)。
+CREATE TABLE IF NOT EXISTS chargers (
+    robot_id    TEXT PRIMARY KEY,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    x           REAL NOT NULL,
+    y           REAL NOT NULL,
+    yaw         REAL NOT NULL,
+    set_ms      INTEGER NOT NULL,
+    set_by      TEXT NOT NULL DEFAULT ''
+);
+-- W13:每台狗这一轮回充走到哪一步了(goto / dock / resume 被打断 / cooldown 失败或人中止之后歇着)。
+CREATE TABLE IF NOT EXISTS charge_cycles (
+    robot_id   TEXT PRIMARY KEY,
+    state      TEXT NOT NULL,
+    task_id    TEXT NOT NULL DEFAULT '',
+    sent_ms    INTEGER NOT NULL DEFAULT 0,
+    started_ms INTEGER NOT NULL,
+    until_ms   INTEGER
 );
 -- W30 复查:删了运行记录、导出还没删成的(删导出成了才清;下一次删除、定时清理、重启都接着删)。
 CREATE TABLE IF NOT EXISTS export_purges (

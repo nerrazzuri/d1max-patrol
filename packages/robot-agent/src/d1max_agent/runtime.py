@@ -113,7 +113,7 @@ ACK_MAX_BYTES = 240 * 1024
 BATTERY_FLOOR_PCT = 15.0
 
 #: 要人监护(W00c6i)时,只有这几种任务受监护租约约束(遥控、叫停、换图、发布照常)。
-_AUTONOMOUS_KINDS = frozenset({"goto", "patrol", "standoff"})
+_AUTONOMOUS_KINDS = frozenset({"goto", "patrol", "standoff", "dock"})
 #: 放了、过期的监护会话留多久(秒):挡同一会话里迟到的旧心跳(站点的命令有效期 30 s,再多留一点)。
 _SESSION_MEMORY_S = 60.0
 
@@ -360,6 +360,8 @@ class AgentRuntime:
             kinds.add("teleop")                    # W00c5c:遥控不要地图
         if self._standoff_ok():
             kinds.add("standoff")                  # W25:要规划后端(避障守卫、禁行区)+ 人员检测
+        if caps.recharge_mode != "none":
+            kinds.add("dock")                      # W13:HAL 会对桩(厂家回充;以后自己认二维码)
         return kinds
 
     def _standoff_ok(self) -> bool:
@@ -393,6 +395,11 @@ class AgentRuntime:
                               lease_ttl_ms=ttl, hal=self.hal, now_ms=self._mono_ms,
                               video_live=self._video_live, events=self.events,
                               priority=cmd.priority)
+        if cmd.kind == "dock":
+            from d1max_agent.tasks.dock import DockTask
+            from d1max_contract.charging import parse_dock
+            return DockTask(task_id=cmd.task_id, req=parse_dock(cmd.payload), hal=self.hal,
+                            now_ms=self._mono_ms, priority=cmd.priority)
         if cmd.kind == "standoff":
             from d1max_agent.tasks.standoff import StandoffTask
             from d1max_contract.standoff import parse_standoff
@@ -414,7 +421,8 @@ class AgentRuntime:
         return EngineGotoTask(task_id=cmd.task_id, target=target,
                               max_speed_mps=cmd.payload.get("max_speed_mps"), parts=self.parts,
                               events=self.events, now_ms=self._now, priority=cmd.priority,
-                              photo=cmd.payload.get("photo"))
+                              photo=cmd.payload.get("photo"),
+                              charge=cmd.payload.get("charge") is True)
 
     def _admit(self, cmd: Command) -> str:
         """发件箱满了(盘到停止水位或发件箱到上限)不接巡检 —— 绝不删没传完的来腾地方。
@@ -599,6 +607,9 @@ class AgentRuntime:
             out["standoff"] = self._standoff_caps()   # W25:在不在守、在不在退、是不是无路可退
         if self.parts is not None:
             out["speed_cap"] = self._speed_cap_caps()  # W29:全狗限速(站点下雨、雷暴时发)
+        rmode = self.hal.hal_capabilities().recharge_mode
+        if rmode != "none":
+            out["dock"] = {"mode": rmode}           # W13:会对桩、充电、出桩
         deter = self.deter.caps()
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术

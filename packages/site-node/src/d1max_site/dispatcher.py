@@ -550,7 +550,8 @@ class Dispatcher:
 
     async def goto(self, robot_id: str, target: dict[str, Any], max_speed_mps: float | None,
                    *, issued_by: str, priority: int = 0,
-                   task_id: str | None = None, photo: str | None = None) -> dict[str, Any]:
+                   task_id: str | None = None, photo: str | None = None,
+                   charge: bool = False) -> dict[str, Any]:
         """``photo``:到了拍一张(相机名,W17)。狗没报能用这个相机拍(``goto_photo``,老代理)就不带:
         老代理不看这个键,照走不拍,带上只会让人以为有照片。"""
         c = self._client_for(robot_id)
@@ -566,6 +567,8 @@ class Dispatcher:
         if photo is not None and photo in ((c.capabilities.tasks.get("goto_photo") or {})
                                            .get("cameras") or ()):
             payload["photo"] = photo
+        if charge:
+            payload["charge"] = True                # W13:去充电桩,低电量不掉头
         return await self._send(c, robot_id, "goto", payload, issued_by=issued_by,
                                 priority=priority, task_id=task_id)
 
@@ -622,6 +625,15 @@ class Dispatcher:
             raise DispatchRefused(str(exc)) from exc
         if why:
             raise DispatchRefused(why)
+
+    async def dock(self, robot_id: str, task_id: str, req: Any, *,
+                   issued_by: str) -> dict[str, Any]:
+        """对桩、充电、出桩(W13)。站点回充编排派;优先级是回充那一档。"""
+        from d1max_contract.charging import CHARGE_PRIORITY
+        c = self._client_for(robot_id)
+        self._check_dispatchable(robot_id, c, "dock")
+        return await self._send(c, robot_id, "dock", req.to_payload(), issued_by=issued_by,
+                                priority=CHARGE_PRIORITY, task_id=task_id)
 
     async def standoff(self, robot_id: str, task_id: str, req: Any, *,
                        issued_by: str) -> dict[str, Any]:
