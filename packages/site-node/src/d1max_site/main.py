@@ -401,6 +401,7 @@ class Server:
         self.deterrence = DeterrenceDesk(self.db, self.dispatcher, now_ms=wall_ms,
                                          standby=self.standby)
         self.standby.hold = self.deterrence.holds
+        self.deterrence.alerts = self.alerts           # W24:驱离中看到人报告警
         self.incidents.busy = self.deterrence.busy
         # W00c5b:视频经站点。狗按需把相机推到这里(SRT),这里转 MJPEG 给观众。
         from d1max_site.video import VideoHub, dispatcher_sender

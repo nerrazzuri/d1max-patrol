@@ -56,6 +56,8 @@ set -euo pipefail
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-localizer.service 定位器的自启链(有人手工 enable 过的话)
 # @删除 /etc/systemd/system/d1max-obstacles.service                       感知节点单元(W11)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-obstacles.service 感知节点的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/system/d1max-persons.service                         人员检测节点单元(W24)
+# @删除 /etc/systemd/system/multi-user.target.wants/d1max-persons.service 人员检测节点的自启链(有人手工 enable 过的话)
 # @删除 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(有人手工 enable 过的话)
 # @删除 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置(W09d;删了之后按系统原来的配置对时)
@@ -89,6 +91,8 @@ LOC_UNIT=d1max-localizer.service
 LOC_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-localizer.service
 OBS_UNIT=d1max-obstacles.service
 OBS_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-obstacles.service
+PERS_UNIT=d1max-persons.service
+PERS_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-persons.service
 MERGE_UNIT=d1max-lidar-merge.service
 MERGE_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service
 LEGACY_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-patrol.service
@@ -381,7 +385,7 @@ stop_service() {
     say "  (这台机器上没有 systemctl,整段跳过)"
     return 0
   fi
-  for u in "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do
+  for u in "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do
     if [ "$DO_IT" != 1 ]; then
       say "  [dry-run] 会 stop + disable $u"
       continue
@@ -397,6 +401,8 @@ stop_service() {
   rm_sys "$LOC_WANTS_LINK" "定位器的自启链,没 enable 过就没有"
   rm_sys "$UNIT_DIR/$OBS_UNIT" "感知节点单元(W11)"
   rm_sys "$OBS_WANTS_LINK" "感知节点的自启链,没 enable 过就没有"
+  rm_sys "$UNIT_DIR/$PERS_UNIT" "人员检测节点单元(W24)"
+  rm_sys "$PERS_WANTS_LINK" "人员检测节点的自启链,没 enable 过就没有"
   rm_sys "$UNIT_DIR/$MERGE_UNIT" "前后雷达合并单元(W09i)"
   rm_sys "$MERGE_WANTS_LINK" "前后雷达合并的自启链,没 enable 过就没有"
   rm_sys "/etc/systemd/timesyncd.conf.d/d1max.conf" "对时配置(W09d),站点地址没填过就没有"

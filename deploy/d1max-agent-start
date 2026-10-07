@@ -15,6 +15,8 @@
 #                    真狗等 W09b 的定位器验过再设)
 #   D1MAX_OBSTACLES=none|bridge(W11;空着 = none。bridge 要 D1MAX_NAV=planned、起了 d1max-obstacles,
 #                   真狗等 W11 的真机项验过再设)
+#   D1MAX_PERSONS=none|bridge(W24;空着 = none。bridge 要起了 d1max-persons、检测模型装好,
+#                 真狗等 W24 的真机项验过再设)
 #   D1MAX_NAV=straight|planned(W10;空着 = straight 直线桥。planned 在规划栅格上规划、守禁行区,
 #              真狗等 W10 的真机项验过再设)
 #   D1MAX_AGENT_ARGS=其余参数(比如 --mapping、--sidecar 127.0.0.1:8090 --mps-per-unit …)
@@ -30,6 +32,7 @@ exec "$here/venv/bin/d1max-agent" \
   ${D1MAX_LOCALIZER:+--localizer} ${D1MAX_LOCALIZER:+"$D1MAX_LOCALIZER"} \
   ${D1MAX_NAV:+--nav} ${D1MAX_NAV:+"$D1MAX_NAV"} \
   ${D1MAX_OBSTACLES:+--obstacles} ${D1MAX_OBSTACLES:+"$D1MAX_OBSTACLES"} \
+  ${D1MAX_PERSONS:+--persons} ${D1MAX_PERSONS:+"$D1MAX_PERSONS"} \
   --registration /etc/d1max/registration.json --store-dir /var/lib/d1max/agent \
   --outbox "${D1MAX_OUTBOX:?单元里应该有 D1MAX_OUTBOX}" \
   --map "${D1MAX_MAP:?/etc/d1max/env 里没有 D1MAX_MAP(地图号:版本)}" \

@@ -107,7 +107,9 @@ def _collect(tmp_path) -> dict[str, object]:
         s.api.deterrence = s.loop.call(lambda: _sync_make(DeterrenceDesk, s))
         s.api.deterrence.sessions["A"] = Session(
             robot_id="A", incident_id=1, zone="yard", task_id="incident-abc", level=2,
-            started_ms=wall() - 60_000, level_ms=wall() - 5_000)
+            started_ms=wall() - 60_000, level_ms=wall() - 5_000,
+            persons={"count": 2, "nearest_m": 7.5, "bearing_deg": -12.0, "camera": "front",
+                     "at_ms": wall()})
         deterrence = s.req("GET", "/api/deterrence", token=tok)[1]
         s.req("POST", "/api/mode", {"mode": "armed"}, token=tok)       # 下面的入侵照常派
         s.api.incidents.add_source("nvr")

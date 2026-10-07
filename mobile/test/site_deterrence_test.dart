@@ -30,6 +30,18 @@ void main() {
         'L3 警笛（自动，已到最高的自动一级）');
   });
 
+  test('看到的人说人话', () {
+    expect(deterPersonsText(_rows().first), '看到 2 个人，最近 7.5 m');
+    expect(deterPersonsText(<String, dynamic>{'persons': <String, dynamic>{'gone': true}}), '人走了');
+    expect(deterPersonsText(<String, dynamic>{'persons': null}), '');
+    expect(deterPersonsText(<String, dynamic>{'persons': <String, dynamic>{'count': 1}}), '看到 1 个人');
+  });
+
+  testWidgets('驱离页显示看到的人', (t) async {
+    await _open(t, FakeApi('guard')..deterRows = _rows());
+    expect(find.textContaining('看到 2 个人，最近 7.5 m'), findsOneWidget);
+  });
+
   testWidgets('保安：跳级、解除', (t) async {
     final api = FakeApi('guard')..deterRows = _rows();
     await _open(t, api);
