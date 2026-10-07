@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 22                      # W22:分级驱离(deter_sessions)
+SCHEMA_VERSION = 23                      # W22 复查:驱离的收尾意图落库(deter_sessions.ending)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -359,6 +359,9 @@ _ADDED_COLUMNS = (
     ("sessions", "scope", "TEXT NOT NULL DEFAULT ''"),
     # W20:操作人实名。账号名是登录用的,显示名是给人看的(「张三」);老账号空着,显示账号名。
     ("accounts", "display_name", "TEXT NOT NULL DEFAULT ''"),
+    # W22 复查:这一场要收尾了(原因);空 = 没在收尾。站点重启读到就只接着收尾,不再开任何东西。
+    ("deter_sessions", "ending", "TEXT NOT NULL DEFAULT ''"),
+    ("deter_sessions", "ending_back", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

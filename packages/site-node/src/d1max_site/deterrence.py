@@ -26,8 +26,10 @@
 - 关的依据是「这一场确认关上过」(``off``),不是「记得发过开」:发过开(回执成没成都算)
   就从 ``off`` 里去掉;该关又没确认关过的一律发关。站点重启后 ``off`` 是空的,
   第一拍把不该开的全关一遍。
-- 先落库、再改内存:切级、自动升落库没成就这一下不改。结束是**先全关**、再删库、删成了才从内存拿掉、
-  派回程;删库没成就标「收尾中」(不再开任何东西),下一拍接着收。
+- 先落库、再改内存:切级、自动升落库没成就这一下不改。
+- 结束:**先在库里标「收尾中」**(原因、回不回待命点)→ 全关 → 删库 → 删成了才从内存拿掉、派回程。
+  删库没成,下一拍接着收;**站点重启读到「收尾中」的只接着收尾,不再开任何东西**(W22 复查)。
+  连「收尾中」都写不进库:照样先全关、内存里标收尾中、每拍重试,解除回报错让人知道。
 """
 
 from __future__ import annotations
@@ -85,6 +87,8 @@ class Session:
     clip_ms: int = 0
     #: 收尾中(落库没成,下一拍接着收):``(原因, 回不回待命点)``。收尾中不再开任何东西。
     ending: tuple[str, bool] | None = None
+    #: 「收尾中」落进库了没有(没落进去的话站点重启会把这一场当成还在驱离)。
+    ending_saved: bool = False
 
     def row(self) -> tuple:
         return (self.robot_id, self.incident_id, self.zone, self.task_id, self.level,
@@ -92,7 +96,7 @@ class Session:
 
     def view(self, now_ms: int) -> dict[str, Any]:
         d = {k: v for k, v in asdict(self).items()
-             if k not in ("sent", "off", "clip_i", "clip_ms", "ending")}
+             if k not in ("sent", "off", "clip_i", "clip_ms", "ending", "ending_saved")}
         d["label"] = LABEL[self.level]
         d["next_in_s"] = (max(0, (self.level_ms + STEP_S * 1000 - now_ms) // 1000)
                           if self.auto and self.level < AUTO_MAX else None)
@@ -115,6 +119,9 @@ class DeterrenceDesk:
                         task_id=r["task_id"], level=r["level"], started_ms=r["started_ms"],
                         level_ms=r["level_ms"], human_ms=r["human_ms"], auto=bool(r["auto"]),
                         by=r["by"])
+            if r["ending"]:
+                # 上次收尾到一半(删库没成)就停了:只接着收尾
+                s.ending, s.ending_saved = (r["ending"], bool(r["ending_back"])), True
             self.sessions[s.robot_id] = s
         dispatcher.on_event(self._on_event)
 
@@ -224,6 +231,10 @@ class DeterrenceDesk:
         async with self._lock(robot_id):
             self._live(robot_id)
             await self._end(robot_id, f"{by} 解除", go_back=True, by=by)
+            s = self.sessions.get(robot_id)
+            if s is not None and not s.ending_saved:
+                raise DeterrenceError("声光已全关,但「解除」没落进库(站点重启可能恢复这一场):"
+                                      "稍后再按一次")
 
     # ------------------------------------------------------------ 每拍
 
@@ -333,6 +344,16 @@ class DeterrenceDesk:
             if by:
                 s.by = by
             log.info("%s 驱离收尾: %s", rid, why)
+        if not s.ending_saved:
+            # 先把「要收尾」落库:之后哪一步没成、站点重启,都只会接着收尾,不会恢复开
+            try:
+                with self.db.tx() as c:
+                    c.execute("UPDATE deter_sessions SET ending=?, ending_back=?, by=? "
+                              "WHERE robot_id=?",
+                              (s.ending[0] or "收尾", int(s.ending[1]), s.by, rid))
+                s.ending_saved = True
+            except Exception:
+                log.exception("%s 驱离「收尾中」落不了库:先全关,下一拍再写", rid)
         for out in self._outputs(rid):
             s.off.discard(out)                          # 收尾:每一路都发一遍关(不信记录)
             await self._off(s, out)                     # 没发出去也没事:45 秒自己关
