@@ -10,12 +10,15 @@
 - **方向**:框的水平中点 + 相机水平视场角(厂商:111°)→ 狗身系方向(朝前 0°、朝左为正)。不要相机内参:
   广角镜头按等距模型(``--lens equidistant``,默认)或针孔模型算,误差在几度,够挑雷达点。
   后相机朝后:方向加 180°。相机装在雷达正上方 75 mm、前 8 mm(厂商安装尺寸),当成同一点。
-- **距离**:前雷达这一帧(换到狗身系)里,方向在框左右边之间、高度在人身上那一段(相对雷达
-  ``--z-min``–``--z-max``)、离狗 ``--max-range`` 以内的点,取**最近的一簇**(从近往远,头一个
-  0.5 m 以内凑够 5 个点的地方):几个散点不算,人后面的墙、树点再多也不把距离拉远。
+- **距离**:前后雷达(各自换到狗身系)**新鲜的**点云里(W24 外审:收到不超过 1 秒、
+  跟这帧画面的时间差不超过 0.5 秒;对不上就报距离未知,不拿旧点云量),
+  方向在框左右边之间、高度在人身上那一段(相对雷达 ``--z-min``–``--z-max``)、
+  离狗 ``--max-range`` 以内的点,取**最近的一簇**(从近往远,头一个 0.5 m 以内凑够 5 个点的
+  地方):几个散点不算,人后面的墙、树点再多也不把距离拉远。
   凑不够就是 ``null``(那个方向雷达没打到人)。
-- **截图**:一帧里有人、离上一张超过 ``--snapshot-every`` 秒,就把这一帧 JPEG 存进截图目录,
-  文件名随报文报给代理(代理存成归档传站点,存完删掉)。
+- **截图**:一帧里有人、离上一张超过 ``--snapshot-every`` 秒,就把这一帧 JPEG 存进截图目录(最多
+  :data:`MAX_SNAPSHOTS` 张,多了删最旧的:代理那头存不下时不许一直攒),文件名随报文报给代理
+  (代理存成归档传站点,存完删掉)。
 """
 
 from __future__ import annotations
@@ -37,6 +40,10 @@ HFOV_DEG = 111.0
 Z_MIN, Z_MAX = -0.25, 1.6
 MAX_RANGE_M = 25.0
 MIN_POINTS = 5
+#: 点云多旧还能用(收到时刻,单调钟)、跟画面的时间差多大还算同一时刻(各自的话题时间戳)。
+CLOUD_MAX_AGE_S = 1.0
+CLOUD_MAX_SKEW_NS = 500_000_000
+MAX_SNAPSHOTS = 30
 CLUSTER_M = 0.5
 
 
@@ -210,11 +217,22 @@ class PersonNode:
         self._wall_ns = wall_ns
         self.seq = 0
         self._snap_at = -1e18
-        #: 最近一帧前雷达点云(狗身系)。
-        self.cloud: Any = None
+        #: 每台雷达最近一帧点云(狗身系):``雷达 → (点, 话题时间戳 ns, 收到时刻)``。
+        self.clouds: dict[str, tuple[Any, int, float]] = {}
 
-    def on_cloud(self, pts_base: Any) -> None:
-        self.cloud = pts_base
+    def on_cloud(self, pts_base: Any, stamp_ns: int = 0, source: str = "front") -> None:
+        self.clouds[source] = (pts_base, int(stamp_ns), self._mono())
+
+    def _fresh_cloud(self, stamp_ns: int) -> Any:
+        """跟这帧画面对得上的点云(前后雷达拼起来);一台都对不上回 ``None``(距离报未知)。"""
+        import numpy as np
+        now = self._mono()
+        got = [pts for pts, st, at in self.clouds.values()
+               if now - at <= CLOUD_MAX_AGE_S
+               and (not st or not stamp_ns or abs(st - stamp_ns) <= CLOUD_MAX_SKEW_NS)]
+        if not got:
+            return None
+        return got[0] if len(got) == 1 else np.vstack(got)
 
     def on_image(self, camera: str, jpeg: bytes, stamp_ns: int) -> dict[str, Any]:
         self.seq += 1
@@ -226,6 +244,7 @@ class PersonNode:
             boxes, w, _h = self.detector.detect(jpeg)
         except Exception as exc:                         # noqa: BLE001 - 一帧坏了不停
             return base | {"check": "no_camera", "reason": f"这一帧处理不了:{exc}"[:200]}
+        cloud = self._fresh_cloud(stamp_ns)
         people = []
         for b in boxes[:16]:
             c = bearing_deg((b.x1 + b.x2) / 2, w, hfov_deg=self.cfg.hfov_deg, lens=self.cfg.lens,
@@ -235,8 +254,8 @@ class PersonNode:
             right = bearing_deg(b.x2, w, hfov_deg=self.cfg.hfov_deg, lens=self.cfg.lens,
                                 camera=camera)
             r = None
-            if self.cloud is not None:
-                r = range_m(self.cloud, right, left, z_min=self.cfg.z_min, z_max=self.cfg.z_max,
+            if cloud is not None:
+                r = range_m(cloud, right, left, z_min=self.cfg.z_min, z_max=self.cfg.z_max,
                             max_range=self.cfg.max_range)
             people.append({"bearing_deg": round(c, 1),
                            "range_m": None if r is None else round(r, 2),
@@ -256,6 +275,9 @@ class PersonNode:
             tmp = self.snapshot_dir / f".{name}.tmp"
             tmp.write_bytes(jpeg)
             os.replace(tmp, self.snapshot_dir / name)
+            old = sorted(self.snapshot_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime)
+            for p in old[:-MAX_SNAPSHOTS]:
+                p.unlink(missing_ok=True)                # 代理一直没收走的:删最旧的
         except OSError:
             log.exception("截图存不下")
             return ""
@@ -277,6 +299,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--back-topic", default="/rear_camera/image_compressed",
                     help="后相机(空 = 不用)")
     ap.add_argument("--lidar-topic", default="/front_lidar")
+    ap.add_argument("--rear-lidar-topic", default="/rear_lidar",
+                    help="后雷达(空 = 不用;后相机看到的人靠它测距,外参见 --lidars)")
+    ap.add_argument("--lidars", type=Path, default=None,
+                    help="后雷达外参 lidars.json(默认 /etc/d1max/lidars.json;没有 = 几何初值)")
     ap.add_argument("--frames", type=Path, default=None,
                     help="前雷达外参(frames.json);不给就跟着代理正在用的图(--maps-dir)走")
     ap.add_argument("--maps-dir", type=Path, default=Path("/var/lib/d1max/agent/maps"))
@@ -297,7 +323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from d1max_contract.persbridge import PROTO
     from d1max_localizer.build import cloud_xyz
     from d1max_localizer.frames import Frames
-    from d1max_localizer.obstacles import LineClient, Mount, active_frames
+    from d1max_localizer.obstacles import LineClient, Mount, RearMount, active_frames
 
     detector: Detector | None = None
     why = ""
@@ -310,17 +336,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                             settings=Settings(hfov_deg=a.hfov, lens=a.lens, z_min=a.z_min,
                                               z_max=a.z_max))
 
-    def mount() -> Mount | None:
+    def mounts() -> tuple[Mount | None, RearMount | None]:
         try:
-            if a.frames is not None:
-                return Mount.from_frames(Frames.load(a.frames))
-            got = active_frames(a.maps_dir)
-            return Mount.from_frames(Frames.load(got[1])) if got else None
+            f = Frames.load(a.frames) if a.frames is not None else None
+            if f is None:
+                got = active_frames(a.maps_dir)
+                f = Frames.load(got[1]) if got else None
+            if f is None:
+                return None, None
+            front = Mount.from_frames(f)
+            rear = RearMount.from_lidars(front, f, a.lidars) if a.rear_lidar_topic else None
+            return front, rear
         except Exception as exc:                         # noqa: BLE001
             log.error("外参读不了:%s(先不测距)", exc)
-            return None
+            return None, None
 
-    mnt = mount()
+    mnt, rear_mnt = mounts()
     client = LineClient(lambda: _unix(a.socket), {"t": "hello", "proto": PROTO,
                                                   "name": "d1max-persons"})
     rclpy.init(args=None)
@@ -329,13 +360,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                      reliability=ReliabilityPolicy.BEST_EFFORT)
     last: dict[str, float] = {}
 
-    def on_lidar(raw: bytes) -> None:
-        if mnt is None:
-            return
-        try:
-            node_logic.on_cloud(mnt.to_base(cloud_xyz(deserialize_message(raw, PointCloud2))))
-        except Exception:
-            log.exception("雷达这一帧处理不了")
+    def on_lidar(source: str, m: Any) -> Callable[[bytes], None]:
+        def cb(raw: bytes) -> None:
+            if m is None:
+                return
+            try:
+                msg = deserialize_message(raw, PointCloud2)
+                st = msg.header.stamp
+                node_logic.on_cloud(m.to_base(cloud_xyz(msg)),
+                                    st.sec * 1_000_000_000 + st.nanosec, source)
+            except Exception:
+                log.exception("%s 雷达这一帧处理不了", source)
+        return cb
 
     def on_image(camera: str) -> Callable[[bytes], None]:
         def cb(raw: bytes) -> None:
@@ -352,7 +388,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 log.exception("%s 这一帧处理不了", camera)
         return cb
 
-    node.create_subscription(PointCloud2, a.lidar_topic, on_lidar, qos, raw=True)
+    node.create_subscription(PointCloud2, a.lidar_topic, on_lidar("front", mnt), qos, raw=True)
+    if a.rear_lidar_topic:
+        node.create_subscription(PointCloud2, a.rear_lidar_topic, on_lidar("rear", rear_mnt), qos,
+                                 raw=True)
     node.create_subscription(CompressedImage, a.front_topic, on_image("front"), qos, raw=True)
     if a.back_topic:
         node.create_subscription(CompressedImage, a.back_topic, on_image("back"), qos, raw=True)

@@ -593,84 +593,154 @@ async def test_接线_到了拦截点_待命点不自动回_驱离结束才回(t
         await t.close()
 
 
-# ------------------------------------------------------------ W24:人员检测联动
+# ------------------------------------------------------------ W24:人员检测联动(按当前人员状态对账)
 
 
 class 假告警台:
-    def __init__(self):
+    def __init__(self, fail=0):
         self.raised = []
+        self.fail = fail
 
     def raise_alert(self, **kw):
+        if self.fail:
+            self.fail -= 1
+            raise RuntimeError("告警库写不进")
         self.raised.append(kw)
 
+    def has_open(self, robot, kind):
+        return any(a["robot"] == robot and a["kind"] == kind for a in self.raised)
 
-async def _人(t, kind, **data):
+
+def _人员(t, present, *, near=False, count=1, nearest_m=7.5, state="ok"):
+    p = {"state": state, "present": present, "near": near}
+    if present:
+        p |= {"count": count, "nearest_m": nearest_m}
+    t.disp.clients["A"].capabilities.tasks["persons"] = p
+
+
+async def _到场(t):
     import asyncio
-    e = Event(event_id=f"p{len(t.disp.sent)}{kind}", seq=1, boot_id="b", stamp=1, kind=kind,
-              data=data)
-    for cb in t.disp.cbs:
-        cb("A", e)
+    _到了(t.disp)
     for _ in range(5):
         await asyncio.sleep(0)
 
 
-async def test_W24_看到人报告警_带人数距离_截图归在事件任务下(台):
+async def test_W24_有人_报告警带人数距离_现场归事件任务(台):
     t = 台
     t.desk.alerts = 假告警台()
-    _到了(t.disp)
-    await _人(t, "person_seen", count=2, nearest_m=7.5, bearing_deg=-12.0, camera="front",
-             snapshot_run="incident-abc")
-    [a] = t.desk.alerts.raised
-    assert a["kind"] == "intrusion_person" and a["robot"] == "A"
-    assert "2 个人" in a["title"] and "7.5 m" in a["title"]
-    assert a["context"]["task_id"] == "incident-abc"
-    assert a["context"]["persons"]["count"] == 2
-    v = t.desk.view()[0]
-    assert v["persons"]["count"] == 2 and v["persons"]["nearest_m"] == 7.5
-
-
-async def test_W24_有人进到5米_自动升到L3(台):
-    t = 台
-    _到了(t.disp)
-    await _人(t, "person_seen", count=1, nearest_m=8.0, camera="front")
-    assert t.desk.sessions["A"].level == 0
-    await _人(t, "person_near", count=1, nearest_m=4.2, camera="front")
-    assert t.desk.sessions["A"].level == 3 and "siren" in t.disp.on()
-    assert t.db.query("SELECT level FROM deter_sessions")[0]["level"] == 3
-
-
-async def test_W24_看到过人_人走了_收场回待命点(台):
-    t = 台
-    _到了(t.disp)
-    t.clock.go(30)
+    await _到场(t)
+    _人员(t, True, count=2, nearest_m=7.5)
     await t.desk.tick()
-    await _人(t, "person_seen", count=1, nearest_m=9.0, camera="front")
-    await _人(t, "person_gone", after_s=20)
+    [a] = t.desk.alerts.raised
+    assert a["kind"] == "intrusion_person" and "2 个人" in a["title"] and "7.5 m" in a["title"]
+    assert a["context"]["task_id"] == "incident-abc"
+    await t.desk.tick()
+    assert len(t.desk.alerts.raised) == 1, "报过了不重报"
+    assert t.desk.view()[0]["persons"]["count"] == 2
+    assert t.db.query("SELECT person_seen, person_alerted FROM deter_sessions")[0][0] == 1
+
+
+async def test_W24外审3_到之前就看到人_开场马上对上_近就直接L3(台):
+    t = 台
+    t.desk.alerts = 假告警台()
+    _人员(t, True, near=True, nearest_m=3.0)               # 到之前就有人、3 米
+    await _到场(t)
+    s = t.desk.sessions["A"]
+    assert s.level == 3 and s.seen_person and len(t.desk.alerts.raised) == 1
+    assert "siren" in t.disp.on()
+
+
+async def test_W24外审4_没有事件能控制驱离_补投的老走了不收场(台):
+    t = 台
+    await _到场(t)
+    _人员(t, True)
+    await t.desk.tick()
+    e = Event(event_id="old", seq=1, boot_id="b", stamp=1, kind="person_gone", data={})
+    for cb in t.disp.cbs:
+        cb("A", e)                                        # 很早以前的「走了」补投过来
+    await t.desk.tick()
+    assert "A" in t.desk.sessions and t.stb.back == []
+
+
+async def test_W24_看到过人_确认没人_收场回待命点(台):
+    t = 台
+    await _到场(t)
+    _人员(t, True)
+    await t.desk.tick()
+    _人员(t, False)
+    await t.desk.tick()
     assert "A" not in t.desk.sessions and t.stb.back == ["A"] and t.disp.on() == set()
     assert "人走了" in t.disp.pushed[-1]["ended"]
 
 
-async def test_W24_没看到过人_走了不收_按时间管(台):
+async def test_W24_没看到过人_确认没人也不收_不知道也不收(台):
     t = 台
-    _到了(t.disp)
-    await _人(t, "person_gone", after_s=20)
+    await _到场(t)
+    _人员(t, False)
+    await t.desk.tick()
+    assert "A" in t.desk.sessions
+    _人员(t, True)
+    await t.desk.tick()
+    _人员(t, None, state="stale")                          # 检测不在
+    await t.desk.tick()
+    _人员(t, None)                                        # 不知道
+    await t.desk.tick()
+    assert "A" in t.desk.sessions, "不知道不收"
+
+
+async def test_W24_人接手了_近不升_没人不收_只显示(台):
+    t = 台
+    await _到场(t)
+    await t.desk.set_level("A", 1, by="gina")
+    _人员(t, True, near=True, nearest_m=3.0)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 1 and t.desk.view()[0]["persons"]["near"] is True
+    _人员(t, False)
+    await t.desk.tick()
     assert "A" in t.desk.sessions
 
 
-async def test_W24_人接手了_靠近不升_走了不收_只显示(台):
+async def test_W24外审6_告警报不出去_下一拍接着报_重启后也接着报(台):
     t = 台
-    _到了(t.disp)
-    await t.desk.set_level("A", 1, by="gina")
-    await _人(t, "person_seen", count=1, nearest_m=8.0, camera="front")
-    await _人(t, "person_near", count=1, nearest_m=3.0, camera="front")
-    assert t.desk.sessions["A"].level == 1, "人在管:不替人升"
-    assert t.desk.view()[0]["persons"]["nearest_m"] == 3.0
-    await _人(t, "person_gone", after_s=20)
-    assert "A" in t.desk.sessions, "人在管:人走了也等人解除"
+    t.desk.alerts = 假告警台(fail=2)
+    await _到场(t)
+    _人员(t, True)
+    await t.desk.tick()
+    await t.desk.tick()
+    assert t.desk.alerts.raised == [] and not t.desk.sessions["A"].person_alerted
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)   # 站点重启
+    desk2.alerts = t.desk.alerts
+    assert desk2.sessions["A"].seen_person and not desk2.sessions["A"].person_alerted
+    await desk2.tick()
+    assert len(t.desk.alerts.raised) == 1 and desk2.sessions["A"].person_alerted
+
+
+async def test_W24_狗不新鲜_人员状态不算(台):
+    t = 台
+    await _到场(t)
+    t.disp._fresh = lambda c: False
+    _人员(t, True, near=True, nearest_m=2.0)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 0 and not t.desk.sessions["A"].seen_person
 
 
 async def test_W24_不在驱离的狗_看到人只记不报(台):
     t = 台
     t.desk.alerts = 假告警台()
-    await _人(t, "person_seen", count=1, nearest_m=5.0, camera="front")
+    _人员(t, True)
+    await t.desk.tick()
     assert t.desk.alerts.raised == [] and t.desk.view() == []
+
+
+async def test_W24外审6_保安处理掉告警之后站点重启_不再报一次(台):
+    t = 台
+    t.desk.alerts = 假告警台()
+    await _到场(t)
+    _人员(t, True)
+    await t.desk.tick()
+    assert len(t.desk.alerts.raised) == 1
+    t.desk.alerts.raised.clear()                          # 保安处理掉了(告警簿里不挂着了)
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
+    desk2.alerts = t.desk.alerts
+    await desk2.tick()
+    assert t.desk.alerts.raised == [], "报成过就记在库里,重启不再报"
