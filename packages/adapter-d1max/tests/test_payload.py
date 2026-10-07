@@ -162,8 +162,8 @@ async def test_开一路带最长时间_到点自己关_再开从现在重算(�
     await p.set("siren", True, 0.3)                  # 再开一次:从现在重算
     await asyncio.sleep(0.2)
     assert 板子.coils[1], "重开之后不该按第一次的时间关"
-    await asyncio.sleep(0.3)
-    assert not 板子.coils[1] and p.state()["siren"] is False
+    # 到点之后由看护循环关(每 RETRY_S 一拍):等它,不赌固定的睡眠时长(CI 慢机上挂过)
+    assert await _等到(lambda: not 板子.coils[1] and p.state()["siren"] is False)
     await p.close()
 
 
@@ -196,8 +196,7 @@ async def test_到点关不掉_过一秒再关(板子):
     await asyncio.sleep(0.6)                          # 到点那一下关不掉(板子不回)
     assert 板子.coils[2]
     板子.mute = False
-    await asyncio.sleep(1.2)
-    assert not 板子.coils[2], "关不掉要接着关"
+    assert await _等到(lambda: not 板子.coils[2]), "关不掉要接着关"
     await p.close()
 
 
@@ -249,8 +248,8 @@ async def test_喇叭到点掐掉_新的一段打断旧的(tmp_path):
     await asyncio.sleep(0.05)
     assert p.playing()
     proc = p._proc
-    await asyncio.sleep(0.3)
-    assert not p.playing() and proc.returncode == -9, "到点要掐掉播放进程"
+    assert await _等到(lambda: not p.playing()), "到点要掐"
+    assert proc.returncode == -9, "到点要掐掉播放进程"
     await p.sound("long", 5)
     await asyncio.sleep(0.05)
     first = p._proc
