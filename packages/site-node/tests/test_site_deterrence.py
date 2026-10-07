@@ -92,7 +92,9 @@ async def test_到了拦截点开一场_L0什么都不开_待命点先别回_事
     assert (s["robot_id"], s["level"], s["zone"], s["auto"]) == ("A", 0, "front", True)
     assert s["next_in_s"] == 30 and s["ends_in_s"] == CAP_S
     await t.desk.tick()
-    assert t.disp.sent == [] and t.desk.busy() == {"A"}
+    assert t.disp.on() == set() and t.desk.busy() == {"A"}
+    assert {p["output"] for _, p, _ in t.disp.sent} == {"strobe", "siren", "spotlight",
+                                                         "speaker"}, "L0:没确认关过的都先关一遍"
     assert t.disp.pushed[-1]["kind"] == "deterrence"
 
 
@@ -106,13 +108,13 @@ async def test_每30秒自动升_最多到L3_按级开声光_话术轮放_优先
     t.clock.go(30)
     await t.desk.tick()
     assert t.desk.sessions["A"].level == 2
-    clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker"]
+    clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker" and p["on"]]
     assert clips == ["warn-zh"]
     assert {pr for _, p, pr in t.disp.sent if p["output"] == "speaker"} == {EVENT}
     for _ in range(2):
         t.clock.go(10)
         await t.desk.tick()
-    clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker"]
+    clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker" and p["on"]]
     assert clips == ["warn-zh", "warn-en", "warn-ms"], "中文、英文、马来文轮放"
     t.clock.go(10)                                       # 到 L2 之后 30 秒:升 L3,话术从头
     await t.desk.tick()
@@ -120,7 +122,7 @@ async def test_每30秒自动升_最多到L3_按级开声光_话术轮放_优先
     for _ in range(2):
         t.clock.go(10)
         await t.desk.tick()
-    clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker"]
+    clips = [p["clip"] for _, p, _ in t.disp.sent if p["output"] == "speaker" and p["on"]]
     assert clips[3:] == ["notified-zh", "notified-en", "notified-zh"], \
         "L3 放「已通知保安」;没录马来文的就跳过"
     t.clock.go(120)
@@ -139,7 +141,7 @@ async def test_声光每20秒续一次_不多发(台):
     assert len(t.disp.sent) == n, "没到 20 秒不续"
     t.clock.go(16)
     await t.desk.tick()
-    renewed = [p["output"] for _, p, _ in t.disp.sent[n:]]
+    renewed = [p["output"] for _, p, _ in t.disp.sent[n:] if p["on"]]
     assert sorted(renewed) == ["spotlight", "strobe"]
 
 
@@ -208,7 +210,8 @@ async def test_站点重启接着管(台, tmp_path):
     assert (s["level"], s["auto"], s["by"], s["zone"]) == (2, False, "gina", "front")
     n = len(t.disp.sent)
     await desk2.tick()
-    assert {p["output"] for _, p, _ in t.disp.sent[n:]} >= {"strobe", "spotlight", "speaker"}, \
+    assert {p["output"] for _, p, _ in t.disp.sent[n:] if p["on"]} >= {"strobe", "spotlight",
+                                                                       "speaker"}, \
         "重启后的第一拍把该开的重新开上(新的台没记着发过什么)"
 
 
@@ -256,7 +259,7 @@ async def test_只有部分路_只开有的_没话术不放(tmp_path):
     desk = DeterrenceDesk(db, disp, now_ms=clock, standby=假待命())
     _到了(disp)
     await desk.set_level("A", 3, by="gina")
-    assert {p["output"] for _, p, _ in disp.sent} == {"strobe"}
+    assert {p["output"] for _, p, _ in disp.sent if p["on"]} == {"strobe"}
     db.close()
 
 
@@ -317,6 +320,152 @@ def test_接口_没开驱离的站点404(tmp_path):
         assert s.req("GET", "/api/deterrence", token=s.login())[0] == 404
     finally:
         s.close()
+
+
+# ------------------------------------------------------------ W22 外审:串行、该关的关、落库顺序
+
+
+class 慢派遣(假派遣):
+    """「开」的回执卡在闸上,测试放行。"""
+
+    def __init__(self):
+        super().__init__()
+        import asyncio
+        self.gate = asyncio.Event()
+        self.gate.set()
+
+    async def deter(self, rid, payload, *, issued_by, priority):
+        if payload["on"]:
+            await self.gate.wait()
+        return await super().deter(rid, payload, issued_by=issued_by, priority=priority)
+
+
+async def test_外审1_升级等回执时解除_解除等它_结束之后不再有开(tmp_path):
+    import asyncio
+    db = SiteDB(tmp_path / "site.db")
+    db.query("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome, robot_id, "
+             "task_id, note, detail) VALUES ('nvr','e1','intrusion','front',1,'dispatched','A',"
+             "'incident-abc','','{}')")
+    disp, stb = 慢派遣(), 假待命()
+    desk = DeterrenceDesk(db, disp, now_ms=钟(), standby=stb)
+    _到了(disp)
+    disp.gate.clear()
+    up = asyncio.ensure_future(desk.set_level("A", 3, by="gina"))
+    await asyncio.sleep(0.05)                             # 升级卡在等「开」的回执
+    rel = asyncio.ensure_future(desk.release("A", by="olga"))
+    await asyncio.sleep(0.05)
+    assert not rel.done(), "解除等在途的那条命令"
+    disp.gate.set()
+    await asyncio.gather(up, rel)
+    last_on = max(i for i, (_, p, _) in enumerate(disp.sent) if p["on"])
+    offs = {p["output"] for _, p, _ in disp.sent[last_on + 1:] if not p["on"]}
+    assert offs == {"strobe", "siren", "spotlight", "speaker"}, "最后一条「开」之后每一路都关了"
+    assert disp.on() == set() and desk.view() == [] and stb.back == ["A"]
+    await desk.tick()
+    assert disp.on() == set(), "结束之后不再有开"
+    db.close()
+
+
+async def test_外审2_重启后马上降到L0_该关的都关(台):
+    t = 台
+    _到了(t.disp)
+    await t.desk.set_level("A", 3, by="gina")
+    assert {"strobe", "spotlight", "siren", "speaker"} <= t.disp.on()
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)   # 重启:不记得发过什么
+    n = len(t.disp.sent)
+    await desk2.set_level("A", 0, by="gina")
+    offs = {p["output"] for _, p, _ in t.disp.sent[n:] if not p["on"]}
+    assert offs == {"strobe", "spotlight", "siren", "speaker"}
+    assert t.disp.on() == set()
+
+
+async def test_外审2_开的回执丢了_降级照样关(台):
+    t = 台
+    _到了(t.disp)
+    await t.desk.tick()                                   # L0:先确认都关了
+    real = t.disp.deter
+
+    async def 开了但回执丢了(rid, payload, *, issued_by, priority):
+        await real(rid, payload, issued_by=issued_by, priority=priority)
+        if payload["on"]:
+            raise TimeoutError("回执超时")
+        return {"ack": {"result": "accepted"}}
+    t.disp.deter = 开了但回执丢了
+    await t.desk.set_level("A", 1, by="gina")
+    assert t.disp.on() == {"strobe", "spotlight"}, "狗上其实开了"
+    t.disp.deter = real
+    await t.desk.set_level("A", 0, by="gina")
+    assert t.disp.on() == set(), "没记到成了,不等于没开"
+
+
+async def test_外审3_解除时删库没成_先全关_标收尾中_下一拍接着收(台, monkeypatch):
+    t = 台
+    _到了(t.disp)
+    await t.desk.set_level("A", 3, by="gina")
+    real = t.db.tx
+    bad = {"on": True}
+
+    def tx():
+        if bad["on"]:
+            raise RuntimeError("库锁住了")
+        return real()
+    monkeypatch.setattr(t.db, "tx", tx)
+    await t.desk.release("A", by="olga")
+    assert t.disp.on() == set(), "删库没成也先全关"
+    assert t.desk.view() == [] and t.desk.busy() == {"A"}, "收尾中:不显示、也不派别的活"
+    assert t.stb.back == [] and t.db.query("SELECT level FROM deter_sessions")[0]["level"] == 3
+    with pytest.raises(DeterrenceError):
+        await t.desk.set_level("A", 2, by="gina")
+    t.clock.go(30)
+    n = len(t.disp.sent)
+    await t.desk.tick()
+    assert not [p for _, p, _ in t.disp.sent[n:] if p["on"]], "收尾中一条「开」都不发"
+    bad["on"] = False
+    await t.desk.tick()
+    assert t.desk.busy() == set() and t.stb.back == ["A"]
+    assert not t.db.query("SELECT 1 FROM deter_sessions")
+
+
+async def test_外审3_切级落库没成_不改_自动升落库没成_下一拍再升(台, monkeypatch):
+    t = 台
+    _到了(t.disp)
+    real = t.db.tx
+    bad = {"on": True}
+
+    def tx():
+        if bad["on"]:
+            raise RuntimeError("库锁住了")
+        return real()
+    monkeypatch.setattr(t.db, "tx", tx)
+    with pytest.raises(DeterrenceError, match="落库没成"):
+        await t.desk.set_level("A", 3, by="gina")
+    assert t.desk.sessions["A"].level == 0 and t.desk.sessions["A"].auto is True
+    t.clock.go(30)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 0, "落库没成就不升"
+    bad["on"] = False
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 1
+    assert t.db.query("SELECT level FROM deter_sessions")[0]["level"] == 1
+
+
+async def test_外审3_开场落不了库_不开_照常回待命点(台, monkeypatch):
+    import asyncio
+    t = 台
+    monkeypatch.setattr(t.db, "tx", lambda: (_ for _ in ()).throw(RuntimeError("库锁住了")))
+    _到了(t.disp)
+    await asyncio.sleep(0.05)
+    assert t.desk.busy() == set() and t.stb.back == ["A"], "待命点那头没派回程:这里派"
+
+
+async def test_外审1_解除时每一路都发关_不信记录_保安手动开过的也关(台):
+    t = 台
+    _到了(t.disp)
+    await t.desk.tick()                                   # L0:都确认关过了
+    await t.disp.deter("A", {"output": "siren", "on": True, "max_s": 60},
+                       issued_by="gina", priority=60)      # 保安在「上装…」里手动开了警笛
+    await t.desk.release("A", by="gina")
+    assert t.disp.on() == set(), "解除:每一路都关,不信「确认关过」的记录"
 
 
 # ------------------------------------------------------------ 跟待命点、事件派遣接上
