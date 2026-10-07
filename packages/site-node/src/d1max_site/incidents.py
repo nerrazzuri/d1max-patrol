@@ -115,18 +115,22 @@ class IncidentDesk:
         """登记一个事件源,返回共享密钥(十六进制,只在这一次给出)。"""
         if not isinstance(name, str) or not SAFE_ID.match(name):
             raise IncidentError(f"事件源名只许 ASCII 字母、数字、. _ -: {name!r}")
+        from d1max_site.sealbox import seal_value
         secret = secrets.token_hex(32)
+        sealed = seal_value(self.db, secret)              # 加密落库(W30,决策 43)
         with self.db.tx() as c:
             if c.execute("SELECT 1 FROM incident_sources WHERE name=?", (name,)).fetchone():
                 raise IncidentError(f"事件源 {name} 已经登记过了")
-            c.execute("INSERT INTO incident_sources VALUES (?,?,?)", (name, secret, self._now()))
+            c.execute("INSERT INTO incident_sources VALUES (?,?,?)", (name, sealed, self._now()))
         return secret
 
     def rotate_secret(self, name: str) -> str:
         """换一个事件源的共享密钥(W16):旧的当场作废,返回新的(只这一次给出)。"""
+        from d1max_site.sealbox import seal_value
         secret = secrets.token_hex(32)
+        sealed = seal_value(self.db, secret)
         with self.db.tx() as c:
-            cur = c.execute("UPDATE incident_sources SET secret=? WHERE name=?", (secret, name))
+            cur = c.execute("UPDATE incident_sources SET secret=? WHERE name=?", (sealed, name))
             if cur.rowcount == 0:
                 raise IncidentError(f"没有事件源 {name}")
         return secret
@@ -274,7 +278,8 @@ class IncidentDesk:
         签的是**原样的时间戳头** + ``.`` + 原始请求体;时间戳只认十进制纯数字(毫秒)。"""
         rows = self.db.query("SELECT secret FROM incident_sources WHERE name=?",
                              (source if isinstance(source, str) else "",))
-        key = bytes.fromhex(rows[0]["secret"]) if rows else b"\0" * 32
+        from d1max_site.sealbox import open_value
+        key = bytes.fromhex(open_value(self.db, rows[0]["secret"])) if rows else b"\0" * 32
         stamp = timestamp if isinstance(timestamp, str) else ""
         want = hmac.new(key, stamp.encode("latin-1", "replace") + b"." + body,
                         hashlib.sha256).digest()

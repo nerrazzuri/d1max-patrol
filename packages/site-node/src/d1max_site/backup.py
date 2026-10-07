@@ -5,6 +5,11 @@
 - 证据库:增量镜像到 ``<备份目录>/evidence/``(没有的、大小或修改时间对不上的才拷;站点上删了的,
   备份里**不跟着删** —— 备份是用来找回东西的)。
 
+**加密**(W30,决策 43):站点配了备份密钥(``/etc/d1max-site/backup.key``,装机脚本生成,**不在备份盘上**)
+就全部加密:库是 ``site-<时刻>.db.d1seal``,镜像的每个文件是 ``<原名>.d1seal``(修改时间跟原文件一样,
+增量照算)。备份盘被拿走,里面的东西打不开。以前的明文备份,加密一份就删一份明文。恢复用
+``d1max-site backup-open``(要那把备份密钥:**装机时就离线另存一份**,站点主机坏了没有它就恢复不了)。
+
 备份目录在 ``site.json`` 的 ``backup_dir`` 里配(站点主机上的外接盘,挂到
 ``/var/lib/d1max-site-backup`` —— 站点服务单元只许写这个位置)。没配就是没备份:值守汇总里明说。
 上次成功超过 ``STALE_MS`` 出一条 ``backup_stale`` 告警。
@@ -22,8 +27,12 @@ from pathlib import Path
 from typing import Any
 
 from d1max_site.alert_sources import SITE
+from d1max_site.sealbox import SealError
 
 log = logging.getLogger(__name__)
+
+#: 加密备份的后缀(W30)。
+SEALED = ".d1seal"
 
 #: 多久备份一次(秒)。
 EVERY_S = 3600
@@ -36,8 +45,10 @@ STALE_MS = 25 * 3600 * 1000
 class SiteBackup:
     def __init__(self, db, evidence_root: Path, dest: Path | None, *,
                  now_ms: Callable[[], int], alerts: Any = None,
-                 more: dict[str, Path] | None = None) -> None:
+                 more: dict[str, Path] | None = None, box: Any = None) -> None:
         self.db = db
+        #: 备份密钥(``sealbox.SealBox``);``None`` = 明文备份。
+        self.box = box
         self.evidence_root = Path(evidence_root)
         #: 还要镜像的目录(W00c5d 内部评审:地图、录包也只在站点上有一份):``{备份里的名字: 目录}``。
         self.more = {k: Path(v) for k, v in (more or {}).items()}
@@ -102,13 +113,20 @@ class SiteBackup:
             # 直接往外接盘上备份会一直拿着库锁,事件循环和接收口全卡住(内部评审)。
             local.unlink(missing_ok=True)
             self.db.backup_to(local)
-            tmp = dbdir / f".site-{stamp}.db.tmp"
-            shutil.copy2(local, tmp)
-            os.replace(tmp, dbdir / f"site-{stamp}.db")
-            for old in sorted(dbdir.glob("site-*.db"))[:-KEEP_DB]:
+            if self.box is not None:
+                self.box.seal_file(local, dbdir / f"site-{stamp}.db{SEALED}")
+                for plain in dbdir.glob("site-*.db"):
+                    plain.unlink(missing_ok=True)      # 以前的明文备份:有了加密的就删
+                kept = sorted(dbdir.glob(f"site-*.db{SEALED}"))
+            else:
+                tmp = dbdir / f".site-{stamp}.db.tmp"
+                shutil.copy2(local, tmp)
+                os.replace(tmp, dbdir / f"site-{stamp}.db")
+                kept = sorted(dbdir.glob("site-*.db"))
+            for old in kept[:-KEEP_DB]:
                 old.unlink(missing_ok=True)
             self._mirror()
-        except (OSError, sqlite3.Error) as exc:
+        except (OSError, sqlite3.Error, SealError) as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
             log.warning("站点备份没成: %s", self.last_error)
             return False
@@ -135,17 +153,26 @@ class SiteBackup:
             if not src.is_file() or src.name.endswith(".tmp"):
                 continue
             dst = out / rel
+            if self.box is not None:
+                dst = dst.with_name(dst.name + SEALED)
             try:
                 st = src.stat()
                 try:
                     ds = dst.stat()
-                    if ds.st_size == st.st_size and int(ds.st_mtime) == int(st.st_mtime):
+                    same = int(ds.st_mtime) == int(st.st_mtime) and (
+                        self.box is not None or ds.st_size == st.st_size)
+                    if same:
                         continue
                 except FileNotFoundError:
                     pass
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dst.with_name(dst.name + ".tmp")
-                shutil.copy2(src, tmp)
-                os.replace(tmp, dst)
+                if self.box is not None:
+                    self.box.seal_file(src, dst)
+                    os.utime(dst, (st.st_atime, st.st_mtime))   # 增量按原文件的修改时间比
+                    (out / rel).unlink(missing_ok=True)          # 以前的明文那份删掉
+                else:
+                    tmp = dst.with_name(dst.name + ".tmp")
+                    shutil.copy2(src, tmp)
+                    os.replace(tmp, dst)
             except FileNotFoundError:
                 continue                          # 拷的时候源没了(搬走、删掉):这一个跳过,别的照拷

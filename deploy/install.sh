@@ -24,6 +24,7 @@ set -euo pipefail
 # @写盘 /var/lib/d1max                                                   数据根(代理的发件箱、事件簿、幂等记录),升级回滚都不碰它
 # @写盘 /etc/d1max                                                       配置目录(站点签发的证书包、注册文件也放这儿,由人拷来)
 # @写盘 /etc/d1max/env                                                   现场值:站点地址、地图、原点、适配器、SN
+# @写盘 /etc/d1max/release-pub.pem                                       发行公钥(W30;包里带了才装,验站点下发的版本)
 # @写盘 /etc/systemd/system/d1max-agent.service                           代理单元(狗上只有它一个服务,W00c5e)
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
 # @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;只装不 enable)
@@ -260,8 +261,21 @@ else
 fi
 
 say "3/7 把包落进槽里"
+# 发行公钥(W30,决策 43):包里带了就装到 /etc/d1max(装机是人在现场、包是人拿来的,可信);
+# 之后站点下发的版本,狗都拿它验签名,验不过不装。包里没带、狗上也没有:这一次照装(--unsigned),
+# 但站点下发的版本都会被拒,除非 /etc/d1max/env 里写 D1MAX_RELEASE_UNSIGNED_OK=1(只许开发、仿真)。
+mkdir -p /etc/d1max
+if [[ -f "$PKG/deploy/release-pub.pem" ]]; then
+  install -m 0644 -o root -g root "$PKG/deploy/release-pub.pem" /etc/d1max/release-pub.pem
+  echo "  装了发行公钥 /etc/d1max/release-pub.pem"
+fi
+UNSIGNED=()
+if [[ ! -f /etc/d1max/release-pub.pem ]]; then
+  echo "  注意:没有发行公钥,这一次不验签名;站点下发的版本会被拒(见 docs/W30-完工报告.md)" >&2
+  UNSIGNED=(--unsigned)
+fi
 sudo -u "$RUN_USER" env D1MAX_RELEASE_ROOT="$ROOT" \
-  "$ROOT/bin/python" -m d1max_patrol.cli release install "$PKG"
+  "$ROOT/bin/python" -m d1max_patrol.cli release install ${UNSIGNED[@]+"${UNSIGNED[@]}"} "$PKG"
 
 say "4/7 给这一版建自己的 venv"
 # **每版一个 venv,不是服务共用根下那个解释器。** 服务单元的 ExecStart

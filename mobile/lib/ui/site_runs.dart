@@ -114,6 +114,7 @@ class SiteRunPage extends StatefulWidget {
 
   static Key photoKey(String name) => Key('photo-$name');
   static const Key judgeKey = Key('run-judge');
+  static const Key keepKey = Key('run-keep');
 
   @override
   State<SiteRunPage> createState() => _SiteRunPageState();
@@ -151,6 +152,17 @@ class _SiteRunPageState extends State<SiteRunPage> {
     }
   }
 
+  /// 标「留着」（W30）：过了留存期（默认 90 天）、按时间段删都不删。
+  Future<void> _keep(bool want) async {
+    try {
+      await widget.api.setRunKeep(widget.runId, want);
+      _snack(want ? '留着：过了留存期也不删' : '不留了：到期照常删');
+      _reload();
+    } on SiteError catch (e) {
+      _snack('没改成：$e');
+    }
+  }
+
   void _snack(String text) {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
@@ -169,6 +181,17 @@ class _SiteRunPageState extends State<SiteRunPage> {
     final canReview = widget.api.session?.canReview ?? false;
     return Scaffold(
       appBar: AppBar(title: const Text('这一趟'), actions: [
+        if (canReview)
+          FutureBuilder<Map<String, dynamic>>(
+              future: _detail,
+              builder: (c, snap) {
+                final kept = (snap.data?['run'] as Map?)?['keep'] == 1;
+                return IconButton(
+                    key: SiteRunPage.keepKey,
+                    tooltip: kept ? '不留了' : '留着（过了留存期也不删）',
+                    icon: Icon(kept ? Icons.bookmark : Icons.bookmark_border),
+                    onPressed: snap.hasData ? () => _keep(!kept) : null);
+              }),
         if (canReview)
           IconButton(
               key: SiteRunPage.judgeKey,

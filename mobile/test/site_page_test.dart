@@ -123,6 +123,11 @@ class FakeApi implements SiteApi {
     return Uint8List.fromList([1, 2, 3]);
   }
   @override
+  Future<Map<String, dynamic>> setRunKeep(int id, bool keep) async {
+    calls.add('run-keep $id $keep');
+    return <String, dynamic>{'id': id, 'keep': keep};
+  }
+  @override
   Future<Map<String, dynamic>> setRecordingKeep(int id, bool keep) async {
     calls.add('keep $id $keep');
     for (final r in recordingRows) {

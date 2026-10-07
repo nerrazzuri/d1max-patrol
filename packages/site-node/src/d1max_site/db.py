@@ -12,8 +12,9 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
-SCHEMA_VERSION = 30                      # W29 外审:雷暴撤巡检后的回程(weather_returns)
+SCHEMA_VERSION = 31                      # W30:运行记录「留着」(runs.keep,PDPA 留存期不删)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -402,6 +403,8 @@ _ADDED_COLUMNS = (
     ("deter_sessions", "cornered", "INTEGER NOT NULL DEFAULT 0"),
     # W25 外审:这一场的拦截点(保持距离的拴绳中心,补派、重启都按它)
     ("deter_sessions", "standoff_center", "TEXT NOT NULL DEFAULT ''"),
+    # W30:运行记录标了「留着」(要留作证据):过了留存期也不删,按时间段删时也不删
+    ("runs", "keep", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -410,6 +413,8 @@ class SiteDB:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        #: 口令加密(W30,``sealbox.SealBox``):站点接上;``None`` = 口令明文(开发、老站点)。
+        self.sealbox: Any = None
         fresh = not self.path.exists()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False,
                                      isolation_level=None)

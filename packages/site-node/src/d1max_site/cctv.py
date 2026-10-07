@@ -376,8 +376,11 @@ class CameraWatch:
 
 
 def load_cameras(db: SiteDB) -> list[Camera]:
+    """口令在库里是加密的(W30),读出来解开。"""
+    from d1max_site.sealbox import open_value
+
     return [Camera(name=r["name"], onvif_url=r["onvif_url"], username=r["username"],
-                   password=r["password"], zone=r["zone"], rtsp_url=r["rtsp_url"],
+                   password=open_value(db, r["password"]), zone=r["zone"], rtsp_url=r["rtsp_url"],
                    motion=bool(r["motion"]))
             for r in db.query("SELECT * FROM cameras ORDER BY name")]
 
@@ -387,10 +390,12 @@ def add_camera(db: SiteDB, cam: Camera, *, now_ms: int) -> None:
         raise ValueError(f"摄像头名字只许字母、数字、. _ -:{cam.name!r}")
     if not cam.zone:
         raise ValueError("要防区(--zone):这台摄像头报的入侵算哪个防区")
+    from d1max_site.sealbox import seal_value
+    sealed = seal_value(db, cam.password)             # 口令加密落库(W30,决策 43)
     with db.tx() as c:
         c.execute("INSERT OR REPLACE INTO cameras(name, onvif_url, username, password, zone, "
                   "rtsp_url, motion, added_ms) VALUES (?,?,?,?,?,?,?,?)",
-                  (cam.name, cam.onvif_url, cam.username, cam.password, cam.zone, cam.rtsp_url,
+                  (cam.name, cam.onvif_url, cam.username, sealed, cam.zone, cam.rtsp_url,
                    int(cam.motion), now_ms))
 
 

@@ -27,7 +27,10 @@ class ReleaseCatalogError(ValueError):
 
 
 class ReleaseCatalog:
-    def __init__(self, home: Path, db, *, now_ms: Callable[[], int]) -> None:
+    def __init__(self, home: Path, db, *, now_ms: Callable[[], int],
+                 pubkey: Path | None = None) -> None:
+        #: 发行公钥(W30,决策 43):配了就登记时先验签名(狗上还会再验一遍)。
+        self.pubkey = pubkey
         self.root = Path(home) / "releases"
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = db
@@ -60,6 +63,12 @@ class ReleaseCatalog:
         got = tree_sha256(pkg, skip=MANIFEST)
         if got != raw.get("content_sha256"):
             raise ReleaseCatalogError(f"包的指纹对不上:自述 {raw.get('content_sha256')},算出 {got}")
+        if self.pubkey is not None and Path(self.pubkey).is_file():
+            from d1max_contract import relsign
+            try:
+                relsign.verify(raw, Path(self.pubkey))
+            except relsign.SignError as exc:
+                raise ReleaseCatalogError(f"{name}:{exc}(狗上也会拒,不登记)") from exc
         if self.db.query("SELECT 1 FROM releases WHERE name=?", (name,)):
             raise ReleaseCatalogError(f"{name} 已经登记过了")
         out = self.root / f"{name}.tar.gz"

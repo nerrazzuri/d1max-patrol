@@ -162,7 +162,19 @@ def build_parser() -> argparse.ArgumentParser:
                              "建 venv 时只从它装(现场的狗上不了网)")
     p_ins = rel_sub.add_parser("install", help="把一个包落进槽里,不切换")
     p_ins.add_argument("package", help="包目录")
+    p_ins.add_argument("--pubkey", default=None,
+                       help="发行公钥(W30),默认 $D1MAX_RELEASE_PUBKEY"
+                            " 或 /etc/d1max/release-pub.pem")
+    p_ins.add_argument("--unsigned", action="store_true",
+                       help="没装发行公钥时照装(只许开发、仿真);装了公钥就一定验")
     _root_arg(p_ins)
+    p_kg = rel_sub.add_parser(
+        "keygen", help="生成发行签名密钥(W30;**在发行方的电脑上跑,私钥离线保管**)")
+    p_kg.add_argument("private", help="私钥放哪(0600;不进仓库、不上狗、不上站点)")
+    p_kg.add_argument("public", help="公钥放哪(提交到仓库 deploy/release-pub.pem,装机时装到狗上)")
+    p_sg = rel_sub.add_parser("sign", help="给打好的包签名(写进 release.json 的 signature)")
+    p_sg.add_argument("package", help="包目录(release pack 打出来的)")
+    p_sg.add_argument("--key", required=True, help="私钥")
     p_act = rel_sub.add_parser("activate", help="切到某一版,下次起来自检")
     p_act.add_argument("name", help="版本名")
     _root_arg(p_act)
@@ -537,6 +549,8 @@ def _cmd_release(args: argparse.Namespace) -> int:
     # 那台机器上根本没有 /opt/d1max,连算一次默认版本根都是多余的。
     if args.release_command == "pack":
         return _cmd_release_pack(args, now_ms)
+    if args.release_command in ("keygen", "sign"):
+        return _cmd_release_sign(args)
 
     layout = Layout(root=_release_root(getattr(args, "root", None)))
 
@@ -552,6 +566,14 @@ def _cmd_release(args: argparse.Namespace) -> int:
         return 0
 
     if args.release_command == "install":
+        from d1max_contract import relsign
+        pub = Path(args.pubkey or os.environ.get("D1MAX_RELEASE_PUBKEY") or relsign.DEFAULT_PUBKEY)
+        why = relsign.check_package(Path(args.package), pub, allow_unsigned=args.unsigned)
+        if why:
+            print(f"装不了: {why}", file=sys.stderr)
+            return 2
+        if not pub.is_file():
+            print(f"注意:没装发行公钥 {pub},没验签名(--unsigned)", file=sys.stderr)
         try:
             manifest = stage(layout, Path(args.package), now_ms=now_ms)
         except (ReleaseError, OSError) as exc:
@@ -622,6 +644,34 @@ def _cmd_bundle_pack(args: argparse.Namespace) -> int:
     print(f"任务包目录 : {dest}")
     print("下一步: 拷到站点主机上,跑")
     print(f"  d1max-site import-bundle <拷过去的路径>/{dest.name}")
+    return 0
+
+
+def _cmd_release_sign(args: argparse.Namespace) -> int:
+    """``release keygen`` / ``release sign``(W30,决策 43)。"""
+    import json
+
+    from d1max_contract import relsign
+    try:
+        if args.release_command == "keygen":
+            relsign.keygen(Path(args.private), Path(args.public))
+            print(f"私钥 {args.private}(离线保管,丢了就再也签不了;"
+                  "泄露了要换钥匙、重装所有狗的公钥)")
+            print(f"公钥 {args.public}(提交到仓库 deploy/release-pub.pem)")
+            return 0
+        path = Path(args.package) / "release.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        from d1max_agent.engine.release import verify_package
+        verify_package(Path(args.package))          # 包内指纹先对得上,才签
+        manifest["signature"] = relsign.sign(manifest, Path(args.key))
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                       encoding="utf-8")
+        os.replace(tmp, path)
+    except (relsign.SignError, ReleaseError, OSError, ValueError) as exc:
+        print(f"没成: {exc}", file=sys.stderr)
+        return 2
+    print(f"签好了: {manifest['name']}")
     return 0
 
 

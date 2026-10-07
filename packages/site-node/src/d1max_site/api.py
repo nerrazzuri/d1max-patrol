@@ -93,7 +93,9 @@ _CAM = re.compile(r"^/api/cameras/([A-Za-z0-9._-]{1,64})/live$")
 _DETER = re.compile(r"^/api/deterrence/([^/]{1,64})/(level|release)$")
 #: 连续录像(W18):一段 ``/api/recordings/<id>/video``、标留着 ``/api/recordings/<id>/keep``。
 _REC = re.compile(r"^/api/recordings/(\d{1,12})/(video|keep)$")
-_RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,300}))?)?$")
+#: 看证据的审计(W30):同一个人看同一样东西多久记一次(毫秒)。
+VIEW_AUDIT_EVERY_MS = 600_000
+_RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review|keep)(?:/([^/]{1,300}))?)?$")
 _EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
 #: W00c5d 第二部分:给狗下发图、录包、重建。
 _MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build|outbox_retry)$")
@@ -165,6 +167,12 @@ class SiteApi:
         self.releases = releases
         #: W18:连续录像(站点主程序接上)。
         self.recordings: Any = None
+        #: 个人数据(W30,``privacy.PrivacyDesk``):运行记录标「留着」。
+        self.privacy: Any = None
+        #: 谁看过什么(W30,PDPA):``(账号, 东西) → 上次记审计的时刻``;
+        #: 10 分钟内同一个人看同一样只记一次。
+        self._viewed: dict[tuple[str, str], int] = {}
+        self._viewed_lock = threading.Lock()
         #: W19:固定摄像头(站点主程序接上);实时画面每台一个 ``CctvView``,观众共用。
         self.cctv: Any = None
         #: 布防模式(W20,``modes.ArmingDesk``)。站点主程序接上;没接的站点 /api/mode 回 404。
@@ -1269,10 +1277,25 @@ class _Handler(TlsHandlerMixin):
                 self._audit_target = f"run/{rid}"
                 if method == "GET" and what is None:
                     self._need(user, VIEW)
-                    return self._send_json(200, desk.detail(rid))
+                    got = desk.detail(rid)
+                    self._audit_view(f"run/{rid}")
+                    return self._send_json(200, got)
                 if method == "GET" and what == "photos" and arg:
                     self._need(user, VIEW)
-                    return self._send_file(desk.photo(rid, unquote(arg)), "image/jpeg")
+                    p = desk.photo(rid, unquote(arg))
+                    self._audit_view(f"run/{rid}/photo/{unquote(arg)[:100]}")
+                    return self._send_file(p, "image/jpeg")
+                if method == "POST" and what == "keep" and arg is None:
+                    # W30(PDPA):标「留着」—— 过了留存期、按时间段删都不删(要留作证据的)
+                    self._need(user, REVIEW)
+                    d = self._body()
+                    if not isinstance(d.get("keep"), bool) or self.site.privacy is None:
+                        raise HttpError(400, "要 keep: true/false")
+                    self._audit_detail = {"keep": d["keep"]}
+                    try:
+                        return self._send_json(200, self.site.privacy.set_keep(rid, d["keep"]))
+                    except KeyError as exc:
+                        raise HttpError(404, "没有这一趟") from exc
                 if method == "POST" and what == "judge" and arg is None:
                     self._need(user, REVIEW)
                     self._body()
@@ -1304,7 +1327,9 @@ class _Handler(TlsHandlerMixin):
             m = _EXPORT.match(path)
             if m is not None and method == "GET":
                 self._need(user, EXPORT)
-                return self._send_file(desk.export_path(unquote(m.group(1))), "application/zip")
+                p = desk.export_path(unquote(m.group(1)))
+                self._audit_view(f"export/{unquote(m.group(1))[:100]}", action="DOWNLOAD")
+                return self._send_file(p, "application/zip")
         except RunError as exc:
             msg = str(exc)
             raise HttpError(404 if msg.startswith(("没有", "这一趟里没有")) else 400, msg) from exc
@@ -1636,6 +1661,7 @@ class _Handler(TlsHandlerMixin):
             if v is None:
                 make = self.site.cctv_view_factory or CctvView
                 v = self.site._cctv_views[cam.name] = make(cam)
+        self._audit_view(f"camera/{cam.name}")
         frames = v.frames()
         try:
             first = next(frames)
@@ -1683,6 +1709,7 @@ class _Handler(TlsHandlerMixin):
             p = store.path(row)
             if not p.is_file():
                 raise HttpError(404, "这一段的文件不在了")
+            self._audit_view(f"recording/{rid}")
             return self._send_file(p, "video/mp4")
         if method != "POST":
             raise HttpError(405, "只收 POST")
@@ -1692,6 +1719,27 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, "要 keep: true/false")
         self._audit_detail = {"keep": body["keep"]}
         return self._send_json(200, {"recording": store.set_keep(rid, body["keep"])})
+
+    def _audit_view(self, target: str, *, action: str = "VIEW") -> None:
+        """看了、下载了证据(W30,PDPA):记审计。同一个人看同一样东西 10 分钟内只记一次(放录像、
+        看画面会连着请求好多次)。记不下来不挡看(审计写不进去另有日志)。"""
+        site = self.site
+        if site.audit is None or not self._actor:
+            return
+        now = site._now()
+        key = (self._actor, f"{action} {target}")
+        with site._viewed_lock:
+            last = site._viewed.get(key)
+            if last is not None and now - last < VIEW_AUDIT_EVERY_MS:
+                return
+            if len(site._viewed) > 5000:
+                site._viewed.clear()
+            site._viewed[key] = now
+        try:
+            site.audit.record(actor=self._actor, action=action, target=target, status=200,
+                              remote=self.client_address[0])
+        except Exception:
+            log.exception("看证据的审计写不进去")
 
     def _send_file(self, path, content_type: str) -> None:
         size = path.stat().st_size
