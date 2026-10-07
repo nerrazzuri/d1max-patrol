@@ -389,6 +389,12 @@ class Server:
         from d1max_site.modes import ArmingDesk
         self.arming = ArmingDesk(self.db, now_ms=wall_ms, publish=self.dispatcher.feed.publish)
         self.incidents.arming = self.arming
+        # W22:分级驱离。到了拦截点由它接管(开声光、自动升级、回程)。
+        from d1max_site.deterrence import DeterrenceDesk
+        self.deterrence = DeterrenceDesk(self.db, self.dispatcher, now_ms=wall_ms,
+                                         standby=self.standby)
+        self.standby.hold = self.deterrence.holds
+        self.incidents.busy = self.deterrence.busy
         # W00c5b:视频经站点。狗按需把相机推到这里(SRT),这里转 MJPEG 给观众。
         from d1max_site.video import VideoHub, dispatcher_sender
         vcfg = cfg.get("video", {})
@@ -463,6 +469,7 @@ class Server:
                            supervision=self.supervision, zones=self.zones, now_ms=wall_ms)
         self.teleop.audit = self.api.audit
         self.api.arming = self.arming
+        self.api.deterrence = self.deterrence
         self.arming.on_expired = lambda back, row: self.api.audit.record(
             actor="site", action="mode visitor_expired", target=back, status=200,
             detail={"visitor_zones": row["visitor_zones"], "set_by": row["set_by"]}, remote="")
@@ -556,6 +563,10 @@ class Server:
                 self.incidents.retell()                # W16 外审:入侵的告警上次没报成的,补
             except Exception:
                 log.exception("入侵告警补报这一拍没办成")
+            try:
+                await self.deterrence.tick()           # W22:驱离到点收、自动升、续声光
+            except Exception:
+                log.exception("驱离这一拍没办成")
             try:
                 self.arming.tick()                     # W20:访客到点退回原来的模式
             except Exception:

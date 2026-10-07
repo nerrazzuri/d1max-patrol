@@ -24,6 +24,7 @@ import 'site_mode.dart';
 import 'site_releases.dart';
 import 'site_cameras.dart';
 import 'site_deter.dart';
+import 'site_deterrence.dart';
 import 'site_intercepts.dart';
 import 'site_recordings.dart';
 import 'site_runs.dart';
@@ -251,6 +252,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
 
   /// 布防模式（W20）；站点没开（老站点 404）就是 null，不显示那一行。
   Map<String, dynamic>? _mode;
+
+  /// 正在进行的驱离（W22），按狗。站点推 `deterrence` 帧当场换。
+  Map<String, Map<String, dynamic>> _deter = <String, Map<String, dynamic>>{};
   String? _error;
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _debounce;
@@ -281,6 +285,16 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       }
       if (f['kind'] == 'mode' && f['mode'] is Map && mounted) {
         setState(() => _mode = Map<String, dynamic>.from(f['mode'] as Map));
+      }
+      if (f['kind'] == 'deterrence' && f['robot_id'] is String && mounted) {
+        setState(() {
+          final s = f['session'];
+          if (s is Map) {
+            _deter[f['robot_id'] as String] = Map<String, dynamic>.from(s);
+          } else {
+            _deter.remove(f['robot_id']);
+          }
+        });
       }
       if (alertWantsSound(f)) {
         widget.ring();
@@ -360,7 +374,13 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       final m = await widget.api.mode();
       if (mounted) setState(() => _mode = m);
     } on SiteError {
-      return; // 老站点没有布防模式（404）；读不到就不显示那一行
+      // 老站点没有布防模式（404）；读不到就不显示那一行
+    }
+    try {
+      final d = await widget.api.deterrence();
+      if (mounted) setState(() => _deter = {for (final s in d) '${s['robot_id']}': s});
+    } on SiteError {
+      return; // 老站点没有驱离（404）
     }
   }
 
@@ -517,6 +537,17 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                     context, MaterialPageRoute<void>(builder: (_) => SiteModePage(api: widget.api)));
                 await _reload();
               },
+            ),
+          for (final e in _deter.entries)
+            ListTile(
+              key: Key('deterrence-${e.key}'),
+              tileColor: Colors.red.withValues(alpha: 0.12),
+              leading: const Icon(Icons.campaign, color: Colors.red),
+              title: Text('${e.key} 驱离中 · ${deterSessionText(e.value)}'),
+              subtitle: Text('防区 ${e.value['zone']}'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute<void>(builder: (_) => SiteDeterrencePage(api: widget.api, robotId: e.key))),
             ),
           for (final r in _robots)
             ListTile(

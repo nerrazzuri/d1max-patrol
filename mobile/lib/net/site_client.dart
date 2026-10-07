@@ -362,6 +362,13 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> relocalize(String robotId,
       {bool atHome = false, double x = 0, double y = 0, double yaw = 0});
 
+  /// 分级驱离（W22）：正在进行的几场（每台狗最多一场）。站点没开回 404。
+  Future<List<Map<String, dynamic>>> deterrence();
+  /// 跳级、往回退（保安、管理员）。人动过一次就不再自动升。
+  Future<Map<String, dynamic>> deterLevel(String robotId, int level);
+  /// 解除（保安、管理员、业主）：全关、狗回待命点。
+  Future<void> deterRelease(String robotId);
+
   /// 上装（W21）：开（带 [maxS] 秒，到点狗上自己关）/ 关一路：`strobe` 警灯、`siren` 警笛、`spotlight` 聚光灯、
   /// `speaker` 喇叭（开要 [clip]：话术名或 `tts:<语言>:<文字>`）。返回 `{ack}`。
   Future<Map<String, dynamic>> deter(String robotId, String output, bool on, {double? maxS, String? clip});
@@ -1055,6 +1062,21 @@ class SiteClient implements SiteApi {
           {String name = '', bool replace = false}) async =>
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/home/here',
           <String, dynamic>{if (name.isNotEmpty) 'name': name, if (replace) 'replace': true}));
+
+  @override
+  Future<List<Map<String, dynamic>>> deterrence() async =>
+      ((_map(await _send('GET', '/api/deterrence'))['sessions'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .toList();
+
+  @override
+  Future<Map<String, dynamic>> deterLevel(String robotId, int level) async => _map(await _send(
+      'POST', '/api/deterrence/${Uri.encodeComponent(robotId)}/level', <String, dynamic>{'level': level}));
+
+  @override
+  Future<void> deterRelease(String robotId) async =>
+      _send('POST', '/api/deterrence/${Uri.encodeComponent(robotId)}/release', <String, dynamic>{});
 
   @override
   Future<Map<String, dynamic>> deter(String robotId, String output, bool on,

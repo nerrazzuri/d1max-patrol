@@ -1,0 +1,275 @@
+"""分级驱离(W22,决策 37)。入侵派出去的狗**到了拦截点**,站点开一场驱离,
+按级给狗发上装命令(W21 ``deter``):
+
+| 级 | 做什么 |
+|---|---|
+| L0 观察 | 什么都不开(到了已经拍过一张,W17) |
+| L1 灯光 | 警灯、聚光灯 |
+| L2 语音警告 | L1 + 喇叭轮放「这里是私人领地,请离开」(``warn-<语言>``,中文、英文、马来文) |
+| L3 警笛 | L2 的灯 + 警笛 + 喇叭轮放「已通知保安」(``notified-<语言>``) |
+| L4 人工 | 跟 L3 一样开着,但只有人能进;表示保安接手了 |
+
+- **自动升**:到了之后每级停 ``STEP_S``(30 秒)升一级,自动最多到 L3。**人动过一次级别(跳级、往回退)
+  就不再自动升**:人在管了。
+- **解除**:保安、管理员、业主都能(``abort`` 权限,跟「叫停」一个道理):全关、狗回待命点。
+- **最长 10 分钟**(从开始或最后一次人动过算):到点自动收(全关、回待命点)。
+  W24 人员检测没做,不知道人走没走,没人管的时候不许一直响。
+- 狗被派去干别的了(开始跑别的任务):这一场结束、全关,不派回程。
+- **声光自己会停**:每次开都带 ``KEEP_S``(45 秒),站点每 ``RENEW_S``(20 秒)续一次;站点挂了、断网了,
+  狗上最多 45 秒全关。喇叭的优先级用事件档(``EVENT``),手动按的(``MANUAL``)打断不了。
+- 驱离中的狗:事件派遣不选它去别的拦截点;待命点管理器不自动派它回去(驱离结束时这里派)。
+- 每一场落库(``deter_sessions``):站点重启接着管(级别、开始时刻、人动没动过都在)。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+from d1max_contract.messages import Event
+from d1max_site.db import SiteDB
+from d1max_site.priorities import EVENT, INCIDENT_PREFIX
+
+log = logging.getLogger(__name__)
+
+STEP_S = 30
+AUTO_MAX = 3
+MAX_LEVEL = 4
+CAP_S = 600
+KEEP_S = 45.0
+RENEW_S = 20
+CLIP_EVERY_S = 10
+CLIP_MAX_S = 15.0
+LANGS = ("zh", "en", "ms")
+LABEL = {0: "观察", 1: "灯光", 2: "语音警告", 3: "警笛", 4: "人工"}
+#: 每一级开哪几路继电器、喇叭放哪一套话术(``None`` = 不放)。
+RELAYS = {0: frozenset(), 1: frozenset({"strobe", "spotlight"}),
+          2: frozenset({"strobe", "spotlight"}),
+          3: frozenset({"strobe", "spotlight", "siren"}),
+          4: frozenset({"strobe", "spotlight", "siren"})}
+CLIPS = {0: None, 1: None, 2: "warn", 3: "notified", 4: "notified"}
+
+
+class DeterrenceError(ValueError):
+    """没有这一场、级别不对(API 回 400/404)。"""
+
+
+@dataclass
+class Session:
+    robot_id: str
+    incident_id: int
+    zone: str
+    task_id: str
+    level: int
+    started_ms: int
+    level_ms: int
+    human_ms: int = 0
+    auto: bool = True
+    by: str = ""
+    #: 不落库:每一路上次发「开」的时刻、喇叭放到第几段、上次放的时刻。
+    sent: dict[str, int] = field(default_factory=dict)
+    clip_i: int = 0
+    clip_ms: int = 0
+
+    def view(self, now_ms: int) -> dict[str, Any]:
+        d = {k: v for k, v in asdict(self).items() if k not in ("sent", "clip_i", "clip_ms")}
+        d["label"] = LABEL[self.level]
+        d["next_in_s"] = (max(0, (self.level_ms + STEP_S * 1000 - now_ms) // 1000)
+                          if self.auto and self.level < AUTO_MAX else None)
+        d["ends_in_s"] = max(0, (max(self.started_ms, self.human_ms) + CAP_S * 1000 - now_ms)
+                             // 1000)
+        return d
+
+
+class DeterrenceDesk:
+    def __init__(self, db: SiteDB, dispatcher: Any, *, now_ms: Callable[[], int],
+                 standby: Any = None) -> None:
+        self.db = db
+        self.dispatcher = dispatcher
+        self._now = now_ms
+        self.standby = standby
+        self.sessions: dict[str, Session] = {}
+        self._tasks: set[asyncio.Task] = set()
+        for r in db.query("SELECT * FROM deter_sessions"):
+            s = Session(robot_id=r["robot_id"], incident_id=r["incident_id"], zone=r["zone"],
+                        task_id=r["task_id"], level=r["level"], started_ms=r["started_ms"],
+                        level_ms=r["level_ms"], human_ms=r["human_ms"], auto=bool(r["auto"]),
+                        by=r["by"])
+            self.sessions[s.robot_id] = s
+        dispatcher.on_event(self._on_event)
+
+    # ------------------------------------------------------------ 进出
+
+    def holds(self, robot_id: str, task_id: str) -> bool:
+        """待命点管理器问:这一趟跑完要不要先别回(驱离接管回程)。到拦截点的事件任务、狗装了上装才接。"""
+        return task_id.startswith(INCIDENT_PREFIX) and self._can(robot_id)
+
+    def busy(self) -> set[str]:
+        """正在驱离的狗(事件派遣不选它)。"""
+        return set(self.sessions)
+
+    def _can(self, robot_id: str) -> bool:
+        c = self.dispatcher.clients.get(robot_id)
+        return bool(c and c.capabilities and "deter" in c.capabilities.tasks)
+
+    def _on_event(self, robot_id: str, e: Event) -> None:
+        task_id = e.data.get("task_id") if isinstance(e.data, dict) else None
+        if e.kind != "task_done" or not isinstance(task_id, str) \
+                or not task_id.startswith(INCIDENT_PREFIX) or not self._can(robot_id):
+            return
+        rows = self.db.query("SELECT id, zone FROM incidents WHERE task_id=? ORDER BY id LIMIT 1",
+                             (task_id,))
+        if not rows or robot_id in self.sessions:
+            return
+        now = self._now()
+        s = Session(robot_id=robot_id, incident_id=rows[0]["id"], zone=rows[0]["zone"],
+                    task_id=task_id, level=0, started_ms=now, level_ms=now)
+        self.sessions[robot_id] = s
+        self._save(s)
+        log.info("%s 到了拦截点(防区 %s):开始驱离", robot_id, s.zone)
+        self._publish(s)
+
+    def _save(self, s: Session) -> None:
+        with self.db.tx() as c:
+            c.execute("INSERT OR REPLACE INTO deter_sessions(robot_id, incident_id, zone, "
+                      "task_id, level, started_ms, level_ms, human_ms, auto, by) "
+                      "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                      (s.robot_id, s.incident_id, s.zone, s.task_id, s.level, s.started_ms,
+                       s.level_ms, s.human_ms, int(s.auto), s.by))
+
+    def _publish(self, s: Session | None, robot_id: str = "", ended: str = "") -> None:
+        if s is not None:
+            item: dict[str, Any] = {"kind": "deterrence", "robot_id": s.robot_id,
+                                    "session": s.view(self._now())}
+        else:
+            item = {"kind": "deterrence", "robot_id": robot_id, "session": None, "ended": ended}
+        try:
+            self.dispatcher.feed.publish(item)
+        except Exception:
+            log.exception("驱离推给手机没推出去")
+
+    def view(self) -> list[dict[str, Any]]:
+        now = self._now()
+        return [s.view(now) for s in sorted(self.sessions.values(), key=lambda s: s.robot_id)]
+
+    # ------------------------------------------------------------ 人
+
+    async def set_level(self, robot_id: str, level: Any, *, by: str) -> dict[str, Any]:
+        """跳级、往回退(保安、管理员)。人动过一次就不再自动升。"""
+        s = self.sessions.get(robot_id)
+        if s is None:
+            raise DeterrenceError(f"{robot_id} 没在驱离")
+        if isinstance(level, bool) or not isinstance(level, int) or not 0 <= level <= MAX_LEVEL:
+            raise DeterrenceError(f"级别是 0–{MAX_LEVEL} 的整数")
+        now = self._now()
+        s.level, s.level_ms, s.human_ms, s.auto, s.by = level, now, now, False, by
+        s.clip_i, s.clip_ms = 0, 0                      # 换了级:话术从头(中文)、马上放
+        self._save(s)
+        await self._apply(s)
+        self._publish(s)
+        return s.view(now)
+
+    async def release(self, robot_id: str, *, by: str) -> None:
+        """解除(保安、管理员、业主):全关、狗回待命点。"""
+        if robot_id not in self.sessions:
+            raise DeterrenceError(f"{robot_id} 没在驱离")
+        await self._end(robot_id, f"{by} 解除", go_back=True)
+
+    # ------------------------------------------------------------ 每拍
+
+    async def tick(self) -> None:
+        """站点每几秒调一次:到点收、自动升、续声光、轮放话术。一台炸了不挡别的台。"""
+        for rid in list(self.sessions):
+            try:
+                await self._tick_one(rid)
+            except Exception:
+                log.exception("%s 的驱离这一拍没办成", rid)
+
+    async def _tick_one(self, rid: str) -> None:
+        s = self.sessions[rid]
+        now = self._now()
+        if now - max(s.started_ms, s.human_ms) >= CAP_S * 1000:
+            return await self._end(rid, f"到 {CAP_S // 60} 分钟自动收", go_back=True)
+        c = self.dispatcher.clients.get(rid)
+        task = c.status.task if c is not None and c.status is not None else None
+        if task is not None and task.task_id != s.task_id and task.state.value in (
+                "running", "pending"):
+            return await self._end(rid, f"狗被派去干别的了({task.task_id})", go_back=False)
+        if s.auto and s.level < AUTO_MAX and now - s.level_ms >= STEP_S * 1000:
+            s.level, s.level_ms = s.level + 1, now
+            s.clip_i, s.clip_ms = 0, 0
+            self._save(s)
+            log.info("%s 驱离自动升到 L%d(%s)", rid, s.level, LABEL[s.level])
+            self._publish(s)
+        await self._apply(s)
+
+    def _outputs(self, rid: str) -> list[str]:
+        c = self.dispatcher.clients.get(rid)
+        caps = c.capabilities.tasks.get("deter", {}) if c and c.capabilities else {}
+        return list(caps.get("outputs", []))
+
+    def _clips(self, rid: str, kind: str) -> list[str]:
+        c = self.dispatcher.clients.get(rid)
+        caps = c.capabilities.tasks.get("deter", {}) if c and c.capabilities else {}
+        have = set(caps.get("clips", []))
+        return [f"{kind}-{lang}" for lang in LANGS if f"{kind}-{lang}" in have]
+
+    async def _send(self, rid: str, payload: dict[str, Any]) -> bool:
+        try:
+            r = await self.dispatcher.deter(rid, payload, issued_by=f"deterrence:{rid}",
+                                            priority=EVENT)
+        except Exception as exc:                        # noqa: BLE001 - 下一拍再来
+            log.warning("%s 驱离的 %s 没发出去: %s", rid, payload.get("output"), exc)
+            return False
+        ack = r.get("ack", {}) if isinstance(r, dict) else {}
+        if ack.get("result") not in (None, "accepted"):
+            log.warning("%s 驱离的 %s 狗没做: %s", rid, payload.get("output"),
+                        ack.get("reason") or ack.get("result"))
+            return False
+        return True
+
+    async def _apply(self, s: Session) -> None:
+        """按这一级该开的开、续,不该开的关;喇叭轮放。"""
+        now = self._now()
+        have = self._outputs(s.robot_id)
+        want = RELAYS[s.level]
+        for out in ("strobe", "spotlight", "siren"):
+            if out not in have:
+                continue
+            if out in want:
+                if now - s.sent.get(out, -10**12) >= RENEW_S * 1000 and await self._send(
+                        s.robot_id, {"output": out, "on": True, "max_s": KEEP_S}):
+                    s.sent[out] = now
+            elif out in s.sent:
+                if await self._send(s.robot_id, {"output": out, "on": False}):
+                    s.sent.pop(out, None)
+        kind = CLIPS[s.level]
+        clips = self._clips(s.robot_id, kind) if kind and "speaker" in have else []
+        if clips and now - s.clip_ms >= CLIP_EVERY_S * 1000:
+            clip = clips[s.clip_i % len(clips)]
+            if await self._send(s.robot_id, {"output": "speaker", "on": True, "max_s": CLIP_MAX_S,
+                                             "clip": clip}):
+                s.clip_i, s.clip_ms = s.clip_i + 1, now
+                s.sent["speaker"] = now
+        elif not clips and "speaker" in s.sent:
+            if await self._send(s.robot_id, {"output": "speaker", "on": False}):
+                s.sent.pop("speaker", None)
+
+    async def _end(self, rid: str, why: str, *, go_back: bool) -> None:
+        s = self.sessions.pop(rid)
+        with self.db.tx() as c:
+            c.execute("DELETE FROM deter_sessions WHERE robot_id=?", (rid,))
+        log.info("%s 驱离结束: %s", rid, why)
+        for out in self._outputs(rid):
+            await self._send(rid, {"output": out, "on": False})   # 没发出去也没事:45 秒自己关
+        self._publish(None, rid, why)
+        if go_back and self.standby is not None:
+            try:
+                await self.standby.return_to(rid, issued_by=f"deterrence:{s.by or 'auto'}")
+            except Exception as exc:                    # noqa: BLE001 - 回不去:推给值守的人
+                log.warning("%s 驱离结束后回待命点没派成: %s", rid, exc)
+                self.dispatcher.feed.publish({"kind": "standby_failed", "robot_id": rid,
+                                              "after": s.task_id, "reason": str(exc)})

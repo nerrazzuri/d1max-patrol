@@ -89,6 +89,8 @@ _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
 #: 固定摄像头的实时画面(W19)。
 _CAM = re.compile(r"^/api/cameras/([A-Za-z0-9._-]{1,64})/live$")
+#: 分级驱离(W22):``/api/deterrence/<狗>/level``、``/release``。
+_DETER = re.compile(r"^/api/deterrence/([^/]{1,64})/(level|release)$")
 #: 连续录像(W18):一段 ``/api/recordings/<id>/video``、标留着 ``/api/recordings/<id>/keep``。
 _REC = re.compile(r"^/api/recordings/(\d{1,12})/(video|keep)$")
 _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review)(?:/([^/]{1,300}))?)?$")
@@ -167,6 +169,8 @@ class SiteApi:
         self.cctv: Any = None
         #: 布防模式(W20,``modes.ArmingDesk``)。站点主程序接上;没接的站点 /api/mode 回 404。
         self.arming: Any = None
+        #: 分级驱离(W22,``deterrence.DeterrenceDesk``)。
+        self.deterrence: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -389,6 +393,8 @@ class _Handler(TlsHandlerMixin):
             if method == "POST" and path == "/api/bundles":
                 self._need(user, MANAGE)
                 return self._import_bundle(user)
+            if path == "/api/deterrence" or _DETER.match(path):
+                return self._deterrence(method, path, user)
             if path in ("/api/mode", "/api/mode/zones"):
                 return self._mode(method, path, user)
             if path in ("/api/incidents", "/api/intercepts", "/api/zones"):
@@ -715,6 +721,38 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, str(exc)) from exc
         row = self.site.dispatch(lambda: desk.handle(source, body))
         self._send_json(200, row)
+
+    def _deterrence(self, method: str, path: str, user) -> None:
+        """分级驱离(W22)。看:``view``;跳级、往回退:``dispatch``(保安、管理员);解除:``abort``
+        (保安、管理员、业主,同「叫停」)。"""
+        from d1max_site.deterrence import DeterrenceError
+        desk = self.site.deterrence
+        if desk is None:
+            raise HttpError(404, "这个站点没开驱离")
+        if path == "/api/deterrence":
+            if method != "GET":
+                raise HttpError(405, "只支持 GET")
+            self._need(user, VIEW)
+            return self._send_json(200, {"sessions": self.site.loop.call(
+                lambda: _sync(desk.view))})
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        m = _DETER.match(path)
+        robot_id, action = unquote(m.group(1)), m.group(2)
+        self._audit_target = robot_id
+        d = self._body()
+        try:
+            if action == "level":
+                self._need(user, DISPATCH)
+                self._audit_detail = {"level": d.get("level")}
+                v = self.site.loop.call(lambda: desk.set_level(robot_id, d.get("level"),
+                                                               by=str(user)), timeout_s=30)
+                return self._send_json(200, {"session": v})
+            self._need(user, ABORT)
+            self.site.loop.call(lambda: desk.release(robot_id, by=str(user)), timeout_s=30)
+            return self._send_json(200, {"ok": True})
+        except DeterrenceError as exc:
+            raise HttpError(404 if "没在驱离" in str(exc) else 400, str(exc)) from exc
 
     def _mode(self, method: str, path: str, user) -> None:
         """布防模式(W20)。看:``view``。切到布防:``arm``(保安也行);切到在家、访客:``set_mode``
