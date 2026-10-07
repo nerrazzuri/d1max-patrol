@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 31                      # W30:运行记录「留着」(runs.keep,PDPA 留存期不删)
+SCHEMA_VERSION = 32                      # W30 复查:要删的导出(export_purges)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -344,6 +344,11 @@ CREATE TABLE IF NOT EXISTS weather (
 CREATE TABLE IF NOT EXISTS weather_returns (
     robot_id   TEXT PRIMARY KEY,
     task_id    TEXT NOT NULL,
+    created_ms INTEGER NOT NULL
+);
+-- W30 复查:删了运行记录、导出还没删成的(删导出成了才清;下一次删除、定时清理、重启都接着删)。
+CREATE TABLE IF NOT EXISTS export_purges (
+    run_id     INTEGER PRIMARY KEY,
     created_ms INTEGER NOT NULL
 );
 -- W24 复查:要报、还没报成的告警(连内容一起)。报成才删;人走了、驱离结束都不动它。
