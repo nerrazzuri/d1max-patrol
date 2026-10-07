@@ -449,7 +449,7 @@ def test_W29_滤雨点_孤零零一个点不挡_杆子挡_两个挨着的也挡(
     occ, known = classify(np.vstack([ground, rain, pole, pair]), H, cfg)
     for x, y, _ in rain:
         assert not occ[_cell(cfg, x, y)], ("雨滴不挡", x, y)
-        assert known[_cell(cfg, x, y)], "那一格地面照样看见了"
+        assert not known[_cell(cfg, x, y)], "那一格算没看见(打到了地面也不当空,外审 4)"
     assert occ[_cell(cfg, 2.05, 0.05)], "杆子挡"
     assert occ[_cell(cfg, 1.25, -2.05)] and occ[_cell(cfg, 1.35, -2.05)], "挨着的两个点挡"
     lone_air = classify(np.array([[2.55, 1.55, -H + 0.5]]), H, cfg)
@@ -457,3 +457,17 @@ def test_W29_滤雨点_孤零零一个点不挡_杆子挡_两个挨着的也挡(
         "只有一个雨滴、没打到地面:不挡、也不算看见"
     off = classify(np.array([[2.55, 1.55, -H + 0.5]]), H, Config(speckle=False))
     assert off[0][_cell(cfg, 2.55, 1.55)], "关掉滤雨点:照旧挡"
+
+
+
+def test_W29外审4_稀疏的真东西_同格有地面点_滤掉后是未知不是空():
+    cfg = Config()
+    pts = np.array([[2.05, 0.05, -H], [2.05, 0.05, -H + 0.4]])   # 同格:地面点、高 0.4 m 的点
+    occ, known = classify(pts, H, Config(speckle=False))
+    assert occ[_cell(cfg, 2.05, 0.05)], "不滤:挡"
+    occ, known = classify(pts, H, cfg)
+    assert not occ[_cell(cfg, 2.05, 0.05)] and not known[_cell(cfg, 2.05, 0.05)], \
+        "滤掉了:不挡、也不算看见(代理当未知,守卫不让过)"
+    ground_only = classify(np.array([[2.05, 0.05, -H]]), H, cfg)
+    assert ground_only[1][_cell(cfg, 2.05, 0.05)] and not ground_only[0][_cell(cfg, 2.05, 0.05)], \
+        "只有地面点:看见了、空"

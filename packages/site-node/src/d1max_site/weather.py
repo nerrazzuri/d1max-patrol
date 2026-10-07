@@ -15,9 +15,16 @@
 
 **怎么管**都是按当前天气**每拍对账**(W24 的教训:不靠「变了的那一下」):
 - 雷暴时每拍看一遍:还在跑的排程巡检(``sched-`` 开头)撤掉(每趟 15 秒最多撤一次);排程执行器到点不起跑
-  (记 ``weather``)。撤了之后狗空着,待命点管理器照常派它回去。
-- 每拍对每台在线、新鲜、报了 ``speed_cap`` 的狗:狗上的限速跟该有的不一样、或者快到点了(剩不到一半),
-  就发一条(每台 15 秒最多一次)。限速命令带有效期(10 分钟),站点挂了狗上到点自己取消。
+  (记 ``weather``)。
+- **撤了要派回待命点**(W29 外审 1:待命点管理器只在 ``task_done`` 后自动回,
+  撤掉的是 ``task_aborted``):撤之前先把「这台狗撤完要回待命点」落库(``weather_returns``)。
+  每拍对账:那一趟还在跑 → 等;狗空了(没任务,或者任务是那一趟、已经结束)→ 派回待命点,
+  派成了才删;**狗在跑别的了(人派的、入侵派的)→ 作废**,不抢。派不成每 15 秒再派。
+  站点重启后照样接着办。
+- 每拍对每台在线、新鲜、报了 ``speed_cap`` 的狗:狗上的限速跟该有的不一样就发;一样的话,
+  **按站点自己记的上次发成的时刻**,过了有效期的一半就续(W29 外审 2:狗只在限速变了时重发能力,
+  能力里的 ``left_s`` 是那时的快照,不是倒计时)。站点重启后不知道上次什么时候发的:先补发一次。
+  每台 15 秒最多发一次。限速命令带有效期(10 分钟),站点挂了狗上到点自己取消。
 """
 
 from __future__ import annotations
@@ -100,7 +107,11 @@ class WeatherDesk:
         self._fetch = fetch
         self._publish = publish
         self._polled_ms: int | None = None
-        self._sent: dict[str, int] = {}                 # 狗 → 上次发限速的时刻
+        self._sent: dict[str, int] = {}                 # 狗 → 上次发限速的时刻(含没发成的,限次用)
+        self._capped: dict[str, int] = {}               # 狗 → 上次限速**发成**的时刻(续期用)
+        self._back_ms: dict[str, int] = {}              # 狗 → 上次派回程的时刻
+        #: 待命点(``standby.StandbyManager``):雷暴撤了巡检派回去。站点主程序接上。
+        self.standby: Any = None
         self._aborted: dict[str, int] = {}              # 任务 → 上次撤的时刻
         self._told: str = ""
         with db.tx() as c:
@@ -199,6 +210,7 @@ class WeatherDesk:
             self._changed()
         if cond == "storm":
             await self._stop_patrols()
+        await self._returns()
         await self._caps()
 
     async def _stop_patrols(self) -> None:
@@ -212,10 +224,50 @@ class WeatherDesk:
                 continue
             self._aborted[t.task_id] = now
             try:
+                with self.db.tx() as tx:                # 先记「撤完要回待命点」,再撤(外审 1)
+                    tx.execute("INSERT OR REPLACE INTO weather_returns(robot_id, task_id, "
+                               "created_ms) VALUES (?,?,?)", (rid, t.task_id, now))
                 await self.dispatcher.abort(rid, t.task_id, issued_by="weather")
                 log.info("雷暴:撤掉 %s 的排程巡检 %s", rid, t.task_id)
             except Exception as exc:  # noqa: BLE001 - 下一拍再撤
                 log.warning("雷暴撤 %s 的巡检没成:%s", rid, exc)
+
+    async def _returns(self) -> None:
+        """雷暴撤了巡检的狗:那一趟结束、狗空着了就派回待命点(派成才删);狗在跑别的了就作废。"""
+        rows = self.db.query("SELECT robot_id, task_id FROM weather_returns")
+        if not rows:
+            return
+        now = self._now()
+        for r in rows:
+            rid, tid = r["robot_id"], r["task_id"]
+            c = self.dispatcher.clients.get(rid)
+            t = c.status.task if c is not None and c.status is not None else None
+            if t is not None and t.state.value in ("running", "pending"):
+                if t.task_id == tid:
+                    continue                            # 还在撤:等它停
+                self._drop_return(rid, f"狗在跑别的了({t.task_id}),不抢")
+                continue
+            if self.standby is None:
+                continue
+            if now - self._back_ms.get(rid, -10**12) < RESEND_S * 1000:
+                continue
+            self._back_ms[rid] = now
+            try:
+                got = await self.standby.return_to(rid, issued_by="weather:storm")
+            except Exception as exc:  # noqa: BLE001 - 不在线、没就绪:过一会儿再派
+                log.warning("雷暴撤巡检后 %s 回待命点没派成(%d 秒后再派):%s", rid, RESEND_S, exc)
+                continue
+            ack = got.get("ack", {}) if isinstance(got, dict) else {}
+            if ack.get("result") not in ("accepted", "duplicate"):
+                log.warning("雷暴撤巡检后 %s 回待命点被拒(%s):%d 秒后再派", rid,
+                            ack.get("reason"), RESEND_S)
+                continue
+            self._drop_return(rid, "派回待命点了")
+
+    def _drop_return(self, rid: str, why: str) -> None:
+        with self.db.tx() as tx:
+            tx.execute("DELETE FROM weather_returns WHERE robot_id=?", (rid,))
+        log.info("雷暴撤巡检后 %s 的回程:%s", rid, why)
 
     async def _caps(self) -> None:
         want = self.speed_cap()
@@ -226,18 +278,25 @@ class WeatherDesk:
             if not isinstance(caps, dict) or (callable(fresh) and not fresh(c)):
                 continue
             have = caps.get("max_speed_mps")
-            left = caps.get("left_s") or 0
-            if have == want and (want is None or left >= CAP_TTL_S // 2):
+            sent = self._capped.get(rid)
+            if have == want and (want is None or (
+                    sent is not None and now - sent < CAP_TTL_S * 1000 // 2)):
                 continue
             if now - self._sent.get(rid, -10**12) < RESEND_S * 1000:
                 continue
             self._sent[rid] = now
             try:
-                await self.dispatcher.speed_cap(rid, SpeedCap(max_speed_mps=want,
-                                                              ttl_s=CAP_TTL_S),
-                                                issued_by="weather")
+                r = await self.dispatcher.speed_cap(rid, SpeedCap(max_speed_mps=want,
+                                                                  ttl_s=CAP_TTL_S),
+                                                    issued_by="weather")
             except Exception as exc:  # noqa: BLE001 - 下一次再发
                 log.warning("给 %s 发限速没成:%s", rid, exc)
+                continue
+            ack = r.get("ack", {}) if isinstance(r, dict) else {}
+            if ack.get("result") == "accepted":
+                self._capped[rid] = now                 # 发成了:从这一刻起算续期
+            else:
+                log.warning("给 %s 发限速被拒:%s", rid, ack.get("reason"))
 
     def _changed(self) -> dict[str, Any]:
         v = self.view()

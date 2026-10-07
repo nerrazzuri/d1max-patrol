@@ -190,6 +190,10 @@ class SiteAlertSources:
             m.running = s.task is not None and s.task.state is TaskState.RUNNING
             m.estop = not s.ready.estop_clear
             m.loc_lost_running = m.running and not s.ready.loc_ok
+            if m.loc_lost_running:
+                # W29 外审 3:站点重启前就在丢定位 —— 从现在起重新计 30 秒(之前的时长不知道,
+                # 宁可晚一点报 P1,不能不报)
+                m.loc_since, m.loc_p1 = self._now(), False
             if m.running:
                 m.started = s.task.task_id
 
@@ -226,6 +230,8 @@ class SiteAlertSources:
                                          f"{LOC_P1_S} 秒内恢复就接着走")
         if not loc:
             m.loc_since = None
+        elif m.loc_since is None:
+            m.loc_since, m.loc_p1 = self._now(), False   # 丢着定位、没在计(W29 外审 3)
         m.loc_lost_running = loc
         if running and s.task.task_id != m.started:
             m.started = s.task.task_id
@@ -248,11 +254,15 @@ class SiteAlertSources:
                 self._offline(rid, m)
             elif m.loc_since is not None and not m.loc_p1 \
                     and self._now() - m.loc_since >= LOC_P1_S * 1000:
-                m.loc_p1 = True                           # 30 秒还没恢复:叫人(W29)
-                self.desk.raise_alert(kind="loc_lost_paused", robot=rid,
-                                      title="定位丢失后暂停,30 秒没恢复:要人到场",
-                                      detail="狗原地停着,不靠不准的定位自己走;到场重新给位置,"
-                                             "或者遥控挪到看得清的地方")
+                try:                                      # 30 秒还没恢复:叫人(W29)
+                    self.desk.raise_alert(kind="loc_lost_paused", robot=rid,
+                                          title="定位丢失后暂停,30 秒没恢复:要人到场",
+                                          detail="狗原地停着,不靠不准的定位自己走;到场重新给位置,"
+                                                 "或者遥控挪到看得清的地方")
+                except Exception:                         # 写不进去:不标报过,下一拍再报(外审 3)
+                    log.exception("%s 定位丢失 P1 报不出去,下一拍再报", rid)
+                    continue
+                m.loc_p1 = True
 
     def _offline(self, rid: str, m: _Mem) -> None:
         if m.offline:

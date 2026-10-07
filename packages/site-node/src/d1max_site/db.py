@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 29                      # W29:天气(weather)
+SCHEMA_VERSION = 30                      # W29 外审:雷暴撤巡检后的回程(weather_returns)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -338,6 +338,12 @@ CREATE TABLE IF NOT EXISTS weather (
     auto_ms         INTEGER,
     auto_detail     TEXT NOT NULL DEFAULT '',
     auto_error      TEXT NOT NULL DEFAULT ''
+);
+-- W29 外审:雷暴撤了巡检、要派回待命点的狗(派成了才删;狗在跑别的了就作废)。
+CREATE TABLE IF NOT EXISTS weather_returns (
+    robot_id   TEXT PRIMARY KEY,
+    task_id    TEXT NOT NULL,
+    created_ms INTEGER NOT NULL
 );
 -- W24 复查:要报、还没报成的告警(连内容一起)。报成才删;人走了、驱离结束都不动它。
 CREATE TABLE IF NOT EXISTS pending_alerts (
