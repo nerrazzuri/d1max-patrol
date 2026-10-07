@@ -417,7 +417,7 @@ class Dispatcher:
         """区域(W10):这一版区域要人工确认过(外审 2);狗上的区域修订要跟站点的一致;这张图上有区域,
         狗的导航就得守;规划后端没有规划栅格不派。只管会自己走的(goto、巡检,排程、事件派遣、回待命点
         都经过它)。"""
-        if kind not in ("goto", "patrol"):
+        if kind not in ("goto", "patrol", "standoff"):
             return
         head = c.capabilities.tasks.get("head") if c.capabilities is not None else None
         if head is not None and not head.get("autonomy", head.get("direction") == "head"):
@@ -622,6 +622,15 @@ class Dispatcher:
             raise DispatchRefused(str(exc)) from exc
         if why:
             raise DispatchRefused(why)
+
+    async def standoff(self, robot_id: str, task_id: str, req: Any, *,
+                       issued_by: str) -> dict[str, Any]:
+        """保持距离(W25):驱离开场派、狗没在守就补派。优先级最低(谁来都抢得走)。"""
+        from d1max_contract.standoff import STANDOFF_PRIORITY
+        c = self._client_for(robot_id)
+        self._check_dispatchable(robot_id, c, "standoff")
+        return await self._send(c, robot_id, "standoff", req.to_payload(), issued_by=issued_by,
+                                priority=STANDOFF_PRIORITY, task_id=task_id)
 
     async def abort(self, robot_id: str, task_id: str, *, issued_by: str) -> dict[str, Any]:
         """abort 只要求登记有效:不在线也发(QoS 1 持久会话,重连后补投)。"""

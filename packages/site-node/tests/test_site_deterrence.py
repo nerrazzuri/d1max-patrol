@@ -812,3 +812,124 @@ async def test_W24复查二2_真告警台_告警报成删待报没成_保安解�
     assert desk2.alerts.open() == [], "意图报过了,不再报"
     assert len(t.db.query("SELECT 1 FROM alerts")) == 1
     assert not t.db.query("SELECT 1 FROM pending_alerts")
+
+
+# ------------------------------------------------------------ W25:保持距离
+
+
+def _会守(t, *, fail=False):
+    """假派遣器加上保持距离:能力里报 standoff,派、撤都记下。"""
+    t.disp.clients["A"].capabilities.tasks["standoff"] = {"state": "idle"}
+    t.disp.standoffs, t.disp.aborts = [], []
+
+    async def standoff(rid, task_id, req, *, issued_by):
+        if fail:
+            raise RuntimeError("狗不在线")
+        t.disp.standoffs.append((rid, task_id, req))
+        t.disp.clients[rid].capabilities.tasks["standoff"] = {"state": "hold",
+                                                              "task_id": task_id}
+        return {"ack": {"result": "accepted"}}
+
+    async def abort(rid, task_id, *, issued_by):
+        t.disp.aborts.append((rid, task_id))
+        return {"ack": {"result": "accepted"}}
+    t.disp.standoff, t.disp.abort = standoff, abort
+
+
+def _守状态(t, state, reason=""):
+    st = {"state": state, "task_id": "standoff-incident-abc"}
+    if reason:
+        st["reason"] = reason
+    t.disp.clients["A"].capabilities.tasks["standoff"] = st
+
+
+async def test_W25_开场派保持距离_狗在守就不重派_它跑着不算被派去干别的(台):
+    t = 台
+    _会守(t)
+    await _到场(t)
+    [(rid, tid, req)] = t.disp.standoffs
+    assert tid == "standoff-incident-abc" and CAP_S < req.max_s <= 900
+    t.disp.clients["A"].status.task = SimpleNamespace(
+        task_id=tid, state=SimpleNamespace(value="running"))
+    t.clock.go(60)
+    await t.desk.tick()
+    assert "A" in t.desk.sessions and len(t.disp.standoffs) == 1
+    assert t.desk.view()[0]["standoff"] == "hold"
+
+
+async def test_W25_狗没在守_隔15秒补派_派不出去不挡驱离(台):
+    t = 台
+    _会守(t, fail=True)
+    await _到场(t)
+    t.clock.go(5)
+    await t.desk.tick()
+    assert "A" in t.desk.sessions and t.desk.view()[0]["standoff"] == "idle"
+    _会守(t)
+    t.clock.go(5)
+    await t.desk.tick()
+    assert t.disp.standoffs == [], "15 秒内不重派"
+    t.clock.go(10)
+    await t.desk.tick()
+    assert len(t.disp.standoffs) == 1
+
+
+async def test_W25_狗不支持保持距离_照旧驱离不派(台):
+    t = 台
+    await _到场(t)
+    await t.desk.tick()
+    assert "A" in t.desk.sessions and t.desk.view()[0]["standoff"] is None
+
+
+async def test_W25_无路可退_报P1_只报一次_重启不重报(台):
+    t = 台
+    t.desk.alerts = 假告警台()
+    _会守(t)
+    await _到场(t)
+    _守状态(t, "cornered", "扫过区有挡 3 处")
+    await t.desk.tick()
+    [a] = t.desk.alerts.raised
+    assert a["kind"] == "deter_cornered" and "扫过区有挡" in a["detail"]
+    assert t.desk.view()[0]["standoff"] == "cornered" and t.desk.view()[0]["cornered"]
+    t.desk.alerts.raised.clear()                          # 保安处理掉了
+    _守状态(t, "retreat")
+    await t.desk.tick()
+    _守状态(t, "cornered")
+    await t.desk.tick()
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
+    desk2.alerts = t.desk.alerts
+    await desk2.tick()
+    assert t.desk.alerts.raised == [], "这一场报过就不再报"
+
+
+async def test_W25_无路可退落库没成_不记_下一拍再来(台, monkeypatch):
+    t = 台
+    t.desk.alerts = 假告警台()
+    _会守(t)
+    await _到场(t)
+    _守状态(t, "cornered")
+    real = t.db.tx
+    monkeypatch.setattr(t.db, "tx", lambda: (_ for _ in ()).throw(RuntimeError("库锁住了")))
+    await t.desk.tick()
+    assert not t.desk.sessions["A"].cornered and t.desk.alerts.raised == []
+    monkeypatch.setattr(t.db, "tx", real)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].cornered and len(t.desk.alerts.raised) == 1
+
+
+async def test_W25_收场撤掉保持距离再回待命点(台):
+    t = 台
+    _会守(t)
+    await _到场(t)
+    await t.desk.tick()
+    await t.desk.release("A", by="gina")
+    assert t.disp.aborts == [("A", "standoff-incident-abc")] and t.stb.back == ["A"]
+
+
+async def test_W25_狗被派去干别的了_照样收场(台):
+    t = 台
+    _会守(t)
+    await _到场(t)
+    t.disp.clients["A"].status.task = SimpleNamespace(
+        task_id="manual-1", state=SimpleNamespace(value="running"))
+    await t.desk.tick()
+    assert "A" not in t.desk.sessions

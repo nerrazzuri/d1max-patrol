@@ -29,6 +29,8 @@ ALLOWED_KINDS = frozenset({
     "teleop_lease", "proc_log", "release_precheck", "mapping_trail",
     # W21:上装的声光(警灯、警笛、聚光灯、喇叭),带最长时间、到点狗上自己关;不动腿
     "deter",
+    # W25:保持距离。任务级(站点只派、只撤,带 max_s、拴绳);退不退、往哪退全在狗上判,站点不发速度
+    "standoff",
 })
 #: 直接速度、运动原语:站点永远不许发。
 FORBIDDEN_KINDS = frozenset({"vel", "walk", "move", "stand", "lie", "estop_off", "gait"})

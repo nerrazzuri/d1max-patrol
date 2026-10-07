@@ -19,6 +19,8 @@ TASK_RESOURCES: dict[str, frozenset[str]] = {
     "teleop": frozenset({"motion"}),
     # W00c5c:停车。不是任务,不占资源(跟 abort 一样,任何时候都能进来)。
     "halt": frozenset(),
+    # W25:保持距离。只占 motion;优先级最低,谁来都抢得走。
+    "standoff": frozenset({"motion"}),
 }
 
 

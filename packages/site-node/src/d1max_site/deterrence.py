@@ -30,6 +30,12 @@
 - 结束:**先在库里标「收尾中」**(原因、回不回待命点)→ 全关 → 删库 → 删成了才从内存拿掉、派回程。
   删库没成,下一拍接着收;**站点重启读到「收尾中」的只接着收尾,不再开任何东西**(W22 复查)。
   连「收尾中」都写不进库:照样先全关、内存里标收尾中、每拍重试,解除回报错让人知道。
+
+**保持距离**(W25,决策 40):开场给狗派一趟 ``standoff``(优先级最低;判定在狗上:人进 3 m 就退,
+只退不进,退不了原地站定)。每拍按狗能力里的 ``standoff`` 对账:狗没在守这一场的就补派(每 15 秒最多
+一次);狗报 ``cornered``(无路可退)→ 报 P1 ``deter_cornered``(「这一场无路可退过」跟待报告警一个事务
+落库,同 W24 的告警意图)。这一趟保持距离不算「狗被派去干别的了」。收场时撤掉它
+(回待命点本来也抢得走)。
 """
 
 from __future__ import annotations
@@ -42,6 +48,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from d1max_contract.messages import Event
+from d1max_contract.standoff import MAX_S as STANDOFF_MAX_S
+from d1max_contract.standoff import TASK_PREFIX as STANDOFF_PREFIX
+from d1max_contract.standoff import StandoffRequest
 from d1max_site.db import SiteDB
 from d1max_site.priorities import EVENT, INCIDENT_PREFIX
 
@@ -51,6 +60,8 @@ STEP_S = 30
 AUTO_MAX = 3
 MAX_LEVEL = 4
 CAP_S = 600
+#: 狗没在守这一场的保持距离:隔这么久(秒)补派一次。
+STANDOFF_RESEND_S = 15
 KEEP_S = 45.0
 RENEW_S = 20
 CLIP_EVERY_S = 10
@@ -70,6 +81,10 @@ PERSON_KINDS = frozenset({"person_seen", "person_near", "person_gone", "person_s
 
 class DeterrenceError(ValueError):
     """没有这一场、级别不对、落库没成(API 回 400/404/503)。"""
+
+
+def _standoff_id(s: Session) -> str:
+    return f"{STANDOFF_PREFIX}{s.task_id}"
 
 
 @dataclass
@@ -95,6 +110,10 @@ class Session:
     persons: dict[str, Any] | None = None
     seen_person: bool = False
     person_alerted: bool = False
+    #: 保持距离(W25):狗报的状态(不落库,给人看);上次补派的时刻(不落库);这一场无路可退过没有(落库)。
+    standoff: str | None = None
+    standoff_ms: int = 0
+    cornered: bool = False
     #: 收尾中(落库没成,下一拍接着收):``(原因, 回不回待命点)``。收尾中不再开任何东西。
     ending: tuple[str, bool] | None = None
     #: 「收尾中」落进库了没有(没落进去的话站点重启会把这一场当成还在驱离)。
@@ -103,12 +122,12 @@ class Session:
     def row(self) -> tuple:
         return (self.robot_id, self.incident_id, self.zone, self.task_id, self.level,
                 self.started_ms, self.level_ms, self.human_ms, int(self.auto), self.by,
-                int(self.seen_person), int(self.person_alerted))
+                int(self.seen_person), int(self.person_alerted), int(self.cornered))
 
     def view(self, now_ms: int) -> dict[str, Any]:
         d = {k: v for k, v in asdict(self).items()
              if k not in ("sent", "off", "clip_i", "clip_ms", "ending", "ending_saved",
-                          "seen_person", "person_alerted")}
+                          "seen_person", "person_alerted", "standoff_ms")}
         d["label"] = LABEL[self.level]
         d["next_in_s"] = (max(0, (self.level_ms + STEP_S * 1000 - now_ms) // 1000)
                           if self.auto and self.level < AUTO_MAX else None)
@@ -133,7 +152,7 @@ class DeterrenceDesk:
                         task_id=r["task_id"], level=r["level"], started_ms=r["started_ms"],
                         level_ms=r["level_ms"], human_ms=r["human_ms"], auto=bool(r["auto"]),
                         by=r["by"], seen_person=bool(r["person_seen"]),
-                        person_alerted=bool(r["person_alerted"]))
+                        person_alerted=bool(r["person_alerted"]), cornered=bool(r["cornered"]))
             if r["ending"]:
                 # 上次收尾到一半(删库没成)就停了:只接着收尾
                 s.ending, s.ending_saved = (r["ending"], bool(r["ending_back"])), True
@@ -204,7 +223,7 @@ class DeterrenceDesk:
     def _save_in(c: Any, s: Session) -> None:
         c.execute("INSERT OR REPLACE INTO deter_sessions(robot_id, incident_id, zone, "
                   "task_id, level, started_ms, level_ms, human_ms, auto, by, person_seen, "
-                  "person_alerted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", s.row())
+                  "person_alerted, cornered) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", s.row())
 
     def _publish(self, s: Session | None, robot_id: str = "", ended: str = "") -> None:
         if s is not None:
@@ -250,6 +269,8 @@ class DeterrenceDesk:
                 s = self.sessions.get(rid)
                 if s is not None and s.ending is None:
                     await self._reconcile_persons(s)
+                if s is not None and s.ending is None and rid in self.sessions:
+                    await self._reconcile_standoff(s)
         except Exception:
             log.exception("%s 开场对账人员状态没成(下一拍再对)", rid)
 
@@ -304,6 +325,49 @@ class DeterrenceDesk:
             s.persons = {"count": 0, "gone": True, "at_ms": now}
             if s.auto:
                 await self._end(rid, "人走了(看到过人,之后连续 20 秒确认没人)", go_back=True)
+
+    async def _reconcile_standoff(self, s: Session) -> None:
+        """按狗能力里的 ``standoff`` 对账(W25)。狗不支持(没配人员检测、避障、规划后端)就不管。"""
+        rid, now = s.robot_id, self._now()
+        c = self.dispatcher.clients.get(rid)
+        if c is None or c.capabilities is None or "standoff" not in c.capabilities.tasks:
+            s.standoff = None
+            return
+        fresh = getattr(self.dispatcher, "_fresh", None)
+        if callable(fresh) and not fresh(c):
+            return
+        st = c.capabilities.tasks.get("standoff") or {}
+        tid = _standoff_id(s)
+        mine = st.get("task_id") == tid
+        s.standoff = str(st.get("state")) if mine else "idle"
+        if not mine:
+            if now - s.standoff_ms < STANDOFF_RESEND_S * 1000:
+                return
+            s.standoff_ms = now
+            left = (max(s.started_ms, s.human_ms) + CAP_S * 1000 - now) // 1000
+            req = StandoffRequest(max_s=int(max(30, min(STANDOFF_MAX_S, left + 60))))
+            try:
+                await self.dispatcher.standoff(rid, tid, req, issued_by="deterrence")
+            except Exception as exc:                    # noqa: BLE001 - 派不出去:下次再派
+                log.warning("%s 保持距离没派成(%d 秒后再派):%s", rid, STANDOFF_RESEND_S, exc)
+            return
+        if st.get("state") == "cornered" and not s.cornered:
+            why = str(st.get("reason") or "")
+            new = Session(**{**asdict(s), "cornered": True})
+            try:
+                with self.db.tx() as tx:
+                    self._save_in(tx, new)
+                    tx.execute("INSERT INTO pending_alerts(kind, robot, title, detail, context, "
+                               "created_ms) VALUES (?,?,?,?,?,?)",
+                               ("deter_cornered", rid, "驱离中的狗无路可退,原地站定",
+                                f"防区 {s.zone};" + (why or "四周都退不了"),
+                                json.dumps({"task_id": s.task_id}, ensure_ascii=False), now))
+            except Exception:
+                log.exception("%s 无路可退,落库没成(下一拍再记)", rid)
+                return
+            s.cornered = True
+            log.warning("%s 无路可退,原地站定:%s", rid, why)
+            self._flush_alerts()
 
     def _flush_alerts(self) -> int:
         """把 ``pending_alerts`` 里的告警报出去,报成才删(W24 复查)。告警簿里这台狗这一种还挂着的
@@ -391,12 +455,13 @@ class DeterrenceDesk:
             return await self._end(rid, f"到 {CAP_S // 60} 分钟自动收", go_back=True)
         c = self.dispatcher.clients.get(rid)
         task = c.status.task if c is not None and c.status is not None else None
-        if task is not None and task.task_id != s.task_id and task.state.value in (
-                "running", "pending"):
+        if task is not None and task.task_id not in (s.task_id, _standoff_id(s)) \
+                and task.state.value in ("running", "pending"):
             return await self._end(rid, f"狗被派去干别的了({task.task_id})", go_back=False)
         await self._reconcile_persons(s)                # W24:按狗的当前人员状态对账
         if rid not in self.sessions or s.ending is not None:
             return                                      # 对账时收场了
+        await self._reconcile_standoff(s)               # W25:保持距离在不在守、是不是无路可退
         if s.auto and s.level < AUTO_MAX and now - s.level_ms >= STEP_S * 1000:
             new = Session(**{**asdict(s), "level": s.level + 1, "level_ms": now})
             try:
@@ -502,5 +567,11 @@ class DeterrenceDesk:
             return
         self.sessions.pop(rid, None)
         self._publish(None, rid, why)
+        if s.standoff not in (None, "idle"):
+            # 撤掉保持距离(回待命点本来也抢得走;max_s 兜底)
+            try:
+                await self.dispatcher.abort(rid, _standoff_id(s), issued_by="deterrence")
+            except Exception as exc:                    # noqa: BLE001
+                log.warning("%s 撤保持距离没成(到点狗自己收):%s", rid, exc)
         if go_back and self.standby is not None:
             await self._back(rid, s.task_id, s.by or "auto")

@@ -315,3 +315,17 @@ def test_复查二1_后相机确认远处的人_前相机一帧误检3米_不算
     v.on_persons(_帧(camera="front"))
     v.on_persons(_帧(3.0, camera="front"))                # 三帧里只有两帧、这一帧有:确认了
     assert v.caps()["near"] is True and v.caps()["count"] == 2
+
+
+def test_W25_最近的人_只用确认的相机_一帧误检不算():
+    c, ev, v = _台()
+    assert v.target() is None
+    for _ in range(3):
+        v.on_persons(_帧(9.0, camera="back"))
+    v.on_persons(_帧(3.0, camera="front"))                # 前相机一帧误检
+    assert v.target() == (5.0, 9.0)
+    v.on_persons(_帧(None, camera="front"))
+    v.on_persons(_帧(3.0, camera="front"))
+    assert v.target() == (5.0, 3.0)
+    v.on_disconnect()
+    assert v.target() is None
