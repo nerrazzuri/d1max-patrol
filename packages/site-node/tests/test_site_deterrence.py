@@ -772,3 +772,43 @@ async def test_W24外审6_保安处理掉告警之后站点重启_不再报一�
     desk2.alerts = t.desk.alerts
     await desk2.tick()
     assert t.desk.alerts.raised == [], "报成过就记在库里,重启不再报"
+
+
+async def test_W24复查二2_真告警台_告警报成删待报没成_保安解决后重启_不再报(台, monkeypatch):
+    from d1max_site.alert_store import AlertDesk
+    t = 台
+    t.desk.alerts = AlertDesk(t.db, now_ms=t.clock)
+    await _到场(t)
+    real = t.db.tx
+    orig = t.desk._flush_alerts
+
+    def 删不掉():
+        class 坏:
+            def __enter__(self):
+                raise RuntimeError("库锁住了")
+
+            def __exit__(self, *a):
+                return False
+        n = [0]
+
+        def tx():
+            n[0] += 1
+            return 坏() if n[0] == 2 else real()        # 第 1 次写告警成,第 2 次删待报炸
+        monkeypatch.setattr(t.db, "tx", tx)
+        try:
+            return orig()
+        finally:
+            monkeypatch.setattr(t.db, "tx", real)
+    monkeypatch.setattr(t.desk, "_flush_alerts", 删不掉)
+    _人员(t, True)
+    await t.desk.tick()
+    monkeypatch.setattr(t.desk, "_flush_alerts", orig)
+    [a] = t.desk.alerts.open()
+    assert len(t.db.query("SELECT 1 FROM pending_alerts")) == 1, "删待报没成"
+    t.desk.alerts.resolve(a["key"], who="gina")           # 保安解决了
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)   # 站点重启
+    desk2.alerts = AlertDesk(t.db, now_ms=t.clock)
+    await desk2.tick()
+    assert desk2.alerts.open() == [], "意图报过了,不再报"
+    assert len(t.db.query("SELECT 1 FROM alerts")) == 1
+    assert not t.db.query("SELECT 1 FROM pending_alerts")
