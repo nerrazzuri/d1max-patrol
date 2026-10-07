@@ -168,3 +168,68 @@ def test_图有新版本_拦截点标出来要重设(台, tmp_path):
     _屋子(src, 1.6)
     t.cat.import_dir(src, map_id="house", version="v3")
     assert t.desk.intercepts()["intercepts"][0]["newer_version"] == "v3"
+
+
+# ------------------------------------------------------------ W23 外审
+
+
+def test_外审1_查的时候禁行区被改了_存的指纹是查之前的_对账会重查(台):
+    t = 台
+    real = t.reach.check
+
+    def 查完正好有人封了门(name, map_id, version, x, y):
+        r = real(name, map_id, version, x, y)
+        t.zones.put("house", "wide", [{"id": "door", "kind": "nogo", "label": "门",
+                                       "polygon": [[3.6, 1.0], [4.4, 1.0], [4.4, 3.0],
+                                                   [3.6, 3.0]]}],
+                    base_revision=0, by="alice")
+        return r
+    t.reach.check = 查完正好有人封了门
+    t.desk.set_intercept("backyard", map_id="house", map_version="wide", x=6.0, y=2.0, yaw=0.0)
+    assert t.desk.intercept("backyard")["reach"] == "", "查的时候还走得到"
+    t.reach.check = real
+    assert t.desk.recheck_intercepts() == 1, "指纹对不上:重查"
+    assert "走不到" in t.desk.intercept("backyard")["reach"]
+
+
+async def test_外审2_首单没派成_补派前拦截点已经走不到_并进来的全部记走不到_照样报警(台):
+    t = 台
+    t.desk.set_intercept("backyard", map_id="house", map_version="wide", x=6.0, y=2.0, yaw=0.0)
+    t.desk.map_zone("back", "backyard")
+    for eid, outcome, merged in (("e1", "dispatch_failed", None), ("e2", "merged", 1),
+                                 ("e3", "merged", 1)):
+        t.db.query("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome, "
+                   "intercept, merged_into, note, detail, told_ms) VALUES ('nvr',?,'intrusion',"
+                   "'back',1000,?,'backyard',?,'','{}',NULL)", (eid, outcome, merged))
+    t.db.query("UPDATE intercepts SET reach='从待命点走不到 backyard(门封了)'")
+    told = []
+    t.desk.on_outcome = told.append
+    t.desk._promote_follower(1)
+    rows = {r["event_id"]: r for r in t.desk.list()}
+    assert rows["e2"]["outcome"] == "unreachable" and rows["e3"]["outcome"] == "unreachable"
+    assert "门封了" in rows["e2"]["note"] and rows["e2"]["robot_id"] is None
+    assert sorted(r["event_id"] for r in told) == ["e2", "e3"], "照样报「没狗去」"
+
+
+def test_外审3_命令行设拦截点也查_墙里不收_走得到的收(tmp_path):
+    from test_site_intercept_reach import _屋子
+
+    from d1max_site import main as site_main
+    h = tmp_path / "site"
+    assert site_main.main(["--home", str(h), "init", "--site-id", "estate-1",
+                           "--hostname", "localhost", "--broker-port", "18883"]) == 0
+    db = SiteDB(h / "site.db")
+    src = _files(tmp_path / "src")
+    _屋子(src, 1.6)
+    MapCatalog(h, db, now_ms=lambda: 1000).import_dir(src, map_id="house", version="1")
+    db.query("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
+             "is_default) VALUES ('A', 'dock', 'house', '1', 1.5, 2.0, 0, 1)")
+    db.close()
+    assert site_main.main(["--home", str(h), "intercept", "inwall", "--map", "house:1",
+                           "--pose", "4.0,0.5,0"]) == 2, "墙里:不收"
+    assert site_main.main(["--home", str(h), "intercept", "backyard", "--map", "house:1",
+                           "--pose", "6.0,2.0,0"]) == 0
+    db = SiteDB(h / "site.db")
+    names = [r["name"] for r in db.query("SELECT name FROM intercepts")]
+    db.close()
+    assert names == ["backyard"]

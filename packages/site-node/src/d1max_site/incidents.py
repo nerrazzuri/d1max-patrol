@@ -182,11 +182,13 @@ class IncidentDesk:
             xs.append(float(v))
         problem = note = key = ""
         if self.reach is not None:
-            # W23:设的时候就查;走不到、站不下、不在图上的不收(说原因)
+            # W23:设的时候就查;走不到、站不下、不在图上的不收(说原因)。**指纹在查之前取**
+            # (W23 外审):查的这段时间禁行区、待命点改了,存下的指纹就跟现在的对不上,对账会重查
+            key = self.reach.key(map_id, map_version, xs[0], xs[1])
             r = self.reach.check(name, map_id, map_version, xs[0], xs[1])
             if r.problem:
                 raise IncidentError(f"拦截点 {name} 设不了:{r.problem}")
-            note, key = r.note, self.reach.key(map_id, map_version, xs[0], xs[1])
+            note = r.note
         with self.db.tx() as c:
             c.execute("INSERT INTO intercepts(name, map_id, map_version, x, y, yaw, reach, "
                       "reach_note, reach_key) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO "
@@ -472,7 +474,9 @@ class IncidentDesk:
     def _promote_follower(self, failed: int) -> None:
         """首条派失败:并进它的第一条提升为新的出动(重新选狗),其余的改并到这一条。
         **提升也是一次新的出动,要再看一次模式**(W20 外审):并进来的时候布防、首条失败时已经撤防的,
-        并进它的全部改记 ``disarmed``,一条都不派(同防区才会合并,所以是一起撤的)。"""
+        并进它的全部改记 ``disarmed``,一条都不派(同防区才会合并,所以是一起撤的)。
+        **拦截点也要再看一次**(W23 外审):首条等回执期间拦截点被对账成走不到的,并进来的全部记
+        ``unreachable``(照样报「没狗去」),不派。"""
         disarmed: list[int] = []
         with self.db.tx() as c:
             nxt = c.execute("SELECT id, intercept, zone FROM incidents WHERE merged_into=? AND "
@@ -480,16 +484,20 @@ class IncidentDesk:
             if nxt is None:
                 return
             on, mode = self.arming.armed(nxt["zone"]) if self.arming is not None else (True, "")
+            point = self.intercept(nxt["intercept"])
+            stop: tuple[str, str] | None = None
             if not on:
                 from d1max_site.modes import LABEL
+                stop = ("disarmed", f"首条没派成时已是{LABEL[mode]}模式:这个防区撤防,不再派")
+            elif point is not None and point.get("reach"):
+                stop = ("unreachable", f"拦截点走不到:{point['reach']}")
+            if stop is not None:
                 disarmed = [r["id"] for r in c.execute(
                     "SELECT id FROM incidents WHERE merged_into=? AND outcome='merged' ORDER BY id",
                     (failed,)).fetchall()]
-                c.execute("UPDATE incidents SET outcome='disarmed', note=? WHERE merged_into=? "
-                          "AND outcome='merged'",
-                          (f"首条没派成时已是{LABEL[mode]}模式:这个防区撤防,不再派", failed))
+                c.execute("UPDATE incidents SET outcome=?, note=? WHERE merged_into=? "
+                          "AND outcome='merged'", (*stop, failed))
             else:
-                point = self.intercept(nxt["intercept"])
                 got = self._reserve(c, nxt["id"], point) if point else self._set(
                     c, nxt["id"], outcome="unmapped", note="拦截点没了")
                 c.execute("UPDATE incidents SET merged_into=? WHERE merged_into=? AND "
