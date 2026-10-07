@@ -249,11 +249,13 @@ def cmd_privacy_purge(home: Path, since: str, until: str, robot: str | None,
         raise SiteError(f"时刻要写成 2026-10-08T21:00+08:00 这样:{exc}") from exc
     db = SiteDB(home / "site.db")
     try:
+        from d1max_site.runs import RunDesk
         backup = cfg.get("backup_dir")
-        desk = PrivacyDesk(db, EvidenceStore(home / "evidence", db, now_ms=wall_ms),
-                           now_ms=wall_ms,
+        store = EvidenceStore(home / "evidence", db, now_ms=wall_ms)
+        desk = PrivacyDesk(db, store, now_ms=wall_ms,
                            recordings=RecordingStore(db, home / "recordings", now_ms=wall_ms),
-                           backup_dest=Path(backup) if backup else None)
+                           backup_dest=Path(backup) if backup else None,
+                           exports=RunDesk(store, home=home, now_ms=wall_ms))
         try:
             got = desk.purge(since_ms=since_ms, until_ms=until_ms, robot_id=robot)
         except ValueError as exc:
@@ -554,7 +556,8 @@ class Server:
         self.privacy = PrivacyDesk(self.db, self.evidence, now_ms=wall_ms,
                                    recordings=self.recordings,
                                    backup_dest=Path(backup_dir) if backup_dir else None,
-                                   keep_days=int(rcfg.get("evidence_days", KEEP_DAYS)))
+                                   keep_days=int(rcfg.get("evidence_days", KEEP_DAYS)),
+                                   exports=self.runs)
         self.recordings.on_trimmed = lambda n, oldest: loop_alerts.raise_alert(
             kind="recording_trimmed", robot=_SITE, title=f"站点盘紧,删了最旧的 {n} 段录像",
             detail="不到 30 天就删了:站点盘小,加盘或少录几路")
@@ -908,6 +911,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"删了 {got['runs']} 趟运行记录、{got['recordings']} 段录像"
                   + (f";标了留着没删:运行记录 {got['held_runs']}、录像 {got['held_recordings']}"
                      if got["held_runs"] or got["held_recordings"] else "")
+                  + (f";连带删了 {got['exports']} 份导出" if got.get("exports") else "")
                   + (f";{got['failed']} 样删不掉(看日志,再跑一次)" if got["failed"] else ""))
         elif args.cmd == "backup-open":
             n = cmd_backup_open(Path(args.src), Path(args.dst), Path(args.key))

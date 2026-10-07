@@ -181,7 +181,11 @@ def open_value(db, value: str) -> str:
     box = getattr(db, "sealbox", None)
     if box is None:
         raise SealError("库里的口令加密过,站点没配密钥(secrets_key)")
-    plain = box.open(value)
+    try:
+        plain = box.open(value)
+    except SealError as exc:
+        raise SealError(f"{exc}:/etc/d1max-site/secrets.key 不是加密时的那一把"
+                        "(换新主机恢复时要把原来的 secrets.key 放回去)") from exc
     if len(_opened) > 1000:
         _opened.clear()
     _opened[value] = plain

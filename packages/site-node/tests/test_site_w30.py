@@ -298,3 +298,109 @@ def test_站点配了发行公钥_没签名_签错的不登记_签对的登记(t
     m["signature"] = relsign.sign(m, k)
     (pkg / "release.json").write_text(json.dumps(m))
     assert cat.add(pkg)["name"] == m["name"]
+
+
+# ------------------------------------------------------------ W30 外审
+
+
+def test_外审2_切到加密备份_源已经删了的旧明文备份也加密_不留明文(箱, tmp_path):
+    c = 钟()
+    db, store = _证据(tmp_path, c)
+    _传(store)
+    dest = tmp_path / "bak"
+    orphan = dest / "evidence" / "A" / "巡检" / "20250101T000000Z" / "photos" / "old.jpg"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(b"OLD-PLAIN-PHOTO")                 # 站点上早删了,备份里还有明文
+    old_map = dest / "maps" / "m" / "1" / "floor.pgm"
+    old_map.parent.mkdir(parents=True)
+    old_map.write_bytes(b"OLD-MAP")
+    b = SiteBackup(db, store.root, dest, now_ms=c,
+                   box=SealBox(load_or_create_key(tmp_path / "keys" / "backup.key")))
+    assert b.run_once(), b.last_error
+    plain = [p for p in dest.rglob("*") if p.is_file() and not p.name.endswith(SEALED)]
+    assert plain == [], plain
+    assert not any(b"OLD-PLAIN" in p.read_bytes() or b"OLD-MAP" in p.read_bytes()
+                   for p in dest.rglob("*") if p.is_file())
+    assert (orphan.parent / f"old.jpg{SEALED}").exists()
+    db.close()
+
+
+def test_外审3_删证据连导出一起删_正在打的打完作废(tmp_path):
+    from d1max_site.runs import RunDesk, RunError
+    c, db, store, rec, desk = _台(tmp_path)
+    runs = RunDesk(store, home=tmp_path, now_ms=c)
+    desk.exports = runs
+    r1 = _传(store, stamp=S1, photo=b"PHOTO-1")
+    r2 = _传(store, robot="B", stamp=S2, photo=b"PHOTO-2")
+    meta = runs.export(since_ms=0, until_ms=2_000_000_000_000, robot_id="A", wait=True)
+    other = runs.export(since_ms=0, until_ms=2_000_000_000_000, robot_id="B", wait=True)
+    assert meta["state"] == "ready" and meta["run_ids"] == [r1["id"]]
+    got = desk.purge(since_ms=c.ms - 1000, until_ms=c.ms + 1000, robot_id="A")
+    assert got["runs"] == 1 and got["exports"] == 1
+    with pytest.raises(RunError):
+        runs.export_path(meta["name"])
+    assert runs.export_path(other["name"]).is_file(), "别人的导出不动"
+    # 正在打的:打的时候那一趟被删了 → 打完核一遍作废,不留 zip
+    real = runs.store.dir_of
+    once = []
+
+    def 打着打着被删(r):
+        d = real(r)
+        if r["id"] == r2["id"] and not once:
+            once.append(1)
+            runs.store.dir_of = real                      # 删的时候用真的
+            desk.purge(since_ms=c.ms - 1000, until_ms=c.ms + 1000, robot_id="B")
+        return d
+    runs.store.dir_of = 打着打着被删
+    m3 = runs.export(since_ms=0, until_ms=2_000_000_000_000, robot_id="B", wait=True)
+    runs.store.dir_of = real
+    assert m3["state"] == "failed" and "作废" in m3["error"]
+    assert not (tmp_path / "exports" / m3["name"]).exists()
+    assert not list((tmp_path / "exports").glob("*.tmp"))
+
+
+def test_外审3_过了留存期删的_导出也删(tmp_path):
+    from d1max_site.runs import RunDesk, RunError
+    c, db, store, rec, desk = _台(tmp_path)
+    runs = RunDesk(store, home=tmp_path, now_ms=c)
+    desk.exports = runs
+    _传(store, stamp=S1)
+    meta = runs.export(since_ms=0, until_ms=2_000_000_000_000, wait=True)
+    c.ms += 91 * DAY_MS
+    assert desk.prune() == 1
+    with pytest.raises(RunError):
+        runs.export_path(meta["name"])
+
+
+def test_外审4_换新主机恢复_两把密钥都放回_口令照样解得开_少了secrets_key说清楚(tmp_path):
+    """站点主机坏了:新主机上用备份密钥解开备份、库放回、**原来的 secrets.key 放回**,摄像头口令、
+    事件源密钥照常;secrets.key 用了新生成的那把就解不开,报错说清楚要放回原来那一把。"""
+    from d1max_site import sealbox
+    from d1max_site.cctv import Camera, add_camera, load_cameras
+    from d1max_site.main import cmd_backup_open
+    old = tmp_path / "old"
+    skey, bkey = old / "keys" / "secrets.key", old / "keys" / "backup.key"
+    c = 钟()
+    db = SiteDB(old / "site.db")
+    db.sealbox = SealBox(load_or_create_key(skey))
+    add_camera(db, Camera(name="gate", onvif_url="http://x", username="u", password="Cam#1",
+                          zone="z"), now_ms=1)
+    store = EvidenceStore(old / "evidence", db, now_ms=c)
+    b = SiteBackup(db, store.root, tmp_path / "bak", now_ms=c,
+                   box=SealBox(load_or_create_key(bkey)))
+    assert b.run_once(), b.last_error
+    db.close()
+    sealbox._opened.clear()                               # 新主机:内存里什么都没有
+    out = tmp_path / "restored"
+    cmd_backup_open(tmp_path / "bak", out, bkey)          # 离线另存的备份密钥
+    [snap] = sorted((out / "db").glob("site-*.db"))
+    new = tmp_path / "new"
+    new.mkdir()
+    (new / "site.db").write_bytes(snap.read_bytes())
+    db2 = SiteDB(new / "site.db")
+    db2.sealbox = SealBox(load_or_create_key(new / "keys" / "secrets.key"))   # 新生成的:不对
+    with pytest.raises(SealError, match="secrets.key"):
+        load_cameras(db2)
+    db2.sealbox = SealBox(load_or_create_key(skey))      # 放回离线另存的那一把
+    assert load_cameras(db2)[0].password == "Cam#1"
+    db2.close()
