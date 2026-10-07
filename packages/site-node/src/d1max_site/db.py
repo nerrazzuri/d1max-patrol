@@ -214,6 +214,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     context      TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS alerts_last ON alerts(last_ms);
+-- W21 复查:站点起来时按种类取每台狗最近一条事件(上装故障的全集),不扫整张事件表。
+CREATE INDEX IF NOT EXISTS events_kind ON events(kind, robot_id, received_at);
 CREATE TABLE IF NOT EXISTS teleop_leases (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     robot_id        TEXT NOT NULL,

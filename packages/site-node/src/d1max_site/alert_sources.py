@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -129,6 +130,10 @@ class SiteAlertSources:
         self._incident_zones: dict[str, list[str]] = {}
         #: 每条狗的告警都带上狗最后在哪、在跑哪一趟(W17)。
         desk.context_for = self.here
+        #: 每台狗最近一次报的上装故障(W21 复查,``payload_*`` 的集合)。告警按它**每拍对账**:
+        #: 报、解决失败了下一拍再来;站点起来时从事件库读回每台狗最近一条 ``robot_fault``。
+        self._payload: dict[str, frozenset[str]] = {}
+        self._payload_loaded = False
 
     def here(self, robot: str) -> dict:
         """这台狗的现场(W17):最后一次报的地图位姿(带站点收到的时刻)、正在跑的那一趟。站点那一行、
@@ -212,8 +217,9 @@ class SiteAlertSources:
                                   title=f"开跑:{s.task.kind} {s.task.task_id}")
 
     def step(self) -> None:
-        """站点主循环每 ``STEP_S`` 秒调一次:看掉线,再让 P1 未确认的升档,再修剪内存。"""
+        """站点主循环每 ``STEP_S`` 秒调一次:看掉线,对账上装告警,再让 P1 未确认的升档,再修剪内存。"""
         self.tick()
+        self.reconcile_payload()
         self.desk.escalate()
         self.desk.trim()
 
@@ -350,14 +356,53 @@ class SiteAlertSources:
             if fallen and not m.fallen:
                 self.desk.raise_alert(kind="fallen", robot=rid, title="狗跌倒了", detail=text)
             m.fallen = fallen
-            self._payload_faults(rid, faults)
+            # 先记下全集(事件已经落库,重投会被去重跳过:告警这一下没成,只能靠每拍对账补)
+            self._payload[rid] = frozenset(f.code for f in faults if f.code.startswith("payload_"))
+            try:
+                self._payload_faults(rid, self._payload[rid])
+            except Exception:
+                log.exception("%s 的上装告警这一下没办成,下一拍对账再来", rid)
 
-    def _payload_faults(self, rid: str, faults: tuple) -> None:
+    def _load_payload(self) -> None:
+        """站点起来:每台狗最近一条 ``robot_fault``(按站点收到的时刻)里的上装故障。"""
+        db = getattr(self.desk, "db", None)
+        if db is None:
+            self._payload_loaded = True
+            return
+        rows = db.query(
+            "SELECT e.robot_id, e.data FROM events e WHERE e.kind='robot_fault' AND e.rowid = ("
+            "SELECT x.rowid FROM events x WHERE x.kind='robot_fault' AND x.robot_id=e.robot_id "
+            "ORDER BY x.received_at DESC, x.rowid DESC LIMIT 1)")
+        for r in rows:
+            if r["robot_id"] in self._payload:
+                continue                    # 起来之后已经收到更新的了
+            try:
+                faults = parse_fault_event_data(json.loads(r["data"]))
+            except (ContractError, ValueError):
+                continue
+            self._payload[r["robot_id"]] = frozenset(
+                f.code for f in faults if f.code.startswith("payload_"))
+        self._payload_loaded = True
+
+    def reconcile_payload(self) -> None:
+        """按每台狗最近的上装故障全集对账告警(W21 复查)。一台没成不挡别的台,下一拍再来。"""
+        if not self._payload_loaded:
+            try:
+                self._load_payload()
+            except Exception:
+                log.exception("读不回各狗最近的上装故障,下一拍再读")
+                return
+        for rid, codes in list(self._payload.items()):
+            try:
+                self._payload_faults(rid, codes)
+            except Exception:
+                log.exception("%s 的上装告警对账没成,下一拍再来", rid)
+
+    def _payload_faults(self, rid: str, present: frozenset[str]) -> None:
         """上装关不上、状态不明(W21 复查,狗报 ``payload_<哪一路>``)。
         **告警簿说了算**(同 W19 摄像头):
         这一路在故障里、簿子里还没挂着就报;不在了就解决 —— 重复上报不重复报,站点重启后也对得上。
         ``robot_fault`` 是整个集合(变了才发、代理起来先发一次全集),所以没出现就是好了。"""
-        present = {f.code for f in faults}
         for out, name in PAYLOAD_OUTPUTS.items():
             kind = f"payload_{out}"
             if kind in present:

@@ -102,3 +102,103 @@ def test_W21复查_别的狗的上装故障不串(tmp_path):
     src.on_event("A", _故障事件(1, "payload_strobe"))
     src.on_event("B", _故障事件(1))
     assert [a["robot"] for a in _开着的(desk, "payload_strobe")] == ["A"]
+
+
+def _落库(db, rid, seq, *codes, at=1):
+    """像派遣器那样先把事件存进库(告警源回调没成也在库里)。"""
+    import json
+
+    from d1max_contract.hal import Fault
+    from d1max_contract.messages import fault_event_data
+    db.query("INSERT INTO events(robot_id, boot_id, seq, event_id, kind, data, stamp, received_at) "
+             "VALUES (?,?,?,?,?,?,?,?)",
+             (rid, "b", seq, f"e{seq}", "robot_fault",
+              json.dumps(fault_event_data(tuple(Fault(code=c, fatal=False, text=c)
+                                                for c in codes))), 1, at))
+
+
+def _台(tmp_path):
+    from d1max_site.alert_sources import SiteAlertSources
+    from d1max_site.alert_store import AlertDesk
+    from d1max_site.db import SiteDB
+    db = SiteDB(tmp_path / "s.db")
+    desk = AlertDesk(db, now_ms=lambda: 1_000)
+    return db, desk, SiteAlertSources(desk, now_ms=lambda: 1_000)
+
+
+def test_W21复查2_第一次报告警没成_下一拍补上(tmp_path):
+    db, desk, src = _台(tmp_path)
+    real, calls = desk.raise_alert, []
+
+    def 炸一次(**kw):
+        calls.append(kw["kind"])
+        if len(calls) == 1:
+            raise RuntimeError("库锁住了")
+        return real(**kw)
+    desk.raise_alert = 炸一次
+    _落库(db, "A", 1, "payload_siren")
+    src.on_event("A", _故障事件(1, "payload_siren"))     # 回调里没成(不往外抛)
+    assert not _开着的(desk, "payload_siren")
+    src.on_event("A", _故障事件(1, "payload_siren"))     # 重投同一条:派遣器那头会去重,这里也补不上
+    src.step()                                            # 下一拍对账
+    assert len(_开着的(desk, "payload_siren")) == 1
+    src.step()
+    assert len(_开着的(desk, "payload_siren")) == 1, "对账不重复报"
+
+
+def test_W21复查2_好了_解决没成_下一拍接着解决(tmp_path):
+    db, desk, src = _台(tmp_path)
+    src.on_event("A", _故障事件(1, "payload_spotlight"))
+    assert _开着的(desk, "payload_spotlight")
+    real = desk.resolve_all
+    desk.resolve_all = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("库锁住了"))
+    src.on_event("A", _故障事件(2))
+    assert _开着的(desk, "payload_spotlight"), "这一下没解决成"
+    desk.resolve_all = real
+    src.step()
+    assert not _开着的(desk, "payload_spotlight")
+
+
+def test_W21复查2_事件落了库告警没做成_站点重启后对账补上(tmp_path):
+    from d1max_site.alert_sources import SiteAlertSources
+    from d1max_site.alert_store import AlertDesk
+    db, desk, src = _台(tmp_path)
+    _落库(db, "A", 1, "payload_siren", "payload_strobe", at=10)
+    _落库(db, "A", 2, "payload_siren", at=20)                # A 最近一条:只剩警笛
+    _落库(db, "B", 1, "payload_spotlight", at=15)
+    _落库(db, "B", 2, at=30)                                 # B 最近一条:都好了
+    desk.raise_alert(kind="payload_spotlight", robot="B", title="老的", detail="")
+    # 告警源一次都没成功处理过这几条(或者站点在那之前停了):重启
+    desk2 = AlertDesk(db, now_ms=lambda: 2_000)
+    src2 = SiteAlertSources(desk2, now_ms=lambda: 2_000)
+    src2.step()
+    assert [a["robot"] for a in _开着的(desk2, "payload_siren")] == ["A"]
+    assert not _开着的(desk2, "payload_strobe"), "按最近一条算,警灯早好了"
+    assert not _开着的(desk2, "payload_spotlight"), "B 最近一条好了:老告警解决"
+
+
+def test_W21复查2_读库失败_下一拍再读(tmp_path):
+    db, desk, src = _台(tmp_path)
+    _落库(db, "A", 1, "payload_siren")
+    real = db.query
+    db.query = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("盘忙"))
+    src.step()
+    assert not _开着的(desk, "payload_siren")
+    db.query = real
+    src.step()
+    assert len(_开着的(desk, "payload_siren")) == 1
+
+
+def test_W21复查2_一台对账炸了_不挡别的台(tmp_path):
+    db, desk, src = _台(tmp_path)
+    real = desk.raise_alert
+
+    def A总炸(**kw):
+        if kw["robot"] == "A":
+            raise RuntimeError("A 的这条写不进去")
+        return real(**kw)
+    desk.raise_alert = A总炸
+    _落库(db, "A", 1, "payload_siren", at=1)
+    _落库(db, "B", 1, "payload_siren", at=2)
+    src.step()
+    assert [a["robot"] for a in _开着的(desk, "payload_siren")] == ["B"]
