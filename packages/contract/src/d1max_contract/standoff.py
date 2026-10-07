@@ -11,8 +11,9 @@
   原地站定(不转身、不往前),能力里报 ``cornered``,站点据此报 P1 告警(决策 40);
 - 人不知道在哪(检测中断、没测到距离)→ 原地站着,不动。
 
-``payload``:``{max_s, leash_m}``。``max_s`` 到了狗自己收(站点断了也不会一直守着);
-``leash_m``:离开场的位置最远退多远。
+``payload``:``{max_s, leash_m, center}``。``max_s`` 到了狗自己收(站点断了也不会一直守着);
+``center``:拦截点(地图位姿,这一场出警时 goto 的目标点);``leash_m``:离拦截点最远退多远。
+**同一场驱离的中心是固定的**(W25 外审 2):补派、狗重启都按它算,不按任务起跑时狗站在哪。
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from d1max_contract.errors import ContractError
+from d1max_contract.messages import MapPose
 
 #: 比回待命点(-10)还低:任何派单都能抢。
 STANDOFF_PRIORITY = -20
@@ -39,15 +41,16 @@ STATES = ("idle", "hold", "retreat", "cornered")
 @dataclass(frozen=True)
 class StandoffRequest:
     max_s: int
+    center: MapPose
     leash_m: float = DEFAULT_LEASH_M
 
     def to_payload(self) -> dict[str, Any]:
-        return {"max_s": self.max_s, "leash_m": self.leash_m}
+        return {"max_s": self.max_s, "leash_m": self.leash_m, "center": self.center.to_wire()}
 
 
 def parse_standoff(payload: Any) -> StandoffRequest:
-    if not isinstance(payload, dict) or set(payload) - {"max_s", "leash_m"}:
-        raise ContractError("standoff:payload 只认 max_s、leash_m")
+    if not isinstance(payload, dict) or set(payload) - {"max_s", "leash_m", "center"}:
+        raise ContractError("standoff:payload 只认 max_s、leash_m、center")
     m = payload.get("max_s")
     if isinstance(m, bool) or not isinstance(m, int) or not 1 <= m <= MAX_S:
         raise ContractError(f"standoff:max_s 要是 1–{MAX_S} 的整数:{m!r}")
@@ -55,4 +58,8 @@ def parse_standoff(payload: Any) -> StandoffRequest:
     if isinstance(lm, bool) or not isinstance(lm, (int, float)) or not math.isfinite(lm) \
             or not 0.5 <= lm <= MAX_LEASH_M:
         raise ContractError(f"standoff:leash_m 要在 0.5–{MAX_LEASH_M} 米:{lm!r}")
-    return StandoffRequest(max_s=m, leash_m=float(lm))
+    try:
+        center = MapPose.from_wire(payload.get("center"))
+    except ContractError as exc:
+        raise ContractError(f"standoff:center 不成形:{exc}") from None
+    return StandoffRequest(max_s=m, center=center, leash_m=float(lm))

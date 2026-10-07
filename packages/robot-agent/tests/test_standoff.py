@@ -7,10 +7,12 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
-from d1max_agent.tasks.standoff import RETREAT_V, StandoffTask
+from d1max_agent.tasks.standoff import RETREAT_V, RETREAT_W, StandoffTask
 from d1max_contract.hal import VelocityResult
-from d1max_contract.messages import TaskState
+from d1max_contract.messages import MapPose, TaskState
 from d1max_contract.standoff import StandoffRequest
+
+CENTER = MapPose(map_id="m", map_version="1", frame_id="map", x=0.0, y=0.0, yaw=0.0)
 
 
 class 假狗:
@@ -33,18 +35,19 @@ class 假狗:
 
 class 台:
     def __init__(self, *, target=(0.0, 2.0), leash=6.0, blocked=lambda vx, wz: "",
-                 nogo=lambda dx, dy: ""):
+                 nogo=lambda x, y, d: ""):
         self.t = 0
         self.target = target
         self.pose = (0.0, 0.0, 0.0)
         self.blocked = blocked
         self.dog = 假狗()
         self.task = StandoffTask(
-            task_id="standoff-1", req=StandoffRequest(max_s=60, leash_m=leash), hal=self.dog,
+            task_id="standoff-1", req=StandoffRequest(max_s=60, center=CENTER, leash_m=leash),
+            hal=self.dog,
             now_ms=lambda: self.t, target=lambda: self.target,
             check=lambda vx, wz: SimpleNamespace(ok=not self.blocked(vx, wz),
                                                  reason=self.blocked(vx, wz)),
-            odom=lambda: self.pose, nogo=nogo)
+            here=lambda: self.pose, nogo=nogo)
 
     async def 拍(self, n=1):
         for _ in range(n):
@@ -127,10 +130,43 @@ async def test_拴绳_离拦截点超过就不退了():
 
 
 async def test_禁行区_定位不可信_都不退():
-    s = 台(target=(0.0, 2.0), nogo=lambda dx, dy: "再退就进禁行区「池塘」")
+    s = 台(target=(0.0, 2.0), nogo=lambda x, y, d: "再退就碰禁行区「池塘」")
     await s.task.start()
     await s.拍()
     assert s.task.mode == "cornered" and "池塘" in s.task.why
+    s2 = 台(target=(0.0, 2.0))
+    s2.pose = None
+    await s2.task.start()
+    await s2.拍()
+    assert s2.task.mode == "cornered" and "定位不可信" in s2.task.why
+
+
+def _离矩形(x, y, r):
+    x0, y0, x1, y1 = r
+    return math.hypot(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
+
+
+async def test_外审3_禁行区贴着前侧_带弧扫进去的那一边不走_落点没事也不行():
+    zone = (0.0, 0.45, 0.8, 1.0)                          # 机身左前方 0.21 m
+    s = 台(target=(0.0, 2.0), blocked=lambda vx, wz: "扫过区有挡" if wz == 0.0 else "",
+          nogo=lambda x, y, d: "禁行区「花坛」" if _离矩形(x, y, zone) <= d else "")
+    await s.task.start()
+    await s.拍()
+    assert s.task.mode == "retreat" and s.dog.cmds[-1] == (-RETREAT_V, -RETREAT_W), \
+        "往左带弧机身角会扫到花坛边上:只能往右"
+    s2 = 台(target=(0.0, 2.0), blocked=lambda vx, wz: "扫过区有挡" if wz <= 0.0 else "",
+           nogo=lambda x, y, d: "禁行区「花坛」" if _离矩形(x, y, zone) <= d else "")
+    await s2.task.start()
+    await s2.拍()
+    assert s2.task.mode == "cornered" and "花坛" in s2.task.why
+
+
+async def test_外审2_补派_重启_拴绳中心都是拦截点_退过的不清零():
+    s = 台(target=(0.0, 2.0), leash=6.0)
+    s.pose = (-5.8, 0.0, 0.0)                             # 上一趟已经退到离拦截点 5.8 m
+    await s.task.start()                                  # 补派的新一趟
+    await s.拍()
+    assert s.task.mode == "cornered" and "超过 6 m" in s.task.why
 
 
 async def test_人在哪不知道_不动():
@@ -236,7 +272,12 @@ async def test_真代理(tmp_path):
     try:
         await _拍(rt, broker, dog, c, 3, person=None)
         assert ears.by["capabilities"][-1]["tasks"]["standoff"] == {"state": "idle"}
-        await rt._on_cmd(_cmd("standoff", {"max_s": 60, "leash_m": 6.0}, "s1", c))
+        bad = {"max_s": 60, "leash_m": 6.0, "center": {**CENTER.to_wire(), "map_version": "9"}}
+        await rt._on_cmd(_cmd("standoff", bad, "s0", c))
+        await broker.drain()
+        assert ears.by["cmd/ack"][-1]["reason"] == "map_mismatch", "拦截点不在狗加载的图上:拒"
+        await rt._on_cmd(_cmd("standoff", {"max_s": 60, "leash_m": 6.0,
+                                           "center": CENTER.to_wire()}, "s1", c))
         await broker.drain()
         assert ears.by["cmd/ack"][-1]["result"] == "accepted", ears.by["cmd/ack"][-1]
         x0 = (await dog.odometry()).x
@@ -259,3 +300,12 @@ async def test_人在正侧面_带弧被挡_直退拉不开_算无路可退不�
     await s.task.start()
     await s.拍()
     assert s.task.mode == "cornered" and "拉不开距离" in s.task.why and s.dog.cmds == []
+
+
+async def test_外审3_禁行区在停车那段路上_也不退():
+    zone = (-1.5, -1.0, -1.10, 1.0)          # 前推 1.5 s 够不着,再算停车那 0.5 s 就碰上
+    s = 台(target=(0.0, 2.0), blocked=lambda vx, wz: "扫过区有挡" if wz != 0.0 else "",
+          nogo=lambda x, y, d: "禁行区「水池」" if _离矩形(x, y, zone) <= d else "")
+    await s.task.start()
+    await s.拍()
+    assert s.task.mode == "cornered" and "水池" in s.task.why

@@ -4,15 +4,18 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from d1max_contract.messages import Event
+from d1max_contract.messages import Event, MapPose
 from d1max_site.db import SiteDB
 from d1max_site.deterrence import CAP_S, KEEP_S, DeterrenceDesk, DeterrenceError
 from d1max_site.priorities import EVENT
 
+INTERCEPT = MapPose(map_id="m", map_version="1", frame_id="map", x=12.0, y=-3.0,
+                    yaw=0.0).to_wire()
 CAPS = {"outputs": ["strobe", "siren", "spotlight", "speaker"], "max_s": 600.0,
         "clips": ["warn-zh", "warn-en", "warn-ms", "notified-zh", "notified-en"], "tts": False}
 
@@ -41,6 +44,9 @@ class 假派遣:
 
     def on_event(self, cb):
         self.cbs.append(cb)
+
+    async def abort(self, rid, task_id, *, issued_by):
+        return {"ack": {"result": "rejected", "reason": "no_such_task"}}
 
     async def deter(self, rid, payload, *, issued_by, priority):
         if self.fail:
@@ -78,6 +84,9 @@ def 台(tmp_path):
     db.query("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome, robot_id, "
              "task_id, note, detail) VALUES ('nvr','e1','intrusion','front',1,'dispatched','A',"
              "'incident-abc','','{}')")
+    db.query("INSERT INTO commands(command_id, task_id, robot_id, kind, payload, issued_by, "
+             "issued_at) VALUES ('g1','incident-abc','A','goto',?,'incident',1)",
+             (json.dumps({"target": INTERCEPT}),))
     clock, disp, stb = 钟(), 假派遣(), 假待命()
     desk = DeterrenceDesk(db, disp, now_ms=clock, standby=stb)
     yield SimpleNamespace(db=db, clock=clock, disp=disp, stb=stb, desk=desk)
@@ -817,7 +826,7 @@ async def test_W24复查二2_真告警台_告警报成删待报没成_保安解�
 # ------------------------------------------------------------ W25:保持距离
 
 
-def _会守(t, *, fail=False):
+def _会守(t, *, fail=False, report=True, abort_fail=0):
     """假派遣器加上保持距离:能力里报 standoff,派、撤都记下。"""
     t.disp.clients["A"].capabilities.tasks["standoff"] = {"state": "idle"}
     t.disp.standoffs, t.disp.aborts = [], []
@@ -826,12 +835,18 @@ def _会守(t, *, fail=False):
         if fail:
             raise RuntimeError("狗不在线")
         t.disp.standoffs.append((rid, task_id, req))
-        t.disp.clients[rid].capabilities.tasks["standoff"] = {"state": "hold",
-                                                              "task_id": task_id}
+        if report:                                        # 狗的能力马上就报在守(不报:还没到)
+            t.disp.clients[rid].capabilities.tasks["standoff"] = {"state": "hold",
+                                                                  "task_id": task_id}
         return {"ack": {"result": "accepted"}}
+
+    left = [abort_fail]
 
     async def abort(rid, task_id, *, issued_by):
         t.disp.aborts.append((rid, task_id))
+        if left[0]:
+            left[0] -= 1
+            raise RuntimeError("回执没到")
         return {"ack": {"result": "accepted"}}
     t.disp.standoff, t.disp.abort = standoff, abort
 
@@ -933,3 +948,80 @@ async def test_W25_狗被派去干别的了_照样收场(台):
         task_id="manual-1", state=SimpleNamespace(value="running"))
     await t.desk.tick()
     assert "A" not in t.desk.sessions
+
+
+async def test_W25外审1_刚派出去能力还没更新就解除_照样撤(台):
+    t = 台
+    _会守(t, report=False)
+    await _到场(t)
+    assert len(t.disp.standoffs) == 1 and t.desk.view()[0]["standoff"] == "idle"
+    await t.desk.release("A", by="gina")
+    assert t.disp.aborts == [("A", "standoff-incident-abc")] and "A" not in t.desk.sessions
+
+
+async def test_W25外审1_站点重启后收场_照样撤(台):
+    t = 台
+    _会守(t)
+    await _到场(t)
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
+    assert desk2.sessions["A"].standoff is None
+    await desk2.release("A", by="gina")
+    assert t.disp.aborts == [("A", "standoff-incident-abc")] and t.stb.back == ["A"]
+
+
+async def test_W25外审1_撤没成_停在收尾中_重启后接着撤_撤成才删库回程(台):
+    t = 台
+    _会守(t, abort_fail=2)
+    await _到场(t)
+    await t.desk.release("A", by="gina")                  # 收尾中落了库:解除照样回成功,后面接着撤
+    assert "A" in t.desk.sessions and t.stb.back == [] and t.disp.on() == set()
+    assert t.db.query("SELECT ending FROM deter_sessions")[0][0], "收尾中落了库"
+    await t.desk.tick()
+    assert len(t.disp.aborts) == 1, "15 秒内不重撤"
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)   # 站点重启
+    await desk2.tick()                                    # 第二次:还是没成
+    assert "A" in desk2.sessions and len(t.disp.aborts) == 2
+    t.clock.go(15)
+    await desk2.tick()
+    assert "A" not in desk2.sessions and t.stb.back == ["A"] and len(t.disp.aborts) == 3
+
+
+async def test_W25外审2_每次派都带同一个拦截点_补派_重启都一样(台):
+    t = 台
+    _会守(t, report=False)
+    await _到场(t)
+    t.clock.go(15)
+    await t.desk.tick()                                   # 狗没报在守:补派
+    desk2 = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
+    await desk2.tick()                                    # 重启后再派
+    assert len(t.disp.standoffs) == 3
+    for _, _, req in t.disp.standoffs:
+        assert req.center.to_wire() == INTERCEPT
+
+
+async def test_W25外审2_取不到拦截点_不派_收场也不用撤(台):
+    t = 台
+    t.db.query("DELETE FROM commands")
+    _会守(t)
+    await _到场(t)
+    await t.desk.tick()
+    assert t.disp.standoffs == [] and t.desk.view()[0]["standoff"] is None
+    await t.desk.release("A", by="gina")
+    assert t.disp.aborts == [] and "A" not in t.desk.sessions
+
+
+async def test_W25外审1_撤被拒_不是没这个任务_当没撤成接着撤(台):
+    t = 台
+    _会守(t)
+    await _到场(t)
+    tries = []
+
+    async def abort(rid, task_id, *, issued_by):
+        tries.append(task_id)
+        return {"ack": {"result": "rejected", "reason": "stale_epoch"}}
+    t.disp.abort = abort
+    await t.desk.release("A", by="gina")
+    assert "A" in t.desk.sessions and t.stb.back == []
+    t.clock.go(15)
+    await t.desk.tick()
+    assert len(tries) == 2 and "A" in t.desk.sessions
