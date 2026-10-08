@@ -150,13 +150,24 @@ def yolo_people(out: Any, *, score: float = 0.5, iou: float = 0.45, scale: float
     return boxes
 
 
+#: CPU 推理的线程上限。onnxruntime 缺省把核占满:C40221 上 CPU 版跑两路相机吃到约 4.5 核,
+#: 跟 MOLA、感知抢 CPU(2026-10-08)。GPU 后端不受它影响。
+THREADS = 2
+#: TensorRT 引擎缓存。第一次建引擎要几分钟,不缓存的话每次重启检测节点都要再等一遍。
+TRT_CACHE = Path("/var/lib/d1max/agent/trt-cache")
+
+
 class OnnxDetector:
     """ONNX 模型(YOLO 系,输入 ``(1, 3, size, size)``、RGB、0–1)。要 ``onnxruntime`` 与 OpenCV:
-    **都是真机项**,开发机上没装。装不上、模型读不了抛 :class:`DetectorUnavailable`。"""
+    **都是真机项**,开发机上没装。装不上、模型读不了抛 :class:`DetectorUnavailable`。
+
+    后端按 TensorRT → CUDA → CPU 的顺序挑装了的(Orin 上要 Jetson 版 ``onnxruntime-gpu``,
+    C40221 实测 CUDA 单帧 26 ms、CPU 330 ms);实际用上的记在 :attr:`backend`。"""
 
     def __init__(self, model: Path, *, size: int = 640, score: float = 0.5,
                  providers: Sequence[str] = ("TensorrtExecutionProvider", "CUDAExecutionProvider",
-                                             "CPUExecutionProvider")) -> None:
+                                             "CPUExecutionProvider"),
+                 threads: int = THREADS, trt_cache: Path | None = TRT_CACHE) -> None:
         try:
             import cv2  # noqa: F401
             import onnxruntime as ort
@@ -166,10 +177,25 @@ class OnnxDetector:
             raise DetectorUnavailable(f"没有模型文件 {model}")
         try:
             have = set(ort.get_available_providers())
-            self.sess = ort.InferenceSession(str(model),
-                                             providers=[p for p in providers if p in have])
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = max(1, int(threads))
+            opts.inter_op_num_threads = 1
+            chosen: list[Any] = []
+            for p in providers:
+                if p not in have:
+                    continue
+                if p == "TensorrtExecutionProvider" and trt_cache is not None:
+                    Path(trt_cache).mkdir(parents=True, exist_ok=True)
+                    chosen.append((p, {"trt_engine_cache_enable": True,
+                                       "trt_engine_cache_path": str(trt_cache),
+                                       "trt_fp16_enable": True}))
+                else:
+                    chosen.append(p)
+            self.sess = ort.InferenceSession(str(model), sess_options=opts, providers=chosen)
         except Exception as exc:                         # 模型坏了
             raise DetectorUnavailable(f"模型读不了:{exc}") from exc
+        #: 实际用上的后端(``TensorrtExecutionProvider`` / ``CUDA…`` / ``CPU…``)。
+        self.backend = (self.sess.get_providers() or ["?"])[0]
         self.input = self.sess.get_inputs()[0].name
         self.size, self.score = size, score
 
@@ -307,6 +333,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="前雷达外参(frames.json);不给就跟着代理正在用的图(--maps-dir)走")
     ap.add_argument("--maps-dir", type=Path, default=Path("/var/lib/d1max/agent/maps"))
     ap.add_argument("--fps", type=float, default=2.0, help="每个相机每秒最多检测几帧")
+    ap.add_argument("--threads", type=int, default=THREADS,
+                    help="CPU 推理的线程上限(缺省 2;onnxruntime 不限会占满所有核)")
+    ap.add_argument("--trt-cache", type=Path, default=TRT_CACHE,
+                    help="TensorRT 引擎缓存目录(第一次建引擎要几分钟,缓存了重启就不用再等)")
     ap.add_argument("--hfov", type=float, default=HFOV_DEG)
     ap.add_argument("--lens", choices=("equidistant", "pinhole"), default="equidistant")
     ap.add_argument("--z-min", type=float, default=Z_MIN)
@@ -328,7 +358,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     detector: Detector | None = None
     why = ""
     try:
-        detector = OnnxDetector(a.model)
+        detector = OnnxDetector(a.model, threads=a.threads, trt_cache=a.trt_cache)
+        log.info("检测器后端:%s", detector.backend)
     except DetectorUnavailable as exc:
         why = str(exc)
         log.error("检测器起不来(报 no_model):%s", why)
