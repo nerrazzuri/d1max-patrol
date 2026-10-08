@@ -1139,6 +1139,54 @@ def test_离线轮子覆盖三个包的外部依赖_含contract的mqtt扩展():
     assert set(清单) == {w.name for w in WHEELS.glob("*.whl")}, "SHA256SUMS 与目录不一致"
 
 
+#: 狗上装的那几个包的源码(install.sh 往狗的 venv 里装的就是这些)。
+狗上的源码 = ("src", "packages/contract/src", "packages/adapter-sim/src",
+          "packages/adapter-d1max/src", "packages/robot-agent/src")
+#: import 名 → 发行名(两边不一样的那几个)。
+_发行名 = {"yaml": "pyyaml", "paho": "paho_mqtt"}
+
+
+def test_狗上代码import的第三方库都声明了依赖_也就都有离线轮子():
+    """2026-10-08 装 C40221 前查出:robot-agent 的规划桥、障碍模块 import numpy,assembly 一导入就
+    带进来,可哪个 pyproject 都没声明 —— 狗上 install.sh 装出来的 venv 里没有 numpy,代理连 ``--help``
+    都起不来。
+    开发环境一直碰巧装着 numpy,所有测试都盖不住。这里扫语法树:狗上那几个包 import 的每一个第三方库,
+    都要出现在它们声明的依赖里(contract 连 mqtt 扩展);上面那条再保证每个声明的依赖都有离线轮子。"""
+    import ast
+    import sys
+    try:
+        import tomllib
+    except ImportError:                  # 3.10:pytest 自己依赖 tomli
+        import tomli as tomllib
+    本仓 = {p.name for r in 狗上的源码 for p in (ROOT / r).iterdir() if p.is_dir()
+          and not p.name.endswith(".egg-info") and p.name != "__pycache__"}
+    声明的: set[str] = set()
+    for f in ("pyproject.toml", *(f"packages/{包}/pyproject.toml" for 包 in
+                                  ("contract", "adapter-sim", "adapter-d1max", "robot-agent"))):
+        proj = tomllib.loads((ROOT / f).read_text("utf-8"))["project"]
+        deps = list(proj.get("dependencies", []))
+        if f.startswith("packages/contract"):
+            deps += proj["optional-dependencies"]["mqtt"]
+        声明的 |= {_轮子名(re.split(r"[<>=!~\[; ]", d, maxsplit=1)[0]) for d in deps}
+    漏的: dict[str, str] = {}
+    for r in 狗上的源码:
+        for py in (ROOT / r).rglob("*.py"):
+            for 节点 in ast.walk(ast.parse(py.read_text("utf-8"))):
+                if isinstance(节点, ast.Import):
+                    名字 = [a.name for a in 节点.names]
+                elif isinstance(节点, ast.ImportFrom) and 节点.level == 0 and 节点.module:
+                    名字 = [节点.module]
+                else:
+                    continue
+                for m in 名字:
+                    顶 = m.split(".")[0]
+                    if 顶 in sys.stdlib_module_names or 顶 in 本仓 or 顶 == "__future__":
+                        continue
+                    if _轮子名(_发行名.get(顶, 顶)) not in 声明的:
+                        漏的.setdefault(顶, str(py.relative_to(ROOT)))
+    assert not 漏的, f"狗上的代码 import 了没声明的第三方库(狗上装不上、代理起不来):{漏的}"
+
+
 def test_agent入口在robot_agent的scripts里():
     toml = (ROOT / "packages" / "robot-agent" / "pyproject.toml").read_text(encoding="utf-8")
     assert 'd1max-agent = "d1max_agent.main:main"' in toml
