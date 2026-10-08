@@ -172,12 +172,16 @@ class OnnxDetector:
                  threads: int = THREADS, trt: bool = False,
                  trt_cache: Path | None = TRT_CACHE) -> None:
         try:
-            import cv2  # noqa: F401
+            import cv2
             import onnxruntime as ort
         except ImportError as exc:
             raise DetectorUnavailable(f"推理环境没装:{exc}") from exc
         if not Path(model).is_file():
             raise DetectorUnavailable(f"没有模型文件 {model}")
+        # OpenCV 缺省开一个跟核数一样大的线程池:C40221 上 8 个线程各吃 35–48%,把定位器(MOLA)
+        # 挤到每秒 6 帧(2026-10-08)。解一张图、缩一张图用不着并行。
+        if hasattr(cv2, "setNumThreads"):
+            cv2.setNumThreads(1)
         try:
             have = set(ort.get_available_providers())
             opts = ort.SessionOptions()
@@ -205,7 +209,9 @@ class OnnxDetector:
     def detect(self, jpeg: bytes) -> tuple[list[Box], int, int]:
         import cv2
         import numpy as np
-        img = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+        # 按一半分辨率解(1920×1080 → 960×540):模型输入才 640,全尺寸解码白费 CPU。方向按框在画面里的
+        # 比例算,跟分辨率无关。
+        img = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_REDUCED_COLOR_2)
         if img is None:
             raise ValueError("JPEG 解不开")
         h, w = img.shape[:2]
@@ -256,13 +262,25 @@ class PersonNode:
     def on_cloud(self, pts_base: Any, stamp_ns: int = 0, source: str = "front") -> None:
         self.clouds[source] = (pts_base, int(stamp_ns), self._mono())
 
+    def on_cloud_lazy(self, convert: Callable[[], Any], stamp_ns: int = 0,
+                      source: str = "front") -> None:
+        """先只记下「怎么换算」,用到(这帧画面里有人)才换算,换算一次就缓存。两台雷达每秒 20 帧,
+        每帧都换算到狗身系曾占掉人员检测约四分之一的 CPU(2026-10-08 C40221)。"""
+        self.clouds[source] = (convert, int(stamp_ns), self._mono())
+
     def _fresh_cloud(self, stamp_ns: int) -> Any:
         """跟这帧画面对得上的点云(前后雷达拼起来);一台都对不上回 ``None``(距离报未知)。"""
         import numpy as np
         now = self._mono()
-        got = [pts for pts, st, at in self.clouds.values()
-               if now - at <= CLOUD_MAX_AGE_S
-               and (not st or not stamp_ns or abs(st - stamp_ns) <= CLOUD_MAX_SKEW_NS)]
+        got = []
+        for source, (pts, st, at) in list(self.clouds.items()):
+            if now - at > CLOUD_MAX_AGE_S \
+                    or (st and stamp_ns and abs(st - stamp_ns) > CLOUD_MAX_SKEW_NS):
+                continue
+            if callable(pts):                            # 延后换算的:现在才算,算完记住
+                pts = pts()
+                self.clouds[source] = (pts, st, at)
+            got.append(pts)
         if not got:
             return None
         return got[0] if len(got) == 1 else np.vstack(got)
@@ -277,7 +295,7 @@ class PersonNode:
             boxes, w, _h = self.detector.detect(jpeg)
         except Exception as exc:                         # noqa: BLE001 - 一帧坏了不停
             return base | {"check": "no_camera", "reason": f"这一帧处理不了:{exc}"[:200]}
-        cloud = self._fresh_cloud(stamp_ns)
+        cloud = self._fresh_cloud(stamp_ns) if boxes else None      # 没人就不碰点云
         people = []
         for b in boxes[:16]:
             c = bearing_deg((b.x1 + b.x2) / 2, w, hfov_deg=self.cfg.hfov_deg, lens=self.cfg.lens,
@@ -364,6 +382,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from d1max_contract.persbridge import PROTO
     from d1max_localizer.build import cloud_xyz
     from d1max_localizer.frames import Frames
+    from d1max_localizer.livemap import cdr_stamp
     from d1max_localizer.obstacles import LineClient, Mount, RearMount, active_frames
 
     detector: Detector | None = None
@@ -407,10 +426,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if m is None:
                 return
             try:
-                msg = deserialize_message(raw, PointCloud2)
-                st = msg.header.stamp
-                node_logic.on_cloud(m.to_base(cloud_xyz(msg)),
-                                    st.sec * 1_000_000_000 + st.nanosec, source)
+                # 只读报文头里的时刻,整条点云等用到再反序列化、换算
+                node_logic.on_cloud_lazy(
+                    lambda raw=raw: m.to_base(cloud_xyz(deserialize_message(raw, PointCloud2))),
+                    int(round(cdr_stamp(raw) * 1e9)), source)
             except Exception:
                 log.exception("%s 雷达这一帧处理不了", source)
         return cb

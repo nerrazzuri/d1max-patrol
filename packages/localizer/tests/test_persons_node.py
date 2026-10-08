@@ -216,7 +216,11 @@ def _假推理库(monkeypatch, 有的):
                                                        inter_op_num_threads=0)
     ort.InferenceSession = _假会话
     monkeypatch.setitem(sys.modules, "onnxruntime", ort)
-    monkeypatch.setitem(sys.modules, "cv2", types.ModuleType("cv2"))
+    cv2 = types.ModuleType("cv2")
+    cv2.线程数 = []
+    cv2.setNumThreads = lambda n: cv2.线程数.append(n)
+    monkeypatch.setitem(sys.modules, "cv2", cv2)
+    return cv2
 
 
 def test_推理后端_缺省CUDA不用TensorRT_装了也不用(monkeypatch, tmp_path):
@@ -274,4 +278,48 @@ def test_测距只用框中间_框边上更近的遮挡物不算():
     整框.on_cloud(np.vstack([_人(3.0, 0.0), _人(2.0, -5.0)]))
     被挡 = _过契约(整框.on_image("front", b"x", 1)).people[0]
     assert 被挡.range_m == pytest.approx(2.0, abs=0.05)
+
+
+def test_OpenCV只开一个线程(monkeypatch, tmp_path):
+    """OpenCV 缺省开跟核数一样大的线程池:C40221 上 8 个线程各吃 35–48%,定位器被挤到每秒 6 帧。"""
+    from d1max_localizer.persons import OnnxDetector
+    cv2 = _假推理库(monkeypatch, ["CPUExecutionProvider"])
+    模型 = tmp_path / "person.onnx"
+    模型.write_bytes(b"x")
+    OnnxDetector(模型)
+    assert cv2.线程数 == [1]
+
+
+def test_按一半分辨率解码_宽度按解出来的算(monkeypatch, tmp_path):
+    from d1max_localizer.persons import OnnxDetector
+    cv2 = _假推理库(monkeypatch, ["CPUExecutionProvider"])
+    cv2.IMREAD_COLOR, cv2.IMREAD_REDUCED_COLOR_2 = 1, 17
+    用的 = []
+    cv2.imdecode = lambda buf, flag: (用的.append(flag), np.zeros((540, 960, 3), np.uint8))[1]
+    cv2.resize = lambda img, size: np.zeros((size[1], size[0], 3), np.uint8)
+    模型 = tmp_path / "person.onnx"
+    模型.write_bytes(b"x")
+    d = OnnxDetector(模型)
+    d.sess.run = lambda names, feed: [np.zeros((1, 84, 1), np.float32)]
+    boxes, w, h = d.detect(b"jpeg")
+    assert 用的 == [17] and (w, h) == (960, 540) and boxes == []
+
+
+def test_点云延后换算_没人不算_有人只算一次():
+    """两台雷达每秒 20 帧,每帧都换算到狗身系曾占掉人员检测约四分之一的 CPU。"""
+    算了 = []
+
+    def 换算():
+        算了.append(1)
+        return _人(3.0, 0.0)
+    没人 = PersonNode(假检测器([]))
+    没人.on_cloud_lazy(换算, source="front")
+    没人.on_image("front", b"x", 1)
+    assert 算了 == []
+    有人 = PersonNode(假检测器([Box(860, 300, 1060, 900, 0.8)]))
+    有人.on_cloud_lazy(换算, source="front")
+    for i in range(3):
+        m = _过契约(有人.on_image("front", b"x", i + 1))
+        assert m.people[0].range_m == pytest.approx(3.0, abs=0.05)
+    assert 算了 == [1], "同一帧点云只换算一次"
 
