@@ -14,8 +14,9 @@
   只有「本来能派、狗被更优先的占了」才记 ``displaced``;一条派不出去不挡别的狗的排程。
 - 每条排程每一轮的去向都记一行 ``schedule_runs``(同一轮同一种去向只记一次):
   ``started``(派出去了,带 task_id,结果由事件回写 ``result``)、``skip``/``alarm``(``decide`` 按
-  ``on_missed`` 判的)、``no_robot``(到点了没有能派的狗)、``ambiguous``(不止一台能派、排程
-  没指定,站点不替人挑)、``displaced``(同一拍有更优先的)、``dispatch_failed``(派了但被拒)、
+  ``on_missed`` 判的)、``no_robot``(到点了没有能派的狗)、``ambiguous``(W28 之前:不止一台
+  能派、排程没指定,站点不替人挑;W28 起按电量、定位质量挑一台,不再记,老库里还可能有)、
+  ``displaced``(同一拍有更优先的)、``dispatch_failed``(派了但被拒)、
   ``skew``(钟不可信)。
 - 狗与站点断开时到点:``no_robot`` 记一笔;窗口过了 ``decide`` 给出 ``skip``/``alarm``,也记账。
   **站点不在狗离线时替它补跑**(设计决定三 A 的代价)。
@@ -325,6 +326,22 @@ class SiteScheduler:
                 ok.append(rid)
         return ok, taken, ";".join(why) or "没有登记的狗", kinds
 
+    def _best(self, ok: list[str]) -> tuple[str, str]:
+        """能派的不止一台时挑一台(W28,决策 46):电量高的先,一样就定位质量高的,再按 robot_id。
+        (定位不行的狗 ``dispatchable`` 已经挡掉了:就绪里有定位。)
+        → (robot_id, 挑的理由;只有一台是空串)。"""
+        if len(ok) == 1:
+            return ok[0], ""
+
+        def facts(rid: str) -> tuple[float, float]:
+            c = self.dispatcher.clients.get(rid)
+            t = c.telemetry if c is not None else None
+            return (float(t.battery_pct), float(t.loc_quality)) if t is not None else (-1.0, -1.0)
+        ranked = sorted(ok, key=lambda r: (-facts(r)[0], -facts(r)[1], r))
+        pct = facts(ranked[0])[0]
+        return ranked[0], (f"从 {'、'.join(sorted(ok))} 里挑了 {ranked[0]}(电量最高"
+                           f"{'' if pct < 0 else f' {pct:.0f}%'})")
+
     async def _start(self, act: ActiveBundle, entry: ScheduleEntry, d: Decision, *,
                      now_ms: int, claimed: dict[str, str]) -> None:
         scheduled_ms = d.scheduled_ms or 0
@@ -344,11 +361,7 @@ class SiteScheduler:
             else:
                 self._record(entry, scheduled_ms, "no_robot", note=why)
             return
-        if len(ok) > 1:
-            self._record(entry, scheduled_ms, "ambiguous",
-                         note=f"能派的狗不止一台({', '.join(ok)}),排程没写 robot")
-            return
-        rid = ok[0]
+        rid, why_pick = self._best(ok)                   # W28(决策 46):不止一台能派就挑
         claimed[rid] = entry.id
         task_id = f"sched-{uuid.uuid4().hex[:12]}"
 
@@ -362,7 +375,8 @@ class SiteScheduler:
             tx.execute("INSERT OR IGNORE INTO schedule_runs(entry_id, scheduled_ms, outcome, "
                        "robot_id, task_id, note, decided_at, told_ms, standby_name) "
                        "VALUES (?,?,'started',?,?,?,?,NULL,?)",
-                       (entry.id, scheduled_ms, rid, task_id, f"{d.kind.value},已发出",
+                       (entry.id, scheduled_ms, rid, task_id,
+                        f"{d.kind.value},已发出" + (f";{why_pick}" if why_pick else ""),
                         self._now(), entry.standby))
 
         try:
@@ -378,7 +392,8 @@ class SiteScheduler:
             # 狗可能收到了:这一轮不再派;过 LOST_MS 还没见它跑这一趟,``_sweep`` 说 ``lost``。
             with self.db.tx() as c:
                 c.execute("UPDATE schedule_runs SET note=? WHERE task_id=?",
-                          (f"{d.kind.value},{_TIMEOUT_NOTE}:可能已在跑,这一轮不再派", task_id))
+                          (f"{d.kind.value},{_TIMEOUT_NOTE}:可能已在跑,这一轮不再派"
+                           + (f";{why_pick}" if why_pick else ""), task_id))
             return
         if r["ack"]["result"] == "accepted":
             log.info("排程 %s 到点(%s),派 %s 给 %s", entry.id, d.kind.value, entry.mission, rid)

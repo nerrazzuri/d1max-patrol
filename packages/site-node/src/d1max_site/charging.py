@@ -20,6 +20,10 @@
 - **先落库、再派**(W13 外审 4):要派的那一趟的任务号先写进 ``charge_cycles``(写不进去就不派);
   狗明确拒收 → 退回上一步(走到了的退回 ``arrived``、刚起的作废)、30 秒后再派;发出去回执没到
   (说不清狗收没收)→ 留着,按那个任务号的终态事件对账,过了 :data:`LOST_S` 还没有就当被打断。
+- **错开充**(W28,决策 46:各管各的区域,同一时间只让一台去充):别的狗正在回充(``charge_cycles`` 里
+  去桩、走到了、对桩、被打断待接着充都算;歇着的不算)时,这台到了 30% 先**接着守**(:meth:`view` 的
+  ``held``);守到 :data:`FLOOR_PCT` 还轮不到就也去,报 P2 ``charge_overlap``(跟起这一轮同一个事务)。
+  几台同时到线:电量低的先去。只有一台狗登记了桩的,到线就去。
 - **桩上危险**(W13 外审 1–3):狗报 ``dock.hazard``(出桩、停对桩确认不了,狗上运动锁住)→ 报 P1
   ``dock_stuck``,一次挂一次(``dock_hazards``,跟待报告警同一个事务),狗上摘了就清。
 """
@@ -34,6 +38,7 @@ from typing import Any
 from d1max_contract.charging import (
     CHARGE_PRIORITY,
     DOCK_TIMEOUT_S,
+    FLOOR_PCT,
     INTRUSION_MIN_PCT,
     LOW_PCT,
     RESUME_PCT,
@@ -54,6 +59,8 @@ COOLDOWN_MS = 10 * 60_000
 #: 派不出去(抛错、被拒)之后,这台狗隔多久(毫秒)再派:别每拍都发。派成了不限(下一步马上接)。
 RESEND_MS = 30_000
 _TERMINAL = ("task_done", "task_failed", "task_aborted", "task_preempted")
+#: 这些进度算「正在回充」(占着回充的名额,W28 错开充);``cooldown`` 歇着的不算。
+_CHARGING = ("goto", "arrived", "dock", "resume")
 
 
 class ChargeError(ValueError):
@@ -74,6 +81,10 @@ class ChargeDesk:
         #: 正在驱离的狗(``DeterrenceDesk.busy``):驱离中不去充。
         self.busy: Callable[[], set[str]] | None = None
         self._retry_at: dict[str, int] = {}
+        #: 到了线、因为别的狗在充先接着守的(W28):robot_id → 等的是谁。给 :meth:`view` 看,每拍重算。
+        self._held: dict[str, str] = {}
+        #: 这一回低电已经报过「两台同时在充」的(狗拒收、30 秒后重派时不再报;电量回到线上清)。
+        self._overlap_told: set[str] = set()
 
     # ------------------------------------------------------------ 桩
 
@@ -104,8 +115,9 @@ class ChargeDesk:
                     "SELECT * FROM chargers ORDER BY robot_id")],
                 "cycles": [dict(r) for r in self.db.query(
                     "SELECT * FROM charge_cycles ORDER BY robot_id")],
+                "held": [{"robot_id": r, "waiting_for": w} for r, w in sorted(self._held.items())],
                 "low_pct": self.low_pct, "resume_pct": self.resume_pct,
-                "intrusion_min_pct": INTRUSION_MIN_PCT}
+                "floor_pct": FLOOR_PCT, "intrusion_min_pct": INTRUSION_MIN_PCT}
 
     # ------------------------------------------------------------ 别的台问的
 
@@ -137,7 +149,11 @@ class ChargeDesk:
             flush(self.db, self.alerts)
         except Exception:
             log.exception("待报的告警这一拍没办成")
-        for ch in [dict(r) for r in self.db.query("SELECT * FROM chargers")]:
+        chargers = [dict(r) for r in self.db.query("SELECT * FROM chargers ORDER BY robot_id")]
+        # 几台同时到线:电量低的先起(先起的落了库,后面的就看得见它在充)
+        chargers.sort(key=lambda ch: (self._battery(ch["robot_id"]) is None,
+                                      self._battery(ch["robot_id"]) or 0.0))
+        for ch in chargers:
             try:
                 await self._one(ch)
             except Exception:
@@ -206,9 +222,22 @@ class ChargeDesk:
             caps = c.capabilities.tasks if c.capabilities is not None else {}
             if pct is not None and pct <= self.low_pct and "dock" in caps and self._idle(rid, c) \
                     and self.dispatcher.autonomy(rid) == "autonomous":
+                other = self._charging_other(rid)
+                if other and pct > FLOOR_PCT:
+                    if rid not in self._held:
+                        log.info("%s 电量 %.0f%%:%s 在充,先接着守", rid, pct, other)
+                    self._held[rid] = other
+                    return
+                self._held.pop(rid, None)
                 log.info("%s 电量 %.0f%%:去充", rid, pct)
-                await self._goto(rid, ch, None)
+                await self._goto(rid, ch, None,
+                                 overlap="" if rid in self._overlap_told else other)
+            else:
+                self._held.pop(rid, None)
+                if pct is not None and pct > self.low_pct:
+                    self._overlap_told.discard(rid)
             return
+        self._held.pop(rid, None)
         state = cyc["state"]
         if state == "arrived":
             await self._dock(rid, cyc)                  # 走到了、对桩还没派成
@@ -251,6 +280,13 @@ class ChargeDesk:
                       context={"task_id": cyc["task_id"]}, now_ms=now)
             flush(self.db, self.alerts)
 
+    def _charging_other(self, rid: str) -> str:
+        """别的哪台正在回充(W28 错开充);没有 → 空串。"""
+        rows = self.db.query(
+            f"SELECT robot_id FROM charge_cycles WHERE robot_id<>? AND state IN "
+            f"({','.join('?' * len(_CHARGING))}) ORDER BY robot_id LIMIT 1", (rid, *_CHARGING))
+        return rows[0]["robot_id"] if rows else ""
+
     def _set(self, rid: str, state: str | None, *, until_ms: int | None = None) -> None:
         with self.db.tx() as c:
             if state is None:
@@ -259,7 +295,9 @@ class ChargeDesk:
                 c.execute("UPDATE charge_cycles SET state=?, until_ms=? WHERE robot_id=?",
                           (state, until_ms, rid))
 
-    async def _goto(self, rid: str, ch: dict[str, Any], cyc: dict[str, Any] | None) -> None:
+    async def _goto(self, rid: str, ch: dict[str, Any], cyc: dict[str, Any] | None, *,
+                    overlap: str = "") -> None:
+        """``overlap``:别的狗还在充、这台守到了 20% 也去(W28):起这一轮的同一个事务里记 P2。"""
         now = self._now()
         if now < self._retry_at.get(rid, 0):
             return
@@ -271,6 +309,15 @@ class ChargeDesk:
             c.execute("INSERT OR REPLACE INTO charge_cycles(robot_id, state, task_id, sent_ms, "
                       "started_ms, until_ms) VALUES (?,?,?,?,?,NULL)",
                       (rid, "goto", tid, now, cyc["started_ms"] if cyc else now))
+            if overlap:
+                queue(c, kind="charge_overlap", robot=rid,
+                      title="两台狗同时在充:这台的区域暂时没狗守",
+                      detail=f"{rid} 电量到 {FLOOR_PCT:.0f}%,{overlap} 还在充,{rid} 也去充了;"
+                             f"有一台充完出桩之前这块区域没狗",
+                      context={"task_id": tid, "waiting_for": overlap}, now_ms=now)
+        if overlap:
+            self._overlap_told.add(rid)
+            flush(self.db, self.alerts)
         try:
             r = await self.dispatcher.goto(rid, target, None, issued_by="charge",
                                            priority=CHARGE_PRIORITY, task_id=tid, charge=True)

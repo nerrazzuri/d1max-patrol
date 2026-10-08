@@ -8,6 +8,10 @@
 电量线(决策 45):空闲时电量 ≤ :data:`LOW_PCT` 就去充,充到 :data:`RESUME_PCT` 出桩;充电中来了入侵,
 电量 ≥ :data:`INTRUSION_MIN_PCT` 就出桩去(入侵 80 抢得走回充 50,``dock`` 被抢时**先出桩再交**),
 不够就不派。被抢断的回充,狗空了接着充。
+
+多台狗**错开充**(W28,决策 46):别的狗正在回充时,到了 :data:`LOW_PCT` 先接着守,守到
+:data:`FLOOR_PCT` 还轮不到就也去充(站点报 P2)。去桩这一趟的中止线是 :data:`TRIP_ABORT_PCT`
+(去充是电量唯一能回来的路;不然 20% 的狗过不了出发检查)。
 """
 
 from __future__ import annotations
@@ -20,6 +24,10 @@ from d1max_contract.errors import ContractError
 LOW_PCT = 30.0
 RESUME_PCT = 90.0
 INTRUSION_MIN_PCT = 50.0
+#: 别的狗在充时,守到这条线还轮不到就也去充(W28,决策 46)。
+FLOOR_PCT = 20.0
+#: 去桩那一趟(``goto`` 带 ``charge``)的中止线:路上到这条线才停。
+TRIP_ABORT_PCT = 10.0
 #: 回充的优先级:比排程巡检(10–49)高,比人手动派的(60)、事件派遣(80)低 —— 人和入侵抢得走。
 CHARGE_PRIORITY = 50
 TASK_PREFIX = "charge-"

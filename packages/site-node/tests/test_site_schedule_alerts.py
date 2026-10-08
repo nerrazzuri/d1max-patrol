@@ -159,7 +159,8 @@ async def test_窗口很短_宽限期跟着缩到半个窗口(站, tmp_path):
     assert _去向(t) == [("nightly", None, "no_robot")], "窗口关之前就说了"
 
 
-async def test_不止一台能派_宽限期过了说ambiguous(站):
+async def test_不止一台能派_挑一台派_不报没跑(站):
+    """W28(决策 46):以前宽限期过了报 ``ambiguous``;现在挑一台派出去,不报。"""
     t = 站
     t.reg.enroll("B", fingerprint="sha256:b", issued_at=t.clock.ms - 1,
                  expires_at=t.clock.ms + 10**10)
@@ -170,12 +171,11 @@ async def test_不止一台能派_宽限期过了说ambiguous(站):
     await t.run(2)
     t.site.clients["B"].status_live_at = t.clock()
     await _拍(t)
-    assert t.heard == []
     t.clock.ms = 毫秒(22, 6)
     for rid in ("A", "B"):                                # 假钟跳了几分钟:两台都还新鲜
         t.site.clients[rid].status_live_at = t.clock()
     await _拍(t)
-    assert _去向(t) == [("nightly", None, "ambiguous")]
+    assert t.heard == [] and [r["outcome"] for r in t.sched.runs("nightly")] == ["started"]
 
 
 async def test_钟不可信_宽限期过了说skew(tmp_path):
