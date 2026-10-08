@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 37                      # W33:狗没在驱离时看见人报过没有(person_sightings)
+SCHEMA_VERSION = 38                      # W33 外审:就地驱离要撤的那一趟(deter_sessions.withdraw)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -452,6 +452,8 @@ _ADDED_COLUMNS = (
     ("deter_sessions", "cornered", "INTEGER NOT NULL DEFAULT 0"),
     # W25 外审:这一场的拦截点(保持距离的拴绳中心,补派、重启都按它)
     ("deter_sessions", "standoff_center", "TEXT NOT NULL DEFAULT ''"),
+    # W33 外审:就地驱离开场时狗在跑的那一趟,还没确认撤掉(每拍再撤,结束了才清;重启接着撤)
+    ("deter_sessions", "withdraw", "TEXT NOT NULL DEFAULT ''"),
     # W30:运行记录标了「留着」(要留作证据):过了留存期也不删,按时间段删时也不删
     ("runs", "keep", "INTEGER NOT NULL DEFAULT 0"),
 )
