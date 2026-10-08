@@ -519,6 +519,7 @@ def test_地面拟合最多抽四千个候选点():
     rng = np.random.default_rng(2)
     地面 = np.column_stack([rng.uniform(0.6, 3.5, 40000), rng.uniform(-1.5, 1.5, 40000),
                          np.full(40000, -0.5) + rng.normal(0, 0.005, 40000)])
-    n, h, frac = fit_ground(地面)
+    杂点 = np.column_stack([np.full(7, 2.0), np.zeros(7), np.full(7, -0.25)])   # 不在地面上
+    n, h, frac = fit_ground(np.vstack([地面, 杂点]))     # 不抽的话占比是 40000/40007,不是整数倍
     assert abs(frac * 4000 - round(frac * 4000)) < 1e-6
     assert n[2] > 0.99 and abs(h - 0.5) < 0.02
