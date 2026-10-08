@@ -179,7 +179,9 @@ def fit_ground(pts: Any, *, iters: int = 120, tol: float = 0.03, seed: int = 0
         return None
     q = cand[best]
     centroid = q.mean(0)
-    _, _, vt = np.linalg.svd(q - centroid)
+    # full_matrices=False:只要 3×3 那一块。缺省会造 N×N 的 U —— 真狗上地面内点几万个,每帧都卡在这
+    # (2026-10-08 C40221:感知节点 99% 的时间在这句,2 秒发不出一帧,代理当它断了)。
+    _, _, vt = np.linalg.svd(q - centroid, full_matrices=False)
     n = vt[2]
     if n[2] < 0:
         n = -n
