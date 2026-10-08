@@ -153,7 +153,8 @@ def yolo_people(out: Any, *, score: float = 0.5, iou: float = 0.45, scale: float
 #: CPU 推理的线程上限。onnxruntime 缺省把核占满:C40221 上 CPU 版跑两路相机吃到约 4.5 核,
 #: 跟 MOLA、感知抢 CPU(2026-10-08)。GPU 后端不受它影响。
 THREADS = 2
-#: TensorRT 引擎缓存。第一次建引擎要几分钟,不缓存的话每次重启检测节点都要再等一遍。
+#: TensorRT 引擎缓存(``--trt`` 才用)。第一次建引擎要好几分钟(C40221 上超过 5 分钟),不缓存的话
+#: 每次重启检测节点都要再等一遍。
 TRT_CACHE = Path("/var/lib/d1max/agent/trt-cache")
 
 
@@ -161,13 +162,15 @@ class OnnxDetector:
     """ONNX 模型(YOLO 系,输入 ``(1, 3, size, size)``、RGB、0–1)。要 ``onnxruntime`` 与 OpenCV:
     **都是真机项**,开发机上没装。装不上、模型读不了抛 :class:`DetectorUnavailable`。
 
-    后端按 TensorRT → CUDA → CPU 的顺序挑装了的(Orin 上要 Jetson 版 ``onnxruntime-gpu``,
-    C40221 实测 CUDA 单帧 26 ms、CPU 330 ms);实际用上的记在 :attr:`backend`。"""
+    后端缺省按 CUDA → CPU 的顺序挑装了的(Orin 上要 Jetson 版 ``onnxruntime-gpu``;C40221 实测
+    CUDA 单帧 26 ms、CPU 330 ms)。``trt=True`` 才把 TensorRT 放到最前:更快,但第一次建引擎要好几
+    分钟、换模型或升级 TensorRT 要重建 —— 每秒几帧的用量下不值(2026-10-08 用户定)。实际用上的记在
+    :attr:`backend`。"""
 
     def __init__(self, model: Path, *, size: int = 640, score: float = 0.5,
-                 providers: Sequence[str] = ("TensorrtExecutionProvider", "CUDAExecutionProvider",
-                                             "CPUExecutionProvider"),
-                 threads: int = THREADS, trt_cache: Path | None = TRT_CACHE) -> None:
+                 providers: Sequence[str] = ("CUDAExecutionProvider", "CPUExecutionProvider"),
+                 threads: int = THREADS, trt: bool = False,
+                 trt_cache: Path | None = TRT_CACHE) -> None:
         try:
             import cv2  # noqa: F401
             import onnxruntime as ort
@@ -181,7 +184,7 @@ class OnnxDetector:
             opts.intra_op_num_threads = max(1, int(threads))
             opts.inter_op_num_threads = 1
             chosen: list[Any] = []
-            for p in providers:
+            for p in (("TensorrtExecutionProvider", *providers) if trt else providers):
                 if p not in have:
                     continue
                 if p == "TensorrtExecutionProvider" and trt_cache is not None:
@@ -335,8 +338,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--fps", type=float, default=2.0, help="每个相机每秒最多检测几帧")
     ap.add_argument("--threads", type=int, default=THREADS,
                     help="CPU 推理的线程上限(缺省 2;onnxruntime 不限会占满所有核)")
+    ap.add_argument("--trt", action="store_true",
+                    help="先用 TensorRT(更快;第一次建引擎要好几分钟,换模型、升级要重建;缺省 CUDA)")
     ap.add_argument("--trt-cache", type=Path, default=TRT_CACHE,
-                    help="TensorRT 引擎缓存目录(第一次建引擎要几分钟,缓存了重启就不用再等)")
+                    help="TensorRT 引擎缓存目录(--trt 才用)")
     ap.add_argument("--hfov", type=float, default=HFOV_DEG)
     ap.add_argument("--lens", choices=("equidistant", "pinhole"), default="equidistant")
     ap.add_argument("--z-min", type=float, default=Z_MIN)
@@ -358,7 +363,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     detector: Detector | None = None
     why = ""
     try:
-        detector = OnnxDetector(a.model, threads=a.threads, trt_cache=a.trt_cache)
+        detector = OnnxDetector(a.model, threads=a.threads, trt=a.trt, trt_cache=a.trt_cache)
         log.info("检测器后端:%s", detector.backend)
     except DetectorUnavailable as exc:
         why = str(exc)
