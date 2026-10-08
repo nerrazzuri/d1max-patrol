@@ -591,6 +591,36 @@ def test_叫停之后站点不再派它_人点恢复才派_业主能停不能恢
     assert rows and rows[-1]["actor"] == "alice"
 
 
+def test_W33_只许手动派_设成要dispatch_接自动要manage_手动派照收(站点):
+    s = 站点
+    alice = s.login()
+    s.accounts.add("olga", PW, role="owner")
+    olga = s.req("POST", "/api/login", {"name": "olga", "password": PW})[1]["token"]
+    _等(lambda: s.req("GET", "/api/robots/A", token=alice)[1].get("fresh"))
+    assert s.req("GET", "/api/robots/A", token=alice)[1]["manual_only"] is None
+    assert s.req("POST", "/api/robots/A/service", {"manual_only": True}, token=olga)[0] == 403
+    s.accounts.add("gus", PW, role="guard")
+    gus = s.req("POST", "/api/login", {"name": "gus", "password": PW})[1]["token"]
+    assert s.req("POST", "/api/robots/A/service", {"manual_only": True}, token=gus)[0] == 200, \
+        "保安能关(往安全那边)"
+    assert s.req("POST", "/api/robots/A/service", {"manual_only": False}, token=gus)[0] == 403, \
+        "保安不能开(管理员确认)"
+    s.reg.set_manual_only("A", False, by="t", now_ms=0)
+    assert s.req("POST", "/api/robots/A/service", {"manual_only": "yes"}, token=alice)[0] == 400
+    code, d = s.req("POST", "/api/robots/A/service", {"manual_only": True, "note": "测试狗"},
+                    token=alice)
+    assert code == 200 and d["manual_only"]["by"] == "alice" and d["was_manual_only"] is False
+    v = s.req("GET", "/api/robots/A", token=alice)[1]
+    assert v["manual_only"]["note"] == "测试狗"
+    code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
+    assert code == 200 and d["ack"]["result"] == "accepted", "人手动派的照收"
+    assert s.req("POST", "/api/robots/Z/service", {"manual_only": True}, token=alice)[0] == 404
+    code, d = s.req("POST", "/api/robots/A/service", {"manual_only": False}, token=alice)
+    assert code == 200 and d["manual_only"] is None and d["was_manual_only"] is True
+    rows = s.db.query("SELECT * FROM audit WHERE action LIKE '%/service'")
+    assert len(rows) >= 2 and rows[-1]["actor"] == "alice"
+
+
 def test_狗说停车没成_站点回502让人按机身急停(站点):
     s = 站点
     alice = s.login()

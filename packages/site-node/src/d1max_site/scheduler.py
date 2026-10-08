@@ -311,7 +311,10 @@ class SiteScheduler:
             reason, kind = self.dispatcher.dispatchable(rid, "patrol"), "other"
             if not reason and self.dispatcher.autonomy(rid) != "autonomous":
                 # W00c6i:避障真机验收之前真狗要人监护 —— 排程是没人在场时也会到点的东西,不派。
-                reason, kind = f"{rid} 要人监护,不接排程", "supervised"
+                # W33:站点设成只许手动派的也不派。
+                reason, kind = (f"{rid} 站点设成只许手动派,不接排程"
+                                if self.dispatcher.autonomy(rid) == "manual_only"
+                                else f"{rid} 要人监护,不接排程"), "supervised"
             if not reason and self.dispatcher.busy(rid) is not None:
                 reason, kind = f"{rid} 正在跑 {self.dispatcher.busy(rid)}", "busy"
             if not reason:

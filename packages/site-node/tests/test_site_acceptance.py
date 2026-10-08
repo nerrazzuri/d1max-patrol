@@ -84,6 +84,9 @@ def 现场(tmp_path):
     for rid in ("A", "B"):
         r = site(home, "enroll", rid, "--days", "30")
         assert r.returncode == 0, r.stderr
+        # W33:新登记的狗先只许手动派;验收要跑排程、入侵,管理员确认接自动派遣
+        r = site(home, "robot-auto", rid)
+        assert r.returncode == 0 and "接自动派遣" in r.stdout, r.stderr
     r = site(home, "add-admin", "alice", env={"D1MAX_SITE_PASSWORD": PW})
     assert r.returncode == 0, r.stderr
     # W10:狗用的那张图要在站点目录里(派单前要确认这一版区域)

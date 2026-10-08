@@ -136,9 +136,31 @@ def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
             raise SiteError(f"{robot_id} 已登记且未吊销;先 revoke")
         bundle = ca.issue_robot(robot_id, days=days, now_ms=wall_ms())
         r = bundle.registration
+        # W33:新登记的狗先只许手动派,管理员确认后(robot-auto)才接自动派遣
         reg.enroll(robot_id, fingerprint=bundle.fingerprint, issued_at=r.issued_at,
-                   expires_at=r.expires_at, now_ms=wall_ms())
+                   expires_at=r.expires_at, now_ms=wall_ms(), manual_only=True)
         return bundle.dir
+    finally:
+        db.close()
+
+
+def cmd_robot_service(home: Path, robot_id: str, manual: bool, note: str = "") -> str:
+    """W33:只许手动派 / 接自动派遣。站点在跑也能改(下一拍起按库里的算)。"""
+    cfg = _load(home)
+    db = SiteDB(home / "site.db")
+    try:
+        reg = Registry(db, site_id=cfg["site_id"])
+        if reg.get(robot_id) is None:
+            raise SiteError(f"没有登记过 {robot_id}")
+        reg.set_manual_only(robot_id, manual, by=f"cli:{getpass.getuser()}", now_ms=wall_ms(),
+                            note=note)
+        from d1max_site.audit import AuditLog
+        AuditLog(db, now_ms=wall_ms).record(
+            actor=f"cli:{getpass.getuser()}",
+            action="robot manual_only" if manual else "robot auto", target=robot_id,
+            detail={"note": note} if note else {})
+        return (f"{robot_id}:只许手动派(排程、入侵、回充、自动回待命点都不派)" if manual
+                else f"{robot_id}:接自动派遣(排程、入侵、回充、自动回待命点)")
     finally:
         db.close()
 
@@ -797,6 +819,11 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("enroll", help="给一台狗签证书并登记")
     e.add_argument("robot_id")
     e.add_argument("--days", type=int, default=365)
+    ra_ = sub.add_parser("robot-auto", help="让狗接自动派遣(排程、入侵、回充、自动回待命点)(W33)")
+    ra_.add_argument("robot_id")
+    rm_ = sub.add_parser("robot-manual", help="设成只许手动派:站点不自己让它动(W33)")
+    rm_.add_argument("robot_id")
+    rm_.add_argument("--note", default="")
     r = sub.add_parser("revoke", help="吊销一台狗(之后重启 d1max-mosquitto)")
     r.add_argument("robot_id")
     b = sub.add_parser("import-bundle", help="导入任务包,成为当前包")
@@ -890,6 +917,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             d = cmd_enroll(home, args.robot_id, args.days)
             print(f"证书包: {d}\n拷到狗上: ca.crt robot.crt robot.key → /etc/d1max/tls/,"
                   f"registration.json → /etc/d1max/")
+        elif args.cmd in ("robot-auto", "robot-manual"):
+            print(cmd_robot_service(home, args.robot_id, args.cmd == "robot-manual",
+                                    getattr(args, "note", "")))
         elif args.cmd == "revoke":
             summary = cmd_revoke(home, args.robot_id)
             print(f"已吊销 {args.robot_id}({summary})。重启 broker 才对 broker 生效: "

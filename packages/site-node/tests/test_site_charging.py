@@ -323,3 +323,13 @@ async def test_桩上危险_报P1一次_摘了清_再挂再报(站):
     caps["dock"] = {"mode": "vendor_dock", "on_dock": True, "hazard": "停不住对桩"}
     await t.send(t.charge.tick())
     assert [x["kind"] for x in t.charge.alerts.raised] == ["dock_stuck"]
+
+
+async def test_W33_只许手动派的狗_低电也不自动去充(站):
+    t = 站
+    t.reg.set_manual_only("A", True, by="alice", now_ms=0)
+    await _跑(t, 10)
+    assert _cmds(t, "goto") == [] and t.charge.view()["cycles"] == []
+    t.reg.set_manual_only("A", False, by="alice", now_ms=0)
+    await _跑(t, 3)
+    assert _cmds(t, "goto")

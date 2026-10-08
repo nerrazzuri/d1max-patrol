@@ -22,7 +22,7 @@
 #   D1MAX_AGENT_ARGS=其余参数(比如 --mapping、--sidecar 127.0.0.1:8090 --mps-per-unit …)
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
-# shellcheck disable=SC2086  # D1MAX_AGENT_ARGS 要按空白拆成几个参数
+# D1MAX_AGENT_ARGS 整串交给代理拆(W32):这一版不认识的参数跳过并报站点,退回老版也起得来
 exec "$here/venv/bin/d1max-agent" \
   --transport "${D1MAX_SITE_MQTT:?/etc/d1max/env 里没有 D1MAX_SITE_MQTT(站点地址)}" \
   --tls-ca /etc/d1max/tls/ca.crt --tls-cert /etc/d1max/tls/robot.crt \
@@ -37,4 +37,4 @@ exec "$here/venv/bin/d1max-agent" \
   --outbox "${D1MAX_OUTBOX:?单元里应该有 D1MAX_OUTBOX}" \
   --map "${D1MAX_MAP:?/etc/d1max/env 里没有 D1MAX_MAP(地图号:版本)}" \
   --home "${D1MAX_HOME:?/etc/d1max/env 里没有 D1MAX_HOME(x,y,yaw)}" \
-  ${D1MAX_AGENT_ARGS:-}
+  "--env-args=${D1MAX_AGENT_ARGS:-}"

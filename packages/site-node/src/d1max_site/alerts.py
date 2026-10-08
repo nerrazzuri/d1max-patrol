@@ -129,6 +129,8 @@ LEVEL_OF: dict[str, Level] = {
     "finding": Level.P2,
     # 录像(W18):断了、没传到站点就删了、站点为腾盘删了。不影响巡检能不能跑,但证据缺了,今天之内处理。
     "recording_failed": Level.P2,
+    # W32:代理的启动参数有这一版不认识的,跳过照起(多半是退回了老版本)
+    "agent_args_skipped": Level.P2,
     "recording_dropped": Level.P2,
     "recording_trimmed": Level.P2,
     # 固定摄像头连不上(W19):这一路的入侵收不到了。不影响狗,但防区少了一只眼,今天之内修。

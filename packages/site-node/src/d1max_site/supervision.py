@@ -72,7 +72,7 @@ class SupervisionDesk:
         没登记的狗不在这儿说(交给派遣器报真正的原因)。"""
         if self.dispatcher.registry.get(robot_id) is None:
             return ""
-        if self.dispatcher.autonomy(robot_id) == "autonomous" or self.active(robot_id):
+        if self.dispatcher.reported_autonomy(robot_id) == "autonomous" or self.active(robot_id):
             return ""
         return f"{robot_id} 要人现场监护:先在手机上打开「我在现场监护」"
 

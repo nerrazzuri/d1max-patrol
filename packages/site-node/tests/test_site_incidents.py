@@ -151,6 +151,10 @@ async def test_两台狗_派离拦截点近的那台(站):
     b.status = dataclasses.replace(a.status, ready=dataclasses.replace(a.status.ready,
                                                                        loc_ok=False))
     assert t.desk.pick_robot(t.desk.intercept("gate"))[0] == "A", "定位不行的不派"
+    # W33:只许手动派的狗不接事件派遣(C40221 现场:测试身份被派走了)
+    t.reg.set_manual_only("A", True, by="alice", now_ms=0)
+    rid, why = t.desk.pick_robot(t.desk.intercept("gate"))
+    assert rid is None and "A 站点设成只许手动派" in why
 
 
 async def test_拦截点的地图版本对不上_不派(站):

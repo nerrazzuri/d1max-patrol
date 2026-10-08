@@ -1039,7 +1039,8 @@ def test_agent启动脚本_用自己那一版的代码_参数从env来(tmp_path)
     got = _启动脚本跑一遍(tmp_path, base | more)
     args = got.stdout.splitlines()[1:]
     assert args[args.index("--hal") + 1] == "d1max"
-    assert args[-3:] == ["--mapping", "--sidecar", "127.0.0.1:8090"], "其余参数按空白拆开"
+    # W32(决策 47):其余参数整串交给代理拆,这一版不认识的跳过、报站点(退回老版也起得来)
+    assert args[-1] == "--env-args=--mapping --sidecar 127.0.0.1:8090"
     assert "--autonomy" not in args, "没配自主级别就不传:代理按适配器定(d1max 要人监护)"
 
 

@@ -218,6 +218,12 @@ async def test_两台都能派_排程没指定_挑电量高的(站, tmp_path):
     t.site.clients["B"].telemetry = dataclasses.replace(tel, battery_pct=80.0,
                                                         loc_quality=0.9)
     assert t.sched._best(["A", "B"])[0] == "B", "电量一样:定位质量高的"
+    # W33:只许手动派的不进候选
+    t.reg.set_manual_only("B", True, by="alice", now_ms=0)
+    from d1max_site.scheduler import active_bundle
+    act = active_bundle(t.db)
+    ok, _, why, kinds = t.sched._candidates(act, act.schedule.entries[0], {})
+    assert ok == ["A"] and "B 站点设成只许手动派" in why
 
 
 async def test_排程写了robot就只派那一台(站, tmp_path):

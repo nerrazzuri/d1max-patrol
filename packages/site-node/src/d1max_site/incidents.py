@@ -313,8 +313,11 @@ class IncidentDesk:
             reason = self.dispatcher.dispatchable(rid, "goto")
             c = self.dispatcher.clients.get(rid)
             if not reason and self.dispatcher.autonomy(rid) != "autonomous":
-                # W00c6i:事件多半在夜里、没人在场;要人监护的真狗不派。
-                reason = f"{rid} 要人监护,不接事件派遣"
+                # W00c6i:事件多半在夜里、没人在场;要人监护的真狗不派。W33:只许手动派的也不派
+                # (C40221 现场:新登记的测试身份被入侵派走了)。
+                reason = (f"{rid} 站点设成只许手动派,不接事件派遣"
+                          if self.dispatcher.autonomy(rid) == "manual_only"
+                          else f"{rid} 要人监护,不接事件派遣")
             if not reason:
                 running = c.status.task.task_id if c.status and c.status.task else ""
                 if running.startswith(INCIDENT_PREFIX):
