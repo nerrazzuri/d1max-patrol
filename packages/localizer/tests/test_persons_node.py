@@ -219,7 +219,20 @@ def _假推理库(monkeypatch, 有的):
     monkeypatch.setitem(sys.modules, "cv2", types.ModuleType("cv2"))
 
 
-def test_推理后端_GPU优先_TensorRT带引擎缓存和半精度_CPU限线程(monkeypatch, tmp_path):
+def test_推理后端_缺省CUDA不用TensorRT_装了也不用(monkeypatch, tmp_path):
+    """TensorRT 第一次建引擎要好几分钟(C40221 上超过 5 分钟),每秒几帧的用量下不值:缺省 CUDA。"""
+    from d1max_localizer.persons import OnnxDetector
+    _假推理库(monkeypatch, ["TensorrtExecutionProvider", "CUDAExecutionProvider",
+                        "CPUExecutionProvider"])
+    模型 = tmp_path / "person.onnx"
+    模型.write_bytes(b"x")
+    d = OnnxDetector(模型, trt_cache=tmp_path / "trt")
+    assert d.sess.providers_in == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert d.backend == "CUDAExecutionProvider"
+    assert not (tmp_path / "trt").exists()
+
+
+def test_推理后端_开了trt才先用TensorRT_带引擎缓存和半精度_CPU限线程(monkeypatch, tmp_path):
     """CPU 版 onnxruntime 不限线程会占满所有核(C40221 上约 4.5 核);TensorRT 第一次建引擎要几分钟,
     不缓存的话每次重启都要再等。"""
     from d1max_localizer.persons import OnnxDetector
@@ -227,7 +240,7 @@ def test_推理后端_GPU优先_TensorRT带引擎缓存和半精度_CPU限线程
                         "CPUExecutionProvider"])
     模型 = tmp_path / "person.onnx"
     模型.write_bytes(b"x")
-    d = OnnxDetector(模型, trt_cache=tmp_path / "trt")
+    d = OnnxDetector(模型, trt=True, trt_cache=tmp_path / "trt")
     trt, cuda, cpu = d.sess.providers_in
     assert trt[0] == "TensorrtExecutionProvider"
     assert trt[1] == {"trt_engine_cache_enable": True,
@@ -243,7 +256,7 @@ def test_推理后端_只有CPU就只给CPU_线程数照给的(monkeypatch, tmp_
     _假推理库(monkeypatch, ["AzureExecutionProvider", "CPUExecutionProvider"])
     模型 = tmp_path / "person.onnx"
     模型.write_bytes(b"x")
-    d = OnnxDetector(模型, threads=3, trt_cache=tmp_path / "trt")
+    d = OnnxDetector(模型, threads=3, trt=True, trt_cache=tmp_path / "trt")
     assert d.sess.providers_in == ["CPUExecutionProvider"] and d.backend == "CPUExecutionProvider"
     assert d.sess.opts.intra_op_num_threads == 3
     assert not (tmp_path / "trt").exists(), "没有 TensorRT 就不建缓存目录"
