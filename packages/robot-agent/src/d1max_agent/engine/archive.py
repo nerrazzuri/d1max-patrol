@@ -77,6 +77,11 @@ def _atomic_write(path: Path, text: str) -> None:
 class RunArchive:
     """一次运行的落盘出口。引擎只往这里写,不自己碰文件。"""
 
+    #: 证据加密(W30b,决策 51):配了站点公钥就是 :class:`~d1max_contract.evseal.Sealer`,
+    #: 照片直接封进 ``photos/<名字>.d1e``(明文不落盘);没配是 ``None``,照旧明文(站点报 P2)。
+    #: 代理起来时设一次。
+    sealer: Any = None
+
     def __init__(self, root: Path, mission: Mission, *,
                  started_at: datetime | None = None, suffix: str = "") -> None:
         self._mission = mission
@@ -200,15 +205,22 @@ class RunArchive:
 
     def save_photo(self, waypoint: str, camera: str, data: bytes,
                    at: datetime | None = None) -> Path:
+        """回照片的**原名**路径(事件、汇总里记的就是它;封好的盘上多一个 ``.d1e``,
+        站点解开成原名)。"""
         path = self.photo_path(waypoint, camera, at)
+        sealer = type(self).sealer
+        disk = path.with_name(path.name + ".d1e") if sealer is not None else path
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-        except OSError as exc:
+            if sealer is not None:
+                sealer.seal_bytes(data, disk)
+            else:
+                disk.write_bytes(data)
+        except Exception as exc:                          # 盘满、只读、openssl 不在(封不了)
             self._failed(path.name, exc)
             with contextlib.suppress(OSError):
-                path.unlink(missing_ok=True)              # 写了半截的不留
-            raise
+                disk.unlink(missing_ok=True)              # 写了半截的不留
+            raise OSError(str(exc)) from exc
         return path
 
     # ------------------------------------------------------------- manifest

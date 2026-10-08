@@ -181,6 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--video-transcode", action="store_true",
                    help="相机不是 H.264 时转成 H.264 再推(默认原样转封装,不占 CPU)")
     v.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件")
+    v.add_argument("--evidence-pub", type=Path, default=Path("/etc/d1max/evidence-pub.key"),
+                   help="站点的证据公钥(W30b):有这个文件就把照片、截图、录像封着存(狗自己解不开);"
+                        "没有就照旧明文(站点报 P2)")
     v.add_argument("--record", default="auto",
                    help="连续录像(W18):录哪几路相机,逗号分隔(front,back);none 不录;auto(缺省)"
                         "真狗录 front,back、仿真不录。要 --outbox:片段从录像发件箱传站点")
@@ -481,15 +484,17 @@ def build(args: argparse.Namespace) -> Assembled:
         video = VideoPusher(source=source, ffmpeg=args.ffmpeg, transcode=args.video_transcode)
         pump = keeper = mapper = recorder = None
         cams = record_cameras(args)
+        sealer = _sealer(args)
         if args.outbox is not None:
-            pump, keeper, mapper = _outbox(args, registration, parts, record=bool(cams))
+            pump, keeper, mapper = _outbox(args, registration, parts, record=bool(cams),
+                                           sealer=sealer)
             if cams:
                 from d1max_agent.recording import Recorder
                 recorder = Recorder(video_root(args), cams, source=source,
                                     encode=args.video_transcode,
                                     quota_bytes=int(args.record_max_gb * 2**30),
                                     emit=lambda k, d: None, monotonic=time.monotonic,
-                                    ffmpeg=args.ffmpeg)
+                                    ffmpeg=args.ffmpeg, sealer=sealer)
         elif cams:
             log.warning("给了 --record 但没有 --outbox:不录(片段要从录像发件箱传站点)")
         runtime = AgentRuntime(transport=transport, registration=registration, hal=hal,
@@ -504,6 +509,7 @@ def build(args: argparse.Namespace) -> Assembled:
                                obs_socket=args.obs_socket, persons=args.persons,
                                persons_socket=args.persons_socket,
                                persons_snapshots=args.persons_snapshots)
+        runtime.evidence_sealed = sealer is not None   # W30b:能力里报,没封站点报 P2
         if pump is not None:
             runtime._outbox_retry = pump.retry_refused
         return hal, parts, runtime, pump
@@ -551,8 +557,26 @@ def video_root(args: argparse.Namespace) -> Path:
     return Path(args.outbox)
 
 
+def _sealer(args: argparse.Namespace) -> Any:
+    """证据加密(W30b,决策 51):有站点公钥就封;没有(老狗、没装好)照旧明文。照片的封在
+    :class:`RunArchive` 上设一次(引擎、人员截图都经它存照片)。"""
+    from d1max_agent.engine.archive import RunArchive
+    from d1max_contract.evseal import Sealer, SealError, load_public
+    path = getattr(args, "evidence_pub", None)
+    sealer = None
+    if path is not None and Path(path).is_file():
+        try:
+            sealer = Sealer(load_public(path))
+        except SealError as exc:
+            log.error("证据公钥用不了(照旧明文存):%s", exc)
+    else:
+        log.warning("没有证据公钥 %s:照片、截图、录像明文存在狗上(站点会报 P2)", path)
+    RunArchive.sealer = sealer
+    return sealer
+
+
 def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineParts,
-            *, record: bool = False) -> tuple[Any, Any, Any]:
+            *, record: bool = False, sealer: Any = None) -> tuple[Any, Any, Any]:
     """发件箱 + 后台线程;站点下发地图、录包重建(W00c5d 第二部分)。
 
     上传、下载都走站点的狗专用口,**mTLS**:跟 MQTT 同一套证书(身份就是证书)。发件箱分三块:
@@ -619,6 +643,14 @@ def _outbox(args: argparse.Namespace, registration: Registration, parts: EngineP
         video = (Outbox(video_root(args), cap_bytes=int(args.record_max_gb * 2**30),
                         sink=sinks[3], sn=registration.robot_id, now_ms=wall_ms, sub=SUB,
                         run_depth=2, classify=video_classify, settled=lambda p: True),)
+    if sealer is not None:
+        # W30b(决策 51):升级前就在发件箱里的明文照片、录像,在上传线程起来之前就地封上
+        from d1max_agent.recording import VIDEO_FILE, VIDEO_SEALED
+        n = runs.seal_leftovers(sealer, lambda rel: rel.startswith("photos/"))
+        for v in video:
+            n += v.seal_leftovers(sealer, lambda rel: rel == VIDEO_FILE)
+        if n:
+            log.info("发件箱里 %d 个明文照片、录像补封上了(%s)", n, VIDEO_SEALED)
     pump = OutboxPump(runs, more=(bags, maps), uncounted=video)
     if mapper is not None:
         from d1max_agent.mapping import storage_pressure

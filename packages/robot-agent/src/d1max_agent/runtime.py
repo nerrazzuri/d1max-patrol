@@ -291,6 +291,8 @@ class AgentRuntime:
         #: 确认不了时 dock 任务挂上,实测离桩稳 5 秒才摘)。会对桩的狗才有运动闸。
         self._on_dock: bool | None = None
         self._dock_hazard = ""
+        #: 证据加密(W30b):主程序设;``None`` = 不报(老的装配)。
+        self.evidence_sealed: bool | None = None
         self._dock_clear_ms: int | None = None
         self._dock_told: tuple = ()
         if self.hal.hal_capabilities().recharge_mode != "none":
@@ -618,6 +620,8 @@ class AgentRuntime:
             out["speed_cap"] = self._speed_cap_caps()  # W29:全狗限速(站点下雨、雷暴时发)
         if self.hal.hal_capabilities().recharge_mode != "none":
             out["dock"] = self._dock_caps()         # W13:会对桩;在不在桩上、桩上危险
+        if self.evidence_sealed is not None:
+            out["evidence"] = {"sealed": self.evidence_sealed}   # W30b:没封站点报 P2
         deter = self.deter.caps()
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术

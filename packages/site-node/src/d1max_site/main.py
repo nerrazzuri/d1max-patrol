@@ -139,6 +139,13 @@ def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
         # W33:新登记的狗先只许手动派,管理员确认后(robot-auto)才接自动派遣
         reg.enroll(robot_id, fingerprint=bundle.fingerprint, issued_at=r.issued_at,
                    expires_at=r.expires_at, now_ms=wall_ms(), manual_only=True)
+        # W30b:证书包里带站点的证据公钥(狗用它封照片、录像),从证据私钥算出来
+        from d1max_contract.evseal import public_key
+        from d1max_site.evidence import load_evidence_key
+        key = load_evidence_key(cfg)
+        if key is not None:
+            (bundle.dir / "evidence-pub.key").write_text(public_key(key).hex() + "\n",
+                                                         encoding="ascii")
         return bundle.dir
     finally:
         db.close()
@@ -148,6 +155,28 @@ def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
 #: 密钥照旧是最后一行(脚本、测试按最后一行取)。
 _HEX_HINT = ("注意:下面是 64 位十六进制,算签名前先解码成 32 字节再当 HMAC-SHA256 的密钥"
              "(Python: bytes.fromhex(密钥));签名格式见 docs/事件源接入.md")
+
+
+def cmd_evidence_open(home: Path, key_path: str | None = None) -> tuple[int, int]:
+    """W30b:封好、还没解开的照片、录像补解(换了私钥、当时没配私钥)。"""
+    from d1max_site.evidence import EvidenceStore, load_evidence_key
+    from d1max_site.recordings import RecordingStore
+    cfg = _load(home)
+    if key_path:
+        cfg = {**cfg, "evidence_key": key_path}
+    key = load_evidence_key(cfg)
+    if key is None:
+        raise SiteError("没有证据私钥:解不了")
+    db = SiteDB(home / "site.db")
+    try:
+        store = EvidenceStore(home / "evidence", db, now_ms=wall_ms)
+        rec = RecordingStore(db, home / "recordings", now_ms=wall_ms)
+        store.evidence_key = rec.evidence_key = key
+        a, b = store.open_leftovers()
+        c, d = rec.open_leftovers()
+        return a + c, b + d
+    finally:
+        db.close()
 
 
 def cmd_robot_service(home: Path, robot_id: str, manual: bool, note: str = "") -> str:
@@ -594,6 +623,11 @@ class Server:
         rcfg = cfg.get("retention", {})
         self.recordings = RecordingStore(self.db, home / "recordings", now_ms=wall_ms,
                                          keep_days=int(rcfg.get("recordings_days", 30)))
+        # W30b(决策 51):狗封好的照片、录像收齐了用证据私钥解开
+        from d1max_site.evidence import EvidencePlainWatch, load_evidence_key
+        ekey = load_evidence_key(cfg)
+        self.evidence.evidence_key = self.recordings.evidence_key = ekey
+        self.evidence_watch = EvidencePlainWatch(self.db, self.dispatcher, now_ms=wall_ms)
         # W30(决策 43,PDPA):证据留存期、按时间段删
         from d1max_site.privacy import KEEP_DAYS, PrivacyDesk
         self.privacy = PrivacyDesk(self.db, self.evidence, now_ms=wall_ms,
@@ -614,6 +648,13 @@ class Server:
         self.cctv = CctvManager(self.db, report=incident_reporter(self.incidents, self.loop.submit,
                                                                   wall_ms), now_ms=wall_ms,
                                 alerts=loop_alerts)
+        def 解不开(robot: str, run: str, rel: str, why: str) -> None:
+            loop_alerts.raise_alert(kind="evidence_unopened", robot=robot,
+                                    title=f"狗封好的证据解不开:{run}/{rel}",
+                                    detail=f"{why};封好的那份留在站点,配好证据私钥后 "
+                                           "d1max-site evidence-open 补解")
+        self.evidence.on_unopened = self.recordings.on_unopened = 解不开
+        self.evidence_watch.alerts = self.alerts
         self.intake.on_refused = lambda robot, run, rel, why: loop_alerts.raise_alert(
             kind="upload_refused", robot=robot, title=f"站点不收 {run}/{rel}",
             detail=f"{why}(那一趟留在狗上,不会自己删)")
@@ -737,6 +778,10 @@ class Server:
                 self.sightings.tick()                  # W33:布防中狗没在驱离时看见人报 P1
             except Exception:
                 log.exception("看见人这一拍没办成")
+            try:
+                self.evidence_watch.tick()             # W30b:狗上证据没封报 P2
+            except Exception:
+                log.exception("证据没封这一拍没办成")
             try:
                 await self.weather.tick()              # W29:查天气、雷暴撤排程巡检、对账限速
             except Exception:
@@ -875,6 +920,8 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--until", required=True, help="结束(同上)")
     pp.add_argument("--robot", default=None, help="只删这台狗的(不给就是所有狗)")
     pp.add_argument("--reason", required=True, help="为什么删:谁要求的、哪一条请求(记审计)")
+    eo = sub.add_parser("evidence-open", help="狗封好、站点还没解开的照片、录像补解(W30b)")
+    eo.add_argument("--key", default=None, help="证据私钥(缺省按 site.json / /etc/d1max-site)")
     bo = sub.add_parser("backup-open", help="把加密的备份解开到另一个目录(W30,恢复用)")
     bo.add_argument("src", help="备份目录(或其中的一部分)")
     bo.add_argument("dst", help="解到哪儿(要空目录)")
@@ -930,8 +977,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(cmd_fingerprint(home))
         elif args.cmd == "enroll":
             d = cmd_enroll(home, args.robot_id, args.days)
+            ev = " evidence-pub.key" if (d / "evidence-pub.key").is_file() else ""
             print(f"证书包: {d}\n拷到狗上: ca.crt robot.crt robot.key → /etc/d1max/tls/,"
-                  f"registration.json → /etc/d1max/")
+                  f"registration.json{ev} → /etc/d1max/")
+            if not ev:
+                print("注意:站点没配证据私钥,证书包里没有证据公钥 —— 狗上的照片、录像会明文存"
+                      "(装机脚本会生成 /etc/d1max-site/evidence.key)")
         elif args.cmd in ("robot-auto", "robot-manual"):
             print(cmd_robot_service(home, args.robot_id, args.cmd == "robot-manual",
                                     getattr(args, "note", "")))
@@ -973,6 +1024,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                      if got["held_runs"] or got["held_recordings"] else "")
                   + (f";连带删了 {got['exports']} 份导出" if got.get("exports") else "")
                   + (f";{got['failed']} 样删不掉(看日志,再跑一次)" if got["failed"] else ""))
+        elif args.cmd == "evidence-open":
+            ok, bad = cmd_evidence_open(home, args.key)
+            print(f"解开了 {ok} 个,还解不开 {bad} 个")
+            if bad:
+                return 1
         elif args.cmd == "backup-open":
             n = cmd_backup_open(Path(args.src), Path(args.dst), Path(args.key))
             print(f"解开了 {n} 个文件 → {args.dst}")

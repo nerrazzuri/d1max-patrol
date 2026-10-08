@@ -28,7 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Any
 
-from d1max_contract.intake import VIDEO_FILE, split_video
+from d1max_contract.intake import VIDEO_FILE, VIDEO_SEALED, split_video
 from d1max_contract.storage import WARN_RATIO
 
 log = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ STAGING = ".rec"
 
 def video_classify(rel: str) -> int | None:
     """录像发件箱只传 ``video.mp4``(``Outbox(classify=…)``)。"""
-    return 5 if rel == VIDEO_FILE else None
+    return 5 if rel in (VIDEO_FILE, VIDEO_SEALED) else None
 
 
 class _Cam:
@@ -64,8 +64,11 @@ class Recorder:
                  emit: Callable[[str, dict[str, Any]], None],
                  monotonic: Callable[[], float],
                  disk_usage: Callable[[Path], tuple[int, int, int]] = shutil.disk_usage,
-                 popen: Callable[..., Any] = subprocess.Popen, ffmpeg: str = "ffmpeg") -> None:
+                 popen: Callable[..., Any] = subprocess.Popen, ffmpeg: str = "ffmpeg",
+                 sealer: Any = None) -> None:
         self.root = Path(root)
+        #: 证据加密(W30b):配了就封着挪进发件箱(:class:`~d1max_contract.evseal.Sealer`)。
+        self.sealer = sealer
         self.out = self.root / SUB
         self.cameras = list(cameras)
         self._source = source
@@ -188,7 +191,16 @@ class Recorder:
                 continue
             dest = self.out / camera / p.stem / VIDEO_FILE
             dest.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(p, dest)
+            if self.sealer is not None:
+                # W30b:封着挪进发件箱(暂存里正在写的那段是明文,写完了才挪;封好了再删明文)
+                try:
+                    self.sealer.seal_file(p, dest.with_name(VIDEO_SEALED))
+                except Exception:
+                    log.exception("%s 这一段封不了(留在暂存,下一拍再封)", p.name)
+                    continue
+                p.unlink(missing_ok=True)
+            else:
+                os.replace(p, dest)
             moved += 1
         return moved
 

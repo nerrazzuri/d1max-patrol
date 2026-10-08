@@ -30,6 +30,11 @@ _PHOTO_RE = re.compile(r"^photos/[^/]{1,250}\.(jpg|jpeg|png)$", re.IGNORECASE)
 
 
 def dog_may_upload(rel: str) -> bool:
+    """照片可以是封好的(W30b:``photos/<名字>.jpg.d1e``,站点收齐了解开成原名);清单、事件从不封。"""
+    from d1max_contract.evseal import plain_name
+    plain = plain_name(rel)
+    if plain is not None:
+        return bool(_PHOTO_RE.match(plain))
     return rel in DOG_FILES or bool(_PHOTO_RE.match(rel))
 
 
@@ -47,6 +52,8 @@ def split_run(run: str) -> tuple[str, str] | None:
 #: 被杀掉的那段
 #: 照样能放到断的地方)。时刻是**狗的钟**(UTC),秒级,不带后缀。
 VIDEO_FILE = "video.mp4"
+#: 封好的录像段(W30b):站点收齐了解开成 :data:`VIDEO_FILE`。
+VIDEO_SEALED = VIDEO_FILE + ".d1e"
 _VIDEO_STAMP_RE = re.compile(r"^\d{8}T\d{6}Z$")
 
 

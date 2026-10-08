@@ -24,6 +24,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from d1max_agent.engine.retention import is_settled
 from d1max_agent.engine.upload_queue import UploadQueue, classify
@@ -114,6 +115,30 @@ class Outbox:
                                 backlog_bytes=0, oldest_backlog_s=None)
         self._measure_failed = False
         return f
+
+    def seal_leftovers(self, sealer: Any, want: Callable[[str], bool]) -> int:
+        """W30b:发件箱里还是明文的证据(升级前存的)就地封上:``<名字>`` → ``<名字>.d1e``,
+        封成了才删明文,队列里那一条销账(明文没了,不销账会一直等它)。传到一半的从头传封好的
+        那份。**上传线程起来之前调**。回封了几个。"""
+        from d1max_contract.evseal import SUFFIX
+        n = 0
+        for path in sorted(self.runs_root.rglob("*")):
+            if not path.is_file() or path.name.endswith(SUFFIX) or path.name.startswith("."):
+                continue
+            key = path.relative_to(self.runs_root).as_posix()
+            parts = key.split("/")
+            if len(parts) < self.run_depth + 1 or not want("/".join(parts[self.run_depth:])):
+                continue
+            try:
+                sealer.seal_file(path, path.with_name(path.name + SUFFIX))
+            except Exception:
+                log.exception("发件箱里的 %s 封不了(留着明文照传)", key)
+                continue
+            path.unlink(missing_ok=True)
+            if key in self.uploader.queue._items:
+                self.uploader.queue.finish(key)
+            n += 1
+        return n
 
     def facts(self) -> StorageFacts:
         return self._facts if self._facts is not None else self._measure_safe()
