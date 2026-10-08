@@ -452,6 +452,23 @@ fi
 systemctl daemon-reload
 systemctl enable d1max-agent.service
 
+# 运行期要的系统件(决策 47:只查、只提示,不替厂家的系统装东西、改账号)。C40221 上三样都缺
+# (2026-10-08):没有 ffmpeg 画面和录像都没有;人员检测要系统 Python 里的 onnxruntime;
+# 继电器板的串口属 dialout 组,代理的账号不在组里就打不开。
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo "  !! 没有 ffmpeg:画面(W00c5b)和连续录像(W18)都没有。离线装法见装机清单「一」" >&2
+# 先收进变量再判:pipefail 下 grep -q 早退会让 ffmpeg 挨 SIGPIPE,整条管道算失败、误报。
+elif [[ " $(ffmpeg -hide_banner -protocols 2>/dev/null | tr -s ' \n' ' ') " != *" srt "* ]]; then
+  echo "  !! ffmpeg 不带 srt:画面推不到站点(录像不受影响)。装法见装机清单「一」" >&2
+fi
+if ! python3 -c 'import onnxruntime' >/dev/null 2>&1; then
+  echo "  提示: 系统 Python 里没有 onnxruntime,人员检测节点(W24)起不来;不开人员检测可以不管" >&2
+fi
+if [[ " $(id -nG "$RUN_USER" 2>/dev/null) " != *" dialout "* ]]; then
+  echo "  提示: $RUN_USER 不在 dialout 组,上装继电器板的串口打不开(W21);接了上装再:" >&2
+  echo "        sudo usermod -aG dialout $RUN_USER && sudo systemctl restart d1max-agent" >&2
+fi
+
 say "6/7 看一眼站点签发的证书包与注册文件"
 if [[ -f /etc/d1max/registration.json && -f /etc/d1max/tls/ca.crt \
       && -f /etc/d1max/tls/robot.crt && -f /etc/d1max/tls/robot.key ]]; then
@@ -469,9 +486,14 @@ fi
 # 配置按 /etc/d1max/env 算(站点主机:D1MAX_SITE_NTP,没有从 D1MAX_SITE_MQTT 取);站点地址还没填就先不配,
 # 填了再跑一遍这个脚本。用系统自带的 systemd-timesyncd,不另装包(狗上离线)。
 TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/d1max.conf
-if ! systemctl cat systemd-timesyncd >/dev/null 2>&1; then
-  # 装的是 chrony / ntp 的话 timedatectl 管的是它们,这份配置不生效(W09d 内审):说清楚,不假装配上了
-  echo "  !! 这台机器上没有 systemd-timesyncd,对时没配(真机项 3d.28:换 chrony 指着站点主机)" >&2
+# 只看单元在不在不够:C40221 上 systemd-timesyncd 的包卸了、单元 masked,`systemctl cat` 照样成功,
+# 结果写了一份不生效的配置(2026-10-08)。单元要真能载入(LoadState=loaded)才算有。
+if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != loaded ]]; then
+  # 装的是 chrony / ntp 的话 timedatectl 管的是它们,这份配置不生效(W09d 内审):说清楚,不假装配上了。
+  # 厂家的 chrony 不动(决策 47):狗的钟不准由站点的时差告警兜着。
+  rm -f "$TIMESYNC_CONF"
+  echo "  !! 这台机器的对时不归 systemd-timesyncd 管(没装或 masked;多半是厂家的 chrony),我们不配、" >&2
+  echo "     也不动厂家的配置。钟差站点会报(真机项 3d.28)" >&2
 elif ts_conf=$(bash "$PKG/deploy/d1max-timesync-conf" /etc/d1max/env); then
   install -d -m 0755 "$(dirname "$TIMESYNC_CONF")"
   printf '%s\n' "$ts_conf" > "$TIMESYNC_CONF.tmp"

@@ -1571,10 +1571,15 @@ def test_对时配置_边界_env缺了_带引号_IPv6_减号开头_都说清楚(
 
 
 def test_装机脚本对时_先看有没有_timesyncd_没配上就删旧的_成功才说成功(装机脚本):
-    """W09d 内审小 8。"""
+    """W09d 内审小 8。「有没有」看单元能不能载入:C40221 上包卸了、单元 masked,``systemctl cat``
+    照样成功,结果写了一份不生效的配置(2026-10-08,决策 47)。"""
     段 = 装机脚本[装机脚本.index("TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/d1max.conf"):]
     段 = 段[:段.index('say "7/7')]
-    assert "systemctl cat systemd-timesyncd" in 段
+    assert "systemctl show -p LoadState --value systemd-timesyncd" in 段
+    assert "systemctl cat systemd-timesyncd" not in 段
+    # 不归 timesyncd 管的那一支也把我们的旧配置删掉,不留一份不生效的
+    不归 = 段[:段.index("elif ts_conf=")]
+    assert 'rm -f "$TIMESYNC_CONF"' in 不归
     assert 'rm -f "$TIMESYNC_CONF"' in 段, "站点地址清空、改错了:不留指着旧主机的配置"
     ok = 段.index("对时:向")
     assert 段.rfind("if systemctl restart systemd-timesyncd", 0, ok) != -1, "重启成了才说对上"
@@ -1654,3 +1659,50 @@ def test_装机脚本_换算系数不对什么都不改就停():
     assert i < 装.index('say "1/7 建目录'), "在动任何东西之前"
     assert "exit 2" in 装[i:i + 300]
     assert "sed -i" not in 装[i - 400:i + 400], "不改人手写的配置"
+
+
+# ---------------------------------------------------------- 运行期系统件(决策 47)
+
+def _系统件检查(tmp_path: Path, *, ffmpeg: str | None, onnx: bool, groups: str) -> str:
+    """把 install.sh 里「运行期要的系统件」那段原样抠出来,在 ``set -euo pipefail`` 下用假的
+    ffmpeg / python3 / id 跑,回 stderr。"""
+    import shutil
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    段 = text[text.index("# 运行期要的系统件"):text.index('say "6/7')]
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(parents=True)
+
+    def 假(名: str, body: str) -> None:
+        (bin_ / 名).write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        (bin_ / 名).chmod(0o755)
+    if ffmpeg is not None:
+        # 要找的协议排在最前、后面再写 >64 KB(管道缓冲):管道里 grep -q 一早退,写的一方挨 SIGPIPE,
+        # pipefail 下整条算失败 —— 检查要不受这个影响
+        假("ffmpeg", f"echo 'Input:'; echo '  {ffmpeg}'; echo 'Output:'; echo '  {ffmpeg}'; "
+                     "i=0; while [ $i -lt 20000 ]; do echo '  file'; i=$((i+1)); done")
+    假("python3", "exit 0" if onnx else "exit 1")
+    假("id", f"echo '{groups}'")
+    for 名 in ("tr", "cat", "grep"):
+        (bin_ / 名).symlink_to(shutil.which(名))
+    r = subprocess.run(["/bin/bash", "-c", "set -euo pipefail\nRUN_USER=robot\n" + 段],
+                       env={"PATH": str(bin_)}, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    return r.stderr
+
+
+def test_系统件都在就一声不吭(tmp_path):
+    assert _系统件检查(tmp_path, ffmpeg="srt", onnx=True, groups="robot dialout video") == ""
+
+
+def test_系统件缺什么报什么_只提示不装(tmp_path):
+    err = _系统件检查(tmp_path, ffmpeg=None, onnx=False, groups="robot video")
+    assert "没有 ffmpeg" in err and "onnxruntime" in err and "dialout" in err
+    err = _系统件检查(tmp_path / "b", ffmpeg="rtmp", onnx=True, groups="robot dialout")
+    assert "不带 srt" in err and "onnxruntime" not in err and "dialout" not in err
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    段 = text[text.index("# 运行期要的系统件"):text.index('say "6/7')]
+    # 只查只提示(决策 47):不替厂家的系统装包、改账号 —— usermod 只出现在给人看的提示里
+    for 行 in 段.splitlines():
+        if "usermod" in 行 or "apt-get" in 行:
+            assert 行.strip().startswith(("echo", "#")), 行
+
