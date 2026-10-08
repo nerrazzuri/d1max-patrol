@@ -260,3 +260,18 @@ def test_推理后端_只有CPU就只给CPU_线程数照给的(monkeypatch, tmp_
     assert d.sess.providers_in == ["CPUExecutionProvider"] and d.backend == "CPUExecutionProvider"
     assert d.sess.opts.intra_op_num_threads == 3
     assert not (tmp_path / "trt").exists(), "没有 TensorRT 就不建缓存目录"
+
+
+def test_测距只用框中间_框边上更近的遮挡物不算():
+    """2026-10-08 C40221:人坐在人形机器人斜后方(约 3 m),框右边缘跟站在前面的机器人(约 2 m)重叠
+    一条,整框量到的是机器人。只用框中间一半宽度量,量到的是人。"""
+    det = 假检测器([Box(860, 300, 1060, 900, 0.7)])     # 正中、宽 200 像素,左右边约 ±5.8°
+    n = PersonNode(det)
+    n.on_cloud(np.vstack([_人(3.0, 0.0), _人(2.0, -5.0)]))     # 人在正中 3 m,遮挡物在右边缘 2 m
+    人 = _过契约(n.on_image("front", b"x", 1)).people[0]
+    assert 人.range_m == pytest.approx(3.0, abs=0.05)
+    整框 = PersonNode(det, settings=Settings(range_span=1.0))
+    整框.on_cloud(np.vstack([_人(3.0, 0.0), _人(2.0, -5.0)]))
+    被挡 = _过契约(整框.on_image("front", b"x", 1)).people[0]
+    assert 被挡.range_m == pytest.approx(2.0, abs=0.05)
+
