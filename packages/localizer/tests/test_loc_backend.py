@@ -429,3 +429,63 @@ def test_W34_有效点_有限且离雷达半米外才算():
     data = b"".join(struct.pack("<fffI", *p, 7) for p in pts)        # 每点 16 字节
     assert valid_points(SimpleNamespace(point_step=16, data=data)) == 2
     assert valid_points(SimpleNamespace(point_step=16, data=b"")) == 0
+
+
+async def test_W34外审_挡着要A_恢复后下一拍之前又要B_只起B_旧的恢复请求不盖掉新图(tmp_path):
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    _扫(c, core, 100, 1.2)
+    await be.check()
+    await _settle()                                       # 挡住:停了 MOLA
+    a = _先验(tmp_path, "a")
+    await be.load_prior(("a", "1"), str(a))
+    _扫(c, core, 50_000, 1.2)                             # 恢复了,还没到下一拍
+    b = _先验(tmp_path, "b")
+    await be.load_prior(("b", "1"), str(b))
+    await _settle()
+    await be.check()
+    await _settle()
+    assert sup.started[1:] == [b / PRIOR_FILE], ("A 的恢复请求不许再起,B 也不重起一遍", sup.started)
+    assert core.map_ref == ("b", "1")
+
+
+async def test_W34外审_挡着先后要A和B_恢复了只起最后要的B(tmp_path):
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    _扫(c, core, 100, 1.2)
+    await be.check()
+    await _settle()
+    await be.load_prior(("a", "1"), str(_先验(tmp_path, "a")))
+    b = _先验(tmp_path, "b")
+    await be.load_prior(("b", "1"), str(b))
+    _扫(c, core, 50_000, 1.2)
+    await be.check()
+    await _settle()
+    assert sup.started[1:] == [b / PRIOR_FILE]
+
+
+async def test_W34外审_两回挡住之间正常换过图_第二回恢复起的是换过的那份(tmp_path):
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    _扫(c, core, 100, 1.2)
+    await be.check()
+    await _settle()
+    a = _先验(tmp_path, "a")
+    await be.load_prior(("a", "1"), str(a))               # 第一回挡着时要了 A
+    _扫(c, core, 50_000, 1.2)
+    await be.check()
+    await _settle()
+    assert sup.started[-1] == a / PRIOR_FILE
+    b = _先验(tmp_path, "b")
+    await be.load_prior(("b", "1"), str(b))               # 正常换成 B
+    await _settle()
+    _扫(c, core, 100, 1.2)                                # 第二回挡住
+    await be.check()
+    await _settle()
+    _扫(c, core, 50_000, 1.2)
+    await be.check()
+    await _settle()
+    assert sup.started[-1] == b / PRIOR_FILE, sup.started

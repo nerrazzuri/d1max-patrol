@@ -833,3 +833,16 @@ async def test_W19_摄像头报入侵_派最近的狗去_来源是cctv_照样限
     report(cam, OnvifEvent("x/FieldDetector", "Changed", {}, {"IsInside": "true"}))
     await asyncio.gather(*pending)
     assert len(t.desk.list()) == 1, "超了限流的不收"
+
+
+async def test_W33外审_占位之后发之前改成只许手动派_不派_记派失败(站, monkeypatch):
+    t = 站
+    real = t.desk._dispatch
+
+    async def 发之前改(iid):
+        t.reg.set_manual_only(t.desk._row(iid)["robot_id"], True, by="alice", now_ms=0)
+        await real(iid)
+    monkeypatch.setattr(t.desk, "_dispatch", 发之前改)
+    r = await _报(t)
+    assert r["outcome"] == "dispatch_failed" and "只许手动派" in r["note"], r
+    assert not [c for c in t.site.commands("A", 20) if c["kind"] == "goto"]
