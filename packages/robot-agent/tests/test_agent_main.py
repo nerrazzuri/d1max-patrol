@@ -281,7 +281,24 @@ def test_视频参数_仿真用测试图_真狗拉相机RTSP(tmp_path):
         a.stop()
     d = _args(tmp_path, "--hal", "d1max", "--camera-host", "10.1.2.3", "--video-transcode")
     assert d.camera_host == "10.1.2.3" and d.video_transcode is True
-    assert _args(tmp_path).camera_host == "192.168.234.1"
+    assert _args(tmp_path).camera_host == "192.168.168.168"     # Orin 到 RK3588 走有线
+
+
+def test_仿真也能拉真相机_不抢控制权验视频和录像(tmp_path):
+    """``--video-source rtsp``:运动是仿真的,画面、录像来自真相机(2026-10-08 C40221 现场
+    要这样验)。"""
+    a = agent_main.build(_args(tmp_path, "--video-source", "rtsp"))
+    try:
+        assert a.runtime.video._source("front") == [
+            "-rtsp_transport", "tcp", "-i", "rtsp://192.168.168.168:8554/front"]
+    finally:
+        a.stop()
+    a = agent_main.build(_args(tmp_path, "--hal", "sim", "--video-source", "lavfi"))
+    try:
+        from d1max_agent.video_push import lavfi_source
+        assert a.runtime.video._source is lavfi_source
+    finally:
+        a.stop()
 
 
 # ------------------------------------------------------------ W00c5d:发件箱
