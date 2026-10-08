@@ -450,6 +450,39 @@ async def test_任务完成时钟差还不知道_回程隔一会儿再试_估出
     assert not [i for i in _feed(sub) if i["kind"] == "standby_failed"]
 
 
+async def test_W33复查_回程等着重试的时候改成只许手动派_下一次不发了_也不报没回去(站):
+    """自动回程碰上「钟差还不知道」等 2 s 再试;等的时候保安改成只许手动派:不再发,
+    不推 standby_failed;人手动叫回照收。"""
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    real = t.site._skew
+    waits = []
+
+    class 不知道:
+        _samples: dict = {}
+
+        def note(self, *a):
+            pass
+
+        def skew_s(self, rid):
+            return None
+
+    async def 等(s):
+        waits.append(s)
+        t.reg.set_manual_only("A", True, by="gina", now_ms=0)     # 等的时候改了开关
+        t.site._skew = real                                       # 钟差也估出来了
+    t.stb._sleep = 等
+    sub = t.site.feed.subscribe()
+    await t.send(t.site.goto("A", target(0.8), 0.8, issued_by="alice", priority=MANUAL))
+    t.site._skew = 不知道()
+    await t.run(200)
+    assert waits == [2.0], "试过一次、等过一回"
+    assert len(_cmds(t, "goto")) == 1, "改成只许手动之后不再发回程"
+    assert not [i for i in _feed(sub) if i["kind"] == "standby_failed"]
+    r = await t.stb.return_to("A", issued_by="alice")
+    assert r["ack"]["result"] == "accepted", "人手动叫回照收"
+
+
 async def test_钟差一直不知道_试够了才推standby_failed(站):
     t = 站
     t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
