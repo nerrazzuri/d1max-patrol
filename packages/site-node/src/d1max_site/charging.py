@@ -17,6 +17,11 @@
 - **入侵**(决策 45):正在回充的狗,电量 ≥ 50% 才派(``incidents.pick_robot`` 问 :meth:`refuse`);
   ``dock`` 被抢时狗上先出桩再交。
 - 回充这几趟结束时,待命点管理器不自动派回程(:meth:`holds`):充完的狗就停在桩前。
+- **先落库、再派**(W13 外审 4):要派的那一趟的任务号先写进 ``charge_cycles``(写不进去就不派);
+  狗明确拒收 → 退回上一步(走到了的退回 ``arrived``、刚起的作废)、30 秒后再派;发出去回执没到
+  (说不清狗收没收)→ 留着,按那个任务号的终态事件对账,过了 :data:`LOST_S` 还没有就当被打断。
+- **桩上危险**(W13 外审 1–3):狗报 ``dock.hazard``(出桩、停对桩确认不了,狗上运动锁住)→ 报 P1
+  ``dock_stuck``,一次挂一次(``dock_hazards``,跟待报告警同一个事务),狗上摘了就清。
 """
 
 from __future__ import annotations
@@ -137,6 +142,32 @@ class ChargeDesk:
                 await self._one(ch)
             except Exception:
                 log.exception("%s 的回充这一拍没办成", ch["robot_id"])
+        try:
+            self._hazards()
+        except Exception:
+            log.exception("桩上危险这一拍没对上账")
+
+    def _hazards(self) -> None:
+        """狗报的「桩上危险」对账:新挂上的报 P1(一次挂一次),摘了的清掉记录。"""
+        seen = {r["robot_id"] for r in self.db.query("SELECT robot_id FROM dock_hazards")}
+        now = self._now()
+        for rid, c in list(self.dispatcher.clients.items()):
+            d = c.capabilities.tasks.get("dock") if c.capabilities is not None else None
+            if not isinstance(d, dict):
+                continue
+            hz = d.get("hazard")
+            if hz and rid not in seen:
+                with self.db.tx() as tx:
+                    tx.execute("INSERT INTO dock_hazards(robot_id, reason, created_ms) "
+                               "VALUES (?,?,?)", (rid, str(hz)[:200], now))
+                    queue(tx, kind="dock_stuck", robot=rid,
+                          title="狗可能还在充电桩上,运动锁住了",
+                          detail=f"{str(hz)[:200]};要人去看:把狗挪下桩,它确认离了桩自己解锁",
+                          context={}, now_ms=now)
+            elif not hz and rid in seen:
+                with self.db.tx() as tx:
+                    tx.execute("DELETE FROM dock_hazards WHERE robot_id=?", (rid,))
+        flush(self.db, self.alerts)
 
     def _cycle(self, rid: str) -> dict[str, Any] | None:
         rows = self.db.query("SELECT * FROM charge_cycles WHERE robot_id=?", (rid,))
@@ -179,6 +210,9 @@ class ChargeDesk:
                 await self._goto(rid, ch, None)
             return
         state = cyc["state"]
+        if state == "arrived":
+            await self._dock(rid, cyc)                  # 走到了、对桩还没派成
+            return
         if state == "cooldown":
             if now >= (cyc["until_ms"] or 0):
                 self._set(rid, None)
@@ -197,7 +231,8 @@ class ChargeDesk:
         kind, data = term
         if kind == "task_done":
             if state == "goto":
-                await self._dock(rid, cyc)
+                self._set(rid, "arrived")               # 先记「走到了」,再派对桩
+                await self._dock(rid, {**cyc, "state": "arrived"})
             else:
                 log.info("%s 充完了,出了桩", rid)
                 self._set(rid, None)
@@ -232,20 +267,24 @@ class ChargeDesk:
         tid = f"{TASK_PREFIX}goto-{uuid.uuid4().hex[:10]}"
         target = MapPose(map_id=ch["map_id"], map_version=ch["map_version"], frame_id="map",
                          x=ch["x"], y=ch["y"], yaw=ch["yaw"]).to_wire()
-        try:
-            r = await self.dispatcher.goto(rid, target, None, issued_by="charge",
-                                           priority=CHARGE_PRIORITY, task_id=tid, charge=True)
-        except Exception as exc:  # noqa: BLE001 - 派不出去:过一会儿再派
-            log.warning("%s 去桩前没派成:%s", rid, exc)
-            return
-        if not _accepted(r):
-            log.warning("%s 去桩前被拒:%s", rid, (r or {}).get("ack"))
-            return
-        self._retry_at.pop(rid, None)
-        with self.db.tx() as c:
+        with self.db.tx() as c:                         # 先落库(W13 外审 4):写不进去就不派
             c.execute("INSERT OR REPLACE INTO charge_cycles(robot_id, state, task_id, sent_ms, "
                       "started_ms, until_ms) VALUES (?,?,?,?,?,NULL)",
                       (rid, "goto", tid, now, cyc["started_ms"] if cyc else now))
+        try:
+            r = await self.dispatcher.goto(rid, target, None, issued_by="charge",
+                                           priority=CHARGE_PRIORITY, task_id=tid, charge=True)
+        except Exception as exc:  # noqa: BLE001 - 说不清狗收没收:留着,按终态 / 丢了对账
+            log.warning("%s 去桩前没派成(回执没到?):%s", rid, exc)
+            return
+        if not _accepted(r):
+            log.warning("%s 去桩前被拒:%s", rid, (r or {}).get("ack"))
+            if cyc is None:
+                self._set(rid, None)                    # 刚起的:作废,电量线还低下次再起
+            else:
+                self._set(rid, "resume")
+            return
+        self._retry_at.pop(rid, None)
 
     async def _dock(self, rid: str, cyc: dict[str, Any]) -> None:
         now = self._now()
@@ -253,20 +292,21 @@ class ChargeDesk:
             return
         self._retry_at[rid] = now + RESEND_MS              # 派成了再清
         tid = f"{TASK_PREFIX}dock-{uuid.uuid4().hex[:10]}"
+        with self.db.tx() as c:                         # 先落库(W13 外审 4):写不进去就不派
+            c.execute("UPDATE charge_cycles SET state='dock', task_id=?, sent_ms=? "
+                      "WHERE robot_id=?", (tid, now, rid))
         try:
             r = await self.dispatcher.dock(rid, tid, DockRequest(
                 resume_pct=self.resume_pct, dock_timeout_s=self.dock_timeout_s),
                 issued_by="charge")
-        except Exception as exc:  # noqa: BLE001
-            log.warning("%s 对桩没派成:%s", rid, exc)
+        except Exception as exc:  # noqa: BLE001 - 说不清狗收没收:留着,按终态 / 丢了对账
+            log.warning("%s 对桩没派成(回执没到?):%s", rid, exc)
             return
         if not _accepted(r):
             log.warning("%s 对桩被拒:%s", rid, (r or {}).get("ack"))
+            self._set(rid, "arrived")                   # 退回「走到了」,30 秒后再派
             return
         self._retry_at.pop(rid, None)
-        with self.db.tx() as c:
-            c.execute("UPDATE charge_cycles SET state='dock', task_id=?, sent_ms=? "
-                      "WHERE robot_id=?", (tid, now, rid))
 
 
 def _accepted(r: Any) -> bool:

@@ -237,3 +237,89 @@ def test_回充那几趟结束_待命点管理器不派回程(tmp_path):
     assert desk.holds("A", "charge-dock-1") and desk.holds("A", "charge-goto-1")
     assert not desk.holds("A", "incident-1") and not desk.holds("A", "sched-1")
     db.close()
+
+
+# ------------------------------------------------------------ W13 外审 4、桩上危险
+
+
+async def test_外审4_对桩任务号先落库_写不进去就不派_库好了按记着的派(站, monkeypatch):
+    t = 站
+    await _跑(t, 3)                                       # 还在去桩前的路上
+    assert _cmds(t, "goto") and not _cmds(t, "dock")
+    real_db = t.charge.db
+    calls = []
+
+    class 写不进:
+        def __getattr__(self, k):
+            return getattr(real_db, k)
+
+        def tx(self):
+            calls.append(1)
+            raise RuntimeError("库锁住了")
+    t.charge.db = 写不进()                                 # 只坏回充台的写(站点别的照常)
+    await _跑(t, 20)
+    t.charge.db = real_db
+    assert calls and _cmds(t, "dock") == [], "写不进去:不派"
+    await _跑(t, 10)
+    [d] = _cmds(t, "dock")
+    assert t.charge.view()["cycles"][0]["task_id"] == d["task_id"], "派的就是记着的那个"
+
+
+async def test_外审4_对桩发出去回执没到_狗其实收了_它失败了照样报P1歇着_不另派(站, monkeypatch):
+    t = 站
+    t.charge.dock_timeout_s = 20
+    await _跑(t, 3)
+    real = t.site.dock
+
+    async def 回执没到(rid, tid, req, *, issued_by):
+        await real(rid, tid, req, issued_by=issued_by)
+        raise TimeoutError("回执没到")
+
+    async def 对不上():
+        return None
+    t.dog.recharge_start = 对不上
+    monkeypatch.setattr(t.site, "dock", 回执没到)
+    await _跑(t, 60)
+    assert len(_cmds(t, "dock")) == 1, "说不清收没收:按记着的任务号对账,不另派"
+    [a] = t.charge.alerts.raised
+    assert a["kind"] == "charge_failed" and "没对上桩" in a["detail"]
+    assert a["context"]["task_id"] == _cmds(t, "dock")[0]["task_id"]
+    t.charge = ChargeDesk(t.db, t.site, now_ms=t.clock)    # 站点重启:歇着照歇,不另派、不重报
+    t.charge.alerts = 假告警台()
+    await _跑(t, 30)
+    assert t.charge.alerts.raised == []
+    assert t.charge.view()["cycles"][0]["state"] == "cooldown" and len(_cmds(t, "dock")) == 1
+
+
+async def test_外审4_对桩被拒_退回走到了_过一阵再派(站, monkeypatch):
+    t = 站
+    await _跑(t, 3)
+    real = t.site.dock
+    n = []
+
+    async def 拒(rid, tid, req, *, issued_by):
+        n.append(tid)
+        return {"ack": {"result": "rejected", "reason": "busy"}}
+    monkeypatch.setattr(t.site, "dock", 拒)
+    await _跑(t, 10)
+    assert n and t.charge.view()["cycles"][0]["state"] == "arrived"
+    monkeypatch.setattr(t.site, "dock", real)
+    await _跑(t, 40)
+    assert _cmds(t, "dock") and t.charge.view()["cycles"][0]["state"] == "dock"
+
+
+async def test_桩上危险_报P1一次_摘了清_再挂再报(站):
+    t = 站
+    caps = t.site.clients["A"].capabilities.tasks
+    caps["dock"] = {"mode": "vendor_dock", "on_dock": True, "hazard": "出不了桩(120 秒)"}
+    await t.send(t.charge.tick())
+    await t.send(t.charge.tick())
+    [a] = t.charge.alerts.raised
+    assert a["kind"] == "dock_stuck" and "出不了桩" in a["detail"]
+    caps["dock"] = {"mode": "vendor_dock", "on_dock": False}
+    await t.send(t.charge.tick())
+    assert not t.db.query("SELECT 1 FROM dock_hazards")
+    t.charge.alerts.raised.clear()
+    caps["dock"] = {"mode": "vendor_dock", "on_dock": True, "hazard": "停不住对桩"}
+    await t.send(t.charge.tick())
+    assert [x["kind"] for x in t.charge.alerts.raised] == ["dock_stuck"]

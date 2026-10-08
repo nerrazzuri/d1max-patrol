@@ -287,6 +287,14 @@ class AgentRuntime:
         self._speed_cap_told: tuple = (None,)              # 起来时没限速:不用多发一次能力
         if self.parts is not None:
             self.processor.speed_cap_hook = self._on_speed_cap
+        #: 充电桩(W13 外审):此刻在不在桩上(实测;``None`` = 还没读到)、「桩上危险」(出桩、停对桩
+        #: 确认不了时 dock 任务挂上,实测离桩稳 5 秒才摘)。会对桩的狗才有运动闸。
+        self._on_dock: bool | None = None
+        self._dock_hazard = ""
+        self._dock_clear_ms: int | None = None
+        self._dock_told: tuple = ()
+        if self.hal.hal_capabilities().recharge_mode != "none":
+            self.processor.motion_gate = self._motion_gate
         log.info("自主级别: %s%s", autonomy,
                  "(goto/巡检只在有人现场监护时才收)" if autonomy == "supervised" else "")
         #: 遥控的收帧时刻、帧有效期、租约走单调钟(W00c5c 内部评审):墙钟会被 NTP 往回拨。
@@ -399,7 +407,8 @@ class AgentRuntime:
             from d1max_agent.tasks.dock import DockTask
             from d1max_contract.charging import parse_dock
             return DockTask(task_id=cmd.task_id, req=parse_dock(cmd.payload), hal=self.hal,
-                            now_ms=self._mono_ms, priority=cmd.priority)
+                            now_ms=self._mono_ms, priority=cmd.priority,
+                            on_hazard=self._set_dock_hazard)
         if cmd.kind == "standoff":
             from d1max_agent.tasks.standoff import StandoffTask
             from d1max_contract.standoff import parse_standoff
@@ -607,9 +616,8 @@ class AgentRuntime:
             out["standoff"] = self._standoff_caps()   # W25:在不在守、在不在退、是不是无路可退
         if self.parts is not None:
             out["speed_cap"] = self._speed_cap_caps()  # W29:全狗限速(站点下雨、雷暴时发)
-        rmode = self.hal.hal_capabilities().recharge_mode
-        if rmode != "none":
-            out["dock"] = {"mode": rmode}           # W13:会对桩、充电、出桩
+        if self.hal.hal_capabilities().recharge_mode != "none":
+            out["dock"] = self._dock_caps()         # W13:会对桩;在不在桩上、桩上危险
         deter = self.deter.caps()
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术
@@ -644,6 +652,55 @@ class AgentRuntime:
             return {"max_speed_mps": None}
         return {"max_speed_mps": self._speed_cap[0],
                 "left_s": max(0, (self._speed_cap[1] - self._mono_ms()) // 1000)}
+
+    # ------------------------------------------------------------ 充电桩(W13 外审)
+
+    def _set_dock_hazard(self, why: str) -> None:
+        self._dock_hazard = why or "出没出桩说不清"
+        self._dock_clear_ms = None
+        self.events.emit("dock_hazard", {"reason": self._dock_hazard})
+
+    def _motion_gate(self) -> str:
+        if self._dock_hazard:
+            return f"on_dock: 桩上危险,运动锁住({self._dock_hazard});离了桩确认之后才放"
+        if self._on_dock is None:
+            return "on_dock: 还不知道在不在充电桩上"
+        if self._on_dock:
+            return "on_dock: 狗在充电桩上:先出桩(派对桩任务出桩)"
+        return ""
+
+    async def _sense_dock(self) -> None:
+        """每拍实测在不在桩上;挂着「桩上危险」的,实测离桩稳 5 秒才摘。"""
+        from d1max_agent.tasks.dock import SETTLE_S
+        on: bool | None
+        try:
+            b = await self.hal.battery()
+            on = bool(b.charging)
+            try:
+                on = on or str(await self.hal.recharge_status()) in ("docked", "docking",
+                                                                     "charging")
+            except Exception:  # noqa: BLE001 - 状态读不到:只按电池
+                pass
+        except Exception:  # noqa: BLE001 - 电池读不到:不知道
+            on = None
+        self._on_dock = on
+        if self._dock_hazard:
+            now = self._mono_ms()
+            if on is False:
+                self._dock_clear_ms = self._dock_clear_ms or now
+                if now - self._dock_clear_ms >= SETTLE_S * 1000:
+                    log.info("实测离了桩:桩上危险摘掉(%s)", self._dock_hazard)
+                    self._dock_hazard = ""
+                    self.events.emit("dock_hazard_cleared", {})
+            else:
+                self._dock_clear_ms = None
+
+    def _dock_caps(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"mode": self.hal.hal_capabilities().recharge_mode,
+                             "on_dock": self._on_dock}
+        if self._dock_hazard:
+            d["hazard"] = self._dock_hazard[:200]
+        return d
 
     def _standoff_caps(self) -> dict[str, Any]:
         t = self._standoff_task()
@@ -1763,6 +1820,13 @@ class AgentRuntime:
                 tuple(self._standoff_caps().values()) if self._standoff_ok() else ())
             if pst != self._pers_state_told:     # 在不在看、有没有人、近不近变了:站点据此对账驱离
                 self._pers_state_told = pst
+                if self.transport.connected:
+                    await self._publish_caps()
+        if self.processor.motion_gate is not None:
+            await self._sense_dock()             # W13 外审:实测在不在桩上、摘桩上危险
+            dt = (self._on_dock, self._dock_hazard)
+            if dt != self._dock_told:
+                self._dock_told = dt
                 if self.transport.connected:
                     await self._publish_caps()
         if self.parts is not None:
