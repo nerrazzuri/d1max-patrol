@@ -49,7 +49,15 @@ String _statusLine(Map<String, dynamic> r) {
   final task = st['task'];
   final taskText = task is Map ? taskLabel(task) : '空闲';
   final held = r['held'] is Map ? '已叫停 · ' : '';
-  return held + (online ? '在线 · $taskText' : '离线');
+  // W33：只许手动派的狗（站点自己不让它动）；狗确认看见人（决策 48）
+  final manual = r['manual_only'] is Map ? '只许手动 · ' : '';
+  final caps = r['capabilities'];
+  final tasks = caps is Map ? caps['tasks'] : null;
+  final p = tasks is Map ? tasks['persons'] : null;
+  final seen = online && p is Map && p['state'] == 'ok' && p['present'] == true
+      ? ' · 看见 ${p['count'] ?? 1} 人'
+      : '';
+  return held + manual + (online ? '在线 · $taskText$seen' : '离线');
 }
 
 /// 一趟任务说人话（W13：回充那几趟）；别的照原样 `kind state`。

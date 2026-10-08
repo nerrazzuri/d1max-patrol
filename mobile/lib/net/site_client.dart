@@ -378,6 +378,9 @@ abstract class SiteApi {
   Future<Map<String, dynamic>> deterLevel(String robotId, int level);
   /// 解除（保安、管理员、业主）：全关、狗回待命点。
   Future<void> deterRelease(String robotId);
+  /// 就地驱离（W33，决策 48；保安、管理员）：狗自己看见人报了 P1，看过现场决定驱离。狗在跑的任务先撤掉，
+  /// 在它此刻的位置开一场、从 L1（灯光）起。回这一场。
+  Future<Map<String, dynamic>> deterStart(String robotId);
 
   /// 上装（W21）：开（带 [maxS] 秒，到点狗上自己关）/ 关一路：`strobe` 警灯、`siren` 警笛、`spotlight` 聚光灯、
   /// `speaker` 喇叭（开要 [clip]：话术名或 `tts:<语言>:<文字>`）。返回 `{ack}`。
@@ -1103,6 +1106,10 @@ class SiteClient implements SiteApi {
   @override
   Future<void> deterRelease(String robotId) async =>
       _send('POST', '/api/deterrence/${Uri.encodeComponent(robotId)}/release', <String, dynamic>{});
+
+  @override
+  Future<Map<String, dynamic>> deterStart(String robotId) async => _map(await _send(
+      'POST', '/api/deterrence/${Uri.encodeComponent(robotId)}/start', <String, dynamic>{}));
 
   @override
   Future<Map<String, dynamic>> deter(String robotId, String output, bool on,

@@ -261,6 +261,7 @@ def test_事件派遣的命令行(home, capsys):
     assert site_main.main(["--home", str(home), "source-add", "nvr-1"]) == 0
     out = capsys.readouterr().out
     assert "共享密钥" in out and len(out.strip().splitlines()[-1]) == 64
+    assert "先解码成 32 字节" in out, "W33:提示密钥要先解码(C40221 现场照字面算,一直 401)"
     assert site_main.main(["--home", str(home), "source-add", "nvr-1"]) == 2
     assert site_main.main(["--home", str(home), "intercept", "gate", "--map", "estate-1:7",
                            "--pose", "1,0,0"]) == 0

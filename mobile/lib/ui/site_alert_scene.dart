@@ -22,6 +22,7 @@ class SiteAlertScenePage extends StatefulWidget {
   static const Key photoKey = Key('scene-photo');
   static const Key msgKey = Key('scene-msg');
   static const Key videoKey = Key('scene-video');
+  static const Key deterKey = Key('scene-deter-here');
 
   @override
   State<SiteAlertScenePage> createState() => _SiteAlertScenePageState();
@@ -73,6 +74,17 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
         context,
         MaterialPageRoute<void>(
             builder: (_) => SiteRunPage(api: widget.api, runId: (runs.first['id'] as num).toInt())));
+  }
+
+  /// 就地驱离（W33，决策 48）：狗在跑的任务先撤掉，就在它这儿开一场、从 L1（灯光）起。
+  Future<void> _deterHere() async {
+    try {
+      final s = await widget.api.deterStart(widget.alert.robot);
+      final lv = s['session'] is Map ? (s['session'] as Map)['level'] : null;
+      if (mounted) setState(() => _msg = '已在 ${widget.alert.robot} 这儿开驱离（L${lv ?? 1}），驱离页可以升级、解除');
+    } on SiteError catch (e) {
+      if (mounted) setState(() => _msg = '开不了：$e');
+    }
   }
 
   String _ago(int ms) {
@@ -128,6 +140,12 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                     MaterialPageRoute<void>(
                         builder: (_) => SiteRecordingsPage(
                             api: widget.api, robotId: a.robot, aroundMs: a.firstMs)))),
+          if (a.kind == 'dog_sees_person' && a.robot != 'site')
+            FilledButton.icon(
+                key: SiteAlertScenePage.deterKey,
+                icon: const Icon(Icons.campaign_outlined),
+                label: const Text('就地驱离'),
+                onPressed: _deterHere),
           if (taskId != null)
             OutlinedButton.icon(
                 key: SiteAlertScenePage.photoKey,

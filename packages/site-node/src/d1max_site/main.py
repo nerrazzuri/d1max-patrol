@@ -144,6 +144,12 @@ def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
         db.close()
 
 
+#: 事件源密钥怎么用(W33:2026-10-08 C40221 现场照字面拿字符串算 HMAC,一直 401)。打在密钥**前面**:
+#: 密钥照旧是最后一行(脚本、测试按最后一行取)。
+_HEX_HINT = ("注意:下面是 64 位十六进制,算签名前先解码成 32 字节再当 HMAC-SHA256 的密钥"
+             "(Python: bytes.fromhex(密钥));签名格式见 docs/事件源接入.md")
+
+
 def cmd_robot_service(home: Path, robot_id: str, manual: bool, note: str = "") -> str:
     """W33:只许手动派 / 接自动派遣。站点在跑也能改(下一拍起按库里的算)。"""
     cfg = _load(home)
@@ -509,6 +515,11 @@ class Server:
                                  low_pct=float(ccfg.get("low_pct", 30)),
                                  resume_pct=float(ccfg.get("resume_pct", 90)))
         self.charge.alerts = self.alerts
+        # W33(决策 48):布防中狗没在驱离时自己看见人报 P1
+        from d1max_site.sightings import PersonWatch
+        self.sightings = PersonWatch(self.db, self.dispatcher, now_ms=wall_ms, arming=self.arming,
+                                     deterrence=self.deterrence)
+        self.sightings.alerts = self.alerts
         self.charge.busy = self.deterrence.busy
         self.incidents.charging = self.charge.refuse
         self.standby.hold = lambda rid, tid: (self.deterrence.holds(rid, tid)
@@ -722,6 +733,10 @@ class Server:
                 await self.charge.tick()               # W13:低电量去充、对桩、充满出桩、接着充
             except Exception:
                 log.exception("回充这一拍没办成")
+            try:
+                self.sightings.tick()                  # W33:布防中狗没在驱离时看见人报 P1
+            except Exception:
+                log.exception("看见人这一拍没办成")
             try:
                 await self.weather.tick()              # W29:查天气、雷暴撤排程巡检、对账限速
             except Exception:
@@ -966,11 +981,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.cmd == "source-add":
             secret = cmd_incident_admin(home, "source", name=args.name)
             print(f"事件源 {args.name} 登记好了。共享密钥"
-                  f"(只显示这一次,配到摄像头/NVR 的转发器上):\n{secret}")
+                  f"(只显示这一次,配到摄像头/NVR 的转发器上)。{_HEX_HINT}\n{secret}")
         elif args.cmd == "source-rotate":
             secret = cmd_incident_admin(home, "source-rotate", name=args.name)
             print(f"事件源 {args.name} 的密钥换好了,旧的已经作废。新密钥"
-                  f"(只显示这一次,配到摄像头/NVR 的转发器上):\n{secret}")
+                  f"(只显示这一次,配到摄像头/NVR 的转发器上)。{_HEX_HINT}\n{secret}")
         elif args.cmd == "source-rm":
             cmd_incident_admin(home, "source-rm", name=args.name)
             print(f"事件源 {args.name} 删了:它的回调从此验签不过")

@@ -37,6 +37,9 @@ from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose, Waypoint
 log = logging.getLogger(__name__)
 
 POSITION_TOL_M = 0.1
+#: 到了点再原地转到目标朝向,差这么多以内算对上(W33:2026-10-08 C40221 直线回待命点,停下时朝着反方向,
+#: 待命点的朝向决定相机对着哪)。跟规划后端一样。
+YAW_TOL_RAD = 0.15
 #: HAL 拒速度命令的原因 → 任务失败原因里的话(W34;C40221 急停时只写了「导航回了 Failed」)。
 _REJECT_TEXT = {"estop": "急停按下了", "no_control": "没控制权(遥控器或厂家 App 拿着)",
                 "fault": "狗报故障"}
@@ -77,6 +80,8 @@ class HalNavBackend(NavBackend):
         self._loc = LocStatus.CONTINUOUS_LOC
         #: 这一段为什么 Failed(W34:任务失败原因写清楚 —— 急停、看不见、定位不行……);新的一段清空。
         self.fail_reason = ""
+        #: 到了点、正在原地转到目标朝向(W33)。新的一段清空。
+        self._yawing = False
         self._target: Pose | None = None
         self._due: tuple[int, NavStatus] | None = None      # (时刻, 到时进入的状态)
         self._seq = 0
@@ -328,8 +333,14 @@ class HalNavBackend(NavBackend):
         assert self._target is not None
         dx, dy = self._target.position.x - here.x, self._target.position.y - here.y
         dist = math.hypot(dx, dy)
-        if dist <= POSITION_TOL_M:
-            await self._enter_terminal(NavStatus.SUCCEED)
+        if self._yawing or dist <= POSITION_TOL_M:
+            # 到了:原地转到目标朝向再算到(W33;转的时候位置会漂几厘米,不回头再走)
+            self._yawing = True
+            err = _wrap(self._target.yaw - here.yaw)
+            if abs(err) <= YAW_TOL_RAD:
+                await self._enter_terminal(NavStatus.SUCCEED)
+                return
+            await self._send(0.0, max(-self._wmax, min(self._wmax, K_ANG * err)), dt_s)
             return
         d = self._dir or 1                               # 狗尾为前:狗尾对着目标、往后退(W09i)
         bearing = _wrap(math.atan2(dy, dx) - (here.yaw if d > 0 else here.yaw + math.pi))
@@ -365,6 +376,7 @@ class HalNavBackend(NavBackend):
         if status is NavStatus.INITIALIZING:
             self._dir = 0                                # 新的一趟:起跑时再定行进方向
             self.fail_reason = ""
+            self._yawing = False
         if status is not prev:
             self.emit(NavStatusEvent(status, prev))
 

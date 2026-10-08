@@ -90,6 +90,10 @@ class DeterrenceError(ValueError):
     """没有这一场、级别不对、落库没成(API 回 400/404/503)。"""
 
 
+#: 就地驱离(W33,决策 48)那一场的任务号前缀(狗本来空着时)。
+HERE_PREFIX = "deter-here-"
+
+
 def _standoff_id(s: Session) -> str:
     return f"{STANDOFF_PREFIX}{s.task_id}"
 
@@ -437,6 +441,51 @@ class DeterrenceDesk:
         return flush(self.db, self.alerts)
 
     # ------------------------------------------------------------ 人
+
+    async def start_here(self, robot_id: str, *, by: str) -> dict[str, Any]:
+        """保安就地开一场(W33,决策 48):狗自己看见人、报了 P1,保安看过现场决定驱离。不靠入侵事件:
+        拴绳中心(保持距离用)就是狗此刻的位置,从 L1(灯光)起,照常每 30 秒升、10 分钟收。
+        狗正在跑别的任务(巡检、回程)就**先撤掉**,让它停在这儿(撤是安全动作,只许手动派的狗也撤);
+        有人在遥控就不开。"""
+        from d1max_site.dispatcher import TELEOP_TASK_PREFIX
+        async with self._lock(robot_id):
+            if robot_id in self.sessions:
+                raise DeterrenceError(f"{robot_id} 已经在驱离了")
+            if not self._can(robot_id):
+                raise DeterrenceError(f"{robot_id} 没有上装(声光、喇叭),开不了驱离")
+            c = self.dispatcher.clients.get(robot_id)
+            fresh = getattr(self.dispatcher, "_fresh", None)
+            pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
+            if c is None or (callable(fresh) and not fresh(c)) or pose is None:
+                raise DeterrenceError(f"{robot_id} 不在线、状态不新鲜或不知道在哪:开不了就地驱离")
+            task = c.status.task if c.status is not None else None
+            running = task is not None and task.state.value in ("running", "pending")
+            if running and task.task_id.startswith(TELEOP_TASK_PREFIX):
+                raise DeterrenceError(f"{robot_id} 有人在遥控:开不了就地驱离")
+            now = self._now()
+            # 撤掉的那一趟记成这一场的任务号:撤的回执、终态到之前,它还「在跑」,不算被派去干别的
+            tid = task.task_id if running else f"{HERE_PREFIX}{now}"
+            s = Session(robot_id=robot_id, incident_id=0, zone="就地", task_id=tid, level=1,
+                        started_ms=now, level_ms=now, by=by,
+                        center=json.dumps(MapPose(map_id=pose.map_id,
+                                                  map_version=pose.map_version, frame_id="map",
+                                                  x=pose.x, y=pose.y, yaw=pose.yaw).to_wire()))
+            try:
+                self._save(s)
+            except Exception as exc:
+                raise DeterrenceError(f"驱离没落进库:{exc}") from exc
+            if running:
+                try:
+                    await self.dispatcher.abort(robot_id, tid, issued_by=f"deterrence:{by}")
+                except Exception:
+                    log.exception("%s 就地驱离:撤掉 %s 没发成(驱离照开)", robot_id, tid)
+            self.sessions[robot_id] = s
+            log.info("%s 就地驱离(%s 开的,%s)", robot_id, by,
+                     f"撤了 {tid}" if running else "狗本来空着")
+            await self._apply(s)                        # 人按的:L1 的灯马上开,不等下一拍
+            self._publish(s)
+            asyncio.get_running_loop().create_task(self._reconcile_now(robot_id))
+            return s.view(now)
 
     async def set_level(self, robot_id: str, level: Any, *, by: str) -> dict[str, Any]:
         """跳级、往回退(保安、管理员)。人动过一次就不再自动升。先落库,成了再改。"""
