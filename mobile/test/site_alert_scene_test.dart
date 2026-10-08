@@ -177,4 +177,28 @@ void main() {
     expect(find.byKey(SiteRobotsPage.bgWatchKey), findsNothing);
     expect(api.calls, isNot(contains('watch-token')));
   });
+
+  testWidgets('W33 狗看见人了：现场页有「就地驱离」，按了开一场；别的告警没有这个按钮', (t) async {
+    await _land(t);
+    final api = FakeApi('guard');
+    final seen = Alert.fromWire(<String, dynamic>{
+      'key': 'A/dog_sees_person#1', 'level': 'P1', 'kind': 'dog_sees_person', 'robot': 'A',
+      'title': '狗看见人了:2 个人,最近 3.5 m', 'detail': '布防中', 'first_ms': 1, 'last_ms': 1,
+      'count': 1, 'acked_by': '', 'acked_ms': null, 'resolved_by': '', 'resolved_ms': null,
+      'escalated': 0, 'channel': 'sound',
+      'context': <String, dynamic>{'task_id': 'persons', 'persons': <String, dynamic>{'count': 2},
+        'pose': <String, dynamic>{'map_id': 'estate-1', 'map_version': '7', 'x': 3.0, 'y': 4.0,
+          'at_ms': 1000}},
+    });
+    await t.pumpWidget(MaterialApp(home: SiteAlertScenePage(api: api, alert: seen)));
+    await t.pumpAndSettle();
+    expect(find.byKey(SiteAlertScenePage.photoKey), findsOneWidget, reason: '现场照片在 persons 那几趟');
+    await t.tap(find.byKey(SiteAlertScenePage.deterKey));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('deter-start A'));
+    expect(find.textContaining('开驱离（L1）'), findsOneWidget);
+    await t.pumpWidget(MaterialApp(home: SiteAlertScenePage(api: api, alert: _intrusion())));
+    await t.pumpAndSettle();
+    expect(find.byKey(SiteAlertScenePage.deterKey), findsNothing);
+  });
 }

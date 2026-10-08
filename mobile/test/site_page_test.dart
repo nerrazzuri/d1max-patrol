@@ -200,6 +200,11 @@ class FakeApi implements SiteApi {
     calls.add('deter-release $robotId');
     deterRows = <Map<String, dynamic>>[];
   }
+  @override
+  Future<Map<String, dynamic>> deterStart(String robotId) async {
+    calls.add('deter-start $robotId');
+    return <String, dynamic>{'session': <String, dynamic>{'robot_id': robotId, 'level': 1}};
+  }
   /// 上装（W21）：记在 [calls] 里；[deterAck] 是狗回的回执。
   Map<String, dynamic> deterAck = <String, dynamic>{'result': 'accepted'};
   @override
@@ -653,6 +658,20 @@ void main() {
     expect(find.byKey(const Key('btn-patrol')), findsNothing);
     expect(find.byKey(const Key('btn-standby')), findsNothing);
     expect(find.byKey(const Key('btn-abort')), findsOneWidget);
+  });
+
+  testWidgets('W33 狗卡片：只许手动派、狗确认看见几个人', (t) async {
+    final v = Map<String, dynamic>.of(siteFixture('site_robot'))
+      ..['manual_only'] = <String, dynamic>{'by': 'enroll', 'at_ms': 1, 'note': '新登记'};
+    final caps = Map<String, dynamic>.of(v['capabilities'] as Map<String, dynamic>);
+    caps['tasks'] = <String, dynamic>{...(caps['tasks'] as Map<String, dynamic>),
+      'persons': <String, dynamic>{'state': 'ok', 'present': true, 'count': 2}};
+    v['capabilities'] = caps;
+    final api = FakeApi('guard', robotView: v)..robotsOverride = <Map<String, dynamic>>[v];
+    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api)));
+    await t.pumpAndSettle();
+    expect(find.textContaining('只许手动'), findsOneWidget);
+    expect(find.textContaining('看见 2 人'), findsOneWidget);
   });
 
   testWidgets('被叫停了：说清楚，保安有「恢复」，业主没有', (t) async {

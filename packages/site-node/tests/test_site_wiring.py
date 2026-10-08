@@ -80,3 +80,9 @@ def test_驱离接到待命点_事件派遣_接口上(srv):
 def test_驱离接到告警台上(srv):
     """W24:驱离中看到人要报告警。"""
     assert srv.deterrence.alerts is srv.alerts
+
+
+def test_W33_狗看见人接到布防模式_驱离_告警台上(srv):
+    """决策 48:布防中狗没在驱离时看见人报 P1;驱离中的不报(问驱离台)。"""
+    assert srv.sightings.arming is srv.arming and srv.sightings.deterrence is srv.deterrence
+    assert srv.sightings.alerts is srv.alerts

@@ -90,7 +90,7 @@ _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: 固定摄像头的实时画面(W19)。
 _CAM = re.compile(r"^/api/cameras/([A-Za-z0-9._-]{1,64})/live$")
 #: 分级驱离(W22):``/api/deterrence/<狗>/level``、``/release``。
-_DETER = re.compile(r"^/api/deterrence/([^/]{1,64})/(level|release)$")
+_DETER = re.compile(r"^/api/deterrence/([^/]{1,64})/(level|release|start)$")
 #: 连续录像(W18):一段 ``/api/recordings/<id>/video``、标留着 ``/api/recordings/<id>/keep``。
 _REC = re.compile(r"^/api/recordings/(\d{1,12})/(video|keep)$")
 #: 充电桩(W13):``/api/chargers/<robot_id>``。
@@ -743,7 +743,7 @@ class _Handler(TlsHandlerMixin):
         self._send_json(200, row)
 
     def _deterrence(self, method: str, path: str, user) -> None:
-        """分级驱离(W22)。看:``view``;跳级、往回退:``dispatch``(保安、管理员);解除:``abort``
+        """分级驱离(W22)。看:``view``;就地开一场(W33,``start``)、跳级、往回退:``dispatch``(保安、管理员);解除:``abort``
         (保安、管理员、业主,同「叫停」)。"""
         from d1max_site.deterrence import DeterrenceError
         desk = self.site.deterrence
@@ -762,6 +762,12 @@ class _Handler(TlsHandlerMixin):
         self._audit_target = robot_id
         d = self._body()
         try:
+            if action == "start":
+                # W33(决策 48):就地驱离,保安、管理员
+                self._need(user, DISPATCH)
+                v = self.site.loop.call(lambda: desk.start_here(robot_id, by=str(user)),
+                                        timeout_s=30)
+                return self._send_json(200, {"session": v})
             if action == "level":
                 self._need(user, DISPATCH)
                 self._audit_detail = {"level": d.get("level")}

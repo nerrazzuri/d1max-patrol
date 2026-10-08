@@ -1068,3 +1068,90 @@ async def test_W33外审_驱离中改成只许手动派_不再新派保持距离
     import asyncio
     await asyncio.sleep(0)
     assert t.stb.back == [], "收场后不自动回待命点"
+
+
+# ------------------------------------------------------------ W33(决策 48):就地驱离
+
+
+def _在这儿(t, task=None):
+    c = t.disp.clients["A"]
+    c.telemetry = SimpleNamespace(pose=MapPose(map_id="estate-1", map_version="7",
+                                               frame_id="map", x=8.0, y=2.0, yaw=0.5))
+    c.status.task = task
+    t.disp.aborted = []
+
+    async def 撤(rid, tid, *, issued_by):
+        t.disp.aborted.append((rid, tid, issued_by))
+        return {"ack": {"result": "accepted"}}
+    t.disp.abort = 撤
+
+
+async def test_W33_就地驱离_狗空着_从L1开_拴绳中心是狗此刻的位置_照常升和收(台):
+    t = 台
+    _在这儿(t)
+    v = await t.desk.start_here("A", by="gina")
+    assert v["level"] == 1 and v["by"] == "gina" and v["zone"] == "就地"
+    s = t.desk.sessions["A"]
+    assert json.loads(s.center)["x"] == 8.0 and s.task_id.startswith("deter-here-")
+    assert t.disp.aborted == []
+    t.clock.go(31)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 2, "照常每 30 秒升"
+    with pytest.raises(DeterrenceError, match="已经在驱离"):
+        await t.desk.start_here("A", by="gina")
+
+
+async def test_W33_就地驱离_狗在巡检_先撤掉那一趟_撤的回执到之前不算被派去干别的(台):
+    t = 台
+    patrol = SimpleNamespace(task_id="sched-1", state=SimpleNamespace(value="running"))
+    _在这儿(t, task=patrol)
+    await t.desk.start_here("A", by="gina")
+    assert t.disp.aborted == [("A", "sched-1", "deterrence:gina")]
+    await t.desk.tick()
+    assert "A" in t.desk.sessions, "巡检还在收尾:不收场"
+
+
+async def test_W33_就地驱离_有人在遥控_没上装_不知道在哪_都开不了(台):
+    t = 台
+    _在这儿(t, task=SimpleNamespace(task_id="teleop-3", state=SimpleNamespace(value="running")))
+    with pytest.raises(DeterrenceError, match="遥控"):
+        await t.desk.start_here("A", by="gina")
+    _在这儿(t)
+    t.disp.clients["A"].telemetry = None
+    with pytest.raises(DeterrenceError, match="不知道在哪"):
+        await t.desk.start_here("A", by="gina")
+    t.disp.clients["A"].capabilities.tasks.pop("deter")
+    _在这儿(t)
+    with pytest.raises(DeterrenceError, match="没有上装"):
+        await t.desk.start_here("A", by="gina")
+    assert "A" not in t.desk.sessions
+
+
+def test_W33_接口_就地驱离_保安能开_业主不能_狗上真开了灯(tmp_path):
+    from test_site_api import PW, _等, 站
+
+    from d1max_site.standby import StandbyManager
+    s = 站(tmp_path, payload=True)
+    try:
+        s.accounts.add("gina", PW, role="guard")
+        s.accounts.add("olga", PW, role="owner")
+        stb = StandbyManager(s.db, s.disp, now_ms=s.api._now)
+        desk = s.loop.call(lambda: _建(s, stb))
+        s.api.deterrence = desk
+
+        def 登(n):
+            return s.req("POST", "/api/login", {"name": n, "password": PW})[1]["token"]
+        gina, olga = 登("gina"), 登("olga")
+        _等(lambda: "deter" in ((s.req("GET", "/api/robots/A", token=gina)[1].get("capabilities")
+                                 or {}).get("tasks") or {}))
+        _等(lambda: s.disp.clients["A"].telemetry is not None
+            and s.disp.clients["A"].telemetry.pose is not None)
+        assert s.req("POST", "/api/deterrence/A/start", {}, token=olga)[0] == 403
+        code, d = s.req("POST", "/api/deterrence/A/start", {}, token=gina)
+        assert code == 200 and d["session"]["level"] == 1, d
+        _等(lambda: s.dog.deter_on("strobe") and s.dog.deter_on("spotlight"))
+        assert s.req("POST", "/api/deterrence/A/start", {}, token=gina)[0] == 400, "已经在驱离"
+        acts = [(r["actor"], r["action"]) for r in s.api.audit.list()]
+        assert ("gina", "POST /api/deterrence/A/start") in acts
+    finally:
+        s.close()

@@ -109,6 +109,20 @@ async def test_goto按厂商状态机时序走到点(台子):
     assert abs(o.x - 2.0) <= 0.15 and o.vx == 0.0
 
 
+async def test_W33_直线到点再原地转到目标朝向才算到(台子):
+    """2026-10-08 C40221:直线回待命点,狗停下时朝着反方向(yaw ≈ π),待命点记的朝向是 0。"""
+    import math
+    c, r, nav, dev = 台子
+    drain = _收(nav)
+    await nav.goto(Pose.from_xy_yaw(2.0, 0.0, math.pi / 2))
+    await _步(c, r, nav, 120)
+    kinds = [e.status for e in drain() if isinstance(e, NavStatusEvent)]
+    assert NavStatus.SUCCEED in kinds
+    o = await r.odometry()
+    assert abs(o.x - 2.0) <= 0.15
+    assert abs(math.remainder(o.yaw - math.pi / 2, 2 * math.pi)) <= 0.16, o.yaw
+
+
 async def test_终态驻留期间goto被拒(台子):
     c, r, nav, dev = 台子
     await nav.goto(Pose.from_xy_yaw(0.5, 0.0))
