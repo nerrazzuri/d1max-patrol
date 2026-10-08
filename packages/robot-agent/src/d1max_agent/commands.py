@@ -111,6 +111,9 @@ class CommandProcessor:
         self.deter_hook: Callable[[Command], Any] | None = None
         #: 全狗限速(W29):收下回空串,不收回原因。
         self.speed_cap_hook: Callable[[Command], Any] | None = None
+        #: 运动闸(W13 外审):会让狗动的任务**收的时候、起跑的时候**都问它;回原因就不收 / 不起跑
+        #: (狗在桩上、出没出桩说不清)。``dock`` 自己不问(出桩就是它的事)。
+        self.motion_gate: Callable[[], str] | None = None
 
     # ------------------------------------------------------------ 代次落盘
 
@@ -240,6 +243,12 @@ class CommandProcessor:
                 if reason else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED, data=data))
         if self._fence is not None and cmd.kind in _MOTION_KINDS:
             return self._finish(self._rej(cmd, "halting"))
+        cur = self.current
+        if not (cur is not None and cur.kind == "dock" and not cur.done):
+            # 正在对桩、充着的时候来了更急的:收下,让 dock 先出桩再交(起跑时还会再问闸)
+            why = self._gate(cmd.kind)
+            if why:
+                return self._finish(self._rej(cmd, why))
         if cmd.kind not in self.supported:
             return self._finish(self._rej(cmd, "unsupported"))
         try:
@@ -511,9 +520,22 @@ class CommandProcessor:
                 self.finished.append(nxt)
                 self.events.emit("task_failed", {"task_id": nxt.task_id, **nxt.detail})
                 continue
+            why = self._gate(nxt.kind)
+            if why:
+                # 排着的运动任务轮到了,可狗在桩上 / 出没出桩说不清(W13 外审 2):不起跑
+                nxt.state = TaskState.FAILED
+                nxt.detail = {"reason": why}
+                self.finished.append(nxt)
+                self.events.emit("task_failed", {"task_id": nxt.task_id, **nxt.detail})
+                continue
             self.ledger.acquire(nxt.task_id, nxt.kind)
             self.current = nxt
             await nxt.start()
+
+    def _gate(self, kind: str) -> str:
+        if kind not in _MOTION_KINDS or kind == "dock" or self.motion_gate is None:
+            return ""
+        return self.motion_gate()
 
 
 #: 叫停栅栏立着的时候拒收的命令(会让狗动的任务)。

@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 33                      # W13:充电桩、回充进度(chargers、charge_cycles)
+SCHEMA_VERSION = 34                      # W13 外审:桩上危险报过没有(dock_hazards)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -365,6 +365,12 @@ CREATE TABLE IF NOT EXISTS charge_cycles (
     sent_ms    INTEGER NOT NULL DEFAULT 0,
     started_ms INTEGER NOT NULL,
     until_ms   INTEGER
+);
+-- W13 外审:狗报「桩上危险」(运动锁住)报过 P1 的(一次挂一次;狗上摘了就删)。
+CREATE TABLE IF NOT EXISTS dock_hazards (
+    robot_id   TEXT PRIMARY KEY,
+    reason     TEXT NOT NULL,
+    created_ms INTEGER NOT NULL
 );
 -- W30 复查:删了运行记录、导出还没删成的(删导出成了才清;下一次删除、定时清理、重启都接着删)。
 CREATE TABLE IF NOT EXISTS export_purges (
