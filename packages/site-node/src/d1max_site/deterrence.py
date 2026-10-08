@@ -92,6 +92,8 @@ class DeterrenceError(ValueError):
 
 #: 就地驱离(W33,决策 48)那一场的任务号前缀(狗本来空着时)。
 HERE_PREFIX = "deter-here-"
+#: 就地驱离要撤的那一趟还在跑:隔这么久(秒)再撤一次(W33 外审 1)。
+WITHDRAW_EVERY_S = 5
 
 
 def _standoff_id(s: Session) -> str:
@@ -130,6 +132,10 @@ class Session:
     abort_ms: int = 0
     standoff_stopped: bool = False
     cornered: bool = False
+    #: 就地驱离(W33 外审):开场时狗在跑、要撤掉的那一趟(落库;确认结束了才清)、
+    #: 上次发撤的时刻(不落库)。
+    withdraw: str = ""
+    withdraw_ms: int = 0
     #: 收尾中(落库没成,下一拍接着收):``(原因, 回不回待命点)``。收尾中不再开任何东西。
     ending: tuple[str, bool] | None = None
     #: 「收尾中」落进库了没有(没落进去的话站点重启会把这一场当成还在驱离)。
@@ -139,13 +145,13 @@ class Session:
         return (self.robot_id, self.incident_id, self.zone, self.task_id, self.level,
                 self.started_ms, self.level_ms, self.human_ms, int(self.auto), self.by,
                 int(self.seen_person), int(self.person_alerted), int(self.cornered),
-                self.center)
+                self.center, self.withdraw)
 
     def view(self, now_ms: int) -> dict[str, Any]:
         d = {k: v for k, v in asdict(self).items()
              if k not in ("sent", "off", "clip_i", "clip_ms", "ending", "ending_saved",
                           "seen_person", "person_alerted", "standoff_ms", "center",
-                          "abort_ms", "standoff_stopped")}
+                          "abort_ms", "standoff_stopped", "withdraw_ms")}
         d["label"] = LABEL[self.level]
         d["next_in_s"] = (max(0, (self.level_ms + STEP_S * 1000 - now_ms) // 1000)
                           if self.auto and self.level < AUTO_MAX else None)
@@ -171,7 +177,7 @@ class DeterrenceDesk:
                         level_ms=r["level_ms"], human_ms=r["human_ms"], auto=bool(r["auto"]),
                         by=r["by"], seen_person=bool(r["person_seen"]),
                         person_alerted=bool(r["person_alerted"]), cornered=bool(r["cornered"]),
-                        center=r["standoff_center"])
+                        center=r["standoff_center"], withdraw=r["withdraw"])
             if r["ending"]:
                 # 上次收尾到一半(删库没成)就停了:只接着收尾
                 s.ending, s.ending_saved = (r["ending"], bool(r["ending_back"])), True
@@ -258,8 +264,8 @@ class DeterrenceDesk:
     def _save_in(c: Any, s: Session) -> None:
         c.execute("INSERT OR REPLACE INTO deter_sessions(robot_id, incident_id, zone, "
                   "task_id, level, started_ms, level_ms, human_ms, auto, by, person_seen, "
-                  "person_alerted, cornered, standoff_center) "
-                  "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", s.row())
+                  "person_alerted, cornered, standoff_center, withdraw) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", s.row())
 
     def _publish(self, s: Session | None, robot_id: str = "", ended: str = "") -> None:
         if s is not None:
@@ -466,7 +472,7 @@ class DeterrenceDesk:
             # 撤掉的那一趟记成这一场的任务号:撤的回执、终态到之前,它还「在跑」,不算被派去干别的
             tid = task.task_id if running else f"{HERE_PREFIX}{now}"
             s = Session(robot_id=robot_id, incident_id=0, zone="就地", task_id=tid, level=1,
-                        started_ms=now, level_ms=now, by=by,
+                        started_ms=now, level_ms=now, by=by, withdraw=tid if running else "",
                         center=json.dumps(MapPose(map_id=pose.map_id,
                                                   map_version=pose.map_version, frame_id="map",
                                                   x=pose.x, y=pose.y, yaw=pose.yaw).to_wire()))
@@ -474,18 +480,50 @@ class DeterrenceDesk:
                 self._save(s)
             except Exception as exc:
                 raise DeterrenceError(f"驱离没落进库:{exc}") from exc
-            if running:
-                try:
-                    await self.dispatcher.abort(robot_id, tid, issued_by=f"deterrence:{by}")
-                except Exception:
-                    log.exception("%s 就地驱离:撤掉 %s 没发成(驱离照开)", robot_id, tid)
+            # 落了库马上登记(W33 外审 2):下面等撤、等开灯的回执时,到了拦截点的回调看见已经在驱离,
+            # 不另开一场盖掉它
             self.sessions[robot_id] = s
             log.info("%s 就地驱离(%s 开的,%s)", robot_id, by,
-                     f"撤了 {tid}" if running else "狗本来空着")
+                     f"先撤 {tid}" if running else "狗本来空着")
+            if s.withdraw:
+                await self._withdraw(s)                 # 先撤一次;没确认结束每拍接着撤(外审 1)
             await self._apply(s)                        # 人按的:L1 的灯马上开,不等下一拍
             self._publish(s)
             asyncio.get_running_loop().create_task(self._reconcile_now(robot_id))
             return s.view(now)
+
+    async def _withdraw(self, s: Session) -> None:
+        """就地驱离要撤的那一趟(W33 外审 1):狗上还在跑就隔 :data:`WITHDRAW_EVERY_S` 再撤一次(拒了、
+        超时、站点重启都接着撤);狗上已经不是它了(撤成了、它自己完了)才清掉、落库。"""
+        c = self.dispatcher.clients.get(s.robot_id)
+        task = c.status.task if c is not None and c.status is not None else None
+        if task is None or task.task_id != s.withdraw \
+                or task.state.value not in ("running", "pending"):
+            if c is None or c.status is None:
+                return                                  # 狗的状态还没来:说不清,接着等
+            now = self._now()
+            try:                                        # 狗停下了:升级的 30 秒从现在起算
+                self._save(Session(**{**asdict(s), "withdraw": "", "level_ms": now}))
+            except Exception:
+                log.exception("%s 撤的那一趟结束了,落库没成(下一拍再记)", s.robot_id)
+                return
+            log.info("%s 就地驱离:%s 撤掉了", s.robot_id, s.withdraw)
+            s.withdraw, s.level_ms = "", now
+            return
+        now = self._now()
+        if now - s.withdraw_ms < WITHDRAW_EVERY_S * 1000:
+            return
+        s.withdraw_ms = now
+        try:
+            r = await self.dispatcher.abort(s.robot_id, s.withdraw,
+                                            issued_by=f"deterrence:{s.by or 'here'}")
+            ack = r.get("ack", {}) if isinstance(r, dict) else {}
+            if ack.get("result") not in ("accepted", "duplicate"):
+                log.warning("%s 就地驱离:撤 %s 被拒(%s),%d 秒后再撤", s.robot_id, s.withdraw,
+                            ack.get("reason") or ack.get("result"), WITHDRAW_EVERY_S)
+        except Exception as exc:  # noqa: BLE001 - 超时、断线:过一会儿再撤
+            log.warning("%s 就地驱离:撤 %s 没发成(%s),%d 秒后再撤", s.robot_id, s.withdraw,
+                        exc, WITHDRAW_EVERY_S)
 
     async def set_level(self, robot_id: str, level: Any, *, by: str) -> dict[str, Any]:
         """跳级、往回退(保安、管理员)。人动过一次就不再自动升。先落库,成了再改。"""
@@ -545,11 +583,14 @@ class DeterrenceDesk:
         if task is not None and task.task_id not in (s.task_id, _standoff_id(s)) \
                 and task.state.value in ("running", "pending"):
             return await self._end(rid, f"狗被派去干别的了({task.task_id})", go_back=False)
+        if s.withdraw:
+            await self._withdraw(s)                     # W33 外审:就地驱离要撤的那一趟还在跑
         await self._reconcile_persons(s)                # W24:按狗的当前人员状态对账
         if rid not in self.sessions or s.ending is not None:
             return                                      # 对账时收场了
         await self._reconcile_standoff(s)               # W25:保持距离在不在守、是不是无路可退
-        if s.auto and s.level < AUTO_MAX and now - s.level_ms >= STEP_S * 1000:
+        if s.auto and s.level < AUTO_MAX and now - s.level_ms >= STEP_S * 1000 \
+                and not s.withdraw:                     # 狗还没停下(在撤):不往上升
             new = Session(**{**asdict(s), "level": s.level + 1, "level_ms": now})
             try:
                 self._save(new)

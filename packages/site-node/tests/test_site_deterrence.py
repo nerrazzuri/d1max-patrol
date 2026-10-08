@@ -1155,3 +1155,55 @@ def test_W33_接口_就地驱离_保安能开_业主不能_狗上真开了灯(tm
         assert ("gina", "POST /api/deterrence/A/start") in acts
     finally:
         s.close()
+
+
+@pytest.mark.parametrize("how", ["rejected", "timeout"])
+async def test_W33外审1_撤巡检被拒或超时_每拍接着撤_撤成之前不升_站点重启接着撤(台, how):
+    t = 台
+    patrol = SimpleNamespace(task_id="sched-1", state=SimpleNamespace(value="running"))
+    _在这儿(t, task=patrol)
+    tries = []
+
+    async def 撤不掉(rid, tid, *, issued_by):
+        tries.append(tid)
+        if how == "timeout":
+            raise TimeoutError("回执没到")
+        return {"ack": {"result": "rejected", "reason": "busy"}}
+    t.disp.abort = 撤不掉
+    await t.desk.start_here("A", by="gina")
+    assert tries == ["sched-1"]
+    for _ in range(12):                                   # 60 s:每 5 s 再撤一次,不往上升
+        t.clock.go(5)
+        await t.desk.tick()
+    assert len(tries) >= 10 and t.desk.sessions["A"].level == 1, (len(tries), t.desk.sessions)
+    assert t.db.query("SELECT withdraw FROM deter_sessions")[0]["withdraw"] == "sched-1"
+    again = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)     # 站点重启
+    n = len(tries)
+    await again.tick()
+    assert len(tries) == n + 1, "重启后接着撤"
+    t.disp.clients["A"].status.task = None               # 终于停了
+    await again.tick()
+    row = t.db.query("SELECT withdraw, level_ms FROM deter_sessions")[0]
+    assert again.sessions["A"].withdraw == "" and row["withdraw"] == ""
+    assert row["level_ms"] == t.clock(), "停下了:升级从这一刻起算(落库,重启也照这个)"
+    t.clock.go(31)
+    await again.tick()
+    assert again.sessions["A"].level == 2, "停下了:照常升"
+
+
+async def test_W33外审2_等撤的回执时到了拦截点_不另开一场盖掉就地驱离(台):
+    t = 台
+    patrol = SimpleNamespace(task_id="sched-1", state=SimpleNamespace(value="running"))
+    _在这儿(t, task=patrol)
+
+    async def 撤的时候到了(rid, tid, *, issued_by):
+        _到了(t.disp)                                    # 入侵那一趟自然到了拦截点
+        return {"ack": {"result": "accepted"}}
+    t.disp.abort = 撤的时候到了
+    v = await t.desk.start_here("A", by="gina")
+    assert v["level"] == 1
+    row = t.db.query("SELECT level, zone, standoff_center FROM deter_sessions")[0]
+    assert (row["level"], row["zone"]) == (1, "就地"), dict(row)
+    assert json.loads(row["standoff_center"])["x"] == 8.0, "拴绳中心是狗此刻的位置,不是拦截点"
+    again = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
+    assert again.sessions["A"].zone == "就地" and again.sessions["A"].level == 1
