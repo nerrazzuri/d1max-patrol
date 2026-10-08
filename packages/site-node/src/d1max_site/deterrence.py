@@ -352,7 +352,8 @@ class DeterrenceDesk:
                     return
                 s.seen_person = True
                 self._flush_alerts()
-            if p.get("near") and s.auto and s.level < AUTO_MAX:
+            if p.get("near") and s.auto and s.level < AUTO_MAX and not s.withdraw:
+                # W33 复查 1:就地驱离要撤的那一趟还没撤成(狗可能还在走):不自动升,跟每 30 秒升一样
                 new = Session(**{**asdict(s), "level": AUTO_MAX, "level_ms": now})
                 try:
                     self._save(new)
@@ -496,14 +497,19 @@ class DeterrenceDesk:
         """就地驱离要撤的那一趟(W33 外审 1):狗上还在跑就隔 :data:`WITHDRAW_EVERY_S` 再撤一次(拒了、
         超时、站点重启都接着撤);狗上已经不是它了(撤成了、它自己完了)才清掉、落库。"""
         c = self.dispatcher.clients.get(s.robot_id)
-        task = c.status.task if c is not None and c.status is not None else None
-        if task is None or task.task_id != s.withdraw \
-                or task.state.value not in ("running", "pending"):
-            if c is None or c.status is None:
-                return                                  # 狗的状态还没来:说不清,接着等
+        fresh = getattr(self.dispatcher, "_fresh", None)
+        # W33 复查 3:只信在线、新鲜的状态(过时的、broker 留着的老状态里 task 是空的,不算撤成了)
+        known = (c is not None and c.status is not None and c.status.online
+                 and (not callable(fresh) or fresh(c)))
+        task = c.status.task if known else None
+        if known and (task is None or task.task_id != s.withdraw
+                      or task.state.value not in ("running", "pending")):
             now = self._now()
             try:                                        # 狗停下了:升级的 30 秒从现在起算
-                self._save(Session(**{**asdict(s), "withdraw": "", "level_ms": now}))
+                # 只改这两格(收尾中也走这里:整行重写会把「收尾中」那两格冲掉)
+                with self.db.tx() as tx:
+                    tx.execute("UPDATE deter_sessions SET withdraw='', level_ms=? "
+                               "WHERE robot_id=?", (now, s.robot_id))
             except Exception:
                 log.exception("%s 撤的那一趟结束了,落库没成(下一拍再记)", s.robot_id)
                 return
@@ -689,6 +695,11 @@ class DeterrenceDesk:
             await self._off(s, out)                     # 没发出去也没事:45 秒自己关
         if not await self._stop_standoff(s):
             return                                      # 保持距离没撤成:停在收尾中,下一拍接着撤
+        if s.withdraw:
+            # W33 复查 2:就地驱离要撤的那一趟还没确认结束 —— 收尾也得等它(删了会话就再没人撤了)
+            await self._withdraw(s)
+            if s.withdraw:
+                return                                  # 停在收尾中(已落库),下一拍接着撤
         try:
             with self.db.tx() as c:
                 c.execute("DELETE FROM deter_sessions WHERE robot_id=?", (rid,))

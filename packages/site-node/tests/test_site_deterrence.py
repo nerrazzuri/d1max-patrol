@@ -35,7 +35,7 @@ class 假派遣:
     def __init__(self, caps=CAPS):
         self.clients = {"A": SimpleNamespace(
             capabilities=SimpleNamespace(tasks={"deter": caps} if caps else {}),
-            status=SimpleNamespace(task=None))}
+            status=SimpleNamespace(task=None, online=True))}
         self.cbs = []
         self.sent: list[tuple[str, dict, int]] = []
         self.fail = False
@@ -1207,3 +1207,113 @@ async def test_W33外审2_等撤的回执时到了拦截点_不另开一场盖�
     assert json.loads(row["standoff_center"])["x"] == 8.0, "拴绳中心是狗此刻的位置,不是拦截点"
     again = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
     assert again.sessions["A"].zone == "就地" and again.sessions["A"].level == 1
+
+
+def _撤不掉(t):
+    patrol = SimpleNamespace(task_id="sched-1", state=SimpleNamespace(value="running"))
+    _在这儿(t, task=patrol)
+    tries = []
+
+    async def 拒(rid, tid, *, issued_by):
+        if tid != "sched-1":                              # 保持距离:狗上没有这一趟(撤成了)
+            return {"ack": {"result": "rejected", "reason": "no_such_task"}}
+        tries.append(tid)
+        return {"ack": {"result": "rejected", "reason": "busy"}}
+    t.disp.abort = 拒
+    return tries
+
+
+async def test_W33复查1_没撤成_有人靠近也不升L3_不开警笛_撤成了才升(台):
+    t = 台
+    _撤不掉(t)
+    await t.desk.start_here("A", by="gina")
+    t.disp.clients["A"].capabilities.tasks["persons"] = {
+        "state": "ok", "present": True, "near": True, "count": 1, "nearest_m": 3.0}
+    t.clock.go(5)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 1, "旧巡检还在跑:人靠近也不自动升"
+    assert not any(p.get("output") == "siren" and p.get("on") for _, p, _ in t.disp.sent)
+    t.disp.clients["A"].status.task = None               # 终于停了
+    t.clock.go(5)
+    await t.desk.tick()
+    await t.desk.tick()
+    assert t.desk.sessions["A"].level == 3, "停下了:人在 5 米内照常直接升 L3"
+
+
+async def test_W33复查2_没撤成就解除_收尾等撤成才删会话_重启接着撤(台):
+    t = 台
+    tries = _撤不掉(t)
+    await t.desk.start_here("A", by="gina")
+    await t.desk.release("A", by="gina")
+    assert "A" in t.desk.sessions and t.desk.sessions["A"].ending, "还在收尾:等撤成"
+    row = t.db.query("SELECT ending, withdraw FROM deter_sessions")[0]
+    assert row["ending"] and row["withdraw"] == "sched-1"
+    n = len(tries)
+    again = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)     # 站点重启
+    t.clock.go(5)
+    await again.tick()
+    assert len(tries) > n and again.sessions["A"].ending, "重启后只接着收尾、接着撤"
+    t.disp.clients["A"].status.task = None
+    await again.tick()
+    assert "A" not in again.sessions and not t.db.query("SELECT 1 FROM deter_sessions")
+
+
+async def test_W33复查3_状态不新鲜_空的task不算撤成_接着撤(台):
+    t = 台
+    tries = _撤不掉(t)
+    await t.desk.start_here("A", by="gina")
+    t.disp._fresh = lambda c: False                      # 过时的、broker 留着的老状态
+    t.disp.clients["A"].status.task = None
+    t.clock.go(5)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].withdraw == "sched-1" and len(tries) >= 2, "说不清:接着撤"
+    t.disp.clients["A"].status.online = False
+    t.clock.go(5)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].withdraw == "sched-1"
+    t.disp._fresh = lambda c: True                       # 新鲜,可狗说自己离线了(遗言)
+    t.clock.go(5)
+    await t.desk.tick()
+    assert t.desk.sessions["A"].withdraw == "sched-1", "离线的状态也不信"
+    t.disp.clients["A"].status.online = True
+    await t.desk.tick()
+    assert t.desk.sessions["A"].withdraw == "", "在线、新鲜的状态说停了:才算撤成"
+
+
+async def test_W33复查2_收尾中撤成了_删库没成_重启照旧是收尾中(台):
+    t = 台
+    _撤不掉(t)
+    await t.desk.start_here("A", by="gina")
+    await t.desk.release("A", by="gina")
+    t.disp.clients["A"].status.task = None               # 撤成了
+
+    real = t.db
+
+    class 删不掉:
+        def __getattr__(self, k):
+            return getattr(real, k)
+
+        def tx(self):
+            inner = real.tx()
+
+            class 包:
+                def __enter__(self_):
+                    c = inner.__enter__()
+
+                    class 游标:
+                        def execute(self__, sql, *a):
+                            if sql.startswith("DELETE FROM deter_sessions"):
+                                raise RuntimeError("库锁住了")
+                            return c.execute(sql, *a)
+                    return 游标()
+
+                def __exit__(self_, *e):
+                    return inner.__exit__(*e)
+            return 包()
+    t.desk.db = 删不掉()
+    await t.desk.tick()
+    t.desk.db = real
+    row = t.db.query("SELECT ending, withdraw FROM deter_sessions")[0]
+    assert row["withdraw"] == "" and row["ending"], "撤成了记上,「收尾中」照旧在"
+    again = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
+    assert again.sessions["A"].ending, "重启后只接着收尾,不会恢复成还在驱离"
