@@ -187,6 +187,39 @@ async def test_控制权被上装收回时广播事件():
         assert not await backend.has_control()
 
 
+async def test_控制权丢了又被旁路自动抢回来_同一条连接就知道_不用重连():
+    """2026-10-08 C40221:保安用遥控器拿走控制权、用完松手,旁路进程自动重抢成功,可它只广播过
+    control_lost —— 连着的代理一直以为没控制权,站点一直拒派,要重启代理才好。旁路进程现在
+    持有状态一变就广播 hello,客户端收到重复的 hello 只更新持有状态。"""
+    async with _pair() as (sim, backend):
+        with backend.subscription() as queue:
+            sim.drop_control("遥控器拿走了")
+            await _drain(queue, ControlLostEvent)
+        assert not await backend.has_control()
+        sim.regain_control()
+        await _until(lambda: backend._held)
+        assert await backend.has_control() and backend.connected
+
+
+def test_旁路进程每处拿到控制权都走SetHeld_持有一变就广播hello():
+    """C++ 那头编不进测试(要厂商 SDK),这里核源码:拿控制权的几处(重抢回执、SDK 报可用、
+    hold 命令)都经 SetHeld,SetHeld 变了就广播握手帧。"""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[2] / "motion" / "patrol_agent.cpp").read_text("utf-8")
+    body = src[src.index("static void SetHeld(bool held) {"):]
+    body = body[:body.index("\n}\n")]
+    assert "g_held.exchange(held) != held" in body and "Broadcast(HelloFrame())" in body
+    assert "SetHeld(a.error_code == 0);" in src                       # 重抢的回执
+    assert "TakeControl(5000)) SetHeld(true);" in src                 # SDK 报可用
+    hold = src[src.index("static Outcome DoHold() {"):]
+    assert "SetHeld(true);" in hold[:hold.index("\n}\n")]
+    # 连上时那帧也用同一个构造:握手帧只有一份写法
+    assert "SendTo(fd, HelloFrame());" in src
+    # 别处不许再直接把 g_held 写成 true(那样又不广播了)
+    assert not re.search(r"g_held\s*=\s*true", src)
+
+
 async def test_控制权丢了之后动作指令立刻被挡住():
     async with _pair() as (sim, backend):
         with backend.subscription() as queue:

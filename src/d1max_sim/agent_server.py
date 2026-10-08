@@ -561,6 +561,16 @@ class SimAgentServer:
         self._cancel_gen += 1
         self._broadcast({"t": "control_lost", "reason": reason})
 
+    def regain_control(self) -> None:
+        """控制权又拿回来了(遥控器、厂家 App 用完松手,SDK 报可用,旁路进程自动重抢成功)。同
+        patrol_agent.cpp 的 SetHeld:持有状态一变就给每个连着的客户端广播一帧 hello。"""
+        if self._held:
+            return
+        self._held = True
+        self._broadcast({"t": "hello", "proto": PROTO_VERSION, "sdk": self._sdk,
+                         "held": True, "robot": "sim://d1max", "follows_head": self.follows_head,
+                         "speed_level_want": self.speed_level_want})
+
     def push_fault(self, level: int, code: int, message: str) -> None:
         self._broadcast({"t": "fault", "level": level, "code": code,
                          "message": message})
