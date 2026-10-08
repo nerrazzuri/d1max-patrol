@@ -1707,3 +1707,10 @@ def test_系统件缺什么报什么_只提示不装(tmp_path):
         if "usermod" in 行 or "apt-get" in 行:
             assert 行.strip().startswith(("echo", "#")), 行
 
+
+
+def test_人员检测启动脚本不读用户目录的包():
+    """C40221:robot 的 ~/.local 里有 numpy 2.x,盖住系统 numpy 1.21,系统 OpenCV 一 import 就挂。"""
+    text = (DEPLOY / "d1max-persons-start").read_text(encoding="utf-8")
+    assert "\nexport PYTHONNOUSERSITE=1\n" in text
+    assert text.index("export PYTHONNOUSERSITE=1") < text.index("exec /usr/bin/python3")

@@ -20,6 +20,10 @@ set +u
 set -u
 export ROS_DOMAIN_ID="${D1MAX_LOC_ROS_DOMAIN:-24}"
 export RMW_IMPLEMENTATION="${D1MAX_LOC_RMW:-rmw_zenoh_cpp}"
+# 不读 ~/.local:C40221 上 robot 账号的 ~/.local 里有一份 numpy 2.x(不是我们装的),盖住系统的
+# numpy 1.21,系统的 OpenCV 一 import 就挂(2026-10-08)。onnxruntime 装在单独的目录里,经
+# /etc/d1max/env 的 PYTHONPATH 带进来(接在下面这两段后面),见装机清单「狗上的系统件」。
+export PYTHONNOUSERSITE=1
 export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
 # shellcheck disable=SC2086  # D1MAX_PERSONS_ARGS 要按空白拆成几个参数
 exec /usr/bin/python3 -m d1max_localizer.persons \

@@ -192,3 +192,58 @@ def test_外审2_点云没带时间戳_也按收到多久判旧():
     n.on_cloud(_人(3.0, 0.0))                              # 不带时间戳
     c.t += 3600
     assert _过契约(n.on_image("front", b"x", 0)).people[0].range_m is None
+
+
+# ------------------------------------------------------------ 推理后端(2026-10-08 C40221)
+
+class _假会话:
+    def __init__(self, model, sess_options=None, providers=()):
+        self.model, self.opts, self.providers_in = model, sess_options, list(providers)
+
+    def get_providers(self):
+        return [p[0] if isinstance(p, tuple) else p for p in self.providers_in]
+
+    def get_inputs(self):
+        return [type("I", (), {"name": "images"})()]
+
+
+def _假推理库(monkeypatch, 有的):
+    import sys
+    import types
+    ort = types.ModuleType("onnxruntime")
+    ort.get_available_providers = lambda: list(有的)
+    ort.SessionOptions = lambda: types.SimpleNamespace(intra_op_num_threads=0,
+                                                       inter_op_num_threads=0)
+    ort.InferenceSession = _假会话
+    monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+    monkeypatch.setitem(sys.modules, "cv2", types.ModuleType("cv2"))
+
+
+def test_推理后端_GPU优先_TensorRT带引擎缓存和半精度_CPU限线程(monkeypatch, tmp_path):
+    """CPU 版 onnxruntime 不限线程会占满所有核(C40221 上约 4.5 核);TensorRT 第一次建引擎要几分钟,
+    不缓存的话每次重启都要再等。"""
+    from d1max_localizer.persons import OnnxDetector
+    _假推理库(monkeypatch, ["TensorrtExecutionProvider", "CUDAExecutionProvider",
+                        "CPUExecutionProvider"])
+    模型 = tmp_path / "person.onnx"
+    模型.write_bytes(b"x")
+    d = OnnxDetector(模型, trt_cache=tmp_path / "trt")
+    trt, cuda, cpu = d.sess.providers_in
+    assert trt[0] == "TensorrtExecutionProvider"
+    assert trt[1] == {"trt_engine_cache_enable": True,
+                      "trt_engine_cache_path": str(tmp_path / "trt"), "trt_fp16_enable": True}
+    assert (tmp_path / "trt").is_dir()
+    assert (cuda, cpu) == ("CUDAExecutionProvider", "CPUExecutionProvider")
+    assert d.backend == "TensorrtExecutionProvider"
+    assert (d.sess.opts.intra_op_num_threads, d.sess.opts.inter_op_num_threads) == (2, 1)
+
+
+def test_推理后端_只有CPU就只给CPU_线程数照给的(monkeypatch, tmp_path):
+    from d1max_localizer.persons import OnnxDetector
+    _假推理库(monkeypatch, ["AzureExecutionProvider", "CPUExecutionProvider"])
+    模型 = tmp_path / "person.onnx"
+    模型.write_bytes(b"x")
+    d = OnnxDetector(模型, threads=3, trt_cache=tmp_path / "trt")
+    assert d.sess.providers_in == ["CPUExecutionProvider"] and d.backend == "CPUExecutionProvider"
+    assert d.sess.opts.intra_op_num_threads == 3
+    assert not (tmp_path / "trt").exists(), "没有 TensorRT 就不建缓存目录"
