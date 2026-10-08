@@ -99,6 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
                                 description=f"D1 Max 机器人代理 {AGENT_VERSION}")
     p.add_argument("--transport", type=_transport_arg, required=True,
                    help="mqtt://host[:port]、mqtts://host[:port] 或 memory://(进程内,演示用)")
+    p.add_argument("--env-args", metavar="ARGS", default=None,
+                   help="/etc/d1max/env 的 D1MAX_AGENT_ARGS(启动脚本带进来,W32):这一版不认识的参数"
+                        "跳过并报站点,不会因为它起不来")
     p.add_argument("--hal", choices=("sim", "d1max"), default="sim", help="品牌适配器")
     p.add_argument("--autonomy", choices=("supervised", "autonomous"), default=None,
                    help="自主级别(W00c6i):supervised = goto/巡检只在有人现场监护时才接;"
@@ -228,9 +231,62 @@ def make_rtk(args: argparse.Namespace) -> Any:
     return OwnRtk(args.rtk_device, args.rtk_baud, init=init, now_ms=wall_ms)
 
 
+def _is_opt(tok: str) -> bool:
+    """``--x``、``-x`` 是参数;``-0.5``、``-1,2,0`` 是值(横线后面不是字母)。"""
+    import re
+    return re.match(r"^--?[A-Za-z]", tok) is not None
+
+
+def split_env_args(p: argparse.ArgumentParser, raw: str) -> tuple[list[str], list[str]]:
+    """``/etc/d1max/env`` 的 ``D1MAX_AGENT_ARGS``(W32,决策 47):这一版认识的留下,不认识的连同
+    后面跟着的值一起跳过 —— 那一串是整机的、不跟版本走,新版加的参数退回老版时老版不认,不能因为
+    这个起不来。→ (留下的, 跳过的;跳过的一个参数连同它的值算一项)。"""
+    import shlex
+    known = {s for a in p._actions for s in a.option_strings}
+    groups: list[list[str]] = []                      # 每个参数连同它后面跟着的值
+    for tok in shlex.split(raw or ""):
+        if _is_opt(tok) or not groups:
+            groups.append([tok])
+        else:
+            groups[-1].append(tok)
+    kept: list[str] = []
+    skipped: list[str] = []
+    for g in groups:
+        name = g[0].split("=", 1)[0]
+        if not _is_opt(g[0]) or name not in known or name == "--env-args":
+            skipped.append(" ".join(g))
+        elif len(g) == 2 and "=" not in g[0]:
+            kept.append(f"{g[0]}={g[1]}")              # --home=-1,2,0:横线开头的值 argparse 才认
+        else:
+            kept += g
+    return kept, skipped
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p = build_parser()
-    args = p.parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # W32:``--env-args=<串>`` 是启动脚本从 /etc/d1max/env 带来的;拆开、认不得的跳过,接在最后
+    # (跟以前直接摊在命令行末尾一样:写在后面的盖前面的)。命令行上直接给的参数照旧严格检查。
+    raw: list[str] = []
+    rest: list[str] = []
+    it = iter(argv)
+    for tok in it:
+        if tok.startswith("--env-args="):
+            raw.append(tok.split("=", 1)[1])
+        elif tok == "--env-args":
+            raw.append(next(it, ""))
+        else:
+            rest.append(tok)
+    kept: list[str] = []
+    skipped: list[str] = []
+    for r in raw:
+        k, s = split_env_args(p, r)
+        kept += k
+        skipped += s
+    args = p.parse_args(rest + kept)
+    args.skipped_env_args = skipped
+    for s in skipped:
+        log.warning("D1MAX_AGENT_ARGS 里的 %r 这一版不认识:跳过(起来以后报站点)", s)
     tls = (args.tls_ca, args.tls_cert, args.tls_key)
     given = [t is not None for t in tls]
     if args.transport.startswith("mqtts://"):
@@ -303,9 +359,19 @@ class Assembled:
     #: 仿真定位器(``--sim-localizer``,W09a):运行时起来之后连本机定位桥、按 10 Hz 出位姿。
     sim_loc: Any = None
 
+    #: 启动参数里这一版不认识、跳过了的(W32):起来以后记一条事件,站点报 P2。
+    skipped_args: tuple[str, ...] = ()
+
     def start(self) -> None:
         """在 bridge 的循环里起运行时,并开始每拍 step;发件箱一起起。"""
         self.bridge.call(self.runtime.start, timeout_s=30.0)
+        if self.skipped_args:
+            skipped = list(self.skipped_args)
+
+            async def tell() -> None:
+                self.runtime.events.emit("agent_args_skipped",
+                                         {"args": skipped, "version": AGENT_VERSION})
+            self.bridge.call(tell, timeout_s=10.0)
         self.bridge.spawn(lambda: self._drive())
         if self.sim_loc is not None:
             self.bridge.spawn(lambda: self._sim_localize())
@@ -451,7 +517,8 @@ def build(args: argparse.Namespace) -> Assembled:
         from d1max_adapter_sim.localizer import SimLocalizer
         sim_loc = SimLocalizer(hal, args.loc_socket or Path(args.store_dir) / "loc.sock")
     return Assembled(bridge=bridge, runtime=runtime, parts=parts, hal=hal, broker=broker,
-                     period_s=args.period, _stop=threading.Event(), pump=pump, sim_loc=sim_loc)
+                     period_s=args.period, _stop=threading.Event(), pump=pump, sim_loc=sim_loc,
+                     skipped_args=tuple(getattr(args, "skipped_env_args", ())))
 
 
 class _NoIntake:

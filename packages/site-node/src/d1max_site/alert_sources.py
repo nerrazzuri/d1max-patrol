@@ -351,6 +351,14 @@ class SiteAlertSources:
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
             self.desk.raise_alert(kind="map_failed", robot=rid, title=f"{what}没成:{which}",
                                   detail=str(d.get("reason", ""))[:300])
+        elif e.kind == "agent_args_skipped":
+            # W32(决策 47):/etc/d1max/env 的 D1MAX_AGENT_ARGS 里有这一版不认识的参数(多半是
+            # 退回了老版、参数是新版加的):代理跳过照起,但那几项设置没生效
+            args = "、".join(str(a) for a in d.get("args", [])[:10])
+            self.desk.raise_alert(kind="agent_args_skipped", robot=rid,
+                                  title="狗上的代理有几个启动参数这一版不认识,跳过了",
+                                  detail=f"代理 {d.get('version', '?')} 跳过:{args}"[:300]
+                                         + ";多半是退回了老版本,这几项设置没生效")
         elif e.kind == "recording_failed":
             # W18:这一路录像断了(相机不通、盘写不进),狗每 10 s 重试;录回来报 recording_ok
             self.desk.raise_alert(kind="recording_failed", robot=rid,

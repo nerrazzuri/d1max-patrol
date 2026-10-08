@@ -83,7 +83,7 @@ ALERTS_LIMIT_MAX = 2000
 _ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
 _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
-                     r"(teleop|halt|resume|supervise|relocalize|home/here|deter)$")
+                     r"(teleop|halt|resume|supervise|relocalize|home/here|deter|service)$")
 #: W00c5b:``/api/robots/<id>/video/<front|back|health>``。
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
@@ -438,6 +438,8 @@ class _Handler(TlsHandlerMixin):
                     return self._halt(robot_id, user)
                 if m.group(2) == "resume" and method == "POST":
                     return self._resume(robot_id, user)
+                if m.group(2) == "service" and method == "POST":
+                    return self._service(robot_id, user)
                 if m.group(2) == "supervise" and method == "POST":
                     return self._supervise(robot_id, user)
                 if m.group(2) == "relocalize" and method == "POST":
@@ -946,6 +948,25 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "没有这台狗")
         was = self.site.dispatcher.resume(robot_id, by=str(user))
         return self._send_json(200, {"robot_id": robot_id, "was_held": was})
+
+    def _service(self, robot_id: str, user) -> None:
+        """只许手动派 / 接自动派遣(W33):``{manual_only: bool, note?}``。设成只许手动要 ``dispatch``
+        (往安全那边走,能派它的人都能关);接自动派遣要 ``manage``(新登记的狗由管理员确认)。"""
+        d = self._body()
+        on = d.get("manual_only")
+        if not isinstance(on, bool):
+            raise HttpError(400, "要 manual_only: true / false")
+        self._need(user, DISPATCH if on else MANAGE)
+        self._audit_target = robot_id
+        note = d.get("note") if isinstance(d.get("note"), str) else ""
+        self._audit_detail = {"manual_only": on, **({"note": note[:200]} if note else {})}
+        reg = self.site.dispatcher.registry
+        if reg.get(robot_id) is None:
+            raise HttpError(404, "没有这台狗")
+        was = reg.set_manual_only(robot_id, on, by=str(user), now_ms=self.site.dispatcher._now(),
+                                  note=note)
+        return self._send_json(200, {"robot_id": robot_id, "manual_only": reg.manual_only(robot_id),
+                                     "was_manual_only": was})
 
     def _deter(self, robot_id: str, user) -> None:
         """上装(W21):``{"output", "on", "max_s"?, "clip"?}``。``dispatch`` 权限(保安、管理员)。

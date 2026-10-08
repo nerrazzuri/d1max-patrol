@@ -35,9 +35,15 @@ class Registry:
             raise RegistryError(str(exc)) from exc
 
     def enroll(self, robot_id: str, *, fingerprint: str, issued_at: int, expires_at: int,
-               now_ms: int | None = None) -> None:
+               now_ms: int | None = None, manual_only: bool = False) -> None:
+        """``manual_only``:登记成「只许手动派」(W33:站点命令行登记新狗时默认这样,
+        管理员确认后才接自动派遣)。"""
         self._check_id(robot_id)
         with self.db.tx() as c:
+            if manual_only:
+                c.execute("INSERT OR REPLACE INTO robot_service(robot_id, by, at_ms, note) "
+                          "VALUES (?,?,?,?)", (robot_id, "enroll", now_ms or issued_at,
+                                               "新登记:确认之前只许手动派"))
             row = c.execute("SELECT revoked FROM robots WHERE robot_id=?", (robot_id,)).fetchone()
             if row is not None and not row["revoked"]:
                 raise RegistryError(f"{robot_id} 已登记且未吊销;先 revoke")
@@ -50,6 +56,25 @@ class Registry:
                 c.execute("UPDATE robots SET fingerprint=?, issued_at=?, expires_at=?, "
                           "revoked=0, enrolled_at=? WHERE robot_id=?",
                           (fingerprint, issued_at, expires_at, now_ms or issued_at, robot_id))
+
+    def manual_only(self, robot_id: str) -> dict | None:
+        """只许手动派(W33):``{by, at_ms, note}``;接自动派遣 → ``None``。"""
+        rows = self.db.query("SELECT by, at_ms, note FROM robot_service WHERE robot_id=?",
+                             (robot_id,))
+        return dict(rows[0]) if rows else None
+
+    def set_manual_only(self, robot_id: str, on: bool, *, by: str, now_ms: int,
+                        note: str = "") -> bool:
+        """设成只许手动派 / 接自动派遣。返回之前是不是只许手动。"""
+        with self.db.tx() as c:
+            was = c.execute("SELECT 1 FROM robot_service WHERE robot_id=?",
+                            (robot_id,)).fetchone() is not None
+            if on:
+                c.execute("INSERT OR REPLACE INTO robot_service(robot_id, by, at_ms, note) "
+                          "VALUES (?,?,?,?)", (robot_id, by, now_ms, note[:200]))
+            else:
+                c.execute("DELETE FROM robot_service WHERE robot_id=?", (robot_id,))
+        return was
 
     def revoke(self, robot_id: str) -> None:
         with self.db.tx() as c:

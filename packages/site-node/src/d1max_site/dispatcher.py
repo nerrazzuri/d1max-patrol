@@ -316,6 +316,7 @@ class Dispatcher:
                 "active": self.registry.active(robot_id, now_ms=self._now()),
                 "expires_at": rec.expires_at, "status": status, "capabilities": caps,
                 "fresh": self._fresh(c), "held": self.held(robot_id),
+                "manual_only": self.registry.manual_only(robot_id),
                 "loc": self._loc_view(c), "clock_skew_s": _round1(self.clock_skew_s(robot_id)),
                 # W09e:最近一份遥测里的 RTK 解(没配 RTK、老狗都是 None)
                 "rtk": c.telemetry.rtk if c is not None and c.telemetry is not None else None}
@@ -715,7 +716,14 @@ class Dispatcher:
 
     def autonomy(self, robot_id: str) -> str:
         """狗报的自主级别(W00c6i);读不到按 ``supervised`` 算。排程与事件派遣只派给
-        ``autonomous``。"""
+        ``autonomous``。站点设成只许手动派的(W33)→ ``manual_only``,不管狗报什么。"""
+        if self.registry.manual_only(robot_id) is not None:
+            return "manual_only"
+        return self.reported_autonomy(robot_id)
+
+    def reported_autonomy(self, robot_id: str) -> str:
+        """狗自己报的自主级别,不看站点的「只许手动派」(W33):要不要人现场监护按这个算 —— 只许手动派
+        只挡站点自己发起的动作,人手动派的跟以前一样。"""
         from d1max_contract.supervision import autonomy_of
         c = self.clients.get(robot_id)
         caps = c.capabilities.tasks.get("patrol") if c and c.capabilities else None

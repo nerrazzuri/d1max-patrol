@@ -67,6 +67,20 @@ async def test_任务结束自动回默认待命点_回程结束不再回(站):
     assert abs(o.x) < 0.2 and abs(o.y) < 0.2
 
 
+async def test_W33_只许手动派的狗_任务完了不自动回_也不报没回去(站):
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.reg.set_manual_only("A", True, by="alice", now_ms=0)
+    feed = []
+    t.site.feed.listen(feed.append)
+    await t.send(t.site.goto("A", target(0.8), 0.8, issued_by="alice", priority=MANUAL))
+    await t.run(200)
+    assert len(_cmds(t, "goto")) == 1, "人手动派的那趟照走,完了不自动回"
+    assert not [e for e in feed if e.get("kind") == "standby_failed"]
+    r = await t.stb.return_to("A", issued_by="alice")
+    assert r["ack"]["result"] == "accepted", "人手动叫回照收"
+
+
 async def test_没有默认待命点就不回(站):
     t = 站
     await t.send(t.site.goto("A", target(0.5), 0.8, issued_by="alice", priority=MANUAL))

@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 35                      # W28 外审:这一回低电报过同时在充没有(charge_overlaps)
+SCHEMA_VERSION = 36                      # W33:只许手动派的狗(robot_service)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -367,6 +367,14 @@ CREATE TABLE IF NOT EXISTS charge_cycles (
     until_ms   INTEGER
 );
 -- W13 外审:狗报「桩上危险」(运动锁住)报过 P1 的(一次挂一次;狗上摘了就删)。
+-- W33(C40221 真机):只许手动派的狗。站点自己发起的动作(排程、入侵派遣、回充、任务完了自动回待命点)
+-- 一律不派;人手动派的照常。新登记的狗默认在这里(管理员确认后才接自动派遣);没有这一行 = 接。
+CREATE TABLE IF NOT EXISTS robot_service (
+    robot_id TEXT PRIMARY KEY,
+    by       TEXT NOT NULL,
+    at_ms    INTEGER NOT NULL,
+    note     TEXT NOT NULL DEFAULT ''
+);
 -- W28 外审:这一回低电已经报过「两台同时在充」的(重派、重启不再报;电量回到 30% 以上删)。
 CREATE TABLE IF NOT EXISTS charge_overlaps (
     robot_id   TEXT PRIMARY KEY,

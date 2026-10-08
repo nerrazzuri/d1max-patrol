@@ -380,6 +380,10 @@ class StandbyManager:
                                      task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")
 
     async def _auto(self, robot_id: str, after: str) -> None:
+        if self.dispatcher.registry.manual_only(robot_id) is not None:
+            # W33:只许手动派的狗,站点不自己让它动(回待命点也不派),人手动叫
+            log.info("%s 只许手动派:%s 结束后不自动回待命点", robot_id, after)
+            return
         if after.startswith(TELEOP_TASK_PREFIX) and self._path_kind(robot_id) != "planned":
             # 遥控放租之后直线的狗不自动回(W00c6b 内审):起点是人刚开到的任意位置,人在场。
             log.info("%s 遥控放租之后不自动回待命点(直线的狗,人手动叫)", robot_id)

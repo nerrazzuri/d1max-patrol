@@ -333,3 +333,24 @@ def test_release_add登记一版_坏包退2(home, tmp_path, capsys):
     assert f"登记了 {NAME}" in capsys.readouterr().out
     assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 2
     assert site_main.main(["--home", str(home), "release-add", str(tmp_path)]) == 2
+
+
+def test_W33_新登记的狗只许手动_robot_auto才接自动派遣_robot_manual再关(home, capsys):
+    assert site_main.main(["--home", str(home), "enroll", "A", "--days", "10"]) == 0
+    db = SiteDB(home / "site.db")
+    reg = Registry(db, site_id="estate-1")
+    assert reg.manual_only("A")["by"] == "enroll"
+    db.close()
+    assert site_main.main(["--home", str(home), "robot-auto", "A"]) == 0
+    assert "接自动派遣" in capsys.readouterr().out
+    db = SiteDB(home / "site.db")
+    assert Registry(db, site_id="estate-1").manual_only("A") is None
+    db.close()
+    assert site_main.main(["--home", str(home), "robot-manual", "A", "--note", "现场测试"]) == 0
+    db = SiteDB(home / "site.db")
+    got = Registry(db, site_id="estate-1").manual_only("A")
+    assert got["note"] == "现场测试" and got["by"].startswith("cli:")
+    acts = [r["action"] for r in db.query("SELECT action FROM audit ORDER BY id")]
+    assert acts[-2:] == ["robot auto", "robot manual_only"]
+    db.close()
+    assert site_main.main(["--home", str(home), "robot-auto", "Z"]) == 2

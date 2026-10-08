@@ -517,3 +517,42 @@ def test_起不来_握手说证书还没生效_启动失败的信息里带上钟
     assert agent_main.main([]) == 1
     err = capsys.readouterr().err
     assert "起不来" in err and "钟可能不对" in err
+
+
+# ------------------------------------------------------------ W32(决策 47)
+
+def test_W32_env参数里这一版不认识的跳过_连同它的值_认识的照用(tmp_path):
+    a = _args(tmp_path, "--env-args=--autonomy autonomous --future-knob 0.3 --period 0.02 "
+                        "--future-flag --home -1.5,2,0 --future=x")
+    assert a.autonomy == "autonomous" and a.period == 0.02 and a.home.position.x == -1.5
+    assert a.skipped_env_args == ["--future-knob 0.3", "--future-flag", "--future=x"]
+
+
+def test_W32_负数是值_不是参数_后写的盖前写的(tmp_path):
+    a = _args(tmp_path, "--env-args", "--home -1,-2,-0.5")
+    assert (a.home.position.x, a.home.position.y) == (-1.0, -2.0), "盖掉前面的 --home"
+    assert a.skipped_env_args == []
+
+
+def test_W32_命令行上直接给的不认识参数照旧拒(tmp_path):
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--future-knob", "1")
+
+
+def test_W32_老版本加新参数还能起_起来以后报一条事件(tmp_path):
+    """开机守卫退回老版、env 里留着新版的参数:照样起来,跳过的报 ``agent_args_skipped``。"""
+    a = _args(tmp_path, "--env-args=--future-knob 3 --autonomy autonomous")
+    asm = agent_main.build(a)
+    seen = []
+    asm.runtime.events.emit = lambda kind, data: seen.append((kind, data))
+    try:
+        asm.start()
+    finally:
+        asm.stop()
+    [(kind, data)] = [x for x in seen if x[0] == "agent_args_skipped"]
+    assert data["args"] == ["--future-knob 3"] and data["version"]
+
+
+def test_W32_空的env参数什么都不带(tmp_path):
+    a = _args(tmp_path, "--env-args=")
+    assert a.skipped_env_args == [] and a.autonomy is None
