@@ -159,8 +159,11 @@ DEFAULT_EVIDENCE_KEY = Path("/etc/d1max-site/evidence.key")
 
 
 def open_sealed(path: Path, dst: Path, key: bytes | None) -> str:
-    """狗封好的证据(W30b)解开成 ``dst``,成了删掉封好的那份。回空串;解不开回原因(封好的留着,
-    以后配好私钥用 ``d1max-site evidence-open`` 补解)。"""
+    """狗封好的证据(W30b)解开成 ``dst``。回空串;解不开回原因(以后配好私钥用 ``d1max-site
+    evidence-open`` 补解)。
+
+    **封好的那份不在这里删**(W30b 外审 2):调用方登记成了才删。先删后登记的话,登记一失败,站点上
+    只剩一个没登记的明文,补解再也找不到它。"""
     from d1max_contract.evseal import SealError, open_file
     if key is None:
         return "站点没配证据私钥(/etc/d1max-site/evidence.key)"
@@ -168,7 +171,6 @@ def open_sealed(path: Path, dst: Path, key: bytes | None) -> str:
         open_file(path, dst, key)
     except (SealError, OSError) as exc:
         return str(exc)[:200]
-    path.unlink(missing_ok=True)
     return ""
 
 
@@ -210,10 +212,14 @@ class EvidenceStore:
                 why = open_sealed(path, path.with_name(plain.rsplit("/", 1)[-1]), self.evidence_key)
                 if why:
                     log.warning("%s 传来的 %s/%s 解不开:%s", robot_id, run, rel, why)
+                    # 这一趟照样登记(不登记照片):留存期、删除请求按趟删目录,封好的跟着删
+                    self._index(robot_id, mission, stamp, "", notify=False)
                     if self.on_unopened is not None:
                         self.on_unopened(robot_id, run, rel, why)
                     return got
-                rel = plain
+                self._index(robot_id, mission, stamp, plain)
+                path.unlink(missing_ok=True)             # 登记成了才删封好的(外审 2)
+                return got
             self._index(robot_id, mission, stamp, rel)
         return got
 
@@ -232,12 +238,14 @@ class EvidenceStore:
                 bad += 1
                 continue
             self._index(robot, mission, stamp, plain)
+            p.unlink(missing_ok=True)                    # 登记成了才删封好的(外审 2)
             ok += 1
         return ok, bad
 
     # ------------------------------------------------------------ 登记
 
-    def _index(self, robot_id: str, mission: str, stamp: str, rel: str) -> None:
+    def _index(self, robot_id: str, mission: str, stamp: str, rel: str, *,
+               notify: bool = True) -> None:
         run = self.run_dir(robot_id, mission, stamp)
         now = self._now()
         finished, result = None, None
@@ -266,7 +274,7 @@ class EvidenceStore:
             c.execute("UPDATE runs SET last_ms=?, photos=?, bytes=?, "
                       "finished=COALESCE(?, finished), result=COALESCE(?, result) WHERE id=?",
                       (now, photos, size, finished, result, row["id"]))
-        for cb in list(self.on_file):
+        for cb in list(self.on_file) if notify else ():
             try:
                 cb(row["id"], rel)
             except Exception:

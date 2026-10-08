@@ -84,24 +84,33 @@ class RecordingStore:
 
     def _done(self, robot_id: str, camera: str, stamp: str, path: Path, plain_path: Path,
               stored: Stored) -> Stored:
+        sealed = 0
         if path != plain_path:
             from d1max_site.evidence import open_sealed, sha256_file
             why = open_sealed(path, plain_path, self.evidence_key)
             if why:
+                # 解不开也登记(外审 3):记成「还封着」,留存期、腾盘、删除请求照样删得到它
                 log.warning("%s 的录像 %s/%s 解不开:%s", robot_id, camera, stamp, why)
-                if self.on_unopened is not None:
-                    self.on_unopened(robot_id, f"{camera}/{stamp}", VIDEO_SEALED, why)
-                return stored
-            plain = Stored(size=plain_path.stat().st_size, sha256=sha256_file(plain_path))
+                sealed = 1
+                plain = Stored(size=path.stat().st_size, sha256=stored.sha256 or sha256_file(path))
+            else:
+                plain = Stored(size=plain_path.stat().st_size, sha256=sha256_file(plain_path))
         else:
             plain = stored
         with self.db.tx() as c:
             c.execute(
                 "INSERT INTO recordings(robot_id, camera, stamp, start_ms, bytes, sha256, "
-                "received_ms) VALUES (?,?,?,?,?,?,?) ON CONFLICT(robot_id, camera, stamp) "
+                "received_ms, sealed) VALUES (?,?,?,?,?,?,?,?) "
                 # 重传不刷新 received_ms:留存从第一次收齐算(W18 外审)
-                "DO UPDATE SET bytes=excluded.bytes, sha256=excluded.sha256",
-                (robot_id, camera, stamp, stamp_ms(stamp), plain.size, plain.sha256, self._now()))
+                "ON CONFLICT(robot_id, camera, stamp) DO UPDATE SET bytes=excluded.bytes, "
+                "sha256=excluded.sha256, sealed=excluded.sealed",
+                (robot_id, camera, stamp, stamp_ms(stamp), plain.size, plain.sha256, self._now(),
+                 sealed))
+        if sealed:
+            if self.on_unopened is not None:
+                self.on_unopened(robot_id, f"{camera}/{stamp}", VIDEO_SEALED, why)
+        elif path != plain_path:
+            path.unlink(missing_ok=True)                 # 登记成了才删封好的(外审 2)
         return stored
 
     def open_leftovers(self) -> tuple[int, int]:
@@ -114,8 +123,11 @@ class RecordingStore:
                 continue
             stamp = name[: -len(".mp4.d1e")]
             plain_path = p.with_name(f"{stamp}.mp4")
-            self._done(robot, camera, stamp, p, plain_path,
-                       Stored(size=p.stat().st_size, sha256=""))
+            try:
+                self._done(robot, camera, stamp, p, plain_path,
+                           Stored(size=p.stat().st_size, sha256=""))
+            except Exception:
+                log.exception("录像 %s 补解、登记没成(封好的留着,下次再来)", p.name)
             if p.exists():
                 bad += 1                                 # 还是解不开(_done 报过了)
             else:
@@ -130,7 +142,7 @@ class RecordingStore:
         """按开头时刻,最新的在前。``since``/``until`` 按「这一段盖住的时间」算:开头在 ``since``
         之前一段
         以内的也算(盖住了 ``since`` 那一刻)。"""
-        q, args = "SELECT * FROM recordings WHERE 1=1", []
+        q, args = "SELECT * FROM recordings WHERE sealed=0", []   # 还封着的放不了,不列
         if robot_id is not None:
             q += " AND robot_id=?"
             args.append(robot_id)
@@ -148,12 +160,13 @@ class RecordingStore:
         return [dict(r) for r in self.db.query(q, tuple(args))]
 
     def get(self, rid: int) -> dict[str, Any] | None:
-        rows = self.db.query("SELECT * FROM recordings WHERE id=?", (rid,))
+        rows = self.db.query("SELECT * FROM recordings WHERE id=? AND sealed=0", (rid,))
         return dict(rows[0]) if rows else None
 
     def path(self, row: dict[str, Any]) -> Path:
-        return safe_join(self.root, row["robot_id"], row["camera"], row["stamp"][:8],
-                         f"{row['stamp']}.mp4")
+        """这一段在盘上的文件(还封着的是 ``.mp4.d1e``)。"""
+        name = f"{row['stamp']}.mp4" + (".d1e" if row.get("sealed") else "")
+        return safe_join(self.root, row["robot_id"], row["camera"], row["stamp"][:8], name)
 
     def set_keep(self, rid: int, keep: bool) -> dict[str, Any] | None:
         with self.db.tx() as c:
@@ -166,7 +179,11 @@ class RecordingStore:
         """删一段:**文件真没了才删登记**(W18 外审:删不掉也删登记的话,录像在界面上消失、以后再也
         清不到,盘没腾出来却报「腾了」)。回删成了没有。"""
         try:
-            self.path(row).unlink(missing_ok=True)
+            p = self.path(row)
+            p.unlink(missing_ok=True)
+            # 封着、解开的两份都删(补解到一半停了的话两份都在)
+            p.with_name(f"{row['stamp']}.mp4").unlink(missing_ok=True)
+            p.with_name(f"{row['stamp']}.mp4.d1e").unlink(missing_ok=True)
         except (OSError, PathRefused) as exc:
             log.warning("录像删不掉(%s):%s", exc, row.get("id"))
             self.last_delete_error = str(exc)

@@ -121,6 +121,8 @@ class Uploader:
         self.run_depth = run_depth
         #: 相对「一趟」的文件名 → 优先级(None = 不传)。
         self._classify = classify
+        #: 先别传的(队列里的键 → 真):W30b 封不上的明文证据,留着、不传,等补封成了再说。
+        self.hold: Callable[[str], bool] = lambda key: False
 
     # ---- 扫 ----
 
@@ -158,7 +160,7 @@ class Uploader:
     # ---- 传 ----
 
     def run_once(self, now_ms: int) -> Step:
-        ready = self.queue.pending(now_ms)
+        ready = [i for i in self.queue.pending(now_ms) if not self.hold(i.key)]
         if not ready:
             return Step(key="", action="idle", detail="队列空")
         item = ready[0]

@@ -69,6 +69,9 @@ class Recorder:
         self.root = Path(root)
         #: 证据加密(W30b):配了就封着挪进发件箱(:class:`~d1max_contract.evseal.Sealer`)。
         self.sealer = sealer
+        #: 封不上、扣在暂存里的段(``<相机>/<时刻>`` → 原因;W30b 外审 1):不进发件箱、不传明文,下一拍
+        #: 再封;代理把件数报站点。也算进配额(openssl 一直坏着的话暂存不许把盘写满)。
+        self.seal_failed: dict[str, str] = {}
         self.out = self.root / SUB
         self.cameras = list(cameras)
         self._source = source
@@ -193,11 +196,15 @@ class Recorder:
             dest.parent.mkdir(parents=True, exist_ok=True)
             if self.sealer is not None:
                 # W30b:封着挪进发件箱(暂存里正在写的那段是明文,写完了才挪;封好了再删明文)
+                key = f"{camera}/{p.stem}"
                 try:
                     self.sealer.seal_file(p, dest.with_name(VIDEO_SEALED))
-                except Exception:
-                    log.exception("%s 这一段封不了(留在暂存,下一拍再封)", p.name)
+                except Exception as exc:
+                    if key not in self.seal_failed:
+                        log.exception("%s 这一段封不上(留在暂存,下一拍再封)", p.name)
+                    self.seal_failed[key] = str(exc)[:200] or type(exc).__name__
                     continue
+                self.seal_failed.pop(key, None)
                 p.unlink(missing_ok=True)
             else:
                 os.replace(p, dest)
@@ -214,9 +221,25 @@ class Recorder:
                 out += [p for p in (self.out / c).iterdir() if p.is_dir()]
         return sorted(out, key=lambda p: p.name)
 
+    def _stuck(self) -> list[Path]:
+        """封不上、扣在暂存里的段(W30b)。"""
+        out = []
+        for key in list(self.seal_failed):
+            camera, stamp = key.split("/", 1)
+            p = self.root / STAGING / camera / f"{stamp}.mp4"
+            if p.is_file():
+                out.append(p)
+            else:
+                self.seal_failed.pop(key, None)
+        return out
+
     def _enforce_quota(self) -> None:
-        segs = self._segments()
-        sizes = {p: sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) for p in segs}
+        # 发件箱里的段是目录(``<相机>/<时刻>/``),暂存里封不上的是文件(``<相机>/<时刻>.mp4``):
+        # 一起按时刻排、最旧的先删
+        segs = sorted(self._segments() + self._stuck(),
+                      key=lambda p: p.stem if p.suffix == ".mp4" else p.name)
+        sizes = {p: (p.stat().st_size if p.suffix == ".mp4" else
+                     sum(f.stat().st_size for f in p.rglob("*") if f.is_file())) for p in segs}
         total = sum(sizes.values())
         try:
             t, used, _ = self._disk_usage(self.root)
@@ -226,12 +249,17 @@ class Recorder:
         dropped: list[str] = []
         while segs and (total > self.quota_bytes or ratio >= WARN_RATIO):
             p = segs.pop(0)
-            shutil.rmtree(p, ignore_errors=True)
+            if p.suffix == ".mp4":
+                with contextlib.suppress(OSError):
+                    p.unlink()
+            else:
+                shutil.rmtree(p, ignore_errors=True)
             if p.exists():                               # 删不掉(权限、只读):不算删了,换下一段试
                 log.warning("录像段删不掉:%s", p)
                 continue
             total -= sizes[p]
-            dropped.append(f"{p.parent.name}/{p.name}")
+            dropped.append(f"{p.parent.name}/{p.stem if p.suffix == '.mp4' else p.name}")
+            self.seal_failed.pop(dropped[-1], None)
             if ratio >= WARN_RATIO:
                 with contextlib.suppress(OSError):
                     t, used, _ = self._disk_usage(self.root)

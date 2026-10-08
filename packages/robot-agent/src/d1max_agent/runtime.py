@@ -332,6 +332,9 @@ class AgentRuntime:
         self._rec_action = ""
         #: 发件箱隔离的文件重新排上(站点改了规矩之后,管理员让它再传一次);主程序接上。
         self._outbox_retry: Callable[[], int] | None = None
+        #: W30b 外审 1:发件箱里封不上、扣着不传的明文证据(件数, 原因);主程序接上。
+        self._unsealed: Callable[[], tuple[int, str]] | None = None
+        self._unsealed_told = 0
         self.processor.map_hook = self._map_command
         #: 丢掉的遥控帧计数(不合契约的)。
         self.teleop_malformed = 0
@@ -1858,6 +1861,7 @@ class AgentRuntime:
                 self.recorder.step()
             except Exception:                     # 录像出毛病不许带走这一拍(狗照样巡检、遥控)
                 log.exception("录像这一拍炸了")
+        self._watch_sealing()
         await self._watch_faults()
         await self._flush_events()
         await self._publish_status()
@@ -1877,6 +1881,20 @@ class AgentRuntime:
             return
         if o.valid:
             self.trail.feed(o.x, o.y, o.yaw)
+
+    def _watch_sealing(self) -> None:
+        """W30b 外审 1:有证据封不上(扣在狗上、不传明文)报一次 ``evidence_seal_failed``(站点 P2),
+        都封上了报 ``evidence_seal_ok``。件数变多不重报。"""
+        n, why = self._unsealed() if self._unsealed is not None else (0, "")
+        if self.recorder is not None:
+            stuck = getattr(self.recorder, "seal_failed", {})
+            n += len(stuck)
+            why = why or next(iter(stuck.values()), "")
+        if n and not self._unsealed_told:
+            self.events.emit("evidence_seal_failed", {"count": n, "reason": why[:300]})
+        elif not n and self._unsealed_told:
+            self.events.emit("evidence_seal_ok", {})
+        self._unsealed_told = n
 
     async def _watch_faults(self) -> None:
         """HAL 故障集合变了就发一条 ``robot_fault``(W00c5a)。狗只报事实:哪条算跌倒、算不算

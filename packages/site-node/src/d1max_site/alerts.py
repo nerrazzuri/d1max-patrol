@@ -93,6 +93,7 @@ LEVEL_OF: dict[str, Level] = {
     # W30b(决策 51):狗上的照片、录像没加密(没装站点公钥);狗封好的证据站点解不开(私钥不对、没配)。
     "evidence_plain": Level.P2,
     "evidence_unopened": Level.P2,
+    "evidence_seal_failed": Level.P2,
     # 定位变差或打滑(W29,决策 41):狗原地停下等恢复;30 秒还没好再报 loc_lost_paused(P1)。
     "loc_degraded": Level.P2,
     "estop_pressed": Level.P1,

@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 39                      # W30b:狗上证据没封报过没有(evidence_plain)
+SCHEMA_VERSION = 40                      # W30b 外审 3:录像段还封着、解不开(recordings.sealed)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS recordings (
     sha256      TEXT NOT NULL,
     received_ms INTEGER NOT NULL,
     keep        INTEGER NOT NULL DEFAULT 0,
+    sealed      INTEGER NOT NULL DEFAULT 0,
     UNIQUE (robot_id, camera, stamp)
 );
 CREATE INDEX IF NOT EXISTS recordings_start ON recordings(start_ms);
@@ -461,6 +462,8 @@ _ADDED_COLUMNS = (
     ("deter_sessions", "withdraw", "TEXT NOT NULL DEFAULT ''"),
     # W30:运行记录标了「留着」(要留作证据):过了留存期也不删,按时间段删时也不删
     ("runs", "keep", "INTEGER NOT NULL DEFAULT 0"),
+    # W30b 外审 3:这一段还封着(解不开):照样登记,留存、腾盘、删除请求都管得到;列表、回放不给
+    ("recordings", "sealed", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
