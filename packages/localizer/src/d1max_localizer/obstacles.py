@@ -147,7 +147,13 @@ def _cross(a: Sequence[float], b: Sequence[float]) -> tuple[float, float, float]
 
 # ------------------------------------------------------------ 地面与自检
 
-def fit_ground(pts: Any, *, iters: int = 120, tol: float = 0.03, seed: int = 0
+#: 地面拟合最多用这么多个候选点(随机抽)。真狗一帧地面候选几万个,RANSAC 120 轮每轮都扫一遍,
+#: 感知节点光这一步就占一半 CPU、自检攒不够帧(2026-10-08 C40221);拟一个平面几千个点足够。
+MAX_GROUND_PTS = 4000
+
+
+def fit_ground(pts: Any, *, iters: int = 120, tol: float = 0.03, seed: int = 0,
+               max_pts: int = MAX_GROUND_PTS
                ) -> tuple[tuple[float, float, float], float, float] | None:
     """狗身系的点里找地面:雷达以下、水平 0.5–4 m 的点做 RANSAC → (法向(朝上), 雷达离地高度,
     内点占比)。点太少回 ``None``。"""
@@ -158,6 +164,8 @@ def fit_ground(pts: Any, *, iters: int = 120, tol: float = 0.03, seed: int = 0
     if len(cand) < 30:
         return None
     rng = np.random.default_rng(seed)
+    if len(cand) > max_pts:
+        cand = cand[rng.choice(len(cand), max_pts, replace=False)]
     best, best_n = None, 0
     for _ in range(iters):
         a, b, c = cand[rng.choice(len(cand), 3, replace=False)]

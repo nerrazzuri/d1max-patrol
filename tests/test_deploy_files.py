@@ -1714,3 +1714,11 @@ def test_人员检测启动脚本不读用户目录的包():
     text = (DEPLOY / "d1max-persons-start").read_text(encoding="utf-8")
     assert "\nexport PYTHONNOUSERSITE=1\n" in text
     assert text.index("export PYTHONNOUSERSITE=1") < text.index("exec /usr/bin/python3")
+
+
+def test_感知和人员检测的启动脚本限numpy线程():
+    """OpenBLAS 缺省开满核的线程池,C40221 上 8 个线程各吃 23–35%,跟定位器抢 CPU(2026-10-08)。"""
+    for 名 in ("d1max-obstacles-start", "d1max-persons-start"):
+        text = (DEPLOY / 名).read_text(encoding="utf-8")
+        assert "\nexport OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1\n" in text, 名
+        assert text.index("OPENBLAS_NUM_THREADS") < text.index("exec /usr/bin/python3"), 名
