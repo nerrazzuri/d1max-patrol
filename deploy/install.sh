@@ -481,6 +481,11 @@ else
     sudo systemctl start d1max-agent
 提示
 fi
+# W30b(决策 51):站点的证据公钥(证书包里的 evidence-pub.key)。没有照样起,照片、录像明文存,站点报 P2。
+if [[ ! -f /etc/d1max/evidence-pub.key ]]; then
+  echo "  提示: 没有 /etc/d1max/evidence-pub.key —— 照片、截图、录像会明文存在狗上(站点报 P2)。" >&2
+  echo "        从站点证书包拷过来、重启代理就封着存了(狗自己解不开,站点收齐了解开)。" >&2
+fi
 
 # 对时(W09d):狗向站点主机对时(Orin 的钟不准、没有 NTP;钟不对连 mTLS 都过不了 —— 站点证书「还没生效」)。
 # 配置按 /etc/d1max/env 算(站点主机:D1MAX_SITE_NTP,没有从 D1MAX_SITE_MQTT 取);站点地址还没填就先不配,

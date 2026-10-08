@@ -53,7 +53,8 @@ install -d -m 0750 -o d1max-site -g d1max-site "$HOME_DIR"
 # W30(决策 43):口令密钥、备份密钥 —— 不跟库放一起(站点服务对 /etc 只读),只有站点用户能读。
 # **已经有了绝不重新生成**:换了钥匙,库里加密的口令、以前的加密备份就都打不开了。
 install -d -m 0750 -o root -g d1max-site /etc/d1max-site
-for k in secrets backup; do
+# W30b(决策 51):证据私钥(X25519,32 字节随机数):狗用它的公钥封照片、录像,站点收齐了解开。
+for k in secrets backup evidence; do
   if [[ ! -f /etc/d1max-site/$k.key ]]; then
     ( umask 077; head -c 32 /dev/urandom > /etc/d1max-site/$k.key )
     echo "  生成了 /etc/d1max-site/$k.key"
@@ -90,11 +91,13 @@ cat <<TXT
   sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR add-admin <名字>
   sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR enroll <robot_id>
   证书包在 $HOME_DIR/ca/issued/<robot_id>/,拷到狗上:
-    ca.crt robot.crt robot.key → /etc/d1max/tls/   registration.json → /etc/d1max/
+    ca.crt robot.crt robot.key → /etc/d1max/tls/   registration.json evidence-pub.key → /etc/d1max/
 
-**两把密钥现在就离线另存一份**(U 盘、保险柜;两把都不在备份里):
+**三把密钥现在就离线另存一份**(U 盘、保险柜;三把都不在备份里):
   /etc/d1max-site/backup.key   备份是用它加密的:站点主机坏了、没有它,备份就解不开(d1max-site backup-open)
   /etc/d1max-site/secrets.key  库里的摄像头口令、事件源密钥是用它加密的:恢复到新主机时要放回原来这一把,
                                不然库能打开、口令解不开(摄像头连不上、事件源验签全拒)
+  /etc/d1max-site/evidence.key 狗上的照片、录像是用它的公钥封的(W30b):丢了它,封着传上来、还没解开的
+                               就再也解不开(d1max-site evidence-open 补解)
 恢复步骤见 docs/W30-完工报告.md「换新主机恢复」。
 TXT

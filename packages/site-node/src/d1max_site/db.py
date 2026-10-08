@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 38                      # W33 外审:就地驱离要撤的那一趟(deter_sessions.withdraw)
+SCHEMA_VERSION = 39                      # W30b:狗上证据没封报过没有(evidence_plain)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -367,6 +367,11 @@ CREATE TABLE IF NOT EXISTS charge_cycles (
     until_ms   INTEGER
 );
 -- W13 外审:狗报「桩上危险」(运动锁住)报过 P1 的(一次挂一次;狗上摘了就删)。
+-- W30b(决策 51):狗报证据没封(没装站点公钥)报过 P2 的(装好了删)。
+CREATE TABLE IF NOT EXISTS evidence_plain (
+    robot_id   TEXT PRIMARY KEY,
+    created_ms INTEGER NOT NULL
+);
 -- W33(决策 48):布防中狗没在驱离时看见人,这一回报过 P1 了(狗确认人走了删,再看见再报)。
 CREATE TABLE IF NOT EXISTS person_sightings (
     robot_id   TEXT PRIMARY KEY,

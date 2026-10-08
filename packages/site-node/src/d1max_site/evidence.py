@@ -154,6 +154,24 @@ class ChunkWriter:
         return h.copy().hexdigest()
 
 
+#: 站点的证据私钥(W30b,决策 51;``site.json`` 的 ``evidence_key`` 可以改)。安装脚本生成,不进备份。
+DEFAULT_EVIDENCE_KEY = Path("/etc/d1max-site/evidence.key")
+
+
+def open_sealed(path: Path, dst: Path, key: bytes | None) -> str:
+    """狗封好的证据(W30b)解开成 ``dst``,成了删掉封好的那份。回空串;解不开回原因(封好的留着,
+    以后配好私钥用 ``d1max-site evidence-open`` 补解)。"""
+    from d1max_contract.evseal import SealError, open_file
+    if key is None:
+        return "站点没配证据私钥(/etc/d1max-site/evidence.key)"
+    try:
+        open_file(path, dst, key)
+    except (SealError, OSError) as exc:
+        return str(exc)[:200]
+    path.unlink(missing_ok=True)
+    return ""
+
+
 class EvidenceStore:
     def __init__(self, root: Path | str, db, *, now_ms: Callable[[], int]) -> None:
         self.root = Path(root)
@@ -163,6 +181,10 @@ class EvidenceStore:
         self.writer = ChunkWriter()
         #: 收完一趟里一个文件之后调(判读排队用)。
         self.on_file: list[Callable[[int, str], None]] = []
+        #: 证据私钥(W30b):狗封好的照片收齐了用它解开。没配是 ``None``(封好的留着、报 P2)。
+        self.evidence_key: bytes | None = None
+        #: 封好的照片解不开:``(狗, 一趟, 文件, 原因)``。站点主程序接到告警上。
+        self.on_unopened: Callable[[str, str, str, str], None] | None = None
 
     def run_dir(self, robot_id: str, mission: str, stamp: str) -> Path:
         return safe_join(self.root, robot_id, mission, stamp)
@@ -180,8 +202,38 @@ class EvidenceStore:
         path = safe_join(self.root, robot_id, mission, stamp, rel)
         got = self.writer.write(path, offset=offset, data=data, total=total)
         if got.size >= total:
+            from d1max_contract.evseal import plain_name
+            plain = plain_name(rel)
+            if plain is not None:
+                # 封好的照片(W30b):解开成原名再登记;解不开留着封好的、报一声(回执照回:狗那份删了,
+                # 站点这份是唯一的,私钥配好了能补解)
+                why = open_sealed(path, path.with_name(plain.rsplit("/", 1)[-1]), self.evidence_key)
+                if why:
+                    log.warning("%s 传来的 %s/%s 解不开:%s", robot_id, run, rel, why)
+                    if self.on_unopened is not None:
+                        self.on_unopened(robot_id, run, rel, why)
+                    return got
+                rel = plain
             self._index(robot_id, mission, stamp, rel)
         return got
+
+    def open_leftovers(self) -> tuple[int, int]:
+        """封好、还没解开的照片补解(``evidence-open``)。回(解开了几个, 还解不开几个)。"""
+        from d1max_contract.evseal import SUFFIX
+        ok = bad = 0
+        for p in sorted(self.root.rglob("*" + SUFFIX)):
+            try:
+                robot, mission, stamp, *rest = p.relative_to(self.root).parts
+            except ValueError:
+                continue
+            rel = "/".join(rest)
+            plain = rel[: -len(SUFFIX)]
+            if open_sealed(p, p.with_name(plain.rsplit("/", 1)[-1]), self.evidence_key):
+                bad += 1
+                continue
+            self._index(robot, mission, stamp, plain)
+            ok += 1
+        return ok, bad
 
     # ------------------------------------------------------------ 登记
 
@@ -293,3 +345,53 @@ def _row(r) -> dict[str, Any]:
         d["verdicts"] = {}
     d["finished"] = bool(d.get("finished"))
     return d
+
+
+def load_evidence_key(cfg: dict) -> bytes | None:
+    """站点配的证据私钥(W30b);没有回 ``None``(封好的证据收齐了留着、报 P2)。"""
+    from d1max_contract.evseal import SealError, load_private
+    path = Path(cfg.get("evidence_key") or DEFAULT_EVIDENCE_KEY)
+    if not path.is_file():
+        log.warning("没有证据私钥 %s:狗封好的照片、录像收齐了解不开(装机脚本会生成)", path)
+        return None
+    try:
+        return load_private(path)
+    except (SealError, OSError) as exc:
+        log.error("证据私钥用不了:%s", exc)
+        return None
+
+
+class EvidencePlainWatch:
+    """狗报证据没封(能力 ``evidence.sealed`` 是假:没装站点公钥)→ 报 P2 ``evidence_plain``,一台一次
+    (``evidence_plain`` 表,跟待报告警同一个事务),装好了(报真)就清。W30b,决策 51。"""
+
+    def __init__(self, db, dispatcher: Any, *, now_ms: Callable[[], int]) -> None:
+        self.db = db
+        self.dispatcher = dispatcher
+        self._now = now_ms
+        self.alerts: Any = None
+
+    def tick(self) -> None:
+        from d1max_site.pending_alerts import flush, queue
+        seen = {r["robot_id"] for r in self.db.query("SELECT robot_id FROM evidence_plain")}
+        fresh = getattr(self.dispatcher, "_fresh", None)
+        now = self._now()
+        for rid, c in list(self.dispatcher.clients.items()):
+            if c.capabilities is None or (callable(fresh) and not fresh(c)):
+                continue
+            ev = c.capabilities.tasks.get("evidence")
+            if not isinstance(ev, dict) or not isinstance(ev.get("sealed"), bool):
+                continue                                  # 老代理不报:不说
+            if ev["sealed"] is False and rid not in seen:
+                with self.db.tx() as tx:
+                    tx.execute("INSERT INTO evidence_plain(robot_id, created_ms) VALUES (?,?)",
+                               (rid, now))
+                    queue(tx, kind="evidence_plain", robot=rid,
+                          title="狗上的照片、录像没加密",
+                          detail="狗上没有站点的证据公钥(/etc/d1max/evidence-pub.key):照片、截图、"
+                                 "录像明文存在狗上。从证书包拷过去、重启代理",
+                          context={}, now_ms=now)
+            elif ev["sealed"] is True and rid in seen:
+                with self.db.tx() as tx:
+                    tx.execute("DELETE FROM evidence_plain WHERE robot_id=?", (rid,))
+        flush(self.db, self.alerts)

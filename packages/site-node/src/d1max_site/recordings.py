@@ -24,7 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from d1max_contract.intake import VIDEO_FILE, split_video
+from d1max_contract.intake import VIDEO_FILE, VIDEO_SEALED, split_video
 from d1max_site.db import SiteDB
 from d1max_site.evidence import ChunkWriter, PathRefused, Stored, safe_join
 
@@ -60,28 +60,67 @@ class RecordingStore:
         #: 盘紧又删不掉(``(删不掉几段, 最后一个错误)``):不处理的话盘到底线,巡检证据也传不上来了。
         self.on_stuck: Callable[[int, str], None] | None = None
         self.last_delete_error = ""
+        #: 证据私钥(W30b):狗封好的录像段收齐了用它解开;解不开的回调同 :class:`EvidenceStore`。
+        self.evidence_key: bytes | None = None
+        self.on_unopened: Callable[[str, str, str, str], None] | None = None
 
     # ------------------------------------------------------------ 收
 
     def put(self, robot_id: str, run: str, rel: str, *, offset: int, data: bytes,
             total: int) -> Stored:
-        """收件口调:``run`` = ``<相机>/<时刻>``,``rel`` = ``video.mp4``。收齐了登记。"""
+        """收件口调:``run`` = ``<相机>/<时刻>``,``rel`` = ``video.mp4``(封好的是
+        ``video.mp4.d1e``,W30b:收齐了解开再登记)。收齐了登记。"""
         got = split_video(run)
-        if got is None or rel != VIDEO_FILE:
+        if got is None or rel not in (VIDEO_FILE, VIDEO_SEALED):
             raise PathRefused(f"录像的路径不对:{run!r}/{rel!r}")
         camera, stamp = got
-        path = safe_join(self.root, robot_id, camera, stamp[:8], f"{stamp}.mp4")
+        sealed = rel == VIDEO_SEALED
+        plain_path = safe_join(self.root, robot_id, camera, stamp[:8], f"{stamp}.mp4")
+        path = plain_path.with_name(plain_path.name + ".d1e") if sealed else plain_path
         stored = self.writer.write(path, offset=offset, data=data, total=total)
         if stored.size >= total:
-            start = stamp_ms(stamp)
-            with self.db.tx() as c:
-                c.execute(
-                    "INSERT INTO recordings(robot_id, camera, stamp, start_ms, bytes, sha256, "
-                    "received_ms) VALUES (?,?,?,?,?,?,?) ON CONFLICT(robot_id, camera, stamp) "
-                    # 重传不刷新 received_ms:留存从第一次收齐算(W18 外审)
-                    "DO UPDATE SET bytes=excluded.bytes, sha256=excluded.sha256",
-                    (robot_id, camera, stamp, start, stored.size, stored.sha256, self._now()))
+            return self._done(robot_id, camera, stamp, path, plain_path, stored)
         return stored
+
+    def _done(self, robot_id: str, camera: str, stamp: str, path: Path, plain_path: Path,
+              stored: Stored) -> Stored:
+        if path != plain_path:
+            from d1max_site.evidence import open_sealed, sha256_file
+            why = open_sealed(path, plain_path, self.evidence_key)
+            if why:
+                log.warning("%s 的录像 %s/%s 解不开:%s", robot_id, camera, stamp, why)
+                if self.on_unopened is not None:
+                    self.on_unopened(robot_id, f"{camera}/{stamp}", VIDEO_SEALED, why)
+                return stored
+            plain = Stored(size=plain_path.stat().st_size, sha256=sha256_file(plain_path))
+        else:
+            plain = stored
+        with self.db.tx() as c:
+            c.execute(
+                "INSERT INTO recordings(robot_id, camera, stamp, start_ms, bytes, sha256, "
+                "received_ms) VALUES (?,?,?,?,?,?,?) ON CONFLICT(robot_id, camera, stamp) "
+                # 重传不刷新 received_ms:留存从第一次收齐算(W18 外审)
+                "DO UPDATE SET bytes=excluded.bytes, sha256=excluded.sha256",
+                (robot_id, camera, stamp, stamp_ms(stamp), plain.size, plain.sha256, self._now()))
+        return stored
+
+    def open_leftovers(self) -> tuple[int, int]:
+        """封好、还没解开的录像段补解(``evidence-open``)。回(解开了几个, 还解不开几个)。"""
+        ok = bad = 0
+        for p in sorted(self.root.rglob("*.mp4.d1e")):
+            try:
+                robot, camera, _day, name = p.relative_to(self.root).parts
+            except ValueError:
+                continue
+            stamp = name[: -len(".mp4.d1e")]
+            plain_path = p.with_name(f"{stamp}.mp4")
+            self._done(robot, camera, stamp, p, plain_path,
+                       Stored(size=p.stat().st_size, sha256=""))
+            if p.exists():
+                bad += 1                                 # 还是解不开(_done 报过了)
+            else:
+                ok += 1
+        return ok, bad
 
     # ------------------------------------------------------------ 查
 
