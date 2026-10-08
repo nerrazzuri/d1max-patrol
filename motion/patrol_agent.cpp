@@ -257,6 +257,24 @@ static std::atomic<uint64_t> g_cancel_gen{0};
 // 同一把锁。速度线程每次要发 Move 之前都现问它。
 static velgate::Gate g_gate;
 
+// 握手帧。连上时发一次;**持有状态一变就再广播一次**(SetHeld):控制权被遥控器、厂家 App 拿走又
+// 被我们自动抢回来时,之前只广播过 control_lost,连着的代理一直以为没控制权,站点就一直拒派
+// (2026-10-08 C40221 实测,要重启代理才好)。客户端收到重复的 hello 只更新持有状态。
+static std::string HelloFrame() {
+  std::ostringstream hello;
+  hello << "{\"t\":\"hello\",\"proto\":" << kProtoVersion
+        << ",\"sdk\":\"0.1.1\",\"held\":" << (g_held.load() ? "true" : "false")
+        << ",\"follows_head\":" << (g_follows_head ? "true" : "false")
+        << ",\"speed_level_want\":" << g_speed_want
+        << ",\"robot\":\"" << JsonEscape(g_robot_addr) << "\"}";
+  return hello.str();
+}
+
+// 改持有状态;从没有到有(或反过来)就广播一帧 hello。丢控制权那一路另有 control_lost。
+static void SetHeld(bool held) {
+  if (g_held.exchange(held) != held) Broadcast(HelloFrame());
+}
+
 static std::string StateFrame() {
   std::lock_guard<std::mutex> lk(g_state_mtx);
   std::ostringstream os;
@@ -348,14 +366,14 @@ class DataCb : public IDataCallback {
   void OnControlAvailable(const ControlAvailableInfo&) override {
     std::cout << "[i] SDK 报告控制权可用，尝试重新 TakeControl\n";
     std::lock_guard<std::mutex> lk(g_sdk_mtx);
-    if (g_client && !g_client->TakeControl(5000)) g_held = true;
+    if (g_client && !g_client->TakeControl(5000)) SetHeld(true);
   }
 };
 
 class CtrlCb : public IControlCallback {
  public:
   void OnTakeControlAck(const TakeControlAck& a) override {
-    g_held = (a.error_code == 0);
+    SetHeld(a.error_code == 0);
     std::cout << "[CTRL] TakeControlAck: "
               << (a.error_code == 0 ? "SUCCESS" : "FAILURE") << " '" << a.reason
               << "'\n";
@@ -557,7 +575,7 @@ static Outcome DoHold() {
   std::lock_guard<std::mutex> lk(g_sdk_mtx);
   auto ec = g_client->TakeControl(5000);
   if (ec) return DenyControl(ec.message());
-  g_held = true;
+  SetHeld(true);
   return Outcome{};
 }
 
@@ -689,13 +707,7 @@ static void ServeClient(int fd) {
     std::lock_guard<std::mutex> lk(g_clients_mtx);
     g_clients.push_back(fd);
   }
-  std::ostringstream hello;
-  hello << "{\"t\":\"hello\",\"proto\":" << kProtoVersion
-        << ",\"sdk\":\"0.1.1\",\"held\":" << (g_held.load() ? "true" : "false")
-        << ",\"follows_head\":" << (g_follows_head ? "true" : "false")
-        << ",\"speed_level_want\":" << g_speed_want
-        << ",\"robot\":\"" << JsonEscape(g_robot_addr) << "\"}";
-  SendTo(fd, hello.str());
+  SendTo(fd, HelloFrame());
   // 立刻补一帧状态：客户端刚连上就该能读到电量和运动状态，不必干等到
   // 下一次状态变化 —— OnRobotStateData 只在变化时来。
   SendTo(fd, StateFrame());
