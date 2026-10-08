@@ -78,7 +78,7 @@ INTAKE_PORT = 8444
 #: W12:按 SDK 文档的低速档(比例 1.0 = 1.0 m/s、1.5 rad/s),死区按 #37;比例上限 0.5 不变(最快约 0.5
 #: m/s)。
 D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 1.0, "radps_per_unit": 1.5,
-                  "deadband": 0.2, "max_fraction": 0.5, "stopped_eps": 0.02}
+                  "deadband": 0.2, "max_fraction": 0.5, "stopped_eps": 0.02, "fwd_offset": 0.0}
 #: 换算系数的合理范围(W12 外审阻断):SDK 文档低速档 1.0 m/s、1.5 rad/s 上下。老模板照抄的 0.4 / 1.0
 #: 是猜的,
 #: 照它换算代理以为的速度跟实际差一大截、限速区限不住 —— 不在范围里就不起,实测值真不在范围里要人加
@@ -160,6 +160,9 @@ def build_parser() -> argparse.ArgumentParser:
     d1.add_argument("--deadband", type=float, default=None,
                     help="低于这个 m/s 拒,默认 0.2(#37:比例 0.11 几乎不动)")
     d1.add_argument("--max-fraction", type=float, default=None, help="比例上限,默认 0.5")
+    d1.add_argument("--fwd-offset", type=float, default=None,
+                    help="前进的比例死区:比例 = 它 + vx ÷ --mps-per-unit(此时那是直线的斜率);"
+                         "默认 0 = 纯比例。C40221 实测 0.10、斜率 1.09(2026-10-08)")
     d1.add_argument("--stopped-eps", type=float, default=None,
                     help="里程速度低于它算停了(m/s、rad/s),默认 0.02;要大于站着时的噪声")
     d1.add_argument("--invert-yaw", action="store_true", help="转向方向跟 SDK 相反时翻过来")
@@ -396,7 +399,8 @@ def build(args: argparse.Namespace) -> Assembled:
                                   if payload.has(o)) or "(一路都没有)")
             hal = D1MaxHal(host, port, mps_per_unit=args.mps_per_unit,
                            radps_per_unit=args.radps_per_unit, deadband_mps=args.deadband,
-                           max_fraction=args.max_fraction, invert_yaw=args.invert_yaw,
+                           max_fraction=args.max_fraction, fwd_offset=args.fwd_offset,
+                           invert_yaw=args.invert_yaw,
                            stopped_eps=args.stopped_eps, now_ms=wall_ms, payload=payload)
             media = None                          # RTSP 取图归后面的工单
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],

@@ -75,12 +75,13 @@ def test_装配并跑通一条goto(tmp_path):
 def test_hal_d1max的参数(tmp_path):
     a = _args(tmp_path, "--hal", "d1max", "--sidecar", "127.0.0.1:9001", "--mps-per-unit", "1.08",
               "--radps-per-unit", "1.4", "--deadband", "0.06", "--max-fraction", "0.3",
-              "--invert-yaw", "--stopped-eps", "0.05")
+              "--invert-yaw", "--stopped-eps", "0.05", "--fwd-offset", "0.1")
     assert a.hal == "d1max" and a.sidecar == ("127.0.0.1", 9001)
     assert (a.mps_per_unit, a.radps_per_unit, a.deadband, a.max_fraction, a.invert_yaw) == \
         (1.08, 1.4, 0.06, 0.3, True)
-    assert a.stopped_eps == 0.05
+    assert a.stopped_eps == 0.05 and a.fwd_offset == 0.1
     d = _args(tmp_path, "--hal", "d1max")
+    assert d.fwd_offset == 0.0, "缺省纯比例(老行为)"
     assert d.sidecar == ("127.0.0.1", 8090) and d.mps_per_unit == 1.0 and not d.invert_yaw
     assert d.stopped_eps == 0.02
     with pytest.raises(SystemExit):

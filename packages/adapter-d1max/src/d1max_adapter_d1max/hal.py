@@ -9,7 +9,10 @@
   ``radps_per_unit`` 是比例 1.0 对应的速度,``max_fraction`` 是比例上限,``deadband_mps`` 以下拒。
   默认值按 **SDK 文档的低速档**(W12:比例 1.0 = 1.0 m/s、1.5 rad/s;#38 粗测每单位约 1.1 m/s),死区按
   #37(0.11 几乎不动、0.3 明显走)取 0.2 m/s。比例上限 0.5 不变:实际最快仍约 0.5 m/s。真机用
-  ``tools/w00d_motion_check.py`` 量过后改配置。
+  ``tools/w00d_motion_check.py`` 量过后改配置。**前进带死区**(2026-10-08 C40221 实测:比例 0.3 走
+  0.22 m/s、0.2 走 0.11 m/s、0.1 不动,v ≈ 1.09 ×(比例 − 0.10)):``fwd_offset`` 是前进的比例死区,
+  换算成 ``比例 = fwd_offset + |vx| ÷ mps_per_unit``(带符号;vx 为 0 照发 0),这时 ``mps_per_unit``
+  是那条直线的斜率。缺省 0 = 纯比例(老行为)。转向实测接近纯比例,不加。
 - **档位**(W12):换算只对旁路进程要的那一档成立。7 号旁路进程报此刻的档位与要的档位,对不上就拒速度
   命令(``speed_level``;旁路进程自己会设回去);老旁路进程不报,不核。
 - **控制权**(决定二 A):``control_releasable = false``,``release_control()`` 抛
@@ -95,7 +98,7 @@ class D1MaxHal:
 
     def __init__(self, host: str = DEFAULT_AGENT_HOST, port: int = DEFAULT_AGENT_PORT, *,
                  mps_per_unit: float = 1.0, radps_per_unit: float = 1.5,
-                 deadband_mps: float = 0.2, max_fraction: float = 0.5,
+                 deadband_mps: float = 0.2, max_fraction: float = 0.5, fwd_offset: float = 0.0,
                  invert_yaw: bool = False, stopped_eps: float = STOPPED_EPS,
                  frame_id: str = "odom",
                  now_ms: Callable[[], int] = wall_ms,
@@ -108,12 +111,15 @@ class D1MaxHal:
             raise ValueError(f"deadband_mps 不能是负数,收到 {deadband_mps}")
         if not (math.isfinite(max_fraction) and 0 < max_fraction <= MAX_WALK_SPEED):
             raise ValueError(f"max_fraction 要在 (0, {MAX_WALK_SPEED}],收到 {max_fraction}")
+        if not (math.isfinite(fwd_offset) and 0 <= fwd_offset < max_fraction):
+            raise ValueError(f"fwd_offset 要在 [0, max_fraction),收到 {fwd_offset}")
         self._b = backend or SidecarDeviceBackend(host, port)
         self._payload = payload
         self._payload_up = False
         self._mps, self._radps = mps_per_unit, radps_per_unit
         self._deadband = deadband_mps
         self._frac = max_fraction
+        self._fwd0 = fwd_offset
         self._yaw_sign = -1.0 if invert_yaw else 1.0
         if not (math.isfinite(stopped_eps) and stopped_eps > 0):
             raise ValueError(f"stopped_eps 要是正数,收到 {stopped_eps}")
@@ -126,7 +132,7 @@ class D1MaxHal:
 
     @property
     def max_vx(self) -> float:
-        return self._frac * self._mps
+        return (self._frac - self._fwd0) * self._mps
 
     @property
     def max_wz(self) -> float:
@@ -230,7 +236,7 @@ class D1MaxHal:
         vx, wz = _clamp(cmd.vx, self.max_vx), _clamp(cmd.wz, self.max_wz)
         clamped = (vx != cmd.vx) or (wz != cmd.wz)
         # 换算后再夹一次:浮点误差也不许越过旁路进程的上限(它越界就拒)。
-        fwd = _clamp(self._sdk_sign() * vx / self._mps, self._frac)
+        fwd = _clamp(self._sdk_sign() * self._fwd_fraction(vx), self._frac)
         yaw = _clamp(self._yaw_sign * wz / self._radps, self._frac)
         ttl = min(max(int(cmd.ttl_ms), VEL_TTL_MIN_MS), VEL_TTL_MAX_MS)
         try:
@@ -239,6 +245,12 @@ class D1MaxHal:
             return _reject(f"sidecar: {exc}")
         self._vel_until = self._monotonic() + ttl / 1000.0
         return VelocityResult(vx, wz, clamped=clamped, rejected=False)
+
+    def _fwd_fraction(self, vx: float) -> float:
+        """前进 m/s → 比例:死区加上直线那一段;0 就是 0(不许把死区当成一条命令发出去)。"""
+        if vx == 0.0:
+            return 0.0
+        return math.copysign(self._fwd0 + abs(vx) / self._mps, vx)
 
     # ------------------------------------------------------------ 停止与急停
 
