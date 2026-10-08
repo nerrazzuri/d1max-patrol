@@ -39,6 +39,9 @@ RECORD_SPLIT_BYTES = 2 * 1024 ** 3
 #: 录包录哪几个话题。逐字照抄文档 §2 (a)。
 RECORD_TOPICS: tuple[str, ...] = (
     "/front_lidar", "/tf", "/tf_static", "/odom/mc_odom", "/odom/current_pose",
+    # W34(2026-10-08 C40221):建图录包只有前雷达,后雷达标不了、建不了双雷达图 —— 后雷达和两台雷达
+    # 的 IMU 一起录(录包大约大一倍;没有后雷达的狗,这几个话题录包程序就一直等着,不出错)
+    "/rear_lidar", "/front_lidar/imu", "/rear_lidar/imu",
 )
 
 #: 名字里只许有这些 —— 它要当目录名用,还要拼进命令行。**字母或数字打头**(跟站点的契约一样):

@@ -57,6 +57,10 @@ SCAN_BINS = 1440
 RAY_STOP_SHORT_M = 0.1
 #: 离雷达这么近的点不打射线(狗自己的身子)。
 MIN_RANGE_M = 0.3
+#: 按三维判「穿过」(W34:2026-10-08 C40221 双雷达地图桌子、椅子大多没了 —— 射线从桌面底下穿过去
+#: 打到后面的墙,二维上算穿过了桌子那几格):有障碍点的格子,射线在那一格的高度落在这一格障碍点的高度
+#: 范围(上下各放这么多)里才算穿过;从底下钻过去、从上面越过去的不算。没障碍点的格子照旧。
+RAY_HEIGHT_TOL_M = 0.1
 #: 狗身中心线两边这么宽一律可通行。
 FOOTPRINT_M = 0.25
 FREE, UNKNOWN, OCCUPIED = 254, 205, 0
@@ -211,36 +215,55 @@ def _raytrace(walls: np.ndarray, poses: np.ndarray, max_cells: int) -> np.ndarra
 
 def _raytrace_scans(scans: Iterable[tuple[np.ndarray, np.ndarray]], frames: Frames,
                     lo: np.ndarray, shape: tuple[int, int], res: float, band: tuple[float, float],
-                    max_range: float, ground: _Ground) -> tuple[np.ndarray, int]:
+                    max_range: float, ground: _Ground,
+                    occ_h: tuple[np.ndarray, np.ndarray] | None = None
+                    ) -> tuple[np.ndarray, int]:
     """真射线:每一帧从雷达到这一帧障碍层里的点(每个方位格最近的那个),路过的格子各记一次。
-    回(每格被穿过的次数, 用了几帧)。"""
+    ``occ_h``:每格障碍点离当地地面的(最低, 最高)(没有障碍点是 nan);给了就按三维判穿过
+    (:data:`RAY_HEIGHT_TOL_M`)。回(每格被穿过的次数, 用了几帧)。"""
     H, W = shape
     passes = np.zeros(H * W, np.int32)
     step = res / 2
     used = 0
+    lo_h = hi_h = None
+    if occ_h is not None:
+        lo_h, hi_h = occ_h[0].ravel(), occ_h[1].ravel()
     for origin, pts in scans:
-        o = level(np.asarray(origin, float).reshape(1, 3), frames)[0, :2]
+        o3 = level(np.asarray(origin, float).reshape(1, 3), frames)
+        o = o3[0, :2]
+        oh, ook = ground.rel(o3)
         q = level(np.asarray(pts, float), frames)
         h, ok = ground.rel(q)
-        q = q[ok & (h > band[0]) & (h < band[1]), :2] - o
+        keep = ok & (h > band[0]) & (h < band[1])
+        q, h = q[keep, :2] - o, h[keep]
         r = np.hypot(q[:, 0], q[:, 1])
         ok = (r > MIN_RANGE_M) & (r < max_range)
-        q, r = q[ok], r[ok]
+        q, r, h = q[ok], r[ok], h[ok]
         used += 1
         if not len(r):
             continue
         b = ((np.arctan2(q[:, 1], q[:, 0]) + np.pi) / (2 * np.pi) * SCAN_BINS).astype(int) \
             % SCAN_BINS
         order = np.lexsort((r, b))
-        b, r, q = b[order], r[order], q[order]
+        b, r, q, h = b[order], r[order], q[order], h[order]
         first = np.r_[True, b[1:] != b[:-1]]
-        q, r = q[first], r[first]
+        q, r, h = q[first], r[first], h[first]
         n = np.maximum(((r - RAY_STOP_SHORT_M) / step).astype(int), 1)
         ray = np.repeat(np.arange(len(r)), n)
         k = np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)
-        xy = o + q[ray] * (k * step / r[ray])[:, None]
+        frac = k * step / r[ray]
+        xy = o + q[ray] * frac[:, None]
         c = ((xy - lo) / res).astype(int)
         inside = (c[:, 0] >= 0) & (c[:, 0] < W) & (c[:, 1] >= 0) & (c[:, 1] < H)
+        if lo_h is not None and bool(ook[0]):
+            # 三维:射线在这一格的高度(雷达高度到打到的点的高度之间按距离插)要落在这一格障碍点的
+            # 高度范围里;从桌面底下钻过去、从矮东西上面越过去的,不算穿过
+            zr = oh[0] + (h[ray] - oh[0]) * frac
+            cc = np.where(inside, c[:, 1] * W + c[:, 0], 0)
+            lo_c, hi_c = lo_h[cc], hi_h[cc]
+            has = np.isfinite(lo_c)
+            through = ~has | ((zr >= lo_c - RAY_HEIGHT_TOL_M) & (zr <= hi_c + RAY_HEIGHT_TOL_M))
+            inside &= through
         cell = c[inside, 1] * W + c[inside, 0]
         # 一条射线过一格只算一次(步长半格,同一格会落两次)
         key = np.unique(ray[inside].astype(np.int64) * (H * W) + cell)
@@ -278,13 +301,22 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
     occ = np.zeros((H, W), np.int32)
     g = ((w - lo) / res).astype(int)
     np.add.at(occ, (g[:, 1], g[:, 0]), 1)
+    # 每格障碍点的高度范围(三维判穿过用,W34)
+    occ_lo = np.full(H * W, np.inf)
+    occ_hi = np.full(H * W, -np.inf)
+    gk = g[:, 1] * W + g[:, 0]
+    np.minimum.at(occ_lo, gk, h[wall])
+    np.maximum.at(occ_hi, gk, h[wall])
+    empty = ~np.isfinite(occ_lo)
+    occ_lo[empty], occ_hi[empty] = np.nan, np.nan
     seen = np.zeros((H, W), bool)
     gf = ((fl - lo) / res).astype(int)
     seen[gf[:, 1], gf[:, 0]] = True
     seen = _erode(_dilate(seen, 1), 1)                      # 闭运算:远处点稀,补上小洞
     if scans is not None:
         passes, _ = _raytrace_scans(scans, frames, lo, (H, W), res, (floor_clear, wall_top),
-                                    max_range, ground)
+                                    max_range, ground,
+                                    occ_h=(occ_lo.reshape(H, W), occ_hi.reshape(H, W)))
     else:
         pc = ((t[:, :2] - lo) / res).astype(int)
         key = (pc[:, 0] // POSE_STRIDE_CELLS) * 100000 + (pc[:, 1] // POSE_STRIDE_CELLS)

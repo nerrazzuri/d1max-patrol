@@ -74,6 +74,13 @@ RELOC_SETTLE_S = 30.0
 AUTO_RELOC_SIGMA_M = SIGMA_BAD_M
 NO_SCAN_S = 1.0
 STALL_S = 1.0
+#: 雷达被挡(W34:2026-10-08 C40221 罩住前雷达,MOLA 段错误、反复重启,揭开之后还要等退避 16 s):
+#: 一帧有效点(有限、离雷达 0.5 m 外)少于这么多,连着 :data:`LIDAR_BLOCK_S` 就算挡住了 —— 停掉 MOLA、
+#: 不喂它;恢复连着 :data:`LIDAR_CLEAR_S` 马上重起(不等退避)、按最后可信的位置自己重定位。
+#: 同一天录包:前雷达一帧 4.7–5.9 万、后雷达最少 1.4 万。
+LIDAR_MIN_POINTS = 5000
+LIDAR_BLOCK_S = 1.0
+LIDAR_CLEAR_S = 1.0
 START_TIMEOUT_S = 60.0
 #: 最后可信的位置:σ 不大于这个(跳过之后 σ 给「不可信」)、不是跳变帧、没在丢定位;重定位时换成
 #: 给的位置。
@@ -124,6 +131,12 @@ class LocalizerCore:
         self._raw_at: float | None = None              # MOLA 最近一次吐估计(收不收都算)
         self._last_scan: float | None = None
         self._scan_back: float = -1e18                 # 点云断过之后恢复的时刻
+        #: 雷达被挡(W34):挡着没有、从什么时候开始低 / 恢复、最近一帧有效点、变了没告诉适配层。
+        self.lidar_blocked = False
+        self._low_since: float | None = None
+        self._ok_since: float | None = None
+        self.lidar_points: int | None = None
+        self._lidar_change: bool | None = None
         self._restart = False                          # 判了卡住、适配层还没拿走
         self._restarting = False                       # 拿走了,等它重新起来
         self._down = ""
@@ -228,11 +241,33 @@ class LocalizerCore:
         self._queued = False
         self._expired = True
 
-    def on_scan(self) -> None:
+    def on_scan(self, valid: int | None = None) -> None:
+        """来了一帧点云;``valid``:这一帧的有效点数(适配层隔几帧数一次,没数是 ``None``)。"""
         now = self._now()
         if self._last_scan is None or now - self._last_scan > NO_SCAN_S:
             self._scan_back = now                        # 断过一阵之后又来了
         self._last_scan = now
+        if valid is None:
+            return
+        self.lidar_points = int(valid)
+        if valid < LIDAR_MIN_POINTS:
+            self._ok_since = None
+            self._low_since = self._low_since if self._low_since is not None else now
+            if not self.lidar_blocked and now - self._low_since >= LIDAR_BLOCK_S:
+                self.lidar_blocked, self._lidar_change = True, True
+                log.warning("雷达像是被挡住了:一帧有效点只有 %d(要 ≥ %d)", valid, LIDAR_MIN_POINTS)
+        else:
+            self._low_since = None
+            if self.lidar_blocked:
+                self._ok_since = self._ok_since if self._ok_since is not None else now
+                if now - self._ok_since >= LIDAR_CLEAR_S:
+                    self.lidar_blocked, self._lidar_change = False, False
+                    log.info("雷达恢复了(一帧有效点 %d)", valid)
+
+    def take_lidar_change(self) -> bool | None:
+        """雷达挡住(真)/ 恢复(假)了:回一次给适配层(停 MOLA / 马上重起);没变是 ``None``。"""
+        ch, self._lidar_change = self._lidar_change, None
+        return ch
 
     def on_estimate(self, e: Estimate) -> None:
         now = self._now()

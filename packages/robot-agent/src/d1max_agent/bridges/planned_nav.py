@@ -62,8 +62,10 @@ BLOCK_RETRY_S = 5.0
 BLOCK_GIVEUP_S = 20.0
 BLOCK_REPORT_S = 5.0
 TEMP_OBSTACLE_S = 30.0
-#: 原地转被「看不见」挡住(机身两侧是两台半球雷达的盲带,刚起来、站久了没有记忆):前面看得清是空的,
-#: 就笔直往前挪这么远(这么快)再转 —— 挪过一个机身长,两侧就在刚才看过的范围里了。每次被挡最多挪一次。
+#: 原地转、或者带转向的弧线被「看不见」挡住(机身两侧是两台半球雷达的盲带,刚起来、站久了没有
+#: 记忆;转向时机身角甩进去):前面看得清是空的,就笔直往前挪这么远(这么快)再接着走 —— 挪过一个
+#: 机身长,两侧就在刚才看过的范围里了。每次被挡最多挪一次。W34:2026-10-08 C40221 起步是弧线,
+#: 以前只有纯原地转才挪,前后雷达都标过也起不了步。
 CREEP_M = 1.0
 CREEP_V = 0.2
 #: 偏离路径多远就停下重规划(W10 内审应修 5:原来 1 m,比膨胀半径还大)。
@@ -646,9 +648,10 @@ class PlannedNavBackend(HalNavBackend):
                     self._crept = False
             await self._send(vx, wz, dt_s)
             return
-        await self._blocked(v, here, dt_s, vx)
+        await self._blocked(v, here, dt_s, vx, wz)
 
-    async def _blocked(self, v: Any, here: Any, dt_s: float, vx: float = 0.0) -> None:
+    async def _blocked(self, v: Any, here: Any, dt_s: float, vx: float = 0.0,
+                       wz: float = 0.0) -> None:
         now = self._secs()
         if self._blocked_since is None:
             self._blocked_since = now
@@ -665,13 +668,13 @@ class PlannedNavBackend(HalNavBackend):
             if self.on_event is not None:
                 self.on_event("nav_blocked", {"reason": v.reason, "x": round(here.x, 2),
                                               "y": round(here.y, 2)})
-        if (self._creep_from is None and not self._crept and not v.hits and abs(vx) < 1e-6
+        if (self._creep_from is None and not self._crept and not v.hits and abs(wz) > 1e-6
                 and not self._aligning and waited >= BLOCK_DETOUR_S
                 and self.guard.check((self._dir or 1) * CREEP_V, 0.0, self._v_meas,
                                      self.obstacles, self._odom_pose).ok
                 and self._creep_clear(here)):
-            # 原地转只被「看不见」挡住、前面看得清是空的:往前挪一个机身长再转
-            log.info("原地转被看不见的格子挡住(机身两侧没看过):先往前挪 %.1f m", CREEP_M)
+            # 带转向(原地转、弧线)只被「看不见」挡住、前面看得清是空的:往前挪一个机身长再接着走
+            log.info("转向被看不见的格子挡住(机身两侧没看过):先往前挪 %.1f m", CREEP_M)
             self._creep_from = (self._odom_pose[0], self._odom_pose[1])
             self._crept = True
             return

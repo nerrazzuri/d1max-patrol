@@ -38,6 +38,21 @@ RelocService = Callable[[tuple[float, float, float], tuple[float, float, float, 
 
 
 
+
+def valid_points(msg: Any, min_range_m: float = 0.5) -> int:
+    """一帧点云(``sensor_msgs/PointCloud2``,前 12 字节是 float32 的 x、y、z)里有效的点:有限、离雷达
+    ``min_range_m`` 外。雷达被罩住时几乎没有(W34)。"""
+    import numpy as np
+    step = int(msg.point_step)
+    if step < 12 or not msg.data:
+        return 0
+    buf = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+    buf = buf[: len(buf) // step * step].reshape(-1, step)
+    xyz = np.ascontiguousarray(buf[:, :12]).view("<f4").reshape(-1, 3)
+    ok = np.isfinite(xyz).all(axis=1)
+    r2 = (xyz[ok].astype(np.float64) ** 2).sum(axis=1)
+    return int((r2 >= min_range_m * min_range_m).sum())
+
 def _same_file(a: Path | None, b: Path) -> bool:
     """同一个文件(W34:代理重启后给的路径可能经过 ``active`` 链接,字面不同、文件相同)。"""
     if a is None:
@@ -64,6 +79,8 @@ class MolaBackend:
         self._pending: RelocWant | None = None           # 人给的、等 MOLA 起来再下发的
         self._pending_at = 0.0
         self._reloc_errs = 0
+        #: 雷达挡着时代理换了先验(W34):恢复了起这一份。
+        self._resume_prior: Path | None = None
 
     # ------------------------------------------------------------ 代理请的
 
@@ -85,6 +102,9 @@ class MolaBackend:
         self._pending = None                             # 旧图上给的位置作废
         self._alive = False                              # 旧 MOLA 出过位姿不算新的
         self.core.prior_loading(map_ref)
+        if self.core.lidar_blocked:
+            self._resume_prior = mm                      # 雷达挡着:记下,恢复了再起(W34)
+            return ""
         # 不取消上一次还没做完的起动:看管器一把锁串着做,后来的这次最后生效(W09b 内审:取消会把正在
         # 关的旧进程丢成孤儿)
         self._spawn(self.supervisor.start(mm), "起 MOLA")
@@ -146,6 +166,21 @@ class MolaBackend:
     # ------------------------------------------------------------ 每拍
 
     async def check(self) -> None:
+        ch = self.core.take_lidar_change()
+        if ch is True:
+            # 雷达被挡(W34):不喂 MOLA(挡着它会段错误、反复重启),停掉等雷达恢复
+            why = f"雷达被挡住了(一帧有效点只有 {self.core.lidar_points}):定位程序先停"
+            self.core.backend_down(why)
+            self._spawn(self.supervisor.stop(), "停 MOLA")
+            return
+        prior = self._resume_prior or self.supervisor.prior
+        if ch is False and prior is not None:
+            # 恢复了:马上重起(不等退避),起来按最后可信的位置自己重定位
+            self._resume_prior = None
+            self._spawn(self.supervisor.start(prior), "起 MOLA")
+            return
+        if self.core.lidar_blocked:
+            return
         if self.core.take_restart():
             self._spawn(self.supervisor.restart("定位程序卡住了,在重启"), "重启 MOLA")
             return

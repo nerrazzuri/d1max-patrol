@@ -244,3 +244,42 @@ def test_墙根一堆侧面点不把地面抬高_旁边的矮凳还是障碍():
                  np.tile(zs, len(ys))] @ L                # 1 m 长、从地面起的墙,点很密
     g = G.render(np.vstack([P, wall, _bench(f, 14.5, -2.0)]), T, f, scans=[])
     assert g.image[g.cell_of(14.5, -2.2)] == G.OCCUPIED
+
+
+def _table_room(frames, every=4):
+    """屋子(墙上 0.45、0.5、1.6 m 三圈)+ 一张桌子(x 4.5–5.5、y 4.0–5.0,桌面 0.7–0.8 m,没有腿)。狗沿
+    y = 3 走,雷达 0.6 m 高。薄桌面只在每 ``every`` 帧里打到一次(真雷达线束稀,远一点就漏);别的帧
+    那个方向最近的是桌子后面墙的低处 —— 射线从桌面底下钻过去。"""
+    L = np.asarray(frames.level_matrix())
+    xs, ys = np.arange(0, 10, 0.02), np.arange(0, 6, 0.02)
+    walls = np.vstack([np.vstack([np.c_[xs, np.full_like(xs, 6.0), np.full_like(xs, h)],
+                                  np.c_[xs, np.zeros_like(xs), np.full_like(xs, h)],
+                                  np.c_[np.zeros_like(ys), ys, np.full_like(ys, h)],
+                                  np.c_[np.full_like(ys, 10.0), ys, np.full_like(ys, h)]])
+                       for h in (0.45, 0.5, 1.6)])          # 打不着桌面的那几束:从底下、上面过
+    tx, ty = np.meshgrid(np.arange(4.5, 5.5, 0.015), np.arange(4.0, 5.0, 0.015))
+    table = np.vstack([np.c_[tx.ravel(), ty.ravel(), np.full(tx.size, h)] for h in (0.7, 0.8)])
+    rng = np.random.default_rng(5)
+    floor = np.c_[rng.uniform([0, 0], [10, 6], (20000, 2)), np.zeros(20000)]
+    sx = np.linspace(1, 9, 80)
+    scans = []
+    for i, x in enumerate(sx):
+        pts = [walls, floor] + ([table] if i % every == 0 else [])
+        scans.append((np.array([x, 3.0, 0.6]) @ L, np.vstack(pts) @ L))
+    P = np.vstack([walls, floor, table])
+    sensor = np.c_[sx, np.full(80, 3.0), np.full(80, 0.6)]
+    return P @ L, sensor @ L, scans
+
+
+def test_W34_射线从桌面底下钻过去不算穿过_桌子留着_没东西的地方照样清():
+    """2026-10-08 C40221 双雷达地图:桌子、椅子大多没了(占用 14.0 → 7.7 m²)。"""
+    f = _frames()
+    P, T, scans = _table_room(f)
+    g = G.render(P, T, f, scans=scans)
+    at = lambda x, y: g.image[g.cell_of(x, y)]            # noqa: E731
+    occupied = sum(at(x, y) == G.OCCUPIED for x in np.arange(4.6, 5.45, 0.1)
+                   for y in np.arange(4.1, 4.95, 0.1))
+    assert occupied >= 70, f"桌子那 81 格只剩 {occupied} 格是挡"
+    for x, y in ((2.0, 4.5), (7.5, 4.5), (5.0, 3.6)):
+        assert at(x, y) == G.FREE, ("桌子旁边、前面照样清", x, y)
+    assert at(5.0, 5.98) == G.OCCUPIED, "后面的墙"

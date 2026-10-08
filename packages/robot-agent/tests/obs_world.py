@@ -55,8 +55,13 @@ class 假感知:
     """按狗的真实位姿算狗身系局部栅格:前半球(机身前沿往前)4 m 以内看得见;
     ``rear`` 开着后面也看得见。"""
 
-    def __init__(self, world, *, size=80, res=0.1, rng=4.0, rear=False, rear_cal=None):
+    def __init__(self, world, *, size=80, res=0.1, rng=4.0, rear=False, rear_cal=None,
+                 cone=False):
         self.world, self.size, self.res, self.rng, self.rear = world, size, res, rng, rear
+        #: 照 2026-10-08 C40221 实测的视野(W34,``runs/field-c40221/static-tests/obs-3f4.npz``):前后
+        #: 不是一整个半平面,机身前沿外只看得见约 ±0.6 m、越往外越宽(1 m 外约 ±1 m);两侧一直到 1.5 m
+        #: 外都看不见。不开就是老的「前沿外整个半平面」。
+        self.cone = cone
         #: 后雷达外参标过(W09i;默认跟 ``rear`` 一样:看得见就当标过)。
         self.rear_cal = rear if rear_cal is None else rear_cal
         self.seq = 0
@@ -72,6 +77,9 @@ class 假感知:
         dist = np.hypot(X, Y)
         body = (np.abs(X) <= BODY_HL + 0.05) & (np.abs(Y) <= BODY_HW + 0.05)
         fov = (X > BODY_HL) | (self.rear & (X < -BODY_HL))
+        if self.cone:
+            fov = (((X > BODY_HL) & (np.abs(Y) <= 0.6 + 0.9 * (X - BODY_HL)))
+                   | (self.rear & (X < -BODY_HL) & (np.abs(Y) <= 0.6 + 0.9 * (-X - BODY_HL))))
         known = fov & (dist <= self.rng) & ~body
         c, s = math.cos(yaw), math.sin(yaw)
         wx, wy = x + c * X - s * Y, y + s * X + c * Y

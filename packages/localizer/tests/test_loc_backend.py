@@ -43,6 +43,10 @@ class 假看管:
         self.backend.on_down(why)
         self.backend.on_up()
 
+    async def stop(self):
+        self.stops = getattr(self, "stops", 0) + 1
+        self.running = False
+
 
 class 假服务:
     def __init__(self):
@@ -354,3 +358,74 @@ async def test_W34_换了别的图_最后的位置作废_照旧等人给(tmp_pat
     assert len(svc.calls) == 1, "别的图:不按旧位置请"
     core.tick()
     assert [m.reason for m in core.drain() if isinstance(m, State)][-1] == "等人给初始位置"
+
+
+def _扫(c, core, valid, secs, dt=0.1):
+    for _ in range(int(round(secs / dt))):
+        c.t += dt
+        core.on_scan(valid)
+        core.tick()
+
+
+async def test_W34_雷达被挡住_停掉MOLA不喂_挡着不按卡住重启_揭开马上重起自己重定位(tmp_path):
+    """2026-10-08 C40221:罩住前雷达 MOLA 段错误、反复重启(退避到 16 s),揭开以后还要等。"""
+    from d1max_localizer.core import LIDAR_MIN_POINTS
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    await _跟踪着(c, core, be)
+    _扫(c, core, 50_000, 0.5)
+    await be.check()
+    _扫(c, core, 100, 0.5)                                # 不到 1 s:还不算
+    await be.check()
+    await _settle()
+    assert getattr(sup, "stops", 0) == 0 and not core.lidar_blocked
+    _扫(c, core, 100, 0.7)
+    await be.check()
+    await _settle()
+    assert sup.stops == 1 and core.lidar_blocked
+    core.tick()
+    st = [m for m in core.drain() if isinstance(m, State)][-1]
+    assert st.state == "lost" and "雷达被挡住了" in st.reason, st
+    for _ in range(30):                                   # 挡了 3 s:点云在来、MOLA 不吐 —— 不算卡住
+        _扫(c, core, 100, 0.1)
+        await be.check()
+    assert sup.restarts == [] and len(sup.started) == 1
+    _扫(c, core, LIDAR_MIN_POINTS + 1, 0.5)               # 恢复不到 1 s:先不起
+    await be.check()
+    assert len(sup.started) == 1
+    _扫(c, core, 50_000, 0.7)
+    await be.check()
+    await _settle()
+    assert len(sup.started) == 2, "恢复了:马上重起,不等退避"
+    be.mola_output()
+    await be.check()
+    assert svc.calls[-1][2] == AUTO_RELOC_SIGMA_M and len(svc.calls) == 2, "按最后可信的位置自己请"
+
+
+async def test_W34_挡着的时候代理换了先验_恢复了起新的那份(tmp_path):
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    _扫(c, core, 100, 1.2)
+    await be.check()
+    await _settle()
+    new = _先验(tmp_path, "m8")
+    assert await be.load_prior(("m", "8"), str(new)) == ""
+    await _settle()
+    assert len(sup.started) == 1, "挡着:不起"
+    _扫(c, core, 50_000, 1.2)
+    await be.check()
+    await _settle()
+    assert sup.started[-1] == new / PRIOR_FILE
+
+
+def test_W34_有效点_有限且离雷达半米外才算():
+    import struct
+    from types import SimpleNamespace
+
+    from d1max_localizer.backend import valid_points
+    pts = [(1.0, 0.0, 0.0), (0.1, 0.1, 0.0), (float("nan"), 0.0, 0.0), (0.0, -3.0, 1.0)]
+    data = b"".join(struct.pack("<fffI", *p, 7) for p in pts)        # 每点 16 字节
+    assert valid_points(SimpleNamespace(point_step=16, data=data)) == 2
+    assert valid_points(SimpleNamespace(point_step=16, data=b"")) == 0
