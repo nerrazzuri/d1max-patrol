@@ -425,6 +425,11 @@ class StandbyManager:
         原来只试一次、推一条 ``standby_failed``,狗就停在最后一个巡检点。"""
         name = self._target(robot_id, after)
         for attempt in range(STANDBY_TRANSIENT_RETRIES + 1):
+            if self.dispatcher.registry.manual_only(robot_id) is not None:
+                # W33 复查:每次(包括等了再试的那几次)发之前再看开关 —— 等的时候保安改成只许手动派,
+                # 就不发了;跟入口一样安静地不回(人手动叫回照收)
+                log.info("%s 只许手动派:%s 结束后的回程不再派", robot_id, after)
+                return None
             try:
                 came = self._route_back(robot_id, after, name)
                 if came is None:
