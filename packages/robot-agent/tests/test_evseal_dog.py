@@ -90,3 +90,62 @@ def test_代理_有公钥文件能力报封了_没有报没封(tmp_path, 钥匙)
             assert (RunArchive.sealer is not None) is want
         finally:
             asm.stop()
+
+
+# ------------------------------------------------------------ W30b 外审 1
+
+
+class 坏封:
+    def seal_file(self, src, dst):
+        raise E.SealError("openssl 坏了")
+
+
+def test_外审1_录像段封不上_留在暂存不进发件箱_记着_修好了下一拍封(录, 钥匙):
+    _priv, sealer = 钥匙
+    r = 录
+    r.sealer = 坏封()
+    r.start()
+    _段(r, "front", "20261009T010000Z", 400)
+    _段(r, "front", "20261009T010100Z")                   # 正在写
+    r.step()
+    assert not list(r.out.rglob("video.mp4*")), "封不上:不进发件箱(不传明文)"
+    assert (r.root / STAGING / "front" / "20261009T010000Z.mp4").exists()
+    assert list(r.seal_failed) == ["front/20261009T010000Z"]
+    r.sealer = sealer
+    r.step()
+    assert not r.seal_failed
+    assert [p.name for p in (r.out / "front" / "20261009T010000Z").iterdir()] == ["video.mp4.d1e"]
+
+
+def test_外审1_封不上的段也算配额_攒多了从最旧的删_报一次(录):
+    r = 录
+    r.sealer = 坏封()
+    r.start()
+    for m in range(6):
+        _段(r, "front", f"20261009T01{m:02d}00Z", 3000)    # 配额 10000:扣着的 5 段 15000
+    r.step()
+    left = sorted(p.stem for p in (r.root / STAGING / "front").iterdir())
+    assert left == ["20261009T010200Z", "20261009T010300Z", "20261009T010400Z",
+                    "20261009T010500Z"], left              # 删了最旧两段;最新那段正在写,不碰
+    assert [k for k, _ in r.events].count("recording_dropped") == 1
+    assert sorted(r.seal_failed) == [f"front/20261009T01{m:02d}00Z" for m in (2, 3, 4)]
+
+
+def test_外审1_代理_有证据封不上报一次_件数变了不重报_都封上了报好了():
+    from types import SimpleNamespace
+
+    from d1max_agent.runtime import AgentRuntime
+    got = []
+    n = [(2, "openssl 坏了")]
+    rt = SimpleNamespace(_unsealed=lambda: n[0], _unsealed_told=0,
+                         recorder=SimpleNamespace(seal_failed={"front/x": "坏了"}),
+                         events=SimpleNamespace(emit=lambda k, d: got.append((k, d))))
+    AgentRuntime._watch_sealing(rt)
+    AgentRuntime._watch_sealing(rt)
+    n[0] = (5, "openssl 坏了")
+    AgentRuntime._watch_sealing(rt)
+    assert got == [("evidence_seal_failed", {"count": 3, "reason": "openssl 坏了"})]
+    n[0] = (0, "")
+    rt.recorder.seal_failed = {}
+    AgentRuntime._watch_sealing(rt)
+    assert got[-1] == ("evidence_seal_ok", {}) and len(got) == 2

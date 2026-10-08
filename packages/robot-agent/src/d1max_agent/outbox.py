@@ -35,6 +35,8 @@ log = logging.getLogger(__name__)
 
 #: 多久扫一次盘(毫秒)。
 SCAN_EVERY_MS = 15_000
+#: W30b:封不上的明文证据隔多久重封一次。
+RESEAL_EVERY_MS = 60_000
 #: 一拍最多传几块(每块至多 1 MiB)、最多走多久(秒):一拍不能太长 —— 4G 断了的时候每块都要等满
 #: 超时,不限时的话一拍能走半小时,盘况冻住、关不了机(W00c5d 内部评审)。
 MAX_PUTS_PER_STEP = 64
@@ -79,6 +81,11 @@ class Outbox:
         self._measure_failed = False
         #: 删掉了几趟(看得见才查得到)。
         self.deleted_runs = 0
+        #: W30b:证据加密(:meth:`seal_leftovers` 接上)。封不上的明文:键 → 原因,扣着不传、
+        #: 隔一会儿重封。
+        self._seal: tuple[Any, Callable[[str], bool]] | None = None
+        self.unsealed: dict[str, str] = {}
+        self._next_reseal = 0
 
     def close(self) -> None:
         self.queue.close()
@@ -87,6 +94,10 @@ class Outbox:
 
     def step(self, should_stop: Callable[[], bool] = lambda: False) -> None:
         now = self._now()
+        if self.unsealed and now >= self._next_reseal and self._seal is not None:
+            self._next_reseal = now + RESEAL_EVERY_MS
+            if self.seal_leftovers(*self._seal):
+                log.info("发件箱里封不上的明文证据补封上了(还剩 %d 个)", len(self.unsealed))
         if now >= self._next_scan:
             self.uploader.scan()
             self._next_scan = now + SCAN_EVERY_MS
@@ -119,9 +130,16 @@ class Outbox:
     def seal_leftovers(self, sealer: Any, want: Callable[[str], bool]) -> int:
         """W30b:发件箱里还是明文的证据(升级前存的)就地封上:``<名字>`` → ``<名字>.d1e``,
         封成了才删明文,队列里那一条销账(明文没了,不销账会一直等它)。传到一半的从头传封好的
-        那份。**上传线程起来之前调**。回封了几个。"""
+        那份。**上传线程起来之前调**(之后上传线程每 :data:`RESEAL_EVERY_MS` 自己重封)。回封了几个。
+
+        **封不上的不传明文**(W30b 外审 1):记进 :attr:`unsealed`、上传器扣着它不发(这一趟也就
+        确认不了、不删),隔一会儿重封;代理把件数报站点(``evidence_seal_failed``,P2)。"""
         from d1max_contract.evseal import SUFFIX
+        if self._seal is None:
+            self._seal = (sealer, want)
+            self.uploader.hold = lambda key: key in self.unsealed
         n = 0
+        failed: dict[str, str] = {}
         for path in sorted(self.runs_root.rglob("*")):
             if not path.is_file() or path.name.endswith(SUFFIX) or path.name.startswith("."):
                 continue
@@ -131,13 +149,16 @@ class Outbox:
                 continue
             try:
                 sealer.seal_file(path, path.with_name(path.name + SUFFIX))
-            except Exception:
-                log.exception("发件箱里的 %s 封不了(留着明文照传)", key)
+            except Exception as exc:
+                if key not in self.unsealed:
+                    log.exception("发件箱里的 %s 封不上(扣着不传,过一会儿再封)", key)
+                failed[key] = str(exc)[:200] or type(exc).__name__
                 continue
             path.unlink(missing_ok=True)
             if key in self.uploader.queue._items:
                 self.uploader.queue.finish(key)
             n += 1
+        self.unsealed = failed
         return n
 
     def facts(self) -> StorageFacts:
@@ -234,6 +255,16 @@ class OutboxPump:
 
     def start(self) -> None:
         self._thread.start()
+
+    def unsealed(self) -> tuple[int, str]:
+        """W30b:各发件箱里封不上、扣着不传的明文证据(件数, 一个原因)。别的线程读(每个发件箱的
+        :attr:`Outbox.unsealed` 是整个换掉的,读到的是某一拍的快照)。"""
+        n, why = 0, ""
+        for b in self.boxes:
+            u = b.unsealed
+            n += len(u)
+            why = why or next(iter(u.values()), "")
+        return n, why
 
     def _run(self) -> None:
         while not self._stop.is_set():

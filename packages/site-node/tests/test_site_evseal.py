@@ -175,3 +175,158 @@ def test_登记狗_证书包带证据公钥_能补解(tmp_path, monkeypatch, 钥
     pub = home / "ca" / "issued" / "A" / "evidence-pub.key"
     assert E.load_public(pub) == 钥匙.pub
     assert site_main.main(["--home", str(home), "evidence-open"]) == 0
+
+
+# ------------------------------------------------------------ W30b 外审
+
+
+class 时好时坏:
+    """封不上(openssl 坏了)→ 修好。"""
+
+    def __init__(self, real):
+        self.real, self.broken = real, True
+
+    def seal_file(self, src, dst):
+        if self.broken:
+            raise E.SealError("openssl 坏了")
+        self.real.seal_file(src, dst)
+
+
+def test_外审1_补封失败_明文扣着不传_这一趟不删_修好了重封传完(站点, ca, tmp_path, 钥匙):
+    站点.store.evidence_key = 钥匙.priv
+    clock = [NOW]
+    box = Outbox(tmp_path / "dogA", cap_bytes=2**30, sink=_sink(站点, ca, ca.a), sn="A",
+                 now_ms=lambda: clock[0])
+    run = _一趟(box.root)
+    want = _照片(run)
+    box.uploader.scan()                                   # 升级前:明文已经排进队列了
+    s = 时好时坏(钥匙.sealer)
+    assert box.seal_leftovers(s, lambda rel: rel.startswith("photos/")) == 0
+    assert len(box.unsealed) == 2 and "openssl 坏了" in next(iter(box.unsealed.values()))
+    _跑(box, 5)
+    got = 站点.store.run_dir("A", "巡检一", STAMP)
+    assert not (got / "photos").exists() or not list((got / "photos").iterdir()), \
+        "明文照片一个字节都没传"
+    assert run.exists(), "照片没传完:这一趟不删"
+    box.step()
+    assert len(box.unsealed) == 2, "没到重封的点"
+    s.broken = False
+    clock[0] += 60_000
+    _跑(box, 3)
+    assert not box.unsealed and not run.exists(), "补封上了、传完、站点确认、狗上删掉"
+    assert _照片(got) == want
+    box.close()
+
+
+def test_外审1_站点_封不上报P2_都封上了自动解决(tmp_path):
+    from d1max_contract.messages import Event
+    from d1max_site.alert_sources import SiteAlertSources
+    from d1max_site.alert_store import AlertDesk
+    desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: NOW)
+    src = SiteAlertSources(desk, now_ms=lambda: NOW)
+
+    def ev(seq, kind, data):
+        return Event(event_id=f"e{seq}", seq=seq, boot_id="b", stamp=NOW, kind=kind, data=data)
+    src.on_event("A", ev(1, "evidence_seal_failed", {"count": 3, "reason": "openssl 坏了"}))
+    [a] = desk.book.open()
+    assert a.kind == "evidence_seal_failed" and "3 个" in a.title and a.level.name == "P2"
+    src.on_event("A", ev(2, "evidence_seal_ok", {}))
+    assert not desk.book.open()
+
+
+def test_外审2_照片解开了登记失败_封好的留着_补解能登记(站点, ca, tmp_path, 钥匙, monkeypatch):
+    box = Outbox(tmp_path / "dogA", cap_bytes=2**30, sink=_sink(站点, ca, ca.a), sn="A",
+                 now_ms=lambda: NOW)
+    run = _一趟(box.root, photos=1)
+    want = _照片(run)
+    box.seal_leftovers(钥匙.sealer, lambda rel: rel.startswith("photos/"))
+    _跑(box, 3)                                           # 站点没私钥:封好的留着,狗上删了
+    assert not run.exists()
+    站点.store.evidence_key = 钥匙.priv
+    real = 站点.store._index
+
+    def 坏(robot, mission, stamp, rel, **kw):
+        if rel.startswith("photos/"):
+            raise OSError("库写不进")
+        return real(robot, mission, stamp, rel, **kw)
+    monkeypatch.setattr(站点.store, "_index", 坏)
+    with pytest.raises(OSError):
+        站点.store.open_leftovers()
+    d = 站点.store.run_dir("A", "巡检一", STAMP) / "photos"
+    assert any(p.suffix == ".d1e" for p in d.iterdir()), "登记没成:封好的不许删"
+    monkeypatch.setattr(站点.store, "_index", real)
+    assert 站点.store.open_leftovers() == (1, 0)
+    assert _照片(d.parent) == want and 站点.store.runs(robot_id="A")[0]["photos"] == 1
+    box.close()
+
+
+def _封段(tmp_path, sealer, n=3000, name="x"):
+    seg = tmp_path / f"{name}.mp4"
+    seg.write_bytes(os.urandom(n))
+    sealer.seal_file(seg, tmp_path / f"{name}.d1e")
+    return (tmp_path / f"{name}.d1e").read_bytes()
+
+
+def test_外审2_录像解开了登记失败_封好的留着_补解能登记(tmp_path, 钥匙, monkeypatch):
+    from d1max_site.recordings import RecordingStore
+    db = SiteDB(tmp_path / "s.db")
+    rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: NOW)
+    data = _封段(tmp_path, 钥匙.sealer)
+    rec.put("A", "front/20261009T010000Z", "video.mp4.d1e", offset=0, data=data, total=len(data))
+    rec.evidence_key = 钥匙.priv
+    real = db.tx
+    monkeypatch.setattr(db, "tx", lambda: (_ for _ in ()).throw(OSError("库写不进")))
+    assert rec.open_leftovers() == (0, 1), "登记没成:算还没解开"
+    assert list((tmp_path / "rec").rglob("*.mp4.d1e")), "封好的留着"
+    monkeypatch.setattr(db, "tx", real)
+    assert rec.open_leftovers() == (1, 0)
+    [row] = rec.list(robot_id="A")
+    assert row["bytes"] == 3000 and not list((tmp_path / "rec").rglob("*.d1e"))
+
+
+def test_外审3_解不开的录像段登记成封着_不列不放_过了留存期删(tmp_path, 钥匙):
+    from d1max_site.recordings import RecordingStore
+    clock = [NOW]
+    db = SiteDB(tmp_path / "s.db")
+    rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: clock[0])
+    data = _封段(tmp_path, 钥匙.sealer)
+    rec.put("A", "front/20261009T010000Z", "video.mp4.d1e", offset=0, data=data, total=len(data))
+    [row] = [dict(r) for r in db.query("SELECT * FROM recordings")]
+    assert row["sealed"] == 1 and row["bytes"] == len(data)
+    assert rec.list(robot_id="A") == [] and rec.get(row["id"]) is None, "放不了:不列、不给"
+    clock[0] += 91 * 86400_000
+    assert rec.prune() == (1, 0)
+    assert not list((tmp_path / "rec").rglob("*.d1e")) and not db.query("SELECT 1 FROM recordings")
+
+
+def test_外审3_盘紧了_解不开的录像段也删得到(tmp_path, 钥匙):
+    from d1max_site.recordings import RecordingStore
+    free = [0.01]
+    db = SiteDB(tmp_path / "s.db")
+    rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: NOW,
+                         disk_usage=lambda p: (100, int(100 * (1 - free[0])), int(100 * free[0])))
+
+    def _删了就松(row, _real=rec._delete):
+        ok = _real(row)
+        free[0] = 0.5
+        return ok
+    rec._delete = _删了就松
+    data = _封段(tmp_path, 钥匙.sealer)
+    rec.put("A", "front/20261009T010000Z", "video.mp4.d1e", offset=0, data=data, total=len(data))
+    assert rec.prune() == (0, 1)
+    assert not list((tmp_path / "rec").rglob("*.d1e"))
+
+
+def test_外审3_按时间段删除请求_解不开的录像段也删(tmp_path, 钥匙):
+    from d1max_site.evidence import EvidenceStore
+    from d1max_site.privacy import PrivacyDesk
+    from d1max_site.recordings import RecordingStore, stamp_ms
+    db = SiteDB(tmp_path / "s.db")
+    rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: NOW)
+    data = _封段(tmp_path, 钥匙.sealer)
+    rec.put("A", "front/20261009T010000Z", "video.mp4.d1e", offset=0, data=data, total=len(data))
+    desk = PrivacyDesk(db, EvidenceStore(tmp_path / "ev", db, now_ms=lambda: NOW),
+                       now_ms=lambda: NOW, recordings=rec)
+    t = stamp_ms("20261009T010000Z")
+    out = desk.purge(since_ms=t - 1000, until_ms=t + 1000)
+    assert out["recordings"] == 1 and not list((tmp_path / "rec").rglob("*.d1e"))

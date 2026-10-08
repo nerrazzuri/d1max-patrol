@@ -512,6 +512,7 @@ def build(args: argparse.Namespace) -> Assembled:
         runtime.evidence_sealed = sealer is not None   # W30b:能力里报,没封站点报 P2
         if pump is not None:
             runtime._outbox_retry = pump.retry_refused
+            runtime._unsealed = pump.unsealed
         return hal, parts, runtime, pump
 
     async def _in_loop():
