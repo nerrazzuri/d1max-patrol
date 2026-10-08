@@ -12,6 +12,8 @@
 #
 #   输出文件不给的话,默认落在 runs/footprint/ 下,文件名带 UTC 时间戳。
 #   **这个文件要留着** —— 它是装机前那一刻的盘上状态,事后补不出来。
+#   **别在包目录里跑**(先 cd ~):落进包里,包的哈希就变了,install.sh 拒收 —— 所以输出
+#   位置在发行包里头(往上找得到 release.json)时 snapshot 直接拒绝(2026-10-08 装 C40221 踩过)。
 #
 #   本脚本【只读】:被勘察的那几处目录,一个字节都不写。它唯一写盘的地方
 #   是你用参数指定的那个输出文件(默认在当前目录的 runs/ 底下)。
@@ -39,6 +41,9 @@ SURVEY_DIRS=(
   # W01 之后巡检数据根在 /var/lib/d1max;装机会在这儿建目录,勘察范围要跟上,
   # 不然装机前后的 diff 证明不了"只动了声明过的那几处"。深度 1 只看到 d1max 这一层。
   "/var/lib:1"
+  # 填了站点地址之后装机脚本在这儿写对时配置(W09d)。/etc 只看深度 1,看不进 /etc/systemd 底下,
+  # 不单列的话这一处写盘在 diff 里只露成一条「/etc/systemd 被改动」(2026-10-08 装 C40221 查出)。
+  "/etc/systemd/timesyncd.conf.d:1"
   "/etc:1"
   "/usr/local/bin:1"
   "/usr/local/lib:2"
@@ -169,10 +174,27 @@ collect() {
 }
 
 # ------------------------------------------------------------ snapshot
+# 这个目录(不必已存在)在不在一个发行包里:从它往上找 release.json,找到就打出包目录。
+inside_package() {
+  local d=$1
+  case "$d" in /*) ;; *) d="$PWD/$d" ;; esac
+  while :; do
+    if [ -f "$d/release.json" ]; then printf '%s\n' "$d"; return 0; fi
+    [ "$d" = / ] || [ -z "$d" ] && return 1
+    d=$(dirname "$d")
+  done
+}
+
 do_snapshot() {
   local out=${1:-} clash=0 p
   if [ -z "$out" ]; then
     out="$DEFAULT_OUT_DIR/$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || echo now)-footprint.txt"
+  fi
+  if pkg=$(inside_package "$(dirname "$out")"); then
+    warn "!! 快照不能落在发行包里:$pkg"
+    warn "   包里多一个文件,整棵树的哈希就对不上,装机脚本会拒收这个包。"
+    warn "   先 cd ~ 再跑,或者给一个包外的文件名。"
+    return 2
   fi
   mkdir -p "$(dirname "$out")" 2>/dev/null || true
   collect > "$out" || { warn "!! 快照没写成:$out"; return 1; }
@@ -212,6 +234,8 @@ do_diff() {
 function is_ours(p) {
   if (p ~ /^\/opt\/d1max($|\/)/) return 1
   if (p ~ /^\/etc\/d1max($|\/)/) return 1
+  if (p ~ /^\/var\/lib\/d1max($|\/)/) return 1
+  if (p == "/etc/systemd/timesyncd.conf.d/d1max.conf") return 1
   if (p ~ /^\/etc\/systemd\/system\/d1max-[^\/]*\.service$/) return 1
   if (p ~ /^\/etc\/systemd\/system\/[^\/]*\.target\.wants\/d1max-[^\/]*\.service$/) return 1
   return 0
@@ -220,9 +244,12 @@ function is_ours(p) {
 # 变 —— 那不是"我们改了别人的文件", 那条变化的真正内容会以一条独立的
 # "新增" 或 "消失" 条目出现在同一份报告里。所以这里单列一档, 不判红。
 function is_parent(p) {
-  if (p == "/etc" || p == "/opt") return 1
-  if (p == "/etc/systemd/system") return 1
+  if (p == "/etc" || p == "/opt" || p == "/var/lib") return 1
+  if (p == "/etc/systemd/system" || p == "/etc/systemd/timesyncd.conf.d") return 1
   if (p == "/usr/local/bin" || p == "/usr/local/lib") return 1
+  if (p == "/usr/local/sbin" || p == "/etc/sudoers.d") return 1
+  # /etc 深度 1 看得见它;timesyncd.conf.d 是装机新建的话它的 mtime 跟着变,那一条另有记录。
+  if (p == "/etc/systemd") return 1
   if (p ~ /^\/etc\/systemd\/system\/[^\/]*\.target\.wants$/) return 1
   return 0
 }
