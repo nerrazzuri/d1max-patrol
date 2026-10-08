@@ -312,3 +312,74 @@ async def test_外审2_真代理_出不了桩_排着的入侵任务不许起跑_
         assert ack()["result"] == "accepted"
     finally:
         await rt.close()
+
+
+# ------------------------------------------------------------ W13 复查
+
+
+def _状态读不到(dog):
+    async def 读不到():
+        raise OSError("回充状态读不到")
+    dog.recharge_status = 读不到
+
+
+async def test_复查_停对桩后状态一直读不到_不在充也不交_到期挂危险():
+    c, dog, t = _台()
+    got = _挂(t)
+    await t.start()
+    await _跑(c, t, 2)
+    _状态读不到(dog)
+    await t.abort("preempted")
+    await _跑(c, t, 30)
+    assert not t.done, "不在充 ≠ 离了桩:状态读不到就不交"
+    await _跑(c, t, 200)
+    assert t.state is TaskState.FAILED and got, "到期:失败、挂桩上危险"
+
+
+async def test_复查_出桩后状态读不到_不交():
+    c, dog, t = _台(resume_pct=30.0)
+    got = _挂(t)
+    await t.start()
+    for _ in range(600):
+        if t.phase == "undocking":
+            break
+        c.ms += 1000
+        await t.step(1.0)
+    _状态读不到(dog)
+    await _跑(c, t, 30)
+    assert not t.done and not dog.docked, "电池说不充了,可状态读不到:不算离桩"
+    await _跑(c, t, 200)
+    assert t.state is TaskState.FAILED and got
+
+
+async def test_复查_真代理_挂着危险时状态读不到_不充也不摘锁(tmp_path):
+    from test_runtime_maps import REG
+
+    from d1max_agent.runtime import AgentRuntime
+    from d1max_contract.memory_broker import MemoryBroker, MemoryTransport
+    from d1max_patrol.protocol.nav_types import Pose
+    broker = MemoryBroker()
+    c = 钟()
+    c.mono = 100.0
+    dog = SimRobot(now_ms=c, charger=(0.0, 0.0, 0.0))
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=dog,
+                      store_dir=tmp_path, now_ms=c, loaded_map=("m", "1"), boot_id="b",
+                      home=Pose.from_xy_yaw(0.0, 0.0), monotonic=lambda: c.mono,
+                      odom_identity=True)
+    await rt.start()
+    try:
+        rt._set_dock_hazard("出不了桩")
+        _状态读不到(dog)
+        for _ in range(100):                               # 10 秒,不在充
+            await rt.step(0.1)
+            c.ms += 100
+            c.mono += 0.1
+        assert rt._dock_hazard and rt._on_dock is None and rt._motion_gate(), "读不到:锁着"
+        del dog.recharge_status                            # 状态读得到了、确实不在桩上
+        for _ in range(70):
+            await rt.step(0.1)
+            c.ms += 100
+            c.mono += 0.1
+        assert not rt._dock_hazard and rt._motion_gate() == ""
+    finally:
+        await rt.close()

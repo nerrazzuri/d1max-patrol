@@ -104,18 +104,22 @@ class DockTask(Task):
 
     async def _sense(self) -> tuple[bool | None, bool | None, float | None]:
         """此刻 ``(在充, 在桩上或正在对桩, 电量)``;读不到是 ``None``。「在充」决定充上了没有,
-        「在桩上或正在对桩」决定能不能开走。"""
+        「在桩上或正在对桩」决定能不能开走。
+
+        **不在充不等于离了桩**(W13 复查:桩断电时狗照样停在桩上):回充状态读不到,第二项就是
+        ``None``(不知道),除非电池说在充(那就确实在桩上)。"""
         try:
             b = await self._hal.battery()
         except Exception:
             log.exception("读不了电池")
             return None, None, None
         charging = bool(b.charging)
-        busy = charging
+        busy: bool | None
         try:
             busy = charging or str(await self._hal.recharge_status()) in _ON_DOCK
-        except Exception:  # noqa: BLE001 - 状态读不到:只按电池
-            pass
+        except Exception:  # noqa: BLE001 - 状态读不到:在充就是在桩上,不在充是不知道
+            log.warning("读不了回充状态:在不在桩上算不知道")
+            busy = True if charging else None
         return charging, busy, b.percent
 
     async def step(self, dt_s: float) -> None:
