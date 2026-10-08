@@ -24,6 +24,9 @@ export RMW_IMPLEMENTATION="${D1MAX_LOC_RMW:-rmw_zenoh_cpp}"
 # numpy 1.21,系统的 OpenCV 一 import 就挂(2026-10-08)。onnxruntime 装在单独的目录里,经
 # /etc/d1max/env 的 PYTHONPATH 带进来(接在下面这两段后面),见装机清单「狗上的系统件」。
 export PYTHONNOUSERSITE=1
+# numpy 的线性代数库(OpenBLAS)缺省开跟核数一样多的线程:一帧里的小矩阵运算用不着,C40221 上
+# 8 个线程各吃 23–35%,跟定位器抢 CPU(2026-10-08)。
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 export PYTHONPATH="$here/packages/localizer/src:$here/packages/contract/src${PYTHONPATH:+:$PYTHONPATH}"
 # shellcheck disable=SC2086  # D1MAX_PERSONS_ARGS 要按空白拆成几个参数
 exec /usr/bin/python3 -m d1max_localizer.persons \

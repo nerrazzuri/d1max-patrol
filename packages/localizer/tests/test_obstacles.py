@@ -511,3 +511,14 @@ def test_地面拟合不造N乘N的矩阵_几万个内点也很快(monkeypatch):
     assert time.monotonic() - t < 2.0
     assert 用的
     assert n[2] > 0.99 and abs(h - 0.5) < 0.02
+
+
+def test_地面拟合最多抽四千个候选点():
+    """真狗一帧地面候选几万个,RANSAC 每轮都扫一遍,感知节点光这一步就占一半 CPU。内点占比 = 内点数 ÷
+    候选数,候选被抽成 4000 个时它是 1/4000 的整数倍。"""
+    rng = np.random.default_rng(2)
+    地面 = np.column_stack([rng.uniform(0.6, 3.5, 40000), rng.uniform(-1.5, 1.5, 40000),
+                         np.full(40000, -0.5) + rng.normal(0, 0.005, 40000)])
+    n, h, frac = fit_ground(地面)
+    assert abs(frac * 4000 - round(frac * 4000)) < 1e-6
+    assert n[2] > 0.99 and abs(h - 0.5) < 0.02
