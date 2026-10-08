@@ -679,8 +679,9 @@ class AgentRuntime:
             try:
                 on = on or str(await self.hal.recharge_status()) in ("docked", "docking",
                                                                      "charging")
-            except Exception:  # noqa: BLE001 - 状态读不到:只按电池
-                pass
+            except Exception:  # noqa: BLE001 - 状态读不到:在充就是在桩上,不在充是不知道
+                # W13 复查:不在充不等于离了桩(桩断电时狗照样停在桩上)
+                on = True if on else None
         except Exception:  # noqa: BLE001 - 电池读不到:不知道
             on = None
         self._on_dock = on
