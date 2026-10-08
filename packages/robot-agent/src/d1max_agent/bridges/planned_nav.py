@@ -297,7 +297,7 @@ class PlannedNavBackend(HalNavBackend):
 
     async def _inside_nogo(self, z: Zone, here: Any) -> None:
         self._report_nogo(z, here)
-        await self._enter_terminal(NavStatus.FAILED)
+        await self._fail(f"狗进了禁行区 {z.label or z.id}:停,不自己往外走")
 
     # ------------------------------------------------------------ 规划
 
@@ -512,7 +512,7 @@ class PlannedNavBackend(HalNavBackend):
                     await self._send(0.0, 0.0, dt_s)
                     return
                 log.warning("重规划没成:%s", out[1])
-                await self._enter_terminal(NavStatus.FAILED)
+                await self._fail(f"重规划没成:{out[1]}")
                 return
             if out[2] != self._epoch:
                 # 重规划完到这一拍之间区域又换了(内审应修 9):旧区域上的路不装,再来一次
@@ -528,7 +528,7 @@ class PlannedNavBackend(HalNavBackend):
             await self._send(0.0, 0.0, dt_s)            # 原地等新路径
             return
         if self._path is None or self._cm is None:
-            await self._enter_terminal(NavStatus.FAILED)
+            await self._fail("没有路径")
             return
         dgoal = math.hypot(target.position.x - here.x, target.position.y - here.y)
         if self._aligning or dgoal <= ARRIVE_TOL_M:
@@ -630,7 +630,7 @@ class PlannedNavBackend(HalNavBackend):
             log.error("%s:停", why)
             self.emit(AlgErrorEvent((AlgErrorItem(ALG_LIDAR_DISCONNECTED, why, 2),),
                                     self._now()))
-            await self._enter_terminal(NavStatus.FAILED)
+            await self._fail(why)
             return
         v = self.guard.check(vx, wz, self._v_meas, self.obstacles, self._odom_pose)
         if v.ok:
@@ -658,7 +658,7 @@ class PlannedNavBackend(HalNavBackend):
         await self._send(0.0, 0.0, dt_s)                 # 原地等(零速保住步态)
         if waited >= BLOCK_GIVEUP_S:
             log.warning("被挡 %.0f s 还没走成:放弃这一段(%s)", waited, v.reason)
-            await self._enter_terminal(NavStatus.FAILED)
+            await self._fail(f"被挡 {waited:.0f} 秒还没走成({v.reason})")
             return
         if waited >= BLOCK_REPORT_S and not self._blocked_told:
             self._blocked_told = True

@@ -37,6 +37,9 @@ from d1max_patrol.protocol.nav_types import LocStatus, NavStatus, Pose, Waypoint
 log = logging.getLogger(__name__)
 
 POSITION_TOL_M = 0.1
+#: HAL 拒速度命令的原因 → 任务失败原因里的话(W34;C40221 急停时只写了「导航回了 Failed」)。
+_REJECT_TEXT = {"estop": "急停按下了", "no_control": "没控制权(遥控器或厂家 App 拿着)",
+                "fault": "狗报故障"}
 #: 里程锚定丢了定位,引擎等人给位置等多久(秒)。过渡期有人监护(W00c6i),监护一断任务本来就中止。
 HUMAN_RELOCALIZE_WAIT_S = 600.0
 #: 定位器自己能找回来(雷达定位):丢了 / 打滑(跟里程对不上)等多久(秒),等不回来整趟中止、站点报 P1
@@ -72,6 +75,8 @@ class HalNavBackend(NavBackend):
         self._connected = False
         self._status = NavStatus.STANDBY
         self._loc = LocStatus.CONTINUOUS_LOC
+        #: 这一段为什么 Failed(W34:任务失败原因写清楚 —— 急停、看不见、定位不行……);新的一段清空。
+        self.fail_reason = ""
         self._target: Pose | None = None
         self._due: tuple[int, NavStatus] | None = None      # (时刻, 到时进入的状态)
         self._seq = 0
@@ -298,10 +303,10 @@ class HalNavBackend(NavBackend):
         if not d or d != self._dir:
             # 不许自己走了(头尾不知道、狗尾为前但后面看不清),或者半路调了头(行进方向变了):停
             log.error("头尾方向是 %s(%s):停", self.head, self.head_block() or "半路调了头")
-            await self._enter_terminal(NavStatus.FAILED)
+            await self._fail(f"头尾方向是 {self.head}({self.head_block() or '半路调了头'})")
             return
         if loc is LocStatus.LOC_LOST:
-            await self._enter_terminal(NavStatus.FAILED)
+            await self._fail(self._loc_why())
             return
         if self._target is None:
             # 停车正在路上(``_enter_terminal`` 先清目标、再等 HAL 回执;真 HAL 最长等 5 s):
@@ -311,7 +316,7 @@ class HalNavBackend(NavBackend):
             return
         here = self.anchor.estimate((odom.x, odom.y, odom.yaw))
         if here is None:
-            await self._enter_terminal(NavStatus.FAILED)
+            await self._fail(self._loc_why())
             return
         await self._drive(here, dt_s)
 
@@ -341,14 +346,25 @@ class HalNavBackend(NavBackend):
             seq=self._seq, ttl_ms=max(300, int(dt_s * 3000)), frame="base", vx=vx, vy=0.0, wz=wz))
         if got.rejected:
             log.warning("HAL 拒了速度命令(%s),导航按 Failed 收尾", got.reason)
-            await self._enter_terminal(NavStatus.FAILED)
+            await self._fail(_REJECT_TEXT.get(got.reason or "", f"狗不收速度命令({got.reason})"))
 
     # ------------------------------------------------------------ 内部
+
+    async def _fail(self, why: str) -> None:
+        """这一段 Failed,原因记下来给引擎写进任务失败原因(W34)。"""
+        self.fail_reason = why
+        await self._enter_terminal(NavStatus.FAILED)
+
+    def _loc_why(self) -> str:
+        """定位不可信时说清楚是哪样(W34:定位不收敛、没设位置、里程不新鲜)。"""
+        why = self.anchor.why_not(self.odom_ok)
+        return f"定位不可信:{why}" if why else "定位不可信"
 
     def _set_status(self, status: NavStatus) -> None:
         prev, self._status = self._status, status
         if status is NavStatus.INITIALIZING:
             self._dir = 0                                # 新的一趟:起跑时再定行进方向
+            self.fail_reason = ""
         if status is not prev:
             self.emit(NavStatusEvent(status, prev))
 

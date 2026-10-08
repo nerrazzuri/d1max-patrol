@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import signal
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -22,6 +23,8 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 BACKOFF_S = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
+#: ``ros2 launch`` 说底下哪个进程死了、退出码多少(W34:外层 launch 的退出码是 0,被杀、段错误也是 0)。
+_DIED = re.compile(r"\[ERROR\] \[([^\]]+)\]: process has died \[pid \d+, exit code (-?\d+)")
 STABLE_S = 60.0
 KILL_AFTER_S = 5.0
 
@@ -55,6 +58,9 @@ class MolaSupervisor:
         self._fails = 0
         self._stopping = False
         self._lock = asyncio.Lock()
+        #: 底下的节点最近一次怎么死的(从 ``ros2 launch`` 的输出里认,W34):``(节点, 退出码)``。
+        self._died: tuple[str, int] | None = None
+        self._reader: asyncio.Task | None = None
 
     @property
     def running(self) -> bool:
@@ -98,25 +104,58 @@ class MolaSupervisor:
         log.info("起 MOLA:%s", " ".join(cmd))
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd, env=self._env, start_new_session=True, stdin=asyncio.subprocess.DEVNULL)
+                *cmd, env=self._env, start_new_session=True, stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
         except OSError as exc:                            # 命令不在、没权限:说出来、过一会儿再试
             self._schedule(f"定位程序起不来({exc})")
             return
         self._proc = proc
+        self._died = None
         self._on_up()
         loop = asyncio.get_running_loop()
+        self._reader = loop.create_task(self._read(proc))
         self._watch = loop.create_task(self._wait(proc, loop.time()))
+
+    async def _read(self, proc: asyncio.subprocess.Process) -> None:
+        """MOLA(``ros2 launch``)的输出原样进日志;认出「底下哪个进程死了、退出码多少」记下来。"""
+        assert proc.stdout is not None
+        mola = logging.getLogger("mola")
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                return
+            text = line.decode("utf-8", "replace").rstrip()
+            mola.info("%s", text)
+            m = _DIED.search(text)
+            if m:
+                self._died = (m.group(1), int(m.group(2)))
+
+    def _exit_text(self, rc: int | None) -> str:
+        """退出原因:底下的节点死了说它的退出码(负数 = 被信号杀,-11 段错误、-9 被强杀)。"""
+        if self._died is not None:
+            name, code = self._died
+            sig = ""
+            if code < 0:
+                with contextlib.suppress(ValueError):
+                    sig = f",被信号 {signal.Signals(-code).name} 杀了"
+            return f"定位程序退出了({name} 退出码 {code}{sig})"
+        if rc == 0:
+            return "定位程序退出了(外层 ros2 launch 退出码 0;底下的 MOLA 可能是被杀或崩了,看日志)"
+        return f"定位程序退出了(退出码 {rc})"
 
     async def _wait(self, proc: asyncio.subprocess.Process, started: float) -> None:
         rc = await proc.wait()
         _signal_group(proc.pid, signal.SIGKILL)           # 它自己退了:组里剩下的(launch 底下的)收掉
+        if self._reader is not None:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(self._reader), 1.0)   # 把最后几行读完
         async with self._lock:
             if self._stopping or proc is not self._proc:
                 return
             self._proc = None
             if asyncio.get_running_loop().time() - started >= STABLE_S:
                 self._fails = 0
-            self._schedule(f"定位程序退出了(退出码 {rc})")
+            self._schedule(self._exit_text(rc))
 
     def _schedule(self, why: str) -> None:
         delay = self._backoff[min(self._fails, len(self._backoff) - 1)]

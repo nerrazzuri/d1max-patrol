@@ -220,6 +220,20 @@ def test_旁路进程每处拿到控制权都走SetHeld_持有一变就广播hel
     assert not re.search(r"g_held\s*=\s*true", src)
 
 
+def test_W34_旁路进程丢了控制权自己定期重抢_不只等SDK通知():
+    """2026-10-08 C40221:厂家遥控器退出以后 SDK 不发 OnControlAvailable,以前旁路一直 held=0。
+    现在心跳里没握着就每 6 秒 TakeControl 一次,成了走 SetHeld(广播 hello),没成同一原因只记一次。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[2] / "motion" / "patrol_agent.cpp").read_text("utf-8")
+    beat = src[src.index("// 心跳：定期续一次 TakeControl"):]
+    beat = beat[:beat.index("}).detach();")]
+    assert "if (!g_held.load() && beat % 2 == 0) {" in beat
+    retake = beat[beat.index("if (!g_held.load() && beat % 2 == 0) {"):]
+    assert "ec = g_client->TakeControl(5000);" in retake
+    assert retake.index("if (!ec) {") < retake.index("SetHeld(true);")
+    assert "ec.message() != last_why" in retake, "同一个失败原因别刷屏"
+
+
 async def test_控制权丢了之后动作指令立刻被挡住():
     async with _pair() as (sim, backend):
         with backend.subscription() as queue:

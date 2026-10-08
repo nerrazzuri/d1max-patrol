@@ -599,5 +599,14 @@ async def test_质量_越不确定越低_丢了是零():
     assert loc.quality(True) == 0.0
     _稳(loc, 0.0, 0.0, sigma=0.1)
     q1 = loc.quality(True)
-    loc.on_pose(_位姿(0.0, 0.0, sigma=0.5))
+    loc.on_pose(_位姿(0.0, 0.0, sigma=0.3))
     assert 0.0 < loc.quality(True) < q1 < 1.0
+
+
+async def test_W34_σ在0点8还不认_现场重定位时1点0就认了太松():
+    """2026-10-08 C40221 3d.8:杀掉 MOLA 自己重定位时 σ 从 1.5 往下降,原来 1.0 就认。"""
+    c, link, loc = await _就绪()
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(0.0, 0.0, sigma=0.8))
+    assert not loc.ok(True) and "定位偏差可能到 0.8 m" in loc.why_not(True)
+    _稳(loc, 0.0, 0.0, sigma=0.4)
