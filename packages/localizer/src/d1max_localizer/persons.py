@@ -229,6 +229,10 @@ class Settings:
     z_max: float = Z_MAX
     max_range: float = MAX_RANGE_M
     snapshot_every_s: float = 10.0
+    #: 测距只用框中间这一段宽度(比例)。人的身子在框中间,框边上常是挡在前面的别的东西:
+    #: 2026-10-08 C40221 上人坐在人形机器人斜后方,框右边缘跟机器人重叠一条,整框量到的是
+    #: 2 m 的机器人,不是 3 m 的人。
+    range_span: float = 0.5
 
 
 class PersonNode:
@@ -278,9 +282,11 @@ class PersonNode:
         for b in boxes[:16]:
             c = bearing_deg((b.x1 + b.x2) / 2, w, hfov_deg=self.cfg.hfov_deg, lens=self.cfg.lens,
                             camera=camera)
-            left = bearing_deg(b.x1, w, hfov_deg=self.cfg.hfov_deg, lens=self.cfg.lens,
+            half = (b.x2 - b.x1) * min(1.0, max(0.05, self.cfg.range_span)) / 2
+            mid = (b.x1 + b.x2) / 2
+            left = bearing_deg(mid - half, w, hfov_deg=self.cfg.hfov_deg, lens=self.cfg.lens,
                                camera=camera)
-            right = bearing_deg(b.x2, w, hfov_deg=self.cfg.hfov_deg, lens=self.cfg.lens,
+            right = bearing_deg(mid + half, w, hfov_deg=self.cfg.hfov_deg, lens=self.cfg.lens,
                                 camera=camera)
             r = None
             if cloud is not None:
