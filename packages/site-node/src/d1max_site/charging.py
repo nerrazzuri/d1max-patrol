@@ -22,7 +22,8 @@
   (说不清狗收没收)→ 留着,按那个任务号的终态事件对账,过了 :data:`LOST_S` 还没有就当被打断。
 - **错开充**(W28,决策 46:各管各的区域,同一时间只让一台去充):别的狗正在回充(``charge_cycles`` 里
   去桩、走到了、对桩、被打断待接着充都算;歇着的不算)时,这台到了 30% 先**接着守**(:meth:`view` 的
-  ``held``);守到 :data:`FLOOR_PCT` 还轮不到就也去,报 P2 ``charge_overlap``(跟起这一轮同一个事务)。
+  ``held``);守到 :data:`FLOOR_PCT` 还轮不到就也去,报 P2 ``charge_overlap``(跟起这一轮同一个事务;
+  一回低电只报一次,记在 ``charge_overlaps``,电量回到线上删)。
   几台同时到线:电量低的先去。只有一台狗登记了桩的,到线就去。
 - **桩上危险**(W13 外审 1–3):狗报 ``dock.hazard``(出桩、停对桩确认不了,狗上运动锁住)→ 报 P1
   ``dock_stuck``,一次挂一次(``dock_hazards``,跟待报告警同一个事务),狗上摘了就清。
@@ -83,8 +84,6 @@ class ChargeDesk:
         self._retry_at: dict[str, int] = {}
         #: 到了线、因为别的狗在充先接着守的(W28):robot_id → 等的是谁。给 :meth:`view` 看,每拍重算。
         self._held: dict[str, str] = {}
-        #: 这一回低电已经报过「两台同时在充」的(狗拒收、30 秒后重派时不再报;电量回到线上清)。
-        self._overlap_told: set[str] = set()
 
     # ------------------------------------------------------------ 桩
 
@@ -231,11 +230,12 @@ class ChargeDesk:
                 self._held.pop(rid, None)
                 log.info("%s 电量 %.0f%%:去充", rid, pct)
                 await self._goto(rid, ch, None,
-                                 overlap="" if rid in self._overlap_told else other)
+                                 overlap="" if self._overlap_told(rid) else other)
             else:
                 self._held.pop(rid, None)
-                if pct is not None and pct > self.low_pct:
-                    self._overlap_told.discard(rid)
+                if pct is not None and pct > self.low_pct and self._overlap_told(rid):
+                    with self.db.tx() as tx:            # 电量回到线上:这一回低电结束
+                        tx.execute("DELETE FROM charge_overlaps WHERE robot_id=?", (rid,))
             return
         self._held.pop(rid, None)
         state = cyc["state"]
@@ -280,6 +280,10 @@ class ChargeDesk:
                       context={"task_id": cyc["task_id"]}, now_ms=now)
             flush(self.db, self.alerts)
 
+    def _overlap_told(self, rid: str) -> bool:
+        """这一回低电报过「两台同时在充」没有(落库:狗拒收重派、站点重启都不再报;W28 外审)。"""
+        return bool(self.db.query("SELECT 1 FROM charge_overlaps WHERE robot_id=?", (rid,)))
+
     def _charging_other(self, rid: str) -> str:
         """别的哪台正在回充(W28 错开充);没有 → 空串。"""
         rows = self.db.query(
@@ -315,8 +319,9 @@ class ChargeDesk:
                       detail=f"{rid} 电量到 {FLOOR_PCT:.0f}%,{overlap} 还在充,{rid} 也去充了;"
                              f"有一台充完出桩之前这块区域没狗",
                       context={"task_id": tid, "waiting_for": overlap}, now_ms=now)
+                c.execute("INSERT OR REPLACE INTO charge_overlaps(robot_id, created_ms) "
+                          "VALUES (?,?)", (rid, now))
         if overlap:
-            self._overlap_told.add(rid)
             flush(self.db, self.alerts)
         try:
             r = await self.dispatcher.goto(rid, target, None, issued_by="charge",

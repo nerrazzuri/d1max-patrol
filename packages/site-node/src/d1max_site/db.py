@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 34                      # W13 外审:桩上危险报过没有(dock_hazards)
+SCHEMA_VERSION = 35                      # W28 外审:这一回低电报过同时在充没有(charge_overlaps)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -367,6 +367,11 @@ CREATE TABLE IF NOT EXISTS charge_cycles (
     until_ms   INTEGER
 );
 -- W13 外审:狗报「桩上危险」(运动锁住)报过 P1 的(一次挂一次;狗上摘了就删)。
+-- W28 外审:这一回低电已经报过「两台同时在充」的(重派、重启不再报;电量回到 30% 以上删)。
+CREATE TABLE IF NOT EXISTS charge_overlaps (
+    robot_id   TEXT PRIMARY KEY,
+    created_ms INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS dock_hazards (
     robot_id   TEXT PRIMARY KEY,
     reason     TEXT NOT NULL,
