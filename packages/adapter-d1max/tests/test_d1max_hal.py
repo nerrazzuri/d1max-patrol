@@ -70,7 +70,8 @@ def test_能力_控制权不可释放_没有横移_只有灯():
 def test_参数不合理当场拒():
     for bad in ({"mps_per_unit": 0.0}, {"radps_per_unit": -1.0}, {"deadband_mps": -0.1},
                 {"max_fraction": 0.0}, {"max_fraction": 0.6}, {"mps_per_unit": float("nan")},
-                {"stopped_eps": 0.0}):
+                {"stopped_eps": 0.0}, {"fwd_offset": -0.01}, {"fwd_offset": 0.5},
+                {"fwd_offset": float("nan")}):
         with pytest.raises(ValueError):
             D1MaxHal(**bad)
 
@@ -121,6 +122,22 @@ async def test_速度换成比例值发vel_ttl夹到旁路的范围():
         assert _最后一条(sim, "vel")["ttl_ms"] == 1000
         await hal.set_velocity(_v(vx=0.36, ttl_ms=10))
         assert _最后一条(sim, "vel")["ttl_ms"] == 50
+
+
+async def test_前进带死区_比例是死区加直线_零照发零_上限按直线算():
+    """2026-10-08 C40221 实测前进 v ≈ 1.09 ×(比例 − 0.10):纯比例换算低速走得比要的慢一半。"""
+    async with _台子(fwd_offset=0.1) as (sim, hal):
+        assert math.isclose(hal.hal_capabilities().max_vx, (0.5 - 0.1) * 1.2)
+        await hal.set_velocity(_v(vx=0.36))
+        assert math.isclose(_最后一条(sim, "vel")["fwd"], 0.1 + 0.36 / 1.2)
+        await hal.set_velocity(_v(vx=-0.36))
+        assert math.isclose(_最后一条(sim, "vel")["fwd"], -(0.1 + 0.36 / 1.2)), "倒着走对称"
+        await hal.set_velocity(_v(vx=0.0, wz=0.6))
+        a = _最后一条(sim, "vel")
+        assert a["fwd"] == 0.0 and math.isclose(a["yaw"], 0.4), "原地转不许带上死区往前蹭"
+        got = await hal.set_velocity(_v(vx=5.0))
+        assert got.clamped and math.isclose(got.applied_vx, 0.48)
+        assert math.isclose(_最后一条(sim, "vel")["fwd"], 0.5), "夹到上限后比例正好是上限"
 
 
 async def test_超上限夹住并如实报():
