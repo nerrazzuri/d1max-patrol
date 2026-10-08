@@ -16,6 +16,12 @@ d = pathlib.Path(sys.argv[1])
 (d / f"up-{os.getpid()}").write_text(sys.argv[2])
 if sys.argv[3] == "crash":
     sys.exit(3)
+if sys.argv[3] == "launch_child_segv":             # 像 ros2 launch:底下的节点段错误,外层照样退 0
+    print("[INFO] [mola-1]: process started with pid [123]", flush=True)
+    print("[ERROR] [mola-1]: process has died [pid 123, exit code -11, cmd 'mola']", flush=True)
+    sys.exit(0)
+if sys.argv[3] == "quiet_zero":
+    sys.exit(0)
 if sys.argv[3] == "stubborn":                      # 不理 SIGINT(像收尾慢的 ROS 节点)
     import signal
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -206,4 +212,21 @@ async def test_两次起动同时来_串着做_只剩后来那个(tmp_path, monk
     await asyncio.sleep(0.3)
     alive = [p for p in tmp_path.glob("up-*") if _alive(int(p.name[3:]))]
     assert [p.read_text() for p in alive] == ["/maps/c/prior.mm"]
+    await s.stop()
+
+
+async def test_W34_底下的节点段错误_外层launch退0_说清是谁怎么死的(tmp_path):
+    """2026-10-08 C40221:罩住前雷达 MOLA 段错误,日志写「退出码 0」(外层 ros2 launch 的)。"""
+    s, r = _sup(tmp_path, mode="launch_child_segv", backoff=(30.0,))
+    await s.start(Path("/maps/a/prior.mm"))
+    await _等(lambda: r.downs)
+    assert "mola-1 退出码 -11" in r.downs[0] and "SIGSEGV" in r.downs[0], r.downs
+    await s.stop()
+
+
+async def test_W34_外层退0又没说谁死了_不写成正常的退出码0(tmp_path):
+    s, r = _sup(tmp_path, mode="quiet_zero", backoff=(30.0,))
+    await s.start(Path("/maps/a/prior.mm"))
+    await _等(lambda: r.downs)
+    assert "外层 ros2 launch 退出码 0" in r.downs[0] and "可能是被杀或崩了" in r.downs[0]
     await s.stop()

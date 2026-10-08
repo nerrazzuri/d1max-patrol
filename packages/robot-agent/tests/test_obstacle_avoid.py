@@ -269,6 +269,9 @@ async def test_通道整个堵死_等满20秒放弃_中间报一次被挡(tmp_pa
     assert t.status[-2:] == [NavStatus.FAILED, NavStatus.STANDBY], t.status
     assert [k for k, _ in t.events].count("nav_blocked") == 1
     assert ALG_NAV_BLOCKED not in t.algs
+    # W34:任务失败原因写清楚是被挡(几处挡、几处看不见),不是笼统的「导航回了 Failed」
+    assert t.nav.fail_reason.startswith("被挡 ") and "扫过区有挡" in t.nav.fail_reason, \
+        t.nav.fail_reason
 
 
 async def test_挡的东西挪走了_接着走原来的路(tmp_path):

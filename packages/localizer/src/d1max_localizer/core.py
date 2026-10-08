@@ -46,8 +46,8 @@ Q_GOOD = 0.8
 Q_BAD = 0.5
 Q_MATCH = 0.5
 SIGMA_MIN_M = 0.1
-#: 「不可信」的 σ:要**明显高于**代理的线(``BridgeLocalizer.SIGMA_LOST_M`` = 1.0,σ 大于它才不信 ——
-#: 2026-09-27 回放:原来给 1.0 正好压线,代理照样信)。
+#: 「不可信」的 σ:要**明显高于**代理的线(``BridgeLocalizer.SIGMA_LOST_M``,W34 起 0.5;σ 大于它才
+#: 不信 —— 2026-09-27 回放:原来给 1.0 正好压线,代理照样信)。
 SIGMA_BAD_M = 1.5
 #: 跳过之后这么久 σ 给「不可信」(W09b 内审:只给 0.5 的话代理稳 5 帧就信了跳过去的位置)。
 SIGMA_JUMPED_M = SIGMA_BAD_M
@@ -151,11 +151,14 @@ class LocalizerCore:
     # ------------------------------------------------------------ 进
 
     def prior_loading(self, map_ref: tuple[str, str]) -> None:
+        if map_ref != self._map:
+            self._good = None                           # 别的图:旧位置不能当初值
+            self._forget_reloc()
+        # 同一张图重新载(W34:2026-10-08 C40221 代理每次重启定位器都要人重新给初始位置):最后可信的
+        # 位置留着,MOLA 起来以后按它自己重定位(跟 MOLA 重启一样)
         self._map, self._frames, self._loading = map_ref, None, True
         self._need_init = True
-        self._good = None                               # 别的图:旧位置不能当初值
         self._want_reloc = False
-        self._forget_reloc()
 
     def prior_loaded(self, map_ref: tuple[str, str], frames: Frames) -> None:
         if map_ref != self._map:

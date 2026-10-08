@@ -1014,12 +1014,31 @@ int main(int argc, char** argv) {
   }).detach();
 
   std::thread([]() {
-    // 心跳：定期续一次 TakeControl，并把状态刷进日志。上装那头一旦松手，
-    // OnControlAvailable 会来，续控就在那条回调里。
+    // 心跳：定期续一次 TakeControl，并把状态刷进日志。
+    // **丢了控制权就每 6 秒自己重抢一次**(W34,2026-10-08 C40221 实测):厂家遥控器退出以后 SDK
+    // **不发** OnControlAvailable(App 退出会发),以前只等那条通知,旁路一直 held=0、收工连趴下都
+    // 发不了。遥控器、App 还拿着的时候 SDK 回「another master exists」,不会抢走人手上的:过 6 秒再试。
     int beat = 0;
+    std::string last_why;
     while (g_running.load()) {
       std::this_thread::sleep_for(std::chrono::seconds(3));
-      if (++beat % 5) continue;
+      ++beat;
+      if (!g_held.load() && beat % 2 == 0) {
+        std::error_code ec;
+        {
+          std::lock_guard<std::mutex> lk(g_sdk_mtx);
+          ec = g_client->TakeControl(5000);
+        }
+        if (!ec) {
+          std::cout << "[CTRL] 自己重抢回了控制权\n";
+          last_why.clear();
+          SetHeld(true);
+        } else if (ec.message() != last_why) {
+          last_why = ec.message();                    // 同一个原因只记一次,别刷屏
+          std::cout << "[CTRL] 重抢没成(" << last_why << "),6 秒后再试\n";
+        }
+      }
+      if (beat % 5) continue;
       {
         std::lock_guard<std::mutex> lk(g_sdk_mtx);
         if (g_held.load()) g_client->TakeControl(0);

@@ -37,6 +37,16 @@ RelocService = Callable[[tuple[float, float, float], tuple[float, float, float, 
                         Awaitable[bool]]
 
 
+
+def _same_file(a: Path | None, b: Path) -> bool:
+    """同一个文件(W34:代理重启后给的路径可能经过 ``active`` 链接,字面不同、文件相同)。"""
+    if a is None:
+        return False
+    try:
+        return a == b or a.resolve() == b.resolve()
+    except OSError:
+        return a == b
+
 class MolaBackend:
     def __init__(self, core: LocalizerCore, *, supervisor: Any, reloc_service: RelocService,
                  default_prior_dir: Path | None = None,
@@ -68,8 +78,9 @@ class MolaBackend:
             frames = Frames.load(fj)
         except ContractError as exc:
             return str(exc)[:200]
-        if map_ref == self._map and self.supervisor.prior == mm and self.supervisor.running:
-            return ""
+        if map_ref == self._map and self.supervisor.running and \
+                _same_file(self.supervisor.prior, mm):
+            return ""                                    # 同一份先验(经链接也算):不重启 MOLA
         self._map, self._frames = map_ref, frames
         self._pending = None                             # 旧图上给的位置作废
         self._alive = False                              # 旧 MOLA 出过位姿不算新的

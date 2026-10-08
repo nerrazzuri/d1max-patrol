@@ -296,3 +296,61 @@ async def test_起_MOLA_出错_不悄悄吞掉(tmp_path):
     await _settle()
     core.tick()
     assert "起 MOLA出错" in [m.reason for m in core.drain() if isinstance(m, State)][-1]
+
+
+async def _跟踪着(c, core, be, x=3.0):
+    """人给过位置、MOLA 稳定出位姿了:有「最后可信的位置」。"""
+    be.mola_output()
+    assert await be.relocalize(x, 1.0, 0.0, 0.5, req=1) == ""
+    stamp = 5000.0
+    c.t += 40.0
+    for _ in range(5):
+        c.t += 0.1
+        stamp += 0.1
+        core.on_scan()
+        core.on_estimate(Estimate(stamp=stamp, p=(x + 0.4043, 1.0, 0.5), q=(0.0, 0.0, 0.0, 1.0),
+                                  quality=0.95))
+
+
+async def test_W34_代理重启后经链接给同一份先验_不重启MOLA(tmp_path):
+    c, core, sup, svc, be = _台(tmp_path)
+    d = _先验(tmp_path)
+    await be.load_prior(M, str(d))
+    await _settle()
+    link = tmp_path / "active"
+    link.symlink_to(d)
+    assert await be.load_prior(M, str(link)) == ""
+    await _settle()
+    assert len(sup.started) == 1, "字面不同、是同一个文件:不重启"
+
+
+async def test_W34_同一张图重新载先验_按最后可信的位置自己重定位_不等人(tmp_path):
+    """2026-10-08 C40221:代理每次重启,定位器都要人重新给初始位置。"""
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    await _跟踪着(c, core, be)
+    other = _先验(tmp_path, "m7-copy")                    # 同一张图,换了个目录给(MOLA 要重启)
+    await be.load_prior(M, str(other))
+    await _settle()
+    assert len(sup.started) == 2
+    be.mola_output()
+    await be.check()
+    p, q, sigma = svc.calls[-1]
+    assert len(svc.calls) == 2 and sigma == AUTO_RELOC_SIGMA_M, "自己按最后的位置请重定位"
+    core.tick()
+    assert "等人给初始位置" not in [m.reason for m in core.drain() if isinstance(m, State)]
+
+
+async def test_W34_换了别的图_最后的位置作废_照旧等人给(tmp_path):
+    c, core, sup, svc, be = _台(tmp_path)
+    await be.load_prior(M, str(_先验(tmp_path)))
+    await _settle()
+    await _跟踪着(c, core, be)
+    await be.load_prior(("other", "1"), str(_先验(tmp_path, "o1")))
+    await _settle()
+    be.mola_output()
+    await be.check()
+    assert len(svc.calls) == 1, "别的图:不按旧位置请"
+    core.tick()
+    assert [m.reason for m in core.drain() if isinstance(m, State)][-1] == "等人给初始位置"

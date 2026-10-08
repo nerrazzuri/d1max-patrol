@@ -96,7 +96,7 @@ class Mount:
         return cls(fwd=fwd, left=left, up=up, x=float(sx), y=float(sy))
 
     def mirrored(self) -> Mount:
-        """后雷达的猜测外参:前雷达绕上轴转 π、装在狗身后面(真机录包标定之前只用来看见「空」)。"""
+        """后雷达的猜测外参:前雷达绕上轴转 π、装在狗身后面(真机录包标定之前只用它的「挡」)。"""
         neg = tuple(-v for v in self.fwd)
         return Mount(fwd=neg, left=tuple(-v for v in self.left), up=self.up,  # type: ignore[arg-type]
                      x=-self.x, y=-self.y)

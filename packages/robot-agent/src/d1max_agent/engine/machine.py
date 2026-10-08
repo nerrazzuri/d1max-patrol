@@ -1227,7 +1227,10 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                 # (被挪到隔断另一侧之类),也可能是别的原因,厂商这一层只给
                 # 得出"没到"这个事实,不给原因。跟 LOC_LOST 混在一句话里,
                 # 现场的人会分不清"该去找狗"还是"该去看这个点走不通"。
-                raise _FailWaypoint(f"到不了下一个点(导航回了 {item.status.value})")
+                # W34:导航后端说得出原因(急停、被挡/看不见、定位不行……)就写上
+                why = getattr(self._nav, "fail_reason", "")
+                raise _FailWaypoint(f"到不了下一个点:{why}" if why
+                                    else f"到不了下一个点(导航回了 {item.status.value})")
 
     async def _do_actions(self, wp: MissionWaypoint) -> None:
         for action in wp.actions:

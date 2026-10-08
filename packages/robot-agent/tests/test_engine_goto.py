@@ -235,6 +235,8 @@ async def test_急停期间引擎收尾为aborted_任务failed(台子):
     await _跑(c, r, parts, t, 40)
     assert t.done and t.state is TaskState.FAILED, (t.state, t.detail)
     assert t.detail["reason"], "理由要说出来(引擎按 retry_then_skip 跳过的航点,note 里有)"
+    # W34:2026-10-08 C40221 急停后只写了「到不了下一个点(导航回了 Failed)」,没点明急停
+    assert "急停按下了" in t.detail["reason"], t.detail
 
 
 async def test_断线不安全时引擎暂停_重连继续(台子):
