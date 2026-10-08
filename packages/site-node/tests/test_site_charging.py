@@ -333,3 +333,25 @@ async def test_W33_只许手动派的狗_低电也不自动去充(站):
     t.reg.set_manual_only("A", False, by="alice", now_ms=0)
     await _跑(t, 3)
     assert _cmds(t, "goto")
+
+
+async def test_W33外审_走到桩前之后改成只许手动派_不续派对桩_改回来接着(站):
+    t = 站
+    await _跑(t, 3)
+    assert _cmds(t, "goto") and t.charge.view()["cycles"][0]["state"] == "goto"
+    t.reg.set_manual_only("A", True, by="alice", now_ms=0)
+    await _跑(t, 30)                                      # 去桩前那一趟照走完(狗上的,不撤)
+    assert t.charge.view()["cycles"][0]["state"] == "arrived" and _cmds(t, "dock") == []
+    t.reg.set_manual_only("A", False, by="alice", now_ms=0)
+    await _跑(t, 3)
+    assert _cmds(t, "dock")
+
+
+async def test_W33外审_被打断待接着充时改成只许手动派_不再去桩(站):
+    t = 站
+    await _跑(t, 3)
+    t.charge._set("A", "resume")
+    t.reg.set_manual_only("A", True, by="alice", now_ms=0)
+    n = len(_cmds(t, "goto"))
+    await _跑(t, 40)
+    assert len(_cmds(t, "goto")) == n and t.charge.view()["cycles"][0]["state"] == "resume"

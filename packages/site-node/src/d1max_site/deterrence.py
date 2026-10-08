@@ -235,6 +235,10 @@ class DeterrenceDesk:
         asyncio.get_running_loop().create_task(self._reconcile_now(robot_id))
 
     async def _back(self, rid: str, after: str, by: str = "auto") -> None:
+        if self.dispatcher.registry.manual_only(rid) is not None:
+            # W33 外审:收场之后的回程是站点自己发起的;只许手动派的狗留在原地,人手动叫回
+            log.info("%s 只许手动派:驱离收场后不自动回待命点", rid)
+            return
         try:
             await self.standby.return_to(rid, issued_by=f"deterrence:{by}")
         except Exception as exc:                        # noqa: BLE001 - 回不去:推给值守的人
@@ -403,6 +407,7 @@ class DeterrenceDesk:
             req = StandoffRequest(max_s=int(max(30, min(STANDOFF_MAX_S, left + 60))),
                                   center=MapPose.from_wire(json.loads(s.center)))
             try:
+                self.dispatcher.check_auto(rid)         # W33 外审:新派之前再问一次
                 await self.dispatcher.standoff(rid, tid, req, issued_by="deterrence")
             except Exception as exc:                    # noqa: BLE001 - 派不出去:下次再派
                 log.warning("%s 保持距离没派成(%d 秒后再派):%s", rid, STANDOFF_RESEND_S, exc)

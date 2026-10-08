@@ -721,6 +721,12 @@ class Dispatcher:
             return "manual_only"
         return self.reported_autonomy(robot_id)
 
+    def check_auto(self, robot_id: str) -> None:
+        """站点自己发起的动作(续派回充、雷暴回程、事件派遣、驱离的保持距离与收场回程……)发之前再问一次
+        (W33 外审):设成只许手动派了 → 抛 :class:`DispatchRefused`。撤、停不走这里。"""
+        if self.registry.manual_only(robot_id) is not None:
+            raise DispatchRefused(f"{robot_id} 站点设成只许手动派:站点不自己让它动")
+
     def reported_autonomy(self, robot_id: str) -> str:
         """狗自己报的自主级别,不看站点的「只许手动派」(W33):要不要人现场监护按这个算 —— 只许手动派
         只挡站点自己发起的动作,人手动派的跟以前一样。"""

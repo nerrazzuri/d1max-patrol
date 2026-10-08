@@ -79,8 +79,10 @@ class MolaBackend:
         self._pending: RelocWant | None = None           # 人给的、等 MOLA 起来再下发的
         self._pending_at = 0.0
         self._reloc_errs = 0
-        #: 雷达挡着时代理换了先验(W34):恢复了起这一份。
+        #: 最新想要的先验(W34 外审:每次换先验都记,恢复时只起它,旧的恢复请求不许盖掉新图)、
+        #: 雷达恢复时还要不要起(挡住停了 MOLA、或挡着时来了新先验;恢复前已经直接起了就不要)。
         self._resume_prior: Path | None = None
+        self._resume_pending = False
 
     # ------------------------------------------------------------ 代理请的
 
@@ -102,9 +104,11 @@ class MolaBackend:
         self._pending = None                             # 旧图上给的位置作废
         self._alive = False                              # 旧 MOLA 出过位姿不算新的
         self.core.prior_loading(map_ref)
+        self._resume_prior = mm                          # 最新想要的那份(W34 外审:恢复时只起它)
         if self.core.lidar_blocked:
-            self._resume_prior = mm                      # 雷达挡着:记下,恢复了再起(W34)
+            self._resume_pending = True                  # 雷达挡着:恢复了再起
             return ""
+        self._resume_pending = False                     # 已经直接起了:恢复时不再起一遍
         # 不取消上一次还没做完的起动:看管器一把锁串着做,后来的这次最后生效(W09b 内审:取消会把正在
         # 关的旧进程丢成孤儿)
         self._spawn(self.supervisor.start(mm), "起 MOLA")
@@ -171,12 +175,13 @@ class MolaBackend:
             # 雷达被挡(W34):不喂 MOLA(挡着它会段错误、反复重启),停掉等雷达恢复
             why = f"雷达被挡住了(一帧有效点只有 {self.core.lidar_points}):定位程序先停"
             self.core.backend_down(why)
+            self._resume_pending = True
             self._spawn(self.supervisor.stop(), "停 MOLA")
             return
         prior = self._resume_prior or self.supervisor.prior
-        if ch is False and prior is not None:
-            # 恢复了:马上重起(不等退避),起来按最后可信的位置自己重定位
-            self._resume_prior = None
+        if ch is False and self._resume_pending and prior is not None:
+            # 恢复了:马上重起(不等退避)最新想要的那份先验,起来按最后可信的位置自己重定位
+            self._resume_pending = False
             self._spawn(self.supervisor.start(prior), "起 MOLA")
             return
         if self.core.lidar_blocked:

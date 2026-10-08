@@ -463,6 +463,7 @@ class IncidentDesk:
         target = MapPose(map_id=point["map_id"], map_version=point["map_version"],
                          frame_id="map", x=point["x"], y=point["y"], yaw=point["yaw"]).to_wire()
         try:
+            self.dispatcher.check_auto(row["robot_id"])  # W33 外审:占位到发之间改了开关也拦
             r = await self.dispatcher.goto(row["robot_id"], target, None,
                                            issued_by=f"incident:{row['source']}",
                                            priority=EVENT, task_id=row["task_id"],

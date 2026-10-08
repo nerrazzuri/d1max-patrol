@@ -299,9 +299,17 @@ class ChargeDesk:
                 c.execute("UPDATE charge_cycles SET state=?, until_ms=? WHERE robot_id=?",
                           (state, until_ms, rid))
 
+    def _manual(self, rid: str) -> bool:
+        """W33 外审:续派(接着充、走到了对桩)之前再看一次「只许手动派」;是就先不派,这一轮的进度留着,
+        改回接自动派遣再接着办。狗上正在跑的对桩、出桩不受影响(出桩是狗自己的事)。"""
+        m = getattr(getattr(self.dispatcher, "registry", None), "manual_only", None)
+        return bool(callable(m) and m(rid) is not None)
+
     async def _goto(self, rid: str, ch: dict[str, Any], cyc: dict[str, Any] | None, *,
                     overlap: str = "") -> None:
         """``overlap``:别的狗还在充、这台守到了 20% 也去(W28):起这一轮的同一个事务里记 P2。"""
+        if self._manual(rid):
+            return
         now = self._now()
         if now < self._retry_at.get(rid, 0):
             return
@@ -339,6 +347,8 @@ class ChargeDesk:
         self._retry_at.pop(rid, None)
 
     async def _dock(self, rid: str, cyc: dict[str, Any]) -> None:
+        if self._manual(rid):
+            return
         now = self._now()
         if now < self._retry_at.get(rid, 0):
             return

@@ -407,7 +407,9 @@ class StandbyManager:
         """``after`` 那一趟**被撤了**之后回待命点(W29 复查:雷暴撤巡检)。跟跑完自动回**同一套规矩**:
         要人监护的不回;会规划的狗规划回去;直线的狗只沿来路回,**来路确认不了**(巡检半路被撤,
         不知道停在哪)抛 :class:`StandbyError` —— 调用方让狗原地等、告警。
-        不重试(调用方过一阵再来)。"""
+        不重试(调用方过一阵再来)。站点设成只许手动派的也回不得(W33 外审)。"""
+        if self.dispatcher.registry.manual_only(robot_id) is not None:
+            raise StandbyError(f"{robot_id} 站点设成只许手动派,站点不自己让它回")
         why = self.refusal(robot_id) if self.refusal is not None else ""
         if why:
             raise StandbyError(why)

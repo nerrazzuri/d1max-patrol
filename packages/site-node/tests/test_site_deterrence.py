@@ -41,6 +41,15 @@ class 假派遣:
         self.fail = False
         self.feed = SimpleNamespace(publish=lambda item: self.pushed.append(item))
         self.pushed: list[dict] = []
+        #: 只许手动派的狗(W33 外审)
+        self.manual: set[str] = set()
+        self.registry = SimpleNamespace(
+            manual_only=lambda rid: {"by": "t"} if rid in self.manual else None)
+
+    def check_auto(self, rid):
+        from d1max_site.dispatcher import DispatchRefused
+        if rid in self.manual:
+            raise DispatchRefused(f"{rid} 站点设成只许手动派")
 
     def on_event(self, cb):
         self.cbs.append(cb)
@@ -1042,3 +1051,20 @@ async def test_W25外审1_撤被拒_不是没这个任务_当没撤成接着撤(
     t.clock.go(15)
     await t.desk.tick()
     assert len(tries) == 2 and "A" in t.desk.sessions
+
+
+async def test_W33外审_驱离中改成只许手动派_不再新派保持距离_收场照撤但不自动回待命点(台):
+    t = 台
+    _会守(t, fail=True)
+    await _到场(t)
+    assert t.disp.standoffs == []
+    t.disp.manual.add("A")
+    _会守(t)
+    t.clock.go(20)
+    await t.desk.tick()
+    assert t.disp.standoffs == [], "只许手动派:不新派"
+    await t.desk.release("A", by="gina")
+    assert t.disp.aborts == [("A", "standoff-incident-abc")], "撤照撤(安全)"
+    import asyncio
+    await asyncio.sleep(0)
+    assert t.stb.back == [], "收场后不自动回待命点"

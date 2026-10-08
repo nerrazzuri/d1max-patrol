@@ -659,3 +659,15 @@ async def test_W29复查_雷暴撤了一半_会规划的狗规划回去(站):
     assert len(gotos) == 1 and gotos[0]["task_id"].startswith("standby-")
     assert gotos[0]["issued_by"] == "weather:storm"
     assert not t.db.query("SELECT 1 FROM weather_returns")
+
+
+async def test_W33外审_只许手动派的狗_雷暴撤巡检后的回程也不派(站):
+    import pytest as _p
+
+    from d1max_site.standby import StandbyError
+    t = 站
+    t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
+    t.reg.set_manual_only("A", True, by="alice", now_ms=0)
+    with _p.raises(StandbyError, match="只许手动派"):
+        await t.stb.return_after_once("A", "sched-1", issued_by="weather:storm")
+    assert _cmds(t, "goto") == []
