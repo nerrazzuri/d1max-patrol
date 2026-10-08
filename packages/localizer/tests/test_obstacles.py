@@ -488,3 +488,26 @@ def test_W29复查_感知节点把可疑格子报给代理_没有可疑就不带
     assert sus[_cell(Config(), 1.55, 0.55)] and sum(sus) == 1
     clean = per.on_front(到雷达系(m, 场景()), 30)
     assert "suspect" not in clean, "没有可疑:不带(老代理照收)"
+
+
+def test_地面拟合不造N乘N的矩阵_几万个内点也很快(monkeypatch):
+    """真狗上地面内点几万个,svd 缺省 full_matrices=True 会造 N×N 的 U,每帧都卡死(2026-10-08 C40221:
+    感知节点 99% 的时间在这一句,2 秒发不出一帧)。"""
+    import time
+    用的 = []
+    原 = np.linalg.svd
+
+    def 只许薄的(a, **kw):
+        用的.append(kw)
+        # 老写法真去算会撑爆内存(4 万点要 12.8 GB),在调用那一刻就判,不真算
+        assert kw.get("full_matrices") is False, "svd 要 full_matrices=False"
+        return 原(a, **kw)
+    monkeypatch.setattr(np.linalg, "svd", 只许薄的)
+    rng = np.random.default_rng(1)
+    地面 = np.column_stack([rng.uniform(0.6, 3.5, 40000), rng.uniform(-1.5, 1.5, 40000),
+                         np.full(40000, -0.5) + rng.normal(0, 0.005, 40000)])
+    t = time.monotonic()
+    n, h, frac = fit_ground(地面)
+    assert time.monotonic() - t < 2.0
+    assert 用的
+    assert n[2] > 0.99 and abs(h - 0.5) < 0.02
