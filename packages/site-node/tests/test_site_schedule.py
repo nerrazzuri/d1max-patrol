@@ -189,7 +189,9 @@ async def test_钟不可信就不起(tmp_path):
     await t.close()
 
 
-async def test_两台都能派_排程没指定_不替人挑(站, tmp_path):
+async def test_两台都能派_排程没指定_挑电量高的(站, tmp_path):
+    """W28(决策 46):以前记 ``ambiguous`` 不派;现在挑电量最高的,理由写进记录。"""
+    import dataclasses
     t = 站
     t.reg.enroll("B", fingerprint="sha256:b", issued_at=t.clock.ms - 1,
                  expires_at=t.clock.ms + 10**10)
@@ -200,9 +202,22 @@ async def test_两台都能派_排程没指定_不替人挑(站, tmp_path):
     t.clock.ms = 毫秒(22, 0, 30)
     await t.run(2)
     t.site.clients["B"].status_live_at = t.clock()
+    from d1max_contract.messages import Telemetry
+    tel = Telemetry(stamp=t.clock.ms, pose=None, battery_pct=50.0, task_state=None,
+                    loc_quality=1.0)
+    t.site.clients["A"].telemetry = dataclasses.replace(tel, battery_pct=60.0)
+    t.site.clients["B"].telemetry = dataclasses.replace(tel, battery_pct=80.0)
     await _拍(t)
     runs = t.sched.runs("nightly")
-    assert [r["outcome"] for r in runs] == ["ambiguous"] and "A, B" in runs[0]["note"]
+    assert [(r["outcome"], r["robot_id"]) for r in runs] == [("started", "B")]
+    assert "挑了 B" in runs[0]["note"] and "80%" in runs[0]["note"]
+    t.site.clients["A"].telemetry = dataclasses.replace(tel, battery_pct=90.0)
+    assert t.sched._best(["A", "B"])[0] == "A"
+    t.site.clients["A"].telemetry = dataclasses.replace(tel, battery_pct=80.0,
+                                                        loc_quality=0.2)
+    t.site.clients["B"].telemetry = dataclasses.replace(tel, battery_pct=80.0,
+                                                        loc_quality=0.9)
+    assert t.sched._best(["A", "B"])[0] == "B", "电量一样:定位质量高的"
 
 
 async def test_排程写了robot就只派那一台(站, tmp_path):

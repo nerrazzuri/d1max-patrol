@@ -23,6 +23,7 @@ from d1max_agent.engine.machine import EngineBusy, RunState
 from d1max_agent.engine.mission import Action, Mission, MissionWaypoint, Policy
 from d1max_agent.events import EventBook
 from d1max_agent.tasks.base import Task
+from d1max_contract.charging import TRIP_ABORT_PCT
 from d1max_contract.messages import MapPose, TaskState
 from d1max_patrol.protocol.nav_types import NavStatus, Pose
 
@@ -232,7 +233,9 @@ class EngineGotoTask(EngineMissionTask):
                                                      self.target.yaw),
                 actions=((Action(type="photo", camera=self.photo),) if self.photo else ())),),
             policy=Policy(photo_optional=True, charging_trip=self.charge,
-                          on_battery_low="continue" if self.charge else "return_home"))
+                          on_battery_low="continue" if self.charge else "return_home",
+                          # W28:别的狗在充时这台守到 20% 才去,中止线得在那下面
+                          **({"battery_abort_pct": TRIP_ABORT_PCT} if self.charge else {})))
 
     async def _progress(self) -> dict:
         # 按地图位姿算(W00c6e 内审:以前按原始里程,锚在 (10, 5) 时报 12 m、真距离 2 m)。

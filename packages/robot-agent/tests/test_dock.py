@@ -383,3 +383,16 @@ async def test_复查_真代理_挂着危险时状态读不到_不充也不摘�
         assert not rt._dock_hazard and rt._motion_gate() == ""
     finally:
         await rt.close()
+
+
+async def test_W28_去桩的goto_中止线是10_别的还是25():
+    from d1max_agent.tasks.engine_goto import EngineGotoTask
+    from d1max_contract.charging import TRIP_ABORT_PCT
+    from d1max_contract.messages import MapPose
+    t = EngineGotoTask.__new__(EngineGotoTask)
+    t.task_id, t.photo = "charge-goto-1", None
+    t.target = MapPose(map_id="m", map_version="1", frame_id="map", x=1.0, y=0.0, yaw=0.0)
+    t.charge = True
+    assert t._mission().policy.battery_abort_pct == TRIP_ABORT_PCT
+    t.charge = False
+    assert t._mission().policy.battery_abort_pct == 25.0

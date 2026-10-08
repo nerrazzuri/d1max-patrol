@@ -86,6 +86,8 @@ LEVEL_OF: dict[str, Level] = {
     "charge_failed": Level.P1,
     # 狗可能还在充电桩上(W13 外审):出桩、停对桩确认不了,狗上运动锁住了。要人去挪。
     "dock_stuck": Level.P1,
+    # 别的狗在充、这台守到 20% 也去充了(W28,决策 46):这段时间它的区域没狗守。
+    "charge_overlap": Level.P2,
     # 定位变差或打滑(W29,决策 41):狗原地停下等恢复;30 秒还没好再报 loc_lost_paused(P1)。
     "loc_degraded": Level.P2,
     "estop_pressed": Level.P1,

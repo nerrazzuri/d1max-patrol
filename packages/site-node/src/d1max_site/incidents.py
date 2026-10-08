@@ -31,6 +31,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from d1max_contract.charging import LOW_PCT
 from d1max_contract.dispatch import DispatchTimeout
 from d1max_contract.messages import Event, MapPose
 from d1max_site.ca import SAFE_ID
@@ -300,9 +301,10 @@ class IncidentDesk:
 
     def pick_robot(self, point: dict[str, Any]) -> tuple[str | None, str]:
         """→ (robot_id 或 None, 都不能派时的理由)。能派 = 在线、新鲜、就绪、地图对得上、没在跑
-        别的事件任务(同是 80,狗会回 busy);正在跑巡检或回程的可以(会被抢占)。离拦截点最近的优先;
-        没有位姿的排后面;再按 robot_id。"""
-        best: list[tuple[int, float, str]] = []
+        别的事件任务(同是 80,狗会回 busy);正在跑巡检或回程的可以(会被抢占)。定位不行的
+        ``dispatchable`` 已经挡掉了(就绪里有定位)。电量 ≤ 30% 的排最后(W28,决策 46:只有它能去时照派,
+        入侵优先);再离拦截点最近的优先;没有位姿的排后面;再按 robot_id。"""
+        best: list[tuple[bool, int, float, str]] = []
         why = []
         for r in self.dispatcher.registry.list():
             rid = r.robot_id
@@ -334,13 +336,14 @@ class IncidentDesk:
                 why.append(reason)
                 continue
             pose = c.telemetry.pose if c.telemetry is not None else None
+            low = c.telemetry is not None and c.telemetry.battery_pct <= LOW_PCT
             if pose is not None and pose.map_id == point["map_id"]:
-                best.append((0, math.hypot(pose.x - point["x"], pose.y - point["y"]), rid))
+                best.append((low, 0, math.hypot(pose.x - point["x"], pose.y - point["y"]), rid))
             else:
-                best.append((1, 0.0, rid))
+                best.append((low, 1, 0.0, rid))
         if not best:
             return None, ";".join(why) or "没有登记的狗"
-        return sorted(best)[0][2], ""
+        return sorted(best)[0][3], ""
 
     def _open_incident_robots(self) -> set[str]:
         rows = self.db.query(
