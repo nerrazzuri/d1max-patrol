@@ -127,6 +127,31 @@ def test_守卫_停车距离按实测速度_原地转按外接圆_不动就放�
     assert g.reach(0.6) == pytest.approx(0.6 * 0.2 + 0.36 + 0.3)
 
 
+def _现场视野(size=80, res=0.1, occ=()):
+    """照 C40221 实测(obs-3f4):前后各一个往外变宽的视野锥,两侧看不见。"""
+    c = [(i - size / 2 + 0.5) * res for i in range(size)]
+    known = [(r, k) for r in range(size) for k in range(size)
+             if (abs(c[r]) > 0.465 and abs(c[k]) <= 0.6 + 0.9 * (abs(c[r]) - 0.465))]
+    return _grid(cells_occ=occ, cells_known=known, size=size, res=res)
+
+
+def test_W34_现场视野_直行起得了步_转向扫进两侧盲带_前面真有挡照样拦():
+    g = ObstacleGuard()
+    v = ObstacleView(monotonic=lambda: 0.0)
+    v.note_odom(0, 0, 0)
+    v.on_grid(_现场视野())
+    assert g.check(0.3, 0.0, 0.3, v, (0, 0, 0)).ok, "直行:扫过区都在前面看得见的锥里"
+    turn = g.check(0.0, 0.4, 0.0, v, (0, 0, 0))
+    assert not turn.ok and not turn.hits and turn.unknown > 100, "原地转:机身角甩进盲带"
+    arc = g.check(0.3, 0.3, 0.3, v, (0, 0, 0))
+    assert not arc.ok and not arc.hits and arc.unknown, "弧线也是"
+    blocked = ObstacleView(monotonic=lambda: 0.0)
+    blocked.note_odom(0, 0, 0)
+    blocked.on_grid(_现场视野(occ=[(46, k) for k in range(37, 43)]))    # 正前 0.65 m 一排
+    hit = g.check(0.3, 0.0, 0.3, blocked, (0, 0, 0))
+    assert not hit.ok and hit.hits, "身外真有挡:照拦"
+
+
 def test_守卫_看不见当挡_机身底下不查_数据不新鲜当挡():
     g = ObstacleGuard()
     n = 40
@@ -155,7 +180,8 @@ def test_守卫_看不见当挡_机身底下不查_数据不新鲜当挡():
 
 class 台子:
     def __init__(self, tmp_path, *, walls=(), rear=True, guard=True, latency=0.0, gait=0.0,
-                 decel=math.inf, clearance=False, max_vx=0.6, rear_cal=None, head="head"):
+                 decel=math.inf, clearance=False, max_vx=0.6, rear_cal=None, head="head",
+                 cone=False):
         self.c = 钟()
         self.world = 世界(walls=walls)
         self.world.地图(tmp_path)
@@ -169,7 +195,7 @@ class 台子:
         self.view = ObstacleView(monotonic=self.c.s)
         self.nav.obstacles = self.view
         self.nav.guard = ObstacleGuard() if guard else _放行()
-        self.per = 假感知(self.world, rear=rear, rear_cal=rear_cal)
+        self.per = 假感知(self.world, rear=rear, rear_cal=rear_cal, cone=cone)
         self.events: list = []
         self.nav.on_event = lambda k, d: self.events.append((k, d))
         self.status: list = []
@@ -364,6 +390,47 @@ async def test_要掉头_身后看不见就不转_后雷达开着先往前挪再
             break
     assert NavStatus.SUCCEED in seeing.status and not seeing.crashed
     assert max(xs) > 5.8, "先往前挪了一个机身长,再转"
+
+
+async def test_W34_现场视野_起步是弧线_只被两侧看不见挡住_先直着挪再走到(tmp_path):
+    """2026-10-08 C40221:前后雷达都标过,连直行 1.6 m 都起不了步 —— 起步那条命令带转向,机身角
+    甩进两侧盲带(约 150 格看不见)。以前只有纯原地转才「先往前挪」,弧线被挡就原地等到放弃。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(3.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(5.0, 4.6))               # 斜前方:起步是弧线
+    for _ in range(600):
+        await t.一拍()
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    assert NavStatus.SUCCEED in t.status and not t.crashed, (t.status, t.nav.fail_reason)
+
+
+async def test_W34_现场视野_弧线被挡_前面真有东西_不挪照停(tmp_path):
+    """身外真有挡(正前方看得见的那块里):不往前挪,原地等、到时候放弃,不撞。"""
+    t = 台子(tmp_path, rear=True, cone=True, walls=[(3.85, 3.7, 3.95, 4.3)])
+    await t.start(3.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(5.0, 4.6))
+    await t.跑(40.0)
+    assert not t.crashed and t.r.x < 3.0 + 0.1, "前面挡着:不挪"
+    assert not t.nav._crept
+
+
+async def test_W34_转向被挡_有实打实的挡就不往前挪_只有看不见才挪(tmp_path):
+    """挡住转向的是看得见的东西(在转身扫过的那一圈里),不是盲带:往前挪解决不了,照旧记临时障碍、绕。"""
+    from d1max_agent.obstacles import Verdict
+    for hits, crept in (((( -0.52, 0.05),), False), ((), True)):
+        t = 台子(tmp_path, rear=True, cone=True)
+        await t.start(3.0, 4.0, yaw=0.0)
+        await t.nav.goto(Pose.from_xy_yaw(1.0, 4.0))
+        await t.跑(0.5)
+        from types import SimpleNamespace
+        here = SimpleNamespace(x=t.r.x, y=t.r.y, yaw=t.r.yaw)
+        v = Verdict(False, "扫过区有挡", hits=hits, unknown=50)
+        for _ in range(30):                                  # 3 s:过了「先等一会儿再绕」
+            t.c.ms += 100
+            t._feed()                                        # 感知照常来(正前方看得清是空的)
+            await t.nav._blocked(v, here, 0.1, 0.0, 0.4)
+        assert t.nav._crept is crept, hits
 
 
 async def test_往前挪_前面是禁行区或墙就不挪_对朝向的时候不挪(tmp_path):

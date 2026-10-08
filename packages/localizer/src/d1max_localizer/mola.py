@@ -24,10 +24,11 @@ from mola_msgs.srv import RelocalizeNearPose
 from nav_msgs.msg import Odometry
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.serialization import deserialize_message
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Float32
 
-from d1max_localizer.backend import Pairer
+from d1max_localizer.backend import Pairer, valid_points
 from d1max_localizer.core import Estimate
 
 POSE_TOPIC = "/lidar_odometry/pose"
@@ -36,6 +37,8 @@ RELOC_SERVICE = "/relocalize_near_pose"
 RELOC_TIMEOUT_S = 0.7
 #: 重定位初值的姿态不确定度(弧度)。
 RELOC_SIGMA_RAD = 0.3
+#: 每隔几帧数一次有效点(反序列化 2.7 MB 的点云不便宜;10 Hz 的雷达 2 Hz 数一次够判挡住)。
+COUNT_EVERY = 5
 
 
 class MolaRos:
@@ -50,13 +53,24 @@ class MolaRos:
                                  history=HistoryPolicy.KEEP_LAST)
         self.node.create_subscription(Odometry, POSE_TOPIC, self._on_pose, 10)
         self.node.create_subscription(Float32, QUALITY_TOPIC, self._on_quality, 10)
-        self.node.create_subscription(PointCloud2, lidar_topic,
-                                      lambda _raw: loop.call_soon_threadsafe(on_scan),
-                                      best_effort, raw=True)
+        self._on_scan, self._n_scans = on_scan, 0
+        self.node.create_subscription(PointCloud2, lidar_topic, self._scan, best_effort,
+                                      raw=True)
         self._reloc = self.node.create_client(RelocalizeNearPose, RELOC_SERVICE)
         self._exec = SingleThreadedExecutor()
         self._exec.add_node(self.node)
         self._thread = threading.Thread(target=self._spin, name="rclpy", daemon=True)
+
+    def _scan(self, raw: bytes) -> None:
+        """每帧都告诉核心「点云在来」;每 :data:`COUNT_EVERY` 帧数一次有效点(雷达被挡,W34)。"""
+        self._n_scans += 1
+        valid = None
+        if self._n_scans % COUNT_EVERY == 0:
+            try:
+                valid = valid_points(deserialize_message(raw, PointCloud2))
+            except Exception:  # noqa: BLE001 - 数不了这一帧:当没数,不挡「点云在来」
+                valid = None
+        self._loop.call_soon_threadsafe(self._on_scan, valid)
 
     def start(self) -> None:
         self._thread.start()

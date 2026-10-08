@@ -151,10 +151,12 @@ def test_域是可配的(procs, cfg, tmp_path):
     assert other.spec_for_build(tmp_path / "b", "m1").env["ROS_DOMAIN_ID"] == "77"
 
 
-def test_录包录的是那五个话题(orch, tmp_path):
+def test_录包录的话题_前后雷达和两台的IMU都录(orch, tmp_path):
     line = _argv([orch.spec_for_record(tmp_path / "b")], "bagrecord")
     for topic in RECORD_TOPICS:
         assert topic in line
+    for topic in ("/rear_lidar", "/front_lidar/imu", "/rear_lidar/imu"):
+        assert topic in RECORD_TOPICS, "W34:后雷达不录就标不了、建不了双雷达图"
     assert "-s mcap" in line, "mcap 是文档定的格式,换了格式回放的工具就对不上"
 
 
