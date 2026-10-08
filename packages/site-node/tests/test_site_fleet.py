@@ -157,3 +157,19 @@ def test_去桩那一趟的中止线在守的线下面():
     from d1max_contract.charging import LOW_PCT
     assert TRIP_ABORT_PCT < FLOOR_PCT < LOW_PCT
 
+
+
+async def test_外审_报过P2_保安处理了_站点重启_同一回低电不再报(台):
+    t = 台
+    t.d.pct("A", 25.0)
+    await t.desk.tick()
+    t.d.pct("B", 19.0)
+    t.d.reject = True
+    await t.desk.tick()
+    assert len(t.desk.alerts.raised) == 1
+    t.desk = ChargeDesk(t.db, t.d, now_ms=lambda: t.ms[0])    # 站点重启
+    t.desk.alerts = 假告警台()                                  # 那一条保安处理掉了
+    t.ms[0] += 31_000
+    t.d.reject = False
+    await t.desk.tick()
+    assert _去充的(t) == ["A", "B", "B"] and t.desk.alerts.raised == []
