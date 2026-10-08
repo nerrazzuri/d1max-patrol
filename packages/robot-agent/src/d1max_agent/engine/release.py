@@ -103,6 +103,19 @@ _PACK_SKIP_DIRS = frozenset({"__pycache__", ".git", ".venv", "venv",
                              "tests"})    # packages/*/tests 狗上跑不了,别占包体
 #: 按后缀筛,目录和文件都走这一条(``.egg-info`` 筛的是目录名)。
 _PACK_SKIP_SUFFIXES = (".pyc", ".pyo", ".tmp", ".egg-info")
+#: setuptools 在**项目根**(放 ``pyproject.toml`` 的那一层)旁边写的构建产物。开发机上非 -e 地
+#: ``pip install packages/<包>`` 一次就会留下 ``packages/<包>/build/lib/``,里面是**那一刻**的源码;
+#: 进了包,狗上 install.sh 建 venv 时 setuptools 会接着用它,装进去的是旧代码(2026-10-08 装 C40221:
+#: 包里源码有新参数,装好的代理却不认,升级被开机守卫退回)。只认项目根下这一层 —— 源码里叫
+#: ``build`` 的模块(``d1max_localizer.build``)照收。
+_BUILD_OUTPUTS = frozenset({"build", "dist"})
+
+
+def _build_output(rel: str) -> bool:
+    """包里的相对路径是不是某个项目根(顶层、``packages/<包>/``)下的 ``build/``、``dist/``。"""
+    parts = rel.split("/")
+    return parts[0] in _BUILD_OUTPUTS or (
+        len(parts) > 2 and parts[0] == "packages" and parts[2] in _BUILD_OUTPUTS)
 
 #: 从 ``pyproject.toml`` 的 ``[project]`` 段里抠 ``version``。
 _PROJECT_VERSION_RE = re.compile(r"^\s*version\s*=\s*[\"']([^\"']+)[\"']",
@@ -244,8 +257,8 @@ def verify_package(where: Path | str) -> ReleaseManifest:
 
 def _packed(rel: str) -> bool:
     """这个相对路径打包时收不收(``_PACK_SKIP_DIRS``/``_PACK_SKIP_SUFFIXES``)。"""
-    return not any(part in _PACK_SKIP_DIRS or part.endswith(_PACK_SKIP_SUFFIXES)
-                   for part in rel.split("/"))
+    return not _build_output(rel) and not any(
+        part in _PACK_SKIP_DIRS or part.endswith(_PACK_SKIP_SUFFIXES) for part in rel.split("/"))
 
 
 def verify_slot(layout: Layout, name: str) -> ReleaseManifest:
@@ -312,10 +325,12 @@ def _git_short(src: Path) -> str:
     return done.stdout.strip().lower()
 
 
-def _pack_ignore(_where: str, names: list[str]) -> set[str]:
-    """``shutil.copytree`` 的筛子。筛掉的理由见 ``_PACK_SKIP_DIRS``。"""
+def _pack_ignore(where: str, names: list[str]) -> set[str]:
+    """``shutil.copytree`` 的筛子。筛掉的理由见 ``_PACK_SKIP_DIRS``、``_BUILD_OUTPUTS``。"""
+    project_root = (Path(where) / "pyproject.toml").is_file()
     return {n for n in names
-            if n in _PACK_SKIP_DIRS or n.endswith(_PACK_SKIP_SUFFIXES)}
+            if n in _PACK_SKIP_DIRS or n.endswith(_PACK_SKIP_SUFFIXES)
+            or (project_root and n in _BUILD_OUTPUTS)}
 
 
 def _check_free(dest: Path, *, force: bool) -> None:

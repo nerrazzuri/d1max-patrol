@@ -213,6 +213,32 @@ def test_服务要的那份建图参数在包里(tmp_path, 无git):
     assert (dest / "src" / "d1max_patrol" / "__init__.py").is_file()
 
 
+def test_各包的构建产物不进包_叫build的源码模块照收(tmp_path, 无git):
+    """2026-10-08 装 C40221:开发机上非 -e 装过一次,``packages/<包>/build/lib/`` 里留着那一刻的源码,
+    进了包,狗上 setuptools 接着用它,装进去的是旧代码 —— 新参数不认,升级被开机守卫退回。"""
+    树 = _源码树(tmp_path / "树")
+    for 包 in ("contract", "robot-agent"):
+        for 产物 in ("build/lib/d1max_x/__init__.py", "dist/x-0.1.0.whl"):
+            p = 树 / "packages" / 包 / 产物
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("旧的\n", encoding="utf-8")
+    模块 = 树 / "packages" / "contract" / "src" / "d1max_contract" / "build" / "__init__.py"
+    模块.parent.mkdir(parents=True)
+    模块.write_text("# 真源码\n", encoding="utf-8")
+    dest = pack(树, tmp_path / "出", now_ms=NOW_MS)
+    for 包 in ("contract", "robot-agent"):
+        assert not (dest / "packages" / 包 / "build").exists()
+        assert not (dest / "packages" / 包 / "dist").exists()
+    assert (dest / "packages" / "contract" / "src" / "d1max_contract" / "build" /
+            "__init__.py").is_file()
+    # 装好之后槽里长出构建产物(有人在槽里构建过),核槽时照样不算进来,跟打包时的规矩一致
+    assert verify_package(dest).content_sha256 == read_manifest(dest).content_sha256
+    (dest / "packages" / "contract" / "build").mkdir()
+    (dest / "packages" / "contract" / "build" / "x.py").write_text("", encoding="utf-8")
+    assert release._packed("packages/contract/build/x.py") is False
+    assert release._packed("packages/contract/src/d1max_contract/build/__init__.py") is True
+
+
 def test_该排掉的东西一个都没进包(tmp_path, 无git):
     """漏排一个 ``refs/`` 就是把厂商私有资料装进了客户的机器,而且没人会发现。"""
     dest = pack(_源码树(tmp_path / "树"), tmp_path / "出", now_ms=NOW_MS)
