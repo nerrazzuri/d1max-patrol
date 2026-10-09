@@ -74,37 +74,49 @@ class Stored:
 
     size: int
     sha256: str
+    #: 这份证据删过了:一个字节都没收,回执叫狗当传完(PR #87 复查 R3)。
+    discarded: bool = False
 
 
 #: 一个文件最大多少字节(录包最大;照片、事件远小于它)。超了永远不收。
 MAX_FILE_BYTES = 8 * 1024 ** 3
-#: 删了的证据记多久(系统审查 S07):狗的发件箱断网攒的不会比这更久。
-PURGE_KEEP_DAYS = 180
-
-
 def is_purged(db: Any, kind: str, robot_id: str, key: str) -> bool:
     """这份证据删过没有(``kind``:``run`` 一趟、``rec`` 一段录像;``key``:``<任务>/<时刻>``、
-    ``<相机>/<时刻>``)。删过的再传上来不许复活(系统审查 S07)。"""
+    ``<相机>/<时刻>``)。删过的再传上来不许复活(系统审查 S07)。**记号永久保留**(PR #87 复查 R2:
+    狗的发件箱没有最长保留期,长期断网、恢复旧发件箱都可能在很久以后再传)。"""
     return bool(db.query("SELECT 1 FROM purged WHERE kind=? AND robot_id=? AND key=?",
                          (kind, robot_id, key)))
 
 
 def mark_purged(tx: Any, kind: str, robot_id: str, key: str, now_ms: int) -> None:
-    """在删的那个事务里记「删过了」。"""
-    tx.execute("INSERT OR REPLACE INTO purged(kind, robot_id, key, purged_ms) VALUES (?,?,?,?)",
+    """记「删过了」。**删文件之前**就在这里落库(PR #87 复查 R1):之后的上传一律不收。"""
+    tx.execute("INSERT OR IGNORE INTO purged(kind, robot_id, key, purged_ms) VALUES (?,?,?,?)",
                (kind, robot_id, key, now_ms))
 
 
-def swallow(writer: ChunkWriter, root: Path, robot_id: str, key: str, rel: str, *,
-            offset: int, data: bytes, total: int) -> Stored:
-    """删过的证据又传上来(回执丢了、断网攒着的、跟删除交错的):照常收下、照常回执(狗认了就删掉自己
-    那份,不会无限重试),收在证据库外的 ``root`` 里,收齐了就删,不登记(系统审查 S07)。"""
-    path = safe_join(root, robot_id, *key.split("/"), rel)
-    got = writer.write(path, offset=offset, data=data, total=total)
-    if got.size >= total:
-        path.unlink(missing_ok=True)
-        log.info("%s 的 %s/%s 删过了:又传上来的这份收下就扔", robot_id, key, rel)
-    return got
+#: 删过的又传上来时的回执(PR #87 复查 R3):一个字节都不收、不暂存,叫狗当传完。
+DISCARDED = Stored(size=0, sha256="", discarded=True)
+
+
+class IdentityLocks:
+    """同一份证据(``kind``、狗、``key``)的收、登记、删互斥(PR #87 复查 R1):删的时候不会有一块
+    正好写进去,写的时候不会被删掉一半。"""
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._locks: dict[tuple[str, str, str], threading.Lock] = {}
+
+    def __call__(self, kind: str, robot_id: str, key: str) -> threading.Lock:
+        with self._guard:
+            return self._locks.setdefault((kind, robot_id, key), threading.Lock())
+
+
+def drop_old_incoming(root: Path) -> None:
+    """以前的版本把删过又传上来的半截收在 ``<库>-purged-incoming``:起来时整个删掉(R3)。"""
+    old = root.parent / (root.name + "-purged-incoming")
+    if old.exists():
+        shutil.rmtree(old, ignore_errors=True)
+        log.info("删了以前暂存的已删证据半截:%s", old)
 #: 站点盘剩这么多就不再收(先让狗等着 —— 库也在这块盘上,写满了整个站点都停)。
 MIN_FREE_BYTES = 2 * 1024 ** 3
 MIN_FREE_RATIO = 0.02
@@ -208,8 +220,9 @@ class EvidenceStore:
         self.db = db
         self._now = now_ms
         self.writer = ChunkWriter()
-        #: 删过的证据又传上来时临时收在这里(证据库外,不进备份),收齐就删(系统审查 S07)。
-        self.purged_root = self.root.parent / (self.root.name + "-purged-incoming")
+        #: 同一趟的收、删互斥(PR #87 复查 R1)。
+        self.locks = IdentityLocks()
+        drop_old_incoming(self.root)
         #: 收完一趟里一个文件之后调(判读排队用)。
         self.on_file: list[Callable[[int, str], None]] = []
         #: 证据私钥(W30b):狗封好的照片收齐了用它解开。没配是 ``None``(封好的留着、报 P2)。
@@ -230,9 +243,14 @@ class EvidenceStore:
         if not dog_may_upload(rel):
             raise PathRefused(f"站点不收这种文件:{rel!r}")
         mission, stamp = parts
-        if is_purged(self.db, "run", robot_id, f"{mission}/{stamp}"):
-            return swallow(self.writer, self.purged_root, robot_id, f"{mission}/{stamp}", rel,
-                           offset=offset, data=data, total=total)
+        with self.locks("run", robot_id, f"{mission}/{stamp}"):
+            if is_purged(self.db, "run", robot_id, f"{mission}/{stamp}"):
+                return DISCARDED                          # 删过了:不收、叫狗当传完
+            return self._put(robot_id, run, mission, stamp, rel, offset=offset, data=data,
+                             total=total)
+
+    def _put(self, robot_id: str, run: str, mission: str, stamp: str, rel: str, *, offset: int,
+             data: bytes, total: int) -> Stored:
         path = safe_join(self.root, robot_id, mission, stamp, rel)
         got = self.writer.write(path, offset=offset, data=data, total=total)
         if got.size >= total:
