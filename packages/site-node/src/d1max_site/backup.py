@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -40,13 +41,19 @@ EVERY_S = 3600
 KEEP_DB = 7
 #: 上次成功超过这么久算备份过期(毫秒)。
 STALE_MS = 25 * 3600 * 1000
+#: 多久自动抽查一次备份能不能用(A2)、抽几个文件核 MAC。
+VERIFY_EVERY_MS = 7 * 86_400_000
+VERIFY_SAMPLE = 200
 
 
 class SiteBackup:
     def __init__(self, db, evidence_root: Path, dest: Path | None, *,
                  now_ms: Callable[[], int], alerts: Any = None,
-                 more: dict[str, Path] | None = None, box: Any = None) -> None:
+                 more: dict[str, Path] | None = None, box: Any = None,
+                 files: dict[str, Path] | None = None) -> None:
         self.db = db
+        #: 站点身份的单个文件(A2:``site.json``):每次备份进 ``<备份目录>/config/``。
+        self.files = {k: Path(v) for k, v in (files or {}).items()}
         #: 备份密钥(``sealbox.SealBox``);``None`` = 明文备份。
         self.box = box
         self.evidence_root = Path(evidence_root)
@@ -78,10 +85,18 @@ class SiteBackup:
             c.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, str(value)))
 
     def status(self) -> dict[str, Any]:
-        return {"configured": self.dest is not None,
-                "dest": str(self.dest) if self.dest is not None else "",
-                "last_ok_ms": self.last_ok_ms, "error": self.last_error,
-                "stale": self.stale()}
+        out = {"configured": self.dest is not None,
+               "dest": str(self.dest) if self.dest is not None else "",
+               "last_ok_ms": self.last_ok_ms, "error": self.last_error,
+               "stale": self.stale(), "encrypted": self.box is not None}
+        for k in ("backup_verify", "backup_drill"):           # A2:上次校验、演练的结果
+            rows = self.db.query("SELECT value FROM meta WHERE key=?", (k,))
+            if rows:
+                try:
+                    out[k.split("_")[1]] = json.loads(rows[0]["value"])
+                except ValueError:
+                    pass
+        return out
 
     def stale(self) -> bool:
         if self.dest is None:
@@ -125,6 +140,7 @@ class SiteBackup:
                 kept = sorted(dbdir.glob("site-*.db"))
             for old in kept[:-KEEP_DB]:
                 old.unlink(missing_ok=True)
+            self._config()
             self._mirror()
         except (OSError, sqlite3.Error, SealError) as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
@@ -136,6 +152,46 @@ class SiteBackup:
         self._meta_set("backup_last_ok_ms", self.last_ok_ms)
         self.last_error = ""
         return True
+
+    def _config(self) -> None:
+        """站点身份的单个文件(``site.json``)进 ``config/``(A2)。CA 目录走镜像(主程序 ``more``)。"""
+        assert self.dest is not None
+        out = self.dest / "config"
+        out.mkdir(parents=True, exist_ok=True)
+        for name, src in self.files.items():
+            if not src.is_file():
+                continue
+            if self.box is not None:
+                self.box.seal_file(src, out / (name + SEALED))
+                (out / name).unlink(missing_ok=True)
+            else:
+                tmp = out / f".{name}.tmp"
+                shutil.copy2(src, tmp)
+                os.replace(tmp, out / name)
+
+    def verify_step(self, key: Path | None) -> dict[str, Any] | None:
+        """每周抽查一次备份能不能用(A2):库快照完整、身份齐、每一趟都在、抽 ``VERIFY_SAMPLE`` 个文件
+        核 MAC。没过报 P2 ``backup_verify_failed``,过了自动解决。结果记库(值守汇总看)。全量校验用
+        ``d1max-site backup-verify``。"""
+        if self.dest is None or self.last_ok_ms is None:
+            return None
+        last = self._meta_int("backup_verify_ms") or 0
+        if self._now() - last < VERIFY_EVERY_MS:
+            return None
+        from d1max_site.restore import verify
+        rep = verify(self.dest, key, sample=VERIFY_SAMPLE).to_dict()
+        self._meta_set("backup_verify_ms", self._now())
+        with self.db.tx() as c:
+            c.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)",
+                      ("backup_verify", json.dumps(rep, ensure_ascii=False)))
+        if self.alerts is not None:
+            if not rep["ok"]:
+                self.alerts.raise_alert(kind="backup_verify_failed", robot=SITE,
+                                        title="站点备份校验没过:出了事可能恢复不了",
+                                        detail=";".join(rep["problems"])[:300])
+            else:
+                self.alerts.resolve_all(SITE, "backup_verify_failed", who="site:backup_verify")
+        return rep
 
     def _mirror(self) -> None:
         assert self.dest is not None

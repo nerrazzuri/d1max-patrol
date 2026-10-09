@@ -328,6 +328,35 @@ def cmd_privacy_purge(home: Path, since: str, until: str, robot: str | None,
         db.close()
 
 
+def backup_dirs(home: Path, *, encrypted: bool) -> dict[str, Path]:
+    """要镜像进备份的目录。A2:站点身份(CA 私钥、站点服务证书、broker 配置)也进 —— **只进加密的
+    备份**(明文备份盘被拿走,CA 私钥就丢了)。"""
+    out = {"maps": home / "maps", "bags": home / "bags", "releases": home / "releases"}
+    if encrypted:
+        out |= {"ca": home / "ca", "broker": home / "broker"}
+    return out
+
+
+def cmd_backup_drill(home: Path, key: str | None) -> dict:
+    """灾备演练(A2):用站点配的备份目录、备份密钥,恢复到临时目录、校验、对数,结果记库。"""
+    from d1max_site.restore import drill
+    from d1max_site.sealbox import DEFAULT_KEYS
+    cfg = _load(home)
+    dest = cfg.get("backup_dir")
+    if not dest:
+        raise SiteError("site.json 没配 backup_dir:没有备份,演练不了")
+    k = Path(key or cfg.get("backup_key") or DEFAULT_KEYS["backup"])
+    got = drill(home / "site.db", Path(dest), k if k.is_file() else None, now_ms=wall_ms)
+    db = SiteDB(home / "site.db")
+    try:
+        with db.tx() as c:
+            c.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)",
+                      ("backup_drill", json.dumps(got, ensure_ascii=False)))
+    finally:
+        db.close()
+    return got
+
+
 def cmd_backup_open(src: Path, dst: Path, key: Path) -> int:
     """把加密的备份目录解开到另一个目录(W30;恢复用)。回解开了几个文件。"""
     from d1max_site.backup import SEALED
@@ -609,13 +638,18 @@ class Server:
         loop_alerts = LoopAlerts(self.alerts, self.loop)
         self.runs = RunDesk(self.evidence, home=home, now_ms=wall_ms, alerts=loop_alerts)
         backup_dir = cfg.get("backup_dir")
-        from d1max_site.sealbox import site_box
+        from d1max_site.sealbox import DEFAULT_KEYS, site_box
+        bbox = site_box(cfg, "backup") if backup_dir else None
+        more = backup_dirs(home, encrypted=bbox is not None)
+        if bbox is None and backup_dir:
+            log.error("备份没加密:CA 私钥不进备份,站点主机坏了狗要全部重登记"
+                      "(装机脚本会生成备份密钥)")
         self.backup = SiteBackup(self.db, self.evidence.root,
                                  Path(backup_dir) if backup_dir else None, now_ms=wall_ms,
-                                 alerts=loop_alerts,
-                                 more={"maps": home / "maps", "bags": home / "bags",
-                                       "releases": home / "releases"},
-                                 box=site_box(cfg, "backup") if backup_dir else None)
+                                 alerts=loop_alerts, more=more, box=bbox,
+                                 files={"site.json": home / "site.json"})
+        self._backup_key = Path(cfg.get("backup_key") or DEFAULT_KEYS["backup"]) \
+            if bbox is not None else None
         icfg = cfg.get("intake", {})
         self.intake = IntakeServer(
             host=icfg.get("host", "0.0.0.0"), port=int(icfg.get("port", DEFAULT_PORT)),
@@ -721,6 +755,7 @@ class Server:
         每拍看一眼备份到点没有。一拍炸了记下来、下一拍照走。"""
         while not self._stop.wait(CHORE_PERIOD_S):
             for what, fn in (("自动判读", self.runs.step), ("备份", self.backup.step),
+                             ("备份抽查", lambda: self.backup.verify_step(self._backup_key)),
                              ("录像留存", self._prune_recordings),
                              ("摄像头", self.cctv.sync),
                              ("拦截点对账", self.incidents.recheck_intercepts)):
@@ -964,6 +999,15 @@ def build_parser() -> argparse.ArgumentParser:
     bo.add_argument("dst", help="解到哪儿(要空目录)")
     bo.add_argument("--key", default="/etc/d1max-site/backup.key",
                     help="备份密钥(装机时离线另存的那一份)")
+    bv = sub.add_parser("backup-verify", help="校验备份能不能恢复(A2):库、身份、每一趟、每个文件")
+    bv.add_argument("dest", help="备份目录")
+    bv.add_argument("--key", default="/etc/d1max-site/backup.key", help="备份密钥")
+    bv.add_argument("--sample", type=int, default=None, help="只抽这么多个文件核 MAC(缺省全核)")
+    rs = sub.add_parser("restore", help="把备份恢复成站点目录(A2;--home 要是空目录)")
+    rs.add_argument("dest", help="备份目录")
+    rs.add_argument("--key", default="/etc/d1max-site/backup.key", help="备份密钥")
+    bd = sub.add_parser("backup-drill", help="灾备演练(A2):恢复到临时目录、校验、对数、删掉")
+    bd.add_argument("--key", default=None, help="备份密钥(缺省按 site.json / /etc/d1max-site)")
     so = sub.add_parser("source-add", help="登记事件源,打印共享密钥")
     so.add_argument("name")
     sr = sub.add_parser("source-rotate", help="换事件源的共享密钥(旧的当场作废),打印新的")
@@ -1066,6 +1110,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"解开了 {ok} 个,还解不开 {bad} 个")
             if bad:
                 return 1
+        elif args.cmd == "backup-verify":
+            from d1max_site.restore import verify
+            r = verify(Path(args.dest), Path(args.key) if Path(args.key).is_file() else None,
+                       sample=args.sample)
+            print(json.dumps(r.to_dict(), ensure_ascii=False, indent=1))
+            return 0 if r.ok else 1
+        elif args.cmd == "restore":
+            from d1max_site.restore import restore
+            from d1max_site.sealbox import SealError
+            try:
+                r = restore(Path(args.dest),
+                            Path(args.key) if Path(args.key).is_file() else None, home)
+            except SealError as exc:
+                raise SiteError(str(exc)) from exc
+            print(json.dumps(r.to_dict(), ensure_ascii=False, indent=1))
+            print(f"恢复到 {home}。还要:把离线另存的 secrets.key、evidence.key 放回 "
+                  "/etc/d1max-site/;起服务;手机上核一下站点证书指纹(d1max-site fingerprint)"
+                  "跟原来一样")
+            return 0 if r.ok else 1
+        elif args.cmd == "backup-drill":
+            r = cmd_backup_drill(home, args.key)
+            print(json.dumps(r, ensure_ascii=False, indent=1))
+            return 0 if r["ok"] else 1
         elif args.cmd == "backup-open":
             n = cmd_backup_open(Path(args.src), Path(args.dst), Path(args.key))
             print(f"解开了 {n} 个文件 → {args.dst}")

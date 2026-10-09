@@ -196,7 +196,7 @@ def test_备份过期出一条告警_没配就明说(台, tmp_path):
     assert [a["kind"] for a in alerts.got] == ["backup_stale"]
     none = SiteBackup(store.db, store.root, None, now_ms=c)
     assert none.status() == {"configured": False, "dest": "", "last_ok_ms": None, "error": "",
-                             "stale": False}
+                             "stale": False, "encrypted": False}
 
 
 def test_还在传的照片不判读_更不当基线(台):
