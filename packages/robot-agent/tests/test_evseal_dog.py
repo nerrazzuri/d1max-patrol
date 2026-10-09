@@ -131,21 +131,16 @@ def test_外审1_封不上的段也算配额_攒多了从最旧的删_报一次(
     assert sorted(r.seal_failed) == [f"front/20261009T01{m:02d}00Z" for m in (2, 3, 4)]
 
 
-def test_外审1_代理_有证据封不上报一次_件数变了不重报_都封上了报好了():
+def test_复查_代理_遥测的盘况带封不上的件数_没配加密不带():
     from types import SimpleNamespace
 
     from d1max_agent.runtime import AgentRuntime
-    got = []
     n = [(2, "openssl 坏了")]
     rt = SimpleNamespace(_unsealed=lambda: n[0], _unsealed_told=0,
-                         recorder=SimpleNamespace(seal_failed={"front/x": "坏了"}),
-                         events=SimpleNamespace(emit=lambda k, d: got.append((k, d))))
-    AgentRuntime._watch_sealing(rt)
-    AgentRuntime._watch_sealing(rt)
-    n[0] = (5, "openssl 坏了")
-    AgentRuntime._watch_sealing(rt)
-    assert got == [("evidence_seal_failed", {"count": 3, "reason": "openssl 坏了"})]
+                         recorder=SimpleNamespace(seal_failed={"front/x": "坏了"}))
+    assert AgentRuntime._unsealed_now(rt) == 3
     n[0] = (0, "")
     rt.recorder.seal_failed = {}
-    AgentRuntime._watch_sealing(rt)
-    assert got[-1] == ("evidence_seal_ok", {}) and len(got) == 2
+    assert AgentRuntime._unsealed_now(rt) == 0, "都封好了报 0(站点据此解决告警)"
+    rt._unsealed = None
+    assert AgentRuntime._unsealed_now(rt) is None

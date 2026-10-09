@@ -565,6 +565,16 @@ async def test_盘况每10秒随遥测带一次_满了不接巡检(tmp_path):
                               backlog_files=1, backlog_bytes=10, oldest_backlog_s=3)
     assert rt.processor.admit_hook(type("C", (), {"kind": "patrol"})()) == "storage_full"
     assert rt.processor.admit_hook(type("C", (), {"kind": "goto"})()) == ""
+    assert with_storage[0].storage.unsealed is None, "没配证据加密:不报封不上的件数"
+    rt._unsealed = lambda: (2, "openssl 坏了")            # W30b 复查:配了加密,盘况带当前件数
+    ears.by_topic["telemetry"].clear()
+    for _ in range(120):
+        await rt.step(0.1)
+        r.tick(0.1)
+        c.advance(0.1)
+    await broker.drain()
+    got = [Telemetry.from_wire(d).storage for d in ears.by_topic.get("telemetry", [])]
+    assert [st.unsealed for st in got if st is not None][:1] == [2]
     await rt.close()
 
 

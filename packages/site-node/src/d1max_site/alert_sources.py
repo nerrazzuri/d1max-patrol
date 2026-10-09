@@ -359,14 +359,6 @@ class SiteAlertSources:
                                   title="狗上的代理有几个启动参数这一版不认识,跳过了",
                                   detail=f"代理 {d.get('version', '?')} 跳过:{args}"[:300]
                                          + ";多半是退回了老版本,这几项设置没生效")
-        elif e.kind == "evidence_seal_failed":
-            # W30b 外审 1:狗上有照片、录像封不上(openssl 坏了?);扣在狗上不传明文,每分钟重封
-            self.desk.raise_alert(kind="evidence_seal_failed", robot=rid,
-                                  title=f"狗上 {d.get('count', '?')} 个照片、录像封不上,扣着没传",
-                                  detail=f"{str(d.get('reason', ''))[:200]};狗每分钟重封一次,"
-                                         "封上了自动传、这条告警自动解决")
-        elif e.kind == "evidence_seal_ok":
-            self.desk.resolve_all(rid, "evidence_seal_failed", who="site:evidence_seal_ok")
         elif e.kind == "recording_failed":
             # W18:这一路录像断了(相机不通、盘写不进),狗每 10 s 重试;录回来报 recording_ok
             self.desk.raise_alert(kind="recording_failed", robot=rid,

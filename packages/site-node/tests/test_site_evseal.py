@@ -218,20 +218,84 @@ def test_外审1_补封失败_明文扣着不传_这一趟不删_修好了重封
     box.close()
 
 
-def test_外审1_站点_封不上报P2_都封上了自动解决(tmp_path):
-    from d1max_contract.messages import Event
-    from d1max_site.alert_sources import SiteAlertSources
+def _封不上台(tmp_path):
+    from d1max_contract.storage import StorageFacts
     from d1max_site.alert_store import AlertDesk
-    desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: NOW)
-    src = SiteAlertSources(desk, now_ms=lambda: NOW)
+    db = SiteDB(tmp_path / "s.db")
+    desk = AlertDesk(db, now_ms=lambda: NOW)
+    d = SimpleNamespace(clients={}, storage={}, is_stale=lambda rid: False)
+    w = EvidencePlainWatch(db, d, now_ms=lambda: NOW)
+    w.alerts = desk
 
-    def ev(seq, kind, data):
-        return Event(event_id=f"e{seq}", seq=seq, boot_id="b", stamp=NOW, kind=kind, data=data)
-    src.on_event("A", ev(1, "evidence_seal_failed", {"count": 3, "reason": "openssl 坏了"}))
-    [a] = desk.book.open()
-    assert a.kind == "evidence_seal_failed" and "3 个" in a.title and a.level.name == "P2"
-    src.on_event("A", ev(2, "evidence_seal_ok", {}))
-    assert not desk.book.open()
+    def 报(n):
+        d.storage["A"] = (StorageFacts(disk_used_ratio=0.1, outbox_bytes=0, outbox_cap_bytes=1,
+                                       backlog_files=0, backlog_bytes=0, oldest_backlog_s=None,
+                                       unsealed=n), NOW)
+    return w, desk, 报
+
+
+def _开着的(desk):
+    return [a for a in desk.book.open() if a.kind == "evidence_seal_failed"]
+
+
+def test_复查_狗报封不上的件数_站点报P2一次_封好了自动解决_老代理不报(tmp_path):
+    w, desk, 报 = _封不上台(tmp_path)
+    报(None)
+    w.tick()
+    assert not _开着的(desk), "老代理、没配加密:不报"
+    报(3)
+    w.tick()
+    w.tick()
+    [a] = _开着的(desk)
+    assert "3 个" in a.title and a.level.name == "P2"
+    desk.resolve(a.key, who="张三")                       # 人手动解决了:这一回不重报
+    报(4)
+    w.tick()
+    assert not _开着的(desk)
+    报(0)
+    w.tick()
+    报(1)
+    w.tick()
+    assert len(_开着的(desk)) == 1, "封好了又坏了:新的一回,再报"
+    报(0)
+    w.tick()
+    assert not _开着的(desk)
+
+
+def test_复查_报P2失败了_下一拍再报(tmp_path):
+    w, desk, 报 = _封不上台(tmp_path)
+    real = desk.raise_alert
+    desk.raise_alert = lambda **kw: (_ for _ in ()).throw(OSError("库写不进"))
+    报(2)
+    w.tick()
+    assert not _开着的(desk)
+    desk.raise_alert = real
+    w.tick()
+    assert len(_开着的(desk)) == 1, "封不上一直在:报失败了下一拍再报"
+
+
+def test_复查_自动解决失败了_下一拍再解决(tmp_path):
+    w, desk, 报 = _封不上台(tmp_path)
+    报(2)
+    w.tick()
+    real = desk.resolve_all
+    desk.resolve_all = lambda *a, **kw: (_ for _ in ()).throw(OSError("库写不进"))
+    报(0)
+    w.tick()
+    assert len(_开着的(desk)) == 1
+    desk.resolve_all = real
+    w.tick()
+    assert not _开着的(desk), "都封好了:解决失败了下一拍再解决"
+
+
+def test_复查_盘况带封不上的件数_老站点老代理都兼容():
+    from d1max_contract.storage import StorageFacts
+    base = dict(disk_used_ratio=0.1, outbox_bytes=0, outbox_cap_bytes=1, backlog_files=0,
+                backlog_bytes=0, oldest_backlog_s=None)
+    assert "unsealed" not in StorageFacts(**base).to_wire(), "没配加密:线上跟老的一样"
+    w = StorageFacts(**base, unsealed=3).to_wire()
+    assert StorageFacts.from_wire(w).unsealed == 3
+    assert StorageFacts.from_wire(StorageFacts(**base).to_wire()).unsealed is None
 
 
 def test_外审2_照片解开了登记失败_封好的留着_补解能登记(站点, ca, tmp_path, 钥匙, monkeypatch):
