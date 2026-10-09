@@ -119,6 +119,26 @@ class SealBox:
         finally:
             body.unlink(missing_ok=True)
 
+    def verify_file(self, src: Path) -> None:
+        """只核 MAC、不解密、不落盘(备份校验用,A2)。对不上抛 :class:`SealError`。"""
+        size = src.stat().st_size
+        if size < len(FILE_MAGIC) + _TAG:
+            raise SealError(f"{src.name} 太短,不是加密备份")
+        mac = hmac.new(self._mac, FILE_MAGIC, hashlib.sha256)
+        with open(src, "rb") as f:
+            if f.read(len(FILE_MAGIC)) != FILE_MAGIC:
+                raise SealError(f"{src.name} 不是加密备份")
+            left = size - len(FILE_MAGIC) - _TAG
+            while left:
+                chunk = f.read(min(_CHUNK, left))
+                if not chunk:
+                    raise SealError(f"{src.name} 读不全")
+                mac.update(chunk)
+                left -= len(chunk)
+            tag = f.read(_TAG)
+        if not hmac.compare_digest(tag, mac.digest()):
+            raise SealError(f"{src.name} 对不上(密钥不对,或者被改过)")
+
     def open_file(self, src: Path, dst: Path) -> None:
         """解密 ``src`` 写到 ``dst``。先核 MAC,对不上一个字节都不写。"""
         size = src.stat().st_size
