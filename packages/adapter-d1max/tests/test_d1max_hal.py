@@ -498,3 +498,20 @@ async def _拒(hal, why):
 
 async def _收(hal):
     return not (await hal.set_velocity(_v(vx=0.5))).rejected
+
+
+async def test_W26复查3_软急停确认_要新鲜状态明确说开着_不知道不算(monkeypatch):
+    hal = D1MaxHal(mps_per_unit=0.4, radps_per_unit=1.0, deadband_mps=0.05, max_fraction=0.5)
+    assert await hal.estop_status() and not await hal.soft_estop_confirmed(), \
+        "没状态帧:放行按急停算,确认按没确认算"
+    async with _台子() as (sim, hal):
+        assert await _等(lambda: _有状态(hal))
+        assert not await hal.soft_estop_confirmed()
+        await hal.emergency_stop(True)
+        assert await _等(hal.soft_estop_confirmed)
+        monkeypatch.setattr(hal, "_monotonic", lambda: time.monotonic() + 5.0)
+        assert not await hal.soft_estop_confirmed(), "状态过期了:不算确认"
+
+
+async def _有状态(hal):
+    return hal._b.last_state is not None

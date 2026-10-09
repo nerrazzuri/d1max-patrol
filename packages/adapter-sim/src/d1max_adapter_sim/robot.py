@@ -311,6 +311,9 @@ class SimRobot:
     async def estop_status(self) -> bool:
         return self._estop
 
+    async def soft_estop_confirmed(self) -> bool:
+        return self._estop
+
     async def load_map(self, map_id: str, version: str, path) -> None:
         """W00c5d 第二部分:载入站点下发的一张图(仿真里只记下来;``fail_load`` 注入失败)。"""
         if self.fail_load:
