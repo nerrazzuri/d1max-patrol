@@ -37,15 +37,21 @@ class StorageFacts:
     backlog_bytes: int
     #: 最老一条待传的等了多久(秒);没有积压为 None。
     oldest_backlog_s: int | None
+    #: W30b 复查:封不上、扣在狗上不传的照片、录像有几个。``None`` = 没配证据加密或老代理(不报)。
+    #: 狗每次遥测都报当前值,站点按它对账告警(报、解决失败了下一拍再来),不靠一次性事件。
+    unsealed: int | None = None
 
     def full(self, *, stop_ratio: float = STOP_RATIO) -> bool:
         """满了:盘到停止水位,或发件箱到上限。满了就不接新的巡检。"""
         return self.disk_used_ratio >= stop_ratio or self.outbox_bytes >= self.outbox_cap_bytes
 
     def to_wire(self) -> dict[str, Any]:
-        return {"disk_used_ratio": self.disk_used_ratio, "outbox_bytes": self.outbox_bytes,
-                "outbox_cap_bytes": self.outbox_cap_bytes, "backlog_files": self.backlog_files,
-                "backlog_bytes": self.backlog_bytes, "oldest_backlog_s": self.oldest_backlog_s}
+        out = {"disk_used_ratio": self.disk_used_ratio, "outbox_bytes": self.outbox_bytes,
+               "outbox_cap_bytes": self.outbox_cap_bytes, "backlog_files": self.backlog_files,
+               "backlog_bytes": self.backlog_bytes, "oldest_backlog_s": self.oldest_backlog_s}
+        if self.unsealed is not None:
+            out["unsealed"] = self.unsealed
+        return out
 
     @classmethod
     def from_wire(cls, d: Any) -> StorageFacts:
@@ -56,8 +62,10 @@ class StorageFacts:
                 or not 0.0 <= r <= 1.0:
             raise ContractError("StorageFacts: disk_used_ratio 要是 0–1 的数")
         oldest = d.get("oldest_backlog_s")
+        unsealed = d.get("unsealed")
         return cls(disk_used_ratio=float(r), outbox_bytes=_count(d, "outbox_bytes"),
                    outbox_cap_bytes=_count(d, "outbox_cap_bytes", lo=1),
                    backlog_files=_count(d, "backlog_files"),
                    backlog_bytes=_count(d, "backlog_bytes"),
-                   oldest_backlog_s=None if oldest is None else _count(d, "oldest_backlog_s"))
+                   oldest_backlog_s=None if oldest is None else _count(d, "oldest_backlog_s"),
+                   unsealed=None if unsealed is None else _count(d, "unsealed"))

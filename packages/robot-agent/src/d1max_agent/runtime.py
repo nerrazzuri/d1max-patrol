@@ -332,7 +332,7 @@ class AgentRuntime:
         self._rec_action = ""
         #: 发件箱隔离的文件重新排上(站点改了规矩之后,管理员让它再传一次);主程序接上。
         self._outbox_retry: Callable[[], int] | None = None
-        #: W30b 外审 1:发件箱里封不上、扣着不传的明文证据(件数, 原因);主程序接上。
+        #: W30b 外审 1:发件箱里封不上、扣着不传的明文证据(件数, 原因);主程序接上(配了证据加密才接)。
         self._unsealed: Callable[[], tuple[int, str]] | None = None
         self._unsealed_told = 0
         self.processor.map_hook = self._map_command
@@ -1861,7 +1861,6 @@ class AgentRuntime:
                 self.recorder.step()
             except Exception:                     # 录像出毛病不许带走这一拍(狗照样巡检、遥控)
                 log.exception("录像这一拍炸了")
-        self._watch_sealing()
         await self._watch_faults()
         await self._flush_events()
         await self._publish_status()
@@ -1882,19 +1881,20 @@ class AgentRuntime:
         if o.valid:
             self.trail.feed(o.x, o.y, o.yaw)
 
-    def _watch_sealing(self) -> None:
-        """W30b 外审 1:有证据封不上(扣在狗上、不传明文)报一次 ``evidence_seal_failed``(站点 P2),
-        都封上了报 ``evidence_seal_ok``。件数变多不重报。"""
-        n, why = self._unsealed() if self._unsealed is not None else (0, "")
+    def _unsealed_now(self) -> int | None:
+        """W30b 复查:发件箱、录像暂存里封不上、扣着不传的证据有几个(随遥测的盘况报,站点按当前值对账
+        告警)。没配证据加密回 ``None``(不报)。件数变了记一笔日志。"""
+        if self._unsealed is None:
+            return None
+        n, why = self._unsealed()
         if self.recorder is not None:
             stuck = getattr(self.recorder, "seal_failed", {})
             n += len(stuck)
             why = why or next(iter(stuck.values()), "")
-        if n and not self._unsealed_told:
-            self.events.emit("evidence_seal_failed", {"count": n, "reason": why[:300]})
-        elif not n and self._unsealed_told:
-            self.events.emit("evidence_seal_ok", {})
-        self._unsealed_told = n
+        if n != self._unsealed_told:
+            (log.warning if n else log.info)("封不上、扣着不传的证据:%d 个 %s", n, why)
+            self._unsealed_told = n
+        return n
 
     async def _watch_faults(self) -> None:
         """HAL 故障集合变了就发一条 ``robot_fault``(W00c5a)。狗只报事实:哪条算跌倒、算不算
@@ -1980,6 +1980,9 @@ class AgentRuntime:
             storage = self._storage()
             if storage is not None:
                 self._next_storage_ms = now + STORAGE_EVERY_MS
+                n = self._unsealed_now()
+                if n is not None:
+                    storage = dataclasses.replace(storage, unsealed=n)
         tele = compose_telemetry(
             now_ms=now, odom=await self.hal.odometry(), battery=await self.hal.battery(),
             health=await self.hal.health(), loaded_map=self.loaded_map,
