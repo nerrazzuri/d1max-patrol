@@ -144,8 +144,18 @@ def test_R1_删掉一张登记了的照片_校验和恢复都不过(站, tmp_pat
     r = verify(dest, key)
     assert not r.ok and any("清单上" in x for x in r.problems) \
         and any("照片没有文件" in x for x in r.problems), r.problems
+    with pytest.raises(Exception, match="不恢复"):
+        restore(dest, key, tmp_path / "new")
+
+
+def test_R1_恢复出来的站点目录缺照片_缺MQTT配置_verify_home查得出(站, tmp_path):
+    home, dest, key, db, b = 站
     new = tmp_path / "new"
-    assert not restore(dest, key, new).ok
+    assert restore(dest, key, new).ok
+    next(new.joinpath("evidence").rglob("*.jpg")).unlink()
+    (new / "broker" / "acl").unlink()
+    probs = ";".join(verify_home(new).problems)
+    assert "照片没有文件" in probs and "broker/acl" in probs
 
 
 def test_R1_删掉整个MQTT配置_校验和恢复都不过(站, tmp_path):
@@ -154,8 +164,8 @@ def test_R1_删掉整个MQTT配置_校验和恢复都不过(站, tmp_path):
     shutil.rmtree(dest / "broker")
     probs = ";".join(verify(dest, key).problems)
     assert "broker/mosquitto.conf" in probs and "broker/acl" in probs
-    rh = restore(dest, key, tmp_path / "new")
-    assert not rh.ok and any("broker/acl" in x for x in rh.problems)
+    with pytest.raises(Exception, match="broker/acl"):
+        restore(dest, key, tmp_path / "new")
 
 
 def test_R1_明文备份不带站点身份_不过(站, tmp_path):
@@ -250,3 +260,26 @@ def test_R3_明文备份恢复也不抄源文件的宽权限(站, tmp_path):
         os.umask(old)
     files = [p for p in (tmp_path / "new").rglob("*") if p.is_file()]
     assert files and all(stat.S_IMODE(p.stat().st_mode) & 0o077 == 0 for p in files)
+
+
+# ------------------------------------------------------------ A2 复查(恢复、演练也按清单)
+
+
+def test_复查_清单上的文件缺了_恢复和演练都不成_一个字节都不写(站, tmp_path):
+    home, dest, key, db, b = 站
+    next(dest.joinpath("evidence").rglob("events.jsonl" + SEALED)).unlink()
+    new = tmp_path / "new"
+    with pytest.raises(Exception, match="清单上的 1 个文件不见了"):
+        restore(dest, key, new)
+    assert not new.exists() or not any(new.iterdir()), "写之前就挡住"
+    got = site_main.cmd_backup_drill(home, str(key))
+    assert not got["ok"] and "清单" in got["problems"][0]
+
+
+def test_复查_清单全删了_恢复和演练都不成(站, tmp_path):
+    home, dest, key, db, b = 站
+    for m in (dest / "db").glob("manifest-*"):
+        m.unlink()
+    with pytest.raises(Exception, match="没有做完的备份"):
+        restore(dest, key, tmp_path / "new")
+    assert not site_main.cmd_backup_drill(home, str(key))["ok"]
