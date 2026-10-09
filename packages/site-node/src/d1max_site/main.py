@@ -549,6 +549,10 @@ class Server:
         self.sightings = PersonWatch(self.db, self.dispatcher, now_ms=wall_ms, arming=self.arming,
                                      deterrence=self.deterrence)
         self.sightings.alerts = self.alerts
+        from d1max_site.force import ForceWatch
+        #: 狗翻倒、被抱起来(W26,决策 52):按狗能力里的状态对账报 P1,布防时被抱起来响警笛。
+        self.force = ForceWatch(self.db, self.dispatcher, now_ms=wall_ms, arming=self.arming)
+        self.force.alerts = self.alerts
         self.charge.busy = self.deterrence.busy
         self.incidents.charging = self.charge.refuse
         self.standby.hold = lambda rid, tid: (self.deterrence.holds(rid, tid)
@@ -778,6 +782,10 @@ class Server:
                 self.sightings.tick()                  # W33:布防中狗没在驱离时看见人报 P1
             except Exception:
                 log.exception("看见人这一拍没办成")
+            try:
+                await self.force.tick()                # W26:翻倒、被抱起来报 P1,布防时响警笛
+            except Exception:
+                log.exception("受力这一拍没办成")
             try:
                 self.evidence_watch.tick()             # W30b:狗上证据没封报 P2
             except Exception:

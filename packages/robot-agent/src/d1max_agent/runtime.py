@@ -293,6 +293,13 @@ class AgentRuntime:
         self._dock_hazard = ""
         #: 证据加密(W30b):主程序设;``None`` = 不报(老的装配)。
         self.evidence_sealed: bool | None = None
+        #: 异常受力检测(W26,决策 52):适配器报有 IMU 才判。门槛主程序按 ``--force-config`` 换。
+        self.force: Any = None
+        if self.hal.hal_capabilities().sensing.get("imu"):
+            from d1max_agent.force import ForceWatch
+            self.force = ForceWatch()
+        self._force_told: tuple = ()
+        self.processor.force_gate = self._force_gate
         self._dock_clear_ms: int | None = None
         self._dock_told: tuple = ()
         if self.hal.hal_capabilities().recharge_mode != "none":
@@ -625,6 +632,8 @@ class AgentRuntime:
             out["dock"] = self._dock_caps()         # W13:会对桩;在不在桩上、桩上危险
         if self.evidence_sealed is not None:
             out["evidence"] = {"sealed": self.evidence_sealed}   # W30b:没封站点报 P2
+        if self.force is not None:
+            out["force"] = self.force.caps()        # W26:翻倒、被抱起来(站点按它对账报 P1)
         deter = self.deter.caps()
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术
@@ -666,6 +675,55 @@ class AgentRuntime:
         self._dock_hazard = why or "出没出桩说不清"
         self._dock_clear_ms = None
         self.events.emit("dock_hazard", {"reason": self._dock_hazard})
+
+    def _force_gate(self) -> str:
+        """W26:翻倒、被抱起来时不收、不起跑会让狗动的任务。"""
+        st = self.force.state if self.force is not None else "ok"
+        if st == "flipped":
+            return "flipped: 狗翻倒了:扶起来、解除急停之后才能动"
+        if st == "lifted":
+            return "lifted: 狗被抱起来了(腿上不承重):放回地上之后才能动"
+        return ""
+
+    async def _watch_force(self) -> None:
+        """W26(决策 52):每拍读姿态、受力判一次。
+        - 翻倒:撤掉会让狗动的任务、停车、**软急停**(等人扶、人工解除);
+        - 被抱起来:撤任务、停车(悬空迈腿会伤人);
+        - 被撞:只报。
+        都发事件(留个底、带时刻好对录像);翻倒、抱起来、恢复了都重发能力(站点按能力里的状态对账报警)。"""
+        if self.force is None:
+            return
+        from d1max_contract.hal import MotionStatus
+        try:
+            s = await self.hal.imu()
+        except HalUnsupported:
+            s = None
+        try:
+            standing = await self.hal.motion_status() in (MotionStatus.STANDING,
+                                                          MotionStatus.READY)
+        except Exception:                         # noqa: BLE001 - 说不清就不进基线、不判抱起来
+            standing = False
+        for f in self.force.feed(s, self._now(), standing=standing):
+            log.warning("受力检测:%s %s", f.kind, f.data)
+            if f.kind in ("flipped", "lifted"):
+                from d1max_agent.commands import _MOTION_KINDS
+                if await self.processor.abort_kinds(_MOTION_KINDS, f.kind):
+                    log.warning("%s:中止会让狗动的任务", f.kind)
+                try:
+                    await self._stop_motion()
+                except Exception:
+                    log.exception("%s:停车失败", f.kind)
+                if f.kind == "flipped":
+                    try:
+                        await self.hal.emergency_stop(True)
+                    except Exception:
+                        log.exception("翻倒了:软急停失败")
+            self.events.emit(f"force_{f.kind}", f.data)
+        key = (self.force.state, tuple(sorted(self.force.checks.items())))
+        if key != self._force_told:
+            self._force_told = key
+            if self.transport.connected:
+                await self._publish_caps()
 
     def _motion_gate(self) -> str:
         if self._dock_hazard:
@@ -1845,6 +1903,10 @@ class AgentRuntime:
                     await self._publish_caps()
             await self.parts.step(dt_s)          # 两个桥:导航状态机 + 设备事件
             await self._enforce_head()
+        try:
+            await self._watch_force()
+        except Exception:                         # 受力检测出毛病不许带走这一拍
+            log.exception("受力检测这一拍炸了")
         await self._feed_trail()
         try:
             self._log_rtk()

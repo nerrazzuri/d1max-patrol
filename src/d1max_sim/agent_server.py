@@ -575,6 +575,13 @@ class SimAgentServer:
         self._broadcast({"t": "fault", "level": level, "code": code,
                          "message": message})
 
+    def push_imu(self, roll: float, pitch: float, shock: float, load: float | None = None) -> None:
+        """W26:发一帧姿态与受力(真旁路进程 20 Hz 发)。"""
+        frame = {"t": "imu", "roll": roll, "pitch": pitch, "shock": shock}
+        if load is not None:
+            frame["load"] = load
+        self._broadcast(frame)
+
     def set_battery(self, percent: float) -> None:
         self.battery1 = self.battery2 = percent
 

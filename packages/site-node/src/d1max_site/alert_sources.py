@@ -359,6 +359,16 @@ class SiteAlertSources:
                                   title="狗上的代理有几个启动参数这一版不认识,跳过了",
                                   detail=f"代理 {d.get('version', '?')} 跳过:{args}"[:300]
                                          + ";多半是退回了老版本,这几项设置没生效")
+        elif e.kind == "force_bump":
+            # W26(决策 52):狗被撞、被推、被踢了一下(没倒);任务照跑。翻倒、抱起来按能力对账(force.py)
+            g = d.get("shock_g", "?")
+            self.desk.raise_alert(kind="force_bump", robot=rid, title=f"狗被撞了一下({g} g)",
+                                  detail="受力异常但没倒,任务照跑;位置看告警现场,录像看这个时刻前后"
+                                         "(门槛没在真狗上标定前误报会多)")
+        elif e.kind == "force_config_bad":
+            self.desk.raise_alert(kind="force_config_bad", robot=rid,
+                                  title="狗上的受力门槛文件读不懂,用的是缺省门槛",
+                                  detail=f"/etc/d1max/force.json:{str(d.get('reason', ''))[:250]}")
         elif e.kind == "recording_failed":
             # W18:这一路录像断了(相机不通、盘写不进),狗每 10 s 重试;录回来报 recording_ok
             self.desk.raise_alert(kind="recording_failed", robot=rid,

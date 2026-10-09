@@ -41,6 +41,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -91,7 +92,11 @@ using namespace robot_sdk;
 // 7(W12):state 带 speed_level(SDK RobotState.speed_level:0 未知、1 低速、2 中速、3 高速);hello 带
 // speed_level_want(参数 --speed-level,默认 1)。拿到控制权就 SetSpeed 到要的档,之后档位被换掉
 // (厂家 App)就每秒再设一次;档位不对的时候不放行任何运动(Move 的比例值换成 m/s 全看档位)。
-static const int kProtoVersion = 7;
+//
+// 8(W26):加了 imu 帧(20 Hz):{"roll","pitch"(弧度),"shock"(上一帧以来加速度模长偏离重力参考最大的
+// 那一下,g),"load"(关节力矩绝对值之和;没收到关节数据不带)}。开 SetImuConfig(100)。老代理不认识
+// imu 帧 —— 只有新代理配新旁路进程才发,7 号及更老的照旧能连(代理按「没有受力数据」不判)。
+static const int kProtoVersion = 8;
 static int g_speed_want = 1;
 static bool g_follows_head = true;
 
@@ -248,6 +253,12 @@ static SDKClient* g_client = nullptr;
 static std::mutex g_sdk_mtx;   // 所有 SDK 调用串行化
 static std::atomic<bool> g_running{true};
 static std::atomic<int64_t> g_last_odom_ms{0};
+// W26 受力:IMU 回调攒、20 Hz 发一帧。重力参考是加速度模长的慢均值(单位随 SDK,m/s² 还是 g 都行)。
+static std::mutex g_imu_mtx;
+static double g_imu_roll = 0.0, g_imu_pitch = 0.0, g_imu_shock = 0.0, g_imu_gref = 0.0;
+static double g_load = -1.0;  // <0 = 没收到关节数据
+static int64_t g_last_imu_ms = 0;
+static const int64_t kImuMinIntervalMs = 50;
 // 停车代数。halt 和 estop(on) 把它加一；每条 walk 开始时记下当时的代数，
 // 走的过程中每一拍都看一眼 —— 代数变了就是「有人叫停了」，立刻收手。
 // 排在队里还没轮到的 walk 也靠它作废：它们记下的代数早于那次叫停。
@@ -335,6 +346,43 @@ class DataCb : public IDataCallback {
        << ",\"ts_ms\":" << static_cast<long long>(d.time_stamp / 1000000ULL)
        << "}";
     Broadcast(os.str());
+  }
+
+  void OnImuData(const ImuData& d) override {
+    // ImuData 的四元数是 x, y, z, w(跟 MotionData 的 w, x, y, z 不一样)。
+    const double x = d.quat_x, y = d.quat_y, z = d.quat_z, w = d.quat_w;
+    const double roll = std::atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
+    const double sp = std::max(-1.0, std::min(1.0, 2.0 * (w * y - z * x)));
+    const double pitch = std::asin(sp);
+    const double n = std::sqrt(double(d.acc_x) * d.acc_x + double(d.acc_y) * d.acc_y +
+                               double(d.acc_z) * d.acc_z);
+    std::ostringstream os;
+    {
+      std::lock_guard<std::mutex> lk(g_imu_mtx);
+      g_imu_roll = roll;
+      g_imu_pitch = pitch;
+      if (g_imu_gref <= 0.0) g_imu_gref = n;
+      if (g_imu_gref > 0.0) {
+        g_imu_shock = std::max(g_imu_shock, std::fabs(n - g_imu_gref) / g_imu_gref);
+        g_imu_gref += (n - g_imu_gref) * 0.002;   // 100 Hz 下时间常数约 5 秒
+      }
+      const int64_t now = NowMs();
+      if (now - g_last_imu_ms < kImuMinIntervalMs) return;
+      g_last_imu_ms = now;
+      os << "{\"t\":\"imu\",\"roll\":" << JsonNum(roll) << ",\"pitch\":" << JsonNum(pitch)
+         << ",\"shock\":" << JsonNum(g_imu_shock);
+      if (g_load >= 0.0) os << ",\"load\":" << JsonNum(g_load);
+      os << "}";
+      g_imu_shock = 0.0;                          // 峰值:发走就清
+    }
+    Broadcast(os.str());
+  }
+
+  void OnJointStateData(const JointStateData& d) override {
+    double s = 0.0;
+    for (double e : d.efforts) s += std::fabs(e);
+    std::lock_guard<std::mutex> lk(g_imu_mtx);
+    g_load = s;
   }
 
   void OnFaultData(const FaultDatas& f) override {
@@ -968,6 +1016,7 @@ int main(int argc, char** argv) {
   client.SetMcConfig(true, 2000);
   client.SetSpeedReportConfig(true, 20, 2000);
   client.SetJointStateConfig(true, 2000);
+  client.SetImuConfig(100, 2000);                 // W26:姿态、撞击(待真机:频率范围、单位)
 
   // ---- 开门 ----
   const int server = Listen(listen_host, listen_port);

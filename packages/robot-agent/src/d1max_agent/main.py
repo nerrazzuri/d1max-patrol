@@ -184,6 +184,9 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--evidence-pub", type=Path, default=Path("/etc/d1max/evidence-pub.key"),
                    help="站点的证据公钥(W30b):有这个文件就把照片、截图、录像封着存(狗自己解不开);"
                         "没有就照旧明文(站点报 P2)")
+    v.add_argument("--force-config", type=Path, default=Path("/etc/d1max/force.json"),
+                   help="异常受力检测的门槛(W26):真狗标定后写这个 JSON(只写要改的项);"
+                        "没有就用缺省(占位)")
     v.add_argument("--record", default="auto",
                    help="连续录像(W18):录哪几路相机,逗号分隔(front,back);none 不录;auto(缺省)"
                         "真狗录 front,back、仿真不录。要 --outbox:片段从录像发件箱传站点")
@@ -510,6 +513,14 @@ def build(args: argparse.Namespace) -> Assembled:
                                persons_socket=args.persons_socket,
                                persons_snapshots=args.persons_snapshots)
         runtime.evidence_sealed = sealer is not None   # W30b:能力里报,没封站点报 P2
+        if runtime.force is not None:                   # W26:标定过的门槛
+            from d1max_agent.force import ForceConfig
+            try:
+                runtime.force.cfg = ForceConfig.load(args.force_config)
+            except (OSError, ValueError) as exc:     # 写错了:照缺省判,能力里带上,站点报 P2
+                log.error("受力门槛 %s 读不懂,用缺省:%s", args.force_config, exc)
+                runtime.force.config_error = str(exc)[:200]
+                runtime.events.emit("force_config_bad", {"reason": str(exc)[:200]})
         if pump is not None:
             runtime._outbox_retry = pump.retry_refused
             runtime._unsealed = pump.unsealed
