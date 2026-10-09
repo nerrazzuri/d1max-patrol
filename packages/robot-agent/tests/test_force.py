@@ -208,3 +208,146 @@ async def test_代理_没有imu的狗不判_能力里不报(tmp_path):
                       hal=SimRobot(now_ms=钟()), store_dir=tmp_path / "a", now_ms=钟(),
                       loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0))
     assert rt.force is None and "force" not in rt._extra_tasks() and rt._force_gate() == ""
+
+
+# ------------------------------------------------------------ W26 外审
+
+
+async def test_外审1_软急停失败了下一拍补_撤任务失败不挡停车急停(狗, monkeypatch):
+    rt, r, 走, 遥控, 事件, 能力 = 狗
+    await 走(3)
+    await 遥控(1)
+    real_estop, real_abort = r.emergency_stop, rt.processor.abort_kinds
+    fails = {"estop": 2, "abort": 2}
+
+    async def 急停(on):
+        if fails["estop"]:
+            fails["estop"] -= 1
+            raise OSError("SDK 没回")
+        await real_estop(on)
+
+    async def 撤(kinds, reason):
+        if fails["abort"]:
+            fails["abort"] -= 1
+            raise RuntimeError("引擎卡了")
+        return await real_abort(kinds, reason)
+    monkeypatch.setattr(r, "emergency_stop", 急停)
+    monkeypatch.setattr(rt.processor, "abort_kinds", 撤)
+    stops = []
+    real_stop = rt._stop_motion
+
+    async def 停():
+        stops.append(1)
+        await real_stop()
+    monkeypatch.setattr(rt, "_stop_motion", 停)
+    r.inject_imu(roll=math.radians(80))
+    await 走(0.6)
+    assert rt.force.state == "flipped" and stops, "撤任务失败了照样停车"
+    assert not await r.estop_status() and "estop" in rt.force.owed
+    await 走(0.3)
+    assert await r.estop_status() and not rt.force.owed, "失败的那几样下几拍补上了"
+    assert rt.processor.current is None or rt.processor.current.kind != "teleop"
+
+
+async def test_外审1_撤任务抛了_下次还能再请求():
+    from d1max_agent.commands import CommandProcessor
+
+    class 任务:
+        task_id, kind, done, aborting = "t1", "goto", False, False
+        n = 0
+
+        async def abort(self, reason):
+            self.n += 1
+            if self.n == 1:
+                raise RuntimeError("卡了")
+    p = CommandProcessor.__new__(CommandProcessor)
+    p.pending, p.current, p._abort_requested = [], 任务(), set()
+    with pytest.raises(RuntimeError):
+        await p.abort_kinds(frozenset({"goto"}), "lifted")
+    assert await p.abort_kinds(frozenset({"goto"}), "lifted") == 1 and p.current.n == 2
+
+
+def test_外审3_落盘_重启了照旧锁着_悬空的低承重学不进基线_放回地上才解(tmp_path):
+    p = tmp_path / "force.json"
+    w = ForceWatch(path=p)
+    _, t = _喂(w, _s(load=100.0), 0, 3.0)
+    got, t = _喂(w, _s(load=10.0), t, 0.6)
+    assert w.state == "lifted"
+    w.save()
+    w2 = ForceWatch(path=p)                               # 代理重启
+    assert w2.state == "lifted" and w2.owed == {"abort", "stop"}
+    got, t = _喂(w2, _s(load=10.0), t, 30)
+    assert not got and w2.state == "lifted", "还悬空:不解锁、不学基线"
+    got, t = _喂(w2, _s(load=55.0), t, 2.1)
+    assert [f.kind for f in got] == ["landed"], "承重回到抱起前基线的一半以上才算放下"
+    w2.save()
+    assert ForceWatch(path=p).state == "ok"
+
+
+def test_外审3_状态文件读不懂_当翻倒锁着(tmp_path):
+    p = tmp_path / "force.json"
+    p.write_text("{坏的")
+    w = ForceWatch(path=p)
+    assert w.state == "flipped" and "stop" in w.owed
+    got, _ = _喂(w, _s(), 0, 3.1)
+    assert [f.kind for f in got] == ["upright"], "扶正稳住才解"
+
+
+async def test_外审3_代理重启_被抱起来的锁还在(tmp_path):
+    from d1max_agent.force import ForceWatch as FW
+    FW(path=tmp_path / "agent" / "force.json")
+    w = FW(path=tmp_path / "agent" / "force.json")
+    w.state, w._lift_base, w.owed = "lifted", 100.0, set()
+    w.save()
+    c = 钟()
+    rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG,
+                      hal=SimRobot(now_ms=c, imu=True), store_dir=tmp_path / "agent", now_ms=c,
+                      loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0))
+    assert rt.force.state == "lifted" and rt._force_gate().startswith("lifted")
+    await rt.close()
+
+
+async def test_外审2_代理_在跑的对桩任务走停对桩不出桩(狗):
+    rt, r, 走, 遥控, 事件, 能力 = 狗
+    await 走(3)
+
+    class 对桩:
+        from d1max_contract.messages import TaskState
+        task_id, kind, done, aborting = "charge-dock-1", "dock", False, False
+        state, detail = TaskState.RUNNING, {}
+        got: list = []
+
+        async def force_stop(self, reason):
+            self.got.append(reason)
+            self.aborting = True
+
+        async def abort(self, reason):
+            raise AssertionError("受力故障不许走普通中止(会出桩)")
+
+        async def step(self, dt):
+            pass
+    t = 对桩()
+    rt.processor.current = t
+    r.inject_imu(load=5.0)
+    await 走(0.7)
+    assert t.got == ["lifted"] and "abort" not in rt.force.owed
+    rt.processor.current = None
+
+
+async def test_外审1_软急停命令回了成_可读回来没开_下一拍再发(狗, monkeypatch):
+    rt, r, 走, 遥控, 事件, 能力 = 狗
+    await 走(3)
+    real = r.emergency_stop
+    lost = [2]
+
+    async def 丢了(on):
+        if lost[0]:
+            lost[0] -= 1
+            return                                        # SDK 回了,可没生效
+        await real(on)
+    monkeypatch.setattr(r, "emergency_stop", 丢了)
+    r.inject_imu(roll=math.radians(80))
+    await 走(0.6)
+    assert "estop" in rt.force.owed, "读回来没开:不算做成"
+    await 走(0.3)
+    assert await r.estop_status() and not rt.force.owed

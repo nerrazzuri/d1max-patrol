@@ -297,7 +297,8 @@ class AgentRuntime:
         self.force: Any = None
         if self.hal.hal_capabilities().sensing.get("imu"):
             from d1max_agent.force import ForceWatch
-            self.force = ForceWatch()
+            # 状态落盘(W26 外审 3):重启了照旧锁着、照旧补做没做成的安全动作
+            self.force = ForceWatch(path=store_dir / "force.json")
         self._force_told: tuple = ()
         self.processor.force_gate = self._force_gate
         self._dock_clear_ms: int | None = None
@@ -703,27 +704,62 @@ class AgentRuntime:
                                                           MotionStatus.READY)
         except Exception:                         # noqa: BLE001 - 说不清就不进基线、不判抱起来
             standing = False
-        for f in self.force.feed(s, self._now(), standing=standing):
+        found = self.force.feed(s, self._now(), standing=standing)
+        for f in found:
             log.warning("受力检测:%s %s", f.kind, f.data)
-            if f.kind in ("flipped", "lifted"):
-                from d1max_agent.commands import _MOTION_KINDS
-                if await self.processor.abort_kinds(_MOTION_KINDS, f.kind):
-                    log.warning("%s:中止会让狗动的任务", f.kind)
-                try:
-                    await self._stop_motion()
-                except Exception:
-                    log.exception("%s:停车失败", f.kind)
-                if f.kind == "flipped":
-                    try:
-                        await self.hal.emergency_stop(True)
-                    except Exception:
-                        log.exception("翻倒了:软急停失败")
             self.events.emit(f"force_{f.kind}", f.data)
+        await self._force_secure()
+        if found:
+            try:
+                self.force.save()
+            except OSError:
+                log.exception("受力状态写不进盘(下一拍再写)")
         key = (self.force.state, tuple(sorted(self.force.checks.items())))
         if key != self._force_told:
             self._force_told = key
             if self.transport.connected:
                 await self._publish_caps()
+
+    async def _force_secure(self) -> None:
+        """W26 外审 1:翻倒、抱起来时欠着的安全动作**各做各的**、每拍补,确认做成了才划掉(落盘):
+        - ``abort``:撤掉会让狗动的任务(对桩的改成停对桩、不出桩);
+        - ``stop``:停车(先撤导航目标再停 HAL);
+        - ``estop``:软急停,读回急停确实开着才算(只翻倒要)。
+        一样失败不挡别的。"""
+        f = self.force
+        if not f.owed:
+            return
+        before = set(f.owed)
+        if "abort" in f.owed:
+            try:
+                from d1max_agent.commands import _MOTION_KINDS
+                cur = self.processor.current
+                if cur is not None and not cur.done and hasattr(cur, "force_stop"):
+                    await cur.force_stop(f.state)
+                await self.processor.abort_kinds(_MOTION_KINDS, f.state)
+                cur = self.processor.current
+                if cur is None or cur.done or cur.kind not in _MOTION_KINDS or cur.aborting:
+                    f.owed.discard("abort")
+            except Exception:
+                log.exception("%s:撤任务没成(下一拍再撤)", f.state)
+        if "stop" in f.owed:
+            try:
+                await self._stop_motion()
+                f.owed.discard("stop")
+            except Exception:
+                log.exception("%s:停车没成(下一拍再停)", f.state)
+        if "estop" in f.owed:
+            try:
+                await self.hal.emergency_stop(True)
+                if await self.hal.estop_status():
+                    f.owed.discard("estop")
+            except Exception:
+                log.exception("翻倒了:软急停没成(下一拍再急停)")
+        if f.owed != before:
+            try:
+                f.save()
+            except OSError:
+                log.exception("受力状态写不进盘(下一拍再写)")
 
     def _motion_gate(self) -> str:
         if self._dock_hazard:

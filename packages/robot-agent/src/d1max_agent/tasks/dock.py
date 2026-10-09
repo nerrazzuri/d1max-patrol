@@ -59,6 +59,8 @@ class DockTask(Task):
         self._then: tuple[TaskState, str] | None = None
         self.percent: float | None = None
         self._cmd_ok = False                         # 出桩 / 停对桩的命令发成了没有
+        #: 翻倒、被抱起来了(W26 外审 2):只许停对桩,**不许出桩**(悬空、翻着出桩会伤人、伤桩)。
+        self._no_undock = False
 
     @property
     def aborting(self) -> bool:
@@ -90,11 +92,23 @@ class DockTask(Task):
         charging, _, _ = await self._sense()
         self._leave(state, reason, undock=bool(charging) or self.phase == "charging")
 
+    async def force_stop(self, reason: str) -> None:
+        """翻倒、被抱起来了(W26 外审 2):停对桩、不出桩,已经在出桩的也改成停。重复调没事。
+        确认不了离了桩就照旧挂「桩上危险」锁住(``SAFE_TIMEOUT_S``)。"""
+        self._no_undock = True
+        if self.done:
+            return
+        if self._then is None:
+            self._then = (TaskState.ABORTED, reason)
+        if self.phase != "stopping":
+            log.warning("%s:%s,停对桩、不出桩", self.task_id, reason)
+            self._go("stopping")
+
     def _leave(self, state: TaskState, reason: str, *, undock: bool) -> None:
         """要走了:出桩(在桩上)或停对桩(还在对),确认安全了才进 ``state``。"""
         if self._then is None:
             self._then = (state, reason)
-        self._go("undocking" if undock else "stopping")
+        self._go("undocking" if undock and not self._no_undock else "stopping")
 
     def _finish(self, state: TaskState, reason: str) -> None:
         self.state = state
@@ -160,7 +174,7 @@ class DockTask(Task):
                 self._lost_ms = None
             return
         # undocking / stopping:实测安全了才进终态
-        if self.phase == "stopping" and charging:
+        if self.phase == "stopping" and charging and not self._no_undock:
             # 停的时候已经上桩了(刚充上,或者停对桩的命令没成):改走出桩
             log.info("停对桩时已经上桩了:改出桩")
             then = self._then

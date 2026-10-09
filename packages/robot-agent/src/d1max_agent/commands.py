@@ -487,7 +487,12 @@ class CommandProcessor:
         if cur is not None and not cur.done and cur.kind in kinds and not cur.aborting \
                 and cur.task_id not in self._abort_requested:
             self._abort_requested.add(cur.task_id)
-            await cur.abort(reason)
+            try:
+                await cur.abort(reason)
+            except BaseException:
+                # 没请求成:下次还要能再请求(W26 外审 1:受力故障时撤任务失败了要补)
+                self._abort_requested.discard(cur.task_id)
+                raise
             n += 1
         return n
 
