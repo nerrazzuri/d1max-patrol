@@ -739,6 +739,27 @@ class Server:
         self._next_rec_prune = now + 600
         self.recordings.prune()
         self.privacy.prune()                           # W30:证据过了留存期删(连备份)
+        self._retry_old_incoming()
+
+    def _retry_old_incoming(self) -> None:
+        """以前版本暂存的已删证据半截(PR #87 复查 R3)起来时没删掉的:定时再删,删不掉报 P2,
+        删掉了自动解决(PR #88 复查)。"""
+        from d1max_site.alert_sources import SITE
+        from d1max_site.evidence import drop_old_incoming
+        why = []
+        for store in (self.evidence, self.recordings):
+            if getattr(store, "incoming_error", ""):
+                store.incoming_error = drop_old_incoming(store.root)
+            if getattr(store, "incoming_error", ""):
+                why.append(store.incoming_error)
+        if why:
+            if not self.alerts.has_open(SITE, "purged_incoming_stuck"):
+                self.alerts.raise_alert(kind="purged_incoming_stuck", robot=SITE,
+                                        title="以前暂存的已删证据删不掉",
+                                        detail="里面是已经删除的原文,要人看一下权限、盘:"
+                                               + ";".join(why)[:250])
+        elif self.alerts.has_open(SITE, "purged_incoming_stuck"):
+            self.alerts.resolve_all(SITE, "purged_incoming_stuck", who="site:incoming_dropped")
 
     async def _schedule_loop(self) -> None:
         """排程执行器:每 30 s 一拍。一拍炸了记下来、下一拍照走(老 W06 执行器同一个理由:

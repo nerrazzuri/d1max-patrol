@@ -111,12 +111,21 @@ class IdentityLocks:
             return self._locks.setdefault((kind, robot_id, key), threading.Lock())
 
 
-def drop_old_incoming(root: Path) -> None:
-    """以前的版本把删过又传上来的半截收在 ``<库>-purged-incoming``:起来时整个删掉(R3)。"""
+def drop_old_incoming(root: Path) -> str:
+    """以前的版本把删过又传上来的半截收在 ``<库>-purged-incoming``:整个删掉(R3)。
+
+    回空串 = 没有了(删掉了、本来就没有);删不掉回原因(PR #88 复查:不吞错误)—— 那里面是删过的
+    原文,调用方起来时调一次、之后杂事里定时再调,删不掉报 P2,删掉了才算完。"""
     old = root.parent / (root.name + "-purged-incoming")
-    if old.exists():
-        shutil.rmtree(old, ignore_errors=True)
-        log.info("删了以前暂存的已删证据半截:%s", old)
+    if not old.exists():
+        return ""
+    try:
+        shutil.rmtree(old)
+    except OSError as exc:
+        log.error("以前暂存的已删证据半截删不掉(下次再删):%s:%s", old, exc)
+        return f"{old}:{exc}"[:300]
+    log.info("删了以前暂存的已删证据半截:%s", old)
+    return ""
 #: 站点盘剩这么多就不再收(先让狗等着 —— 库也在这块盘上,写满了整个站点都停)。
 MIN_FREE_BYTES = 2 * 1024 ** 3
 MIN_FREE_RATIO = 0.02
@@ -222,7 +231,8 @@ class EvidenceStore:
         self.writer = ChunkWriter()
         #: 同一趟的收、删互斥(PR #87 复查 R1)。
         self.locks = IdentityLocks()
-        drop_old_incoming(self.root)
+        #: 以前的暂存区删不掉的原因(空 = 没有了);站点杂事定时再删、报 P2(PR #88 复查)。
+        self.incoming_error = drop_old_incoming(self.root)
         #: 收完一趟里一个文件之后调(判读排队用)。
         self.on_file: list[Callable[[int, str], None]] = []
         #: 证据私钥(W30b):狗封好的照片收齐了用它解开。没配是 ``None``(封好的留着、报 P2)。

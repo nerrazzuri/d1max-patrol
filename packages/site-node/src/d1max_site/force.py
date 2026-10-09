@@ -150,6 +150,14 @@ class ForceWatch:
         if not ok:
             ok = True
             for out in outs:
+                # PR #88 复查:前一路等回执可能等了好几秒 —— 每一路发之前按**此刻**重算剩余时长、
+                # 重核这一回还在(没放下、没换一回),过了点就不发
+                left = SIREN_S - (self._now() - row["started_ms"]) / 1000
+                cur = self.db.query("SELECT state, started_ms FROM force_episodes "
+                                    "WHERE robot_id=?", (rid,))
+                if left <= 1 or not cur or cur[0]["state"] != "lifted" \
+                        or cur[0]["started_ms"] != row["started_ms"]:
+                    break
                 try:
                     r = await self.dispatcher.deter(rid, {"output": out, "on": True,
                                                           "max_s": round(left)},
