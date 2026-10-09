@@ -351,3 +351,78 @@ async def test_外审1_软急停命令回了成_可读回来没开_下一拍再�
     assert "estop" in rt.force.owed, "读回来没开:不算做成"
     await 走(0.3)
     assert await r.estop_status() and not rt.force.owed
+
+
+# ------------------------------------------------------------ W26 复查
+
+
+async def test_复查1_写盘失败了每拍重写_写成为止(狗, monkeypatch):
+    rt, r, 走, 遥控, 事件, 能力 = 狗
+    await 走(3)
+    real = type(rt.force).save
+    fails = [5]
+
+    def 坏盘(self):
+        if fails[0]:
+            fails[0] -= 1
+            raise OSError("盘满了")
+        real(self)
+    monkeypatch.setattr(type(rt.force), "save", 坏盘)
+    r.inject_imu(load=5.0)
+    await 走(0.7)
+    assert rt.force.state == "lifted" and not rt.force.owed and rt.force.dirty
+    path = rt.force._path
+    assert not path.exists() or json.loads(path.read_text())["state"] == "ok"
+    await 走(0.5)
+    assert not rt.force.dirty and json.loads(path.read_text())["state"] == "lifted", \
+        "动作都做完了、没有新状态,照样接着写到成"
+
+
+async def test_复查2_扶正了可停车急停一直没成_欠着的照样补_照样锁着(狗, monkeypatch):
+    rt, r, 走, 遥控, 事件, 能力 = 狗
+    await 走(3)
+    broken = [True]
+    real_stop, real_estop = rt._stop_motion, r.emergency_stop
+
+    async def 停():
+        if broken[0]:
+            raise OSError("停不下")
+        await real_stop()
+
+    async def 急停(on):
+        if broken[0]:
+            raise OSError("SDK 没回")
+        await real_estop(on)
+    monkeypatch.setattr(rt, "_stop_motion", 停)
+    monkeypatch.setattr(r, "emergency_stop", 急停)
+    r.inject_imu(roll=math.radians(80))
+    await 走(0.6)
+    r.inject_imu(roll=0.0)
+    await 走(3.5)
+    assert rt.force.state == "ok" and rt.force.owed >= {"stop", "estop"}
+    assert rt._force_gate().startswith("force:"), "安全处置没做完:照旧锁着"
+    assert 能力()["owed"]
+    broken[0] = False
+    await 走(0.3)
+    assert not rt.force.owed and rt._force_gate() == "" and await r.estop_status()
+
+
+async def test_复查3_急停状态不知道_不算软急停做成了(狗, monkeypatch):
+    rt, r, 走, 遥控, 事件, 能力 = 狗
+    await 走(3)
+    sure = [False]
+
+    async def 确认():
+        return sure[0]
+    monkeypatch.setattr(r, "soft_estop_confirmed", 确认)
+    monkeypatch.setattr(r, "estop_status", lambda: _真())   # 不知道:按急停算(放行那头)
+    r.inject_imu(roll=math.radians(80))
+    await 走(1)
+    assert "estop" in rt.force.owed, "estop_status 回真不算证明"
+    sure[0] = True
+    await 走(0.2)
+    assert "estop" not in rt.force.owed
+
+
+async def _真():
+    return True

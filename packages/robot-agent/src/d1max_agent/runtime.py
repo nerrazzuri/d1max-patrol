@@ -680,6 +680,10 @@ class AgentRuntime:
     def _force_gate(self) -> str:
         """W26:翻倒、被抱起来时不收、不起跑会让狗动的任务。"""
         st = self.force.state if self.force is not None else "ok"
+        if st == "ok" and self.force is not None and self.force.owed:
+            # W26 复查 2:姿态恢复了,可停车、急停还没确认做成:照旧锁着
+            return "force: 翻倒、被抱起来后的安全处置还没做完(" + "、".join(sorted(
+                self.force.owed)) + "):做完之前不能动"
         if st == "flipped":
             return "flipped: 狗翻倒了:扶起来、解除急停之后才能动"
         if st == "lifted":
@@ -709,12 +713,13 @@ class AgentRuntime:
             log.warning("受力检测:%s %s", f.kind, f.data)
             self.events.emit(f"force_{f.kind}", f.data)
         await self._force_secure()
-        if found:
+        if self.force.dirty:                      # W26 复查 1:没写成盘的每拍重写,写成为止
             try:
                 self.force.save()
             except OSError:
                 log.exception("受力状态写不进盘(下一拍再写)")
-        key = (self.force.state, tuple(sorted(self.force.checks.items())))
+        key = (self.force.state, tuple(sorted(self.force.checks.items())),
+               tuple(sorted(self.force.owed)))
         if key != self._force_told:
             self._force_told = key
             if self.transport.connected:
@@ -730,13 +735,14 @@ class AgentRuntime:
         if not f.owed:
             return
         before = set(f.owed)
+        why = f.state if f.state != "ok" else "force"     # 姿态恢复了还欠着(复查 2)
         if "abort" in f.owed:
             try:
                 from d1max_agent.commands import _MOTION_KINDS
                 cur = self.processor.current
                 if cur is not None and not cur.done and hasattr(cur, "force_stop"):
-                    await cur.force_stop(f.state)
-                await self.processor.abort_kinds(_MOTION_KINDS, f.state)
+                    await cur.force_stop(why)
+                await self.processor.abort_kinds(_MOTION_KINDS, why)
                 cur = self.processor.current
                 if cur is None or cur.done or cur.kind not in _MOTION_KINDS or cur.aborting:
                     f.owed.discard("abort")
@@ -751,15 +757,13 @@ class AgentRuntime:
         if "estop" in f.owed:
             try:
                 await self.hal.emergency_stop(True)
-                if await self.hal.estop_status():
+                # W26 复查 3:要新鲜状态明确说软急停开着;estop_status 不知道时也回真,不能当证明
+                if await self.hal.soft_estop_confirmed():
                     f.owed.discard("estop")
             except Exception:
                 log.exception("翻倒了:软急停没成(下一拍再急停)")
         if f.owed != before:
-            try:
-                f.save()
-            except OSError:
-                log.exception("受力状态写不进盘(下一拍再写)")
+            f.dirty = True
 
     def _motion_gate(self) -> str:
         if self._dock_hazard:

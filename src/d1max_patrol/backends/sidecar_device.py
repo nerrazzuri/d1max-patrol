@@ -111,6 +111,8 @@ class SidecarDeviceBackend(DeviceBackend):
         self._pending: dict[int, asyncio.Future[Ack]] = {}
         self._hello: Hello | None = None
         self._state: StateFrame | None = None
+        #: 最近一帧机身状态到达的时刻(``time.monotonic``;W26 复查:确认软急停要新鲜的)。
+        self._state_at: float | None = None
         self._odom: OdomFrame | None = None
         self._held = False
         #: 上一次广播出去的电量,用来抑制"每帧都发一条 BatteryEvent"。
@@ -141,6 +143,10 @@ class SidecarDeviceBackend(DeviceBackend):
     def last_state(self) -> StateFrame | None:
         """最近一帧机身状态。没收到过是 None。"""
         return self._state
+
+    @property
+    def last_state_at(self) -> float | None:
+        return self._state_at
 
     @property
     def last_odom(self) -> OdomFrame | None:
@@ -283,6 +289,7 @@ class SidecarDeviceBackend(DeviceBackend):
             return
         if isinstance(frame, StateFrame):
             self._state = frame
+            self._state_at = time.monotonic()
             battery = frame.battery
             if battery != self._last_battery:
                 self._last_battery = battery

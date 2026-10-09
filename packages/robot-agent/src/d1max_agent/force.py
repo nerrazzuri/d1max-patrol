@@ -121,9 +121,14 @@ class ForceWatch:
         if self.state != OK:
             log.warning("代理起来时受力状态是 %s(上次没恢复):照旧锁着", self.state)
 
+    #: 有改动还没写成盘(W26 复查 1):代理每拍看,写成了才放下。
+    dirty = False
+
     def save(self) -> None:
-        """状态、基线、欠着的动作写盘(原子替换)。写不进去照抛(调用方记日志、下一拍再写)。"""
+        """状态、基线、欠着的动作写盘(原子替换)。写成了放下 :attr:`dirty`;写不进去照抛、
+        :attr:`dirty` 留着(调用方记日志,下一拍再写)。"""
         if self._path is None:
+            self.dirty = False
             return
         d = {"state": self.state, "since_ms": self.since_ms, "lift_base": self._lift_base,
              "owed": sorted(self.owed)}
@@ -131,11 +136,14 @@ class ForceWatch:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(d), encoding="utf-8")
         os.replace(tmp, self._path)
+        self.dirty = False
 
     def caps(self) -> dict[str, Any]:
         out: dict[str, Any] = {"state": self.state, "checks": dict(self.checks)}
         if self.config_error:
             out["config_error"] = self.config_error
+        if self.owed:
+            out["owed"] = sorted(self.owed)             # 安全处置还没做完(还锁着)
         if self.since_ms is not None and self.state != OK:
             out["since_ms"] = self.since_ms
         return out
@@ -209,12 +217,14 @@ class ForceWatch:
             self._lift_base = info.get("baseline")
         self.state, self.since_ms, self._cand = state, now_ms, None
         self.owed |= {"abort", "stop"} | ({"estop"} if state == FLIPPED else set())
+        self.dirty = True
         return Finding(state, info)
 
     def _leave(self, kind: str, now_ms: int, info: dict[str, Any]) -> Finding:
+        # 姿态恢复 ≠ 安全处置做完了(W26 复查 2):欠着的动作**不清**,代理接着补,补完之前照旧锁着
         self.state, self.since_ms, self._cand = OK, now_ms, None
-        self.owed.clear()
         self._lift_base = None
+        self.dirty = True
         self._base.clear()                              # 换了个姿势、位置:基线重攒
         self.checks["lift"] = False
         return Finding(kind, info)

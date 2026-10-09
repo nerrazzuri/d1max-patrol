@@ -72,6 +72,8 @@ _LYING_MOTIONS = frozenset({SdkMotion.LIE_DOWN, SdkMotion.LOCKED})
 ODOM_STALE_S = 1.0
 #: 姿态帧(W26,20 Hz)多久没来算过期。
 IMU_STALE_S = 0.5
+#: 状态帧多久没来,就不拿它确认软急停(W26 复查)。
+STATE_STALE_S = 3.0
 #: 里程速度绝对值低于这个算停了(m/s、rad/s)。**待测**:四足站着不动时里程速度的噪声没量过,
 #: 探针会记下观察窗口里的最大值;太小的话 ``stopped()`` 永远不成立(代理那头有兜底超时)。
 STOPPED_EPS = 0.02
@@ -280,6 +282,16 @@ class D1MaxHal:
 
     async def estop_reset(self) -> None:
         await self._b.emergency_stop(False)
+
+    async def soft_estop_confirmed(self) -> bool:
+        """新鲜的状态帧(:data:`STATE_STALE_S` 以内)明确报软急停 ``STOP`` 才回真(W26 复查):
+        没状态帧、过期了、``Unknown`` 都不算确认 —— :meth:`estop_status` 那种「不知道按急停算」
+        不能拿来当证明。"""
+        st, at = self._b.last_state, getattr(self._b, "last_state_at", None)
+        if st is None or at is None or not self._b.connected \
+                or self._monotonic() - at > STATE_STALE_S:
+            return False
+        return st.estop_software is EmergencyStatus.STOP
 
     def _estop_now(self) -> bool:
         """软、硬两路**都**报「已解除」才算没急停。没状态帧、任一路 ``Unknown``(旁路进程在
