@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 40                      # W30b 外审 3:录像段还封着、解不开(recordings.sealed)
+SCHEMA_VERSION = 41                      # W30b 复查 Minor:这一回「封不上」报过了(evidence_unsealed)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -370,6 +370,12 @@ CREATE TABLE IF NOT EXISTS charge_cycles (
 -- W13 外审:狗报「桩上危险」(运动锁住)报过 P1 的(一次挂一次;狗上摘了就删)。
 -- W30b(决策 51):狗报证据没封(没装站点公钥)报过 P2 的(装好了删)。
 CREATE TABLE IF NOT EXISTS evidence_plain (
+    robot_id   TEXT PRIMARY KEY,
+    created_ms INTEGER NOT NULL
+);
+-- W30b 复查 Minor:这一回「狗上证据封不上」已经报过的狗(人手动解决了、站点重启了都不重报;
+-- 狗报件数回到 0 才删)。
+CREATE TABLE IF NOT EXISTS evidence_unsealed (
     robot_id   TEXT PRIMARY KEY,
     created_ms INTEGER NOT NULL
 );

@@ -378,8 +378,6 @@ class EvidencePlainWatch:
         self.dispatcher = dispatcher
         self._now = now_ms
         self.alerts: Any = None
-        #: 这一回「封不上」已经报过的狗(报成了才记;人手动解决了不重报,封好了才忘)。
-        self._seal_told: set[str] = set()
 
     def tick(self) -> None:
         self._plain()
@@ -391,6 +389,8 @@ class EvidencePlainWatch:
         事件)。"""
         if self.alerts is None:
             return
+        # 这一回已经报过的狗(报成了才记;人手动解决了、站点重启了都不重报;件数回到 0 才忘)
+        told = {r["robot_id"] for r in self.db.query("SELECT robot_id FROM evidence_unsealed")}
         stale = getattr(self.dispatcher, "is_stale", None)
         for rid, (facts, _at) in list(getattr(self.dispatcher, "storage", {}).items()):
             n = getattr(facts, "unsealed", None)
@@ -398,7 +398,7 @@ class EvidencePlainWatch:
                 continue                                  # 老代理、没配加密不报;狗没信儿不动
             try:
                 if n > 0:
-                    if rid in self._seal_told:
+                    if rid in told:
                         continue
                     if not self.alerts.has_open(rid, "evidence_seal_failed"):
                         self.alerts.raise_alert(
@@ -406,12 +406,16 @@ class EvidencePlainWatch:
                             title=f"狗上 {n} 个照片、录像封不上,扣着没传",
                             detail="多半是狗上 openssl 坏了或者盘写不进(看代理日志);"
                                    "狗每分钟重封一次,封上了自动传、这条告警自动解决")
-                    self._seal_told.add(rid)
+                    with self.db.tx() as tx:
+                        tx.execute("INSERT OR IGNORE INTO evidence_unsealed(robot_id, created_ms) "
+                                   "VALUES (?,?)", (rid, self._now()))
                 else:
                     if self.alerts.has_open(rid, "evidence_seal_failed"):
                         self.alerts.resolve_all(rid, "evidence_seal_failed",
                                                 who="site:evidence_sealed")
-                    self._seal_told.discard(rid)
+                    if rid in told:
+                        with self.db.tx() as tx:
+                            tx.execute("DELETE FROM evidence_unsealed WHERE robot_id=?", (rid,))
             except Exception:
                 log.exception("%s 证据封不上的告警没办成(下一拍再来)", rid)
 

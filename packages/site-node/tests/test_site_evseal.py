@@ -226,6 +226,7 @@ def _封不上台(tmp_path):
     d = SimpleNamespace(clients={}, storage={}, is_stale=lambda rid: False)
     w = EvidencePlainWatch(db, d, now_ms=lambda: NOW)
     w.alerts = desk
+    w.d = d
 
     def 报(n):
         d.storage["A"] = (StorageFacts(disk_used_ratio=0.1, outbox_bytes=0, outbox_cap_bytes=1,
@@ -251,6 +252,10 @@ def test_复查_狗报封不上的件数_站点报P2一次_封好了自动解决
     desk.resolve(a.key, who="张三")                       # 人手动解决了:这一回不重报
     报(4)
     w.tick()
+    assert not _开着的(desk)
+    again = EvidencePlainWatch(w.db, w.d, now_ms=lambda: NOW)   # 站点重启了也不重报(复查 Minor)
+    again.alerts = desk
+    again.tick()
     assert not _开着的(desk)
     报(0)
     w.tick()
