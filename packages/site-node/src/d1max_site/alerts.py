@@ -100,6 +100,7 @@ LEVEL_OF: dict[str, Level] = {
     "force_config_bad": Level.P2,
     "purged_incoming_stuck": Level.P2,
     "backup_verify_failed": Level.P2,
+    "push_failed": Level.P2,
     # 定位变差或打滑(W29,决策 41):狗原地停下等恢复;30 秒还没好再报 loc_lost_paused(P1)。
     "loc_degraded": Level.P2,
     "estop_pressed": Level.P1,

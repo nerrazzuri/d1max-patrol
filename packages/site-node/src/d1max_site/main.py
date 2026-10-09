@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import inspect
 import json
 import logging
 import os
@@ -42,8 +43,9 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 from d1max_site import SITE_VERSION
 from d1max_site.accounts import Accounts, AuthError
@@ -709,6 +711,17 @@ class Server:
         self.api.arming = self.arming
         self.api.deterrence = self.deterrence
         self.api.weather = self.weather
+        from d1max_site.push import PushDesk, load_sender
+        sender, why_off = load_sender(cfg)
+        if why_off:
+            log.warning("P1 不推到手机:%s", why_off)
+        #: P1 推到手机(商业化 A6,决策 53:极光,只推标题)。
+        self.push = PushDesk(self.db, now_ms=wall_ms, sender=sender,
+                             site_name=str(cfg.get("site_name") or cfg.get("site_id") or ""),
+                             why_off=why_off)
+        self.push.alerts = LoopAlerts(self.alerts, self.loop)   # 推送在线程里跑:告警经事件循环
+        self.alerts.push = sender is not None
+        self.api.push = self.push
         self.api.privacy = self.privacy                # W30:运行记录标「留着」
         self.api.charge = self.charge                  # W13:充电桩
         self.arming.on_expired = lambda back, row: self.api.audit.record(
@@ -839,17 +852,20 @@ class Server:
             for what, part, meth in (("驱离", "deterrence", "tick"),      # W22:到点收、续声光
                                      ("回充", "charge", "tick"),          # W13
                                      ("受力警笛", "force", "sound"),      # W26:布防时被抱起来
-                                     ("天气", "weather", "tick")):        # W29:雷暴撤排程、对账限速
+                                     ("天气", "weather", "tick"),         # W29:雷暴撤排程、对账限速
+                                     ("推送", "push", "tick")):           # A6:P1 推到手机
                 try:
-                    self._lane(what, getattr(getattr(self, part), meth))
+                    # 推送是同步的、要等网络:放线程里;别的本来就是协程
+                    self._lane(what, getattr(getattr(self, part), meth), thread=part == "push")
                 except Exception:
                     log.exception("%s这一拍没起来", what)
         lanes = [t for t in getattr(self, "_lanes", {}).values() if not t.done()]
         if lanes:
             await asyncio.wait(lanes, timeout=15)
 
-    def _lane(self, name: str, fn: Callable[[], Awaitable[None]]) -> None:
-        """``fn`` 放到自己那条道上跑一轮;上一轮还没完就不起新的(不叠着跑,状态机不乱)。"""
+    def _lane(self, name: str, fn: Callable[[], Any], *, thread: bool = False) -> None:
+        """``fn`` 放到自己那条道上跑一轮;上一轮还没完就不起新的(不叠着跑,状态机不乱)。
+        ``thread``:``fn`` 是同步的、会卡住(要等网络,比如推送)—— 放到线程里跑,不卡事件循环。"""
         if not hasattr(self, "_lanes"):
             self._lanes: dict[str, asyncio.Task] = {}
         t = self._lanes.get(name)
@@ -858,7 +874,9 @@ class Server:
 
         async def run() -> None:
             try:
-                await fn()
+                r = await asyncio.to_thread(fn) if thread else fn()
+                if inspect.isawaitable(r):
+                    await r
             except Exception:
                 log.exception("%s这一拍没办成", name)
         self._lanes[name] = asyncio.get_running_loop().create_task(run(), name=f"lane:{name}")

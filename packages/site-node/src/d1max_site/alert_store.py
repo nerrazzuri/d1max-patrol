@@ -52,6 +52,8 @@ class AlertDesk:
         self._publish = publish
         #: 一台狗的现场(W17):告警源接上(狗最后在哪、在跑哪一趟)。调用方给的 ``context`` 盖在上面。
         self.context_for: Callable[[str], dict[str, Any]] | None = None
+        #: 商业化 A6:P1 推到手机(站点主程序配了推送才打开)。
+        self.push = False
         self.book = AlertBook(sink=self._write)
         # 只读回未解决的与最近 RESTORE_RECENT 条:整张历史表读进内存会一直涨,升级每 5 s 还要遍历。
         # 序号从整张表的键里算(只读键),读回的只是一部分也不撞号。
@@ -75,6 +77,10 @@ class AlertDesk:
             c.execute(f"INSERT INTO alerts({', '.join(_COLS)}) VALUES "
                       f"({', '.join('?' * len(_COLS))}) ON CONFLICT(key) DO UPDATE SET "
                       + ", ".join(f"{k}=excluded.{k}" for k in _COLS[1:]), vals)
+            if self.push:
+                # 商业化 A6:没确认的 P1 新起、升档,跟告警同一个事务排进推送队列(记下了就一定会推)
+                from d1max_site.push import enqueue
+                enqueue(c, a, self._now())
         if self._publish is not None:
             try:
                 self._publish({"kind": "alert", "alert": w})
