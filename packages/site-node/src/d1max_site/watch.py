@@ -33,7 +33,7 @@ NO_BACKUP = "站点没配备份目录:站点的库和证据只有这一份"
 
 
 def watch_summary(dispatcher: Dispatcher, desk: AlertDesk, *, now_ms: int,
-                  scheduler: Any = None, backup: Any = None) -> dict[str, Any]:
+                  scheduler: Any = None, backup: Any = None, push: Any = None) -> dict[str, Any]:
     counts = desk.open_counts()
     zero = {"P1": 0, "P2": 0, "P3": 0}
     robots = []
@@ -86,4 +86,9 @@ def watch_summary(dispatcher: Dispatcher, desk: AlertDesk, *, now_ms: int,
         site["backup"] = backup.status()
         if not site["backup"]["configured"]:
             site["why"]["backup"] = NO_BACKUP
+    # 商业化 A6:P1 推不推得到手机(没配、几台手机登记了、有没有发不出去的)
+    site["push"] = push.view() if push is not None else None
+    if push is None or not site["push"]["configured"]:
+        site["why"]["push"] = ((push.why_off if push is not None else "")
+                               or "没配推送:P1 只在 App 里")
     return {"now_ms": now_ms, "robots": robots, "site": site}

@@ -185,6 +185,8 @@ class SiteApi:
         self.deterrence: Any = None
         #: 天气(W29,``weather.WeatherDesk``)。没接的站点 /api/weather 回 404。
         self.weather: Any = None
+        #: P1 推到手机(商业化 A6,``push.PushDesk``)。没接的站点 /api/push/devices 回 404。
+        self.push: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -413,6 +415,8 @@ class _Handler(TlsHandlerMixin):
                 return self._mode(method, path, user)
             if path == "/api/weather":
                 return self._weather(method, user)
+            if path in ("/api/push/devices", "/api/push/devices/remove"):
+                return self._push_devices(method, path, user)
             if path == "/api/chargers" or _CHARGER.match(path):
                 return self._chargers(method, path, user)
             if path in ("/api/incidents", "/api/intercepts", "/api/zones"):
@@ -516,7 +520,7 @@ class _Handler(TlsHandlerMixin):
             return self._send_json(200, self.site.loop.call(lambda: _sync(
                 watch_summary, self.site.dispatcher, self.site.alerts,
                 now_ms=self.site._now(), scheduler=self.site.scheduler,
-                backup=self.site.backup)))
+                backup=self.site.backup, push=self.site.push)))
         m = _ALERT.match(path)
         if method != "POST" or m is None:
             raise HttpError(404, f"没有 {method} {path}")
@@ -857,6 +861,27 @@ class _Handler(TlsHandlerMixin):
                 y=float(vals[1]), yaw=float(vals[2]), by=str(user)))
         except ChargeError as exc:
             raise HttpError(400, str(exc)) from exc
+
+    def _push_devices(self, method: str, path: str, user) -> None:
+        """这部手机收不收 P1 推送(商业化 A6):``POST /api/push/devices`` 登记推送号、
+        ``POST /api/push/devices/remove`` 注销。登录了的(包括值守令牌)都能给**自己**登记;推送号记在
+        这个账号名下。"""
+        desk = self.site.push
+        if desk is None:
+            raise HttpError(404, "这个站点没开推送")
+        self._need(user, VIEW)
+        d = self._body()
+        reg = str(d.get("registration_id") or "")
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        try:
+            if path.endswith("/remove"):
+                desk.unregister(str(user), reg)
+            else:
+                desk.register(str(user), reg, str(d.get("platform") or "android"))
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
+        return self._send_json(200, {"ok": True})
 
     def _weather(self, method: str, user) -> None:
         """天气(W29)。看:``view``。手动切(正常 / 下雨 / 雷暴 / 回到自动):``arm``(值班的保安、业主、

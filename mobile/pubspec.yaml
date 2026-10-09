@@ -37,6 +37,7 @@ dependencies:
   path_provider: ^2.1.6
   crypto: ^3.0.7
   video_player: ^2.14.1
+  jpush_flutter: ^3.5.8
 
 dev_dependencies:
   flutter_test:

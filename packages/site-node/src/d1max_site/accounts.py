@@ -38,7 +38,9 @@ WATCH_MAX = 5
 #: 回执、
 #: 入侵账 —— 偷到一个 30 天的值守令牌就能一直看整个站点。告警名单、值守汇总也不放(汇总里有狗的状态)
 #: 。
-WATCH_PATHS = frozenset({("GET", "/api/watch/events"), ("POST", "/api/logout")})
+WATCH_PATHS = frozenset({("GET", "/api/watch/events"), ("POST", "/api/logout"),
+                         # 商业化 A6:值守的手机登记、注销推送号(值守令牌就是为收 P1 发的)
+                         ("POST", "/api/push/devices"), ("POST", "/api/push/devices/remove")})
 FAIL_WINDOW_MS = 5 * 60_000
 FAIL_LIMIT = 5
 LOCK_MS = 5 * 60_000

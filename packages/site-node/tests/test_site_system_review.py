@@ -119,7 +119,7 @@ async def test_S06_驱离等回执的时候_受力对账照样每拍跑(monkeypa
         evidence_watch=SimpleNamespace(tick=lambda: None),
         weather=SimpleNamespace(tick=lambda: calls.append("天气") or noop()),
         arming=SimpleNamespace(tick=lambda: None))
-    rt._lane = lambda name, fn: cls._lane(rt, name, fn)
+    rt._lane = lambda name, fn, **kw: cls._lane(rt, name, fn, **kw)
     real_sleep = asyncio.sleep
 
     async def fast(_n):

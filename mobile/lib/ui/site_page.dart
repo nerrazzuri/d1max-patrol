@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../net/background_watch.dart';
+import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
 import 'site_logs.dart';
@@ -75,11 +76,14 @@ class SiteListPage extends StatefulWidget {
   final SiteApiFactory apiFactory;
   /// 后台值守（W17）：测试换成假的。
   final BackgroundWatch watch;
+  /// P1 推到手机（商业化 A6）：测试换成假的；缺省按平台（手机上是极光，桌面版不推）。
+  final PushRegistrar? push;
   const SiteListPage(
       {super.key,
       required this.store,
       this.apiFactory = defaultSiteApi,
-      this.watch = const ChannelBackgroundWatch()});
+      this.watch = const ChannelBackgroundWatch(),
+      this.push});
 
   @override
   State<SiteListPage> createState() => _SiteListPageState();
@@ -193,9 +197,23 @@ class _SiteListPageState extends State<SiteListPage> {
       return;
     }
     final a = api;
+    // 商业化 A6：进了站点就收这个站点的 P1 推送（报不上不挡进站点：后台值守照旧）
+    final push = widget.push ?? defaultPush();
+    String? pushId;
+    if (push.supported) {
+      unawaited(push.registrationId().then((id) async {
+        if (id == null || a.session == null) return;
+        await a.pushRegister(id, push.platform);
+        pushId = id;
+      }).catchError((Object _) {}));
+    }
     final why = await nav.push<String>(MaterialPageRoute<String>(
         builder: (_) => SiteRobotsPage(api: a, title: s.name, entry: s, watch: widget.watch)));
-    // 离开就注销：不然令牌在站点上还能用半小时。
+    // 离开就注销：不然令牌在站点上还能用半小时。推送号先注销（离开了就不再收这个站点的推送）。
+    try {
+      final id = pushId;
+      if (id != null && a.session != null) await a.pushUnregister(id);
+    } catch (_) {}
     try {
       if (a.session != null) await a.logout();
     } catch (_) {}

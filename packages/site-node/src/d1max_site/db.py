@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 44                      # PR #87 复查 R4:受力警报定时续(force_episodes.siren_ms)
+SCHEMA_VERSION = 45                      # 商业化 A6:P1 推到手机(push_devices、push_outbox)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -396,6 +396,28 @@ CREATE TABLE IF NOT EXISTS purged (
     key       TEXT NOT NULL,
     purged_ms INTEGER NOT NULL,
     PRIMARY KEY (kind, robot_id, key)
+);
+-- 商业化 A6(决策 53):收推送的手机(极光的推送号)、要推的 P1(告警写库的同一个事务里排上;同一条
+-- 同一档只排一次)。
+CREATE TABLE IF NOT EXISTS push_devices (
+    reg_id     TEXT PRIMARY KEY,
+    account    TEXT NOT NULL,
+    platform   TEXT NOT NULL,
+    updated_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS push_outbox (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_key  TEXT NOT NULL,
+    tier       INTEGER NOT NULL,
+    robot      TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    next_ms    INTEGER NOT NULL,
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    sent_ms    INTEGER,
+    dropped    TEXT NOT NULL DEFAULT '',
+    error      TEXT NOT NULL DEFAULT '',
+    UNIQUE (alert_key, tier)
 );
 -- W33(决策 48):布防中狗没在驱离时看见人,这一回报过 P1 了(狗确认人走了删,再看见再报)。
 CREATE TABLE IF NOT EXISTS person_sightings (

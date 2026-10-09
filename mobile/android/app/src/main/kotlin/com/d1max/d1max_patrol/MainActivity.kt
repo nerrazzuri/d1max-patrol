@@ -13,6 +13,10 @@ import io.flutter.plugin.common.MethodChannel
 
 /** 后台值守（W17）的开关在 Dart 那边（`lib/net/background_watch.dart`），这里只转给 [WatchService]。 */
 class MainActivity : FlutterActivity() {
+    /** 商业化 A6:App 被杀以后点厂商通道的推送通知,拉起的 intent 带着参数,Flutter 3.29 起会当深链接
+     *  去找路由、找不到就白屏(极光插件说明)。我们不用深链接:关掉。 */
+    override fun shouldHandleDeeplinking(): Boolean = false
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "d1max/watch").setMethodCallHandler { call, result ->

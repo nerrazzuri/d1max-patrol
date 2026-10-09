@@ -286,6 +286,10 @@ abstract class SiteApi {
   SiteSession? get session;
   Future<SiteSession> login(String name, String password);
   Future<void> logout();
+
+  /// 商业化 A6：这台手机收 P1 推送（极光推送号），离开站点前注销。
+  Future<void> pushRegister(String registrationId, String platform);
+  Future<void> pushUnregister(String registrationId);
   Future<List<Map<String, dynamic>>> robots();
   Future<Map<String, dynamic>> robot(String id);
   Future<Map<String, dynamic>> patrol(String id, String missionId);
@@ -690,6 +694,18 @@ class SiteClient implements SiteApi {
     } finally {
       session = null;
     }
+  }
+
+  @override
+  Future<void> pushRegister(String registrationId, String platform) async {
+    await _send('POST', '/api/push/devices',
+        <String, dynamic>{'registration_id': registrationId, 'platform': platform});
+  }
+
+  @override
+  Future<void> pushUnregister(String registrationId) async {
+    await _send('POST', '/api/push/devices/remove',
+        <String, dynamic>{'registration_id': registrationId});
   }
 
   @override

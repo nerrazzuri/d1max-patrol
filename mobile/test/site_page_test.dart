@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:d1max_patrol/main.dart';
 import 'package:d1max_patrol/model/alert.dart';
+import 'package:d1max_patrol/net/push.dart';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
@@ -62,8 +63,14 @@ class FakeApi implements SiteApi {
 
   @override
   Future<SiteSession> login(String n, String p) async => session!;
+  /// 商业化 A6：推送号登记、注销、注销会话的先后。
+  final List<String> pushLog = <String>[];
   @override
-  Future<void> logout() async {}
+  Future<void> logout() async => pushLog.add('logout');
+  @override
+  Future<void> pushRegister(String id, String platform) async => pushLog.add('+$id/$platform');
+  @override
+  Future<void> pushUnregister(String id) async => pushLog.add('-$id');
   @override
   Future<List<Map<String, dynamic>>> robots() async {
     robotsCalls++;
@@ -768,6 +775,30 @@ void main() {
     await t.pumpWidget(const SizedBox());
   });
 
+  testWidgets('A6：进了站点报推送号，离开时先注销推送号再注销会话；桌面版不报', (t) async {
+    final store = MemorySiteStore([
+      SiteEntry(name: '庄园', url: 'https://h:1', fingerprint: 'ab' * 32, username: 'gina')
+    ]);
+    for (final push in <PushRegistrar>[_FakePush(), const NoPush()]) {
+      final api = FakeApi('guard');
+      await t.pumpWidget(MaterialApp(
+          home: SiteListPage(store: store, apiFactory: (_) => api, push: push)));
+      await t.pumpAndSettle();
+      await t.tap(find.text('庄园'));
+      await t.pumpAndSettle();
+      await t.enterText(find.byKey(const Key('site-password')), 'pw');
+      await t.tap(find.text('登录'));
+      await t.pumpAndSettle();
+      expect(find.byType(SiteRobotsPage), findsOneWidget);
+      await t.pageBack();
+      await t.pumpAndSettle();
+      expect(api.pushLog,
+          push.supported ? ['+rid-1/android', '-rid-1', 'logout'] : ['logout'],
+          reason: push.supported ? '先注销推送号、再注销会话' : '不支持推送的平台什么都不报');
+      await t.pumpWidget(const SizedBox());
+    }
+  });
+
   testWidgets('令牌过期（401）退回站点列表并说明', (t) async {
     final store = MemorySiteStore([
       SiteEntry(name: '庄园', url: 'https://h:1', fingerprint: 'ab' * 32, username: 'gina')
@@ -856,4 +887,14 @@ class _BrokenStore implements SiteStore {
   @override
   Future<void> save(List<SiteEntry> s) async => throw StateError('不许写');
 
+}
+
+
+class _FakePush implements PushRegistrar {
+  @override
+  bool get supported => true;
+  @override
+  String get platform => 'android';
+  @override
+  Future<String?> registrationId() async => 'rid-1';
 }
