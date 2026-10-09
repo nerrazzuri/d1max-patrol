@@ -142,6 +142,7 @@ class SiteBackup:
                 old.unlink(missing_ok=True)
             self._config()
             self._mirror()
+            self._manifest(stamp)
         except (OSError, sqlite3.Error, SealError) as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
             log.warning("站点备份没成: %s", self.last_error)
@@ -152,6 +153,29 @@ class SiteBackup:
         self._meta_set("backup_last_ok_ms", self.last_ok_ms)
         self.last_error = ""
         return True
+
+    def _manifest(self, stamp: str) -> None:
+        """这一次备份**做完了**才发清单(A2 外审 R1):备份目录里此刻有的每一个文件。校验按清单一个
+        一个核 —— 只核剩下的文件,整份删掉的就发现不了。没有清单的快照(做到一半断了)不算可恢复的
+        版本。清单跟快照同名时刻,留得一样久。"""
+        assert self.dest is not None
+        dbdir = self.dest / "db"
+        files = sorted(p.relative_to(self.dest).as_posix() for p in self.dest.rglob("*")
+                       if p.is_file() and p.parent != dbdir and not p.name.startswith("."))
+        body = json.dumps({"stamp": stamp, "files": files}, ensure_ascii=False).encode()
+        tmp = dbdir / f".manifest-{stamp}.json.tmp"
+        tmp.write_bytes(body)
+        try:
+            if self.box is not None:
+                self.box.seal_file(tmp, dbdir / f"manifest-{stamp}.json{SEALED}")
+            else:
+                os.replace(tmp, dbdir / f"manifest-{stamp}.json")
+        finally:
+            tmp.unlink(missing_ok=True)
+        snaps = {p.name.split(".")[0].removeprefix("site-") for p in dbdir.glob("site-*.db*")}
+        for m in dbdir.glob("manifest-*.json*"):          # 快照删了,它的清单也删
+            if m.name.split(".")[0].removeprefix("manifest-") not in snaps:
+                m.unlink(missing_ok=True)
 
     def _config(self) -> None:
         """站点身份的单个文件(``site.json``)进 ``config/``(A2)。CA 目录走镜像(主程序 ``more``)。"""
@@ -170,28 +194,43 @@ class SiteBackup:
                 os.replace(tmp, out / name)
 
     def verify_step(self, key: Path | None) -> dict[str, Any] | None:
-        """每周抽查一次备份能不能用(A2):库快照完整、身份齐、每一趟都在、抽 ``VERIFY_SAMPLE`` 个文件
-        核 MAC。没过报 P2 ``backup_verify_failed``,过了自动解决。结果记库(值守汇总看)。全量校验用
-        ``d1max-site backup-verify``。"""
-        if self.dest is None or self.last_ok_ms is None:
-            return None
-        last = self._meta_int("backup_verify_ms") or 0
-        if self._now() - last < VERIFY_EVERY_MS:
-            return None
-        from d1max_site.restore import verify
-        rep = verify(self.dest, key, sample=VERIFY_SAMPLE).to_dict()
-        self._meta_set("backup_verify_ms", self._now())
-        with self.db.tx() as c:
-            c.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)",
-                      ("backup_verify", json.dumps(rep, ensure_ascii=False)))
-        if self.alerts is not None:
-            if not rep["ok"]:
-                self.alerts.raise_alert(kind="backup_verify_failed", robot=SITE,
-                                        title="站点备份校验没过:出了事可能恢复不了",
-                                        detail=";".join(rep["problems"])[:300])
-            else:
-                self.alerts.resolve_all(SITE, "backup_verify_failed", who="site:backup_verify")
+        """每周抽查一次备份能不能用(A2):按清单核每个文件都在、库快照完整、身份齐、登记的照片都在、
+        抽 ``VERIFY_SAMPLE`` 个文件核 MAC。**紧跟在一次备份做完之后跑**(清单是新的)。结果记库(值守
+        汇总看)。回这一次扫的结果;没到点回 ``None``。全量校验用 ``d1max-site backup-verify``。
+
+        告警**每拍按记下的结果对账**(A2 外审 R4):没过报 P2 ``backup_verify_failed``、过了解决;
+        报、解决失败了下一拍再来,不等下一周的扫描。"""
+        rep = None
+        if self.dest is not None and self.last_ok_ms is not None:
+            last = self._meta_int("backup_verify_ms") or 0
+            if self._now() - last >= VERIFY_EVERY_MS and self.last_ok_ms > last:
+                from d1max_site.restore import verify
+                rep = verify(self.dest, key, sample=VERIFY_SAMPLE).to_dict()
+                with self.db.tx() as c:                    # 结果跟时刻同一个事务落库
+                    c.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)",
+                              ("backup_verify", json.dumps(rep, ensure_ascii=False)))
+                    c.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)",
+                              ("backup_verify_ms", str(self._now())))
+        self._verify_alert()
         return rep
+
+    def _verify_alert(self) -> None:
+        if self.alerts is None:
+            return
+        rows = self.db.query("SELECT value FROM meta WHERE key='backup_verify'")
+        if not rows:
+            return
+        try:
+            rep = json.loads(rows[0]["value"])
+        except ValueError:
+            return
+        open_ = self.alerts.has_open(SITE, "backup_verify_failed")
+        if not rep.get("ok") and not open_:
+            self.alerts.raise_alert(kind="backup_verify_failed", robot=SITE,
+                                    title="站点备份校验没过:出了事可能恢复不了",
+                                    detail=";".join(rep.get("problems", []))[:300])
+        elif rep.get("ok") and open_:
+            self.alerts.resolve_all(SITE, "backup_verify_failed", who="site:backup_verify")
 
     def _mirror(self) -> None:
         assert self.dest is not None
