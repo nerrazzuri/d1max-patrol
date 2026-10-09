@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 42                      # W26:狗翻倒、被抱起来的这一回(force_episodes)
+SCHEMA_VERSION = 43                      # 系统审查 S07:删过的证据不许复活(purged)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -380,12 +380,21 @@ CREATE TABLE IF NOT EXISTS evidence_unsealed (
     created_ms INTEGER NOT NULL
 );
 -- W26(决策 52):狗翻倒、被抱起来的这一回(报过 P1 了;狗报回 ok 删)。siren:1 = 布防中被抱起来、
--- 警笛警灯还没开成(下一拍再发),0 = 不响或者开过了。
+-- 警笛警灯还没开成(下一拍再发),2 = 开成了(45 秒内这几路归它,驱离不许关),0 = 不响、过点了。
 CREATE TABLE IF NOT EXISTS force_episodes (
     robot_id   TEXT PRIMARY KEY,
     state      TEXT NOT NULL,
     started_ms INTEGER NOT NULL,
     siren      INTEGER NOT NULL DEFAULT 0
+);
+-- 系统审查 S07:删过的证据(kind:run 一趟 <任务>/<时刻>、rec 一段录像 <相机>/<时刻>)。跟删除同一个
+-- 事务落库;再传上来照收照回执、收齐就扔,不登记(回执丢了、断网攒着的、跟删除交错的都不复活)。
+CREATE TABLE IF NOT EXISTS purged (
+    kind      TEXT NOT NULL,
+    robot_id  TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    purged_ms INTEGER NOT NULL,
+    PRIMARY KEY (kind, robot_id, key)
 );
 -- W33(决策 48):布防中狗没在驱离时看见人,这一回报过 P1 了(狗确认人走了删,再看见再报)。
 CREATE TABLE IF NOT EXISTS person_sightings (

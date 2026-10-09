@@ -23,6 +23,10 @@ PREFIX = "enc1:"
 FILE_MAGIC = b"D1SEAL1\n"
 KEY_BYTES = 32
 _TAG = 32
+#: 加密文件比原文多这么多字节:我们的头 + openssl 带口令时的 ``Salted__`` 头和 8 字节盐 + MAC
+#: (CTR 不补齐)。备份增量按它换算原文长度(系统审查 S08)。
+_OPENSSL_SALT_HEADER = 16
+FILE_OVERHEAD = len(FILE_MAGIC) + _OPENSSL_SALT_HEADER + _TAG
 _CHUNK = 1 << 20
 
 

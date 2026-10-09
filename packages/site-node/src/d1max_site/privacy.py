@@ -21,6 +21,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from d1max_site.evidence import PURGE_KEEP_DAYS, mark_purged
+
 log = logging.getLogger(__name__)
 
 KEEP_DAYS = 90
@@ -56,6 +58,9 @@ class PrivacyDesk:
         with self.db.tx() as c:
             c.execute("DELETE FROM run_photos WHERE run_id=?", (run["id"],))
             c.execute("DELETE FROM runs WHERE id=?", (run["id"],))
+            # 系统审查 S07:记「删过了」,再传上来不许复活
+            mark_purged(c, "run", run["robot_id"], f"{run['mission']}/{run['stamp']}",
+                        self._now())
             # 「这一趟的导出要删」跟删登记同一个事务落库(W30 复查):导出删成了才清
             c.execute("INSERT OR IGNORE INTO export_purges(run_id, created_ms) VALUES (?,?)",
                       (run["id"], self._now()))
@@ -68,6 +73,9 @@ class PrivacyDesk:
             "SELECT * FROM runs WHERE keep=0 AND last_ms<? ORDER BY last_ms LIMIT 500", (cutoff,))]
         done = {r["id"] for r in rows if self._delete_run(r)}
         self._drop_exports()                            # 连以前没删成的导出一起接着删
+        with self.db.tx() as c:                         # 「删过了」的记号记够了就忘(S07)
+            c.execute("DELETE FROM purged WHERE purged_ms<?",
+                      (self._now() - PURGE_KEEP_DAYS * DAY_MS,))
         n = len(done)
         if n:
             log.info("运行记录过了 %d 天留存期:删了 %d 趟", self.keep_days, n)

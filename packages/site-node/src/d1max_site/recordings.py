@@ -26,7 +26,15 @@ from typing import Any
 
 from d1max_contract.intake import VIDEO_FILE, VIDEO_SEALED, split_video
 from d1max_site.db import SiteDB
-from d1max_site.evidence import ChunkWriter, PathRefused, Stored, safe_join
+from d1max_site.evidence import (
+    ChunkWriter,
+    PathRefused,
+    Stored,
+    is_purged,
+    mark_purged,
+    safe_join,
+    swallow,
+)
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +63,8 @@ class RecordingStore:
         self.keep_days = keep_days
         self._disk_usage = disk_usage
         self.writer = ChunkWriter()
+        #: 删过的录像又传上来时临时收在这里,收齐就删(系统审查 S07)。
+        self.purged_root = self.root.parent / (self.root.name + "-purged-incoming")
         #: 为了腾盘删了录像(``(删了几段, 最早收齐的那段的收齐时刻)``):站点主程序接到告警源上。
         self.on_trimmed: Callable[[int, int], None] | None = None
         #: 盘紧又删不掉(``(删不掉几段, 最后一个错误)``):不处理的话盘到底线,巡检证据也传不上来了。
@@ -74,6 +84,10 @@ class RecordingStore:
         if got is None or rel not in (VIDEO_FILE, VIDEO_SEALED):
             raise PathRefused(f"录像的路径不对:{run!r}/{rel!r}")
         camera, stamp = got
+        if is_purged(self.db, "rec", robot_id, f"{camera}/{stamp}"):
+            # 删过的这一段又传上来(系统审查 S07):照收照回执、收齐就扔,不登记
+            return swallow(self.writer, self.purged_root, robot_id, f"{camera}/{stamp}", rel,
+                           offset=offset, data=data, total=total)
         sealed = rel == VIDEO_SEALED
         plain_path = safe_join(self.root, robot_id, camera, stamp[:8], f"{stamp}.mp4")
         path = plain_path.with_name(plain_path.name + ".d1e") if sealed else plain_path
@@ -98,14 +112,23 @@ class RecordingStore:
         else:
             plain = stored
         with self.db.tx() as c:
-            c.execute(
-                "INSERT INTO recordings(robot_id, camera, stamp, start_ms, bytes, sha256, "
-                "received_ms, sealed) VALUES (?,?,?,?,?,?,?,?) "
-                # 重传不刷新 received_ms:留存从第一次收齐算(W18 外审)
-                "ON CONFLICT(robot_id, camera, stamp) DO UPDATE SET bytes=excluded.bytes, "
-                "sha256=excluded.sha256, sealed=excluded.sealed",
-                (robot_id, camera, stamp, stamp_ms(stamp), plain.size, plain.sha256, self._now(),
-                 sealed))
+            # 跟登记同一个事务核对「删过了」(系统审查 S07):收着的时候被删了的,不登记、不复活
+            gone = bool(c.execute("SELECT 1 FROM purged WHERE kind='rec' AND robot_id=? AND key=?",
+                                  (robot_id, f"{camera}/{stamp}")).fetchone())
+            if not gone:
+                c.execute(
+                    "INSERT INTO recordings(robot_id, camera, stamp, start_ms, bytes, sha256, "
+                    "received_ms, sealed) VALUES (?,?,?,?,?,?,?,?) "
+                    # 重传不刷新 received_ms:留存从第一次收齐算(W18 外审)
+                    "ON CONFLICT(robot_id, camera, stamp) DO UPDATE SET bytes=excluded.bytes, "
+                    "sha256=excluded.sha256, sealed=excluded.sealed",
+                    (robot_id, camera, stamp, stamp_ms(stamp), plain.size, plain.sha256,
+                     self._now(), sealed))
+        if gone:
+            for p in (path, plain_path):
+                p.unlink(missing_ok=True)
+            log.info("%s 的录像 %s/%s 删过了:收齐的这份不登记", robot_id, camera, stamp)
+            return stored
         if sealed:
             if self.on_unopened is not None:
                 self.on_unopened(robot_id, f"{camera}/{stamp}", VIDEO_SEALED, why)
@@ -190,6 +213,8 @@ class RecordingStore:
             return False
         with self.db.tx() as c:
             c.execute("DELETE FROM recordings WHERE id=?", (row["id"],))
+            # 系统审查 S07:记「删过了」,再传上来不许复活
+            mark_purged(c, "rec", row["robot_id"], f"{row['camera']}/{row['stamp']}", self._now())
         return True
 
     def _free_ratio(self) -> float:

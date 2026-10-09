@@ -48,7 +48,13 @@ from d1max_agent.tasks.engine_goto import EngineGotoTask
 from d1max_agent.transport import GuardedTransport
 from d1max_agent.zonebook import ZoneBook
 from d1max_contract.errors import ContractError
-from d1max_contract.hal import Fault, HalUnsupported, RobotHAL
+from d1max_contract.hal import (
+    Fault,
+    HalUnsupported,
+    RobotHAL,
+    VelocityCommand,
+    VelocityResult,
+)
 from d1max_contract.maps import PRIOR_FILES
 from d1max_contract.messages import Command, MapPose, Reconcile, fault_event_data
 from d1max_contract.policy import policy_for
@@ -163,6 +169,7 @@ class AgentRuntime:
         self._rtk_reloc: asyncio.Task | None = None
         self.topics = registration.topics
         self.hal = hal
+        self._guard_velocity(hal)
         self.boot_id = boot_id or f"boot-{uuid.uuid4().hex[:10]}"
         self._now = now_ms
         self.loaded_map = loaded_map
@@ -677,9 +684,45 @@ class AgentRuntime:
         self._dock_clear_ms = None
         self.events.emit("dock_hazard", {"reason": self._dock_hazard})
 
+    def _guard_velocity(self, hal: RobotHAL) -> None:
+        """**所有运动出口的统一那一道**(系统审查 S01、S03):导航、遥控、保持距离发速度都经
+        ``hal.set_velocity``,这里把它换成先过闸的那一个(装在 HAL 实例上:谁拿着这个 HAL 都绕不过去,
+        包括主程序先装好的引擎)。
+        - 受力锁着(翻倒、抱起来、安全处置没做完):速度一律拒、再叫一次停 —— 撤任务失败时旧任务还在
+          ``step``,不许把刚做完的停车盖掉;
+        - 全狗限速(W29)有效:平移速度按比例压到上限以内(遥控、保持距离以前只有导航守)。"""
+        inner = hal.set_velocity
+
+        async def guarded(cmd: VelocityCommand) -> VelocityResult:
+            why = self._force_gate()
+            if why:
+                if cmd.vx or cmd.vy or cmd.wz:
+                    try:
+                        await hal.stop()
+                    except Exception:
+                        log.exception("受力锁着时停车失败")
+                return VelocityResult(applied_vx=0.0, applied_wz=0.0, clamped=False,
+                                      rejected=True, reason=why.split(":", 1)[0] or "force")
+            cap = self._cap_now()
+            v = math.hypot(cmd.vx, cmd.vy)
+            if v > cap:
+                k = cap / v
+                cmd = dataclasses.replace(cmd, vx=cmd.vx * k, vy=cmd.vy * k)
+            return await inner(cmd)
+        hal.set_velocity = guarded  # type: ignore[method-assign]
+
+    def _cap_now(self) -> float:
+        """此刻有效的全狗限速(过期了就是不限)。"""
+        sc = getattr(self, "_speed_cap", None)
+        if sc is None or self._mono_ms() >= sc[1]:
+            return math.inf
+        return sc[0]
+
     def _force_gate(self) -> str:
         """W26:翻倒、被抱起来时不收、不起跑会让狗动的任务。"""
-        st = self.force.state if self.force is not None else "ok"
+        if getattr(self, "force", None) is None:
+            return ""
+        st = self.force.state
         if st == "ok" and self.force is not None and self.force.owed:
             # W26 复查 2:姿态恢复了,可停车、急停还没确认做成:照旧锁着
             return "force: 翻倒、被抱起来后的安全处置还没做完(" + "、".join(sorted(
@@ -712,18 +755,24 @@ class AgentRuntime:
         for f in found:
             log.warning("受力检测:%s %s", f.kind, f.data)
             self.events.emit(f"force_{f.kind}", f.data)
+        # 系统审查 S02:**先落盘、再做要等的安全动作** —— 等撤任务、停车的时候进程没了,重启也还记得
+        # 危险和欠着的动作。写不进去照样马上做安全动作,标记留着下一拍再写。
+        self._force_save()
         await self._force_secure()
-        if self.force.dirty:                      # W26 复查 1:没写成盘的每拍重写,写成为止
-            try:
-                self.force.save()
-            except OSError:
-                log.exception("受力状态写不进盘(下一拍再写)")
+        self._force_save()                        # 安全动作划掉了几样:再写一次
         key = (self.force.state, tuple(sorted(self.force.checks.items())),
                tuple(sorted(self.force.owed)))
         if key != self._force_told:
             self._force_told = key
             if self.transport.connected:
                 await self._publish_caps()
+
+    def _force_save(self) -> None:
+        if self.force.dirty:                      # W26 复查 1:没写成盘的每拍重写,写成为止
+            try:
+                self.force.save()
+            except OSError:
+                log.exception("受力状态写不进盘(下一拍再写)")
 
     async def _force_secure(self) -> None:
         """W26 外审 1:翻倒、抱起来时欠着的安全动作**各做各的**、每拍补,确认做成了才划掉(落盘):

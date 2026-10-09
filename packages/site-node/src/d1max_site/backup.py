@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from d1max_site.alert_sources import SITE
-from d1max_site.sealbox import SealError
+from d1max_site.sealbox import FILE_OVERHEAD, SealError
 
 log = logging.getLogger(__name__)
 
@@ -187,22 +187,29 @@ class SiteBackup:
                 dst = dst.with_name(dst.name + SEALED)
             try:
                 st = src.stat()
+                # 系统审查 S08:按**原文的版本**比 —— 修改时间精确到纳秒、原文长度(加密的按固定开销
+                # 换算)。以前截成整秒、加密时还不看长度:同一秒里写完后半截的文件永远进不了备份。
+                extra = FILE_OVERHEAD if self.box is not None else 0
                 try:
                     ds = dst.stat()
-                    same = int(ds.st_mtime) == int(st.st_mtime) and (
-                        self.box is not None or ds.st_size == st.st_size)
-                    if same:
+                    if ds.st_mtime_ns == st.st_mtime_ns and ds.st_size == st.st_size + extra:
                         continue
                 except FileNotFoundError:
                     pass
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 if self.box is not None:
                     self.box.seal_file(src, dst)
-                    os.utime(dst, (st.st_atime, st.st_mtime))   # 增量按原文件的修改时间比
                     (out / rel).unlink(missing_ok=True)          # 以前的明文那份删掉
                 else:
                     tmp = dst.with_name(dst.name + ".tmp")
                     shutil.copy2(src, tmp)
                     os.replace(tmp, dst)
+                after = src.stat()
+                if (after.st_mtime_ns, after.st_size) == (st.st_mtime_ns, st.st_size):
+                    os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))  # 增量按原文的版本比
+                else:
+                    # 拷的时候源还在变(证据按块写):这一份可能是半截,标成「要重拷」(修改时间
+                    # 对不上),下一轮再拷
+                    os.utime(dst, ns=(st.st_atime_ns, 0))
             except FileNotFoundError:
                 continue                          # 拷的时候源没了(搬走、删掉):这一个跳过,别的照拷

@@ -67,6 +67,11 @@ class ForceWatch:
         return st if st in ("ok", "flipped", "lifted") else None
 
     async def tick(self) -> None:
+        self.reconcile()
+        await self.sound()
+
+    def reconcile(self) -> None:
+        """对账、报 P1(不等任何回执:系统审查 S06,站点主程序每拍直接调,不许被别的命令等住)。"""
         rows = {r["robot_id"]: dict(r) for r in self.db.query("SELECT * FROM force_episodes")}
         now = self._now()
         for rid in list(self.dispatcher.clients):
@@ -82,9 +87,13 @@ class ForceWatch:
             elif row is None or row["state"] != st:
                 rows[rid] = self._raise(rid, st, now)
         flush(self.db, self.alerts)
-        for rid, row in rows.items():
-            if row["state"] == "lifted" and row["siren"] == 1:
-                await self._siren(rid, row, now)
+
+    async def sound(self) -> None:
+        """要响还没响成的警笛、警灯发出去(要等回执:站点主程序放在自己那条道上跑)。"""
+        now = self._now()
+        for row in [dict(r) for r in self.db.query(
+                "SELECT * FROM force_episodes WHERE state='lifted' AND siren=1")]:
+            await self._siren(row["robot_id"], row, now)
 
     def _raise(self, rid: str, st: str, now: int) -> dict[str, Any]:
         c = self.dispatcher.clients.get(rid)
@@ -105,6 +114,16 @@ class ForceWatch:
                   context=context, now_ms=now)
         log.warning("%s %s", rid, _TITLES[st])
         return {"robot_id": rid, "state": st, "started_ms": now, "siren": siren}
+
+    def held(self, rid: str) -> set[str]:
+        """这台狗此刻归受力警报的输出(布防中被抱起来、这一回开始后 ``SIREN_S`` 秒内)。驱离收场、
+        换级关灯时问它(系统审查 S04)。"""
+        rows = self.db.query("SELECT state, started_ms, siren FROM force_episodes "
+                             "WHERE robot_id=?", (rid,))
+        if not rows or rows[0]["state"] != "lifted" or rows[0]["siren"] not in (1, 2) \
+                or self._now() - rows[0]["started_ms"] >= SIREN_S * 1000:
+            return set()
+        return {"siren", "strobe"}
 
     def _outputs(self, rid: str) -> list[str]:
         c = self.dispatcher.clients.get(rid)
@@ -130,6 +149,7 @@ class ForceWatch:
                     log.warning("%s 被抱起来了,%s 没发出去:%s", rid, out, exc)
                     ok = False
         if ok:
+            # 2 = 开成了(这一回的 45 秒内这几路归受力警报,驱离收尾不许关:系统审查 S04)
             with self.db.tx() as tx:
-                tx.execute("UPDATE force_episodes SET siren=0 WHERE robot_id=? AND started_ms=?",
+                tx.execute("UPDATE force_episodes SET siren=2 WHERE robot_id=? AND started_ms=?",
                            (rid, row["started_ms"]))

@@ -95,6 +95,9 @@ class SiteScheduler:
         self.on_outcome = on_outcome
         #: 天气(W29,``weather.WeatherDesk``):雷暴时到点不起跑。站点主程序接上。
         self.weather: Any = None
+        #: 站点这头占着的狗(驱离会话;系统审查 S05):狗上一时没有任务(没配保持距离、补派窗口、
+        #: 站点重启恢复中)也算忙,排程不许抢。站点主程序接 ``deterrence.busy``。
+        self.site_busy: Callable[[], set[str]] | None = None
         self.dispatcher = dispatcher
         self._now = now_ms
         self._ref = time_reference
@@ -317,6 +320,8 @@ class SiteScheduler:
                                 else f"{rid} 要人监护,不接排程"), "supervised"
             if not reason and self.dispatcher.busy(rid) is not None:
                 reason, kind = f"{rid} 正在跑 {self.dispatcher.busy(rid)}", "busy"
+            if not reason and rid in self._site_busy():
+                reason, kind = f"{rid} 正在驱离", "busy"
             if not reason:
                 caps = self.dispatcher.clients[rid].capabilities
                 loaded = caps.tasks.get("patrol", {}).get("map_id") if caps else None
@@ -328,6 +333,15 @@ class SiteScheduler:
             else:
                 ok.append(rid)
         return ok, taken, ";".join(why) or "没有登记的狗", kinds
+
+    def _site_busy(self) -> set[str]:
+        if self.site_busy is None:
+            return set()
+        try:
+            return set(self.site_busy())
+        except Exception:
+            log.exception("站点占用读不出来:这一拍不派")
+            return {"*"} | {r.robot_id for r in self.dispatcher.registry.list()}
 
     def _best(self, ok: list[str]) -> tuple[str, str]:
         """能派的不止一台时挑一台(W28,决策 46):电量高的先,一样就定位质量高的,再按 robot_id。
@@ -369,6 +383,9 @@ class SiteScheduler:
         task_id = f"sched-{uuid.uuid4().hex[:12]}"
 
         def 发之前记账(_cmd, tx) -> None:
+            if rid in self._site_busy():
+                # 选狗之后、发之前驱离占了它(系统审查 S05):不发,整个事务回滚
+                raise DispatchRefused(f"{rid} 正在驱离")
             # 用派遣器开的事务(跟命令入账同一个):哪一步炸了整个回滚 —— 这一轮不算起跑过、没有运行
             # 记录、命令也不发(外审复查)。``started`` 不用报告警,不走 ``_record``(它自己开事务)。
             tx.execute("INSERT INTO schedule_state(entry_id, last_started_ms) VALUES (?,?) "
