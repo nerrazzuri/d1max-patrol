@@ -85,6 +85,20 @@ def _complete(dest: Path) -> tuple[Path | None, Path | None]:
     return (snaps[sorted(snaps)[-1]] if snaps else None), None
 
 
+def _manifest_problem(dest: Path, box: SealBox | None, man: Path | None, tmp: Path) -> str:
+    """选定的那次备份按清单完整吗:回空串 = 完整;否则回原因。校验、恢复、演练共用(A2 复查)。"""
+    if man is None:
+        return "没有做完的备份(没有清单):要么做到一半断了,要么是老版本做的 —— 等下一次备份"
+    try:
+        listed = json.loads(_read(box, man, tmp / "m.json").read_bytes())["files"]
+    except (SealError, OSError, ValueError, KeyError, TypeError) as exc:
+        return f"清单 {man.name} 读不了:{exc}"
+    lost = [f for f in listed if not (dest / f).is_file()]
+    if lost:
+        return f"清单上的 {len(lost)} 个文件不见了(比如 {lost[0]})"
+    return ""
+
+
 def _read(box: SealBox | None, src: Path, tmp: Path) -> Path:
     """加密的解到 ``tmp``,明文的原样。"""
     if src.name.endswith(SEALED):
@@ -166,16 +180,9 @@ def verify(dest: Path, key: Path | None, *, sample: int | None = None,
                     rep.bad(f"库快照 {snap.name} 完整性检查没过:{check[:200]}")
             except (SealError, OSError, sqlite3.Error) as exc:
                 rep.bad(f"库快照 {snap.name} 打不开:{exc}")
-        if man is None:
-            rep.bad("没有做完的备份(没有清单):要么做到一半断了,要么是老版本做的 —— 等下一次备份")
-        else:
-            try:
-                listed = json.loads(_read(box, man, Path(tmp) / "m.json").read_bytes())["files"]
-                lost = [f for f in listed if not (dest / f).is_file()]
-                if lost:
-                    rep.bad(f"清单上的 {len(lost)} 个文件不见了(比如 {lost[0]})")
-            except (SealError, OSError, ValueError, KeyError, TypeError) as exc:
-                rep.bad(f"清单 {man.name} 读不了:{exc}")
+        why = _manifest_problem(dest, box, man, Path(tmp))
+        if why:
+            rep.bad(why)
     _check_tree(rep, dest, suffix, runs, photos, "备份里")
     files = [p for p in dest.rglob("*") if p.is_file() and p.parent.name != "db"
              and not p.name.startswith(".")]
@@ -207,9 +214,14 @@ def restore(dest: Path, key: Path | None, home: Path) -> Report:
     if home.exists() and any(home.iterdir()):
         raise SealError(f"{home} 不是空的:恢复只往空目录里放(不盖掉现有的站点)")
     box = _box(key)
-    snap, _man = _complete(dest)
+    snap, man = _complete(dest)
     if snap is None:
         raise SealError("备份里没有库快照(db/site-*.db)")
+    # A2 复查:**写之前**先按清单核这次备份完整(没清单、缺文件就不恢复 —— 恢复出来缺东西却报成)
+    with tempfile.TemporaryDirectory(prefix="d1max-restore-") as tmp:
+        why = _manifest_problem(dest, box, man, Path(tmp))
+    if why:
+        raise SealError(f"不恢复:{why}")
     old = os.umask(0o077)
     try:
         home.mkdir(parents=True, exist_ok=True)
