@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 41                      # W30b 复查 Minor:这一回「封不上」报过了(evidence_unsealed)
+SCHEMA_VERSION = 42                      # W26:狗翻倒、被抱起来的这一回(force_episodes)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -378,6 +378,14 @@ CREATE TABLE IF NOT EXISTS evidence_plain (
 CREATE TABLE IF NOT EXISTS evidence_unsealed (
     robot_id   TEXT PRIMARY KEY,
     created_ms INTEGER NOT NULL
+);
+-- W26(决策 52):狗翻倒、被抱起来的这一回(报过 P1 了;狗报回 ok 删)。siren:1 = 布防中被抱起来、
+-- 警笛警灯还没开成(下一拍再发),0 = 不响或者开过了。
+CREATE TABLE IF NOT EXISTS force_episodes (
+    robot_id   TEXT PRIMARY KEY,
+    state      TEXT NOT NULL,
+    started_ms INTEGER NOT NULL,
+    siren      INTEGER NOT NULL DEFAULT 0
 );
 -- W33(决策 48):布防中狗没在驱离时看见人,这一回报过 P1 了(狗确认人走了删,再看见再报)。
 CREATE TABLE IF NOT EXISTS person_sightings (

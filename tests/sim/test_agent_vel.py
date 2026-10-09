@@ -16,11 +16,11 @@ from tests.sim.test_agent_server import _client
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_协议是v7_跟C加加旁路进程的常量一致():
+def test_协议是v8_跟C加加旁路进程的常量一致():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     m = re.search(r"static const int kProtoVersion = (\d+);", src)
-    # W12:state 带 speed_level、hello 带 speed_level_want
-    assert m and int(m.group(1)) == PROTO_VERSION == 7
+    # W12:state 带 speed_level、hello 带 speed_level_want;W26:imu 帧
+    assert m and int(m.group(1)) == PROTO_VERSION == 8
 
 
 async def _站起(sim: SimAgentServer, client) -> None:

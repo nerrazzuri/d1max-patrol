@@ -99,6 +99,25 @@ class Odometry:
 
 
 @dataclass(frozen=True)
+class ImuSample:
+    """机身姿态与受力(W26 异常受力检测)。``imu()`` 回它。
+
+    - ``roll``、``pitch``:机身横滚、俯仰(弧度,水平站着是 0)。
+    - ``shock_g``:**上一次读到这一次之间**加速度模长偏离 1 g 最大的那一下(g;适配器自己攒峰值,
+      代理 10 Hz 读也不漏掉一下撞击)。
+    - ``load``:四条腿的承重指数(关节力矩绝对值之和,单位随厂家;``None`` = 读不到)。被抱起来时
+      腿上不承重,掉到站立时的零头。
+    - ``valid``:数据新鲜(适配器没收到、过期了是 ``False``,别的字段别信)。
+    """
+    stamp_ms: int
+    roll: float
+    pitch: float
+    shock_g: float
+    load: float | None
+    valid: bool
+
+
+@dataclass(frozen=True)
 class Battery:
     percent: float
     charging: bool

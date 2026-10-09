@@ -114,6 +114,8 @@ class CommandProcessor:
         #: 运动闸(W13 外审):会让狗动的任务**收的时候、起跑的时候**都问它;回原因就不收 / 不起跑
         #: (狗在桩上、出没出桩说不清)。``dock`` 自己不问(出桩就是它的事)。
         self.motion_gate: Callable[[], str] | None = None
+        #: 受力闸(W26):翻倒、被抱起来时会让狗动的任务一律不收、不起跑(``dock`` 也不例外)。
+        self.force_gate: Callable[[], str] | None = None
 
     # ------------------------------------------------------------ 代次落盘
 
@@ -243,6 +245,10 @@ class CommandProcessor:
                 if reason else Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED, data=data))
         if self._fence is not None and cmd.kind in _MOTION_KINDS:
             return self._finish(self._rej(cmd, "halting"))
+        if cmd.kind in _MOTION_KINDS and self.force_gate is not None:
+            why = self.force_gate()
+            if why:
+                return self._finish(self._rej(cmd, why))
         cur = self.current
         if not (cur is not None and cur.kind == "dock" and not cur.done):
             # 正在对桩、充着的时候来了更急的:收下,让 dock 先出桩再交(起跑时还会再问闸)
@@ -533,6 +539,10 @@ class CommandProcessor:
             await nxt.start()
 
     def _gate(self, kind: str) -> str:
+        if kind in _MOTION_KINDS and self.force_gate is not None:
+            why = self.force_gate()
+            if why:
+                return why
         if kind not in _MOTION_KINDS or kind == "dock" or self.motion_gate is None:
             return ""
         return self.motion_gate()

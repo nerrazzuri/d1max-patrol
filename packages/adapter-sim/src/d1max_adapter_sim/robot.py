@@ -21,6 +21,7 @@ from d1max_contract.hal import (
     HalCapabilities,
     HalUnsupported,
     Health,
+    ImuSample,
     MotionStatus,
     Odometry,
     VelocityCommand,
@@ -53,8 +54,13 @@ class SimRobot:
                  max_decel: float = math.inf, require_clearance: bool = False,
                  payload: bool = False,
                  charger: tuple[float, float, float] | None = None,
-                 charge_pct_per_h: float = 60.0) -> None:
+                 charge_pct_per_h: float = 60.0, imu: bool = False) -> None:
         self._now = now_ms
+        #: 假 IMU(W26):给了才有(``imu()``、能力里报);姿态、撞击、腿上承重用 :meth:`inject_imu` 改。
+        self._imu_on = imu
+        self._roll = self._pitch = 0.0
+        self._shock = 0.0
+        self._load: float | None = 100.0
         #: 假充电桩(W13):桩前对准点的位姿(x, y, yaw)。给了就会对桩:站在对准点 0.4 m、20° 内调
         #: ``recharge_start``,过 :data:`DOCK_S` 秒上桩、充电;``undock`` 过 :data:`UNDOCK_S` 秒出桩。
         #: 没站准就一直上不了桩(跟厂家回充一样不报失败)。
@@ -110,6 +116,18 @@ class SimRobot:
 
     def inject_head(self, head: str) -> None:
         self.head_direction = head
+
+    def inject_imu(self, *, roll: float | None = None, pitch: float | None = None,
+                   shock_g: float | None = None, load: float | None | str = "keep") -> None:
+        """W26:改姿态(弧度)、来一下撞击(下一次 ``imu()`` 读走就清)、腿上承重(``None`` = 读不到)。"""
+        if roll is not None:
+            self._roll = roll
+        if pitch is not None:
+            self._pitch = pitch
+        if shock_g is not None:
+            self._shock = max(self._shock, shock_g)
+        if load != "keep":
+            self._load = load  # type: ignore[assignment]
 
     def inject_loc_lost(self, lost: bool) -> None:
         self._loc_lost = lost
@@ -309,7 +327,11 @@ class SimRobot:
                         yaw=self.yaw, vx=self._vx, wz=self._wz, valid=not self._loc_lost)
 
     async def imu(self) -> Any:
-        raise HalUnsupported("sim 没有 imu")
+        if not self._imu_on:
+            raise HalUnsupported("sim 没开 imu(SimRobot(imu=True))")
+        shock, self._shock = self._shock, 0.0             # 峰值:读走就清
+        return ImuSample(stamp_ms=self._now(), roll=self._roll, pitch=self._pitch, shock_g=shock,
+                         load=self._load, valid=True)
 
     async def lidar(self) -> Any:
         raise HalUnsupported("sim 没有 lidar")
@@ -422,7 +444,7 @@ class SimRobot:
             max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self.deadband_vx, lateral=False,
             control_releasable=True,
             recharge_mode="vendor_dock" if self.charger is not None else "none",
-            sensing={"lidar": False, "depth": False, "thermal": False, "imu": False,
+            sensing={"lidar": False, "depth": False, "thermal": False, "imu": self._imu_on,
                      "joint_effort": False, "foot_force": False},
             actuators={"light": False, "strobe": self.payload, "siren": self.payload,
                        "speaker": self.payload, "spotlight": self.payload, "head": False})

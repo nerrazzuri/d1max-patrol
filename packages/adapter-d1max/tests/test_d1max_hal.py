@@ -64,7 +64,7 @@ def test_能力_控制权不可释放_没有横移_只有灯():
     assert caps.deadband_vx == 0.05
     assert caps.actuators == {"light": True, "strobe": False, "siren": False, "speaker": False,
                               "spotlight": False, "head": False}
-    assert not any(caps.sensing.values())
+    assert [k for k, v in caps.sensing.items() if v] == ["imu"], "W26:姿态与受力走旁路进程"
 
 
 def test_参数不合理当场拒():
@@ -306,6 +306,25 @@ async def test_故障帧原样进health与faults():
         assert (await hal.health()).faults == ("7", "9")
 
 
+async def test_姿态受力帧_撞击取峰值读走就清_老旁路进程不发就是无效(monkeypatch):
+    async with _台子() as (sim, hal):
+        s = await hal.imu()
+        assert not s.valid and s.load is None, "没收到过:无效(代理不判)"
+        sim.push_imu(0.1, -0.2, 2.5, load=80.0)
+        sim.push_imu(0.1, -0.2, 0.3, load=79.0)
+        assert await _等(lambda: _imu_load(hal, 79.0))
+        s = await hal.imu()
+        assert s.valid and (s.roll, s.pitch) == (0.1, -0.2) and s.shock_g == 2.5, "峰值不漏"
+        assert (await hal.imu()).shock_g == 0.0, "读走就清"
+        monkeypatch.setattr(hal, "_monotonic", lambda: time.monotonic() + 5.0)
+        assert not (await hal.imu()).valid, "过期了:无效"
+
+
+async def _imu_load(hal, want):
+    f = hal._b.last_imu
+    return f is not None and f.load == want
+
+
 async def _n_faults(hal, n):
     return len(await hal.faults()) == n
 
@@ -320,7 +339,7 @@ async def test_灯按通道开关_其余执行器与感知抛不支持():
             await hal.light("top", True)
         with pytest.raises(HalUnsupported):
             await hal.set_motion_mode("stair")
-        for call in (hal.imu(), hal.lidar(), hal.ultrasonic(), hal.joints(), hal.contacts(),
+        for call in (hal.lidar(), hal.ultrasonic(), hal.joints(), hal.contacts(),
                      hal.depth(), hal.thermal(), hal.audio_session(), hal.recharge_start(),
                      hal.recharge_stop(), hal.undock(), hal.recharge_status(),
                      hal.strobe("front", "x", 1.0), hal.siren(True, 1.0), hal.sound("x", 1.0),

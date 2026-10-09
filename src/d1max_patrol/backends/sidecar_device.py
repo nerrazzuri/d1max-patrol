@@ -40,6 +40,7 @@ from d1max_patrol.protocol.agent_frames import (
     ControlLostFrame,
     FaultFrame,
     Hello,
+    ImuFrame,
     MotionStatus,
     OdomFrame,
     StateFrame,
@@ -116,6 +117,11 @@ class SidecarDeviceBackend(DeviceBackend):
         self._last_battery: float | None = None
         #: 最近一帧里程到达的时刻(``time.monotonic``)。HAL 拿它判里程新不新鲜。
         self._odom_at: float | None = None
+        #: 最近一帧姿态与受力(W26)、到达时刻(``time.monotonic``);撞击峰值在两次读之间攒着
+        #: (取走就清)。
+        self._imu: ImuFrame | None = None
+        self._imu_at: float | None = None
+        self._shock_peak = 0.0
         #: 最近的故障帧(有界),带到达时刻(``time.monotonic``)。事件流里的 ``FaultEvent`` 丢了
         #: code,HAL 要原样的;HAL 要的是「当前」故障,按到达时刻判(见 :meth:`current_faults`)。
         self._faults: deque[tuple[float, FaultFrame]] = deque(maxlen=RECENT_FAULTS)
@@ -145,6 +151,20 @@ class SidecarDeviceBackend(DeviceBackend):
     def last_odom_at(self) -> float | None:
         """最近一帧里程到达的 ``time.monotonic()``。没收到过是 None。"""
         return self._odom_at
+
+    @property
+    def last_imu(self) -> ImuFrame | None:
+        """最近一帧姿态与受力(W26)。没收到过是 None(老旁路进程不发)。"""
+        return self._imu
+
+    @property
+    def last_imu_at(self) -> float | None:
+        return self._imu_at
+
+    def take_shock(self) -> float:
+        """上次取走以来最大的那一下撞击(g),取走就清(HAL 每拍取一次,20 Hz 的帧一下都不漏)。"""
+        peak, self._shock_peak = self._shock_peak, 0.0
+        return peak
 
     @property
     def recent_faults(self) -> tuple[FaultFrame, ...]:
@@ -267,6 +287,11 @@ class SidecarDeviceBackend(DeviceBackend):
             if battery != self._last_battery:
                 self._last_battery = battery
                 self.emit(BatteryEvent(percent=battery))
+            return
+        if isinstance(frame, ImuFrame):
+            self._imu = frame
+            self._imu_at = time.monotonic()
+            self._shock_peak = max(self._shock_peak, frame.shock)
             return
         if isinstance(frame, OdomFrame):
             self._odom = frame

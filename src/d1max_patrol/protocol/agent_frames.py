@@ -56,7 +56,10 @@ from typing import Any
 #:
 #: 4(W11):加了 ``clear`` —— 感知节点给的净空许可(``ms``、``dist``),旁路进程带
 #: ``--require-clearance`` 时没有有效许可就把前进分量置零(第二层刹停)。
-PROTO_VERSION = 7
+#:
+#: 8(W26):加了 ``imu`` 帧(20 Hz):姿态、撞击峰值、腿上承重。老旁路进程不发,代理按「没有受力数据」
+#: 不判。
+PROTO_VERSION = 8
 #: 代理(``sidecar_device``)能配的最老的旁路进程:代理只用到 ``vel``(3),``clear`` 是感知节点发的
 #: (W11 内审应修 1:严格等于 4 的话,只推新版代理、旁路进程还是 3 号时整机不能动)。
 MIN_PROTO_VERSION = 3
@@ -171,6 +174,19 @@ class StateFrame:
     def emergency(self) -> bool:
         """任一路急停生效即为 True。``UNKNOWN`` 不算生效,但也不该当没事。"""
         return EmergencyStatus.STOP in (self.estop_software, self.estop_hardware)
+
+
+@dataclass(frozen=True)
+class ImuFrame:
+    """姿态与受力(W26),由 SDK ``OnImuData``、``OnJointStateData`` 攒出来,20 Hz。
+
+    ``roll``、``pitch`` 弧度;``shock`` 是上一帧以来加速度模长偏离重力参考最大的那一下(g);
+    ``load`` 是关节力矩绝对值之和(没收到关节数据是 ``None``)。"""
+
+    roll: float
+    pitch: float
+    shock: float
+    load: float | None = None
 
 
 @dataclass(frozen=True)
@@ -347,6 +363,10 @@ def decode_frame(line: str | bytes) -> Downstream:
             vx=_num(obj, "vx"), vy=_num(obj, "vy"), vyaw=_num(obj, "vyaw"),
             ts_ms=int(_num(obj, "ts_ms")),
         )
+    if kind == "imu":
+        return ImuFrame(roll=_num(obj, "roll"), pitch=_num(obj, "pitch"),
+                        shock=_num(obj, "shock"),
+                        load=_num(obj, "load") if obj.get("load") is not None else None)
     if kind == "fault":
         return FaultFrame(
             level=int(_num(obj, "level")),

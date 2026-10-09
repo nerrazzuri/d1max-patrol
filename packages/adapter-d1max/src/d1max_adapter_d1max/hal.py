@@ -42,6 +42,7 @@ from d1max_contract.hal import (
     HalCapabilities,
     HalUnsupported,
     Health,
+    ImuSample,
     MotionStatus,
     Odometry,
     VelocityCommand,
@@ -69,6 +70,8 @@ _LYING_MOTIONS = frozenset({SdkMotion.LIE_DOWN, SdkMotion.LOCKED})
 
 #: 里程多久没来算不新鲜(秒)。旁路进程 50 Hz 转发 ``OnMcData``,1 s 没来就是链路出事了。
 ODOM_STALE_S = 1.0
+#: 姿态帧(W26,20 Hz)多久没来算过期。
+IMU_STALE_S = 0.5
 #: 里程速度绝对值低于这个算停了(m/s、rad/s)。**待测**:四足站着不动时里程速度的噪声没量过,
 #: 探针会记下观察窗口里的最大值;太小的话 ``stopped()`` 永远不成立(代理那头有兜底超时)。
 STOPPED_EPS = 0.02
@@ -319,7 +322,16 @@ class D1MaxHal:
                         vx=s * o.vx, wz=o.vyaw, valid=self._odom_fresh())
 
     async def imu(self) -> Any:
-        raise HalUnsupported("W00d 不接 imu")
+        """姿态与受力(W26):旁路进程 8 号起 20 Hz 发 ``imu`` 帧。撞击是上次读以来的峰值。
+        没收到过、过期了(:data:`IMU_STALE_S`)回 ``valid=False``(老旁路进程一直是这样:代理不判)。"""
+        f, at = self._b.last_imu, self._b.last_imu_at
+        fresh = self._b.connected and at is not None and self._monotonic() - at <= IMU_STALE_S
+        shock = self._b.take_shock()
+        if f is None:
+            return ImuSample(stamp_ms=self._now(), roll=0.0, pitch=0.0, shock_g=0.0, load=None,
+                             valid=False)
+        return ImuSample(stamp_ms=self._now(), roll=f.roll, pitch=f.pitch, shock_g=shock,
+                         load=f.load, valid=fresh)
 
     async def lidar(self) -> Any:
         raise HalUnsupported("W00d 不接 lidar(走 ROS,归后面的工单)")
@@ -444,7 +456,7 @@ class D1MaxHal:
         return HalCapabilities(
             max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self._deadband, lateral=False,
             control_releasable=False, recharge_mode="none",
-            sensing={"lidar": False, "depth": False, "thermal": False, "imu": False,
+            sensing={"lidar": False, "depth": False, "thermal": False, "imu": True,
                      "joint_effort": False, "foot_force": False},
             actuators={"light": True, "head": False} | {
                 k: self._payload is not None and self._payload.has(k)

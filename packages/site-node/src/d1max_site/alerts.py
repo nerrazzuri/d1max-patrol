@@ -94,6 +94,10 @@ LEVEL_OF: dict[str, Level] = {
     "evidence_plain": Level.P2,
     "evidence_unopened": Level.P2,
     "evidence_seal_failed": Level.P2,
+    "force_flipped": Level.P1,
+    "force_lifted": Level.P1,
+    "force_bump": Level.P2,
+    "force_config_bad": Level.P2,
     # 定位变差或打滑(W29,决策 41):狗原地停下等恢复;30 秒还没好再报 loc_lost_paused(P1)。
     "loc_degraded": Level.P2,
     "estop_pressed": Level.P1,
