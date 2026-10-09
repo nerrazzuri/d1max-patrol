@@ -396,3 +396,26 @@ async def test_W28_去桩的goto_中止线是10_别的还是25():
     assert t._mission().policy.battery_abort_pct == TRIP_ABORT_PCT
     t.charge = False
     assert t._mission().policy.battery_abort_pct == 25.0
+
+
+async def test_W26外审2_充着时翻倒抱起来_停对桩不出桩_已经在出桩的也改停(monkeypatch):
+    c, dog, t = _台()
+    await t.start()
+    await _跑(c, t, 10)
+    assert dog.docked
+    await t.force_stop("lifted")
+    await t.force_stop("lifted")                          # 重复调没事
+    await _跑(c, t, 200)
+    assert dog.undock_calls == 0, "受力故障:一次都不发出桩"
+    assert t.state is TaskState.FAILED and "确认不了离了桩" in t.detail["reason"], \
+        "还在桩上:挂桩上危险锁住,等人"
+    c, dog, t = _台()
+    await t.start()
+    await _跑(c, t, 10)
+    await t.abort("preempted")
+    assert t.phase == "undocking"
+    await t.force_stop("flipped")                         # 出桩中途翻了
+    assert t.phase == "stopping"
+    n = dog.undock_calls
+    await _跑(c, t, 60)
+    assert dog.undock_calls == n, "改成停:不再发出桩"

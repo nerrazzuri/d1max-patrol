@@ -12,6 +12,10 @@
 - **被撞**:``shock_g``(两次读之间加速度偏离 1 g 最大的那一下)超过 ``bump_g``。报站点 P2、任务照跑
   (门槛没标定前误报会多,决策 52);``bump_cooldown_s`` 内只报一次。翻倒、抱起来时不报撞。
 
+**落盘**(W26 外审 3):翻倒、抱起来的状态,抱起前的承重基线,还欠着没确认做成的安全动作
+(:attr:`ForceWatch.owed`),都写进代理存储目录的 ``force.json``。代理重启了照旧锁着、照旧补做,
+要数据确认安全(扶正稳住、放回地上承重回来)才解锁;锁着的时候不学基线(悬空的低承重学不进去)。
+
 **门槛全是占位**:真狗上标定(``庄园场景待真机测试.md`` §3r),标好写进 ``/etc/d1max/force.json``
 (:meth:`ForceConfig.load`,只写要改的项)。厂家 SDK 给哪几样就判哪几样,:attr:`ForceWatch.checks`
 报站点(读不到承重就不判抱起来)。
@@ -20,7 +24,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 import statistics
 from collections import deque
 from dataclasses import dataclass, fields, replace
@@ -28,6 +34,8 @@ from pathlib import Path
 from typing import Any
 
 from d1max_contract.hal import ImuSample
+
+log = logging.getLogger(__name__)
 
 OK, FLIPPED, LIFTED = "ok", "flipped", "lifted"
 
@@ -75,10 +83,13 @@ class Finding:
 
 
 class ForceWatch:
-    def __init__(self, cfg: ForceConfig | None = None) -> None:
+    def __init__(self, cfg: ForceConfig | None = None, *, path: Path | str | None = None) -> None:
         self.cfg = cfg or ForceConfig()
         self.state = OK
         self.since_ms: int | None = None
+        #: 欠着、还没确认做成的安全动作(``abort``、``stop``、``estop``):代理每拍补,做成一样划一样。
+        self.owed: set[str] = set()
+        self._path = Path(path) if path is not None else None
         #: 这只狗判得了哪几样(读到过有效的姿态才判翻倒、撞;有承重基线才判抱起来)。
         self.checks = {"flip": False, "lift": False, "bump": False}
         self._base: deque[tuple[int, float]] = deque()
@@ -86,6 +97,40 @@ class ForceWatch:
         self._bump_ms: int | None = None
         #: 门槛文件读不懂(照缺省判):能力里带上,站点报 P2。
         self.config_error = ""
+        self._load()
+
+    # ------------------------------------------------------------ 落盘
+
+    def _load(self) -> None:
+        if self._path is None or not self._path.is_file():
+            return
+        try:
+            d = json.loads(self._path.read_text(encoding="utf-8"))
+            st = d.get("state")
+            if st not in (OK, FLIPPED, LIFTED):
+                raise ValueError(f"state={st!r}")
+            self.state = st
+            self.since_ms = d.get("since_ms")
+            base = d.get("lift_base")
+            self._lift_base = float(base) if base is not None else None
+            self.owed = {a for a in d.get("owed", []) if a in ("abort", "stop", "estop")}
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            # 读不懂:当翻倒了锁着(宁可要人去看一眼),不当没事
+            log.error("受力状态 %s 读不懂(%s):当翻倒锁着,要扶正稳住才解", self._path, exc)
+            self.state, self.owed = FLIPPED, {"abort", "stop"}
+        if self.state != OK:
+            log.warning("代理起来时受力状态是 %s(上次没恢复):照旧锁着", self.state)
+
+    def save(self) -> None:
+        """状态、基线、欠着的动作写盘(原子替换)。写不进去照抛(调用方记日志、下一拍再写)。"""
+        if self._path is None:
+            return
+        d = {"state": self.state, "since_ms": self.since_ms, "lift_base": self._lift_base,
+             "owed": sorted(self.owed)}
+        tmp = self._path.with_name(self._path.name + ".tmp")
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(d), encoding="utf-8")
+        os.replace(tmp, self._path)
 
     def caps(self) -> dict[str, Any]:
         out: dict[str, Any] = {"state": self.state, "checks": dict(self.checks)}
@@ -163,10 +208,13 @@ class ForceWatch:
         if state == LIFTED:
             self._lift_base = info.get("baseline")
         self.state, self.since_ms, self._cand = state, now_ms, None
+        self.owed |= {"abort", "stop"} | ({"estop"} if state == FLIPPED else set())
         return Finding(state, info)
 
     def _leave(self, kind: str, now_ms: int, info: dict[str, Any]) -> Finding:
         self.state, self.since_ms, self._cand = OK, now_ms, None
+        self.owed.clear()
+        self._lift_base = None
         self._base.clear()                              # 换了个姿势、位置:基线重攒
         self.checks["lift"] = False
         return Finding(kind, info)
