@@ -7,6 +7,11 @@
 # 做的事:装 mosquitto/openssl/python3-venv/ffmpeg → 建系统用户 d1max-site → /opt/d1max-site/venv 装
 # contract[mqtt] 与 site-node → 没 init 过就 `d1max-site init` → 装两个单元并启用。
 # 之后:`d1max-site add-admin <名字>`、`d1max-site enroll <robot_id>`(见文末提示)。
+#
+# **恢复到新主机**(A2,docs/备份恢复与灾备演练.md):
+#   sudo bash deploy/site/install-site.sh --recover
+# 只装软件、用户、目录、服务单元:**不生成密钥**(三把要先从离线另存的那份放回 /etc/d1max-site/,
+# 没放回就停下)、**不 init**(不建新的站点身份)、**不起服务**。之后 `d1max-site restore`,再起服务。
 set -euo pipefail
 
 PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -16,18 +21,31 @@ UNIT_DIR=/etc/systemd/system
 SITE_ID=""
 HOSTS=()
 BROKER_PORT=8883
+RECOVER=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --site-id) SITE_ID="$2"; shift 2 ;;
     --hostname) HOSTS+=("$2"); shift 2 ;;
     --broker-port) BROKER_PORT="$2"; shift 2 ;;
+    --recover) RECOVER=1; shift ;;
     *) echo "不认识的参数: $1" >&2; exit 2 ;;
   esac
 done
 [[ $EUID -eq 0 ]] || { echo "要 root(sudo)" >&2; exit 1; }
-[[ -n "$SITE_ID" && ${#HOSTS[@]} -gt 0 ]] || {
-  echo "用法: install-site.sh --site-id <id> --hostname <名字或IP> [--hostname …]" >&2; exit 2; }
+if [[ $RECOVER -eq 1 ]]; then
+  # 恢复:三把密钥必须先放回(换了钥匙,备份解不开、库里的口令解不开、封着的证据解不开)
+  for k in secrets backup evidence; do
+    [[ -f /etc/d1max-site/$k.key ]] || {
+      echo "恢复要先把离线另存的 /etc/d1max-site/$k.key 放回来(不会生成新的)" >&2; exit 2; }
+  done
+  [[ ! -f "$HOME_DIR/site.json" ]] || {
+    echo "$HOME_DIR 已经有站点了:恢复只往空的站点目录里放" >&2; exit 2; }
+else
+  [[ -n "$SITE_ID" && ${#HOSTS[@]} -gt 0 ]] || {
+    echo "用法: install-site.sh --site-id <id> --hostname <名字或IP> [--hostname …]" >&2
+    echo "  恢复到新主机: install-site.sh --recover" >&2; exit 2; }
+fi
 
 echo "[1/5] 系统包"
 apt-get update
@@ -72,7 +90,9 @@ echo "[3/5] Python 环境"
 "$VENV/bin/pip" install --upgrade "$PKG/packages/contract[mqtt,planning]" "$PKG/packages/site-node"
 
 echo "[4/5] 站点目录"
-if [[ ! -f "$HOME_DIR/site.json" ]]; then
+if [[ $RECOVER -eq 1 ]]; then
+  echo "  恢复模式:不 init(站点身份从备份里恢复)"
+elif [[ ! -f "$HOME_DIR/site.json" ]]; then
   args=(--home "$HOME_DIR" init --site-id "$SITE_ID" --broker-port "$BROKER_PORT")
   for h in "${HOSTS[@]}"; do args+=(--hostname "$h"); done
   runuser -u d1max-site -- "$VENV/bin/d1max-site" "${args[@]}"
@@ -84,6 +104,19 @@ echo "[5/5] systemd 单元"
 install -m 0644 "$PKG/deploy/site/d1max-mosquitto.service" "$UNIT_DIR/"
 install -m 0644 "$PKG/deploy/site/d1max-site.service" "$UNIT_DIR/"
 systemctl daemon-reload
+if [[ $RECOVER -eq 1 ]]; then
+  systemctl enable d1max-mosquitto.service d1max-site.service      # 不起:先恢复
+  cat <<TXT
+软件装好了(恢复模式:没 init、没起服务)。接下来:
+  接上备份盘,恢复:
+    sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR restore <备份目录> --key /etc/d1max-site/backup.key
+  恢复的结果 ok 为 true 了再起服务:
+    sudo systemctl start d1max-mosquitto d1max-site
+  核对站点证书指纹跟原来一样:
+    sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR fingerprint
+TXT
+  exit 0
+fi
 systemctl enable --now d1max-mosquitto.service d1max-site.service
 
 cat <<TXT

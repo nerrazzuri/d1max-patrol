@@ -133,3 +133,120 @@ def test_没加密的备份_不放CA私钥(tmp_path):
     assert "ca" in site_main.backup_dirs(Path("/h"), encrypted=True)
     plain = site_main.backup_dirs(Path("/h"), encrypted=False)
     assert "ca" not in plain and "broker" not in plain and "maps" in plain
+
+
+# ------------------------------------------------------------ A2 外审(R1–R4)
+
+
+def test_R1_删掉一张登记了的照片_校验和恢复都不过(站, tmp_path):
+    home, dest, key, db, b = 站
+    next(dest.joinpath("evidence").rglob("*.jpg" + SEALED)).unlink()
+    r = verify(dest, key)
+    assert not r.ok and any("清单上" in x for x in r.problems) \
+        and any("照片没有文件" in x for x in r.problems), r.problems
+    new = tmp_path / "new"
+    assert not restore(dest, key, new).ok
+
+
+def test_R1_删掉整个MQTT配置_校验和恢复都不过(站, tmp_path):
+    import shutil
+    home, dest, key, db, b = 站
+    shutil.rmtree(dest / "broker")
+    probs = ";".join(verify(dest, key).problems)
+    assert "broker/mosquitto.conf" in probs and "broker/acl" in probs
+    rh = restore(dest, key, tmp_path / "new")
+    assert not rh.ok and any("broker/acl" in x for x in rh.problems)
+
+
+def test_R1_明文备份不带站点身份_不过(站, tmp_path):
+    home, dest, key, db, b = 站
+    plain = tmp_path / "plain-bak"
+    pb = SiteBackup(db, home / "evidence", plain, now_ms=lambda: NOW,
+                    more=site_main.backup_dirs(home, encrypted=False),
+                    files={"site.json": home / "site.json"})
+    assert pb.run_once()
+    r = verify(plain, None)
+    assert not r.ok and any("ca/ca.key" in x for x in r.problems), r.problems
+
+
+def test_R1_做到一半断了的那次不算_用上一次做完了的_老备份没有清单不过(站, tmp_path):
+    home, dest, key, db, b = 站
+    (dest / "db" / ("site-20991231T000000Z.db" + SEALED)).write_bytes(
+        (dest / "db").glob("site-*.db" + SEALED).__next__().read_bytes())  # 只有快照,没清单
+    r = verify(dest, key)
+    assert r.ok and r.snapshot != "site-20991231T000000Z.db" + SEALED, r.problems
+    for m in (dest / "db").glob("manifest-*"):
+        m.unlink()
+    assert any("没有做完的备份" in x for x in verify(dest, key).problems)
+
+
+def test_R3_umask022下恢复_私钥都是0600_目录0700(站, tmp_path):
+    import stat
+    home, dest, key, db, b = 站
+    old = os.umask(0o022)
+    try:
+        new = tmp_path / "new"
+        assert restore(dest, key, new).ok
+    finally:
+        os.umask(old)
+    assert (new / "ca" / "issued" / "A" / "robot.key").is_file()
+    for p in new.rglob("*"):
+        mode = stat.S_IMODE(p.stat().st_mode)
+        assert mode & 0o077 == 0, (p, oct(mode))
+
+
+def test_R4_报P2写失败了_下一拍补上_解决失败了也补(站):
+    from d1max_site.alert_store import AlertDesk
+    home, dest, key, db, b = 站
+    desk = AlertDesk(db, now_ms=lambda: NOW)
+    b.alerts = desk
+    real_raise, real_resolve = desk.raise_alert, desk.resolve_all
+    desk.raise_alert = lambda **kw: (_ for _ in ()).throw(OSError("库锁住了"))
+    (dest / ("config/site.json" + SEALED)).unlink()
+    with pytest.raises(OSError):
+        b.verify_step(key)
+    desk.raise_alert = real_raise
+    assert b.verify_step(key) is None, "一周一次的扫描不重跑"
+    [a] = [a for a in desk.book.open() if a.kind == "backup_verify_failed"]
+    b._now = lambda: NOW + 8 * 86_400_000
+    assert b.run_once()
+    desk.resolve_all = lambda *a, **kw: (_ for _ in ()).throw(OSError("库锁住了"))
+    with pytest.raises(OSError):
+        b.verify_step(key)
+    desk.resolve_all = real_resolve
+    b.verify_step(key)
+    assert not [a for a in desk.book.open() if a.kind == "backup_verify_failed"]
+
+
+def test_R2_装机脚本有恢复模式_不生成密钥_不init_不起服务():
+    from pathlib import Path
+    s = (Path(__file__).resolve().parents[3] / "deploy" / "site" / "install-site.sh").read_text()
+    rec = s[s.index('if [[ $RECOVER -eq 1 ]]; then'):]
+    head = rec[:rec.index("fi")]
+    assert "放回来(不会生成新的)" in head and "exit 2" in head, "密钥没放回就停,不生成"
+    gen = s.index('head -c 32 /dev/urandom')
+    assert s.index("恢复要先把离线另存的") < gen, "先查密钥、后才会走到生成那一步"
+    assert '恢复模式:不 init' in s
+    tail = s[s.index("systemctl daemon-reload"):]
+    assert tail.index("systemctl enable d1max-mosquitto.service d1max-site.service") \
+        < tail.index("exit 0") < tail.index("enable --now")
+
+
+def test_R3_明文备份恢复也不抄源文件的宽权限(站, tmp_path):
+    import stat
+    home, dest, key, db, b = 站
+    plain = tmp_path / "plain-bak"
+    pb = SiteBackup(db, home / "evidence", plain, now_ms=lambda: NOW,
+                    more=site_main.backup_dirs(home, encrypted=False),
+                    files={"site.json": home / "site.json"})
+    assert pb.run_once()
+    for p in plain.rglob("*"):
+        if p.is_file():
+            p.chmod(0o644)
+    old = os.umask(0o022)
+    try:
+        restore(plain, None, tmp_path / "new")
+    finally:
+        os.umask(old)
+    files = [p for p in (tmp_path / "new").rglob("*") if p.is_file()]
+    assert files and all(stat.S_IMODE(p.stat().st_mode) & 0o077 == 0 for p in files)
