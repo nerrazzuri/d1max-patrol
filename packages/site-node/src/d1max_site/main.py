@@ -42,7 +42,7 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 
 from d1max_site import SITE_VERSION
@@ -553,7 +553,9 @@ class Server:
         #: 狗翻倒、被抱起来(W26,决策 52):按狗能力里的状态对账报 P1,布防时被抱起来响警笛。
         self.force = ForceWatch(self.db, self.dispatcher, now_ms=wall_ms, arming=self.arming)
         self.force.alerts = self.alerts
+        self.deterrence.held_by_others = self.force.held   # 系统审查 S04:驱离不关受力警报的灯
         self.charge.busy = self.deterrence.busy
+        self.scheduler.site_busy = self.deterrence.busy    # 系统审查 S05:排程不抢在驱离的狗
         self.incidents.charging = self.charge.refuse
         self.standby.hold = lambda rid, tid: (self.deterrence.holds(rid, tid)
                                               or self.charge.holds(rid, tid))
@@ -758,46 +760,52 @@ class Server:
                 log.exception("排程没办成的告警记不下来")
 
     async def _alert_loop(self) -> None:
-        """告警:每几秒看一次掉线、让 P1 未确认的升档。一拍炸了记下来、下一拍照走。"""
+        """告警:每几秒看一次掉线、让 P1 未确认的升档。一拍炸了记下来、下一拍照走。
+
+        系统审查 S06:**只对账、不等回执的**每拍直接做(掉线、P1 升档、受力报警、看见人、证据、
+        访客到点);**要等狗回执的**(驱离、回充、受力警笛、天气限速续发)各走各的道(:meth:`_lane`):上一轮还没跑完
+        就这一轮跳过,不叠着跑、也不挡别人 —— 一台掉线的狗收尾等回执,不许拖住别的狗的受力报警、
+        掉线检查、限速续期。"""
         from d1max_site.alert_sources import STEP_S
         while not self._stop.is_set():
             await asyncio.sleep(STEP_S)
+            # 每一样各自 try(连取部件也在 try 里):一样炸了不带走别的
+            for what, part, meth in (("告警", "alert_sources", "step"),
+                                     ("入侵告警补报", "incidents", "retell"),    # W16 外审
+                                     ("看见人", "sightings", "tick"),            # W33
+                                     ("受力", "force", "reconcile"),             # W26
+                                     ("证据没封", "evidence_watch", "tick"),     # W30b
+                                     ("访客到点退回", "arming", "tick")):        # W20
+                try:
+                    getattr(getattr(self, part), meth)()
+                except Exception:
+                    log.exception("%s这一拍没办成", what)
+            for what, part, meth in (("驱离", "deterrence", "tick"),      # W22:到点收、续声光
+                                     ("回充", "charge", "tick"),          # W13
+                                     ("受力警笛", "force", "sound"),      # W26:布防时被抱起来
+                                     ("天气", "weather", "tick")):        # W29:雷暴撤排程、对账限速
+                try:
+                    self._lane(what, getattr(getattr(self, part), meth))
+                except Exception:
+                    log.exception("%s这一拍没起来", what)
+        lanes = [t for t in getattr(self, "_lanes", {}).values() if not t.done()]
+        if lanes:
+            await asyncio.wait(lanes, timeout=15)
+
+    def _lane(self, name: str, fn: Callable[[], Awaitable[None]]) -> None:
+        """``fn`` 放到自己那条道上跑一轮;上一轮还没完就不起新的(不叠着跑,状态机不乱)。"""
+        if not hasattr(self, "_lanes"):
+            self._lanes: dict[str, asyncio.Task] = {}
+        t = self._lanes.get(name)
+        if t is not None and not t.done():
+            return
+
+        async def run() -> None:
             try:
-                self.alert_sources.step()
+                await fn()
             except Exception:
-                log.exception("告警这一拍没办成")
-            try:
-                self.incidents.retell()                # W16 外审:入侵的告警上次没报成的,补
-            except Exception:
-                log.exception("入侵告警补报这一拍没办成")
-            try:
-                await self.deterrence.tick()           # W22:驱离到点收、自动升、续声光
-            except Exception:
-                log.exception("驱离这一拍没办成")
-            try:
-                await self.charge.tick()               # W13:低电量去充、对桩、充满出桩、接着充
-            except Exception:
-                log.exception("回充这一拍没办成")
-            try:
-                self.sightings.tick()                  # W33:布防中狗没在驱离时看见人报 P1
-            except Exception:
-                log.exception("看见人这一拍没办成")
-            try:
-                await self.force.tick()                # W26:翻倒、被抱起来报 P1,布防时响警笛
-            except Exception:
-                log.exception("受力这一拍没办成")
-            try:
-                self.evidence_watch.tick()             # W30b:狗上证据没封报 P2
-            except Exception:
-                log.exception("证据没封这一拍没办成")
-            try:
-                await self.weather.tick()              # W29:查天气、雷暴撤排程巡检、对账限速
-            except Exception:
-                log.exception("天气这一拍没办成")
-            try:
-                self.arming.tick()                     # W20:访客到点退回原来的模式
-            except Exception:
-                log.exception("访客到点退回这一拍没办成")
+                log.exception("%s这一拍没办成", name)
+        self._lanes[name] = asyncio.get_running_loop().create_task(run(), name=f"lane:{name}")
 
     async def _sync_loop(self) -> None:
         while not self._stop.is_set():

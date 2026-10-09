@@ -164,6 +164,8 @@ class DeterrenceDesk:
     def __init__(self, db: SiteDB, dispatcher: Any, *, now_ms: Callable[[], int],
                  standby: Any = None) -> None:
         self.db = db
+        #: 别的来源此刻还要着的输出(系统审查 S04;站点主程序接受力那一头):驱离关灯、收尾时不关它们。
+        self.held_by_others: Any = None
         self.dispatcher = dispatcher
         self._now = now_ms
         self.standby = standby
@@ -640,6 +642,12 @@ class DeterrenceDesk:
         return await self._send(s.robot_id, payload)
 
     async def _off(self, s: Session, out: str) -> None:
+        held = self.held_by_others(s.robot_id) if self.held_by_others is not None else set()
+        if out in held:
+            # 系统审查 S04:这一路别的来源(被抱起来的警报)还要着:驱离只撤自己的需求,不关它
+            s.off.add(out)
+            s.sent.pop(out, None)
+            return
         if out in s.off:
             return
         if await self._send(s.robot_id, {"output": out, "on": False}):
