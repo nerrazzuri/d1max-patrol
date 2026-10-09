@@ -79,6 +79,9 @@ class PutReceipt:
     message: str = ""
     #: W00c5d:站点说这个文件永远不收(名字不合规、跟收齐的内容冲突)。
     refused: bool = False
+    #: 站点说这份证据已经删过了(隐私删除、留存期删):**不收、也不用再传** —— 当传完了,
+    #: 这一趟照常确认、删掉(PR #87 复查 R3:站点不再为了回执暂存删过的明文)。
+    discarded: bool = False
 
 
 class UploadSink(Protocol):
@@ -87,11 +90,11 @@ class UploadSink(Protocol):
 
 @dataclass(frozen=True)
 class Step:
-    """走一步的结果。``action`` 只有七种,别加第八种而不改这行注释。
+    """走一步的结果。``action`` 只有八种,别加第九种而不改这行注释。
 
     idle 队列空或都在退避里 / sent 传了一块还没完 / done 这个文件对上了 /
     deferred 发不出去,退避 / rewound 哈希对不上,从头再来 / gone 文件没了 /
-    refused 站点永远不收,隔离(W00c5d)
+    refused 站点永远不收,隔离(W00c5d) / discarded 站点说删过了,当传完(PR #87 复查)
     """
 
     key: str
@@ -188,6 +191,10 @@ class Uploader:
             wait = backoff_ms(item.attempts + 1, rand=self._rand)
             self.queue.defer(item.key, next_ms=now_ms + wait)
             return Step(key=item.key, action="deferred", detail=f"{exc}(等 {wait} ms)")
+
+        if receipt.discarded:
+            self.queue.finish(item.key)
+            return Step(key=item.key, action="discarded", detail="站点说这份已经删过了:不传了")
 
         if receipt.refused:
             # 站点永远不收:隔离起来,不再重试(每 5 分钟重传 1 MiB 一天就是几百 MB 的 4G);这一趟

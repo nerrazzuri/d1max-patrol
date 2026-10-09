@@ -210,6 +210,8 @@ def parse_receipt(status: int, body: bytes) -> PutReceipt:
         message=_认字段(payload, "message", str, ""),
         # W00c5d:站点明确说「永远不收」(422 且 ok 为假):隔离这个文件,不再重试。
         refused=(status == REFUSED_STATUS and not ok),
+        # 站点说「删过了,当传完」(200、ok 为真、discarded 为真):只认这一种形状
+        discarded=ok and status == 200 and _认字段(payload, "discarded", bool, False),
     )
 
 

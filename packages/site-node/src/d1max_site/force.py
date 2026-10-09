@@ -27,6 +27,9 @@ log = logging.getLogger(__name__)
 
 #: 被抱起来时警笛、警灯响多久(决策 52)。
 SIREN_S = 45
+#: 响着的时候隔多久再发一次「开」(PR #87 复查 R4:狗重启、上装重新初始化会全关,站点不知道;
+#: 定时按剩余时长再开一次,最多晚这么久补回来;过了 45 秒就不发)。
+RENEW_S = 5
 
 _TITLES = {"flipped": "狗翻倒了", "lifted": "狗被抱起来了"}
 _DETAILS = {
@@ -89,10 +92,18 @@ class ForceWatch:
         flush(self.db, self.alerts)
 
     async def sound(self) -> None:
-        """要响还没响成的警笛、警灯发出去(要等回执:站点主程序放在自己那条道上跑)。"""
+        """要响的警笛、警灯发出去(要等回执:站点主程序放在自己那条道上跑)。没响成的(``siren=1``)
+        每拍发;响着的(``siren=2``)每 :data:`RENEW_S` 秒按剩余时长再发一次(R4)。"""
         now = self._now()
         for row in [dict(r) for r in self.db.query(
-                "SELECT * FROM force_episodes WHERE state='lifted' AND siren=1")]:
+                "SELECT * FROM force_episodes WHERE state='lifted' AND siren IN (1, 2)")]:
+            if now - row["started_ms"] >= SIREN_S * 1000:
+                with self.db.tx() as tx:                  # 过了点:不响了,也不再归它
+                    tx.execute("UPDATE force_episodes SET siren=0 WHERE robot_id=? "
+                               "AND started_ms=?", (row["robot_id"], row["started_ms"]))
+                continue
+            if row["siren"] == 2 and now - row["siren_ms"] < RENEW_S * 1000:
+                continue
             await self._siren(row["robot_id"], row, now)
 
     def _raise(self, rid: str, st: str, now: int) -> dict[str, Any]:
@@ -151,5 +162,5 @@ class ForceWatch:
         if ok:
             # 2 = 开成了(这一回的 45 秒内这几路归受力警报,驱离收尾不许关:系统审查 S04)
             with self.db.tx() as tx:
-                tx.execute("UPDATE force_episodes SET siren=2 WHERE robot_id=? AND started_ms=?",
-                           (rid, row["started_ms"]))
+                tx.execute("UPDATE force_episodes SET siren=2, siren_ms=? WHERE robot_id=? "
+                           "AND started_ms=?", (now, rid, row["started_ms"]))

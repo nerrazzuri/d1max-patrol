@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 43                      # 系统审查 S07:删过的证据不许复活(purged)
+SCHEMA_VERSION = 44                      # PR #87 复查 R4:受力警报定时续(force_episodes.siren_ms)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -385,7 +385,8 @@ CREATE TABLE IF NOT EXISTS force_episodes (
     robot_id   TEXT PRIMARY KEY,
     state      TEXT NOT NULL,
     started_ms INTEGER NOT NULL,
-    siren      INTEGER NOT NULL DEFAULT 0
+    siren      INTEGER NOT NULL DEFAULT 0,
+    siren_ms   INTEGER NOT NULL DEFAULT 0
 );
 -- 系统审查 S07:删过的证据(kind:run 一趟 <任务>/<时刻>、rec 一段录像 <相机>/<时刻>)。跟删除同一个
 -- 事务落库;再传上来照收照回执、收齐就扔,不登记(回执丢了、断网攒着的、跟删除交错的都不复活)。
@@ -487,6 +488,8 @@ _ADDED_COLUMNS = (
     ("runs", "keep", "INTEGER NOT NULL DEFAULT 0"),
     # W30b 外审 3:这一段还封着(解不开):照样登记,留存、腾盘、删除请求都管得到;列表、回放不给
     ("recordings", "sealed", "INTEGER NOT NULL DEFAULT 0"),
+    # PR #87 复查 R4:受力警报上次发「开」的时刻(定时续:狗重启、上装全关了也补回来)
+    ("force_episodes", "siren_ms", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

@@ -1,6 +1,7 @@
 """2026-10-09 系统审查(跨功能)站点这一头的回归:S04 驱离收场不关受力警报的灯;S05 排程不抢在驱离的狗;
 S06 等回执的不挡对账;S07 删过的证据不复活;S08 加密备份不漏同一秒里的改动。审查报告的复现断言的是错的
 行为,这里断言对的。"""
+# ruff: noqa: F811  (站点、ca 是从 test_site_intake 借来的夹具)
 
 from __future__ import annotations
 
@@ -8,6 +9,8 @@ import asyncio
 import os
 import threading
 from types import SimpleNamespace
+
+from test_site_intake import ca, 站点  # noqa: F401  (夹具)
 
 from d1max_site.db import SiteDB
 from d1max_site.deterrence import DeterrenceDesk, Session
@@ -145,11 +148,9 @@ def test_S07_删过的照片_又传上来照收照回执_不复活(tmp_path):
     assert privacy.purge(since_ms=now[0] - 1, until_ms=now[0] + 1)["runs"] == 1
     now[0] += 1000
     got = store.put("A", run, rel, offset=0, data=data[:5], total=len(data))
-    got = store.put("A", run, rel, offset=5, data=data[5:], total=len(data))
-    assert got.size == len(data), "照常回执:狗认了就删自己那份"
+    assert got.discarded, "回执叫狗当传完(PR #87 复查 R3:一个字节都不收)"
     assert not db.query("SELECT * FROM runs") and not db.query("SELECT * FROM run_photos")
-    assert not [p for p in (tmp_path / "evidence").rglob("*") if p.is_file()]
-    assert not [p for p in (tmp_path / "evidence-purged-incoming").rglob("*") if p.is_file()]
+    assert not [p for p in tmp_path.rglob("*") if p.is_file() and p.suffix == ".jpg"]
     db.close()
 
 
@@ -274,3 +275,147 @@ def test_S07_收的时候还没删_登记之前删了_登记那一步挡住(tmp_
     assert not db.query("SELECT * FROM runs") and not db.query("SELECT * FROM run_photos")
     assert not [p for p in (tmp_path / "evidence").rglob("*") if p.is_file()]
     db.close()
+
+
+# ------------------------------------------------------------ PR #87 复查(R1–R4)
+
+RUN87, REL87, DATA87 = "mission/20261009T120000Z", "photos/P1__front__20261009T120000Z.jpg", \
+    b"private image"
+
+
+def _证据87(tmp_path, now):
+    from d1max_site.evidence import EvidenceStore
+    from d1max_site.privacy import PrivacyDesk
+    db = SiteDB(tmp_path / "db")
+    store = EvidenceStore(tmp_path / "evidence", db, now_ms=lambda: now[0])
+    store.put("A", RUN87, REL87, offset=0, data=DATA87, total=len(DATA87))
+    return db, store, PrivacyDesk(db, store, now_ms=lambda: now[0])
+
+
+def _文件(root):
+    return [p for p in root.rglob("*") if p.is_file()]
+
+
+def test_R1_删文件和落记号之间来了重传_不留没人管的文件(tmp_path, monkeypatch):
+    import shutil
+    import threading
+    db, store, privacy = _证据87(tmp_path, [NOW])
+    real, raced = shutil.rmtree, []
+
+    def 交错(path, *a, **kw):
+        out = real(path, *a, **kw)
+        if not raced:                                     # 上传口在别的线程,正好这时候来
+            t = threading.Thread(target=lambda: raced.append(store.put(
+                "A", RUN87, REL87, offset=0, data=DATA87, total=len(DATA87))))
+            t.start()
+            raced.append(t)
+        return out
+    monkeypatch.setattr(shutil, "rmtree", 交错)
+    assert privacy.purge(since_ms=NOW - 1, until_ms=NOW + 1)["runs"] == 1
+    raced[0].join(5)
+    got = raced[1]
+    assert got.discarded, "记号先落了、删的时候拿着锁:交错进来的重传等删完、不收"
+    assert not db.query("SELECT * FROM runs") and not _文件(store.root)
+    db.close()
+
+
+def test_R1_上传拿着锁的时候_删除等它写完再删(tmp_path):
+    import threading
+    db, store, privacy = _证据87(tmp_path, [NOW])
+    lock = store.locks("run", "A", RUN87)
+    lock.acquire()
+    done = []
+    t = threading.Thread(target=lambda: done.append(
+        privacy.purge(since_ms=NOW - 1, until_ms=NOW + 1)))
+    t.start()
+    t.join(0.3)
+    assert not done, "删除等着同一趟的收"
+    lock.release()
+    t.join(5)
+    assert done and done[0]["runs"] == 1 and not _文件(store.root)
+    db.close()
+
+
+def test_R2_删过的记号不过期_过了一年再传也不复活(tmp_path):
+    now = [NOW]
+    db, store, privacy = _证据87(tmp_path, now)
+    privacy.purge(since_ms=NOW - 1, until_ms=NOW + 1)
+    now[0] += 400 * 86_400_000
+    privacy.prune()
+    assert db.query("SELECT * FROM purged")
+    assert store.put("A", RUN87, REL87, offset=0, data=DATA87, total=len(DATA87)).discarded
+    assert not db.query("SELECT * FROM runs") and not _文件(store.root)
+    db.close()
+
+
+def test_R3_删过的再传_一个字节都不收_没有暂存区_以前的暂存区起来就清(tmp_path):
+    from d1max_site.evidence import EvidenceStore
+    now = [NOW]
+    db, store, privacy = _证据87(tmp_path, now)
+    privacy.purge(since_ms=NOW - 1, until_ms=NOW + 1)
+    got = store.put("A", RUN87, REL87, offset=0, data=DATA87[:5], total=len(DATA87))
+    assert got.discarded and got.size == 0
+    assert not _文件(tmp_path / "evidence")
+    old = tmp_path / "evidence-purged-incoming" / "A" / "x.jpg"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"priva")
+    EvidenceStore(tmp_path / "evidence", db, now_ms=lambda: now[0])
+    assert not old.exists() and not (tmp_path / "evidence-purged-incoming").exists()
+    db.close()
+
+
+def test_R3_删过的录像段再传_不收(tmp_path):
+    from d1max_site.recordings import RecordingStore
+    db = SiteDB(tmp_path / "db")
+    rec = RecordingStore(db, tmp_path / "rec", now_ms=lambda: NOW)
+    stamp = "20261009T010000Z"
+    rec.put("A", f"front/{stamp}", "video.mp4", offset=0, data=b"x" * 100, total=100)
+    assert rec._delete(rec.list(robot_id="A")[0])
+    got = rec.put("A", f"front/{stamp}", "video.mp4", offset=0, data=b"x" * 40, total=100)
+    assert got.discarded and not _文件(tmp_path / "rec")
+    db.close()
+
+
+async def test_R4_受力警报开着_狗重启上装全关了_剩下的时间里补开_过了点不再开(tmp_path):
+    from d1max_site.force import RENEW_S
+    db = SiteDB(tmp_path / "s.db")
+    now, outputs, sent = [NOW], {}, []
+    d = 假派遣(outputs)
+    real = d.deter
+
+    async def deter(rid, payload, **kw):
+        sent.append(dict(payload))
+        return await real(rid, payload, **kw)
+    d.deter = deter
+    arming = ArmingDesk(db, now_ms=lambda: now[0])
+    arming.set_mode("armed", by="guard")
+    force = ForceWatch(db, d, now_ms=lambda: now[0], arming=arming)
+    await force.tick()
+    assert outputs == {"siren": True, "strobe": True}
+    outputs.clear()                                       # 狗重启:上装全关
+    now[0] += RENEW_S * 1000
+    await force.tick()
+    assert outputs == {"siren": True, "strobe": True}, "定时续:补回来了"
+    assert sent[-1]["max_s"] == 45 - RENEW_S, "按剩下的时长,不重新算 45 秒"
+    n = len(sent)
+    now[0] = NOW + 46_000
+    await force.tick()
+    assert len(sent) == n and force.held("A") == set(), "过了 45 秒不再开、不再归它"
+    db.close()
+
+
+def test_R3_端到端_狗传站点已经删过的那一趟_站点不收_狗当传完删掉(站点, ca, tmp_path):
+    from test_site_intake import STAMP, _sink, _一趟, _跑
+
+    from d1max_agent.outbox import Outbox
+    from d1max_site.evidence import mark_purged
+    with 站点.store.db.tx() as tx:                       # 站点上这一趟删过了(狗断网时)
+        mark_purged(tx, "run", "A", f"巡检一/{STAMP}", NOW)
+    box = Outbox(tmp_path / "dogA", cap_bytes=2**30, sink=_sink(站点, ca, ca.a), sn="A",
+                 now_ms=lambda: NOW)
+    run = _一趟(box.root)
+    _跑(box, 3)
+    assert not run.exists(), "狗当传完:整趟删掉,不无限重试"
+    assert not 站点.store.runs(robot_id="A")
+    assert not [p for p in 站点.store.root.rglob("*") if p.is_file()]
+    box.close()

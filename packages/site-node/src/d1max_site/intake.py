@@ -240,6 +240,10 @@ class _Handler(TlsHandlerMixin):
         except OSError as exc:
             log.warning("证据库写不进去: %s", exc)
             return self._later(507, f"站点盘写不进去: {exc}")
+        if got.discarded:
+            # 删过了(PR #87 复查 R3):一个字节没收,叫狗当传完(新代理认 discarded)
+            return self._reply(200, {"ok": True, "stored": total, "sha256": "", "discarded": True,
+                                     "message": "这份证据站点上已经删过了:不收"})
         self._reply(200, {"ok": True, "stored": got.size, "sha256": got.sha256, "message": ""})
 
     def _drain(self) -> None:

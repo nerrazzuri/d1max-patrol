@@ -15,13 +15,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from d1max_site.evidence import PURGE_KEEP_DAYS, mark_purged
+from d1max_site.evidence import mark_purged
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +44,19 @@ class PrivacyDesk:
         self._now = now_ms
 
     def _delete_run(self, run: dict[str, Any]) -> bool:
-        """删一趟:站点上的目录、备份里的那一份、登记。目录删不掉就不删登记(下次再删)。"""
+        """删一趟:站点上的目录、备份里的那一份、登记。目录删不掉就不删登记(下次再删)。
+
+        PR #87 复查 R1:**先落「删过了」**,再删文件、再删登记,整个过程拿着这一趟的收删锁 —— 删文件
+        和落记号之间不会有上传把文件写回来(写回来的没有登记,留存清理也找不到它)。记号落了、文件没删成:
+        登记留着,下次接着删;这期间再传上来的一律不收。"""
+        key = f"{run['mission']}/{run['stamp']}"
+        locks = getattr(self.evidence, "locks", None)
+        with locks("run", run["robot_id"], key) if locks is not None else contextlib.nullcontext():
+            return self._delete_run_locked(run, key)
+
+    def _delete_run_locked(self, run: dict[str, Any], key: str) -> bool:
+        with self.db.tx() as c:
+            mark_purged(c, "run", run["robot_id"], key, self._now())
         d = self.evidence.dir_of(run)
         try:
             if d.exists():
@@ -58,9 +71,6 @@ class PrivacyDesk:
         with self.db.tx() as c:
             c.execute("DELETE FROM run_photos WHERE run_id=?", (run["id"],))
             c.execute("DELETE FROM runs WHERE id=?", (run["id"],))
-            # 系统审查 S07:记「删过了」,再传上来不许复活
-            mark_purged(c, "run", run["robot_id"], f"{run['mission']}/{run['stamp']}",
-                        self._now())
             # 「这一趟的导出要删」跟删登记同一个事务落库(W30 复查):导出删成了才清
             c.execute("INSERT OR IGNORE INTO export_purges(run_id, created_ms) VALUES (?,?)",
                       (run["id"], self._now()))
@@ -73,9 +83,6 @@ class PrivacyDesk:
             "SELECT * FROM runs WHERE keep=0 AND last_ms<? ORDER BY last_ms LIMIT 500", (cutoff,))]
         done = {r["id"] for r in rows if self._delete_run(r)}
         self._drop_exports()                            # 连以前没删成的导出一起接着删
-        with self.db.tx() as c:                         # 「删过了」的记号记够了就忘(S07)
-            c.execute("DELETE FROM purged WHERE purged_ms<?",
-                      (self._now() - PURGE_KEEP_DAYS * DAY_MS,))
         n = len(done)
         if n:
             log.info("运行记录过了 %d 天留存期:删了 %d 趟", self.keep_days, n)
