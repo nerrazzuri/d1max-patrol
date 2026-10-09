@@ -67,7 +67,7 @@ class RecordingStore:
         self.writer = ChunkWriter()
         #: 同一段的收、删互斥(PR #87 复查 R1)。
         self.locks = IdentityLocks()
-        drop_old_incoming(self.root)
+        self.incoming_error = drop_old_incoming(self.root)       # PR #88 复查:删不掉杂事里再删
         #: 为了腾盘删了录像(``(删了几段, 最早收齐的那段的收齐时刻)``):站点主程序接到告警源上。
         self.on_trimmed: Callable[[int, int], None] | None = None
         #: 盘紧又删不掉(``(删不掉几段, 最后一个错误)``):不处理的话盘到底线,巡检证据也传不上来了。

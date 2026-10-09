@@ -419,3 +419,65 @@ def test_R3_端到端_狗传站点已经删过的那一趟_站点不收_狗当�
     assert not 站点.store.runs(robot_id="A")
     assert not [p for p in 站点.store.root.rglob("*") if p.is_file()]
     box.close()
+
+
+# ------------------------------------------------------------ PR #88 复查
+
+
+def test_PR88_旧暂存区删不掉_不吞错误_报P2_杂事里再删_删掉了自动解决(tmp_path, monkeypatch):
+    import shutil
+
+    from d1max_site import main as site_main
+    from d1max_site.alert_store import AlertDesk
+    from d1max_site.evidence import EvidenceStore
+    from d1max_site.recordings import RecordingStore
+    db = SiteDB(tmp_path / "db")
+    old = tmp_path / "evidence-purged-incoming" / "A" / "x.jpg"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"priva")
+    real = shutil.rmtree
+
+    def 删不掉(path, *a, **kw):
+        if "purged-incoming" in str(path):
+            if kw.get("ignore_errors"):
+                return None                               # 跟真的一样:吞了错误、什么都没删
+            raise PermissionError("只读")
+        return real(path, *a, **kw)
+    monkeypatch.setattr(shutil, "rmtree", 删不掉)
+    store = EvidenceStore(tmp_path / "evidence", db, now_ms=lambda: NOW)
+    assert "只读" in store.incoming_error and old.exists()
+    rt = SimpleNamespace(evidence=store, recordings=RecordingStore(db, tmp_path / "rec",
+                                                                   now_ms=lambda: NOW),
+                         alerts=AlertDesk(db, now_ms=lambda: NOW))
+    site_main.Server._retry_old_incoming(rt)
+    site_main.Server._retry_old_incoming(rt)
+    [a] = [a for a in rt.alerts.book.open() if a.kind == "purged_incoming_stuck"]
+    assert a.level.name == "P2"
+    monkeypatch.setattr(shutil, "rmtree", real)            # 权限修好了
+    site_main.Server._retry_old_incoming(rt)
+    assert not old.exists() and store.incoming_error == ""
+    assert not [a for a in rt.alerts.book.open() if a.kind == "purged_incoming_stuck"]
+    db.close()
+
+
+async def test_PR88_续发时前一路等回执跨过了截止_后一路不再发开(tmp_path):
+    db = SiteDB(tmp_path / "s.db")
+    now, outputs, sent = [NOW], {}, []
+    d = 假派遣(outputs)
+    real = d.deter
+
+    async def 慢(rid, payload, **kw):
+        sent.append((now[0], dict(payload)))
+        if now[0] - NOW >= 40_000:
+            now[0] += 10_000                              # 这一路等回执等了 10 秒
+        return await real(rid, payload, **kw)
+    d.deter = 慢
+    arming = ArmingDesk(db, now_ms=lambda: now[0])
+    arming.set_mode("armed", by="guard")
+    force = ForceWatch(db, d, now_ms=lambda: now[0], arming=arming)
+    await force.tick()
+    sent.clear()
+    now[0] = NOW + 40_000
+    await force.tick()
+    assert [p["output"] for _, p in sent] == ["siren"], "第二路发之前过了 45 秒:不发"
+    db.close()
