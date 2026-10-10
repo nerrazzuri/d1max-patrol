@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { api, ApiError, onUnauthorized, setFetch } from "./api";
 import { alertTitle, DICTS, initialLang, knownKinds, tr } from "./i18n";
 import { heading, onMap, toPx } from "./mapview";
+import { daysText, toMap } from "./zonesadmin";
 import { abnormal, alarmState, canDispatch, duration, openAlerts, queue, robotMap, robotState, wallOrder, type Alert, type Robot } from "./model";
 
 const fx = (name: string) =>
@@ -164,5 +165,20 @@ describe("报警状态与队列(ISA-18.2)", () => {
     expect(duration(42_000)).toBe("0:42");
     expect(duration(725_000)).toBe("12:05");
     expect(duration(3_723_000)).toBe("1:02:03");
+  });
+});
+
+describe("防区与名单", () => {
+  it("预览像素 ↔ 地图坐标来回一样", () => {
+    const meta = { width: 200, height: 100, m_per_px: 0.5, left_x: -10, top_y: 20 };
+    const [x, y] = toMap(meta, 20, 40);
+    expect([x, y]).toEqual([0, 0]);
+    expect(toPx(meta, x, y)).toEqual({ px: 20, py: 40 });
+  });
+  it("星期写成人话", () => {
+    expect(daysText(127)).toBe("Every day");
+    expect(daysText(0b0011111)).toBe("Weekdays");
+    expect(daysText(0b1100000)).toBe("Weekends");
+    expect(daysText(0b0000101)).toBe("Mon, Wed");
   });
 });

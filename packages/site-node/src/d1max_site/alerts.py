@@ -184,6 +184,8 @@ LEVEL_OF: dict[str, Level] = {
     "run_done": Level.P3,
     "run_start": Level.P3,
     "battery_swap": Level.P3,
+    # B1c:授权在场(名单)——狗看见人,但人在授权的防区和时段里:不报 P1,留一条记录
+    "authorized_person": Level.P3,
 }
 
 

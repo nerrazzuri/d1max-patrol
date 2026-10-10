@@ -77,6 +77,11 @@ SSE_HEARTBEAT_S = 15.0
 REQUEST_TIMEOUT_S = 30.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
+#: 防区多边形(商业化 B1c)、名单(时段 / 人员授权)。
+_AREAS = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/areas$")
+_AUTHZ = re.compile(r"^/api/lists/authorizations(?:/(\d{1,9})/remove)?$")
+#: 网页上登记 / 出开通码 / 吊销机器狗(商业化 B1b,管理员)。
+_ADMIN_ROBOT = re.compile(r"^/api/admin/robots(?:/([^/]{1,64})/(code|revoke))?$")
 #: ``GET /api/alerts?all=1&limit=`` 的上限。
 ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
@@ -195,6 +200,9 @@ class SiteApi:
         self.web_dir: Path | None = None
         #: 给人看的站点名(商业化 B1,网页顶栏;站点主程序从 site.json 接)。
         self.site_name = ""
+        #: 防区多边形、名单(商业化 B1c;站点主程序接上)。
+        self.areas: Any = None
+        self.authz: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -425,6 +433,16 @@ class _Handler(TlsHandlerMixin):
                     "min_app_level": MIN_APP_API_LEVEL})
             if method == "POST" and path == "/api/me/password":
                 return self._change_own_password(user)
+            m = _AREAS.match(path)
+            if m is not None:
+                return self._areas(method, unquote(m.group(1)), unquote(m.group(2)), user)
+            m = _AUTHZ.match(path)
+            if m is not None:
+                return self._authz(method, m.group(1), user)
+            m = _ADMIN_ROBOT.match(path)
+            if m is not None:
+                self._need(user, MANAGE)
+                return self._admin_robot(method, m.group(1), m.group(2))
             if path == "/api/accounts" or _ACCOUNT.match(path):
                 self._need(user, MANAGE_ACCOUNTS)
                 return self._accounts(method, path)
@@ -768,6 +786,102 @@ class _Handler(TlsHandlerMixin):
         except AuthError as exc:
             raise HttpError(400 if "没有账号" not in str(exc) else 404, str(exc)) from exc
         self._send_json(200, {"accounts": acc.list()})
+
+    def _areas(self, method: str, map_id: str, version: str, user) -> None:
+        """防区画在地图上(B1c):``GET`` 这张图这一版上的防区多边形(``view``);``POST
+        {zone, points}`` 新建或改、``POST {zone, remove: true}`` 删(``manage``)。"""
+        from d1max_site.areas import AreaError
+        book = self.site.areas
+        if book is None:
+            raise HttpError(404, "这个站点没开防区")
+        if method == "GET":
+            self._need(user, VIEW)
+            return self._send_json(200, {"areas": book.list(map_id, version)})
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        self._need(user, MANAGE)
+        d = self._body()
+        zone = d.get("zone")
+        self._audit_target = f"{map_id}:{version}/{str(zone)[:64]}"
+        try:
+            if d.get("remove") is True:
+                if not book.remove(map_id, version, str(zone)):
+                    raise HttpError(404, "这张图上没有这个防区")
+            else:
+                book.set(map_id, version, zone, d.get("points"), by=str(user))
+        except AreaError as exc:
+            raise HttpError(400, str(exc)) from exc
+        return self._send_json(200, {"areas": book.list(map_id, version)})
+
+    def _authz(self, method: str, entry_id: str | None, user) -> None:
+        """名单(B1c,时段 / 人员授权):``GET`` 看(``view``);``POST`` 加一条、``POST …/{id}/remove``
+        删(``manage``)。"""
+        from d1max_site.authz import AuthzError
+        book = self.site.authz
+        if book is None:
+            raise HttpError(404, "这个站点没开名单")
+        if method == "GET" and entry_id is None:
+            self._need(user, VIEW)
+            return self._send_json(200, {"authorizations": book.list(),
+                                         "active": book.active(None)})
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        self._need(user, MANAGE)
+        d = self._body()
+        if entry_id is not None:
+            self._audit_target = f"authorization/{entry_id}"
+            if not book.remove(int(entry_id)):
+                raise HttpError(404, "没有这一条")
+        else:
+            self._audit_target = str(d.get("name", ""))[:64]
+            self._audit_detail = {k: d.get(k) for k in ("zones", "days", "start", "end")}
+            try:
+                book.add(d, by=str(user))
+            except AuthzError as exc:
+                raise HttpError(400, str(exc)) from exc
+        return self._send_json(200, {"authorizations": book.list()})
+
+    def _admin_robot(self, method: str, robot_id: str | None, action: str | None) -> None:
+        """登记新狗并出开通码、给已登记的狗重出开通码、吊销(商业化 B1b,``manage``)。跟命令行
+        ``enroll --code`` / ``enroll-code`` / ``revoke`` 是同一套函数(证书、注册表、CRL 都一样)。"""
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        home = self.site.home
+        if home is None:
+            raise HttpError(404, "这个站点没接站点目录")
+        from d1max_site import main as site_main
+        d = self._body()
+        try:
+            if action is None:                                     # 登记新狗 + 出开通码
+                rid = str(d.get("robot_id") or "")
+                if not SAFE_ID.match(rid):
+                    raise HttpError(400, "编号只收字母、数字、点、下划线、减号,最多 64 个")
+                days = d.get("days", 365)
+                if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 3650:
+                    raise HttpError(400, "证书有效天数要是 1–3650 的整数")
+                self._audit_target, self._audit_detail = rid, {"days": days}
+                site_main.cmd_enroll(home, rid, days)
+                code = site_main.cmd_enroll_code(home, rid, d.get("host") or None, 24.0)
+                return self._send_json(200, {"robot_id": rid, "code": code, "hours": 24,
+                                             "manual_only": True})
+            rid = unquote(robot_id or "")
+            if not SAFE_ID.match(rid):
+                raise HttpError(404, "没有这台狗")
+            self._audit_target = rid
+            if action == "code":
+                hours = d.get("hours", 24)
+                if not isinstance(hours, (int, float)) or isinstance(hours, bool) \
+                        or not 0.25 <= hours <= 168:
+                    raise HttpError(400, "开通码有效小时数要在 0.25–168 之间")
+                code = site_main.cmd_enroll_code(home, rid, d.get("host") or None, float(hours))
+                return self._send_json(200, {"robot_id": rid, "code": code, "hours": hours})
+            summary = site_main.cmd_revoke(home, rid)
+            return self._send_json(200, {"robot_id": rid, "summary": summary,
+                                         "broker_restart": "systemctl restart d1max-mosquitto"})
+        except site_main.SiteError as exc:
+            msg = str(exc)
+            raise HttpError(409 if ("已登记" in msg or "没登记" in msg or "没有" in msg) else 400,
+                            msg) from exc
 
     def _change_own_password(self, user: str) -> None:
         d = self._body()

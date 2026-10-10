@@ -24,14 +24,18 @@ import {
   type Mode,
 } from "./model";
 import { AlarmQueue } from "./queue";
+import { RobotsAdminPage, SystemPage, UsersPage } from "./admin";
+import { ListsPage, MapsZonesPage } from "./zonesadmin";
 
-type Page = "live" | "map" | "alarms";
+type Page = "live" | "map" | "alarms" | "admin/robots" | "admin/zones" | "admin/users" | "admin/lists" | "admin/system";
+
+const PAGES: Page[] = ["live", "map", "alarms", "admin/robots", "admin/zones", "admin/users", "admin/lists", "admin/system"];
 
 function readRoute(): { page: Page; robot: string | null } {
   const h = typeof location === "undefined" ? "" : location.hash;
   const [p, q] = h.replace(/^#\/?/, "").split("?");
   const robot = new URLSearchParams(q ?? "").get("robot");
-  return { page: p === "map" ? "map" : p === "alarms" ? "alarms" : "live", robot };
+  return { page: (PAGES as string[]).includes(p) ? (p as Page) : "live", robot };
 }
 
 const TASK: Record<string, Key> = { patrol: "st_patrolling", goto: "st_patrolling", standby: "st_returning" };
@@ -154,6 +158,12 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
             </div>
           </>
         )}
+        {route.page.startsWith("admin/") && me.role === "admin" && <AdminNav page={route.page} />}
+        {route.page === "admin/users" && me.role === "admin" && <UsersPage me={me.name} say={say} />}
+        {route.page === "admin/robots" && me.role === "admin" && <RobotsAdminPage say={say} />}
+        {route.page === "admin/system" && me.role === "admin" && <SystemPage />}
+        {route.page === "admin/zones" && me.role === "admin" && <MapsZonesPage say={say} />}
+        {route.page === "admin/lists" && me.role === "admin" && <ListsPage say={say} />}
         {route.page === "map" && (
           <MapPage units={units} p1={p1} now={now} selected={route.robot ?? firstP1?.robot ?? null}
             onSelect={(id) => go("map", id)}
@@ -209,6 +219,9 @@ function TopBar(props: {
     { id: null, key: "tabRecordings" },
     { id: null, key: "tabReports" },
   ];
+  // 管理组只给管理员(B0:值班组 + 管理组分开;保安看到的界面简单)。顶栏上只占一个「Admin」页签,
+  // 进去以后是第二排的子页签(顶栏一行放得下)。
+  const isAdminPage = props.page.startsWith("admin/");
   const modes: Mode["mode"][] = ["armed", "home", "visitor"];
   const modeKey: Record<Mode["mode"], Key> = { armed: "modeArmed", home: "modeHome", visitor: "modeVisitor" };
   return (
@@ -217,11 +230,13 @@ function TopBar(props: {
       <span class="wordmark">D1 Max</span>
       <span class="site muted">{props.me.site_name}</span>
       <nav class="tabsnav" aria-label={t("mainNav")}>
-        {tabs.map((x) => x.id ? (
-          <a key={x.key} href={`#/${x.id}`} aria-current={props.page === x.id ? "page" : undefined}>{t(x.key)}</a>
-        ) : (
-          <span key={x.key} class="disabled" aria-disabled="true" title={t("comingSoon")}>{t(x.key)}</span>
-        ))}
+        {tabs.map((x) => <Tab key={x.key} x={x} page={props.page} />)}
+        {props.me.role === "admin" && (
+          <>
+            <span class="navsep" aria-hidden="true" />
+            <a href="#/admin/robots" aria-current={isAdminPage ? "page" : undefined}>{t("adminGroup")}</a>
+          </>
+        )}
       </nav>
       <span class="counts" aria-live="polite">
         {props.p1 + props.p2 === 0 ? <span class="muted">{t("noActiveAlarms")}</span> : null}
@@ -246,5 +261,29 @@ function TopBar(props: {
         <button type="button" class="btn stop" onClick={props.onStop}><Icon name="octagon" />{t("stopAll")}</button>
       )}
     </header>
+  );
+}
+
+function Tab({ x, page }: { x: { id: Page | null; key: Key }; page: Page }) {
+  return x.id ? (
+    <a href={`#/${x.id}`} aria-current={page === x.id ? "page" : undefined}>{t(x.key)}</a>
+  ) : (
+    <span class="disabled" aria-disabled="true" title={t("comingSoon")}>{t(x.key)}</span>
+  );
+}
+
+const ADMIN: { id: Page | null; key: Key }[] = [
+  { id: "admin/robots", key: "tabRobotsAdmin" },
+  { id: "admin/zones", key: "tabMapsZones" },
+  { id: "admin/users", key: "tabUsers" },
+  { id: "admin/lists", key: "tabLists" },
+  { id: "admin/system", key: "tabSystem" },
+];
+
+function AdminNav({ page }: { page: Page }) {
+  return (
+    <nav class="subnav" aria-label={t("adminGroup")}>
+      {ADMIN.map((x) => <Tab key={x.key} x={x} page={page} />)}
+    </nav>
   );
 }
