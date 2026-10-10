@@ -81,6 +81,9 @@ class Registry:
             cur = c.execute("UPDATE robots SET revoked=1 WHERE robot_id=?", (robot_id,))
             if cur.rowcount == 0:
                 raise RegistryError(f"没有登记过 {robot_id}")
+            # A 阶段外审 I1:吊销了,没领的开通码一并作废(重新登记要先吊销,所以也不会复活;
+            # 就算漏删,claim 还核证书代次)
+            c.execute("DELETE FROM enroll_claims WHERE robot_id=?", (robot_id,))
 
     @staticmethod
     def _rec(r) -> RobotRecord:

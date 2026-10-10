@@ -61,6 +61,8 @@ class TopicStats:
         gaps_s = [b - a for a, b in zip(self.recv, self.recv[1:], strict=False)]
         med = statistics.median(gaps_s) if gaps_s else 0.0
         return {"topic": self.name, "frames": n,
+                # A 阶段外审 M2:带时间戳、算得出延迟的帧有几帧(0 = 延迟没测到,不能判通过)
+                "lat_samples": len(self.lat_ms),
                 "hz": round(n / seconds, 2) if seconds > 0 else 0.0,
                 "median_hz": round(1.0 / med, 2) if med > 0 else 0.0,
                 "mb_per_s": round(self.nbytes / seconds / 1e6, 3) if seconds > 0 else 0.0,
@@ -83,6 +85,8 @@ def verdict(s: dict[str, Any], *, want_hz: float, min_hz_ratio: float,
         return "FAIL", "一帧都没收到(zenoh 路由起了吗?话题名对吗?)"
     if s["hz"] < want_hz * min_hz_ratio:
         return "FAIL", f"帧率 {s['hz']} Hz,不到要的 {want_hz} Hz 的 {min_hz_ratio:.0%}"
+    if not s.get("lat_samples"):
+        return "UNKNOWN", "帧都收到了,但没有一帧带时间戳:延迟没测到,不能算通过"
     if s["clock_mismatch"]:
         if s["jitter_p95_ms"] > max_p95_ms:
             return "FAIL", (f"时间戳跟本机不是一个钟,按抖动看:p95 {s['jitter_p95_ms']} ms,超过 "

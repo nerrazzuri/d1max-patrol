@@ -38,13 +38,15 @@ def 台(tmp_path):
         for name, dis in (("gina", 0), ("bob", 1)):
             c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
                       "VALUES (?,?,?,?,?,?)", (name, "guard", b"s", b"h", 0, dis))
+            c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                      "VALUES (?,?,0,0)", ("s-" + name, name))
     desk = AlertDesk(db, now_ms=lambda: clock[0])
     desk.push = True
     j = 假极光()
     p = PushDesk(db, now_ms=lambda: clock[0], sender=j, site_name="翠湖庄园")
     p.alerts = desk
-    p.register("gina", "rid-gina", "android")
-    p.register("bob", "rid-bob", "android")
+    p.register("gina", "rid-gina", "android", session="s-gina")
+    p.register("bob", "rid-bob", "android", session="s-bob")
     yield desk, p, j, clock, db
     db.close()
 
@@ -251,7 +253,7 @@ def test_F4_分批发_第一批发着的时候有人确认了_后面的批次不
     import d1max_site.push as push
     desk, p, j, clock, db = 台
     monkeypatch.setattr(push, "BATCH", 1)
-    p.register("gina", "rid-gina-2", "android")
+    p.register("gina", "rid-gina-2", "android", session="s-gina")
     a = desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
     real = j.send
 
@@ -266,21 +268,39 @@ def test_F4_分批发_第一批发着的时候有人确认了_后面的批次不
     assert row["sent_ms"] is not None and "后面的没发" in row["error"]
 
 
-def test_F3_登记它的那次登录退出了_不再推给它(台):
-    desk, p, j, clock, db = 台
-    alive = {"s1": True}
-    p.session_alive = lambda h: alive.get(h, False)
-    with db.tx() as c:
-        c.execute("DELETE FROM push_devices")
-    p.register("gina", "rid-1", "android", session="s1")
-    p.register("gina", "rid-old", "android")              # 没绑登录的(老数据):不推
-    desk.raise_alert(kind="dog_sees_person", robot="A", title="一")
-    p.tick()
-    assert [r for r, *_ in j.sent] == [["rid-1"]]
-    alive["s1"] = False                                    # 退出了(登记还在,注销没发出去)
-    desk.raise_alert(kind="force_flipped", robot="B", title="二")
-    p.tick()
-    assert len(j.sent) == 1 and _队(db)[-1]["dropped"] == "没有登记的手机"
+def test_外审I2_推送跟着退出和撤权走_不跟着闲置过期走(tmp_path):
+    """App 被系统清掉、半小时没请求、站点重启了:照样推。明确退出、停用、改角色、重设口令:不推。
+    退出以后迟到的登记不能把它加回来。没绑登录的老数据不推。"""
+    from d1max_site.accounts import Accounts, _token_hash
+    clock = [NOW]
+    db = SiteDB(tmp_path / "s.db")
+    acc = Accounts(db, now_ms=lambda: clock[0])
+    acc.add("gina", PW, role="guard")
+    tok = acc.login("gina", PW)
+    p = PushDesk(db, now_ms=lambda: clock[0], sender=假极光())
+    assert p.register("gina", "rid-1", "android", session=_token_hash(tok))
+    p.register("gina", "rid-old", "android")                # 老数据:没绑登录
+    clock[0] += 13 * 3600_000                               # 闲置、到期都过了
+    assert not acc.session_alive(_token_hash(tok))
+    db.close()
+    db = SiteDB(tmp_path / "s.db")                          # 站点重启
+    acc = Accounts(db, now_ms=lambda: clock[0])
+    p = PushDesk(db, now_ms=lambda: clock[0], sender=假极光())
+    assert p._devices() == ["rid-1"], "闲置过期不影响推送"
+    acc.logout(tok)                                         # 过期了的令牌照样能退出
+    assert p._devices() == []
+    assert not p.register("gina", "rid-1", "android", session=_token_hash(tok)), "迟到的登记不复活"
+    assert p._devices() == []
+    for 撤 in (lambda: acc.set_disabled("gina", True), lambda: acc.set_role("gina", "owner"),
+              lambda: acc.reset_password("gina", PW + "x")):
+        acc.set_disabled("gina", False)
+        with db.tx() as c:
+            c.execute("INSERT OR REPLACE INTO sessions(token_hash, name, created_at, last_used) "
+                      "VALUES ('h1','gina',?,?)", (clock[0], clock[0]))
+        assert p.register("gina", "rid-2", "android", session="h1") and p._devices() == ["rid-2"]
+        撤()
+        assert p._devices() == []
+    db.close()
 
 
 def test_F3_真接口_登记以后退出登录_站点不再推给这台手机(tmp_path):
@@ -289,7 +309,6 @@ def test_F3_真接口_登记以后退出登录_站点不再推给这台手机(tm
         s.accounts.add("gina", PW, role="guard")
         j = 假极光()
         p = PushDesk(s.db, now_ms=lambda: NOW, sender=j)
-        p.session_alive = s.accounts.session_alive
         s.api.push = p
         tok = _登(s, "gina")
         assert s.req("POST", "/api/push/devices", {"registration_id": "rid-1"}, token=tok)[0] \

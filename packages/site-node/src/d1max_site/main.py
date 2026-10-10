@@ -306,7 +306,12 @@ def cmd_release_add(home: Path, src: Path, note: str) -> dict:
     cfg = _load(home)
     db = SiteDB(home / "site.db")
     try:
-        pub = Path(cfg.get("release_pubkey") or "/etc/d1max-site/release-pub.pem")
+        # A 阶段外审 I3:不验签只能显式打开(开发用),删掉钥匙不等于不验
+        pub = None if cfg.get("release_unsigned") is True else \
+            Path(cfg.get("release_pubkey") or "/etc/d1max-site/release-pub.pem")
+        if pub is None:
+            print("警告:site.json 里 release_unsigned=true,登记升级包不验签(只该在开发环境)",
+                  file=sys.stderr)
         return ReleaseCatalog(home, db, now_ms=wall_ms, pubkey=pub).add(src, note=note)
     except ReleaseCatalogError as exc:
         raise SiteError(str(exc)) from exc
@@ -798,7 +803,6 @@ class Server:
                              why_off=why_off)
         self.push.alerts = self._loop_alerts      # 推送在线程里跑:告警经事件循环
         self.alerts.push = sender is not None
-        self.push.session_alive = self.accounts.session_alive   # A6 外审 F3:退出了的不推
         self.api.push = self.push
         from d1max_site import keyvault
         from d1max_site.health import HealthDesk

@@ -16,7 +16,6 @@ import hashlib
 import hmac
 import json
 import secrets
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -68,12 +67,18 @@ def issue_code(db: Any, cfg: dict[str, Any], home: Path, robot_id: str, *, finge
         raise ProvisionError(f"{robot_id} 没有证书包({'、'.join(missing)}):先 enroll")
     host = host or cfg["hostnames"][0]
     token = secrets.token_urlsafe(24)
+    cert_fp = _cert_fp((bundle / "robot.crt").read_bytes())
     with db.tx() as c:
+        # A 阶段外审 I1:码绑这一代证书。登记表里的、证书包里的必须是同一代,而且没吊销
+        row = c.execute("SELECT fingerprint, revoked FROM robots WHERE robot_id=?",
+                        (robot_id,)).fetchone()
+        if row is None or row["revoked"] or row["fingerprint"] != cert_fp:
+            raise ProvisionError(f"{robot_id} 没登记、已吊销,或者证书包不是登记的这一代:先 enroll")
         c.execute("INSERT INTO enroll_claims(robot_id, token_hash, created_ms, expires_ms, "
-                  "used_ms) VALUES (?,?,?,?,NULL) ON CONFLICT(robot_id) DO UPDATE SET "
+                  "used_ms, cert_fp) VALUES (?,?,?,?,NULL,?) ON CONFLICT(robot_id) DO UPDATE SET "
                   "token_hash=excluded.token_hash, created_ms=excluded.created_ms, "
-                  "expires_ms=excluded.expires_ms, used_ms=NULL",
-                  (robot_id, _h(token), now_ms, now_ms + ttl_ms))
+                  "expires_ms=excluded.expires_ms, used_ms=NULL, cert_fp=excluded.cert_fp",
+                  (robot_id, _h(token), now_ms, now_ms + ttl_ms, cert_fp))
     return encode({"api": f"https://{host}:{api_port}",
                    "fp": fingerprint.removeprefix("sha256:"),
                    "mqtt": f"mqtts://{host}:{cfg.get('broker_port', 8883)}",
@@ -84,27 +89,52 @@ def issue_code(db: Any, cfg: dict[str, Any], home: Path, robot_id: str, *, finge
 DENIED = "开通码不对、过期了或者已经用过了:在站点上重新出一个"
 
 
-def claim(db: Any, home: Path, robot_id: str, token: str, *, now_ms: int,
-          revoked: Callable[[str], bool] | None = None) -> dict[str, str]:
+def _cert_fp(pem: bytes) -> str:
+    """PEM 证书的指纹(跟 ``SiteCA.fingerprint`` 一样:``sha256:`` + DER 的 SHA-256)。"""
+    text = pem.decode("ascii", "replace")
+    try:
+        body = text.split("-----BEGIN CERTIFICATE-----", 1)[1]
+        body = body.split("-----END CERTIFICATE-----", 1)[0]
+        der = base64.b64decode("".join(body.split()), validate=True)
+    except (IndexError, ValueError):
+        return ""
+    return "sha256:" + hashlib.sha256(der).hexdigest()
+
+
+def _snapshot(bundle: Path) -> dict[str, bytes] | None:
+    """读一份证书包。读的时候有人在换证(证书前后读到的不一样),回 None。"""
+    try:
+        before = (bundle / "robot.crt").read_bytes()
+        out = {n: (bundle / n).read_bytes() for n in BUNDLE if (bundle / n).is_file()}
+        after = (bundle / "robot.crt").read_bytes()
+    except OSError:
+        return None
+    if before != after or out.get("robot.crt") != before:
+        return None
+    return out
+
+
+def claim(db: Any, home: Path, robot_id: str, token: str, *, now_ms: int) -> dict[str, str]:
     """领证书包:回 ``{文件名: base64}``。对不上抛 :class:`ProvisionError`(:data:`DENIED`)。
-    **给了就作废**:作废跟核对在同一个事务里,两只狗拿同一个码只有一只领得到。"""
+
+    - **给了就作废**:作废跟核对在同一个事务里,两只狗拿同一个码只有一只领得到。
+    - **只给出码的那一代**(A 阶段外审 I1):码记着出码时证书的指纹;登记表里这只狗现在的证书、
+      这一回读到的证书包都得是那一代、没吊销,才给。吊销、重新登记还会直接删掉旧码。"""
     if not isinstance(robot_id, str) or not isinstance(token, str) or not token:
         raise ProvisionError(DENIED)
+    snap = _snapshot(Path(home) / "ca" / "issued" / robot_id)
+    got_fp = _cert_fp(snap["robot.crt"]) if snap and "robot.crt" in snap else ""
     with db.tx() as c:
-        row = c.execute("SELECT token_hash, expires_ms, used_ms FROM enroll_claims "
-                        "WHERE robot_id=?", (robot_id,)).fetchone()
+        row = c.execute("SELECT e.token_hash, e.expires_ms, e.used_ms, e.cert_fp, r.fingerprint, "
+                        "r.revoked FROM enroll_claims e LEFT JOIN robots r "
+                        "ON r.robot_id = e.robot_id WHERE e.robot_id=?", (robot_id,)).fetchone()
         ok = (row is not None and row["used_ms"] is None and now_ms <= row["expires_ms"]
               and hmac.compare_digest(row["token_hash"], _h(token))
-              and not (revoked is not None and revoked(robot_id)))
+              and row["revoked"] == 0 and row["cert_fp"] != ""
+              and row["fingerprint"] == row["cert_fp"] == got_fp)
         if not ok:
             raise ProvisionError(DENIED)
         c.execute("UPDATE enroll_claims SET used_ms=? WHERE robot_id=?", (now_ms, robot_id))
-    bundle = Path(home) / "ca" / "issued" / robot_id
-    out = {}
-    for name in BUNDLE:
-        p = bundle / name
-        if p.is_file():
-            out[name] = base64.b64encode(p.read_bytes()).decode("ascii")
-    if any(n not in out for n in REQUIRED):
+    if snap is None or any(n not in snap for n in REQUIRED):
         raise ProvisionError("站点上这只狗的证书包不全:重新 enroll")
-    return out
+    return {n: base64.b64encode(v).decode("ascii") for n, v in snap.items()}

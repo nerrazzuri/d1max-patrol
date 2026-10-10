@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 48                      # 商业化 A4:狗的开通码(enroll_claims)
+SCHEMA_VERSION = 49                      # A 阶段外审 I1:开通码绑证书代次(enroll_claims.cert_fp)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -433,7 +433,9 @@ CREATE TABLE IF NOT EXISTS enroll_claims (
     token_hash TEXT NOT NULL,
     created_ms INTEGER NOT NULL,
     expires_ms INTEGER NOT NULL,
-    used_ms    INTEGER
+    used_ms    INTEGER,
+    -- A 阶段外审 I1:出码时这只狗证书的指纹(这一代)。领的时候登记表和读到的证书都得是这一代。
+    cert_fp    TEXT NOT NULL DEFAULT ''
 );
 -- W33(决策 48):布防中狗没在驱离时看见人,这一回报过 P1 了(狗确认人走了删,再看见再报)。
 CREATE TABLE IF NOT EXISTS person_sightings (
@@ -530,6 +532,7 @@ _ADDED_COLUMNS = (
     ("force_episodes", "siren_ms", "INTEGER NOT NULL DEFAULT 0"),
     # A6 外审 F3:登记推送号的那次登录(令牌哈希);那次登录退出、过期了就不推
     ("push_devices", "session", "TEXT NOT NULL DEFAULT ''"),
+    ("enroll_claims", "cert_fp", "TEXT NOT NULL DEFAULT ''"),          # A 阶段外审 I1
 )
 
 

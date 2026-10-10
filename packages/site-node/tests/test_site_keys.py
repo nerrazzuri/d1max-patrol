@@ -151,3 +151,14 @@ def test_站点装机脚本_恢复模式不生成密钥_托管包在装好软件
     assert "[[ $RECOVER -eq 1 ]] && continue" in loop, "恢复模式:没有的不生成"
     assert s.index("pip\" install") < s.index("keys-import \"$KEYS_FILE\""), "装好软件再导回"
     assert "--keys)" in s
+
+
+def test_外审M1_配了推送却缺极光密钥_自检报毛病_托管包不打(tmp_path):
+    cfg = _钥(tmp_path / "etc")                                  # 配了推送
+    Path(cfg["push"]["secret_file"]).unlink()
+    rows = {r["name"]: r["problem"] for r in keyvault.status(cfg)}
+    assert "推送恢复不了" in rows["jpush"]
+    with pytest.raises(keyvault.KeyError_, match="jpush"):
+        keyvault.export(cfg, tmp_path / "x", PASS)
+    cfg2 = _钥(tmp_path / "etc2", jpush=False)                   # 没配推送:缺了不算
+    assert keyvault.export(cfg2, tmp_path / "y", PASS) == ["backup", "evidence", "secrets"]

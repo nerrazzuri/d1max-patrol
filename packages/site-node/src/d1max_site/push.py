@@ -132,25 +132,32 @@ class PushDesk:
         self.why_off = why_off if sender is None else ""
         #: 告警台(站点主程序接上):发不出去报 P2。
         self.alerts: Any = None
-        #: 登记推送号的那次登录还有效吗(令牌哈希 → 真假;站点主程序接 ``Accounts.session_alive``)。
-        self.session_alive: Callable[[str], bool] | None = None
         self.last_error = ""
 
     # ------------------------------------------------------------ 手机登记
 
-    def register(self, account: str, reg_id: str, platform: str, *, session: str = "") -> None:
-        """``session``:登记时那次登录的令牌哈希(A6 外审 F3):这次登录退出、过期了,这台手机就不推。"""
+    def register(self, account: str, reg_id: str, platform: str, *, session: str = "") -> bool:
+        """登记一部手机。``session``:登记它的那次登录的令牌哈希。
+
+        推送订阅的生命周期(A 阶段外审 I2):**那次登录明确退出**(``Accounts.logout``)、账号停用 /
+        改角色 / 重设口令、手机自己注销,才不再推;**登录闲置过期不影响**(App 被系统清掉以后照样要
+        收到 P1)。登记跟退出在同一个库里串行:那次登录在这个事务里已经不在了(退出了、被撤了)就不登记,
+        回 False —— 迟到的登记不会把撤掉的授权又加回来。"""
         reg_id = str(reg_id).strip()
         if not reg_id or len(reg_id) > 128 or not reg_id.isascii():
             raise ValueError("registration_id 不对")
         if platform not in ("android", "ios", "harmony"):
             raise ValueError("platform 要是 android / ios / harmony")
         with self.db.tx() as c:
+            if session and c.execute("SELECT 1 FROM sessions WHERE token_hash=? AND name=?",
+                                     (session, account)).fetchone() is None:
+                return False
             c.execute("INSERT INTO push_devices(reg_id, account, platform, updated_ms, session) "
                       "VALUES (?,?,?,?,?) ON CONFLICT(reg_id) DO UPDATE SET "
                       "account=excluded.account, platform=excluded.platform, "
                       "updated_ms=excluded.updated_ms, session=excluded.session",
                       (reg_id, account, platform, self._now(), session))
+        return True
 
     def unregister(self, account: str, reg_id: str) -> None:
         with self.db.tx() as c:
@@ -171,13 +178,12 @@ class PushDesk:
     # ------------------------------------------------------------ 发
 
     def _devices(self) -> list[str]:
-        """推给谁:停用了的账号不推;**登记它的那次登录已经退出、过期了的不推**(A6 外审 F3:手机退出时
-        登记还在路上、注销没发出去,也不会留在推送名单里)。"""
+        """推给谁:名单里的、账号没停用的。退出登录、停用、改权限时名单里的行已经删了(A 阶段外审 I2);
+        **登录闲置过期不删**:App 被系统清掉、半小时没请求,照样推。"""
         rows = self.db.query(
-            "SELECT d.reg_id, d.session FROM push_devices d JOIN accounts a ON a.name = d.account "
-            "WHERE a.disabled = 0")
-        alive = self.session_alive
-        return [r["reg_id"] for r in rows if alive is None or alive(r["session"])]
+            "SELECT d.reg_id FROM push_devices d JOIN accounts a ON a.name = d.account "
+            "WHERE a.disabled = 0 AND d.session != ''")     # 没绑登录的老数据:收不回,不推
+        return [r["reg_id"] for r in rows]
 
     def tick(self) -> None:
         """要推的都推出去(要等网络:站点主程序放在自己那条道上跑)。

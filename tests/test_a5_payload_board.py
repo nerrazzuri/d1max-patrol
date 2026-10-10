@@ -105,6 +105,12 @@ def test_链路_帧率带宽断档_钟对不上按抖动判():
     assert lb.verdict(lb.TopicStats("/y").summary(5), want_hz=10, min_hz_ratio=0.9,
                       max_p95_ms=50)[0] == "FAIL"
     assert "Mbit/s" in lb.render([dict(r, topic="/x", verdict="PASS", why="")])
+    nostamp = lb.TopicStats("/z")                              # 外审 M2:帧够、一帧没时间戳
+    for i in range(100):
+        nostamp.add(1.8e9 + i * 0.1, None, 10)
+    r = nostamp.summary(10.0)
+    assert r["lat_samples"] == 0
+    assert lb.verdict(r, want_hz=10, min_hz_ratio=0.9, max_p95_ms=50)[0] == "UNKNOWN"
 
 
 NX = ("10-10-2026 10:00:00 RAM 6123/15389MB (lfb 2x4MB) SWAP 120/7694MB (cached 0MB) "
@@ -131,3 +137,9 @@ def test_功耗_整板那一路优先_没有就加分路_关掉的核不算(tmp_
     assert pw.main([str(log), "--budget-w", "10"]) == 0
     assert pw.main([str(log), "--budget-w", "5"]) == 1
     assert "交换区" in capsys.readouterr().out
+    nopower = tmp_path / "n.log"                               # 外审 M2:有采样没功耗
+    nopower.write_text(NX.split(" VDD_IN")[0] + "\n")
+    assert pw.summarize(nopower.read_text().splitlines())["power_samples"] == 0
+    assert pw.main([str(nopower)]) == 0, "没给预算:只是统计"
+    assert pw.main([str(nopower), "--budget-w", "25"]) == 1
+    assert "功耗没测到" in capsys.readouterr().out
