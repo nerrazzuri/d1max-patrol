@@ -583,7 +583,7 @@ def test_装机清单说清了装完放证书包_填现场值_再起代理(装�
     说清楚:跑一趟 install.sh → 放证书包 → 填 env → 起代理;而且适配器先留仿真。"""
     清单 = (ROOT / "docs" / "装机清单.md").read_text(encoding="utf-8")
     二 = 清单.split("## 二、")[1].split("## 三、")[0]
-    放 = 二.index("**放证书包**")
+    放 = 二.index("**开通**")                      # 商业化 A4:放证书包改成一条开通命令
     填 = 二.index("**填现场值**")
     起 = 二.index("sudo systemctl restart d1max-agent")
     assert 放 < 填 < 起
@@ -592,6 +592,7 @@ def test_装机清单说清了装完放证书包_填现场值_再起代理(装�
     assert "D1MAX_HAL" in 二 and "sim" in 二 and "§3b" in 二, "适配器先留仿真、验收过了才改"
     # 清单一里要先在站点上登记这只狗(enroll),不然二、里没有证书包可放。
     assert "enroll" in 清单.split("## 二、")[0]
+    assert "provision --code" in 二 and "selfcheck" in 清单.split("## 三、")[1]   # A4
     # 脚本那一侧:6/7 看证书包、7/7 站点值空着不起。
     assert "/etc/d1max/registration.json" in 装机脚本
     assert "已经是在跑的那一版了,跳过切换" in 装机脚本

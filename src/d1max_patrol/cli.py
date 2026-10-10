@@ -129,6 +129,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--full", action="store_true",
                    help="导航之外再起一台仿真旁路进程(给 d1max-agent --hal d1max 联调用)")
 
+    pv = sub.add_parser("provision", help="用站点给的开通码开通这台狗(商业化 A4,以 root 跑)")
+    pv.add_argument("--code", required=True, help="站点 d1max-site enroll --code 给的那一行")
+    pv.add_argument("--etc", default="/etc/d1max", help=argparse.SUPPRESS)
+    pv.add_argument("--user", default=os.environ.get("D1MAX_USER", "robot"),
+                    help="代理用哪个账号跑(证书包的属主)")
+    pv.add_argument("--force", action="store_true", help="已经开通成别的编号也换(小心)")
+    sc = sub.add_parser("selfcheck", help="出厂自检:证书、env、连站点、对时、盘、服务(商业化 A4)")
+    sc.add_argument("--etc", default="/etc/d1max", help=argparse.SUPPRESS)
+    sc.add_argument("--user", default=os.environ.get("D1MAX_USER", "robot"))
     rel = sub.add_parser("release", help="装机、升级、回滚")
     rel_sub = rel.add_subparsers(dest="release_command", required=True)
 
@@ -239,6 +248,23 @@ async def _backend(args) -> AsyncIterator[VendorNavBackend]:
                       file=sys.stderr)
 
 
+def _cmd_provision(args: argparse.Namespace) -> int:
+    """开通、出厂自检(商业化 A4)。"""
+    from d1max_patrol import provision as pv
+    etc = Path(args.etc)
+    if args.command == "provision":
+        try:
+            rid = pv.provision(args.code, etc=etc, user=args.user or None, force=args.force)
+        except pv.ProvisionError as exc:
+            print(f"开通没成:{exc}", file=sys.stderr)
+            return 1
+        print(f"开通好了:这台狗是 {rid}。证书包、站点地址都放好了。下面是出厂自检:")
+    rows = pv.selfcheck(etc=etc, user=args.user or None)
+    for c in rows:
+        print(f"  {c.level:4}  {c.name}:{c.detail}")
+    return 1 if any(c.level == "FAIL" for c in rows) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """进程入口。只负责解析参数、配置日志、起事件循环。
 
@@ -283,6 +309,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "bundle":
         return _cmd_bundle_pack(args)
+    if args.command in ("provision", "selfcheck"):
+        return _cmd_provision(args)
 
     if args.command == "release":
         # 跟 sim 同一条道理:装机时机器上根本没有后端可连,boot-guard 更是

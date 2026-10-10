@@ -189,6 +189,8 @@ class SiteApi:
         self.push: Any = None
         #: 体检、诊断(商业化 A1,``health.HealthDesk``)。没接的站点 /healthz 只回好。
         self.health: Any = None
+        #: 站点目录(商业化 A4:狗领证书包从 ``<站点目录>/ca/issued/`` 拿)。站点主程序接上。
+        self.home: Path | None = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -366,6 +368,8 @@ class _Handler(TlsHandlerMixin):
                 return self._healthz()             # 商业化 A1:探活不用登录,只回好不好
             if method == "POST" and path == "/api/login":
                 return self._login()
+            if method == "POST" and path == "/api/enroll/claim":
+                return self._enroll_claim()          # 商业化 A4:狗领证书包,开通码就是凭证
             if method == "POST" and path == "/api/incidents":
                 return self._incident_in()          # 摄像头不登录:验签
             user = self._user()
@@ -867,6 +871,26 @@ class _Handler(TlsHandlerMixin):
                 y=float(vals[1]), yaw=float(vals[2]), by=str(user)))
         except ChargeError as exc:
             raise HttpError(400, str(exc)) from exc
+
+    def _enroll_claim(self) -> None:
+        """狗拿开通码领自己的证书包(商业化 A4)。不用登录;对不上一律 403 同一句话。记审计。"""
+        from d1max_site.provision import ProvisionError, claim
+        d = self._body()
+        rid = str(d.get("robot_id") or "")[:64]
+        self._actor, self._audit_target = f"robot:{rid}", rid
+        if self.site.home is None:
+            raise HttpError(404, "这个站点没开开通码")
+        reg = getattr(self.site.dispatcher, "registry", None)
+
+        def revoked(r: str) -> bool:
+            cur = reg.get(r) if reg is not None else None
+            return cur is None or cur.revoked
+        try:
+            files = claim(self.site.dispatcher.db, self.site.home, rid,
+                          str(d.get("token") or ""), now_ms=self.site._now(), revoked=revoked)
+        except ProvisionError as exc:
+            raise HttpError(403, str(exc)) from exc
+        return self._send_json(200, {"robot_id": rid, "files": files})
 
     def _healthz(self) -> None:
         """探活(商业化 A1):不用登录,只回 ``{"ok", "version"}``;不好回 503。"""
