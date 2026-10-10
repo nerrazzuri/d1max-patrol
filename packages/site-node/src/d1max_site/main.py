@@ -330,6 +330,42 @@ def cmd_privacy_purge(home: Path, since: str, until: str, robot: str | None,
         db.close()
 
 
+def _passphrase(confirm: bool) -> str:
+    """托管包的口令:``D1MAX_KEYS_PASSPHRASE`` 或交互输入(导出时输两遍)。"""
+    p = os.environ.get("D1MAX_KEYS_PASSPHRASE")
+    if p:
+        return p
+    p = getpass.getpass("托管包口令:")
+    if confirm and getpass.getpass("再输一遍:") != p:
+        raise SiteError("两遍口令不一样")
+    return p
+
+
+def cmd_keys(home: Path, args: argparse.Namespace) -> int:
+    """站点密钥(A3):自检、导出托管包、导回。"""
+    from d1max_site import keyvault
+    cfg = _load(home) if (home / "site.json").exists() else {}
+    try:
+        if args.cmd == "keys-status":
+            rows = keyvault.status(cfg)
+            if args.json:
+                print(json.dumps(rows, ensure_ascii=False, indent=1))
+            else:
+                for r in rows:
+                    print(f"{r['name']:9} {r['fingerprint'] or '-':16} {r['mode'] or '-':6} "
+                          f"{r['problem'] or 'ok'}  {r['path']}")
+            return 1 if any(r["problem"] for r in rows) else 0
+        if args.cmd == "keys-export":
+            names = keyvault.export(cfg, Path(args.out), _passphrase(True))
+            print(f"托管包写好了:{args.out}(带了 {'、'.join(names)})。口令另外记,别跟它放一起。")
+            return 0
+        names = keyvault.import_(cfg, Path(args.src), _passphrase(False), force=args.force)
+        print("放回了:" + ("、".join(names) if names else "(都已经在了、一样的)"))
+        return 0
+    except keyvault.KeyError_ as exc:
+        raise SiteError(str(exc)) from exc
+
+
 def cmd_support_bundle(home: Path, out: str | None, hours: int) -> str:
     """命令行导出诊断包(A1):没有正在跑的站点进程的实时状态(事件循环、MQTT、狗),其余都有。"""
     from d1max_site.health import HealthDesk, support_bundle
@@ -739,6 +775,7 @@ class Server:
         self.alerts.push = sender is not None
         self.push.session_alive = self.accounts.session_alive   # A6 外审 F3:退出了的不推
         self.api.push = self.push
+        from d1max_site import keyvault
         from d1max_site.health import HealthDesk
         #: 体检、指标历史、诊断包(商业化 A1)。
         self._beat = time.monotonic()
@@ -746,7 +783,8 @@ class Server:
         self.health = HealthDesk(self.db, home=home, now_ms=wall_ms, dispatcher=self.dispatcher,
                                  backup=self.backup, push=self.push,
                                  loop_lag=lambda: time.monotonic() - self._beat,
-                                 lanes=lambda: dict(self._lane_started))
+                                 lanes=lambda: dict(self._lane_started),
+                                 keys=lambda: keyvault.status(cfg))      # A3
         self.health.alerts = self._loop_alerts            # 杂事线程里报:经事件循环
         self.api.health = self.health
         self.api.privacy = self.privacy                # W30:运行记录标「留着」
@@ -1061,6 +1099,13 @@ def build_parser() -> argparse.ArgumentParser:
     bo.add_argument("dst", help="解到哪儿(要空目录)")
     bo.add_argument("--key", default="/etc/d1max-site/backup.key",
                     help="备份密钥(装机时离线另存的那一份)")
+    ks = sub.add_parser("keys-status", help="站点密钥在不在、长度、权限、短指纹(A3)")
+    ks.add_argument("--json", action="store_true")
+    ke = sub.add_parser("keys-export", help="站点密钥打成一个口令加密的托管包,离线保管(A3)")
+    ke.add_argument("--out", required=True, help="托管包写到哪儿(U 盘)")
+    ki = sub.add_parser("keys-import", help="托管包里的密钥放回 /etc/d1max-site(A3,以 root 跑)")
+    ki.add_argument("src", help="托管包")
+    ki.add_argument("--force", action="store_true", help="已经有了、而且不一样的也盖(小心)")
     sb = sub.add_parser("support-bundle",
                         help="导出诊断包(A1):体检、版本、打码的配置、日志")
     sb.add_argument("--out", default=None,
@@ -1116,7 +1161,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     home: Path = args.home
     try:
-        _check_owner(home)
+        if args.cmd != "keys-import":      # A3:导回密钥要写 /etc/d1max-site,以 root 跑
+            _check_owner(home)
         if args.cmd == "init":
             cmd_init(home, args.site_id, args.hostname, args.broker_port)
             print(f"站点目录建好了: {home}")
@@ -1177,6 +1223,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"解开了 {ok} 个,还解不开 {bad} 个")
             if bad:
                 return 1
+        elif args.cmd in ("keys-status", "keys-export", "keys-import"):
+            return cmd_keys(home, args)
         elif args.cmd == "support-bundle":
             print(cmd_support_bundle(home, args.out, args.hours))
             return 0

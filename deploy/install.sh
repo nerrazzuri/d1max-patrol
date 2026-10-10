@@ -25,6 +25,7 @@ set -euo pipefail
 # @写盘 /etc/d1max                                                       配置目录(站点签发的证书包、注册文件也放这儿,由人拷来)
 # @写盘 /etc/d1max/env                                                   现场值:站点地址、地图、原点、适配器、SN
 # @写盘 /etc/d1max/release-pub.pem                                       发行公钥(W30;包里带了才装,验站点下发的版本)
+# @写盘 /etc/d1max/release-pub.d                                         换钥匙时另外认的发行公钥(A3;跟包里的一样)
 # @写盘 /etc/systemd/system/d1max-agent.service                           代理单元(狗上只有它一个服务,W00c5e)
 # @写盘 /etc/systemd/system/multi-user.target.wants/d1max-agent.service  systemctl enable 生成的自启链
 # @写盘 /etc/systemd/system/d1max-localizer.service                       定位器单元(W09b;只装不 enable)
@@ -268,6 +269,17 @@ mkdir -p /etc/d1max
 if [[ -f "$PKG/deploy/release-pub.pem" ]]; then
   install -m 0644 -o root -g root "$PKG/deploy/release-pub.pem" /etc/d1max/release-pub.pem
   echo "  装了发行公钥 /etc/d1max/release-pub.pem"
+fi
+# 换钥匙(A3):包里 deploy/release-pub.d/*.pem 是另外也认的公钥。狗上这个目录**跟包里的一样**:
+# 包里删掉的(吊销了的)狗上也删掉。包里没有这个目录就不动狗上的。
+if [[ -d "$PKG/deploy/release-pub.d" ]]; then
+  install -d -m 0755 -o root -g root /etc/d1max/release-pub.d
+  find /etc/d1max/release-pub.d -maxdepth 1 -type f -name '*.pem' -delete
+  for k in "$PKG"/deploy/release-pub.d/*.pem; do
+    [[ -f "$k" ]] || continue
+    install -m 0644 -o root -g root "$k" /etc/d1max/release-pub.d/
+    echo "  另外也认发行公钥 $(basename "$k")"
+  done
 fi
 UNSIGNED=()
 if [[ ! -f /etc/d1max/release-pub.pem ]]; then

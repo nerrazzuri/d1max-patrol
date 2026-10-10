@@ -63,8 +63,8 @@ class ReleaseCatalog:
         got = tree_sha256(pkg, skip=MANIFEST)
         if got != raw.get("content_sha256"):
             raise ReleaseCatalogError(f"包的指纹对不上:自述 {raw.get('content_sha256')},算出 {got}")
-        if self.pubkey is not None and Path(self.pubkey).is_file():
-            from d1max_contract import relsign
+        from d1max_contract import relsign
+        if self.pubkey is not None and relsign.trusted_keys(Path(self.pubkey)):  # A3:含 .d/ 里的
             try:
                 relsign.verify(raw, Path(self.pubkey))
             except relsign.SignError as exc:

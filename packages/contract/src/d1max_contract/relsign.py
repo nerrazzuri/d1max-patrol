@@ -9,6 +9,10 @@ Ed25519,原来调 ``openssl`` 的做法在狗上合法的包也验不过)。密�
 
 - 私钥:``release keygen`` 生成,**只在发行方手里、离线保管,不进仓库、不上狗、不上站点**。
 - 公钥:``/etc/d1max/release-pub.pem``(装机脚本放),狗上验;站点配了也先验一遍(登记时就拒)。
+
+**换钥匙**(商业化 A3):除了 ``release-pub.pem``,同目录下 ``release-pub.d/*.pem`` 里的公钥也认,哪一把
+验得过都算。换的时候先把新公钥放进 ``release-pub.d/``(装机、升级时带上),之后用新私钥签;所有狗都
+换过来以后删掉旧公钥 —— **删掉就是吊销**(私钥泄露了就立刻删、重新签发在用的包)。
 """
 
 from __future__ import annotations
@@ -58,8 +62,25 @@ def sign(manifest: dict[str, Any], private: Path) -> str:
     return base64.b64encode(ed25519.sign(seed, message(manifest))).decode("ascii")
 
 
+def trusted_keys(public: Path) -> list[Path]:
+    """认哪几把公钥:``public`` 本身(在的话)+ 同目录 ``<名字去掉 .pem>.d/*.pem``(A3 换钥匙)。"""
+    public = Path(public)
+    out = [public] if public.is_file() else []
+    extra = public.with_name(public.name.removesuffix(".pem") + ".d")
+    if extra.is_dir():
+        out += sorted(p for p in extra.glob("*.pem") if p.is_file())
+    return out
+
+
+def key_id(public: Path) -> str:
+    """公钥的短指纹(SHA-256 前 16 位):对照离线那份、写进日志用。"""
+    import hashlib
+    return hashlib.sha256(ed25519.pub_from_pem(Path(public).read_bytes())).hexdigest()[:16]
+
+
 def verify(manifest: dict[str, Any], public: Path) -> None:
-    """验 ``manifest["signature"]``。对就返回,不对抛 :class:`SignError`。"""
+    """验 ``manifest["signature"]``:``public`` 和它的 ``.d/`` 里**哪一把验得过都算**(A3 换钥匙)。
+    对就返回,不对抛 :class:`SignError`。"""
     sig = manifest.get("signature")
     if not isinstance(sig, str) or not sig:
         raise SignError("包没有签名")
@@ -67,14 +88,22 @@ def verify(manifest: dict[str, Any], public: Path) -> None:
         raw = base64.b64decode(sig, validate=True)
     except ValueError as exc:
         raise SignError("签名不是 base64") from exc
-    if not Path(public).is_file():
+    keys = trusted_keys(Path(public))
+    if not keys:
         raise SignError(f"没有发行公钥 {public}")
-    try:
-        pub = ed25519.pub_from_pem(Path(public).read_bytes())
-    except (OSError, ValueError) as exc:
-        raise SignError(f"发行公钥读不了: {exc}") from exc
-    if not ed25519.verify(pub, message(manifest), raw):
-        raise SignError("签名对不上(不是我们发行的,或者包被改过)")
+    bad: list[str] = []
+    msg = message(manifest)
+    for k in keys:
+        try:
+            pub = ed25519.pub_from_pem(k.read_bytes())
+        except (OSError, ValueError) as exc:
+            bad.append(f"{k.name} 读不了: {exc}")
+            continue
+        if ed25519.verify(pub, msg, raw):
+            return
+    if bad and len(bad) == len(keys):
+        raise SignError("发行公钥读不了: " + ";".join(bad))
+    raise SignError("签名对不上(不是我们发行的,或者包被改过,或者签它的钥匙已经吊销)")
 
 
 def check_package(pkg: Path, public: Path | None, *, allow_unsigned: bool = False) -> str:
@@ -84,7 +113,7 @@ def check_package(pkg: Path, public: Path | None, *, allow_unsigned: bool = Fals
         manifest = json.loads((Path(pkg) / "release.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         return f"读不了 release.json: {exc}"
-    if public is None or not Path(public).is_file():
+    if public is None or not trusted_keys(Path(public)):
         return "" if allow_unsigned else f"狗上没装发行公钥({public or DEFAULT_PUBKEY}),不装"
     try:
         verify(manifest, public)

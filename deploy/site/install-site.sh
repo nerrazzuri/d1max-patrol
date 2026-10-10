@@ -22,6 +22,7 @@ SITE_ID=""
 HOSTS=()
 BROKER_PORT=8883
 RECOVER=0
+KEYS_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,11 +30,15 @@ while [[ $# -gt 0 ]]; do
     --hostname) HOSTS+=("$2"); shift 2 ;;
     --broker-port) BROKER_PORT="$2"; shift 2 ;;
     --recover) RECOVER=1; shift ;;
+    --keys) KEYS_FILE="$2"; shift 2 ;;
     *) echo "不认识的参数: $1" >&2; exit 2 ;;
   esac
 done
 [[ $EUID -eq 0 ]] || { echo "要 root(sudo)" >&2; exit 1; }
-if [[ $RECOVER -eq 1 ]]; then
+if [[ $RECOVER -eq 1 && -n "$KEYS_FILE" ]]; then
+  [[ -f "$KEYS_FILE" ]] || { echo "托管包 $KEYS_FILE 不在" >&2; exit 2; }
+  echo "  恢复模式:密钥从托管包放回(装好软件以后,会问托管包口令)"
+elif [[ $RECOVER -eq 1 ]]; then
   # 恢复:三把密钥必须先放回(换了钥匙,备份解不开、库里的口令解不开、封着的证据解不开)
   for k in secrets backup evidence; do
     [[ -f /etc/d1max-site/$k.key ]] || {
@@ -72,8 +77,11 @@ install -d -m 0750 -o d1max-site -g d1max-site "$HOME_DIR"
 # **已经有了绝不重新生成**:换了钥匙,库里加密的口令、以前的加密备份就都打不开了。
 install -d -m 0750 -o root -g d1max-site /etc/d1max-site
 # W30b(决策 51):证据私钥(X25519,32 字节随机数):狗用它的公钥封照片、录像,站点收齐了解开。
+# 恢复模式(A2、A3)**绝不生成**:密钥要么先放回了,要么下一步从托管包放回 —— 这里生成一把新的,
+# 托管包就导不回来(不一样的不盖),旧备份也解不开。
 for k in secrets backup evidence; do
   if [[ ! -f /etc/d1max-site/$k.key ]]; then
+    [[ $RECOVER -eq 1 ]] && continue
     ( umask 077; head -c 32 /dev/urandom > /etc/d1max-site/$k.key )
     echo "  生成了 /etc/d1max-site/$k.key"
   fi
@@ -84,10 +92,25 @@ done
 if [[ -f "$PKG/deploy/release-pub.pem" ]]; then
   install -m 0644 "$PKG/deploy/release-pub.pem" /etc/d1max-site/release-pub.pem
 fi
+# 换钥匙(A3):另外也认的发行公钥,跟包里的一样(包里删掉的这里也删)
+if [[ -d "$PKG/deploy/release-pub.d" ]]; then
+  install -d -m 0755 /etc/d1max-site/release-pub.d
+  find /etc/d1max-site/release-pub.d -maxdepth 1 -type f -name '*.pem' -delete
+  for k in "$PKG"/deploy/release-pub.d/*.pem; do
+    [[ -f "$k" ]] && install -m 0644 "$k" /etc/d1max-site/release-pub.d/
+  done
+fi
 
 echo "[3/5] Python 环境"
 [[ -x "$VENV/bin/python" ]] || python3 -m venv "$VENV"
 "$VENV/bin/pip" install --upgrade "$PKG/packages/contract[mqtt,planning]" "$PKG/packages/site-node"
+if [[ $RECOVER -eq 1 && -n "$KEYS_FILE" ]]; then
+  # A3:托管包里的密钥放回 /etc/d1max-site(root:d1max-site 0440);口令交互输入
+  "$VENV/bin/d1max-site" --home "$HOME_DIR" keys-import "$KEYS_FILE"
+  for k in secrets backup evidence; do
+    [[ -f /etc/d1max-site/$k.key ]] || { echo "托管包里没有 $k.key" >&2; exit 2; }
+  done
+fi
 
 echo "[4/5] 站点目录"
 if [[ $RECOVER -eq 1 ]]; then
