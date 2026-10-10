@@ -278,6 +278,19 @@ def _旧库(t, tmp_path):
     c.close()
 
 
+def _PR105升过的库(t, tmp_path):
+    """51 版的库被 PR #105 升到 52 版以后的样子(复查 R1 第二轮):PR #105 的迁移就是这一句补列
+    —— 缺省值 'p1',把只记过授权 P3 的那一回也标成了报过 P1 —— 再把版本写成 52。"""
+    import sqlite3
+    _旧库(t, tmp_path)
+    c = sqlite3.connect(tmp_path / "s.db")
+    c.execute("ALTER TABLE person_sightings ADD COLUMN kind TEXT NOT NULL DEFAULT 'p1'")
+    c.execute("UPDATE meta SET value='52' WHERE key='schema'")
+    c.commit()
+    assert [r[0] for r in c.execute("SELECT kind FROM person_sightings")] == ["p1"]
+    c.close()
+
+
 def _升级后的台(t, tmp_path):
     from d1max_site.sightings import PersonWatch
     db = SiteDB(tmp_path / "s.db")                          # 真跑一遍补列迁移
@@ -334,4 +347,60 @@ def test_复查R1_旧库升级_真报过P1的那一回_不重复报(台, tmp_pat
         w.tick()
     n = [a["kind"] for a in w.alerts.raised].count("dog_sees_person")
     assert n == (0 if P1发出去了 else 1), "发出去过的不再报;还在 pending 的照常补发一次"
+    db.close()
+
+
+@pytest.mark.parametrize("P3发出去了", [True, False])
+def test_复查R1二_PR105升到52版错标成p1的_修复一次_补报一次_重启不重判(台, tmp_path, P3发出去了):  # noqa: F811
+    t = 台
+    if not P3发出去了:
+        t.w.alerts = None
+    areas = AreaBook(t.db, now_ms=lambda: t.ms[0])
+    areas.set("m", "1", "Back garden", SQUARE, by="admin")
+    t.w.areas = areas
+    _可靠位置(t)
+    t.arming.authz = SimpleNamespace(active=lambda zone: "Gardener")
+    t.d.persons("A", present=True, count=1, nearest_m=4.0)
+    t.w.tick()
+    _PR105升过的库(t, tmp_path)
+    from test_site_charging import 假告警台
+    t.w.alerts = 假告警台()
+    db, arming, w = _升级后的台(t, tmp_path)                # 装上修复版;授权已经没了,人一直在
+    assert [r["kind"] for r in db.query("SELECT kind FROM person_sightings")] == ["authorized"]
+    for _ in range(3):
+        w.tick()
+    assert [a["kind"] for a in w.alerts.raised].count("dog_sees_person") == 1
+    assert [r["kind"] for r in db.query("SELECT kind FROM person_sightings")] == ["p1"]
+    db.close()
+    # 修复只跑一次:再重启,报过 P1 的不会被重判回授权、也不再报
+    with __import__("sqlite3").connect(tmp_path / "s.db") as c:
+        c.execute("DELETE FROM alerts")                     # 就算证据没了(极端),也不重判
+        c.execute("DELETE FROM pending_alerts")
+    db, arming, w = _升级后的台(t, tmp_path)
+    assert [r["kind"] for r in db.query("SELECT kind FROM person_sightings")] == ["p1"]
+    for _ in range(3):
+        w.tick()
+    assert [a["kind"] for a in w.alerts.raised].count("dog_sees_person") == 1, "不重复报"
+    db.close()
+
+
+@pytest.mark.parametrize("P1发出去了", [True, False])
+def test_复查R1二_PR105升过的库里真报过P1的_修复以后还是p1_不重复报(台, tmp_path, P1发出去了):  # noqa: F811
+    t = 台
+    if P1发出去了:
+        from d1max_site.alert_store import AlertDesk
+        t.w.alerts = AlertDesk(t.db, now_ms=lambda: t.ms[0])
+    else:
+        t.w.alerts = None
+    t.d.persons("A", present=True, count=1, nearest_m=4.0)
+    t.w.tick()
+    _PR105升过的库(t, tmp_path)
+    from test_site_charging import 假告警台
+    t.w.alerts = 假告警台()
+    db, arming, w = _升级后的台(t, tmp_path)
+    assert [r["kind"] for r in db.query("SELECT kind FROM person_sightings")] == ["p1"]
+    for _ in range(3):
+        w.tick()
+    n = [a["kind"] for a in w.alerts.raised].count("dog_sees_person")
+    assert n == (0 if P1发出去了 else 1)
     db.close()
