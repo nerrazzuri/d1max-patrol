@@ -23,11 +23,16 @@ export interface UnitInfo {
   battery: number | null;
   deter?: DeterSession;
   task: string;
+  /** 数据过期了(B 阶段外审 I5):状态显示「未知」。 */
+  stale?: boolean;
+  /** 驱离接口这一次没拿到:说不清有没有驱离,不是「没有」。 */
+  deterUnknown?: boolean;
 }
 
 const CAMS: Cam[] = ["front", "back"];
 
-export function StateText({ s }: { s: RobotState }) {
+export function StateText({ s, stale }: { s: RobotState; stale?: boolean }) {
+  if (stale) return <span class="state unknown">{t("stUnknown")}</span>;
   const a = abnormal(s);
   return (
     <span class={a ? `state ${a}` : "state"}>
@@ -41,7 +46,7 @@ function Strip({ u, onMap }: { u: UnitInfo; onMap: () => void }) {
   return (
     <div class="unit-strip">
       <span class="unit-id">{u.robot.robot_id}</span>
-      <StateText s={u.state} />
+      <StateText s={u.state} stale={u.stale} />
       {u.battery != null && <span class={u.battery < 20 ? "batt low" : "batt"}>{Math.round(u.battery)}%</span>}
       <span class="muted">{u.task}</span>
       <button type="button" class="link push" onClick={onMap}>{t("map")}</button>
@@ -119,7 +124,7 @@ export function AlarmTile(props: {
         <button type="button" class="btn onalarm" onClick={props.onMap}>{t("showOnMap")}</button>
         <span class="soft small">{t("talkNA")}</span>
         <span class="soft small push">
-          {u.deter ? t("deterOn", { n: u.deter.level }) : ""}
+          {u.deter ? t("deterOn", { n: u.deter.level }) : u.deterUnknown || u.stale ? t("deterUnknown") : ""}
           {p?.count ? ` ${t("persons", { n: p.count, m: p.nearest_m ?? "?" })}` : ""}
         </span>
       </div>

@@ -62,15 +62,24 @@ def resolve(path: str, web_dir: Path = WEB_DIR) -> tuple[Path, str, bool] | None
     """静态路径 → ``(文件, Content-Type, 能不能长缓存)``;没构建过(没有 index.html)回 None。
 
     只认 ``/assets/<一层文件名>``,别的都回 ``index.html``:不拼用户给的路径,走不出 ``web/``。"""
+    root = web_dir.resolve()
+
+    def _inside(f: Path) -> bool:
+        # B 阶段外审 M1:跟着符号链接走出 web/ 的不给(先解析出真实路径再比)
+        try:
+            return f.resolve(strict=True).is_relative_to(root)
+        except OSError:
+            return False
+
     index = web_dir / "index.html"
-    if not index.is_file():
+    if not index.is_file() or not _inside(index):
         return None
     if path.startswith("/assets/"):
         name = path[len("/assets/"):]
         if name and "/" not in name and "\\" not in name and not name.startswith(".") \
                 and all(c.isalnum() or c in "-_." for c in name):
             f = web_dir / "assets" / name
-            if f.is_file():
+            if f.is_file() and _inside(f):
                 ext = f.suffix.lower()
                 typ = _TYPES.get(ext) or mimetypes.guess_type(name)[0] or "application/octet-stream"
                 return f, typ, True

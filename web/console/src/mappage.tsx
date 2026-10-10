@@ -81,7 +81,7 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
       <aside class="sidebar" aria-label={t("tabMap")}>
         {sel && (
           <div class="sel">
-            <div class="row"><span class="unit-id">{sel.robot.robot_id}</span><StateText s={sel.state} />{sel.battery != null && <span class="batt push">{Math.round(sel.battery)}%</span>}</div>
+            <div class="row"><span class="unit-id">{sel.robot.robot_id}</span><StateText s={sel.state} stale={sel.stale} />{sel.battery != null && <span class="batt push">{Math.round(sel.battery)}%</span>}</div>
             {sel.state !== "offline" && (
               <div class="pair small">
                 <CameraWell key={`${sel.robot.robot_id}-f`} robot={sel.robot.robot_id} cam="front" now={props.now} />
@@ -96,7 +96,7 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
           {props.units.filter((u) => u !== sel).map((u) => (
             <li key={u.robot.robot_id}>
               <button type="button" class="botrow" onClick={() => props.onSelect(u.robot.robot_id)}>
-                <span class="unit-id">{u.robot.robot_id}</span><StateText s={u.state} />
+                <span class="unit-id">{u.robot.robot_id}</span><StateText s={u.state} stale={u.stale} />
                 {u.battery != null && <span class="batt push">{Math.round(u.battery)}%</span>}
               </button>
             </li>

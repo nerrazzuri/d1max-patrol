@@ -21,6 +21,8 @@ export function AlarmQueue(props: {
   active: Alert[];
   shelved: Alert[];
   now: number;
+  /** 数据过期时最后一次更新的时刻(B 阶段外审 I5);``null`` = 没过期。 */
+  stale?: string | null;
   open: boolean;
   onToggle: () => void;
   onAck: (a: Alert) => void;
@@ -41,7 +43,7 @@ export function AlarmQueue(props: {
   return (
     <section class={props.open ? "queue open" : "queue"} aria-label={t("tabAlarms")}>
       <div class="queue-head">
-        <h2>{props.active.length ? t("alarmsActive", { n: props.active.length }) : t("noActiveAlarms")}</h2>
+        <h2>{props.stale ? t("alarmsUnknown", { t: props.stale }) : props.active.length ? t("alarmsActive", { n: props.active.length }) : t("noActiveAlarms")}</h2>
         {props.open ? (
           <div class="tabs" role="tablist">
             {(["active", "shelved", "history"] as Tab[]).map((x) => (

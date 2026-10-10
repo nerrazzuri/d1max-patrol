@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 51                      # B1c:防区多边形、时段授权
+SCHEMA_VERSION = 52                      # B 阶段外审 I1:person_sightings.kind
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -467,7 +467,10 @@ CREATE TABLE IF NOT EXISTS enroll_claims (
 -- W33(决策 48):布防中狗没在驱离时看见人,这一回报过 P1 了(狗确认人走了删,再看见再报)。
 CREATE TABLE IF NOT EXISTS person_sightings (
     robot_id   TEXT PRIMARY KEY,
-    started_ms INTEGER NOT NULL
+    started_ms INTEGER NOT NULL,
+    -- B 阶段外审 I1:这一回记成了什么。'p1' = 报过 P1;'authorized' = 授权在场只记了 P3
+    -- (授权失效、狗走出授权区、位置说不清了而人还在,要补报一次 P1)。
+    kind       TEXT NOT NULL DEFAULT 'p1'
 );
 -- W33(C40221 真机):只许手动派的狗。站点自己发起的动作(排程、入侵派遣、回充、任务完了自动回待命点)
 -- 一律不派;人手动派的照常。新登记的狗默认在这里(管理员确认后才接自动派遣);没有这一行 = 接。
@@ -564,6 +567,7 @@ _ADDED_COLUMNS = (
     ("alerts", "shelved_ms", "INTEGER"),
     ("alerts", "shelved_until_ms", "INTEGER"),
     ("alerts", "shelved_reason", "TEXT NOT NULL DEFAULT ''"),
+    ("person_sightings", "kind", "TEXT NOT NULL DEFAULT 'p1'"),        # B 阶段外审 I1
 )
 
 

@@ -629,6 +629,13 @@ class _Handler(TlsHandlerMixin):
         name, pw = d.get("name"), d.get("password")
         if not isinstance(name, str) or not isinstance(pw, str):
             raise HttpError(400, "要 name 与 password 两个字符串")
+        if d.get("web") is True:
+            # B 阶段外审 I4:网页登录(会种 cookie)也要防跨站 —— 别的网站的表单设不了自定义头、
+            # 也发不了 application/json(要预检,站点不答应跨域)。在建会话、种 cookie 之前拒。
+            from d1max_site.webui import CSRF_HEADER
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if self.headers.get(CSRF_HEADER) != "1" or ctype != "application/json":
+                raise HttpError(403, "网页登录少了防伪造的头")
         self._actor = f"login:{name[:64]}"
         try:
             token = self.site.accounts.login(name, pw)
