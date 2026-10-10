@@ -1,0 +1,18 @@
+[Unit]
+Description=D1 Max zenoh 路由(商业化 A5:自带算力板从厂商 Orin 拉话题;没填网关不起)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=robot
+EnvironmentFile=-/etc/d1max/env
+ExecCondition=/opt/d1max/current/deploy/d1max-zenohd-start --check
+ExecStart=/opt/d1max/current/deploy/d1max-zenohd-start
+RuntimeDirectory=d1max-zenohd
+RuntimeDirectoryMode=0700
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

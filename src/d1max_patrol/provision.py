@@ -208,6 +208,15 @@ def _mqtt_tls(url: str, etc: Path, timeout_s: float = 10.0) -> str:
         return str(exc)[:200]
 
 
+def _tcp(host: str, port: int, timeout_s: float = 3.0) -> str:
+    """连一下 TCP 端口:回空串 = 通了。"""
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return ""
+    except OSError as exc:
+        return str(exc)[:200]
+
+
 def _run(cmd: list[str]) -> tuple[int, str]:
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -219,7 +228,8 @@ def _run(cmd: list[str]) -> tuple[int, str]:
 def selfcheck(*, etc: Path = ETC, user: str | None = "robot",
               mqtt_probe: Callable[[str, Path], str] = _mqtt_tls,
               run: Callable[[list[str]], tuple[int, str]] = _run,
-              disk_usage: Callable[[Path], Any] = shutil.disk_usage) -> list[Check]:
+              disk_usage: Callable[[Path], Any] = shutil.disk_usage,
+              tcp_probe: Callable[[str, int], str] = _tcp) -> list[Check]:
     out: list[Check] = []
     rid = ""
     try:
@@ -262,6 +272,16 @@ def selfcheck(*, etc: Path = ETC, user: str | None = "robot",
         why = mqtt_probe(env["D1MAX_SITE_MQTT"], etc)
         out.append(Check("FAIL", "连站点", f"{env['D1MAX_SITE_MQTT']}:{why}") if why
                    else Check("PASS", "连站点", f"用自己的证书连上了 {env['D1MAX_SITE_MQTT']}"))
+    gw = env.get("D1MAX_GATEWAY", "")
+    if gw:
+        # 商业化 A5:装在自带算力板上,雷达、相机话题从厂商 Orin(网关)的 zenoh 路由拉
+        raw = env.get("D1MAX_GATEWAY_ZENOH_PORT") or "7447"
+        port = int(raw) if raw.isdigit() else 0
+        why = tcp_probe(gw, port) if port else f"端口不对:{raw}"
+        out.append(Check("FAIL", "网关", f"{gw}:{port} 的 zenoh 连不上({why}):板子接进狗内网了吗?"
+                                         "网关地址对吗?") if why
+                   else Check("PASS", "网关", f"{gw}:{port} 的 zenoh 连得上;记得 "
+                                              "systemctl enable --now d1max-zenohd"))
     rc, txt = run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
     out.append(Check("PASS", "对时", "已同步") if rc == 0 and txt == "yes"
                else Check("WARN", "对时", f"没同步({txt or rc}):录像、告警的时间会不准"))

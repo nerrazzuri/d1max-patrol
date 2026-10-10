@@ -62,6 +62,8 @@ set -euo pipefail
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-persons.service 人员检测节点的自启链(有人手工 enable 过的话)
 # @删除 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service 前后雷达合并的自启链(有人手工 enable 过的话)
+# @删除 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由单元(A5)
+# @删除 /etc/systemd/system/multi-user.target.wants/d1max-zenohd.service zenoh 路由的自启链(enable 过的话)
 # @删除 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置(W09d;删了之后按系统原来的配置对时)
 # @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
 # @删除 /etc/systemd/system/d1max-patrol.service                         老服务(W00c5e 退役;没重跑过装机脚本的老机器上还在)
@@ -97,6 +99,8 @@ PERS_UNIT=d1max-persons.service
 PERS_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-persons.service
 MERGE_UNIT=d1max-lidar-merge.service
 MERGE_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service
+ZENOH_UNIT=d1max-zenohd.service
+ZENOH_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-zenohd.service
 LEGACY_WANTS_LINK=/etc/systemd/system/multi-user.target.wants/d1max-patrol.service
 
 say()  { printf '%s\n' "$*"; }
@@ -387,7 +391,7 @@ stop_service() {
     say "  (这台机器上没有 systemctl,整段跳过)"
     return 0
   fi
-  for u in "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do
+  for u in "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$ZENOH_UNIT" "$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do
     if [ "$DO_IT" != 1 ]; then
       say "  [dry-run] 会 stop + disable $u"
       continue
@@ -407,6 +411,8 @@ stop_service() {
   rm_sys "$PERS_WANTS_LINK" "人员检测节点的自启链,没 enable 过就没有"
   rm_sys "$UNIT_DIR/$MERGE_UNIT" "前后雷达合并单元(W09i)"
   rm_sys "$MERGE_WANTS_LINK" "前后雷达合并的自启链,没 enable 过就没有"
+  rm_sys "$UNIT_DIR/$ZENOH_UNIT" "zenoh 路由单元(A5)"
+  rm_sys "$ZENOH_WANTS_LINK" "zenoh 路由的自启链,没 enable 过就没有"
   rm_sys "/etc/systemd/timesyncd.conf.d/d1max.conf" "对时配置(W09d),站点地址没填过就没有"
   if [ "$DO_IT" = 1 ]; then
     systemctl try-restart systemd-timesyncd >/dev/null 2>&1 || true

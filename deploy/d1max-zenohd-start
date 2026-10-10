@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# 自带算力板上的 zenoh 路由(商业化 A5)。我们的服务装在自己的板子上、不在厂商 Orin 上时,雷达、相机话题
+# 要从厂商 Orin(网关)那边的 zenoh 路由拉过来:本机起一个路由,往外只连网关,自己**只在本机听**
+# (本机的定位器、感知节点、人员检测连它)。装在厂商 Orin 上(没填网关)时什么都不起:厂商自己有路由。
+#
+#   d1max-zenohd-start           起路由(systemd 用)
+#   d1max-zenohd-start --check   只看要不要起:填了网关回 0,没填回 1(ExecCondition= 用)
+#   d1max-zenohd-start --print   打出要用的配置(排查用)
+#
+# 读 /etc/d1max/env 的 D1MAX_GATEWAY=<厂商 Orin 的地址>(只认 IPv4 或主机名),D1MAX_GATEWAY_ZENOH_PORT
+# (缺省 7447)。**不 source 这份文件**(同 d1max-timesync-conf):按字面量读。
+# 退出码:0 起了 / 要起;1 没填网关(不用起);4 值不干净。
+set -euo pipefail
+ENV_FILE="${D1MAX_ENV_FILE:-/etc/d1max/env}"
+read_env_value() {
+  [[ -r "$ENV_FILE" ]] || return 0
+  sed -n "s/^[[:space:]]*$1=//p" "$ENV_FILE" 2>/dev/null \
+    | tail -n 1 \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+gw=$(read_env_value D1MAX_GATEWAY)
+port=$(read_env_value D1MAX_GATEWAY_ZENOH_PORT)
+port=${port:-7447}
+if [[ -z "$gw" ]]; then
+  [[ "${1:-}" == "--check" ]] || echo "zenoh 路由:没填 D1MAX_GATEWAY,装在厂商 Orin 上,不用起" >&2
+  exit 1
+fi
+if [[ ! "$gw" =~ ^[A-Za-z0-9.-]+$ ]] || [[ ! "$port" =~ ^[0-9]{1,5}$ ]]; then
+  echo "zenoh 路由:D1MAX_GATEWAY / D1MAX_GATEWAY_ZENOH_PORT 的值不干净:'$gw' '$port'" >&2
+  exit 4
+fi
+[[ "${1:-}" == "--check" ]] && exit 0
+
+config() {
+  cat <<JSON
+{
+  mode: "router",
+  connect: {
+    timeout_ms: { router: -1, peer: -1, client: 0 },
+    endpoints: ["tcp/$gw:$port"],
+    exit_on_failure: { router: false, peer: false, client: true },
+    retry: { period_init_ms: 1000, period_max_ms: 4000, period_increase_factor: 2 },
+  },
+  listen: {
+    timeout_ms: 0,
+    endpoints: ["tcp/127.0.0.1:7447"],
+    exit_on_failure: true,
+    retry: { period_init_ms: 1000, period_max_ms: 4000, period_increase_factor: 2 },
+  },
+  scouting: { multicast: { enabled: false }, gossip: { enabled: true } },
+}
+JSON
+}
+if [[ "${1:-}" == "--print" ]]; then
+  config
+  exit 0
+fi
+dir="${RUNTIME_DIRECTORY:-/run/d1max-zenohd}"
+mkdir -p "$dir"
+config > "$dir/router.json5"
+export ZENOH_ROUTER_CONFIG_URI="$dir/router.json5"
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+here="$(cd "$(dirname "$0")" && pwd)"
+exec "$here/d1max-ros" ros2 run rmw_zenoh_cpp rmw_zenohd

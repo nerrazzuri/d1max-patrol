@@ -1200,8 +1200,9 @@ def test_卸载脚本删agent单元():
     assert "\nMAIN_UNIT=d1max-agent.service\n" in text
     assert 'rm_sys "$UNIT_DIR/$MAIN_UNIT"' in text and 'rm_sys "$WANTS_LINK"' in text
     # 没重跑过装机脚本的老机器上老服务还在:卸载照样要停、要删。定位器(W09b)先停,它连着代理。
-    assert ('for u in "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$MAIN_UNIT" '
-            '"$LEGACY_UNIT" "$OLD_UNIT"; do') in text
+    # zenoh 路由(A5)在吃话题的几个之后停
+    assert ('for u in "$PERS_UNIT" "$OBS_UNIT" "$LOC_UNIT" "$MERGE_UNIT" "$ZENOH_UNIT" '
+            '"$MAIN_UNIT" "$LEGACY_UNIT" "$OLD_UNIT"; do') in text
     assert 'rm_sys "$UNIT_DIR/$LEGACY_UNIT"' in text
 
 
