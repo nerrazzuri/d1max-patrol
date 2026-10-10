@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 45                      # 商业化 A6:P1 推到手机(push_devices、push_outbox)
+SCHEMA_VERSION = 46                      # A6 外审 F3:推送号跟登记它的那次登录绑在一起(session)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -403,7 +403,8 @@ CREATE TABLE IF NOT EXISTS push_devices (
     reg_id     TEXT PRIMARY KEY,
     account    TEXT NOT NULL,
     platform   TEXT NOT NULL,
-    updated_ms INTEGER NOT NULL
+    updated_ms INTEGER NOT NULL,
+    session    TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS push_outbox (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -512,6 +513,8 @@ _ADDED_COLUMNS = (
     ("recordings", "sealed", "INTEGER NOT NULL DEFAULT 0"),
     # PR #87 复查 R4:受力警报上次发「开」的时刻(定时续:狗重启、上装全关了也补回来)
     ("force_episodes", "siren_ms", "INTEGER NOT NULL DEFAULT 0"),
+    # A6 外审 F3:登记推送号的那次登录(令牌哈希);那次登录退出、过期了就不推
+    ("push_devices", "session", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

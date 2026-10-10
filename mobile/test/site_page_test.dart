@@ -790,6 +790,12 @@ void main() {
       await t.tap(find.text('登录'));
       await t.pumpAndSettle();
       expect(find.byType(SiteRobotsPage), findsOneWidget);
+      final tip = find.byKey(SiteRobotsPage.pushKey);
+      if (push.supported) {
+        expect(t.widget<Tooltip>(tip).message, 'P1 推送：已就绪', reason: '标题栏上看得见推送就绪了');
+      } else {
+        expect(tip, findsNothing);
+      }
       await t.pageBack();
       await t.pumpAndSettle();
       expect(api.pushLog,

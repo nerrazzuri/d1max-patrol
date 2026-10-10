@@ -878,7 +878,9 @@ class _Handler(TlsHandlerMixin):
             if path.endswith("/remove"):
                 desk.unregister(str(user), reg)
             else:
-                desk.register(str(user), reg, str(d.get("platform") or "android"))
+                from d1max_site.accounts import _token_hash
+                desk.register(str(user), reg, str(d.get("platform") or "android"),
+                              session=_token_hash(self._token() or ""))
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"ok": True})

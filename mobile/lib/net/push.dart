@@ -8,8 +8,10 @@
 /// iOS 用 `--dart-define=JPUSH_APPKEY=…`。没给：[supported] 为假，什么都不做。
 library;
 
+import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:jpush_flutter/jpush_flutter.dart';
 import 'package:jpush_flutter/jpush_interface.dart';
 
@@ -52,12 +54,8 @@ class JPushRegistrar implements PushRegistrar {
     try {
       final j = _jpush ??= (JPush.newJPush()
         ..setup(appKey: _appKey, channel: 'developer-default', production: true));
-      // 刚装好、第一次起来时极光还在注册：等几秒再要
-      for (var i = 0; i < 5; i++) {
-        final id = await j.getRegistrationID();
-        if (id.isNotEmpty) return id;
-        await Future<void>.delayed(const Duration(seconds: 2));
-      }
+      final id = await j.getRegistrationID();
+      if (id.isNotEmpty) return id;                       // 还没注册上：PushSession 过一会儿再要
     } catch (_) {
       // 没配 AppKey、插件起不来：不推（后台值守照旧）
     }
@@ -67,3 +65,88 @@ class JPushRegistrar implements PushRegistrar {
 
 PushRegistrar defaultPush() =>
     Platform.isAndroid || Platform.isIOS ? JPushRegistrar() : const NoPush();
+
+
+// ------------------------------------------------------------ 一次登录的推送登记（A6 外审 F2、F3）
+
+enum PushState { off, waiting, ready }
+
+/// 一次进站点（登录）期间的推送登记：拿不到推送号、登记请求失败都**退避重试**，直到登记上或者离开站点；
+/// 离开时先不许再登记、等在路上的那一次落定，登记上了的（包括离开那一刻才登记上的）注销。
+/// 站点那头推送号还跟登记它的那次登录绑着（退出了就不推），这里的注销是尽力而为。
+class PushSession {
+  PushSession(this.registrar, {required this.register, required this.unregister,
+      Duration Function(int attempt)? backoff})
+      : _backoff = backoff ?? _defaultBackoff;
+
+  final PushRegistrar registrar;
+  final Future<void> Function(String id, String platform) register;
+  final Future<void> Function(String id) unregister;
+  final Duration Function(int attempt) _backoff;
+
+  /// 界面上看：没开（不支持、没配）/ 还没登记上（带原因）/ 登记上了。
+  final ValueNotifier<PushState> state = ValueNotifier(PushState.off);
+  String reason = '';
+
+  bool _stopped = false;
+  String? _registered;
+  Future<void>? _run;
+  Completer<void>? _wake;
+
+  static Duration _defaultBackoff(int n) => Duration(seconds: n < 6 ? 2 << n : 60);
+
+  void start() {
+    if (!registrar.supported || _run != null) return;
+    state.value = PushState.waiting;
+    reason = '正在登记推送';
+    _run = _loop();
+  }
+
+  Future<void> _loop() async {
+    for (var attempt = 0; !_stopped; attempt++) {
+      String? id;
+      try {
+        id = await registrar.registrationId();
+      } catch (_) {}
+      if (_stopped) return;
+      if (id == null) {
+        reason = '推送号还没拿到（没配极光、或者还在注册），稍后再试';
+      } else {
+        try {
+          await register(id, registrar.platform);
+          // 离开那一刻才登记上的也记下：stop() 等这一次落定以后注销它
+          _registered = id;
+          reason = '';
+          state.value = PushState.ready;
+          return;
+        } catch (e) {
+          reason = '推送登记没成：$e，稍后再试';
+        }
+      }
+      state.value = PushState.waiting;
+      final w = _wake = Completer<void>();
+      await Future.any([Future<void>.delayed(_backoff(attempt)), w.future]);
+    }
+  }
+
+  /// 离开站点（注销会话之前）调：不再登记；在路上的那一次落定；登记上了的注销。
+  Future<void> stop() async {
+    _stopped = true;
+    final w = _wake;
+    if (w != null && !w.isCompleted) w.complete();
+    final r = _run;
+    if (r != null) {
+      try {
+        await r.timeout(const Duration(seconds: 10));
+      } catch (_) {}
+    }
+    final id = _registered;
+    _registered = null;
+    if (id != null) {
+      try {
+        await unregister(id);
+      } catch (_) {}
+    }
+    state.value = PushState.off;
+  }
+}

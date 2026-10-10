@@ -225,3 +225,77 @@ async def test_推送那条道在线程里跑_卡住不挡事件循环(monkeypat
     assert _t.monotonic() - t0 < 1 and where == [False], "在线程里、不卡循环"
     gate.set()
     await asyncio.wait(list(rt._lanes.values()), timeout=5)
+
+
+# ------------------------------------------------------------ A6 外审(F3、F4)
+
+
+def test_F4_前一条等网络跨过了一小时_后一条不再发(台):
+    desk, p, j, clock, db = 台
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="一")
+    desk.raise_alert(kind="force_flipped", robot="B", title="二")
+    clock[0] += 3600_000 - 500
+    real = j.send
+
+    def 慢(*a):
+        clock[0] += 1000                                  # 这一条等网络等了 1 秒
+        return real(*a)
+    j.send = 慢
+    p.tick()
+    q = {r["title"]: r for r in _队(db)}
+    assert [b for _, _, b, _ in j.sent] == ["一"], "第二条发之前已经过期:不发"
+    assert "作废" in q["二"]["dropped"] and q["一"]["sent_ms"] == clock[0], "记实际发完的时刻"
+
+
+def test_F4_分批发_第一批发着的时候有人确认了_后面的批次不发(台, monkeypatch):
+    import d1max_site.push as push
+    desk, p, j, clock, db = 台
+    monkeypatch.setattr(push, "BATCH", 1)
+    p.register("gina", "rid-gina-2", "android")
+    a = desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    real = j.send
+
+    def 发着确认(*args):
+        out = real(*args)
+        desk.ack(a.key, who="gina")
+        return out
+    j.send = 发着确认
+    p.tick()
+    assert len(j.sent) == 1, "确认以后后面的批次不发"
+    row = _队(db)[0]
+    assert row["sent_ms"] is not None and "后面的没发" in row["error"]
+
+
+def test_F3_登记它的那次登录退出了_不再推给它(台):
+    desk, p, j, clock, db = 台
+    alive = {"s1": True}
+    p.session_alive = lambda h: alive.get(h, False)
+    with db.tx() as c:
+        c.execute("DELETE FROM push_devices")
+    p.register("gina", "rid-1", "android", session="s1")
+    p.register("gina", "rid-old", "android")              # 没绑登录的(老数据):不推
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="一")
+    p.tick()
+    assert [r for r, *_ in j.sent] == [["rid-1"]]
+    alive["s1"] = False                                    # 退出了(登记还在,注销没发出去)
+    desk.raise_alert(kind="force_flipped", robot="B", title="二")
+    p.tick()
+    assert len(j.sent) == 1 and _队(db)[-1]["dropped"] == "没有登记的手机"
+
+
+def test_F3_真接口_登记以后退出登录_站点不再推给这台手机(tmp_path):
+    s = 站(tmp_path, alerts=True)
+    try:
+        s.accounts.add("gina", PW, role="guard")
+        j = 假极光()
+        p = PushDesk(s.db, now_ms=lambda: NOW, sender=j)
+        p.session_alive = s.accounts.session_alive
+        s.api.push = p
+        tok = _登(s, "gina")
+        assert s.req("POST", "/api/push/devices", {"registration_id": "rid-1"}, token=tok)[0] \
+            == 200
+        assert p._devices() == ["rid-1"]
+        assert s.req("POST", "/api/logout", {}, token=tok)[0] == 200
+        assert p._devices() == [], "退出了:登记还在也不推"
+    finally:
+        s.close()
