@@ -64,7 +64,15 @@ class ReleaseCatalog:
         if got != raw.get("content_sha256"):
             raise ReleaseCatalogError(f"包的指纹对不上:自述 {raw.get('content_sha256')},算出 {got}")
         from d1max_contract import relsign
-        if self.pubkey is not None and relsign.trusted_keys(Path(self.pubkey)):  # A3:含 .d/ 里的
+        # A 阶段外审 I3:配了公钥位置(``pubkey`` 不是 None)就**必须**验;一把可信钥匙都没有(没生成、
+        # 删光了)= 谁签的都不认,不是「不验」。不验签只有显式的开发开关(``site.json`` 的
+        # ``release_unsigned: true`` → 站点主程序传 ``pubkey=None``)。
+        if self.pubkey is not None:
+            if not relsign.trusted_keys(Path(self.pubkey)):  # A3:含 .d/ 里的
+                raise ReleaseCatalogError(
+                    f"{name}:站点上没有可信的发行公钥({self.pubkey} 和同名 .d/ 都没有),不登记。"
+                    "先生成发行钥匙(docs/W30-完工报告.md);只在开发环境不验签,在 site.json 里写 "
+                    "\"release_unsigned\": true")
             try:
                 relsign.verify(raw, Path(self.pubkey))
             except relsign.SignError as exc:

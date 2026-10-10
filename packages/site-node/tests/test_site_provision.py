@@ -17,7 +17,6 @@ from d1max_patrol import provision as dog
 from d1max_site import main as site_main
 from d1max_site import provision as site
 from d1max_site.db import SiteDB
-from d1max_site.registry import Registry
 
 NOW = 1_800_000_000_000
 
@@ -40,9 +39,7 @@ def _码(home, rid="A", hours=24.0):
 def _领(home, rid, token, now=NOW):
     db = SiteDB(home / "site.db")
     try:
-        reg = Registry(db, site_id="e")
-        return site.claim(db, home, rid, token, now_ms=now,
-                          revoked=lambda r: reg.get(r) is None or reg.get(r).revoked)
+        return site.claim(db, home, rid, token, now_ms=now)
     finally:
         db.close()
 
@@ -201,8 +198,11 @@ def test_接口_领证书包不用登录_用过一次403(tmp_path, 站):
     s = 台(tmp_path / "api", alerts=True)
     try:
         s.api.home = home
+        fp = site._cert_fp((home / "ca/issued/A/robot.crt").read_bytes())
         if s.reg.get("A") is None:
-            s.reg.enroll("A", fingerprint="f", issued_at=0, expires_at=NOW * 2, now_ms=0)
+            s.reg.enroll("A", fingerprint=fp, issued_at=0, expires_at=NOW * 2, now_ms=0)
+        with s.db.tx() as c:                                 # 测试台登记的是假指纹:换成这一代的
+            c.execute("UPDATE robots SET fingerprint=? WHERE robot_id='A'", (fp,))
         cfg = _j.loads((home / "site.json").read_text())
         c = site.decode(site.issue_code(s.db, cfg, home, "A", fingerprint="ab", now_ms=NOW))
         code, d = s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": c["t"]})
@@ -211,3 +211,49 @@ def test_接口_领证书包不用登录_用过一次403(tmp_path, 站):
         assert s.req("POST", "/api/enroll/claim", {"robot_id": "A", "token": "猜的"})[0] == 403
     finally:
         s.close()
+
+
+
+def test_外审I1_吊销后同编号重新登记_旧码永远作废_新码能领_领到的是新这一代(站):
+    home = 站
+    old = site.decode(_码(home))                     # 出了码,没领
+    site_main.main(["--home", str(home), "revoke", "A"])
+    with pytest.raises(site.ProvisionError):
+        _领(home, "A", old["t"])
+    assert site_main.main(["--home", str(home), "enroll", "A"]) == 0   # 同编号重新登记,新私钥
+    with pytest.raises(site.ProvisionError):
+        _领(home, "A", old["t"]), "旧码不能跨代复活"
+    new = site.decode(_码(home))
+    files = _领(home, "A", new["t"])
+    import base64
+    assert base64.b64decode(files["robot.key"]) == (home / "ca/issued/A/robot.key").read_bytes()
+
+
+def test_外审I1_出码以后证书包被换了一代_旧码领不到新私钥(站):
+    """出码以后有人绕过登记表直接换了证书包(或者正在换):读到的证书跟出码时那一代对不上,不给。"""
+    home = 站
+    c = site.decode(_码(home))
+    other = home.parent / "x"
+    site_main.main(["--home", str(other), "init", "--site-id", "x", "--hostname", "localhost"])
+    site_main.main(["--home", str(other), "enroll", "A"])
+    for n in ("robot.crt", "robot.key"):
+        (home / "ca/issued/A" / n).write_bytes((other / "ca/issued/A" / n).read_bytes())
+    with pytest.raises(site.ProvisionError):
+        _领(home, "A", c["t"])
+
+
+def test_外审I1_读证书包时证书变了_当没读到(tmp_path, monkeypatch):
+    b = tmp_path / "b"
+    b.mkdir()
+    for n in site.REQUIRED:
+        (b / n).write_bytes(b"1")
+    real = Path.read_bytes
+    calls = {"n": 0}
+
+    def flip(self):
+        if self.name == "robot.crt":
+            calls["n"] += 1
+            return b"%d" % calls["n"]
+        return real(self)
+    monkeypatch.setattr(Path, "read_bytes", flip)
+    assert site._snapshot(b) is None

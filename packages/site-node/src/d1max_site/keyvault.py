@@ -37,8 +37,14 @@ KEYS: dict[str, tuple[str, str, int | None]] = {
     "evidence": ("evidence_key", "/etc/d1max-site/evidence.key", 32),
     "jpush": ("", "/etc/d1max-site/jpush.secret", None),
 }
-#: 没有也不算毛病的(没配推送就没有它)。
+#: 没配就可以没有的(A 阶段外审 M1:配了推送,即 ``site.json`` 的 ``push`` 有 ``app_key``,就必须有)。
 OPTIONAL = frozenset({"jpush"})
+
+
+def _optional(name: str, cfg: dict[str, Any]) -> bool:
+    if name == "jpush":
+        return not (cfg.get("push") or {}).get("app_key")
+    return name in OPTIONAL
 
 
 class KeyError_(RuntimeError):
@@ -67,7 +73,8 @@ def status(cfg: dict[str, Any], *, root: Path | None = None) -> list[dict[str, A
         row: dict[str, Any] = {"name": name, "path": str(p), "present": p.is_file(),
                                "fingerprint": "", "mode": "", "problem": ""}
         if not p.is_file():
-            row["problem"] = "" if name in OPTIONAL else "没有这把密钥"
+            row["problem"] = "" if _optional(name, cfg) else (
+                "没有这把密钥" + (":配了推送,缺它推送恢复不了" if name == "jpush" else ""))
             out.append(row)
             continue
         try:

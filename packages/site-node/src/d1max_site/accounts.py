@@ -21,6 +21,7 @@ import re
 import secrets
 import threading
 from collections.abc import Callable
+from typing import Any
 
 from d1max_site.db import SiteDB
 from d1max_site.permissions import ROLES
@@ -49,6 +50,12 @@ MAX_CONCURRENT_HASH = 4
 _NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DUMMY_SALT = b"\0" * 16
 
+
+
+def _drop_push(c: Any, name: str) -> None:
+    """账号的权限变了(停用、改角色、重设口令):它登记的手机都不再推(A 阶段外审 I2)。
+    手机下次登录会重新登记。"""
+    c.execute("DELETE FROM push_devices WHERE account=?", (name,))
 
 class AuthError(RuntimeError):
     pass
@@ -189,6 +196,7 @@ class Accounts:
             # 改角色、停用、改口令:旧会话作废。只改显示名不动会话(不是权限变化)。
             if role is not None or disabled is not None or password is not None:
                 c.execute("DELETE FROM sessions WHERE name=?", (name,))
+                _drop_push(c, name)
 
     def set_role(self, name: str, role: str) -> None:
         self._check_role(role)
@@ -199,6 +207,7 @@ class Accounts:
                 raise AuthError("这是最后一个启用的 admin,不能降级")
             c.execute("UPDATE accounts SET role=? WHERE name=?", (role, name))
             c.execute("DELETE FROM sessions WHERE name=?", (name,))
+            _drop_push(c, name)
 
     def set_disabled(self, name: str, disabled: bool) -> None:
         with self.db.tx() as c:
@@ -207,6 +216,7 @@ class Accounts:
                 raise AuthError("这是最后一个启用的 admin,不能停用")
             c.execute("UPDATE accounts SET disabled=? WHERE name=?", (int(bool(disabled)), name))
             c.execute("DELETE FROM sessions WHERE name=?", (name,))
+            _drop_push(c, name)
 
     def reset_password(self, name: str, password: str) -> None:
         """管理员重设别人的口令。"""
@@ -217,6 +227,7 @@ class Accounts:
             self._get(c, name)
             c.execute("UPDATE accounts SET salt=?, pw_hash=? WHERE name=?", (salt, digest, name))
             c.execute("DELETE FROM sessions WHERE name=?", (name,))
+            _drop_push(c, name)
 
     def change_password(self, name: str, old: str, new: str) -> None:
         """自己改自己的口令:要旧口令。**猜旧口令跟猜登录口令同一个计数**:不然拿着偷来的
@@ -334,5 +345,9 @@ class Accounts:
         return token, now + WATCH_ABS_MS
 
     def logout(self, token: str) -> None:
+        """退出登录。**这次登录登记的手机一并不再推**(A 阶段外审 I2:推送跟着登记它的那次登录的
+        「退出」走,不跟着它的「闲置过期」走)。令牌已经过期了也照样删:拿得出令牌就是那部手机。"""
+        h = _token_hash(token)
         with self.db.tx() as c:
-            c.execute("DELETE FROM sessions WHERE token_hash=?", (_token_hash(token),))
+            c.execute("DELETE FROM sessions WHERE token_hash=?", (h,))
+            c.execute("DELETE FROM push_devices WHERE session=? AND session != ''", (h,))

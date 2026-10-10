@@ -327,9 +327,16 @@ def test_map_import登记一张图_同版本再来退2(home, tmp_path, capsys):
                            "--version", "8"]) == 2
 
 
+def _开发不验签(home):
+    cfg = json.loads((home / "site.json").read_text())
+    cfg["release_unsigned"] = True
+    (home / "site.json").write_text(json.dumps(cfg))
+
+
 def test_release_add登记一版_坏包退2(home, tmp_path, capsys):
     from test_site_releases import NAME, 做包
     pkg = 做包(tmp_path)
+    _开发不验签(home)
     assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 0
     assert f"登记了 {NAME}" in capsys.readouterr().out
     assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 2
@@ -355,3 +362,36 @@ def test_W33_新登记的狗只许手动_robot_auto才接自动派遣_robot_manu
     assert acts[-2:] == ["robot auto", "robot manual_only"]
     db.close()
     assert site_main.main(["--home", str(home), "robot-auto", "Z"]) == 2
+
+
+
+def test_外审I3_没有可信钥匙不登记_删掉最后一把也不放行_不验签要显式打开(home, tmp_path, capsys):
+    from test_site_releases import 做包
+
+    from d1max_contract import relsign
+    cfg = json.loads((home / "site.json").read_text())
+    pub = tmp_path / "keys" / "release-pub.pem"
+    cfg["release_pubkey"] = str(pub)
+    (home / "site.json").write_text(json.dumps(cfg))
+    pkg = 做包(tmp_path, "2026-10-11-aaaaa1")
+    assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 2, "没生成钥匙"
+    assert "没有可信的发行公钥" in capsys.readouterr().err
+    relsign.keygen(tmp_path / "k.key", pub)
+    raw = json.loads((pkg / "release.json").read_text())
+    assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 2, "没签名"
+    raw["signature"] = relsign.sign(raw, tmp_path / "k.key")
+    (pkg / "release.json").write_text(json.dumps(raw))
+    pub.unlink()                                             # 删掉最后一把 = 谁签的都不认
+    (pub.parent / "release-pub.d").mkdir()
+    assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 2
+    relsign.keygen(tmp_path / "k2.key", pub)                 # 换了一把新的:旧钥匙签的不认
+    assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 2
+    (pub.parent / "release-pub.d" / "old.pem").write_bytes(
+        (tmp_path / "keys" / "release-pub.pem").read_bytes())
+    raw["signature"] = relsign.sign(raw, tmp_path / "k2.key")
+    (pkg / "release.json").write_text(json.dumps(raw))
+    assert site_main.main(["--home", str(home), "release-add", str(pkg)]) == 0
+    pkg2 = 做包(tmp_path, "2026-10-11-aaaaa2")
+    _开发不验签(home)
+    assert site_main.main(["--home", str(home), "release-add", str(pkg2)]) == 0
+    assert "不验签" in capsys.readouterr().err

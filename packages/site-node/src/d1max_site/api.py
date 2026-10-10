@@ -372,6 +372,11 @@ class _Handler(TlsHandlerMixin):
                 return self._enroll_claim()          # 商业化 A4:狗领证书包,开通码就是凭证
             if method == "POST" and path == "/api/incidents":
                 return self._incident_in()          # 摄像头不登录:验签
+            if method == "POST" and path == "/api/logout":
+                # A 阶段外审 I2:令牌闲置过期了也能退出(连同这次登录登记的手机一起不推);
+                # 拿得出令牌就是那部手机,不用它还有效
+                self.site.accounts.logout(self._token() or "")
+                return self._send_json(200, {"ok": True})
             user = self._user()
             if getattr(user, "scope", "") == "watch" and (method, path) not in WATCH_PATHS:
                 raise HttpError(403, "值守令牌只能看告警")
@@ -380,9 +385,6 @@ class _Handler(TlsHandlerMixin):
                 self._need(user, VIEW)
                 token, expires = self.site.accounts.issue_watch_token(str(user))
                 return self._send_json(200, {"token": token, "expires_at": expires})
-            if method == "POST" and path == "/api/logout":
-                self.site.accounts.logout(self._token() or "")
-                return self._send_json(200, {"ok": True})
             if method == "POST" and path == "/api/me/password":
                 return self._change_own_password(user)
             if path == "/api/accounts" or _ACCOUNT.match(path):
@@ -888,14 +890,10 @@ class _Handler(TlsHandlerMixin):
         self._actor, self._audit_target = f"robot:{rid}", rid
         if self.site.home is None:
             raise HttpError(404, "这个站点没开开通码")
-        reg = getattr(self.site.dispatcher, "registry", None)
-
-        def revoked(r: str) -> bool:
-            cur = reg.get(r) if reg is not None else None
-            return cur is None or cur.revoked
         try:
+            # 吊销、证书代次在 claim 的事务里跟登记表核(A 阶段外审 I1)
             files = claim(self.site.dispatcher.db, self.site.home, rid,
-                          str(d.get("token") or ""), now_ms=self.site._now(), revoked=revoked)
+                          str(d.get("token") or ""), now_ms=self.site._now())
         except ProvisionError as exc:
             raise HttpError(403, str(exc)) from exc
         return self._send_json(200, {"robot_id": rid, "files": files})
@@ -949,8 +947,9 @@ class _Handler(TlsHandlerMixin):
                 desk.unregister(str(user), reg)
             else:
                 from d1max_site.accounts import _token_hash
-                desk.register(str(user), reg, str(d.get("platform") or "android"),
-                              session=_token_hash(self._token() or ""))
+                if not desk.register(str(user), reg, str(d.get("platform") or "android"),
+                                     session=_token_hash(self._token() or "")):
+                    raise HttpError(401, "这次登录已经退出了:重新登录再登记推送")
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"ok": True})

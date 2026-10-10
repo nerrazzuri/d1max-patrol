@@ -79,6 +79,7 @@ def summarize(lines: list[str]) -> dict[str, Any]:
             "power_max_w": round(max(pw), 2) if pw else None,
             # board = 整板输入;rails = 分路加起来(AGX Orin,偏小)
             "power_src": rows[-1].get("power_src"),
+            "power_samples": len(pw),
             "cpu_avg_pct": round(statistics.fmean(avg_core), 1) if avg_core else None,
             "cpu_busiest_core_avg_pct": round(statistics.fmean(busiest), 1) if busiest else None,
             "ram_max_mb": max(r["ram_mb"] for r in rows),
@@ -103,7 +104,11 @@ def main(argv: list[str] | None = None) -> int:
             continue
         over = (a.budget_w is not None and s["power_p95_w"] is not None
                 and s["power_p95_w"] > a.budget_w)
-        bad = bad or over
+        # A 阶段外审 M2:给了预算却一条功耗都没有 = 没测到,不能算过
+        unknown = a.budget_w is not None and s["power_p95_w"] is None
+        bad = bad or over or unknown
+        if unknown:
+            print(f"{p}:日志里没有功耗(VDD_IN / POM_5V_IN / 分路):功耗没测到,不能判预算")
         print(f"{p}:{s['samples']} 个采样;功耗 平均 {s['power_avg_w']} W / "
               f"p95 {s['power_p95_w']} W / 峰值 {s['power_max_w']} W;CPU 平均 "
               f"{s['cpu_avg_pct']}%(最忙的核 {s['cpu_busiest_core_avg_pct']}%);"
