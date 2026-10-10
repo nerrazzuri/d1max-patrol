@@ -84,7 +84,8 @@ class HealthDesk:
                  lanes: Callable[[], dict[str, float]] | None = None,
                  disk_usage: Callable[[Path], Any] = shutil.disk_usage,
                  cert_end: Callable[[Path], int | None] = _openssl_enddate,
-                 monotonic: Callable[[], float] = time.monotonic) -> None:
+                 monotonic: Callable[[], float] = time.monotonic,
+                 keys: Callable[[], list[dict[str, Any]]] | None = None) -> None:
         self.db = db
         self.home = Path(home)
         self._now = now_ms
@@ -97,6 +98,8 @@ class HealthDesk:
         self._disk = disk_usage
         self._cert_end = cert_end
         self._mono = monotonic
+        #: 站点密钥自检(A3,``keyvault.status``)。
+        self._keys = keys
         #: 告警台(站点主程序接线程安全的那个):P2。
         self.alerts: Any = None
         self._next_tick = 0
@@ -187,6 +190,9 @@ class HealthDesk:
         out["certs"] = {"ok": not soon, "value": None if worst is None else round(worst, 1),
                         "detail": ";".join(soon)[:300] or (f"证书最近的还有 {worst:.0f} 天到期"
                                                           if worst is not None else "没有证书")}
+        if self._keys is not None:
+            bad = [f"{r['name']}:{r['problem']}" for r in self._keys() if r["problem"]]
+            out["keys"] = {"ok": not bad, "detail": ";".join(bad)[:300] or "站点密钥都在、权限对"}
         lanes = self._lanes() if self._lanes is not None else {}
         stuck = [n for n, t0 in lanes.items() if self._mono() - t0 > LANE_STUCK_S]
         out["lanes"] = {"ok": not stuck,
