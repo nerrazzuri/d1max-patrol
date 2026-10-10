@@ -32,6 +32,8 @@ class PersonWatch:
         self._now = now_ms
         self.arming = arming
         self.deterrence = deterrence
+        #: 防区多边形(B1c,:class:`d1max_site.areas.AreaBook`):按狗的位置算防区。站点主程序接上。
+        self.areas: Any = None
         #: 告警台。站点主程序接上;没接就只落库(下一拍有了再报)。
         self.alerts: Any = None
 
@@ -69,8 +71,44 @@ class PersonWatch:
                 with self.db.tx() as tx:                  # 人走了:这一回完了,再看见再报
                     tx.execute("DELETE FROM person_sightings WHERE robot_id=?", (rid,))
             elif present is True and rid not in seen and armed and rid not in busy:
-                self._raise(rid, p, now)
+                who = self._authorized(rid)                  # B1c:名单
+                if who is not None:
+                    self._authorized_seen(rid, p, who, now)
+                else:
+                    self._raise(rid, p, now)
         flush(self.db, self.alerts)
+
+    def _zone(self, rid: str) -> str | None:
+        """狗现在在哪个防区(B1c:按地图上画的防区多边形算);说不清是 ``None``。"""
+        if self.areas is None:
+            return None
+        c = self.dispatcher.clients.get(rid)
+        pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
+        if pose is None:
+            return None
+        try:
+            return self.areas.zone_at(pose.map_id, pose.map_version, pose.x, pose.y)
+        except Exception:
+            log.exception("%s 在哪个防区算不出来", rid)
+            return None
+
+    def _authorized(self, rid: str) -> str | None:
+        if self.arming is None or not hasattr(self.arming, "authorized"):
+            return None
+        return self.arming.authorized(self._zone(rid))
+
+    def _authorized_seen(self, rid: str, p: dict[str, Any], who: str, now: int) -> None:
+        """授权在场:不报 P1,记一条 P3(历史里查得到),这一回也算报过(人走了再看见再判)。"""
+        zone = self._zone(rid)
+        with self.db.tx() as tx:
+            tx.execute("INSERT INTO person_sightings(robot_id, started_ms) VALUES (?,?)",
+                       (rid, now))
+            queue(tx, kind="authorized_person", robot=rid, title=f"授权在场:{who}",
+                  detail=f"狗看见 {p.get('count', 1)} 个人;{who} 的授权"
+                         + (f"(防区 {zone})" if zone else "(全站)") + "生效中,不报 P1",
+                  context={"task_id": "persons", "authorized": who,
+                           **({"zone": zone} if zone else {})}, now_ms=now)
+        log.info("%s 看见人了,授权在场:%s", rid, who)
 
     def _raise(self, rid: str, p: dict[str, Any], now: int) -> None:
         n = p.get("count", 1)

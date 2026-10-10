@@ -418,6 +418,10 @@ class IncidentDesk:
                     from d1max_site.modes import LABEL
                     return self._set(c, iid, outcome="disarmed",
                                      note=f"{LABEL[mode]}模式:这个防区撤防,只记录")
+                who = self.arming.authorized(ev["zone"])          # B1c:名单
+                if who is not None:
+                    return self._set(c, iid, outcome="authorized",
+                                     note=f"授权在场:{who}(这个防区、这个时段),只记录")
             z = c.execute("SELECT intercept FROM zones WHERE zone=?", (ev["zone"],)).fetchone()
             if z is None:
                 return self._set(c, iid, outcome="unmapped", note="防区没映射到拦截点")

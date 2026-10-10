@@ -643,6 +643,12 @@ class Server:
         # W20:布防模式。撤防的防区来了入侵只记账、不派狗、不报告警。
         from d1max_site.modes import ArmingDesk
         self.arming = ArmingDesk(self.db, now_ms=wall_ms, publish=self.dispatcher.feed.publish)
+        from d1max_site.areas import AreaBook
+        from d1max_site.authz import AuthzBook
+        #: 防区多边形、名单(商业化 B1c)。
+        self.areas = AreaBook(self.db, now_ms=wall_ms)
+        self.authz = AuthzBook(self.db, now_ms=wall_ms)
+        self.arming.authz = self.authz
         self.incidents.arming = self.arming
         # W22:分级驱离。到了拦截点由它接管(开声光、自动升级、回程)。
         from d1max_site.deterrence import DeterrenceDesk
@@ -791,6 +797,8 @@ class Server:
                            supervision=self.supervision, zones=self.zones, now_ms=wall_ms)
         self.teleop.audit = self.api.audit
         self.api.arming = self.arming
+        self.api.areas, self.api.authz = self.areas, self.authz      # B1c
+        self.sightings.areas = self.areas
         self.api.deterrence = self.deterrence
         self.api.weather = self.weather
         from d1max_site.push import PushDesk, load_sender

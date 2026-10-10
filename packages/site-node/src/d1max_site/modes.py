@@ -47,9 +47,22 @@ class ArmingDesk:
         self._publish = publish
         #: 访客到点自动退回时(``tick``):``(退回到的模式, 当时的访客那一行)``。站点接到审计上。
         self.on_expired: Callable[[str, dict[str, Any]], None] | None = None
+        #: 名单(B1c,:class:`d1max_site.authz.AuthzBook`):此刻生效的时段 / 人员授权。站点主程序接上。
+        self.authz: Any = None
         with db.tx() as c:
             c.execute("INSERT OR IGNORE INTO site_mode(id, mode, prev_mode, visitor_zones, "
                       "until_ms, set_by, set_ms) VALUES (1, 'armed', '', '[]', NULL, '', 0)")
+
+    def authorized(self, zone: str | None) -> str | None:
+        """此刻 ``zone`` 上生效的授权名字(B1c);没有、没接名单都是 ``None``。
+        读不出来当没有(宁可多报)。"""
+        if self.authz is None:
+            return None
+        try:
+            return self.authz.active(zone)
+        except Exception:
+            log.exception("名单读不出来:当没有授权(宁可多报)")
+            return None
 
     # ------------------------------------------------------------ 读
 
@@ -85,7 +98,7 @@ class ArmingDesk:
         """手机挑防区用:绑过拦截点的、摄像头登记的、配过在家撤防的。"""
         rows = self.db.query(
             "SELECT zone FROM zones UNION SELECT zone FROM cameras UNION "
-            "SELECT zone FROM zone_arming ORDER BY zone")
+            "SELECT zone FROM zone_arming UNION SELECT zone FROM zone_areas ORDER BY zone")
         return [r["zone"] for r in rows]
 
     def view(self) -> dict[str, Any]:

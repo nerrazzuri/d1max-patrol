@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 50                      # B1:告警搁置(alerts.shelved_*)
+SCHEMA_VERSION = 51                      # B1c:防区多边形、时段授权
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -431,6 +431,29 @@ CREATE TABLE IF NOT EXISTS metrics (
     value REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS metrics_ts ON metrics(ts);
+-- 商业化 B1c:防区画在地图上(每张图每个版本,一个防区一个多边形,地图坐标)。
+CREATE TABLE IF NOT EXISTS zone_areas (
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    zone        TEXT NOT NULL,
+    points      TEXT NOT NULL,
+    updated_by  TEXT NOT NULL DEFAULT '',
+    updated_ms  INTEGER NOT NULL,
+    PRIMARY KEY (map_id, map_version, zone)
+);
+-- 商业化 B1c:名单第一版 —— 时段 / 人员授权。
+CREATE TABLE IF NOT EXISTS authorizations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    zones      TEXT NOT NULL DEFAULT '[]',
+    days       INTEGER NOT NULL,
+    start_min  INTEGER NOT NULL,
+    end_min    INTEGER NOT NULL,
+    until_ms   INTEGER,
+    note       TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL DEFAULT '',
+    created_ms INTEGER NOT NULL
+);
 -- 商业化 A4:狗的开通码(一只狗一个;只记令牌的哈希;领过一次就作废)。
 CREATE TABLE IF NOT EXISTS enroll_claims (
     robot_id   TEXT PRIMARY KEY,

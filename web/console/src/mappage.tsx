@@ -11,11 +11,15 @@ import { abnormal, alarmState, robotMap, type Alert } from "./model";
 export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; selected: string | null; onSelect: (id: string) => void; onVideo: (id: string) => void }) {
   const which = props.units.map((u) => robotMap(u.robot)).find((m) => m) ?? null;
   const [meta, setMeta] = useState<PreviewMeta | null>(null);
+  const [areas, setAreas] = useState<{ zone: string; points: [number, number][] }[]>([]);
   const key = which ? `${which.map_id}/${which.version}` : "";
   useEffect(() => {
     setMeta(null);
+    setAreas([]);
     if (!which) return;
-    api<PreviewMeta>("GET", `/api/maps/${enc(which.map_id)}/${enc(which.version)}/preview`).then(setMeta).catch(() => setMeta(null));
+    const base = `/api/maps/${enc(which.map_id)}/${enc(which.version)}`;
+    api<PreviewMeta>("GET", `${base}/preview`).then(setMeta).catch(() => setMeta(null));
+    api<{ areas: { zone: string; points: [number, number][] }[] }>("GET", `${base}/areas`).then((d) => setAreas(d.areas)).catch(() => setAreas([]));
   }, [key]);
   const sel = props.units.find((u) => u.robot.robot_id === props.selected) ?? props.units[0];
 
@@ -27,6 +31,17 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
         ) : (
           <svg class="map" viewBox={`0 0 ${meta.width} ${meta.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={t("mapAria")}>
             <image href={`/api/maps/${enc(which.map_id)}/${enc(which.version)}/preview.png`} x="0" y="0" width={meta.width} height={meta.height} class="mapimg" />
+            {areas.map((a) => {
+              const pts = a.points.map(([x, y]) => toPx(meta, x, y));
+              const cx = pts.reduce((s, p) => s + p.px, 0) / pts.length;
+              const cy = pts.reduce((s, p) => s + p.py, 0) / pts.length;
+              return (
+                <g key={a.zone}>
+                  <polygon points={pts.map((p) => `${p.px},${p.py}`).join(" ")} class="sec-area quiet" />
+                  <text x={cx} y={cy} class="area-label quiet" font-size={Math.max(10, meta.width / 70)}>{a.zone}</text>
+                </g>
+              );
+            })}
             {props.p1.map((a) => {
               const p = a.context?.pose;
               if (!p || p.map_id !== which.map_id || p.map_version !== which.version) return null;
