@@ -100,6 +100,7 @@ def test_狗看见人_在授权防区里_不报P1记P3_离开授权防区照报P
     areas = AreaBook(t.db, now_ms=lambda: t.ms[0])
     areas.set("m", "1", "Back garden", SQUARE, by="admin")          # 狗在 (3, 4)
     t.w.areas = areas
+    _可靠位置(t)
     t.arming.authz = SimpleNamespace(
         active=lambda zone: "Gardener" if zone == "Back garden" else None)
     t.d.persons("A", present=True, count=1, nearest_m=4.0)
@@ -117,6 +118,75 @@ def test_狗看见人_在授权防区里_不报P1记P3_离开授权防区照报P
     t.d.persons("A", present=True, count=1, nearest_m=4.0)
     t.w.tick()
     assert t.w.alerts.raised[-1]["kind"] == "dog_sees_person"
+
+
+def _可靠位置(t, *, loc_ok=True, age_ms=0):
+    t.d.clients["A"].status.ready = SimpleNamespace(loc_ok=loc_ok)
+    t.d.telemetry_at = {"A": t.ms[0] - age_ms}
+    t.d.stale_ms = 5000
+
+
+def _授权台(t, active):
+    areas = AreaBook(t.db, now_ms=lambda: t.ms[0])
+    areas.set("m", "1", "Back garden", SQUARE, by="admin")          # 狗在 (3, 4)
+    t.w.areas = areas
+    _可靠位置(t)
+    t.arming.authz = SimpleNamespace(active=active)
+    t.d.persons("A", present=True, count=1, nearest_m=4.0)
+    t.w.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["authorized_person"]
+
+
+@pytest.mark.parametrize("变化", ["到期或删除", "走出授权区", "定位丢了", "位置停更"])
+def test_外审I1_I3_授权在场的这一回_人一直在_授权不适用了就补报一次P1(台, 变化):  # noqa: F811
+    t = 台
+    granted = {"on": True}
+    _授权台(t, lambda zone: "Gardener" if granted["on"] and zone == "Back garden" else None)
+    t.w.tick()
+    assert len(t.w.alerts.raised) == 1, "授权还在:不重复记"
+    if 变化 == "到期或删除":
+        granted["on"] = False
+    elif 变化 == "走出授权区":
+        t.d.clients["A"].telemetry.pose.x = 50.0
+    elif 变化 == "定位丢了":
+        _可靠位置(t, loc_ok=False)
+    else:
+        _可靠位置(t, age_ms=60_000)
+    t.w.tick()
+    kinds = [a["kind"] for a in t.w.alerts.raised]
+    assert kinds == ["authorized_person", "dog_sees_person"], kinds
+    assert "授权已不适用" in t.w.alerts.raised[-1]["title"]
+    t.w.tick()
+    t.w.tick()
+    assert len(t.w.alerts.raised) == 2, "补报只报一次"
+
+
+def test_外审I1_补报写在库里_重启以后照样补_告警台报不出去下一拍再报(台, tmp_path):  # noqa: F811
+    from d1max_site.sightings import PersonWatch
+    t = 台
+    granted = {"on": True}
+    _授权台(t, lambda zone: "Gardener" if granted["on"] and zone == "Back garden" else None)
+    granted["on"] = False
+    w2 = PersonWatch(t.db, t.d, now_ms=lambda: t.ms[0], arming=t.arming, deterrence=t.det)
+    w2.areas, w2.alerts = t.w.areas, None                  # 「重启」,告警台还没接上
+    w2.tick()
+    assert [r["kind"] for r in t.db.query("SELECT kind FROM person_sightings")] == ["p1"]
+    w2.alerts = t.w.alerts
+    w2.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["authorized_person", "dog_sees_person"]
+
+
+def test_外审I3_位置说不清_只认全站授权(台):  # noqa: F811
+    t = 台
+    areas = AreaBook(t.db, now_ms=lambda: t.ms[0])
+    areas.set("m", "1", "Back garden", SQUARE, by="admin")
+    t.w.areas = areas
+    _可靠位置(t, loc_ok=False)                               # 旧坐标还在花园里
+    t.arming.authz = SimpleNamespace(
+        active=lambda zone: "Gardener" if zone == "Back garden" else None)
+    t.d.persons("A", present=True, count=1, nearest_m=4.0)
+    t.w.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["dog_sees_person"], "旧坐标不能套授权"
 
 
 def test_接口_看要登录_改要管理员_坏参数400(tmp_path):
@@ -149,3 +219,46 @@ def test_接口_看要登录_改要管理员_坏参数400(tmp_path):
         assert s.req("POST", f"/api/lists/authorizations/{eid}/remove", {}, token=admin)[0] == 404
     finally:
         s.close()
+
+
+@pytest.fixture
+async def 派单台(tmp_path):
+    from test_site_dispatcher import 台子
+    from test_site_incidents import IncidentDesk
+    t = 台子(tmp_path)
+    await t.start()
+    t.desk = IncidentDesk(t.db, t.site, now_ms=t.clock)
+    t.secret = t.desk.add_source("nvr-1")
+    t.desk.set_intercept("gate", map_id="estate-1", map_version="7", x=1.0, y=0.0, yaw=0.0)
+    t.desk.map_zone("front-yard", "gate")
+    yield t
+    await t.close()
+
+
+async def test_外审I2_首条没派成_补派时防区有授权_不派不占狗(派单台, monkeypatch):
+    import asyncio
+
+    from test_site_incidents import _两台狗, _假派单, _签好
+    t = 派单台
+    await _两台狗(t)
+    t.desk.arming = ArmingDesk(t.db, now_ms=t.clock)
+    granted = {"on": False}
+    t.desk.arming.authz = SimpleNamespace(
+        active=lambda zone: "Gardener" if granted["on"] and zone == "front-yard" else None)
+    fake = _假派单(results=("rejected", "accepted"))
+    monkeypatch.setattr(t.site, "goto", fake)
+    h1 = asyncio.ensure_future(t.desk.handle("nvr-1", _签好(t, "e1")))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    r2 = await asyncio.wait_for(t.desk.handle("nvr-1", _签好(t, "e2")), 2)
+    r3 = await asyncio.wait_for(t.desk.handle("nvr-1", _签好(t, "e3")), 2)
+    assert r2["outcome"] == r3["outcome"] == "merged"
+    granted["on"] = True                                   # 首条还在等回执时加了授权
+    fake.gate.set()
+    r1 = await asyncio.wait_for(h1, 2)
+    assert r1["outcome"] == "dispatch_failed"
+    await asyncio.wait_for(t.desk.drain(), 2)
+    rows = {r["event_id"]: r for r in t.desk.list()}
+    assert rows["e2"]["outcome"] == rows["e3"]["outcome"] == "authorized"
+    assert "Gardener" in rows["e2"]["note"]
+    assert len(fake.calls) == 1, "补派没再叫狗"

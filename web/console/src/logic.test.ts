@@ -182,3 +182,30 @@ describe("防区与名单", () => {
     expect(daysText(0b0000101)).toBe("Mon, Wed");
   });
 });
+
+describe("外审 I5:跟站点断了不能把旧的当现在", () => {
+  it("拿不到、或者太久没拿到新的,都算过期", async () => {
+    const { isStale, STALE_AFTER_MS } = await import("./data");
+    expect(isStale({ okAt: null, failingSince: null }, 1000)).toBe(true);
+    expect(isStale({ okAt: 1000, failingSince: null }, 1000 + STALE_AFTER_MS)).toBe(false);
+    expect(isStale({ okAt: 1000, failingSince: null }, 1001 + STALE_AFTER_MS)).toBe(true);
+    expect(isStale({ okAt: 1000, failingSince: 1500 }, 1600)).toBe(true);
+  });
+  it("核心接口失败 → 整个失败;驱离接口失败 → 记成说不清(null),不是「没有驱离」", async () => {
+    const { fetchSite } = await import("./data");
+    const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+    const routes: Record<string, () => Response> = {
+      "/api/robots": () => ok({ robots: [] }),
+      "/api/alerts": () => ok({ alerts: [] }),
+      "/api/mode": () => ok({ mode: "armed" }),
+      "/api/deterrence": () => new Response("{}", { status: 502 }),
+      "/api/watch/summary": () => ok({ robots: [] }),
+    };
+    setFetch(async (p) => routes[String(p)]());
+    const d = await fetchSite();
+    expect(d.deter).toBeNull();
+    expect(d.mode).toEqual({ mode: "armed" });
+    routes["/api/alerts"] = () => { throw new TypeError("offline"); };
+    await expect(fetchSite()).rejects.toBeInstanceOf(ApiError);
+  });
+});

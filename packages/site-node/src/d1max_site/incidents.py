@@ -506,9 +506,13 @@ class IncidentDesk:
             on, mode = self.arming.armed(nxt["zone"]) if self.arming is not None else (True, "")
             point = self.intercept(nxt["intercept"])
             stop: tuple[str, str] | None = None
+            who = self.arming.authorized(nxt["zone"]) if self.arming is not None else None
             if not on:
                 from d1max_site.modes import LABEL
                 stop = ("disarmed", f"首条没派成时已是{LABEL[mode]}模式:这个防区撤防,不再派")
+            elif who is not None:
+                # B 阶段外审 I2:补派跟首次派走同一套出动资格 —— 授权在场就不派、不占狗
+                stop = ("authorized", f"首条没派成时这个防区有授权在场:{who},只记录")
             elif point is not None and point.get("reach"):
                 stop = ("unreachable", f"拦截点走不到:{point['reach']}")
             if stop is not None:

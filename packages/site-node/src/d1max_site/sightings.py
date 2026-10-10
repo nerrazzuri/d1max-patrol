@@ -58,7 +58,9 @@ class PersonWatch:
         return p if isinstance(p, dict) and p.get("state") == "ok" else None
 
     def tick(self) -> None:
-        seen = {r["robot_id"] for r in self.db.query("SELECT robot_id FROM person_sightings")}
+        # 这一回记成了什么(B 阶段外审 I1):'p1' 报过 P1;'authorized' 授权在场只记了 P3
+        seen = {r["robot_id"]: r["kind"]
+                for r in self.db.query("SELECT robot_id, kind FROM person_sightings")}
         armed = self._armed()
         busy = set(getattr(self.deterrence, "sessions", {}) or {})
         now = self._now()
@@ -70,20 +72,38 @@ class PersonWatch:
             if present is False and rid in seen:
                 with self.db.tx() as tx:                  # 人走了:这一回完了,再看见再报
                     tx.execute("DELETE FROM person_sightings WHERE robot_id=?", (rid,))
-            elif present is True and rid not in seen and armed and rid not in busy:
-                who = self._authorized(rid)                  # B1c:名单
-                if who is not None:
+            elif present is True and armed and rid not in busy:
+                kind = seen.get(rid)
+                if kind == "p1":
+                    continue                                  # 这一回报过 P1 了
+                who = self._authorized(rid)          # B1c:名单(每拍按当前授权、当前位置重核)
+                if kind is None and who is not None:
                     self._authorized_seen(rid, p, who, now)
-                else:
-                    self._raise(rid, p, now)
+                elif who is None:
+                    # 新的一回没授权 → 报 P1;授权在场的这一回,授权失效 / 狗走出授权区 / 位置说不清了
+                    # 而人还在 → 补报一次 P1(B 阶段外审 I1)
+                    self._raise(rid, p, now, lapsed=kind == "authorized")
         flush(self.db, self.alerts)
 
     def _zone(self, rid: str) -> str | None:
-        """狗现在在哪个防区(B1c:按地图上画的防区多边形算);说不清是 ``None``。"""
+        """狗现在在哪个防区(B1c:按地图上画的防区多边形算);说不清是 ``None``。
+
+        B 阶段外审 I3:只认**可靠的现在位置** —— 狗说定位正常(``ready.loc_ok``),而且站点最近
+        (``stale_ms`` 以内,按站点自己的钟收到的时刻)收到过它的位置。定位丢了、位置停更了,旧坐标
+        不代表它还在那块地上:按说不清算(只认全站授权)。"""
         if self.areas is None:
             return None
         c = self.dispatcher.clients.get(rid)
-        pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
+        if c is None or c.telemetry is None or c.status is None:
+            return None
+        ready = getattr(c.status, "ready", None)
+        if not getattr(ready, "loc_ok", False):
+            return None
+        at = getattr(self.dispatcher, "telemetry_at", {}).get(rid)
+        stale = getattr(self.dispatcher, "stale_ms", None)
+        if at is None or stale is None or self._now() - at > stale:
+            return None
+        pose = c.telemetry.pose
         if pose is None:
             return None
         try:
@@ -101,8 +121,8 @@ class PersonWatch:
         """授权在场:不报 P1,记一条 P3(历史里查得到),这一回也算报过(人走了再看见再判)。"""
         zone = self._zone(rid)
         with self.db.tx() as tx:
-            tx.execute("INSERT INTO person_sightings(robot_id, started_ms) VALUES (?,?)",
-                       (rid, now))
+            tx.execute("INSERT INTO person_sightings(robot_id, started_ms, kind) "
+                       "VALUES (?,?,'authorized')", (rid, now))
             queue(tx, kind="authorized_person", robot=rid, title=f"授权在场:{who}",
                   detail=f"狗看见 {p.get('count', 1)} 个人;{who} 的授权"
                          + (f"(防区 {zone})" if zone else "(全站)") + "生效中,不报 P1",
@@ -110,10 +130,14 @@ class PersonWatch:
                            **({"zone": zone} if zone else {})}, now_ms=now)
         log.info("%s 看见人了,授权在场:%s", rid, who)
 
-    def _raise(self, rid: str, p: dict[str, Any], now: int) -> None:
+    def _raise(self, rid: str, p: dict[str, Any], now: int, *, lapsed: bool = False) -> None:
+        """报 P1。``lapsed``:这一回本来是授权在场,授权失效(或狗走出授权区、位置说不清)了人还在,
+        补报;跟这一回的记录在同一个事务里改成 'p1'(报不出去的 pending 下一拍 flush 再报)。"""
         n = p.get("count", 1)
         near = p.get("nearest_m")
         title = f"狗看见人了:{n} 个人" + (f",最近 {near} m" if near is not None else "")
+        if lapsed:
+            title += "(授权已不适用)"
         c = self.dispatcher.clients.get(rid)
         pose = c.telemetry.pose if c is not None and c.telemetry is not None else None
         context: dict[str, Any] = {"task_id": "persons",
@@ -122,8 +146,8 @@ class PersonWatch:
             context["pose"] = {"map_id": pose.map_id, "map_version": pose.map_version,
                                "x": round(pose.x, 2), "y": round(pose.y, 2), "at_ms": now}
         with self.db.tx() as tx:
-            tx.execute("INSERT INTO person_sightings(robot_id, started_ms) VALUES (?,?)",
-                       (rid, now))
+            tx.execute("INSERT INTO person_sightings(robot_id, started_ms, kind) VALUES (?,?,'p1') "
+                       "ON CONFLICT(robot_id) DO UPDATE SET kind='p1'", (rid, now))
             queue(tx, kind="dog_sees_person", robot=rid, title=title,
                   detail="布防中,狗不在驱离;看现场照片,要驱离就点「就地驱离」",
                   context=context, now_ms=now)

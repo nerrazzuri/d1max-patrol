@@ -11,6 +11,8 @@ from test_site_api import PW, 站
 
 from d1max_site import webui
 
+WEB = {"X-D1Max-Web": "1"}
+
 
 def _http(s, method, path, body=None, headers=None):
     data = json.dumps(body).encode() if body is not None else None
@@ -74,7 +76,8 @@ def _cookie(h):
 
 
 def test_网页登录_种HttpOnly_cookie_回复里没有令牌_cookie能看_改东西要防伪造头(台):
-    code, h, body = _http(台, "POST", "/api/login", {"name": "alice", "password": PW, "web": True})
+    code, h, body = _http(台, "POST", "/api/login", {"name": "alice", "password": PW, "web": True},
+                          headers=WEB)
     d = json.loads(body)
     assert code == 200 and d["token"] == "" and d["name"] == "alice"
     sc = h["Set-Cookie"]
@@ -110,7 +113,8 @@ def test_cookie_解析():
 
 
 def test_我是谁_cookie刷新以后认得出人和角色(台):
-    code, h, _ = _http(台, "POST", "/api/login", {"name": "alice", "password": PW, "web": True})
+    code, h, _ = _http(台, "POST", "/api/login", {"name": "alice", "password": PW, "web": True},
+                       headers=WEB)
     台.api.site_name = "Lakeside Estate"
     code, _, body = _http(台, "GET", "/api/me", headers={"Cookie": _cookie(h)})
     d = json.loads(body)
@@ -130,3 +134,44 @@ def test_包里带的网页_构建过_没有内联脚本和内联样式():
     assert "style=" not in html and "<style" not in html
     for src in re.findall(r'(?:src|href)="(/assets/[^"]+)"', html):
         assert webui.resolve(src) is not None, src
+
+
+def _raw(s, method, path, raw: bytes, headers):
+    r = urllib.request.Request(s.api.url + path, data=raw, method=method)
+    for k, v in headers.items():
+        r.add_header(k, v)
+    try:
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            return resp.status, resp.headers
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers
+
+
+def test_外审I4_跨站表单换登录_拒在种cookie之前_正常网页登录和手机登录照常(台):
+    """别的网站的 HTML 表单(text/plain、没有自定义头)能拼出合法 JSON:网页登录要拒,不种 cookie。"""
+    form = b'{"name": "alice", "password": "' + PW.encode() + b'", "web": true, "x": "="}'
+    for headers in ({"Content-Type": "text/plain", "Origin": "https://evil.example"},
+                    {"Content-Type": "application/json"},                       # 没有防伪造头
+                    {"Content-Type": "text/plain", "X-D1Max-Web": "1"}):         # 头有了但不是 JSON
+        code, h = _raw(台, "POST", "/api/login", form, headers)
+        assert code == 403 and "Set-Cookie" not in h, headers
+    code, h = _raw(台, "POST", "/api/login", form,
+                   {"Content-Type": "application/json; charset=utf-8", "X-D1Max-Web": "1"})
+    assert code == 200 and "d1max_session=" in h["Set-Cookie"]
+    code, _, body = _http(台, "POST", "/api/login", {"name": "alice", "password": PW})
+    assert code == 200 and json.loads(body)["token"], "手机、命令行登录不受影响"
+
+
+def test_外审M1_静态目录里的符号链接指到外面_不给(tmp_path):
+    web = tmp_path / "web"
+    (web / "assets").mkdir(parents=True)
+    (web / "index.html").write_text("<title>x</title>")
+    (tmp_path / "secret.json").write_text("{}")
+    (web / "assets" / "fixture.json").symlink_to(tmp_path / "secret.json")
+    (web / "assets" / "ok.js").write_text("1")
+    assert webui.resolve("/assets/fixture.json", web) is None
+    assert webui.resolve("/assets/ok.js", web) is not None
+    other = tmp_path / "web2"
+    other.mkdir()
+    (other / "index.html").symlink_to(tmp_path / "secret.json")
+    assert webui.resolve("/", other) is None, "index.html 也查"

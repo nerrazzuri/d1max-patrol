@@ -91,6 +91,10 @@ a { color: var(--c-select); }
 .who { font-size: 14px; color: var(--c-textSecondary); }
 .page { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
 
+/* 跟站点断了(B 阶段外审 I5):常驻,直到重新拿到数据 */
+.stalebar { min-height: 40px; padding: 6px 16px; background: var(--c-p2Bg); color: var(--c-text); display: flex; align-items: center; gap: 10px; font-weight: 600; border-bottom: 1px solid var(--c-p2); position: sticky; top: 56px; z-index: 5; }
+.state.unknown { color: var(--c-textMuted); font-style: italic; }
+
 /* 全站 P1 条(Live 以外的页签) */
 .p1bar { min-height: 40px; padding: 4px 16px; background: var(--c-p1); color: var(--c-onSolid); display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
 .p1bar .pri { color: var(--c-onSolid); }

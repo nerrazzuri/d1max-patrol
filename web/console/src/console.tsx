@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import type { Me } from "./app";
 import type { Cam } from "./camera";
-import { useNow, useSiteData } from "./data";
+import { hms, isStale, useNow, useSiteData } from "./data";
 import { Confirm, ShelveDialog } from "./dialogs";
 import { alertTitle, lang, t, type Key } from "./i18n";
 import { Icon, Shape } from "./icons";
@@ -49,8 +49,10 @@ type Pending =
   | null;
 
 export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
-  const [data, refresh] = useSiteData();
+  const [data, refresh, conn] = useSiteData();
   const now = useNow();
+  // B 阶段外审 I5:拿不到新数据时,旧的照显示但标明过期 —— 不能把旧的「在线、没有报警」当成现在
+  const stale = isStale(conn, now);
   const [route, setRoute] = useState(readRoute);
   const [qOpen, setQOpen] = useState(true);
   const [pending, setPending] = useState<Pending>(null);
@@ -86,15 +88,17 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   const fell = new Set(alerts.filter((a) => a.resolved_ms == null && FELL_KINDS.has(a.kind)).map((a) => a.robot));
   const units: UnitInfo[] = useMemo(() => {
     const deter = new Map((data?.deter ?? []).map((d) => [d.robot_id, d]));
+    const deterUnknown = data != null && data.deter === null;
     const batt = new Map((data?.summary?.robots ?? []).map((r) => [r.robot_id, r.battery_pct]));
     return (data?.robots ?? [])
       .filter((r) => r.active && !r.revoked)
       .map((r) => {
         const kind = r.status?.task?.kind ?? "";
         const state = robotState(r, deter.get(r.robot_id), kind.includes("dock") || kind.includes("charg"), fell.has(r.robot_id));
-        return { robot: r, state, battery: batt.get(r.robot_id) ?? null, deter: deter.get(r.robot_id), task: kind && TASK[kind] ? t(TASK[kind]) : "" };
+        return { robot: r, state, battery: stale ? null : batt.get(r.robot_id) ?? null, deter: deter.get(r.robot_id),
+          task: stale ? "" : kind && TASK[kind] ? t(TASK[kind]) : "", stale, deterUnknown };
       });
-  }, [data, lang.value]);
+  }, [data, lang.value, stale]);
   const { pinned, rest } = wallOrder(units.map((u) => u.robot), p1Robots);
   const unitOf = (id: string) => units.find((u) => u.robot.robot_id === id)!;
   const online = units.filter((u) => u.state !== "offline");
@@ -114,10 +118,16 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
 
   return (
     <div class="console">
-      <TopBar me={me} page={route.page} mode={data?.mode ?? null} p1={p1.length} p2={active.length - p1.length}
+      <TopBar me={me} page={route.page} mode={data?.mode ?? null} p1={p1.length} p2={active.length - p1.length} stale={stale}
         now={now} onPage={go} onMode={(m) => setPending({ kind: "mode", mode: m })}
         onStop={() => setPending({ kind: "stop" })}
         onSignOut={async () => { try { await api("POST", "/api/logout", {}); } finally { onOut(); } }} />
+      {stale && (
+        <div class="stalebar" role="alert">
+          <Shape kind="P2" />
+          {conn.okAt ? t("staleBanner", { t: hms(conn.okAt) }) : t("staleNever")}
+        </div>
+      )}
       {route.page !== "live" && firstP1 && (
         <div class={alarmState(firstP1, now) === "unacked" ? "p1bar flash" : "p1bar"} role="alert">
           <span class="pri"><Shape kind="P1" />P1</span>
@@ -172,6 +182,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
       </main>
 
       <AlarmQueue active={active} shelved={shelved} now={now} open={route.page === "alarms" || qOpen}
+        stale={stale ? (conn.okAt ? hms(conn.okAt) : "—") : null}
         onToggle={() => setQOpen(!qOpen)} onAck={ack}
         onShelve={(a) => setPending({ kind: "shelve", a })}
         onUnshelve={(a) => act(() => api("POST", `/api/alerts/${enc(a.key)}/unshelve`, {}))}
@@ -206,6 +217,7 @@ function TopBar(props: {
   mode: Mode | null;
   p1: number;
   p2: number;
+  stale: boolean;
   now: number;
   onPage: (p: Page) => void;
   onMode: (m: Mode["mode"]) => void;
@@ -239,9 +251,9 @@ function TopBar(props: {
         )}
       </nav>
       <span class="counts" aria-live="polite">
-        {props.p1 + props.p2 === 0 ? <span class="muted">{t("noActiveAlarms")}</span> : null}
-        {props.p1 > 0 && <span class="pri P1"><Shape kind="P1" />{props.p1}</span>}
-        {props.p2 > 0 && <span class="pri P2"><Shape kind="P2" />{props.p2}</span>}
+        {props.stale ? <span class="muted">{t("stUnknown")}: ?</span> : props.p1 + props.p2 === 0 ? <span class="muted">{t("noActiveAlarms")}</span> : null}
+        {!props.stale && props.p1 > 0 && <span class="pri P1"><Shape kind="P1" />{props.p1}</span>}
+        {!props.stale && props.p2 > 0 && <span class="pri P2"><Shape kind="P2" />{props.p2}</span>}
       </span>
       {props.mode && (
         <div class="seg push" role="group" aria-label={t("modeLabel")}>
