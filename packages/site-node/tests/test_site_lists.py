@@ -262,3 +262,76 @@ async def test_外审I2_首条没派成_补派时防区有授权_不派不占狗
     assert rows["e2"]["outcome"] == rows["e3"]["outcome"] == "authorized"
     assert "Gardener" in rows["e2"]["note"]
     assert len(fake.calls) == 1, "补派没再叫狗"
+
+
+def _旧库(t, tmp_path):
+    """把库变回 51 版的样子:person_sightings 只有两列(老版本授权 P3、真 P1 都只写这两列)。"""
+    import sqlite3
+    t.db.close()
+    c = sqlite3.connect(tmp_path / "s.db")
+    c.execute("CREATE TABLE old_ps (robot_id TEXT PRIMARY KEY, started_ms INTEGER NOT NULL)")
+    c.execute("INSERT INTO old_ps SELECT robot_id, started_ms FROM person_sightings")
+    c.execute("DROP TABLE person_sightings")
+    c.execute("ALTER TABLE old_ps RENAME TO person_sightings")
+    c.execute("UPDATE meta SET value='51' WHERE key='schema'")
+    c.commit()
+    c.close()
+
+
+def _升级后的台(t, tmp_path):
+    from d1max_site.sightings import PersonWatch
+    db = SiteDB(tmp_path / "s.db")                          # 真跑一遍补列迁移
+    arming = ArmingDesk(db, now_ms=lambda: t.ms[0])
+    w = PersonWatch(db, t.d, now_ms=lambda: t.ms[0], arming=arming, deterrence=t.det)
+    w.areas = AreaBook(db, now_ms=lambda: t.ms[0])
+    w.alerts = t.w.alerts
+    return db, arming, w
+
+
+@pytest.mark.parametrize("P3发出去了", [True, False])
+def test_复查R1_旧库升级_只记过授权P3的那一回_授权没了要补报P1_重启也不丢(台, tmp_path, P3发出去了):  # noqa: F811
+    t = 台
+    if not P3发出去了:
+        t.w.alerts = None                                  # 授权 P3 还在 pending 里
+    areas = AreaBook(t.db, now_ms=lambda: t.ms[0])
+    areas.set("m", "1", "Back garden", SQUARE, by="admin")
+    t.w.areas = areas
+    _可靠位置(t)
+    t.arming.authz = SimpleNamespace(active=lambda zone: "Gardener")
+    t.d.persons("A", present=True, count=1, nearest_m=4.0)
+    t.w.tick()
+    _旧库(t, tmp_path)
+    from test_site_charging import 假告警台
+    t.w.alerts = 假告警台()
+    db, arming, w = _升级后的台(t, tmp_path)                # 升级;授权已经删了,人一直在
+    assert [r["kind"] for r in db.query("SELECT kind FROM person_sightings")] == ["authorized"]
+    db.close()
+    db, arming, w = _升级后的台(t, tmp_path)                # 还没来得及 tick 又重启:意图不丢
+    for _ in range(3):
+        w.tick()
+    kinds = [a["kind"] for a in w.alerts.raised]
+    assert kinds.count("dog_sees_person") == 1, kinds
+    assert [r["kind"] for r in db.query("SELECT kind FROM person_sightings")] == ["p1"]
+    db.close()
+
+
+@pytest.mark.parametrize("P1发出去了", [True, False])
+def test_复查R1_旧库升级_真报过P1的那一回_不重复报(台, tmp_path, P1发出去了):  # noqa: F811
+    t = 台
+    if P1发出去了:
+        from d1max_site.alert_store import AlertDesk
+        t.w.alerts = AlertDesk(t.db, now_ms=lambda: t.ms[0])   # P1 落进告警表
+    else:
+        t.w.alerts = None                                     # P1 还在 pending 里
+    t.d.persons("A", present=True, count=1, nearest_m=4.0)
+    t.w.tick()
+    _旧库(t, tmp_path)
+    from test_site_charging import 假告警台
+    t.w.alerts = 假告警台()
+    db, arming, w = _升级后的台(t, tmp_path)
+    assert [r["kind"] for r in db.query("SELECT kind FROM person_sightings")] == ["p1"]
+    for _ in range(3):
+        w.tick()
+    n = [a["kind"] for a in w.alerts.raised].count("dog_sees_person")
+    assert n == (0 if P1发出去了 else 1), "发出去过的不再报;还在 pending 的照常补发一次"
+    db.close()
