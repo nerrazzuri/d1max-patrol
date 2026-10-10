@@ -1,5 +1,7 @@
 {
+  "api_level": 1,
   "display_name": "alice",
+  "min_app_level": 1,
   "name": "alice",
   "role": "admin",
   "token": "fixture_session_not_valid"

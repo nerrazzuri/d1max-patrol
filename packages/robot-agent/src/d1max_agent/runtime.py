@@ -642,6 +642,13 @@ class AgentRuntime:
             out["evidence"] = {"sealed": self.evidence_sealed}   # W30b:没封站点报 P2
         if self.force is not None:
             out["force"] = self.force.caps()        # W26:翻倒、被抱起来(站点按它对账报 P1)
+        # 商业化 A7:兼容级别、旁路进程的协议号(站点据此报「狗太老」「站点太老」)
+        from d1max_contract.compat import AGENT_LEVEL
+        compat: dict[str, Any] = {"level": AGENT_LEVEL}
+        hello = getattr(getattr(self.hal, "_b", None), "_hello", None)   # 真狗适配器的旁路握手
+        if getattr(hello, "proto", None) is not None:
+            compat["sidecar_proto"] = hello.proto
+        out["compat"] = compat
         deter = self.deter.caps()
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术

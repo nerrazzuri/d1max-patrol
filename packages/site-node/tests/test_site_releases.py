@@ -9,6 +9,7 @@ import tarfile
 
 import pytest
 
+from d1max_contract.compat import AGENT_LEVEL
 from d1max_contract.digest import tree_sha256
 from d1max_site.db import SiteDB
 from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
@@ -16,16 +17,18 @@ from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
 NAME = "2026-09-25-bbbbbb"
 
 
-def 做包(tmp, name=NAME, *, sha=None, schema=1):
+def 做包(tmp, name=NAME, *, sha=None, schema=1, compat="现在"):
     d = tmp / "pkgs" / name
     (d / "src").mkdir(parents=True, exist_ok=True)
     (d / "src" / "x.py").write_text("print('hi')\n")
     (d / "deploy").mkdir(exist_ok=True)
     (d / "deploy" / "d1max-agent-start").write_text("#!/bin/sh\n")
     (d / "deploy" / "d1max-agent-start").chmod(0o755)
-    (d / "release.json").write_text(json.dumps({
-        "name": name, "version": "0.9", "requires_mission_schema": schema,
-        "content_sha256": sha or tree_sha256(d, skip="release.json")}))
+    raw = {"name": name, "version": "0.9", "requires_mission_schema": schema,
+           "content_sha256": sha or tree_sha256(d, skip="release.json")}
+    if compat is not None:                                 # A7:None = 老包,没有兼容级别
+        raw["compat_level"] = AGENT_LEVEL if compat == "现在" else compat
+    (d / "release.json").write_text(json.dumps(raw))
     return d
 
 
@@ -138,3 +141,15 @@ def test_老库的任务包表也补上schema列(tmp_path):
     c.close()
     from d1max_site.catalog import active_bundle_schema
     assert active_bundle_schema(SiteDB(db_path)) == ("b v1", 1)
+
+
+
+def test_A7_升级包的代理兼容级别_太老太新站点都不登记(cat, tmp_path):
+    from d1max_contract.compat import SITE_MAX_AGENT_LEVEL, SITE_MIN_AGENT_LEVEL
+    with pytest.raises(ReleaseCatalogError, match="太老"):
+        cat.add(做包(tmp_path, "2026-10-10-aaaaa1", compat=None))
+    with pytest.raises(ReleaseCatalogError, match="太老"):
+        cat.add(做包(tmp_path, "2026-10-10-aaaaa2", compat=SITE_MIN_AGENT_LEVEL - 1))
+    with pytest.raises(ReleaseCatalogError, match="先升站点"):
+        cat.add(做包(tmp_path, "2026-10-10-aaaaa3", compat=SITE_MAX_AGENT_LEVEL + 1))
+    cat.add(做包(tmp_path, "2026-10-10-aaaaa4"))

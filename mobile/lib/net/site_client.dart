@@ -60,6 +60,25 @@ String? checkSiteEntry(String url, String fingerprint) {
 }
 
 /// 登录之后的会话。
+/// 版本兼容（商业化 A7，跟站点的 `d1max_contract.compat` 对着）：这个 App 的接口级别、它要站点至少几级。
+/// 只在「两头都要会」的接口改了的时候加一。
+const int appApiLevel = 1;
+const int minSiteApiLevel = 1;
+
+/// 站点登录回复里的接口级别、站点要的 App 最低级别（老站点不带：都算 1）配不配这个 App：
+/// 配就回 null，不配回给人看的原因。
+String? compatProblem(Map<String, dynamic> login) {
+  final siteLevel = login['api_level'] is int ? login['api_level'] as int : 1;
+  final minApp = login['min_app_level'] is int ? login['min_app_level'] as int : 1;
+  if (appApiLevel < minApp) {
+    return 'App 太老了：这个站点要 App 接口级别 $minApp 以上（现在是 $appApiLevel），请升级 App';
+  }
+  if (siteLevel < minSiteApiLevel) {
+    return '站点太老了：这个 App 要站点接口级别 $minSiteApiLevel 以上（站点是 $siteLevel），请先升级站点';
+  }
+  return null;
+}
+
 class SiteSession {
   final String token;
   final String name;
@@ -678,6 +697,19 @@ class SiteClient implements SiteApi {
   Future<SiteSession> login(String name, String password) async {
     final d = _map(await _send('POST', '/api/login',
         <String, dynamic>{'name': name, 'password': password}));
+    final why = compatProblem(d);
+    if (why != null) {
+      // 配不上：不用这次登录（顺手注销掉，站点上不留一个没人用的令牌）
+      final t = d['token'] as String? ?? '';
+      if (t.isNotEmpty) {
+        session = SiteSession(t, name, '');
+        try {
+          await _send('POST', '/api/logout', <String, dynamic>{});
+        } catch (_) {}
+        session = null;
+      }
+      throw SiteError(0, why);
+    }
     final s = SiteSession(d['token'] as String? ?? '', d['name'] as String? ?? name,
         d['role'] as String? ?? '', displayName: d['display_name'] as String? ?? '');
     if (s.token.isEmpty) {

@@ -104,6 +104,8 @@ LEVEL_OF: dict[str, Level] = {
     "cert_expiring": Level.P2,
     "site_disk_low": Level.P2,
     "lane_stuck": Level.P2,
+    "agent_too_old": Level.P2,
+    "site_too_old": Level.P2,
     # 定位变差或打滑(W29,决策 41):狗原地停下等恢复;30 秒还没好再报 loc_lost_paused(P1)。
     "loc_degraded": Level.P2,
     "estop_pressed": Level.P1,
