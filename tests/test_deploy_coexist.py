@@ -53,6 +53,8 @@ from tests.test_deploy_files import DEPLOY
     "PERS_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-persons.service",
     "MERGE_UNIT": "d1max-lidar-merge.service",
     "MERGE_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-lidar-merge.service",
+    "ZENOH_UNIT": "d1max-zenohd.service",
+    "ZENOH_WANTS_LINK": "/etc/systemd/system/multi-user.target.wants/d1max-zenohd.service",
 }
 
 

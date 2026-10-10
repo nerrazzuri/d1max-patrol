@@ -3,7 +3,7 @@ Description=D1 Max 前后雷达合并(后雷达换进前雷达系、拼成 /d1ma
 # 装机脚本只装、不 enable:后雷达外参(/etc/d1max/lidars.json)在真机上标过、W09i 的真机项验过之前不起。
 # 起用:sudo systemctl enable --now d1max-lidar-merge,再在 /etc/d1max/env 里给定位器
 # D1MAX_LOC_ARGS=--lidar-topic /d1max/merged_lidar。外参没标过它只转发前雷达(不拼)。
-After=network-online.target
+After=network-online.target d1max-zenohd.service
 Wants=network-online.target
 StartLimitIntervalSec=0
 

@@ -3,7 +3,7 @@ Description=D1 Max 人员检测节点(相机看到人 + 雷达量距离,经本�
 # 装机脚本只装、不 enable:检测模型、推理环境在真狗上装好、W24 的真机项验过之前不起(代理也还用 --persons none)。
 # 起用:把模型放到 /etc/d1max/person.onnx,sudo systemctl enable --now d1max-persons,
 # 再在 /etc/d1max/env 里写 D1MAX_PERSONS=bridge。
-After=network-online.target d1max-agent.service
+After=network-online.target d1max-agent.service d1max-zenohd.service
 Wants=network-online.target
 StartLimitIntervalSec=0
 
