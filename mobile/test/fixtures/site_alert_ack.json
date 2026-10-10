@@ -1,22 +1,26 @@
 {
   "alert": {
     "acked_by": "alice",
-    "acked_ms": 1791047964462,
+    "acked_ms": 1791644336697,
     "channel": "screen",
     "context": {
-      "task_id": "task-c876310ee649"
+      "task_id": "task-9eea8dbdce3d"
     },
     "count": 1,
     "detail": "狗报急停没解除",
     "escalated": 0,
-    "first_ms": 1791047964115,
+    "first_ms": 1791644336329,
     "key": "A/estop_pressed#1",
     "kind": "estop_pressed",
-    "last_ms": 1791047964115,
+    "last_ms": 1791644336329,
     "level": "P1",
     "resolved_by": "",
     "resolved_ms": null,
     "robot": "A",
+    "shelved_by": "",
+    "shelved_ms": null,
+    "shelved_reason": "",
+    "shelved_until_ms": null,
     "title": "急停被按下"
   }
 }

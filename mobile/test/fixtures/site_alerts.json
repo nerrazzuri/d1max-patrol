@@ -5,19 +5,23 @@
       "acked_ms": null,
       "channel": "screen",
       "context": {
-        "task_id": "task-c876310ee649"
+        "task_id": "task-9eea8dbdce3d"
       },
       "count": 1,
       "detail": "狗报急停没解除",
       "escalated": 0,
-      "first_ms": 1791047964115,
+      "first_ms": 1791644336329,
       "key": "A/estop_pressed#1",
       "kind": "estop_pressed",
-      "last_ms": 1791047964115,
+      "last_ms": 1791644336329,
       "level": "P1",
       "resolved_by": "",
       "resolved_ms": null,
       "robot": "A",
+      "shelved_by": "",
+      "shelved_ms": null,
+      "shelved_reason": "",
+      "shelved_until_ms": null,
       "title": "急停被按下"
     },
     {
@@ -25,20 +29,24 @@
       "acked_ms": null,
       "channel": "screen",
       "context": {
-        "task_id": "task-c876310ee649"
+        "task_id": "task-9eea8dbdce3d"
       },
       "count": 1,
       "detail": "",
       "escalated": 0,
-      "first_ms": 1791047964032,
+      "first_ms": 1791644336235,
       "key": "A/run_start#1",
       "kind": "run_start",
-      "last_ms": 1791047964032,
+      "last_ms": 1791644336235,
       "level": "P3",
       "resolved_by": "",
       "resolved_ms": null,
       "robot": "A",
-      "title": "开跑:goto task-c876310ee649"
+      "shelved_by": "",
+      "shelved_ms": null,
+      "shelved_reason": "",
+      "shelved_until_ms": null,
+      "title": "开跑:goto task-9eea8dbdce3d"
     }
   ]
 }

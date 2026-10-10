@@ -80,7 +80,7 @@ _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
 #: ``GET /api/alerts?all=1&limit=`` 的上限。
 ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
-_ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve)$")
+_ALERT = re.compile(r"^/api/alerts/([^/]{1,256})/(ack|resolve|shelve|unshelve)$")
 #: W00c5c:``/api/robots/<id>/teleop``(WebSocket)与 ``/api/robots/<id>/halt``。
 _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
                      r"(teleop|halt|resume|supervise|relocalize|home/here|deter|service)$")
@@ -191,6 +191,10 @@ class SiteApi:
         self.health: Any = None
         #: 站点目录(商业化 A4:狗领证书包从 ``<站点目录>/ca/issued/`` 拿)。站点主程序接上。
         self.home: Path | None = None
+        #: 网页值班台的静态文件目录(商业化 B1;None = 包里带的 web/,测试换成别的)。
+        self.web_dir: Path | None = None
+        #: 给人看的站点名(商业化 B1,网页顶栏;站点主程序从 site.json 接)。
+        self.site_name = ""
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -299,6 +303,9 @@ class _Handler(TlsHandlerMixin):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        for k, v in getattr(self, "_extra_headers", ()):
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(raw)
 
@@ -321,13 +328,28 @@ class _Handler(TlsHandlerMixin):
         return d
 
     def _token(self) -> str | None:
+        """``Authorization: Bearer``(手机、命令行);没有就看网页的 cookie(商业化 B1)。"""
         h = self.headers.get("Authorization") or ""
-        return h[7:].strip() if h.startswith("Bearer ") else None
+        if h.startswith("Bearer "):
+            self._via_cookie = False
+            return h[7:].strip()
+        from d1max_site.webui import cookie_token
+        tok = cookie_token(self.headers.get("Cookie"))
+        self._via_cookie = tok is not None
+        return tok
+
+    def _csrf_ok(self) -> None:
+        """靠 cookie 认的、要改东西的请求,得带 ``X-D1Max-Web`` 头(别的网站加不了)。"""
+        from d1max_site.webui import CSRF_HEADER
+        if getattr(self, "_via_cookie", False) and self._method != "GET" \
+                and self.headers.get(CSRF_HEADER) != "1":
+            raise HttpError(403, "网页请求少了防伪造的头")
 
     def _user(self) -> str:
         name = self.site.accounts.check(self._token())
         if name is None:
             raise HttpError(401, "没登录或登录已过期")
+        self._csrf_ok()
         self._actor = name
         return name
 
@@ -343,6 +365,7 @@ class _Handler(TlsHandlerMixin):
     def _handle(self, method: str) -> None:
         self._actor, self._status, self._resp = "", 0, {}
         self._audit_target, self._audit_detail = "", {}
+        self._method, self._via_cookie, self._extra_headers = method, False, []
         #: 这一次请求不进审计(W00c6i:续着的监护心跳每秒一条,只记开始与结束)。
         self._skip_audit = False
         path = self.path.split("?", 1)[0]
@@ -366,6 +389,8 @@ class _Handler(TlsHandlerMixin):
         try:
             if method == "GET" and path == "/healthz":
                 return self._healthz()             # 商业化 A1:探活不用登录,只回好不好
+            if method == "GET" and not path.startswith("/api/"):
+                return self._static(path)          # 商业化 B1:网页值班台(不用登录;数据走 /api)
             if method == "POST" and path == "/api/login":
                 return self._login()
             if method == "POST" and path == "/api/enroll/claim":
@@ -375,7 +400,11 @@ class _Handler(TlsHandlerMixin):
             if method == "POST" and path == "/api/logout":
                 # A 阶段外审 I2:令牌闲置过期了也能退出(连同这次登录登记的手机一起不推);
                 # 拿得出令牌就是那部手机,不用它还有效
-                self.site.accounts.logout(self._token() or "")
+                tok = self._token()
+                self._csrf_ok()
+                self.site.accounts.logout(tok or "")
+                from d1max_site.webui import clear_cookie
+                self._extra_headers.append(("Set-Cookie", clear_cookie()))  # B1:清 cookie
                 return self._send_json(200, {"ok": True})
             user = self._user()
             if getattr(user, "scope", "") == "watch" and (method, path) not in WATCH_PATHS:
@@ -385,6 +414,15 @@ class _Handler(TlsHandlerMixin):
                 self._need(user, VIEW)
                 token, expires = self.site.accounts.issue_watch_token(str(user))
                 return self._send_json(200, {"token": token, "expires_at": expires})
+            if method == "GET" and path == "/api/me":
+                # 商业化 B1:网页刷新以后靠 cookie 认人,要知道是谁、什么角色、站点叫什么
+                from d1max_contract.compat import MIN_APP_API_LEVEL, SITE_API_LEVEL
+                self._need(user, VIEW)
+                return self._send_json(200, {
+                    "name": str(user), "role": getattr(user, "role", ""),
+                    "display_name": self.site.accounts.display_name(str(user)),
+                    "site_name": self.site.site_name, "api_level": SITE_API_LEVEL,
+                    "min_app_level": MIN_APP_API_LEVEL})
             if method == "POST" and path == "/api/me/password":
                 return self._change_own_password(user)
             if path == "/api/accounts" or _ACCOUNT.match(path):
@@ -544,15 +582,28 @@ class _Handler(TlsHandlerMixin):
         self._need(user, HANDLE_ALERTS)
         key = unquote(m.group(1))
         self._audit_target = key[:256]
-        self._body()                                    # 读掉请求体;里面的 who 不信
+        d = self._body()                                # 请求体里的 who 不信,人取登录账号
         try:
-            if m.group(2) == "ack":
+            if m.group(2) == "shelve":
+                # B1:P2 搁置(ISA-18.2):要原因、到点自动回来
+                until = d.get("until_ms")
+                if not isinstance(until, int) or isinstance(until, bool):
+                    raise HttpError(400, "要 until_ms(整数毫秒)")
+                reason = str(d.get("reason") or "")
+                self._audit_detail = {"until_ms": until, "reason": reason[:200]}
+                a = self.site.loop.call(lambda: _sync(
+                    self.site.alerts.shelve, key, who=str(user), until_ms=until, reason=reason))
+            elif m.group(2) == "unshelve":
+                a = self.site.loop.call(lambda: _sync(self.site.alerts.unshelve, key))
+            elif m.group(2) == "ack":
                 a = self.site.loop.call(lambda: _sync(self.site.alerts.ack, key, who=str(user)))
             else:
                 a = self.site.loop.call(
                     lambda: _sync(self.site.alerts.resolve, key, who=str(user)))
         except AlertNotFound as exc:
             raise HttpError(404, "没有这条告警") from exc
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"alert": a.to_wire()})
 
     def _login(self) -> None:
@@ -569,6 +620,11 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(401, str(exc)) from exc
         who = self.site.accounts.check(token)
         from d1max_contract.compat import MIN_APP_API_LEVEL, SITE_API_LEVEL
+        if d.get("web") is True:
+            # 商业化 B1:网页登录种 HttpOnly cookie,回复里**不给令牌**(页面脚本拿不到)
+            from d1max_site.webui import session_cookie
+            self._extra_headers.append(("Set-Cookie", session_cookie(token)))
+            token = ""
         self._send_json(200, {"token": token, "name": name,
                               "role": getattr(who, "role", ""),
                               "display_name": self.site.accounts.display_name(name),
@@ -1915,6 +1971,25 @@ class _Handler(TlsHandlerMixin):
                               remote=self.client_address[0])
         except Exception:
             log.exception("看证据的审计写不进去")
+
+    def _static(self, path: str) -> None:
+        """网页值班台的静态文件(商业化 B1,见 :mod:`d1max_site.webui`)。"""
+        from d1max_site.webui import SECURITY_HEADERS, WEB_DIR, resolve
+        hit = resolve(path, getattr(self.site, "web_dir", None) or WEB_DIR)
+        if hit is None:
+            raise HttpError(404, "没有这个页面(网页值班台没装?)")
+        f, typ, immutable = hit
+        raw = f.read_bytes()
+        self._status = 200
+        self.send_response(200)
+        self.send_header("Content-Type", typ)
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable" if immutable
+                         else "no-store")
+        for k, v in SECURITY_HEADERS:
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(raw)
 
     def _send_file(self, path, content_type: str) -> None:
         size = path.stat().st_size

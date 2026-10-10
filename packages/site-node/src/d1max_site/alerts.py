@@ -241,6 +241,15 @@ class Alert:
     #: (``task_id``,照片在那一趟的记录里)、拦截点(``intercept``)。只给手机看,不参与判级、聚合。
     #: 吸收时新的盖旧的(最近一次触发的现场)。
     context: dict[str, Any] = field(default_factory=dict)
+    #: 搁置(B1,ISA-18.2 shelving):值班员把一条 **P2** 暂时放一边,必须写原因、到点自动回来。
+    #: ``shelved_until_ms`` 过了就算没搁置(不用谁去改它);P1 不许搁置。
+    shelved_by: str = ""
+    shelved_ms: int | None = None
+    shelved_until_ms: int | None = None
+    shelved_reason: str = ""
+
+    def shelved_at(self, now_ms: int) -> bool:
+        return self.shelved_until_ms is not None and now_ms < self.shelved_until_ms
 
     @property
     def channel(self) -> Channel:
@@ -274,6 +283,10 @@ class Alert:
             "escalated": self.escalated,
             "channel": self.channel.value,
             "context": dict(self.context),
+            "shelved_by": self.shelved_by,
+            "shelved_ms": self.shelved_ms,
+            "shelved_until_ms": self.shelved_until_ms,
+            "shelved_reason": self.shelved_reason,
         }
 
 
@@ -282,6 +295,8 @@ class Alert:
 #: 拍的 —— 先定 15 分钟,跟 §5.7 那个 2 米一样没有实测依据,真机清单里要
 #: 有一条量它、按现场手感调。
 AGGREGATE_WINDOW_MS = 15 * 60_000
+#: 一条 P2 最多搁置多久(B1):一个夜班。
+MAX_SHELVE_MS = 12 * 3600_000
 
 
 def _key(robot: str, kind: str, seq: int) -> str:
@@ -450,6 +465,39 @@ class AlertBook:
         if existing is None:
             raise AlertNotFound(key)
         alert = replace(existing, resolved_by=who, resolved_ms=now_ms)
+        self._spill(alert)
+        self._by_key[key] = alert
+        return alert
+
+    def shelve(self, key: str, *, who: str, until_ms: int, reason: str, now_ms: int) -> Alert:
+        """把一条 P2 搁置到 ``until_ms``(B1,ISA-18.2)。规矩:只有 P2;没解决的;要有人、有原因;
+        最多搁置 :data:`MAX_SHELVE_MS`。不合规矩抛 ``ValueError``(消息给人看)。"""
+        existing = self._by_key.get(key)
+        if existing is None:
+            raise AlertNotFound(key)
+        if existing.level is not Level.P2:
+            raise ValueError("只有 P2 能搁置;P1 要处理")
+        if existing.resolved_ms is not None:
+            raise ValueError("这条已经解决了")
+        reason = (reason or "").strip()
+        if not who or not reason:
+            raise ValueError("搁置要写原因")
+        if len(reason) > 200:
+            raise ValueError("原因最多 200 个字")
+        if not now_ms < until_ms <= now_ms + MAX_SHELVE_MS:
+            raise ValueError(f"搁置到的时间要在现在之后、{MAX_SHELVE_MS // 3600_000} 小时以内")
+        alert = replace(existing, shelved_by=who, shelved_ms=now_ms, shelved_until_ms=until_ms,
+                        shelved_reason=reason)
+        self._spill(alert)
+        self._by_key[key] = alert
+        return alert
+
+    def unshelve(self, key: str, *, now_ms: int) -> Alert:
+        """提前取消搁置(回到待处理)。"""
+        existing = self._by_key.get(key)
+        if existing is None:
+            raise AlertNotFound(key)
+        alert = replace(existing, shelved_until_ms=min(existing.shelved_until_ms or now_ms, now_ms))
         self._spill(alert)
         self._by_key[key] = alert
         return alert
