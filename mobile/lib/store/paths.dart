@@ -8,17 +8,25 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../l10n.dart';
 import 'site_store.dart';
 
 /// 站点列表文件（W00c4）。
 const String sitesFileName = 'sites.json';
 
-Future<SiteStore> openSiteStore() async {
+/// 语言选了哪种（App V2）。
+const String langFileName = 'lang.json';
+
+Future<LangStore> openLangStore() async => LangStore(File('${(await _dir()).path}/$langFileName'));
+
+Future<SiteStore> openSiteStore() async =>
+    JsonSiteStore(File('${(await _dir()).path}/$sitesFileName'));
+
+Future<Directory> _dir() {
   // 桌面版（W15）：documents 是用户的「文档」文件夹（~/Documents、我的文档），谁都看得见、改得了；
   // 用 app 自己的支持目录（Linux ~/.local/share/<应用>、Windows %APPDATA%、Mac Application Support）。
   // 这只防误删误改、不摆在用户眼前，不是安全边界：同一个系统用户照样能改（外审备注）。
-  final dir = Platform.isLinux || Platform.isWindows || Platform.isMacOS
-      ? await getApplicationSupportDirectory()
-      : await getApplicationDocumentsDirectory();
-  return JsonSiteStore(File('${dir.path}/$sitesFileName'));
+  return Platform.isLinux || Platform.isWindows || Platform.isMacOS
+      ? getApplicationSupportDirectory()
+      : getApplicationDocumentsDirectory();
 }
