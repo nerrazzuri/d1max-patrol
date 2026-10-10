@@ -721,6 +721,7 @@ class Server:
                              why_off=why_off)
         self.push.alerts = LoopAlerts(self.alerts, self.loop)   # 推送在线程里跑:告警经事件循环
         self.alerts.push = sender is not None
+        self.push.session_alive = self.accounts.session_alive   # A6 外审 F3:退出了的不推
         self.api.push = self.push
         self.api.privacy = self.privacy                # W30:运行记录标「留着」
         self.api.charge = self.charge                  # W13:充电桩

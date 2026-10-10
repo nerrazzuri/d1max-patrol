@@ -303,6 +303,23 @@ class Accounts:
             c.execute("UPDATE sessions SET last_used=? WHERE token_hash=?", (now, h))
             return Principal(row["name"], row["role"], row["scope"])
 
+    def session_alive(self, token_hash: str) -> bool:
+        """这个令牌(哈希)现在还有效吗:跟 :meth:`check` 同样的规矩,但不续期、不删(推送名单用,A6)。"""
+        if not token_hash:
+            return False
+        rows = self.db.query("SELECT s.created_at, s.last_used, s.scope, a.disabled "
+                             "FROM sessions s JOIN accounts a ON a.name = s.name "
+                             "WHERE s.token_hash=?",
+                             (token_hash,))
+        if not rows:
+            return False
+        r, now = rows[0], self._now()
+        if r["disabled"]:
+            return False
+        if r["scope"] == "watch":
+            return now - r["created_at"] <= WATCH_ABS_MS
+        return now - r["last_used"] <= self.idle_ms and now - r["created_at"] <= self.abs_ms
+
     def issue_watch_token(self, name: str) -> tuple[str, int]:
         """给这个账号发一个值守令牌(W17)。回 ``(令牌, 到期时刻)``。令牌只出现这一次,库里只存
         哈希。"""

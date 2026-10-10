@@ -2,6 +2,9 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // A6 外审 F1:华为、荣耀厂商通道的 SDK 在它们自己的仓库(只有接了才会去拉)
+        maven { url = uri("https://developer.huawei.com/repo/") }
+        maven { url = uri("https://developer.hihonor.com/repo") }
     }
 }
 

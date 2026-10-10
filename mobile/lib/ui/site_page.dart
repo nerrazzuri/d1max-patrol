@@ -197,23 +197,17 @@ class _SiteListPageState extends State<SiteListPage> {
       return;
     }
     final a = api;
-    // 商业化 A6：进了站点就收这个站点的 P1 推送（报不上不挡进站点：后台值守照旧）
-    final push = widget.push ?? defaultPush();
-    String? pushId;
-    if (push.supported) {
-      unawaited(push.registrationId().then((id) async {
-        if (id == null || a.session == null) return;
-        await a.pushRegister(id, push.platform);
-        pushId = id;
-      }).catchError((Object _) {}));
-    }
+    // 商业化 A6：进了站点就收这个站点的 P1 推送。登记不上不挡进站点（后台值守照旧），退避一直重试，
+    // 页面上看得见没登记上（A6 外审 F2）。
+    final push = PushSession(widget.push ?? defaultPush(),
+        register: a.pushRegister, unregister: a.pushUnregister)
+      ..start();
     final why = await nav.push<String>(MaterialPageRoute<String>(
-        builder: (_) => SiteRobotsPage(api: a, title: s.name, entry: s, watch: widget.watch)));
-    // 离开就注销：不然令牌在站点上还能用半小时。推送号先注销（离开了就不再收这个站点的推送）。
-    try {
-      final id = pushId;
-      if (id != null && a.session != null) await a.pushUnregister(id);
-    } catch (_) {}
+        builder: (_) => SiteRobotsPage(
+            api: a, title: s.name, entry: s, watch: widget.watch, push: push)));
+    // 离开就注销：不然令牌在站点上还能用半小时。推送先停、注销推送号（在路上的登记落定了再注销，
+    // A6 外审 F3），再注销会话（站点那头推送号跟这次登录绑着，退出了也不再推）。
+    await push.stop();
     try {
       if (a.session != null) await a.logout();
     } catch (_) {}
@@ -264,6 +258,8 @@ class SiteRobotsPage extends StatefulWidget {
   /// 后台值守（W17，决策 30）：登录进来就开（有 [entry] 且平台支持），离开这一页（注销）就停。
   final BackgroundWatch watch;
   final SiteEntry? entry;
+  /// P1 推送登记（商业化 A6）：给了就在标题栏上显示推送就没就绪。
+  final PushSession? push;
   /// 响铃那一档、没人确认：每隔这么久再响一次，直到确认（W17）。
   final Duration ringEvery;
   const SiteRobotsPage(
@@ -273,9 +269,11 @@ class SiteRobotsPage extends StatefulWidget {
       this.ring = defaultRing,
       this.watch = const ChannelBackgroundWatch(),
       this.entry,
+      this.push,
       this.ringEvery = const Duration(seconds: 4)});
 
   static const Key bgWatchKey = Key('btn-bg-watch');
+  static const Key pushKey = Key('push-state');
   static const Key modeKey = Key('mode-banner');
   static const Key weatherKey = Key('weather-banner');
 
@@ -520,6 +518,21 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     final role = widget.api.session?.role ?? '';
     return Scaffold(
       appBar: AppBar(title: Text('${widget.title}（$role）'), actions: [
+        if (widget.push != null)
+          ValueListenableBuilder<PushState>(
+              valueListenable: widget.push!.state,
+              builder: (_, st, _) => st == PushState.off
+                  ? const SizedBox.shrink()
+                  : Tooltip(
+                      key: SiteRobotsPage.pushKey,
+                      message: st == PushState.ready
+                          ? 'P1 推送：已就绪'
+                          : 'P1 推送：还没就绪（${widget.push!.reason}）',
+                      child: Icon(
+                          st == PushState.ready
+                              ? Icons.notifications_on
+                              : Icons.notifications_paused,
+                          color: st == PushState.ready ? Colors.green : Colors.orange))),
         if (widget.watch.supported && widget.entry != null)
           IconButton(
               key: SiteRobotsPage.bgWatchKey,

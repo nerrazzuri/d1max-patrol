@@ -132,21 +132,25 @@ class PushDesk:
         self.why_off = why_off if sender is None else ""
         #: 告警台(站点主程序接上):发不出去报 P2。
         self.alerts: Any = None
+        #: 登记推送号的那次登录还有效吗(令牌哈希 → 真假;站点主程序接 ``Accounts.session_alive``)。
+        self.session_alive: Callable[[str], bool] | None = None
         self.last_error = ""
 
     # ------------------------------------------------------------ 手机登记
 
-    def register(self, account: str, reg_id: str, platform: str) -> None:
+    def register(self, account: str, reg_id: str, platform: str, *, session: str = "") -> None:
+        """``session``:登记时那次登录的令牌哈希(A6 外审 F3):这次登录退出、过期了,这台手机就不推。"""
         reg_id = str(reg_id).strip()
         if not reg_id or len(reg_id) > 128 or not reg_id.isascii():
             raise ValueError("registration_id 不对")
         if platform not in ("android", "ios", "harmony"):
             raise ValueError("platform 要是 android / ios / harmony")
         with self.db.tx() as c:
-            c.execute("INSERT INTO push_devices(reg_id, account, platform, updated_ms) "
-                      "VALUES (?,?,?,?) ON CONFLICT(reg_id) DO UPDATE SET "
+            c.execute("INSERT INTO push_devices(reg_id, account, platform, updated_ms, session) "
+                      "VALUES (?,?,?,?,?) ON CONFLICT(reg_id) DO UPDATE SET "
                       "account=excluded.account, platform=excluded.platform, "
-                      "updated_ms=excluded.updated_ms", (reg_id, account, platform, self._now()))
+                      "updated_ms=excluded.updated_ms, session=excluded.session",
+                      (reg_id, account, platform, self._now(), session))
 
     def unregister(self, account: str, reg_id: str) -> None:
         with self.db.tx() as c:
@@ -166,47 +170,66 @@ class PushDesk:
 
     # ------------------------------------------------------------ 发
 
+    def _devices(self) -> list[str]:
+        """推给谁:停用了的账号不推;**登记它的那次登录已经退出、过期了的不推**(A6 外审 F3:手机退出时
+        登记还在路上、注销没发出去,也不会留在推送名单里)。"""
+        rows = self.db.query(
+            "SELECT d.reg_id, d.session FROM push_devices d JOIN accounts a ON a.name = d.account "
+            "WHERE a.disabled = 0")
+        alive = self.session_alive
+        return [r["reg_id"] for r in rows if alive is None or alive(r["session"])]
+
     def tick(self) -> None:
-        """要推的都推出去(要等网络:站点主程序放在自己那条道上跑)。"""
-        now = self._now()
+        """要推的都推出去(要等网络:站点主程序放在自己那条道上跑)。
+
+        A6 外审 F4:每一条、每一批**发之前按此刻**再核一遍(过期了没有、有人确认或解决了没有):前面的
+        请求等网络可能等了好几秒。发了一部分以后有人确认了,后面的批次不再发(发出去的撤不回)。"""
         rows = [dict(r) for r in self.db.query(
             "SELECT * FROM push_outbox WHERE sent_ms IS NULL AND dropped='' AND next_ms<=? "
-            "ORDER BY id LIMIT 50", (now,))]
+            "ORDER BY id LIMIT 50", (self._now(),))]
         for row in rows:
-            why = self._skip(row, now)
+            why = self._skip(row, self._now())
             if why:
-                with self.db.tx() as c:
-                    c.execute("UPDATE push_outbox SET dropped=? WHERE id=?", (why, row["id"]))
+                self._drop(row, why)
                 continue
             if self.sender is None:
                 continue                              # 没配:留着(配好了、一小时内的还能推)
-            # 停用了的账号的手机不推(停用就该收不到了)
-            reg = [r["reg_id"] for r in self.db.query(
-                "SELECT d.reg_id FROM push_devices d JOIN accounts a ON a.name = d.account "
-                "WHERE a.disabled = 0")]
+            reg = self._devices()
             if not reg:
-                with self.db.tx() as c:
-                    c.execute("UPDATE push_outbox SET dropped='没有登记的手机' WHERE id=?",
-                              (row["id"],))
+                self._drop(row, "没有登记的手机")
                 continue
             title = f"{self.site_name} · P1" if self.site_name else "P1 告警"
+            sent_any, stopped = False, ""
             try:
                 for i in range(0, len(reg), BATCH):
+                    if i:
+                        stopped = self._skip(row, self._now())
+                        if stopped:
+                            break
                     self.sender.send(reg[i:i + BATCH], title, row["title"],
                                      {"alert_key": row["alert_key"]})
+                    sent_any = True
             except PushError as exc:
                 self.last_error = str(exc)[:300]
                 wait = min(BACKOFF_MAX_S, BACKOFF_BASE_S * 2 ** min(row["attempts"], 10))
                 with self.db.tx() as c:
                     c.execute("UPDATE push_outbox SET attempts=attempts+1, next_ms=?, error=? "
-                              "WHERE id=?", (now + wait * 1000, self.last_error, row["id"]))
+                              "WHERE id=?", (self._now() + wait * 1000, self.last_error,
+                                             row["id"]))
                 log.warning("P1 推送没发出去(%s 秒后再试):%s", wait, exc)
                 continue
             self.last_error = ""
-            with self.db.tx() as c:
-                c.execute("UPDATE push_outbox SET sent_ms=?, error='' WHERE id=?",
-                          (now, row["id"]))
-        self._stuck(now)
+            with self.db.tx() as c:                       # 记实际发完的时刻
+                c.execute("UPDATE push_outbox SET sent_ms=?, error=? WHERE id=?",
+                          (self._now(), f"发了一部分,{stopped},后面的没发" if stopped else "",
+                           row["id"]))
+            if stopped and not sent_any:
+                self._drop(row, stopped)
+        self._stuck(self._now())
+
+    def _drop(self, row: dict[str, Any], why: str) -> None:
+        with self.db.tx() as c:
+            c.execute("UPDATE push_outbox SET dropped=? WHERE id=?", (why, row["id"]))
 
     def _skip(self, row: dict[str, Any], now: int) -> str:
         if now - row["created_ms"] > EXPIRE_MS:
