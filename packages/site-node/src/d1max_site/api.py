@@ -187,6 +187,8 @@ class SiteApi:
         self.weather: Any = None
         #: P1 推到手机(商业化 A6,``push.PushDesk``)。没接的站点 /api/push/devices 回 404。
         self.push: Any = None
+        #: 体检、诊断(商业化 A1,``health.HealthDesk``)。没接的站点 /healthz 只回好。
+        self.health: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -360,6 +362,8 @@ class _Handler(TlsHandlerMixin):
 
     def _route(self, method: str, path: str) -> None:
         try:
+            if method == "GET" and path == "/healthz":
+                return self._healthz()             # 商业化 A1:探活不用登录,只回好不好
             if method == "POST" and path == "/api/login":
                 return self._login()
             if method == "POST" and path == "/api/incidents":
@@ -415,6 +419,8 @@ class _Handler(TlsHandlerMixin):
                 return self._mode(method, path, user)
             if path == "/api/weather":
                 return self._weather(method, user)
+            if path in ("/api/health", "/api/metrics", "/api/support-bundle"):
+                return self._health(method, path, user)
             if path in ("/api/push/devices", "/api/push/devices/remove"):
                 return self._push_devices(method, path, user)
             if path == "/api/chargers" or _CHARGER.match(path):
@@ -861,6 +867,38 @@ class _Handler(TlsHandlerMixin):
                 y=float(vals[1]), yaw=float(vals[2]), by=str(user)))
         except ChargeError as exc:
             raise HttpError(400, str(exc)) from exc
+
+    def _healthz(self) -> None:
+        """探活(商业化 A1):不用登录,只回 ``{"ok", "version"}``;不好回 503。"""
+        desk = self.site.health
+        if desk is None:
+            return self._send_json(200, {"ok": True, "version": ""})
+        ok, body = desk.healthz()
+        return self._send_json(200 if ok else 503, body)
+
+    def _health(self, method: str, path: str, user) -> None:
+        """体检、指标历史、诊断包(商业化 A1)。体检和诊断包要管理员;指标历史能看的都能看。"""
+        desk = self.site.health
+        if desk is None:
+            raise HttpError(404, "这个站点没开体检")
+        if method != "GET":
+            raise HttpError(405, "只支持 GET")
+        if path == "/api/metrics":
+            self._need(user, VIEW)
+            q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            since = q.get("since", ["0"])[0]
+            return self._send_json(200, {"metrics": desk.metrics(
+                key=(q.get("key") or [None])[0], since_ms=int(since) if since.isdigit() else 0)})
+        self._need(user, MANAGE)
+        if path == "/api/health":
+            return self._send_json(200, desk.view())
+        import tempfile
+
+        from d1max_site.health import support_bundle
+        with tempfile.TemporaryDirectory(prefix="d1max-bundle-") as tmp:
+            out = support_bundle(Path(tmp) / "support.tar.gz", home=desk.home, db=desk.db,
+                                 health=desk, now_ms=self.site._now())
+            return self._send_bytes(out.read_bytes(), "application/gzip")
 
     def _push_devices(self, method: str, path: str, user) -> None:
         """这部手机收不收 P1 推送(商业化 A6):``POST /api/push/devices`` 登记推送号、

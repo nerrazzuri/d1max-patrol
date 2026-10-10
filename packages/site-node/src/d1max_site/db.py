@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 46                      # A6 外审 F3:推送号跟登记它的那次登录绑在一起(session)
+SCHEMA_VERSION = 47                      # 商业化 A1:指标历史(metrics)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -420,6 +420,13 @@ CREATE TABLE IF NOT EXISTS push_outbox (
     error      TEXT NOT NULL DEFAULT '',
     UNIQUE (alert_key, tier)
 );
+-- 商业化 A1:指标历史(每 5 分钟一笔,留 30 天):盘、狗在线、开着的告警、狗上待传的、事件循环延迟。
+CREATE TABLE IF NOT EXISTS metrics (
+    ts    INTEGER NOT NULL,
+    key   TEXT NOT NULL,
+    value REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS metrics_ts ON metrics(ts);
 -- W33(决策 48):布防中狗没在驱离时看见人,这一回报过 P1 了(狗确认人走了删,再看见再报)。
 CREATE TABLE IF NOT EXISTS person_sightings (
     robot_id   TEXT PRIMARY KEY,
