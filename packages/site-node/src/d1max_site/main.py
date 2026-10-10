@@ -817,6 +817,7 @@ class Server:
         self.health.alerts = self._loop_alerts            # 杂事线程里报:经事件循环
         self.api.health = self.health
         self.api.home = home                              # A4:狗领证书包
+        self.api.site_name = str(cfg.get("site_name") or cfg.get("site_id") or "")   # B1
         from d1max_site.compat import CompatWatch
         #: 狗的版本配不配站点(商业化 A7)。
         self.compat = CompatWatch(self.dispatcher)

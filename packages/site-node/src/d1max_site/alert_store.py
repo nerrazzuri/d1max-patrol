@@ -24,7 +24,8 @@ log = logging.getLogger(__name__)
 RESTORE_RECENT = 200
 
 _COLS = ("key", "level", "kind", "robot", "title", "detail", "first_ms", "last_ms", "count",
-         "acked_by", "acked_ms", "resolved_by", "resolved_ms", "escalated", "context")
+         "acked_by", "acked_ms", "resolved_by", "resolved_ms", "escalated", "context",
+         "shelved_by", "shelved_ms", "shelved_until_ms", "shelved_reason")
 
 
 def _from_row(r: Any) -> Alert:
@@ -33,7 +34,9 @@ def _from_row(r: Any) -> Alert:
                  last_ms=r["last_ms"], count=r["count"], acked_by=r["acked_by"],
                  acked_ms=r["acked_ms"], resolved_by=r["resolved_by"],
                  resolved_ms=r["resolved_ms"], escalated=r["escalated"],
-                 context=_context(r["context"]))
+                 context=_context(r["context"]), shelved_by=r["shelved_by"],
+                 shelved_ms=r["shelved_ms"], shelved_until_ms=r["shelved_until_ms"],
+                 shelved_reason=r["shelved_reason"])
 
 
 def _context(raw: Any) -> dict[str, Any]:
@@ -109,6 +112,12 @@ class AlertDesk:
 
     def resolve(self, key: str, *, who: str) -> Alert:
         return self.book.resolve(key, who=who, now_ms=self._now())
+
+    def shelve(self, key: str, *, who: str, until_ms: int, reason: str) -> Alert:
+        return self.book.shelve(key, who=who, until_ms=until_ms, reason=reason, now_ms=self._now())
+
+    def unshelve(self, key: str) -> Alert:
+        return self.book.unshelve(key, now_ms=self._now())
 
     def resolve_all(self, robot: str, kind: str, *, who: str) -> int:
         """这一位(狗、站点、``cctv:<名字>``)这一种还没解决的告警全解决(W19:摄像头恢复、删了)。回几条。"""

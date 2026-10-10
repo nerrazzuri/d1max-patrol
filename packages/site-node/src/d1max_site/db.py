@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 49                      # A 阶段外审 I1:开通码绑证书代次(enroll_claims.cert_fp)
+SCHEMA_VERSION = 50                      # B1:告警搁置(alerts.shelved_*)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -213,7 +213,11 @@ CREATE TABLE IF NOT EXISTS alerts (
     resolved_by  TEXT NOT NULL,
     resolved_ms  INTEGER,
     escalated    INTEGER NOT NULL,
-    context      TEXT NOT NULL DEFAULT '{}'
+    context      TEXT NOT NULL DEFAULT '{}',
+    shelved_by   TEXT NOT NULL DEFAULT '',
+    shelved_ms   INTEGER,
+    shelved_until_ms INTEGER,
+    shelved_reason TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS alerts_last ON alerts(last_ms);
 -- W21 复查:站点起来时按种类取每台狗最近一条事件(上装故障的全集),不扫整张事件表。
@@ -533,6 +537,10 @@ _ADDED_COLUMNS = (
     # A6 外审 F3:登记推送号的那次登录(令牌哈希);那次登录退出、过期了就不推
     ("push_devices", "session", "TEXT NOT NULL DEFAULT ''"),
     ("enroll_claims", "cert_fp", "TEXT NOT NULL DEFAULT ''"),          # A 阶段外审 I1
+    ("alerts", "shelved_by", "TEXT NOT NULL DEFAULT ''"),               # B1 搁置
+    ("alerts", "shelved_ms", "INTEGER"),
+    ("alerts", "shelved_until_ms", "INTEGER"),
+    ("alerts", "shelved_reason", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
