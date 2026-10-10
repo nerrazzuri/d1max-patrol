@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 52                      # B 阶段外审 I1:person_sightings.kind(老记录按证据分)
+SCHEMA_VERSION = 53                      # B 阶段外审:person_sightings.kind + 一次性按证据修复
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -609,8 +609,9 @@ class SiteDB:
             # 老库补列(CREATE TABLE IF NOT EXISTS 不会给已有的表加列)。
             for table, col, decl in _ADDED_COLUMNS:
                 cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
-                if col not in cols and (table, col) == ("person_sightings", "kind"):
-                    self._migrate_sighting_kind(decl)
+                if (table, col) == ("person_sightings", "kind"):
+                    stored = int(row[0]) if row is not None and str(row[0]).isdigit() else None
+                    self._migrate_sighting_kind(decl, add_column=col not in cols, stored=stored)
                 elif col not in cols:
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             if not had_homes:
@@ -625,24 +626,35 @@ class SiteDB:
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
 
-    def _migrate_sighting_kind(self, decl: str) -> None:
-        """老库(≤51)的在场记录补 ``kind``(B 阶段外审复查 R1)。老版本里「报过 P1」和「只记了授权
-        P3」写的是同样的两列,不能一律当成报过 P1 —— 那样升级以后授权没了、人还在,永远不补报。
+    def _migrate_sighting_kind(self, decl: str, *, add_column: bool, stored: int | None) -> None:
+        """在场记录的 ``kind`` 一次性修复(B 阶段外审复查 R1)。``stored``:库里记的结构版本
+        (新库是 ``None``)。
 
-        按证据分:这一回有 ``dog_sees_person``(告警表里这只狗的、最后一次触发不早于这一回开始;或者
-        还在待报表里)→ ``'p1'``;**没有证据的 → ``'authorized'``**,下一拍按当前的授权重核(授权还在
-        不动,不在了补报一次 P1)。判错的代价是多报一条(会被聚合吸收),不是漏报。
-        补列和分类在同一个事务里:中途断了不会留下「全是 p1」的半截。"""
+        老版本(≤51)里「报过 P1」和「只记了授权 P3」写的是同样的两列;PR #105(52 版)补列时一律
+        缺省成 ``'p1'`` —— 已经升到 52 版的库里,只记过授权 P3 的那一回也被标成了报过 P1,授权没了、
+        人还在,永远不补报。所以**库是 53 版以前的,不管列在不在**,都把标成 ``'p1'`` 的按证据核一遍:
+
+        - 这一回有 ``dog_sees_person``(告警表里这只狗的、最后一次触发不早于这一回开始;或者还在
+          待报表里)→ 留着 ``'p1'``;
+        - **没有证据的 → ``'authorized'``**,下一拍按当前的授权重核(授权还在不动,不在了补报一次
+          P1)。判错的代价是多报一条(会被聚合吸收),不是漏报。
+
+        补列、分类、把版本写成 53 在同一个事务里:只跑一次(以后启动看到 ≥53 就不再重判),中途断了
+        不留半截。后面那些迁移都是幂等的,版本提前写上不碍事。"""
+        if not add_column and (stored is None or stored >= 53):
+            return
         self._conn.execute("BEGIN IMMEDIATE")
         try:
-            self._conn.execute(f"ALTER TABLE person_sightings ADD COLUMN kind {decl}")
+            if add_column:
+                self._conn.execute(f"ALTER TABLE person_sightings ADD COLUMN kind {decl}")
             self._conn.execute(
-                "UPDATE person_sightings SET kind='authorized' WHERE NOT EXISTS ("
+                "UPDATE person_sightings SET kind='authorized' WHERE kind='p1' AND NOT EXISTS ("
                 "SELECT 1 FROM alerts a WHERE a.kind='dog_sees_person' "
                 "AND a.robot=person_sightings.robot_id AND a.last_ms>=person_sightings.started_ms) "
                 "AND NOT EXISTS (SELECT 1 FROM pending_alerts p WHERE p.kind='dog_sees_person' "
                 "AND p.robot=person_sightings.robot_id "
                 "AND p.created_ms>=person_sightings.started_ms)")
+            self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', '53')")
             self._conn.execute("COMMIT")
         except BaseException:
             self._conn.execute("ROLLBACK")
