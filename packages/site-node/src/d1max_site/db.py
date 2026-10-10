@@ -533,6 +533,10 @@ _ADDED_COLUMNS = (
 )
 
 
+
+class SchemaTooNew(RuntimeError):
+    """站点库是更新的站点程序写的(商业化 A7):老程序不开它。"""
+
 class SiteDB:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -550,6 +554,17 @@ class SiteDB:
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
+            # 商业化 A7:库比程序新(站点回滚到老版本、拿新库给老程序用),不开 —— 开了会把版本号
+            # 改回去,新版加的表和列老程序不认,下次再升就对不上了。
+            has_meta = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").fetchone()
+            row = self._conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone() \
+                if has_meta else None
+            if row is not None and str(row[0]).isdigit() and int(row[0]) > SCHEMA_VERSION:
+                self._conn.close()
+                raise SchemaTooNew(f"站点库是第 {row[0]} 版结构,这个站点程序只认到第 "
+                                   f"{SCHEMA_VERSION} 版:库是新版程序写的。装回新版程序,或者"
+                                   "用老版本时候的备份恢复(docs/版本兼容与升级顺序.md)")
             had_homes = self._conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='homes'").fetchone()
             self._conn.executescript(_DDL)

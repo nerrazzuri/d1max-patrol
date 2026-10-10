@@ -423,6 +423,11 @@ class _Handler(TlsHandlerMixin):
                 return self._mode(method, path, user)
             if path == "/api/weather":
                 return self._weather(method, user)
+            if method == "GET" and path == "/api/versions":
+                self._need(user, VIEW)
+                from d1max_site.compat import versions
+                return self._send_json(200, self.site.loop.call(
+                    lambda: _sync(versions, self.site.dispatcher)))
             if path in ("/api/health", "/api/metrics", "/api/support-bundle"):
                 return self._health(method, path, user)
             if path in ("/api/push/devices", "/api/push/devices/remove"):
@@ -561,9 +566,12 @@ class _Handler(TlsHandlerMixin):
         except AuthError as exc:
             raise HttpError(401, str(exc)) from exc
         who = self.site.accounts.check(token)
+        from d1max_contract.compat import MIN_APP_API_LEVEL, SITE_API_LEVEL
         self._send_json(200, {"token": token, "name": name,
                               "role": getattr(who, "role", ""),
-                              "display_name": self.site.accounts.display_name(name)})
+                              "display_name": self.site.accounts.display_name(name),
+                              # 商业化 A7:App 看这两个数,配不上的当场说「升级 App」「升级站点」
+                              "api_level": SITE_API_LEVEL, "min_app_level": MIN_APP_API_LEVEL})
 
     def _robot(self, method: str, robot_id: str, action: str | None, user: str) -> None:
         disp = self.site.dispatcher

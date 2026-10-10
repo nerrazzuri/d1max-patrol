@@ -23,6 +23,9 @@
           "thermal": false
         },
         "tasks": {
+          "compat": {
+            "level": 2
+          },
           "goto": {
             "autonomy": "autonomous",
             "max_speed_mps": 1.0,
@@ -69,7 +72,7 @@
         }
       },
       "clock_skew_s": 0.0,
-      "expires_at": 1792440758688,
+      "expires_at": 1792635772930,
       "fresh": true,
       "held": null,
       "loc": {
@@ -89,9 +92,9 @@
       "robot_id": "A",
       "rtk": null,
       "status": {
-        "boot_id": "boot-e907b4ce2c",
+        "boot_id": "boot-2cb157f65a",
         "control_epoch": 1,
-        "last_seen": 1791440758952,
+        "last_seen": 1791635773590,
         "online": true,
         "ready": {
           "control": true,

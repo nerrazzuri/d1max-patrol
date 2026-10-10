@@ -96,7 +96,7 @@ async def test_W00_验收流程(台):
 
     # 0. 亮相:能力里只有 goto;状态 online、ready、没有任务;首次连接的 reconcile 是干净的。
     assert list(site.capabilities.tasks) == ["goto", "patrol", "teleop", "relocalize", "mark_home",
-                                             "head", "zones_set", "speed_cap"]
+                                             "head", "zones_set", "speed_cap", "compat"]
     assert site.status.online and site.status.ready.ok and site.status.task is None
     assert t.reconciles and t.reconciles[0].task is None
     assert (t.reconciles[0].unacked_from_seq, t.reconciles[0].unacked_to_seq) == (0, 0)

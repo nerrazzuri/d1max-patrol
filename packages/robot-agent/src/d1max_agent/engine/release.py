@@ -32,6 +32,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from d1max_contract.compat import AGENT_LEVEL
 from d1max_contract.digest import tree_sha256 as _tree_sha256
 from d1max_contract.releases import AGENT_START
 
@@ -200,6 +201,9 @@ class ReleaseManifest:
     #: 这一版能读的任务包 schema 的最低要求。比盘上的包高就不许升(§7.2)。
     requires_mission_schema: int
     built_at: str
+    #: 这一版代理的兼容级别(商业化 A7,``d1max_contract.compat.AGENT_LEVEL``);老包没有算 1。
+    #: 站点登记时按它拒「站点配不上」的包。
+    compat_level: int = 1
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -208,6 +212,7 @@ class ReleaseManifest:
             "content_sha256": self.content_sha256,
             "requires_mission_schema": self.requires_mission_schema,
             "built_at": self.built_at,
+            "compat_level": self.compat_level,
         }
 
 
@@ -232,6 +237,8 @@ def read_manifest(where: Path | str) -> ReleaseManifest:
         content_sha256=str(raw.get("content_sha256", "")),
         requires_mission_schema=schema,
         built_at=str(raw.get("built_at", "")),
+        compat_level=int(raw.get("compat_level", 1)) if str(raw.get("compat_level", 1)).isdigit()
+        else 1,
     )
 
 
@@ -476,6 +483,7 @@ def pack(src: Path | str, out_parent: Path | str, *, name: str | None = None,
         content_sha256=content,
         requires_mission_schema=BUNDLE_SCHEMA,
         built_at=stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        compat_level=AGENT_LEVEL,
     )
     try:
         _write_manifest(dest, manifest)

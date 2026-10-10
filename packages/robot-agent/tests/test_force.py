@@ -426,3 +426,14 @@ async def test_复查3_急停状态不知道_不算软急停做成了(狗, monke
 
 async def _真():
     return True
+
+
+def test_A7_能力里报兼容级别(tmp_path):
+    from d1max_contract.compat import AGENT_LEVEL
+    rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG,
+                      hal=SimRobot(now_ms=钟()), store_dir=tmp_path / "a", now_ms=钟(),
+                      loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0))
+    assert rt._extra_tasks()["compat"] == {"level": AGENT_LEVEL}
+    from types import SimpleNamespace
+    rt.hal._b = SimpleNamespace(_hello=SimpleNamespace(proto=8))      # 真狗适配器握过手的样子
+    assert rt._extra_tasks()["compat"] == {"level": AGENT_LEVEL, "sidecar_proto": 8}

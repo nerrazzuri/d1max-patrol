@@ -69,6 +69,17 @@ class ReleaseCatalog:
                 relsign.verify(raw, Path(self.pubkey))
             except relsign.SignError as exc:
                 raise ReleaseCatalogError(f"{name}:{exc}(狗上也会拒,不登记)") from exc
+        # 商业化 A7:这一版代理的兼容级别站点配不配得上(太老的发下去会一直重传,太新的站点不认)
+        from d1max_contract.compat import SITE_MAX_AGENT_LEVEL, SITE_MIN_AGENT_LEVEL
+        lv = raw.get("compat_level", 1)
+        if not isinstance(lv, int) or isinstance(lv, bool):
+            raise ReleaseCatalogError(f"{MANIFEST} 的 compat_level 要是整数")
+        if lv < SITE_MIN_AGENT_LEVEL:
+            raise ReleaseCatalogError(f"{name} 的代理太老(兼容级别 {lv},站点要 "
+                                      f"≥{SITE_MIN_AGENT_LEVEL}):发下去配不上这个站点,不登记")
+        if lv > SITE_MAX_AGENT_LEVEL:
+            raise ReleaseCatalogError(f"{name} 的代理比站点新(兼容级别 {lv},站点只认到 "
+                                      f"{SITE_MAX_AGENT_LEVEL}):先升站点,再登记它")
         if self.db.query("SELECT 1 FROM releases WHERE name=?", (name,)):
             raise ReleaseCatalogError(f"{name} 已经登记过了")
         out = self.root / f"{name}.tar.gz"

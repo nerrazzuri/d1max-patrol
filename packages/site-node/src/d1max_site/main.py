@@ -813,6 +813,10 @@ class Server:
         self.health.alerts = self._loop_alerts            # 杂事线程里报:经事件循环
         self.api.health = self.health
         self.api.home = home                              # A4:狗领证书包
+        from d1max_site.compat import CompatWatch
+        #: 狗的版本配不配站点(商业化 A7)。
+        self.compat = CompatWatch(self.dispatcher)
+        self.compat.alerts = self.alerts
         self.api.privacy = self.privacy                # W30:运行记录标「留着」
         self.api.charge = self.charge                  # W13:充电桩
         self.arming.on_expired = lambda back, row: self.api.audit.record(
@@ -939,6 +943,7 @@ class Server:
                                      ("看见人", "sightings", "tick"),            # W33
                                      ("受力", "force", "reconcile"),             # W26
                                      ("证据没封", "evidence_watch", "tick"),     # W30b
+                                     ("版本", "compat", "tick"),                 # A7
                                      ("访客到点退回", "arming", "tick")):        # W20
                 try:
                     getattr(getattr(self, part), meth)()
@@ -1132,6 +1137,7 @@ def build_parser() -> argparse.ArgumentParser:
     bo.add_argument("dst", help="解到哪儿(要空目录)")
     bo.add_argument("--key", default="/etc/d1max-site/backup.key",
                     help="备份密钥(装机时离线另存的那一份)")
+    sub.add_parser("versions", help="站点、每只狗的版本、兼容级别、配不配(A7;狗的要站点在跑)")
     ks = sub.add_parser("keys-status", help="站点密钥在不在、长度、权限、短指纹(A3)")
     ks.add_argument("--json", action="store_true")
     ke = sub.add_parser("keys-export", help="站点密钥打成一个口令加密的托管包,离线保管(A3)")
@@ -1260,6 +1266,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"解开了 {ok} 个,还解不开 {bad} 个")
             if bad:
                 return 1
+        elif args.cmd == "versions":
+            from d1max_site.compat import versions
+            print(json.dumps(versions(None), ensure_ascii=False, indent=1))
+            print("(狗的版本要看正在跑的站点:管理员登录后 GET /api/versions)")
         elif args.cmd in ("keys-status", "keys-export", "keys-import"):
             return cmd_keys(home, args)
         elif args.cmd == "support-bundle":
