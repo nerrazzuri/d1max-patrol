@@ -330,6 +330,20 @@ def cmd_privacy_purge(home: Path, since: str, until: str, robot: str | None,
         db.close()
 
 
+def cmd_support_bundle(home: Path, out: str | None, hours: int) -> str:
+    """命令行导出诊断包(A1):没有正在跑的站点进程的实时状态(事件循环、MQTT、狗),其余都有。"""
+    from d1max_site.health import HealthDesk, support_bundle
+    now = wall_ms()
+    path = Path(out) if out else Path.cwd() / time.strftime(
+        "d1max-support-%Y%m%dT%H%M%SZ.tar.gz", time.gmtime(now / 1000))
+    db = SiteDB(home / "site.db")
+    try:
+        h = HealthDesk(db, home=home, now_ms=wall_ms)
+        return str(support_bundle(path, home=home, db=db, health=h, hours=hours, now_ms=now))
+    finally:
+        db.close()
+
+
 def backup_dirs(home: Path, *, encrypted: bool) -> dict[str, Path]:
     """要镜像进备份的目录。A2:站点身份(CA 私钥、站点服务证书、broker 配置)也进 —— **只进加密的
     备份**(明文备份盘被拿走,CA 私钥就丢了)。"""
@@ -638,6 +652,8 @@ class Server:
         # 判读、备份、接收口在别的线程里:告警要跳回事件循环去报(告警簿只许在循环里改)。
         from d1max_site.alert_store import LoopAlerts
         loop_alerts = LoopAlerts(self.alerts, self.loop)
+        #: 杂事线程、推送线程里报告警用这个(经事件循环;AlertDesk 只许在事件循环里用)。
+        self._loop_alerts = loop_alerts
         self.runs = RunDesk(self.evidence, home=home, now_ms=wall_ms, alerts=loop_alerts)
         backup_dir = cfg.get("backup_dir")
         from d1max_site.sealbox import DEFAULT_KEYS, site_box
@@ -719,10 +735,20 @@ class Server:
         self.push = PushDesk(self.db, now_ms=wall_ms, sender=sender,
                              site_name=str(cfg.get("site_name") or cfg.get("site_id") or ""),
                              why_off=why_off)
-        self.push.alerts = LoopAlerts(self.alerts, self.loop)   # 推送在线程里跑:告警经事件循环
+        self.push.alerts = self._loop_alerts      # 推送在线程里跑:告警经事件循环
         self.alerts.push = sender is not None
         self.push.session_alive = self.accounts.session_alive   # A6 外审 F3:退出了的不推
         self.api.push = self.push
+        from d1max_site.health import HealthDesk
+        #: 体检、指标历史、诊断包(商业化 A1)。
+        self._beat = time.monotonic()
+        self._lane_started: dict[str, float] = {}
+        self.health = HealthDesk(self.db, home=home, now_ms=wall_ms, dispatcher=self.dispatcher,
+                                 backup=self.backup, push=self.push,
+                                 loop_lag=lambda: time.monotonic() - self._beat,
+                                 lanes=lambda: dict(self._lane_started))
+        self.health.alerts = self._loop_alerts            # 杂事线程里报:经事件循环
+        self.api.health = self.health
         self.api.privacy = self.privacy                # W30:运行记录标「留着」
         self.api.charge = self.charge                  # W13:充电桩
         self.arming.on_expired = lambda back, row: self.api.audit.record(
@@ -754,6 +780,7 @@ class Server:
         self.loop.submit(self._sync_loop)
         self.loop.submit(self._schedule_loop)
         self.loop.submit(self._alert_loop)
+        self.loop.submit(self._beat_loop)
         self.api.start()
         self.intake.start()
         self._chores.start()
@@ -771,6 +798,7 @@ class Server:
             for what, fn in (("自动判读", self.runs.step), ("备份", self.backup.step),
                              ("备份抽查", lambda: self.backup.verify_step(self._backup_key)),
                              ("录像留存", self._prune_recordings),
+                             ("体检", self.health.tick),                  # A1:证书、盘、卡住的道
                              ("摄像头", self.cctv.sync),
                              ("拦截点对账", self.incidents.recheck_intercepts)):
                 try:
@@ -801,14 +829,16 @@ class Server:
                 store.incoming_error = drop_old_incoming(store.root)
             if getattr(store, "incoming_error", ""):
                 why.append(store.incoming_error)
+        # 杂事线程里调:告警经事件循环(A1 顺手修:以前直接用了只许在事件循环里用的告警台)
+        alerts = getattr(self, "_loop_alerts", None) or self.alerts
         if why:
-            if not self.alerts.has_open(SITE, "purged_incoming_stuck"):
-                self.alerts.raise_alert(kind="purged_incoming_stuck", robot=SITE,
+            if not alerts.has_open(SITE, "purged_incoming_stuck"):
+                alerts.raise_alert(kind="purged_incoming_stuck", robot=SITE,
                                         title="以前暂存的已删证据删不掉",
                                         detail="里面是已经删除的原文,要人看一下权限、盘:"
                                                + ";".join(why)[:250])
-        elif self.alerts.has_open(SITE, "purged_incoming_stuck"):
-            self.alerts.resolve_all(SITE, "purged_incoming_stuck", who="site:incoming_dropped")
+        elif alerts.has_open(SITE, "purged_incoming_stuck"):
+            alerts.resolve_all(SITE, "purged_incoming_stuck", who="site:incoming_dropped")
 
     async def _schedule_loop(self) -> None:
         """排程执行器:每 30 s 一拍。一拍炸了记下来、下一拍照走(老 W06 执行器同一个理由:
@@ -873,6 +903,10 @@ class Server:
         if t is not None and not t.done():
             return
 
+        started = getattr(self, "_lane_started", None)
+        if started is not None:
+            started[name] = time.monotonic()           # A1:体检看有没有卡住的道
+
         async def run() -> None:
             try:
                 r = await asyncio.to_thread(fn) if thread else fn()
@@ -880,7 +914,16 @@ class Server:
                     await r
             except Exception:
                 log.exception("%s这一拍没办成", name)
+            finally:
+                if started is not None:
+                    started.pop(name, None)
         self._lanes[name] = asyncio.get_running_loop().create_task(run(), name=f"lane:{name}")
+
+    async def _beat_loop(self) -> None:
+        """事件循环的心跳(商业化 A1):每秒记一下;体检看它多久没跳,就知道事件循环卡没卡。"""
+        while not self._stop.is_set():
+            self._beat = time.monotonic()
+            await asyncio.sleep(1.0)
 
     async def _sync_loop(self) -> None:
         while not self._stop.is_set():
@@ -1018,6 +1061,11 @@ def build_parser() -> argparse.ArgumentParser:
     bo.add_argument("dst", help="解到哪儿(要空目录)")
     bo.add_argument("--key", default="/etc/d1max-site/backup.key",
                     help="备份密钥(装机时离线另存的那一份)")
+    sb = sub.add_parser("support-bundle",
+                        help="导出诊断包(A1):体检、版本、打码的配置、日志")
+    sb.add_argument("--out", default=None,
+                    help="写到哪儿(缺省当前目录 d1max-support-<时刻>.tar.gz)")
+    sb.add_argument("--hours", type=int, default=24, help="带最近多少小时的日志")
     bv = sub.add_parser("backup-verify", help="校验备份能不能恢复(A2):库、身份、每一趟、每个文件")
     bv.add_argument("dest", help="备份目录")
     bv.add_argument("--key", default="/etc/d1max-site/backup.key", help="备份密钥")
@@ -1129,6 +1177,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"解开了 {ok} 个,还解不开 {bad} 个")
             if bad:
                 return 1
+        elif args.cmd == "support-bundle":
+            print(cmd_support_bundle(home, args.out, args.hours))
+            return 0
         elif args.cmd == "backup-verify":
             from d1max_site.restore import verify
             r = verify(Path(args.dest), Path(args.key) if Path(args.key).is_file() else None,
