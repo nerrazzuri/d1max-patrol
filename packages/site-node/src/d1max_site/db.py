@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 52                      # B 阶段外审 I1:person_sightings.kind
+SCHEMA_VERSION = 52                      # B 阶段外审 I1:person_sightings.kind(老记录按证据分)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -609,7 +609,9 @@ class SiteDB:
             # 老库补列(CREATE TABLE IF NOT EXISTS 不会给已有的表加列)。
             for table, col, decl in _ADDED_COLUMNS:
                 cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
-                if col not in cols:
+                if col not in cols and (table, col) == ("person_sightings", "kind"):
+                    self._migrate_sighting_kind(decl)
+                elif col not in cols:
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             if not had_homes:
                 # W13a 迁移:以前没有原点表,下发地图时拿「这张图上的待命点(默认的优先、再按名字)
@@ -622,6 +624,29 @@ class SiteDB:
                     "WHERE map_version != '' ORDER BY is_default DESC, name")
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
+
+    def _migrate_sighting_kind(self, decl: str) -> None:
+        """老库(≤51)的在场记录补 ``kind``(B 阶段外审复查 R1)。老版本里「报过 P1」和「只记了授权
+        P3」写的是同样的两列,不能一律当成报过 P1 —— 那样升级以后授权没了、人还在,永远不补报。
+
+        按证据分:这一回有 ``dog_sees_person``(告警表里这只狗的、最后一次触发不早于这一回开始;或者
+        还在待报表里)→ ``'p1'``;**没有证据的 → ``'authorized'``**,下一拍按当前的授权重核(授权还在
+        不动,不在了补报一次 P1)。判错的代价是多报一条(会被聚合吸收),不是漏报。
+        补列和分类在同一个事务里:中途断了不会留下「全是 p1」的半截。"""
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute(f"ALTER TABLE person_sightings ADD COLUMN kind {decl}")
+            self._conn.execute(
+                "UPDATE person_sightings SET kind='authorized' WHERE NOT EXISTS ("
+                "SELECT 1 FROM alerts a WHERE a.kind='dog_sees_person' "
+                "AND a.robot=person_sightings.robot_id AND a.last_ms>=person_sightings.started_ms) "
+                "AND NOT EXISTS (SELECT 1 FROM pending_alerts p WHERE p.kind='dog_sees_person' "
+                "AND p.robot=person_sightings.robot_id "
+                "AND p.created_ms>=person_sightings.started_ms)")
+            self._conn.execute("COMMIT")
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
 
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:
