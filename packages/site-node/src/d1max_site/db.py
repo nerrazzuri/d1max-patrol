@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 47                      # 商业化 A1:指标历史(metrics)
+SCHEMA_VERSION = 48                      # 商业化 A4:狗的开通码(enroll_claims)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -427,6 +427,14 @@ CREATE TABLE IF NOT EXISTS metrics (
     value REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS metrics_ts ON metrics(ts);
+-- 商业化 A4:狗的开通码(一只狗一个;只记令牌的哈希;领过一次就作废)。
+CREATE TABLE IF NOT EXISTS enroll_claims (
+    robot_id   TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    expires_ms INTEGER NOT NULL,
+    used_ms    INTEGER
+);
 -- W33(决策 48):布防中狗没在驱离时看见人,这一回报过 P1 了(狗确认人走了删,再看见再报)。
 CREATE TABLE IF NOT EXISTS person_sightings (
     robot_id   TEXT PRIMARY KEY,

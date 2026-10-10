@@ -127,6 +127,31 @@ def cmd_fingerprint(home: Path) -> str:
     return fp.split(":", 1)[1]
 
 
+def _code_text(code: str) -> str:
+    return ("开通码(一次性,用过、过期就作废;别贴到公开的地方):\n" + code +
+            "\n狗上:sudo /opt/d1max/bin/python -m d1max_patrol.cli provision --code '<上面那一行>'")
+
+
+def cmd_enroll_code(home: Path, robot_id: str, host: str | None, hours: float) -> str:
+    """给已登记的狗出一个开通码(商业化 A4):一次性、``hours`` 小时有效,旧码作废。"""
+    from d1max_site.provision import ProvisionError, issue_code
+    cfg = _load(home)
+    ca = SiteCA(home / "ca")
+    db = SiteDB(home / "site.db")
+    try:
+        cur = Registry(db, site_id=cfg["site_id"]).get(robot_id)
+        if cur is None or cur.revoked:
+            raise SiteError(f"{robot_id} 没登记或已吊销:先 enroll")
+        try:
+            return issue_code(db, cfg, home, robot_id,
+                              fingerprint=ca.fingerprint(home / "ca" / "server" / "server.crt"),
+                              now_ms=wall_ms(), host=host, ttl_ms=int(hours * 3600_000))
+        except ProvisionError as exc:
+            raise SiteError(str(exc)) from exc
+    finally:
+        db.close()
+
+
 def cmd_enroll(home: Path, robot_id: str, days: int) -> Path:
     cfg = _load(home)
     ca = SiteCA(home / "ca")
@@ -787,6 +812,7 @@ class Server:
                                  keys=lambda: keyvault.status(cfg))      # A3
         self.health.alerts = self._loop_alerts            # 杂事线程里报:经事件循环
         self.api.health = self.health
+        self.api.home = home                              # A4:狗领证书包
         self.api.privacy = self.privacy                # W30:运行记录标「留着」
         self.api.charge = self.charge                  # W13:充电桩
         self.arming.on_expired = lambda back, row: self.api.audit.record(
@@ -1051,6 +1077,13 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("enroll", help="给一台狗签证书并登记")
     e.add_argument("robot_id")
     e.add_argument("--days", type=int, default=365)
+    e.add_argument("--code", action="store_true",
+                   help="顺带出一个开通码(A4):狗上 d1max-patrol provision --code 一条命令开通")
+    e.add_argument("--host", default=None, help="开通码里狗连站点用的主机名(缺省第一个 --hostname)")
+    ec = sub.add_parser("enroll-code", help="给已登记的狗重新出一个开通码(A4,旧码作废)")
+    ec.add_argument("robot_id")
+    ec.add_argument("--host", default=None, help="狗连站点用的主机名(缺省第一个 --hostname)")
+    ec.add_argument("--hours", type=float, default=24.0, help="多少小时内有效")
     ra_ = sub.add_parser("robot-auto", help="让狗接自动派遣(排程、入侵、回充、自动回待命点)(W33)")
     ra_.add_argument("robot_id")
     rm_ = sub.add_parser("robot-manual", help="设成只许手动派:站点不自己让它动(W33)")
@@ -1177,6 +1210,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not ev:
                 print("注意:站点没配证据私钥,证书包里没有证据公钥 —— 狗上的照片、录像会明文存"
                       "(装机脚本会生成 /etc/d1max-site/evidence.key)")
+            if args.code:
+                print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, 24.0)))
+        elif args.cmd == "enroll-code":
+            print(_code_text(cmd_enroll_code(home, args.robot_id, args.host, args.hours)))
         elif args.cmd in ("robot-auto", "robot-manual"):
             print(cmd_robot_service(home, args.robot_id, args.cmd == "robot-manual",
                                     getattr(args, "note", "")))
