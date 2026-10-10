@@ -14,6 +14,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n.dart';
 import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
@@ -78,12 +79,15 @@ class SiteListPage extends StatefulWidget {
   final BackgroundWatch watch;
   /// P1 推到手机（商业化 A6）：测试换成假的；缺省按平台（手机上是极光，桌面版不推）。
   final PushRegistrar? push;
+  /// 语言存哪儿（App V2）；不给就只在这次运行里生效。
+  final LangStore? langStore;
   const SiteListPage(
       {super.key,
       required this.store,
       this.apiFactory = defaultSiteApi,
       this.watch = const ChannelBackgroundWatch(),
-      this.push});
+      this.push,
+      this.langStore});
 
   @override
   State<SiteListPage> createState() => _SiteListPageState();
@@ -103,6 +107,16 @@ class _SiteListPageState extends State<SiteListPage> {
     }, onError: (Object e) {
       if (mounted) setState(() => _loadError = '站点列表读不出来：$e');
     });
+  }
+
+  Future<void> _setLang(AppLang lang) async {
+    if (lang == appLang.value) return;
+    appLang.value = lang;
+    try {
+      await widget.langStore?.save(lang);
+    } catch (_) {
+      // 存不上只是下次打开还是原来的语言，不挡这一次。
+    }
   }
 
   Future<void> _remove(SiteEntry s) async {
@@ -218,7 +232,19 @@ class _SiteListPageState extends State<SiteListPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('站点')),
+      appBar: AppBar(title: Text(tr('Sites', '站点')), actions: [
+        // 语言（App V2）：英文为主，中文可选。只在这一页能换 —— 换了整个 app 重建。
+        PopupMenuButton<AppLang>(
+            key: const Key('lang-switch'),
+            tooltip: tr('Language', '语言'),
+            icon: const Icon(Icons.language),
+            initialValue: appLang.value,
+            onSelected: _setLang,
+            itemBuilder: (_) => const [
+                  PopupMenuItem(value: AppLang.en, child: Text('English')),
+                  PopupMenuItem(value: AppLang.zh, child: Text('中文')),
+                ]),
+      ]),
       floatingActionButton: _loadError != null
           ? null
           : FloatingActionButton(
