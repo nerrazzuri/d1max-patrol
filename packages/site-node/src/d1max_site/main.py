@@ -451,6 +451,25 @@ def cmd_backup_drill(home: Path, key: str | None) -> dict:
     return got
 
 
+def cmd_inventory(home: Path, out: str | None, against: str | None) -> tuple[str, int]:
+    """站点清点(H5):记一份现在有什么(``--out``),或者跟以前记的那份比(``--compare``)。"""
+    from d1max_site import inventory
+    cfg = _load(home)
+    try:
+        now = inventory.take(home, fingerprint=cmd_fingerprint(home),
+                             site_id=str(cfg.get("site_id") or ""), now_ms=wall_ms())
+        if against:
+            result = inventory.compare(inventory.load(Path(against)), now)
+            return inventory.render(result), 0 if result["ok"] else 1
+    except inventory.InventoryError as exc:
+        raise SiteError(str(exc)) from exc
+    text = json.dumps(now, ensure_ascii=False, indent=1)
+    if out:
+        Path(out).write_text(text + "\n", encoding="utf-8")
+        return f"清点记下了: {out}(换主机、恢复之后拿它来 --compare)", 0
+    return text, 0
+
+
 def cmd_backup_open(src: Path, dst: Path, key: Path) -> int:
     """把加密的备份目录解开到另一个目录(W30;恢复用)。回解开了几个文件。"""
     from d1max_site.backup import SEALED
@@ -1190,6 +1209,10 @@ def build_parser() -> argparse.ArgumentParser:
     rs = sub.add_parser("restore", help="把备份恢复成站点目录(A2;--home 要是空目录)")
     rs.add_argument("dest", help="备份目录")
     rs.add_argument("--key", default="/etc/d1max-site/backup.key", help="备份密钥")
+    inv = sub.add_parser("inventory", help="站点清点(H5):换主机前记一份,恢复后拿来比")
+    inv.add_argument("--out", default=None, help="把清点写到这个文件")
+    inv.add_argument("--compare", default=None, metavar="FILE",
+                     help="跟以前记的那份比:站点身份变了退出码 1")
     bd = sub.add_parser("backup-drill", help="灾备演练(A2):恢复到临时目录、校验、对数、删掉")
     bd.add_argument("--key", default=None, help="备份密钥(缺省按 site.json / /etc/d1max-site)")
     so = sub.add_parser("source-add", help="登记事件源,打印共享密钥")
@@ -1334,6 +1357,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                   "/etc/d1max-site/;起服务;手机上核一下站点证书指纹(d1max-site fingerprint)"
                   "跟原来一样")
             return 0 if r.ok else 1
+        elif args.cmd == "inventory":
+            text, code = cmd_inventory(home, args.out, args.compare)
+            print(text)
+            return code
         elif args.cmd == "backup-drill":
             r = cmd_backup_drill(home, args.key)
             print(json.dumps(r, ensure_ascii=False, indent=1))
