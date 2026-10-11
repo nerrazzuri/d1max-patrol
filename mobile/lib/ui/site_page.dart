@@ -181,7 +181,9 @@ class _SiteListPageState extends State<SiteListPage> {
     // 商业化 A6：进了站点就收这个站点的 P1 推送。登记不上不挡进站点（后台值守照旧），退避一直重试，
     // 页面上看得见没登记上（A6 外审 F2）。
     final push = PushSession(widget.push ?? defaultPush(),
-        register: a.pushRegister, unregister: a.pushUnregister)
+        also: widget.push == null ? defaultAlsoPush() : const <PushRegistrar>[],
+        register: (id, platform, provider) => a.pushRegister(id, platform, provider: provider),
+        unregister: a.pushUnregister)
       ..start();
     final why = await nav.push<String>(MaterialPageRoute<String>(
         builder: (_) => SiteRobotsPage(

@@ -129,6 +129,8 @@ flutter {
 dependencies {
     // 后台值守的纯判断(AlertBell)用 JUnit 测:cd android && ./gradlew :app:testReleaseUnitTest(W17 外审)
     testImplementation("junit:junit:4.13.2")
+    // RC 加固 H9:FCM(带 Google 服务的手机)。只用来要推送号、让系统弹通知;参数打包时给,没给不起作用。
+    implementation("com.google.firebase:firebase-messaging:24.1.0")
     // A6 外审 F1:给了参数的厂商才接它的极光厂商插件(版本跟 jpush_flutter 带的极光 SDK 6.2.1 一致)
     for (v in pushVendors.filter { it.enabled() }) {
         for (d in v.deps) implementation(d)

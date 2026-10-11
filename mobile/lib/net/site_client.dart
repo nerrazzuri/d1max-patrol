@@ -400,7 +400,7 @@ abstract class SiteApi {
   Future<void> logout();
 
   /// 商业化 A6：这台手机收 P1 推送（极光推送号），离开站点前注销。
-  Future<void> pushRegister(String registrationId, String platform);
+  Future<void> pushRegister(String registrationId, String platform, {String provider = 'jpush'});
   Future<void> pushUnregister(String registrationId);
   Future<List<Map<String, dynamic>>> robots();
   Future<Map<String, dynamic>> robot(String id);
@@ -843,9 +843,12 @@ class SiteClient implements SiteApi {
   }
 
   @override
-  Future<void> pushRegister(String registrationId, String platform) async {
-    await _send('POST', '/api/push/devices',
-        <String, dynamic>{'registration_id': registrationId, 'platform': platform});
+  Future<void> pushRegister(String registrationId, String platform, {String provider = 'jpush'}) async {
+    await _send('POST', '/api/push/devices', <String, dynamic>{
+      'registration_id': registrationId,
+      'platform': platform,
+      'provider': provider,                              // 老站点不认识这个字段，照旧当极光
+    });
   }
 
   @override
