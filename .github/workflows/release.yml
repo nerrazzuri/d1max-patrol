@@ -42,6 +42,7 @@ jobs:
             packages/site-node/tests/test_site_restore.py \
             packages/site-node/tests/test_site_keys.py \
             packages/site-node/tests/test_site_compat.py \
+            packages/site-node/tests/test_site_schema_upgrade.py \
             packages/site-node/tests/test_site_releases.py \
             packages/site-node/tests/test_site_releases_api.py \
             packages/robot-agent/tests/test_release_ops.py \
