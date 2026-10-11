@@ -23,6 +23,10 @@ class FakeSite {
   /// 按路径覆盖状态码（默认 200）。
   final Map<String, int> statusCodes = <String, int>{};
 
+  /// 这些路径一直不回（模拟超时）；这些路径说好发 1000 字节、发了 10 个就把连接掐了（模拟中途断开）。
+  final Set<String> hang = <String>{};
+  final Set<String> cut = <String>{};
+
   /// 真：事件流发完快照之后一声不吭（模拟半开的连接）。
   bool sseSilent = false;
 
@@ -73,6 +77,24 @@ class FakeSite {
     final resp = req.response;
     if (path.endsWith('/teleop')) {
       await _teleop(req, code);
+      return;
+    }
+    if (hang.contains(path)) {
+      await Future<void>.delayed(const Duration(seconds: 20));
+      return;
+    }
+    if (cut.contains(path)) {
+      resp.contentLength = 1000;
+      final sock = await resp.detachSocket(); // 头（说好 1000 字节）发出去了
+      sock.add(List<int>.filled(10, 1));
+      await sock.flush();
+      sock.destroy();
+      return;
+    }
+    if (path == '/api/support-bundle' && code == 200) {
+      resp.headers.contentType = ContentType('application', 'gzip');
+      resp.add(List<int>.filled(5000, 9));
+      await resp.close();
       return;
     }
     if (path.endsWith('/preview.png') && code == 200) {

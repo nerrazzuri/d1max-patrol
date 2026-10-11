@@ -72,7 +72,7 @@ class FakeApi implements SiteApi {
       'certs': <String, dynamic>{'ok': true, 'detail': '证书都没到期'},
     },
   };
-  SiteError? healthError;
+  Object? healthError;
   Map<String, dynamic> versionsBody = <String, dynamic>{
     'site': <String, dynamic>{'version': '1.4.0', 'schema': 54, 'api_level': 1, 'min_app_level': 1},
     'robots': <dynamic>[
@@ -82,9 +82,11 @@ class FakeApi implements SiteApi {
       <String, dynamic>{'name': 'gina', 'kind': 'app', 'version': '1.0.0', 'api_level': 1, 'platform': 'android', 'last_used': 1},
     ],
   };
-  SiteError? versionsError;
-  SiteError? bundleError;
+  Object? versionsError;
+  /// 诊断包取不到时抛的：不只是包好的 SiteError，也可以是别的（页面什么都得接住）。
+  Object? bundleError;
   Completer<void>? healthGate;
+  Completer<void>? versionsGate;
   @override
   Future<Map<String, dynamic>> health() async {
     calls.add('health');
@@ -94,6 +96,7 @@ class FakeApi implements SiteApi {
   }
   @override
   Future<Map<String, dynamic>> versions() async {
+    if (versionsGate != null) await versionsGate!.future;
     if (versionsError != null) throw versionsError!;
     return versionsBody;
   }

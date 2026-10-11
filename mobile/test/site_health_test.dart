@@ -1,4 +1,5 @@
 // C-B4：手机上的站点体检页、保存诊断包、登录时报 App 版本。
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -9,6 +10,7 @@ import 'package:d1max_patrol/ui/theme.dart';
 import 'package:d1max_patrol/ui/widget/alarm_widgets.dart';
 import 'package:d1max_patrol/ui/widget/bar_actions.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi;
@@ -190,6 +192,117 @@ void main() {
     final msg = t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data!;
     expect(msg, contains('诊断包没存上：盘满了'));
     expect(msg, isNot(contains('存好了')));
+  });
+
+  for (final (name, err) in <(String, Object)>[
+    ('连不上', const SocketException('Connection reset by peer')),
+    ('超时', TimeoutException('no reply')),
+    ('握手失败', const HandshakeException('bad cert')),
+    ('中途断了', const HttpException('Connection closed while receiving data')),
+    ('别的什么错', StateError('boom')),
+  ]) {
+    testWidgets('外审 I1 取诊断包时$name（没包成 SiteError 的）：说没存上，按钮放开，再按一次能存', (t) async {
+      final api = FakeApi('admin')..bundleError = err;
+      final saved = await _open(t, api);
+      await t.ensureVisible(find.byKey(SiteHealthPage.bundleKey));
+      await t.tap(find.byKey(SiteHealthPage.bundleKey));
+      await t.pumpAndSettle();
+      expect(t.takeException(), isNull, reason: '错不许漏出页面');
+      expect(saved, isEmpty);
+      expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, startsWith('诊断包没存上'));
+      expect(find.text('正在存…'), findsNothing);
+      expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNotNull);
+      api.bundleError = null;
+      await t.tap(find.byKey(SiteHealthPage.bundleKey));
+      await t.pumpAndSettle();
+      expect(saved.length, 1);
+      expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, startsWith('存好了'));
+    });
+  }
+
+  testWidgets('外审 I1 找存盘目录的插件坏了（不是文件错）：一样说没存上、按钮放开', (t) async {
+    final api = FakeApi('admin');
+    await _open(t, api, where: (_) => throw MissingPluginException('no path_provider'));
+    await t.ensureVisible(find.byKey(SiteHealthPage.bundleKey));
+    await t.tap(find.byKey(SiteHealthPage.bundleKey));
+    await t.pumpAndSettle();
+    expect(t.takeException(), isNull);
+    expect(t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data, startsWith('诊断包没存上'));
+    expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNotNull);
+  });
+
+  testWidgets('存的时候：按钮写正在存、按不了；存完放开', (t) async {
+    final api = FakeApi('admin');
+    final gate = Completer<String>();
+    _portrait(t);
+    await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteHealthPage(api: api, save: (n, b) => gate.future)));
+    await t.pumpAndSettle();
+    await t.ensureVisible(find.byKey(SiteHealthPage.bundleKey));
+    await t.tap(find.byKey(SiteHealthPage.bundleKey));
+    await t.pump();
+    expect(find.text('正在存…'), findsOneWidget);
+    expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNull);
+    gate.complete('/x/y.tar.gz');
+    await t.pumpAndSettle();
+    expect(find.text('正在存…'), findsNothing);
+    expect(t.widget<OutlinedButton>(find.byKey(SiteHealthPage.bundleKey)).onPressed, isNotNull);
+  });
+
+  testWidgets('外审 M1 一刷新就撤掉上一次的结论、写正在读；体检坏了马上说，不等版本一览', (t) async {
+    final api = FakeApi('admin');
+    await _open(t, api);
+    expect((t.widget<ListTile>(find.byKey(SiteHealthPage.overallKey)).title as Text).data, '各项都正常');
+    api
+      ..healthGate = Completer<void>()
+      ..versionsGate = Completer<void>();
+    await t.tap(find.byKey(SiteHealthPage.refreshKey));
+    await t.pump();
+    // 两个都还没回来：上一次的「各项都正常」已经不在了
+    expect(find.byKey(SiteHealthPage.overallKey), findsNothing);
+    expect(find.text('各项都正常'), findsNothing);
+    expect(find.byKey(SiteHealthPage.checkKey('db')), findsNothing);
+    expect(find.text('狗上的软件'), findsNothing);
+    expect(find.byKey(SiteHealthPage.loadingKey), findsOneWidget);
+    // 体检坏了、版本一览还卡着：错马上显示
+    api.healthError = const SocketException('down');
+    api.healthGate!.complete();
+    await t.pump();
+    await t.pump();
+    expect(find.textContaining('站点体检没读到'), findsOneWidget);
+    expect(find.byKey(SiteHealthPage.loadingKey), findsNothing);
+    expect(find.byKey(SiteHealthPage.overallKey), findsNothing);
+    expect(find.text('狗上的软件'), findsNothing, reason: '版本一览还没回来');
+    api.versionsGate!.complete();
+    await t.pump();
+    await t.pump();
+    expect(find.text('狗上的软件'), findsOneWidget);
+    expect(find.textContaining('站点体检没读到'), findsOneWidget);
+  });
+
+  testWidgets('外审 M1 反过来：版本一览卡着，体检读到了就先显示', (t) async {
+    final api = FakeApi('admin')..versionsGate = Completer<void>();
+    _portrait(t);
+    await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteHealthPage(api: api, save: (n, b) async => n)));
+    await t.pump();
+    await t.pump();
+    expect(find.byKey(SiteHealthPage.overallKey), findsOneWidget);
+    expect(find.byKey(SiteHealthPage.loadingKey), findsNothing);
+    expect(find.text('狗上的软件'), findsNothing);
+    api.versionsGate!.complete();
+    await t.pumpAndSettle();
+    expect(find.text('狗上的软件'), findsOneWidget);
+  });
+
+  testWidgets('正在读的时候刷新按钮按不了（不会同时问两次）', (t) async {
+    final api = FakeApi('admin')..healthGate = Completer<void>();
+    _portrait(t);
+    await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteHealthPage(api: api, save: (n, b) async => n)));
+    await t.pump();
+    expect(t.widget<IconButton>(find.byKey(SiteHealthPage.refreshKey)).onPressed, isNull);
+    api.healthGate!.complete();
+    await t.pumpAndSettle();
+    expect(t.widget<IconButton>(find.byKey(SiteHealthPage.refreshKey)).onPressed, isNotNull);
+    expect(api.calls.where((c) => c == 'health').length, 1);
   });
 
   testWidgets('入口：管理员的菜单里有「站点体检」，点了进去；保安、业主没有', (t) async {
