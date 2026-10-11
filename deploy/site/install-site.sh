@@ -139,8 +139,11 @@ if [[ $RECOVER -eq 1 ]]; then
     sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR restore <备份目录> --key /etc/d1max-site/backup.key
   恢复的结果 ok 为 true 了再起服务:
     sudo systemctl start d1max-mosquitto d1max-site
-  核对站点证书指纹跟原来一样:
-    sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR fingerprint
+  自检,不能有 FAIL:
+    sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR selfcheck
+  跟换主机前记的那份清点比(站点证书指纹要一样):
+    sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR inventory --compare <before.json>
+步骤见 docs/备份恢复与灾备演练.md 第四节。
 TXT
   exit 0
 fi
@@ -149,9 +152,9 @@ systemctl enable --now d1max-mosquitto.service d1max-site.service
 cat <<TXT
 装好了。接下来:
   sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR add-admin <名字>
-  sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR enroll <robot_id>
-  证书包在 $HOME_DIR/ca/issued/<robot_id>/,拷到狗上:
-    ca.crt robot.crt robot.key → /etc/d1max/tls/   registration.json evidence-pub.key → /etc/d1max/
+  sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR selfcheck        # 不能有 FAIL
+  开通一台狗(出一行 24 小时有效的开通码,狗上 provision --code 领证书包):
+    sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR enroll <robot_id> --code
 
 **三把密钥现在就离线另存一份**(U 盘、保险柜;三把都不在备份里):
   /etc/d1max-site/backup.key   备份是用它加密的:站点主机坏了、没有它,备份就解不开(d1max-site backup-open)
@@ -159,5 +162,7 @@ cat <<TXT
                                不然库能打开、口令解不开(摄像头连不上、事件源验签全拒)
   /etc/d1max-site/evidence.key 狗上的照片、录像是用它的公钥封的(W30b):丢了它,封着传上来、还没解开的
                                就再也解不开(d1max-site evidence-open 补解)
-恢复步骤见 docs/W30-完工报告.md「换新主机恢复」。
+三把一起导成一个带口令的托管包更省事:
+  sudo -u d1max-site $VENV/bin/d1max-site --home $HOME_DIR keys-export <U 盘上的文件>
+恢复步骤见 docs/备份恢复与灾备演练.md 第四节。
 TXT

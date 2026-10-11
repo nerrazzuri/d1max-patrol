@@ -1104,6 +1104,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="站点证书里的主机名或 IP(狗与手机用它连站点),可给多个")
     i.add_argument("--broker-port", type=int, default=8883)
     sub.add_parser("fingerprint", help="打印站点服务证书的 SHA-256(手机添加站点时核对)")
+    sc = sub.add_parser("selfcheck", help="装完自检(H6):逐条 PASS / WARN / FAIL,有 FAIL 退出码 1")
+    sc.add_argument("--api-port", type=int, default=8443)
     pc = sub.add_parser("pair-code",
                         help="出手机添加站点用的配对码(App V2;手机上粘贴,"
                              "或在值班台 System 页扫二维码)")
@@ -1237,6 +1239,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             cmd_init(home, args.site_id, args.hostname, args.broker_port)
             print(f"站点目录建好了: {home}")
             print(f"站点证书指纹(手机添加站点时核对):{cmd_fingerprint(home)}")
+        elif args.cmd == "selfcheck":
+            from d1max_site import selfcheck as sc_mod
+            checks = sc_mod.selfcheck(home, _load(home), api_port=args.api_port)
+            print(sc_mod.render(checks))
+            return 1 if any(c.level == "FAIL" for c in checks) else 0
         elif args.cmd == "fingerprint":
             print(cmd_fingerprint(home))
         elif args.cmd == "pair-code":
