@@ -868,7 +868,8 @@ class _Handler(TlsHandlerMixin):
         except PairingError as exc:
             raise HttpError(400, str(exc)) from exc
         from d1max_site.pairing import check_url
-        self._send_json(200, {"code": code, "name": name[:64], "url": check_url(url), "fingerprint": fp})
+        self._send_json(200, {"code": code, "name": name[:64], "url": check_url(url),
+                              "fingerprint": fp})
 
     def _admin_robot(self, method: str, robot_id: str | None, action: str | None) -> None:
         """登记新狗并出开通码、给已登记的狗重出开通码、吊销(商业化 B1b,``manage``)。跟命令行

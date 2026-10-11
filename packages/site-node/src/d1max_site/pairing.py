@@ -1,9 +1,9 @@
 """手机扫码添加站点(App V2):配对码 = 站点名 + 地址 + 站点服务证书指纹,一行字,可以画成二维码。
 
-- 形状:``D1MAXSITE1.<base64url(JSON)>``,JSON 是 ``{"n": 站点名, "u": 地址, "f": 指纹}``。跟狗的开通码
-  (``D1MAX1.``,:mod:`d1max_site.provision`)前缀不同,扫错了当场认得出来。
-- **里面没有任何秘密**:没有账号、口令、令牌。指纹是公开的(连上站点谁都看得到证书),配对码只是省得人手抄
-  64 位十六进制。手机扫了以后照样要输账号口令登录。
+- 形状:``D1MAXSITE1.<base64url(JSON)>``,JSON 是 ``{"n": 站点名, "u": 地址, "f": 指纹}``。
+  跟狗的开通码(``D1MAX1.``,:mod:`d1max_site.provision`)前缀不同,扫错了当场认得出来。
+- **里面没有任何秘密**:没有账号、口令、令牌。指纹是公开的(连上站点谁都看得到证书),配对码只是
+  省得人手抄 64 位十六进制。手机扫了以后照样要输账号口令登录。
 - 地址是**手机要连的地址**,站点自己不知道(它不知道自己在外面叫什么、过没过 VPN):网页上由值班台的地址
   带出来、可以改;命令行自己给。只收 ``https://主机[:端口]``,不带路径、账号、查询串。
 - 信任从哪儿来:配对码要从登录后的值班台(或站点机器的命令行)拿。别人给的二维码能把手机指到别的站点去,
@@ -55,8 +55,8 @@ def encode(name: str, url: str, fingerprint: str) -> str:
     name = name.strip()
     if not name or len(name) > MAX_NAME:
         raise PairingError(f"站点名要有,最长 {MAX_NAME} 个字")
-    raw = json.dumps({"n": name, "u": check_url(url), "f": fp}, separators=(",", ":"), sort_keys=True,
-                     ensure_ascii=False).encode("utf-8")
+    raw = json.dumps({"n": name, "u": check_url(url), "f": fp}, separators=(",", ":"),
+                     sort_keys=True, ensure_ascii=False).encode("utf-8")
     return PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
