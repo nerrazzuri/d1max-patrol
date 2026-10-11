@@ -139,7 +139,15 @@ export function patrolsCsv(rows: PatrolRow[]): string {
     rows.map((r) => [stamp(r.scheduled_ms), r.entry_id, r.outcome, r.robot_id ?? "", r.result ?? "", r.note]));
 }
 
-/** 文件名里的时间段:`2026-10-11_0000-2400`。 */
-export function fileTag(date: string, from: string, to: string): string {
-  return `${date}_${from.replace(":", "")}-${to.replace(":", "")}`;
+/** 文件名里的时间段,**按已经读到的那份报表**的头和尾写(不按筛选框里正在改的):
+ * `2026-10-11_0000-0000`(开头的日期、起止钟点)。 */
+export function fileTag(sinceMs: number, untilMs: number): string {
+  const a = stamp(sinceMs), b = stamp(untilMs);
+  return `${a.slice(0, 10)}_${a.slice(11, 16).replace(":", "")}-${b.slice(11, 16).replace(":", "")}`;
+}
+
+/** 读到的这份报表是不是现在选的时间段的(C-B3 外审 I2):不是就不许显示、打印、导出 ——
+ * 换了日期、新的还没读回来时,旧的一份不能顶着新的名字出去。 */
+export function matches(d: { since_ms: number; until_ms: number } | null, p: { since: number; until: number } | null): boolean {
+  return d != null && p != null && d.since_ms === p.since && d.until_ms === p.until;
 }

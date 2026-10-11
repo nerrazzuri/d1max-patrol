@@ -9,7 +9,9 @@ import { hms } from "./data";
 import { alertTitle, lang, t } from "./i18n";
 import { duration, type Alert } from "./model";
 import {
+  applyKeep,
   ascending,
+  belongs,
   covered,
   dateInput,
   dayRange,
@@ -45,6 +47,8 @@ export function RecordingsPage(props: { robots: string[]; role: string; now: num
   const video = useRef<HTMLVideoElement>(null);
   const seek = useRef<number>(0);
   const want = useRef<number | null>(props.at);
+  /** 选择(狗、哪一路、哪一天)换了几次:在途的请求回来时对不上就不许动页面(C-B3 外审 I1)。 */
+  const sel = useRef(0);
   const range = dayRange(date);
 
   useEffect(() => {
@@ -52,6 +56,7 @@ export function RecordingsPage(props: { robots: string[]; role: string; now: num
   }, [props.robots.join(",")]);
 
   useEffect(() => {
+    sel.current++;
     setRows(null);
     setCur(null);
     setState("loading");
@@ -122,14 +127,19 @@ export function RecordingsPage(props: { robots: string[]; role: string; now: num
 
   const keep = async () => {
     if (!cur) return;
+    const gen = sel.current, id = cur.id;
     try {
-      const d = await api<{ recording: Recording }>("POST", `/api/recordings/${cur.id}/keep`, { keep: !cur.keep });
-      setCur(d.recording);
-      setRows((rs) => rs && rs.map((r) => (r.id === d.recording.id ? d.recording : r)));
+      const d = await api<{ recording: Recording }>("POST", `/api/recordings/${id}/keep`, { keep: !cur.keep });
+      // 只改问的那一段;回来时选择换了就丢掉。正在放的换成了别的段:不许被这个回包换回去
+      const current = gen === sel.current;
+      setRows((rs) => applyKeep({ rows: rs, cur: null }, id, d.recording, current).rows);
+      setCur((c) => applyKeep({ rows: null, cur: c }, id, d.recording, current).cur);
     } catch (e) {
-      props.say(t("failed", { why: e instanceof Error ? e.message : String(e) }));
+      if (gen === sel.current) props.say(t("failed", { why: e instanceof Error ? e.message : String(e) }));
     }
   };
+  // 画面只放、只标**这台狗这一路**的段(段自己带着是谁的)
+  const shown = belongs(cur, robot, cam) ? cur : null;
 
   const total = range ? covered(sp, range.since, range.until) : 0;
   const kept = (rows ?? []).filter((r) => r.keep).length;
@@ -163,36 +173,36 @@ export function RecordingsPage(props: { robots: string[]; role: string; now: num
       </div>
 
       <div class="recview">
-        <div class={cur && !broken ? "well rec" : "well rec idle"}>
-          {cur && !broken && (
-            <video ref={video} key={cur.id} class="feed" src={`/api/recordings/${cur.id}/video`} autoplay playsInline controls
-              aria-label={`${camLabel(robot, cam)} ${t("recorded")}`}
+        <div class={shown && !broken ? "well rec" : "well rec idle"}>
+          {shown && !broken && (
+            <video ref={video} key={shown.id} class="feed" src={`/api/recordings/${shown.id}/video`} autoplay playsInline controls
+              aria-label={`${camLabel(shown.robot_id, shown.camera as Cam)} ${t("recorded")}`}
               onLoadedMetadata={(e) => {
                 const v = e.currentTarget as HTMLVideoElement;
                 v.playbackRate = speed;
                 if (seek.current > 0) v.currentTime = Math.min(seek.current, Math.max(0, v.duration - 0.1));
               }}
-              onTimeUpdate={(e) => setHead(cur.start_ms + (e.currentTarget as HTMLVideoElement).currentTime * 1000)}
-              onEnded={() => step(nextSegment(rows ?? [], cur))}
+              onTimeUpdate={(e) => setHead(shown.start_ms + (e.currentTarget as HTMLVideoElement).currentTime * 1000)}
+              onEnded={() => step(nextSegment(rows ?? [], shown))}
               onError={() => setBroken(true)} />
           )}
-          {(!cur || broken) && (
+          {(!shown || broken) && (
             <p class="empty">
               {broken ? t("recBroken") : state === "loading" ? t("loading") : state === "off" ? t("recOff") : state === "failed" ? t("recFailed")
                 : rows && rows.length === 0 ? t("recNone") : t("recPick")}
             </p>
           )}
-          {cur && (
+          {shown && (
             <div class="osd top">
-              <span>{camLabel(robot, cam)}</span>
+              <span>{camLabel(shown.robot_id, shown.camera as Cam)}</span>
               <span>{date} {head != null ? hms(head) : ""}</span>
             </div>
           )}
-          {cur && !broken && <div class="osd bottom recosd"><span class="osd-status">{t("recorded")}{cur.keep ? ` · ${t("recKept")}` : ""}</span></div>}
+          {shown && !broken && <div class="osd bottom recosd"><span class="osd-status">{t("recorded")}{shown.keep ? ` · ${t("recKept")}` : ""}</span></div>}
         </div>
         <div class="recctl">
-          <button type="button" class="btn sm" disabled={!cur || !prevSegment(rows ?? [], cur)} onClick={() => cur && step(prevSegment(rows ?? [], cur))}>{t("recPrev")}</button>
-          <button type="button" class="btn sm" disabled={!cur || !nextSegment(rows ?? [], cur)} onClick={() => cur && step(nextSegment(rows ?? [], cur))}>{t("recNext")}</button>
+          <button type="button" class="btn sm" disabled={!shown || !prevSegment(rows ?? [], shown)} onClick={() => shown && step(prevSegment(rows ?? [], shown))}>{t("recPrev")}</button>
+          <button type="button" class="btn sm" disabled={!shown || !nextSegment(rows ?? [], shown)} onClick={() => shown && step(nextSegment(rows ?? [], shown))}>{t("recNext")}</button>
           <div class="seg" role="group" aria-label={t("recSpeed")}>
             {SPEEDS.map((s) => (
               <button key={s} type="button" aria-pressed={s === speed}
@@ -200,8 +210,8 @@ export function RecordingsPage(props: { robots: string[]; role: string; now: num
             ))}
           </div>
           {canReview(props.role) && (
-            <button type="button" class="btn sm" aria-pressed={!!cur?.keep} disabled={!cur} onClick={keep}>
-              {cur?.keep ? t("recUnkeep") : t("recKeep")}
+            <button type="button" class="btn sm" aria-pressed={!!shown?.keep} disabled={!shown} onClick={keep}>
+              {shown?.keep ? t("recUnkeep") : t("recKeep")}
             </button>
           )}
           <span class="muted small">{t("recKeepHint")}</span>

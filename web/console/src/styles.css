@@ -309,7 +309,6 @@ input[type="time"], input[type="date"] { color-scheme: dark; }
 /* 报表页(C-B3b) */
 .report { display: flex; flex-direction: column; gap: 16px; }
 .sheet { display: flex; flex-direction: column; gap: 24px; max-width: 1200px; }
-.sheet.dim { opacity: 0.5; }
 .sheet h1 { font-size: 22px; line-height: 28px; margin: 0; }
 .sheet h2 { font-size: 18px; line-height: 24px; margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--c-rule); }
 .sheet p { margin: 4px 0; }

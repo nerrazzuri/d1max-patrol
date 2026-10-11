@@ -6,9 +6,9 @@ import { api, ApiError, onUnauthorized, setFetch } from "./api";
 import { alertTitle, DICTS, initialLang, knownKinds, lang, tr } from "./i18n";
 import { heading, onMap, toPx } from "./mapview";
 import { daysText, toMap } from "./zonesadmin";
-import { ascending, clockSeconds, covered, dateInput, dayRange, firstAfter, minuteOf, nextSegment, prevSegment, recordingLink, segmentAt, spans, type Recording } from "./recordings";
+import { applyKeep, ascending, belongs, clockSeconds, covered, dateInput, dayRange, firstAfter, minuteOf, nextSegment, prevSegment, recordingLink, segmentAt, spans, type Recording } from "./recordings";
 import { canReview } from "./recpage";
-import { alarmsCsv, csv, csvCell, fileTag, incidentsCsv, minutes, patrolsCsv, period, secondsText, stamp, type AlarmRow } from "./reports";
+import { alarmsCsv, csv, csvCell, fileTag, incidentsCsv, matches, minutes, patrolsCsv, period, secondsText, stamp, type AlarmRow } from "./reports";
 import { outcomeText } from "./reportpage";
 import { abnormal, alarmState, canDispatch, duration, openAlerts, queue, robotMap, robotState, SIREN_LEVEL, sirenState, wallOrder, type Alert, type Robot } from "./model";
 
@@ -144,7 +144,28 @@ describe("reports", () => {
     const ms = new Date(2026, 9, 11, 2, 4, 9).getTime();
     expect(stamp(ms)).toBe("2026-10-11 02:04:09");
     expect(stamp(null)).toBe("");
-    expect(fileTag("2026-10-11", "20:00", "08:00")).toBe("2026-10-11_2000-0800");
+    const night = period("2026-10-11", "20:00", "08:00")!;
+    expect(fileTag(night.since, night.until)).toBe("2026-10-11_2000-0800");
+    const whole = period("2026-10-11", "00:00", "00:00")!;
+    expect(fileTag(whole.since, whole.until)).toBe("2026-10-11_0000-0000");
+  });
+  it("读到的报表是不是现在选的这一段:头尾都得对上;没读到、没选好都不算", () => {
+    const d = { since_ms: 100, until_ms: 200 };
+    expect(matches(d, { since: 100, until: 200 })).toBe(true);
+    expect(matches(d, { since: 100, until: 201 })).toBe(false);
+    expect(matches(d, { since: 99, until: 200 })).toBe(false);
+    expect(matches(null, { since: 100, until: 200 })).toBe(false);
+    expect(matches(d, null)).toBe(false);
+  });
+  it("「留着」的回包:只改问的那一段;选择换了、回的不是那一段都不动;正在放别的段不换回去", () => {
+    const r = (id: number, keep = 0): Recording => ({ id, robot_id: "A", camera: "front", start_ms: id, bytes: 1, keep });
+    const s = { rows: [r(1), r(2)], cur: r(2) };
+    expect(applyKeep(s, 1, r(1, 1), true)).toEqual({ rows: [r(1, 1), r(2)], cur: r(2) });
+    expect(applyKeep(s, 2, r(2, 1), true)).toEqual({ rows: [r(1), r(2, 1)], cur: r(2, 1) });
+    expect(applyKeep(s, 1, r(1, 1), false)).toBe(s);
+    expect(applyKeep(s, 1, r(2, 1), true)).toBe(s);
+    expect(applyKeep({ rows: null, cur: null }, 1, r(1, 1), true)).toEqual({ rows: null, cur: null });
+    expect([belongs(r(1), "A", "front"), belongs(r(1), "B", "front"), belongs(r(1), "A", "back"), belongs(null, "A", "front")]).toEqual([true, false, false, false]);
   });
   it("三张 CSV 的列:告警带多久确认(钟差当 0、没确认留空);入侵事件、巡逻的空值留空", () => {
     const t0 = new Date(2026, 9, 11, 2, 0, 0).getTime();

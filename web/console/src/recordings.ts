@@ -89,6 +89,22 @@ export function covered(sp: { from: number; to: number }[], since: number, until
   return sp.reduce((s, x) => s + Math.max(0, Math.min(x.to, until) - Math.max(x.from, since)), 0);
 }
 
+/** 「留着」的回包怎么用(C-B3 外审 I1):只改**问的那一段** —— 列表里那一行,和正在放的那一段(如果还是它)。
+ * 回来的不是问的那一段、选择已经换了(`current` 是 false):什么都不动。绝不因为一个回包换掉正在放的段。 */
+export function applyKeep<S extends { rows: Recording[] | null; cur: Recording | null }>(s: S, reqId: number, got: Recording, current: boolean): S {
+  if (!current || got.id !== reqId) return s;
+  return {
+    ...s,
+    rows: s.rows && s.rows.map((r) => (r.id === reqId ? got : r)),
+    cur: s.cur && s.cur.id === reqId ? got : s.cur,
+  };
+}
+
+/** 这一段是不是现在选的这台狗、这一路的:不是就不放、不往画面上写字(证据不许标错来源)。 */
+export function belongs(rec: Recording | null, robot: string, cam: string): rec is Recording {
+  return rec != null && rec.robot_id === robot && rec.camera === cam;
+}
+
 /** 从一条告警去录像页:那台狗、告警前 10 秒起。 */
 export function recordingLink(a: { robot: string; first_ms: number }): string {
   return `#/recordings?robot=${encodeURIComponent(a.robot)}&t=${Math.max(1, a.first_ms - 10_000)}`;

@@ -7,7 +7,7 @@ import type { Me } from "./app";
 import { hms } from "./data";
 import { alertTitle, DICTS, lang, t, type Key } from "./i18n";
 import { dateInput } from "./recordings";
-import { alarmsCsv, fileTag, incidentsCsv, patrolsCsv, period, secondsText, stamp, type Daily } from "./reports";
+import { alarmsCsv, fileTag, incidentsCsv, matches, patrolsCsv, period, secondsText, stamp, type Daily } from "./reports";
 
 /** 入侵事件、排程的结果:认得的翻成人话,不认得的原样摆(站点以后可能多出新的)。 */
 export function outcomeText(v: string | null): string {
@@ -46,12 +46,15 @@ export function ReportsPage({ me, now }: { me: Me; now: number }) {
   const [date, setDate] = useState(dateInput(now));
   const [from, setFrom] = useState("00:00");
   const [to, setTo] = useState("00:00");
-  const [d, setD] = useState<Daily | null>(null);
+  const [got, setD] = useState<Daily | null>(null);
   const [state, setState] = useState<"loading" | "ok" | "failed" | "bad">("loading");
   const [madeAt, setMadeAt] = useState(now);
   const [nonce, setNonce] = useState(0);
   const p = period(date, from, to);
   void lang.value;
+  // 读到的那一份只在它就是现在选的时间段时才算数(外审 I2):换了日期、新的还没回来,旧的不显示、
+  // 不能打印、不能导出。文件名按读到的那一份的头尾写,不按筛选框。
+  const d = matches(got, p) ? got : null;
 
   useEffect(() => {
     if (!p) {
@@ -76,7 +79,7 @@ export function ReportsPage({ me, now }: { me: Me; now: number }) {
     return () => { live = false; };
   }, [p?.since, p?.until, nonce]);
 
-  const tag = fileTag(date, from, to);
+  const tag = d ? fileTag(d.since_ms, d.until_ms) : "";
   const a = d?.alarms;
   return (
     <div class="report">
@@ -102,10 +105,10 @@ export function ReportsPage({ me, now }: { me: Me; now: number }) {
 
       {state === "bad" && <p class="empty">{t("repBadPeriod")}</p>}
       {state === "failed" && <p class="empty">{t("repFailed")}</p>}
-      {state === "loading" && !d && <p class="empty">{t("loading")}</p>}
+      {state !== "bad" && state !== "failed" && !d && <p class="empty">{t("loading")}</p>}
 
       {d && a && p && (
-        <article class={state === "loading" ? "sheet dim" : "sheet"}>
+        <article class="sheet">
           <header class="sheet-head">
             <h1>{t("repTitle")} · {me.site_name}</h1>
             <p class="mono">{stamp(d.since_ms)} → {stamp(d.until_ms)}</p>
@@ -187,7 +190,6 @@ export function ReportsPage({ me, now }: { me: Me; now: number }) {
             <h2>{t("repPatrols")}</h2>
             <p>{t("repPatrolTotal", { n: d.patrols.total })} <Counts by={d.patrols.by_outcome} /></p>
             {d.patrols.started > 0 && <p>{t("repStartedResults", { n: d.patrols.started })} <Counts by={d.patrols.by_result} /></p>}
-            <p class="muted">{t("repRuns", { n: d.runs.total, f: d.runs.finished, p: d.runs.photos })}</p>
             {d.patrols.rows.length > 0 && (
               <table class="reptable">
                 <caption>{d.patrols.truncated ? t("repTruncated", { n: d.patrols.rows.length }) : ""}</caption>
@@ -202,6 +204,11 @@ export function ReportsPage({ me, now }: { me: Me; now: number }) {
                 </tbody>
               </table>
             )}
+          </section>
+
+          <section>
+            <h2>{t("repEvidence")}</h2>
+            <p>{t("repRuns", { n: d.runs.total, f: d.runs.finished, p: d.runs.photos })}</p>
           </section>
 
           <footer class="muted small">{t("repNotIncluded")}</footer>
