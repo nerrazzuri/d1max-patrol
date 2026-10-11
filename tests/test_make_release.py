@@ -49,7 +49,9 @@ def world(tmp_path):
 
 
 def _args(repo, key, out, *more):
-    return ["--repo", str(repo), "--key", str(key), "--out", str(out), "--skip-android", *more]
+    gate = [] if "--gate" in more else ["--no-gate"]
+    return ["--repo", str(repo), "--key", str(key), "--out", str(out), "--skip-android",
+            *gate, *more]
 
 
 def test_条件齐了_出签好的包和发行记录(world, capsys):
@@ -71,8 +73,9 @@ def test_条件齐了_出签好的包和发行记录(world, capsys):
 def _parse(argv):
     import argparse
     p = argparse.ArgumentParser()
-    for name in ("--key", "--out", "--wheels", "--repo"):
+    for name in ("--key", "--out", "--wheels", "--repo", "--gate", "--write-gate"):
         p.add_argument(name, default=None)
+    p.add_argument("--no-gate", action="store_true")
     p.add_argument("--build-number", type=int, default=None)
     p.add_argument("--skip-android", action="store_true")
     return p.parse_args(argv)
@@ -147,7 +150,7 @@ def test_轮子目录是空的_不发(world, capsys, tmp_path):
 
 def test_要编安卓_没有正式_keystore_没给构建号_不发(world, capsys):
     repo, key, out = world
-    argv = ["--repo", str(repo), "--key", str(key), "--out", str(out)]
+    argv = ["--repo", str(repo), "--key", str(key), "--out", str(out), "--no-gate"]
     assert mr.run(_parse(argv), now_ms=NOW) == 2
     err = capsys.readouterr().err
     assert "没有 mobile/android/key.properties" in err and "--build-number" in err
@@ -192,6 +195,100 @@ def test_签完验不过_半成品删掉(world, monkeypatch):
     with pytest.raises(mr.ReleaseFail, match="验不过"):
         mr.make_package(repo, key, out, wheels=None, now_ms=NOW)
     assert not [p for p in out.iterdir() if p.is_dir()]
+
+
+def _gate(world, tmp_path, *more) -> Path:
+    dest = tmp_path / "gate" / "gate.json"
+    assert mr.run(_parse(["--repo", str(world[0]), "--write-gate", str(dest), *more]),
+                  now_ms=NOW - 5000) == 0
+    return dest
+
+
+def test_发行闸_过了闸的同一份_发得出去_记录里写着(world, tmp_path, capsys):
+    repo, key, out = world
+    dest = _gate(world, tmp_path)
+    gate = json.loads(dest.read_text("utf-8"))
+    assert gate["kind"] == "d1max-release-gate" and len(gate["commit"]) == 40
+    assert not gate["wheels"]
+    assert mr.run(_parse(["--repo", str(repo), "--key", str(key), "--out", str(out),
+                          "--skip-android", "--gate", str(dest)]), now_ms=NOW) == 0
+    pkg = next(p for p in out.iterdir() if p.is_dir())
+    rec = json.loads((out / f"{pkg.name}.release-record.json").read_text("utf-8"))
+    assert rec["gate"] == {"created_ms": NOW - 5000, "run": None}
+    assert rec["content_sha256"] == gate["content_sha256"], "隔了一阵、换了目录再打,指纹要一样"
+    assert "发行闸        过了" in capsys.readouterr().out
+
+
+def test_发行闸_不给记录不发_明说不过闸才发_记录里写明(world, capsys):
+    repo, key, out = world
+    argv = ["--repo", str(repo), "--key", str(key), "--out", str(out), "--skip-android"]
+    assert mr.run(_parse(argv), now_ms=NOW) == 2
+    assert "--gate" in capsys.readouterr().err and not out.exists()
+    assert mr.run(_parse([*argv, "--no-gate"]), now_ms=NOW) == 0
+    pkg = next(p for p in out.iterdir() if p.is_dir())
+    assert json.loads((out / f"{pkg.name}.release-record.json").read_text("utf-8"))["gate"] is None
+    assert "没过闸" in capsys.readouterr().out
+
+
+def test_发行闸_过的是别的提交_不发(world, tmp_path, capsys):
+    repo = world[0]
+    dest = _gate(world, tmp_path)
+    (repo / "src/new.py").write_text("x = 1\n", "utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "after gate")
+    assert "发行闸过的是提交" in _refused(world, capsys, "--gate", str(dest))
+
+
+def test_发行闸_同一个提交但打出来的包不一样_不发_半成品删掉(world, tmp_path, capsys):
+    repo, key, out = world
+    dest = _gate(world, tmp_path)
+    gate = json.loads(dest.read_text("utf-8"))
+    gate["content_sha256"] = "0" * 64
+    dest.write_text(json.dumps(gate), "utf-8")
+    assert mr.run(_parse(_args(repo, key, out, "--gate", str(dest))), now_ms=NOW) == 2
+    assert "指纹跟发行闸记的不一样" in capsys.readouterr().err
+    assert not [p for p in out.iterdir() if p.is_dir()]
+    assert not list(out.glob("*.release-record.json"))
+
+
+def test_发行闸_带没带轮子不一致_不发(world, tmp_path, capsys):
+    repo, key, out = world
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    (wheels / "a-1-py3-none-any.whl").write_bytes(b"w")
+    dest = _gate(world, tmp_path, "--wheels", str(wheels))
+    assert json.loads(dest.read_text("utf-8"))["wheels"] is True
+    assert mr.run(_parse(_args(repo, key, out, "--gate", str(dest))), now_ms=NOW) == 2
+    assert "--wheels 要跟闸一致" in capsys.readouterr().err
+
+
+def test_发行闸_记录读不了_不是闸的记录_不发(world, tmp_path, capsys):
+    bad = tmp_path / "x.json"
+    assert "读不了发行闸的记录" in _refused(world, capsys, "--gate", str(bad))
+    bad.write_text('{"kind": "else", "commit": "a", "content_sha256": "b"}', "utf-8")
+    assert "不是发行闸的记录" in _refused(world, capsys, "--gate", str(bad))
+
+
+def test_发行闸_工作区不干净不出记录(world, tmp_path, capsys):
+    (world[0] / "stray.py").write_text("x = 1\n", "utf-8")
+    dest = tmp_path / "gate.json"
+    assert mr.run(_parse(["--repo", str(world[0]), "--write-gate", str(dest)]), now_ms=NOW) == 2
+    assert not dest.exists() and "没提交的改动" in capsys.readouterr().err
+
+
+def test_发行闸的工作流_整套_ci_严格跑_点名的测试文件都在_不碰钥匙():
+    import yaml
+    wf = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text("utf-8"))
+    assert wf["jobs"]["ci"] == {"uses": "./.github/workflows/ci.yml", "with": {"strict": True}}
+    assert wf["jobs"]["gate"]["needs"] == "ci"
+    text = (ROOT / ".github/workflows/release.yml").read_text("utf-8")
+    assert "secrets." not in text, "钥匙不上 GitHub(决策 54)"
+    import re
+    named = re.findall(r"(?:packages|tests)/[\w/.-]+\.py", text)
+    assert len(named) >= 11 and all((ROOT / n).is_file() for n in named), named
+    ci = (ROOT / ".github/workflows/ci.yml").read_text("utf-8")
+    assert "continue-on-error: ${{ !inputs.strict }}" in ci
+    assert "group: ${{ github.workflow }}-${{ github.ref }}" in ci, "闸调进来不许顶掉平时那一趟"
 
 
 def test_CI_的安卓包是调试签名_发行脚本才要求正式钥匙():

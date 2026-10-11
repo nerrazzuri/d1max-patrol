@@ -4,6 +4,10 @@
     .venv/bin/python tools/make_release.py --key /media/usb/d1max-release.key --out ~/release-out \\
         --wheels dist/wheels-aarch64-py310 --build-number 12
 
+**发行闸**(.github/workflows/release.yml):要发的那个提交先在 GitHub 上过一遍闸(全套测试,集成层
+必过),闸出一份记录(提交、包指纹)。这里用 `--gate <那份记录>` 对:不是同一个提交、打出来的包
+指纹不一样,就不发。钥匙不上 GitHub,闸只管「这份代码测过了」,签名只在这台机器上做。
+
 一条命令做完:先把条件全查一遍(有一条不过就一个字节都不写),再打包、签名、验签,
 编正式签名的安卓包并核它不是调试签名,最后写一份发行记录和 SHA256SUMS。
 
@@ -21,6 +25,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -139,6 +144,49 @@ def parse_signer(text: str) -> tuple[str, str]:
     return dns[0], shas[0].lower()
 
 
+def read_gate(path: Path) -> dict[str, Any]:
+    try:
+        gate = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ReleaseFail(f"读不了发行闸的记录 {path}: {exc}") from exc
+    if not isinstance(gate, dict) or gate.get("kind") != "d1max-release-gate" \
+            or not isinstance(gate.get("commit"), str) \
+            or not isinstance(gate.get("content_sha256"), str):
+        raise ReleaseFail(f"{path} 不是发行闸的记录")
+    return gate
+
+
+def check_gate(gate: dict[str, Any], *, commit: str, content_sha256: str, wheels: bool) -> None:
+    """闸过的是不是就是手上要发的这一份。"""
+    if gate["commit"] != commit:
+        raise ReleaseFail(f"发行闸过的是提交 {gate['commit'][:12]},现在要发的是 {commit[:12]}")
+    if bool(gate.get("wheels")) != wheels:
+        raise ReleaseFail("发行闸打包时带没带离线轮子,跟这次不一样(--wheels 要跟闸一致)")
+    if gate["content_sha256"] != content_sha256:
+        raise ReleaseFail("打出来的包指纹跟发行闸记的不一样:"
+                          "这台机器上的代码或轮子跟闸测的不是同一份")
+
+
+def write_gate(repo: Path, dest: Path, *, wheels: Path | None, now_ms: int) -> dict[str, Any]:
+    """发行闸用:不签名,只打一遍包、记下提交和包指纹。工作区要干净。"""
+    if _git(repo, "status", "--porcelain"):
+        raise ReleaseFail("仓库里有没提交的改动:闸只认提交过的代码")
+    scratch = Path(tempfile.mkdtemp(prefix="d1max-gate-"))
+    try:
+        pkg = pack(repo, scratch, now_ms=now_ms, wheels=wheels)
+        manifest = json.loads((pkg / "release.json").read_text(encoding="utf-8"))
+    except ReleaseError as exc:
+        raise ReleaseFail(f"打包没成: {exc}") from exc
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    gate = {"kind": "d1max-release-gate", "commit": _git(repo, "rev-parse", "HEAD"),
+                    "content_sha256": manifest["content_sha256"], "version": manifest["version"],
+                    "wheels": wheels is not None, "created_ms": now_ms}
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(gate, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return gate
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -208,6 +256,20 @@ def write_record(out: Path, record: dict[str, Any], files: list[Path]) -> None:
 
 def run(args: argparse.Namespace, *, now_ms: int) -> int:
     repo = Path(args.repo).resolve()
+    if getattr(args, "write_gate", None):
+        wheels = Path(args.wheels).expanduser() if args.wheels else None
+        try:
+            gate = write_gate(repo, Path(args.write_gate).expanduser(), wheels=wheels,
+                              now_ms=now_ms)
+        except ReleaseFail as exc:
+            print(f"没成: {exc}", file=sys.stderr)
+            return 2
+        print(f"发行闸记录 {args.write_gate}")
+        print(f"提交 {gate['commit']}  指纹 {gate['content_sha256']}")
+        return 0
+    if not args.key or not args.out:
+        print("不能发行:\n  - 要给 --key 和 --out", file=sys.stderr)
+        return 2
     key = Path(args.key).expanduser()
     out = Path(args.out).expanduser()
     wheels = Path(args.wheels).expanduser() if args.wheels else None
@@ -215,6 +277,19 @@ def run(args: argparse.Namespace, *, now_ms: int) -> int:
     bad = preflight(repo, key, out, android=android, wheels=wheels)
     if android and args.build_number is None:
         bad.append("没给 --build-number:安卓靠它判断新旧,每发一版加一")
+    gate: dict[str, Any] | None = None
+    gate_arg = getattr(args, "gate", None)
+    if gate_arg:
+        try:
+            gate = read_gate(Path(gate_arg).expanduser())
+            head = _git(repo, "rev-parse", "HEAD")
+            if gate["commit"] != head:
+                bad.append(f"发行闸过的是提交 {gate['commit'][:12]},现在要发的是 {head[:12]}")
+        except (ReleaseFail, OSError) as exc:
+            bad.append(str(exc))
+    elif not getattr(args, "no_gate", False):
+        bad.append("没给 --gate <发行闸的记录>(先在 GitHub 上跑 release-gate;"
+                   "明知没过闸也要出包就加 --no-gate,发行记录里会写明)")
     if bad:
         print("不能发行:", file=sys.stderr)
         for b in bad:
@@ -224,12 +299,21 @@ def run(args: argparse.Namespace, *, now_ms: int) -> int:
     try:
         pkg = make_package(repo, key, out, wheels=wheels, now_ms=now_ms)
         manifest = json.loads((pkg / "release.json").read_text(encoding="utf-8"))
+        if gate is not None:
+            try:
+                check_gate(gate, commit=_git(repo, "rev-parse", "HEAD"),
+                           content_sha256=manifest["content_sha256"], wheels=wheels is not None)
+            except ReleaseFail:
+                shutil.rmtree(pkg, ignore_errors=True)
+                raise
         record: dict[str, Any] = {
             "package": manifest["name"], "version": manifest["version"],
             "content_sha256": manifest["content_sha256"],
             "commit": _git(repo, "rev-parse", "HEAD"),
             "release_key_id": relsign.key_id(repo / REPO_PUBKEY),
             "built_at_ms": now_ms, "android": None,
+            "gate": None if gate is None else {"created_ms": gate.get("created_ms"),
+                                               "run": gate.get("run")},
         }
         files: list[Path] = []
         if android:
@@ -254,6 +338,7 @@ def run(args: argparse.Namespace, *, now_ms: int) -> int:
         print(f"安卓证书      {record['android']['cert_sha256']}(第一次发行时抄下来,以后每次对)")
     else:
         print("安卓包        没编(--skip-android)")
+    print("发行闸        " + ("过了" if record["gate"] else "**没过闸**(--no-gate)"))
     print(f"发行记录      {out / (record['package'] + '.release-record.json')}")
     return 0
 
@@ -261,8 +346,12 @@ def run(args: argparse.Namespace, *, now_ms: int) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--key", required=True, help="发行私钥(离线保管的那一把)")
-    p.add_argument("--out", required=True, help="放发行物的目录(在仓库外面)")
+    p.add_argument("--key", default=None, help="发行私钥(离线保管的那一把)")
+    p.add_argument("--out", default=None, help="放发行物的目录(在仓库外面)")
+    p.add_argument("--gate", default=None, help="发行闸的记录(release-gate 工作流的产物 gate.json)")
+    p.add_argument("--no-gate", action="store_true", help="明知没过闸也出包(发行记录里写明)")
+    p.add_argument("--write-gate", default=None, metavar="FILE",
+                   help="发行闸自己用:不签名,只记下提交和包指纹")
     p.add_argument("--wheels", default=None, help="离线轮子目录(*.whl),拷进包里")
     p.add_argument("--build-number", type=int, default=None, help="安卓构建号,每发一版加一")
     p.add_argument("--skip-android", action="store_true", help="只出站点和狗的包,不编安卓")
