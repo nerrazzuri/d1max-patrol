@@ -103,6 +103,7 @@ void main() {
           'first_ms': t0, 'context': <String, dynamic>{}});
     await t.pumpWidget(MaterialApp(home: SiteAlertScenePage(api: api, alert: alert('A'))));
     await t.pumpAndSettle();
+    await t.ensureVisible(find.byKey(SiteAlertScenePage.videoKey));
     await t.tap(find.byKey(SiteAlertScenePage.videoKey));
     await t.pumpAndSettle();
     final page = t.widget<SiteRecordingsPage>(find.byType(SiteRecordingsPage));

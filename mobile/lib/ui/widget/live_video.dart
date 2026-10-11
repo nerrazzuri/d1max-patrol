@@ -645,7 +645,7 @@ class _LiveVideoState extends State<LiveVideo> {
   /// **不许画转圈。** 一直转圈的圈跟「连不上」长得一样，人分不出该等还是
   /// 该走过去看 —— 而这两件事在现场差着十分钟。
   Widget _panel(String title, String hint) => Container(
-        color: const Color(0xFF202124),
+        color: const Color(0xFF000000), // 画面的底是纯黑（规范 2.1 well）
         alignment: Alignment.center,
         padding: const EdgeInsets.all(16),
         // 画面小的时候（横屏遥控页中间那一栏、窄手机）整块等比缩小：字照样全看得到，不溢出。
@@ -663,7 +663,7 @@ class _LiveVideoState extends State<LiveVideo> {
                   const SizedBox(height: 8),
                   Text(hint,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                      style: const TextStyle(color: Colors.white70, fontSize: 14)),
                 ],
               ),
             ),

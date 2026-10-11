@@ -9,6 +9,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 
@@ -78,7 +79,7 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
               return ListView(children: [
                 ListTile(
                     title: Text(tr("Can't load records: ${snap.error}", '记录拿不到：${snap.error}'),
-                        style: const TextStyle(color: Colors.red))),
+                        style: const TextStyle(color: D1Color.p1Text))),
               ]);
             }
             if (!snap.hasData) return const Center(child: CircularProgressIndicator());
@@ -99,7 +100,7 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
                           '${r['finished'] == true ? '' : '没跑完 · '}${_verdictSummary(r)}'
                           ' · 已复核 ${r['reviewed'] ?? 0}')),
                   trailing: ((r['verdicts'] as Map?)?['abnormal'] as num? ?? 0) > 0
-                      ? const Icon(Icons.report, color: Colors.red)
+                      ? const Icon(Icons.report, color: D1Color.p1Text)
                       : null,
                   onTap: () => Navigator.push(
                       context,
@@ -270,7 +271,7 @@ class _SiteRunPageState extends State<SiteRunPage> {
           : f != null
               ? tr('Assessment: ${f['reason'] ?? ''}', '判读：${f['reason'] ?? ''}')
               : tr('Not assessed yet', '还没判读')),
-      trailing: shown == 'abnormal' ? const Icon(Icons.report, color: Colors.red) : null,
+      trailing: shown == 'abnormal' ? const Icon(Icons.report, color: D1Color.p1Text) : null,
       onTap: () => _open(p),
     );
   }
@@ -340,7 +341,7 @@ class _SitePhotoPageState extends State<SitePhotoPage> {
           future: widget.bytes,
           builder: (c, s) => s.hasError
               ? Text(tr("Can't load photo: ${s.error}", '照片拿不到：${s.error}'),
-                  style: const TextStyle(color: Colors.red))
+                  style: const TextStyle(color: D1Color.p1Text))
               : s.hasData
                   ? InteractiveViewer(child: Image.memory(s.data!))
                   : const SizedBox(height: 200, child: Center(child: CircularProgressIndicator())),

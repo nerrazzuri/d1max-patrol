@@ -82,6 +82,7 @@ void main() {
     expect(find.textContaining('拦截点：gate'), findsOneWidget);
     expect(find.textContaining('狗最后在：(3.0, -1.0)'), findsOneWidget);
     expect(find.textContaining('incident-abc'), findsOneWidget);
+    await t.ensureVisible(find.byKey(SiteAlertScenePage.mapKey));
     await t.tap(find.byKey(SiteAlertScenePage.mapKey));
     await t.pumpAndSettle();
     final page = t.widget<SiteMapPreviewPage>(find.byType(SiteMapPreviewPage));
@@ -94,6 +95,7 @@ void main() {
     final api = FakeApi('guard');
     await t.pumpWidget(MaterialApp(home: SiteAlertScenePage(api: api, alert: _intrusion())));
     await t.pumpAndSettle();
+    await t.ensureVisible(find.byKey(SiteAlertScenePage.photoKey));
     await t.tap(find.byKey(SiteAlertScenePage.photoKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('runs mission=incident-abc'));
@@ -104,6 +106,7 @@ void main() {
     await t.pumpWidget(
         MaterialApp(home: SiteAlertScenePage(api: api, alert: _intrusion(context: ctx))));
     await t.pumpAndSettle();
+    await t.ensureVisible(find.byKey(SiteAlertScenePage.photoKey));
     await t.tap(find.byKey(SiteAlertScenePage.photoKey));
     await t.pumpAndSettle();
     expect(find.byType(SiteRunPage), findsOneWidget);
@@ -193,6 +196,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteAlertScenePage(api: api, alert: seen)));
     await t.pumpAndSettle();
     expect(find.byKey(SiteAlertScenePage.photoKey), findsOneWidget, reason: '现场照片在 persons 那几趟');
+    await t.ensureVisible(find.byKey(SiteAlertScenePage.deterKey));
     await t.tap(find.byKey(SiteAlertScenePage.deterKey));
     await t.pumpAndSettle();
     expect(api.calls, contains('deter-start A'));

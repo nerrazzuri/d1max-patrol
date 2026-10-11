@@ -8,8 +8,10 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'widget/bar_actions.dart';
 import 'widget/fields_dialog.dart';
 
 class SiteInterceptsPage extends StatefulWidget {
@@ -181,18 +183,16 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
   Widget build(BuildContext context) {
     final manage = widget.api.session?.canManageMaps ?? false;
     return Scaffold(
-      appBar: AppBar(title: Text(tr('Intercept points and zones', '拦截点与防区')), actions: [
+      appBar: AppBar(title: Text(tr('Intercept points and zones', '拦截点与防区')), actions: barActions(context, [
         if (manage) ...[
-          TextButton(
+          BarAction(
               key: SiteInterceptsPage.hereKey,
               onPressed: _here,
-              child: Text(tr('Set intercept point at robot', '在狗这儿设拦截点'))),
-          TextButton(
-              key: SiteInterceptsPage.zoneKey,
-              onPressed: _addZone,
-              child: Text(tr('Link zone', '绑防区'))),
+              label: tr('Set intercept point at robot', '在狗这儿设拦截点')),
+          BarAction(
+              key: SiteInterceptsPage.zoneKey, onPressed: _addZone, label: tr('Link zone', '绑防区')),
         ],
-      ]),
+      ])),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(padding: const EdgeInsets.all(8), children: [
@@ -240,14 +240,14 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
                       Text(
                           tr('Unreachable, no robot is sent on an intrusion: ${p['reach']}',
                               '走不到，入侵来了不派狗：${p['reach']}'),
-                          key: Key('intercept-reach-${p['name']}'), style: const TextStyle(color: Colors.red)),
+                          key: Key('intercept-reach-${p['name']}'), style: const TextStyle(color: D1Color.p1Text)),
                     if ('${p['reach_note'] ?? ''}'.isNotEmpty)
-                      Text('${p['reach_note']}', style: const TextStyle(color: Colors.grey)),
+                      Text('${p['reach_note']}', style: const TextStyle(color: D1Color.textMuted)),
                     if (p['newer_version'] is String)
                       Text(
                           tr('The map has a new version ${p['newer_version']}: set this point again on the new map',
                               '图有新版本 ${p['newer_version']}：要在新图上重设'),
-                          key: Key('intercept-newer-${p['name']}'), style: const TextStyle(color: Colors.orange)),
+                          key: Key('intercept-newer-${p['name']}'), style: const TextStyle(color: D1Color.p2)),
                   ]),
                   trailing: manage
                       ? IconButton(

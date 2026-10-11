@@ -9,6 +9,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 
@@ -172,7 +173,7 @@ class _SiteDeterrencePageState extends State<SiteDeterrencePage> {
         if (s != null) ...[
           ListTile(
             key: const Key('deterrence-now'),
-            leading: const Icon(Icons.campaign, color: Colors.red),
+            leading: const Icon(Icons.campaign, color: D1Color.p1Text),
             title: Text(deterSessionText(s)),
             subtitle: Text(
                 tr('Zone ${s['zone']} · ends automatically in ${s['ends_in_s']} s${deterSceneText(s)}',
@@ -192,7 +193,7 @@ class _SiteDeterrencePageState extends State<SiteDeterrencePage> {
           if (sess?.canAbort ?? false)
             FilledButton.icon(
               key: SiteDeterrencePage.releaseKey,
-              style: FilledButton.styleFrom(backgroundColor: Colors.green),
+              style: FilledButton.styleFrom(backgroundColor: D1Color.text),
               onPressed: _release,
               icon: const Icon(Icons.check),
               label: Text(tr('End deterrence (all off, return to standby)', '解除（全关、回待命点）')),

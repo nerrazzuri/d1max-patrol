@@ -15,6 +15,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 
@@ -206,7 +207,7 @@ class _SiteModePageState extends State<SiteModePage> {
                 key: Key('mode-zone-${z['zone']}'),
                 dense: true,
                 leading: Icon(z['armed'] == true ? Icons.shield : Icons.shield_outlined,
-                    color: z['armed'] == true ? Colors.red : Colors.grey),
+                    color: z['armed'] == true ? D1Color.p1Text : D1Color.textMuted),
                 title: Text(
                     '${z['zone']} · ${z['armed'] == true ? tr('Armed', '布防中') : tr('Disarmed', '撤防中')}'),
                 subtitle: Text(z['home_armed'] == true
@@ -235,7 +236,7 @@ IconData modeIcon(String mode) => switch (mode) {
     };
 
 Color modeColor(String mode) => switch (mode) {
-      'home' => Colors.blue,
-      'visitor' => Colors.orange,
-      _ => Colors.red,
+      'home' => D1Color.select,
+      'visitor' => D1Color.p2,
+      _ => D1Color.p1Text,
     };

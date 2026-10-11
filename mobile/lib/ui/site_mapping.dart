@@ -19,6 +19,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 
@@ -356,13 +357,13 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
               tr('The green dot is where recording started, the red dot is where the robot is now. '
                   'Coordinates are the robot\'s own odometry (a new place has no map yet) and drift over distance.',
                   '绿点是录包起点，红点是狗现在的位置；坐标是狗自己的里程（新地方还没有图），走远了会有些漂。'),
-              style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              style: const TextStyle(fontSize: 12, color: D1Color.textMuted)),
         ),
         Expanded(
           child: Padding(
             padding: const EdgeInsets.all(8),
             child: DecoratedBox(
-              decoration: BoxDecoration(border: Border.all(color: Colors.black12)),
+              decoration: BoxDecoration(border: Border.all(color: D1Color.rule)),
               child: CustomPaint(
                   key: SiteMappingTrailPage.canvasKey,
                   painter: TrailPainter(List<Offset>.of(_pts)),
@@ -400,7 +401,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
         child: Padding(
           padding: const EdgeInsets.all(8),
           child: DecoratedBox(
-            decoration: BoxDecoration(border: Border.all(color: Colors.black12)),
+            decoration: BoxDecoration(border: Border.all(color: D1Color.rule)),
             child: png == null
                 ? Center(child: Text(tr('No image yet', '还没有图')))
                 : InteractiveViewer(
@@ -431,7 +432,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
                   'do not match the built map. View the built map on the Maps page after you stop.',
                   '蓝线是走过的路，绿点是起点，红箭头是狗现在的位置和朝向。这是边走边建时的预览：'
                   '坐标跟建好的图不通用，建好的图停下后在地图页看。'),
-              style: const TextStyle(fontSize: 12, color: Colors.black54)),
+              style: const TextStyle(fontSize: 12, color: D1Color.textMuted)),
         ]),
       ),
     ]);
@@ -822,7 +823,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                   Text(tr('Source: ${meta['source']}', '用的是 ${meta['source']}'),
                       style: const TextStyle(fontSize: 12)),
                 if (meta['warning'] != null)
-                  Text('${meta['warning']}', style: const TextStyle(color: Colors.deepOrange)),
+                  Text('${meta['warning']}', style: const TextStyle(color: D1Color.p2)),
                 const Divider(),
                 for (final p in homes)
                   Text(
@@ -831,7 +832,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                               '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})',
                           '原点 · ${p['robot_id']} · ${p['name']}  '
                               '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
-                      style: const TextStyle(color: Colors.blue)),
+                      style: const TextStyle(color: D1Color.select)),
                 if (pts.isEmpty) Text(tr('No standby points on this map yet', '这张图上还没有登记待命点')),
                 for (final p in pts)
                   Text('${p['robot_id']} · ${p['name']}${p['default'] == true ? tr(' (default)', '（默认）') : ''}  '
@@ -866,7 +867,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                       'Changed since it was confirmed (revision ${conf['revision']} was confirmed): '
                           'cannot be sent to robots',
                       '改过之后没重新确认（确认的是第 ${conf['revision']} 版）：下发不了'),
-          style: TextStyle(color: confirmed ? Colors.green : Colors.deepOrange)),
+          style: TextStyle(color: confirmed ? D1Color.text : D1Color.p2)),
       if (zones.isEmpty) Text(tr('No zones drawn', '没画区域')),
       for (final z in zones)
         Row(children: [

@@ -8,6 +8,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 import 'site_mapping.dart';
@@ -107,12 +108,12 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
         final go = await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
-            title: Text(tr('$robot has no home point on $label', '$robot 在 $label 上还没有原点')),
+            title: Text(tr('$robot has no origin on $label', '$robot 在 $label 上还没有原点')),
             content: Text(tr(
                 'If you send it anyway, the robot accepts no goto or patrol after loading this map '
-                    '(without a home point there is no safe place to return to). Remote control and '
-                    'set position still work. Drive the robot to the home point (in front of the dock), '
-                    'set its position, then mark the home point there.',
+                    '(without an origin there is no safe place to return to). Remote control and '
+                    'set position still work. Drive the robot to the origin (in front of the dock), '
+                    'set its position, then tap "Mark origin here".',
                 '照样下发的话，狗载上这张图之后不接 goto、巡检（没有原点就没有安全返航的目标）；'
                     '遥控、设位置照常。要先把狗开到原点（充电桩前），设好位置，再点「在这儿标原点」。')),
             actions: [
@@ -126,7 +127,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
           ),
         );
         if (go != true) {
-          _snack(tr('Not sent: $robot has no home point on $label', '没下发：$robot 在 $label 上还没有原点'));
+          _snack(tr('Not sent: $robot has no origin on $label', '没下发：$robot 在 $label 上还没有原点'));
           return;
         }
         r = await widget.api.activateMap(robot, '${m['map_id']}', '${m['version']}',
@@ -194,7 +195,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
               return ListView(children: [
                 ListTile(
                     title: Text(tr('Map list unavailable: ${snap.error}', '地图目录拿不到：${snap.error}'),
-                        style: const TextStyle(color: Colors.red))),
+                        style: const TextStyle(color: D1Color.p1Text))),
               ]);
             }
             if (!snap.hasData) return const Center(child: CircularProgressIndicator());

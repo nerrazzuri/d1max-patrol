@@ -13,6 +13,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 
@@ -135,7 +136,7 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      color: _on ? Colors.red.shade50 : null,
+      color: _on ? D1Color.p1Bg : null,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         SwitchListTile(
           key: SupervisionSwitch.switchKey,

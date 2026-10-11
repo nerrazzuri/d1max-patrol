@@ -13,6 +13,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 
@@ -55,8 +56,8 @@ IconData weatherIcon(String condition) => switch (condition) {
     };
 
 Color? weatherColor(String condition) => switch (condition) {
-      'storm' => Colors.deepPurple,
-      'rain' => Colors.blue,
+      'storm' => D1Color.select,
+      'rain' => D1Color.select,
       _ => null,
     };
 

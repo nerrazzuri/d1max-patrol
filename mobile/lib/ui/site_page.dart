@@ -14,6 +14,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/background_watch.dart';
 import '../net/push.dart';
@@ -37,6 +38,7 @@ import 'site_supervise.dart';
 import 'site_teleop.dart';
 import 'site_video.dart';
 import 'site_watch_page.dart';
+import 'widget/bar_actions.dart';
 import 'widget/fields_dialog.dart';
 
 /// 造一个站点客户端。测试换成假的。
@@ -539,7 +541,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                           st == PushState.ready
                               ? Icons.notifications_on
                               : Icons.notifications_paused,
-                          color: st == PushState.ready ? Colors.green : Colors.orange))),
+                          color: st == PushState.ready ? D1Color.text : D1Color.p2))),
         if (widget.watch.supported && widget.entry != null)
           IconButton(
               key: SiteRobotsPage.bgWatchKey,
@@ -547,7 +549,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                   ? tr('Background watch: on (tap to turn off)', '后台值守：开着（点了关）')
                   : tr('Background watch: off (tap to turn on)', '后台值守：关着（点了开）'),
               icon: Icon(_bgOn ? Icons.shield : Icons.shield_outlined,
-                  color: _bgOn ? Colors.green : null),
+                  color: _bgOn ? D1Color.text : null),
               onPressed: _bgBusy ? null : _bgToggle),
         IconButton(
             key: const Key('open-watch'),
@@ -590,11 +592,11 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
           if (!_live)
             ListTile(
                 key: const Key('live-lost'),
-                leading: const Icon(Icons.sync_problem, color: Colors.orange),
+                leading: const Icon(Icons.sync_problem, color: D1Color.p2),
                 title: Text(tr('Live updates disconnected. Reconnecting; pull down to refresh',
                     '实时更新没连上，正在重连；下拉可以手动刷新'))),
           if (_error != null)
-            ListTile(title: Text(_error!, style: const TextStyle(color: Colors.red))),
+            ListTile(title: Text(_error!, style: const TextStyle(color: D1Color.p1Text))),
           if (_mode != null)
             ListTile(
               key: SiteRobotsPage.modeKey,
@@ -622,8 +624,8 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
           for (final e in _deter.entries)
             ListTile(
               key: Key('deterrence-${e.key}'),
-              tileColor: Colors.red.withValues(alpha: 0.12),
-              leading: const Icon(Icons.campaign, color: Colors.red),
+              tileColor: D1Color.p1Bg,
+              leading: const Icon(Icons.campaign, color: D1Color.p1Text),
               title: Text(tr('${e.key} deterring · ${deterSessionText(e.value)}',
                   '${e.key} 驱离中 · ${deterSessionText(e.value)}')),
               subtitle: Text(tr('Zone ${e.value['zone']}${deterSceneText(e.value)}',
@@ -970,7 +972,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           if (v?['capabilities'] is Map &&
               headText((v!['capabilities'] as Map).cast<String, dynamic>()).isNotEmpty)
             Text(headText((v['capabilities'] as Map).cast<String, dynamic>()),
-                key: const Key('robot-head'), style: const TextStyle(color: Colors.deepOrange)),
+                key: const Key('robot-head'), style: const TextStyle(color: D1Color.p2)),
           if (v?['capabilities'] is Map &&
               obstaclesText((v!['capabilities'] as Map).cast<String, dynamic>()).isNotEmpty)
             Text(obstaclesText((v['capabilities'] as Map).cast<String, dynamic>()),
@@ -979,7 +981,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           if (v?['held'] is Map)
             Card(
               key: const Key('robot-held'),
-              color: Colors.orange.shade50,
+              color: D1Color.p2Bg,
               child: ListTile(
                 title: Text(tr('Stopped by ${(v!['held'] as Map)['by']}',
                     '被 ${(v['held'] as Map)['by']} 叫停了')),
@@ -1087,7 +1089,10 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             if ((s?.canAbort ?? false) && taskId != null)
               FilledButton(
                   key: const Key('btn-abort'),
-                  style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: D1Color.p1,
+                      foregroundColor: D1Color.onSolid,
+                      side: const BorderSide(color: D1Color.p1Frame, width: D1Size.stopAllRing)),
                   onPressed: _abort,
                   child: Text(tr('Stop', '叫停'))),
           ]),
@@ -1115,20 +1120,20 @@ class SiteIncidentsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(tr('Incidents', '事件')), actions: [
-        // 拦截点与防区（W16）：谁都能看，管理员能改
+      appBar: AppBar(title: Text(tr('Incidents', '事件')), actions: barActions(context, [
         // 固定摄像头（W19）：自带的入侵检测报到站点
-        TextButton(
+        BarAction(
             key: const Key('btn-cameras'),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute<void>(builder: (_) => SiteCamerasPage(api: api))),
-            child: Text(tr('Cameras…', '摄像头…'))),
-        TextButton(
+            onPressed: () => Navigator.push(
+                context, MaterialPageRoute<void>(builder: (_) => SiteCamerasPage(api: api))),
+            label: tr('Cameras…', '摄像头…')),
+        // 拦截点与防区（W16）：谁都能看，管理员能改
+        BarAction(
             key: const Key('btn-intercepts'),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute<void>(builder: (_) => SiteInterceptsPage(api: api))),
-            child: Text(tr('Intercept points…', '拦截点…'))),
-      ]),
+            onPressed: () => Navigator.push(
+                context, MaterialPageRoute<void>(builder: (_) => SiteInterceptsPage(api: api))),
+            label: tr('Intercept points…', '拦截点…')),
+      ])),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: api.incidents(),
         builder: (c, snap) {
