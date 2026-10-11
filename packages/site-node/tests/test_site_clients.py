@@ -108,7 +108,7 @@ def test_老库升级_补上那一列_老会话照样能用(tmp_path):
     try:
         assert "client" in {r[1] for r in db.query("PRAGMA table_info(sessions)")}
         assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == str(
-            SCHEMA_VERSION) == "54"
+            SCHEMA_VERSION) == "55"
         acc = Accounts(db, now_ms=lambda: 1_800_000_000_000)
         assert acc.check(tok) is not None and acc.clients() == []
     finally:

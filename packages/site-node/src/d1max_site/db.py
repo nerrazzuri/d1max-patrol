@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 54                      # C-B4:sessions.client(哪个 App、哪一版登录的)
+SCHEMA_VERSION = 55                      # RC 加固 H9:推送多通道(provider、done)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -409,7 +409,8 @@ CREATE TABLE IF NOT EXISTS push_devices (
     account    TEXT NOT NULL,
     platform   TEXT NOT NULL,
     updated_ms INTEGER NOT NULL,
-    session    TEXT NOT NULL DEFAULT ''
+    session    TEXT NOT NULL DEFAULT '',
+    provider   TEXT NOT NULL DEFAULT 'jpush'
 );
 CREATE TABLE IF NOT EXISTS push_outbox (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -423,6 +424,7 @@ CREATE TABLE IF NOT EXISTS push_outbox (
     sent_ms    INTEGER,
     dropped    TEXT NOT NULL DEFAULT '',
     error      TEXT NOT NULL DEFAULT '',
+    done       TEXT NOT NULL DEFAULT '',
     UNIQUE (alert_key, tier)
 );
 -- 商业化 A1:指标历史(每 5 分钟一笔,留 30 天):盘、狗在线、开着的告警、狗上待传的、事件循环延迟。
@@ -563,6 +565,9 @@ _ADDED_COLUMNS = (
     ("force_episodes", "siren_ms", "INTEGER NOT NULL DEFAULT 0"),
     # A6 外审 F3:登记推送号的那次登录(令牌哈希);那次登录退出、过期了就不推
     ("push_devices", "session", "TEXT NOT NULL DEFAULT ''"),
+    # RC 加固 H9:这个推送号是哪个通道的(极光 / FCM);这一条已经发完了的通道(逗号隔开),重试不重发
+    ("push_devices", "provider", "TEXT NOT NULL DEFAULT 'jpush'"),
+    ("push_outbox", "done", "TEXT NOT NULL DEFAULT ''"),
     ("enroll_claims", "cert_fp", "TEXT NOT NULL DEFAULT ''"),          # A 阶段外审 I1
     ("alerts", "shelved_by", "TEXT NOT NULL DEFAULT ''"),               # B1 搁置
     ("alerts", "shelved_ms", "INTEGER"),

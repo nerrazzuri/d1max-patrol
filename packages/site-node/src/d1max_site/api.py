@@ -1177,11 +1177,13 @@ class _Handler(TlsHandlerMixin):
             else:
                 from d1max_site.accounts import _token_hash
                 if not desk.register(str(user), reg, str(d.get("platform") or "android"),
-                                     session=_token_hash(self._token() or "")):
+                                     session=_token_hash(self._token() or ""),
+                                     provider=str(d.get("provider") or "jpush")):
                     raise HttpError(401, "这次登录已经退出了:重新登录再登记推送")
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
-        return self._send_json(200, {"ok": True})
+        # providers:站点配了哪几个通道(手机拿来提示「登记了但站点没配这个通道,收不到」)
+        return self._send_json(200, {"ok": True, "providers": sorted(desk.senders)})
 
     def _weather(self, method: str, user) -> None:
         """天气(W29)。看:``view``。手动切(正常 / 下雨 / 雷暴 / 回到自动):``arm``(值班的保安、业主、

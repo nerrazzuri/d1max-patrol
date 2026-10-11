@@ -813,16 +813,16 @@ class Server:
         self.sightings.areas = self.areas
         self.api.deterrence = self.deterrence
         self.api.weather = self.weather
-        from d1max_site.push import PushDesk, load_sender
-        sender, why_off = load_sender(cfg)
+        from d1max_site.push import PushDesk, load_senders
+        senders, why_off = load_senders(cfg)
         if why_off:
-            log.warning("P1 不推到手机:%s", why_off)
-        #: P1 推到手机(商业化 A6,决策 53:极光,只推标题)。
-        self.push = PushDesk(self.db, now_ms=wall_ms, sender=sender,
+            log.warning("P1 推送:%s", why_off)
+        #: P1 推到手机(商业化 A6,决策 53、56:极光和 FCM 并列,只推标题)。
+        self.push = PushDesk(self.db, now_ms=wall_ms, senders=senders,
                              site_name=str(cfg.get("site_name") or cfg.get("site_id") or ""),
                              why_off=why_off)
         self.push.alerts = self._loop_alerts      # 推送在线程里跑:告警经事件循环
-        self.alerts.push = sender is not None
+        self.alerts.push = bool(senders)
         self.api.push = self.push
         from d1max_site import keyvault
         from d1max_site.health import HealthDesk
