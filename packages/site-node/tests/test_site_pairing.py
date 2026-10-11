@@ -37,10 +37,19 @@ def test_拼出来读回去一样_中文站点名也行_里面只有三样():
     body = code.split(".", 1)[1]
     raw = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
     assert set(raw) == {"n", "u", "f"}, "没有账号、口令、令牌"
+    plain = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+    assert "庄园一号".encode() in plain, "中文原样放(不转成 \\uXXXX):码短一截,二维码好扫"
+
+
+def test_不是配对码_说的是不是_不是坏了():
+    for code in ("D1MAX1.abc", "https://example.com", ""):
+        with pytest.raises(pairing.PairingError, match="不是配对码"):
+            pairing.decode(code)
 
 
 @pytest.mark.parametrize("url", [
     "", "http://site:8443", "https://", "site:8443", "https://u:p@site:8443", "https://u@site:8443",
+    "https://:p@site:8443", "https://@site:8443",
     "https://site:8443/api", "https://site:8443?x=1", "https://site:8443#f", "https://site:99999",
     "https://si te:8443", "https://si\nte:8443", "https://" + "a" * 200, "javascript:alert(1)",
 ])
