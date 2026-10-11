@@ -177,7 +177,13 @@ interface AdminRobot {
   status?: { online: boolean } | null;
   capabilities?: { agent?: string } | null;
 }
-interface Versions { site: { version: string }; robots: { robot_id: string; verdict: string; sidecar_proto?: number | null }[] }
+export interface ClientRow { name: string; kind: string; version?: string; platform?: string; api_level?: number; last_used: number }
+interface Versions { site: { version: string; min_app_level?: number }; robots: { robot_id: string; verdict: string; sidecar_proto?: number | null }[]; clients?: ClientRow[] }
+
+/** 登录着的 App 太老了没有:它报的接口级别比站点要的低(没报级别的说不清,不算)。 */
+export function clientTooOld(c: ClientRow, minAppLevel: number | undefined): boolean {
+  return c.kind === "app" && c.api_level != null && minAppLevel != null && c.api_level < minAppLevel;
+}
 interface CameraRow { name: string; zone: string; connected: boolean; error: string }
 
 export function RobotsAdminPage({ say }: { say: Say }) {
@@ -359,6 +365,26 @@ export function SystemPage() {
             {(versions?.robots ?? []).map((r) => (
               <tr key={r.robot_id}><td class="mono strong">{r.robot_id}</td><td>{t(`compat_${r.verdict}` as Key)}</td><td class="muted small">{r.sidecar_proto != null ? `sidecar ${r.sidecar_proto}` : ""}</td></tr>
             ))}
+          </tbody>
+        </table>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>{t("clients")}</h2><span class="muted small push">{t("clientsHint")}</span></div>
+        <table class="grid">
+          <tbody>
+            {(versions?.clients ?? []).length === 0 && <tr><td class="muted">{t("clientsNone")}</td></tr>}
+            {(versions?.clients ?? []).map((c, i) => {
+              const old = clientTooOld(c, versions?.site.min_app_level);
+              return (
+                <tr key={i}>
+                  <td class="strong">{c.name}</td>
+                  <td>{c.kind === "web" ? t("clientWeb") : `${t("clientApp")} ${c.version ?? "?"}`}</td>
+                  <td class="muted small">{[c.platform, c.api_level != null ? `API ${c.api_level}` : ""].filter(Boolean).join(" · ")}</td>
+                  <td>{old ? <span class="state p2"><Shape kind="P2" />{t("clientOld")}</span> : ""}</td>
+                  <td class="muted small mono">{hm(c.last_used)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </section>

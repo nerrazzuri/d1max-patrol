@@ -6,6 +6,7 @@ import { api, ApiError, onUnauthorized, setFetch } from "./api";
 import { alertTitle, DICTS, initialLang, knownKinds, lang, tr } from "./i18n";
 import { heading, onMap, toPx } from "./mapview";
 import { daysText, toMap } from "./zonesadmin";
+import { clientTooOld, type ClientRow } from "./admin";
 import { applyKeep, ascending, belongs, clockSeconds, covered, dateInput, dayRange, firstAfter, minuteOf, nextSegment, prevSegment, recordingLink, segmentAt, spans, type Recording } from "./recordings";
 import { canReview } from "./recpage";
 import { alarmsCsv, csv, csvCell, fileTag, incidentsCsv, matches, minutes, patrolsCsv, period, secondsText, stamp, type AlarmRow } from "./reports";
@@ -189,6 +190,18 @@ describe("reports", () => {
     expect(outcomeText(null)).toBe("—");
     expect(outcomeText("")).toBe("—");
     expect(outcomeText("done")).toBe(tr(lang.value, "out_done"));
+  });
+});
+
+describe("signed-in apps", () => {
+  it("App 太老:报的接口级别比站点要的低才算;网页、没报级别、站点没说要几级都不算", () => {
+    const c = (o: Partial<ClientRow>): ClientRow => ({ name: "g", kind: "app", last_used: 1, ...o });
+    expect(clientTooOld(c({ api_level: 1 }), 2)).toBe(true);
+    expect(clientTooOld(c({ api_level: 2 }), 2)).toBe(false);
+    expect(clientTooOld(c({ api_level: 0 }), 1)).toBe(true);
+    expect(clientTooOld(c({}), 2)).toBe(false);
+    expect(clientTooOld(c({ api_level: 1 }), undefined)).toBe(false);
+    expect(clientTooOld(c({ kind: "web", api_level: 1 }), 2)).toBe(false);
   });
 });
 

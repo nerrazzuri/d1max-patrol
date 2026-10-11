@@ -175,3 +175,14 @@ def test_外审M1_静态目录里的符号链接指到外面_不给(tmp_path):
     other.mkdir()
     (other / "index.html").symlink_to(tmp_path / "secret.json")
     assert webui.resolve("/", other) is None, "index.html 也查"
+
+
+def test_网页登录记成web_自己报成app也不认(台):
+    """C-B4:网页登录(种 cookie 的)一律记成 web,不看它自己报什么。"""
+    code, _, _ = _http(台, "POST", "/api/login",
+                       {"name": "alice", "password": PW, "web": True,
+                        "client": {"kind": "app", "version": "9.9.9"}},
+                       headers={"X-D1Max-Web": "1"})
+    assert code == 200
+    assert [(c["name"], c["kind"], c.get("version")) for c in 台.accounts.clients()] == [
+        ("alice", "web", None)]

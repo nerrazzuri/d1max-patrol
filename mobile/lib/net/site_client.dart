@@ -70,6 +70,18 @@ String? checkSiteEntry(String url, String fingerprint) {
 /// 版本兼容（商业化 A7，跟站点的 `d1max_contract.compat` 对着）：这个 App 的接口级别、它要站点至少几级。
 /// 只在「两头都要会」的接口改了的时候加一。
 const int appApiLevel = 1;
+
+/// 这个 App 的版本号（跟 `pubspec.yaml` 的 `version` 加号前面那一段一致，测试核着）。登录时报给站点
+/// （C-B4）：管理员在版本一览里看得到谁还在用老 App。
+const String appVersion = '1.0.0';
+
+/// 登录时报给站点的「我是谁」：哪一类程序、哪一版、接口级别、什么系统。只给人看，站点不拿它做判断。
+Map<String, dynamic> clientInfo({String? platform}) => <String, dynamic>{
+      'kind': 'app',
+      'version': appVersion,
+      'api_level': appApiLevel,
+      'platform': platform ?? Platform.operatingSystem,
+    };
 const int minSiteApiLevel = 1;
 
 /// 站点登录回复里的接口级别、站点要的 App 最低级别（老站点不带：都算 1）配不配这个 App：
@@ -124,6 +136,9 @@ class SiteSession {
 
   /// 下发地图、录包、重建（W00c5d 第二部分）：只有管理员。
   bool get canManageMaps => role == 'admin';
+
+  /// 站点体检、诊断包（商业化 A1）：只有管理员。
+  bool get canSeeHealth => role == 'admin';
   bool get canAbort => role == 'admin' || role == 'guard' || role == 'owner';
 }
 
@@ -409,6 +424,16 @@ abstract class SiteApi {
       {String? robotId, String? camera, int? since, int? until, int? limit});
   /// 一段录像的字节（钉证书、带令牌；一段一分钟，几十 MB）。
   Future<Uint8List> recordingBytes(int id);
+
+  /// 站点体检（商业化 A1，管理员）：`{ok, critical_ok, checks: {名字: {ok, detail, value?}}, version, now_ms}`。
+  Future<Map<String, dynamic>> health();
+
+  /// 版本一览（A7）：`{site: {version, schema, api_level, …}, robots: [{robot_id, online, agent, level,
+  /// verdict}], clients?: [...]}`（`clients` 只给管理员）。
+  Future<Map<String, dynamic>> versions();
+
+  /// 诊断包（A1，管理员）：一个 `.tar.gz`，发给厂家查问题用。里面没有口令和私钥。
+  Future<Uint8List> supportBundle();
   /// 标「留着」（过了 30 天也不删）：值班的人、管理员。
   Future<Map<String, dynamic>> setRecordingKeep(int id, bool keep);
   /// 把这台狗现在站的地方登记成充电桩对准点（W13：领到桩前约 1.5 米、正对桩）。管理员。
@@ -780,7 +805,7 @@ class SiteClient implements SiteApi {
   @override
   Future<SiteSession> login(String name, String password) async {
     final d = _map(await _send('POST', '/api/login',
-        <String, dynamic>{'name': name, 'password': password}));
+        <String, dynamic>{'name': name, 'password': password, 'client': clientInfo()}));
     final why = compatProblem(d);
     if (why != null) {
       // 配不上：不用这次登录（顺手注销掉，站点上不留一个没人用的令牌）
@@ -1031,6 +1056,19 @@ class SiteClient implements SiteApi {
 
   /// 一段录像最大多少字节（一分钟；真狗的码率没量过，给足余量）。
   static const int maxRecordingBytes = 200 * 1024 * 1024;
+
+  @override
+  Future<Map<String, dynamic>> health() async => _map(await _send('GET', '/api/health'));
+
+  @override
+  Future<Map<String, dynamic>> versions() async => _map(await _send('GET', '/api/versions'));
+
+  /// 诊断包最多这么大（站点打的是日志尾巴和配置，正常几百 KB）。
+  static const int maxBundleBytes = 64 * 1024 * 1024;
+
+  @override
+  Future<Uint8List> supportBundle() =>
+      _bytes('/api/support-bundle', maxBundleBytes, tr('Diagnostics bundle', '诊断包'));
 
   @override
   Future<Uint8List> recordingBytes(int id) =>

@@ -506,8 +506,11 @@ class _Handler(TlsHandlerMixin):
             if method == "GET" and path == "/api/versions":
                 self._need(user, VIEW)
                 from d1max_site.compat import versions
-                return self._send_json(200, self.site.loop.call(
-                    lambda: _sync(versions, self.site.dispatcher)))
+                got = self.site.loop.call(lambda: _sync(versions, self.site.dispatcher))
+                if allowed(getattr(user, "role", ""), MANAGE):
+                    # C-B4:谁在用哪一版 App 登录着(带账号名,只给管理员)
+                    got["clients"] = self.site.accounts.clients()
+                return self._send_json(200, got)
             if path in ("/api/health", "/api/metrics", "/api/support-bundle"):
                 return self._health(method, path, user)
             if path in ("/api/push/devices", "/api/push/devices/remove"):
@@ -662,7 +665,12 @@ class _Handler(TlsHandlerMixin):
                 raise HttpError(403, "网页登录少了防伪造的头")
         self._actor = f"login:{name[:64]}"
         try:
-            token = self.site.accounts.login(name, pw)
+            # C-B4:App 报自己是哪一版;网页登录记成 web(不信它自己报的类别)
+            web = d.get("web") is True
+            client = {"kind": "web"} if web else d.get("client")
+            if not web and isinstance(client, dict) and client.get("kind") == "web":
+                client = None
+            token = self.site.accounts.login(name, pw, client)
         except LockedOut as exc:
             raise HttpError(429, str(exc)) from exc
         except AuthError as exc:

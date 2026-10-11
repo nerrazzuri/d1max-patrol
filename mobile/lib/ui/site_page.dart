@@ -20,6 +20,7 @@ import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'site_health.dart';
 import 'site_add.dart';
 import 'site_logs.dart';
 import 'site_mapping.dart';
@@ -529,6 +530,8 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       (const Key('open-runs'), tr('Records', '记录'), Icons.photo_library, () => SiteRunsPage(api: widget.api)),
       (const Key('open-incidents'), tr('Incidents', '事件'), Icons.warning_amber, () => SiteIncidentsPage(api: widget.api)),
       (const Key('open-schedule'), tr('Schedule', '排程'), Icons.schedule, () => SiteSchedulePage(api: widget.api)),
+      if (widget.api.session?.canSeeHealth ?? false)
+        (const Key('open-health'), tr('Site health', '站点体检'), Icons.monitor_heart_outlined, () => SiteHealthPage(api: widget.api)),
     ];
     void go(Widget Function() page) =>
         Navigator.push(context, MaterialPageRoute<void>(builder: (_) => page()));

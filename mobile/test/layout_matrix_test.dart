@@ -4,6 +4,7 @@
 import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/store/site_store.dart';
+import 'package:d1max_patrol/ui/site_health.dart';
 import 'package:d1max_patrol/ui/site_add.dart';
 import 'package:d1max_patrol/ui/site_alert_scene.dart';
 import 'package:d1max_patrol/ui/site_cameras.dart';
@@ -58,6 +59,7 @@ final _pages = <String, Widget Function()>{
   'standby': () => SiteStandbyPage(api: FakeApi('admin'), robotId: 'A', canMarkHere: true),
   'intercepts': () => SiteInterceptsPage(api: FakeApi('admin')),
   'mode': () => SiteModePage(api: FakeApi('admin')),
+  'health': () => SiteHealthPage(api: FakeApi('admin'), save: (n, b) async => '/x/\$n'),
   'weather': () => SiteWeatherPage(api: FakeApi('admin')),
   'deterrence settings': () => SiteDeterrencePage(api: FakeApi('admin'), robotId: 'A'),
   'deter': () => SiteDeterPage(api: FakeApi('guard'), robotId: 'A',

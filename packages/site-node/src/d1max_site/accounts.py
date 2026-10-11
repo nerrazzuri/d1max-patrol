@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import threading
@@ -88,6 +89,28 @@ def _hash(password: str, salt: bytes) -> bytes:
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("ascii", "replace")).hexdigest()
+
+
+#: 登录时报的程序信息里认的几样(别的丢掉):哪一类、版本号、接口级别、什么系统。
+CLIENT_KINDS = ("app", "web")
+_CLIENT_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,31}$")
+
+
+def clean_client(obj: Any) -> str:
+    """登录时报的 ``client`` 收拾成一小段 JSON(存库用);看不懂的回空串。字段:``kind``(app / web,
+    必须有)、``version``、``platform``(字母数字和 ``.+_-``,最长 32)、``api_level``(0–9999 的整数)。
+    是客户端自己报的,**只拿来给人看**,不拿来做任何判断。"""
+    if not isinstance(obj, dict) or obj.get("kind") not in CLIENT_KINDS:
+        return ""
+    out: dict[str, Any] = {"kind": obj["kind"]}
+    for k in ("version", "platform"):
+        v = obj.get(k)
+        if isinstance(v, str) and _CLIENT_TEXT.match(v):
+            out[k] = v
+    lv = obj.get("api_level")
+    if isinstance(lv, int) and not isinstance(lv, bool) and 0 <= lv <= 9999:
+        out["api_level"] = lv
+    return json.dumps(out, sort_keys=True)
 
 
 class Accounts:
@@ -260,7 +283,9 @@ class Accounts:
 
     # ------------------------------------------------------------ 登录
 
-    def login(self, name: str, password: str) -> str:
+    def login(self, name: str, password: str, client: Any = None) -> str:
+        """``client``:登录的是哪个程序、哪一版(C-B4,见 :func:`clean_client`);记在这次会话上,
+        管理员在版本一览里看得到谁还在用老 App。看不懂的不记,**不挡登录**。"""
         now = self._now()
         with self._lock:
             until = self._locked_until.get(name, 0)
@@ -288,9 +313,28 @@ class Accounts:
             self._locked_until.pop(name, None)
         token = secrets.token_urlsafe(32)
         with self.db.tx() as c:
-            c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
-                      "VALUES (?,?,?,?)", (_token_hash(token), name, now, now))
+            c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used, client) "
+                      "VALUES (?,?,?,?,?)",
+                      (_token_hash(token), name, now, now, clean_client(client)))
         return token
+
+    def clients(self) -> list[dict[str, Any]]:
+        """还有效的登录各是哪个程序、哪一版(值守令牌、没报的不列)。最近用过的在前。"""
+        now = self._now()
+        out = []
+        for r in self.db.query(
+                "SELECT s.name, s.created_at, s.last_used, s.client FROM sessions s "
+                "JOIN accounts a ON a.name=s.name WHERE s.client<>'' AND s.scope='' "
+                "AND a.disabled=0 ORDER BY s.last_used DESC, s.name"):
+            if now - r["last_used"] > self.idle_ms or now - r["created_at"] > self.abs_ms:
+                continue
+            try:
+                c = json.loads(r["client"])
+            except ValueError:
+                continue
+            out.append({"name": r["name"], "created_at": r["created_at"],
+                        "last_used": r["last_used"], **c})
+        return out
 
     def check(self, token: str | None) -> Principal | None:
         """令牌有效 → 账号(``Principal``:名字 + 角色,并续闲置期);无效、过期或账号停用 → None。"""
