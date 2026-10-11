@@ -4,7 +4,7 @@
 值班台的 Reports 页用:保安交班、给业主看。**只读库**,不改任何东西;数是按 SQL 数出来的(不截),
 明细每一样最多带 :data:`ROWS_MAX` 行,截了在回包里写明(``truncated``)。
 
-归到哪一段:告警按**第一次报**的时刻,入侵事件按站点**收到**的时刻,排程按**该跑**的时刻,运行记录按
+归到哪一段:告警按**第一次报**的时刻,入侵事件按站点**收到**的时刻,排程按**该跑**的时刻,证据归档按
 第一个文件到站点的时刻。都是 ``[since, until)``。
 
 没有的:每台狗在线了多久(站点不记在线历史)、误报率(「记成误报」和「解决了」在库里是同一个动作)。
@@ -127,6 +127,8 @@ def _patrols(db: SiteDB, w: tuple[int, int]) -> dict[str, Any]:
 
 
 def _runs(db: SiteDB, w: tuple[int, int]) -> dict[str, Any]:
+    """证据归档:狗传上来的**都算**(巡逻记录、到拦截点拍的、人员截图),不只是巡逻 —— 别拿它当
+    巡逻的工作量(C-B3 外审 M1);巡逻跑了几趟看 :func:`_patrols`。"""
     [n] = db.query("SELECT COUNT(*) AS total, SUM(finished) AS finished, SUM(photos) AS photos "
                    "FROM runs WHERE first_ms>=? AND first_ms<?", w)
     by_robot = _counts(db, "SELECT robot_id, COUNT(*) FROM runs WHERE first_ms>=? AND first_ms<? "
