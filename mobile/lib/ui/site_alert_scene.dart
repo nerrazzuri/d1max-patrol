@@ -72,6 +72,16 @@ class SiteAlertScenePage extends StatefulWidget {
   return (mapId!, version!, marks);
 }
 
+/// 过了多久：`0:42`、`12:05`、`1:02:03`。负数（两头的钟差一点）当 0。
+abstract final class SiteAlertScenePageSpan {
+  static String of(int ms) {
+    final s = ms < 0 ? 0 : ms ~/ 1000;
+    final h = s ~/ 3600, m = (s % 3600) ~/ 60;
+    String two(int n) => n.toString().padLeft(2, '0');
+    return h > 0 ? '$h:${two(m)}:${two(s % 60)}' : '$m:${two(s % 60)}';
+  }
+}
+
 class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   late Alert _a = widget.alert;
 
@@ -110,6 +120,21 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   }
 
   @override
+  void didUpdateWidget(SiteAlertScenePage old) {
+    super.didUpdateWidget(old);
+    // 同一个位置换了一条告警（或者同一条的新状态）：这一页记的东西是上一条的，全部重来
+    if (!identical(old.alert, widget.alert)) {
+      _a = widget.alert;
+      _ackedHere = null;
+      _deter = null;
+      _deterKnown = false;
+      _msg = '';
+      _dim = false;
+      unawaited(_refresh());
+    }
+  }
+
+  @override
   void dispose() {
     _timer?.cancel();
     super.dispose();
@@ -143,13 +168,16 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     try {
       final r = await widget.api.ackAlert(_a.key);
       if (!mounted) return;
+      // 站点回的是确认之后的这条告警：是这一条就用它的（谁、几点以站点记的为准）；不是这一条（或者
+      // 老站点没回）就先在本地记成「我、现在」，下一次刷新拿到站点的再换。
       final got = r['alert'] is Map ? Alert.fromWire(Map<String, dynamic>.from(r['alert'] as Map)) : null;
+      final mine = got != null && got.key == _a.key && got.ackedMs != null;
       setState(() {
-        if (got != null && got.key == _a.key) _a = got;
-        _ackedHere = (
-          got?.ackedBy.isNotEmpty == true ? got!.ackedBy : (widget.api.session?.name ?? ''),
-          got?.ackedMs ?? widget.now().millisecondsSinceEpoch
-        );
+        if (mine) {
+          _a = got;
+        } else {
+          _ackedHere = (widget.api.session?.name ?? '', widget.now().millisecondsSinceEpoch);
+        }
         _msg = '';
       });
     } on SiteError catch (e) {
@@ -251,12 +279,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     return '${_two(d.hour)}:${_two(d.minute)}:${_two(d.second)}';
   }
 
-  /// 过了多久：`0:42`、`12:05`、`1:02:03`。
-  static String span(int ms) {
-    final s = ms < 0 ? 0 : ms ~/ 1000;
-    final h = s ~/ 3600, m = (s % 3600) ~/ 60;
-    return h > 0 ? '$h:${_two(m)}:${_two(s % 60)}' : '$m:${_two(s % 60)}';
-  }
+  static String span(int ms) => SiteAlertScenePageSpan.of(ms);
 
   String _stateLine() {
     if (!_open) return tr('Closed at ${hms(_a.resolvedMs!)}', '${hms(_a.resolvedMs!)} 已关闭');

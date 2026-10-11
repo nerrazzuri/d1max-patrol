@@ -226,7 +226,7 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                 if (_msg.isNotEmpty) Text(_msg, key: SiteStandbyPage.msgKey),
                 Text(
                   tr(
-                      'Home point (safe return and charging; one per map; change it with '
+                      'Origin (safe return and charging; one per map; change it with '
                           '"Mark origin here" on the robot page)',
                       '原点（安全返航、回充；每张图一个，在狗页「在这儿标原点」改）'),
                   style: const TextStyle(fontWeight: FontWeight.bold),

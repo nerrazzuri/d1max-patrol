@@ -520,6 +520,44 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     super.dispose();
   }
 
+  /// 去别的页面的入口（版本、地图、记录、事件、排程）。屏幕够宽一排图标；竖屏的手机收进「⋮」菜单、
+  /// 带文字（六个图标挤在一起，站点名只剩两个字，也认不出哪个是哪个）。
+  List<Widget> _navActions(BuildContext context) {
+    final items = <(Key?, String, IconData, Widget Function())>[
+      (const Key('open-releases'), tr('Releases', '版本'), Icons.system_update, () => SiteReleasesPage(api: widget.api)),
+      (const Key('open-maps'), tr('Maps', '地图'), Icons.map, () => SiteMapsPage(api: widget.api)),
+      (const Key('open-runs'), tr('Records', '记录'), Icons.photo_library, () => SiteRunsPage(api: widget.api)),
+      (const Key('open-incidents'), tr('Incidents', '事件'), Icons.warning_amber, () => SiteIncidentsPage(api: widget.api)),
+      (const Key('open-schedule'), tr('Schedule', '排程'), Icons.schedule, () => SiteSchedulePage(api: widget.api)),
+    ];
+    void go(Widget Function() page) =>
+        Navigator.push(context, MaterialPageRoute<void>(builder: (_) => page()));
+    if (MediaQuery.sizeOf(context).width >= barActionsCollapseBelow) {
+      return [
+        for (final it in items)
+          IconButton(key: it.$1, tooltip: it.$2, icon: Icon(it.$3), onPressed: () => go(it.$4)),
+      ];
+    }
+    return [
+      PopupMenuButton<int>(
+          key: barMoreKey,
+          tooltip: tr('More', '更多'),
+          icon: const Icon(Icons.more_vert),
+          onSelected: (i) => go(items[i].$4),
+          itemBuilder: (_) => [
+                for (var i = 0; i < items.length; i++)
+                  PopupMenuItem<int>(
+                      key: items[i].$1,
+                      value: i,
+                      child: Row(children: [
+                        Icon(items[i].$3, size: 20, color: D1Color.textSecondary),
+                        const SizedBox(width: 12),
+                        Text(items[i].$2),
+                      ])),
+              ]),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final role = widget.api.session?.role ?? '';
@@ -557,34 +595,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
             icon: const Icon(Icons.notifications_active),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteWatchPage(api: widget.api)))),
-        IconButton(
-            key: const Key('open-releases'),
-            tooltip: tr('Releases', '版本'),
-            icon: const Icon(Icons.system_update),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute<void>(builder: (_) => SiteReleasesPage(api: widget.api)))),
-        IconButton(
-            key: const Key('open-maps'),
-            tooltip: tr('Maps', '地图'),
-            icon: const Icon(Icons.map),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute<void>(builder: (_) => SiteMapsPage(api: widget.api)))),
-        IconButton(
-            key: const Key('open-runs'),
-            tooltip: tr('Records', '记录'),
-            icon: const Icon(Icons.photo_library),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute<void>(builder: (_) => SiteRunsPage(api: widget.api)))),
-        IconButton(
-            tooltip: tr('Incidents', '事件'),
-            icon: const Icon(Icons.warning_amber),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute<void>(builder: (_) => SiteIncidentsPage(api: widget.api)))),
-        IconButton(
-            tooltip: tr('Schedule', '排程'),
-            icon: const Icon(Icons.schedule),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute<void>(builder: (_) => SiteSchedulePage(api: widget.api)))),
+        ..._navActions(context),
       ]),
       body: RefreshIndicator(
         onRefresh: _reload,

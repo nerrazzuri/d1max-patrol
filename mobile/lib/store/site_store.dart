@@ -5,6 +5,8 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import '../l10n.dart';
+
 /// 一个站点。
 class SiteEntry {
   final String name;
@@ -46,7 +48,9 @@ class JsonSiteStore implements SiteStore {
     final text = await file.readAsString();
     if (text.trim().isEmpty) return <SiteEntry>[];
     final raw = jsonDecode(text);
-    if (raw is! List) throw const FormatException('站点文件的顶层应该是个数组');
+    if (raw is! List) {
+      throw FormatException(tr('The top level of the sites file must be a list', '站点文件的顶层应该是个数组'));
+    }
     return raw.whereType<Map<String, dynamic>>().map(SiteEntry.fromJson).toList();
   }
 

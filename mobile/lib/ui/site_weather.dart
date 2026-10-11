@@ -56,8 +56,8 @@ IconData weatherIcon(String condition) => switch (condition) {
     };
 
 Color? weatherColor(String condition) => switch (condition) {
-      'storm' => D1Color.select,
-      'rain' => D1Color.select,
+      // 雷暴停巡检，是要人知道的异常：琥珀。下雨只是限速，不上色（规范 2.1）。
+      'storm' => D1Color.p2,
       _ => null,
     };
 
