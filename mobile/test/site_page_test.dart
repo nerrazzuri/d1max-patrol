@@ -111,7 +111,7 @@ class FakeApi implements SiteApi {
   @override
   Future<void> logout() async => pushLog.add('logout');
   @override
-  Future<void> pushRegister(String id, String platform) async => pushLog.add('+$id/$platform');
+  Future<void> pushRegister(String id, String platform, {String provider = 'jpush'}) async => pushLog.add('+$id/$platform');
   @override
   Future<void> pushUnregister(String id) async => pushLog.add('-$id');
   @override
@@ -966,6 +966,8 @@ class _FakePush implements PushRegistrar {
   bool get supported => true;
   @override
   String get platform => 'android';
+  @override
+  String get provider => 'jpush';
   @override
   Future<String?> registrationId() async => 'rid-1';
 }

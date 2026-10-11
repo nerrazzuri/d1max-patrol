@@ -39,6 +39,17 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        // RC 加固 H9:FCM 的推送号。Firebase 的参数由 Dart 那边带过来(打包时 --dart-define 给的)。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "d1max/push").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "fcmToken" -> FcmToken.get(
+                    applicationContext,
+                    call.argument<String>("appId") ?: "", call.argument<String>("apiKey") ?: "",
+                    call.argument<String>("projectId") ?: "", call.argument<String>("senderId") ?: "",
+                ) { token -> runOnUiThread { result.success(token) } }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     /** 弹通知要权限（Android 13+）；后台常驻最好不被省电杀掉：都只在开值守时问，拒了不再缠着问。 */
