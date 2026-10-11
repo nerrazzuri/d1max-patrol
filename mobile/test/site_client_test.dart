@@ -162,6 +162,55 @@ void main() {
     }
   });
 
+  test('取文件（诊断包）时连不上、握手失败、超时、中途断了：都是页面认得的 SiteError（C-B4 外审 I1）', () async {
+    final site = FakeSite();
+    await site.start();
+    Future<Object?> fails(SiteClient c) async {
+      try {
+        await c.supportBundle();
+        return null;
+      } on Object catch (e) {
+        return e;
+      } finally {
+        c.close();
+      }
+    }
+
+    final url = site.url;
+    try {
+      final ok = SiteClient(site.url, testCertFingerprint());
+      expect((await ok.supportBundle()).length, 5000);
+      ok.close();
+      // 握手：指纹对不上
+      final tls = await fails(SiteClient(site.url, 'cd' * 32));
+      expect(tls, isA<SiteError>());
+      expect('$tls', contains('指纹对不上'));
+      // 超时：站点一直不回
+      site.hang.add('/api/support-bundle');
+      final slow = await fails(SiteClient(site.url, testCertFingerprint(), timeout: const Duration(milliseconds: 300)));
+      expect(slow, isA<SiteError>());
+      expect('$slow', contains('超时'));
+      site.hang.clear();
+      // 中途断开：说好 1000 字节，发了 10 个连接就没了
+      site.cut.add('/api/support-bundle');
+      final dropped = await fails(SiteClient(site.url, testCertFingerprint()));
+      expect(dropped, isA<SiteError>());
+      expect('$dropped', contains('断了'));
+      site.cut.clear();
+      // 站点回 403：还是原来那个说法
+      site.statusCodes['/api/support-bundle'] = 403;
+      final denied = await fails(SiteClient(site.url, testCertFingerprint()));
+      expect(denied, isA<SiteError>());
+      expect((denied! as SiteError).status, 403);
+    } finally {
+      await site.close();
+    }
+    // 连不上：站点关了
+    final gone = await fails(SiteClient(url, testCertFingerprint()));
+    expect(gone, isA<SiteError>());
+    expect('$gone', contains('连不上站点'));
+  });
+
   test('真 HTTPS：告警键整个编码成一段，列全部带 all=1', () async {
     final site = FakeSite();
     await site.start();

@@ -78,6 +78,7 @@ class SiteHealthPage extends StatefulWidget {
   static const Key refreshKey = Key('health-refresh');
   static const Key bundleKey = Key('health-bundle');
   static const Key msgKey = Key('health-msg');
+  static const Key loadingKey = Key('health-loading');
   static Key checkKey(String name) => Key('health-check-$name');
 
   @override
@@ -99,29 +100,41 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
     _load();
   }
 
-  Future<void> _load() async {
+  /// 体检和版本一览**各问各的、各显示各的**（外审 M1）：一个慢、一个坏，不拖着另一个。一刷新就把上一次的
+  /// 结论撤掉（写「正在读」）—— 没读到就是没读到，不留着上一次的当现在的。先发的后到：丢掉。
+  void _load() {
     final seq = ++_asked;
-    setState(() => _loading = true);
-    Map<String, dynamic>? h, v;
-    String? err;
-    try {
-      h = await widget.api.health();
-    } on SiteError catch (e) {
-      err = '$e';
-    }
-    try {
-      v = await widget.api.versions();
-    } on SiteError {
-      v = null; // 版本一览读不到：那一段不显示，体检照样看
-    }
-    if (!mounted || seq != _asked) return; // 先发的后到：丢掉
     setState(() {
-      // 没读到就是没读到：不留着上一次的当现在的
-      _health = h;
-      _versions = v;
-      _error = err;
-      _loading = false;
+      _loading = true;
+      _health = null;
+      _versions = null;
+      _error = null;
     });
+    bool current() => mounted && seq == _asked;
+    () async {
+      Map<String, dynamic>? h;
+      String? err;
+      try {
+        h = await widget.api.health();
+      } on Object catch (e) {
+        err = '$e';
+      }
+      if (!current()) return;
+      setState(() {
+        _health = h;
+        _error = err;
+        _loading = false;
+      });
+    }();
+    () async {
+      Map<String, dynamic>? v;
+      try {
+        v = await widget.api.versions();
+      } on Object {
+        v = null; // 版本一览读不到：那一段不显示，体检照样看
+      }
+      if (current()) setState(() => _versions = v);
+    }();
   }
 
   Future<void> _bundle() async {
@@ -129,21 +142,24 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
       _saving = true;
       _msg = '';
     });
-    String msg;
+    // 不管哪一步出什么错（取不到、存不下、找目录的插件坏了）：都说出来，按钮一定放开让人再试（外审 I1）
+    var msg = '';
     try {
       final bytes = await widget.api.supportBundle();
       final path = await widget.save(bundleName(widget.now()), bytes);
       msg = tr('Saved ${(bytes.length / 1024).ceil()} KB to $path', '存好了（${(bytes.length / 1024).ceil()} KB）：$path');
-    } on SiteError catch (e) {
-      msg = tr('Diagnostics bundle not saved: $e', '诊断包没存上：$e');
     } on FileSystemException catch (e) {
       msg = tr('Diagnostics bundle not saved: ${e.message}', '诊断包没存上：${e.message}');
+    } on Object catch (e) {
+      msg = tr('Diagnostics bundle not saved: $e', '诊断包没存上：$e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _msg = msg;
+        });
+      }
     }
-    if (!mounted) return;
-    setState(() {
-      _saving = false;
-      _msg = msg;
-    });
   }
 
   Widget _overall(Map<String, dynamic> h) {
@@ -253,7 +269,7 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
             onPressed: _loading ? null : _load),
       ]),
       body: ListView(children: [
-        if (_loading && h == null) ListTile(title: Text(tr('Loading…', '正在读…'))),
+        if (_loading) ListTile(key: SiteHealthPage.loadingKey, title: Text(tr('Loading…', '正在读…'))),
         if (_error != null)
           ListTile(
               leading: const PriorityShape(level: 'P2', color: D1Color.p2),

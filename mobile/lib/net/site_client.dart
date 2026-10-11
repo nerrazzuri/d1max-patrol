@@ -740,9 +740,14 @@ class SiteClient implements SiteApi {
 
   // ------------------------------------------------------------ 请求
 
-  Future<dynamic> _send(String method, String path, [Object? body, Duration? within]) async {
+  Future<dynamic> _send(String method, String path, [Object? body, Duration? within]) =>
+      _wrapped(() => _sendRaw(method, path, body).timeout(within ?? timeout));
+
+  /// 连不上、握手失败、超时、连接中途断了：都收成页面认得的 [SiteError]。JSON 请求和取文件
+  /// （照片、录像、诊断包）走同一套（C-B4 外审 I1：取文件的原来不包，页面接不住）。
+  Future<T> _wrapped<T>(Future<T> Function() run) async {
     try {
-      return await _sendRaw(method, path, body).timeout(within ?? timeout);
+      return await run();
     } on SiteError {
       rethrow;
     } on HandshakeException catch (e) {
@@ -1088,7 +1093,10 @@ class SiteClient implements SiteApi {
       _map(await _send('POST', '/api/runs/$id/keep', <String, dynamic>{'keep': keep}));
 
   /// 取一份字节（照片、预览图）：钉证书、带令牌、不跟重定向、有上限。
-  Future<Uint8List> _bytes(String path, int maxBytes, String what) async {
+  Future<Uint8List> _bytes(String path, int maxBytes, String what) =>
+      _wrapped(() => _bytesRaw(path, maxBytes, what));
+
+  Future<Uint8List> _bytesRaw(String path, int maxBytes, String what) async {
     final req = await _io.openUrl('GET', base.resolve(path)).timeout(timeout);
     req.followRedirects = false;
     final tok = session?.token;
