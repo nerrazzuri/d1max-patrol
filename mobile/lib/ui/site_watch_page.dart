@@ -17,11 +17,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../model/alert.dart';
 import '../model/site_watch.dart';
 import '../net/site_client.dart';
 import 'site_alert_scene.dart';
+import 'widget/alarm_widgets.dart';
 
 /// 这一帧 SSE 是不是「升到声音档、还没人确认」的告警——手机该响铃。
 bool alertWantsSound(Map<String, dynamic> frame) {
@@ -170,13 +172,16 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       if (a.count > 1) tr('${a.count} times', '${a.count} 次'),
     ].join(' · ');
     return Card(
-      color: a.level == 'P1' ? Colors.red.shade50 : null,
+      color: a.level == 'P1' ? D1Color.p1Bg : null,
       child: ListTile(
         key: SiteWatchPage.alertKey(a.key),
         // 点开看现场（W17）：狗在哪、拦截点、到了拍的照片
         onTap: () => Navigator.push(context,
             MaterialPageRoute<void>(builder: (_) => SiteAlertScenePage(api: widget.api, alert: a))),
-        title: Text('${a.level} ${a.robot} · ${a.title}'),
+        // 三重编码（规范 2.1）：颜色 + 形状 + 文字
+        leading: PriorityShape(level: a.level, color: priorityColor(a.level), size: 16),
+        minLeadingWidth: 16,
+        title: Text('${a.level} ${a.robot} · ${alertTitle(a.kind, a.title)}'),
         subtitle: Text([if (a.detail.isNotEmpty) a.detail, state].join('\n')),
         isThreeLine: a.detail.isNotEmpty,
         trailing: can
@@ -257,7 +262,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       if (!_live)
         ListTile(
             key: SiteWatchPage.liveLostKey,
-            leading: const Icon(Icons.sync_problem, color: Colors.orange),
+            leading: const Icon(Icons.sync_problem, color: D1Color.p2),
             title: Text(tr(
                 'Live updates lost, reconnecting. The figures below may be out of date; pull down to refresh',
                 '实时更新断了，正在重连；下面的数可能是旧的，下拉可以再问一次'))),
@@ -271,7 +276,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       if (_alertsError != null)
         ListTile(
             key: SiteWatchPage.alertsErrorKey,
-            title: Text(_alertsError!, style: const TextStyle(color: Colors.red)))
+            title: Text(_alertsError!, style: const TextStyle(color: D1Color.p1Text)))
       else if (_alertsAt == null)
         // 还没读到过：**不许说「没有」** —— 那是这一屏能说的最坏的假话。
         ListTile(key: SiteWatchPage.p1LoadingKey, title: Text(tr('Not loaded yet', '还没读到')))
@@ -287,7 +292,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       if (_summaryError != null)
         ListTile(
             key: SiteWatchPage.summaryErrorKey,
-            title: Text(_summaryError!, style: const TextStyle(color: Colors.red)))
+            title: Text(_summaryError!, style: const TextStyle(color: D1Color.p1Text)))
       else if (s != null) ...[
         for (final r in s.robots) _robotTile(r),
         ListTile(

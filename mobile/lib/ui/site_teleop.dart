@@ -19,9 +19,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 import 'site_video.dart';
+import 'orientation.dart';
 import 'widget/joystick.dart';
 
 /// 结束原因给人看的话。
@@ -71,6 +73,8 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // App V2：别的页面竖屏横屏都行，遥控只许横屏（两根杆在两边、画面在中间）；离开放开。
+    unawaited(lockLandscape());
     unawaited(_open());
   }
 
@@ -264,6 +268,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
 
   @override
   void dispose() {
+    unawaited(unlockOrientation());
     WidgetsBinding.instance.removeObserver(this);
     _stopTicking();
     _keys.clear();
@@ -318,7 +323,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                           '没有画面：不许动（画面回来之前摇杆不起作用）')
                       : _status,
                   key: SiteTeleopPage.statusKey,
-                  style: TextStyle(color: bad ? Colors.red : null, fontWeight: FontWeight.bold),
+                  style: TextStyle(color: bad ? D1Color.p1Text : null, fontWeight: FontWeight.bold),
                 ),
               ),
               if (desktop)
@@ -344,7 +349,10 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                   height: 64,
                   child: FilledButton(
                     key: SiteTeleopPage.stopKey,
-                    style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: D1Color.p1,
+                      foregroundColor: D1Color.onSolid,
+                      side: const BorderSide(color: D1Color.p1Frame, width: D1Size.stopAllRing)),
                     onPressed: _halt,
                     child: Text(tr('Stop', '停'), style: const TextStyle(fontSize: 28)),
                   ),

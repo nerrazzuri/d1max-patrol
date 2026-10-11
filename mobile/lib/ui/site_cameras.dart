@@ -8,6 +8,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 import 'site_recordings.dart' show clipTime;
@@ -93,7 +94,7 @@ class _SiteCamerasPageState extends State<SiteCamerasPage> {
                 ListTile(
                   key: SiteCamerasPage.camKey('${c['name']}'),
                   leading: Icon(c['connected'] == true ? Icons.videocam : Icons.videocam_off,
-                      color: c['connected'] == true ? Colors.green : Colors.red),
+                      color: c['connected'] == true ? D1Color.text : D1Color.p1Text),
                   title: Text(tr(
                       '${c['name']} · Zone ${c['zone']}',
                       '${c['name']} · 防区 ${c['zone']}')),

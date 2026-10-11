@@ -9,6 +9,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 
@@ -117,15 +118,15 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
                     ? tr('Can activate: all blocking checks passed', '能切：拦的都过了')
                     : tr('Cannot activate: $blocking blocking check(s) failed', '不能切：$blocking 项拦着'),
                 key: const Key('precheck-verdict'),
-                style: TextStyle(color: r['ok'] == true ? Colors.green : Colors.red)),
+                style: TextStyle(color: r['ok'] == true ? D1Color.text : D1Color.p1Text)),
             for (final ch in checks)
               ListTile(
                 key: Key('precheck-item-${ch['name']}'),
                 dense: true,
                 leading: Icon(ch['ok'] == true ? Icons.check_circle : Icons.cancel,
                     color: ch['ok'] == true
-                        ? Colors.green
-                        : (ch['blocking'] == true ? Colors.red : Colors.orange)),
+                        ? D1Color.text
+                        : (ch['blocking'] == true ? D1Color.p1Text : D1Color.p2)),
                 title: Text('${_label('${ch['name']}')}'
                     '${ch['ok'] != true && ch['blocking'] != true ? tr(' (advisory, not blocking)', '（提示，不拦）') : ''}'),
                 subtitle: Text('${ch['detail'] ?? ''}'),
@@ -169,7 +170,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
           if (snap.hasError) {
             return Center(
                 child: Text(tr('Releases unavailable: ${snap.error}', '拿不到：${snap.error}'),
-                    style: const TextStyle(color: Colors.red)));
+                    style: const TextStyle(color: D1Color.p1Text)));
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final rels = (snap.data!['releases'] as List).whereType<Map<String, dynamic>>().toList();

@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'widget/bar_actions.dart';
 
 class SiteStandbyPage extends StatefulWidget {
   final SiteApi api;
@@ -99,7 +100,7 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(tr(
-                "Uses the robot's current position as a standby point (the home point is not "
+                "Uses the robot's current position as a standby point (the origin is not "
                     'changed). The robot checks its localization first: it refuses if no position '
                     'is set or the error is large, and while a task is running.',
                 '用狗现在的位置当一个待命点（原点不动）。狗会先核定位：没设位置、偏差大就不设；'
@@ -203,21 +204,19 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
     final dispatch = s?.canDispatch ?? false;
     return Scaffold(
       appBar: AppBar(
-        title: Text(tr('${widget.robotId} · Standby and home points', '${widget.robotId} · 待命点与原点')),
-        actions: [
+        title: Text(tr('${widget.robotId} · Standby points and origin', '${widget.robotId} · 待命点与原点')),
+        actions: barActions(context, [
           if (manage && widget.canMarkHere)
-            TextButton(
-              key: SiteStandbyPage.hereKey,
-              onPressed: _here,
-              child: Text(tr('Set standby point here', '在这儿设待命点')),
-            ),
+            BarAction(
+                key: SiteStandbyPage.hereKey,
+                onPressed: _here,
+                label: tr('Set standby point here', '在这儿设待命点')),
           if (manage)
-            TextButton(
-              key: SiteStandbyPage.chargerKey,
-              onPressed: _charger,
-              child: Text(tr('Set dock here', '在这儿设充电桩')),
-            ),
-        ],
+            BarAction(
+                key: SiteStandbyPage.chargerKey,
+                onPressed: _charger,
+                label: tr('Set dock here', '在这儿设充电桩')),
+        ]),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -228,11 +227,11 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
                 Text(
                   tr(
                       'Home point (safe return and charging; one per map; change it with '
-                          '"Mark home here" on the robot page)',
+                          '"Mark origin here" on the robot page)',
                       '原点（安全返航、回充；每张图一个，在狗页「在这儿标原点」改）'),
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-                if (_homes.isEmpty) Text(tr('No home point marked yet', '还没标过原点')),
+                if (_homes.isEmpty) Text(tr('No origin marked yet', '还没标过原点')),
                 for (final h in _homes)
                   Text(
                     '${h['name']}  ${_xy(h)}',
