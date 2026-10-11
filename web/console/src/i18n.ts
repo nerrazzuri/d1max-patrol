@@ -246,6 +246,16 @@ const en = {
   siteVersion: "Site {v}",
   supportBundle: "Download support bundle",
   supportHint: "Logs and settings for troubleshooting. Keys, tokens and the database are not included.",
+  pairTitle: "Add this site to the phone app",
+  pairHint: "In the app, choose Add site, then Scan code. Check that the site name and fingerprint on the phone match the ones here.",
+  pairUrl: "Address the phone will use",
+  pairUpdate: "Update code",
+  pairSite: "Site",
+  pairFingerprint: "Certificate fingerprint",
+  pairCode: "Code (to paste instead of scanning)",
+  pairNoSecret: "The code holds the site name, address and certificate fingerprint only. No account or password; each person still signs in on the phone.",
+  pairBadUrl: "Use an address like https://host:8443",
+  pairQrAria: "QR code for adding this site to the phone app",
 };
 
 type Key = keyof typeof en;
@@ -491,6 +501,16 @@ const zh: Partial<Record<Key, string>> = {
   siteVersion: "站点 {v}",
   supportBundle: "下载诊断包",
   supportHint: "排查用的日志和设置。不含密钥、令牌和数据库。",
+  pairTitle: "把这个站点加到手机 App",
+  pairHint: "在 App 里点「添加站点」，再点「扫码」。核对手机上显示的站点名和指纹跟这里一样。",
+  pairUrl: "手机要连的地址",
+  pairUpdate: "更新二维码",
+  pairSite: "站点",
+  pairFingerprint: "证书指纹",
+  pairCode: "配对码（不扫码时粘贴）",
+  pairNoSecret: "配对码里只有站点名、地址和证书指纹，没有账号和口令；每个人在手机上照样要登录。",
+  pairBadUrl: "地址要写成 https://主机:8443",
+  pairQrAria: "把这个站点加到手机 App 的二维码",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };

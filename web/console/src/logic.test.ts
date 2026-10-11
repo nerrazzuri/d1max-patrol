@@ -209,3 +209,21 @@ describe("外审 I5:跟站点断了不能把旧的当现在", () => {
     await expect(fetchSite()).rejects.toBeInstanceOf(ApiError);
   });
 });
+
+describe("App V2:手机扫码添加站点的二维码", () => {
+  it("格子数是合法的二维码大小,留 4 格静区,三个角上有定位块", async () => {
+    const { qrGrid, QUIET } = await import("./qr");
+    const g = qrGrid("D1MAXSITE1." + "A".repeat(150));
+    expect((g.n - 17) % 4).toBe(0);
+    expect(g.size).toBe(g.n + 2 * QUIET);
+    // 定位块的最上一行是连着 7 格黑:左上、右上
+    expect(g.d.startsWith(`M${QUIET} ${QUIET}h7v1h-7z`)).toBe(true);
+    expect(g.d).toContain(`M${QUIET + g.n - 7} ${QUIET}h7v1h-7z`);
+    expect(g.d).toContain(`M${QUIET} ${QUIET + g.n - 7}h7v1h-7z`);
+  });
+  it("内容不同码就不同;同样的内容码一样(能复查)", async () => {
+    const { qrGrid } = await import("./qr");
+    expect(qrGrid("a").d).toBe(qrGrid("a").d);
+    expect(qrGrid("a").d).not.toBe(qrGrid("b").d);
+  });
+});

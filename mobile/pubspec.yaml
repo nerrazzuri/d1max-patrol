@@ -38,6 +38,7 @@ dependencies:
   crypto: ^3.0.7
   video_player: ^2.14.1
   jpush_flutter: ^3.5.8
+  mobile_scanner: 7.4.2
 
 dev_dependencies:
   flutter_test:

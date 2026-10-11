@@ -9,6 +9,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 import 'widget/live_video.dart';
 
@@ -88,8 +89,12 @@ class _SiteVideoState extends State<SiteVideo> {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       SegmentedButton<String>(
         segments: [
-          ButtonSegment(value: 'front', label: Text('前', key: SiteVideo.cameraKey('front'))),
-          ButtonSegment(value: 'back', label: Text('后', key: SiteVideo.cameraKey('back'))),
+          ButtonSegment(value: 'front', label: Text(tr(
+              'Front',
+              '前'), key: SiteVideo.cameraKey('front'))),
+          ButtonSegment(value: 'back', label: Text(tr(
+              'Back',
+              '后'), key: SiteVideo.cameraKey('back'))),
         ],
         selected: {_camera},
         onSelectionChanged: (s) => setState(() => _camera = s.first),

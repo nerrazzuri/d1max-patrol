@@ -7,6 +7,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 
 /// 字节数说人话。
@@ -40,10 +41,12 @@ class _SiteProcLogsPageState extends State<SiteProcLogsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.robotId} 的建图日志'), actions: [
+      appBar: AppBar(title: Text(tr(
+          'Mapping logs for ${widget.robotId}',
+          '${widget.robotId} 的建图日志')), actions: [
         IconButton(
             key: SiteProcLogsPage.refreshKey,
-            tooltip: '刷新',
+            tooltip: tr('Refresh', '刷新'),
             icon: const Icon(Icons.refresh),
             onPressed: () => setState(() {
                   _data = widget.api.procLogs(widget.robotId);
@@ -54,13 +57,18 @@ class _SiteProcLogsPageState extends State<SiteProcLogsPage> {
         builder: (context, snap) {
           if (snap.hasError) {
             return Padding(
-                padding: const EdgeInsets.all(16), child: Text('取不到日志列表：${snap.error}'));
+                padding: const EdgeInsets.all(16), child: Text(tr(
+                    "Can't load the log list: ${snap.error}",
+                    '取不到日志列表：${snap.error}')));
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final logs = (snap.data!['logs'] as List? ?? const []).cast<Map<String, dynamic>>();
           if (logs.isEmpty) {
-            return const Padding(
-                padding: EdgeInsets.all(16), child: Text('还没有日志：这只狗还没录过包、没重建过图'));
+            return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(tr(
+                    'No logs yet: this robot has not recorded a bag or rebuilt a map',
+                    '还没有日志：这只狗还没录过包、没重建过图')));
           }
           return ListView(children: [
             for (final l in logs)
@@ -120,7 +128,7 @@ class _SiteProcLogPageState extends State<SiteProcLogPage> {
       appBar: AppBar(title: Text(widget.name), actions: [
         IconButton(
             key: SiteProcLogPage.refreshKey,
-            tooltip: '刷新',
+            tooltip: tr('Refresh', '刷新'),
             icon: const Icon(Icons.refresh),
             onPressed: () => setState(() {
                   _data = _fetch();
@@ -130,7 +138,9 @@ class _SiteProcLogPageState extends State<SiteProcLogPage> {
         future: _data,
         builder: (context, snap) {
           if (snap.hasError) {
-            return Padding(padding: const EdgeInsets.all(16), child: Text('取不到：${snap.error}'));
+            return Padding(padding: const EdgeInsets.all(16), child: Text(tr(
+                "Can't load: ${snap.error}",
+                '取不到：${snap.error}')));
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final d = snap.data!;
@@ -141,8 +151,10 @@ class _SiteProcLogPageState extends State<SiteProcLogPage> {
             if (snap.connectionState == ConnectionState.waiting) const LinearProgressIndicator(),
             Expanded(child: ListView(controller: _scroll, padding: const EdgeInsets.all(12), children: [
             Text(d['truncated'] == true
-                ? '共 ${logSizeText(size)}，只显示最后 ${logSizeText(got)}（最新的在最底下）'
-                : '共 ${logSizeText(size)}'),
+                ? tr(
+                    '${logSizeText(size)} in total, showing only the last ${logSizeText(got)} (newest at the bottom)',
+                    '共 ${logSizeText(size)}，只显示最后 ${logSizeText(got)}（最新的在最底下）')
+                : tr('${logSizeText(size)} in total', '共 ${logSizeText(size)}')),
             const Divider(),
             SelectableText('${d['text'] ?? ''}',
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),

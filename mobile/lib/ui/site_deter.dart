@@ -7,6 +7,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 
 class SiteDeterPage extends StatefulWidget {
@@ -24,18 +25,20 @@ class SiteDeterPage extends StatefulWidget {
 }
 
 /// 每一路的名字、默认开多久（秒）。
-const Map<String, (String, double)> deterOutputs = <String, (String, double)>{
-  'strobe': ('警灯', 60),
-  'siren': ('警笛', 10),
-  'spotlight': ('聚光灯', 120),
-  'speaker': ('喇叭', 30),
-};
+Map<String, (String, double)> get deterOutputs => <String, (String, double)>{
+      'strobe': (tr('Strobe light', '警灯'), 60),
+      'siren': (tr('Siren', '警笛'), 10),
+      'spotlight': (tr('Spotlight', '聚光灯'), 120),
+      'speaker': (tr('Speaker', '喇叭'), 30),
+    };
 
 /// 狗回的拒绝理由说人话。
 String deterReasonText(String r) => switch (r) {
-      'busy' => '喇叭正在放更要紧的（事件、驱离），等它放完',
-      'unsupported' => '狗上没接这一路',
-      _ when r.startsWith('device:') => '设备没做成：${r.substring(7).trim()}',
+      'busy' => tr('The speaker is playing something more urgent (incident, deterrence). Wait for it to finish',
+          '喇叭正在放更要紧的（事件、驱离），等它放完'),
+      'unsupported' => tr('This output is not fitted on the robot', '狗上没接这一路'),
+      _ when r.startsWith('device:') =>
+        tr('Device failed: ${r.substring(7).trim()}', '设备没做成：${r.substring(7).trim()}'),
       _ => ackReasonText(r),
     };
 
@@ -63,15 +66,22 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
   Future<void> _go(String output, bool on, {String? clip}) async {
     final name = deterOutputs[output]?.$1 ?? output;
     final secs = deterOutputs[output]?.$2 ?? 10;
-    final what = on ? '开$name ${secs.toStringAsFixed(0)} 秒' : '关$name';
+    final what = on
+        ? tr('$name on for ${secs.toStringAsFixed(0)} s', '开$name ${secs.toStringAsFixed(0)} 秒')
+        : tr('$name off', '关$name');
     String msg;
     try {
       final r = await widget.api.deter(widget.robotId, output, on, maxS: on ? secs : null, clip: clip);
       final ack = r['ack'];
       final res = ack is Map ? '${ack['result']}' : 'accepted';
-      msg = res == 'accepted' ? '$what：好了' : '$what没成：${deterReasonText(ack is Map ? '${ack['reason'] ?? res}' : res)}';
+      if (res == 'accepted') {
+        msg = tr('$what: done', '$what：好了');
+      } else {
+        final why = deterReasonText(ack is Map ? '${ack['reason'] ?? res}' : res);
+        msg = tr('$what failed: $why', '$what没成：$why');
+      }
     } on SiteError catch (e) {
-      msg = '$what没成：$e';
+      msg = tr('$what failed: $e', '$what没成：$e');
     }
     if (mounted) setState(() => _msg = msg);
   }
@@ -80,25 +90,27 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
   Widget build(BuildContext context) {
     final outs = _outputs;
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.robotId} · 上装')),
+      appBar: AppBar(title: Text(tr('${widget.robotId} · Payload', '${widget.robotId} · 上装'))),
       body: ListView(padding: const EdgeInsets.all(8), children: [
         if (_msg.isNotEmpty) Text(_msg, key: SiteDeterPage.msgKey),
-        if (outs.isEmpty) const Text('这只狗没接上装'),
+        if (outs.isEmpty) Text(tr('No payload fitted on this robot', '这只狗没接上装')),
         for (final o in outs.where((o) => o != 'speaker'))
           ListTile(
             key: Key('deter-$o'),
             dense: true,
-            title: Text('${deterOutputs[o]?.$1 ?? o}（开 ${deterOutputs[o]?.$2.toStringAsFixed(0)} 秒，到点自己关）'),
+            title: Text(tr(
+                '${deterOutputs[o]?.$1 ?? o} (on for ${deterOutputs[o]?.$2.toStringAsFixed(0)} s, then switches off by itself)',
+                '${deterOutputs[o]?.$1 ?? o}（开 ${deterOutputs[o]?.$2.toStringAsFixed(0)} 秒，到点自己关）')),
             trailing: Wrap(spacing: 8, children: [
-              FilledButton(key: Key('deter-on-$o'), onPressed: () => _go(o, true), child: const Text('开')),
-              OutlinedButton(key: Key('deter-off-$o'), onPressed: () => _go(o, false), child: const Text('关')),
+              FilledButton(key: Key('deter-on-$o'), onPressed: () => _go(o, true), child: Text(tr('On', '开'))),
+              OutlinedButton(key: Key('deter-off-$o'), onPressed: () => _go(o, false), child: Text(tr('Off', '关'))),
             ]),
           ),
         if (outs.contains('speaker')) ...[
           const Divider(),
           Row(children: [
-            const Text('喇叭：'),
-            if (_clips.isEmpty) const Text('狗上没有录好的话术'),
+            Text(tr('Speaker: ', '喇叭：')),
+            if (_clips.isEmpty) Text(tr('No recorded clips on the robot', '狗上没有录好的话术')),
             if (_clips.isNotEmpty)
               DropdownButton<String>(
                 key: const Key('deter-clip'),
@@ -110,9 +122,9 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
             FilledButton(
                 key: const Key('deter-play'),
                 onPressed: _clip == null ? null : () => _go('speaker', true, clip: _clip),
-                child: const Text('放')),
+                child: Text(tr('Play', '放'))),
             const SizedBox(width: 8),
-            OutlinedButton(key: const Key('deter-off-speaker'), onPressed: () => _go('speaker', false), child: const Text('停')),
+            OutlinedButton(key: const Key('deter-off-speaker'), onPressed: () => _go('speaker', false), child: Text(tr('Stop', '停'))),
           ]),
           if (widget.caps['tts'] == true)
             Row(children: [
@@ -132,7 +144,9 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
                       key: const Key('deter-tts'),
                       controller: _tts,
                       maxLength: 300,
-                      decoration: const InputDecoration(labelText: '现打一段（狗上合成后放）'))),
+                      decoration: InputDecoration(
+                          labelText: tr('Type a message (synthesized on the robot, then played)',
+                              '现打一段（狗上合成后放）')))),
               const SizedBox(width: 8),
               FilledButton(
                   key: const Key('deter-say'),
@@ -141,7 +155,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
                     if (t.isEmpty) return;
                     _go('speaker', true, clip: 'tts:$_lang:$t');
                   },
-                  child: const Text('说')),
+                  child: Text(tr('Say', '说'))),
             ]),
         ],
       ]),

@@ -15,6 +15,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 
 class SiteModePage extends StatefulWidget {
@@ -84,7 +85,11 @@ class _SiteModePageState extends State<SiteModePage> {
       final m = await widget.api.mode();
       if (mounted) setState(() => _mode = m);
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = e.status == 404 ? '这个站点没开布防模式' : '$e');
+      if (mounted) {
+        setState(() => _msg = e.status == 404
+            ? tr('Arming modes are not enabled on this site', '这个站点没开布防模式')
+            : '$e');
+      }
     }
   }
 
@@ -93,9 +98,9 @@ class _SiteModePageState extends State<SiteModePage> {
     try {
       final m = await f();
       if (mounted) setState(() => _mode = m);
-      msg = '$what：好了';
+      msg = tr('$what: done', '$what：好了');
     } on SiteError catch (e) {
-      msg = '$what没成：$e';
+      msg = tr('$what failed: $e', '$what没成：$e');
     }
     if (mounted) setState(() => _msg = msg);
   }
@@ -112,9 +117,10 @@ class _SiteModePageState extends State<SiteModePage> {
       builder: (c) => StatefulBuilder(
         builder: (c, set) => AlertDialog(
           scrollable: true, // 横屏
-          title: const Text('访客模式：在「在家」的基础上，再撤哪几个防区？'),
+          title: Text(tr('Visitor mode: which zones to disarm in addition to Home?',
+              '访客模式：在「在家」的基础上，再撤哪几个防区？')),
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (zones.isEmpty) const Text('还没有防区（只按「在家」撤防）'),
+            if (zones.isEmpty) Text(tr('No zones yet (disarms as in Home only)', '还没有防区（只按「在家」撤防）')),
             Wrap(spacing: 6, children: [
               for (final z in zones)
                 FilterChip(
@@ -125,26 +131,27 @@ class _SiteModePageState extends State<SiteModePage> {
                 ),
             ]),
             Row(children: [
-              const Text('多久：'),
+              Text(tr('For ', '多久：')),
               DropdownButton<int>(
                 key: const Key('visitor-hours'),
                 value: hours,
-                items: [for (final h in visitorHours) DropdownMenuItem(value: h, child: Text('$h 小时'))],
+                items: [for (final h in visitorHours) DropdownMenuItem(value: h, child: Text(tr('$h h', '$h 小时')))],
                 onChanged: (v) => set(() => hours = v ?? hours),
               ),
-              const Text('，到点自动回去'),
+              Text(tr(', then reverts automatically', '，到点自动回去')),
             ]),
           ]),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
-            FilledButton(key: const Key('visitor-go'), onPressed: () => Navigator.pop(c, true), child: const Text('开访客')),
+            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
+            FilledButton(key: const Key('visitor-go'), onPressed: () => Navigator.pop(c, true), child: Text(tr('Start visitor mode', '开访客'))),
           ],
         ),
       ),
     );
     if (ok != true) return;
     final list = picked.toList()..sort();
-    await _run(() => widget.api.setMode('visitor', zones: list, minutes: hours * 60), '开访客 $hours 小时');
+    await _run(() => widget.api.setMode('visitor', zones: list, minutes: hours * 60),
+        tr('Start visitor mode for $hours h', '开访客 $hours 小时'));
   }
 
   @override
@@ -155,7 +162,7 @@ class _SiteModePageState extends State<SiteModePage> {
     final manage = s?.canManageMaps ?? false;
     final m = _mode;
     return Scaffold(
-      appBar: AppBar(title: const Text('布防模式')),
+      appBar: AppBar(title: Text(tr('Arming mode', '布防模式'))),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(padding: const EdgeInsets.all(8), children: [
@@ -165,45 +172,53 @@ class _SiteModePageState extends State<SiteModePage> {
             ListTile(
               key: const Key('mode-now'),
               leading: Icon(modeIcon('${m['mode']}'), color: modeColor('${m['mode']}')),
-              title: Text('现在：${modeText(m)}'),
-              subtitle: Text('${m['set_by'] == 'site:visitor_expired' ? '访客到点自动回来的' : '${m['set_by']} 切的'}'
-                  '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · 访客撤了 ${(m['visitor_zones'] as List).join('、')}' : ''}'),
+              title: Text(tr('Now: ${modeText(m)}', '现在：${modeText(m)}')),
+              subtitle: Text(tr(
+                  '${m['set_by'] == 'site:visitor_expired' ? 'Reverted automatically when visitor mode ended' : 'Set by ${m['set_by']}'}'
+                      '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · visitor mode disarmed ${(m['visitor_zones'] as List).join(', ')}' : ''}',
+                  '${m['set_by'] == 'site:visitor_expired' ? '访客到点自动回来的' : '${m['set_by']} 切的'}'
+                      '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · 访客撤了 ${(m['visitor_zones'] as List).join('、')}' : ''}')),
             ),
             Wrap(spacing: 8, children: [
               if (canArm)
                 FilledButton.icon(
                     key: SiteModePage.armKey,
-                    onPressed: m['mode'] == 'armed' ? null : () => _run(() => widget.api.setMode('armed'), '切到布防'),
+                    onPressed: m['mode'] == 'armed' ? null : () => _run(() => widget.api.setMode('armed'), tr('Switch to Armed', '切到布防')),
                     icon: const Icon(Icons.shield),
-                    label: const Text('布防')),
+                    label: Text(tr('Armed', '布防'))),
               if (canSet) ...[
                 OutlinedButton.icon(
                     key: SiteModePage.homeKey,
-                    onPressed: m['mode'] == 'home' ? null : () => _run(() => widget.api.setMode('home'), '切到在家'),
+                    onPressed: m['mode'] == 'home' ? null : () => _run(() => widget.api.setMode('home'), tr('Switch to Home', '切到在家')),
                     icon: const Icon(Icons.home),
-                    label: const Text('在家')),
+                    label: Text(tr('Home', '在家'))),
                 OutlinedButton.icon(
-                    key: SiteModePage.visitorKey, onPressed: _visitor, icon: const Icon(Icons.people), label: const Text('访客…')),
+                    key: SiteModePage.visitorKey, onPressed: _visitor, icon: const Icon(Icons.people), label: Text(tr('Visitor…', '访客…'))),
               ],
-              if (!canSet) const Text('撤防（在家、访客）要业主切'),
+              if (!canSet) Text(tr('Disarming (Home, Visitor) needs the owner', '撤防（在家、访客）要业主切')),
             ]),
             const Divider(),
-            const Text('防区（没配过的防区一律布防）', style: TextStyle(fontWeight: FontWeight.bold)),
-            if (_zones.isEmpty) const Text('还没有防区'),
+            Text(tr('Zones (zones that are not configured are always armed)', '防区（没配过的防区一律布防）'),
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            if (_zones.isEmpty) Text(tr('No zones yet', '还没有防区')),
             for (final z in _zones)
               ListTile(
                 key: Key('mode-zone-${z['zone']}'),
                 dense: true,
                 leading: Icon(z['armed'] == true ? Icons.shield : Icons.shield_outlined,
                     color: z['armed'] == true ? Colors.red : Colors.grey),
-                title: Text('${z['zone']} · ${z['armed'] == true ? '布防中' : '撤防中'}'),
-                subtitle: Text(z['home_armed'] == true ? '在家时也布防' : '在家时撤防'),
+                title: Text(
+                    '${z['zone']} · ${z['armed'] == true ? tr('Armed', '布防中') : tr('Disarmed', '撤防中')}'),
+                subtitle: Text(z['home_armed'] == true
+                    ? tr('Armed in Home mode too', '在家时也布防')
+                    : tr('Disarmed in Home mode', '在家时撤防')),
                 trailing: manage
                     ? Switch(
                         key: Key('mode-zone-home-${z['zone']}'),
                         value: z['home_armed'] == true,
                         onChanged: (v) => _run(() => widget.api.setZoneHome('${z['zone']}', v),
-                            '${z['zone']} 在家时${v ? '布防' : '撤防'}'))
+                            tr('${z['zone']} ${v ? 'armed' : 'disarmed'} in Home mode',
+                                '${z['zone']} 在家时${v ? '布防' : '撤防'}')))
                     : null,
               ),
           ],

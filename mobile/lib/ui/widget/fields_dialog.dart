@@ -4,6 +4,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../l10n.dart';
+
 class DialogField {
   final Key? key;
   final String label;
@@ -64,7 +66,7 @@ class _FieldsDialogState extends State<_FieldsDialog> {
               decoration: InputDecoration(labelText: widget.fields[i].label)),
       ]),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('算了')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel', '算了'))),
         FilledButton(
             key: widget.confirmKey,
             onPressed: () => Navigator.pop(context, [for (final c in _ctl) c.text.trim()]),

@@ -19,6 +19,7 @@ import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'site_add.dart';
 import 'site_logs.dart';
 import 'site_mapping.dart';
 import 'site_maps.dart';
@@ -45,28 +46,30 @@ SiteApi defaultSiteApi(SiteEntry s) => SiteClient(s.url, s.fingerprint);
 
 String _statusLine(Map<String, dynamic> r) {
   final st = r['status'];
-  if (r['revoked'] == true) return '已吊销';
-  if (st is! Map) return '没有状态';
+  if (r['revoked'] == true) return tr('Revoked', '已吊销');
+  if (st is! Map) return tr('No status', '没有状态');
   final online = st['online'] == true && r['fresh'] == true;
   final task = st['task'];
-  final taskText = task is Map ? taskLabel(task) : '空闲';
-  final held = r['held'] is Map ? '已叫停 · ' : '';
+  final taskText = task is Map ? taskLabel(task) : tr('Idle', '空闲');
+  final held = r['held'] is Map ? tr('Stopped · ', '已叫停 · ') : '';
   // W33：只许手动派的狗（站点自己不让它动）；狗确认看见人（决策 48）
-  final manual = r['manual_only'] is Map ? '只许手动 · ' : '';
+  final manual = r['manual_only'] is Map ? tr('Manual only · ', '只许手动 · ') : '';
   final caps = r['capabilities'];
   final tasks = caps is Map ? caps['tasks'] : null;
   final p = tasks is Map ? tasks['persons'] : null;
   final seen = online && p is Map && p['state'] == 'ok' && p['present'] == true
-      ? ' · 看见 ${p['count'] ?? 1} 人'
+      ? tr(' · sees ${p['count'] ?? 1} person(s)', ' · 看见 ${p['count'] ?? 1} 人')
       : '';
-  return held + manual + (online ? '在线 · $taskText$seen' : '离线');
+  return held +
+      manual +
+      (online ? tr('Online · $taskText$seen', '在线 · $taskText$seen') : tr('Offline', '离线'));
 }
 
 /// 一趟任务说人话（W13：回充那几趟）；别的照原样 `kind state`。
 String taskLabel(Map task) {
   final id = '${task['task_id'] ?? ''}';
-  if (task['kind'] == 'dock') return '充电中（对桩、充电、出桩）';
-  if (task['kind'] == 'goto' && id.startsWith('charge-')) return '去充电';
+  if (task['kind'] == 'dock') return tr('Charging (docking, charging, undocking)', '充电中（对桩、充电、出桩）');
+  if (task['kind'] == 'goto' && id.startsWith('charge-')) return tr('Going to charge', '去充电');
   return '${task['kind']} ${task['state']}';
 }
 
@@ -81,13 +84,16 @@ class SiteListPage extends StatefulWidget {
   final PushRegistrar? push;
   /// 语言存哪儿（App V2）；不给就只在这次运行里生效。
   final LangStore? langStore;
+  /// 扫配对码（App V2）：测试换成假的；缺省手机上开相机，桌面版没有扫码按钮。
+  final CodeScanner? scanner;
   const SiteListPage(
       {super.key,
       required this.store,
       this.apiFactory = defaultSiteApi,
       this.watch = const ChannelBackgroundWatch(),
       this.push,
-      this.langStore});
+      this.langStore,
+      this.scanner});
 
   @override
   State<SiteListPage> createState() => _SiteListPageState();
@@ -105,7 +111,7 @@ class _SiteListPageState extends State<SiteListPage> {
     widget.store.load().then((s) {
       if (mounted) setState(() => _sites = s);
     }, onError: (Object e) {
-      if (mounted) setState(() => _loadError = '站点列表读不出来：$e');
+      if (mounted) setState(() => _loadError = '$e');
     });
   }
 
@@ -125,54 +131,11 @@ class _SiteListPageState extends State<SiteListPage> {
     if (mounted) setState(() => _sites = next);
   }
 
+  /// 添加站点（App V2）：扫码、粘贴配对码或手填，都在 `SiteAddPage`；这里只管存。
   Future<void> _add() async {
-    final name = TextEditingController();
-    final url = TextEditingController(text: 'https://');
-    final fp = TextEditingController();
-    final user = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => AlertDialog(
-        // 横屏时键盘占掉一大半高：整个对话框（标题连输入框）能滚，不然溢出。
-        scrollable: true,
-        title: const Text('添加站点'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(
-              key: const Key('site-name'),
-              controller: name,
-              decoration: const InputDecoration(labelText: '名字')),
-          TextField(
-              key: const Key('site-url'),
-              controller: url,
-              decoration: const InputDecoration(labelText: '地址（https://…:8443）')),
-          TextField(
-              key: const Key('site-fp'),
-              controller: fp,
-              decoration: const InputDecoration(
-                  labelText: '证书指纹（d1max-site fingerprint）')),
-          TextField(
-              key: const Key('site-user'),
-              controller: user,
-              decoration: const InputDecoration(labelText: '账号')),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('保存')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    final bad = checkSiteEntry(url.text, fp.text);
-    if (bad != null || name.text.trim().isEmpty || user.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('没保存：${bad ?? '名字和账号要填'}')));
-      return;
-    }
-    final entry = SiteEntry(
-        name: name.text.trim(),
-        url: url.text.trim(),
-        fingerprint: normalizeFingerprint(fp.text),
-        username: user.text.trim());
+    final entry = await Navigator.push<SiteEntry>(context,
+        MaterialPageRoute<SiteEntry>(builder: (_) => SiteAddPage(scanner: widget.scanner)));
+    if (entry == null || !mounted) return;
     final next = [..._sites, entry];
     await widget.store.save(next);
     if (mounted) setState(() => _sites = next);
@@ -184,17 +147,18 @@ class _SiteListPageState extends State<SiteListPage> {
       context: context,
       builder: (c) => AlertDialog(
         scrollable: true, // 横屏弹键盘
-        title: Text('登录 ${s.name}'),
+        title: Text(tr('Sign in to ${s.name}', '登录 ${s.name}')),
         content: TextField(
             key: const Key('site-password'),
             controller: pw,
             obscureText: true,
             autofocus: true, // 桌面版（W15）：弹出来就能打字，回车就登录
             onSubmitted: (_) => Navigator.pop(c, true),
-            decoration: InputDecoration(labelText: '${s.username} 的口令')),
+            decoration: InputDecoration(
+                labelText: tr('Password for ${s.username}', '${s.username} 的口令'))),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('登录')),
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: Text(tr('Sign in', '登录'))),
         ],
       ),
     );
@@ -207,7 +171,7 @@ class _SiteListPageState extends State<SiteListPage> {
       await api.login(s.username, pw.text);
     } catch (e) {
       api?.close();
-      messenger.showSnackBar(SnackBar(content: Text('登录不了：$e')));
+      messenger.showSnackBar(SnackBar(content: Text(tr("Can't sign in: $e", '登录不了：$e'))));
       return;
     }
     final a = api;
@@ -250,9 +214,13 @@ class _SiteListPageState extends State<SiteListPage> {
           : FloatingActionButton(
               key: const Key('site-add'), onPressed: _add, child: const Icon(Icons.add)),
       body: _loadError != null
-          ? Center(child: Text(_loadError!, key: const Key('site-load-error')))
+          ? Center(
+              child: Text(tr("Can't read the site list: $_loadError", '站点列表读不出来：$_loadError'),
+                  key: const Key('site-load-error')))
           : _sites.isEmpty
-              ? const Center(child: Text('还没有站点。右下角添加。'))
+              ? Center(
+                  child: Text(tr('No sites yet. Add one with the button at the bottom right.',
+                      '还没有站点。右下角添加。')))
               : ListView(children: [
                   for (final s in _sites)
                     ListTile(
@@ -260,7 +228,8 @@ class _SiteListPageState extends State<SiteListPage> {
                         subtitle: Text('${s.url} · ${s.username}'),
                         trailing: IconButton(
                             key: Key('site-remove-${s.name}'),
-                            tooltip: '删掉（证书重签后删了重加）',
+                            tooltip: tr('Remove (after the certificate is reissued, remove and add again)',
+                                '删掉（证书重签后删了重加）'),
                             icon: const Icon(Icons.delete_outline),
                             onPressed: () => _remove(s)),
                         onTap: () => _open(s)),
@@ -279,7 +248,8 @@ void defaultRing() {
 
 class SiteRobotsPage extends StatefulWidget {
   final SiteApi api;
-  final String title;
+  /// 标题（站点名）；不给就是「站点」（按当前语言）。
+  final String? title;
   final void Function() ring;
   /// 后台值守（W17，决策 30）：登录进来就开（有 [entry] 且平台支持），离开这一页（注销）就停。
   final BackgroundWatch watch;
@@ -291,7 +261,7 @@ class SiteRobotsPage extends StatefulWidget {
   const SiteRobotsPage(
       {super.key,
       required this.api,
-      this.title = '站点',
+      this.title,
       this.ring = defaultRing,
       this.watch = const ChannelBackgroundWatch(),
       this.entry,
@@ -365,7 +335,10 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
         final a = f['alert'] as Map;
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('${a['level']} ${a['robot']} · ${a['title']}（没人确认）')));
+              content: Text(tr(
+                  '${a['level']} ${a['robot']} · '
+                      '${alertTitle('${a['kind']}', '${a['title']}')} (unacknowledged)',
+                  '${a['level']} ${a['robot']} · ${a['title']}（没人确认）'))));
         }
       }
       _soon();
@@ -388,7 +361,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
       final a = pending.first;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('${a.level} ${a.robot} · ${a.title}（没人确认）')));
+            content: Text(tr(
+                '${a.level} ${a.robot} · ${alertTitle(a.kind, a.title)} (unacknowledged)',
+                '${a.level} ${a.robot} · ${a.title}（没人确认）'))));
       }
     } on Exception {
       return; // 读不到就算了：值守屏自己会报读不到
@@ -412,7 +387,10 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
   }
 
   void _backToLogin() {
-    if (!_disposed && mounted) Navigator.of(context).pop('登录过期了，重新登录');
+    if (!_disposed && mounted) {
+      Navigator.of(context)
+          .pop(tr('Your session has expired. Sign in again', '登录过期了，重新登录'));
+    }
   }
 
   void _soon() {
@@ -502,9 +480,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
           site: e.name, url: e.url, fingerprint: e.fingerprint, token: '${t['token']}');
       _bgOn = true;
     } on SiteError catch (err) {
-      why = '后台值守开不了：$err';
+      why = tr("Can't start background watch: $err", '后台值守开不了：$err');
     } on PlatformException catch (err) {
-      why = '后台值守开不了：${err.message}';
+      why = tr("Can't start background watch: ${err.message}", '后台值守开不了：${err.message}');
     }
     if (!mounted) return;
     setState(() => _bgBusy = false);
@@ -520,8 +498,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
           _bgOn = false;
           _bgBusy = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('后台值守关了：app 退到后台就收不到告警')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tr('Background watch off: no alarms arrive while the app is in the background',
+                '后台值守关了：app 退到后台就收不到告警'))));
       }
     } else {
       await _bgStart();
@@ -542,8 +521,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
   @override
   Widget build(BuildContext context) {
     final role = widget.api.session?.role ?? '';
+    final title = widget.title ?? tr('Site', '站点');
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.title}（$role）'), actions: [
+      appBar: AppBar(title: Text(tr('$title ($role)', '$title（$role）')), actions: [
         if (widget.push != null)
           ValueListenableBuilder<PushState>(
               valueListenable: widget.push!.state,
@@ -552,8 +532,9 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                   : Tooltip(
                       key: SiteRobotsPage.pushKey,
                       message: st == PushState.ready
-                          ? 'P1 推送：已就绪'
-                          : 'P1 推送：还没就绪（${widget.push!.reason}）',
+                          ? tr('P1 push: ready', 'P1 推送：已就绪')
+                          : tr('P1 push: not ready (${widget.push!.reason})',
+                              'P1 推送：还没就绪（${widget.push!.reason}）'),
                       child: Icon(
                           st == PushState.ready
                               ? Icons.notifications_on
@@ -562,41 +543,43 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
         if (widget.watch.supported && widget.entry != null)
           IconButton(
               key: SiteRobotsPage.bgWatchKey,
-              tooltip: _bgOn ? '后台值守：开着（点了关）' : '后台值守：关着（点了开）',
+              tooltip: _bgOn
+                  ? tr('Background watch: on (tap to turn off)', '后台值守：开着（点了关）')
+                  : tr('Background watch: off (tap to turn on)', '后台值守：关着（点了开）'),
               icon: Icon(_bgOn ? Icons.shield : Icons.shield_outlined,
                   color: _bgOn ? Colors.green : null),
               onPressed: _bgBusy ? null : _bgToggle),
         IconButton(
             key: const Key('open-watch'),
-            tooltip: '值守',
+            tooltip: tr('Watch', '值守'),
             icon: const Icon(Icons.notifications_active),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteWatchPage(api: widget.api)))),
         IconButton(
             key: const Key('open-releases'),
-            tooltip: '版本',
+            tooltip: tr('Releases', '版本'),
             icon: const Icon(Icons.system_update),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteReleasesPage(api: widget.api)))),
         IconButton(
             key: const Key('open-maps'),
-            tooltip: '地图',
+            tooltip: tr('Maps', '地图'),
             icon: const Icon(Icons.map),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteMapsPage(api: widget.api)))),
         IconButton(
             key: const Key('open-runs'),
-            tooltip: '记录',
+            tooltip: tr('Records', '记录'),
             icon: const Icon(Icons.photo_library),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteRunsPage(api: widget.api)))),
         IconButton(
-            tooltip: '事件',
+            tooltip: tr('Incidents', '事件'),
             icon: const Icon(Icons.warning_amber),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteIncidentsPage(api: widget.api)))),
         IconButton(
-            tooltip: '排程',
+            tooltip: tr('Schedule', '排程'),
             icon: const Icon(Icons.schedule),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteSchedulePage(api: widget.api)))),
@@ -605,17 +588,18 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
         onRefresh: _reload,
         child: ListView(children: [
           if (!_live)
-            const ListTile(
-                key: Key('live-lost'),
-                leading: Icon(Icons.sync_problem, color: Colors.orange),
-                title: Text('实时更新没连上，正在重连；下拉可以手动刷新')),
+            ListTile(
+                key: const Key('live-lost'),
+                leading: const Icon(Icons.sync_problem, color: Colors.orange),
+                title: Text(tr('Live updates disconnected. Reconnecting; pull down to refresh',
+                    '实时更新没连上，正在重连；下拉可以手动刷新'))),
           if (_error != null)
             ListTile(title: Text(_error!, style: const TextStyle(color: Colors.red))),
           if (_mode != null)
             ListTile(
               key: SiteRobotsPage.modeKey,
               leading: Icon(modeIcon('${_mode!['mode']}'), color: modeColor('${_mode!['mode']}')),
-              title: Text('模式：${modeText(_mode!)}'),
+              title: Text(tr('Mode: ${modeText(_mode!)}', '模式：${modeText(_mode!)}')),
               trailing: const Icon(Icons.chevron_right),
               onTap: () async {
                 await Navigator.push(
@@ -640,8 +624,10 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
               key: Key('deterrence-${e.key}'),
               tileColor: Colors.red.withValues(alpha: 0.12),
               leading: const Icon(Icons.campaign, color: Colors.red),
-              title: Text('${e.key} 驱离中 · ${deterSessionText(e.value)}'),
-              subtitle: Text('防区 ${e.value['zone']}${deterSceneText(e.value)}'),
+              title: Text(tr('${e.key} deterring · ${deterSessionText(e.value)}',
+                  '${e.key} 驱离中 · ${deterSessionText(e.value)}')),
+              subtitle: Text(tr('Zone ${e.value['zone']}${deterSceneText(e.value)}',
+                  '防区 ${e.value['zone']}${deterSceneText(e.value)}')),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.push(context,
                   MaterialPageRoute<void>(builder: (_) => SiteDeterrencePage(api: widget.api, robotId: e.key))),
@@ -701,10 +687,12 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       final ack = r['ack'];
       final reason = ack is Map ? '${ack['reason'] ?? ''}' : '';
       ok = ack is! Map || ack['result'] == 'accepted' || ack['result'] == 'duplicate';
-      msg = '$what：${ack is Map ? '${ack['result']}' : 'ok'}'
-          '${reason.isNotEmpty ? '（${ackReasonText(reason)}）' : ''}';
+      final res = ack is Map ? '${ack['result']}' : 'ok';
+      msg = reason.isEmpty
+          ? tr('$what: $res', '$what：$res')
+          : tr('$what: $res (${ackReasonText(reason)})', '$what：$res（${ackReasonText(reason)}）');
     } on SiteError catch (e) {
-      msg = '$what 没成：$e';
+      msg = tr('$what failed: $e', '$what 没成：$e');
     }
     if (!mounted) return ok; // 派单要等回执，人可能早就退出这一页了
     setState(() => _msg = msg);
@@ -719,26 +707,32 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
   /// 填了地图号与版本就边走边建（W09c2）：停下之后狗上直接打包成这一版，不用再点「重建」。
   Future<void> _startRecord() async {
     final got = await showFieldsDialog(context,
-        title: '开始录包',
+        title: tr('Start bag recording', '开始录包'),
         fields: [
-          DialogField('包名（字母、数字、. _ -）',
+          DialogField(tr('Bag name (letters, digits, . _ -)', '包名（字母、数字、. _ -）'),
               key: const Key('record-name'),
               initial:
                   'rec-${DateTime.now().toUtc().toIso8601String().substring(0, 16).replaceAll(':', '')}'),
-          const DialogField('地图号（边走边建；空着只录包）', key: Key('record-map')),
-          const DialogField('版本', key: Key('record-version')),
+          DialogField(
+              tr('Map ID (build while driving; leave empty to record only)', '地图号（边走边建；空着只录包）'),
+              key: const Key('record-map')),
+          DialogField(tr('Version', '版本'), key: const Key('record-version')),
         ],
-        confirm: '开始',
+        confirm: tr('Start', '开始'),
         confirmKey: const Key('record-go'));
     if (got == null || got[0].isEmpty) return;
     final mapId = got[1].trim(), version = got[2].trim();
     if (mapId.isEmpty != version.isEmpty) {
-      setState(() => _msg = '边走边建：地图号与版本要一起填（只录包就都空着）');
+      setState(() => _msg = tr(
+          'Build while driving: fill in both map ID and version (leave both empty to record only)',
+          '边走边建：地图号与版本要一起填（只录包就都空着）'));
       return;
     }
     final ok = await _do(
         () => widget.api.mapping(widget.robotId, 'start', name: got[0], mapId: mapId, version: version),
-        mapId.isEmpty ? '开始录包' : '开始录包并建图 $mapId:$version');
+        mapId.isEmpty
+            ? tr('Start bag recording', '开始录包')
+            : tr('Start bag recording and mapping $mapId:$version', '开始录包并建图 $mapId:$version'));
     // 收下了就打开录包轨迹（W00c6h）：边开边看哪儿走过了。录包在狗上后台起，起来之后才开始记点。
     if (ok && mounted && robotCan(_view, 'mapping_trail')) _openTrail();
   }
@@ -747,15 +741,15 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
   Future<void> _relocalize() async {
     final how = await showDialog<String>(
       context: context,
-      builder: (c) => SimpleDialog(title: const Text('狗现在在哪'), children: [
+      builder: (c) => SimpleDialog(title: Text(tr('Where is the robot now', '狗现在在哪')), children: [
         SimpleDialogOption(
             key: const Key('reloc-home'),
             onPressed: () => Navigator.pop(c, 'home'),
-            child: const Text('在原点（充电桩）')),
+            child: Text(tr('At the origin (dock)', '在原点（充电桩）'))),
         SimpleDialogOption(
             key: const Key('reloc-xy'),
             onPressed: () => Navigator.pop(c, 'xy'),
-            child: const Text('输地图坐标')),
+            child: Text(tr('Enter map coordinates', '输地图坐标'))),
       ]),
     );
     if (how == null || !mounted) return;
@@ -764,39 +758,46 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       final sure = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
-          title: const Text('狗现在就在原点？'),
-          content: const Text('要站在原点（充电桩）上、朝向跟标原点时一样。站在别处点了，狗会按错的位置走。'),
+          title: Text(tr('Is the robot at the origin now?', '狗现在就在原点？')),
+          content: Text(tr(
+              'It must stand on the origin (dock), facing the same way as when the origin was marked. '
+                  'If it is anywhere else, the robot will navigate from the wrong position.',
+              '要站在原点（充电桩）上、朝向跟标原点时一样。站在别处点了，狗会按错的位置走。')),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
             FilledButton(
                 key: const Key('reloc-home-go'),
                 onPressed: () => Navigator.pop(c, true),
-                child: const Text('在原点')),
+                child: Text(tr('At the origin', '在原点'))),
           ],
         ),
       );
       if (sure != true) return;
-      await _do(() => widget.api.relocalize(widget.robotId, atHome: true), '设位置');
+      await _do(() => widget.api.relocalize(widget.robotId, atHome: true), tr('Set position', '设位置'));
       return;
     }
     final got = await showFieldsDialog(context,
-        title: '狗现在在地图上哪儿',
-        fields: const [
-          DialogField('x（米）', key: Key('reloc-x')),
-          DialogField('y（米）', key: Key('reloc-y')),
+        title: tr('Where is the robot on the map', '狗现在在地图上哪儿'),
+        fields: [
+          DialogField(tr('x (m)', 'x（米）'), key: const Key('reloc-x')),
+          DialogField(tr('y (m)', 'y（米）'), key: const Key('reloc-y')),
           // 地图的 x 轴不一定朝东（雷达建的图按建图起点定轴，W00c6e 内审）。
-          DialogField('朝向（度，地图 x 轴方向为 0，逆时针为正）', key: Key('reloc-yaw'), initial: '0'),
+          DialogField(
+              tr('Heading (degrees; 0 = map x axis, counter-clockwise positive)',
+                  '朝向（度，地图 x 轴方向为 0，逆时针为正）'),
+              key: const Key('reloc-yaw'),
+              initial: '0'),
         ],
-        confirm: '设',
+        confirm: tr('Set', '设'),
         confirmKey: const Key('reloc-go'));
     if (got == null) return;
     final x = double.tryParse(got[0]), y = double.tryParse(got[1]), deg = double.tryParse(got[2]);
     if (x == null || y == null || deg == null || !x.isFinite || !y.isFinite || !deg.isFinite) {
-      if (mounted) setState(() => _msg = '坐标、朝向要是数字');
+      if (mounted) setState(() => _msg = tr('Coordinates and heading must be numbers', '坐标、朝向要是数字'));
       return;
     }
     await _do(() => widget.api.relocalize(widget.robotId, x: x, y: y, yaw: deg * pi / 180),
-        '设位置');
+        tr('Set position', '设位置'));
   }
 
   /// 在当前位置标原点（W00c6f，管理员）：确认之后狗用它此刻的位置当这张图上的原点（W13a：原点跟待命点
@@ -805,16 +806,22 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: const Text('在这儿标原点'),
-        content: Text('把 ${widget.robotId} 在这张图上的原点（安全返航、回充用，名字叫 home）换成它现在的'
-            '位置？待命点不动（这张图上还没有待命点的话，顺手建一个默认的）。\n'
-            '狗会先核定位：没设位置、偏差大就不标；在跑任务、在换图也不标。'),
+        title: Text(tr('Mark origin here', '在这儿标原点')),
+        content: Text(tr(
+            'Move the origin of ${widget.robotId} on this map (used for safe return and charging, named home) '
+                'to where it is now? Standby points stay as they are (if this map has none yet, a default '
+                'one is created).\n'
+                'The robot checks its localization first: it will not mark if the position is not set or the '
+                'error is large, or while it is running a task or switching maps.',
+            '把 ${widget.robotId} 在这张图上的原点（安全返航、回充用，名字叫 home）换成它现在的'
+                '位置？待命点不动（这张图上还没有待命点的话，顺手建一个默认的）。\n'
+                '狗会先核定位：没设位置、偏差大就不标；在跑任务、在换图也不标。')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
           FilledButton(
               key: const Key('mark-home-go'),
               onPressed: () => Navigator.pop(c, true),
-              child: const Text('标')),
+              child: Text(tr('Mark', '标'))),
         ],
       ),
     );
@@ -832,37 +839,50 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         final move = await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
-            title: const Text('替换旧的待命点？'),
-            content: Text('待命点 home 现在登记在 $where 上。换到狗现在用的这张图上（$where 上就没有它了）？'),
+            title: Text(tr('Replace the old standby point?', '替换旧的待命点？')),
+            content: Text(tr(
+                'Standby point home is registered on $where. Move it to the map the robot is using now '
+                    '(it is removed from $where)?',
+                '待命点 home 现在登记在 $where 上。换到狗现在用的这张图上（$where 上就没有它了）？')),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+              TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
               FilledButton(
                   key: const Key('mark-home-replace'),
                   onPressed: () => Navigator.pop(c, true),
-                  child: const Text('替换')),
+                  child: Text(tr('Replace', '替换'))),
             ],
           ),
         );
         if (move != true) {
-          if (mounted) setState(() => _msg = '没标：待命点 home 还在 $where 上');
+          if (mounted) {
+            setState(() => _msg = tr('Not marked: standby point home is still on $where',
+                '没标：待命点 home 还在 $where 上'));
+          }
           return;
         }
         r = await widget.api.markHome(widget.robotId, replace: true);
       }
       final d = (r['ack'] as Map?)?['data'];
-      msg = d is Map
-          ? '原点标好了：(${(d['x'] as num).toStringAsFixed(1)}, ${(d['y'] as num).toStringAsFixed(1)})'
-              '，偏差约 ${(d['sigma_m'] as num? ?? 0).toStringAsFixed(1)} m'
-          : '原点标好了';
+      if (d is Map) {
+        final x = (d['x'] as num).toStringAsFixed(1), y = (d['y'] as num).toStringAsFixed(1);
+        final sigma = (d['sigma_m'] as num? ?? 0).toStringAsFixed(1);
+        msg = tr('Origin marked: ($x, $y), error about $sigma m',
+            '原点标好了：($x, $y)，偏差约 $sigma m');
+      } else {
+        msg = tr('Origin marked', '原点标好了');
+      }
     } on SiteError catch (e) {
       final d = e.body['data'];
       if (e.status == 500 && d is Map && d['x'] is num && d['y'] is num) {
         // 狗上已经换了、站点没登记上：给坐标，好手工登记待命点。
-        msg = '${e.message}：狗上的原点在 ${d['map_id']}:${d['map_version']} 的 '
-            '(${(d['x'] as num).toStringAsFixed(1)}, ${(d['y'] as num).toStringAsFixed(1)})';
+        final at = '${d['map_id']}:${d['map_version']}';
+        final x = (d['x'] as num).toStringAsFixed(1), y = (d['y'] as num).toStringAsFixed(1);
+        msg = tr("${e.message}: the robot's origin is at ($x, $y) on $at",
+            '${e.message}：狗上的原点在 $at 的 ($x, $y)');
       } else if (e.status == 409) {
         // 站点回的是「狗没标:<狗的原因>」：原因照拒收那一套说人话。
-        msg = '没标：${ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''))}';
+        final why = ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''));
+        msg = tr('Not marked: $why', '没标：$why');
       } else {
         msg = e.toString(); // 504「狗可能已经标了」等：照站点说的
       }
@@ -878,7 +898,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     try {
       v = await widget.api.robot(widget.robotId);
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = '叫停没成：$e');
+      if (mounted) setState(() => _msg = tr('Stop failed: $e', '叫停没成：$e'));
       return;
     }
     final st = v['status'];
@@ -888,12 +908,12 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       if (mounted) {
         setState(() {
           _view = v;
-          _msg = '它现在没在跑任务';
+          _msg = tr('It is not running a task now', '它现在没在跑任务');
         });
       }
       return;
     }
-    await _do(() => widget.api.abort(widget.robotId, tid), '叫停');
+    await _do(() => widget.api.abort(widget.robotId, tid), tr('Stop', '叫停'));
   }
 
   Future<void> _patrol() async {
@@ -902,20 +922,24 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
       final s = await widget.api.schedule();
       missions = (s['missions'] as List? ?? const []).map((e) => '$e').toList();
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = '拿不到任务：$e');
+      if (mounted) setState(() => _msg = tr("Can't load tasks: $e", '拿不到任务：$e'));
       return;
     }
     if (!mounted) return;
     final pick = await showDialog<String>(
       context: context,
-      builder: (c) => SimpleDialog(title: const Text('派哪趟巡检'), children: [
-        if (missions.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('站点上还没有任务包')),
+      builder: (c) => SimpleDialog(title: Text(tr('Choose a patrol', '派哪趟巡检')), children: [
+        if (missions.isEmpty)
+          Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(tr('No task bundle on the site yet', '站点上还没有任务包'))),
         for (final m in missions)
           SimpleDialogOption(onPressed: () => Navigator.pop(c, m), child: Text(m)),
       ]),
     );
     if (pick == null) return;
-    await _do(() => widget.api.patrol(widget.robotId, pick), '派巡检 $pick');
+    await _do(() => widget.api.patrol(widget.robotId, pick),
+        tr('Dispatch patrol $pick', '派巡检 $pick'));
   }
 
   @override
@@ -938,7 +962,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           child: RefreshIndicator(
         onRefresh: _reload,
         child: ListView(padding: const EdgeInsets.all(12), children: [
-          Text(v == null ? '加载中…' : _statusLine(v), key: const Key('robot-status')),
+          Text(v == null ? tr('Loading…', '加载中…') : _statusLine(v), key: const Key('robot-status')),
           if (v?['loc'] is Map)
             Text(locText((v!['loc'] as Map).cast<String, dynamic>()), key: const Key('robot-loc')),
           if (v?['rtk'] is Map)
@@ -957,13 +981,17 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
               key: const Key('robot-held'),
               color: Colors.orange.shade50,
               child: ListTile(
-                title: Text('被 ${(v!['held'] as Map)['by']} 叫停了'),
-                subtitle: const Text('站点不会再派它（排程、事件、回待命点、遥控都不派），点「恢复」之后才派'),
+                title: Text(tr('Stopped by ${(v!['held'] as Map)['by']}',
+                    '被 ${(v['held'] as Map)['by']} 叫停了')),
+                subtitle: Text(tr(
+                    'The site will not dispatch it (schedule, incidents, return to standby, remote control) '
+                        'until you tap Resume',
+                    '站点不会再派它（排程、事件、回待命点、遥控都不派），点「恢复」之后才派')),
                 trailing: (s?.canDispatch ?? false)
                     ? FilledButton(
                         key: const Key('btn-resume'),
-                        onPressed: () => _do(() => widget.api.resume(widget.robotId), '恢复'),
-                        child: const Text('恢复'))
+                        onPressed: () => _do(() => widget.api.resume(widget.robotId), tr('Resume', '恢复')),
+                        child: Text(tr('Resume', '恢复')))
                     : null,
               ),
             ),
@@ -972,7 +1000,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
           Wrap(spacing: 8, runSpacing: 8, children: [
             if (s?.canDispatch ?? false)
               FilledButton(
-                  key: const Key('btn-patrol'), onPressed: _patrol, child: const Text('派巡检')),
+                  key: const Key('btn-patrol'), onPressed: _patrol, child: Text(tr('Dispatch patrol', '派巡检'))),
             // 连续录像（W18）：谁都能看
             OutlinedButton(
                 key: const Key('btn-recordings'),
@@ -980,7 +1008,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                     context,
                     MaterialPageRoute<void>(
                         builder: (_) => SiteRecordingsPage(api: widget.api, robotId: widget.robotId))),
-                child: const Text('录像')),
+                child: Text(tr('Recordings', '录像'))),
             if (s?.canTeleop ?? false)
               FilledButton.tonal(
                   key: const Key('btn-teleop'),
@@ -989,25 +1017,27 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                       MaterialPageRoute<void>(
                           builder: (_) =>
                               SiteTeleopPage(api: widget.api, robotId: widget.robotId))),
-                  child: const Text('遥控')),
+                  child: Text(tr('Remote control', '遥控'))),
             if ((s?.canManageMaps ?? false) && robotCan(v, 'mapping')) ...[
               OutlinedButton(
                   key: const Key('btn-record-start'),
                   onPressed: _startRecord,
-                  child: const Text('开始录包')),
+                  child: Text(tr('Start bag recording', '开始录包'))),
               OutlinedButton(
                   key: const Key('btn-record-stop'),
-                  onPressed: () => _do(() => widget.api.mapping(widget.robotId, 'stop'), '停止录包'),
-                  child: const Text('停止录包')),
+                  onPressed: () => _do(() => widget.api.mapping(widget.robotId, 'stop'),
+                      tr('Stop bag recording', '停止录包')),
+                  child: Text(tr('Stop bag recording', '停止录包'))),
             ],
             if ((s?.canManageMaps ?? false) && robotCan(v, 'mark_home'))
               OutlinedButton(
                   key: const Key('btn-mark-home'),
                   onPressed: _markHome,
-                  child: const Text('在这儿标原点')),
+                  child: Text(tr('Mark origin here', '在这儿标原点'))),
             if ((s?.canManageMaps ?? false) && robotCan(v, 'mapping_trail'))
               OutlinedButton(
-                  key: const Key('btn-mapping-trail'), onPressed: _openTrail, child: const Text('录包轨迹')),
+                  key: const Key('btn-mapping-trail'), onPressed: _openTrail,
+                  child: Text(tr('Bag recording trail', '录包轨迹'))),
             // 建图进程日志（W00c6g）：管理员看录包、重建子进程的日志，不用再 SSH 上狗。
             if ((s?.canManageMaps ?? false) && robotCan(v, 'proc_log'))
               OutlinedButton(
@@ -1017,7 +1047,7 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                       MaterialPageRoute<void>(
                           builder: (_) =>
                               SiteProcLogsPage(api: widget.api, robotId: widget.robotId))),
-                  child: const Text('建图日志')),
+                  child: Text(tr('Mapping logs', '建图日志'))),
             // 上装（W21）：警灯、警笛、聚光灯、喇叭。保安、管理员；狗报了 deter 才有
             if ((s?.canDispatch ?? false) && robotCan(v, 'deter'))
               OutlinedButton(
@@ -1030,17 +1060,18 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                               robotId: widget.robotId,
                               caps: Map<String, dynamic>.from(
                                   ((v?['capabilities'] as Map)['tasks'] as Map)['deter'] as Map)))),
-                  child: const Text('上装…')),
+                  child: Text(tr('Payload…', '上装…'))),
             if ((s?.canDispatch ?? false) && robotCan(v, 'relocalize'))
               OutlinedButton(
                   key: const Key('btn-relocalize'),
                   onPressed: _relocalize,
-                  child: const Text('设位置')),
+                  child: Text(tr('Set position', '设位置'))),
             if (s?.canDispatch ?? false)
               OutlinedButton(
                   key: const Key('btn-standby'),
-                  onPressed: () => _do(() => widget.api.returnToStandby(widget.robotId), '回待命点'),
-                  child: const Text('回待命点')),
+                  onPressed: () => _do(() => widget.api.returnToStandby(widget.robotId),
+                      tr('Return to standby', '回待命点')),
+                  child: Text(tr('Return to standby', '回待命点'))),
             // 待命点与原点（W13a）：列表、回指定的一个；管理员在这儿设、设默认、删
             if ((s?.canDispatch ?? false) || (s?.canManageMaps ?? false))
               OutlinedButton(
@@ -1052,13 +1083,13 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                               api: widget.api,
                               robotId: widget.robotId,
                               canMarkHere: robotCanStandbyHere(v)))),
-                  child: const Text('待命点…')),
+                  child: Text(tr('Standby points…', '待命点…'))),
             if ((s?.canAbort ?? false) && taskId != null)
               FilledButton(
                   key: const Key('btn-abort'),
                   style: FilledButton.styleFrom(backgroundColor: Colors.red),
                   onPressed: _abort,
-                  child: const Text('叫停')),
+                  child: Text(tr('Stop', '叫停'))),
           ]),
           const SizedBox(height: 12),
           // 画面经站点来（W00c5b）：谁都能看（业主也是），站点那头有人看才让狗推。
@@ -1084,19 +1115,19 @@ class SiteIncidentsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('事件'), actions: [
+      appBar: AppBar(title: Text(tr('Incidents', '事件')), actions: [
         // 拦截点与防区（W16）：谁都能看，管理员能改
         // 固定摄像头（W19）：自带的入侵检测报到站点
         TextButton(
             key: const Key('btn-cameras'),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteCamerasPage(api: api))),
-            child: const Text('摄像头…')),
+            child: Text(tr('Cameras…', '摄像头…'))),
         TextButton(
             key: const Key('btn-intercepts'),
             onPressed: () => Navigator.push(context,
                 MaterialPageRoute<void>(builder: (_) => SiteInterceptsPage(api: api))),
-            child: const Text('拦截点…')),
+            child: Text(tr('Intercept points…', '拦截点…'))),
       ]),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: api.incidents(),
@@ -1104,7 +1135,7 @@ class SiteIncidentsPage extends StatelessWidget {
           if (snap.hasError) return Center(child: Text('${snap.error}'));
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final rows = snap.data!;
-          if (rows.isEmpty) return const Center(child: Text('没有事件'));
+          if (rows.isEmpty) return Center(child: Text(tr('No incidents', '没有事件')));
           return ListView(children: [
             for (final r in rows)
               ListTile(
@@ -1126,7 +1157,7 @@ class SiteSchedulePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('排程')),
+      appBar: AppBar(title: Text(tr('Schedule', '排程'))),
       body: FutureBuilder<Map<String, dynamic>>(
         future: api.schedule(),
         builder: (c, snap) {
@@ -1134,17 +1165,24 @@ class SiteSchedulePage extends StatelessWidget {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final d = snap.data!;
           final entries = (d['entries'] as List? ?? const []).whereType<Map>().toList();
-          if (d['bundle'] == null) return const Center(child: Text('站点上还没有任务包'));
+          if (d['bundle'] == null) {
+            return Center(child: Text(tr('No task bundle on the site yet', '站点上还没有任务包')));
+          }
           return ListView(children: [
             ListTile(
-                title: Text('任务包 ${(d['bundle'] as Map)['bundle_id']} '
-                    'v${(d['bundle'] as Map)['version']}'),
-                subtitle: Text('时区 ${d['timezone']}')),
+                title: Text(tr(
+                    'Task bundle ${(d['bundle'] as Map)['bundle_id']} v${(d['bundle'] as Map)['version']}',
+                    '任务包 ${(d['bundle'] as Map)['bundle_id']} v${(d['bundle'] as Map)['version']}')),
+                subtitle: Text(tr('Time zone ${d['timezone']}', '时区 ${d['timezone']}'))),
             for (final e in entries)
               ListTile(
                 title: Text('${e['id']} · ${scheduleWhen(e.cast<String, dynamic>())} · ${e['mission']}'),
-                subtitle: Text('下一轮 ${e['next_run']}'
-                    '${e['last'] is Map ? ' · 上一次 ${(e['last'] as Map)['outcome']} ${(e['last'] as Map)['result'] ?? ''}' : ''}'),
+                subtitle: Text(tr('Next ${e['next_run']}', '下一轮 ${e['next_run']}') +
+                    (e['last'] is Map
+                        ? tr(
+                            ' · last ${(e['last'] as Map)['outcome']} ${(e['last'] as Map)['result'] ?? ''}',
+                            ' · 上一次 ${(e['last'] as Map)['outcome']} ${(e['last'] as Map)['result'] ?? ''}')
+                        : '')),
               ),
           ]);
         },

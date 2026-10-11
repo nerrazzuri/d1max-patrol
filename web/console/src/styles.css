@@ -257,3 +257,16 @@ input[type="time"], input[type="date"] { color-scheme: dark; }
   .queue td { display: inline-block; border: 0; padding: 2px 8px; }
   .queue tr { display: block; border-top: 1px solid var(--c-rule); padding: 6px 0; }
 }
+
+/* 手机扫码添加站点(App V2)。二维码白底黑码,不跟主题走。 */
+.pair-phone { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; padding-top: 16px; }
+.pair-phone .qr { width: 232px; height: 232px; flex: none; border-radius: var(--r-control); }
+.pair-phone .qr.none { display: flex; align-items: center; justify-content: center; border: 1px solid var(--c-rule); }
+.pair-text { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.pair-text p { margin: 0; }
+.pair-text .row { align-items: flex-end; }
+.pair-text .grow { flex: 1; min-width: 0; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+.kv dt { color: var(--c-textMuted); font-size: 14px; line-height: 20px; }
+.kv dd { margin: 0; min-width: 0; }
+.wrap { overflow-wrap: anywhere; }

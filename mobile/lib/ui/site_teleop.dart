@@ -19,20 +19,21 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 import 'site_video.dart';
 import 'widget/joystick.dart';
 
 /// 结束原因给人看的话。
 String teleopEndText(String reason) => switch (reason) {
-      'released' => '你放开了遥控',
-      'disconnected' => '遥控连接断了，狗已经停下',
-      'taken_over' => '管理员接管了遥控',
-      'halt' => '有人按了停车',
-      'robot_offline' => '狗掉线了',
-      'lease_lost' => '续不上租约，遥控结束',
-      'logged_out' => '登录过期了',
-      _ => '遥控结束（$reason）',
+      'released' => tr('You released control', '你放开了遥控'),
+      'disconnected' => tr('Remote control connection lost. The robot has stopped', '遥控连接断了，狗已经停下'),
+      'taken_over' => tr('An admin took control', '管理员接管了遥控'),
+      'halt' => tr('Someone pressed stop', '有人按了停车'),
+      'robot_offline' => tr('The robot went offline', '狗掉线了'),
+      'lease_lost' => tr('The control lease could not be renewed. Remote control ended', '续不上租约，遥控结束'),
+      'logged_out' => tr('Your session has expired', '登录过期了'),
+      _ => tr('Remote control ended ($reason)', '遥控结束（$reason）'),
     };
 
 class SiteTeleopPage extends StatefulWidget {
@@ -56,7 +57,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   TeleopLink? _link;
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _tick;
-  String _status = '正在拿遥控……';
+  String _status = tr('Requesting control…', '正在拿遥控……');
   bool _granted = false;
   bool _video = true;
   bool _ended = false;
@@ -85,7 +86,9 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
         _clearKeys();
-        _endLocally('切到后台了，遥控已结束（狗已停）。要接着开，重新进这一页');
+        _endLocally(tr(
+            'The app went to the background. Remote control ended (robot stopped). Reopen this page to continue',
+            '切到后台了，遥控已结束（狗已停）。要接着开，重新进这一页'));
     }
   }
 
@@ -126,7 +129,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     } on SiteError catch (e) {
       if (mounted) {
         setState(() {
-          _status = '遥控开不了：${e.message}';
+          _status = tr("Can't start remote control: ${e.message}", '遥控开不了：${e.message}');
           _ended = true;
         });
       }
@@ -144,7 +147,8 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           _granted = true;
           _maxVx = (m['max_vx'] as num?)?.toDouble() ?? 0;
           _maxWz = (m['max_wz'] as num?)?.toDouble() ?? 0;
-          _status = '你在遥控（限速 ${_maxVx.toStringAsFixed(2)} m/s）';
+          _status = tr('You are in control (speed limit ${_maxVx.toStringAsFixed(2)} m/s)',
+              '你在遥控（限速 ${_maxVx.toStringAsFixed(2)} m/s）');
         });
         _tick ??= Timer.periodic(const Duration(milliseconds: 100), (_) => _sendNow());
       case 'video':
@@ -243,7 +247,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       setState(() {
         _ended = true;
         _granted = false;
-        _status = '你按了停车';
+        _status = tr('You pressed stop', '你按了停车');
       });
     }
     try {
@@ -251,7 +255,9 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
     } on SiteError catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('停车没确认：$e —— 按机身急停！')));
+            .showSnackBar(SnackBar(
+                content: Text(tr('Stop not confirmed: $e. Press the E-stop on the robot',
+                    '停车没确认：$e —— 按机身急停！'))));
       }
     }
   }
@@ -285,7 +291,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       onKeyEvent: _onKey,
       onFocusChange: _lostFocus,
       child: Scaffold(
-      appBar: AppBar(title: Text('遥控 ${widget.robotId}')),
+      appBar: AppBar(title: Text(tr('Remote control ${widget.robotId}', '遥控 ${widget.robotId}'))),
       body: SafeArea(
         top: false,
         // 摇杆铺满给它的那块地方：要给定大小（整栏高）。
@@ -307,16 +313,20 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
               Padding(
                 padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
                 child: Text(
-                  !_video && !_ended ? '没有画面：不许动（画面回来之前摇杆不起作用）' : _status,
+                  !_video && !_ended
+                      ? tr('No video: do not drive (the joysticks are disabled until video returns)',
+                          '没有画面：不许动（画面回来之前摇杆不起作用）')
+                      : _status,
                   key: SiteTeleopPage.statusKey,
                   style: TextStyle(color: bad ? Colors.red : null, fontWeight: FontWeight.bold),
                 ),
               ),
               if (desktop)
-                const Padding(
+                Padding(
                   key: SiteTeleopPage.keysKey,
-                  padding: EdgeInsets.fromLTRB(4, 4, 4, 0),
-                  child: Text('键盘：W/S 前后，A/D 转向，松开就停；Esc 停车'),
+                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+                  child: Text(tr('Keyboard: W/S forward/back, A/D turn, release to stop; Esc to stop',
+                      '键盘：W/S 前后，A/D 转向，松开就停；Esc 停车')),
                 ),
               Expanded(
                 child: ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
@@ -336,7 +346,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                     key: SiteTeleopPage.stopKey,
                     style: FilledButton.styleFrom(backgroundColor: Colors.red),
                     onPressed: _halt,
-                    child: const Text('停', style: TextStyle(fontSize: 28)),
+                    child: Text(tr('Stop', '停'), style: const TextStyle(fontSize: 28)),
                   ),
                 ),
               ),
