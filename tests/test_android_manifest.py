@@ -27,14 +27,25 @@ def test_release包的清单里有网络权限():
     assert "android.permission.INTERNET" in _permissions(MAIN_MANIFEST)
 
 
-def test_主界面只许横屏():
-    """用户 2026-09-26「手机app需要改成横屏模式」。清单里锁住,启动画面(Flutter 起来之前)就是横的;
-    ``sensorLandscape``:两个横向都行,手机怎么拿都能转过来。Flutter 那边 ``lockLandscape`` 也锁。"""
+def test_主界面跟着手机的旋转设置_不锁横屏():
+    """App V2(决策 44):普通页面竖屏横屏都行,遥控页自己锁横屏(Flutter 那边进出时锁放)。清单里是
+    ``fullUser``:四个方向都行,但听用户的自动旋转开关 —— 关了自动旋转就是竖屏,不会自己转。
+    (2026-09-26 到 App V2 之前是 ``sensorLandscape``,整个 app 只许横屏。)"""
     root = ET.parse(MAIN_MANIFEST).getroot()
     acts = root.findall("application/activity")
     main = [a for a in acts if a.get(f"{ANDROID}name") == ".MainActivity"]
     assert main, "找不到 MainActivity"
-    assert main[0].get(f"{ANDROID}screenOrientation") == "sensorLandscape"
+    assert main[0].get(f"{ANDROID}screenOrientation") == "fullUser"
+
+
+def test_应用名走资源_英文系统英文_中文系统中文():
+    """App V2:英文为主、中文可选。名字不写死在清单里。"""
+    root = ET.parse(MAIN_MANIFEST).getroot()
+    assert root.find("application").get(f"{ANDROID}label") == "@string/app_name"
+    res = MAIN_MANIFEST.parent / "res"
+    names = {d: ET.parse(res / d / "strings.xml").getroot().find("string[@name='app_name']").text
+             for d in ("values", "values-zh")}
+    assert names == {"values": "D1 Max Patrol", "values-zh": "D1 Max 巡检"}
 
 
 def test_W17_后台值守的前台服务与权限():

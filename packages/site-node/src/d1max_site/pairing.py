@@ -36,7 +36,8 @@ def check_url(url: str) -> str:
         port = u.port
     except ValueError as exc:
         raise PairingError("地址要是 https://主机:端口") from exc
-    if u.scheme != "https" or not u.hostname or u.username is not None or u.password is not None:
+    # 有 @ 就有 username(哪怕是空的),口令不用另查
+    if u.scheme != "https" or not u.hostname or u.username is not None:
         raise PairingError("地址要是 https://主机:端口")
     if u.path not in ("", "/") or u.query or u.fragment:
         raise PairingError("地址只写到端口为止,不带路径")
