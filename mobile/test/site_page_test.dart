@@ -63,6 +63,46 @@ class FakeApi implements SiteApi {
 
   @override
   Future<SiteSession> login(String n, String p) async => session!;
+  /// 站点体检（C-B4）：给了就用它；[healthError] 给了就抛。诊断包同理。
+  Map<String, dynamic> healthBody = <String, dynamic>{
+    'ok': true, 'critical_ok': true, 'version': '1.4.0', 'now_ms': 1,
+    'checks': <String, dynamic>{
+      'db': <String, dynamic>{'ok': true, 'detail': '库能写'},
+      'disk': <String, dynamic>{'ok': true, 'detail': '站点盘还剩 62%', 'value': 0.62},
+      'certs': <String, dynamic>{'ok': true, 'detail': '证书都没到期'},
+    },
+  };
+  SiteError? healthError;
+  Map<String, dynamic> versionsBody = <String, dynamic>{
+    'site': <String, dynamic>{'version': '1.4.0', 'schema': 54, 'api_level': 1, 'min_app_level': 1},
+    'robots': <dynamic>[
+      <String, dynamic>{'robot_id': 'A', 'online': true, 'agent': '1.4.0', 'level': 2, 'verdict': 'ok'},
+    ],
+    'clients': <dynamic>[
+      <String, dynamic>{'name': 'gina', 'kind': 'app', 'version': '1.0.0', 'api_level': 1, 'platform': 'android', 'last_used': 1},
+    ],
+  };
+  SiteError? versionsError;
+  SiteError? bundleError;
+  Completer<void>? healthGate;
+  @override
+  Future<Map<String, dynamic>> health() async {
+    calls.add('health');
+    if (healthGate != null) await healthGate!.future;
+    if (healthError != null) throw healthError!;
+    return healthBody;
+  }
+  @override
+  Future<Map<String, dynamic>> versions() async {
+    if (versionsError != null) throw versionsError!;
+    return versionsBody;
+  }
+  @override
+  Future<Uint8List> supportBundle() async {
+    calls.add('support-bundle');
+    if (bundleError != null) throw bundleError!;
+    return Uint8List.fromList(List<int>.filled(3000, 7));
+  }
   /// 商业化 A6：推送号登记、注销、注销会话的先后。
   final List<String> pushLog = <String>[];
   @override

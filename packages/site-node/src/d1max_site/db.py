@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 53                      # B 阶段外审:person_sightings.kind + 一次性按证据修复
+SCHEMA_VERSION = 54                      # C-B4:sessions.client(哪个 App、哪一版登录的)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     name       TEXT NOT NULL REFERENCES accounts(name),
     created_at INTEGER NOT NULL,
     last_used  INTEGER NOT NULL,
-    scope      TEXT NOT NULL DEFAULT ''
+    scope      TEXT NOT NULL DEFAULT '',
+    client     TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS commands (
     command_id  TEXT PRIMARY KEY,
@@ -568,6 +569,7 @@ _ADDED_COLUMNS = (
     ("alerts", "shelved_until_ms", "INTEGER"),
     ("alerts", "shelved_reason", "TEXT NOT NULL DEFAULT ''"),
     ("person_sightings", "kind", "TEXT NOT NULL DEFAULT 'p1'"),        # B 阶段外审 I1
+    ("sessions", "client", "TEXT NOT NULL DEFAULT ''"),               # C-B4:App 版本号上报
 )
 
 

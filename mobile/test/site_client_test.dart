@@ -27,7 +27,7 @@ void main() {
     final robots = await c.robots();
     expect(robots.first['robot_id'], 'A');
     expect(site.received.last.auth, 'Bearer ${s.token}');
-    expect(site.received.first.body, {'name': 'alice', 'password': 'correct-horse-battery'});
+    expect(site.received.first.body, {'name': 'alice', 'password': 'correct-horse-battery', 'client': clientInfo()});
     c.close();
   });
 
@@ -145,6 +145,21 @@ void main() {
     expect(r['ack']['result'], 'accepted');
     expect(r['task_id'], isA<String>());
     c.close();
+  });
+
+  test('真 HTTPS：登录的报文里带着 App 的版本', () async {
+    final site = FakeSite();
+    await site.start();
+    final c = SiteClient(site.url, testCertFingerprint());
+    try {
+      await c.login('gina', 'pw');
+      final body = site.received.firstWhere((r) => r.path == '/api/login').body as Map;
+      expect(body['client'], clientInfo());
+      expect(body.keys.toSet(), {'name', 'password', 'client'});
+    } finally {
+      c.close();
+      await site.close();
+    }
   });
 
   test('真 HTTPS：告警键整个编码成一段，列全部带 all=1', () async {
