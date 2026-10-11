@@ -320,7 +320,7 @@ def support_bundle(out: Path, *, home: Path, db: Any, health: HealthDesk | None,
     def put(name: str, obj: Any) -> None:
         files[name] = (obj if isinstance(obj, bytes) else
                        json.dumps(obj, ensure_ascii=False, indent=1, default=str).encode())
-    put("README.txt", ("D1 Max 站点诊断包。不含密钥、令牌、库文件、照片录像、狗的位置;"
+    put("README.txt", ("Nexus Warden 站点诊断包。不含密钥、令牌、库文件、照片录像、狗的位置;"
                        "站点配置里像口令、密钥的值打了码,"
                        "日志里长串十六进制只留前 8 位。\n").encode())
     put("versions.json", {"site": site_version(), "python": platform.python_version(),

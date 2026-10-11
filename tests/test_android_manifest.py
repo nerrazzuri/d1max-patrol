@@ -45,7 +45,7 @@ def test_应用名走资源_英文系统英文_中文系统中文():
     res = MAIN_MANIFEST.parent / "res"
     names = {d: ET.parse(res / d / "strings.xml").getroot().find("string[@name='app_name']").text
              for d in ("values", "values-zh")}
-    assert names == {"values": "D1 Max Patrol", "values-zh": "D1 Max 巡检"}
+    assert names == {"values": "Nexus Warden", "values-zh": "Nexus Warden"}
 
 
 def test_W17_后台值守的前台服务与权限():
@@ -63,3 +63,11 @@ def test_W17_后台值守的前台服务与权限():
     assert svc[0].get(f"{ANDROID}exported") == "false", "别的 app 不许启停值守"
     props = {p.get(f"{ANDROID}name") for p in svc[0].findall("property")}
     assert "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" in props
+
+
+def test_RC0_产品名和包名_决策55():
+    """包名有客户装上之后不能改(改了就是另一个 App,升不了级);推送账号也按它登记。"""
+    gradle = (REPO / "mobile/android/app/build.gradle.kts").read_text(encoding="utf-8")
+    assert 'applicationId = "com.nexusdynamic.warden"' in gradle
+    assert '"JPUSH_PKGNAME" to "com.nexusdynamic.warden"' in gradle, "极光按包名认 App,要跟上面一样"
+    assert 'namespace = "com.d1max.d1max_patrol"' in gradle, "代码里的包路径是内部的,不跟着改"

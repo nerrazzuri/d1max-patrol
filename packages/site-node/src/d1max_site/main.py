@@ -126,8 +126,8 @@ def cmd_pair_code(home: Path, url: str, name: str | None = None) -> str:
     from d1max_site.pairing import PairingError, encode
     cfg = _load(home)
     try:
-        return encode(name or str(cfg.get("site_name") or cfg.get("site_id") or "D1 Max"), url,
-                      cmd_fingerprint(home))
+        shown = name or str(cfg.get("site_name") or cfg.get("site_id") or "Nexus Warden")
+        return encode(shown, url, cmd_fingerprint(home))
     except PairingError as exc:
         raise SiteError(str(exc)) from exc
 

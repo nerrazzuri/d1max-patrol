@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.d1max" "\0"
-            VALUE "FileDescription", "d1max_patrol" "\0"
+            VALUE "CompanyName", "Nexus Dynamic" "\0"
+            VALUE "FileDescription", "Nexus Warden" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "d1max_patrol" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.d1max. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Nexus Dynamic. All rights reserved." "\0"
             VALUE "OriginalFilename", "d1max_patrol.exe" "\0"
-            VALUE "ProductName", "d1max_patrol" "\0"
+            VALUE "ProductName", "Nexus Warden" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

@@ -6,7 +6,7 @@ import alertCatalog from "../../../design/i18n/alerts.json";
 export type Lang = "en" | "zh";
 
 const en = {
-  appName: "D1 Max",
+  appName: "Nexus Warden",
   dutyConsole: "Duty console",
   signIn: "Sign in",
   signingIn: "Signing in…",
@@ -355,7 +355,7 @@ const en = {
 type Key = keyof typeof en;
 
 const zh: Partial<Record<Key, string>> = {
-  appName: "D1 Max",
+  appName: "Nexus Warden",
   dutyConsole: "值班台",
   signIn: "登录",
   signingIn: "正在登录…",
