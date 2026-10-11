@@ -44,7 +44,7 @@ PairingInfo decodePairing(String raw) {
     );
   }
   if (!code.startsWith(pairingPrefix)) {
-    throw PairingException(tr("That's not a D1 Max site code.", '这不是 D1 Max 站点的配对码。'));
+    throw PairingException(tr("That's not a Nexus Warden site code.", '这不是 Nexus Warden 站点的配对码。'));
   }
   final bad = PairingException(tr('The site code is damaged. Scan or copy it again.', '配对码坏了。重新扫一次或者重新复制。'));
   final Object? d;

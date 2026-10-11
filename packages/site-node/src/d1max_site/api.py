@@ -890,7 +890,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "这个站点没接站点目录")
         q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
         url = (q.get("url") or [""])[0]
-        name = self.site.site_name or "D1 Max"
+        name = self.site.site_name or "Nexus Warden"
         try:
             fp = cmd_fingerprint(home)
             code = encode(name, url, fp)

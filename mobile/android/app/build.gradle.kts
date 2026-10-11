@@ -71,7 +71,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.d1max.d1max_patrol"
+        applicationId = "com.nexusdynamic.warden"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -85,7 +85,7 @@ android {
         // 商业化 A6:极光推送。AppKey 打包时给(-PjpushAppKey=… 或 ~/.gradle/gradle.properties),不进仓库;
         // 没给就是空的:App 照常用,只是收不到极光推送(后台值守照旧)。
         manifestPlaceholders += mapOf(
-            "JPUSH_PKGNAME" to "com.d1max.d1max_patrol",
+            "JPUSH_PKGNAME" to "com.nexusdynamic.warden",
             "JPUSH_APPKEY" to (project.findProperty("jpushAppKey") as String? ?: ""),
             "JPUSH_CHANNEL" to "developer-default",
         )

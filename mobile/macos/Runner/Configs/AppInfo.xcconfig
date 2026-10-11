@@ -8,7 +8,7 @@
 PRODUCT_NAME = d1max_patrol
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.d1max.d1maxPatrol
+PRODUCT_BUNDLE_IDENTIFIER = com.nexusdynamic.warden
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.d1max. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 Nexus Dynamic. All rights reserved.

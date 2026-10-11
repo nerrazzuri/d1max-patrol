@@ -248,7 +248,7 @@ function TopBar(props: {
   return (
     <header class="topbar">
       <a class="skip" href="#main">Skip to content</a>
-      <span class="wordmark">D1 Max</span>
+      <span class="wordmark">Nexus Warden</span>
       <span class="site muted">{props.me.site_name}</span>
       <nav class="tabsnav" aria-label={t("mainNav")}>
         {tabs.map((x) => <Tab key={x.key} x={x} page={props.page} />)}

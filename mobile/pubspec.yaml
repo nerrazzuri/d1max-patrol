@@ -1,5 +1,5 @@
 name: d1max_patrol
-description: "D1 Max 巡检机器狗的手机遥控器。只做 Android。"
+description: "Nexus Warden:机器狗安防的手机端。"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

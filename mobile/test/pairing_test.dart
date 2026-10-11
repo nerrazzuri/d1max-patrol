@@ -30,7 +30,7 @@ void main() {
     expect(() => decodePairing('D1MAX1.abcdef'),
         throwsA(isA<PairingException>().having((e) => e.message, 'message', contains('狗的开通码'))));
     expect(() => decodePairing('https://example.com/'),
-        throwsA(isA<PairingException>().having((e) => e.message, 'message', contains('不是 D1 Max 站点'))));
+        throwsA(isA<PairingException>().having((e) => e.message, 'message', contains('不是 Nexus Warden 站点'))));
     expect(() => decodePairing(''), throwsA(isA<PairingException>()));
   });
 
@@ -69,6 +69,6 @@ void main() {
     appLang.value = AppLang.en;
     addTearDown(() => appLang.value = AppLang.zh);
     expect(() => decodePairing('nope'),
-        throwsA(isA<PairingException>().having((e) => e.message, 'message', "That's not a D1 Max site code.")));
+        throwsA(isA<PairingException>().having((e) => e.message, 'message', "That's not a Nexus Warden site code.")));
   });
 }

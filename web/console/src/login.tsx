@@ -30,7 +30,7 @@ export function Login({ onIn, expired }: { onIn: (m: Me) => void; expired: boole
     <main class="login">
       <div class="login-top"><LangSwitch /></div>
       <form class="login-card" onSubmit={submit}>
-        <div class="brand"><span class="mark">D1</span><span>{t("appName")}</span></div>
+        <div class="brand"><span class="mark">NW</span><span>{t("appName")}</span></div>
         <h1>{t("dutyConsole")}</h1>
         {expired && <p class="note" role="status">{t("sessionExpired")}</p>}
         <label>

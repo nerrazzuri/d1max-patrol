@@ -55,7 +55,7 @@ class PatrolApp extends StatelessWidget {
         valueListenable: appLang,
         builder: (context, lang, _) => MaterialApp(
               key: ValueKey<AppLang>(lang),
-              title: tr('D1 Max Patrol', 'D1 Max 巡检'),
+              title: 'Nexus Warden',
               // 桌面版（W15）：鼠标拖也能滚、能「下拉刷新」（Flutter 桌面默认只认触摸、触控板拖动）。
               scrollBehavior: const MaterialScrollBehavior().copyWith(dragDevices: {
                 PointerDeviceKind.touch,

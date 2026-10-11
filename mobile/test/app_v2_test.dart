@@ -248,7 +248,7 @@ void main() {
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('site-scan')));
       await t.pumpAndSettle();
-      expect(find.textContaining('不是 D1 Max 站点的配对码'), findsOneWidget);
+      expect(find.textContaining('不是 Nexus Warden 站点的配对码'), findsOneWidget);
       expect(t.widget<TextField>(find.byKey(const Key('site-url'))).controller!.text, 'https://');
     });
 
