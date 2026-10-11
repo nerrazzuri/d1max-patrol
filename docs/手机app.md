@@ -166,8 +166,8 @@ W00c4 加站点模式的时候，直连狗的那几屏（狗的名册、设备 P
 **怎么编**：
 - Linux（这台开发机）：要 `clang ninja-build libgtk-3-dev`，然后 `flutter build linux --release`，包在
   `build/linux/x64/release/bundle/`（整个目录拷走，跑里面的 `d1max_patrol`）。
-- Windows、macOS 不能在 Linux 上编：CI 的 `desktop` 作业（合进 master、手动触发时跑）在 Windows、Mac 机器上编，
-  三个包都在那一次运行的 Artifacts 里（留 14 天）。
+- Windows、macOS 不能在 Linux 上编：CI 的 `desktop` 作业（合进 master、手动触发时跑）编 Linux、Windows 两个包，
+  在那一次运行的 Artifacts 里（留 14 天）。macOS 2026-10-11 起编不过，挪到单独的工作流 `experimental`，没修。
 - **Mac 版没签名**：发给别人装，对方第一次要右键「打开」；正式分发要苹果开发者账号签名、公证（没做）。
   Windows 版第一次运行可能被 SmartScreen 拦，点「仍要运行」。
 
