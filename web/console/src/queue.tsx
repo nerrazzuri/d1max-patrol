@@ -6,6 +6,7 @@ import { hm, hms } from "./data";
 import { alertTitle, lang, t, type Key } from "./i18n";
 import { Shape } from "./icons";
 import { alarmState, type Alert, type AlarmState } from "./model";
+import { recordingLink } from "./recordings";
 
 const STATE_KEY: Record<AlarmState, Key> = {
   unacked: "stUnacked",
@@ -88,6 +89,7 @@ export function AlarmQueue(props: {
                       )}
                       {st === "shelved" && <button type="button" class="btn sm" onClick={() => props.onUnshelve(a)}>{t("unshelve")}</button>}
                       {st !== "resolved" && <button type="button" class="link" onClick={() => props.onGo(a)}>{t("goTo")}</button>}
+                      {a.robot && a.robot !== "site" && <a class="link" href={recordingLink(a)}>{t("recLink")}</a>}
                     </td>
                   </tr>
                 );

@@ -6,6 +6,8 @@ import { api, ApiError, onUnauthorized, setFetch } from "./api";
 import { alertTitle, DICTS, initialLang, knownKinds, tr } from "./i18n";
 import { heading, onMap, toPx } from "./mapview";
 import { daysText, toMap } from "./zonesadmin";
+import { ascending, covered, dateInput, dayRange, firstAfter, minuteOf, nextSegment, prevSegment, recordingLink, segmentAt, spans, type Recording } from "./recordings";
+import { canReview } from "./recpage";
 import { abnormal, alarmState, canDispatch, duration, openAlerts, queue, robotMap, robotState, SIREN_LEVEL, sirenState, wallOrder, type Alert, type Robot } from "./model";
 
 const fx = (name: string) =>
@@ -36,6 +38,66 @@ describe("i18n", () => {
     expect(alertTitle("en", "brand_new_kind", "站点原文")).toBe("站点原文");
     expect(alertTitle("en", "$doc", "原文")).toBe("原文");
     expect(knownKinds().length).toBeGreaterThan(60);
+  });
+});
+
+describe("recordings", () => {
+  const rec = (id: number, start_ms: number, keep = 0): Recording => ({ id, robot_id: "A", camera: "front", start_ms, bytes: 1, keep });
+  const day = dayRange("2026-10-11")!;
+  it("一天的范围按当地时间;日期框的写法来回一致;看不懂的、不存在的日子不收", () => {
+    expect(new Date(day.since).getHours()).toBe(0);
+    expect(day.until - day.since).toBe(86_400_000);
+    expect(dateInput(day.since)).toBe("2026-10-11");
+    expect(dateInput(day.until - 1)).toBe("2026-10-11");
+    expect(dateInput(day.until)).toBe("2026-10-12");
+    expect(dayRange("2026-1-1")).toBeNull();
+    expect(dayRange("2026-02-30")).toBeNull();
+    expect(dayRange("")).toBeNull();
+  });
+  it("站点给的是新的在前:排成从早到晚;同一刻的按编号", () => {
+    expect(ascending([rec(3, 300), rec(2, 100), rec(1, 100)]).map((r) => r.id)).toEqual([1, 2, 3]);
+  });
+  it("挨着的段并成一段,隔开 2 秒以上的分开;一共录了多久只算这一天里的", () => {
+    const s = day.since;
+    const rows = [rec(1, s - 30_000), rec(2, s + 30_000), rec(3, s + 91_999), rec(4, s + 300_000)];
+    const sp = spans(rows, 60);
+    expect(sp).toEqual([{ from: s - 30_000, to: s + 151_999 }, { from: s + 300_000, to: s + 360_000 }]);
+    expect(spans([rec(1, 0), rec(2, 62_000)], 60).length).toBe(2);
+    expect(covered(sp, day.since, day.until)).toBe(151_999 + 60_000);
+    expect(covered([{ from: day.until - 1000, to: day.until + 5000 }], day.since, day.until)).toBe(1000);
+    expect(spans([], 60)).toEqual([]);
+  });
+  it("哪一段盖住那一刻:含头不含尾,回从头算第几秒;空档上回 null,往后找最近的一段", () => {
+    const rows = [rec(1, 0), rec(2, 60_000), rec(3, 300_000)];
+    expect(segmentAt(rows, 0, 60)).toEqual({ rec: rows[0], offsetS: 0 });
+    expect(segmentAt(rows, 59_999, 60)!.rec.id).toBe(1);
+    expect(segmentAt(rows, 60_000, 60)).toEqual({ rec: rows[1], offsetS: 0 });
+    expect(segmentAt(rows, 75_500, 60)).toEqual({ rec: rows[1], offsetS: 15.5 });
+    expect(segmentAt(rows, 120_000, 60)).toBeNull();
+    expect(segmentAt(rows, -1, 60)).toBeNull();
+    expect(firstAfter(rows, 120_000)!.id).toBe(3);
+    expect(firstAfter(rows, 300_000)!.id).toBe(3);
+    expect(firstAfter(rows, 300_001)).toBeNull();
+  });
+  it("上一段、下一段:到头了是 null;不在列表里的也是 null", () => {
+    const rows = [rec(1, 0), rec(2, 60_000)];
+    expect(nextSegment(rows, rows[0])!.id).toBe(2);
+    expect(nextSegment(rows, rows[1])).toBeNull();
+    expect(prevSegment(rows, rows[1])!.id).toBe(1);
+    expect(prevSegment(rows, rows[0])).toBeNull();
+    expect(nextSegment(rows, rec(9, 5))).toBeNull();
+    expect(prevSegment(rows, rec(9, 5))).toBeNull();
+  });
+  it("时间轴的横坐标是这一天的第几分钟,出界夹住;从告警去录像页带狗和前 10 秒", () => {
+    expect(minuteOf(day.since, day.since)).toBe(0);
+    expect(minuteOf(day.since + 90_000, day.since)).toBe(1.5);
+    expect(minuteOf(day.since - 5, day.since)).toBe(0);
+    expect(minuteOf(day.until + 5, day.since)).toBe(1440);
+    expect(recordingLink({ robot: "D1 01", first_ms: 50_000 })).toBe("#/recordings?robot=D1%2001&t=40000");
+    expect(recordingLink({ robot: "A", first_ms: 5 })).toBe("#/recordings?robot=A&t=1");
+  });
+  it("谁能标留着:管理员、保安;业主不能(跟站点的 review 权限一致)", () => {
+    expect([canReview("admin"), canReview("guard"), canReview("owner"), canReview("")]).toEqual([true, true, false, false]);
   });
 });
 
