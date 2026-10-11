@@ -96,6 +96,25 @@ _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 _CAM = re.compile(r"^/api/cameras/([A-Za-z0-9._-]{1,64})/live$")
 #: 分级驱离(W22):``/api/deterrence/<狗>/level``、``/release``。
 _DETER = re.compile(r"^/api/deterrence/([^/]{1,64})/(level|release|start)$")
+_RANGE = re.compile(r"^bytes=(\d{0,18})-(\d{0,18})$")
+
+
+def byte_range(header: str | None, size: int) -> tuple[int, int] | None | bool:
+    """``Range`` 头里要的那一段 ``(头, 尾)``(都含)。没带、不是 ``bytes=``、一次要好几段:``None``
+    (整份发,规范允许不理);写得对但够不着(头在文件外、``bytes=-0``、空文件):``False``(416)。"""
+    m = _RANGE.match((header or "").strip())
+    if m is None or (not m.group(1) and not m.group(2)):
+        return None
+    if not m.group(1):                                  # bytes=-N:最后 N 个字节
+        n = int(m.group(2))
+        return False if n == 0 or size == 0 else (max(0, size - n), size - 1)
+    start = int(m.group(1))
+    if start >= size:
+        return False
+    end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+    return None if end < start else (start, end)
+
+
 #: 连续录像(W18):一段 ``/api/recordings/<id>/video``、标留着 ``/api/recordings/<id>/keep``。
 _REC = re.compile(r"^/api/recordings/(\d{1,12})/(video|keep)$")
 #: 充电桩(W13):``/api/chargers/<robot_id>``。
@@ -2085,7 +2104,7 @@ class _Handler(TlsHandlerMixin):
             if not p.is_file():
                 raise HttpError(404, "这一段的文件不在了")
             self._audit_view(f"recording/{rid}")
-            return self._send_file(p, "video/mp4")
+            return self._send_file(p, "video/mp4", ranged=True)
         if method != "POST":
             raise HttpError(405, "只收 POST")
         self._need(user, REVIEW)
@@ -2135,17 +2154,39 @@ class _Handler(TlsHandlerMixin):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _send_file(self, path, content_type: str) -> None:
+    def _send_file(self, path, content_type: str, *, ranged: bool = False) -> None:
+        """整份发。``ranged``(录像):认 ``Range: bytes=…``,只发要的那一段(206)—— 浏览器放录像拖进度
+        靠它;要的范围不对回 416。"""
         size = path.stat().st_size
-        self._status = 200
-        self.send_response(200)
+        start, end = 0, size - 1
+        part = False
+        if ranged:
+            got = byte_range(self.headers.get("Range"), size)
+            if got is False:
+                self._status = 416
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if got is not None:
+                (start, end), part = got, True
+        self._status = 206 if part else 200
+        self.send_response(self._status)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Length", str(end - start + 1))
+        if ranged:
+            self.send_header("Accept-Ranges", "bytes")
+        if part:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
+        left = end - start + 1
         with open(path, "rb") as fh:
-            while chunk := fh.read(1 << 16):
+            fh.seek(start)
+            while left > 0 and (chunk := fh.read(min(1 << 16, left))):
                 self.wfile.write(chunk)
+                left -= len(chunk)
 
     def _video(self, robot_id: str, what: str, user) -> None:
         """视频经站点(W00c5b)。``health``:每路画面健康;``front``/``back``:MJPEG 长连(``view``)。

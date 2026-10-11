@@ -10,6 +10,7 @@ import { alertTitle, lang, t, type Key } from "./i18n";
 import { Icon, Shape } from "./icons";
 import { LangSwitch } from "./langswitch";
 import { AlarmTile, FullCamera, JumpStrip, OfflineStrip, RobotUnit, type UnitInfo } from "./live";
+import { RecordingsPage } from "./recpage";
 import { MapPage } from "./mappage";
 import {
   alarmState,
@@ -28,15 +29,16 @@ import { AlarmQueue } from "./queue";
 import { RobotsAdminPage, SystemPage, UsersPage } from "./admin";
 import { ListsPage, MapsZonesPage } from "./zonesadmin";
 
-type Page = "live" | "map" | "alarms" | "admin/robots" | "admin/zones" | "admin/users" | "admin/lists" | "admin/system";
+type Page = "live" | "map" | "alarms" | "recordings" | "admin/robots" | "admin/zones" | "admin/users" | "admin/lists" | "admin/system";
 
-const PAGES: Page[] = ["live", "map", "alarms", "admin/robots", "admin/zones", "admin/users", "admin/lists", "admin/system"];
+const PAGES: Page[] = ["live", "map", "alarms", "recordings", "admin/robots", "admin/zones", "admin/users", "admin/lists", "admin/system"];
 
-function readRoute(): { page: Page; robot: string | null } {
+function readRoute(): { page: Page; robot: string | null; at: number | null } {
   const h = typeof location === "undefined" ? "" : location.hash;
   const [p, q] = h.replace(/^#\/?/, "").split("?");
   const robot = new URLSearchParams(q ?? "").get("robot");
-  return { page: (PAGES as string[]).includes(p) ? (p as Page) : "live", robot };
+  const at = Number(new URLSearchParams(q ?? "").get("t") ?? "");
+  return { page: (PAGES as string[]).includes(p) ? (p as Page) : "live", robot, at: at > 0 ? at : null };
 }
 
 const TASK: Record<string, Key> = { patrol: "st_patrolling", goto: "st_patrolling", standby: "st_returning" };
@@ -175,6 +177,10 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
         {route.page === "admin/system" && me.role === "admin" && <SystemPage />}
         {route.page === "admin/zones" && me.role === "admin" && <MapsZonesPage say={say} />}
         {route.page === "admin/lists" && me.role === "admin" && <ListsPage say={say} />}
+        {route.page === "recordings" && (
+          <RecordingsPage key={`${route.robot ?? ""}@${route.at ?? ""}`} robots={units.map((u) => u.robot.robot_id)} role={me.role} now={now}
+            robot={route.robot} at={route.at} say={say} />
+        )}
         {route.page === "map" && (
           <MapPage units={units} p1={p1} now={now} selected={route.robot ?? firstP1?.robot ?? null}
             onSelect={(id) => go("map", id)}
@@ -229,7 +235,7 @@ function TopBar(props: {
     { id: "live", key: "tabLive" },
     { id: "map", key: "tabMap" },
     { id: "alarms", key: "tabAlarms" },
-    { id: null, key: "tabRecordings" },
+    { id: "recordings", key: "tabRecordings" },
     { id: null, key: "tabReports" },
   ];
   // 管理组只给管理员(B0:值班组 + 管理组分开;保安看到的界面简单)。顶栏上只占一个「Admin」页签,

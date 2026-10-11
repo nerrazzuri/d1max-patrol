@@ -266,3 +266,59 @@ def test_W18复查_前50段删不掉_第51段照样删_不被饿死(库, monkeyp
     assert left == {r["id"] for r in rows[:50]}, "前 50 段(删不掉的)登记还在"
     assert all(p.exists() for p in bad)
     assert trimmed == [1] and stuck == [50], "删不掉的报一次"
+
+
+# ------------------------------------------------------------ C-B3:值班台放录像,拖进度要 Range
+
+
+@pytest.mark.parametrize("header,want", [
+    (None, None), ("", None), ("items=0-1", None), ("bytes=0-1,5-6", None), ("bytes=-", None),
+    ("bytes=5-2", None),
+    ("bytes=0-", (0, 99)), ("bytes=0-0", (0, 0)), ("bytes=10-19", (10, 19)),
+    ("bytes=90-500", (90, 99)), ("bytes=99-", (99, 99)), ("bytes=-10", (90, 99)),
+    ("bytes=-500", (0, 99)), (" bytes=1-2 ", (1, 2)),
+    ("bytes=100-", False), ("bytes=-0", False),
+])
+def test_要哪一段_没带或看不懂整份发_够不着416(header, want):
+    from d1max_site.api import byte_range
+    assert byte_range(header, 100) == want and type(byte_range(header, 100)) is type(want)
+
+
+def test_空文件_要最后几个字节也是416():
+    from d1max_site.api import byte_range
+    assert byte_range("bytes=-5", 0) is False and byte_range("bytes=0-", 0) is False
+
+
+def test_接口_录像按段取_206带范围_够不着416_不带照旧整份(站点):
+    import urllib.error
+    s = 站点
+    data = _存(s.rec, n=200_000)                        # 比一次读的 64 KB 大:跨块也切得对
+    olga = _登(s, "olga")
+    [r] = s.req("GET", "/api/recordings?robot=A", token=olga)[1]["recordings"]
+    host, port = s.api.httpd.server_address[:2]
+
+    def get(rng):
+        h = {"Authorization": f"Bearer {olga}"}
+        if rng:
+            h["Range"] = rng
+        req = urllib.request.Request(f"http://{host}:{port}/api/recordings/{r['id']}/video",
+                                     headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, dict(resp.headers), resp.read()
+        except urllib.error.HTTPError as e:
+            return e.code, dict(e.headers), e.read()
+    code, h, body = get(None)
+    assert code == 200 and body == data and h["Accept-Ranges"] == "bytes"
+    assert "Content-Range" not in h
+    code, h, body = get("bytes=70000-140000")
+    assert code == 206 and body == data[70000:140001]
+    assert h["Content-Range"] == "bytes 70000-140000/200000" and h["Content-Length"] == "70001"
+    code, h, body = get("bytes=-7")
+    assert code == 206 and body == data[-7:] and h["Content-Range"] == "bytes 199993-199999/200000"
+    code, h, body = get("bytes=199999-")
+    assert code == 206 and body == data[-1:]
+    code, h, body = get("bytes=200000-")
+    assert code == 416 and body == b"" and h["Content-Range"] == "bytes */200000"
+    code, h, body = get("bytes=0-1,5-6")
+    assert code == 200 and body == data, "一次要好几段:不理,整份发"

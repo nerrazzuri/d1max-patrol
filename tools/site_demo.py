@@ -60,6 +60,38 @@ def _wait(log: Path, text: str, p: subprocess.Popen, timeout: float = 60) -> Non
     raise SystemExit(f"{timeout:.0f} s 内没等到 {text!r}(看 {log})")
 
 
+def _seed_recordings(home: Path, work: Path, minutes: int) -> None:
+    """放 ``minutes`` 分钟的假录像(狗 A,前后两路,到现在为止;中间空 5 分钟,看得出空档)。站点还没
+    起来时直接往它的库里登记。画面是 ffmpeg 的测试图,带一个走动的秒表。"""
+    import time
+
+    from d1max_site.db import SiteDB
+    from d1max_site.recordings import SEGMENT_S, RecordingStore
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise SystemExit("没有 ffmpeg:sudo apt-get install ffmpeg")
+    clip = work / "demo-segment.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
+                    f"testsrc2=size=640x360:rate=10:duration={SEGMENT_S}", "-c:v", "libx264",
+                    "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "20",
+                    "-movflags", "+faststart", str(clip)], check=True)
+    data = clip.read_bytes()
+    now = int(time.time())
+    last = now - now % SEGMENT_S - SEGMENT_S
+    db = SiteDB(home / "site.db")
+    try:
+        store = RecordingStore(db, home / "recordings", now_ms=lambda: now * 1000)
+        for i in range(minutes):
+            if minutes > 20 and 10 <= i < 15:
+                continue                                # 空档
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(last - i * SEGMENT_S))
+            for cam in ("front", "back"):
+                store.put("A", f"{cam}/{stamp}", "video.mp4", offset=0, data=data,
+                          total=len(data))
+    finally:
+        db.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     # 默认不放仓库里:仓库路径带空格(「D1 Max」),Mosquitto 的配置按空白切词,路径里不许有空格
@@ -67,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--api-port", type=int, default=8443)
     ap.add_argument("--password", default="demo-password-123")
     ap.add_argument("--map-dir", type=Path, default=None, help="建好的图(版本目录);不给用一张假的")
+    ap.add_argument("--recordings", type=int, default=0, metavar="N",
+                    help="往站点里放 N 分钟的假录像(要 ffmpeg;看值班台的录像页用)")
     a = ap.parse_args(argv)
     mosq = shutil.which("mosquitto") or "/usr/sbin/mosquitto"
     if not Path(mosq).exists():
@@ -86,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
         (src / "m.pgm").write_bytes(b"x")
     _site(home, "map-import", str(src), "--map-id", "estate-1", "--version", "7")
     fp = _site(home, "fingerprint").strip()
+    if a.recordings > 0:
+        _seed_recordings(home, a.dir, a.recordings)
 
     procs: list[subprocess.Popen] = []
 
