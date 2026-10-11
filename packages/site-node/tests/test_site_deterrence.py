@@ -39,6 +39,8 @@ class 假派遣:
         self.cbs = []
         self.sent: list[tuple[str, dict, int]] = []
         self.fail = False
+        #: 狗明说没做(回执 rejected)的几路
+        self.reject: set[str] = set()
         self.feed = SimpleNamespace(publish=lambda item: self.pushed.append(item))
         self.pushed: list[dict] = []
         #: 只许手动派的狗(W33 外审)
@@ -60,6 +62,8 @@ class 假派遣:
     async def deter(self, rid, payload, *, issued_by, priority):
         if self.fail:
             raise RuntimeError("狗不在线")
+        if payload["output"] in self.reject and payload["on"]:
+            return {"ack": {"result": "rejected", "reason": "device"}}
         self.sent.append((rid, payload, priority))
         return {"ack": {"result": "accepted"}}
 
@@ -1367,3 +1371,60 @@ async def test_狗没装警笛_给人看的说得出来_能力不知道是None(t
     del disp.clients["A"]
     assert desk.view()[0]["outputs"] is None
     db.close()
+
+
+# ------------------------------------------------------------ C-B2 复查 R1:续开没成,上次成功作废
+
+
+@pytest.mark.parametrize("how", ["rejected", "unsent"])
+async def test_警笛开成了_续开没成_马上不算开着_下一拍重发_成了才又算(台, how):
+    t = 台
+    _到了(t.disp)
+    v = await t.desk.set_level("A", 3, by="gina")
+    assert "siren" in v["active"]
+    t.clock.go(19.9)
+    await t.desk.tick()
+    assert "siren" in t.desk.view()[0]["active"], "还没到续的时候:照旧"
+    t.clock.go(0.1)                                     # 20 秒:该续了,这一次狗没做
+    if how == "rejected":
+        t.disp.reject = {"siren"}
+    else:
+        t.disp.fail = True
+    await t.desk.tick()
+    [s] = t.desk.view()
+    assert s["level"] == 3 and "siren" not in s["active"], "狗上开失败会转成关:不拿上次成功当现在"
+    if how == "rejected":
+        assert "strobe" in s["active"], "别的路续上了的照旧"
+    n = len(t.disp.sent)
+    t.clock.go(1)
+    await t.desk.tick()                                 # 还没好:每拍接着发,仍不算
+    assert "siren" not in t.desk.view()[0]["active"]
+    t.disp.reject, t.disp.fail = set(), False
+    t.clock.go(1)
+    await t.desk.tick()
+    assert "siren" in t.desk.view()[0]["active"], "恢复了:不用等 20 秒,马上重发、成了才算"
+    assert any(p["output"] == "siren" and p["on"] for _, p, _ in t.disp.sent[n:])
+
+
+async def test_人再按一次第3级_续开没成之后也马上重发(台):
+    t = 台
+    _到了(t.disp)
+    await t.desk.set_level("A", 3, by="gina")
+    t.clock.go(20)
+    t.disp.reject = {"siren"}
+    await t.desk.tick()
+    assert "siren" not in t.desk.view()[0]["active"]
+    t.disp.reject = set()
+    v = await t.desk.set_level("A", 3, by="gina")
+    assert "siren" in v["active"]
+
+
+async def test_喇叭放不出来_也不算开着(台):
+    t = 台
+    _到了(t.disp)
+    v = await t.desk.set_level("A", 2, by="gina")
+    assert "speaker" in v["active"]
+    t.clock.go(10)
+    t.disp.reject = {"speaker"}
+    await t.desk.tick()
+    assert "speaker" not in t.desk.view()[0]["active"]

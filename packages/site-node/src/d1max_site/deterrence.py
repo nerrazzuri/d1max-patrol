@@ -148,8 +148,9 @@ class Session:
                 self.center, self.withdraw)
 
     def view(self, now_ms: int, outputs: list[str] | None = None) -> dict[str, Any]:
-        """给人看的。``active`` = 狗**接受了**「开」、还在保持时间里的几路(C-B2 外审 I1:级别只是
-        要求,不等于响了);``outputs`` = 这台狗有哪几路(``None`` = 不知道)。"""
+        """给人看的。``active`` = 狗**接受了**「开」、还在保持时间里、之后没有开失败过的几路(C-B2
+        外审 I1:级别只是要求,不等于响了;复查 R1:续开没成就不算);
+        ``outputs`` = 这台狗有哪几路(``None`` = 不知道)。"""
         d = {k: v for k, v in asdict(self).items()
              if k not in ("sent", "off", "clip_i", "clip_ms", "ending", "ending_saved",
                           "seen_person", "person_alerted", "standoff_ms", "center",
@@ -648,9 +649,15 @@ class DeterrenceDesk:
         return True
 
     async def _on(self, s: Session, payload: dict[str, Any]) -> bool:
-        """发一条「开」:发之前就从「确认关过」里去掉(回执丢了也可能开了)。"""
+        """发一条「开」:发之前就从「确认关过」里去掉(回执丢了也可能开了)。
+
+        没成(没发出去、狗拒了):这一路上次「开成了」的记录**作废**(C-B2 复查 R1)—— 狗上的驱动开失败
+        会把这一路转成关,不能再拿上一次成功当现在开着;下一拍照样重发。"""
         s.off.discard(payload["output"])
-        return await self._send(s.robot_id, payload)
+        if await self._send(s.robot_id, payload):
+            return True
+        s.sent.pop(payload["output"], None)
+        return False
 
     async def _off(self, s: Session, out: str) -> None:
         held = self.held_by_others(s.robot_id) if self.held_by_others is not None else set()
