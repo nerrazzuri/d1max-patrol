@@ -327,4 +327,98 @@ void main() {
       await t.pumpAndSettle();
     }
   });
+
+  // ---- RC 加固 H8：系统的「另存」和「分享」
+  Future<void> page(WidgetTester t, FakeApi api,
+      {BundleSaver? save, BundleSharer? share, bool? canShare = true}) async {
+    _portrait(t);
+    await t.pumpWidget(MaterialApp(
+        theme: proTheme(),
+        home: SiteHealthPage(
+            api: api,
+            now: () => DateTime(2026, 10, 11, 2, 4, 9),
+            canShare: canShare,
+            save: save ?? (n, b) async => '/d/$n',
+            share: share ?? (n, b) async => true)));
+    await t.pumpAndSettle();
+  }
+
+  Future<void> press(WidgetTester t, Key k) async {
+    await t.ensureVisible(find.byKey(k));
+    await t.tap(find.byKey(k));
+    await t.pumpAndSettle();
+  }
+
+  String msg(WidgetTester t) => t.widget<SelectableText>(find.byKey(SiteHealthPage.msgKey)).data!;
+  bool enabled(WidgetTester t, Key k) => t.widget<OutlinedButton>(find.byKey(k)).onPressed != null;
+
+  testWidgets('分享：取回来交给分享面板，带着按时间起的名字；说交出去了', (t) async {
+    final api = FakeApi('admin');
+    final shared = <(String, int)>[];
+    await page(t, api, share: (n, b) async {
+      shared.add((n, b.length));
+      return true;
+    });
+    await press(t, SiteHealthPage.shareKey);
+    expect(api.calls, contains('support-bundle'));
+    expect(shared, [('d1max-support-20261011-020409.tar.gz', 3000)]);
+    expect(msg(t), '交给分享了（3 KB）：d1max-support-20261011-020409.tar.gz');
+    expect(enabled(t, SiteHealthPage.shareKey) && enabled(t, SiteHealthPage.bundleKey), isTrue);
+  });
+
+  testWidgets('分享面板被关掉、另存被取消：照实说，不说成了，能再来', (t) async {
+    final api = FakeApi('admin');
+    await page(t, api, share: (n, b) async => false, save: (n, b) async => null);
+    await press(t, SiteHealthPage.shareKey);
+    expect(msg(t), '没分享：取消了');
+    await press(t, SiteHealthPage.bundleKey);
+    expect(msg(t), '没存：取消了');
+    expect(enabled(t, SiteHealthPage.shareKey) && enabled(t, SiteHealthPage.bundleKey), isTrue);
+  });
+
+  testWidgets('分享出错（插件坏了、临时目录写不了、站点取不到）：说没分享出去和原因，两个按钮都放开', (t) async {
+    for (final Object err in <Object>[
+      StateError('no share plugin'),
+      const FileSystemException('disk full'),
+    ]) {
+      final api = FakeApi('admin');
+      await page(t, api, share: (n, b) async => throw err);
+      await press(t, SiteHealthPage.shareKey);
+      expect(msg(t), startsWith('诊断包没分享出去：'));
+      expect(msg(t), contains(err is FileSystemException ? 'disk full' : 'no share plugin'));
+      expect(enabled(t, SiteHealthPage.shareKey) && enabled(t, SiteHealthPage.bundleKey), isTrue);
+      await t.pumpWidget(Container());
+    }
+    final api = FakeApi('admin')..bundleError = const SiteError(0, '连不上');
+    var called = false;
+    await page(t, api, share: (n, b) async => called = true);
+    await press(t, SiteHealthPage.shareKey);
+    expect(called, isFalse, reason: '没取到就没东西可分享');
+    expect(msg(t), startsWith('诊断包没分享出去：'));
+  });
+
+  testWidgets('正在分享：两个按钮都按不了，只有分享那个写着正在取；完了都放开', (t) async {
+    final api = FakeApi('admin');
+    final gate = Completer<bool>();
+    await page(t, api, share: (n, b) => gate.future);
+    await t.ensureVisible(find.byKey(SiteHealthPage.shareKey));
+    await t.tap(find.byKey(SiteHealthPage.shareKey));
+    await t.pump();
+    await t.pump();
+    expect(find.text('正在取…'), findsOneWidget);
+    expect(find.text('正在存…'), findsNothing);
+    expect(enabled(t, SiteHealthPage.shareKey) || enabled(t, SiteHealthPage.bundleKey), isFalse);
+    gate.complete(true);
+    await t.pumpAndSettle();
+    expect(enabled(t, SiteHealthPage.shareKey) && enabled(t, SiteHealthPage.bundleKey), isTrue);
+  });
+
+  testWidgets('桌面版（发不了文件）：没有分享按钮，另存还在', (t) async {
+    await page(t, FakeApi('admin'), canShare: false);
+    expect(find.byKey(SiteHealthPage.shareKey), findsNothing);
+    expect(find.byKey(SiteHealthPage.bundleKey), findsOneWidget);
+    await t.pumpWidget(Container());
+    await page(t, FakeApi('admin'), canShare: null);
+    expect(find.byKey(SiteHealthPage.shareKey), findsNothing, reason: '测试机是桌面系统');
+  });
 }

@@ -59,7 +59,7 @@ final _pages = <String, Widget Function()>{
   'standby': () => SiteStandbyPage(api: FakeApi('admin'), robotId: 'A', canMarkHere: true),
   'intercepts': () => SiteInterceptsPage(api: FakeApi('admin')),
   'mode': () => SiteModePage(api: FakeApi('admin')),
-  'health': () => SiteHealthPage(api: FakeApi('admin'), save: (n, b) async => '/x/\$n'),
+  'health': () => SiteHealthPage(api: FakeApi('admin'), canShare: true, save: (n, b) async => '/x/\$n'),
   'weather': () => SiteWeatherPage(api: FakeApi('admin')),
   'deterrence settings': () => SiteDeterrencePage(api: FakeApi('admin'), robotId: 'A'),
   'deter': () => SiteDeterPage(api: FakeApi('guard'), robotId: 'A',
