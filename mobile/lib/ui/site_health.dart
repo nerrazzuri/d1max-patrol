@@ -8,8 +8,10 @@ library;
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../design/tokens.g.dart';
 import '../l10n.dart';
@@ -44,7 +46,11 @@ String verdictLabel(Object? v) => switch (v) {
     };
 
 /// 把诊断包存成文件，回存到哪儿了。测试换掉它（不碰真的盘）。
-typedef BundleSaver = Future<String> Function(String name, Uint8List bytes);
+/// 回存到哪儿了；null = 人取消了。
+typedef BundleSaver = Future<String?> Function(String name, Uint8List bytes);
+
+/// 回 false = 人关掉了分享面板。
+typedef BundleSharer = Future<bool> Function(String name, Uint8List bytes);
 
 /// 存到「下载」目录（安卓上是这个 App 自己的外部文件目录，文件管理器里看得到）；没有就存到文档目录。
 Future<String> saveBundleToDisk(String name, Uint8List bytes) async {
@@ -61,6 +67,30 @@ Future<String> saveBundleToDisk(String name, Uint8List bytes) async {
   return f.path;
 }
 
+/// 「另存」（RC 加固 H8）：弹系统的保存框，人自己挑放哪儿（安卓上是「下载」、网盘……；桌面版是
+/// 文件对话框）。App 自己的目录在安卓 11 以上的文件管理器里进不去，存那儿等于没存。
+/// 回 null = 人取消了。保存框起不来（桌面上没装对话框程序之类）才退回 [saveBundleToDisk]。
+Future<String?> saveBundleWithPicker(String name, Uint8List bytes) async {
+  final Uri? where;
+  try {
+    where = await FilePicker.saveFile(fileName: name, bytes: bytes, mimeType: 'application/gzip');
+  } on Object {
+    return saveBundleToDisk(name, bytes);
+  }
+  if (where == null) return null;
+  return where.isScheme('file') ? where.toFilePath() : name;
+}
+
+/// 「分享」：先放进临时目录，再交给系统的分享面板（邮件、聊天软件、网盘、文件）。回 false = 人关掉了面板。
+Future<bool> shareBundle(String name, Uint8List bytes) async {
+  final dir = await getTemporaryDirectory();
+  final f = File('${dir.path}${Platform.pathSeparator}$name');
+  await f.writeAsBytes(bytes, flush: true);
+  final r = await SharePlus.instance
+      .share(ShareParams(files: [XFile(f.path, mimeType: 'application/gzip')], subject: name));
+  return r.status != ShareResultStatus.dismissed;
+}
+
 /// 诊断包的文件名：`d1max-support-20261011-021436.tar.gz`（当地时间）。
 String bundleName(DateTime now) {
   String two(int n) => n.toString().padLeft(2, '0');
@@ -71,12 +101,23 @@ String bundleName(DateTime now) {
 class SiteHealthPage extends StatefulWidget {
   final SiteApi api;
   final BundleSaver save;
+  final BundleSharer share;
+
+  /// 有没有「分享」按钮。不给就按系统：手机有，桌面版没有（那边的分享面板发不了文件）。
+  final bool? canShare;
   final DateTime Function() now;
-  const SiteHealthPage({super.key, required this.api, this.save = saveBundleToDisk, this.now = DateTime.now});
+  const SiteHealthPage(
+      {super.key,
+      required this.api,
+      this.save = saveBundleWithPicker,
+      this.share = shareBundle,
+      this.canShare,
+      this.now = DateTime.now});
 
   static const Key overallKey = Key('health-overall');
   static const Key refreshKey = Key('health-refresh');
   static const Key bundleKey = Key('health-bundle');
+  static const Key shareKey = Key('health-share');
   static const Key msgKey = Key('health-msg');
   static const Key loadingKey = Key('health-loading');
   static Key checkKey(String name) => Key('health-check-$name');
@@ -90,7 +131,8 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
   Map<String, dynamic>? _versions;
   String? _error;
   bool _loading = true;
-  bool _saving = false;
+  bool _saving = false; // 存或者分享正在做：两个按钮都按不了
+  bool _sharing = false;
   String _msg = '';
   int _asked = 0;
 
@@ -137,21 +179,36 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
     }();
   }
 
-  Future<void> _bundle() async {
+  Future<void> _bundle({bool share = false}) async {
     setState(() {
       _saving = true;
+      _sharing = share;
       _msg = '';
     });
     // 不管哪一步出什么错（取不到、存不下、找目录的插件坏了）：都说出来，按钮一定放开让人再试（外审 I1）
     var msg = '';
     try {
       final bytes = await widget.api.supportBundle();
-      final path = await widget.save(bundleName(widget.now()), bytes);
-      msg = tr('Saved ${(bytes.length / 1024).ceil()} KB to $path', '存好了（${(bytes.length / 1024).ceil()} KB）：$path');
+      final name = bundleName(widget.now());
+      final kb = (bytes.length / 1024).ceil();
+      if (share) {
+        msg = await widget.share(name, bytes)
+            ? tr('Handed $name ($kb KB) to the share sheet', '交给分享了（$kb KB）：$name')
+            : tr('Not shared: cancelled', '没分享：取消了');
+      } else {
+        final path = await widget.save(name, bytes);
+        msg = path == null
+            ? tr('Not saved: cancelled', '没存：取消了')
+            : tr('Saved $kb KB to $path', '存好了（$kb KB）：$path');
+      }
     } on FileSystemException catch (e) {
-      msg = tr('Diagnostics bundle not saved: ${e.message}', '诊断包没存上：${e.message}');
+      msg = share
+          ? tr('Diagnostics bundle not shared: ${e.message}', '诊断包没分享出去：${e.message}')
+          : tr('Diagnostics bundle not saved: ${e.message}', '诊断包没存上：${e.message}');
     } on Object catch (e) {
-      msg = tr('Diagnostics bundle not saved: $e', '诊断包没存上：$e');
+      msg = share
+          ? tr('Diagnostics bundle not shared: $e', '诊断包没分享出去：$e')
+          : tr('Diagnostics bundle not saved: $e', '诊断包没存上：$e');
     } finally {
       if (mounted) {
         setState(() {
@@ -288,13 +345,19 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
                 style: D1Text.caption.copyWith(color: D1Color.textSecondary))),
         Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                    key: SiteHealthPage.bundleKey,
-                    icon: const Icon(Icons.download),
-                    label: Text(_saving ? tr('Saving…', '正在存…') : tr('Save diagnostics bundle', '保存诊断包')),
-                    onPressed: _saving ? null : _bundle))),
+            child: Wrap(spacing: 12, runSpacing: 8, children: [
+              OutlinedButton.icon(
+                  key: SiteHealthPage.bundleKey,
+                  icon: const Icon(Icons.download),
+                  label: Text(_saving && !_sharing ? tr('Saving…', '正在存…') : tr('Save diagnostics bundle', '保存诊断包')),
+                  onPressed: _saving ? null : _bundle),
+              if (widget.canShare ?? (Platform.isAndroid || Platform.isIOS))
+                OutlinedButton.icon(
+                    key: SiteHealthPage.shareKey,
+                    icon: const Icon(Icons.share),
+                    label: Text(_saving && _sharing ? tr('Preparing…', '正在取…') : tr('Share…', '分享…')),
+                    onPressed: _saving ? null : () => _bundle(share: true)),
+            ])),
         if (_msg.isNotEmpty)
           Padding(
               padding: const EdgeInsets.all(16),

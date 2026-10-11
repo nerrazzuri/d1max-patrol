@@ -39,6 +39,9 @@ dependencies:
   video_player: ^2.14.1
   jpush_flutter: ^3.5.8
   mobile_scanner: 7.4.2
+  # RC 加固 H8:诊断包走系统的「另存」和「分享」(版本钉死,都发布两周以上)
+  share_plus: 13.3.0
+  file_picker: 13.1.0
 
 dev_dependencies:
   flutter_test:
