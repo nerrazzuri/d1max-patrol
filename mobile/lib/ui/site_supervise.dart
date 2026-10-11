@@ -13,6 +13,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 
 class SupervisionSwitch extends StatefulWidget {
@@ -49,7 +50,9 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      _stop('切到后台了，监护已放（狗会停下）');
+      _stop(tr(
+          'App moved to the background, supervision released (the robot will stop)',
+          '切到后台了，监护已放（狗会停下）'));
     }
   }
 
@@ -65,10 +68,12 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
       final r = await widget.api.supervise(widget.robotId, 'renew', session: session, seq: ++_seq);
       final ack = r['ack'];
       if (ack is Map && ack['result'] != 'accepted') {
-        why = '狗没接监护：${ackReasonText('${ack['reason'] ?? ack['result']}')}';
+        why = tr(
+            'Robot did not accept supervision: ${ackReasonText('${ack['reason'] ?? ack['result']}')}',
+            '狗没接监护：${ackReasonText('${ack['reason'] ?? ack['result']}')}');
       }
     } catch (e) {
-      why = '监护续不上：$e';
+      why = tr('Supervision renewal failed: $e', '监护续不上：$e');
     } finally {
       _inFlight = false;
     }
@@ -79,9 +84,9 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
     }
     _failures++;
     if (_failures >= 2) {
-      _stop('$why（狗会停下）');
+      _stop(tr('$why (the robot will stop)', '$why（狗会停下）'));
     } else if (mounted) {
-      setState(() => _msg = '$why，再试一次');
+      setState(() => _msg = tr('$why, retrying', '$why，再试一次'));
     }
   }
 
@@ -134,11 +139,15 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         SwitchListTile(
           key: SupervisionSwitch.switchKey,
-          title: Text(_on ? '监护中' : '我在现场监护'),
-          subtitle: const Text('这台狗要人现场监护才执行派单（避障还没验收）。开着的时候狗会执行下发的任务；'
-              '关掉、离开这一页、切到后台就停。'),
+          title: Text(_on ? tr('Supervising', '监护中') : tr("I'm supervising on site", '我在现场监护')),
+          subtitle: Text(tr(
+              'This robot runs dispatched tasks only under on-site supervision (obstacle avoidance is '
+              'not accepted yet). While this is on, the robot runs the tasks sent to it. Turning it '
+              'off, leaving this page or moving the app to the background stops it.',
+              '这台狗要人现场监护才执行派单（避障还没验收）。开着的时候狗会执行下发的任务；'
+              '关掉、离开这一页、切到后台就停。')),
           value: _on,
-          onChanged: (v) => v ? _start() : _stop('监护已放'),
+          onChanged: (v) => v ? _start() : _stop(tr('Supervision released', '监护已放')),
         ),
         if (_msg.isNotEmpty)
           Padding(

@@ -431,6 +431,9 @@ class _Handler(TlsHandlerMixin):
                     "display_name": self.site.accounts.display_name(str(user)),
                     "site_name": self.site.site_name, "api_level": SITE_API_LEVEL,
                     "min_app_level": MIN_APP_API_LEVEL})
+            if method == "GET" and path == "/api/pairing":
+                self._need(user, VIEW)
+                return self._pairing()
             if method == "POST" and path == "/api/me/password":
                 return self._change_own_password(user)
             m = _AREAS.match(path)
@@ -847,6 +850,25 @@ class _Handler(TlsHandlerMixin):
             except AuthzError as exc:
                 raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"authorizations": book.list()})
+
+    def _pairing(self) -> None:
+        """手机扫码添加站点的配对码(App V2):站点名 + 手机要连的地址 + 站点服务证书指纹,没有秘密。
+        地址由网页带过来(站点不知道自己在外面叫什么)。"""
+        from d1max_site.main import cmd_fingerprint
+        from d1max_site.pairing import PairingError, encode
+        home = self.site.home
+        if home is None:
+            raise HttpError(404, "这个站点没接站点目录")
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        url = (q.get("url") or [""])[0]
+        name = self.site.site_name or "D1 Max"
+        try:
+            fp = cmd_fingerprint(home)
+            code = encode(name, url, fp)
+        except PairingError as exc:
+            raise HttpError(400, str(exc)) from exc
+        from d1max_site.pairing import check_url
+        self._send_json(200, {"code": code, "name": name[:64], "url": check_url(url), "fingerprint": fp})
 
     def _admin_robot(self, method: str, robot_id: str | None, action: str | None) -> None:
         """登记新狗并出开通码、给已登记的狗重出开通码、吊销(商业化 B1b,``manage``)。跟命令行

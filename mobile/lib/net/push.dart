@@ -15,6 +15,8 @@ import 'package:flutter/foundation.dart';
 import 'package:jpush_flutter/jpush_flutter.dart';
 import 'package:jpush_flutter/jpush_interface.dart';
 
+import '../l10n.dart';
+
 abstract class PushRegistrar {
   bool get supported;
 
@@ -98,7 +100,7 @@ class PushSession {
   void start() {
     if (!registrar.supported || _run != null) return;
     state.value = PushState.waiting;
-    reason = '正在登记推送';
+    reason = tr('Registering for push notifications', '正在登记推送');
     _run = _loop();
   }
 
@@ -110,7 +112,9 @@ class PushSession {
       } catch (_) {}
       if (_stopped) return;
       if (id == null) {
-        reason = '推送号还没拿到（没配极光、或者还在注册），稍后再试';
+        reason = tr(
+            'No push ID yet (JPush not configured, or still registering). Will retry',
+            '推送号还没拿到（没配极光、或者还在注册），稍后再试');
       } else {
         try {
           await register(id, registrar.platform);
@@ -120,7 +124,7 @@ class PushSession {
           state.value = PushState.ready;
           return;
         } catch (e) {
-          reason = '推送登记没成：$e，稍后再试';
+          reason = tr('Push registration failed: $e. Will retry', '推送登记没成：$e，稍后再试');
         }
       }
       state.value = PushState.waiting;

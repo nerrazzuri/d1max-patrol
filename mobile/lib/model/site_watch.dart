@@ -4,6 +4,8 @@
 /// 在现场差着一次事故。每个 null 在 [SiteWatchRobot.why] 里带一句人话，屏上照印。
 library;
 
+import '../l10n.dart';
+
 class SiteWatchRobot {
   final String robotId;
   final bool online;
@@ -58,7 +60,9 @@ class SiteWatchRobot {
       );
 
   /// 这一项为什么是「不知道」。没说理由的 null 也要印一句，不许留白。
-  String whyFor(String field) => why[field] ?? '站点没给这一项，这一档是「不知道」';
+  String whyFor(String field) => why[field] ?? tr(
+      'The site did not report this item, so it shows as "unknown"',
+      '站点没给这一项，这一档是「不知道」');
 }
 
 class SiteWatchSummary {
@@ -87,7 +91,11 @@ class SiteWatchSummary {
   /// **读不懂就抛 `FormatException`**：没有 `robots` 那一段时屏上会画成「零台狗」，而且不报错。
   factory SiteWatchSummary.fromWire(Map<String, dynamic> m) {
     final raw = m['robots'];
-    if (raw is! List) throw const FormatException('值守汇总里没有 robots 那一段，读不出');
+    if (raw is! List) {
+      throw FormatException(tr(
+          'Watch summary has no "robots" section, cannot read it',
+          '值守汇总里没有 robots 那一段，读不出'));
+    }
     final site = (m['site'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
     return SiteWatchSummary(
       nowMs: (m['now_ms'] as num?)?.toInt() ?? 0,
@@ -96,7 +104,9 @@ class SiteWatchSummary {
           if (r is Map)
             SiteWatchRobot.fromWire(r.cast<String, dynamic>())
           else
-            throw FormatException('值守汇总里有一行不是对象：${r.runtimeType}'),
+            throw FormatException(tr(
+                'A row in the watch summary is not an object: ${r.runtimeType}',
+                '值守汇总里有一行不是对象：${r.runtimeType}')),
       ],
       scheduleOk: site['schedule_ok'] as bool?,
       scheduleError: '${site['schedule_error'] ?? ''}',

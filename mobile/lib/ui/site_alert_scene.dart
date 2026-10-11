@@ -6,6 +6,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../model/alert.dart';
 import '../net/site_client.dart';
 import 'site_mapping.dart';
@@ -48,8 +49,8 @@ class SiteAlertScenePage extends StatefulWidget {
     marks.add(MapMark(label, (p['x'] as num).toDouble(), (p['y'] as num).toDouble(), color));
   }
 
-  add(pose, a.robot == 'site' ? '狗' : '狗 ${a.robot}', Colors.red);
-  if (point is Map) add(point, '拦截点 ${point['name'] ?? ''}', Colors.purple);
+  add(pose, a.robot == 'site' ? tr('Robot', '狗') : tr('Robot ${a.robot}', '狗 ${a.robot}'), Colors.red);
+  if (point is Map) add(point, tr('Intercept point ${point['name'] ?? ''}', '拦截点 ${point['name'] ?? ''}'), Colors.purple);
   if (marks.isEmpty) return null;
   return (mapId!, version!, marks);
 }
@@ -62,12 +63,14 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     try {
       runs = await widget.api.runs(mission: taskId);
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = '找不到那一趟的记录：$e');
+      if (mounted) setState(() => _msg = tr("Can't find the record for that task: $e", '找不到那一趟的记录：$e'));
       return;
     }
     if (!mounted) return;
     if (runs.isEmpty) {
-      setState(() => _msg = '那一趟的记录还没传到站点（狗到了、拍完会传上来）');
+      setState(() => _msg = tr(
+          'The record for that task has not reached the site yet (it uploads after the robot arrives and takes photos)',
+          '那一趟的记录还没传到站点（狗到了、拍完会传上来）'));
       return;
     }
     await Navigator.push(
@@ -81,17 +84,21 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     try {
       final s = await widget.api.deterStart(widget.alert.robot);
       final lv = s['session'] is Map ? (s['session'] as Map)['level'] : null;
-      if (mounted) setState(() => _msg = '已在 ${widget.alert.robot} 这儿开驱离（L${lv ?? 1}），驱离页可以升级、解除');
+      if (mounted) {
+        setState(() => _msg = tr(
+            'Deterrence started at ${widget.alert.robot} (L${lv ?? 1}). Escalate or end it on the deterrence page',
+            '已在 ${widget.alert.robot} 这儿开驱离（L${lv ?? 1}），驱离页可以升级、解除'));
+      }
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = '开不了：$e');
+      if (mounted) setState(() => _msg = tr("Can't start deterrence: $e", '开不了：$e'));
     }
   }
 
   String _ago(int ms) {
     final s = widget.now().difference(DateTime.fromMillisecondsSinceEpoch(ms)).inSeconds;
-    if (s < 60) return '$s 秒前';
-    if (s < 3600) return '${s ~/ 60} 分钟前';
-    return '${s ~/ 3600} 小时前';
+    if (s < 60) return tr('$s s ago', '$s 秒前');
+    if (s < 3600) return tr('${s ~/ 60} min ago', '${s ~/ 60} 分钟前');
+    return tr('${s ~/ 3600} h ago', '${s ~/ 3600} 小时前');
   }
 
   @override
@@ -103,28 +110,36 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     final taskId = ctx['task_id'] is String ? ctx['task_id'] as String : null;
     final marks = sceneMarks(a);
     return Scaffold(
-      appBar: AppBar(title: Text('${a.level} ${a.robot} · 现场')),
+      appBar: AppBar(title: Text(tr('${a.level} ${a.robot} · Scene', '${a.level} ${a.robot} · 现场'))),
       body: ListView(padding: const EdgeInsets.all(12), children: [
         Text(a.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
         if (a.detail.isNotEmpty) Text(a.detail),
         const Divider(),
-        if (ctx['zone'] != null) Text('防区：${ctx['zone']}'),
+        if (ctx['zone'] != null) Text(tr('Zone: ${ctx['zone']}', '防区：${ctx['zone']}')),
         if (point != null)
-          Text('拦截点：${point['name']}  (${(point['x'] as num).toStringAsFixed(1)}, '
-              '${(point['y'] as num).toStringAsFixed(1)})'),
+          Text(tr(
+              'Intercept point: ${point['name']}  (${(point['x'] as num).toStringAsFixed(1)}, '
+                  '${(point['y'] as num).toStringAsFixed(1)})',
+              '拦截点：${point['name']}  (${(point['x'] as num).toStringAsFixed(1)}, '
+                  '${(point['y'] as num).toStringAsFixed(1)})')),
         if (pose != null)
-          Text('狗最后在：(${(pose['x'] as num).toStringAsFixed(1)}, '
-              '${(pose['y'] as num).toStringAsFixed(1)})  图 ${pose['map_id']}:${pose['map_version']}'
-              '${pose['at_ms'] is num ? '  · ${_ago((pose['at_ms'] as num).toInt())}报的' : ''}'),
-        if (taskId != null) Text('那一趟：$taskId'),
-        if (ctx.isEmpty) const Text('这条告警没带现场（老站点，或站点那一行的告警）'),
+          Text(tr(
+              'Robot last at: (${(pose['x'] as num).toStringAsFixed(1)}, '
+                  '${(pose['y'] as num).toStringAsFixed(1)})  map ${pose['map_id']}:${pose['map_version']}'
+                  '${pose['at_ms'] is num ? '  · reported ${_ago((pose['at_ms'] as num).toInt())}' : ''}',
+              '狗最后在：(${(pose['x'] as num).toStringAsFixed(1)}, '
+                  '${(pose['y'] as num).toStringAsFixed(1)})  图 ${pose['map_id']}:${pose['map_version']}'
+                  '${pose['at_ms'] is num ? '  · ${_ago((pose['at_ms'] as num).toInt())}报的' : ''}')),
+        if (taskId != null) Text(tr('Task: $taskId', '那一趟：$taskId')),
+        if (ctx.isEmpty) Text(tr('This alarm has no scene data (older site, or a site-level alarm)',
+              '这条告警没带现场（老站点，或站点那一行的告警）')),
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 8, children: [
           if (marks != null)
             FilledButton.icon(
                 key: SiteAlertScenePage.mapKey,
                 icon: const Icon(Icons.map_outlined),
-                label: const Text('在图上看'),
+                label: Text(tr('Show on map', '在图上看')),
                 onPressed: () => Navigator.push(
                     context,
                     MaterialPageRoute<void>(
@@ -134,7 +149,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
             OutlinedButton.icon(
                 key: SiteAlertScenePage.videoKey,
                 icon: const Icon(Icons.videocam_outlined),
-                label: const Text('现场录像'),
+                label: Text(tr('Scene recording', '现场录像')),
                 onPressed: () => Navigator.push(
                     context,
                     MaterialPageRoute<void>(
@@ -144,13 +159,13 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
             FilledButton.icon(
                 key: SiteAlertScenePage.deterKey,
                 icon: const Icon(Icons.campaign_outlined),
-                label: const Text('就地驱离'),
+                label: Text(tr('Deter here', '就地驱离')),
                 onPressed: _deterHere),
           if (taskId != null)
             OutlinedButton.icon(
                 key: SiteAlertScenePage.photoKey,
                 icon: const Icon(Icons.photo_camera_outlined),
-                label: const Text('现场照片'),
+                label: Text(tr('Scene photos', '现场照片')),
                 onPressed: () => _photo(taskId)),
         ]),
         if (_msg.isNotEmpty) Padding(

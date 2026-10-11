@@ -9,15 +9,16 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 
 /// 结论给人看的话。
 String verdictText(String? v) => switch (v) {
-      'normal' => '正常',
-      'abnormal' => '异常',
-      'unclear' => '看不清',
-      'pending' => '待判读',
-      null => '待判读',
+      'normal' => tr('Normal', '正常'),
+      'abnormal' => tr('Abnormal', '异常'),
+      'unclear' => tr('Unclear', '看不清'),
+      'pending' => tr('Pending', '待判读'),
+      null => tr('Pending', '待判读'),
       _ => v,
     };
 
@@ -34,7 +35,7 @@ String stampText(String stamp) {
 
 String _verdictSummary(Map<String, dynamic> r) {
   final v = r['verdicts'];
-  if (r['judged_ms'] == null || v is! Map || v.isEmpty) return '待判读';
+  if (r['judged_ms'] == null || v is! Map || v.isEmpty) return tr('Pending', '待判读');
   final parts = <String>[
     for (final k in ['abnormal', 'unclear', 'normal', 'pending'])
       if ((v[k] as num? ?? 0) > 0) '${verdictText(k)} ${v[k]}',
@@ -59,7 +60,10 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.robotId == null ? '记录' : '记录 ${widget.robotId}')),
+      appBar: AppBar(
+          title: Text(widget.robotId == null
+              ? tr('Records', '记录')
+              : tr('Records ${widget.robotId}', '记录 ${widget.robotId}'))),
       body: RefreshIndicator(
         onRefresh: () async {
           setState(() {
@@ -73,23 +77,27 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
             if (snap.hasError) {
               return ListView(children: [
                 ListTile(
-                    title: Text('记录拿不到：${snap.error}',
+                    title: Text(tr("Can't load records: ${snap.error}", '记录拿不到：${snap.error}'),
                         style: const TextStyle(color: Colors.red))),
               ]);
             }
             if (!snap.hasData) return const Center(child: CircularProgressIndicator());
             final rows = snap.data!;
             if (rows.isEmpty) {
-              return ListView(children: const [ListTile(title: Text('还没有记录'))]);
+              return ListView(children: [ListTile(title: Text(tr('No records yet', '还没有记录')))]);
             }
             return ListView(children: [
               for (final r in rows)
                 ListTile(
                   key: SiteRunsPage.runKey((r['id'] as num).toInt()),
                   title: Text('${r['mission']} · ${stampText('${r['stamp']}')}'),
-                  subtitle: Text('${r['robot_id']} · 照片 ${r['photos']} · '
-                      '${r['finished'] == true ? '' : '没跑完 · '}${_verdictSummary(r)}'
-                      ' · 已复核 ${r['reviewed'] ?? 0}'),
+                  subtitle: Text(tr(
+                      '${r['robot_id']} · ${r['photos']} photos · '
+                          '${r['finished'] == true ? '' : 'not finished · '}${_verdictSummary(r)}'
+                          ' · ${r['reviewed'] ?? 0} reviewed',
+                      '${r['robot_id']} · 照片 ${r['photos']} · '
+                          '${r['finished'] == true ? '' : '没跑完 · '}${_verdictSummary(r)}'
+                          ' · 已复核 ${r['reviewed'] ?? 0}')),
                   trailing: ((r['verdicts'] as Map?)?['abnormal'] as num? ?? 0) > 0
                       ? const Icon(Icons.report, color: Colors.red)
                       : null,
@@ -144,9 +152,10 @@ class _SiteRunPageState extends State<SiteRunPage> {
     try {
       // 站点在后台判（几十张照片要好几分钟）：这里只是开个头，过一会儿下拉刷新看结论。
       await widget.api.judgeRun(widget.runId);
-      _snack('站点开始重判了，过一会儿刷新看结论');
+      _snack(tr('The site has started reassessing. Refresh in a few minutes for the results',
+          '站点开始重判了，过一会儿刷新看结论'));
     } on SiteError catch (e) {
-      _snack('判读没成：$e');
+      _snack(tr('Reassessment failed: $e', '判读没成：$e'));
     } finally {
       if (mounted) setState(() => _judging = false);
     }
@@ -156,10 +165,12 @@ class _SiteRunPageState extends State<SiteRunPage> {
   Future<void> _keep(bool want) async {
     try {
       await widget.api.setRunKeep(widget.runId, want);
-      _snack(want ? '留着：过了留存期也不删' : '不留了：到期照常删');
+      _snack(want
+          ? tr('Kept: not deleted after the retention period', '留着：过了留存期也不删')
+          : tr('No longer kept: deleted when the retention period ends', '不留了：到期照常删'));
       _reload();
     } on SiteError catch (e) {
-      _snack('没改成：$e');
+      _snack(tr('Not changed: $e', '没改成：$e'));
     }
   }
 
@@ -180,7 +191,7 @@ class _SiteRunPageState extends State<SiteRunPage> {
   Widget build(BuildContext context) {
     final canReview = widget.api.session?.canReview ?? false;
     return Scaffold(
-      appBar: AppBar(title: const Text('这一趟'), actions: [
+      appBar: AppBar(title: Text(tr('This run', '这一趟')), actions: [
         if (canReview)
           FutureBuilder<Map<String, dynamic>>(
               future: _detail,
@@ -188,14 +199,16 @@ class _SiteRunPageState extends State<SiteRunPage> {
                 final kept = (snap.data?['run'] as Map?)?['keep'] == 1;
                 return IconButton(
                     key: SiteRunPage.keepKey,
-                    tooltip: kept ? '不留了' : '留着（过了留存期也不删）',
+                    tooltip: kept
+                        ? tr('Stop keeping', '不留了')
+                        : tr('Keep (not deleted after the retention period)', '留着（过了留存期也不删）'),
                     icon: Icon(kept ? Icons.bookmark : Icons.bookmark_border),
                     onPressed: snap.hasData ? () => _keep(!kept) : null);
               }),
         if (canReview)
           IconButton(
               key: SiteRunPage.judgeKey,
-              tooltip: '让站点重判',
+              tooltip: tr('Reassess on the site', '让站点重判'),
               icon: _judging
                   ? const SizedBox(
                       width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
@@ -206,7 +219,7 @@ class _SiteRunPageState extends State<SiteRunPage> {
         future: _detail,
         builder: (c, snap) {
           if (snap.hasError) {
-            return Center(child: Text('拿不到：${snap.error}'));
+            return Center(child: Text(tr("Can't load: ${snap.error}", '拿不到：${snap.error}')));
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final run = (snap.data!['run'] as Map?)?.cast<String, dynamic>() ?? {};
@@ -216,8 +229,11 @@ class _SiteRunPageState extends State<SiteRunPage> {
           return ListView(children: [
             ListTile(
               title: Text('${run['mission']} · ${stampText('${run['stamp']}')}'),
-              subtitle: Text('${run['robot_id']} · 照片 ${run['photos']} · '
-                  '${run['finished'] == true ? '跑完了（${run['result']}）' : '没跑完'}'),
+              subtitle: Text(tr(
+                  '${run['robot_id']} · ${run['photos']} photos · '
+                      '${run['finished'] == true ? 'finished (${run['result']})' : 'not finished'}',
+                  '${run['robot_id']} · 照片 ${run['photos']} · '
+                      '${run['finished'] == true ? '跑完了（${run['result']}）' : '没跑完'}')),
             ),
             for (final p in photos) _photoTile(p),
           ]);
@@ -243,13 +259,17 @@ class _SiteRunPageState extends State<SiteRunPage> {
               : Icon(s.hasError ? Icons.broken_image : Icons.photo),
         ),
       ),
-      title: Text('${p['waypoint']} · ${p['camera']} · ${verdictText(shown as String?)}'
-          '${r != null ? '（人已复核）' : ''}'),
+      title: Text(tr(
+          '${p['waypoint']} · ${p['camera']} · ${verdictText(shown as String?)}'
+              '${r != null ? ' (reviewed)' : ''}',
+          '${p['waypoint']} · ${p['camera']} · ${verdictText(shown)}'
+              '${r != null ? '（人已复核）' : ''}')),
       subtitle: Text(r != null
-          ? '复核：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}'
+          ? tr('Review: ${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}',
+              '复核：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}')
           : f != null
-              ? '判读：${f['reason'] ?? ''}'
-              : '还没判读'),
+              ? tr('Assessment: ${f['reason'] ?? ''}', '判读：${f['reason'] ?? ''}')
+              : tr('Not assessed yet', '还没判读')),
       trailing: shown == 'abnormal' ? const Icon(Icons.report, color: Colors.red) : null,
       onTap: () => _open(p),
     );
@@ -300,7 +320,8 @@ class _SitePhotoPageState extends State<SitePhotoPage> {
       if (mounted) Navigator.pop(context, true);
     } on SiteError catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('复核没记下：$e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(tr('Review not saved: $e', '复核没记下：$e'))));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -318,27 +339,33 @@ class _SitePhotoPageState extends State<SitePhotoPage> {
         FutureBuilder<Uint8List>(
           future: widget.bytes,
           builder: (c, s) => s.hasError
-              ? Text('照片拿不到：${s.error}', style: const TextStyle(color: Colors.red))
+              ? Text(tr("Can't load photo: ${s.error}", '照片拿不到：${s.error}'),
+                  style: const TextStyle(color: Colors.red))
               : s.hasData
                   ? InteractiveViewer(child: Image.memory(s.data!))
                   : const SizedBox(height: 200, child: Center(child: CircularProgressIndicator())),
         ),
         const SizedBox(height: 8),
         Text(f == null
-            ? '模型：还没判读'
-            : '模型：${verdictText(f['verdict'] as String?)}（把握 '
-                '${((f['confidence'] as num? ?? 0) * 100).round()}%）${f['reason'] ?? ''}'
-                '${(f['evidence'] ?? '') != '' ? '；依据：${f['evidence']}' : ''}'),
+            ? tr('Model: not assessed yet', '模型：还没判读')
+            : tr(
+                'Model: ${verdictText(f['verdict'] as String?)} (confidence '
+                    '${((f['confidence'] as num? ?? 0) * 100).round()}%) ${f['reason'] ?? ''}'
+                    '${(f['evidence'] ?? '') != '' ? '; evidence: ${f['evidence']}' : ''}',
+                '模型：${verdictText(f['verdict'] as String?)}（把握 '
+                    '${((f['confidence'] as num? ?? 0) * 100).round()}%）${f['reason'] ?? ''}'
+                    '${(f['evidence'] ?? '') != '' ? '；依据：${f['evidence']}' : ''}')),
         const SizedBox(height: 4),
         Text(r == null
-            ? '人：还没复核'
-            : '人：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}'),
+            ? tr('Reviewer: not reviewed yet', '人：还没复核')
+            : tr('Reviewer: ${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}',
+                '人：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}')),
         if (canReview) ...[
           const SizedBox(height: 12),
           TextField(
               key: SitePhotoPage.noteKey,
               controller: _note,
-              decoration: const InputDecoration(labelText: '说一句（可不填）'),
+              decoration: InputDecoration(labelText: tr('Note (optional)', '说一句（可不填）')),
               maxLength: 200),
           Wrap(spacing: 8, children: [
             for (final v in ['normal', 'abnormal', 'unclear'])

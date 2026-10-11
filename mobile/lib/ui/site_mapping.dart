@@ -19,6 +19,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 
 /// 先问预览（还不知道）、在看预览、在看录包轨迹。
@@ -167,7 +168,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
       if (mounted) {
         setState(() {
           _staleS += widget.previewPeriod.inSeconds;
-          _err = '连不上：$e';
+          _err = tr("Can't reach the site: $e", '连不上：$e');
         });
       }
       return;
@@ -231,7 +232,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
         _err = '';
       });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _err = '取不到轨迹：$e');
+      if (mounted) setState(() => _err = tr('Trail unavailable: $e', '取不到轨迹：$e'));
     }
   }
 
@@ -243,21 +244,31 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
   }
 
   String _trailStatus() {
-    if (!_asked) return _err.isNotEmpty ? _err : '正在问狗……';
-    final n = '已记 ${_pts.length} 个点';
+    if (!_asked) return _err.isNotEmpty ? _err : tr('Asking the robot…', '正在问狗……');
+    final n = tr('${_pts.length} points logged', '已记 ${_pts.length} 个点');
     final span = TrailPainter.span(_pts);
     final size = span == null
         ? ''
-        : '，走过的范围约 ${span.width.toStringAsFixed(0)} × ${span.height.toStringAsFixed(0)} m';
+        : tr(', area covered about ${span.width.toStringAsFixed(0)} × ${span.height.toStringAsFixed(0)} m',
+            '，走过的范围约 ${span.width.toStringAsFixed(0)} × ${span.height.toStringAsFixed(0)} m');
     final head = _recording
-        ? '录包中：$n$size（每 ${widget.period.inSeconds} 秒更新）'
+        ? tr('Recording: $n$size (updates every ${widget.period.inSeconds} s)',
+            '录包中：$n$size（每 ${widget.period.inSeconds} 秒更新）')
         : _starting
-            ? '录包正在起（要十几秒），起来了就开始记点……'
-            : '没在录包（下面是最后一次录的轨迹）：$n$size';
+            ? tr('Recording is starting (takes 10–20 s). Points are logged once it is up…',
+                '录包正在起（要十几秒），起来了就开始记点……')
+            : tr('Not recording (trail of the last recording below): $n$size',
+                '没在录包（下面是最后一次录的轨迹）：$n$size');
     return [
       head,
-      if (_full) '点数到上限了，后面的不再记：红点是记下的最后一点，不是狗现在的位置',
-      if (_jumps > 0) '里程跳过 $_jumps 次（运控重启、归零），轨迹在跳的地方接上了',
+      if (_full)
+        tr('Point limit reached, no more points are logged: the red dot is the last logged point, '
+            'not where the robot is now',
+            '点数到上限了，后面的不再记：红点是记下的最后一点，不是狗现在的位置'),
+      if (_jumps > 0)
+        tr('Odometry jumped $_jumps time(s) (motion controller restart or reset); '
+            'the trail was joined at the jumps',
+            '里程跳过 $_jumps 次（运控重启、归零），轨迹在跳的地方接上了'),
       if (_err.isNotEmpty) _err,
     ].join('\n');
   }
@@ -265,7 +276,10 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
   String _previewStatus() {
     if (_mode == _Mode.probe) {
       if (_err.isNotEmpty) return _err;
-      return _pvStarting ? '开录正在起（要十几秒），起来了就有图……' : '正在问狗……';
+      return _pvStarting
+          ? tr('Recording is starting (takes 10–20 s). The image appears once it is up…',
+              '开录正在起（要十几秒），起来了就有图……')
+          : tr('Asking the robot…', '正在问狗……');
     }
     final d = _pv;
     final tag = '${d['map_id']}:${d['version']}';
@@ -275,22 +289,38 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
     final age = (d['age_s'] as num?)?.toDouble() ?? 0;
     final pvErr = '${d['preview_error'] ?? ''}';
     final head = _pvDone
-        ? '这一趟建完了（建好的图在地图页），下面是最后一张'
+        ? tr('This run is finished (the built map is on the Maps page). Last preview below',
+            '这一趟建完了（建好的图在地图页），下面是最后一张')
         : !rec
-            ? '停了，正在打包 $tag（下面是最后一张）'
+            ? tr('Stopped, packaging $tag (last preview below)', '停了，正在打包 $tag（下面是最后一张）')
             : _seq == 0
-                ? '边走边建 $tag：在线建图起来了，等第一张预览……'
-                : '边走边建 $tag：已累加 ${d['frames']} 帧，范围约 '
-                    '${w.toStringAsFixed(0)} × ${h.toStringAsFixed(0)} m（每 ${widget.previewPeriod.inSeconds} 秒更新）';
+                ? tr('Live mapping $tag: mapping is up, waiting for the first preview…',
+                    '边走边建 $tag：在线建图起来了，等第一张预览……')
+                : tr(
+                    'Live mapping $tag: ${d['frames']} frames merged, area about '
+                        '${w.toStringAsFixed(0)} × ${h.toStringAsFixed(0)} m '
+                        '(updates every ${widget.previewPeriod.inSeconds} s)',
+                    '边走边建 $tag：已累加 ${d['frames']} 帧，范围约 '
+                        '${w.toStringAsFixed(0)} × ${h.toStringAsFixed(0)} m（每 ${widget.previewPeriod.inSeconds} 秒更新）');
     return [
       head,
       if (rec && !_pvDone && d['preview_running'] == false)
-        '预览进程停了（日志 mapview.log），建图不受影响，停下后照样出图'
+        tr('Preview process stopped (log: mapview.log). Mapping is not affected; '
+            'the map is still built after you stop',
+            '预览进程停了（日志 mapview.log），建图不受影响，停下后照样出图')
       else if (rec && !_pvDone && _seq > 0 && age > _staleAfterS)
-        '预览 ${age.toStringAsFixed(0)} 秒没更新（狗上的预览进程可能停了），建图不受影响',
-      if (pvErr.isNotEmpty) '预览没起来：$pvErr（建图不受影响，停下后照样出图）',
-      if (d['too_big'] == true) '图太大，狗没发（下面是上一张）',
-      if (_err.isNotEmpty) _png != null ? '$_err（下面是约 $_staleS 秒前的图）' : _err,
+        tr('Preview not updated for ${age.toStringAsFixed(0)} s (the preview process on the robot '
+            'may have stopped). Mapping is not affected',
+            '预览 ${age.toStringAsFixed(0)} 秒没更新（狗上的预览进程可能停了），建图不受影响'),
+      if (pvErr.isNotEmpty)
+        tr('Preview did not start: $pvErr (mapping is not affected; the map is still built after you stop)',
+            '预览没起来：$pvErr（建图不受影响，停下后照样出图）'),
+      if (d['too_big'] == true)
+        tr('Image too large, the robot did not send it (previous one below)', '图太大，狗没发（下面是上一张）'),
+      if (_err.isNotEmpty)
+        _png != null
+            ? tr('$_err (the image below is about $_staleS s old)', '$_err（下面是约 $_staleS 秒前的图）')
+            : _err,
     ].join('\n');
   }
 
@@ -298,10 +328,10 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
   Widget build(BuildContext context) {
     final trail = _mode == _Mode.trail;
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.robotId} ${trail ? '录包轨迹' : '边走边建'}'), actions: [
+      appBar: AppBar(title: Text('${widget.robotId} ${trail ? tr('recording trail', '录包轨迹') : tr('live mapping', '边走边建')}'), actions: [
         IconButton(
             key: SiteMappingTrailPage.refreshKey,
-            tooltip: '刷新',
+            tooltip: tr('Refresh', '刷新'),
             icon: const Icon(Icons.refresh),
             onPressed: () {
               // 再看一次；狗说还在录（还在建）就接着问
@@ -320,10 +350,13 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
         Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
             child: Text(_trailStatus(), key: SiteMappingTrailPage.statusKey)),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12),
-          child: Text('绿点是录包起点，红点是狗现在的位置；坐标是狗自己的里程（新地方还没有图），走远了会有些漂。',
-              style: TextStyle(fontSize: 12, color: Colors.black54)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Text(
+              tr('The green dot is where recording started, the red dot is where the robot is now. '
+                  'Coordinates are the robot\'s own odometry (a new place has no map yet) and drift over distance.',
+                  '绿点是录包起点，红点是狗现在的位置；坐标是狗自己的里程（新地方还没有图），走远了会有些漂。'),
+              style: const TextStyle(fontSize: 12, color: Colors.black54)),
         ),
         Expanded(
           child: Padding(
@@ -369,7 +402,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
           child: DecoratedBox(
             decoration: BoxDecoration(border: Border.all(color: Colors.black12)),
             child: png == null
-                ? const Center(child: Text('还没有图'))
+                ? Center(child: Text(tr('No image yet', '还没有图')))
                 : InteractiveViewer(
                     maxScale: 8,
                     child: Center(
@@ -392,9 +425,13 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
         child: ListView(padding: const EdgeInsets.all(8), children: [
           Text(_previewStatus(), key: SiteMappingTrailPage.statusKey),
           const SizedBox(height: 8),
-          const Text('蓝线是走过的路，绿点是起点，红箭头是狗现在的位置和朝向。这是边走边建时的预览：'
-              '坐标跟建好的图不通用，建好的图停下后在地图页看。',
-              style: TextStyle(fontSize: 12, color: Colors.black54)),
+          Text(
+              tr('The blue line is the path covered, the green dot is the start, the red arrow is the '
+                  'robot\'s position and heading. This is a preview during live mapping: its coordinates '
+                  'do not match the built map. View the built map on the Maps page after you stop.',
+                  '蓝线是走过的路，绿点是起点，红箭头是狗现在的位置和朝向。这是边走边建时的预览：'
+                  '坐标跟建好的图不通用，建好的图停下后在地图页看。'),
+              style: const TextStyle(fontSize: 12, color: Colors.black54)),
         ]),
       ),
     ]);
@@ -613,7 +650,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       await widget.api.saveZones(widget.mapId, widget.version, zones, _rev);
       _msg = done;
     } on SiteError catch (e) {
-      _msg = '没存上：${e.message}';
+      _msg = tr('Not saved: ${e.message}', '没存上：${e.message}');
     }
     await _loadZones();
     if (mounted) setState(() => _busy = false);
@@ -639,7 +676,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       _drawing = null;
       _draft.clear();
     });
-    await _save([..._zoneList, zone], '存好了：第 ${_rev + 1} 版（改过要重新确认）');
+    await _save(
+        [..._zoneList, zone],
+        tr('Saved: revision ${_rev + 1} (changes must be confirmed again)',
+            '存好了：第 ${_rev + 1} 版（改过要重新确认）'));
   }
 
   Future<void> _confirm() async {
@@ -648,14 +688,18 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
         context: context,
         builder: (c) => AlertDialog(
               scrollable: true,
-              title: Text('确认第 $_rev 版区域'),
-              content: Text('${_zones?['confirm_text'] ?? ''}。\n确认之后这张图才能下发给狗。'),
+              title: Text(tr('Confirm zones revision $_rev', '确认第 $_rev 版区域')),
+              content: Text(tr(
+                  '${_zones?['confirm_text'] ?? ''}.\nThe map can be sent to robots only after you confirm.',
+                  '${_zones?['confirm_text'] ?? ''}。\n确认之后这张图才能下发给狗。')),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('再看看')),
+                TextButton(
+                    onPressed: () => Navigator.pop(c, false),
+                    child: Text(tr('Review again', '再看看'))),
                 FilledButton(
                     key: SiteMapPreviewPage.confirmOkKey,
                     onPressed: () => Navigator.pop(c, true),
-                    child: const Text('确认')),
+                    child: Text(tr('Confirm', '确认'))),
               ],
             ));
     if (ok != true || !mounted) return;
@@ -665,9 +709,9 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
     });
     try {
       await widget.api.confirmZones(widget.mapId, widget.version, _rev);
-      _msg = '确认了第 $_rev 版';
+      _msg = tr('Revision $_rev confirmed', '确认了第 $_rev 版');
     } on SiteError catch (e) {
-      _msg = '没确认上：${e.message}';
+      _msg = tr('Not confirmed: ${e.message}', '没确认上：${e.message}');
     }
     await _loadZones();
     if (mounted) setState(() => _busy = false);
@@ -684,7 +728,8 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
             final e = snap.error;
             return Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text('看不了：${e is SiteError ? e.message : e}'));
+                child: Text(tr('Preview unavailable: ${e is SiteError ? e.message : e}',
+                    '看不了：${e is SiteError ? e.message : e}')));
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final (meta, png) = snap.data!;
@@ -768,20 +813,28 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                   Text('${m.label}  (${m.x.toStringAsFixed(1)}, ${m.y.toStringAsFixed(1)})',
                       style: TextStyle(color: m.color, fontWeight: FontWeight.bold)),
                 if (widget.marks.isNotEmpty) const Divider(),
-                Text('一像素 ${mpp.toStringAsFixed(2)} m · 图 ${w.toInt()} × ${h.toInt()} 像素 · '
-                    '约 ${(w * mpp).toStringAsFixed(0)} × ${(h * mpp).toStringAsFixed(0)} m'),
+                Text(tr(
+                    '${mpp.toStringAsFixed(2)} m per pixel · image ${w.toInt()} × ${h.toInt()} px · '
+                        'about ${(w * mpp).toStringAsFixed(0)} × ${(h * mpp).toStringAsFixed(0)} m',
+                    '一像素 ${mpp.toStringAsFixed(2)} m · 图 ${w.toInt()} × ${h.toInt()} 像素 · '
+                        '约 ${(w * mpp).toStringAsFixed(0)} × ${(h * mpp).toStringAsFixed(0)} m')),
                 if (meta['source'] != null)
-                  Text('用的是 ${meta['source']}', style: const TextStyle(fontSize: 12)),
+                  Text(tr('Source: ${meta['source']}', '用的是 ${meta['source']}'),
+                      style: const TextStyle(fontSize: 12)),
                 if (meta['warning'] != null)
                   Text('${meta['warning']}', style: const TextStyle(color: Colors.deepOrange)),
                 const Divider(),
                 for (final p in homes)
-                  Text('原点 · ${p['robot_id']} · ${p['name']}  '
-                      '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})',
+                  Text(
+                      tr(
+                          'Home point · ${p['robot_id']} · ${p['name']}  '
+                              '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})',
+                          '原点 · ${p['robot_id']} · ${p['name']}  '
+                              '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
                       style: const TextStyle(color: Colors.blue)),
-                if (pts.isEmpty) const Text('这张图上还没有登记待命点'),
+                if (pts.isEmpty) Text(tr('No standby points on this map yet', '这张图上还没有登记待命点')),
                 for (final p in pts)
-                  Text('${p['robot_id']} · ${p['name']}${p['default'] == true ? '（默认）' : ''}  '
+                  Text('${p['robot_id']} · ${p['name']}${p['default'] == true ? tr(' (default)', '（默认）') : ''}  '
                       '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
                 const Divider(),
                 ..._zonePanel(zones),
@@ -795,35 +848,45 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
 
   List<Widget> _zonePanel(List<Map<String, dynamic>> zones) {
     final admin = widget.api.session?.canManageMaps ?? false;
-    if (_zonesError != null) return [Text('区域取不到：$_zonesError')];
-    if (_zones == null) return const [Text('区域取的中…')];
+    if (_zonesError != null) {
+      return [Text(tr('Zones unavailable: $_zonesError', '区域取不到：$_zonesError'))];
+    }
+    if (_zones == null) return [Text(tr('Loading zones…', '区域取的中…'))];
     final conf = _zones!['confirmed'] as Map<String, dynamic>?;
     final confirmed = conf != null && conf['current'] == true;
     return [
-      Text('禁行区 / 限速区 · 第 $_rev 版', style: const TextStyle(fontWeight: FontWeight.bold)),
+      Text(tr('No-go / speed-limit zones · revision $_rev', '禁行区 / 限速区 · 第 $_rev 版'),
+          style: const TextStyle(fontWeight: FontWeight.bold)),
       Text(
           confirmed
-              ? '已确认（${conf['by']}）'
+              ? tr('Confirmed (${conf['by']})', '已确认（${conf['by']}）')
               : conf == null
-                  ? '还没确认：这张图下发不了'
-                  : '改过之后没重新确认（确认的是第 ${conf['revision']} 版）：下发不了',
+                  ? tr('Not confirmed: this map cannot be sent to robots', '还没确认：这张图下发不了')
+                  : tr(
+                      'Changed since it was confirmed (revision ${conf['revision']} was confirmed): '
+                          'cannot be sent to robots',
+                      '改过之后没重新确认（确认的是第 ${conf['revision']} 版）：下发不了'),
           style: TextStyle(color: confirmed ? Colors.green : Colors.deepOrange)),
-      if (zones.isEmpty) const Text('没画区域'),
+      if (zones.isEmpty) Text(tr('No zones drawn', '没画区域')),
       for (final z in zones)
         Row(children: [
           Expanded(
               child: Text(z['kind'] == 'nogo'
-                  ? '禁行 · ${z['label'] ?? ''}（${z['id']}）'
-                  : '限速 ${z['max_speed_mps']} m/s · ${z['label'] ?? ''}（${z['id']}）')),
+                  ? tr('No-go · ${z['label'] ?? ''} (${z['id']})', '禁行 · ${z['label'] ?? ''}（${z['id']}）')
+                  : tr('Limit ${z['max_speed_mps']} m/s · ${z['label'] ?? ''} (${z['id']})',
+                      '限速 ${z['max_speed_mps']} m/s · ${z['label'] ?? ''}（${z['id']}）'))),
           if (admin && _drawing == null)
             IconButton(
                 key: SiteMapPreviewPage.deleteKey('${z['id']}'),
                 icon: const Icon(Icons.delete_outline),
-                tooltip: '删掉（放宽：狗空闲时才换上）',
+                tooltip: tr('Delete (relaxes limits: applied only when the robot is idle)',
+                    '删掉（放宽：狗空闲时才换上）'),
                 onPressed: _busy
                     ? null
-                    : () => _save([for (final o in zones) if (o['id'] != z['id']) o],
-                        '删了：第 ${_rev + 1} 版（改过要重新确认）')),
+                    : () => _save(
+                        [for (final o in zones) if (o['id'] != z['id']) o],
+                        tr('Deleted: revision ${_rev + 1} (changes must be confirmed again)',
+                            '删了：第 ${_rev + 1} 版（改过要重新确认）'))),
         ]),
       if (_msg != null) Text(_msg!),
       if (admin && _drawing == null) ...[
@@ -831,25 +894,28 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           OutlinedButton(
               key: SiteMapPreviewPage.drawNogoKey,
               onPressed: _busy ? null : () => setState(() => _drawing = 'nogo'),
-              child: const Text('画禁行区')),
+              child: Text(tr('Draw no-go zone', '画禁行区'))),
           OutlinedButton(
               key: SiteMapPreviewPage.drawSlowKey,
               onPressed: _busy ? null : () => setState(() => _drawing = 'slow'),
-              child: const Text('画限速区')),
+              child: Text(tr('Draw speed-limit zone', '画限速区'))),
         ]),
         if (!confirmed) ...[
           Text('${_zones!['confirm_text'] ?? ''}', style: const TextStyle(fontSize: 12)),
           FilledButton(
               key: SiteMapPreviewPage.confirmKey,
               onPressed: _busy ? null : _confirm,
-              child: Text('确认第 $_rev 版')),
+              child: Text(tr('Confirm revision $_rev', '确认第 $_rev 版'))),
         ],
       ],
       if (_drawing != null) ...[
-        Text('${_drawing == 'nogo' ? '禁行区' : '限速区'}：点图加顶点，已 ${_draft.length} 个'),
+        Text(tr(
+            '${_drawing == 'nogo' ? 'No-go zone' : 'Speed-limit zone'}: tap the map to add corners, '
+                '${_draft.length} so far',
+            '${_drawing == 'nogo' ? '禁行区' : '限速区'}：点图加顶点，已 ${_draft.length} 个')),
         if (_drawing == 'slow')
           Row(children: [
-            Text('限速 ${_speed.toStringAsFixed(1)} m/s'),
+            Text(tr('Limit ${_speed.toStringAsFixed(1)} m/s', '限速 ${_speed.toStringAsFixed(1)} m/s')),
             Expanded(
                 child: Slider(
                     value: _speed,
@@ -862,18 +928,18 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           FilledButton(
               key: SiteMapPreviewPage.finishKey,
               onPressed: _draft.length >= 3 && !_busy ? _finish : null,
-              child: const Text('完成')),
+              child: Text(tr('Finish zone', '完成'))),
           OutlinedButton(
               key: SiteMapPreviewPage.undoKey,
               onPressed: _draft.isEmpty ? null : () => setState(_draft.removeLast),
-              child: const Text('撤销一点')),
+              child: Text(tr('Undo point', '撤销一点'))),
           TextButton(
               key: SiteMapPreviewPage.cancelKey,
               onPressed: () => setState(() {
                     _drawing = null;
                     _draft.clear();
                   }),
-              child: const Text('不画了')),
+              child: Text(tr('Cancel', '不画了'))),
         ]),
       ],
     ];

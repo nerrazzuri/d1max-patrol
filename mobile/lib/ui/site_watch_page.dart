@@ -17,6 +17,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../model/alert.dart';
 import '../model/site_watch.dart';
 import '../net/site_client.dart';
@@ -114,10 +115,10 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
         _alertsAt = widget.now();
       });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _alertsError = '告警读不到：$e');
+      if (mounted) setState(() => _alertsError = tr("Can't load alarms: $e", '告警读不到：$e'));
     } on FormatException catch (e) {
       // 读不懂的名单不许当成「没有 P1」：那是这一屏能说的最坏的假话。
-      if (mounted) setState(() => _alertsError = '告警读不懂：${e.message}');
+      if (mounted) setState(() => _alertsError = tr("Can't read the alarm list: ${e.message}", '告警读不懂：${e.message}'));
     }
   }
 
@@ -130,9 +131,9 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
         _summaryError = null;
       });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _summaryError = '汇总读不到：$e');
+      if (mounted) setState(() => _summaryError = tr("Can't load the summary: $e", '汇总读不到：$e'));
     } on FormatException catch (e) {
-      if (mounted) setState(() => _summaryError = '汇总读不懂：${e.message}');
+      if (mounted) setState(() => _summaryError = tr("Can't read the summary: ${e.message}", '汇总读不懂：${e.message}'));
     }
   }
 
@@ -142,7 +143,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
     } on SiteError catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$what 没成：$e')));
+            .showSnackBar(SnackBar(content: Text(tr('$what failed: $e', '$what 没成：$e'))));
       }
     }
     await _loadAlerts();
@@ -164,9 +165,9 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
   Widget _alertTile(Alert a) {
     final can = widget.api.session?.canHandleAlerts ?? false;
     final state = <String>[
-      if (a.ackedBy.isNotEmpty) '${a.ackedBy} 已确认' else '还没有人确认',
-      if (a.escalated > 0) '已升级到 ${a.channel}',
-      if (a.count > 1) '${a.count} 次',
+      if (a.ackedBy.isNotEmpty) tr('Acknowledged by ${a.ackedBy}', '${a.ackedBy} 已确认') else tr('Unacknowledged', '还没有人确认'),
+      if (a.escalated > 0) tr('Escalated to ${a.channel}', '已升级到 ${a.channel}'),
+      if (a.count > 1) tr('${a.count} times', '${a.count} 次'),
     ].join(' · ');
     return Card(
       color: a.level == 'P1' ? Colors.red.shade50 : null,
@@ -183,45 +184,62 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
                 if (a.ackedMs == null)
                   TextButton(
                       key: SiteWatchPage.ackKey(a.key),
-                      onPressed: () => _act(() => widget.api.ackAlert(a.key), '确认'),
-                      child: const Text('确认')),
+                      onPressed: () => _act(() => widget.api.ackAlert(a.key), tr('Acknowledge', '确认')),
+                      child: Text(tr('Acknowledge', '确认'))),
                 TextButton(
                     key: SiteWatchPage.resolveKey(a.key),
-                    onPressed: () => _act(() => widget.api.resolveAlert(a.key), '解决'),
-                    child: const Text('解决')),
+                    onPressed: () => _act(() => widget.api.resolveAlert(a.key), tr('Resolve', '解决')),
+                    child: Text(tr('Resolve', '解决'))),
               ])
             : null,
       ),
     );
   }
 
-  String _num(Object? v, String unit, String why) => v == null ? '不知道（$why）' : '$v$unit';
+  String _num(Object? v, String unit, String why) => v == null ? tr('Unknown ($why)', '不知道（$why）') : '$v$unit';
 
   int? _pct(double? r) => r == null ? null : (r * 100).round();
 
-  String _ago(int s) => s < 120 ? '$s 秒' : s < 7200 ? '${s ~/ 60} 分钟' : '${s ~/ 3600} 小时';
+  String _ago(int s) => s < 120
+      ? tr('$s s', '$s 秒')
+      : s < 7200
+          ? tr('${s ~/ 60} min', '${s ~/ 60} 分钟')
+          : tr('${s ~/ 3600} h', '${s ~/ 3600} 小时');
 
   /// 站点自己的备份（W00c5d）。
   String _backupText(SiteWatchSummary s) {
     final b = s.siteBackup;
-    if (b == null || b['configured'] != true) return '备份：${s.siteWhy['backup'] ?? '没配'}';
+    if (b == null || b['configured'] != true) return tr('Backup: ${s.siteWhy['backup'] ?? 'not configured'}', '备份：${s.siteWhy['backup'] ?? '没配'}');
     final ok = (b['last_ok_ms'] as num?)?.toInt();
-    final when = ok == null ? '还没成功过' : '上次成功在 ${_ago(((s.nowMs - ok) ~/ 1000).clamp(0, 1 << 31))}前';
+    final ago = ok == null ? '' : _ago(((s.nowMs - ok) ~/ 1000).clamp(0, 1 << 31));
+    final when = ok == null
+        ? tr('never succeeded', '还没成功过')
+        : tr('last succeeded $ago ago', '上次成功在 $ago前');
     final err = '${b['error'] ?? ''}';
-    return '备份：$when${b['stale'] == true ? '（过期了）' : ''}${err.isEmpty ? '' : '；$err'}';
+    return tr('Backup: $when${b['stale'] == true ? ' (overdue)' : ''}${err.isEmpty ? '' : '; $err'}',
+        '备份：$when${b['stale'] == true ? '（过期了）' : ''}${err.isEmpty ? '' : '；$err'}');
   }
 
   Widget _robotTile(SiteWatchRobot r) {
     final lines = <String>[
-      r.online ? (r.fresh ? '在线' : '在线（状态过期）') : '掉线',
-      '电量 ${_num(r.batteryPct?.toStringAsFixed(0), '%', r.whyFor('battery_pct'))}',
-      '钟偏 ${_num(r.clockSkewS?.toStringAsFixed(1), ' 秒', r.whyFor('clock_skew_s'))}',
+      r.online
+          ? (r.fresh ? tr('Online', '在线') : tr('Online (status out of date)', '在线（状态过期）'))
+          : tr('Offline', '掉线'),
+      tr('Battery ${_num(r.batteryPct?.toStringAsFixed(0), '%', r.whyFor('battery_pct'))}',
+          '电量 ${_num(r.batteryPct?.toStringAsFixed(0), '%', r.whyFor('battery_pct'))}'),
+      tr('Clock offset ${_num(r.clockSkewS?.toStringAsFixed(1), ' s', r.whyFor('clock_skew_s'))}',
+          '钟偏 ${_num(r.clockSkewS?.toStringAsFixed(1), ' 秒', r.whyFor('clock_skew_s'))}'),
       r.alerts == null
-          ? '未解决告警 不知道（站点没给）'
-          : '未解决 P1 ${r.alerts!['P1']} · P2 ${r.alerts!['P2']} · P3 ${r.alerts!['P3']}',
-      '盘水位 ${_num(_pct(r.diskUsedRatio), '%', r.whyFor('disk_used_ratio'))}',
-      '证据积压 ${_num(r.uploadBacklog, ' 个文件', r.whyFor('upload_backlog'))}'
-          '${(r.oldestBacklogS ?? 0) > 0 ? '（最老的等了 ${_ago(r.oldestBacklogS!)}）' : ''}',
+          ? tr('Open alarms: unknown (not reported by the site)', '未解决告警 不知道（站点没给）')
+          : tr('Open P1 ${r.alerts!['P1']} · P2 ${r.alerts!['P2']} · P3 ${r.alerts!['P3']}',
+              '未解决 P1 ${r.alerts!['P1']} · P2 ${r.alerts!['P2']} · P3 ${r.alerts!['P3']}'),
+      tr('Disk used ${_num(_pct(r.diskUsedRatio), '%', r.whyFor('disk_used_ratio'))}',
+          '盘水位 ${_num(_pct(r.diskUsedRatio), '%', r.whyFor('disk_used_ratio'))}'),
+      tr(
+          'Evidence backlog ${_num(r.uploadBacklog, ' files', r.whyFor('upload_backlog'))}'
+              '${(r.oldestBacklogS ?? 0) > 0 ? ' (oldest waiting ${_ago(r.oldestBacklogS!)})' : ''}',
+          '证据积压 ${_num(r.uploadBacklog, ' 个文件', r.whyFor('upload_backlog'))}'
+              '${(r.oldestBacklogS ?? 0) > 0 ? '（最老的等了 ${_ago(r.oldestBacklogS!)}）' : ''}'),
     ];
     return ListTile(
         key: SiteWatchPage.robotKey(r.robotId),
@@ -237,33 +255,35 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
     final s = _summary;
     final alerts = <Widget>[
       if (!_live)
-        const ListTile(
+        ListTile(
             key: SiteWatchPage.liveLostKey,
-            leading: Icon(Icons.sync_problem, color: Colors.orange),
-            title: Text('实时更新断了，正在重连；下面的数可能是旧的，下拉可以再问一次')),
+            leading: const Icon(Icons.sync_problem, color: Colors.orange),
+            title: Text(tr(
+                'Live updates lost, reconnecting. The figures below may be out of date; pull down to refresh',
+                '实时更新断了，正在重连；下面的数可能是旧的，下拉可以再问一次'))),
       ListTile(
           key: SiteWatchPage.loadedAtKey,
           dense: true,
           title: Text(_alertsAt == null
-              ? '告警还没读到过'
-              : '告警读于 ${_hms(_alertsAt!)}；下拉可以再问一次')),
-      const ListTile(title: Text('要立刻动身的（P1）')),
+              ? tr('Alarms not loaded yet', '告警还没读到过')
+              : tr('Alarms loaded at ${_hms(_alertsAt!)}; pull down to refresh', '告警读于 ${_hms(_alertsAt!)}；下拉可以再问一次'))),
+      ListTile(title: Text(tr('Act now (P1)', '要立刻动身的（P1）'))),
       if (_alertsError != null)
         ListTile(
             key: SiteWatchPage.alertsErrorKey,
             title: Text(_alertsError!, style: const TextStyle(color: Colors.red)))
       else if (_alertsAt == null)
         // 还没读到过：**不许说「没有」** —— 那是这一屏能说的最坏的假话。
-        const ListTile(key: SiteWatchPage.p1LoadingKey, title: Text('还没读到'))
+        ListTile(key: SiteWatchPage.p1LoadingKey, title: Text(tr('Not loaded yet', '还没读到')))
       else if (p1.isEmpty)
-        const ListTile(key: SiteWatchPage.p1NoneKey, title: Text('没有'))
+        ListTile(key: SiteWatchPage.p1NoneKey, title: Text(tr('None', '没有')))
       else
         for (final a in p1) _alertTile(a),
-      if (rest.isNotEmpty) const ListTile(title: Text('其余未解决的')),
+      if (rest.isNotEmpty) ListTile(title: Text(tr('Other open alarms', '其余未解决的'))),
       for (final a in rest) _alertTile(a),
     ];
     final robots = <Widget>[
-      const ListTile(title: Text('每台狗')),
+      ListTile(title: Text(tr('Robots', '每台狗'))),
       if (_summaryError != null)
         ListTile(
             key: SiteWatchPage.summaryErrorKey,
@@ -271,16 +291,17 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       else if (s != null) ...[
         for (final r in s.robots) _robotTile(r),
         ListTile(
-            title: const Text('站点'),
+            title: Text(tr('Site', '站点')),
             subtitle: Text('${s.scheduleOk == null
-                ? '排程：${s.siteWhy['schedule_ok'] ?? '不知道'}'
+                ? tr('Schedule: ${s.siteWhy['schedule_ok'] ?? 'unknown'}',
+                    '排程：${s.siteWhy['schedule_ok'] ?? '不知道'}')
                 : s.scheduleOk!
-                    ? '排程正常'
-                    : '排程没办成：${s.scheduleError}'}\n${_backupText(s)}')),
+                    ? tr('Schedule OK', '排程正常')
+                    : tr('Schedule failed: ${s.scheduleError}', '排程没办成：${s.scheduleError}')}\n${_backupText(s)}')),
       ],
     ];
     return Scaffold(
-      appBar: AppBar(title: const Text('值守')),
+      appBar: AppBar(title: Text(tr('Watch', '值守'))),
       // 宽屏（桌面版、值守大屏，W15）：告警一栏、每台狗一栏并排，一眼都看得见；窄的照旧一栏往下排。
       body: LayoutBuilder(
         builder: (context, box) => box.maxWidth >= SiteWatchPage.wideAt

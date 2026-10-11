@@ -8,6 +8,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 import 'site_mapping.dart';
 import 'widget/fields_dialog.dart';
@@ -37,7 +38,10 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
 
   String _ackText(Map<String, dynamic> r, String ok) {
     final ack = (r['ack'] as Map?) ?? const {};
-    return ack['result'] == 'accepted' ? ok : '狗没接：${ack['result']} ${ack['reason'] ?? ''}';
+    return ack['result'] == 'accepted'
+        ? ok
+        : tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
+            '狗没接：${ack['result']} ${ack['reason'] ?? ''}');
   }
 
   /// 选一台**报了这种能力**的狗（没这能力的狗会回 unsupported）。一台都没有就说一声、返回 null。
@@ -46,17 +50,18 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
     try {
       robots = (await widget.api.robots()).where((r) => robotCan(r, task)).toList();
     } on SiteError catch (e) {
-      _snack('拿不到狗的列表：$e');
+      _snack(tr('Robot list unavailable: $e', '拿不到狗的列表：$e'));
       return null;
     }
     if (!mounted) return null;
     if (robots.isEmpty) {
-      _snack('没有能$what的狗（狗没在线报能力，或者这台狗不支持）');
+      _snack(tr('No robot can $what (none is online reporting this capability, or it is not supported)',
+          '没有能$what的狗（狗没在线报能力，或者这台狗不支持）'));
       return null;
     }
     return showDialog<String>(
       context: context,
-      builder: (c) => SimpleDialog(title: const Text('下发给哪台狗'), children: [
+      builder: (c) => SimpleDialog(title: Text(tr('Send to which robot', '下发给哪台狗')), children: [
         for (final r in robots)
           SimpleDialogOption(
               key: Key('pick-${r['robot_id']}'),
@@ -67,22 +72,27 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
   }
 
   Future<void> _activate(Map<String, dynamic> m) async {
-    final robot = await _pickRobot('map_activate', '换图');
+    final robot = await _pickRobot('map_activate', tr('switch maps', '换图'));
     if (robot == null || !mounted) return;
     final label = '${m['map_id']}:${m['version']}';
     // 换图会换坐标系：点位、待命点都得是这张图上的。点错了狗就在错的图上走，所以要再确认一次。
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: Text('让 $robot 换成 $label？'),
-        content: const Text('狗先下载、核对，等手上的任务做完再切换坐标系；切换那一小会儿不接新任务。'
-            '任务包、待命点要是这张图上的。'),
+        title: Text(tr('Switch $robot to $label?', '让 $robot 换成 $label？')),
+        content: Text(tr(
+            'The robot downloads and verifies the map first, then switches coordinate frames once its '
+                'current task is done. It accepts no new tasks during the switch. '
+                'Task packages and standby points must be on this map.',
+            '狗先下载、核对，等手上的任务做完再切换坐标系；切换那一小会儿不接新任务。'
+                '任务包、待命点要是这张图上的。')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+          TextButton(
+              onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
           FilledButton(
               key: const Key('activate-go'),
               onPressed: () => Navigator.pop(c, true),
-              child: const Text('换')),
+              child: Text(tr('Switch', '换'))),
         ],
       ),
     );
@@ -97,28 +107,37 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
         final go = await showDialog<bool>(
           context: context,
           builder: (c) => AlertDialog(
-            title: Text('$robot 在 $label 上还没有原点'),
-            content: const Text('照样下发的话，狗载上这张图之后不接 goto、巡检（没有原点就没有安全返航的目标）；'
-                '遥控、设位置照常。要先把狗开到原点（充电桩前），设好位置，再点「在这儿标原点」。'),
+            title: Text(tr('$robot has no home point on $label', '$robot 在 $label 上还没有原点')),
+            content: Text(tr(
+                'If you send it anyway, the robot accepts no goto or patrol after loading this map '
+                    '(without a home point there is no safe place to return to). Remote control and '
+                    'set position still work. Drive the robot to the home point (in front of the dock), '
+                    'set its position, then mark the home point there.',
+                '照样下发的话，狗载上这张图之后不接 goto、巡检（没有原点就没有安全返航的目标）；'
+                    '遥控、设位置照常。要先把狗开到原点（充电桩前），设好位置，再点「在这儿标原点」。')),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('算了')),
+              TextButton(
+                  onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
               FilledButton(
                   key: const Key('activate-without-home'),
                   onPressed: () => Navigator.pop(c, true),
-                  child: const Text('照样下发')),
+                  child: Text(tr('Send anyway', '照样下发'))),
             ],
           ),
         );
         if (go != true) {
-          _snack('没下发：$robot 在 $label 上还没有原点');
+          _snack(tr('Not sent: $robot has no home point on $label', '没下发：$robot 在 $label 上还没有原点'));
           return;
         }
         r = await widget.api.activateMap(robot, '${m['map_id']}', '${m['version']}',
             withoutHome: true);
       }
-      _snack(_ackText(r, '$robot 在下载、载入 $label，好了它报的地图版本会变'));
+      _snack(_ackText(
+          r,
+          tr('$robot is downloading and loading $label. Its reported map version changes when done',
+              '$robot 在下载、载入 $label，好了它报的地图版本会变')));
     } on SiteError catch (e) {
-      _snack('下发没成：$e');
+      _snack(tr('Send failed: $e', '下发没成：$e'));
     }
   }
 
@@ -126,28 +145,33 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
     final robot = '${b['robot_id']}';
     try {
       if (!robotCan(await widget.api.robot(robot), 'map_build')) {
-        _snack('$robot 现在不能重建（没在线报能力，或者不支持）');
+        _snack(tr('$robot cannot rebuild now (not online reporting this capability, or not supported)',
+            '$robot 现在不能重建（没在线报能力，或者不支持）'));
         return;
       }
     } on SiteError catch (e) {
-      _snack('拿不到 $robot 的状态：$e');
+      _snack(tr('Status of $robot unavailable: $e', '拿不到 $robot 的状态：$e'));
       return;
     }
     if (!mounted) return;
     final got = await showFieldsDialog(context,
-        title: '拿 ${b['name']} 重建',
-        fields: const [
-          DialogField('地图号', initial: 'estate-1'),
-          DialogField('新的版本号（不能跟已有的重）', key: SiteMapsPage.versionKey),
+        title: tr('Rebuild from ${b['name']}', '拿 ${b['name']} 重建'),
+        fields: [
+          DialogField(tr('Map ID', '地图号'), initial: 'estate-1'),
+          DialogField(tr('New version (must differ from existing ones)', '新的版本号（不能跟已有的重）'),
+              key: SiteMapsPage.versionKey),
         ],
-        confirm: '重建',
+        confirm: tr('Rebuild', '重建'),
         confirmKey: const Key('build-go'));
     if (got == null || got[0].isEmpty || got[1].isEmpty) return;
     try {
       final r = await widget.api.buildMap(robot, '${b['name']}', got[0], got[1]);
-      _snack(_ackText(r, '$robot 开始重建，好了新图会出现在这里'));
+      _snack(_ackText(
+          r,
+          tr('$robot started rebuilding. The new map appears here when done',
+              '$robot 开始重建，好了新图会出现在这里')));
     } on SiteError catch (e) {
-      _snack('重建没成：$e');
+      _snack(tr('Rebuild failed: $e', '重建没成：$e'));
     }
   }
 
@@ -155,7 +179,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
   Widget build(BuildContext context) {
     final admin = widget.api.session?.canManageMaps ?? false;
     return Scaffold(
-      appBar: AppBar(title: const Text('地图')),
+      appBar: AppBar(title: Text(tr('Maps', '地图'))),
       body: RefreshIndicator(
         onRefresh: () async {
           setState(() {
@@ -169,7 +193,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
             if (snap.hasError) {
               return ListView(children: [
                 ListTile(
-                    title: Text('地图目录拿不到：${snap.error}',
+                    title: Text(tr('Map list unavailable: ${snap.error}', '地图目录拿不到：${snap.error}'),
                         style: const TextStyle(color: Colors.red))),
               ]);
             }
@@ -177,19 +201,22 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
             final maps = (snap.data!['maps'] as List).whereType<Map<String, dynamic>>();
             final bags = (snap.data!['bags'] as List).whereType<Map<String, dynamic>>();
             return ListView(children: [
-              const ListTile(title: Text('图')),
-              if (maps.isEmpty) const ListTile(title: Text('站点上还没有图')),
+              ListTile(title: Text(tr('Maps', '图'))),
+              if (maps.isEmpty) ListTile(title: Text(tr('No maps on the site yet', '站点上还没有图'))),
               for (final m in maps)
                 ListTile(
                   key: SiteMapsPage.mapKey('${m['map_id']}', '${m['version']}'),
                   title: Text('${m['map_id']}:${m['version']}'),
-                  subtitle: Text('来自 ${m['source']} · ${(m['files'] as List).length} 个文件'
-                      '${(m['note'] ?? '') != '' ? ' · ${m['note']}' : ''}'),
+                  subtitle: Text(tr(
+                      'From ${m['source']} · ${(m['files'] as List).length} files'
+                          '${(m['note'] ?? '') != '' ? ' · ${m['note']}' : ''}',
+                      '来自 ${m['source']} · ${(m['files'] as List).length} 个文件'
+                          '${(m['note'] ?? '') != '' ? ' · ${m['note']}' : ''}')),
                   // 看图（W00c6h）谁都能点；点这一行是下发（管理员）。
                   trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                     IconButton(
                         key: SiteMapsPage.previewKey('${m['map_id']}', '${m['version']}'),
-                        tooltip: '看图',
+                        tooltip: tr('View map', '看图'),
                         icon: const Icon(Icons.map_outlined),
                         onPressed: () => Navigator.push(
                             context,
@@ -203,8 +230,8 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
                   onTap: admin ? () => _activate(m) : null,
                 ),
               const Divider(),
-              const ListTile(title: Text('录包')),
-              if (bags.isEmpty) const ListTile(title: Text('还没有录包')),
+              ListTile(title: Text(tr('Mapping recordings', '录包'))),
+              if (bags.isEmpty) ListTile(title: Text(tr('No mapping recordings yet', '还没有录包'))),
               for (final b in bags)
                 ListTile(
                   key: SiteMapsPage.bagKey('${b['robot_id']}', '${b['name']}'),

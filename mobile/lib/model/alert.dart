@@ -25,6 +25,8 @@
 /// 字段就崩的话，一次狗那头的小升级就是现场一块黑屏。
 library;
 
+import '../l10n.dart';
+
 /// 一条告警（`engine/alerts.py` 的 `Alert.to_wire()`，14 个键）。
 class Alert {
   /// 聚合键，形如 `robot/kind#seq`。
@@ -156,14 +158,16 @@ List<Alert> alertsFromWire(Map<String, dynamic> m) {
   final Object? raw = m['alerts'];
   if (raw is! List) {
     throw FormatException(m.containsKey('alerts')
-        ? '告警名单不是个名单：${raw.runtimeType}'
-        : '回的这份东西里没有 alerts 那一段，读不出告警');
+        ? tr('Alarm list is not a list: ${raw.runtimeType}', '告警名单不是个名单：${raw.runtimeType}')
+        : tr('Reply has no "alerts" section, cannot read alarms', '回的这份东西里没有 alerts 那一段，读不出告警'));
   }
   return <Alert>[
     for (final Object? a in raw)
       if (a is Map<String, dynamic>)
         Alert.fromWire(a)
       else
-        throw FormatException('告警名单里有一条不是对象：${a.runtimeType}'),
+        throw FormatException(tr(
+            'An entry in the alarm list is not an object: ${a.runtimeType}',
+            '告警名单里有一条不是对象：${a.runtimeType}')),
   ];
 }

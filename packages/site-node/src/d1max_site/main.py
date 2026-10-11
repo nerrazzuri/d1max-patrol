@@ -27,6 +27,7 @@
     intercept NAME --map M:VER --pose x,y,yaw → 登记拦截点(W00c2c)
     zone ZONE INTERCEPT                    → 防区映射到拦截点(W00c2c)
     fingerprint                            → 站点服务证书的 SHA-256(手机添加站点时核对;W00c4)
+    pair-code --url https://主机:端口      → 手机添加站点用的配对码(站点名 + 地址 + 指纹;App V2)
     serve     [--api-host 127.0.0.1] [--api-port 8443] [--broker mqtts://127.0.0.1:8883]
 """
 
@@ -118,6 +119,17 @@ def cmd_init(home: Path, site_id: str, hostnames: list[str], broker_port: int) -
     (home / "site.json").write_text(json.dumps({
         "site_id": site_id, "broker_port": broker_port, "hostnames": hostnames,
         "version": SITE_VERSION}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def cmd_pair_code(home: Path, url: str, name: str | None = None) -> str:
+    """手机扫码添加站点的配对码(App V2):站点名 + 手机要连的地址 + 证书指纹。没有秘密。"""
+    from d1max_site.pairing import PairingError, encode
+    cfg = _load(home)
+    try:
+        return encode(name or str(cfg.get("site_name") or cfg.get("site_id") or "D1 Max"), url,
+                      cmd_fingerprint(home))
+    except PairingError as exc:
+        raise SiteError(str(exc)) from exc
 
 
 def cmd_fingerprint(home: Path) -> str:
@@ -1092,6 +1104,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="站点证书里的主机名或 IP(狗与手机用它连站点),可给多个")
     i.add_argument("--broker-port", type=int, default=8883)
     sub.add_parser("fingerprint", help="打印站点服务证书的 SHA-256(手机添加站点时核对)")
+    pc = sub.add_parser("pair-code", help="出手机添加站点用的配对码(App V2;手机上粘贴,或在值班台 System 页扫二维码)")
+    pc.add_argument("--url", required=True, help="手机要连的站点地址,https://主机:端口")
+    pc.add_argument("--name", default=None, help="手机上显示的站点名(缺省用 site.json 的 site_name / site_id)")
     e = sub.add_parser("enroll", help="给一台狗签证书并登记")
     e.add_argument("robot_id")
     e.add_argument("--days", type=int, default=365)
@@ -1221,6 +1236,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"站点证书指纹(手机添加站点时核对):{cmd_fingerprint(home)}")
         elif args.cmd == "fingerprint":
             print(cmd_fingerprint(home))
+        elif args.cmd == "pair-code":
+            print(cmd_pair_code(home, args.url, args.name))
         elif args.cmd == "enroll":
             d = cmd_enroll(home, args.robot_id, args.days)
             ev = " evidence-pub.key" if (d / "evidence-pub.key").is_file() else ""

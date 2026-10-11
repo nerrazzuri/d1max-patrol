@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 
 /// 放一段录像。测试换成记下来的。
@@ -61,7 +62,7 @@ class _ClipPageState extends State<_ClipPage> {
         _c.play();
       }
     }, onError: (Object e) {
-      if (mounted) setState(() => _error = '放不了：$e');
+      if (mounted) setState(() => _error = tr("Can't play: $e", '放不了：$e'));
     });
   }
 
@@ -157,7 +158,9 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
       if (mounted) {
         setState(() {
           _loading = false;
-          _msg = e.status == 404 ? '这个站点没开录像' : '录像读不到：$e';
+          _msg = e.status == 404
+              ? tr('Recording is not enabled on this site', '这个站点没开录像')
+              : tr("Can't load recordings: $e", '录像读不到：$e');
         });
       }
     }
@@ -174,7 +177,7 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
     final id = (r['id'] as num).toInt();
     setState(() {
       _busyId = id;
-      _msg = '下载中…';
+      _msg = tr('Downloading…', '下载中…');
     });
     try {
       final bytes = await widget.api.recordingBytes(id);
@@ -182,9 +185,9 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
       setState(() => _msg = '');
       await widget.player.play(context, bytes, '${r['camera']} · ${clipTime((r['start_ms'] as num).toInt())}');
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = '下载不了：$e');
+      if (mounted) setState(() => _msg = tr("Can't download: $e", '下载不了：$e'));
     } on Exception catch (e) {
-      if (mounted) setState(() => _msg = '放不了：$e');
+      if (mounted) setState(() => _msg = tr("Can't play: $e", '放不了：$e'));
     } finally {
       if (mounted) setState(() => _busyId = null);
     }
@@ -196,9 +199,13 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
     try {
       await widget.api.setRecordingKeep(id, want);
       await _load();
-      if (mounted) setState(() => _msg = want ? '标了留着：过了 30 天也不删' : '不留了：30 天后照常删');
+      if (mounted) {
+        setState(() => _msg = want
+            ? tr('Marked to keep: not deleted after 30 days', '标了留着：过了 30 天也不删')
+            : tr('No longer kept: deleted after 30 days as usual', '不留了：30 天后照常删'));
+      }
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = '没标上：$e');
+      if (mounted) setState(() => _msg = tr("Couldn't change the keep mark: $e", '没标上：$e'));
     }
   }
 
@@ -207,29 +214,36 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
     final canKeep = widget.api.session?.canReview ?? false; // 站点按 review 查（W20：业主能确认告警，但不能标留着）
     final around = widget.aroundMs;
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.robotId} · 录像'), actions: [
+      appBar: AppBar(title: Text(tr('${widget.robotId} · Recordings', '${widget.robotId} · 录像')), actions: [
         TextButton(key: SiteRecordingsPage.olderKey, onPressed: () => _shift(-SiteRecordingsPage.windowMin),
-            child: const Text('← 更早')),
+            child: Text(tr('← Earlier', '← 更早'))),
         TextButton(key: SiteRecordingsPage.newerKey, onPressed: () => _shift(SiteRecordingsPage.windowMin),
-            child: const Text('更晚 →')),
+            child: Text(tr('Later →', '更晚 →'))),
       ]),
       body: ListView(padding: const EdgeInsets.all(8), children: [
         Wrap(spacing: 8, children: [
           for (final c in const <String?>[null, 'front', 'back'])
             ChoiceChip(
                 key: SiteRecordingsPage.cameraKey(c ?? 'all'),
-                label: Text(c == null ? '全部' : c == 'front' ? '前' : '后'),
+                label: Text(c == null
+                    ? tr('All', '全部')
+                    : c == 'front'
+                        ? tr('Front', '前')
+                        : tr('Back', '后')),
                 selected: _camera == c,
                 onSelected: (_) {
                   _camera = c;
                   unawaited(_load());
                 }),
         ]),
-        if (around != null) Text('告警那一刻：${clipTime(around)}（时刻是狗的钟）'),
+        if (around != null) Text(tr('Alarm time: ${clipTime(around)} (times are by the robot clock)',
+              '告警那一刻：${clipTime(around)}（时刻是狗的钟）')),
         if (_msg.isNotEmpty) Text(_msg, key: SiteRecordingsPage.msgKey),
         if (_loading) const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator())),
         if (!_loading && _rows.isEmpty && _msg.isEmpty)
-          const Text('这段时间没有录像（狗没开录像、还没传上来，或者过了 30 天删了）'),
+          Text(tr(
+              'No recordings in this period (recording is off on the robot, not uploaded yet, or deleted after 30 days)',
+              '这段时间没有录像（狗没开录像、还没传上来，或者过了 30 天删了）')),
         for (final r in _rows)
           ListTile(
             key: SiteRecordingsPage.clipKey((r['id'] as num).toInt()),
@@ -239,7 +253,7 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
                 : const Icon(Icons.play_circle_outline),
             title: Text('${clipTime((r['start_ms'] as num).toInt())} · ${r['camera']}'),
             subtitle: Text('${((r['bytes'] as num) / 1048576).toStringAsFixed(1)} MB'
-                '${r['keep'] == 1 ? ' · 留着' : ''}'),
+                '${r['keep'] == 1 ? tr(' · kept', ' · 留着') : ''}'),
             selected: around != null &&
                 (r['start_ms'] as num) <= around &&
                 around < (r['start_ms'] as num) + 60000,
@@ -247,7 +261,9 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
             trailing: canKeep
                 ? IconButton(
                     key: SiteRecordingsPage.keepKey((r['id'] as num).toInt()),
-                    tooltip: r['keep'] == 1 ? '不留了' : '留着（过了 30 天也不删）',
+                    tooltip: r['keep'] == 1
+                        ? tr('Stop keeping', '不留了')
+                        : tr('Keep (not deleted after 30 days)', '留着（过了 30 天也不删）'),
                     icon: Icon(r['keep'] == 1 ? Icons.bookmark : Icons.bookmark_border),
                     onPressed: () => _keep(r))
                 : null,

@@ -6,6 +6,7 @@ import { hm, hms } from "./data";
 import { Confirm, Modal } from "./dialogs";
 import { t, type Key } from "./i18n";
 import { Shape } from "./icons";
+import { qrGrid } from "./qr";
 
 type Say = (s: string) => void;
 
@@ -361,6 +362,7 @@ export function SystemPage() {
           </tbody>
         </table>
       </section>
+      <PairPhone />
       <section class="panel">
         <div class="panel-head">
           <h2>{t("supportBundle")}</h2>
@@ -369,5 +371,60 @@ export function SystemPage() {
         <p class="muted small pad">{t("supportHint")}</p>
       </section>
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ 手机扫码添加站点(App V2)
+
+interface Pairing { code: string; name: string; url: string; fingerprint: string }
+
+/** 配对码 = 站点名 + 手机要连的地址 + 证书指纹(没有账号口令)。地址缺省是值班台现在的地址,
+ * 手机走别的地址(VPN、另一个网段)就改一下。 */
+function PairPhone() {
+  const [url, setUrl] = useState(window.location.origin);
+  const [asked, setAsked] = useState(window.location.origin);
+  const [pair, setPair] = useState<Pairing | null>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let live = true;
+    api<Pairing>("GET", `/api/pairing?url=${enc(asked)}`)
+      .then((d) => { if (live) { setPair(d); setErr(""); } })
+      .catch((e) => { if (live) { setPair(null); setErr(e instanceof ApiError ? e.message : String(e)); } });
+    return () => { live = false; };
+  }, [asked]);
+  const g = pair ? qrGrid(pair.code) : null;
+  return (
+    <section class="panel">
+      <div class="panel-head"><h2>{t("pairTitle")}</h2></div>
+      <div class="pair-phone pad">
+        {/* 白底黑码:扫码器要的是这个,不跟着深色主题走 */}
+        {g ? (
+          <svg class="qr" viewBox={`0 0 ${g.size} ${g.size}`} role="img" aria-label={t("pairQrAria")} shape-rendering="crispEdges">
+            <rect width={g.size} height={g.size} fill="#fff" />
+            <path d={g.d} fill="#000" />
+          </svg>
+        ) : (
+          <div class="qr none">{err ? <span class="state p2"><Shape kind="P2" />{t("pairBadUrl")}</span> : null}</div>
+        )}
+        <div class="pair-text">
+          <p>{t("pairHint")}</p>
+          <form class="row" onSubmit={(e) => { e.preventDefault(); setAsked(url.trim()); }}>
+            <label class="field grow">
+              <span>{t("pairUrl")}</span>
+              <input type="url" value={url} onInput={(e) => setUrl((e.target as HTMLInputElement).value)} spellcheck={false} autocomplete="off" />
+            </label>
+            <button type="submit" class="btn" disabled={url.trim() === asked}>{t("pairUpdate")}</button>
+          </form>
+          {pair && (
+            <dl class="kv">
+              <dt>{t("pairSite")}</dt><dd>{pair.name}</dd>
+              <dt>{t("pairFingerprint")}</dt><dd class="mono small wrap">{pair.fingerprint}</dd>
+              <dt>{t("pairCode")}</dt><dd class="mono small wrap">{pair.code}</dd>
+            </dl>
+          )}
+          <p class="muted small">{t("pairNoSecret")}</p>
+        </div>
+      </div>
+    </section>
   );
 }

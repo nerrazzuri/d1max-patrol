@@ -8,6 +8,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../l10n.dart';
 import '../net/site_client.dart';
 import 'site_recordings.dart' show clipTime;
 import 'widget/live_video.dart';
@@ -55,7 +56,9 @@ class _SiteCamerasPageState extends State<SiteCamerasPage> {
       if (mounted) {
         setState(() {
           _loading = false;
-          _msg = e.status == 404 ? '这个站点没开摄像头' : '摄像头读不到：$e';
+          _msg = e.status == 404
+              ? tr('Cameras are not enabled on this site', '这个站点没开摄像头')
+              : tr("Can't read cameras: $e", '摄像头读不到：$e');
         });
       }
     }
@@ -63,33 +66,46 @@ class _SiteCamerasPageState extends State<SiteCamerasPage> {
 
   String _state(Map<String, dynamic> c) {
     final since = (c['since_ms'] as num?)?.toInt();
-    final when = since == null || since == 0 ? '' : '（${clipTime(since)} 起）';
-    if (c['connected'] == true) return '连着$when';
+    final when = since == null || since == 0 ? '' : tr(
+        ' (since ${clipTime(since)})',
+        '（${clipTime(since)} 起）');
+    if (c['connected'] == true) return tr('Connected$when', '连着$when');
     final err = '${c['error'] ?? ''}';
-    return '连不上$when${err.isEmpty ? '' : '：$err'}——这一路的入侵收不到';
+    return tr(
+        'Not connected$when${err.isEmpty ? '' : ': $err'} — intrusions from this camera are not received',
+        '连不上$when${err.isEmpty ? '' : '：$err'}——这一路的入侵收不到');
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('固定摄像头')),
+      appBar: AppBar(title: Text(tr('Fixed cameras', '固定摄像头'))),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(padding: const EdgeInsets.all(8), children: [
               if (_msg.isNotEmpty) Text(_msg, key: SiteCamerasPage.msgKey),
               if (_msg.isEmpty && _rows.isEmpty)
-                const Text('还没有摄像头：在站点主机上 d1max-site camera-add 登记（摄像头自带的入侵检测报到站点，派狗去）'),
+                Text(tr(
+                    'No cameras yet. Register one on the site host with d1max-site camera-add (the '
+                    'camera reports its own intrusion detection to the site, which sends a robot)',
+                    '还没有摄像头：在站点主机上 d1max-site camera-add 登记（摄像头自带的入侵检测报到站点，派狗去）')),
               for (final c in _rows)
                 ListTile(
                   key: SiteCamerasPage.camKey('${c['name']}'),
                   leading: Icon(c['connected'] == true ? Icons.videocam : Icons.videocam_off,
                       color: c['connected'] == true ? Colors.green : Colors.red),
-                  title: Text('${c['name']} · 防区 ${c['zone']}'),
+                  title: Text(tr(
+                      '${c['name']} · Zone ${c['zone']}',
+                      '${c['name']} · 防区 ${c['zone']}')),
                   subtitle: Text([
                     _state(c),
                     if (c['last_event_ms'] != null)
-                      '最近一次报入侵：${clipTime((c['last_event_ms'] as num).toInt())}',
-                    if (c['motion'] == true) '画面动了也算入侵',
+                      tr(
+                          'Last intrusion reported: ${clipTime((c['last_event_ms'] as num).toInt())}',
+                          '最近一次报入侵：${clipTime((c['last_event_ms'] as num).toInt())}'),
+                    if (c['motion'] == true) tr(
+                        'Video motion also counts as an intrusion',
+                        '画面动了也算入侵'),
                   ].join('\n')),
                   isThreeLine: c['last_event_ms'] != null || c['motion'] == true,
                   trailing: c['live'] == true ? const Icon(Icons.chevron_right) : null,
@@ -113,7 +129,7 @@ class SiteCameraLivePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('$name · 实时画面')),
+      appBar: AppBar(title: Text(tr('$name · Live', '$name · 实时画面'))),
       body: Center(
         child: ConstrainedBox(
           constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.8),
