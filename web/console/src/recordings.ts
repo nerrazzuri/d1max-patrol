@@ -24,8 +24,17 @@ export function dayRange(date: string): { since: number; until: number } | null 
   const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
   const since = new Date(y, mo, d).getTime();
   const until = new Date(y, mo, d + 1).getTime();
-  if (Number.isNaN(since) || new Date(since).getDate() !== d) return null;
+  const got = new Date(since);
+  if (Number.isNaN(since) || got.getDate() !== d || got.getMonth() !== mo) return null; // 2 月 30 日、13 月:不收
   return { since, until };
+}
+
+/** 24 小时制的 `HH:MM` 或 `HH:MM:SS` → 这一天的第几秒。看不懂、出界的回 null。 */
+export function clockSeconds(text: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(text.trim());
+  if (!m) return null;
+  const h = Number(m[1]), mi = Number(m[2]), s = Number(m[3] ?? "0");
+  return h > 23 || mi > 59 || s > 59 ? null : (h * 60 + mi) * 60 + s;
 }
 
 /** 按开头时刻从早到晚(站点给的是新的在前)。 */

@@ -305,3 +305,35 @@ input[type="time"], input[type="date"] { color-scheme: dark; }
 .rectable { border-collapse: collapse; font-size: 14px; max-width: 1120px; }
 .rectable caption { text-align: left; font-weight: 700; padding: 8px 0 4px; }
 .rectable td { padding: 6px 16px 6px 0; border-top: 1px solid var(--c-rule); }
+
+/* 报表页(C-B3b) */
+.report { display: flex; flex-direction: column; gap: 16px; }
+.sheet { display: flex; flex-direction: column; gap: 24px; max-width: 1200px; }
+.sheet.dim { opacity: 0.5; }
+.sheet h1 { font-size: 22px; line-height: 28px; margin: 0; }
+.sheet h2 { font-size: 18px; line-height: 24px; margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--c-rule); }
+.sheet p { margin: 4px 0; }
+.sheet section { display: flex; flex-direction: column; gap: 8px; }
+.stats { display: flex; flex-wrap: wrap; gap: 8px 32px; }
+.stat { display: flex; flex-direction: column; min-width: 96px; max-width: 220px; }
+.stat-n { font-size: 28px; line-height: 34px; font-weight: 700; font-family: var(--font-mono); }
+.stat-l { font-size: 14px; line-height: 18px; color: var(--c-textSecondary); }
+.reptable { border-collapse: collapse; font-size: 14px; line-height: 20px; width: 100%; }
+.reptable.narrow { width: auto; min-width: 320px; }
+.reptable caption { text-align: left; font-weight: 700; padding: 12px 0 4px; }
+.reptable th { text-align: left; font-weight: 600; color: var(--c-textSecondary); padding: 4px 16px 4px 0; border-bottom: 1px solid var(--c-rule); }
+.reptable td { padding: 4px 16px 4px 0; border-bottom: 1px solid var(--c-rule); vertical-align: top; }
+.reptable .num { text-align: right; font-family: var(--font-mono); }
+/* 打印:白底黑字,只留报表;顶栏、报警队列、筛选条都不印 */
+@media print {
+  body { background: #fff; color: #000; }
+  .topbar, .subnav, .queue, .noprint, .banner, .toast { display: none !important; }
+  .page { padding: 0; }
+  .sheet { max-width: none; color: #000; }
+  .sheet .muted, .stat-l, .reptable th { color: #444; }
+  .sheet h2, .reptable th, .reptable td { border-color: #999; }
+  .pri.P1, .pri.P2 { color: #000; }
+  .reptable tr { break-inside: avoid; }
+}
+.recbar input.hhmm { width: 76px; }
+.recbar input.hhmm.wide { width: 108px; }

@@ -519,6 +519,8 @@ class _Handler(TlsHandlerMixin):
                 return self._incident_admin(method, path)
             if path == "/api/runs" or path.startswith(("/api/runs/", "/api/exports")):
                 return self._runs(method, path, user)
+            if path == "/api/reports/daily":
+                return self._report(method, user)
             if path == "/api/recordings" or _REC.match(path):
                 return self._recordings(method, path, user)
             if path == "/api/cameras" or _CAM.match(path):
@@ -2064,6 +2066,24 @@ class _Handler(TlsHandlerMixin):
         except StopIteration as exc:
             raise HttpError(502, f"摄像头画面拉不下来:{v.error}") from exc
         self._mjpeg(frames, first)
+
+    def _report(self, method: str, user) -> None:
+        """值班日报(C-B3b):能看的都能看(保安交班、业主)。"""
+        from d1max_site.reports import ReportError, daily
+        if method != "GET":
+            raise HttpError(405, "只收 GET")
+        self._need(user, VIEW)
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+
+        def num(k: str) -> int:
+            v = (q.get(k) or [""])[0]
+            if not v.isdigit() or len(v) > 15:
+                raise HttpError(400, f"{k} 要是非负整数(毫秒)")
+            return int(v)
+        try:
+            return self._send_json(200, daily(self.site.accounts.db, num("since"), num("until")))
+        except ReportError as exc:
+            raise HttpError(400, str(exc)) from exc
 
     def _recordings(self, method: str, path: str, user) -> None:
         """连续录像(W18)。看、放:``view``;标「留着」(过了 30 天也不删):``review``(值班的人

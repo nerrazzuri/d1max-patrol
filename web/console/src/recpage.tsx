@@ -13,6 +13,7 @@ import {
   covered,
   dateInput,
   dayRange,
+  clockSeconds,
   firstAfter,
   minuteOf,
   nextSegment,
@@ -148,10 +149,12 @@ export function RecordingsPage(props: { robots: string[]; role: string; now: num
           <input type="date" value={date} max={dateInput(props.now)} onChange={(e) => setDate((e.target as HTMLInputElement).value)} />
         </label>
         <label>{t("recJump")}
-          <input type="time" step="1" disabled={!rows || !range}
-            onChange={(e) => {
-              const v = (e.target as HTMLInputElement).value.split(":").map(Number);
-              if (range && rows && v.length >= 2 && v.every((n) => !Number.isNaN(n))) play(rows, range.since + ((v[0] * 60 + v[1]) * 60 + (v[2] ?? 0)) * 1000);
+          <input type="text" class="mono hhmm wide" inputMode="numeric" maxLength={8} placeholder="HH:MM:SS" disabled={!rows || !range}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              const s = clockSeconds((e.target as HTMLInputElement).value);
+              if (s == null) props.say(t("recBadTime"));
+              else if (range && rows) play(rows, range.since + s * 1000);
             }} />
         </label>
         <span class="muted push">
@@ -248,7 +251,7 @@ export function RecordingsPage(props: { robots: string[]; role: string; now: num
             {alerts.slice().sort((a, b) => a.first_ms - b.first_ms).map((a) => (
               <tr key={a.key}>
                 <td class="mono">{hms(a.first_ms)}</td>
-                <td class={`pri ${a.level}`}>{a.level}</td>
+                <td><span class={`pri ${a.level}`}>{a.level}</span></td>
                 <td>{alertTitle(lang.value, a.kind, a.title)}</td>
                 <td><button type="button" class="link" disabled={!rows} onClick={() => rows && play(rows, a.first_ms - 10_000)}>{t("recPlayFrom")}</button></td>
               </tr>

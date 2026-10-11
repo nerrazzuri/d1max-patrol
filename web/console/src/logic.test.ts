@@ -3,11 +3,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { api, ApiError, onUnauthorized, setFetch } from "./api";
-import { alertTitle, DICTS, initialLang, knownKinds, tr } from "./i18n";
+import { alertTitle, DICTS, initialLang, knownKinds, lang, tr } from "./i18n";
 import { heading, onMap, toPx } from "./mapview";
 import { daysText, toMap } from "./zonesadmin";
-import { ascending, covered, dateInput, dayRange, firstAfter, minuteOf, nextSegment, prevSegment, recordingLink, segmentAt, spans, type Recording } from "./recordings";
+import { ascending, clockSeconds, covered, dateInput, dayRange, firstAfter, minuteOf, nextSegment, prevSegment, recordingLink, segmentAt, spans, type Recording } from "./recordings";
 import { canReview } from "./recpage";
+import { alarmsCsv, csv, csvCell, fileTag, incidentsCsv, minutes, patrolsCsv, period, secondsText, stamp, type AlarmRow } from "./reports";
+import { outcomeText } from "./reportpage";
 import { abnormal, alarmState, canDispatch, duration, openAlerts, queue, robotMap, robotState, SIREN_LEVEL, sirenState, wallOrder, type Alert, type Robot } from "./model";
 
 const fx = (name: string) =>
@@ -52,6 +54,8 @@ describe("recordings", () => {
     expect(dateInput(day.until)).toBe("2026-10-12");
     expect(dayRange("2026-1-1")).toBeNull();
     expect(dayRange("2026-02-30")).toBeNull();
+    expect(dayRange("2026-13-01")).toBeNull();
+    expect(dayRange("2026-00-10")).toBeNull();
     expect(dayRange("")).toBeNull();
   });
   it("站点给的是新的在前:排成从早到晚;同一刻的按编号", () => {
@@ -96,8 +100,74 @@ describe("recordings", () => {
     expect(recordingLink({ robot: "D1 01", first_ms: 50_000 })).toBe("#/recordings?robot=D1%2001&t=40000");
     expect(recordingLink({ robot: "A", first_ms: 5 })).toBe("#/recordings?robot=A&t=1");
   });
+  it("跳到几点:24 小时制 HH:MM[:SS];出界、看不懂回 null", () => {
+    expect([clockSeconds("00:00"), clockSeconds("2:14"), clockSeconds("02:14:36"), clockSeconds(" 23:59:59 ")]).toEqual([0, 8040, 8076, 86399]);
+    expect([clockSeconds("24:00"), clockSeconds("12:60"), clockSeconds("12:00:60"), clockSeconds("1214"), clockSeconds("2 PM"), clockSeconds("")]).toEqual([null, null, null, null, null, null]);
+  });
   it("谁能标留着:管理员、保安;业主不能(跟站点的 review 权限一致)", () => {
     expect([canReview("admin"), canReview("guard"), canReview("owner"), canReview("")]).toEqual([true, true, false, false]);
+  });
+});
+
+describe("reports", () => {
+  it("几点几分:24:00 是一天的尽头;看不懂的不收", () => {
+    expect([minutes("00:00"), minutes("7:05"), minutes("23:59"), minutes("24:00")]).toEqual([0, 425, 1439, 1440]);
+    expect([minutes("24:01"), minutes("25:00"), minutes("12:60"), minutes("12"), minutes(""), minutes("ab:cd")]).toEqual([null, null, null, null, null, null]);
+  });
+  it("时间段:同一天里的;结束不比开始晚 = 到第二天(一整天、跨夜的班);日期不对回 null", () => {
+    const day = dayRange("2026-10-11")!;
+    expect(period("2026-10-11", "00:00", "00:00")).toEqual({ since: day.since, until: day.until });
+    expect(period("2026-10-11", "08:00", "20:00")).toEqual({ since: day.since + 8 * 3_600_000, until: day.since + 20 * 3_600_000 });
+    expect(period("2026-10-11", "20:00", "08:00")).toEqual({ since: day.since + 20 * 3_600_000, until: day.until + 8 * 3_600_000 });
+    expect(period("2026-10-11", "09:30", "09:30")).toEqual({ since: day.since + 9.5 * 3_600_000, until: day.until + 9.5 * 3_600_000 });
+    expect(period("2026-10-11", "00:00", "24:00")).toEqual({ since: day.since, until: day.until });
+    expect(period("2026-13-01", "00:00", "00:00")).toBeNull();
+    expect(period("2026-10-11", "", "00:00")).toBeNull();
+    expect(period("2026-10-11", "00:00", "x")).toBeNull();
+  });
+  it("多少秒写成人看的", () => {
+    expect([secondsText(null), secondsText(0), secondsText(41.6), secondsText(59.4)]).toEqual(["—", "0 s", "42 s", "59 s"]);
+    expect([secondsText(60), secondsText(110), secondsText(3599)]).toEqual(["1 min 00 s", "1 min 50 s", "59 min 59 s"]);
+    expect([secondsText(3600), secondsText(7500)]).toEqual(["1 h 00 min", "2 h 05 min"]);
+  });
+  it("CSV:逗号引号换行加引号;公式开头垫撇号(数字不垫);带 BOM、CRLF", () => {
+    expect(csvCell("plain")).toBe("plain");
+    expect(csvCell('a,"b"')).toBe('"a,""b"""');
+    expect(csvCell("line1\nline2")).toBe('"line1\nline2"');
+    expect([csvCell("=1+1"), csvCell("+x"), csvCell("-x"), csvCell("@x")]).toEqual(["'=1+1", "'+x", "'-x", "'@x"]);
+    expect(csvCell("=A1,B")).toBe(`"'=A1,B"`);
+    expect([csvCell(-5), csvCell(0), csvCell(null), csvCell(undefined)]).toEqual(["-5", "0", "", ""]);
+    expect(csv(["a", "b"], [[1, "x,y"], ["狗", null]])).toBe('\uFEFFa,b\r\n1,"x,y"\r\n狗,\r\n');
+    expect(csv(["a"], [])).toBe("\uFEFFa\r\n");
+  });
+  it("时刻、文件名", () => {
+    const ms = new Date(2026, 9, 11, 2, 4, 9).getTime();
+    expect(stamp(ms)).toBe("2026-10-11 02:04:09");
+    expect(stamp(null)).toBe("");
+    expect(fileTag("2026-10-11", "20:00", "08:00")).toBe("2026-10-11_2000-0800");
+  });
+  it("三张 CSV 的列:告警带多久确认(钟差当 0、没确认留空);入侵事件、巡逻的空值留空", () => {
+    const t0 = new Date(2026, 9, 11, 2, 0, 0).getTime();
+    const base: AlarmRow = { key: "k", level: "P1", kind: "dog_sees_person", robot: "A", title: "t", first_ms: t0, count: 2, acked_by: "gina", acked_ms: t0 + 41_600, resolved_by: "", resolved_ms: null, zone: "East, wall" };
+    const out = alarmsCsv([base, { ...base, acked_ms: t0 - 500 }, { ...base, acked_ms: null, acked_by: "", zone: null }], (r) => `T:${r.kind}`).split("\r\n");
+    expect(out[0]).toBe("\uFEFFfirst_raised,priority,kind,event,robot,zone,times_raised,acknowledged_by,acknowledged_at,seconds_to_acknowledge,closed_by,closed_at");
+    expect(out[1]).toBe('2026-10-11 02:00:00,P1,dog_sees_person,T:dog_sees_person,A,"East, wall",2,gina,2026-10-11 02:00:41,42,,');
+    expect(out[2].split(",").slice(-3)).toEqual(["0", "", ""]);
+    expect(out[3]).toBe("2026-10-11 02:00:00,P1,dog_sees_person,T:dog_sees_person,A,,2,,,,,");
+    expect(incidentsCsv([{ id: 1, received_at: t0, source: "nvr", type: "intrusion", zone: "front", intercept: null, outcome: "dispatched", robot_id: null, result: null, note: "=x" }]).split("\r\n")[1])
+      .toBe("2026-10-11 02:00:00,nvr,intrusion,front,,dispatched,,,'=x");
+    expect(patrolsCsv([{ id: 1, entry_id: "night", scheduled_ms: t0, outcome: "started", robot_id: "A", result: null, note: "" }]).split("\r\n")[1])
+      .toBe("2026-10-11 02:00:00,night,started,A,,");
+  });
+  it("处置、结果:认得的翻成人话(中英都有),不认得的原样,没有的是 —", () => {
+    for (const k of ["dispatched", "dispatching", "dispatch_failed", "merged", "duplicate", "disarmed", "authorized", "unmapped", "unreachable", "no_robot", "ignored_type", "started", "skip", "done", "failed", "aborted", "preempted", "running"]) {
+      expect(DICTS.en[`out_${k}` as never], k).toBeTruthy();
+      expect(DICTS.zh[`out_${k}` as never], k).toBeTruthy();
+    }
+    expect(outcomeText("some_new_outcome")).toBe("some_new_outcome");
+    expect(outcomeText(null)).toBe("—");
+    expect(outcomeText("")).toBe("—");
+    expect(outcomeText("done")).toBe(tr(lang.value, "out_done"));
   });
 });
 
