@@ -32,7 +32,8 @@ def 台(tmp_path, monkeypatch):
 def test_拼出来读回去一样_中文站点名也行_里面只有三样():
     code = pairing.encode(" 庄园一号 ", "https://site.example:8443/", "sha256:" + FP.upper())
     assert code.startswith("D1MAXSITE1.") and "=" not in code
-    assert pairing.decode(code) == {"name": "庄园一号", "url": "https://site.example:8443", "fingerprint": FP}
+    assert pairing.decode(code) == {"name": "庄园一号", "url": "https://site.example:8443",
+                                    "fingerprint": FP}
     body = code.split(".", 1)[1]
     raw = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
     assert set(raw) == {"n", "u", "f"}, "没有账号、口令、令牌"
@@ -54,18 +55,27 @@ def test_地址规范化_IPv6带方括号_没写端口就不带():
     assert pairing.check_url("https://192.168.1.5:8443") == "https://192.168.1.5:8443"
 
 
-@pytest.mark.parametrize("name,fp", [("", FP), ("x" * 65, FP), ("a", "ab" * 31), ("a", "zz" * 32), ("a", "")])
+@pytest.mark.parametrize("name,fp", [("", FP), ("x" * 65, FP), ("a", "ab" * 31), ("a", "zz" * 32),
+                                     ("a", "")])
 def test_站点名和指纹不对就不出码(name, fp):
     with pytest.raises(pairing.PairingError):
         pairing.encode(name, "https://s:8443", fp)
 
 
+def _raw(payload: bytes) -> str:
+    return "D1MAXSITE1." + base64.urlsafe_b64encode(payload).decode()
+
+
+def _json(d: dict) -> str:
+    return _raw(json.dumps(d).encode())
+
+
 @pytest.mark.parametrize("code", [
-    "", "D1MAX1.abc", "D1MAXSITE1.", "D1MAXSITE1.!!!!", "D1MAXSITE1." + base64.urlsafe_b64encode(b"[1]").decode(),
-    "D1MAXSITE1." + base64.urlsafe_b64encode(json.dumps({"n": "a", "u": "http://s", "f": FP}).encode()).decode(),
-    "D1MAXSITE1." + base64.urlsafe_b64encode(json.dumps({"n": "a", "u": "https://s", "f": "12"}).encode()).decode(),
-    "D1MAXSITE1." + base64.urlsafe_b64encode(json.dumps({"n": 1, "u": "https://s", "f": FP}).encode()).decode(),
-    "D1MAXSITE1." + base64.urlsafe_b64encode(b"\xff\xfe").decode(),
+    "", "D1MAX1.abc", "D1MAXSITE1.", "D1MAXSITE1.!!!!", _raw(b"[1]"),
+    _json({"n": "a", "u": "http://s", "f": FP}),
+    _json({"n": "a", "u": "https://s", "f": "12"}),
+    _json({"n": 1, "u": "https://s", "f": FP}),
+    _raw(b"\xff\xfe"),
 ])
 def test_坏码读不出来_狗的开通码也不认(code):
     with pytest.raises(pairing.PairingError):
@@ -78,8 +88,10 @@ def test_接口_登录了谁都能拿_指纹就是站点证书的_没登录不�
     code, d = s.req("GET", "/api/pairing?url=https%3A%2F%2F192.168.1.5%3A8443", token=tok)
     assert code == 200, d
     fp = site_main.cmd_fingerprint(home)
-    assert d["fingerprint"] == fp and d["url"] == "https://192.168.1.5:8443" and d["name"] == "庄园一号"
-    assert pairing.decode(d["code"]) == {"name": "庄园一号", "url": "https://192.168.1.5:8443", "fingerprint": fp}
+    assert d["fingerprint"] == fp and d["url"] == "https://192.168.1.5:8443"
+    assert d["name"] == "庄园一号"
+    assert pairing.decode(d["code"]) == {"name": "庄园一号", "url": "https://192.168.1.5:8443",
+                                         "fingerprint": fp}
     assert s.req("GET", "/api/pairing?url=https%3A%2F%2Fx%3A8443")[0] == 401
 
 
@@ -101,8 +113,10 @@ def test_命令行出码_地址不对退出码非零(台, capsys):
     assert site_main.main(["--home", str(home), "pair-code", "--url", "https://site.lan:8443"]) == 0
     out = capsys.readouterr().out.strip()
     d = pairing.decode(out)
-    assert d["url"] == "https://site.lan:8443" and d["name"] == "estate-1", "缺省用 site.json 的站点号"
+    assert d["url"] == "https://site.lan:8443"
+    assert d["name"] == "estate-1", "缺省用 site.json 的站点号"
     assert d["fingerprint"] == site_main.cmd_fingerprint(home)
-    assert site_main.main(["--home", str(home), "pair-code", "--url", "https://x:8443", "--name", "East"]) == 0
+    assert site_main.main(["--home", str(home), "pair-code", "--url", "https://x:8443",
+                           "--name", "East"]) == 0
     assert pairing.decode(capsys.readouterr().out.strip())["name"] == "East"
     assert site_main.main(["--home", str(home), "pair-code", "--url", "http://site.lan"]) != 0

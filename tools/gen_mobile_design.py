@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""把设计的单一来源(``design/tokens.json``、``design/i18n/alerts.json``)生成手机 App 用的 Dart 常量(App V2)。
+"""把设计的单一来源(``design/tokens.json``、``design/i18n/alerts.json``)生成手机 App 用的
+Dart 常量(App V2)。
 
 App 不在运行时读 JSON:颜色、字号是编译期常量,告警标题按种类查表。改了 ``design/`` 之后跑一遍::
 
@@ -32,7 +33,8 @@ def _dart_str(s: str) -> str:
 
 
 def tokens_dart(tokens: dict) -> str:
-    lines = [HEADER, "import 'dart:ui' show Color;\n", f"const int tokensVersion = {int(tokens['version'])};\n",
+    lines = [HEADER, "import 'dart:ui' show Color;\n",
+             f"const int tokensVersion = {int(tokens['version'])};\n",
              "/// 颜色(``design/tokens.json`` 的 color)。", "abstract final class D1Color {"]
     for name, value in tokens["color"].items():
         lines.append(f"  static const Color {name} = {_hex(value)};")
@@ -42,21 +44,26 @@ def tokens_dart(tokens: dict) -> str:
     lines += ["}\n", "/// 圆角(radius)。", "abstract final class D1Radius {"]
     for name, value in tokens["radius"].items():
         lines.append(f"  static const double {name} = {float(value)};")
-    lines += ["}\n", "/// 字号、行高、字重(type);family 是 mono 的用等宽字体。", "abstract final class D1Type {"]
+    lines += ["}\n", "/// 字号、行高、字重(type);family 是 mono 的用等宽字体。",
+              "abstract final class D1Type {"]
     for name, t in tokens["type"].items():
         mono = "true" if t.get("family") == "mono" else "false"
-        lines.append(f"  static const ({{double size, double line, int weight, bool mono}}) {name} = "
-                     f"(size: {float(t['size'])}, line: {float(t['line'])}, weight: {int(t['weight'])}, mono: {mono});")
+        lines.append("  static const ({double size, double line, int weight, bool mono}) "
+                     f"{name} = "
+                     f"(size: {float(t['size'])}, line: {float(t['line'])}, "
+                     f"weight: {int(t['weight'])}, mono: {mono});")
     lines += ["}\n", "/// 动效(motion),毫秒。", "abstract final class D1Motion {",
               f"  static const int fast = {int(tokens['motion']['fast'])};",
               f"  static const int p1FlashMs = {int(tokens['motion']['p1FlashMs'])};",
-              f"  static const double p1FlashMinOpacity = {float(tokens['motion']['p1FlashMinOpacity'])};",
+              "  static const double p1FlashMinOpacity = "
+              f"{float(tokens['motion']['p1FlashMinOpacity'])};",
               "}"]
     return "\n".join(lines) + "\n"
 
 
 def alerts_dart(catalog: dict) -> str:
-    lines = [HEADER, "/// 告警标题按种类(kind):``(英文, 中文)``。来源 ``design/i18n/alerts.json``。",
+    lines = [HEADER,
+             "/// 告警标题按种类(kind):``(英文, 中文)``。来源 ``design/i18n/alerts.json``。",
              "const Map<String, (String, String)> alertTitles = <String, (String, String)>{"]
     for kind, entry in catalog.items():
         if kind.startswith("$"):
@@ -69,7 +76,8 @@ def alerts_dart(catalog: dict) -> str:
 def generate() -> dict[Path, str]:
     tokens = json.loads((ROOT / "design" / "tokens.json").read_text(encoding="utf-8"))
     catalog = json.loads((ROOT / "design" / "i18n" / "alerts.json").read_text(encoding="utf-8"))
-    return {OUT / "tokens.g.dart": tokens_dart(tokens), OUT / "alert_titles.g.dart": alerts_dart(catalog)}
+    return {OUT / "tokens.g.dart": tokens_dart(tokens),
+            OUT / "alert_titles.g.dart": alerts_dart(catalog)}
 
 
 def main() -> int:
