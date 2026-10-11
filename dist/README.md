@@ -1,36 +1,12 @@
 # dist —— 带到现场的安装包
 
-> ⚠️ **2026-09-26（W00c5e）起，下面这个 `app-release.apk` 不能用了。** 它是老的「直连狗」版本：
-> 手机连狗的热点、输 PIN。狗上那一套服务已经退役，这个包装上之后**什么都连不上**。
-> 现在的 app 只连站点，要用 `mobile/` 现在的代码在装了 Android SDK 的机器上重编
-> （`cd mobile && flutter build apk --release`），编出来之后更新下面那张表。
-> 在那之前别把这个包带去现场。
+> 2026-10-12（决策 57）：老的 `app-release.apk`（直连狗的那一版，早就不能用）从仓库删了。手机包现在从 CI 的
+> `android` 作业下（调试签名，只给开发、测试用），发给客户的按 `docs/正式发行手册.md` 出。
 
 这个目录里的东西**是二进制,不是源码**。放进仓库只有一个理由:
 现场那台 Ubuntu 笔记本未必装了 Flutter 和 Android SDK,而
 `mobile/build/` 是 git 忽略的,`git clone` 拉不到包。把包放这儿,
 现场 `git pull` 就有,不用再找 U 盘。
-
-## app-release.apk
-
-| 项 | 值 |
-|---|---|
-| 大小 | 51 331 606 B（49.0 MB） |
-| sha256 | `a44b146b2d695fcd88350901c8f8043d985254c1f1a55baaab742d02b886b246` |
-| 编出来的分支/提交 | `feat/交付主线` @ `c25568c`（补了 INTERNET 权限的那一版） |
-| 编译命令 | `cd mobile && flutter build apk --release` |
-| 编译机 | 开发机（Windows），不是现场笔记本 |
-| 编译时间 | 2026-09-15 |
-
-**上一版（@ `cf3fa50`）没有 INTERNET 权限，装上连不上狗，别再用。** 核对办法：
-`aapt2 dump permissions app-release.apk` 里要有 `android.permission.INTERNET`。
-
-**通用包,三个 ABI（arm64-v8a / armeabi-v7a / x86_64）都在里面**,
-不确定手机是什么架构就装它。装法见 `docs/真机现场执行单.md` 的 1.1b。
-
-**签名**:`mobile/android/app/build.gradle` 的 release 配置回落到 debug key
-（那几行本来就带着 Flutter 模板的 TODO）。自测够用,**上应用商店不够用**——
-真要发客户得另配 keystore,这条记在第 9 卷。
 
 ## 不在这儿的东西
 

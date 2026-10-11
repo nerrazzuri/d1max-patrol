@@ -4,9 +4,9 @@
 # 只在合进 master、手动触发时跑(macOS 机器按十倍计费)。
 name: experimental
 
+# 决策 59(2026-10-12):RC 的支持平台不含 macOS,以后开 iOS 时一起修。改成只手动触发:
+# 不再每次合进 master 都红一次(macOS 机器按十倍计费)。
 on:
-  push:
-    branches: [master]
   workflow_dispatch:
 
 concurrency:
