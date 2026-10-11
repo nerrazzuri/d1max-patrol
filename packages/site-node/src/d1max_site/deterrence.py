@@ -147,12 +147,16 @@ class Session:
                 int(self.seen_person), int(self.person_alerted), int(self.cornered),
                 self.center, self.withdraw)
 
-    def view(self, now_ms: int) -> dict[str, Any]:
+    def view(self, now_ms: int, outputs: list[str] | None = None) -> dict[str, Any]:
+        """给人看的。``active`` = 狗**接受了**「开」、还在保持时间里的几路(C-B2 外审 I1:级别只是
+        要求,不等于响了);``outputs`` = 这台狗有哪几路(``None`` = 不知道)。"""
         d = {k: v for k, v in asdict(self).items()
              if k not in ("sent", "off", "clip_i", "clip_ms", "ending", "ending_saved",
                           "seen_person", "person_alerted", "standoff_ms", "center",
                           "abort_ms", "standoff_stopped", "withdraw_ms")}
         d["label"] = LABEL[self.level]
+        d["active"] = sorted(o for o, at in self.sent.items() if now_ms - at < KEEP_S * 1000)
+        d["outputs"] = None if outputs is None else sorted(outputs)
         d["next_in_s"] = (max(0, (self.level_ms + STEP_S * 1000 - now_ms) // 1000)
                           if self.auto and self.level < AUTO_MAX else None)
         d["ends_in_s"] = max(0, (max(self.started_ms, self.human_ms) + CAP_S * 1000 - now_ms)
@@ -272,7 +276,7 @@ class DeterrenceDesk:
     def _publish(self, s: Session | None, robot_id: str = "", ended: str = "") -> None:
         if s is not None:
             item: dict[str, Any] = {"kind": "deterrence", "robot_id": s.robot_id,
-                                    "session": s.view(self._now())}
+                                    "session": self._view(s)}
         else:
             item = {"kind": "deterrence", "robot_id": robot_id, "session": None, "ended": ended}
         try:
@@ -282,8 +286,15 @@ class DeterrenceDesk:
 
     def view(self) -> list[dict[str, Any]]:
         now = self._now()
-        return [s.view(now) for s in sorted(self.sessions.values(), key=lambda s: s.robot_id)
+        return [self._view(s, now) for s in sorted(self.sessions.values(),
+                                                   key=lambda s: s.robot_id)
                 if s.ending is None]
+
+    def _view(self, s: Session, now: int | None = None) -> dict[str, Any]:
+        c = self.dispatcher.clients.get(s.robot_id)
+        known = c is not None and c.capabilities is not None
+        return s.view(self._now() if now is None else now,
+                      self._outputs(s.robot_id) if known else None)
 
     def _live(self, rid: str) -> Session:
         s = self.sessions.get(rid)
@@ -493,7 +504,7 @@ class DeterrenceDesk:
             await self._apply(s)                        # 人按的:L1 的灯马上开,不等下一拍
             self._publish(s)
             asyncio.get_running_loop().create_task(self._reconcile_now(robot_id))
-            return s.view(now)
+            return self._view(s, now)
 
     async def _withdraw(self, s: Session) -> None:
         """就地驱离要撤的那一趟(W33 外审 1):狗上还在跑就隔 :data:`WITHDRAW_EVERY_S` 再撤一次(拒了、
@@ -550,7 +561,7 @@ class DeterrenceDesk:
             s.clip_i, s.clip_ms = 0, 0                  # 换了级:话术从头(中文)、马上放
             await self._apply(s)
             self._publish(s)
-            return s.view(now)
+            return self._view(s, now)
 
     async def release(self, robot_id: str, *, by: str) -> None:
         """解除(保安、管理员、业主):全关、狗回待命点。等在途的那条命令回来再收。"""

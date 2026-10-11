@@ -41,6 +41,7 @@ class SiteAlertScenePage extends StatefulWidget {
   static const Key headKey = Key('scene-head');
   static const Key stateKey = Key('scene-state');
   static const Key nextKey = Key('scene-next');
+  static const Key staleKey = Key('scene-deter-stale');
 
   @override
   State<SiteAlertScenePage> createState() => _SiteAlertScenePageState();
@@ -72,6 +73,25 @@ class SiteAlertScenePage extends StatefulWidget {
   return (mapId!, version!, marks);
 }
 
+/// 一场驱离里警笛的状态：狗接受了、要求了还没确认、没要求、这台狗没装、说不清。
+enum SirenState { on, requested, off, notFitted, unknown }
+
+/// 警笛在第几级、一场驱离里警笛现在算什么状态（C-B2 外审 I1）。
+abstract final class SiteAlertScenePageSiren {
+  /// 警笛在第 3 级（站点 `deterrence.RELAYS`）；第 2 级只有灯和语音警告。
+  static const int level = 3;
+
+  /// `on` 只在狗**接受了**开警笛的命令时才算（站点回的 `active`）：级别到了只是要求，不等于响了。
+  /// 老站点不发 `active` / `outputs`：到了级别也只算「要求了」。
+  static SirenState of(Map<String, dynamic>? d) {
+    if (d == null) return SirenState.unknown;
+    final outputs = d['outputs'], active = d['active'], lv = d['level'];
+    if (outputs is List && !outputs.contains('siren')) return SirenState.notFitted;
+    if (active is List && active.contains('siren')) return SirenState.on;
+    return lv is num && lv >= level ? SirenState.requested : SirenState.off;
+  }
+}
+
 /// 过了多久：`0:42`、`12:05`、`1:02:03`。负数（两头的钟差一点）当 0。
 abstract final class SiteAlertScenePageSpan {
   static String of(int ms) {
@@ -88,14 +108,37 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   /// 在这一页点了「我来处理」之后站点回的（或者本地记的）确认人、时刻；刷新拿到新的告警就用新的。
   (String, int)? _ackedHere;
 
-  /// 这台狗正在进行的驱离；没有就是 null。[_deterKnown] 是 false 时说不清有没有（接口没拿到）。
+  /// 最后一次**问到**的驱离（这台狗没在驱离就是 null）。它只是一张快照：[_deterFresh] 不成立时
+  /// （上一次没问到，或者太久没问到）不能当成现在的声光状态，见 [_d]（C-B2 外审 I2）。
   Map<String, dynamic>? _deter;
   bool _deterKnown = false;
+
+  /// 问到 [_deter] 那一刻：第几拍（判新鲜用，不靠墙上的钟）、几点（给人看）。
+  int _deterTick = 0;
+  int _deterAtMs = 0;
+
+  /// 隔这么多拍还没再问到，就算旧的（一拍 800 ms、每 4 拍问一次：连着三次没回来）。
+  static const int _freshTicks = 12;
+
+  /// 这一页现在是第几条告警：换了一条就加一。在途的请求回来时对不上就不许动页面（外审 I3）。
+  int _gen = 0;
+
+  /// 向站点问的编号：回来得比已经用上的还旧就丢掉（先发的后到）。
+  int _asked = 0;
+  int _alertApplied = 0;
+  int _deterApplied = 0;
+
+  bool _falseDialog = false;
 
   String _msg = '';
   bool _dim = false;
   int _ticks = 0;
   Timer? _timer;
+
+  bool get _deterFresh => _deterKnown && _ticks - _deterTick <= _freshTicks;
+
+  /// **现在**的驱离：只有新鲜的才算；旧快照、没问到都是 null。
+  Map<String, dynamic>? get _d => _deterFresh ? _deter : null;
 
   bool get _isRobot => _a.robot != 'site' && _a.robot.isNotEmpty;
   bool get _acked => _a.ackedMs != null || _ackedHere != null;
@@ -111,6 +154,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       if (!mounted) return;
       _ticks++;
       if (_ticks % 4 == 0) unawaited(_refresh());
+      if (_deterKnown && _ticks - _deterTick == _freshTicks + 1) setState(() {}); // 刚变旧：重画
       if (_flashing) {
         setState(() => _dim = !_dim);
       } else if (_dim) {
@@ -122,16 +166,34 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   @override
   void didUpdateWidget(SiteAlertScenePage old) {
     super.didUpdateWidget(old);
-    // 同一个位置换了一条告警（或者同一条的新状态）：这一页记的东西是上一条的，全部重来
-    if (!identical(old.alert, widget.alert)) {
-      _a = widget.alert;
+    if (identical(old.alert, widget.alert) && identical(old.api, widget.api)) return;
+    final same = old.alert.key == widget.alert.key && identical(old.api, widget.api);
+    _a = widget.alert;
+    if (!same) {
+      // 同一个位置换了一条告警：这一页记的东西是上一条的，全部重来；上一条还在路上的请求、还开着的
+      // 「记成误报？」都作废（外审 I3）
+      _gen++;
       _ackedHere = null;
       _deter = null;
       _deterKnown = false;
       _msg = '';
       _dim = false;
-      unawaited(_refresh());
+      if (_falseDialog) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _falseDialog) Navigator.of(context, rootNavigator: true).pop(false);
+        });
+      }
     }
+    unawaited(_refresh());
+  }
+
+  /// 记下刚问到的驱离（[s] 是 null = 这台狗没在驱离）。在它之前发出去的查询回来了也不许盖掉它。
+  void _gotDeter(Map<String, dynamic>? s) {
+    _deter = s;
+    _deterKnown = true;
+    _deterTick = _ticks;
+    _deterAtMs = widget.now().millisecondsSinceEpoch;
+    _deterApplied = ++_asked;
   }
 
   @override
@@ -141,64 +203,98 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   }
 
   /// 向站点再问一遍：这条告警现在什么样（别人可能确认了、解决了）、这台狗有没有在驱离。
-  /// 哪个没问到就留着旧的；驱离没问到记成「说不清」，不是「没有」。
+  /// 告警没问到就留着旧的。驱离没问到记成「说不清」：旧快照留着给人看「最后问到时」，但不当成现在的。
+  /// 发出去之后这一页换了告警、或者更新的结果已经用上了：这一次的结果丢掉。
   Future<void> _refresh() async {
+    final gen = _gen, key = _a.key, robot = _a.robot, isRobot = _isRobot;
+    final seq = ++_asked;
+    bool current() => mounted && gen == _gen;
     try {
-      final now = (await widget.api.alerts(all: true)).where((x) => x.key == _a.key);
-      if (mounted && now.isNotEmpty) setState(() => _a = now.first);
-    } on Object {
-      // 留着旧的
-    }
-    if (!_isRobot) return;
-    try {
-      final rows = await widget.api.deterrence();
-      final mine = rows.where((r) => r['robot_id'] == _a.robot);
-      if (mounted) {
-        setState(() {
-          _deter = mine.isEmpty ? null : mine.first;
-          _deterKnown = true;
-        });
+      final now = (await widget.api.alerts(all: true)).where((x) => x.key == key);
+      if (!current()) return;
+      if (now.isNotEmpty && seq > _alertApplied) {
+        _alertApplied = seq;
+        setState(() => _a = now.first);
       }
     } on Object {
-      if (mounted) setState(() => _deterKnown = false);
+      if (!current()) return; // 留着旧的
+    }
+    if (!isRobot) return;
+    try {
+      final rows = await widget.api.deterrence();
+      if (!current() || seq <= _deterApplied) return;
+      final mine = rows.where((r) => r['robot_id'] == robot);
+      setState(() {
+        _deter = mine.isEmpty ? null : mine.first;
+        _deterKnown = true;
+        _deterTick = _ticks;
+        _deterAtMs = widget.now().millisecondsSinceEpoch;
+        _deterApplied = seq;
+      });
+    } on Object {
+      if (!current() || seq <= _deterApplied) return;
+      setState(() {
+        _deterKnown = false;
+        _deterApplied = seq;
+      });
     }
   }
 
   Future<void> _ack() async {
+    final gen = _gen, key = _a.key;
     try {
-      final r = await widget.api.ackAlert(_a.key);
-      if (!mounted) return;
-      // 站点回的是确认之后的这条告警：是这一条就用它的（谁、几点以站点记的为准）；不是这一条（或者
-      // 老站点没回）就先在本地记成「我、现在」，下一次刷新拿到站点的再换。
+      final r = await widget.api.ackAlert(key);
+      if (!mounted || gen != _gen) return; // 这一页已经是另一条告警了：上一条的回包不许动它
       final got = r['alert'] is Map ? Alert.fromWire(Map<String, dynamic>.from(r['alert'] as Map)) : null;
-      final mine = got != null && got.key == _a.key && got.ackedMs != null;
+      if (got != null && got.key != key) {
+        // 站点明说回的是另一条：不能当成这一条确认上了
+        setState(() => _msg = tr("Not acknowledged: the site answered about another alarm (${got.key})",
+            '没确认上：站点回的是另一条告警（${got.key}）'));
+        return;
+      }
+      // 站点回了确认之后的这一条：谁、几点以站点记的为准。老站点不回正文：先在本地记成「我、现在」，
+      // 下一次刷新拿到站点的再换。
       setState(() {
-        if (mine) {
+        if (got != null && got.ackedMs != null) {
           _a = got;
+          _ackedHere = (got.ackedBy, got.ackedMs!);
         } else {
           _ackedHere = (widget.api.session?.name ?? '', widget.now().millisecondsSinceEpoch);
         }
         _msg = '';
       });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr('Not acknowledged: $e', '没确认上：$e'));
+      if (mounted && gen == _gen) setState(() => _msg = tr('Not acknowledged: $e', '没确认上：$e'));
     }
   }
 
+  static const int sirenLevel = SiteAlertScenePageSiren.level;
+  static SirenState sirenState(Map<String, dynamic>? d) => SiteAlertScenePageSiren.of(d);
+
   Future<void> _siren() async {
+    final gen = _gen, robot = _a.robot;
     try {
-      final r = await widget.api.deterLevel(_a.robot, 2);
-      if (!mounted) return;
+      final r = await widget.api.deterLevel(robot, sirenLevel);
+      if (!mounted || gen != _gen) return;
+      final s = r['session'] is Map ? Map<String, dynamic>.from(r['session'] as Map) : null;
       setState(() {
-        if (r['session'] is Map) _deter = Map<String, dynamic>.from(r['session'] as Map);
-        _msg = '';
+        if (s != null) _gotDeter(s);
+        _msg = switch (sirenState(s)) {
+          SirenState.on => '',
+          SirenState.notFitted => tr('Level $sirenLevel is set, but this robot has no siren.',
+              '已到第 $sirenLevel 级，但这台狗没有警笛。'),
+          _ => tr('Level $sirenLevel requested. The robot has not confirmed the siren yet.',
+              '已要求第 $sirenLevel 级，狗还没确认警笛开了。'),
+        };
       });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr("Siren didn't start: $e", '警笛没开：$e'));
+      if (mounted && gen == _gen) setState(() => _msg = tr("Siren didn't start: $e", '警笛没开：$e'));
     }
   }
 
   Future<void> _falseAlarm() async {
+    final gen = _gen, key = _a.key;
+    _falseDialog = true;
     final ok = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
@@ -213,24 +309,29 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                     child: Text(tr('False alarm', '误报'))),
               ],
             ));
-    if (ok != true || !mounted) return;
+    _falseDialog = false;
+    // 问的是那一条：这一页换了告警，这次的「是」不算数
+    if (ok != true || !mounted || gen != _gen) return;
     try {
-      await widget.api.resolveAlert(_a.key);
-      if (mounted) Navigator.pop(context);
+      await widget.api.resolveAlert(key);
+      if (mounted && gen == _gen) Navigator.pop(context);
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr('Not closed: $e', '没关上：$e'));
+      if (mounted && gen == _gen) setState(() => _msg = tr('Not closed: $e', '没关上：$e'));
     }
   }
 
   Future<void> _photo(String taskId) async {
+    final gen = _gen;
     List<Map<String, dynamic>> runs;
     try {
       runs = await widget.api.runs(mission: taskId);
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr("Can't find the record for that task: $e", '找不到那一趟的记录：$e'));
+      if (mounted && gen == _gen) {
+        setState(() => _msg = tr("Can't find the record for that task: $e", '找不到那一趟的记录：$e'));
+      }
       return;
     }
-    if (!mounted) return;
+    if (!mounted || gen != _gen) return;
     if (runs.isEmpty) {
       setState(() => _msg = tr(
           'The record for that task has not reached the site yet (it uploads after the robot arrives and takes photos)',
@@ -245,22 +346,18 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
 
   /// 就地驱离（W33，决策 48）：狗在跑的任务先撤掉，就在它这儿开一场、从 L1（灯光）起。
   Future<void> _deterHere() async {
+    final gen = _gen, robot = _a.robot;
     try {
-      final s = await widget.api.deterStart(widget.alert.robot);
+      final s = await widget.api.deterStart(robot);
+      if (!mounted || gen != _gen) return;
       final lv = s['session'] is Map ? (s['session'] as Map)['level'] : null;
-      if (mounted) {
-        setState(() {
-          if (s['session'] is Map) {
-            _deter = Map<String, dynamic>.from(s['session'] as Map);
-            _deterKnown = true;
-          }
-          _msg = tr(
-              'Deterrence started at ${widget.alert.robot} (L${lv ?? 1}). Escalate or end it on the deterrence page',
-              '已在 ${widget.alert.robot} 这儿开驱离（L${lv ?? 1}），驱离页可以升级、解除');
-        });
-      }
+      setState(() {
+        if (s['session'] is Map) _gotDeter(Map<String, dynamic>.from(s['session'] as Map));
+        _msg = tr('Deterrence started at $robot (L${lv ?? 1}). Escalate or end it on the deterrence page',
+            '已在 $robot 这儿开驱离（L${lv ?? 1}），驱离页可以升级、解除');
+      });
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr("Can't start deterrence: $e", '开不了：$e'));
+      if (mounted && gen == _gen) setState(() => _msg = tr("Can't start deterrence: $e", '开不了：$e'));
     }
   }
 
@@ -296,7 +393,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   }
 
   Map? get _persons {
-    final p = _a.context['persons'] ?? _deter?['persons'];
+    final p = _a.context['persons'] ?? _d?['persons'];
     return p is Map ? p : null;
   }
 
@@ -305,13 +402,19 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     final parts = <String>[];
     final m = _persons?['nearest_m'];
     if (m is num && _isRobot) {
-      parts.add(tr('${m.toStringAsFixed(1)} m ahead of ${_a.robot}.', '在 ${_a.robot} 前方 ${m.toStringAsFixed(1)} 米。'));
+      // 站点只给最近的距离，没给方向（前后相机汇总的）：不说「前方」（外审 M1）
+      parts.add(tr('Nearest person ${m.toStringAsFixed(1)} m from ${_a.robot}.',
+          '最近的人距 ${_a.robot} ${m.toStringAsFixed(1)} 米。'));
     }
-    final d = _deter;
+    final d = _d;
     if (d != null) {
       parts.add(tr('Deterrence level ${d['level']}.', '驱离第 ${d['level']} 级。'));
-    } else if (_isRobot && !_deterKnown) {
-      parts.add(tr('Deterrence status unknown.', '说不清有没有在驱离。'));
+    } else if (_isRobot && !_deterFresh) {
+      final old = _deter;
+      parts.add(old == null
+          ? tr('Deterrence status unknown.', '说不清有没有在驱离。')
+          : tr('Deterrence status unknown (level ${old['level']} when last checked at ${hms(_deterAtMs)}).',
+              '说不清有没有在驱离（${hms(_deterAtMs)} 最后问到时是第 ${old['level']} 级）。'));
     }
     return parts.join(' ');
   }
@@ -373,12 +476,21 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     final s = widget.api.session;
     final handle = s?.canHandleAlerts ?? false;
     final dispatch = s?.canDispatch ?? false;
-    final d = _deter;
-    final sirenOn = d != null && (d['level'] is num) && (d['level'] as num) >= 2;
+    // 新鲜的才按它的状态摆；只剩旧快照时不猜警笛开没开，让人能再要求一次（没在驱离了站点会说）
+    final d = _d;
+    final sound = tr('Sound siren (level $sirenLevel)', '开警笛（第 $sirenLevel 级）');
     Widget second;
     if (d != null && dispatch) {
-      second = _big(SiteAlertScenePage.sirenKey,
-          sirenOn ? tr('Siren is on', '警笛已开') : tr('Sound siren (level 2)', '开警笛（第 2 级）'), sirenOn ? null : _siren);
+      second = switch (sirenState(d)) {
+        SirenState.on => _big(SiteAlertScenePage.sirenKey, tr('Siren is on', '警笛已开'), null),
+        SirenState.notFitted =>
+          _big(SiteAlertScenePage.sirenKey, tr('No siren on this robot', '这台狗没有警笛'), null),
+        SirenState.requested =>
+          _big(SiteAlertScenePage.sirenKey, tr('Siren not confirmed. Retry', '警笛没确认，再试'), _siren),
+        _ => _big(SiteAlertScenePage.sirenKey, sound, _siren),
+      };
+    } else if (_deter != null && !_deterFresh && dispatch) {
+      second = _big(SiteAlertScenePage.sirenKey, sound, _siren);
     } else if (_a.kind == 'dog_sees_person' && _isRobot && dispatch) {
       second = _big(SiteAlertScenePage.deterKey, tr('Deter here', '就地驱离'), _deterHere);
     } else {
@@ -414,6 +526,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
       if (_a.count > 1 && _a.lastMs > _a.firstMs)
         (_a.lastMs, tr('Raised again (${_a.count} times in total).', '又报了（一共 ${_a.count} 次）。')),
     ];
+    // 开始、升级是带时刻的旧事，旧快照里的也照摆；「接下来」是现在的计划，只有新鲜的才说
     final d = _deter;
     if (d != null) {
       if (d['started_ms'] is num) {
@@ -433,7 +546,10 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     }
     if (_a.resolvedMs != null) rows.add((_a.resolvedMs!, tr('Closed.', '已关闭。')));
     rows.sort((x, y) => x.$1.compareTo(y.$1));
-    final next = d != null && d['auto'] == true && d['next_in_s'] is num
+    final staleNote = _isRobot && d != null && !_deterFresh
+        ? tr('Deterrence status not updated since ${hms(_deterAtMs)}.', '驱离的状态从 ${hms(_deterAtMs)} 起没再问到。')
+        : null;
+    final next = _deterFresh && d != null && d['auto'] == true && d['next_in_s'] is num
         ? tr('Next: level ${(d['level'] as num? ?? 0) + 1} in ${d['next_in_s']} s if no one responds.',
             '接下来：没人处理的话 ${d['next_in_s']} 秒后升到第 ${(d['level'] as num? ?? 0) + 1} 级。')
         : null;
@@ -448,6 +564,10 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
               const SizedBox(width: 12),
               Expanded(child: Text(r.$2, style: D1Text.caption.copyWith(color: D1Color.text))),
             ])),
+      if (staleNote != null)
+        Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Text(staleNote, key: SiteAlertScenePage.staleKey, style: D1Text.label.copyWith(color: D1Color.p2))),
       if (next != null)
         Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),

@@ -1317,3 +1317,53 @@ async def test_W33复查2_收尾中撤成了_删库没成_重启照旧是收尾�
     assert row["withdraw"] == "" and row["ending"], "撤成了记上,「收尾中」照旧在"
     again = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
     assert again.sessions["A"].ending, "重启后只接着收尾,不会恢复成还在驱离"
+
+
+# ------------------------------------------------------------ C-B2 外审 I1:级别是要求,不等于响了
+
+
+async def test_警笛在第3级_第2级只有灯和话术_给人看的带狗接受了的几路(台):
+    t = 台
+    _到了(t.disp)
+    await t.desk.tick()
+    v2 = await t.desk.set_level("A", 2, by="gina")
+    assert "siren" not in v2["active"] and "siren" not in t.disp.on(), "L2 不响警笛"
+    assert v2["outputs"] == ["siren", "speaker", "spotlight", "strobe"]
+    v3 = await t.desk.set_level("A", 3, by="gina")
+    assert "siren" in v3["active"] and "siren" in t.disp.on()
+    [s] = t.desk.view()
+    assert s["active"] == v3["active"] == ["siren", "speaker", "spotlight", "strobe"]
+    assert t.disp.pushed[-1]["session"]["active"] == s["active"], "推给页面的也带"
+
+
+async def test_警笛没发出去_不算开着_续不上过了保持时间也不算(台):
+    t = 台
+    _到了(t.disp)
+    t.disp.fail = True
+    v = await t.desk.set_level("A", 3, by="gina")
+    assert v["level"] == 3 and v["active"] == [], "级别到了 3,但狗没收到:不说开着"
+    t.disp.fail = False
+    await t.desk.tick()
+    assert "siren" in t.desk.view()[0]["active"]
+    t.disp.fail = True                                  # 之后续不上:狗上到时间自己关
+    t.clock.go(44.9)
+    assert "siren" in t.desk.view()[0]["active"]
+    t.clock.go(0.1)
+    assert t.desk.view()[0]["active"] == [], "保持时间(45 秒)到了没续上:不再说开着"
+
+
+async def test_狗没装警笛_给人看的说得出来_能力不知道是None(tmp_path):
+    db = SiteDB(tmp_path / "site.db")
+    db.query("INSERT INTO incidents(source, event_id, type, zone, received_at, outcome, robot_id, "
+             "task_id, note, detail) VALUES ('nvr','e1','intrusion','f',1,'dispatched','A',"
+             "'incident-abc','','{}')")
+    disp = 假派遣(caps={"outputs": ["strobe", "speaker"], "clips": [], "tts": False})
+    desk = DeterrenceDesk(db, disp, now_ms=钟(), standby=假待命())
+    _到了(disp)
+    v = await desk.set_level("A", 3, by="gina")
+    assert v["outputs"] == ["speaker", "strobe"] and "siren" not in v["active"]
+    disp.clients["A"].capabilities = None
+    assert desk.view()[0]["outputs"] is None, "狗的能力还没报上来:不知道,不是没有"
+    del disp.clients["A"]
+    assert desk.view()[0]["outputs"] is None
+    db.close()

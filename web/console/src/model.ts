@@ -48,6 +48,22 @@ export interface DeterSession {
   robot_id: string;
   level: number;
   persons?: { count?: number; nearest_m?: number };
+  /** 狗**接受了**「开」、还在保持时间里的几路(老站点不发)。 */
+  active?: string[];
+  /** 这台狗有哪几路;null / 不发 = 不知道。 */
+  outputs?: string[] | null;
+}
+
+/** 警笛在第 3 级(站点 deterrence.RELAYS);第 2 级只有灯和语音警告(C-B2 外审 I1)。 */
+export const SIREN_LEVEL = 3;
+
+export type SirenState = "on" | "requested" | "off" | "notFitted";
+
+/** 一场驱离里警笛算什么状态。"on" 只在狗接受了开警笛的命令时才算:级别到了只是要求,不等于响了。 */
+export function sirenState(d: DeterSession): SirenState {
+  if (Array.isArray(d.outputs) && !d.outputs.includes("siren")) return "notFitted";
+  if (Array.isArray(d.active) && d.active.includes("siren")) return "on";
+  return d.level >= SIREN_LEVEL ? "requested" : "off";
 }
 
 export interface Summary {

@@ -19,6 +19,7 @@ import {
   FELL_KINDS,
   queue,
   robotState,
+  SIREN_LEVEL,
   wallOrder,
   type Alert,
   type Mode,
@@ -151,7 +152,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
               return (
                 <AlarmTile key={a.key} a={a} u={unitOf(r.robot_id)} role={me.role} now={now}
                   onAck={() => ack(a)}
-                  onSiren={() => act(() => api("POST", `/api/deterrence/${enc(a.robot)}/level`, { level: 2 }))}
+                  onSiren={() => act(() => api("POST", `/api/deterrence/${enc(a.robot)}/level`, { level: SIREN_LEVEL }))}
                   onFalse={() => setPending({ kind: "false", a })}
                   onMap={() => go("map", a.robot)}
                   onOpen={(cam) => setPending({ kind: "cam", robot: a.robot, cam })} />
