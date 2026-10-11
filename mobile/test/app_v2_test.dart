@@ -461,6 +461,24 @@ void main() {
       await t.pumpWidget(Container());
     });
 
+    testWidgets('复查 R1 警笛开着、后来站点说没确认了（续开没成）：不再写已开，能再试；成了再写已开', (t) async {
+      final api = FakeApi('guard')..deterRows = [_session(level: 3, auto: false, active: ['siren', 'strobe'])];
+      await _alarm(t, api, _p1());
+      expect(_btn(t, siren), '警笛已开');
+      expect(_enabled(t, siren), isFalse);
+      api.deterRows = [_session(level: 3, auto: false, active: ['strobe'])];
+      await t.pump(const Duration(milliseconds: 3300));
+      await t.pump();
+      expect(find.text('警笛已开'), findsNothing);
+      expect(_btn(t, siren), '警笛没确认，再试');
+      expect(_enabled(t, siren), isTrue);
+      await t.tap(find.byKey(siren));
+      await t.pumpAndSettle();
+      expect(api.calls, contains('deter-level A 3'));
+      expect(_btn(t, siren), '警笛已开');
+      await t.pumpWidget(Container());
+    });
+
     testWidgets('I1 这台狗没装警笛：按钮说没有、按不了；老站点到了第 3 级也只说没确认', (t) async {
       final api = FakeApi('guard')..deterRows = [_session(outputs: ['speaker', 'strobe'])];
       await _alarm(t, api, _p1());
