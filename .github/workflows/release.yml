@@ -1,0 +1,67 @@
+# 发行闸(商业化 RC0-3,决策 54、56):要发给客户的那个提交,先在这儿过一遍。
+#
+# 做的事:整套 ci 调一遍(集成层在这儿**必过**)→ 把恢复、升级、回退、兼容那几组测试点名再跑一遍
+# (哪个文件被删了、改名了,这儿就红)→ 打一遍包,记下提交和包指纹,产物 gate.json 留 90 天。
+#
+# **钥匙不在 GitHub 上,这儿不签名**:签名只在离线的发行机上做(tools/make_release.py --gate gate.json),
+# 它核对「闸过的提交、包指纹」跟手上要发的是同一份,对不上不发。没有正式钥匙那一步直接失败。
+# 手册:docs/正式发行手册.md。
+name: release-gate
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*", "rc*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    with:
+      strict: true
+
+  gate:
+    needs: ci
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.10"
+      - name: 装
+        run: |
+          python -m pip install -e ".[dev]" -e "packages/contract[mqtt]" -e packages/adapter-sim \
+            -e packages/adapter-d1max -e "packages/localizer[build]" -e packages/robot-agent \
+            -e packages/site-node
+      - name: 恢复、升级、回退、兼容(点名跑;少一个文件就红)
+        run: |
+          python -m pytest -p no:cacheprovider --tb=short \
+            packages/site-node/tests/test_site_restore.py \
+            packages/site-node/tests/test_site_keys.py \
+            packages/site-node/tests/test_site_compat.py \
+            packages/site-node/tests/test_site_releases.py \
+            packages/site-node/tests/test_site_releases_api.py \
+            packages/robot-agent/tests/test_release_ops.py \
+            packages/robot-agent/tests/test_release_precheck.py \
+            packages/contract/tests/test_releases_contract.py \
+            tests/test_cli_release.py tests/test_deploy_files.py tests/test_make_release.py
+      - name: 记下提交和包指纹
+        run: |
+          python tools/make_release.py --write-gate gate/gate.json --wheels dist/wheels-aarch64-py310
+          python - <<'PY'
+          import json, os
+          p = "gate/gate.json"
+          g = json.load(open(p, encoding="utf-8"))
+          g["run"] = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          g["ref"] = os.environ["GITHUB_REF"]
+          json.dump(g, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+          PY
+          cat gate/gate.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: d1max-release-gate
+          path: gate/gate.json
+          retention-days: 90

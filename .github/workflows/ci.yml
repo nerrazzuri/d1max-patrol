@@ -15,9 +15,14 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+  workflow_call:                       # 发行闸(release.yml)整套调一遍,集成层在那儿是必过的
+    inputs:
+      strict:
+        type: boolean
+        default: false
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -169,7 +174,8 @@ jobs:
   integration:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
-    continue-on-error: true            # 集成层先不设必过(外审:先分层、看稳不稳)
+    # 集成层平时不设必过(外审:先分层、看稳不稳);发行闸调进来时(strict)必过。
+    continue-on-error: ${{ !inputs.strict }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
