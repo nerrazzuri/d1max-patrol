@@ -5,7 +5,8 @@
 #     依赖这些程序的测试自己跳过;
 #   手机:flutter(analyze + test);
 #   集成层:integration(装上 mosquitto、ffmpeg、g++ 跑全量)—— 不设必过,先看稳不稳。
-#   桌面版:desktop(W15,Linux/Windows/macOS 三个包)—— 不设必过,只在 master、手动触发时跑。
+#   桌面版:desktop(W15,Linux/Windows 两个包)—— 不设必过,只在 master、手动触发时跑。
+#     macOS 现在编不过,挪到 experimental.yml 单独跑,不把这里的结论染红(RC0)。
 # 第三方 action 只用 GitHub 官方的(checkout、setup-python、upload-artifact),按提交哈希钉死;Flutter 按标签从官方仓库拉。
 name: ci
 
@@ -103,8 +104,8 @@ jobs:
       - name: 构建产物跟仓库里的一样
         run: git diff --exit-code -- packages/site-node/src/d1max_site/web
 
-  # 桌面版(W15):同一套 Flutter 代码编 Linux / Windows / macOS 三个包,产物留 14 天可下载。
-  # 不设必过;只在合进 master、手动触发时跑(macOS 机器按十倍计费,不在每个 PR 上跑)。
+  # 桌面版(W15):同一套 Flutter 代码编 Linux / Windows 两个包,产物留 14 天可下载。
+  # 不设必过;只在合进 master、手动触发时跑。macOS 在 experimental.yml。
   desktop:
     if: github.event_name != 'pull_request'
     strategy:
@@ -117,9 +118,6 @@ jobs:
           - os: windows-2022
             target: windows
             out: build/windows/x64/runner/Release
-          - os: macos-14
-            target: macos
-            out: build/macos/Build/Products/Release/d1max_patrol.app
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:

@@ -1371,6 +1371,9 @@ def test_站点安装脚本不碰狗_狗的安装脚本不碰站点():
     assert site.index("apt-get update") < site.index("apt-get install"), "新机器不 update 装不上"
     assert "enable --now d1max-mosquitto.service d1max-site.service" in site
     assert 'if [[ ! -f "$HOME_DIR/site.json" ]]' in site, "重跑不许重建 CA"
+    assert "usermod -aG systemd-journal d1max-site" in site, "诊断包读不到站点日志(A1)"
+    assert site.index("useradd --system") < site.index("usermod -aG systemd-journal") \
+        < site.index("enable --now d1max-mosquitto.service"), "先有用户再加组,加完再起服务"
     assert 'packages/contract[mqtt,planning]" "$PKG/packages/site-node"' in site
 
 

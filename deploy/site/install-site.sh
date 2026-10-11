@@ -71,6 +71,10 @@ systemctl restart chrony
 
 echo "[2/5] 用户与目录"
 id -u d1max-site >/dev/null 2>&1 || useradd --system --home-dir "$HOME_DIR" --shell /usr/sbin/nologin d1max-site
+# A1:诊断包要带站点自己的日志,站点用户得在 systemd-journal 组里才读得到;每次都补(老站点升级也补上)。
+if getent group systemd-journal >/dev/null 2>&1; then
+  usermod -aG systemd-journal d1max-site
+fi
 install -d -m 0750 -o d1max-site -g d1max-site "$HOME_DIR"
 
 # W30(决策 43):口令密钥、备份密钥 —— 不跟库放一起(站点服务对 /etc 只读),只有站点用户能读。
