@@ -190,15 +190,28 @@ class FakeApi implements SiteApi {
   /// 分级驱离（W22）：默认没有；测试改 [deterRows]。
   List<Map<String, dynamic>> deterRows = <Map<String, dynamic>>[];
   SiteError? deterrenceError;
+  bool deterDogRefuses = false;
+  /// 给了就等它完成再回（模拟一直读不回来）。
+  Completer<void>? deterrenceGate;
   @override
   Future<List<Map<String, dynamic>>> deterrence() async {
+    if (deterrenceGate != null) await deterrenceGate!.future;
     if (deterrenceError != null) throw deterrenceError!;
     return deterRows;
   }
   @override
   Future<Map<String, dynamic>> deterLevel(String robotId, int level) async {
     calls.add('deter-level $robotId $level');
-    final s = <String, dynamic>{...deterRows.first, 'level': level, 'auto': false, 'by': 'u', 'next_in_s': null};
+    final have = deterRows.first['outputs'];
+    final s = <String, dynamic>{
+      ...deterRows.first, 'level': level, 'auto': false, 'by': 'u', 'next_in_s': null,
+      // 站点第 3 级起才开警笛；狗有这一路、接受了才算开着（[deterDogRefuses] = 狗没接受）
+      if (deterRows.first.containsKey('active'))
+        'active': <String>[
+          'strobe',
+          if (level >= 3 && !deterDogRefuses && (have is! List || have.contains('siren'))) 'siren',
+        ],
+    };
     deterRows = [s];
     return <String, dynamic>{'session': s};
   }
@@ -424,12 +437,21 @@ class FakeApi implements SiteApi {
   @override
   Future<Map<String, dynamic>> ackAlert(String key) async {
     calls.add('ack $key');
-    return siteFixture('site_alert_ack');
+    return _acked(key);
   }
   @override
   Future<Map<String, dynamic>> resolveAlert(String key) async {
     calls.add('resolve $key');
-    return siteFixture('site_alert_ack');
+    return _acked(key);
+  }
+
+  /// 站点回的是**问的那一条**确认之后的样子（真站点的夹具，换成问的那一条、确认人是登录的这个人）。
+  Map<String, dynamic> _acked(String key) {
+    final a = Map<String, dynamic>.from(siteFixture('site_alert_ack')['alert'] as Map);
+    if (a['key'] == key) return <String, dynamic>{'alert': a};
+    return <String, dynamic>{
+      'alert': <String, dynamic>{...a, 'key': key, 'robot': key.split('/').first, 'acked_by': session?.name ?? ''}
+    };
   }
   /// 给了就用它，不给用真站点的夹具。
   Map<String, dynamic>? summaryBody;

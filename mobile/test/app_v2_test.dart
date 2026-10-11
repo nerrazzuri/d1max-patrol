@@ -1,3 +1,5 @@
+import 'dart:async';
+
 // App V2：英文为主中文可选、扫码 / 粘贴配对码添加站点、告警页（视觉规范 2.5）、竖屏顶栏、遥控锁横屏。
 import 'dart:io';
 
@@ -48,9 +50,50 @@ Alert _p1({String? ackedBy, int? ackedMs, int? resolvedMs, String level = 'P1'})
       'context': <String, dynamic>{'zone': 'East wall',
         'persons': <String, dynamic>{'count': 1, 'nearest_m': 6.2}}});
 
-Map<String, dynamic> _session({int level = 1, bool auto = true}) => <String, dynamic>{
+Map<String, dynamic> _session(
+        {int level = 1,
+        bool auto = true,
+        List<String>? active = const ['strobe'],
+        List<String>? outputs = const ['siren', 'speaker', 'spotlight', 'strobe']}) =>
+    <String, dynamic>{
       'robot_id': 'A', 'level': level, 'auto': auto, 'next_in_s': auto ? 30 : null,
-      'started_ms': _t0 + 4000, 'level_ms': _t0 + 4000};
+      'started_ms': _t0 + 4000, 'level_ms': _t0 + 4000,
+      // 老站点不发这两样
+      if (active != null) ...<String, dynamic>{'active': active, 'outputs': outputs}};
+
+Alert _p1b() => Alert.fromWire(<String, dynamic>{
+      'key': 'B/dog_sees_person#7', 'level': 'P1', 'kind': 'dog_sees_person', 'robot': 'B', 'title': 't',
+      'first_ms': _t0, 'last_ms': _t0, 'acked_by': '', 'acked_ms': null, 'resolved_ms': null,
+      'context': <String, dynamic>{'zone': 'North gate'}});
+
+/// 确认、跳级的回包扣在手里，测试自己放（或者让它失败）。
+class _Held extends FakeApi {
+  _Held(super.role);
+  final ack = <Completer<Map<String, dynamic>>>[];
+  final level = <Completer<Map<String, dynamic>>>[];
+  @override
+  Future<Map<String, dynamic>> ackAlert(String key) {
+    calls.add('ack $key');
+    ack.add(Completer<Map<String, dynamic>>());
+    return ack.last.future;
+  }
+
+  @override
+  Future<Map<String, dynamic>> deterLevel(String robotId, int level) {
+    calls.add('deter-level $robotId $level');
+    this.level.add(Completer<Map<String, dynamic>>());
+    return this.level.last.future;
+  }
+}
+
+Map<String, dynamic> _ackedWire(String key, {String by = 'alice'}) => <String, dynamic>{
+      'alert': <String, dynamic>{'key': key, 'level': 'P1', 'kind': 'dog_sees_person', 'robot': key.split('/').first,
+        'title': 't', 'first_ms': _t0, 'last_ms': _t0, 'acked_by': by, 'acked_ms': _t0 + 50000}};
+
+String _btn(WidgetTester t, Key k) =>
+    t.widget<Text>(find.descendant(of: find.byKey(k), matching: find.byType(Text))).data!;
+
+bool _enabled(WidgetTester t, Key k) => t.widget<ButtonStyleButton>(find.byKey(k)).onPressed != null;
 
 Future<void> _alarm(WidgetTester t, FakeApi api, Alert a, {int afterS = 42}) async {
   _portrait(t);
@@ -263,15 +306,17 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('在驱离：说到第几级、接下来多久升级；「开警笛」升到 2 级，开了就灰掉', (t) async {
+    testWidgets('在驱离：说到第几级、接下来多久升级；「开警笛」升到 3 级，狗接受了才写已开、灰掉', (t) async {
       final api = FakeApi('guard')..deterRows = [_session()];
       await _alarm(t, api, _p1());
-      expect(find.textContaining('在 A 前方 6.2 米。 驱离第 1 级。'), findsOneWidget);
+      expect(find.textContaining('最近的人距 A 6.2 米。 驱离第 1 级。'), findsOneWidget);
+      expect(find.textContaining('前方'), findsNothing, reason: '站点没给方向');
       expect(_text(t, SiteAlertScenePage.nextKey), contains('30 秒后升到第 2 级'));
       expect(find.byKey(SiteAlertScenePage.deterKey), findsNothing, reason: '已经在驱离：不是「就地驱离」');
       await t.tap(find.byKey(SiteAlertScenePage.sirenKey));
       await t.pumpAndSettle();
-      expect(api.calls, contains('deter-level A 2'));
+      expect(api.calls.where((c) => c.startsWith('deter-level')), ['deter-level A 3'],
+          reason: '站点第 3 级才有警笛，第 2 级只有灯和话术');
       expect(t.widget<OutlinedButton>(find.byKey(SiteAlertScenePage.sirenKey)).onPressed, isNull);
       expect(find.text('警笛已开'), findsOneWidget);
       expect(find.byKey(SiteAlertScenePage.nextKey), findsNothing, reason: '人接手了就不再自动升级');
@@ -336,9 +381,9 @@ void main() {
       await _alarm(t, api, _p1());
       expect(find.text('Person detected'), findsWidgets);
       expect(_text(t, SiteAlertScenePage.stateKey), 'Unacknowledged for 0:42');
-      expect(find.text('6.2 m ahead of A. Deterrence level 1.'), findsOneWidget);
+      expect(find.text('Nearest person 6.2 m from A. Deterrence level 1.'), findsOneWidget);
       expect(find.text("I'll handle it"), findsOneWidget);
-      expect(find.text('Sound siren (level 2)'), findsOneWidget);
+      expect(find.text('Sound siren (level 3)'), findsOneWidget);
       expect(find.text('Talk: not available'), findsOneWidget);
       expect(find.text('布防中'), findsOneWidget);
       await t.pumpWidget(Container());
@@ -362,6 +407,261 @@ void main() {
       expect(SiteAlertScenePageSpan.of(725000), '12:05');
       expect(SiteAlertScenePageSpan.of(3723000), '1:02:03');
       expect(SiteAlertScenePageSpan.of(-5), '0:00');
+    });
+  });
+
+  group('告警页：C-B2 外审（警笛等级、旧状态、迟到的回包）', () {
+    const siren = SiteAlertScenePage.sirenKey;
+
+    test('警笛的状态：狗接受了才算开着；级别到了只算要求了；没装、说不清各说各的', () {
+      SirenState of(Map<String, dynamic>? d) => SiteAlertScenePageSiren.of(d);
+      expect(of(null), SirenState.unknown);
+      expect(of(_session(level: 1)), SirenState.off);
+      expect(of(_session(level: 2, active: ['speaker', 'strobe'])), SirenState.off, reason: '第 2 级不是警笛');
+      expect(of(_session(level: 3, active: ['strobe'])), SirenState.requested);
+      expect(of(_session(level: 4, active: ['strobe'])), SirenState.requested);
+      expect(of(_session(level: 3, active: ['siren', 'strobe'])), SirenState.on);
+      expect(of(_session(level: 3, active: ['siren'], outputs: ['strobe'])), SirenState.notFitted);
+      expect(of(_session(level: 1, outputs: ['strobe'])), SirenState.notFitted);
+      expect(of(_session(level: 3, active: null)), SirenState.requested, reason: '老站点不说哪几路开着：不猜');
+      expect(of(_session(level: 2, active: null)), SirenState.off);
+    });
+
+    testWidgets('I1 第 2 级不写警笛已开，还能按；按了发第 3 级', (t) async {
+      final api = FakeApi('guard')..deterRows = [_session(level: 2, active: ['speaker', 'strobe'])];
+      await _alarm(t, api, _p1());
+      expect(_btn(t, siren), '开警笛（第 3 级）');
+      expect(find.text('警笛已开'), findsNothing);
+      await t.tap(find.byKey(siren));
+      await t.pumpAndSettle();
+      expect(api.calls, contains('deter-level A 3'));
+      expect(_btn(t, siren), '警笛已开');
+      expect(_enabled(t, siren), isFalse);
+      expect(find.byKey(SiteAlertScenePage.msgKey), findsNothing);
+      await t.pumpWidget(Container());
+    });
+
+    testWidgets('I1 狗没接受开警笛：不写已开，说还没确认，能再试；后来狗接受了才写已开', (t) async {
+      final api = FakeApi('guard')
+        ..deterRows = [_session()]
+        ..deterDogRefuses = true;
+      await _alarm(t, api, _p1());
+      await t.tap(find.byKey(siren));
+      await t.pumpAndSettle();
+      expect(find.text('警笛已开'), findsNothing);
+      expect(_btn(t, siren), '警笛没确认，再试');
+      expect(_enabled(t, siren), isTrue);
+      expect(_text(t, SiteAlertScenePage.msgKey), contains('狗还没确认警笛开了'));
+      api.deterDogRefuses = false;
+      await t.tap(find.byKey(siren));
+      await t.pumpAndSettle();
+      expect(api.calls.where((c) => c == 'deter-level A 3').length, 2);
+      expect(_btn(t, siren), '警笛已开');
+      expect(find.byKey(SiteAlertScenePage.msgKey), findsNothing);
+      await t.pumpWidget(Container());
+    });
+
+    testWidgets('I1 这台狗没装警笛：按钮说没有、按不了；老站点到了第 3 级也只说没确认', (t) async {
+      final api = FakeApi('guard')..deterRows = [_session(outputs: ['speaker', 'strobe'])];
+      await _alarm(t, api, _p1());
+      expect(_btn(t, siren), '这台狗没有警笛');
+      expect(_enabled(t, siren), isFalse);
+      await t.pumpWidget(Container());
+      final old = FakeApi('guard')..deterRows = [_session(level: 3, auto: false, active: null)];
+      await _alarm(t, old, _p1());
+      expect(_btn(t, siren), '警笛没确认，再试');
+      expect(find.text('警笛已开'), findsNothing);
+      await t.pumpWidget(Container());
+    });
+
+    testWidgets('I2 问到过第 3 级、之后问不到：不再当成现在的 —— 说不清、不写警笛已开、不说接下来；恢复了再跟上', (t) async {
+      final api = FakeApi('guard')..deterRows = [_session(level: 2, active: ['strobe'])];
+      await _alarm(t, api, _p1());
+      expect(find.textContaining('驱离第 2 级。'), findsOneWidget);
+      expect(find.byKey(SiteAlertScenePage.nextKey), findsOneWidget);
+      api.deterRows = [_session(level: 3, auto: false, active: ['siren', 'strobe'])];
+      await t.pump(const Duration(milliseconds: 3300));
+      await t.pump();
+      expect(_btn(t, siren), '警笛已开');
+      api.deterrenceError = const SiteError(502, 'x');
+      await t.pump(const Duration(milliseconds: 3300));
+      await t.pump();
+      expect(find.textContaining('驱离第 3 级。'), findsNothing);
+      expect(find.textContaining('说不清有没有在驱离（02:15:18 最后问到时是第 3 级）'), findsOneWidget);
+      expect(find.text('警笛已开'), findsNothing);
+      expect(_btn(t, siren), '开警笛（第 3 级）');
+      expect(_enabled(t, siren), isTrue, reason: '说不清的时候让人能再要求一次');
+      expect(find.byKey(SiteAlertScenePage.nextKey), findsNothing);
+      expect(_text(t, SiteAlertScenePage.staleKey), contains('02:15:18 起没再问到'));
+      expect(find.textContaining('驱离升到第 3 级。'), findsOneWidget, reason: '带时刻的旧事照摆');
+      api.deterrenceError = null;
+      await t.pump(const Duration(milliseconds: 3300));
+      await t.pump();
+      expect(find.textContaining('驱离第 3 级。'), findsOneWidget);
+      expect(_btn(t, siren), '警笛已开');
+      expect(find.byKey(SiteAlertScenePage.staleKey), findsNothing);
+      await t.pumpWidget(Container());
+    });
+
+    testWidgets('I2 问了一直不回来：过了三个周期也算旧的；人身上的距离（驱离带的）一起收掉', (t) async {
+      final a = Alert.fromWire(<String, dynamic>{
+        'key': 'A/intrusion#1', 'level': 'P1', 'kind': 'intrusion', 'robot': 'A', 'title': 't',
+        'first_ms': _t0, 'last_ms': _t0, 'acked_by': 'bob', 'acked_ms': _t0 + 1000, // 确认了：不闪，没有别的重画
+        'context': <String, dynamic>{'zone': 'East wall'}});
+      final api = FakeApi('guard')
+        ..deterRows = [
+          <String, dynamic>{..._session(), 'persons': <String, dynamic>{'count': 1, 'nearest_m': 4.0}}
+        ];
+      await _alarm(t, api, a);
+      expect(find.textContaining('最近的人距 A 4.0 米。 驱离第 1 级。'), findsOneWidget);
+      api.deterrenceGate = Completer<void>();
+      await t.pump(const Duration(milliseconds: 9600));
+      await t.pump();
+      expect(find.textContaining('驱离第 1 级。'), findsOneWidget, reason: '还在三个周期里');
+      await t.pump(const Duration(milliseconds: 800));
+      await t.pump();
+      expect(find.textContaining('驱离第 1 级。'), findsNothing);
+      expect(find.textContaining('最近的人'), findsNothing);
+      expect(find.textContaining('说不清有没有在驱离（'), findsOneWidget);
+      expect(find.byKey(SiteAlertScenePage.nextKey), findsNothing);
+      // 扣住的那几次终于回来了：是现在问到的，算数
+      api.deterrenceGate!.complete();
+      api.deterrenceGate = null;
+      await t.pump();
+      await t.pump();
+      expect(find.textContaining('驱离第 1 级。'), findsOneWidget);
+      await t.pumpWidget(Container());
+    });
+
+    testWidgets('I2 先发的查询后到：不许盖掉刚按出来的结果', (t) async {
+      final api = FakeApi('guard')..deterRows = [_session()];
+      await _alarm(t, api, _p1());
+      // 一次查询发出去、扣住（它读到的是按之前的第 1 级）
+      final gate = api.deterrenceGate = Completer<void>();
+      await t.pump(const Duration(milliseconds: 3300));
+      final before = api.deterRows;
+      api.deterrenceGate = null;
+      await t.tap(find.byKey(siren));
+      await t.pump();
+      expect(_btn(t, siren), '警笛已开');
+      api.deterRows = before; // 扣住的那一次读到的还是旧的
+      gate.complete();
+      await t.pump();
+      await t.pump();
+      expect(_btn(t, siren), '警笛已开', reason: '旧的查询回来得晚，丢掉');
+      await t.pumpWidget(Container());
+    });
+
+    for (final (name, finish) in <(String, void Function(Completer<Map<String, dynamic>>))>[
+      ('确认上了', (c) => c.complete(_ackedWire('A/dog_sees_person#1'))),
+      ('没带正文（老站点）', (c) => c.complete(<String, dynamic>{})),
+      ('失败了', (c) => c.completeError(const SiteError(502, 'x'))),
+    ]) {
+      testWidgets('I3 上一条告警的确认回包迟到（$name）：换上来的这一条不许变', (t) async {
+        final api = _Held('guard');
+        await _alarm(t, api, _p1());
+        await t.tap(find.byKey(SiteAlertScenePage.ackKey));
+        await t.pump();
+        await _alarm(t, api, _p1b());
+        expect(_text(t, SiteAlertScenePage.stateKey), startsWith('没人确认'));
+        finish(api.ack.single);
+        await t.pump();
+        await t.pump(const Duration(milliseconds: 100));
+        expect(_text(t, SiteAlertScenePage.stateKey), startsWith('没人确认'), reason: 'B 没在站点确认过');
+        expect(_enabled(t, SiteAlertScenePage.ackKey), isTrue);
+        expect(find.byKey(SiteAlertScenePage.msgKey), findsNothing, reason: 'A 的成败不写到 B 的页面上');
+        expect(api.calls.where((c) => c.startsWith('ack')), ['ack A/dog_sees_person#1']);
+        // B 自己的确认照常
+        await t.tap(find.byKey(SiteAlertScenePage.ackKey));
+        await t.pump();
+        api.ack.last.complete(_ackedWire('B/dog_sees_person#7', by: 'u'));
+        await t.pump();
+        await t.pump();
+        expect(api.calls.last, 'ack B/dog_sees_person#7');
+        expect(_text(t, SiteAlertScenePage.stateKey), isNot(startsWith('没人确认')));
+        expect(_enabled(t, SiteAlertScenePage.ackKey), isFalse);
+        await t.pumpWidget(Container());
+      });
+    }
+
+    testWidgets('I3 站点明说回的是另一条：不算这一条确认上了；没带正文的老站点才在本地记', (t) async {
+      final api = _Held('guard');
+      await _alarm(t, api, _p1());
+      await t.tap(find.byKey(SiteAlertScenePage.ackKey));
+      await t.pump();
+      api.ack.last.complete(_ackedWire('B/dog_sees_person#7'));
+      await t.pump();
+      await t.pump();
+      expect(_text(t, SiteAlertScenePage.stateKey), startsWith('没人确认'));
+      expect(_text(t, SiteAlertScenePage.msgKey), contains('站点回的是另一条告警（B/dog_sees_person#7）'));
+      expect(_enabled(t, SiteAlertScenePage.ackKey), isTrue);
+      await t.tap(find.byKey(SiteAlertScenePage.ackKey));
+      await t.pump();
+      api.ack.last.complete(<String, dynamic>{});
+      await t.pump();
+      await t.pump();
+      expect(_text(t, SiteAlertScenePage.stateKey), startsWith('你在 '));
+      expect(find.byKey(SiteAlertScenePage.msgKey), findsNothing);
+      await t.pumpWidget(Container());
+    });
+
+    testWidgets('I3 同一条告警换了个新对象（上一页推来的新状态）：在途的确认照样算数', (t) async {
+      final api = _Held('guard');
+      await _alarm(t, api, _p1());
+      await t.tap(find.byKey(SiteAlertScenePage.ackKey));
+      await t.pump();
+      await _alarm(t, api, _p1());
+      api.ack.single.complete(_ackedWire('A/dog_sees_person#1'));
+      await t.pump();
+      await t.pump();
+      expect(_text(t, SiteAlertScenePage.stateKey), startsWith('alice 在 '));
+      // 上一页又推来一份还没确认的旧状态：不退回去
+      await _alarm(t, api, _p1());
+      expect(_text(t, SiteAlertScenePage.stateKey), startsWith('alice 在 '));
+      expect(_enabled(t, SiteAlertScenePage.ackKey), isFalse);
+      await t.pumpWidget(Container());
+    });
+
+    testWidgets('I3 上一条的「记成误报？」还开着就换了告警：对话框收掉，谁都不关', (t) async {
+      final api = FakeApi('guard');
+      await _alarm(t, api, _p1());
+      await t.ensureVisible(find.byKey(SiteAlertScenePage.falseKey));
+      await t.tap(find.byKey(SiteAlertScenePage.falseKey));
+      await t.pumpAndSettle();
+      expect(find.byKey(SiteAlertScenePage.falseGoKey), findsOneWidget);
+      await t.pumpWidget(MaterialApp(
+          theme: proTheme(),
+          home: SiteAlertScenePage(
+              api: api, alert: _p1b(), now: () => DateTime.fromMillisecondsSinceEpoch(_t0 + 42000))));
+      await t.pumpAndSettle();
+      expect(find.byKey(SiteAlertScenePage.falseGoKey), findsNothing, reason: '问的是上一条');
+      expect(find.byType(SiteAlertScenePage), findsOneWidget);
+      expect(api.calls.where((c) => c.startsWith('resolve')), isEmpty);
+      // 这一条自己的误报照常：关的是这一条
+      await t.ensureVisible(find.byKey(SiteAlertScenePage.falseKey));
+      await t.tap(find.byKey(SiteAlertScenePage.falseKey));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(SiteAlertScenePage.falseGoKey));
+      await t.pumpAndSettle();
+      expect(api.calls.where((c) => c.startsWith('resolve')), ['resolve B/dog_sees_person#7']);
+    });
+
+    testWidgets('I3 上一条的开警笛回包迟到：不写到换上来的这一条上', (t) async {
+      final api = _Held('guard')..deterRows = [_session()];
+      await _alarm(t, api, _p1());
+      await t.tap(find.byKey(siren));
+      await t.pump();
+      api.deterRows = <Map<String, dynamic>>[];
+      await _alarm(t, api, _p1b());
+      expect(find.byKey(siren), findsNothing, reason: 'B 没在驱离');
+      api.level.single.complete(<String, dynamic>{
+        'session': _session(level: 3, auto: false, active: ['siren'])
+      });
+      await t.pump();
+      await t.pump();
+      expect(find.byKey(siren), findsNothing);
+      expect(find.textContaining('驱离第 3 级'), findsNothing);
+      await t.pumpWidget(Container());
     });
   });
 

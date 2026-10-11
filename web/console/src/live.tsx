@@ -11,6 +11,7 @@ import {
   alarmState,
   canDispatch,
   duration,
+  sirenState,
   type Alert,
   type DeterSession,
   type Robot,
@@ -90,12 +91,17 @@ export function AlarmTile(props: {
 }) {
   const { a, u } = props;
   const st = alarmState(a, props.now);
-  const p = a.context?.persons ?? u.deter?.persons;
+  // 数据过期了(I5):旧的驱离快照不当成现在的声光状态(C-B2 外审 I2)
+  const d = u.stale ? undefined : u.deter;
+  const p = a.context?.persons ?? d?.persons;
   const where = [
     a.context?.zone,
-    p?.nearest_m != null ? t("aheadOf", { m: p.nearest_m, id: a.robot }) : a.robot,
+    p?.nearest_m != null ? t("nearestTo", { m: p.nearest_m, id: a.robot }) : a.robot,
   ].filter(Boolean).join(", ");
-  const sirenOn = (u.deter?.level ?? 0) >= 2;
+  // 说不清(过期)时不猜警笛开没开,让人能再要求一次
+  const siren = d ? sirenState(d) : "off";
+  const sirenLabel: Key = siren === "on" ? "sirenOn" : siren === "notFitted" ? "sirenNone" : siren === "requested" ? "sirenRetry" : "siren";
+  const sirenFixed = siren === "on" || siren === "notFitted";
   return (
     <section class={st === "unacked" ? "alarm-tile unacked" : "alarm-tile"} id={`unit-${u.robot.robot_id}`}
       aria-label={`P1 ${alertTitle(lang.value, a.kind, a.title)} ${a.robot}`}>
@@ -116,15 +122,15 @@ export function AlarmTile(props: {
       <div class="alarm-actions">
         <button type="button" class="btn primary" disabled={st !== "unacked"} onClick={props.onAck}>{t("take")}</button>
         {u.deter && canDispatch(props.role) && (
-          <button type="button" class="btn onalarm" aria-pressed={sirenOn} disabled={sirenOn} onClick={props.onSiren}>
-            {sirenOn ? t("sirenOn") : t("siren")}
+          <button type="button" class="btn onalarm" aria-pressed={siren === "on"} disabled={sirenFixed} onClick={props.onSiren}>
+            {t(sirenLabel)}
           </button>
         )}
         <button type="button" class="btn onalarm" onClick={props.onFalse}>{t("falseAlarm")}</button>
         <button type="button" class="btn onalarm" onClick={props.onMap}>{t("showOnMap")}</button>
         <span class="soft small">{t("talkNA")}</span>
         <span class="soft small push">
-          {u.deter ? t("deterOn", { n: u.deter.level }) : u.deterUnknown || u.stale ? t("deterUnknown") : ""}
+          {d ? t("deterOn", { n: d.level }) : u.deterUnknown || u.stale ? t("deterUnknown") : ""}
           {p?.count ? ` ${t("persons", { n: p.count, m: p.nearest_m ?? "?" })}` : ""}
         </span>
       </div>

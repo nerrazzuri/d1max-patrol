@@ -1,6 +1,7 @@
 {
   "sessions": [
     {
+      "active": [],
       "auto": true,
       "by": "",
       "cornered": false,
@@ -9,17 +10,18 @@
       "incident_id": 1,
       "label": "语音警告",
       "level": 2,
-      "level_ms": 1791482694768,
+      "level_ms": 1791693799192,
       "next_in_s": 24,
+      "outputs": [],
       "persons": {
-        "at_ms": 1791482699768,
+        "at_ms": 1791693804192,
         "count": 2,
         "near": false,
         "nearest_m": 7.5
       },
       "robot_id": "A",
       "standoff": "retreat",
-      "started_ms": 1791482639768,
+      "started_ms": 1791693744192,
       "task_id": "incident-abc",
       "withdraw": "",
       "zone": "yard"

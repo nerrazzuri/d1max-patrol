@@ -6,7 +6,7 @@ import { api, ApiError, onUnauthorized, setFetch } from "./api";
 import { alertTitle, DICTS, initialLang, knownKinds, tr } from "./i18n";
 import { heading, onMap, toPx } from "./mapview";
 import { daysText, toMap } from "./zonesadmin";
-import { abnormal, alarmState, canDispatch, duration, openAlerts, queue, robotMap, robotState, wallOrder, type Alert, type Robot } from "./model";
+import { abnormal, alarmState, canDispatch, duration, openAlerts, queue, robotMap, robotState, SIREN_LEVEL, sirenState, wallOrder, type Alert, type Robot } from "./model";
 
 const fx = (name: string) =>
   JSON.parse(readFileSync(new URL(`../../../mobile/test/fixtures/${name}.json`, import.meta.url), "utf-8"));
@@ -43,6 +43,22 @@ describe("model", () => {
   const robot: Robot = fx("site_robots").robots[0];
   it("夹具里的狗:在线、急停没解除 → 急停", () => {
     expect(robotState(robot, undefined, false)).toBe("estop");
+  });
+  it("警笛在第 3 级;狗接受了才算开着,级别到了只算要求了;没装的说得出来(C-B2 外审 I1)", () => {
+    expect(SIREN_LEVEL).toBe(3);
+    const all = ["siren", "speaker", "spotlight", "strobe"];
+    expect(sirenState({ robot_id: "A", level: 1, active: ["strobe"], outputs: all })).toBe("off");
+    expect(sirenState({ robot_id: "A", level: 2, active: ["speaker", "strobe"], outputs: all })).toBe("off");
+    expect(sirenState({ robot_id: "A", level: 3, active: ["strobe"], outputs: all })).toBe("requested");
+    expect(sirenState({ robot_id: "A", level: 3, active: ["siren", "strobe"], outputs: all })).toBe("on");
+    expect(sirenState({ robot_id: "A", level: 3, active: ["siren"], outputs: ["strobe"] })).toBe("notFitted");
+    expect(sirenState({ robot_id: "A", level: 3, active: [], outputs: null })).toBe("requested");
+    expect(sirenState({ robot_id: "A", level: 3 })).toBe("requested"); // 老站点不说哪几路开着:不猜
+    expect(sirenState({ robot_id: "A", level: 2 })).toBe("off");
+    expect(DICTS.en.siren).toContain("level 3");
+    expect(DICTS.zh.siren).toContain("3 级");
+    expect(DICTS.en.nearestTo).not.toMatch(/ahead/);
+    expect(DICTS.zh.nearestTo).not.toContain("前方");
   });
   it("状态优先级:离线 > 急停 > 驱离 > 手动 > 任务 > 充电 > 待命", () => {
     const ok = { ...robot, status: { ...robot.status!, ready: { estop_clear: true } } };
