@@ -73,7 +73,7 @@ def test_只推标题给登记了的手机_停用账号不推(台):
     p.tick()
     [(reg, title, body, extras)] = j.sent
     assert reg == ["rid-gina"] and title == "翠湖庄园 · P1" and body == "狗看见人了"
-    assert set(extras) == {"alert_key"}, "不带照片、位置"
+    assert set(extras) == {"alert_key", "tier"}, "不带照片、位置"
     assert _队(db)[0]["sent_ms"] == NOW
     p.tick()
     assert len(j.sent) == 1, "推过的不再推"
@@ -286,20 +286,21 @@ def test_外审I2_推送跟着退出和撤权走_不跟着闲置过期走(tmp_pa
     db = SiteDB(tmp_path / "s.db")                          # 站点重启
     acc = Accounts(db, now_ms=lambda: clock[0])
     p = PushDesk(db, now_ms=lambda: clock[0], sender=假极光())
-    assert p._devices() == ["rid-1"], "闲置过期不影响推送"
+    assert p._devices() == {"jpush": ["rid-1"]}, "闲置过期不影响推送"
     acc.logout(tok)                                         # 过期了的令牌照样能退出
-    assert p._devices() == []
+    assert p._devices() == {}
     assert not p.register("gina", "rid-1", "android", session=_token_hash(tok)), "迟到的登记不复活"
-    assert p._devices() == []
+    assert p._devices() == {}
     for 撤 in (lambda: acc.set_disabled("gina", True), lambda: acc.set_role("gina", "owner"),
               lambda: acc.reset_password("gina", PW + "x")):
         acc.set_disabled("gina", False)
         with db.tx() as c:
             c.execute("INSERT OR REPLACE INTO sessions(token_hash, name, created_at, last_used) "
                       "VALUES ('h1','gina',?,?)", (clock[0], clock[0]))
-        assert p.register("gina", "rid-2", "android", session="h1") and p._devices() == ["rid-2"]
+        assert p.register("gina", "rid-2", "android", session="h1")
+        assert p._devices() == {"jpush": ["rid-2"]}
         撤()
-        assert p._devices() == []
+        assert p._devices() == {}
     db.close()
 
 
@@ -313,8 +314,333 @@ def test_F3_真接口_登记以后退出登录_站点不再推给这台手机(tm
         tok = _登(s, "gina")
         assert s.req("POST", "/api/push/devices", {"registration_id": "rid-1"}, token=tok)[0] \
             == 200
-        assert p._devices() == ["rid-1"]
+        assert p._devices() == {"jpush": ["rid-1"]}
         assert s.req("POST", "/api/logout", {}, token=tok)[0] == 200
-        assert p._devices() == [], "退出了:登记还在也不推"
+        assert p._devices() == {}, "退出了:登记还在也不推"
+    finally:
+        s.close()
+
+
+# ---------------------------------------------------------------- RC 加固 H9:多通道、FCM
+
+
+class 假通道:
+    def __init__(self, batch=None):
+        self.sent, self.fail, self.dead = [], None, []
+        if batch:
+            self.batch = batch
+
+    def send(self, reg, title, body, extras):
+        if self.fail:
+            raise PushError(self.fail)
+        self.sent.append(list(reg))
+        return "ok"
+
+    def take_dead(self):
+        dead, self.dead = self.dead, []
+        return dead
+
+
+@pytest.fixture
+def 双通道(tmp_path):
+    clock = [NOW]
+    db = SiteDB(tmp_path / "s.db")
+    with db.tx() as c:
+        for name in ("gina", "omar", "lee"):
+            c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                      "VALUES (?,?,?,?,?,0)", (name, "guard", b"s", b"h", 0))
+            c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                      "VALUES (?,?,0,0)", ("s-" + name, name))
+    desk = AlertDesk(db, now_ms=lambda: clock[0])
+    desk.push = True
+    j, f = 假通道(), 假通道()
+    p = PushDesk(db, now_ms=lambda: clock[0], senders={"jpush": j, "fcm": f}, site_name="站")
+    p.alerts = desk
+    p.register("gina", "jp-gina", "android", session="s-gina")                    # 国内手机
+    p.register("omar", "fcm-omar", "android", session="s-omar", provider="fcm")   # 带 Google 服务
+    yield desk, p, j, f, clock, db
+    db.close()
+
+
+def test_H9_各走各的通道_同一部手机两个都登记了只走FCM(双通道):
+    desk, p, j, f, clock, db = 双通道
+    p.register("lee", "jp-lee", "android", session="s-lee")
+    p.register("lee", "fcm-lee", "android", session="s-lee", provider="fcm")
+    assert p._devices() == {"jpush": ["jp-gina"], "fcm": ["fcm-lee", "fcm-omar"]}
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    p.tick()
+    assert j.sent == [["jp-gina"]] and f.sent == [["fcm-lee", "fcm-omar"]]
+    row = _队(db)[0]
+    assert row["sent_ms"] == NOW and set(row["done"].split(",")) == {"fcm", "jpush"}
+
+
+def test_H9_一个通道没发出去_另一个照发_重试只补没发的那个(双通道):
+    desk, p, j, f, clock, db = 双通道
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    f.fail = "连不上 FCM"
+    p.tick()
+    row = _队(db)[0]
+    assert j.sent == [["jp-gina"]] and f.sent == []
+    assert row["sent_ms"] is None and row["done"] == "jpush" and row["attempts"] == 1
+    assert "连不上 FCM" in row["error"]
+    f.fail = None
+    clock[0] += 11_000
+    p.tick()
+    assert j.sent == [["jp-gina"]], "极光那边发过了,不重发"
+    assert f.sent == [["fcm-omar"]] and _队(db)[0]["sent_ms"] == NOW + 11_000
+
+
+def test_H9_两个通道都不通_连续10分钟报P2_通了一个还剩一个仍算没发完(双通道):
+    desk, p, j, f, clock, db = 双通道
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    j.fail = f.fail = "没外网"
+    for _ in range(12):
+        p.tick()
+        clock[0] += 60_000
+    assert [a for a in desk.book.open() if a.kind == "push_failed"]
+    j.fail = None
+    clock[0] += 300_000
+    p.tick()
+    assert _队(db)[0]["sent_ms"] is None and _队(db)[0]["done"] == "jpush"
+    assert [a for a in desk.book.open() if a.kind == "push_failed"], "FCM 的手机还没收到"
+
+
+def test_H9_手机登记的通道站点没配_不推它_体检说得出有几台收不到(tmp_path):
+    db = SiteDB(tmp_path / "s.db")
+    with db.tx() as c:
+        c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                  "VALUES ('omar','guard',?,?,0,0)", (b"s", b"h"))
+        c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                  "VALUES ('s-omar','omar',0,0)")
+    j = 假通道()
+    p = PushDesk(db, now_ms=lambda: NOW, senders={"jpush": j})
+    p.register("omar", "fcm-omar", "android", session="s-omar", provider="fcm")
+    assert p._devices() == {}
+    v = p.view()
+    assert v["providers"] == ["jpush"] and v["devices_unreachable"] == 1
+    assert v["devices_by_provider"] == {"fcm": 1}
+    from d1max_site.health import HealthDesk
+    assert "1 台登记的通道站点没配,收不到" in HealthDesk._push_detail(v)
+    db.close()
+
+
+def test_H9_通道说推送号没了_从名单上删掉_发送失败时也删(双通道):
+    desk, p, j, f, clock, db = 双通道
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    f.dead, f.fail = ["fcm-omar"], "5xx"
+    p.tick()
+    assert [r["reg_id"] for r in db.query("SELECT reg_id FROM push_devices")] == ["jp-gina"]
+
+
+def test_H9_有人确认了_后面的通道不再发(双通道, monkeypatch):
+    desk, p, j, f, clock, db = 双通道
+    a = desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    real = f.send
+
+    def 发着的时候确认(reg, *rest):
+        out = real(reg, *rest)
+        desk.ack(a.key, who="gina")
+        return out
+    monkeypatch.setattr(f, "send", 发着的时候确认)
+    p.tick()
+    assert f.sent == [["fcm-omar"]] and j.sent == [], "FCM 发完有人确认了,极光那批不发"
+    row = _队(db)[0]
+    assert row["sent_ms"] is not None and "后面的没发" in row["error"] and row["done"] == "fcm"
+
+
+def test_H9_登记_通道名不认识_令牌太长_拒(双通道):
+    _, p, *_ = 双通道
+    with pytest.raises(ValueError, match="provider"):
+        p.register("gina", "x", "android", session="s-gina", provider="apns")
+    p.register("gina", "f" * 400, "android", session="s-gina", provider="fcm")
+    with pytest.raises(ValueError):
+        p.register("gina", "f" * 400, "android", session="s-gina")       # 极光的号没这么长
+    with pytest.raises(ValueError):
+        p.register("gina", "f" * 513, "android", session="s-gina", provider="fcm")
+
+
+def test_H9_配置_老写法是极光_新写法两个并列_一个配坏了另一个照用并说原因(tmp_path):
+    from d1max_site.push import Fcm, load_senders
+    (tmp_path / "jp").write_text("sec\n", "utf-8")
+    acct = tmp_path / "fcm.json"
+    acct.write_text(json.dumps({"project_id": "proj", "client_email": "a@b", "private_key": "PEM"}),
+                    "utf-8")
+    jp = {"app_key": "k", "secret_file": str(tmp_path / "jp")}
+    old, why = load_senders({"push": jp})
+    assert list(old) == ["jpush"] and why == ""
+    both, why = load_senders({"push": {"jpush": jp, "fcm": {"service_account_file": str(acct)}}})
+    assert set(both) == {"jpush", "fcm"} and why == "" and isinstance(both["fcm"], Fcm)
+    assert both["fcm"].url.endswith("/v1/projects/proj/messages:send")
+    half, why = load_senders({"push": {"jpush": jp,
+                                       "fcm": {"service_account_file": str(tmp_path / "无")}}})
+    assert list(half) == ["jpush"] and "读不了 FCM 服务账号" in why
+    acct.write_text('{"project_id": "p"}', "utf-8")
+    bad = load_senders({"push": {"fcm": {"service_account_file": str(acct)}}})
+    assert bad[0] == {} and "不是服务账号文件" in bad[1]
+    assert "不认识的推送通道" in load_senders({"push": {"apns": {}}})[1]
+    assert load_sender({"push": {"fcm": {"service_account_file": str(tmp_path / "无")}}})[0] is None
+
+
+class _回:
+    def __init__(self, body):
+        self._b = json.dumps(body).encode()
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _http错(code, body):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(json.dumps(body).encode()))
+
+
+def test_H9_FCM_报文_鉴权换一次令牌反复用_快到期再换():
+    from d1max_site.push import Fcm
+    calls, clock = [], [1000.0]
+
+    def opener(req, timeout):
+        calls.append(req)
+        if "oauth" in req.full_url:
+            return _回({"access_token": f"tok{len(calls)}", "expires_in": 3600})
+        return _回({"name": "projects/p/messages/9"})
+    signed = []
+    f = Fcm("p", "svc@p.iam", "KEY", opener=opener, now_s=lambda: clock[0],
+            signer=lambda key, data: signed.append((key, data)) or b"SIG")
+    assert f.send(["t1", "t2"], "站 · P1", "狗翻倒了", {"alert_key": "A/x#1", "tier": "2"}) \
+        == "projects/p/messages/9"
+    assert [("oauth" in c.full_url) for c in calls] == [True, False, False], "令牌只换一次"
+    key, signing = signed[0]
+    head, claims = (json.loads(base64.urlsafe_b64decode(x + b"==")) for x in signing.split(b"."))
+    assert key == "KEY" and head == {"alg": "RS256", "typ": "JWT"}
+    assert claims == {"iss": "svc@p.iam", "aud": "https://oauth2.googleapis.com/token",
+                      "scope": "https://www.googleapis.com/auth/firebase.messaging",
+                      "iat": 1000, "exp": 4600}
+    assert calls[0].data.decode().endswith("." + "U0lH")           # base64url("SIG")
+    msg = json.loads(calls[1].data)["message"]
+    assert calls[1].full_url == "https://fcm.googleapis.com/v1/projects/p/messages:send"
+    assert calls[1].get_header("Authorization") == "Bearer tok1"
+    assert msg["token"] == "t1" and msg["notification"] == {"title": "站 · P1", "body": "狗翻倒了"}
+    assert msg["data"] == {"alert_key": "A/x#1", "tier": "2"}
+    assert msg["android"]["priority"] == "HIGH" and msg["android"]["ttl"] == "3600s"
+    assert msg["android"]["notification"]["tag"] == "A/x#1#2", "重发盖掉原来那条,不叠"
+    clock[0] += 3500
+    f.send(["t1"], "t", "b", {"alert_key": "k", "tier": "0"})
+    assert sum("oauth" in c.full_url for c in calls) == 1, "还有一百秒才到期:接着用"
+    clock[0] += 50
+    f.send(["t1"], "t", "b", {"alert_key": "k", "tier": "0"})
+    assert sum("oauth" in c.full_url for c in calls) == 2, "不到一分钟就到期:换新的"
+
+
+def test_H9_FCM_令牌失效记下不算失败_别的错算失败并发完其余的_鉴权错了下次重新换():
+    from d1max_site.push import Fcm
+    seen, auth = [], [0]
+
+    def opener(req, timeout):
+        if "oauth" in req.full_url:
+            auth[0] += 1
+            return _回({"access_token": "tok", "expires_in": 3600})
+        tok = json.loads(req.data)["message"]["token"]
+        seen.append(tok)
+        if tok == "gone":
+            raise _http错(404, {"error": {"status": "NOT_FOUND", "details": [
+                {"errorCode": "UNREGISTERED"}]}})
+        if tok == "busy":
+            raise _http错(503, {"error": {"status": "UNAVAILABLE"}})
+        if tok == "auth":
+            raise _http错(401, {"error": {"status": "UNAUTHENTICATED"}})
+        return _回({"name": "m"})
+    f = Fcm("p", "e", "K", opener=opener, signer=lambda k, d: b"s", now_s=lambda: 0.0)
+    assert f.send(["gone", "ok"], "t", "b", {}) == "m" and f.take_dead() == ["gone"]
+    assert f.take_dead() == []
+    with pytest.raises(PushError, match=r"FCM 回 503.*1 / 3 台没发出去"):
+        f.send(["ok", "busy", "ok2"], "t", "b", {})
+    assert seen[-3:] == ["ok", "busy", "ok2"], "一台没发出去不耽误后面的"
+    with pytest.raises(PushError, match="401"):
+        f.send(["auth"], "t", "b", {})
+    f.send(["ok"], "t", "b", {})
+    assert auth[0] == 2, "401 之后把令牌扔了重新换"
+
+
+def test_H9_FCM_鉴权失败_连不上_都是PushError():
+    import urllib.error
+
+    from d1max_site.push import Fcm
+
+    def 拒(req, timeout):
+        raise _http错(400, {"error": "invalid_grant"})
+
+    def 断(req, timeout):
+        raise urllib.error.URLError("no route")
+    for opener, why in ((拒, "FCM 鉴权回 400"), (断, "连不上 Google 鉴权")):
+        f = Fcm("p", "e", "K", opener=opener, signer=lambda k, d: b"s")
+        with pytest.raises(PushError, match=why):
+            f.send(["t"], "t", "b", {})
+    f = Fcm("p", "e", "K", opener=lambda r, timeout: _回({}), signer=lambda k, d: b"s")
+    with pytest.raises(PushError, match="没有访问令牌"):
+        f.send(["t"], "t", "b", {})
+
+
+def test_H9_用系统openssl签RS256_验得过_私钥不对说得出(tmp_path):
+    import shutil
+    import subprocess
+
+    from d1max_site.push import openssl_rs256
+    if shutil.which("openssl") is None:
+        pytest.skip("没有 openssl")
+    key = tmp_path / "k.pem"
+    subprocess.run(["openssl", "genrsa", "-out", str(key), "2048"], check=True, capture_output=True)
+    pub = tmp_path / "p.pem"
+    subprocess.run(["openssl", "rsa", "-in", str(key), "-pubout", "-out", str(pub)], check=True,
+                   capture_output=True)
+    sig = openssl_rs256(key.read_text(), b"head.claims")
+    (tmp_path / "sig").write_bytes(sig)
+    (tmp_path / "data").write_bytes(b"head.claims")
+    ok = subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(pub), "-signature",
+                         str(tmp_path / "sig"), str(tmp_path / "data")], capture_output=True)
+    assert ok.returncode == 0 and len(sig) == 256
+    with pytest.raises(PushError, match="私钥不对"):
+        openssl_rs256("not a key", b"x")
+
+
+def test_H9_库从54升上来_老的推送号算极光_队里的照发(tmp_path):
+    import sqlite3
+    path = tmp_path / "s.db"
+    SiteDB(path).close()
+    con = sqlite3.connect(path)
+    con.execute("ALTER TABLE push_devices DROP COLUMN provider")
+    con.execute("ALTER TABLE push_outbox DROP COLUMN done")
+    con.execute("UPDATE meta SET value='54' WHERE key='schema'")
+    con.execute("INSERT INTO push_devices(reg_id, account, platform, updated_ms, session) "
+                "VALUES ('old','gina','android',0,'s')")
+    con.execute("INSERT INTO push_outbox(alert_key, tier, robot, title, created_ms, next_ms) "
+                "VALUES ('k',0,'A','t',0,0)")
+    con.commit()
+    con.close()
+    db = SiteDB(path)
+    assert db.query("SELECT provider FROM push_devices")[0]["provider"] == "jpush"
+    assert db.query("SELECT done FROM push_outbox")[0]["done"] == ""
+    assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == "55"
+    db.close()
+
+
+def test_H9_真接口_登记带通道名_回站点配了哪几个(tmp_path):
+    s = 站(tmp_path, alerts=True)
+    try:
+        s.accounts.add("gina", PW, role="guard")
+        s.api.push = PushDesk(s.db, now_ms=lambda: NOW, senders={"jpush": 假通道()})
+        tok = _登(s, "gina")
+        code, got = s.req("POST", "/api/push/devices",
+                          {"registration_id": "fcm-1", "provider": "fcm"}, token=tok)
+        assert code == 200 and got == {"ok": True, "providers": ["jpush"]}
+        assert s.db.query("SELECT provider FROM push_devices")[0]["provider"] == "fcm"
+        assert s.req("POST", "/api/push/devices", {"registration_id": "x", "provider": "apns"},
+                     token=tok)[0] == 400
     finally:
         s.close()

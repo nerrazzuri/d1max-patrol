@@ -170,8 +170,7 @@ class HealthDesk:
         if self.push is not None:
             v = self.push.view()
             out["push"] = {"ok": bool(v["configured"]) and not v["error"],
-                           "detail": (v["why_off"] or v["error"] or
-                                      f"推送已配,{v['devices']} 台手机登记了")}
+                           "detail": (v["error"] or self._push_detail(v))}
         if self.dispatcher is not None:
             clients = getattr(self.dispatcher, "clients", {})
             online = [rid for rid, c in clients.items()
@@ -198,6 +197,17 @@ class HealthDesk:
         out["lanes"] = {"ok": not stuck,
                         "detail": ("卡住了:" + "、".join(stuck)) if stuck else "后台道都在转"}
         return out
+
+    @staticmethod
+    def _push_detail(v: dict[str, Any]) -> str:
+        if not v["configured"]:
+            return v["why_off"]
+        text = f"推送已配({'、'.join(v.get('providers') or [])}),{v['devices']} 台手机登记了"
+        if v.get("devices_unreachable"):
+            text += f";其中 {v['devices_unreachable']} 台登记的通道站点没配,收不到"
+        if v["why_off"]:
+            text += f";{v['why_off']}"
+        return text
 
     def healthz(self) -> tuple[bool, dict[str, Any]]:
         """探活:只回好不好、版本(不登录的人看不到细节)。"""
