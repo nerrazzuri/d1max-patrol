@@ -159,6 +159,14 @@ ThemeData proTheme() {
         labelStyle: D1Text.label,
         side: const BorderSide(color: D1Color.borderControl),
         shape: control),
+    segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+            shape: WidgetStatePropertyAll(control),
+            side: const WidgetStatePropertyAll(BorderSide(color: D1Color.borderControl)),
+            textStyle: WidgetStatePropertyAll(D1Text.label),
+            foregroundColor: const WidgetStatePropertyAll(D1Color.text),
+            backgroundColor: WidgetStateProperty.resolveWith(
+                (s) => s.contains(WidgetState.selected) ? D1Color.selectBg : Colors.transparent))),
     switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith(
             (s) => s.contains(WidgetState.selected) ? D1Color.onPrimary : D1Color.textMuted),

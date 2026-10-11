@@ -171,34 +171,45 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       if (a.escalated > 0) tr('Escalated to ${a.channel}', '已升级到 ${a.channel}'),
       if (a.count > 1) tr('${a.count} times', '${a.count} 次'),
     ].join(' · ');
-    return Card(
-      color: a.level == 'P1' ? D1Color.p1Bg : null,
-      child: ListTile(
-        key: SiteWatchPage.alertKey(a.key),
-        // 点开看现场（W17）：狗在哪、拦截点、到了拍的照片
-        onTap: () => Navigator.push(context,
-            MaterialPageRoute<void>(builder: (_) => SiteAlertScenePage(api: widget.api, alert: a))),
-        // 三重编码（规范 2.1）：颜色 + 形状 + 文字
-        leading: PriorityShape(level: a.level, color: priorityColor(a.level), size: 16),
-        minLeadingWidth: 16,
-        title: Text('${a.level} ${a.robot} · ${alertTitle(a.kind, a.title)}'),
-        subtitle: Text([if (a.detail.isNotEmpty) a.detail, state].join('\n')),
-        isThreeLine: a.detail.isNotEmpty,
-        trailing: can
-            ? Wrap(spacing: 4, children: [
-                if (a.ackedMs == null)
-                  TextButton(
-                      key: SiteWatchPage.ackKey(a.key),
-                      onPressed: () => _act(() => widget.api.ackAlert(a.key), tr('Acknowledge', '确认')),
-                      child: Text(tr('Acknowledge', '确认'))),
-                TextButton(
-                    key: SiteWatchPage.resolveKey(a.key),
-                    onPressed: () => _act(() => widget.api.resolveAlert(a.key), tr('Resolve', '解决')),
-                    child: Text(tr('Resolve', '解决'))),
-              ])
-            : null,
-      ),
-    );
+    final actions = !can
+        ? null
+        : Wrap(spacing: 4, children: [
+            if (a.ackedMs == null)
+              TextButton(
+                  key: SiteWatchPage.ackKey(a.key),
+                  onPressed: () => _act(() => widget.api.ackAlert(a.key), tr('Acknowledge', '确认')),
+                  child: Text(tr('Acknowledge', '确认'))),
+            TextButton(
+                key: SiteWatchPage.resolveKey(a.key),
+                onPressed: () => _act(() => widget.api.resolveAlert(a.key), tr('Resolve', '解决')),
+                child: Text(tr('Resolve', '解决'))),
+          ]);
+    // 竖屏的手机一行摆不下「标题 + 两个按钮」（按钮会把标题挤成一个字一行）：按钮放到下面一行。
+    return LayoutBuilder(builder: (context, box) {
+      final narrow = box.maxWidth < 520;
+      final text = [if (a.detail.isNotEmpty) a.detail, state].join('\n');
+      return Card(
+        color: a.level == 'P1' ? D1Color.p1Bg : null,
+        child: ListTile(
+          key: SiteWatchPage.alertKey(a.key),
+          // 点开看告警页（W17 的现场、App V2 的处理）：画面、在哪、处理按钮
+          onTap: () => Navigator.push(context,
+              MaterialPageRoute<void>(builder: (_) => SiteAlertScenePage(api: widget.api, alert: a))),
+          // 三重编码（规范 2.1）：颜色 + 形状 + 文字
+          leading: PriorityShape(level: a.level, color: priorityColor(a.level), size: 16),
+          minLeadingWidth: 16,
+          title: Text('${a.level} ${a.robot} · ${alertTitle(a.kind, a.title)}'),
+          subtitle: narrow && actions != null
+              ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(text),
+                  Align(alignment: Alignment.centerRight, child: actions),
+                ])
+              : Text(text),
+          isThreeLine: a.detail.isNotEmpty || (narrow && actions != null),
+          trailing: narrow ? null : actions,
+        ),
+      );
+    });
   }
 
   String _num(Object? v, String unit, String why) => v == null ? tr('Unknown ($why)', '不知道（$why）') : '$v$unit';

@@ -235,8 +235,8 @@ IconData modeIcon(String mode) => switch (mode) {
       _ => Icons.shield,
     };
 
+/// 布防、在家、访客都是正常状态：不上色（规范 2.1：颜色只给报警）。认不出的模式是异常，琥珀。
 Color modeColor(String mode) => switch (mode) {
-      'home' => D1Color.select,
-      'visitor' => D1Color.p2,
-      _ => D1Color.p1Text,
+      'armed' || 'home' || 'visitor' => D1Color.textSecondary,
+      _ => D1Color.p2,
     };

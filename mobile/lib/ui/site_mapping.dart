@@ -29,6 +29,14 @@ enum _Mode { probe, preview, trail }
 /// 预览这么久没更新就说一声（狗上 3 秒写一张）。
 const int _staleAfterS = 15;
 
+/// 区域的名字在英文界面上怎么显示。名字是存在站点上的数据：画的时候 app 给的缺省名是中文的
+/// 「禁行区」「限速区」，英文界面把这两个翻过来；人自己起的名字原样显示。
+String zoneLabelText(Object? label) {
+  final l = '${label ?? ''}';
+  if (appLang.value == AppLang.zh) return l;
+  return switch (l) { '禁行区' => 'No-go zone', '限速区' => 'Speed-limit zone', _ => l };
+}
+
 class SiteMappingTrailPage extends StatefulWidget {
   final SiteApi api;
   final String robotId;
@@ -828,7 +836,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                 for (final p in homes)
                   Text(
                       tr(
-                          'Home point · ${p['robot_id']} · ${p['name']}  '
+                          'Origin · ${p['robot_id']} · ${p['name']}  '
                               '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})',
                           '原点 · ${p['robot_id']} · ${p['name']}  '
                               '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
@@ -873,8 +881,8 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
         Row(children: [
           Expanded(
               child: Text(z['kind'] == 'nogo'
-                  ? tr('No-go · ${z['label'] ?? ''} (${z['id']})', '禁行 · ${z['label'] ?? ''}（${z['id']}）')
-                  : tr('Limit ${z['max_speed_mps']} m/s · ${z['label'] ?? ''} (${z['id']})',
+                  ? tr('No-go · ${zoneLabelText(z['label'])} (${z['id']})', '禁行 · ${z['label'] ?? ''}（${z['id']}）')
+                  : tr('Limit ${z['max_speed_mps']} m/s · ${zoneLabelText(z['label'])} (${z['id']})',
                       '限速 ${z['max_speed_mps']} m/s · ${z['label'] ?? ''}（${z['id']}）'))),
           if (admin && _drawing == null)
             IconButton(
