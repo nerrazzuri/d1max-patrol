@@ -412,6 +412,7 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
                   robots: _robots,
                   deterring: _deter.keys.toSet(),
                   activityOf: robotStatusLine,
+                  loadSummary: widget.api.watchSummary,
                   onOpen: (id) => Navigator.push(context,
                       MaterialPageRoute<void>(builder: (_) => SiteRobotPage(api: widget.api, robotId: id)))),
             ]),
