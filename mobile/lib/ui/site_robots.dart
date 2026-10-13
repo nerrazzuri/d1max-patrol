@@ -11,12 +11,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'nw/nw_p3_robots.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 import 'site_deterrence.dart';
 import 'site_mode.dart';
 import 'site_robot.dart';
@@ -303,96 +305,119 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = Nw.of(context);
     final role = widget.api.session?.role ?? '';
     final title = widget.title ?? tr('Site', '站点');
     return Scaffold(
-      appBar: AppBar(title: Text(tr('$title ($role)', '$title（$role）')), actions: [
-        if (widget.push != null)
-          ValueListenableBuilder<PushState>(
-              valueListenable: widget.push!.state,
-              builder: (_, st, _) => st == PushState.off
-                  ? const SizedBox.shrink()
-                  : Tooltip(
-                      key: SiteRobotsPage.pushKey,
-                      message: st == PushState.ready
-                          ? tr('P1 push: ready', 'P1 推送：已就绪')
-                          : tr('P1 push: not ready (${widget.push!.reason})',
-                              'P1 推送：还没就绪（${widget.push!.reason}）'),
-                      child: Icon(
-                          st == PushState.ready
-                              ? Icons.notifications_on
-                              : Icons.notifications_paused,
-                          color: st == PushState.ready ? D1Color.text : D1Color.p2))),
-        if (widget.watch.supported && widget.entry != null)
-          IconButton(
-              key: SiteRobotsPage.bgWatchKey,
-              tooltip: _bgOn
-                  ? tr('Background watch: on (tap to turn off)', '后台值守：开着（点了关）')
-                  : tr('Background watch: off (tap to turn on)', '后台值守：关着（点了开）'),
-              icon: Icon(_bgOn ? Icons.shield : Icons.shield_outlined,
-                  color: _bgOn ? D1Color.text : null),
-              onPressed: _bgBusy ? null : _bgToggle),
+      body: Column(children: [
+        NwHeader(
+            overline: tr('Robot fleet', '狗'),
+            title: tr('$title ($role)', '$title（$role）'),
+            // 能退就给返回：从站点列表登录进来的，返回 = 离开站点（注销）
+            leading: Navigator.canPop(context) ? const BackButton() : null,
+            trailing: [
+              if (widget.push != null)
+                ValueListenableBuilder<PushState>(
+                    valueListenable: widget.push!.state,
+                    builder: (_, st, _) => st == PushState.off
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: Nw.s8),
+                            child: Tooltip(
+                                key: SiteRobotsPage.pushKey,
+                                message: st == PushState.ready
+                                    ? tr('P1 push: ready', 'P1 推送：已就绪')
+                                    : tr('P1 push: not ready (${widget.push!.reason})',
+                                        'P1 推送：还没就绪（${widget.push!.reason}）'),
+                                // 就绪是绿的；没就绪换一个图标（不只靠颜色）
+                                child: Icon(
+                                    st == PushState.ready
+                                        ? Icons.notifications_on
+                                        : Icons.notifications_paused,
+                                    color: st == PushState.ready ? c.success : c.textSecondary)))),
+              if (widget.watch.supported && widget.entry != null)
+                IconButton(
+                    key: SiteRobotsPage.bgWatchKey,
+                    tooltip: _bgOn
+                        ? tr('Background watch: on (tap to turn off)', '后台值守：开着（点了关）')
+                        : tr('Background watch: off (tap to turn on)', '后台值守：关着（点了开）'),
+                    icon: Icon(_bgOn ? Icons.shield : Icons.shield_outlined,
+                        color: _bgOn ? c.success : c.textSecondary),
+                    onPressed: _bgBusy ? null : _bgToggle),
+            ]),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _reload,
+            child: ListView(padding: const EdgeInsets.all(Nw.s16), children: [
+              if (!_live)
+                Padding(
+                    padding: const EdgeInsets.only(bottom: Nw.s8),
+                    child: NwNotice(
+                        key: const Key('live-lost'),
+                        tone: NwTone.neutral,
+                        icon: Icons.sync_problem_rounded,
+                        text: tr('Live updates disconnected. Reconnecting; pull down to refresh',
+                            '实时更新没连上，正在重连；下拉可以手动刷新'))),
+              if (_error != null)
+                Padding(
+                    padding: const EdgeInsets.only(bottom: Nw.s8),
+                    child: NwNotice(text: _error!, tone: NwTone.error)),
+              if (_mode != null)
+                Padding(
+                    padding: const EdgeInsets.only(bottom: Nw.s8),
+                    child: NwBanner(
+                      key: SiteRobotsPage.modeKey,
+                      icon: modeIcon('${_mode!['mode']}'),
+                      title: tr('Mode: ${modeText(_mode!)}', '模式：${modeText(_mode!)}'),
+                      onTap: () async {
+                        await Navigator.push(
+                            context, MaterialPageRoute<void>(builder: (_) => SiteModePage(api: widget.api)));
+                        await _reload();
+                      },
+                    )),
+              if (_weather != null)
+                Padding(
+                    padding: const EdgeInsets.only(bottom: Nw.s8),
+                    child: NwBanner(
+                      key: SiteRobotsPage.weatherKey,
+                      icon: weatherIcon('${_weather!['condition']}'),
+                      title: weatherText(_weather!),
+                      onTap: () async {
+                        await Navigator.push(context,
+                            MaterialPageRoute<void>(builder: (_) => SiteWeatherPage(api: widget.api)));
+                        await _reload();
+                      },
+                    )),
+              for (final e in _deter.entries)
+                Padding(
+                    padding: const EdgeInsets.only(bottom: Nw.s8),
+                    child: NwBanner(
+                      key: Key('deterrence-${e.key}'),
+                      tone: NwTone.error,
+                      icon: Icons.campaign_rounded,
+                      title: tr('${e.key} deterring · ${deterSessionText(e.value)}',
+                          '${e.key} 驱离中 · ${deterSessionText(e.value)}'),
+                      subtitle: tr('Zone ${e.value['zone']}${deterSceneText(e.value)}',
+                          '防区 ${e.value['zone']}${deterSceneText(e.value)}'),
+                      onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute<void>(
+                              builder: (_) => SiteDeterrencePage(api: widget.api, robotId: e.key))),
+                    )),
+              if (_mode != null || _weather != null || _deter.isNotEmpty) const SizedBox(height: Nw.s8),
+              // 筛选、一只狗一张卡（Key 是 robot-<编号>）。**要带 Key**：上面的横幅多一条少一条，它在列表里
+              // 的位置就变了，不带 Key 的话它的状态（选的哪一格）会被换掉。
+              NwFleet(
+                  key: const ValueKey<String>('robots-fleet'),
+                  robots: _robots,
+                  deterring: _deter.keys.toSet(),
+                  activityOf: robotStatusLine,
+                  onOpen: (id) => Navigator.push(context,
+                      MaterialPageRoute<void>(builder: (_) => SiteRobotPage(api: widget.api, robotId: id)))),
+            ]),
+          ),
+        ),
       ]),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: ListView(children: [
-          if (!_live)
-            ListTile(
-                key: const Key('live-lost'),
-                leading: const Icon(Icons.sync_problem, color: D1Color.p2),
-                title: Text(tr('Live updates disconnected. Reconnecting; pull down to refresh',
-                    '实时更新没连上，正在重连；下拉可以手动刷新'))),
-          if (_error != null)
-            ListTile(title: Text(_error!, style: const TextStyle(color: D1Color.p1Text))),
-          if (_mode != null)
-            ListTile(
-              key: SiteRobotsPage.modeKey,
-              leading: Icon(modeIcon('${_mode!['mode']}'), color: modeColor('${_mode!['mode']}')),
-              title: Text(tr('Mode: ${modeText(_mode!)}', '模式：${modeText(_mode!)}')),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                await Navigator.push(
-                    context, MaterialPageRoute<void>(builder: (_) => SiteModePage(api: widget.api)));
-                await _reload();
-              },
-            ),
-          if (_weather != null)
-            ListTile(
-              key: SiteRobotsPage.weatherKey,
-              leading: Icon(weatherIcon('${_weather!['condition']}'), color: weatherColor('${_weather!['condition']}')),
-              title: Text(weatherText(_weather!)),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                await Navigator.push(
-                    context, MaterialPageRoute<void>(builder: (_) => SiteWeatherPage(api: widget.api)));
-                await _reload();
-              },
-            ),
-          for (final e in _deter.entries)
-            ListTile(
-              key: Key('deterrence-${e.key}'),
-              tileColor: D1Color.p1Bg,
-              leading: const Icon(Icons.campaign, color: D1Color.p1Text),
-              title: Text(tr('${e.key} deterring · ${deterSessionText(e.value)}',
-                  '${e.key} 驱离中 · ${deterSessionText(e.value)}')),
-              subtitle: Text(tr('Zone ${e.value['zone']}${deterSceneText(e.value)}',
-                  '防区 ${e.value['zone']}${deterSceneText(e.value)}')),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.push(context,
-                  MaterialPageRoute<void>(builder: (_) => SiteDeterrencePage(api: widget.api, robotId: e.key))),
-            ),
-          for (final r in _robots)
-            ListTile(
-              key: Key('robot-${r['robot_id']}'),
-              title: Text('${r['robot_id']}'),
-              subtitle: Text(robotStatusLine(r)),
-              onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute<void>(
-                      builder: (_) => SiteRobotPage(api: widget.api, robotId: '${r['robot_id']}'))),
-            ),
-        ]),
-      ),
     );
   }
 }

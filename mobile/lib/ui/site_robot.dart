@@ -8,9 +8,12 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_button.dart';
+import 'nw/nw_p3_robots.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 import 'site_deter.dart';
 import 'site_logs.dart';
 import 'site_mapping.dart';
@@ -343,165 +346,305 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         tr('Dispatch patrol $pick', '派巡检 $pick'));
   }
 
+  /// 诊断卡的各行：只放狗自己报的（代理、适配器、当前版本、兼容级、传感器、上装）和站点估的钟差。
+  /// 没报的那一行不出；一行都没有就不出这张卡。
+  List<(IconData, String, String)> _diagnostics(Map<String, dynamic>? v) {
+    final caps = v?['capabilities'];
+    if (caps is! Map) return const [];
+    final tasks = caps['tasks'];
+    final rel = tasks is Map ? tasks['release_install'] : null;
+    final compat = tasks is Map ? tasks['compat'] : null;
+    String on(Object? m) =>
+        m is Map ? [for (final e in m.entries) if (e.value == true) '${e.key}'].join(', ') : '';
+    final skew = v?['clock_skew_s'];
+    return [
+      if (caps['agent'] is String) (Icons.memory_rounded, tr('Agent version', '代理版本'), '${caps['agent']}'),
+      if (caps['adapter'] is String) (Icons.settings_input_component_rounded, tr('Adapter', '适配器'), '${caps['adapter']}'),
+      if (rel is Map && rel['current'] is String)
+        (Icons.system_update_rounded, tr('Installed release', '当前版本'), '${rel['current']}'),
+      if (compat is Map && compat['level'] != null)
+        (Icons.handshake_rounded, tr('Compatibility level', '兼容级'), '${compat['level']}'),
+      if (on(caps['sensing']).isNotEmpty) (Icons.sensors_rounded, tr('Sensors', '传感器'), on(caps['sensing'])),
+      if (on(caps['actuators']).isNotEmpty) (Icons.campaign_rounded, tr('Payload', '上装'), on(caps['actuators'])),
+      if (skew is num)
+        (Icons.schedule_rounded, tr('Clock offset', '钟差'), tr('${skew.toStringAsFixed(1)} s', '${skew.toStringAsFixed(1)} 秒')),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
+    final c = Nw.of(context);
     final s = widget.api.session;
     final v = _view;
     final st = v?['status'];
     final task = st is Map ? st['task'] : null;
     final taskId = task is Map && task['task_id'] is String ? task['task_id'] as String : null;
     final events = (v?['events'] as List? ?? const []).whereType<Map>().toList();
+    final phase = v == null ? null : robotPhase(v);
+    final dispatch = s?.canDispatch ?? false;
+    final maps = s?.canManageMaps ?? false;
+    void go(Widget Function() page) =>
+        Navigator.push(context, MaterialPageRoute<void>(builder: (_) => page()));
+    // 宽的（横屏手机、平板、桌面）：画面在左、操作在右，不用翻就按得到；竖屏手机一栏往下排。
+    final wide = MediaQuery.sizeOf(context).width >= 700;
+
+    final ops = <Widget>[
+      if (dispatch)
+        NwOpTile(
+            tileKey: const Key('btn-patrol'),
+            icon: Icons.explore_rounded,
+            label: tr('Dispatch patrol', '派巡检'),
+            onTap: _patrol),
+      if (dispatch)
+        NwOpTile(
+            tileKey: const Key('btn-standby'),
+            icon: Icons.home_rounded,
+            label: tr('Return to standby', '回待命点'),
+            onTap: () =>
+                _do(() => widget.api.returnToStandby(widget.robotId), tr('Return to standby', '回待命点'))),
+      // 连续录像（W18）：谁都能看
+      NwOpTile(
+          tileKey: const Key('btn-recordings'),
+          icon: Icons.videocam_rounded,
+          label: tr('Recordings', '录像'),
+          onTap: () => go(() => SiteRecordingsPage(api: widget.api, robotId: widget.robotId))),
+      if (s?.canTeleop ?? false)
+        NwOpTile(
+            tileKey: const Key('btn-teleop'),
+            icon: Icons.sports_esports_rounded,
+            label: tr('Remote control', '遥控'),
+            onTap: () => go(() => SiteTeleopPage(api: widget.api, robotId: widget.robotId))),
+      // 上装（W21）：警灯、警笛、聚光灯、喇叭。保安、管理员；狗报了 deter 才有
+      if (dispatch && robotCan(v, 'deter'))
+        NwOpTile(
+            tileKey: const Key('btn-deter'),
+            icon: Icons.volume_up_rounded,
+            label: tr('Payload…', '上装…'),
+            onTap: () => go(() => SiteDeterPage(
+                api: widget.api,
+                robotId: widget.robotId,
+                caps: Map<String, dynamic>.from(
+                    ((v?['capabilities'] as Map)['tasks'] as Map)['deter'] as Map)))),
+      if (dispatch && robotCan(v, 'relocalize'))
+        NwOpTile(
+            tileKey: const Key('btn-relocalize'),
+            icon: Icons.my_location_rounded,
+            label: tr('Set position', '设位置'),
+            onTap: _relocalize),
+      // 待命点与原点（W13a）：列表、回指定的一个；管理员在这儿设、设默认、删
+      if (dispatch || maps)
+        NwOpTile(
+            tileKey: const Key('btn-standby-list'),
+            icon: Icons.flag_rounded,
+            label: tr('Standby points…', '待命点…'),
+            onTap: () => go(() => SiteStandbyPage(
+                api: widget.api, robotId: widget.robotId, canMarkHere: robotCanStandbyHere(v)))),
+    ];
+    final admin = <Widget>[
+      if (maps && robotCan(v, 'mapping')) ...[
+        NwOpTile(
+            tileKey: const Key('btn-record-start'),
+            icon: Icons.fiber_manual_record_rounded,
+            label: tr('Start bag recording', '开始录包'),
+            onTap: _startRecord),
+        NwOpTile(
+            tileKey: const Key('btn-record-stop'),
+            icon: Icons.stop_rounded,
+            label: tr('Stop bag recording', '停止录包'),
+            onTap: () => _do(
+                () => widget.api.mapping(widget.robotId, 'stop'), tr('Stop bag recording', '停止录包'))),
+      ],
+      if (maps && robotCan(v, 'mark_home'))
+        NwOpTile(
+            tileKey: const Key('btn-mark-home'),
+            icon: Icons.add_location_alt_rounded,
+            label: tr('Mark origin here', '在这儿标原点'),
+            onTap: _markHome),
+      if (maps && robotCan(v, 'mapping_trail'))
+        NwOpTile(
+            tileKey: const Key('btn-mapping-trail'),
+            icon: Icons.timeline_rounded,
+            label: tr('Bag recording trail', '录包轨迹'),
+            onTap: _openTrail),
+      // 建图进程日志（W00c6g）：管理员看录包、重建子进程的日志，不用再 SSH 上狗。
+      if (maps && robotCan(v, 'proc_log'))
+        NwOpTile(
+            tileKey: const Key('btn-proc-logs'),
+            icon: Icons.article_rounded,
+            label: tr('Mapping logs', '建图日志'),
+            onTap: () => go(() => SiteProcLogsPage(api: widget.api, robotId: widget.robotId))),
+    ];
+    final diag = _diagnostics(v);
+    final battery = robotBattery(v);
+    final caps = v?['capabilities'] is Map ? (v!['capabilities'] as Map).cast<String, dynamic>() : null;
+
+    // 最上面：一句话的状态、被叫停的说明、刚才那一下的结果 —— 两种排法都在最上面。
+    final top = <Widget>[
+      Text(v == null ? tr('Loading…', '加载中…') : robotStatusLine(v),
+          key: const Key('robot-status'), style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
+      // 叫停之后站点不再派它（W00c5e）：说清楚，给能派单的人一个「恢复」。
+      if (v?['held'] is Map)
+        Padding(
+            padding: const EdgeInsets.only(top: Nw.s8),
+            child: NwCard(
+              key: const Key('robot-held'),
+              tone: NwTone.info,
+              child: Row(children: [
+                Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(tr('Stopped by ${(v!['held'] as Map)['by']}', '被 ${(v['held'] as Map)['by']} 叫停了'),
+                      style: NwText.titleSmall.copyWith(color: c.text)),
+                  const SizedBox(height: Nw.s4),
+                  Text(
+                      tr(
+                          'The site will not dispatch it (schedule, incidents, return to standby, remote control) '
+                              'until you tap Resume',
+                          '站点不会再派它（排程、事件、回待命点、遥控都不派），点「恢复」之后才派'),
+                      style: NwText.bodySmall.copyWith(color: c.textSecondary)),
+                ])),
+                if (dispatch) ...[
+                  const SizedBox(width: Nw.s8),
+                  NwButton(
+                      buttonKey: const Key('btn-resume'),
+                      label: tr('Resume', '恢复'),
+                      onPressed: () => _do(() => widget.api.resume(widget.robotId), tr('Resume', '恢复'))),
+                ],
+              ]),
+            )),
+      if (_msg != null)
+        Padding(padding: const EdgeInsets.only(top: Nw.s8), child: NwNotice(text: _msg!, tone: NwTone.neutral)),
+      const SizedBox(height: Nw.s16),
+    ];
+    // 画面经站点来（W00c5b）：谁都能看（业主也是），站点那头有人看才让狗推。
+    final facts = <Widget>[
+      SiteVideo(api: widget.api, robotId: widget.robotId),
+      const SizedBox(height: Nw.s16),
+      IntrinsicHeight(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Expanded(
+            flex: 2,
+            child: NwInfoTile(
+                icon: battery == null
+                    ? Icons.battery_unknown_rounded
+                    : (battery < NwBattery.lowBelow ? Icons.battery_alert_rounded : Icons.battery_full_rounded),
+                label: tr('Battery', '电量'),
+                value: battery == null ? '--' : '${battery.round()}%',
+                tone: battery == null
+                    ? NwTone.neutral
+                    : nwToneOf(battery < NwBattery.lowBelow ? 'lowBattery' : 'battery'))),
+        const SizedBox(width: Nw.s8),
+        Expanded(
+            flex: 3,
+            child: v?['loc'] is Map
+                ? NwInfoTile(
+                    key: const Key('robot-loc'),
+                    icon: Icons.location_on_rounded,
+                    label: tr('Position', '定位'),
+                    value: locText((v!['loc'] as Map).cast<String, dynamic>()))
+                : NwInfoTile(
+                    icon: Icons.location_on_rounded, label: tr('Position', '定位'), value: tr('Not reported', '没上报'))),
+      ])),
+      if (v?['rtk'] is Map)
+        Padding(
+            padding: const EdgeInsets.only(top: Nw.s8),
+            child: Text(rtkText((v!['rtk'] as Map).cast<String, dynamic>()),
+                key: const Key('robot-rtk'), style: NwText.bodyMedium.copyWith(color: c.text))),
+      if (caps != null && headText(caps).isNotEmpty)
+        Padding(
+            padding: const EdgeInsets.only(top: Nw.s8),
+            child: NwNotice(key: const Key('robot-head'), text: headText(caps), tone: NwTone.info)),
+      if (caps != null && obstaclesText(caps).isNotEmpty)
+        Padding(
+            padding: const EdgeInsets.only(top: Nw.s8),
+            child: Text(obstaclesText(caps),
+                key: const Key('robot-obstacles'), style: NwText.bodyMedium.copyWith(color: c.text))),
+      const SizedBox(height: Nw.s16),
+    ];
+    final actions = <Widget>[
+      if (ops.isNotEmpty) ...[
+        NwSectionLabel(tr('Operations', '操作')),
+        const SizedBox(height: Nw.s8),
+        NwTileGrid(columns: wide ? 4 : 3, children: ops),
+        const SizedBox(height: Nw.s16),
+      ],
+      if (admin.isNotEmpty) ...[
+        NwSectionLabel(tr('Admin', '管理')),
+        const SizedBox(height: Nw.s8),
+        NwTileGrid(columns: wide ? 4 : 3, children: admin),
+        const SizedBox(height: Nw.s16),
+      ],
+    ];
+    final diagnostics = <Widget>[
+      if (diag.isNotEmpty) ...[
+        NwSectionLabel(tr('Diagnostics', '诊断')),
+        const SizedBox(height: Nw.s8),
+        NwCard(
+            key: const Key('robot-diagnostics'),
+            padding: EdgeInsets.zero,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              for (final d in diag) NwDiagnosticRow(icon: d.$1, label: d.$2, value: d.$3),
+            ])),
+        const SizedBox(height: Nw.s16),
+      ],
+    ];
     return Scaffold(
-      appBar: AppBar(title: Text(widget.robotId)),
-      // 「我在现场监护」钉在列表外面（W00c6i 内审）：放在按需构建的列表里，上面插一行提示或者往下一翻，
-      // 它的状态就被换掉、发出放租 —— 刚派出去的任务随即被中止。
+      // 页头：返回、编号、状态，右上是红色的「叫停」—— 任何时候都在屏幕里，不跟着滚。没任务时置灰。
       body: Column(children: [
+        NwHeader(
+            title: widget.robotId,
+            leading: Navigator.canPop(context) ? const BackButton() : null,
+            trailing: [
+              if (phase != null)
+                ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 120),
+                    child: NwStatusPill(
+                        key: const Key('robot-phase'), label: robotPhaseLabel(phase), tone: robotPhaseTone(phase))),
+              if (s?.canAbort ?? false) ...[
+                const SizedBox(width: Nw.s8),
+                // 没在跑任务：灰的、按不动，也不带 btn-abort 这个 Key（有 Key 的那个一定按得动）
+                NwButton(
+                    buttonKey: taskId != null ? const Key('btn-abort') : const Key('btn-abort-off'),
+                    variant: NwButtonVariant.destructive,
+                    size: NwButtonSize.large,
+                    icon: Icons.stop_circle_rounded,
+                    label: tr('Stop', '叫停'),
+                    onPressed: taskId != null ? _abort : null),
+                const SizedBox(width: Nw.s8),
+              ],
+            ]),
+        // 「我在现场监护」钉在列表外面（W00c6i 内审）：放在按需构建的列表里，上面插一行提示或者往下一翻，
+        // 它的状态就被换掉、发出放租 —— 刚派出去的任务随即被中止。
         if ((s?.canDispatch ?? false) && robotNeedsSupervision(v))
           SupervisionSwitch(
               key: ValueKey('supervise-${widget.robotId}'), api: widget.api, robotId: widget.robotId),
         Expanded(
           child: RefreshIndicator(
         onRefresh: _reload,
-        child: ListView(padding: const EdgeInsets.all(12), children: [
-          Text(v == null ? tr('Loading…', '加载中…') : robotStatusLine(v), key: const Key('robot-status')),
-          if (v?['loc'] is Map)
-            Text(locText((v!['loc'] as Map).cast<String, dynamic>()), key: const Key('robot-loc')),
-          if (v?['rtk'] is Map)
-            Text(rtkText((v!['rtk'] as Map).cast<String, dynamic>()), key: const Key('robot-rtk')),
-          if (v?['capabilities'] is Map &&
-              headText((v!['capabilities'] as Map).cast<String, dynamic>()).isNotEmpty)
-            Text(headText((v['capabilities'] as Map).cast<String, dynamic>()),
-                key: const Key('robot-head'), style: const TextStyle(color: D1Color.p2)),
-          if (v?['capabilities'] is Map &&
-              obstaclesText((v!['capabilities'] as Map).cast<String, dynamic>()).isNotEmpty)
-            Text(obstaclesText((v['capabilities'] as Map).cast<String, dynamic>()),
-                key: const Key('robot-obstacles')),
-          // 叫停之后站点不再派它（W00c5e）：说清楚，给能派单的人一个「恢复」。
-          if (v?['held'] is Map)
-            Card(
-              key: const Key('robot-held'),
-              color: D1Color.p2Bg,
-              child: ListTile(
-                title: Text(tr('Stopped by ${(v!['held'] as Map)['by']}',
-                    '被 ${(v['held'] as Map)['by']} 叫停了')),
-                subtitle: Text(tr(
-                    'The site will not dispatch it (schedule, incidents, return to standby, remote control) '
-                        'until you tap Resume',
-                    '站点不会再派它（排程、事件、回待命点、遥控都不派），点「恢复」之后才派')),
-                trailing: (s?.canDispatch ?? false)
-                    ? FilledButton(
-                        key: const Key('btn-resume'),
-                        onPressed: () => _do(() => widget.api.resume(widget.robotId), tr('Resume', '恢复')),
-                        child: Text(tr('Resume', '恢复')))
-                    : null,
-              ),
-            ),
-          if (_msg != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_msg!)),
-          const SizedBox(height: 12),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            if (s?.canDispatch ?? false)
-              FilledButton(
-                  key: const Key('btn-patrol'), onPressed: _patrol, child: Text(tr('Dispatch patrol', '派巡检'))),
-            // 连续录像（W18）：谁都能看
-            OutlinedButton(
-                key: const Key('btn-recordings'),
-                onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute<void>(
-                        builder: (_) => SiteRecordingsPage(api: widget.api, robotId: widget.robotId))),
-                child: Text(tr('Recordings', '录像'))),
-            if (s?.canTeleop ?? false)
-              FilledButton.tonal(
-                  key: const Key('btn-teleop'),
-                  onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute<void>(
-                          builder: (_) =>
-                              SiteTeleopPage(api: widget.api, robotId: widget.robotId))),
-                  child: Text(tr('Remote control', '遥控'))),
-            if ((s?.canManageMaps ?? false) && robotCan(v, 'mapping')) ...[
-              OutlinedButton(
-                  key: const Key('btn-record-start'),
-                  onPressed: _startRecord,
-                  child: Text(tr('Start bag recording', '开始录包'))),
-              OutlinedButton(
-                  key: const Key('btn-record-stop'),
-                  onPressed: () => _do(() => widget.api.mapping(widget.robotId, 'stop'),
-                      tr('Stop bag recording', '停止录包')),
-                  child: Text(tr('Stop bag recording', '停止录包'))),
-            ],
-            if ((s?.canManageMaps ?? false) && robotCan(v, 'mark_home'))
-              OutlinedButton(
-                  key: const Key('btn-mark-home'),
-                  onPressed: _markHome,
-                  child: Text(tr('Mark origin here', '在这儿标原点'))),
-            if ((s?.canManageMaps ?? false) && robotCan(v, 'mapping_trail'))
-              OutlinedButton(
-                  key: const Key('btn-mapping-trail'), onPressed: _openTrail,
-                  child: Text(tr('Bag recording trail', '录包轨迹'))),
-            // 建图进程日志（W00c6g）：管理员看录包、重建子进程的日志，不用再 SSH 上狗。
-            if ((s?.canManageMaps ?? false) && robotCan(v, 'proc_log'))
-              OutlinedButton(
-                  key: const Key('btn-proc-logs'),
-                  onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute<void>(
-                          builder: (_) =>
-                              SiteProcLogsPage(api: widget.api, robotId: widget.robotId))),
-                  child: Text(tr('Mapping logs', '建图日志'))),
-            // 上装（W21）：警灯、警笛、聚光灯、喇叭。保安、管理员；狗报了 deter 才有
-            if ((s?.canDispatch ?? false) && robotCan(v, 'deter'))
-              OutlinedButton(
-                  key: const Key('btn-deter'),
-                  onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute<void>(
-                          builder: (_) => SiteDeterPage(
-                              api: widget.api,
-                              robotId: widget.robotId,
-                              caps: Map<String, dynamic>.from(
-                                  ((v?['capabilities'] as Map)['tasks'] as Map)['deter'] as Map)))),
-                  child: Text(tr('Payload…', '上装…'))),
-            if ((s?.canDispatch ?? false) && robotCan(v, 'relocalize'))
-              OutlinedButton(
-                  key: const Key('btn-relocalize'),
-                  onPressed: _relocalize,
-                  child: Text(tr('Set position', '设位置'))),
-            if (s?.canDispatch ?? false)
-              OutlinedButton(
-                  key: const Key('btn-standby'),
-                  onPressed: () => _do(() => widget.api.returnToStandby(widget.robotId),
-                      tr('Return to standby', '回待命点')),
-                  child: Text(tr('Return to standby', '回待命点'))),
-            // 待命点与原点（W13a）：列表、回指定的一个；管理员在这儿设、设默认、删
-            if ((s?.canDispatch ?? false) || (s?.canManageMaps ?? false))
-              OutlinedButton(
-                  key: const Key('btn-standby-list'),
-                  onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute<void>(
-                          builder: (_) => SiteStandbyPage(
-                              api: widget.api,
-                              robotId: widget.robotId,
-                              canMarkHere: robotCanStandbyHere(v)))),
-                  child: Text(tr('Standby points…', '待命点…'))),
-            if ((s?.canAbort ?? false) && taskId != null)
-              FilledButton(
-                  key: const Key('btn-abort'),
-                  style: FilledButton.styleFrom(
-                      backgroundColor: D1Color.p1,
-                      foregroundColor: D1Color.onSolid,
-                      side: const BorderSide(color: D1Color.p1Frame, width: D1Size.stopAllRing)),
-                  onPressed: _abort,
-                  child: Text(tr('Stop', '叫停'))),
-          ]),
-          const SizedBox(height: 12),
-          // 画面经站点来（W00c5b）：谁都能看（业主也是），站点那头有人看才让狗推。
-          // **放在按钮下面**：叫停要一眼就按得到，不许被画面挤出屏幕。
-          SiteVideo(api: widget.api, robotId: widget.robotId),
-          const Divider(),
+        child: ListView(padding: const EdgeInsets.all(Nw.s16), children: [
+          // 最上面那几行包成一个：多一行少一行，下面的画面在列表里的位置不变（位置一变它就得重连）
+          Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: top),
+          if (wide)
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                  flex: 5,
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch, children: [...facts, ...diagnostics])),
+              const SizedBox(width: Nw.s16),
+              Expanded(
+                  flex: 6, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: actions)),
+            ])
+          else ...[
+            ...facts,
+            ...actions,
+            ...diagnostics,
+          ],
+          if (events.isNotEmpty) NwSectionLabel(tr('Recent events', '最近的事件')),
           for (final e in events.take(30))
-            ListTile(dense: true, title: Text('${e['kind']}'), subtitle: Text('${e['data']}')),
+            ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text('${e['kind']}'),
+                subtitle: Text('${e['data']}')),
         ]),
           ),
         ),
