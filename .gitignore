@@ -41,3 +41,6 @@ motion/hold02
 .superpowers/
 
 motion/test_vel_gate
+
+# agent 的 worktree 在这下面
+.claude/
