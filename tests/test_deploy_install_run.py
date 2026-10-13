@@ -48,6 +48,8 @@ def _准备(root: Path) -> Path:
     _stub(stub / "systemctl", f'''echo "systemctl $*" >> "{log}"
 case "$1" in
   is-active) exit 3 ;;
+  is-enabled) for u in "$@"; do case "$u" in *.service)
+      [ -e "{root}/etc/systemd/system/multi-user.target.wants/$u" ] || exit 1;; esac; done ;;
   disable) for u in "$@"; do case "$u" in *.service)
       rm -f "{root}/etc/systemd/system/multi-user.target.wants/$u";; esac; done ;;
   enable) mkdir -p "{root}/etc/systemd/system/multi-user.target.wants"
@@ -78,8 +80,8 @@ exit 0
     return script
 
 
-def _跑(root: Path, script: Path) -> subprocess.CompletedProcess:
-    env = {"PATH": f"{root / 'stub'}:{os.environ['PATH']}", "HOME": str(root)}
+def _跑(root: Path, script: Path, **extra: str) -> subprocess.CompletedProcess:
+    env = {"PATH": f"{root / 'stub'}:{os.environ['PATH']}", "HOME": str(root)} | extra
     return subprocess.run(["bash", str(script), str(root / "pkg" / PKG_NAME)],
                           capture_output=True, text=True, timeout=120, env=env)
 
@@ -195,3 +197,58 @@ def test_包里没有代理启动脚本_盘上一个字节都不动就停(tmp_pa
     assert "启动脚本" in got.stderr
     assert not (tmp_path / "opt/d1max").exists(), "1/7 还没开始"
     assert not (tmp_path / "calls").exists(), "systemctl、chown、python 一个都没跑"
+
+
+# ---------------------------------------------------------------- W35(2026-10-13 C40221 第二轮)
+
+
+def test_W35_包里带了离线轮子_没给pip参数就只从它装_给了就听给的(tmp_path):
+    """现场:清单写的 ``/home/robot/wheels`` 在这只狗上不存在,包里其实带着 ``wheels/``(站点下发的
+    版本就是从它装的)。没给 ``D1MAX_PIP_ARGS`` 就用包里的;给了(哪怕是空的)听给的。"""
+    script = _准备(tmp_path)
+    wheels = tmp_path / "pkg" / PKG_NAME / "wheels"
+    wheels.mkdir()
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    pips = [c for c in _调用(tmp_path) if "-m pip install" in c]
+    assert pips and all(f"--no-index --find-links={wheels}" in c for c in pips), pips
+    assert "离线轮子" in got.stdout
+    for given in ("--no-index --find-links=/media/usb/wheels", ""):
+        root = tmp_path / f"given{len(given)}"
+        root.mkdir()
+        script = _准备(root)
+        (root / "pkg" / PKG_NAME / "wheels").mkdir()
+        got = _跑(root, script, D1MAX_PIP_ARGS=given)
+        assert got.returncode == 0, got.stdout + got.stderr
+        pips = [c for c in _调用(root) if "-m pip install" in c]
+        assert pips and not any("find-links=" + str(root / "pkg") in c for c in pips), pips
+        if given:
+            assert all(given in c for c in pips)
+
+
+def test_W35_包里没带轮子_不加参数(tmp_path):
+    script = _准备(tmp_path)
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0
+    assert not any("--no-index" in c for c in _调用(tmp_path))
+
+
+def test_W35_开关写了bridge但服务没设自启_提示一句_设了就不提(tmp_path):
+    """现场:定位器、感知、人员检测三个服务是手工 ``start`` 的,整机断电再开都不起,代理一直报没连上。
+    装机脚本照旧不替人 enable(真机验过才起用),但 env 里已经写了要用、服务却没设自启的,说出来。"""
+    script = _准备(tmp_path)
+    etc = tmp_path / "etc/d1max"
+    etc.mkdir(parents=True)
+    (etc / "env").write_text("D1MAX_SITE_MQTT=\nD1MAX_MAP=\nD1MAX_HOME=\nD1MAX_HAL=sim\n"
+                             "D1MAX_LOCALIZER=bridge\n  D1MAX_OBSTACLES=bridge\n"
+                             "#   D1MAX_PERSONS=bridge\n", encoding="utf-8")
+    wants = tmp_path / "etc/systemd/system/multi-user.target.wants"
+    wants.mkdir(parents=True)
+    (wants / "d1max-obstacles.service").write_text("", encoding="utf-8")
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert "sudo systemctl enable --now d1max-localizer" in got.stdout
+    assert "enable --now d1max-obstacles" not in got.stdout, "已经设了自启"
+    assert "enable --now d1max-persons" not in got.stdout, "注释掉的不算"
+    assert not any(c.startswith("systemctl enable") and "localizer" in c
+                   for c in _调用(tmp_path)), "只提示,不替人 enable"

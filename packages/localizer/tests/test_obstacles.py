@@ -13,6 +13,7 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from d1max_localizer.obstacles import (  # noqa: E402
+    REFIT_EVERY,
     Config,
     LineClient,
     Mount,
@@ -523,3 +524,36 @@ def test_地面拟合最多抽四千个候选点():
     n, h, frac = fit_ground(np.vstack([地面, 杂点]))     # 不抽的话占比是 40000/40007,不是整数倍
     assert abs(frac * 4000 - round(frac * 4000)) < 1e-6
     assert n[2] > 0.99 and abs(h - 0.5) < 0.02
+
+
+def test_W35_自检没过_狗站起来之后自己再判_不用重启():
+    """2026-10-13 C40221:感知在狗趴着时起来,量到地面歪 9.1° 判没过,之后狗站起来也一直是没过、站点
+    拒派「避障用不了」,要人去重启感知。没过之后接着攒帧,攒够一轮再判一次。"""
+    lying = 场景()
+    lying[:, 2] += lying[:, 0] * math.tan(math.radians(9.1))
+    c = SelfCheck(frames=3)
+    for _ in range(3):
+        c.feed(lying)
+    assert c.check == "extrinsic_bad"
+    for _ in range(10 * REFIT_EVERY):                           # 还趴着:再判多少轮都是没过
+        c.feed(lying)
+        assert c.check == "extrinsic_bad" and "9.1" in c.reason
+    c._again.clear()
+    states = []
+    for _ in range(4 * REFIT_EVERY):                            # 站起来了
+        c.feed(场景())
+        states.append(c.check)
+    assert states[2 * REFIT_EVERY - 1] == "extrinsic_bad", "攒够一轮(3 次拟合)之前还是没过"
+    assert states[-1] == "ok" and c.reason == "" and abs(c.height - H) < 0.01
+
+
+def test_W35_自检没过之后_趴着站着的帧掺在一起_不算过():
+    """重判用的是没过之后新攒的那一轮,不掺以前的;一轮里一半歪的一半正的,中位数歪就还是没过。"""
+    lying = 场景()
+    lying[:, 2] += lying[:, 0] * math.tan(math.radians(9.1))
+    c = SelfCheck(frames=4)
+    for _ in range(4):
+        c.feed(lying)
+    for i in range(12 * REFIT_EVERY):                           # 每一轮都是 3 次歪的、1 次正的
+        c.feed(场景() if (i // REFIT_EVERY) % 4 == 3 else lying)
+        assert c.check == "extrinsic_bad"
