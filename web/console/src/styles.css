@@ -318,7 +318,17 @@ input[type="time"], input[type="date"] { color-scheme: dark; }
 .stat-n { font-size: 28px; line-height: 34px; font-weight: 700; font-family: var(--font-mono); }
 .stat-l { font-size: 14px; line-height: 18px; color: var(--c-textSecondary); }
 .reptable { border-collapse: collapse; font-size: 14px; line-height: 20px; width: 100%; }
-.reptable.narrow { width: auto; min-width: 320px; }
+.reptable.narrow { width: auto; min-width: 320px; align-self: flex-start; }
+/* 宽屏分两栏(用户 2026-10-14 选 A):原来整份限宽 1200、靠左,宽屏上右半边空着。左栏报警,右栏事件、
+   巡检、证据;窄屏和打印还是一栏。 */
+@media (min-width: 1500px) {
+  .sheet { max-width: none; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+           grid-template-rows: auto auto auto auto 1fr auto; gap: 24px 48px; align-items: start; }
+  .sheet > .sheet-head, .sheet > footer { grid-column: 1 / -1; }
+  .sheet > section { grid-column: 2; }
+  /* 左栏跨到那一行 1fr:它比右栏高出来的那一截落在空行里,不把右栏的几节撑开 */
+  .sheet > section:first-of-type { grid-column: 1; grid-row: 2 / span 4; }
+}
 .reptable caption { text-align: left; font-weight: 700; padding: 12px 0 4px; }
 .reptable th { text-align: left; font-weight: 600; color: var(--c-textSecondary); padding: 4px 16px 4px 0; border-bottom: 1px solid var(--c-rule); }
 .reptable td { padding: 4px 16px 4px 0; border-bottom: 1px solid var(--c-rule); vertical-align: top; }
@@ -328,7 +338,8 @@ input[type="time"], input[type="date"] { color-scheme: dark; }
   body { background: #fff; color: #000; }
   .topbar, .subnav, .queue, .noprint, .banner, .toast { display: none !important; }
   .page { padding: 0; }
-  .sheet { max-width: none; color: #000; }
+  .sheet { max-width: none; color: #000; display: flex; }
+  .sheet > section, .sheet > section:first-of-type { grid-column: auto; grid-row: auto; }
   .sheet .muted, .stat-l, .reptable th { color: #444; }
   .sheet h2, .reptable th, .reptable td { border-color: #999; }
   .pri.P1, .pri.P2 { color: #000; }
