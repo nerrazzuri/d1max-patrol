@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 import 'widget/bar_actions.dart';
 
 class SiteStandbyPage extends StatefulWidget {
@@ -199,9 +201,12 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = Nw.of(context);
     final s = widget.api.session;
     final manage = s?.canManageMaps ?? false;
     final dispatch = s?.canDispatch ?? false;
+    final head = NwText.titleSmall.copyWith(color: c.text, fontWeight: FontWeight.bold);
+    final body = NwText.bodyMedium.copyWith(color: c.text);
     return Scaffold(
       appBar: AppBar(
         title: Text(tr('${widget.robotId} · Standby points and origin', '${widget.robotId} · 待命点与原点')),
@@ -221,67 +226,84 @@ class _SiteStandbyPageState extends State<SiteStandbyPage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(Nw.s16),
               children: [
-                if (_msg.isNotEmpty) Text(_msg, key: SiteStandbyPage.msgKey),
+                if (_msg.isNotEmpty)
+                  Padding(
+                      padding: const EdgeInsets.only(bottom: Nw.s16),
+                      child: Text(_msg, key: SiteStandbyPage.msgKey, style: body)),
                 Text(
                   tr(
                       'Origin (safe return and charging; one per map; change it with '
                           '"Mark origin here" on the robot page)',
                       '原点（安全返航、回充；每张图一个，在狗页「在这儿标原点」改）'),
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  style: head,
                 ),
-                if (_homes.isEmpty) Text(tr('No origin marked yet', '还没标过原点')),
-                for (final h in _homes)
-                  Text(
-                    '${h['name']}  ${_xy(h)}',
-                    key: Key('home-${h['map_id']}-${h['map_version']}'),
-                  ),
-                const Divider(),
+                const SizedBox(height: Nw.s8),
+                NwCard(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  if (_homes.isEmpty)
+                    Text(tr('No origin marked yet', '还没标过原点'), style: body.copyWith(color: c.textSecondary)),
+                  for (final h in _homes)
+                    Text(
+                      '${h['name']}  ${_xy(h)}',
+                      key: Key('home-${h['map_id']}-${h['map_version']}'),
+                      style: body,
+                    ),
+                ])),
+                const SizedBox(height: Nw.s24),
                 Text(
                     tr('Standby points (the robot returns to the default one after a task)',
                         '待命点（任务做完回默认的那一个）'),
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                if (_points.isEmpty) Text(tr('No standby points yet', '还没有待命点')),
-                for (final p in _points)
-                  ListTile(
-                    key: Key('standby-${p['name']}'),
-                    dense: true,
-                    title: Text(
-                        '${p['name']}${p['default'] == true ? tr(' (default)', '（默认）') : ''}'),
-                    subtitle: Text(_xy(p)),
-                    trailing: Wrap(
-                      spacing: 4,
-                      children: [
-                        if (dispatch)
-                          OutlinedButton(
-                            key: Key('standby-go-${p['name']}'),
-                            onPressed: () => _run(
-                              () =>
-                                  widget.api.returnToStandby(widget.robotId, name: '${p['name']}'),
-                              tr('Return to standby ${p['name']}', '回待命点 ${p['name']}'),
+                    style: head),
+                const SizedBox(height: Nw.s8),
+                if (_points.isEmpty)
+                  Text(tr('No standby points yet', '还没有待命点'), style: body.copyWith(color: c.textSecondary)),
+                if (_points.isNotEmpty)
+                  NwCard(
+                      padding: EdgeInsets.zero,
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        for (final p in _points)
+                          ListTile(
+                            key: Key('standby-${p['name']}'),
+                            dense: true,
+                            shape: Border(bottom: BorderSide(color: c.outline)),
+                            title: Text(
+                                '${p['name']}${p['default'] == true ? tr(' (default)', '（默认）') : ''}'),
+                            subtitle: Text(_xy(p)),
+                            trailing: Wrap(
+                              spacing: 4,
+                              children: [
+                                if (dispatch)
+                                  OutlinedButton(
+                                    key: Key('standby-go-${p['name']}'),
+                                    onPressed: () => _run(
+                                      () => widget.api
+                                          .returnToStandby(widget.robotId, name: '${p['name']}'),
+                                      tr('Return to standby ${p['name']}', '回待命点 ${p['name']}'),
+                                    ),
+                                    child: Text(tr('Return here', '回这儿')),
+                                  ),
+                                if (manage && p['default'] != true)
+                                  OutlinedButton(
+                                    key: Key('standby-default-${p['name']}'),
+                                    onPressed: () => _run(
+                                      () => widget.api.setStandbyDefault(widget.robotId, p),
+                                      tr('Make ${p['name']} default', '设 ${p['name']} 为默认'),
+                                    ),
+                                    child: Text(tr('Make default', '设默认')),
+                                  ),
+                                if (manage)
+                                  IconButton(
+                                    key: Key('standby-remove-${p['name']}'),
+                                    tooltip: tr('Delete', '删掉'),
+                                    onPressed: () => _remove('${p['name']}'),
+                                    icon: const Icon(Icons.delete_outline_rounded),
+                                  ),
+                              ],
                             ),
-                            child: Text(tr('Return here', '回这儿')),
                           ),
-                        if (manage && p['default'] != true)
-                          OutlinedButton(
-                            key: Key('standby-default-${p['name']}'),
-                            onPressed: () => _run(
-                              () => widget.api.setStandbyDefault(widget.robotId, p),
-                              tr('Make ${p['name']} default', '设 ${p['name']} 为默认'),
-                            ),
-                            child: Text(tr('Make default', '设默认')),
-                          ),
-                        if (manage)
-                          IconButton(
-                            key: Key('standby-remove-${p['name']}'),
-                            tooltip: tr('Delete', '删掉'),
-                            onPressed: () => _remove('${p['name']}'),
-                            icon: const Icon(Icons.delete_outline),
-                          ),
-                      ],
-                    ),
-                  ),
+                      ])),
               ],
             ),
     );

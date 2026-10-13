@@ -15,6 +15,8 @@ import 'package:video_player/video_player.dart';
 
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 
 /// 放一段录像。测试换成记下来的。
 abstract class ClipPlayer {
@@ -211,6 +213,7 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = Nw.of(context);
     final canKeep = widget.api.session?.canReview ?? false; // 站点按 review 查（W20：业主能确认告警，但不能标留着）
     final around = widget.aroundMs;
     return Scaffold(
@@ -220,54 +223,73 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
         TextButton(key: SiteRecordingsPage.newerKey, onPressed: () => _shift(SiteRecordingsPage.windowMin),
             child: Text(tr('Later →', '更晚 →'))),
       ]),
-      body: ListView(padding: const EdgeInsets.all(8), children: [
-        Wrap(spacing: 8, children: [
-          for (final c in const <String?>[null, 'front', 'back'])
-            ChoiceChip(
-                key: SiteRecordingsPage.cameraKey(c ?? 'all'),
-                label: Text(c == null
-                    ? tr('All', '全部')
-                    : c == 'front'
-                        ? tr('Front', '前')
-                        : tr('Back', '后')),
-                selected: _camera == c,
-                onSelected: (_) {
-                  _camera = c;
-                  unawaited(_load());
-                }),
-        ]),
-        if (around != null) Text(tr('Alarm time: ${clipTime(around)} (times are by the robot clock)',
-              '告警那一刻：${clipTime(around)}（时刻是狗的钟）')),
-        if (_msg.isNotEmpty) Text(_msg, key: SiteRecordingsPage.msgKey),
+      body: ListView(padding: const EdgeInsets.all(Nw.s16), children: [
+        // 按相机筛：全部 / 前 / 后
+        NwSegment<String>(
+            values: const <String>['all', 'front', 'back'],
+            selected: _camera ?? 'all',
+            keyOf: SiteRecordingsPage.cameraKey,
+            labelOf: (v) => v == 'all'
+                ? tr('All', '全部')
+                : v == 'front'
+                    ? tr('Front', '前')
+                    : tr('Back', '后'),
+            onChanged: (v) {
+              _camera = v == 'all' ? null : v;
+              unawaited(_load());
+            }),
+        const SizedBox(height: Nw.s8),
+        if (around != null)
+          Padding(
+              padding: const EdgeInsets.only(bottom: Nw.s8),
+              child: Text(
+                  tr('Alarm time: ${clipTime(around)} (times are by the robot clock)',
+                      '告警那一刻：${clipTime(around)}（时刻是狗的钟）'),
+                  style: NwText.bodyMedium.copyWith(color: c.text))),
+        if (_msg.isNotEmpty)
+          Padding(
+              padding: const EdgeInsets.only(bottom: Nw.s8),
+              child: Text(_msg, key: SiteRecordingsPage.msgKey, style: NwText.bodyMedium.copyWith(color: c.text))),
         if (_loading) const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator())),
         if (!_loading && _rows.isEmpty && _msg.isEmpty)
-          Text(tr(
-              'No recordings in this period (recording is off on the robot, not uploaded yet, or deleted after 30 days)',
-              '这段时间没有录像（狗没开录像、还没传上来，或者过了 30 天删了）')),
-        for (final r in _rows)
-          ListTile(
-            key: SiteRecordingsPage.clipKey((r['id'] as num).toInt()),
-            dense: true,
-            leading: _busyId == (r['id'] as num).toInt()
-                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.play_circle_outline),
-            title: Text('${clipTime((r['start_ms'] as num).toInt())} · ${r['camera']}'),
-            subtitle: Text('${((r['bytes'] as num) / 1048576).toStringAsFixed(1)} MB'
-                '${r['keep'] == 1 ? tr(' · kept', ' · 留着') : ''}'),
-            selected: around != null &&
-                (r['start_ms'] as num) <= around &&
-                around < (r['start_ms'] as num) + 60000,
-            onTap: _busyId == null ? () => _play(r) : null,
-            trailing: canKeep
-                ? IconButton(
-                    key: SiteRecordingsPage.keepKey((r['id'] as num).toInt()),
-                    tooltip: r['keep'] == 1
-                        ? tr('Stop keeping', '不留了')
-                        : tr('Keep (not deleted after 30 days)', '留着（过了 30 天也不删）'),
-                    icon: Icon(r['keep'] == 1 ? Icons.bookmark : Icons.bookmark_border),
-                    onPressed: () => _keep(r))
-                : null,
-          ),
+          Text(
+              tr(
+                  'No recordings in this period (recording is off on the robot, not uploaded yet, or deleted after 30 days)',
+                  '这段时间没有录像（狗没开录像、还没传上来，或者过了 30 天删了）'),
+              style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
+        // 一段一行，装在一张卡里；盖住告警那一刻的那一段有底色（selected）
+        if (_rows.isNotEmpty)
+          NwCard(
+              padding: EdgeInsets.zero,
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                for (final r in _rows)
+                  ListTile(
+                    key: SiteRecordingsPage.clipKey((r['id'] as num).toInt()),
+                    dense: true,
+                    shape: Border(bottom: BorderSide(color: c.outline)),
+                    selectedTileColor: c.infoSoft,
+                    selectedColor: c.text,
+                    leading: _busyId == (r['id'] as num).toInt()
+                        ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.play_circle_outline_rounded),
+                    title: Text('${clipTime((r['start_ms'] as num).toInt())} · ${r['camera']}'),
+                    subtitle: Text('${((r['bytes'] as num) / 1048576).toStringAsFixed(1)} MB'
+                        '${r['keep'] == 1 ? tr(' · kept', ' · 留着') : ''}'),
+                    selected: around != null &&
+                        (r['start_ms'] as num) <= around &&
+                        around < (r['start_ms'] as num) + 60000,
+                    onTap: _busyId == null ? () => _play(r) : null,
+                    trailing: canKeep
+                        ? IconButton(
+                            key: SiteRecordingsPage.keepKey((r['id'] as num).toInt()),
+                            tooltip: r['keep'] == 1
+                                ? tr('Stop keeping', '不留了')
+                                : tr('Keep (not deleted after 30 days)', '留着（过了 30 天也不删）'),
+                            icon: Icon(r['keep'] == 1 ? Icons.bookmark_rounded : Icons.bookmark_border_rounded),
+                            onPressed: () => _keep(r))
+                        : null,
+                  ),
+              ])),
       ]),
     );
   }
