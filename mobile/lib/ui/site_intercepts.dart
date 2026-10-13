@@ -8,9 +8,10 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_p4_admin.dart';
+import 'nw/nw_theme.dart';
 import 'widget/bar_actions.dart';
 import 'widget/fields_dialog.dart';
 
@@ -182,6 +183,8 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
   @override
   Widget build(BuildContext context) {
     final manage = widget.api.session?.canManageMaps ?? false;
+    final nw = Nw.of(context);
+    const small = NwText.bodySmall;
     return Scaffold(
       appBar: AppBar(title: Text(tr('Intercept points and zones', '拦截点与防区')), actions: barActions(context, [
         if (manage) ...[
@@ -195,72 +198,90 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
       ])),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView(padding: const EdgeInsets.all(8), children: [
-              if (_msg.isNotEmpty) Text(_msg, key: SiteInterceptsPage.msgKey),
+          : NwListView(children: [
+              if (_msg.isNotEmpty) ...[
+                // 刚做的那一步成没成（Key 在 Text 上）
+                Container(
+                    padding: const EdgeInsets.all(Nw.s16),
+                    decoration: BoxDecoration(color: nw.infoSoft, borderRadius: BorderRadius.circular(Nw.r8)),
+                    child: Text(_msg,
+                        key: SiteInterceptsPage.msgKey, style: NwText.bodyMedium.copyWith(color: nw.text))),
+                nwGap16,
+              ],
               Text(
                   tr(
                       'Zone → intercept point (when a camera reports an intrusion in the zone, '
                           'a robot is sent to that point)',
                       '防区 → 拦截点（摄像头报这个防区有入侵，派狗去那个拦截点）'),
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-              if (_zones.isEmpty)
-                Text(tr('No zones yet: intrusions are logged as "not mapped" and no robot is sent',
-                    '还没有防区：这时候来的入侵都记「没映射」，没狗去')),
-              for (final z in _zones)
-                ListTile(
-                  key: Key('zone-${z['zone']}'),
-                  dense: true,
-                  title: Text('${z['zone']} → ${z['intercept']}'),
-                  trailing: manage
-                      ? IconButton(
-                          key: Key('zone-remove-${z['zone']}'),
-                          tooltip: tr('Stop sending robots', '不再派狗'),
-                          icon: const Icon(Icons.link_off),
-                          onPressed: () => _confirm(
-                              tr('Stop sending robots to zone ${z['zone']}? (Intrusions still raise alarms)',
-                                  '防区 ${z['zone']} 不再派狗？（之后的入侵照样报告警）'),
-                              () => _run(() => widget.api.unmapZone('${z['zone']}'),
-                                  tr('Unlink zone ${z['zone']}', '取消防区 ${z['zone']}')),
-                              Key('zone-remove-go-${z['zone']}')))
-                      : null,
-                ),
-              const Divider(),
-              Text(tr('Intercept points', '拦截点'), style: const TextStyle(fontWeight: FontWeight.bold)),
-              if (_points.isEmpty) Text(tr('No intercept points yet', '还没有拦截点')),
-              for (final p in _points)
-                ListTile(
-                  key: Key('intercept-${p['name']}'),
-                  dense: true,
-                  title: Text('${p['name']}'),
-                  subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('${p['map_id']}:${p['map_version']}  (${(p['x'] as num).toStringAsFixed(1)}, '
-                        '${(p['y'] as num).toStringAsFixed(1)})'),
-                    // W23：走不到（入侵来了不派狗）、没查成的、图有新版本要重设
-                    if ('${p['reach'] ?? ''}'.isNotEmpty)
+                  style: NwText.titleSmall.copyWith(color: nw.text)),
+              nwGap8,
+              NwListCard(children: [
+                if (_zones.isEmpty)
+                  NwCardText(tr('No zones yet: intrusions are logged as "not mapped" and no robot is sent',
+                      '还没有防区：这时候来的入侵都记「没映射」，没狗去')),
+                for (final z in _zones)
+                  ListTile(
+                    key: Key('zone-${z['zone']}'),
+                    dense: true,
+                    leading: Icon(Icons.sensors_rounded, color: nw.textSecondary),
+                    title: Text('${z['zone']} → ${z['intercept']}', style: NwText.bodyMedium.copyWith(color: nw.text)),
+                    trailing: manage
+                        ? IconButton(
+                            key: Key('zone-remove-${z['zone']}'),
+                            tooltip: tr('Stop sending robots', '不再派狗'),
+                            icon: Icon(Icons.link_off_rounded, color: nw.text),
+                            onPressed: () => _confirm(
+                                tr('Stop sending robots to zone ${z['zone']}? (Intrusions still raise alarms)',
+                                    '防区 ${z['zone']} 不再派狗？（之后的入侵照样报告警）'),
+                                () => _run(() => widget.api.unmapZone('${z['zone']}'),
+                                    tr('Unlink zone ${z['zone']}', '取消防区 ${z['zone']}')),
+                                Key('zone-remove-go-${z['zone']}')))
+                        : null,
+                  ),
+              ]),
+              nwGap24,
+              Text(tr('Intercept points', '拦截点'), style: NwText.titleSmall.copyWith(color: nw.text)),
+              nwGap8,
+              NwListCard(children: [
+                if (_points.isEmpty) NwCardText(tr('No intercept points yet', '还没有拦截点')),
+                for (final p in _points)
+                  ListTile(
+                    key: Key('intercept-${p['name']}'),
+                    dense: true,
+                    leading: Icon(Icons.fence_rounded, color: nw.textSecondary),
+                    title: Text('${p['name']}', style: NwText.bodyMedium.copyWith(color: nw.text, fontWeight: FontWeight.w600)),
+                    subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(
-                          tr('Unreachable, no robot is sent on an intrusion: ${p['reach']}',
-                              '走不到，入侵来了不派狗：${p['reach']}'),
-                          key: Key('intercept-reach-${p['name']}'), style: const TextStyle(color: D1Color.p1Text)),
-                    if ('${p['reach_note'] ?? ''}'.isNotEmpty)
-                      Text('${p['reach_note']}', style: const TextStyle(color: D1Color.textMuted)),
-                    if (p['newer_version'] is String)
-                      Text(
-                          tr('The map has a new version ${p['newer_version']}: set this point again on the new map',
-                              '图有新版本 ${p['newer_version']}：要在新图上重设'),
-                          key: Key('intercept-newer-${p['name']}'), style: const TextStyle(color: D1Color.p2)),
-                  ]),
-                  trailing: manage
-                      ? IconButton(
-                          key: Key('intercept-remove-${p['name']}'),
-                          tooltip: tr('Delete', '删掉'),
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () => _confirm(
-                              tr('Delete intercept point ${p['name']}?', '删掉拦截点 ${p['name']}？'),
-                              () => _run(() => widget.api.removeIntercept('${p['name']}'),
-                                  tr('Delete intercept point ${p['name']}', '删拦截点 ${p['name']}')),
-                              Key('intercept-remove-go-${p['name']}')))
-                      : null,
-                ),
+                          '${p['map_id']}:${p['map_version']}  (${(p['x'] as num).toStringAsFixed(1)}, '
+                          '${(p['y'] as num).toStringAsFixed(1)})',
+                          style: small.copyWith(color: nw.textSecondary)),
+                      // W23：走不到（入侵来了不派狗）、没查成的、图有新版本要重设
+                      if ('${p['reach'] ?? ''}'.isNotEmpty)
+                        Text(
+                            tr('Unreachable, no robot is sent on an intrusion: ${p['reach']}',
+                                '走不到，入侵来了不派狗：${p['reach']}'),
+                            key: Key('intercept-reach-${p['name']}'), style: small.copyWith(color: nw.error)),
+                      if ('${p['reach_note'] ?? ''}'.isNotEmpty)
+                        Text('${p['reach_note']}', style: small.copyWith(color: nw.textMuted)),
+                      if (p['newer_version'] is String)
+                        Text(
+                            tr('The map has a new version ${p['newer_version']}: set this point again on the new map',
+                                '图有新版本 ${p['newer_version']}：要在新图上重设'),
+                            key: Key('intercept-newer-${p['name']}'), style: small.copyWith(color: nw.warning)),
+                    ]),
+                    trailing: manage
+                        ? IconButton(
+                            key: Key('intercept-remove-${p['name']}'),
+                            tooltip: tr('Delete', '删掉'),
+                            icon: Icon(Icons.delete_outline_rounded, color: nw.error),
+                            onPressed: () => _confirm(
+                                tr('Delete intercept point ${p['name']}?', '删掉拦截点 ${p['name']}？'),
+                                () => _run(() => widget.api.removeIntercept('${p['name']}'),
+                                    tr('Delete intercept point ${p['name']}', '删拦截点 ${p['name']}')),
+                                Key('intercept-remove-go-${p['name']}')))
+                        : null,
+                  ),
+              ]),
             ]),
     );
   }

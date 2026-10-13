@@ -13,9 +13,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_button.dart';
+import 'nw/nw_p4_admin.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 
 /// 三种天气给人看的名字。每次用的时候现取（语言能当场换）。
 Map<String, String> get _names => {
@@ -55,10 +58,14 @@ IconData weatherIcon(String condition) => switch (condition) {
       _ => Icons.help_outline,
     };
 
-Color? weatherColor(String condition) => switch (condition) {
-      // 雷暴停巡检，是要人知道的异常：琥珀。下雨只是限速，不上色（规范 2.1）。
-      'storm' => D1Color.p2,
-      _ => null,
+/// 这种天气的色调：雷暴停巡检，是要人知道的异常 —— 橙。下雨只是限速，不上色。
+NwTone weatherTone(String condition) => condition == 'storm' ? NwTone.warning : NwTone.neutral;
+
+/// 图标的颜色；不上色是 null（跟着所在的主题走）。[colors] 给当前上下文的那一套（`Nw.of(context)`）；
+/// 不给按浅色那一套。
+Color? weatherColor(String condition, [NwColors? colors]) => switch (weatherTone(condition)) {
+      NwTone.neutral => null,
+      final t => (colors ?? NwColors.light).fg(t),
     };
 
 /// 手动切能挑的时长（小时）。
@@ -132,32 +139,50 @@ class _SiteWeatherPageState extends State<SiteWeatherPage> {
   Widget build(BuildContext context) {
     final w = _w;
     final a = w?['auto'];
+    final nw = Nw.of(context);
+    final tone = weatherTone('${w?['condition']}');
     return Scaffold(
       appBar: AppBar(title: Text(tr('Weather', '天气'))),
-      body: ListView(padding: const EdgeInsets.all(8), children: [
-        if (w != null)
-          ListTile(
-            leading: Icon(weatherIcon('${w['condition']}'), color: weatherColor('${w['condition']}')),
-            title: Text(weatherText(w)),
-            subtitle: Text(a is Map && a['enabled'] == true
-                ? tr(
-                    'Online: ${a['condition'] == null ? 'no result yet' : (_names[a['condition']] ?? a['condition'])}'
-                        '${'${a['error'] ?? ''}'.isEmpty ? '' : ' (last lookup failed: ${a['error']})'}',
-                    '联网查的：${a['condition'] == null ? '还没查到' : (_names[a['condition']] ?? a['condition'])}'
-                        '${'${a['error'] ?? ''}'.isEmpty ? '' : '（上次查不到：${a['error']}）'}')
-                : tr('No site coordinates set, no online lookup', '没配庄园坐标，不联网查')),
-          ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: Text(tr(
-              'Thunderstorm: scheduled patrols pause and robots return to standby; an intrusion '
-                  'still sends a robot. Rain and thunderstorm: all robots limited to 0.3 m/s.',
-              '雷暴：排程巡检暂停、狗回待命点，有入侵照样派狗。下雨、雷暴：全狗限速 0.3 m/s。')),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            Text(tr('Manual for:', '手动切多久：')),
+      body: NwListView(children: [
+        if (w != null) ...[
+          NwSectionLabel(tr('Now', '现在')),
+          nwGap8,
+          NwCard(
+              tone: tone,
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(weatherIcon('${w['condition']}'),
+                    size: 24, color: tone == NwTone.neutral ? nw.textSecondary : nw.fg(tone)),
+                const SizedBox(width: Nw.s16),
+                Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  Text(weatherText(w), style: NwText.titleSmall.copyWith(color: nw.text)),
+                  nwGap4,
+                  Text(
+                      a is Map && a['enabled'] == true
+                          ? tr(
+                              'Online: ${a['condition'] == null ? 'no result yet' : (_names[a['condition']] ?? a['condition'])}'
+                                  '${'${a['error'] ?? ''}'.isEmpty ? '' : ' (last lookup failed: ${a['error']})'}',
+                              '联网查的：${a['condition'] == null ? '还没查到' : (_names[a['condition']] ?? a['condition'])}'
+                                  '${'${a['error'] ?? ''}'.isEmpty ? '' : '（上次查不到：${a['error']}）'}')
+                          : tr('No site coordinates set, no online lookup', '没配庄园坐标，不联网查'),
+                      style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+                ])),
+              ])),
+          nwGap24,
+        ],
+        NwSectionLabel(tr('Set manually', '手动切')),
+        nwGap8,
+        NwCard(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(
+              tr(
+                  'Thunderstorm: scheduled patrols pause and robots return to standby; an intrusion '
+                      'still sends a robot. Rain and thunderstorm: all robots limited to 0.3 m/s.',
+                  '雷暴：排程巡检暂停、狗回待命点，有入侵照样派狗。下雨、雷暴：全狗限速 0.3 m/s。'),
+              style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+          nwGap16,
+          Wrap(spacing: Nw.s8, runSpacing: Nw.s4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            Text(tr('Manual for:', '手动切多久：'), style: NwText.bodyMedium.copyWith(color: nw.text)),
             for (final h in weatherHours)
               ChoiceChip(
                   key: SiteWeatherPage.hoursKey(h),
@@ -165,20 +190,26 @@ class _SiteWeatherPageState extends State<SiteWeatherPage> {
                   selected: _hours == h,
                   onSelected: (_) => setState(() => _hours = h)),
           ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Wrap(spacing: 8, runSpacing: 8, children: [
+          nwGap16,
+          Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
             for (final c in const ['normal', 'rain', 'storm'])
-              FilledButton.tonalIcon(
-                  key: SiteWeatherPage.setKey(c),
+              NwButton(
+                  buttonKey: SiteWeatherPage.setKey(c),
+                  variant: NwButtonVariant.secondary,
                   onPressed: () => _set(c),
-                  icon: Icon(weatherIcon(c)),
-                  label: Text(_names[c]!)),
-            OutlinedButton(key: SiteWeatherPage.setKey('auto'), onPressed: () => _set('auto'), child: Text(tr('Back to automatic', '回到自动'))),
+                  icon: weatherIcon(c),
+                  label: _names[c]!),
+            NwButton(
+                buttonKey: SiteWeatherPage.setKey('auto'),
+                variant: NwButtonVariant.outline,
+                onPressed: () => _set('auto'),
+                label: tr('Back to automatic', '回到自动')),
           ]),
-        ),
-        if (_msg.isNotEmpty) Padding(padding: const EdgeInsets.all(16), child: Text(_msg, key: SiteWeatherPage.msgKey)),
+          if (_msg.isNotEmpty) ...[
+            nwGap16,
+            Text(_msg, key: SiteWeatherPage.msgKey, style: NwText.bodyMedium.copyWith(color: nw.text)),
+          ],
+        ])),
       ]),
     );
   }

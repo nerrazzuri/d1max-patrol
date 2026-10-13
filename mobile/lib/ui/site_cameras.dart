@@ -8,9 +8,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_p4_admin.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 import 'site_recordings.dart' show clipTime;
 import 'widget/live_video.dart';
 
@@ -79,44 +81,63 @@ class _SiteCamerasPageState extends State<SiteCamerasPage> {
 
   @override
   Widget build(BuildContext context) {
+    final nw = Nw.of(context);
     return Scaffold(
       appBar: AppBar(title: Text(tr('Fixed cameras', '固定摄像头'))),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView(padding: const EdgeInsets.all(8), children: [
-              if (_msg.isNotEmpty) Text(_msg, key: SiteCamerasPage.msgKey),
+          : NwListView(children: [
+              if (_msg.isNotEmpty) ...[
+                // 读不到、没开：提示条里的那句话（Key 在 Text 上）
+                Container(
+                    padding: const EdgeInsets.all(Nw.s16),
+                    decoration: BoxDecoration(color: nw.warningSoft, borderRadius: BorderRadius.circular(Nw.r8)),
+                    child: Text(_msg,
+                        key: SiteCamerasPage.msgKey, style: NwText.bodyMedium.copyWith(color: nw.text))),
+                nwGap16,
+              ],
               if (_msg.isEmpty && _rows.isEmpty)
-                Text(tr(
-                    'No cameras yet. Register one on the site host with d1max-site camera-add (the '
-                    'camera reports its own intrusion detection to the site, which sends a robot)',
-                    '还没有摄像头：在站点主机上 d1max-site camera-add 登记（摄像头自带的入侵检测报到站点，派狗去）')),
-              for (final c in _rows)
-                ListTile(
-                  key: SiteCamerasPage.camKey('${c['name']}'),
-                  leading: Icon(c['connected'] == true ? Icons.videocam : Icons.videocam_off,
-                      color: c['connected'] == true ? D1Color.text : D1Color.p1Text),
-                  title: Text(tr(
-                      '${c['name']} · Zone ${c['zone']}',
-                      '${c['name']} · 防区 ${c['zone']}')),
-                  subtitle: Text([
-                    _state(c),
-                    if (c['last_event_ms'] != null)
-                      tr(
-                          'Last intrusion reported: ${clipTime((c['last_event_ms'] as num).toInt())}',
-                          '最近一次报入侵：${clipTime((c['last_event_ms'] as num).toInt())}'),
-                    if (c['motion'] == true) tr(
-                        'Video motion also counts as an intrusion',
-                        '画面动了也算入侵'),
-                  ].join('\n')),
-                  isThreeLine: c['last_event_ms'] != null || c['motion'] == true,
-                  trailing: c['live'] == true ? const Icon(Icons.chevron_right) : null,
-                  onTap: c['live'] == true
-                      ? () => Navigator.push(
-                          context,
-                          MaterialPageRoute<void>(
-                              builder: (_) => SiteCameraLivePage(api: widget.api, name: '${c['name']}')))
-                      : null,
-                ),
+                NwCard(
+                    child: Text(
+                        tr(
+                            'No cameras yet. Register one on the site host with d1max-site camera-add (the '
+                                'camera reports its own intrusion detection to the site, which sends a robot)',
+                            '还没有摄像头：在站点主机上 d1max-site camera-add 登记（摄像头自带的入侵检测报到站点，派狗去）'),
+                        style: NwText.bodyMedium.copyWith(color: nw.textSecondary))),
+              if (_rows.isNotEmpty)
+                NwListCard(children: [
+                  for (final c in _rows)
+                    ListTile(
+                      key: SiteCamerasPage.camKey('${c['name']}'),
+                      // 连着是绿的；连不上是红的、换一个图标（这一路的入侵收不到）
+                      leading: Icon(
+                          c['connected'] == true ? Icons.videocam_rounded : Icons.videocam_off_rounded,
+                          color: c['connected'] == true ? nw.success : nw.error),
+                      title: Text(
+                          tr('${c['name']} · Zone ${c['zone']}', '${c['name']} · 防区 ${c['zone']}'),
+                          style: NwText.titleSmall.copyWith(color: nw.text)),
+                      subtitle: Text(
+                          [
+                            _state(c),
+                            if (c['last_event_ms'] != null)
+                              tr(
+                                  'Last intrusion reported: ${clipTime((c['last_event_ms'] as num).toInt())}',
+                                  '最近一次报入侵：${clipTime((c['last_event_ms'] as num).toInt())}'),
+                            if (c['motion'] == true)
+                              tr('Video motion also counts as an intrusion', '画面动了也算入侵'),
+                          ].join('\n'),
+                          style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+                      isThreeLine: c['last_event_ms'] != null || c['motion'] == true,
+                      trailing:
+                          c['live'] == true ? Icon(Icons.chevron_right_rounded, color: nw.textSecondary) : null,
+                      onTap: c['live'] == true
+                          ? () => Navigator.push(
+                              context,
+                              MaterialPageRoute<void>(
+                                  builder: (_) => SiteCameraLivePage(api: widget.api, name: '${c['name']}')))
+                          : null,
+                    ),
+                ]),
             ]),
     );
   }
