@@ -11,6 +11,8 @@ import 'package:flutter/material.dart';
 
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 import 'widget/live_video.dart';
 
 /// 按固定间隔问站点「这台狗在不在线、新不新鲜」，变成 `LiveVideo` 要的那条流。
@@ -87,17 +89,13 @@ class _SiteVideoState extends State<SiteVideo> {
   Widget build(BuildContext context) {
     final id = Uri.encodeComponent(widget.robotId);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      SegmentedButton<String>(
-        segments: [
-          ButtonSegment(value: 'front', label: Text(tr(
-              'Front',
-              '前'), key: SiteVideo.cameraKey('front'))),
-          ButtonSegment(value: 'back', label: Text(tr(
-              'Back',
-              '后'), key: SiteVideo.cameraKey('back'))),
-        ],
-        selected: {_camera},
-        onSelectionChanged: (s) => setState(() => _camera = s.first),
+      // 前后切换：每一格的 Key 在能点的那一层上
+      NwSegment<String>(
+        values: const <String>['front', 'back'],
+        selected: _camera,
+        onChanged: (v) => setState(() => _camera = v),
+        labelOf: (v) => v == 'front' ? tr('Front', '前') : tr('Back', '后'),
+        keyOf: SiteVideo.cameraKey,
       ),
       const SizedBox(height: 8),
       // 横屏（app 只许横屏）：整宽的 16:9 比屏幕还高。最高到屏幕高的六成，居中、不拉伸。
@@ -106,6 +104,8 @@ class _SiteVideoState extends State<SiteVideo> {
           constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.6),
           child: AspectRatio(
             aspectRatio: 16 / 9,
+            child: ClipRRect(
+            borderRadius: BorderRadius.circular(Nw.r8),
             child: LiveVideo(
               key: ValueKey<String>('site-live-$_camera'),
               baseUrl: widget.api.baseUrl,
@@ -115,6 +115,7 @@ class _SiteVideoState extends State<SiteVideo> {
               openClient: widget.api.pinnedClient,
               firstFrameGrace: const Duration(seconds: 12),
               health: _poller.stream,
+            ),
             ),
           ),
         ),
