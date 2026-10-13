@@ -3,10 +3,9 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../../design/tokens.g.dart';
 import '../../l10n.dart';
 import '../../net/site_client.dart';
-import '../theme.dart';
+import '../nw/nw_theme.dart';
 
 /// 优先级的形状：P1 实心菱形、P2 实心三角、别的空心圆。颜色由调用方给（实底上是白的）。
 class PriorityShape extends StatelessWidget {
@@ -61,14 +60,15 @@ class _ShapePainter extends CustomPainter {
   bool shouldRepaint(_ShapePainter old) => old.level != level || old.color != color;
 }
 
-/// 优先级的字色：P1 红、P2 琥珀、别的中性。
-Color priorityColor(String level) => switch (level) {
-      'P1' => D1Color.p1Text,
-      'P2' => D1Color.p2,
-      _ => D1Color.textMuted,
+/// 优先级的字色：P1 红、P2 橙、别的中性。颜色跟着浅色 / 深色走：把 `Nw.of(context)` 传进来
+/// （不传按浅色那一套）。
+Color priorityColor(String level, [NwColors c = NwColors.light]) => switch (level) {
+      'P1' => c.error,
+      'P2' => c.warning,
+      _ => c.textSecondary,
     };
 
-/// 「全部急停」：整个界面唯一的红色按钮（规范 2.1），红底 + 2px 报警框。按了先问一遍，再对每台在线的狗
+/// 「全部急停」：红底 + 2px 报警框（红色只给急停这一类）。按了先问一遍，再对每台在线的狗
 /// 发急停；哪台没停住说出来（叫人去按它身上的急停）。
 class StopAllButton extends StatelessWidget {
   final SiteApi api;
@@ -107,7 +107,7 @@ class StopAllButton extends StatelessWidget {
                 TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '取消'))),
                 FilledButton(
                     key: confirmKey,
-                    style: _stopStyle,
+                    style: _stopStyle(c),
                     onPressed: () => Navigator.pop(c, true),
                     child: Text(tr('Stop all', '全部急停'))),
               ],
@@ -125,18 +125,22 @@ class StopAllButton extends StatelessWidget {
     onResult(bad.isEmpty ? tr('Stopped $n robots.', '$n 台狗都停了。') : bad.join(' '));
   }
 
-  static final ButtonStyle _stopStyle = FilledButton.styleFrom(
-      backgroundColor: D1Color.p1,
-      foregroundColor: D1Color.onSolid,
-      side: const BorderSide(color: D1Color.p1Frame, width: D1Size.stopAllRing),
-      textStyle: D1Text.label);
+  static ButtonStyle _stopStyle(BuildContext context) {
+    final c = Nw.of(context);
+    return FilledButton.styleFrom(
+        backgroundColor: c.error,
+        foregroundColor: c.onError,
+        side: BorderSide(color: c.errorFrame, width: 2),
+        minimumSize: const Size(Nw.touch, 40),
+        textStyle: NwText.labelLarge);
+  }
 
   @override
   Widget build(BuildContext context) => Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: FilledButton.icon(
           key: buttonKey,
-          style: _stopStyle,
+          style: _stopStyle(context),
           onPressed: () => _press(context),
           icon: const Icon(Icons.report, size: 18),
           label: Text(tr('Stop all', '全部急停'))));
