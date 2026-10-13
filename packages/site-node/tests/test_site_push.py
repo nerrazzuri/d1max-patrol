@@ -820,15 +820,23 @@ def test_外审I2_库从55升上来_发了一半的那条_已经发完的通道�
                 "VALUES ('s','gina',0,0)")
     con.execute("INSERT INTO push_devices(reg_id, account, platform, updated_ms, session, provider)"
                 " VALUES ('jp','gina','android',0,'s','jpush')")
+    con.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                "VALUES ('omar','guard',x'00',x'00',0,0)")
+    con.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                "VALUES ('s2','omar',0,0)")
+    con.execute("INSERT INTO push_devices(reg_id, account, platform, updated_ms, session, provider)"
+                " VALUES ('fc','omar','android',0,'s2','fcm')")
     con.execute("INSERT INTO push_outbox(alert_key, tier, robot, title, created_ms, next_ms, done) "
                 "VALUES ('A/x#1',0,'A','x',?,?,'jpush')", (NOW, NOW))
     con.commit()
     con.close()
     db = SiteDB(path)
-    j = 假通道()
-    p = PushDesk(db, now_ms=lambda: NOW, senders={"jpush": j}, site_name="站")
+    j, f = 假通道(), 假通道()
+    p = PushDesk(db, now_ms=lambda: NOW, senders={"jpush": j, "fcm": f}, site_name="站")
     p.tick()
-    assert j.sent == [] and _队(db)[0]["sent_ms"] == NOW
+    assert j.sent == [], "升级前极光那一路发完了:不重发"
+    assert f.sent == [["fc"]], "FCM 那一路当时没发完:照发"
+    assert _队(db)[0]["sent_ms"] == NOW
     db.close()
 
 
@@ -857,3 +865,135 @@ def test_外审I1_极光那头替离线手机存多久_也按还剩多少给():
         return _回({"msg_id": 1})
     JPush("k", "s", opener=opener).send(["r"], "t", "b", {}, ttl_s=125)
     assert got[0]["options"]["time_to_live"] == 125
+
+
+# ---------------------------------------------------------------- RC 加固复查 R1
+
+
+def _双通道真FCM(tmp_path, respond):
+    """手机 A(同一次登录登记了 FCM 和极光)、手机 B(只有 FCM);两个通道都配了。"""
+    seen = []
+
+    def opener(req, timeout):
+        if "oauth" in req.full_url:
+            return _回({"access_token": "t", "expires_in": 3600})
+        seen.append(_tok(req))
+        return respond(_tok(req))
+    clock = [NOW]
+    db = SiteDB(tmp_path / "s.db")
+    with db.tx() as c:
+        for name in ("a", "b"):
+            c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                      "VALUES (?,?,?,?,?,0)", (name, "guard", b"s", b"h", 0))
+            c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                      "VALUES (?,?,0,0)", ("s-" + name, name))
+    desk = AlertDesk(db, now_ms=lambda: clock[0])
+    desk.push = True
+    j = 假通道()
+
+    def mk():
+        p = PushDesk(db, now_ms=lambda: clock[0],
+                     senders={"jpush": j, "fcm": _真FCM(opener)}, site_name="站")
+        p.alerts = desk
+        return p
+    p = mk()
+    p.register("a", "fcm-a", "android", session="s-a", provider="fcm")
+    p.register("a", "jp-a", "android", session="s-a")
+    p.register("b", "fcm-b", "android", session="s-b", provider="fcm")
+    return desk, p, mk, j, seen, clock, db
+
+
+def _没了():
+    return _http错(404, {"error": {"status": "NOT_FOUND",
+                                  "details": [{"errorCode": "UNREGISTERED"}]}})
+
+
+def test_复查R1_手机的FCM令牌失效了_另一台要重试_极光那一路不能记成发完_下一轮补上(tmp_path):
+    """A 的 FCM 令牌失效被删、B 回 503。极光这一轮本来没有要发的(A 先走 FCM),却被记成「发完了」;
+    下一轮 B 成功,极光被跳过,整条记成发完 —— A 两个通道都没收到这条 P1。"""
+    state = {"b": 503}
+
+    def respond(tok):
+        if tok == "fcm-a":
+            raise _没了()
+        if state["b"]:
+            raise _http错(state["b"], {"error": {"status": "UNAVAILABLE"}})
+        return _回({"name": "m"})
+    desk, p, mk, j, seen, clock, db = _双通道真FCM(tmp_path, respond)
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    p.tick()
+    assert _队(db)[0]["sent_ms"] is None
+    state["b"] = 0
+    clock[0] += 11_000
+    mk().tick()                                                 # 站点重启过也一样
+    assert j.sent == [["jp-a"]], "A 的 FCM 没了:它登记的极光号要补上"
+    assert seen.count("fcm-b") == 2 and _队(db)[0]["sent_ms"] is not None
+    db.close()
+
+
+def test_复查R1_这一轮FCM别的都发成了_只有一台令牌失效_当轮就改走它的极光_再记发完(tmp_path):
+    def respond(tok):
+        if tok == "fcm-a":
+            raise _没了()
+        return _回({"name": "m"})
+    desk, p, mk, j, seen, clock, db = _双通道真FCM(tmp_path, respond)
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    p.tick()
+    assert j.sent == [["jp-a"]] and seen == ["fcm-a", "fcm-b"]
+    assert _队(db)[0]["sent_ms"] == NOW
+    p.tick()
+    assert j.sent == [["jp-a"]] and seen == ["fcm-a", "fcm-b"], "发完了:不再发"
+    db.close()
+
+
+def test_复查R1_极光先发完了_之后那台手机的FCM令牌才失效_极光照样补给它(tmp_path):
+    """极光这一路有别的手机、先发完了;这不等于以后新落到极光上的手机不用发。"""
+    state = {"a": 503}
+
+    def respond(tok):
+        if tok == "fcm-a":
+            if state["a"] == 503:
+                raise _http错(503, {"error": {"status": "UNAVAILABLE"}})
+            raise _没了()
+        return _回({"name": "m"})
+    desk, p, mk, j, seen, clock, db = _双通道真FCM(tmp_path, respond)
+    with db.tx() as c:
+        c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                  "VALUES ('c','guard',x'00',x'00',0,0)")
+        c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                  "VALUES ('s-c','c',0,0)")
+    p.register("c", "jp-c", "android", session="s-c")           # 只有极光的手机
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    p.tick()
+    assert j.sent == [["jp-c"]] and _队(db)[0]["sent_ms"] is None
+    state["a"] = 404
+    clock[0] += 11_000
+    p.tick()
+    assert j.sent == [["jp-c"], ["jp-a"]], "发过的 jp-c 不重发;新落到极光上的 jp-a 补上"
+    assert _队(db)[0]["sent_ms"] is not None
+    db.close()
+
+
+def test_复查R1_手机全没了_发过的算发完_一台都没发成的作废(tmp_path):
+    def respond(tok):
+        raise _没了()
+    desk, p, mk, j, seen, clock, db = _双通道真FCM(tmp_path, respond)
+    with db.tx() as c:
+        c.execute("DELETE FROM push_devices WHERE reg_id='jp-a'")
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    p.tick()
+    row = _队(db)[0]
+    assert row["dropped"] == "没有登记的手机" and db.query("SELECT * FROM push_devices") == []
+    db.close()
+
+
+def test_复查R1_通道一次回了失败又说有推送号没了_当轮也重算名单(双通道):
+    """一批一个请求的通道(极光那种):这一批没发成,同时告诉站点哪几个号没了。"""
+    desk, p, j, f, clock, db = 双通道
+    p.register("lee", "jp-lee", "android", session="s-lee")
+    p.register("lee", "fcm-lee", "android", session="s-lee", provider="fcm")
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    f.fail, f.dead = "FCM 回 503", ["fcm-lee"]
+    p.tick()
+    assert ["jp-lee"] in j.sent, "lee 的 FCM 号没了:当轮就走它的极光"
+    assert _队(db)[0]["sent_ms"] is None, "fcm-omar 还没发成"

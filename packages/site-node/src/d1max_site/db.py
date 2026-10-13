@@ -637,6 +637,14 @@ class SiteDB:
                     "INSERT OR IGNORE INTO homes(robot_id, map_id, map_version, name, x, y, yaw) "
                     "SELECT robot_id, map_id, map_version, name, x, y, yaw FROM standby_points "
                     "WHERE map_version != '' ORDER BY is_default DESC, name")
+            if row is not None and str(row[0]).isdigit() and int(row[0]) < 56:
+                # 升到 56 之前发了一半的推送:那时候只记「哪个通道发完了」(done),没有逐台的账。
+                # 56 起只认逐台的账:把发完了的通道名下现在的推送号补记成发过,不然升级后重发一遍。
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO push_sent(outbox_id, reg_id, sent_ms) "
+                    "SELECT o.id, d.reg_id, o.created_ms FROM push_outbox o JOIN push_devices d "
+                    "ON (',' || o.done || ',') LIKE ('%,' || d.provider || ',%') "
+                    "WHERE o.sent_ms IS NULL AND o.dropped = '' AND o.done != ''")
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
 
