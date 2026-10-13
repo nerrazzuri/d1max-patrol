@@ -11,7 +11,7 @@ import pytest
 from obs_world import 世界, 假感知
 
 from d1max_adapter_sim.robot import SimRobot
-from d1max_agent.bridges.planned_nav import PlannedNavBackend
+from d1max_agent.bridges.planned_nav import CREEP_M, PlannedNavBackend
 from d1max_agent.obstacles import FRESH_S, ObstacleGuard, ObstacleView
 from d1max_agent.planning.planner import Planner
 from d1max_contract.obsbridge import Grid, pack_bits
@@ -369,16 +369,22 @@ async def test_带链路延迟_起步切步态_刹车上限_也不撞(tmp_path):
 
 
 async def test_要掉头_身后看不见就不转_后雷达开着先往前挪再转(tmp_path):
-    """内审测试漏洞:原来只跑 3 s。没后雷达:身后从没看见过,挪了也转不过去,等满 20 s 放弃、没撞;
-    有后雷达:身侧(两台雷达的盲带)没看过 —— 先往前挪一个机身长,再转、走到。"""
+    """内审测试漏洞:原来只跑 3 s。身后、身侧没看过:不原地转,先往前挪,再转、走到。
+    W35:原来挪 1.0 m,没后雷达时转身那一圈最靠后的一条还没看过,挪了也转不过去、等满 20 s 放弃;
+    现在挪 1.3 m,转身那一圈全在前雷达刚看过的范围里,没后雷达也转得过去(每一步照样过守卫)。"""
     blind = 台子(tmp_path, rear=False)
     await blind.start(5.0, 4.0, yaw=0.0)
     await blind.nav.goto(Pose.from_xy_yaw(2.0, 4.0))            # 目标在身后
     await blind.跑(3.0)
     assert abs(blind.r.yaw) < 0.05, "身后没看过:不原地转"
-    await blind.跑(60.0)
-    assert not blind.crashed and NavStatus.FAILED in blind.status
-    assert blind.r.x < 5.0 + 1.1, "最多往前挪一次、一个机身长"
+    bx = []
+    for _ in range(600):
+        await blind.一拍()
+        bx.append(blind.r.x)
+        if blind.status and blind.status[-1] is NavStatus.STANDBY:
+            break
+    assert not blind.crashed and NavStatus.SUCCEED in blind.status, blind.nav.fail_reason
+    assert 5.0 + CREEP_M - 0.2 < max(bx) < 5.0 + CREEP_M + 0.1, "往前挪一次,不多挪"
     seeing = 台子(tmp_path, rear=True)
     await seeing.start(5.0, 4.0, yaw=0.0)
     await seeing.nav.goto(Pose.from_xy_yaw(2.0, 4.0))
@@ -389,7 +395,7 @@ async def test_要掉头_身后看不见就不转_后雷达开着先往前挪再
         if seeing.status and seeing.status[-1] is NavStatus.STANDBY:
             break
     assert NavStatus.SUCCEED in seeing.status and not seeing.crashed
-    assert max(xs) > 5.8, "先往前挪了一个机身长,再转"
+    assert max(xs) > 5.0 + CREEP_M - 0.2, "先往前挪了,再转"
 
 
 async def test_W34_现场视野_起步是弧线_只被两侧看不见挡住_先直着挪再走到(tmp_path):
@@ -667,3 +673,77 @@ async def test_近障降速_前面有人慢下来_离远了恢复(tmp_path):
     assert min(vs) < free * 0.7 and min(vs) >= 0.2, vs
     await t.跑(80.0)
     assert NavStatus.SUCCEED in t.status and not t.crashed
+
+
+# ---------------------------------------------------------------- W35(2026-10-13 C40221 第二轮)
+
+
+async def test_W35_现场视野_贴着墙_起步要转_照样先直着挪再走到(tmp_path):
+    """路线一弯就起不了步、「先挪」也不触发:狗站在桌子边上(半米),「往前挪」那条线头几格在**膨胀过**
+    的代价图里是致命格,不让挪 —— 其实机身直着往前走得出去(机身半宽 0.24 m),挪出去 1 m 就离开桌子、
+    转得开了;守卫也现看着。"""
+    t = 台子(tmp_path, rear=True, cone=True, walls=[(2.4, 3.3, 3.2, 3.5)])
+    await t.start(3.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(5.0, 5.2))
+    for _ in range(900):
+        await t.一拍()
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    assert NavStatus.SUCCEED in t.status and not t.crashed, (t.status, t.nav.fail_reason)
+
+
+async def test_W35_现场视野_人挡了十几秒走开_马上接着走_不等到放弃(tmp_path):
+    """3f.6 后半的回归(现场视野下:人挡一阵、走开,狗接着走)。这条在改之前就过 —— 现场那次「等满
+    20 s」台式机上没复现出来,留着防退化。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(2.0)
+    t.world.dyn["person"] = (4.0, 3.6, 4.4, 4.4)
+    for _ in range(80):
+        await t.一拍()
+        if t.nav._blocked_since is not None:
+            break
+    assert t.nav._blocked_since is not None
+    await t.跑(12.0)                                            # 站了 12 s
+    assert NavStatus.FAILED not in t.status
+    x0 = t.r.x
+    del t.world.dyn["person"]
+    await t.跑(6.0)
+    assert NavStatus.FAILED not in t.status, t.nav.fail_reason
+    assert t.r.x > x0 + 0.5 or NavStatus.SUCCEED in t.status, "人走了 6 s 内接着走"
+    await t.跑(60.0)
+    assert NavStatus.SUCCEED in t.status and not t.crashed
+
+
+async def test_W35_往前挪_机身要压上地图里的墙就不挪_狗身下本来压着的不算(tmp_path):
+    """挪之前看的是**没膨胀**的地图上机身扫过的那一条:前面 1 m 内有墙不挪;狗现在站的地方本来就
+    压着的格子(定位差几厘米、贴着桌子站)不算,不然哪儿都挪不了。"""
+    from types import SimpleNamespace
+    t = 台子(tmp_path, rear=True, cone=True, walls=[(4.2, 3.0, 4.4, 5.0)])
+    await t.start(3.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(3.0, 6.0))
+    await t.跑(0.3)
+    assert not t.nav._creep_clear(SimpleNamespace(x=3.0, y=4.0, yaw=0.0)), "前面 1.2 m 是墙"
+    assert t.nav._creep_clear(SimpleNamespace(x=3.0, y=4.0, yaw=math.pi)), "往另一头是空的"
+    t2 = 台子(tmp_path, rear=True, cone=True, walls=[(2.6, 3.6, 2.8, 3.8)])   # 狗身后角压着的一小块
+    await t2.start(3.0, 4.0, yaw=0.0)
+    await t2.nav.goto(Pose.from_xy_yaw(3.0, 6.0))
+    await t2.跑(0.3)
+    assert t2.nav._creep_clear(SimpleNamespace(x=3.0, y=4.0, yaw=0.0))
+    # 不在中线上,机身边会蹭到
+    t3 = 台子(tmp_path, rear=True, cone=True, walls=[(3.8, 4.2, 4.0, 4.4)])
+    await t3.start(3.0, 4.0, yaw=0.0)
+    await t3.nav.goto(Pose.from_xy_yaw(3.0, 6.0))
+    await t3.跑(0.3)
+    assert not t3.nav._creep_clear(SimpleNamespace(x=3.0, y=4.0, yaw=0.0)), "按机身宽查,不是一条线"
+
+
+async def test_W35_弧线被拦_原地转也被拦_就不转(tmp_path):
+    """弧线被拦时改成原地转,前提是原地转那条自己过得了守卫:刚起步两侧没看过、前面又有东西(挪不了),
+    哪条都过不了 —— 原地不动。"""
+    t = 台子(tmp_path, rear=True, cone=True, walls=[(3.85, 3.7, 3.95, 4.3)])
+    await t.start(3.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(5.0, 4.6))
+    await t.跑(8.0)
+    assert not t.crashed and abs(t.r.yaw) < 0.02 and abs(t.r.x - 3.0) < 0.05

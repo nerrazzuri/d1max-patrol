@@ -66,7 +66,12 @@ TEMP_OBSTACLE_S = 30.0
 #: 记忆;转向时机身角甩进去):前面看得清是空的,就笔直往前挪这么远(这么快)再接着走 —— 挪过一个
 #: 机身长,两侧就在刚才看过的范围里了。每次被挡最多挪一次。W34:2026-10-08 C40221 起步是弧线,
 #: 以前只有纯原地转才挪,前后雷达都标过也起不了步。
-CREEP_M = 1.0
+#: W35(2026-10-13):原来挪 1.0 m(一个机身长 0.93 m 多一点)—— 不够。挪完要原地转,转身扫的是外接圆
+#: (半径 0.59 m);圆里最靠后的那一条,在起步时离机头不到一格,正好落在机头前那圈看不见的地方
+#: (雷达从机头前 0.47 m 起才看得见,栅格 0.1 m)。挪完转到一半被**一格**看不见的卡住,原地等、
+#: 两侧的记忆 10 s 过期,再也转不动,等满 20 s 放弃(现场日志「有挡 0 处、看不见 1 处」)。
+#: 要挪过:外接圆半径 0.59 + 机头盲区 0.47 + 一格 0.1 + 感知延迟那几厘米 ≈ 1.2,取 1.3。
+CREEP_M = 1.3
 CREEP_V = 0.2
 #: 偏离路径多远就停下重规划(W10 内审应修 5:原来 1 m,比膨胀半径还大)。
 MAX_DEVIATION_M = 0.3
@@ -542,7 +547,9 @@ class PlannedNavBackend(HalNavBackend):
             await self._move(0.0, self._turn(err), dt_s, here)
             return
         seg, dev, proj = self._project(here.x, here.y)
-        if dev > MAX_DEVIATION_M:
+        # 正往前挪着(W35):挪本来就是离开路径,挪完再重规划一次 —— 原来挪 1 m 的路上每偏 0.3 m 重规划
+        # 一次,正好用光 3 次的额度,再多一次就「走不上路径」失败
+        if dev > MAX_DEVIATION_M and self._creep_from is None:
             log.warning("偏离路径 %.2f m,从当前位置重规划", dev)
             self._start_replan()
             await self._send(0.0, 0.0, dt_s)
@@ -635,6 +642,12 @@ class PlannedNavBackend(HalNavBackend):
             await self._fail(why)
             return
         v = self.guard.check(vx, wz, self._v_meas, self.obstacles, self._odom_pose)
+        if not v.ok and abs(vx) > 1e-6 and abs(wz) > 1e-6 and self._creep_from is None:
+            # 边走边转的弧线被拦(W35:急弯的弧线往里扫出去一米,扫进机身侧面的盲带),原地转却通得过:
+            # 先原地转正,转正了下一拍就是直走 —— 不为一条弧线原地等到放弃。发出去的那条照样过了守卫
+            turn = self.guard.check(0.0, wz, self._v_meas, self.obstacles, self._odom_pose)
+            if turn.ok:
+                vx, v = 0.0, turn
         if v.ok:
             if self._blocked_since is not None:
                 waited = self._secs() - self._blocked_since
@@ -686,21 +699,40 @@ class PlannedNavBackend(HalNavBackend):
             self._start_replan(detour=True)
 
     def _creep_clear(self, here: Any) -> bool:
-        """往前挪那一段(挪的距离 + 机身前沿)在地图上也得能走:不碰致命格、离禁行区够远(内审阻断 1:
-        原来只看守卫,禁行区要等狗身中心压上去才停 —— 落差在真机验过之前只靠禁行区挡)。"""
-        cm = self._cm
-        if cm is None:
+        """往前挪那一段在地图上也得能走:机身(含余量)扫过的那一条不压地图里的挡、不出图,离禁行区
+        够远(内审阻断 1:原来只看守卫,禁行区要等狗身中心压上去才停 —— 落差在真机验过之前只靠禁行区
+        挡)。
+
+        W35(2026-10-13 C40221):原来查的是**膨胀过**的代价图上中心走的那条线 —— 膨胀半径是机身
+        外接圆(0.5 m 多),狗离桌子、墙半米以内就哪儿都不让挪,路线一弯就起不了步。直着挪用不着
+        外接圆:按机身矩形查没膨胀的图;东西真在那儿守卫现看着。狗此刻机身底下本来就压着的格子
+        不算(定位差几厘米、贴着东西站)。"""
+        if self._base is None:
             return False
-        from d1max_agent.planning.astar import LETHAL, iter_line
+        blocked, res, origin = self._base
+        rows, cols = blocked.shape
         h = _heading(here.yaw, self._dir or 1)
         c, s = math.cos(h), math.sin(h)
+        hl = self.guard.body_len / 2 + self.guard.margin
+        hw = self.guard.body_wid / 2 + self.guard.margin
+        step = min(0.05, res / 2)
+        nx, ny = int(math.ceil(2 * hl / step)), int(math.ceil(2 * hw / step))
+        body = [(-hl + 2 * hl * i / nx, -hw + 2 * hw * j / ny)
+                for i in range(nx + 1) for j in range(ny + 1)]
+
+        def cells(d: float) -> set[tuple[int, int]]:
+            out = set()
+            for lx, ly in body:
+                x, y = here.x + c * (d + lx) - s * ly, here.y + s * (d + lx) + c * ly
+                out.add((int(math.floor((y - origin[1]) / res)),
+                         int(math.floor((x - origin[0]) / res))))
+            return out
+        under = cells(0.0)
+        for i in range(1, int(math.ceil(CREEP_M / step)) + 1):
+            for r, k in cells(min(i * step, CREEP_M)) - under:
+                if not (0 <= r < rows and 0 <= k < cols) or blocked[r, k]:
+                    return False
         reach = CREEP_M + self.guard.body_len / 2 + self.guard.margin
-        end = (here.x + c * CREEP_M, here.y + s * CREEP_M)
-        a, b = cm.cell_of(here.x, here.y), cm.cell_of(*end)
-        if a is None or b is None:
-            return False
-        if any(cm.cost[r, k] == LETHAL and not (r, k) == a for r, k in iter_line(a, b)):
-            return False
         for i in range(int(reach / 0.05) + 1):
             d = i * 0.05
             if self.nogo_near(here.x + c * d, here.y + s * d, ZONE_STOP_M) is not None:
