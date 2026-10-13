@@ -6,7 +6,7 @@ import 'dart:typed_data';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/ui/site_health.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/theme.dart';
+import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/widget/alarm_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show MissingPluginException;
@@ -24,7 +24,7 @@ Future<List<(String, Uint8List)>> _open(WidgetTester t, FakeApi api, {String Fun
   _portrait(t);
   final saved = <(String, Uint8List)>[];
   await t.pumpWidget(MaterialApp(
-      theme: proTheme(),
+      theme: nwTheme(Brightness.dark),
       home: SiteHealthPage(
           api: api,
           now: () => DateTime(2026, 10, 11, 2, 4, 9),
@@ -234,7 +234,7 @@ void main() {
     final api = FakeApi('admin');
     final gate = Completer<String>();
     _portrait(t);
-    await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteHealthPage(api: api, save: (n, b) => gate.future)));
+    await t.pumpWidget(MaterialApp(theme: nwTheme(Brightness.dark), home: SiteHealthPage(api: api, save: (n, b) => gate.future)));
     await t.pumpAndSettle();
     await t.ensureVisible(find.byKey(SiteHealthPage.bundleKey));
     await t.tap(find.byKey(SiteHealthPage.bundleKey));
@@ -281,7 +281,7 @@ void main() {
   testWidgets('外审 M1 反过来：版本一览卡着，体检读到了就先显示', (t) async {
     final api = FakeApi('admin')..versionsGate = Completer<void>();
     _portrait(t);
-    await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteHealthPage(api: api, save: (n, b) async => n)));
+    await t.pumpWidget(MaterialApp(theme: nwTheme(Brightness.dark), home: SiteHealthPage(api: api, save: (n, b) async => n)));
     await t.pump();
     await t.pump();
     expect(find.byKey(SiteHealthPage.overallKey), findsOneWidget);
@@ -295,7 +295,7 @@ void main() {
   testWidgets('正在读的时候刷新按钮按不了（不会同时问两次）', (t) async {
     final api = FakeApi('admin')..healthGate = Completer<void>();
     _portrait(t);
-    await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteHealthPage(api: api, save: (n, b) async => n)));
+    await t.pumpWidget(MaterialApp(theme: nwTheme(Brightness.dark), home: SiteHealthPage(api: api, save: (n, b) async => n)));
     await t.pump();
     expect(t.widget<IconButton>(find.byKey(SiteHealthPage.refreshKey)).onPressed, isNull);
     api.healthGate!.complete();
@@ -309,7 +309,7 @@ void main() {
   testWidgets('入口：管理员的底部导航有管理栏（站点体检），点了进去；保安、业主没有', (t) async {
     _portrait(t);
     final api = FakeApi('admin');
-    await t.pumpWidget(MaterialApp(theme: proTheme(), home: NwShell(api: api)));
+    await t.pumpWidget(MaterialApp(theme: nwTheme(Brightness.dark), home: NwShell(api: api)));
     await t.pumpAndSettle();
     expect(find.byType(SiteHealthPage), findsNothing);
     await t.tap(find.byKey(const Key('open-health')));
@@ -317,7 +317,7 @@ void main() {
     expect(find.byType(SiteHealthPage), findsOneWidget);
     for (final role in ['guard', 'owner']) {
       await t.pumpWidget(Container());
-      await t.pumpWidget(MaterialApp(theme: proTheme(), home: NwShell(api: FakeApi(role))));
+      await t.pumpWidget(MaterialApp(theme: nwTheme(Brightness.dark), home: NwShell(api: FakeApi(role))));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('open-health')), findsNothing, reason: role);
       await t.tap(find.byKey(NwShell.moreKey));
@@ -336,7 +336,7 @@ void main() {
       {BundleSaver? save, BundleSharer? share, bool? canShare = true}) async {
     _portrait(t);
     await t.pumpWidget(MaterialApp(
-        theme: proTheme(),
+        theme: nwTheme(Brightness.dark),
         home: SiteHealthPage(
             api: api,
             now: () => DateTime(2026, 10, 11, 2, 4, 9),

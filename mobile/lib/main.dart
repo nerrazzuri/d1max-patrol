@@ -13,8 +13,7 @@
 ///
 /// **英文为主中文可选**（App V2）：文字在 `l10n.dart`。**主题浅色、深色两套，跟随系统**（2026-10-14
 /// 按设计稿重做）：新设计系统在 `ui/nw/`（`nw_theme.dart`），登录之后是带底部导航的外壳
-/// （`ui/nw/nw_shell.dart`）。老的专业版主题（`ui/theme.dart`）在各页换完之前还留着，页面里写死的
-/// `D1Color` 也还在。
+/// （`ui/nw/nw_shell.dart`）。老的专业版主题和它的字体 2026-10-14 收尾时删了。
 library;
 
 import 'package:flutter/foundation.dart';
@@ -33,7 +32,6 @@ export 'ui/orientation.dart' show landscapeOnly, lockLandscape, unlockOrientatio
 /// 打在包里的字体和各自的许可证（都是 SIL OFL 1.1）：登记进 App 的许可证页。
 /// 许可证文件要列在 `pubspec.yaml` 的 assets 里，不然读不到（`nw_theme_test.dart` 把关）。
 const List<(List<String>, String)> fontLicenses = <(List<String>, String)>[
-  (<String>['Atkinson Hyperlegible Next', 'Atkinson Hyperlegible Mono'], 'assets/fonts/OFL.txt'),
   (<String>['Space Grotesk'], 'assets/fonts/OFL-SpaceGrotesk.txt'),
   (<String>['Inter'], 'assets/fonts/OFL-Inter.txt'),
   (<String>['JetBrains Mono'], 'assets/fonts/OFL-JetBrainsMono.txt'),

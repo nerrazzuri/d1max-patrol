@@ -3,7 +3,7 @@
 /// `tests/test_design_mobile_tokens.py`。
 ///
 /// 用法：`final c = Nw.of(context);` 然后 `c.surface`、`c.error`……字用 `NwText.bodyMedium`
-/// （不带颜色，颜色自己配）。老的 `D1*` / `proTheme` 在各页换完之前还留着（`ui/theme.dart`）。
+/// （不带颜色，颜色自己配）。老的专业版主题和它写死的颜色常量 2026-10-14 收尾时删了。
 library;
 
 import 'package:flutter/material.dart';
@@ -169,8 +169,8 @@ class NwColors extends ThemeExtension<NwColors> {
 
 /// 取颜色，外加间距、圆角那几档。
 abstract final class Nw {
-  /// 当前上下文的那一套颜色。**上下文里没有我们的主题也不抛**（大多数测试是光秃秃的 `MaterialApp`，
-  /// 老页面还在用 `proTheme`）：按那个主题是亮是暗，回浅色或深色那一套。
+  /// 当前上下文的那一套颜色。**上下文里没有我们的主题也不抛**（大多数测试是光秃秃的
+  /// `MaterialApp`）：按那个主题是亮是暗，回浅色或深色那一套。
   static NwColors of(BuildContext c) {
     final theme = Theme.of(c);
     return theme.extension<NwColors>() ??

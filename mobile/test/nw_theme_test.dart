@@ -8,7 +8,6 @@ import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
-import 'package:d1max_patrol/ui/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -30,7 +29,6 @@ void main() {
     testWidgets('上下文里没有我们的主题：不抛，按那个主题是亮是暗回一套', (t) async {
       expect(await _colorsUnder(t, null), same(NwColors.light), reason: '光秃秃的 MaterialApp 是亮的');
       expect(await _colorsUnder(t, ThemeData.dark()), same(NwColors.dark));
-      expect(await _colorsUnder(t, proTheme()), same(NwColors.dark), reason: '老的专业版主题是深色的');
       expect(t.takeException(), isNull);
     });
 
