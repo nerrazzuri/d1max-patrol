@@ -22,6 +22,15 @@ vivo、荣耀这些厂商的通道接好了,站点只调极光一个接口。
   老写法(平铺的 ``app_key``)照认,算极光。手机登记推送号时带 ``provider``;一部手机(一次登录)两个
   通道都登记了、站点也都配了,只走一个(先 FCM),不推两遍。一条告警在某个通道发完了就记下
   (``push_outbox.done``),别的通道没发出去重试时不重发它。
+- **逐台记账、至少一次**(RC 加固外审 I1、I2):
+  - **每发一次之前**(FCM 是每一台,极光是每一批)按此刻再核一遍有没有人确认、解决、过没过一小时;
+    交给通道的有效期是此刻**还剩**多少,不是再给一小时。
+  - 发成功的推送号记进 ``push_sent``(跟着库走,站点重启也在);没发成功的下一轮只补它们,发成功过的
+    **不再发**。
+  - **回执丢了**(超时、断线、5xx:手机可能已经收到,站点分不清)按没发成功算,下一轮再发 —— 所以是
+    **至少一次**:这种手机可能收到两遍、响两次。通知带的 ``tag`` 只让第二遍**盖掉**第一遍(通知栏里
+    不叠成两条),**不保证不再响**;要做到不再响得手机自己记着处理过哪一条,现在没做。
+  - 一个通道连着 :data:`GIVE_UP_AFTER` 次失败(多半是整个不通)这一轮就先停,退避之后再来。
 """
 
 from __future__ import annotations
@@ -59,6 +68,9 @@ EXPIRE_MS = 3600_000
 STUCK_MS = 10 * 60_000
 #: 退避:第 n 次失败等 min(MAX, BASE * 2^n) 秒。
 BACKOFF_BASE_S, BACKOFF_MAX_S = 10, 300
+#: 一个通道一轮里连着这么多次发送失败就先停(FCM 一台一个请求、一个最多等 10 秒:没外网时 500 台要等
+#: 一个多小时,这期间别的告警都推不出去)。
+GIVE_UP_AFTER = 3
 
 
 class PushError(Exception):
@@ -77,8 +89,9 @@ class JPush:
         self._open = opener
         self.timeout_s = timeout_s
 
-    def send(self, reg_ids: list[str], title: str, body: str, extras: dict[str, str]) -> str:
-        """推给这几台。回极光的消息号。"""
+    def send(self, reg_ids: list[str], title: str, body: str, extras: dict[str, str], *,
+             ttl_s: int = EXPIRE_MS // 1000) -> str:
+        """推给这几台。回极光的消息号。``ttl_s``:极光那头最多替离线的手机存多久。"""
         payload = {
             "platform": ["android", "ios"],
             "audience": {"registration_id": reg_ids},
@@ -88,7 +101,7 @@ class JPush:
                 "ios": {"alert": {"title": title, "body": body}, "sound": "default",
                         "extras": extras},
             },
-            "options": {"time_to_live": EXPIRE_MS // 1000},
+            "options": {"time_to_live": max(1, int(ttl_s))},
         }
         req = urllib.request.Request(
             self.url, data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
@@ -130,12 +143,14 @@ class Fcm:
     """Firebase Cloud Messaging HTTP v1。一条消息发一台;``send`` 有没发出去的抛 :class:`PushError`。
 
     - 鉴权:服务账号签一张一小时的 JWT 换访问令牌,快到期再换。
-    - 通知带 ``tag``(告警 + 档):同一条重发,手机上**盖掉**原来那条,不叠成两条 —— 所以一批里有几台
-      没发出去、整批重试时,已经收到的手机不会多响一次。
+    - 通知带 ``tag``(告警 + 档):同一条再发一遍,手机通知栏里**盖掉**原来那条,不叠成两条。**它不保证
+      不再响一次**(RC 加固外审 I2:``tag`` 是替换、``collapse_key`` 是合并还没送到的,都不是「处理过
+      这一条」的去重)。不重发靠站点逐台记账(:class:`PushDesk`、``push_sent``)。
     - 令牌失效了的(App 卸了、清了数据):记在 :meth:`take_dead` 里,站点把它从名单上删掉。
     """
 
-    batch = 500
+    #: 站点一次交给它一台(RC 加固外审 I1、I2):每一台发之前站点都按此刻再核一遍,发成功一台记一台。
+    batch = 1
 
     def __init__(self, project_id: str, client_email: str, private_key_pem: str, *,
                  token_uri: str = "https://oauth2.googleapis.com/token",
@@ -187,7 +202,8 @@ class Fcm:
         self._access = (tok, now + float(got.get("expires_in") or 3600))
         return tok
 
-    def send(self, reg_ids: list[str], title: str, body: str, extras: dict[str, str]) -> str:
+    def send(self, reg_ids: list[str], title: str, body: str, extras: dict[str, str], *,
+             ttl_s: int = EXPIRE_MS // 1000) -> str:
         tag = (extras.get("alert_key", "") + "#" + extras.get("tier", ""))[:60]
         failed, last, why = 0, "", ""
         for reg in reg_ids:
@@ -195,7 +211,7 @@ class Fcm:
                 "token": reg,
                 "notification": {"title": title, "body": body},
                 "data": dict(extras),
-                "android": {"priority": "HIGH", "ttl": f"{EXPIRE_MS // 1000}s",
+                "android": {"priority": "HIGH", "ttl": f"{max(1, int(ttl_s))}s",
                             "collapse_key": tag, "notification": {"tag": tag, "sound": "default"}},
             }}
             req = urllib.request.Request(
@@ -393,7 +409,8 @@ class PushDesk:
         """要推的都推出去(要等网络:站点主程序放在自己那条道上跑)。
 
         A6 外审 F4:每一条、每一批**发之前按此刻**再核一遍(过期了没有、有人确认或解决了没有):前面的
-        请求等网络可能等了好几秒。发了一部分以后有人确认了,后面的批次不再发(发出去的撤不回)。"""
+        请求等网络可能等了好几秒。发了一部分以后有人确认了,后面的批次不再发(发出去的撤不回)。
+        RC 加固外审 I1、I2:FCM 一批就是一台;发成功的逐台记账,见模块说明。"""
         rows = [dict(r) for r in self.db.query(
             "SELECT * FROM push_outbox WHERE sent_ms IS NULL AND dropped='' AND next_ms<=? "
             "ORDER BY id LIMIT 50", (self._now(),))]
@@ -411,33 +428,52 @@ class PushDesk:
             title = f"{self.site_name} · P1" if self.site_name else "P1 告警"
             extras = {"alert_key": row["alert_key"], "tier": str(row["tier"])}
             done = [d for d in str(row["done"]).split(",") if d]
-            sent_any, stopped, first, failed = bool(done), "", True, ""
+            got = {r["reg_id"] for r in self.db.query(
+                "SELECT reg_id FROM push_sent WHERE outbox_id=?", (row["id"],))}
+            sent_any, stopped, first, failed = bool(done) or bool(got), "", True, ""
             for name in PROVIDERS:                        # 一个通道没发出去,不耽误另一个
-                reg = devices.get(name) or []
-                if name in done or not reg or stopped:
+                reg = [r for r in devices.get(name) or [] if r not in got]   # 发成功过的不再发
+                if name not in self.senders or name in done or stopped:
                     continue
                 sender = self.senders[name]
                 step = int(getattr(sender, "batch", BATCH))
+                bad, streak = "", 0
                 try:
                     for i in range(0, len(reg), step):
-                        if not first:
+                        if not first:                     # 每发一次之前按此刻再核(外审 I1)
                             stopped = self._skip(row, self._now())
                             if stopped:
                                 break
                         first = False
-                        sender.send(reg[i:i + step], title, row["title"], extras)
+                        chunk = reg[i:i + step]
+                        left = (EXPIRE_MS - (self._now() - row["created_ms"])) // 1000
+                        try:
+                            sender.send(chunk, title, row["title"], extras, ttl_s=max(1, left))
+                        except PushError as exc:
+                            # 这几台算没发成功(回执丢了的也在这里:至少一次);接着发后面的
+                            bad, streak = str(exc)[:300], streak + 1
+                            log.warning("P1 推送(%s)没发出去:%s", name, exc)
+                            if streak >= GIVE_UP_AFTER:
+                                break                     # 多半整个通道不通:这一轮先停
+                            continue
+                        streak = 0
                         sent_any = True
-                except PushError as exc:
-                    failed = str(exc)[:300]
-                    log.warning("P1 推送(%s)没发出去:%s", name, exc)
-                else:
-                    if not stopped:
-                        done.append(name)                 # 这个通道发完了:记下,重试不重发
-                        with self.db.tx() as c:
-                            c.execute("UPDATE push_outbox SET done=? WHERE id=?",
-                                      (",".join(done), row["id"]))
+                        dead = set(getattr(sender, "take_dead", list)())
+                        self._forget(sorted(dead))
+                        with self.db.tx() as c:           # 发成功一次记一次(外审 I2)
+                            c.executemany(
+                                "INSERT OR IGNORE INTO push_sent(outbox_id, reg_id, sent_ms) "
+                                "VALUES (?,?,?)",
+                                [(row["id"], r, self._now()) for r in chunk if r not in dead])
                 finally:
                     self._forget(getattr(sender, "take_dead", list)())
+                if bad:
+                    failed = bad
+                elif not stopped:
+                    done.append(name)                     # 这个通道发完了:记下
+                    with self.db.tx() as c:
+                        c.execute("UPDATE push_outbox SET done=? WHERE id=?",
+                                  (",".join(done), row["id"]))
             if failed:
                 self.last_error = failed
                 wait = min(BACKOFF_MAX_S, BACKOFF_BASE_S * 2 ** min(row["attempts"], 10))

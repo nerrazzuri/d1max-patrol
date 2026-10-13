@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.ha_model.model import KEEP_S, PromoteRefused, Robot, World
+from tests.ha_model.model import KEEP_S, STANDOFF_MAX_S, PromoteRefused, Robot, World
 
 
 def _failover(w: World, **kw) -> None:
@@ -187,3 +187,81 @@ def test_旧主回来当备机_分区期间自己记的不合并_导出给人看
     assert w.a.log == ["共同的", "新主记的"] and w.a.state == "standby"
     with pytest.raises(PromoteRefused):
         w.b.rejoin(w.a)
+
+
+# ---------------------------------------------------------------- RC 加固外审 I3、决策 62
+
+
+def _驱离中换主(max_s: float = 300, *, session_synced: bool = False) -> World:
+    """旧主开了一场驱离:声光开着、狗在保持距离(跑在狗上的任务);然后旧主断电、人升备机。"""
+    w = World.fresh("r1")
+    w.write("a", "驱离会话1", sync=session_synced)
+    if not session_synced:
+        w.b.log = [x for x in w.b.log if x != "驱离会话1"]
+    assert w.send("a", "r1", "outputs_on", owner="驱离会话1").accepted
+    assert w.send("a", "r1", "standoff", owner="驱离会话1", max_s=max_s).accepted
+    w.power_off("a")
+    _failover(w)
+    return w
+
+
+def test_外审I3_会话没复制过来_声光45秒关了_保持距离的任务还在跑_这不是原地等():
+    """原来的稿子写「声光 45 秒关、狗原地等命令」。保持距离是跑在狗上的运动任务,断了站点照样跑、
+    人靠近照样退,声光关不关跟它没关系。"""
+    w = _驱离中换主()
+    r = w.robots["r1"]
+    assert "驱离会话1" not in w.b.log
+    w.now = KEEP_S + 1
+    assert not r.outputs_on(w.now), "不变式 8:声光关了"
+    assert r.running(w.now) is not None, "可是狗还在退:不能说它原地等"
+
+
+def test_决策62_新主不续不撤_这台狗占用到任务结束_结束了才派():
+    w = _驱离中换主(max_s=300)
+    r = w.robots["r1"]
+    w.now = 60
+    assert w.send("b", "r1", "move") is None, "占用着:不派"
+    assert w.send("b", "r1", "outputs_on") is None, "不替它接着开声光(决策 58 第 2 条)"
+    assert w.send("b", "r1", "standoff", owner="新的", max_s=900) is None, "也不给它续"
+    assert w.b.sent == [], "新主一条命令都没发:没续、没撤"
+    assert w.b.busy == {"r1": 300}, "值班台上写得出它最迟什么时候结束"
+    assert r.running(w.now) == ("standoff", "驱离会话1", 300), "任务原样在跑,时限没变长"
+    w.now = 300
+    assert r.running(w.now) is None, "到自己的时限:停了"
+    assert w.send("b", "r1", "move").accepted and w.b.busy == {}, "狗报结束了才回到可派"
+
+
+def test_决策62_人随时可以叫停_叫停之后可派():
+    w = _驱离中换主(max_s=600)
+    w.now = 30
+    assert w.send("b", "r1", "move") is None
+    assert w.send("b", "r1", "stop").accepted, "人下的叫停带新任期,狗照办"
+    assert w.robots["r1"].running(w.now) is None and w.b.busy == {}
+    assert w.send("b", "r1", "move").accepted
+
+
+def test_不变式10_新主够不着这台狗_遗留的任务也最迟到自己的时限停_时限封顶():
+    w = _驱离中换主(max_s=99999)
+    w.partition("b", "r1")
+    r = w.robots["r1"]
+    assert w.send("b", "r1", "stop") is None, "够不着"
+    w.now = STANDOFF_MAX_S - 1
+    assert r.running(w.now) is not None
+    w.now = STANDOFF_MAX_S
+    assert r.running(w.now) is None, "给多长都封顶在 900 秒"
+
+
+def test_会话复制过来了_新主认识这个任务_不算占用_照常接着管():
+    w = _驱离中换主(session_synced=True)
+    assert "驱离会话1" in w.b.log
+    w.now = 10
+    assert w.send("b", "r1", "outputs_on", owner="驱离会话1").accepted, "接着续声光"
+    assert w.b.busy == {}
+
+
+def test_不变式9_备机和下台的旧主对占用的狗也一条不发():
+    w = _驱离中换主()
+    w.heal()
+    w.gossip()
+    assert w.a.state == "deposed"
+    assert w.send("a", "r1", "stop") is None and w.a.sent[-1].kind == "standoff"

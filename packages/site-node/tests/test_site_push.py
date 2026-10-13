@@ -23,7 +23,7 @@ class 假极光:
     def __init__(self):
         self.sent, self.fail = [], None
 
-    def send(self, reg, title, body, extras):
+    def send(self, reg, title, body, extras, **kw):
         if self.fail:
             raise PushError(self.fail)
         self.sent.append((list(reg), title, body, extras))
@@ -239,9 +239,9 @@ def test_F4_前一条等网络跨过了一小时_后一条不再发(台):
     clock[0] += 3600_000 - 500
     real = j.send
 
-    def 慢(*a):
+    def 慢(*a, **kw):
         clock[0] += 1000                                  # 这一条等网络等了 1 秒
-        return real(*a)
+        return real(*a, **kw)
     j.send = 慢
     p.tick()
     q = {r["title"]: r for r in _队(db)}
@@ -257,8 +257,8 @@ def test_F4_分批发_第一批发着的时候有人确认了_后面的批次不
     a = desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
     real = j.send
 
-    def 发着确认(*args):
-        out = real(*args)
+    def 发着确认(*args, **kw):
+        out = real(*args, **kw)
         desk.ack(a.key, who="gina")
         return out
     j.send = 发着确认
@@ -330,7 +330,7 @@ class 假通道:
         if batch:
             self.batch = batch
 
-    def send(self, reg, title, body, extras):
+    def send(self, reg, title, body, extras, **kw):
         if self.fail:
             raise PushError(self.fail)
         self.sent.append(list(reg))
@@ -437,8 +437,8 @@ def test_H9_有人确认了_后面的通道不再发(双通道, monkeypatch):
     a = desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
     real = f.send
 
-    def 发着的时候确认(reg, *rest):
-        out = real(reg, *rest)
+    def 发着的时候确认(reg, *rest, **kw):
+        out = real(reg, *rest, **kw)
         desk.ack(a.key, who="gina")
         return out
     monkeypatch.setattr(f, "send", 发着的时候确认)
@@ -626,7 +626,8 @@ def test_H9_库从54升上来_老的推送号算极光_队里的照发(tmp_path)
     db = SiteDB(path)
     assert db.query("SELECT provider FROM push_devices")[0]["provider"] == "jpush"
     assert db.query("SELECT done FROM push_outbox")[0]["done"] == ""
-    assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == "55"
+    from d1max_site.db import SCHEMA_VERSION
+    assert db.query("SELECT value FROM meta WHERE key='schema'")[0]["value"] == str(SCHEMA_VERSION)
     db.close()
 
 
@@ -644,3 +645,215 @@ def test_H9_真接口_登记带通道名_回站点配了哪几个(tmp_path):
                      token=tok)[0] == 400
     finally:
         s.close()
+
+
+# ---------------------------------------------------------------- RC 加固外审(2026-10-13)I1、I2
+
+
+def _真FCM(opener):
+    from d1max_site.push import Fcm
+    return Fcm("p", "e", "K", opener=opener, signer=lambda k, d: b"s", now_s=lambda: 0.0)
+
+
+def _FCM台(tmp_path, opener, n=3):
+    clock = [NOW]
+    db = SiteDB(tmp_path / "s.db")
+    with db.tx() as c:
+        for i in range(n):
+            c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                      "VALUES (?,?,?,?,?,0)", (f"u{i}", "guard", b"s", b"h", 0))
+            c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                      "VALUES (?,?,0,0)", (f"s{i}", f"u{i}"))
+    desk = AlertDesk(db, now_ms=lambda: clock[0])
+    desk.push = True
+    p = PushDesk(db, now_ms=lambda: clock[0], senders={"fcm": _真FCM(opener)}, site_name="站")
+    p.alerts = desk
+    for i in range(n):
+        p.register(f"u{i}", f"reg{i}", "android", session=f"s{i}", provider="fcm")
+    return desk, p, clock, db
+
+
+def _tok(req):
+    return json.loads(req.data)["message"]["token"]
+
+
+def test_外审I1_FCM同一批里_发着第一台的时候有人确认了_后面的不发(tmp_path):
+    seen, hook = [], [None]
+
+    def opener(req, timeout):
+        if "oauth" in req.full_url:
+            return _回({"access_token": "t", "expires_in": 3600})
+        seen.append(_tok(req))
+        if hook[0]:
+            hook[0]()
+        return _回({"name": "m"})
+    desk, p, clock, db = _FCM台(tmp_path, opener)
+    a = desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    hook[0] = lambda: desk.ack(a.key, who="gina") if len(seen) == 1 else None
+    p.tick()
+    assert seen == ["reg0"], "第一台发着的时候确认了:第二、三台不发"
+    row = _队(db)[0]
+    assert row["sent_ms"] is not None and "确认" in row["error"]
+    db.close()
+
+
+def test_外审I1_FCM同一批里_发着第一台跨过了一小时_后面的不发_有效期按剩下的给(tmp_path):
+    seen, ttl, hook = [], [], [None]
+
+    def opener(req, timeout):
+        if "oauth" in req.full_url:
+            return _回({"access_token": "t", "expires_in": 3600})
+        seen.append(_tok(req))
+        ttl.append(json.loads(req.data)["message"]["android"]["ttl"])
+        hook[0]()
+        return _回({"name": "m"})
+    desk, p, clock, db = _FCM台(tmp_path, opener)
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    clock[0] += 50 * 60_000                                   # 排队 50 分钟才轮到(站点刚上外网)
+    hook[0] = lambda: clock.__setitem__(0, clock[0] + 6 * 60_000)   # 每台等网络 6 分钟
+    p.tick()
+    assert seen == ["reg0", "reg1"], "发第三台之前已经过了一小时"
+    assert ttl == ["600s", "240s"], "手机那头的有效期按此刻还剩多少给,不是再给一小时"
+    db.close()
+
+
+def test_外审I2_FCM一台成功一台503_重试只补没成功的那台_重启也一样(tmp_path):
+    seen, busy = [], {"reg1"}
+
+    def opener(req, timeout):
+        if "oauth" in req.full_url:
+            return _回({"access_token": "t", "expires_in": 3600})
+        seen.append(_tok(req))
+        if _tok(req) in busy:
+            raise _http错(503, {"error": {"status": "UNAVAILABLE"}})
+        return _回({"name": "m"})
+    desk, p, clock, db = _FCM台(tmp_path, opener)
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    p.tick()
+    assert seen == ["reg0", "reg1", "reg2"], "一台没发出去不耽误后面的"
+    row = _队(db)[0]
+    assert row["sent_ms"] is None and row["attempts"] == 1 and "503" in row["error"]
+    busy.clear()
+    clock[0] += 11_000
+    p2 = PushDesk(db, now_ms=lambda: clock[0], senders={"fcm": _真FCM(opener)}, site_name="站")
+    p2.tick()                                                   # 站点重启过:换了一个 PushDesk
+    assert seen == ["reg0", "reg1", "reg2", "reg1"], "发成功过的 reg0、reg2 不再发"
+    assert _队(db)[0]["sent_ms"] == NOW + 11_000
+    db.close()
+
+
+def test_外审I2_回执丢了_超时_算没成功_下一轮再发这一台_至少一次(tmp_path):
+    """手机可能已经收到、站点没等到回复:分不清,按没发成功重发(至少一次投递;文档里明说)。"""
+    seen, lost = [], {"reg0"}
+
+    def opener(req, timeout):
+        if "oauth" in req.full_url:
+            return _回({"access_token": "t", "expires_in": 3600})
+        seen.append(_tok(req))
+        if _tok(req) in lost:
+            raise TimeoutError("timed out")
+        return _回({"name": "m"})
+    desk, p, clock, db = _FCM台(tmp_path, opener, n=2)
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    p.tick()
+    lost.clear()
+    clock[0] += 11_000
+    p.tick()
+    assert seen == ["reg0", "reg1", "reg0"]
+    db.close()
+
+
+def test_外审I2_整个通道不通_连着几台都失败就先停_不把每一台都等一遍(tmp_path):
+    seen = []
+
+    def opener(req, timeout):
+        if "oauth" in req.full_url:
+            return _回({"access_token": "t", "expires_in": 3600})
+        seen.append(_tok(req))
+        raise OSError("Network is unreachable")
+    desk, p, clock, db = _FCM台(tmp_path, opener, n=12)
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    p.tick()
+    assert len(seen) == 3, "一台最多等 10 秒:没外网时 500 台要等一个多小时"
+    db.close()
+
+
+def test_外审I2_极光一批发成功记下这一批_下一批失败只补下一批(台, monkeypatch):
+    desk, p, j, clock, db = 台
+    monkeypatch.setattr("d1max_site.push.BATCH", 2)
+    with db.tx() as c:
+        for i in range(3):
+            c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                      "VALUES (?,?,?,?,?,0)", (f"u{i}", "guard", b"s", b"h", 0))
+            c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                      "VALUES (?,?,0,0)", (f"s{i}", f"u{i}"))
+    for i in range(3):
+        p.register(f"u{i}", f"rid-u{i}", "android", session=f"s{i}")
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    calls = []
+    real = j.send
+
+    def send(reg, title, body, extras, **kw):
+        calls.append(list(reg))
+        if len(calls) == 2:
+            raise PushError("极光回 503")
+        return real(reg, title, body, extras, **kw)
+    j.send = send
+    p.tick()
+    assert calls == [["rid-gina", "rid-u0"], ["rid-u1", "rid-u2"]]
+    clock[0] += 11_000
+    p.tick()
+    assert calls[2:] == [["rid-u1", "rid-u2"]], "第一批发成功了:不重发"
+    assert _队(db)[0]["sent_ms"] == NOW + 11_000
+
+
+def test_外审I2_库从55升上来_发了一半的那条_已经发完的通道不重发(tmp_path):
+    import sqlite3
+    from pathlib import Path
+    snap = Path(__file__).parent / "fixtures" / "schema" / "site-v55.sql"
+    path = tmp_path / "s.db"
+    con = sqlite3.connect(path)
+    con.executescript(snap.read_text(encoding="utf-8"))
+    con.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                "VALUES ('gina','guard',x'00',x'00',0,0)")
+    con.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                "VALUES ('s','gina',0,0)")
+    con.execute("INSERT INTO push_devices(reg_id, account, platform, updated_ms, session, provider)"
+                " VALUES ('jp','gina','android',0,'s','jpush')")
+    con.execute("INSERT INTO push_outbox(alert_key, tier, robot, title, created_ms, next_ms, done) "
+                "VALUES ('A/x#1',0,'A','x',?,?,'jpush')", (NOW, NOW))
+    con.commit()
+    con.close()
+    db = SiteDB(path)
+    j = 假通道()
+    p = PushDesk(db, now_ms=lambda: NOW, senders={"jpush": j}, site_name="站")
+    p.tick()
+    assert j.sent == [] and _队(db)[0]["sent_ms"] == NOW
+    db.close()
+
+
+def test_外审I2_隔一台失败一台_不算整个通道不通_每一台都发到(tmp_path):
+    seen = []
+
+    def opener(req, timeout):
+        if "oauth" in req.full_url:
+            return _回({"access_token": "t", "expires_in": 3600})
+        seen.append(_tok(req))
+        if int(_tok(req)[3:]) % 2:
+            raise _http错(503, {"error": {"status": "UNAVAILABLE"}})
+        return _回({"name": "m"})
+    desk, p, clock, db = _FCM台(tmp_path, opener, n=8)
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="x")
+    p.tick()
+    assert len(seen) == 8, "失败的没连着:不停"
+    db.close()
+
+
+def test_外审I1_极光那头替离线手机存多久_也按还剩多少给():
+    got = []
+
+    def opener(req, timeout):
+        got.append(json.loads(req.data))
+        return _回({"msg_id": 1})
+    JPush("k", "s", opener=opener).send(["r"], "t", "b", {}, ttl_s=125)
+    assert got[0]["options"]["time_to_live"] == 125

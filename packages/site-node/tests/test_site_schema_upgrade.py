@@ -24,22 +24,57 @@ SNAPSHOTS = {int(re.search(r"v(\d+)", p.name).group(1)): p for p in sorted(FIX.g
 EVERY_VERSION_FROM = 54
 
 
+def _norm(sql: str | None) -> str:
+    return re.sub(r"\s+", " ", sql or "").strip().lower()
+
+
+def _checks(sql: str | None) -> list[str]:
+    """建表语句里的每一条 ``CHECK (...)``(括号配平着取),去掉空白差别。补列带进来的也在这句里。"""
+    text, out = sql or "", []
+    for m in re.finditer(r"\bCHECK\s*\(", text, re.I):
+        depth, k = 1, m.end()
+        while k < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[k], 0)
+            k += 1
+        out.append(re.sub(r"\s+", "", text[m.end():k - 1]).lower())
+    return sorted(out)
+
+
 def _shape(path: Path) -> dict[str, object]:
-    """库的结构:每张表的列(名字、类型、非空、默认值、主键位次)、索引和它盖的列。跟建的先后无关。"""
+    """库的结构,跟建的先后无关:
+
+    - 每张表的列(名字、类型、非空、默认值、主键位次)、``WITHOUT ROWID`` / ``STRICT``;
+    - 索引:盖的列、每一列的排序方向和排序规则、是不是唯一、部分索引的条件;
+    - 外键、``CHECK``、列上的 ``COLLATE``、触发器、视图(RC 加固外审 M1:原来只比列和索引盖的列,两个
+      只差一个 ``REFERENCES`` 的库比出来一样,「一模一样」说大了)。"""
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
-        tables = [r[0] for r in con.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        master = {(r[0], r[1]): r[2] for r in con.execute(
+            "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")}
+        tables = [n for (t, n) in master if t == "table"]
         cols = {t: sorted((c[1], c[2].upper(), c[3], c[4], c[5])
                           for c in con.execute(f"PRAGMA table_info({t})")) for t in tables}
+        flags = {r[1]: tuple(r[3:6]) for r in con.execute("PRAGMA table_list")
+                 if r[1] in tables}                       # 列数、WITHOUT ROWID、STRICT
         idx = {}
         for t in tables:
             for row in con.execute(f"PRAGMA index_list({t})"):
-                name, unique = row[1], row[2]
-                on = tuple(c[2] for c in con.execute(f"PRAGMA index_info({name})"))
+                name, unique, partial = row[1], row[2], row[4]
+                keys = tuple((c[2], c[3], c[4].upper()) for c in con.execute(
+                    f"PRAGMA index_xinfo({name})") if c[5])     # 列、是不是倒序、排序规则
+                on = tuple(k[0] for k in keys)
                 key = name if not name.startswith("sqlite_autoindex") else f"auto:{t}:{on}"
-                idx[key] = (t, unique, on)
-        return {"cols": cols, "idx": idx}
+                where = _norm(master.get(("index", name))).partition(" where ")[2]
+                idx[key] = (t, unique, keys, partial, where)
+        fks = {t: sorted(tuple(r[2:8]) for r in con.execute(f"PRAGMA foreign_key_list({t})"))
+               for t in tables}
+        checks = {t: _checks(master[("table", t)]) for t in tables}
+        collate = {t: sorted(m.lower() for m in re.findall(
+            r"\bCOLLATE\s+(\w+)", master[("table", t)] or "", re.I)) for t in tables}
+        other = {f"{t}:{n}": _norm(sql) for (t, n), sql in master.items()
+                 if t in ("trigger", "view")}
+        return {"cols": cols, "flags": flags, "idx": idx, "fks": fks, "checks": checks,
+                "collate": collate, "other": other}
     finally:
         con.close()
 
@@ -130,3 +165,53 @@ def test_快照没断档_升版本号要留上一版的快照():
     assert not missing, f"缺这几版的快照(升 SCHEMA_VERSION 时要加): {missing}"
     for v, p in SNAPSHOTS.items():
         assert f"VALUES('schema','{v}')" in p.read_text(encoding="utf-8"), p.name
+
+
+@pytest.mark.parametrize("甲, 乙", [
+    ("CREATE TABLE p(id INTEGER PRIMARY KEY); CREATE TABLE c(p INTEGER)",
+     "CREATE TABLE p(id INTEGER PRIMARY KEY); CREATE TABLE c(p INTEGER REFERENCES p(id))"),
+    ("CREATE TABLE c(p INTEGER REFERENCES x(id))",
+     "CREATE TABLE c(p INTEGER REFERENCES x(id) ON DELETE CASCADE)"),
+    ("CREATE TABLE t(n INTEGER)", "CREATE TABLE t(n INTEGER CHECK (n >= 0))"),
+    ("CREATE TABLE t(n INTEGER CHECK (n >= 0))", "CREATE TABLE t(n INTEGER CHECK (n > 0))"),
+    ("CREATE TABLE t(n INTEGER)",
+     "CREATE TABLE t(n INTEGER); "
+     "CREATE TRIGGER g AFTER INSERT ON t BEGIN UPDATE t SET n = 1; END"),
+    ("CREATE TABLE t(n INTEGER); CREATE INDEX i ON t(n)",
+     "CREATE TABLE t(n INTEGER); CREATE INDEX i ON t(n) WHERE n IS NOT NULL"),
+    ("CREATE TABLE t(n INTEGER); CREATE INDEX i ON t(n)",
+     "CREATE TABLE t(n INTEGER); CREATE INDEX i ON t(n DESC)"),
+    ("CREATE TABLE t(s TEXT); CREATE INDEX i ON t(s)",
+     "CREATE TABLE t(s TEXT); CREATE INDEX i ON t(s COLLATE NOCASE)"),
+    ("CREATE TABLE t(s TEXT)", "CREATE TABLE t(s TEXT COLLATE NOCASE)"),
+    ("CREATE TABLE t(k TEXT PRIMARY KEY)", "CREATE TABLE t(k TEXT PRIMARY KEY) WITHOUT ROWID"),
+    ("CREATE TABLE t(n INTEGER)",
+     "CREATE TABLE t(n INTEGER); CREATE VIEW v AS SELECT n FROM t"),
+], ids=["外键", "外键的删除规则", "CHECK 有没有", "CHECK 的内容", "触发器", "部分索引的条件",
+        "索引倒序", "索引的排序规则", "列的排序规则", "WITHOUT ROWID", "视图"])
+def test_外审M1_结构比较认得出这些差别(tmp_path, 甲, 乙):
+    """反例:两个库只差这一样,比出来要不一样。原来只比列和索引盖的列,这些全看不出。"""
+    shapes = []
+    for i, sql in enumerate((甲, 乙)):
+        path = tmp_path / f"{i}.db"
+        con = sqlite3.connect(path)
+        con.executescript(sql)
+        con.commit()
+        con.close()
+        shapes.append(_shape(path))
+    assert shapes[0] != shapes[1]
+
+
+def test_外审M1_写法不同但结构一样的_比出来一样(tmp_path):
+    """先建表再补列(升级走的路)跟一次建全(新装走的路):语句长得不一样,结构要算一样。"""
+    a, b = tmp_path / "a.db", tmp_path / "b.db"
+    con = sqlite3.connect(a)
+    con.executescript("CREATE TABLE t(k TEXT PRIMARY KEY, n INTEGER CHECK (n >= 0));"
+                      "CREATE INDEX i ON t(n)")
+    con.close()
+    con = sqlite3.connect(b)
+    con.executescript("CREATE TABLE t(k   TEXT PRIMARY KEY);"
+                      "ALTER TABLE t ADD COLUMN n INTEGER   CHECK (n>=0);"
+                      "CREATE INDEX i ON t(n)")
+    con.close()
+    assert _shape(a) == _shape(b)
