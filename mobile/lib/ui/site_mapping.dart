@@ -19,9 +19,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 
 /// 先问预览（还不知道）、在看预览、在看录包轨迹。
 enum _Mode { probe, preview, trail }
@@ -358,20 +359,21 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
   Widget _trailBody() => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: Text(_trailStatus(), key: SiteMappingTrailPage.statusKey)),
+            child: Text(_trailStatus(),
+                key: SiteMappingTrailPage.statusKey, style: NwText.bodyMedium.copyWith(color: Nw.of(context).text))),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Text(
               tr('The green dot is where recording started, the red dot is where the robot is now. '
                   'Coordinates are the robot\'s own odometry (a new place has no map yet) and drift over distance.',
                   '绿点是录包起点，红点是狗现在的位置；坐标是狗自己的里程（新地方还没有图），走远了会有些漂。'),
-              style: const TextStyle(fontSize: 12, color: D1Color.textMuted)),
+              style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         ),
         Expanded(
           child: Padding(
             padding: const EdgeInsets.all(8),
             child: DecoratedBox(
-              decoration: BoxDecoration(border: Border.all(color: D1Color.rule)),
+              decoration: BoxDecoration(border: Border.all(color: Nw.of(context).outline)),
               child: CustomPaint(
                   key: SiteMappingTrailPage.canvasKey,
                   painter: TrailPainter(List<Offset>.of(_pts)),
@@ -409,7 +411,7 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
         child: Padding(
           padding: const EdgeInsets.all(8),
           child: DecoratedBox(
-            decoration: BoxDecoration(border: Border.all(color: D1Color.rule)),
+            decoration: BoxDecoration(border: Border.all(color: Nw.of(context).outline)),
             child: png == null
                 ? Center(child: Text(tr('No image yet', '还没有图')))
                 : InteractiveViewer(
@@ -429,22 +431,32 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
           ),
         ),
       ),
-      SizedBox(
-        width: 240,
-        child: ListView(padding: const EdgeInsets.all(8), children: [
-          Text(_previewStatus(), key: SiteMappingTrailPage.statusKey),
-          const SizedBox(height: 8),
-          Text(
-              tr('The blue line is the path covered, the green dot is the start, the red arrow is the '
-                  'robot\'s position and heading. This is a preview during live mapping: its coordinates '
-                  'do not match the built map. View the built map on the Maps page after you stop.',
-                  '蓝线是走过的路，绿点是起点，红箭头是狗现在的位置和朝向。这是边走边建时的预览：'
-                  '坐标跟建好的图不通用，建好的图停下后在地图页看。'),
-              style: const TextStyle(fontSize: 12, color: D1Color.textMuted)),
-        ]),
-      ),
+      _sidePanel(context, [
+        Text(_previewStatus(), key: SiteMappingTrailPage.statusKey),
+        const SizedBox(height: 8),
+        Text(
+            tr('The blue line is the path covered, the green dot is the start, the red arrow is the '
+                'robot\'s position and heading. This is a preview during live mapping: its coordinates '
+                'do not match the built map. View the built map on the Maps page after you stop.',
+                '蓝线是走过的路，绿点是起点，红箭头是狗现在的位置和朝向。这是边走边建时的预览：'
+                '坐标跟建好的图不通用，建好的图停下后在地图页看。'),
+            style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
+      ]),
     ]);
   }
+}
+
+/// 图右边那一栏（状态、图上登记的东西、区域）：卡片的底、左边一条线，里面能滚。
+Widget _sidePanel(BuildContext context, List<Widget> children) {
+  final c = Nw.of(context);
+  return SizedBox(
+      width: 240,
+      child: Material(
+          color: c.surface,
+          shape: Border(left: BorderSide(color: c.outline)),
+          child: DefaultTextStyle.merge(
+              style: NwText.bodyMedium.copyWith(color: c.text),
+              child: ListView(padding: const EdgeInsets.all(8), children: children))));
 }
 
 /// 在预览图上画走过的路、狗现在的位置与朝向。坐标是预览的平面系（米）：图的左下角是 [origin]、y 朝上，
@@ -735,10 +747,12 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
         builder: (context, snap) {
           if (snap.hasError) {
             final e = snap.error;
-            return Padding(
+            return SingleChildScrollView(
                 padding: const EdgeInsets.all(16),
-                child: Text(tr('Preview unavailable: ${e is SiteError ? e.message : e}',
-                    '看不了：${e is SiteError ? e.message : e}')));
+                child: NwNotice(
+                    tone: NwTone.warning,
+                    text: tr('Preview unavailable: ${e is SiteError ? e.message : e}',
+                        '看不了：${e is SiteError ? e.message : e}')));
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final (meta, png) = snap.data!;
@@ -815,9 +829,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                 ),
               ),
             ),
-            SizedBox(
-              width: 240,
-              child: ListView(padding: const EdgeInsets.all(8), children: [
+            _sidePanel(context, [
                 for (final m in widget.marks)
                   Text('${m.label}  (${m.x.toStringAsFixed(1)}, ${m.y.toStringAsFixed(1)})',
                       style: TextStyle(color: m.color, fontWeight: FontWeight.bold)),
@@ -829,9 +841,9 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                         '约 ${(w * mpp).toStringAsFixed(0)} × ${(h * mpp).toStringAsFixed(0)} m')),
                 if (meta['source'] != null)
                   Text(tr('Source: ${meta['source']}', '用的是 ${meta['source']}'),
-                      style: const TextStyle(fontSize: 12)),
+                      style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
                 if (meta['warning'] != null)
-                  Text('${meta['warning']}', style: const TextStyle(color: D1Color.p2)),
+                  Text('${meta['warning']}', style: TextStyle(color: Nw.of(context).warning)),
                 const Divider(),
                 for (final p in homes)
                   Text(
@@ -840,15 +852,14 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                               '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})',
                           '原点 · ${p['robot_id']} · ${p['name']}  '
                               '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
-                      style: const TextStyle(color: D1Color.select)),
+                      style: TextStyle(color: Nw.of(context).tertiary)),
                 if (pts.isEmpty) Text(tr('No standby points on this map yet', '这张图上还没有登记待命点')),
                 for (final p in pts)
                   Text('${p['robot_id']} · ${p['name']}${p['default'] == true ? tr(' (default)', '（默认）') : ''}  '
                       '(${(p['x'] as num).toStringAsFixed(1)}, ${(p['y'] as num).toStringAsFixed(1)})'),
                 const Divider(),
                 ..._zonePanel(zones),
-              ]),
-            ),
+            ]),
           ]);
         },
       ),
@@ -875,7 +886,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                       'Changed since it was confirmed (revision ${conf['revision']} was confirmed): '
                           'cannot be sent to robots',
                       '改过之后没重新确认（确认的是第 ${conf['revision']} 版）：下发不了'),
-          style: TextStyle(color: confirmed ? D1Color.text : D1Color.p2)),
+          style: TextStyle(color: confirmed ? Nw.of(context).text : Nw.of(context).warning)),
       if (zones.isEmpty) Text(tr('No zones drawn', '没画区域')),
       for (final z in zones)
         Row(children: [
@@ -910,7 +921,8 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               child: Text(tr('Draw speed-limit zone', '画限速区'))),
         ]),
         if (!confirmed) ...[
-          Text('${_zones!['confirm_text'] ?? ''}', style: const TextStyle(fontSize: 12)),
+          Text('${_zones!['confirm_text'] ?? ''}',
+              style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
           FilledButton(
               key: SiteMapPreviewPage.confirmKey,
               onPressed: _busy ? null : _confirm,
