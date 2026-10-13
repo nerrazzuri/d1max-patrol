@@ -20,8 +20,9 @@ vivo、荣耀这些厂商的通道接好了,站点只调极光一个接口。
   首个客户)并列,以后加 APNs。``push`` 写成
   ``{"jpush": {...}, "fcm": {"service_account_file": "…"}}``;
   老写法(平铺的 ``app_key``)照认,算极光。手机登记推送号时带 ``provider``;一部手机(一次登录)两个
-  通道都登记了、站点也都配了,只走一个(先 FCM),不推两遍。一条告警在某个通道发完了就记下
-  (``push_outbox.done``),别的通道没发出去重试时不重发它。
+  通道都登记了、站点也都配了,只走一个(先 FCM),不推两遍。``push_outbox.done`` 记这一条在哪些
+  通道名下的手机都发成功过,**只给人看**;发没发过只认逐台的账(见下;RC 加固复查 R1:原来拿它
+  跳过整个通道,手机的 FCM 令牌失效、要改走它登记的极光时被跳过了)。
 - **逐台记账、至少一次**(RC 加固外审 I1、I2):
   - **每发一次之前**(FCM 是每一台,极光是每一批)按此刻再核一遍有没有人确认、解决、过没过一小时;
     交给通道的有效期是此刻**还剩**多少,不是再给一小时。
@@ -71,6 +72,8 @@ BACKOFF_BASE_S, BACKOFF_MAX_S = 10, 300
 #: 一个通道一轮里连着这么多次发送失败就先停(FCM 一台一个请求、一个最多等 10 秒:没外网时 500 台要等
 #: 一个多小时,这期间别的告警都推不出去)。
 GIVE_UP_AFTER = 3
+#: 一条告警一轮里最多把名单重新算几遍(有推送号没了才重算;正常一遍)。
+RECOUNT_MAX = 3
 
 
 class PushError(Exception):
@@ -421,24 +424,28 @@ class PushDesk:
                 continue
             if not self.senders:
                 continue                              # 没配:留着(配好了、一小时内的还能推)
-            devices = self._devices()
-            if not devices:
-                self._drop(row, "没有登记的手机")
-                continue
             title = f"{self.site_name} · P1" if self.site_name else "P1 告警"
             extras = {"alert_key": row["alert_key"], "tier": str(row["tier"])}
-            done = [d for d in str(row["done"]).split(",") if d]
             got = {r["reg_id"] for r in self.db.query(
                 "SELECT reg_id FROM push_sent WHERE outbox_id=?", (row["id"],))}
-            sent_any, stopped, first, failed = bool(done) or bool(got), "", True, ""
-            for name in PROVIDERS:                        # 一个通道没发出去,不耽误另一个
-                reg = [r for r in devices.get(name) or [] if r not in got]   # 发成功过的不再发
-                if name not in self.senders or name in done or stopped:
-                    continue
-                sender = self.senders[name]
-                step = int(getattr(sender, "batch", BATCH))
-                bad, streak = "", 0
-                try:
+            sent_any, stopped, first, failed = bool(got), "", True, ""
+            done: list[str] = []
+            tried: set[str] = set()                       # 这一轮发过没成的:重算名单时不再碰,等退避
+            # 名单每一遍重新算(RC 加固复查 R1):这一遍里有推送号没了(FCM 令牌失效),那部手机登记的
+            # 另一个通道这才轮得上 —— 原来名单只算一次、没有要发的通道也记成「发完了」,那部手机两头
+            # 都没收到。**发没发过只看逐台的账**(``push_sent``),不看通道的「发完」标记。
+            for _ in range(RECOUNT_MAX):
+                devices = self._devices()
+                gone = 0
+                done = []
+                for name in PROVIDERS:                    # 一个通道没发出去,不耽误另一个
+                    if name not in self.senders or stopped:
+                        continue
+                    mine = devices.get(name) or []
+                    reg = [r for r in mine if r not in got and r not in tried]   # 发成功过的不再发
+                    sender = self.senders[name]
+                    step = int(getattr(sender, "batch", BATCH))
+                    bad, streak = "", 0
                     for i in range(0, len(reg), step):
                         if not first:                     # 每发一次之前按此刻再核(外审 I1)
                             stopped = self._skip(row, self._now())
@@ -452,28 +459,34 @@ class PushDesk:
                         except PushError as exc:
                             # 这几台算没发成功(回执丢了的也在这里:至少一次);接着发后面的
                             bad, streak = str(exc)[:300], streak + 1
+                            tried.update(chunk)
                             log.warning("P1 推送(%s)没发出去:%s", name, exc)
+                            gone += self._forget(getattr(sender, "take_dead", list)())
                             if streak >= GIVE_UP_AFTER:
                                 break                     # 多半整个通道不通:这一轮先停
                             continue
                         streak = 0
-                        sent_any = True
                         dead = set(getattr(sender, "take_dead", list)())
-                        self._forget(sorted(dead))
-                        with self.db.tx() as c:           # 发成功一次记一次(外审 I2)
-                            c.executemany(
-                                "INSERT OR IGNORE INTO push_sent(outbox_id, reg_id, sent_ms) "
-                                "VALUES (?,?,?)",
-                                [(row["id"], r, self._now()) for r in chunk if r not in dead])
-                finally:
-                    self._forget(getattr(sender, "take_dead", list)())
-                if bad:
-                    failed = bad
-                elif not stopped:
-                    done.append(name)                     # 这个通道发完了:记下
-                    with self.db.tx() as c:
-                        c.execute("UPDATE push_outbox SET done=? WHERE id=?",
-                                  (",".join(done), row["id"]))
+                        gone += self._forget(sorted(dead))
+                        ok = [r for r in chunk if r not in dead]
+                        if ok:
+                            sent_any = True
+                            got.update(ok)
+                            with self.db.tx() as c:       # 发成功一次记一次(外审 I2)
+                                c.executemany(
+                                    "INSERT OR IGNORE INTO push_sent(outbox_id, reg_id, sent_ms) "
+                                    "VALUES (?,?,?)", [(row["id"], r, self._now()) for r in ok])
+                    if bad:
+                        failed = bad
+                    elif not stopped and mine and not tried.intersection(mine):
+                        done.append(name)                 # 这一遍它名下的都发成功过(只给人看)
+                if stopped or not gone:
+                    break                                 # 没有推送号没了:名单没变,不用再算
+            with self.db.tx() as c:
+                c.execute("UPDATE push_outbox SET done=? WHERE id=?", (",".join(done), row["id"]))
+            if not failed and not stopped and not sent_any:
+                self._drop(row, "没有登记的手机")
+                continue
             if failed:
                 self.last_error = failed
                 wait = min(BACKOFF_MAX_S, BACKOFF_BASE_S * 2 ** min(row["attempts"], 10))
@@ -492,11 +505,12 @@ class PushDesk:
                 self._drop(row, stopped)
         self._stuck(self._now())
 
-    def _forget(self, reg_ids: list[str]) -> None:
-        """通道说这几个推送号没了(App 卸了):从名单上删掉。"""
+    def _forget(self, reg_ids: list[str]) -> int:
+        """通道说这几个推送号没了(App 卸了):从名单上删掉。回删了几个。"""
         if reg_ids:
             with self.db.tx() as c:
                 c.executemany("DELETE FROM push_devices WHERE reg_id=?", [(r,) for r in reg_ids])
+        return len(reg_ids)
 
     def _drop(self, row: dict[str, Any], why: str) -> None:
         with self.db.tx() as c:

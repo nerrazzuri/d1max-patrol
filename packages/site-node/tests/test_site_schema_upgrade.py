@@ -24,19 +24,33 @@ SNAPSHOTS = {int(re.search(r"v(\d+)", p.name).group(1)): p for p in sorted(FIX.g
 EVERY_VERSION_FROM = 54
 
 
+_LITERAL = re.compile(r"('(?:[^']|'')*')")
+
+
+def _outside_literals(sql: str, fix) -> str:
+    """只动引号**外面**的:字符串常量原样留着(RC 加固复查 M1:原来整段小写、去空白,
+    ``CHECK(kind='P1')`` 跟 ``CHECK(kind='p1')`` 比出来一样,它们管的范围其实不同)。"""
+    parts = _LITERAL.split(sql)
+    return "".join(x if k % 2 else fix(x) for k, x in enumerate(parts))
+
+
 def _norm(sql: str | None) -> str:
-    return re.sub(r"\s+", " ", sql or "").strip().lower()
+    """关键字、标识符不分大小写,引号外的空白压成一个;字符串常量不动。"""
+    return _outside_literals(sql or "", lambda x: re.sub(r"\s+", " ", x).lower()).strip()
 
 
 def _checks(sql: str | None) -> list[str]:
-    """建表语句里的每一条 ``CHECK (...)``(括号配平着取),去掉空白差别。补列带进来的也在这句里。"""
+    """建表语句里的每一条 ``CHECK (...)``(括号配平着取;字符串常量里的括号不算),引号外的空白去掉、
+    大小写不分,字符串常量不动。补列带进来的也在这句里。"""
     text, out = sql or "", []
-    for m in re.finditer(r"\bCHECK\s*\(", text, re.I):
+    blank = _LITERAL.sub(lambda m: "'" + "_" * (len(m.group(0)) - 2) + "'", text)   # 等长、没括号
+    for m in re.finditer(r"\bCHECK\s*\(", blank, re.I):
         depth, k = 1, m.end()
-        while k < len(text) and depth:
-            depth += {"(": 1, ")": -1}.get(text[k], 0)
+        while k < len(blank) and depth:
+            depth += {"(": 1, ")": -1}.get(blank[k], 0)
             k += 1
-        out.append(re.sub(r"\s+", "", text[m.end():k - 1]).lower())
+        out.append(_outside_literals(text[m.end():k - 1],
+                                     lambda x: re.sub(r"\s+", "", x).lower()))
     return sorted(out)
 
 
@@ -64,7 +78,7 @@ def _shape(path: Path) -> dict[str, object]:
                     f"PRAGMA index_xinfo({name})") if c[5])     # 列、是不是倒序、排序规则
                 on = tuple(k[0] for k in keys)
                 key = name if not name.startswith("sqlite_autoindex") else f"auto:{t}:{on}"
-                where = _norm(master.get(("index", name))).partition(" where ")[2]
+                where = _norm(master.get(("index", name))).partition(" where ")[2]   # 常量原样
                 idx[key] = (t, unique, keys, partial, where)
         fks = {t: sorted(tuple(r[2:8]) for r in con.execute(f"PRAGMA foreign_key_list({t})"))
                for t in tables}
@@ -187,8 +201,18 @@ def test_快照没断档_升版本号要留上一版的快照():
     ("CREATE TABLE t(k TEXT PRIMARY KEY)", "CREATE TABLE t(k TEXT PRIMARY KEY) WITHOUT ROWID"),
     ("CREATE TABLE t(n INTEGER)",
      "CREATE TABLE t(n INTEGER); CREATE VIEW v AS SELECT n FROM t"),
+    ("CREATE TABLE t(k TEXT CHECK (k = 'P1'))", "CREATE TABLE t(k TEXT CHECK (k = 'p1'))"),
+    ("CREATE TABLE t(k TEXT CHECK (k = 'a b'))", "CREATE TABLE t(k TEXT CHECK (k = 'ab'))"),
+    ("CREATE TABLE t(k TEXT CHECK (k != ')' AND k != 'x'))",
+     "CREATE TABLE t(k TEXT CHECK (k != ')' AND k != 'X'))"),
+    ("CREATE TABLE t(k TEXT); CREATE INDEX i ON t(k) WHERE k = 'P1'",
+     "CREATE TABLE t(k TEXT); CREATE INDEX i ON t(k) WHERE k = 'p1'"),
+    ("CREATE TABLE t(k TEXT); CREATE TRIGGER g AFTER INSERT ON t BEGIN UPDATE t SET k = 'A'; END",
+     "CREATE TABLE t(k TEXT); CREATE TRIGGER g AFTER INSERT ON t BEGIN UPDATE t SET k = 'a'; END"),
 ], ids=["外键", "外键的删除规则", "CHECK 有没有", "CHECK 的内容", "触发器", "部分索引的条件",
-        "索引倒序", "索引的排序规则", "列的排序规则", "WITHOUT ROWID", "视图"])
+        "索引倒序", "索引的排序规则", "列的排序规则", "WITHOUT ROWID", "视图",
+        "CHECK 里常量的大小写", "CHECK 里常量的空格", "CHECK 里常量带括号",
+        "部分索引条件里常量的大小写", "触发器里常量的大小写"])
 def test_外审M1_结构比较认得出这些差别(tmp_path, 甲, 乙):
     """反例:两个库只差这一样,比出来要不一样。原来只比列和索引盖的列,这些全看不出。"""
     shapes = []
@@ -210,8 +234,8 @@ def test_外审M1_写法不同但结构一样的_比出来一样(tmp_path):
                       "CREATE INDEX i ON t(n)")
     con.close()
     con = sqlite3.connect(b)
-    con.executescript("CREATE TABLE t(k   TEXT PRIMARY KEY);"
-                      "ALTER TABLE t ADD COLUMN n INTEGER   CHECK (n>=0);"
+    con.executescript("create table t(k   TEXT PRIMARY KEY);"
+                      "ALTER TABLE t ADD COLUMN n INTEGER   check (N>=0);"
                       "CREATE INDEX i ON t(n)")
     con.close()
     assert _shape(a) == _shape(b)
