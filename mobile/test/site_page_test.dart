@@ -932,6 +932,9 @@ void main() {
     ]);
     await t.pumpWidget(MaterialApp(home: SiteListPage(key: const Key('fresh'), store: store)));
     await t.pumpAndSettle();
+    // 2026-10-14 重做：删除收进了卡片的菜单，先点开菜单
+    await t.tap(find.byKey(const Key('site-menu-a')));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('site-remove-a')));
     await t.pumpAndSettle();
     expect(store.sites, isEmpty);
