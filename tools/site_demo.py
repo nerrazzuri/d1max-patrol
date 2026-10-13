@@ -10,6 +10,8 @@
     .venv/bin/python tools/site_demo.py            # 起好了打印地址、指纹、账号;Ctrl+C 全部收掉
     .venv/bin/python tools/site_demo.py --map-dir runs/w09i-sim/map_front
     # ↑ 用一张真的图(有预览)
+    .venv/bin/python tools/site_demo.py --host 192.168.5.12 --recordings 30
+    # ↑ 绑局域网地址:同一个网里的手机装上 App 就能连(配对码:d1max-site --home <目录>/site pair-code)
 
 桌面版:「站点」页右下角 +,填打印出来的地址和指纹,账号 ``demo``。每次起都是新的站点目录(``--dir``,
 默认 ``~/.cache/d1max-site-demo``,起之前清掉),证书指纹每次都不一样。
@@ -97,6 +99,9 @@ def main(argv: list[str] | None = None) -> int:
     # 默认不放仓库里:仓库路径带空格(「D1 Max」),Mosquitto 的配置按空白切词,路径里不许有空格
     ap.add_argument("--dir", type=Path, default=Path.home() / ".cache" / "d1max-site-demo")
     ap.add_argument("--api-port", type=int, default=8443)
+    ap.add_argument("--host", default=HOST,
+                    help="站点 API 绑哪个地址。给这台机器的局域网地址(比如 192.168.5.12),"
+                         "同一个网里的手机就连得上;默认只本机")
     ap.add_argument("--password", default="demo-password-123")
     ap.add_argument("--map-dir", type=Path, default=None, help="建好的图(版本目录);不给用一张假的")
     ap.add_argument("--recordings", type=int, default=0, metavar="N",
@@ -110,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     home, logs = a.dir / "site", a.dir / "logs"
     logs.mkdir(parents=True)
     bport = _free_port()
-    _site(home, "init", "--site-id", "demo", "--hostname", HOST, "--broker-port", str(bport))
+    _site(home, "init", "--site-id", "demo", "--hostname", a.host, "--broker-port", str(bport))
     _site(home, "enroll", "A", "--days", "30")
     _site(home, "add-admin", "demo", env={"D1MAX_SITE_PASSWORD": a.password})
     src = a.map_dir
@@ -135,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         start("mosquitto", [mosq, "-c", str(home / "broker" / "mosquitto.conf")],
               "mosquitto version")
         start("site", [sys.executable, "-m", "d1max_site.main", "--home", str(home), "serve",
-                       "--api-host", HOST, "--api-port", str(a.api_port)], "d1max-site 起来了")
+                       "--api-host", a.host, "--api-port", str(a.api_port)], "d1max-site 起来了")
         crt = home / "ca" / "issued" / "A"
         start("agent", [sys.executable, "-m", "d1max_agent.main",
                         "--transport", f"mqtts://127.0.0.1:{bport}",
@@ -145,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
                         "--store-dir", str(a.dir / "agent"), "--runs-root", str(a.dir / "runs"),
                         "--map", "estate-1:7", "--home", "0,0,0"], "d1max-agent 起来了")
         print(f"演示站点起来了(日志在 {logs}):\n"
-              f"  地址  https://{HOST}:{a.api_port}\n"
+              f"  地址  https://{a.host}:{a.api_port}\n"
               f"  指纹  {fp}\n"
               f"  账号  demo / {a.password}\n"
               f"  狗    A(仿真)\n"
