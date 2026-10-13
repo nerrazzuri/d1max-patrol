@@ -168,6 +168,9 @@ class BridgeLocalizer:
         self._anchor: _Fix | None = None
         self._anchor_m = ANCHOR_M
         self._anchor_what = "最后可信的位置"
+        #: 锚是哪一次重定位请求给的、还没有哪一帧按它稳下来过(请求号;没有是 ``None``)。这期间普通的
+        #: 可信帧**不许**把锚盖掉(W35 外审 I1)。
+        self._anchor_hold: int | None = None
         #: 稳住了、可是跟锚对不上(非空 = 卡在这儿,每来一帧再比一次)。
         self._off_why = ""
         self._wrong_map = False
@@ -273,6 +276,7 @@ class BridgeLocalizer:
             return
         if map_ref != self._map:
             self._ref = self._good = self._anchor = None   # 别的图:旧位置不能当参照
+            self._anchor_hold = None
             self.rtk_disagree = ""
         self._map, self._dir = map_ref, dir
         self._prior_ok = None
@@ -390,36 +394,48 @@ class BridgeLocalizer:
         """请定位器按给的位姿(初值)重定位。收下回空串;否则回拒绝原因。收敛看之后的帧(带这次的
         ``reloc_id`` 那一帧按跳变稳下来)。
 
-        请求号**发出去之前**就登记:回复跟那一帧挨着到的时候,那一帧可能先被读进来。"""
+        请求号**发出去之前**就登记:回复跟那一帧挨着到的时候,那一帧可能先被读进来。
+
+        **锚也在发出去之前就换成给的这个位置**(W35 外审 I1):原来等回执回来才换,回执之前到的那一帧
+        和后面几帧稳定帧是按旧锚(或者没有锚)核的 —— 错解已经认下了、通知了引擎,回执回来再换锚也不会
+        重新核;下一帧可信的还会把刚换的锚盖成那个错解。没成(拒了、没回、没连上)就退回原来的锚;
+        等回复的时候换了图,新图上不留这个锚。"""
         mine: list[int] = []
+        before = (self._anchor, self._anchor_m, self._anchor_what, self._anchor_hold)
 
         def make(req: int) -> Relocalize:
             mine.append(req)
             self._reloc = (req, human)
+            now = self._now()
+            self._anchor = _Fix(pose=(float(pose[0]), float(pose[1]), float(pose[2])),
+                                sigma_xy=sigma_xy, sigma_yaw=0.0, source=GIVEN, at=now, born=now,
+                                odom=self._odom, epoch=self._epoch, path=self._path, dr0=0.0)
+            self._anchor_m = max(ANCHOR_M, 3 * sigma_xy)
+            self._anchor_what = "人给的位置" if human else "重定位给的位置"
+            self._anchor_hold = req
+            self._off_why = ""
             return Relocalize(req=req, map_id=map_ref[0], map_version=map_ref[1], x=pose[0],
                               y=pose[1], yaw=pose[2], sigma_xy=sigma_xy)
+        def undo() -> None:
+            """这次没成:请求不等了;锚还是这次给的那个(没被换图清掉、没被更新的请求换掉)就退回去。"""
+            self._forget_reloc(mine)
+            if mine and self._anchor_hold == mine[0]:
+                self._anchor, self._anchor_m, self._anchor_what, self._anchor_hold = before
+                self._off_why = ""
         try:
             r = await self._ask(make, RELOC_TIMEOUT_S)
         except LocalizerUnavailable as exc:
-            self._forget_reloc(mine)
+            undo()
             return f"localizer_unavailable: {exc}"
         except asyncio.TimeoutError:
-            self._forget_reloc(mine)
+            undo()
             return f"localizer_unavailable: 定位器 {RELOC_TIMEOUT_S:g} 秒没回"
         if self._map != map_ref:
-            self._forget_reloc(mine)
+            undo()
             return "busy: 等定位器回复的时候换了图"
         if not r.ok:
-            self._forget_reloc(mine)
+            undo()
             return f"localizer_refused: {r.reason}"[:200]
-        # 给的这个位置就是新的锚(W35):它稳下来的地方要离这儿不远
-        now = self._now()
-        self._anchor = _Fix(pose=(float(pose[0]), float(pose[1]), float(pose[2])),
-                            sigma_xy=sigma_xy, sigma_yaw=0.0, source=GIVEN, at=now, born=now,
-                            odom=self._odom, epoch=self._epoch, path=self._path, dr0=0.0)
-        self._anchor_m = max(ANCHOR_M, 3 * sigma_xy)
-        self._anchor_what = "人给的位置" if human else "重定位给的位置"
-        self._off_why = ""
         return ""
 
     async def reset(self) -> None:
@@ -507,7 +523,10 @@ class BridgeLocalizer:
         return self._reloc is not None or (self._settle > 0 and not self._off_why)
 
     def _set_good(self, f: _Fix) -> None:
-        self._good = self._anchor = f
+        self._good = f
+        if self._anchor_hold is not None:
+            return                               # 刚给的锚还没人按它稳下来过:不许盖(W35 外审 I1)
+        self._anchor = f
         self._anchor_m, self._anchor_what = ANCHOR_M, "最后可信的位置"
 
     def _off_anchor(self, new: _Fix) -> str:
@@ -603,6 +622,7 @@ class BridgeLocalizer:
         if ref is not None and ref.T is not None and new.T is not None and ref.epoch == new.epoch:
             delta = compose(new.T, inverse(ref.T))
         self._ref = new                              # 引擎挪过了:以后的修正量从这一帧算
+        self._anchor_hold = None                     # 按给的锚核过、稳下来了:以后跟着可信的帧走
         if self._trusted(new):
             self._set_good(new)
         log.info("定位器稳下来了,修正量 %s%s", delta, "(人给的位置)" if human else "")

@@ -762,3 +762,100 @@ async def test_人给了位置_走了5米却稳在12米外_不认():
     for _ in range(SETTLE_FIXES):
         loc.on_pose(_位姿(-10.0, 0.0, 0.0))
     assert "人给的位置" in loc.why_not(True)
+
+
+# ---------------------------------------------------------------- W35 外审 I1:位姿比回执先到
+
+
+async def test_外审I1_头一回设位置_回执到之前位姿和稳定帧先到了_稳在8米外_不认():
+    """锚原来是等回执回来才设:回执之前到的那几帧按「没有锚」放行,错解已经认下了。"""
+    got = []
+    c, link, loc = await _就绪()
+    loc.on_corrected = lambda d, human: got.append((d, human))
+
+    def 先到(msg):
+        loc.on_pose(_位姿(8.0, 0.0, jump=True, reloc_id=msg.req))
+        for _ in range(SETTLE_FIXES + 1):
+            loc.on_pose(_位姿(8.0, 0.0))
+    link.before_reply = 先到
+    assert await loc.relocalize(M, (0.0, 0.0, 0.0)) == ""
+    assert not loc.ok(True) and "人给的位置" in loc.why_not(True)
+    assert got == []
+    loc.on_pose(_位姿(8.0, 0.0))                          # 再来一帧:不能把锚改成 8 m 那儿
+    assert not loc.ok(True)
+    link.before_reply = None
+    assert await loc.relocalize(M, (0.2, 0.0, 0.0)) == ""
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(0.2, 0.0, jump=True, reloc_id=r.req))
+    _稳(loc, 0.1, 0.0)
+
+
+async def test_外审I1_已经有锚_人重新给8米_回执之前稳在原地的错解_按新给的比_不认():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+
+    def 先到(msg):
+        loc.on_pose(_位姿(0.0, 0.0, jump=True, reloc_id=msg.req))
+        for _ in range(SETTLE_FIXES + 1):
+            loc.on_pose(_位姿(0.0, 0.0))
+    link.before_reply = 先到
+    assert await loc.relocalize(M, (8.0, 0.0, 0.0)) == ""
+    assert not loc.ok(True) and "人给的位置" in loc.why_not(True)
+    loc.on_pose(_位姿(0.0, 0.0))
+    loc.on_pose(_位姿(0.0, 0.0))
+    assert not loc.ok(True), "后面的普通帧不能把锚盖回 0 m"
+
+
+async def test_外审I1_等回执的时候来的是普通帧_不许把刚给的锚盖掉():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    link.before_reply = lambda msg: [loc.on_pose(_位姿(0.0, 0.0)) for _ in range(3)]
+    assert await loc.relocalize(M, (8.0, 0.0, 0.0)) == ""
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(0.0, 0.0, jump=True, reloc_id=r.req))   # 定位器没照办,稳在原地
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(0.0, 0.0))
+    assert not loc.ok(True) and "人给的位置" in loc.why_not(True)
+
+
+@pytest.mark.parametrize("坏法", ["拒了", "没回", "没连上"])
+async def test_外审I1_重定位没成_锚退回原来那个(坏法):
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    if 坏法 == "拒了":
+        link.answer["relocalize"] = (False, "初值离地图太远")
+    elif 坏法 == "没回":
+        link.hang = 1
+    else:
+        link.down = True
+    assert await loc.relocalize(M, (8.0, 0.0, 0.0)) != ""
+    link.down = False
+    loc.on_pose(_位姿(8.0, 0.0, jump=True))               # 没成的那次不算数:8 m 那儿还是离锚太远
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(8.0, 0.0))
+    assert "最后可信的位置" in loc.why_not(True)
+    loc.on_pose(_位姿(0.1, 0.0, jump=True))
+    _稳(loc, 0.1, 0.0)
+
+
+async def test_外审I1_等回执的时候换了图_给的锚不留到新图上():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    m2 = ("estate-1", "8")
+    link.before_reply = lambda msg: loc.on_map(m2, "/maps/estate-1/8") \
+        if isinstance(msg, Relocalize) else None
+    assert (await loc.relocalize(M, (8.0, 0.0, 0.0))).startswith("busy")
+    link.before_reply = None
+    await loc.prior_task
+    _稳(loc, 30.0, 30.0, m=m2)
+
+
+async def test_外审I1_按给的锚稳下来之后_锚跟着可信的帧走_不一直钉在给的那儿():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    assert await loc.relocalize(M, (0.0, 0.0, 0.0)) == ""
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(2.5, 0.0, jump=True, reloc_id=r.req))
+    _稳(loc, 2.5, 0.0)                                    # 离给的 2.5 m:认
+    loc.on_pose(_位姿(5.0, 0.0, jump=True))               # 以后再跳:跟 2.5 m 那儿比,不跟 0 比
+    _稳(loc, 5.0, 0.0)

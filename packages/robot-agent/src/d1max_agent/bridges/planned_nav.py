@@ -629,7 +629,8 @@ class PlannedNavBackend(HalNavBackend):
             moved = math.hypot(self._odom_pose[0] - self._creep_from[0],
                                self._odom_pose[1] - self._creep_from[1])
             if moved < CREEP_M:
-                vx, wz = (self._dir or 1) * CREEP_V, 0.0  # 往前挪着看两侧(守卫照样查)
+                # 往前挪着看两侧(守卫照样查)
+                vx, wz = (self._dir or 1) * self._creep_speed(here), 0.0
             else:
                 log.info("往前挪了 %.1f m,两侧看过了,接着转", moved)
                 self._creep_from = None
@@ -732,12 +733,29 @@ class PlannedNavBackend(HalNavBackend):
             for r, k in cells(min(i * step, CREEP_M)) - under:
                 if not (0 <= r < rows and 0 <= k < cols) or blocked[r, k]:
                     return False
+        # 区域的规矩一条不少(W35 外审 I2):禁行区,**加上限速低到这台狗守不住、规划当禁行的限速区**
+        # (:meth:`_effective`)。改查没膨胀的图时只看了原始的禁行区,把后一类漏了 —— 人划的区雷达
+        # 看不见,守卫补不上。放松的只是实物那一圈外接圆的膨胀,不是区域。
+        closed = [z for z in self._effective(self.zones) if z.kind == "nogo"]
         reach = CREEP_M + self.guard.body_len / 2 + self.guard.margin
         for i in range(int(reach / 0.05) + 1):
             d = i * 0.05
-            if self.nogo_near(here.x + c * d, here.y + s * d, ZONE_STOP_M) is not None:
+            x, y = here.x + c * d, here.y + s * d
+            if any(distance_to_polygon(x, y, z.polygon) <= ZONE_STOP_M for z in closed):
                 return False
         return True
+
+    def _creep_speed(self, here: Any) -> float:
+        """往前挪的速度:不超过 :data:`CREEP_V`,也不超过机身前沿再往前半米这一段里限速区的上限
+        (W35 外审 I2:原来固定 0.2 m/s,挪进限速 0.1 的区照样 0.2)。"""
+        v = CREEP_V
+        if self._cm is not None:
+            h = _heading(here.yaw, self._dir or 1)
+            c, s = math.cos(h), math.sin(h)
+            ahead = self.guard.body_len / 2 + self.guard.margin + 0.5
+            for i in range(int(ahead / 0.1) + 1):
+                v = min(v, self._cm.speed_at(here.x + c * i * 0.1, here.y + s * i * 0.1))
+        return max(v, self._caps.deadband_vx)
 
     def _remember(self, hits: Any, here: Any, now: float) -> None:
         """挡住的点(此刻狗身系)→ 地图规划栅格的格,记进临时障碍层(过 30 s 忘掉);

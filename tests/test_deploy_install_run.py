@@ -279,7 +279,7 @@ def test_决策61_对时归chrony管的狗_写一个单独的片段向站点对�
     assert "\nserver 10.0.0.5 iburst prefer trust\n" in frag and "\nmakestep 1.0 3\n" in frag
     assert (tmp_path / "etc/chrony/chrony.conf").read_text(encoding="utf-8") == vendor, "厂家的不动"
     assert "systemctl restart chrony" in _调用(tmp_path)
-    assert "chrony 向 10.0.0.5 对时" in got.stdout
+    assert "向 10.0.0.5 对时" in got.stdout
     assert not (tmp_path / "etc/systemd/timesyncd.conf.d/d1max.conf").exists()
 
 
@@ -292,7 +292,7 @@ def test_决策61_厂家的主配置不读片段目录_不改它_说清楚要加
         tmp_path / "etc/chrony/conf.d/d1max.conf").read_text(encoding="utf-8")
     assert "systemctl restart chrony" not in _调用(tmp_path), "没生效就不说对上了"
     assert "confdir" in got.stderr and "不改厂家的文件" in got.stderr
-    assert "对时:chrony 向" not in got.stdout
+    assert "对时" not in got.stdout.replace("对时片段", "")
 
 
 def test_决策61_站点地址没填_不留片段_没有chrony的机器照旧只提示(tmp_path):
@@ -310,3 +310,28 @@ def test_决策61_站点地址没填_不留片段_没有chrony的机器照旧只
     got = _跑(b, script)
     assert got.returncode == 0, got.stdout + got.stderr
     assert not (b / "etc/chrony").exists() and "我们不配" in got.stderr
+
+
+@pytest.mark.parametrize("主配置, 生效", [
+    ("confdir /etc/chrony/conf.d\n", True),
+    ("confdir /etc/chrony/conf.d/\n", True),
+    ("confdir /etc/chrony/sources.d /etc/chrony/conf.d\n", True),
+    ("include /etc/chrony/conf.d/*.conf\n", True),
+    ("include /etc/chrony/conf.d/d1max.conf\n", True),
+    ("confdir /etc/chrony/conf.d-disabled\n", False),
+    ("confdir /etc/chrony/conf.dd\n", False),
+    ("include /etc/chrony/conf.d-old/*.conf\n", False),
+    ("include /etc/chrony/conf.d/other.conf\n", False),
+    ("# confdir /etc/chrony/conf.d\n", False),
+], ids=["confdir", "confdir 带斜杠", "confdir 第二个参数", "include 通配", "include 点名",
+        "同前缀的别的目录", "多一个字母", "include 同前缀", "include 别的文件", "注释掉的"])
+def test_W35外审M1_主配置读不读我们的片段_按整个参数认_不按前缀(tmp_path, 主配置, 生效):
+    """原来只看路径前缀:``confdir /etc/chrony/conf.d-disabled`` 也算读了,脚本重启 chrony、说
+    「向站点对时」,其实片段没被载入。"""
+    vendor = 主配置.replace("/etc/chrony", str(tmp_path / "etc/chrony"))
+    script = _chrony狗(tmp_path, 主配置=vendor, env="D1MAX_SITE_NTP=site.lan\n")
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert ("systemctl restart chrony" in _调用(tmp_path)) is 生效
+    assert ("向 site.lan 对时" in got.stdout) is 生效
+    assert ("不改厂家的文件" in got.stderr) is (not 生效)

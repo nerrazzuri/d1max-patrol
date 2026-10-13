@@ -549,17 +549,40 @@ if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != 
       } > "$CHRONY_CONF.tmp"
       chmod 0644 "$CHRONY_CONF.tmp"
       mv -f "$CHRONY_CONF.tmp" "$CHRONY_CONF"
-      if grep -qE "^[[:space:]]*(confdir|include)[[:space:]]+${CHRONY_DROPIN_DIR//./\\.}" \
-          "$CHRONY_MAIN"; then
+      # 主配置读不读我们的片段:**按整个参数认**(W35 外审 M1:原来只比路径前缀,
+      # `confdir …/conf.d-disabled` 也算读了,片段没载入却说「向站点对时」)。认这两种写法:
+      #   confdir <目录>…      其中一个参数正好是片段的目录(chrony 4 起才有 confdir)
+      #   include <通配>       通配正好盖住我们这个文件(`…/conf.d/*.conf`、点名这个文件)
+      chrony_loads_ours() {
+        local kind arg rest
+        while read -r kind rest; do
+          case "$kind" in
+            confdir)
+              for arg in $rest; do
+                [[ "${arg%/}" == "$CHRONY_DROPIN_DIR" ]] && return 0
+              done ;;
+            include)
+              arg=${rest%%[[:space:]]*}
+              # shellcheck disable=SC2053  # 右边故意不加引号:它是主配置里写的通配
+              [[ "$(dirname "$arg")" == "$CHRONY_DROPIN_DIR" && "$CHRONY_CONF" == $arg ]] \
+                && return 0 ;;
+          esac
+        done < "$CHRONY_MAIN"
+        return 1
+      }
+      if chrony_loads_ours; then
         if systemctl restart chrony; then
-          echo "  对时:chrony 向 $ts_host 对时(chronyc sources 看;带 ^* 的那一行应该是它)"
+          echo "  对时:chrony 的片段写好、主配置会读它、chrony 重启了,向 $ts_host 对时。"
+          echo "       **有没有真对上要看** chronyc sources(站点那一行带 ^*);脚本没法替你确认。"
         else
           echo "  !! chrony 重启不了,对时没配上" >&2
         fi
       else
         echo "  !! 对时片段写好了($CHRONY_CONF),但厂家的 $CHRONY_MAIN 不读 conf.d:" >&2
-        echo "     我们不改厂家的文件。要生效,在它末尾加一行  confdir $CHRONY_DROPIN_DIR  再" >&2
-        echo "     sudo systemctl restart chrony(真机项 3f.20)" >&2
+        echo "     我们不改厂家的文件。要生效,在它末尾加一行再 sudo systemctl restart chrony:" >&2
+        echo "       chrony 4 及以上(chronyd --version 看):  confdir $CHRONY_DROPIN_DIR" >&2
+        echo "       chrony 3.x(没有 confdir):              include $CHRONY_CONF" >&2
+        echo "     这两行没在这只狗上验过(真机项 3f.20):加完看 chronyc sources 里有没有站点那一行。" >&2
       fi
     else
       rm -f "$CHRONY_CONF"
