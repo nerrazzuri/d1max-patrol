@@ -8,7 +8,8 @@
 /// 别的几栏只在显示的时候才建、切走就拆 —— 跟原来「推进去、退出来」一样：值守屏自己的轮询和事件流
 /// 不在背后空跑，切回来看到的是现读的。
 ///
-/// 这一批（P0）各栏里面还是老页面的样子，后面几批一栏一栏换。
+/// 地图、记录、管理三栏是第四批（P4）换的：地图栏是当前这张图（[SiteMapTab]，地图列表从它右上角进）；
+/// 记录栏是三个分段当页头、下面嵌各自那一页；管理栏是站点体检，最下面接那几个入口。
 library;
 
 import 'package:flutter/material.dart';
@@ -30,6 +31,7 @@ import '../site_schedule.dart';
 import '../site_watch_page.dart';
 import '../site_weather.dart';
 import 'nw_button.dart';
+import 'nw_p4_admin.dart';
 import 'nw_theme.dart';
 import 'nw_widgets.dart';
 
@@ -142,7 +144,7 @@ class _NwShellState extends State<NwShell> {
 
   Widget _page(int tab, bool admin) => switch (tab) {
         0 => SiteWatchPage(api: widget.api),
-        2 => SiteMapsPage(api: widget.api),
+        2 => SiteMapTab(api: widget.api),
         3 => _HistoryTab(api: widget.api),
         _ => admin ? _AdminTab(api: widget.api) : _MoreTab(api: widget.api),
       };
@@ -186,7 +188,7 @@ class _NwShellState extends State<NwShell> {
 
 enum _History { runs, incidents, schedule }
 
-/// 记录栏：巡检记录 / 事件 / 排程三个分段，下面是各自原来那一页。
+/// 记录栏：巡检记录 / 事件 / 排程三个分段当页头，下面是各自那一页的内容（嵌着，不带自己的顶栏）。
 class _HistoryTab extends StatefulWidget {
   final SiteApi api;
   const _HistoryTab({required this.api});
@@ -204,35 +206,38 @@ class _HistoryTabState extends State<_HistoryTab> {
     return Column(children: [
       Material(
           color: c.surface,
+          shape: Border(bottom: BorderSide(color: c.outline)),
           child: SafeArea(
               bottom: false,
-              child: Padding(
-                  padding: const EdgeInsets.fromLTRB(Nw.s16, Nw.s8, Nw.s16, Nw.s8),
-                  child: NwSegment<_History>(
-                      values: _History.values,
-                      selected: _seg,
-                      onChanged: (v) => setState(() => _seg = v),
-                      labelOf: (v) => switch (v) {
-                            _History.runs => tr('Patrols', '巡检'),
-                            _History.incidents => tr('Incidents', '事件'),
-                            _History.schedule => tr('Schedule', '排程'),
-                          },
-                      keyOf: (v) => switch (v) {
-                            _History.runs => NwShell.runsKey,
-                            _History.incidents => NwShell.incidentsKey,
-                            _History.schedule => NwShell.scheduleKey,
-                          })))),
+              child: LayoutBuilder(
+                  builder: (context, box) => Padding(
+                      // 宽屏：分段跟下面的内容一样宽、一样居中
+                      padding: EdgeInsets.symmetric(horizontal: nwSideInset(box.maxWidth), vertical: Nw.s8),
+                      child: NwSegment<_History>(
+                          values: _History.values,
+                          selected: _seg,
+                          onChanged: (v) => setState(() => _seg = v),
+                          labelOf: (v) => switch (v) {
+                                _History.runs => tr('Patrols', '巡检'),
+                                _History.incidents => tr('Incidents', '事件'),
+                                _History.schedule => tr('Schedule', '排程'),
+                              },
+                          keyOf: (v) => switch (v) {
+                                _History.runs => NwShell.runsKey,
+                                _History.incidents => NwShell.incidentsKey,
+                                _History.schedule => NwShell.scheduleKey,
+                              }))))),
       Expanded(
-          // 刘海已经让上面那一条躲开了，下面那一页的顶栏不用再躲一次
+          // 刘海已经让上面那一条躲开了
           child: MediaQuery.removePadding(
               context: context,
               removeTop: true,
               child: KeyedSubtree(
                   key: ValueKey<_History>(_seg),
                   child: switch (_seg) {
-                    _History.runs => SiteRunsPage(api: widget.api),
-                    _History.incidents => SiteIncidentsPage(api: widget.api),
-                    _History.schedule => SiteSchedulePage(api: widget.api),
+                    _History.runs => SiteRunsPage(api: widget.api, embedded: true),
+                    _History.incidents => SiteIncidentsPage(api: widget.api, embedded: true),
+                    _History.schedule => SiteSchedulePage(api: widget.api, embedded: true),
                   }))),
     ]);
   }
@@ -252,38 +257,33 @@ List<(Key, IconData, String, Widget Function())> _entries(SiteApi api) => [
 void _go(BuildContext context, Widget Function() page) =>
     Navigator.push(context, MaterialPageRoute<void>(builder: (_) => page()));
 
-/// 管理栏（管理员）：上面一排入口，下面是站点体检。
+/// 管理栏（管理员）：站点体检（站点状态、版本、诊断包），最下面是去版本、拦截点、摄像头、天气的入口 ——
+/// 跟体检在同一页里一起滚。
 class _AdminTab extends StatelessWidget {
   final SiteApi api;
   const _AdminTab({required this.api});
 
   @override
   Widget build(BuildContext context) {
-    final c = Nw.of(context);
-    return Column(children: [
-      Material(
-          color: c.surface,
-          child: SafeArea(
-              bottom: false,
-              child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: Nw.s16, vertical: Nw.s4),
-                  child: Row(children: [
-                    for (final e in _entries(api))
-                      Padding(
-                          padding: const EdgeInsets.only(right: Nw.s8),
-                          child: NwButton(
-                              buttonKey: e.$1,
-                              icon: e.$2,
-                              label: e.$3,
-                              variant: NwButtonVariant.outline,
-                              size: NwButtonSize.small,
-                              onPressed: () => _go(context, e.$4))),
-                  ])))),
-      Expanded(
-          child: MediaQuery.removePadding(
-              context: context, removeTop: true, child: SiteHealthPage(api: api))),
-    ]);
+    return SiteHealthPage(
+        api: api,
+        embedded: true,
+        footer: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+          NwSectionLabel(tr('Site settings', '站点设置')),
+          nwGap8,
+          // 竖屏的手机一行一个（两个并排「Intercept points」摆不下）；宽了并排
+          NwGrid(minTile: 220, children: [
+            for (final e in _entries(api))
+              NwButton(
+                  buttonKey: e.$1,
+                  icon: e.$2,
+                  label: e.$3,
+                  variant: NwButtonVariant.outline,
+                  size: NwButtonSize.large,
+                  fullWidth: true,
+                  onPressed: () => _go(context, e.$4)),
+          ]),
+        ]));
   }
 }
 
