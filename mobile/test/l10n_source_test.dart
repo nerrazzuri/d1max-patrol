@@ -10,9 +10,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// 故意留着的中文（文件 → 那一行里的一段）。每条都要说得出为什么。
 const _allowed = <String, List<String>>{
   // 语言自己的名字：不管界面是什么语言都这么写
-  'lib/ui/site_page.dart': ["Text('中文')", r"RegExp(r'^狗没标[:：]')"],
+  'lib/ui/site_list.dart': ["Text('中文')"],
   'lib/ui/site_deter.dart': ["Text('中文')"],
   // 跟站点回的报错原文对：剥掉开头那几个字
+  'lib/ui/site_robot.dart': [r"RegExp(r'^狗没标[:：]')"],
   'lib/ui/site_standby.dart': [r"RegExp(r'^狗没标[:：]')"],
   'lib/ui/site_intercepts.dart': [r"RegExp(r'^狗没标[:：]')"],
   // 存到站点上的区域名字（数据，不是界面文字）；显示的时候另外翻（zoneLabelText）
