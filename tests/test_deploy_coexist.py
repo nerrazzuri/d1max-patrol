@@ -382,8 +382,10 @@ def test_范围只盖我们自己的东西():
     # W01b 的两处在 /opt、/etc/d1max 之外,但都是**精确路径、不带通配**,
     # 而且名字里带 d1max —— 匹配不到别人的东西。
     # W09d 的对时配置同样:精确路径、名字带 d1max。
+    # 决策 61 的 chrony 对时片段也是:精确路径、名字带 d1max(厂家的 chrony.conf 不在里面)。
     精确的 = {"/usr/local/sbin/d1max-privileged", "/usr/local/sbin/d1max-restart-now",
-           "/etc/sudoers.d/d1max", "/etc/systemd/timesyncd.conf.d/d1max.conf"}
+           "/etc/sudoers.d/d1max", "/etc/systemd/timesyncd.conf.d/d1max.conf",
+           "/etc/chrony/conf.d/d1max.conf"}
     for 一组 in 形状:
         for 一条 in 一组.split("|"):
             if 一条 in 精确的:
