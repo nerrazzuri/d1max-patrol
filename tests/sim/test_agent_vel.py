@@ -127,6 +127,34 @@ def test_CPP运动安全门_行为测试编译并通过(tmp_path):
     assert "全部通过" in got.stdout
 
 
+def test_CPP抢控制权看回执_行为测试编译并通过_旁路四处都走它(tmp_path):
+    """W35(2026-10-13 C40221):SDK 的 ``TakeControl`` 回没出错只说明收到了回执,回执是 FAILURE
+    (遥控器还拿着)旁路也记成抢到了、把 held 置真。成没成只看回执(``motion/take_ack.hpp``)。"""
+    import re
+    import shutil
+    import subprocess
+
+    src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
+    code = "\n".join(ln.split("//")[0] for ln in src.splitlines())
+    # 带超时的 TakeControl(等回执的那种)只许出现在 TakeConfirmed 里;续期用的 TakeControl(0) 不算
+    waits = re.findall(r"TakeControl\((?!0\)|\))[^)]*\)", code)
+    assert waits == ["TakeControl(timeout_ms)"], waits
+    assert code.count("TakeConfirmed(") == 5, "定义 1 处 + 开机、hold、SDK 说可用、每 6 秒重抢"
+    assert "g_take.OnAck(a.error_code == 0, a.reason)" in code
+
+    cxx = shutil.which("g++")
+    if cxx is None:
+        import pytest
+        pytest.skip("没有 g++")
+    exe = tmp_path / "test_take_ack"
+    subprocess.run([cxx, "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
+                    "-o", str(exe), str(ROOT / "motion" / "test_take_ack.cpp")],
+                   check=True, capture_output=True, timeout=180)
+    got = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert "take_ack: ok" in got.stdout
+
+
 def test_旁路进程的vel全走运动安全门_常量两边一致():
     from d1max_patrol.backends.sidecar_device import MAX_WALK_SPEED, VEL_TTL_MAX_MS, VEL_TTL_MIN_MS
 
