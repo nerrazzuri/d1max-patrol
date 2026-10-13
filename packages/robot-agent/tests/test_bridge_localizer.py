@@ -731,3 +731,34 @@ async def test_走得远_里程自己也会偏_线按走过的路放宽():
     for _ in range(SETTLE_FIXES):
         loc.on_pose(_位姿(20.0, 5.0))
     assert loc.ok(True), loc.why_not(True)
+
+
+async def test_人给的朝向偏45度_边走边收敛到真实位置_认():
+    """2026-10-13 回放:拿给的(偏了的)朝向推「往哪走了」,走 10 m 就推偏 7 m,把对的冤枉成错的。"""
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    assert await loc.relocalize(M, (2.0, 0.0, 0.8)) == ""    # 真实位置 (0, 0)、朝向 0
+    [r] = [m for m in link.sent if isinstance(m, Relocalize)]
+    loc.on_pose(_位姿(2.0, 0.0, 0.8, jump=True, reloc_id=r.req))
+    for i in range(1, 101):                              # 往前(地图 +x)走 10 m
+        c.t += 0.1
+        loc.update((0.1 * i, 0.0, 0.0), True)
+    loc.on_pose(_位姿(10.0, 0.0, 0.0, jump=True))
+    for _ in range(SETTLE_FIXES):
+        loc.on_pose(_位姿(10.0, 0.0, 0.0))
+    assert loc.ok(True), loc.why_not(True)
+
+
+async def test_人给了位置_走了5米却稳在12米外_不认():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    assert await loc.relocalize(M, (2.0, 0.0, 0.8)) == ""
+    [r] = [m for m in link.sent if isinstance(m, Relocalize)]
+    loc.on_pose(_位姿(2.0, 0.0, 0.8, jump=True, reloc_id=r.req))
+    for i in range(1, 51):
+        c.t += 0.1
+        loc.update((0.1 * i, 0.0, 0.0), True)
+    loc.on_pose(_位姿(-10.0, 0.0, 0.0, jump=True))
+    for _ in range(SETTLE_FIXES):
+        loc.on_pose(_位姿(-10.0, 0.0, 0.0))
+    assert "人给的位置" in loc.why_not(True)
