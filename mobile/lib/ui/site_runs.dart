@@ -9,9 +9,13 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_button.dart';
+import 'nw/nw_cards.dart';
+import 'nw/nw_p4_admin.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 
 /// 结论给人看的话。
 String verdictText(String? v) => switch (v) {
@@ -44,12 +48,46 @@ String _verdictSummary(Map<String, dynamic> r) {
   return parts.join(' · ');
 }
 
+/// 这一趟有没有判成异常的照片。
+bool _abnormal(Map<String, dynamic> r) => ((r['verdicts'] as Map?)?['abnormal'] as num? ?? 0) > 0;
+
+/// 这一趟是哪天跑的（当地时间）：按目录名那个 UTC 时刻。认不出来是 null。
+DateTime? _stampTime(Object? stamp) {
+  final m = RegExp(r'^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$').firstMatch('$stamp');
+  if (m == null) return null;
+  return DateTime.utc(int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!), int.parse(m[4]!),
+          int.parse(m[5]!), int.parse(m[6]!))
+      .toLocal();
+}
+
+/// 记录栏顶上那两个数：今天（当地日期，按 [now]）跑了几趟、其中几趟有异常。只数已经读到的这一份列表，
+/// 不另外问站点。
+({int today, int anomalies}) runStats(List<Map<String, dynamic>> rows, DateTime now) {
+  var today = 0, anomalies = 0;
+  for (final r in rows) {
+    final t = _stampTime(r['stamp']);
+    if (t == null || t.year != now.year || t.month != now.month || t.day != now.day) continue;
+    today++;
+    if (_abnormal(r)) anomalies++;
+  }
+  return (today: today, anomalies: anomalies);
+}
+
 class SiteRunsPage extends StatefulWidget {
   final SiteApi api;
   final String? robotId;
-  const SiteRunsPage({super.key, required this.api, this.robotId});
+
+  /// 嵌在底部导航的记录栏里：不带自己的顶栏（页头是记录栏的那排分段）。
+  final bool embedded;
+
+  /// 现在几点（「今天」按它算）。测试换掉它。
+  final DateTime Function() now;
+  const SiteRunsPage(
+      {super.key, required this.api, this.robotId, this.embedded = false, this.now = DateTime.now});
 
   static Key runKey(int id) => Key('run-$id');
+  static const Key todayKey = Key('runs-today');
+  static const Key anomalyKey = Key('runs-anomalies');
 
   @override
   State<SiteRunsPage> createState() => _SiteRunsPageState();
@@ -60,58 +98,94 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = Nw.of(context);
+    final body = RefreshIndicator(
+      onRefresh: () async {
+        setState(() {
+          _rows = widget.api.runs(robotId: widget.robotId);
+        });
+        await _rows.catchError((Object _) => <Map<String, dynamic>>[]);
+      },
+      child: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _rows,
+        builder: (_, snap) {
+          if (snap.hasError) {
+            return NwListView(children: [
+              NwNotice(
+                  tone: NwTone.error,
+                  text: tr("Can't load records: ${snap.error}", '记录拿不到：${snap.error}')),
+            ]);
+          }
+          if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+          final rows = snap.data!;
+          final stats = runStats(rows, widget.now());
+          return NwListView(children: [
+            NwSectionLabel(tr('Today', '今天')),
+            nwGap8,
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                  child: NwStatTile(
+                      key: SiteRunsPage.todayKey,
+                      icon: Icons.route_rounded,
+                      label: tr('Rounds', '巡了几趟'),
+                      value: '${stats.today}')),
+              const SizedBox(width: Nw.s8),
+              // 判成异常的照片是要人去看的：有就标红（跟下面卡片上的标记一个色），没有不上色
+              Expanded(
+                  child: NwStatTile(
+                      key: SiteRunsPage.anomalyKey,
+                      icon: Icons.warning_amber_rounded,
+                      label: tr('With anomalies', '有异常的'),
+                      value: '${stats.anomalies}',
+                      tone: stats.anomalies > 0 ? NwTone.error : NwTone.neutral)),
+            ]),
+            nwGap24,
+            NwSectionLabel(tr('Recent rounds', '最近的巡检')),
+            nwGap8,
+            if (rows.isEmpty)
+              NwCard(child: Text(tr('No records yet', '还没有记录'), style: NwText.bodyMedium.copyWith(color: c.textSecondary))),
+            for (final r in rows)
+              Padding(
+                  padding: const EdgeInsets.only(bottom: Nw.s8),
+                  // 站点的列表里没有照片（只有张数）：不摆缩略图那一行，点进去才取照片
+                  child: Stack(
+                      key: SiteRunsPage.runKey((r['id'] as num).toInt()),
+                      fit: StackFit.passthrough,
+                      children: [
+                        NwPatrolCard(
+                            id: '${r['mission']}',
+                            time: '${stampText('${r['stamp']}')} · ${r['robot_id']}',
+                            status: tr(
+                                '${r['robot_id']} · ${r['photos']} photos · '
+                                    '${r['finished'] == true ? '' : 'not finished · '}${_verdictSummary(r)}'
+                                    ' · ${r['reviewed'] ?? 0} reviewed',
+                                '${r['robot_id']} · 照片 ${r['photos']} · '
+                                    '${r['finished'] == true ? '' : '没跑完 · '}${_verdictSummary(r)}'
+                                    ' · 已复核 ${r['reviewed'] ?? 0}'),
+                            anomaly: _abnormal(r),
+                            tone: _abnormal(r) ? NwTone.error : NwTone.neutral,
+                            onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        SiteRunPage(api: widget.api, runId: (r['id'] as num).toInt())))),
+                        if (_abnormal(r))
+                          Positioned(
+                              top: Nw.s16,
+                              right: Nw.s16,
+                              child: IgnorePointer(child: Icon(Icons.report, size: 24, color: c.error))),
+                      ])),
+          ]);
+        },
+      ),
+    );
+    if (widget.embedded) return body;
     return Scaffold(
       appBar: AppBar(
           title: Text(widget.robotId == null
               ? tr('Records', '记录')
               : tr('Records ${widget.robotId}', '记录 ${widget.robotId}'))),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          setState(() {
-            _rows = widget.api.runs(robotId: widget.robotId);
-          });
-          await _rows.catchError((Object _) => <Map<String, dynamic>>[]);
-        },
-        child: FutureBuilder<List<Map<String, dynamic>>>(
-          future: _rows,
-          builder: (c, snap) {
-            if (snap.hasError) {
-              return ListView(children: [
-                ListTile(
-                    title: Text(tr("Can't load records: ${snap.error}", '记录拿不到：${snap.error}'),
-                        style: const TextStyle(color: D1Color.p1Text))),
-              ]);
-            }
-            if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-            final rows = snap.data!;
-            if (rows.isEmpty) {
-              return ListView(children: [ListTile(title: Text(tr('No records yet', '还没有记录')))]);
-            }
-            return ListView(children: [
-              for (final r in rows)
-                ListTile(
-                  key: SiteRunsPage.runKey((r['id'] as num).toInt()),
-                  title: Text('${r['mission']} · ${stampText('${r['stamp']}')}'),
-                  subtitle: Text(tr(
-                      '${r['robot_id']} · ${r['photos']} photos · '
-                          '${r['finished'] == true ? '' : 'not finished · '}${_verdictSummary(r)}'
-                          ' · ${r['reviewed'] ?? 0} reviewed',
-                      '${r['robot_id']} · 照片 ${r['photos']} · '
-                          '${r['finished'] == true ? '' : '没跑完 · '}${_verdictSummary(r)}'
-                          ' · 已复核 ${r['reviewed'] ?? 0}')),
-                  trailing: ((r['verdicts'] as Map?)?['abnormal'] as num? ?? 0) > 0
-                      ? const Icon(Icons.report, color: D1Color.p1Text)
-                      : null,
-                  onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute<void>(
-                          builder: (_) =>
-                              SiteRunPage(api: widget.api, runId: (r['id'] as num).toInt()))),
-                ),
-            ]);
-          },
-        ),
-      ),
+      body: body,
     );
   }
 }
@@ -220,23 +294,37 @@ class _SiteRunPageState extends State<SiteRunPage> {
         future: _detail,
         builder: (c, snap) {
           if (snap.hasError) {
-            return Center(child: Text(tr("Can't load: ${snap.error}", '拿不到：${snap.error}')));
+            return NwListView(children: [
+              NwNotice(tone: NwTone.error, text: tr("Can't load: ${snap.error}", '拿不到：${snap.error}')),
+            ]);
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final run = (snap.data!['run'] as Map?)?.cast<String, dynamic>() ?? {};
           final photos = (snap.data!['photos'] as List? ?? const [])
               .whereType<Map<String, dynamic>>()
               .toList();
-          return ListView(children: [
-            ListTile(
-              title: Text('${run['mission']} · ${stampText('${run['stamp']}')}'),
-              subtitle: Text(tr(
-                  '${run['robot_id']} · ${run['photos']} photos · '
-                      '${run['finished'] == true ? 'finished (${run['result']})' : 'not finished'}',
-                  '${run['robot_id']} · 照片 ${run['photos']} · '
-                      '${run['finished'] == true ? '跑完了（${run['result']}）' : '没跑完'}')),
-            ),
-            for (final p in photos) _photoTile(p),
+          final nw = Nw.of(context);
+          return NwListView(children: [
+            NwCard(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text('${run['mission']} · ${stampText('${run['stamp']}')}',
+                  style: NwText.titleMedium.copyWith(color: nw.text)),
+              nwGap4,
+              Text(
+                  tr(
+                      '${run['robot_id']} · ${run['photos']} photos · '
+                          '${run['finished'] == true ? 'finished (${run['result']})' : 'not finished'}',
+                      '${run['robot_id']} · 照片 ${run['photos']} · '
+                          '${run['finished'] == true ? '跑完了（${run['result']}）' : '没跑完'}'),
+                  style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+            ])),
+            nwGap24,
+            NwSectionLabel(tr('Photos', '照片')),
+            nwGap8,
+            NwListCard(children: [
+              if (photos.isEmpty) NwCardText(tr('No photos in this run', '这一趟没有照片')),
+              for (final p in photos) _photoTile(p),
+            ]),
           ]);
         },
       ),
@@ -244,34 +332,43 @@ class _SiteRunPageState extends State<SiteRunPage> {
   }
 
   Widget _photoTile(Map<String, dynamic> p) {
+    final nw = Nw.of(context);
     final f = (p['finding'] as Map?)?.cast<String, dynamic>();
     final r = (p['review'] as Map?)?.cast<String, dynamic>();
     final shown = r?['verdict'] ?? f?['verdict'];
     return ListTile(
       key: SiteRunPage.photoKey('${p['name']}'),
-      leading: SizedBox(
-        width: 64,
-        height: 48,
-        child: FutureBuilder<Uint8List>(
-          future: _photo('${p['name']}'),
-          builder: (c, s) => s.hasData && s.data!.isNotEmpty
-              // 缩略图按小尺寸解码：几十张原图全尺寸解出来，手机内存吃不消。
-              ? Image.memory(s.data!, fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: 128)
-              : Icon(s.hasError ? Icons.broken_image : Icons.photo),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(Nw.r4),
+        child: Container(
+          width: 64,
+          height: 48,
+          color: nw.surfaceVariant,
+          child: FutureBuilder<Uint8List>(
+            future: _photo('${p['name']}'),
+            builder: (c, s) => s.hasData && s.data!.isNotEmpty
+                // 缩略图按小尺寸解码：几十张原图全尺寸解出来，手机内存吃不消。
+                ? Image.memory(s.data!, fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: 128)
+                : Icon(s.hasError ? Icons.broken_image : Icons.photo, color: nw.textSecondary),
+          ),
         ),
       ),
-      title: Text(tr(
-          '${p['waypoint']} · ${p['camera']} · ${verdictText(shown as String?)}'
-              '${r != null ? ' (reviewed)' : ''}',
-          '${p['waypoint']} · ${p['camera']} · ${verdictText(shown)}'
-              '${r != null ? '（人已复核）' : ''}')),
-      subtitle: Text(r != null
-          ? tr('Review: ${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}',
-              '复核：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}')
-          : f != null
-              ? tr('Assessment: ${f['reason'] ?? ''}', '判读：${f['reason'] ?? ''}')
-              : tr('Not assessed yet', '还没判读')),
-      trailing: shown == 'abnormal' ? const Icon(Icons.report, color: D1Color.p1Text) : null,
+      title: Text(
+          tr(
+              '${p['waypoint']} · ${p['camera']} · ${verdictText(shown as String?)}'
+                  '${r != null ? ' (reviewed)' : ''}',
+              '${p['waypoint']} · ${p['camera']} · ${verdictText(shown)}'
+                  '${r != null ? '（人已复核）' : ''}'),
+          style: NwText.titleSmall.copyWith(color: nw.text)),
+      subtitle: Text(
+          r != null
+              ? tr('Review: ${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}',
+                  '复核：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}')
+              : f != null
+                  ? tr('Assessment: ${f['reason'] ?? ''}', '判读：${f['reason'] ?? ''}')
+                  : tr('Not assessed yet', '还没判读'),
+          style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+      trailing: shown == 'abnormal' ? Icon(Icons.report, color: nw.error) : null,
       onTap: () => _open(p),
     );
   }
@@ -334,46 +431,58 @@ class _SitePhotoPageState extends State<SitePhotoPage> {
     final f = (widget.photo['finding'] as Map?)?.cast<String, dynamic>();
     final r = (widget.photo['review'] as Map?)?.cast<String, dynamic>();
     final canReview = widget.api.session?.canReview ?? false;
+    final c = Nw.of(context);
+    final line = NwText.bodyMedium.copyWith(color: c.text);
     return Scaffold(
       appBar: AppBar(title: Text('${widget.photo['waypoint']} · ${widget.photo['camera']}')),
-      body: ListView(padding: const EdgeInsets.all(12), children: [
+      body: NwListView(children: [
         FutureBuilder<Uint8List>(
           future: widget.bytes,
-          builder: (c, s) => s.hasError
-              ? Text(tr("Can't load photo: ${s.error}", '照片拿不到：${s.error}'),
-                  style: const TextStyle(color: D1Color.p1Text))
+          builder: (_, s) => s.hasError
+              ? NwNotice(
+                  tone: NwTone.error, text: tr("Can't load photo: ${s.error}", '照片拿不到：${s.error}'))
               : s.hasData
-                  ? InteractiveViewer(child: Image.memory(s.data!))
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(Nw.r8),
+                      child: InteractiveViewer(child: Image.memory(s.data!)))
                   : const SizedBox(height: 200, child: Center(child: CircularProgressIndicator())),
         ),
-        const SizedBox(height: 8),
-        Text(f == null
-            ? tr('Model: not assessed yet', '模型：还没判读')
-            : tr(
-                'Model: ${verdictText(f['verdict'] as String?)} (confidence '
-                    '${((f['confidence'] as num? ?? 0) * 100).round()}%) ${f['reason'] ?? ''}'
-                    '${(f['evidence'] ?? '') != '' ? '; evidence: ${f['evidence']}' : ''}',
-                '模型：${verdictText(f['verdict'] as String?)}（把握 '
-                    '${((f['confidence'] as num? ?? 0) * 100).round()}%）${f['reason'] ?? ''}'
-                    '${(f['evidence'] ?? '') != '' ? '；依据：${f['evidence']}' : ''}')),
-        const SizedBox(height: 4),
-        Text(r == null
-            ? tr('Reviewer: not reviewed yet', '人：还没复核')
-            : tr('Reviewer: ${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}',
-                '人：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}')),
+        nwGap16,
+        NwCard(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(
+              f == null
+                  ? tr('Model: not assessed yet', '模型：还没判读')
+                  : tr(
+                      'Model: ${verdictText(f['verdict'] as String?)} (confidence '
+                          '${((f['confidence'] as num? ?? 0) * 100).round()}%) ${f['reason'] ?? ''}'
+                          '${(f['evidence'] ?? '') != '' ? '; evidence: ${f['evidence']}' : ''}',
+                      '模型：${verdictText(f['verdict'] as String?)}（把握 '
+                          '${((f['confidence'] as num? ?? 0) * 100).round()}%）${f['reason'] ?? ''}'
+                          '${(f['evidence'] ?? '') != '' ? '；依据：${f['evidence']}' : ''}'),
+              style: line),
+          nwGap8,
+          Text(
+              r == null
+                  ? tr('Reviewer: not reviewed yet', '人：还没复核')
+                  : tr('Reviewer: ${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}',
+                      '人：${verdictText(r['verdict'] as String?)} ${r['note'] ?? ''}'),
+              style: line),
+        ])),
         if (canReview) ...[
-          const SizedBox(height: 12),
+          nwGap16,
           TextField(
               key: SitePhotoPage.noteKey,
               controller: _note,
               decoration: InputDecoration(labelText: tr('Note (optional)', '说一句（可不填）')),
               maxLength: 200),
-          Wrap(spacing: 8, children: [
+          Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
             for (final v in ['normal', 'abnormal', 'unclear'])
-              FilledButton.tonal(
-                  key: SitePhotoPage.reviewKey(v),
+              NwButton(
+                  buttonKey: SitePhotoPage.reviewKey(v),
+                  variant: NwButtonVariant.secondary,
                   onPressed: _busy ? null : () => _review(v),
-                  child: Text(verdictText(v))),
+                  label: verdictText(v)),
           ]),
         ],
       ]),
