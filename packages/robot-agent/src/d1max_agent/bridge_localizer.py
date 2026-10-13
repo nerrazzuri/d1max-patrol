@@ -34,7 +34,8 @@
 最后在错的地方稳住几帧,窗口里全是错的,照样过(2026-10-13 C40221 3d.9:人给偏 2 m 的初值,稳在错
 8 m、朝向差 160° 的地方还报 σ 0.1,代理认了;狗一直没动)。所以跳变之后要认之前,拿「锚」按里程推到
 现在,再比:锚 = 最近一帧可信的,或者刚收下的那次重定位给的位置(人给的、RTK 给的都算)。离推出来的
-位置超过 :data:`ANCHOR_M`(重定位时是 max(它, 3σ))+ :data:`XCHECK_FRAC` × 这期间走过的路,或者朝向
+位置超过 :data:`ANCHOR_M`(重定位时是 max(它, 3σ);给的朝向不准,这时只比离给的位置多远、里程挪了
+多远放宽多远)+ :data:`XCHECK_FRAC` × 这期间走过的路,或者朝向
 差超过 :data:`ANCHOR_YAW_RAD`(加里程朝向漂的量)→ 不认,一直说「请重新设位置」,直到它自己回到
 对得上的地方、或者有人(或 RTK)再给一次位置。里程断过(换了段)、没配上里程:没法比,照旧认。
 """
@@ -85,6 +86,8 @@ ANCHOR_M = 3.0
 ANCHOR_YAW_RAD = math.pi / 2
 #: 里程朝向站着也在漂(2026-10-08 C40221:约 0.002 rad/s);锚放久了朝向那条线按这个放宽。
 ANCHOR_YAW_DRIFT_RPS = 0.005
+#: 锚是重定位给的位置(不是定位器出的一帧)时,它的 ``source``。
+GIVEN = "given"
 #: 「比平常晚到多少」按近这么久里最小的「收到时刻 − 时间戳」算(秒)。
 LAG_WINDOW_S = 10.0
 #: 配里程:离那一刻最近的里程样本差过这么多就配不上(秒)。
@@ -412,7 +415,7 @@ class BridgeLocalizer:
         # 给的这个位置就是新的锚(W35):它稳下来的地方要离这儿不远
         now = self._now()
         self._anchor = _Fix(pose=(float(pose[0]), float(pose[1]), float(pose[2])),
-                            sigma_xy=sigma_xy, sigma_yaw=0.0, source="given", at=now, born=now,
+                            sigma_xy=sigma_xy, sigma_yaw=0.0, source=GIVEN, at=now, born=now,
                             odom=self._odom, epoch=self._epoch, path=self._path, dr0=0.0)
         self._anchor_m = max(ANCHOR_M, 3 * sigma_xy)
         self._anchor_what = "人给的位置" if human else "重定位给的位置"
@@ -514,7 +517,13 @@ class BridgeLocalizer:
         if a is None or a.T is None or new.odom is None or a.epoch != new.epoch:
             return ""
         want = compose(a.T, new.odom)
-        gap = math.hypot(new.pose[0] - want[0], new.pose[1] - want[1])
+        if a.source == GIVEN:
+            # 给的朝向可能偏几十度:拿它推「往哪走了」会越走越偏(2026-10-13 回放:给偏 45°、边走边
+            # 收敛到真实位置的那一趟被冤枉了)。只比离给的位置多远,里程挪了多远就放宽多远
+            gap = max(0.0, math.hypot(new.pose[0] - a.pose[0], new.pose[1] - a.pose[1])
+                      - math.hypot(new.odom[0] - a.odom[0], new.odom[1] - a.odom[1]))
+        else:
+            gap = math.hypot(new.pose[0] - want[0], new.pose[1] - want[1])
         turn = abs(_wrap(new.pose[2] - want[2]))
         if gap > self._anchor_m + XCHECK_FRAC * max(0.0, new.path - a.path):
             bad = f"{gap:.1f} m"
