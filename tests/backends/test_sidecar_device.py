@@ -211,7 +211,8 @@ def test_旁路进程每处拿到控制权都走SetHeld_持有一变就广播hel
     body = body[:body.index("\n}\n")]
     assert "g_held.exchange(held) != held" in body and "Broadcast(HelloFrame())" in body
     assert "SetHeld(a.error_code == 0);" in src                       # 重抢的回执
-    assert "TakeControl(5000)) SetHeld(true);" in src                 # SDK 报可用
+    # SDK 报可用(W35:看回执)
+    assert "TakeConfirmed(*g_client, 5000).empty()) SetHeld(true);" in src
     hold = src[src.index("static Outcome DoHold() {"):]
     assert "SetHeld(true);" in hold[:hold.index("\n}\n")]
     # 连上时那帧也用同一个构造:握手帧只有一份写法
@@ -229,9 +230,9 @@ def test_W34_旁路进程丢了控制权自己定期重抢_不只等SDK通知():
     beat = beat[:beat.index("}).detach();")]
     assert "if (!g_held.load() && beat % 2 == 0) {" in beat
     retake = beat[beat.index("if (!g_held.load() && beat % 2 == 0) {"):]
-    assert "ec = g_client->TakeControl(5000);" in retake
-    assert retake.index("if (!ec) {") < retake.index("SetHeld(true);")
-    assert "ec.message() != last_why" in retake, "同一个失败原因别刷屏"
+    assert "why = TakeConfirmed(*g_client, 5000);" in retake, "W35:回执说成了才算"
+    assert retake.index("if (why.empty()) {") < retake.index("SetHeld(true);")
+    assert "why != last_why" in retake, "同一个失败原因别刷屏"
 
 
 async def test_控制权丢了之后动作指令立刻被挡住():
