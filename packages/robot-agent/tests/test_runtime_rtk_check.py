@@ -41,14 +41,15 @@ async def 台(tmp_path):
     await t.收()
 
 
-async def test_定位器稳定地错了四米_RTK抓住_不可信_按RTK重定位_对回来解除(台):
-    """W09a 的已知限制:定位器自信地跳错、之后一直稳定地错,交叉校验(只跟里程比)抓不住。"""
+async def test_定位器稳定地错了两米_RTK抓住_不可信_按RTK重定位_对回来解除(台):
+    """W09a 的已知限制:定位器自信地跳错、之后一直稳定地错,交叉校验(只跟里程比)抓不住。错得不到
+    3 m 的,跟锚比(W35)也放过 —— 靠 RTK。"""
     t = 台
     await t.连()
     rtk = 假RTK(t.c)
     t.rt.rtk = rtk
     t.rt._rtk_check.on_map(GEO)
-    t.loc.jump(4.0, 0.0, flag=True)                      # 定位器报跳变、稳稳地错 4 m
+    t.loc.jump(2.0, 0.0, flag=True)                      # 定位器报跳变、稳稳地错 2 m
     await t.拍(30)
     assert _遥测(t.ears).loc["reason"] == "", "只看里程:它是可信的"
     o = await t.dog.odometry()
@@ -61,6 +62,25 @@ async def test_定位器稳定地错了四米_RTK抓住_不可信_按RTK重定�
     assert _遥测(t.ears).loc["reason"] == "", "对回来连续 3 s:解除"
 
 
+async def test_定位器稳在四米外_跟锚对不上先不认_RTK照样能把它请回来(台):
+    """W35:错得远的代理自己就不认(不用等 RTK);卡在那儿的时候 RTK 核对照常跑、按 RTK 重定位之后
+    新的锚是 RTK 给的位置,对回来就解除。"""
+    t = 台
+    await t.连()
+    rtk = 假RTK(t.c)
+    t.rt.rtk = rtk
+    t.rt._rtk_check.on_map(GEO)
+    t.loc.jump(4.0, 0.0, flag=True)
+    await t.拍(30)
+    assert "请重新设位置" in _遥测(t.ears).loc["reason"]
+    o = await t.dog.odometry()
+    rtk.at = (o.x, o.y)
+    await t.拍(40)
+    assert t.loc.relocs, "请定位器在 RTK 的位置重定位了"
+    await t.拍(60)
+    assert _遥测(t.ears).loc["reason"] == ""
+
+
 async def test_RTK说不对的那几秒_遥测里说原因(台):
     t = 台
     await t.连()
@@ -68,15 +88,15 @@ async def test_RTK说不对的那几秒_遥测里说原因(台):
     t.rt.rtk = rtk
     t.rt._rtk_check.on_map(GEO)
     t.loc.refuse_reloc = "测试:先不让它对回来"
-    t.loc.jump(4.0, 0.0, flag=True)
+    t.loc.jump(2.0, 0.0, flag=True)
     await t.拍(30)
     o = await t.dog.odometry()
     rtk.at = (o.x, o.y)
     await t.拍(40)
-    assert "RTK 说位置差 4.0 m" in _遥测(t.ears).loc["reason"]
+    assert "RTK 说位置差 2.0 m" in _遥测(t.ears).loc["reason"]
     assert not t.rt.parts.nav.anchor.ok(True)
     evs = [e["data"] for e in t.ears.by.get("event", []) if e["kind"] == "rtk_disagree"]
-    assert len(evs) == 1 and evs[0]["gap_m"] == pytest.approx(4.0, abs=0.1), "发事件给站点"
+    assert len(evs) == 1 and evs[0]["gap_m"] == pytest.approx(2.0, abs=0.1), "发事件给站点"
 
 
 async def test_RTK的解太旧_不拿来比(台):
@@ -86,7 +106,7 @@ async def test_RTK的解太旧_不拿来比(台):
     rtk = 假RTK(lambda: t.c.ms - 1000)
     t.rt.rtk = rtk
     t.rt._rtk_check.on_map(GEO)
-    t.loc.jump(4.0, 0.0, flag=True)
+    t.loc.jump(2.0, 0.0, flag=True)
     await t.拍(30)
     o = await t.dog.odometry()
     rtk.at = (o.x, o.y)
@@ -154,7 +174,7 @@ async def test_人给了位置_RTK的结论作废_一阵子不按RTK自动请(�
     t.rt.rtk = rtk
     t.rt._rtk_check.on_map(GEO)
     t.loc.refuse_reloc = "测试:先不让它对回来"
-    t.loc.jump(4.0, 0.0, flag=True)
+    t.loc.jump(2.0, 0.0, flag=True)
     await t.拍(30)
     o = await t.dog.odometry()
     rtk.at = (o.x, o.y)
