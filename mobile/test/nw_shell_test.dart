@@ -107,8 +107,14 @@ void main() {
       expect(find.byType(SiteWatchPage, skipOffstage: false), findsNothing, reason: '切走的那一栏拆掉，不在背后空跑');
       expect(find.byKey(const Key('robot-A')), findsOneWidget);
       await _tab(t, NwShell.mapKey);
-      expect(find.byType(SiteMapsPage), findsOneWidget);
+      // 第四批：地图栏是当前这张图；地图列表从它右上角推进去
+      expect(find.byType(SiteMapTab), findsOneWidget);
       expect(find.byKey(const Key('robot-A')), findsNothing);
+      await _tab(t, SiteMapTab.listKey);
+      expect(find.byType(SiteMapsPage), findsOneWidget);
+      expect(find.byType(NwBottomNav), findsNothing);
+      await t.pageBack();
+      await t.pumpAndSettle();
 
       await _tab(t, NwShell.historyKey);
       expect(find.byType(SiteRunsPage), findsOneWidget);
@@ -126,6 +132,8 @@ void main() {
       await _tab(t, NwShell.adminKey);
       expect(find.byType(SiteHealthPage), findsOneWidget);
       expect(t.widget(find.byKey(const Key('open-releases'))), isA<OutlinedButton>());
+      // 第四批：入口在体检下面（同一页里往下滚）
+      await t.ensureVisible(find.byKey(const Key('open-releases')));
       await _tab(t, const Key('open-releases'));
       expect(find.byType(SiteReleasesPage), findsOneWidget);
       expect(find.byType(NwBottomNav), findsNothing);
@@ -195,7 +203,7 @@ void main() {
       expect(rang, 1);
       await t.pump(const Duration(milliseconds: 100));
       expect(find.textContaining('没人确认'), findsOneWidget, reason: '提示条在外壳上，哪一栏都看得见');
-      expect(find.byType(SiteMapsPage), findsOneWidget);
+      expect(find.byType(SiteMapTab), findsOneWidget);
       await t.pumpWidget(Container());
     });
 

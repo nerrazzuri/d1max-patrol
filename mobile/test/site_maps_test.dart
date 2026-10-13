@@ -154,12 +154,16 @@ void main() {
     expect(admin.calls, contains('mapping A start yard estate-1:5'));
   });
 
-  // 2026-10-14 重做：入口从狗列表的顶栏挪到了底部导航的「地图」栏。
+  // 2026-10-14 重做：入口从狗列表的顶栏挪到了底部导航的「地图」栏；第四批起地图栏是当前这张图
+  // （SiteMapTab），这个列表页从它右上角进。
   testWidgets('进了站点有「地图」入口', (t) async {
     final api = FakeApi('owner');
     await t.pumpWidget(MaterialApp(home: NwShell(api: api, title: '庄园')));
     await t.pump();
     await t.tap(find.byKey(const Key('open-maps')));
+    await t.pumpAndSettle();
+    expect(find.byType(SiteMapTab), findsOneWidget);
+    await t.tap(find.byKey(SiteMapTab.listKey));
     await t.pumpAndSettle();
     expect(find.byType(SiteMapsPage), findsOneWidget);
   });

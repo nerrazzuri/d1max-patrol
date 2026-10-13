@@ -60,6 +60,7 @@ final _pages = <String, Widget Function()>{
   'robot (owner)': () => SiteRobotPage(api: FakeApi('owner'), robotId: 'A'),
   'watch': () => SiteWatchPage(api: FakeApi('guard')),
   'alarm scene': () => SiteAlertScenePage(api: FakeApi('guard'), alert: _p1()),
+  'map tab': () => Scaffold(body: SiteMapTab(api: FakeApi('admin'))),
   'maps': () => SiteMapsPage(api: FakeApi('admin')),
   'releases': () => SiteReleasesPage(api: FakeApi('admin')),
   'runs': () => SiteRunsPage(api: FakeApi('admin')),
