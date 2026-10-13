@@ -5,6 +5,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../l10n.dart';
+import '../nw/nw_theme.dart';
 
 class BarAction {
   final Key? key;
@@ -20,20 +21,31 @@ const Key barMoreKey = Key('bar-more');
 
 List<Widget> barActions(BuildContext context, List<BarAction> actions) {
   if (actions.isEmpty) return const <Widget>[];
+  final c = Nw.of(context);
   if (MediaQuery.sizeOf(context).width >= barActionsCollapseBelow) {
+    // 顶栏上的字：正文色的等宽标签（顶栏的底是卡片色，不用强调色）
+    final style = TextButton.styleFrom(
+        foregroundColor: c.text, textStyle: NwText.labelMedium, minimumSize: const Size(Nw.touch, Nw.touch));
     return [
-      for (final a in actions) TextButton(key: a.key, onPressed: a.onPressed, child: Text(a.label)),
+      for (final a in actions) TextButton(key: a.key, style: style, onPressed: a.onPressed, child: Text(a.label)),
     ];
   }
   return [
     PopupMenuButton<int>(
         key: barMoreKey,
         tooltip: tr('More', '更多'),
-        icon: const Icon(Icons.more_vert),
+        icon: Icon(Icons.more_vert_rounded, color: c.text),
+        color: c.surface,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Nw.r12), side: BorderSide(color: c.outline)),
         onSelected: (i) => actions[i].onPressed(),
         itemBuilder: (_) => [
               for (var i = 0; i < actions.length; i++)
-                PopupMenuItem<int>(key: actions[i].key, value: i, child: Text(actions[i].label)),
+                PopupMenuItem<int>(
+                    key: actions[i].key,
+                    value: i,
+                    child: Text(actions[i].label, style: NwText.bodyMedium.copyWith(color: c.text))),
             ]),
   ];
 }
