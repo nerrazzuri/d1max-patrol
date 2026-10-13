@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 55                      # RC 加固 H9:推送多通道(provider、done)
+SCHEMA_VERSION = 56                      # RC 加固外审 I2:推送逐台记账(push_sent)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -426,6 +426,13 @@ CREATE TABLE IF NOT EXISTS push_outbox (
     error      TEXT NOT NULL DEFAULT '',
     done       TEXT NOT NULL DEFAULT '',
     UNIQUE (alert_key, tier)
+);
+-- RC 加固外审 I2:哪一条(push_outbox.id)给哪个推送号发成功过。重试只补没发成功的;站点重启也在。
+CREATE TABLE IF NOT EXISTS push_sent (
+    outbox_id  INTEGER NOT NULL,
+    reg_id     TEXT NOT NULL,
+    sent_ms    INTEGER NOT NULL,
+    PRIMARY KEY (outbox_id, reg_id)
 );
 -- 商业化 A1:指标历史(每 5 分钟一笔,留 30 天):盘、狗在线、开着的告警、狗上待传的、事件循环延迟。
 CREATE TABLE IF NOT EXISTS metrics (
