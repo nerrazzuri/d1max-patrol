@@ -27,6 +27,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../../l10n.dart';
+import '../nw/nw_theme.dart';
 
 /// 这一刻哪几路相机有画面（相机名 → 有没有）。由调用方的健康轮询给（站点那一份见
 /// `site_video.dart` 的 `SiteVideoHealthPoller`）。
@@ -659,11 +660,12 @@ class _LiveVideoState extends State<LiveVideo> {
                 children: <Widget>[
                   Text(title,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white, fontSize: 18)),
+                      style: NwText.titleMedium.copyWith(color: Nw.of(context).onScrim, fontSize: 18)),
                   const SizedBox(height: 8),
                   Text(hint,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                      style: NwText.bodyMedium
+                          .copyWith(color: Nw.of(context).onScrim.withValues(alpha: 0.7))),
                 ],
               ),
             ),

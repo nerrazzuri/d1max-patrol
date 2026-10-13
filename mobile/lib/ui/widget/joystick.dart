@@ -11,6 +11,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../nw/nw_theme.dart';
+
 /// 这根杆管哪个轴。
 enum JoystickAxis {
   /// 左杆：平移。**吸附到单轴** —— 真机遥控器推 45° 也只走一个轴。
@@ -167,19 +169,33 @@ class _JoystickState extends State<Joystick> {
   Widget build(BuildContext context) {
     final Offset? c = _center;
     final double dim = _dim;
+    // 颜色跟着主题走（2026-10-14 重做）：都是「压在画面上的字」那个色（白）调透明度。
+    final Color ink = Nw.of(context).onScrim;
     final Widget face = Stack(
       fit: StackFit.expand,
       children: <Widget>[
-        // 底：一块几乎透明的区域，把这一角标出来又不挡画面。
+        // 底：一块几乎透明的区域加一圈细边，把这一角标出来又不挡画面。
         // **不画死一个圈** —— 画了人就会去按它，而按不准正是要避开的事。
         DecoratedBox(
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.18 * dim),
-            borderRadius: const BorderRadius.all(Radius.circular(12)),
+            color: ink.withValues(alpha: 0.08 * dim),
+            borderRadius: const BorderRadius.all(Radius.circular(Nw.r12)),
+            border: Border.all(color: ink.withValues(alpha: 0.30 * dim), width: 1.5),
           ),
         ),
+        // 角上一个小记号说这根杆管什么（前后 / 转向）。在角上、很淡：不是让人去按的靶子。
+        Positioned(
+          left: Nw.s8,
+          top: Nw.s8,
+          child: Icon(
+              widget.axis == JoystickAxis.turn
+                  ? Icons.swap_horiz_rounded
+                  : Icons.swap_vert_rounded,
+              size: 20,
+              color: ink.withValues(alpha: 0.54 * dim)),
+        ),
         if (c != null) ...<Widget>[
-          _circle(c, Joystick.radius, 0.24, dim, null),
+          _circle(c, Joystick.radius, 0.24, dim, null, ink),
           _circle(
               c +
                   Offset(_value.dx * Joystick.radius,
@@ -187,7 +203,8 @@ class _JoystickState extends State<Joystick> {
               Joystick.knobRadius,
               0.70,
               dim,
-              Joystick.knobKey),
+              Joystick.knobKey,
+              ink),
         ],
       ],
     );
@@ -207,7 +224,7 @@ class _JoystickState extends State<Joystick> {
     );
   }
 
-  Widget _circle(Offset at, double r, double alpha, double dim, Key? key) =>
+  Widget _circle(Offset at, double r, double alpha, double dim, Key? key, Color ink) =>
       Positioned(
         left: at.dx - r,
         top: at.dy - r,
@@ -216,10 +233,10 @@ class _JoystickState extends State<Joystick> {
         child: DecoratedBox(
           key: key,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: alpha * dim),
+            color: ink.withValues(alpha: alpha * dim),
             shape: BoxShape.circle,
             border: Border.all(
-                color: Colors.white.withValues(alpha: 0.54 * dim), width: 1.5),
+                color: ink.withValues(alpha: 0.54 * dim), width: 1.5),
           ),
         ),
       );

@@ -19,9 +19,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 import 'site_video.dart';
 import 'orientation.dart';
 import 'widget/joystick.dart';
@@ -295,43 +296,93 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
       autofocus: true,
       onKeyEvent: _onKey,
       onFocusChange: _lostFocus,
-      child: Scaffold(
-      appBar: AppBar(title: Text(tr('Remote control ${widget.robotId}', '遥控 ${widget.robotId}'))),
+      // 这一页不管系统是浅色深色都是深色的（2026-10-14 重做）：它就是一块画面，两边的杆、上面的字
+      // 都按「压在画面上」配色；没有顶栏，左上一个关闭。
+      child: Theme(
+      data: nwTheme(Brightness.dark),
+      child: Builder(builder: (context) {
+      final c = Nw.of(context);
+      return Scaffold(
       body: SafeArea(
         top: false,
         // 摇杆铺满给它的那块地方：要给定大小（整栏高）。
         child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           SizedBox(
             width: side,
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Joystick(
-                key: SiteTeleopPage.moveStickKey,
-                axis: JoystickAxis.translate,
-                enabled: _canDrive,
-                onChanged: (v) => _fwd = v.dy,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              // 左上：关闭、画面是不是活的、哪只狗
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 4, 8, 0),
+                child: Row(children: [
+                  IconButton(
+                      key: const Key('teleop-close'),
+                      tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+                      icon: Icon(Icons.close_rounded, color: c.onScrim),
+                      onPressed: () => Navigator.maybePop(context)),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                        Text(widget.robotId,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: NwText.labelLarge.copyWith(color: c.onScrim)),
+                        const SizedBox(height: 2),
+                        // 「LIVE」只在真能开的时候亮（拿到遥控、站点说有画面）：画面还在接的时候不许说它是活的
+                        NwStatusPill(
+                            label: _ended
+                                ? tr('ENDED', '已结束')
+                                : !_video
+                                    ? tr('NO VIDEO', '无画面')
+                                    : (_granted ? tr('LIVE', '实时') : tr('WAITING', '等待')),
+                            tone: _canDrive ? NwTone.success : NwTone.neutral,
+                            dot: _canDrive),
+                      ])),
+                ]),
               ),
-            ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Joystick(
+                    key: SiteTeleopPage.moveStickKey,
+                    axis: JoystickAxis.translate,
+                    enabled: _canDrive,
+                    onChanged: (v) => _fwd = v.dy,
+                  ),
+                ),
+              ),
+            ]),
           ),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
-                child: Text(
-                  !_video && !_ended
-                      ? tr('No video: do not drive (the joysticks are disabled until video returns)',
-                          '没有画面：不许动（画面回来之前摇杆不起作用）')
-                      : _status,
-                  key: SiteTeleopPage.statusKey,
-                  style: TextStyle(color: bad ? D1Color.p1Text : null, fontWeight: FontWeight.bold),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: Nw.s8, vertical: Nw.s4),
+                  decoration: BoxDecoration(
+                      color: bad ? c.errorSoft : c.surface,
+                      borderRadius: BorderRadius.circular(Nw.r8),
+                      border: Border.all(color: bad ? c.error : c.outline)),
+                  child: Text(
+                    !_video && !_ended
+                        ? tr('No video: do not drive (the joysticks are disabled until video returns)',
+                            '没有画面：不许动（画面回来之前摇杆不起作用）')
+                        : _status,
+                    key: SiteTeleopPage.statusKey,
+                    style: NwText.titleSmall
+                        .copyWith(color: bad ? c.error : c.text, fontWeight: FontWeight.bold),
+                  ),
                 ),
               ),
               if (desktop)
                 Padding(
                   key: SiteTeleopPage.keysKey,
                   padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
-                  child: Text(tr('Keyboard: W/S forward/back, A/D turn, release to stop; Esc to stop',
-                      '键盘：W/S 前后，A/D 转向，松开就停；Esc 停车')),
+                  child: Text(
+                      tr('Keyboard: W/S forward/back, A/D turn, release to stop; Esc to stop',
+                          '键盘：W/S 前后，A/D 转向，松开就停；Esc 停车'),
+                      style: NwText.bodySmall.copyWith(color: c.textSecondary)),
                 ),
               Expanded(
                 child: ListView(padding: const EdgeInsets.symmetric(vertical: 8), children: [
@@ -346,15 +397,34 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
               Padding(
                 padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
                 child: SizedBox(
-                  height: 64,
-                  child: FilledButton(
-                    key: SiteTeleopPage.stopKey,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: D1Color.p1,
-                      foregroundColor: D1Color.onSolid,
-                      side: const BorderSide(color: D1Color.p1Frame, width: D1Size.stopAllRing)),
-                    onPressed: _halt,
-                    child: Text(tr('Stop', '停'), style: const TextStyle(fontSize: 28)),
+                  height: 72,
+                  // 整个 App 只有这一处有光晕：红的，告诉人「这个最要紧」
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(Nw.r12),
+                        boxShadow: [
+                          BoxShadow(
+                              color: c.error.withValues(alpha: 0.27), blurRadius: 20, offset: const Offset(0, 8)),
+                        ]),
+                    child: FilledButton(
+                      key: SiteTeleopPage.stopKey,
+                      style: FilledButton.styleFrom(
+                          backgroundColor: c.error,
+                          foregroundColor: c.onError,
+                          padding: const EdgeInsets.symmetric(horizontal: Nw.s8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Nw.r12))),
+                      onPressed: _halt,
+                      // 栏窄、字大：摆不下就整个缩小，不溢出
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.front_hand_rounded, size: 28),
+                          const SizedBox(width: Nw.s8),
+                          Text(tr('Stop', '停'),
+                              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900)),
+                        ]),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -373,6 +443,8 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           ),
         ]),
       ),
+      );
+      }),
       ),
     );
   }
