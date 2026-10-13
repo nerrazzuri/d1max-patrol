@@ -859,3 +859,53 @@ async def test_外审I1_按给的锚稳下来之后_锚跟着可信的帧走_不
     _稳(loc, 2.5, 0.0)                                    # 离给的 2.5 m:认
     loc.on_pose(_位姿(5.0, 0.0, jump=True))               # 以后再跳:跟 2.5 m 那儿比,不跟 0 比
     _稳(loc, 5.0, 0.0)
+
+
+# ---------------------------------------------------------------- W35 复查 R1:别的稳定轮不许放手
+
+
+async def test_复查R1_等这次重定位的那一帧时_先稳下来的是普通帧_不许放开刚给的锚():
+    """头一回设位置 x=2:先到的是没有请求号的普通帧(x=0,够稳一轮,离给的 2 m 在线内);原来这一轮
+    稳下来就把锚放开、盖成 0。随后这次请求的那一帧稳在 x=−2.5:离给的位置 4.5 m,却按 0 比成
+    2.5 m 认了。"""
+    c, link, loc = await _就绪()
+
+    def 先到(msg):
+        for _ in range(SETTLE_FIXES + 2):
+            loc.on_pose(_位姿(0.0, 0.0))
+    link.before_reply = 先到
+    assert await loc.relocalize(M, (2.0, 0.0, 0.0)) == ""
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(-2.5, 0.0, jump=True, reloc_id=r.req))
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(-2.5, 0.0))
+    assert not loc.ok(True) and "人给的位置差 4.5 m" in loc.why_not(True)
+
+
+async def test_复查R1_回执已经回来了_普通帧稳一轮_也不放开_要等这次请求的那一帧():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    assert await loc.relocalize(M, (2.0, 0.0, 0.0)) == ""
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(0.5, 0.0, jump=True))               # 不是这次请求的:自己跳了一下,稳住
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(0.5, 0.0))
+    loc.on_pose(_位姿(-2.5, 0.0, jump=True, reloc_id=r.req))
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(-2.5, 0.0))
+    assert not loc.ok(True) and "人给的位置差 4.5 m" in loc.why_not(True)
+
+
+async def test_复查R1_收下了但那一帧没来定位器就断了_连回来稳一轮_锚才放开():
+    """请求跟着连接一起没了:不然锚一直钉在给的那儿,以后的跳变都拿它比。"""
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    assert await loc.relocalize(M, (2.0, 0.0, 0.0)) == ""
+    loc.on_disconnect()
+    loc.on_connect()
+    await loc.prior_task
+    _稳(loc, 2.2, 0.0)                                    # 连回来:按给的锚核过
+    loc.on_pose(_位姿(4.9, 0.0, jump=True))               # 以后跟着可信的帧走(离 2.2 差 2.7)
+    _稳(loc, 4.9, 0.0)
+    loc.on_pose(_位姿(7.5, 0.0, jump=True))               # 离 4.9 差 2.6:认;还钉在 2 就差 5.5
+    _稳(loc, 7.5, 0.0)
