@@ -622,7 +622,12 @@ class BridgeLocalizer:
         if ref is not None and ref.T is not None and new.T is not None and ref.epoch == new.epoch:
             delta = compose(new.T, inverse(ref.T))
         self._ref = new                              # 引擎挪过了:以后的修正量从这一帧算
-        self._anchor_hold = None                     # 按给的锚核过、稳下来了:以后跟着可信的帧走
+        # 按给的锚核过、稳下来了:以后跟着可信的帧走。**只有这次请求的那一帧到过之后的稳定轮才算**
+        # (W35 复查 R1):还在等那一帧(``_reloc`` 没清)时稳下来的是别的轮 —— 刚连上的普通帧、它
+        # 自己跳了一下 —— 不许放手,不然锚被盖成那一轮的位置,真正那一帧来了按错的锚比。
+        # 请求跟着连接一起没了(断开时 ``_reloc`` 清了)也算到头:连回来稳的那一轮放手。
+        if self._reloc is None:
+            self._anchor_hold = None
         if self._trusted(new):
             self._set_good(new)
         log.info("定位器稳下来了,修正量 %s%s", delta, "(人给的位置)" if human else "")
