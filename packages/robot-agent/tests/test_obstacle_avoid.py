@@ -747,3 +747,42 @@ async def test_W35_弧线被拦_原地转也被拦_就不转(tmp_path):
     await t.nav.goto(Pose.from_xy_yaw(5.0, 4.6))
     await t.跑(8.0)
     assert not t.crashed and abs(t.r.yaw) < 0.02 and abs(t.r.x - 3.0) < 0.05
+
+
+# ---------------------------------------------------------------- W35 外审 I2:挪也要守区域的规矩
+
+
+async def test_外审I2_前面是限速低到守不住的限速区_当禁行_不往里挪(tmp_path):
+    """规划那边把「限速低于这台狗的前进死区」的限速区当禁行(再慢就不走了)。挪之前改查没膨胀的
+    图以后只看了原始的禁行区,这一类漏了:雷达看不见人划的区,守卫补不上。"""
+    from types import SimpleNamespace
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.nav.set_zones(_区域({
+        "id": "lawn", "kind": "slow", "label": "草坪", "max_speed_mps": 0.02,
+        "polygon": [[3.8, 3.0], [4.6, 3.0], [4.6, 5.0], [3.8, 5.0]]}))
+    await t.start(3.0, 4.0, yaw=0.0)
+    here = SimpleNamespace(x=3.0, y=4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(3.0, 6.0))
+    await t.跑(0.3)
+    assert not t.nav._creep_clear(here), "前面 0.8 m 起是当禁行的限速区"
+    assert t.nav._creep_clear(SimpleNamespace(x=3.0, y=4.0, yaw=math.pi)), "往另一头没有"
+    await t.跑(30.0)
+    assert t.r.x < 3.0 + 0.05 and not t.nav._crept, "整趟也没往里挪"
+
+
+async def test_外审I2_前面是过得去的限速区_挪的时候不超它的限速(tmp_path):
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.nav.set_zones(_区域({
+        "id": "path", "kind": "slow", "label": "小路", "max_speed_mps": 0.1,
+        "polygon": [[3.2, 3.0], [6.0, 3.0], [6.0, 5.0], [3.2, 5.0]]}))
+    await t.start(3.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(5.0, 4.6))
+    fast = 0.0
+    for _ in range(400):
+        await t.一拍()
+        if t.nav._creep_from is not None:
+            fast = max(fast, abs(t.r.speed[0]))
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    assert t.nav._crept or fast > 0, "这一趟确实挪了"
+    assert 0 < fast <= 0.1 + 1e-6, f"挪的时候 {fast} m/s,限速 0.1"
