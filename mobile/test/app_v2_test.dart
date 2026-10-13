@@ -133,14 +133,15 @@ void main() {
       expect(await t.runAsync(langs.load), AppLang.en, reason: '没存过：英文');
       await t.pumpWidget(PatrolApp(siteStore: MemorySiteStore(), langStore: langs));
       await t.pumpAndSettle();
-      expect(find.text('Sites'), findsOneWidget);
+      // 2026-10-14 重做：这一页的标题按设计稿叫 Site Selection（原来是 Sites / 站点）
+      expect(find.text('Site Selection'), findsOneWidget);
       expect(find.text('No sites yet. Add one with the button at the bottom right.'), findsOneWidget);
       await t.tap(find.byKey(const Key('lang-switch')));
       await t.pumpAndSettle();
       await t.tap(find.text('中文'));
       await t.pumpAndSettle();
-      expect(find.text('站点'), findsOneWidget);
-      expect(find.text('Sites'), findsNothing);
+      expect(find.text('选择站点'), findsOneWidget);
+      expect(find.text('Site Selection'), findsNothing);
       // 存盘是真的文件读写：得让真时钟走几步（见 support/pump.dart 的说明）
       for (var i = 0; i < 10 && !File('${dir.path}/lang.json').existsSync(); i++) {
         await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));

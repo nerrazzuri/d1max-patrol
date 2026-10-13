@@ -48,6 +48,10 @@ final _pages = <String, Widget Function()>{
             fingerprint: 'ab' * 32, username: 'night.guard')
       ])),
   'add site': () => SiteAddPage(scanner: (_) async => null),
+  'login': () => SiteLoginPage(
+      site: SiteEntry(name: 'East Gate Estate', url: 'https://192.168.100.200:8443',
+          fingerprint: 'ab' * 32, username: 'night.guard'),
+      signIn: (_) async => FakeApi('guard')),
   'shell (admin)': () => NwShell(api: FakeApi('admin'), title: 'East Gate Estate'),
   'shell (owner)': () => NwShell(api: FakeApi('owner'), title: 'East Gate Estate'),
   'robots': () => SiteRobotsPage(api: FakeApi('admin'), title: 'East Gate Estate'),
