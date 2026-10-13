@@ -5,6 +5,8 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../l10n.dart';
+import '../nw/nw_button.dart';
+import '../nw/nw_theme.dart';
 
 class DialogField {
   final Key? key;
@@ -55,22 +57,31 @@ class _FieldsDialogState extends State<_FieldsDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final nw = Nw.of(context);
     return AlertDialog(
       scrollable: true, // 横屏时键盘占掉一大半高：整个对话框能滚
-      title: Text(widget.title),
+      backgroundColor: nw.surface,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Nw.r12), side: BorderSide(color: nw.outline)),
+      title: Text(widget.title, style: NwText.titleLarge.copyWith(color: nw.text)),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
         for (var i = 0; i < widget.fields.length; i++)
-          TextField(
-              key: widget.fields[i].key,
-              controller: _ctl[i],
-              decoration: InputDecoration(labelText: widget.fields[i].label)),
+          Padding(
+              padding: EdgeInsets.only(top: i == 0 ? 0 : Nw.s8),
+              child: TextField(
+                  key: widget.fields[i].key,
+                  controller: _ctl[i],
+                  style: NwText.bodyMedium.copyWith(color: nw.text),
+                  decoration: InputDecoration(labelText: widget.fields[i].label))),
       ]),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel', '算了'))),
-        FilledButton(
-            key: widget.confirmKey,
+        NwButton(
+            variant: NwButtonVariant.ghost, onPressed: () => Navigator.pop(context), label: tr('Cancel', '算了')),
+        NwButton(
+            buttonKey: widget.confirmKey,
             onPressed: () => Navigator.pop(context, [for (final c in _ctl) c.text.trim()]),
-            child: Text(widget.confirm)),
+            label: widget.confirm),
       ],
     );
   }
