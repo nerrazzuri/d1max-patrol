@@ -90,9 +90,10 @@ void main() {
     await t.pumpWidget(Container());
   });
 
-  testWidgets('狗列表页有「记录」入口', (t) async {
+  // 2026-10-14 重做：入口从狗列表的顶栏挪到了底部导航的「记录」栏。
+  testWidgets('进了站点有「记录」入口', (t) async {
     final api = FakeApi('owner');
-    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, title: '庄园')));
+    await t.pumpWidget(MaterialApp(home: NwShell(api: api, title: '庄园')));
     await t.pump();
     await t.tap(find.byKey(const Key('open-runs')));
     await t.pumpAndSettle();

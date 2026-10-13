@@ -4,8 +4,10 @@ import 'dart:io';
 
 import 'package:d1max_patrol/design/nw_tokens.g.dart';
 import 'package:d1max_patrol/main.dart';
+import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
+import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -121,6 +123,28 @@ void main() {
       expect(end.textMuted, NwColors.dark.textMuted);
       expect(NwColors.light.lerp(null, 0.5), same(NwColors.light));
       expect(NwColors.dark.copyWith(), same(NwColors.dark));
+    });
+  });
+
+  group('整个 App', () {
+    testWidgets('浅色、深色两套都挂上了，跟着系统走：系统是深色，页面拿到的就是深色那套', (t) async {
+      addTearDown(t.platformDispatcher.clearPlatformBrightnessTestValue);
+      t.platformDispatcher.platformBrightnessTestValue = Brightness.light;
+      await t.pumpWidget(PatrolApp(siteStore: MemorySiteStore()));
+      await t.pumpAndSettle();
+      final app = t.widget<MaterialApp>(find.byType(MaterialApp));
+      expect(app.themeMode, ThemeMode.system);
+      expect(app.theme!.extension<NwColors>(), same(NwColors.light));
+      expect(app.darkTheme!.extension<NwColors>(), same(NwColors.dark));
+      final ctx = t.element(find.byType(SiteListPage));
+      expect(Nw.of(ctx), same(NwColors.light));
+      expect(Theme.of(ctx).scaffoldBackgroundColor, NwColors.light.bg);
+      t.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
+      await t.pumpAndSettle();
+      expect(Theme.of(ctx).brightness, Brightness.dark);
+      expect(Nw.of(ctx).bg, NwColors.dark.bg);
+      expect(Theme.of(ctx).scaffoldBackgroundColor, NwColors.dark.bg);
+      expect(Theme.of(ctx).textTheme.bodyMedium!.fontFamily, 'Inter');
     });
   });
 

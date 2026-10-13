@@ -706,22 +706,31 @@ void main() {
       expect(find.byKey(SiteStandbyPage.hereKey), findsOneWidget);
     });
 
-    testWidgets('狗列表：竖屏时去别的页面的入口在菜单里、带文字；值守的铃还在外面', (t) async {
+    // 2026-10-14 重做：去别的页面的入口从狗列表顶栏的「⋮」菜单挪到了底部导航 —— 值守、地图、记录各是
+    // 一栏，事件、排程是记录栏的分段，版本在管理栏里。竖屏也都摆在外面、带文字，不用再点开菜单。
+    testWidgets('进了站点：竖屏时去别的页面的入口都在底部导航上、带文字', (t) async {
       _portrait(t);
       await t.pumpWidget(MaterialApp(
-          theme: proTheme(), home: SiteRobotsPage(api: FakeApi('admin'), title: 'East Gate Estate')));
+          theme: proTheme(), home: NwShell(api: FakeApi('admin'), title: 'East Gate Estate')));
       await t.pumpAndSettle();
-      expect(find.byKey(const Key('open-watch')), findsOneWidget);
-      expect(find.byKey(const Key('open-maps')), findsNothing);
-      await t.tap(find.byKey(barMoreKey));
+      expect(find.byKey(barMoreKey), findsNothing, reason: '没有收起来的菜单了');
+      for (final k in ['open-watch', 'open-maps', 'open-runs', 'open-health']) {
+        expect(find.byKey(Key(k)), findsOneWidget, reason: k);
+        expect(t.getRect(find.byKey(Key(k))).bottom, lessThanOrEqualTo(844), reason: k);
+      }
+      expect(find.descendant(of: find.byKey(const Key('open-maps')), matching: find.text('地图')), findsOneWidget);
+      await t.tap(find.byKey(const Key('open-runs')));
       await t.pumpAndSettle();
-      for (final k in ['open-releases', 'open-maps', 'open-runs', 'open-incidents', 'open-schedule']) {
+      for (final k in ['open-incidents', 'open-schedule']) {
         expect(find.byKey(Key(k)), findsOneWidget, reason: k);
       }
-      expect(find.text('地图'), findsOneWidget);
       await t.tap(find.byKey(const Key('open-schedule')));
       await t.pumpAndSettle();
       expect(find.byType(SiteSchedulePage), findsOneWidget);
+      await t.tap(find.byKey(const Key('open-health')));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('open-releases')), findsOneWidget);
+      await t.pumpWidget(Container());
     });
 
     testWidgets('值守屏的告警卡片：竖屏时按钮在下面一行，不挤标题；点得到', (t) async {

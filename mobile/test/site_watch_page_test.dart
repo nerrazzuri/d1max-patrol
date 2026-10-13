@@ -117,10 +117,12 @@ void main() {
     expect(alertWantsSound(<String, dynamic>{'kind': 'status'}), isFalse);
   });
 
+  // 2026-10-14 重做：值守入口从狗列表的顶栏挪到了底部导航（进来先看的就是值守）；响铃还是狗列表管，
+  // 它在外壳里一直活着。
   testWidgets('狗列表页：声音档的告警帧响铃；值守入口打得开', (t) async {
     final api = FakeApi('guard');
     var rang = 0;
-    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, ring: () => rang++)));
+    await t.pumpWidget(MaterialApp(home: NwShell(api: api, ring: () => rang++)));
     await t.pumpAndSettle();
     final f = siteFixture('site_alert_frame');
     api.sse.add(f);
@@ -133,6 +135,9 @@ void main() {
     await t.pump();
     expect(rang, 1);
     await t.pump(const Duration(seconds: 1));
+    await t.tap(find.byKey(NwShell.dogsKey));
+    await t.pumpAndSettle();
+    expect(find.byType(SiteWatchPage), findsNothing);
     await t.tap(find.byKey(const Key('open-watch')));
     await t.pumpAndSettle();
     expect(find.byType(SiteWatchPage), findsOneWidget);

@@ -10,6 +10,7 @@
 /// 2026-10-14 起这几屏各在各的文件里；这个文件只把它们一起导出（老的导入照旧能用）。
 library;
 
+export 'nw/nw_shell.dart' show NwShell;
 export 'site_incidents.dart';
 export 'site_list.dart';
 export 'site_robot.dart';

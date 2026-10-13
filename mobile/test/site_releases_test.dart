@@ -81,10 +81,13 @@ void main() {
     expect(find.byKey(SiteReleasesPage.actionKey('A', 'install')), findsNothing);
   });
 
-  testWidgets('狗列表页有「版本」入口', (t) async {
+  // 2026-10-14 重做：入口从狗列表的顶栏挪到了底部导航的「更多」栏（管理员是「管理」栏）。
+  testWidgets('进了站点有「版本」入口', (t) async {
     final api = FakeApi('owner');
-    await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api, title: '庄园')));
-    await t.pump();
+    await t.pumpWidget(MaterialApp(home: NwShell(api: api, title: '庄园')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(NwShell.moreKey));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const Key('open-releases')));
     await t.pumpAndSettle();
     expect(find.byType(SiteReleasesPage), findsOneWidget);
