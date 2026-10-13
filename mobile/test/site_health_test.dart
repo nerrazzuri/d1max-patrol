@@ -8,7 +8,6 @@ import 'package:d1max_patrol/ui/site_health.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/theme.dart';
 import 'package:d1max_patrol/ui/widget/alarm_widgets.dart';
-import 'package:d1max_patrol/ui/widget/bar_actions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:flutter_test/flutter_test.dart';
@@ -305,27 +304,31 @@ void main() {
     expect(api.calls.where((c) => c == 'health').length, 1);
   });
 
-  testWidgets('入口：管理员的菜单里有「站点体检」，点了进去；保安、业主没有', (t) async {
+  // 2026-10-14 重做：入口从狗列表顶栏的「⋮」菜单挪到了底部导航 —— 「站点体检」是管理栏（只有管理员
+  // 有），「排程」是记录栏的一个分段（谁都有）。
+  testWidgets('入口：管理员的底部导航有管理栏（站点体检），点了进去；保安、业主没有', (t) async {
     _portrait(t);
     final api = FakeApi('admin');
-    await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteRobotsPage(api: api)));
+    await t.pumpWidget(MaterialApp(theme: proTheme(), home: NwShell(api: api)));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(barMoreKey));
-    await t.pumpAndSettle();
+    expect(find.byType(SiteHealthPage), findsNothing);
     await t.tap(find.byKey(const Key('open-health')));
     await t.pumpAndSettle();
     expect(find.byType(SiteHealthPage), findsOneWidget);
     for (final role in ['guard', 'owner']) {
       await t.pumpWidget(Container());
-      await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteRobotsPage(api: FakeApi(role))));
-      await t.pumpAndSettle();
-      await t.tap(find.byKey(barMoreKey));
+      await t.pumpWidget(MaterialApp(theme: proTheme(), home: NwShell(api: FakeApi(role))));
       await t.pumpAndSettle();
       expect(find.byKey(const Key('open-health')), findsNothing, reason: role);
-      expect(find.byKey(const Key('open-schedule')), findsOneWidget);
-      await t.tapAt(const Offset(5, 5));
+      await t.tap(find.byKey(NwShell.moreKey));
       await t.pumpAndSettle();
+      expect(find.byKey(const Key('open-health')), findsNothing, reason: role);
+      expect(find.byType(SiteHealthPage, skipOffstage: false), findsNothing, reason: role);
+      await t.tap(find.byKey(NwShell.historyKey));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('open-schedule')), findsOneWidget);
     }
+    await t.pumpWidget(Container());
   });
 
   // ---- RC 加固 H8：系统的「另存」和「分享」

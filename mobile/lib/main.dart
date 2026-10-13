@@ -11,7 +11,10 @@
 /// **普通页面竖屏横屏都行，遥控只许横屏**（App V2，决策 44；2026-09-26 起到 V2 之前是全横屏）。
 /// 见 `ui/orientation.dart`。
 ///
-/// **专业版界面、英文为主中文可选**（App V2）：主题在 `ui/theme.dart`，文字在 `l10n.dart`。
+/// **英文为主中文可选**（App V2）：文字在 `l10n.dart`。**主题浅色、深色两套，跟随系统**（2026-10-14
+/// 按设计稿重做）：新设计系统在 `ui/nw/`（`nw_theme.dart`），登录之后是带底部导航的外壳
+/// （`ui/nw/nw_shell.dart`）。老的专业版主题（`ui/theme.dart`）在各页换完之前还留着，页面里写死的
+/// `D1Color` 也还在。
 library;
 
 import 'package:flutter/foundation.dart';
@@ -22,8 +25,8 @@ import 'package:flutter/services.dart';
 import 'l10n.dart';
 import 'store/paths.dart';
 import 'store/site_store.dart';
+import 'ui/nw/nw_theme.dart';
 import 'ui/site_page.dart';
-import 'ui/theme.dart';
 
 export 'ui/orientation.dart' show landscapeOnly, lockLandscape, unlockOrientation;
 
@@ -72,7 +75,10 @@ class PatrolApp extends StatelessWidget {
                 PointerDeviceKind.trackpad,
                 PointerDeviceKind.stylus,
               }),
-              theme: proTheme(),
+              // 浅色、深色两套都有，跟着系统走（2026-10-14 重做，用户定的）。
+              theme: nwTheme(Brightness.light),
+              darkTheme: nwTheme(Brightness.dark),
+              themeMode: ThemeMode.system,
               home: SiteListPage(store: siteStore, langStore: langStore),
               // 刘海、三键导航栏（安卓 15 起强制全屏到边）：每一页都躲开。顶上归各页的 AppBar。
               builder: (context, child) =>

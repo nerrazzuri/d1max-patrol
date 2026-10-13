@@ -1,4 +1,5 @@
 /// 站点列表（W00c4）：存着的站点一行一个，点了登录、进站点；右上换语言，右下添加。
+/// 登录之后进的是带底部导航的外壳（`nw/nw_shell.dart`）。
 library;
 
 import 'package:flutter/material.dart';
@@ -8,8 +9,8 @@ import '../net/background_watch.dart';
 import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
+import 'nw/nw_shell.dart';
 import 'site_add.dart';
-import 'site_robots.dart';
 
 /// 造一个站点客户端。测试换成假的。
 typedef SiteApiFactory = SiteApi Function(SiteEntry site);
@@ -124,7 +125,7 @@ class _SiteListPageState extends State<SiteListPage> {
         unregister: a.pushUnregister)
       ..start();
     final why = await nav.push<String>(MaterialPageRoute<String>(
-        builder: (_) => SiteRobotsPage(
+        builder: (_) => NwShell(
             api: a, title: s.name, entry: s, watch: widget.watch, push: push)));
     // 离开就注销：不然令牌在站点上还能用半小时。推送先停、注销推送号（在路上的登记落定了再注销，
     // A6 外审 F3），再注销会话（站点那头推送号跟这次登录绑着，退出了也不再推）。

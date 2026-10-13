@@ -64,7 +64,8 @@ void main() {
     await t.enterText(find.byKey(const Key('site-password')), 'pw');
     await t.testTextInput.receiveAction(TextInputAction.done);
     await t.pumpAndSettle();
-    expect(find.byType(SiteRobotsPage), findsOneWidget, reason: '回车就登录进去了');
+    // 2026-10-14 重做：登录进去是带底部导航的外壳（狗列表是其中一栏），不直接是狗列表
+    expect(find.byType(NwShell), findsOneWidget, reason: '回车就登录进去了');
   });
 
   testWidgets('鼠标拖也能滚（桌面上「下拉刷新」才用得了）', (t) async {

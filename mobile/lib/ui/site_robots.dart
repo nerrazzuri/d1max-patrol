@@ -1,5 +1,6 @@
 /// 狗的列表（W00c4，实时）。这一屏在登录之后一直开着，站点级的事都在它身上：事件流、响铃、
-/// 后台值守、登录过期退回站点列表。
+/// 后台值守、登录过期退回站点列表。去别的页面的入口（值守、地图、记录、版本……）2026-10-14 起
+/// 在底部导航上（`nw/nw_shell.dart`），不在这一屏的顶栏了。
 ///
 /// **升到声音档、还没人确认的告警**（SSE `kind: alert`）：由这一屏响铃，不管人此刻在看哪一页。
 /// App 没开时的系统推送不在 W00c5a 里。
@@ -17,17 +18,10 @@ import '../net/push.dart';
 import '../net/site_client.dart';
 import '../store/site_store.dart';
 import 'site_deterrence.dart';
-import 'site_health.dart';
-import 'site_incidents.dart';
-import 'site_maps.dart';
 import 'site_mode.dart';
-import 'site_releases.dart';
 import 'site_robot.dart';
-import 'site_runs.dart';
-import 'site_schedule.dart';
 import 'site_watch_page.dart';
 import 'site_weather.dart';
-import 'widget/bar_actions.dart';
 
 /// 响铃：系统提示音 + 震动。测试换成计数的。
 void defaultRing() {
@@ -307,46 +301,6 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
     super.dispose();
   }
 
-  /// 去别的页面的入口（版本、地图、记录、事件、排程）。屏幕够宽一排图标；竖屏的手机收进「⋮」菜单、
-  /// 带文字（六个图标挤在一起，站点名只剩两个字，也认不出哪个是哪个）。
-  List<Widget> _navActions(BuildContext context) {
-    final items = <(Key?, String, IconData, Widget Function())>[
-      (const Key('open-releases'), tr('Releases', '版本'), Icons.system_update, () => SiteReleasesPage(api: widget.api)),
-      (const Key('open-maps'), tr('Maps', '地图'), Icons.map, () => SiteMapsPage(api: widget.api)),
-      (const Key('open-runs'), tr('Records', '记录'), Icons.photo_library, () => SiteRunsPage(api: widget.api)),
-      (const Key('open-incidents'), tr('Incidents', '事件'), Icons.warning_amber, () => SiteIncidentsPage(api: widget.api)),
-      (const Key('open-schedule'), tr('Schedule', '排程'), Icons.schedule, () => SiteSchedulePage(api: widget.api)),
-      if (widget.api.session?.canSeeHealth ?? false)
-        (const Key('open-health'), tr('Site health', '站点体检'), Icons.monitor_heart_outlined, () => SiteHealthPage(api: widget.api)),
-    ];
-    void go(Widget Function() page) =>
-        Navigator.push(context, MaterialPageRoute<void>(builder: (_) => page()));
-    if (MediaQuery.sizeOf(context).width >= barActionsCollapseBelow) {
-      return [
-        for (final it in items)
-          IconButton(key: it.$1, tooltip: it.$2, icon: Icon(it.$3), onPressed: () => go(it.$4)),
-      ];
-    }
-    return [
-      PopupMenuButton<int>(
-          key: barMoreKey,
-          tooltip: tr('More', '更多'),
-          icon: const Icon(Icons.more_vert),
-          onSelected: (i) => go(items[i].$4),
-          itemBuilder: (_) => [
-                for (var i = 0; i < items.length; i++)
-                  PopupMenuItem<int>(
-                      key: items[i].$1,
-                      value: i,
-                      child: Row(children: [
-                        Icon(items[i].$3, size: 20, color: D1Color.textSecondary),
-                        const SizedBox(width: 12),
-                        Text(items[i].$2),
-                      ])),
-              ]),
-    ];
-  }
-
   @override
   Widget build(BuildContext context) {
     final role = widget.api.session?.role ?? '';
@@ -378,13 +332,6 @@ class _SiteRobotsPageState extends State<SiteRobotsPage> {
               icon: Icon(_bgOn ? Icons.shield : Icons.shield_outlined,
                   color: _bgOn ? D1Color.text : null),
               onPressed: _bgBusy ? null : _bgToggle),
-        IconButton(
-            key: const Key('open-watch'),
-            tooltip: tr('Watch', '值守'),
-            icon: const Icon(Icons.notifications_active),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute<void>(builder: (_) => SiteWatchPage(api: widget.api)))),
-        ..._navActions(context),
       ]),
       body: RefreshIndicator(
         onRefresh: _reload,

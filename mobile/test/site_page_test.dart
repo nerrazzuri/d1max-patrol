@@ -854,6 +854,10 @@ void main() {
       await t.enterText(find.byKey(const Key('site-password')), 'pw');
       await t.tap(find.text('登录'));
       await t.pumpAndSettle();
+      // 2026-10-14 重做：登录进去是带底部导航的外壳，狗列表是其中一栏（进来先看值守）
+      expect(find.byType(NwShell), findsOneWidget);
+      await t.tap(find.byKey(NwShell.dogsKey));
+      await t.pumpAndSettle();
       expect(find.byType(SiteRobotsPage), findsOneWidget);
       final tip = find.byKey(SiteRobotsPage.pushKey);
       if (push.supported) {

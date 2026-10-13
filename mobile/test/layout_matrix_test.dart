@@ -1,9 +1,14 @@
-// App V2 的版面：每一页在**竖屏的手机（390×844）和横屏的手机（800×360）**上、**英文和中文**两种文字、
-// **专业版主题**下都不溢出（RenderFlex overflowed 在测试里是报错）。英文比中文长，竖屏比横屏窄：
+// App V2 的版面：每一页在**竖屏的手机（390×844）和横屏的手机（800×360）**上、**英文和中文**两种文字
+// 下都不溢出（RenderFlex overflowed 在测试里是报错）。英文比中文长，竖屏比横屏窄：
 // 四种组合都画一遍。测试里的字体每个字都是方块（比真字体宽），过了这里真机上只会更松。
+//
+// 主题四档（2026-10-14 重做）：新主题的**浅色**、**深色**（App 现在用的，跟随系统），**不带主题**
+// （大多数测试是光秃秃的 MaterialApp，页面在那儿也得画得出来、不抛），和老的**专业版主题**
+// （各页换完、删掉 proTheme 之前留着）。
 import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/store/site_store.dart';
+import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/site_health.dart';
 import 'package:d1max_patrol/ui/site_add.dart';
 import 'package:d1max_patrol/ui/site_alert_scene.dart';
@@ -43,6 +48,8 @@ final _pages = <String, Widget Function()>{
             fingerprint: 'ab' * 32, username: 'night.guard')
       ])),
   'add site': () => SiteAddPage(scanner: (_) async => null),
+  'shell (admin)': () => NwShell(api: FakeApi('admin'), title: 'East Gate Estate'),
+  'shell (owner)': () => NwShell(api: FakeApi('owner'), title: 'East Gate Estate'),
   'robots': () => SiteRobotsPage(api: FakeApi('admin'), title: 'East Gate Estate'),
   'robot (admin, busy)': () => SiteRobotPage(api: FakeApi('admin', robotView: busyView()), robotId: 'A'),
   'robot (guard)': () => SiteRobotPage(api: FakeApi('guard'), robotId: 'A'),
@@ -68,22 +75,32 @@ final _pages = <String, Widget Function()>{
   'recordings': () => SiteRecordingsPage(api: FakeApi('guard'), robotId: 'A'),
 };
 
+/// 主题四档：名字 + 主题（null = 不带，MaterialApp 自己的默认主题）。
+final _themes = <String, ThemeData? Function()>{
+  'light': () => nwTheme(Brightness.light),
+  'dark': () => nwTheme(Brightness.dark),
+  'no theme': () => null,
+  'pro': proTheme,
+};
+
 void main() {
-  for (final lang in AppLang.values) {
-    for (final size in const [_portrait, _landscape]) {
-      final where = '${lang.name} ${size.width.toInt()}×${size.height.toInt()}';
-      for (final e in _pages.entries) {
-        testWidgets('不溢出 [$where] ${e.key}', (t) async {
-          appLang.value = lang;
-          addTearDown(() => appLang.value = AppLang.zh);
-          t.view.physicalSize = size * 2;
-          t.view.devicePixelRatio = 2.0;
-          addTearDown(t.view.reset);
-          await t.pumpWidget(MaterialApp(theme: proTheme(), home: e.value()));
-          await t.pumpAndSettle();
-          expect(t.takeException(), isNull);
-          await t.pumpWidget(Container());
-        });
+  for (final th in _themes.entries) {
+    for (final lang in AppLang.values) {
+      for (final size in const [_portrait, _landscape]) {
+        final where = '${th.key} ${lang.name} ${size.width.toInt()}×${size.height.toInt()}';
+        for (final e in _pages.entries) {
+          testWidgets('不溢出 [$where] ${e.key}', (t) async {
+            appLang.value = lang;
+            addTearDown(() => appLang.value = AppLang.zh);
+            t.view.physicalSize = size * 2;
+            t.view.devicePixelRatio = 2.0;
+            addTearDown(t.view.reset);
+            await t.pumpWidget(MaterialApp(theme: th.value(), home: e.value()));
+            await t.pumpAndSettle();
+            expect(t.takeException(), isNull);
+            await t.pumpWidget(Container());
+          });
+        }
       }
     }
   }
