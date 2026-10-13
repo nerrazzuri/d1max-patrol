@@ -29,6 +29,14 @@
 里程)。卡了一下之后一批一起到的,各配各的,不会被当成跳、也不会算错修正量。
 
 两次定位之间的地图位姿 = 最近一帧 ∘(配上的里程)⁻¹ ∘ 此刻的里程。
+
+**稳下来的地方跟锚对不对得上**(W35):交叉校验只看最近几秒 —— 定位器来回跳一阵(每跳一次窗口就清),
+最后在错的地方稳住几帧,窗口里全是错的,照样过(2026-10-13 C40221 3d.9:人给偏 2 m 的初值,稳在错
+8 m、朝向差 160° 的地方还报 σ 0.1,代理认了;狗一直没动)。所以跳变之后要认之前,拿「锚」按里程推到
+现在,再比:锚 = 最近一帧可信的,或者刚收下的那次重定位给的位置(人给的、RTK 给的都算)。离推出来的
+位置超过 :data:`ANCHOR_M`(重定位时是 max(它, 3σ))+ :data:`XCHECK_FRAC` × 这期间走过的路,或者朝向
+差超过 :data:`ANCHOR_YAW_RAD`(加里程朝向漂的量)→ 不认,一直说「请重新设位置」,直到它自己回到
+对得上的地方、或者有人(或 RTK)再给一次位置。里程断过(换了段)、没配上里程:没法比,照旧认。
 """
 
 from __future__ import annotations
@@ -70,6 +78,13 @@ XCHECK_M = 0.3
 XCHECK_FRAC = 0.2
 XCHECK_YAW_RAD = 0.3
 XCHECK_WINDOW_S = 5.0
+#: 跳变之后稳下来的地方离「锚按里程推到现在」最多差这么多(见模块说明,W35)。3 m:人在地图上点位置
+#: 偏 2 m、朝向偏 45° 要能收敛回来(3d.9 的做法);点云重新匹配上的正常修正在 1 m 以内
+#: (2026-10-08 转圈那次 0.66 m、2026-10-13 雷达半挡 0.5 m)。
+ANCHOR_M = 3.0
+ANCHOR_YAW_RAD = math.pi / 2
+#: 里程朝向站着也在漂(2026-10-08 C40221:约 0.002 rad/s);锚放久了朝向那条线按这个放宽。
+ANCHOR_YAW_DRIFT_RPS = 0.005
 #: 「比平常晚到多少」按近这么久里最小的「收到时刻 − 时间戳」算(秒)。
 LAG_WINDOW_S = 10.0
 #: 配里程:离那一刻最近的里程样本差过这么多就配不上(秒)。
@@ -145,6 +160,13 @@ class BridgeLocalizer:
         self._ref: _Fix | None = None
         #: 最近一帧可信的(σ 在线内、定位器没说丢):丢定位后自动重定位的初值。断开不清,换图清。
         self._good: _Fix | None = None
+        #: 锚(W35):跳变之后稳下来的地方拿它按里程推到现在来比。最近一帧可信的,或者刚收下的那次
+        #: 重定位给的位置;``_anchor_m`` 是位置那条线,``_anchor_what`` 是给人看的叫法。
+        self._anchor: _Fix | None = None
+        self._anchor_m = ANCHOR_M
+        self._anchor_what = "最后可信的位置"
+        #: 稳住了、可是跟锚对不上(非空 = 卡在这儿,每来一帧再比一次)。
+        self._off_why = ""
         self._wrong_map = False
         #: RTK 核对说定位器不对(W09e,``RtkCheck``;代理每拍写):非空就不可信。
         self.rtk_disagree = ""
@@ -211,13 +233,19 @@ class BridgeLocalizer:
             return
         self._win.append(new)
         if self._settle > 0:
+            if self._settle == 1:
+                was, self._off_why = self._off_why, self._off_anchor(new)
+                if self._off_why:
+                    if not was:
+                        log.warning("%s", self._off_why)
+                    return                           # 稳住了但对不上:不认,下一帧再比
             self._settle -= 1
             if self._settle == 0:
                 self._settled(new)
             return
         self._ref = new
         if self._trusted(new):
-            self._good = new
+            self._set_good(new)
 
     # ------------------------------------------------------------ 代理这边
 
@@ -241,7 +269,7 @@ class BridgeLocalizer:
         if map_ref == self._map and dir == self._dir and self._prior_ok == map_ref:
             return
         if map_ref != self._map:
-            self._ref = self._good = None            # 别的图:旧位置不能当参照
+            self._ref = self._good = self._anchor = None   # 别的图:旧位置不能当参照
             self.rtk_disagree = ""
         self._map, self._dir = map_ref, dir
         self._prior_ok = None
@@ -321,6 +349,8 @@ class BridgeLocalizer:
         f = self._fix
         if f is None:
             return "定位器还没给出位置"
+        if self._off_why:
+            return self._off_why
         if self._settle > 0:
             return self._settle_why
         now = self._now()
@@ -379,6 +409,14 @@ class BridgeLocalizer:
         if not r.ok:
             self._forget_reloc(mine)
             return f"localizer_refused: {r.reason}"[:200]
+        # 给的这个位置就是新的锚(W35):它稳下来的地方要离这儿不远
+        now = self._now()
+        self._anchor = _Fix(pose=(float(pose[0]), float(pose[1]), float(pose[2])),
+                            sigma_xy=sigma_xy, sigma_yaw=0.0, source="given", at=now, born=now,
+                            odom=self._odom, epoch=self._epoch, path=self._path, dr0=0.0)
+        self._anchor_m = max(ANCHOR_M, 3 * sigma_xy)
+        self._anchor_what = "人给的位置" if human else "重定位给的位置"
+        self._off_why = ""
         return ""
 
     async def reset(self) -> None:
@@ -417,6 +455,7 @@ class BridgeLocalizer:
         self._wrong_map = False
         self._settle = 0
         self._settle_human = False
+        self._off_why = ""
         self._win.clear()
         self._reloc = None
         self._stamp = None
@@ -460,8 +499,31 @@ class BridgeLocalizer:
 
     @property
     def busy(self) -> bool:
-        """正在重定位、或重定位 / 跳变之后还在等稳定(W09e:这时候不拿 RTK 核对)。"""
-        return self._reloc is not None or self._settle > 0
+        """正在重定位、或重定位 / 跳变之后还在等稳定(W09e:这时候不拿 RTK 核对)。稳住了但跟锚对不上
+        (W35)不算:它不会自己好,RTK 核对要能来救。"""
+        return self._reloc is not None or (self._settle > 0 and not self._off_why)
+
+    def _set_good(self, f: _Fix) -> None:
+        self._good = self._anchor = f
+        self._anchor_m, self._anchor_what = ANCHOR_M, "最后可信的位置"
+
+    def _off_anchor(self, new: _Fix) -> str:
+        """稳下来的这一帧跟锚按里程推到现在的位置对不对得上;对不上回一句说明,对得上(或没法比)回
+        空串。"""
+        a = self._anchor
+        if a is None or a.T is None or new.odom is None or a.epoch != new.epoch:
+            return ""
+        want = compose(a.T, new.odom)
+        gap = math.hypot(new.pose[0] - want[0], new.pose[1] - want[1])
+        turn = abs(_wrap(new.pose[2] - want[2]))
+        if gap > self._anchor_m + XCHECK_FRAC * max(0.0, new.path - a.path):
+            bad = f"{gap:.1f} m"
+        elif turn > ANCHOR_YAW_RAD + ANCHOR_YAW_DRIFT_RPS * max(0.0, new.at - a.at):
+            bad = f"朝向 {math.degrees(turn):.0f}°"
+        else:
+            return ""
+        return (f"定位器稳住的地方跟{self._anchor_what}差 {bad},里程说狗没这么动过:"
+                "请重新设位置")
 
     def _send_prior(self) -> None:
         if not self._connected or self._map is None:
@@ -519,6 +581,7 @@ class BridgeLocalizer:
         """跳了(或刚连上、刚重定位):从这一帧起重新数;修正量的参照还是跳之前最后可信的那一帧
         (稳定期里又跳也不换)。"""
         self._settle = SETTLE_FIXES
+        self._off_why = ""
         self._settle_why = why
         self._settle_human = self._settle_human or human
         self._win.clear()
@@ -532,7 +595,7 @@ class BridgeLocalizer:
             delta = compose(new.T, inverse(ref.T))
         self._ref = new                              # 引擎挪过了:以后的修正量从这一帧算
         if self._trusted(new):
-            self._good = new
+            self._set_good(new)
         log.info("定位器稳下来了,修正量 %s%s", delta, "(人给的位置)" if human else "")
         if self.on_corrected is not None:
             self.on_corrected(delta, human)

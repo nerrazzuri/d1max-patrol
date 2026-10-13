@@ -610,3 +610,124 @@ async def test_W34_σ在0点8还不认_现场重定位时1点0就认了太松():
         loc.on_pose(_位姿(0.0, 0.0, sigma=0.8))
     assert not loc.ok(True) and "定位偏差可能到 0.8 m" in loc.why_not(True)
     _稳(loc, 0.0, 0.0, sigma=0.4)
+
+
+# ---------------------------------------------------------------- W35:稳下来的地方跟锚对不对得上
+
+
+async def test_人给了位置_定位器乱跳一阵稳在8米外_里程没动_不认():
+    """2026-10-13 C40221 3d.9:给偏 2 m、45° 的初值,MOLA 来回跳了 32 s,稳在错 8 m、朝向差 160° 的
+    地方还报 σ 0.1,代理认了。狗一直站着没动。"""
+    got = []
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.on_corrected = lambda d, human: got.append((d, human))
+    assert await loc.relocalize(M, (2.0, 0.0, 0.8)) == ""
+    [r] = [m for m in link.sent if isinstance(m, Relocalize)]
+    loc.on_pose(_位姿(2.0, 0.0, 0.8, jump=True, reloc_id=r.req))
+    for x in (3.0, 5.5, 4.0, 7.0):                       # 来回跳
+        c.t += 0.1
+        loc.update((0.0, 0.0, 0.0), True)
+        loc.on_pose(_位姿(x, 1.0, 2.0, jump=True))
+    for _ in range(SETTLE_FIXES + 3):                    # 在错的地方稳住了
+        c.t += 0.1
+        loc.update((0.0, 0.0, 0.0), True)
+        loc.on_pose(_位姿(8.0, 0.0, -2.8))
+    assert not loc.ok(True)
+    assert "请重新设位置" in loc.why_not(True) and "人给的位置" in loc.why_not(True)
+    assert got == [], "没稳下来:不给引擎修正量"
+    assert not loc.busy, "卡在这儿不算「在等稳定」:RTK 核对还能来救"
+
+
+async def test_人给的位置偏2米45度_稳在真实位置_认():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    assert await loc.relocalize(M, (2.0, 0.0, 0.8)) == ""
+    [r] = [m for m in link.sent if isinstance(m, Relocalize)]
+    loc.on_pose(_位姿(2.0, 0.0, 0.8, jump=True, reloc_id=r.req))
+    _稳(loc, 0.1, 0.0, 0.02)
+
+
+async def test_自己跳了之后稳在离最后可信位置很远的地方_不认_回来了就认():
+    got = []
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.on_corrected = lambda d, human: got.append(d)
+    loc.on_pose(_位姿(6.0, 0.0, jump=True))
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(6.0, 0.0))
+    assert "最后可信的位置" in loc.why_not(True) and got == []
+    loc.on_pose(_位姿(0.4, 0.0, jump=True))               # MOLA 自己对回来了
+    assert "跳" in loc.why_not(True) and loc.busy, "又跳了:从头等稳定,不再挂着上一次的说法"
+    for _ in range(SETTLE_FIXES):
+        loc.on_pose(_位姿(0.4, 0.0))
+    assert loc.ok(True) and len(got) == 1
+
+
+async def test_狗真的走了那么远_稳在那儿_认():
+    """丢定位期间被遥控开走 6 m:里程也走了 6 m,不算对不上。"""
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.on_pose(_位姿(0.0, 0.0, jump=True))
+    for i in range(1, 61):
+        c.t += 0.1
+        loc.update((0.1 * i, 0.0, 0.0), True)
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(6.0, 0.0, jump=True) if _ == 0 else _位姿(6.0, 0.0))
+    assert loc.ok(True), loc.why_not(True)
+
+
+async def test_稳在对的位置但朝向反了_不认():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.on_pose(_位姿(0.2, 0.0, 2.9, jump=True))
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(0.2, 0.0, 2.9))
+    assert "朝向" in loc.why_not(True)
+
+
+async def test_里程断过_没法比_照旧认():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.update((0.0, 0.0, 0.0), False)
+    loc.update((0.0, 0.0, 0.0), True)
+    loc.on_pose(_位姿(6.0, 0.0, jump=True))
+    for _ in range(SETTLE_FIXES):
+        loc.on_pose(_位姿(6.0, 0.0))
+    assert loc.ok(True)
+
+
+async def test_换了图_旧的锚不管新图():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    m2 = ("estate-1", "8")
+    loc.on_map(m2, "/maps/estate-1/8")
+    await loc.prior_task
+    _稳(loc, 30.0, 30.0, m=m2)
+
+
+async def test_卡住之后人再给一次位置_按新给的比():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.on_pose(_位姿(8.0, 0.0, jump=True))
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(8.0, 0.0))
+    assert not loc.ok(True)
+    assert await loc.relocalize(M, (8.2, 0.0, 0.0)) == ""    # 人说:它其实就在那儿
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(8.2, 0.0, jump=True, reloc_id=r.req))
+    _稳(loc, 8.0, 0.0)
+
+
+async def test_走得远_里程自己也会偏_线按走过的路放宽():
+    """丢定位期间走了 20 m:里程偏几米是正常的(线 = 3 m + 走过的路的两成);没走时差 5 m 不认。"""
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.on_pose(_位姿(0.0, 0.0, jump=True))
+    for i in range(1, 201):
+        c.t += 0.1
+        loc.update((0.1 * i, 0.0, 0.0), True)
+    loc.on_pose(_位姿(20.0, 5.0, jump=True))
+    for _ in range(SETTLE_FIXES):
+        loc.on_pose(_位姿(20.0, 5.0))
+    assert loc.ok(True), loc.why_not(True)

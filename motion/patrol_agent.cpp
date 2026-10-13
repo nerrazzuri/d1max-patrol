@@ -62,6 +62,7 @@
 #include <vector>
 
 #include "robot_sdk/sdk_client.hpp"
+#include "take_ack.hpp"
 #include "vel_gate.hpp"
 
 using namespace robot_sdk;
@@ -286,6 +287,17 @@ static void SetHeld(bool held) {
   if (g_held.exchange(held) != held) Broadcast(HelloFrame());
 }
 
+static TakeLedger g_take;
+
+/// 抢控制权,**等回执说成了才算**(W35:TakeControl 回没出错只说明收到了回执,见 take_ack.hpp)。
+/// 成了回空串,没成回原因。调用方拿着 g_sdk_mtx。
+static std::string TakeConfirmed(robot_sdk::SDKClient& c, int timeout_ms) {
+  auto since = g_take.Begin();
+  auto ec = c.TakeControl(timeout_ms);
+  if (ec) return ec.message();
+  return g_take.Confirm(since, std::chrono::milliseconds(1000));
+}
+
 static std::string StateFrame() {
   std::lock_guard<std::mutex> lk(g_state_mtx);
   std::ostringstream os;
@@ -414,7 +426,7 @@ class DataCb : public IDataCallback {
   void OnControlAvailable(const ControlAvailableInfo&) override {
     std::cout << "[i] SDK 报告控制权可用，尝试重新 TakeControl\n";
     std::lock_guard<std::mutex> lk(g_sdk_mtx);
-    if (g_client && !g_client->TakeControl(5000)) SetHeld(true);
+    if (g_client && TakeConfirmed(*g_client, 5000).empty()) SetHeld(true);
   }
 };
 
@@ -422,6 +434,7 @@ class CtrlCb : public IControlCallback {
  public:
   void OnTakeControlAck(const TakeControlAck& a) override {
     SetHeld(a.error_code == 0);
+    g_take.OnAck(a.error_code == 0, a.reason);
     std::cout << "[CTRL] TakeControlAck: "
               << (a.error_code == 0 ? "SUCCESS" : "FAILURE") << " '" << a.reason
               << "'\n";
@@ -621,8 +634,8 @@ static Outcome DoHead(double yaw, double pitch) {
 
 static Outcome DoHold() {
   std::lock_guard<std::mutex> lk(g_sdk_mtx);
-  auto ec = g_client->TakeControl(5000);
-  if (ec) return DenyControl(ec.message());
+  auto why = TakeConfirmed(*g_client, 5000);
+  if (!why.empty()) return DenyControl(why);
   SetHeld(true);
   return Outcome{};
 }
@@ -1002,9 +1015,10 @@ int main(int argc, char** argv) {
   }
   std::cout << "[agent] ★★★ 抢到窗口，已连上（第 " << attempt << " 次）★★★\n";
 
-  auto ec = client.TakeControl(5000);
+  auto take_why = TakeConfirmed(client, 5000);
+  bool ec = !take_why.empty();
   g_held = !ec;
-  std::cout << "[agent] TakeControl(): " << (ec ? ec.message() : "ok") << "\n";
+  std::cout << "[agent] TakeControl(): " << (ec ? take_why : "ok") << "\n";
   if (ec)
     std::cout << "[!] 没拿到控制权。遥测大概还能读，但动不了。"
                  "重启 RK3588 再抢一次(清单 #46/#47)\n";
@@ -1073,17 +1087,17 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::seconds(3));
       ++beat;
       if (!g_held.load() && beat % 2 == 0) {
-        std::error_code ec;
+        std::string why;
         {
           std::lock_guard<std::mutex> lk(g_sdk_mtx);
-          ec = g_client->TakeControl(5000);
+          why = TakeConfirmed(*g_client, 5000);
         }
-        if (!ec) {
+        if (why.empty()) {
           std::cout << "[CTRL] 自己重抢回了控制权\n";
           last_why.clear();
           SetHeld(true);
-        } else if (ec.message() != last_why) {
-          last_why = ec.message();                    // 同一个原因只记一次,别刷屏
+        } else if (why != last_why) {
+          last_why = why;                             // 同一个原因只记一次,别刷屏
           std::cout << "[CTRL] 重抢没成(" << last_why << "),6 秒后再试\n";
         }
       }
