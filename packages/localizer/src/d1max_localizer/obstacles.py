@@ -201,7 +201,11 @@ class SelfCheck:
     """启动自检:攒 :data:`CHECK_FRAMES` 帧的地面拟合,取中位数判;:data:`GIVE_UP_FRAMES` 帧还攒不够
     (一直找不到地面 —— 外参的「上」弄反了、对着墙)就判没过(内审应修 6:原来永远「还在自检」)。
     过了之后**接着估离地高度**(每 :data:`REFIT_EVERY` 帧一次,取最近 :data:`CHECK_FRAMES` 次的
-    中位数):狗开机是趴着的,站起来高度变了,不跟着变的话近处地面全成了落差。"""
+    中位数):狗开机是趴着的,站起来高度变了,不跟着变的话近处地面全成了落差。
+
+    **没过之后接着判**(W35,2026-10-13 C40221:感知在狗趴着时起来,地面歪 9.1° 判没过,狗站起来以后
+    也一直是没过,要人去重启感知):每 :data:`REFIT_EVERY` 帧拟一次,新攒够一轮再判,过了就 ``ok``。
+    外参真歪了的照样一直没过。"""
 
     def __init__(self, frames: int = CHECK_FRAMES) -> None:
         self.need = frames
@@ -211,10 +215,21 @@ class SelfCheck:
         self.reason = ""
         self.height: float | None = None
         self._heights: list[float] = []
+        self._again: list[tuple[float, float, float]] = []   # 没过之后新攒的一轮
 
     def feed(self, pts_base: Any) -> None:
         self.tried += 1
         if self.check == "extrinsic_bad":
+            if self.tried % REFIT_EVERY:
+                return
+            got = fit_ground(pts_base, seed=self.tried)
+            if got is not None:
+                n, h, frac = got
+                tilt = math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
+                self._again.append((tilt, h, frac))
+            if len(self._again) >= self.need:
+                self.fits, self._again = self._again, []
+                self._judge()
             return
         if self.check == "ok":
             if self.tried % REFIT_EVERY:

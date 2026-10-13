@@ -76,6 +76,18 @@ PKG=${1:-}
 # **展开时故意不加引号**:这个变量装的是好几个参数,加引号会被当成一个
 # 带空格的长参数传给 pip。它只从运维手里来,不从网上来。
 PIP_ARGS=${D1MAX_PIP_ARGS:-}
+# 包里带了离线轮子(`release pack --wheels`;站点下发的版本就是只从它装的)而运维没给 D1MAX_PIP_ARGS:
+# 只从包里的装(W35,2026-10-13 C40221:清单写的 /home/robot/wheels 在那只狗上不存在,包里其实带着)。
+# 给了(哪怕给的是空的)就听给的。路径里有空白的不自动用 —— PIP_ARGS 展开时不加引号,会被拆开。
+if [[ -z "${D1MAX_PIP_ARGS+x}" && -n "$PKG" && -d "$PKG/wheels" ]]; then
+  PKG_WHEELS="$(cd "$PKG/wheels" && pwd)"
+  if [[ "$PKG_WHEELS" =~ [[:space:]] ]]; then
+    echo "  提示: 包里带了离线轮子,但路径里有空白($PKG_WHEELS),不自动用;要用就把包挪到没有空白的路径下。"
+  else
+    PIP_ARGS="--no-index --find-links=$PKG_WHEELS"
+    echo "包里带了离线轮子:依赖只从 $PKG_WHEELS 装(要走别处就自己给 D1MAX_PIP_ARGS)。"
+  fi
+fi
 
 # **包目录名不是随便起的。** engine/release.py 的 _NAME_RE 只认
 # <日期>-<6 到 12 位十六进制>,verify_package() 还要求这个目录名跟包里
@@ -621,6 +633,19 @@ systemctl try-restart d1max-obstacles.service 2>/dev/null || true
 systemctl try-restart d1max-persons.service 2>/dev/null || true
 systemctl try-restart d1max-lidar-merge.service 2>/dev/null || true
 systemctl try-restart d1max-zenohd.service 2>/dev/null || true
+# 这三个单元装机不替人 enable(真机验过才起用,做法写在各自单元文件开头:enable --now)。但 env 里
+# 已经写了要用、单元却没设开机自启的,说出来(W35,2026-10-13 C40221:三个都是手工 start 的,整机
+# 断电再开都不起,代理一直报没连上)。
+for pair in D1MAX_LOCALIZER:d1max-localizer D1MAX_OBSTACLES:d1max-obstacles \
+            D1MAX_PERSONS:d1max-persons; do
+  key=${pair%%:*}
+  unit=${pair##*:}
+  if grep -qE "^[[:space:]]*$key=bridge[[:space:]]*$" /etc/d1max/env 2>/dev/null \
+      && ! systemctl is-enabled --quiet "$unit.service" 2>/dev/null; then
+    echo "  提示: /etc/d1max/env 里写了 $key=bridge,但 $unit 没设开机自启:整机断电再开它不会起,"
+    echo "        代理会一直报没连上。验过了就:sudo systemctl enable --now $unit"
+  fi
+done
 
 say "装完了。看一眼:"
 echo "  systemctl status d1max-agent"
