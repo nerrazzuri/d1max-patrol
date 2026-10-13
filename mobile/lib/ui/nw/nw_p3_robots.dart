@@ -9,6 +9,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../l10n.dart';
+import '../../model/site_watch.dart';
 import 'nw_cards.dart';
 import 'nw_theme.dart';
 import 'nw_widgets.dart';
@@ -128,12 +129,24 @@ class NwFleet extends StatefulWidget {
   final String Function(Map<String, dynamic> robot) activityOf;
   final void Function(String robotId) onOpen;
 
+  /// 站点的值守汇总（`api.watchSummary`）。狗的视图里没有电量，汇总里有：给了就从它取电量贴到卡片上。
+  /// 读不到不出声，电量照旧写「--」（不拿旧的、不猜）。
+  final Future<Map<String, dynamic>> Function()? loadSummary;
+
   const NwFleet(
       {super.key,
       required this.robots,
       this.deterring = const <String>{},
       required this.activityOf,
-      required this.onOpen});
+      required this.onOpen,
+      this.loadSummary,
+      this.now = DateTime.now});
+
+  /// 现在几点（测试拨钟用）。
+  final DateTime Function() now;
+
+  /// 电量多久重读一次（狗的列表刷新时顺带看一眼，不到这么久不重读）。
+  static const Duration batteryEvery = Duration(seconds: 15);
 
   static Key filterKey(FleetFilter f) => Key('robots-filter-${f.name}');
   static const Key emptyKey = Key('robots-filter-empty');
@@ -145,11 +158,58 @@ class NwFleet extends StatefulWidget {
 class _NwFleetState extends State<NwFleet> {
   FleetFilter _filter = FleetFilter.all;
 
+  /// 汇总里读到的电量（编号 → 百分数）；读不到、汇总里是「不知道」的都没有这一项。
+  Map<String, double> _battery = const <String, double>{};
+  DateTime? _batteryAt;
+  int _batterySeq = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBattery();
+  }
+
+  @override
+  void didUpdateWidget(NwFleet old) {
+    super.didUpdateWidget(old);
+    // 狗的列表换了一份（页面刚刷新过）：电量也该看一眼了；刷得勤的时候不跟着每次都问
+    final at = _batteryAt;
+    if (!identical(old.robots, widget.robots) &&
+        (at == null || widget.now().difference(at) >= NwFleet.batteryEvery)) {
+      _loadBattery();
+    }
+  }
+
+  Future<void> _loadBattery() async {
+    final load = widget.loadSummary;
+    if (load == null) return;
+    final seq = ++_batterySeq;
+    _batteryAt = widget.now();
+    try {
+      final s = SiteWatchSummary.fromWire(await load());
+      if (!mounted || seq != _batterySeq) return;       // 迟到的旧回复不盖新的
+      setState(() => _battery = {
+            for (final r in s.robots)
+              if (r.batteryPct != null) r.robotId: r.batteryPct!,
+          });
+    } catch (_) {
+      if (!mounted || seq != _batterySeq) return;
+      setState(() => _battery = const <String, double>{});   // 读不到：不留着上一次的当现在的
+    }
+  }
+
+  /// 狗的视图，电量从汇总里补上（视图自己带了就用它自己的）。
+  Map<String, dynamic> _withBattery(Map<String, dynamic> r) {
+    final b = _battery['${r['robot_id']}'];
+    return b == null || r['battery_pct'] is num ? r : {...r, 'battery_pct': b};
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = Nw.of(context);
-    int count(FleetFilter f) => widget.robots.where((r) => fleetFilterMatch(f, r)).length;
-    final shown = widget.robots.where((r) => fleetFilterMatch(_filter, r)).toList();
+    final robots = [for (final r in widget.robots) _withBattery(r)];
+    int count(FleetFilter f) => robots.where((r) => fleetFilterMatch(f, r)).length;
+    final shown = robots.where((r) => fleetFilterMatch(_filter, r)).toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
       NwSegment<FleetFilter>(
           values: FleetFilter.values,
@@ -162,7 +222,7 @@ class _NwFleetState extends State<NwFleet> {
                 FleetFilter.charging => tr('Charging ${count(f)}', '充电 ${count(f)}'),
               }),
       const SizedBox(height: Nw.s16),
-      if (shown.isEmpty && widget.robots.isNotEmpty)
+      if (shown.isEmpty && robots.isNotEmpty)
         Padding(
             key: NwFleet.emptyKey,
             padding: const EdgeInsets.all(Nw.s16),

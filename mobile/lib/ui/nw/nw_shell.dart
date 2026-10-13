@@ -143,7 +143,7 @@ class _NwShellState extends State<NwShell> {
   int _tab = 0;
 
   Widget _page(int tab, bool admin) => switch (tab) {
-        0 => SiteWatchPage(api: widget.api),
+        0 => SiteWatchPage(api: widget.api, title: widget.title),
         2 => SiteMapTab(api: widget.api),
         3 => _HistoryTab(api: widget.api),
         _ => admin ? _AdminTab(api: widget.api) : _MoreTab(api: widget.api),
