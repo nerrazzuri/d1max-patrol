@@ -23,6 +23,36 @@ def test_仓库里的Dart常量跟重新生成的一样():
             f"{path.name} 过期了:跑 python3 tools/gen_mobile_design.py"
 
 
+def test_新设计系统的令牌也在生成的里面_跟检入的一字节不差():
+    out = {path.name: (path, text) for path, text in _gen().generate().items()}
+    path, text = out["nw_tokens.g.dart"]
+    assert path.read_bytes() == text.encode("utf-8"), "跑 python3 tools/gen_mobile_design.py"
+    assert "abstract final class NwLight" in text and "abstract final class NwDark" in text
+
+
+def test_新令牌写错了当场报_不生成半截():
+    import json
+
+    import pytest
+
+    good = json.loads((ROOT / "design" / "mobile.json").read_text(encoding="utf-8"))
+    gen = _gen()
+    assert "static const Color scrim = Color(0xB3000000);" in gen.nw_tokens_dart(good)
+
+    def broken(change):
+        bad = json.loads(json.dumps(good))
+        change(bad)
+        return bad
+
+    for change in (lambda d: d["color"]["dark"].pop("info"),              # 两套键不一样
+                   lambda d: d["color"]["light"].update(bg="#FFF"),       # 不是六位
+                   lambda d: d["color"]["light"].update(scrim="#000000"),  # 遮罩没带透明度
+                   lambda d: d["type"]["labelSmall"].update(size=10),     # 小于 12
+                   lambda d: d["type"]["bodySmall"].update(family="serif")):
+        with pytest.raises(ValueError):
+            gen.nw_tokens_dart(broken(change))
+
+
 def test_颜色写错了当场报_不生成半截():
     import pytest
 
