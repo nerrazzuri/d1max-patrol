@@ -9,9 +9,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 
 /// 每一级的名字（跟站点 `deterrence.LABEL` 一样）。
 List<String> get deterLevelNames => <String>[
@@ -162,40 +163,77 @@ class _SiteDeterrencePageState extends State<SiteDeterrencePage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = Nw.of(context);
     final sess = widget.api.session;
     final s = _s;
     final lv = (s?['level'] as num?)?.toInt();
+    const size = Size(Nw.touch, 48);
+    final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(Nw.r8));
+    // 现在这一级按不了，但它是「选中的」，不是「用不了的」：照样实底
+    final current = FilledButton.styleFrom(
+        disabledBackgroundColor: c.primary,
+        disabledForegroundColor: c.onPrimary,
+        minimumSize: size,
+        textStyle: NwText.labelLarge,
+        shape: shape);
+    final other = OutlinedButton.styleFrom(
+        foregroundColor: c.text,
+        side: BorderSide(color: c.textMuted),
+        minimumSize: size,
+        textStyle: NwText.labelLarge,
+        shape: shape);
     return Scaffold(
       appBar: AppBar(title: Text(tr('${widget.robotId} · Deterrence', '${widget.robotId} · 驱离'))),
-      body: ListView(padding: const EdgeInsets.all(8), children: [
-        if (_msg.isNotEmpty) Text(_msg, key: const Key('deterrence-msg')),
-        if (s == null && _ended) Text(tr('No deterrence in progress', '没在驱离')),
+      body: ListView(
+          // 横屏的手机只有 360 高：内距、间距收紧一点，常用的那几样不用滚就点得到
+          padding: const EdgeInsets.symmetric(horizontal: Nw.s16, vertical: Nw.s8),
+          children: [
+        if (_msg.isNotEmpty)
+          Container(
+              margin: const EdgeInsets.only(bottom: Nw.s8),
+              padding: const EdgeInsets.symmetric(horizontal: Nw.s16, vertical: Nw.s8),
+              decoration: BoxDecoration(color: c.infoSoft, borderRadius: BorderRadius.circular(Nw.r8)),
+              child: Text(_msg,
+                  key: const Key('deterrence-msg'), style: NwText.bodyMedium.copyWith(color: c.text))),
+        if (s == null && _ended)
+          Text(tr('No deterrence in progress', '没在驱离'), style: NwText.bodyLarge.copyWith(color: c.text)),
         if (s != null) ...[
-          ListTile(
-            key: const Key('deterrence-now'),
-            leading: const Icon(Icons.campaign, color: D1Color.p1Text),
-            title: Text(deterSessionText(s)),
-            subtitle: Text(
-                tr('Zone ${s['zone']} · ends automatically in ${s['ends_in_s']} s${deterSceneText(s)}',
-                    '防区 ${s['zone']} · ${s['ends_in_s']} 秒后自动收${deterSceneText(s)}'),
-                key: const Key('deterrence-persons')),
-          ),
+          NwCard(
+              padding: EdgeInsets.zero,
+              child: ListTile(
+                key: const Key('deterrence-now'),
+                // 正在驱离 = 入侵（P1）还在处理：红
+                leading: Icon(Icons.campaign_rounded, color: c.error),
+                title: Text(deterSessionText(s), style: NwText.titleMedium.copyWith(color: c.text)),
+                subtitle: Text(
+                    tr('Zone ${s['zone']} · ends automatically in ${s['ends_in_s']} s${deterSceneText(s)}',
+                        '防区 ${s['zone']} · ${s['ends_in_s']} 秒后自动收${deterSceneText(s)}'),
+                    key: const Key('deterrence-persons'),
+                    style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
+              )),
+          const SizedBox(height: Nw.s16),
           if (sess?.canDispatch ?? false)
-            Wrap(spacing: 6, children: [
+            Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
               for (var l = 0; l < deterLevelNames.length; l++)
                 (l == lv ? FilledButton.new : OutlinedButton.new)(
                   key: SiteDeterrencePage.levelKey(l),
+                  style: l == lv ? current : other,
                   onPressed: l == lv ? null : () => _level(l),
                   child: Text('L$l ${deterLevelNames[l]}'),
                 ),
             ]),
-          const SizedBox(height: 8),
+          const SizedBox(height: Nw.s16),
           if (sess?.canAbort ?? false)
             FilledButton.icon(
               key: SiteDeterrencePage.releaseKey,
-              style: FilledButton.styleFrom(backgroundColor: D1Color.text),
+              style: FilledButton.styleFrom(
+                  backgroundColor: c.primary,
+                  foregroundColor: c.onPrimary,
+                  minimumSize: const Size(Nw.touch, 52),
+                  textStyle: NwText.labelLarge,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Nw.r12))),
               onPressed: _release,
-              icon: const Icon(Icons.check),
+              icon: const Icon(Icons.check_rounded),
               label: Text(tr('End deterrence (all off, return to standby)', '解除（全关、回待命点）')),
             ),
         ],
