@@ -65,9 +65,28 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  # 字体的许可证(SIL OFL 1.1):登记进 App 的许可证页(main.dart 的 fontLicenses),要打进包里才读得到。
+  assets:
+    - assets/fonts/OFL.txt
+    - assets/fonts/OFL-SpaceGrotesk.txt
+    - assets/fonts/OFL-Inter.txt
+    - assets/fonts/OFL-JetBrainsMono.txt
+
   # 专业版字体(视觉规范 2.2):Atkinson Hyperlegible Next / Mono(SIL OFL 1.1,见 assets/fonts/OFL.txt)。
   # 可变字体,字重走 wght 轴。中文落到系统字体。
+  # 2026-10-14 重做的那一套(design/mobile.json):标题 Space Grotesk、正文 Inter、标签 JetBrains Mono,
+  # 都是可变字体(SIL OFL 1.1),取自 google/fonts 仓库的 ofl/ 目录,打在包里,不在运行时取。
+  # Atkinson 两种在老页面换完之前留着。
   fonts:
+    - family: Space Grotesk
+      fonts:
+        - asset: assets/fonts/SpaceGrotesk.ttf
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter.ttf
+    - family: JetBrains Mono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono.ttf
     - family: Atkinson Hyperlegible Next
       fonts:
         - asset: assets/fonts/AtkinsonHyperlegibleNext.ttf

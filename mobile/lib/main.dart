@@ -27,12 +27,21 @@ import 'ui/theme.dart';
 
 export 'ui/orientation.dart' show landscapeOnly, lockLandscape, unlockOrientation;
 
+/// 打在包里的字体和各自的许可证（都是 SIL OFL 1.1）：登记进 App 的许可证页。
+/// 许可证文件要列在 `pubspec.yaml` 的 assets 里，不然读不到（`nw_theme_test.dart` 把关）。
+const List<(List<String>, String)> fontLicenses = <(List<String>, String)>[
+  (<String>['Atkinson Hyperlegible Next', 'Atkinson Hyperlegible Mono'], 'assets/fonts/OFL.txt'),
+  (<String>['Space Grotesk'], 'assets/fonts/OFL-SpaceGrotesk.txt'),
+  (<String>['Inter'], 'assets/fonts/OFL-Inter.txt'),
+  (<String>['JetBrains Mono'], 'assets/fonts/OFL-JetBrainsMono.txt'),
+];
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   LicenseRegistry.addLicense(() async* {
-    yield LicenseEntryWithLineBreaks(
-        const <String>['Atkinson Hyperlegible Next', 'Atkinson Hyperlegible Mono'],
-        await rootBundle.loadString('assets/fonts/OFL.txt'));
+    for (final (families, path) in fontLicenses) {
+      yield LicenseEntryWithLineBreaks(families, await rootBundle.loadString(path));
+    }
   });
   final langStore = await openLangStore();
   appLang.value = await langStore.load();
