@@ -1,4 +1,4 @@
-"""手机 App 的设计常量(App V2)是从 design/ 生成的:仓库里的跟重新生成的一样
+"""手机 App 的设计常量是从 design/ 生成的:仓库里的跟重新生成的一样
 (改了 JSON 忘了跑生成脚本的会红)。"""
 
 from __future__ import annotations
@@ -53,13 +53,27 @@ def test_新令牌写错了当场报_不生成半截():
             gen.nw_tokens_dart(broken(change))
 
 
-def test_颜色写错了当场报_不生成半截():
+def test_网页值班台那份令牌_手机只生成动效_缺了当场报():
+    """2026-10-14 重做之后手机不再用 ``tokens.json`` 的颜色、尺寸、圆角、字(颜色写错的检查在
+    新令牌那条里);只剩告警页闪法的三项。"""
+    import json
+
     import pytest
 
-    with pytest.raises(ValueError):
-        _gen().tokens_dart({"version": 2, "color": {"bg": "rgb(0,0,0)"}, "size": {}, "radius": {},
-                            "type": {}, "motion": {"fast": 1, "p1FlashMs": 1,
-                                                   "p1FlashMinOpacity": 0.4}})
+    gen = _gen()
+    tokens = json.loads((ROOT / "design" / "tokens.json").read_text(encoding="utf-8"))
+    out = gen.tokens_dart(tokens)
+    motion = tokens["motion"]
+    assert f"static const int fast = {int(motion['fast'])};" in out
+    assert f"static const int p1FlashMs = {int(motion['p1FlashMs'])};" in out
+    assert f"static const double p1FlashMinOpacity = {float(motion['p1FlashMinOpacity'])};" in out
+    for gone in ("D1Color", "D1Size", "D1Radius", "D1Type", "Color("):
+        assert gone not in out, gone
+    for key in ("fast", "p1FlashMs", "p1FlashMinOpacity"):
+        bad = json.loads(json.dumps(tokens))
+        del bad["motion"][key]
+        with pytest.raises(KeyError):
+            gen.tokens_dart(bad)
 
 
 def test_告警标题里的引号和美元符转义():

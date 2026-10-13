@@ -2,9 +2,9 @@
 // 下都不溢出（RenderFlex overflowed 在测试里是报错）。英文比中文长，竖屏比横屏窄：
 // 四种组合都画一遍。测试里的字体每个字都是方块（比真字体宽），过了这里真机上只会更松。
 //
-// 主题四档（2026-10-14 重做）：新主题的**浅色**、**深色**（App 现在用的，跟随系统），**不带主题**
-// （大多数测试是光秃秃的 MaterialApp，页面在那儿也得画得出来、不抛），和老的**专业版主题**
-// （各页换完、删掉 proTheme 之前留着）。
+// 主题三档（2026-10-14 重做）：新主题的**浅色**、**深色**（App 现在用的，跟随系统），和**不带主题**
+// （大多数测试是光秃秃的 MaterialApp，页面在那儿也得画得出来、不抛）。老的专业版主题那一档跟着
+// 主题本身一起删了。
 import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/store/site_store.dart';
@@ -26,7 +26,6 @@ import 'package:d1max_patrol/ui/site_runs.dart';
 import 'package:d1max_patrol/ui/site_standby.dart';
 import 'package:d1max_patrol/ui/site_watch_page.dart';
 import 'package:d1max_patrol/ui/site_weather.dart';
-import 'package:d1max_patrol/ui/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -80,12 +79,11 @@ final _pages = <String, Widget Function()>{
   'recordings': () => SiteRecordingsPage(api: FakeApi('guard'), robotId: 'A'),
 };
 
-/// 主题四档：名字 + 主题（null = 不带，MaterialApp 自己的默认主题）。
+/// 主题三档：名字 + 主题（null = 不带，MaterialApp 自己的默认主题）。
 final _themes = <String, ThemeData? Function()>{
   'light': () => nwTheme(Brightness.light),
   'dark': () => nwTheme(Brightness.dark),
   'no theme': () => null,
-  'pro': proTheme,
 };
 
 void main() {

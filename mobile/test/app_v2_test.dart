@@ -15,7 +15,7 @@ import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_standby.dart';
 import 'package:d1max_patrol/ui/site_teleop.dart';
 import 'package:d1max_patrol/ui/site_watch_page.dart';
-import 'package:d1max_patrol/ui/theme.dart';
+import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/widget/alarm_widgets.dart';
 import 'package:d1max_patrol/ui/widget/bar_actions.dart';
 import 'package:flutter/foundation.dart';
@@ -99,7 +99,7 @@ Future<void> _alarm(WidgetTester t, FakeApi api, Alert a, {int afterS = 42}) asy
   _portrait(t);
   api.alertRows = <Map<String, dynamic>>[];
   await t.pumpWidget(MaterialApp(
-      theme: proTheme(),
+      theme: nwTheme(Brightness.dark),
       home: SiteAlertScenePage(
           api: api, alert: a, now: () => DateTime.fromMillisecondsSinceEpoch(_t0 + afterS * 1000))));
   await t.pumpAndSettle();
@@ -173,16 +173,20 @@ void main() {
       expect(zoneLabelText(null), '');
     });
 
-    testWidgets('专业版主题：深色、主色是中性灰白不是品牌色、字体是 Atkinson', (t) async {
-      final th = proTheme();
+    testWidgets('主题（2026-10-14 重做）：浅色深色两套、主色和底色是设计稿的、字体是 Inter / JetBrains Mono', (t) async {
+      final th = nwTheme(Brightness.dark);
       expect(th.brightness, Brightness.dark);
-      expect(th.colorScheme.primary, const Color(0xFFE2E2E2));
-      expect(th.scaffoldBackgroundColor, const Color(0xFF1C1D1F));
-      expect(th.textTheme.bodyMedium!.fontFamily, 'Atkinson Hyperlegible Next');
-      expect(th.textTheme.bodyMedium!.fontSize, 16);
-      expect(D1Text.osd.fontFamily, 'Atkinson Hyperlegible Mono');
-      for (final s in [th.textTheme.bodySmall!, th.textTheme.labelSmall!, D1Text.osd, D1Text.caption]) {
-        expect(s.fontSize, greaterThanOrEqualTo(14), reason: '规范：最小 14');
+      expect(th.colorScheme.primary, const Color(0xFFD1E4FF));
+      expect(th.scaffoldBackgroundColor, const Color(0xFF0A0C10));
+      expect(th.textTheme.bodyMedium!.fontFamily, 'Inter');
+      expect(th.textTheme.bodyMedium!.fontSize, 14);
+      expect(NwText.labelSmall.fontFamily, 'JetBrains Mono');
+      final light = nwTheme(Brightness.light);
+      expect(light.brightness, Brightness.light);
+      expect(light.colorScheme.primary, const Color(0xFF1A1C1E));
+      expect(light.scaffoldBackgroundColor, const Color(0xFFFDFDFD));
+      for (final s in [th.textTheme.bodySmall!, th.textTheme.labelSmall!, light.textTheme.bodySmall!, light.textTheme.labelSmall!, ...NwText.all]) {
+        expect(s.fontSize, greaterThanOrEqualTo(12), reason: '用户定的：最小 12');
       }
     });
   });
@@ -191,7 +195,7 @@ void main() {
     Future<MemorySiteStore> open(WidgetTester t, {CodeScanner? scanner}) async {
       _portrait(t);
       final store = MemorySiteStore();
-      await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteListPage(store: store, scanner: scanner)));
+      await t.pumpWidget(MaterialApp(theme: nwTheme(Brightness.dark), home: SiteListPage(store: store, scanner: scanner)));
       await t.pumpAndSettle();
       await t.tap(find.byKey(const Key('site-add')));
       await t.pumpAndSettle();
@@ -336,7 +340,7 @@ void main() {
       _portrait(t);
       api.alertRows = <Map<String, dynamic>>[];
       await t.pumpWidget(MaterialApp(
-          theme: proTheme(),
+          theme: nwTheme(Brightness.dark),
           home: Builder(
               builder: (c) => TextButton(
                   onPressed: () => Navigator.push(c,
@@ -649,7 +653,7 @@ void main() {
       await t.pumpAndSettle();
       expect(find.byKey(SiteAlertScenePage.falseGoKey), findsOneWidget);
       await t.pumpWidget(MaterialApp(
-          theme: proTheme(),
+          theme: nwTheme(Brightness.dark),
           home: SiteAlertScenePage(
               api: api, alert: _p1b(), now: () => DateTime.fromMillisecondsSinceEpoch(_t0 + 42000))));
       await t.pumpAndSettle();
@@ -689,7 +693,7 @@ void main() {
       _portrait(t);
       final api = FakeApi('admin');
       await t.pumpWidget(MaterialApp(
-          theme: proTheme(), home: SiteStandbyPage(api: api, robotId: 'A', canMarkHere: true)));
+          theme: nwTheme(Brightness.dark), home: SiteStandbyPage(api: api, robotId: 'A', canMarkHere: true)));
       await t.pumpAndSettle();
       expect(find.byKey(SiteStandbyPage.hereKey), findsNothing);
       await t.tap(find.byKey(barMoreKey));
@@ -701,7 +705,7 @@ void main() {
       expect(find.byKey(SiteStandbyPage.nameKey), findsOneWidget, reason: '菜单里点了跟按钮一样：弹出起名的框');
       t.view.physicalSize = const Size(800 * 2, 360 * 2);
       await t.pumpWidget(MaterialApp(
-          theme: proTheme(), home: SiteStandbyPage(api: FakeApi('admin'), robotId: 'A', canMarkHere: true)));
+          theme: nwTheme(Brightness.dark), home: SiteStandbyPage(api: FakeApi('admin'), robotId: 'A', canMarkHere: true)));
       await t.pumpAndSettle();
       expect(find.byKey(barMoreKey), findsNothing);
       expect(find.byKey(SiteStandbyPage.hereKey), findsOneWidget);
@@ -712,7 +716,7 @@ void main() {
     testWidgets('进了站点：竖屏时去别的页面的入口都在底部导航上、带文字', (t) async {
       _portrait(t);
       await t.pumpWidget(MaterialApp(
-          theme: proTheme(), home: NwShell(api: FakeApi('admin'), title: 'East Gate Estate')));
+          theme: nwTheme(Brightness.dark), home: NwShell(api: FakeApi('admin'), title: 'East Gate Estate')));
       await t.pumpAndSettle();
       expect(find.byKey(barMoreKey), findsNothing, reason: '没有收起来的菜单了');
       for (final k in ['open-watch', 'open-maps', 'open-runs', 'open-health']) {
@@ -737,7 +741,7 @@ void main() {
     testWidgets('值守屏的告警卡片：竖屏时按钮在下面一行，不挤标题；点得到', (t) async {
       _portrait(t);
       final api = FakeApi('guard');
-      await t.pumpWidget(MaterialApp(theme: proTheme(), home: SiteWatchPage(api: api)));
+      await t.pumpWidget(MaterialApp(theme: nwTheme(Brightness.dark), home: SiteWatchPage(api: api)));
       await t.pumpAndSettle();
       const key = 'A/estop_pressed#1';
       final title = t.getRect(find.textContaining('急停被按下'));

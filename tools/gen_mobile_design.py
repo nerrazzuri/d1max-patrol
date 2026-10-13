@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""把设计的单一来源(``design/tokens.json``、``design/mobile.json``、``design/i18n/alerts.json``)
-生成手机 App 用的 Dart 常量(App V2)。2026-10-14 重做的那一套:``mobile.json`` →
-``nw_tokens.g.dart``。
+"""把设计的单一来源(``design/mobile.json``、``design/i18n/alerts.json``、``design/tokens.json``)
+生成手机 App 用的 Dart 常量。2026-10-14 重做之后手机的设计系统是 ``mobile.json`` →
+``nw_tokens.g.dart``;``tokens.json`` 归网页值班台,手机只从里面取动效(``tokens.g.dart`` 的
+``D1Motion``)。
 
 App 不在运行时读 JSON:颜色、字号是编译期常量,告警标题按种类查表。改了 ``design/`` 之后跑一遍::
 
@@ -34,31 +35,16 @@ def _dart_str(s: str) -> str:
 
 
 def tokens_dart(tokens: dict) -> str:
-    lines = [HEADER, "import 'dart:ui' show Color;\n",
-             f"const int tokensVersion = {int(tokens['version'])};\n",
-             "/// 颜色(``design/tokens.json`` 的 color)。", "abstract final class D1Color {"]
-    for name, value in tokens["color"].items():
-        lines.append(f"  static const Color {name} = {_hex(value)};")
-    lines += ["}\n", "/// 尺寸(size),逻辑像素。", "abstract final class D1Size {"]
-    for name, value in tokens["size"].items():
-        lines.append(f"  static const double {name} = {float(value)};")
-    lines += ["}\n", "/// 圆角(radius)。", "abstract final class D1Radius {"]
-    for name, value in tokens["radius"].items():
-        lines.append(f"  static const double {name} = {float(value)};")
-    lines += ["}\n", "/// 字号、行高、字重(type);family 是 mono 的用等宽字体。",
-              "abstract final class D1Type {"]
-    for name, t in tokens["type"].items():
-        mono = "true" if t.get("family") == "mono" else "false"
-        lines.append("  static const ({double size, double line, int weight, bool mono}) "
-                     f"{name} = "
-                     f"(size: {float(t['size'])}, line: {float(t['line'])}, "
-                     f"weight: {int(t['weight'])}, mono: {mono});")
-    lines += ["}\n", "/// 动效(motion),毫秒。", "abstract final class D1Motion {",
-              f"  static const int fast = {int(tokens['motion']['fast'])};",
-              f"  static const int p1FlashMs = {int(tokens['motion']['p1FlashMs'])};",
-              "  static const double p1FlashMinOpacity = "
-              f"{float(tokens['motion']['p1FlashMinOpacity'])};",
-              "}"]
+    """``design/tokens.json`` 是网页值班台的令牌;手机 App 2026-10-14 换了设计系统(``mobile.json``),
+    从这里只剩动效那三项还在用(告警页没确认的 P1 的闪法)。颜色、尺寸、圆角、字不再生成。"""
+    motion = tokens["motion"]
+    lines = [HEADER, f"const int tokensVersion = {int(tokens['version'])};\n",
+             "/// 动效(``design/tokens.json`` 的 motion),毫秒。手机 App 从这份令牌里只用这三项。",
+             "abstract final class D1Motion {",
+             f"  static const int fast = {int(motion['fast'])};",
+             f"  static const int p1FlashMs = {int(motion['p1FlashMs'])};",
+             f"  static const double p1FlashMinOpacity = {float(motion['p1FlashMinOpacity'])};",
+             "}"]
     return "\n".join(lines) + "\n"
 
 
