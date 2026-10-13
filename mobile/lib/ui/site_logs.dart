@@ -9,6 +9,9 @@ import 'package:flutter/material.dart';
 
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_p4_admin.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 
 /// 字节数说人话。
 String logSizeText(int n) {
@@ -55,34 +58,40 @@ class _SiteProcLogsPageState extends State<SiteProcLogsPage> {
       body: FutureBuilder<Map<String, dynamic>>(
         future: _data,
         builder: (context, snap) {
+          final nw = Nw.of(context);
           if (snap.hasError) {
-            return Padding(
-                padding: const EdgeInsets.all(16), child: Text(tr(
-                    "Can't load the log list: ${snap.error}",
-                    '取不到日志列表：${snap.error}')));
+            return NwListView(children: [
+              NwNotice(
+                  tone: NwTone.error,
+                  text: tr("Can't load the log list: ${snap.error}", '取不到日志列表：${snap.error}')),
+            ]);
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final logs = (snap.data!['logs'] as List? ?? const []).cast<Map<String, dynamic>>();
           if (logs.isEmpty) {
-            return Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(tr(
-                    'No logs yet: this robot has not recorded a bag or rebuilt a map',
-                    '还没有日志：这只狗还没录过包、没重建过图')));
+            return NwEmpty(
+                icon: Icons.article_outlined,
+                text: tr('No logs yet: this robot has not recorded a bag or rebuilt a map',
+                    '还没有日志：这只狗还没录过包、没重建过图'));
           }
-          return ListView(children: [
-            for (final l in logs)
-              ListTile(
-                title: Text('${l['name']}'),
-                subtitle: Text('${logSizeText((l['size'] as num? ?? 0).toInt())}'
-                    '  ·  ${_when(l['mtime_ms'])}'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute<void>(
-                        builder: (_) => SiteProcLogPage(
-                            api: widget.api, robotId: widget.robotId, name: '${l['name']}'))),
-              ),
+          return NwListView(children: [
+            NwListCard(children: [
+              for (final l in logs)
+                ListTile(
+                  leading: Icon(Icons.article_rounded, color: nw.textSecondary),
+                  title: Text('${l['name']}', style: NwText.labelLarge.copyWith(color: nw.text)),
+                  subtitle: Text(
+                      '${logSizeText((l['size'] as num? ?? 0).toInt())}'
+                      '  ·  ${_when(l['mtime_ms'])}',
+                      style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+                  trailing: Icon(Icons.chevron_right_rounded, color: nw.textSecondary),
+                  onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                          builder: (_) => SiteProcLogPage(
+                              api: widget.api, robotId: widget.robotId, name: '${l['name']}'))),
+                ),
+            ]),
           ]);
         },
       ),
@@ -137,10 +146,11 @@ class _SiteProcLogPageState extends State<SiteProcLogPage> {
       body: FutureBuilder<Map<String, dynamic>>(
         future: _data,
         builder: (context, snap) {
+          final nw = Nw.of(context);
           if (snap.hasError) {
-            return Padding(padding: const EdgeInsets.all(16), child: Text(tr(
-                "Can't load: ${snap.error}",
-                '取不到：${snap.error}')));
+            return NwListView(children: [
+              NwNotice(tone: NwTone.error, text: tr("Can't load: ${snap.error}", '取不到：${snap.error}')),
+            ]);
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final d = snap.data!;
@@ -149,15 +159,21 @@ class _SiteProcLogPageState extends State<SiteProcLogPage> {
           // 刷新时旧的还摆着：钉在顶上一条进度条（不跟着滚），看得出在取。
           return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             if (snap.connectionState == ConnectionState.waiting) const LinearProgressIndicator(),
-            Expanded(child: ListView(controller: _scroll, padding: const EdgeInsets.all(12), children: [
-            Text(d['truncated'] == true
-                ? tr(
-                    '${logSizeText(size)} in total, showing only the last ${logSizeText(got)} (newest at the bottom)',
-                    '共 ${logSizeText(size)}，只显示最后 ${logSizeText(got)}（最新的在最底下）')
-                : tr('${logSizeText(size)} in total', '共 ${logSizeText(size)}')),
-            const Divider(),
-            SelectableText('${d['text'] ?? ''}',
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+            Expanded(
+                child: ListView(controller: _scroll, padding: const EdgeInsets.all(Nw.s16), children: [
+              Text(
+                  d['truncated'] == true
+                      ? tr(
+                          '${logSizeText(size)} in total, showing only the last ${logSizeText(got)} (newest at the bottom)',
+                          '共 ${logSizeText(size)}，只显示最后 ${logSizeText(got)}（最新的在最底下）')
+                      : tr('${logSizeText(size)} in total', '共 ${logSizeText(size)}'),
+                  style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+              nwGap8,
+              // 日志正文：等宽、整段能选能复制；一张卡片装着，跟页面的底分开
+              NwCard(
+                  radius: Nw.r8,
+                  child: SelectableText('${d['text'] ?? ''}',
+                      style: NwText.labelSmall.copyWith(color: nw.text, fontWeight: FontWeight.w400, height: 1.4))),
             ])),
           ]);
         },

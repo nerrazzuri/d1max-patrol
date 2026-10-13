@@ -9,9 +9,12 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_button.dart';
+import 'nw/nw_p4_admin.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 
 class SiteReleasesPage extends StatefulWidget {
   final SiteApi api;
@@ -108,33 +111,42 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
     final blocking = (r['blocking'] as List? ?? const []).length;
     return showDialog<void>(
       context: context,
-      builder: (c) => AlertDialog(
-        title: Text(title),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView(shrinkWrap: true, children: [
-            Text(
-                r['ok'] == true
-                    ? tr('Can activate: all blocking checks passed', '能切：拦的都过了')
-                    : tr('Cannot activate: $blocking blocking check(s) failed', '不能切：$blocking 项拦着'),
-                key: const Key('precheck-verdict'),
-                style: TextStyle(color: r['ok'] == true ? D1Color.text : D1Color.p1Text)),
-            for (final ch in checks)
-              ListTile(
-                key: Key('precheck-item-${ch['name']}'),
-                dense: true,
-                leading: Icon(ch['ok'] == true ? Icons.check_circle : Icons.cancel,
-                    color: ch['ok'] == true
-                        ? D1Color.text
-                        : (ch['blocking'] == true ? D1Color.p1Text : D1Color.p2)),
-                title: Text('${_label('${ch['name']}')}'
-                    '${ch['ok'] != true && ch['blocking'] != true ? tr(' (advisory, not blocking)', '（提示，不拦）') : ''}'),
-                subtitle: Text('${ch['detail'] ?? ''}'),
-              ),
-          ]),
-        ),
-        actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('OK', '知道了')))],
-      ),
+      builder: (c) {
+        final nw = Nw.of(c);
+        return AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(shrinkWrap: true, children: [
+              // 能切是绿的；不能切是红的（拦着的那几项也是红的，只是提示的是橙的）
+              Text(
+                  r['ok'] == true
+                      ? tr('Can activate: all blocking checks passed', '能切：拦的都过了')
+                      : tr('Cannot activate: $blocking blocking check(s) failed', '不能切：$blocking 项拦着'),
+                  key: const Key('precheck-verdict'),
+                  style: NwText.titleSmall.copyWith(color: r['ok'] == true ? nw.success : nw.error)),
+              nwGap8,
+              for (final ch in checks)
+                ListTile(
+                  key: Key('precheck-item-${ch['name']}'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                      ch['ok'] == true
+                          ? Icons.check_circle_rounded
+                          : (ch['blocking'] == true ? Icons.cancel_rounded : Icons.warning_amber_rounded),
+                      color: ch['ok'] == true ? nw.success : (ch['blocking'] == true ? nw.error : nw.warning)),
+                  title: Text(
+                      '${_label('${ch['name']}')}'
+                      '${ch['ok'] != true && ch['blocking'] != true ? tr(' (advisory, not blocking)', '（提示，不拦）') : ''}',
+                      style: NwText.bodyMedium.copyWith(color: nw.text)),
+                  subtitle: Text('${ch['detail'] ?? ''}', style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+                ),
+            ]),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('OK', '知道了')))],
+        );
+      },
     );
   }
 
@@ -162,15 +174,19 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
   @override
   Widget build(BuildContext context) {
     final admin = widget.api.session?.canManageMaps ?? false;
+    final nw = Nw.of(context);
+    final title = NwText.titleSmall.copyWith(color: nw.text);
+    final sub = NwText.bodySmall.copyWith(color: nw.textSecondary);
     return Scaffold(
       appBar: AppBar(title: Text(tr('Releases', '版本'))),
       body: FutureBuilder<Map<String, dynamic>>(
         future: _data,
-        builder: (c, snap) {
+        builder: (_, snap) {
           if (snap.hasError) {
-            return Center(
-                child: Text(tr('Releases unavailable: ${snap.error}', '拿不到：${snap.error}'),
-                    style: const TextStyle(color: D1Color.p1Text)));
+            return NwListView(children: [
+              NwNotice(
+                  tone: NwTone.error, text: tr('Releases unavailable: ${snap.error}', '拿不到：${snap.error}')),
+            ]);
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           final rels = (snap.data!['releases'] as List).whereType<Map<String, dynamic>>().toList();
@@ -183,38 +199,57 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
               });
               await _data.catchError((Object _) => <String, dynamic>{});
             },
-            child: ListView(children: [
-              ListTile(title: Text(tr('Running on each robot', '每台狗在跑'))),
+            child: NwListView(children: [
+              NwSectionLabel(tr('Running on each robot', '每台狗在跑')),
+              nwGap8,
               for (final e in robots.entries)
-                ListTile(
-                  key: SiteReleasesPage.robotKey(e.key),
-                  title: Text(e.key),
-                  subtitle: Text('${e.value ?? tr('Unknown (not reported: the robot is offline, or does not support releases from the site)', '不知道（狗没报：不在线，或者不支持站点下发版本）')}'),
-                  // 狗没报在跑哪一版 = 没报发布能力（或者不在线）：按了也是 unsupported，不给按钮。
-                  trailing: admin && e.value != null
-                      ? Wrap(spacing: 4, children: [
-                          for (final (a, label) in [
-                            ('install', tr('Install', '装')),
-                            ('precheck', tr('Check', '查')),
-                            ('activate', tr('Activate', '切')),
-                            ('rollback', tr('Roll back', '退')),
-                          ])
-                            TextButton(
-                                key: SiteReleasesPage.actionKey(e.key, a),
-                                onPressed: () => _act(e.key, a, names),
-                                child: Text(label)),
-                        ])
-                      : null,
-                ),
-              const Divider(),
-              ListTile(title: Text(tr('Releases on the site', '站点上的版本'))),
-              if (rels.isEmpty) ListTile(title: Text(tr('No releases registered yet', '还没有登记过版本'))),
-              for (final r in rels)
-                ListTile(
-                  title: Text(tr('${r['name']} (${r['version']})', '${r['name']}（${r['version']}）')),
-                  subtitle: Text('${((r['size'] as num? ?? 0) / 1048576).toStringAsFixed(1)} MB'
-                      '${(r['note'] ?? '') != '' ? ' · ${r['note']}' : ''}'),
-                ),
+                Padding(
+                    padding: const EdgeInsets.only(bottom: Nw.s8),
+                    child: NwCard(
+                        key: SiteReleasesPage.robotKey(e.key),
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(e.key, style: NwText.titleMedium.copyWith(color: nw.text, fontWeight: FontWeight.w700)),
+                              nwGap4,
+                              Text(
+                                  '${e.value ?? tr('Unknown (not reported: the robot is offline, or does not support releases from the site)', '不知道（狗没报：不在线，或者不支持站点下发版本）')}',
+                                  style: NwText.bodyMedium.copyWith(color: nw.textSecondary)),
+                              // 狗没报在跑哪一版 = 没报发布能力（或者不在线）：按了也是 unsupported，不给按钮。
+                              if (admin && e.value != null) ...[
+                                nwGap8,
+                                Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
+                                  for (final (a, label) in [
+                                    ('install', tr('Install', '装')),
+                                    ('precheck', tr('Check', '查')),
+                                    ('activate', tr('Activate', '切')),
+                                    ('rollback', tr('Roll back', '退')),
+                                  ])
+                                    NwButton(
+                                        buttonKey: SiteReleasesPage.actionKey(e.key, a),
+                                        variant: NwButtonVariant.outline,
+                                        size: NwButtonSize.small,
+                                        onPressed: () => _act(e.key, a, names),
+                                        label: label),
+                                ]),
+                              ],
+                            ]))),
+              nwGap16,
+              NwSectionLabel(tr('Releases on the site', '站点上的版本')),
+              nwGap8,
+              NwListCard(children: [
+                if (rels.isEmpty) NwCardText(tr('No releases registered yet', '还没有登记过版本')),
+                for (final r in rels)
+                  ListTile(
+                    leading: Icon(Icons.inventory_2_rounded, color: nw.textSecondary),
+                    title: Text(tr('${r['name']} (${r['version']})', '${r['name']}（${r['version']}）'), style: title),
+                    subtitle: Text(
+                        '${((r['size'] as num? ?? 0) / 1048576).toStringAsFixed(1)} MB'
+                        '${(r['note'] ?? '') != '' ? ' · ${r['note']}' : ''}',
+                        style: sub),
+                  ),
+              ]),
             ]),
           );
         },

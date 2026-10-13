@@ -1,8 +1,11 @@
 /// 站点体检（C-B4；站点那头是商业化 A1 / A7）：管理员在手机上看站点好不好 —— 每一项检查过没过、
 /// 哪几项是要紧的、站点和每台狗的版本配不配、谁还登录着哪一版 App；还能把诊断包存到手机上发给厂家。
 ///
-/// 没过的要紧项用 P1 的形状和颜色，别的没过的用 P2；过了的不上色。站点给的明细是中文（英文界面也摆
-/// 出来，比没有强）。读不到就说读不到，不拿上一次的当现在的。
+/// 没过的要紧项用 P1 的形状和颜色，别的没过的用 P2；过了的是绿色的勾（2026-10-14 重做：正常用绿色）。
+/// 站点给的明细是中文（英文界面也摆出来，比没有强）。读不到就说读不到，不拿上一次的当现在的。
+///
+/// 版面照设计稿的 System Health：「站点状态」一张卡（各项检查）、「固件与软件」一片格子（站点、每只狗、
+/// 每台登录着的客户端）、「维护」一张卡（诊断包）。设计稿的「重启站点」没做：站点没有这个功能。
 library;
 
 import 'dart:io';
@@ -13,10 +16,13 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
-import 'theme.dart';
+import 'nw/nw_button.dart';
+import 'nw/nw_cards.dart';
+import 'nw/nw_p4_admin.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 import 'widget/alarm_widgets.dart';
 
 /// 要紧的几项（站点 `health.CRITICAL`）：哪一项没过站点就算不能用。
@@ -106,13 +112,21 @@ class SiteHealthPage extends StatefulWidget {
   /// 有没有「分享」按钮。不给就按系统：手机有，桌面版没有（那边的分享面板发不了文件）。
   final bool? canShare;
   final DateTime Function() now;
+
+  /// 嵌在底部导航的管理栏里：不带 `AppBar`（没有返回可按），页头换成外壳那种，刷新还在页头右边。
+  final bool embedded;
+
+  /// 接在诊断包下面、跟着一起滚的东西（管理栏放去版本、拦截点、摄像头、天气的入口）。
+  final Widget? footer;
   const SiteHealthPage(
       {super.key,
       required this.api,
       this.save = saveBundleWithPicker,
       this.share = shareBundle,
       this.canShare,
-      this.now = DateTime.now});
+      this.now = DateTime.now,
+      this.embedded = false,
+      this.footer});
 
   static const Key overallKey = Key('health-overall');
   static const Key refreshKey = Key('health-refresh');
@@ -220,20 +234,24 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
   }
 
   Widget _overall(Map<String, dynamic> h) {
+    final nw = Nw.of(context);
     final ok = h['ok'] == true;
     final critical = h['critical_ok'] == false;
-    final color = ok ? D1Color.text : (critical ? D1Color.p1Text : D1Color.p2);
+    final color = ok ? nw.success : (critical ? nw.error : nw.warning);
     return ListTile(
         key: SiteHealthPage.overallKey,
-        leading: ok ? const Icon(Icons.check, color: D1Color.textSecondary) : PriorityShape(level: critical ? 'P1' : 'P2', color: color),
+        leading: ok
+            ? Icon(Icons.check_circle_rounded, color: color)
+            : PriorityShape(level: critical ? 'P1' : 'P2', color: color, size: 20),
         title: Text(
             ok
                 ? tr('All checks passed', '各项都正常')
                 : critical
                     ? tr('Site is not healthy', '站点有要紧的问题')
                     : tr('Some checks need attention', '有几项要看一下'),
-            style: D1Text.heading.copyWith(color: color)),
-        subtitle: Text(tr('Site version ${h['version'] ?? '?'}', '站点版本 ${h['version'] ?? '?'}')));
+            style: NwText.titleMedium.copyWith(color: ok ? nw.text : color)),
+        subtitle: Text(tr('Site version ${h['version'] ?? '?'}', '站点版本 ${h['version'] ?? '?'}'),
+            style: NwText.bodySmall.copyWith(color: nw.textSecondary)));
   }
 
   List<Widget> _checks(Map<String, dynamic> h) {
@@ -255,115 +273,183 @@ class _SiteHealthPageState extends State<SiteHealthPage> {
           final c = checks[k] is Map ? checks[k] as Map : const <String, dynamic>{};
           final ok = c['ok'] == true;
           final crit = criticalChecks.contains(k);
-          final color = ok ? D1Color.textSecondary : (crit ? D1Color.p1Text : D1Color.p2);
+          final nw = Nw.of(context);
+          final color = ok ? nw.success : (crit ? nw.error : nw.warning);
           return ListTile(
               key: SiteHealthPage.checkKey(k),
               dense: true,
-              leading: ok ? const Icon(Icons.check, size: 18, color: D1Color.textSecondary) : PriorityShape(level: crit ? 'P1' : 'P2', color: color),
-              title: Text(crit ? tr('${checkLabel(k)} · critical', '${checkLabel(k)} · 要紧') : checkLabel(k)),
-              subtitle: Text('${c['detail'] ?? ''}'),
-              trailing: Text(ok ? tr('OK', '正常') : tr('Failed', '没过'), style: D1Text.label.copyWith(color: color)));
+              leading: ok ? Icon(Icons.check_circle_rounded, size: 20, color: color) : PriorityShape(level: crit ? 'P1' : 'P2', color: color, size: 16),
+              title: Text(crit ? tr('${checkLabel(k)} · critical', '${checkLabel(k)} · 要紧') : checkLabel(k),
+                  style: NwText.bodyMedium.copyWith(color: nw.text)),
+              subtitle: Text('${c['detail'] ?? ''}', style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+              trailing: Text(ok ? tr('OK', '正常') : tr('Failed', '没过'),
+                  style: NwText.labelMedium.copyWith(color: color, fontWeight: FontWeight.w700)));
         }(),
     ];
   }
 
+  /// 版本格子：站点一格、每只狗一格、每台登录着的客户端一格。跟站点配不上的（狗太老、App 太老）是橙色的小标。
   List<Widget> _versionRows(Map<String, dynamic> v) {
+    final nw = Nw.of(context);
+    final site = v['site'] is Map ? v['site'] as Map : null;
     final robots = v['robots'] is List ? (v['robots'] as List).whereType<Map>().toList() : const <Map>[];
     final clients = v['clients'] is List ? (v['clients'] as List).whereType<Map>().toList() : const <Map>[];
-    final minApp = v['site'] is Map ? (v['site'] as Map)['min_app_level'] : null;
+    final minApp = site?['min_app_level'];
+    final heading = NwText.titleSmall.copyWith(color: nw.text);
+    final none = NwText.bodyMedium.copyWith(color: nw.textSecondary);
+    // 一格：是谁、哪一版；小标（配不配）压在右上角那一行 —— 放进版本格自己的那一行会把版本那句挤掉一半
+    Widget tile(String entity, String version, {String? note, NwTone tone = NwTone.neutral}) =>
+        Stack(fit: StackFit.passthrough, children: [
+          NwVersionCard(entity: entity, version: version),
+          if (note != null)
+            Positioned(top: Nw.s8, right: Nw.s8, child: NwStatusPill(label: note, tone: tone)),
+        ]);
     return [
-      Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-          child: Text(tr('Robot software', '狗上的软件'), style: D1Text.heading)),
-      if (robots.isEmpty) ListTile(dense: true, title: Text(tr('No robots.', '还没有狗。'))),
-      for (final r in robots)
-        () {
-          final bad = r['verdict'] == 'agent_too_old' || r['verdict'] == 'site_too_old';
-          return ListTile(
-              dense: true,
-              leading: bad ? const PriorityShape(level: 'P2', color: D1Color.p2) : null,
-              title: Text('${r['robot_id']}', style: D1Text.osd.copyWith(color: D1Color.text)),
-              subtitle: Text([
-                if (r['agent'] != null) tr('agent ${r['agent']}', '代理 ${r['agent']}'),
-                if (r['level'] != null) tr('level ${r['level']}', '级别 ${r['level']}'),
-                r['online'] == true ? tr('online', '在线') : tr('offline', '离线'),
-              ].join(' · ')),
-              trailing: Text(verdictLabel(r['verdict']), style: D1Text.label.copyWith(color: bad ? D1Color.p2 : D1Color.textSecondary)));
-        }(),
-      Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-          child: Text(tr('Signed-in apps', '登录着的 App'), style: D1Text.heading)),
+      if (site != null) ...[
+        NwGrid(minTile: _versionTile, children: [tile(tr('Site', '站点'), '${site['version'] ?? '?'}')]),
+        nwGap16,
+      ],
+      Text(tr('Robot software', '狗上的软件'), style: heading),
+      nwGap8,
+      if (robots.isEmpty) Text(tr('No robots.', '还没有狗。'), style: none),
+      NwGrid(minTile: _versionTile, children: [
+        for (final r in robots)
+          () {
+            final bad = r['verdict'] == 'agent_too_old' || r['verdict'] == 'site_too_old';
+            return tile(
+                '${r['robot_id']}',
+                [
+                  if (r['agent'] != null) tr('agent ${r['agent']}', '代理 ${r['agent']}'),
+                  if (r['level'] != null) tr('level ${r['level']}', '级别 ${r['level']}'),
+                  r['online'] == true ? tr('online', '在线') : tr('offline', '离线'),
+                ].join(' · '),
+                note: verdictLabel(r['verdict']),
+                tone: bad ? NwTone.warning : (r['verdict'] == 'ok' ? NwTone.success : NwTone.neutral));
+          }(),
+      ]),
+      nwGap16,
+      Text(tr('Signed-in apps', '登录着的 App'), style: heading),
+      nwGap8,
       if (clients.isEmpty)
-        ListTile(
-            dense: true,
-            title: Text(tr('No app has reported its version yet (older apps do not).', '还没有 App 报过版本（老版本 App 不报）。'))),
-      for (final c in clients)
-        () {
-          final old = c['kind'] == 'app' && c['api_level'] is int && minApp is int && (c['api_level'] as int) < minApp;
-          return ListTile(
-              dense: true,
-              leading: old ? const PriorityShape(level: 'P2', color: D1Color.p2) : null,
-              title: Text('${c['name']}'),
-              subtitle: Text([
-                c['kind'] == 'web' ? tr('Web console', '网页值班台') : tr('Phone app ${c['version'] ?? '?'}', '手机 App ${c['version'] ?? '?'}'),
-                if (c['platform'] != null) '${c['platform']}',
-              ].join(' · ')),
-              trailing: old ? Text(tr('Too old', '太老'), style: D1Text.label.copyWith(color: D1Color.p2)) : null);
-        }(),
+        Text(tr('No app has reported its version yet (older apps do not).', '还没有 App 报过版本（老版本 App 不报）。'),
+            style: none),
+      NwGrid(minTile: _versionTile, children: [
+        for (final c in clients)
+          () {
+            final old = c['kind'] == 'app' && c['api_level'] is int && minApp is int && (c['api_level'] as int) < minApp;
+            return tile(
+                '${c['name']}',
+                [
+                  c['kind'] == 'web' ? tr('Web console', '网页值班台') : tr('Phone app ${c['version'] ?? '?'}', '手机 App ${c['version'] ?? '?'}'),
+                  if (c['platform'] != null) '${c['platform']}',
+                ].join(' · '),
+                note: old ? tr('Too old', '太老') : null,
+                tone: NwTone.warning);
+          }(),
+      ]),
     ];
   }
+
+  /// 版本格最窄这么宽：「代理 1.4.0 · 级别 2 · 在线」那一句摆得下。
+  static const double _versionTile = 320;
 
   @override
   Widget build(BuildContext context) {
     final h = _health;
     final v = _versions;
-    return Scaffold(
-      appBar: AppBar(title: Text(tr('Site health', '站点体检')), actions: [
-        IconButton(
-            key: SiteHealthPage.refreshKey,
-            tooltip: tr('Refresh', '刷新'),
-            icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _load),
-      ]),
-      body: ListView(children: [
-        if (_loading) ListTile(key: SiteHealthPage.loadingKey, title: Text(tr('Loading…', '正在读…'))),
-        if (_error != null)
-          ListTile(
-              leading: const PriorityShape(level: 'P2', color: D1Color.p2),
-              title: Text(tr("Can't read the site's health: $_error", '站点体检没读到：$_error'),
-                  style: const TextStyle(color: D1Color.p2))),
-        if (h != null) ...[_overall(h), const Divider(height: 1), ..._checks(h)],
-        if (v != null) ..._versionRows(v),
-        const Divider(height: 24),
-        Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text(
-                tr(
-                    'The diagnostics bundle holds the health report, recent logs and settings. It has no passwords or private keys. '
-                        'Send it to support when asked.',
-                    '诊断包里是体检结果、最近的日志和配置，没有口令和私钥。厂家要的时候发给他们。'),
-                style: D1Text.caption.copyWith(color: D1Color.textSecondary))),
-        Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Wrap(spacing: 12, runSpacing: 8, children: [
-              OutlinedButton.icon(
-                  key: SiteHealthPage.bundleKey,
-                  icon: const Icon(Icons.download),
-                  label: Text(_saving && !_sharing ? tr('Saving…', '正在存…') : tr('Save diagnostics bundle', '保存诊断包')),
-                  onPressed: _saving ? null : _bundle),
-              if (widget.canShare ?? (Platform.isAndroid || Platform.isIOS))
-                OutlinedButton.icon(
-                    key: SiteHealthPage.shareKey,
-                    icon: const Icon(Icons.share),
-                    label: Text(_saving && _sharing ? tr('Preparing…', '正在取…') : tr('Share…', '分享…')),
-                    onPressed: _saving ? null : () => _bundle(share: true)),
+    final nw = Nw.of(context);
+    final refresh = IconButton(
+        key: SiteHealthPage.refreshKey,
+        tooltip: tr('Refresh', '刷新'),
+        icon: const Icon(Icons.refresh_rounded),
+        onPressed: _loading ? null : _load);
+    // 整页一次建完（不是懒加载的列表）：页面不长，下面的诊断包、入口随时找得到
+    final body = LayoutBuilder(builder: (context, box) {
+      final side = nwSideInset(box.maxWidth);
+      return SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(side, Nw.s16, side, Nw.s24),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            NwSectionLabel(tr('Station status', '站点状态')),
+            nwGap8,
+            if (_loading)
+              NwListCard(children: [
+                ListTile(
+                    key: SiteHealthPage.loadingKey,
+                    leading: Icon(Icons.hourglass_empty_rounded, color: nw.textSecondary),
+                    title: Text(tr('Loading…', '正在读…'), style: NwText.bodyMedium.copyWith(color: nw.textSecondary))),
+              ]),
+            if (_error != null)
+              NwListCard(tone: NwTone.warning, children: [
+                ListTile(
+                    leading: PriorityShape(level: 'P2', color: nw.warning, size: 16),
+                    title: Text(tr("Can't read the site's health: $_error", '站点体检没读到：$_error'),
+                        style: NwText.bodyMedium.copyWith(color: nw.text))),
+              ]),
+            if (h != null) NwListCard(children: [_overall(h), ..._checks(h)]),
+            // 版本一览还没读到、读不到：这一节整个不显示（体检照样看），不拿上一次的当现在的
+            if (v != null) ...[
+              nwGap24,
+              NwSectionLabel(tr('Firmware & software', '固件与软件')),
+              nwGap8,
+              ..._versionRows(v),
+            ],
+            nwGap24,
+            NwSectionLabel(tr('Maintenance', '维护')),
+            nwGap8,
+            NwCard(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(color: nw.surfaceVariant, borderRadius: BorderRadius.circular(Nw.r8)),
+                    child: Icon(Icons.description_rounded, size: 24, color: nw.textSecondary)),
+                const SizedBox(width: Nw.s16),
+                Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  Text(tr('Diagnostics bundle', '诊断包'), style: NwText.titleSmall.copyWith(color: nw.text)),
+                  nwGap4,
+                  Text(
+                      tr(
+                          'The diagnostics bundle holds the health report, recent logs and settings. It has no passwords or private keys. '
+                              'Send it to support when asked.',
+                          '诊断包里是体检结果、最近的日志和配置，没有口令和私钥。厂家要的时候发给他们。'),
+                      style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
+                ])),
+              ]),
+              nwGap16,
+              Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
+                NwButton(
+                    buttonKey: SiteHealthPage.bundleKey,
+                    variant: NwButtonVariant.outline,
+                    icon: Icons.download_rounded,
+                    label: _saving && !_sharing ? tr('Saving…', '正在存…') : tr('Save diagnostics bundle', '保存诊断包'),
+                    onPressed: _saving ? null : _bundle),
+                if (widget.canShare ?? (Platform.isAndroid || Platform.isIOS))
+                  NwButton(
+                      buttonKey: SiteHealthPage.shareKey,
+                      variant: NwButtonVariant.outline,
+                      icon: Icons.share_rounded,
+                      label: _saving && _sharing ? tr('Preparing…', '正在取…') : tr('Share…', '分享…'),
+                      onPressed: _saving ? null : () => _bundle(share: true)),
+              ]),
+              if (_msg.isNotEmpty) ...[
+                nwGap16,
+                SelectableText(_msg, key: SiteHealthPage.msgKey, style: NwText.bodyMedium.copyWith(color: nw.text)),
+              ],
             ])),
-        if (_msg.isNotEmpty)
-          Padding(
-              padding: const EdgeInsets.all(16),
-              child: SelectableText(_msg, key: SiteHealthPage.msgKey, style: D1Text.body)),
-        const SizedBox(height: 24),
-      ]),
+            if (widget.footer != null) ...[nwGap24, widget.footer!],
+          ]));
+    });
+    if (widget.embedded) {
+      return Column(children: [
+        NwHeader(overline: tr('Admin', '管理'), title: tr('Site health', '站点体检'), trailing: [refresh]),
+        Expanded(child: body),
+      ]);
+    }
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('Site health', '站点体检')), actions: [refresh]),
+      body: body,
     );
   }
 }
