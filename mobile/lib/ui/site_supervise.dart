@@ -13,9 +13,9 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'nw/nw_theme.dart';
 
 class SupervisionSwitch extends StatefulWidget {
   final SiteApi api;
@@ -134,28 +134,40 @@ class _SupervisionSwitchState extends State<SupervisionSwitch> with WidgetsBindi
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      color: _on ? D1Color.p1Bg : null,
+    final c = Nw.of(context);
+    // 开着的时候红框、软红底：狗此刻会自己动，人得一直在场（跟急停一类，不是装饰）。
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Nw.s16, Nw.s8, Nw.s16, 0),
+      child: Material(
+      color: _on ? c.errorSoft : c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Nw.r12),
+          side: _on ? BorderSide(color: c.errorFrame, width: 2) : BorderSide(color: c.outline)),
+      clipBehavior: Clip.antiAlias,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         SwitchListTile(
           key: SupervisionSwitch.switchKey,
-          title: Text(_on ? tr('Supervising', '监护中') : tr("I'm supervising on site", '我在现场监护')),
-          subtitle: Text(tr(
-              'This robot runs dispatched tasks only under on-site supervision (obstacle avoidance is '
-              'not accepted yet). While this is on, the robot runs the tasks sent to it. Turning it '
-              'off, leaving this page or moving the app to the background stops it.',
-              '这台狗要人现场监护才执行派单（避障还没验收）。开着的时候狗会执行下发的任务；'
-              '关掉、离开这一页、切到后台就停。')),
+          title: Text(_on ? tr('Supervising', '监护中') : tr("I'm supervising on site", '我在现场监护'),
+              style: NwText.titleSmall.copyWith(color: c.text)),
+          subtitle: Text(
+              tr(
+                  'This robot runs dispatched tasks only under on-site supervision (obstacle avoidance is '
+                  'not accepted yet). While this is on, the robot runs the tasks sent to it. Turning it '
+                  'off, leaving this page or moving the app to the background stops it.',
+                  '这台狗要人现场监护才执行派单（避障还没验收）。开着的时候狗会执行下发的任务；'
+                  '关掉、离开这一页、切到后台就停。'),
+              style: NwText.bodySmall.copyWith(color: c.textSecondary)),
           value: _on,
           onChanged: (v) => v ? _start() : _stop(tr('Supervision released', '监护已放')),
         ),
         if (_msg.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text(_msg, key: SupervisionSwitch.statusKey),
+            child: Text(_msg,
+                key: SupervisionSwitch.statusKey, style: NwText.bodyMedium.copyWith(color: c.text)),
           ),
       ]),
+      ),
     );
   }
 }
