@@ -6,21 +6,28 @@
 ///
 /// 现场是站点记在告警上的（`context`）：狗最后一次报的地图位姿与收到的时刻、正在跑的那一趟、入侵的
 /// 防区与拦截点。老站点不发：细节那一段只剩一句话。
+///
+/// 2026-10-14 重做（设计稿的 AlarmIncidentDetail）：四个大按钮和按了之后的那句话挪到**底栏**
+/// （拇指够得着、不跟着滚）；「在哪」、细节是一张卡，事件经过是一张卡；有位置的告警多一张小地图
+/// （站点渲染的那张栅格图，点了进地图）。状态、防迟到回包的那些一个字没动。
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../design/tokens.g.dart';
+import '../design/tokens.g.dart' show D1Motion;
 import '../l10n.dart';
 import '../model/alert.dart';
 import '../net/site_client.dart';
+import 'nw/nw_button.dart';
+import 'nw/nw_p2_duty.dart';
+import 'nw/nw_theme.dart';
+import 'nw/nw_widgets.dart';
 import 'site_mapping.dart';
 import 'site_recordings.dart';
 import 'site_runs.dart';
 import 'site_video.dart';
-import 'theme.dart';
 import 'widget/alarm_widgets.dart';
 
 class SiteAlertScenePage extends StatefulWidget {
@@ -42,6 +49,9 @@ class SiteAlertScenePage extends StatefulWidget {
   static const Key stateKey = Key('scene-state');
   static const Key nextKey = Key('scene-next');
   static const Key staleKey = Key('scene-deter-stale');
+
+  /// 底栏：四个大按钮和按了之后的那句话。
+  static const Key barKey = Key('scene-bar');
 
   @override
   State<SiteAlertScenePage> createState() => _SiteAlertScenePageState();
@@ -420,59 +430,105 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   }
 
   Widget _head() {
+    final c = Nw.of(context);
     final p1 = _a.level == 'P1';
     final solid = p1 && _open;
-    final fg = solid ? D1Color.onSolid : D1Color.text;
+    final fg = solid ? c.onError : c.text;
+    final mark = solid ? c.onError : priorityColor(_a.level, c);
     return Container(
         key: SiteAlertScenePage.headKey,
-        color: solid ? D1Color.p1 : D1Color.raised,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        color: solid ? c.error : c.surface,
+        padding: const EdgeInsets.fromLTRB(Nw.s16, Nw.s8, Nw.s16, Nw.s8),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            PriorityShape(level: _a.level, color: solid ? D1Color.onSolid : priorityColor(_a.level)),
+            PriorityShape(level: _a.level, color: mark),
             const SizedBox(width: 6),
-            Text(_a.level, style: D1Text.label.copyWith(color: solid ? D1Color.onSolid : priorityColor(_a.level))),
+            Text(_a.level, style: NwText.labelLarge.copyWith(color: mark, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
             Expanded(
-                child: Text(alertTitle(_a.kind, _a.title), style: D1Text.heading.copyWith(color: fg))),
-            const SizedBox(width: 8),
-            Text(hms(_a.firstMs), style: D1Text.osd.copyWith(color: fg)),
+                child: Text(alertTitle(_a.kind, _a.title), style: NwText.titleMedium.copyWith(color: fg))),
+            const SizedBox(width: Nw.s8),
+            Text(hms(_a.firstMs), style: NwText.labelMedium.copyWith(color: fg)),
           ]),
           const SizedBox(height: 2),
           Text(_stateLine(),
               key: SiteAlertScenePage.stateKey,
-              style: D1Text.label.copyWith(color: solid ? D1Color.onSolid : D1Color.textSecondary)),
+              style: NwText.labelLarge.copyWith(color: solid ? c.onError : c.textSecondary)),
         ]));
   }
 
   /// 报警块：头 + 实时画面，外面一圈报警框（没确认的 P1 闪）。
   Widget _alarmBlock() {
+    final c = Nw.of(context);
     final p1 = _a.level == 'P1' && _open;
-    final frame = p1 ? D1Color.p1Frame : D1Color.rule;
     return AnimatedOpacity(
         opacity: _dim ? D1Motion.p1FlashMinOpacity : 1.0,
         duration: const Duration(milliseconds: D1Motion.fast),
         child: Container(
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-                color: D1Color.surface, border: Border.all(color: frame, width: p1 ? D1Size.alarmFrame : 1)),
+                color: c.surface,
+                borderRadius: BorderRadius.circular(Nw.r12),
+                border: Border.all(color: p1 ? c.errorFrame : c.outline, width: p1 ? 2 : 1)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               _head(),
-              if (_isRobot && _open)
+              if (_isRobot && _open) ...[
+                // 哪只狗的画面。前 / 后哪一路、连没连上是画面那一格自己说的（它管切换、管在线判定）
                 Padding(
-                    padding: const EdgeInsets.all(8), child: SiteVideo(api: widget.api, robotId: _a.robot)),
+                    padding: const EdgeInsets.fromLTRB(Nw.s16, Nw.s8, Nw.s16, 0),
+                    child: Row(children: [
+                      Icon(Icons.videocam_rounded, size: 16, color: c.textSecondary),
+                      const SizedBox(width: Nw.s4),
+                      Expanded(
+                          child: Text(tr('CAMERA · ${_a.robot}', '画面 · ${_a.robot}'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: NwText.labelMedium.copyWith(color: c.textSecondary))),
+                    ])),
+                Padding(
+                    padding: const EdgeInsets.all(Nw.s8), child: SiteVideo(api: widget.api, robotId: _a.robot)),
+              ],
             ])));
   }
 
+  /// 底栏的大按钮：高 56、字 14、摆不下折两行（不截掉）。Key 在标准按钮上（测试按类型认）。
   Widget _big(Key? key, String label, VoidCallback? onPressed, {bool primary = false}) {
-    final style = (primary ? FilledButton.styleFrom : OutlinedButton.styleFrom)(
-        minimumSize: const Size.fromHeight(D1Size.buttonPhone), padding: const EdgeInsets.symmetric(horizontal: 8));
+    final c = Nw.of(context);
+    const size = Size.fromHeight(56);
+    const padding = EdgeInsets.symmetric(horizontal: Nw.s8);
+    final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(Nw.r12));
     final child = Text(label, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis);
     return primary
-        ? FilledButton(key: key, style: style, onPressed: onPressed, child: child)
-        : OutlinedButton(key: key, style: style, onPressed: onPressed, child: child);
+        ? FilledButton(
+            key: key,
+            style: FilledButton.styleFrom(
+                backgroundColor: c.primary,
+                foregroundColor: c.onPrimary,
+                disabledBackgroundColor: c.surfaceVariant,
+                disabledForegroundColor: c.textMuted,
+                minimumSize: size,
+                padding: padding,
+                textStyle: NwText.labelLarge,
+                shape: shape),
+            onPressed: onPressed,
+            child: child)
+        : OutlinedButton(
+            key: key,
+            style: OutlinedButton.styleFrom(
+                foregroundColor: c.text,
+                disabledForegroundColor: c.textMuted,
+                // 按钮的边要认得出是个按钮（非文字 3:1）：不用卡片那条淡边
+                side: BorderSide(color: c.textMuted),
+                minimumSize: size,
+                padding: padding,
+                textStyle: NwText.labelLarge,
+                shape: shape),
+            onPressed: onPressed,
+            child: child);
   }
 
-  Widget _actions() {
+  /// 四个大按钮。[oneRow]：横屏、平板四个一排；竖屏两排。
+  Widget _actions({bool oneRow = false}) {
     final s = widget.api.session;
     final handle = s?.canHandleAlerts ?? false;
     final dispatch = s?.canDispatch ?? false;
@@ -496,27 +552,34 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     } else {
       second = _big(null, tr('Siren: not available', '警笛：现在用不了'), null);
     }
-    return Column(children: [
-      Row(children: [
-        Expanded(
-            child: _big(SiteAlertScenePage.ackKey, tr("I'll handle it", '我来处理'),
-                handle && _open && !_acked ? _ack : null,
-                primary: true)),
-        const SizedBox(width: 8),
+    final first = _big(SiteAlertScenePage.ackKey, tr("I'll handle it", '我来处理'),
+        handle && _open && !_acked ? _ack : null,
+        primary: true);
+    final third = _big(SiteAlertScenePage.falseKey, tr('False alarm', '误报'), handle && _open ? _falseAlarm : null);
+    final fourth = _big(null, tr('Talk: not available', '对讲：还没有'), null);
+    const gap = SizedBox(width: Nw.s8);
+    if (oneRow) {
+      return Row(children: [
+        Expanded(child: first),
+        gap,
         Expanded(child: second),
-      ]),
-      const SizedBox(height: 8),
-      Row(children: [
-        Expanded(
-            child: _big(SiteAlertScenePage.falseKey, tr('False alarm', '误报'), handle && _open ? _falseAlarm : null)),
-        const SizedBox(width: 8),
-        Expanded(child: _big(null, tr('Talk: not available', '对讲：还没有'), null)),
-      ]),
+        gap,
+        Expanded(child: third),
+        gap,
+        Expanded(child: fourth),
+      ]);
+    }
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Row(children: [Expanded(child: first), gap, Expanded(child: second)]),
+      const SizedBox(height: Nw.s8),
+      Row(children: [Expanded(child: third), gap, Expanded(child: fourth)]),
     ]);
   }
 
-  /// 事件经过：站点记下来的时刻，一行一条；最后一行是「接下来会自动发生什么」（琥珀色）。
+  /// 事件经过：站点记下来的时刻，一行一条；最后一行是「接下来会自动发生什么」（提示色）。
   List<Widget> _timeline() {
+    final c = Nw.of(context);
+    final note = NwText.bodyMedium.copyWith(color: c.info, fontWeight: FontWeight.w600);
     final rows = <(int, String)>[
       (
         _a.firstMs,
@@ -554,30 +617,31 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
             '接下来：没人处理的话 ${d['next_in_s']} 秒后升到第 ${(d['level'] as num? ?? 0) + 1} 级。')
         : null;
     return [
-      Text(tr('What happened', '事件经过'), style: D1Text.heading),
+      Text(tr('What happened', '事件经过'), style: NwText.titleSmall.copyWith(color: c.text)),
       const SizedBox(height: 4),
       for (final r in rows)
         Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(hms(r.$1), style: D1Text.osd.copyWith(color: D1Color.textSecondary)),
+              Text(hms(r.$1), style: NwText.labelMedium.copyWith(color: c.textSecondary)),
               const SizedBox(width: 12),
-              Expanded(child: Text(r.$2, style: D1Text.caption.copyWith(color: D1Color.text))),
+              Expanded(child: Text(r.$2, style: NwText.bodyMedium.copyWith(color: c.text))),
             ])),
       if (staleNote != null)
         Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Text(staleNote, key: SiteAlertScenePage.staleKey, style: D1Text.label.copyWith(color: D1Color.p2))),
+            child: Text(staleNote, key: SiteAlertScenePage.staleKey, style: note)),
       if (next != null)
         Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Text(next, key: SiteAlertScenePage.nextKey, style: D1Text.label.copyWith(color: D1Color.p2))),
+            child: Text(next, key: SiteAlertScenePage.nextKey, style: note)),
     ];
   }
 
-  List<Widget> _details(Map? pose, Map? point, String? taskId, (String, String, List<MapMark>)? marks) {
+  /// 现场细节，和去录像、照片的两个入口（去地图的入口是小地图那一块）。
+  List<Widget> _details(Map? pose, Map? point, String? taskId) {
     final ctx = _a.context;
-    final small = D1Text.caption.copyWith(color: D1Color.text);
+    final small = NwText.bodySmall.copyWith(color: Nw.of(context).text);
     return [
       if (appLang.value != AppLang.zh && _a.detail.isNotEmpty)
         // 站点给的原因是中文：英文界面也摆出来（比没有强），放在细节里
@@ -607,40 +671,59 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
             tr('This alarm has no scene data (older site, or a site-level alarm)',
                 '这条告警没带现场（老站点，或站点那一行的告警）'),
             style: small),
-      const SizedBox(height: 8),
-      Wrap(spacing: 8, runSpacing: 8, children: [
-        if (marks != null)
-          OutlinedButton.icon(
-              key: SiteAlertScenePage.mapKey,
-              icon: const Icon(Icons.map_outlined),
-              label: Text(tr('Show on map', '在图上看')),
-              onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute<void>(
-                      builder: (_) => SiteMapPreviewPage(
-                          api: widget.api, mapId: marks.$1, version: marks.$2, marks: marks.$3)))),
-        if (_isRobot)
-          OutlinedButton.icon(
-              key: SiteAlertScenePage.videoKey,
-              icon: const Icon(Icons.videocam_outlined),
-              label: Text(tr('Scene recording', '现场录像')),
-              onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute<void>(
-                      builder: (_) =>
-                          SiteRecordingsPage(api: widget.api, robotId: _a.robot, aroundMs: _a.firstMs)))),
-        if (taskId != null)
-          OutlinedButton.icon(
-              key: SiteAlertScenePage.photoKey,
-              icon: const Icon(Icons.photo_camera_outlined),
-              label: Text(tr('Scene photos', '现场照片')),
-              onPressed: () => _photo(taskId)),
-      ]),
+      if (_isRobot || taskId != null) ...[
+        const SizedBox(height: Nw.s8),
+        Wrap(spacing: Nw.s8, runSpacing: Nw.s8, children: [
+          if (_isRobot)
+            NwButton(
+                buttonKey: SiteAlertScenePage.videoKey,
+                variant: NwButtonVariant.outline,
+                icon: Icons.videocam_outlined,
+                label: tr('Scene recording', '现场录像'),
+                onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                        builder: (_) =>
+                            SiteRecordingsPage(api: widget.api, robotId: _a.robot, aroundMs: _a.firstMs)))),
+          if (taskId != null)
+            NwButton(
+                buttonKey: SiteAlertScenePage.photoKey,
+                variant: NwButtonVariant.outline,
+                icon: Icons.photo_camera_outlined,
+                label: tr('Scene photos', '现场照片'),
+                onPressed: () => _photo(taskId)),
+        ]),
+      ],
     ];
+  }
+
+  /// 底栏：按了之后的那句话（长了自己滚，不截掉）在上，四个大按钮在下。
+  Widget _bar(bool oneRow) {
+    final c = Nw.of(context);
+    return Material(
+        key: SiteAlertScenePage.barKey,
+        color: c.surface,
+        shape: Border(top: BorderSide(color: c.outline)),
+        child: SafeArea(
+            top: false,
+            child: Padding(
+                padding: const EdgeInsets.fromLTRB(Nw.s16, Nw.s8, Nw.s16, Nw.s8),
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  if (_msg.isNotEmpty)
+                    ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 88),
+                        child: SingleChildScrollView(
+                            padding: const EdgeInsets.only(bottom: Nw.s8),
+                            child: Text(_msg,
+                                key: SiteAlertScenePage.msgKey,
+                                style: NwText.bodyMedium.copyWith(color: c.text, fontWeight: FontWeight.w600)))),
+                  _actions(oneRow: oneRow),
+                ]))));
   }
 
   @override
   Widget build(BuildContext context) {
+    final c = Nw.of(context);
     final ctx = _a.context;
     final pose = ctx['pose'] is Map ? ctx['pose'] as Map : null;
     final point = ctx['intercept'] is Map ? ctx['intercept'] as Map : null;
@@ -649,29 +732,55 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
     final where = '${ctx['zone'] ?? (_isRobot ? _a.robot : tr('Site', '站点'))}';
     final whereLine = _whereLine();
     final rest = <Widget>[
-      Text(where, style: D1Text.phoneTitle),
-      if (whereLine.isNotEmpty) Text(whereLine, style: D1Text.body),
+      NwCard(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        Text(tr('LOCATION', '位置'), style: NwText.labelSmall.copyWith(color: c.textSecondary)),
+        const SizedBox(height: Nw.s4),
+        Text(where, style: NwText.titleLarge.copyWith(color: c.text)),
+        if (whereLine.isNotEmpty) ...[
+          const SizedBox(height: Nw.s4),
+          Text(whereLine, style: NwText.bodyLarge.copyWith(color: c.text)),
+        ],
+        const SizedBox(height: Nw.s8),
+        ..._details(pose, point, taskId),
+      ])),
+      if (marks != null) ...[
+        const SizedBox(height: 12),
+        // 换了一张图（换了一条告警）就是另一个小地图：上一张的图不留在这一条上
+        NwMapThumb(
+            key: ValueKey<String>('scene-map-thumb ${marks.$1}:${marks.$2}'),
+            tapKey: SiteAlertScenePage.mapKey,
+            load: () => widget.api.mapPreviewPng(marks.$1, marks.$2),
+            label: marks.$3.map((m) => m.label).join(' · '),
+            action: tr('Show on map', '在图上看'),
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                    builder: (_) => SiteMapPreviewPage(
+                        api: widget.api, mapId: marks.$1, version: marks.$2, marks: marks.$3)))),
+      ],
       const SizedBox(height: 12),
-      _actions(),
-      if (_msg.isNotEmpty)
-        Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(_msg, key: SiteAlertScenePage.msgKey, style: D1Text.body.copyWith(color: D1Color.p2))),
-      const SizedBox(height: 16),
-      ..._details(pose, point, taskId, marks),
-      const SizedBox(height: 16),
-      ..._timeline(),
+      NwCard(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: _timeline())),
     ];
     // 横屏、平板、桌面：报警块在左、其余在右各滚各的；竖屏的手机一列到底。都不用懒加载的列表 ——
-    // 四个大按钮、现场细节不管滚到哪儿都得在（无障碍、测试按 key 找）。
+    // 现场细节不管滚到哪儿都得在（无障碍、测试按 key 找）。四个大按钮在底栏，不跟着滚。
     final wide = MediaQuery.sizeOf(context).width >= 700;
     return Scaffold(
       appBar: AppBar(
+          leading: Navigator.canPop(context)
+              ? IconButton(
+                  icon: const Icon(Icons.close_rounded),
+                  tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
+                  onPressed: () => Navigator.maybePop(context))
+              : null,
           title: Text(tr('Alarm', '告警')),
           actions: [
             if (widget.api.session?.canDispatch ?? false)
               StopAllButton(api: widget.api, onResult: (m) => setState(() => _msg = m)),
           ]),
+      bottomNavigationBar: _bar(wide),
       body: wide
           ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(
@@ -681,11 +790,11 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                   flex: 4,
                   child: SingleChildScrollView(
                       padding: const EdgeInsets.fromLTRB(0, 12, 12, 12),
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: rest))),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: rest))),
             ])
           : SingleChildScrollView(
               padding: const EdgeInsets.all(12),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 _alarmBlock(),
                 const SizedBox(height: 12),
                 ...rest,
