@@ -65,6 +65,7 @@ set -euo pipefail
 # @删除 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由单元(A5)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-zenohd.service zenoh 路由的自启链(enable 过的话)
 # @删除 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置(W09d;删了之后按系统原来的配置对时)
+# @删除 /etc/chrony/conf.d/d1max.conf                                     对时片段(决策 61;删了之后 chrony 回到厂家的配置)
 # @删除 /etc/systemd/system/d1max-bootguard.service                      老的守卫单元(多数机器上没有)
 # @删除 /etc/systemd/system/d1max-patrol.service                         老服务(W00c5e 退役;没重跑过装机脚本的老机器上还在)
 # @删除 /etc/systemd/system/multi-user.target.wants/d1max-patrol.service 老服务的自启链
@@ -199,6 +200,7 @@ rm_sys() {
     /usr/local/sbin/d1max-restart-now) ;;
     /etc/sudoers.d/d1max) ;;
     /etc/systemd/timesyncd.conf.d/d1max.conf) ;;
+    /etc/chrony/conf.d/d1max.conf) ;;
     *)
       warn "  拒绝删除 $target —— 不在允许的范围里。这是护栏,不是错误。"
       return 0
@@ -416,6 +418,10 @@ stop_service() {
   rm_sys "/etc/systemd/timesyncd.conf.d/d1max.conf" "对时配置(W09d),站点地址没填过就没有"
   if [ "$DO_IT" = 1 ]; then
     systemctl try-restart systemd-timesyncd >/dev/null 2>&1 || true
+  fi
+  rm_sys "/etc/chrony/conf.d/d1max.conf" "chrony 的对时片段(决策 61),对时不归 chrony 管的机器上没有"
+  if [ "$DO_IT" = 1 ]; then
+    systemctl try-restart chrony >/dev/null 2>&1 || true
   fi
   rm_sys "$UNIT_DIR/$OLD_UNIT" "老的守卫单元,多数机器上本来就没有"
   rm_sys "$UNIT_DIR/$LEGACY_UNIT" "老服务(W00c5e 退役),重跑过装机脚本的机器上已经没有"

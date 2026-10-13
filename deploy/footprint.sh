@@ -44,6 +44,8 @@ SURVEY_DIRS=(
   # 填了站点地址之后装机脚本在这儿写对时配置(W09d)。/etc 只看深度 1,看不进 /etc/systemd 底下,
   # 不单列的话这一处写盘在 diff 里只露成一条「/etc/systemd 被改动」(2026-10-08 装 C40221 查出)。
   "/etc/systemd/timesyncd.conf.d:1"
+  # 对时归 chrony 管的狗:站点对时的片段写在这儿(决策 61)。
+  "/etc/chrony/conf.d:1"
   "/etc:1"
   "/usr/local/bin:1"
   "/usr/local/lib:2"
@@ -236,6 +238,7 @@ function is_ours(p) {
   if (p ~ /^\/etc\/d1max($|\/)/) return 1
   if (p ~ /^\/var\/lib\/d1max($|\/)/) return 1
   if (p == "/etc/systemd/timesyncd.conf.d/d1max.conf") return 1
+  if (p == "/etc/chrony/conf.d/d1max.conf") return 1
   if (p ~ /^\/etc\/systemd\/system\/d1max-[^\/]*\.service$/) return 1
   if (p ~ /^\/etc\/systemd\/system\/[^\/]*\.target\.wants\/d1max-[^\/]*\.service$/) return 1
   return 0
@@ -246,6 +249,7 @@ function is_ours(p) {
 function is_parent(p) {
   if (p == "/etc" || p == "/opt" || p == "/var/lib") return 1
   if (p == "/etc/systemd/system" || p == "/etc/systemd/timesyncd.conf.d") return 1
+  if (p == "/etc/chrony/conf.d" || p == "/etc/chrony") return 1
   if (p == "/usr/local/bin" || p == "/usr/local/lib") return 1
   if (p == "/usr/local/sbin" || p == "/etc/sudoers.d") return 1
   # /etc 深度 1 看得见它;timesyncd.conf.d 是装机新建的话它的 mtime 跟着变,那一条另有记录。

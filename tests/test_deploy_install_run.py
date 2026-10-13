@@ -34,6 +34,7 @@ def _准备(root: Path) -> Path:
     """造假根、假命令、一个包目录;返回改过路径的 install.sh。"""
     subs = {"/opt/d1max": root / "opt/d1max", "/etc/d1max": root / "etc/d1max",
             "/etc/systemd": root / "etc/systemd", "/etc/sudoers.d": root / "etc/sudoers.d",
+            "/etc/chrony": root / "etc/chrony",
             "/usr/local/sbin": root / "usr/local/sbin", "/var/lib/d1max": root / "var/lib/d1max"}
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     for old, new in subs.items():
@@ -252,3 +253,60 @@ def test_W35_开关写了bridge但服务没设自启_提示一句_设了就不�
     assert "enable --now d1max-persons" not in got.stdout, "注释掉的不算"
     assert not any(c.startswith("systemctl enable") and "localizer" in c
                    for c in _调用(tmp_path)), "只提示,不替人 enable"
+
+
+def _chrony狗(root: Path, *, 主配置: str | None, env: str) -> Path:
+    script = _准备(root)
+    if 主配置 is not None:
+        (root / "etc/chrony").mkdir(parents=True)
+        (root / "etc/chrony/chrony.conf").write_text(主配置, encoding="utf-8")
+    (root / "etc/d1max").mkdir(parents=True)
+    (root / "etc/d1max/env").write_text("D1MAX_MAP=\nD1MAX_HOME=\nD1MAX_HAL=sim\n" + env,
+                                        encoding="utf-8")
+    shutil.copy2(DEPLOY / "d1max-timesync-conf", root / "pkg" / PKG_NAME / "deploy")
+    return script
+
+
+def test_决策61_对时归chrony管的狗_写一个单独的片段向站点对时_厂家的配置不动(tmp_path):
+    """2026-10-13 C40221:厂家的 chrony 跟上装电脑(慢 15 s)和没信号的秒脉冲,狗的钟一直不准,站点按
+    钟差拒发命令;整机断电再开是 1970 年。假 systemctl 不认 ``show``,等于 timesyncd 不在(masked)。"""
+    vendor = "refclock PPS /dev/pps0\nserver 192.168.168.19 iburst\nconfdir /etc/chrony/conf.d\n"
+    vendor = vendor.replace("/etc/chrony", str(tmp_path / "etc/chrony"))
+    script = _chrony狗(tmp_path, 主配置=vendor, env="D1MAX_SITE_MQTT=mqtts://10.0.0.5:8883\n")
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    frag = (tmp_path / "etc/chrony/conf.d/d1max.conf").read_text(encoding="utf-8")
+    assert "\nserver 10.0.0.5 iburst prefer trust\n" in frag and "\nmakestep 1.0 3\n" in frag
+    assert (tmp_path / "etc/chrony/chrony.conf").read_text(encoding="utf-8") == vendor, "厂家的不动"
+    assert "systemctl restart chrony" in _调用(tmp_path)
+    assert "chrony 向 10.0.0.5 对时" in got.stdout
+    assert not (tmp_path / "etc/systemd/timesyncd.conf.d/d1max.conf").exists()
+
+
+def test_决策61_厂家的主配置不读片段目录_不改它_说清楚要加哪一行(tmp_path):
+    vendor = "server 192.168.168.19 iburst\n# confdir /etc/chrony/conf.d\n"
+    script = _chrony狗(tmp_path, 主配置=vendor, env="D1MAX_SITE_NTP=site.lan\n")
+    got = _跑(tmp_path, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert "server site.lan iburst prefer trust" in (
+        tmp_path / "etc/chrony/conf.d/d1max.conf").read_text(encoding="utf-8")
+    assert "systemctl restart chrony" not in _调用(tmp_path), "没生效就不说对上了"
+    assert "confdir" in got.stderr and "不改厂家的文件" in got.stderr
+    assert "对时:chrony 向" not in got.stdout
+
+
+def test_决策61_站点地址没填_不留片段_没有chrony的机器照旧只提示(tmp_path):
+    a = tmp_path / "a"
+    a.mkdir()
+    script = _chrony狗(a, 主配置="confdir /etc/chrony/conf.d\n", env="D1MAX_SITE_MQTT=\n")
+    (a / "etc/chrony/conf.d").mkdir()
+    (a / "etc/chrony/conf.d/d1max.conf").write_text("server old.lan iburst\n", encoding="utf-8")
+    got = _跑(a, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert not (a / "etc/chrony/conf.d/d1max.conf").exists(), "指着旧主机的片段不留"
+    b = tmp_path / "b"
+    b.mkdir()
+    script = _chrony狗(b, 主配置=None, env="D1MAX_SITE_MQTT=mqtts://10.0.0.5:8883\n")
+    got = _跑(b, script)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert not (b / "etc/chrony").exists() and "我们不配" in got.stderr

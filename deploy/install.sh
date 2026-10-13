@@ -34,6 +34,7 @@ set -euo pipefail
 # @写盘 /etc/systemd/system/d1max-lidar-merge.service                     前后雷达合并单元(W09i;只装不 enable)
 # @写盘 /etc/systemd/system/d1max-zenohd.service                          自带算力板的 zenoh 路由(A5;只装不 enable;没填网关不起)
 # @写盘 /etc/systemd/timesyncd.conf.d/d1max.conf                          对时配置:向站点主机对时(W09d)
+# @写盘 /etc/chrony/conf.d/d1max.conf                                     对时归 chrony 管的狗:向站点主机对时(决策 61)
 #
 # 这份脚本不写、但 uninstall.sh 要负责收掉的(老机器上可能还在;这里只 rm/disable 它们,从来不写):
 #
@@ -522,14 +523,53 @@ fi
 # 配置按 /etc/d1max/env 算(站点主机:D1MAX_SITE_NTP,没有从 D1MAX_SITE_MQTT 取);站点地址还没填就先不配,
 # 填了再跑一遍这个脚本。用系统自带的 systemd-timesyncd,不另装包(狗上离线)。
 TIMESYNC_CONF=/etc/systemd/timesyncd.conf.d/d1max.conf
+CHRONY_CONF=/etc/chrony/conf.d/d1max.conf
+# 厂家那份主配置:**只读不写**(看它在不在、读不读 conf.d)。
+CHRONY_DROPIN_DIR=$(dirname "$CHRONY_CONF")
+CHRONY_MAIN="$(dirname "$CHRONY_DROPIN_DIR")/chrony.conf"
 # 只看单元在不在不够:C40221 上 systemd-timesyncd 的包卸了、单元 masked,`systemctl cat` 照样成功,
 # 结果写了一份不生效的配置(2026-10-08)。单元要真能载入(LoadState=loaded)才算有。
 if [[ "$(systemctl show -p LoadState --value systemd-timesyncd 2>/dev/null)" != loaded ]]; then
   # 装的是 chrony / ntp 的话 timedatectl 管的是它们,这份配置不生效(W09d 内审):说清楚,不假装配上了。
-  # 厂家的 chrony 不动(决策 47):狗的钟不准由站点的时差告警兜着。
   rm -f "$TIMESYNC_CONF"
-  echo "  !! 这台机器的对时不归 systemd-timesyncd 管(没装或 masked;多半是厂家的 chrony),我们不配、" >&2
-  echo "     也不动厂家的配置。钟差站点会报(真机项 3d.28)" >&2
+  if [[ -f "$CHRONY_MAIN" ]]; then
+    # 对时归厂家的 chrony 管(决策 61,2026-10-13,改掉决策 47 的「不动」):厂家配的源是 RTK 秒脉冲(没天线
+    # 就没信号)和上装电脑(C40221 上慢 15 s;裸机上没有这台),狗的钟一直不准,站点按钟差拒发命令;整机
+    # 断电再开是 1970 年。加**一个单独的片段**把站点主机设成首选、可信的源;厂家那份 chrony.conf 不改,
+    # 删掉这个片段、重启 chrony 就回到厂家的配置。
+    if ts_conf=$(bash "$PKG/deploy/d1max-timesync-conf" /etc/d1max/env); then
+      ts_host=$(sed -n 's/^NTP=//p' <<<"$ts_conf")
+      install -d -m 0755 "$CHRONY_DROPIN_DIR"
+      {
+        echo "# D1 Max(决策 61):狗向站点主机对时。删掉这个文件、重启 chrony 就回到厂家的配置。"
+        echo "# prefer trust:别的源(上装电脑、没信号的秒脉冲)跟它对不上时听它的。"
+        echo "server $ts_host iburst prefer trust"
+        echo "# 差过 1 s 直接拨(头 3 次):断电再开是 1970 年,慢慢调要调几年。"
+        echo "makestep 1.0 3"
+      } > "$CHRONY_CONF.tmp"
+      chmod 0644 "$CHRONY_CONF.tmp"
+      mv -f "$CHRONY_CONF.tmp" "$CHRONY_CONF"
+      if grep -qE "^[[:space:]]*(confdir|include)[[:space:]]+${CHRONY_DROPIN_DIR//./\\.}" \
+          "$CHRONY_MAIN"; then
+        if systemctl restart chrony; then
+          echo "  对时:chrony 向 $ts_host 对时(chronyc sources 看;带 ^* 的那一行应该是它)"
+        else
+          echo "  !! chrony 重启不了,对时没配上" >&2
+        fi
+      else
+        echo "  !! 对时片段写好了($CHRONY_CONF),但厂家的 $CHRONY_MAIN 不读 conf.d:" >&2
+        echo "     我们不改厂家的文件。要生效,在它末尾加一行  confdir $CHRONY_DROPIN_DIR  再" >&2
+        echo "     sudo systemctl restart chrony(真机项 3f.20)" >&2
+      fi
+    else
+      rm -f "$CHRONY_CONF"
+      systemctl try-restart chrony >/dev/null 2>&1 || true
+      echo "  对时:先不配(原因见上一行)"
+    fi
+  else
+    echo "  !! 这台机器的对时不归 systemd-timesyncd 管(没装或 masked),也没有 $CHRONY_MAIN," >&2
+    echo "     我们不配。钟差站点会报(真机项 3d.28)" >&2
+  fi
 elif ts_conf=$(bash "$PKG/deploy/d1max-timesync-conf" /etc/d1max/env); then
   install -d -m 0755 "$(dirname "$TIMESYNC_CONF")"
   printf '%s\n' "$ts_conf" > "$TIMESYNC_CONF.tmp"
