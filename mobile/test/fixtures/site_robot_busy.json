@@ -56,6 +56,15 @@
       "relocalize": {
         "needs_pose": false
       },
+      "running_config": {
+        "confirms": "load",
+        "kept": [],
+        "map_id": "estate-1",
+        "map_version": "7",
+        "previous": null,
+        "zones_digest": "c371876a5eefd14d43bdd271b5f9690eb44d0b970f171cb8f7219f4ff8153d3d",
+        "zones_rev": 0
+      },
       "speed_cap": {
         "max_speed_mps": null
       },
@@ -76,8 +85,8 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-ba366b2f93c1",
-      "issued_at": 1791985984857,
+      "command_id": "cmd-f723edf43272",
+      "issued_at": 1791995367245,
       "issued_by": "alice",
       "kind": "goto",
       "payload": {
@@ -93,21 +102,21 @@
       },
       "priority": 60,
       "robot_id": "A",
-      "task_id": "task-6d043cde0511"
+      "task_id": "task-e70763966c0f"
     }
   ],
   "events": [
     {
-      "boot_id": "boot-6a9ed85275",
+      "boot_id": "boot-dabfb6b5fd",
       "data": {
         "faults": []
       },
       "kind": "robot_fault",
       "seq": 1,
-      "stamp": 1791985984788
+      "stamp": 1791995367185
     }
   ],
-  "expires_at": 1792985984740,
+  "expires_at": 1792995367134,
   "fresh": true,
   "held": null,
   "loc": null,
@@ -115,10 +124,33 @@
   "revoked": false,
   "robot_id": "A",
   "rtk": null,
+  "running": {
+    "confirms": "load",
+    "kept": [],
+    "legacy": false,
+    "map": {
+      "dog": null,
+      "match": null,
+      "site": null
+    },
+    "map_id": "estate-1",
+    "map_version": "7",
+    "mission": null,
+    "previous": null,
+    "problems": [],
+    "zones": {
+      "basis": "digest",
+      "dog": "c371876a5eefd14d43bdd271b5f9690eb44d0b970f171cb8f7219f4ff8153d3d",
+      "dog_rev": 0,
+      "match": true,
+      "site": "c371876a5eefd14d43bdd271b5f9690eb44d0b970f171cb8f7219f4ff8153d3d",
+      "site_rev": 0
+    }
+  },
   "status": {
-    "boot_id": "boot-6a9ed85275",
+    "boot_id": "boot-dabfb6b5fd",
     "control_epoch": 1,
-    "last_seen": 1791985984860,
+    "last_seen": 1791995367252,
     "online": true,
     "ready": {
       "control": true,
@@ -129,8 +161,8 @@
     "schema": "1.0",
     "task": {
       "kind": "goto",
-      "state": "pending",
-      "task_id": "task-6d043cde0511"
+      "state": "running",
+      "task_id": "task-e70763966c0f"
     }
   }
 }
