@@ -108,6 +108,9 @@ LEVEL_OF: dict[str, Level] = {
     "site_too_old": Level.P2,
     # 定位变差或打滑(W29,决策 41):狗原地停下等恢复;30 秒还没好再报 loc_lost_paused(P1)。
     "loc_degraded": Level.P2,
+    # 空闲的狗定位不可信两分钟(对账 S6;刚起来、刚换图宽限五分钟):派不了单,今天之内要人去设位置;
+    # 好了站点自己解决。
+    "loc_lost_idle": Level.P2,
     "estop_pressed": Level.P1,
     # lease_expired、suspend_stale、watchdog_died 三类原来由狗上老服务报;W00c5e 之后没有来源
     # (遥控租约在站点上、接管不挂起),种类留着是为了库里的老记录读得懂。

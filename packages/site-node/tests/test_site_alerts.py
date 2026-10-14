@@ -524,3 +524,145 @@ def test_W29外审3_P1写不进去_下一拍接着报(台, monkeypatch):
     monkeypatch.setattr(desk, "raise_alert", real)
     src.tick()
     assert "loc_lost_paused" in _kinds(desk)
+
+
+# ------------------------------------------------------------ 对账 S6:空闲的狗定位不可信
+
+
+def _空闲丢定位(desk):
+    return [a for a in desk.book.all() if a.kind == "loc_lost_idle"]
+
+
+def _遥测(c, reason):
+    return Telemetry(stamp=c.ms, pose=None, battery_pct=80.0, task_state=None, loc_quality=0.0,
+                     loc={"source": "localizer", "anchored": False, "sigma_m": 0.5,
+                          "reason": reason, "localizer": "bridge"})
+
+
+def test_对账S6_空闲的狗定位不可信_过两分钟报P2_好了自己解决_再丢再报(台):
+    from d1max_site.alert_sources import LOC_IDLE_BOOT_S, LOC_IDLE_P2_S
+    assert (LOC_IDLE_P2_S, LOC_IDLE_BOOT_S) == (120, 300), "两条线的来由见常量注释,改了要重核"
+    c, db, desk, src, *_ = 台
+    src.on_status("A", _status())
+    c.ms += LOC_IDLE_BOOT_S * 1000                        # 狗起来的那一阵过去了
+    src.on_status("A", _status(loc_ok=False))
+    src.on_telemetry("A", _遥测(c, "定位器说定位丢了:雷达没数据"))
+    c.ms += LOC_IDLE_P2_S * 1000 - 1000
+    src.tick()
+    assert _空闲丢定位(desk) == [], "两分钟以内:定位器自己能好的(雷达挡了又恢复、重定位)不报"
+    c.ms += 1000
+    src.tick()
+    src.tick()
+    [a] = _空闲丢定位(desk)
+    assert a.level.value == "P2" and a.count == 1 and a.resolved_ms is None
+    assert "雷达没数据" in a.detail and "派不了" in a.title
+    src.on_status("A", _status(loc_ok=False))             # 状态重发、一直不好:不重复报
+    c.ms += 600_000
+    src.tick()
+    assert [x.count for x in _空闲丢定位(desk)] == [1]
+    src.on_status("A", _status())                         # 好了:自己解决
+    [a] = _空闲丢定位(desk)
+    assert a.resolved_ms is not None and a.resolved_by == "site:loc_ok"
+    src.on_status("A", _status(loc_ok=False))             # 再丢:新的一回
+    c.ms += LOC_IDLE_P2_S * 1000
+    src.tick()
+    assert len([x for x in _空闲丢定位(desk) if x.resolved_ms is None]) == 1
+
+
+def test_对账S6_空闲丢定位_短的不报_刚起来和刚换图宽限五分钟(台):
+    from d1max_site.alert_sources import LOC_IDLE_BOOT_S, LOC_IDLE_P2_S
+    c, db, desk, src, *_ = 台
+    t0 = c.ms
+    src.on_status("A", _status(loc_ok=False))             # 刚上线:等人给初始位置
+    c.ms = t0 + LOC_IDLE_P2_S * 1000 + 5000
+    src.tick()
+    assert _空闲丢定位(desk) == [], "刚起来:人多半正在设位置"
+    c.ms = t0 + LOC_IDLE_BOOT_S * 1000
+    src.tick()
+    assert [a.robot for a in _空闲丢定位(desk)] == ["A"], "宽限过了还没设:报"
+    src.on_status("B", _status())
+    c.ms += LOC_IDLE_BOOT_S * 1000
+    t1 = c.ms
+    src.on_event("B", _ev("map_activated", map_id="m", version="2"))
+    src.on_status("B", _status(loc_ok=False))             # 新图:定位器要人给初始位置
+    c.ms = t1 + LOC_IDLE_P2_S * 1000 + 5000
+    src.tick()
+    assert "B" not in [a.robot for a in _空闲丢定位(desk)]
+    c.ms = t1 + LOC_IDLE_BOOT_S * 1000
+    src.tick()
+    assert "B" in [a.robot for a in _空闲丢定位(desk)]
+    src.on_status("C", _status())
+    c.ms += LOC_IDLE_BOOT_S * 1000
+    src.on_status("C", _status(loc_ok=False))
+    c.ms += 60_000
+    src.on_status("C", _status())                         # 一分钟就好了
+    c.ms += 600_000
+    src.tick()
+    assert "C" not in [a.robot for a in _空闲丢定位(desk)]
+    src.on_status("D", Status(online=True, boot_id="d1", ready=_ready(), control_epoch=1,
+                              last_seen=1, task=None))
+    c.ms += LOC_IDLE_BOOT_S * 1000
+    src.on_status("D", Status(online=True, boot_id="d2", ready=_ready(loc_ok=False),
+                              control_epoch=1, last_seen=1, task=None))   # 代理重启过
+    c.ms += LOC_IDLE_P2_S * 1000 + 5000
+    src.tick()
+    assert "D" not in [a.robot for a in _空闲丢定位(desk)], "换了 boot_id:也是刚起来"
+
+
+def test_对账S6_跑着任务丢定位归原来那两条_空闲的不另报_掉线了不计(台):
+    from d1max_site.alert_sources import LOC_IDLE_BOOT_S
+    c, db, desk, src, pushed, stale = 台
+    src.on_status("A", _status())
+    c.ms += LOC_IDLE_BOOT_S * 1000
+    src.on_status("A", _status(task=_running(), loc_ok=False))
+    c.ms += 3_600_000
+    src.tick()
+    assert _空闲丢定位(desk) == [] and "loc_lost_paused" in _kinds(desk)
+    src.on_status("B", _status())
+    c.ms += LOC_IDLE_BOOT_S * 1000
+    src.on_status("B", _status(loc_ok=False))
+    c.ms += 60_000
+    stale.add("B")
+    src.tick()                                            # 掉线了:停表
+    c.ms += 3_600_000
+    src.tick()
+    assert "B" not in [a.robot for a in _空闲丢定位(desk)]
+    stale.discard("B")
+    src.on_status("B", _status(loc_ok=False))             # 回来了、还是不好:从回来起重新计
+    src.tick()
+    assert "B" not in [a.robot for a in _空闲丢定位(desk)], "掉线那一小时不算进去"
+    from d1max_site.alert_sources import LOC_IDLE_P2_S
+    c.ms += LOC_IDLE_P2_S * 1000
+    src.tick()
+    assert "B" in [a.robot for a in _空闲丢定位(desk)]
+
+
+def test_对账S6_站点重启前报过_重启后不重复报_好了照样解决_写不进去下一拍再报(台, monkeypatch):
+    from d1max_site.alert_sources import LOC_IDLE_P2_S
+    c, db, desk, src, *_ = 台
+    desk.raise_alert(kind="loc_lost_idle", robot="B", title="空闲的狗定位不可信")
+    src.seed("B", _status(loc_ok=False))                  # 站点重启时还丢着;停机期间好了
+    src.on_status("B", _status())
+    assert all(x.resolved_ms is not None for x in _空闲丢定位(desk)), "重启后第一份状态就好了也解决"
+    desk.raise_alert(kind="loc_lost_idle", robot="A", title="空闲的狗定位不可信")
+    src.seed("A", _status(loc_ok=False))                  # 站点重启:读回库里的状态做种
+    src.on_status("A", _status(loc_ok=False))
+    c.ms += LOC_IDLE_P2_S * 1000
+    src.tick()
+    assert [x.count for x in _空闲丢定位(desk) if x.robot == "A"] == [1], "簿子里还挂着:不重复报"
+    src.on_status("A", _status())
+    assert all(x.resolved_ms is not None for x in _空闲丢定位(desk))
+    src.on_status("A", _status(loc_ok=False))
+    c.ms += LOC_IDLE_P2_S * 1000
+    real = desk.raise_alert
+
+    def 炸(**kw):
+        if kw["kind"] == "loc_lost_idle":
+            raise RuntimeError("库锁住了")
+        return real(**kw)
+    monkeypatch.setattr(desk, "raise_alert", 炸)
+    src.tick()
+    monkeypatch.setattr(desk, "raise_alert", real)
+    assert len([x for x in _空闲丢定位(desk) if x.resolved_ms is None]) == 0
+    src.tick()
+    assert len([x for x in _空闲丢定位(desk) if x.resolved_ms is None]) == 1

@@ -93,6 +93,13 @@ def _hit(text: str, words: tuple[str, ...]) -> bool:
 
 #: 定位变差、打滑(W29):先报 P2,这么多秒还没恢复再报 P1。
 LOC_P1_S = 30
+#: 空闲的狗定位不可信(对账 S6):连着这么多秒报 P2 ``loc_lost_idle``「派不了单」,好了自己解决。两分钟:
+#: 定位器自己能好的都比这短(2026-10-13 雷达挡了又恢复约 45 s;MOLA 重启后按最后的位置重定位,σ 降回
+#: 可信约 20 s;换先验几十秒);再长,就要等到排程派不出去(P1 漏跑)、出了入侵派不了才知道。
+LOC_IDLE_P2_S = 120
+#: 狗刚起来(第一次见、换了 boot_id)或者刚换完图:定位器要人到场给初始位置(真定位器重开过、新图上都是
+#: 这样),人多半正在弄 —— 从那一刻起宽限到这么多秒才报,不在人设位置的时候吵。
+LOC_IDLE_BOOT_S = 300
 
 
 @dataclass
@@ -104,6 +111,13 @@ class _Mem:
     #: 跑着任务、定位不行从哪一刻起(站点的钟;W29:先报 P2,30 秒还没好再报 P1)。
     loc_since: int | None = None
     loc_p1: bool = False
+    #: 空闲的狗定位不可信(对账 S6):最近一份在线状态里定位不行没有、空闲着不行从哪一刻起(站点的钟)、
+    #: 这一回报过没有、起来 / 换图的宽限到哪一刻、狗最近一条遥测里说的原因。
+    loc_bad: bool = False
+    loc_idle_since: int | None = None
+    loc_idle_p2: bool = False
+    loc_quiet_until: int = 0
+    loc_reason: str = ""
     fallen: bool = False
     skew: bool = False
     disk80: bool = False
@@ -194,6 +208,10 @@ class SiteAlertSources:
                 # W29 外审 3:站点重启前就在丢定位 —— 从现在起重新计 30 秒(之前的时长不知道,
                 # 宁可晚一点报 P1,不能不报)
                 m.loc_since, m.loc_p1 = self._now(), False
+            # 对账 S6:空闲着丢定位的同样从现在起计;库里挂着的那条,好了照样解决
+            m.loc_bad = not s.ready.loc_ok
+            if m.loc_bad and not m.running:
+                m.loc_idle_since, m.loc_idle_p2 = self._now(), False
             if m.running:
                 m.started = s.task.task_id
 
@@ -209,6 +227,7 @@ class SiteAlertSources:
             # 狗重启过:它上一辈子的故障(跌倒)不再算数,起来第一拍它会报全集。
             m.boot_id = s.boot_id
             m.fallen = False
+            m.loc_quiet_until = self._now() + LOC_IDLE_BOOT_S * 1000   # 对账 S6:刚起来,宽限
         if m.offline:
             m.online_since = self._now()
         m.offline = False
@@ -233,10 +252,47 @@ class SiteAlertSources:
         elif m.loc_since is None:
             m.loc_since, m.loc_p1 = self._now(), False   # 丢着定位、没在计(W29 外审 3)
         m.loc_lost_running = loc
+        self._loc_idle(rid, m, idle_bad=not running and not s.ready.loc_ok, ok=s.ready.loc_ok)
         if running and s.task.task_id != m.started:
             m.started = s.task.task_id
             self.desk.raise_alert(kind="run_start", robot=rid,
                                   title=f"开跑:{s.task.kind} {s.task.task_id}")
+
+    def _loc_idle(self, rid: str, m: _Mem, *, idle_bad: bool, ok: bool) -> None:
+        """空闲的狗定位不可信(对账 S6):开表 / 停表;定位好了把挂着的那条解决(解决不成下一份状态
+        再来)。报在 ``tick`` 里(到点才报)。"""
+        if idle_bad and m.loc_idle_since is None:
+            m.loc_idle_since, m.loc_idle_p2 = self._now(), False
+        elif not idle_bad:
+            m.loc_idle_since = None
+        if ok and m.loc_bad:
+            try:
+                self.desk.resolve_all(rid, "loc_lost_idle", who="site:loc_ok")
+            except Exception:
+                log.exception("%s 定位好了,空闲丢定位那条解决不了,下一份状态再来", rid)
+                return
+            m.loc_idle_p2 = False
+        m.loc_bad = not ok
+
+    def _loc_idle_due(self, rid: str, m: _Mem) -> None:
+        """到点(连着 :data:`LOC_IDLE_P2_S`,起来、换图后不早于宽限)还不好:报 P2,这一回只报一次;
+        簿子里还挂着(站点重启前报过)不重复报;写不进去下一拍再报。"""
+        if m.offline or m.loc_idle_since is None or m.loc_idle_p2:
+            return
+        now = self._now()
+        if now < max(m.loc_idle_since + LOC_IDLE_P2_S * 1000, m.loc_quiet_until):
+            return
+        try:
+            if not self.desk.has_open(rid, "loc_lost_idle"):
+                detail = (f"已经 {(now - m.loc_idle_since) // 60_000} 分钟多;"
+                          f"狗说:{m.loc_reason or '没说为什么'}。到场设位置(手机单狗页「设位置」),"
+                          "或者查定位器;好了这条自己解决")
+                self.desk.raise_alert(kind="loc_lost_idle", robot=rid,
+                                      title="空闲的狗定位不可信:派不了单", detail=detail[:300])
+        except Exception:
+            log.exception("%s 空闲丢定位 P2 报不出去,下一拍再报", rid)
+            return
+        m.loc_idle_p2 = True
 
     def step(self) -> None:
         """站点主循环每 ``STEP_S`` 秒调一次:看掉线,对账上装告警,再让 P1 未确认的升档,再修剪内存。"""
@@ -263,6 +319,7 @@ class SiteAlertSources:
                     log.exception("%s 定位丢失 P1 报不出去,下一拍再报", rid)
                     continue
                 m.loc_p1 = True
+            self._loc_idle_due(rid, m)
 
     def _offline(self, rid: str, m: _Mem) -> None:
         if m.offline:
@@ -270,7 +327,7 @@ class SiteAlertSources:
         m.offline = True
         # 掉线期间的事看不见:回来之后重新从它报的状态认起。跌倒的记忆也清掉(狗可能被扶起、重启)。
         m.estop = m.loc_lost_running = m.fallen = False
-        m.loc_since = None
+        m.loc_since = m.loc_idle_since = None              # 掉线不计(loc_bad 留着:回来好了照样解决)
         if m.online_since is not None and self._now() - m.online_since < OFFLINE_REARM_MS:
             log.info("%s 回来不到 %d s 又掉线:算同一次,不另起告警", rid, OFFLINE_REARM_MS // 1000)
             return
@@ -346,6 +403,10 @@ class SiteAlertSources:
                                   title=f"狗上正在用的图坏了:{which},不能自主",
                                   detail=f"{str(d.get('reason', ''))[:240]};"
                                          "重新下发这一版(同一版也会重新下载、逐个核对)")
+        elif e.kind == "map_activated":
+            # 对账 S6:换了图,定位器要人在新图上给初始位置 —— 空闲丢定位宽限一阵
+            m = self._m(rid)
+            m.loc_quiet_until = max(m.loc_quiet_until, self._now() + LOC_IDLE_BOOT_S * 1000)
         elif e.kind in ("map_activate_failed", "map_build_failed"):
             what = "换图" if e.kind == "map_activate_failed" else "重建"
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
@@ -478,6 +539,8 @@ class SiteAlertSources:
         m = self._m(rid)
         if t.pose is not None:
             m.pose, m.pose_ms = t.pose.to_wire(), self._now()
+        if isinstance(t.loc, dict):
+            m.loc_reason = str(t.loc.get("reason") or "")[:200]   # 对账 S6:空闲丢定位的告警带上
         if abs(skew) > SKEW_ALARM_S and not m.skew:
             m.skew = True
             self.desk.raise_alert(kind="clock_skew", robot=rid, title="狗的钟不准",

@@ -120,6 +120,10 @@
     "en": "Localization degraded, robot paused",
     "zh": "定位变差，原地等恢复"
   },
+  "loc_lost_idle": {
+    "en": "Idle robot not localized, cannot dispatch",
+    "zh": "空闲的狗定位不可信，派不了单"
+  },
   "estop_pressed": {
     "en": "E-stop pressed",
     "zh": "急停被按下"
