@@ -57,7 +57,9 @@ def test_导入任务包_成为当前包(tmp_path):
     got = import_bundle(db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
     assert got["missions"] == ["loop"] and got["schedule_entries"] == ["nightly"]
     act = active_bundle(db)
-    assert (act.bundle_id, act.version) == ("estate-kl", 1)
+    # 2026-10-14:任务、排程落进路线库(唯一真理源),不再有「当前包」
+    assert (act.bundle_id, act.version) == ("site-routes", 1)
+    assert got["routes"]["added"] == ["loop"] and got["schedules"]["added"] == ["nightly"]
     assert act.missions["loop"].map_id == "estate-1"
     assert act.schedule.timezone == "Asia/Kuala_Lumpur"
     db.close()
@@ -76,7 +78,8 @@ def test_版本不升_被改过_排程指向不存在的任务_都拒(tmp_path):
     坏 = 排程.replace("mission: loop", "mission: ghost")
     with pytest.raises(CatalogError, match="ghost"):
         import_bundle(db, 打包(tmp_path, 4, schedule=坏), imported_by="alice", now_ms=4)
-    assert active_bundle(db).version == 2, "拒掉的不影响当前包"
+    assert sorted(active_bundle(db).missions) == ["loop"] and active_bundle(db).version == 1, \
+        "拒掉的不影响路线库"
     db.close()
 
 
@@ -243,7 +246,7 @@ async def test_排程写了robot就只派那一台(站, tmp_path):
 async def test_视图有下一轮与最近一次(站):
     t = 站
     v = t.sched.view()
-    assert v["bundle"] == {"bundle_id": "estate-kl", "version": 1}
+    assert v["bundle"] == {"bundle_id": "site-routes", "version": 1}
     assert v["entries"][0]["next_run"].startswith("2027-03-15T22:00")
     assert v["entries"][0]["last"] is None
     assert v["clock_checked"] is False, "没接参照就如实说没核对"

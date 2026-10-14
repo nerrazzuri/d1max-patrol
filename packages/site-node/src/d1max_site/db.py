@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 57                      # 决策 66、R2:区域收紧免确认(确认过的那一份)、带过来的建议
+SCHEMA_VERSION = 58                      # 路线库(站点存的路线、排程是唯一真理源),老的当前包抄进来
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -536,6 +536,42 @@ CREATE TABLE IF NOT EXISTS robot_state (
     capabilities TEXT,
     updated_at   INTEGER NOT NULL
 );
+-- 巡检路线库(2026-10-14 用户定:站点存的路线是唯一真理源;网页、手机都能改;任务包导进来也落这里)。
+-- 一条路线 = 一份任务定义(契约 ``mission`` 的线格式,绑地图号 + 版本);
+-- 修订号每改 +1(乐观并发,同区域)。
+CREATE TABLE IF NOT EXISTS routes (
+    route_id    TEXT PRIMARY KEY,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL DEFAULT '',
+    definition  TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    updated_ms  INTEGER NOT NULL,
+    updated_by  TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT ''
+);
+-- 排程(契约 ``schedule`` 一条 entry 的线格式)。``active_from_ms``:这一条从什么时候起算数 ——
+-- 新加、改了钟点的
+-- 那一刻;那之前到点的轮次不跑、不补记(原来是「任务包导入之前到点的不算」,按包整体算)。
+CREATE TABLE IF NOT EXISTS route_schedules (
+    entry_id       TEXT PRIMARY KEY,
+    definition     TEXT NOT NULL,
+    revision       INTEGER NOT NULL,
+    active_from_ms INTEGER NOT NULL,
+    updated_ms     INTEGER NOT NULL,
+    updated_by     TEXT NOT NULL DEFAULT '',
+    source         TEXT NOT NULL DEFAULT ''
+);
+-- 路线库整体:一行。``revision`` 每次改动 +1(导出成任务包时当版本号);
+-- ``timezone`` 排程的时区(没设 NULL);
+-- ``last_import`` 最近一次导入的任务包(JSON,没有是空串)。
+CREATE TABLE IF NOT EXISTS route_store (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    revision    INTEGER NOT NULL DEFAULT 0,
+    timezone    TEXT,
+    updated_ms  INTEGER NOT NULL DEFAULT 0,
+    updated_by  TEXT NOT NULL DEFAULT '',
+    last_import TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -670,8 +706,46 @@ class SiteDB:
                 self._conn.execute(
                     "UPDATE nav_zones SET confirmed_body=body, confirmed_how='confirm' "
                     "WHERE confirmed_rev = revision AND confirmed_body IS NULL")
+            if row is not None and str(row[0]).isdigit() and int(row[0]) < 58:
+                self._migrate_routes()
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
+
+    def _migrate_routes(self) -> None:
+        """58:路线库成为唯一真理源。升上来时把**当前任务包**(``bundles.active = 1``)的任务、
+        排程原样抄成
+        路线库的行 —— 派遣、排程照旧(不改行为):每条排程从**那次导入**起算数(跟原来「导入之前到点的
+        不算」一样),时区照抄。别的(不是当前的)包只留在导入记录里,原来就不用。没有当前包 = 空库。
+        没绑地图版本的老任务(R1 之前导入的)照抄:读得出来、不派,路线页上标出来要人核。"""
+        import json
+        b = self._conn.execute("SELECT * FROM bundles WHERE active=1").fetchone()
+        if b is None:
+            return
+        src = f"bundle {b['bundle_id']} v{b['version']}"
+        at, by = int(b["imported_at"]), str(b["imported_by"])
+        for r in self._conn.execute("SELECT mission_id, definition FROM missions "
+                                    "WHERE bundle_id=? AND version=?",
+                                    (b["bundle_id"], b["version"])).fetchall():
+            d = json.loads(r["definition"])
+            self._conn.execute(
+                "INSERT OR IGNORE INTO routes(route_id, map_id, map_version, definition, revision, "
+                "updated_ms, updated_by, source) VALUES (?,?,?,?,1,?,?,?)",
+                (r["mission_id"], str(d.get("map_id", "")), str(d.get("map_version", "")),
+                 r["definition"], at, by, src))
+        sched = json.loads(b["schedule"])
+        entries = sched.get("entries") or []
+        for e in entries:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO route_schedules(entry_id, definition, revision, "
+                "active_from_ms, updated_ms, updated_by, source) VALUES (?,?,1,?,?,?,?)",
+                (str(e["id"]), json.dumps(e, ensure_ascii=False), at, at, by, src))
+        # 包里没有 schedule.yaml 时导入记的是占位的 UTC、没有排程:那不是人定的时区,不抄
+        tz = sched.get("timezone") if entries or sched.get("timezone") != "UTC" else None
+        imp = json.dumps({"bundle_id": b["bundle_id"], "version": b["version"], "at_ms": at,
+                          "by": by}, ensure_ascii=False)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO route_store(id, revision, timezone, updated_ms, updated_by, "
+            "last_import) VALUES (1, 1, ?, ?, ?, ?)", (tz, at, by, imp))
 
     def _migrate_sighting_kind(self, decl: str, *, add_column: bool, stored: int | None) -> None:
         """在场记录的 ``kind`` 一次性修复(B 阶段外审复查 R1)。``stored``:库里记的结构版本

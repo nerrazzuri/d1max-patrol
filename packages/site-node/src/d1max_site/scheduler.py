@@ -1,6 +1,7 @@
 """站点的排程执行器(W00c2a,吸收 W06;设计决定三 A:排程在站点执行)。
 
-每拍(``serve`` 里 30 s 一次)对**当前包**的每条排程用契约的 ``decide``(与狗上老执行器同一份
+每拍(``serve`` 里 30 s 一次)对**路线库**(``routes.py``,站点存的路线、排程)的每条排程
+用契约的 ``decide``(与狗上老执行器同一份
 纯函数)判一次,``pick`` 选出这一拍起跑哪一条,选狗、派 ``patrol``。判据与账:
 
 - ``last_started`` 落库(``schedule_state``),站点重启从库里恢复 —— 同一轮不起第二次。
@@ -8,8 +9,9 @@
   发完再记的话下一拍会再派一趟,狗会排在第一趟后面再跑一遍。回执超时 → 这一轮就算起跑过了;
   狗明确拒收 → 这一行改记 ``dispatch_failed``,这一轮也不再重派(每 30 s 重发一条注定被拒的命令
   没有意义)。
-- **任务包导入之前就到点的那一轮不算**:导入一个带 08:00 ``run_late`` 的包不会立刻补跑一趟迟了
-  十几个小时的;也因此不同任务包里同名的排程不会互相串账(``last_started`` 按排程 id 存)。
+- **排程加进来(新加、改了、任务包导入)之前就到点的那一轮不算**
+  (路线库里每条排程自己记 ``active_from_ms``):
+  加一条 08:00 ``run_late`` 的排程不会立刻补跑一趟迟了十几个小时的(``last_started`` 按排程 id 存)。
 - 每拍按优先级把到点的排程逐条过:每条挑自己能派的狗,已经被更优先的排程在这一拍占了的狗不算。
   只有「本来能派、狗被更优先的占了」才记 ``displaced``;一条派不出去不挡别的狗的排程。
 - 每条排程每一轮的去向都记一行 ``schedule_runs``(同一轮同一种去向只记一次):
@@ -243,8 +245,8 @@ class SiteScheduler:
         decisions = []
         for e in act.schedule.entries:
             d = decide(e, now=now, last_started_ms=self.last_started(e.id))
-            if d.scheduled_ms is not None and d.scheduled_ms < act.imported_at:
-                continue                     # 导入之前就到点的那一轮:这个包那时还不存在
+            if d.scheduled_ms is not None and d.scheduled_ms < act.since(e.id):
+                continue                     # 这条排程加进来、改动之前就到点的那一轮:那时它还不存在
             decisions.append((e, d))
         for e, d in decisions:
             if d.kind in (DecisionKind.SKIP, DecisionKind.ALARM) and d.scheduled_ms is not None:
@@ -283,7 +285,7 @@ class SiteScheduler:
         又不是最新一轮**、还没有定论(``started``/``skip``/``alarm``)的轮次逐轮按 ``on_missed`` 记账
         (``run_late`` 的老轮次被后面一轮取代了,记 ``skip``)。同一轮同一种去向只记一次、只说一次,
         重启、重复的拍不会再说。最新那一轮照旧归 ``decide``(在窗口里就派)。"""
-        since = max(act.imported_at, now_ms - CATCHUP_MS)
+        since = max(act.since(entry.id), now_ms - CATCHUP_MS)
         start = datetime.fromtimestamp(since / 1000, tz=now.tzinfo)
         rounds = occurrences_between(entry, start, now)
         for occ in rounds[:-1]:                       # 最后一轮(不晚于现在的最新一轮)归 decide

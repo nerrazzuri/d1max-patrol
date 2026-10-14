@@ -23,6 +23,7 @@ from test_site_schedule import 打包, 排程, 毫秒
 
 from d1max_contract.messages import Ack, AckResult
 from d1max_site.catalog import import_bundle
+from d1max_site.routes import RouteStore
 from d1max_site.scheduler import SiteScheduler
 
 
@@ -51,6 +52,10 @@ def _去向(t) -> list[tuple]:
 
 
 def _换排程(t, tmp_path, text, v=2):
+    # 2026-10-14:导入按名字并进路线库、不再整包替换 —— 原来的排程先删掉,留下的才是这份文本里的
+    for e in t.db.query("SELECT entry_id, revision FROM route_schedules"):
+        RouteStore(t.db, now_ms=t.clock).delete_schedule(e["entry_id"], base_revision=e["revision"],
+                                                         by="test")
     import_bundle(t.db, 打包(tmp_path, v, schedule=text), imported_by="alice", now_ms=t.clock())
 
 
