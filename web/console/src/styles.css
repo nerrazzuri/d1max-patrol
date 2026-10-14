@@ -452,6 +452,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .rv-ep.lost { fill: var(--c-warning); fill-opacity: 0.75; }
 .rv-ep.degraded { fill: none; }
 .runlegend { padding: 0 8px 4px; }
+/* 地图页:地图下面的「去这里」工具条、运行图层图例只占自己那几行高;地图占满剩下的(.runlegend 借了
+   .maplegend 的 flex: 1,那是给横着的图例栏用的,放进竖着排的 .mapbox 里会跟地图平分高度) */
+.mapbox > .posebar, .mapbox > .runlegend { flex: none; }
+/* 地图页的「去这里」工具条:提示和按钮排一行(放不下再折),少占地图的高 */
+.mapbox > .posebar { flex-direction: row; flex-wrap: wrap; align-items: center; padding: 6px 16px; }
 .sw .rv-path, .sw .rv-trail { vector-effect: none; }
 .runinfo { display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 18px; color: var(--c-textSecondary); }
 .runinfo .warn { color: var(--c-warning); font-weight: 600; }
