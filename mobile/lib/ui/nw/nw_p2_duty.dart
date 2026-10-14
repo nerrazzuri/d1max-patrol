@@ -2,7 +2,7 @@
 /// 某一格的分段、小地图。只管摆，数据和动作由页面给。
 library;
 
-import 'dart:typed_data';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -104,10 +104,11 @@ class NwChoiceBar extends StatelessWidget {
   }
 }
 
-/// 小地图：站点渲染的那张栅格图的缩略，下面一行说图上标了什么。整块能点（[tapKey] 安在 `InkWell` 上）。
+/// 小地图：站点渲染的那张图（栅格图，站点给了平面图就是平面图）的缩略，按站点给的转角摆正（跟地图栏一个
+/// 样子），下面一行说图上标了什么。整块能点（[tapKey] 安在 `InkWell` 上）；点了是换页，不换算坐标。
 /// 图取不到、读不出就只剩下面那一行（入口还在）。**换了一张图要换 `key`**：这里只取一次。
 class NwMapThumb extends StatefulWidget {
-  final Future<Uint8List> Function() load;
+  final Future<NwMapPicture> Function() load;
 
   /// 图上标了什么（「狗 A · 拦截点 gate」）。
   final String label;
@@ -135,7 +136,7 @@ class NwMapThumb extends StatefulWidget {
 }
 
 class _NwMapThumbState extends State<NwMapThumb> {
-  Uint8List? _png;
+  NwMapPicture? _pic;
 
   @override
   void initState() {
@@ -145,17 +146,39 @@ class _NwMapThumbState extends State<NwMapThumb> {
 
   Future<void> _load() async {
     try {
-      final png = await widget.load();
-      if (mounted && png.isNotEmpty) setState(() => _png = png);
+      final pic = await widget.load();
+      if (mounted && pic.bytes.isNotEmpty) setState(() => _pic = pic);
     } on Object {
       // 没有图：不摆缩略，入口照旧
     }
   }
 
+  /// 底图铺满这一块（多的裁掉）；转了角度的：转过的整张图铺满。
+  Widget _image(BuildContext context, NwMapPicture pic) {
+    final size = pic.size;
+    final turned = size != null && pic.rotationDeg != 0;
+    final image = nwMapRaster(
+        context,
+        Image.memory(pic.bytes,
+            fit: turned ? BoxFit.fill : BoxFit.cover,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.medium,
+            errorBuilder: (_, _, _) => const SizedBox.shrink()),
+        darkKey: NwMapThumb.darkRasterKey);
+    if (!turned) return image;
+    return FittedBox(
+        fit: BoxFit.cover,
+        clipBehavior: Clip.hardEdge,
+        child: NwMapRotation(
+            rad: pic.rotationDeg * math.pi / 180,
+            size: size,
+            child: SizedBox(width: size.width, height: size.height, child: image)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = Nw.of(context);
-    final png = _png;
+    final pic = _pic;
     return Material(
         color: c.surface,
         shape: RoundedRectangleBorder(
@@ -165,19 +188,12 @@ class _NwMapThumbState extends State<NwMapThumb> {
             key: widget.tapKey,
             onTap: widget.onTap,
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              if (png != null)
+              if (pic != null)
                 Container(
                     height: widget.height,
                     color: c.surfaceVariant,
-                    // 只有栅格底图过深色滤镜（跟地图栏同一个）；浅色原样
-                    child: nwMapRaster(
-                        context,
-                        Image.memory(png,
-                            fit: BoxFit.cover,
-                            gaplessPlayback: true,
-                            filterQuality: FilterQuality.medium,
-                            errorBuilder: (_, _, _) => const SizedBox.shrink()),
-                        darkKey: NwMapThumb.darkRasterKey)),
+                    // 只有底图过深色滤镜（跟地图栏同一个）；浅色原样
+                    child: _image(context, pic)),
               ConstrainedBox(
                   constraints: const BoxConstraints(minHeight: 48),
                   child: Padding(

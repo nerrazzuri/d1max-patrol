@@ -103,6 +103,12 @@ class FakeSite {
       await resp.close();
       return;
     }
+    if (path.endsWith('/plan.png') && code == 200) {
+      resp.headers.contentType = ContentType('image', 'png');
+      resp.add(fakePlanPng);
+      await resp.close();
+      return;
+    }
     if (path.startsWith('/api/runs/') && path.contains('/photos/') && code == 200) {
       resp.headers.contentType = ContentType('image', 'jpeg');
       resp.add(photoBytes);
@@ -232,6 +238,9 @@ class FakeSite {
     }
   }
 }
+
+/// 一张真的 2×1 灰度 + 透明 PNG（平面图的假图）：左边一格亮、不透明（地面），右边一格暗、全透明（没扫到）。
+final Uint8List fakePlanPng = Uint8List.fromList(<int>[137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 4, 0, 0, 0, 94, 43, 183, 1, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 245, 95, 131, 1, 0, 7, 58, 2, 34, 112, 192, 45, 54, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]);
 
 /// 一张真的 1×1 灰度 PNG（W00c6h 地图预览的假图：`Image.memory` 认得）。
 final Uint8List fakePreviewPng = Uint8List.fromList(<int>[137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0, 58, 126, 155, 85, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 56, 11, 0, 0, 207, 0, 206, 160, 254, 41, 80, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]);

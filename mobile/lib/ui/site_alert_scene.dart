@@ -20,6 +20,7 @@ import '../design/tokens.g.dart' show D1Motion;
 import '../l10n.dart';
 import '../model/alert.dart';
 import '../net/site_client.dart';
+import 'map_view.dart' show loadMapPicture;
 import 'nw/nw_button.dart';
 import 'nw/nw_p2_duty.dart';
 import 'nw/nw_theme.dart';
@@ -751,7 +752,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
         NwMapThumb(
             key: ValueKey<String>('scene-map-thumb ${marks.$1}:${marks.$2}'),
             tapKey: SiteAlertScenePage.mapKey,
-            load: () => widget.api.mapPreviewPng(marks.$1, marks.$2),
+            load: () => loadMapPicture(widget.api, marks.$1, marks.$2),
             label: marks.$3.map((m) => m.label).join(' · '),
             action: tr('Show on map', '在图上看'),
             onTap: () => Navigator.push(

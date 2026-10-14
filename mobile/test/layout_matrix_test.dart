@@ -17,6 +17,7 @@ import 'package:d1max_patrol/ui/site_deter.dart';
 import 'package:d1max_patrol/ui/site_deterrence.dart';
 import 'package:d1max_patrol/ui/site_intercepts.dart';
 import 'package:d1max_patrol/ui/site_logs.dart';
+import 'package:d1max_patrol/ui/site_mapping.dart' show SiteMapPreviewPage;
 import 'package:d1max_patrol/ui/site_maps.dart';
 import 'package:d1max_patrol/ui/site_mode.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
@@ -30,6 +31,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi, busyView;
+import 'support/fake_map.dart' show Rot23Api;
 
 const _portrait = Size(390, 844);
 const _landscape = Size(800, 360);
@@ -60,6 +62,9 @@ final _pages = <String, Widget Function()>{
   'watch': () => SiteWatchPage(api: FakeApi('guard')),
   'alarm scene': () => SiteAlertScenePage(api: FakeApi('guard'), alert: _p1()),
   'map tab': () => Scaffold(body: SiteMapTab(api: FakeApi('admin'))),
+  // 2026-10-14 地图给客户看得懂：转了 23° 的真图、平面图、两个片区
+  'map tab (rotated, plan, areas)': () => Scaffold(body: SiteMapTab(api: Rot23Api('admin'))),
+  'map preview (rotated, plan, areas)': () => SiteMapPreviewPage(api: Rot23Api('admin'), mapId: 'estate-1', version: '8'),
   'maps': () => SiteMapsPage(api: FakeApi('admin')),
   'releases': () => SiteReleasesPage(api: FakeApi('admin')),
   'runs': () => SiteRunsPage(api: FakeApi('admin')),

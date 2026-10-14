@@ -22,6 +22,7 @@ import 'nw/nw_p3_robots.dart' show robotOnline;
 import 'nw/nw_p4_admin.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
+import 'map_view.dart';
 import 'site_mapping.dart';
 import 'site_robot.dart';
 import 'widget/fields_dialog.dart';
@@ -305,7 +306,10 @@ class _MapView {
   /// 这张图是不是狗报着的那一张（不是：狗报的图站点上没有，摆的是站点上最新的）。
   final bool inUse;
   final Map<String, dynamic>? meta;
+
+  /// 底图：栅格预览图，站点给了平面图就是平面图（[plan]）。
   final Uint8List? png;
+  final bool plan;
 
   /// 这张图看不了的原因（没有栅格之类）。
   final String? previewError;
@@ -319,6 +323,7 @@ class _MapView {
       this.inUse = false,
       this.meta,
       this.png,
+      this.plan = false,
       this.previewError,
       this.zones = const [],
       this.robots = const [],
@@ -327,10 +332,9 @@ class _MapView {
   String get tag => '$mapId:$version';
 }
 
-/// 站点渲染的栅格底图：浅色原样，深色过 [darkMapRaster]。
-Widget _raster(BuildContext context, Uint8List png) => nwMapRaster(
-    context, Image.memory(png, fit: BoxFit.fill, filterQuality: FilterQuality.none, gaplessPlayback: true),
-    darkKey: SiteMapTab.darkRasterKey);
+/// 底图（栅格预览图或者平面图）：浅色原样，深色过 [darkMapRaster]。
+Widget _raster(BuildContext context, Uint8List png, {bool plan = false}) =>
+    mapBaseImage(context, png, plan: plan, darkKey: SiteMapTab.darkRasterKey);
 
 /// 底部导航的「地图」栏：狗正在用的那张图的预览当主体（能缩放），图上画狗、待命点、原点、禁行区和
 /// 限速区，左上是图例、右下是回正和缩放；下面（横屏在右边）是这张图上的狗。右上进地图列表
@@ -355,6 +359,16 @@ class SiteMapTab extends StatefulWidget {
   static const Key recenterKey = Key('map-tab-recenter');
   static const Key zoomInKey = Key('map-tab-zoom-in');
   static const Key zoomOutKey = Key('map-tab-zoom-out');
+
+  /// 片区淡淡的底和边（`CustomPaint`，[AreasPainter]）；片区的名字（`Text`）。
+  static const Key areasKey = Key('map-tab-areas');
+  static Key areaLabelKey(String name) => Key('map-tab-area-$name');
+
+  /// 比例尺那一段（`SizedBox`，宽 = 这一段在屏上的长度）。
+  static const Key scaleKey = Key('map-tab-scale');
+
+  /// 图例的标题行（`InkWell`）：点了收起、展开。
+  static const Key legendToggleKey = Key('map-tab-legend-toggle');
   static Key robotKey(String id) => Key('map-tab-robot-$id');
   static Key markerKey(String id) => Key('map-tab-marker-$id');
 
@@ -369,7 +383,13 @@ class _SiteMapTabState extends State<SiteMapTab> {
   /// 画布那一块现在多大（缩放按钮绕它的中心缩放）。
   Size _viewport = Size.zero;
 
+  /// 图例展开着没有：null = 人还没点过，一列摆得下就展开、摆不下（横屏的手机）收起来，免得挡住图。
+  bool? _legendOpen;
+
   static const double _maxScale = 8;
+
+  /// 左下比例尺那一块大约多高（图例往下排到这儿为止）。
+  static const double _scaleBarHeight = 48;
 
   @override
   void dispose() {
@@ -412,10 +432,11 @@ class _SiteMapTabState extends State<SiteMapTab> {
     final id = '${pick['map_id']}', version = '${pick['version']}';
     Map<String, dynamic>? meta;
     Uint8List? png;
+    var plan = false;
     String? previewError;
     try {
       meta = await widget.api.mapPreview(id, version);
-      png = await widget.api.mapPreviewPng(id, version);
+      (png, plan) = await loadMapBase(widget.api, id, version, MapGeo.fromPreview(meta));
     } on SiteError catch (e) {
       previewError = e.message;
     }
@@ -435,6 +456,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
         inUse: used != null,
         meta: meta,
         png: png,
+        plan: plan,
         previewError: previewError,
         zones: zones,
         robots: robots,
@@ -553,15 +575,14 @@ class _SiteMapTabState extends State<SiteMapTab> {
     });
   }
 
-  /// 图：栅格图上叠区域、待命点和原点（还是看图那一页的 painter）、狗；左上图例、右下回正和缩放。
+  /// 图：底图（栅格图或者平面图）上叠片区、区域、待命点和原点（还是看图那一页的 painter）、狗；整张图按站点
+  /// 给的转角摆正、整张放进这一块（这就是「回到整张图」那个样子：缩放的变换是单位阵）；左上图例、左下
+  /// 比例尺、右下回正和缩放。图上的字（狗的编号、片区名字）反着转回来，永远是正的。
   Widget _canvas(BuildContext context, _MapView v) {
     final c = Nw.of(context);
     final meta = v.meta!;
-    final w = (meta['width'] as num? ?? 1).toDouble();
-    final h = (meta['height'] as num? ?? 1).toDouble();
-    final mpp = (meta['m_per_px'] as num? ?? 1).toDouble();
-    final left = (meta['left_x'] as num? ?? 0).toDouble();
-    final top = (meta['top_y'] as num? ?? 0).toDouble();
+    final geo = MapGeo.fromPreview(meta);
+    final w = geo.width, h = geo.height, mpp = geo.mPerPx, rad = geo.radians;
     final standby = (meta['standby'] as List? ?? const []).whereType<Map>().toList();
     final homes = (meta['homes'] as List? ?? const []).whereType<Map>().toList();
     final nogo = v.zones.any((z) => z['kind'] == 'nogo');
@@ -578,6 +599,25 @@ class _SiteMapTabState extends State<SiteMapTab> {
         decoration: round
             ? BoxDecoration(color: color, shape: BoxShape.circle)
             : BoxDecoration(color: color.withValues(alpha: 0.35), border: Border.all(color: color, width: 2)));
+    // 图例：只列图上有的（底图那三样总有）
+    final legend = <NwLegendItem>[
+      ...mapBaseLegend(context, plan: v.plan),
+      if (placed.isNotEmpty)
+        NwLegendItem(
+            swatch: Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                    color: c.surface, shape: BoxShape.circle, border: Border.all(color: c.success, width: 2))),
+            label: tr('Robot', '狗')),
+      if (standby.isNotEmpty)
+        NwLegendItem(swatch: swatch(_standbyPaint, round: true), label: tr('Standby point', '待命点')),
+      if (homes.isNotEmpty)
+        NwLegendItem(swatch: Container(width: 10, height: 10, color: _homePaint), label: tr('Origin', '原点')),
+      if (nogo) NwLegendItem(swatch: swatch(_nogoPaint), label: tr('No-go zone', '禁行区')),
+      if (slow) NwLegendItem(swatch: swatch(_slowPaint), label: tr('Speed-limit zone', '限速区')),
+      if (geo.areas.isNotEmpty) mapAreaLegend(context),
+    ];
     return Padding(
         padding: const EdgeInsets.all(Nw.s8),
         child: DecoratedBox(
@@ -589,93 +629,123 @@ class _SiteMapTabState extends State<SiteMapTab> {
                 borderRadius: BorderRadius.circular(Nw.r12),
                 child: LayoutBuilder(builder: (context, box) {
                   _viewport = box.biggest;
-                  // 图按比例缩进这一块；图上的点（图的像素）跟着同一个比例
-                  final k = math.max(0.0, math.min(box.maxWidth / w, box.maxHeight / h));
-                  Offset px(double x, double y) => Offset((x - left) / mpp * k, (top - y) / mpp * k);
+                  // 转过的整张图按比例放进这一块；图上的点（图的像素）跟着同一个比例
+                  final k = geo.fitScale(box.biggest);
+                  Offset px(double x, double y) => geo.toPx(x, y) * k;
                   final r = math.max(3.0, math.max(w, h) * k / 120);
                   // 短屏（横屏手机）右下那三个按钮竖着摆不下：横着摆
                   final short = box.maxHeight < 3 * Nw.touch + 4 * Nw.s8 + 96;
+                  // 图例摆在左上，下面给比例尺留地方；矮了就排成几列。人没点过的话，一列摆得下、展开了也
+                  // 不压着整张图（转过的外接框）才展开，不然收成一个「图例」，点了再看
+                  final legendMax = math.max(48.0, box.maxHeight - 3 * Nw.s8 - _scaleBarHeight);
+                  final legendOpen = _legendOpen ?? _legendFits(context, legend, box.biggest, geo, k, legendMax);
+                  final areas = [
+                    for (final a in geo.areas) (a.name, [for (final p in a.points) px(p.dx, p.dy)]),
+                  ];
                   return Stack(children: [
                     Positioned.fill(
                         child: InteractiveViewer(
                             transformationController: _zoom,
                             maxScale: _maxScale,
                             child: Center(
-                                child: SizedBox(
-                                    key: SiteMapTab.canvasKey,
-                                    width: w * k,
-                                    height: h * k,
-                                    child: Stack(clipBehavior: Clip.none, children: [
-                                      Positioned.fill(child: _raster(context, v.png!)),
-                                      Positioned.fill(
-                                          child: CustomPaint(
-                                              key: SiteMapTab.zonesKey,
-                                              painter: ZonesPainter([
-                                                for (final z in v.zones)
-                                                  ZoneShape(z['kind'] == 'nogo', [
-                                                    for (final p in (z['polygon'] as List? ?? const []))
-                                                      if (p is List && p.length >= 2 && p[0] is num && p[1] is num)
-                                                        px((p[0] as num).toDouble(), (p[1] as num).toDouble()),
-                                                  ]),
-                                              ], const <Offset>[], radius: r))),
-                                      Positioned.fill(
-                                          child: CustomPaint(
-                                              key: SiteMapTab.standbyKey,
-                                              painter: StandbyPainter([
-                                                for (final p in standby)
-                                                  if (p['x'] is num && p['y'] is num)
-                                                    px((p['x'] as num).toDouble(), (p['y'] as num).toDouble()),
-                                              ], radius: r, homes: [
-                                                for (final p in homes)
-                                                  if (p['x'] is num && p['y'] is num)
-                                                    px((p['x'] as num).toDouble(), (p['y'] as num).toDouble()),
-                                              ]))),
-                                      for (final (id, online, at) in placed)
-                                        Positioned(
-                                            left: px(at.dx, at.dy).dx,
-                                            top: px(at.dx, at.dy).dy,
-                                            child: FractionalTranslation(
-                                                translation: const Offset(-0.5, -0.5),
-                                                child: NwRobotMarker(
-                                                    markerKey: SiteMapTab.markerKey(id),
-                                                    id: id,
-                                                    // 不在线的（过期、吊销）：中性色，不是绿的
-                                                    tone: online ? nwToneOf('online') : NwTone.neutral))),
-                                    ]))))),
+                                child: NwMapRotation(
+                                    rad: rad,
+                                    size: Size(w * k, h * k),
+                                    child: SizedBox(
+                                        key: SiteMapTab.canvasKey,
+                                        width: w * k,
+                                        height: h * k,
+                                        child: Stack(clipBehavior: Clip.none, children: [
+                                          Positioned.fill(child: _raster(context, v.png!, plan: v.plan)),
+                                          if (areas.isNotEmpty)
+                                            Positioned.fill(
+                                                child: CustomPaint(
+                                                    key: SiteMapTab.areasKey,
+                                                    painter: AreasPainter([for (final a in areas) a.$2],
+                                                        fill: mapAreaFill(c), stroke: mapAreaStroke(c), strokeWidth: 1.5))),
+                                          Positioned.fill(
+                                              child: CustomPaint(
+                                                  key: SiteMapTab.zonesKey,
+                                                  painter: ZonesPainter([
+                                                    for (final z in v.zones)
+                                                      ZoneShape(z['kind'] == 'nogo', [
+                                                        for (final p in (z['polygon'] as List? ?? const []))
+                                                          if (p is List && p.length >= 2 && p[0] is num && p[1] is num)
+                                                            px((p[0] as num).toDouble(), (p[1] as num).toDouble()),
+                                                      ]),
+                                                  ], const <Offset>[], radius: r))),
+                                          Positioned.fill(
+                                              child: CustomPaint(
+                                                  key: SiteMapTab.standbyKey,
+                                                  painter: StandbyPainter([
+                                                    for (final p in standby)
+                                                      if (p['x'] is num && p['y'] is num)
+                                                        px((p['x'] as num).toDouble(), (p['y'] as num).toDouble()),
+                                                  ], radius: r, homes: [
+                                                    for (final p in homes)
+                                                      if (p['x'] is num && p['y'] is num)
+                                                        px((p['x'] as num).toDouble(), (p['y'] as num).toDouble()),
+                                                  ]))),
+                                          if (areas.isNotEmpty)
+                                            Positioned.fill(
+                                                child: MapAreaLabels(
+                                                    areas: areas,
+                                                    rad: rad,
+                                                    unit: 1,
+                                                    zoom: _zoom,
+                                                    labelKey: SiteMapTab.areaLabelKey)),
+                                          for (final (id, online, at) in placed)
+                                            Positioned(
+                                                left: px(at.dx, at.dy).dx,
+                                                top: px(at.dx, at.dy).dy,
+                                                child: FractionalTranslation(
+                                                    translation: const Offset(-0.5, -0.5),
+                                                    // 牌子反着转回来：编号正着读
+                                                    child: Transform.rotate(
+                                                        angle: -rad,
+                                                        child: NwRobotMarker(
+                                                            markerKey: SiteMapTab.markerKey(id),
+                                                            id: id,
+                                                            // 不在线的（过期、吊销）：中性色，不是绿的
+                                                            tone: online ? nwToneOf('online') : NwTone.neutral)))),
+                                        ])))))),
                     Positioned(
                         left: Nw.s8,
                         top: Nw.s8,
                         child: ConstrainedBox(
-                            constraints: BoxConstraints(maxWidth: math.max(0, box.maxWidth - 2 * Nw.s8)),
+                            constraints: BoxConstraints(
+                                maxWidth: math.max(0, box.maxWidth - 2 * Nw.s8), maxHeight: legendMax),
                             child: NwMapOverlay(
                                 overlayKey: SiteMapTab.legendKey,
                                 child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      NwLegendItem(
-                                          swatch: Container(
-                                              width: 12,
-                                              height: 12,
-                                              decoration: BoxDecoration(
-                                                  color: c.surface,
-                                                  shape: BoxShape.circle,
-                                                  border: Border.all(color: c.success, width: 2))),
-                                          label: tr('Robot', '狗')),
-                                      if (standby.isNotEmpty)
-                                        NwLegendItem(
-                                            swatch: swatch(_standbyPaint, round: true),
-                                            label: tr('Standby point', '待命点')),
-                                      if (homes.isNotEmpty)
-                                        NwLegendItem(
-                                            swatch: Container(width: 10, height: 10, color: _homePaint),
-                                            label: tr('Origin', '原点')),
-                                      if (nogo)
-                                        NwLegendItem(swatch: swatch(_nogoPaint), label: tr('No-go zone', '禁行区')),
-                                      if (slow)
-                                        NwLegendItem(
-                                            swatch: swatch(_slowPaint), label: tr('Speed-limit zone', '限速区')),
+                                      InkWell(
+                                          key: SiteMapTab.legendToggleKey,
+                                          onTap: () => setState(() => _legendOpen = !legendOpen),
+                                          child: Padding(
+                                              padding: const EdgeInsets.symmetric(vertical: Nw.s4),
+                                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                                Text(tr('Legend', '图例'),
+                                                    style: NwText.labelSmall
+                                                        .copyWith(color: c.text, fontWeight: FontWeight.w700)),
+                                                const SizedBox(width: Nw.s4),
+                                                Icon(legendOpen ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                                                    size: 16, color: c.textSecondary),
+                                              ]))),
+                                      if (legendOpen)
+                                        Flexible(
+                                            child: Wrap(direction: Axis.vertical, runSpacing: Nw.s16, children: [
+                                          for (final item in legend)
+                                            ConstrainedBox(
+                                                constraints: const BoxConstraints(maxWidth: 176), child: item),
+                                        ])),
                                     ])))),
+                    Positioned(
+                        left: Nw.s8,
+                        bottom: Nw.s8,
+                        child: MapScaleBar(pxPerMeter: k / mpp, zoom: _zoom, barKey: SiteMapTab.scaleKey)),
                     Positioned(
                         right: Nw.s8,
                         bottom: Nw.s8,
@@ -702,6 +772,33 @@ class _SiteMapTabState extends State<SiteMapTab> {
                             ])),
                   ]);
                 }))));
+  }
+
+  /// 图例一列摆得下（[legendMax] 那么高），左上角展开了也不压着整张图（按 [k] 放进 [box] 的、转过的
+  /// 外接框）。宽、高按图例的字量出来（跟 [NwLegendItem] 一个字号）。
+  static bool _legendFits(
+      BuildContext context, List<NwLegendItem> items, Size box, MapGeo geo, double k, double legendMax) {
+    const header = 24.0, row = 16.0;
+    final h = 2 * Nw.s8 + header + items.length * row;
+    if (h > legendMax) return false;
+    var textW = 0.0;
+    final scaler = MediaQuery.textScalerOf(context);
+    for (final i in items) {
+      final tp = TextPainter(
+          text: TextSpan(text: i.label, style: NwText.labelSmall),
+          textDirection: Directionality.of(context),
+          textScaler: scaler,
+          maxLines: 1)
+        ..layout();
+      textW = math.max(textW, tp.width);
+      tp.dispose();
+    }
+    final legend = Rect.fromLTWH(Nw.s8, Nw.s8, 2 * Nw.s8 + row + Nw.s4 + textW, h);
+    final map = Rect.fromCenter(
+        center: box.center(Offset.zero),
+        width: nwRotatedBounds(geo.size, geo.radians).width * k,
+        height: nwRotatedBounds(geo.size, geo.radians).height * k);
+    return !legend.overlaps(map);
   }
 
   /// 在线 = 没吊销、狗说在线、**站点说这份状态还新鲜**，跟狗列表一个口径（`robotOnline`；App 重做外审

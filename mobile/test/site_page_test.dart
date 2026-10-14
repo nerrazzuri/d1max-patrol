@@ -432,6 +432,16 @@ class FakeApi implements SiteApi {
     return fakePreviewPng;
   }
 
+  /// 平面图（2026-10-14 地图好看一点）：[planError] 给了就抛（模拟取不到）。
+  SiteError? planError;
+  Uint8List planBytes = fakePlanPng;
+  @override
+  Future<Uint8List> mapPlanPng(String url) async {
+    calls.add('mapPlanPng $url');
+    if (planError != null) throw planError!;
+    return planBytes;
+  }
+
   /// 建图进程日志（W00c6g）。给了列表就用它；给了错误就抛。
   List<Map<String, dynamic>>? procLogRows;
   SiteError? procLogError;
