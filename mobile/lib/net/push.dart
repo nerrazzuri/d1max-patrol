@@ -4,8 +4,9 @@
 /// App 不在前台、被系统清掉也收得到（厂商通道要在极光控制台配好）。离开站点（注销）之前注销推送号。
 /// 跟后台值守（W17）是两条路：值守是 App 自己连着站点，推送是站点经极光推；被省电杀掉时还有推送兜底。
 ///
-/// AppKey 打包时给：Android 用 `-PjpushAppKey=…`（`android/app/build.gradle.kts`），
-/// iOS 用 `--dart-define=JPUSH_APPKEY=…`。没给：[supported] 为假，什么都不做。
+/// AppKey 打包时给：Android 用 `-PjpushAppKey=…`（`android/app/build.gradle.kts`）。
+/// iOS（H13）现在不推：要先配 APNs（苹果开发者账号、推送证书、aps-environment），之后用
+/// `--dart-define=JPUSH_APPKEY=…` 给 AppKey，再放开 [JPushRegistrar.supported]。
 ///
 /// **FCM**（RC 加固 H9，决策 56）：带 Google 服务的安卓手机（马来西亚的首个客户）走 FCM，跟极光并列。
 /// Firebase 的四个参数打包时给（`--dart-define=FCM_APP_ID=… FCM_API_KEY=… FCM_PROJECT_ID=…
@@ -55,8 +56,11 @@ class JPushRegistrar implements PushRegistrar {
   static const String _appKey = String.fromEnvironment('JPUSH_APPKEY');
   JPushFlutterInterface? _jpush;
 
+  /// 只在安卓上开（H13）：iOS 工程还没配 APNs（没有推送权限、没有 aps-environment），极光 iOS 插件的
+  /// `getRegistrationID` 在真机上没登录成功就**一直不回**（`JPushPlugin.m` 把回调挂起等登录），
+  /// 推送登记会卡住、离开站点要白等 10 秒。配好 APNs 之后再放开 iOS。
   @override
-  bool get supported => Platform.isAndroid || Platform.isIOS;
+  bool get supported => Platform.isAndroid;
 
   @override
   String get platform => Platform.isIOS ? 'ios' : 'android';
@@ -121,8 +125,8 @@ class FcmRegistrar implements PushRegistrar {
   }
 }
 
-PushRegistrar defaultPush() =>
-    Platform.isAndroid || Platform.isIOS ? JPushRegistrar() : const NoPush();
+/// iOS 先不推（H13：没配 APNs，见 [JPushRegistrar.supported]）；iOS 上 P1 只在 App 开着时收得到。
+PushRegistrar defaultPush() => Platform.isAndroid ? JPushRegistrar() : const NoPush();
 
 /// 极光之外还要登记的通道（现在只有 FCM，配了才有）。
 List<PushRegistrar> defaultAlsoPush() {
