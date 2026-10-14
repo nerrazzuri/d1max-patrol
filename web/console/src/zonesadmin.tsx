@@ -1,17 +1,15 @@
 // 管理组(商业化 B1c):地图与防区(在图上画防区多边形)、名单(时段 / 人员授权)。
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { Confirm, Modal } from "./dialogs";
 import { t } from "./i18n";
-import { toPx, type PreviewMeta } from "./mapview";
+import { MapCanvas } from "./mapcanvas";
+import { toPx, type PreviewMeta, type Pt } from "./mapview";
 
 type Say = (s: string) => void;
-type Pt = [number, number];
 
 interface MapRow { map_id: string; version: string; note: string; created_ms: number; source: string }
 interface Area { zone: string; points: Pt[] }
-interface NavZone { id: string; kind: string; label: string; polygon: Pt[] }
-interface Preview extends PreviewMeta { zones?: NavZone[] }
 
 function errText(e: unknown): string {
   return t("failed", { why: e instanceof ApiError ? e.message : String(e) });
@@ -26,22 +24,16 @@ function poly(meta: PreviewMeta, pts: Pt[]): string {
   return pts.map(([x, y]) => { const p = toPx(meta, x, y); return `${p.px},${p.py}`; }).join(" ");
 }
 
-function centroid(meta: PreviewMeta, pts: Pt[]): { px: number; py: number } {
-  const c = pts.reduce((a, [x, y]) => [a[0] + x / pts.length, a[1] + y / pts.length], [0, 0]);
-  return toPx(meta, c[0], c[1]);
-}
-
 // ------------------------------------------------------------------ 地图与防区
 
 export function MapsZonesPage({ say }: { say: Say }) {
   const [maps, setMaps] = useState<MapRow[]>([]);
   const [sel, setSel] = useState<MapRow | null>(null);
-  const [meta, setMeta] = useState<Preview | null>(null);
+  const [meta, setMeta] = useState<PreviewMeta | null>(null);
   const [areas, setAreas] = useState<Area[]>([]);
   const [draft, setDraft] = useState<Pt[] | null>(null);
   const [naming, setNaming] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
-  const svg = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
     api<{ maps: MapRow[] }>("GET", "/api/maps").then((d) => {
@@ -58,19 +50,14 @@ export function MapsZonesPage({ say }: { say: Say }) {
     setMeta(null);
     setDraft(null);
     if (!base) return;
-    api<Preview>("GET", `${base}/preview`).then(setMeta).catch(() => setMeta(null));
+    api<PreviewMeta>("GET", `${base}/preview`).then(setMeta).catch(() => setMeta(null));
     loadAreas();
   }, [base]);
 
-  function click(e: MouseEvent) {
-    if (!draft || !meta || !svg.current) return;
-    const pt = svg.current.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const ctm = svg.current.getScreenCTM();
-    if (!ctm) return;
-    const p = pt.matrixTransform(ctm.inverse());
-    setDraft([...draft, toMap(meta, p.x, p.y)]);
+  // 点的那一处:地图组件给的是预览像素(世界层的 getScreenCTM 倒回去,转正、缩放、平移都算进去了)
+  function pick(px: number, py: number) {
+    if (!meta) return;
+    setDraft((d) => (d ? [...d, toMap(meta, px, py)] : d));
   }
 
   async function save(name: string) {
@@ -113,28 +100,15 @@ export function MapsZonesPage({ say }: { say: Say }) {
         <div class="zonesplit">
           <div class="zonemap">
             {!sel || !meta ? <p class="empty">{t("noMap")}</p> : (
-              <svg ref={svg} class={draft ? "map drawing" : "map"} viewBox={`0 0 ${meta.width} ${meta.height}`} preserveAspectRatio="xMidYMid meet"
-                role="img" aria-label={t("tabMapsZones")} onClick={click}>
-                <image href={`${base}/preview.png`} x="0" y="0" width={meta.width} height={meta.height} class="mapimg" />
-                {(meta.zones ?? []).filter((z) => z.kind === "nogo").map((z) => (
-                  <polygon key={z.id} points={poly(meta, z.polygon)} class="nogo-area" />
-                ))}
-                {areas.map((a) => {
-                  const c = centroid(meta, a.points);
-                  return (
-                    <g key={a.zone}>
-                      <polygon points={poly(meta, a.points)} class="sec-area" />
-                      <text x={c.px} y={c.py} class="area-label" font-size={Math.max(10, meta.width / 60)}>{a.zone}</text>
-                    </g>
-                  );
-                })}
-                {draft && draft.length > 0 && (
-                  <g>
-                    <polyline points={poly(meta, draft)} class="draft-line" />
-                    {draft.map(([x, y], i) => { const p = toPx(meta, x, y); return <circle key={i} cx={p.px} cy={p.py} r={meta.width / 200} class="draft-pt" />; })}
-                  </g>
-                )}
-              </svg>
+              // 防区页只画能改的防区(防区接口,改了当场变);站点预览里的 areas 在地图页上画
+              <MapCanvas meta={meta} raster={`${base}/preview.png`} label={t("tabMapsZones")}
+                areas={areas.map((a) => ({ name: a.zone, pts: a.points, kind: "zone" as const }))}
+                drawing={!!draft} onPick={draft ? pick : undefined}
+                world={draft && draft.length > 0 ? <polyline points={poly(meta, draft)} class="draft-line" /> : null}
+                marks={(s) => draft?.map(([x, y], i) => {
+                  const [sx, sy] = s.map(x, y);
+                  return <circle key={i} cx={sx} cy={sy} r={4} class="draft-pt" />;
+                })} />
             )}
           </div>
           <div class="zonelist">

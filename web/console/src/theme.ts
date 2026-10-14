@@ -13,6 +13,9 @@ function webExtras(p: Palette): Palette {
   return { well: "#000000", mapBg: p.surfaceVariant, focus: p.tertiary };
 }
 
+/** 深色下底图反亮度的那个 a(CSS invert(a))。 */
+const RASTER_INVERT = 0.91;
+
 export function palette(s: Scheme): Palette {
   const base = (mobile.color as Record<Scheme, Palette>)[s];
   return { ...base, ...webExtras(base) };
@@ -21,10 +24,18 @@ export function palette(s: Scheme): Palette {
 /**
  * 深色下地图栅格的滤镜:跟手机的 ColorFilter(y = 235 − 0.82·x)一样的意思 —— 空地 254→约 24、未知 205→约 64、
  * 墙 0→约 232。CSS 的 invert(a) 是 y = a − (2a − 1)·x,a = 0.91 时斜率 −0.82、截距 232。浅色下原样。
- * 只用在栅格(.mapimg)上,不用在上面画的狗、防区。
+ * 只用在底图(.mapimg:栅格或平面图)上,不用在上面画的狗、防区。
  */
 export function mapRasterFilter(s: Scheme): string {
-  return s === "dark" ? "invert(0.91)" : "none";
+  return s === "dark" ? `invert(${RASTER_INVERT})` : "none";
+}
+
+/** 底图(栅格、平面图)上的一个灰度在这一套下显示成什么颜色(跟 --map-raster 滤镜一样算):图例色块用。 */
+export function rasterShade(grey: number, s: Scheme): string {
+  const a = RASTER_INVERT;
+  const v = s === "dark" ? 255 * (a + (1 - 2 * a) * (grey / 255)) : grey;
+  const h = Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0");
+  return `#${h}${h}${h}`;
 }
 
 const QUERY = "(prefers-color-scheme: dark)";
