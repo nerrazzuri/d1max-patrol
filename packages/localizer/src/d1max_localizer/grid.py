@@ -17,14 +17,20 @@
   0.4 m 矮的东西(路牙、台阶)栅格上看不见;
 - **看到过地面**(离当地地面 :data:`FLOOR_BAND_M` 以内有点)、又不是障碍的格子算可通行(开阔地上
   没有齐腰高的东西、射线没处打,光靠射线只有走过的那一条线 —— 内审阻断 1);
-- 格子的「被穿过次数」与「障碍点数」按 log-odds 判占据 / 可通行(人、玻璃反射这种一会儿有一会儿没的,
-  穿过的次数多就判可通行)。「被穿过」**有逐帧扫描就用真射线**(每一帧从雷达到这一帧打到的障碍点;
-  :func:`render` 的 ``scans``):跟着狗走的人,他站过的地方在别的时刻被射线穿过,清得掉(W09c1 在
-  newdog2 上踩到:人连成一道「墙」,走过的路被判成墙、另一侧全成了「没扫到」)。没有逐帧扫描就退回
-  原型的模拟射线(从路线上的点往四周打,碰到墙停 —— 人那道「墙」清不掉);
+- 格子的「被穿过次数」与「障碍点数」按比例判占据 / 可通行(障碍点至少 5 个、占两样加起来的四分之一
+  以上判占据;人、玻璃反射这种一会儿有一会儿没的,穿过的次数多就判可通行)。「被穿过」**有逐帧扫描
+  就用真射线**(每一帧从雷达到这一帧打到的障碍点;:func:`render` 的 ``scans``):跟着狗走的人,他站
+  过的地方在别的时刻被射线穿过,清得掉(W09c1 在 newdog2 上踩到:人连成一道「墙」,走过的路被判成
+  墙、另一侧全成了「没扫到」)。真射线停在打到的点前 :data:`RAY_STOP_SHORT_M`,打到的那一格不算
+  穿过;按高度判穿过(:data:`RAY_HEIGHT_TOL_M`,桌面底下钻过去的不算)。没有逐帧扫描就退回原型的
+  模拟射线(从路线上的点往四周打,碰到墙停 —— 人那道「墙」清不掉);
 - 狗身中心走过的路(``body_path``)两边 :data:`FOOTPRINT_M` 以内一律可通行:狗的身子在那儿待过;
 - 可通行区做一次开运算(去掉透过没扫到的玻璃漏出去的细扇形);只留贴着可通行区的障碍(去掉悬在
-  外面的鬼影)。
+  外面的鬼影);
+- **墙只画雷达看得见的那一面**(:func:`_surface`,2026-10-14):从可通行区横竖看过去都得先穿过两层以上
+  占据才看得到的格(点云抖出来的厚度、墙背面、家具块里头)改成「不知道」。办公室图墙厚 0.20 m(中位
+  数)、p90 0.55 m → 0.10 m、0.15 m。只把占据改成「不知道」,可通行的格一格不动 —— 规划
+  (``d1max_contract.planning.costmap``)、拦截点、站点核点位只认可通行,两样都当挡。
 
 只依赖 numpy(狗上用 ROS 系统 Python 里 apt 装的那份);不要 scipy、PIL。
 """
@@ -53,8 +59,15 @@ RAYS = 540
 POSE_STRIDE_CELLS = 6
 #: 真射线:每帧按方位分这么多格,每格只打最近的那个障碍点(它就是这一帧看到的空地的边)。
 SCAN_BINS = 1440
-#: 真射线在打到的点之前这么远就停(那一格归「打到」,不归「穿过」)。
-RAY_STOP_SHORT_M = 0.1
+#: 真射线最后一个采样点离打到的点至少这么远(采样每半格一个,实际停在 0.075–0.1 m);**打到的那一格
+#: 一律不算「穿过」**(那一格归「打到」)。原来写 0.1 m、采样还少算一步,实际停在 0.125–0.15 m:墙面
+#: 前两格从来没有射线正着穿过,那里零星的噪点(测距拖尾、多次反射)全判成占据,墙往空地那边胖一格、
+#: 边上毛糙(2026-10-14)。停近了:墙面前隔一格的噪点有射线穿过、清得掉。没停到半格 / 一格:试过,
+#: 墙一样薄(墙厚是 :data:`SURFACE_LAYERS` 管的),可门框的头、桌腿这种细东西多被旁边打到的射线
+#: 「穿过」掉一格(合成的门两边各缺一格;C40221 双雷达图上一处 8 格的桌椅)。打到的那一格单独排除:
+#: 点落在格子深处时停下前那一步还在这一格里,墙格会被自己的射线「穿过」(玻璃、细杆这种点少的格
+#: 就清掉了)。
+RAY_STOP_SHORT_M = 0.075
 #: 离雷达这么近的点不打射线(狗自己的身子)。
 MIN_RANGE_M = 0.3
 #: 按三维判「穿过」(W34:2026-10-08 C40221 双雷达地图桌子、椅子大多没了 —— 射线从桌面底下穿过去
@@ -63,6 +76,15 @@ MIN_RANGE_M = 0.3
 RAY_HEIGHT_TOL_M = 0.1
 #: 狗身中心线两边这么宽一律可通行。
 FOOTPRINT_M = 0.25
+#: 墙只画雷达看得见的那一面(2026-10-14,:func:`_surface`):从可通行区那边看过去,**横竖哪条直线都要
+#: 先穿过超过这么多个占据格**才看得到的格(点云抖出来的厚度、墙的背面、家具块的里头)改成「不知道」
+#: —— 雷达只看得到墙朝着它的那一面;办公室图上墙厚大半是这一面后面的点(射线打不进去,比例永远是
+#: 1)。两层:真墙面常常跨在两格的分界上。规划、拦截点把「不知道」跟占据一样当挡,这一步**只改图、
+#: 不改哪里能走**。
+SURFACE_LAYERS = 2
+#: 往里、往外最多看这么远(米):只动跟可通行区连着(只走占据格)、这么远以内的格;这么远以内一条直线
+#: 都看不到可通行区的不动。
+SURFACE_REACH_M = 2.0
 FREE, UNKNOWN, OCCUPIED = 254, 205, 0
 #: 栅格最多多少格(站点预览的上限也是 2500 万像素);超了一格放粗一倍,粗到 :data:`MAX_RES_M`
 #: 还超就报错。
@@ -248,13 +270,16 @@ def _raytrace_scans(scans: Iterable[tuple[np.ndarray, np.ndarray]], frames: Fram
         b, r, q, h = b[order], r[order], q[order], h[order]
         first = np.r_[True, b[1:] != b[:-1]]
         q, r, h = q[first], r[first], h[first]
-        n = np.maximum(((r - RAY_STOP_SHORT_M) / step).astype(int), 1)
+        # 采样点 0, step, 2·step …,最后一个离打到的点不近于 RAY_STOP_SHORT_M
+        n = np.maximum(np.floor((r - RAY_STOP_SHORT_M) / step).astype(int) + 1, 1)
         ray = np.repeat(np.arange(len(r)), n)
         k = np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)
         frac = k * step / r[ray]
         xy = o + q[ray] * frac[:, None]
         c = ((xy - lo) / res).astype(int)
-        inside = (c[:, 0] >= 0) & (c[:, 0] < W) & (c[:, 1] >= 0) & (c[:, 1] < H)
+        end = ((o + q - lo) / res).astype(int)              # 打到的点那一格:归「打到」
+        inside = (c[:, 0] >= 0) & (c[:, 0] < W) & (c[:, 1] >= 0) & (c[:, 1] < H) \
+            & ((c[:, 0] != end[ray, 0]) | (c[:, 1] != end[ray, 1]))
         if lo_h is not None and bool(ook[0]):
             # 三维:射线在这一格的高度(雷达高度到打到的点的高度之间按距离插)要落在这一格障碍点的
             # 高度范围里;从桌面底下钻过去、从矮东西上面越过去的,不算穿过
@@ -269,6 +294,54 @@ def _raytrace_scans(scans: Iterable[tuple[np.ndarray, np.ndarray]], frames: Fram
         key = np.unique(ray[inside].astype(np.int64) * (H * W) + cell)
         np.add.at(passes, key % (H * W), 1)
     return passes.reshape(H, W), used
+
+
+def _shifted(m: np.ndarray, dy: int, dx: int) -> np.ndarray:
+    """``out[y, x] = m[y - dy, x - dx]``,出界的是 False。"""
+    h, w = m.shape
+    out = np.zeros_like(m)
+    if abs(dy) < h and abs(dx) < w:
+        out[max(dy, 0):h + min(dy, 0), max(dx, 0):w + min(dx, 0)] = \
+            m[max(-dy, 0):h + min(-dy, 0), max(-dx, 0):w + min(-dx, 0)]
+    return out
+
+
+def _surface(occ: np.ndarray, free: np.ndarray, res: float) -> np.ndarray:
+    """墙只画看得见的那一面(:data:`SURFACE_LAYERS`):回该改成「不知道」的占据格 —— 两样都满足:
+
+    - 跟可通行区连着:从可通行区只走占据格(四邻接),超过 :data:`SURFACE_LAYERS` 步才到,
+      :data:`SURFACE_REACH_M` 以内;
+    - 挡在后面:从它沿上下左右四条直线往外看(「不知道」的格看得穿),够得着可通行区的那几条,每条
+      都先穿过超过 :data:`SURFACE_LAYERS` 个占据格(算它自己)。不看斜线:墙面毛糙,斜线从相邻两列
+      的凹凸之间钻出去,直墙上会留下一列列三格厚的(斜墙按横竖数本来就更厚,剥完也还是连着的)。
+
+    隔着几格「不知道」看得到可通行区的(擦着看过去的走廊墙朝走廊的那面 —— 2026-10-14 只留贴着可通行区
+    那一层的试法丢过一整段这样的墙)、只走占据格够不着的(另一堵墙、隔着一道缝的重影)、哪条直线都看
+    不到可通行区的,都不动。"""
+    n = max(int(round(SURFACE_REACH_M / res)), SURFACE_LAYERS + 1)
+    reached = free
+    deep = np.zeros(occ.shape, bool)
+    for i in range(1, n + 1):                               # 只走占据格,第 i 步够着的
+        new = _dilate(reached, 1) & occ & ~reached
+        if not new.any():
+            break
+        if i > SURFACE_LAYERS:
+            deep |= new
+        reached = reached | new
+    if not deep.any():
+        return deep
+    seen = np.zeros(occ.shape, bool)                        # 有条直线穿过不多于那么多层就到可通行区
+    reach = np.zeros(occ.shape, bool)                       # 有条直线够得着可通行区
+    for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+        found = np.zeros(occ.shape, bool)
+        crossed = np.zeros(occ.shape, np.int32)
+        for k in range(n + 1):                              # 看 c − k·方向 那一格
+            hit = _shifted(free, k * dy, k * dx) & ~found
+            seen |= hit & (crossed <= SURFACE_LAYERS)
+            reach |= hit
+            found |= hit
+            crossed += _shifted(occ, k * dy, k * dx) & ~found
+    return deep & reach & ~seen
 
 
 def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: float = RES_M,
@@ -336,6 +409,7 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
         free_m |= body
         occ_m &= ~body
     occ_m &= _dilate(free_m, int(0.5 / res))                # 只留贴着可通行区的障碍
+    occ_m &= ~_surface(occ_m, free_m, res)                  # 墙只画看得见的那一面
     img = np.full((H, W), UNKNOWN, np.uint8)
     img[free_m] = FREE
     img[occ_m] = OCCUPIED
