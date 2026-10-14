@@ -12,7 +12,7 @@ import { heading, namedAreas, onMap, toPx, type PreviewMeta, type Pt } from "./m
 import { abnormal, alarmState, robotMap, type Alert } from "./model";
 import { usePosePick } from "./posepick";
 import { RunInfo } from "./runinfo";
-import { RunLegend, VizWorld, vizAvoid, vizHas, vizMarks, vizOnMap } from "./runlayers";
+import { RunLegendItems, VizWorld, vizAvoid, vizHas, vizMarks, vizOnMap } from "./runlayers";
 import { useEpisodes, useRunViz } from "./runviz";
 
 /** 屏上的大小(像素):狗的圆点半径、报警圈半径、狗编号字号。 */
@@ -82,6 +82,9 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
           <MapCanvas meta={meta} raster={`/api/maps/${enc(which.map_id)}/${enc(which.version)}/preview.png`} label={t("mapAria")}
             areas={mapAreas(meta, areas)} legend={legend} drawing={!!pose.onPick} onPick={pose.onPick}
             world={<VizWorld meta={meta} robots={vizRobots} />}
+            // 「去这里」浮在图的右上角(不在图下面另占一块);运行图层的图例并进底图图例那一行
+            overlay={pose.panel}
+            legendExtra={<RunLegendItems has={vizHas(vizRobots, eps)} />}
             // 区域名让开报警圈、狗(圆点 + 下面的编号)
             avoid={(s) => [
               ...vizAvoid(s, meta, vizRobots),
@@ -122,8 +125,6 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
               </>
             )} />
         )}
-        {pose.panel}
-        {meta && <RunLegend has={vizHas(vizRobots, eps)} />}
       </div>
       <aside class="sidebar" aria-label={t("tabMap")}>
         {sel && (
