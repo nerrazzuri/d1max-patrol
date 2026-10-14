@@ -11,6 +11,17 @@
 - **资源有上限**(W00c6h 内审):图最多 ``MAX_PIXELS`` 像素;P5 文件不许比头里说的大;P2(文本,一个像素
   几个字节、解析吃内存)文件最多 ``MAX_P2_BYTES``;yaml 最多 ``MAX_YAML_BYTES``。调用方先按
   :func:`pgm_limit` 看文件大小,再读。
+
+2026-10-14 地图台账 M9、44、M7(只管显示,导航栅格、狗用的坐标一样都不动):
+
+- **「看到过、狗没走过」**(``seen.pbm``,:func:`parse_seen`;建图时只透过玻璃、门口看到过、被定成
+  「不知道」的格):预览上画成 :data:`SEEN_GRAY`(介于地面和没建图之间),平面图上画成淡淡的地面(白、
+  透明度 :data:`PLAN_SEEN_ALPHA`);``meta`` 带 ``seen: true``(客户端据此在图例里加一行)。只落在
+  「不知道」的格上。
+- **抹掉区**(区域种类 ``erase``,:func:`erase_mask`:格心在多边形里的格):预览、平面图上抹成没建图,墙也
+  不画。
+- **有内容的范围** ``content_bbox``:预览像素 ``[x0, y0, x1, y1]``(地面 + 墙 + 看到过,去掉抹掉的;一格
+  都没有就不给)。客户端「全图」、刚打开时按它缩放,四周的空白不算进去。
 """
 
 from __future__ import annotations
@@ -31,7 +42,15 @@ MAX_YAML_BYTES = 64 * 1024
 _P5_SLACK = 16
 
 _RANK_OCC, _RANK_FREE, _RANK_UNKNOWN = 0, 1, 2
-_COLORS = bytes([0, 254, 205]) + bytes(253)   # 名次 → 灰度(取 min 缩图:占据 < 空闲 < 未知)
+#: 预览(:func:`render`)自己用的名次多一档「看到过」:占据 < 空闲 < 看到过 < 未知(缩图取 min)。
+_R4_SEEN, _R4_UNKNOWN = 2, 3
+#: 预览上「看到过、狗没走过」的灰度:比地面(254)暗、比没建图(205)亮。
+SEEN_GRAY = 232
+_COLORS = bytes([0, 254, SEEN_GRAY, 205]) + bytes(252)   # 预览的名次 → 灰度
+#: 平面图上「看到过」那层白色的透明度(淡淡的地面)。
+PLAN_SEEN_ALPHA = 0.35
+#: P4 正文之后容许的尾巴。
+_P4_SLACK = 16
 
 
 class PreviewError(ValueError):
@@ -142,14 +161,112 @@ def _png(w: int, h: int, rows: list[bytes]) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
-def _rank_lut(meta: dict[str, Any]) -> bytes:
+def _rank_lut(meta: dict[str, Any], unknown: int = _RANK_UNKNOWN) -> bytes:
     """灰度 → 名次(占据 / 空闲 / 未知),照 ``map_server`` 的三值。"""
     lut = bytearray(256)
     for p in range(256):
         occ = p / 255.0 if meta["negate"] else (255 - p) / 255.0
         lut[p] = (_RANK_OCC if occ > meta["occupied_thresh"]
-                  else _RANK_FREE if occ < meta["free_thresh"] else _RANK_UNKNOWN)
+                  else _RANK_FREE if occ < meta["free_thresh"] else unknown)
     return bytes(lut)
+
+
+# ------------------------------------------------------------ 看到过、抹掉、有内容的范围
+
+
+def seen_limit(w: int, h: int) -> int:
+    """跟 ``w × h`` 的栅格配套的 ``seen.pbm`` 最多多大(字节):调用方先比文件大小,超了不读。"""
+    return len(f"P4\n{w} {h}\n") + -(-w // 8) * h + _P4_SLACK
+
+
+def parse_seen(data: bytes, w: int, h: int):
+    """``seen.pbm``(PBM 二进制 ``P4``:一格一位、每行补满一个字节、高位在前,1 = 看到过)→ numpy 真假
+    (高, 宽),行朝下。宽高要跟栅格一样;正文不许短、不许比该有的长出 :data:`_P4_SLACK` 以上。"""
+    import numpy as np
+    pos, head = 0, []
+    for _ in range(3):
+        m = _TOKEN.match(data, pos)
+        if m is None:
+            raise PreviewError("seen.pbm 头不完整")
+        head.append(m.group(1))
+        pos = m.end()
+    if head[0] != b"P4":
+        raise PreviewError(f"seen.pbm 不是 PBM 二进制({head[0][:4]!r})")
+    try:
+        mw, mh = int(head[1]), int(head[2])
+    except ValueError:
+        raise PreviewError("seen.pbm 头里的宽、高不是整数") from None
+    if (mw, mh) != (w, h):
+        raise PreviewError(f"seen.pbm 跟栅格不一样大({mw}×{mh},栅格 {w}×{h})")
+    row = -(-w // 8)
+    body = data[pos + 1:]
+    if len(body) < row * h or len(body) > row * h + _P4_SLACK:
+        raise PreviewError(f"seen.pbm 正文 {len(body)} 字节,该是 {row * h}")
+    bits = np.frombuffer(body[:row * h], dtype=np.uint8).reshape(h, row)
+    return np.unpackbits(bits, axis=1)[:, :w].astype(bool)
+
+
+def erase_mask(polys, w: int, h: int, meta: dict[str, Any]):
+    """抹掉区(地图坐标的多边形)压到的格 → numpy 真假 (高, 宽),行朝下。**格心在多边形里**才算(只管
+    显示,不往外扩;狗那头规划另按保守的算)。"""
+    import numpy as np
+    out = np.zeros((h, w), dtype=bool)
+    res = meta["resolution"]
+    ox, oy = meta["origin"]
+    for poly in polys:
+        if len(poly) < 3:
+            continue
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
+        c0 = max(0, int(math.floor((min(xs) - ox) / res)))
+        c1 = min(w - 1, int(math.floor((max(xs) - ox) / res)))
+        r0 = max(0, h - 1 - int(math.floor((max(ys) - oy) / res)))
+        r1 = min(h - 1, h - 1 - int(math.floor((min(ys) - oy) / res)))
+        if c0 > c1 or r0 > r1:
+            continue
+        X, Y = np.meshgrid(ox + (np.arange(c0, c1 + 1) + 0.5) * res,
+                           oy + (h - 1 - np.arange(r0, r1 + 1) + 0.5) * res)
+        inside = np.zeros(X.shape, dtype=bool)
+        n = len(poly)
+        for i in range(n):
+            (ax, ay), (bx, by) = poly[i], poly[(i + 1) % n]
+            crosses = (ay > Y) != (by > Y)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                xc = ax + (Y - ay) * (bx - ax) / (by - ay)
+            inside ^= crosses & (X < xc)
+        out[r0:r1 + 1, c0:c1 + 1] |= inside
+    return out
+
+
+def _overlay(ranks, seen, erase, unknown: int, seen_rank: int | None):
+    """名次栅格 ``ranks``(numpy,行朝下)上:抹掉的改成未知;看到过、又是未知的(抹掉的不算)改成
+    ``seen_rank``(``None`` = 不改,只回掩码)。→ (名次, 剩下的看到过的掩码或 ``None``)。"""
+    if erase is None and seen is None:
+        return ranks, None
+    ranks = ranks.copy()
+    if erase is not None:
+        ranks[erase] = unknown
+    mask = None
+    if seen is not None:
+        mask = seen & (ranks == unknown)
+        if erase is not None:
+            mask &= ~erase
+        if not mask.any():
+            mask = None
+        elif seen_rank is not None:
+            ranks[mask] = seen_rank
+    return ranks, mask
+
+
+def _content_bbox(known, k: int) -> list[float] | None:
+    """有内容的格(真假,行朝下)的外框 → 预览像素 ``[x0, y0, x1, y1]``(缩了 ``k`` 倍);没有是 None。"""
+    import numpy as np
+    rows = np.flatnonzero(known.any(axis=1))
+    if not len(rows):
+        return None
+    cols = np.flatnonzero(known.any(axis=0))
+    return [round(int(cols[0]) / k, 3), round(int(rows[0]) / k, 3),
+            round((int(cols[-1]) + 1) / k, 3), round((int(rows[-1]) + 1) / k, 3)]
 
 
 def _shrink(w: int, h: int) -> int:
@@ -157,10 +274,15 @@ def _shrink(w: int, h: int) -> int:
     return max(1, -(-max(w, h) // MAX_SIDE))
 
 
-def render(pgm: bytes, meta: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
-    """→ (PNG, 给手机的坐标换算)。"""
+def render(pgm: bytes, meta: dict[str, Any], *, seen=None,
+           erase=None) -> tuple[bytes, dict[str, Any]]:
+    """→ (PNG, 给手机的坐标换算 + 有内容的范围)。``seen``、``erase``:numpy 真假 (高, 宽)(行朝下),
+    看到过的画浅灰、抹掉的画成没建图(见模块说明)。"""
+    import numpy as np
     w, h, body = parse_pgm(pgm)
-    ranks = body.translate(_rank_lut(meta))
+    r4 = np.frombuffer(body.translate(_rank_lut(meta, _R4_UNKNOWN)), dtype=np.uint8).reshape(h, w)
+    r4, has_seen = _overlay(r4, seen, erase, _R4_UNKNOWN, _R4_SEEN)
+    ranks = r4.tobytes()
     k = _shrink(w, h)
     rows = []
     for top in range(0, h, k):
@@ -173,6 +295,11 @@ def render(pgm: bytes, meta: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     ox, oy = meta["origin"]
     info: dict[str, Any] = {"width": len(rows[0]), "height": len(rows), "m_per_px": res * k,
                             "left_x": ox, "top_y": oy + h * res}
+    bbox = _content_bbox(r4 != _R4_UNKNOWN, k)
+    if bbox is not None:
+        info["content_bbox"] = bbox
+    if has_seen is not None:
+        info["seen"] = True
     if meta.get("origin_yaw"):
         info["warning"] = (f"地图 origin 带转角 {meta['origin_yaw']:.3f} rad,预览没按转角转:"
                            "待命点画的位置可能不准")
@@ -370,9 +497,10 @@ def _coverage(field, level: float):
     return np.clip(field, 0.0, 1.0, out=field)
 
 
-def _plan_pixels(ranks, k: int, width: int, height: int, s: int):
+def _plan_pixels(ranks, k: int, width: int, height: int, s: int, seen=None):
     """→ ``uint8`` 数组 (height·s, width·s, 2):灰度、透明度。``k``:预览比原图缩的倍数;预览盖
-    ``height·k`` × ``width·k`` 个原图格(可能比原图多出一点,多出来的当未知)。"""
+    ``height·k`` × ``width·k`` 个原图格(可能比原图多出一点,多出来的当未知)。``seen``:看到过的格
+    (真假;画成透明度 :data:`PLAN_SEEN_ALPHA` 的白,垫在地板和墙下面)。"""
     import numpy as np
     h, w = ranks.shape
     ext_h, ext_w = height * k, width * k
@@ -409,10 +537,19 @@ def _plan_pixels(ranks, k: int, width: int, height: int, s: int):
     floor_a *= 1 - wall_a
     alpha = wall_a
     alpha += floor_a
+    white = floor_a
+    if seen is not None:
+        # 看到过的(M9):淡淡的白,垫在地板、墙下面:透明度再加 看到过 × 0.35 × (1 − 上面那两层)
+        seen_a = layer(seen, False, _FLOOR_SIGMA, _FLOOR_LEVEL)
+        seen_a *= np.float32(PLAN_SEEN_ALPHA)
+        seen_a *= 1 - alpha
+        alpha += seen_a
+        white += seen_a
+        del seen_a
     px = np.empty((out_h, out_w, 2), dtype=np.uint8)
     px[..., 1] = np.rint(alpha * 255)
     # 全透明的地方灰度给白(地板色):不预乘透明度的缩放也不会在边上渗出黑边
-    gray = np.divide(floor_a, alpha, out=np.ones_like(alpha), where=px[..., 1] > 0)
+    gray = np.divide(white, alpha, out=np.ones_like(alpha), where=px[..., 1] > 0)
     px[..., 0] = np.rint(gray * 255)
     return px
 
@@ -435,11 +572,12 @@ def _png_ga(px) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw.tobytes(), 6)) + chunk(b"IEND", b""))
 
 
-def render_plan(ranks) -> tuple[bytes, int]:
+def render_plan(ranks, *, seen=None, erase=None) -> tuple[bytes, int]:
     """``ranks``(:func:`grid_ranks` 出的)→ (平面图 PNG, 倍数)。范围跟 :func:`render` 出的预览
-    一模一样,像素是它的倍数倍。"""
+    一模一样,像素是它的倍数倍。``seen``、``erase`` 同 :func:`render`。"""
     h, w = ranks.shape
+    ranks, mask = _overlay(ranks, seen, erase, _RANK_UNKNOWN, None)
     k = _shrink(w, h)
     width, height = -(-w // k), -(-h // k)
     s = plan_scale(width, height)
-    return _png_ga(_plan_pixels(ranks, k, width, height, s)), s
+    return _png_ga(_plan_pixels(ranks, k, width, height, s, seen=mask)), s
