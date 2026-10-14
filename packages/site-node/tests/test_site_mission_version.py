@@ -65,8 +65,9 @@ async def test_任务绑的版本跟狗加载的对不上_不派_不记账(台):
 async def test_没绑版本的任务_不派_不拿狗的版本去补(台):
     t = 台
     await t.run(3)
-    with pytest.raises(DispatchRefused, match="map_version"):
+    with pytest.raises(DispatchRefused, match="没写 map_version") as ei:
         await t.site.patrol("A", _任务(map_version=None), issued_by="alice")
+    assert "第 7 版" not in str(ei.value), "说的是没绑版本,不是拿狗的第 7 版去比"
     assert not _patrols(t)
 
 
