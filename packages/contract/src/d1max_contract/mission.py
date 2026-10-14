@@ -167,6 +167,10 @@ class Policy:
         return out
 
 
+#: 地图版本最长几个字符(同 ``d1max_contract.maps.NAME_RE`` 的 64)。
+MAX_MAP_VERSION_LEN = 64
+
+
 @dataclass(frozen=True, slots=True)
 class Mission:
     """一份完整的巡检任务。"""
@@ -177,9 +181,18 @@ class Mission:
     policy: Policy = field(default_factory=Policy)
     route_source: str = "inline"
     route_path_id: str = ""
+    #: 这些点是在这张图的**哪一版**上量的(R1,2026-10-14)。地图号 + 版本才是一个坐标系:每次建图
+    #: 原点都不一样,第 3 版上的 (3, 2) 落到第 4 版上可能是一个能走、但不对的地方。站点只把任务派给
+    #: 加载着这一版的狗,命令里的 ``map_version`` 就是它(狗再核一遍)。
+    #: **空串 = 没绑**:老任务包、站点升级前导入的任务、狗自己拼的任务(回充 goto)。契约照样读得进来
+    #: (不然站点库里的老任务一升级就读炸),站点不派、新狗不收;**绝不拿「狗现在用的版本」去补**。
+    map_version: str = ""
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {"mission": self.mission, "map_id": self.map_id}
+        if self.map_version:
+            # 没绑的不写:线格式跟老的一样(老夹具、老代理不受影响;老代理不认识这个键也不拒)
+            out["map_version"] = self.map_version
         if self.route_source != "inline" or self.route_path_id:
             out["route"] = {"source": self.route_source,
                             "path_id": self.route_path_id}
@@ -318,6 +331,7 @@ def parse_mission(raw: Any) -> Mission:
     _require(isinstance(name, str) and name.strip(), "缺少 mission(任务名)")
     map_id = raw.get("map_id")
     _require(isinstance(map_id, str) and map_id.strip(), "缺少 map_id(地图名)")
+    map_version = _parse_map_version(raw)
 
     route = raw.get("route") or {}
     _require(isinstance(route, dict), f"route 应为映射,实际为 {route!r}")
@@ -347,7 +361,23 @@ def parse_mission(raw: Any) -> Mission:
         policy=_parse_policy(raw.get("policy")),
         route_source=route_source,
         route_path_id=route_path_id,
+        map_version=map_version,
     )
+
+
+def _parse_map_version(raw: dict[str, Any]) -> str:
+    """没写 → 空串(没绑,见 :attr:`Mission.map_version`);写了就得是像样的版本号。**不收数字**:
+    版本号是字符串(``"4"``、``"2026-10-08"``),``4`` 和 ``4.0`` 谁转成谁是一次猜。"""
+    if "map_version" not in raw:
+        return ""
+    v = raw["map_version"]
+    if not isinstance(v, str):
+        hint = f'(写成字符串 "{v}")' if isinstance(v, (int, float)) and not isinstance(v, bool) \
+            else ""
+        raise MissionError(f"map_version 应为字符串(这些点是在哪一版地图上量的),实际为 {v!r}{hint}")
+    _require(bool(v) and v == v.strip() and v.isprintable() and len(v) <= MAX_MAP_VERSION_LEN,
+             f"map_version 应为 1–{MAX_MAP_VERSION_LEN} 个字符、不带首尾空白,实际为 {v!r}")
+    return v
 
 
 # --------------------------------------------------------------------- 往返

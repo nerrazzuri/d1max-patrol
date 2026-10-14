@@ -9,6 +9,7 @@
     "map_version": "7",
     "mission": {
       "map_id": "estate-1",
+      "map_version": "7",
       "mission": "night-loop",
       "policy": {
         "battery_abort_pct": 25.0,
