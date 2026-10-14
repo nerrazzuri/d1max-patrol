@@ -5,6 +5,18 @@
 - 区域集有自己的**修订号**(从 1 起,改一次 +1);站点是唯一权威,经命令 ``zones_set`` 整份下发。
 - **只收紧**(:func:`tightens`)的改动可以热更;放宽的等狗空闲再换(设计稿「与 W08 字面不同」)。
 - 不进地图产物:建图不管它,站点单独存。
+
+决策 65、66(2026-10-14)加的两个**可选**字段(线上只在用到时才出现,老的区域集一字不差):
+
+- ``hard``(只给禁行区):**硬禁区** —— 水体、落差那一类,遥控也不许开进去(狗上按机身轮廓 + 定位 σ +
+  刹车距离挡,见 ``d1max_agent.zone_guard``)。没有 = 普通禁行区(花坛之类,人遥控可以进)。老狗不认
+  这个键,照普通禁行区守(规划照样绕);能力里 ``zones_set.teleop_hard`` 为真的狗才在遥控时守。
+- ``until_ms``:**临时区**的到期时刻(站点的钟,毫秒)。到期由**站点**删(新修订、照常下发);狗不按自己的
+  钟删(狗的钟可能是错的;过期了还守着是往安全那边错)。
+
+**收紧**按几何判(:func:`tightens`):旧的每个区域都要被新的**某一个**区域整个盖住、而且不比它松
+(禁行盖禁行或限速,硬的要硬的盖,限速不升,到期不提前)。按单个区域盖,不算并集:把一个禁行区拆成两半
+保守地算放宽(要人确认)。
 """
 
 from __future__ import annotations
@@ -24,6 +36,8 @@ MIN_AREA_M2 = 0.01
 #: 坐标绝对值上限(米):地图系里的点,庄园一公里以内;挡住离谱值。
 MAX_COORD_M = 100_000.0
 MAX_LABEL = 64
+#: 到期时刻(毫秒)的上限:挡住离谱值(秒当毫秒发会落在 1970 年,站点按「已经过了」拒)。
+MAX_UNTIL_MS = 2 ** 53
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -86,10 +100,8 @@ def point_in_polygon(x: float, y: float, pts: tuple[tuple[float, float], ...]) -
     return inside
 
 
-def distance_to_polygon(x: float, y: float, pts: tuple[tuple[float, float], ...]) -> float:
-    """点到多边形的距离:在里面是 0。"""
-    if point_in_polygon(x, y, pts):
-        return 0.0
+def boundary_distance(x: float, y: float, pts: tuple[tuple[float, float], ...]) -> float:
+    """点到多边形**边**的距离(在里面、外面都按边量)。"""
     best = math.inf
     n = len(pts)
     for i in range(n):
@@ -101,6 +113,102 @@ def distance_to_polygon(x: float, y: float, pts: tuple[tuple[float, float], ...]
     return best
 
 
+def distance_to_polygon(x: float, y: float, pts: tuple[tuple[float, float], ...]) -> float:
+    """点到多边形的距离:在里面是 0。"""
+    if point_in_polygon(x, y, pts):
+        return 0.0
+    return boundary_distance(x, y, pts)
+
+
+def signed_distance(x: float, y: float, pts: tuple[tuple[float, float], ...]) -> float:
+    """点到多边形边的有向距离:外面为正、里面为负(压在边上是 0)。"""
+    d = boundary_distance(x, y, pts)
+    return -d if point_in_polygon(x, y, pts) else d
+
+
+#: 判「严格在里面」时离边至少这么远(米):压在边上、浮点差一点点的都不算在里面(往「没盖住」那边判)。
+_EPS_M = 1e-9
+
+
+def _strictly_inside(x: float, y: float, pts: tuple[tuple[float, float], ...]) -> bool:
+    return point_in_polygon(x, y, pts) and boundary_distance(x, y, pts) > _EPS_M
+
+
+def _interior_point(pts: tuple[tuple[float, float], ...]) -> tuple[float, float] | None:
+    """简单多边形里面的一个点(O'Rourke:最下最左那个顶点是凸的;它跟两个邻点的三角形里没有别的顶点
+    就取三角形重心,有就取离那条底边最远的那个顶点跟它的中点)。浮点上不放心的回 ``None``。"""
+    n = len(pts)
+    i = min(range(n), key=lambda k: (pts[k][1], pts[k][0]))
+    v, a, b = pts[i], pts[i - 1], pts[(i + 1) % n]
+    tri = (a, v, b)
+    inside = [p for k, p in enumerate(pts) if k not in (i, (i - 1) % n, (i + 1) % n)
+              and point_in_polygon(p[0], p[1], tri)]
+    if inside:
+        def far(p: tuple[float, float]) -> float:
+            return abs(_orient(a, b, p))
+        q = max(inside, key=far)
+        c = ((v[0] + q[0]) / 2.0, (v[1] + q[1]) / 2.0)
+    else:
+        c = ((a[0] + v[0] + b[0]) / 3.0, (a[1] + v[1] + b[1]) / 3.0)
+    return c if _strictly_inside(c[0], c[1], pts) else None
+
+
+def _cut_params(a, b, poly: tuple[tuple[float, float], ...]) -> list[float]:
+    """线段 ab 跟多边形各条边的交点在 ab 上的参数 t(含共线重叠的两端),加上 0、1,排好。"""
+    ts = {0.0, 1.0}
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L2 = dx * dx + dy * dy
+    n = len(poly)
+    for k in range(n):
+        c, d = poly[k], poly[(k + 1) % n]
+        ex, ey = d[0] - c[0], d[1] - c[1]
+        den = dx * ey - dy * ex
+        if den != 0:
+            t = ((c[0] - a[0]) * ey - (c[1] - a[1]) * ex) / den
+            u = ((c[0] - a[0]) * dy - (c[1] - a[1]) * dx) / den
+            if -1e-12 <= t <= 1 + 1e-12 and -1e-12 <= u <= 1 + 1e-12:
+                ts.add(min(1.0, max(0.0, t)))
+        elif L2 > 0 and _orient(a, b, c) == 0:
+            for p in (c, d):                              # 共线:两端投影到 ab 上
+                t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2
+                if 0.0 < t < 1.0:
+                    ts.add(t)
+    return sorted(ts)
+
+
+def polygon_contains(outer: tuple[tuple[float, float], ...],
+                     inner: tuple[tuple[float, float], ...]) -> bool:
+    """``inner`` 整个在 ``outer`` 里面(边上算里面)。**宁可错说「没盖住」**(那样只是要人多确认一次):
+
+    1. ``inner`` 的顶点都在 ``outer`` 里(含边上);
+    2. ``outer`` 的边一段都不穿过 ``inner`` 的**内部**(按跟 ``inner`` 各边的交点切段、每段中点
+       严格在 ``inner`` 里面就是穿过了)—— 只看顶点、只看真交叉都判不出凹口、夹缝从边上插进来;
+    3. ``inner`` 里面取一个点,在 ``outer`` 里。
+
+    有了 2,``inner`` 的内部跟 ``outer`` 的边不相交,要么整个在里面、要么整个在外面,3 定是哪个。"""
+    if outer == inner:
+        return True
+    if not all(point_in_polygon(x, y, outer) for x, y in inner):
+        return False
+    n = len(outer)
+    for k in range(n):
+        a, b = outer[k], outer[(k + 1) % n]
+        ts = _cut_params(a, b, inner)
+        for t0, t1 in zip(ts, ts[1:], strict=False):
+            if t1 - t0 <= 1e-12:
+                continue
+            tm = (t0 + t1) / 2.0
+            if _strictly_inside(a[0] + tm * (b[0] - a[0]), a[1] + tm * (b[1] - a[1]), inner):
+                return False
+    c = _interior_point(inner)
+    return c is not None and point_in_polygon(c[0], c[1], outer)
+
+
+def _bbox(pts: tuple[tuple[float, float], ...]) -> tuple[float, float, float, float]:
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
 @dataclass(frozen=True)
 class Zone:
     id: str
@@ -108,13 +216,24 @@ class Zone:
     polygon: tuple[tuple[float, float], ...]
     label: str = ""
     max_speed_mps: float | None = None
+    #: 硬禁区(决策 65,只给禁行区):遥控也守。
+    hard: bool = False
+    #: 临时区的到期时刻(站点的钟,毫秒;决策 66);``None`` = 一直有效。
+    until_ms: int | None = None
 
     def to_wire(self) -> dict[str, Any]:
         d: dict[str, Any] = {"id": self.id, "kind": self.kind, "label": self.label,
                              "polygon": [[x, y] for x, y in self.polygon]}
         if self.kind == "slow":
             d["max_speed_mps"] = self.max_speed_mps
+        if self.hard:
+            d["hard"] = True                  # 不是硬的不写:老的区域集线上一字不差
+        if self.until_ms is not None:
+            d["until_ms"] = self.until_ms
         return d
+
+    def expired(self, now_ms: int) -> bool:
+        return self.until_ms is not None and self.until_ms <= now_ms
 
     @classmethod
     def from_wire(cls, d: Any) -> Zone:
@@ -151,7 +270,17 @@ class Zone:
             speed = float(speed)
         elif "max_speed_mps" in d and d["max_speed_mps"] is not None:
             raise ContractError(f"zone {zid}: 禁行区不带限速")
-        return cls(id=zid, kind=kind, polygon=poly, label=label, max_speed_mps=speed)
+        hard = d.get("hard", False)
+        if not isinstance(hard, bool):
+            raise ContractError(f"zone {zid}: hard 要是 true/false")
+        if hard and kind != "nogo":
+            raise ContractError(f"zone {zid}: 只有禁行区能是硬禁区")
+        until = d.get("until_ms")
+        if until is not None and (isinstance(until, bool) or not isinstance(until, int)
+                                  or not 0 < until <= MAX_UNTIL_MS):
+            raise ContractError(f"zone {zid}: until_ms 要是正整数(毫秒)")
+        return cls(id=zid, kind=kind, polygon=poly, label=label, max_speed_mps=speed,
+                   hard=hard, until_ms=until)
 
 
 @dataclass(frozen=True)
@@ -166,6 +295,16 @@ class ZoneSet:
 
     def slow(self) -> tuple[Zone, ...]:
         return tuple(z for z in self.zones if z.kind == "slow")
+
+    def hard(self) -> tuple[Zone, ...]:
+        """硬禁区(决策 65):遥控也守的那几个。"""
+        return tuple(z for z in self.zones if z.kind == "nogo" and z.hard)
+
+    def without_expired(self, now_ms: int) -> ZoneSet:
+        """去掉到期了的(修订号不动;站点删的时候另给新修订)。"""
+        keep = tuple(z for z in self.zones if not z.expired(now_ms))
+        return self if len(keep) == len(self.zones) else ZoneSet(
+            self.map_id, self.map_version, self.revision, keep)
 
     def to_wire(self) -> dict[str, Any]:
         return {"map_id": self.map_id, "map_version": self.map_version,
@@ -190,16 +329,39 @@ class ZoneSet:
         return cls(map_id=map_id, map_version=ver, revision=rev, zones=zones)
 
 
-def tightens(old: ZoneSet, new: ZoneSet) -> bool:
-    """``new`` 相对 ``old`` 是不是**只收紧**:同一个几何版本;旧的禁行区原样都在;旧的限速区同 id、
-    同顶点、限速不升;新加的随意。其余(删、挪、升限速、换几何版本)都算放宽。"""
+def _as_strict(new: Zone, old: Zone) -> bool:
+    """``new`` 这个区域的规矩不比 ``old`` 松(不看几何)。"""
+    if not (new.until_ms is None or (old.until_ms is not None and new.until_ms >= old.until_ms)):
+        return False                                        # 到期提前了(含永久改临时)
+    if old.kind == "nogo":
+        return new.kind == "nogo" and (new.hard or not old.hard)
+    if new.kind == "nogo":
+        return True                                         # 禁行比任何限速都严
+    return new.max_speed_mps <= old.max_speed_mps           # type: ignore[operator]
+
+
+def covered(old: Zone, zones: tuple[Zone, ...]) -> bool:
+    """``old`` 被 ``zones`` 里**某一个**不比它松的区域整个盖住(决策 66;不算并集)。"""
+    ob = _bbox(old.polygon)
+    for n in zones:
+        if not _as_strict(n, old):
+            continue
+        if n.polygon == old.polygon:
+            return True
+        nb = _bbox(n.polygon)
+        if nb[0] > ob[0] or nb[1] > ob[1] or nb[2] < ob[2] or nb[3] < ob[3]:
+            continue                                        # 包围盒都盖不住
+        if polygon_contains(n.polygon, old.polygon):
+            return True
+    return False
+
+
+def tightens(old: ZoneSet, new: ZoneSet, *, now_ms: int | None = None) -> bool:
+    """``new`` 相对 ``old`` 是不是**只收紧**(决策 66):同一个几何版本;``old`` 的每个区域都被 ``new``
+    里某一个不比它松的区域整个盖住(:func:`covered`;放大、换 id、加硬禁区标记、限速调低、到期推后都算
+    收紧)。其余(删、缩、挪、升限速、去掉硬禁区标记、到期提前、换几何版本)都算放宽;又紧又松的算放宽。
+    ``now_ms`` 给了的话,``old`` 里到期了的不用再盖(站点会删它)。"""
     if (old.map_id, old.map_version) != (new.map_id, new.map_version):
         return False
-    by_id = {z.id: z for z in new.zones}
-    for z in old.zones:
-        n = by_id.get(z.id)
-        if n is None or n.kind != z.kind or n.polygon != z.polygon:
-            return False
-        if z.kind == "slow" and n.max_speed_mps > z.max_speed_mps:  # type: ignore[operator]
-            return False
-    return True
+    return all(covered(z, new.zones) for z in old.zones
+               if now_ms is None or not z.expired(now_ms))
