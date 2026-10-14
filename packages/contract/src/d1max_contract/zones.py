@@ -1,35 +1,49 @@
 """禁行区与限速区(W10,W08 决定 5):挂在几何版本(``map_id + map_version``)上的一份区域集。
 
 - 区域是地图系里的多边形:``nogo`` 当障碍(规划不许进、狗在里面就停),``slow`` 限速
-  (``max_speed_mps``)。
+  (``max_speed_mps``),``erase`` 抹掉区(对狗跟 ``nogo`` 一样,见最后一节)。
 - 区域集有自己的**修订号**(从 1 起,改一次 +1);站点是唯一权威,经命令 ``zones_set`` 整份下发。
 - **只收紧**(:func:`tightens`)的改动可以热更;放宽的等狗空闲再换(设计稿「与 W08 字面不同」)。
 - 不进地图产物:建图不管它,站点单独存。
 
 决策 65、66(2026-10-14)加的两个**可选**字段(线上只在用到时才出现,老的区域集一字不差):
 
-- ``hard``(只给禁行区):**硬禁区** —— 水体、落差那一类,遥控也不许开进去(狗上按机身轮廓 + 定位 σ +
-  刹车距离挡,见 ``d1max_agent.zone_guard``)。没有 = 普通禁行区(花坛之类,人遥控可以进)。老狗不认
-  这个键,照普通禁行区守(规划照样绕);能力里 ``zones_set.teleop_hard`` 为真的狗才在遥控时守。
+- ``hard``(只给禁行区、抹掉区):**硬禁区** —— 水体、落差那一类,遥控也不许开进去(狗上按机身轮廓 +
+  定位 σ + 刹车距离挡,见 ``d1max_agent.zone_guard``)。没有 = 普通禁行区(花坛之类,人遥控可以进)。
+  老狗不认这个键,照普通禁行区守(规划照样绕);能力里 ``zones_set.teleop_hard`` 为真的狗才在遥控时守。
 - ``until_ms``:**临时区**的到期时刻(站点的钟,毫秒)。到期由**站点**删(新修订、照常下发);狗不按自己的
   钟删(狗的钟可能是错的;过期了还守着是往安全那边错)。
 
 **收紧**按几何判(:func:`tightens`):旧的每个区域都要被新的**某一个**区域整个盖住、而且不比它松
 (禁行盖禁行或限速,硬的要硬的盖,限速不升,到期不提前)。按单个区域盖,不算并集:把一个禁行区拆成两半
 保守地算放宽(要人确认)。
+
+**抹掉区** ``erase``(地图台账 44,用户 2026-10-14「在图上框一块抹掉」):
+
+- 对狗跟禁行区**一模一样**:规划当障碍、每拍回退检查、狗在里面就停(:attr:`Zone.keep_out`、
+  :meth:`ZoneSet.nogo` 都把它算进去);站点画图时把那一块抹成「没建图」(墙也不画)—— 那是建图时的
+  杂物、玻璃反射、不该去的地方。
+- 遥控(决策 65):跟普通禁行区一样**不守**,除非也标了 ``hard``(那就跟硬禁区一样守)。
+- 收紧 / 放宽(决策 66):禁行、抹掉都是「狗不去」,互相盖得住就算不比它松;加抹掉区是收紧,删、缩是
+  放宽。
+- **老代理不认这个种类**(会把整份区域集拒掉,规划照旧用老的、站点补发不停、派单一直拒):站点发给能力里
+  没有 ``zones_set.erase`` 的狗时换成同一块禁行区(:meth:`ZoneSet.erase_as_nogo`)—— 对狗一样严,不加
+  兼容级别(级别只在「两头都要会」时加,这里站点一个人就兜住了)。
 """
 
 from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from d1max_contract.errors import ContractError
 from d1max_contract.maps import check_name
 
-KINDS = ("nogo", "slow")
+KINDS = ("nogo", "slow", "erase")
+#: 狗不许进的种类:禁行、抹掉(规划、每拍回退、狗在里面就停,两样一模一样)。
+KEEP_OUT = ("nogo", "erase")
 MAX_ZONES = 200
 MAX_VERTICES = 64
 MIN_AREA_M2 = 0.01
@@ -217,7 +231,7 @@ class Zone:
     polygon: tuple[tuple[float, float], ...]
     label: str = ""
     max_speed_mps: float | None = None
-    #: 硬禁区(决策 65,只给禁行区):遥控也守。
+    #: 硬禁区(决策 65,只给禁行区、抹掉区):遥控也守。
     hard: bool = False
     #: 临时区的到期时刻(站点的钟,毫秒;决策 66);``None`` = 一直有效。
     until_ms: int | None = None
@@ -235,6 +249,11 @@ class Zone:
 
     def expired(self, now_ms: int) -> bool:
         return self.until_ms is not None and self.until_ms <= now_ms
+
+    @property
+    def keep_out(self) -> bool:
+        """狗不许进(禁行、抹掉)。"""
+        return self.kind in KEEP_OUT
 
     @classmethod
     def from_wire(cls, d: Any) -> Zone:
@@ -270,12 +289,12 @@ class Zone:
                 raise ContractError(f"zone {zid}: 限速区要 max_speed_mps 在 (0, 5]")
             speed = float(speed)
         elif "max_speed_mps" in d and d["max_speed_mps"] is not None:
-            raise ContractError(f"zone {zid}: 禁行区不带限速")
+            raise ContractError(f"zone {zid}: 禁行区、抹掉区不带限速")
         hard = d.get("hard", False)
         if not isinstance(hard, bool):
             raise ContractError(f"zone {zid}: hard 要是 true/false")
-        if hard and kind != "nogo":
-            raise ContractError(f"zone {zid}: 只有禁行区能是硬禁区")
+        if hard and kind not in KEEP_OUT:
+            raise ContractError(f"zone {zid}: 只有禁行区、抹掉区能是硬禁区")
         until = d.get("until_ms")
         if until is not None and (isinstance(until, bool) or not isinstance(until, int)
                                   or not 0 < until <= MAX_UNTIL_MS):
@@ -292,14 +311,27 @@ class ZoneSet:
     zones: tuple[Zone, ...] = ()
 
     def nogo(self) -> tuple[Zone, ...]:
-        return tuple(z for z in self.zones if z.kind == "nogo")
+        """狗不许进的:禁行区 + 抹掉区。"""
+        return tuple(z for z in self.zones if z.keep_out)
 
     def slow(self) -> tuple[Zone, ...]:
         return tuple(z for z in self.zones if z.kind == "slow")
 
+    def erase(self) -> tuple[Zone, ...]:
+        """抹掉区:站点画图时抹成没建图的那几块。"""
+        return tuple(z for z in self.zones if z.kind == "erase")
+
     def hard(self) -> tuple[Zone, ...]:
-        """硬禁区(决策 65):遥控也守的那几个。"""
-        return tuple(z for z in self.zones if z.kind == "nogo" and z.hard)
+        """硬禁区(决策 65):遥控也守的那几个(禁行、抹掉都可以标)。"""
+        return tuple(z for z in self.zones if z.keep_out and z.hard)
+
+    def erase_as_nogo(self) -> ZoneSet:
+        """发给不认 ``erase`` 的老代理的那一份:抹掉区换成同一块禁行区(id、名字、几何、硬、到期不变),
+        修订号不变。没有抹掉区就是自己(线上一字不差)。"""
+        if not any(z.kind == "erase" for z in self.zones):
+            return self
+        return ZoneSet(self.map_id, self.map_version, self.revision, tuple(
+            replace(z, kind="nogo") if z.kind == "erase" else z for z in self.zones))
 
     def without_expired(self, now_ms: int) -> ZoneSet:
         """去掉到期了的(修订号不动;站点删的时候另给新修订)。"""
@@ -334,9 +366,9 @@ def _as_strict(new: Zone, old: Zone) -> bool:
     """``new`` 这个区域的规矩不比 ``old`` 松(不看几何)。"""
     if not (new.until_ms is None or (old.until_ms is not None and new.until_ms >= old.until_ms)):
         return False                                        # 到期提前了(含永久改临时)
-    if old.kind == "nogo":
-        return new.kind == "nogo" and (new.hard or not old.hard)
-    if new.kind == "nogo":
+    if old.keep_out:                                        # 禁行、抹掉:对狗一样严
+        return new.keep_out and (new.hard or not old.hard)
+    if new.keep_out:
         return True                                         # 禁行比任何限速都严
     return new.max_speed_mps <= old.max_speed_mps           # type: ignore[operator]
 

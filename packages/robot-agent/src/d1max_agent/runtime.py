@@ -642,8 +642,9 @@ class AgentRuntime:
             # W10:区域修订号、守不守(直线桥不守禁行区)、能不能规划。站点按它补发、拒派。
             nav = self.parts.nav
             # teleop_hard(决策 65):这台狗遥控时守硬禁区(老狗不报,站点据此提醒操作的人)
+            # erase(地图台账 44):认得抹掉区(老狗不报,站点发给它时换成同一块禁行区)
             z: dict[str, Any] = {"rev": self._zones.revision if self._zones else 0,
-                                 "enforced": self._planned, "teleop_hard": True}
+                                 "enforced": self._planned, "teleop_hard": True, "erase": True}
             if self._zones_pending is not None:
                 z["pending_rev"] = self._zones_pending.revision
             if self._planned:

@@ -256,7 +256,8 @@ class PlannedNavBackend(HalNavBackend):
     def _rebox(self) -> None:
         # S7(能力对账附录 A 说明 3):跟规划、「先挪」同一个口径 —— 限速低到守不住的限速区也当禁行。
         # 原来这里只取原始禁行区,每拍回退检查和保持距离(``nogo_near``)都漏了那一类。
-        closed = [z for z in self._effective(self.zones) if z.kind == "nogo"]
+        # 抹掉区(地图台账 44)对狗就是禁行区
+        closed = [z for z in self._effective(self.zones) if z.keep_out]
         self._boxes = [(min(p[0] for p in z.polygon), min(p[1] for p in z.polygon),
                         max(p[0] for p in z.polygon), max(p[1] for p in z.polygon), z)
                        for z in closed]

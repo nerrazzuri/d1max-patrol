@@ -259,7 +259,7 @@ def build(blocked: np.ndarray, res: float, origin: tuple[float, float],
     hard = blocked.copy()
     speed = np.full(blocked.shape, np.inf, dtype=np.float32)
     for z in zones:
-        if z.kind == "nogo":
+        if z.keep_out:                                  # 禁行、抹掉(地图台账 44):一样硬挡
             hard |= polygon_mask(z.polygon, blocked.shape, res, origin, nogo_margin_m)
         else:
             m = polygon_mask(z.polygon, blocked.shape, res, origin)

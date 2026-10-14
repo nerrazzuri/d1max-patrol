@@ -245,7 +245,8 @@ class TeleopZoneGuard:
         return v
 
     def _check(self, vx: float, wz: float, odom: Pose, v_meas: float) -> Verdict:
-        hard = boxed(z for z in self._zones() if z.kind == "nogo" and z.hard)
+        # 抹掉区(地图台账 44)只有也标了硬的才守,跟普通禁行区一样
+        hard = boxed(z for z in self._zones() if z.keep_out and z.hard)
         if not hard:
             return Verdict(vx, wz, "ok")
         est, trusted, why = self._locate(odom)

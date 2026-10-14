@@ -146,6 +146,31 @@ async def test_绕禁行区_不进(tmp_path):
     assert t.min_zone >= 0.52, t.min_zone
 
 
+async def test_抹掉区_规划当禁行绕开_终点在里面拒_狗走进去每拍查到就停(tmp_path):
+    """地图台账 44:管理员在图上抹掉的一块(``erase``),狗永远不去 —— 规划绕开、离它跟离禁行区一样远,
+    终点在里面同步拒;狗被推进去,每拍回退检查就停、发 inside_nogo。"""
+    t = 台子(tmp_path)
+    await t.nav.set_zones(区域({"id": "junk", "kind": "erase", "label": "抹掉",
+                              "polygon": [[5, 1], [7, 1], [7, 6], [5, 6]]}))
+    await t.start(2.0, 3.0)
+    with pytest.raises(NavRequestError, match="规划失败"):
+        await t.nav.goto(Pose.from_xy_yaw(6.0, 3.0))
+    assert t.nav.nogo_at(6.0, 3.0) is not None and t.nav.nogo_at(6.0, 3.0).id == "junk"
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 3.0))
+    await t.走到头()
+    o = await t.在()
+    assert math.hypot(o.x - 10.0, o.y - 3.0) <= 0.2
+    assert t.min_zone >= 0.52, t.min_zone
+    await t.nav.goto(Pose.from_xy_yaw(2.0, 7.0))
+    for _ in range(5):
+        await t.一拍()
+    t.r.teleport(6.0, 5.5, 0.0)
+    await t.一拍()
+    await t.一拍()
+    assert t.status[-1] is NavStatus.FAILED
+    assert [k for k, _ in t.events][-1:] == ["inside_nogo"]
+
+
 async def test_终点在禁行区_没图_没定位_都同步拒_狗不动(tmp_path):
     t = 台子(tmp_path)
     await t.nav.set_zones(区域({"id": "pond", "kind": "nogo",

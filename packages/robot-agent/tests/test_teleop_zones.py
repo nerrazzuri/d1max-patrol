@@ -214,6 +214,20 @@ async def test_普通禁行区不管_没有区域照常(tmp_path):
     assert s2.max_v >= 0.5 - 1e-6
 
 
+async def test_抹掉区_遥控跟普通禁行区一样不守_标了硬的才守(tmp_path):
+    """地图台账 44 的取舍(写在 ``d1max_contract.zones``):抹掉区对自主导航就是禁行区;遥控(人开的)
+    跟普通禁行区一样能进,除非管理员也标了硬禁区。"""
+    s = 台(tmp_path, [Zone("junk", "erase", POOL, "抹掉")])
+    await s.start()
+    await s.开(vx=0.5, secs=10.0)
+    assert s.r.x > 3.5 and s.guard.last.state == "ok", "没标硬的抹掉区:人开的可以进"
+    s2 = 台(tmp_path, [Zone("junk", "erase", POOL, "抹掉", hard=True)])
+    await s2.start()
+    await s2.开(vx=0.5, secs=25.0)
+    assert s2.worst > 0.0 and s2.guard.last.state in ("blocked", "inside"), s2.worst
+    assert s2.t.zone_note()["zone"] == "junk"
+
+
 async def test_定位不可信_有硬禁区全程限速_没有照常(tmp_path):
     s = 台(tmp_path, [_zone()], x=-20.0)
     s.loc.trusted = False

@@ -176,6 +176,20 @@ def test_区域进代价图():
     assert wider.hard[15, 24] and not cm.hard[15, 24] and not wider.hard[15, 25]
 
 
+def test_抹掉区进代价图_跟禁行区一模一样():
+    """地图台账 44:``erase`` 对规划就是禁行区(硬挡、膨胀、σ 外扩都一样)。"""
+    poly = [[1, 1], [2, 1], [2, 2], [1, 2]]
+    nogo = costmap.build(空地(40, 40), 0.1, (0.0, 0.0),
+                         区域({"id": "p", "kind": "nogo", "polygon": poly}),
+                         robot_radius_m=0.3, nogo_margin_m=0.2)
+    erase = costmap.build(空地(40, 40), 0.1, (0.0, 0.0),
+                          区域({"id": "e", "kind": "erase", "polygon": poly}),
+                          robot_radius_m=0.3, nogo_margin_m=0.2)
+    assert erase.hard[15, 15] and erase.hard.sum() == nogo.hard.sum() > 0
+    assert (erase.hard == nogo.hard).all() and (erase.lethal == nogo.lethal).all()
+    assert (erase.cost == nogo.cost).all() and np.isinf(erase.speed).all()
+
+
 def test_格与坐标():
     cm = costmap.build(空地(10, 20), 0.1, (-1.0, 5.0))
     assert cm.cell_of(-1.0, 5.0) == (0, 0) and cm.cell_of(0.95, 5.95) == (9, 19)
