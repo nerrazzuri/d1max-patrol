@@ -194,7 +194,7 @@ async def test_排程_升级前导入的老任务没绑版本_不派_当场报(�
     import_bundle(t.db, 打包(tmp_path, 1), imported_by="alice", now_ms=t.clock())
     老 = {k: v for k, v in 任务.items() if k != "map_version"}
     with t.db.tx() as c:
-        c.execute("UPDATE missions SET definition=?", (json.dumps(老),))
+        c.execute("UPDATE routes SET definition=?, map_version=''", (json.dumps(老),))
     assert active_bundle(t.db).missions["loop"].map_version == "", "老行读得出来,算没绑"
     await _到点(t)
     [run] = t.sched.runs("nightly")

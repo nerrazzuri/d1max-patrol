@@ -30,7 +30,8 @@ TABLES: dict[str, str] = {
     "incident_sources": "事件源", "zones": "防区", "zone_areas": "防区范围",
     "authorizations": "授权时段", "intercepts": "拦截点", "standby_points": "待命点",
     "homes": "原点", "chargers": "充电桩", "nav_zones": "禁行区",
-    "maps": "地图", "bundles": "任务包", "releases": "软件版本",
+    "maps": "地图", "bundles": "任务包", "routes": "巡检路线",
+    "route_schedules": "排程", "releases": "软件版本",
     "alerts": "告警", "incidents": "入侵事件", "runs": "运行记录", "run_photos": "照片",
     "audit": "审计", "recordings": "连续录像",
 }

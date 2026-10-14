@@ -18,7 +18,8 @@
     add-account NAME --role admin|guard|owner [--display-name 真名] → 同上,带角色(W00c3)、
                      显示名(W20 操作人实名:一人一个账号)
     set-role NAME ROLE / disable NAME / enable NAME → 账号管理(W00c3;都吊销那个账号的会话)
-    import-bundle DIR                      → 导入任务包,成为当前包(W00c2a)
+    import-bundle DIR                      → 导入任务包,按名字并进路线库(W00c2a;路线库是唯一真理源)
+    export-bundle OUT_DIR                  → 把路线库导成任务包(备份、搬站点;import-bundle 收得下)
     standby ROBOT NAME --map M:VER --pose x,y,yaw [--default] → 登记待命点(W00c2b)
     source-add NAME                        → 登记事件源,打印共享密钥(只这一次;W00c2c)
     camera-add NAME --onvif URL --zone Z   → 登记固定摄像头(ONVIF 事件 → 入侵派遣;W19)
@@ -292,6 +293,18 @@ def cmd_import_bundle(home: Path, bundle_dir: Path, imported_by: str) -> dict:
     try:
         return import_bundle(db, bundle_dir, imported_by=imported_by, now_ms=wall_ms())
     except CatalogError as exc:
+        raise SiteError(str(exc)) from exc
+    finally:
+        db.close()
+
+
+def cmd_export_bundle(home: Path, out_dir: Path, exported_by: str) -> dict:
+    from d1max_site.routes import RouteError, RouteStore
+    _load(home)
+    db = SiteDB(home / "site.db")
+    try:
+        return RouteStore(db, now_ms=wall_ms).export_bundle(out_dir, by=exported_by)
+    except RouteError as exc:
         raise SiteError(str(exc)) from exc
     finally:
         db.close()
@@ -1151,8 +1164,10 @@ def build_parser() -> argparse.ArgumentParser:
     rm_.add_argument("--note", default="")
     r = sub.add_parser("revoke", help="吊销一台狗(之后重启 d1max-mosquitto)")
     r.add_argument("robot_id")
-    b = sub.add_parser("import-bundle", help="导入任务包,成为当前包")
+    b = sub.add_parser("import-bundle", help="导入任务包,按名字并进站点的路线库")
     b.add_argument("bundle_dir", type=Path)
+    eb = sub.add_parser("export-bundle", help="把站点的路线库导成任务包(备份、搬站点)")
+    eb.add_argument("out_dir", type=Path)
     ra = sub.add_parser("release-add", help="登记一个发布包(W00c5d):之后可以给狗装、切")
     ra.add_argument("dir", type=Path)
     ra.add_argument("--note", default="")
@@ -1295,8 +1310,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                   f"systemctl restart d1max-mosquitto")
         elif args.cmd == "import-bundle":
             got = cmd_import_bundle(home, args.bundle_dir, f"cli:{getpass.getuser()}")
-            print(f"导入了 {got['bundle_id']} v{got['version']}:任务 {', '.join(got['missions'])};"
-                  f"排程 {', '.join(got['schedule_entries']) or '无'}({got['timezone']})")
+            from d1max_site.catalog import import_summary
+            print(import_summary(got))
+        elif args.cmd == "export-bundle":
+            got = cmd_export_bundle(home, args.out_dir, f"cli:{getpass.getuser()}")
+            print(f"导出了 {got['bundle_id']} v{got['version']} → {got['path']}:路线 "
+                  f"{', '.join(got['routes']) or '无'};排程 {', '.join(got['schedules']) or '无'}")
         elif args.cmd == "release-add":
             got = cmd_release_add(home, args.dir, args.note)
             print(f"登记了 {got['name']}({got['version']}):{got['size']} 字节,"

@@ -9,7 +9,13 @@
 - ``POST /api/robots/<id>/goto`` ``{"target":MapPose,"max_speed_mps"?}``(优先级由站点定,W00c2b)
 - ``POST /api/robots/<id>/abort`` ``{"task_id"}``
 - ``POST /api/robots/<id>/patrol`` ``{"mission_id"}``:从当前任务包里起一趟(W00c2a)
-- ``POST /api/bundles`` ``{"path"}``:导入站点主机上的一个任务包目录(W00c2a)
+- ``POST /api/bundles`` ``{"path"}``:导入站点主机上的一个任务包目录,并进路线库(W00c2a;按名字替换,
+  回摘要 ``summary``)
+- 路线库(2026-10-14,``routes.py``,**站点存的路线、排程是唯一真理源**;看 ``view``,改 ``manage``):
+  ``GET /api/routes[?map_id=&map_version=]``、``GET /api/routes/<名>``(带逐点校验 ``problems``)、
+  ``POST /api/routes/<名>``(整条存,带 ``base_revision``,新建 0)、``POST /api/routes/<名>/delete``;
+  ``POST /api/route-timezone``;``GET /api/route-schedules``、``POST /api/route-schedules/<id>``、
+  ``…/<id>/delete``;``POST /api/route-export``(导成任务包放在站点主机的 ``route-exports/``)
 - ``GET/POST /api/robots/<id>/standby``、``POST /api/robots/<id>/standby/return``:待命点(W00c2b);
   GET 也带这台狗的原点(``homes``,W13a);``standby/return`` 可带 ``name`` 回指定的那一个;
   ``POST /api/robots/<id>/standby/here``:在当前位置设待命点(W13a,不动原点)
@@ -18,7 +24,7 @@
   事件账、拦截点、防区(W00c2c)
 - ``GET/POST /api/accounts``、``POST /api/accounts/<name>``、``POST /api/me/password``、
   ``GET /api/audit``:账号、角色、审计(W00c3)
-- ``GET  /api/schedule``:当前包的排程,每条下一轮何时、最近一次去向与结果(W00c2a)
+- ``GET  /api/schedule``:路线库的排程,每条下一轮何时、最近一次去向与结果(W00c2a)
 - ``GET  /api/events`` SSE:第一帧全量快照,之后是派遣器的 status/event/ack/reconcile;
   订阅者跟不上时补发一帧全量快照(``lagged``),不悄悄丢
 
@@ -79,6 +85,9 @@ REQUEST_TIMEOUT_S = 30.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
 #: 防区多边形(商业化 B1c)、名单(时段 / 人员授权)。
+#: 路线库:路线 ``/api/routes/<名>[/delete]``、排程 ``/api/route-schedules/<id>[/delete]``。
+_ROUTE = re.compile(r"^/api/routes/([^/]{1,64})(/delete)?$")
+_ROUTE_SCHED = re.compile(r"^/api/route-schedules(?:/([^/]{1,64})(/delete)?)?$")
 _AREAS = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/areas$")
 _AUTHZ = re.compile(r"^/api/lists/authorizations(?:/(\d{1,9})/remove)?$")
 #: 网页上登记 / 出开通码 / 吊销机器狗(商业化 B1b,管理员)。
@@ -234,6 +243,10 @@ class SiteApi:
         if zones is None and maps is not None:
             from d1max_site.nav_zones import NavZones
             zones = getattr(dispatcher, "zones", None) or NavZones(dispatcher.db, now_ms=self._now)
+        #: 路线库(2026-10-14):站点存的路线、排程。校验点用地图目录,没地图目录(测试台子)就不查可达。
+        from d1max_site.routes import RouteStore
+        self.routes = RouteStore(dispatcher.db, maps=maps, now_ms=self._now) \
+            if dispatcher is not None else None
         self.zones = zones
         if zones is not None and getattr(dispatcher, "zones", None) is None:
             dispatcher.zones = zones
@@ -500,6 +513,9 @@ class _Handler(TlsHandlerMixin):
             if method == "POST" and path == "/api/bundles":
                 self._need(user, MANAGE)
                 return self._import_bundle(user)
+            if path in ("/api/routes", "/api/route-timezone", "/api/route-export") \
+                    or _ROUTE.match(path) or _ROUTE_SCHED.match(path):
+                return self._routes(method, path, user)
             if path == "/api/deterrence" or _DETER.match(path):
                 return self._deterrence(method, path, user)
             if path in ("/api/mode", "/api/mode/zones"):
@@ -749,7 +765,7 @@ class _Handler(TlsHandlerMixin):
             from d1max_site.catalog import active_bundle
             act = active_bundle(disp.db)
             if act is None or mid not in act.missions:
-                raise HttpError(404, f"当前任务包里没有任务 {mid!r}")
+                raise HttpError(404, f"路线库里没有路线 {mid!r}")
             wire = act.missions[mid].to_wire()
             result = self.site.dispatch(lambda: disp.patrol(robot_id, wire, issued_by=str(user),
                                                             priority=MANUAL))
@@ -1242,7 +1258,7 @@ class _Handler(TlsHandlerMixin):
         self._send_json(200, {"ok": True} | desk.intercepts())
 
     def _import_bundle(self, user: str) -> None:
-        from d1max_site.catalog import CatalogError, import_bundle
+        from d1max_site.catalog import CatalogError, import_bundle, import_summary
         d = self._body()
         path = d.get("path")
         if not isinstance(path, str) or not path:
@@ -1252,7 +1268,75 @@ class _Handler(TlsHandlerMixin):
                                 now_ms=self.site._now())
         except CatalogError as exc:
             raise HttpError(409, str(exc)) from exc
-        self._send_json(200, got)
+        self._audit_target = f"{got['bundle_id']} v{got['version']}"
+        self._audit_detail = {"routes": got["routes"], "schedules": got["schedules"],
+                              "kept_schedules": got["kept_schedules"]}
+        self._send_json(200, got | {"summary": import_summary(got)})
+
+    def _routes(self, method: str, path: str, user) -> None:
+        """路线库(``routes.py``):看 ``view``,改 ``manage``(进审计)。出错:校验没过 400(逐点的在
+        ``errors``)、``base_revision`` 对不上 409、没有 404。"""
+        from d1max_site.routes import RouteConflict, RouteError, RouteNotFound
+        store = self.site.routes
+        mr, ms = _ROUTE.match(path), _ROUTE_SCHED.match(path)
+        read = method == "GET"
+        self._need(user, VIEW if read else MANAGE)
+        try:
+            if read:
+                if path == "/api/routes":
+                    q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                    return self._send_json(200, store.view(
+                        (q.get("map_id") or [None])[0], (q.get("map_version") or [None])[0]))
+                if mr is not None and not mr.group(2):
+                    return self._send_json(200, store.get(unquote(mr.group(1))))
+                if ms is not None and ms.group(1) is None:
+                    v = store.view()
+                    return self._send_json(200, {"timezone": v["timezone"],
+                                                 "revision": v["revision"],
+                                                 "schedules": v["schedules"]})
+                raise HttpError(405, "这个接口不能 GET")
+            if method != "POST":
+                raise HttpError(405, "只支持 GET/POST")
+            d = self._body()
+            if path == "/api/route-timezone":
+                self._audit_detail = {"timezone": str(d.get("timezone"))[:64]}
+                return self._send_json(200, store.set_timezone(d.get("timezone"),
+                                                               by=str(user)))
+            if path == "/api/route-export":
+                if self.site.home is None:
+                    raise HttpError(404, "这个站点没配站点目录,导不出任务包")
+                got = store.export_bundle(self.site.home / "route-exports", by=str(user))
+                self._audit_target = f"{got['bundle_id']} v{got['version']}"
+                return self._send_json(200, got)
+            if mr is not None:
+                rid = unquote(mr.group(1))
+                self._audit_target = rid
+                if mr.group(2):
+                    store.delete_route(rid, base_revision=d.get("base_revision"), by=str(user))
+                    self._audit_detail = {"delete": True}
+                    return self._send_json(200, {"ok": True})
+                out = store.put_route(rid, d, by=str(user))
+                self._audit_detail = {"revision": out["revision"], "points": len(out["waypoints"]),
+                                      "map": f"{out['map_id']}:{out['map_version']}"}
+                return self._send_json(200, out)
+            if ms is not None and ms.group(1):
+                eid = unquote(ms.group(1))
+                self._audit_target = eid
+                if ms.group(2):
+                    store.delete_schedule(eid, base_revision=d.get("base_revision"),
+                                          by=str(user))
+                    self._audit_detail = {"delete": True}
+                    return self._send_json(200, {"ok": True})
+                self._audit_detail = {"mission": str(d.get("mission"))[:64],
+                                      "at": str(d.get("at"))[:8]}
+                return self._send_json(200, store.put_schedule(eid, d, by=str(user)))
+        except RouteConflict as exc:
+            raise HttpError(409, str(exc), extra={"errors": exc.errors}) from exc
+        except RouteNotFound as exc:
+            raise HttpError(404, str(exc)) from exc
+        except RouteError as exc:
+            raise HttpError(400, str(exc), extra={"errors": exc.errors}) from exc
+        raise HttpError(404, f"没有 {method} {path}")
 
     def _halt(self, robot_id: str, user) -> None:
         """停车(W00c5c):走 cmd,不走遥控连接。``abort`` 权限 —— 业主也能按。"""

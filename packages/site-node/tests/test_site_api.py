@@ -434,7 +434,7 @@ def test_排程视图(站点, tmp_path):
     站点.req("POST", "/api/bundles", {"path": str(_任务包(tmp_path))}, token=tok)
     站点.api.scheduler = SiteScheduler(站点.db, 站点.disp, now_ms=wall)
     code, v = 站点.req("GET", "/api/schedule", token=tok)
-    assert code == 200 and v["bundle"]["bundle_id"] == "estate-kl"
+    assert code == 200 and v["bundle"]["bundle_id"] == "site-routes"
     assert v["entries"][0]["id"] == "nightly" and v["entries"][0]["next_run"]
 
 
