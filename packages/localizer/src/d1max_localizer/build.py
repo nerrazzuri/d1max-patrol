@@ -4,7 +4,11 @@
   再用);
 - ``frames.json``:坐标换算,从建图轨迹标定;**「上」的正负号用点云判**(最密的那层水平面 —— 地面 ——
   要在雷达下面):光看轨迹分不出上下,新狗 C40011 的雷达就是 X 朝下装的,按「X 朝上」标出来的平面是
-  镜像的,转向会反(2026-09-27 画 newdog2 的栅格时发现);
+  镜像的,转向会反(2026-09-27 画 newdog2 的栅格时发现)。**再拿狗自己的里程核一遍手性**(对账 S2,
+  :func:`handedness`):录包里有运控的里程(``/odom/mc_odom``),建图轨迹在地图平面上往左转的时候里程也
+  得往左转;一直反着(镜像)就不出图、说清楚,核不了(没录包、没里程、转得太少)照出图,
+  ``build.json`` 的 ``handedness`` 写着结论(2026-10-13 狗上建的 ``office-c40221:2`` 跟台式机拿同一个
+  录包重建的上下镜像,W36);
 - ``floor.pgm`` + ``floor.yaml``:按 ``frames.json`` 的平面画的规划栅格(:mod:`d1max_localizer.grid`);
   有录包就从里面逐帧读扫描打真射线(:func:`bag_scans`,跟着狗走的人清得掉),读不了退回模拟射线,
   ``build.json`` 的 ``grid.rays`` 写着用的哪种;
@@ -79,6 +83,22 @@ LC_MAX_SHIFT_SHARE = 0.05
 LC_MAX_TURN_DEG = 15.0
 _LC_COUNT = re.compile(r"(?:Overall number of accepted loop-closures|Total accepted loop closures)"
                        r":\s*(\d+)")
+#: 核手性(对账 S2)用的狗自己的里程:建图录包里录的(``app/mapping.py`` 的 ``RECORD_TOPICS``),
+#: 运控的那个在前。
+ODOM_TOPICS = ("/odom/mc_odom", "/odom/current_pose")
+#: 每隔这么久比一次两边各转了多少(秒);这一段里程转过这么多才算「在转」(弧度,约 3°)。
+HAND_STEP_S = 1.0
+HAND_MIN_STEP_RAD = 0.05
+#: 算进来的转向加起来不到这么多(弧度,约 57°)不下结论。建图走一圈转得远比这多(10-08、10-13 两份
+#: 办公室录包:900°、1300° 上下)。
+HAND_MIN_TURN_RAD = 1.0
+#: 按转过的角度加权:同号的占这么多以上算对,反号的占这么多以上算镜像,中间说不清(照出图)。两份办公室
+#: 录包台式机重建:同号 100%,相关 0.999。
+HAND_AGREE = 0.8
+#: 两边时刻没对齐的余量:在 ±这么多秒里找两边最像的那一下(录包里雷达「收到 − 报文头」比里程大
+#: 2.7 s,10-08 那份;报文头两边是一个钟)。
+HAND_MAX_LAG_S = 3.0
+HAND_LAG_STEP_S = 0.1
 
 
 class BuildError(RuntimeError):
@@ -152,11 +172,14 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
             read_scans: Callable[..., Iterator[Any]] | None = None,
             rtk_antenna: tuple[float, float] = (0.0, 0.0),
             clock_offset: Callable[[Path, str], float | None] | None = None,
-            loop_closure: str | None = None) -> list[str]:
+            loop_closure: str | None = None,
+            read_odom: Callable[[Path], tuple[str, list[tuple[float, float, float]]] | None]
+            | None = None) -> list[str]:
     """``work`` 里的 ``raw_prior.mm``、``traj.tum``、``map.simplemap`` → ``out`` 里的版本文件。回
-    文件名。给了 ``bag``(建图的那个录包)就从里面逐帧读扫描打真射线。``loop_closure`` 是回环工具
-    的路径(:func:`find_loop_closure`;None = 不回环):先回环(:func:`loop_close`),成了就从
-    ``work/lc`` 里回环后的三样打包。"""
+    文件名。给了 ``bag``(建图的那个录包)就从里面逐帧读扫描打真射线、读狗自己的里程核手性(镜像就抛
+    :class:`BuildError`,一个版本文件都不写)。``loop_closure`` 是回环工具的路径
+    (:func:`find_loop_closure`;None = 不回环):先回环(:func:`loop_close`),成了就从 ``work/lc``
+    里回环后的三样打包。"""
     prior_pack = prior_pack or PriorPack()
     import numpy as np
 
@@ -181,6 +204,14 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     sensor = np.array([p for _, p, _ in traj])
     frames, why = orient(points, traj)
     frames = frames.with_sensor_in_base(*sensor_in_base)
+    hand = check_handedness(traj, frames, bag, lidar_topic, read_odom or bag_odom,
+                            clock_offset or bag_clock_offset)
+    if hand["verdict"] == "mirrored":
+        raise BuildError(
+            f"地图是镜像的,不出图:建图轨迹在地图平面上的转向跟狗自己的里程({hand['topic']})"
+            f"反号 —— 按转过的角度算 {1 - hand['agree']:.0%} 反着(一共转了 {hand['turn_deg']}°)。"
+            f"多半是「上」判反了({why});这样的图上转向会反、导航会往反方向拐。"
+            "核雷达的装法和 frames 的标定(对账 S2)")
     frames.save(out / "frames.json")
     t0 = time.monotonic()
     body = np.array([frames.to_map2d(p, q)[:2] for _, p, q in traj])
@@ -207,9 +238,117 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
         prior_pack.label(), "frames": why, "frames_count": len(traj),
         "grid": {"res": g.res, "size": list(g.image.shape[::-1]), "origin": list(g.origin),
                  "rays": rays},
-        "mola": _mola_info(work), "loop_closure": lc_info, "geo": geo_info, "timings_s": timings},
-        ensure_ascii=False, indent=2) + "\n")
+        "mola": _mola_info(work), "loop_closure": lc_info, "geo": geo_info, "handedness": hand,
+        "timings_s": timings}, ensure_ascii=False, indent=2) + "\n")
     return files
+
+
+def check_handedness(traj: Sequence[Any], frames: Frames, bag: Path | None, lidar_topic: str,
+                     read_odom: Callable[[Path], tuple[str, list[tuple[float, float, float]]]
+                                         | None],
+                     clock_offset: Callable[[Path, str], float | None]) -> dict[str, Any]:
+    """建图轨迹(按 ``frames`` 换到地图平面)的转向跟录包里狗自己的里程比(对账 S2)。回 ``build.json``
+    的 ``handedness``:``verdict`` = ``ok`` / ``mirrored`` / ``unclear`` / ``skipped``(没录包、没
+    里程、读不了),带比的是哪个话题、按哪个钟对的时刻。先按报文头的钟对(狗上两边是一个钟);两边时段
+    对不上再按「收到的时刻」对:轨迹加上雷达的「收到 − 报文头」(``clock_offset``)。"""
+    if bag is None:
+        return {"verdict": "skipped", "why": "没给录包"}
+    try:
+        got = read_odom(bag)
+    except Exception as exc:  # noqa: BLE001 —— 核不了照出图(没有 ROS、包坏了),写明为什么
+        why = f"读不了录包里的里程:{type(exc).__name__}: {exc}"
+        return {"verdict": "skipped", "why": why[:300]}
+    if got is None:
+        return {"verdict": "skipped", "why": f"录包里没有里程({'、'.join(ODOM_TOPICS)})"}
+    topic, rows = got
+    yaws = [(t, frames.to_map2d(p, q)[2]) for t, p, q in traj]
+    res, clock = handedness(yaws, [(h, y) for h, _, y in rows]), "header"
+    if res.pop("apart", False):
+        off = clock_offset(bag, lidar_topic)
+        if off is not None:
+            res = handedness([(t + off, y) for t, y in yaws], [(r, y) for _, r, y in rows])
+            res.pop("apart", None)
+            clock = "receive"
+    return {**res, "topic": topic, "clock": clock}
+
+
+def handedness(map_yaw: Sequence[tuple[float, float]], odom_yaw: Sequence[tuple[float, float]]
+               ) -> dict[str, Any]:
+    """两串 ``(时刻, 朝向)``(同一个钟):地图平面上的转向跟里程的同不同号。每 :data:`HAND_STEP_S` 比
+    一次各转了多少;两边时刻在 ±:data:`HAND_MAX_LAG_S` 里挪到最像(同号、反号里差得少的那个,不偏向
+    哪个号);里程转得够的那几段按转过的角度加权数同号的占比(``agree``)。回 ``verdict``
+    (``ok`` / ``mirrored`` / ``unclear``)、``why``、``agree``、``turn_deg``、``windows``、
+    ``lag_s``、``corr``、``ratio``(地图转的 / 里程转的,中位数)。两边时段对不上时带 ``apart``。"""
+    import numpy as np
+
+    m = np.array(sorted(map_yaw), float).reshape(-1, 2)
+    o = np.array(sorted(odom_yaw), float).reshape(-1, 2)
+    if len(m) < 2 or len(o) < 2:
+        return {"verdict": "unclear", "why": "帧太少", "apart": True}
+    mu, ou = np.unwrap(m[:, 1]), np.unwrap(o[:, 1])
+    lo = max(m[0, 0], o[0, 0]) + HAND_MAX_LAG_S
+    hi = min(m[-1, 0], o[-1, 0]) - HAND_MAX_LAG_S
+    if hi - lo < 10 * HAND_STEP_S:
+        return {"verdict": "unclear", "apart": True,
+                "why": f"两边的时段对不上(重叠 {max(0.0, hi - lo):.0f} s)"}
+    g = np.arange(lo, hi, HAND_STEP_S)
+    do = np.diff(np.interp(g, o[:, 0], ou))
+    sel = np.abs(do) >= HAND_MIN_STEP_RAD
+    turn = float(np.abs(do[sel]).sum())
+    info: dict[str, Any] = {"turn_deg": round(math.degrees(turn)), "windows": int(sel.sum())}
+    if turn < HAND_MIN_TURN_RAD:
+        return {"verdict": "unclear", **info,
+                "why": f"里程转得太少(算进来的 {info['turn_deg']}°,"
+                       f"要 {math.degrees(HAND_MIN_TURN_RAD):.0f}°)"}
+    # 挪到两边最像:同号、反号里差得少的那个算(不偏向哪个号);一样像取挪得少的
+    best: tuple[float, float, Any] | None = None
+    lags = sorted(np.arange(-HAND_MAX_LAG_S, HAND_MAX_LAG_S + 1e-9, HAND_LAG_STEP_S), key=abs)
+    for lag in lags:
+        dm = np.diff(np.interp(g + lag, m[:, 0], mu))
+        e = float(min(((dm - do) ** 2).sum(), ((dm + do) ** 2).sum()))
+        if best is None or e < best[1] - 1e-9 * (1.0 + best[1]):
+            best = (float(lag), e, dm)
+    assert best is not None
+    lag, _, dm = best
+    w = np.abs(do[sel])
+    agree = float((w * (np.sign(dm[sel]) == np.sign(do[sel]))).sum() / w.sum())
+    corr = (float(np.corrcoef(dm, do)[0, 1]) if np.std(dm) > 1e-9 and np.std(do) > 1e-9
+            else None)
+    info.update(agree=round(agree, 3), lag_s=round(lag, 1) + 0.0,
+                corr=None if corr is None else round(corr, 3),
+                ratio=round(float(np.median(dm[sel] / do[sel])), 3))
+    if agree >= HAND_AGREE:
+        return {"verdict": "ok", **info, "why": "转向跟里程同号"}
+    if agree <= 1 - HAND_AGREE:
+        return {"verdict": "mirrored", **info, "why": "转向跟里程反号:地图是镜像的"}
+    return {"verdict": "unclear", **info, "why": "转向跟里程一阵同号一阵反号:说不清(时刻对不齐?)"}
+
+
+def bag_odom(bag: Path, topics: Sequence[str] = ODOM_TOPICS
+             ) -> tuple[str, list[tuple[float, float, float]]] | None:
+    """录包里狗自己的里程(``nav_msgs/Odometry``):``topics`` 里第一个录了的 → ``(话题, [(报文头时刻,
+    收到时刻, 朝向)])``;一个都没录是 None。要 ROS 的系统 Python(``rosbag2_py``)。"""
+    import rosbag2_py
+    from nav_msgs.msg import Odometry
+    from rclpy.serialization import deserialize_message
+
+    storage = "mcap" if any(Path(bag).glob("*.mcap")) else "sqlite3"
+    r = rosbag2_py.SequentialReader()
+    r.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id=storage),
+           rosbag2_py.ConverterOptions("", ""))
+    have = {t.name for t in r.get_all_topics_and_types()}
+    topic = next((t for t in topics if t in have), None)
+    if topic is None:
+        return None
+    r.set_filter(rosbag2_py.StorageFilter(topics=[topic]))
+    rows = []
+    while r.has_next():
+        _, raw, t_ns = r.read_next()
+        m = deserialize_message(raw, Odometry)
+        q = m.pose.pose.orientation
+        yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        rows.append((m.header.stamp.sec + m.header.stamp.nanosec * 1e-9, t_ns * 1e-9, yaw))
+    return topic, rows
 
 
 def find_loop_closure(setting: str = "auto", *, env: Mapping[str, str] | None = None,
