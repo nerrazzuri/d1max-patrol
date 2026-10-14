@@ -1,6 +1,7 @@
 # 还没验收、现在编不过的平台(RC0):单独一个工作流,红了不影响 ci 的结论。
 # macOS 桌面版要不要继续支持(决策 28 当时说了要)由用户定;定了要就修好挪回 ci.yml。
-# 现在只有 macOS 桌面版:2026-10-11 起编不过(video_player_avfoundation: module 'Flutter' not found),没修。
+# macOS 桌面版:2026-10-11 起编不过(video_player_avfoundation: module 'Flutter' not found),没修。
+# iOS(RC 加固 H13):基础工程,只验「不签名能编过」;没有苹果开发者账号,不签名、不出包、不推送。
 # 只在合进 master、手动触发时跑(macOS 机器按十倍计费)。
 name: experimental
 
@@ -35,3 +36,19 @@ jobs:
           name: d1max-desktop-macos
           path: mobile/build/macos/Build/Products/Release/d1max_patrol.app
           retention-days: 14
+
+  # H13:iOS 基础工程编得过不过。不签名(没有开发者账号),只编 debug;不上传产物(没签名的包装不到手机上)。
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: 装 Flutter 3.47.5(官方仓库,按标签)
+        run: |
+          git clone --depth 1 --branch 3.47.5 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - run: flutter --version && xcodebuild -version
+      - working-directory: mobile
+        run: flutter pub get
+      - working-directory: mobile
+        run: flutter build ios --debug --no-codesign
