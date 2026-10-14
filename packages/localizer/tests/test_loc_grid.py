@@ -576,12 +576,13 @@ def _scene(frames, walls, floor, origins, visible=None, *, seed=13, sigma=0.02):
 GLASS = (3.0, 5.5)                                         # 北墙上的玻璃(x),没有一个点
 
 
-def _glass_room(frames):
+def _glass_room(frames, *, outside_wall=True):
     """8 × 6 m 的屋子(x 0–8、y 0–6),北墙 x 3.0–5.5 是玻璃(一个点都没有),外面 4 m 有一堵墙
-    (y = 10)、外面的地面也看得到 —— 只能从玻璃那儿看出去。狗沿 y = 2 从 x = 1 走到 7。"""
+    (y = 10;``outside_wall=False`` 没有这堵墙,外面只有地面)、外面的地面也看得到 —— 只能从玻璃那儿
+    看出去。狗沿 y = 2 从 x = 1 走到 7。"""
     walls = np.vstack([_wall(0, 0, 8, 0), _wall(0, 0, 0, 6), _wall(8, 0, 8, 6),
-                       _wall(0, 6, GLASS[0], 6), _wall(GLASS[1], 6, 8, 6),
-                       _wall(-4, 10, 12, 10)])
+                       _wall(0, 6, GLASS[0], 6), _wall(GLASS[1], 6, 8, 6)]
+                      + ([_wall(-4, 10, 12, 10)] if outside_wall else []))
     rng = np.random.default_rng(17)
     floor = np.vstack([np.c_[rng.uniform([0, 0], [8, 6], (24000, 2)), np.zeros(24000)],
                        np.c_[rng.uniform([-4, 6.05], [12, 9.95], (40000, 2)), np.zeros(40000)]])
@@ -665,6 +666,19 @@ def test_M9_玻璃外面去掉的格记进显示用的掩码_屋里可通行的�
     sub = old.image[rows, ox:ox + W]
     assert sub.shape == g.image.shape
     assert ((sub == G.FREE) & (g.image != G.FREE) == g.seen).all()
+
+
+def test_M9_玻璃外面没有墙_只有看到过的地面_裁图也留着它():
+    """玻璃外面只有地面、没有墙(没有占据格):那一片去掉之后图上一格「有内容」的都没有了 ——
+    裁图要把掩码也算进去,不然掩码跟着被裁掉、显示不出来。"""
+    f = _frames()
+    P, T, scans, body = _glass_room(f, outside_wall=False)
+    g = G.render(P, T, f, scans=scans, body_path=body)
+    assert g.seen is not None
+    X, Y = _xy(g)
+    assert not ((g.image != G.UNKNOWN) & (Y > 6.5)).any(), "玻璃外面没有可通行、没有墙"
+    assert Y.max() > 9.0 and g.seen[(Y > 8.0) & (X > 3.5) & (X < 5.0)].mean() > 0.9, \
+        "图一直留到看到过的那一片(y 到 10)"
 
 
 def test_M9_写掩码_P4_一格一位_跟图一样大_没有就不写(tmp_path):

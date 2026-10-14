@@ -89,6 +89,10 @@ def test_预览_看到过的是浅灰_抹掉的是没建图_范围按有内容�
     assert px[10, 40] == mp.SEEN_GRAY and px[10, 10] == 254 and px[5, 10] == 0
     assert px[30, 40] == 205 and 205 < mp.SEEN_GRAY < 254
     assert info["seen"] is True and info["content_bbox"] == [5.0, 5.0, 50.0, 25.0]
+    over = seen.copy()
+    over[5:25, 5:30] = True                              # 掩码压在地面、墙上(坏的):地面、墙照旧
+    px = _gray_rows(mp.render(_pgm(g), META, seen=over)[0])
+    assert px[10, 10] == 254 and px[5, 10] == 0 and px[10, 40] == mp.SEEN_GRAY
     erase = np.zeros(g.shape, bool)
     erase[:, 25:] = True                                 # 屋子右边一截(含右墙)+ 外面那一片全抹掉
     png, info = mp.render(_pgm(g), META, seen=seen, erase=erase)
