@@ -679,6 +679,13 @@ class Server:
         self.alert_sources = SiteAlertSources(self.alerts, now_ms=wall_ms,
                                               skew_of=self.dispatcher.clock_skew_s)   # W09d:同一份
         self.alert_sources.attach(self.dispatcher)
+        # 运营可视化:规划路径 / 轨迹 / 被挡(内存)、定位历史(库 58)
+        from d1max_site.loc_history import LocHistory
+        from d1max_site.runviz import RunViz
+        self.runviz = RunViz(now_ms=wall_ms, alerts=self.alerts)
+        self.runviz.attach(self.dispatcher)
+        self.loc_history = LocHistory(self.db, now_ms=wall_ms)
+        self.loc_history.attach(self.dispatcher)
         # W00c6c:排程这一轮没跑,告诉值守的人。
         self.scheduler.on_outcome = self.alert_sources.on_schedule_outcome
         # W16:入侵有了去向(派出去了、没狗去)、事件源被限流,告诉值守的人。
@@ -895,6 +902,7 @@ class Server:
         self.api.rtk = self.rtk
         self.api.recordings = self.recordings
         self.api.cctv = self.cctv
+        self.api.runviz, self.api.loc_history = self.runviz, self.loc_history   # 运营可视化
         self.cctv.on_changed = self.api.drop_cctv_view   # 删了、改了:正在看的旧画面当场关
         self._stop = threading.Event()
         self._chores = threading.Thread(target=self._chore_loop, daemon=True,
@@ -996,6 +1004,8 @@ class Server:
             await asyncio.sleep(STEP_S)
             # 每一样各自 try(连取部件也在 try 里):一样炸了不带走别的
             for what, part, meth in (("告警", "alert_sources", "step"),
+                                     ("被挡告警", "runviz", "tick"),             # 运营可视化
+                                     ("定位历史", "loc_history", "tick"),
                                      ("入侵告警补报", "incidents", "retell"),    # W16 外审
                                      ("看见人", "sightings", "tick"),            # W33
                                      ("受力", "force", "reconcile"),             # W26

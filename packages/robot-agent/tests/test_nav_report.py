@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import math
 
+from test_obstacle_avoid import 台子
+
 from d1max_agent.nav_report import (
     MAX_POINTS,
     MIN_GAP_MS,
@@ -15,7 +17,6 @@ from d1max_agent.nav_report import (
 )
 from d1max_contract.messages import Telemetry
 from d1max_patrol.protocol.nav_types import NavStatus, Pose
-from test_obstacle_avoid import 台子
 
 
 def _line(n, step=0.05):

@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 58                      # 路线库(站点存的路线、排程是唯一真理源),老的当前包抄进来
+SCHEMA_VERSION = 59                      # 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -572,6 +572,25 @@ CREATE TABLE IF NOT EXISTS route_store (
     updated_by  TEXT NOT NULL DEFAULT '',
     last_import TEXT NOT NULL DEFAULT ''
 );
+-- 运营可视化(库 59):定位丢了 / 变差的每一段(loc_history.py)。有界:每台狗 500 段、全站 5000 段、
+-- 90 天。end_ms 空 = 还没结束;end_how:recovered / became_* / offline / no_data / site_restart。
+CREATE TABLE IF NOT EXISTS loc_episodes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id    TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    start_ms    INTEGER NOT NULL,
+    end_ms      INTEGER,
+    end_how     TEXT NOT NULL DEFAULT '',
+    map_id      TEXT NOT NULL DEFAULT '',
+    map_version TEXT NOT NULL DEFAULT '',
+    x           REAL,
+    y           REAL,
+    cause       TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT '',
+    sigma_m     REAL,
+    task_id     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS loc_episodes_robot ON loc_episodes(robot_id, start_ms);
 """
 
 

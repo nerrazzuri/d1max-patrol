@@ -124,6 +124,10 @@
     "en": "Idle robot not localized, cannot dispatch",
     "zh": "空闲的狗定位不可信，派不了单"
   },
+  "nav_blocked": {
+    "en": "Robot blocked for over a minute",
+    "zh": "狗被挡住了，一分钟还没走成"
+  },
   "estop_pressed": {
     "en": "E-stop pressed",
     "zh": "急停被按下"

@@ -223,6 +223,10 @@ class SiteApi:
         self.weather: Any = None
         #: P1 推到手机(商业化 A6,``push.PushDesk``)。没接的站点 /api/push/devices 回 404。
         self.push: Any = None
+        #: 运营可视化:规划路径 / 轨迹 / 被挡(``runviz.RunViz``)、
+        #: 定位历史(``loc_history.LocHistory``)。
+        self.runviz: Any = None
+        self.loc_history: Any = None
         #: 体检、诊断(商业化 A1,``health.HealthDesk``)。没接的站点 /healthz 只回好。
         self.health: Any = None
         #: 站点目录(商业化 A4:狗领证书包从 ``<站点目录>/ca/issued/`` 拿)。站点主程序接上。
@@ -545,6 +549,9 @@ class _Handler(TlsHandlerMixin):
                 return self._report(method, user)
             if path == "/api/recordings" or _REC.match(path):
                 return self._recordings(method, path, user)
+            from d1max_site import api_runviz
+            if api_runviz.handles(path):               # 运营可视化:路径轨迹、定位历史、摄像头登记
+                return api_runviz.route(self, method, path, user)
             if path == "/api/cameras" or _CAM.match(path):
                 return self._cameras(method, path, user)
             if path == "/api/admin/maps" or path.startswith("/api/admin/maps/"):
