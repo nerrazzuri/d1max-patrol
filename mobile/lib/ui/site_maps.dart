@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 import 'nw/nw_button.dart';
+import 'nw/nw_p3_robots.dart' show robotOnline;
 import 'nw/nw_p4_admin.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
@@ -631,7 +632,8 @@ class _SiteMapTabState extends State<SiteMapTab> {
                                                 child: NwRobotMarker(
                                                     markerKey: SiteMapTab.markerKey(id),
                                                     id: id,
-                                                    tone: nwToneOf(online ? 'online' : 'offline')))),
+                                                    // 不在线的（过期、吊销）：中性色，不是绿的
+                                                    tone: online ? nwToneOf('online') : NwTone.neutral))),
                                     ]))))),
                     Positioned(
                         left: Nw.s8,
@@ -695,10 +697,17 @@ class _SiteMapTabState extends State<SiteMapTab> {
                 }))));
   }
 
-  static bool _online(Map<String, dynamic> r) {
-    final s = r['status'];
-    return s is Map && s['online'] == true;
-  }
+  /// 在线 = 没吊销、狗说在线、**站点说这份状态还新鲜**，跟狗列表一个口径（`robotOnline`；App 重做外审
+  /// I2：原来只看狗最后一次说的 `online`，狗失联以后那一格还是真的，站点用 `fresh=false` 说它过期了 ——
+  /// 过期的、吊销的都被画成了绿色的在线）。
+  static bool _online(Map<String, dynamic> r) => robotOnline(r);
+
+  /// 状态药丸上写什么、什么色：在线绿；吊销、离线照规矩（离线红）。
+  static (String, NwTone) _state(Map<String, dynamic> r) => r['revoked'] == true
+      ? (tr('Revoked', '已吊销'), NwTone.neutral)
+      : _online(r)
+          ? (tr('Online', '在线'), nwToneOf('online'))
+          : (tr('Offline', '离线'), nwToneOf('offline'));
 
   /// 这只狗在图上的位置（米）；没设位置、没报的是 null。
   static Offset? _pose(Map<String, dynamic> r) {
@@ -772,12 +781,17 @@ class _SiteMapTabState extends State<SiteMapTab> {
                                       style:
                                           NwText.titleSmall.copyWith(color: c.text, fontWeight: FontWeight.w700))),
                               const SizedBox(width: Nw.s8),
-                              NwStatusPill(
-                                  label: _online(r) ? tr('Online', '在线') : tr('Offline', '离线'),
-                                  tone: nwToneOf(_online(r) ? 'online' : 'offline')),
+                              NwStatusPill(label: _state(r).$1, tone: _state(r).$2),
                             ]),
                             nwGap4,
-                            Text(where(r), maxLines: 2, overflow: TextOverflow.ellipsis, style: sub),
+                            // 不在线的：图上那个点是它最后报的位置，不是现在的，说出来
+                            Text(
+                                _online(r) || _pose(r) == null
+                                    ? where(r)
+                                    : tr('${where(r)} · last known position', '${where(r)} · 最后知道的位置'),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: sub),
                           ])),
                       Icon(Icons.chevron_right_rounded, size: 24, color: c.textSecondary),
                     ]))),

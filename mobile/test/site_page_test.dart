@@ -765,12 +765,19 @@ void main() {
     expect(find.byKey(const Key('btn-resume')), findsNothing);
   });
 
-  testWidgets('没在跑任务就没有叫停按钮', (t) async {
+  testWidgets('这一页看着它没在跑任务：叫停照样在、按得动；按了现问站点，真没在跑就说没在跑', (t) async {
+    // App 重做外审 I1（2026-10-14）：原来是「没在跑任务就没有叫停按钮」—— 可「没在跑」是这一页进来时
+    // 读的那一眼，之后狗被别处派走这一页不知道，人就没有叫停可按。
     final idle = Map<String, dynamic>.of(siteFixture('site_robot'));
     final st = Map<String, dynamic>.of(idle['status'] as Map<String, dynamic>)..['task'] = null;
     idle['status'] = st;
-    await openRobot(t, FakeApi('guard', robotView: idle));
-    expect(find.byKey(const Key('btn-abort')), findsNothing);
+    final api = FakeApi('guard', robotView: idle);
+    await openRobot(t, api);
+    expect(find.byKey(const Key('btn-abort')), findsOneWidget);
+    await t.tap(find.byKey(const Key('btn-abort')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('它现在没在跑任务'), findsOneWidget);
+    expect(api.calls.where((c) => c.startsWith('abort ')), isEmpty);
   });
 
   testWidgets('打开就是站点列表：没有直连入口（W00c5e）', (t) async {

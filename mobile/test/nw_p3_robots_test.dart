@@ -199,7 +199,7 @@ void main() {
   });
 
   group('单狗页', () {
-    testWidgets('叫停在页头、红的；没任务时置灰、按不动，不带 btn-abort 这个 Key', (t) async {
+    testWidgets('叫停在页头、红的；这一页看着没任务时也按得动（外审 I1）', (t) async {
       await t.pumpWidget(MaterialApp(
           home: SiteRobotPage(api: FakeApi('guard', robotView: busyView()), robotId: 'A')));
       await t.pumpAndSettle();
@@ -217,8 +217,8 @@ void main() {
       await t.pumpWidget(MaterialApp(
           home: SiteRobotPage(key: UniqueKey(), api: FakeApi('guard', robotView: idle), robotId: 'A')));
       await t.pumpAndSettle();
-      expect(find.byKey(const Key('btn-abort')), findsNothing);
-      expect(t.widget<FilledButton>(find.byKey(const Key('btn-abort-off'))).onPressed, isNull);
+      expect(t.widget<FilledButton>(find.byKey(const Key('btn-abort'))).onPressed, isNotNull);
+      expect(find.byKey(const Key('btn-abort-off')), findsNothing);
       await t.pumpWidget(const SizedBox());
     });
 
@@ -298,7 +298,7 @@ void main() {
       expect(find.text('进'), findsOneWidget);
     });
 
-    testWidgets('「实时」只在真能开的时候亮：还没拿到遥控、没画面、结束了各说各的', (t) async {
+    testWidgets('状态标签说的是遥控权（外审 M1：不写「实时」）：还没拿到、拿到了、没画面、结束了各说各的', (t) async {
       t.view.physicalSize = const Size(800 * 2, 360 * 2);
       t.view.devicePixelRatio = 2.0;
       addTearDown(t.view.reset);
@@ -311,7 +311,7 @@ void main() {
       api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5, 'max_wz': 0.75});
       await t.pump();
       await t.pump();
-      expect(pill().label, '实时');
+      expect(pill().label, '已获控制');
       expect(pill().tone, NwTone.success);
       api.link!.ctl.add(<String, dynamic>{'kind': 'video', 'ok': false});
       await t.pump();
