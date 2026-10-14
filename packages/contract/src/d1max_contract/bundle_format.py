@@ -28,7 +28,10 @@ from d1max_contract.schedule import Schedule, ScheduleError, parse_schedule
 BUNDLE_MANIFEST = "bundle.yaml"
 
 #: 本版打出来的包写的 schema。§7.2 的 ``requires_mission_schema`` 跟它对账。
-BUNDLE_SCHEMA = 1
+#:
+#: 2(R1,2026-10-14):每个任务都写 ``map_version``(点是在哪一版图上量的),打包器不收没写的。
+#: 1 号的老包里任务都没绑版本,站点不再导入(报错点名哪几份、站点上这张图有哪几版)。
+BUNDLE_SCHEMA = 2
 
 MIN_VERSION = 1
 #: 上界拦的是时间戳。§3.2 要的是**单调递增的整数**,不是时间戳:两台机器的
@@ -374,6 +377,16 @@ def verify_pure_data(root: Path | str, *,
 MISSIONS_DIR = "missions"
 
 
+def unbound_mission_text(name: str, map_id: str, versions: Sequence[str] = ()) -> str:
+    """任务没写 ``map_version`` 的那句话(打包器、站点导入共用)。``versions``:站点上这张图有哪几版
+    (新的在前),给了就列出来 —— **只列,不替人挑**:哪一版是这些点量的,只有画点的人知道。"""
+    have = (f";站点上 {map_id} 有这几版:{'、'.join(versions)}(新的在前)" if versions
+            else "")
+    return (f"任务 {name} 没写 map_version:这些点是在 {map_id} 的哪一版图上量的?"
+            "每次建图原点都不一样,不写就核不了坐标对不对得上(R1)。"
+            f"在任务里加 \"map_version\": \"<版本>\"(核过点再写),重新打包{have}")
+
+
 def bundle_sha256(bundle_dir: Path | str) -> str:
     """整包指纹。**跟 §7.3 的发布包是同一套算法** —— 只是跳过的自述文件
     换成了 ``bundle.yaml``。两套算法就是两个真理源(定夺 3)。
@@ -429,6 +442,8 @@ def _盖章(bundle_dir: Path, schema: int) -> None:
             m = parse_mission(raw)
         except (json.JSONDecodeError, MissionError, ValueError, OSError) as e:
             raise BundleError(f"任务 {p.name} 不合规: {e}") from e
+        if not m.map_version:
+            raise BundleError(unbound_mission_text(p.name, m.map_id))
         data = m.to_wire()
         data["schema"] = schema
         p.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True,

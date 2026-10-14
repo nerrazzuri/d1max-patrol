@@ -178,9 +178,10 @@ def test_上线的形状():
     }
 
 
-def test_当前的schema是1():
-    """§7.2 的 ``requires_mission_schema`` 跟这个数对账。改它是**破坏兼容**。"""
-    assert BUNDLE_SCHEMA == 1
+def test_当前的schema是2():
+    """§7.2 的 ``requires_mission_schema`` 跟这个数对账。改它是**破坏兼容**。
+    2(R1):每个任务都绑地图版本(``map_version``);1 号的老包站点不再导入。"""
+    assert BUNDLE_SCHEMA == 2
 
 
 def test_自述是冻的():

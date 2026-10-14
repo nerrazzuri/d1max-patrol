@@ -63,7 +63,7 @@ def generate() -> dict[str, dict[str, Any]]:
             command_id="cmd-0005", task_id="task-0005", kind="patrol",
             issued_at=1_760_000_100_000, expires_at=1_760_000_160_000, control_epoch=3,
             priority=0, payload={"map_version": "7", "mission": Mission(
-                mission="night-loop", map_id="estate-1", policy=Policy(loops=1),
+                mission="night-loop", map_id="estate-1", map_version="7", policy=Policy(loops=1),
                 waypoints=(
                     MissionWaypoint(name="gate", pose=Pose.from_xy_yaw(12.5, -3.25, 1.5708),
                                     actions=(Action(type="photo", camera="front"),)),

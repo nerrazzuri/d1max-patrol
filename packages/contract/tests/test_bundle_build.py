@@ -24,6 +24,7 @@ def 一个任务() -> dict:
     return {
         "mission": "night",
         "map_id": "floor1",
+        "map_version": "3",             # R1:打包器不收没绑版本的任务
         # 形状照 ``engine/mission.py`` 的 ``parse_mission`` 来 —— ``_盖章``
         # 会把每个任务真过一遍解析,对不上就打不出包。
         "waypoints": [{
