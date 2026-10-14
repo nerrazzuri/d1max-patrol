@@ -93,7 +93,7 @@ def test_S05_排程不抢在驱离的狗_选狗和发之前都看(tmp_path):
     deter._save(s)
     sched = SiteScheduler(db, d, now_ms=lambda: NOW)
     sched.site_busy = deter.busy
-    act = ActiveBundle("b", 1, NOW, schedule, {"loop": mission})
+    act = ActiveBundle("b", 1, schedule, {"loop": mission}, {"s": NOW})   # W39 路线库:按条起算
     ok, _, why, kinds = sched._candidates(act, schedule.entries[0], {})
     assert ok == [] and "正在驱离" in why and kinds == {"busy"}
     db.close()
