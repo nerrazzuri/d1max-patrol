@@ -15,6 +15,10 @@ export interface NavZone {
   kind: string;
   label: string;
   polygon: Pt[];
+  /** 硬禁区(决策 65,水体、落差):遥控也开不进去。 */
+  hard?: boolean;
+  /** 临时区到期(决策 66,毫秒)。 */
+  until_ms?: number;
 }
 
 /** 站点给的有名字的区域(地图坐标,米)。 */

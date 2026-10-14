@@ -22,6 +22,7 @@ import {
   worldMatrix,
   zoomView,
   type Box,
+  type NavZone,
   type Obstacle,
   type PreviewMeta,
   type Pt,
@@ -32,10 +33,11 @@ import { rasterShade, scheme } from "./theme";
 /** 图上画的有名字的多边形(地图坐标,米):area = 区域(淡),zone = 防区(防区页上能改的那些,显眼)。 */
 export interface CanvasArea { name: string; pts: Pt[]; kind: "area" | "zone" }
 
-export type LegendKey = "floor" | "wall" | "unknown" | "nogo" | "slow" | "area" | "zone" | "robot" | "alarm";
-const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "unknown", "nogo", "slow", "area", "zone", "robot", "alarm"];
+export type LegendKey = "floor" | "wall" | "unknown" | "nogo" | "hard" | "slow" | "area" | "zone" | "robot" | "alarm";
+const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "unknown", "nogo", "hard", "slow", "area", "zone", "robot", "alarm"];
 const LEGEND_TEXT: Record<LegendKey, Key> = {
-  floor: "legendFloor", wall: "legendWall", unknown: "legendUnknown", nogo: "legendNoGo", slow: "legendSlow",
+  floor: "legendFloor", wall: "legendWall", unknown: "legendUnknown", nogo: "legendNoGo", hard: "hardNoGoLegend",
+  slow: "legendSlow",
   area: "legendArea", zone: "legendZone", robot: "legendRobot", alarm: "legendAlarm",
 };
 
@@ -184,7 +186,8 @@ export function MapCanvas(props: {
   const zones = (meta.zones ?? []).filter((z) => Array.isArray(z.polygon) && z.polygon.length >= 3);
   const areas = props.areas ?? [];
   const present = new Set<LegendKey>(["floor", "wall", "unknown", ...(props.legend ?? [])]);
-  if (zones.some((z) => z.kind === "nogo")) present.add("nogo");
+  if (zones.some((z) => z.kind === "nogo" && !z.hard)) present.add("nogo");
+  if (zones.some((z) => z.kind === "nogo" && z.hard)) present.add("hard");
   if (zones.some((z) => z.kind === "slow")) present.add("slow");
   for (const a of areas) present.add(a.kind);
   const bar = scaleBar(meta.m_per_px, view.k);
@@ -201,7 +204,10 @@ export function MapCanvas(props: {
               preserveAspectRatio="none" class={plan ? "mapimg plan" : "mapimg"}
               onError={plan ? () => setPlanBad(plan.url) : undefined} />
             {zones.map((z) => (z.kind === "nogo" || z.kind === "slow") && (
-              <polygon key={z.id} points={polyAttr(meta, z.polygon)} class={z.kind === "nogo" ? "nogo-area" : "slow-area"} />
+              <polygon key={z.id} points={polyAttr(meta, z.polygon)}
+                class={z.kind === "nogo" ? (z.hard ? "nogo-area hard" : "nogo-area") : "slow-area"}>
+                {z.kind === "nogo" && <title>{navZoneTip(z)}</title>}
+              </polygon>
             ))}
             {areas.map((a, i) => (
               <polygon key={`${i}:${a.kind}:${a.name}`} points={polyAttr(meta, a.pts)} class={a.kind === "zone" ? "sec-area" : "sec-area quiet"} />
@@ -241,6 +247,16 @@ export function MapCanvas(props: {
   );
 }
 
+/** 悬停在禁行区上看到的那句话:名字、是不是硬禁区(决策 65)、临时区什么时候到期(决策 66)。 */
+export function navZoneTip(z: NavZone): string {
+  const name = z.label || z.id;
+  const base = z.hard ? t("hardNoGoTip", { label: name }) : t("noGoTip", { label: name });
+  if (typeof z.until_ms !== "number") return base;
+  const d = new Date(z.until_ms);
+  const two = (v: number) => String(v).padStart(2, "0");
+  return base + t("zoneUntil", { t: `${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}` });
+}
+
 /** 图例里的一小块,跟图上画的一样(底图的灰度按现在的主题算,跟 --map-raster 一样)。 */
 function Swatch({ k, plan }: { k: LegendKey; plan: boolean }) {
   const s = scheme.value;
@@ -252,6 +268,7 @@ function Swatch({ k, plan }: { k: LegendKey; plan: boolean }) {
     ? <rect x="0.5" y="0.5" width="15" height="11" class="sw-bg sw-edge" />
     : <rect x="0.5" y="0.5" width="15" height="11" fill={shade(SHADE.raster.unknown)} class="sw-edge" />;
   else if (k === "nogo") body = <rect x="1" y="1" width="14" height="10" class="nogo-area" />;
+  else if (k === "hard") body = <rect x="1.5" y="1.5" width="13" height="9" class="nogo-area hard" />;
   else if (k === "slow") body = <rect x="1" y="1" width="14" height="10" class="slow-area" />;
   else if (k === "area") body = <rect x="1" y="1" width="14" height="10" class="sec-area quiet" />;
   else if (k === "zone") body = <rect x="1" y="1" width="14" height="10" class="sec-area" />;
