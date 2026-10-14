@@ -352,6 +352,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
   .console.fill .zonesplit { flex: 1; min-height: 0; flex-wrap: nowrap; }
   .console.fill .zonemap .mapwrap { flex: 1; height: auto; }
   .console.fill .zonelist { overflow-y: auto; }
+  /* 巡检路线页跟防区页一样整页一屏(2026-10-15:原来地图写死 600 px 高,下面空出 25–30%) */
+  .console.fill .routesplit { flex: 1; min-height: 0; flex-wrap: nowrap; }
+  .console.fill .routemap .mapwrap { flex: 1; height: auto; }
+  .console.fill .routeside { overflow-y: auto; max-height: 100%; }
 }
 
 /* 手机扫码添加站点(App V2)。二维码白底黑码,不跟主题走。 */

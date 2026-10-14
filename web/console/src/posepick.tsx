@@ -9,6 +9,7 @@ import { Confirm } from "./dialogs";
 import { clickGuard, startDrag, swallowClick } from "./dragpt";
 import type { Screen } from "./mapcanvas";
 import type { PreviewMeta } from "./mapview";
+import { PoseMarker } from "./posemarker";
 import { clientToMap, degOf, handleAt, pxToMap, yawToward } from "./routes";
 import { rt } from "./routes_i18n";
 import "./routes.css";
@@ -92,14 +93,11 @@ export function usePosePick(o: {
     marks: (s) => {
       if (!pose || !meta) return null;
       const h = handleAt(meta, s, pose.x, pose.y, pose.yaw, HANDLE_PX);
+      // 定位箭头(posemarker.tsx):圆底座 + 朝向三角尖,三角尖就是转朝向的把手
       return (
-        <g class="pose-pin" data-pose="1">
-          <line x1={h.x} y1={h.y} x2={h.hx} y2={h.hy} />
-          <circle cx={h.x} cy={h.y} r={9} />
-          <g class="route-handle" data-handle="pose" onPointerDown={dragHandle} onClick={(ev) => ev.stopPropagation()}>
-            <circle cx={h.hx} cy={h.hy} r={7} />
-          </g>
-        </g>
+        <PoseMarker x={h.x} y={h.y} hx={h.hx} hy={h.hy} r={12} selected class="pose-pin"
+          attrs={{ "data-pose": "1" } as Record<string, string>}
+          handle={{ data: "pose", onPointerDown: dragHandle }} />
       );
     },
     panel: !can ? null : (
