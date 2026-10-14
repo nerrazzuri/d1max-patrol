@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 56                      # RC 加固外审 I2:推送逐台记账(push_sent)
+SCHEMA_VERSION = 57                      # 决策 66、R2:区域收紧免确认(确认过的那一份)、带过来的建议
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -305,6 +305,21 @@ CREATE TABLE IF NOT EXISTS nav_zones (
     confirmed_rev INTEGER,
     confirmed_by  TEXT,
     confirmed_ms  INTEGER,
+    confirmed_body TEXT,
+    confirmed_how TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (map_id, map_version)
+);
+-- R2(2026-10-14):新版本把上一版的区域、待命点、拦截点带过来**给人核**(不生效);
+-- state:open(等人核)、adopted(采纳过)、discarded(丢掉了)。一个版本只生成一次。
+CREATE TABLE IF NOT EXISTS nav_zone_proposals (
+    map_id       TEXT NOT NULL,
+    map_version  TEXT NOT NULL,
+    from_version TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    state        TEXT NOT NULL DEFAULT 'open',
+    created_ms   INTEGER NOT NULL,
+    closed_by    TEXT NOT NULL DEFAULT '',
+    closed_ms    INTEGER,
     PRIMARY KEY (map_id, map_version)
 );
 -- W20:全站一个当前模式(一行);在家时撤防的防区(没有这一行的防区一律布防)。
@@ -582,6 +597,9 @@ _ADDED_COLUMNS = (
     ("alerts", "shelved_reason", "TEXT NOT NULL DEFAULT ''"),
     ("person_sightings", "kind", "TEXT NOT NULL DEFAULT 'p1'"),        # B 阶段外审 I1
     ("sessions", "client", "TEXT NOT NULL DEFAULT ''"),               # C-B4:App 版本号上报
+    # 决策 66:最后确认过的那一份区域(收紧跟它比)、怎么确认的(confirm / tighten / expiry)
+    ("nav_zones", "confirmed_body", "TEXT"),
+    ("nav_zones", "confirmed_how", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -645,6 +663,13 @@ class SiteDB:
                     "SELECT o.id, d.reg_id, o.created_ms FROM push_outbox o JOIN push_devices d "
                     "ON (',' || o.done || ',') LIKE ('%,' || d.provider || ',%') "
                     "WHERE o.sent_ms IS NULL AND o.dropped = '' AND o.done != ''")
+            if row is not None and str(row[0]).isdigit() and int(row[0]) < 57:
+                # 决策 66:收紧免确认要跟「最后确认过的那一份」比。升上来时当前这一版确认过的,那一份
+                # 就是它;确认的是旧修订(改过没再确认)的,那一份不知道 —— 留空,之后的改动一律要人
+                # 确认(往保守那边)。
+                self._conn.execute(
+                    "UPDATE nav_zones SET confirmed_body=body, confirmed_how='confirm' "
+                    "WHERE confirmed_rev = revision AND confirmed_body IS NULL")
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
 

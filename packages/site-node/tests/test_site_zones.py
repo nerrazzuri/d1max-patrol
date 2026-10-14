@@ -28,9 +28,11 @@ def test_存储_修订号_并发_收紧判定_确认(tmp_path):
     assert z.confirmed_current("m", "1")
     zs, tight = z.put("m", "1", [POND], base_revision=0, by="alice")
     assert zs.revision == 1 and tight
-    assert not z.confirmed_current("m", "1"), "改过要重新确认"
-    assert z.view("m", "1")["confirmed"] == {"revision": 0, "by": "alice", "at_ms": 1000,
-                                             "current": False}
+    # 决策 66(2026-10-14):收紧免确认 —— 以前这里断言「改过要重新确认」(任何改动都作废确认);
+    # 现在加一个禁行区算改的人确认了这一版(留了怎么确认的),放宽的仍要重新确认(见下面删禁行区那一步)
+    assert z.confirmed_current("m", "1"), "收紧:改的人就算确认了"
+    assert z.view("m", "1")["confirmed"] == {"revision": 1, "by": "alice", "at_ms": 1000,
+                                             "current": True, "how": "tighten"}
     with pytest.raises(ZonesConflict):
         z.put("m", "1", [], base_revision=0, by="bob")          # 看到的是旧的:不许盖
     with pytest.raises(ZonesConflict):
@@ -46,6 +48,7 @@ def test_存储_修订号_并发_收紧判定_确认(tmp_path):
     assert z.current("m", "1").revision == 1                     # 坏的没写进去
     zs, tight = z.put("m", "1", [], base_revision=1, by="alice")
     assert zs.revision == 2 and not tight                         # 删禁行区:放宽
+    assert not z.confirmed_current("m", "1"), "放宽要重新确认"
     t[0] = 2000
     z.confirm("m", "1", revision=2, by="carol")
     assert z.confirmed_current("m", "1")
@@ -197,13 +200,20 @@ def test_换图之后删光禁行区_没重新确认_不派自主任务_遥控�
     _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
     s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")
     assert s.disp.dispatchable("A", "goto") == ""
-    code, d = s.req("POST", ZP, {"zones": [], "base_revision": 0}, token=alice)   # 修订 1,空的
-    assert code == 200
+    # 决策 66 之前这里直接把空的第 0 版存成空的第 1 版(什么都没删);现在没改动的「改」不算放宽,
+    # 所以先真画一个(收紧,免确认),再真删光(放宽)
+    code, d = s.req("POST", ZP, {"zones": [POND], "base_revision": 0}, token=alice)
+    assert code == 200 and d["auto_confirmed"] is True
     _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
+    code, d = s.req("POST", ZP, {"zones": [], "base_revision": 1}, token=alice)   # 修订 2,删光
+    assert code == 200 and d["auto_confirmed"] is False
+    _等(lambda: _zcaps(s)["rev"] == 2, timeout=8)
     assert "安全确认" in s.disp.dispatchable("A", "goto")
     assert "安全确认" in s.disp.dispatchable("A", "patrol")
     assert s.disp.dispatchable("A", "teleop") == ""
-    s.req("POST", ZP + "/confirm", {"revision": 1, "confirm": True}, token=alice)
+    code, d = s.req("POST", ZP + "/confirm", {"revision": 2, "confirm": True, "empty_ok": True},
+                    token=alice)
+    assert code == 200, d
     assert s.disp.dispatchable("A", "goto") == ""
 
 
@@ -245,3 +255,289 @@ def test_头尾调过来了_不派会自己走的_遥控照常(站点):
     assert s.disp.dispatchable("A", "goto") == ""
     tasks["head"] = {"direction": "head"}
     assert s.disp.dispatchable("A", "goto") == ""
+
+
+# ---------------------------------- 决策 66(2026-10-14):收紧免确认、放宽要确认、临时区到期
+
+BIG = {"id": "pond2", "kind": "nogo", "label": "池子大一圈",
+       "polygon": [[4.5, 4.5], [6.5, 4.5], [6.5, 6.5], [4.5, 6.5]]}
+HARD = POND | {"hard": True}
+
+
+def _z(tmp_path, t0=1000):
+    t = [t0]
+    return NavZones(SiteDB(tmp_path / "s.db"), now_ms=lambda: t[0]), t
+
+
+def test_收紧免确认_放宽要确认_又紧又松算放宽(tmp_path):
+    z, t = _z(tmp_path)
+    z.put("m", "1", [POND], base_revision=0, by="alice")
+    assert not z.confirmed_current("m", "1"), "从没确认过的:收紧也不算确认(那一句还没人说过)"
+    z.confirm("m", "1", revision=1, by="alice")
+    t[0] = 2000
+    # 收紧:加硬禁区标记、加一个限速区、调低限速、放大 —— 改的人就算确认了
+    for rev, zones in ((2, [HARD]), (3, [HARD, SLOW]), (4, [HARD, SLOW | {"max_speed_mps": 0.2}]),
+                       (5, [HARD | {"polygon": BIG["polygon"]}, SLOW | {"max_speed_mps": 0.2}])):
+        zs, tight = z.put("m", "1", zones, base_revision=rev - 1, by="bob")
+        assert zs.revision == rev and tight
+        assert z.confirmed_current("m", "1"), rev
+        assert z.view("m", "1")["confirmed"] == {"revision": rev, "by": "bob", "at_ms": 2000,
+                                                 "current": True, "how": "tighten"}
+    # 放宽:去掉硬禁区标记 → 要确认
+    zs, tight = z.put("m", "1", [BIG, SLOW | {"max_speed_mps": 0.2}], base_revision=5, by="bob")
+    assert not tight and not z.confirmed_current("m", "1")
+    # 改回去(跟最后确认的那一版比是收紧):又算确认了
+    z.put("m", "1", [HARD | {"polygon": BIG["polygon"]}, SLOW | {"max_speed_mps": 0.2}],
+          base_revision=6, by="bob")
+    assert z.confirmed_current("m", "1"), "撤销误删:跟最后确认的那一版比是收紧"
+    # 又紧又松(加一个、删一个)= 放宽
+    z.put("m", "1", [HARD | {"polygon": BIG["polygon"]}, {"id": "new", "kind": "nogo",
+          "polygon": [[0, 0], [1, 0], [1, 1]]}], base_revision=7, by="bob")
+    assert not z.confirmed_current("m", "1")
+    z.confirm("m", "1", revision=8, by="carol")
+    assert z.view("m", "1")["confirmed"]["how"] == "confirm"
+
+
+def test_临时区_到期站点删_带确认_不带确认的照样不带(tmp_path):
+    z, t = _z(tmp_path, t0=10_000)
+    z.confirm("m", "1", revision=0, by="alice")
+    z.put("m", "1", [POND, SLOW | {"until_ms": 70_000}], base_revision=0, by="alice")
+    assert z.confirmed_current("m", "1"), "加一个临时限速区:收紧"
+    assert z.expire() == [], "还没到期"
+    t[0] = 70_000
+    got = z.expire()
+    assert [(s.map_id, s.revision, [x.id for x in s.zones]) for s in got] == [("m", 2, ["pond"])]
+    assert z.current("m", "1").revision == 2
+    assert [x.id for x in z.current("m", "1").zones] == ["pond"]
+    v = z.view("m", "1")
+    assert v["confirmed"]["current"] and v["confirmed"]["how"] == "expiry", \
+        "到期是放宽,但到期时间是确认过的那一版里定的:预先确认过"
+    assert v["updated_by"] == "site:expiry"
+    assert z.expire() == []
+    audit = z.db.query("SELECT actor, action, detail FROM audit WHERE action='zones_expired'")
+    assert len(audit) == 1 and audit[0]["actor"] == "site:expiry"
+    # 当前这一版没确认(有放宽还没人确认):到期删掉之后照样没确认
+    z.put("m", "1", [SLOW | {"until_ms": 80_000}], base_revision=2, by="alice")      # 删了池子
+    assert not z.confirmed_current("m", "1")
+    t[0] = 80_000
+    assert [s.revision for s in z.expire()] == [4]
+    assert not z.confirmed_current("m", "1")
+
+
+def test_临时区_到期时间要在以后_按站点的钟_给时长也行(tmp_path):
+    z, t = _z(tmp_path, t0=10_000)
+    with pytest.raises(ZonesError, match="已经过了"):
+        z.put("m", "1", [POND | {"until_ms": 10_000}], base_revision=0, by="a")
+    with pytest.raises(ZonesError, match="太远"):
+        z.put("m", "1", [POND | {"until_ms": 10_000 + 400 * 86_400_000}], base_revision=0, by="a")
+    zs, _ = z.put("m", "1", [POND | {"for_s": 3600}], base_revision=0, by="a")
+    assert zs.zones[0].until_ms == 10_000 + 3_600_000, \
+        "时长按站点的钟换成到期时刻(手机的钟可能不准)"
+    for bad in (0, -1, True, 1.5, "60", 400 * 86_400):
+        with pytest.raises(ZonesError):
+            z.put("m", "1", [POND | {"for_s": bad}], base_revision=1, by="a")
+    with pytest.raises(ZonesError):
+        z.put("m", "1", [POND | {"for_s": 60, "until_ms": 99_999_999}], base_revision=1, by="a")
+    # 已经到期、站点还没来得及删的那一个原样带回来:悄悄去掉,不报错
+    t[0] = 10_000 + 3_600_000
+    zs, _ = z.put("m", "1", [POND | {"until_ms": 10_000 + 3_600_000}, SLOW], base_revision=1,
+                  by="a")
+    assert [x.id for x in zs.zones] == ["lawn"]
+
+
+def test_从56升上来_当前确认过的记下确认过的那一份_没确认的留空(tmp_path):
+    """决策 66 的迁移:收紧免确认要跟「最后确认过的那一份」比;升上来时只有「确认的就是当前修订」的
+    那几行知道那一份是什么,别的留空(之后的改动一律要人确认)。"""
+    import json as _json
+    import sqlite3
+    from pathlib import Path
+    snap = Path(__file__).parent / "fixtures" / "schema" / "site-v56.sql"
+    p = tmp_path / "old.db"
+    con = sqlite3.connect(p)
+    con.executescript(snap.read_text(encoding="utf-8"))
+    body = lambda rev, zs: _json.dumps({"map_id": "m", "map_version": "1", "revision": rev,  # noqa: E731
+                                        "zones": zs})
+    con.execute("INSERT INTO nav_zones VALUES ('m','1',1,?,'a',1,1,'a',1)", (body(1, [POND]),))
+    con.execute("INSERT INTO nav_zones VALUES ('m','2',2,?,'a',1,1,'a',1)",
+                (body(2, [POND]).replace('"1"', '"2"'),))
+    con.commit()
+    con.close()
+    z = NavZones(SiteDB(p), now_ms=lambda: 5)
+    assert z.confirmed_current("m", "1") and not z.confirmed_current("m", "2")
+    z.put("m", "1", [POND, SLOW], base_revision=1, by="b")
+    assert z.confirmed_current("m", "1"), "确认过的那一份就是升上来时的当前一版:收紧照样免确认"
+    z.put("m", "2", [POND, SLOW], base_revision=2, by="b")
+    assert not z.confirmed_current("m", "2"), "那一份不知道:往保守那边,要人确认"
+
+
+# ---------------------------------- R2:新版本把上一版的区域、待命点、拦截点带过来给人核
+
+def _图(db, version, ms, frames=b"F1"):
+    import hashlib
+    import json as _json
+    files = [{"name": "floor.pgm", "size": 1, "sha256": "0" * 64}]
+    if frames is not None:
+        files.append({"name": "frames.json", "size": len(frames),
+                      "sha256": hashlib.sha256(frames).hexdigest()})
+    with db.tx() as c:
+        c.execute("INSERT INTO maps(map_id, version, source, created_ms, files, note) "
+                  "VALUES (?,?,?,?,?,?)", ("m", version, "import", ms, _json.dumps(files), ""))
+
+
+def _上一版(db, z):
+    _图(db, "1", 100)
+    z.put("m", "1", [POND, SLOW, POND | {"id": "old", "until_ms": 1500}], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    with db.tx() as c:
+        c.execute("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
+                  "is_default) VALUES ('A','dock','m','1',1.0,2.0,0.5,1)")
+        c.execute("INSERT INTO intercepts(name, map_id, map_version, x, y, yaw) "
+                  "VALUES ('gate','m','1',3.0,4.0,0.0)")
+
+
+def test_新版本_上一版的东西带过来给人核_不生效(tmp_path):
+    z, t = _z(tmp_path)
+    _上一版(z.db, z)
+    t[0] = 2000                                       # 「old」那个临时区已经到期:不带
+    _图(z.db, "2", 200)
+    v = z.view("m", "2")
+    assert v["revision"] == 0 and v["zones"] == [] and not z.confirmed_current("m", "2"), \
+        "带过来的只是待核的建议,不生效"
+    p = v["proposal"]
+    assert p["from_version"] == "1" and p["from_revision"] == 1
+    assert [x["id"] for x in p["zones"]] == ["pond", "lawn"]
+    assert p["standby"] == [{"robot_id": "A", "name": "dock", "x": 1.0, "y": 2.0, "yaw": 0.5,
+                             "default": True}]
+    assert p["intercepts"] == [{"name": "gate", "x": 3.0, "y": 4.0, "yaw": 0.0}]
+    assert p["frame"]["same"] is True and "坐标" in p["frame"]["note"]
+    assert v["previous"] == {"version": "1", "revision": 1, "zones": 3}
+    # 上一版的东西原样不动
+    assert z.db.query("SELECT map_version FROM standby_points")[0]["map_version"] == "1"
+    assert z.current("m", "2").zones == ()
+    assert z.view("m", "1").get("proposal") is None, "第一版没有上一版"
+
+
+def test_新版本_坐标系变了明说(tmp_path):
+    z, _ = _z(tmp_path)
+    _上一版(z.db, z)
+    _图(z.db, "2", 200, frames=b"F2")
+    p = z.view("m", "2")["proposal"]
+    assert p["frame"]["same"] is False and "frames.json" in p["frame"]["note"]
+    _图(z.db, "3", 300, frames=None)
+    assert z.view("m", "3").get("proposal") is None, "上一版(2)什么都没有:不带"
+
+
+def test_新版本_采纳一部分并确认_丢掉_都只一次(tmp_path):
+    z, _ = _z(tmp_path)
+    _上一版(z.db, z)
+    _图(z.db, "2", 200)
+    z.view("m", "2")
+    z.put("m", "2", [{"id": "pond", "kind": "nogo", "polygon": [[0, 0], [1, 0], [1, 1]]}],
+          base_revision=0, by="a")                     # 新版本上先画了一个 id 撞车的
+    with pytest.raises(ZonesError):
+        z.confirm("m", "2", revision=1, by="a", adopt={"zones": ["nope"]})
+    got = z.confirm("m", "2", revision=1, by="a", adopt={"zones": ["pond"]})
+    zs = z.current("m", "2")
+    assert zs.revision == 2 and len(zs.zones) == 2 and z.confirmed_current("m", "2")
+    assert {x.id for x in zs.zones} == {"pond", got["zones"]["pond"]}, got
+    assert z.view("m", "2").get("proposal") is None, "采纳过就收起来"
+    assert z.view("m", "2")["confirmed"]["how"] == "confirm"
+    # 丢掉:收起来,不会再生成
+    _图(z.db, "3", 300)
+    assert z.view("m", "3")["proposal"] is not None
+    z.discard_proposal("m", "3", by="a")
+    assert z.view("m", "3").get("proposal") is None
+    with pytest.raises(ZonesError):
+        z.confirm("m", "3", revision=0, by="a", adopt={"zones": ["pond"]})
+
+
+def test_接口_收紧免确认_派单不断_放宽要确认才派(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
+    s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")
+    _zcaps(s)["enforced"] = True                        # 当它是规划后端的狗
+    assert s.disp.dispatchable("A", "goto") == ""
+    code, d = s.req("POST", ZP, {"zones": [POND], "base_revision": 0}, token=alice)
+    assert code == 200 and d["tighten"] is True and d["auto_confirmed"] is True, d
+    _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
+    _zcaps(s)["enforced"] = True
+    assert s.disp.dispatchable("A", "goto") == "", "加一个禁行区:入侵派遣、巡检照派"
+    code, d = s.req("POST", ZP, {"zones": [], "base_revision": 1}, token=alice)
+    assert code == 200 and d["tighten"] is False and d["auto_confirmed"] is False, d
+    _等(lambda: _zcaps(s)["rev"] == 2, timeout=8)
+    _zcaps(s)["enforced"] = True
+    assert "安全确认" in s.disp.dispatchable("A", "goto"), "删禁行区:要人确认"
+    audit = s.db.query("SELECT detail FROM audit WHERE target=? ORDER BY id",
+                       (f"{MAP[0]}:{MAP[1]}",))
+    assert any('"auto_confirmed": true' in a["detail"] for a in audit), audit
+
+
+def test_接口_确认空的区域集要明说(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    code, d = s.req("POST", ZP + "/confirm", {"revision": 0, "confirm": True}, token=alice)
+    assert code == 409 and d.get("reason") == "zones_empty", d
+    code, d = s.req("POST", ZP + "/confirm", {"revision": 0, "confirm": True, "empty_ok": True},
+                    token=alice)
+    assert code == 200 and d["confirmed"]["current"] is True
+
+
+def test_接口_到期删掉之后发给狗(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
+    code, d = s.req("POST", ZP, {"zones": [POND, SLOW | {"for_s": 60}], "base_revision": 0},
+                    token=alice)
+    assert code == 200 and d["zones"][1]["until_ms"] > 0, d
+    _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
+    assert s.loop.call(lambda: s.disp.expire_zones()) == []
+    real = s.disp.zones._now
+    s.disp.zones._now = lambda: real() + 61_000
+    try:
+        assert s.loop.call(lambda: s.disp.expire_zones()) == [f"{MAP[0]}:{MAP[1]}"]
+    finally:
+        s.disp.zones._now = real
+    _等(lambda: _zcaps(s)["rev"] == 2, timeout=8)
+    assert [z.id for z in s.agent._zones.zones] == ["pond"]
+
+
+def test_接口_新版本带过来的_采纳并确认_待命点拦截点跟着过去(站点, tmp_path):
+    from d1max_site.incidents import IncidentDesk
+    from d1max_site.standby import StandbyManager
+    s = 站点
+    s.api.standby = StandbyManager(s.db, s.disp, now_ms=lambda: 1000)
+    s.api.incidents = IncidentDesk(s.db, s.disp, now_ms=lambda: 1000)
+    alice = _登(s, "alice")
+    s.req("POST", ZP, {"zones": [POND], "base_revision": 0}, token=alice)
+    with s.db.tx() as c:
+        c.execute("INSERT INTO standby_points(robot_id, name, map_id, map_version, x, y, yaw, "
+                  "is_default) VALUES ('A','dock',?,?,1.0,2.0,0.5,1)", MAP)
+        c.execute("INSERT INTO intercepts(name, map_id, map_version, x, y, yaw) "
+                  "VALUES ('gate',?,?,3.0,4.0,0.0)", MAP)
+    d = tmp_path / "v8"
+    d.mkdir()
+    (d / "m.pgm").write_bytes(b"y")
+    s.maps.import_dir(d, map_id=MAP[0], version="8")
+    p8 = f"/api/maps/{MAP[0]}/8/zones"
+    code, v = s.req("GET", p8, token=alice)
+    assert code == 200 and v["proposal"]["from_version"] == MAP[1], v
+    code, v = s.req("POST", p8 + "/confirm", {"revision": 0, "confirm": True, "adopt": {
+        "zones": ["pond"], "standby": [["A", "dock"]], "intercepts": ["gate"]}}, token=alice)
+    assert code == 200, v
+    assert [z["id"] for z in v["zones"]] == ["pond"] and v["confirmed"]["current"]
+    assert v["adopted"]["standby"] == {"A/dock": ""} and v["adopted"]["intercepts"] == {"gate": ""}
+    assert s.db.query("SELECT map_version FROM standby_points")[0]["map_version"] == "8"
+    assert s.db.query("SELECT map_version FROM intercepts")[0]["map_version"] == "8"
+    assert v.get("proposal") is None
+    # 丢掉
+    d9 = tmp_path / "v9"
+    d9.mkdir()
+    (d9 / "m.pgm").write_bytes(b"z")
+    s.maps.import_dir(d9, map_id=MAP[0], version="9")
+    p9 = f"/api/maps/{MAP[0]}/9/zones"
+    assert s.req("GET", p9, token=alice)[1]["proposal"] is not None
+    code, v = s.req("POST", p9 + "/proposal", {"action": "discard"}, token=alice)
+    assert code == 200 and v.get("proposal") is None
+    gina = _登(s, "gina")
+    assert s.req("POST", p9 + "/proposal", {"action": "discard"}, token=gina)[0] == 403

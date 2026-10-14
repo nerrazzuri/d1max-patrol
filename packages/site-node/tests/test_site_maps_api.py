@@ -42,9 +42,9 @@ def _caps(s):
 
 
 def _确认(s, token, version, revision=0):
-    """W10:下发之前人工确认禁行区都画了(没什么要画的也要确认一次)。"""
+    """W10:下发之前人工确认禁行区都画了(没什么要画的也要确认一次;R2 起空的要明说 empty_ok)。"""
     code, d = s.req("POST", f"/api/maps/{MAP[0]}/{version}/zones/confirm",
-                    {"revision": revision, "confirm": True}, token=token)
+                    {"revision": revision, "confirm": True, "empty_ok": True}, token=token)
     assert code == 200, (code, d)
 
 

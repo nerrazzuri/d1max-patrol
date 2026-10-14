@@ -128,8 +128,9 @@ _MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build|outbox_r
 #: W00c6h:建好的图的栅格预览(坐标换算 + 待命点;PNG);地图显示改进:平面图 ``plan.png``。
 _MAPVIEW = re.compile(
     r"^/api/maps/([^/]{1,64})/([^/]{1,32})/(preview|preview\.png|plan\.png)$")
-#: W10:``/api/maps/<id>/<版本>/zones``(看、整份改)与 ``…/zones/confirm``(发布前人工确认)。
-_ZONES = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/zones(/confirm)?$")
+#: W10:``/api/maps/<id>/<版本>/zones``(看、整份改)与 ``…/zones/confirm``(发布前人工确认);
+#: R2:``…/zones/proposal``(丢掉从上一版带过来、待核的建议)。
+_ZONES = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/zones(/confirm|/proposal)?$")
 #: W00c6g:狗上建图进程日志的列表、某一个的尾巴(``?bytes=``)。
 _LOGS = re.compile(r"^/api/robots/([^/]{1,64})/logs(?:/([^/]{1,64}))?$")
 _LOG_NAME = re.compile(r"[a-z0-9_.-]{1,48}")
@@ -1761,7 +1762,7 @@ class _Handler(TlsHandlerMixin):
         m = _ZONES.match(path)
         if m is not None:
             return self._zones(method, unquote(m.group(1)), unquote(m.group(2)),
-                               bool(m.group(3)), user)
+                               (m.group(3) or "").lstrip("/"), user)
         m = _MAPCMD.match(path)
         if m is None or method != "POST":
             raise HttpError(404, f"没有 {method} {path}")
@@ -1830,9 +1831,12 @@ class _Handler(TlsHandlerMixin):
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
 
-    def _zones(self, method: str, map_id: str, version: str, confirm: bool, user) -> None:
+    def _zones(self, method: str, map_id: str, version: str, what: str, user) -> None:
         """禁行区、限速区(W10):``GET`` 看(``view``);``POST`` 整份改(``manage``,带 ``base_revision``,
-        改完发给加载着这一版的狗);``POST …/confirm`` 发布前人工确认(``manage``)。"""
+        改完发给加载着这一版的狗;决策 66:只收紧的当场算确认了,回 ``auto_confirmed``);
+        ``POST …/confirm`` 发布前人工确认(``manage``;一个区域都没有的要明说 ``empty_ok``;R2:带
+        ``adopt`` 采纳从上一版带过来、核过的那几个);``POST …/proposal`` ``{"action": "discard"}``
+        丢掉带过来的建议(``manage``)。"""
         from d1max_site.maps import MapError
         from d1max_site.nav_zones import ZonesConflict, ZonesError
         if self.site.zones is None:
@@ -1841,33 +1845,130 @@ class _Handler(TlsHandlerMixin):
             self.site.maps.get(map_id, version)
         except MapError as exc:
             raise HttpError(404, str(exc)) from exc
-        if method == "GET" and not confirm:
+        if method == "GET" and not what:
             self._need(user, VIEW)
             return self._send_json(200, self.site.zones.view(map_id, version))
         self._need(user, MANAGE)
         self._audit_target = f"{map_id}:{version}"
         d = self._body()
+        zones = self.site.zones
         try:
-            if method == "POST" and confirm:
-                if d.get("confirm") is not True:
-                    raise HttpError(400, "要 confirm: true(确认那一句)")
-                self.site.zones.confirm(map_id, version, revision=d.get("revision"), by=str(user))
-                self._audit_detail = {"confirmed_rev": d.get("revision")}
-                return self._send_json(200, self.site.zones.view(map_id, version))
-            if method == "POST" and not confirm:
-                zs, tighten = self.site.zones.put(map_id, version, d.get("zones"),
-                                             base_revision=d.get("base_revision"), by=str(user))
+            if method == "POST" and what == "confirm":
+                return self._zones_confirm(map_id, version, d, user)
+            if method == "POST" and what == "proposal":
+                if d.get("action") != "discard":
+                    raise HttpError(400, "要 action: discard")
+                zones.discard_proposal(map_id, version, by=str(user))
+                self._audit_detail = {"proposal": "discard"}
+                return self._send_json(200, zones.view(map_id, version))
+            if method == "POST" and not what:
+                zs, tighten = zones.put(map_id, version, d.get("zones"),
+                                        base_revision=d.get("base_revision"), by=str(user))
+                # 改之前修订号核过(base_revision),改完还是「确认的就是当前修订」= 这一次当场算确认了
+                auto = zones.confirmed_current(map_id, version)
                 self._audit_detail = {"revision": zs.revision, "tighten": tighten,
-                                      "zones": len(zs.zones)}
+                                      "auto_confirmed": auto, "zones": len(zs.zones),
+                                      "hard": len(zs.hard())}
                 pushed = self.site.dispatch(lambda: self.site.dispatcher.push_zones(
                     zs, tighten=tighten, issued_by=str(user)))
-                return self._send_json(200, self.site.zones.view(map_id, version)
-                                       | {"tighten": tighten, "pushed": pushed})
+                return self._send_json(200, zones.view(map_id, version)
+                                       | {"tighten": tighten, "pushed": pushed,
+                                          "auto_confirmed": auto})
         except ZonesConflict as exc:
             raise HttpError(409, str(exc)) from exc
         except ZonesError as exc:
             raise HttpError(400, str(exc)) from exc
         raise HttpError(404, f"没有 {method} 区域接口")
+
+    def _zones_confirm(self, map_id: str, version: str, d: dict, user) -> None:
+        """确认(W08 决定 5)。一个区域都没有的要明说(R2:``empty_ok: true``,手机多弹一道提示 —— 重建图
+        之后泳池的禁行区可能悄悄没了);``adopt`` 采纳从上一版带过来的:区域并进来一起确认,待命点、
+        拦截点按各自的规矩搬到这一版(拦截点照样查走不走得到,不过的不搬、说原因)。"""
+        zones = self.site.zones
+        if d.get("confirm") is not True:
+            raise HttpError(400, "要 confirm: true(确认那一句)")
+        empty_ok = d.get("empty_ok", False)
+        if not isinstance(empty_ok, bool):
+            raise HttpError(400, "empty_ok 要是 true/false")
+        adopt, prop = d.get("adopt"), None
+        want_sb: list[tuple[str, str]] = []
+        want_ic: list[str] = []
+        if adopt is not None:
+            if not isinstance(adopt, dict):
+                raise HttpError(400, "adopt 要是对象")
+            prop = zones.proposal(map_id, version)
+            if prop is None:
+                raise HttpError(409, f"{map_id}:{version} 没有待核的、从上一版带过来的东西")
+            sb, ic = adopt.get("standby", []), adopt.get("intercepts", [])
+            have_sb = {(p["robot_id"], p["name"]) for p in prop.get("standby", [])}
+            have_ic = {p["name"] for p in prop.get("intercepts", [])}
+            if not isinstance(sb, list) or not all(
+                    isinstance(p, list) and len(p) == 2 and tuple(p) in have_sb for p in sb):
+                raise HttpError(400, "adopt.standby 要是带过来的待命点 [狗, 名字] 的列表")
+            if not isinstance(ic, list) or not all(isinstance(n, str) and n in have_ic
+                                                   for n in ic):
+                raise HttpError(400, "adopt.intercepts 要是带过来的拦截点名字的列表")
+            want_sb, want_ic = [tuple(p) for p in sb], list(ic)
+        n_adopt = len(adopt.get("zones", []) or []) if isinstance(adopt, dict) else 0
+        if not zones.current(map_id, version).zones and not n_adopt and empty_ok is not True:
+            prev = zones.view(map_id, version).get("previous")
+            raise HttpError(409, f"{map_id}:{version} 一个禁行区、限速区都没有:确认之前再看一眼 ——"
+                                 "水体、落差、陡坡、花坛真的一处都没有吗?"
+                                 + (f"(上一版第 {prev['version']} 版画了 {prev['zones']} 个)"
+                                    if prev and prev.get("zones") else "")
+                                 + "真的没有就带上 empty_ok",
+                            extra={"reason": "zones_empty", "previous": prev})
+        rep = zones.confirm(map_id, version, revision=d.get("revision"), by=str(user),
+                            adopt=adopt)
+        adopted: dict[str, Any] = {"zones": rep["zones"], "standby": {}, "intercepts": {}}
+        if prop is not None:
+            src = prop["from_version"]
+            for rid, name in want_sb:
+                p = next(x for x in prop["standby"] if (x["robot_id"], x["name"]) == (rid, name))
+                adopted["standby"][f"{rid}/{name}"] = self._adopt_standby(
+                    map_id, version, src, p)
+            for name in want_ic:
+                p = next(x for x in prop["intercepts"] if x["name"] == name)
+                adopted["intercepts"][name] = self._adopt_intercept(map_id, version, src, p)
+        self._audit_detail = {"confirmed_rev": d.get("revision"), "empty_ok": empty_ok,
+                              "adopted": {k: len(v) for k, v in adopted.items()}}
+        out = zones.view(map_id, version)
+        return self._send_json(200, out | ({"adopted": adopted} if prop is not None else {}))
+
+    def _adopt_standby(self, map_id: str, version: str, src: str, p: dict) -> str:
+        """把上一版的一个待命点搬到这一版(同样的坐标,人核过了):上一版那个改过、删了就不搬。"""
+        from d1max_site.standby import StandbyError
+        if getattr(self.site, "standby", None) is None:
+            return "这个站点没开待命点"
+        rows = self.site.dispatcher.db.query(
+            "SELECT map_id, map_version, x, y, yaw FROM standby_points WHERE robot_id=? AND "
+            "name=?", (p["robot_id"], p["name"]))
+        if not rows or (rows[0]["map_id"], rows[0]["map_version"], rows[0]["x"], rows[0]["y"],
+                        rows[0]["yaw"]) != (map_id, src, p["x"], p["y"], p["yaw"]):
+            return "上一版的这个待命点后来改过或删了:没搬,在新图上重新设"
+        try:
+            self.site.standby.set(p["robot_id"], p["name"], map_id=map_id, map_version=version,
+                                  x=p["x"], y=p["y"], yaw=p["yaw"])
+        except StandbyError as exc:
+            return str(exc)[:200]
+        return ""
+
+    def _adopt_intercept(self, map_id: str, version: str, src: str, p: dict) -> str:
+        """把上一版的一个拦截点搬到这一版:照样查走不走得到(W23),不过的不搬、说原因。"""
+        from d1max_site.incidents import IncidentError
+        if getattr(self.site, "incidents", None) is None:
+            return "这个站点没开拦截点"
+        rows = self.site.dispatcher.db.query(
+            "SELECT map_id, map_version, x, y, yaw FROM intercepts WHERE name=?", (p["name"],))
+        if not rows or (rows[0]["map_id"], rows[0]["map_version"], rows[0]["x"], rows[0]["y"],
+                        rows[0]["yaw"]) != (map_id, src, p["x"], p["y"], p["yaw"]):
+            return "上一版的这个拦截点后来改过或删了:没搬,在新图上重新设"
+        try:
+            self.site.incidents.set_intercept(p["name"], map_id=map_id, map_version=version,
+                                              x=p["x"], y=p["y"], yaw=p["yaw"])
+        except IncidentError as exc:
+            return str(exc)[:200]
+        return ""
 
     @staticmethod
     def _check_new_version(cat: Any, map_id: str, version: str) -> None:
