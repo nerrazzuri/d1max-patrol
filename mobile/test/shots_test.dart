@@ -67,6 +67,8 @@ Map<String, dynamic> _summary(int p1, int p2) {
   final s = jsonDecode(jsonEncode(siteFixture('site_watch_summary'))) as Map<String, dynamic>;
   for (final r in (s['robots'] as List).cast<Map<String, dynamic>>()) {
     r['alerts'] = <String, dynamic>{'P1': p1, 'P2': p2, 'P3': 0};
+    // 电量是刚读的（夹具里那个时刻早过了 10 分钟，狗卡上会不写数）
+    if (r['battery_as_of_ms'] != null) r['battery_as_of_ms'] = DateTime.now().millisecondsSinceEpoch;
     if (p1 == 0 && p2 == 0) {
       r['upload_backlog'] = 0;
       r['oldest_backlog_s'] = 0;
