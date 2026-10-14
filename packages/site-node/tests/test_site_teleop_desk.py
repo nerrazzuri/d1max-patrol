@@ -56,7 +56,9 @@ class _Disp:
 
     async def teleop_lease(self, robot_id, lease, *, timeout_s):
         self.leases.append(lease)
-        return SimpleNamespace(result=self.lease_result)
+        return SimpleNamespace(result=self.lease_result, data=self.lease_data)
+
+    lease_data = None
 
     async def halt(self, robot_id, *, issued_by):
         self.halts += 1
@@ -383,3 +385,47 @@ def test_halt送到了就不放租_狗那头记的是halt(desk):
     time.sleep(0.2)
     assert s.end_reason == "halt" and d.leases == [], "halt 中止遥控任务;放租会抢在 halt 前面"
     assert d.halts == 1
+
+
+def test_硬禁区_狗说截了_变了才告诉手机_截了记审计(desk):
+    """决策 65:狗在续租回执里说硬禁区守卫怎么判的;站点变了才转给手机(``zone_guard``),截了记审计。"""
+    k, d = desk
+    audit = []
+    k.audit = SimpleNamespace(record=lambda **kw: audit.append(kw))
+    s = k.open("A", _u("gina", "guard"))
+    told = []
+    s.ws = SimpleNamespace(send_text=lambda t: told.append(json.loads(t)), close=lambda *a: None)
+    d.lease_data = {"zone_guard": {"state": "ok"}}
+    k.step()
+    d.lease_data = {"zone_guard": {"state": "blocked", "zone": "pool", "label": "池子",
+                                   "reason": "再往前会进硬禁区「池子」"}}
+    k.step()
+    k.step()                                             # 没变:不再说
+    d.lease_data = None                                  # 老狗:不带
+    k.step()
+    d.lease_data = {"zone_guard": {"state": "ok"}}
+    k.step()
+    zg = [m for m in told if m.get("kind") == "zone_guard"]
+    assert [m["state"] for m in zg] == ["ok", "blocked", "ok"], zg
+    assert zg[1]["label"] == "池子"
+    states = [a["detail"]["state"] for a in audit if a["action"] == "teleop_zone_guard"]
+    assert states == ["blocked"]
+
+
+def test_硬禁区_老狗不守_开遥控时就告诉手机(desk):
+    """这张图上有硬禁区、狗的能力里没有 ``zones_set.teleop_hard``(老代理):开遥控时说清楚。"""
+    from d1max_contract.zones import ZoneSet
+    k, d = desk
+    hard = ZoneSet.from_wire({"map_id": "m", "map_version": "1", "revision": 1, "zones": [
+        {"id": "pool", "kind": "nogo", "hard": True, "polygon": [[0, 0], [1, 0], [1, 1]]}]})
+    d.zones = SimpleNamespace(current=lambda m, v: hard)
+    d._loaded = lambda c: ("m", "1")
+    caps = d.clients["A"].capabilities
+    caps.tasks["zones_set"] = {"rev": 1, "enforced": True}
+    s = k.open("A", _u("gina", "guard"))
+    assert s.zone_told is not None and s.zone_told["state"] == "unsupported"
+    k.close(s, "released")
+    d.status.task = None                                  # 狗那头上一趟停稳了
+    caps.tasks["zones_set"] = {"rev": 1, "enforced": True, "teleop_hard": True}
+    s = k.open("A", _u("gina", "guard"))
+    assert s.zone_told is None, "新狗自己守,自己会说"
