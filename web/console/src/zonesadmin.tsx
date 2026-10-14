@@ -1,15 +1,20 @@
 // 管理组(商业化 B1c):地图与防区(在图上画防区多边形)、名单(时段 / 人员授权)。
+// 地图台账 44(2026-10-14):在图上框一块「抹掉」(导航区域的种类 erase)—— 狗永远不去、站点画图时抹成没建图。
+// 存的是整份导航区域(带改之前看到的修订号,跟手机一样);加一块是收紧、当场生效,删一块是放宽、要在手机上重新确认。
+// 别的导航区域(禁行、限速)照旧只在手机上画。
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { Confirm, Modal } from "./dialogs";
 import { t } from "./i18n";
 import { MapCanvas } from "./mapcanvas";
-import { toPx, type PreviewMeta, type Pt } from "./mapview";
+import { toPx, type NavZone, type PreviewMeta, type Pt } from "./mapview";
 
 type Say = (s: string) => void;
 
 interface MapRow { map_id: string; version: string; note: string; created_ms: number; source: string }
 interface Area { zone: string; points: Pt[] }
+/** 站点的导航区域(GET/POST …/zones):修订号 + 整份区域。 */
+interface NavZones { revision: number; zones: NavZone[]; auto_confirmed?: boolean }
 
 function errText(e: unknown): string {
   return t("failed", { why: e instanceof ApiError ? e.message : String(e) });
@@ -32,8 +37,13 @@ export function MapsZonesPage({ say }: { say: Say }) {
   const [meta, setMeta] = useState<PreviewMeta | null>(null);
   const [areas, setAreas] = useState<Area[]>([]);
   const [draft, setDraft] = useState<Pt[] | null>(null);
+  /** 正在画的是防区还是抹掉区。 */
+  const [drawKind, setDrawKind] = useState<"zone" | "erase">("zone");
   const [naming, setNaming] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [nav, setNav] = useState<NavZones | null>(null);
+  const [erasing, setErasing] = useState(false);
+  const [unerasing, setUnerasing] = useState<NavZone | null>(null);
 
   useEffect(() => {
     api<{ maps: MapRow[] }>("GET", "/api/maps").then((d) => {
@@ -46,13 +56,60 @@ export function MapsZonesPage({ say }: { say: Say }) {
     if (!base) return;
     api<{ areas: Area[] }>("GET", `${base}/areas`).then((d) => setAreas(d.areas)).catch(() => setAreas([]));
   }, [base]);
+  const loadMeta = useCallback(() => {
+    if (!base) return;
+    api<PreviewMeta>("GET", `${base}/preview`).then(setMeta).catch(() => setMeta(null));
+  }, [base]);
+  const loadNav = useCallback(() => {
+    if (!base) return;
+    api<NavZones>("GET", `${base}/zones`).then(setNav).catch(() => setNav(null));
+  }, [base]);
   useEffect(() => {
     setMeta(null);
     setDraft(null);
+    setNav(null);
     if (!base) return;
-    api<PreviewMeta>("GET", `${base}/preview`).then(setMeta).catch(() => setMeta(null));
+    loadMeta();
     loadAreas();
+    loadNav();
   }, [base]);
+  const erased = (nav?.zones ?? []).filter((z) => z.kind === "erase");
+
+  /** 整份导航区域存回去(改之前看到的修订号先拉一次最新的,别盖掉手机上刚改的);存完重新取预览(抹掉区变了,
+   *  平面图地址跟着变)和区域。 */
+  async function saveNav(change: (zones: NavZone[], rev: number) => NavZone[]): Promise<NavZones> {
+    const cur = await api<NavZones>("GET", `${base}/zones`);
+    const d = await api<NavZones>("POST", `${base}/zones`, { zones: change(cur.zones, cur.revision), base_revision: cur.revision });
+    setNav(d);
+    loadMeta();
+    return d;
+  }
+
+  async function erase() {
+    setErasing(false);
+    const pts = draft ?? [];
+    try {
+      const d = await saveNav((zones, rev) => {
+        let id = `e${rev + 1}`;
+        while (zones.some((z) => z.id === id)) id += "x";
+        return [...zones, { id, kind: "erase", label: t("eraseLabel"), polygon: pts }];
+      });
+      setDraft(null);
+      say(d.auto_confirmed ? t("erasedOk", { rev: d.revision }) : t("erasedNeedsConfirm", { rev: d.revision }));
+    } catch (e) {
+      say(errText(e));
+    }
+  }
+
+  async function unerase(z: NavZone) {
+    setUnerasing(null);
+    try {
+      const d = await saveNav((zones) => zones.filter((o) => o.id !== z.id));
+      say(t("eraseRemoved", { rev: d.revision }));
+    } catch (e) {
+      say(errText(e));
+    }
+  }
 
   // 点的那一处:地图组件给的是预览像素(世界层的 getScreenCTM 倒回去,转正、缩放、平移都算进去了)
   function pick(px: number, py: number) {
@@ -88,13 +145,18 @@ export function MapsZonesPage({ say }: { say: Say }) {
           <span class="push" />
           {draft ? (
             <>
-              <span class="muted small">{t("drawHint", { n: draft.length })}</span>
+              <span class="muted small">{drawKind === "erase" ? t("eraseDrawHint", { n: draft.length }) : t("drawHint", { n: draft.length })}</span>
               <button type="button" class="btn sm" onClick={() => setDraft(draft.slice(0, -1))} disabled={!draft.length}>{t("undoPoint")}</button>
               <button type="button" class="btn sm" onClick={() => setDraft(null)}>{t("cancel")}</button>
-              <button type="button" class="btn primary sm" disabled={draft.length < 3} onClick={() => setNaming(true)}>{t("finishZone")}</button>
+              {drawKind === "erase"
+                ? <button type="button" class="btn primary sm" disabled={draft.length < 3} onClick={() => setErasing(true)}>{t("finishErase")}</button>
+                : <button type="button" class="btn primary sm" disabled={draft.length < 3} onClick={() => setNaming(true)}>{t("finishZone")}</button>}
             </>
           ) : (
-            <button type="button" class="btn primary" disabled={!meta} onClick={() => setDraft([])}>{t("drawZone")}</button>
+            <>
+              <button type="button" class="btn" disabled={!meta || !nav} onClick={() => { setDrawKind("erase"); setDraft([]); }}>{t("drawErase")}</button>
+              <button type="button" class="btn primary" disabled={!meta} onClick={() => { setDrawKind("zone"); setDraft([]); }}>{t("drawZone")}</button>
+            </>
           )}
         </div>
         <div class="zonesplit">
@@ -104,7 +166,7 @@ export function MapsZonesPage({ say }: { say: Say }) {
               <MapCanvas meta={meta} raster={`${base}/preview.png`} label={t("tabMapsZones")}
                 areas={areas.map((a) => ({ name: a.zone, pts: a.points, kind: "zone" as const }))}
                 drawing={!!draft} onPick={draft ? pick : undefined}
-                world={draft && draft.length > 0 ? <polyline points={poly(meta, draft)} class="draft-line" /> : null}
+                world={draft && draft.length > 0 ? <polyline points={poly(meta, draft)} class={drawKind === "erase" ? "draft-line erase" : "draft-line"} /> : null}
                 marks={(s) => draft?.map(([x, y], i) => {
                   const [sx, sy] = s.map(x, y);
                   return <circle key={i} cx={sx} cy={sy} r={4} class="draft-pt" />;
@@ -132,10 +194,27 @@ export function MapsZonesPage({ say }: { say: Say }) {
                 </li>
               ))}
             </ul>
+            <h2>{t("erasedRegions")}</h2>
+            <p class="muted small">{t("erasedHint")}</p>
+            {erased.length === 0 && <p class="muted small">{t("noErased")}</p>}
+            <ul class="erased-list">
+              {erased.map((z) => (
+                <li key={z.id}>
+                  <span class="strong">{z.label || z.id}</span>
+                  <span class="muted small">{t("points", { n: z.polygon.length })}</span>
+                  <button type="button" class="link push" onClick={() => setUnerasing(z)}>{t("remove")}</button>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       </section>
       {naming && <NameZone onClose={() => setNaming(false)} onSave={save} />}
+      {erasing && <Confirm text={t("eraseConfirm")} yes={t("finishErase")} onNo={() => setErasing(false)} onYes={() => void erase()} />}
+      {unerasing && (
+        <Confirm text={t("removeEraseConfirm", { label: unerasing.label || unerasing.id })} yes={t("remove")} danger
+          onNo={() => setUnerasing(null)} onYes={() => void unerase(unerasing)} />
+      )}
       {removing && (
         <Confirm text={t("removeZoneConfirm", { zone: removing })} yes={t("remove")} onNo={() => setRemoving(null)}
           onYes={() => {
