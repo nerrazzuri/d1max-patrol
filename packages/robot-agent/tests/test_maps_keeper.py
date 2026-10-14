@@ -314,3 +314,31 @@ def test_站点回4xx_只有没有这个才算拒_证书一时认不出照样重
             assert isinstance(e.value, FetchRefused) == refused, name
     finally:
         srv.shutdown()
+
+
+def test_M9_图里多一个狗不用的文件_照样下载_照样逐个核_坏了整张不装(k):
+    """M9 的兼容:新站点上的图可能带 ``seen.pbm``(只管显示,狗不读)。狗按清单逐个下、逐个核 —— 清单
+    不认名字白名单,老代理也是这一套:多一个文件就多下一个、多核一个;它坏了跟别的文件坏了一样整张不装。
+    没有它的老版本照旧。"""
+    from d1max_contract.maps import SEEN_FILE
+    keeper, site = k
+    files = {"prior.mm": b"prior", "frames.json": b"{}", "floor.pgm": b"P5\n1 1\n255\n\xfe",
+             SEEN_FILE: b"P4\n1 1\n\x80"}
+    a = site.add("m", "1", files)
+    d = keeper.install(a)
+    assert (d / SEEN_FILE).read_bytes() == files[SEEN_FILE]
+    keeper.commit(a)
+    assert keeper.verify_active() == a
+    (keeper.dir_of(a) / SEEN_FILE).write_bytes(b"P4\n1 1\n\x00")
+    with pytest.raises(MapIntegrityError, match=SEEN_FILE):
+        keeper.verify_active()                                    # 这个文件也在全量核里
+    b = site.add("m", "2", {n: v for n, v in files.items() if n != SEEN_FILE})
+    keeper.install(b)
+    keeper.commit(b)
+    assert keeper.verify_active() == b
+    bad = MapRef.from_wire(a.to_wire() | {"version": "3"})
+    for n, v in files.items():
+        site.files[("m", "3", n)] = v
+    site.files[("m", "3", SEEN_FILE)] = b"P4\n1 1\n\xff"          # 站点给的跟清单对不上
+    with pytest.raises(MapInstallError):
+        keeper.install(bad)

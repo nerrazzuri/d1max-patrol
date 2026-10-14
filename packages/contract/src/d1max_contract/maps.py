@@ -32,8 +32,22 @@ MANIFEST = "map.json"
 GEOMETRY_FILES = ("prior.mm", "frames.json", "floor.pgm", "floor.yaml", "coverage.json",
                   "build.json")
 #: 可选的文件(W09e):有就收进清单、跟着传、照样校验;没有不影响这一版能用。``geo.json`` = 地图与
-#: 经纬度的配准(录包时有 RTK 固定解、配得上才有,见 ``d1max_contract.geo``)。
-OPTIONAL_FILES = ("geo.json",)
+#: 经纬度的配准(录包时有 RTK 固定解、配得上才有,见 ``d1max_contract.geo``)。``seen.pbm`` = 见
+#: :data:`SEEN_FILE`。
+#:
+#: **老的狗、老的站点碰到新的可选文件不出事**:清单(``map.json``)只是「文件名 + 大小 + sha256」的
+#: 列表,:class:`MapRef` 不认名字白名单(只查字符、个数 ≤ :data:`MAX_FILES`),狗下载、校验、开机全量核
+#: 都是按清单逐个来 —— 多一个文件就多下一个、多核一个,不载它、不用它。老代理建图时只收它认得的可选
+#: 文件(``mapping._settle`` 按自己那份 :data:`OPTIONAL_FILES`),新的定位器在老代理上出的 ``seen.pbm``
+#: 不进清单、不传,那一版就是没有它的老样子。
+OPTIONAL_FILES = ("geo.json", "seen.pbm")
+#: 「看到过、狗没走过」(M9,只管显示):建图时**只透过玻璃、门口看到过**、被定成「不知道」的格子
+#: (``d1max_localizer.grid`` 的 ``_see_through`` 去掉的那些)。规划、狗一律不读它 —— 那些格在
+#: ``floor.pgm`` 里照样是「不知道」、照样当挡;站点画平面图时把它们画成淡淡的地面,客户看得出
+#: 房子的样子。格式:PBM 二进制(``P4``,一格一位,1 = 是),宽高、行序跟同一版的 ``floor.pgm``
+#: 一模一样(行 0 = 地图上 y 最大的那一行);栅格最多 2500 万格,这个文件最多约 3.1 MB。一格都
+#: 没有就不写这个文件。
+SEEN_FILE = "seen.pbm"
 COVERAGE = "coverage.json"
 #: 定位器要的那两样(W09b):配了定位器的狗只收带着它们的版本。
 PRIOR_FILES = ("prior.mm", "frames.json")

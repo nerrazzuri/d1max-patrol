@@ -265,6 +265,32 @@ def test_栅格拿到狗身中心走过的路(tmp_path, monkeypatch):
     assert len(seen) == 2 and all(b is not None and len(b) == 120 for b in seen)
 
 
+def test_M9_栅格带显示掩码就写_seen_pbm_进文件表_没有就不写(tmp_path, monkeypatch):
+    """M9:「看到过、狗没走过」的掩码是可选文件(``d1max_contract.maps.SEEN_FILE``),栅格有才写、
+    才进文件表;没有的那一版文件表跟原来一模一样。"""
+    from d1max_contract.maps import OPTIONAL_FILES, SEEN_FILE
+    assert SEEN_FILE in OPTIONAL_FILES
+    work, pts = _scene(tmp_path, False)
+    real = G.render
+
+    def 带掩码(*a, **k):
+        g = real(*a, **k)
+        seen = np.zeros(g.image.shape, bool)
+        seen[2:4, 3:9] = True
+        g.image[seen] = G.UNKNOWN
+        return G.Grid(image=g.image, origin=g.origin, res=g.res, seen=seen)
+    monkeypatch.setattr(G, "render", 带掩码)
+    files = B.package(work, tmp_path / "out", run=假MOLA(pts))
+    assert sorted(files) == sorted([*B.FILES, SEEN_FILE])
+    raw = (tmp_path / "out" / SEEN_FILE).read_bytes()
+    head = (tmp_path / "out" / "floor.pgm").read_bytes().split(b"\n")[1]
+    w, h = (int(v) for v in head.split())
+    assert raw.startswith(f"P4\n{w} {h}\n".encode()), "跟 floor.pgm 一样大"
+    monkeypatch.undo()
+    files = B.package(work, tmp_path / "out2", run=假MOLA(pts))
+    assert sorted(files) == sorted(B.FILES) and not (tmp_path / "out2" / SEEN_FILE).exists()
+
+
 def test_点云消息按字段偏移取xyz_丢掉NaN():
     names = ("x", "y", "z", "intensity", "ring")
     dt = np.dtype({"names": list(names), "formats": ["<f4", "<f4", "<f4", "<f4", "<u2"],
