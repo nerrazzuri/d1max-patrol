@@ -391,9 +391,38 @@ String _bridgeLocText(Map<String, dynamic> loc, String reason) {
     final other => other,
   };
   final s = loc['sigma_m'];
-  return tr(
+  final base = tr(
       'Localization: $src, error about ${s is num ? s.toStringAsFixed(1) : '?'} m',
       '定位：$src，偏差约 ${s is num ? s.toStringAsFixed(1) : '?'} m');
+  // 可信、但变差了（狗在推算、σ 偏大，自动限速）：带上狗说的原因
+  final degraded = '${loc['degraded'] ?? ''}';
+  return degraded.isEmpty ? base : tr('$base · degraded: $degraded', '$base · 变差：$degraded');
+}
+
+/// 运行状态的人话（运营可视化）：单狗视图里的 `nav`（站点从狗的 `nav_blocked` / `nav_replan` 事件取的）。
+/// 被挡写「被挡 N 秒：原因」，重规划写次数和原因；都没有是空串。
+String navText(Map<String, dynamic>? nav) {
+  if (nav == null) return '';
+  final lines = <String>[];
+  final b = nav['blocked'];
+  if (b is Map) {
+    final n = b['for_s'] is num ? (b['for_s'] as num).toInt() : 0;
+    final why = '${b['reason'] ?? ''}';
+    lines.add(tr('Blocked $n s: ${why.isEmpty ? 'no reason given' : why}',
+        '被挡 $n 秒：${why.isEmpty ? '没说原因' : why}'));
+  }
+  final r = nav['replan'];
+  if (r is Map) {
+    final n = r['n'] is num ? (r['n'] as num).toInt() : 0;
+    final why = switch ('${r['why']}') {
+      'zones' => tr('zones changed', '区域换了'),
+      'near_nogo' => tr('too close to a no-go zone', '离禁行区太近'),
+      'detour' => tr('detouring around an obstacle', '绕障'),
+      _ => tr('off the route', '偏离路径'),
+    };
+    lines.add(tr('Re-planned $n× ($why)', '重规划 $n 次（$why）'));
+  }
+  return lines.join('\n');
 }
 
 /// 站点的接口面。界面只认它，测试可以换成假的。
@@ -406,6 +435,13 @@ abstract class SiteApi {
   Future<void> pushRegister(String registrationId, String platform, {String provider = 'jpush'});
   Future<void> pushUnregister(String registrationId);
   Future<List<Map<String, dynamic>>> robots();
+
+  /// 运营可视化：每台狗的规划路径、最近轨迹、被挡位置（`GET /api/runviz`，站点内存里的，不落库）。
+  Future<Map<String, dynamic>> runViz();
+
+  /// 运营可视化：定位丢了 / 变差的每一段（`GET /api/loc-episodes`），按图、狗、时间过滤。
+  Future<List<Map<String, dynamic>>> locEpisodes(
+      {String? mapId, String? mapVersion, String? robot, int? sinceMs, int limit = 200});
   Future<Map<String, dynamic>> robot(String id);
   Future<Map<String, dynamic>> patrol(String id, String missionId);
 
@@ -894,6 +930,23 @@ class SiteClient implements SiteApi {
     return (d['robots'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
         .toList();
+  }
+
+  @override
+  Future<Map<String, dynamic>> runViz() async => _map(await _send('GET', '/api/runviz'));
+
+  @override
+  Future<List<Map<String, dynamic>>> locEpisodes(
+      {String? mapId, String? mapVersion, String? robot, int? sinceMs, int limit = 200}) async {
+    final q = <String, String>{
+      'map_id': ?mapId,
+      'map_version': ?mapVersion,
+      'robot': ?robot,
+      'since_ms': ?(sinceMs == null ? null : '$sinceMs'),
+      'limit': '$limit',
+    };
+    final d = _map(await _send('GET', '/api/loc-episodes?${Uri(queryParameters: q).query}'));
+    return (d['episodes'] as List? ?? const []).whereType<Map<String, dynamic>>().toList();
   }
 
   @override

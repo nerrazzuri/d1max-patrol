@@ -541,6 +541,11 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                 : NwInfoTile(
                     icon: Icons.location_on_rounded, label: tr('Position', '定位'), value: tr('Not reported', '没上报'))),
       ])),
+      if (v?['nav'] is Map && navText((v!['nav'] as Map).cast<String, dynamic>()).isNotEmpty)
+        Padding(
+            padding: const EdgeInsets.only(top: Nw.s8),
+            child: Text(navText((v['nav'] as Map).cast<String, dynamic>()),
+                key: const Key('robot-nav'), style: NwText.bodyMedium.copyWith(color: c.warning))),
       if (v?['rtk'] is Map)
         Padding(
             padding: const EdgeInsets.only(top: Nw.s8),

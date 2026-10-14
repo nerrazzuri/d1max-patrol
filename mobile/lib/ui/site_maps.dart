@@ -23,6 +23,7 @@ import 'nw/nw_p4_admin.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 import 'map_view.dart';
+import 'run_viz.dart';
 import 'site_mapping.dart';
 import 'site_pose_pick.dart';
 import 'site_robot.dart';
@@ -318,6 +319,10 @@ class _MapView {
   final List<Map<String, dynamic>> robots;
   final String? robotsError;
 
+  /// 运营可视化：`/api/runviz` 那一份（规划路径、轨迹、被挡）和这张图近 7 天的定位问题；读不到就是空。
+  final Map<String, dynamic>? viz;
+  final List<Map<String, dynamic>> episodes;
+
   const _MapView(
       {this.mapId,
       this.version,
@@ -328,7 +333,9 @@ class _MapView {
       this.previewError,
       this.zones = const [],
       this.robots = const [],
-      this.robotsError});
+      this.robotsError,
+      this.viz,
+      this.episodes = const []});
 
   String get tag => '$mapId:$version';
 }
@@ -354,6 +361,7 @@ class SiteMapTab extends StatefulWidget {
   static const Key zonesKey = Key('map-tab-zones');
   static const Key standbyKey = Key('map-tab-standby');
   static const Key legendKey = Key('map-tab-legend');
+  static const Key runVizKey = Key('map-tab-run-viz');
   static const Key listKey = Key('map-tab-list');
   static const Key refreshKey = Key('map-tab-refresh');
   static const Key emptyKey = Key('map-tab-empty');
@@ -455,7 +463,28 @@ class _SiteMapTabState extends State<SiteMapTab> {
         // 留着预览里带的
       }
     }
+    // 运营可视化（读不到不影响看图）：路径 / 轨迹 / 被挡，近 7 天这张图上的定位问题。位置跟着「刷新」读。
+    Map<String, dynamic>? viz;
+    var episodes = const <Map<String, dynamic>>[];
+    if (png != null) {
+      try {
+        viz = await widget.api.runViz();
+      } on SiteError {
+        // 没有就不画
+      }
+      try {
+        episodes = await widget.api.locEpisodes(
+            mapId: id,
+            mapVersion: version,
+            sinceMs: DateTime.now().millisecondsSinceEpoch - 7 * 86400000,
+            limit: 300);
+      } on SiteError {
+        // 没有就不画
+      }
+    }
     return _MapView(
+        viz: viz,
+        episodes: episodes,
         mapId: id,
         version: version,
         inUse: used != null,
@@ -614,6 +643,8 @@ class _SiteMapTabState extends State<SiteMapTab> {
         decoration: round
             ? BoxDecoration(color: color, shape: BoxShape.circle)
             : BoxDecoration(color: color.withValues(alpha: 0.35), border: Border.all(color: color, width: 2)));
+    // 运营可视化：这张图上有什么可画的（图例只列有的；坐标在下面的画布里再换）
+    final vizAt = runVizShapes(v.viz, v.mapId!, v.version!, (x, y) => Offset(x, y));
     // 图例：只列图上有的（底图那三样总有）
     final legend = <NwLegendItem>[
       ...mapBaseLegend(context, plan: v.plan, seen: geo.seen),
@@ -633,6 +664,11 @@ class _SiteMapTabState extends State<SiteMapTab> {
       if (slow) NwLegendItem(swatch: swatch(_slowPaint), label: tr('Speed-limit zone', '限速区')),
       if (erase) mapEraseLegend(context),
       if (geo.areas.isNotEmpty) mapAreaLegend(context),
+      ...runVizLegend(context,
+          path: vizAt.any((s) => s.path.length >= 2),
+          trail: vizAt.any((s) => s.trail.length >= 2),
+          blocked: vizAt.any((s) => s.blocked != null),
+          episodes: episodeDots(v.episodes, (x, y) => Offset(x, y)).isNotEmpty),
     ];
     return Padding(
         padding: const EdgeInsets.all(Nw.s8),
@@ -696,6 +732,19 @@ class _SiteMapTabState extends State<SiteMapTab> {
                                                             px((p[0] as num).toDouble(), (p[1] as num).toDouble()),
                                                       ]),
                                                   ], const <Offset>[], radius: r))),
+                                          Positioned.fill(
+                                              child: ValueListenableBuilder<Matrix4>(
+                                                  valueListenable: _zoom,
+                                                  builder: (_, m, _) => CustomPaint(
+                                                      key: SiteMapTab.runVizKey,
+                                                      painter: RunVizPainter(
+                                                          shapes: runVizShapes(v.viz, v.mapId!, v.version!, px),
+                                                          episodes: episodeDots(v.episodes, px),
+                                                          zoom: m.getMaxScaleOnAxis(),
+                                                          pathColor: c.tertiary,
+                                                          trailColor: c.textSecondary,
+                                                          warnColor: c.warning,
+                                                          edgeColor: c.surface)))),
                                           Positioned.fill(
                                               child: CustomPaint(
                                                   key: SiteMapTab.standbyKey,
