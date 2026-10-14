@@ -175,6 +175,8 @@ interface AdminRobot {
   expires_at: number;
   manual_only: unknown;
   status?: { online: boolean } | null;
+  /** 站点说这份状态还新鲜。狗失联以后 `status.online` 停在最后那一次，要看这个（跟值守页一个口径）。 */
+  fresh?: boolean;
   capabilities?: { agent?: string } | null;
 }
 export interface ClientRow { name: string; kind: string; version?: string; platform?: string; api_level?: number; last_used: number }
@@ -218,7 +220,7 @@ export function RobotsAdminPage({ say }: { say: Say }) {
               return (
                 <tr key={r.robot_id} class={r.revoked ? "off" : undefined}>
                   <td class="mono strong">{r.robot_id}</td>
-                  <td>{r.revoked ? t("revokedTag") : r.status?.online ? <span class="state tone-success">{t("online")}</span> : <span class="state p2 tone-error"><Shape kind="P2" />{t("st_offline")}</span>}</td>
+                  <td>{r.revoked ? t("revokedTag") : r.status?.online && r.fresh === true ? <span class="state tone-success">{t("online")}</span> : <span class="state p2 tone-error"><Shape kind="P2" />{t("st_offline")}</span>}</td>
                   <td class="mono">{r.capabilities?.agent ?? "—"}</td>
                   <td>{v === "ok" ? <span class="state tone-success">{t("compat_ok")}</span> : <span class="state p2"><Shape kind="P2" />{t(`compat_${v}` as Key)}</span>}</td>
                   <td>{r.manual_only ? t("manualOnly") : t("autoDispatch")}</td>
