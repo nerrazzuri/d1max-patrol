@@ -67,12 +67,13 @@
           },
           "zones_set": {
             "enforced": false,
-            "rev": 0
+            "rev": 0,
+            "teleop_hard": true
           }
         }
       },
       "clock_skew_s": 0.0,
-      "expires_at": 1792635772930,
+      "expires_at": 1792985984740,
       "fresh": true,
       "held": null,
       "loc": {
@@ -92,9 +93,9 @@
       "robot_id": "A",
       "rtk": null,
       "status": {
-        "boot_id": "boot-2cb157f65a",
+        "boot_id": "boot-6a9ed85275",
         "control_epoch": 1,
-        "last_seen": 1791635773590,
+        "last_seen": 1791985985433,
         "online": true,
         "ready": {
           "control": true,

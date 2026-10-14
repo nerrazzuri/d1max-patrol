@@ -169,6 +169,43 @@ def test_保安遥控_狗动_限速一半_松手停_断开就放租_审计有起
     assert ("gina", "teleop_start") in acts and ("gina", "teleop_end") in acts
 
 
+def test_硬禁区_遥控开不进去_手机知道为什么(tmp_path):
+    """决策 65 端到端:管理员在图上画一个硬禁区(池子)→ 发给狗 → 保安遥控冲着它开:狗停在池边,
+    手机收到 ``zone_guard``(截了、哪个区)。"""
+    from test_site_api import MAP
+    s = 站(tmp_path, teleop={"renew_s": 0.5}, maps={})
+    try:
+        s.accounts.add("gina", PW, role="guard")
+        d = tmp_path / "cur"
+        d.mkdir()
+        (d / "m.pgm").write_bytes(b"x")
+        s.maps.import_dir(d, map_id=MAP[0], version=MAP[1])
+        alice = _登(s, "alice")
+        tok = _登(s)
+        _新鲜(s, tok)
+        pool = {"id": "pool", "kind": "nogo", "label": "池子", "hard": True,
+                "polygon": [[1.5, -5], [5, -5], [5, 5], [1.5, 5]]}
+        code, v = s.req("POST", f"/api/maps/{MAP[0]}/{MAP[1]}/zones",
+                        {"zones": [pool], "base_revision": 0}, token=alice)
+        assert code == 200 and v["zones"][0]["hard"] is True, v
+        _等(lambda: s.disp.clients["A"].capabilities.tasks["zones_set"]["rev"] == 1, timeout=8)
+        assert s.disp.clients["A"].capabilities.tasks["zones_set"]["teleop_hard"] is True
+        ph = 手机(s, tok)
+        g = ph.wait_kind("granted")
+        assert "zone_guard" not in g, "新狗自己守,开场不用提醒"
+        _推(ph, 0.5, seconds=5.0)
+        o = _odom(s)
+        assert o.x + 0.465 < 1.5 and o.x > 0.3, f"停在池边(机头 {o.x + 0.465:.2f})"
+        seen = []
+        while not seen or seen[-1]["state"] in ("ok", "limited"):   # 开场 ok,近了先减速,再截
+            seen.append(ph.wait_kind("zone_guard", timeout=5))
+        assert seen[-1]["state"] in ("blocked", "inside") and seen[-1]["zone"] == "pool", seen
+        assert seen[-1]["label"] == "池子"
+        ph.close()
+    finally:
+        s.close()
+
+
 def test_站点到狗的帧断了_狗在帧有效期里自己停(站点):
     """帧那一段断了、别的都好好的(狗在线、租约照续、手机照推):能让狗停的只有狗那头的帧有效期。
     (整条链路断开会先触发断线策略,测不到有效期 —— W00c5c 内部评审。)"""

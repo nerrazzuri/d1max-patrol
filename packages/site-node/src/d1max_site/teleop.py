@@ -16,6 +16,9 @@
   转发频率有上限。
 - **画面断过之后要先松手**:画面回来时手机上的杆值可能还卡在断之前(手指抬起被灰掉的杆吞了);
   站点收到一帧零速之前不转发运动。
+- **硬禁区**(决策 65):狗在续租回执里说它的硬禁区守卫这会儿怎么判的(``data.zone_guard``:截了、
+  减速、在边上、位置不可信);变了才转给手机(``{"kind": "zone_guard", ...}``),截了记审计。这张图上
+  有硬禁区、狗的能力里没有 ``zones_set.teleop_hard``(老代理不守)的,开遥控时就告诉手机。
 """
 
 from __future__ import annotations
@@ -85,6 +88,8 @@ class Session:
     last_fwd: float = 0.0
     #: 画面断过:收到一帧零速之前不转发运动。
     need_zero: bool = False
+    #: 硬禁区守卫(决策 65)最近告诉手机的那一份;老狗不守、图上有硬禁区时开场就是 ``unsupported``。
+    zone_told: dict | None = None
 
 
 class TeleopDesk:
@@ -173,7 +178,8 @@ class TeleopDesk:
             raise TeleopRefused(409, f"狗没接遥控: {ack.get('result')} {ack.get('reason', '')}")
         # 开的时候查过画面是有的:之后只在变了的时候告诉手机。
         s = Session(robot_id=robot_id, epoch=epoch, operator=name, max_vx=caps[0],
-                    max_wz=caps[1], started_ms=self._now(), row_id=row_id, video_told=True)
+                    max_wz=caps[1], started_ms=self._now(), row_id=row_id, video_told=True,
+                    zone_told=self._hard_unsupported(robot_id))
         with self._lock:
             self._sessions[robot_id] = s
         self._audit(name, "teleop_start", robot_id, {"lease_epoch": epoch,
@@ -194,6 +200,39 @@ class TeleopDesk:
             except Exception:  # noqa: BLE001 - 追发是尽力而为;授予命令本身有效期很短
                 log.info("没接上的授予(%s 代次 %d)追发放租也没回话", robot_id, epoch)
         threading.Thread(target=_go, daemon=True, name="teleop-release").start()
+
+    def _hard_unsupported(self, robot_id: str) -> dict[str, Any] | None:
+        """决策 65:这张图上有硬禁区,狗却不报 ``zones_set.teleop_hard``(老代理,遥控时不守)→ 开场就
+        告诉手机;别的情况 ``None``(新狗自己守、自己会说)。查不到当没有。"""
+        try:
+            c = self.dispatcher.clients.get(robot_id)
+            caps = c.capabilities if c is not None else None
+            z = caps.tasks.get("zones_set") if caps is not None else None
+            if isinstance(z, dict) and z.get("teleop_hard"):
+                return None
+            zones = getattr(self.dispatcher, "zones", None)
+            loaded = self.dispatcher._loaded(c)
+            if zones is None or loaded is None or not zones.current(*loaded).hard():
+                return None
+        except Exception:                  # 提醒而已,查不到不挡遥控
+            log.debug("查硬禁区支持没查成", exc_info=True)
+            return None
+        return {"state": "unsupported",
+                "reason": f"{robot_id} 的代理太老,遥控时不守硬禁区(水体、落差):看着画面开,"
+                          "升级代理"}
+
+    def _zone_note(self, s: Session, data: Any) -> None:
+        """狗在续租回执里说的硬禁区守卫(决策 65):变了才告诉手机;截了、在边上记一笔审计。"""
+        zg = data.get("zone_guard") if isinstance(data, dict) else None
+        if not isinstance(zg, dict) or zg == s.zone_told:
+            return
+        prev = (s.zone_told or {}).get("state")
+        s.zone_told = zg
+        self._tell(s, {"kind": "zone_guard", **zg})
+        if zg.get("state") in ("blocked", "inside", "untrusted") and zg.get("state") != prev:
+            self._audit(s.operator, "teleop_zone_guard", s.robot_id,
+                        {"lease_epoch": s.epoch, "state": zg.get("state"),
+                         "zone": zg.get("zone", "")})
 
     def _caps(self, robot_id: str) -> tuple[float, float]:
         c = self.dispatcher.clients.get(robot_id)
@@ -412,6 +451,8 @@ class TeleopDesk:
                                             lease_ttl_ms=self.lease_ttl_ms),
                     timeout_s=self.renew_s), timeout_s=self.renew_s + 2)
                 ok = ack.result is AckResult.ACCEPTED
+                if ok:
+                    self._zone_note(s, getattr(ack, "data", None))
             except Exception:  # noqa: BLE001 - 续不上就算一次失败
                 ok = False
             s.renew_failures = 0 if ok else s.renew_failures + 1

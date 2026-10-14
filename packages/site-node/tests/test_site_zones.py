@@ -114,7 +114,7 @@ def test_改了区域_发给狗_狗上换上_能力里的修订跟着变(站点)
     s = 站点
     alice = _登(s, "alice")
     _等(lambda: _zcaps(s) is not None)
-    assert _zcaps(s) == {"rev": 0, "enforced": False}
+    assert _zcaps(s) == {"rev": 0, "enforced": False, "teleop_hard": True}   # 决策 65 起多一项
     code, d = s.req("POST", ZP, {"zones": [SLOW], "base_revision": 0}, token=alice)
     assert code == 200 and d["pushed"] == {"A": ""}, d
     _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
