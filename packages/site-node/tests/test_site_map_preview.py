@@ -66,8 +66,9 @@ def test_三种格子_颜色_坐标换算():
     w, h, rows = _png_rows(png)
     assert (w, h) == (4, 2)
     assert rows[0] == bytes([0, 254, 205, 0]) and rows[1] == bytes([254] * 4)
+    # 地图台账 M7(2026-10-14)起多一项有内容的范围(预览像素)
     assert meta == {"width": 4, "height": 2, "m_per_px": 0.05, "left_x": -10.0,
-                    "top_y": -5.0 + 2 * 0.05}
+                    "top_y": -5.0 + 2 * 0.05, "content_bbox": [0.0, 0.0, 4.0, 2.0]}
 
 
 def test_反色_ascii的pgm_注释():

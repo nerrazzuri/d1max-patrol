@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -1990,14 +1991,22 @@ class _Handler(TlsHandlerMixin):
         这一版上画的防区 ``{name, points: [{x, y}]}``,跟 ``…/areas`` 一样谁能看图谁能看)、``plan``
         (``{url, scale}``:``plan.png`` 是平面图样子的灰度 + 透明 PNG,范围跟 ``preview.png``
         一模一样,像素是它的 ``scale`` 倍;客户端拉伸到预览的 ``width × height`` 画,叠加的换算都
-        不变)。"""
+        不变)。
+
+        2026-10-14(地图台账 M9、44、M7):这张图这一版上的**抹掉区**(区域种类 ``erase``)在预览、
+        平面图上抹成没建图(站点画好,客户端不用管);有抹掉区时平面图地址带 ``?e=<抹掉区的指纹>``
+        (改了抹掉区地址就变,客户端重新取图);``preview`` 另给 ``content_bbox``(有内容的范围,预览像素
+        ``[x0, y0, x1, y1]``,客户端「全图」按它缩放)、``seen``(这一版带「看到过、狗没走过」的淡色层,
+        客户端据此在图例里加一行;没有就不给)。"""
         from d1max_site.map_preview import NoRaster, PreviewError, plan_scale
         from d1max_site.maps import MapError
+        zs = (self.site.zones.current(map_id, version) if self.site.zones is not None else None)
+        erase = tuple(z.polygon for z in zs.erase()) if zs is not None else ()
         try:
             if what == "plan.png":
-                png, info = self.site.maps.plan(map_id, version)[0], {}
+                png, info = self.site.maps.plan(map_id, version, erase)[0], {}
             else:
-                png, info = self.site.maps.preview(map_id, version)
+                png, info = self.site.maps.preview(map_id, version, erase)
         except (MapError, NoRaster) as exc:
             raise HttpError(404, str(exc)) from exc
         except (PreviewError, OSError) as exc:
@@ -2014,13 +2023,15 @@ class _Handler(TlsHandlerMixin):
             "ORDER BY robot_id", (map_id, version))
         homes = [{"robot_id": r["robot_id"], "name": r["name"], "x": r["x"], "y": r["y"],
                   "yaw": r["yaw"]} for r in rows]                 # W13a:原点单独画
-        zones = (self.site.zones.current(map_id, version).to_wire()["zones"]
-                 if self.site.zones is not None else [])
+        zones = zs.to_wire()["zones"] if zs is not None else []
         book = self.site.areas
         areas = [{"name": a["zone"], "points": [{"x": x, "y": y} for x, y in a["points"]]}
                  for a in (book.list(map_id, version) if book is not None else [])]
-        plan = {"url": f"/api/maps/{quote(map_id, safe='')}/{quote(version, safe='')}/plan.png",
-                "scale": plan_scale(info["width"], info["height"])}
+        url = f"/api/maps/{quote(map_id, safe='')}/{quote(version, safe='')}/plan.png"
+        if erase:
+            tag = hashlib.sha256(json.dumps(erase).encode()).hexdigest()[:12]
+            url += f"?e={tag}"
+        plan = {"url": url, "scale": plan_scale(info["width"], info["height"])}
         return self._send_json(200, info | {"standby": standby, "homes": homes, "zones": zones,
                                             "areas": areas, "plan": plan})
 
