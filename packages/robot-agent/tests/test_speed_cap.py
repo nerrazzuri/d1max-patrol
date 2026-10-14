@@ -116,3 +116,25 @@ def test_限着速时_近障从更远就开始减速():
     assert nav._near_cap(1) == math.inf, "不限速:2.5 m 外的障碍不减速"
     nav.speed_cap = 0.3
     assert nav._near_cap(1) < 0.3, "下雨限着速:2.5 m 就开始减速"
+
+
+def test_对账S6_定位变差_自动走限0点3_比全狗限速低的照全狗限速():
+    import math
+    from types import SimpleNamespace
+
+    from d1max_agent.bridges.hal_nav import LOC_DEGRADED_MPS, HalNavBackend
+    caps = SimpleNamespace(max_vx=1.0, max_wz=1.5, deadband_vx=0.2)
+    nav = HalNavBackend.__new__(HalNavBackend)
+    why = [""]
+    nav._caps, nav._vmax, nav.speed_cap, nav.odom_ok = caps, 1.0, math.inf, True
+    nav.anchor = SimpleNamespace(degraded=lambda odom_ok: why[0])
+    assert nav._vlim() == 1.0
+    why[0] = "定位偏差可能到 0.30 m"
+    assert LOC_DEGRADED_MPS == 0.3 and nav._vlim() == 0.3
+    nav.speed_cap = 0.25
+    assert nav._vlim() == 0.25
+    why[0] = ""
+    nav.speed_cap = math.inf
+    assert nav._vlim() == 1.0
+    nav.anchor = SimpleNamespace()                        # 里程锚定:没有「变差」这一说
+    assert nav._vlim() == 1.0

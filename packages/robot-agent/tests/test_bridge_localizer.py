@@ -1216,3 +1216,31 @@ async def test_S1_可信的帧攒着写_挪够了或隔够久才写(tmp_path, mo
         loc.update((3.0, 0.0, 0.0), True)
         loc.on_pose(_位姿(3.0, 5.0))
     assert len(writes) == n + 1
+
+
+# ---------------------------------------------------------------- 对账 S6:可信、但变差了(限速)
+
+
+async def test_S6_σ偏大_在推算_算变差_好了过一阵才算回来_不可信的不算变差():
+    from d1max_agent.bridge_localizer import DEGRADED_HOLD_S, SIGMA_DEGRADED_M
+    assert (SIGMA_DEGRADED_M, DEGRADED_HOLD_S) == (0.25, 3.0), "来由见常量注释,改了要重核"
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    assert loc.degraded(True) == ""
+    loc.on_pose(_位姿(0.0, 0.0, sigma=SIGMA_DEGRADED_M + 0.05))
+    assert loc.ok(True) and "偏差" in loc.degraded(True)
+    assert "偏差" in loc.to_wire(True)["degraded"]
+    c.t += 0.1
+    loc.update((0.0, 0.0, 0.0), True)
+    loc.on_pose(_位姿(0.0, 0.0, sigma=0.1))
+    assert loc.degraded(True), "刚变差过:先别快回去"
+    for _ in range(round(DEGRADED_HOLD_S / 0.1) + 1):
+        c.t += 0.1
+        loc.update((0.0, 0.0, 0.0), True)
+        loc.on_pose(_位姿(0.0, 0.0, sigma=0.1))
+    assert loc.degraded(True) == "" and "degraded" not in loc.to_wire(True)
+    c.t += FRESH_S + 0.2                                  # 定位器这一阵没来:拿里程推
+    loc.update((0.1, 0.0, 0.0), True)
+    assert loc.ok(True) and loc.source == "dead_reckoning" and "推算" in loc.degraded(True)
+    loc.on_pose(_位姿(0.1, 0.0, sigma=SIGMA_LOST_M + 0.1))
+    assert not loc.ok(True) and loc.degraded(True) == "", "不可信不是「变差」:导航本来就停"

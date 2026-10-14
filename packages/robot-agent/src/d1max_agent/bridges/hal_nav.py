@@ -48,6 +48,10 @@ HUMAN_RELOCALIZE_WAIT_S = 600.0
 #: 定位器自己能找回来(雷达定位):丢了 / 打滑(跟里程对不上)等多久(秒),等不回来整趟中止、站点报 P1
 #: (W29,决策 41:原地停、等恢复,超时叫人,不靠不准的定位自己摸回去)。
 AUTO_RELOCALIZE_WAIT_S = 30.0
+#: 定位可信、但变差了(对账 S6:定位器在推算、σ 偏大,``BridgeLocalizer.degraded``)时自动走的上限
+#: (米/秒)。跟下雨限速一样(决策 41):每秒最多带 0.3 m 没核过的位移走,推算上限(2 s、1 m)里最多走
+#: 0.6 m;禁行区按 σ 加宽(最多 0.5 m)守得住,刹车距离也短。遥控不经这里,不受它管。
+LOC_DEGRADED_MPS = 0.3
 BEARING_THRESH_RAD = 0.3
 K_LIN = 1.0
 K_ANG = 2.0
@@ -245,8 +249,24 @@ class HalNavBackend(NavBackend):
         raise NavRequestError("return_home", "直线桥不认返航,引擎沿来路回(W00c6b)")
 
     def _vlim(self) -> float:
-        """这一拍的前进上限:任务给的 ∧ 全狗限速(W29;不低于死区,不然走不动)。"""
-        return min(self._vmax, max(self.speed_cap, self._caps.deadband_vx))
+        """这一拍的前进上限:任务给的 ∧ 全狗限速(W29)∧ 定位变差时的限速(对账 S6);不低于死区,
+        不然走不动。两座桥(直线、规划)自己走都经这里。"""
+        cap = self.speed_cap
+        if self._loc_degraded():
+            cap = min(cap, LOC_DEGRADED_MPS)
+        return min(self._vmax, max(cap, self._caps.deadband_vx))
+
+    def _loc_degraded(self) -> str:
+        """定位可信、但变差了的原因(定位来源没有这一说就是空串);变了记一行日志。"""
+        fn = getattr(getattr(self, "anchor", None), "degraded", None)
+        why = fn(getattr(self, "odom_ok", False)) if fn is not None else ""
+        if bool(why) != getattr(self, "_loc_capped", False):
+            self._loc_capped = bool(why)
+            if why:
+                log.warning("定位变差了(%s):自动走限速 %.1f m/s", why, LOC_DEGRADED_MPS)
+            else:
+                log.info("定位回来了:不再因为定位限速")
+        return why
 
     async def get_speed(self) -> dict[str, float]:
         return {"x": self._vmax, "y": 0.0, "z": self._wmax}

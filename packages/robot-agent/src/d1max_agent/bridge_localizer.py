@@ -90,6 +90,13 @@ DR_MAX_M = 1.0
 #: σ_xy 过这条线就不可信(点云匹配正常在 0.3 m 以内;标原点还要 ≤ 0.5 m)。W34:原来是 1.0 —— 2026-10-08
 #: C40221 3d.8,杀掉 MOLA 自己重定位时 σ 从 1.5 往下降,还在 1.0 时代理就认了,对导航太松;收到 0.5。
 SIGMA_LOST_M = 0.5
+#: 可信、但变差了(对账 S6):σ 过这条线,自动走要限速(导航桥 ``hal_nav._vlim``)。正常点云匹配给
+#: 0.1 m(ICP 质量 ≥ 0.8);过 0.25 m = 质量掉到 0.77 以下、或刚重定位完还在收敛(定位器的 σ 从给的
+#: 初值 30 s 降下来,人给的 0.5 头 15 s 在线上)、或代理拿里程推了 0.7 m 以上。离不可信的线(0.5 m)
+#: 还差一半 —— 变差了还能走,只是走慢点,不至于一路快跑到丢了才急停。
+SIGMA_DEGRADED_M = 0.25
+#: 变差过之后这么久照样算变差(秒):σ 在线上下抖、推算一阵一阵的,速度不跟着一快一慢。
+DEGRADED_HOLD_S = 3.0
 #: 跳变之后要连着这么多帧前后对得上才恢复。
 SETTLE_FIXES = 5
 #: 交叉校验(见模块说明)。
@@ -241,6 +248,8 @@ class BridgeLocalizer:
         self._wrong_map = False
         #: RTK 核对说定位器不对(W09e,``RtkCheck``;代理每拍写):非空就不可信。
         self.rtk_disagree = ""
+        #: 最近一次「变差了」(对账 S6):(时刻, 原因)。
+        self._degraded: tuple[float, str] | None = None
         self._settle = 0
         self._settle_why = ""
         self._settle_human = False
@@ -452,15 +461,38 @@ class BridgeLocalizer:
     def ok(self, odom_ok: bool) -> bool:
         return not self.why_not(odom_ok)
 
+    def degraded(self, odom_ok: bool) -> str:
+        """可信、但变差了(对账 S6):在拿里程推算(这一帧的位置过了 :data:`FRESH_S`:晚到,或定位器自己
+        在推),或者 σ 过 :data:`SIGMA_DEGRADED_M`。回原因;没变差、不可信(导航本来就停)回空串。变差过
+        的 :data:`DEGRADED_HOLD_S` 内照样算(说法后面带「刚变差过」)。"""
+        if not self.ok(odom_ok):
+            return ""
+        now, f = self._now(), self._fix
+        why = ""
+        if f is not None and now - f.born > FRESH_S:
+            why = f"在拿里程推算(定位器的位置是 {now - f.born:.1f} 秒前的)"
+        elif self.sigma_xy > SIGMA_DEGRADED_M:
+            why = f"定位偏差可能到 {self.sigma_xy:.2f} m"
+        if why:
+            self._degraded = (now, why)
+            return why
+        if self._degraded is not None and now - self._degraded[0] < DEGRADED_HOLD_S:
+            return f"{self._degraded[1]}(刚变差过)"
+        return ""
+
     def quality(self, odom_ok: bool) -> float:
         if not self.ok(odom_ok):
             return 0.0
         return max(0.0, 1.0 - self.sigma_xy / SIGMA_LOST_M)
 
     def to_wire(self, odom_ok: bool) -> dict[str, Any]:
-        return {"source": self.source, "anchored": self.anchored,
-                "sigma_m": round(self.sigma_xy, 2), "reason": self.why_not(odom_ok),
-                "localizer": "bridge"}
+        out = {"source": self.source, "anchored": self.anchored,
+               "sigma_m": round(self.sigma_xy, 2), "reason": self.why_not(odom_ok),
+               "localizer": "bridge"}
+        degraded = self.degraded(odom_ok)
+        if degraded:
+            out["degraded"] = degraded                   # 对账 S6:自动走限着速(老站点不认,不碍事)
+        return out
 
     def health(self) -> Any:
         """升级前检查的一项(W00c6d):连着、新鲜、没丢定位。"""
