@@ -119,6 +119,10 @@ class JPush:
         self.url = url
         self._open = opener
         self.timeout_s = timeout_s
+        #: 去重字段(``apns_collapse_id``、厂商 ``notify_id``)极光认不认没拿真账号验过。极光要是因为
+        #: 参数回 400(400 = 这一条没发出去),去掉它们立刻重发一次,之后这台站点不再带:去重最多做不成
+        #: (可能响两次),P1 不能因为它一条都推不出去。
+        self.dedupe = True
 
     def send(self, reg_ids: list[str], title: str, body: str, extras: dict[str, str], *,
              ttl_s: int = EXPIRE_MS // 1000) -> str:
@@ -131,6 +135,10 @@ class JPush:
         的那台手机仍可能出现两条。"""
         tag = collapse_id(extras.get("alert_key", ""), extras.get("tier", "0") or "0")
         nid = vendor_notify_id(extras.get("alert_key", ""), extras.get("tier", "0") or "0")
+        options: dict[str, Any] = {"time_to_live": max(1, int(ttl_s))}
+        if self.dedupe:
+            options |= {"apns_collapse_id": tag, "third_party_channel": {
+                v: {"notify_id": nid} for v in JPUSH_NOTIFY_ID_VENDORS}}
         payload = {
             "platform": ["android", "ios"],
             "audience": {"registration_id": reg_ids},
@@ -140,9 +148,7 @@ class JPush:
                 "ios": {"alert": {"title": title, "body": body}, "sound": "default",
                         "extras": extras},
             },
-            "options": {"time_to_live": max(1, int(ttl_s)), "apns_collapse_id": tag,
-                        "third_party_channel": {
-                            v: {"notify_id": nid} for v in JPUSH_NOTIFY_ID_VENDORS}},
+            "options": options,
         }
         req = urllib.request.Request(
             self.url, data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
@@ -153,6 +159,10 @@ class JPush:
                 got = json.loads(resp.read() or b"{}")
         except urllib.error.HTTPError as exc:
             detail = exc.read()[:300].decode("utf-8", "replace") if exc.fp else ""
+            if exc.code == 400 and self.dedupe:
+                log.warning("极光回 400(%s):去掉推送去重字段重发,之后不再带", detail)
+                self.dedupe = False
+                return self.send(reg_ids, title, body, extras, ttl_s=ttl_s)
             raise PushError(f"极光回 {exc.code}:{detail}") from exc
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise PushError(f"连不上极光:{exc}") from exc
