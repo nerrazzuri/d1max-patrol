@@ -28,6 +28,12 @@
 #     echo 'shutdown'     > runs/d1max-agent.fifo     # 真释放+退出(不可逆，之后要重启 RK3588)
 #   （TCP 口 127.0.0.1:8090 才是 JSONL 协议，给 Python 客户端 SidecarDeviceBackend 用。）
 #
+#   只收代理的运动命令（S11，协议 9）：patrol_agent 每次起来生成一个令牌，写进 $TOKEN
+#   （缺省 ~/.d1max/sidecar.token，0600）。TCP 连接先认证才能开车，停车、急停谁都能发。
+#   代理（d1max-agent --hal d1max）缺省读同一个文件 —— **代理要跟这个脚本同一个账号跑**。
+#   现场工具（w00d_motion_check、calibrate_drive）要开车得显式给 --token-file。
+#   FIFO 建成 0600（只有这个账号能写）；组或别人能写的 FIFO，patrol_agent 只收 halt/estop/status。
+#
 #   前提：急停在手；动作前四周留足空地。
 # =====================================================================
 set -u
@@ -37,6 +43,8 @@ BIN=./motion/patrol_agent
 LISTEN=127.0.0.1:8090
 FIFO=runs/d1max-agent.fifo
 PIDFILE=runs/d1max-agent.pid
+# 旁路进程的令牌(S11):每次起来重写。代理的 --sidecar-token-file 缺省同一个路径
+TOKEN="${D1MAX_SIDECAR_TOKEN:-$HOME/.d1max/sidecar.token}"
 mkdir -p runs/field-logs
 
 # 缺二进制就编（Makefile 已修好带空格路径的 rpath）
@@ -45,8 +53,10 @@ if [ ! -x "$BIN" ]; then
   make -C motion patrol_agent || { echo "!! 编译失败"; exit 1; }
 fi
 
-# 命令管道（应急人工通道）
-[ -p "$FIFO" ] || { rm -f "$FIFO"; mkfifo "$FIFO"; }
+# 命令管道（应急人工通道）。0600:只有这个账号能写(S11:组或别人能写的,patrol_agent 只收停车)
+if [ -p "$FIFO" ] && [ -z "$(find "$FIFO" -maxdepth 0 -perm /022 2>/dev/null)" ]; then :; else
+  rm -f "$FIFO"; mkfifo -m 600 "$FIFO"
+fi
 
 # 判定"机器重启了"要连续多少次 ping 不通(每次间隔 3s)。
 #
@@ -101,14 +111,14 @@ start_agent(){
     echo "[field-agent] !! 没有 setsid（util-linux）——agent 只能跟脚本同组，"
     echo "               这种情况下 Ctrl+C 会连它一起杀掉、控制权就丢了。"
     echo "               装一下：sudo apt install util-linux"
-    "$BIN" "$DOG" "$PORT" --listen "$LISTEN" --fifo "$FIFO" >>"$LOG" 2>&1 &
+    "$BIN" "$DOG" "$PORT" --listen "$LISTEN" --fifo "$FIFO" --token-file "$TOKEN" >>"$LOG" 2>&1 &
     AGENT_PID=$!
     echo "$AGENT_PID" > "$PIDFILE"
     return 0
   fi
 
   "$setsid_bin" bash -c 'echo $$ > "$1"; shift; exec "$@"' _ \
-      "$PIDFILE" "$BIN" "$DOG" "$PORT" --listen "$LISTEN" --fifo "$FIFO" \
+      "$PIDFILE" "$BIN" "$DOG" "$PORT" --listen "$LISTEN" --fifo "$FIFO" --token-file "$TOKEN" \
       >>"$LOG" 2>&1 &
 
   waited=0
@@ -144,7 +154,7 @@ cleanup(){
 
   还能继续用：
     echo 'stand' > $FIFO          # FIFO 人工通道照旧
-    TCP 127.0.0.1:8090            # Python 客户端照旧
+    TCP 127.0.0.1:8090            # Python 客户端照旧(开车要令牌 $TOKEN,停车不要)
 
   停掉的是「保活」这一层：热点掉了不再自动重连，机器重启也不再自动重抢窗口。
   想恢复：bash field-agent.sh     # 会认出它、直接接管，不会重复起第二个
@@ -171,7 +181,7 @@ connect_wifi(){
 
 echo "======================================================"
 echo " field-agent —— 抢连握住不放 + 跨重启自动重抢"
-echo " 狗=$DOG:$PORT  热点=$SSID  命令口 TCP=$LISTEN  fifo=$FIFO"
+echo " 狗=$DOG:$PORT  热点=$SSID  命令口 TCP=$LISTEN  fifo=$FIFO  令牌=$TOKEN"
 echo " ★ 现在就可以给 RK3588 上电/重启，脚本会一直抢开机窗口。"
 echo " Ctrl+C 只退本脚本——patrol_agent 继续跑，控制权不松手"
 echo "======================================================"

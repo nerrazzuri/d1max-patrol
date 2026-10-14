@@ -13,11 +13,16 @@
 
 前提:**旁路进程已在开机窗口抢到控制权**(重启狗时抢握手)。否则 acquire 抛错。
 
+**要旁路进程的令牌**(协议 9,S11:只收认证过的连接的运动命令;这个脚本绕过代理的禁行区、避障,
+所以令牌要人**显式**给)。令牌在旁路进程那台机器、起它的那个账号的 ~/.d1max/sidecar.token(0600)。
+笔记本上连 Orin 的旁路进程,不落盘地递过来:`--token-file <(ssh robot@<Orin_IP> cat .d1max/sidecar.token)`
+(下面写作 TOK)。
+
 用法:
-  python3 calibrate_drive.py --host <Orin_IP> [--port 8090] --dry-run      # 看计划
-  python3 calibrate_drive.py --host <Orin_IP> --test                       # 小步试
-  python3 calibrate_drive.py --host <Orin_IP> --measure-yaw                 # 测 yaw 角速率
-  python3 calibrate_drive.py --host <Orin_IP> --arm                         # 正式跑全序列
+  python3 calibrate_drive.py --host <Orin_IP> [--port 8090] --dry-run      # 看计划(不要令牌)
+  python3 calibrate_drive.py --host <Orin_IP> --token-file TOK --test         # 小步试
+  python3 calibrate_drive.py --host <Orin_IP> --token-file TOK --measure-yaw  # 测 yaw 角速率
+  python3 calibrate_drive.py --host <Orin_IP> --token-file TOK --arm          # 正式跑全序列
 调 yaw:先 --measure-yaw 转 5 秒,从 /odom/current_pose 或 IMU 看转了多少度,
        把 YAW_DEG_PER_S 改成实测值,再 --arm。
 """
@@ -40,7 +45,7 @@ async def run(args):
     if not args.dry_run:
         sys.path.insert(0, "src")
         from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
-        dev = SidecarDeviceBackend(host=args.host, port=args.port)
+        dev = SidecarDeviceBackend(host=args.host, port=args.port, token_file=args.token_file)
     else:
         dev = None
 
@@ -129,6 +134,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1", help="旁路进程 host(笔记本上填 Orin IP)")
     ap.add_argument("--port", type=int, default=8090)
+    ap.add_argument("--token-file", default=None,
+                    help="旁路进程的令牌文件(协议 9;要动狗就得显式给,见文件头)")
     ap.add_argument("--arm", action="store_true", help="真正驱动(否则 dry-run)")
     ap.add_argument("--dry-run", action="store_true", help="只打印计划,不连狗")
     ap.add_argument("--test", action="store_true", help="只发一小拍前进")
@@ -138,6 +145,8 @@ def main():
     if not (args.arm or args.test or args.measure_yaw):
         args.dry_run = True
         print("(未 --arm/--test/--measure-yaw → dry-run,只打印计划)\n")
+    if not args.dry_run and args.token_file is None:
+        ap.error("要动狗得给 --token-file(旁路进程只收认证过的连接的运动命令,见文件头)")
     asyncio.run(run(args))
 
 if __name__ == "__main__":

@@ -85,6 +85,17 @@ def test_仿真器没装时_sim_子命令给中文提示(monkeypatch, capsys):
     assert "pip install -e .[dev]" in err
 
 
+def test_S11_厂家导航的goto_walk默认不跑_连都不连_指到站点(capsys):
+    """厂家导航没有禁行区(W08):老命令行的 goto/walk 绕过站点和代理。不带 --allow-vendor-nav 连都不连
+    (这里给的是连不上的地址:返回 2 而不是「连接」失败的 1)。"""
+    for argv in (["goto", "1", "2"], ["walk", "m", "p"]):
+        assert main(["--url", "ws://127.0.0.1:1", *argv]) == 2
+        err = capsys.readouterr().err
+        assert "厂家导航" in err and "/api/robots/<狗>/goto" in err and "--allow-vendor-nav" in err
+    assert main(["--url", "ws://127.0.0.1:1", "goto", "--allow-vendor-nav", "1", "2"]) == 1, \
+        "显式说了才去连(这里连不上)"
+
+
 def test_连不上时返回1(capsys):
     assert main(["--url", "ws://127.0.0.1:1", "status"]) == 1
     assert "连接" in capsys.readouterr().err
@@ -134,7 +145,7 @@ async def test_load_与_goto(sim, capsys):
     assert await run(sim, "load", "map_1") == 0
     assert "ContinuousLoc" in capsys.readouterr().out
 
-    assert await run(sim, "goto", "1", "0", "0") == 0
+    assert await run(sim, "goto", "--allow-vendor-nav", "1", "0", "0") == 0
     assert "Succeed" in capsys.readouterr().out
 
 
@@ -144,13 +155,13 @@ async def test_goto_导航失败返回1(sim, capsys):
     await run(sim, "load", "map_1")
     sim.faults.fail_next_nav = True
 
-    assert await run(sim, "goto", "1", "0", "0") == 1
+    assert await run(sim, "goto", "--allow-vendor-nav", "1", "0", "0") == 1
     out = capsys.readouterr().out
     assert "Failed" in out
 
 
 async def test_goto_在定位未就绪时返回1(sim, capsys):
-    assert await run(sim, "goto", "1", "0") == 1
+    assert await run(sim, "goto", "--allow-vendor-nav", "1", "0") == 1
     assert "定位" in capsys.readouterr().err
 
 
@@ -168,7 +179,7 @@ async def test_paths_与_walk(sim, capsys):
     assert "一号线" in out and "P1" in out and "P2" in out
 
     assert await run(sim, "load", map_id) == 0
-    assert await run(sim, "walk", map_id, "一号线") == 0
+    assert await run(sim, "walk", "--allow-vendor-nav", map_id, "一号线") == 0
     out = capsys.readouterr().out
     assert "1/2" in out and "2/2" in out
     assert "全部完成" in out
@@ -201,7 +212,7 @@ async def test_path_save_航点格式错误返回1(sim, capsys):
 
 async def test_walk_遇到不存在的路线返回1(sim, capsys):
     map_id = sim.store.create_map()
-    assert await run(sim, "walk", map_id, "没这条线") == 1
+    assert await run(sim, "walk", "--allow-vendor-nav", map_id, "没这条线") == 1
     assert "没这条线" in capsys.readouterr().err
 
 
@@ -216,7 +227,7 @@ async def test_walk_中途失败即刻停下(sim, capsys):
     await run(sim, "load", map_id)
     sim.faults.fail_next_nav = True
 
-    assert await run(sim, "walk", map_id, "线") == 1
+    assert await run(sim, "walk", "--allow-vendor-nav", map_id, "线") == 1
     err = capsys.readouterr().err
     assert "P1" in err and "Failed" in err
 
@@ -235,6 +246,6 @@ async def test_超时参数会传下去(sim, capsys):
     await run(sim, "map-stop")
     await run(sim, "load", "map_1")
     sim.faults.stuck = True
-    argv = ["--url", sim.url, "--timeout", "1", "goto", "5", "0"]
+    argv = ["--url", sim.url, "--timeout", "1", "goto", "--allow-vendor-nav", "5", "0"]
     assert await _amain(build_parser().parse_args(argv)) == 1
     assert "超时" in capsys.readouterr().err

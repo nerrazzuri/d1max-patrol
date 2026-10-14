@@ -28,15 +28,27 @@ def _load(name: str):
     return mod
 
 
+TOKEN = "5a" * 32
+
+
 @pytest.fixture
 def 仿真旁路():
+    """跟真旁路进程(协议 9)一样要令牌:探针不认证也读得到,运动检查要显式给令牌文件(S11)。"""
     loop = LoopBridge()
     loop.start()
-    sim = SimAgentServer(port=0)
+    sim = SimAgentServer(port=0, token=TOKEN)
     loop.call(sim.start)
     yield sim
     loop.call(sim.stop)
     loop.stop()
+
+
+@pytest.fixture
+def 令牌(tmp_path) -> str:
+    p = tmp_path / "tok" / "sidecar.token"
+    p.parent.mkdir()
+    p.write_text(TOKEN + "\n", encoding="utf-8")
+    return str(p)
 
 
 def _空端口() -> int:
@@ -52,7 +64,7 @@ def test_探针只读_报版本控制权姿态电量里程(仿真旁路, tmp_pat
     [log] = tmp_path.glob("w00d-probe-*.json")
     got = json.loads(log.read_text(encoding="utf-8"))
     assert rc == 0 and got["ok"], got
-    assert got["hello"]["proto"] == got["proto_want"] == 8 and got["held"] is True
+    assert got["hello"]["proto"] == got["proto_want"] == 9 and got["held"] is True
     assert got["sdk_motion"] == "LieDown" and got["hal_motion"] == "lying"
     assert got["battery"] == 71.0 and got["estop"] is False and got["odom"]["valid"]
     assert got["odom_hz"] > 5
@@ -76,30 +88,41 @@ def test_运动检查不带在场声明_连都不连(仿真旁路, tmp_path, cap
     assert 仿真旁路.commands == [] and list(tmp_path.iterdir()) == []
 
 
-def test_运动检查的速度与时长有硬上限(tmp_path):
+def test_运动检查的速度与时长有硬上限(tmp_path, 令牌):
     mc = _load("w00d_motion_check")
     for bad in (["--fwd-fraction", "0.4"], ["--fwd-fraction", "-0.3"], ["--turn-fraction", "-0.5"],
                 ["--turn-fraction", "nan"], ["--fwd-s", "10"], ["--deadband-fraction", "0.4"]):
         with pytest.raises(SystemExit):
-            mc.main(["--i-am-present", "--log-dir", str(tmp_path), *bad])
+            mc.main(["--i-am-present", "--token-file", 令牌, "--log-dir", str(tmp_path), *bad])
 
 
-def test_运动检查_趴着就不动(仿真旁路, tmp_path):
+def test_运动检查_不给令牌文件不连(仿真旁路, tmp_path, capsys):
+    """S11:开车绕过代理的禁行区、避障,令牌要人显式给,工具不替人去默认位置找。"""
+    mc = _load("w00d_motion_check")
+    with pytest.raises(SystemExit):
+        mc.main(["--i-am-present", "--sidecar", f"127.0.0.1:{仿真旁路.port}",
+                 "--log-dir", str(tmp_path)])
+    assert "--token-file" in capsys.readouterr().err
+    assert 仿真旁路.commands == []
+
+
+def test_运动检查_趴着就不动(仿真旁路, tmp_path, 令牌):
     mc = _load("w00d_motion_check")
     rc = mc.main(["--i-am-present", "--sidecar", f"127.0.0.1:{仿真旁路.port}",
-                  "--log-dir", str(tmp_path)])
+                  "--token-file", 令牌, "--log-dir", str(tmp_path)])
     got = json.loads(next(tmp_path.glob("w00d-motion-*.json")).read_text(encoding="utf-8"))
     assert rc == 1 and "先站起" in got["error"]
     assert "vel" not in [c for c, _ in 仿真旁路.commands]
 
 
-def test_运动检查_默认比例_五步走完_给出换算建议(仿真旁路, tmp_path):
+def test_运动检查_默认比例_五步走完_给出换算建议(仿真旁路, tmp_path, 令牌):
     """仿真旁路里比例 1.0 折 1.2 m/s、1.5 rad/s,低于比例 0.2 不动。工具按比例值发命令,**默认参数**
     下不经过任何未实测的系数,建议值就该接近仿真的真值;死区那一步不动。"""
     仿真旁路.motion = SdkMotion.GENERAL
     mc = _load("w00d_motion_check")
     rc = mc.main(["--i-am-present", "--sidecar", f"127.0.0.1:{仿真旁路.port}",
-                  "--turn-s", "1", "--fwd-s", "1", "--log-dir", str(tmp_path)])
+                  "--token-file", 令牌, "--turn-s", "1", "--fwd-s", "1",
+                  "--log-dir", str(tmp_path)])
     got = json.loads(next(tmp_path.glob("w00d-motion-*.json")).read_text(encoding="utf-8"))
     assert rc == 0 and got["ok"], got
     s = got["steps"]

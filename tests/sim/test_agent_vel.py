@@ -16,11 +16,61 @@ from tests.sim.test_agent_server import _client
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_协议是v8_跟C加加旁路进程的常量一致():
+def test_协议是v9_跟C加加旁路进程的常量一致():
     src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
     m = re.search(r"static const int kProtoVersion = (\d+);", src)
-    # W12:state 带 speed_level、hello 带 speed_level_want;W26:imu 帧
-    assert m and int(m.group(1)) == PROTO_VERSION == 8
+    # W12:state 带 speed_level、hello 带 speed_level_want;W26:imu 帧;S11:auth
+    assert m and int(m.group(1)) == PROTO_VERSION == 9
+
+
+def test_CPP只收代理的运动命令_行为测试编译并通过(tmp_path):
+    """S11:``motion/cmd_auth.hpp`` 的令牌、命令分类、FIFO 权限、令牌文件(0600、改名落盘、不跟链接)用
+    ``motion/test_cmd_auth.cpp`` 跑,不链接厂商 SDK。"""
+    import shutil
+    import subprocess
+
+    cxx = shutil.which("g++")
+    if cxx is None:
+        import pytest
+        pytest.skip("没有 g++")
+    exe = tmp_path / "test_cmd_auth"
+    subprocess.run([cxx, "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
+                    "-o", str(exe), str(ROOT / "motion" / "test_cmd_auth.cpp")],
+                   check=True, capture_output=True, timeout=180)
+    got = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
+    assert got.returncode == 0, got.stdout + got.stderr
+    assert "cmd_auth: ok" in got.stdout
+
+
+def test_旁路进程每条TCP命令先过认证门_FIFO看权限_令牌先于开门():
+    """S11 的接线(真二进制要连厂商 SDK,开发机上跑不起来,这里核源码):读线程里 auth 先处理、
+    每条命令先过 ``ConnAuth::Check`` 才插队或进队;FIFO 按打开的那个 fd 判可不可信、不可信的只收
+    停车;令牌在开门之前写好;hello 报 ``auth``。"""
+    src = (ROOT / "motion" / "patrol_agent.cpp").read_text(encoding="utf-8")
+    code = "\n".join(ln.split("//")[0] for ln in src.splitlines())
+
+    def body(sig: str) -> str:
+        i = code.index(sig)
+        return code[i:code.index("\n}\n", i)]
+    serve = body("static void ServeClient(")
+    gate = serve.index("auth.Check(cmd, JsonBoolField(line, \"on\", true))")
+    assert serve.index('if (cmd == "auth")') < gate < serve.index("if (IsUrgent(cmd))") \
+        < serve.index("conn.queue.push_back"), "先认证、再过门,才插队或进队"
+    assert "cmdauth::ConnAuth auth(&g_token);" in serve, "每条连接自己的认证状态"
+    between = serve[gate:serve.index("if (IsUrgent(cmd))")]
+    assert re.search(r"if \(!deny\.empty\(\)\) \{.*SendTo\(fd, AckFrame\(id, Reject\(deny\)\)\);"
+                     r"\s*continue;\s*\}", between, re.S), "过不了门就回拒、不往下走"
+    auth = serve[serve.index('if (cmd == "auth")'):gate]
+    assert "auth.Auth(got)" in auth and "continue;" in auth, "auth 自己回执,不往下走"
+    fifo = body("static void FifoLoop(")
+    assert "::fstat(fd, &st)" in fifo and "cmdauth::FifoTrusted(st, ::geteuid())" in fifo
+    line = body("static void HandleFifoLine(")
+    assert line.index("!trusted && !cmdauth::FifoOpen(cmd)") < line.index('if (cmd == "stand")')
+    assert '",\\"auth\\":true"' in body("static std::string HelloFrame(")
+    main = code[code.index("int main("):]
+    assert main.index("cmdauth::WriteTokenFile(token_file, g_token)") \
+        < main.index("client.Connect(") < main.index("Listen(listen_host, listen_port)")
+    assert "g_token.clear();" in main, "没写成令牌文件就谁都认证不了(不留一个没人知道的令牌)"
 
 
 async def _站起(sim: SimAgentServer, client) -> None:

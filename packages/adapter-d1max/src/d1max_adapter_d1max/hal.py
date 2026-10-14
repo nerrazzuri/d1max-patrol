@@ -108,7 +108,10 @@ class D1MaxHal:
                  frame_id: str = "odom",
                  now_ms: Callable[[], int] = wall_ms,
                  backend: SidecarDeviceBackend | None = None,
-                 payload: Payload | None = None) -> None:
+                 payload: Payload | None = None,
+                 token_file: str | None = None) -> None:
+        """``token_file``:旁路进程的令牌(协议 9,S11)。代理给缺省的 ``~/.d1max/sidecar.token``;
+        旁路进程要令牌而读不了、不对,``connect`` 就抛(开不了车的代理不该假装能开)。"""
         for name, v in (("mps_per_unit", mps_per_unit), ("radps_per_unit", radps_per_unit)):
             if not (math.isfinite(v) and v > 0):
                 raise ValueError(f"{name} 要是正数,收到 {v}")
@@ -118,7 +121,7 @@ class D1MaxHal:
             raise ValueError(f"max_fraction 要在 (0, {MAX_WALK_SPEED}],收到 {max_fraction}")
         if not (math.isfinite(fwd_offset) and 0 <= fwd_offset < max_fraction):
             raise ValueError(f"fwd_offset 要在 [0, max_fraction),收到 {fwd_offset}")
-        self._b = backend or SidecarDeviceBackend(host, port)
+        self._b = backend or SidecarDeviceBackend(host, port, token_file=token_file)
         self._payload = payload
         self._payload_up = False
         self._mps, self._radps = mps_per_unit, radps_per_unit

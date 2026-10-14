@@ -22,9 +22,15 @@
 结果写进 ``runs/field-logs/w00d-motion-<时刻>.json``(``--log-dir`` 可改),末尾给出建议的
 ``--mps-per-unit`` / ``--radps-per-unit`` / ``--invert-yaw``(实测速度 ÷ 实际发出的比例)。
 
+**要旁路进程的令牌**(协议 9,S11:旁路进程只收认证过的连接的运动命令)。令牌在旁路进程的
+``--token-file``(缺省起旁路进程那个账号的 ``~/.d1max/sidecar.token``,0600)。**显式给**,不设缺省:
+开车绕过了代理的禁行区、避障,得是人有意为之。
+
 用法::
 
-    .venv/bin/python tools/w00d_motion_check.py --i-am-present [--sidecar 127.0.0.1:8090]
+    .venv/bin/python tools/w00d_motion_check.py --i-am-present \\
+        --token-file ~/.d1max/sidecar.token [--sidecar 127.0.0.1:8090]
+    # 旁路进程是别的账号(或 root)起的:--token-file <(sudo cat <那个账号的令牌文件>)
 """
 
 from __future__ import annotations
@@ -60,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--i-am-present", action="store_true",
                    help="我在现场、守着硬急停、周围净空。不给这个不跑")
     p.add_argument("--sidecar", type=_hostport, default=("127.0.0.1", 8090))
+    p.add_argument("--token-file", default=None,
+                   help="旁路进程的令牌文件(协议 9;缺省位置 ~/.d1max/sidecar.token,要显式给)")
     p.add_argument("--turn-fraction", type=float, default=0.3, help="转向比例值(正=想要逆时针)")
     p.add_argument("--turn-s", type=float, default=3.0)
     p.add_argument("--fwd-fraction", type=float, default=0.3, help="前进比例值")
@@ -109,7 +117,7 @@ async def check(args: argparse.Namespace) -> dict[str, Any]:
     from d1max_patrol.backends.sidecar_device import SidecarDeviceBackend
 
     host, port = args.sidecar
-    b = SidecarDeviceBackend(host, port)
+    b = SidecarDeviceBackend(host, port, token_file=args.token_file)
     # 系数取 1:HAL 收的「m/s」就是比例值,换算不引入未实测的数。死区交给第 5 步去量,不挡。
     hal = D1MaxHal(host, port, backend=b, mps_per_unit=1.0, radps_per_unit=1.0,
                    deadband_mps=0.0, max_fraction=MAX_FRACTION)
@@ -217,6 +225,9 @@ def main(argv: list[str] | None = None) -> int:
         print("这个工具会让狗动起来。人在现场、守着硬急停、周围净空,再带 --i-am-present 跑。",
               file=sys.stderr)
         return 2
+    if args.token_file is None:
+        p.error("要旁路进程的令牌:--token-file <文件>(协议 9 只收认证过的连接的运动命令;"
+                "缺省位置 ~/.d1max/sidecar.token,显式给)")
     _check_limits(p, args)
     got = asyncio.run(check(args))
     text = json.dumps(got, ensure_ascii=False, indent=2)

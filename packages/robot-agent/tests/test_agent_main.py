@@ -84,10 +84,15 @@ def test_hal_d1max的参数(tmp_path):
     assert d.fwd_offset == 0.0, "缺省纯比例(老行为)"
     assert d.sidecar == ("127.0.0.1", 8090) and d.mps_per_unit == 1.0 and not d.invert_yaw
     assert d.stopped_eps == 0.02
+    assert d.sidecar_token_file == "~/.d1max/sidecar.token", "S11:缺省读旁路进程写的那个令牌"
+    t = _args(tmp_path, "--hal", "d1max", "--sidecar-token-file", "/run/x/tok")
+    assert t.sidecar_token_file == "/run/x/tok"
     with pytest.raises(SystemExit):
         _args(tmp_path, "--hal", "d1max", "--sidecar", "nope")
     with pytest.raises(SystemExit):
         _args(tmp_path, "--sidecar", "127.0.0.1:9001"), "sim 不收 --sidecar"
+    with pytest.raises(SystemExit):
+        _args(tmp_path, "--sidecar-token-file", "/run/x/tok"), "sim 不收旁路令牌"
 
 
 def test_真狗的换算系数不在SDK低速档的范围里就不起_人确认过才起(tmp_path, capsys):
@@ -119,7 +124,9 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
 
     sim_loop = LoopBridge()
     sim_loop.start()
-    sim = SimAgentServer(port=0)
+    sim = SimAgentServer(port=0, token="7f" * 32)     # S11:跟真旁路进程一样只收认证过的运动命令
+    tok = tmp_path / "sidecar.token"
+    tok.write_text("7f" * 32 + "\n", encoding="utf-8")
 
     async def _起():
         await sim.start()
@@ -131,7 +138,7 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
         # 监护本身在 test_supervision.py 测。
         args = _args(tmp_path, "--hal", "d1max", "--sidecar", f"127.0.0.1:{sim.port}",
                      "--mps-per-unit", "1.2", "--radps-per-unit", "1.5", "--deadband", "0.25",
-                     "--autonomy", "autonomous")
+                     "--autonomy", "autonomous", "--sidecar-token-file", str(tok))
         a = agent_main.build(args)
         a.start()
         site = DispatchClient(MemoryTransport(a.broker, "site"), T, now_ms=agent_main.wall_ms)
@@ -153,7 +160,8 @@ def test_hal_d1max_经仿真旁路跑通一条goto(tmp_path):
         fin = a.runtime.processor.finished[-1]
         assert fin.task_id == cmd.task_id and fin.state is TaskState.DONE, (fin.state, fin.detail)
         assert abs(sim.x - 0.8) < 0.2 and abs(sim.y - 0.4) < 0.2, (sim.x, sim.y)
-        assert "vel" in [c for c, _ in sim.commands]
+        sent = [c for c, _ in sim.commands]
+        assert "vel" in sent and sent.index("auth") < sent.index("vel"), "先认证再开车"
         caps = site.capabilities
         assert caps is not None and caps.adapter == "d1max/0.1.0"
     finally:
