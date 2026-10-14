@@ -148,6 +148,27 @@ void main() {
       expect(_batteryOf(t, 'A'), isNull);
     });
 
+    testWidgets('外审 M1：页面上没有别的动静（不重建、不重读），到 10 分钟自己撤下', (t) async {
+      await t.pumpWidget(_fleet([_robot('A')],
+          () async => _summary({'A': 82}, age: const Duration(minutes: 5), siteAhead: const Duration(hours: -3))));
+      await t.pump();
+      expect(_batteryOf(t, 'A'), 82);
+      _clock = _clock.add(const Duration(minutes: 4));
+      await t.pump(const Duration(minutes: 4));
+      expect(_batteryOf(t, 'A'), 82, reason: '还没到 10 分钟');
+      _clock = _clock.add(const Duration(minutes: 2));
+      await t.pump(const Duration(minutes: 2));            // 只让时间过去，不 pumpWidget
+      expect(_batteryOf(t, 'A'), isNull);
+    });
+
+    testWidgets('页面关了：到期的那次重画不再跑', (t) async {
+      await t.pumpWidget(_fleet([_robot('A')], () async => _summary({'A': 82})));
+      await t.pump();
+      await t.pumpWidget(const SizedBox());
+      await t.pump(const Duration(minutes: 11));
+      expect(t.takeException(), isNull);
+    });
+
     testWidgets('读的时候是新的、后来放旧了：到时候也不写了', (t) async {
       final robots = [_robot('A')];
       await t.pumpWidget(_fleet(robots, () async => _summary({'A': 82})));

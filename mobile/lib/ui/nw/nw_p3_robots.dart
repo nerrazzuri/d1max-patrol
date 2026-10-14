@@ -6,6 +6,8 @@
 /// 电量现在站点也没放进这份视图（在值守汇总里），读得到 `battery_pct` 才显示、才判低电，读不到写「--」。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../l10n.dart';
@@ -171,10 +173,41 @@ class _NwFleetState extends State<NwFleet> {
   DateTime? _batteryAt;
   int _batterySeq = 0;
 
+  /// 最早那个读数到 [NwFleet.batteryMaxAge] 的时候重画一次（C-B6 外审 M1：只在重画时看多旧的话，
+  /// 页面上没别的动静，过期的数会一直挂着）。
+  Timer? _expiry;
+
   @override
   void initState() {
     super.initState();
     _loadBattery();
+  }
+
+  @override
+  void dispose() {
+    _expiry?.cancel();
+    super.dispose();
+  }
+
+  /// 读数旧了多少毫秒（按站点的钟算到拿到汇总，之后加本机过去的时间）。
+  int _age((double, int, DateTime) b) => b.$2 + widget.now().difference(b.$3).inMilliseconds;
+
+  /// 按还没过期的读数里最早到期的那一个排一次重画；到了再排下一个。
+  void _scheduleExpiry() {
+    _expiry?.cancel();
+    _expiry = null;
+    final max = NwFleet.batteryMaxAge.inMilliseconds;
+    int? soonest;
+    for (final b in _battery.values) {
+      final left = max - _age(b);
+      if (left >= 0 && (soonest == null || left < soonest)) soonest = left;
+    }
+    if (soonest == null) return;
+    _expiry = Timer(Duration(milliseconds: soonest + 1), () {
+      if (!mounted) return;
+      setState(() {});
+      _scheduleExpiry();
+    });
   }
 
   @override
@@ -204,9 +237,11 @@ class _NwFleetState extends State<NwFleet> {
               if (r.batteryPct != null && r.batteryAsOfMs != null)
                 r.robotId: (r.batteryPct!, siteNow - r.batteryAsOfMs!, got),
           });
+      _scheduleExpiry();
     } catch (_) {
       if (!mounted || seq != _batterySeq) return;
       setState(() => _battery = const <String, (double, int, DateTime)>{});   // 读不到：不留着上一次的当现在的
+      _scheduleExpiry();
     }
   }
 
@@ -215,8 +250,7 @@ class _NwFleetState extends State<NwFleet> {
   Map<String, dynamic> _withBattery(Map<String, dynamic> r) {
     final b = _battery['${r['robot_id']}'];
     if (b == null || r['battery_pct'] is num) return r;
-    final age = b.$2 + widget.now().difference(b.$3).inMilliseconds;
-    return age > NwFleet.batteryMaxAge.inMilliseconds ? r : {...r, 'battery_pct': b.$1};
+    return _age(b) > NwFleet.batteryMaxAge.inMilliseconds ? r : {...r, 'battery_pct': b.$1};
   }
 
   @override
