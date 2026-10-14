@@ -105,6 +105,17 @@ Future<void> Function(WidgetTester) _tab(Key k) => (t) async {
       await t.pumpAndSettle();
     };
 
+/// 告警页往下滚到小地图（缩略图要真解码出来才看得见）。
+Future<void> _toMiniMap(WidgetTester t) async {
+  await t.pumpAndSettle();
+  await t.ensureVisible(find.byKey(SiteAlertScenePage.mapKey));
+  await t.pumpAndSettle();
+  for (final e in find.byType(Image).evaluate()) {
+    await t.runAsync(() => precacheImage((e.widget as Image).image, e));
+  }
+  await t.pumpAndSettle();
+}
+
 /// 遥控：等站点给了控制权（摇杆、STOP 都亮着）。
 FakeApi? _teleopApi;
 Future<void> _granted(WidgetTester t) async {
@@ -194,6 +205,11 @@ void main() {
         _phone,
         () => SiteAlertScenePage(
             api: _deterring(), alert: Alert.fromWire(_p1Row()), now: () => DateTime.fromMillisecondsSinceEpoch(_t0 + 42000))),
+    '05b-alarm-map': _Shot(
+        _phone,
+        () => SiteAlertScenePage(
+            api: _deterring(), alert: Alert.fromWire(_p1Row()), now: () => DateTime.fromMillisecondsSinceEpoch(_t0 + 42000)),
+        ready: _toMiniMap),
     '06-dogs': _Shot(_phone, () => NwShell(api: _clear('guard'), title: 'East Gate Estate', ring: () {}),
         ready: _tab(NwShell.dogsKey)),
     '07-robot-guard': _Shot(_phone, () => SiteRobotPage(api: FakeApi('guard'), robotId: 'A')),
