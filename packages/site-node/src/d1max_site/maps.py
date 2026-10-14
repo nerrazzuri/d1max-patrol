@@ -97,6 +97,8 @@ def _digest_of(path: Path) -> str:
 #: 「哪里有图」:``coverage.json`` 最大多少字节(20 万个点也就几 MB);缓存几个版本。
 MAX_COVERAGE_BYTES = 16 * 1024 ** 2
 REACH_CACHE = 8
+#: ``build.json`` 最大多少字节(地图管理页读它显示怎么建的;正常几 KB)。
+MAX_BUILD_JSON_BYTES = 256 * 1024
 
 
 class MapCatalog:
@@ -532,6 +534,84 @@ class MapCatalog:
                       "VALUES (?,?,?,?,?,?)",
                       (ref.map_id, ref.version, source, self._now(),
                        json.dumps([f.to_wire() for f in ref.files]), note[:200]))
+
+    # ------------------------------------------------------------ 管理(地图管理页)
+
+    def set_note(self, map_id: str, version: str, note: str) -> str:
+        """改这一版的备注(最多 200 字,去首尾空白);回新的备注。没有这一版 :class:`MapError`。"""
+        note = note.strip()[:200]
+        with self.db.tx() as c:
+            n = c.execute("UPDATE maps SET note=? WHERE map_id=? AND version=?",
+                          (note, map_id, version)).rowcount
+        if not n:
+            raise MapError(f"没有这张图:{map_id}:{version}")
+        return note
+
+    def build_info(self, map_id: str, version: str) -> dict[str, Any] | None:
+        """这一版的 ``build.json``(怎么建的:来源、回环用了没有、手性核对结论…)的几项,给人看;
+        没有(导入的老版本)、读不了、太大 → ``None``。一版登记了就不变,不缓存也便宜(几 KB)。"""
+        try:
+            ref = self.get(map_id, version)
+        except (MapError, ContractError):
+            return None
+        if "build.json" not in {f.name for f in ref.files}:
+            return None
+        path = self.root / map_id / version / "build.json"
+        try:
+            if path.stat().st_size > MAX_BUILD_JSON_BYTES:
+                return None
+            d = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(d, dict):
+            return None
+        lc = d.get("loop_closure") if isinstance(d.get("loop_closure"), dict) else {}
+        hand = d.get("handedness") if isinstance(d.get("handedness"), dict) else {}
+        grid = d.get("grid") if isinstance(d.get("grid"), dict) else {}
+        src = d.get("source")
+        return {"source": src if isinstance(src, (str, int, float)) else
+                (json.dumps(src, ensure_ascii=False)[:200] if src is not None else None),
+                "builder": d.get("builder") if isinstance(d.get("builder"), str) else None,
+                "frames": d.get("frames_count") if isinstance(d.get("frames_count"), int) else None,
+                "loop_closure": {"used": bool(lc.get("used")),
+                                 "closures": lc.get("closures") if isinstance(
+                                     lc.get("closures"), int) else None,
+                                 "why": str(lc["why"])[:200] if lc.get("why") else None},
+                "handedness": {"verdict": hand.get("verdict") if isinstance(
+                    hand.get("verdict"), str) else None,
+                               "why": str(hand["why"])[:200] if hand.get("why") else None},
+                "res_m": grid.get("res") if isinstance(grid.get("res"), (int, float)) else None,
+                "size_px": grid.get("size") if isinstance(grid.get("size"), list) else None}
+
+    def delete(self, map_id: str, version: str) -> int:
+        """删掉这一版:文件、登记行,缓存里的预览也清。回删掉多少字节。**不查**有没有狗在用、是不是
+        最新(那是管理页的规矩,在 ``maps_admin``);没有这一版 :class:`MapError`。"""
+        with self._lock:
+            rows = self.db.query("SELECT files FROM maps WHERE map_id=? AND version=?",
+                                 (map_id, version))
+            if not rows:
+                raise MapError(f"没有这张图:{map_id}:{version}")
+            try:
+                size = sum(int(f.get("size", 0)) for f in json.loads(rows[0]["files"]))
+            except (ValueError, AttributeError, TypeError):
+                size = 0
+            d = self.root / map_id / version
+            gone = d.with_name(d.name + ".deleting")
+            if d.exists():
+                shutil.rmtree(gone, ignore_errors=True)
+                os.replace(d, gone)                  # 先挪开再登记:登记行没了,目录不会悬着
+            with self.db.tx() as c:
+                c.execute("DELETE FROM maps WHERE map_id=? AND version=?", (map_id, version))
+            shutil.rmtree(gone, ignore_errors=True)
+            try:
+                d.parent.rmdir()                     # 这个地图号下没别的版本了:空目录也删
+            except OSError:
+                pass
+        key = (map_id, version)
+        with self._preview_lock:
+            for cache in (self._previews, self._plans, self._reaches):
+                cache.pop(key, None)
+        return size
 
     # ------------------------------------------------------------ 录包
 

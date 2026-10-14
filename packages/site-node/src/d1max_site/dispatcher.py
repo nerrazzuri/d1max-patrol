@@ -326,6 +326,7 @@ class Dispatcher:
                 "expires_at": rec.expires_at, "status": status, "capabilities": caps,
                 "fresh": self._fresh(c), "held": self.held(robot_id),
                 "manual_only": self.registry.manual_only(robot_id),
+                "running": self.running_view(c),
                 "loc": self._loc_view(c), "clock_skew_s": _round1(self.clock_skew_s(robot_id)),
                 # W09e:最近一份遥测里的 RTK 解(没配 RTK、老狗都是 None)
                 "rtk": c.telemetry.rtk if c is not None and c.telemetry is not None else None}
@@ -411,6 +412,7 @@ class Dispatcher:
             raise DispatchRefused(f"{robot_id} 不支持 {kind}")
         self._check_skew(robot_id)
         self._check_zones(robot_id, c, kind)
+        self._check_running(robot_id, c, kind)
         if s.task is not None and s.task.task_id.startswith(TELEOP_TASK_PREFIX):
             # W00c5c:人工遥控优先于一切自动任务 —— 狗那头会回 busy,这里先挑开(事件派遣去找别的狗)。
             raise DispatchRefused(f"{robot_id} 正在遥控")
@@ -474,6 +476,77 @@ class Dispatcher:
             # 限速区也一样(内审小 11):直线桥两样都不守
             raise DispatchRefused(f"{robot_id} 的导航不守区域(直线桥),{loaded[0]}:{loaded[1]} "
                                   "上画了禁行区或限速区")
+
+    # ------------------------------------------------------------ 运行配置(R3、R4)
+
+    def running_view(self, c: DispatchClient | None) -> dict[str, Any] | None:
+        """狗**实际在跑**的配置跟站点登记的比(R3、R4):
+
+        - 图:狗报的图内容摘要 ``map_digest`` 跟站点登记那一版的清单摘要比(``match``);
+        - 区域:修订号一样、**内容摘要**也要一样(``basis`` = ``digest``);老狗不报摘要就只比修订号
+          (``basis`` = ``revision``,界面标「旧版,只比修订号」);
+        - 任务修订:最近一趟巡检命令带的,只展示。
+
+        狗没报 ``running_config``(老代理)→ 只有 ``legacy: True``,闸回到原来的按修订号比;狗没加载
+        地图、站点不认识这一版的 → 对应项 ``match`` 是 ``None``(查不了,不挡)。``problems`` 是挡
+        派单的原因(给人看的句子)。"""
+        caps = c.capabilities if c is not None else None
+        if caps is None:
+            return None
+        rc = caps.tasks.get("running_config")
+        if not isinstance(rc, dict):
+            return {"legacy": True, "problems": [], "map": None, "zones": None}
+        from d1max_contract.maps import map_digest
+        from d1max_contract.zones import zones_digest
+        m_id, m_ver = rc.get("map_id"), rc.get("map_version")
+        problems: list[str] = []
+        out: dict[str, Any] = {"legacy": False, "problems": problems, "map_id": m_id,
+                               "map_version": m_ver, "confirms": rc.get("confirms"),
+                               "previous": rc.get("previous"), "kept": rc.get("kept"),
+                               "mission": rc.get("last_patrol")}
+        # 图
+        mp: dict[str, Any] = {"dog": rc.get("map_digest"), "site": None, "match": None}
+        if self.maps is not None and isinstance(m_id, str) and isinstance(m_ver, str):
+            try:
+                mp["site"] = map_digest(self.maps.get(m_id, m_ver))
+            except Exception:  # noqa: BLE001 —— 站点不认识这一版:查不了,不挡
+                mp["site"] = None
+        if isinstance(mp["dog"], str) and isinstance(mp["site"], str):
+            mp["match"] = mp["dog"] == mp["site"]
+            if not mp["match"]:
+                problems.append(
+                    f"{m_id}:{m_ver} 狗上的内容(摘要 {mp['dog'][:8]})跟站点登记的(摘要 "
+                    f"{mp['site'][:8]})不一样:狗上的图被改过、或者站点换过这一版的文件;"
+                    "重新下发这一版(会重新下载、逐个核对)")
+        out["map"] = mp
+        # 区域
+        zp: dict[str, Any] = {"dog_rev": rc.get("zones_rev"), "dog": rc.get("zones_digest"),
+                              "site_rev": None, "site": None, "match": None, "basis": None}
+        if self.zones is not None and isinstance(m_id, str) and isinstance(m_ver, str):
+            site = self.zones.current(m_id, m_ver)
+            zp["site_rev"], zp["site"] = site.revision, zones_digest(site)
+            if isinstance(zp["dog"], str):
+                zp["basis"] = "digest"
+                zp["match"] = zp["dog"] == zp["site"] and zp["dog_rev"] == site.revision
+                if not zp["match"] and zp["dog_rev"] == site.revision:
+                    problems.append(
+                        f"{m_id}:{m_ver} 的区域修订号一样(第 {site.revision} 版)但内容不一样:"
+                        "站点多半从旧备份恢复过又改了一次;在地图页再保存一次区域(出新修订),"
+                        "新内容会发给狗")
+            else:
+                zp["basis"] = "revision"             # 老代理:能力里没有摘要
+                zp["match"] = zp["dog_rev"] == site.revision
+        out["zones"] = zp
+        return out
+
+    def _check_running(self, robot_id: str, c: DispatchClient, kind: str) -> None:
+        """会自己走的任务:狗实际在跑的图、区域内容跟站点登记的对不上不派(R3、R4)。"""
+        if kind not in ("goto", "patrol", "standoff"):
+            return
+        v = self.running_view(c)
+        if v is not None and v["problems"]:
+            raise DispatchRefused(f"{robot_id} 在跑的配置跟站点登记的对不上:" + ";".join(
+                v["problems"]))
 
     async def push_zones(self, zs: Any, *, tighten: bool, issued_by: str) -> dict[str, str]:
         """改了区域:发给在线、加载着这一版的狗 → {狗: 空串(收下)或原因}。发不出去的由
@@ -642,7 +715,10 @@ class Dispatcher:
                                 [(w.name, w.pose.position.x, w.pose.position.y)
                                  for w in m.waypoints])
         # 任务自己的版本(跟上面核过的狗的那一版相等):老狗(代理级别 2)只核这个键,发任务的才有意义
-        payload = {"mission": m.to_wire(), "map_version": m.map_version}
+        # 任务修订(R4):命令里带一份任务定义的内容摘要,狗原样记下、能力里报(站点知道派的是哪一份)
+        from d1max_contract.digest import canonical_digest
+        payload = {"mission": m.to_wire(), "map_version": m.map_version,
+                   "mission_rev": canonical_digest(m.to_wire())}
         if len(json.dumps(payload).encode()) > MAX_PATROL_BYTES:
             raise DispatchRefused(f"任务定义超过 {MAX_PATROL_BYTES} 字节")
         return await self._send(c, robot_id, "patrol", payload, issued_by=issued_by,
