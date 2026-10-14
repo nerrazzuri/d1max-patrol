@@ -11,10 +11,14 @@ Map<String, dynamic> _robot(String id) => {
       'status': {'online': true, 'ready': {'estop_clear': true}, 'task': null},
     };
 
-Map<String, dynamic> _summary(Map<String, num?> battery) => {
+/// [age]：电量是多久以前读的（缺省刚读的）；给 [noAsOf] 就不带读数时刻。
+Map<String, dynamic> _summary(Map<String, num?> battery, {Duration age = Duration.zero, bool noAsOf = false}) => {
       'robots': [
         for (final e in battery.entries)
-          {'robot_id': e.key, 'online': true, 'fresh': true, 'battery_pct': e.value, 'why': <String, String>{}},
+          {
+            'robot_id': e.key, 'online': true, 'fresh': true, 'battery_pct': e.value, 'why': <String, String>{},
+            if (!noAsOf) 'battery_as_of_ms': _clock.subtract(age).millisecondsSinceEpoch,
+          },
       ],
       'site': <String, dynamic>{},
     };
@@ -95,5 +99,35 @@ void main() {
     await t.pumpWidget(_fleet([r], () async => _summary({'A': 82})));
     await t.pump();
     expect(_batteryOf(t, 'A'), 15);
+  });
+
+  group('电量多旧：超过 10 分钟的不写数', () {
+    testWidgets('刚读的：写数', (t) async {
+      await t.pumpWidget(_fleet([_robot('A')], () async => _summary({'A': 82}, age: const Duration(minutes: 9))));
+      await t.pump();
+      expect(_batteryOf(t, 'A'), 82);
+    });
+
+    testWidgets('11 分钟前读的：不写数（当不知道）', (t) async {
+      await t.pumpWidget(_fleet([_robot('A')], () async => _summary({'A': 82}, age: const Duration(minutes: 11))));
+      await t.pump();
+      expect(_batteryOf(t, 'A'), isNull);
+    });
+
+    testWidgets('没说什么时候读的：不写数', (t) async {
+      await t.pumpWidget(_fleet([_robot('A')], () async => _summary({'A': 82}, noAsOf: true)));
+      await t.pump();
+      expect(_batteryOf(t, 'A'), isNull);
+    });
+
+    testWidgets('读的时候是新的、后来放旧了：到时候也不写了', (t) async {
+      final robots = [_robot('A')];
+      await t.pumpWidget(_fleet(robots, () async => _summary({'A': 82})));
+      await t.pump();
+      expect(_batteryOf(t, 'A'), 82);
+      _clock = _clock.add(const Duration(minutes: 11));
+      await t.pumpWidget(_fleet(robots, () async => throw StateError('不该重读')));  // 同一份列表：不重读
+      expect(_batteryOf(t, 'A'), isNull);
+    });
   });
 }

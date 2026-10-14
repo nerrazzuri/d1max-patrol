@@ -148,6 +148,10 @@ class NwFleet extends StatefulWidget {
   /// 电量多久重读一次（狗的列表刷新时顺带看一眼，不到这么久不重读）。
   static const Duration batteryEvery = Duration(seconds: 15);
 
+  /// 汇总里的电量是多久以前读的（`battery_as_of_ms`），超过这么久就不写数（当不知道）；
+  /// 没说什么时候读的也不写。
+  static const Duration batteryMaxAge = Duration(minutes: 10);
+
   static Key filterKey(FleetFilter f) => Key('robots-filter-${f.name}');
   static const Key emptyKey = Key('robots-filter-empty');
 
@@ -158,8 +162,8 @@ class NwFleet extends StatefulWidget {
 class _NwFleetState extends State<NwFleet> {
   FleetFilter _filter = FleetFilter.all;
 
-  /// 汇总里读到的电量（编号 → 百分数）；读不到、汇总里是「不知道」的都没有这一项。
-  Map<String, double> _battery = const <String, double>{};
+  /// 汇总里读到的电量（编号 → 百分数、读数时刻）；读不到、汇总里是「不知道」、没说什么时候读的都没有这一项。
+  Map<String, (double, int)> _battery = const <String, (double, int)>{};
   DateTime? _batteryAt;
   int _batterySeq = 0;
 
@@ -190,18 +194,21 @@ class _NwFleetState extends State<NwFleet> {
       if (!mounted || seq != _batterySeq) return;       // 迟到的旧回复不盖新的
       setState(() => _battery = {
             for (final r in s.robots)
-              if (r.batteryPct != null) r.robotId: r.batteryPct!,
+              if (r.batteryPct != null && r.batteryAsOfMs != null) r.robotId: (r.batteryPct!, r.batteryAsOfMs!),
           });
     } catch (_) {
       if (!mounted || seq != _batterySeq) return;
-      setState(() => _battery = const <String, double>{});   // 读不到：不留着上一次的当现在的
+      setState(() => _battery = const <String, (double, int)>{});   // 读不到：不留着上一次的当现在的
     }
   }
 
-  /// 狗的视图，电量从汇总里补上（视图自己带了就用它自己的）。
+  /// 狗的视图，电量从汇总里补上（视图自己带了就用它自己的）。汇总里那个读数旧过 [NwFleet.batteryMaxAge]
+  /// 就不补（按现在的钟算，读来的时候新、后来放旧了的也不补）。
   Map<String, dynamic> _withBattery(Map<String, dynamic> r) {
     final b = _battery['${r['robot_id']}'];
-    return b == null || r['battery_pct'] is num ? r : {...r, 'battery_pct': b};
+    if (b == null || r['battery_pct'] is num) return r;
+    final age = widget.now().millisecondsSinceEpoch - b.$2;
+    return age > NwFleet.batteryMaxAge.inMilliseconds ? r : {...r, 'battery_pct': b.$1};
   }
 
   @override
