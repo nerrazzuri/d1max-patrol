@@ -6,10 +6,13 @@
 // - 视图(View):放大倍数 k(屏上一像素 / 预览一像素)+ 图中心在屏上的位置 (cx, cy)。
 //   屏上点 = (cx, cy) + k·R(θ)·(预览点 − 图中心)。全图(fitView)= 转过的整张图正好放进框里、居中。
 // - 屏上一点 → 地图坐标:交给浏览器(世界层的 getScreenCTM().inverse()),跟画的是同一个 transform。
+// - 全图按有内容的范围(地图台账 M7,2026-10-14):站点给 content_bbox(预览像素 [x0, y0, x1, y1]:地面 + 墙 +
+//   「看到过」,去掉抹掉的),fitView 把它转过以后的外框放进框里、居中;没给(老站点)按整张图。缩放的上下限、
+//   平移的边照旧按整张图算(缩小还能看到整张)。
 
 export type Pt = [number, number];
 
-/** 站点的导航区域(nogo 当障碍、slow 限速),地图坐标(米)。 */
+/** 站点的导航区域(nogo 当障碍、slow 限速、erase 抹掉区:狗不去、站点画图时抹成没建图),地图坐标(米)。 */
 export interface NavZone {
   id: string;
   kind: string;
@@ -40,6 +43,10 @@ export interface PreviewMeta {
   /** 平面图(灰度 + 透明,盖住预览的整个范围,scale 倍分辨率);拉到 width×height 画。 */
   plan?: { url: string; scale: number };
   zones?: NavZone[];
+  /** 有内容的范围(预览像素 [x0, y0, x1, y1]);没给 = 老站点,全图按整张图。 */
+  content_bbox?: number[];
+  /** 这一版带「看到过、狗没走过」的淡色层(图例里加一行)。 */
+  seen?: boolean;
 }
 
 export function toPx(meta: PreviewMeta, x: number, y: number): { px: number; py: number } {
@@ -112,11 +119,45 @@ export function rotatedSize(meta: PreviewMeta): Box {
   return { w: meta.width * cos + meta.height * sin, h: meta.width * sin + meta.height * cos };
 }
 
-/** 全图:转过的整张图放进框里(四边留 pad)、居中。 */
-export function fitView(meta: PreviewMeta, box: Box, pad = 16): View {
+/** 站点给的有内容的范围:四个有限数、在图里(夹到图上)、有大小;不合用回 null(按整张图)。 */
+export function contentBox(meta: PreviewMeta): [number, number, number, number] | null {
+  const b = meta.content_bbox;
+  if (!Array.isArray(b) || b.length !== 4 || !b.every((v) => typeof v === "number" && Number.isFinite(v))) return null;
+  const x0 = Math.max(0, Math.min(b[0], b[2]));
+  const y0 = Math.max(0, Math.min(b[1], b[3]));
+  const x1 = Math.min(meta.width, Math.max(b[0], b[2]));
+  const y1 = Math.min(meta.height, Math.max(b[1], b[3]));
+  return x1 - x0 > 0 && y1 - y0 > 0 ? [x0, y0, x1, y1] : null;
+}
+
+/** 整张图:转过的整张图放进框里(四边留 pad)、居中。缩放的上下限按它算。 */
+export function fitWhole(meta: PreviewMeta, box: Box, pad = 16): View {
   const r = rotatedSize(meta);
   const k = Math.max(1e-6, Math.min((box.w - 2 * pad) / r.w, (box.h - 2 * pad) / r.h));
   return { k, cx: box.w / 2, cy: box.h / 2 };
+}
+
+/** 全图(刚打开、点「全图」):有内容的范围(四个角绕图中心转过以后的外框)放进框里(四边留 pad)、居中;
+ *  站点没给范围就是整张图(fitWhole)。 */
+export function fitView(meta: PreviewMeta, box: Box, pad = 16): View {
+  const b = contentBox(meta);
+  if (!b) return fitWhole(meta, box, pad);
+  const t = (rotationOf(meta) * Math.PI) / 180;
+  const cos = Math.cos(t);
+  const sin = Math.sin(t);
+  const mx = meta.width / 2;
+  const my = meta.height / 2;
+  // 四个角相对图中心转过以后(屏上方向,k = 1)
+  const pts = [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]].map(([x, y]) => [
+    cos * (x - mx) - sin * (y - my), sin * (x - mx) + cos * (y - my)]);
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const w = Math.max(...xs) - Math.min(...xs);
+  const h = Math.max(...ys) - Math.min(...ys);
+  const k = Math.max(1e-6, Math.min((box.w - 2 * pad) / w, (box.h - 2 * pad) / h));
+  const ux = (Math.max(...xs) + Math.min(...xs)) / 2;
+  const uy = (Math.max(...ys) + Math.min(...ys)) / 2;
+  return { k, cx: box.w / 2 - k * ux, cy: box.h / 2 - k * uy };
 }
 
 /** 以屏上 (qx, qy) 为定点放大 f 倍(那一点下面的地图不动)。 */
@@ -126,7 +167,7 @@ export function zoomView(v: View, f: number, qx: number, qy: number): View {
 
 /** 平移、缩放的边:最小是全图的一半,最大全图的 16 倍;图中心不出框外(留得住一块图在屏上)。 */
 export function clampView(meta: PreviewMeta, box: Box, v: View): View {
-  const fit = fitView(meta, box);
+  const fit = fitWhole(meta, box);
   const k = Math.min(fit.k * 16, Math.max(fit.k * 0.5, v.k));
   const r = rotatedSize(meta);
   const hw = (r.w * k) / 2;

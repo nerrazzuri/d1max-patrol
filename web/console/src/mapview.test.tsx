@@ -9,7 +9,9 @@ import type { UnitInfo } from "./live";
 import { MapPage } from "./mappage";
 import {
   applyMat,
+  contentBox,
   fitView,
+  fitWhole,
   invertMat,
   labelFits,
   placeLabel,
@@ -556,5 +558,175 @@ describe("防区页:在转过的图上点着画多边形,存下去的点 = 想�
     expect(c.querySelector("g.map-world polygon.sec-area")).not.toBeNull();
     expect(c.querySelector("g.map-world polygon.nogo-area")).not.toBeNull();
     expect(legend(c)).toEqual(["floor", "wall", "unknown", "nogo", "zone"]);
+  });
+});
+
+// ------------------------------------------------------------------ 地图台账 M7、M9、44(2026-10-14)
+
+describe("全图按有内容的范围(content_bbox,预览像素):转过的范围放进框里、居中;没给按整张图", () => {
+  const BB: [number, number, number, number] = [40, 30, 220, 160];
+  const corners = (m: Mat, b: number[]) => [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]].map(([x, y]) => applyMat(m, x, y));
+  for (const deg of [0, 23, -31, 44.9]) {
+    for (const box of [{ w: 900, h: 600 }, { w: 500, h: 900 }]) {
+      it(`转 ${deg}°,框 ${box.w}×${box.h}`, () => {
+        const meta = { ...META, rotation_deg: deg, content_bbox: BB };
+        const pad = 16;
+        const m = worldMatrix(meta, fitView(meta, box, pad));
+        const c = corners(m, BB);
+        const xs = c.map((p) => p[0]);
+        const ys = c.map((p) => p[1]);
+        for (const x of xs) expect(x).toBeGreaterThanOrEqual(pad - 1e-9), expect(x).toBeLessThanOrEqual(box.w - pad + 1e-9);
+        for (const y of ys) expect(y).toBeGreaterThanOrEqual(pad - 1e-9), expect(y).toBeLessThanOrEqual(box.h - pad + 1e-9);
+        const spanX = Math.max(...xs) - Math.min(...xs);
+        const spanY = Math.max(...ys) - Math.min(...ys);
+        expect(Math.max(spanX / (box.w - 2 * pad), spanY / (box.h - 2 * pad))).toBeCloseTo(1, 9);
+        expect((Math.max(...xs) + Math.min(...xs)) / 2).toBeCloseTo(box.w / 2, 9);
+        expect((Math.max(...ys) + Math.min(...ys)) / 2).toBeCloseTo(box.h / 2, 9);
+        // 比整张图放得大(空白不算进去)
+        expect(fitView(meta, box, pad).k).toBeGreaterThan(fitWhole(meta, box, pad).k);
+      });
+    }
+  }
+  it("没给、坏的、没有大小的:按整张图;超出图的夹到图上", () => {
+    const box = { w: 900, h: 600 };
+    const whole = fitWhole(META, box);
+    expect(fitView(META, box)).toEqual(whole);
+    for (const bad of [[1, 2, 3], [0, 0, 0, 0], [5, 5, 5, 50], [Number.NaN, 0, 10, 10], "x", [0, 0, "9", 9]]) {
+      expect(fitView({ ...META, content_bbox: bad as never }, box), JSON.stringify(bad)).toEqual(whole);
+    }
+    expect(contentBox({ ...META, content_bbox: [-50, -5, 900, 120] })).toEqual([0, 0, 400, 120]);
+    expect(contentBox({ ...META, content_bbox: [220, 160, 40, 30] })).toEqual([40, 30, 220, 160]);
+  });
+});
+
+describe("看到过、狗没走过 + 抹掉区:图例只在有的时候列;抹掉区只描边(底图站点已经抹了)", () => {
+  const ERASE: NavZone = { id: "e1", kind: "erase", label: "Junk", polygon: [[-9, 7], [-7, 7], [-7, 5], [-9, 5]] };
+  it("站点说有看到过、图上有抹掉区:都列;抹掉区画成细虚线,悬停说狗不去", async () => {
+    installScreenCTM();
+    const { container: c } = mapPage({ ...META, seen: true, zones: [NOGO, ERASE] }, { units: [unit(robot("A", null))] });
+    await ready(c);
+    expect(legend(c)).toEqual(["floor", "wall", "seen", "unknown", "nogo", "erase"]);
+    const e = c.querySelector("g.map-world polygon.erase-area")!;
+    expect(e).not.toBeNull();
+    expect(e.querySelector("title")!.textContent).toBe("Erased region Junk: robots never go there");
+    expect(c.querySelectorAll("g.map-world polygon.nogo-area").length).toBe(1);
+  });
+  it("中文图例", async () => {
+    installScreenCTM();
+    lang.value = "zh";
+    const { container: c } = mapPage({ ...META, seen: true, zones: [ERASE] }, { units: [unit(robot("A", null))] });
+    await ready(c);
+    const text = c.querySelector(".maplegend")!.textContent!;
+    for (const w of ["看到过、狗没走过", "已抹掉（狗不去）"]) expect(text).toContain(w);
+  });
+  it("刚打开就按有内容的范围放;「全图」也回到它", async () => {
+    installScreenCTM();
+    const meta = { ...META, rotation_deg: -31, content_bbox: [100, 50, 300, 250] };
+    const { container: c, getByText } = mapPage(meta);
+    await ready(c);
+    const first = worldOf(c);
+    // 范围的中心落在框的中心
+    const [cx, cy] = applyMat(first, 200, 150);
+    expect(cx).toBeCloseTo(RECT.width / 2, 6);
+    expect(cy).toBeCloseTo(RECT.height / 2, 6);
+    wheel(c.querySelector("svg.map")!, -300, RECT.left + 100, RECT.top + 100);
+    await tick();
+    expect(worldOf(c)).not.toEqual(first);
+    fireEvent.click(getByText("Whole map"));
+    await tick();
+    expect(worldOf(c)).toEqual(first);
+  });
+});
+
+describe("防区页:抹掉一块(导航区域 erase),点出来的地图点原样存;删掉要确认", () => {
+  const WANT: [number, number][] = [[1.23, -2.5], [4.56, -2.5], [4.56, 1.11], [-3.07, 6.4]];
+  const OLD: NavZone = { id: "pond", kind: "nogo", label: "Pool", polygon: [[2, -2], [6, -2], [6, -5], [2, -5]], hard: true };
+
+  function site(meta: PreviewMeta, zones: NavZone[], rev: number) {
+    const posted: { zones: NavZone[]; base_revision: number }[] = [];
+    let cur = { revision: rev, zones };
+    let previews = 0;
+    setFetch((async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/maps")) return json({ maps: [{ map_id: "m1", version: "1", note: "", created_ms: 0, source: "" }] });
+      if (u.endsWith("/api/maps/m1/1/preview")) { previews += 1; return json(meta); }
+      if (u.endsWith("/api/maps/m1/1/areas")) return json({ areas: [] });
+      if (u.endsWith("/api/maps/m1/1/zones")) {
+        if (init?.method === "POST") {
+          const body = JSON.parse(String(init.body));
+          posted.push(body);
+          cur = { revision: cur.revision + 1, zones: body.zones };
+          return json({ ...cur, auto_confirmed: true });
+        }
+        return json(cur);
+      }
+      return json({}, 404);
+    }) as never);
+    return { posted, previews: () => previews };
+  }
+
+  for (const deg of [undefined, 30, -30]) {
+    it(`转角 ${deg ?? "没给"}:抹掉的多边形跟想点的地图点差不到 1e-6,别的区域原样带着,修订号对`, async () => {
+      installScreenCTM();
+      const meta: PreviewMeta = deg === undefined ? META : { ...META, rotation_deg: deg };
+      const s = site(meta, [OLD], 4);
+      const r = render(<MapsZonesPage say={() => {}} />);
+      await ready(r.container);
+      await waitFor(() => expect((r.getByText("Erase a region") as HTMLButtonElement).disabled).toBe(false));
+      fireEvent.click(r.getByText("Erase a region"));
+      await tick();
+      const m = worldOf(r.container);
+      const svg = r.container.querySelector("svg.map")!;
+      for (const [x, y] of WANT) {
+        const p = toPx(meta, x, y);
+        const [sx, sy] = applyMat(m, p.px, p.py);
+        fireEvent.click(svg, { clientX: RECT.left + sx, clientY: RECT.top + sy });
+        await tick();
+      }
+      expect(r.container.textContent).toContain(`(${WANT.length} so far)`);
+      expect(r.container.querySelector("polyline.draft-line.erase")).not.toBeNull();
+      const before = s.previews();
+      fireEvent.click(r.getByText("Erase this region"));
+      await tick();
+      const dialog = r.container.ownerDocument.querySelector("dialog")!;
+      expect(dialog.textContent).toContain("Robots will never go into it");
+      fireEvent.click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Erase this region")!);
+      await waitFor(() => expect(s.posted.length).toBe(1));
+      const got = s.posted[0];
+      expect(got.base_revision).toBe(4);
+      expect(got.zones[0]).toEqual(OLD);
+      const e = got.zones[1];
+      expect(e.kind).toBe("erase");
+      expect(e.id).toBe("e5");
+      expect(e.polygon.length).toBe(WANT.length);
+      e.polygon.forEach(([x, y], i) => {
+        expect(Math.abs(x - WANT[i][0]), `x${i}`).toBeLessThan(1e-6);
+        expect(Math.abs(y - WANT[i][1]), `y${i}`).toBeLessThan(1e-6);
+      });
+      await waitFor(() => expect(s.previews()).toBeGreaterThan(before));   // 重新取预览:平面图地址变了
+      await waitFor(() => expect(r.container.querySelector(".erased-list")!.textContent).toContain("Erased"));
+    });
+  }
+
+  it("删掉一块抹掉区:先说清楚是放宽(要在手机上重新确认),确认了才存", async () => {
+    installScreenCTM();
+    const ERASED: NavZone = { id: "e2", kind: "erase", label: "Junk", polygon: [[0, 0], [1, 0], [1, 1]] };
+    const s = site(META, [OLD, ERASED], 7);
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await ready(r.container);
+    await waitFor(() => expect(r.container.querySelector(".erased-list li")).not.toBeNull());
+    fireEvent.click(r.container.querySelector(".erased-list li button")!);
+    await tick();
+    const dialog = r.container.ownerDocument.querySelector("dialog")!;
+    expect(dialog.textContent).toContain("relaxes the robots' zones");
+    fireEvent.click([...dialog.querySelectorAll("button")].find((b) => b.textContent === "Cancel")!);
+    await tick();
+    expect(s.posted.length).toBe(0);
+    fireEvent.click(r.container.querySelector(".erased-list li button")!);
+    await tick();
+    const again = r.container.ownerDocument.querySelector("dialog")!;
+    fireEvent.click([...again.querySelectorAll("button")].find((b) => b.textContent === "Remove")!);
+    await waitFor(() => expect(s.posted.length).toBe(1));
+    expect(s.posted[0]).toEqual({ zones: [OLD], base_revision: 7 });
   });
 });

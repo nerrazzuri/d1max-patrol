@@ -33,16 +33,17 @@ import { rasterShade, scheme } from "./theme";
 /** 图上画的有名字的多边形(地图坐标,米):area = 区域(淡),zone = 防区(防区页上能改的那些,显眼)。 */
 export interface CanvasArea { name: string; pts: Pt[]; kind: "area" | "zone" }
 
-export type LegendKey = "floor" | "wall" | "unknown" | "nogo" | "hard" | "slow" | "area" | "zone" | "robot" | "alarm";
-const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "unknown", "nogo", "hard", "slow", "area", "zone", "robot", "alarm"];
+export type LegendKey = "floor" | "wall" | "seen" | "unknown" | "nogo" | "hard" | "erase" | "slow" | "area" | "zone" | "robot" | "alarm";
+const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "seen", "unknown", "nogo", "hard", "erase", "slow", "area", "zone", "robot", "alarm"];
 const LEGEND_TEXT: Record<LegendKey, Key> = {
-  floor: "legendFloor", wall: "legendWall", unknown: "legendUnknown", nogo: "legendNoGo", hard: "hardNoGoLegend",
-  slow: "legendSlow",
+  floor: "legendFloor", wall: "legendWall", seen: "legendSeen", unknown: "legendUnknown", nogo: "legendNoGo",
+  hard: "hardNoGoLegend", erase: "legendErase", slow: "legendSlow",
   area: "legendArea", zone: "legendZone", robot: "legendRobot", alarm: "legendAlarm",
 };
 
-/** 底图的灰度(站点 map_preview:空地 254、墙 0、未知 205;平面图:地面白、墙深灰、未知透明)。 */
-const SHADE = { raster: { floor: 254, wall: 0, unknown: 205 }, plan: { floor: 255, wall: 34 } };
+/** 底图的灰度(站点 map_preview:空地 254、墙 0、看到过 232、未知 205;平面图:地面白、墙深灰、看到过是
+ *  透明度 0.35 的白、未知透明)。 */
+const SHADE = { raster: { floor: 254, wall: 0, seen: 232, unknown: 205 }, plan: { floor: 255, wall: 34, seenAlpha: 0.35 } };
 
 /** 标记层用:地图坐标 / 预览像素 → 屏上。 */
 export interface Screen {
@@ -189,6 +190,9 @@ export function MapCanvas(props: {
   if (zones.some((z) => z.kind === "nogo" && !z.hard)) present.add("nogo");
   if (zones.some((z) => z.kind === "nogo" && z.hard)) present.add("hard");
   if (zones.some((z) => z.kind === "slow")) present.add("slow");
+  // 地图台账 M9、44:看到过、狗没走过(站点说这一版有才列);抹掉区(站点已经把那一块画成没建图,这里只描边)
+  if (meta.seen === true) present.add("seen");
+  if (zones.some((z) => z.kind === "erase")) present.add("erase");
   for (const a of areas) present.add(a.kind);
   const bar = scaleBar(meta.m_per_px, view.k);
   const cls = ["map", props.drawing ? "drawing" : "", dragging ? "dragging" : ""].filter(Boolean).join(" ");
@@ -203,10 +207,10 @@ export function MapCanvas(props: {
             <image key={plan ? plan.url : props.raster} href={plan ? plan.url : props.raster} x="0" y="0" width={meta.width} height={meta.height}
               preserveAspectRatio="none" class={plan ? "mapimg plan" : "mapimg"}
               onError={plan ? () => setPlanBad(plan.url) : undefined} />
-            {zones.map((z) => (z.kind === "nogo" || z.kind === "slow") && (
+            {zones.map((z) => (z.kind === "nogo" || z.kind === "slow" || z.kind === "erase") && (
               <polygon key={z.id} points={polyAttr(meta, z.polygon)}
-                class={z.kind === "nogo" ? (z.hard ? "nogo-area hard" : "nogo-area") : "slow-area"}>
-                {z.kind === "nogo" && <title>{navZoneTip(z)}</title>}
+                class={z.kind === "nogo" ? (z.hard ? "nogo-area hard" : "nogo-area") : z.kind === "erase" ? "erase-area" : "slow-area"}>
+                {(z.kind === "nogo" || z.kind === "erase") && <title>{navZoneTip(z)}</title>}
               </polygon>
             ))}
             {areas.map((a, i) => (
@@ -247,10 +251,12 @@ export function MapCanvas(props: {
   );
 }
 
-/** 悬停在禁行区上看到的那句话:名字、是不是硬禁区(决策 65)、临时区什么时候到期(决策 66)。 */
+/** 悬停在禁行区、抹掉区上看到的那句话:名字、是不是硬禁区(决策 65)、临时区什么时候到期(决策 66)。 */
 export function navZoneTip(z: NavZone): string {
   const name = z.label || z.id;
-  const base = z.hard ? t("hardNoGoTip", { label: name }) : t("noGoTip", { label: name });
+  const base = z.kind === "erase"
+    ? (z.hard ? t("hardEraseTip", { label: name }) : t("eraseTip", { label: name }))
+    : z.hard ? t("hardNoGoTip", { label: name }) : t("noGoTip", { label: name });
   if (typeof z.until_ms !== "number") return base;
   const d = new Date(z.until_ms);
   const two = (v: number) => String(v).padStart(2, "0");
@@ -264,6 +270,10 @@ function Swatch({ k, plan }: { k: LegendKey; plan: boolean }) {
   let body: ComponentChildren;
   if (k === "floor") body = <rect x="0.5" y="0.5" width="15" height="11" fill={shade(plan ? SHADE.plan.floor : SHADE.raster.floor)} class="sw-edge" />;
   else if (k === "wall") body = <rect x="0.5" y="0.5" width="15" height="11" fill={shade(plan ? SHADE.plan.wall : SHADE.raster.wall)} class="sw-edge" />;
+  else if (k === "seen") body = plan
+    ? <><rect x="0.5" y="0.5" width="15" height="11" class="sw-bg sw-edge" /><rect x="0.5" y="0.5" width="15" height="11" fill={shade(SHADE.plan.floor)} fill-opacity={SHADE.plan.seenAlpha} /></>
+    : <rect x="0.5" y="0.5" width="15" height="11" fill={shade(SHADE.raster.seen)} class="sw-edge" />;
+  else if (k === "erase") body = <rect x="1" y="1" width="14" height="10" class="erase-area" />;
   else if (k === "unknown") body = plan
     ? <rect x="0.5" y="0.5" width="15" height="11" class="sw-bg sw-edge" />
     : <rect x="0.5" y="0.5" width="15" height="11" fill={shade(SHADE.raster.unknown)} class="sw-edge" />;

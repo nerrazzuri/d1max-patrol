@@ -294,12 +294,15 @@ a.btn { text-decoration: none; }
 .slow-area { fill: var(--c-textMuted); fill-opacity: 0.16; stroke: var(--c-textSecondary); stroke-dasharray: 2 3; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 /* 硬禁区(决策 65,水体、落差:遥控也开不进去):实线、粗边、更深 —— 不靠颜色一样认得出 */
 .nogo-area.hard { fill-opacity: 0.4; stroke-dasharray: none; stroke-width: 3; }
+/* 抹掉区(地图台账 44):站点已经把底图那一块抹成没建图,这里只描一道细虚线,看得出边在哪 */
+.erase-area { fill: none; stroke: var(--c-textSecondary); stroke-dasharray: 1 3; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .nogo-legend .swatch { display: inline-block; width: 14px; height: 10px; vertical-align: middle; border: 1.5px dashed var(--c-error); background: color-mix(in srgb, var(--c-error) 22%, transparent); }
 .nogo-legend .swatch.hard { border: 3px solid var(--c-error); background: color-mix(in srgb, var(--c-error) 40%, transparent); }
 .area-label { fill: var(--c-text); text-anchor: middle; font-family: var(--font-sans); font-weight: 600; paint-order: stroke; stroke: var(--c-surface); stroke-width: 4px; }
 .sec-area.quiet { fill-opacity: 0.06; stroke: var(--c-textMuted); }
 .area-label.quiet { fill: var(--c-textSecondary); font-weight: 500; }
 .draft-line { fill: none; stroke: var(--c-text); stroke-width: 2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+.draft-line.erase { stroke: var(--c-textSecondary); stroke-dasharray: 2 3; }
 .draft-pt { fill: var(--c-text); }
 .checks { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 .checks legend { font-weight: 600; margin-bottom: 4px; }
