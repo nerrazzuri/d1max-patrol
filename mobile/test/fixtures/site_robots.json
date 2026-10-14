@@ -58,6 +58,15 @@
           "relocalize": {
             "needs_pose": false
           },
+          "running_config": {
+            "confirms": "load",
+            "kept": [],
+            "map_id": "estate-1",
+            "map_version": "7",
+            "previous": null,
+            "zones_digest": "c371876a5eefd14d43bdd271b5f9690eb44d0b970f171cb8f7219f4ff8153d3d",
+            "zones_rev": 0
+          },
           "speed_cap": {
             "max_speed_mps": null
           },
@@ -74,7 +83,7 @@
         }
       },
       "clock_skew_s": 0.0,
-      "expires_at": 1792985984740,
+      "expires_at": 1792995367134,
       "fresh": true,
       "held": null,
       "loc": {
@@ -93,10 +102,33 @@
       "revoked": false,
       "robot_id": "A",
       "rtk": null,
+      "running": {
+        "confirms": "load",
+        "kept": [],
+        "legacy": false,
+        "map": {
+          "dog": null,
+          "match": null,
+          "site": null
+        },
+        "map_id": "estate-1",
+        "map_version": "7",
+        "mission": null,
+        "previous": null,
+        "problems": [],
+        "zones": {
+          "basis": "digest",
+          "dog": "c371876a5eefd14d43bdd271b5f9690eb44d0b970f171cb8f7219f4ff8153d3d",
+          "dog_rev": 0,
+          "match": true,
+          "site": "c371876a5eefd14d43bdd271b5f9690eb44d0b970f171cb8f7219f4ff8153d3d",
+          "site_rev": 0
+        }
+      },
       "status": {
-        "boot_id": "boot-6a9ed85275",
+        "boot_id": "boot-dabfb6b5fd",
         "control_epoch": 1,
-        "last_seen": 1791985985433,
+        "last_seen": 1791995367817,
         "online": true,
         "ready": {
           "control": true,

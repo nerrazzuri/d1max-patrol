@@ -56,6 +56,15 @@
       "relocalize": {
         "needs_pose": false
       },
+      "running_config": {
+        "confirms": "load",
+        "kept": [],
+        "map_id": "estate-1",
+        "map_version": "7",
+        "previous": null,
+        "zones_digest": "c371876a5eefd14d43bdd271b5f9690eb44d0b970f171cb8f7219f4ff8153d3d",
+        "zones_rev": 0
+      },
       "speed_cap": {
         "max_speed_mps": null
       },
@@ -76,8 +85,8 @@
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-c3689d6a01ad",
-      "issued_at": 1791985984963,
+      "command_id": "cmd-8f95d69d8a36",
+      "issued_at": 1791995367347,
       "issued_by": "incident:nvr",
       "kind": "goto",
       "payload": {
@@ -93,25 +102,25 @@
       },
       "priority": 80,
       "robot_id": "A",
-      "task_id": "incident-a219dd2f333e"
+      "task_id": "incident-a64dcd3edc22"
     },
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-65b2045e2bbf",
-      "issued_at": 1791985984880,
+      "command_id": "cmd-3c5a19357b73",
+      "issued_at": 1791995367271,
       "issued_by": "alice",
       "kind": "abort",
       "payload": {},
       "priority": 0,
       "robot_id": "A",
-      "task_id": "task-6d043cde0511"
+      "task_id": "task-e70763966c0f"
     },
     {
       "ack_reason": "",
       "ack_result": "accepted",
-      "command_id": "cmd-ba366b2f93c1",
-      "issued_at": 1791985984857,
+      "command_id": "cmd-f723edf43272",
+      "issued_at": 1791995367245,
       "issued_by": "alice",
       "kind": "goto",
       "payload": {
@@ -127,61 +136,61 @@
       },
       "priority": 60,
       "robot_id": "A",
-      "task_id": "task-6d043cde0511"
+      "task_id": "task-e70763966c0f"
     }
   ],
   "events": [
     {
-      "boot_id": "boot-6a9ed85275",
+      "boot_id": "boot-dabfb6b5fd",
       "data": {
         "reason": "起飞前检查未通过: device_ready(急停处于按下状态)",
-        "task_id": "incident-a219dd2f333e"
+        "task_id": "incident-a64dcd3edc22"
       },
       "kind": "task_failed",
       "seq": 5,
-      "stamp": 1791985985433
+      "stamp": 1791995367817
     },
     {
-      "boot_id": "boot-6a9ed85275",
+      "boot_id": "boot-dabfb6b5fd",
       "data": {
         "distance_m": 0.2,
-        "task_id": "incident-a219dd2f333e"
+        "task_id": "incident-a64dcd3edc22"
       },
       "kind": "task_progress",
       "seq": 4,
-      "stamp": 1791985985433
+      "stamp": 1791995367817
     },
     {
-      "boot_id": "boot-6a9ed85275",
+      "boot_id": "boot-dabfb6b5fd",
       "data": {
         "reason": "preempted",
-        "task_id": "task-6d043cde0511"
+        "task_id": "task-e70763966c0f"
       },
       "kind": "task_preempted",
       "seq": 3,
-      "stamp": 1791985985400
+      "stamp": 1791995367785
     },
     {
-      "boot_id": "boot-6a9ed85275",
+      "boot_id": "boot-dabfb6b5fd",
       "data": {
         "distance_m": 4.0,
-        "task_id": "task-6d043cde0511"
+        "task_id": "task-e70763966c0f"
       },
       "kind": "task_progress",
       "seq": 2,
-      "stamp": 1791985984905
+      "stamp": 1791995367287
     },
     {
-      "boot_id": "boot-6a9ed85275",
+      "boot_id": "boot-dabfb6b5fd",
       "data": {
         "faults": []
       },
       "kind": "robot_fault",
       "seq": 1,
-      "stamp": 1791985984788
+      "stamp": 1791995367185
     }
   ],
-  "expires_at": 1792985984740,
+  "expires_at": 1792995367134,
   "fresh": true,
   "held": null,
   "loc": {
@@ -200,10 +209,33 @@
   "revoked": false,
   "robot_id": "A",
   "rtk": null,
+  "running": {
+    "confirms": "load",
+    "kept": [],
+    "legacy": false,
+    "map": {
+      "dog": null,
+      "match": null,
+      "site": null
+    },
+    "map_id": "estate-1",
+    "map_version": "7",
+    "mission": null,
+    "previous": null,
+    "problems": [],
+    "zones": {
+      "basis": "digest",
+      "dog": "c371876a5eefd14d43bdd271b5f9690eb44d0b970f171cb8f7219f4ff8153d3d",
+      "dog_rev": 0,
+      "match": true,
+      "site": "c371876a5eefd14d43bdd271b5f9690eb44d0b970f171cb8f7219f4ff8153d3d",
+      "site_rev": 0
+    }
+  },
   "status": {
-    "boot_id": "boot-6a9ed85275",
+    "boot_id": "boot-dabfb6b5fd",
     "control_epoch": 1,
-    "last_seen": 1791985985433,
+    "last_seen": 1791995367817,
     "online": true,
     "ready": {
       "control": true,

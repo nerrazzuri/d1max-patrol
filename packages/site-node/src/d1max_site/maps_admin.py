@@ -347,8 +347,8 @@ class MapAdmin:
         cat = self.cat
         try:
             with cat._render_lock:                      # 渲染一次只做一张(吃 CPU 和内存)
-                _, meta_a, image_a, data_a, _ = cat._raster(map_id, a)
-                _, meta_b, image_b, data_b, _ = cat._raster(map_id, b)
+                _, meta_a, image_a, data_a, _, _ = cat._raster(map_id, a)
+                _, meta_b, image_b, data_b, _, _ = cat._raster(map_id, b)
                 try:
                     got = map_diff.diff_grids(mp.grid_ranks(data_a, meta_a), meta_a,
                                               mp.grid_ranks(data_b, meta_b), meta_b)
