@@ -78,6 +78,10 @@ STORAGE_EVERY_MS = 10_000
 SWITCH_WAIT_S = 600.0
 #: 起来时载入正在用的那张图最多等多久(秒);过了照旧用 ``--map``。
 LOAD_MAP_TIMEOUT_S = 120.0
+#: 换图:载入之后最多等多久让定位器确认新图的先验(秒,R5)。载几百 MB 的先验要些时候;过了没回当作没成。
+PRIOR_ACK_WAIT_S = 120.0
+#: 等定位器确认时多久看一眼(秒)。
+PRIOR_ACK_POLL_S = 0.2
 
 
 def _parse_home(v: Any) -> tuple[float, float, float] | None:
@@ -191,6 +195,8 @@ class AgentRuntime:
         self.zonebook = ZoneBook(store_dir / "zones.json")
         self._zones: ZoneSet | None = None
         self._zones_pending: ZoneSet | None = None
+        #: 最近一次收下的巡检命令带的任务修订(R4 运行配置;进程内,重启清空)。
+        self._last_patrol: dict[str, Any] | None = None
         self._grid_job: asyncio.Task | None = None
         if parts is not None and hasattr(parts.nav, "on_event"):
             parts.nav.on_event = self._nav_event
@@ -473,7 +479,9 @@ class AgentRuntime:
         if cmd.kind == "patrol":
             from d1max_agent.tasks.patrol import PatrolTask
             from d1max_contract.mission import parse_mission
-            return PatrolTask(task_id=cmd.task_id, mission=parse_mission(cmd.payload["mission"]),
+            mission = parse_mission(cmd.payload["mission"])
+            self._note_patrol(cmd, mission)
+            return PatrolTask(task_id=cmd.task_id, mission=mission,
                               parts=self.parts, events=self.events, now_ms=self._now,
                               priority=cmd.priority)
         target = MapPose.from_wire(cmd.payload["target"])
@@ -482,6 +490,16 @@ class AgentRuntime:
                               events=self.events, now_ms=self._now, priority=cmd.priority,
                               photo=cmd.payload.get("photo"),
                               charge=cmd.payload.get("charge") is True)
+
+    def _note_patrol(self, cmd: Command, mission: Any) -> None:
+        """记下这趟巡检命令带的任务修订(R4):站点给了 ``mission_rev`` 就原样记;老站点没给就按收到的
+        任务定义自己算(同一个函数,站点要是也算,两边一样)。"""
+        from d1max_contract.digest import canonical_digest
+        rev = cmd.payload.get("mission_rev")
+        if not isinstance(rev, str) or not 0 < len(rev) <= 64:
+            rev = canonical_digest(cmd.payload.get("mission"))
+        self._last_patrol = {"task_id": cmd.task_id, "mission": mission.mission,
+                             "map_version": mission.map_version, "rev": rev}
 
     def _admit(self, cmd: Command) -> str:
         """发件箱满了(盘到停止水位或发件箱到上限)不接巡检 —— 绝不删没传完的来腾地方。
@@ -652,6 +670,9 @@ class AgentRuntime:
                 if nav.plan_problem:
                     z["problem"] = nav.plan_problem
             out["zones_set"] = z
+        rc = self._running_config()
+        if rc is not None:
+            out["running_config"] = rc
         if self.obs_view is not None:
             # W11:避障能不能用(``ok`` 才派会自己走的任务);外参自检没过带原因
             o: dict[str, Any] = {"state": self.obs_view.state(), "rear": self.obs_view.rear}
@@ -685,6 +706,33 @@ class AgentRuntime:
         if deter is not None:
             out["deter"] = deter                    # W21:接了哪几路上装、能放哪些话术
         return out
+
+    def _running_config(self) -> dict[str, Any] | None:
+        """狗**实际在跑**的配置(R4,能力里的 ``running_config``):地图号与版本、地图内容摘要(取自
+        ``active.json`` 里的清单 —— 不重新读文件)、正在守的那份区域的修订与内容摘要(R3)、最近一趟
+        巡检命令带的任务修订、本地库里留着哪几版(R5:回退不用重新下载)、换图要不要等定位器确认。
+        站点拿它跟自己登记的比,对不上不派自主任务。没加载地图 → ``None``。"""
+        if self.loaded_map is None:
+            return None
+        from d1max_contract.maps import map_digest
+        from d1max_contract.zones import zones_digest
+        m_id, m_ver = self.loaded_map
+        rc: dict[str, Any] = {"map_id": m_id, "map_version": m_ver}
+        if self.maps is not None:
+            act = self.maps.active()
+            if act is not None and (act.map_id, act.version) == self.loaded_map:
+                rc["map_digest"] = map_digest(act)     # 老狗、命令行指定的图没有清单:不报
+            prev = self.maps.previous()
+            rc["previous"] = None if prev is None else [prev.map_id, prev.version]
+            rc["kept"] = [list(k) for k in self.maps.kept()]
+        zs = self._zones or ZoneSet(m_id, m_ver, 0, ())
+        rc["zones_rev"] = zs.revision
+        rc["zones_digest"] = zones_digest(zs)
+        anchor = self.parts.nav.anchor if self.parts is not None else None
+        rc["confirms"] = "localizer" if callable(getattr(anchor, "prior_status", None)) else "load"
+        if self._last_patrol is not None:
+            rc["last_patrol"] = dict(self._last_patrol)
+        return rc
 
     def _on_speed_cap(self, cmd: Command) -> str:
         """全狗限速(W29):记下、马上用上。``null`` 取消。"""
@@ -1318,6 +1366,8 @@ class AgentRuntime:
         base = {"task_id": task_id, "map_id": ref.map_id, "version": ref.version}
         # 原来那张校验不过(W09g):提交失败时不把它载回去
         old = None if self.map_problem else self.maps.active()
+        old_prev = self.maps.previous() if old is not None else None
+        old_home = self.maps.home_of(old) if old is not None else None
         try:
             if self._locsrv is not None:
                 # 配了定位器:这一版要带定位先验(站点上 slam_toolbox 时期的老版本没有;激活了定位器
@@ -1354,13 +1404,28 @@ class AgentRuntime:
                             log.exception("提交失败后载回原来的图也失败了")
                     raise MapInstallError(f"记不下正在用的图: {exc}") from exc
                 self._switch_map(ref)
+                # R5:配了定位器的,等它确认收下新图的先验才算换成 —— 它不收(或一直不回),退回原来那张
+                # (本地库里留着,不用重新下载),事件报失败。没有定位器的,载入成功就算。
+                why = await self._prior_ack(ref)
+                rolled = False
+                if why and old is not None:
+                    rolled = await self._revert_map(old, old_prev, old_home)
+                if why:
+                    tail = ("(已退回原来的 " + f"{old.map_id}:{old.version})" if rolled
+                            else "(退回原来的也没成,狗上现在的图见能力)") if old is not None \
+                        else "(原来没有别的图可退)"
+                    raise MapInstallError(why + tail)
             finally:
                 self._switching = False
-            self.events.emit("map_activated", base)
+            self.events.emit("map_activated", base | {"confirmed": self._confirm_kind()})
             log.info("换图了:%s:%s", ref.map_id, ref.version)
         except MapInstallError as exc:
             log.warning("换图没成(%s:%s):%s", ref.map_id, ref.version, exc)
             self.events.emit("map_activate_failed", base | {"reason": str(exc)[:200]})
+            try:
+                await self._publish_caps()           # 退回之后狗报的图变回来了
+            except Exception:
+                log.exception("换图失败之后发能力没成")
             return
         except Exception as exc:
             log.exception("换图炸了")
@@ -1371,6 +1436,42 @@ class AgentRuntime:
             await self._publish_caps()
         except Exception:
             log.exception("换图之后发能力没成(下次重连会再发)")
+
+    def _confirm_kind(self) -> str:
+        anchor = self.parts.nav.anchor if self.parts is not None else None
+        return "localizer" if callable(getattr(anchor, "prior_status", None)) else "load"
+
+    async def _prior_ack(self, ref) -> str:
+        """等定位器对 ``ref`` 的先验表态(R5)。回空串 = 确认了(或这只狗没有定位器);否则回原因。"""
+        anchor = self.parts.nav.anchor if self.parts is not None else None
+        status = getattr(anchor, "prior_status", None)
+        if not callable(status):
+            return ""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + PRIOR_ACK_WAIT_S
+        key = (ref.map_id, ref.version)
+        while True:
+            state, why = status(key)
+            if state == "ok":
+                return ""
+            if state == "rejected":
+                return f"定位器不收这张图的先验:{why}"[:200]
+            if loop.time() >= deadline:
+                return (f"定位器 {PRIOR_ACK_WAIT_S:g} s 没确认这张图的先验" + (f"({why})" if why else ""))[:200]
+            await asyncio.sleep(PRIOR_ACK_POLL_S)
+
+    async def _revert_map(self, old, old_prev, old_home) -> bool:
+        """新图定位器不认:换回原来那张(R5)。原来那张还在本地库里(``commit`` 留着上一张),不用下载;
+        载入、记成正在用的、切坐标系,跟换图同一套。成了回 True。"""
+        try:
+            d = self.maps.dir_of(old)
+            await self._hal_load(old.map_id, old.version, d)
+            self.maps.commit(old, home=old_home, previous=old_prev)
+            self._switch_map(old)
+            return True
+        except Exception:
+            log.exception("换图没成之后退回原来的 %s:%s 也失败了", old.map_id, old.version)
+            return False
 
     async def _hal_load(self, map_id: str, version: str, d: Path) -> None:
         """适配器载入一张图。配了定位器的狗不经 HAL(W09c 决定 6、W08 决定 5):换图归代理的导航后端,

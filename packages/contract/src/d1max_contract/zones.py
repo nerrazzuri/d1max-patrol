@@ -33,6 +33,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from dataclasses import dataclass, replace
@@ -360,6 +362,17 @@ class ZoneSet:
         if len(set(ids)) != len(ids):
             raise ContractError("zones: id 重复")
         return cls(map_id=map_id, map_version=ver, revision=rev, zones=zones)
+
+
+def zones_digest(zs: ZoneSet) -> str:
+    """一份区域的内容摘要(R3):地图号、版本、每个区域(按 id 排序)的全部字段;**不含修订号**。
+    站点从自己存的算,狗从它落了盘、正在守的那份算,两边对:修订号一样、内容不一样(站点从旧备份
+    恢复后又改了一次,正好改到同一个号)也认得出来。字段顺序、浮点写法都由 JSON 的规范写法定死,
+    两头用同一个函数。"""
+    body = {"map_id": zs.map_id, "map_version": zs.map_version,
+            "zones": sorted((z.to_wire() for z in zs.zones), key=lambda w: str(w.get("id")))}
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(b"d1max-zones-digest/1\n" + raw.encode("utf-8")).hexdigest()
 
 
 def _as_strict(new: Zone, old: Zone) -> bool:

@@ -217,6 +217,7 @@ class BridgeLocalizer:
         self._dir = ""
         self._prior_ok: tuple[str, str] | None = None
         self._prior_err = ""
+        self._prior_rejected = False
         self._state = ""
         self._state_reason = ""
         self._fix: _Fix | None = None
@@ -277,6 +278,7 @@ class BridgeLocalizer:
     def on_disconnect(self) -> None:
         self._connected = False
         self._prior_ok = None
+        self._prior_rejected = False
         self._state = ""
         self._reset_fix()
 
@@ -344,6 +346,20 @@ class BridgeLocalizer:
     def anchored(self) -> bool:
         return self._fix is not None and self._prior_ok == self._map and self._map is not None
 
+    def prior_status(self, ref: tuple[str, str]) -> tuple[str, str]:
+        """定位器对 ``ref`` 这张图先验的态度(R5,换图要等它):``("ok", "")`` 收下了;``("rejected",
+        原因)`` 明说不收;``("pending", 原因)`` 还没回(没连上、在载、超时重发中;原因是最近一次的
+        说明)。当前的图不是 ``ref`` 一律 pending(又换了图)。"""
+        if self._map != ref:
+            return "pending", "当前的图已经不是这一张"
+        if self._prior_ok == ref:
+            return "ok", ""
+        if self._prior_rejected:
+            return "rejected", self._prior_err
+        if not self._connected:
+            return "pending", "定位器没连上"
+        return "pending", self._prior_err
+
     @property
     def map_ref(self) -> tuple[str, str] | None:
         return self._map
@@ -372,6 +388,7 @@ class BridgeLocalizer:
         self._map, self._dir = map_ref, dir
         self._prior_ok = None
         self._prior_err = ""
+        self._prior_rejected = False
         self._reset_fix()
         self._send_prior()
 
@@ -756,6 +773,7 @@ class BridgeLocalizer:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+        self._prior_rejected = False
         if self.prior_task is not None and not self.prior_task.done():
             self.prior_task.cancel()
         self.prior_task = loop.create_task(self._prior(self._map, self._dir))
@@ -779,6 +797,7 @@ class BridgeLocalizer:
                 self._prior_ok, self._prior_err = ref, ""
             else:
                 self._prior_err = r.reason or "没说为什么"
+                self._prior_rejected = True
             return
 
     def _mismatch(self, new: _Fix) -> str:

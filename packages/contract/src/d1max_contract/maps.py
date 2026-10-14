@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from dataclasses import dataclass
@@ -109,6 +110,17 @@ class MapRef:
             raise ContractError("map: 文件名重复")
         return cls(map_id=check_name(d.get("map_id"), "地图号"),
                     version=check_name(d.get("version"), "版本"), files=parsed)
+
+
+def map_digest(ref: MapRef) -> str:
+    """一张图的内容摘要(R4):清单里每个文件的(名字, 大小, sha256)按名字排序后的 sha256。
+    清单已经把每个文件的哈希写死了,所以摘要等于「这一版的内容」—— 站点和狗各自从自己手里的清单
+    算,不用再读文件;两边不一样 = 狗上用的不是站点登记的那一份。跟地图号、版本号**无关**(同样的
+    内容换个版本号摘要一样,同一个版本号换了内容摘要不一样)。"""
+    h = hashlib.sha256(b"d1max-map-digest/1\n")
+    for f in sorted(ref.files, key=lambda f: f.name):
+        h.update(f"{f.name}\t{f.size}\t{f.sha256}\n".encode())
+    return h.hexdigest()
 
 
 def parse_mapping(p: Any) -> tuple[str, str]:

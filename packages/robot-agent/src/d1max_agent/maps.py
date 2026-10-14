@@ -3,8 +3,9 @@
 - 站点下发 ``map_activate``(地图号、版本、每个文件的大小与 sha256)→ 从站点的狗专用口下载
   (mTLS),**每个文件边下边算哈希,大小或哈希对不上整张不装**;装好了交给适配器载入
   (适配器没有载入这一步的,这台狗就不报这项能力,站点也不会发)。
-- 狗上只留正在用的这一张:``<store>/maps/<地图号>/<版本>/``,旁边 ``active.json`` 记着是哪张;
-  别的一律删。
+- 狗上留**有限的几张**:正在用的、上一张(R5,``previous.json`` 记着:回退不用重新下载)、最近一次
+  自己建的(见下)—— 最多三张,别的一律删。``<store>/maps/<地图号>/<版本>/``,旁边 ``active.json`` 记着
+  正在用的是哪张。
   重启时按 ``active.json`` 接着用 —— **先完整校验**(:meth:`MapKeeper.verify_active`,W09g):清单跟
   声明一样、每个文件是普通文件、大小与 sha256 都对;校验不过不载、不退回 ``--map``(见代理)。
   :meth:`MapKeeper.active` 只读声明,不碰文件,状态查询里随便调。
@@ -44,6 +45,9 @@ ADOPTED = ".adopted"
 REFUSED_HTTP = (404, 410, 416)
 #: 一个文件连续几次没进展就放弃(每次有进展就重新数);两次之间退避 1、2、4… 秒,最多 30 秒。
 RESUME_TRIES = 5
+
+#: ``commit(previous=)`` 不给的意思:用换下来的那一张。
+_AUTO: Any = object()
 
 #: 下载:给地图号、版本、文件名(续传时再给 ``offset=`` 从第几个字节起),返回一块一块的字节(调用方在
 #: 线程里跑它)。
@@ -105,6 +109,33 @@ class MapKeeper:
             return MapRef.from_wire(json.loads(raw.decode("utf-8")))
         except (ValueError, RecursionError, ContractError) as exc:
             raise MapIntegrityError(f"active.json 坏了: {type(exc).__name__}: {exc}"[:200]) from exc
+
+    def previous(self) -> MapRef | None:
+        """上一张正在用的图(R5,``previous.json``):还留在本地库里、清单文件在、而且不是现在这张才回;
+        **只读声明和清单,不算哈希**(回退时 :meth:`install` / :meth:`local` 会逐个核)。"""
+        try:
+            ref = MapRef.from_wire(json.loads((self.root / "previous.json").read_text("utf-8")))
+        except (OSError, ValueError, RecursionError, ContractError):
+            return None
+        cur = self.active()
+        if cur is not None and (cur.map_id, cur.version) == (ref.map_id, ref.version):
+            return None
+        try:
+            have = MapRef.from_wire(json.loads((self.dir_of(ref) / MANIFEST).read_text("utf-8")))
+        except (OSError, ValueError, RecursionError, ContractError):
+            return None
+        return ref if have == ref else None
+
+    def kept(self) -> list[tuple[str, str]]:
+        """本地库里留着的版本(地图号, 版本),给站点看(能力里报):正在用的、上一张、收养来的。"""
+        out = []
+        for m in sorted(self.root.iterdir()) if self.root.is_dir() else []:
+            if not m.is_dir() or m.name.startswith("."):
+                continue
+            for v in sorted(m.iterdir()):
+                if v.is_dir() and not v.name.startswith(".") and (v / MANIFEST).is_file():
+                    out.append((m.name, v.name))
+        return out
 
     def verify_active(self) -> MapRef | None:
         """正在用的那张完整校验(W09g,**阻塞、要算整张图的 sha256**:只在代理起来、激活时调)。没有
@@ -282,8 +313,20 @@ class MapKeeper:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def commit(self, ref: MapRef, *, home: tuple[float, float, float] | None = None) -> None:
-        """这张图载入成功了:记成正在用的(连同站点给的原点),别的图都删掉(狗上只留这一张)。"""
+    def commit(self, ref: MapRef, *, home: tuple[float, float, float] | None = None,
+               previous: Any = _AUTO) -> None:
+        """这张图载入成功了:记成正在用的(连同站点给的原点)。**上一张留着**(R5:回退不用重新下载):
+        ``previous`` 不给 = 换下来的这一张;给 ``None`` = 不留;给 :class:`MapRef` = 留指定的那张(回退
+        失败的善后:把原来的上一张记回去)。收养来的最近一份(自己建的)也留着。别的图都删掉 —— 狗上
+        最多三张:正在用的、上一张、最近自己建的。"""
+        if previous is _AUTO:
+            old = self.active()
+            previous = old if old is not None and (old.map_id, old.version) != (
+                ref.map_id, ref.version) else self.previous()
+        if previous is not None and (previous.map_id, previous.version) == (
+                ref.map_id, ref.version):
+            previous = None
+        self._write_json("previous.json", None if previous is None else previous.to_wire())
         tmp = self.root / "active.json.tmp"
         rec = ref.to_wire()
         if home is not None:
@@ -303,6 +346,8 @@ class MapKeeper:
         try:
             with self._lock:
                 keep = {self.dir_of(ref).resolve()}
+                if previous is not None:
+                    keep.add(self.dir_of(previous).resolve())
                 adopted = self._adopted()
                 if adopted:
                     keep.add(adopted[-1].resolve())
@@ -317,6 +362,19 @@ class MapKeeper:
         except OSError:
             log.warning("换图之后清理旧图没清干净", exc_info=True)
 
+    def _write_json(self, name: str, rec: Any) -> None:
+        """``previous.json`` 这类小记录:写临时文件、换名;``None`` = 删掉。出错抛 ``OSError``。"""
+        path = self.root / name
+        if rec is None:
+            path.unlink(missing_ok=True)
+            return
+        tmp = path.with_name(name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+
     def _adopted(self) -> list[Path]:
         """收养来的版本目录,按收养先后排。"""
         got = []
@@ -330,11 +388,13 @@ class MapKeeper:
         return [d for _, d in sorted(got)]
 
     def discard(self, ref: MapRef) -> None:
-        """装好了但没载进去:删掉,狗上照旧用原来那张。收养来的不删(建图的狗自己那份,删了要重下)。"""
+        """装好了但没载进去:删掉,狗上照旧用原来那张。收养来的、上一张(回退用)不删。"""
         with self._lock:
             cur = self.active()
+            prev = self.previous()
             d = self.dir_of(ref)
             if (cur is None or (cur.map_id, cur.version) != (ref.map_id, ref.version)) \
+                    and (prev is None or (prev.map_id, prev.version) != (ref.map_id, ref.version)) \
                     and not (d / ADOPTED).exists():
                 shutil.rmtree(d, ignore_errors=True)
 
