@@ -1,0 +1,32 @@
+/* 路线编辑页、地图页上的「去这里 / 在这里设位置」(2026-10-14)。颜色用主题变量,不新增。 */
+.routesplit { display: flex; flex-wrap: wrap; }
+.routemap { flex: 999 1 560px; min-width: 0; background: var(--c-mapBg); display: flex; flex-direction: column; }
+.routemap .mapwrap { flex: none; height: 600px; }
+.routeside { flex: 1 1 320px; max-width: 420px; padding: 12px 16px; border-left: 1px solid var(--c-outline); display: flex; flex-direction: column; gap: 12px; }
+.routeside h2 { font-size: 16px; }
+.routeside ul { list-style: none; margin: 0; padding: 0; }
+.routelist li, .pointlist li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--c-outline); }
+.routelist li[aria-current="true"], .pointlist li[aria-current="true"] { background: color-mix(in srgb, var(--c-tertiary) 12%, transparent); }
+.pointlist .num { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--c-text); color: var(--c-surface); font: 600 12px/22px var(--font-mono); text-align: center; }
+.pointlist .bad { color: var(--c-error); font-size: 13px; }
+.pointform { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pointform .wide { grid-column: 1 / -1; }
+.pointform input { height: 36px; }
+.route-line { fill: none; stroke: var(--c-tertiary); stroke-width: 3; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.route-line.other { stroke: var(--c-textSecondary); stroke-width: 2; stroke-dasharray: 5 4; opacity: 0.8; }
+.route-pt { cursor: grab; touch-action: none; }
+.route-pt circle { fill: var(--c-tertiary); stroke: var(--c-surface); stroke-width: 2; }
+.route-pt text { fill: var(--c-surface); font: 700 12px var(--font-mono); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.route-pt.on circle { fill: var(--c-text); stroke: var(--c-tertiary); stroke-width: 3; }
+.route-pt.bad circle { fill: var(--c-error); }
+.route-pt.other { cursor: default; opacity: 0.8; }
+.route-pt.other circle { fill: var(--c-textSecondary); }
+.route-handle { cursor: grab; touch-action: none; }
+.route-handle circle { fill: var(--c-surface); stroke: var(--c-text); stroke-width: 2; }
+.route-handle line { stroke: var(--c-text); stroke-width: 2; }
+.map.drawing .route-pt { cursor: grab; }
+.posebar { padding: 10px 16px; border-top: 1px solid var(--c-outline); display: flex; flex-direction: column; gap: 8px; }
+.posebar .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pose-pin circle { fill: var(--c-surface); stroke: var(--c-primary); stroke-width: 3; }
+.pose-pin line { stroke: var(--c-primary); stroke-width: 3; }
+.pose-pin text { fill: var(--c-text); font: 700 12px var(--font-mono); text-anchor: middle; paint-order: stroke; stroke: var(--c-surface); stroke-width: 4px; }

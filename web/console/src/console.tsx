@@ -29,11 +29,12 @@ import {
 import { AlarmQueue } from "./queue";
 import { RobotsAdminPage, SystemPage, UsersPage } from "./admin";
 import { MapManagePage } from "./mapmgmt";
+import { RoutesPage } from "./routepage";
 import { ListsPage, MapsZonesPage } from "./zonesadmin";
 
-type Page = "live" | "map" | "alarms" | "recordings" | "reports" | "admin/robots" | "admin/zones" | "admin/maps" | "admin/users" | "admin/lists" | "admin/system";
+type Page = "live" | "map" | "alarms" | "recordings" | "reports" | "admin/robots" | "admin/zones" | "admin/maps" | "admin/routes" | "admin/users" | "admin/lists" | "admin/system";
 
-const PAGES: Page[] = ["live", "map", "alarms", "recordings", "reports", "admin/robots", "admin/zones", "admin/maps", "admin/users", "admin/lists", "admin/system"];
+const PAGES: Page[] = ["live", "map", "alarms", "recordings", "reports", "admin/robots", "admin/zones", "admin/maps", "admin/routes", "admin/users", "admin/lists", "admin/system"];
 
 function readRoute(): { page: Page; robot: string | null; at: number | null } {
   const h = typeof location === "undefined" ? "" : location.hash;
@@ -181,6 +182,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
         {route.page === "admin/system" && me.role === "admin" && <SystemPage />}
         {route.page === "admin/zones" && me.role === "admin" && <MapsZonesPage say={say} />}
         {route.page === "admin/maps" && me.role === "admin" && <MapManagePage say={say} />}
+        {route.page === "admin/routes" && me.role === "admin" && <RoutesPage say={say} />}
         {route.page === "admin/lists" && me.role === "admin" && <ListsPage say={say} />}
         {route.page === "reports" && <ReportsPage me={me} now={now} />}
         {route.page === "recordings" && (
@@ -188,7 +190,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
             robot={route.robot} at={route.at} say={say} />
         )}
         {route.page === "map" && (
-          <MapPage units={units} p1={p1} now={now} selected={route.robot ?? firstP1?.robot ?? null}
+          <MapPage units={units} p1={p1} now={now} role={me.role} selected={route.robot ?? firstP1?.robot ?? null}
             onSelect={(id) => go("map", id)}
             onVideo={(id) => { go("live"); window.setTimeout(() => document.getElementById(`unit-${id}`)?.scrollIntoView(), 50); }} />
         )}
@@ -301,6 +303,7 @@ const ADMIN: { id: Page | null; key: Key }[] = [
   { id: "admin/robots", key: "tabRobotsAdmin" },
   { id: "admin/zones", key: "tabMapsZones" },
   { id: "admin/maps", key: "tabMapMgmt" },
+  { id: "admin/routes", key: "tabRoutes" },
   { id: "admin/users", key: "tabUsers" },
   { id: "admin/lists", key: "tabLists" },
   { id: "admin/system", key: "tabSystem" },

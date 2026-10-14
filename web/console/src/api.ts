@@ -4,6 +4,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** 站点回的整个 JSON(比如路线校验没过时的逐点 errors);没有 = undefined。 */
+    readonly data?: unknown,
   ) {
     super(message);
   }
@@ -47,7 +49,7 @@ export async function api<T = unknown>(method: "GET" | "POST", path: string, bod
     const msg = (data as { error?: string }).error ?? `HTTP ${resp.status}`;
     // 登录本身、开页时问「我是谁」的 401 不算「过期」:只有用着用着被踢才回登录页并提示
     if (resp.status === 401 && path !== "/api/login" && path !== "/api/me") onUnauthorized.cb();
-    throw new ApiError(resp.status, msg);
+    throw new ApiError(resp.status, msg, data);
   }
   return data as T;
 }
