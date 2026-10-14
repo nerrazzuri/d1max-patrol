@@ -10,6 +10,7 @@ import { StateText, type UnitInfo } from "./live";
 import { MapCanvas, type CanvasArea, type LegendKey } from "./mapcanvas";
 import { heading, namedAreas, onMap, toPx, type PreviewMeta, type Pt } from "./mapview";
 import { abnormal, alarmState, robotMap, type Alert } from "./model";
+import { usePosePick } from "./posepick";
 
 /** 屏上的大小(像素):狗的圆点半径、报警圈半径、狗编号字号。 */
 const BOT_R = 7;
@@ -30,7 +31,7 @@ export function mapAreas(meta: PreviewMeta, sec: { zone: string; points: Pt[] }[
   return named;
 }
 
-export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; selected: string | null; onSelect: (id: string) => void; onVideo: (id: string) => void }) {
+export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; selected: string | null; onSelect: (id: string) => void; onVideo: (id: string) => void; role?: string }) {
   const which = props.units.map((u) => robotMap(u.robot)).find((m) => m) ?? null;
   const [meta, setMeta] = useState<PreviewMeta | null>(null);
   const [areas, setAreas] = useState<{ zone: string; points: Pt[] }[]>([]);
@@ -44,6 +45,9 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
     api<{ areas: { zone: string; points: Pt[] }[] }>("GET", `${base}/areas`).then((d) => setAreas(d.areas)).catch(() => setAreas([]));
   }, [key]);
   const sel = props.units.find((u) => u.robot.robot_id === props.selected) ?? props.units[0];
+  // 点图 → 去这里 / 在这里设位置(posepick.tsx;只有管理员、保安)
+  const pose = usePosePick({ meta, map: which ? { map_id: which.map_id, version: which.version } : null,
+    robotId: sel?.robot.robot_id ?? null, robotAt: sel?.robot.loc?.pose ?? null, role: props.role ?? "" });
 
   // 图上真画得出来的报警点、狗(图例只列有的)
   const pins = !which || !meta ? [] : props.p1.flatMap((a) => {
@@ -62,12 +66,12 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
 
   return (
     <div class="mappage">
-      <div class="mapbox">
+      <div class="mapbox" {...pose.wrapProps}>
         {!which || !meta ? (
           <p class="empty">{t("noMap")}</p>
         ) : (
           <MapCanvas meta={meta} raster={`/api/maps/${enc(which.map_id)}/${enc(which.version)}/preview.png`} label={t("mapAria")}
-            areas={mapAreas(meta, areas)} legend={legend}
+            areas={mapAreas(meta, areas)} legend={legend} drawing={!!pose.onPick} onPick={pose.onPick}
             // 区域名让开报警圈、狗(圆点 + 下面的编号)
             avoid={(s) => [
               ...pins.map(({ px, py }) => { const [x, y] = s.px(px, py); return { x, y, r: PIN_R + 2 }; }),
@@ -75,6 +79,7 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
             ]}
             marks={(s) => (
               <>
+                {pose.marks(s)}
                 {pins.map(({ a, px, py }) => {
                   const [x, y] = s.px(px, py);
                   const h = PIN_R / 2.5;
@@ -95,7 +100,7 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
                   const a = abnormal(u.state);
                   const on = u.robot.robot_id === sel?.robot.robot_id;
                   return (
-                    <g key={u.robot.robot_id} class={`bot ${a ?? "ok"}${on ? " on" : ""}`} onClick={() => props.onSelect(u.robot.robot_id)}>
+                    <g key={u.robot.robot_id} class={`bot ${a ?? "ok"}${on ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); props.onSelect(u.robot.robot_id); }}>
                       <line x1={x} y1={y} x2={x + ((ex - x) / n) * len} y2={y + ((ey - y) / n) * len} class="bot-head" />
                       <circle cx={x} cy={y} r={BOT_R} class="bot-dot" />
                       <text x={x} y={y + BOT_R + LABEL_PX + 2} class="bot-label" font-size={LABEL_PX}>{u.robot.robot_id}</text>
@@ -105,6 +110,7 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
               </>
             )} />
         )}
+        {pose.panel}
       </div>
       <aside class="sidebar" aria-label={t("tabMap")}>
         {sel && (
