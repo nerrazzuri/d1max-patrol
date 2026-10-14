@@ -399,6 +399,14 @@ def add_camera(db: SiteDB, cam: Camera, *, now_ms: int) -> None:
                    int(cam.motion), now_ms))
 
 
+def update_camera_keep_password(db: SiteDB, cam: Camera) -> bool:
+    """改一台已登记的摄像头、**保留库里原来的口令**(原样,不解开再封;网页上改配置没重填口令时用)。"""
+    with db.tx() as c:
+        return c.execute("UPDATE cameras SET onvif_url=?, username=?, zone=?, rtsp_url=?, motion=? "
+                         "WHERE name=?", (cam.onvif_url, cam.username, cam.zone, cam.rtsp_url,
+                                          int(cam.motion), cam.name)).rowcount > 0
+
+
 def remove_camera(db: SiteDB, name: str) -> bool:
     with db.tx() as c:
         return c.execute("DELETE FROM cameras WHERE name=?", (name,)).rowcount > 0

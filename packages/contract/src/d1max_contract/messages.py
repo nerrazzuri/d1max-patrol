@@ -440,8 +440,8 @@ class Telemetry:
     #: W09e:RTK 最新一条解 ``{"fix", "lat", "lon", "alt", "sats", "hdop", "std_h_m", "age_s",
     #: "stamp_ms", "stale"?}``(没配 RTK 不发,老狗也不带)。
     rtk: dict[str, Any] | None = None
-    #: 运营可视化:正在导航时的规划路径 ``{"seq", "path"?: [[x, y], ...]}``(``d1max_agent.nav_report``;
-    #: 没在导航、老狗都不发这个键)。
+    #: 运营可视化:正在导航时的规划路径 ``{"seq", "path"?: [[x, y], ...]}``
+    #: (``d1max_agent.nav_report``;没在导航、老狗都不发这个键)。
     nav: dict[str, Any] | None = None
 
     def to_wire(self) -> dict[str, Any]:

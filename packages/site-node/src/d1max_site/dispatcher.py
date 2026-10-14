@@ -174,6 +174,8 @@ class Dispatcher:
         self.maps: Any = None
         #: 禁行区、限速区(``NavZones``,W10):派单前核狗上的区域修订、补发没同步的。
         self.zones: Any = None
+        #: 运行可视化(``RunViz``,运营可视化):狗视图里带被挡 / 重规划状态。
+        self.runviz: Any = None
         self._zones_sent: dict[tuple[str, int], int] = {}
         #: 新事件(去重之后)的回调:排程执行器靠它回写这一趟的结果。
         self._event_cbs: list[Callable[[str, Event], None]] = []
@@ -321,15 +323,20 @@ class Dispatcher:
         status = c.status.to_wire() if c is not None and c.status is not None else None
         caps = (c.capabilities.to_wire()
                 if c is not None and c.capabilities is not None else None)
-        return {"robot_id": robot_id, "revoked": rec.revoked,
-                "active": self.registry.active(robot_id, now_ms=self._now()),
-                "expires_at": rec.expires_at, "status": status, "capabilities": caps,
-                "fresh": self._fresh(c), "held": self.held(robot_id),
-                "manual_only": self.registry.manual_only(robot_id),
-                "running": self.running_view(c),
-                "loc": self._loc_view(c), "clock_skew_s": _round1(self.clock_skew_s(robot_id)),
-                # W09e:最近一份遥测里的 RTK 解(没配 RTK、老狗都是 None)
-                "rtk": c.telemetry.rtk if c is not None and c.telemetry is not None else None}
+        out = {"robot_id": robot_id, "revoked": rec.revoked,
+               "active": self.registry.active(robot_id, now_ms=self._now()),
+               "expires_at": rec.expires_at, "status": status, "capabilities": caps,
+               "fresh": self._fresh(c), "held": self.held(robot_id),
+               "manual_only": self.registry.manual_only(robot_id),
+               "running": self.running_view(c),
+               "loc": self._loc_view(c), "clock_skew_s": _round1(self.clock_skew_s(robot_id)),
+               # W09e:最近一份遥测里的 RTK 解(没配 RTK、老狗都是 None)
+               "rtk": c.telemetry.rtk if c is not None and c.telemetry is not None else None}
+        # 运营可视化:被挡多久、为什么、重规划几次(``runviz.RunViz``);没有被挡 / 重规划就没有这个键
+        nav = self.runviz.nav_summary(robot_id) if self.runviz is not None else None
+        if nav:
+            out["nav"] = nav
+        return out
 
     @staticmethod
     def _loc_view(c: DispatchClient | None) -> dict[str, Any] | None:

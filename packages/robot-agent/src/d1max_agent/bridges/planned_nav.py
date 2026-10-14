@@ -490,7 +490,7 @@ class PlannedNavBackend(HalNavBackend):
         await super().goto(pose)
 
     def current_path(self) -> tuple[tuple[float, float], ...] | None:
-        """正在走的规划路径(地图坐标,米);没在走(没规划、收尾了)是 ``None``。给遥测上报用(运营可视化)。"""
+        """正在走的规划路径(地图坐标,米);没在走(没规划、收尾了)是 ``None``。给遥测上报用。"""
         return self._path.points if self._path is not None else None
 
     def _start_replan(self, *, detour: bool = False, why: str = "off_route") -> None:
@@ -505,8 +505,8 @@ class PlannedNavBackend(HalNavBackend):
         else:
             self._replans += 1
         if self.on_event is not None:
-            # 运营可视化:站点据此在状态里写「重规划了几次、为什么」(why: off_route 偏离路径 / zones 区域
-            # 换了 / near_nogo 离禁行区太近 / detour 绕障)
+            # 运营可视化:站点据此在状态里写「重规划了几次、为什么」(why:
+            # off_route 偏离路径 / zones 区域换了 / near_nogo 离禁行区太近 / detour 绕障)
             self.on_event("nav_replan", {"why": "detour" if detour else why, "n": self._replans})
         gen = self._gen
         target = self._target
