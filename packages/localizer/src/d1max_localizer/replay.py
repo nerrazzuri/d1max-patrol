@@ -183,7 +183,8 @@ def agent_view(msgs: Sequence[tuple[float, Any]], *,
                odom: Sequence[tuple[float, tuple[float, float, float]]] = ()) -> View:
     """把报文流喂给代理的 ``BridgeLocalizer``(W09a 同一份代码),每条报文之后记一行:
     ``(时刻, 信不信, 为什么, 这条是位姿的话它的 stamp_ns)``。
-    ``odom`` 是 ``[(时刻, (x, y, yaw))]``(录包里的里程替身);空的话不做交叉校验、不推算。"""
+    ``odom`` 是 ``[(时刻, (x, y, yaw))]``(录包里的里程替身);空的话不做交叉校验、不推算,也不核
+    锚(代理按「根本没有里程」起,对账 S1 之后真代理没有能核的锚不认跳过的)。"""
     from d1max_agent.bridge_localizer import BridgeLocalizer
 
     return asyncio.run(_agent_view(BridgeLocalizer, msgs, odom))
@@ -193,7 +194,7 @@ async def _agent_view(cls: Any, msgs: Sequence[tuple[float, Any]],
                       odom: Sequence[tuple[float, tuple[float, float, float]]]) -> View:
     clock = _Clock()
     clock.t = msgs[0][0] if msgs else 0.0
-    agent = cls(monotonic=clock)
+    agent = cls(monotonic=clock, odometry=bool(odom))
 
     class _Link:
         async def request(self, make: Any, timeout_s: float) -> Reply:
