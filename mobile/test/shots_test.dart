@@ -16,6 +16,8 @@ import 'package:d1max_patrol/ui/nw/nw_cards.dart';
 import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
 import 'package:d1max_patrol/ui/site_alert_scene.dart';
+import 'package:d1max_patrol/ui/site_mapping.dart' show MapMark, SiteMapPreviewPage;
+import 'package:d1max_patrol/ui/site_maps.dart' show SiteMapTab;
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_teleop.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +26,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi;
+import 'support/fake_map.dart';
 import 'support/fake_site.dart' show siteFixture;
 
 final _out = Platform.environment['D1MAX_SHOTS'];
@@ -56,10 +59,10 @@ Map<String, dynamic> _alert(String level, String kind, String title, {String det
     };
 
 /// 没确认的 P1：狗看见人（带防区、距离、位置）。
-Map<String, dynamic> _p1Row() => _alert('P1', 'dog_sees_person', '狗看见人了:1 个人,最近 6.2 m', detail: '布防中', context: <String, dynamic>{
+Map<String, dynamic> _p1Row({Map<String, dynamic>? pose}) => _alert('P1', 'dog_sees_person', '狗看见人了:1 个人,最近 6.2 m', detail: '布防中', context: <String, dynamic>{
       'zone': 'East wall', 'task_id': 'persons',
       'persons': <String, dynamic>{'count': 1, 'nearest_m': 6.2},
-      'pose': <String, dynamic>{'map_id': 'estate-1', 'map_version': '7', 'x': 3.0, 'y': 4.0},
+      'pose': pose ?? <String, dynamic>{'map_id': 'estate-1', 'map_version': '7', 'x': 3.0, 'y': 4.0},
     });
 
 /// 值守汇总：真站点的夹具，各级告警数换成给的。
@@ -95,6 +98,37 @@ FakeApi _deterring() => FakeApi('guard')
   ..deterRows = [
     <String, dynamic>{'robot_id': 'A', 'level': 1, 'auto': true, 'next_in_s': 30, 'started_ms': _t0 + 4000}
   ];
+
+/// 告警页、转了的图：狗看见人的位置在这张图上。
+FakeApi _deteringOnMap() => Rot23Api('guard')
+  ..deterRows = [
+    <String, dynamic>{'robot_id': 'A', 'level': 1, 'auto': true, 'next_in_s': 30, 'started_ms': _t0 + 4000}
+  ];
+
+/// 地图栏放大两下（比例尺、片区名字跟着变）。
+Future<void> _mapZoomed(WidgetTester t) async {
+  await _tab(NwShell.mapKey)(t);
+  await t.tap(find.byKey(SiteMapTab.zoomInKey));
+  await t.pump();
+  await t.tap(find.byKey(SiteMapTab.zoomInKey));
+  await t.pumpAndSettle();
+}
+
+/// 图片要真解码出来才画得上去（`Image.memory` 在测试里是异步的）。
+Future<void> _decoded(WidgetTester t) async {
+  await t.pumpAndSettle();
+  for (final e in find.byType(Image).evaluate()) {
+    await t.runAsync(() => precacheImage((e.widget as Image).image, e));
+  }
+  await t.pumpAndSettle();
+}
+
+Future<void> Function(WidgetTester) _then(
+        Future<void> Function(WidgetTester) a, Future<void> Function(WidgetTester) b) =>
+    (t) async {
+      await a(t);
+      await b(t);
+    };
 
 Future<void> _settle(WidgetTester t) => t.pumpAndSettle();
 
@@ -222,6 +256,32 @@ void main() {
     '11-teleop': _Shot(_wide, () => SiteTeleopPage(api: _teleopApi = FakeApi('guard'), robotId: 'A'),
         ready: _granted, themes: const [Brightness.dark]),
     '12-duty-landscape': _Shot(_wide, () => NwShell(api: _busy('guard'), title: 'East Gate Estate', ring: () {})),
+    // 地图给客户看得懂：转 23° 摆正、平面图、片区名字、图例、比例尺
+    '13-map-plan': _Shot(_phone, () => NwShell(api: Rot23Api('admin'), title: 'East Gate Estate', ring: () {}),
+        ready: _then(_tab(NwShell.mapKey), _decoded)),
+    '13b-map-raster': _Shot(
+        _phone, () => NwShell(api: Rot23Api('admin', plan: false), title: 'East Gate Estate', ring: () {}),
+        ready: _then(_tab(NwShell.mapKey), _decoded)),
+    '13c-map-zoomed': _Shot(_phone, () => NwShell(api: Rot23Api('admin'), title: 'East Gate Estate', ring: () {}),
+        ready: _then(_mapZoomed, _decoded)),
+    '13d-map-landscape': _Shot(_wide, () => NwShell(api: Rot23Api('admin'), title: 'East Gate Estate', ring: () {}),
+        ready: _then(_tab(NwShell.mapKey), _decoded)),
+    '13e-map-desktop': _Shot(
+        const Size(1280, 720), () => NwShell(api: Rot23Api('admin'), title: 'East Gate Estate', ring: () {}),
+        ready: _then(_tab(NwShell.mapKey), _decoded)),
+    '14-alarm-map-rot': _Shot(
+        _phone,
+        () => SiteAlertScenePage(
+            api: _deteringOnMap(),
+            alert: Alert.fromWire(_p1Row(pose: <String, dynamic>{'map_id': 'estate-1', 'map_version': '8', 'x': -3.0, 'y': 4.0})),
+            now: () => DateTime.fromMillisecondsSinceEpoch(_t0 + 42000)),
+        ready: _toMiniMap),
+    '15-map-preview-rot': _Shot(
+        _wide,
+        () => SiteMapPreviewPage(api: Rot23Api('admin'), mapId: 'estate-1', version: '8', marks: const [
+              MapMark('Robot A', -3.0, 4.0, Colors.red),
+            ]),
+        ready: _decoded),
   };
   for (final lang in _langs) {
     for (final e in pages.entries) {

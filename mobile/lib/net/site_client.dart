@@ -579,6 +579,10 @@ abstract class SiteApi {
   /// 预览图（灰度 PNG）。
   Future<Uint8List> mapPreviewPng(String mapId, String version);
 
+  /// 平面图（预览 JSON 里的 `plan.url`，灰度 + 透明的 PNG）：跟 [mapPreviewPng] 一样钉证书、带令牌取。
+  /// 只取这个站点自己的地址（别的主机、端口、协议不去，令牌不外送）。
+  Future<Uint8List> mapPlanPng(String url);
+
   /// 这张图这一版的禁行区、限速区（W10，谁都能看）：`{revision, zones: [{id, kind: nogo|slow, label,
   /// polygon: [[x, y]], max_speed_mps?}], confirmed: {revision, by, at_ms, current}?, confirm_text}`。
   Future<Map<String, dynamic>> mapZones(String mapId, String version);
@@ -1029,6 +1033,15 @@ class SiteClient implements SiteApi {
   Future<Uint8List> mapPreviewPng(String mapId, String version) => _bytes(
       '/api/maps/${Uri.encodeComponent(mapId)}/${Uri.encodeComponent(version)}/preview.png',
       maxPhotoBytes, tr('Map preview', '地图预览'));
+
+  @override
+  Future<Uint8List> mapPlanPng(String url) async {
+    final u = base.resolve(url);
+    if (u.scheme != base.scheme || u.host != base.host || u.port != base.port) {
+      throw SiteError(0, tr('Floor plan is not on this site', '平面图不在这个站点上'));
+    }
+    return _bytes(u.toString(), maxPhotoBytes, tr('Floor plan', '平面图'));
+  }
 
   @override
   Future<List<Map<String, dynamic>>> recordings(

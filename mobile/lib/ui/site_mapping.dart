@@ -21,6 +21,8 @@ import 'package:flutter/material.dart';
 
 import '../l10n.dart';
 import '../net/site_client.dart';
+import 'map_view.dart';
+import 'nw/nw_map_raster.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 
@@ -605,6 +607,10 @@ class SiteMapPreviewPage extends StatefulWidget {
   static const Key overlayKey = Key('preview-overlay');
   static const Key zonesKey = Key('preview-zones');
   static const Key canvasKey = Key('preview-canvas');
+
+  /// 片区淡淡的底和边（`CustomPaint`）；片区的名字（`Text`）。
+  static const Key areasKey = Key('preview-areas');
+  static Key areaLabelKey(String name) => Key('preview-area-$name');
   static const Key drawNogoKey = Key('zone-draw-nogo');
   static const Key drawSlowKey = Key('zone-draw-slow');
   static const Key finishKey = Key('zone-finish');
@@ -619,7 +625,11 @@ class SiteMapPreviewPage extends StatefulWidget {
 }
 
 class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
-  late final Future<(Map<String, dynamic>, Uint8List)> _data = _load();
+  /// （预览 JSON，底图，底图是不是平面图）。
+  late final Future<(Map<String, dynamic>, Uint8List, bool)> _data = _load();
+
+  /// 图的缩放（片区的名字跟着它决定放不放得下）。
+  final TransformationController _zoom = TransformationController();
 
   /// 区域（W10）：`GET …/zones` 那一份；取不到就只看图。
   Map<String, dynamic>? _zones;
@@ -632,15 +642,23 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
   bool _busy = false;
   String? _msg;
 
-  Future<(Map<String, dynamic>, Uint8List)> _load() async => (
-        await widget.api.mapPreview(widget.mapId, widget.version),
-        await widget.api.mapPreviewPng(widget.mapId, widget.version),
-      );
+  /// 预览 JSON，再取底图：站点给了平面图先取平面图，取不到退回栅格预览图（[loadMapBase]）。
+  Future<(Map<String, dynamic>, Uint8List, bool)> _load() async {
+    final meta = await widget.api.mapPreview(widget.mapId, widget.version);
+    final (png, plan) = await loadMapBase(widget.api, widget.mapId, widget.version, MapGeo.fromPreview(meta));
+    return (meta, png, plan);
+  }
 
   @override
   void initState() {
     super.initState();
     _loadZones();
+  }
+
+  @override
+  void dispose() {
+    _zoom.dispose();
+    super.dispose();
   }
 
   Future<void> _loadZones() async {
@@ -742,7 +760,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text('${widget.mapId}:${widget.version}')),
-      body: FutureBuilder<(Map<String, dynamic>, Uint8List)>(
+      body: FutureBuilder<(Map<String, dynamic>, Uint8List, bool)>(
         future: _data,
         builder: (context, snap) {
           if (snap.hasError) {
@@ -755,13 +773,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                         '看不了：${e is SiteError ? e.message : e}')));
           }
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-          final (meta, png) = snap.data!;
-          final w = (meta['width'] as num? ?? 1).toDouble();
-          final h = (meta['height'] as num? ?? 1).toDouble();
-          final mpp = (meta['m_per_px'] as num? ?? 1).toDouble();
-          final left = (meta['left_x'] as num? ?? 0).toDouble();
-          final top = (meta['top_y'] as num? ?? 0).toDouble();
-          Offset px(double x, double y) => Offset((x - left) / mpp, (top - y) / mpp);
+          final (meta, png, plan) = snap.data!;
+          final geo = MapGeo.fromPreview(meta);
+          final w = geo.width, h = geo.height, mpp = geo.mPerPx, rad = geo.radians;
+          Offset px(double x, double y) => geo.toPx(x, y);
           final pts = (meta['standby'] as List? ?? const []).cast<Map<String, dynamic>>();
           final pixels = [
             for (final p in pts) px((p['x'] as num).toDouble(), (p['y'] as num).toDouble()),
@@ -786,44 +801,66 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           ];
           final draft = [for (final p in _draft) px(p.dx, p.dy)];
           final r = math.max(2.0, math.max(w, h) / 120);
-          // 横屏：左边是图（能缩放），右边一栏是待命点、区域和比例。
+          final areas = [
+            for (final a in geo.areas) (a.name, [for (final p in a.points) px(p.dx, p.dy)]),
+          ];
+          final c = Nw.of(context);
+          // 横屏：左边是图（能缩放），右边一栏是待命点、区域和比例。图按站点给的转角摆正：点图加顶点时
+          // 点下去的位置 Flutter 按同一个变换反算回图的像素（GestureDetector 在转过的那一层里头）。
           return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Expanded(
-              child: InteractiveViewer(
-                maxScale: 8,
-                child: FittedBox(
-                  child: GestureDetector(
-                    key: SiteMapPreviewPage.canvasKey,
-                    // 画区域：点一下加一个顶点（图的像素 → 地图米）
-                    onTapUp: _drawing == null
-                        ? null
-                        : (d) => setState(() => _draft.add(Offset(
-                            left + d.localPosition.dx * mpp, top - d.localPosition.dy * mpp))),
-                    child: SizedBox(
-                      width: w,
-                      height: h,
-                      child: Stack(children: [
-                        Image.memory(png,
-                            width: w,
-                            height: h,
-                            filterQuality: FilterQuality.none,
-                            gaplessPlayback: true),
-                        CustomPaint(
-                            key: SiteMapPreviewPage.zonesKey,
-                            size: Size(w, h),
-                            painter: ZonesPainter(shapes, draft, radius: r)),
-                        CustomPaint(
-                            key: SiteMapPreviewPage.overlayKey,
-                            size: Size(w, h),
-                            painter: StandbyPainter(pixels, radius: r, homes: homePixels)),
-                        if (widget.marks.isNotEmpty)
-                          CustomPaint(
-                              key: SiteMapPreviewPage.marksKey,
-                              size: Size(w, h),
-                              painter: MarksPainter([
-                                for (final m in widget.marks) (px(m.x, m.y), m.color),
-                              ], radius: r * 2.5)),
-                      ]),
+              child: LayoutBuilder(
+                builder: (context, box) => InteractiveViewer(
+                  transformationController: _zoom,
+                  maxScale: 8,
+                  child: FittedBox(
+                    child: NwMapRotation(
+                      rad: rad,
+                      size: Size(w, h),
+                      child: GestureDetector(
+                        key: SiteMapPreviewPage.canvasKey,
+                        // 画区域：点一下加一个顶点（图的像素 → 地图米）
+                        onTapUp: _drawing == null
+                            ? null
+                            : (d) => setState(() => _draft.add(geo.toMap(d.localPosition))),
+                        child: SizedBox(
+                          width: w,
+                          height: h,
+                          child: Stack(children: [
+                            SizedBox(width: w, height: h, child: mapBaseImage(context, png, plan: plan)),
+                            if (areas.isNotEmpty)
+                              CustomPaint(
+                                  key: SiteMapPreviewPage.areasKey,
+                                  size: Size(w, h),
+                                  painter: AreasPainter([for (final a in areas) a.$2],
+                                      fill: mapAreaFill(c), stroke: mapAreaStroke(c), strokeWidth: r / 2)),
+                            CustomPaint(
+                                key: SiteMapPreviewPage.zonesKey,
+                                size: Size(w, h),
+                                painter: ZonesPainter(shapes, draft, radius: r)),
+                            CustomPaint(
+                                key: SiteMapPreviewPage.overlayKey,
+                                size: Size(w, h),
+                                painter: StandbyPainter(pixels, radius: r, homes: homePixels)),
+                            if (widget.marks.isNotEmpty)
+                              CustomPaint(
+                                  key: SiteMapPreviewPage.marksKey,
+                                  size: Size(w, h),
+                                  painter: MarksPainter([
+                                    for (final m in widget.marks) (px(m.x, m.y), m.color),
+                                  ], radius: r * 2.5)),
+                            if (areas.isNotEmpty)
+                              Positioned.fill(
+                                  child: MapAreaLabels(
+                                      areas: areas,
+                                      rad: rad,
+                                      // 图被 FittedBox 缩放了这么多（跟它一个算法）
+                                      unit: geo.fitScale(box.biggest),
+                                      zoom: _zoom,
+                                      labelKey: SiteMapPreviewPage.areaLabelKey)),
+                          ]),
+                        ),
+                      ),
                     ),
                   ),
                 ),

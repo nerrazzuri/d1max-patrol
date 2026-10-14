@@ -456,6 +456,25 @@ void main() {
     c.close();
   });
 
+  test('平面图（预览 JSON 的 plan.url）：站点自己的地址带令牌取字节；别的主机、端口、协议不去（令牌不外送）', () async {
+    final c = SiteClient(site.url, testCertFingerprint());
+    await c.login('alice', 'pw');
+    final png = await c.mapPlanPng('/api/maps/estate-1/8/plan.png');
+    expect(png, fakePlanPng);
+    expect(site.received.last.path, '/api/maps/estate-1/8/plan.png');
+    expect(site.received.last.auth, startsWith('Bearer '));
+    final n = site.received.length;
+    for (final url in [
+      'https://evil.example/api/maps/estate-1/8/plan.png',
+      'https://127.0.0.1:1/plan.png',
+      'http://127.0.0.1:${site.port}/plan.png',
+    ]) {
+      await expectLater(c.mapPlanPng(url), throwsA(isA<SiteError>()), reason: url);
+    }
+    expect(site.received.length, n, reason: '一个请求都没发出去');
+    c.close();
+  });
+
   test('建图日志：列表、尾巴的请求形状（名字编码、bytes 放查询串）', () async {
     final c = SiteClient(site.url, testCertFingerprint());
     await c.login('alice', 'pw');
