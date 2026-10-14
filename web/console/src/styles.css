@@ -39,6 +39,7 @@ a { color: var(--c-tertiary); }
 .shape.P1 { fill: var(--c-error); }
 .shape.P2 { fill: var(--c-warning); }
 .shape.P3 { stroke: var(--c-textMuted); }
+.shape.offline { stroke: var(--c-error); }
 .pri { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-weight: 700; }
 .pri.P1 { color: var(--c-error); }
 .pri.P2 { color: var(--c-warning); }
@@ -55,6 +56,7 @@ a { color: var(--c-tertiary); }
 .state.tone-warning { color: var(--c-warning); background: var(--c-warningSoft); }
 .state.tone-error { color: var(--c-error); background: var(--c-errorSoft); }
 .state .shape.P1, .state .shape.P2 { fill: currentColor; }
+.state .shape.offline { stroke: currentColor; }
 .batt { font-family: var(--font-mono); font-weight: 600; color: var(--c-success); }
 .batt.low { color: var(--c-warning); }
 

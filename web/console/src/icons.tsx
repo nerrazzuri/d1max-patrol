@@ -1,13 +1,22 @@
-// 图标(B0 专业版):优先级三重编码的形状(P1 实心菱形、P2 实心三角、P3 空心圆)、急停八边形,
+// 图标(B0 专业版):优先级三重编码的形状(P1 实心菱形、P2 实心三角、P3 空心圆)、离线(空心圆加一道斜杠,
+// 「没有」的意思;离线是红的,不能借 P2 的三角)、急停八边形,
 // 外加几个线条图标(Lucide 风格,ISC 许可的样子手画)。形状永远跟文字一起出现,不单独表意。
 import type { JSX } from "preact";
 
-export function Shape({ kind, size = 12 }: { kind: "P1" | "P2" | "P3"; size?: number }): JSX.Element {
+export type ShapeKind = "P1" | "P2" | "P3" | "offline";
+
+export function Shape({ kind, size = 12 }: { kind: ShapeKind; size?: number }): JSX.Element {
   return (
     <svg class={`shape ${kind}`} width={size} height={size} viewBox="0 0 12 12" aria-hidden="true">
       {kind === "P1" && <path d="M6 0l6 6-6 6-6-6z" />}
       {kind === "P2" && <path d="M6 1l6 10H0z" />}
       {kind === "P3" && <circle cx="6" cy="6" r="4.5" fill="none" stroke-width="1.5" />}
+      {kind === "offline" && (
+        <g fill="none" stroke-width="1.5" stroke-linecap="round">
+          <circle cx="6" cy="6" r="4.5" />
+          <path d="M2.8 9.2l6.4-6.4" />
+        </g>
+      )}
     </svg>
   );
 }
