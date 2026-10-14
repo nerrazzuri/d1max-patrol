@@ -2,6 +2,7 @@
 // 外加这一单新加的 /api/admin/robots(登记 / 出开通码 / 吊销)。
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
+import { CamerasPanel } from "./camadmin";
 import { hm, hms } from "./data";
 import { Confirm, Modal } from "./dialogs";
 import { t, type Key } from "./i18n";
@@ -186,12 +187,10 @@ interface Versions { site: { version: string; min_app_level?: number }; robots: 
 export function clientTooOld(c: ClientRow, minAppLevel: number | undefined): boolean {
   return c.kind === "app" && c.api_level != null && minAppLevel != null && c.api_level < minAppLevel;
 }
-interface CameraRow { name: string; zone: string; connected: boolean; error: string }
 
 export function RobotsAdminPage({ say }: { say: Say }) {
   const [robots, reload] = useLoad<{ robots: AdminRobot[] }>("/api/robots");
   const [versions] = useLoad<Versions>("/api/versions");
-  const [cams] = useLoad<{ cameras: CameraRow[] }>("/api/cameras");
   const [adding, setAdding] = useState(false);
   const [code, setCode] = useState<{ id: string; code: string; hours: number } | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -245,21 +244,7 @@ export function RobotsAdminPage({ say }: { say: Say }) {
           </tbody>
         </table>
       </section>
-      <section class="panel">
-        <div class="panel-head"><h2>{t("cameras")}</h2><span class="muted small push">{t("camerasHint")}</span></div>
-        <table class="grid">
-          <thead><tr><th>{t("cameraName")}</th><th>{t("colZone")}</th><th>{t("colOnline")}</th></tr></thead>
-          <tbody>
-            {cams && cams.cameras.length === 0 && <tr><td colSpan={3} class="muted">{t("noCameras")}</td></tr>}
-            {(cams?.cameras ?? []).map((c) => (
-              <tr key={c.name}>
-                <td class="mono">{c.name}</td><td>{c.zone}</td>
-                <td>{c.connected ? <span class="state tone-success">{t("connected")}</span> : <span class="state p2"><Shape kind="P2" />{t("notConnected")}</span>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      <CamerasPanel say={say} />
       {adding && (
         <AddRobot onClose={() => setAdding(false)} say={say}
           onDone={(id, c, h) => { setAdding(false); setCode({ id, code: c, hours: h }); reload(); }} />

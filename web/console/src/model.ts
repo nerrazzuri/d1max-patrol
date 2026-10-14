@@ -32,7 +32,22 @@ export interface Robot {
   fresh: boolean;
   revoked: boolean;
   held: unknown;
-  loc?: { pose?: { x: number; y: number; yaw: number } | null; anchored?: boolean } | null;
+  loc?: {
+    pose?: { x: number; y: number; yaw: number } | null;
+    anchored?: boolean;
+    // 运行可视化:来源、偏差、质量、变差、为什么不可信(狗遥测的 loc 块,老狗没有)
+    source?: string;
+    sigma_m?: number | null;
+    quality?: number | null;
+    reason?: string;
+    degraded?: string;
+    localizer?: string;
+  } | null;
+  /** 被挡 / 重规划的状态(站点 runviz;没被挡、没重规划就没有这个键)。 */
+  nav?: {
+    blocked?: { since_ms: number; for_s: number; reason: string; x: number | null; y: number | null; map_id: string; map_version: string };
+    replan?: { why: string; n: number; at_ms: number };
+  } | null;
   status?: {
     online: boolean;
     last_seen: number;

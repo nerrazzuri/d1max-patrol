@@ -442,3 +442,24 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 }
 .recbar input.hhmm { width: 76px; }
 .recbar input.hhmm.wide { width: 108px; }
+
+/* 运行可视化(runlayers.tsx、locpage.tsx、camadmin.tsx):规划路径虚线、轨迹细线、被挡三角、定位问题的点 */
+.rv-path { fill: none; stroke: var(--c-tertiary); stroke-width: 2.5; stroke-dasharray: 7 5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.rv-trail { fill: none; stroke: var(--c-textSecondary); stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; stroke-opacity: 0.85; vector-effect: non-scaling-stroke; }
+.rv-goal { fill: none; stroke: var(--c-tertiary); stroke-width: 2.5; stroke-linecap: round; }
+.rv-blocked path, .rv-blocked-sw { fill: var(--c-warning); stroke: var(--c-surface); stroke-width: 1.5; }
+.rv-ep { stroke: var(--c-warning); stroke-width: 2; }
+.rv-ep.lost { fill: var(--c-warning); fill-opacity: 0.75; }
+.rv-ep.degraded { fill: none; }
+.runlegend { padding: 0 8px 4px; }
+.sw .rv-path, .sw .rv-trail { vector-effect: none; }
+.runinfo { display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 18px; color: var(--c-textSecondary); }
+.runinfo .warn { color: var(--c-warning); font-weight: 600; }
+.runinfo .lost { color: var(--c-error); font-weight: 600; }
+.locpage { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+.locpage .filters { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: end; }
+.locpage .filters label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--c-textSecondary); }
+.locpage table.grid td.cause { max-width: 360px; overflow-wrap: anywhere; }
+.camform .warnlist { margin: 4px 0 0; padding-left: 18px; color: var(--c-warning); font-size: 12px; }
+.warncell { color: var(--c-warning); font-size: 12px; }
+.unit .runinfo { padding: 2px 12px 4px; }
