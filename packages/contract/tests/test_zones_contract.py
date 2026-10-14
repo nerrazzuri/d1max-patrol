@@ -245,6 +245,72 @@ def test_收紧_限速区_硬禁区_到期():
     assert not tightens(temp, _set([], rev=2), now_ms=t - 1)
 
 
+# ------------------------------------------------------------ 抹掉区(地图台账 44,用户 2026-10-14)
+
+
+def _erase(zid="e", poly=SQ, **kw):
+    return {"id": zid, "kind": "erase", "label": "抹掉", "polygon": poly} | kw
+
+
+def test_抹掉区_来回一致_狗当禁行守_硬的另说():
+    """``erase``:管理员在图上框一块「抹掉」—— 狗永远不去(规划、每拍回退跟禁行区一模一样),站点画图时
+    那一块抹成没建图。遥控(决策 65):跟普通禁行区一样不守,除非也标了硬禁区。"""
+    zs = _set([_nogo("a"), _erase("e"), _slow("s"), _erase("h", hard=True)])
+    assert ZoneSet.from_wire(zs.to_wire()) == zs
+    a, e, s, h = zs.zones
+    assert e.kind == "erase" and e.keep_out and a.keep_out and not s.keep_out
+    assert e.to_wire() == {"id": "e", "kind": "erase", "label": "抹掉",
+                           "polygon": [[0, 0], [2, 0], [2, 2], [0, 2]]}
+    assert [z.id for z in zs.nogo()] == ["a", "e", "h"], "狗守的禁行 = 禁行 + 抹掉"
+    assert [z.id for z in zs.erase()] == ["e", "h"]
+    assert [z.id for z in zs.hard()] == ["h"], "抹掉区只有标了硬的遥控才守"
+
+
+@pytest.mark.parametrize("bad", [
+    {"id": "e", "kind": "erase", "polygon": SQ, "max_speed_mps": 0.3},
+    {"id": "e", "kind": "erase", "polygon": SQ[:2]},
+    {"id": "e", "kind": "erase", "polygon": SQ, "hard": "yes"},
+    {"id": "e", "kind": "erased", "polygon": SQ},
+])
+def test_抹掉区_坏的拒(bad):
+    with pytest.raises(ContractError):
+        _set([bad])
+
+
+def test_抹掉区_收紧放宽():
+    """决策 66 的口径:加抹掉区 = 收紧(免确认),删、缩 = 放宽(要确认);抹掉跟禁行对狗一样严,
+    互相换(盖得住)算收紧;抹掉改成限速是放宽;去掉硬的标记是放宽。"""
+    base = _set([_nogo("a")])
+    assert tightens(base, _set([_nogo("a"), _erase("e", poly=BIG)], rev=2)), "加一块抹掉"
+    er = _set([_erase("e")])
+    assert not tightens(er, _set([], rev=2)), "删抹掉区:放宽"
+    assert not tightens(er, _set([_erase("e", poly=[[0, 0], [1, 0], [1, 1], [0, 1]])], rev=2))
+    assert tightens(er, _set([_erase("e", poly=BIG)], rev=2)), "放大"
+    assert tightens(er, _set([_nogo("n")], rev=2)), "抹掉换成同一块禁行:狗一样不去"
+    assert tightens(base, _set([_erase("e")], rev=2)), "禁行换成同一块抹掉:狗一样不去"
+    assert not tightens(er, _set([_slow("s", 0.1, poly=BIG)], rev=2)), "抹掉改成限速:放宽"
+    assert tightens(_set([_slow("s", 0.3)]), _set([_erase("e")], rev=2)), "限速改成抹掉:更严"
+    hard = _set([_erase("e", hard=True)])
+    assert not tightens(hard, _set([_erase("e")], rev=2)), "去掉硬的标记:放宽"
+    assert tightens(hard, _set([_nogo("n") | {"hard": True}], rev=2))
+
+
+def test_抹掉区_发给不认得的老狗_换成同一块禁行区_别的一字不差():
+    """老代理(能力里没有 ``zones_set.erase``)不认 ``erase``:整份区域集会被它拒掉(规划照旧用老的
+    那份、站点一直补发、派单一直拒「区域没同步」)。站点发给它的时候换成同一块**禁行区**(id、名字、
+    几何、硬、到期都不变)—— 对狗来说一模一样严,只是它不知道站点画图时要抹掉那一块。"""
+    zs = _set([_nogo("a"), _erase("e", hard=True, until_ms=1_800_000_000_000), _slow("s")], rev=7)
+    old = zs.erase_as_nogo()
+    assert old.revision == 7 and [z.kind for z in old.zones] == ["nogo", "nogo", "slow"]
+    assert old.zones[1].to_wire() == {"id": "e", "kind": "nogo", "label": "抹掉",
+                                      "polygon": [[0, 0], [2, 0], [2, 2], [0, 2]], "hard": True,
+                                      "until_ms": 1_800_000_000_000}
+    assert old.zones[0] == zs.zones[0] and old.zones[2] == zs.zones[2]
+    assert all(z.get("kind") in ("nogo", "slow") for z in old.to_wire()["zones"])
+    plain = _set([_nogo("a")])
+    assert plain.erase_as_nogo() is plain, "没有抹掉区就原样(线上一字不差)"
+
+
 def test_多边形包含():
     from d1max_contract.zones import polygon_contains
     sq = ((0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0))

@@ -488,8 +488,12 @@ class Dispatcher:
     async def _send_zones(self, rid: str, c: DispatchClient, zs: Any, tighten: bool,
                           issued_by: str) -> str:
         self._zones_sent[(rid, zs.revision)] = self._now()
+        # 地图台账 44:老代理(能力里没有 zones_set.erase)不认抹掉区,整份会被它拒掉 —— 发给它的换成
+        # 同一块禁行区(对狗一样严;修订号不变,派单门槛照旧按修订号核)
+        z = c.capabilities.tasks.get("zones_set") if c.capabilities is not None else None
+        wire = zs if (z or {}).get("erase") else zs.erase_as_nogo()
         try:
-            r = await self._send(c, rid, "zones_set", {"zones": zs.to_wire(), "tighten": tighten},
+            r = await self._send(c, rid, "zones_set", {"zones": wire.to_wire(), "tighten": tighten},
                                  issued_by=issued_by)
         except Exception as exc:  # noqa: BLE001 —— 一台发不出去不挡别的,补发兜底
             log.warning("给 %s 发区域第 %d 版没成:%s", rid, zs.revision, exc)

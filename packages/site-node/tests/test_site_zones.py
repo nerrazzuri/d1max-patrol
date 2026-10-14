@@ -114,13 +114,53 @@ def test_改了区域_发给狗_狗上换上_能力里的修订跟着变(站点)
     s = 站点
     alice = _登(s, "alice")
     _等(lambda: _zcaps(s) is not None)
-    assert _zcaps(s) == {"rev": 0, "enforced": False, "teleop_hard": True}   # 决策 65 起多一项
+    # 决策 65 起多一项 teleop_hard,地图台账 44 起多一项 erase
+    assert _zcaps(s) == {"rev": 0, "enforced": False, "teleop_hard": True, "erase": True}
     code, d = s.req("POST", ZP, {"zones": [SLOW], "base_revision": 0}, token=alice)
     assert code == 200 and d["pushed"] == {"A": ""}, d
     _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
     assert s.agent._zones.revision == 1
     row = s.db.query("SELECT payload FROM commands WHERE kind='zones_set'")[-1]
     assert '"tighten": true' in row["payload"]
+
+
+ERASE = {"id": "junk", "kind": "erase", "label": "抹掉", "hard": True,
+         "polygon": [[2, 2], [3, 2], [3, 3], [2, 3]]}
+
+
+def _sent(s):
+    import json
+    row = s.db.query("SELECT payload FROM commands WHERE kind='zones_set' ORDER BY rowid")[-1]
+    return json.loads(row["payload"])["zones"]
+
+
+def test_抹掉区_认得的狗原样发_老狗换成同一块禁行区_补发也一样(站点):
+    """地图台账 44:老代理(能力里没有 ``zones_set.erase``)不认 ``erase``,会把整份区域集拒掉 ——
+    站点发给它时换成同一块禁行区(id、名字、几何、硬都不变),它照收、照守;认得的狗原样收。加抹掉区是
+    收紧(决策 66)。"""
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
+    code, d = s.req("POST", ZP, {"zones": [POND, ERASE], "base_revision": 0}, token=alice)
+    assert code == 200 and d["pushed"] == {"A": ""} and d["tighten"] is True, d
+    assert [z["kind"] for z in _sent(s)["zones"]] == ["nogo", "erase"]
+    _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
+    assert [z.kind for z in s.agent._zones.zones] == ["nogo", "erase"]
+    del _zcaps(s)["erase"]                              # 当它是认不得抹掉区的老狗
+    code, d = s.req("POST", ZP, {"zones": [POND, ERASE, SLOW], "base_revision": 1}, token=alice)
+    assert code == 200 and d["pushed"] == {"A": ""}, d
+    old = _sent(s)
+    assert old["revision"] == 2 and [z["kind"] for z in old["zones"]] == ["nogo", "nogo", "slow"]
+    assert old["zones"][1] == {"id": "junk", "kind": "nogo", "label": "抹掉", "hard": True,
+                               "polygon": [[2, 2], [3, 2], [3, 3], [2, 3]]}
+    _等(lambda: _zcaps(s).get("rev") == 2, timeout=8)
+    # 站点自己那份还是抹掉区(画图时抹掉、手机网页认得)
+    mine = s.req("GET", ZP, token=alice)[1]["zones"]
+    assert [z["kind"] for z in mine] == ["nogo", "erase", "slow"]
+    s.disp.zones.put(MAP[0], MAP[1], [ERASE], base_revision=2, by="alice")   # 没发出去:补发
+    _zcaps(s).pop("erase", None)
+    assert s.loop.call(lambda: s.disp.sync_zones()) == ["A"]
+    assert [z["kind"] for z in _sent(s)["zones"]] == ["nogo"]
 
 
 def test_派单门槛_修订对不上拒_补发之后放行(站点):
@@ -267,6 +307,20 @@ HARD = POND | {"hard": True}
 def _z(tmp_path, t0=1000):
     t = [t0]
     return NavZones(SiteDB(tmp_path / "s.db"), now_ms=lambda: t[0]), t
+
+
+def test_抹掉区_加了免确认_删了要确认(tmp_path):
+    """地图台账 44 + 决策 66:画一块抹掉区是收紧(改的人就算确认了,派单不断);删掉是放宽(要管理员
+    确认)。"""
+    z, _ = _z(tmp_path)
+    z.put("m", "1", [POND], base_revision=0, by="alice")
+    z.confirm("m", "1", revision=1, by="alice")
+    zs, tight = z.put("m", "1", [POND, ERASE], base_revision=1, by="bob")
+    assert tight and z.confirmed_current("m", "1")
+    assert [x.kind for x in zs.zones] == ["nogo", "erase"]
+    assert z.view("m", "1")["confirmed"]["how"] == "tighten"
+    zs, tight = z.put("m", "1", [POND], base_revision=2, by="bob")
+    assert not tight and not z.confirmed_current("m", "1"), "删抹掉区要确认"
 
 
 def test_收紧免确认_放宽要确认_又紧又松算放宽(tmp_path):

@@ -136,7 +136,8 @@ async def test_没有规划栅格_不宣告能自主(台):
     broker, c, r, ears, rt, site, mk = 台
     caps = _caps(ears)
     assert caps.tasks["zones_set"] == {"rev": 0, "enforced": True, "plan_ok": False,
-                                       "problem": "没有规划栅格", "teleop_hard": True}
+                                       "problem": "没有规划栅格", "teleop_hard": True,
+                                       "erase": True}
     assert "goto" not in rt.processor.supported and "patrol" not in rt.processor.supported
 
 
@@ -145,8 +146,31 @@ async def test_换图载规划栅格_能规划(台):
     await _换图(rt, broker, site, c, ears)
     assert rt.parts.nav.plan_ok
     z = _caps(ears).tasks["zones_set"]
-    assert z == {"rev": 0, "enforced": True, "plan_ok": True, "teleop_hard": True}
+    assert z == {"rev": 0, "enforced": True, "plan_ok": True, "teleop_hard": True,
+                 "erase": True}
     assert {"goto", "patrol"} <= rt.processor.supported
+
+
+async def test_抹掉区_收下_规划当禁行_标了硬的遥控也守_能力里报认得(台):
+    """地图台账 44:新代理认 ``erase``(能力 ``zones_set.erase``,站点据此决定发原样还是换成禁行区);
+    加抹掉区是收紧、立刻换上;规划、每拍回退当禁行;标了硬的进遥控要守的那一份。"""
+    broker, c, r, ears, rt, site, mk = 台
+    await _换图(rt, broker, site, c, ears)
+    assert _caps(ears).tasks["zones_set"]["erase"] is True
+    junk = {"id": "junk", "kind": "erase", "label": "抹掉",
+            "polygon": [[6, 1], [7, 1], [7, 2], [6, 2]]}
+    pit = junk | {"id": "pit", "hard": True, "polygon": [[8, 1], [9, 1], [9, 2], [8, 2]]}
+    await rt._on_cmd(_cmd("zones_set", _zs(1, [POND, junk, pit]), "z1", c))
+    await _跑(rt, broker, 2)
+    ack = ears.by["cmd/ack"][-1]
+    assert ack["result"] == "accepted" and ack["data"] == {"revision": 1, "deferred": False}
+    nav = rt.parts.nav
+    assert nav.nogo_at(6.5, 1.5).id == "junk" and nav.nogo_at(8.5, 1.5).id == "pit"
+    assert sorted(z.id for z in rt._hard_zones()) == ["pit"]
+    # 删掉抹掉区 = 放宽:狗空闲就换上(这里空闲)
+    await rt._on_cmd(_cmd("zones_set", _zs(2, [POND]), "z2", c))
+    await _跑(rt, broker, 2)
+    assert nav.zones.revision == 2 and nav.nogo_at(6.5, 1.5) is None
 
 
 async def test_规划栅格坏了_记原因(台):
@@ -259,7 +283,8 @@ async def test_直线桥_报不守区域(tmp_path):
     await rt.start()
     try:
         await _跑(rt, broker, 2)
-        assert _caps(ears).tasks["zones_set"] == {"rev": 0, "enforced": False, "teleop_hard": True}
+        assert _caps(ears).tasks["zones_set"] == {"rev": 0, "enforced": False,
+                                                  "teleop_hard": True, "erase": True}
         await rt._on_cmd(_cmd("zones_set", _zs(1, [POND], ver="1"), "z1", c))
         await _跑(rt, broker, 2)
         assert ears.by["cmd/ack"][-1]["result"] == "accepted"
@@ -286,7 +311,8 @@ async def test_遥控守硬禁区_直线桥也守_续租回执带着为什么截
     await rt.start()
     try:
         await _跑(rt, broker, 2)
-        assert _caps(ears).tasks["zones_set"] == {"rev": 0, "enforced": False, "teleop_hard": True}
+        assert _caps(ears).tasks["zones_set"] == {"rev": 0, "enforced": False,
+                                                  "teleop_hard": True, "erase": True}
         pool = POND | {"polygon": [[2, -3], [6, -3], [6, 3], [2, 3]], "hard": True}
         await rt._on_cmd(_cmd("zones_set", _zs(1, [pool], ver="1"), "z1", c))
         await _跑(rt, broker, 2)
