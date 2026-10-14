@@ -29,14 +29,19 @@ vivo、荣耀这些厂商的通道接好了,站点只调极光一个接口。
   - 发成功的推送号记进 ``push_sent``(跟着库走,站点重启也在);没发成功的下一轮只补它们,发成功过的
     **不再发**。
   - **回执丢了**(超时、断线、5xx:手机可能已经收到,站点分不清)按没发成功算,下一轮再发 —— 所以是
-    **至少一次**:这种手机可能收到两遍、响两次。通知带的 ``tag`` 只让第二遍**盖掉**第一遍(通知栏里
-    不叠成两条),**不保证不再响**;要做到不再响得手机自己记着处理过哪一条,现在没做。
+    **至少一次**:这种手机可能收到两遍、响两次。
+  - **推送去重**(通知栏里只剩一条):每条通知带一个稳定标记 :func:`collapse_id`(告警主键 + 档,跟
+    时间、重试、进程无关),第二遍**盖掉**第一遍。FCM 用 ``android.notification.tag``;极光用
+    ``apns_collapse_id``(iOS)和厂商通道的 ``notify_id``(华为、小米、OPPO、vivo、荣耀)。**还剩**:
+    极光自己的通道(App 活着、走极光长连接)没有按标记盖掉的字段,那一路仍可能两条;盖掉**不保证
+    不再响**;不同的告警、同一条升档,各是一条。要做到不再响得手机自己记着处理过哪一条,现在没做。
   - 一个通道连着 :data:`GIVE_UP_AFTER` 次失败(多半是整个不通)这一轮就先停,退避之后再来。
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import subprocess
@@ -74,6 +79,29 @@ BACKOFF_BASE_S, BACKOFF_MAX_S = 10, 300
 GIVE_UP_AFTER = 3
 #: 一条告警一轮里最多把名单重新算几遍(有推送号没了才重算;正常一遍)。
 RECOUNT_MAX = 3
+#: 极光的厂商通道里认 ``notify_id``(同一个号的通知后一条盖掉前一条)的那几家。依据:极光 REST v3
+#: 推送接口公开文档 ``options.third_party_channel`` 的厂商属性表,``notify_id``(int)「厂商通知唯一
+#: 标识 …… 对应 vivo、荣耀的 notifyId 字段;华为、小米、OPPO 的 notify_id 字段;不携带时,极光自动以
+#: 极光产生的唯一消息 msgid 传递给厂商」。**没在真手机上验过**:各家收到同一个号是不是一定盖掉、
+#: 没在极光控制台配那一家的应用带上它会不会被拒,都待真机、真账号验;出问题从这里删掉那一家即可。
+JPUSH_NOTIFY_ID_VENDORS = ("huawei", "xiaomi", "oppo", "vivo", "honor")
+
+
+def collapse_id(alert_key: str, tier: int | str) -> str:
+    """一条告警的一档在手机通知栏里的标记(推送去重):同一条同一档推了几遍,通知栏里只剩一条。
+
+    从告警在库里的主键(``alerts.key``,``robot/kind#seq``)和档算,跟时间、重试、推送号、进程都无关,
+    站点重启也一样。取哈希不截断(原来截到 60 个字,机器人名长了会把末尾的序号截掉、两条告警撞成
+    一条);``p1-`` 加 32 位十六进制,35 字节,在 APNs collapse id 的 64 字节以内。升档(``tier`` 变了)
+    是另一条通知:升档就是要再响一次,不拿它去盖掉上一档。"""
+    raw = f"{alert_key}#{int(tier)}".encode()
+    return "p1-" + hashlib.sha256(raw).hexdigest()[:32]
+
+
+def vendor_notify_id(alert_key: str, tier: int | str) -> int:
+    """同一个标记给厂商通道用的整数号(``notify_id`` 是 int):1 到 2^31-1,同一条同一档永远一样。"""
+    n = int(collapse_id(alert_key, tier)[3:11], 16) & 0x7FFFFFFF
+    return n or 1
 
 
 class PushError(Exception):
@@ -94,7 +122,15 @@ class JPush:
 
     def send(self, reg_ids: list[str], title: str, body: str, extras: dict[str, str], *,
              ttl_s: int = EXPIRE_MS // 1000) -> str:
-        """推给这几台。回极光的消息号。``ttl_s``:极光那头最多替离线的手机存多久。"""
+        """推给这几台。回极光的消息号。``ttl_s``:极光那头最多替离线的手机存多久。
+
+        推送去重(同一条推了两遍,通知栏里只剩一条):iOS 带 ``options.apns_collapse_id``,厂商通道带
+        ``options.third_party_channel.<厂商>.notify_id``(见 :data:`JPUSH_NOTIFY_ID_VENDORS`)。
+        **极光自己的通道(App 活着时极光长连接直接送到)没有能按我们的标记盖掉的字段**:
+        ``override_msg_id`` 要填上一条的极光消息号,回执丢了的时候站点恰恰没拿到它;所以这一路回执丢了
+        的那台手机仍可能出现两条。"""
+        tag = collapse_id(extras.get("alert_key", ""), extras.get("tier", "0") or "0")
+        nid = vendor_notify_id(extras.get("alert_key", ""), extras.get("tier", "0") or "0")
         payload = {
             "platform": ["android", "ios"],
             "audience": {"registration_id": reg_ids},
@@ -104,7 +140,9 @@ class JPush:
                 "ios": {"alert": {"title": title, "body": body}, "sound": "default",
                         "extras": extras},
             },
-            "options": {"time_to_live": max(1, int(ttl_s))},
+            "options": {"time_to_live": max(1, int(ttl_s)), "apns_collapse_id": tag,
+                        "third_party_channel": {
+                            v: {"notify_id": nid} for v in JPUSH_NOTIFY_ID_VENDORS}},
         }
         req = urllib.request.Request(
             self.url, data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
@@ -146,9 +184,13 @@ class Fcm:
     """Firebase Cloud Messaging HTTP v1。一条消息发一台;``send`` 有没发出去的抛 :class:`PushError`。
 
     - 鉴权:服务账号签一张一小时的 JWT 换访问令牌,快到期再换。
-    - 通知带 ``tag``(告警 + 档):同一条再发一遍,手机通知栏里**盖掉**原来那条,不叠成两条。**它不保证
-      不再响一次**(RC 加固外审 I2:``tag`` 是替换、``collapse_key`` 是合并还没送到的,都不是「处理过
-      这一条」的去重)。不重发靠站点逐台记账(:class:`PushDesk`、``push_sent``)。
+    - 通知带 ``android.notification.tag`` = :func:`collapse_id`(告警主键 + 档):同一条再发一遍,手机
+      通知栏里**盖掉**原来那条,不叠成两条(firebase-messaging 24.1.0 的 ``CommonNotificationBuilder``
+      拿 ``gcm.n.tag`` 当 ``NotificationManager.notify(tag, 0, …)`` 的 tag;没给 tag 时用
+      ``"FCM-Notification:" + uptime``,每条都是新的)。**它不保证不再响一次**(RC 加固外审 I2:替换
+      不是「处理过这一条」的去重)。不重发靠站点逐台记账(:class:`PushDesk`、``push_sent``)。
+      App 在前台时 FCM 不替它弹通知(前台有 App 自己的告警页)。这里没有 APNs 段(FCM 只给安卓手机用;
+      以后加 iOS 走 FCM 时带 ``apns.headers["apns-collapse-id"]`` = 同一个标记)。
     - 令牌失效了的(App 卸了、清了数据):记在 :meth:`take_dead` 里,站点把它从名单上删掉。
     """
 
@@ -207,15 +249,18 @@ class Fcm:
 
     def send(self, reg_ids: list[str], title: str, body: str, extras: dict[str, str], *,
              ttl_s: int = EXPIRE_MS // 1000) -> str:
-        tag = (extras.get("alert_key", "") + "#" + extras.get("tier", ""))[:60]
+        tag = collapse_id(extras.get("alert_key", ""), extras.get("tier", "0") or "0")
         failed, last, why = 0, "", ""
         for reg in reg_ids:
             msg = {"message": {
                 "token": reg,
                 "notification": {"title": title, "body": body},
                 "data": dict(extras),
+                # 不带 android.collapse_key:FCM 每台手机同时只存 4 个不同折叠键的消息,超了随便丢哪个
+                # (Firebase 文档「Collapsible and non-collapsible messages」)—— 离线时五条不同的 P1
+                # 会丢掉一条。同一条的两遍离线时都存着也没关系,送到时 tag 一样、盖掉。
                 "android": {"priority": "HIGH", "ttl": f"{max(1, int(ttl_s))}s",
-                            "collapse_key": tag, "notification": {"tag": tag, "sound": "default"}},
+                            "notification": {"tag": tag, "sound": "default"}},
             }}
             req = urllib.request.Request(
                 self.url, data=json.dumps(msg, ensure_ascii=False).encode(), method="POST",
