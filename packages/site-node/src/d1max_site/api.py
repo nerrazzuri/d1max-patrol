@@ -43,7 +43,7 @@ from collections.abc import Callable
 from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote
+from urllib.parse import parse_qs, quote, unquote
 
 from d1max_contract.dispatch import DispatchTimeout
 from d1max_site.accounts import WATCH_PATHS, Accounts, AuthError, LockedOut
@@ -125,8 +125,9 @@ _RUN = re.compile(r"^/api/runs/(\d{1,12})(?:/(judge|photos|review|keep)(?:/([^/]
 _EXPORT = re.compile(r"^/api/exports/([^/]{1,128})$")
 #: W00c5d 第二部分:给狗下发图、录包、重建。
 _MAPCMD = re.compile(r"^/api/robots/([^/]{1,64})/(map|mapping|map_build|outbox_retry)$")
-#: W00c6h:建好的图的栅格预览(坐标换算 + 待命点;PNG)。
-_MAPVIEW = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/(preview|preview\.png)$")
+#: W00c6h:建好的图的栅格预览(坐标换算 + 待命点;PNG);地图显示改进:平面图 ``plan.png``。
+_MAPVIEW = re.compile(
+    r"^/api/maps/([^/]{1,64})/([^/]{1,32})/(preview|preview\.png|plan\.png)$")
 #: W10:``/api/maps/<id>/<版本>/zones``(看、整份改)与 ``…/zones/confirm``(发布前人工确认)。
 _ZONES = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/zones(/confirm)?$")
 #: W00c6g:狗上建图进程日志的列表、某一个的尾巴(``?bytes=``)。
@@ -1879,16 +1880,26 @@ class _Handler(TlsHandlerMixin):
 
     def _map_preview(self, map_id: str, version: str, what: str) -> None:
         """建好的图的预览(W00c6h,``view``):``preview`` 是坐标换算 + 这张图这一版上登记的待命点
-        (每台狗的),``preview.png`` 是图。没有这张图、没有栅格 404;文件坏了 500(说是哪个文件)。"""
-        from d1max_site.map_preview import NoRaster, PreviewError
+        (每台狗的),``preview.png`` 是图。没有这张图、没有栅格 404;文件坏了 500(说是哪个文件)。
+
+        地图显示改进(只管显示,导航栅格、坐标都不动):``preview`` 另给 ``rotation_deg``(建议的显示
+        转角:预览在屏幕上顺时针转这么多度,墙横平竖直;[-45, 45),算不出来 0)、``areas``(这张图
+        这一版上画的防区 ``{name, points: [{x, y}]}``,跟 ``…/areas`` 一样谁能看图谁能看)、``plan``
+        (``{url, scale}``:``plan.png`` 是平面图样子的灰度 + 透明 PNG,范围跟 ``preview.png``
+        一模一样,像素是它的 ``scale`` 倍;客户端拉伸到预览的 ``width × height`` 画,叠加的换算都
+        不变)。"""
+        from d1max_site.map_preview import NoRaster, PreviewError, plan_scale
         from d1max_site.maps import MapError
         try:
-            png, info = self.site.maps.preview(map_id, version)
+            if what == "plan.png":
+                png, info = self.site.maps.plan(map_id, version)[0], {}
+            else:
+                png, info = self.site.maps.preview(map_id, version)
         except (MapError, NoRaster) as exc:
             raise HttpError(404, str(exc)) from exc
         except (PreviewError, OSError) as exc:
             raise HttpError(500, f"这张图预览不了:{exc}") from exc
-        if what == "preview.png":
+        if what != "preview":
             return self._send_bytes(png, "image/png")
         rows = self.site.dispatcher.db.query(
             "SELECT robot_id, name, x, y, yaw, is_default FROM standby_points WHERE map_id=? AND "
@@ -1902,7 +1913,13 @@ class _Handler(TlsHandlerMixin):
                   "yaw": r["yaw"]} for r in rows]                 # W13a:原点单独画
         zones = (self.site.zones.current(map_id, version).to_wire()["zones"]
                  if self.site.zones is not None else [])
-        return self._send_json(200, info | {"standby": standby, "homes": homes, "zones": zones})
+        book = self.site.areas
+        areas = [{"name": a["zone"], "points": [{"x": x, "y": y} for x, y in a["points"]]}
+                 for a in (book.list(map_id, version) if book is not None else [])]
+        plan = {"url": f"/api/maps/{quote(map_id, safe='')}/{quote(version, safe='')}/plan.png",
+                "scale": plan_scale(info["width"], info["height"])}
+        return self._send_json(200, info | {"standby": standby, "homes": homes, "zones": zones,
+                                            "areas": areas, "plan": plan})
 
     def _home_on(self, robot_id: str, map_id: str, version: str) -> dict[str, float] | None:
         """这台狗在这张图这个版本上的原点(W13a):**只看原点表**。待命点是运营调度的点、随时会加、挪、删,

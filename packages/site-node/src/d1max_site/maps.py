@@ -38,6 +38,16 @@ log = logging.getLogger(__name__)
 
 #: 栅格预览缓存几张(W00c6h;一张最大 1024×1024 灰度 PNG,几百 KB)。
 PREVIEW_CACHE = 8
+#: 平面图(地图显示改进)缓存几张:一张最大 2048×2048 灰度 + 透明 PNG,通常几百 KB。
+PLAN_CACHE = 4
+
+
+def _stamp(paths: tuple[Path, ...]) -> tuple | None:
+    """这几个文件现在的(大小, 修改时刻);读不到 ``None``。缓存拿它判断文件换没换。"""
+    try:
+        return tuple((st.st_size, st.st_mtime_ns) for st in (p.stat() for p in paths))
+    except OSError:
+        return None
 
 
 class MapError(ValueError):
@@ -99,8 +109,11 @@ class MapCatalog:
         self._now = now_ms
         self._lock = threading.Lock()
         self.writer = ChunkWriter()
-        #: 栅格预览(W00c6h):(地图号, 版本) → (PNG, 坐标换算)。一版登记了就不变,渲染一次缓存着。
-        self._previews: dict[tuple[str, str], tuple[bytes, dict[str, Any]]] = {}
+        #: 栅格预览(W00c6h):(地图号, 版本) → ((PNG, 坐标换算 + 显示转角), 文件, 文件戳)。一版登记了
+        #: 就不变,渲染一次缓存着;栅格 / yaml 文件的大小、修改时刻变了(有人在盘上换了)重新渲。
+        self._previews: dict[tuple[str, str], tuple[Any, tuple[Path, ...], tuple]] = {}
+        #: 平面图(地图显示改进):(地图号, 版本) → ((PNG, 倍数), 文件, 文件戳),同上。
+        self._plans: dict[tuple[str, str], tuple[Any, tuple[Path, ...], tuple]] = {}
         self._preview_lock = threading.Lock()
         #: 「哪里有图」(W09c 决定 5):(地图号, 版本) → (走过的路, 可通行判定)或 None(老版本不查)。
         self._reaches: dict[tuple[str, str], Any] = {}
@@ -214,33 +227,51 @@ class MapCatalog:
         return self.root / map_id / version / name
 
     def preview(self, map_id: str, version: str) -> tuple[bytes, dict[str, Any]]:
-        """这张图的栅格预览(W00c6h):PNG 与给手机的坐标换算(``map_preview.render``)。缓存最近
+        """这张图的栅格预览(W00c6h):PNG 与给手机的坐标换算(``map_preview.render``),外加建议的
+        显示转角 ``rotation_deg``(``map_preview.wall_rotation``,地图显示改进)。缓存最近
         ``PREVIEW_CACHE`` 张。没有这张图 ``MapError``;没有栅格 ``NoRaster``;文件坏了、太大
         ``PreviewError``。**先看大小再读**(W00c6h 内审:一台被攻破的狗传上来几个 GB,谁点一下
         站点就 OOM)。"""
-        key = (map_id, version)
-        hit = self._cached(key)
+        return self._memo(self._previews, PREVIEW_CACHE, (map_id, version), self._render)
+
+    def plan(self, map_id: str, version: str) -> tuple[bytes, int]:
+        """这张图的平面图(地图显示改进,``map_preview.render_plan``):(PNG, 是预览的几倍)。范围跟
+        预览一模一样。缓存最近 ``PLAN_CACHE`` 张;出错跟 :meth:`preview` 一样。"""
+        return self._memo(self._plans, PLAN_CACHE, (map_id, version), self._render_plan)
+
+    def _memo(self, cache: dict, size: int, key: tuple[str, str], render: Callable) -> Any:
+        """渲染一次缓存着(最近用的 ``size`` 张);全站一次只渲一张,同一版一起点的后来者等着拿缓存。"""
+        hit = self._cached(cache, key)
         if hit is not None:
             return hit
         with self._render_lock:
-            hit = self._cached(key)                   # 等锁的时候别人渲好了
+            hit = self._cached(cache, key)            # 等锁的时候别人渲好了
             if hit is not None:
                 return hit
-            got = self._render(map_id, version)
+            got, files = render(*key)
             with self._preview_lock:
-                self._previews[key] = got
-                while len(self._previews) > PREVIEW_CACHE:
-                    self._previews.pop(next(iter(self._previews)))
+                cache[key] = (got, *files)
+                while len(cache) > size:
+                    cache.pop(next(iter(cache)))
             return got
 
-    def _cached(self, key: tuple[str, str]) -> tuple[bytes, dict[str, Any]] | None:
+    def _cached(self, cache: dict, key: tuple[str, str]) -> Any:
         with self._preview_lock:
-            hit = self._previews.pop(key, None)
-            if hit is not None:
-                self._previews[key] = hit             # 挪到最后:最近用的
-            return hit
+            hit = cache.get(key)
+        if hit is None:
+            return None
+        got, paths, stamp = hit
+        if _stamp(paths) != stamp:
+            return None                               # 盘上的文件换了:重新渲
+        with self._preview_lock:
+            if cache.get(key) is hit:
+                cache[key] = cache.pop(key)           # 挪到最后:最近用的
+        return got
 
-    def _render(self, map_id: str, version: str) -> tuple[bytes, dict[str, Any]]:
+    def _raster(self, map_id: str, version: str
+                ) -> tuple[str, dict[str, Any], str, bytes, tuple[tuple[Path, ...], tuple]]:
+        """→ (yaml 名, yaml 内容, 栅格名, 栅格字节, (两个文件的路径, 读之前的文件戳))。**先看大小
+        再读**。"""
         from d1max_site import map_preview as mp
         try:
             ref = self.get(check_name(map_id, "地图号"), check_name(version, "版本"))
@@ -252,7 +283,8 @@ class MapCatalog:
         if not yamls:
             raise mp.NoRaster(f"{map_id}:{version} 没有栅格(.yaml + .pgm),没法预览")
         yp = d / yamls[0]
-        if yp.stat().st_size > mp.MAX_YAML_BYTES:
+        yst = yp.stat()
+        if yst.st_size > mp.MAX_YAML_BYTES:
             raise mp.PreviewError(f"{yamls[0]}:地图 yaml 太大")
         meta = mp.parse_map_yaml(yp.read_text("utf-8", errors="replace"))
         image = Path(meta["image"]).name
@@ -262,13 +294,32 @@ class MapCatalog:
         try:
             with open(ip, "rb") as fh:
                 limit = mp.pgm_limit(fh.read(4096))
-            size = ip.stat().st_size
-            if size > limit:
-                raise mp.PreviewError(f"文件太大({size} 字节,按头里说的最多 {limit})")
-            png, info = mp.render(ip.read_bytes(), meta)
+            ist = ip.stat()
+            if ist.st_size > limit:
+                raise mp.PreviewError(f"文件太大({ist.st_size} 字节,按头里说的最多 {limit})")
+            data = ip.read_bytes()
         except mp.PreviewError as exc:
             raise mp.PreviewError(f"{image}:{exc}") from exc
-        return png, info | {"source": yamls[0]}
+        stamp = tuple((st.st_size, st.st_mtime_ns) for st in (yst, ist))
+        return yamls[0], meta, image, data, ((yp, ip), stamp)
+
+    def _render(self, map_id: str, version: str) -> tuple[tuple[bytes, dict[str, Any]], tuple]:
+        from d1max_site import map_preview as mp
+        source, meta, image, data, files = self._raster(map_id, version)
+        try:
+            png, info = mp.render(data, meta)
+            rotation = mp.wall_rotation(mp.grid_ranks(data, meta))
+        except mp.PreviewError as exc:
+            raise mp.PreviewError(f"{image}:{exc}") from exc
+        return (png, info | {"source": source, "rotation_deg": rotation}), files
+
+    def _render_plan(self, map_id: str, version: str) -> tuple[tuple[bytes, int], tuple]:
+        from d1max_site import map_preview as mp
+        _, meta, image, data, files = self._raster(map_id, version)
+        try:
+            return mp.render_plan(mp.grid_ranks(data, meta)), files
+        except mp.PreviewError as exc:
+            raise mp.PreviewError(f"{image}:{exc}") from exc
 
     # ------------------------------------------------------------ 哪里有图(W09c 决定 5)
 
