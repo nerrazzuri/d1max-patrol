@@ -770,6 +770,25 @@ async def test_外审I2_前面是限速低到守不住的限速区_当禁行_不
     assert t.r.x < 3.0 + 0.05 and not t.nav._crept, "整趟也没往里挪"
 
 
+async def test_S7_往前挪_按机身轮廓加σ查禁行区(tmp_path):
+    """S7(2026-10-14):挪之前查禁行区跟每拍回退检查一个口径 —— 机身矩形挪完再刹停,离禁行区不到
+    σ + 余量、越挪越近就不挪(原来是中心线离 0.25 m、不加 σ)。禁行区在机身侧前方,中心线碰不到。"""
+    from types import SimpleNamespace
+    t = 台子(tmp_path, rear=True, cone=True)
+    # 狗在 (3, 4) 朝 +x;禁行区在 y ≥ 4.3、x ≥ 4 —— 机身侧面离它 6 cm,中心线离 0.3 m
+    await t.nav.set_zones(_区域({"id": "bed", "kind": "nogo", "label": "花坛",
+                               "polygon": [[4.0, 4.3], [6.0, 4.3], [6.0, 5.0], [4.0, 5.0]]}))
+    await t.start(3.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(3.0, 6.0))
+    await t.跑(0.3)
+    here = SimpleNamespace(x=3.0, y=4.0, yaw=0.0, sigma_xy_m=0.0)
+    assert t.nav._creep_clear(here), "σ 0:侧面还差 6 cm,挪得过去"
+    here.sigma_xy_m = 0.1
+    assert not t.nav._creep_clear(here), "σ 0.1:侧面可能已经蹭上了,不挪"
+    here.y = 3.0
+    assert t.nav._creep_clear(here), "离远了照挪"
+
+
 async def test_外审I2_前面是过得去的限速区_挪的时候不超它的限速(tmp_path):
     t = 台子(tmp_path, rear=True, cone=True)
     await t.nav.set_zones(_区域({
