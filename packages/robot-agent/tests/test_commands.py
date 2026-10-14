@@ -302,7 +302,7 @@ def _patrol(cid, mission, version="3"):
     return _cmd("patrol", cid=cid, payload={"mission": mission, "map_version": version})
 
 
-_MISSION = {"mission": "loop", "map_id": "m1", "waypoints": [
+_MISSION = {"mission": "loop", "map_id": "m1", "map_version": "3", "waypoints": [
     {"name": "a", "pose": {"position": {"x": 1, "y": 0}, "orientation": {"x": 0, "y": 0,
                                                                            "z": 0, "w": 1}}}]}
 
@@ -312,7 +312,8 @@ async def test_patrol的payload校验(cp):
     cp.supported.add("patrol")
     ack = await cp.handle(_patrol("p1", {"mission": "x"}).to_wire(), TOPIC)
     assert ack.result is AckResult.REJECTED and ack.reason.startswith("payload: mission")
-    ack = await cp.handle(_patrol("p2", _MISSION, version="4").to_wire(), TOPIC)
+    ack = await cp.handle(_patrol("p2", dict(_MISSION, map_version="4"), version="4").to_wire(),
+                          TOPIC)
     assert ack.result is AckResult.REJECTED and ack.reason == "map_mismatch"
     vendor = dict(_MISSION, route={"source": "vendor_path", "path_id": "x"})
     ack = await cp.handle(_patrol("p3", vendor).to_wire(), TOPIC)
@@ -320,6 +321,23 @@ async def test_patrol的payload校验(cp):
     ack = await cp.handle(_cmd("patrol", cid="p4", payload={"mission": _MISSION}).to_wire(),
                           TOPIC)
     assert ack.result is AckResult.REJECTED and "map_version" in ack.reason
+
+
+async def test_R1_patrol_任务要绑版本_跟命令和加载的那一版都对得上才收(cp):
+    """以前站点把狗自己的版本填进命令,这里的核对永远通过。现在任务自己带版本,三样都得一样。"""
+    cp.supported.add("patrol")
+    没绑 = {k: v for k, v in _MISSION.items() if k != "map_version"}
+    ack = await cp.handle(_patrol("u1", 没绑).to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and "map_version" in ack.reason, \
+        "老站点派来的(命令里是狗自己的 3、任务没绑):不收"
+    ack = await cp.handle(_patrol("u2", dict(_MISSION, map_version="2")).to_wire(), TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason.startswith("payload:") \
+        and "第 2 版" in ack.reason, "任务说 2、命令说 3:对不上不收"
+    ack = await cp.handle(_patrol("u3", dict(_MISSION, map_version="4"), version="4").to_wire(),
+                          TOPIC)
+    assert ack.result is AckResult.REJECTED and ack.reason == "map_mismatch", "狗加载的是 3"
+    ack = await cp.handle(_patrol("u4", _MISSION).to_wire(), TOPIC)
+    assert ack.result is AckResult.ACCEPTED, ack
 
 
 # ------------------------------------------------------------ W00c5b:video 命令(不是任务)

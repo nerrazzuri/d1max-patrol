@@ -352,7 +352,11 @@ class CommandProcessor:
         return ""
 
     def _check_patrol(self, cmd: Command) -> str:
-        """``{"mission": <任务定义>, "map_version": str}``(W00c2a 设计决定二 A)。"""
+        """``{"mission": <任务定义>, "map_version": str}``(W00c2a 设计决定二 A)。
+
+        R1(代理级别 3):任务自己要绑地图版本(``mission.map_version``),跟命令的 ``map_version``
+        一致、跟狗加载的那一版一致才收。没绑的不收 —— 老站点(派单时把狗自己的版本填进命令)派来的
+        就是这种,收了等于核对空转;老站点要先升级(见 ``d1max_contract.compat``)。"""
         from d1max_contract.mission import MissionError, parse_mission
         try:
             mission = parse_mission(cmd.payload.get("mission"))
@@ -365,6 +369,12 @@ class CommandProcessor:
             return "payload: 要 map_version"
         if self.loaded_map is None or (mission.map_id, version) != self.loaded_map:
             return "map_mismatch"
+        if not mission.map_version:
+            return ("payload: 任务没绑地图版本(mission.map_version),不知道点是在哪一版图上量的,"
+                    "不收 —— 站点要先升级(R1)")
+        if mission.map_version != version:
+            return (f"payload: 任务绑的是第 {mission.map_version} 版,命令说第 {version} 版:"
+                    "对不上不收")
         return ""
 
     async def _handle_abort(self, cmd: Command) -> Ack:

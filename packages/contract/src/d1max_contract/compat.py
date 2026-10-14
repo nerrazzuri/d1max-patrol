@@ -7,6 +7,10 @@
 - 1:W 系列做完以前的代理。
 - 2:认站点的「这份证据删过了,当传完」回执(``discarded``,PR #88)。站点自从 PR #88 起会发这种回执,
   **1 级的代理收到它会一直重传**,所以站点要求代理至少 2 级。
+- 3:巡检任务要绑地图版本(R1,``mission.map_version``):3 级的代理**不收没绑版本的巡检**。老站点
+  派单时把狗自己加载的版本填进命令、任务不带版本 —— 派给 3 级的狗全被拒,所以老站点(最高认 2)
+  报「站点比狗老」、也不登记 3 级的升级包:**先升站点**。新站点照样派 2 级的狗:它把**任务的**
+  版本放进命令,老狗本来就核这个键,核对从空转变成真的。
 
 站点接口级别(:data:`SITE_API_LEVEL`,登录回复里带;手机 App 看它):
 
@@ -25,9 +29,9 @@
 
 from __future__ import annotations
 
-AGENT_LEVEL = 2
+AGENT_LEVEL = 3
 SITE_MIN_AGENT_LEVEL = 2
-SITE_MAX_AGENT_LEVEL = 2
+SITE_MAX_AGENT_LEVEL = 3
 SITE_API_LEVEL = 1
 MIN_APP_API_LEVEL = 1
 

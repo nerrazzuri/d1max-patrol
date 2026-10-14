@@ -317,7 +317,7 @@ async def test_订阅者跟不上_清掉积压再给快照(台):
 async def test_patrol太大_发之前就拒(台):
     t = 台
     pt = {"position": {"x": 0.1, "y": 0}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
-    big = {"mission": "big", "map_id": "estate-1", "policy": {},
+    big = {"mission": "big", "map_id": "estate-1", "map_version": "7", "policy": {},
            "waypoints": [{"name": f"p{i}", "pose": pt} for i in range(501)]}
     with pytest.raises(DispatchRefused, match="500"):
         await t.site.patrol("A", big, issued_by="alice")
@@ -379,7 +379,7 @@ async def test_发之前记账炸了_命令和记账一起回滚(台):
     记了的那一半一起回滚,命令不发。"""
     t = 台
     pt = {"position": {"x": 0.1, "y": 0}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
-    m = {"mission": "m", "map_id": "estate-1", "policy": {},
+    m = {"mission": "m", "map_id": "estate-1", "map_version": "7", "policy": {},
          "waypoints": [{"name": "p", "pose": pt}]}
 
     def 炸(cmd, tx):
@@ -395,7 +395,7 @@ async def test_命令入账失败_记账也回滚(台):
     """反过来:记账写成了、命令入账失败 —— 也要一起回滚(不然这一轮算起跑过、却没有命令)。"""
     t = 台
     pt = {"position": {"x": 0.1, "y": 0}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
-    m = {"mission": "m", "map_id": "estate-1", "policy": {},
+    m = {"mission": "m", "map_id": "estate-1", "map_version": "7", "policy": {},
          "waypoints": [{"name": "p", "pose": pt}]}
     with t.site.db.tx() as c:
         c.execute("CREATE TRIGGER 命令写不进去 BEFORE INSERT ON commands WHEN NEW.kind = 'patrol' "
@@ -427,7 +427,7 @@ async def test_图外的点_goto和巡检发之前就拒_按狗加载的那一�
 
     def pt(x):
         return {"position": {"x": x, "y": 0}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
-    m = {"mission": "m", "map_id": "estate-1", "policy": {},
+    m = {"mission": "m", "map_id": "estate-1", "map_version": "7", "policy": {},
          "waypoints": [{"name": "门口", "pose": pt(1.0)}, {"name": "仓库", "pose": pt(11.0)}]}
     n = len(t.site.commands("A"))
     with pytest.raises(DispatchRefused, match="仓库.*8.0 m"):

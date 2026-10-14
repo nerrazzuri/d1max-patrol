@@ -91,7 +91,7 @@ async def test_没有默认待命点就不回(站):
 async def test_巡检被手动派单抢占_账记preempted_派单完了回待命点(站, tmp_path):
     t = 站
     t.stb.set("A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
-    远 = {"mission": "loop", "map_id": "estate-1", "policy": {}, "waypoints": [
+    远 = {"mission": "loop", "map_id": "estate-1", "map_version": "7", "policy": {}, "waypoints": [
         {"name": "far", "pose": {"position": {"x": 6.0, "y": 0.0},
                                  "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}}]}
     import_bundle(t.db, 打包(tmp_path, 1, mission=远), imported_by="alice", now_ms=t.clock())
@@ -184,7 +184,7 @@ def _pose(x, y):
     return {"position": {"x": x, "y": y}, "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}
 
 
-_巡检 = {"mission": "L", "map_id": "estate-1", "policy": {},
+_巡检 = {"mission": "L", "map_id": "estate-1", "map_version": "7", "policy": {},
          "waypoints": [{"name": "a", "pose": _pose(1.0, 0.0),
                         "actions": [{"type": "dwell", "seconds": 0.2}]},
                        {"name": "b", "pose": _pose(1.0, 1.0)}]}
@@ -579,7 +579,8 @@ async def test_W14_手动派的巡检照旧回默认的(站):
 
 
 def _乱序巡检(n=6):
-    return {"mission": "R", "map_id": "estate-1", "policy": {"order": "shuffle"},
+    return {"mission": "R", "map_id": "estate-1", "map_version": "7",
+            "policy": {"order": "shuffle"},
             "waypoints": [{"name": f"p{i}", "pose": _pose(0.2 * i, 0.0)} for i in range(n)]}
 
 

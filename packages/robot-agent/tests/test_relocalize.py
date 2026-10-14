@@ -322,7 +322,7 @@ async def test_任务跑着_狗停着驻留_不收设位置_丢定位暂停时�
     from d1max_patrol.protocol.nav_types import Pose as P
     broker, c, ears, dog, rt = await _台(tmp_path)
     await rt._on_cmd(_cmd("relocalize", {"x": 0.0, "y": 0.0, "yaw": 0.0}, "r", c))
-    m = Mission(mission="d", map_id="m", policy=Policy(), waypoints=(
+    m = Mission(mission="d", map_id="m", map_version="1", policy=Policy(), waypoints=(
         MissionWaypoint(name="a", pose=P.from_xy_yaw(1.0, 0.0),
                         actions=(Action(type="dwell", seconds=30.0),)),
         MissionWaypoint(name="b", pose=P.from_xy_yaw(2.0, 0.0))))
