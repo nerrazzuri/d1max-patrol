@@ -1045,6 +1045,9 @@ class Server:
                 added = await self.dispatcher.sync_robots()
                 if added:
                     log.info("新登记的狗挂上了: %s", ", ".join(added))
+                gone = await self.dispatcher.expire_zones()
+                if gone:
+                    log.info("临时区到期删了、发给狗: %s", ", ".join(gone))
                 sent = await self.dispatcher.sync_zones()
                 if sent:
                     log.info("补发区域给: %s", ", ".join(sent))

@@ -453,8 +453,11 @@ class Dispatcher:
         if not self.zones.confirmed_current(*loaded):
             # W10 外审 2:确认不只卡换图 —— 换图之后删了禁行区(放宽)、W10 之前就在用的图(修订 0),
             # 这一版区域没人确认过,就不派自主走的任务(停止、遥控、安全降级不受影响)
-            raise DispatchRefused(f"{loaded[0]}:{loaded[1]} 当前的区域修订还没做安全确认:先在地图页"
-                                  "核对禁行区、确认这一版(图不在站点目录里就先导入)")
+            # 决策 66:只收紧的改动当场算确认了;走到这里的是放宽过(删、缩、调高限速)、
+            # 或者从没确认过的
+            raise DispatchRefused(f"{loaded[0]}:{loaded[1]} 当前的区域修订还没做安全确认(放宽过、"
+                                  "或者从没确认过):先在地图页核对禁行区、确认这一版(图不在站点目录里"
+                                  "就先导入)")
         site = self.zones.current(*loaded)
         z = c.capabilities.tasks.get("zones_set") if c.capabilities is not None else None
         if z is None:
@@ -493,6 +496,16 @@ class Dispatcher:
             return str(exc)[:200] or type(exc).__name__
         ack = r.get("ack", {})
         return "" if ack.get("result") in ("accepted", "duplicate") else str(ack.get("reason"))
+
+    async def expire_zones(self) -> list[str]:
+        """临时区到期(决策 66):站点删掉到期的、出新修订,发给加载着那一版的狗(放宽,狗空闲时换上;
+        发不出去的由 :meth:`sync_zones` 补发)。回改了的几何版本 ``地图:版本``。"""
+        if self.zones is None:
+            return []
+        changed = self.zones.expire()
+        for zs in changed:
+            await self.push_zones(zs, tighten=False, issued_by="site:zones_expiry")
+        return [f"{zs.map_id}:{zs.map_version}" for zs in changed]
 
     async def sync_zones(self, *, retry_ms: int = 30_000) -> list[str]:
         """补发(W10):狗报的区域修订比站点的旧、也没在等着换这一版 → 再发一次(同一版 30 s 内不重发)。

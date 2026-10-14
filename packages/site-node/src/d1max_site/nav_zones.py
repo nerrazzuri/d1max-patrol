@@ -3,13 +3,33 @@
 - 改(``put``):整份换,带 ``base_revision``(改之前看到的修订号),跟库里的对不上 →
   :class:`ZonesConflict`(两个人同时改,后到的不许悄悄盖掉先到的)。
 - **发布前人工确认**(``confirm``,W08 决定 5):确认的是「水体、落差(台阶下沿、路缘、池边)、
-  陡坡、花坛都已画成禁行区」这一句,记确认人、时刻、确认的是哪一版修订;改过之后要重新确认。
-- 换图门槛:这个几何版本的区域**已确认、且确认的就是当前修订**(:meth:`confirmed_current`)。
+  陡坡、花坛都已画成禁行区」这一句,记确认人、时刻、确认的是哪一版修订。
+- 换图门槛、派单门槛:这个几何版本的区域**已确认、且确认的就是当前修订**(:meth:`confirmed_current`)。
+
+决策 66(2026-10-14):
+
+- **收紧免确认**:改完跟**最后确认过的那一份**(``confirmed_body``)比是只收紧(:func:`tightens`,
+  按几何:加禁行区、放大、加硬禁区标记、调低限速、到期推后)→ 这一版当场算确认了(确认人 = 改的人,
+  ``confirmed_how = 'tighten'``,审计里有 ``auto_confirmed``),入侵派遣、巡检照派。**放宽**(删、缩、
+  挪、升限速、去掉硬禁区标记、到期提前)或又紧又松的,照旧要管理员确认才派。从没确认过的(新版本)
+  收紧也不算确认:那一句还没人说过。
+- **临时区**:区域可以带 ``until_ms``(或者接口给 ``for_s`` 时长,按**站点的钟**换成到期时刻 ——
+  手机的钟可能不准)。到期由站点删(:meth:`expire`,每 10 秒一轮),删完是新修订、照常发给狗。
+  到期是放宽,但到期时间是写在确认过的那一份里的,**算预先确认过**:跟最后确认的那一份比(到期的不用再盖住)还是只收紧
+  就带上确认(``confirmed_how = 'expiry'``,确认人 ``site:expiry``);当前这一版本来就没确认的,删完照样
+  没确认。狗不按自己的钟删(狗的钟可能是错的;过期了还守着是往安全那边错)。
+
+R2(2026-10-14):**新版本把上一版的东西带过来给人核**(:meth:`proposal`)。新版本(站点目录里有、还没
+画过区域)头一回被看的时候,把上一版的区域(没到期的)、待命点、拦截点抄一份**建议**(不生效、不发狗);
+手机区域页顶上一条横幅:「从第 X 版带过来的,坐标可能不一样,每一个都要对着新图核」;两版的
+``frames.json`` 不一样就明说坐标系变了。确认的时候带 ``adopt``(核过、要留下的那几个)才生效 —— 确认
+就是平常的确认。丢掉(:meth:`discard_proposal`)之后不再生成。不做坐标换算。
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -17,6 +37,13 @@ from d1max_contract.errors import ContractError
 from d1max_contract.zones import ZoneSet, tightens
 
 CONFIRM_TEXT = "水体、落差(台阶下沿、路缘、池边)、陡坡、花坛都已画成禁行区"
+#: 临时区最长多久(决策 66):挡手滑(秒当毫秒、多打几个零)。
+MAX_TEMP_MS = 366 * 86_400_000
+#: 接口给时长(``for_s``)最短多久。
+MIN_TEMP_S = 60
+#: 到期删区域、带上确认的那个「人」。
+EXPIRY_BY = "site:expiry"
+_ID_KEEP = re.compile(r"[^A-Za-z0-9._-]")
 
 
 class ZonesError(Exception):
@@ -54,18 +81,71 @@ class NavZones:
             if r["confirmed_rev"] is not None:
                 out["confirmed"] = {"revision": r["confirmed_rev"], "by": r["confirmed_by"],
                                     "at_ms": r["confirmed_ms"],
-                                    "current": r["confirmed_rev"] == r["revision"]}
+                                    "current": r["confirmed_rev"] == r["revision"],
+                                    "how": r["confirmed_how"] or "confirm"}
+        out["proposal"] = self.proposal(map_id, version)
+        prev = self._previous(map_id, version)
+        out["previous"] = None
+        if prev is not None:
+            pz = self.current(map_id, prev["version"])
+            out["previous"] = {"version": prev["version"], "revision": pz.revision,
+                               "zones": len(pz.zones)}
         return out
+
+    # ------------------------------------------------------------ 改
+
+    def _prepare(self, zones: Any, cur: ZoneSet, now: int) -> Any:
+        """临时区(决策 66):``for_s`` 按站点的钟换成 ``until_ms``;到期时刻要在以后、不超过一年。已经
+        到期、站点还没来得及删的那一个原样带回来(手机拿的是删之前那一份)就悄悄去掉。"""
+        if not isinstance(zones, list):
+            return zones
+        stale = {(z.id, z.until_ms) for z in cur.zones if z.expired(now)}
+        out = []
+        for d in zones:
+            if not isinstance(d, dict):
+                out.append(d)
+                continue
+            d = dict(d)
+            if "for_s" in d:
+                f = d.pop("for_s")
+                if d.get("until_ms") is not None:
+                    raise ZonesError(f"区域 {d.get('id')}:for_s 跟 until_ms 只给一个")
+                if isinstance(f, bool) or not isinstance(f, int) \
+                        or not MIN_TEMP_S <= f <= MAX_TEMP_MS // 1000:
+                    raise ZonesError(f"区域 {d.get('id')}:for_s 要是 {MIN_TEMP_S} 秒到一年之间的"
+                                     "整数")
+                d["until_ms"] = now + f * 1000
+            u = d.get("until_ms")
+            if isinstance(u, int) and not isinstance(u, bool):
+                if u <= now:
+                    if (d.get("id"), u) in stale:
+                        continue
+                    raise ZonesError(f"区域 {d.get('id')}:到期时间已经过了(按站点的钟)")
+                if u > now + MAX_TEMP_MS:
+                    raise ZonesError(f"区域 {d.get('id')}:到期时间太远(最多一年)")
+            out.append(d)
+        return out
+
+    @staticmethod
+    def _confirmed_set(r: Any) -> ZoneSet | None:
+        if r is None or not r["confirmed_body"]:
+            return None
+        try:
+            return ZoneSet.from_wire(json.loads(r["confirmed_body"]))
+        except (ValueError, ContractError):
+            return None
 
     def put(self, map_id: str, version: str, zones: Any, *, base_revision: Any,
             by: str) -> tuple[ZoneSet, bool]:
-        """整份换 → (新的那份, 是不是只收紧)。``base_revision`` 对不上抛 :class:`ZonesConflict`;
-        区域不合规矩抛 :class:`ZonesError`。"""
+        """整份换 → (新的那份, 是不是比上一版只收紧)。``base_revision`` 对不上抛
+        :class:`ZonesConflict`;区域不合规矩抛 :class:`ZonesError`。跟最后确认过的那一份比
+        只收紧的,当场算确认了(决策 66;调用方拿 :meth:`confirmed_current` 看)。"""
         if isinstance(base_revision, bool) or not isinstance(base_revision, int):
             raise ZonesError("base_revision 要是整数(改之前看到的修订号)")
+        now = self._now()
         with self.db.tx() as tx:
-            rows = tx.execute("SELECT revision, body FROM nav_zones WHERE map_id=? AND "
-                              "map_version=?", (map_id, version)).fetchall()
+            rows = tx.execute("SELECT * FROM nav_zones WHERE map_id=? AND map_version=?",
+                              (map_id, version)).fetchall()
             cur = (ZoneSet.from_wire(json.loads(rows[0]["body"])) if rows
                    else ZoneSet(map_id, version, 0, ()))
             if base_revision != cur.revision:
@@ -73,43 +153,245 @@ class NavZones:
                                     f"{base_revision} 版):重新拉一下再改")
             try:
                 new = ZoneSet.from_wire({"map_id": map_id, "map_version": version,
-                                         "revision": cur.revision + 1, "zones": zones})
+                                         "revision": cur.revision + 1,
+                                         "zones": self._prepare(zones, cur, now)})
             except ContractError as exc:
                 raise ZonesError(str(exc)) from exc
             body = json.dumps(new.to_wire(), ensure_ascii=False)
             if rows:
                 tx.execute("UPDATE nav_zones SET revision=?, body=?, updated_by=?, updated_ms=? "
                            "WHERE map_id=? AND map_version=?",
-                           (new.revision, body, by, self._now(), map_id, version))
+                           (new.revision, body, by, now, map_id, version))
             else:
                 tx.execute("INSERT INTO nav_zones(map_id, map_version, revision, body, updated_by,"
                            " updated_ms) VALUES (?,?,?,?,?,?)",
-                           (map_id, version, new.revision, body, by, self._now()))
-        return new, tightens(cur, new)
+                           (map_id, version, new.revision, body, by, now))
+            ok = self._confirmed_set(rows[0] if rows else None)
+            if ok is not None and tightens(ok, new, now_ms=now):
+                # 决策 66:跟最后确认过的那一份比只收紧 → 改的人就算确认了这一版
+                self._mark_confirmed(tx, map_id, version, new, by, now, "tighten")
+        return new, tightens(cur, new, now_ms=now)
 
-    def confirm(self, map_id: str, version: str, *, revision: Any, by: str) -> None:
-        """人工确认这一版修订(没画过的就是确认第 0 版:这张图没什么要画的)。"""
+    @staticmethod
+    def _mark_confirmed(tx: Any, map_id: str, version: str, zs: ZoneSet, by: str, now: int,
+                        how: str) -> None:
+        tx.execute("UPDATE nav_zones SET confirmed_rev=?, confirmed_by=?, confirmed_ms=?, "
+                   "confirmed_body=?, confirmed_how=? WHERE map_id=? AND map_version=?",
+                   (zs.revision, by, now, json.dumps(zs.to_wire(), ensure_ascii=False), how,
+                    map_id, version))
+
+    # ------------------------------------------------------------ 确认
+
+    def confirm(self, map_id: str, version: str, *, revision: Any, by: str,
+                adopt: Any = None) -> dict[str, Any]:
+        """人工确认这一版修订(没画过的就是确认第 0 版:这张图没什么要画的)。
+
+        ``adopt``(R2):``{"zones": [带过来的建议里核过、要留下的区域 id]}`` —— 并进当前这一份
+        (id 撞了换一个)、修订 +1、确认的就是并完的那一版、建议收起来。
+        回 ``{"zones": {原 id: 新 id}}``。
+        待命点、拦截点由调用方按建议另外搬(它们有自己的校验)。"""
         if isinstance(revision, bool) or not isinstance(revision, int):
             raise ZonesError("revision 要是整数(确认的是哪一版)")
+        if adopt is not None and not isinstance(adopt, dict):
+            raise ZonesError("adopt 要是对象")
+        now = self._now()
+        report: dict[str, Any] = {"zones": {}}
         with self.db.tx() as tx:
-            rows = tx.execute("SELECT revision FROM nav_zones WHERE map_id=? AND map_version=?",
-                              (map_id, version)).fetchall()
-            cur = rows[0]["revision"] if rows else 0
-            if revision != cur:
-                raise ZonesConflict(f"区域现在是第 {cur} 版,确认的是第 {revision} 版:"
+            rows = tx.execute("SELECT revision, body FROM nav_zones WHERE map_id=? AND "
+                              "map_version=?", (map_id, version)).fetchall()
+            cur = (ZoneSet.from_wire(json.loads(rows[0]["body"])) if rows
+                   else ZoneSet(map_id, version, 0, ()))
+            if revision != cur.revision:
+                raise ZonesConflict(f"区域现在是第 {cur.revision} 版,确认的是第 {revision} 版:"
                                     "看过最新的再确认")
+            new = cur
+            if adopt is not None:
+                new = self._adopt(tx, map_id, version, cur, adopt, by, now, report)
+            body = json.dumps(new.to_wire(), ensure_ascii=False)
             if rows:
-                tx.execute("UPDATE nav_zones SET confirmed_rev=?, confirmed_by=?, confirmed_ms=? "
-                           "WHERE map_id=? AND map_version=?",
-                           (cur, by, self._now(), map_id, version))
+                if new is not cur:
+                    tx.execute("UPDATE nav_zones SET revision=?, body=?, updated_by=?, "
+                               "updated_ms=? WHERE map_id=? AND map_version=?",
+                               (new.revision, body, by, now, map_id, version))
             else:
-                empty = json.dumps(ZoneSet(map_id, version, 0, ()).to_wire())
                 tx.execute("INSERT INTO nav_zones(map_id, map_version, revision, body, updated_by,"
-                           " updated_ms, confirmed_rev, confirmed_by, confirmed_ms) "
-                           "VALUES (?,?,?,?,?,?,?,?,?)",
-                           (map_id, version, 0, empty, by, self._now(), 0, by, self._now()))
+                           " updated_ms) VALUES (?,?,?,?,?,?)",
+                           (map_id, version, new.revision, body, by, now))
+            self._mark_confirmed(tx, map_id, version, new, by, now, "confirm")
+        return report
+
+    def _adopt(self, tx: Any, map_id: str, version: str, cur: ZoneSet, adopt: dict, by: str,
+               now: int, report: dict[str, Any]) -> ZoneSet:
+        prow = tx.execute("SELECT body FROM nav_zone_proposals WHERE map_id=? AND map_version=? "
+                          "AND state='open'", (map_id, version)).fetchone()
+        if prow is None:
+            raise ZonesError(f"{map_id}:{version} 没有待核的、从上一版带过来的东西")
+        prop = json.loads(prow["body"])
+        offered = {z.get("id"): z for z in prop.get("zones", []) if isinstance(z, dict)}
+        ids = adopt.get("zones", [])
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids) \
+                or len(set(ids)) != len(ids):
+            raise ZonesError("adopt.zones 要是不重复的区域 id 列表")
+        missing = [i for i in ids if i not in offered]
+        if missing:
+            raise ZonesError(f"带过来的建议里没有这几个区域:{', '.join(missing)}")
+        merged = [z.to_wire() for z in cur.zones]
+        used = {z.id for z in cur.zones}
+        for zid in ids:
+            z = dict(offered[zid])
+            u = z.get("until_ms")
+            if isinstance(u, int) and not isinstance(u, bool) and u <= now:
+                report["zones"][zid] = ""                  # 带过来之后到期了:不要
+                continue
+            nid, k = zid, 1
+            while nid in used:
+                nid = f"{_ID_KEEP.sub('', zid)[:56]}-c{k}"
+                k += 1
+            used.add(nid)
+            merged.append(z | {"id": nid})
+            report["zones"][zid] = nid
+        tx.execute("UPDATE nav_zone_proposals SET state='adopted', closed_by=?, closed_ms=? "
+                   "WHERE map_id=? AND map_version=?", (by, now, map_id, version))
+        if not any(report["zones"].values()):
+            return cur
+        try:
+            return ZoneSet.from_wire({"map_id": map_id, "map_version": version,
+                                      "revision": cur.revision + 1, "zones": merged})
+        except ContractError as exc:
+            raise ZonesError(f"带过来的区域并不进去:{exc}") from exc
 
     def confirmed_current(self, map_id: str, version: str) -> bool:
         r = self._row(map_id, version)
         return r is not None and r["confirmed_rev"] is not None \
             and r["confirmed_rev"] == r["revision"]
+
+    # ------------------------------------------------------------ 临时区到期(决策 66)
+
+    def expire(self) -> list[ZoneSet]:
+        """删掉到期了的临时区:每个有到期区域的几何版本出一个新修订(``updated_by = site:expiry``);
+        跟最后确认过的那一份比还是只收紧的,带上确认(``confirmed_how = 'expiry'``)。回改了的那几份
+        (调用方发给狗)。"""
+        now = self._now()
+        out: list[ZoneSet] = []
+        for r in self.db.query("SELECT map_id, map_version FROM nav_zones "
+                               "WHERE body LIKE '%until_ms%'"):
+            with self.db.tx() as tx:
+                row = tx.execute("SELECT * FROM nav_zones WHERE map_id=? AND map_version=?",
+                                 (r["map_id"], r["map_version"])).fetchone()
+                if row is None:
+                    continue
+                cur = ZoneSet.from_wire(json.loads(row["body"]))
+                keep = cur.without_expired(now)
+                if keep is cur:
+                    continue
+                new = ZoneSet(cur.map_id, cur.map_version, cur.revision + 1, keep.zones)
+                tx.execute("UPDATE nav_zones SET revision=?, body=?, updated_by=?, updated_ms=? "
+                           "WHERE map_id=? AND map_version=?",
+                           (new.revision, json.dumps(new.to_wire(), ensure_ascii=False),
+                            EXPIRY_BY, now, new.map_id, new.map_version))
+                ok = self._confirmed_set(row)
+                confirmed = ok is not None and tightens(ok, new, now_ms=now)
+                if confirmed:
+                    self._mark_confirmed(tx, new.map_id, new.map_version, new, EXPIRY_BY, now,
+                                         "expiry")
+            gone = sorted({z.id for z in cur.zones} - {z.id for z in new.zones})
+            self._audit("zones_expired", f"{new.map_id}:{new.map_version}",
+                        {"revision": new.revision, "removed": gone, "confirmed": confirmed})
+            out.append(new)
+        return out
+
+    def _audit(self, action: str, target: str, detail: dict[str, Any]) -> None:
+        from d1max_site.audit import AuditLog
+        AuditLog(self.db, now_ms=self._now).record(actor=EXPIRY_BY, action=action, target=target,
+                                                   status=200, detail=detail)
+
+    # ------------------------------------------------------------ R2:新版本带过来的建议
+
+    def _previous(self, map_id: str, version: str) -> Any:
+        """站点目录里这一版之前的那一版(按登记时刻);这一版不在目录里、是第一版 → ``None``。"""
+        try:
+            me = self.db.query("SELECT rowid AS k, created_ms FROM maps WHERE map_id=? AND "
+                               "version=?", (map_id, version))
+            if not me:
+                return None
+            t, k = me[0]["created_ms"], me[0]["k"]
+            rows = self.db.query(
+                "SELECT version, files FROM maps WHERE map_id=? AND (created_ms<? OR "
+                "(created_ms=? AND rowid<?)) ORDER BY created_ms DESC, rowid DESC LIMIT 1",
+                (map_id, t, t, k))
+        except Exception:  # noqa: BLE001 —— 没有地图目录的老库:当没有上一版
+            return None
+        return rows[0] if rows else None
+
+    def proposal(self, map_id: str, version: str) -> dict[str, Any] | None:
+        """这一版待核的建议(没有、采纳过、丢掉了 → ``None``)。全新的版本头一回问的时候生成。"""
+        self._ensure_proposal(map_id, version)
+        rows = self.db.query("SELECT * FROM nav_zone_proposals WHERE map_id=? AND map_version=?",
+                             (map_id, version))
+        if not rows or rows[0]["state"] != "open":
+            return None
+        return json.loads(rows[0]["body"]) | {"from_version": rows[0]["from_version"],
+                                              "created_ms": rows[0]["created_ms"]}
+
+    def _ensure_proposal(self, map_id: str, version: str) -> None:
+        if self.db.query("SELECT 1 FROM nav_zone_proposals WHERE map_id=? AND map_version=?",
+                         (map_id, version)) or self._row(map_id, version) is not None:
+            return                                   # 生成过;或者这一版已经画过、确认过(不是全新的)
+        prev = self._previous(map_id, version)
+        if prev is None:
+            return
+        pv = prev["version"]
+        now = self._now()
+        pz = self.current(map_id, pv)
+        zones = [z.to_wire() for z in pz.zones if not z.expired(now)]
+        standby = [{"robot_id": r["robot_id"], "name": r["name"], "x": r["x"], "y": r["y"],
+                    "yaw": r["yaw"], "default": bool(r["is_default"])}
+                   for r in self.db.query(
+                       "SELECT * FROM standby_points WHERE map_id=? AND map_version=? "
+                       "ORDER BY robot_id, name", (map_id, pv))]
+        intercepts = [{"name": r["name"], "x": r["x"], "y": r["y"], "yaw": r["yaw"]}
+                      for r in self.db.query(
+                          "SELECT * FROM intercepts WHERE map_id=? AND map_version=? "
+                          "ORDER BY name", (map_id, pv))]
+        if not (zones or standby or intercepts):
+            return
+        me = self.db.query("SELECT files FROM maps WHERE map_id=? AND version=?",
+                           (map_id, version))
+        body = {"from_revision": pz.revision, "zones": zones, "standby": standby,
+                "intercepts": intercepts,
+                "frame": _frame(me[0]["files"] if me else "[]", prev["files"], pv)}
+        with self.db.tx() as tx:
+            tx.execute("INSERT OR IGNORE INTO nav_zone_proposals(map_id, map_version, "
+                       "from_version, body, created_ms) VALUES (?,?,?,?,?)",
+                       (map_id, version, pv, json.dumps(body, ensure_ascii=False), now))
+
+    def discard_proposal(self, map_id: str, version: str, *, by: str) -> None:
+        self._ensure_proposal(map_id, version)
+        with self.db.tx() as tx:
+            n = tx.execute("UPDATE nav_zone_proposals SET state='discarded', closed_by=?, "
+                           "closed_ms=? WHERE map_id=? AND map_version=? AND state='open'",
+                           (by, self._now(), map_id, version)).rowcount
+        if not n:
+            raise ZonesError(f"{map_id}:{version} 没有待核的、从上一版带过来的东西")
+
+
+def _frame(mine: str, prev: str, prev_version: str) -> dict[str, Any]:
+    """两版的坐标系对不对得上(R2):只看 ``frames.json``(雷达装法、哪边是上 —— 镜像的图就差在这)。
+    一样也不说明坐标一样(重新建的图起点不同、回环会挪),所以三种都要人核。"""
+    def sha(files: str) -> str | None:
+        try:
+            for f in json.loads(files or "[]"):
+                if isinstance(f, dict) and f.get("name") == "frames.json":
+                    return str(f.get("sha256"))
+        except ValueError:
+            pass
+        return None
+    a, b = sha(mine), sha(prev)
+    if a and b and a == b:
+        return {"same": True, "note": f"坐标系参数(frames.json)跟第 {prev_version} 版一样;"
+                                      "重新建的图坐标照样可能整体挪了,每一个都要对着新图核"}
+    if a and b:
+        return {"same": False, "note": f"坐标系参数(frames.json)跟第 {prev_version} 版不一样:"
+                                       "带过来的坐标很可能是错的,对不上的删掉重画"}
+    return {"same": None, "note": "看不出两版坐标系是不是一样(有一版没有 frames.json):"
+                                  "每一个都要对着新图核"}

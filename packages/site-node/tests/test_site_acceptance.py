@@ -164,9 +164,9 @@ def test_W00c1_端到端(现场):
     code, d = req(ctx, "POST", "/api/login", {"name": "alice", "password": PW})
     assert code == 200, d
     tok = d["token"]
-    # W10 外审 2:这一版区域没人确认过不派自主走的任务
+    # W10 外审 2:这一版区域没人确认过不派自主走的任务(R2:一个区域都没有的要明说 empty_ok)
     code, d = req(ctx, "POST", "/api/maps/estate-1/7/zones/confirm",
-                  {"revision": 0, "confirm": True}, token=tok)
+                  {"revision": 0, "confirm": True, "empty_ok": True}, token=tok)
     assert code == 200, d
     等(lambda: req(ctx, "GET", "/api/robots/A", token=tok)[1].get("fresh"), what="A 新鲜")
     # W09h(决策 19):钟差估出来之前不派会动的命令 —— 真进程、真 broker,钟对得上时估计值略负,
