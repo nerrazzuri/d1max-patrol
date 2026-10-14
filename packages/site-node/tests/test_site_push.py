@@ -14,7 +14,7 @@ from test_site_api import PW, 站
 
 from d1max_site.alert_store import AlertDesk
 from d1max_site.db import SiteDB
-from d1max_site.push import JPush, PushDesk, PushError, load_sender
+from d1max_site.push import JPush, PushDesk, PushError, collapse_id, load_sender
 
 NOW = 1_800_000_000_000
 
@@ -529,7 +529,7 @@ def test_H9_FCM_报文_鉴权换一次令牌反复用_快到期再换():
     assert msg["token"] == "t1" and msg["notification"] == {"title": "站 · P1", "body": "狗翻倒了"}
     assert msg["data"] == {"alert_key": "A/x#1", "tier": "2"}
     assert msg["android"]["priority"] == "HIGH" and msg["android"]["ttl"] == "3600s"
-    assert msg["android"]["notification"]["tag"] == "A/x#1#2", "重发盖掉原来那条,不叠"
+    assert msg["android"]["notification"]["tag"] == collapse_id("A/x#1", 2), "重发盖掉原来那条,不叠"
     clock[0] += 3500
     f.send(["t1"], "t", "b", {"alert_key": "k", "tier": "0"})
     assert sum("oauth" in c.full_url for c in calls) == 1, "还有一百秒才到期:接着用"
