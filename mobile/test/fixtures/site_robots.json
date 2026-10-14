@@ -24,7 +24,7 @@
         },
         "tasks": {
           "compat": {
-            "level": 2
+            "level": 3
           },
           "goto": {
             "autonomy": "autonomous",
@@ -67,6 +67,7 @@
           },
           "zones_set": {
             "enforced": false,
+            "erase": true,
             "rev": 0,
             "teleop_hard": true
           }
