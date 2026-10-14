@@ -27,6 +27,28 @@ import 'site_video.dart';
 import 'orientation.dart';
 import 'widget/joystick.dart';
 
+/// 硬禁区守卫（决策 65）说的话：狗在续租回执里说、站点转过来的 `{state, label?, max_vx?}`。
+/// 没什么要说的（`ok`、看不懂）是 null。
+String? teleopZoneText(Map<String, dynamic>? zg) {
+  if (zg == null) return null;
+  final name = '${zg['label'] ?? ''}'.isNotEmpty ? '${zg['label']}' : '${zg['zone'] ?? ''}';
+  final v = (zg['max_vx'] as num?)?.toStringAsFixed(1) ?? '0.2';
+  return switch ('${zg['state']}') {
+    'limited' => tr('Close to hard no-go zone "$name": slowing down', '离硬禁区「$name」近了：减速'),
+    'blocked' => tr('Next to hard no-go zone "$name": the robot will not drive further in. Drive or turn away',
+        '再往前会进硬禁区「$name」：不许往那边开，往外开、转开都行'),
+    'inside' => tr('At or inside hard no-go zone "$name": only moves that lead out are allowed',
+        '狗在硬禁区「$name」边上或里面：只许往外开'),
+    'untrusted' => tr(
+        'Position not trusted: hard no-go zones (water, drops) cannot be checked. Speed limited to $v m/s, watch the video',
+        '位置不可信：硬禁区（水体、落差）守不了，限速 $v m/s，看着画面开'),
+    'unsupported' => tr(
+        'This robot\'s software does not keep remote control out of hard no-go zones: watch the video and update the robot',
+        '这台狗的代理太老，遥控时不守硬禁区：看着画面开，升级代理'),
+    _ => null,
+  };
+}
+
 /// 结束原因给人看的话。
 String teleopEndText(String reason) => switch (reason) {
       'released' => tr('You released control', '你放开了遥控'),
@@ -51,6 +73,7 @@ class SiteTeleopPage extends StatefulWidget {
   static const Key moveStickKey = Key('teleop-move');
   static const Key turnStickKey = Key('teleop-turn');
   static const Key keysKey = Key('teleop-keys');
+  static const Key zoneKey = Key('teleop-zone');
 
   @override
   State<SiteTeleopPage> createState() => _SiteTeleopPageState();
@@ -66,6 +89,9 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
   bool _ended = false;
   double _maxVx = 0, _maxWz = 0;
   double _fwd = 0, _turn = 0;
+
+  /// 硬禁区守卫这会儿说的（决策 65）；null = 没什么要说的。
+  String? _zoneNote;
 
   /// 通知栏拉下来、来电盖住这一类：手指多半被系统收走了，这段时间只发零速。
   bool _inactive = false;
@@ -154,6 +180,7 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           _maxWz = (m['max_wz'] as num?)?.toDouble() ?? 0;
           _status = tr('You are in control (speed limit ${_maxVx.toStringAsFixed(2)} m/s)',
               '你在遥控（限速 ${_maxVx.toStringAsFixed(2)} m/s）');
+          _zoneNote = teleopZoneText(m['zone_guard'] as Map<String, dynamic>?);
         });
         _tick ??= Timer.periodic(const Duration(milliseconds: 100), (_) => _sendNow());
       case 'video':
@@ -166,6 +193,9 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
           _link?.send(0, 0);
         }
         setState(() => _video = ok);
+      case 'zone_guard':
+        // 只是告诉人为什么截了（截速度是狗那头的事）：杆、定时器、键盘一概不动
+        setState(() => _zoneNote = teleopZoneText(m));
       case 'ended':
         _stopTicking();
         _clearKeys();
@@ -377,6 +407,22 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                   ),
                 ),
               ),
+              if (_zoneNote != null && !_ended)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: Nw.s8, vertical: Nw.s4),
+                    decoration: BoxDecoration(
+                        color: c.soft(NwTone.warning),
+                        borderRadius: BorderRadius.circular(Nw.r8),
+                        border: Border.all(color: c.fg(NwTone.warning))),
+                    child: Text(_zoneNote!,
+                        key: SiteTeleopPage.zoneKey,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: NwText.bodySmall.copyWith(color: c.text, fontWeight: FontWeight.w600)),
+                  ),
+                ),
               if (desktop)
                 Padding(
                   key: SiteTeleopPage.keysKey,

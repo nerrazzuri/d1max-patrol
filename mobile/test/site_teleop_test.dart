@@ -479,6 +479,42 @@ void main() {
     await t.pumpWidget(Container());
   });
 
+  testWidgets('硬禁区（决策 65）：狗说截了、减速、位置不可信，屏上说为什么；没事了就收起来', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api);
+    expect(find.byKey(SiteTeleopPage.zoneKey), findsNothing);
+    Future<void> say(Map<String, dynamic> m) async {
+      api.link!.ctl.add(<String, dynamic>{'kind': 'zone_guard', ...m});
+      await t.pump();
+      await t.pump();
+    }
+    await say({'state': 'blocked', 'zone': 'pool', 'label': '池子'});
+    expect(find.textContaining('再往前会进硬禁区「池子」'), findsOneWidget);
+    await say({'state': 'limited', 'zone': 'pool', 'label': '池子'});
+    expect(find.textContaining('离硬禁区「池子」近了'), findsOneWidget);
+    await say({'state': 'inside', 'zone': 'pool', 'label': '池子'});
+    expect(find.textContaining('只许往外开'), findsOneWidget);
+    await say({'state': 'untrusted', 'max_vx': 0.2});
+    expect(find.textContaining('位置不可信'), findsOneWidget);
+    expect(find.textContaining('0.2 m/s'), findsOneWidget);
+    await say({'state': 'ok'});
+    expect(find.byKey(SiteTeleopPage.zoneKey), findsNothing);
+    expect(_stickEnabled(t, 0), isTrue, reason: '只是告诉人,杆照常(截速度是狗那头的事)');
+    await t.pumpWidget(Container());
+  });
+
+  testWidgets('硬禁区：老狗不守，开场（granted 里）就说', (t) async {
+    final api = FakeApi('guard');
+    await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
+    await t.pump();
+    api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5,
+      'max_wz': 0.75, 'zone_guard': {'state': 'unsupported', 'reason': 'x'}});
+    await t.pump();
+    await t.pump();
+    expect(find.textContaining('不守硬禁区'), findsOneWidget);
+    await t.pumpWidget(Container());
+  });
+
   testWidgets('连接还没回来就退出这一页：回来的那条连接放租、关掉（W00c5 修复内部评审）', (t) async {
     // 最常见的交错：「正在拿遥控……」的时候按了返回。页面已经销毁，回来的连接不许留着租约。
     final api = FakeApi('guard')..teleopGate = Completer<void>();

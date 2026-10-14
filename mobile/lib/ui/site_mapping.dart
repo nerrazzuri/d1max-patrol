@@ -448,7 +448,8 @@ class _SiteMappingTrailPageState extends State<SiteMappingTrailPage> with Widget
   }
 }
 
-/// 图右边那一栏（状态、图上登记的东西、区域）：卡片的底、左边一条线，里面能滚。
+/// 图右边那一栏（状态、图上登记的东西、区域）：卡片的底、左边一条线，里面能滚。不按需建：区域、带过来的
+/// 建议、确认按钮一项不少都在（R2 之后这一栏长了，按需建的列表里滚到下面之前按钮还不存在）。
 Widget _sidePanel(BuildContext context, List<Widget> children) {
   final c = Nw.of(context);
   return SizedBox(
@@ -458,7 +459,10 @@ Widget _sidePanel(BuildContext context, List<Widget> children) {
           shape: Border(left: BorderSide(color: c.outline)),
           child: DefaultTextStyle.merge(
               style: NwText.bodyMedium.copyWith(color: c.text),
-              child: ListView(padding: const EdgeInsets.all(8), children: children))));
+              child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch, children: children)))));
 }
 
 /// 在预览图上画走过的路、狗现在的位置与朝向。坐标是预览的平面系（米）：图的左下角是 [origin]、y 朝上，
@@ -619,6 +623,17 @@ class SiteMapPreviewPage extends StatefulWidget {
   static const Key confirmKey = Key('zone-confirm');
   static const Key confirmOkKey = Key('zone-confirm-ok');
   static Key deleteKey(String id) => Key('zone-del-$id');
+  /// 决策 65：画禁行区时标「硬禁区」（水体、落差：遥控也开不进去）。
+  static const Key hardKey = Key('zone-hard');
+  /// 决策 66：临时区多久到期（下拉框；里面每一项按秒，null = 一直有效）。
+  static const Key untilKey = Key('zone-until');
+  static Key forKey(int? seconds) => Key('zone-for-${seconds ?? 0}');
+  /// R2：新版本从上一版带过来、等人核的那一块；每一项的勾；不要了。
+  static const Key proposalKey = Key('zone-proposal');
+  static Key proposedKey(String kind, String id) => Key('zone-prop-$kind-$id');
+  static const Key discardProposalKey = Key('zone-proposal-discard');
+  /// R2：确认一个区域都没有的那一版，多弹的那道提示上的「真的没有」。
+  static const Key confirmEmptyKey = Key('zone-confirm-empty');
 
   @override
   State<SiteMapPreviewPage> createState() => _SiteMapPreviewPageState();
@@ -641,6 +656,13 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
   double _speed = 0.3;
   bool _busy = false;
   String? _msg;
+
+  /// 正在画的禁行区是不是硬禁区（决策 65）、临时区多久到期（决策 66，秒；null = 一直有效）。
+  bool _hard = false;
+  int? _forS;
+
+  /// 带过来的建议里勾上了哪几个（R2）：`zone:id`、`standby:狗/名字`、`intercept:名字`。
+  final Set<String> _adopt = <String>{};
 
   /// 预览 JSON，再取底图：站点给了平面图先取平面图，取不到退回栅格预览图（[loadMapBase]）。
   Future<(Map<String, dynamic>, Uint8List, bool)> _load() async {
@@ -679,21 +701,33 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       (_zones?['zones'] as List? ?? const []).cast<Map<String, dynamic>>();
   int get _rev => (_zones?['revision'] as num? ?? 0).toInt();
 
-  /// 整份存（新加、删一个都走这里）；站点回什么就说什么（409 = 别人先改了）。
-  Future<void> _save(List<Map<String, dynamic>> zones, String done) async {
+  /// 新版本从上一版带过来、等人核的（R2）；没有是 null。
+  Map<String, dynamic>? get _proposal => _zones?['proposal'] as Map<String, dynamic>?;
+  List<Map<String, dynamic>> _propList(String k) =>
+      (_proposal?[k] as List? ?? const []).cast<Map<String, dynamic>>();
+
+  /// 整份存（新加、删一个都走这里）；站点回什么就说什么（409 = 别人先改了）。[done] 拿站点说的
+  /// 「只收紧、当场算确认了」（决策 66）给出那句话。
+  Future<void> _save(List<Map<String, dynamic>> zones, String Function(bool auto) done) async {
     setState(() {
       _busy = true;
       _msg = null;
     });
     try {
-      await widget.api.saveZones(widget.mapId, widget.version, zones, _rev);
-      _msg = done;
+      final r = await widget.api.saveZones(widget.mapId, widget.version, zones, _rev);
+      _msg = done(r['auto_confirmed'] == true);
     } on SiteError catch (e) {
       _msg = tr('Not saved: ${e.message}', '没存上：${e.message}');
     }
     await _loadZones();
     if (mounted) setState(() => _busy = false);
   }
+
+  void _startDrawing(String kind) => setState(() {
+        _drawing = kind;
+        _hard = false;
+        _forS = null;
+      });
 
   Future<void> _finish() async {
     final kind = _drawing!;
@@ -710,18 +744,41 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           [double.parse(p.dx.toStringAsFixed(2)), double.parse(p.dy.toStringAsFixed(2))]
       ],
       if (kind == 'slow') 'max_speed_mps': double.parse(_speed.toStringAsFixed(1)),
+      if (kind == 'nogo' && _hard) 'hard': true,
+      // 临时区：给时长，站点按它自己的钟换成到期时刻（手机的钟可能不准）
+      if (_forS != null) 'for_s': _forS,
     };
     setState(() {
       _drawing = null;
       _draft.clear();
     });
+    final next = _rev + 1;
     await _save(
         [..._zoneList, zone],
-        tr('Saved: revision ${_rev + 1} (changes must be confirmed again)',
-            '存好了：第 ${_rev + 1} 版（改过要重新确认）'));
+        (auto) => auto
+            ? tr('Saved: revision $next (only tightens: stays confirmed, robots can still be sent out)',
+                '存好了：第 $next 版（只收紧：不用重新确认，照常派狗）')
+            : tr('Saved: revision $next (changes must be confirmed again)',
+                '存好了：第 $next 版（改过要重新确认）'));
   }
 
   Future<void> _confirm() async {
+    final prop = _proposal;
+    final zoneIds = [
+      for (final z in _propList('zones'))
+        if (_adopt.contains('zone:${z['id']}')) '${z['id']}'
+    ];
+    final standby = [
+      for (final p in _propList('standby'))
+        if (_adopt.contains('standby:${p['robot_id']}/${p['name']}')) ['${p['robot_id']}', '${p['name']}']
+    ];
+    final intercepts = [
+      for (final p in _propList('intercepts'))
+        if (_adopt.contains('intercept:${p['name']}')) '${p['name']}'
+    ];
+    final picked = zoneIds.length + standby.length + intercepts.length;
+    final offered =
+        _propList('zones').length + _propList('standby').length + _propList('intercepts').length;
     // 二次确认（W10 内审小 15）：把确认的那句话念一遍，别跟画区域的按钮误触
     final ok = await showDialog<bool>(
         context: context,
@@ -729,8 +786,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               scrollable: true,
               title: Text(tr('Confirm zones revision $_rev', '确认第 $_rev 版区域')),
               content: Text(tr(
-                  '${_zones?['confirm_text'] ?? ''}.\nThe map can be sent to robots only after you confirm.',
-                  '${_zones?['confirm_text'] ?? ''}。\n确认之后这张图才能下发给狗。')),
+                  '${_zones?['confirm_text'] ?? ''}.\nThe map can be sent to robots only after you confirm.'
+                      '${prop == null ? '' : '\nCopied from version ${prop['from_version']}: adopting the $picked ticked item(s) of $offered; the rest are dropped.'}',
+                  '${_zones?['confirm_text'] ?? ''}。\n确认之后这张图才能下发给狗。'
+                      '${prop == null ? '' : '\n从第 ${prop['from_version']} 版带过来的 $offered 个里，采纳勾上的 $picked 个，没勾的不要了。'}')),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(c, false),
@@ -742,15 +801,73 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               ],
             ));
     if (ok != true || !mounted) return;
+    var emptyOk = false;
+    if (_zoneList.isEmpty && zoneIds.isEmpty) {
+      // R2：一个区域都没有的那一版再问一道 —— 重建图之后，上一版画的泳池可能悄悄没了
+      final prev = _zones?['previous'] as Map<String, dynamic>?;
+      final had = (prev?['zones'] as num? ?? 0).toInt();
+      final ok2 = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+                scrollable: true,
+                title: Text(tr('No zones at all', '一个区域都没有')),
+                content: Text(tr(
+                    'This version has no no-go or speed-limit zone at all'
+                        '${had > 0 ? ' (version ${prev?['version']} had $had)' : ''}. Confirm only if there '
+                        'really is no water, drop, steep slope or flower bed anywhere on this map.',
+                    '这一版一个禁行区、限速区都没有${had > 0 ? '（上一版第 ${prev?['version']} 版画了 $had 个）' : ''}。'
+                        '确认之前再看一眼：水体、落差、陡坡、花坛真的一处都没有吗？')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(c, false),
+                      child: Text(tr('Review again', '再看看'))),
+                  FilledButton(
+                      key: SiteMapPreviewPage.confirmEmptyKey,
+                      onPressed: () => Navigator.pop(c, true),
+                      child: Text(tr('Yes, there are none', '真的没有'))),
+                ],
+              ));
+      if (ok2 != true || !mounted) return;
+      emptyOk = true;
+    }
     setState(() {
       _busy = true;
       _msg = null;
     });
     try {
-      await widget.api.confirmZones(widget.mapId, widget.version, _rev);
-      _msg = tr('Revision $_rev confirmed', '确认了第 $_rev 版');
+      final r = await widget.api.confirmZones(widget.mapId, widget.version, _rev,
+          emptyOk: emptyOk,
+          adopt: prop == null
+              ? null
+              : <String, dynamic>{'zones': zoneIds, 'standby': standby, 'intercepts': intercepts});
+      // 待命点、拦截点没搬过去的（上一版的改过、拦截点走不到……）说原因
+      final adopted = r['adopted'] as Map<String, dynamic>?;
+      final failed = [
+        for (final k in const ['standby', 'intercepts'])
+          for (final e in ((adopted?[k] as Map?) ?? const {}).entries)
+            if ('${e.value}'.isNotEmpty) '${e.key}: ${e.value}'
+      ];
+      _adopt.clear();
+      _msg = tr('Revision ${r['revision'] ?? _rev} confirmed', '确认了第 ${r['revision'] ?? _rev} 版') +
+          (failed.isEmpty ? '' : '\n${failed.join('\n')}');
     } on SiteError catch (e) {
       _msg = tr('Not confirmed: ${e.message}', '没确认上：${e.message}');
+    }
+    await _loadZones();
+    if (mounted) setState(() => _busy = false);
+  }
+
+  Future<void> _discardProposal() async {
+    setState(() {
+      _busy = true;
+      _msg = null;
+    });
+    try {
+      await widget.api.discardZoneProposal(widget.mapId, widget.version);
+      _adopt.clear();
+      _msg = tr('Copied items dropped', '带过来的不要了');
+    } on SiteError catch (e) {
+      _msg = tr('Not dropped: ${e.message}', '没丢掉：${e.message}');
     }
     await _loadZones();
     if (mounted) setState(() => _busy = false);
@@ -790,14 +907,15 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           final zones = _zones != null
               ? _zoneList
               : (meta['zones'] as List? ?? const []).cast<Map<String, dynamic>>();
+          List<Offset> poly(Map<String, dynamic> z) => [
+                for (final v in (z['polygon'] as List? ?? const []))
+                  px(((v as List)[0] as num).toDouble(), (v[1] as num).toDouble())
+              ];
           final shapes = [
-            for (final z in zones)
-              ZoneShape(
-                  z['kind'] == 'nogo',
-                  [
-                    for (final v in (z['polygon'] as List? ?? const []))
-                      px(((v as List)[0] as num).toDouble(), (v[1] as num).toDouble())
-                  ]),
+            for (final z in zones) ZoneShape(z['kind'] == 'nogo', poly(z), hard: z['hard'] == true),
+            // R2：从上一版带过来、还没人核的：只画轮廓，跟生效的分开
+            for (final z in _propList('zones'))
+              ZoneShape(z['kind'] == 'nogo', poly(z), hard: z['hard'] == true, proposed: true),
           ];
           final draft = [for (final p in _draft) px(p.dx, p.dy)];
           final r = math.max(2.0, math.max(w, h) / 120);
@@ -903,6 +1021,74 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
     );
   }
 
+  /// 临时区到期的时刻（决策 66），按手机的钟显示：` · 到 10-14 18:30`。
+  static String _untilText(Object? untilMs) {
+    if (untilMs is! num) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(untilMs.toInt());
+    String two(int v) => v.toString().padLeft(2, '0');
+    final s = '${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+    return tr(' · until $s', ' · 到 $s');
+  }
+
+  /// R2：新版本从上一版带过来、等人核的。横幅说清楚坐标可能不一样（坐标系参数不一样就明说）；每一项
+  /// 一个勾（管理员才勾得动），勾上的在确认时才采纳；管理员也能整个不要。
+  List<Widget> _proposalPanel(Map<String, dynamic> prop, bool admin) {
+    final c = Nw.of(context);
+    final from = '${prop['from_version']}';
+    final same = (prop['frame'] as Map<String, dynamic>?)?['same'];
+    Widget tick(String key, String kind, String id, String title) => CheckboxListTile(
+        key: SiteMapPreviewPage.proposedKey(kind, id),
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        value: _adopt.contains(key),
+        onChanged: admin && !_busy
+            ? (v) => setState(() => v == true ? _adopt.add(key) : _adopt.remove(key))
+            : null,
+        title: Text(title));
+    return [
+      NwNotice(
+          key: SiteMapPreviewPage.proposalKey,
+          tone: same == false ? NwTone.error : NwTone.warning,
+          text: tr(
+              'Copied from version $from: check each one against the new map; coordinates may differ. '
+                  'Nothing here is in force until you tick it and confirm.',
+              '从第 $from 版带过来的：每一个都要对着新图核，坐标可能不一样。勾上、确认之后才生效。')),
+      if (same == false)
+        Text(
+            tr('The coordinate frame changed (frames.json differs): copied positions are probably wrong. '
+                'Redraw instead.', '坐标系变了（frames.json 不一样）：带过来的位置很可能是错的，重画。'),
+            style: NwText.bodyMedium.copyWith(color: c.error, fontWeight: FontWeight.bold)),
+      if (same == null)
+        Text(tr('Cannot tell whether the coordinate frame is the same.', '看不出坐标系是不是一样。'),
+            style: NwText.bodySmall.copyWith(color: c.warning)),
+      for (final z in _propList('zones'))
+        tick(
+            'zone:${z['id']}',
+            'zone',
+            '${z['id']}',
+            z['kind'] == 'nogo'
+                ? (z['hard'] == true
+                    ? tr('Hard no-go · ${zoneLabelText(z['label'])}', '硬禁区 · ${z['label'] ?? ''}')
+                    : tr('No-go · ${zoneLabelText(z['label'])}', '禁行 · ${z['label'] ?? ''}'))
+                : tr('Limit ${z['max_speed_mps']} m/s · ${zoneLabelText(z['label'])}',
+                    '限速 ${z['max_speed_mps']} m/s · ${z['label'] ?? ''}')),
+      for (final p in _propList('standby'))
+        tick('standby:${p['robot_id']}/${p['name']}', 'standby', '${p['robot_id']}/${p['name']}',
+            tr('Standby point · ${p['robot_id']} · ${p['name']}', '待命点 · ${p['robot_id']} · ${p['name']}')),
+      for (final p in _propList('intercepts'))
+        tick('intercept:${p['name']}', 'intercept', '${p['name']}',
+            tr('Intercept point · ${p['name']}', '拦截点 · ${p['name']}')),
+      if (admin)
+        Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+                key: SiteMapPreviewPage.discardProposalKey,
+                onPressed: _busy ? null : _discardProposal,
+                child: Text(tr('Drop all copied items', '带过来的都不要')))),
+      const Divider(),
+    ];
+  }
+
   List<Widget> _zonePanel(List<Map<String, dynamic>> zones) {
     final admin = widget.api.session?.canManageMaps ?? false;
     if (_zonesError != null) {
@@ -911,12 +1097,19 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
     if (_zones == null) return [Text(tr('Loading zones…', '区域取的中…'))];
     final conf = _zones!['confirmed'] as Map<String, dynamic>?;
     final confirmed = conf != null && conf['current'] == true;
+    final prop = _proposal;
     return [
       Text(tr('No-go / speed-limit zones · revision $_rev', '禁行区 / 限速区 · 第 $_rev 版'),
           style: const TextStyle(fontWeight: FontWeight.bold)),
       Text(
           confirmed
-              ? tr('Confirmed (${conf['by']})', '已确认（${conf['by']}）')
+              ? switch (conf['how']) {
+                  // 决策 66：只收紧的改动当场算确认了；临时区到期删掉也算（到期是确认时就定好的）
+                  'tighten' => tr('Confirmed (${conf['by']}, only tightened)',
+                      '已确认（${conf['by']}，只收紧）'),
+                  'expiry' => tr('Confirmed (a temporary zone expired)', '已确认（临时区到期删了）'),
+                  _ => tr('Confirmed (${conf['by']})', '已确认（${conf['by']}）'),
+                }
               : conf == null
                   ? tr('Not confirmed: this map cannot be sent to robots', '还没确认：这张图下发不了')
                   : tr(
@@ -924,14 +1117,20 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                           'cannot be sent to robots',
                       '改过之后没重新确认（确认的是第 ${conf['revision']} 版）：下发不了'),
           style: TextStyle(color: confirmed ? Nw.of(context).text : Nw.of(context).warning)),
+      if (prop != null) ..._proposalPanel(prop, admin),
       if (zones.isEmpty) Text(tr('No zones drawn', '没画区域')),
       for (final z in zones)
         Row(children: [
           Expanded(
-              child: Text(z['kind'] == 'nogo'
-                  ? tr('No-go · ${zoneLabelText(z['label'])} (${z['id']})', '禁行 · ${z['label'] ?? ''}（${z['id']}）')
-                  : tr('Limit ${z['max_speed_mps']} m/s · ${zoneLabelText(z['label'])} (${z['id']})',
-                      '限速 ${z['max_speed_mps']} m/s · ${z['label'] ?? ''}（${z['id']}）'))),
+              child: Text((z['kind'] == 'nogo'
+                      ? (z['hard'] == true
+                          ? tr('Hard no-go · ${zoneLabelText(z['label'])} (${z['id']})',
+                              '硬禁区 · ${z['label'] ?? ''}（${z['id']}）')
+                          : tr('No-go · ${zoneLabelText(z['label'])} (${z['id']})',
+                              '禁行 · ${z['label'] ?? ''}（${z['id']}）'))
+                      : tr('Limit ${z['max_speed_mps']} m/s · ${zoneLabelText(z['label'])} (${z['id']})',
+                          '限速 ${z['max_speed_mps']} m/s · ${z['label'] ?? ''}（${z['id']}）')) +
+                  _untilText(z['until_ms']))),
           if (admin && _drawing == null)
             IconButton(
                 key: SiteMapPreviewPage.deleteKey('${z['id']}'),
@@ -940,30 +1139,43 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                     '删掉（放宽：狗空闲时才换上）'),
                 onPressed: _busy
                     ? null
-                    : () => _save(
-                        [for (final o in zones) if (o['id'] != z['id']) o],
-                        tr('Deleted: revision ${_rev + 1} (changes must be confirmed again)',
-                            '删了：第 ${_rev + 1} 版（改过要重新确认）'))),
+                    : () {
+                        final next = _rev + 1;
+                        _save(
+                            [for (final o in zones) if (o['id'] != z['id']) o],
+                            (auto) => auto
+                                ? tr('Deleted: revision $next (nothing was relaxed: stays confirmed)',
+                                    '删了：第 $next 版（没放宽：不用重新确认）')
+                                : tr('Deleted: revision $next (changes must be confirmed again)',
+                                    '删了：第 $next 版（改过要重新确认）'));
+                      }),
         ]),
       if (_msg != null) Text(_msg!),
       if (admin && _drawing == null) ...[
         Wrap(spacing: 4, children: [
           OutlinedButton(
               key: SiteMapPreviewPage.drawNogoKey,
-              onPressed: _busy ? null : () => setState(() => _drawing = 'nogo'),
+              onPressed: _busy ? null : () => _startDrawing('nogo'),
               child: Text(tr('Draw no-go zone', '画禁行区'))),
           OutlinedButton(
               key: SiteMapPreviewPage.drawSlowKey,
-              onPressed: _busy ? null : () => setState(() => _drawing = 'slow'),
+              onPressed: _busy ? null : () => _startDrawing('slow'),
               child: Text(tr('Draw speed-limit zone', '画限速区'))),
         ]),
-        if (!confirmed) ...[
+        Text(
+            tr('Adding or enlarging a zone, a lower limit or the hard mark takes effect at once. Deleting, '
+                'shrinking or raising a limit must be confirmed again before robots are sent out.',
+                '加禁行区、放大、调低限速、标硬禁区当场生效；删、缩、调高限速要重新确认才派狗。'),
+            style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
+        if (!confirmed || prop != null) ...[
           Text('${_zones!['confirm_text'] ?? ''}',
               style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
           FilledButton(
               key: SiteMapPreviewPage.confirmKey,
               onPressed: _busy ? null : _confirm,
-              child: Text(tr('Confirm revision $_rev', '确认第 $_rev 版'))),
+              child: Text(prop == null
+                  ? tr('Confirm revision $_rev', '确认第 $_rev 版')
+                  : tr('Confirm revision $_rev with the ticked items', '确认第 $_rev 版（带勾上的）'))),
         ],
       ],
       if (_drawing != null) ...[
@@ -971,6 +1183,36 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
             '${_drawing == 'nogo' ? 'No-go zone' : 'Speed-limit zone'}: tap the map to add corners, '
                 '${_draft.length} so far',
             '${_drawing == 'nogo' ? '禁行区' : '限速区'}：点图加顶点，已 ${_draft.length} 个')),
+        if (_drawing == 'nogo')
+          CheckboxListTile(
+              key: SiteMapPreviewPage.hardKey,
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              value: _hard,
+              onChanged: (v) => setState(() => _hard = v ?? false),
+              title: Text(tr('Hard no-go (water, drops): remote control also keeps out',
+                  '硬禁区（水体、落差）：遥控也开不进去'))),
+        Row(children: [
+          Text(tr('Expires: ', '到期：'), style: NwText.bodySmall),
+          Expanded(
+            child: DropdownButton<int?>(
+                key: SiteMapPreviewPage.untilKey,
+                isExpanded: true,
+                value: _forS,
+                onChanged: (s) => setState(() => _forS = s),
+                items: [
+                  for (final (s, label) in [
+                    (null, tr('Never', '一直有效')),
+                    (3600, tr('In 1 h', '1 小时后')),
+                    (8 * 3600, tr('In 8 h', '8 小时后')),
+                    (86400, tr('In 1 day', '1 天后')),
+                    (7 * 86400, tr('In 7 days', '7 天后')),
+                  ])
+                    DropdownMenuItem<int?>(
+                        key: SiteMapPreviewPage.forKey(s), value: s, child: Text(label)),
+                ]),
+          ),
+        ]),
         if (_drawing == 'slow')
           Row(children: [
             Text(tr('Limit ${_speed.toStringAsFixed(1)} m/s', '限速 ${_speed.toStringAsFixed(1)} m/s')),
@@ -1004,14 +1246,18 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
   }
 }
 
-/// 一个区域在图上的样子：禁行（红）还是限速（黄），顶点（图的像素坐标）。
+/// 一个区域在图上的样子：禁行（红）还是限速（黄），顶点（图的像素坐标）；硬禁区（决策 65）更深、
+/// 边更粗；从上一版带过来、等人核的（R2）只画轮廓。
 class ZoneShape {
-  const ZoneShape(this.nogo, this.pixels);
+  const ZoneShape(this.nogo, this.pixels, {this.hard = false, this.proposed = false});
   final bool nogo;
   final List<Offset> pixels;
+  final bool hard;
+  final bool proposed;
 }
 
-/// 画区域（W10）：禁行红、限速黄，半透明；正在画的那一个用虚一点的蓝线连着顶点。
+/// 画区域（W10）：禁行红、限速黄，半透明；硬禁区深红、粗边；带过来的只有灰蓝色的轮廓；正在画的那一个
+/// 用虚一点的蓝线连着顶点。
 class ZonesPainter extends CustomPainter {
   ZonesPainter(this.shapes, this.draft, {this.radius = 3});
   final List<ZoneShape> shapes;
@@ -1023,14 +1269,23 @@ class ZonesPainter extends CustomPainter {
     for (final z in shapes) {
       if (z.pixels.length < 3) continue;
       final path = Path()..addPolygon(z.pixels, true);
-      final c = z.nogo ? Colors.red : Colors.amber;
-      canvas.drawPath(path, Paint()..color = c.withValues(alpha: 0.35));
+      if (z.proposed) {
+        canvas.drawPath(
+            path,
+            Paint()
+              ..color = Colors.blueGrey
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = radius / 2);
+        continue;
+      }
+      final c = z.nogo ? (z.hard ? Colors.red.shade900 : Colors.red) : Colors.amber;
+      canvas.drawPath(path, Paint()..color = c.withValues(alpha: z.hard ? 0.55 : 0.35));
       canvas.drawPath(
           path,
           Paint()
             ..color = c
             ..style = PaintingStyle.stroke
-            ..strokeWidth = radius / 2);
+            ..strokeWidth = z.hard ? radius : radius / 2);
     }
     if (draft.isNotEmpty) {
       final line = Paint()
