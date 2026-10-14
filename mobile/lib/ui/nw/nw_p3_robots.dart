@@ -162,8 +162,12 @@ class NwFleet extends StatefulWidget {
 class _NwFleetState extends State<NwFleet> {
   FleetFilter _filter = FleetFilter.all;
 
-  /// 汇总里读到的电量（编号 → 百分数、读数时刻）；读不到、汇总里是「不知道」、没说什么时候读的都没有这一项。
-  Map<String, (double, int)> _battery = const <String, (double, int)>{};
+  /// 汇总里读到的电量（编号 → 百分数、拿到汇总那一刻它已经旧了多少毫秒、本机拿到汇总的时刻）；读不到、
+  /// 汇总里是「不知道」、没说什么时候读的都没有这一项。
+  ///
+  /// 「旧了多少」按**站点自己的钟**算（汇总带着站点的 `now_ms`），之后再加本机钟上过去的时间：
+  /// 手机跟站点的钟对不上（差几分钟、几小时）也不会把新读数藏掉、把旧读数当新的。
+  Map<String, (double, int, DateTime)> _battery = const <String, (double, int, DateTime)>{};
   DateTime? _batteryAt;
   int _batterySeq = 0;
 
@@ -192,13 +196,17 @@ class _NwFleetState extends State<NwFleet> {
     try {
       final s = SiteWatchSummary.fromWire(await load());
       if (!mounted || seq != _batterySeq) return;       // 迟到的旧回复不盖新的
+      final got = widget.now();
+      // 站点没带 now_ms（老站点）：只能拿本机的钟比
+      final siteNow = s.nowMs > 0 ? s.nowMs : got.millisecondsSinceEpoch;
       setState(() => _battery = {
             for (final r in s.robots)
-              if (r.batteryPct != null && r.batteryAsOfMs != null) r.robotId: (r.batteryPct!, r.batteryAsOfMs!),
+              if (r.batteryPct != null && r.batteryAsOfMs != null)
+                r.robotId: (r.batteryPct!, siteNow - r.batteryAsOfMs!, got),
           });
     } catch (_) {
       if (!mounted || seq != _batterySeq) return;
-      setState(() => _battery = const <String, (double, int)>{});   // 读不到：不留着上一次的当现在的
+      setState(() => _battery = const <String, (double, int, DateTime)>{});   // 读不到：不留着上一次的当现在的
     }
   }
 
@@ -207,7 +215,7 @@ class _NwFleetState extends State<NwFleet> {
   Map<String, dynamic> _withBattery(Map<String, dynamic> r) {
     final b = _battery['${r['robot_id']}'];
     if (b == null || r['battery_pct'] is num) return r;
-    final age = widget.now().millisecondsSinceEpoch - b.$2;
+    final age = b.$2 + widget.now().difference(b.$3).inMilliseconds;
     return age > NwFleet.batteryMaxAge.inMilliseconds ? r : {...r, 'battery_pct': b.$1};
   }
 
