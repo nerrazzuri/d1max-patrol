@@ -1022,7 +1022,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteSchedulePage(api: api)));
     await t.pumpAndSettle();
     expect(find.textContaining('nightly'), findsOneWidget);
-    expect(find.textContaining('estate-kl'), findsOneWidget);
+    expect(find.textContaining('站点路线库'), findsOneWidget);   // 2026-10-14:不再显示任务包名,显示路线库的修订号
   });
 }
 
