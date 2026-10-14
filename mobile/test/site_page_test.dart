@@ -114,6 +114,25 @@ class FakeApi implements SiteApi {
   Future<void> pushRegister(String id, String platform, {String provider = 'jpush'}) async => pushLog.add('+$id/$platform');
   @override
   Future<void> pushUnregister(String id) async => pushLog.add('-$id');
+  /// 运营可视化：`runViz` / `locEpisodes` 的内容；[vizError] 给了就抛。
+  Map<String, dynamic> vizBody = <String, dynamic>{'robots': <String, dynamic>{}};
+  List<Map<String, dynamic>> episodesBody = <Map<String, dynamic>>[];
+  SiteError? vizError;
+  @override
+  Future<Map<String, dynamic>> runViz() async {
+    calls.add('runViz');
+    if (vizError != null) throw vizError!;
+    return vizBody;
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> locEpisodes(
+      {String? mapId, String? mapVersion, String? robot, int? sinceMs, int limit = 200}) async {
+    calls.add('locEpisodes $mapId:$mapVersion');
+    if (vizError != null) throw vizError!;
+    return episodesBody;
+  }
+
   @override
   Future<List<Map<String, dynamic>>> robots() async {
     robotsCalls++;
