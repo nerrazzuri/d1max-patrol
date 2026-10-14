@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 
 import pytest
@@ -287,7 +288,13 @@ async def test_跟里程对不上也当跳_里程不新鲜时修正量给不出(
     loc.update((0.0, 0.0, 0.0), True)
     for _ in range(SETTLE_FIXES):
         loc.on_pose(_位姿(1.0, 0.0))
-    assert loc.ok(True) and got == [None], "里程断过:旧坐标换不过来,引擎把来路作废"
+    # 对账 S1:跳过、里程又断过 —— 核不了稳下来的地方,不再照旧认(原来这里直接认了)
+    assert not loc.ok(True) and "里程断过" in loc.why_not(True) and got == []
+    assert await loc.relocalize(M, (1.0, 0.0, 0.0)) == ""   # 人给位置
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(1.0, 0.0, jump=True, reloc_id=r.req))
+    _稳(loc, 1.0, 0.0)
+    assert got == [None], "里程断过:旧坐标换不过来,引擎把来路作废"
 
 
 async def test_只转了朝向_跟里程对不上也当跳():
@@ -686,15 +693,36 @@ async def test_稳在对的位置但朝向反了_不认():
     assert "朝向" in loc.why_not(True)
 
 
-async def test_里程断过_没法比_照旧认():
+async def test_S1_里程断过_又跳了_核不了_不认_人给位置之后认():
+    """原来叫「里程断过_没法比_照旧认」(W35 交接里点名的漏洞):里程换段之后定位器跳 6 m,照样认了。"""
     c, link, loc = await _就绪()
     _稳(loc, 0.0, 0.0)
     loc.update((0.0, 0.0, 0.0), False)
     loc.update((0.0, 0.0, 0.0), True)
     loc.on_pose(_位姿(6.0, 0.0, jump=True))
-    for _ in range(SETTLE_FIXES):
+    for _ in range(SETTLE_FIXES + 2):
         loc.on_pose(_位姿(6.0, 0.0))
-    assert loc.ok(True)
+    assert not loc.ok(True)
+    assert "里程断过" in loc.why_not(True) and "请重新设位置" in loc.why_not(True)
+    assert not loc.busy, "卡在这儿不算「在等稳定」:RTK 核对还能来救"
+    assert await loc.relocalize(M, (6.1, 0.0, 0.0)) == ""
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(6.0, 0.0, jump=True, reloc_id=r.req))
+    _稳(loc, 6.0, 0.0)
+
+
+async def test_S1_里程断过之后来过可信的帧_锚换到新的一段_再跳照样能比():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.update((0.0, 0.0, 0.0), False)
+    loc.update((0.0, 0.0, 0.0), True)
+    loc.on_pose(_位姿(0.0, 0.0))                          # 新的一段里可信的一帧:锚换到这儿
+    loc.on_pose(_位姿(0.4, 0.0, jump=True))
+    _稳(loc, 0.4, 0.0)
+    loc.on_pose(_位姿(6.0, 0.0, jump=True))
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(6.0, 0.0))
+    assert "最后可信的位置差 5.6 m" in loc.why_not(True)
 
 
 async def test_换了图_旧的锚不管新图():
@@ -909,3 +937,282 @@ async def test_复查R1_收下了但那一帧没来定位器就断了_连回来�
     _稳(loc, 4.9, 0.0)
     loc.on_pose(_位姿(7.5, 0.0, jump=True))               # 离 4.9 差 2.6:认;还钉在 2 就差 5.5
     _稳(loc, 7.5, 0.0)
+
+
+# ---------------------------------------------------------------- 对账 S1:没有能核的锚,跳过的不认
+
+
+def _代理(c, keep=None, boot="boot-1"):
+    """一个(重新)起来的代理这边:给了 ``keep`` 就把锚记在那儿、起来时读回。"""
+    _钟[0] = c
+    loc = BridgeLocalizer(monotonic=c, keep=keep, boot_id=boot)
+    link = 假桥()
+    loc.link = link
+    return loc, link
+
+
+async def _接上(loc, odom, m=M):
+    loc.on_map(m, f"/maps/{m[0]}/{m[1]}")
+    loc.update(odom, True)
+    loc.on_connect()
+    await loc.prior_task
+
+
+async def test_S1_没有锚_一直连着的照旧认_连上之后跳过的稳下来不认_要人给位置():
+    """代理刚起来、手里没有锚:定位器一直连续在跟的照旧认(W34;仿真定位器一连上就有位置);可只要它
+    在代理眼前跳过一次(报 jump、重定位、跟里程对不上),稳在哪儿都核不了,原来照认。"""
+    c, link, loc = await _就绪()
+    _稳(loc, 3.0, 4.0)
+    c, link, loc = await _就绪()
+    loc.on_pose(_位姿(0.0, 0.0))                          # 连上的头一帧
+    loc.on_pose(_位姿(6.0, 0.0, jump=True))               # 还没认过任何位置,它自己跳了
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(6.0, 0.0))
+    assert not loc.ok(True)
+    assert "没有可信过的位置" in loc.why_not(True) and "请重新设位置" in loc.why_not(True)
+    assert not loc.busy
+    assert await loc.relocalize(M, (6.1, 0.0, 0.0)) == ""
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(6.0, 0.0, jump=True, reloc_id=r.req))
+    _稳(loc, 6.0, 0.0)
+
+
+async def test_S1_没有锚_跟里程对不上也算跳过():
+    c, link, loc = await _就绪()
+    loc.on_pose(_位姿(0.0, 0.0))
+    for _ in range(3):
+        loc.on_pose(_位姿(0.0, 0.0))
+    loc.on_pose(_位姿(2.0, 0.0))                          # 没报 jump,可里程没动:对不上
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(2.0, 0.0))
+    assert not loc.ok(True) and "请重新设位置" in loc.why_not(True)
+
+
+async def test_S1_没有锚_跳过卡住了_断开再连上_不洗白():
+    c, link, loc = await _就绪()
+    loc.on_pose(_位姿(0.0, 0.0))
+    loc.on_pose(_位姿(6.0, 0.0, jump=True))
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(6.0, 0.0))
+    assert not loc.ok(True)
+    loc.on_disconnect()
+    loc.on_connect()
+    await loc.prior_task
+    for _ in range(SETTLE_FIXES + 2):                    # 连回来:没报 jump,一直在 6 m 那儿
+        loc.on_pose(_位姿(6.0, 0.0))
+    assert not loc.ok(True) and "请重新设位置" in loc.why_not(True)
+
+
+async def test_S1_跳过之后按锚核过了_从头记_后来里程断了又断开重连_说的是刚连上():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.on_pose(_位姿(0.4, 0.0, jump=True))
+    _稳(loc, 0.4, 0.0)                                    # 跳过、核过:不再挂着「跳过」
+    loc.on_disconnect()
+    loc.update((0.0, 0.0, 0.0), False)
+    loc.update((0.0, 0.0, 0.0), True)
+    loc.on_connect()
+    await loc.prior_task
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(0.4, 0.0))
+    why = loc.why_not(True)
+    assert "定位器刚连上" in why and "里程断过" in why and "请重新设位置" in why, why
+
+
+async def test_S1_没有锚_换了图从头算():
+    c, link, loc = await _就绪()
+    loc.on_pose(_位姿(0.0, 0.0))
+    loc.on_pose(_位姿(6.0, 0.0, jump=True))
+    for _ in range(SETTLE_FIXES + 2):
+        loc.on_pose(_位姿(6.0, 0.0))
+    m2 = ("estate-1", "8")
+    loc.on_map(m2, "/maps/estate-1/8")
+    await loc.prior_task
+    _稳(loc, 30.0, 30.0, m=m2)
+
+
+async def test_S1_稳下来那一帧没配上里程_等配上了再核_不直接认():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    loc.on_pose(_位姿(8.0, 0.0, jump=True))
+    c.t += 1.0                                           # 这一秒里程没来新样本:帧配不上里程
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(8.0, 0.0))
+    assert not loc.ok(True) and "没配上里程" in loc.why_not(True)
+    assert "请重新设位置" not in loc.why_not(True), "一会儿就好:不叫人"
+    loc.update((0.0, 0.0, 0.0), True)
+    loc.on_pose(_位姿(8.0, 0.0))
+    assert "差 8.0 m" in loc.why_not(True) and "请重新设位置" in loc.why_not(True)
+
+
+async def test_S1_可信的帧没配上里程_不把能推的锚换掉():
+    c, link, loc = await _就绪()
+    _稳(loc, 0.0, 0.0)
+    c.t += 1.0
+    loc.on_pose(_位姿(0.0, 0.0))                          # 可信,可没配上里程
+    loc.update((0.0, 0.0, 0.0), True)
+    loc.on_pose(_位姿(6.0, 0.0, jump=True))
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(6.0, 0.0))
+    assert "最后可信的位置差 6.0 m" in loc.why_not(True)
+
+
+# ---------------------------------------------------------------- 对账 S1:锚记在盘上,代理重启照样核
+
+
+async def _走一段(c, loc, x0, odo0, n, dx=0.1):
+    for i in range(1, n + 1):
+        c.t += 0.1
+        loc.update((odo0 + dx * i, 0.0, 0.0), True)
+        loc.on_pose(_位姿(x0 + dx * i, 5.0))
+        assert loc.ok(True), loc.why_not(True)
+
+
+async def test_S1_代理重启_定位器一直在跟_按记下的锚核过_认_不用人(tmp_path):
+    keep = tmp_path / "loc_anchor.json"
+    c = 钟()
+    loc, link = _代理(c, keep)
+    await _接上(loc, (0.0, 0.0, 0.0))
+    _稳(loc, 10.0, 5.0)
+    await _走一段(c, loc, 10.0, 0.0, 30)                 # 走 3 m
+    assert keep.is_file()
+    c.t += 20.0                                          # 代理重启;这期间狗又被遥控挪了 1 m
+    loc2, _ = _代理(c, keep)
+    await _接上(loc2, (4.0, 0.0, 0.0))
+    _稳(loc2, 14.0, 5.0)
+
+
+async def test_S1_代理重启_这期间定位器跳到远处_一直报着没跳过_不认(tmp_path):
+    """代理重启的时候定位器在别处重定位(或稳在了错解上),代理连上时它已经「连续」地报着错的位置:
+    原来没有锚、也没看见跳,直接认。"""
+    keep = tmp_path / "loc_anchor.json"
+    c = 钟()
+    loc, link = _代理(c, keep)
+    await _接上(loc, (0.0, 0.0, 0.0))
+    _稳(loc, 10.0, 5.0)
+    await _走一段(c, loc, 10.0, 0.0, 30)
+    c.t += 20.0
+    loc2, link2 = _代理(c, keep)
+    await _接上(loc2, (3.0, 0.0, 0.0))
+    for _ in range(SETTLE_FIXES + 2):
+        loc2.on_pose(_位姿(22.0, 5.0))
+    assert not loc2.ok(True)
+    why = loc2.why_not(True)
+    assert "代理重启前最后可信的位置差 9.0 m" in why and "请重新设位置" in why, why
+    assert await loc2.relocalize(M, (22.0, 5.0, 0.0)) == ""   # 人到场说「它就在这儿」
+    r = [m for m in link2.sent if isinstance(m, Relocalize)][-1]
+    loc2.on_pose(_位姿(22.0, 5.0, jump=True, reloc_id=r.req))
+    _稳(loc2, 22.0, 5.0)
+
+
+async def test_S1_代理重启_人刚给了位置还没稳下来_按记下的给的位置核(tmp_path):
+    keep = tmp_path / "loc_anchor.json"
+    c = 钟()
+    loc, link = _代理(c, keep)
+    await _接上(loc, (0.0, 0.0, 0.0))
+    assert await loc.relocalize(M, (2.0, 0.0, 0.8)) == ""
+    c.t += 5.0
+    loc2, _ = _代理(c, keep)                              # 定位器按旧代理的请求重定位完了
+    await _接上(loc2, (0.0, 0.0, 0.0))
+    loc2.on_pose(_位姿(8.0, 0.0, -2.8, jump=True, reloc_id=1))
+    for _ in range(SETTLE_FIXES + 2):
+        loc2.on_pose(_位姿(8.0, 0.0, -2.8))
+    assert "代理重启前人给的位置差" in loc2.why_not(True)
+    loc3, _ = _代理(c, keep)
+    await _接上(loc3, (0.0, 0.0, 0.0))
+    loc3.on_pose(_位姿(0.1, 0.0, 0.02, jump=True, reloc_id=1))
+    _稳(loc3, 0.1, 0.0, 0.02)
+
+
+async def test_S1_重定位没成_盘上的锚也退回原来那个(tmp_path):
+    keep = tmp_path / "loc_anchor.json"
+    c = 钟()
+    loc, link = _代理(c, keep)
+    await _接上(loc, (0.0, 0.0, 0.0))
+    _稳(loc, 10.0, 5.0)
+    link.answer["relocalize"] = (False, "初值离地图太远")
+    assert await loc.relocalize(M, (30.0, 30.0, 0.0)) != ""
+    loc2, _ = _代理(c, keep)
+    await _接上(loc2, (0.0, 0.0, 0.0))
+    _稳(loc2, 10.0, 5.0)
+
+
+async def test_S1_代理重启_记下的锚里程断过_核不了_不认(tmp_path):
+    keep = tmp_path / "loc_anchor.json"
+    c = 钟()
+    loc, _ = _代理(c, keep)
+    await _接上(loc, (0.0, 0.0, 0.0))
+    _稳(loc, 10.0, 5.0)
+    loc2, _ = _代理(c, keep)
+    await _接上(loc2, (0.0, 0.0, 0.0))
+    loc2.update((0.0, 0.0, 0.0), False)                  # 连上之前里程断了一下
+    loc2.update((0.0, 0.0, 0.0), True)
+    for _ in range(SETTLE_FIXES + 2):
+        loc2.on_pose(_位姿(10.0, 5.0))
+    assert not loc2.ok(True) and "里程断过" in loc2.why_not(True)
+
+
+@pytest.mark.parametrize("坏法", ["别的开机", "别的图", "坏文件", "没有文件", "钟在后面"])
+async def test_S1_代理重启_记下的锚用不上_当没有锚(tmp_path, 坏法):
+    """用不上的一律当没有:定位器一直连续的照旧认(跟原来一样),起来不报错。"""
+    keep = tmp_path / "loc_anchor.json"
+    c = 钟()
+    loc, _ = _代理(c, keep)
+    await _接上(loc, (0.0, 0.0, 0.0), m=("estate-1", "6") if 坏法 == "别的图" else M)
+    _稳(loc, 50.0, 50.0, m=("estate-1", "6") if 坏法 == "别的图" else M)
+    if 坏法 == "坏文件":
+        keep.write_text("{坏的")
+    elif 坏法 == "没有文件":
+        keep.unlink()
+    elif 坏法 == "钟在后面":
+        c.t -= 50.0                                      # 不是同一个钟记的:不信
+    loc2, _ = _代理(c, keep, boot="boot-2" if 坏法 == "别的开机" else "boot-1")
+    await _接上(loc2, (0.0, 0.0, 0.0))
+    _稳(loc2, 10.0, 5.0)
+    if 坏法 in ("别的开机", "别的图", "坏文件"):
+        assert json.loads(keep.read_text())["pose"][:2] == [10.0, 5.0], "用不上的那份换成新的"
+
+
+async def test_S1_换图把记下的锚删掉_写不进盘不出错(tmp_path):
+    keep = tmp_path / "loc_anchor.json"
+    c = 钟()
+    loc, _ = _代理(c, keep)
+    await _接上(loc, (0.0, 0.0, 0.0))
+    _稳(loc, 10.0, 5.0)
+    assert keep.is_file()
+    loc.on_map(("estate-1", "8"), "/maps/estate-1/8")
+    assert not keep.exists(), "别的图:记下的那份作废"
+    loc2, _ = _代理(c, tmp_path / "没有这个目录" / "loc_anchor.json")
+    await _接上(loc2, (0.0, 0.0, 0.0))
+    _稳(loc2, 1.0, 1.0)                                   # 写不进去只记日志
+
+
+async def test_S1_可信的帧攒着写_挪够了或隔够久才写(tmp_path, monkeypatch):
+    import d1max_agent.bridge_localizer as BL
+    keep = tmp_path / "loc_anchor.json"
+    c = 钟()
+    loc, _ = _代理(c, keep)
+    await _接上(loc, (0.0, 0.0, 0.0))
+    writes = []
+    real = BL.os.replace
+    monkeypatch.setattr(BL.os, "replace", lambda a, b: (writes.append(c.t), real(a, b)))
+    _稳(loc, 0.0, 5.0)
+    assert len(writes) == 1
+    await _走一段(c, loc, 0.0, 0.0, 30)                  # 1 m/s 走 3 s:一秒最多一回
+    assert len(writes) == 3, writes
+    for _ in range(20):                                  # 停下:最后挪的那一截隔够 1 s 补写
+        c.t += 0.1
+        loc.update((3.0, 0.0, 0.0), True)
+        loc.on_pose(_位姿(3.0, 5.0))
+    assert len(writes) == 4, writes
+    n = len(writes)
+    for _ in range(100):                                 # 站着 10 s:不写
+        c.t += 0.1
+        loc.update((3.0, 0.0, 0.0), True)
+        loc.on_pose(_位姿(3.0, 5.0))
+    assert len(writes) == n
+    for _ in range(250):                                 # 再站 25 s:到 30 s 写一回
+        c.t += 0.1
+        loc.update((3.0, 0.0, 0.0), True)
+        loc.on_pose(_位姿(3.0, 5.0))
+    assert len(writes) == n + 1

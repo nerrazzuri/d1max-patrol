@@ -37,17 +37,35 @@
 位置超过 :data:`ANCHOR_M`(重定位时是 max(它, 3σ);给的朝向不准,这时只比离给的位置多远、里程挪了
 多远放宽多远)+ :data:`XCHECK_FRAC` × 这期间走过的路,或者朝向
 差超过 :data:`ANCHOR_YAW_RAD`(加里程朝向漂的量)→ 不认,一直说「请重新设位置」,直到它自己回到
-对得上的地方、或者有人(或 RTK)再给一次位置。里程断过(换了段)、没配上里程:没法比,照旧认。
+对得上的地方、或者有人(或 RTK)再给一次位置。
+
+**没有能核的锚**(对账 S1,2026-10-14):原来「没有锚 / 锚跟这一帧不在同一段里程 / 锚没配上里程」就照旧
+认 —— 代理刚重启、里程断过之后定位器再跳一下,稳在哪都认。现在:
+
+- 稳下来那一帧**自己**没配上里程、锚是好的:不认,等下一帧配上了再核(一会儿就好);
+- 别的没法比的情况,只有一种照旧认:代理手里**根本没有锚**,而且代理连上定位器以后它**一帧都没跳过**
+  (没报 ``jump``、没重定位、没跟里程对不上)—— 这是「定位器一直连续在跟」,代理只是刚起来(W34:代理
+  重启不用人重给位置;仿真定位器一连上就有位置)。跳过的记着,断开重连也不清(不然断一下就洗白了),
+  到换图或者按锚核过一次才清;
+- 其余(跳过 / 重定位过而没有锚、里程断过、锚当时没配上里程)一律「请重新设位置」,跟锚对不上一样卡着,
+  等人(或 RTK)给位置。
+
+**锚记在盘上**(给了 ``keep``):代理重启以后锚还在 —— 重启前最后可信的位置(或人刚给的)连同那一刻的
+里程(运控自己的里程,代理重启不归零)。只拿来**核**,从不当成可信的位置用;同一次开机(``boot_id``)、
+同一张图才读回,换图就删。这样「代理重启、这期间定位器跳到了别处」也抓得住,而定位器一直在跟的照样不用人。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
+import os
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from d1max_agent.localization import (
@@ -104,10 +122,40 @@ AUTO_RELOC_SIGMA_M = 1.0
 RELOC_TIMEOUT_S = 1.0
 #: 换先验等回复(回复只说收下没有;载入进度走 ``status initializing``);没回就再发。
 PRIOR_TIMEOUT_S = 10.0
+#: 锚记在盘上(对账 S1):可信的帧一直在换锚(一秒十帧),盘上那份挪了这么远、转了这么多、或者隔了
+#: 这么久才再写一次,两次之间最少隔 :data:`KEEP_MIN_S`。记的是「地图位姿 + 那一刻的里程」一对,哪一刻
+#: 的都能按里程推到现在,所以不用写得很勤;勤一点只是让重启后推的那段路短一些(里程走得越远偏得越多)。
+#: 换了种类(人给的 / 可信的帧)、换了里程段马上写。
+KEEP_MOVE_M = 0.5
+KEEP_TURN_RAD = 0.2
+KEEP_EVERY_S = 30.0
+KEEP_MIN_S = 1.0
+KEEP_VERSION = 1
+#: 这一次开机的号(Linux):记下的锚只在同一次开机里用(重开机之后里程、定位器都从头来)。
+BOOT_ID_FILE = Path("/proc/sys/kernel/random/boot_id")
 
 
 class LocalizerUnavailable(RuntimeError):
     """定位器没连上(``link.request`` 抛)。"""
+
+
+def _read_boot_id() -> str:
+    try:
+        return BOOT_ID_FILE.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _finite(v: Any) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        raise ValueError(f"不是有限数:{v!r}")
+    return float(v)
+
+
+def _num3(v: Any) -> tuple[float, float, float]:
+    if not isinstance(v, list) or len(v) != 3:
+        raise ValueError(f"要三个数:{v!r}")
+    return (_finite(v[0]), _finite(v[1]), _finite(v[2]))
 
 
 @dataclass(frozen=True)
@@ -142,7 +190,11 @@ class BridgeLocalizer:
     #: 丢了能自己找回来(雷达定位;W29:引擎只等 30 秒,等不回来叫人)。
     AUTO_RECOVERS = True
 
-    def __init__(self, *, monotonic: Callable[[], float]) -> None:
+    def __init__(self, *, monotonic: Callable[[], float], keep: Path | str | None = None,
+                 boot_id: str | None = None) -> None:
+        """``keep``:锚记在这个文件里(重启读回,只拿来核;``None`` = 不记)。``monotonic`` 要是整台机器
+        同一个钟(``time.monotonic``:开机以来,代理重启不归零)—— 记下的锚按它算放了多久。``boot_id``:
+        这一次开机的号(默认读 :data:`BOOT_ID_FILE`;读不到就不记)。"""
         self._now = monotonic
         #: 本机桥(``request(make, timeout_s) -> Reply``,没连上抛 :class:`LocalizerUnavailable`)。
         self.link: Any = None
@@ -173,6 +225,19 @@ class BridgeLocalizer:
         self._anchor_hold: int | None = None
         #: 稳住了、可是跟锚对不上(非空 = 卡在这儿,每来一帧再比一次)。
         self._off_why = ""
+        #: 代理连上定位器以后它跳过(报 ``jump``、重定位、跟里程对不上),还没按锚核过一回(对账 S1):
+        #: 没有能核的锚时,这种稳下来的不认。断开重连不清,换图、核过一回才清。
+        self._unverified = False
+        #: 锚记在盘上(对账 S1):文件、开机号、上次写的那一份和时刻;``_kept`` 是起来时读回的、还没
+        #: 用上的(头一回 ``on_map`` 到同一张图才用)。
+        self._keep = Path(keep) if keep is not None else None
+        self._boot = (boot_id if boot_id is not None
+                      else _read_boot_id() if self._keep is not None else "")
+        if not self._boot:
+            self._keep = None                        # 分不出重开过机没有:不记
+        self._kept_fix: _Fix | None = None
+        self._kept_at = -math.inf
+        self._kept: tuple[tuple[str, str], _Fix, float, str] | None = self._load_keep()
         self._wrong_map = False
         #: RTK 核对说定位器不对(W09e,``RtkCheck``;代理每拍写):非空就不可信。
         self.rtk_disagree = ""
@@ -231,7 +296,8 @@ class BridgeLocalizer:
             self._jumped(new, "定位器刚跳过(重定位或匹配跳变),等它稳下来")
             return
         if prev is None:
-            self._jumped(new, "定位器刚连上(或刚换图),等它稳下来")
+            # 刚连上不算跳:定位器那边可能一直连续在跟(代理重启),核法见 ``_off_anchor``
+            self._jumped(new, "定位器刚连上(或刚换图),等它稳下来", seen=False)
             return
         bad = self._mismatch(new)
         if bad:
@@ -276,8 +342,21 @@ class BridgeLocalizer:
             return
         if map_ref != self._map:
             self._ref = self._good = self._anchor = None   # 别的图:旧位置不能当参照
+            self._anchor_m, self._anchor_what = ANCHOR_M, "最后可信的位置"
             self._anchor_hold = None
+            self._unverified = False
             self.rtk_disagree = ""
+            kept, self._kept = self._kept, None
+            if kept is not None and map_ref is not None and kept[0] == map_ref:
+                # 代理重启前记下的锚(同一次开机、同一张图):只拿来核(对账 S1)
+                _, fix, self._anchor_m, what = kept
+                self._anchor = replace(fix, epoch=self._epoch, path=self._path)
+                self._anchor_what = f"代理重启前{what}"
+                self._kept_fix, self._kept_at = self._anchor, self._now()
+                log.info("读回代理重启前记下的锚:%s (%.2f, %.2f, %.2f),放了 %.0f 秒", what,
+                         *fix.pose, self._now() - fix.at)
+            else:
+                self._save_keep()                    # 别的图(或没有图):记下的那份作废
         self._map, self._dir = map_ref, dir
         self._prior_ok = None
         self._prior_err = ""
@@ -414,6 +493,7 @@ class BridgeLocalizer:
             self._anchor_what = "人给的位置" if human else "重定位给的位置"
             self._anchor_hold = req
             self._off_why = ""
+            self._save_keep()
             return Relocalize(req=req, map_id=map_ref[0], map_version=map_ref[1], x=pose[0],
                               y=pose[1], yaw=pose[2], sigma_xy=sigma_xy)
         def undo() -> None:
@@ -422,6 +502,7 @@ class BridgeLocalizer:
             if mine and self._anchor_hold == mine[0]:
                 self._anchor, self._anchor_m, self._anchor_what, self._anchor_hold = before
                 self._off_why = ""
+                self._save_keep()
         try:
             r = await self._ask(make, RELOC_TIMEOUT_S)
         except LocalizerUnavailable as exc:
@@ -526,15 +607,30 @@ class BridgeLocalizer:
         self._good = f
         if self._anchor_hold is not None:
             return                               # 刚给的锚还没人按它稳下来过:不许盖(W35 外审 I1)
+        a = self._anchor
+        if f.odom is None and a is not None and a.odom is not None and a.epoch == f.epoch:
+            return                               # 这一帧没配上里程:留着同一段里能推的那个(对账 S1)
         self._anchor = f
         self._anchor_m, self._anchor_what = ANCHOR_M, "最后可信的位置"
+        self._save_keep(force=False)
 
     def _off_anchor(self, new: _Fix) -> str:
-        """稳下来的这一帧跟锚按里程推到现在的位置对不对得上;对不上回一句说明,对得上(或没法比)回
-        空串。"""
+        """稳下来的这一帧跟锚按里程推到现在的位置对不对得上;对不上(或没法比、不该照旧认)回一句说明,
+        对得上回空串。没法比的时候怎么办见模块说明「没有能核的锚」(对账 S1)。"""
         a = self._anchor
-        if a is None or a.T is None or new.odom is None or a.epoch != new.epoch:
-            return ""
+        if a is None or a.odom is None or a.epoch != new.epoch:
+            if a is None and not self._unverified:
+                return ""                        # 连上以后一直连续、代理手里也没有锚:照旧认(W34)
+            if a is None:
+                why = "代理手里没有可信过的位置"
+            elif a.odom is None:
+                why = f"{self._anchor_what}那会儿没配上里程"
+            else:
+                why = f"里程断过(换了段),推不到{self._anchor_what}"
+            did = "跳过(或重定位过)" if self._unverified else "刚连上"
+            return f"定位器{did},{why},核不了它稳住的地方:请重新设位置"
+        if new.odom is None:
+            return f"定位器稳住了,这一帧没配上里程:等配上了再跟{self._anchor_what}核对"
         want = compose(a.T, new.odom)
         if a.source == GIVEN:
             # 给的朝向可能偏几十度:拿它推「往哪走了」会越走越偏(2026-10-13 回放:给偏 45°、边走边
@@ -552,6 +648,63 @@ class BridgeLocalizer:
             return ""
         return (f"定位器稳住的地方跟{self._anchor_what}差 {bad},里程说狗没这么动过:"
                 "请重新设位置")
+
+    # ------------------------------------------------------------ 锚记在盘上(对账 S1)
+
+    def _save_keep(self, *, force: bool = True) -> None:
+        """把锚写到盘上(没有锚、锚没配上里程就删掉)。``force`` 为假:按 :data:`KEEP_MOVE_M` 等几条
+        攒着写(可信的帧一秒十帧)。写不进去只记日志 —— 重启后没有锚,按「没有锚」那条规矩办。"""
+        if self._keep is None:
+            return
+        a, now = self._anchor, self._now()
+        try:
+            if a is None or a.odom is None or self._map is None:
+                self._kept_fix = None
+                self._keep.unlink(missing_ok=True)
+                return
+            p = self._kept_fix
+            if not force and p is not None and p.epoch == a.epoch and p.source == a.source:
+                if now - self._kept_at < KEEP_MIN_S:
+                    return
+                if (math.hypot(a.pose[0] - p.pose[0], a.pose[1] - p.pose[1]) < KEEP_MOVE_M
+                        and abs(_wrap(a.pose[2] - p.pose[2])) < KEEP_TURN_RAD
+                        and now - self._kept_at < KEEP_EVERY_S):
+                    return
+            what = self._anchor_what.removeprefix("代理重启前")
+            body = {"version": KEEP_VERSION, "boot_id": self._boot, "map": list(self._map),
+                    "pose": list(a.pose), "odom": list(a.odom), "sigma_xy": a.sigma_xy,
+                    "source": a.source, "at": a.at, "anchor_m": self._anchor_m, "what": what}
+            tmp = self._keep.with_name(self._keep.name + ".tmp")
+            tmp.write_text(json.dumps(body, ensure_ascii=False) + "\n", encoding="utf-8")
+            os.replace(tmp, self._keep)                  # 不 fsync:断电就是重开机,本来就不用
+            self._kept_fix, self._kept_at = a, now
+        except OSError as exc:
+            log.warning("锚写不进 %s:%s(代理重启后没有锚可核)", self._keep, exc)
+
+    def _load_keep(self) -> tuple[tuple[str, str], _Fix, float, str] | None:
+        """读回代理重启前记下的锚:(哪张图, 锚, 位置那条线, 叫法)。没有、别的开机、坏了都是 None。"""
+        if self._keep is None or not self._keep.exists():
+            return None
+        try:
+            d = json.loads(self._keep.read_text(encoding="utf-8"))
+            if d.get("version") != KEEP_VERSION or d.get("boot_id") != self._boot:
+                log.info("盘上的锚不是这一次开机记的:不用")
+                return None
+            m = d["map"]
+            if not (isinstance(m, list) and len(m) == 2 and all(isinstance(s, str) for s in m)):
+                raise ValueError("map")
+            pose, odom = _num3(d["pose"]), _num3(d["odom"])
+            sigma, at, line = (_finite(d[k]) for k in ("sigma_xy", "at", "anchor_m"))
+            source, what = d["source"], d["what"]
+            if not (isinstance(source, str) and isinstance(what, str)) or sigma < 0 \
+                    or line <= 0 or at > self._now():
+                raise ValueError("source/what/sigma_xy/anchor_m/at")
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            log.warning("盘上的锚读不懂,不用:%s", exc)
+            return None
+        fix = _Fix(pose=pose, sigma_xy=sigma, sigma_yaw=0.0, source=source, at=at, born=at,
+                   odom=odom, epoch=0, path=0.0, dr0=0.0)
+        return (m[0], m[1]), fix, line, what
 
     def _send_prior(self) -> None:
         if not self._connected or self._map is None:
@@ -605,19 +758,21 @@ class BridgeLocalizer:
                 return f"朝向差 {math.degrees(turn):.0f}°"
         return ""
 
-    def _jumped(self, new: _Fix, why: str, *, human: bool = False) -> None:
+    def _jumped(self, new: _Fix, why: str, *, human: bool = False, seen: bool = True) -> None:
         """跳了(或刚连上、刚重定位):从这一帧起重新数;修正量的参照还是跳之前最后可信的那一帧
-        (稳定期里又跳也不换)。"""
+        (稳定期里又跳也不换)。``seen`` 为假 = 只是刚连上,不算定位器跳过(对账 S1)。"""
         self._settle = SETTLE_FIXES
         self._off_why = ""
         self._settle_why = why
         self._settle_human = self._settle_human or human
+        self._unverified = self._unverified or seen
         self._win.clear()
         self._win.append(new)
 
     def _settled(self, new: _Fix) -> None:
         ref, human = self._ref, self._settle_human
         self._settle_human = False
+        self._unverified = False                     # 按锚核过了(或一直连续、没有锚):从头记
         delta = None
         if ref is not None and ref.T is not None and new.T is not None and ref.epoch == new.epoch:
             delta = compose(new.T, inverse(ref.T))
