@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -54,3 +55,10 @@ def tree_sha256(root: Path | str, *, skip: str,
         digest.update(sha256_file(path).encode())
         digest.update(_CHUNK_JOIN)
     return digest.hexdigest()
+
+
+def canonical_digest(obj: object, *, n: int = 16) -> str:
+    """任意 JSON 结构的内容摘要(R4 的「任务修订」等通用字段):规范写法(键排序、无空白)的 sha256,
+    取前 ``n`` 位十六进制。站点发命令时算,狗收到后原样回报(或自己算),两头用同一个函数。"""
+    raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:n]

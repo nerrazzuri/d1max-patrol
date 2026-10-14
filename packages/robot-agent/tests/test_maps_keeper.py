@@ -70,7 +70,9 @@ def test_装好_提交_重启还认得_别的图删掉(k, tmp_path):
     keeper.commit(b)
     again = MapKeeper(tmp_path / "maps", fetch=site.fetch)
     assert again.active() == b
-    assert not (tmp_path / "maps" / "estate-1" / "7").exists(), "狗上只留正在用的那一张"
+    # R5:换下来的上一张留着(回退不用重新下载);再往前的才删(见 test_maps_rollback_keep.py)
+    assert (tmp_path / "maps" / "estate-1" / "7").exists(), "上一张留着"
+    assert again.previous() == a
     assert again.home_of(b) is None
 
 
