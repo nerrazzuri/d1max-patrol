@@ -62,23 +62,60 @@ def _scene(tmp, upside_down):
 
 
 class 假MOLA:
-    def __init__(self, points, fail=""):
-        self.points, self.fail, self.calls = points, fail, []
+    """``lc``:回环工具(``mola-sm-lc-cli``)的假样 —— ``closures`` 个回环,关键帧每个往 ``shift`` 方向
+    挪「序号 × 每帧的量」(像是把慢慢积累的漂移拉回来);``lc_fail`` 让它退出码 1。"""
+
+    def __init__(self, points, fail="", *, closures=3, shift=(0.0, 0.0, 0.0), lc_fail=False,
+                 lc_kfs_drop=0, kf_garbage=False):
+        self.points, self.fail, self.calls, self.envs, self.kws = points, fail, [], [], []
+        self.closures, self.shift, self.lc_fail, self.lc_kfs_drop = (closures, shift, lc_fail,
+                                                                     lc_kfs_drop)
+        self.kf_garbage = kf_garbage
 
     def __call__(self, cmd, env=None, stdout=None, stderr=None, **kw):
         self.calls.append(cmd)
+        self.envs.append(env)
+        self.kws.append(kw)
+        name = Path(cmd[0]).name
         if cmd[0] == "dpkg-query":
             return SimpleNamespace(returncode=0, stdout="1.2.3")
-        if self.fail and cmd[0] == self.fail:
+        if self.fail and name == self.fail:
             stdout.write("出错了:内存不够\n")
             return SimpleNamespace(returncode=2)
-        if cmd[0] == "mm2ply":
+        if name == "mola-sm-lc-cli":
+            if self.lc_fail:
+                stdout.write("Exception: 回环的 ICP 炸了\n")
+                return SimpleNamespace(returncode=1)
+            src, dst = Path(cmd[cmd.index("-i") + 1]), Path(cmd[cmd.index("-o") + 1])
+            dst.write_bytes(src.read_bytes() + b"-lc")
+            stdout.write(f"[INFO |SimplemapLoopClosure] Overall number of accepted loop-closures: "
+                         f"{self.closures}\n")
+        if name == "sm-cli":
+            sm, out = Path(cmd[2]), Path(cmd[cmd.index("--output") + 1])
+            closed = sm.read_bytes().endswith(b"-lc")
+            lines = (sm.parent.parent if closed else sm.parent).joinpath("traj.tum")
+            rows = [ln.split() for ln in lines.read_text().splitlines()][::10]
+            if closed and self.lc_kfs_drop:
+                rows = rows[:-self.lc_kfs_drop]
+            text = []
+            for k, r in enumerate(rows):
+                t, p = float(r[0]) - 0.05, [float(v) for v in r[1:4]]   # 关键帧的时刻是报文头
+                if closed:
+                    p = [v + k * s for v, s in zip(p, self.shift, strict=True)]
+                text.append(" ".join(f"{v:.6f}" for v in (t, *p)) + " " + " ".join(r[4:]))
+            if closed and self.kf_garbage:
+                text = ["nan? 1 2 3 4 5 6 7", "坏 行 不 是 数 字 啊 !"]
+            out.write_text("\n".join(text) + "\n")
+        if name == "sm2mm" and "-p" in cmd:
+            src, dst = Path(cmd[cmd.index("-i") + 1]), Path(cmd[cmd.index("-o") + 1])
+            dst.write_bytes(b"prior-from:" + src.read_bytes())
+        if name == "mm2ply":
             out = cmd[cmd.index("-o") + 1]
             head = (f"ply\nformat binary_little_endian 1.0\nelement vertex {len(self.points)}\n"
                     "property float x\nproperty float y\nproperty float z\nend_header\n").encode()
             with open(out + "_raw.ply", "wb") as fh:
                 fh.write(head + self.points.tobytes())
-        if cmd[0] == "mm-kf-regroup":
+        if name == "mm-kf-regroup":
             src, dst = cmd[cmd.index("-i") + 1], cmd[cmd.index("-o") + 1]
             with open(src, "rb") as a, open(dst, "wb") as b:
                 b.write(a.read() + b"-regrouped")
@@ -372,3 +409,172 @@ def test_配准出错不让整次建图失败(tmp_path, monkeypatch):
     info = json.loads((tmp_path / "out" / "build.json").read_text())["geo"]
     assert info["written"] is False and "坏数" in info["why"] and info["clock_offset_s"] == 1.5
     assert "geo.json" not in files
+
+
+# ------------------------------------------------------------ 回环(可选)
+
+
+def _lc_tool(tmp_path):
+    """装在自己前缀下的回环工具(像 colcon --merge-install 装出来的):bin/ 里是命令,share/ 里记着
+    版本。"""
+    prefix = tmp_path / "lc-prefix"
+    exe = prefix / "bin" / "mola-sm-lc-cli"
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    share = prefix / "share" / "mola_sm_loop_closure"
+    share.mkdir(parents=True, exist_ok=True)
+    share.joinpath("package.xml").write_text("<package><version>1.2.2</version></package>\n")
+    share.joinpath("d1max-build.txt").write_text("mola_sm_loop_closure e737aa8 (MRPT 2.15)\n")
+    return str(exe)
+
+
+_SAME = ("frames.json", "floor.pgm", "floor.yaml", "coverage.json", "prior.mm")
+
+
+def _plain(tmp_path, pts, work):
+    """不回环打出来的(对照)。"""
+    fake = 假MOLA(pts)
+    B.package(work, tmp_path / "plain", run=fake)
+    return fake, tmp_path / "plain"
+
+
+def test_有回环工具_跑回环_从回环后的simplemap重出点云先验与轨迹_build_json记下(tmp_path):
+    from d1max_localizer.replay import read_tum
+    work, pts = _scene(tmp_path, False)
+    cli = _lc_tool(tmp_path)
+    fake = 假MOLA(pts, closures=3, shift=(0.0, 0.01, 0.0))
+    files = B.package(work, tmp_path / "out", run=fake, loop_closure=cli)
+    assert sorted(files) == sorted(B.FILES)
+    [lc] = [c for c in fake.calls if Path(c[0]).name == "mola-sm-lc-cli"]
+    assert lc[0] == cli
+    assert lc[lc.index("-i") + 1] == str(work / "map.simplemap")
+    assert lc[lc.index("-o") + 1] == str(work / "lc" / "map.simplemap")
+    assert lc[lc.index("-p") + 1] == str(B.LC_PIPELINE) and B.LC_PIPELINE.is_file()
+    env = fake.envs[fake.calls.index(lc)]
+    assert env["LD_LIBRARY_PATH"].split(":")[0] == str(Path(cli).parent.parent / "lib"), \
+        "自己前缀下装的回环工具:它的库不在 ROS 的库路径里"
+    assert fake.kws[fake.calls.index(lc)].get("cwd") == str(work / "lc"), \
+        "回环工具往当前目录写调试文件(sm_lc__*.tum):在中间目录里跑"
+    sm2mm = [c for c in fake.calls if c[0] == "sm2mm"]
+    assert {c[c.index("-i") + 1] for c in sm2mm} == {str(work / "lc" / "map.simplemap")}, \
+        "点云、先验都从回环后的 simplemap 重出"
+    [prior] = [c for c in sm2mm if "-p" in c]
+    assert prior[prior.index("-p") + 1] == str(B.PRIOR_PIPELINE) and B.PRIOR_PIPELINE.is_file()
+    assert (tmp_path / "out" / "prior.mm").read_bytes() == b"prior-from:sm-lc"
+    [ply] = [c for c in fake.calls if c[0] == "mm2ply"]
+    assert ply[ply.index("-i") + 1] == str(work / "lc" / "points.mm")
+    # 轨迹(栅格的射线、frames、走过的路都用它)按关键帧的改动挪:关键帧 k 挪了 0.01·k
+    fixed, orig = read_tum(work / "lc" / "traj.tum"), read_tum(work / "traj.tum")
+    assert [f[0] for f in fixed] == [o[0] for o in orig]
+    dy = [f[1][1] - o[1][1] for f, o in zip(fixed, orig, strict=True)]
+    assert dy[0] == pytest.approx(0.0005, abs=1e-6) and dy[-1] == pytest.approx(0.11, abs=1e-6)
+    assert all(b >= a - 1e-9 for a, b in zip(dy, dy[1:], strict=False))
+    b = json.loads((tmp_path / "out" / "build.json").read_text())
+    lcj = b["loop_closure"]
+    assert lcj["ran"] is True and lcj["used"] is True and lcj["closures"] == 3, lcj
+    assert lcj["cli"] == cli and lcj["version"] == "mola_sm_loop_closure e737aa8 (MRPT 2.15)"
+    assert lcj["keyframes"] == 12 and lcj["max_shift_m"] == pytest.approx(0.11, abs=1e-3)
+    assert {"lc_s", "keyframes_s", "prior_s"} <= set(lcj["timings_s"])
+    assert "loop_closure_s" in b["timings_s"]
+
+
+def test_没有回环工具_出的文件跟原来一样_build_json说没有(tmp_path):
+    work, pts = _scene(tmp_path, False)
+    fake, out = _plain(tmp_path, pts, work)
+    assert [c[0] for c in fake.calls] == ["sm2mm", "mm2ply"], "不多调一个命令"
+    assert fake.calls[0] == ["sm2mm", "-i", str(work / "map.simplemap"), "-o",
+                             str(work / "points.mm"), "--no-progress-bar"]
+    assert not (work / "lc").exists()
+    import os
+    assert os.stat(out / "prior.mm").st_ino == os.stat(work / "raw_prior.mm").st_ino
+    b = json.loads((out / "build.json").read_text())
+    assert b["loop_closure"] == {"ran": False, "why": "没有回环工具(mola-sm-lc-cli)"}
+    assert "loop_closure_s" not in b["timings_s"]
+
+
+@pytest.mark.parametrize("case, kw, why", [
+    ("失败", {"lc_fail": True}, "退出码 1"),
+    ("没找到", {"closures": 0}, "没找到回环"),
+    ("挪得太多", {"shift": (0.0, 0.5, 0.0)}, "挪得太多"),
+    ("关键帧对不上", {"lc_kfs_drop": 1}, "关键帧"),
+    ("别的错", {"kf_garbage": True}, "回环出错: ValueError"),
+])
+def test_回环不成_退回原来的打包_build_json说为什么(tmp_path, case, kw, why):
+    work, pts = _scene(tmp_path, False)
+    _, plain = _plain(tmp_path, pts, work)
+    fake = 假MOLA(pts, **kw)
+    out = tmp_path / "out"
+    B.package(work, out, run=fake, loop_closure=_lc_tool(tmp_path))
+    for name in _SAME:
+        assert (out / name).read_bytes() == (plain / name).read_bytes(), (case, name)
+    sm2mm = [c for c in fake.calls if c[0] == "sm2mm"]
+    assert sm2mm == [["sm2mm", "-i", str(work / "map.simplemap"), "-o", str(work / "points.mm"),
+                      "--no-progress-bar"]], "退回去:点云从原来的 simplemap 出,不重出先验"
+    lcj = json.loads((out / "build.json").read_text())["loop_closure"]
+    assert lcj["ran"] is True and lcj["used"] is False and why in lcj["why"], lcj
+    if case == "失败":
+        assert "ICP 炸了" in lcj["why"], "带日志尾巴"
+    if case == "没找到":
+        assert lcj["closures"] == 0
+        assert not [c for c in fake.calls if c[0] == "sm-cli"], "没回环就不用再导关键帧"
+
+
+def test_轨迹按前后两个关键帧的改动插值():
+    c10, s10 = math.cos(math.radians(10)), math.sin(math.radians(10))
+    ident = (0.0, 0.0, 0.0, 1.0)
+    q10 = (0.0, 0.0, math.sin(math.radians(5)), math.cos(math.radians(5)))
+    before = [(0.0, (0.0, 0.0, 0.0), ident), (1.0, (1.0, 0.0, 0.0), ident)]
+    after = [(0.0, (0.0, 0.0, 0.0), ident), (1.0, (1.0, 0.2, 0.0), q10)]
+    traj = [(t, (x, 0.0, 0.0), ident) for t, x in ((-0.5, -0.5), (0.0, 0.0), (0.5, 0.5),
+                                                    (1.0, 1.0), (2.0, 2.0))]
+    got = B.correct_traj(traj, before, after)
+    assert [g[0] for g in got] == [t for t, _, _ in traj]
+    p = [g[1] for g in got]
+    assert p[0] == pytest.approx((-0.5, 0.0, 0.0)) and p[1] == pytest.approx((0.0, 0.0, 0.0))
+    assert p[3] == pytest.approx((1.0, 0.2, 0.0)), "关键帧上就是回环后的位姿"
+    assert got[3][2] == pytest.approx(q10)
+    assert p[4] == pytest.approx((1 + c10, 0.2 + s10, 0.0)), "最后一个关键帧之后跟着它挪"
+    mid = (0.5 * 0.5 + 0.5 * (0.5 * c10 + 1 - c10), 0.5 * (0.5 * s10 + 0.2 - s10), 0.0)
+    assert p[2] == pytest.approx(mid), "两个关键帧中间:两边各自挪出来的位置按时刻插"
+    yaw = 2 * math.atan2(got[2][2][2], got[2][2][3])
+    assert math.degrees(yaw) == pytest.approx(5.0, abs=0.01)
+    with pytest.raises(B.BuildError, match="关键帧"):
+        B.correct_traj(traj, before, after[:1])
+
+
+def test_找回环工具(tmp_path):
+    exe = _lc_tool(tmp_path)
+    nowhere = tmp_path / "nowhere" / "mola-sm-lc-cli"
+
+    def on_path(name):
+        return "/opt/ros/humble/bin/mola-sm-lc-cli" if name == "mola-sm-lc-cli" else None
+
+    def none(name):
+        return None
+    assert B.find_loop_closure("off", env={}, which=on_path) is None
+    assert B.find_loop_closure("auto", env={"D1MAX_LOOP_CLOSURE": "off"}, which=on_path) is None
+    assert B.find_loop_closure("auto", env={"D1MAX_LOOP_CLOSURE": exe}, which=none) == exe
+    assert B.find_loop_closure(exe, env={}, which=none) == exe
+    assert B.find_loop_closure("auto", env={}, which=on_path) == \
+        "/opt/ros/humble/bin/mola-sm-lc-cli"
+    assert B.find_loop_closure("auto", env={}, which=none, default=Path(exe)) == exe
+    assert B.find_loop_closure("auto", env={}, which=none, default=nowhere) is None
+    assert B.find_loop_closure(str(nowhere), env={}, which=on_path) is None, \
+        "给的路径不是能跑的程序:当没有(建图不能因为可选的一步失败)"
+
+
+def test_建图命令_回环开关交给打包(tmp_path, monkeypatch):
+    from d1max_localizer import tools
+    seen = {}
+
+    def 打包(work, out, **kw):
+        seen.update(kw)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "build.json").write_text("{}")
+        return []
+    monkeypatch.setattr(B, "package", 打包)
+    monkeypatch.setattr(B, "find_loop_closure", lambda s: None if s == "off" else f"找:{s}")
+    base = ["build", "--bag", str(tmp_path / "bag"), "--out", str(tmp_path / "o"), "--reuse"]
+    assert tools.main(base) == 0 and seen["loop_closure"] == "找:auto"
+    assert tools.main([*base, "--loop-closure", "off"]) == 0 and seen["loop_closure"] is None
