@@ -10,6 +10,7 @@ import type { Recording } from "./recordings";
 import { RecordingsPage } from "./recpage";
 import { ReportsPage } from "./reportpage";
 import type { Daily } from "./reports";
+import { MapsZonesPage } from "./zonesadmin";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -315,5 +316,38 @@ describe("管理页的狗:在线跟值守页一个口径(站点说新鲜才算)"
     const cell = r.getByText("Offline");
     expect(cell.querySelector("svg.shape.offline")).toBeTruthy();
     expect(cell.querySelector("svg.shape.P2")).toBeNull();
+  });
+});
+
+describe("地图与防区页:硬禁区(决策 65)看得出来,只读", () => {
+  it("硬禁区单独一个样子、悬停说遥控也开不进去、带到期时间;普通禁行区照旧;图例说明", async () => {
+    const until = new Date(2026, 9, 14, 18, 30).getTime();
+    setFetch(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.endsWith("/api/maps")) return json({ maps: [{ map_id: "estate", version: "8", note: "", created_ms: 1, source: "x" }] });
+      if (u.endsWith("/preview")) {
+        return json({
+          width: 100, height: 50, m_per_px: 0.1, left_x: 0, top_y: 5, zones: [
+            { id: "pool", kind: "nogo", label: "Pool", hard: true, until_ms: until, polygon: [[1, 1], [2, 1], [2, 2]] },
+            { id: "bed", kind: "nogo", label: "Bed", polygon: [[3, 1], [4, 1], [4, 2]] },
+            { id: "lawn", kind: "slow", label: "Lawn", max_speed_mps: 0.3, polygon: [[5, 1], [6, 1], [6, 2]] },
+          ],
+        });
+      }
+      if (u.endsWith("/areas")) return json({ areas: [] });
+      return json({});
+    });
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await waitFor(() => expect(r.container.querySelector("polygon.nogo-area")).toBeTruthy());
+    const polys = [...r.container.querySelectorAll("polygon.nogo-area")];
+    expect(polys.length).toBe(2);
+    const hard = polys.find((p) => p.classList.contains("hard"))!;
+    expect(hard).toBeTruthy();
+    expect(hard.querySelector("title")!.textContent).toContain("Pool");
+    expect(hard.querySelector("title")!.textContent).toContain("remote control");
+    expect(hard.querySelector("title")!.textContent).toContain("18:30");
+    const plain = polys.find((p) => !p.classList.contains("hard"))!;
+    expect(plain.querySelector("title")!.textContent).toContain("Bed");
+    expect(r.container.textContent).toContain("Hard no-go");
   });
 });

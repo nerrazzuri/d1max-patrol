@@ -114,6 +114,14 @@ export function MapsZonesPage({ say }: { say: Say }) {
           <div class="zonelist">
             <h2>{t("securityZones")}</h2>
             <p class="muted small">{t("zonesHint")}</p>
+            {(meta?.zones ?? []).some((z) => z.kind === "nogo") && (
+              <p class="muted small nogo-legend">
+                <span class="swatch nogo" aria-hidden="true" /> {t("noGoLegend")}
+                {(meta?.zones ?? []).some((z) => z.kind === "nogo" && z.hard) && (
+                  <><br /><span class="swatch nogo hard" aria-hidden="true" /> {t("hardNoGoLegend")}</>
+                )}
+              </p>
+            )}
             {areas.length === 0 && <p class="muted small">{t("noZones")}</p>}
             <ul>
               {areas.map((a) => (
