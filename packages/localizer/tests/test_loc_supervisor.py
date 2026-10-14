@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 
+import pytest
+from d1max_localizer import supervisor
 from d1max_localizer.supervisor import MolaSupervisor, mola_command
 
 假MOLA = """
@@ -229,4 +233,135 @@ async def test_W34_外层退0又没说谁死了_不写成正常的退出码0(tmp
     await s.start(Path("/maps/a/prior.mm"))
     await _等(lambda: r.downs)
     assert "外层 ros2 launch 退出码 0" in r.downs[0] and "可能是被杀或崩了" in r.downs[0]
+    await s.stop()
+
+
+# ---------------------------------------------------------------- W35:MOLA 日志逐行到
+# 2026-10-13 C40221:MOLA 自己打 11:46:11 的那行,我们日志 11:46:44 才出来
+# —— 子进程往管道写时整块缓冲。
+
+慢慢说 = """
+import sys, time
+print("[mola-cli-1] 第一行 " + sys.argv[1])
+{flush}
+time.sleep(float(sys.argv[2]))
+print("[mola-cli-1] 第二行")
+"""
+
+
+def _说话的(tmp_path, *, flush: bool, sleep_s: float):
+    script = tmp_path / "talker.py"
+    script.write_text(慢慢说.format(flush="sys.stdout.flush()" if flush else ""))
+    r = 记()
+
+    def cmd(prior):                                       # 不加 -u:往管道写就整块缓冲
+        return [sys.executable, str(script), str(prior), str(sleep_s)]
+    return MolaSupervisor(command_for=cmd, on_up=r.up, on_down=r.down, backoff=(30.0,)), r
+
+
+def _mola_lines(caplog):
+    return [rec.getMessage() for rec in caplog.records if rec.name == "mola"]
+
+
+async def test_W35_子进程说一行_我们这边马上记_不等它退(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="mola")
+    s, r = _说话的(tmp_path, flush=True, sleep_s=20.0)
+    await s.start(Path("/maps/a/prior.mm"))
+    await _等(lambda: any("第一行" in m for m in _mola_lines(caplog)), n=400)   # 最多约 8 s
+    assert s.running and not any("第二行" in m for m in _mola_lines(caplog)), "它还没退、还在睡"
+    await s.stop()
+
+
+async def test_W35_子进程是_Python_不刷也逐行到(tmp_path, caplog):
+    """ros2 launch 本身是 Python:环境里给 PYTHONUNBUFFERED,它往管道写也逐行。"""
+    caplog.set_level(logging.INFO, logger="mola")
+    s, r = _说话的(tmp_path, flush=False, sleep_s=20.0)
+    await s.start(Path("/maps/a/prior.mm"))
+    await _等(lambda: any("第一行" in m for m in _mola_lines(caplog)), n=400)
+    assert s.running
+    await s.stop()
+
+
+async def test_W35_超长的一行_读的不死_后面的照样记(tmp_path, caplog):
+    """一行超过读缓冲上限:原来 readline 抛错、读的任务死了,管道写满 MOLA 就卡在写上。"""
+    caplog.set_level(logging.INFO, logger="mola")
+    script = tmp_path / "long.py"
+    script.write_text("import sys, time\n"
+                      "sys.stdout.write('x' * (4 << 20) + '\\n')\n"
+                      "print('[mola-cli-1] 长行之后', flush=True)\n"
+                      "time.sleep(20)\n")
+    s = MolaSupervisor(command_for=lambda p: [sys.executable, str(script)],
+                       on_up=lambda: None, on_down=lambda why: None, backoff=(30.0,))
+    await s.start(Path("/maps/a/prior.mm"))
+    await _等(lambda: any("长行之后" in m for m in _mola_lines(caplog)), n=400)
+    assert s.running
+    await s.stop()
+
+
+@pytest.mark.skipif(not (shutil.which("stdbuf") and shutil.which("grep") and shutil.which("sh")),
+                    reason="要 coreutils stdbuf、grep、sh")
+async def test_W35_孙子进程是_C_程序_套了_stdbuf_也逐行到(caplog):
+    """像 ros2 launch 底下的 mola-cli:sh 底下的 grep(C stdio,往管道写整块缓冲)。stdbuf 靠
+    LD_PRELOAD + 环境变量,孙子进程继承到 → 第一行不等它退就到。"""
+    caplog.set_level(logging.INFO, logger="mola")
+    s = MolaSupervisor(
+        command_for=lambda p: ["sh", "-c", "(echo '[mola-cli-1] 第一行'; sleep 20) | grep mola"],
+        on_up=lambda: None, on_down=lambda why: None, backoff=(30.0,))
+    await s.start(Path("/maps/a/prior.mm"))
+    await _等(lambda: any("第一行" in m for m in _mola_lines(caplog)), n=400)
+    assert s.running
+    await s.stop()
+
+
+def _which(*missing):
+    return lambda name, path=None: None if name in missing else f"/usr/bin/{name}"
+
+
+def test_W35_有_stdbuf_就套上_逐行缓冲(monkeypatch):
+    monkeypatch.setattr(supervisor.shutil, "which", _which())
+    cmd = mola_command(Path("/m/prior.mm"))
+    assert supervisor.line_buffered(cmd) == ["/usr/bin/stdbuf", "-oL", "-eL", *cmd]
+
+
+def test_W35_要起的程序找不到_不套_照旧报起不来(monkeypatch):
+    monkeypatch.setattr(supervisor.shutil, "which", _which("ros2"))
+    cmd = mola_command(Path("/m/prior.mm"))
+    assert supervisor.line_buffered(cmd) == cmd
+
+
+def test_W35_没有_stdbuf_原样起_只说一回(monkeypatch, caplog):
+    monkeypatch.setattr(supervisor.shutil, "which", _which("stdbuf"))
+    monkeypatch.setattr(supervisor, "_warned_no_stdbuf", False)
+    caplog.set_level(logging.WARNING, logger=supervisor.__name__)
+    cmd = mola_command(Path("/m/prior.mm"))
+    assert supervisor.line_buffered(cmd) == cmd
+    assert supervisor.line_buffered(cmd) == cmd
+    assert sum("stdbuf" in rec.getMessage() for rec in caplog.records) == 1
+
+
+async def test_W35_起的时候真套上了_环境里也给了不缓冲(monkeypatch):
+    seen = {}
+
+    async def fake_exec(*argv, env=None, **kw):
+        seen["argv"], seen["env"] = list(argv), env
+        raise OSError("不真起")
+    monkeypatch.setattr(supervisor.shutil, "which", _which())
+    monkeypatch.setattr(supervisor.asyncio, "create_subprocess_exec", fake_exec)
+    s = MolaSupervisor(command_for=lambda p: mola_command(p), on_up=lambda: None,
+                       on_down=lambda why: None, backoff=(30.0,), env={"PATH": "/x"})
+    await s.start(Path("/m/prior.mm"))
+    assert seen["argv"] == ["/usr/bin/stdbuf", "-oL", "-eL", *mola_command(Path("/m/prior.mm"))]
+    assert seen["env"]["PATH"] == "/x"
+    assert seen["env"]["PYTHONUNBUFFERED"] == "1"
+    assert seen["env"]["RCUTILS_LOGGING_BUFFERED_STREAM"] == "0"
+    await s.stop()
+
+
+async def test_W35_套了_stdbuf_照样认出底下谁死了(tmp_path):
+    """解析不变:套上 stdbuf(这台机器上有就真套)认「process has died」照旧。"""
+    assert supervisor.shutil.which("stdbuf"), "开发机上该有 coreutils 的 stdbuf"
+    s, r = _sup(tmp_path, mode="launch_child_segv", backoff=(30.0,))
+    await s.start(Path("/maps/a/prior.mm"))
+    await _等(lambda: r.downs)
+    assert "mola-1 退出码 -11" in r.downs[0] and "SIGSEGV" in r.downs[0], r.downs
     await s.stop()

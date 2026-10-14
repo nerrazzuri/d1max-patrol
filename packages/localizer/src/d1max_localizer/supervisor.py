@@ -7,6 +7,11 @@
 - :meth:`restart`:核心判它卡住了(点云在来、不出位姿)时关掉重起;
 - 关的时候连子孙一起关(``ros2 launch`` 底下还有节点进程):新会话起,关时对整个进程组先 SIGINT,
   :data:`KILL_AFTER_S` 还在就 SIGKILL。
+- 输出逐行到(W35,2026-10-13 C40221:MOLA 自己打 11:46:11 的那行,日志 11:46:44 才出来):
+  mola-cli(C++)往管道写时 stdout 整块缓冲。起的时候套 ``stdbuf -oL -eL``(它靠 LD_PRELOAD 和
+  环境变量生效,``ros2 launch`` 底下的 mola-cli 也继承到);``ros2 launch`` 本身是 Python,环境里给
+  ``PYTHONUNBUFFERED=1``;ROS 日志给 ``RCUTILS_LOGGING_BUFFERED_STREAM=0``。不用伪终端。我们这边
+  逐行读、逐行记;超长的一行丢掉说一声,读的不停(停了管道写满,MOLA 就卡在写上)。
 """
 
 from __future__ import annotations
@@ -16,11 +21,35 @@ import contextlib
 import logging
 import os
 import re
+import shutil
 import signal
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+#: 子进程往管道写也逐行(见模块说明);调用方给的环境里已有的不覆盖。
+UNBUFFERED_ENV = {"PYTHONUNBUFFERED": "1", "RCUTILS_LOGGING_BUFFERED_STREAM": "0"}
+#: 一行最长读多少(asyncio 默认 64 KiB);再长的丢掉,读的照样往下读。
+LINE_LIMIT = 1 << 20
+_warned_no_stdbuf = False
+
+
+def line_buffered(cmd: Sequence[str], path: str | None = None) -> list[str]:
+    """有 ``stdbuf``(coreutils)就套上让子进程逐行刷;没有就原样起,只说一回。
+
+    要起的程序本身找不到(按子进程的 ``PATH``)就不套:原样起,照旧在起的时候报「起不来」,
+    不变成 stdbuf 的退出码 127。"""
+    global _warned_no_stdbuf
+    if not cmd or shutil.which(cmd[0], path=path) is None:
+        return list(cmd)
+    stdbuf = shutil.which("stdbuf")
+    if stdbuf:
+        return [stdbuf, "-oL", "-eL", *cmd]
+    if not _warned_no_stdbuf:
+        _warned_no_stdbuf = True
+        log.warning("找不到 stdbuf(coreutils):MOLA 原样起,它的日志可能成批才到")
+    return list(cmd)
 
 BACKOFF_S = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 #: ``ros2 launch`` 说底下哪个进程死了、退出码多少(W34:外层 launch 的退出码是 0,被杀、段错误也是 0)。
@@ -100,12 +129,14 @@ class MolaSupervisor:
 
     async def _spawn(self) -> None:
         assert self._prior is not None
-        cmd = list(self._command_for(self._prior))
+        env = {**UNBUFFERED_ENV, **(os.environ if self._env is None else self._env)}
+        cmd = line_buffered(self._command_for(self._prior), path=env.get("PATH", os.defpath))
         log.info("起 MOLA:%s", " ".join(cmd))
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd, env=self._env, start_new_session=True, stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                *cmd, env=env, start_new_session=True, stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                limit=LINE_LIMIT)
         except OSError as exc:                            # 命令不在、没权限:说出来、过一会儿再试
             self._schedule(f"定位程序起不来({exc})")
             return
@@ -121,7 +152,11 @@ class MolaSupervisor:
         assert proc.stdout is not None
         mola = logging.getLogger("mola")
         while True:
-            line = await proc.stdout.readline()
+            try:
+                line = await proc.stdout.readline()
+            except ValueError:                            # 超过 LINE_LIMIT:asyncio 已把这段丢了
+                log.warning("MOLA 输出一行超过 %d 字节,丢掉", LINE_LIMIT)
+                continue
             if not line:
                 return
             text = line.decode("utf-8", "replace").rstrip()
