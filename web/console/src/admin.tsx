@@ -220,7 +220,7 @@ export function RobotsAdminPage({ say }: { say: Say }) {
               return (
                 <tr key={r.robot_id} class={r.revoked ? "off" : undefined}>
                   <td class="mono strong">{r.robot_id}</td>
-                  <td>{r.revoked ? t("revokedTag") : r.status?.online && r.fresh === true ? <span class="state tone-success">{t("online")}</span> : <span class="state p2 tone-error"><Shape kind="P2" />{t("st_offline")}</span>}</td>
+                  <td>{r.revoked ? t("revokedTag") : r.status?.online && r.fresh === true ? <span class="state tone-success">{t("online")}</span> : <span class="state p2 tone-error"><Shape kind="offline" />{t("st_offline")}</span>}</td>
                   <td class="mono">{r.capabilities?.agent ?? "—"}</td>
                   <td>{v === "ok" ? <span class="state tone-success">{t("compat_ok")}</span> : <span class="state p2"><Shape kind="P2" />{t(`compat_${v}` as Key)}</span>}</td>
                   <td>{r.manual_only ? t("manualOnly") : t("autoDispatch")}</td>

@@ -309,4 +309,11 @@ describe("管理页的狗:在线跟值守页一个口径(站点说新鲜才算)"
       expect(r.container.textContent).toContain("Offline");
     });
   }
+
+  it("离线那一格用离线的形状,不借 P2 的三角", async () => {
+    const r = await page(false);
+    const cell = r.getByText("Offline");
+    expect(cell.querySelector("svg.shape.offline")).toBeTruthy();
+    expect(cell.querySelector("svg.shape.P2")).toBeNull();
+  });
 });

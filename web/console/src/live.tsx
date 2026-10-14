@@ -5,7 +5,7 @@ import { CameraWell, camLabel, type Cam } from "./camera";
 import { hm, hms } from "./data";
 import { Modal } from "./dialogs";
 import { alertTitle, lang, t, type Key } from "./i18n";
-import { Shape } from "./icons";
+import { Shape, type ShapeKind } from "./icons";
 import { tone } from "./theme";
 import {
   abnormal,
@@ -33,12 +33,20 @@ export interface UnitInfo {
 
 const CAMS: Cam[] = ["front", "back"];
 
+/** 狗状态旁边的形状(色盲靠它):离线有自己的形状,P1 类菱形,其它 P2 类三角;正常没有。 */
+export function stateShape(s: RobotState): ShapeKind | null {
+  if (s === "offline") return "offline";
+  const a = abnormal(s);
+  return a === "p1" ? "P1" : a === "p2" ? "P2" : null;
+}
+
 export function StateText({ s, stale }: { s: RobotState; stale?: boolean }) {
   if (stale) return <span class="state unknown">{t("stUnknown")}</span>;
   const a = abnormal(s);
+  const shape = stateShape(s);
   return (
     <span class={`${a ? `state ${a}` : "state"} tone-${tone(s)}`}>
-      {a && <Shape kind={a === "p1" ? "P1" : "P2"} />}
+      {shape && <Shape kind={shape} />}
       {t(`st_${s}` as Key)}
     </span>
   );
@@ -72,7 +80,7 @@ export function OfflineStrip({ u, onMap }: { u: UnitInfo; onMap: () => void }) {
   return (
     <section class="unit offline" id={`unit-${u.robot.robot_id}`} aria-label={u.robot.robot_id}>
       <span class="unit-id">{u.robot.robot_id}</span>
-      <span class="state p2 tone-error"><Shape kind="P2" />{last ? t("offlineSince", { t: hm(last) }) : t("st_offline")}</span>
+      <span class="state p2 tone-error"><Shape kind="offline" />{last ? t("offlineSince", { t: hm(last) }) : t("st_offline")}</span>
       <span class="muted">{t("notStreaming")}</span>
       <button type="button" class="link push" onClick={onMap}>{t("map")}</button>
     </section>
@@ -143,11 +151,11 @@ export function JumpStrip({ units, p1, watching, total }: { units: UnitInfo[]; p
   return (
     <nav class="jump" aria-label="Robots">
       {units.map((u) => {
-        const a = abnormal(u.state);
+        const shape = stateShape(u.state);
         const cls = p1.has(u.robot.robot_id) ? "jumpbtn p1" : "jumpbtn";
         return (
           <a key={u.robot.robot_id} class={cls} href={`#unit-${u.robot.robot_id}`}>
-            {a && !p1.has(u.robot.robot_id) && <Shape kind={a === "p1" ? "P1" : "P2"} />}
+            {shape && !p1.has(u.robot.robot_id) && <Shape kind={shape} />}
             {u.robot.robot_id}
           </a>
         );
