@@ -7,6 +7,7 @@ import { Confirm } from "./dialogs";
 import { startDrag, clickGuard, swallowClick } from "./dragpt";
 import { t } from "./i18n";
 import { MapCanvas } from "./mapcanvas";
+import { PoseMarker } from "./posemarker";
 import { toPx, type PreviewMeta } from "./mapview";
 import "./routes.css";
 import {
@@ -229,28 +230,24 @@ export function RoutesPage({ say }: { say: Say }) {
                 </>}
                 marks={(s) => (
                   <>
+                    {/* 路线的点:定位箭头(posemarker.tsx),中间是序号,三角尖指着到点后的朝向;选中的那一个三角尖能拖 */}
                     {others.map((r) => r.waypoints.map((p, i) => {
-                      const [x, y] = s.map(p.x, p.y);
-                      return <g key={`${r.id}:${i}`} class="route-pt other"><circle cx={x} cy={y} r={7} /><text x={x} y={y} font-size={10}>{i + 1}</text></g>;
+                      const h = handleAt(meta, s, p.x, p.y, p.yaw, HANDLE_PX);
+                      return <PoseMarker key={`${r.id}:${i}`} x={h.x} y={h.y} hx={h.hx} hy={h.hy} r={8} label={i + 1}
+                        class="route-pt other" />;
                     }))}
                     {pts.map((p, i) => {
-                      const [x, y] = s.map(p.x, p.y);
+                      const h = handleAt(meta, s, p.x, p.y, p.yaw, HANDLE_PX);
                       return (
-                        <g key={i} class={`route-pt${i === pi ? " on" : ""}${bad.has(i) ? " bad" : ""}`} data-point={i}
-                          onPointerDown={dragPoint(i)} onClick={(e) => { e.stopPropagation(); setPi(i); }}>
+                        <PoseMarker key={i} x={h.x} y={h.y} hx={h.hx} hy={h.hy} r={PT_R} label={i + 1} selected={i === pi}
+                          class={`route-pt${i === pi ? " on" : ""}${bad.has(i) ? " bad" : ""}`}
+                          attrs={{ "data-point": String(i), onPointerDown: dragPoint(i),
+                            onClick: (e: MouseEvent) => { e.stopPropagation(); setPi(i); } } as Record<string, unknown>}
+                          handle={i === pi ? { data: i, onPointerDown: dragHandle(i) } : undefined}>
                           <title>{`${i + 1}. ${p.name}${bad.has(i) ? ` — ${bad.get(i)}` : ""}`}</title>
-                          <circle cx={x} cy={y} r={PT_R} /><text x={x} y={y}>{i + 1}</text>
-                        </g>
+                        </PoseMarker>
                       );
                     })}
-                    {selPoint && pi !== null && (() => {
-                      const h = handleAt(meta, s, selPoint.x, selPoint.y, selPoint.yaw, HANDLE_PX);
-                      return (
-                        <g class="route-handle" data-handle={pi} onPointerDown={dragHandle(pi)} onClick={(ev) => ev.stopPropagation()}>
-                          <line x1={h.x} y1={h.y} x2={h.hx} y2={h.hy} /><circle cx={h.hx} cy={h.hy} r={7} />
-                        </g>
-                      );
-                    })()}
                   </>
                 )} />
             )}

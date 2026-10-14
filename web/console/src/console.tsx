@@ -124,7 +124,8 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   const firstP1 = p1[0];
 
   // 有地图的页(地图、防区)整页一屏:地图只占顶栏和报警队列之间那一块,不被队列盖住(宽屏;窄屏照旧往下滚)
-  const fill = route.page === "map" || route.page === "admin/zones";
+  // 带地图的页整页一屏(地图撑满顶栏与报警队列之间):地图、防区、巡检路线
+  const fill = route.page === "map" || route.page === "admin/zones" || route.page === "admin/routes";
   return (
     <div class={fill ? "console fill" : "console"}>
       <TopBar me={me} page={route.page} mode={data?.mode ?? null} p1={p1.length} p2={active.length - p1.length} stale={stale}

@@ -14,19 +14,27 @@
 .pointform input { height: 36px; }
 .route-line { fill: none; stroke: var(--c-tertiary); stroke-width: 3; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 .route-line.other { stroke: var(--c-textSecondary); stroke-width: 2; stroke-dasharray: 5 4; opacity: 0.8; }
+/* 点位标记(posemarker.tsx,2026-10-15 改版):圆底座 + 朝向三角尖;三角尖就是把手。颜色只用主题变量。 */
+.pose-marker .pm-body { fill: var(--c-surface); stroke: var(--c-tertiary); stroke-width: 2.5; }
+.pose-marker .pm-nose { fill: var(--c-tertiary); stroke: var(--c-surface); stroke-width: 1.5; stroke-linejoin: round; }
+.pose-marker .pm-dot { fill: var(--c-tertiary); }
+.pose-marker .pm-label { fill: var(--c-text); font: 700 11px var(--font-mono); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.pose-marker .pm-halo { fill: color-mix(in srgb, var(--c-tertiary) 22%, transparent); stroke: none; }
+.pose-marker .pm-grab { fill: transparent; }
+.pose-marker.sel .pm-body { fill: var(--c-tertiary); }
+.pose-marker.sel .pm-label { fill: var(--c-surface); }
+.pose-marker.sel .pm-dot { fill: var(--c-surface); }
 .route-pt { cursor: grab; touch-action: none; }
-.route-pt circle { fill: var(--c-tertiary); stroke: var(--c-surface); stroke-width: 2; }
-.route-pt text { fill: var(--c-surface); font: 700 12px var(--font-mono); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
-.route-pt.on circle { fill: var(--c-text); stroke: var(--c-tertiary); stroke-width: 3; }
-.route-pt.bad circle { fill: var(--c-error); }
-.route-pt.other { cursor: default; opacity: 0.8; }
-.route-pt.other circle { fill: var(--c-textSecondary); }
+.route-pt.bad .pm-body { stroke: var(--c-error); }
+.route-pt.bad .pm-nose { fill: var(--c-error); }
+.route-pt.bad.sel .pm-body { fill: var(--c-error); }
+.route-pt.other { cursor: default; opacity: 0.75; }
+.route-pt.other .pm-body { stroke: var(--c-textSecondary); }
+.route-pt.other .pm-nose { fill: var(--c-textSecondary); }
+.route-pt.other .pm-label { font-size: 9px; }
 .route-handle { cursor: grab; touch-action: none; }
-.route-handle circle { fill: var(--c-surface); stroke: var(--c-text); stroke-width: 2; }
-.route-handle line { stroke: var(--c-text); stroke-width: 2; }
+.route-handle:hover .pm-nose { filter: brightness(1.15); }
 .map.drawing .route-pt { cursor: grab; }
 .posebar { padding: 10px 16px; border-top: 1px solid var(--c-outline); display: flex; flex-direction: column; gap: 8px; }
 .posebar .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.pose-pin circle { fill: var(--c-surface); stroke: var(--c-primary); stroke-width: 3; }
-.pose-pin line { stroke: var(--c-primary); stroke-width: 3; }
 .pose-pin text { fill: var(--c-text); font: 700 12px var(--font-mono); text-anchor: middle; paint-order: stroke; stroke: var(--c-surface); stroke-width: 4px; }
