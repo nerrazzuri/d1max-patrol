@@ -578,3 +578,179 @@ def test_建图命令_回环开关交给打包(tmp_path, monkeypatch):
     base = ["build", "--bag", str(tmp_path / "bag"), "--out", str(tmp_path / "o"), "--reuse"]
     assert tools.main(base) == 0 and seen["loop_closure"] == "找:auto"
     assert tools.main([*base, "--loop-closure", "off"]) == 0 and seen["loop_closure"] is None
+
+
+# ------------------------------------------------------------ 对账 S2:地图手性(跟里程同号)
+
+
+def _转圈(tmp, upside_down, *, n=300, r=1.5):
+    """跟 ``_scene`` 同一间屋子,狗绕 (3, 1.2) 朝左走一圈(半径 1.5 m,30 s,都在屋里):朝向一直在变。
+    回 (work, 点云, 世界里的朝向 [(时刻, 朝向)])。"""
+    work, pts = _scene(tmp, upside_down)
+    W2M, B_ = _world(upside_down)
+    lines, yaws = [], []
+    for i in range(n):
+        th = 2 * math.pi * i / n
+        R = W2M @ _Rz(th) @ B_.T
+        p = W2M @ np.array([3.0 + r * math.sin(th), 1.2 - r * math.cos(th), 0.0])
+        q = mat_to_quat(tuple(tuple(v) for v in R))
+        t = 100 + 0.1 * i
+        lines.append(f"{t:.2f} {p[0]} {p[1]} {p[2]} {q[0]} {q[1]} {q[2]} {q[3]}")
+        yaws.append((t, th))
+    (work / "traj.tum").write_text("\n".join(lines) + "\n")
+    return work, pts, yaws
+
+
+def _里程(yaws, *, sign=1.0, off=0.7, dt=0.0):
+    """狗自己的里程(录包里 ``/odom/mc_odom`` 那样):(报文头时刻, 收到时刻, 朝向);里程系的零朝向
+    跟地图不一样(``off``)。``sign=-1`` 就是跟地图反着转。"""
+    return [(t + dt, t + dt + 0.02, math.remainder(sign * th + off, 2 * math.pi))
+            for t, th in yaws]
+
+
+def test_S2_手性_同号认_反号判镜像_转得少或对不上时段说不清():
+    assert (B.HAND_AGREE, B.HAND_MIN_TURN_RAD, B.HAND_MAX_LAG_S) == (0.8, 1.0, 3.0), \
+        "来由见常量注释(两份真录包:同号 100%、转 860–900°、两边差 2.7 s),改了要重核"
+    yaws = [(100 + 0.1 * i, 2 * math.pi * i / 300 + 0.6 * math.sin(i / 13)) for i in range(300)]
+    odom = [(h, y) for h, _, y in _里程(yaws)]
+    ok = B.handedness(yaws, odom)
+    assert ok["verdict"] == "ok" and ok["agree"] == 1.0 and ok["turn_deg"] > 200, ok
+    assert abs(ok["ratio"] - 1.0) < 0.05 and ok["lag_s"] == 0.0
+    bad = B.handedness(yaws, [(h, y) for h, _, y in _里程(yaws, sign=-1.0)])
+    assert bad["verdict"] == "mirrored" and bad["agree"] == 0.0, bad
+    late = B.handedness(yaws, [(h, y) for h, _, y in _里程(yaws, dt=2.0)])
+    assert late["verdict"] == "ok" and late["lag_s"] == pytest.approx(-2.0, abs=0.15), late
+    straight = [(t, 0.01 * math.sin(t)) for t, _ in yaws]
+    few = B.handedness(straight, [(t, y + 0.3) for t, y in straight])
+    assert few["verdict"] == "unclear" and "转得太少" in few["why"], few
+    bend = [(t, 0.15 * (t - 110) if 110 <= t < 114 else (0.0 if t < 110 else 0.6))
+            for t, _ in yaws]                            # 只拐了一个 34° 的弯
+    few = B.handedness(bend, [(t, y + 0.3) for t, y in bend])
+    assert few["verdict"] == "unclear" and few["turn_deg"] < 57, few
+    apart = B.handedness(yaws, [(t + 1000.0, y) for t, y in odom])
+    assert apart["verdict"] == "unclear" and "时段" in apart["why"], apart
+    half = [(t, th if t < 115 else -th) for t, th in yaws]   # 前一半同号、后一半反号
+    mixed = B.handedness(half, [(t, th) for t, th in yaws])
+    assert mixed["verdict"] == "unclear" and 0.2 < mixed["agree"] < 0.8, mixed
+
+
+@pytest.mark.parametrize("upside_down", [False, True])
+def test_S2_打包时拿录包里的里程核手性_对的出图_build_json记下(tmp_path, upside_down):
+    work, pts, yaws = _转圈(tmp_path, upside_down)
+    got = []
+
+    def 读里程(bag):
+        got.append(bag)
+        return "/odom/mc_odom", _里程(yaws)
+    B.package(work, tmp_path / "out", run=假MOLA(pts), bag=tmp_path / "bag",
+              read_scans=lambda *a: iter(()), read_odom=读里程)
+    assert got == [tmp_path / "bag"]
+    h = json.loads((tmp_path / "out" / "build.json").read_text())["handedness"]
+    assert h["verdict"] == "ok" and h["topic"] == "/odom/mc_odom" and h["clock"] == "header", h
+
+
+def test_S2_地图跟狗反着转_不出图_说清楚(tmp_path):
+    work, pts, yaws = _转圈(tmp_path, True)
+    out = tmp_path / "out"
+    with pytest.raises(B.BuildError, match="镜像.*反号.*「上」"):
+        B.package(work, out, run=假MOLA(pts), bag=tmp_path / "bag",
+                  read_scans=lambda *a: iter(()),
+                  read_odom=lambda bag: ("/odom/mc_odom", _里程(yaws, sign=-1.0)))
+    assert not (out / "frames.json").exists() and not (out / "build.json").exists(), \
+        "判了镜像:一个版本文件都不写"
+
+
+def test_S2_上判反了_里程是对的_核出来不出图(tmp_path, monkeypatch):
+    """模拟 10-13 狗上那次(怀疑):``orient`` 把「上」判反了(倒装的雷达按装法的正负号标),地图平面
+    是镜像的。"""
+    from d1max_localizer.frames import calibrate
+    work, pts, yaws = _转圈(tmp_path, True)
+
+    def 判反(points, traj):
+        poses = [(p, q) for _, p, q in traj]
+        f = calibrate(poses, sensor_up=B.SENSOR_UP_HINT, forward_hint=B.SENSOR_FORWARD_HINT)
+        return f, "按装法的「上」(没翻)"
+    monkeypatch.setattr(B, "orient", 判反)
+    with pytest.raises(B.BuildError, match="镜像"):
+        B.package(work, tmp_path / "out", run=假MOLA(pts), bag=tmp_path / "bag",
+                  read_scans=lambda *a: iter(()),
+                  read_odom=lambda bag: ("/odom/mc_odom", _里程(yaws)))
+
+
+def test_S2_核不了的照出图_build_json写着为什么(tmp_path):
+    work, pts, yaws = _转圈(tmp_path, False)
+
+    def 打包(name, **kw):
+        B.package(work, tmp_path / name, run=假MOLA(pts), read_scans=lambda *a: iter(()), **kw)
+        return json.loads((tmp_path / name / "build.json").read_text())["handedness"]
+
+    assert 打包("o1") == {"verdict": "skipped", "why": "没给录包"}
+    h = 打包("o2", bag=tmp_path / "bag", read_odom=lambda bag: None)
+    assert h["verdict"] == "skipped" and "/odom/mc_odom" in h["why"], h
+
+    def 坏(bag):
+        raise RuntimeError("包坏了")
+    h = 打包("o3", bag=tmp_path / "bag", read_odom=坏)
+    assert h["verdict"] == "skipped" and "包坏了" in h["why"], h
+    h = 打包("o4", bag=tmp_path / "bag")                    # 默认读法:这里没有 ROS / 不是录包
+    assert h["verdict"] == "skipped" and "读不了" in h["why"], h
+    still = [(t, r, 0.3) for t, r, _ in _里程(yaws)]         # 里程一直不转:说不清
+    h = 打包("o5", bag=tmp_path / "bag", read_odom=lambda bag: ("/odom/mc_odom", still))
+    assert h["verdict"] == "unclear", h
+
+
+def test_S2_报文头的钟对不上_按收到的时刻对(tmp_path):
+    """里程的报文头用的是别的钟(差得远):退回「收到的时刻」,轨迹按雷达的「收到 − 报文头」挪过去。"""
+    work, pts, yaws = _转圈(tmp_path, False)
+    odom = [(h - 5e6, r + 50.0, y) for h, r, y in _里程(yaws)]
+    B.package(work, tmp_path / "out", run=假MOLA(pts), bag=tmp_path / "bag",
+              read_scans=lambda *a: iter(()), read_odom=lambda bag: ("/odom/mc_odom", odom),
+              clock_offset=lambda bag, topic: 50.0)
+    h = json.loads((tmp_path / "out" / "build.json").read_text())["handedness"]
+    assert h["verdict"] == "ok" and h["clock"] == "receive", h
+
+
+_ODOM_BAG = """
+import math, rosbag2_py
+from pathlib import Path
+from rclpy.serialization import serialize_message
+from nav_msgs.msg import Odometry
+from d1max_localizer import build as B
+bag = Path(BAG)
+w = rosbag2_py.SequentialWriter()
+w.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id="mcap"),
+       rosbag2_py.ConverterOptions("cdr", "cdr"))
+for name in ("/odom/current_pose", "/odom/mc_odom"):
+    w.create_topic(rosbag2_py.TopicMetadata(name=name, type="nav_msgs/msg/Odometry",
+                                            serialization_format="cdr"))
+for i in range(3):
+    for name, k in (("/odom/current_pose", -1), ("/odom/mc_odom", 1)):
+        m = Odometry()
+        m.header.stamp.sec, m.header.stamp.nanosec = 50 + i, 0
+        a = 0.5 * i * k
+        m.pose.pose.orientation.z, m.pose.pose.orientation.w = math.sin(a / 2), math.cos(a / 2)
+        w.write(name, serialize_message(m), (100 + i) * 10**9 + (k > 0))
+del w
+for topics in (B.ODOM_TOPICS, ("/odom/current_pose",)):
+    topic, rows = B.bag_odom(bag, topics)
+    print(topic, [(h, round(r, 3), round(y, 3)) for h, r, y in rows])
+print(B.bag_odom(bag, topics=("/nope",)))
+"""
+
+
+@pytest.mark.skipif(not Path("/opt/ros/humble/setup.sh").is_file(), reason="要 ROS")
+def test_S2_从真的mcap录包读里程_报文头收到时刻朝向(tmp_path):
+    import os
+    import subprocess
+    repo = Path(__file__).resolve().parents[3]
+    script = _ODOM_BAG.replace("BAG", repr(str(tmp_path / "bag")))
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["OURS"] = f"{repo}/packages/localizer/src:{repo}/packages/contract/src"
+    r = subprocess.run(["bash", "-c", "set +u; . /opt/ros/humble/setup.bash; "
+                        'PYTHONPATH="$PYTHONPATH:$OURS" /usr/bin/python3 -'],
+                       input=script, capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == [
+        "/odom/mc_odom [(50.0, 100.0, 0.0), (51.0, 101.0, 0.5), (52.0, 102.0, 1.0)]",
+        "/odom/current_pose [(50.0, 100.0, 0.0), (51.0, 101.0, -0.5), (52.0, 102.0, -1.0)]",
+        "None"], r.stdout
