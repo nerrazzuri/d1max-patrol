@@ -19,9 +19,9 @@
  *
  * ============================== 用法 ==============================
  *
- *   patrol_agent <ip> <port> [--listen HOST:PORT] [--fifo PATH]
+ *   patrol_agent <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--token-file PATH]
  *
- *   patrol_agent 192.168.168.168 8082 --listen 127.0.0.1:8090 --fifo /tmp/d1max.cmd
+ *   patrol_agent 192.168.168.168 8082 --listen 127.0.0.1:8090 --fifo runs/d1max-agent.fifo
  *
  * **先起它，再给机器上电。** 它会一直刷"第 N 次未抢到"，直到抢到窗口。
  * 端口是 8082/UDP，不是文档里写的 8081（清单 #34）。
@@ -29,16 +29,22 @@
  * FIFO 是给人用的应急通道，收的是 hold02 那套空格分隔的命令；TCP 那条
  * 才是给 Python 用的。两条走同一把锁、同一条会话。
  *
+ * **只收代理的运动命令**(S11,协议 9,见 cmd_auth.hpp):起来时生成一个随机令牌写进 --token-file
+ * (默认 ~/.d1max/sidecar.token,0600);TCP 连接先 auth 才能发运动命令,停车、急停谁都能发。
+ * FIFO 只有属主是这个账号、组和别人都不能写的时候才收运动命令。
+ *
  * **它不会自己 ReleaseControl。** SIGINT 也不会——那正是要防的事。真要
  * 交还控制权，从 TCP 发 {"cmd":"shutdown"}，或者 FIFO 里敲 shutdown。
  *
  * 编译： cd motion && make patrol_agent
  */
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -61,6 +67,7 @@
 #include <thread>
 #include <vector>
 
+#include "cmd_auth.hpp"
 #include "robot_sdk/sdk_client.hpp"
 #include "take_ack.hpp"
 #include "vel_gate.hpp"
@@ -97,7 +104,13 @@ using namespace robot_sdk;
 // 8(W26):加了 imu 帧(20 Hz):{"roll","pitch"(弧度),"shock"(上一帧以来加速度模长偏离重力参考最大的
 // 那一下,g),"load"(关节力矩绝对值之和;没收到关节数据不带)}。开 SetImuConfig(100)。老代理不认识
 // imu 帧 —— 只有新代理配新旁路进程才发,7 号及更老的照旧能连(代理按「没有受力数据」不判)。
-static const int kProtoVersion = 8;
+//
+// 9(S11):只收代理的运动命令。hello 带 "auth":true;每条连接先 {"cmd":"auth","token":…}(令牌在
+// --token-file),没认证的连接发运动命令一律拒(not_authorized);停车、按下急停、净空许可照收(见
+// cmd_auth.hpp)。8 号及更老的代理不发 auth —— 连上了也开不了车,所以握手就得拒(老代理认 3–8)。
+static const int kProtoVersion = 9;
+// 这一次起来的令牌(cmd_auth.hpp)。空 = 没写成令牌文件,谁都认证不了(停车照常)。
+static std::string g_token;
 static int g_speed_want = 1;
 static bool g_follows_head = true;
 
@@ -275,6 +288,7 @@ static velgate::Gate g_gate;
 static std::string HelloFrame() {
   std::ostringstream hello;
   hello << "{\"t\":\"hello\",\"proto\":" << kProtoVersion
+        << ",\"auth\":true"
         << ",\"sdk\":\"0.1.1\",\"held\":" << (g_held.load() ? "true" : "false")
         << ",\"follows_head\":" << (g_follows_head ? "true" : "false")
         << ",\"speed_level_want\":" << g_speed_want
@@ -776,6 +790,9 @@ static void ServeClient(int fd) {
   Conn conn;
   conn.fd = fd;
   std::thread worker(ConnWorker, &conn);
+  // 这条连接认证过没有(S11)。只有读线程碰它:命令按行的顺序过这道门,auth 之后的行才放行。
+  cmdauth::ConnAuth auth(&g_token);
+  bool told_denied = false;
 
   std::string buffer;
   char chunk[4096];
@@ -797,6 +814,23 @@ static void ServeClient(int fd) {
         continue;
       }
       const int id = static_cast<int>(JsonNumField(line, "id", 0));
+      if (cmd == "auth") {
+        std::string got;
+        JsonField(line, "token", &got);
+        const std::string why = auth.Auth(got);
+        if (!why.empty()) std::cout << "[AUTH] 一个客户端认证没过: " << why << "\n";
+        SendTo(fd, AckFrame(id, why.empty() ? Outcome{} : Reject(why)));
+        continue;
+      }
+      const std::string deny = auth.Check(cmd, JsonBoolField(line, "on", true));
+      if (!deny.empty()) {
+        if (!told_denied) {  // 一条连接只记一次:速度环 10 Hz,别刷屏
+          told_denied = true;
+          std::cout << "[AUTH] 没认证的连接发 " << cmd << ",拒(停车、急停照收)\n";
+        }
+        SendTo(fd, AckFrame(id, Reject(deny)));
+        continue;
+      }
       if (IsUrgent(cmd)) {
         SendTo(fd, AckFrame(id, RunCommand(cmd, line, [] { return false; })));
         continue;
@@ -854,11 +888,18 @@ static int Listen(const std::string& host, int port) {
 // FIFO —— 给人用的应急通道，命令格式沿用 hold02
 // ===================================================================
 
-static void HandleFifoLine(const std::string& line) {
+/// trusted:这个 FIFO 属主是本账号、组和别人都不能写(cmdauth::FifoTrusted)。不可信的只收停车、
+/// 按下急停、看状态(S11:FIFO 的门就是它的文件权限,谁都能写的管道不许开车)。
+static void HandleFifoLine(const std::string& line, bool trusted) {
   std::istringstream is(line);
   std::string cmd;
   is >> cmd;
   if (cmd.empty()) return;
+  if (!trusted && !cmdauth::FifoOpen(cmd)) {
+    std::cout << "[FIFO] " << cmd << " -> 拒:这个管道组或别人能写(或者属主不是本账号),"
+                 "只收 halt/estop/status。重建:rm 它,mkfifo -m 600\n";
+    return;
+  }
   Outcome out;
   if (cmd == "stand") {
     out = DoStand();
@@ -898,14 +939,35 @@ static void HandleFifoLine(const std::string& line) {
 }
 
 static void FifoLoop(const std::string& path) {
+  bool told = false;
   while (g_running.load()) {
-    std::ifstream f(path);   // 阻塞到有写入者
-    if (!f) {
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);  // 阻塞到有写入者
+    if (fd < 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
       continue;
     }
-    std::string line;
-    while (std::getline(f, line)) HandleFifoLine(line);
+    // 看的是打开的这一个(fstat),不是路径:看完再被换掉也没用
+    struct stat st {};
+    const bool trusted = ::fstat(fd, &st) == 0 && cmdauth::FifoTrusted(st, ::geteuid());
+    if (!trusted && !told) {
+      told = true;
+      std::cout << "[!] FIFO " << path << " 组或别人能写(或者不是本账号的管道):"
+                   "只收 halt/estop/status\n";
+    }
+    std::string buf;
+    char chunk[512];
+    ssize_t n;
+    while ((n = ::read(fd, chunk, sizeof(chunk))) > 0 || (n < 0 && errno == EINTR)) {
+      if (n < 0) continue;
+      buf.append(chunk, static_cast<size_t>(n));
+      size_t nl;
+      while ((nl = buf.find('\n')) != std::string::npos) {
+        HandleFifoLine(buf.substr(0, nl), trusted);
+        buf.erase(0, nl + 1);
+      }
+    }
+    if (!buf.empty()) HandleFifoLine(buf, trusted);  // 最后一行没换行
+    ::close(fd);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 }
@@ -925,15 +987,18 @@ static void OnSig(int) {
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::cerr << "usage: " << argv[0]
-              << " <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--require-clearance]"
-                 " [--sdk-follows-head 0|1] [--speed-level 0|1|2|3]\n"
+              << " <ip> <port> [--listen HOST:PORT] [--fifo PATH] [--token-file PATH]"
+                 " [--require-clearance] [--sdk-follows-head 0|1] [--speed-level 0|1|2|3]\n"
               << "  例: " << argv[0]
               << " 192.168.168.168 8082 --listen 127.0.0.1:8090"
-                 " --fifo /tmp/d1max.cmd\n";
+                 " --fifo runs/d1max-agent.fifo\n"
+              << "  --token-file 缺省 ~/.d1max/sidecar.token(代理的 --sidecar-token-file 缺省同一个)\n";
     return 2;
   }
   const std::string ip = argv[1], port = argv[2];
-  std::string listen_host = "127.0.0.1", fifo;
+  std::string listen_host = "127.0.0.1", fifo, token_file;
+  if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0')
+    token_file = std::string(home) + "/.d1max/sidecar.token";
   int listen_port = 8090;
   for (int i = 3; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -948,6 +1013,8 @@ int main(int argc, char** argv) {
       }
     } else if (arg == "--fifo" && i + 1 < argc) {
       fifo = argv[++i];
+    } else if (arg == "--token-file" && i + 1 < argc) {
+      token_file = argv[++i];
     } else if (arg == "--require-clearance") {
       g_gate.RequireClearance(true);  // W11 第二层:没有感知节点的净空许可不许往前
     } else if (arg == "--sdk-follows-head" && i + 1 < argc) {
@@ -975,6 +1042,25 @@ int main(int argc, char** argv) {
   std::signal(SIGINT, OnSig);
   std::signal(SIGTERM, OnSig);
   std::signal(SIGPIPE, SIG_IGN);
+
+  // ---- 令牌(S11)----
+  // **写不成也照起**:开机窗口错过了要重启 RK3588。没有令牌就谁都开不了车,停车、急停照常。
+  {
+    std::string why;
+    if (token_file.empty()) {
+      why = "没有 HOME、也没给 --token-file";
+    } else {
+      g_token = cmdauth::NewToken(&why);
+      if (!g_token.empty()) why = cmdauth::WriteTokenFile(token_file, g_token);
+    }
+    if (!why.empty()) {
+      g_token.clear();
+      std::cout << "[!!] 令牌没写成(" << why << "):这一次谁都开不了车(停车、急停照常)。"
+                   "修好再重启旁路进程 —— 要重抢开机窗口\n";
+    } else {
+      std::cout << "[agent] 令牌写在 " << token_file << "(0600);代理连上先认证才能开车\n";
+    }
+  }
 
   SDKClient client;
   g_client = &client;

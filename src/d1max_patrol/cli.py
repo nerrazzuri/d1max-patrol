@@ -69,6 +69,18 @@ MAPPING_TRANSITION_TIMEOUT_S = 15.0
 NAV_STANDBY_TIMEOUT_S = 10.0
 _POLL_INTERVAL_S = 0.02
 
+#: S11(地图与导航能力对账 2026-10-14):``goto``/``walk`` 走的是**厂家导航**,不经过我们的代理和站点 ——
+#: 没有禁行区、限速区、避障守卫(W08:厂家导航没有禁行区)。只留给「核对厂家导航本身」的现场项
+#: (真机现场执行单 7.1、7.8、7.9;真机联调手册 E2、E3),要人显式说出来。
+VENDOR_NAV_HELP = ("我知道这是厂家导航:不守禁行区、限速区,不过避障守卫,人守着急停 "
+                   "(只用于核对厂家导航的现场项)")
+VENDOR_NAV_REFUSAL = (
+    "{cmd} 走的是厂家导航:不守禁行区、限速区,不过我们的避障守卫,也绕过站点(W08、S11),默认不跑。\n"
+    "  让狗去一个点:手机单狗页「去这里」,或站点接口 POST /api/robots/<狗>/goto(按区域、"
+    "避障、监护规则派);巡检用任务包。\n"
+    "  只有核对厂家导航本身的现场项(真机现场执行单 7.x、联调手册 E2/E3)才加 --allow-vendor-nav,"
+    "人守着急停。")
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="d1max", description="D1 Max 巡检工具")
@@ -104,14 +116,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("load", help="加载定位地图并等到定位就绪")
     p.add_argument("map_id")
 
-    p = sub.add_parser("goto", help="走一个点")
+    p = sub.add_parser("goto", help="走一个点(厂家导航:没有禁行区,要 --allow-vendor-nav)")
     p.add_argument("x", type=float)
     p.add_argument("y", type=float)
     p.add_argument("yaw", type=float, nargs="?", default=0.0)
+    p.add_argument("--allow-vendor-nav", action="store_true", help=VENDOR_NAV_HELP)
 
-    p = sub.add_parser("walk", help="按厂商路线全逐点走完")
+    p = sub.add_parser("walk",
+                       help="按厂商路线全逐点走完(厂家导航:没有禁行区,要 --allow-vendor-nav)")
     p.add_argument("map_id")
     p.add_argument("path_id")
+    p.add_argument("--allow-vendor-nav", action="store_true", help=VENDOR_NAV_HELP)
 
     p = sub.add_parser("speed", help="读或写导航速度")
     p.add_argument("x", type=float, nargs="?")
@@ -326,6 +341,10 @@ def main(argv: list[str] | None = None) -> int:
 
 async def _amain(args: argparse.Namespace) -> int:
     """真正干活的地方:建后端连接,分发到对应子命令处理函数。"""
+    if args.command in ("goto", "walk") and not args.allow_vendor_nav:
+        # 连都不连:厂家导航没有禁行区(S11)
+        print(VENDOR_NAV_REFUSAL.format(cmd=args.command), file=sys.stderr)
+        return 2
     try:
         async with _backend(args) as backend:
             handler = _COMMANDS[args.command]

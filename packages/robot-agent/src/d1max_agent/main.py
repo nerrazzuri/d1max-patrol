@@ -78,7 +78,9 @@ INTAKE_PORT = 8444
 #: W12:按 SDK 文档的低速档(比例 1.0 = 1.0 m/s、1.5 rad/s),死区按 #37;比例上限 0.5 不变(最快约 0.5
 #: m/s)。
 D1MAX_DEFAULTS = {"sidecar": ("127.0.0.1", 8090), "mps_per_unit": 1.0, "radps_per_unit": 1.5,
-                  "deadband": 0.2, "max_fraction": 0.5, "stopped_eps": 0.02, "fwd_offset": 0.0}
+                  "deadband": 0.2, "max_fraction": 0.5, "stopped_eps": 0.02, "fwd_offset": 0.0,
+                  # S11:旁路进程(协议 9)只收认证过的连接的运动命令;它起来时把令牌写在这
+                  "sidecar_token_file": "~/.d1max/sidecar.token"}
 #: 换算系数的合理范围(W12 外审阻断):SDK 文档低速档 1.0 m/s、1.5 rad/s 上下。老模板照抄的 0.4 / 1.0
 #: 是猜的,
 #: 照它换算代理以为的速度跟实际差一大截、限速区限不住 —— 不在范围里就不起,实测值真不在范围里要人加
@@ -154,6 +156,9 @@ def build_parser() -> argparse.ArgumentParser:
     d1 = p.add_argument_group("--hal d1max(比例换算的几个数都待真机实测)")
     d1.add_argument("--sidecar", type=_hostport, default=None,
                     help="旁路进程 host:port,默认 127.0.0.1:8090")
+    d1.add_argument("--sidecar-token-file", default=None,
+                    help="旁路进程的令牌(协议 9:认证过才能开车;旁路进程起来时写),"
+                         "默认 ~/.d1max/sidecar.token —— 跟旁路进程同一个账号跑才读得到")
     d1.add_argument("--mps-per-unit", type=float, default=None,
                     help="Move 比例 1.0 对应的 m/s,默认 1.0(SDK 文档低速档,W12)")
     d1.add_argument("--radps-per-unit", type=float, default=None,
@@ -473,7 +478,8 @@ def build(args: argparse.Namespace) -> Assembled:
                            radps_per_unit=args.radps_per_unit, deadband_mps=args.deadband,
                            max_fraction=args.max_fraction, fwd_offset=args.fwd_offset,
                            invert_yaw=args.invert_yaw,
-                           stopped_eps=args.stopped_eps, now_ms=wall_ms, payload=payload)
+                           stopped_eps=args.stopped_eps, now_ms=wall_ms, payload=payload,
+                           token_file=args.sidecar_token_file)
             media = None                          # RTSP 取图归后面的工单
         parts = build_engine(hal, runs_root=args.runs_root, now_ms=wall_ms, map_id=args.map[0],
                              home=args.home, media=media, nav_kind=args.nav,

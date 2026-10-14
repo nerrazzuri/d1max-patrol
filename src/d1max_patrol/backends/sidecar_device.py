@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import math
+import os
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 from d1max_patrol.backends.base import (
@@ -33,6 +36,7 @@ from d1max_patrol.backends.base import (
     Frame,
 )
 from d1max_patrol.protocol.agent_frames import (
+    AUTH_PROTO_VERSION,
     MIN_PROTO_VERSION,
     PROTO_VERSION,
     Ack,
@@ -48,6 +52,8 @@ from d1max_patrol.protocol.agent_frames import (
     encode_command,
 )
 from d1max_patrol.protocol.nav_types import Pose
+
+log = logging.getLogger(__name__)
 
 #: 旁路进程默认监听的地址。只绑回环 —— 它握着能让机器走路的控制权,
 #: 默认对外可达是不可接受的。要跨机连(旁路进程板载、Python 在笔记本上)
@@ -80,6 +86,28 @@ VEL_TTL_MAX_MS = 1000
 #: 留多少条最近的故障帧给 HAL 读(``recent_faults``)。
 RECENT_FAULTS = 20
 
+#: 旁路进程把这一次的令牌写在哪(``patrol_agent --token-file`` 的缺省,协议 9,S11)。
+#: **只有代理缺省读它**;现场工具要开车得自己显式给 ``--token-file``(docs/真机联调手册.md)。
+DEFAULT_TOKEN_FILE = "~/.d1max/sidecar.token"
+#: 令牌文件最多读多少字节(令牌是 64 个十六进制字符;读到一大坨说明指错了文件)。
+_MAX_TOKEN_BYTES = 256
+
+
+def read_token(path: str | os.PathLike[str]) -> str:
+    """读旁路进程的令牌(去掉首尾空白)。读不了、是空的、太长:抛 ``DeviceBackendError``,
+    说清楚在哪读的。"""
+    p = Path(path).expanduser()
+    try:
+        raw = p.read_bytes()[: _MAX_TOKEN_BYTES + 1]
+    except OSError as exc:
+        raise DeviceBackendError(
+            f"读不了旁路进程的令牌 {p}: {exc} —— 旁路进程起来时写它(patrol_agent --token-file,"
+            f"缺省 {DEFAULT_TOKEN_FILE});要用起旁路进程的那个账号读,或者把路径指过去") from exc
+    token = raw.decode("ascii", "replace").strip()
+    if not token or len(raw) > _MAX_TOKEN_BYTES:
+        raise DeviceBackendError(f"旁路进程的令牌文件 {p} 不像令牌(空的或太长):指错文件了?")
+    return token
+
 
 class SidecarDeviceBackend(DeviceBackend):
     """通过 TCP + JSONL 驱动常驻 SDK 会话。
@@ -99,11 +127,17 @@ class SidecarDeviceBackend(DeviceBackend):
         port: int = DEFAULT_AGENT_PORT,
         *,
         ack_timeout_s: float = DEFAULT_ACK_TIMEOUT_S,
+        token_file: str | os.PathLike[str] | None = None,
     ) -> None:
+        """``token_file``:旁路进程的令牌(协议 9,S11)。给了就在每次 ``connect`` 时现读、认证 —— 认证
+        不过 ``connect`` 就抛;不给就不认证:只读(遥测)、停车、急停照常,运动命令旁路进程会拒。"""
         super().__init__()
         self._host = host
         self._port = port
         self._ack_timeout_s = ack_timeout_s
+        self._token_file = token_file
+        #: 这条连接能不能开车:旁路进程不核令牌(老旁路进程),或者认证过了。
+        self._authorized = False
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._pump: asyncio.Task[None] | None = None
@@ -138,6 +172,11 @@ class SidecarDeviceBackend(DeviceBackend):
     def hello(self) -> Hello | None:
         """旁路进程的自我介绍。没连上时是 None。"""
         return self._hello
+
+    @property
+    def authorized(self) -> bool:
+        """这条连接能发运动命令:旁路进程不核令牌(8 号及更老),或者令牌认证过了(S11)。"""
+        return self._authorized and self.connected
 
     @property
     def last_state(self) -> StateFrame | None:
@@ -229,7 +268,31 @@ class SidecarDeviceBackend(DeviceBackend):
             )
         self._hello = hello
         self._held = hello.held
+        self._authorized = False
         self._pump = asyncio.create_task(self._pump_frames())
+        await self._authenticate(hello)
+
+    async def _authenticate(self, hello: Hello) -> None:
+        """协议 9(S11):旁路进程要令牌就在这条连接上认证一次。
+
+        - 旁路进程不核令牌(8 号及更老):能开车,但本机谁都能开 —— 给了令牌文件(代理)就记一条警告。
+        - 要令牌、没给令牌文件(只读的探针):不认证;运动命令旁路进程会拒,停车、急停照常。
+        - 要令牌、给了:现读(旁路进程每次起来换一个)、认证;读不了或不对 → 断开、抛,说清楚。"""
+        if not hello.auth:
+            self._authorized = True
+            if self._token_file is not None:
+                log.warning("旁路进程是 %d 号(< %d),不核令牌:本机任何进程都能让狗动。重编 "
+                            "motion/patrol_agent", hello.proto, AUTH_PROTO_VERSION)
+            return
+        if self._token_file is None:
+            return
+        try:
+            token = read_token(self._token_file)
+            await self._command("auth", timeout_s=URGENT_ACK_TIMEOUT_S, token=token)
+        except DeviceBackendError as exc:
+            await self.close()
+            raise DeviceBackendError(f"旁路进程认证没过: {exc}") from exc
+        self._authorized = True
 
     async def close(self) -> None:
         """断开 Python 这头。
@@ -249,6 +312,7 @@ class SidecarDeviceBackend(DeviceBackend):
         writer, self._writer = self._writer, None
         self._reader = None
         self._held = False
+        self._authorized = False
         if writer is not None:
             writer.close()
             with contextlib.suppress(Exception):
@@ -582,9 +646,11 @@ def _port(text: str) -> int:
 __all__ = [
     "DEFAULT_AGENT_HOST",
     "DEFAULT_AGENT_PORT",
+    "DEFAULT_TOKEN_FILE",
     "MAX_WALK_SECONDS",
     "MAX_WALK_SPEED",
     "URGENT_ACK_TIMEOUT_S",
     "SidecarDeviceBackend",
     "parse_agent_endpoint",
+    "read_token",
 ]

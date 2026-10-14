@@ -59,10 +59,20 @@ from typing import Any
 #:
 #: 8(W26):加了 ``imu`` 帧(20 Hz):姿态、撞击峰值、腿上承重。老旁路进程不发,代理按「没有受力数据」
 #: 不判。
-PROTO_VERSION = 8
+#:
+#: 9(S11):只收代理的运动命令。``hello`` 带 ``auth: true``;每条连接先发 ``auth {token}``(令牌是
+#: 旁路进程起来时写进 ``--token-file`` 的随机数,缺省 ``~/.d1max/sidecar.token``),没认证的连接发运动
+#: 命令一律回 ``not_authorized``;``halt``、按下的 ``estop``、``clear`` 谁都能发(停车永远不挡)。
+#: 8 号及更老的代理不发 ``auth``,所以老代理(认 3–8)握手就拒 9 号;新代理照样认 3–8 的老旁路进程
+#: (它们不核令牌 —— 代理记一条警告:本机任何进程都能让狗动,重编 ``motion/patrol_agent``)。
+PROTO_VERSION = 9
 #: 代理(``sidecar_device``)能配的最老的旁路进程:代理只用到 ``vel``(3),``clear`` 是感知节点发的
 #: (W11 内审应修 1:严格等于 4 的话,只推新版代理、旁路进程还是 3 号时整机不能动)。
 MIN_PROTO_VERSION = 3
+#: 旁路进程拒没认证的运动命令时,原因以它开头(``motion/cmd_auth.hpp`` 的 ``kNotAuthorized``)。
+NOT_AUTHORIZED = "not_authorized"
+#: 旁路进程从这一号起要令牌(``hello.auth``)。
+AUTH_PROTO_VERSION = 9
 
 
 class MotionStatus(str, Enum):
@@ -133,6 +143,8 @@ class Hello:
     follows_head: bool = True
     #: 旁路进程要的速度档(7 号起报;None = 没报,不核;0 = 旁路进程不管档位)。
     speed_level_want: int | None = None
+    #: 运动命令要不要先认证(9 号起报 ``true``;没报 = 老旁路进程,不核令牌)。
+    auth: bool = False
 
 
 @dataclass(frozen=True)
@@ -337,6 +349,7 @@ def decode_frame(line: str | bytes) -> Downstream:
             robot=str(obj.get("robot", "")),
             follows_head=obj.get("follows_head") is not False,
             speed_level_want=_int_or_none(obj.get("speed_level_want")),
+            auth=obj.get("auth") is True,
         )
     if kind == "ack":
         ack_id = obj.get("id")

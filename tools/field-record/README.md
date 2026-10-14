@@ -45,12 +45,17 @@
 ## SDK 标定驱动:`calibrate_drive.py`(我控制那半)
 复用项目 `SidecarDeviceBackend` 的 `walk/stand/lie`,默认 dry-run,`--arm` 才动。
 ```bash
-# 这台笔记本带去办公室。连上狗网络后(host 填 Orin IP):
-python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --dry-run          # 看计划
-python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --test             # 小步试(1拍前进+停)
-python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --measure-yaw      # 转5s测角速率→改 YAW_DEG_PER_S
-python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --arm --stand-lie  # 正式跑(另开终端先跑 record_bag.sh calib)
+# 这台笔记本带去办公室。连上狗网络后(host 填 Orin IP)。要动狗得给旁路进程的令牌(S11,见下):
+# 令牌每条命令现递一次、不落盘:--token-file <(ssh robot@<ORIN_IP> cat .d1max/sidecar.token)
+# (下面写作 --token-file TOK;别把 <(...) 存进变量,命令一结束那个 fd 就关了)
+python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --dry-run                      # 看计划(不要令牌)
+python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --token-file TOK --test         # 小步试(1拍前进+停)
+python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --token-file TOK --measure-yaw  # 转5s测角速率→改 YAW_DEG_PER_S
+python3 tools/field-record/calibrate_drive.py --host <ORIN_IP> --token-file TOK --arm --stand-lie  # 正式跑(另开终端先跑 record_bag.sh calib)
 ```
+- **令牌(S11,旁路进程协议 9)**:旁路进程只收认证过的连接的运动命令;令牌在起旁路进程那个账号的
+  `~/.d1max/sidecar.token`(0600,旁路进程每次起来重写)。这个脚本绕过代理的禁行区、避障,所以令牌要人
+  **显式**给(`--token-file`),不设缺省;停车(halt)不要令牌。旁路进程是别的账号或 root 起的,就 `sudo cat` 那个账号的。
 - **前提(关键)**:`acquire_control()` 只是**核对**旁路进程握着控制权;真正的 TakeControl 是**旁路进程在开机窗口抢的**。
   所以 SDK 驱动前必须:**重启狗 + 旁路进程抢赢握手**(否则上装占着,acquire 抛错,当天走不了 SDK 这条)。
 - 安全:walk 有硬上限(≤10s,|amt|≤0.5),脚本再收紧到 ≤4s;全程 try/finally 兜底 halt;**你守硬急停**。

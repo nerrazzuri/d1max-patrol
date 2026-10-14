@@ -30,6 +30,7 @@ import time
 from typing import Any
 
 from d1max_patrol.protocol.agent_frames import (
+    NOT_AUTHORIZED,
     PROTO_VERSION,
     AgentProtocolError,
     EmergencyStatus,
@@ -56,6 +57,16 @@ WALK_CANCELLED = "行走被停车/急停打断"
 
 #: 插队执行的命令。跟 ``patrol_agent.cpp`` 的 ``IsUrgent`` 对齐。
 URGENT_COMMANDS = frozenset({"halt", "estop", "vel", "clear"})
+
+
+def open_command(cmd: str, args: dict[str, Any]) -> bool:
+    """不要令牌就能发的命令(协议 9,S11)。跟 ``motion/cmd_auth.hpp`` 的 ``IsOpen`` 一字不差:停车、
+    按下急停、净空许可、auth;松开急停(``on: false``)要令牌。"""
+    if cmd in ("halt", "auth", "clear"):
+        return True
+    if cmd == "estop":
+        return bool(args.get("on", True))       # 跟下面执行时同一个解读:判的就是要做的
+    return False
 
 #: ``vel``(协议 v3)的边界:同 ``motion/vel_gate.hpp`` 的 ``kMaxFraction`` 与 ``kTtl*``。
 VEL_MAX = 0.5
@@ -87,7 +98,12 @@ class SimAgentServer:
         require_clearance: bool = False,
         follows_head: bool = True,
         speed_level_want: int = 1,
+        token: str | None = None,
     ) -> None:
+        #: 同 ``patrol_agent --token-file``(协议 9,S11):给了就要求每条连接先 ``auth``,没认证的连接
+        #: 发运动命令回 ``not_authorized``;``None`` = 仿真不核令牌(hello 报 ``auth: false``,
+        #: 老测试照旧)。
+        self.token = token
         #: 同 ``patrol_agent --speed-level``(W12):要的速度档(0 = 不管);``speed_level`` 是此刻的档
         #: (测试改它 = 有人在厂家 App 上换了档)。档位不对不放行运动,过 1 s 自己设回去。
         self.speed_level_want = speed_level_want
@@ -213,23 +229,20 @@ class SimAgentServer:
                              writer: asyncio.StreamWriter) -> None:
         self._clients.add(writer)
         try:
-            self._send(writer, {
-                "t": "hello", "proto": PROTO_VERSION, "sdk": self._sdk,
-                "held": self._held, "robot": "sim://d1max", "follows_head": self.follows_head,
-                "speed_level_want": self.speed_level_want,
-            })
+            self._send(writer, self._hello(self._held))
             await writer.drain()
             telemetry = asyncio.create_task(self._telemetry_loop(writer))
             self._tasks.add(telemetry)
             queue: asyncio.Queue[_Job] = asyncio.Queue()
             worker = asyncio.create_task(self._worker(writer, queue))
             self._tasks.add(worker)
+            authed = [self.token is None]           # 这条连接认证过没有(S11)
             try:
                 while True:
                     line = await reader.readline()
                     if not line:
                         break
-                    await self._on_line(writer, line, queue)
+                    await self._on_line(writer, line, queue, authed)
             finally:
                 # 客户端走了:队里剩下的一律不做,正在走的那一拍收手 —— 跟 C++
                 # 的 ``closing`` 一样。
@@ -245,6 +258,11 @@ class SimAgentServer:
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
+
+    def _hello(self, held: bool) -> dict[str, Any]:
+        return {"t": "hello", "proto": PROTO_VERSION, "auth": self.token is not None,
+                "sdk": self._sdk, "held": held, "robot": "sim://d1max",
+                "follows_head": self.follows_head, "speed_level_want": self.speed_level_want}
 
     def _send(self, writer: asyncio.StreamWriter, obj: dict[str, Any]) -> None:
         with contextlib.suppress(ConnectionError, OSError, RuntimeError):
@@ -301,7 +319,7 @@ class SimAgentServer:
     # -------------------------------------------------------------- 命令
 
     async def _on_line(self, writer: asyncio.StreamWriter, line: bytes,
-                       queue: asyncio.Queue[_Job]) -> None:
+                       queue: asyncio.Queue[_Job], authed: list[bool]) -> None:
         try:
             cmd_id, cmd, args = decode_command(line)
         except AgentProtocolError as exc:
@@ -311,6 +329,23 @@ class SimAgentServer:
             return
         # 收到就记,不等轮到它才记 —— 测试要断言的是"上层发了什么"。
         self.commands.append((cmd, dict(args)))
+        if cmd == "auth":
+            # 同 cmd_auth.hpp 的 ConnAuth::Auth:对了这条连接放行;不对不说期望的是什么
+            if self.token is None:
+                ok, why = True, ""
+            elif args.get("token") == self.token:
+                ok, why = True, ""
+            else:
+                ok, why = False, f"{NOT_AUTHORIZED}: 令牌不对(旁路进程重启过就换了,重新读令牌文件)"
+            authed[0] = authed[0] or ok
+            ack: dict[str, Any] = {"t": "ack", "id": cmd_id, "ok": ok}
+            self._send(writer, ack | ({"error": why} if why else {}))
+            return
+        if not authed[0] and not open_command(cmd, args):
+            # 同 cmd_auth.hpp 的 ConnAuth::Check:没认证的连接只能停车、按急停、发净空许可
+            self._send(writer, {"t": "ack", "id": cmd_id, "ok": False,
+                                "error": f"{NOT_AUTHORIZED}: {cmd} 要先认证(发 auth)"})
+            return
         if cmd in URGENT_COMMANDS:
             await self._execute(writer, (cmd_id, cmd, dict(args), self._cancel_gen))
             return
@@ -567,9 +602,7 @@ class SimAgentServer:
         if self._held:
             return
         self._held = True
-        self._broadcast({"t": "hello", "proto": PROTO_VERSION, "sdk": self._sdk,
-                         "held": True, "robot": "sim://d1max", "follows_head": self.follows_head,
-                         "speed_level_want": self.speed_level_want})
+        self._broadcast(self._hello(True))
 
     def push_fault(self, level: int, code: int, message: str) -> None:
         self._broadcast({"t": "fault", "level": level, "code": code,
@@ -611,4 +644,5 @@ __all__ = [
     "WALK_CANCELLED",
     "WALK_DEADBAND",
     "SimAgentServer",
+    "open_command",
 ]
