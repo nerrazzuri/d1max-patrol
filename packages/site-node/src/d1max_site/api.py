@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote
 
+from d1max_contract import SCHEMA as CONTRACT_SCHEMA
 from d1max_contract.dispatch import DispatchTimeout
 from d1max_site.accounts import WATCH_PATHS, Accounts, AuthError, LockedOut
 from d1max_site.audit import AuditLog
@@ -763,6 +764,9 @@ class _Handler(TlsHandlerMixin):
             target = d.get("target")
             if not isinstance(target, dict):
                 raise HttpError(400, "要 target(MapPose 对象)")
+            # 网页、手机发的目标点只有图号、版本、坐标(2026-10-15 点「去这里」被拒「缺 schema」):
+            # 契约版本站点补上;给了别的版本照旧按契约拒。发给狗的报文照旧带 schema。
+            target = {"schema": CONTRACT_SCHEMA, **target}
             result = self.site.dispatch(lambda: disp.goto(
                 robot_id, target, speed, issued_by=str(user), priority=MANUAL))
         elif action == "patrol":

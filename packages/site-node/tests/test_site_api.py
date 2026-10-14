@@ -250,6 +250,17 @@ def test_登录后派goto走到_命令记着alice(站点):
     assert v["commands"][0]["issued_by"] == "alice"
 
 
+def test_网页手机发的goto目标没带schema_站点补上_照样派(站点):
+    """2026-10-15 用户在演示站点点「去这里」被拒(「target 不成形: MapPose: 缺 schema」):
+    网页、手机发的目标点只有图号、版本、坐标,不带契约版本。站点在 HTTP 这一层补上,
+    狗那头的报文照旧要带。"""
+    tok = 站点.login()
+    _等(lambda: 站点.req("GET", "/api/robots/A", token=tok)[1].get("fresh"))
+    bare = {k: v for k, v in target(0.5).items() if k != "schema"}
+    code, d = 站点.req("POST", "/api/robots/A/goto", {"target": bare}, token=tok)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+
+
 def test_派遣条件不满足回409带理由(站点):
     tok = 站点.login()
     code, d = 站点.req("POST", "/api/robots/ghost/goto", {"target": target(1.0)}, token=tok)
