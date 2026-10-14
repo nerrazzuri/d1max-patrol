@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../widget/alarm_widgets.dart';
+import 'nw_map_raster.dart';
 import 'nw_theme.dart';
 import 'nw_widgets.dart';
 
@@ -117,6 +118,9 @@ class NwMapThumb extends StatefulWidget {
   final Key? tapKey;
   final double height;
 
+  /// 深色下包住缩略图底图的那层 `ColorFiltered`（[darkMapRaster]）。
+  static const Key darkRasterKey = Key('map-thumb-dark-raster');
+
   const NwMapThumb(
       {super.key,
       required this.load,
@@ -165,11 +169,15 @@ class _NwMapThumbState extends State<NwMapThumb> {
                 Container(
                     height: widget.height,
                     color: c.surfaceVariant,
-                    child: Image.memory(png,
-                        fit: BoxFit.cover,
-                        gaplessPlayback: true,
-                        filterQuality: FilterQuality.medium,
-                        errorBuilder: (_, _, _) => const SizedBox.shrink())),
+                    // 只有栅格底图过深色滤镜（跟地图栏同一个）；浅色原样
+                    child: nwMapRaster(
+                        context,
+                        Image.memory(png,
+                            fit: BoxFit.cover,
+                            gaplessPlayback: true,
+                            filterQuality: FilterQuality.medium,
+                            errorBuilder: (_, _, _) => const SizedBox.shrink()),
+                        darkKey: NwMapThumb.darkRasterKey)),
               ConstrainedBox(
                   constraints: const BoxConstraints(minHeight: 48),
                   child: Padding(

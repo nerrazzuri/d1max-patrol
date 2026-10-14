@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import '../l10n.dart';
 import '../net/site_client.dart';
 import 'nw/nw_button.dart';
+import 'nw/nw_map_raster.dart';
 import 'nw/nw_p3_robots.dart' show robotOnline;
 import 'nw/nw_p4_admin.dart';
 import 'nw/nw_theme.dart';
@@ -24,6 +25,8 @@ import 'nw/nw_widgets.dart';
 import 'site_mapping.dart';
 import 'site_robot.dart';
 import 'widget/fields_dialog.dart';
+
+export 'nw/nw_map_raster.dart' show darkMapRaster;
 
 class SiteMapsPage extends StatefulWidget {
   final SiteApi api;
@@ -324,22 +327,10 @@ class _MapView {
   String get tag => '$mapId:$version';
 }
 
-/// 深色下压暗栅格图用的滤镜：亮度反过来、再收一点（空地 254 → 27 接近深色底，没探过的 205 → 67，
-/// 墙 0 → 235 浅色）。只滤站点给的底图；上面画的防区、待命点、狗都不过它。
-const ColorFilter darkMapRaster = ColorFilter.matrix(<double>[
-  -0.82, 0, 0, 0, 235, //
-  0, -0.82, 0, 0, 235, //
-  0, 0, -0.82, 0, 235, //
-  0, 0, 0, 1, 0, //
-]);
-
 /// 站点渲染的栅格底图：浅色原样，深色过 [darkMapRaster]。
-Widget _raster(BuildContext context, Uint8List png) {
-  final image = Image.memory(png, fit: BoxFit.fill, filterQuality: FilterQuality.none, gaplessPlayback: true);
-  return Theme.of(context).brightness == Brightness.dark
-      ? ColorFiltered(key: SiteMapTab.darkRasterKey, colorFilter: darkMapRaster, child: image)
-      : image;
-}
+Widget _raster(BuildContext context, Uint8List png) => nwMapRaster(
+    context, Image.memory(png, fit: BoxFit.fill, filterQuality: FilterQuality.none, gaplessPlayback: true),
+    darkKey: SiteMapTab.darkRasterKey);
 
 /// 底部导航的「地图」栏：狗正在用的那张图的预览当主体（能缩放），图上画狗、待命点、原点、禁行区和
 /// 限速区，左上是图例、右下是回正和缩放；下面（横屏在右边）是这张图上的狗。右上进地图列表

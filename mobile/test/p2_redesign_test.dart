@@ -5,6 +5,8 @@ import 'dart:async';
 import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/model/alert.dart';
 import 'package:d1max_patrol/net/site_client.dart';
+import 'package:d1max_patrol/ui/nw/nw_map_raster.dart';
+import 'package:d1max_patrol/ui/nw/nw_p2_duty.dart';
 import 'package:d1max_patrol/ui/nw/nw_theme.dart';
 import 'package:d1max_patrol/ui/nw/nw_widgets.dart';
 import 'package:d1max_patrol/ui/site_alert_scene.dart';
@@ -280,6 +282,27 @@ void main() {
       await scene(t, none, _intrusion(context: <String, dynamic>{'zone': 'z'}), const Size(390, 844));
       expect(none.calls.where((c) => c.startsWith('mapPreviewPng')), isEmpty);
       expect(find.byKey(SiteAlertScenePage.mapKey), findsNothing);
+      await t.pumpWidget(Container());
+    });
+
+    testWidgets('小地图：深色下只有栅格底图过地图栏同一个反色滤镜，下面那行字不过；浅色没有滤镜', (t) async {
+      for (final b in Brightness.values) {
+        await scene(t, FakeApi('guard'), _intrusion(), const Size(390, 844), theme: nwTheme(b));
+        expect(find.byKey(SiteAlertScenePage.mapKey), findsOneWidget);
+        final thumb = find.byType(NwMapThumb);
+        expect(find.descendant(of: thumb, matching: find.byType(Image)), findsOneWidget);
+        final filter = find.byKey(NwMapThumb.darkRasterKey);
+        if (b == Brightness.light) {
+          expect(filter, findsNothing);
+          expect(find.descendant(of: thumb, matching: find.byType(ColorFiltered)), findsNothing);
+          continue;
+        }
+        expect(filter, findsOneWidget);
+        expect(t.widget<ColorFiltered>(filter).colorFilter, darkMapRaster);
+        expect(find.descendant(of: filter, matching: find.byType(Image)), findsOneWidget);
+        expect(find.descendant(of: filter, matching: find.byType(Text)), findsNothing);
+        expect(find.descendant(of: filter, matching: find.byType(Icon)), findsNothing);
+      }
       await t.pumpWidget(Container());
     });
 
