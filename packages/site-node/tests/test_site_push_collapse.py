@@ -185,3 +185,44 @@ def test_不同的告警_各自一条_升档也另起一条(tmp_path):
     assert [_fcm键(m) for m in net.fcm] == [collapse_id(k, t) for k, t in keys]
     db.close()
 
+
+
+def test_极光不认去重字段回400_去掉重发一次_之后不再带_P1照样推得出去():
+    import io
+    import urllib.error
+
+    from d1max_site.push import JPush
+    sent = []
+
+    def opener(req, timeout):
+        body = json.loads(req.data)
+        sent.append(body)
+        if "third_party_channel" in body["options"] or "apns_collapse_id" in body["options"]:
+            raise urllib.error.HTTPError("u", 400, "x", {}, io.BytesIO(b'{"error":{"code":1003}}'))
+        return io.BytesIO(json.dumps({"msg_id": str(len(sent))}).encode())
+
+    j = JPush("k", "s", opener=opener)
+    extras = {"alert_key": "A/intrusion#1", "tier": "1"}
+    assert j.send(["r"], "t", "b", extras) == "2"
+    assert len(sent) == 2 and "third_party_channel" in sent[0]["options"]
+    assert "third_party_channel" not in sent[1]["options"]
+    assert j.send(["r"], "t", "b", extras) == "3"          # 之后直接不带,不再先挨一次 400
+    assert len(sent) == 3
+
+
+def test_极光回别的错_不重发():
+    import io
+    import urllib.error
+
+    import pytest
+
+    from d1max_site.push import JPush, PushError
+    sent = []
+
+    def opener(req, timeout):
+        sent.append(req)
+        raise urllib.error.HTTPError("u", 401, "x", {}, io.BytesIO(b"{}"))
+
+    with pytest.raises(PushError, match="401"):
+        JPush("k", "s", opener=opener).send(["r"], "t", "b", {"alert_key": "A/x#1", "tier": "1"})
+    assert len(sent) == 1
