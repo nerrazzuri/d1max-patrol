@@ -120,8 +120,10 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   const ack = (a: Alert) => act(() => api("POST", `/api/alerts/${enc(a.key)}/ack`, {}));
   const firstP1 = p1[0];
 
+  // 有地图的页(地图、防区)整页一屏:地图只占顶栏和报警队列之间那一块,不被队列盖住(宽屏;窄屏照旧往下滚)
+  const fill = route.page === "map" || route.page === "admin/zones";
   return (
-    <div class="console">
+    <div class={fill ? "console fill" : "console"}>
       <TopBar me={me} page={route.page} mode={data?.mode ?? null} p1={p1.length} p2={active.length - p1.length} stale={stale}
         now={now} onPage={go} onMode={(m) => setPending({ kind: "mode", mode: m })}
         onStop={() => setPending({ kind: "stop" })}
