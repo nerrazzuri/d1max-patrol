@@ -11,13 +11,16 @@ Map<String, dynamic> _robot(String id) => {
       'status': {'online': true, 'ready': {'estop_clear': true}, 'task': null},
     };
 
-/// [age]：电量是多久以前读的（缺省刚读的）；给 [noAsOf] 就不带读数时刻。
-Map<String, dynamic> _summary(Map<String, num?> battery, {Duration age = Duration.zero, bool noAsOf = false}) => {
+/// [age]：电量是多久以前读的（缺省刚读的）；给 [noAsOf] 就不带读数时刻。[siteAhead]：给了就带站点的
+/// `now_ms`，站点的钟比本机快这么多（负的是慢），读数时刻也按站点的钟记。
+Map<String, dynamic> _summary(Map<String, num?> battery,
+        {Duration age = Duration.zero, bool noAsOf = false, Duration? siteAhead}) => {
+      if (siteAhead != null) 'now_ms': _clock.add(siteAhead).millisecondsSinceEpoch,
       'robots': [
         for (final e in battery.entries)
           {
             'robot_id': e.key, 'online': true, 'fresh': true, 'battery_pct': e.value, 'why': <String, String>{},
-            if (!noAsOf) 'battery_as_of_ms': _clock.subtract(age).millisecondsSinceEpoch,
+            if (!noAsOf) 'battery_as_of_ms': _clock.add(siteAhead ?? Duration.zero).subtract(age).millisecondsSinceEpoch,
           },
       ],
       'site': <String, dynamic>{},
@@ -117,6 +120,31 @@ void main() {
     testWidgets('没说什么时候读的：不写数', (t) async {
       await t.pumpWidget(_fleet([_robot('A')], () async => _summary({'A': 82}, noAsOf: true)));
       await t.pump();
+      expect(_batteryOf(t, 'A'), isNull);
+    });
+
+    testWidgets('站点的钟比手机慢一小时、读数是 1 分钟前的：照样写数（按站点自己的钟算多旧）', (t) async {
+      await t.pumpWidget(_fleet([_robot('A')],
+          () async => _summary({'A': 82}, age: const Duration(minutes: 1), siteAhead: const Duration(hours: -1))));
+      await t.pump();
+      expect(_batteryOf(t, 'A'), 82);
+    });
+
+    testWidgets('站点的钟比手机快一小时、读数是 11 分钟前的：不写数', (t) async {
+      await t.pumpWidget(_fleet([_robot('A')],
+          () async => _summary({'A': 82}, age: const Duration(minutes: 11), siteAhead: const Duration(hours: 1))));
+      await t.pump();
+      expect(_batteryOf(t, 'A'), isNull);
+    });
+
+    testWidgets('站点的钟对不上、读的时候是新的、后来放旧了：按本机过去的时间算，到时候也不写了', (t) async {
+      final robots = [_robot('A')];
+      await t.pumpWidget(_fleet(robots,
+          () async => _summary({'A': 82}, age: const Duration(minutes: 5), siteAhead: const Duration(hours: -3))));
+      await t.pump();
+      expect(_batteryOf(t, 'A'), 82);
+      _clock = _clock.add(const Duration(minutes: 6));
+      await t.pumpWidget(_fleet(robots, () async => throw StateError('不该重读')));
       expect(_batteryOf(t, 'A'), isNull);
     });
 
