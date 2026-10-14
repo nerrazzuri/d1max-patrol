@@ -218,9 +218,9 @@ export function RobotsAdminPage({ say }: { say: Say }) {
               return (
                 <tr key={r.robot_id} class={r.revoked ? "off" : undefined}>
                   <td class="mono strong">{r.robot_id}</td>
-                  <td>{r.revoked ? t("revokedTag") : r.status?.online ? t("online") : <span class="state p2"><Shape kind="P2" />{t("st_offline")}</span>}</td>
+                  <td>{r.revoked ? t("revokedTag") : r.status?.online ? <span class="state tone-success">{t("online")}</span> : <span class="state p2 tone-error"><Shape kind="P2" />{t("st_offline")}</span>}</td>
                   <td class="mono">{r.capabilities?.agent ?? "—"}</td>
-                  <td>{v === "ok" ? t("compat_ok") : <span class="state p2"><Shape kind="P2" />{t(`compat_${v}` as Key)}</span>}</td>
+                  <td>{v === "ok" ? <span class="state tone-success">{t("compat_ok")}</span> : <span class="state p2"><Shape kind="P2" />{t(`compat_${v}` as Key)}</span>}</td>
                   <td>{r.manual_only ? t("manualOnly") : t("autoDispatch")}</td>
                   <td class="mono">{r.expires_at ? day(r.expires_at) : "—"}</td>
                   <td class="actions">
@@ -252,7 +252,7 @@ export function RobotsAdminPage({ say }: { say: Say }) {
             {(cams?.cameras ?? []).map((c) => (
               <tr key={c.name}>
                 <td class="mono">{c.name}</td><td>{c.zone}</td>
-                <td>{c.connected ? t("connected") : <span class="state p2"><Shape kind="P2" />{t("notConnected")}</span>}</td>
+                <td>{c.connected ? <span class="state tone-success">{t("connected")}</span> : <span class="state p2"><Shape kind="P2" />{t("notConnected")}</span>}</td>
               </tr>
             ))}
           </tbody>
@@ -342,7 +342,7 @@ export function SystemPage() {
         <div class="panel-head">
           <h1>{t("health")}</h1>
           {health && (
-            <span class={health.ok ? "muted" : "state p2"}>{!health.ok && <Shape kind="P2" />}{health.ok ? t("healthOk") : t("healthBad")}</span>
+            <span class={health.ok ? "state tone-success" : "state p2"}>{!health.ok && <Shape kind="P2" />}{health.ok ? t("healthOk") : t("healthBad")}</span>
           )}
           <span class="muted small push">{health ? t("siteVersion", { v: health.version }) : ""} {health ? hm(Date.now()) : ""}</span>
         </div>
@@ -351,7 +351,7 @@ export function SystemPage() {
             {checks.map(([k, c]) => (
               <tr key={k}>
                 <td class="strong">{t(`check_${k}` as Key)}{CRITICAL.has(k) ? <span class="muted small"> · {t("critical")}</span> : null}</td>
-                <td>{c.ok ? "OK" : <span class={CRITICAL.has(k) ? "state p1" : "state p2"}><Shape kind={CRITICAL.has(k) ? "P1" : "P2"} />{t("checkFail")}</span>}</td>
+                <td>{c.ok ? <span class="state tone-success">OK</span> : <span class={CRITICAL.has(k) ? "state p1" : "state p2"}><Shape kind={CRITICAL.has(k) ? "P1" : "P2"} />{t("checkFail")}</span>}</td>
                 <td class="muted small">{c.detail ?? ""}</td>
               </tr>
             ))}

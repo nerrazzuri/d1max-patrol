@@ -6,6 +6,7 @@ import { hm, hms } from "./data";
 import { Modal } from "./dialogs";
 import { alertTitle, lang, t, type Key } from "./i18n";
 import { Shape } from "./icons";
+import { tone } from "./theme";
 import {
   abnormal,
   alarmState,
@@ -36,7 +37,7 @@ export function StateText({ s, stale }: { s: RobotState; stale?: boolean }) {
   if (stale) return <span class="state unknown">{t("stUnknown")}</span>;
   const a = abnormal(s);
   return (
-    <span class={a ? `state ${a}` : "state"}>
+    <span class={`${a ? `state ${a}` : "state"} tone-${tone(s)}`}>
       {a && <Shape kind={a === "p1" ? "P1" : "P2"} />}
       {t(`st_${s}` as Key)}
     </span>
@@ -71,7 +72,7 @@ export function OfflineStrip({ u, onMap }: { u: UnitInfo; onMap: () => void }) {
   return (
     <section class="unit offline" id={`unit-${u.robot.robot_id}`} aria-label={u.robot.robot_id}>
       <span class="unit-id">{u.robot.robot_id}</span>
-      <span class="state p2"><Shape kind="P2" />{last ? t("offlineSince", { t: hm(last) }) : t("st_offline")}</span>
+      <span class="state p2 tone-error"><Shape kind="P2" />{last ? t("offlineSince", { t: hm(last) }) : t("st_offline")}</span>
       <span class="muted">{t("notStreaming")}</span>
       <button type="button" class="link push" onClick={onMap}>{t("map")}</button>
     </section>
