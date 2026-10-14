@@ -359,17 +359,22 @@ class NwHeader extends StatelessWidget {
   final Widget? leading;
   final List<Widget> trailing;
 
+  /// 矮屏（横着拿的手机）用的一行版：小标、标题排一行，标题字小一号，上下留得少，好给下面的内容腾地方。
+  final bool compact;
+
   const NwHeader(
       {super.key,
       required this.title,
       this.overline,
       this.subtitle,
       this.leading,
-      this.trailing = const <Widget>[]});
+      this.trailing = const <Widget>[],
+      this.compact = false});
 
   @override
   Widget build(BuildContext context) {
     final c = Nw.of(context);
+    if (compact) return _compact(c);
     return Container(
         decoration: BoxDecoration(color: c.surface, border: Border(bottom: BorderSide(color: c.outline))),
         child: SafeArea(
@@ -404,6 +409,33 @@ class NwHeader extends StatelessWidget {
                   ...trailing,
                 ]))));
   }
+  Widget _compact(NwColors c) => Container(
+      decoration: BoxDecoration(color: c.surface, border: Border(bottom: BorderSide(color: c.outline))),
+      child: SafeArea(
+          bottom: false,
+          child: Padding(
+              padding: EdgeInsets.fromLTRB(leading == null ? Nw.s24 : Nw.s8, Nw.s4, Nw.s8, Nw.s4),
+              child: Row(children: [
+                ?leading,
+                Expanded(
+                    child: Text.rich(
+                        TextSpan(children: [
+                          if (overline != null) ...[
+                            TextSpan(
+                                text: overline!.toUpperCase(),
+                                style: NwText.labelSmall.copyWith(color: c.textSecondary)),
+                            const TextSpan(text: '   '),
+                          ],
+                          TextSpan(text: title, style: NwText.titleMedium.copyWith(color: c.text)),
+                          if (subtitle != null)
+                            TextSpan(
+                                text: '   $subtitle', style: NwText.bodySmall.copyWith(color: c.textSecondary)),
+                        ]),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis)),
+                ...trailing,
+              ]))));
+
 }
 
 /// 空状态（「还没有…」）：居中的图标、一句话、可以再一句引导和一个按钮。

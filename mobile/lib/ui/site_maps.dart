@@ -324,6 +324,23 @@ class _MapView {
   String get tag => '$mapId:$version';
 }
 
+/// 深色下压暗栅格图用的滤镜：亮度反过来、再收一点（空地 254 → 27 接近深色底，没探过的 205 → 67，
+/// 墙 0 → 235 浅色）。只滤站点给的底图；上面画的防区、待命点、狗都不过它。
+const ColorFilter darkMapRaster = ColorFilter.matrix(<double>[
+  -0.82, 0, 0, 0, 235, //
+  0, -0.82, 0, 0, 235, //
+  0, 0, -0.82, 0, 235, //
+  0, 0, 0, 1, 0, //
+]);
+
+/// 站点渲染的栅格底图：浅色原样，深色过 [darkMapRaster]。
+Widget _raster(BuildContext context, Uint8List png) {
+  final image = Image.memory(png, fit: BoxFit.fill, filterQuality: FilterQuality.none, gaplessPlayback: true);
+  return Theme.of(context).brightness == Brightness.dark
+      ? ColorFiltered(key: SiteMapTab.darkRasterKey, colorFilter: darkMapRaster, child: image)
+      : image;
+}
+
 /// 底部导航的「地图」栏：狗正在用的那张图的预览当主体（能缩放），图上画狗、待命点、原点、禁行区和
 /// 限速区，左上是图例、右下是回正和缩放；下面（横屏在右边）是这张图上的狗。右上进地图列表
 /// （[SiteMapsPage]：管理员下发、重建都在那里）。
@@ -335,6 +352,9 @@ class SiteMapTab extends StatefulWidget {
   const SiteMapTab({super.key, required this.api});
 
   static const Key canvasKey = Key('map-tab-canvas');
+
+  /// 深色下栅格底图外面那层滤镜（浅色没有这一层）。
+  static const Key darkRasterKey = Key('map-tab-dark-raster');
   static const Key zonesKey = Key('map-tab-zones');
   static const Key standbyKey = Key('map-tab-standby');
   static const Key legendKey = Key('map-tab-legend');
@@ -595,11 +615,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
                                     width: w * k,
                                     height: h * k,
                                     child: Stack(clipBehavior: Clip.none, children: [
-                                      Positioned.fill(
-                                          child: Image.memory(v.png!,
-                                              fit: BoxFit.fill,
-                                              filterQuality: FilterQuality.none,
-                                              gaplessPlayback: true)),
+                                      Positioned.fill(child: _raster(context, v.png!)),
                                       Positioned.fill(
                                           child: CustomPaint(
                                               key: SiteMapTab.zonesKey,

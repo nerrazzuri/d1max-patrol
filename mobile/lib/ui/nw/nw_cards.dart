@@ -58,12 +58,13 @@ class NwSiteCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: NwText.titleMedium.copyWith(color: c.text, fontWeight: FontWeight.w700)),
               const SizedBox(height: Nw.s4),
-              Row(children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Icon(Icons.location_on_rounded, size: 14, color: c.textSecondary),
                 const SizedBox(width: Nw.s4),
                 Expanded(
+                    // 地址 · 账号长了折一行（两行为止），不截成一行看不全
                     child: Text(address,
-                        maxLines: 1,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: NwText.bodySmall.copyWith(color: c.textSecondary))),
               ]),
@@ -281,6 +282,10 @@ class NwPatrolCard extends StatelessWidget {
   final bool anomaly;
   final NwTone tone;
 
+  /// [status] 里异常的那一段（「Abnormal 1」）。给了、又在 [status] 里：只有这一段上色加粗，其余照常
+  /// 次要字色；不给就整行按 [anomaly] 上色。
+  final String? flagged;
+
   /// 缩略图（已经是做好的小部件：站点的照片）。每张摆成 80×60。
   final List<Widget> thumbs;
 
@@ -296,6 +301,7 @@ class NwPatrolCard extends StatelessWidget {
       required this.status,
       this.anomaly = false,
       this.tone = NwTone.neutral,
+      this.flagged,
       this.thumbs = const <Widget>[],
       this.more = 0,
       this.onTap});
@@ -352,16 +358,30 @@ class NwPatrolCard extends StatelessWidget {
           Divider(height: 1, thickness: 1, color: c.outline),
           const SizedBox(height: Nw.s8),
           Row(children: [
-            Expanded(
-                child: Text(status,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: NwText.bodySmall.copyWith(
-                        color: anomaly ? c.fg(tone) : c.textSecondary,
-                        fontWeight: anomaly ? FontWeight.w700 : FontWeight.w400))),
+            Expanded(child: _status(c)),
             Icon(Icons.arrow_forward_rounded, size: 24, color: c.text),
           ]),
         ]));
+  }
+
+  /// 结果那一行。有 [flagged]：只有那一段上色。
+  Widget _status(NwColors c) {
+    final plain = NwText.bodySmall.copyWith(color: c.textSecondary, fontWeight: FontWeight.w400);
+    final hot = NwText.bodySmall.copyWith(color: c.fg(tone), fontWeight: FontWeight.w700);
+    final f = flagged;
+    final at = f == null || f.isEmpty ? -1 : status.indexOf(f);
+    if (!anomaly || at < 0) {
+      return Text(status, maxLines: 2, overflow: TextOverflow.ellipsis, style: anomaly ? hot : plain);
+    }
+    return Text.rich(
+        TextSpan(children: [
+          if (at > 0) TextSpan(text: status.substring(0, at)),
+          TextSpan(text: f, style: hot),
+          if (at + f!.length < status.length) TextSpan(text: status.substring(at + f.length)),
+        ]),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: plain);
   }
 }
 

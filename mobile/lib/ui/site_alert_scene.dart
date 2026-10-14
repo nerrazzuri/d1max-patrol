@@ -492,10 +492,11 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
   }
 
   /// 底栏的大按钮：高 56、字 14、摆不下折两行（不截掉）。Key 在标准按钮上（测试按类型认）。
+  /// 字用正文的比例字（Inter 14 半粗），不用等宽的标签字：390 宽的手机上四个按钮的字都摆得下一行。
   Widget _big(Key? key, String label, VoidCallback? onPressed, {bool primary = false}) {
     final c = Nw.of(context);
     const size = Size.fromHeight(56);
-    const padding = EdgeInsets.symmetric(horizontal: Nw.s8);
+    const padding = EdgeInsets.symmetric(horizontal: Nw.s4);
     final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(Nw.r12));
     final child = Text(label, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis);
     return primary
@@ -508,7 +509,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                 disabledForegroundColor: c.textMuted,
                 minimumSize: size,
                 padding: padding,
-                textStyle: NwText.labelLarge,
+                textStyle: NwText.titleSmall,
                 shape: shape),
             onPressed: onPressed,
             child: child)
@@ -521,7 +522,7 @@ class _SiteAlertScenePageState extends State<SiteAlertScenePage> {
                 side: BorderSide(color: c.textMuted),
                 minimumSize: size,
                 padding: padding,
-                textStyle: NwText.labelLarge,
+                textStyle: NwText.titleSmall,
                 shape: shape),
             onPressed: onPressed,
             child: child);

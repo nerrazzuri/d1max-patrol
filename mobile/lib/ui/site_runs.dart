@@ -48,6 +48,10 @@ String _verdictSummary(Map<String, dynamic> r) {
   return parts.join(' · ');
 }
 
+/// 结果那一行里异常的那一段（和 [_verdictSummary] 拼出来的一样）。
+String _abnormalPart(Map<String, dynamic> r) =>
+    '${verdictText('abnormal')} ${(r['verdicts'] as Map)['abnormal']}';
+
 /// 这一趟有没有判成异常的照片。
 bool _abnormal(Map<String, dynamic> r) => ((r['verdicts'] as Map?)?['abnormal'] as num? ?? 0) > 0;
 
@@ -164,6 +168,8 @@ class _SiteRunsPageState extends State<SiteRunsPage> {
                                     ' · 已复核 ${r['reviewed'] ?? 0}'),
                             anomaly: _abnormal(r),
                             tone: _abnormal(r) ? NwTone.error : NwTone.neutral,
+                            // 只把「异常 N」那一段标红，「正常 1 · 已复核 1」照常
+                            flagged: _abnormal(r) ? _abnormalPart(r) : null,
                             onTap: () => Navigator.push(
                                 context,
                                 MaterialPageRoute<void>(

@@ -67,6 +67,10 @@ class SiteWatchPage extends StatefulWidget {
   /// 窗口宽到这么多（逻辑像素）就分两栏（W15 桌面版）。横屏手机最宽也就 900 出头。
   static const double wideAt = 1100;
 
+  /// 屏幕高不到这么多（横着拿的手机）：页头用一行的紧凑版。
+  static const double compactBelow = 480;
+  static const Key headerKey = Key('watch-header');
+
   @override
   State<SiteWatchPage> createState() => _SiteWatchPageState();
 }
@@ -461,7 +465,12 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children)));
     return Scaffold(
       body: Column(children: [
-        NwHeader(overline: tr('Nexus Warden', 'Nexus Warden'), title: widget.title ?? tr('Watch', '值守')),
+        // 矮屏（横着拿的手机，高不到 480）：页头压成一行，给告警腾地方；竖屏照旧
+        NwHeader(
+            key: SiteWatchPage.headerKey,
+            overline: tr('Nexus Warden', 'Nexus Warden'),
+            title: widget.title ?? tr('Watch', '值守'),
+            compact: MediaQuery.sizeOf(context).height < SiteWatchPage.compactBelow),
         Expanded(
           // 宽屏（桌面版、值守大屏，W15）：告警一栏、每台狗一栏并排，一眼都看得见；窄的照旧一栏往下排。
           child: LayoutBuilder(
