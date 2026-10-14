@@ -42,9 +42,9 @@ class SiteSchedulePage extends StatelessWidget {
             Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Text(
-                  tr(
-                      'Task bundle ${(d['bundle'] as Map)['bundle_id']} v${(d['bundle'] as Map)['version']}',
-                      '任务包 ${(d['bundle'] as Map)['bundle_id']} v${(d['bundle'] as Map)['version']}'),
+                  // 2026-10-14：站点存的路线、排程是唯一真理源，版本号是路线库的修订号
+                  tr('Site routes · revision ${(d['bundle'] as Map)['version']}',
+                      '站点路线库 · 第 ${(d['bundle'] as Map)['version']} 版'),
                   style: NwText.titleMedium.copyWith(color: c.text)),
               nwGap4,
               Text(tr('Time zone ${d['timezone']}', '时区 ${d['timezone']}'), style: sub),
