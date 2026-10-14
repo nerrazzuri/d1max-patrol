@@ -305,7 +305,7 @@ class PlannedNavBackend(HalNavBackend):
             self._cm = cm
             if self._crosses(cm, here):
                 log.warning("新区域挡住了正在走的路,原地等、重规划")
-                self._start_replan()
+                self._start_replan(why="zones")
         finally:
             self._hold = False
 
@@ -347,7 +347,7 @@ class PlannedNavBackend(HalNavBackend):
         await self._send(0.0, 0.0, dt_s)
         if (self._replan is None or self._replan.done()) and self._replan_out is None \
                 and self._target is not None:
-            self._start_replan()
+            self._start_replan(why="near_nogo")
 
     # ------------------------------------------------------------ 每拍的禁行区回退检查(S7)
 
@@ -489,7 +489,11 @@ class PlannedNavBackend(HalNavBackend):
         log.info("%s:规划出 %d 个点、%.1f m", op, len(path.points), path.length_m)
         await super().goto(pose)
 
-    def _start_replan(self, *, detour: bool = False) -> None:
+    def current_path(self) -> tuple[tuple[float, float], ...] | None:
+        """正在走的规划路径(地图坐标,米);没在走(没规划、收尾了)是 ``None``。给遥测上报用(运营可视化)。"""
+        return self._path.points if self._path is not None else None
+
+    def _start_replan(self, *, detour: bool = False, why: str = "off_route") -> None:
         if self._replan is not None and not self._replan.done():
             return
         self._replan_kind = "detour" if detour else ""
@@ -500,6 +504,10 @@ class PlannedNavBackend(HalNavBackend):
             return
         else:
             self._replans += 1
+        if self.on_event is not None:
+            # 运营可视化:站点据此在状态里写「重规划了几次、为什么」(why: off_route 偏离路径 / zones 区域
+            # 换了 / near_nogo 离禁行区太近 / detour 绕障)
+            self.on_event("nav_replan", {"why": "detour" if detour else why, "n": self._replans})
         gen = self._gen
         target = self._target
         assert target is not None
@@ -628,7 +636,7 @@ class PlannedNavBackend(HalNavBackend):
                 return
             if out[2] != self._epoch:
                 # 重规划完到这一拍之间区域又换了(内审应修 9):旧区域上的路不装,再来一次
-                self._start_replan()
+                self._start_replan(why="zones")
                 await self._send(0.0, 0.0, dt_s)
                 return
             self._path, self._cm = out[1]
@@ -787,7 +795,8 @@ class PlannedNavBackend(HalNavBackend):
             self._blocked_told = True
             if self.on_event is not None:
                 self.on_event("nav_blocked", {"reason": v.reason, "x": round(here.x, 2),
-                                              "y": round(here.y, 2)})
+                                              "y": round(here.y, 2),
+                                              "waited_s": round(waited, 1)})
         if (self._creep_from is None and not self._crept and not v.hits and abs(wz) > 1e-6
                 and not self._aligning and waited >= BLOCK_DETOUR_S
                 and self.guard.check((self._dir or 1) * CREEP_V, 0.0, self._v_meas,

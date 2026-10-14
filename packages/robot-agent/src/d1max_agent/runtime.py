@@ -34,6 +34,7 @@ from d1max_agent.idempotency import IdempotencyStore
 from d1max_agent.localization import OdomAnchor
 from d1max_agent.locbridge import LocBridgeServer
 from d1max_agent.mapping_trail import MappingTrail
+from d1max_agent.nav_report import NavPathReporter
 from d1max_agent.release_precheck import MIN_BATTERY_PCT as _PRECHECK_MIN_BATTERY_PCT
 from d1max_agent.resources import ResourceLedger
 from d1max_agent.status import (
@@ -370,6 +371,8 @@ class AgentRuntime:
         self._went_offline = False
         self._last_status_wire: dict | None = None
         self._next_telemetry_ms: int | None = None
+        #: 规划路径上报(运营可视化):限频、抽稀、有界。
+        self._nav_report = NavPathReporter()
         self._started = False
         #: HAL 碰过没有(connect 调过就算,哪怕它抛了)。close() 据此决定要不要收 HAL。
         self._hal_touched = False
@@ -2283,4 +2286,8 @@ class AgentRuntime:
             storage=storage, anchor=self.parts.nav.anchor if self.parts is not None else None)
         if self.rtk is not None:
             tele = dataclasses.replace(tele, rtk=self.rtk.latest())
+        nav_path = getattr(self.parts.nav, "current_path", None) if self.parts is not None else None
+        nav = self._nav_report.wire(nav_path() if nav_path is not None else None, now)
+        if nav is not None:
+            tele = dataclasses.replace(tele, nav=nav)
         await self.transport.publish(self.topics.telemetry, _dumps(tele.to_wire()), qos=0)

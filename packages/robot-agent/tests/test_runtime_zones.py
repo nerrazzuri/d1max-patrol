@@ -399,3 +399,29 @@ async def test_读规划栅格期间来了新区域_读完不拿旧的盖回去(
             break
     assert nav.plan_ok and nav.zones is not None and nav.zones.revision == 1
     assert nav.nogo_at(3.5, 1.5) is not None
+
+
+async def test_运营可视化_走的时候遥测带规划路径_收尾后不带(台):
+    from d1max_contract.messages import Telemetry
+    broker, c, r, ears, rt, site, mk = 台
+    await _换图(rt, broker, site, c, ears)
+    r.teleport(1.0, 1.0, 0.0)
+    assert all("nav" not in d for d in ears.by.get("telemetry", [])), "没在导航:不带 nav"
+    goto = Command(command_id="g1", task_id="t1", kind="goto", issued_at=c.ms,
+                   expires_at=c.ms + 60_000, control_epoch=1,
+                   payload={"target": {"schema": "1.0", "map_id": "m", "map_version": "2",
+                                       "frame_id": "map", "x": 5.0, "y": 3.0, "yaw": 0.0}})
+    await rt._on_cmd(Message(T.cmd, json.dumps(goto.to_wire()).encode(), 1, False))
+    await _跑(rt, broker, 30, r, c)
+    navs = [Telemetry.from_wire(d).nav for d in ears.by["telemetry"] if "nav" in d]
+    assert navs, "走的时候遥测带 nav"
+    full = [n for n in navs if "path" in n]
+    assert full and 2 <= len(full[0]["path"]) <= 64
+    assert len(full) < len(navs), "不是每拍都带点:限频"
+    for _ in range(80):
+        await _跑(rt, broker, 10, r, c)
+        if rt._tasks_idle():
+            break
+    ears.by["telemetry"].clear()
+    await _跑(rt, broker, 20, r, c)
+    assert ears.by["telemetry"] and all("nav" not in d for d in ears.by["telemetry"])
