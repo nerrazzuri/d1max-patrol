@@ -202,6 +202,14 @@ def test_硬禁区_遥控开不进去_手机知道为什么(tmp_path):
         assert seen[-1]["state"] in ("blocked", "inside") and seen[-1]["zone"] == "pool", seen
         assert seen[-1]["label"] == "池子"
         ph.close()
+        _等(lambda: s.teleop.active("A") is None, timeout=5)
+        _等(lambda: s.disp.clients["A"].status.task is None, timeout=8)
+        # 当它是老代理(能力里没有 teleop_hard):开场就告诉手机「这台狗遥控时不守硬禁区」
+        s.disp.clients["A"].capabilities.tasks["zones_set"].pop("teleop_hard")
+        ph = 手机(s, tok)
+        g = ph.wait_kind("granted")
+        assert g["zone_guard"]["state"] == "unsupported" and "硬禁区" in g["zone_guard"]["reason"]
+        ph.close()
     finally:
         s.close()
 
