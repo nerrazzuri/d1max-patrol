@@ -329,13 +329,14 @@ class _SiteTeleopPageState extends State<SiteTeleopPage> with WidgetsBindingObse
                             overflow: TextOverflow.ellipsis,
                             style: NwText.labelLarge.copyWith(color: c.onScrim)),
                         const SizedBox(height: 2),
-                        // 「LIVE」只在真能开的时候亮（拿到遥控、站点说有画面）：画面还在接的时候不许说它是活的
+                        // 这里说的是**遥控权**，不是画面（App 重做外审 M1：原来拿到遥控就写「LIVE」，可这一页
+                        // 不知道本机收没收到画面 —— 画面框里还写着「正在连」）。画面活不活看画面框自己。
                         NwStatusPill(
                             label: _ended
                                 ? tr('ENDED', '已结束')
                                 : !_video
                                     ? tr('NO VIDEO', '无画面')
-                                    : (_granted ? tr('LIVE', '实时') : tr('WAITING', '等待')),
+                                    : (_granted ? tr('IN CONTROL', '已获控制') : tr('WAITING', '等待')),
                             tone: _canDrive ? NwTone.success : NwTone.neutral,
                             dot: _canDrive),
                       ])),

@@ -376,9 +376,6 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
     final c = Nw.of(context);
     final s = widget.api.session;
     final v = _view;
-    final st = v?['status'];
-    final task = st is Map ? st['task'] : null;
-    final taskId = task is Map && task['task_id'] is String ? task['task_id'] as String : null;
     final events = (v?['events'] as List? ?? const []).whereType<Map>().toList();
     final phase = v == null ? null : robotPhase(v);
     final dispatch = s?.canDispatch ?? false;
@@ -601,14 +598,17 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
                         key: const Key('robot-phase'), label: robotPhaseLabel(phase), tone: robotPhaseTone(phase))),
               if (s?.canAbort ?? false) ...[
                 const SizedBox(width: Nw.s8),
-                // 没在跑任务：灰的、按不动，也不带 btn-abort 这个 Key（有 Key 的那个一定按得动）
+                // **有叫停权限就一直按得动**，不看这一页手上那份状态里有没有任务（App 重做外审 I1）：那份
+                // 状态是进来时、手动刷新时读的，之后狗被排程、入侵、另一台手机派走，这一页不知道 ——
+                // 拿它把叫停置灰，人就停不了狗。按下去 `_abort` 自己现问站点现在跑的是哪一趟；真没在跑
+                // 就说没在跑。
                 NwButton(
-                    buttonKey: taskId != null ? const Key('btn-abort') : const Key('btn-abort-off'),
+                    buttonKey: const Key('btn-abort'),
                     variant: NwButtonVariant.destructive,
                     size: NwButtonSize.large,
                     icon: Icons.stop_circle_rounded,
                     label: tr('Stop', '叫停'),
-                    onPressed: taskId != null ? _abort : null),
+                    onPressed: _abort),
                 const SizedBox(width: Nw.s8),
               ],
             ]),
