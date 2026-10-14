@@ -358,8 +358,9 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
                                               overflow: TextOverflow.ellipsis,
                                               style: NwText.labelLarge.copyWith(color: c.text)),
                                           const SizedBox(height: Nw.s4),
+                                          // 站点地址长了折一行（两行为止）
                                           Text(s.url,
-                                              maxLines: 1,
+                                              maxLines: 2,
                                               overflow: TextOverflow.ellipsis,
                                               style: NwText.labelSmall.copyWith(color: c.textSecondary)),
                                         ])),
