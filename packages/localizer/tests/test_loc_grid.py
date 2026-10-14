@@ -636,6 +636,53 @@ def test_玻璃墙_外面看到的扇形是不知道_屋里照样可通行_规�
         assert G.OCCUPIED in _column(g, x, 5.85, 6.15), x
 
 
+def test_M9_玻璃外面去掉的格记进显示用的掩码_屋里可通行的不在里面_不碰可通行和占据(tmp_path,
+                                                                     monkeypatch):
+    """M9(用户 2026-10-14):只透过玻璃看到过、被改成「不知道」的格子,规划照样当挡(``floor.pgm``
+    里还是不知道),另外记一份显示用的掩码 ``Grid.seen`` —— 站点画成淡淡的地面。掩码 = 这条规则去掉的
+    那些:玻璃外面的在里面,屋里可通行的不在,跟可通行、占据一格都不重叠;宽高、行序跟图一样。"""
+    f = _frames()
+    P, T, scans, body = _glass_room(f)
+    g = G.render(P, T, f, scans=scans, body_path=body)
+    assert g.seen is not None and g.seen.shape == g.image.shape and g.seen.dtype == bool
+    X, Y = _xy(g)
+    assert not (g.seen & (g.image != G.UNKNOWN)).any(), "掩码只落在「不知道」的格子上"
+    outside = (Y > 7.0) & (Y < 9.5) & (X > 3.5) & (X < 5.0)    # 正对着玻璃、外面那一块
+    assert g.seen[outside].mean() > 0.9, "玻璃外面看到过的在掩码里"
+    assert not g.seen[(Y > 0.2) & (Y < 5.8) & (X > 0.2) & (X < 7.8)].any(), "屋里一格都不在"
+    for x, y in ((4.25, 8.0), (4.0, 9.0)):
+        assert g.seen[g.cell_of(x, y)] and g.image[g.cell_of(x, y)] == G.UNKNOWN, (x, y)
+    # 跟没有这条规则时比:掩码正好是被去掉的可通行格(坐标对齐)
+    monkeypatch.setattr(G, "_see_through", lambda free, *a: free)
+    old = G.render(P, T, f, scans=scans, body_path=body)
+    monkeypatch.undo()
+    ox = int(round((g.origin[0] - old.origin[0]) / g.res))
+    oy = int(round((g.origin[1] - old.origin[1]) / g.res))
+    assert old.seen is None, "没去掉任何格:没有掩码"
+    H, W = g.image.shape
+    oh = old.image.shape[0]
+    rows = slice(oh - oy - H, oh - oy)                 # 行 0 是 y 最大的那一行
+    sub = old.image[rows, ox:ox + W]
+    assert sub.shape == g.image.shape
+    assert ((sub == G.FREE) & (g.image != G.FREE) == g.seen).all()
+
+
+def test_M9_写掩码_P4_一格一位_跟图一样大_没有就不写(tmp_path):
+    img = np.full((3, 10), G.UNKNOWN, np.uint8)
+    seen = np.zeros((3, 10), bool)
+    seen[0, 0] = seen[0, 9] = seen[2, 8] = True
+    g = G.Grid(image=img, origin=(0.0, 0.0), res=0.05, seen=seen)
+    p = G.write_seen(g, tmp_path / "seen.pbm")
+    raw = p.read_bytes()
+    assert raw[:8] == b"P4\n10 3\n" and len(raw) == 8 + 2 * 3, "一行 10 格补成 2 字节"
+    body = np.frombuffer(raw[8:], np.uint8).reshape(3, 2)
+    assert (np.unpackbits(body, axis=1)[:, :10].astype(bool) == seen).all(), "高位在前、1 = 是"
+    assert G.write_seen(G.Grid(image=img, origin=(0.0, 0.0), res=0.05), tmp_path / "a.pbm") is None
+    empty = G.Grid(image=img, origin=(0.0, 0.0), res=0.05, seen=np.zeros((3, 10), bool))
+    assert G.write_seen(empty, tmp_path / "b.pbm") is None
+    assert not (tmp_path / "a.pbm").exists() and not (tmp_path / "b.pbm").exists()
+
+
 def test_大厅从好些地方都看得到_离路远也照样可通行():
     """16 × 12 m 的大厅、几根细柱子(0.3 m,不够开口的「两边」),狗沿中线走一趟:离路 5 m 多的角落也是从
     路上好些地方看到的,规则一格都不动(柱子影子里的除外,那几格本来就没扫到)。"""

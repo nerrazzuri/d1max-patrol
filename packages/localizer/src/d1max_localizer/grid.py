@@ -43,6 +43,12 @@
   代价:狗没进去、只从门口看过的屋子、只从一个方向远远看过的角落也成了「不知道」(往保守那边错);没有
   逐帧扫描(模拟射线)时不做。10-13 办公室图(前雷达)透出去的假空地(离路 3 m 以外、连着路的)64 m² →
   3.7 m²,规划走得到的面积 42.49 → 42.40 m²(离路 2 m 以内一格没少);台式机画图多 16–22% 的时间。
+- **这条规则去掉的格子另记一份显示用的掩码**(M9,用户 2026-10-14「只许狗扫过的地方,别的淡淡
+  地显示」):``Grid.seen``(跟图一样大、一样的行序),:func:`write_seen` 写成 ``seen.pbm``
+  (``d1max_contract.maps`` 的 ``SEEN_FILE``)。**只管显示**:``floor.pgm`` 里那些格照样是「不知道」、
+  规划照样当挡;站点画平面图时画成淡淡的地面(「看到过、狗没走过」),客户看得出房子的样子。掩码跟
+  可通行、占据一格都不重叠;一格都没有(没去掉、模拟射线)就是 ``None``、不写文件。裁图时掩码的格子
+  也算「有内容」(不然玻璃外面的那一片被裁掉,掩码跟图对不上)。
 
 只依赖 numpy(狗上用 ROS 系统 Python 里 apt 装的那份);不要 scipy、PIL。
 """
@@ -145,6 +151,8 @@ class Grid:
     image: np.ndarray                                # 行 0 = 地图上 y 最大的那一行(PGM 的约定)
     origin: tuple[float, float]                      # 左下角那一格在地图平面上的 (x, y)
     res: float
+    #: 显示用的「看到过、狗没走过」(M9,见模块说明):跟 ``image`` 一样大的真假;没有是 ``None``。
+    seen: np.ndarray | None = None
 
     def cell_of(self, x: float, y: float) -> tuple[int, int] | None:
         """地图平面上的点在图像里的 (行, 列);出了图是 None。"""
@@ -672,19 +680,24 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
         occ_m &= ~body
     occ_m &= _dilate(free_m, int(0.5 / res))                # 只留贴着可通行区的障碍
     occ_m &= ~_surface(occ_m, free_m, res)                  # 墙只画看得见的那一面
+    seen_only = np.zeros((H, W), bool)
     if views is not None and used and (walked & free_m).any():
-        free_m = _see_through(free_m, views, walked, res)  # 透过玻璃、开口看到的假空地
+        kept = _see_through(free_m, views, walked, res)     # 透过玻璃、开口看到的假空地
+        seen_only = free_m & ~kept                          # M9:去掉的那些,显示时画淡色
+        free_m = kept
     img = np.full((H, W), UNKNOWN, np.uint8)
     img[free_m] = FREE
     img[occ_m] = OCCUPIED
-    known = img != UNKNOWN
+    known = (img != UNKNOWN) | seen_only
     if known.any():                                         # 裁到有内容的范围,四周留 5 格
         ys, xs = np.where(known)
         y0, x0 = max(int(ys.min()) - 5, 0), max(int(xs.min()) - 5, 0)
         y1, x1 = min(int(ys.max()) + 6, H), min(int(xs.max()) + 6, W)
         img = img[y0:y1, x0:x1]
+        seen_only = seen_only[y0:y1, x0:x1]
         lo = lo + np.array([x0, y0]) * res
-    return Grid(image=np.flipud(img).copy(), origin=(float(lo[0]), float(lo[1])), res=res)
+    return Grid(image=np.flipud(img).copy(), origin=(float(lo[0]), float(lo[1])), res=res,
+                seen=np.flipud(seen_only).copy() if seen_only.any() else None)
 
 
 def write(grid: Grid, base: Path) -> tuple[Path, Path]:
@@ -697,3 +710,15 @@ def write(grid: Grid, base: Path) -> tuple[Path, Path]:
                    f"origin: [{grid.origin[0]:.3f}, {grid.origin[1]:.3f}, 0.0]\nnegate: 0\n"
                    f"occupied_thresh: 0.65\nfree_thresh: 0.196\nmode: trinary\n")
     return pgm, yml
+
+
+def write_seen(grid: Grid, path: Path) -> Path | None:
+    """显示用的掩码(M9)写成 PBM 二进制(``P4``:一格一位、每行补满一个字节、高位在前,1 = 是),宽高、
+    行序跟 ``floor.pgm`` 一样。没有掩码、一格都没有 → 不写,回 ``None``。"""
+    if grid.seen is None or not grid.seen.any():
+        return None
+    path = Path(path)
+    h, w = grid.seen.shape
+    bits = np.packbits(grid.seen.astype(bool), axis=1)
+    path.write_bytes(f"P4\n{w} {h}\n".encode() + bits.tobytes())
+    return path

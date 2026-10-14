@@ -12,6 +12,8 @@
 - ``floor.pgm`` + ``floor.yaml``:按 ``frames.json`` 的平面画的规划栅格(:mod:`d1max_localizer.grid`);
   有录包就从里面逐帧读扫描打真射线(:func:`bag_scans`,跟着狗走的人清得掉),读不了退回模拟射线,
   ``build.json`` 的 ``grid.rays`` 写着用的哪种;
+- ``seen.pbm``(可选,M9):只透过玻璃、门口看到过、被定成「不知道」的格子,站点画成淡淡的地面
+  (只管显示,规划不读;``d1max_contract.maps.SEEN_FILE``);一格都没有就不写;
 - ``coverage.json``:「哪里有图」—— 建图时走过的路(地图平面上每 :data:`COVERAGE_STEP_M` 一点);
 - ``build.json``:怎么建的(来源、参数、各步耗时、标定说明)。
 
@@ -42,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from d1max_contract.geo import GEO_FILE
-from d1max_contract.maps import GEOMETRY_FILES
+from d1max_contract.maps import GEOMETRY_FILES, SEEN_FILE
 from d1max_localizer.frames import Frames, calibrate
 from d1max_localizer.replay import MOLA_SHARE, read_tum
 
@@ -221,6 +223,7 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     except grid.GridTooLarge as exc:
         raise BuildError(str(exc)) from exc
     grid.write(g, out / "floor")
+    seen_written = grid.write_seen(g, out / SEEN_FILE) is not None   # M9:显示用,有才写
     timings["grid_s"] = round(time.monotonic() - t0, 1)
     t0 = time.monotonic()
     _pack_prior(src / "raw_prior.mm", out / "prior.mm", prior_pack, run, src)
@@ -233,6 +236,8 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     files = list(FILES)
     if geo_info.get("written"):
         files.append(GEO_FILE)
+    if seen_written:
+        files.append(SEEN_FILE)
     (out / "build.json").write_text(json.dumps({
         "version": 1, "source": source, "builder": "mola-lidar-odometry", "prior_pack":
         prior_pack.label(), "frames": why, "frames_count": len(traj),

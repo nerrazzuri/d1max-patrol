@@ -513,3 +513,18 @@ async def test_建好的图带geo_json就一起收进清单_没有照旧(svc):
     await svc.stop()
     ref = await svc.build(svc.last_bag, "estate-1", "10")
     assert "geo.json" not in [f.name for f in ref.files]
+
+
+async def test_M9_建好的图带seen_pbm就一起收进清单_没有照旧(svc):
+    """M9:显示用的掩码 ``seen.pbm`` 跟 geo.json 一样是可选文件:有就收、跟着传、照样校验。"""
+    from d1max_contract.maps import SEEN_FILE
+    svc.orch.made = (*GEOMETRY_FILES, SEEN_FILE)
+    await svc.start("yard3")
+    await svc.stop()
+    ref = await svc.build(svc.last_bag, "estate-1", "11")
+    assert [f.name for f in ref.files] == [*GEOMETRY_FILES, SEEN_FILE]
+    svc.orch.made = GEOMETRY_FILES
+    await svc.start("yard4")
+    await svc.stop()
+    ref = await svc.build(svc.last_bag, "estate-1", "12")
+    assert SEEN_FILE not in [f.name for f in ref.files]
