@@ -113,7 +113,30 @@ a { color: var(--c-tertiary); }
 .tabsnav .disabled { color: var(--c-textMuted); }
 .counts { display: inline-flex; gap: 12px; font-size: 14px; }
 .clock { font-size: 20px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.who { font-size: 14px; color: var(--c-textSecondary); }
+.who { font-size: 14px; color: var(--c-textSecondary); white-space: nowrap; }
+/* 顶栏一行放得下(≥ 1024):Stop all 永远在第一行最右、不缩;页签、模式、报警数、时钟也不缩不藏;
+   挤了先让站点名省略号截断,再藏牌子和用户名、收紧间距。 */
+.topbar > * { flex-shrink: 0; }
+.topbar > .site { flex: 0 1 auto; min-width: 0; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar > .btn.stop { flex-shrink: 0; }
+@media (min-width: 1024px) { .topbar { flex-wrap: nowrap; } }
+@media (max-width: 1439px) {
+  .topbar { gap: 10px; }
+  .topbar > .wordmark, .topbar > .who { display: none; }
+  .tabsnav a, .tabsnav .disabled { padding: 0 10px; }
+  .topbar .seg button { padding: 0 8px; }
+  .clock { font-size: 18px; }
+}
+@media (max-width: 1199px) {
+  .topbar { gap: 6px; padding: 0 8px; }
+  .tabsnav a, .tabsnav .disabled { padding: 0 6px; }
+  .topbar .seg button { padding: 0 5px; letter-spacing: 0; }
+  .navsep { margin: 12px 2px; }
+  .counts { gap: 8px; }
+  .clock { font-size: 16px; }
+  .topbar > .btn.icon { width: 34px; }
+  .topbar > .btn.stop { padding: 0 12px; }
+}
 .page { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
 
 /* 跟站点断了(B 阶段外审 I5):常驻,直到重新拿到数据 */
