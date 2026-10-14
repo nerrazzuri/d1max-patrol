@@ -62,10 +62,10 @@ def 区域(*zs, rev=1):
 
 
 class 台子:
-    def __init__(self, tmp_path, walls=(), planner=None, radius=0.52):
+    def __init__(self, tmp_path, walls=(), planner=None, radius=0.52, **robot):
         self.c = 钟()
         self.occ = 画世界(tmp_path, walls)
-        self.r = SimRobot(now_ms=self.c, max_vx=0.6, max_wz=1.5, stop_latency_s=0.2)
+        self.r = SimRobot(now_ms=self.c, max_vx=0.6, max_wz=1.5, stop_latency_s=0.2, **robot)
         self.nav = PlannedNavBackend(self.r, now_ms=self.c, map_id="m",
                                      planner=planner or Planner(in_process=True),
                                      robot_radius_m=radius)
@@ -538,3 +538,157 @@ async def test_到了拐点就换下一段_不追着拐点本身走(tmp_path):
     t.r.teleport(3.95, 2.0, 0.0)                         # 离第一个拐点 5 cm
     await t.一拍()
     assert t.nav._seg == 1, "到了拐点就换下一段"
+
+
+# ------------------------------------------------------------ S7(2026-10-14):每拍禁行区回退检查
+# 按机身矩形 + 定位 σ + 此刻速度下的刹车距离;限速低到守不住的限速区一样当禁行。
+
+
+def _在(x, y, yaw=0.0, sigma=0.0):
+    from types import SimpleNamespace
+    return SimpleNamespace(x=x, y=y, yaw=yaw, sigma_xy_m=sigma)
+
+
+def _区(*zs):
+    return 区域(*zs)
+
+
+async def test_S7_回退检查_机身侧面加σ_不是看中心(tmp_path):
+    """狗身中心离禁行区 0.27 m(原来 0.25 m 的线外,照走),机身侧面只差 3 cm:σ 0.05 就该刹。"""
+    t = 台子(tmp_path)
+    await t.nav.set_zones(_区({"id": "bed", "kind": "nogo", "label": "花坛",
+                              "polygon": [[0, 4.27], [12, 4.27], [12, 6], [0, 6]]}))
+    t.nav._v_meas = 0.3                                   # 顺着花坛边往前走
+    assert t.nav._backstop(_在(5.0, 4.0, sigma=0.0)) == ("", None)
+    v, z = t.nav._backstop(_在(5.0, 4.0, sigma=0.05))
+    assert v == "near" and z.id == "bed"
+    t.nav._v_meas = 0.0
+    assert t.nav._backstop(_在(5.0, 4.0, sigma=0.05)) == ("", None), "站着不动不刹(原地转归规划管)"
+    v, _ = t.nav._backstop(_在(5.0, 4.1))                  # 侧面压上 7 cm
+    assert v == "inside"
+
+
+async def test_S7_回退检查_刹车距离_快了就刹_慢了不刹_往外走不刹(tmp_path):
+    """禁行区在机头前 0.3 m:0.6 m/s 再走一拍、再刹停要走 0.54 m,进去了;0.1 m/s 只要 4 cm。"""
+    t = 台子(tmp_path)
+    await t.nav.set_zones(_区({"id": "pond", "kind": "nogo",
+                              "polygon": [[5.765, 0], [8, 0], [8, 8], [5.765, 8]]}))
+    for v, want in ((0.6, "near"), (0.4, "near"), (0.1, "")):
+        t.nav._v_meas = v
+        assert t.nav._backstop(_在(5.0, 4.0))[0] == want, v
+    t.nav._v_meas = 0.6
+    assert t.nav._backstop(_在(5.0, 4.0, yaw=math.pi))[0] == "", "往外走(背着池子)不刹"
+    t.nav._dir = -1                                        # 狗尾为前:往狗尾那头走
+    assert t.nav._backstop(_在(5.0, 4.0, yaw=math.pi))[0] == "near"
+    t.nav._dir = 0
+    # 限速:离池子越近越慢;离得远不限
+    cap = t.nav._zone_cap(_在(5.0, 4.0))
+    assert 0 < cap < 0.4, cap
+    assert t.nav._zone_cap(_在(4.0, 4.0)) > cap
+    assert t.nav._zone_cap(_在(1.0, 4.0)) == math.inf
+    assert t.nav._zone_cap(_在(5.0, 4.0, yaw=math.pi)) == math.inf, "往外走不限"
+
+
+async def test_S7_限速低到守不住的限速区_回退检查和保持距离都当禁行(tmp_path):
+    """能力对账附录 A 说明 3:规划、「先挪」当禁行,每拍回退检查和保持距离的 ``nogo_near`` 原来只看
+    原始禁行区。"""
+    t = 台子(tmp_path)
+    await t.nav.set_zones(_区({"id": "crawl", "kind": "slow", "max_speed_mps": 0.03,
+                              "polygon": [[4, 3.5], [6, 3.5], [6, 4.5], [4, 4.5]]},
+                             {"id": "ok", "kind": "slow", "max_speed_mps": 0.3,
+                              "polygon": [[8, 3.5], [10, 3.5], [10, 4.5], [8, 4.5]]}))
+    v, z = t.nav._backstop(_在(5.0, 4.0))
+    assert v == "inside" and z.id == "crawl"
+    assert t.nav._backstop(_在(9.0, 4.0))[0] == "", "守得住的限速区不当禁行"
+    assert t.nav.nogo_near(5.0, 3.0, 0.6).id == "crawl", "保持距离那头也认"
+    assert t.nav.nogo_near(9.0, 3.0, 0.6) is None
+
+
+class σ锚:
+    """仿真里程就是位姿,σ 固定(测正常走会不会被回退检查误停)。"""
+
+    def __new__(cls, sigma):
+        from d1max_agent.localization import OdomAnchor
+
+        class _A(OdomAnchor):
+            @property
+            def sigma_xy(self):
+                return sigma
+        return _A(identity=True)
+
+
+@pytest.mark.parametrize("sigma", [0.0, 0.2, 0.4])
+@pytest.mark.parametrize("case", ["around", "corridor", "zigzag", "headon", "elbow"])
+async def test_S7_正常规划的路_几种σ_不被回退检查误停(tmp_path, sigma, case):
+    """规划出的路离禁行区 0.57 m + σ:绕池子;穿过两个禁行区夹出来的、刚好过得去的通道;在通道口急拐
+    (拐点原地转,机身角甩向禁行区的角);正对着禁行区走到膨胀边外的终点;沿着一条通道全速冲向正对着
+    禁行区的拐点再拐上去(按刹车距离提前减速,不然要刹)—— 都不刹、不停、机身一下都不压上。"""
+    t = 台子(tmp_path)
+    t.nav.use_anchor(σ锚(sigma))
+    m = math.ceil(sigma / 0.1 - 1e-9) * 0.1                # 规划按 σ 加宽禁行区(按 0.1 m 取整)
+    half = 0.57 + m + 0.3                    # 通道半宽:刚好过得去(栅格 0.1 m、按半格对角线往保守取)
+    lo = {"id": "lo", "kind": "nogo", "polygon": [[4, 0.2], [8, 0.2], [8, 4 - half], [4, 4 - half]]}
+    hi = {"id": "hi", "kind": "nogo", "polygon": [[4, 4 + half], [8, 4 + half], [8, 7.8], [4, 7.8]]}
+    x_end = 7.6 + 2 * (0.57 + m) + 0.4                     # 拐角那条竖通道的右边:正对着来路
+    pond = {"id": "pond", "kind": "nogo", "polygon": [[5, 2], [7, 2], [7, 5], [5, 5]]}
+    zones = {"around": [pond], "corridor": [lo, hi], "zigzag": [lo, hi],
+             "headon": [{"id": "wall", "kind": "nogo",
+                         "polygon": [[9, 0.2], [11.8, 0.2], [11.8, 7.8], [9, 7.8]]}],
+             "elbow": [{"id": "blk", "kind": "nogo",
+                        "polygon": [[0.2, 2.6], [7.6, 2.6], [7.6, 7.8], [0.2, 7.8]]},
+                       {"id": "end", "kind": "nogo",
+                        "polygon": [[x_end, 0.2], [11.8, 0.2], [11.8, 7.8], [x_end, 7.8]]}]}[case]
+    start, goal = {"around": ((2.0, 3.5), (10.0, 3.5)), "corridor": ((1.5, 4.0), (10.5, 4.0)),
+                   "zigzag": ((2.5, 1.2), (9.5, 6.8)),
+                   "headon": ((2.0, 4.0), (9.0 - 0.57 - m - 0.15, 4.0)),
+                   "elbow": ((1.5, 1.15), ((7.6 + x_end) / 2, 6.8))}[case]
+    await t.nav.set_zones(区域(*zones))
+    near = []
+    real = t.nav._near_nogo
+
+    async def 记(z, here, dt):
+        near.append((z.id, round(here.x, 2), round(here.y, 2)))
+        await real(z, here, dt)
+    t.nav._near_nogo = 记
+    worst = [math.inf]
+    step = t.一拍
+
+    async def 量(dt=0.1):
+        await step(dt)
+        o = await t.在()
+        from d1max_agent.zone_guard import footprint, rect_poly_distance
+        for z in t.nav.zones.nogo():
+            worst[0] = min(worst[0], rect_poly_distance(footprint(o.x, o.y, o.yaw), z.polygon))
+    t.一拍 = 量
+    await t.start(*start)
+    await t.nav.goto(Pose.from_xy_yaw(*goal))
+    await t.走到头()
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason, near)
+    assert near == [], near
+    assert not [e for e in t.events if e[0] == "inside_nogo"]
+    assert worst[0] > 0.0, worst
+    assert max(v for _, _, v in t.speeds) > 0.55, "离得远的那几段照常快走"
+
+
+async def test_S7_路不知道的禁行区_正对着冲过去_刹得住_机身一下都没进去(tmp_path):
+    """定位漂、规划栅格画漏了:路直直穿过一个禁行区(这里直接塞给回退检查,不换路)。仿真狗有 0.2 s
+    链路延迟、0.5 m/s² 刹车减速度 —— 原来「中心离 0.25 m」的线,机头要先进去 0.2 m 再加刹车那一段。
+    现在按刹车距离提前刹、重规划(路还是穿过去 → 刹 → 用光次数 → FAILED),机身没进去。"""
+    t = 台子(tmp_path, latency_s=0.2, max_decel=0.5)
+    await t.start(1.5, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.5, 4.0))
+    for _ in range(20):
+        await t.一拍()
+    assert (await t.在()).vx > 0.5
+    t.nav.zones = 区域({"id": "ditch", "kind": "nogo", "label": "沟",
+                       "polygon": [[7.0, 0.2], [8.0, 0.2], [8.0, 7.8], [7.0, 7.8]]})
+    t.nav._rebox()                                        # 只给回退检查,不重算代价图(路不知道)
+    nose = 0.0
+    for _ in range(400):
+        await t.一拍()
+        o = await t.在()
+        nose = max(nose, o.x + 0.465)
+        if t.status and t.status[-1] in (NavStatus.FAILED, NavStatus.STANDBY):
+            break
+    assert nose < 7.0, f"机头进了沟({nose:.3f})"
+    assert NavStatus.FAILED in t.status and NavStatus.SUCCEED not in t.status

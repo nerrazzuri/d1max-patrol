@@ -14,6 +14,20 @@
 致命格 → 原地等、重规划;狗在新禁行区里面 → 原地停、FAILED、发事件 ``inside_nogo``,不自己往外走
 (W08 决定 5)。
 
+**每拍的禁行区回退检查**(能力对账 S7,2026-10-14;原来只看狗身中心离禁行区 0.25 m,机头正对着走过去
+能先进去约 0.2 m 才停):按**机身矩形**(:mod:`d1max_agent.zone_guard`)、**定位 σ**、**此刻速度下的刹车
+距离**查,跟规划、「先挪」一样把限速低到守不住的限速区当禁行(:meth:`_effective`;原来回退检查和保持
+距离用的 ``nogo_near`` 只看原始禁行区):
+
+- 机身已经压上 → 停、FAILED、事件 ``inside_nogo``(站点 P1),跟原来一样;
+- 照现在的速度再走一拍、再刹停,机身扫过的那一段离(当禁行的)区域不到 σ + :data:`BACKSTOP_MARGIN_M`、
+  而且不是越走越远 → **刹车**(零速)、从此刻的位置按此刻的 σ 重规划(路会先离开它);重规划不出、
+  次数用光 → FAILED。还没进去,不发 P1;
+- 正常走的时候不让上面那条被碰到:往禁行区那边走时按刹车距离**减速**,留出 σ + :data:`BRAKE_MARGIN_M`
+  (:meth:`_zone_cap`)。规划出的路离禁行区 0.57 m(外接圆 + 余量,再按 σ 加宽),平着走、绕角都碰不到;
+  正对着禁行区走到拐点会慢下来(刹车距离的占位数是保守的,真机量,3e.12)。原地转不在这里管(规划按
+  外接圆膨胀)。
+
 障碍、被挡、绕行不在这里(W11):这一版只看静态图 + 区域。
 """
 
@@ -28,6 +42,7 @@ from typing import Any
 
 import numpy as np
 
+from d1max_agent import zone_guard as zg
 from d1max_agent.bridges.hal_nav import HalNavBackend, _wrap
 from d1max_agent.localization import DRIFT_XY_PER_M, OdomAnchor
 from d1max_agent.planning import costmap as cmod
@@ -75,8 +90,12 @@ CREEP_M = 1.3
 CREEP_V = 0.2
 #: 偏离路径多远就停下重规划(W10 内审应修 5:原来 1 m,比膨胀半径还大)。
 MAX_DEVIATION_M = 0.3
-#: 狗身中心离禁行区这么近就算压进去了(机身半宽 0.24 m;规划出的路离禁行区至少外接圆半径)。
-ZONE_STOP_M = 0.25
+#: 每拍回退检查(S7):机身扫过的那一段(此刻速度再走一拍、再刹停)离当禁行的区域不到 σ + 这么多、而且
+#: 不是越走越远 → 刹车、重规划(原来是「狗身中心离禁行区 0.25 m」:机身半宽 0.24 m,机头正对着能先
+#: 进去 0.2 m)。
+BACKSTOP_MARGIN_M = 0.02
+#: 往禁行区那边走时按刹车距离减速,留出 σ + 这么多(比上面那条宽,正常走不会碰到它)。
+BRAKE_MARGIN_M = 0.10
 MAX_REPLANS = 3
 MAX_SIGMA_MARGIN_M = 0.5
 K_LIN = 1.0
@@ -136,8 +155,13 @@ class PlannedNavBackend(HalNavBackend):
         self.on_event: Callable[[str, dict], None] | None = None
         #: 正在核对新区域(W10 内审阻断 2):核完之前原地等,不拿旧代价图沿旧路走。
         self._hold = False
-        #: 禁行区的包围盒(每拍查「狗在不在禁行区里」先按它筛,内审小 13)。
+        #: 禁行区的包围盒(每拍查「狗在不在禁行区里」先按它筛,内审小 13)。含当禁行的限速区(S7)。
         self._boxes: list[tuple[float, float, float, float, Zone]] = []
+        #: 同一批(当禁行的)区域,给按机身查的回退检查用(S7)。
+        self._closed: list = []
+        #: 最近一拍发出去的前进速度(回退检查按它和实测取大算刹车距离)。
+        self._last_vx = 0.0
+        self._near_told = False
         #: 路长估计单用一个规划器(内审应修 7:不跟 goto、重规划抢同一个子进程)。
         self._hint_planner: Planner | None = None
         #: 局部避障(W11):感知的滚动记忆与守卫;``None`` = 没配(``--obstacles none``)。
@@ -230,12 +254,16 @@ class PlannedNavBackend(HalNavBackend):
                      for z in zs.zones)
 
     def _rebox(self) -> None:
+        # S7(能力对账附录 A 说明 3):跟规划、「先挪」同一个口径 —— 限速低到守不住的限速区也当禁行。
+        # 原来这里只取原始禁行区,每拍回退检查和保持距离(``nogo_near``)都漏了那一类。
+        closed = [z for z in self._effective(self.zones) if z.kind == "nogo"]
         self._boxes = [(min(p[0] for p in z.polygon), min(p[1] for p in z.polygon),
                         max(p[0] for p in z.polygon), max(p[1] for p in z.polygon), z)
-                       for z in (self.zones.nogo() if self.zones is not None else ())]
+                       for z in closed]
+        self._closed = zg.boxed(closed)
 
     def nogo_near(self, x: float, y: float, d: float = 0.0) -> Zone | None:
-        """离哪个禁行区不到 ``d`` 米(``d=0`` 就是在里面);先按包围盒筛。"""
+        """离哪个禁行区(含当禁行的限速区)不到 ``d`` 米(``d=0`` 就是在里面);先按包围盒筛。"""
         for x0, y0, x1, y1, z in self._boxes:
             if x0 - d <= x <= x1 + d and y0 - d <= y <= y1 + d \
                     and distance_to_polygon(x, y, z.polygon) <= d:
@@ -257,13 +285,15 @@ class PlannedNavBackend(HalNavBackend):
             self._hold = True
         try:
             here = await self._here()
-            z = None if here is None else self.nogo_near(here.x, here.y, ZONE_STOP_M)
-            if z is not None:
+            verdict, z = ("", None) if here is None else self._backstop(here)
+            if verdict == "inside":
                 if self._status in (NavStatus.ACTIVE, NavStatus.PAUSE, NavStatus.INITIALIZING):
                     await self._inside_nogo(z, here)
                 else:
                     self._report_nogo(z, here, idle=True)
                 return
+            # 离新区域太近(还没压上):核对期间原地等着(``_hold``),下面照常看路要不要重规划;
+            # 每拍的回退检查接着管
             if not moving:
                 return
             cm = await self._costmap_async(self._margin(here, self._target))
@@ -305,6 +335,75 @@ class PlannedNavBackend(HalNavBackend):
     async def _inside_nogo(self, z: Zone, here: Any) -> None:
         self._report_nogo(z, here)
         await self._fail(f"狗进了禁行区 {z.label or z.id}:停,不自己往外走")
+
+    async def _near_nogo(self, z: Zone, here: Any, dt_s: float) -> None:
+        """S7:再走就离(当禁行的)区域太近了 —— 刹车,从这儿按此刻的 σ 重规划(路先离开它);重规划
+        不出来、次数用光,下一拍按重规划失败收尾。"""
+        if not self._near_told:
+            self._near_told = True
+            log.warning("离禁行区 %s 太近(机身 + 定位偏差 %.2f m + 刹车距离):刹车、重规划",
+                        z.id, zg.sigma_of(here))
+        await self._send(0.0, 0.0, dt_s)
+        if (self._replan is None or self._replan.done()) and self._replan_out is None \
+                and self._target is not None:
+            self._start_replan()
+
+    # ------------------------------------------------------------ 每拍的禁行区回退检查(S7)
+
+    def _travel(self, here: Any) -> tuple[tuple[float, float, float], float]:
+        """``(此刻位姿, 平移方向)``:狗尾为前时往狗尾那头走(朝向加 π)。"""
+        return (here.x, here.y, here.yaw), _heading(here.yaw, self._dir or 1)
+
+    def _backstop(self, here: Any) -> tuple[str, Zone | None]:
+        """S7:``("inside", 区域)`` 机身已经压上(当禁行的)区域;``("near", 区域)`` 照现在的速度
+        再走一拍、再刹停,机身扫过的那一段离它不到 σ + :data:`BACKSTOP_MARGIN_M`、而且不是越走越远
+        (更近、平着走都算);都没有 ``("", None)``。站着不动不算「near」—— 原地转靠规划的
+        外接圆膨胀管。"""
+        if not self._closed:
+            return "", None
+        pose, h = self._travel(here)
+        need = zg.sigma_of(here) + BACKSTOP_MARGIN_M
+        v = max(abs(self._v_meas), abs(self._last_vx))
+        d = v * zg.TICK_S + zg.stop_distance(v)
+        poses = zg.sweep(*pose, d, 0.0, heading=h)[1:] if d > 1e-6 else []
+        for z in self._closed:
+            c0 = zg.clearance(pose, z, need)
+            if c0 <= 0.0:
+                return "inside", z.zone
+            for p in poses:
+                c = zg.clearance(p, z, need)
+                if c < need and c <= c0 + 1e-3:
+                    return "near", z.zone
+        return "", None
+
+    def _zone_cap(self, here: Any) -> float:
+        """往(当禁行的)区域那边走时的限速(S7):再走一拍、再刹停,机身扫过的那一段离它留出
+        σ + :data:`BRAKE_MARGIN_M`(越走越近的那一段才算;平着走、往外走不限)。"""
+        if not self._closed:
+            return math.inf
+        pose, h = self._travel(here)
+        need = zg.sigma_of(here) + BRAKE_MARGIN_M
+        vmax = self._caps.max_vx
+        dmax = vmax * zg.TICK_S + zg.stop_distance(vmax)
+        poses = zg.sweep(*pose, dmax, 0.0, heading=h)
+        n = len(poses) - 1
+        free = dmax
+        for z in self._closed:
+            c0 = zg.clearance(pose, z, need)
+            for i, p in enumerate(poses[1:], 1):
+                c = zg.clearance(p, z, need)
+                if c < need and c < c0 - 1e-3:
+                    free = min(free, dmax * (i - 1) / n)
+                    break
+        if free >= dmax:
+            return math.inf
+        # 最快多快:v·一拍 + v·延迟 + v²/(2a) ≤ free
+        a, t = zg.DECEL_MPS2, zg.TICK_S + zg.LATENCY_S
+        return a * (-t + math.sqrt(t * t + 2.0 * free / a))
+
+    async def _send(self, vx: float, wz: float, dt_s: float) -> None:
+        self._last_vx = vx
+        await super()._send(vx, wz, dt_s)
 
     # ------------------------------------------------------------ 规划
 
@@ -430,6 +529,7 @@ class PlannedNavBackend(HalNavBackend):
         self._blocked_since = None
         self._blocked_told = False
         self._detoured = False
+        self._last_vx = 0.0
         self._path = None
         self._aligning = False
         self._replan_out = None
@@ -507,10 +607,14 @@ class PlannedNavBackend(HalNavBackend):
         if self._hold:
             await self._send(0.0, 0.0, dt_s)            # 正在核对新区域:原地等
             return
-        z = self.nogo_near(here.x, here.y, ZONE_STOP_M)
-        if z is not None:
+        verdict, z = self._backstop(here)                # S7:机身 + σ + 刹车距离
+        if verdict == "inside":
             await self._inside_nogo(z, here)
             return
+        if verdict == "near":
+            await self._near_nogo(z, here, dt_s)
+            return
+        self._near_told = False
         out, self._replan_out = self._replan_out, None
         if out is not None:
             if out[0] == "fail":
@@ -568,7 +672,8 @@ class PlannedNavBackend(HalNavBackend):
             vx = 0.0
         else:
             limit = min(self._vlim(), self._path_speed(seg, proj),
-                        self._cm.speed_at(here.x, here.y), self._near_cap(d))
+                        self._cm.speed_at(here.x, here.y), self._near_cap(d),
+                        self._zone_cap(here))
             vx = d * max(min(limit, K_LIN * dgoal), self._caps.deadband_vx)
         await self._move(vx, wz, dt_s, here)
 
@@ -736,12 +841,15 @@ class PlannedNavBackend(HalNavBackend):
         # 区域的规矩一条不少(W35 外审 I2):禁行区,**加上限速低到这台狗守不住、规划当禁行的限速区**
         # (:meth:`_effective`)。改查没膨胀的图时只看了原始的禁行区,把后一类漏了 —— 人划的区雷达
         # 看不见,守卫补不上。放松的只是实物那一圈外接圆的膨胀,不是区域。
-        closed = [z for z in self._effective(self.zones) if z.kind == "nogo"]
-        reach = CREEP_M + self.guard.body_len / 2 + self.guard.margin
-        for i in range(int(reach / 0.05) + 1):
-            d = i * 0.05
-            x, y = here.x + c * d, here.y + s * d
-            if any(distance_to_polygon(x, y, z.polygon) <= ZONE_STOP_M for z in closed):
+        # S7:跟每拍回退检查同一个口径 —— 机身矩形挪完再刹停,离它不到 σ + 余量、越挪越近就不挪
+        # (原来是中心线离 0.25 m,不加 σ)。
+        pose = (here.x, here.y, here.yaw)
+        need = zg.sigma_of(here) + BACKSTOP_MARGIN_M
+        poses = zg.sweep(*pose, CREEP_M + zg.stop_distance(CREEP_V), 0.0, heading=h)[1:]
+        for z in self._closed:
+            c0 = zg.clearance(pose, z, need)
+            if c0 <= 0.0 or any(c < need and c < c0 - 1e-3
+                                for c in (zg.clearance(p, z, need) for p in poses)):
                 return False
         return True
 
