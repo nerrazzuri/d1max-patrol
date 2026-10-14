@@ -245,7 +245,8 @@ class AgentRuntime:
         if parts is not None and localizer == "bridge":
             # 地图位姿来自本机桥上的定位器(W09b 的 ROS 节点;仿真是仿真定位器)。
             mono = monotonic or time.monotonic
-            src = BridgeLocalizer(monotonic=mono)
+            # 锚记在盘上(对账 S1):代理重启以后照样拿它核定位器稳住的地方
+            src = BridgeLocalizer(monotonic=mono, keep=store_dir / "loc_anchor.json")
             src.on_map(loaded_map)
             self._locsrv = LocBridgeServer(loc_socket or store_dir / "loc.sock", src,
                                            monotonic=mono)

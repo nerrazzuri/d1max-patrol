@@ -385,6 +385,36 @@ async def test_配了定位器的真狗_换图不经HAL_定位器换先验_重�
         await t.收()
 
 
+async def test_对账S1_代理重启_定位器一直在跟不用人_这期间它跳到远处就不认(tmp_path):
+    """代理把锚记在自己的存储目录里(``loc_anchor.json``),重启读回、只拿来核:定位器一直连续在跟的
+    不用人重给位置(W34 现场验过的);代理不在的时候它跳到了 8 m 外、连上时报得「连续」的,不认。"""
+    t = await 台子().起(tmp_path)
+    try:
+        await t.连()
+        await t.rt._on_cmd(_goto(2.0, 0.0, "g1", t.c))
+        await t.拍(80)
+        assert _事件(t.ears, "task_done")
+        assert (tmp_path / "loc_anchor.json").is_file()
+
+        async def 重启(offset=(0.0, 0.0, 0.0)):
+            await t.loc.close()
+            await t.rt.close()
+            t.rt = t.新代理()
+            await t.rt.start()
+            t.loc = SimLocalizer(t.dog, t.d / "loc.sock")
+            t.loc.offset = list(offset)
+            await t.连()
+            return _遥测(t.ears).loc
+
+        loc = await 重启()
+        assert loc["reason"] == "" and loc["anchored"], loc
+        loc = await 重启((8.0, 0.0, 0.0))
+        assert "代理重启前最后可信的位置差 8.0 m" in loc["reason"], loc
+        assert "请重新设位置" in loc["reason"]
+    finally:
+        await t.收()
+
+
 async def test_配了定位器_仿真狗有载入这一步也不调(tmp_path):
     from test_runtime_maps import _跑, 站点
 
