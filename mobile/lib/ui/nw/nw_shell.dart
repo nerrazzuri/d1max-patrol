@@ -29,6 +29,7 @@ import '../site_robots.dart';
 import '../site_runs.dart';
 import '../site_schedule.dart';
 import '../site_watch_page.dart';
+import '../site_routes.dart';
 import '../site_weather.dart';
 import 'nw_button.dart';
 import 'nw_p4_admin.dart';
@@ -129,6 +130,7 @@ class NwShell extends StatefulWidget {
   static const Key releasesKey = Key('open-releases');
   static const Key interceptsKey = Key('open-intercepts');
   static const Key camerasKey = Key('open-cameras');
+  static const Key routesKey = Key('open-routes');
   static const Key weatherKey = Key('open-weather');
 
   @override
@@ -251,6 +253,7 @@ List<(Key, IconData, String, Widget Function())> _entries(SiteApi api) => [
       (NwShell.releasesKey, Icons.system_update_rounded, tr('Releases', '版本'), () => SiteReleasesPage(api: api)),
       (NwShell.interceptsKey, Icons.fence_rounded, tr('Intercept points', '拦截点'), () => SiteInterceptsPage(api: api)),
       (NwShell.camerasKey, Icons.videocam_rounded, tr('Cameras', '摄像头'), () => SiteCamerasPage(api: api)),
+      (NwShell.routesKey, Icons.route_rounded, tr('Patrol routes', '巡检路线'), () => SiteRoutesPage(api: api)),
       (NwShell.weatherKey, Icons.cloud_rounded, tr('Weather', '天气'), () => SiteWeatherPage(api: api)),
     ];
 

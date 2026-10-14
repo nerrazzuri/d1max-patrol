@@ -658,6 +658,41 @@ class FakeApi implements SiteApi {
     };
   }
 
+  /// 巡检路线库（2026-10-14）：[routesBody] 是站点那份视图；存、删、去某个点都记在 [calls] 里。
+  /// [routeError] 给了就让存 / 删 / goto 抛它（模拟站点的 400 逐点错误、409 冲突、监护拒绝）。
+  Map<String, dynamic> routesBody = <String, dynamic>{
+    'revision': 1, 'timezone': 'Asia/Kuala_Lumpur', 'routes': <dynamic>[], 'schedules': <dynamic>[]};
+  SiteError? routeError;
+  final List<Map<String, dynamic>> savedRoutes = <Map<String, dynamic>>[];
+  final List<Map<String, dynamic>> gotos = <Map<String, dynamic>>[];
+  @override
+  Future<Map<String, dynamic>> routes({String? mapId, String? version}) async {
+    calls.add('routes $mapId:$version');
+    return routesBody;
+  }
+  @override
+  Future<Map<String, dynamic>> saveRoute(String id, Map<String, dynamic> body) async {
+    calls.add('saveRoute $id base=${body['base_revision']}');
+    if (routeError != null) throw routeError!;
+    savedRoutes.add(<String, dynamic>{'id': id, ...body});
+    return <String, dynamic>{'id': id, 'revision': (body['base_revision'] as int) + 1, 'bound': true,
+      'map_id': body['map_id'], 'map_version': body['map_version'], 'waypoints': body['waypoints'],
+      'policy': body['policy'] ?? <String, dynamic>{}};
+  }
+  @override
+  Future<void> deleteRoute(String id, int baseRevision) async {
+    calls.add('deleteRoute $id base=$baseRevision');
+    if (routeError != null) throw routeError!;
+  }
+  @override
+  Future<Map<String, dynamic>> goto(String robotId,
+      {required String mapId, required String version, required double x, required double y, required double yaw}) async {
+    calls.add('goto $robotId $mapId:$version');
+    if (routeError != null) throw routeError!;
+    gotos.add(<String, dynamic>{'robot': robotId, 'map_id': mapId, 'version': version, 'x': x, 'y': y, 'yaw': yaw});
+    return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}, 'task_id': 't1'};
+  }
+
   @override
   Future<Map<String, dynamic>> relocalize(String robotId,
       {bool atHome = false, double x = 0, double y = 0, double yaw = 0}) async {

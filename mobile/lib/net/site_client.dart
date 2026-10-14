@@ -137,6 +137,9 @@ class SiteSession {
   /// 下发地图、录包、重建（W00c5d 第二部分）：只有管理员。
   bool get canManageMaps => role == 'admin';
 
+  /// 改巡检路线、排程（站点的 manage 权限）：管理员。看路线谁都能；派一趟要 [canDispatch]。
+  bool get canManageRoutes => role == 'admin';
+
   /// 站点体检、诊断包（商业化 A1）：只有管理员。
   bool get canSeeHealth => role == 'admin';
   bool get canAbort => role == 'admin' || role == 'guard' || role == 'owner';
@@ -405,6 +408,21 @@ abstract class SiteApi {
   Future<List<Map<String, dynamic>>> robots();
   Future<Map<String, dynamic>> robot(String id);
   Future<Map<String, dynamic>> patrol(String id, String missionId);
+
+  /// 巡检路线库（2026-10-14，站点存的路线、排程是唯一真理源）：路线（按地图号、版本筛）、排程、时区、修订号。
+  Future<Map<String, dynamic>> routes({String? mapId, String? version});
+
+  /// 整条存（新建 `base_revision` 为 0）。站点逐点校验：400 带 `errors: [{index, name, problem}]`
+  /// （在 [SiteError.body] 里），别人改过 409。管理员。点是平的：`{name, x, y, yaw, check?, actions?}`。
+  Future<Map<String, dynamic>> saveRoute(String id, Map<String, dynamic> body);
+
+  /// 删一条路线（还有排程在用的站点会拒）。管理员。
+  Future<void> deleteRoute(String id, int baseRevision);
+
+  /// 去一个点（地图坐标，米；[yaw] 弧度）。站点拒了（要人监护、没就绪、点不可达……）原因在 [SiteError]。
+  /// 保安、管理员。
+  Future<Map<String, dynamic>> goto(String robotId,
+      {required String mapId, required String version, required double x, required double y, required double yaw});
   Future<Map<String, dynamic>> abort(String id, String taskId);
   /// 回默认待命点；给了 [name] 就回那一个（W13a）。
   Future<Map<String, dynamic>> returnToStandby(String id, {String? name});
@@ -886,6 +904,33 @@ class SiteClient implements SiteApi {
   Future<Map<String, dynamic>> patrol(String id, String missionId) async =>
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(id)}/patrol',
           <String, dynamic>{'mission_id': missionId}));
+
+  @override
+  Future<Map<String, dynamic>> routes({String? mapId, String? version}) async => _map(await _send(
+      'GET',
+      '/api/routes${mapId == null ? '' : '?map_id=${Uri.encodeQueryComponent(mapId)}'
+          '${version == null ? '' : '&map_version=${Uri.encodeQueryComponent(version)}'}'}'));
+
+  @override
+  Future<Map<String, dynamic>> saveRoute(String id, Map<String, dynamic> body) async =>
+      _map(await _send('POST', '/api/routes/${Uri.encodeComponent(id)}', body));
+
+  @override
+  Future<void> deleteRoute(String id, int baseRevision) async => _send(
+      'POST', '/api/routes/${Uri.encodeComponent(id)}/delete', <String, dynamic>{'base_revision': baseRevision});
+
+  @override
+  Future<Map<String, dynamic>> goto(String robotId,
+          {required String mapId,
+          required String version,
+          required double x,
+          required double y,
+          required double yaw}) async =>
+      _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/goto', <String, dynamic>{
+        'target': <String, dynamic>{
+          'map_id': mapId, 'map_version': version, 'frame_id': 'map', 'x': x, 'y': y, 'yaw': yaw,
+        },
+      }));
 
   @override
   Future<Map<String, dynamic>> abort(String id, String taskId) async =>

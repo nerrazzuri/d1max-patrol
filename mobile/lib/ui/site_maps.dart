@@ -24,6 +24,7 @@ import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
 import 'map_view.dart';
 import 'site_mapping.dart';
+import 'site_pose_pick.dart';
 import 'site_robot.dart';
 import 'widget/fields_dialog.dart';
 
@@ -380,6 +381,9 @@ class _SiteMapTabState extends State<SiteMapTab> {
   late Future<_MapView> _data = _load();
   final TransformationController _zoom = TransformationController();
 
+  /// 点图选的位置（去这里 / 设位置，[site_pose_pick.dart]；保安、管理员）。
+  final PosePickController _posePick = PosePickController();
+
   /// 画布那一块现在多大（缩放按钮绕它的中心缩放）。
   Size _viewport = Size.zero;
 
@@ -394,6 +398,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
   @override
   void dispose() {
     _zoom.dispose();
+    _posePick.dispose();
     super.dispose();
   }
 
@@ -558,16 +563,25 @@ class _SiteMapTabState extends State<SiteMapTab> {
                 tone: NwTone.warning,
                 text: tr('Preview unavailable: ${v.previewError}', '看不了：${v.previewError}')))
         : _canvas(context, v);
+    // 图下面那一条：点图选位置之后去这里 / 设位置（保安、管理员）
+    final canPose = v.png != null && v.inUse && (widget.api.session?.canDispatch ?? false);
+    final poseBar = PoseBar(
+        api: widget.api,
+        controller: _posePick,
+        mapId: '${v.mapId}',
+        version: '${v.version}',
+        robots: [for (final r in v.robots) if (robotMapTag(r) == v.tag) r]);
     // 横屏、桌面：图在左、狗在右一栏；竖屏：图在上、狗在下（最多占四成高）
     return LayoutBuilder(builder: (context, box) {
       if (box.maxWidth >= 700) {
         return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Expanded(child: canvas),
+          Expanded(child: canPose ? Column(children: [Expanded(child: canvas), poseBar]) : canvas),
           SizedBox(width: math.min(360, box.maxWidth * 0.4), child: _robots(context, v, side: true)),
         ]);
       }
       return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Expanded(child: canvas),
+        if (canPose) poseBar,
         ConstrainedBox(
             constraints: BoxConstraints(maxHeight: box.maxHeight * 0.4),
             child: _robots(context, v, side: false)),
@@ -716,6 +730,8 @@ class _SiteMapTabState extends State<SiteMapTab> {
                                                             id: id,
                                                             // 不在线的（过期、吊销）：中性色，不是绿的
                                                             tone: online ? nwToneOf('online') : NwTone.neutral)))),
+                                          if (v.inUse && (widget.api.session?.canDispatch ?? false))
+                                            Positioned.fill(child: PoseLayer(controller: _posePick, geo: geo, k: k)),
                                         ]))))))),
                     Positioned(
                         left: Nw.s8,

@@ -23,6 +23,7 @@ import 'package:d1max_patrol/ui/site_mode.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
 import 'package:d1max_patrol/ui/site_recordings.dart';
 import 'package:d1max_patrol/ui/site_releases.dart';
+import 'package:d1max_patrol/ui/site_routes.dart';
 import 'package:d1max_patrol/ui/site_runs.dart';
 import 'package:d1max_patrol/ui/site_standby.dart';
 import 'package:d1max_patrol/ui/site_watch_page.dart';
@@ -66,6 +67,18 @@ final _pages = <String, Widget Function()>{
   'map tab (rotated, plan, areas)': () => Scaffold(body: SiteMapTab(api: Rot23Api('admin'))),
   'map preview (rotated, plan, areas)': () => SiteMapPreviewPage(api: Rot23Api('admin'), mapId: 'estate-1', version: '8'),
   'maps': () => SiteMapsPage(api: FakeApi('admin')),
+  // 2026-10-14 巡检路线：列表、新建的编辑页、带三个点的编辑页（转了 23° 的图）
+  'routes': () => SiteRoutesPage(api: FakeApi('admin')),
+  'route editor (new)': () => SiteRouteEditorPage(api: FakeApi('admin'), mapId: 'estate-1', version: '8', newName: 'night'),
+  'route editor (existing, rotated)': () => SiteRouteEditorPage(
+      api: Rot23Api('admin'), mapId: 'estate-1', version: '8',
+      route: <String, dynamic>{
+        'id': 'loop', 'map_id': 'estate-1', 'map_version': '8', 'revision': 3, 'policy': <String, dynamic>{},
+        'waypoints': <dynamic>[
+          <String, dynamic>{'name': 'P1', 'x': -3.29, 'y': 6.1, 'yaw': 0.0},
+          <String, dynamic>{'name': 'P2', 'x': -1.5, 'y': 8.4, 'yaw': 0.5},
+        ],
+      }),
   'releases': () => SiteReleasesPage(api: FakeApi('admin')),
   'runs': () => SiteRunsPage(api: FakeApi('admin')),
   'run': () => SiteRunPage(api: FakeApi('admin'), runId: 1),
