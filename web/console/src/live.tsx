@@ -18,6 +18,7 @@ import {
   type Robot,
   type RobotState,
 } from "./model";
+import { RunInfo } from "./runinfo";
 
 export interface UnitInfo {
   robot: Robot;
@@ -68,6 +69,7 @@ export function RobotUnit({ u, now, onMap, onOpen }: { u: UnitInfo; now: number;
   return (
     <section class="unit" id={`unit-${u.robot.robot_id}`} aria-label={u.robot.robot_id}>
       <Strip u={u} onMap={onMap} />
+      <RunInfo robot={u.robot} />
       <div class="pair">
         {CAMS.map((c) => <CameraWell key={c} robot={u.robot.robot_id} cam={c} now={now} onOpen={() => onOpen(c)} />)}
       </div>

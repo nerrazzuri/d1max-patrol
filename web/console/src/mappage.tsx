@@ -2,7 +2,7 @@
 // 菱形 + 报警圈(未确认时闪)。侧栏只给**选中**的狗拉前后两路小画面(有 P1 时默认选 P1 的狗)。
 // 地图本身(转正、全图、缩放平移、区域名、图例、比例尺、平面图)在 mapcanvas.tsx;狗和报警点画在屏上坐标里
 // (大小不跟着缩放变),位置用跟底图同一个变换算。
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, enc } from "./api";
 import { CameraWell } from "./camera";
 import { t } from "./i18n";
@@ -11,6 +11,9 @@ import { MapCanvas, type CanvasArea, type LegendKey } from "./mapcanvas";
 import { heading, namedAreas, onMap, toPx, type PreviewMeta, type Pt } from "./mapview";
 import { abnormal, alarmState, robotMap, type Alert } from "./model";
 import { usePosePick } from "./posepick";
+import { RunInfo } from "./runinfo";
+import { RunLegend, VizWorld, vizAvoid, vizHas, vizMarks, vizOnMap } from "./runlayers";
+import { useEpisodes, useRunViz } from "./runviz";
 
 /** 屏上的大小(像素):狗的圆点半径、报警圈半径、狗编号字号。 */
 const BOT_R = 7;
@@ -48,6 +51,12 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
   // 点图 → 去这里 / 在这里设位置(posepick.tsx;只有管理员、保安)
   const pose = usePosePick({ meta, map: which ? { map_id: which.map_id, version: which.version } : null,
     robotId: sel?.robot.robot_id ?? null, robotAt: sel?.robot.loc?.pose ?? null, role: props.role ?? "" });
+  // 运行可视化:规划路径、轨迹、被挡位置(2 s 一拉),近 7 天定位出过问题的地方
+  const viz = useRunViz(!!which);
+  const vizRobots = which ? vizOnMap(viz, which.map_id, which.version) : [];
+  const since = useMemo(() => Date.now() - 7 * 86_400_000, [key]);
+  const { rows: episodes } = useEpisodes({ map_id: which?.map_id, map_version: which?.version, since_ms: since, limit: 300 }, !!which);
+  const eps = episodes ?? [];
 
   // 图上真画得出来的报警点、狗(图例只列有的)
   const pins = !which || !meta ? [] : props.p1.flatMap((a) => {
@@ -72,14 +81,17 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
         ) : (
           <MapCanvas meta={meta} raster={`/api/maps/${enc(which.map_id)}/${enc(which.version)}/preview.png`} label={t("mapAria")}
             areas={mapAreas(meta, areas)} legend={legend} drawing={!!pose.onPick} onPick={pose.onPick}
+            world={<VizWorld meta={meta} robots={vizRobots} />}
             // 区域名让开报警圈、狗(圆点 + 下面的编号)
             avoid={(s) => [
+              ...vizAvoid(s, meta, vizRobots),
               ...pins.map(({ px, py }) => { const [x, y] = s.px(px, py); return { x, y, r: PIN_R + 2 }; }),
               ...bots.map(({ px, py }) => { const [x, y] = s.px(px, py); return { x, y: y + LABEL_PX / 2, r: BOT_R + LABEL_PX + 4 }; }),
             ]}
             marks={(s) => (
               <>
                 {pose.marks(s)}
+                {vizMarks(s, meta, vizRobots, eps)}
                 {pins.map(({ a, px, py }) => {
                   const [x, y] = s.px(px, py);
                   const h = PIN_R / 2.5;
@@ -111,6 +123,7 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
             )} />
         )}
         {pose.panel}
+        {meta && <RunLegend has={vizHas(vizRobots, eps)} />}
       </div>
       <aside class="sidebar" aria-label={t("tabMap")}>
         {sel && (
@@ -123,6 +136,7 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
               </div>
             )}
             <span class="muted">{sel.task}</span>
+            <RunInfo robot={sel.robot} />
             <button type="button" class="link" onClick={() => props.onVideo(sel.robot.robot_id)}>{t("goToVideo")}</button>
           </div>
         )}
