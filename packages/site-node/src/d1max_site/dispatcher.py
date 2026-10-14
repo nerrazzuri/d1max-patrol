@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from d1max_contract.bundle_format import unbound_mission_text
 from d1max_contract.dispatch import DispatchClient, DispatchTimeout
 from d1max_contract.errors import ContractError
 from d1max_contract.messages import Ack, Event, MapPose, Reconcile, Status, Telemetry
@@ -65,6 +66,14 @@ MAX_PATROL_WAYPOINTS = 500
 
 class DispatchRefused(RuntimeError):
     """派遣条件不满足。``reason`` 给人看,站点 API 原样回 409。"""
+
+
+def version_mismatch_text(mission: str, map_id: str, version: str, robot_id: str,
+                          loaded: str) -> str:
+    """任务绑的那一版跟狗加载的不一样(R1;派遣器、排程共用)。"""
+    return (f"任务 {mission} 的点是在 {map_id} 第 {version} 版上量的,"
+            f"{robot_id} 加载的是第 {loaded} 版:每次建图原点都不一样,老坐标在新图上不可信 —— "
+            "在新图上核过点、改 map_version、重新打包导入(或者让狗换回那一版图)")
 
 
 class Unsupported(DispatchRefused):
@@ -576,20 +585,28 @@ class Dispatcher:
     async def patrol(self, robot_id: str, mission: dict[str, Any], *, issued_by: str,
                      priority: int = 0, task_id: str | None = None,
                      before_send: Callable[[Any, Any], None] | None = None) -> dict[str, Any]:
-        """整趟巡检(W00c2a)。任务定义整份放进命令(设计决定二 A);``map_version`` 取狗在
-        能力报文里报的已加载地图,任务的 ``map_id`` 要跟它一致。"""
+        """整趟巡检(W00c2a)。任务定义整份放进命令(设计决定二 A)。
+
+        **任务绑地图版本**(R1):任务的 ``(map_id, map_version)`` 要跟狗在能力报文里报的已加载地图
+        一模一样;命令里的 ``map_version`` 是**任务的**(以前填的是狗自己的,狗的核对就空转了)。没绑
+        版本的任务(老任务包、升级前导入的)不派 —— 绝不拿狗现在用的那一版去补。"""
         c = self._client_for(robot_id)
         self._check_dispatchable(robot_id, c, "patrol")
         try:
             m = parse_mission(mission)
         except (MissionError, ValueError) as exc:
             raise DispatchRefused(f"任务定义不成形: {exc}") from exc
+        if not m.map_version:
+            raise DispatchRefused(unbound_mission_text(m.mission, m.map_id))
         caps = c.capabilities.tasks.get("patrol", {}) if c.capabilities is not None else {}
         loaded = (caps.get("map_id"), caps.get("map_version"))
         if loaded[0] is None or loaded[1] is None:
             raise DispatchRefused(f"{robot_id} 没报已加载的地图")
         if m.map_id != loaded[0]:
             raise DispatchRefused(f"任务用的地图 {m.map_id!r},{robot_id} 加载的是 {loaded[0]!r}")
+        if m.map_version != loaded[1]:
+            raise DispatchRefused(version_mismatch_text(m.mission, m.map_id, m.map_version,
+                                                        robot_id, str(loaded[1])))
         if len(m.waypoints) > MAX_PATROL_WAYPOINTS:
             raise DispatchRefused(f"一趟最多 {MAX_PATROL_WAYPOINTS} 个航点,这趟 "
                                   f"{len(m.waypoints)} 个")
@@ -604,10 +621,11 @@ class Dispatcher:
             else:
                 log.info("%s 走直线:随机路线照原来的顺序跑", robot_id)
             m = replace(m, waypoints=tuple(wps), policy=replace(m.policy, order="fixed"))
-        await self._check_reach(m.map_id, loaded[1],
+        await self._check_reach(m.map_id, m.map_version,
                                 [(w.name, w.pose.position.x, w.pose.position.y)
                                  for w in m.waypoints])
-        payload = {"mission": m.to_wire(), "map_version": loaded[1]}
+        # 任务自己的版本(跟上面核过的狗的那一版相等):老狗(代理级别 2)只核这个键,发任务的才有意义
+        payload = {"mission": m.to_wire(), "map_version": m.map_version}
         if len(json.dumps(payload).encode()) > MAX_PATROL_BYTES:
             raise DispatchRefused(f"任务定义超过 {MAX_PATROL_BYTES} 字节")
         return await self._send(c, robot_id, "patrol", payload, issued_by=issued_by,

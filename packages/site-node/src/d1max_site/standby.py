@@ -373,8 +373,9 @@ class StandbyManager:
         wps += (MissionWaypoint(name=last, pose=home),)
         policy = replace(came.policy, on_waypoint_failed="abort", loops=1,
                          on_battery_low="continue")
+        # 来路坐标、待命点都在这一版上(_route_back、_checked_default 核过):任务绑它(R1)
         mission = Mission(mission=f"回待命点·{label}", map_id=p["map_id"], waypoints=wps,
-                          policy=policy)
+                          policy=policy, map_version=p["map_version"])
         return await self.dispatcher.patrol(robot_id, mission.to_wire(), issued_by="standby:auto",
                                      priority=STANDBY_RETURN,
                                      task_id=f"{STANDBY_PREFIX}{uuid.uuid4().hex[:12]}")

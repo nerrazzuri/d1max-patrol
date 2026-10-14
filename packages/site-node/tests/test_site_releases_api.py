@@ -6,6 +6,8 @@ import pytest
 from test_site_api import PW, _等, 站
 from test_site_releases import NAME, 做包
 
+from d1max_contract.bundle_format import BUNDLE_SCHEMA
+
 
 class 假发布:
     def __init__(self):
@@ -173,7 +175,7 @@ def test_升级前检查_没登记的版本_也能查_狗按槽里的自述比sc
     import_bundle(s.db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
     other = "2026-01-01-000000"
     s.agent.releases.done.add(other)
-    s.agent.releases.schema = 2
+    s.agent.releases.schema = BUNDLE_SCHEMA + 1          # 比站点当前包(打包器盖的)新一版
     _能查(s)
     code, d = _查(s, alice, other)
     got = {c["name"]: c for c in d["checks"]}
@@ -231,9 +233,9 @@ def test_新版要的任务包schema比站点当前包高_清单不过_切也不
     s = 站点
     alice = _登(s, "alice")
     import_bundle(s.db, 打包(tmp_path, 1), imported_by="alice", now_ms=1)
-    s.rel_catalog.add(做包(tmp_path, schema=2))
+    s.rel_catalog.add(做包(tmp_path, schema=BUNDLE_SCHEMA + 1))   # 比站点当前包新一版(R1 起包是 2)
     s.agent.releases.done.add(NAME)
-    s.agent.releases.schema = 2                           # 狗槽里的自述跟登记的是同一个包
+    s.agent.releases.schema = BUNDLE_SCHEMA + 1           # 狗槽里的自述跟登记的是同一个包
     _能查(s)
     code, d = _查(s, alice)
     got = {c["name"]: c for c in d["checks"]}

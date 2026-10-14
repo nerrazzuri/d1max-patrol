@@ -4,6 +4,9 @@
 导入 = 校验 → 读 ``missions/*.json``(每份过 ``parse_mission``)与 ``schedule.yaml`` → 排程里
 提到的任务都得在包里 → 一个事务落库,并成为**当前包**(站点同一时刻只按一个包排程)。
 同一个 ``bundle_id`` 的版本号只许往上走。
+
+**每个任务都得绑地图版本**(R1,``map_version``):没绑的老包不导入,报错列出站点上这张图有哪几版。
+站点升级之前就导入了的老包照样读得出来(没绑的任务 ``map_version`` 是空串),派遣器、排程都不派它。
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from d1max_contract.bundle_format import (
     SCHEDULE_NAME,
     BundleError,
     read_bundle_schedule,
+    unbound_mission_text,
     verify_bundle,
 )
 from d1max_contract.mission import Mission, MissionError, parse_mission
@@ -52,6 +56,12 @@ def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
             missions[p.stem] = parse_mission(json.loads(p.read_text(encoding="utf-8")))
         except (OSError, ValueError, MissionError) as exc:
             raise CatalogError(f"任务 {p.name} 不合规: {exc}") from exc
+    unbound = [unbound_mission_text(f"{mid}.json", m.map_id, _map_versions(db, m.map_id))
+               for mid, m in missions.items() if not m.map_version]
+    if unbound:
+        # R1:老包(schema 1)里的任务没绑地图版本。不导入 —— 也**不**替人填狗现在用的那一版:哪一版
+        # 是这些点量的,只有画点的人知道。报错列出站点上这张图有哪几版,给人核
+        raise CatalogError(";".join(unbound))
     if (bundle_dir / SCHEDULE_NAME).exists():
         try:
             schedule = read_bundle_schedule(bundle_dir)
@@ -81,6 +91,12 @@ def import_bundle(db: SiteDB, bundle_dir: Path, *, imported_by: str,
     return {"bundle_id": m.bundle_id, "version": m.version, "missions": sorted(missions),
             "schedule_entries": [e.id for e in schedule.entries],
             "timezone": schedule.timezone}
+
+
+def _map_versions(db: SiteDB, map_id: str) -> list[str]:
+    """站点地图目录里这张图有哪几版,新的在前(只用来写报错)。"""
+    return [r["version"] for r in db.query(
+        "SELECT version FROM maps WHERE map_id=? ORDER BY created_ms DESC", (map_id,))]
 
 
 def active_bundle_schema(db: SiteDB) -> tuple[str, int] | None:

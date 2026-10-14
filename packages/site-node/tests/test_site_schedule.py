@@ -26,7 +26,7 @@ entries:
     window_min: 30
     on_missed: skip
 """
-任务 = {"mission": "loop", "map_id": "estate-1", "policy": {}, "waypoints": [
+任务 = {"mission": "loop", "map_id": "estate-1", "map_version": "7", "policy": {}, "waypoints": [
     {"name": "a", "pose": {"position": {"x": 0.6, "y": 0.0},
                            "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}},
      "actions": [{"type": "dwell", "seconds": 0.5}]},

@@ -28,8 +28,10 @@
   - ``no_robot``/``ambiguous``/``skew``:先等宽限期(半个窗口与 ``GRACE_MS`` 取小,从这一轮第一次派
     不出去算),
     还没起跑才说。
-  - ``dispatch_failed``(狗明确拒收或发之前被拦)、``alarm``/``skip``(窗口过了)、``supervised``(狗要人
-    监护,W00c6i):当场说。
+  - ``dispatch_failed``(狗明确拒收或发之前被拦;**任务没绑地图版本**也是这一种,R1)、
+    ``alarm``/``skip``(窗口过了)、``supervised``(狗要人监护,W00c6i):当场说。
+  - 狗加载的图或**版本**跟任务绑的不一样(R1:同一张图重建过,老坐标不可信):这只狗不算能派的,
+    挑别的;都不行就是 ``no_robot``(备注里写着哪只狗加载的是哪一版)。
   - 回执超时:过 ``LOST_MS`` 还没见狗在跑这一趟、也没收到晚到的回执与结果,说 ``lost``。
   - 跑到一半被更优先的任务(事件派遣、手动派单、遥控)打断(``task_preempted``,W14):当场说
     ``preempted`` —— 这一轮没巡完、**不续**(W00c2b 决定 D2A,用户 2026-10-02 维持)。
@@ -46,6 +48,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from d1max_contract.bundle_format import unbound_mission_text
 from d1max_contract.dispatch import DispatchTimeout
 from d1max_contract.messages import Ack, AckResult, Event
 from d1max_contract.schedule import (
@@ -60,7 +63,7 @@ from d1max_contract.schedule import (
 )
 from d1max_site.catalog import ActiveBundle, active_bundle
 from d1max_site.db import SiteDB
-from d1max_site.dispatcher import Dispatcher, DispatchRefused
+from d1max_site.dispatcher import Dispatcher, DispatchRefused, version_mismatch_text
 from d1max_site.priorities import schedule_priority
 
 log = logging.getLogger(__name__)
@@ -324,9 +327,14 @@ class SiteScheduler:
                 reason, kind = f"{rid} 正在驱离", "busy"
             if not reason:
                 caps = self.dispatcher.clients[rid].capabilities
-                loaded = caps.tasks.get("patrol", {}).get("map_id") if caps else None
-                if loaded != mission.map_id:
-                    reason = f"{rid} 加载的地图是 {loaded!r},任务要 {mission.map_id!r}"
+                p = caps.tasks.get("patrol", {}) if caps else {}
+                loaded = (p.get("map_id"), p.get("map_version"))
+                if loaded[0] != mission.map_id:
+                    reason = f"{rid} 加载的地图是 {loaded[0]!r},任务要 {mission.map_id!r}"
+                elif loaded[1] != mission.map_version:
+                    # R1:同一张图换了版本(重建过),老坐标不可信 —— 跟图不对一样不派,挑别的狗
+                    reason = version_mismatch_text(entry.mission, mission.map_id,
+                                                   mission.map_version, rid, str(loaded[1]))
             if reason:
                 why.append(reason)
                 kinds.add(kind)
@@ -362,6 +370,13 @@ class SiteScheduler:
     async def _start(self, act: ActiveBundle, entry: ScheduleEntry, d: Decision, *,
                      now_ms: int, claimed: dict[str, str]) -> None:
         scheduled_ms = d.scheduled_ms or 0
+        mission = act.missions[entry.mission]
+        if not mission.map_version:
+            # R1:没绑地图版本的任务(站点升级前导入的老包)哪只狗都不派,这一轮当场报(不是等一会儿
+            # 就会好的事,要人重新打包导入)
+            self._record(entry, scheduled_ms, "dispatch_failed",
+                         note=unbound_mission_text(entry.mission, mission.map_id))
+            return
         ok, taken, why, kinds = self._candidates(act, entry, claimed)
         if not ok:
             if taken:

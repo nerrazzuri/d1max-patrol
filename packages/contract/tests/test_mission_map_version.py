@@ -69,3 +69,16 @@ def test_打包_绑了版本的任务原样带着版本(tmp_path):
                        bundle_id="site-kl", version=1, built_at="2026-10-14T10:00:00+08:00")
     got = json.loads((out / "missions" / "night.json").read_text(encoding="utf-8"))
     assert got["map_version"] == "4" and got["schema"] == BUNDLE_SCHEMA == 2
+
+
+def test_代理级别3_新站点认2和3_老站点认不了3():
+    """A7 的规矩:两头都得会的东西改了才加级别。3 级的代理不收没绑版本的巡检(老站点派的全是这种),
+    所以老站点(最高认 2)要先升;新站点照样派 2 级的狗(命令里放任务的版本,老狗本来就核)。"""
+    from d1max_contract.compat import (
+        AGENT_LEVEL,
+        SITE_MAX_AGENT_LEVEL,
+        SITE_MIN_AGENT_LEVEL,
+        agent_verdict,
+    )
+    assert AGENT_LEVEL == SITE_MAX_AGENT_LEVEL == 3
+    assert SITE_MIN_AGENT_LEVEL == 2 and agent_verdict(2) == agent_verdict(3) == "ok"

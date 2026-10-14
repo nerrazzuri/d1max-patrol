@@ -101,7 +101,8 @@ async def test_巡检中来事件_抢占巡检去拦截点_到了回待命点(�
     StandbyManager(t.db, t.site, now_ms=t.clock).set(
         "A", "dock", map_id="estate-1", map_version="7", x=0.0, y=0.0, yaw=0.0, default=True)
     from test_site_dispatcher import target
-    await t.send(t.site.patrol("A", {"mission": "loop", "map_id": "estate-1", "policy": {},
+    await t.send(t.site.patrol("A", {"mission": "loop", "map_id": "estate-1",
+                                     "map_version": "7", "policy": {},
                                      "waypoints": [{"name": "far", "pose": {
                                          "position": {"x": -6.0, "y": 0.0},
                                          "orientation": {"x": 0, "y": 0, "z": 0, "w": 1}}}]},
