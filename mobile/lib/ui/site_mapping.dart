@@ -37,7 +37,7 @@ const int _staleAfterS = 15;
 String zoneLabelText(Object? label) {
   final l = '${label ?? ''}';
   if (appLang.value == AppLang.zh) return l;
-  return switch (l) { '禁行区' => 'No-go zone', '限速区' => 'Speed-limit zone', _ => l };
+  return switch (l) { '禁行区' => 'No-go zone', '限速区' => 'Speed-limit zone', '抹掉区' => 'Erase zone', _ => l };
 }
 
 class SiteMappingTrailPage extends StatefulWidget {
@@ -617,6 +617,9 @@ class SiteMapPreviewPage extends StatefulWidget {
   static Key areaLabelKey(String name) => Key('preview-area-$name');
   static const Key drawNogoKey = Key('zone-draw-nogo');
   static const Key drawSlowKey = Key('zone-draw-slow');
+
+  /// 台账 44：抹掉一块（区域种类 `erase`：狗永远不去，站点画图时抹成没建图）。
+  static const Key drawEraseKey = Key('zone-draw-erase');
   static const Key finishKey = Key('zone-finish');
   static const Key undoKey = Key('zone-undo');
   static const Key cancelKey = Key('zone-cancel');
@@ -640,8 +643,8 @@ class SiteMapPreviewPage extends StatefulWidget {
 }
 
 class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
-  /// （预览 JSON，底图，底图是不是平面图）。
-  late final Future<(Map<String, dynamic>, Uint8List, bool)> _data = _load();
+  /// （预览 JSON，底图，底图是不是平面图）。抹掉区改了重新取（站点把底图那一块抹了，平面图地址也变了）。
+  late Future<(Map<String, dynamic>, Uint8List, bool)> _data = _load();
 
   /// 图的缩放（片区的名字跟着它决定放不放得下）。
   final TransformationController _zoom = TransformationController();
@@ -713,14 +716,24 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       _busy = true;
       _msg = null;
     });
+    String erased(List<Map<String, dynamic>> zs) =>
+        [for (final z in zs) if (z['kind'] == 'erase') '${z['id']}:${z['polygon']}'].join('|');
+    final before = erased(_zoneList);
+    var saved = false;
     try {
       final r = await widget.api.saveZones(widget.mapId, widget.version, zones, _rev);
       _msg = done(r['auto_confirmed'] == true);
+      saved = true;
     } on SiteError catch (e) {
       _msg = tr('Not saved: ${e.message}', '没存上：${e.message}');
     }
     await _loadZones();
-    if (mounted) setState(() => _busy = false);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      // 抹掉区变了：底图重新取（站点已经按新的抹掉区画好了）
+      if (saved && erased(zones) != before) _data = _load();
+    });
   }
 
   void _startDrawing(String kind) => setState(() {
@@ -738,13 +751,13 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
     final zone = <String, dynamic>{
       'id': id,
       'kind': kind,
-      'label': kind == 'nogo' ? '禁行区' : '限速区',
+      'label': switch (kind) { 'nogo' => '禁行区', 'erase' => '抹掉区', _ => '限速区' },
       'polygon': [
         for (final p in _draft)
           [double.parse(p.dx.toStringAsFixed(2)), double.parse(p.dy.toStringAsFixed(2))]
       ],
       if (kind == 'slow') 'max_speed_mps': double.parse(_speed.toStringAsFixed(1)),
-      if (kind == 'nogo' && _hard) 'hard': true,
+      if ((kind == 'nogo' || kind == 'erase') && _hard) 'hard': true,
       // 临时区：给时长，站点按它自己的钟换成到期时刻（手机的钟可能不准）
       if (_forS != null) 'for_s': _forS,
     };
@@ -912,10 +925,9 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                   px(((v as List)[0] as num).toDouble(), (v[1] as num).toDouble())
               ];
           final shapes = [
-            for (final z in zones) ZoneShape(z['kind'] == 'nogo', poly(z), hard: z['hard'] == true),
+            for (final z in zones) ZoneShape.of(z, poly(z)),
             // R2：从上一版带过来、还没人核的：只画轮廓，跟生效的分开
-            for (final z in _propList('zones'))
-              ZoneShape(z['kind'] == 'nogo', poly(z), hard: z['hard'] == true, proposed: true),
+            for (final z in _propList('zones')) ZoneShape.of(z, poly(z), proposed: true),
           ];
           final draft = [for (final p in _draft) px(p.dx, p.dy)];
           final r = math.max(2.0, math.max(w, h) / 120);
@@ -925,13 +937,22 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
           final c = Nw.of(context);
           // 横屏：左边是图（能缩放），右边一栏是待命点、区域和比例。图按站点给的转角摆正：点图加顶点时
           // 点下去的位置 Flutter 按同一个变换反算回图的像素（GestureDetector 在转过的那一层里头）。
+          // 打开时按有内容的范围放（台账 M7，[MapGeo.contentFit]：图按 k 缩放、往反方向挪，范围在正中；
+          // 站点没给范围就是整张图放进来，跟原来的 FittedBox 一个样）。
           return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Expanded(
-              child: LayoutBuilder(
-                builder: (context, box) => InteractiveViewer(
+              child: LayoutBuilder(builder: (context, box) {
+                final (k, shift) = geo.contentFit(box.biggest);
+                return InteractiveViewer(
                   transformationController: _zoom,
                   maxScale: 8,
-                  child: FittedBox(
+                  child: OverflowBox(
+                    maxWidth: double.infinity,
+                    maxHeight: double.infinity,
+                    child: Transform.translate(
+                    offset: -shift,
+                    child: Transform.scale(
+                    scale: k,
                     child: NwMapRotation(
                       rad: rad,
                       size: Size(w, h),
@@ -972,17 +993,19 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                                   child: MapAreaLabels(
                                       areas: areas,
                                       rad: rad,
-                                      // 图被 FittedBox 缩放了这么多（跟它一个算法）
-                                      unit: geo.fitScale(box.biggest),
+                                      // 图被缩放了这么多（[MapGeo.contentFit]）
+                                      unit: k,
                                       zoom: _zoom,
                                       labelKey: SiteMapPreviewPage.areaLabelKey)),
                           ]),
                         ),
                       ),
                     ),
+                    ),
+                    ),
                   ),
-                ),
-              ),
+                );
+              }),
             ),
             _sidePanel(context, [
                 for (final m in widget.marks)
@@ -999,6 +1022,12 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                       style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
                 if (meta['warning'] != null)
                   Text('${meta['warning']}', style: TextStyle(color: Nw.of(context).warning)),
+                // 台账 M9：淡淡的地面是站点画进底图的，这里说一句是什么
+                if (geo.seen)
+                  Text(
+                      tr('Faint floor: seen through doors or glass, not mapped for the robot (it never goes there)',
+                          '淡淡的地面：从门口、玻璃看到过，狗没走过（狗不去）'),
+                      style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
                 const Divider(),
                 for (final p in homes)
                   Text(
@@ -1061,17 +1090,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       if (same == null)
         Text(tr('Cannot tell whether the coordinate frame is the same.', '看不出坐标系是不是一样。'),
             style: NwText.bodySmall.copyWith(color: c.warning)),
-      for (final z in _propList('zones'))
-        tick(
-            'zone:${z['id']}',
-            'zone',
-            '${z['id']}',
-            z['kind'] == 'nogo'
-                ? (z['hard'] == true
-                    ? tr('Hard no-go · ${zoneLabelText(z['label'])}', '硬禁区 · ${z['label'] ?? ''}')
-                    : tr('No-go · ${zoneLabelText(z['label'])}', '禁行 · ${z['label'] ?? ''}'))
-                : tr('Limit ${z['max_speed_mps']} m/s · ${zoneLabelText(z['label'])}',
-                    '限速 ${z['max_speed_mps']} m/s · ${z['label'] ?? ''}')),
+      for (final z in _propList('zones')) tick('zone:${z['id']}', 'zone', '${z['id']}', zoneTitle(z, withId: false)),
       for (final p in _propList('standby'))
         tick('standby:${p['robot_id']}/${p['name']}', 'standby', '${p['robot_id']}/${p['name']}',
             tr('Standby point · ${p['robot_id']} · ${p['name']}', '待命点 · ${p['robot_id']} · ${p['name']}')),
@@ -1121,16 +1140,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       if (zones.isEmpty) Text(tr('No zones drawn', '没画区域')),
       for (final z in zones)
         Row(children: [
-          Expanded(
-              child: Text((z['kind'] == 'nogo'
-                      ? (z['hard'] == true
-                          ? tr('Hard no-go · ${zoneLabelText(z['label'])} (${z['id']})',
-                              '硬禁区 · ${z['label'] ?? ''}（${z['id']}）')
-                          : tr('No-go · ${zoneLabelText(z['label'])} (${z['id']})',
-                              '禁行 · ${z['label'] ?? ''}（${z['id']}）'))
-                      : tr('Limit ${z['max_speed_mps']} m/s · ${zoneLabelText(z['label'])} (${z['id']})',
-                          '限速 ${z['max_speed_mps']} m/s · ${z['label'] ?? ''}（${z['id']}）')) +
-                  _untilText(z['until_ms']))),
+          Expanded(child: Text(zoneTitle(z) + _untilText(z['until_ms']))),
           if (admin && _drawing == null)
             IconButton(
                 key: SiteMapPreviewPage.deleteKey('${z['id']}'),
@@ -1161,11 +1171,20 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               key: SiteMapPreviewPage.drawSlowKey,
               onPressed: _busy ? null : () => _startDrawing('slow'),
               child: Text(tr('Draw speed-limit zone', '画限速区'))),
+          OutlinedButton(
+              key: SiteMapPreviewPage.drawEraseKey,
+              onPressed: _busy ? null : () => _startDrawing('erase'),
+              child: Text(tr('Erase a region', '抹掉一块'))),
         ]),
         Text(
             tr('Adding or enlarging a zone, a lower limit or the hard mark takes effect at once. Deleting, '
                 'shrinking or raising a limit must be confirmed again before robots are sent out.',
                 '加禁行区、放大、调低限速、标硬禁区当场生效；删、缩、调高限速要重新确认才派狗。'),
+            style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
+        Text(
+            tr('Erase a region: robots never go there (like a no-go zone) and every map shows it as removed '
+                '(junk, glass reflections, places robots must not go).',
+                '抹掉一块：狗永远不去（跟禁行区一样），所有地图上都显示成抹掉了（建图时的杂物、玻璃反射、狗不该去的地方）。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         if (!confirmed || prop != null) ...[
           Text('${_zones!['confirm_text'] ?? ''}',
@@ -1180,10 +1199,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       ],
       if (_drawing != null) ...[
         Text(tr(
-            '${_drawing == 'nogo' ? 'No-go zone' : 'Speed-limit zone'}: tap the map to add corners, '
-                '${_draft.length} so far',
-            '${_drawing == 'nogo' ? '禁行区' : '限速区'}：点图加顶点，已 ${_draft.length} 个')),
-        if (_drawing == 'nogo')
+            '${switch (_drawing) { 'nogo' => 'No-go zone', 'erase' => 'Erase', _ => 'Speed-limit zone' }}: '
+                'tap the map to add corners, ${_draft.length} so far',
+            '${switch (_drawing) { 'nogo' => '禁行区', 'erase' => '抹掉', _ => '限速区' }}：点图加顶点，已 ${_draft.length} 个')),
+        if (_drawing == 'nogo' || _drawing == 'erase')
           CheckboxListTile(
               key: SiteMapPreviewPage.hardKey,
               dense: true,
@@ -1247,13 +1266,36 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
 }
 
 /// 一个区域在图上的样子：禁行（红）还是限速（黄），顶点（图的像素坐标）；硬禁区（决策 65）更深、
-/// 边更粗；从上一版带过来、等人核的（R2）只画轮廓。
+/// 边更粗；从上一版带过来、等人核的（R2）只画轮廓；抹掉区（台账 44，[erase]）只描一道细边 —— 底图那一块
+/// 站点已经抹了。
 class ZoneShape {
-  const ZoneShape(this.nogo, this.pixels, {this.hard = false, this.proposed = false});
+  const ZoneShape(this.nogo, this.pixels, {this.hard = false, this.proposed = false, this.erase = false});
+
+  /// 按站点给的区域（`kind`、`hard`）。
+  factory ZoneShape.of(Map<String, dynamic> z, List<Offset> pixels, {bool proposed = false}) =>
+      ZoneShape(z['kind'] == 'nogo', pixels,
+          hard: z['hard'] == true, proposed: proposed, erase: z['kind'] == 'erase');
   final bool nogo;
   final List<Offset> pixels;
   final bool hard;
   final bool proposed;
+  final bool erase;
+}
+
+/// 区域在列表、勾选里怎么写（种类 + 名字 + id）：禁行、硬禁区、抹掉（台账 44）、限速。
+String zoneTitle(Map<String, dynamic> z, {bool withId = true}) {
+  final idEn = withId ? ' (${z['id']})' : '', idZh = withId ? '\uFF08${z['id']}\uFF09' : '';
+  final label = z['label'] ?? '';
+  return switch (z['kind']) {
+    'nogo' => z['hard'] == true
+        ? tr('Hard no-go · ${zoneLabelText(label)}$idEn', '硬禁区 · $label$idZh')
+        : tr('No-go · ${zoneLabelText(label)}$idEn', '禁行 · $label$idZh'),
+    'erase' => z['hard'] == true
+        ? tr('Erased, hard · ${zoneLabelText(label)}$idEn', '抹掉（硬） · $label$idZh')
+        : tr('Erased · ${zoneLabelText(label)}$idEn', '抹掉 · $label$idZh'),
+    _ => tr('Limit ${z['max_speed_mps']} m/s · ${zoneLabelText(label)}$idEn',
+        '限速 ${z['max_speed_mps']} m/s · $label$idZh'),
+  };
 }
 
 /// 画区域（W10）：禁行红、限速黄，半透明；硬禁区深红、粗边；带过来的只有灰蓝色的轮廓；正在画的那一个
@@ -1269,6 +1311,15 @@ class ZonesPainter extends CustomPainter {
     for (final z in shapes) {
       if (z.pixels.length < 3) continue;
       final path = Path()..addPolygon(z.pixels, true);
+      if (z.erase && !z.proposed) {
+        canvas.drawPath(
+            path,
+            Paint()
+              ..color = Colors.blueGrey.withValues(alpha: 0.8)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = z.hard ? radius / 2 : radius / 4);
+        continue;
+      }
       if (z.proposed) {
         canvas.drawPath(
             path,

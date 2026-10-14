@@ -253,6 +253,7 @@ void main() {
     expect((poly[0][0] as num).toDouble(), closeTo(-8.0, 0.02));
     expect((poly[0][1] as num).toDouble(), closeTo(4.0, 0.02));
     expect(find.textContaining('存好了'), findsOneWidget);
+    await t.ensureVisible(find.byKey(SiteMapPreviewPage.confirmKey)); // 右栏多了「抹掉」那段说明,确认钮往下挪了
     await t.tap(find.byKey(SiteMapPreviewPage.confirmKey));
     await t.pumpAndSettle();
     expect(find.textContaining('确认之后这张图才能下发'), findsOneWidget, reason: '弹框念一遍那句话');
