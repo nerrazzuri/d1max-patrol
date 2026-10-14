@@ -1019,6 +1019,40 @@ async def test_S1_跳过之后按锚核过了_从头记_后来里程断了又断
     assert "定位器刚连上" in why and "里程断过" in why and "请重新设位置" in why, why
 
 
+async def test_S1_人给位置那一刻还没有里程_头一个里程当那一刻的_照样核():
+    c, link = 钟(), 假桥()
+    _钟[0] = c
+    loc = BridgeLocalizer(monotonic=c)
+    loc.link = link
+    loc.on_map(M, "/maps/estate-1/7")
+    loc.on_connect()
+    await loc.prior_task
+    assert await loc.relocalize(M, (2.0, 1.0, 0.0)) == ""   # 还没喂过里程
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.update((5.0, 5.0, 0.0), True)                    # 头一个里程
+    loc.on_pose(_位姿(9.0, 1.0, jump=True, reloc_id=r.req))
+    for _ in range(SETTLE_FIXES + 1):
+        loc.on_pose(_位姿(9.0, 1.0))
+    assert "人给的位置差 7.0 m" in loc.why_not(True), loc.why_not(True)
+    assert await loc.relocalize(M, (2.0, 1.0, 0.0)) == ""
+    r = [m for m in link.sent if isinstance(m, Relocalize)][-1]
+    loc.on_pose(_位姿(2.1, 1.0, jump=True, reloc_id=r.req))
+    _稳(loc, 2.1, 1.0)
+
+
+async def test_S1_离线回放没有里程_不核锚_跟原来一样():
+    c, link = 钟(), 假桥()
+    _钟[0] = c
+    loc = BridgeLocalizer(monotonic=c, odometry=False)
+    loc.link = link
+    loc.on_map(M, "")
+    loc.on_connect()
+    await loc.prior_task
+    loc.on_pose(_位姿(0.0, 0.0))
+    loc.on_pose(_位姿(6.0, 0.0, jump=True))
+    _稳(loc, 6.0, 0.0)
+
+
 async def test_S1_没有锚_换了图从头算():
     c, link, loc = await _就绪()
     loc.on_pose(_位姿(0.0, 0.0))

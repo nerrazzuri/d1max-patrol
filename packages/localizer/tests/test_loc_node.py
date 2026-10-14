@@ -93,7 +93,15 @@ async def 台(tmp_path):
     node = Node(args, ros_factory=假ROS, reconnect_s=0.1,
                 command_for=lambda p: [sys.executable, str(script), str(pids), str(p)])
     task = asyncio.get_running_loop().create_task(node.run())
+
+    async def 里程():
+        # 狗站着:真代理的导航桥每拍都喂里程(对账 S1 起,没有里程核不了锚,跳过的不认)
+        while True:
+            agent.update((0.0, 0.0, 0.0), True)
+            await asyncio.sleep(0.05)
+    odo = asyncio.get_running_loop().create_task(里程())
     yield agent, srv, node, pids, prior
+    odo.cancel()
     node.stop()
     await asyncio.wait_for(task, 10.0)
     await srv.close()

@@ -198,11 +198,14 @@ class BridgeLocalizer:
     AUTO_RECOVERS = True
 
     def __init__(self, *, monotonic: Callable[[], float], keep: Path | str | None = None,
-                 boot_id: str | None = None) -> None:
+                 boot_id: str | None = None, odometry: bool = True) -> None:
         """``keep``:锚记在这个文件里(重启读回,只拿来核;``None`` = 不记)。``monotonic`` 要是整台机器
         同一个钟(``time.monotonic``:开机以来,代理重启不归零)—— 记下的锚按它算放了多久。``boot_id``:
-        这一次开机的号(默认读 :data:`BOOT_ID_FILE`;读不到就不记)。"""
+        这一次开机的号(默认读 :data:`BOOT_ID_FILE`;读不到就不记)。``odometry`` 为假 = 根本没有里程
+        (**只有离线回放**这么用,``replay.agent_view`` 没给里程时):核不了锚,稳下来就认(跟 W35 之前
+        一样);真狗、仿真都有里程,不许这么用。"""
         self._now = monotonic
+        self._odometry = odometry
         #: 本机桥(``request(make, timeout_s) -> Reply``,没连上抛 :class:`LocalizerUnavailable`)。
         self.link: Any = None
         #: 跳变稳下来、重定位完:``on_corrected(修正量, 人给的)``。修正量 = 新 ``T`` ∘ 旧 ``T``⁻¹
@@ -390,6 +393,12 @@ class BridgeLocalizer:
         self._odos.append(_Odo(at=now, pose=odom, epoch=self._epoch, path=self._path))
         while self._odos and now - self._odos[0].at > ODOM_KEEP_S:
             self._odos.popleft()
+        a = self._anchor
+        if a is not None and a.odom is None and a.source == GIVEN and self._anchor_hold is not None:
+            # 人给位置那一刻代理手里还没有里程(运控刚连上):狗是停着给的,头一个里程就当那一刻的,
+            # 不然这个位置永远核不了(对账 S1)
+            self._anchor = replace(a, odom=odom, epoch=self._epoch, path=self._path)
+            self._save_keep()
 
     def _dr(self) -> float:
         """最近一帧真匹配上之后里程走过的路(定位器自己推算的 + 代理推算的)。"""
@@ -649,6 +658,8 @@ class BridgeLocalizer:
     def _off_anchor(self, new: _Fix) -> str:
         """稳下来的这一帧跟锚按里程推到现在的位置对不对得上;对不上(或没法比、不该照旧认)回一句说明,
         对得上回空串。没法比的时候怎么办见模块说明「没有能核的锚」(对账 S1)。"""
+        if not self._odometry:
+            return ""                            # 离线回放、没有里程:核不了(见 __init__)
         a = self._anchor
         if a is None or a.odom is None or a.epoch != new.epoch:
             if a is None and not self._unverified:
