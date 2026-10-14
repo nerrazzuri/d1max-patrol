@@ -584,15 +584,24 @@ abstract class SiteApi {
   Future<Uint8List> mapPlanPng(String url);
 
   /// 这张图这一版的禁行区、限速区（W10，谁都能看）：`{revision, zones: [{id, kind: nogo|slow, label,
-  /// polygon: [[x, y]], max_speed_mps?}], confirmed: {revision, by, at_ms, current}?, confirm_text}`。
+  /// polygon: [[x, y]], max_speed_mps?, hard?, until_ms?}], confirmed: {revision, by, at_ms, current,
+  /// how}?, confirm_text, proposal?, previous?}`。`hard`：硬禁区（决策 65，遥控也守）；`until_ms`：临时区
+  /// 到期时刻（决策 66）；`proposal`：新版本从上一版带过来、等人核的（R2）。
   Future<Map<String, dynamic>> mapZones(String mapId, String version);
 
-  /// 整份改（管理员）：[baseRevision] 是改之前看到的修订号，别人先改了回 409。
+  /// 整份改（管理员）：[baseRevision] 是改之前看到的修订号，别人先改了回 409。区域可以带 `for_s`
+  /// （临时区的时长，站点按自己的钟换成 `until_ms`）。回的里面 `auto_confirmed`：只收紧，当场算确认了。
   Future<Map<String, dynamic>> saveZones(
       String mapId, String version, List<Map<String, dynamic>> zones, int baseRevision);
 
   /// 发布前人工确认（管理员，W08 决定 5）：确认的是 [revision] 这一版；没确认的图下发不了。
-  Future<Map<String, dynamic>> confirmZones(String mapId, String version, int revision);
+  /// 一个区域都没有的要 [emptyOk]（R2）；[adopt]：采纳从上一版带过来的
+  /// `{zones: [id], standby: [[狗, 名字]], intercepts: [名字]}`。
+  Future<Map<String, dynamic>> confirmZones(String mapId, String version, int revision,
+      {bool emptyOk = false, Map<String, dynamic>? adopt});
+
+  /// 不要新版本从上一版带过来的那些（R2，管理员）。
+  Future<Map<String, dynamic>> discardZoneProposal(String mapId, String version);
   Stream<Map<String, dynamic>> events();
   void close();
 }
@@ -1025,9 +1034,19 @@ class SiteClient implements SiteApi {
           <String, dynamic>{'zones': zones, 'base_revision': baseRevision}));
 
   @override
-  Future<Map<String, dynamic>> confirmZones(String mapId, String version, int revision) async =>
-      _map(await _send('POST', '${_zonesPath(mapId, version)}/confirm',
-          <String, dynamic>{'revision': revision, 'confirm': true}));
+  Future<Map<String, dynamic>> confirmZones(String mapId, String version, int revision,
+          {bool emptyOk = false, Map<String, dynamic>? adopt}) async =>
+      _map(await _send('POST', '${_zonesPath(mapId, version)}/confirm', <String, dynamic>{
+        'revision': revision,
+        'confirm': true,
+        if (emptyOk) 'empty_ok': true,
+        'adopt': ?adopt,
+      }));
+
+  @override
+  Future<Map<String, dynamic>> discardZoneProposal(String mapId, String version) async =>
+      _map(await _send('POST', '${_zonesPath(mapId, version)}/proposal',
+          <String, dynamic>{'action': 'discard'}));
 
   @override
   Future<Uint8List> mapPreviewPng(String mapId, String version) => _bytes(

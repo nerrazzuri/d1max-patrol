@@ -2,6 +2,7 @@
 // （800×360，常见手机横过来的大小）都不溢出；遥控页两根杆在两边、画面在中间、「停」一直在屏幕里。
 import 'dart:convert';
 
+import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/main.dart' show PatrolApp, landscapeOnly, lockLandscape;
 import 'package:d1max_patrol/store/site_store.dart';
 import 'package:d1max_patrol/ui/site_logs.dart';
@@ -108,6 +109,32 @@ void main() {
     expect(r.left, greaterThanOrEqualTo(32));
     expect(r.right, lessThanOrEqualTo(_w - 48));
   });
+
+  for (final lang in AppLang.values) {
+    testWidgets('最窄的手机（568 宽）：硬禁区那句最长的话（$lang）也不溢出，「停」、状态都在屏幕里', (t) async {
+      appLang.value = lang;
+      addTearDown(() => appLang.value = AppLang.zh);
+      final api = FakeApi('guard');
+      _phone(t, w: 568);
+      await t.pumpWidget(MaterialApp(home: SiteTeleopPage(api: api, robotId: 'A')));
+      await t.pump();
+      api.link!.ctl.add(<String, dynamic>{'kind': 'granted', 'lease_epoch': 1, 'max_vx': 0.5,
+        'max_wz': 0.75, 'zone_guard': {'state': 'unsupported'}});
+      await t.pump();
+      await t.pump();
+      for (final st in ['untrusted', 'unsupported', 'blocked', 'inside']) {
+        api.link!.ctl.add(<String, dynamic>{'kind': 'zone_guard', 'state': st,
+          'label': '后院游泳池旁边的那一片落差', 'max_vx': 0.2});
+        await t.pump();
+        await t.pump();
+        expect(t.takeException(), isNull, reason: st);
+        expect(t.getRect(find.byKey(SiteTeleopPage.zoneKey)).bottom, lessThanOrEqualTo(_h));
+        expect(t.getRect(find.byKey(SiteTeleopPage.statusKey)).bottom, lessThanOrEqualTo(_h));
+        expect(t.getRect(find.byKey(SiteTeleopPage.stopKey)).bottom, lessThanOrEqualTo(_h));
+      }
+      await t.pumpWidget(Container());
+    });
+  }
 
   testWidgets('最窄的手机（568 宽）：两边的杆还放得下一整个圈', (t) async {
     _phone(t, w: 568);
@@ -218,6 +245,42 @@ void main() {
     await _show(t, SiteProcLogPage(api: api, robotId: 'A', name: 'slam'));
     await _show(t, SiteMapPreviewPage(api: api, mapId: 'estate-1', version: '8'));
   });
+
+  for (final lang in AppLang.values) {
+    testWidgets('横屏不溢出（$lang）：区域页带着从上一版带过来的建议、坐标系变了、正在画硬禁区', (t) async {
+      appLang.value = lang;
+      addTearDown(() => appLang.value = AppLang.zh);
+      final api = FakeApi('admin')
+        ..zonesView = <String, dynamic>{
+          'revision': 2, 'confirm_text': '水体、落差(台阶下沿、路缘、池边)、陡坡、花坛都已画成禁行区',
+          'confirmed': {'revision': 2, 'by': 'alice', 'at_ms': 1, 'current': true, 'how': 'tighten'},
+          'zones': <dynamic>[
+            {'id': 'pool', 'kind': 'nogo', 'label': '后院游泳池', 'hard': true,
+              'until_ms': 1800000000000, 'polygon': [[0, 0], [1, 0], [1, 1]]},
+          ],
+          'previous': {'version': '7', 'revision': 9, 'zones': 4},
+          'proposal': {
+            'from_version': '7', 'from_revision': 9, 'frame': {'same': false, 'note': 'n'},
+            'zones': <dynamic>[
+              for (var i = 0; i < 4; i++)
+                {'id': 'z$i', 'kind': 'nogo', 'label': '很长很长的区域名字$i', 'hard': i.isEven,
+                  'polygon': [[0, 0], [1, 0], [1, 1]]},
+            ],
+            'standby': <dynamic>[
+              {'robot_id': 'A', 'name': 'dock', 'x': 1.0, 'y': 2.0, 'yaw': 0.0, 'default': true}],
+            'intercepts': <dynamic>[{'name': 'east-gate', 'x': 3.0, 'y': 4.0, 'yaw': 0.0}],
+          },
+        };
+      await _show(t, SiteMapPreviewPage(api: api, mapId: 'estate-1', version: '8'));
+      expect(find.byKey(SiteMapPreviewPage.proposalKey), findsOneWidget);
+      await t.ensureVisible(find.byKey(SiteMapPreviewPage.drawNogoKey));    // 右边那一栏能滚
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+      await t.pumpAndSettle();
+      expect(find.byKey(SiteMapPreviewPage.hardKey), findsOneWidget);
+      expect(t.takeException(), isNull);
+    });
+  }
 
   testWidgets('横屏不溢出：边走边建的预览（W09f）', (t) async {
     final api = FakeApi('admin')

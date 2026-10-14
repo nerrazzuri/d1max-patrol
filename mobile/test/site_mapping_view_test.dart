@@ -2,6 +2,7 @@
 // 看（能缩放），画上这张图上登记的待命点（建出来的图对不对）。
 import 'dart:typed_data';
 
+import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/ui/site_mapping.dart';
 import 'package:d1max_patrol/ui/site_maps.dart';
 import 'package:d1max_patrol/ui/site_page.dart';
@@ -305,6 +306,185 @@ void main() {
     await t.pump();
     expect(find.byKey(SiteMapPreviewPage.drawNogoKey), findsOneWidget, reason: '不画了回到按钮');
   });
+
+  // ------------------------------------------------------------ 决策 65、66，R2（2026-10-14）
+
+  Future<void> drawTriangle(WidgetTester t) async {
+    final rect = t.getRect(find.byKey(SiteMapPreviewPage.canvasKey));
+    final k = rect.width / 200;
+    for (final o in const [Offset(20, 10), Offset(60, 10), Offset(60, 40)]) {
+      await t.tapAt(rect.topLeft + o * k);
+      await t.pump();
+    }
+  }
+
+  /// 右边那一栏能滚：先滚到看得见再点。
+  Future<void> tapVis(WidgetTester t, Finder f) async {
+    await t.ensureVisible(f);
+    await t.pumpAndSettle();
+    await t.tap(f);
+    await t.pumpAndSettle();
+  }
+
+  testWidgets('画硬禁区、临时的：存的时候带 hard 和 for_s；列表里看得出来；只收紧的说不用重新确认', (t) async {
+    final api = FakeApi('admin')..autoConfirm = true;
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(SiteMapPreviewPage.drawNogoKey));
+    await t.pump();
+    expect(find.byKey(SiteMapPreviewPage.hardKey), findsOneWidget, reason: '画禁行区时能标硬禁区');
+    await tapVis(t, find.byKey(SiteMapPreviewPage.hardKey));
+    await tapVis(t, find.byKey(SiteMapPreviewPage.untilKey));
+    await t.tap(find.byKey(SiteMapPreviewPage.forKey(3600)).last);
+    await t.pumpAndSettle();
+    await drawTriangle(t);
+    await tapVis(t, find.byKey(SiteMapPreviewPage.finishKey));
+    final z = api.savedZones.single.single;
+    expect(z['kind'], 'nogo');
+    expect(z['hard'], isTrue);
+    expect(z['for_s'], 3600);
+    expect(find.textContaining('不用重新确认'), findsOneWidget, reason: '只收紧：站点当场算确认了');
+    // 站点那一份里带了 until_ms、hard:列表、图上都看得出来
+    api.zonesView = <String, dynamic>{...api.zonesView, 'zones': <dynamic>[
+      {'id': 'z1', 'kind': 'nogo', 'label': '禁行区', 'hard': true,
+        'until_ms': DateTime(2026, 10, 14, 18, 30).millisecondsSinceEpoch,
+        'polygon': [[0, 0], [1, 0], [1, 1]]},
+    ]};
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(key: UniqueKey(), api: api,
+        mapId: 'estate-1', version: '8')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('硬禁区'), findsWidgets);
+    expect(find.textContaining('到 10-14 18:30'), findsOneWidget);
+    final p = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter!
+        as ZonesPainter;
+    expect(p.shapes.single.hard, isTrue);
+    // 限速区没有「硬禁区」那个勾
+    await tapVis(t, find.byKey(SiteMapPreviewPage.drawSlowKey));
+    expect(find.byKey(SiteMapPreviewPage.hardKey), findsNothing);
+  });
+
+  testWidgets('放宽（删一个）存了说要重新确认', (t) async {
+    final api = FakeApi('admin')
+      ..zonesView = <String, dynamic>{
+        'revision': 1,
+        'zones': <dynamic>[
+          {'id': 'pond', 'kind': 'nogo', 'label': '池子', 'polygon': [[0, 0], [1, 0], [1, 1]]},
+        ],
+        'confirmed': {'revision': 1, 'by': 'a', 'at_ms': 1, 'current': true}, 'confirm_text': 'x'};
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    await tapVis(t, find.byKey(SiteMapPreviewPage.deleteKey('pond')));
+    expect(find.textContaining('改过要重新确认'), findsOneWidget);
+  });
+
+  Map<String, dynamic> proposalView({bool? same = true}) => <String, dynamic>{
+        'revision': 0, 'zones': <dynamic>[], 'confirmed': null, 'confirm_text': 'x',
+        'previous': {'version': '7', 'revision': 3, 'zones': 2},
+        'proposal': {
+          'from_version': '7', 'from_revision': 3,
+          'frame': {'same': same, 'note': 'n'},
+          'zones': <dynamic>[
+            {'id': 'pond', 'kind': 'nogo', 'label': '池子', 'hard': true,
+              'polygon': [[0, 0], [1, 0], [1, 1]]},
+            {'id': 'lawn', 'kind': 'slow', 'label': '草坪', 'max_speed_mps': 0.3,
+              'polygon': [[2, 0], [3, 0], [3, 1]]},
+          ],
+          'standby': <dynamic>[
+            {'robot_id': 'A', 'name': 'dock', 'x': 1.0, 'y': 2.0, 'yaw': 0.0, 'default': true},
+          ],
+          'intercepts': <dynamic>[{'name': 'gate', 'x': 3.0, 'y': 4.0, 'yaw': 0.0}],
+        },
+      };
+
+  testWidgets('新版本：上一版带过来的给人核，勾上的才在确认时采纳；没勾的不要', (t) async {
+    final api = FakeApi('admin')..zonesView = proposalView();
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    expect(find.byKey(SiteMapPreviewPage.proposalKey), findsOneWidget);
+    expect(find.textContaining('从第 7 版带过来的'), findsOneWidget);
+    expect(find.textContaining('坐标可能不一样'), findsOneWidget);
+    final p = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter!
+        as ZonesPainter;
+    expect(p.shapes.where((s) => s.proposed).length, 2, reason: '带过来的画成虚的、跟生效的分开');
+    await tapVis(t, find.byKey(SiteMapPreviewPage.proposedKey('zone', 'pond')));
+    await tapVis(t, find.byKey(SiteMapPreviewPage.proposedKey('standby', 'A/dock')));
+    await tapVis(t, find.byKey(SiteMapPreviewPage.confirmKey));
+    expect(find.textContaining('采纳勾上的 2 个'), findsOneWidget, reason: '确认框说清楚采纳几个');
+    await t.tap(find.byKey(SiteMapPreviewPage.confirmOkKey));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('confirmZones estate-1:8 rev=0'));
+    expect(api.lastAdopt, <String, dynamic>{
+      'zones': ['pond'], 'standby': [['A', 'dock']], 'intercepts': <String>[]});
+    expect(api.lastEmptyOk, isFalse, reason: '采纳了一个区域:不是空的');
+  });
+
+  testWidgets('新版本：坐标系变了明说；丢掉带过来的', (t) async {
+    final api = FakeApi('admin')..zonesView = proposalView(same: false);
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('坐标系变了'), findsOneWidget);
+    await tapVis(t, find.byKey(SiteMapPreviewPage.discardProposalKey));
+    expect(api.calls, contains('discardZoneProposal estate-1:8'));
+    expect(find.byKey(SiteMapPreviewPage.proposalKey), findsNothing);
+  });
+
+  testWidgets('保安看得到带过来的，勾不了、丢不了', (t) async {
+    final api = FakeApi('guard')..zonesView = proposalView();
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    expect(find.byKey(SiteMapPreviewPage.proposalKey), findsOneWidget);
+    expect(t.widget<CheckboxListTile>(find.byKey(SiteMapPreviewPage.proposedKey('zone', 'pond')))
+        .onChanged, isNull);
+    expect(find.byKey(SiteMapPreviewPage.discardProposalKey), findsNothing);
+  });
+
+  testWidgets('确认一个区域都没有的：多弹一道提示，明说了才带 empty_ok', (t) async {
+    final api = FakeApi('admin')
+      ..zonesView = <String, dynamic>{
+        'revision': 0, 'zones': <dynamic>[], 'confirmed': null, 'confirm_text': 'x',
+        'previous': {'version': '7', 'revision': 3, 'zones': 2}};
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    await tapVis(t, find.byKey(SiteMapPreviewPage.confirmKey));
+    await t.tap(find.byKey(SiteMapPreviewPage.confirmOkKey));
+    await t.pumpAndSettle();
+    expect(find.textContaining('一个禁行区、限速区都没有'), findsOneWidget);
+    expect(find.textContaining('第 7 版画了 2 个'), findsOneWidget);
+    await t.tap(find.text('再看看'));
+    await t.pumpAndSettle();
+    expect(api.calls.where((c) => c.startsWith('confirmZones')), isEmpty, reason: '没明说就不确认');
+    await tapVis(t, find.byKey(SiteMapPreviewPage.confirmKey));
+    await t.tap(find.byKey(SiteMapPreviewPage.confirmOkKey));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(SiteMapPreviewPage.confirmEmptyKey));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('confirmZones estate-1:8 rev=0'));
+    expect(api.lastEmptyOk, isTrue);
+  });
+
+  for (final lang in AppLang.values) {
+    testWidgets('竖屏手机（390×844，$lang）：带过来的建议、硬禁区、到期下拉都不溢出', (t) async {
+      appLang.value = lang;
+      addTearDown(() => appLang.value = AppLang.zh);
+      t.view.physicalSize = const Size(390, 844);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+      final api = FakeApi('admin')..zonesView = proposalView(same: null);
+      await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+          version: '8')));
+      await t.pumpAndSettle();
+      expect(t.takeException(), isNull);
+      await tapVis(t, find.byKey(SiteMapPreviewPage.drawNogoKey));
+      expect(find.byKey(SiteMapPreviewPage.untilKey), findsOneWidget);
+      expect(t.takeException(), isNull);
+    });
+  }
 
   test('解码用的 PNG 是真的（Image.memory 认得）', () {
     expect(fakePreviewPng.sublist(0, 8), Uint8List.fromList([137, 80, 78, 71, 13, 10, 26, 10]));

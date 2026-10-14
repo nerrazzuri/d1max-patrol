@@ -415,14 +415,36 @@ class FakeApi implements SiteApi {
     savedZones.add(zones);
     final rev = (zonesView['revision'] as int) + 1;
     zonesView = <String, dynamic>{...zonesView, 'revision': rev, 'zones': zones};
+    return <String, dynamic>{...zonesView, 'auto_confirmed': autoConfirm};
+  }
+
+  /// 决策 66：这一次存是不是只收紧、当场算确认了（站点回的 `auto_confirmed`）。
+  bool autoConfirm = false;
+
+  /// 给了就让下一次确认回这个错（R2：空的区域集没说 empty_ok 回 409）。
+  SiteError? confirmError;
+  Map<String, dynamic>? lastAdopt;
+  bool? lastEmptyOk;
+  @override
+  Future<Map<String, dynamic>> confirmZones(String mapId, String version, int revision,
+      {bool emptyOk = false, Map<String, dynamic>? adopt}) async {
+    calls.add('confirmZones $mapId:$version rev=$revision');
+    lastAdopt = adopt;
+    lastEmptyOk = emptyOk;
+    final err = confirmError;
+    if (err != null) {
+      confirmError = null;
+      throw err;
+    }
+    zonesView = <String, dynamic>{...zonesView, 'proposal': null, 'confirmed': <String, dynamic>{
+      'revision': revision, 'by': 'u', 'at_ms': 1, 'current': true}};
     return zonesView;
   }
 
   @override
-  Future<Map<String, dynamic>> confirmZones(String mapId, String version, int revision) async {
-    calls.add('confirmZones $mapId:$version rev=$revision');
-    zonesView = <String, dynamic>{...zonesView, 'confirmed': <String, dynamic>{
-      'revision': revision, 'by': 'u', 'at_ms': 1, 'current': true}};
+  Future<Map<String, dynamic>> discardZoneProposal(String mapId, String version) async {
+    calls.add('discardZoneProposal $mapId:$version');
+    zonesView = <String, dynamic>{...zonesView, 'proposal': null};
     return zonesView;
   }
 
