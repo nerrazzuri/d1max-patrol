@@ -25,13 +25,24 @@
   穿过;按高度判穿过(:data:`RAY_HEIGHT_TOL_M`,桌面底下钻过去的不算)。没有逐帧扫描就退回原型的
   模拟射线(从路线上的点往四周打,碰到墙停 —— 人那道「墙」清不掉);
 - 狗身中心走过的路(``body_path``)两边 :data:`FOOTPRINT_M` 以内一律可通行:狗的身子在那儿待过;
-- 可通行区做一次开运算(去掉透过没扫到的玻璃漏出去的细扇形);只留贴着可通行区的障碍(去掉悬在
-  外面的鬼影);
+- 可通行区做一次开运算(去掉透过没扫到的玻璃漏出去的细扇形;宽的扇形见最后一条);只留贴着可通行区
+  的障碍(去掉悬在外面的鬼影);
 - **墙只画雷达看得见的那一面**(:func:`_surface`,2026-10-14):从可通行区横竖看过去都得先穿过一层以上
   占据才看得到的格(点云抖出来的厚度、墙背面、家具块里头)改成「不知道」,墙只剩朝空地的**一层**
   (:data:`SURFACE_LAYERS`)。办公室图墙厚 0.20 m(中位数)、p90 0.55 m → 0.05 m、0.05–0.10 m。只把
   占据改成「不知道」,可通行的格一格不动 —— 规划(``d1max_contract.planning.costmap``)、拦截点、站点
-  核点位只认可通行,两样都当挡。
+  核点位只认可通行,两样都当挡;
+- **透过玻璃、开口看到的假空地改成「不知道」**(:func:`_see_through`,2026-10-14,现场 3d.18):雷达
+  穿过玻璃看到外面的墙和地面,玻璃本身没有点(或者只有零星几点),外面成了一大片扇形的「可通行」,还跟
+  屋里连着 —— 规划会从玻璃穿出去。真射线顺带记下每格是怎么被看到的(:class:`_Seen`):每一帧在近处面
+  上找「开口」(:func:`_openings`:两段够长的面之间、里面看到的都比两边远的口子 —— 玻璃两边的墙、门
+  框),开口线后面看到的算「透过开口」;还记下从哪些方向看到过。离狗走过的路 :data:`PROTECT_M` 以外,
+  ① 八成以上的帧是透过开口看到的(切在开口线上),② 离路 :data:`VIEW_FAR_M` 以外、只从 45° 以内的
+  方向看到过的(从窄口、开口认不出来的玻璃远远看过去的扇形),改成「不知道」;再去掉跟路不连着的碎块、
+  补回单格的洞。**只把可通行改成「不知道」**:占据一格不动(玻璃外面的墙还画着,悬在灰里),不添可通行。
+  代价:狗没进去、只从门口看过的屋子、只从一个方向远远看过的角落也成了「不知道」(往保守那边错);没有
+  逐帧扫描(模拟射线)时不做。10-13 办公室图(前雷达)透出去的假空地(离路 3 m 以外、连着路的)64 m² →
+  3.7 m²,规划走得到的面积 42.49 → 42.40 m²(离路 2 m 以内一格没少);台式机画图多 16–22% 的时间。
 
 只依赖 numpy(狗上用 ROS 系统 Python 里 apt 装的那份);不要 scipy、PIL。
 """
@@ -87,6 +98,37 @@ SURFACE_LAYERS = 1
 #: 往里、往外最多看这么远(米):只动跟可通行区连着(只走占据格)、这么远以内的格;这么远以内一条直线
 #: 都看不到可通行区的不动。
 SURFACE_REACH_M = 2.0
+# ---- 透过玻璃、开口看到的假空地(2026-10-14,:func:`_see_through`;现场 3d.18)
+#: 一帧里的「开口」(:func:`_openings`):近处面(每个方位格最近的障碍点)上两段面之间的口子,口子里
+#: 看到的东西都比两边远。两边各得是一段至少这么长的面(墙、柜子、玻璃框;人、椅子、桌腿、窗棂这种
+#: 零星的不算 —— 不算的话屋里一堆家具之间全成了「开口」:C40221 双雷达合并图上走过的拐角丢过 17% 的
+#: 可走面积;0.4 m 时 10-08 办公室图大屋右上角(一件家具跟右墙之间)整块成了「不知道」)。
+OPEN_FLANK_M = 0.6
+#: 近处面上相邻两点离这么近算同一段面。
+OPEN_SURFACE_GAP_M = 0.25
+#: 口子最宽这么宽(门、一扇玻璃、两根柱子之间;更宽的大玻璃面认不出来,归 :data:`VIEW_FAR_M` 那条)。
+OPEN_MAX_M = 3.5
+#: 口子另一边要比这一边远这么多倍、且至少远这么多米,才算「透过去看到的」。
+OPEN_FAR_RATIO = 1.3
+OPEN_FAR_M = 0.5
+#: 口子里打到的点比开口线近这么多以上,就是口子前面挡着东西,不算开口(玻璃上的回波、窗框落在线上
+#: 前后这么一点的不算挡)。
+OPEN_IN_FRONT_M = 0.3
+#: 口子占的视角超过这么多度、或者开口线离雷达不到这么远的不算:狗站在门口、两张桌子中间时,看出去的
+#: 东西就是从那儿直接看到的。
+OPEN_MAX_DEG = 75.0
+OPEN_MIN_DIST_M = 1.0
+#: 一格被看到的帧里,透过开口看到的占这么多以上 → 「只透过开口看到过」。
+THROUGH_SHARE = 0.8
+#: 看到一格的方向分这么多份(每份 11.25°)。
+VIEW_BINS = 32
+#: 离狗走过的路(沿可通行格量)超过这么远、所有看到它的方向挤在这么多份(45°)以内的格 →「不知道」:
+#: 从窄口远远看过去的扇形。屋里真的空地要么离路近、要么从路上好些地方都看得到。
+VIEW_FAR_M = 3.0
+VIEW_CONE_BINS = 4
+#: 离狗身中心走过的路(沿可通行格量)这么近的一律不动:规划的致命半径 0.57 m 再加一个规划格,狗走过的
+#: 地方规划起来跟原来一样宽。
+PROTECT_M = 0.8
 FREE, UNKNOWN, OCCUPIED = 254, 205, 0
 #: 栅格最多多少格(站点预览的上限也是 2500 万像素);超了一格放粗一倍,粗到 :data:`MAX_RES_M`
 #: 还超就报错。
@@ -237,14 +279,138 @@ def _raytrace(walls: np.ndarray, poses: np.ndarray, max_cells: int) -> np.ndarra
     return passes
 
 
+class _Seen:
+    """逐帧记下每格是怎么被看到的(:func:`_see_through` 用):直接看到的帧数、透过开口看到的帧数
+    (:func:`_openings`;一帧里一格只记一次),和从哪些方向看到过(:data:`VIEW_BINS` 份,一位一份)。
+    「看到」= 射线穿过(跟 ``passes`` 同一批采样)或者看到了这一格的地面。"""
+
+    def __init__(self, cells: int) -> None:
+        self.direct = np.zeros(cells, np.int32)
+        self.through = np.zeros(cells, np.int32)
+        self.dirs = np.zeros(cells, np.uint32)
+
+    def vote(self, cell: np.ndarray, thr: np.ndarray) -> None:
+        """一帧看到的格(可以重复),``thr``:是不是透过开口看到的。"""
+        self.direct[cell[~thr]] += 1                        # 重复的下标只加一次:一帧一票
+        self.through[cell[thr]] += 1
+
+    def look(self, cell: np.ndarray, sector: np.ndarray) -> None:
+        """一帧看到的格和从哪一份方向看到的(``sector`` 从小到大排好)。"""
+        cuts = np.searchsorted(sector, np.arange(VIEW_BINS + 1))
+        for s in range(VIEW_BINS):
+            if cuts[s + 1] > cuts[s]:
+                self.dirs[cell[cuts[s]:cuts[s + 1]]] |= np.uint32(1 << s)
+
+    def scan(self, o: np.ndarray, floor: np.ndarray, s_open: np.ndarray, lo: np.ndarray,
+             shape: tuple[int, int], res: float, max_range: float,
+             ray_cell: np.ndarray, ray_thr: np.ndarray, ray_sector: np.ndarray) -> None:
+        """一帧:射线穿过的格(``ray_*``,方向份从小到大)+ 地面点 ``floor``(相对雷达),地面点远过
+        这个方位的开口线(``s_open``)就是透过开口看到的。"""
+        H, W = shape
+        fr = np.hypot(floor[:, 0], floor[:, 1])
+        near = (fr > MIN_RANGE_M) & (fr < max_range)
+        floor, fr = floor[near], fr[near]
+        fb = ((np.arctan2(floor[:, 1], floor[:, 0]) + np.pi) / (2 * np.pi) * SCAN_BINS
+              ).astype(int) % SCAN_BINS
+        c = ((floor + o - lo) / res).astype(int)
+        ins = (c[:, 0] >= 0) & (c[:, 0] < W) & (c[:, 1] >= 0) & (c[:, 1] < H)
+        fcell, fb, fthr = c[ins, 1] * W + c[ins, 0], fb[ins], (fr > s_open[fb])[ins]
+        self.vote(np.r_[ray_cell, fcell], np.r_[ray_thr, fthr])
+        self.look(ray_cell, ray_sector)
+        order = np.argsort(fb, kind="stable")
+        self.look(fcell[order], fb[order] * VIEW_BINS // SCAN_BINS)
+
+
+#: 找开口时「回到近处」的距离分档(米):一档一档往外,每档多 15%。
+_LADDER = 0.3 * 1.15 ** np.arange(28)
+
+
+def _openings(b: np.ndarray, r: np.ndarray, q: np.ndarray) -> np.ndarray:
+    """一帧的近处面(每个方位格最近的障碍点:格号 ``b`` 从小到大、距离 ``r``、相对雷达的平面坐标
+    ``q``)上的开口 → 每个方位格从雷达到开口线的距离(没有开口是 inf)。
+
+    开口:一段面的头(尾)a,往后(往前)第一个「回到近处」的点 c(距离不超过 a 的
+    :data:`OPEN_FAR_RATIO` 倍、也不超过 a 远 :data:`OPEN_FAR_M`);a、c 都得在一段至少
+    :data:`OPEN_FLANK_M` 长的面上,a、c 之间不超过 :data:`OPEN_MAX_M`、视角不超过
+    :data:`OPEN_MAX_DEG`、开口线离雷达至少 :data:`OPEN_MIN_DIST_M`;夹在中间的方位格里打到的点不许比
+    线段 ac 近 :data:`OPEN_IN_FRONT_M` 以上(口子前面挡着东西的不是开口,比如远处两段墙中间一根近处的
+    柱子)。夹在中间的方位格到线段 ac 的距离就是开口线。玻璃没有回波(或者只有零星几点、窗框)时,
+    玻璃两边的墙就是 a、c。"""
+    nb = SCAN_BINS
+    out = np.full(nb, np.inf)
+    n = len(r)
+    if n < 3:
+        return out
+    gap = np.hypot(*(np.roll(q, -1, 0) - q).T)              # i → i+1(首尾相接)
+    cont = gap <= OPEN_SURFACE_GAP_M
+    if cont.all():
+        return out
+    s0 = int(np.argmin(cont)) + 1                           # 转一下,让 0 号是一段面的头
+    rot = (np.arange(n) + s0) % n
+    seg = np.r_[0, np.cumsum(~cont[rot][:-1])]
+    length = np.bincount(seg, weights=np.where(cont[rot], gap[rot], 0.0))
+    flank = np.zeros(n, bool)
+    flank[rot] = length[seg] >= OPEN_FLANK_M
+    near = np.where(flank, r, np.inf)
+    near2 = np.r_[near, near]
+    idx = np.arange(2 * n)
+    big = 4 * n
+    fwd = np.array([np.minimum.accumulate(np.where(near2 <= t, idx, big)[::-1])[::-1]
+                    for t in _LADDER])                      # 第 i 个起往后第一个 ≤ t 的
+    bwd = np.array([np.maximum.accumulate(np.where(near2 <= t, idx, -1)) for t in _LADDER])
+    lvl = np.clip(np.searchsorted(_LADDER, np.maximum(r * OPEN_FAR_RATIO, r + OPEN_FAR_M),
+                                  side="right") - 1, 0, len(_LADDER) - 1)
+    ends = np.flatnonzero(flank & ~cont)                    # 一段面的尾,往后找
+    heads = np.flatnonzero(flank & np.roll(~cont, 1))       # 一段面的头,往前找
+    a = np.r_[ends, bwd[lvl[heads], heads + n - 1]]
+    c = np.r_[fwd[lvl[ends], ends + 1], heads + n]
+    ok = (a >= 0) & (c < 2 * n)
+    a, c = a[ok], c[ok]
+    b2, q2 = np.r_[b, b + nb], np.r_[q, q]
+    span = b2[c] - b2[a]
+    qa, d = q2[a], q2[c] - q2[a]
+    t0 = np.clip(-(qa * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
+    ok = (span >= 2) & (span <= OPEN_MAX_DEG / 360.0 * nb) \
+        & (np.hypot(d[:, 0], d[:, 1]) <= OPEN_MAX_M) \
+        & (np.hypot(*(qa + d * t0[:, None]).T) >= OPEN_MIN_DIST_M)
+    if not ok.any():
+        return out
+    a, qa, d, span = a[ok], qa[ok], d[ok], span[ok]
+    m = span - 1                                            # 夹在中间的方位格
+    p = np.repeat(np.arange(len(a)), m)
+    bins = b2[a][p] + 1 + np.arange(m.sum()) - np.repeat(np.cumsum(m) - m, m)
+    ang = (bins + 0.5) / nb * 2 * np.pi - np.pi
+    ux, uy = np.cos(ang), np.sin(ang)
+    A, D = qa[p], d[p]
+    den = ux * D[:, 1] - uy * D[:, 0]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = (A[:, 0] * D[:, 1] - A[:, 1] * D[:, 0]) / den   # 射线 s·u 跟线段 A + t·D 的交点
+        t = (A[:, 0] * uy - A[:, 1] * ux) / den
+    hit = np.isfinite(s) & (s > 0) & (t >= -0.01) & (t <= 1.01)
+    bins, s, p = bins[hit] % nb, s[hit], p[hit]
+    rb = np.full(nb, np.inf)
+    rb[b] = r
+    blocked = np.bincount(p[rb[bins] < s - OPEN_IN_FRONT_M], minlength=len(a)) > 0
+    keep = ~blocked[p]                                      # 口子里有比开口线近的东西:不是开口
+    bins, s = bins[keep], s[keep]
+    if not len(bins):
+        return out
+    order = np.lexsort((s, bins))                           # 一格有几条开口线取最近的
+    bins, s = bins[order], s[order]
+    first = np.r_[True, bins[1:] != bins[:-1]]
+    out[bins[first]] = s[first]
+    return out
+
+
 def _raytrace_scans(scans: Iterable[tuple[np.ndarray, np.ndarray]], frames: Frames,
                     lo: np.ndarray, shape: tuple[int, int], res: float, band: tuple[float, float],
                     max_range: float, ground: _Ground,
-                    occ_h: tuple[np.ndarray, np.ndarray] | None = None
-                    ) -> tuple[np.ndarray, int]:
+                    occ_h: tuple[np.ndarray, np.ndarray] | None = None,
+                    seen: _Seen | None = None) -> tuple[np.ndarray, int]:
     """真射线:每一帧从雷达到这一帧障碍层里的点(每个方位格最近的那个),路过的格子各记一次。
     ``occ_h``:每格障碍点离当地地面的(最低, 最高)(没有障碍点是 nan);给了就按三维判穿过
-    (:data:`RAY_HEIGHT_TOL_M`)。回(每格被穿过的次数, 用了几帧)。"""
+    (:data:`RAY_HEIGHT_TOL_M`)。``seen``:给了就顺带记下每格是直接看到还是透过开口看到、从哪些方向
+    看到(:class:`_Seen`)。回(每格被穿过的次数, 用了几帧)。"""
     H, W = shape
     passes = np.zeros(H * W, np.int32)
     step = res / 2
@@ -256,22 +422,30 @@ def _raytrace_scans(scans: Iterable[tuple[np.ndarray, np.ndarray]], frames: Fram
         o3 = level(np.asarray(origin, float).reshape(1, 3), frames)
         o = o3[0, :2]
         oh, ook = ground.rel(o3)
-        q = level(np.asarray(pts, float), frames)
-        h, ok = ground.rel(q)
-        keep = ok & (h > band[0]) & (h < band[1])
-        q, h = q[keep, :2] - o, h[keep]
+        q_all = level(np.asarray(pts, float), frames)
+        h_all, ok_all = ground.rel(q_all)
+        keep = ok_all & (h_all > band[0]) & (h_all < band[1])
+        q, h = q_all[keep, :2] - o, h_all[keep]
         r = np.hypot(q[:, 0], q[:, 1])
         ok = (r > MIN_RANGE_M) & (r < max_range)
         q, r, h = q[ok], r[ok], h[ok]
         used += 1
+        floor = None
+        if seen is not None:
+            fl = ok_all & (h_all > FLOOR_BAND_M[0]) & (h_all < FLOOR_BAND_M[1])
+            floor = q_all[fl, :2] - o
         if not len(r):
+            if seen is not None:
+                none = np.zeros(0, int)
+                seen.scan(o, floor, np.full(SCAN_BINS, np.inf), lo, (H, W), res, max_range,
+                          none, none.astype(bool), none)
             continue
         b = ((np.arctan2(q[:, 1], q[:, 0]) + np.pi) / (2 * np.pi) * SCAN_BINS).astype(int) \
             % SCAN_BINS
         order = np.lexsort((r, b))
         b, r, q, h = b[order], r[order], q[order], h[order]
         first = np.r_[True, b[1:] != b[:-1]]
-        q, r, h = q[first], r[first], h[first]
+        b, q, r, h = b[first], q[first], r[first], h[first]
         # 采样点 0, step, 2·step …,最后一个离打到的点不近于 RAY_STOP_SHORT_M
         n = np.maximum(np.floor((r - RAY_STOP_SHORT_M) / step).astype(int) + 1, 1)
         ray = np.repeat(np.arange(len(r)), n)
@@ -295,6 +469,11 @@ def _raytrace_scans(scans: Iterable[tuple[np.ndarray, np.ndarray]], frames: Fram
         # 一条射线过一格只算一次(步长半格,同一格会落两次)
         key = np.unique(ray[inside].astype(np.int64) * (H * W) + cell)
         np.add.at(passes, key % (H * W), 1)
+        if seen is not None:
+            s_open = _openings(b, r, q)
+            ri = ray[inside]
+            seen.scan(o, floor, s_open, lo, (H, W), res, max_range, cell,
+                      k[inside] * step > s_open[b[ri]], b[ri] * VIEW_BINS // SCAN_BINS)
     return passes.reshape(H, W), used
 
 
@@ -346,6 +525,82 @@ def _surface(occ: np.ndarray, free: np.ndarray, res: float) -> np.ndarray:
     return deep & reach & ~seen
 
 
+def _geodesic(seed: np.ndarray, within: np.ndarray, steps: int) -> np.ndarray:
+    """从 ``seed`` 出发、只走 ``within`` 的格、走 ``steps`` 步以内够得着的格(四邻接、八邻接隔一步
+    换着走,近似圆:正方向 ``steps`` 格、斜方向多约 6%)。"""
+    out = seed & within
+    for i in range(steps):
+        g = _dilate(out, 1)
+        if i % 2:
+            for dy, dx in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+                g |= _shifted(out, dy, dx)
+        g &= within
+        if (g == out).all():
+            break
+        out = g
+    return out
+
+
+def _connected(mask: np.ndarray, seed: np.ndarray) -> np.ndarray:
+    """``mask`` 里跟 ``seed`` 四邻接连着的格。横着、竖着一整段一整段地传(一段里有一格连上了整段都连
+    上),来回扫到不变为止。"""
+    keep = seed & mask
+    while True:
+        before = int(keep.sum())
+        keep = _runs(mask, keep)
+        keep = _runs(mask.T, keep.T).T
+        if int(keep.sum()) == before:
+            return keep
+
+
+def _runs(m: np.ndarray, k: np.ndarray) -> np.ndarray:
+    """``m`` 每一行里连着的一段,只要有一格在 ``k`` 里,整段都算上。"""
+    m, k = np.ascontiguousarray(m), np.ascontiguousarray(k)
+    head = m.copy()
+    head[:, 1:] &= ~m[:, :-1]                               # 每行里一段的头
+    run = np.cumsum(head.ravel())
+    hit = np.zeros(int(run[-1]) + 1, bool)
+    hit[run[k.ravel()]] = True
+    return m & hit[run].reshape(m.shape)
+
+
+def _in_cone(dirs: np.ndarray, width: int) -> np.ndarray:
+    """方向位(:data:`VIEW_BINS` 份)都挤在连着的 ``width`` 份以内的(一位都没有的不算)。"""
+    out = np.zeros(dirs.shape, bool)
+    full = (1 << VIEW_BINS) - 1
+    win = (1 << width) - 1
+    for s in range(VIEW_BINS):
+        w = ((win << s) | (win >> (VIEW_BINS - s))) & full
+        out |= (dirs & np.uint32(full ^ w)) == 0
+    return out & (dirs != 0)
+
+
+def _see_through(free: np.ndarray, seen: _Seen, seed: np.ndarray, res: float) -> np.ndarray:
+    """透过玻璃、开口看到的假空地 → 「不知道」(:data:`THROUGH_SHARE` 起那几个常量;回剩下的可通行):
+
+    - 离狗走过的路(``seed``,沿可通行格量)超过 :data:`PROTECT_M`,并且
+    - 看到它的帧里至少 :data:`THROUGH_SHARE` 是透过开口看到的(:func:`_openings`:玻璃、狗没进去的门
+      —— 切在开口线上),或者
+    - 离路超过 :data:`VIEW_FAR_M`、看到它的方向都在 :data:`VIEW_CONE_BINS` 份(45°)以内(从窄口、
+      零星有回波的玻璃远远看过去的扇形,开口认不出来的也算);
+    - 跟狗走过的路已经不连着(只走可通行格)的可通行格也改成「不知道」(扇形剩下的碎块;狗本来也走
+      不过去);
+    - 最后,留下的可通行区里夹着的单格、一格宽的缝补回去(闭运算,只补原来就是可通行的格;放在连通
+      之后,不会把扇形的碎块接回来):规划把一格「不知道」膨胀成半径 0.57 m 的挡,10-13 办公室图大屋
+      靠墙那条零星去掉的格让规划少了 0.7 m²。
+
+    只把可通行改成「不知道」:占据不动,不添可通行。"""
+    H, W = free.shape
+    direct, through = seen.direct.reshape(H, W), seen.through.reshape(H, W)
+    protect = _geodesic(seed, free, int(round(PROTECT_M / res)))
+    far = free & ~_geodesic(seed, free, int(round(VIEW_FAR_M / res)))
+    via = (through > 0) & (through >= THROUGH_SHARE * (direct + through))
+    narrow = np.zeros((H, W), bool)
+    narrow[far] = _in_cone(seen.dirs.reshape(H, W)[far], VIEW_CONE_BINS)
+    keep = _connected(free & (protect | ~(via | narrow)), seed)
+    return keep | (free & _erode(_dilate(keep, 1), 1))      # 留下的里头零星的一格、一格宽的缝补回去
+
+
 def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: float = RES_M,
            floor_clear: float = FLOOR_CLEAR_M, wall_top: float = WALL_TOP_M,
            traj_margin: float = TRAJ_MARGIN_M, max_range: float = MAX_RANGE_M,
@@ -353,8 +608,9 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
            body_path: np.ndarray | None = None) -> Grid:
     """点云(MOLA 系,(N,3))+ 建图时雷达的位置(MOLA 系,(M,3))→ 栅格(地图平面系)。
 
-    ``scans``:逐帧扫描 ``(雷达位置, 这一帧的点)``(都在 MOLA 系;给了就用真射线,见模块说明);
-    ``body_path``:狗身中心走过的路(地图平面,(K,2)),两边 :data:`FOOTPRINT_M` 一律可通行。"""
+    ``scans``:逐帧扫描 ``(雷达位置, 这一帧的点)``(都在 MOLA 系;给了就用真射线,并去掉透过玻璃、
+    开口看到的假空地,见模块说明);``body_path``:狗身中心走过的路(地图平面,(K,2)),两边
+    :data:`FOOTPRINT_M` 一律可通行(没给的话「走过的路」用雷达的轨迹)。"""
     q = level(np.asarray(points, float), frames)
     t = level(np.asarray(sensor_traj, float), frames)
     ground = _Ground(t, _floor_height(q[:, 2], t[:, 2]), traj_margin, q)
@@ -388,10 +644,13 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
     gf = ((fl - lo) / res).astype(int)
     seen[gf[:, 1], gf[:, 0]] = True
     seen = _erode(_dilate(seen, 1), 1)                      # 闭运算:远处点稀,补上小洞
+    views, used = None, 0
     if scans is not None:
-        passes, _ = _raytrace_scans(scans, frames, lo, (H, W), res, (floor_clear, wall_top),
-                                    max_range, ground,
-                                    occ_h=(occ_lo.reshape(H, W), occ_hi.reshape(H, W)))
+        views = _Seen(H * W)
+        passes, used = _raytrace_scans(scans, frames, lo, (H, W), res, (floor_clear, wall_top),
+                                       max_range, ground,
+                                       occ_h=(occ_lo.reshape(H, W), occ_hi.reshape(H, W)),
+                                       seen=views)
     else:
         pc = ((t[:, :2] - lo) / res).astype(int)
         key = (pc[:, 0] // POSE_STRIDE_CELLS) * 100000 + (pc[:, 1] // POSE_STRIDE_CELLS)
@@ -402,16 +661,19 @@ def render(points: np.ndarray, sensor_traj: np.ndarray, frames: Frames, *, res: 
     occ_m = (occ >= 5) & (ratio > 0.25)
     free_m = ((passes >= 1) | seen) & ~occ_m
     free_m = _dilate(_erode(free_m, 2), 2)                  # 开运算:去掉细扇形
+    walked = np.zeros((H, W), bool)                         # 狗走过的路(身子中心;没给用雷达的)
+    path = body_path if body_path is not None and len(body_path) else t[:, :2]
+    pc = ((np.asarray(path, float)[:, :2] - lo) / res).astype(int)
+    pc = pc[(pc[:, 0] >= 0) & (pc[:, 0] < W) & (pc[:, 1] >= 0) & (pc[:, 1] < H)]
+    walked[pc[:, 1], pc[:, 0]] = True
     if body_path is not None and len(body_path):            # 狗的身子待过的地方
-        bc = ((np.asarray(body_path, float)[:, :2] - lo) / res).astype(int)
-        bc = bc[(bc[:, 0] >= 0) & (bc[:, 0] < W) & (bc[:, 1] >= 0) & (bc[:, 1] < H)]
-        body = np.zeros((H, W), bool)
-        body[bc[:, 1], bc[:, 0]] = True
-        body = _dilate(body, int(round(FOOTPRINT_M / res)))
+        body = _dilate(walked, int(round(FOOTPRINT_M / res)))
         free_m |= body
         occ_m &= ~body
     occ_m &= _dilate(free_m, int(0.5 / res))                # 只留贴着可通行区的障碍
     occ_m &= ~_surface(occ_m, free_m, res)                  # 墙只画看得见的那一面
+    if views is not None and used and (walked & free_m).any():
+        free_m = _see_through(free_m, views, walked, res)  # 透过玻璃、开口看到的假空地
     img = np.full((H, W), UNKNOWN, np.uint8)
     img[free_m] = FREE
     img[occ_m] = OCCUPIED

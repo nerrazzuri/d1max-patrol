@@ -429,24 +429,33 @@ def test_狗能过的门照样过得去_隔墙照样关着_规划只从门过(tm
         f"门框被射线削掉了:门画成 {max(below):.2f}–{min(above):.2f}(真的 {DOOR})"
 
 
-def test_从门里看到的后墙照样关着_墙外没有可通行(tmp_path):
-    """狗只在 A 屋里走,C 屋只从门里看过去:看到的后墙(x = 10)也不许打穿,墙外一格可通行都不许有。"""
-    f = _frames()
-    P, T, scans, body = _two_rooms(f, walk_x=(1.0, 4.0))
-    g = G.render(P, T, f, scans=scans, body_path=body)
+def _xy(g):
+    """栅格每一格格心的地图坐标 (X, Y)(跟 ``g.image`` 一样的形状)。"""
     h, w = g.image.shape
     xs = g.origin[0] + (np.arange(w) + 0.5) * g.res
     ys = g.origin[1] + (h - 1 - np.arange(h) + 0.5) * g.res
-    X, Y = np.meshgrid(xs, ys)
+    return np.meshgrid(xs, ys)
+
+
+def test_从门里看到的后墙照样关着_墙外没有可通行_没进去的屋子是不知道(tmp_path):
+    """狗只在 A 屋里走,C 屋只从门里看过去:看到的后墙(x = 10)也不许打穿,墙外一格可通行都不许有。
+    透过开口看到的假空地(2026-10-14,:func:`G._see_through`)以后,只从门里看过去、狗没进去的 C 屋
+    整间是「不知道」(门两边的隔墙就是开口的两边,跟一扇玻璃一样;这是那条规则认不出真假的地方,往
+    保守那边错);看到的那段后墙还是占据(这条规则不动占据);A 屋照样可通行。"""
+    f = _frames()
+    P, T, scans, body = _two_rooms(f, walk_x=(1.0, 4.0))
+    g = G.render(P, T, f, scans=scans, body_path=body)
+    X, Y = _xy(g)
     outside = (X > 10.12) | (X < -0.12) | (Y > 4.12) | (Y < -0.12)
     assert not (g.image[outside] == G.FREE).any(), "墙外有可通行的格"
-    seen = [y for y in np.arange(0.2, 3.9, 0.05) if g.cell_of(9.5, y) is not None
-            and g.image[g.cell_of(9.5, y)] == G.FREE]
-    assert len(seen) > 5, "从门里看过去 C 屋应该看到一片"
-    for y in seen:                                        # 看得到的那一段后墙是挡
-        row = [g.image[g.cell_of(x, y)] for x in np.arange(9.85, 10.2, 0.05)
-               if g.cell_of(x, y) is not None]
-        assert G.OCCUPIED in row, round(y, 2)
+    in_c = (X > 5.2) & ~outside
+    # 门上框只有 0.2 m(y 3.8–4.0),顺着 C 屋北墙擦过去看到的那一溜(两格高、不到半米)不算开口
+    assert (g.image[in_c] == G.FREE).sum() <= 25, "C 屋只从门里看到过"
+    assert not (g.image[in_c & ((X > 5.8) | (Y < 3.7))] == G.FREE).any(), "C 屋只从门里看到过"
+    back = (X > 9.85) & (X < 10.2) & (Y > DOOR[0] + 0.1) & (Y < DOOR[1] - 0.1)
+    assert (g.image[back] == G.OCCUPIED).sum() >= 15, "门对面那段后墙还是占据"
+    for x, y in ((2.5, 1.2), (4.5, 3.1), (1.0, 0.5), (4.6, 3.6)):
+        assert g.image[g.cell_of(x, y)] == G.FREE, (x, y)
 
 
 def test_只画一面不改哪里能走(monkeypatch):
@@ -533,3 +542,238 @@ def test_栅格放粗了_打到的那一格也不算穿过():
     row, at = _one_ray(0.2, 0.0125, 3.19)
     assert at(3.19) == 0, "打到的那一格"
     assert at(2.9) == 1
+
+
+# ------------------------------------------------------------ 透过玻璃看到的假空地(2026-10-14)
+
+def _wall(x0, y0, x1, y1, step=0.02):
+    """一段墙(地图平面,离地 0.8–1.6 m 五层)。"""
+    n = max(int(np.hypot(x1 - x0, y1 - y0) / step), 1)
+    t = np.linspace(0.0, 1.0, n, endpoint=False)
+    seg = np.c_[x0 + (x1 - x0) * t, y0 + (y1 - y0) * t]
+    return np.vstack([np.c_[seg, np.full(len(seg), h)] for h in np.linspace(0.8, 1.6, 5)])
+
+
+def _scene(frames, walls, floor, origins, visible=None, *, seed=13, sigma=0.02):
+    """逐帧扫描:每个雷达位置看得到的墙点(测距带 ``sigma`` 噪声)+ 地面点;``visible(o, pts)`` 回这一
+    帧看得到哪些点(默认全看得到)。点图 = 每三帧取一帧拼起来。回(点图, 雷达轨迹, 逐帧扫描)(都在
+    MOLA 系)。"""
+    L = np.asarray(frames.level_matrix())
+    rng = np.random.default_rng(seed)
+    scans, mapped = [], []
+    for i, o in enumerate(origins):
+        w = walls if visible is None else walls[visible(o, walls)]
+        fl = floor if visible is None else floor[visible(o, floor)]
+        d = w - o
+        r = np.hypot(d[:, 0], d[:, 1])[:, None]
+        noisy = o + d * (r + rng.normal(0.0, sigma, (len(w), 1))) / r
+        scans.append((o @ L, np.vstack([noisy, fl]) @ L))
+        if i % 3 == 0:
+            mapped.append(np.vstack([noisy[::2], fl[::2]]))
+    return np.vstack(mapped) @ L, np.asarray(origins) @ L, scans
+
+
+GLASS = (3.0, 5.5)                                         # 北墙上的玻璃(x),没有一个点
+
+
+def _glass_room(frames):
+    """8 × 6 m 的屋子(x 0–8、y 0–6),北墙 x 3.0–5.5 是玻璃(一个点都没有),外面 4 m 有一堵墙
+    (y = 10)、外面的地面也看得到 —— 只能从玻璃那儿看出去。狗沿 y = 2 从 x = 1 走到 7。"""
+    walls = np.vstack([_wall(0, 0, 8, 0), _wall(0, 0, 0, 6), _wall(8, 0, 8, 6),
+                       _wall(0, 6, GLASS[0], 6), _wall(GLASS[1], 6, 8, 6),
+                       _wall(-4, 10, 12, 10)])
+    rng = np.random.default_rng(17)
+    floor = np.vstack([np.c_[rng.uniform([0, 0], [8, 6], (24000, 2)), np.zeros(24000)],
+                       np.c_[rng.uniform([-4, 6.05], [12, 9.95], (40000, 2)), np.zeros(40000)]])
+
+    def visible(o, p):
+        out = p[:, 1] > 6.0                               # 屋外的:连线要从玻璃那一段穿过 y = 6
+        x6 = o[0] + (p[:, 0] - o[0]) * (6.0 - o[1]) / np.where(out, p[:, 1] - o[1], 1.0)
+        return ~out | ((x6 > GLASS[0]) & (x6 < GLASS[1]))
+
+    sx = np.linspace(1.0, 7.0, 50)
+    sensor = np.c_[sx, np.full(len(sx), 2.0), np.full(len(sx), 0.6)]
+    P, T, scans = _scene(frames, walls, floor, sensor, visible)
+    return P, T, scans, np.c_[sx - 0.4, np.full(len(sx), 2.0)]
+
+
+def _reachable(g, tmp_path, start):
+    """跟狗同一份代价图(膨胀到外接圆半径 + 余量)上,从 ``start`` 出发不碰致命格走得到的格心
+    [(x, y)]。"""
+    from d1max_contract.planning import costmap as cm
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    G.write(g, tmp_path / "floor")
+    c = cm.from_map_dir(tmp_path, robot_radius_m=cm.ROBOT_RADIUS_M + cm.INFLATE_MARGIN_M)
+    seed = np.zeros(c.shape, bool)
+    seed[c.cell_of(*start)] = True
+    ok = G._connected(~c.lethal, seed)
+    return [c.center(r, cc) for r, cc in zip(*np.nonzero(ok), strict=True)]
+
+
+def test_玻璃墙_外面看到的扇形是不知道_屋里照样可通行_规划穿不过玻璃(tmp_path, monkeypatch):
+    """现场 3d.18(10-13 C40221 办公室图):雷达穿过玻璃看到外面的墙和地面,玻璃本身没有点、画不出墙,
+    外面成了一大片扇形的「可通行」,而且跟屋里连着 —— 规划会从玻璃那儿穿出去。透过开口看到的格
+    (:func:`G._openings`:玻璃两边的墙就是开口的两边)改成「不知道」,切在玻璃那条线上。"""
+    f = _frames()
+    P, T, scans, body = _glass_room(f)
+    monkeypatch.setattr(G, "_see_through", lambda free, *a: free)
+    old = G.render(P, T, f, scans=scans, body_path=body)
+    X, Y = _xy(old)
+    assert ((old.image == G.FREE) & (Y > 7.0)).sum() * old.res ** 2 > 5.0, \
+        "没有这条规则时外面是一大片"
+    assert any(y > 6.6 for _, y in _reachable(old, tmp_path / "old", (4.0, 2.0))), \
+        "没有这条规则时规划能从玻璃穿出去"
+    monkeypatch.undo()
+    g = G.render(P, T, f, scans=scans, body_path=body)
+    X, Y = _xy(g)
+    assert not ((g.image == G.FREE) & (Y > 6.1)).any(), "玻璃外面一格可通行都不许有"
+    for x, y in ((4.25, 5.8), (1.0, 5.5), (7.0, 5.5), (4.0, 0.5), (0.5, 3.0)):
+        assert g.image[g.cell_of(x, y)] == G.FREE, ("屋里", x, y)
+    reach = _reachable(g, tmp_path / "new", (4.0, 2.0))
+    assert max(y for _, y in reach) < 6.0 - 0.5, "规划不许贴近、穿过玻璃那条线"
+    assert len(reach) > 0.8 * 6.9 * 4.9 / 0.01, "屋里规划走得到的地方没少"   # 0.1 m 格
+    for x in (1.0, 2.6, 7.0):                             # 墙还在(这条规则不动占据)
+        assert G.OCCUPIED in _column(g, x, 5.85, 6.15), x
+
+
+def test_大厅从好些地方都看得到_离路远也照样可通行():
+    """16 × 12 m 的大厅、几根细柱子(0.3 m,不够开口的「两边」),狗沿中线走一趟:离路 5 m 多的角落也是从
+    路上好些地方看到的,规则一格都不动(柱子影子里的除外,那几格本来就没扫到)。"""
+    f = _frames()
+    walls = [_wall(0, 0, 16, 0), _wall(0, 12, 16, 12), _wall(0, 0, 0, 12), _wall(16, 0, 16, 12)]
+    a = np.linspace(0, 2 * np.pi, 30, endpoint=False)
+    for px, py in ((4, 3), (8, 3), (12, 3), (4, 9), (8, 9), (12, 9)):
+        walls.append(np.vstack([np.c_[px + 0.15 * np.cos(a), py + 0.15 * np.sin(a), np.full(30, h)]
+                                for h in np.linspace(0.8, 1.6, 5)]))
+    rng = np.random.default_rng(19)
+    floor = np.c_[rng.uniform([0, 0], [16, 12], (60000, 2)), np.zeros(60000)]
+    sx = np.linspace(1.0, 15.0, 60)
+    sensor = np.c_[sx, np.full(len(sx), 6.0), np.full(len(sx), 0.6)]
+    P, T, scans = _scene(f, np.vstack(walls), floor, sensor)
+    body = np.c_[sx - 0.4, np.full(len(sx), 6.0)]
+    g = G.render(P, T, f, scans=scans, body_path=body)
+    for x, y in ((0.6, 0.6), (15.4, 11.4), (8.0, 0.5), (2.0, 11.5), (15.5, 6.0), (6.0, 1.0)):
+        assert g.image[g.cell_of(x, y)] == G.FREE, (x, y)
+    X, Y = _xy(g)
+    hall = (X > 0.2) & (X < 15.8) & (Y > 0.2) & (Y < 11.8)
+    assert (g.image[hall] == G.FREE).mean() > 0.97
+
+
+def test_走廊只从一头往里看过_离路_3_m_以外是不知道_墙还在():
+    """定下来的做法(2026-10-14):3 m × 14 m 的走廊,狗只在一头走了 2 m、一直往里看。墙都是连着的、
+    没有开口,可远处只从一个方向(:data:`G.VIEW_CONE_BINS` 份以内)看到过,跟从窄口看出去的扇形分不开
+    —— 离走过的路 :data:`G.VIEW_FAR_M` 以外改成「不知道」(往保守那边错);近处照样可通行,两边、
+    尽头的墙照样是占据。"""
+    f = _frames()
+    walls = np.vstack([_wall(0, 0, 14, 0), _wall(0, 3, 14, 3), _wall(0, 0, 0, 3),
+                       _wall(14, 0, 14, 3)])
+    rng = np.random.default_rng(23)
+    floor = np.c_[rng.uniform([0, 0], [14, 3], (30000, 2)), np.zeros(30000)]
+    sx = np.linspace(1.0, 3.0, 30)
+    sensor = np.c_[sx, np.full(len(sx), 1.5), np.full(len(sx), 0.6)]
+    P, T, scans = _scene(f, walls, floor, sensor)
+    body = np.c_[sx - 0.4, np.full(len(sx), 1.5)]
+    g = G.render(P, T, f, scans=scans, body_path=body)
+    for x, y in ((1.0, 0.5), (3.5, 2.5), (5.0, 1.5)):
+        assert g.image[g.cell_of(x, y)] == G.FREE, ("离路 3 m 以内", x, y)
+    X, Y = _xy(g)
+    far = (X > 7.0) & (X < 13.8) & (Y > 0.2) & (Y < 2.8)
+    assert not (g.image[far] == G.FREE).any(), "离路 3 m 以外、只从一个方向看到过"
+    assert G.OCCUPIED in _column(g, 10.0, -0.15, 0.15), "南墙"
+    assert G.OCCUPIED in _column(g, 10.0, 2.85, 3.15), "北墙"
+    assert G.OCCUPIED in [g.image[g.cell_of(x, 1.5)] for x in np.arange(13.8, 14.2, 0.05)
+                          if g.cell_of(x, 1.5) is not None], "尽头的墙"
+
+
+def _profile(pts):
+    """雷达在原点、平面上的障碍点 → 近处面(每个方位格最近的那个):(格号, 距离, 坐标),跟
+    :func:`G._raytrace_scans` 里一样的取法。"""
+    b = ((np.arctan2(pts[:, 1], pts[:, 0]) + np.pi) / (2 * np.pi) * G.SCAN_BINS).astype(int) \
+        % G.SCAN_BINS
+    r = np.hypot(pts[:, 0], pts[:, 1])
+    order = np.lexsort((r, b))
+    b, r, pts = b[order], r[order], pts[order]
+    first = np.r_[True, b[1:] != b[:-1]]
+    return b[first], r[first], pts[first]
+
+
+def _bin_of(x, y):
+    return int((np.arctan2(y, x) + np.pi) / (2 * np.pi) * G.SCAN_BINS) % G.SCAN_BINS
+
+
+def test_开口_两边是够长的面才算_零星的柱子_太宽_太近的不算():
+    """:func:`G._openings`,雷达在原点:前面 3 m 一堵墙(y = 3)中间开 1.6 m 的口子,口子后面 8 m 一堵墙
+    —— 口子里的方位格到开口线(y = 3)的距离对、墙那些方位没有开口;一排细柱子(0.1 m 宽,间隔 1.6 m)
+    不算;口子比 :data:`G.OPEN_MAX_M` 宽的不算;开口线离雷达不到 :data:`G.OPEN_MIN_DIST_M` 的不算
+    (狗站在门口)。"""
+    def scan(y, segs):
+        """y 处一排墙段 ``segs`` [(x0, x1)] + 后面 8 m 那堵墙从墙段之间看得到的部分。"""
+        front = [np.c_[xs, np.full_like(xs, y)] for xs in (np.arange(a, b, 0.01) for a, b in segs)]
+        xs = np.arange(-14, 14, 0.01)
+        x_at = xs * y / 8.0                                # 后墙的点跟雷达的连线在 y 处的 x
+        hidden = np.zeros(len(xs), bool)
+        for a, b in segs:
+            hidden |= (x_at >= a) & (x_at <= b)
+        back = np.c_[xs[~hidden], np.full(int((~hidden).sum()), 8.0)]
+        return G._openings(*_profile(np.vstack(front + [back])))
+
+    s = scan(3.0, [(-6, -0.8), (0.8, 6)])
+    for x in (-0.5, 0.0, 0.5):
+        k = _bin_of(x, 3.0)
+        assert abs(s[k] - np.hypot(x, 3.0)) < 0.05, (x, s[k])
+    assert np.isinf(s[_bin_of(-3.0, 3.0)]) and np.isinf(s[_bin_of(3.0, 3.0)]), "墙那儿没有开口"
+    assert np.isinf(s[_bin_of(0.0, -3.0)]), "背后没有东西"
+    assert np.isinf(scan(3.0, [(x, x + 0.1) for x in np.arange(-6, 6, 1.7)])).all(), "一排细柱子"
+    post = np.c_[np.arange(-0.1, 0.1, 0.01), np.full(20, 2.0)]   # 口子前面 1 m 一根柱子
+    b, r, q = _profile(np.vstack([np.c_[np.arange(-6, -0.8, 0.01), np.full(520, 3.0)],
+                                  np.c_[np.arange(0.8, 6, 0.01), np.full(520, 3.0)], post,
+                                  np.c_[np.arange(-2.1, 2.1, 0.01), np.full(420, 8.0)]]))
+    assert np.isinf(G._openings(b, r, q)[_bin_of(0.5, 3.0)]), "口子前面挡着东西的不算开口"
+    assert np.isfinite(scan(3.0, [(-9, -1.5), (1.5, 9)])[_bin_of(0.0, 3.0)]), "3 m 宽的口子算"
+    assert np.isinf(scan(3.0, [(-9, -2.0), (2.0, 9)])[_bin_of(0.0, 3.0)]), \
+        f"4 m 宽的口子(比 {G.OPEN_MAX_M} m 宽)不算"
+    assert np.isinf(scan(0.7, [(-3, -0.5), (0.5, 3)])[_bin_of(0.0, 3.0)]), \
+        "开口线离雷达太近(狗站在门口)"
+    assert np.isfinite(scan(1.2, [(-3, -0.8), (0.8, 3)])[_bin_of(0.0, 3.0)]), "67° 的口子算"
+    assert np.isinf(scan(1.2, [(-3, -1.0), (1.0, 3)])[_bin_of(0.0, 3.0)]), \
+        f"口子占的视角超过 {G.OPEN_MAX_DEG}°(80°)"
+
+
+def test_透过开口_掩码():
+    """直接在掩码上验 :func:`G._see_through`(一格 0.1 m;狗走过的路是第 5 行):
+
+    - 透过开口看到的票占 8 成以上 → 「不知道」;占 7 成的留着;离路 :data:`G.PROTECT_M` 以内的不动;
+    - 离路 3 m 以外、方向挤在 45° 以内 → 「不知道」;方向散开的、离路近的留着;
+    - 留下的可通行区里夹着的单格补回去;
+    - 跟路不连着的一块 → 「不知道」;占据、不知道的格不会变成可通行。"""
+    H, W, res = 60, 80, 0.1
+    free = np.zeros((H, W), bool)
+    free[2:50, 2:78] = True
+    free[54:58, 10:20] = True                             # 跟路不连着的一块
+    seed = np.zeros((H, W), bool)
+    seed[5, 5:75] = True
+    seen = G._Seen(H * W)
+    d, t, dirs = (a.reshape(H, W) for a in (seen.direct, seen.through, seen.dirs))
+    d[:] = 10
+    dirs[:] = 0xFF00FF                                     # 方向散开(两个反方向)
+    d[20:30, 10:20], t[20:30, 10:20] = 1, 9                # 9 成透过开口
+    d[20:30, 30:40], t[20:30, 30:40] = 3, 7                # 7 成
+    d[6:12, 40:50], t[6:12, 40:50] = 0, 10                 # 离路 0.1–0.6 m,透过开口
+    d[14:18, 40:50], t[14:18, 40:50] = 0, 10               # 离路 0.9–1.2 m,透过开口
+    dirs[40:48, 50:60] = 0b1111 << 8                       # 离路 3.5 m 以上,方向挤在 4 份里
+    dirs[20:28, 50:60] = 0b1111 << 8                       # 离路 1.5–2.2 m,方向挤着
+    d[35, 70], t[35, 70] = 0, 10                           # 单格(该补回去)
+    out = G._see_through(free, seen, seed, res)
+    assert not (out & ~free).any(), "不添可通行"
+    assert not out[21:29, 11:19].any() and out[20:30, 30:40].all()   # 去掉的那块四个角补回一格
+    assert out[6:12, 40:50].all(), "离路 0.8 m 以内的不动"
+    assert not out[15:17, 41:49].any(), "离路 0.8 m 以外的照样去掉"
+    assert not out[41:47, 51:59].any() and out[20:28, 50:60].all()
+    assert out[35, 70], "单格补回去"
+    assert not out[54:58, 10:20].any(), "不连着的一块"
+    gone = free[2:50, 2:78] & ~out[2:50, 2:78]
+    assert gone.sum() == 100 + 80 + 40 - 12, "别处一格不动"
+    one = np.zeros((41, 41), bool)                        # 离路远近近似圆:正方向 10 格、斜着 7 格
+    one[20, 20] = True
+    reach = G._geodesic(one, np.ones_like(one), 10)
+    assert reach[20, 30] and not reach[20, 31] and reach[27, 27] and not reach[28, 28]
