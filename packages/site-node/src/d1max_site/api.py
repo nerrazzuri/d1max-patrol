@@ -531,6 +531,8 @@ class _Handler(TlsHandlerMixin):
                 return self._recordings(method, path, user)
             if path == "/api/cameras" or _CAM.match(path):
                 return self._cameras(method, path, user)
+            if path == "/api/admin/maps" or path.startswith("/api/admin/maps/"):
+                return self._maps_admin(method, path, user)     # 地图管理页
             if path == "/api/maps" or _MAPCMD.match(path) or _MAPVIEW.match(path) \
                     or _ZONES.match(path):
                 return self._maps(method, path, user)
@@ -1778,32 +1780,8 @@ class _Handler(TlsHandlerMixin):
         try:
             if what == "map":
                 ref = cat.get(str(d.get("map_id", "")), str(d.get("version", "")))
-                if self.site.zones is not None and not self.site.zones.confirmed_current(ref.map_id,
-                                                                               ref.version):
-                    # W10(W08 决定 5):发布前人工确认水体、落差、陡坡、花坛都画成禁行区了
-                    raise HttpError(409, f"{ref.map_id}:{ref.version} 的禁行区还没确认(或改过之后"
-                                         "没重新确认):先在地图页画好、确认再下发",
-                                    extra={"reason": "zones_unconfirmed"})
-                kind, payload = "map_activate", ref.to_wire()
-                # 这台狗在这张图上的原点:站点原点表里的是权威(W13a),有就下发、盖过图里的 home.json
-                # (W00c6f 内审应修 4);没有才按图里带的。**都没有**(新建的图、新版本):默认不下发,
-                # 管理员明说 ``without_home: true`` 才发 —— 狗上没有原点,起飞前检查拒 goto、巡检,
-                # 遥控、设位置、「在这儿标原点」照常(标原点要狗先载上这张图,所以不能一律拒)。
-                # 待命点不顶替原点(W13a 外审阻断)。
-                home = self._home_on(robot_id, ref.map_id, ref.version)
-                without = d.get("without_home", False)
-                if not isinstance(without, bool):
-                    raise HttpError(400, "without_home 要是 true/false")
-                if home is not None:
-                    payload["home"] = home
-                elif not any(f.name == "home.json" for f in ref.files):
-                    if not without:
-                        raise HttpError(
-                            409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上还没有原点:下发之后狗"
-                                 "不接 goto、巡检,要先把狗开到原点(充电桩前)、设好位置、"
-                                 "「在这儿标原点」。确认要这样下发就带上 without_home",
-                            extra={"reason": "no_home"})
-                    self._audit_detail = {"without_home": True}
+                kind, payload = "map_activate", self._map_activate_payload(
+                    robot_id, ref, d.get("without_home", False))
             elif what == "mapping":
                 action, name = parse_mapping(d)
                 if len(name) > 40:
@@ -1833,6 +1811,41 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail |= {k: v for k, v in payload.items() if k != "files"}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
+
+    def _maps_admin(self, method: str, path: str, user) -> None:
+        """地图管理页(管理员):见 ``maps_admin_api``。"""
+        from d1max_site.maps_admin_api import handle
+        handle(self, method, path, user)
+
+    def _map_activate_payload(self, robot_id: str, ref: Any, without: Any) -> dict[str, Any]:
+        """给这台狗下发 ``ref`` 这一版的 ``map_activate`` 载荷;发布条件不满足抛 :class:`HttpError`。
+        ``POST /api/robots/<id>/map`` 和地图管理页(``maps_admin_api``)共用同一套条件。"""
+        if self.site.zones is not None and not self.site.zones.confirmed_current(ref.map_id,
+                                                                       ref.version):
+            # W10(W08 决定 5):发布前人工确认水体、落差、陡坡、花坛都画成禁行区了
+            raise HttpError(409, f"{ref.map_id}:{ref.version} 的禁行区还没确认(或改过之后"
+                                 "没重新确认):先在地图页画好、确认再下发",
+                            extra={"reason": "zones_unconfirmed"})
+        payload = ref.to_wire()
+        # 这台狗在这张图上的原点:站点原点表里的是权威(W13a),有就下发、盖过图里的 home.json
+        # (W00c6f 内审应修 4);没有才按图里带的。**都没有**(新建的图、新版本):默认不下发,
+        # 管理员明说 ``without_home: true`` 才发 —— 狗上没有原点,起飞前检查拒 goto、巡检,
+        # 遥控、设位置、「在这儿标原点」照常(标原点要狗先载上这张图,所以不能一律拒)。
+        # 待命点不顶替原点(W13a 外审阻断)。
+        home = self._home_on(robot_id, ref.map_id, ref.version)
+        if not isinstance(without, bool):
+            raise HttpError(400, "without_home 要是 true/false")
+        if home is not None:
+            payload["home"] = home
+        elif not any(f.name == "home.json" for f in ref.files):
+            if not without:
+                raise HttpError(
+                    409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上还没有原点:下发之后狗"
+                         "不接 goto、巡检,要先把狗开到原点(充电桩前)、设好位置、"
+                         "「在这儿标原点」。确认要这样下发就带上 without_home",
+                    extra={"reason": "no_home"})
+            self._audit_detail = {"without_home": True}
+        return payload
 
     def _zones(self, method: str, map_id: str, version: str, what: str, user) -> None:
         """禁行区、限速区(W10):``GET`` 看(``view``);``POST`` 整份改(``manage``,带 ``base_revision``,

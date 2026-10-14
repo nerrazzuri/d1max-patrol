@@ -1,0 +1,24 @@
+/* 地图管理页(mapmgmt.tsx)。只用现有的颜色令牌;状态不靠颜色单独表达(文字、符号都带)。 */
+.mm-map { padding: 8px 16px 16px; }
+.mm-mapid { font-size: 16px; margin: 8px 0; }
+.mm-vers { display: flex; flex-direction: column; gap: 12px; }
+.mm-ver { display: flex; gap: 16px; padding: 12px; border: 1px solid var(--c-outline); border-radius: var(--r-r8); background: var(--c-surface); }
+.mm-thumb { flex: none; width: 120px; height: 120px; object-fit: contain; background: var(--c-mapBg); border-radius: var(--r-r8); }
+.mm-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.mm-body h3 { margin: 0; font-size: 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.mm-tag { font-size: 12px; font-weight: 700; padding: 1px 8px; border: 1px solid var(--c-textMuted); border-radius: 999px; }
+.mm-notebox { display: flex; gap: 8px; align-items: center; }
+.mm-notebox input { flex: 1 1 auto; min-width: 0; height: 36px; padding: 0 8px; border-radius: var(--r-r8); border: 1px solid var(--c-textMuted); background: var(--c-surface); color: var(--c-text); font: inherit; font-size: 14px; }
+.mm-build, .mm-counts, .mm-dogs-on { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.mm-chip { display: inline-block; margin-left: 4px; padding: 0 8px; border: 1px solid var(--c-outline); border-radius: 999px; }
+.mm-actions { flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.mm-dogs .mm-run { display: flex; flex-direction: column; gap: 2px; }
+.mm-act.failed b, .mm-act.timeout b { color: var(--c-warning); }
+.mm-results { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mm-results .bad { color: var(--c-warning); }
+.mm-caveat { margin: 0 0 8px; padding: 8px 12px; border-left: 4px solid var(--c-textMuted); background: var(--c-surfaceVariant); }
+.mm-misaligned { margin: 0 0 8px; padding: 8px 12px; border: 2px solid var(--c-error); border-radius: var(--r-r8); font-weight: 600; }
+.mm-diffimg { display: block; max-width: 100%; max-height: 62vh; margin: 8px auto; background: #fff; border: 1px solid var(--c-outline); image-rendering: pixelated; }
+.mm-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.mm-sw { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; border: 1px solid var(--c-textMuted); }
+@media (max-width: 720px) { .mm-ver { flex-direction: column; } .mm-thumb { width: 100%; height: 160px; } }

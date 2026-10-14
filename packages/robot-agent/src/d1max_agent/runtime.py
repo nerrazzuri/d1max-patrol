@@ -500,6 +500,7 @@ class AgentRuntime:
             rev = canonical_digest(cmd.payload.get("mission"))
         self._last_patrol = {"task_id": cmd.task_id, "mission": mission.mission,
                              "map_version": mission.map_version, "rev": rev}
+        # 不马上重发能力(巡检起跑的路径上不加事):站点在下一次能力发布时看到(换图、区域改、重连)
 
     def _admit(self, cmd: Command) -> str:
         """发件箱满了(盘到停止水位或发件箱到上限)不接巡检 —— 绝不删没传完的来腾地方。
@@ -1457,7 +1458,8 @@ class AgentRuntime:
             if state == "rejected":
                 return f"定位器不收这张图的先验:{why}"[:200]
             if loop.time() >= deadline:
-                return (f"定位器 {PRIOR_ACK_WAIT_S:g} s 没确认这张图的先验" + (f"({why})" if why else ""))[:200]
+                tail = f"({why})" if why else ""
+                return f"定位器 {PRIOR_ACK_WAIT_S:g} s 没确认这张图的先验{tail}"[:200]
             await asyncio.sleep(PRIOR_ACK_POLL_S)
 
     async def _revert_map(self, old, old_prev, old_home) -> bool:
