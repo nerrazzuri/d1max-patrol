@@ -343,10 +343,11 @@ def _column(g, x, y0, y1):
     return g.image[[r - k for k in range(n + 1) if r - k >= 0], c]
 
 
-def test_墙有测距噪声_只画朝空地的那一面_不超过两格厚_一格不缺():
+def test_墙有测距噪声_只画朝空地的那一面_一格厚_一格不缺():
     """2026-10-14 办公室图墙厚中位数 0.20 m、p90 0.55 m(一格 0.05 m):射线停在打到的点前 0.1 m,
     墙面前那两格的噪点从来没有射线穿过;墙背后抖出来的点打不到射线,比例永远是 1。雷达只看得到墙朝着
-    它的那一面:留两层。"""
+    它的那一面:只留一层(用户 2026-10-14 嫌两层还是厚)。直墙带 2 cm 测距噪声、3 cm 位姿误差,每一列
+    都还有墙、墙面没挪、最厚一格。"""
     f = _frames()
     P, T, scans, body = _two_rooms(f)
     g = G.render(P, T, f, scans=scans, body_path=body)
@@ -361,7 +362,7 @@ def test_墙有测距噪声_只画朝空地的那一面_不超过两格厚_一�
         first = int(np.argmax(occ))                       # 从屋里往外第一个占据格
         assert (col[:first] == G.FREE).all(), ("墙前面不是可通行", round(x, 2))
         assert abs(3.6 + first * g.res - 4.0) <= 0.1, ("墙面挪了", round(x, 2), first)
-    assert max(thick) <= 2, f"北墙最厚 {max(thick)} 格(各厚度的列数 {np.bincount(thick)})"
+    assert max(thick) <= 1, f"北墙最厚 {max(thick)} 格(各厚度的列数 {np.bincount(thick)})"
 
 
 SPECKS = ((2.6, 5.89), (3.0, 5.89), (3.4, 5.89))           # 墙面前 11 cm 的噪点(测距拖尾、多次反射)
@@ -464,11 +465,12 @@ def test_只画一面不改哪里能走(monkeypatch):
 def test_只画一面_墙后面的去掉_隔着不知道看得到的墙不剥_另一堵墙不动():
     """直接在掩码上验(:func:`_surface`):
 
-    - 贴着可通行区的 8 格厚墙只留两层;
+    - 贴着可通行区的 8 格厚墙只留一层(:data:`SURFACE_LAYERS`);
     - 跟可通行区隔着 6 格「不知道」、只有墙头贴着可通行区的走廊墙(擦着看过去的那种):只走占据格得从
-      墙头沿着墙身一路数下去,哪儿都「深」,可它朝走廊那两层隔着「不知道」就看得到可通行区,整段留着,
+      墙头沿着墙身一路数下去,哪儿都「深」,可它朝走廊那一层隔着「不知道」就看得到可通行区,整段留着,
       只剥它背面 —— 2026-10-14 只留贴着可通行区那一层的试法,在办公室图上丢过一整段这样的墙;
-    - 一堵两格厚的墙后面隔一道缝的另一堵墙(玻璃后面的墙、重影):只走占据格够不着,不动。"""
+    - 一堵两格厚的墙后面隔一道缝的另一堵墙(玻璃后面的墙、重影):只走占据格够不着,不动;两格厚的那堵
+      自己只留朝空地那一层。"""
     H, W = 40, 80
     free = np.zeros((H, W), bool)
     occ = np.zeros((H, W), bool)
@@ -480,9 +482,9 @@ def test_只画一面_墙后面的去掉_隔着不知道看得到的墙不剥_�
     drop = G._surface(occ, free, 0.05)
     assert not (drop & ~occ).any(), "只动占据格"
     kept = occ & ~drop
-    assert kept[10:12, 0:30].all() and not kept[12:18, 2:28].any(), "厚墙留两层"
-    assert kept[16:18, 30:72].all(), "走廊墙朝走廊的两层整段留着"
-    assert not kept[18:20, 34:56].any(), "走廊墙的背面去掉(墙头那一截看得到墙头外面,留着)"
+    assert kept[10, 0:30].all() and not kept[11:18, 2:28].any(), "厚墙留一层"
+    assert kept[16, 30:72].all(), "走廊墙朝走廊的那一层整段留着"
+    assert not kept[17:20, 34:56].any(), "走廊墙的背面去掉(墙头那一截看得到墙头外面,留着)"
     free = np.zeros((H, W), bool)
     occ = np.zeros((H, W), bool)
     free[0:10, :] = True
@@ -491,7 +493,8 @@ def test_只画一面_墙后面的去掉_隔着不知道看得到的墙不剥_�
     occ[10:18, 60:80] = True                              # 旁边一堵 8 格厚的
     kept = occ & ~G._surface(occ, free, 0.05)
     assert kept[15:18, 0:50].all(), "隔着缝的另一堵墙不动"
-    assert kept[10:12, 60:80].all() and not kept[12:18, 62:78].any(), "厚的那堵照样留两层"
+    assert kept[10, 0:50].all() and not kept[11, 2:48].any(), "两格厚的那堵只留朝空地那一层"
+    assert kept[10, 60:80].all() and not kept[11:18, 62:78].any(), "厚的那堵照样留一层"
 
 
 def _one_ray(res, x0, hit_x):
