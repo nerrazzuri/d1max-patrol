@@ -19,3 +19,7 @@ d1max-loc = "d1max_localizer.tools:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# 建图回环用的 MOLA 管线配置(build.py 按包内路径找):不声明的话装成 wheel 时不带,狗上回环每次都退回
+[tool.setuptools.package-data]
+d1max_localizer = ["pipelines/*.yaml"]
