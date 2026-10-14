@@ -1,0 +1,90 @@
+# sm2mm pipeline (d1max_localizer.build, docs/建图回环.md): a loop-closed simplemap -> localisation
+# prior with the same layer name and class as the final local map MOLA lidar odometry saves
+# (MOLA_SAVE_MM, "localmap": mola::KeyframePointCloudMap), one keyframe per simplemap keyframe.
+# Map options and per-scan filters follow mola_lidar_odometry 3.2 pipelines/lidar3d-default.yaml
+# (range cut, linear deskew with the stored twist, adaptive 0.15 m decimation to ~10k points); in
+# sm2mm the generator already puts the points in map coordinates, hence points_already_global and
+# input_layer_in_local_coordinates: false. sm2mm reads plain YAML: no ${ENV|default} here.
+generators:
+  - class_name: mp2p_icp_filters::Generator
+    params:
+      target_layer: "raw"
+      throw_on_unhandled_observation_class: false
+      process_class_names_regex: "mrpt::obs::CObservationPointCloud"
+      process_sensor_labels_regex: ".*"
+
+  - class_name: mp2p_icp_filters::Generator
+    params:
+      name: "generator_localmap"
+      target_layer: "localmap"
+      throw_on_unhandled_observation_class: false
+      process_class_names_regex: ""
+      metric_map_definition:
+        class: mola::KeyframePointCloudMap
+        plugin: "libmola_metric_maps.so"
+        creationOpts:
+          k_correspondences_for_cov: 20
+          min_correspondences_for_cov: 5
+          max_distance_for_cov: 2.0
+          # 3 in lidar3d-default. The simplemap has ~1/3 of the local map's keyframes (office-1:
+          # 163 vs 456), and with 3 the other-session replay got worse than MOLA's own map (ICP
+          # quality p5 0.955 -> 0.936); 4 -> 0.962, 5 -> 0.981, 6 -> 0.986, at MOLA per-frame p95
+          # 29 / 33 / 39 ms vs 26 ms on MOLA's own map (desktop). The map keeps these options: the
+          # localizer uses them when it loads it.
+          max_search_keyframes: 4
+          use_view_direction_filter: true
+          max_view_angle_deg: 120
+          rotation_distance_weight: 2.0
+          num_diverse_keyframes: 1
+          approximate_cov: false
+        insertOpts:
+          remove_frames_farther_than: 0
+        likelihoodOpts: ~
+        renderOpts: ~
+
+filters:
+  - class_name: mp2p_icp_filters::FilterAdjustTimestamps
+    params:
+      pointcloud_layer: "raw"
+      silently_ignore_no_timestamps: true
+      method: "TimestampAdjustMethod::MiddleIsZero"
+
+  - class_name: mp2p_icp_filters::FilterByRange
+    params:
+      input_pointcloud_layer: "raw"
+      output_layer_between: "raw_range_filtered"
+      range_min: 1.0
+      range_max: 60.0
+      metric_l_infinity: true
+      center: [robot_x, robot_y, robot_z]
+
+  - class_name: mp2p_icp_filters::FilterDeskew
+    params:
+      input_pointcloud_layer: "raw_range_filtered"
+      output_pointcloud_layer: "deskewed"
+      method: "MotionCompensationMethod::Linear"
+      silently_ignore_no_timestamps: true
+      output_layer_class: "mrpt::maps::CGenericPointsMap"
+      twist: [vx, vy, vz, wx, wy, wz]
+      points_already_global: true
+      robot_pose: [robot_x, robot_y, robot_z, robot_yaw, robot_pitch, robot_roll]
+
+  - class_name: mp2p_icp_filters::FilterDecimateAdaptive
+    params:
+      input_pointcloud_layer: "deskewed"
+      output_pointcloud_layer: "decimated_for_map"
+      voxel_size: 0.15
+      desired_output_point_count: 10000
+      maximum_voxel_stride: 0
+      decimate_method: "DecimateMethod::FirstPoint"
+
+  - class_name: mp2p_icp_filters::FilterMerge
+    params:
+      input_pointcloud_layer: "decimated_for_map"
+      target_layer: "localmap"
+      input_layer_in_local_coordinates: false
+      robot_pose: [robot_x, robot_y, robot_z, robot_yaw, robot_pitch, robot_roll]
+
+  - class_name: mp2p_icp_filters::FilterDeleteLayer
+    params:
+      pointcloud_layer_to_remove: ["raw", "raw_range_filtered", "deskewed", "decimated_for_map"]

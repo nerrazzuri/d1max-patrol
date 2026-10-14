@@ -64,6 +64,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     b.add_argument("--reuse", action="store_true", help="用 --work 里已有的 MOLA 输出,只打包")
     b.add_argument("--rtk-antenna", type=lambda s: _floats(s, 2), default=(0.0, 0.0),
                    help="RTK 天线在狗身上的水平位置(朝前,朝左,米;W09e 配经纬度用,真机量)")
+    b.add_argument("--loop-closure", default="auto",
+                   help="回环(可选,docs/建图回环.md):auto = 找得到回环工具就跑(环境变量 "
+                        "D1MAX_LOOP_CLOSURE、PATH、/opt/d1max/loop-closure),off = 不跑,或者给"
+                        "mola-sm-lc-cli 的路径")
     cr = sub.add_parser("calibrate-rear", help="标后雷达外参(W09i)")
     cr.add_argument("--bag", type=Path, required=True)
     cr.add_argument("--traj", type=Path, required=True,
@@ -164,9 +168,12 @@ def _build(a: argparse.Namespace) -> int:
     from d1max_localizer import build
     work = a.work or a.out.with_name(a.out.name + ".work")
     timings = {} if a.reuse else build.run_mapping(a.bag, work, lidar_topic=a.lidar_topic)
+    lc = build.find_loop_closure(a.loop_closure)
+    print(f"回环工具:{lc or '没有(不回环)'}")
     files = build.package(work, a.out, prior_pack=build.PriorPack.parse(a.prior_pack),
                           source=f"bag:{a.bag.name}", timings=timings, bag=a.bag,
-                          lidar_topic=a.lidar_topic, rtk_antenna=tuple(a.rtk_antenna))
+                          lidar_topic=a.lidar_topic, rtk_antenna=tuple(a.rtk_antenna),
+                          loop_closure=lc)
     print(json.dumps(json.loads((a.out / "build.json").read_text()), ensure_ascii=False,
                      indent=2))
     print("文件:", ", ".join(files))

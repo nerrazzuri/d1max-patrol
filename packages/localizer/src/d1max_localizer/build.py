@@ -14,6 +14,12 @@
 两步::func:`run_mapping` 用 MOLA 命令行在录包上建图(雷达里程计 + 存局部地图、轨迹、simplemap;边走
 边建的 W09c2 用在线跑出来的同样三样);:func:`package` 把这三样打成版本文件。MOLA 的命令都经 ``run``
 调(测试换成假的)。点云、栅格要 numpy(狗上用 ROS 系统 Python 里 apt 装的那份)。
+
+**回环(可选,docs/建图回环.md)**:雷达里程计走一圈回到起点会差一点(漂移),同一面墙就画成两层。装了
+回环工具(``mola_sm_loop_closure`` 的 ``mola-sm-lc-cli``,:func:`find_loop_closure`)就在打包前先跑
+:func:`loop_close`:simplemap 进、改过关键帧位姿的 simplemap 出;再从它重出点云、先验(``sm2mm`` +
+``pipelines/prior-from-simplemap.yaml``),轨迹按关键帧的改动挪(:func:`correct_traj`),打包用这三样。
+没装、跑不成、没找到回环、改得离谱,都照原来的打包,``build.json`` 的 ``loop_closure`` 写着为什么。
 """
 
 from __future__ import annotations
@@ -22,10 +28,11 @@ import glob
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -53,6 +60,25 @@ SCAN_TOPIC = "/front_lidar"
 FRONT_FRAME_TOPICS = (SCAN_TOPIC, "/d1max/merged_lidar")
 FILES = GEOMETRY_FILES
 Runner = Callable[..., Any]
+
+#: 回环工具的命令名;找法见 :func:`find_loop_closure`。
+LC_CLI = "mola-sm-lc-cli"
+#: 环境变量:给回环工具的路径,或者 ``off`` 不回环。
+LC_ENV = "D1MAX_LOOP_CLOSURE"
+#: 自己编的回环工具装在这儿(docs/建图回环.md:colcon ``--merge-install`` 装到这个前缀)。
+LC_DEFAULT = Path("/opt/d1max/loop-closure/bin") / LC_CLI
+PIPELINES = Path(__file__).with_name("pipelines")
+#: 回环的参数(从上游 3D GICP 那份改的,改了什么写在文件头)。
+LC_PIPELINE = PIPELINES / "loop-closure.yaml"
+#: 从回环后的 simplemap 重出定位先验(跟 MOLA 建图存的局部地图同一个图层、同一个类)。
+PRIOR_PIPELINE = PIPELINES / "prior-from-simplemap.yaml"
+#: 回环把关键帧挪得超过 max(这么多米, 路程 × 这个比例),或者转得超过这么多度,就不用(多半是认错了
+#: 地方的回环把图拉歪了)。只拦得住离谱的;办公室三份图(23–27 m)实测挪 0.06–0.24 m、转 0.7–2.3°。
+LC_MAX_SHIFT_M = 1.0
+LC_MAX_SHIFT_SHARE = 0.05
+LC_MAX_TURN_DEG = 15.0
+_LC_COUNT = re.compile(r"(?:Overall number of accepted loop-closures|Total accepted loop closures)"
+                       r":\s*(\d+)")
 
 
 class BuildError(RuntimeError):
@@ -125,9 +151,12 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
             bag: Path | None = None, lidar_topic: str = SCAN_TOPIC,
             read_scans: Callable[..., Iterator[Any]] | None = None,
             rtk_antenna: tuple[float, float] = (0.0, 0.0),
-            clock_offset: Callable[[Path, str], float | None] | None = None) -> list[str]:
+            clock_offset: Callable[[Path, str], float | None] | None = None,
+            loop_closure: str | None = None) -> list[str]:
     """``work`` 里的 ``raw_prior.mm``、``traj.tum``、``map.simplemap`` → ``out`` 里的版本文件。回
-    文件名。给了 ``bag``(建图的那个录包)就从里面逐帧读扫描打真射线。"""
+    文件名。给了 ``bag``(建图的那个录包)就从里面逐帧读扫描打真射线。``loop_closure`` 是回环工具
+    的路径(:func:`find_loop_closure`;None = 不回环):先回环(:func:`loop_close`),成了就从
+    ``work/lc`` 里回环后的三样打包。"""
     prior_pack = prior_pack or PriorPack()
     import numpy as np
 
@@ -138,11 +167,16 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
             raise BuildError(f"建图没出 {name}")
     out.mkdir(parents=True, exist_ok=True)
     timings = dict(timings or {})
-    traj = read_tum(work / "traj.tum")
-    if len(traj) < 10:
-        raise BuildError(f"建图轨迹只有 {len(traj)} 帧,太短")
+    n = len(read_tum(work / "traj.tum"))
+    if n < 10:
+        raise BuildError(f"建图轨迹只有 {n} 帧,太短")
     t0 = time.monotonic()
-    points = _points(work, run)
+    src, lc_info = loop_close(work, loop_closure, run)
+    if lc_info["ran"]:
+        timings["loop_closure_s"] = round(time.monotonic() - t0, 1)
+    traj = read_tum(src / "traj.tum")
+    t0 = time.monotonic()
+    points = _points(src, run)
     timings["points_s"] = round(time.monotonic() - t0, 1)
     sensor = np.array([p for _, p, _ in traj])
     frames, why = orient(points, traj)
@@ -158,7 +192,7 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
     grid.write(g, out / "floor")
     timings["grid_s"] = round(time.monotonic() - t0, 1)
     t0 = time.monotonic()
-    _pack_prior(work / "raw_prior.mm", out / "prior.mm", prior_pack, run, work)
+    _pack_prior(src / "raw_prior.mm", out / "prior.mm", prior_pack, run, src)
     timings["prior_s"] = round(time.monotonic() - t0, 1)
     cov = coverage(traj, frames)
     (out / "coverage.json").write_text(json.dumps({"version": 1, "step_m": COVERAGE_STEP_M,
@@ -173,9 +207,187 @@ def package(work: Path, out: Path, *, prior_pack: PriorPack | None = None,
         prior_pack.label(), "frames": why, "frames_count": len(traj),
         "grid": {"res": g.res, "size": list(g.image.shape[::-1]), "origin": list(g.origin),
                  "rays": rays},
-        "mola": _mola_info(work), "geo": geo_info, "timings_s": timings}, ensure_ascii=False,
-        indent=2) + "\n")
+        "mola": _mola_info(work), "loop_closure": lc_info, "geo": geo_info, "timings_s": timings},
+        ensure_ascii=False, indent=2) + "\n")
     return files
+
+
+def find_loop_closure(setting: str = "auto", *, env: Mapping[str, str] | None = None,
+                      which: Callable[[str], str | None] = shutil.which,
+                      default: Path = LC_DEFAULT) -> str | None:
+    """回环工具在哪(没有是 None —— 回环是可选的一步,找不到就不回环,不报错)。``setting``:``off``
+    不回环;``auto`` 依次看环境变量 :data:`LC_ENV`(路径或 ``off``)、``PATH``(apt 装进
+    ``/opt/ros/humble/bin`` 的那种)、:data:`LC_DEFAULT`(自己编、装在自己前缀下的);别的当路径。给的
+    路径不是能跑的程序也当没有。"""
+    env = os.environ if env is None else env
+    if setting == "auto":
+        setting = env.get(LC_ENV, "").strip() or "auto"
+    if setting == "off":
+        return None
+    if setting != "auto":
+        return setting if _executable(Path(setting)) else None
+    found = which(LC_CLI)
+    if found:
+        return found
+    return str(default) if _executable(default) else None
+
+
+def _executable(p: Path) -> bool:
+    return p.is_file() and os.access(p, os.X_OK)
+
+
+class _NoLoopClosure(Exception):
+    """回环这一步不用了(说人话的原因):退回原来的打包。"""
+
+
+def loop_close(work: Path, cli: str | None, run: Runner = subprocess.run
+               ) -> tuple[Path, dict[str, Any]]:
+    """回环(可选):``work/map.simplemap`` → 回环工具 → ``work/lc/map.simplemap``;导出前后的关键帧
+    位姿(``sm-cli export-keyframes``),轨迹按它挪(:func:`correct_traj`),从回环后的 simplemap 重出
+    先验(``sm2mm``)。回 ``(打包用哪个目录, build.json 的 loop_closure)``:成了是 ``work/lc``,不成
+    (没有工具、跑不成、没找到回环、挪得太多)是 ``work`` 原样。"""
+    if not cli:
+        return work, {"ran": False, "why": f"没有回环工具({LC_CLI})"}
+    lc = work / "lc"
+    shutil.rmtree(lc, ignore_errors=True)
+    lc.mkdir(parents=True)
+    info: dict[str, Any] = {"ran": True, "used": False, "cli": cli, "version": _lc_version(cli),
+                            "pipeline": str(LC_PIPELINE)}
+    timings: dict[str, float] = {}
+    info["timings_s"] = timings
+    try:
+        _loop_close(work, lc, cli, run, info, timings)
+    except (_NoLoopClosure, BuildError) as exc:
+        info["why"] = str(exc)[:400]
+        return work, info
+    except Exception as exc:  # noqa: BLE001 —— 可选的一步:出什么错都退回原来的打包,记下来
+        info["why"] = f"回环出错: {type(exc).__name__}: {exc}"[:400]
+        return work, info
+    info["used"] = True
+    return lc, info
+
+
+def _loop_close(work: Path, lc: Path, cli: str, run: Runner, info: dict[str, Any],
+                timings: dict[str, float]) -> None:
+    prefix = Path(cli).parent.parent
+    env = {**os.environ, "LD_LIBRARY_PATH": ":".join(
+        p for p in (str(prefix / "lib"), os.environ.get("LD_LIBRARY_PATH", "")) if p)}
+    t0 = time.monotonic()
+    # 它往当前目录写调试文件(sm_lc__initial.tum、sm_lc__final.tum;参数文件管不了):在 lc/ 里跑
+    _run(run, [cli, "-i", str(work / "map.simplemap"), "-o", str(lc / "map.simplemap"),
+               "-p", str(LC_PIPELINE)], env, lc / "lc.log", "回环", cwd=lc)
+    timings["lc_s"] = round(time.monotonic() - t0, 1)
+    counts = _LC_COUNT.findall((lc / "lc.log").read_text(errors="replace"))
+    if not counts:
+        raise _NoLoopClosure("回环日志里没有回环数(工具的版本不对?)")
+    info["closures"] = int(counts[-1])
+    if not info["closures"]:
+        raise _NoLoopClosure("没找到回环")
+    if not (lc / "map.simplemap").is_file():
+        raise _NoLoopClosure("回环没出 simplemap")
+    t0 = time.monotonic()
+    for name, sm in (("kf_before.tum", work / "map.simplemap"),
+                     ("kf_after.tum", lc / "map.simplemap")):
+        _run(run, ["sm-cli", "export-keyframes", str(sm), "--output", str(lc / name)], None,
+             lc / "sm-cli.log", "导出关键帧")
+    before, after = read_tum(lc / "kf_before.tum"), read_tum(lc / "kf_after.tum")
+    fixed = correct_traj(read_tum(work / "traj.tum"), before, after)
+    timings["keyframes_s"] = round(time.monotonic() - t0, 1)
+    info.update(_shifts(before, after))
+    limit = max(LC_MAX_SHIFT_M, LC_MAX_SHIFT_SHARE * info["path_m"])
+    if info["max_shift_m"] > limit or info["max_turn_deg"] > LC_MAX_TURN_DEG:
+        raise _NoLoopClosure(
+            f"回环把关键帧挪得太多(最多 {info['max_shift_m']:.2f} m / {info['max_turn_deg']:.1f}°,"
+            f"上限 {limit:.2f} m / {LC_MAX_TURN_DEG:g}°):多半认错了地方,不用")
+    (lc / "traj.tum").write_text("".join(
+        f"{t:.6f} " + " ".join(f"{v:.6f}" for v in (*p, *q)) + "\n" for t, p, q in fixed))
+    t0 = time.monotonic()
+    _run(run, ["sm2mm", *_plugin(), "-i", str(lc / "map.simplemap"), "-o",
+               str(lc / "raw_prior.mm"), "-p", str(PRIOR_PIPELINE), "--no-progress-bar"], None,
+         lc / "prior.log", "从回环后的 simplemap 出先验")
+    timings["prior_s"] = round(time.monotonic() - t0, 1)
+    if not (lc / "raw_prior.mm").is_file():
+        raise _NoLoopClosure("从回环后的 simplemap 出先验没出文件")
+
+
+def _lc_version(cli: str) -> str:
+    """回环工具的版本:我们编的记在 ``share/mola_sm_loop_closure/d1max-build.txt``(源码的提交号;
+    ``package.xml`` 里的版本号跟提交对不上),没有就看 ``package.xml``。"""
+    share = Path(cli).parent.parent / "share" / "mola_sm_loop_closure"
+    try:
+        return (share / "d1max-build.txt").read_text().strip().splitlines()[0][:120]
+    except (OSError, IndexError):
+        pass
+    try:
+        m = re.search(r"<version>([^<]+)</version>", (share / "package.xml").read_text())
+    except OSError:
+        m = None
+    return m.group(1) if m else "?"
+
+
+Pose = tuple[float, tuple[float, float, float], tuple[float, float, float, float]]
+
+
+def correct_traj(traj: Sequence[Pose], before: Sequence[Pose], after: Sequence[Pose]
+                 ) -> list[Pose]:
+    """轨迹按关键帧的改动挪:关键帧 k 的改动 ``C_k = T_after_k · T_before_k⁻¹``(左乘);一帧落在关键帧
+    k、k+1 之间,两边各自挪一份(``C_k·T``、``C_{k+1}·T``),位置按时刻线性插、朝向按时刻插(四元数
+    nlerp,相邻两个改动差得很小)。第一个关键帧之前跟第一个、最后一个之后跟最后一个。关键帧前后对不上
+    (个数、时刻)报 :class:`BuildError`。"""
+    import numpy as np
+
+    from d1max_localizer.frames import mat_to_quat, quat_to_mat
+
+    if not before or len(before) != len(after) or any(
+            abs(a[0] - b[0]) > 1e-3 for a, b in zip(before, after, strict=True)):
+        raise BuildError(f"回环前后的关键帧对不上({len(before)} 个 / {len(after)} 个)")
+    stamps = np.array([t for t, _, _ in before])
+    corr = []
+    for (_, pb, qb), (_, pa, qa) in zip(before, after, strict=True):
+        R = np.array(quat_to_mat(qa)) @ np.array(quat_to_mat(qb)).T
+        corr.append((R, np.array(pa, float) - R @ np.array(pb, float)))
+
+    def moved(k: int, p: Any, Rp: Any) -> tuple[Any, Any]:
+        R, t = corr[k]
+        q = np.array(mat_to_quat(tuple(tuple(r) for r in R @ Rp)))
+        return R @ p + t, q / np.linalg.norm(q)
+
+    out: list[Pose] = []
+    for t, p, q in traj:
+        P, Rp = np.array(p, float), np.array(quat_to_mat(q))
+        k = int(np.searchsorted(stamps, t, side="right")) - 1
+        if k < 0 or k >= len(stamps) - 1:
+            pos, quat = moved(min(max(k, 0), len(stamps) - 1), P, Rp)
+        else:
+            w = float((t - stamps[k]) / (stamps[k + 1] - stamps[k]))
+            (p0, q0), (p1, q1) = moved(k, P, Rp), moved(k + 1, P, Rp)
+            q1 = q1 if float(q0 @ q1) >= 0 else -q1
+            pos = (1 - w) * p0 + w * p1
+            quat = (1 - w) * q0 + w * q1
+            quat = quat / np.linalg.norm(quat)
+        out.append((t, (float(pos[0]), float(pos[1]), float(pos[2])),
+                    (float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3]))))
+    return out
+
+
+def _shifts(before: Sequence[Pose], after: Sequence[Pose]) -> dict[str, Any]:
+    """回环改了多少:关键帧挪的最大、最后一个、中位数(米),转的最大(度),路程(米,回环前)。"""
+    import numpy as np
+
+    from d1max_localizer.frames import quat_to_mat
+
+    pb = np.array([p for _, p, _ in before], float)
+    pa = np.array([p for _, p, _ in after], float)
+    d = np.linalg.norm(pa - pb, axis=1)
+    turn = []
+    for (_, _, qb), (_, _, qa) in zip(before, after, strict=True):
+        c = (np.trace(np.array(quat_to_mat(qb)).T @ np.array(quat_to_mat(qa))) - 1) / 2
+        turn.append(math.degrees(math.acos(max(-1.0, min(1.0, float(c))))))
+    return {"keyframes": len(before),
+            "path_m": round(float(np.linalg.norm(np.diff(pb, axis=0), axis=1).sum()), 2),
+            "max_shift_m": round(float(d.max()), 3), "end_shift_m": round(float(d[-1]), 3),
+            "median_shift_m": round(float(np.median(d)), 3),
+            "max_turn_deg": round(max(turn), 2)}
 
 
 def bag_clock_offset(bag: Path, topic: str, n: int = 200) -> float | None:
@@ -392,9 +604,11 @@ def _pack_prior(raw: Path, out: Path, pack: PriorPack, run: Runner, work: Path) 
         raise BuildError("先验打包没出文件")
 
 
-def _run(run: Runner, cmd: list[str], env: dict[str, str] | None, log: Path, what: str) -> None:
+def _run(run: Runner, cmd: list[str], env: dict[str, str] | None, log: Path, what: str,
+         cwd: Path | None = None) -> None:
+    kw = {"cwd": str(cwd)} if cwd is not None else {}
     with open(log, "w") as fh:
-        r = run(cmd, env=env, stdout=fh, stderr=subprocess.STDOUT)
+        r = run(cmd, env=env, stdout=fh, stderr=subprocess.STDOUT, **kw)
     if getattr(r, "returncode", 0) != 0:
         tail = log.read_text(errors="replace")[-300:] if log.exists() else ""
         raise BuildError(f"{what}失败(退出码 {r.returncode}):{tail}")
