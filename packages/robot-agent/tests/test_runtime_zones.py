@@ -136,7 +136,7 @@ async def test_没有规划栅格_不宣告能自主(台):
     broker, c, r, ears, rt, site, mk = 台
     caps = _caps(ears)
     assert caps.tasks["zones_set"] == {"rev": 0, "enforced": True, "plan_ok": False,
-                                       "problem": "没有规划栅格"}
+                                       "problem": "没有规划栅格", "teleop_hard": True}
     assert "goto" not in rt.processor.supported and "patrol" not in rt.processor.supported
 
 
@@ -145,7 +145,7 @@ async def test_换图载规划栅格_能规划(台):
     await _换图(rt, broker, site, c, ears)
     assert rt.parts.nav.plan_ok
     z = _caps(ears).tasks["zones_set"]
-    assert z == {"rev": 0, "enforced": True, "plan_ok": True}
+    assert z == {"rev": 0, "enforced": True, "plan_ok": True, "teleop_hard": True}
     assert {"goto", "patrol"} <= rt.processor.supported
 
 
@@ -259,12 +259,90 @@ async def test_直线桥_报不守区域(tmp_path):
     await rt.start()
     try:
         await _跑(rt, broker, 2)
-        assert _caps(ears).tasks["zones_set"] == {"rev": 0, "enforced": False}
+        assert _caps(ears).tasks["zones_set"] == {"rev": 0, "enforced": False, "teleop_hard": True}
         await rt._on_cmd(_cmd("zones_set", _zs(1, [POND], ver="1"), "z1", c))
         await _跑(rt, broker, 2)
         assert ears.by["cmd/ack"][-1]["result"] == "accepted"
         assert _caps(ears).tasks["zones_set"]["rev"] == 1
         assert {"goto", "patrol"} <= rt.processor.supported
+    finally:
+        await rt.close()
+
+
+async def test_遥控守硬禁区_直线桥也守_续租回执带着为什么截了(tmp_path):
+    """决策 65:硬禁区跟导航守不守无关(``--nav straight`` 的狗遥控照样守);能力里报 ``teleop_hard``;
+    截了的原因随续租回执给站点;放宽等空闲的那一份里新加的硬禁区也守。"""
+    from d1max_contract.teleop import TeleopFrame, teleop_grant_payload
+    broker, c = MemoryBroker(), 钟()
+    r = SimRobot(now_ms=c, max_vx=1.0)
+    ears = 耳朵()
+    st = MemoryTransport(broker, "site")
+    await st.connect()
+    await st.subscribe(f"{T.prefix}/#", ears)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=r,
+                      store_dir=tmp_path / "agent", now_ms=c, loaded_map=("m", "1"),
+                      boot_id="b", home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono)
+    rt._video_live = lambda: True
+    await rt.start()
+    try:
+        await _跑(rt, broker, 2)
+        assert _caps(ears).tasks["zones_set"] == {"rev": 0, "enforced": False, "teleop_hard": True}
+        pool = POND | {"polygon": [[2, -3], [6, -3], [6, 3], [2, 3]], "hard": True}
+        await rt._on_cmd(_cmd("zones_set", _zs(1, [pool], ver="1"), "z1", c))
+        await _跑(rt, broker, 2)
+        g = Command(command_id="g1", task_id="teleop-1", kind="teleop", issued_at=c.ms,
+                    expires_at=c.ms + 60_000, control_epoch=1, priority=100,
+                    payload=teleop_grant_payload(lease_epoch=1, operator="gina",
+                                                 lease_ttl_ms=30_000))
+        await rt._on_cmd(Message(T.cmd, json.dumps(g.to_wire()).encode(), 1, False))
+        await _跑(rt, broker, 3, r, c)
+        assert rt.processor.current is not None and rt.processor.current.kind == "teleop"
+        for i in range(80):                                # 推着往前 8 s
+            f = TeleopFrame(lease_epoch=1, seq=i + 1, sent_at=c.ms, ttl_ms=300, vx=0.5, wz=0.0)
+            await rt._on_teleop(Message(T.teleop, json.dumps(f.to_wire()).encode(), 0, False))
+            await _跑(rt, broker, 1, r, c)
+        o = await r.odometry()
+        assert o.x + 0.465 < 2.0 and o.x > 1.0, f"开到池边停下(机头 {o.x + 0.465:.2f})"
+        renew = Command(command_id="rn1", task_id="teleop-1", kind="teleop_lease",
+                        issued_at=c.ms, expires_at=c.ms + 60_000, control_epoch=1,
+                        payload={"action": "renew", "lease_epoch": 1, "lease_ttl_ms": 30_000})
+        await rt._on_cmd(Message(T.cmd, json.dumps(renew.to_wire()).encode(), 1, False))
+        await _跑(rt, broker, 1)
+        ack = [a for a in ears.by["cmd/ack"] if a["command_id"] == "rn1"][-1]
+        zg = ack["data"]["zone_guard"]
+        assert zg["state"] in ("blocked", "inside") and zg["zone"] == "pond", ack
+        # 又紧又松(删了池子、在别处加了一个硬禁区)= 放宽,遥控算忙、等空闲才换:两份的硬禁区都守
+        ditch = {"id": "ditch", "kind": "nogo", "hard": True,
+                 "polygon": [[-6, -3], [-3, -3], [-3, 3], [-6, 3]]}
+        await rt._on_cmd(_cmd("zones_set", _zs(2, [ditch], ver="1"), "z2", c))
+        await _跑(rt, broker, 1)
+        assert ears.by["cmd/ack"][-1]["data"] == {"revision": 2, "deferred": True}
+        assert sorted(z.id for z in rt._hard_zones()) == ["ditch", "pond"]
+    finally:
+        await rt.close()
+
+
+async def test_遥控的位置_没设过不可信_设了可信_走远了不可信(tmp_path):
+    """决策 65:遥控守硬禁区用的位置跟导航同一个来源;不可信(没设、σ 过线)就按「不知道在哪」限速。"""
+    broker, c = MemoryBroker(), 钟()
+    r = SimRobot(now_ms=c, max_vx=1.0)
+    rt = AgentRuntime(transport=MemoryTransport(broker, "dog"), registration=REG, hal=r,
+                      store_dir=tmp_path / "agent", now_ms=c, loaded_map=("m", "1"),
+                      boot_id="b", home=Pose.from_xy_yaw(0, 0, 0), monotonic=lambda: c.mono,
+                      odom_identity=False)                   # 当真狗:要人给位置
+    await rt.start()
+    try:
+        await _跑(rt, broker, 2, r, c)
+        est, ok, why = rt._teleop_locate((0.0, 0.0, 0.0))
+        assert est is None and not ok and why
+        rt.parts.nav.anchor.anchor(("m", "1"), (5.0, 1.0, 0.0), (0.0, 0.0, 0.0))
+        est, ok, why = rt._teleop_locate((1.0, 0.0, 0.0))
+        assert ok and why == "" and (round(est.x, 3), round(est.y, 3)) == (6.0, 1.0)
+        for i in range(1, 120):                               # 推着走 12 m:σ 过 2 m 的线
+            r.teleport(i * 0.1, 0.0, 0.0)
+            await _跑(rt, broker, 1, r, c)
+        est, ok, why = rt._teleop_locate((12.0, 0.0, 0.0))
+        assert est is not None and not ok and "偏差" in why
     finally:
         await rt.close()
 

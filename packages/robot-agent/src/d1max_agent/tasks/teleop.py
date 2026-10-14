@@ -14,12 +14,17 @@
 - **没画面不动**:``video_live()`` 为假(狗上一路都没在推)就不下速度、在动就停 —— 站点那头还有一道。
 - **结束**(放租、halt、租约到期、断线、被中止):先停车、等停稳(最多 ``STOP_CONFIRM_TIMEOUT_S``),
   再进终态;结束中的帧一律不执行。断线 = 结束,**不续**。
+- **硬禁区**(决策 65):给了 ``zone_guard``(:class:`~d1max_agent.zone_guard.TeleopZoneGuard`)就每拍
+  先过它 —— 会把机身(加定位 σ、刹车距离)带进硬禁区的那一下截掉(先减速、再只许转、再零速),往外开、
+  平着开照发;定位不可信时全程限速。普通禁行区、没有硬禁区照旧不管。为什么截了随续租回执给站点
+  (:meth:`TeleopTask.zone_note`),站点转给手机。
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from d1max_agent.events import EventBook
 from d1max_agent.tasks.base import Task
@@ -39,7 +44,8 @@ _MIN_TTL_MS = 50
 class TeleopTask(Task):
     def __init__(self, *, task_id: str, lease_epoch: int, operator: str, lease_ttl_ms: int,
                  hal: RobotHAL, now_ms: Callable[[], int], video_live: Callable[[], bool],
-                 events: EventBook, priority: int = TELEOP_PRIORITY) -> None:
+                 events: EventBook, priority: int = TELEOP_PRIORITY,
+                 zone_guard: Any = None) -> None:
         super().__init__(task_id=task_id, kind="teleop", priority=priority)
         self.lease_epoch = lease_epoch
         self.operator = operator
@@ -64,6 +70,9 @@ class TeleopTask(Task):
         #: 会话开始时的头尾方向(``head`` / ``tail`` / ``unknown``:老旁路进程不报,
         #: 照 SDK 的「往前」)。
         self._head = "unknown"
+        #: 硬禁区(决策 65);``None`` = 不守(没载图、老测试)。
+        self._guard = zone_guard
+        self._guard_state = "ok"
 
     async def _read_head(self) -> str:
         try:
@@ -93,6 +102,10 @@ class TeleopTask(Task):
     def renew(self, lease_ttl_ms: int) -> None:
         if self._ending is None:
             self._until = self._now() + lease_ttl_ms
+
+    def zone_note(self) -> dict[str, Any] | None:
+        """硬禁区守卫这会儿的判断(决策 65):续租回执里带给站点、站点转给手机。没守卫回 ``None``。"""
+        return None if self._guard is None else self._guard.note()
 
     def release(self) -> None:
         self._end(TaskState.DONE, "released")
@@ -128,18 +141,23 @@ class TeleopTask(Task):
             return
         c = self._cmd
         live = c is not None and now < c[2] and self._video_live()
+        vx = wz = 0.0
         if live:
             vx = max(-self._vmax, min(self._vmax, c[0]))
             wz = max(-self._wmax, min(self._wmax, c[1]))
             if abs(vx) < self._deadband:
                 vx = 0.0                                  # 死区以下的平移不下(HAL 会拒)
-            if vx == 0.0 and wz == 0.0:
-                live = False
+            if self._head == "tail":
+                vx = -vx                                  # 人眼里的「往前」是狗尾那头
+        if self._guard is not None:
+            vx, wz = await self._zone_check(vx, wz)       # 硬禁区(决策 65):机身系里查
+            if abs(vx) < self._deadband:
+                vx = 0.0
+        if live and vx == 0.0 and wz == 0.0:
+            live = False
         if live:
             self._vseq += 1
             ttl = max(_MIN_TTL_MS, min(c[3], c[2] - now))
-            if self._head == "tail":
-                vx = -vx                                  # 人眼里的「往前」是狗尾那头
             got = await self._hal.set_velocity(VelocityCommand(
                 seq=self._vseq, ttl_ms=ttl, frame="base", vx=vx, vy=0.0, wz=wz))
             if got.rejected:
@@ -148,6 +166,21 @@ class TeleopTask(Task):
         elif self._moving:
             await self._hal.stop()
             self._moving = False
+
+    async def _zone_check(self, vx: float, wz: float) -> tuple[float, float]:
+        """过硬禁区守卫(决策 65)。没在动也问一次(手机上显示「在边上」「位置不可信」要新鲜)。
+        守卫自己出错不许让遥控开着冲:当零速、记下来。"""
+        try:
+            o = await self._hal.odometry()
+            v = self._guard.check(vx, wz, (o.x, o.y, o.yaw), float(getattr(o, "vx", 0.0) or 0.0))
+        except Exception:
+            log.exception("硬禁区守卫出错:这一拍按零速")
+            return 0.0, 0.0
+        if v.state != self._guard_state:
+            if v.state in ("blocked", "limited", "inside", "untrusted"):
+                log.info("遥控硬禁区:%s %s", v.state, v.reason)
+            self._guard_state = v.state
+        return v.vx, v.wz
 
     async def _finish(self, dt_s: float) -> None:
         """结束:先停车、等停稳,再进终态。"""

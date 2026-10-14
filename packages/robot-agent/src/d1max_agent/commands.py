@@ -415,6 +415,11 @@ class CommandProcessor:
             return self._rej(cmd, "no_such_lease")
         if lease.action == "renew":
             t.renew(lease.lease_ttl_ms)
+            # 决策 65:硬禁区守卫这会儿怎么判的(截了、减速、在边上、位置不可信)随回执给站点,转给手机
+            note = getattr(t, "zone_note", lambda: None)()
+            if note is not None:
+                return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED,
+                           data={"zone_guard": note})
         else:
             t.release()
         return Ack(cmd.command_id, cmd.task_id, AckResult.ACCEPTED)

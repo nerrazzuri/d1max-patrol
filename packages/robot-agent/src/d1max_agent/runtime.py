@@ -410,6 +410,32 @@ class AgentRuntime:
             return None
         return (est.x, est.y, est.yaw)
 
+    def _hard_zones(self) -> list[Any]:
+        """遥控要守的硬禁区(决策 65):正在用的那一份**加上**等着换的那一份(放宽的等空闲才换,遥控
+        算忙;又加了硬禁区又删了别的那种「又紧又松」也在等 —— 两份都守,往严里取)。跟导航守不守
+        (``--nav straight`` 也守)无关。"""
+        out: list[Any] = []
+        for zs in (self._zones, self._zones_pending):
+            if zs is not None and self.loaded_map == (zs.map_id, zs.map_version):
+                out.extend(zs.hard())
+        return out
+
+    def _teleop_locate(self, odom: tuple[float, float, float]) -> tuple[Any, bool, str]:
+        """遥控守硬禁区要的位置:``(估计, 可不可信, 为什么不可信)``。可信 = 定位来源说可信、
+        里程新鲜、位置就在正用着的这张图上。"""
+        if self.parts is None or self.loaded_map is None:
+            return None, False, "没有加载地图"
+        nav = self.parts.nav
+        odom_ok = bool(getattr(nav, "odom_ok", True))
+        est = nav.anchor.estimate(odom)
+        if est is None:
+            return None, False, nav.anchor.why_not(odom_ok) or "还没设位置"
+        if (est.map_id, est.map_version) != self.loaded_map:
+            return est, False, "位置不在正用着的这张图上"
+        if not nav.anchor.ok(odom_ok):
+            return est, False, nav.anchor.why_not(odom_ok) or "定位不可信"
+        return est, True, ""
+
     def _standoff_nogo(self, x: float, y: float, d: float) -> str:
         """地图上 (x, y) 离禁行区不到 ``d`` 米:回原因。"""
         z = self.parts.nav.nogo_near(x, y, d)
@@ -418,12 +444,15 @@ class AgentRuntime:
     def _make_task(self, cmd: Command) -> Task:
         if cmd.kind == "teleop":
             from d1max_agent.tasks.teleop import TeleopTask
+            from d1max_agent.zone_guard import TeleopZoneGuard
             from d1max_contract.teleop import parse_teleop_grant
             epoch, operator, ttl = parse_teleop_grant(cmd.payload)
+            guard = TeleopZoneGuard(zones=self._hard_zones, locate=self._teleop_locate,
+                                    deadband_vx=self.hal.hal_capabilities().deadband_vx)
             return TeleopTask(task_id=cmd.task_id, lease_epoch=epoch, operator=operator,
                               lease_ttl_ms=ttl, hal=self.hal, now_ms=self._mono_ms,
                               video_live=self._video_live, events=self.events,
-                              priority=cmd.priority)
+                              priority=cmd.priority, zone_guard=guard)
         if cmd.kind == "dock":
             from d1max_agent.tasks.dock import DockTask
             from d1max_contract.charging import parse_dock
@@ -612,8 +641,9 @@ class AgentRuntime:
             out["head"] = {"direction": head, "autonomy": not blocked}
             # W10:区域修订号、守不守(直线桥不守禁行区)、能不能规划。站点按它补发、拒派。
             nav = self.parts.nav
+            # teleop_hard(决策 65):这台狗遥控时守硬禁区(老狗不报,站点据此提醒操作的人)
             z: dict[str, Any] = {"rev": self._zones.revision if self._zones else 0,
-                                 "enforced": self._planned}
+                                 "enforced": self._planned, "teleop_hard": True}
             if self._zones_pending is not None:
                 z["pending_rev"] = self._zones_pending.revision
             if self._planned:
