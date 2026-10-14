@@ -189,7 +189,8 @@ async def test_定位器卡了一下一批一起到_不当跳_接着走(台, mon
         sources.append(t.rt.parts.nav.anchor.source)
     assert "dead_reckoning" in sources and sources[-1] == "scan_match", "卡着的时候在推算"
     assert got == [] and not t.loc.relocs
-    await t.拍(60)
+    # 对账 S6:推算的那一阵(加 3 s)按「定位变差」限速 0.3 m/s,走完要多几秒(原来 60 拍)
+    await t.拍(100)
     assert _事件(t.ears, "task_done"), t.ears.by.get("event")
 
 
@@ -413,6 +414,29 @@ async def test_对账S1_代理重启_定位器一直在跟不用人_这期间它
         assert "请重新设位置" in loc["reason"]
     finally:
         await t.收()
+
+
+async def test_对账S6_定位可信但变差了_自动走的慢下来_好了再快回去(台):
+    t = 台
+    await t.连()
+    await t.rt._on_cmd(_goto(30.0, 0.0, "g1", t.c))
+
+    async def 速度():
+        x0 = t.dog.x
+        await t.拍(10)
+        return t.dog.x - x0                               # 10 拍 = 1 s
+
+    await t.拍(20)
+    assert await 速度() > 0.6
+    t.loc.sigma_xy = 0.3                                  # 匹配变差:σ 0.3(可信线 0.5 以内)
+    await t.拍(10)
+    assert await 速度() <= 0.33
+    loc = _遥测(t.ears).loc
+    assert loc["reason"] == "" and "偏差" in loc["degraded"], loc
+    t.loc.sigma_xy = 0.05
+    await t.拍(40)                                        # 刚变差过的那 3 s 过去
+    assert await 速度() > 0.6
+    assert "degraded" not in _遥测(t.ears).loc
 
 
 async def test_配了定位器_仿真狗有载入这一步也不调(tmp_path):
