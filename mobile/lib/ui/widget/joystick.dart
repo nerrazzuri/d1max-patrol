@@ -36,9 +36,13 @@ class Joystick extends StatefulWidget {
     required this.axis,
     required this.onChanged,
     this.enabled = true,
+    this.label,
   });
 
   final JoystickAxis axis;
+
+  /// 这根杆管什么的一个词（「前后」「转向」），没人按着的时候写在静止的那个圈里。
+  final String? label;
 
   /// 值变了就叫一次。**按下（零）和松手（零）也会叫。**
   final ValueChanged<Offset> onChanged;
@@ -183,17 +187,10 @@ class _JoystickState extends State<Joystick> {
             border: Border.all(color: ink.withValues(alpha: 0.30 * dim), width: 1.5),
           ),
         ),
-        // 角上一个小记号说这根杆管什么（前后 / 转向）。在角上、很淡：不是让人去按的靶子。
-        Positioned(
-          left: Nw.s8,
-          top: Nw.s8,
-          child: Icon(
-              widget.axis == JoystickAxis.turn
-                  ? Icons.swap_horiz_rounded
-                  : Icons.swap_vert_rounded,
-              size: 20,
-              color: ink.withValues(alpha: 0.54 * dim)),
-        ),
+        // 没人按着：在这一块正中画一个静止的样子 —— 跟推的时候一样大的底圈、杆头，加一个词说这根杆
+        // 管什么。只是告诉人「这是摇杆」：按在这一块的哪儿，哪儿就是圆心（上面那条规矩不变），
+        // 一按下这个样子就换成跟着手指的那一个。静止的杆头不带 [Joystick.knobKey]。
+        if (c == null) _idle(ink, dim),
         if (c != null) ...<Widget>[
           _circle(c, Joystick.radius, 0.24, dim, null, ink),
           _circle(
@@ -220,6 +217,58 @@ class _JoystickState extends State<Joystick> {
         onPointerUp: _release,
         onPointerCancel: _release,
         child: face,
+      ),
+    );
+  }
+
+  /// 静止的样子：底圈、杆头、方向记号和那个词，都在底圈里面。
+  Widget _idle(Color ink, double dim) {
+    const double r = Joystick.radius, k = Joystick.knobRadius;
+    final Color soft = ink.withValues(alpha: 0.70 * dim);
+    final String? label = widget.label;
+    return Center(
+      child: SizedBox(
+        width: r * 2,
+        height: r * 2,
+        child: Stack(children: <Widget>[
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: ink.withValues(alpha: 0.06 * dim),
+                shape: BoxShape.circle,
+                border: Border.all(color: ink.withValues(alpha: 0.40 * dim), width: 1.5),
+              ),
+            ),
+          ),
+          Positioned(
+            left: r - k,
+            top: r - k,
+            width: k * 2,
+            height: k * 2,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: ink.withValues(alpha: 0.24 * dim),
+                shape: BoxShape.circle,
+                border: Border.all(color: ink.withValues(alpha: 0.54 * dim), width: 1.5),
+              ),
+              child: Icon(
+                  widget.axis == JoystickAxis.turn ? Icons.swap_horiz_rounded : Icons.swap_vert_rounded,
+                  size: 20,
+                  color: soft),
+            ),
+          ),
+          if (label != null)
+            Positioned(
+              left: Nw.s16,
+              right: Nw.s16,
+              top: r + k + Nw.s4,
+              child: Text(label,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: NwText.labelMedium.copyWith(color: soft, fontWeight: FontWeight.w600)),
+            ),
+        ]),
       ),
     );
   }
