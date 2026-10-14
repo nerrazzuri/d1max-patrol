@@ -185,7 +185,8 @@ def polygon_contains(outer: tuple[tuple[float, float], ...],
        严格在 ``inner`` 里面就是穿过了)—— 只看顶点、只看真交叉都判不出凹口、夹缝从边上插进来;
     3. ``inner`` 里面取一个点,在 ``outer`` 里。
 
-    有了 2,``inner`` 的内部跟 ``outer`` 的边不相交,要么整个在里面、要么整个在外面,3 定是哪个。"""
+    有了 2,``inner`` 的内部跟 ``outer`` 的边不相交,要么整个在里面、要么整个在外面,3 定是哪个。
+    (1 是 2 + 3 推得出来的,只是先便宜地筛掉大多数「没盖住」—— 去掉它结果不变。)"""
     if outer == inner:
         return True
     if not all(point_in_polygon(x, y, outer) for x, y in inner):
