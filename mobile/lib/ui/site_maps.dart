@@ -586,7 +586,8 @@ class _SiteMapTabState extends State<SiteMapTab> {
     final standby = (meta['standby'] as List? ?? const []).whereType<Map>().toList();
     final homes = (meta['homes'] as List? ?? const []).whereType<Map>().toList();
     final nogo = v.zones.any((z) => z['kind'] == 'nogo');
-    final slow = v.zones.any((z) => z['kind'] != 'nogo');
+    final slow = v.zones.any((z) => z['kind'] == 'slow');
+    final erase = v.zones.any((z) => z['kind'] == 'erase'); // 台账 44：抹掉区
     // 这张图上的狗：报着这张图、位置可信的才画（没设位置的画在哪儿都是错的）
     final placed = <(String, bool, Offset)>[
       if (v.inUse)
@@ -601,7 +602,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
             : BoxDecoration(color: color.withValues(alpha: 0.35), border: Border.all(color: color, width: 2)));
     // 图例：只列图上有的（底图那三样总有）
     final legend = <NwLegendItem>[
-      ...mapBaseLegend(context, plan: v.plan),
+      ...mapBaseLegend(context, plan: v.plan, seen: geo.seen),
       if (placed.isNotEmpty)
         NwLegendItem(
             swatch: Container(
@@ -616,6 +617,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
         NwLegendItem(swatch: Container(width: 10, height: 10, color: _homePaint), label: tr('Origin', '原点')),
       if (nogo) NwLegendItem(swatch: swatch(_nogoPaint), label: tr('No-go zone', '禁行区')),
       if (slow) NwLegendItem(swatch: swatch(_slowPaint), label: tr('Speed-limit zone', '限速区')),
+      if (erase) mapEraseLegend(context),
       if (geo.areas.isNotEmpty) mapAreaLegend(context),
     ];
     return Padding(
@@ -629,8 +631,9 @@ class _SiteMapTabState extends State<SiteMapTab> {
                 borderRadius: BorderRadius.circular(Nw.r12),
                 child: LayoutBuilder(builder: (context, box) {
                   _viewport = box.biggest;
-                  // 转过的整张图按比例放进这一块；图上的点（图的像素）跟着同一个比例
-                  final k = geo.fitScale(box.biggest);
+                  // 转过的图按比例放进这一块（台账 M7：按有内容的范围，范围在正中 —— 图往反方向挪 shift；
+                  // 站点没给范围就是整张图，不挪）；图上的点（图的像素）跟着同一个比例
+                  final (k, shift) = geo.contentFit(box.biggest);
                   Offset px(double x, double y) => geo.toPx(x, y) * k;
                   final r = math.max(3.0, math.max(w, h) * k / 120);
                   // 短屏（横屏手机）右下那三个按钮竖着摆不下：横着摆
@@ -639,6 +642,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
                   // 不压着整张图（转过的外接框）才展开，不然收成一个「图例」，点了再看
                   final legendMax = math.max(48.0, box.maxHeight - 3 * Nw.s8 - _scaleBarHeight);
                   final legendOpen = _legendOpen ?? _legendFits(context, legend, box.biggest, geo, k, legendMax);
+                  // 有内容的范围外面（四周没建图的空白）可能出了这一块：照画，InteractiveViewer 裁掉
                   final areas = [
                     for (final a in geo.areas) (a.name, [for (final p in a.points) px(p.dx, p.dy)]),
                   ];
@@ -647,7 +651,11 @@ class _SiteMapTabState extends State<SiteMapTab> {
                         child: InteractiveViewer(
                             transformationController: _zoom,
                             maxScale: _maxScale,
-                            child: Center(
+                            child: OverflowBox(
+                                maxWidth: double.infinity,
+                                maxHeight: double.infinity,
+                                child: Transform.translate(
+                                offset: -shift,
                                 child: NwMapRotation(
                                     rad: rad,
                                     size: Size(w * k, h * k),
@@ -668,7 +676,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
                                                   key: SiteMapTab.zonesKey,
                                                   painter: ZonesPainter([
                                                     for (final z in v.zones)
-                                                      ZoneShape(z['kind'] == 'nogo', [
+                                                      ZoneShape.of(z, [
                                                         for (final p in (z['polygon'] as List? ?? const []))
                                                           if (p is List && p.length >= 2 && p[0] is num && p[1] is num)
                                                             px((p[0] as num).toDouble(), (p[1] as num).toDouble()),
@@ -708,7 +716,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
                                                             id: id,
                                                             // 不在线的（过期、吊销）：中性色，不是绿的
                                                             tone: online ? nwToneOf('online') : NwTone.neutral)))),
-                                        ])))))),
+                                        ]))))))),
                     Positioned(
                         left: Nw.s8,
                         top: Nw.s8,
@@ -794,10 +802,9 @@ class _SiteMapTabState extends State<SiteMapTab> {
       tp.dispose();
     }
     final legend = Rect.fromLTWH(Nw.s8, Nw.s8, 2 * Nw.s8 + row + Nw.s4 + textW, h);
-    final map = Rect.fromCenter(
-        center: box.center(Offset.zero),
-        width: nwRotatedBounds(geo.size, geo.radians).width * k,
-        height: nwRotatedBounds(geo.size, geo.radians).height * k);
+    // 图上有东西的那一块（有内容的范围转过以后，放在正中；站点没给范围就是整张图）
+    final content = geo.contentBounds();
+    final map = Rect.fromCenter(center: box.center(Offset.zero), width: content.width * k, height: content.height * k);
     return !legend.overlaps(map);
   }
 

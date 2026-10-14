@@ -8,6 +8,11 @@
 /// - **片区**：站点给 `areas: [{name, points: [{x, y}]}]`，淡淡地画出来，名字正着摆在片区的视觉中心，
 ///   屏上放不下就不写。
 /// - **比例尺**：1 / 2 / 5 / 10 / 20 m 里挑一段，跟着缩放走（转角不改长短）。
+/// - **全图按有内容的范围**（地图台账 M7，2026-10-14）：站点给 `content_bbox`（预览像素 `[x0, y0, x1, y1]`：
+///   地面 + 墙 + 「看到过」，去掉抹掉的），打开、回正时把它（四个角转过以后的外框）放进画布、居中
+///   （[MapGeo.contentFit]），四周没建图的空白不算进去；没给按整张图。
+/// - **看到过、狗没走过**（M9）：站点说 `seen: true` 就在图例里加一行（淡淡的地面是站点画进底图的）；
+///   **抹掉区**（区域种类 `erase`，台账 44）：站点已经把底图那一块抹了，这边只描一道细边、图例加一行。
 ///
 /// 站点没给这几个字段（老站点）一律按没有处理：不转、画栅格、没有片区。
 library;
@@ -50,6 +55,12 @@ class MapGeo {
   /// 平面图的地址（站点没给是 null）。
   final String? planUrl;
 
+  /// 有内容的范围（预览像素，夹到图上；站点没给、坏的、没大小的是 null —— 按整张图）。
+  final Rect? content;
+
+  /// 这一版带「看到过、狗没走过」的淡色层（图例里加一行）。
+  final bool seen;
+
   const MapGeo(
       {required this.width,
       required this.height,
@@ -58,7 +69,9 @@ class MapGeo {
       required this.topY,
       this.rotationDeg = 0,
       this.areas = const [],
-      this.planUrl});
+      this.planUrl,
+      this.content,
+      this.seen = false});
 
   /// 读预览 JSON。缺的、不是数的按老规矩取缺省（大小 1、一像素 1 m、边 0、不转）。
   factory MapGeo.fromPreview(Map<String, dynamic> meta) {
@@ -86,15 +99,26 @@ class MapGeo {
     final plan = meta['plan'];
     final url = plan is Map && plan['url'] is String && (plan['url'] as String).isNotEmpty ? plan['url'] as String : null;
     final mpp = n('m_per_px', 1);
+    final w = math.max(1.0, n('width', 1)), h = math.max(1.0, n('height', 1));
+    Rect? content;
+    final bb = meta['content_bbox'];
+    if (bb is List && bb.length == 4 && bb.every((v) => v is num && v.isFinite)) {
+      final v = [for (final e in bb) (e as num).toDouble()];
+      final r = Rect.fromLTRB(math.max(0, math.min(v[0], v[2])), math.max(0, math.min(v[1], v[3])),
+          math.min(w, math.max(v[0], v[2])), math.min(h, math.max(v[1], v[3])));
+      if (r.width > 0 && r.height > 0) content = r;
+    }
     return MapGeo(
-        width: math.max(1, n('width', 1)),
-        height: math.max(1, n('height', 1)),
+        width: w,
+        height: h,
         mPerPx: mpp > 0 ? mpp : 1,
         leftX: n('left_x', 0),
         topY: n('top_y', 0),
         rotationDeg: n('rotation_deg', 0),
         areas: areas,
-        planUrl: url);
+        planUrl: url,
+        content: content,
+        seen: meta['seen'] == true);
   }
 
   double get radians => rotationDeg * math.pi / 180;
@@ -111,6 +135,26 @@ class MapGeo {
   double fitScale(Size box) {
     final r = nwRotatedBounds(size, radians);
     return math.max(0.0, math.min(box.width / r.width, box.height / r.height));
+  }
+
+  /// 有内容的范围四个角绕图的中心顺时针转 [radians] 以后的外框（屏上方向、图的一像素 = 1、相对图的中心）；
+  /// 站点没给范围就是整张图转过的外框。
+  Rect contentBounds() {
+    final b = content ?? Offset.zero & size;
+    final c = size.center(Offset.zero);
+    final q = [for (final p in [b.topLeft, b.topRight, b.bottomLeft, b.bottomRight]) nwRotate(p - c, radians)];
+    return Rect.fromLTRB(q.map((p) => p.dx).reduce(math.min), q.map((p) => p.dy).reduce(math.min),
+        q.map((p) => p.dx).reduce(math.max), q.map((p) => p.dy).reduce(math.max));
+  }
+
+  /// 「全图」：有内容的范围（[contentBounds]）放进 [box]（四边离 [pad]）、居中 —— 回（图的一像素画成多大，
+  /// 范围的中心离图的中心多远：屏上的、已经乘过缩放）。图（绕自己的中心转过、按这个缩放画）往反方向挪这么多，
+  /// 范围就在 [box] 正中。站点没给范围：整张图放进 [box]（[fitScale]，不留边、不挪），跟原来一样。
+  (double, Offset) contentFit(Size box, {double pad = 8}) {
+    if (content == null) return (fitScale(box), Offset.zero);
+    final r = contentBounds();
+    final k = math.max(0.0, math.min((box.width - 2 * pad) / r.width, (box.height - 2 * pad) / r.height));
+    return (k, r.center * k);
   }
 }
 
@@ -420,8 +464,13 @@ class _ScaleBarPainter extends CustomPainter {
 const int _rasterFloor = 254, _rasterWall = 0, _rasterUnknown = 205;
 const int _planFloor = 248, _planWall = 52;
 
-/// 图例里底图那三样：地面、墙和障碍物、没扫到。色块跟图过同一个深色滤镜，跟图上看到的一个色。
-List<NwLegendItem> mapBaseLegend(BuildContext context, {required bool plan}) {
+/// 预览图上「看到过、狗没走过」的灰（站点 `SEEN_GRAY`）；平面图上是这么透明的白（站点 `PLAN_SEEN_ALPHA`）。
+const int _rasterSeen = 232;
+const double _planSeenAlpha = 0.35;
+
+/// 图例里底图那三样：地面、墙和障碍物、没扫到；[seen]（站点说这一版有）再加一样「看到过、狗没走过」。色块
+/// 跟图过同一个深色滤镜，跟图上看到的一个色。
+List<NwLegendItem> mapBaseLegend(BuildContext context, {required bool plan, bool seen = false}) {
   final c = Nw.of(context);
   Widget gray(int v) => Container(
       width: 12,
@@ -431,6 +480,19 @@ List<NwLegendItem> mapBaseLegend(BuildContext context, {required bool plan}) {
   return [
     NwLegendItem(swatch: gray(plan ? _planFloor : _rasterFloor), label: tr('Floor', '地面')),
     NwLegendItem(swatch: gray(plan ? _planWall : _rasterWall), label: tr('Wall, obstacle', '墙、障碍物')),
+    if (seen)
+      NwLegendItem(
+          swatch: Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(color: c.surfaceVariant, border: Border.all(color: c.textSecondary)),
+              child: nwMapRaster(
+                  context,
+                  ColoredBox(
+                      color: plan
+                          ? Color.fromARGB((_planSeenAlpha * 255).round(), 255, 255, 255)
+                          : const Color.fromARGB(255, _rasterSeen, _rasterSeen, _rasterSeen)))),
+          label: tr('Seen, not mapped for the robot', '看到过、狗没走过')),
     NwLegendItem(
         swatch: plan
             ? Container(
@@ -440,6 +502,18 @@ List<NwLegendItem> mapBaseLegend(BuildContext context, {required bool plan}) {
             : gray(_rasterUnknown),
         label: tr('Not mapped', '没扫到')),
   ];
+}
+
+/// 抹掉区（台账 44）在图上的边：底图那一块站点已经抹了，这里只描一道细边。
+Color mapEraseStroke(NwColors c) => c.textSecondary;
+
+/// 图例里「已抹掉」那一样：跟图上一样只有边。
+NwLegendItem mapEraseLegend(BuildContext context) {
+  final c = Nw.of(context);
+  return NwLegendItem(
+      swatch: Container(
+          width: 12, height: 10, decoration: BoxDecoration(border: Border.all(color: mapEraseStroke(c), width: 1))),
+      label: tr('Erased (robots never go there)', '已抹掉（狗不去）'));
 }
 
 /// 图例里「片区」那一样：跟图上画的一个底、一个边。
