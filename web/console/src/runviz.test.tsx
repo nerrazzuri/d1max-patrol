@@ -114,17 +114,20 @@ describe("地图上的规划路径、轨迹、被挡、定位问题的点", () =
     });
   }
 
-  it("图例只列图上有的:有路径、轨迹、被挡、问题点时四项都在;什么都没有就没有这一行", async () => {
+  // 2026-10-15 改版:运行图层的图例并进地图自己那一行图例(不另占一行),这里在那一行里找。
+  it("图例只列图上有的:有路径、轨迹、被挡、问题点时四项都在(并在地图图例那一行里);什么都没有就一项都没有", async () => {
     installScreenCTM();
+    const RUN = ["path", "trail", "blocked", "episode"];
+    const runKeys = (root: Element) => [...root.querySelectorAll(".maplegend [data-legend]")]
+      .map((e) => e.getAttribute("data-legend")).filter((k) => RUN.includes(k ?? ""));
     const { container: c } = mapPage(META);
-    await waitFor(() => expect(c.querySelector('[data-testid="run-legend"]')).not.toBeNull());
-    await waitFor(() => expect(c.querySelector('[data-testid="run-legend"] [data-legend="episode"]')).not.toBeNull());
-    const keys = [...c.querySelectorAll('[data-testid="run-legend"] [data-legend]')].map((e) => e.getAttribute("data-legend"));
-    expect(keys).toEqual(["path", "trail", "blocked", "episode"]);
+    await waitFor(() => expect(c.querySelector('.maplegend [data-legend="episode"]')).not.toBeNull());
+    expect(runKeys(c)).toEqual(RUN);
+    expect(c.querySelector('[data-testid="run-legend"]')).toBeNull();
     cleanup();
     const empty = mapPage(META, { robots: {} }, []);
     await waitFor(() => expect(empty.container.querySelector("g.map-world")).not.toBeNull());
-    expect(empty.container.querySelector('[data-testid="run-legend"]')).toBeNull();
+    expect(runKeys(empty.container)).toEqual([]);
     expect(empty.container.querySelector("polyline.rv-path")).toBeNull();
   });
 

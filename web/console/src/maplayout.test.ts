@@ -18,8 +18,14 @@ describe("地图页:地图下面的东西不跟地图抢高", () => {
     expect(decl(".mapbox")).toMatch(/flex-direction: ?column/);
     expect(decl(".mapcanvas")).toMatch(/flex: ?1\b/);
   });
-  it("工具条、运行图层图例 flex: none(不能跟着 .maplegend 的 flex: 1 长高)", () => {
-    expect(decl(".mapbox > .posebar")).toMatch(/flex: ?none/);
-    expect(decl(".mapbox > .runlegend")).toMatch(/flex: ?none/);
+  it("「去这里」浮在图框里(绝对定位),不在图下面另占一块", () => {
+    expect(decl(".mapwrap > .posebar")).toMatch(/position: ?absolute/);
+    expect(decl(".mapbox > .posebar")).toBe("");
+  });
+});
+
+describe("管理组各页铺满宽度", () => {
+  it(".admin 不限最大宽度(宽屏右边不空一块)", () => {
+    expect(decl(".admin")).not.toMatch(/max-width/);
   });
 });

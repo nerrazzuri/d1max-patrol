@@ -96,6 +96,18 @@ export function vizHas(robots: [string, VizRobot][], episodes: Episode[]): VizHa
 }
 
 /** 图例(只列图上有的),放在地图下面,不动 MapCanvas 自己的图例。 */
+/** 运行图层的图例项(只是 <li>):放进地图那一行图例里,不另占一行。 */
+export function RunLegendItems({ has }: { has: VizHas }) {
+  return (
+    <>
+      {has.path && <li data-legend="path"><svg class="sw" width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><path d="M1 6H15" class="rv-path" /></svg>{L("Planned path", "规划路径")}</li>}
+      {has.trail && <li data-legend="trail"><svg class="sw" width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><path d="M1 6H15" class="rv-trail" /></svg>{L("Recent trail", "最近走过")}</li>}
+      {has.blocked && <li data-legend="blocked"><svg class="sw" width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><path d="M8 1L14 11H2Z" class="rv-blocked-sw" /></svg>{L("Blocked here", "被挡的地方")}</li>}
+      {has.episode && <li data-legend="episode"><svg class="sw" width="16" height="12" viewBox="0 0 16 12" aria-hidden="true"><circle cx="8" cy="6" r="4" class="rv-ep lost" /></svg>{L("Localization problem (filled: lost, hollow: degraded)", "定位出过问题(实心:丢了,空心:变差)")}</li>}
+    </>
+  );
+}
+
 export function RunLegend({ has }: { has: VizHas }) {
   if (!has.path && !has.trail && !has.episode && !has.blocked) return null;
   return (

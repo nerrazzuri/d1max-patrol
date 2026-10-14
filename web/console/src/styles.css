@@ -259,7 +259,9 @@ a { color: var(--c-tertiary); }
 .subnav a:hover { color: var(--c-text); }
 .subnav a[aria-current="page"] { color: var(--c-text); box-shadow: inset 0 -3px 0 var(--c-text); }
 .subnav .disabled { color: var(--c-textMuted); }
-.admin { display: flex; flex-direction: column; gap: 16px; max-width: 1400px; }
+/* 管理组各页铺满宽度(原来限 1400 px,是给只有表格、表单的时候用的;加了地图与防区、地图管理、巡检路线这些
+   带地图的页以后,宽屏右边空一大块 —— 2026-10-15 用户截图) */
+.admin { display: flex; flex-direction: column; gap: 16px; }
 .panel { background: var(--c-surface); border: 1px solid var(--c-outline); border-radius: var(--r-r12); overflow: hidden; }
 .panel-head { min-height: 56px; padding: 8px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; border-bottom: 1px solid var(--c-outline); }
 .panel-head h1 { font-size: 22px; line-height: 28px; font-weight: 600; }
@@ -452,11 +454,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .rv-ep.lost { fill: var(--c-warning); fill-opacity: 0.75; }
 .rv-ep.degraded { fill: none; }
 .runlegend { padding: 0 8px 4px; }
-/* 地图页:地图下面的「去这里」工具条、运行图层图例只占自己那几行高;地图占满剩下的(.runlegend 借了
-   .maplegend 的 flex: 1,那是给横着的图例栏用的,放进竖着排的 .mapbox 里会跟地图平分高度) */
-.mapbox > .posebar, .mapbox > .runlegend { flex: none; }
-/* 地图页的「去这里」工具条:提示和按钮排一行(放不下再折),少占地图的高 */
-.mapbox > .posebar { flex-direction: row; flex-wrap: wrap; align-items: center; padding: 6px 16px; }
+/* 地图页的「去这里」:浮在图框右上角的小卡片(2026-10-15 用户嫌图下面那块灰框别扭)。没选点时只是一行小提示,
+   选了点才出按钮;不占图下面的高,地图铺满。 */
+.mapwrap > .posebar { position: absolute; top: 12px; right: 12px; z-index: 2; max-width: min(360px, calc(100% - 24px));
+  padding: 10px 12px; gap: 6px; border: 1px solid var(--c-outline); border-top: 1px solid var(--c-outline);
+  border-radius: var(--r-r8); background: var(--c-surface); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); }
+.mapwrap > .posebar p { margin: 0; }
+.mapwrap > .posebar.idle { padding: 6px 10px; background: color-mix(in srgb, var(--c-surface) 85%, transparent); box-shadow: none; }
 .sw .rv-path, .sw .rv-trail { vector-effect: none; }
 .runinfo { display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 18px; color: var(--c-textSecondary); }
 .runinfo .warn { color: var(--c-warning); font-weight: 600; }

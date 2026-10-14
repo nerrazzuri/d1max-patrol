@@ -103,14 +103,14 @@ export function usePosePick(o: {
       );
     },
     panel: !can ? null : (
-      <div class="posebar" data-posebar="1">
+      <div class={!pose && !msg ? "posebar idle" : "posebar"} data-posebar="1">
         {!pose ? <p class="muted small">{rt("poseHint")}</p> : <p class="mono small" data-pose-text="1">{at}</p>}
-        {!o.robotId && <p class="muted small">{rt("poseNoRobot")}</p>}
-        <div class="row">
+        {pose && !o.robotId && <p class="muted small">{rt("poseNoRobot")}</p>}
+        {(pose || msg) && <div class="row">
           <button type="button" class="btn primary sm" disabled={!pose || !o.robotId || !o.map || busy} onClick={go}>{rt("poseGo")}</button>
           <button type="button" class="btn sm" disabled={!pose || !o.robotId || busy} onClick={() => setAsking(true)}>{rt("poseSet")}</button>
           <button type="button" class="btn sm" disabled={!pose} onClick={() => { setPose(null); setMsg(""); }}>{rt("poseClear")}</button>
-        </div>
+        </div>}
         {msg && <p class="small" role="status" data-pose-msg="1">{msg}</p>}
         {asking && pose && (
           <Confirm text={rt("poseSetConfirm", { robot: o.robotId ?? "", x: pose.x, y: pose.y, deg: degOf(pose.yaw) })}

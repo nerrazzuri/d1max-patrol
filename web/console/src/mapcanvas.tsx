@@ -105,6 +105,10 @@ export function MapCanvas(props: {
   drawing?: boolean;
   /** 点了图(不是拖):点的那一处的预览像素。 */
   onPick?: (px: number, py: number) => void;
+  /** 浮在地图上的东西(比如「去这里」小卡片),放在图框里、不占图下面的高。 */
+  overlay?: ComponentChildren;
+  /** 图例那一行里多加的项(页面自己画的图层,比如规划路径、轨迹),跟底图图例排一行。 */
+  legendExtra?: ComponentChildren;
 }) {
   const { meta } = props;
   const wrap = useRef<HTMLDivElement>(null);
@@ -232,12 +236,14 @@ export function MapCanvas(props: {
             {props.marks?.(screen)}
           </g>
         </svg>
+        {props.overlay}
       </div>
       <div class="mapbar">
         <ul class="maplegend" aria-label={t("legend")}>
           {LEGEND_ORDER.filter((k) => present.has(k)).map((k) => (
             <li key={k} data-legend={k}><Swatch k={k} plan={!!plan} />{t(LEGEND_TEXT[k])}</li>
           ))}
+          {props.legendExtra}
         </ul>
         <div class="mapctl">
           <span class="scale" role="img" aria-label={t("scaleAria", { m: bar.m })}>
