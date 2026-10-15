@@ -60,7 +60,8 @@ export function RoutesPage({ say }: { say: Say }) {
   const [problems, setProblems] = useState<PointProblem[]>([]);
   const [conflict, setConflict] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [newName, setNewName] = useState("");
+  // 2026-10-15 用户:所有路线一起画在图上太乱 —— 图上只画列表里选中的那一条;要对照别的路线再打开
+  const [showOthers, setShowOthers] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const guard = useRef(clickGuard());
 
@@ -103,7 +104,8 @@ export function RoutesPage({ say }: { say: Say }) {
     setConflict(false);
   }
   function startNew() {
-    setDraft({ id: newName.trim(), isNew: true, base: 0, points: [], policy: {} });
+    // 新建:右侧栏换成编辑页,名字在编辑页顶上填(2026-10-15 用户:原来名字框夹在路线列表和点位列表中间)
+    setDraft({ id: "", isNew: true, base: 0, points: [], policy: {} });
     setOrig(undefined);
     setPi(null);
     setProblems([]);
@@ -172,7 +174,8 @@ export function RoutesPage({ say }: { say: Say }) {
 
   // ---- 图上
   const pts = draft?.points ?? [];
-  const others = routes.filter((r) => r.id !== draft?.id);
+  const others = showOthers ? routes.filter((r) => r.id !== draft?.id) : [];
+  const schedCount = (id: string) => (view?.schedules ?? []).filter((s) => s.mission === id).length;
   const line = (ps: { x: number; y: number }[]) => ps.map((p) => { const q = toPx(meta!, p.x, p.y); return `${q.px},${q.py}`; }).join(" ");
 
   function dragPoint(i: number) {
@@ -197,6 +200,16 @@ export function RoutesPage({ say }: { say: Say }) {
         });
       });
     };
+  }
+
+  const nameTaken = !!draft?.isNew && routes.some((r) => r.id === draft.id);
+  function back() {
+    if (dirty && !window.confirm(rt("routeUnsaved"))) return;
+    setDraft(null);
+    setOrig(undefined);
+    setPi(null);
+    setProblems([]);
+    setConflict(false);
   }
 
   const selPoint = draft && pi !== null ? draft.points[pi] : undefined;
@@ -224,6 +237,7 @@ export function RoutesPage({ say }: { say: Say }) {
             {!sel || !meta ? <p class="empty">{t("noMap")}</p> : (
               <MapCanvas meta={meta} raster={`${base}/preview.png`} label={rt("routesTitle")}
                 drawing={!!draft} onPick={draft ? pick : undefined}
+                overlay={!draft && routes.length > 0 ? <p class="routepick-hint small" data-route-hint="1">{rt("routePickHint")}</p> : undefined}
                 world={<>
                   {others.map((r) => <polyline key={r.id} points={line(r.waypoints)} class="route-line other" data-route={r.id} />)}
                   {draft && pts.length > 1 && <polyline points={line(pts)} class="route-line" data-route={draft.id} />}
@@ -253,26 +267,52 @@ export function RoutesPage({ say }: { say: Say }) {
             )}
           </div>
           <div class="routeside">
-            <h2>{rt("routesTitle")}</h2>
-            {routes.length === 0 && <p class="muted small">{rt("routesNone")}</p>}
-            <ul class="routelist">
-              {routes.map((r) => (
-                <li key={r.id} aria-current={draft?.id === r.id ? "true" : undefined}>
-                  <button type="button" class="link" onClick={() => { if (!dirty || window.confirm(rt("routeUnsaved"))) edit(r); }}>{r.id}</button>
-                  <span class="muted small">{t("points", { n: r.waypoints.length })}</span>
-                </li>
-              ))}
-            </ul>
-            <form class="row" onSubmit={(e) => { e.preventDefault(); if (NAME_RE.test(newName.trim())) startNew(); }}>
-              <input aria-label={rt("routeName")} placeholder={rt("routeName")} value={newName} maxLength={64}
-                onInput={(e) => setNewName(e.currentTarget.value)} />
-              <button type="submit" class="btn sm" disabled={!NAME_RE.test(newName.trim())}>{rt("routeNew")}</button>
-            </form>
-            <p class="muted small">{rt("routeNameHint")}</p>
-
-            {draft && (
+            {!draft ? (
               <>
-                <h2>{draft.id}</h2>
+            {/* 列表页:只有路线列表;点一条或「新建路线」换成编辑页(跟手机一样) */}
+            <div class="routeside-head">
+              <h2>{rt("routesTitle")}</h2>
+              <button type="button" class="btn sm primary" onClick={startNew} disabled={!sel || !meta}>{rt("routeNewBtn")}</button>
+            </div>
+            {routes.length === 0 && <p class="muted small">{rt("routesNone")}</p>}
+            <ul class="routelist" aria-label={rt("routesTitle")}>
+              {routes.map((r) => {
+                const n = schedCount(r.id);
+                return (
+                  <li key={r.id}>
+                    <button type="button" class="routerow" data-route-row={r.id} onClick={() => edit(r)}>
+                      <span class="routerow-name">{r.id}</span>
+                      <span class="muted small">
+                        {t("points", { n: r.waypoints.length })}
+                        {n > 0 && ` · ${rt("routeSchedN", { n })}`}
+                        {!r.bound && <span class="bad"> · {rt("routeUnboundTag")}</span>}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {routes.length > 1 && (
+              <label class="small field-check">
+                <input type="checkbox" checked={showOthers} onChange={(e) => setShowOthers(e.currentTarget.checked)} />
+                {rt("routesShowOthers")}
+              </label>
+            )}
+              </>
+            ) : (
+              <>
+                {/* 编辑页 */}
+                <button type="button" class="link routeback" onClick={back}>{rt("routeBack")}</button>
+                {draft.isNew ? (
+                  <label class="routename">
+                    <span class="small">{rt("routeName")}</span>
+                    <input aria-label={rt("routeName")} placeholder={rt("routeName")} value={draft.id} maxLength={64} autoFocus
+                      onInput={(e) => { const id = e.currentTarget.value.trim(); setDraft((d) => (d ? { ...d, id } : d)); }} />
+                    <span class={`small${nameTaken || (draft.id && !NAME_RE.test(draft.id)) ? " bad" : " muted"}`}>
+                      {nameTaken ? rt("routeNameTaken") : rt("routeNameHint")}
+                    </span>
+                  </label>
+                ) : <h2>{draft.id}</h2>}
                 {sel && <p class="muted small">{rt("routeBind", { v: sel.version })}</p>}
                 {orig && !orig.bound && <p class="muted small">{rt("routeUnbound")}</p>}
                 <p class="muted small">{rt("routeAddHint")}</p>
@@ -306,7 +346,7 @@ export function RoutesPage({ say }: { say: Say }) {
                     onActions={(p2) => change(pts.map((x, k) => (k === pi ? p2 : x)), true)} />
                 ) : pts.length > 0 && <p class="muted small">{rt("pointSelectHint")}</p>}
                 <div class="row">
-                  <button type="button" class="btn primary" disabled={!dirty || pts.length === 0 || !NAME_RE.test(draft.id)} onClick={() => void save()}>{rt("routeSave")}</button>
+                  <button type="button" class="btn primary" disabled={!dirty || pts.length === 0 || !NAME_RE.test(draft.id) || nameTaken} onClick={() => void save()}>{rt("routeSave")}</button>
                   <button type="button" class="btn" disabled={!dirty} onClick={() => (draft.isNew ? setDraft(null) : orig && edit(orig))}>{rt("routeDiscard")}</button>
                   {!draft.isNew && <button type="button" class="btn stop" onClick={() => setRemoving(true)}>{rt("routeDelete")}</button>}
                 </div>
@@ -315,7 +355,6 @@ export function RoutesPage({ say }: { say: Say }) {
                 )}
               </>
             )}
-            {others.length > 0 && <p class="muted small">{rt("routesOther")}</p>}
           </div>
         </div>
       </section>
