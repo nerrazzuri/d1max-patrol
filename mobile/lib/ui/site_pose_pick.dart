@@ -175,6 +175,25 @@ class _PoseBarState extends State<PoseBar> {
   String? _robot;
   String? _msg;
   bool _busy = false;
+  /// 上下文（图、选的狗）每变一次加一：变之前发出去的请求，回来时不说成现在这只狗、这张图的（外审 W39-I2）。
+  int _gen = 0;
+
+  @override
+  void didUpdateWidget(PoseBar old) {
+    super.didUpdateWidget(old);
+    if (old.mapId != widget.mapId || old.version != widget.version) {
+      _gen++;
+      _msg = null;
+    }
+  }
+
+  void _pickRobot(String? v) => setState(() {
+        if (v != _robot) {
+          _gen++;
+          _msg = null;
+        }
+        _robot = v;
+      });
 
   List<String> get _ids => [for (final r in widget.robots) if (robotCan(r, 'goto')) '${r['robot_id']}'];
 
@@ -185,6 +204,7 @@ class _PoseBarState extends State<PoseBar> {
   }
 
   Future<void> _run(Future<Map<String, dynamic>> Function() call, String ok) async {
+    final mine = _gen;
     setState(() {
       _busy = true;
       _msg = null;
@@ -194,7 +214,8 @@ class _PoseBarState extends State<PoseBar> {
       final r = await call();
       final ack = r['ack'];
       final result = ack is Map ? ack['result'] : null;
-      msg = result == null || result == 'accepted'
+      // 只有狗收下了才算（外审 W39-I3：没回执、被拒、过期、重复都不算）
+      msg = result == 'accepted'
           ? ok
           : tr('The robot did not accept: $result ${ack is Map ? (ack['reason'] ?? '') : ''}',
               '狗没接：$result ${ack is Map ? (ack['reason'] ?? '') : ''}');
@@ -205,7 +226,7 @@ class _PoseBarState extends State<PoseBar> {
     if (mounted) {
       setState(() {
         _busy = false;
-        _msg = msg;
+        if (mine == _gen) _msg = msg;           // 上下文变了：不把结果说成现在这只狗、这张图的
       });
     }
   }
@@ -223,6 +244,7 @@ class _PoseBarState extends State<PoseBar> {
     final id = _selected, at = widget.controller.at;
     if (id == null || at == null) return;
     final yaw = widget.controller.yaw;
+    final mapId = widget.mapId, version = widget.version, mine = _gen;
     final ok = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
@@ -241,7 +263,13 @@ class _PoseBarState extends State<PoseBar> {
               ],
             ));
     if (ok != true || !mounted) return;
-    await _run(() => widget.api.relocalize(id, x: at.dx, y: at.dy, yaw: yaw), tr('Position set for $id', '已设 $id 的位置'));
+    // 确认框开着的时候图、狗、点换了：不发（外审 W39-I2）。换了图的狗由站点按带上的图号拒
+    if (mine != _gen || _selected != id || widget.controller.at != at || widget.controller.yaw != yaw) {
+      setState(() => _msg = tr('The map, robot or spot changed — choose again.', '图、狗或位置变了：请重新选。'));
+      return;
+    }
+    await _run(() => widget.api.relocalize(id, x: at.dx, y: at.dy, yaw: yaw, mapId: mapId, version: version),
+        tr('Position set for $id', '已设 $id 的位置'));
   }
 
   @override
@@ -277,7 +305,7 @@ class _PoseBarState extends State<PoseBar> {
                               key: PoseBar.robotKey,
                               value: sel,
                               items: [for (final id in ids) DropdownMenuItem(value: id, child: Text(id))],
-                              onChanged: (v) => setState(() => _robot = v))
+                              onChanged: _pickRobot)
                         else if (sel != null)
                           Text(sel, style: NwText.labelMedium.copyWith(color: c.text)),
                         IconButton(

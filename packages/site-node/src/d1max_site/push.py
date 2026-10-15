@@ -108,6 +108,11 @@ class PushError(Exception):
     """推送没发出去(网络、密钥、极光那边)。"""
 
 
+class PushRetryNow(PushError):
+    """这一次没发出去,但通道已经改好了(极光不认去重字段:之后不再带),**可以马上再发**。通道自己不重发:
+    再发之前要过外层「发之前按此刻再核」(确认了、解决了、过期了就不发)并按此刻重算 TTL(外审 WRAP-I1)。"""
+
+
 class JPush:
     """极光 REST v3。``send`` 失败抛 :class:`PushError`。"""
 
@@ -160,9 +165,9 @@ class JPush:
         except urllib.error.HTTPError as exc:
             detail = exc.read()[:300].decode("utf-8", "replace") if exc.fp else ""
             if exc.code == 400 and self.dedupe:
-                log.warning("极光回 400(%s):去掉推送去重字段重发,之后不再带", detail)
+                log.warning("极光回 400(%s):之后不再带推送去重字段,交回队列马上重发", detail)
                 self.dedupe = False
-                return self.send(reg_ids, title, body, extras, ttl_s=ttl_s)
+                raise PushRetryNow(f"极光不认去重字段(400):{detail}") from exc
             raise PushError(f"极光回 {exc.code}:{detail}") from exc
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise PushError(f"连不上极光:{exc}") from exc
@@ -508,9 +513,8 @@ class PushDesk:
                                 break
                         first = False
                         chunk = reg[i:i + step]
-                        left = (EXPIRE_MS - (self._now() - row["created_ms"])) // 1000
                         try:
-                            sender.send(chunk, title, row["title"], extras, ttl_s=max(1, left))
+                            self._send_once(sender, row, chunk, title, extras)
                         except PushError as exc:
                             # 这几台算没发成功(回执丢了的也在这里:至少一次);接着发后面的
                             bad, streak = str(exc)[:300], streak + 1
@@ -570,6 +574,24 @@ class PushDesk:
     def _drop(self, row: dict[str, Any], why: str) -> None:
         with self.db.tx() as c:
             c.execute("UPDATE push_outbox SET dropped=? WHERE id=?", (why, row["id"]))
+
+    def _send_once(self, sender: Any, row: dict[str, Any], chunk: list[str], title: str,
+                   extras: dict[str, str]) -> None:
+        """发一批;通道说「改好了、马上再发」(:class:`PushRetryNow`)就**按此刻再核一遍**、重算 TTL 再发一次
+        (外审 WRAP-I1:原来极光在通道里自己重发,绕过了这道核对)。再核不过 → 报错,本批算没发成功。"""
+        for again in (False, True):
+            if again:
+                why = self._skip(row, self._now())
+                if why:
+                    raise PushError(f"马上重发之前核对没过:{why}")
+            left = (EXPIRE_MS - (self._now() - row["created_ms"])) // 1000
+            try:
+                sender.send(chunk, title, row["title"], extras, ttl_s=max(1, left))
+                return
+            except PushRetryNow:
+                if again:
+                    raise
+                log.warning("P1 推送:通道改好了,再核一遍马上重发")
 
     def _skip(self, row: dict[str, Any], now: int) -> str:
         if now - row["created_ms"] > EXPIRE_MS:

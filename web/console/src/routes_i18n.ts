@@ -65,6 +65,8 @@ const en = {
   poseSetDone: "Position set for {robot}",
   poseSetConfirm: "Tell {robot} it is standing at x {x} m, y {y} m, heading {deg}° on this map? If that is wrong the robot will navigate from the wrong place.",
   poseNoRobot: "Select a robot first.",
+  poseWrongMap: "{robot} has a different map loaded — it cannot be sent to a point on this one.",
+  poseNoAck: "no clear answer from the robot",
   poseOnlyDispatch: "Only admins and guards can send a robot or set its position.",
   poseNeedsSupervision: "Refused",
 } as const;
@@ -134,6 +136,8 @@ const zh: Record<RKey, string> = {
   poseSetDone: "已设 {robot} 的位置",
   poseSetConfirm: "告诉 {robot}：它现在站在这张图上 x {x} 米、y {y} 米、朝向 {deg}°？设错了狗会按错的位置走。",
   poseNoRobot: "先选一只狗。",
+  poseWrongMap: "{robot} 加载的不是这张图:不能按这张图上的点派它。",
+  poseNoAck: "狗没有明确回复",
   poseOnlyDispatch: "只有管理员和保安能派狗、设位置。",
   poseNeedsSupervision: "被拒",
 };

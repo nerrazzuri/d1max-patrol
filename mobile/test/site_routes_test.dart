@@ -2,6 +2,7 @@
 // 冲突、派给狗；地图栏点图「去这里 / 在这里设位置」。
 // 点图的位置：测试用图自己的渲染框 `localToGlobal`（转角、缩放都算进去）算出屏上哪儿，点下去，
 // 存下去 / 发出去的地图坐标要跟想点的那一处对上 —— 图不转、转 23° 都测。
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:d1max_patrol/l10n.dart';
@@ -377,6 +378,71 @@ void main() {
       expect(double.parse(p[2]), closeTo(2.5, 0.011));
       expect(double.parse(p[3]), closeTo(-3.75, 0.011));
       expect(double.parse(p[4]), closeTo(math.pi / 6, 0.001));
+      expect(api.relocalizeMaps.last, 'estate-1/8', reason: '带上点的那张图，站点核对（外审 W39-I2）');
+      expect(find.textContaining('Position set for A'), findsOneWidget);
+    });
+
+    for (final (ack, why) in [
+      (<String, dynamic>{'result': 'rejected', 'reason': 'moving'}, 'rejected moving'),
+      (<String, dynamic>{'result': 'expired'}, 'expired'),
+      (<String, dynamic>{}, '没回执结果'),
+    ]) {
+      testWidgets('设位置狗没收下（$why）：不说已设（外审 W39-I3）', (t) async {
+        final api = Rot23Api('admin')..relocalizeAck = ack;
+        final c = await pumpTab(t, api);
+        await t.tapAt(c.global(2.5, -3.75));
+        await t.pumpAndSettle();
+        await t.tap(find.byKey(PoseBar.setKey));
+        await t.pumpAndSettle();
+        await t.tap(find.byKey(PoseBar.setOkKey));
+        await t.pumpAndSettle();
+        expect(api.calls.where((x) => x.startsWith('relocalize')), hasLength(1));
+        expect(find.textContaining('Position set'), findsNothing);
+        expect(find.byKey(PoseBar.messageKey), findsOneWidget);
+        if (ack['reason'] != null) expect(find.textContaining('moving'), findsOneWidget);
+      });
+    }
+
+    testWidgets('回包回来时已经换了图：不把结果说成新图的（外审 W39-I2）', (t) async {
+      final api = Rot23Api('admin')..relocalizeGate = Completer<void>();
+      final ctl = PosePickController()..pick(const Offset(1, 2));
+      final robots = [
+        <String, dynamic>{'robot_id': 'A', 'capabilities': {'tasks': {'goto': {}, 'relocalize': {}}}},
+      ];
+      Widget bar(String version) => MaterialApp(
+          home: Scaffold(
+              body: PoseBar(api: api, controller: ctl, mapId: 'estate-1', version: version, robots: robots)));
+      await t.pumpWidget(bar('8'));
+      await t.tap(find.byKey(PoseBar.setKey));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(PoseBar.setOkKey));
+      await t.pump();
+      expect(api.relocalizeMaps.single, 'estate-1/8');
+      await t.pumpWidget(bar('9'));                          // 换了图
+      api.relocalizeGate!.complete();
+      await t.pumpAndSettle();
+      expect(find.textContaining('Position set'), findsNothing);
+      expect(find.byKey(PoseBar.messageKey), findsNothing);
+    });
+
+    testWidgets('确认框开着时图换了：不发', (t) async {
+      final api = Rot23Api('admin');
+      final ctl = PosePickController()..pick(const Offset(1, 2));
+      final robots = [
+        <String, dynamic>{'robot_id': 'A', 'capabilities': {'tasks': {'goto': {}, 'relocalize': {}}}},
+      ];
+      Widget bar(String version) => MaterialApp(
+          home: Scaffold(
+              body: PoseBar(api: api, controller: ctl, mapId: 'estate-1', version: version, robots: robots)));
+      await t.pumpWidget(bar('8'));
+      await t.tap(find.byKey(PoseBar.setKey));
+      await t.pumpAndSettle();
+      await t.pumpWidget(bar('9'));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(PoseBar.setOkKey));
+      await t.pumpAndSettle();
+      expect(api.calls.where((x) => x.startsWith('relocalize')), isEmpty);
+      expect(find.textContaining('choose again'), findsOneWidget);
     });
 
     testWidgets('业主：没有这套工具，点图也不选位置', (t) async {

@@ -35,22 +35,32 @@ export function mapAreas(meta: PreviewMeta, sec: { zone: string; points: Pt[] }[
 }
 
 export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; selected: string | null; onSelect: (id: string) => void; onVideo: (id: string) => void; role?: string }) {
-  const which = props.units.map((u) => robotMap(u.robot)).find((m) => m) ?? null;
-  const [meta, setMeta] = useState<PreviewMeta | null>(null);
-  const [areas, setAreas] = useState<{ zone: string; points: Pt[] }[]>([]);
-  const key = which ? `${which.map_id}/${which.version}` : "";
-  useEffect(() => {
-    setMeta(null);
-    setAreas([]);
-    if (!which) return;
-    const base = `/api/maps/${enc(which.map_id)}/${enc(which.version)}`;
-    api<PreviewMeta>("GET", `${base}/preview`).then(setMeta).catch(() => setMeta(null));
-    api<{ areas: { zone: string; points: Pt[] }[] }>("GET", `${base}/areas`).then((d) => setAreas(d.areas)).catch(() => setAreas([]));
-  }, [key]);
   const sel = props.units.find((u) => u.robot.robot_id === props.selected) ?? props.units[0];
+  // 底图跟着选中的狗(外审 W39-I2:原来总是第一只有图的狗,选中的狗可能在另一张图上);选中的狗没报图
+  // 才退回第一只有图的
+  const selMap = sel ? robotMap(sel.robot) : null;
+  const which = selMap ?? props.units.map((u) => robotMap(u.robot)).find((m) => m) ?? null;
+  const key = which ? `${which.map_id}/${which.version}` : "";
+  // 预览、区域记着是哪张图的:换图以后才回来的旧回包不认
+  const [got, setGot] = useState<{ key: string; meta: PreviewMeta | null; areas: { zone: string; points: Pt[] }[] }>({ key: "", meta: null, areas: [] });
+  useEffect(() => {
+    if (!which) return;
+    let live = true;
+    const base = `/api/maps/${enc(which.map_id)}/${enc(which.version)}`;
+    api<PreviewMeta>("GET", `${base}/preview`).then((m) => live && setGot((g) => ({ key, meta: m, areas: g.key === key ? g.areas : [] })))
+      .catch(() => live && setGot((g) => ({ key, meta: null, areas: g.key === key ? g.areas : [] })));
+    api<{ areas: { zone: string; points: Pt[] }[] }>("GET", `${base}/areas`).then((d) => live && setGot((g) => ({ key, meta: g.key === key ? g.meta : null, areas: d.areas })))
+      .catch(() => {});
+    return () => { live = false; };
+  }, [key]);
+  const meta = got.key === key ? got.meta : null;
+  const areas = got.key === key ? got.areas : [];
+  // 只画加载着这张图的狗(别的图上的坐标画在这张图上是错的)
+  const onThisMap = (u: UnitInfo) => { const m = robotMap(u.robot); return !!(m && which && m.map_id === which.map_id && m.version === which.version); };
   // 点图 → 去这里 / 在这里设位置(posepick.tsx;只有管理员、保安)
   const pose = usePosePick({ meta, map: which ? { map_id: which.map_id, version: which.version } : null,
-    robotId: sel?.robot.robot_id ?? null, robotAt: sel?.robot.loc?.pose ?? null, role: props.role ?? "" });
+    robotId: sel?.robot.robot_id ?? null, robotMap: selMap,
+    robotAt: sel && onThisMap(sel) ? sel.robot.loc?.pose ?? null : null, role: props.role ?? "" });
   // 运行可视化:规划路径、轨迹、被挡位置(2 s 一拉),近 7 天定位出过问题的地方
   const viz = useRunViz(!!which);
   const vizRobots = which ? vizOnMap(viz, which.map_id, which.version) : [];
@@ -67,7 +77,7 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
   });
   const bots = !meta ? [] : props.units.flatMap((u) => {
     const pose = u.robot.loc?.pose;
-    if (!pose) return [];
+    if (!pose || !onThisMap(u)) return [];
     const { px, py } = toPx(meta, pose.x, pose.y);
     return onMap(meta, px, py, 20) ? [{ u, px, py, yaw: pose.yaw }] : [];
   });

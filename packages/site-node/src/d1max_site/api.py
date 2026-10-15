@@ -1442,10 +1442,25 @@ class _Handler(TlsHandlerMixin):
                 if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
                     raise HttpError(400, f"{k} 要是有限数")
                 payload[k] = float(v)
+        # 客户端在哪张图上点的(外审 W39-I2,可选、要成对):网页底图、手机看的图跟狗加载的可能不是同一张
+        # —— 原来坐标直接按狗加载的那张补图号,另一张图上的坐标就当成这张的发出去了。说了就核对,不一样
+        # 不发;不说的(老客户端)照旧
+        want = None
+        if "map_id" in d or "map_version" in d:
+            mid, ver = d.get("map_id"), d.get("map_version")
+            if not (isinstance(mid, str) and mid and isinstance(ver, str) and ver):
+                raise HttpError(400, "map_id、map_version 要成对给,都是非空字符串")
+            want = (mid, ver)
         c = self.site.dispatcher.clients.get(robot_id)
         caps = c.capabilities.tasks.get("patrol", {}) if c and c.capabilities else {}
         if caps.get("map_id") is not None:
-            payload |= {"map_id": caps["map_id"], "map_version": caps.get("map_version")}
+            have = (caps["map_id"], caps.get("map_version"))
+            if want is not None and want != have:
+                raise HttpError(409, f"位置是在 {want[0]} v{want[1]} 上点的,{robot_id} 加载的是 "
+                                     f"{have[0]} v{have[1]}:换到这只狗的图上重新点")
+            payload |= {"map_id": have[0], "map_version": have[1]}
+        elif want is not None:
+            payload |= {"map_id": want[0], "map_version": want[1]}   # 狗没报图:让狗自己核
         self._audit_detail = {k: payload[k] for k in ("x", "y", "yaw", "at_home") if k in payload}
         # 有效期短一点(W00c6e 内审):晚到的旧命令会把「当时的位置」锚到「现在」。30 s 同视频、
         # 遥控续租

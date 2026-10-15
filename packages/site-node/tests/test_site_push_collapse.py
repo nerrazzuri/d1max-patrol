@@ -187,11 +187,15 @@ def test_不同的告警_各自一条_升档也另起一条(tmp_path):
 
 
 
-def test_极光不认去重字段回400_去掉重发一次_之后不再带_P1照样推得出去():
+def test_极光不认去重字段回400_通道自己不重发_交回外层_之后不再带():
+    """外审 WRAP-I1(2026-10-15):原来 400 在 ``JPush.send`` 里递归再发一次,第二次没过外层「发之前按此刻
+    再核」(确认了、过期了照发,TTL 也是旧的)。现在通道只关掉去重字段、报「马上重试」,由外层再核后重发。"""
     import io
     import urllib.error
 
-    from d1max_site.push import JPush
+    import pytest
+
+    from d1max_site.push import JPush, PushRetryNow
     sent = []
 
     def opener(req, timeout):
@@ -203,11 +207,76 @@ def test_极光不认去重字段回400_去掉重发一次_之后不再带_P1照
 
     j = JPush("k", "s", opener=opener)
     extras = {"alert_key": "A/intrusion#1", "tier": "1"}
-    assert j.send(["r"], "t", "b", extras) == "2"
-    assert len(sent) == 2 and "third_party_channel" in sent[0]["options"]
+    with pytest.raises(PushRetryNow):
+        j.send(["r"], "t", "b", extras)
+    assert len(sent) == 1, "通道自己不能再发:再发要外层先核"
+    assert j.send(["r"], "t", "b", extras) == "2"          # 之后直接不带,不再先挨一次 400
     assert "third_party_channel" not in sent[1]["options"]
-    assert j.send(["r"], "t", "b", extras) == "3"          # 之后直接不带,不再先挨一次 400
-    assert len(sent) == 3
+    assert "apns_collapse_id" not in sent[1]["options"]
+
+
+def _极光400台(tmp_path, change):
+    """真 AlertDesk、PushDesk、JPush,假网络:第一次请求期间 ``change`` 发生(确认 / 解决 / 过期 / 只过了
+    一会儿),然后回 400。"""
+    import io
+    import urllib.error
+
+    from d1max_site.push import EXPIRE_MS
+    clock = [NOW]
+    db = SiteDB(tmp_path / "s.db")
+    with db.tx() as c:
+        c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, disabled) "
+                  "VALUES ('u','guard',X'00',X'00',0,0)")
+        c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used) "
+                  "VALUES ('s','u',0,0)")
+    desk = AlertDesk(db, now_ms=lambda: clock[0])
+    desk.push = True
+    calls = []
+
+    def opener(req, timeout):
+        calls.append(json.loads(req.data))
+        if len(calls) == 1:
+            if change == "ack":
+                with db.tx() as c:
+                    c.execute("UPDATE alerts SET acked_ms=?", (clock[0],))
+            elif change == "resolve":
+                with db.tx() as c:
+                    c.execute("UPDATE alerts SET resolved_ms=?", (clock[0],))
+            elif change == "expire":
+                clock[0] += EXPIRE_MS + 1
+            elif change == "wait":
+                clock[0] += 600_000                      # 第一次等了十分钟才回 400
+            raise urllib.error.HTTPError("u", 400, "x", {}, io.BytesIO(b"{}"))
+        return _回({"msg_id": str(len(calls))})
+
+    p = PushDesk(db, now_ms=lambda: clock[0], senders={"jpush": JPush("k", "s", opener=opener)})
+    p.alerts = desk
+    p.register("u", "jp-1", "android", session="s", provider="jpush")
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="狗看见人了")
+    return p, db, calls
+
+
+def test_极光400重发之前_告警被确认_解决_过期了就不再发(tmp_path):
+    for change in ("ack", "resolve", "expire"):
+        p, db, calls = _极光400台(tmp_path / change, change)
+        p.tick()
+        assert len(calls) == 1, f"{change}:400 之后告警已经{change},不能再发"
+        assert db.query("SELECT sent_ms FROM push_outbox")[0]["sent_ms"] is None
+        assert not db.query("SELECT 1 FROM push_sent")
+        db.close()
+
+
+def test_极光400重发_同一拍马上发_TTL按此刻重算_记成发了(tmp_path):
+    p, db, calls = _极光400台(tmp_path, "wait")
+    p.tick()
+    assert len(calls) == 2, "去掉去重字段马上重发,不等退避"
+    assert "third_party_channel" not in calls[1]["options"]
+    assert calls[1]["options"]["time_to_live"] == calls[0]["options"]["time_to_live"] - 600, \
+        "第二次的 TTL 要按此刻剩下的算"
+    assert db.query("SELECT reg_id FROM push_sent")[0]["reg_id"] == "jp-1"
+    row = db.query("SELECT sent_ms, attempts FROM push_outbox")[0]
+    assert row["sent_ms"] is not None and row["attempts"] == 0
+    db.close()
 
 
 def test_极光回别的错_不重发():
