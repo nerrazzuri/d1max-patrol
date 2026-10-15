@@ -175,8 +175,9 @@ async function openNew(meta: PreviewMeta, name = "night", extra: Partial<Paramet
   const posted = routesApi({ meta, ...extra });
   const r = render(<RoutesPage say={() => {}} />);
   await ready(r.container);
+  fireEvent.click(r.getByText("+ New route"));
+  await tick();
   fireEvent.input(r.getByPlaceholderText("Route name"), { target: { value: name } });
-  fireEvent.click(r.getByText("New route"));
   await tick();
   return { r, posted, svg: r.container.querySelector("svg.map")!, c: r.container };
 }
@@ -332,7 +333,74 @@ describe("路线页:站点的回答", () => {
     await waitFor(() => expect(r.container.querySelectorAll("[data-point]").length).toBe(1));
   });
 
-  it("没改的不能存;删路线先确认,带当前修订号;别的路线虚线画出来", async () => {
+  it("列表里点哪条图上只画哪条;没选时只给提示;要对照再勾「同时显示其他路线」", async () => {
+    installScreenCTM();
+    const other = { ...ROUTE, id: "other", bound: false, waypoints: [P("x", 0, 0), P("y", 1, 0)] };
+    const sch = { id: "n1", mission: "loop", at: "22:00", days: ["mon"], window_min: 30, on_missed: "skip", revision: 7 };
+    routesApi({ meta: META, routes: [ROUTE, other], schedules: [sch] });
+    const r = render(<RoutesPage say={() => {}} />);
+    await ready(r.container);
+    await waitFor(() => expect(r.getByText("loop")).toBeTruthy());
+    expect(r.container.querySelectorAll("polyline.route-line").length).toBe(0);
+    expect(r.container.querySelectorAll(".route-pt").length).toBe(0);
+    expect(r.container.querySelector("[data-route-hint]")).not.toBeNull();
+    // 列表一行:点数、排程数、没绑地图版本的标出来
+    expect(r.container.querySelector('[data-route-row="loop"]')?.textContent).toContain("1 schedule");
+    expect(r.container.querySelector('[data-route-row="other"]')?.textContent).toContain("no map version");
+    fireEvent.click(r.getByText("other"));
+    await tick();
+    expect([...r.container.querySelectorAll("polyline.route-line")].map((x) => x.getAttribute("data-route"))).toEqual(["other"]);
+    expect(r.container.querySelectorAll(".route-pt.other").length).toBe(0);
+    expect(r.container.querySelector("[data-route-hint]")).toBeNull();
+    // 编辑页:列表不在了,「← 全部路线」回去
+    expect(r.container.querySelector("[data-route-row]")).toBeNull();
+    fireEvent.click(r.getByText("← All routes"));
+    await tick();
+    fireEvent.click(r.getByLabelText("Also show the other routes (dashed)"));
+    fireEvent.click(r.getByText("loop"));
+    await tick();
+    expect(r.container.querySelector('polyline.route-line:not(.other)[data-route="loop"]')).not.toBeNull();
+    expect(r.container.querySelector('polyline.route-line.other[data-route="other"]')).not.toBeNull();
+  });
+
+  it("右侧栏两页:列表页只有路线列表和「新建路线」;新建在编辑页顶上填名字,重名不能存;有没存的改动回列表先问", async () => {
+    installScreenCTM();
+    routesApi({ meta: META, routes: [ROUTE] });
+    const r = render(<RoutesPage say={() => {}} />);
+    await ready(r.container);
+    await waitFor(() => expect(r.getByText("loop")).toBeTruthy());
+    expect(r.queryByPlaceholderText("Route name")).toBeNull();
+    expect(r.queryByText("Save route")).toBeNull();
+    fireEvent.click(r.getByText("+ New route"));
+    await tick();
+    expect(r.container.querySelector("[data-route-row]")).toBeNull();
+    fireEvent.input(r.getByPlaceholderText("Route name"), { target: { value: "loop" } });
+    await tick();
+    expect(r.getByText("A route with this name already exists on the site.")).toBeTruthy();
+    fireEvent.click(r.container.querySelector("svg.map")!, clientOf(r.container, META, 1, 1));
+    await tick();
+    expect((r.getByText("Save route") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.input(r.getByPlaceholderText("Route name"), { target: { value: "night" } });
+    await tick();
+    expect((r.getByText("Save route") as HTMLButtonElement).disabled).toBe(false);
+    const asked: string[] = [];
+    const orig = window.confirm;
+    window.confirm = ((m: string) => { asked.push(m); return false; }) as typeof window.confirm;
+    try {
+      fireEvent.click(r.getByText("← All routes"));
+      await tick();
+      expect(asked.length).toBe(1);
+      expect(r.getByPlaceholderText("Route name")).toBeTruthy();       // 不确认就留在编辑页
+      window.confirm = (() => true) as typeof window.confirm;
+      fireEvent.click(r.getByText("← All routes"));
+      await tick();
+      expect(r.container.querySelector('[data-route-row="loop"]')).not.toBeNull();
+    } finally {
+      window.confirm = orig;
+    }
+  });
+
+  it("没改的不能存;删路线先确认,带当前修订号", async () => {
     installScreenCTM();
     const other = { ...ROUTE, id: "other", waypoints: [P("x", 0, 0), P("y", 1, 0)] };
     const posted = routesApi({ meta: META, routes: [ROUTE, other] });
@@ -342,7 +410,6 @@ describe("路线页:站点的回答", () => {
     fireEvent.click(r.getByText("loop"));
     await tick();
     expect((r.getByText("Save route") as HTMLButtonElement).disabled).toBe(true);
-    expect(r.container.querySelector('polyline.route-line.other[data-route="other"]')).not.toBeNull();
     expect(r.container.querySelector('polyline.route-line[data-route="loop"]')).not.toBeNull();
     fireEvent.click(r.getByText("Delete route"));
     await tick();

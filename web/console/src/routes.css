@@ -38,3 +38,17 @@
 .posebar { padding: 10px 16px; border-top: 1px solid var(--c-outline); display: flex; flex-direction: column; gap: 8px; }
 .posebar .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .pose-pin text { fill: var(--c-text); font: 700 12px var(--font-mono); text-anchor: middle; paint-order: stroke; stroke: var(--c-surface); stroke-width: 4px; }
+
+/* 路线列表(2026-10-15):一行一条,点了图上只画这一条 */
+.routerow { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 4px 8px;
+  background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 6px; }
+.routerow:hover { background: color-mix(in srgb, var(--c-tertiary) 8%, transparent); }
+.routerow-name { font-weight: 600; }
+.routelist li { padding: 2px 0; }
+.routelist li[aria-current="true"] .routerow-name { color: var(--c-tertiary); }
+.routepick-hint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); margin: 0; padding: 6px 12px;
+  background: var(--c-surface); border: 1px solid var(--c-outline); border-radius: 6px; box-shadow: 0 1px 4px rgb(0 0 0 / 15%); }
+.field-check { display: flex; align-items: center; gap: 6px; }
+.routeside-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.routeback { align-self: flex-start; }
+.routename { display: flex; flex-direction: column; gap: 4px; }
