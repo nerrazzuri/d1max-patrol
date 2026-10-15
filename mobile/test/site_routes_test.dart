@@ -8,6 +8,7 @@ import 'dart:math' as math;
 import 'package:d1max_patrol/l10n.dart';
 import 'package:d1max_patrol/net/site_client.dart';
 import 'package:d1max_patrol/ui/map_view.dart';
+import 'package:d1max_patrol/ui/pose_marker.dart';
 import 'package:d1max_patrol/ui/site_maps.dart';
 import 'package:d1max_patrol/ui/site_pose_pick.dart';
 import 'package:d1max_patrol/ui/site_routes.dart';
@@ -112,6 +113,14 @@ void main() {
         }
         expect(find.byKey(SiteRouteEditorPage.pointKey(2)), findsOneWidget);
         expect(find.byKey(SiteRouteEditorPage.pointKey(3)), findsNothing);
+        // 点是跟网页一样的定位箭头：中间写序号，字跟着图的转角转回正，选中的是最后加的那个
+        PoseMarkerPainter mk(int i) => t
+            .widget<CustomPaint>(
+                find.descendant(of: find.byKey(SiteRouteEditorPage.pointKey(i)), matching: find.byType(CustomPaint)))
+            .painter as PoseMarkerPainter;
+        expect([for (var i = 0; i < 3; i++) mk(i).label], ['1', '2', '3']);
+        expect(mk(0).labelAngle, closeTo(-geo.radians, 1e-9));
+        expect([for (var i = 0; i < 3; i++) mk(i).selected], [false, false, true]);
         await _tapKey(t, SiteRouteEditorPage.saveKey);
         expect(api.savedRoutes, hasLength(1));
         final s = api.savedRoutes.single;
@@ -211,7 +220,11 @@ void main() {
     expect(find.textContaining('P3 is 9.0 m from where'), findsOneWidget);
     expect(find.textContaining('Not saved'), findsOneWidget);
     expect(api.savedRoutes, isEmpty);
-    Color? dot(int i) => ((t.widget<Container>(find.byKey(SiteRouteEditorPage.pointKey(i))).decoration) as BoxDecoration).color;
+    Color? dot(int i) => (t
+            .widget<CustomPaint>(
+                find.descendant(of: find.byKey(SiteRouteEditorPage.pointKey(i)), matching: find.byType(CustomPaint)))
+            .painter as PoseMarkerPainter)
+        .accent;
     expect(dot(1), isNot(dot(0)), reason: '有问题的点换了颜色');
     expect(dot(2), dot(1));
     api.routeError = null;
@@ -330,6 +343,10 @@ void main() {
       await t.timedDragFrom(handle, c.global(-3.5, 4.25 + 3) - handle, const Duration(milliseconds: 300));
       await t.pumpAndSettle();
       expect(t.widget<Text>(find.byKey(PoseBar.textKey)).data, contains('heading 90°'));
+      // 图钉是跟网页一样的定位箭头，朝向跟着拖（这一层没转：地图 +y = 画布 -y）
+      final pin = t.widget<CustomPaint>(find.byKey(PoseLayer.pinKey)).painter as PoseMarkerPainter;
+      expect(pin.heading, closeTo(-math.pi / 2, 0.05));
+      expect(pin.label, isNull);
       await t.tap(find.byKey(PoseBar.goKey));
       await t.pumpAndSettle();
       final g = api.gotos.single;

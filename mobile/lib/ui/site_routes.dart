@@ -23,6 +23,7 @@ import 'nw/nw_map_raster.dart';
 import 'nw/nw_p4_admin.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
+import 'pose_marker.dart';
 import 'widget/fields_dialog.dart';
 
 /// 路线名、排程 id：ASCII 字母数字 . _ -（跟站点同一条规矩）。
@@ -655,41 +656,28 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
                                           color: c.tertiary,
                                           otherColor: c.textSecondary,
                                           width: r / 2)),
+                                  // 路线的点：跟网页一样的定位箭头（pose_marker.dart），中间是序号，三角尖指着到点后的
+                                  // 朝向；字跟着转回正
                                   for (var i = 0; i < _pts.length; i++)
                                     Positioned(
                                         left: line[i].dx - 2.2 * r,
                                         top: line[i].dy - 2.2 * r,
                                         child: IgnorePointer(
-                                            child: Transform.rotate(
-                                                angle: -rad,
-                                                child: Container(
-                                                    key: SiteRouteEditorPage.pointKey(i),
-                                                    width: 4.4 * r,
-                                                    height: 4.4 * r,
-                                                    alignment: Alignment.center,
-                                                    decoration: BoxDecoration(
-                                                        shape: BoxShape.circle,
-                                                        color: _problems.containsKey(i)
-                                                            ? c.error
-                                                            : (i == _sel ? c.text : c.tertiary),
-                                                        border: Border.all(color: c.surface, width: r / 3)),
-                                                    child: Text('${i + 1}',
-                                                        style: TextStyle(
-                                                            fontSize: 2.4 * r,
-                                                            fontWeight: FontWeight.w700,
-                                                            color: c.surface)))))),
-                                  if (_sel != null && _sel! < _pts.length)
-                                    Positioned.fill(
-                                        child: IgnorePointer(
-                                            child: CustomPaint(
-                                                painter: _ArmPainter(
-                                                    line[_sel!],
-                                                    line[_sel!] +
-                                                        Offset(math.cos(_pts[_sel!].yaw), -math.sin(_pts[_sel!].yaw)) *
-                                                            7 *
-                                                            r,
-                                                    c.text,
-                                                    r / 1.5)))),
+                                            child: SizedBox(
+                                                key: SiteRouteEditorPage.pointKey(i),
+                                                width: 4.4 * r,
+                                                height: 4.4 * r,
+                                                child: CustomPaint(
+                                                    painter: PoseMarkerPainter(
+                                                        at: Offset(2.2 * r, 2.2 * r),
+                                                        heading: -_pts[i].yaw,
+                                                        r: 2.2 * r,
+                                                        label: '${i + 1}',
+                                                        labelAngle: -rad,
+                                                        selected: i == _sel,
+                                                        accent: _problems.containsKey(i) ? c.error : c.tertiary,
+                                                        surface: c.surface,
+                                                        text: c.text))))),
                                 ]))))))));
   }
 
@@ -927,24 +915,4 @@ class _RoutePainter extends CustomPainter {
   @override
   bool shouldRepaint(_RoutePainter old) =>
       old.line != line || old.others != others || old.color != color || old.width != width;
-}
-
-class _ArmPainter extends CustomPainter {
-  final Offset from;
-  final Offset to;
-  final Color color;
-  final double width;
-  const _ArmPainter(this.from, this.to, this.color, this.width);
-
-  @override
-  void paint(Canvas canvas, Size size) => canvas.drawLine(
-      from,
-      to,
-      Paint()
-        ..color = color
-        ..strokeWidth = width
-        ..strokeCap = StrokeCap.round);
-
-  @override
-  bool shouldRepaint(_ArmPainter old) => old.from != from || old.to != to || old.color != color;
 }

@@ -19,6 +19,8 @@ import 'package:d1max_patrol/ui/site_alert_scene.dart';
 import 'package:d1max_patrol/ui/site_mapping.dart' show MapMark, SiteMapPreviewPage;
 import 'package:d1max_patrol/ui/site_maps.dart' show SiteMapTab;
 import 'package:d1max_patrol/ui/site_page.dart';
+import 'package:d1max_patrol/ui/site_pose_pick.dart' show PoseBar;
+import 'package:d1max_patrol/ui/site_routes.dart' show SiteRouteEditorPage;
 import 'package:d1max_patrol/ui/site_teleop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -138,6 +140,25 @@ Future<void> Function(WidgetTester) _tab(Key k) => (t) async {
       await t.tap(find.byKey(k));
       await t.pumpAndSettle();
     };
+
+/// 地图栏点一处、左转两下（30°）。
+Future<void> _pickPose(WidgetTester t) async {
+  final c = t.getCenter(find.byKey(SiteMapTab.canvasKey));
+  await t.tapAt(c + const Offset(-20, 10));
+  await t.pumpAndSettle();
+  await t.tap(find.byKey(PoseBar.turnLeftKey));
+  await t.tap(find.byKey(PoseBar.turnLeftKey));
+  await t.pumpAndSettle();
+}
+
+final _loop = <String, dynamic>{
+  'id': 'loop', 'map_id': 'estate-1', 'map_version': '8', 'revision': 3, 'bound': true,
+  'policy': <String, dynamic>{},
+  'waypoints': [
+    for (final (i, x, y, yaw) in [(1, -3.29, 6.1, 0.0), (2, -1.5, 8.4, 1.2), (3, 0.4, 7.7, -1.57)])
+      <String, dynamic>{'name': 'P$i', 'x': x, 'y': y, 'yaw': yaw},
+  ],
+};
 
 /// 告警页往下滚到小地图（缩略图要真解码出来才看得见）。
 Future<void> _toMiniMap(WidgetTester t) async {
@@ -269,6 +290,14 @@ void main() {
     '13e-map-desktop': _Shot(
         const Size(1280, 720), () => NwShell(api: Rot23Api('admin'), title: 'East Gate Estate', ring: () {}),
         ready: _then(_tab(NwShell.mapKey), _decoded)),
+    // 点位标记跟网页一样的定位箭头（2026-10-15）：地图栏选了一个位置、转了 30°；路线编辑页三个点
+    '15-map-pose': _Shot(_phone, () => NwShell(api: Rot23Api('admin'), title: 'East Gate Estate', ring: () {}),
+        ready: _then(_then(_tab(NwShell.mapKey), _decoded), _pickPose)),
+    '16-route-points': _Shot(
+        const Size(900, 700),
+        () => SiteRouteEditorPage(
+            api: Rot23Api('admin'), mapId: 'estate-1', version: '8', route: _loop, allRoutes: [_loop]),
+        ready: _decoded),
     '14-alarm-map-rot': _Shot(
         _phone,
         () => SiteAlertScenePage(

@@ -15,6 +15,7 @@ import '../net/site_client.dart';
 import 'map_view.dart';
 import 'nw/nw_button.dart';
 import 'nw/nw_theme.dart';
+import 'pose_marker.dart';
 
 /// 选出来的位置（地图米、朝向弧度，逆时针）。
 class PosePickController extends ChangeNotifier {
@@ -64,7 +65,9 @@ class PoseLayer extends StatelessWidget {
 
   static const Key pinKey = Key('pose-pin');
   static const Key handleKey = Key('pose-handle');
-  static const double _arm = 30;
+  /// 底座半径（屏上像素，跟网页「去这里」那个一样大）。
+  static const double _r = 12;
+  static const double _grabAt = 30;
 
   @override
   Widget build(BuildContext context) {
@@ -84,25 +87,28 @@ class PoseLayer extends StatelessWidget {
   }
 
   List<Widget> _pin(BuildContext context, NwColors c, Offset at) {
+    // 跟网页一样的定位箭头（pose_marker.dart）：圆底座 + 朝向三角尖，三角尖就是拖朝向的把手
     final px = geo.toPx(at.dx, at.dy) * k;
-    final tip = px + Offset(math.cos(controller.yaw), -math.sin(controller.yaw)) * _arm;
+    final heading = -controller.yaw;                    // 这一层还没转：地图 +y 朝上，画布 y 朝下
+    // 拖朝向的点击区：中心在三角尖外一点（30 px，跟原来的圆把手一样远）。放在网页那样的 1.6 r（19 px）
+    // 测试里拖不动：跟缩放平移抢手势、要等松手才判给它；离远一点手指也好抓，32 px 的点击区照样盖住三角尖
+    final grab = px + Offset(math.cos(heading), math.sin(heading)) * _grabAt;
     return [
       Positioned.fill(
           child: IgnorePointer(
-              child: CustomPaint(painter: _ArmPainter(px, tip, c.primary)))),
-      Positioned(
-          left: px.dx - 9,
-          top: px.dy - 9,
-          child: IgnorePointer(
-              child: Container(
+              child: CustomPaint(
                   key: pinKey,
-                  width: 18,
-                  height: 18,
-                  decoration: BoxDecoration(
-                      color: c.surface, shape: BoxShape.circle, border: Border.all(color: c.primary, width: 3))))),
+                  painter: PoseMarkerPainter(
+                      at: px,
+                      heading: heading,
+                      r: _r,
+                      selected: true,
+                      accent: c.tertiary,
+                      surface: c.surface,
+                      text: c.text)))),
       Positioned(
-          left: tip.dx - 16,
-          top: tip.dy - 16,
+          left: grab.dx - 16,
+          top: grab.dy - 16,
           child: GestureDetector(
               key: handleKey,
               behavior: HitTestBehavior.opaque,
@@ -111,34 +117,11 @@ class PoseLayer extends StatelessWidget {
                 final box = context.findRenderObject() as RenderBox;
                 controller.faceToward(geo.toMap(box.globalToLocal(d.globalPosition) / k));
               },
-              child: SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: Center(
-                      child: Container(
-                          width: 14,
-                          height: 14,
-                          decoration: BoxDecoration(
-                              color: c.surface, shape: BoxShape.circle, border: Border.all(color: c.text, width: 2))))))),
+              child: const SizedBox(width: 32, height: 32))),
     ];
   }
 }
 
-class _ArmPainter extends CustomPainter {
-  final Offset from;
-  final Offset to;
-  final Color color;
-  const _ArmPainter(this.from, this.to, this.color);
-
-  @override
-  void paint(Canvas canvas, Size size) => canvas.drawLine(from, to, Paint()
-    ..color = color
-    ..strokeWidth = 3
-    ..strokeCap = StrokeCap.round);
-
-  @override
-  bool shouldRepaint(_ArmPainter old) => old.from != from || old.to != to || old.color != color;
-}
 
 /// 图下面那一条：选出来的位置、哪只狗、去这里 / 设位置。[robots]：这张图上的狗（站点的狗视图）。
 /// 没选位置时只有一句提示。
