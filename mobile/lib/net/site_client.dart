@@ -549,8 +549,9 @@ abstract class SiteApi {
       {required String session, required int seq});
 
   /// 设位置（W00c6e，里程锚定）：[atHome] 狗在原点；否则 [x]、[y]（米）、[yaw]（弧度），地图坐标。保安、管理员。
+  /// [mapId]、[version]：在哪张图上点的（外审 W39-I2；给了站点核对，跟狗加载的不一样 409）。
   Future<Map<String, dynamic>> relocalize(String robotId,
-      {bool atHome = false, double x = 0, double y = 0, double yaw = 0});
+      {bool atHome = false, double x = 0, double y = 0, double yaw = 0, String? mapId, String? version});
 
   /// 分级驱离（W22）：正在进行的几场（每台狗最多一场）。站点没开回 404。
   Future<List<Map<String, dynamic>>> deterrence();
@@ -1454,9 +1455,16 @@ class SiteClient implements SiteApi {
 
   @override
   Future<Map<String, dynamic>> relocalize(String robotId,
-          {bool atHome = false, double x = 0, double y = 0, double yaw = 0}) async =>
+          {bool atHome = false, double x = 0, double y = 0, double yaw = 0, String? mapId, String? version}) async =>
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/relocalize',
-          atHome ? <String, dynamic>{'at_home': true} : <String, dynamic>{'x': x, 'y': y, 'yaw': yaw}));
+          atHome
+              ? <String, dynamic>{'at_home': true}
+              : <String, dynamic>{
+                  'x': x,
+                  'y': y,
+                  'yaw': yaw,
+                  if (mapId != null && version != null) ...{'map_id': mapId, 'map_version': version},
+                }));
 
   @override
   HttpClient pinnedClient() {

@@ -561,7 +561,8 @@ class _SiteRouteEditorPageState extends State<SiteRouteEditorPage> {
       final r = await widget.api.patrol(id, _id);
       final ack = (r['ack'] as Map?) ?? const {};
       if (mounted) {
-        setState(() => _msg = ack['result'] == null || ack['result'] == 'accepted'
+        // 只有狗收下了才说派了（外审 W39-I3：没回执、被拒、过期、重复都不算）
+        setState(() => _msg = ack['result'] == 'accepted'
             ? tr('Patrol sent to $id', '已派 $id 去巡检')
             : tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
                 '狗没接：${ack['result']} ${ack['reason'] ?? ''}'));

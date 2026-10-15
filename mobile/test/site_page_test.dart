@@ -712,11 +712,17 @@ class FakeApi implements SiteApi {
     return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}, 'task_id': 't1'};
   }
 
+  /// 设位置带的图号版本（外审 W39-I2）；回执可以换（[relocalizeAck]），能挂起（[relocalizeGate]）。
+  final List<String?> relocalizeMaps = [];
+  Map<String, dynamic> relocalizeAck = <String, dynamic>{'result': 'accepted'};
+  Completer<void>? relocalizeGate;
   @override
   Future<Map<String, dynamic>> relocalize(String robotId,
-      {bool atHome = false, double x = 0, double y = 0, double yaw = 0}) async {
+      {bool atHome = false, double x = 0, double y = 0, double yaw = 0, String? mapId, String? version}) async {
     calls.add(atHome ? 'relocalize $robotId home' : 'relocalize $robotId $x $y $yaw');
-    return <String, dynamic>{'ack': <String, dynamic>{'result': 'accepted'}};
+    relocalizeMaps.add(mapId == null ? null : '$mapId/$version');
+    if (relocalizeGate != null) await relocalizeGate!.future;
+    return <String, dynamic>{'ack': relocalizeAck};
   }
 
   /// 视频（W00c5b）。

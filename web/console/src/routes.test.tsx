@@ -473,7 +473,8 @@ describe("地图页:点一点去这里 / 设位置,发出去的就是点的坐�
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0].path).toContain("/api/robots/A/relocalize");
     near(posted[0].body.x, -2.5); near(posted[0].body.y, 2.25);
-    expect(Object.keys(posted[0].body).sort()).toEqual(["x", "y", "yaw"]);
+    // 外审 W39-I2:带上底图的图号、版本,站点核对
+    expect(Object.keys(posted[0].body).sort()).toEqual(["map_id", "map_version", "x", "y", "yaw"]);
   });
 
   it("业主、没带角色的看不到这套工具,点图也不选位置", async () => {
