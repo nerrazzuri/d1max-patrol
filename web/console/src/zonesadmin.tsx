@@ -3,7 +3,7 @@
 // 存的是整份导航区域(带改之前看到的修订号,跟手机一样);加一块是收紧、当场生效,删一块是放宽、要重新确认。
 // 2026-10-15(用户「只能画防区感觉不太够」):网页也能画禁行区、限速区、**虚拟墙**(画一条线,站点存成约 0.3 m 宽的
 // 禁行带,规则跟禁行区一样),列出狗守的区域、删、确认这一版(从上一版带过来的建议还是在手机上核)。
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { Confirm, Modal } from "./dialogs";
 import { t } from "./i18n";
@@ -51,16 +51,19 @@ function poly(meta: PreviewMeta, pts: Pt[]): string {
 export function MapsZonesPage({ say }: { say: Say }) {
   const [maps, setMaps] = useState<MapRow[]>([]);
   const [sel, setSel] = useState<MapRow | null>(null);
-  const [meta, setMeta] = useState<PreviewMeta | null>(null);
-  const [areas, setAreas] = useState<Area[]>([]);
+  // 外审 R3(2026-10-15 下午):预览、防区、导航区域都记着是哪张图的(``base``);换图后才回来的旧回包不写,
+  // 渲染时也只认这张图的 —— 不然 A 图的区域会被拿去确认 B 图(两张图的修订号各数各的,同一个数说明不了什么)
+  const [metaAt, setMetaAt] = useState<{ base: string; v: PreviewMeta | null }>({ base: "", v: null });
+  const [areasAt, setAreasAt] = useState<{ base: string; v: Area[] }>({ base: "", v: [] });
   const [draft, setDraft] = useState<Pt[] | null>(null);
   const [drawKind, setDrawKind] = useState<DrawKind>("zone");
   const [navForm, setNavForm] = useState(false);
   const [removingNav, setRemovingNav] = useState<NavZone | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  /** 弹确认框那一刻给人看的那一份(哪张图、第几版、内容):发之前再拉一次比,变了不确认。 */
+  const [confirming, setConfirming] = useState<{ base: string; nav: NavZones } | null>(null);
   const [naming, setNaming] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
-  const [nav, setNav] = useState<NavZones | null>(null);
+  const [navAt, setNavAt] = useState<{ base: string; v: NavZones | null }>({ base: "", v: null });
   const [erasing, setErasing] = useState(false);
   const [unerasing, setUnerasing] = useState<NavZone | null>(null);
 
@@ -71,22 +74,41 @@ export function MapsZonesPage({ say }: { say: Say }) {
     }).catch((e) => say(errText(e)));
   }, []);
   const base = sel ? `/api/maps/${enc(sel.map_id)}/${enc(sel.version)}` : "";
+  const cur = useRef(base);
+  cur.current = base;
+  /** 回包回来时还是这张图吗。 */
+  const here = (b: string) => cur.current === b;
+  const meta = metaAt.base === base ? metaAt.v : null;
+  const areas = areasAt.base === base ? areasAt.v : [];
+  const nav = navAt.base === base ? navAt.v : null;
+  const setMeta = (b: string, v: PreviewMeta | null) => { if (here(b)) setMetaAt({ base: b, v }); };
+  const setAreas = (b: string, v: Area[]) => { if (here(b)) setAreasAt({ base: b, v }); };
+  const setNav = (b: string, v: NavZones | null) => { if (here(b)) setNavAt({ base: b, v }); };
   const loadAreas = useCallback(() => {
     if (!base) return;
-    api<{ areas: Area[] }>("GET", `${base}/areas`).then((d) => setAreas(d.areas)).catch(() => setAreas([]));
+    const b = base;
+    api<{ areas: Area[] }>("GET", `${b}/areas`).then((d) => setAreas(b, d.areas)).catch(() => setAreas(b, []));
   }, [base]);
   const loadMeta = useCallback(() => {
     if (!base) return;
-    api<PreviewMeta>("GET", `${base}/preview`).then(setMeta).catch(() => setMeta(null));
+    const b = base;
+    api<PreviewMeta>("GET", `${b}/preview`).then((m) => setMeta(b, m)).catch(() => setMeta(b, null));
   }, [base]);
   const loadNav = useCallback(() => {
     if (!base) return;
-    api<NavZones>("GET", `${base}/zones`).then(setNav).catch(() => setNav(null));
+    const b = base;
+    api<NavZones>("GET", `${b}/zones`).then((d) => setNav(b, d)).catch(() => setNav(b, null));
   }, [base]);
   useEffect(() => {
-    setMeta(null);
     setDraft(null);
-    setNav(null);
+    // 换了图:上一张图的弹框、正在画的全作废
+    setConfirming(null);
+    setNavForm(false);
+    setRemovingNav(null);
+    setNaming(false);
+    setRemoving(null);
+    setErasing(false);
+    setUnerasing(null);
     if (!base) return;
     loadMeta();
     loadAreas();
@@ -99,36 +121,46 @@ export function MapsZonesPage({ say }: { say: Say }) {
   /** 整份导航区域存回去(改之前看到的修订号先拉一次最新的,别盖掉手机上刚改的);存完重新取预览(抹掉区变了,
    *  平面图地址跟着变)和区域。 */
   async function saveNav(change: (zones: NavZone[], rev: number) => NavZone[]): Promise<NavZones> {
-    const cur = await api<NavZones>("GET", `${base}/zones`);
-    const d = await api<NavZones>("POST", `${base}/zones`, { zones: change(cur.zones, cur.revision), base_revision: cur.revision });
-    setNav(d);
-    loadMeta();
+    const b = base;
+    const now = await api<NavZones>("GET", `${b}/zones`);
+    const d = await api<NavZones>("POST", `${b}/zones`, { zones: change(now.zones, now.revision), base_revision: now.revision });
+    setNav(b, d);
+    if (here(b)) loadMeta();
     return d;
+  }
+
+  /** 存、删的结果:还在这张图上才说、才清草稿(换了图的,存是存下了,不在这一页说)。 */
+  function after(b: string, f: () => void) {
+    if (here(b)) f();
   }
 
   async function erase() {
     setErasing(false);
     const pts = draft ?? [];
+    const b = base;
     try {
       const d = await saveNav((zones, rev) => {
         let id = `e${rev + 1}`;
         while (zones.some((z) => z.id === id)) id += "x";
         return [...zones, { id, kind: "erase", label: t("eraseLabel"), polygon: pts }];
       });
-      setDraft(null);
-      say(d.auto_confirmed ? t("erasedOk", { rev: d.revision }) : t("erasedNeedsConfirm", { rev: d.revision }));
+      after(b, () => {
+        setDraft(null);
+        say(d.auto_confirmed ? t("erasedOk", { rev: d.revision }) : t("erasedNeedsConfirm", { rev: d.revision }));
+      });
     } catch (e) {
-      say(errText(e));
+      after(b, () => say(errText(e)));
     }
   }
 
   async function unerase(z: NavZone) {
     setUnerasing(null);
+    const b = base;
     try {
       const d = await saveNav((zones) => zones.filter((o) => o.id !== z.id));
-      say(t("eraseRemoved", { rev: d.revision }));
+      after(b, () => say(t("eraseRemoved", { rev: d.revision })));
     } catch (e) {
-      say(errText(e));
+      after(b, () => say(errText(e)));
     }
   }
 
@@ -137,6 +169,7 @@ export function MapsZonesPage({ say }: { say: Say }) {
     setNavForm(false);
     const pts = draft ?? [];
     const kind = drawKind;
+    const b = base;
     try {
       const d = await saveNav((zones, rev) => {
         let id = `${kind === "wall" ? "w" : kind === "slow" ? "s" : "n"}${rev + 1}`;
@@ -149,37 +182,55 @@ export function MapsZonesPage({ say }: { say: Say }) {
         if (f.temp) z.for_s = Math.round(f.hours * 3600);
         return [...zones, z as unknown as NavZone];
       });
-      setDraft(null);
-      say(d.auto_confirmed ? t("navSavedOk", { rev: d.revision }) : t("navSavedNeedsConfirm", { rev: d.revision }));
+      after(b, () => {
+        setDraft(null);
+        say(d.auto_confirmed ? t("navSavedOk", { rev: d.revision }) : t("navSavedNeedsConfirm", { rev: d.revision }));
+      });
     } catch (e) {
-      say(errText(e));
+      after(b, () => say(errText(e)));
     }
   }
 
   async function removeNav(z: NavZone) {
     setRemovingNav(null);
+    const b = base;
     try {
       const d = await saveNav((zones) => zones.filter((o) => o.id !== z.id));
-      say(d.auto_confirmed ? t("navSavedOk", { rev: d.revision }) : t("navRemoved", { rev: d.revision }));
+      after(b, () => say(d.auto_confirmed ? t("navSavedOk", { rev: d.revision }) : t("navRemoved", { rev: d.revision })));
     } catch (e) {
-      say(errText(e));
+      after(b, () => say(errText(e)));
     }
   }
 
   /** 确认这一版(那一句 = 站点给的 confirm_text);一个区域都没有的要明说 empty_ok。 */
   async function confirmNav() {
-    setConfirming(false);
-    if (!nav) return;
+    const shown = confirming;
+    setConfirming(null);
+    if (!shown || !here(shown.base)) return;
+    const b = shown.base;
     try {
-      const d = await api<NavZones>("POST", `${base}/zones/confirm`, {
-        revision: nav.revision, confirm: true, ...(nav.zones.length === 0 ? { empty_ok: true } : {}),
+      // 外审 R3:确认的必须是人刚看过的那一份 —— 发之前再拉一次,图、修订、内容、狗上照旧守着的有一样变了
+      // 就不确认,把新的摆出来让人重看
+      const now = await api<NavZones>("GET", `${b}/zones`);
+      if (!here(b)) return;
+      if (navFingerprint(now) !== navFingerprint(shown.nav)) {
+        setNav(b, now);
+        say(t("navChangedLookAgain", { rev: now.revision }));
+        return;
+      }
+      const d = await api<NavZones>("POST", `${b}/zones/confirm`, {
+        revision: shown.nav.revision, confirm: true, ...(shown.nav.zones.length === 0 ? { empty_ok: true } : {}),
       });
-      setNav(d);
-      loadMeta();
-      say(t("navConfirmedOk", { rev: d.revision }));
+      setNav(b, d);
+      after(b, () => {
+        loadMeta();
+        say(t("navConfirmedOk", { rev: d.revision }));
+      });
     } catch (e) {
-      say(errText(e));
-      loadNav();
+      after(b, () => {
+        say(errText(e));
+        loadNav();
+      });
     }
   }
 
@@ -196,13 +247,16 @@ export function MapsZonesPage({ say }: { say: Say }) {
 
   async function save(name: string) {
     setNaming(false);
+    const b = base;
     try {
-      const d = await api<{ areas: Area[] }>("POST", `${base}/areas`, { zone: name, points: draft });
-      setAreas(d.areas);
-      setDraft(null);
-      say(t("saved"));
+      const d = await api<{ areas: Area[] }>("POST", `${b}/areas`, { zone: name, points: draft });
+      setAreas(b, d.areas);
+      after(b, () => {
+        setDraft(null);
+        say(t("saved"));
+      });
     } catch (e) {
-      say(errText(e));
+      after(b, () => say(errText(e)));
     }
   }
 
@@ -259,7 +313,7 @@ export function MapsZonesPage({ say }: { say: Say }) {
             )}
           </div>
           <div class="zonelist">
-            {nav && <NavPanel nav={nav} list={navList} onRemove={setRemovingNav} onConfirm={() => setConfirming(true)} />}
+            {nav && <NavPanel nav={nav} list={navList} onRemove={setRemovingNav} onConfirm={() => setConfirming({ base, nav })} />}
             <h2>{t("securityZones")}</h2>
             <p class="muted small">{t("zonesHint")}</p>
             {(meta?.zones ?? []).some((z) => z.kind === "nogo") && (
@@ -303,9 +357,10 @@ export function MapsZonesPage({ say }: { say: Say }) {
         <Confirm text={t("removeNavConfirm", { label: removingNav.label || removingNav.id })} yes={t("remove")} danger
           onNo={() => setRemovingNav(null)} onYes={() => void removeNav(removingNav)} />
       )}
-      {confirming && nav && (
-        <Confirm text={nav.zones.length === 0 ? t("navConfirmEmpty") : t("navConfirmText", { rev: nav.revision, text: nav.confirm_text ?? "" })}
-          yes={t("navConfirmBtn")} onNo={() => setConfirming(false)} onYes={() => void confirmNav()} />
+      {confirming && confirming.base === base && (
+        <Confirm text={confirming.nav.zones.length === 0 ? t("navConfirmEmpty")
+          : t("navConfirmText", { rev: confirming.nav.revision, text: confirming.nav.confirm_text ?? "" })}
+          yes={t("navConfirmBtn")} onNo={() => setConfirming(null)} onYes={() => void confirmNav()} />
       )}
       {erasing && <Confirm text={t("eraseConfirm")} yes={t("finishErase")} onNo={() => setErasing(false)} onYes={() => void erase()} />}
       {unerasing && (
@@ -317,7 +372,9 @@ export function MapsZonesPage({ say }: { say: Say }) {
           onYes={() => {
             const z = removing;
             setRemoving(null);
-            api<{ areas: Area[] }>("POST", `${base}/areas`, { zone: z, remove: true }).then((d) => setAreas(d.areas)).catch((e) => say(errText(e)));
+            const b = base;
+            api<{ areas: Area[] }>("POST", `${b}/areas`, { zone: z, remove: true }).then((d) => setAreas(b, d.areas))
+              .catch((e) => after(b, () => say(errText(e))));
           }} />
       )}
     </div>
@@ -538,4 +595,9 @@ function NavZoneForm({ kind, onClose, onSave }: { kind: "nogo" | "slow" | "wall"
       </form>
     </Modal>
   );
+}
+
+/** 一份导航区域「给人看的内容」:修订号、整份区域、狗上照旧守着的、确认那一句(确认前后比,外审 R3)。 */
+export function navFingerprint(n: NavZones): string {
+  return JSON.stringify([n.revision, n.zones, n.held ?? [], n.confirm_text ?? "", !!n.proposal]);
 }

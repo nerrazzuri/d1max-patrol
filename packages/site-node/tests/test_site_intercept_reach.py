@@ -130,7 +130,7 @@ def test_原点也算起点(台):
     assert r.problem == "" and r.note == "", "原点也能当起点"
 
 
-def test_对账_门口画了禁行区_变成走不到_来了入侵不派_删了又走得到(台):
+def test_对账_门口画了禁行区_变成走不到_来了入侵不派_删了并确认又走得到(台):
     t = 台
     t.desk.set_intercept("backyard", map_id="house", map_version="wide", x=6.0, y=2.0, yaw=0.0)
     t.desk.map_zone("back", "backyard")
@@ -148,6 +148,10 @@ def test_对账_门口画了禁行区_变成走不到_来了入侵不派_删了�
     t.desk._publish(row)
     assert [r["outcome"] for r in told] == ["unreachable"], "照样报「没狗去」"
     t.zones.put("house", "wide", [], base_revision=1, by="alice")
+    # 外审 R1(2026-10-15 下午):删禁行区是放宽,确认之前狗照样不过门 —— 拦截点照样走不到
+    t.desk.recheck_intercepts()
+    assert "走不到" in t.desk.intercept("backyard")["reach"]
+    t.zones.confirm("house", "wide", revision=2, by="alice")
     assert t.desk.recheck_intercepts() == 1
     assert t.desk.intercept("backyard")["reach"] == ""
 

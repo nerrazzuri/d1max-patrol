@@ -64,6 +64,16 @@ export function RoutesPage({ say }: { say: Say }) {
   const [showOthers, setShowOthers] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const guard = useRef(clickGuard());
+  // 外审 R2(2026-10-15 下午):读、存、删、重新拉的回包都可能晚到 —— 出发时记下「哪张图、第几次编辑」,
+  // 回来时对不上就不碰页面(服务端已经存下的不撤,只是不把它放进现在这一页)。换图、进编辑、新建、回列表、
+  // 删掉都算新的一次编辑。
+  const mapKey = sel ? `${sel.map_id}\u0000${sel.version}` : "";
+  const live = useRef({ map: mapKey, gen: 0 });
+  if (live.current.map !== mapKey) live.current = { map: mapKey, gen: live.current.gen + 1 };
+  const ticket = () => ({ ...live.current });
+  const still = (tk: { map: string; gen: number }) => live.current.map === tk.map && live.current.gen === tk.gen;
+  const sameMap = (tk: { map: string }) => live.current.map === tk.map;
+  const nextEdit = () => { live.current = { ...live.current, gen: live.current.gen + 1 }; };
 
   useEffect(() => {
     api<{ maps: MapRow[] }>("GET", "/api/maps").then((d) => {
@@ -74,8 +84,10 @@ export function RoutesPage({ say }: { say: Say }) {
   const base = sel ? `/api/maps/${enc(sel.map_id)}/${enc(sel.version)}` : "";
   const load = useCallback(() => {
     if (!sel) return Promise.resolve();
+    const tk = ticket();
     return api<RouteView>("GET", `/api/routes?map_id=${enc(sel.map_id)}&map_version=${enc(sel.version)}`)
-      .then(setView).catch((e) => { setView(null); say(errText(e)); });
+      .then((v) => { if (sameMap(tk)) setView(v); })
+      .catch((e) => { if (sameMap(tk)) { setView(null); say(errText(e)); } });
   }, [sel?.map_id, sel?.version]);
   useEffect(() => {
     setMeta(null);
@@ -86,7 +98,9 @@ export function RoutesPage({ say }: { say: Say }) {
     setConflict(false);
     setView(null);
     if (!base) return;
-    api<PreviewMeta>("GET", `${base}/preview`).then(setMeta).catch(() => setMeta(null));
+    const tk = ticket();
+    api<PreviewMeta>("GET", `${base}/preview`).then((m) => { if (sameMap(tk)) setMeta(m); })
+      .catch(() => { if (sameMap(tk)) setMeta(null); });
     void load();
   }, [base]);
 
@@ -97,7 +111,8 @@ export function RoutesPage({ say }: { say: Say }) {
   const wholeProblems = problems.filter((p) => p.index === null);
 
   function edit(r: Route) {
-    setDraft({ id: r.id, isNew: false, base: r.revision, points: r.waypoints, policy: r.policy });
+    nextEdit();
+    setDraft({ id: r.id, isNew: false, base: r.revision, points: r.waypoints, policy: r.policy, map: mapKey });
     setOrig(r);
     setPi(null);
     setProblems([]);
@@ -105,7 +120,8 @@ export function RoutesPage({ say }: { say: Say }) {
   }
   function startNew() {
     // 新建:右侧栏换成编辑页,名字在编辑页顶上填(2026-10-15 用户:原来名字框夹在路线列表和点位列表中间)
-    setDraft({ id: "", isNew: true, base: 0, points: [], policy: {} });
+    nextEdit();
+    setDraft({ id: "", isNew: true, base: 0, points: [], policy: {}, map: mapKey });
     setOrig(undefined);
     setPi(null);
     setProblems([]);
@@ -125,17 +141,25 @@ export function RoutesPage({ say }: { say: Say }) {
 
   async function save() {
     if (!draft || !sel) return;
+    if (draft.map !== mapKey) {
+      // 草稿不是在现在选的这张图上编的(外审 R2):不发,不然点会改绑到别的图上
+      say(rt("routeWrongMap"));
+      return;
+    }
+    const tk = ticket();
     setProblems([]);
     setConflict(false);
     try {
       const r = await api<Route>("POST", `/api/routes/${enc(draft.id)}`, {
         map_id: sel.map_id, map_version: sel.version, waypoints: draft.points, policy: draft.policy, base_revision: draft.base,
       });
+      if (!still(tk)) return;                 // 已经离开这条路线 / 这张图:存下了,但不放进现在这一页
       say(rt("routeSaved", { rev: r.revision }));
-      setDraft({ id: r.id, isNew: false, base: r.revision, points: r.waypoints, policy: r.policy });
+      setDraft({ id: r.id, isNew: false, base: r.revision, points: r.waypoints, policy: r.policy, map: tk.map });
       setOrig(r);
       await load();
     } catch (e) {
+      if (!still(tk)) return;
       if (e instanceof ApiError && e.status === 409) setConflict(true);
       const errs = e instanceof ApiError ? (e.data as { errors?: PointProblem[] } | undefined)?.errors : undefined;
       if (Array.isArray(errs) && errs.length) {
@@ -148,11 +172,21 @@ export function RoutesPage({ say }: { say: Say }) {
   }
   async function reloadRoute() {
     if (!draft) return;
+    const tk = ticket();
     try {
       const r = await api<Route>("GET", `/api/routes/${enc(draft.id)}`);
+      if (!still(tk)) return;
+      if (sel && (r.map_id !== sel.map_id || r.map_version !== sel.version)) {
+        // 别人把这条路线改到了别的图上:不放进这张图的编辑页
+        say(rt("routeMovedMap", { map: `${r.map_id} · v${r.map_version}` }));
+        setDraft(null);
+        await load();
+        return;
+      }
       edit(r);
       await load();
     } catch (e) {
+      if (!still(tk)) return;
       say(errText(e));
       setDraft(null);
       await load();
@@ -161,13 +195,17 @@ export function RoutesPage({ say }: { say: Say }) {
   async function del() {
     if (!draft) return;
     setRemoving(false);
+    const tk = ticket();
     try {
       await api("POST", `/api/routes/${enc(draft.id)}/delete`, { base_revision: draft.base });
+      if (!still(tk)) return;
       say(rt("routeDeleted"));
+      nextEdit();
       setDraft(null);
       setOrig(undefined);
       await load();
     } catch (e) {
+      if (!still(tk)) return;
       say(errText(e));
     }
   }
@@ -205,6 +243,7 @@ export function RoutesPage({ say }: { say: Say }) {
   const nameTaken = !!draft?.isNew && routes.some((r) => r.id === draft.id);
   function back() {
     if (dirty && !window.confirm(rt("routeUnsaved"))) return;
+    nextEdit();
     setDraft(null);
     setOrig(undefined);
     setPi(null);

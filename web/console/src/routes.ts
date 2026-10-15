@@ -61,6 +61,8 @@ export interface Draft {
   base: number;
   points: RoutePoint[];
   policy: Record<string, unknown>;
+  /** 在哪张图上编的(``map_id\u0000version``;外审 R2):存的时候跟当前选的图核对,对不上不发。 */
+  map?: string;
 }
 
 const round = (v: number, d: number) => Math.round(v * 10 ** d) / 10 ** d;

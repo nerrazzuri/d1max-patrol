@@ -104,3 +104,25 @@ def test_拐角斜接_带子不会因为拐角变细():
     poly = wall_polygon([(0, 0), (4, 0), (4, 4)])
     assert signed_distance(4, 0, poly) <= -0.149
     assert math.isclose(max(x for x, _ in poly), 4.15, abs_tol=1e-6)
+
+
+def test_外审M1_短折线斜接挤窄的拒收_说分段画():
+    """``[(0,0), (0.6,0), (0.85,0.02), (0.5,-0.6)]``:每个拐角都没超过 150°、带子也不自交,但原折线上
+    ``(0.717, -0.216)`` 离边只有约 0.129 m(不到半宽 0.15 m)。现在沿整条线量,窄了就拒。"""
+    with pytest.raises(ContractError, match="窄"):
+        wall_polygon([(0, 0), (0.6, 0), (0.85, 0.02), (0.5, -0.6)])
+
+
+@pytest.mark.parametrize("line", [
+    [(0, 0), (4, 0)],
+    [(0, 0), (3, 0), (3, 2), (5, 4)],
+    [(0, 0), (2, 0), (2, 2), (0, 2), (0, 4)],                # 来回拐
+    [(0, 0), (1, 0.5), (2, 0), (3, 0.5), (4, 0)],            # 锯齿
+    [(i * 0.5, (i % 3) * 0.3) for i in range(30)],
+])
+def test_收下的墙_线上每一处离边都至少半宽(line):
+    poly = wall_polygon(line)
+    for (ax, ay), (bx, by) in zip(line, line[1:], strict=False):
+        for k in range(41):
+            x, y = ax + (bx - ax) * k / 40, ay + (by - ay) * k / 40
+            assert signed_distance(x, y, poly) <= -(WALL_WIDTH_M / 2 - 0.003), (x, y)

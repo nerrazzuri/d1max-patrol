@@ -567,3 +567,135 @@ describe("地图页:点一点去这里 / 设位置,发出去的就是点的坐�
     expect(r.container.querySelector("[data-pose]")).toBeNull();
   });
 });
+
+// ------------------------------------------------------------------ 外审 R2(2026-10-15 下午):迟到的回包
+
+describe("路线页:读、存、删的回包晚到,不进现在这一页(换了图、换了路线、回了列表)", () => {
+  const MAPS2 = { maps: [{ map_id: "B", version: "1", note: "" }, { map_id: "A", version: "1", note: "" }] };
+  const route = (map: string, id: string, rev = 1, pts = [P("P1", 1, 1)]) =>
+    ({ id, map_id: map, map_version: "1", bound: true, revision: rev, waypoints: pts, policy: {}, schedules: [], updated_ms: 0, updated_by: "admin" });
+
+  function slowSite(o: { holdSave?: boolean; holdList?: string; failSave?: boolean }) {
+    const held: { save?: (r: Response) => void; list?: (r: Response) => void } = {};
+    const posted: [string, any][] = [];
+    setFetch((async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        posted.push([u, body]);
+        if (posted.length === 1 && o.holdSave) return new Promise<Response>((r) => { held.save = r; });
+        return json(route(body.map_id, u.split("/").pop()!, 3, body.waypoints));
+      }
+      if (u === "/api/maps") return json(MAPS2);
+      if (u.endsWith("/preview")) return json(META);
+      if (u.includes("/api/routes?")) {
+        const m = u.includes("map_id=B") ? "B" : "A";
+        const body = { revision: 1, timezone: null, routes: [route(m, m === "B" ? "br" : "ar")], schedules: [] };
+        if (o.holdList === m && !held.list) return new Promise<Response>((r) => { held.list = r; });
+        return json(body);
+      }
+      if (u.endsWith("/api/routes/ar")) return json(route("A", "ar", 5));
+      return json({}, 404);
+    }) as never);
+    return { held, posted };
+  }
+
+  async function editAr(r: ReturnType<typeof render>) {
+    fireEvent.change(r.getByLabelText("Map version"), { target: { value: "A\u00001" } });
+    await waitFor(() => expect(r.container.querySelector('[data-route-row="ar"]')).not.toBeNull());
+    fireEvent.click(r.container.querySelector('[data-route-row="ar"]')!);
+    await tick();
+    fireEvent.click(r.getByText("P1"));
+    fireEvent.input(r.getByLabelText("x (m)"), { target: { value: "2" } });
+  }
+
+  it("存 A 的路线时回列表、换到 B 编 br:A 的回包晚到不把 ar 放进来;在 B 上存的是 br、B 图", async () => {
+    installScreenCTM();
+    (window as any).confirm = vi.fn(() => true);
+    const { held, posted } = slowSite({ holdSave: true });
+    const r = render(<RoutesPage say={() => {}} />);
+    await ready(r.container);
+    await editAr(r);
+    fireEvent.click(r.getByText("Save route"));
+    await waitFor(() => expect(posted.length).toBe(1));
+    fireEvent.click(r.getByText("← All routes"));
+    fireEvent.change(r.getByLabelText("Map version"), { target: { value: "B\u00001" } });
+    await waitFor(() => expect(r.container.querySelector('[data-route-row="br"]')).not.toBeNull());
+    fireEvent.click(r.container.querySelector('[data-route-row="br"]')!);
+    await tick();
+    held.save!(json(route("A", "ar", 2, posted[0][1].waypoints)));
+    await new Promise((res) => setTimeout(res, 20));
+    expect(r.container.querySelector(".routeside h2")?.textContent).toBe("br");
+    expect((r.getByLabelText("Map version") as HTMLSelectElement).value).toBe("B\u00001");
+    fireEvent.click(r.getByText("P1"));
+    fireEvent.input(r.getByLabelText("x (m)"), { target: { value: "3" } });
+    fireEvent.click(r.getByText("Save route"));
+    await waitFor(() => expect(posted.length).toBe(2));
+    expect(posted[1][0]).toBe("/api/routes/br");
+    expect(posted[1][1]).toMatchObject({ map_id: "B", map_version: "1", base_revision: 1 });
+  });
+
+  it("A → B → A 又打开 ar:第一次存的回包晚到,不盖掉重新打开的那一份", async () => {
+    installScreenCTM();
+    (window as any).confirm = vi.fn(() => true);
+    const { held, posted } = slowSite({ holdSave: true });
+    const r = render(<RoutesPage say={() => {}} />);
+    await ready(r.container);
+    await editAr(r);
+    fireEvent.click(r.getByText("Save route"));
+    await waitFor(() => expect(posted.length).toBe(1));
+    fireEvent.click(r.getByText("← All routes"));
+    fireEvent.change(r.getByLabelText("Map version"), { target: { value: "B\u00001" } });
+    await waitFor(() => expect(r.container.querySelector('[data-route-row="br"]')).not.toBeNull());
+    await editAr(r);                                         // 又回到 A、又打开 ar、又改了
+    held.save!(json(route("A", "ar", 2, [P("P1", 9, 9)])));
+    await new Promise((res) => setTimeout(res, 20));
+    expect(r.getByLabelText("x (m)")).toHaveProperty("value", "2");
+    expect(r.queryByText("Route saved (revision 2)")).toBeNull();
+  });
+
+  it("A 的路线列表晚到:不写进 B 的列表", async () => {
+    installScreenCTM();
+    const { held } = slowSite({ holdList: "A" });
+    const r = render(<RoutesPage say={() => {}} />);
+    await ready(r.container);
+    fireEvent.change(r.getByLabelText("Map version"), { target: { value: "A\u00001" } });
+    await waitFor(() => expect(held.list).toBeTruthy());
+    fireEvent.change(r.getByLabelText("Map version"), { target: { value: "B\u00001" } });
+    await waitFor(() => expect(r.container.querySelector('[data-route-row="br"]')).not.toBeNull());
+    held.list!(json({ revision: 1, timezone: null, routes: [route("A", "ar")], schedules: [] }));
+    await new Promise((res) => setTimeout(res, 20));
+    expect(r.container.querySelector('[data-route-row="ar"]')).toBeNull();
+    expect(r.container.querySelector('[data-route-row="br"]')).not.toBeNull();
+  });
+
+  it("离开以后才回来的保存报错:不显示、不标点", async () => {
+    installScreenCTM();
+    (window as any).confirm = vi.fn(() => true);
+    const said: string[] = [];
+    let fail: (r: Response) => void = () => {};
+    setFetch((async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (init?.method === "POST") return new Promise<Response>((r) => { fail = r; });
+      if (u === "/api/maps") return json(MAPS2);
+      if (u.endsWith("/preview")) return json(META);
+      if (u.includes("/api/routes?")) return json({ revision: 1, timezone: null, routes: [route("B", "br")], schedules: [] });
+      return json({}, 404);
+    }) as never);
+    const r = render(<RoutesPage say={(s) => said.push(s)} />);
+    await ready(r.container);
+    await waitFor(() => expect(r.container.querySelector('[data-route-row="br"]')).not.toBeNull());
+    fireEvent.click(r.container.querySelector('[data-route-row="br"]')!);
+    await tick();
+    fireEvent.click(r.getByText("P1"));
+    fireEvent.input(r.getByLabelText("x (m)"), { target: { value: "2" } });
+    fireEvent.click(r.getByText("Save route"));
+    await tick();
+    fireEvent.click(r.getByText("← All routes"));
+    await tick();
+    fail(json({ error: "P1 is not a drivable spot", errors: [{ index: 0, problem: "wall" }] }, 400));
+    await new Promise((res) => setTimeout(res, 20));
+    expect(said.filter((s) => s.includes("drivable"))).toEqual([]);
+    expect(r.container.querySelector('[data-route-row="br"]')).not.toBeNull();
+  });
+});

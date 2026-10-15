@@ -14,8 +14,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-#: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表)。
-SCHEMA_VERSION = 59
+#: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
+#: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15)。
+SCHEMA_VERSION = 60
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -308,6 +309,7 @@ CREATE TABLE IF NOT EXISTS nav_zones (
     confirmed_ms  INTEGER,
     confirmed_body TEXT,
     confirmed_how TEXT NOT NULL DEFAULT '',
+    effective_body TEXT,
     PRIMARY KEY (map_id, map_version)
 );
 -- R2(2026-10-14):新版本把上一版的区域、待命点、拦截点带过来**给人核**(不生效);
@@ -656,6 +658,9 @@ _ADDED_COLUMNS = (
     # 决策 66:最后确认过的那一份区域(收紧跟它比)、怎么确认的(confirm / tighten / expiry)
     ("nav_zones", "confirmed_body", "TEXT"),
     ("nav_zones", "confirmed_how", "TEXT NOT NULL DEFAULT ''"),
+    # 外审 R1(2026-10-15 下午):狗上**在生效的**那一份(没确认的放宽不生效、上一轮生效的收紧不丢);
+    # 升上来时留空 = 按原来的算法(当前这一份 + 确认过的那一份里没被盖住的),下一次改动起存下来
+    ("nav_zones", "effective_body", "TEXT"),
 )
 
 
