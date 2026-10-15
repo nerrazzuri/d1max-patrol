@@ -212,7 +212,7 @@ class TeleopDesk:
                 return None
             zones = getattr(self.dispatcher, "zones", None)
             loaded = self.dispatcher._loaded(c)
-            if zones is None or loaded is None or not zones.current(*loaded).hard():
+            if zones is None or loaded is None or not zones.effective(*loaded).hard():
                 return None
         except Exception:                  # 提醒而已,查不到不挡遥控
             log.debug("查硬禁区支持没查成", exc_info=True)

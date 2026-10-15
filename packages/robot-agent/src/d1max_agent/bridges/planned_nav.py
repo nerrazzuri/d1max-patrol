@@ -187,20 +187,28 @@ class PlannedNavBackend(HalNavBackend):
         self._len_cache = {}
 
     def load_grid(self, map_dir: Path | None) -> None:
-        """换图时载规划栅格(阻塞,运行时放线程里调)。坏了记原因、不能规划,不抛。"""
-        self._invalidate()
+        """读 + 装(阻塞)。坏了记原因、不能规划,不抛。运行时换图不用它:读放线程里(:meth:`read_grid`),
+        装在事件循环里且只装当前这次换图的(:meth:`install_grid`,外审 W39-I1)。"""
+        self.install_grid(*self.read_grid(map_dir))
+
+    @staticmethod
+    def read_grid(map_dir: Path | None) -> tuple[Any, str | None]:
+        """读、算规划栅格,**不碰后端**(可以放线程里,晚回来的结果由调用方决定装不装)。回
+        ``(栅格 | None, 问题 | None)``,不抛。"""
         if map_dir is None:
-            self._base, self.plan_problem = None, "没有规划栅格"
-            return
+            return None, "没有规划栅格"
         try:
             free, res, origin = cmod.load_floor(Path(map_dir))
             blocked, pres = cmod.downsample(free, res)
         except (OSError, CostmapError, ValueError) as exc:
             log.error("规划栅格载不了:%s", exc)
-            self._base, self.plan_problem = None, f"规划栅格载不了:{exc}"[:200]
-            return
+            return None, f"规划栅格载不了:{exc}"[:200]
+        return (blocked, pres, origin), None
+
+    def install_grid(self, base: Any, problem: str | None) -> None:
+        """装上 :meth:`read_grid` 的结果(事件循环里调)。"""
         self._invalidate()
-        self._base, self.plan_problem = (blocked, pres, origin), None
+        self._base, self.plan_problem = base, problem
 
     def close_planner(self) -> None:
         self._planner.close()

@@ -199,6 +199,8 @@ class AgentRuntime:
         #: 最近一次收下的巡检命令带的任务修订(R4 运行配置;进程内,重启清空)。
         self._last_patrol: dict[str, Any] | None = None
         self._grid_job: asyncio.Task | None = None
+        #: 换图代次(外审 W39-I1):每换一次图加一,规划栅格只装代次还是自己的那一次读的结果
+        self._grid_gen = 0
         if parts is not None and hasattr(parts.nav, "on_event"):
             parts.nav.on_event = self._nav_event
         #: 局部避障(W11):感知节点经本机障碍桥(``obs.sock``)给局部栅格;规划后端的守卫用它。
@@ -1536,6 +1538,7 @@ class AgentRuntime:
         self._zones_pending = None
         if self._planned:
             nav = self.parts.nav
+            self._grid_gen = getattr(self, "_grid_gen", 0) + 1     # 之前那次换图还在读的,读完不装
             nav.load_grid(None)
             nav.plan_problem = "规划栅格载入中"
             d = self.maps.dir_of(ref) if self.maps is not None else None
@@ -1543,24 +1546,40 @@ class AgentRuntime:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 return
-            self._grid_job = loop.create_task(self._load_grid(d))
+            self._grid_job = loop.create_task(self._load_grid(d, self._grid_gen))
 
     @property
     def _planned(self) -> bool:
         return self.parts is not None and hasattr(self.parts.nav, "load_grid")
 
-    async def _load_grid(self, d: Path | None) -> None:
+    async def _load_grid(self, d: Path | None, gen: int | None = None) -> None:
         """换图后载规划栅格与区域(W10,在线程里读图);完了重发能力(``plan_ok`` 变了)。
         区域取读完图**那一刻**的(内审阻断 1:读图期间站点发来的新区域已经换上了,不许拿换图
-        那一刻的旧值盖回去)。"""
+        那一刻的旧值盖回去)。
+
+        外审 W39-I1:线程里只读、算(``read_grid`` 不碰后端),回到事件循环里**代次还是自己**才装;
+        后面又换过图(连续换图、R5 定位器不收退回原图)的,旧结果、旧错误都不动当前的规划器。"""
         nav = self.parts.nav
+        mine = getattr(self, "_grid_gen", 0) if gen is None else gen
+
+        def stale() -> bool:
+            return getattr(self, "_grid_gen", 0) != mine
         try:
-            await asyncio.to_thread(nav.load_grid, d)
+            got = await asyncio.to_thread(nav.read_grid, d)
+            if stale():
+                log.info("规划栅格读完时已经换过图了(%s):不装", d)
+                return
+            nav.install_grid(*got)
             await nav.set_zones(self._zones)
         except Exception as exc:
+            if stale():
+                log.warning("已经换过图的那次载规划栅格出错(%s):不管", exc)
+                return
             log.exception("载规划栅格出错")
             nav.load_grid(None)
             nav.plan_problem = f"载规划栅格出错:{type(exc).__name__}: {exc}"[:200]
+        if stale():
+            return
         self.processor.supported = self._supported()
         if self.transport.connected:
             await self._publish_caps()

@@ -66,7 +66,7 @@ class InterceptReach:
 
     def _costmap(self, map_id: str, version: str) -> Any:
         from d1max_contract.planning import costmap
-        zs = self.zones.current(map_id, version)
+        zs = self.zones.effective(map_id, version)    # 狗守的那份(外审 W38-I1;内容变修订号必变)
         k = (map_id, version, zs.revision)
         with self._lock:
             if k in self._costmaps:
