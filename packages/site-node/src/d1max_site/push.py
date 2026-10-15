@@ -109,8 +109,9 @@ class PushError(Exception):
 
 
 class PushRetryNow(PushError):
-    """这一次没发出去,但通道已经改好了(极光不认去重字段:之后不再带),**可以马上再发**。通道自己不重发:
-    再发之前要过外层「发之前按此刻再核」(确认了、解决了、过期了就不发)并按此刻重算 TTL(外审 WRAP-I1)。"""
+    """这一次没发出去,但通道已经改好了(极光不认去重字段:之后不再带),**可以马上再发**。通道自己
+    不重发:再发之前要过外层「发之前按此刻再核」(确认了、解决了、过期了就不发)并按此刻重算 TTL
+    (外审 WRAP-I1)。"""
 
 
 class JPush:
@@ -577,8 +578,9 @@ class PushDesk:
 
     def _send_once(self, sender: Any, row: dict[str, Any], chunk: list[str], title: str,
                    extras: dict[str, str]) -> None:
-        """发一批;通道说「改好了、马上再发」(:class:`PushRetryNow`)就**按此刻再核一遍**、重算 TTL 再发一次
-        (外审 WRAP-I1:原来极光在通道里自己重发,绕过了这道核对)。再核不过 → 报错,本批算没发成功。"""
+        """发一批;通道说「改好了、马上再发」(:class:`PushRetryNow`)就**按此刻再核一遍**、重算 TTL
+        再发一次(外审 WRAP-I1:原来极光在通道里自己重发,绕过了这道核对)。再核不过 → 报错,本批算没
+        发成功。"""
         for again in (False, True):
             if again:
                 why = self._skip(row, self._now())

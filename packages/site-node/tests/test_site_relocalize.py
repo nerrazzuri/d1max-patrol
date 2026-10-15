@@ -110,14 +110,15 @@ def test_设位置命令的有效期是30秒(站点, monkeypatch):
 
 
 def test_客户端说了在哪张图上点的_跟狗加载的不一样就不发_一样照发(站点):
-    """外审 W39-I2(2026-10-15):网页底图跟选中的狗可能不是同一张图,原来坐标按狗加载的图补上图号就发了。
-    现在网页、手机带上「我是在哪张图上点的」,站点核对;不带的(老客户端)照旧。"""
+    """外审 W39-I2(2026-10-15):网页底图跟选中的狗可能不是同一张图,原来坐标按狗加载的图补上图号
+    就发了。现在网页、手机带上「我是在哪张图上点的」,站点核对;不带的(老客户端)照旧。"""
     s = 站点
     gina = _登(s, "gina")
     _能设(s)
     caps = s.disp.clients["A"].capabilities.tasks["patrol"]
     code, d = s.req("POST", "/api/robots/A/relocalize",
-                    {"x": 5, "y": 3, "yaw": 0, "map_id": "other-map", "map_version": "1"}, token=gina)
+                    {"x": 5, "y": 3, "yaw": 0, "map_id": "other-map", "map_version": "1"},
+                    token=gina)
     assert code == 409 and "other-map" in d["error"], d
     code, d = s.req("POST", "/api/robots/A/relocalize",
                     {"x": 5, "y": 3, "yaw": 0, "map_id": caps["map_id"], "map_version": "999"},
@@ -130,7 +131,8 @@ def test_客户端说了在哪张图上点的_跟狗加载的不一样就不发_
     assert code == 200 and d["ack"]["result"] == "accepted", d
 
 
-@pytest.mark.parametrize("bad", [{"map_id": "m"}, {"map_version": "1"}, {"map_id": 3, "map_version": "1"},
+@pytest.mark.parametrize("bad", [{"map_id": "m"}, {"map_version": "1"},
+                                 {"map_id": 3, "map_version": "1"},
                                  {"map_id": "", "map_version": "1"}])
 def test_图号版本要成对_要是字符串(站点, bad):
     s = 站点

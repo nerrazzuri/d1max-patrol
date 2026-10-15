@@ -467,7 +467,7 @@ class Dispatcher:
             raise DispatchRefused(f"{loaded[0]}:{loaded[1]} 当前的区域修订还没做安全确认(放宽过、"
                                   "或者从没确认过):先在地图页核对禁行区、确认这一版(图不在站点目录里"
                                   "就先导入)")
-        site = self.zones.current(*loaded)
+        site = self.zones.effective(*loaded)          # 狗守的是在生效的那份(外审 W38-I1)
         z = c.capabilities.tasks.get("zones_set") if c.capabilities is not None else None
         if z is None:
             if site.revision > 0:
@@ -530,7 +530,7 @@ class Dispatcher:
         zp: dict[str, Any] = {"dog_rev": rc.get("zones_rev"), "dog": rc.get("zones_digest"),
                               "site_rev": None, "site": None, "match": None, "basis": None}
         if self.zones is not None and isinstance(m_id, str) and isinstance(m_ver, str):
-            site = self.zones.current(m_id, m_ver)
+            site = self.zones.effective(m_id, m_ver)   # 狗收下的是在生效的那份(外审 W38-I1)
             zp["site_rev"], zp["site"] = site.revision, zones_digest(site)
             if isinstance(zp["dog"], str):
                 zp["basis"] = "digest"
@@ -557,7 +557,12 @@ class Dispatcher:
 
     async def push_zones(self, zs: Any, *, tighten: bool, issued_by: str) -> dict[str, str]:
         """改了区域:发给在线、加载着这一版的狗 → {狗: 空串(收下)或原因}。发不出去的由
-        :meth:`sync_zones` 补发。"""
+        :meth:`sync_zones` 补发。
+
+        外审 W38-I1:发的是这一版**在生效的**那份(:meth:`NavZones.effective`),不是传进来的草稿 ——
+        没确认的放宽不到狗上;``zs`` 只用来定是哪一版。"""
+        if self.zones is not None:
+            zs = self.zones.effective(zs.map_id, zs.map_version)
         targets = [(rid, c) for rid, c in list(self.clients.items())
                    if self._loaded(c) == (zs.map_id, zs.map_version) and self._fresh(c)
                    and c.capabilities is not None and "zones_set" in c.capabilities.tasks]
@@ -603,7 +608,7 @@ class Dispatcher:
             z = c.capabilities.tasks.get("zones_set") if c.capabilities is not None else None
             if loaded is None or z is None or not self._fresh(c):
                 continue
-            site = self.zones.current(*loaded)
+            site = self.zones.effective(*loaded)      # 补发也只发在生效的(外审 W38-I1)
             if not isinstance(z.get("rev"), int) or z["rev"] >= site.revision \
                     or z.get("pending_rev") == site.revision:
                 continue

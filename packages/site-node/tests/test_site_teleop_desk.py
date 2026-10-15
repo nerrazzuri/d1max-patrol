@@ -418,7 +418,7 @@ def test_硬禁区_老狗不守_开遥控时就告诉手机(desk):
     k, d = desk
     hard = ZoneSet.from_wire({"map_id": "m", "map_version": "1", "revision": 1, "zones": [
         {"id": "pool", "kind": "nogo", "hard": True, "polygon": [[0, 0], [1, 0], [1, 1]]}]})
-    d.zones = SimpleNamespace(current=lambda m, v: hard)
+    d.zones = SimpleNamespace(current=lambda m, v: hard, effective=lambda m, v: hard)
     d._loaded = lambda c: ("m", "1")
     caps = d.clients["A"].capabilities
     caps.tasks["zones_set"] = {"rev": 1, "enforced": True}

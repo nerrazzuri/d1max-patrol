@@ -1442,9 +1442,9 @@ class _Handler(TlsHandlerMixin):
                 if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
                     raise HttpError(400, f"{k} 要是有限数")
                 payload[k] = float(v)
-        # 客户端在哪张图上点的(外审 W39-I2,可选、要成对):网页底图、手机看的图跟狗加载的可能不是同一张
-        # —— 原来坐标直接按狗加载的那张补图号,另一张图上的坐标就当成这张的发出去了。说了就核对,不一样
-        # 不发;不说的(老客户端)照旧
+        # 客户端在哪张图上点的(外审 W39-I2,可选、要成对):网页底图、手机看的图跟狗加载的可能不是
+        # 同一张 —— 原来坐标直接按狗加载的那张补图号,另一张图上的坐标就当成这张的发出去了。说了就
+        # 核对,不一样不发;不说的(老客户端)照旧
         want = None
         if "map_id" in d or "map_version" in d:
             mid, ver = d.get("map_id"), d.get("map_version")
@@ -2058,7 +2058,12 @@ class _Handler(TlsHandlerMixin):
                 adopted["intercepts"][name] = self._adopt_intercept(map_id, version, src, p)
         self._audit_detail = {"confirmed_rev": d.get("revision"), "empty_ok": empty_ok,
                               "adopted": {k: len(v) for k, v in adopted.items()}}
-        out = zones.view(map_id, version)
+        # 确认了:在生效的可能变了(放宽的这才生效、采纳的并进来了,修订号也跟着加了)—— 马上发给狗
+        # (外审 W38-I1;发不出去的补发兜底)
+        eff = zones.effective(map_id, version)
+        pushed = self.site.dispatch(lambda: self.site.dispatcher.push_zones(
+            eff, tighten=False, issued_by=str(user)))
+        out = zones.view(map_id, version) | {"pushed": pushed}
         return self._send_json(200, out | ({"adopted": adopted} if prop is not None else {}))
 
     def _adopt_standby(self, map_id: str, version: str, src: str, p: dict) -> str:
