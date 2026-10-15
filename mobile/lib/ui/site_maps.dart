@@ -355,6 +355,7 @@ class SiteMapTab extends StatefulWidget {
   const SiteMapTab({super.key, required this.api});
 
   static const Key canvasKey = Key('map-tab-canvas');
+  static const Key wallLegendKey = Key('map-tab-legend-wall');
 
   /// 深色下栅格底图外面那层滤镜（浅色没有这一层）。
   static const Key darkRasterKey = Key('map-tab-dark-raster');
@@ -628,7 +629,8 @@ class _SiteMapTabState extends State<SiteMapTab> {
     final w = geo.width, h = geo.height, mpp = geo.mPerPx, rad = geo.radians;
     final standby = (meta['standby'] as List? ?? const []).whereType<Map>().toList();
     final homes = (meta['homes'] as List? ?? const []).whereType<Map>().toList();
-    final nogo = v.zones.any((z) => z['kind'] == 'nogo');
+    final nogo = v.zones.any((z) => z['kind'] == 'nogo' && z['wall'] is! List);
+    final wall = v.zones.any((z) => z['kind'] == 'nogo' && z['wall'] is List); // 虚拟墙（2026-10-15）
     final slow = v.zones.any((z) => z['kind'] == 'slow');
     final erase = v.zones.any((z) => z['kind'] == 'erase'); // 台账 44：抹掉区
     // 这张图上的狗：报着这张图、位置可信的才画（没设位置的画在哪儿都是错的）
@@ -661,6 +663,12 @@ class _SiteMapTabState extends State<SiteMapTab> {
       if (homes.isNotEmpty)
         NwLegendItem(swatch: Container(width: 10, height: 10, color: _homePaint), label: tr('Origin', '原点')),
       if (nogo) NwLegendItem(swatch: swatch(_nogoPaint), label: tr('No-go zone', '禁行区')),
+      if (wall)
+        NwLegendItem(
+            key: SiteMapTab.wallLegendKey,
+            swatch: Container(
+                width: 14, height: 4, decoration: BoxDecoration(color: _nogoPaint, borderRadius: BorderRadius.circular(2))),
+            label: tr('Virtual wall', '虚拟墙')),
       if (slow) NwLegendItem(swatch: swatch(_slowPaint), label: tr('Speed-limit zone', '限速区')),
       if (erase) mapEraseLegend(context),
       if (geo.areas.isNotEmpty) mapAreaLegend(context),
@@ -726,7 +734,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
                                                   key: SiteMapTab.zonesKey,
                                                   painter: ZonesPainter([
                                                     for (final z in v.zones)
-                                                      ZoneShape.of(z, [
+                                                      ZoneShape.of(z, wall: zoneWallPixels(z, px), [
                                                         for (final p in (z['polygon'] as List? ?? const []))
                                                           if (p is List && p.length >= 2 && p[0] is num && p[1] is num)
                                                             px((p[0] as num).toDouble(), (p[1] as num).toDouble()),

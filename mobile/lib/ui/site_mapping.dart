@@ -37,7 +37,7 @@ const int _staleAfterS = 15;
 String zoneLabelText(Object? label) {
   final l = '${label ?? ''}';
   if (appLang.value == AppLang.zh) return l;
-  return switch (l) { '禁行区' => 'No-go zone', '限速区' => 'Speed-limit zone', '抹掉区' => 'Erase zone', _ => l };
+  return switch (l) { '禁行区' => 'No-go zone', '限速区' => 'Speed-limit zone', '抹掉区' => 'Erase zone', '虚拟墙' => 'Virtual wall', _ => l };
 }
 
 class SiteMappingTrailPage extends StatefulWidget {
@@ -620,6 +620,7 @@ class SiteMapPreviewPage extends StatefulWidget {
 
   /// 台账 44：抹掉一块（区域种类 `erase`：狗永远不去，站点画图时抹成没建图）。
   static const Key drawEraseKey = Key('zone-draw-erase');
+  static const Key drawWallKey = Key('zone-draw-wall');
   static const Key finishKey = Key('zone-finish');
   static const Key undoKey = Key('zone-undo');
   static const Key cancelKey = Key('zone-cancel');
@@ -748,16 +749,17 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
     while (_zoneList.any((z) => z['id'] == id)) {
       id = '${id}x';
     }
+    final pts = [
+      for (final p in _draft) [double.parse(p.dx.toStringAsFixed(2)), double.parse(p.dy.toStringAsFixed(2))]
+    ];
+    // 虚拟墙（2026-10-15）：只给画的线，多边形（约 0.3 m 宽的禁行带）站点算
     final zone = <String, dynamic>{
       'id': id,
-      'kind': kind,
-      'label': switch (kind) { 'nogo' => '禁行区', 'erase' => '抹掉区', _ => '限速区' },
-      'polygon': [
-        for (final p in _draft)
-          [double.parse(p.dx.toStringAsFixed(2)), double.parse(p.dy.toStringAsFixed(2))]
-      ],
+      'kind': kind == 'wall' ? 'nogo' : kind,
+      'label': switch (kind) { 'nogo' => '禁行区', 'erase' => '抹掉区', 'wall' => '虚拟墙', _ => '限速区' },
+      if (kind == 'wall') 'wall': pts else 'polygon': pts,
       if (kind == 'slow') 'max_speed_mps': double.parse(_speed.toStringAsFixed(1)),
-      if ((kind == 'nogo' || kind == 'erase') && _hard) 'hard': true,
+      if ((kind == 'nogo' || kind == 'erase' || kind == 'wall') && _hard) 'hard': true,
       // 临时区：给时长，站点按它自己的钟换成到期时刻（手机的钟可能不准）
       if (_forS != null) 'for_s': _forS,
     };
@@ -925,9 +927,9 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                   px(((v as List)[0] as num).toDouble(), (v[1] as num).toDouble())
               ];
           final shapes = [
-            for (final z in zones) ZoneShape.of(z, poly(z)),
+            for (final z in zones) ZoneShape.of(z, poly(z), wall: zoneWallPixels(z, px)),
             // R2：从上一版带过来、还没人核的：只画轮廓，跟生效的分开
-            for (final z in _propList('zones')) ZoneShape.of(z, poly(z), proposed: true),
+            for (final z in _propList('zones')) ZoneShape.of(z, poly(z), proposed: true, wall: zoneWallPixels(z, px)),
           ];
           final draft = [for (final p in _draft) px(p.dx, p.dy)];
           final r = math.max(2.0, math.max(w, h) / 120);
@@ -976,7 +978,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
                             CustomPaint(
                                 key: SiteMapPreviewPage.zonesKey,
                                 size: Size(w, h),
-                                painter: ZonesPainter(shapes, draft, radius: r)),
+                                painter: ZonesPainter(shapes, draft, radius: r, draftOpen: _drawing == 'wall')),
                             CustomPaint(
                                 key: SiteMapPreviewPage.overlayKey,
                                 size: Size(w, h),
@@ -1172,6 +1174,10 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
               onPressed: _busy ? null : () => _startDrawing('slow'),
               child: Text(tr('Draw speed-limit zone', '画限速区'))),
           OutlinedButton(
+              key: SiteMapPreviewPage.drawWallKey,
+              onPressed: _busy ? null : () => _startDrawing('wall'),
+              child: Text(tr('Draw virtual wall', '画虚拟墙'))),
+          OutlinedButton(
               key: SiteMapPreviewPage.drawEraseKey,
               onPressed: _busy ? null : () => _startDrawing('erase'),
               child: Text(tr('Erase a region', '抹掉一块'))),
@@ -1180,6 +1186,11 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
             tr('Adding or enlarging a zone, a lower limit or the hard mark takes effect at once. Deleting, '
                 'shrinking or raising a limit must be confirmed again before robots are sent out.',
                 '加禁行区、放大、调低限速、标硬禁区当场生效；删、缩、调高限速要重新确认才派狗。'),
+            style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
+        Text(
+            tr('Virtual wall: tap along the line (2 points or more). Robots do not cross it; it is stored as a '
+                '0.3 m wide no-go strip and follows the same rules as a no-go zone.',
+                '虚拟墙：沿着墙点（两个点以上）。狗不会穿过；存成 0.3 米宽的禁行带，规则跟禁行区一样。'),
             style: NwText.bodySmall.copyWith(color: Nw.of(context).textSecondary)),
         Text(
             tr('Erase a region: robots never go there (like a no-go zone) and every map shows it as removed '
@@ -1199,10 +1210,14 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
       ],
       if (_drawing != null) ...[
         Text(tr(
-            '${switch (_drawing) { 'nogo' => 'No-go zone', 'erase' => 'Erase', _ => 'Speed-limit zone' }}: '
-                'tap the map to add corners, ${_draft.length} so far',
-            '${switch (_drawing) { 'nogo' => '禁行区', 'erase' => '抹掉', _ => '限速区' }}：点图加顶点，已 ${_draft.length} 个')),
-        if (_drawing == 'nogo' || _drawing == 'erase')
+            _drawing == 'wall'
+                ? 'Virtual wall: tap along the line, ${_draft.length} points so far'
+                : '${switch (_drawing) { 'nogo' => 'No-go zone', 'erase' => 'Erase', _ => 'Speed-limit zone' }}: '
+                    'tap the map to add corners, ${_draft.length} so far',
+            _drawing == 'wall'
+                ? '虚拟墙：沿着墙点，已 ${_draft.length} 个'
+                : '${switch (_drawing) { 'nogo' => '禁行区', 'erase' => '抹掉', _ => '限速区' }}：点图加顶点，已 ${_draft.length} 个')),
+        if (_drawing == 'nogo' || _drawing == 'erase' || _drawing == 'wall')
           CheckboxListTile(
               key: SiteMapPreviewPage.hardKey,
               dense: true,
@@ -1246,7 +1261,7 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
         Wrap(spacing: 4, children: [
           FilledButton(
               key: SiteMapPreviewPage.finishKey,
-              onPressed: _draft.length >= 3 && !_busy ? _finish : null,
+              onPressed: _draft.length >= (_drawing == 'wall' ? 2 : 3) && !_busy ? _finish : null,
               child: Text(tr('Finish zone', '完成'))),
           OutlinedButton(
               key: SiteMapPreviewPage.undoKey,
@@ -1269,23 +1284,43 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
 /// 边更粗；从上一版带过来、等人核的（R2）只画轮廓；抹掉区（台账 44，[erase]）只描一道细边 —— 底图那一块
 /// 站点已经抹了。
 class ZoneShape {
-  const ZoneShape(this.nogo, this.pixels, {this.hard = false, this.proposed = false, this.erase = false});
+  const ZoneShape(this.nogo, this.pixels,
+      {this.hard = false, this.proposed = false, this.erase = false, this.wall});
 
-  /// 按站点给的区域（`kind`、`hard`）。
-  factory ZoneShape.of(Map<String, dynamic> z, List<Offset> pixels, {bool proposed = false}) =>
+  /// 按站点给的区域（`kind`、`hard`）；[wall]：虚拟墙画的那条线（图的像素，[zoneWallPixels]）。
+  factory ZoneShape.of(Map<String, dynamic> z, List<Offset> pixels, {bool proposed = false, List<Offset>? wall}) =>
       ZoneShape(z['kind'] == 'nogo', pixels,
-          hard: z['hard'] == true, proposed: proposed, erase: z['kind'] == 'erase');
+          hard: z['hard'] == true, proposed: proposed, erase: z['kind'] == 'erase', wall: wall);
   final bool nogo;
   final List<Offset> pixels;
   final bool hard;
   final bool proposed;
   final bool erase;
+  /// 虚拟墙（2026-10-15）：画的那条线；画成粗线，不画站点算的那条窄带子。
+  final List<Offset>? wall;
+}
+
+/// 虚拟墙的线（地图米 → 图的像素）；不是虚拟墙、线不成形是 null。
+List<Offset>? zoneWallPixels(Map<String, dynamic> z, Offset Function(double, double) px) {
+  final raw = z['wall'];
+  if (raw is! List || raw.length < 2) return null;
+  final out = <Offset>[];
+  for (final p in raw) {
+    if (p is! List || p.length < 2 || p[0] is! num || p[1] is! num) return null;
+    out.add(px((p[0] as num).toDouble(), (p[1] as num).toDouble()));
+  }
+  return out;
 }
 
 /// 区域在列表、勾选里怎么写（种类 + 名字 + id）：禁行、硬禁区、抹掉（台账 44）、限速。
 String zoneTitle(Map<String, dynamic> z, {bool withId = true}) {
   final idEn = withId ? ' (${z['id']})' : '', idZh = withId ? '\uFF08${z['id']}\uFF09' : '';
   final label = z['label'] ?? '';
+  if (z['kind'] == 'nogo' && z['wall'] is List) {
+    return z['hard'] == true
+        ? tr('Hard virtual wall · ${zoneLabelText(label)}$idEn', '硬虚拟墙 · $label$idZh')
+        : tr('Virtual wall · ${zoneLabelText(label)}$idEn', '虚拟墙 · $label$idZh');
+  }
   return switch (z['kind']) {
     'nogo' => z['hard'] == true
         ? tr('Hard no-go · ${zoneLabelText(label)}$idEn', '硬禁区 · $label$idZh')
@@ -1301,14 +1336,30 @@ String zoneTitle(Map<String, dynamic> z, {bool withId = true}) {
 /// 画区域（W10）：禁行红、限速黄，半透明；硬禁区深红、粗边；带过来的只有灰蓝色的轮廓；正在画的那一个
 /// 用虚一点的蓝线连着顶点。
 class ZonesPainter extends CustomPainter {
-  ZonesPainter(this.shapes, this.draft, {this.radius = 3});
+  ZonesPainter(this.shapes, this.draft, {this.radius = 3, this.draftOpen = false});
   final List<ZoneShape> shapes;
   final List<Offset> draft;
   final double radius;
+  /// 正在画的是虚拟墙：连成线、不闭合。
+  final bool draftOpen;
 
   @override
   void paint(Canvas canvas, Size size) {
     for (final z in shapes) {
+      final w = z.wall;
+      if (w != null && w.length >= 2) {
+        // 虚拟墙：粗线（硬的更深更粗）；带过来、等人核的灰蓝
+        final line = Path()..addPolygon(w, false);
+        canvas.drawPath(
+            line,
+            Paint()
+              ..color = z.proposed ? Colors.blueGrey : (z.hard ? Colors.red.shade900 : Colors.red)
+              ..style = PaintingStyle.stroke
+              ..strokeCap = StrokeCap.round
+              ..strokeJoin = StrokeJoin.round
+              ..strokeWidth = z.hard ? radius * 1.4 : radius);
+        continue;
+      }
       if (z.pixels.length < 3) continue;
       final path = Path()..addPolygon(z.pixels, true);
       if (z.erase && !z.proposed) {
@@ -1343,7 +1394,7 @@ class ZonesPainter extends CustomPainter {
         ..color = Colors.blue
         ..style = PaintingStyle.stroke
         ..strokeWidth = radius / 2;
-      canvas.drawPath(Path()..addPolygon(draft, draft.length >= 3), line);
+      canvas.drawPath(Path()..addPolygon(draft, !draftOpen && draft.length >= 3), line);
       for (final p in draft) {
         canvas.drawCircle(p, radius / 1.5, Paint()..color = Colors.blue);
       }

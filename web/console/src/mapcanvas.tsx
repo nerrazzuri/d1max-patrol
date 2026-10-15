@@ -33,11 +33,11 @@ import { rasterShade, scheme } from "./theme";
 /** 图上画的有名字的多边形(地图坐标,米):area = 区域(淡),zone = 防区(防区页上能改的那些,显眼)。 */
 export interface CanvasArea { name: string; pts: Pt[]; kind: "area" | "zone" }
 
-export type LegendKey = "floor" | "wall" | "seen" | "unknown" | "nogo" | "hard" | "erase" | "slow" | "area" | "zone" | "robot" | "alarm";
-const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "seen", "unknown", "nogo", "hard", "erase", "slow", "area", "zone", "robot", "alarm"];
+export type LegendKey = "floor" | "wall" | "seen" | "unknown" | "nogo" | "hard" | "vwall" | "erase" | "slow" | "area" | "zone" | "robot" | "alarm";
+const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "seen", "unknown", "nogo", "hard", "vwall", "erase", "slow", "area", "zone", "robot", "alarm"];
 const LEGEND_TEXT: Record<LegendKey, Key> = {
   floor: "legendFloor", wall: "legendWall", seen: "legendSeen", unknown: "legendUnknown", nogo: "legendNoGo",
-  hard: "hardNoGoLegend", erase: "legendErase", slow: "legendSlow",
+  hard: "hardNoGoLegend", vwall: "legendVWall", erase: "legendErase", slow: "legendSlow",
   area: "legendArea", zone: "legendZone", robot: "legendRobot", alarm: "legendAlarm",
 };
 
@@ -191,8 +191,9 @@ export function MapCanvas(props: {
   const zones = (meta.zones ?? []).filter((z) => Array.isArray(z.polygon) && z.polygon.length >= 3);
   const areas = props.areas ?? [];
   const present = new Set<LegendKey>(["floor", "wall", "unknown", ...(props.legend ?? [])]);
-  if (zones.some((z) => z.kind === "nogo" && !z.hard)) present.add("nogo");
-  if (zones.some((z) => z.kind === "nogo" && z.hard)) present.add("hard");
+  if (zones.some((z) => z.kind === "nogo" && !z.hard && !z.wall)) present.add("nogo");
+  if (zones.some((z) => z.kind === "nogo" && z.hard && !z.wall)) present.add("hard");
+  if (zones.some((z) => !!z.wall)) present.add("vwall");
   if (zones.some((z) => z.kind === "slow")) present.add("slow");
   // 地图台账 M9、44:看到过、狗没走过(站点说这一版有才列);抹掉区(站点已经把那一块画成没建图,这里只描边)
   if (meta.seen === true) present.add("seen");
@@ -211,11 +212,17 @@ export function MapCanvas(props: {
             <image key={plan ? plan.url : props.raster} href={plan ? plan.url : props.raster} x="0" y="0" width={meta.width} height={meta.height}
               preserveAspectRatio="none" class={plan ? "mapimg plan" : "mapimg"}
               onError={plan ? () => setPlanBad(plan.url) : undefined} />
-            {zones.map((z) => (z.kind === "nogo" || z.kind === "slow" || z.kind === "erase") && (
+            {/* 虚拟墙(2026-10-15)画成一条粗线(画的那条),不画站点算的那条窄带子 */}
+            {zones.map((z) => (z.kind === "nogo" || z.kind === "slow" || z.kind === "erase") && !z.wall && (
               <polygon key={z.id} points={polyAttr(meta, z.polygon)}
                 class={z.kind === "nogo" ? (z.hard ? "nogo-area hard" : "nogo-area") : z.kind === "erase" ? "erase-area" : "slow-area"}>
                 {(z.kind === "nogo" || z.kind === "erase") && <title>{navZoneTip(z)}</title>}
               </polygon>
+            ))}
+            {zones.filter((z) => Array.isArray(z.wall) && z.wall.length >= 2).map((z) => (
+              <polyline key={`w:${z.id}`} points={polyAttr(meta, z.wall!)} class={z.hard ? "vwall-line hard" : "vwall-line"} data-vwall={z.id}>
+                <title>{navZoneTip(z)}</title>
+              </polyline>
             ))}
             {areas.map((a, i) => (
               <polygon key={`${i}:${a.kind}:${a.name}`} points={polyAttr(meta, a.pts)} class={a.kind === "zone" ? "sec-area" : "sec-area quiet"} />
@@ -260,9 +267,11 @@ export function MapCanvas(props: {
 /** 悬停在禁行区、抹掉区上看到的那句话:名字、是不是硬禁区(决策 65)、临时区什么时候到期(决策 66)。 */
 export function navZoneTip(z: NavZone): string {
   const name = z.label || z.id;
-  const base = z.kind === "erase"
-    ? (z.hard ? t("hardEraseTip", { label: name }) : t("eraseTip", { label: name }))
-    : z.hard ? t("hardNoGoTip", { label: name }) : t("noGoTip", { label: name });
+  const base = z.wall
+    ? (z.hard ? t("hardVWallTip", { label: name }) : t("vwallTip", { label: name }))
+    : z.kind === "erase"
+      ? (z.hard ? t("hardEraseTip", { label: name }) : t("eraseTip", { label: name }))
+      : z.hard ? t("hardNoGoTip", { label: name }) : t("noGoTip", { label: name });
   if (typeof z.until_ms !== "number") return base;
   const d = new Date(z.until_ms);
   const two = (v: number) => String(v).padStart(2, "0");
@@ -286,6 +295,7 @@ function Swatch({ k, plan }: { k: LegendKey; plan: boolean }) {
   else if (k === "nogo") body = <rect x="1" y="1" width="14" height="10" class="nogo-area" />;
   else if (k === "hard") body = <rect x="1.5" y="1.5" width="13" height="9" class="nogo-area hard" />;
   else if (k === "slow") body = <rect x="1" y="1" width="14" height="10" class="slow-area" />;
+  else if (k === "vwall") body = <path d="M1 9L7 3L15 3" class="vwall-line" />;
   else if (k === "area") body = <rect x="1" y="1" width="14" height="10" class="sec-area quiet" />;
   else if (k === "zone") body = <rect x="1" y="1" width="14" height="10" class="sec-area" />;
   else if (k === "robot") body = <circle cx="8" cy="6" r="5" class="sw-robot" />;

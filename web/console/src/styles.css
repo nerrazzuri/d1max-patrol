@@ -297,6 +297,17 @@ a.btn { text-decoration: none; }
 /* 硬禁区(决策 65,水体、落差:遥控也开不进去):实线、粗边、更深 —— 不靠颜色一样认得出 */
 .nogo-area.hard { fill-opacity: 0.4; stroke-dasharray: none; stroke-width: 3; }
 /* 抹掉区(地图台账 44):站点已经把底图那一块抹成没建图,这里只描一道细虚线,看得出边在哪 */
+/* 虚拟墙(2026-10-15):画的那条线,粗线;硬的实线 */
+.vwall-line { fill: none; stroke: var(--c-error); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 8 4; vector-effect: non-scaling-stroke; }
+.vwall-line.hard { stroke-dasharray: none; stroke-width: 5; }
+.sw .vwall-line { stroke-width: 2.5; stroke-dasharray: 4 2; }
+.draft-line.vwall { stroke: var(--c-error); stroke-width: 4; }
+.draw-buttons { flex-wrap: wrap; gap: 6px; }
+.navzones .warn { color: var(--c-warning); }
+.form .field-check, .field-check { display: flex; align-items: center; gap: 6px; }
+.navzones { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.navzone-list { list-style: none; margin: 0; padding: 0; }
+.navzone-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 6px 0; border-top: 1px solid var(--c-outline); }
 .erase-area { fill: none; stroke: var(--c-textSecondary); stroke-dasharray: 1 3; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .nogo-legend .swatch { display: inline-block; width: 14px; height: 10px; vertical-align: middle; border: 1.5px dashed var(--c-error); background: color-mix(in srgb, var(--c-error) 22%, transparent); }
 .nogo-legend .swatch.hard { border: 3px solid var(--c-error); background: color-mix(in srgb, var(--c-error) 40%, transparent); }

@@ -268,6 +268,66 @@ void main() {
     expect(find.textContaining('已确认'), findsOneWidget);
   });
 
+  testWidgets('虚拟墙（2026-10-15）：两个点就能画完；只送墙线、标硬；图上画成线、列表写虚拟墙', (t) async {
+    final api = FakeApi('admin');
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    await t.ensureVisible(find.byKey(SiteMapPreviewPage.drawWallKey));
+    await t.tap(find.byKey(SiteMapPreviewPage.drawWallKey));
+    await t.pump();
+    final rect = t.getRect(find.byKey(SiteMapPreviewPage.canvasKey));
+    final k = rect.width / 200;
+    await t.tapAt(rect.topLeft + const Offset(20, 10) * k);
+    await t.pump();
+    expect(find.textContaining('虚拟墙：沿着墙点，已 1 个'), findsOneWidget);
+    expect(t.widget<FilledButton>(find.byKey(SiteMapPreviewPage.finishKey)).onPressed, isNull,
+        reason: '一个点画不成墙');
+    await t.tapAt(rect.topLeft + const Offset(60, 10) * k);
+    await t.pump();
+    final draw = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter! as ZonesPainter;
+    expect(draw.draftOpen, isTrue, reason: '画墙是一条线，不闭合');
+    await t.ensureVisible(find.byKey(SiteMapPreviewPage.hardKey));
+    await t.tap(find.byKey(SiteMapPreviewPage.hardKey));
+    await t.pump();
+    await t.ensureVisible(find.byKey(SiteMapPreviewPage.finishKey));
+    await t.tap(find.byKey(SiteMapPreviewPage.finishKey));
+    await t.pumpAndSettle();
+    final z = api.savedZones.single.single;
+    expect(z['kind'], 'nogo');
+    expect(z['hard'], isTrue);
+    expect(z.containsKey('polygon'), isFalse, reason: '多边形站点按线算');
+    final wall = (z['wall'] as List).cast<List>();
+    expect(wall.length, 2);
+    // 像素 (20, 10) → 地图 (-8, 4)；(60, 10) → (-4, 4)
+    expect((wall[0][0] as num).toDouble(), closeTo(-8.0, 0.02));
+    expect((wall[1][0] as num).toDouble(), closeTo(-4.0, 0.02));
+    expect((wall[1][1] as num).toDouble(), closeTo(4.0, 0.02));
+  });
+
+  testWidgets('站点给的虚拟墙：画成墙线（不画带子）、列表写硬虚拟墙；带过来的墙也画成线', (t) async {
+    final api = FakeApi('guard')
+      ..zonesView = <String, dynamic>{
+        'revision': 3,
+        'zones': <dynamic>[
+          {'id': 'w1', 'kind': 'nogo', 'label': '围栏', 'hard': true, 'wall': [[0, 0], [2, 0], [2, 1]],
+            'polygon': [[-0.15, 0.15], [2.15, 0.15], [2.15, 1.15], [1.85, 1.15], [1.85, -0.15], [-0.15, -0.15]]},
+        ],
+        'confirmed': {'revision': 3, 'by': 'alice', 'at_ms': 1, 'current': true},
+        'confirm_text': 'x'};
+    await t.pumpWidget(MaterialApp(home: SiteMapPreviewPage(api: api, mapId: 'estate-1',
+        version: '8')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('硬虚拟墙 · 围栏'), findsOneWidget);
+    final p = t.widget<CustomPaint>(find.byKey(SiteMapPreviewPage.zonesKey)).painter! as ZonesPainter;
+    final s = p.shapes.single;
+    expect(s.hard, isTrue);
+    expect(s.wall, isNotNull);
+    // 左边缘 x = -10、上边缘 y = 5、一像素 0.1 m：(0, 0) 在 (100, 50)，(2, 0) 在 (120, 50)
+    expect(s.wall!.first, const Offset(100, 50));
+    expect(s.wall![1], const Offset(120, 50));
+  });
+
   testWidgets('管理员画限速区带速度；删一个；别人先改了说清楚', (t) async {
     final api = FakeApi('admin')
       ..zonesView = <String, dynamic>{
