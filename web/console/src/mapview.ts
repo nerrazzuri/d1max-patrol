@@ -22,6 +22,10 @@ export interface NavZone {
   hard?: boolean;
   /** 临时区到期(决策 66,毫秒)。 */
   until_ms?: number;
+  /** 限速区的限速(m/s)。 */
+  max_speed_mps?: number;
+  /** 虚拟墙画的那条线(2026-10-15;多边形是站点按它算的约 0.3 m 宽的禁行带)。 */
+  wall?: Pt[];
 }
 
 /** 站点给的有名字的区域(地图坐标,米)。 */

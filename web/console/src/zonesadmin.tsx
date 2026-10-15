@@ -1,7 +1,8 @@
 // 管理组(商业化 B1c):地图与防区(在图上画防区多边形)、名单(时段 / 人员授权)。
 // 地图台账 44(2026-10-14):在图上框一块「抹掉」(导航区域的种类 erase)—— 狗永远不去、站点画图时抹成没建图。
-// 存的是整份导航区域(带改之前看到的修订号,跟手机一样);加一块是收紧、当场生效,删一块是放宽、要在手机上重新确认。
-// 别的导航区域(禁行、限速)照旧只在手机上画。
+// 存的是整份导航区域(带改之前看到的修订号,跟手机一样);加一块是收紧、当场生效,删一块是放宽、要重新确认。
+// 2026-10-15(用户「只能画防区感觉不太够」):网页也能画禁行区、限速区、**虚拟墙**(画一条线,站点存成约 0.3 m 宽的
+// 禁行带,规则跟禁行区一样),列出狗守的区域、删、确认这一版(从上一版带过来的建议还是在手机上核)。
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { Confirm, Modal } from "./dialogs";
@@ -9,12 +10,28 @@ import { t } from "./i18n";
 import { MapCanvas } from "./mapcanvas";
 import { toPx, type NavZone, type PreviewMeta, type Pt } from "./mapview";
 
+/** 虚拟墙的宽(米,跟契约 ``WALL_WIDTH_M`` 一样;只用来写提示,多边形是站点算的)。 */
+const WALL_WIDTH_M = 0.3;
+
 type Say = (s: string) => void;
 
 interface MapRow { map_id: string; version: string; note: string; created_ms: number; source: string }
 interface Area { zone: string; points: Pt[] }
-/** 站点的导航区域(GET/POST …/zones):修订号 + 整份区域。 */
-interface NavZones { revision: number; zones: NavZone[]; auto_confirmed?: boolean }
+/** 站点的导航区域(GET/POST …/zones):修订号 + 整份区域 + 确认情况。 */
+interface NavZones {
+  revision: number;
+  zones: NavZone[];
+  auto_confirmed?: boolean;
+  confirmed?: { revision: number; by: string; at_ms: number; current: boolean; how: string } | null;
+  confirm_text?: string;
+  proposal?: unknown;
+  /** 还没确认、狗上照旧守着的(外审 W38-I1)。 */
+  held?: NavZone[];
+}
+/** 正在画什么:防区(摄像头用)、抹掉区,或者狗守的禁行区、限速区、虚拟墙。 */
+type DrawKind = "zone" | "erase" | "nogo" | "slow" | "wall";
+/** 画完填的那几项。 */
+interface NavForm { label: string; hard: boolean; speed: number; temp: boolean; hours: number }
 
 function errText(e: unknown): string {
   return t("failed", { why: e instanceof ApiError ? e.message : String(e) });
@@ -37,8 +54,10 @@ export function MapsZonesPage({ say }: { say: Say }) {
   const [meta, setMeta] = useState<PreviewMeta | null>(null);
   const [areas, setAreas] = useState<Area[]>([]);
   const [draft, setDraft] = useState<Pt[] | null>(null);
-  /** 正在画的是防区还是抹掉区。 */
-  const [drawKind, setDrawKind] = useState<"zone" | "erase">("zone");
+  const [drawKind, setDrawKind] = useState<DrawKind>("zone");
+  const [navForm, setNavForm] = useState(false);
+  const [removingNav, setRemovingNav] = useState<NavZone | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [naming, setNaming] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [nav, setNav] = useState<NavZones | null>(null);
@@ -74,6 +93,8 @@ export function MapsZonesPage({ say }: { say: Say }) {
     loadNav();
   }, [base]);
   const erased = (nav?.zones ?? []).filter((z) => z.kind === "erase");
+  const navList = (nav?.zones ?? []).filter((z) => z.kind === "nogo" || z.kind === "slow");
+  const minPts = drawKind === "wall" ? 2 : 3;
 
   /** 整份导航区域存回去(改之前看到的修订号先拉一次最新的,别盖掉手机上刚改的);存完重新取预览(抹掉区变了,
    *  平面图地址跟着变)和区域。 */
@@ -111,6 +132,62 @@ export function MapsZonesPage({ say }: { say: Say }) {
     }
   }
 
+  /** 画完的禁行区、限速区、虚拟墙并进整份导航区域。虚拟墙只给线,多边形站点算。 */
+  async function addNav(f: NavForm) {
+    setNavForm(false);
+    const pts = draft ?? [];
+    const kind = drawKind;
+    try {
+      const d = await saveNav((zones, rev) => {
+        let id = `${kind === "wall" ? "w" : kind === "slow" ? "s" : "n"}${rev + 1}`;
+        while (zones.some((z) => z.id === id)) id += "x";
+        const z: Record<string, unknown> = { id, kind: kind === "slow" ? "slow" : "nogo", label: f.label.trim() };
+        if (kind === "wall") z.wall = pts;
+        else z.polygon = pts;
+        if (kind === "slow") z.max_speed_mps = f.speed;
+        else if (f.hard) z.hard = true;
+        if (f.temp) z.for_s = Math.round(f.hours * 3600);
+        return [...zones, z as unknown as NavZone];
+      });
+      setDraft(null);
+      say(d.auto_confirmed ? t("navSavedOk", { rev: d.revision }) : t("navSavedNeedsConfirm", { rev: d.revision }));
+    } catch (e) {
+      say(errText(e));
+    }
+  }
+
+  async function removeNav(z: NavZone) {
+    setRemovingNav(null);
+    try {
+      const d = await saveNav((zones) => zones.filter((o) => o.id !== z.id));
+      say(d.auto_confirmed ? t("navSavedOk", { rev: d.revision }) : t("navRemoved", { rev: d.revision }));
+    } catch (e) {
+      say(errText(e));
+    }
+  }
+
+  /** 确认这一版(那一句 = 站点给的 confirm_text);一个区域都没有的要明说 empty_ok。 */
+  async function confirmNav() {
+    setConfirming(false);
+    if (!nav) return;
+    try {
+      const d = await api<NavZones>("POST", `${base}/zones/confirm`, {
+        revision: nav.revision, confirm: true, ...(nav.zones.length === 0 ? { empty_ok: true } : {}),
+      });
+      setNav(d);
+      loadMeta();
+      say(t("navConfirmedOk", { rev: d.revision }));
+    } catch (e) {
+      say(errText(e));
+      loadNav();
+    }
+  }
+
+  function startDraw(k: DrawKind) {
+    setDrawKind(k);
+    setDraft([]);
+  }
+
   // 点的那一处:地图组件给的是预览像素(世界层的 getScreenCTM 倒回去,转正、缩放、平移都算进去了)
   function pick(px: number, py: number) {
     if (!meta) return;
@@ -145,18 +222,25 @@ export function MapsZonesPage({ say }: { say: Say }) {
           <span class="push" />
           {draft ? (
             <>
-              <span class="muted small">{drawKind === "erase" ? t("eraseDrawHint", { n: draft.length }) : t("drawHint", { n: draft.length })}</span>
+              <span class="muted small" data-draw-hint="1">{drawKind === "erase" ? t("eraseDrawHint", { n: draft.length })
+                : drawKind === "wall" ? t("vwallDrawHint", { n: draft.length, w: WALL_WIDTH_M })
+                : drawKind === "zone" ? t("drawHint", { n: draft.length }) : t("navDrawHint", { n: draft.length })}</span>
               <button type="button" class="btn sm" onClick={() => setDraft(draft.slice(0, -1))} disabled={!draft.length}>{t("undoPoint")}</button>
               <button type="button" class="btn sm" onClick={() => setDraft(null)}>{t("cancel")}</button>
               {drawKind === "erase"
                 ? <button type="button" class="btn primary sm" disabled={draft.length < 3} onClick={() => setErasing(true)}>{t("finishErase")}</button>
-                : <button type="button" class="btn primary sm" disabled={draft.length < 3} onClick={() => setNaming(true)}>{t("finishZone")}</button>}
+                : drawKind === "zone"
+                  ? <button type="button" class="btn primary sm" disabled={draft.length < 3} onClick={() => setNaming(true)}>{t("finishZone")}</button>
+                  : <button type="button" class="btn primary sm" disabled={draft.length < minPts} onClick={() => setNavForm(true)}>{t("finishNav")}</button>}
             </>
           ) : (
-            <>
-              <button type="button" class="btn" disabled={!meta || !nav} onClick={() => { setDrawKind("erase"); setDraft([]); }}>{t("drawErase")}</button>
-              <button type="button" class="btn primary" disabled={!meta} onClick={() => { setDrawKind("zone"); setDraft([]); }}>{t("drawZone")}</button>
-            </>
+            <div class="row draw-buttons">
+              <button type="button" class="btn" disabled={!meta || !nav} onClick={() => startDraw("wall")}>{t("drawVWall")}</button>
+              <button type="button" class="btn" disabled={!meta || !nav} onClick={() => startDraw("nogo")}>{t("drawNoGo")}</button>
+              <button type="button" class="btn" disabled={!meta || !nav} onClick={() => startDraw("slow")}>{t("drawSlow")}</button>
+              <button type="button" class="btn" disabled={!meta || !nav} onClick={() => startDraw("erase")}>{t("drawErase")}</button>
+              <button type="button" class="btn primary" disabled={!meta} onClick={() => startDraw("zone")}>{t("drawZone")}</button>
+            </div>
           )}
         </div>
         <div class="zonesplit">
@@ -166,7 +250,8 @@ export function MapsZonesPage({ say }: { say: Say }) {
               <MapCanvas meta={meta} raster={`${base}/preview.png`} label={t("tabMapsZones")}
                 areas={areas.map((a) => ({ name: a.zone, pts: a.points, kind: "zone" as const }))}
                 drawing={!!draft} onPick={draft ? pick : undefined}
-                world={draft && draft.length > 0 ? <polyline points={poly(meta, draft)} class={drawKind === "erase" ? "draft-line erase" : "draft-line"} /> : null}
+                world={draft && draft.length > 0 ? <polyline points={poly(meta, draft)}
+                  class={drawKind === "erase" ? "draft-line erase" : drawKind === "wall" ? "draft-line vwall" : "draft-line"} /> : null}
                 marks={(s) => draft?.map(([x, y], i) => {
                   const [sx, sy] = s.map(x, y);
                   return <circle key={i} cx={sx} cy={sy} r={4} class="draft-pt" />;
@@ -174,6 +259,7 @@ export function MapsZonesPage({ say }: { say: Say }) {
             )}
           </div>
           <div class="zonelist">
+            {nav && <NavPanel nav={nav} list={navList} onRemove={setRemovingNav} onConfirm={() => setConfirming(true)} />}
             <h2>{t("securityZones")}</h2>
             <p class="muted small">{t("zonesHint")}</p>
             {(meta?.zones ?? []).some((z) => z.kind === "nogo") && (
@@ -210,6 +296,17 @@ export function MapsZonesPage({ say }: { say: Say }) {
         </div>
       </section>
       {naming && <NameZone onClose={() => setNaming(false)} onSave={save} />}
+      {navForm && (drawKind === "nogo" || drawKind === "slow" || drawKind === "wall") && (
+        <NavZoneForm kind={drawKind} onClose={() => setNavForm(false)} onSave={(f) => void addNav(f)} />
+      )}
+      {removingNav && (
+        <Confirm text={t("removeNavConfirm", { label: removingNav.label || removingNav.id })} yes={t("remove")} danger
+          onNo={() => setRemovingNav(null)} onYes={() => void removeNav(removingNav)} />
+      )}
+      {confirming && nav && (
+        <Confirm text={nav.zones.length === 0 ? t("navConfirmEmpty") : t("navConfirmText", { rev: nav.revision, text: nav.confirm_text ?? "" })}
+          yes={t("navConfirmBtn")} onNo={() => setConfirming(false)} onYes={() => void confirmNav()} />
+      )}
       {erasing && <Confirm text={t("eraseConfirm")} yes={t("finishErase")} onNo={() => setErasing(false)} onYes={() => void erase()} />}
       {unerasing && (
         <Confirm text={t("removeEraseConfirm", { label: unerasing.label || unerasing.id })} yes={t("remove")} danger
@@ -359,6 +456,84 @@ function AddAuthz({ zones, onClose, onDone, say }: { zones: string[]; onClose: (
         <div class="row end">
           <button type="button" class="btn" onClick={onClose}>{t("cancel")}</button>
           <button type="submit" class="btn primary" disabled={!name.trim() || days === 0 || (!site && picked.length === 0)}>{t("addAuthorization")}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** 一个导航区域给人看的一行字:种类(虚拟墙、禁行区、限速区多少)、硬、临时到什么时候。 */
+export function navZoneLine(z: NavZone): string {
+  const kind = z.wall ? t("kindVWall") : z.kind === "slow" ? t("kindSlow", { v: z.max_speed_mps ?? "?" }) : t("kindNoGo");
+  const bits = [kind];
+  if (z.hard) bits.push(t("kindHard"));
+  if (typeof z.until_ms === "number") {
+    const d = new Date(z.until_ms);
+    const two = (v: number) => String(v).padStart(2, "0");
+    bits.push(t("kindTemp", { t: `${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}` }));
+  }
+  return bits.join(" · ");
+}
+
+/** 右边「狗守的区域」:这一版确认了没有、确认之前狗照旧守着的、列表(删)、确认按钮。 */
+function NavPanel({ nav, list, onRemove, onConfirm }: {
+  nav: NavZones; list: NavZone[]; onRemove: (z: NavZone) => void; onConfirm: () => void;
+}) {
+  const current = !!nav.confirmed?.current;
+  const held = nav.held ?? [];
+  return (
+    <section class="navzones" data-navzones="1">
+      <h2>{t("navZones")}</h2>
+      <p class="muted small">{t("navZonesHint")}</p>
+      {current
+        ? <p class="small" data-nav-status="ok">{t("navConfirmed", { rev: nav.revision, by: nav.confirmed!.by })}</p>
+        : <p class="small warn" data-nav-status="unconfirmed">{t("navUnconfirmed", { rev: nav.revision })}</p>}
+      {held.length > 0 && <p class="small warn" data-nav-held="1">{t("navHeld", { names: held.map((z) => z.label || z.id).join(", ") })}</p>}
+      {!current && (nav.proposal
+        ? <p class="small">{t("navProposalOpen")}</p>
+        : <button type="button" class="btn sm primary" onClick={onConfirm}>{t("navConfirmBtn")}</button>)}
+      {list.length === 0 && <p class="muted small">{t("noNavZones")}</p>}
+      <ul class="navzone-list">
+        {list.map((z) => (
+          <li key={z.id} data-navzone={z.id}>
+            <span class="strong">{z.label || z.id}</span>
+            <span class="muted small">{navZoneLine(z)}</span>
+            <button type="button" class="link push" onClick={() => onRemove(z)}>{t("remove")}</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** 画完禁行区、限速区、虚拟墙填的那几项:名字;硬(禁行、虚拟墙);限速;临时几小时。 */
+function NavZoneForm({ kind, onClose, onSave }: { kind: "nogo" | "slow" | "wall"; onClose: () => void; onSave: (f: NavForm) => void }) {
+  const [f, setF] = useState<NavForm>({
+    label: kind === "wall" ? t("legendVWall") : kind === "slow" ? t("legendSlow") : t("legendNoGo"),
+    hard: false, speed: 0.3, temp: false, hours: 2,
+  });
+  const title = kind === "wall" ? t("navFormTitleVWall") : kind === "slow" ? t("navFormTitleSlow") : t("navFormTitleNoGo");
+  const ok = f.label.trim().length > 0 && f.label.trim().length <= 64 && (!f.temp || (f.hours > 0 && f.hours <= 8760))
+    && (kind !== "slow" || (f.speed > 0 && f.speed <= 5));
+  return (
+    <Modal label={title} onClose={onClose}>
+      <form class="form" onSubmit={(e) => { e.preventDefault(); if (ok) onSave(f); }}>
+        <h2>{title}</h2>
+        <label class="field">{t("navName")}<input value={f.label} maxLength={64} autoFocus onInput={(e) => setF({ ...f, label: e.currentTarget.value })} /></label>
+        {kind === "slow" ? (
+          <label class="field">{t("navSpeed")}<input type="number" min={0.1} max={5} step={0.1} value={f.speed}
+            onInput={(e) => setF({ ...f, speed: Number(e.currentTarget.value) })} /></label>
+        ) : (
+          <label class="field-check"><input type="checkbox" checked={f.hard} onChange={(e) => setF({ ...f, hard: e.currentTarget.checked })} />{t("navHard")}</label>
+        )}
+        <label class="field-check"><input type="checkbox" checked={f.temp} onChange={(e) => setF({ ...f, temp: e.currentTarget.checked })} />{t("navTemp")}</label>
+        {f.temp && (
+          <label class="field">{t("navTempHours")}<input type="number" min={1} max={8760} step={1} value={f.hours}
+            onInput={(e) => setF({ ...f, hours: Number(e.currentTarget.value) })} /><span class="muted small">{t("navTempHint")}</span></label>
+        )}
+        <div class="row end">
+          <button type="button" class="btn" onClick={onClose}>{t("cancel")}</button>
+          <button type="submit" class="btn primary" disabled={!ok}>{t("navSave")}</button>
         </div>
       </form>
     </Modal>

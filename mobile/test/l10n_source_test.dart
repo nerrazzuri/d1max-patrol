@@ -18,8 +18,8 @@ const _allowed = <String, List<String>>{
   'lib/ui/site_intercepts.dart': [r"RegExp(r'^狗没标[:：]')"],
   // 存到站点上的区域名字（数据，不是界面文字）；显示的时候另外翻（zoneLabelText）
   'lib/ui/site_mapping.dart': [
-    "'nogo' => '禁行区', 'erase' => '抹掉区', _ => '限速区'",
-    "'禁行区' => 'No-go zone', '限速区' => 'Speed-limit zone', '抹掉区' => 'Erase zone'"
+    "'nogo' => '禁行区', 'erase' => '抹掉区', 'wall' => '虚拟墙', _ => '限速区'",
+    "'禁行区' => 'No-go zone', '限速区' => 'Speed-limit zone', '抹掉区' => 'Erase zone', '虚拟墙' => 'Virtual wall'"
   ],
   // 只有全角标点、没有字：报错原文的拼接
   'lib/ui/widget/live_video.dart': [r"'$error（$status）'", r"'$head：$detail'"],

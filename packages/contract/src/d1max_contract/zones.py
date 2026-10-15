@@ -29,6 +29,14 @@
 - **老代理不认这个种类**(会把整份区域集拒掉,规划照旧用老的、站点补发不停、派单一直拒):站点发给能力里
   没有 ``zones_set.erase`` 的狗时换成同一块禁行区(:meth:`ZoneSet.erase_as_nogo`)—— 对狗一样严,不加
   兼容级别(级别只在「两头都要会」时加,这里站点一个人就兜住了)。
+
+**虚拟墙**(用户 2026-10-15「只能画防区感觉不太够」,选的做法:画线、存成窄禁行带):
+
+- 就是一个 ``nogo`` 区域,多一个可选字段 ``wall``:画的那条折线。多边形由**站点**按线算
+  (:func:`wall_polygon`,宽 :data:`WALL_WIDTH_M`,线往两边各让半宽、两头各伸出半宽、拐角斜接);狗只按
+  多边形守 —— 规划、每拍检查、遥控守卫(标了 ``hard`` 的)、收紧判定、老狗都不用改。
+- ``wall`` 只是显示、再编辑用的;**内容摘要不算它**(:func:`zones_digest`),还不认这个字段的狗
+  回报的摘要照样对得上。
 """
 
 from __future__ import annotations
@@ -55,6 +63,14 @@ MAX_LABEL = 64
 #: 到期时刻(毫秒)的上限:挡住离谱值(秒当毫秒发会落在 1970 年,站点按「已经过了」拒)。
 MAX_UNTIL_MS = 2 ** 53
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+#: 虚拟墙的宽(米):比规划栅格(0.1 m)宽两格多,规划还要再按机身胀开;画得窄,不多占通道。
+WALL_WIDTH_M = 0.3
+#: 墙线最多几个点(多边形两边各一圈:2 × 32 = 64 = :data:`MAX_VERTICES`)。
+MAX_WALL_POINTS = MAX_VERTICES // 2
+#: 墙线相邻两点至少隔多远(米)。
+MIN_WALL_SEGMENT_M = 0.1
+#: 拐角最多拐多少度(再急斜接会伸得很长,而且两边贴在一起):要更急就分两段画。
+MAX_WALL_TURN_DEG = 150.0
 
 
 def _num(v: Any) -> bool:
@@ -226,6 +242,64 @@ def _bbox(pts: tuple[tuple[float, float], ...]) -> tuple[float, float, float, fl
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _wall_line(raw: Any, what: str) -> tuple[tuple[float, float], ...]:
+    """墙线:2–:data:`MAX_WALL_POINTS` 个 ``[x, y]``,相邻两点至少隔 :data:`MIN_WALL_SEGMENT_M`。"""
+    if not isinstance(raw, (list, tuple)) or not 2 <= len(raw) <= MAX_WALL_POINTS:
+        raise ContractError(f"{what}: 墙线要两个点到最多 {MAX_WALL_POINTS} 个点")
+    pts = []
+    for p in raw:
+        if (not isinstance(p, (list, tuple)) or len(p) != 2 or not all(_num(v) for v in p)
+                or not all(abs(v) <= MAX_COORD_M for v in p)):
+            raise ContractError(f"{what}: 顶点要是 [x, y] 两个有限数")
+        pts.append((float(p[0]), float(p[1])))
+    for a, b in zip(pts, pts[1:], strict=False):
+        if math.hypot(b[0] - a[0], b[1] - a[1]) < MIN_WALL_SEGMENT_M:
+            raise ContractError(f"{what}: 相邻两点太近(不到 {MIN_WALL_SEGMENT_M} m)")
+    return tuple(pts)
+
+
+def wall_polygon(line: Any, width: float = WALL_WIDTH_M) -> tuple[tuple[float, float], ...]:
+    """虚拟墙的禁行带:墙线往两边各让出 ``width / 2``,两头各伸出 ``width / 2``,拐角斜接。回一圈多边形
+    (左边一路过去、右边一路回来,2 × 点数个顶点,坐标保留到毫米)。画不成(点太少太多太近、拐得太急、
+    自己交叉)抛 :class:`ContractError`,说清楚怎么改。"""
+    pts = _wall_line(line, "虚拟墙")
+    h = width / 2.0
+    n = len(pts)
+    dirs = []
+    for a, b in zip(pts, pts[1:], strict=False):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        length = math.hypot(dx, dy)
+        dirs.append((dx / length, dy / length))
+    for i in range(1, n - 1):
+        (ax, ay), (bx, by) = dirs[i - 1], dirs[i]
+        turn = math.degrees(math.acos(max(-1.0, min(1.0, ax * bx + ay * by))))
+        if turn > MAX_WALL_TURN_DEG:
+            raise ContractError(f"虚拟墙第 {i + 1} 个点拐得太急(超过 {MAX_WALL_TURN_DEG:.0f}°):"
+                                "分成两段画")
+    left, right = [], []
+    for i in range(n):
+        x, y = pts[i]
+        if i == 0 or i == n - 1:
+            ux, uy = dirs[0] if i == 0 else dirs[-1]
+            nx, ny = -uy, ux                                  # 左法线
+            sx, sy = (-ux * h, -uy * h) if i == 0 else (ux * h, uy * h)   # 两头伸出半宽
+            left.append((x + sx + nx * h, y + sy + ny * h))
+            right.append((x + sx - nx * h, y + sy - ny * h))
+            continue
+        (ax, ay), (bx, by) = dirs[i - 1], dirs[i]
+        n1, n2 = (-ay, ax), (-by, bx)
+        mx, my = n1[0] + n2[0], n1[1] + n2[1]
+        ml = math.hypot(mx, my)
+        mx, my = mx / ml, my / ml
+        k = h / max(1e-9, mx * n1[0] + my * n1[1])          # 斜接:沿角平分线走 h / cos(拐角一半)
+        left.append((x + mx * k, y + my * k))
+        right.append((x - mx * k, y - my * k))
+    poly = tuple((round(px, 3), round(py, 3)) for px, py in left + right[::-1])
+    if not is_simple(poly):
+        raise ContractError("虚拟墙自己交叉了(或者拐角挤在一起):分成几段画")
+    return poly
+
+
 @dataclass(frozen=True)
 class Zone:
     id: str
@@ -237,6 +311,8 @@ class Zone:
     hard: bool = False
     #: 临时区的到期时刻(站点的钟,毫秒;决策 66);``None`` = 一直有效。
     until_ms: int | None = None
+    #: 虚拟墙画的那条折线(只给禁行区;显示、再编辑用,狗按多边形守)。
+    wall: tuple[tuple[float, float], ...] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         d: dict[str, Any] = {"id": self.id, "kind": self.kind, "label": self.label,
@@ -247,6 +323,8 @@ class Zone:
             d["hard"] = True                  # 不是硬的不写:老的区域集线上一字不差
         if self.until_ms is not None:
             d["until_ms"] = self.until_ms
+        if self.wall is not None:
+            d["wall"] = [[x, y] for x, y in self.wall]
         return d
 
     def expired(self, now_ms: int) -> bool:
@@ -301,8 +379,13 @@ class Zone:
         if until is not None and (isinstance(until, bool) or not isinstance(until, int)
                                   or not 0 < until <= MAX_UNTIL_MS):
             raise ContractError(f"zone {zid}: until_ms 要是正整数(毫秒)")
+        wall = None
+        if d.get("wall") is not None:
+            if kind != "nogo":
+                raise ContractError(f"zone {zid}: 只有禁行区能带墙线(wall)")
+            wall = _wall_line(d["wall"], f"zone {zid}: wall")
         return cls(id=zid, kind=kind, polygon=poly, label=label, max_speed_mps=speed,
-                   hard=hard, until_ms=until)
+                   hard=hard, until_ms=until, wall=wall)
 
 
 @dataclass(frozen=True)
@@ -369,8 +452,10 @@ def zones_digest(zs: ZoneSet) -> str:
     站点从自己存的算,狗从它落了盘、正在守的那份算,两边对:修订号一样、内容不一样(站点从旧备份
     恢复后又改了一次,正好改到同一个号)也认得出来。字段顺序、浮点写法都由 JSON 的规范写法定死,
     两头用同一个函数。"""
+    # 墙线(``wall``)不算:显示用的,狗按多边形守;还不认它的狗回报的摘要照样对得上
+    wires = [{k: v for k, v in z.to_wire().items() if k != "wall"} for z in zs.zones]
     body = {"map_id": zs.map_id, "map_version": zs.map_version,
-            "zones": sorted((z.to_wire() for z in zs.zones), key=lambda w: str(w.get("id")))}
+            "zones": sorted(wires, key=lambda w: str(w.get("id")))}
     raw = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(b"d1max-zones-digest/1\n" + raw.encode("utf-8")).hexdigest()
 

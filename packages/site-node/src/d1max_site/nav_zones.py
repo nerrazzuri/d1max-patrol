@@ -43,7 +43,7 @@ from dataclasses import replace
 from typing import Any
 
 from d1max_contract.errors import ContractError
-from d1max_contract.zones import MAX_ZONES, ZoneSet, covered, tightens
+from d1max_contract.zones import MAX_ZONES, ZoneSet, covered, tightens, wall_polygon
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +142,8 @@ class NavZones:
     # ------------------------------------------------------------ 改
 
     def _prepare(self, zones: Any, cur: ZoneSet, now: int) -> Any:
-        """临时区(决策 66):``for_s`` 按站点的钟换成 ``until_ms``;到期时刻要在以后、不超过一年。已经
+        """虚拟墙:带 ``wall`` 的按墙线算多边形(:func:`~d1max_contract.zones.wall_polygon`)。
+        临时区(决策 66):``for_s`` 按站点的钟换成 ``until_ms``;到期时刻要在以后、不超过一年。已经
         到期、站点还没来得及删的那一个原样带回来(手机拿的是删之前那一份)就悄悄去掉。"""
         if not isinstance(zones, list):
             return zones
@@ -153,6 +154,12 @@ class NavZones:
                 out.append(d)
                 continue
             d = dict(d)
+            if d.get("wall") is not None:
+                # 虚拟墙(2026-10-15):多边形一律由站点按墙线算(客户端带来的不信),狗按多边形守
+                try:
+                    d["polygon"] = [list(p) for p in wall_polygon(d["wall"])]
+                except ContractError as exc:
+                    raise ZonesError(f"区域 {d.get('id')}:{exc}") from exc
             if "for_s" in d:
                 f = d.pop("for_s")
                 if d.get("until_ms") is not None:

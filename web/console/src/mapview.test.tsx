@@ -730,3 +730,157 @@ describe("防区页:抹掉一块(导航区域 erase),点出来的地图点原样
     expect(s.posted[0]).toEqual({ zones: [OLD], base_revision: 7 });
   });
 });
+
+// ------------------------------------------------------------------ 虚拟墙、网页画禁行区限速区(2026-10-15)
+
+describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出狗守的区域、删、确认", () => {
+  const WALL: NavZone = { id: "w3", kind: "nogo", label: "Fence", hard: true, wall: [[-5, 2], [0, 2], [0, -2]],
+    polygon: [[-5.15, 2.15], [0.15, 2.15], [0.15, -2.15], [-0.15, -2.15], [-0.15, 1.85], [-5.15, 1.85]] };
+
+  function site(state: { revision: number; zones: NavZone[]; confirmed?: unknown; held?: NavZone[]; proposal?: unknown }) {
+    const posted: { url: string; body: any }[] = [];
+    setFetch((async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/maps")) return json({ maps: [{ map_id: "m1", version: "1", note: "", created_ms: 0, source: "" }] });
+      if (u.endsWith("/preview")) return json({ ...META, zones: state.zones });
+      if (u.endsWith("/areas")) return json({ areas: [] });
+      if (u.endsWith("/zones/confirm") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        posted.push({ url: u, body });
+        return json({ ...state, confirm_text: "WATER", confirmed: { revision: state.revision, by: "alice", at_ms: 0, current: true, how: "confirm" } });
+      }
+      if (u.endsWith("/zones") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        posted.push({ url: u, body });
+        return json({ revision: state.revision + 1, zones: body.zones, auto_confirmed: true, confirm_text: "WATER", confirmed: null });
+      }
+      if (u.endsWith("/zones")) return json({ confirm_text: "WATER", confirmed: null, ...state });
+      return json({}, 404);
+    }) as never);
+    return posted;
+  }
+
+  async function clickAt(r: ReturnType<typeof render>, pts: [number, number][]) {
+    const svg = r.container.querySelector("svg.map")!;
+    const m = worldOf(r.container);
+    for (const [x, y] of pts) {
+      const p = toPx(META, x, y);
+      const [sx, sy] = applyMat(m, p.px, p.py);
+      fireEvent.click(svg, { clientX: RECT.left + sx, clientY: RECT.top + sy });
+      await tick();
+    }
+  }
+
+  it("画虚拟墙:两个点就能画完;存的是墙线(多边形站点算)、硬、带改之前的修订号", async () => {
+    installScreenCTM();
+    const posted = site({ revision: 4, zones: [] });
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await ready(r.container);
+    fireEvent.click(r.getByText("Draw virtual wall"));
+    await tick();
+    await clickAt(r, [[-3, 1]]);
+    expect((r.getByText("Finish") as HTMLButtonElement).disabled).toBe(true);
+    await clickAt(r, [[2, 1], [2, -3]]);
+    expect(r.container.querySelector("[data-draw-hint]")!.textContent).toContain("3 points so far");
+    expect(r.container.querySelector("polyline.draft-line.vwall")).not.toBeNull();
+    fireEvent.click(r.getByText("Finish"));
+    await tick();
+    const dlg = r.container.ownerDocument.querySelector("dialog")!;
+    fireEvent.click(dlg.querySelector('input[type="checkbox"]')!);      // 硬
+    fireEvent.submit(dlg.querySelector("form")!);
+    await waitFor(() => expect(posted.length).toBe(1));
+    expect(posted[0].body.base_revision).toBe(4);
+    const [w] = posted[0].body.zones;
+    expect(w).toMatchObject({ id: "w5", kind: "nogo", label: "Virtual wall", hard: true });
+    expect(w.polygon).toBeUndefined();
+    expect(w.wall.length).toBe(3);
+    w.wall.forEach(([x, y]: [number, number], i: number) => {
+      const want = [[-3, 1], [2, 1], [2, -3]][i];
+      expect(Math.abs(x - want[0])).toBeLessThan(1e-6);
+      expect(Math.abs(y - want[1])).toBeLessThan(1e-6);
+    });
+  });
+
+  it("画限速区:限速、临时几小时(站点按自己的钟换成到期)", async () => {
+    installScreenCTM();
+    const posted = site({ revision: 1, zones: [NOGO] });
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await ready(r.container);
+    fireEvent.click(r.getByText("Draw slow zone"));
+    await tick();
+    await clickAt(r, [[-8, 6], [-4, 6], [-4, 3]]);
+    fireEvent.click(r.getByText("Finish"));
+    await tick();
+    const dlg = r.container.ownerDocument.querySelector("dialog")!;
+    fireEvent.input(dlg.querySelector('input[type="number"]')!, { target: { value: "0.5" } });
+    fireEvent.click(dlg.querySelector('input[type="checkbox"]')!);      // 临时
+    await tick();
+    fireEvent.input(dlg.querySelectorAll('input[type="number"]')[1]!, { target: { value: "3" } });
+    fireEvent.submit(dlg.querySelector("form")!);
+    await waitFor(() => expect(posted.length).toBe(1));
+    const zones = posted[0].body.zones;
+    expect(zones[0]).toEqual(NOGO);                                    // 原有的原样带回去
+    expect(zones[1]).toMatchObject({ kind: "slow", max_speed_mps: 0.5, for_s: 10800 });
+    expect(zones[1].polygon.length).toBe(3);
+    expect(zones[1].hard).toBeUndefined();
+  });
+
+  it("虚拟墙画成一条粗线(画的那条),硬的实线;图例有虚拟墙;列表里写种类", async () => {
+    installScreenCTM();
+    site({ revision: 2, zones: [NOGO, WALL], confirmed: { revision: 2, by: "alice", at_ms: 0, current: true, how: "tighten" } });
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await ready(r.container);
+    await waitFor(() => expect(r.container.querySelector("[data-navzone]")).not.toBeNull());
+    const line = r.container.querySelector('g.map-world polyline.vwall-line[data-vwall="w3"]')!;
+    expect(line).not.toBeNull();
+    expect(line.classList.contains("hard")).toBe(true);
+    expect(line.getAttribute("points")!.split(" ").length).toBe(3);
+    expect(r.container.querySelectorAll("g.map-world polygon.nogo-area").length).toBe(1);   // 墙的带子不另画
+    expect(legend(r.container)).toContain("vwall");
+    expect(r.container.querySelector('[data-navzone="w3"]')!.textContent).toContain("Virtual wall · hard");
+    expect(r.container.querySelector('[data-navzone="pool"]')!.textContent).toContain("No-go zone");
+    expect(r.container.querySelector('[data-nav-status="ok"]')!.textContent).toContain("alice");
+    expect(r.queryByText("Confirm this revision")).toBeNull();
+  });
+
+  it("没确认:写明狗照旧守着哪些;确认这一版带修订号;删一个是整份存回去少它", async () => {
+    installScreenCTM();
+    const posted = site({ revision: 7, zones: [WALL], confirmed: { revision: 6, by: "bob", at_ms: 0, current: false, how: "confirm" }, held: [NOGO] });
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await ready(r.container);
+    await waitFor(() => expect(r.container.querySelector('[data-nav-status="unconfirmed"]')).not.toBeNull());
+    expect(r.container.querySelector("[data-nav-held]")!.textContent).toContain("Pool");
+    fireEvent.click(r.getByText("Confirm this revision"));
+    await tick();
+    expect(r.container.ownerDocument.querySelector("dialog")!.textContent).toContain("WATER");
+    fireEvent.click([...r.container.ownerDocument.querySelectorAll("dialog button")].find((b) => b.textContent === "Confirm this revision")!);
+    await waitFor(() => expect(posted.length).toBe(1));
+    expect(posted[0].url).toContain("/zones/confirm");
+    expect(posted[0].body).toEqual({ revision: 7, confirm: true });
+    fireEvent.click(r.container.querySelector('[data-navzone="w3"] button')!);
+    await tick();
+    fireEvent.click(r.container.ownerDocument.querySelector("dialog .btn.stop")!);
+    await waitFor(() => expect(posted.length).toBe(2));
+    expect(posted[1].body.zones).toEqual([]);
+  });
+
+  it("一个区域都没有:确认要明说 empty_ok;有从上一版带过来的建议:不在网页确认", async () => {
+    installScreenCTM();
+    const posted = site({ revision: 0, zones: [], confirmed: null });
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await ready(r.container);
+    await waitFor(() => expect(r.queryByText("Confirm this revision")).not.toBeNull());
+    fireEvent.click(r.getByText("Confirm this revision"));
+    await tick();
+    fireEvent.click([...r.container.ownerDocument.querySelectorAll("dialog button")].find((b) => b.textContent === "Confirm this revision")!);
+    await waitFor(() => expect(posted.length).toBe(1));
+    expect(posted[0].body).toEqual({ revision: 0, confirm: true, empty_ok: true });
+    cleanup();
+    site({ revision: 0, zones: [], confirmed: null, proposal: { zones: [] } });
+    const r2 = render(<MapsZonesPage say={() => {}} />);
+    await ready(r2.container);
+    await waitFor(() => expect(r2.container.querySelector("[data-navzones]")).not.toBeNull());
+    expect(r2.queryByText("Confirm this revision")).toBeNull();
+    expect(r2.container.textContent).toContain("Check them in the phone app first");
+  });
+});
