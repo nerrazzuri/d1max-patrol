@@ -884,3 +884,108 @@ describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出狗�
     expect(r2.container.textContent).toContain("Check them in the phone app first");
   });
 });
+
+// ------------------------------------------------------------------ 外审 R3(2026-10-15 下午)
+
+describe("地图与防区:换图后才回来的旧回包不进这张图;确认的就是人刚看过的那一份", () => {
+  const MAPS_AB = { maps: [{ map_id: "B", version: "1", note: "", created_ms: 0, source: "" }, { map_id: "A", version: "1", note: "", created_ms: 0, source: "" }] };
+  const zone = (id: string): NavZone => ({ id, kind: "nogo", hard: true, label: id, polygon: [[0, 0], [2, 0], [2, 2], [0, 2]] });
+  const B7 = { revision: 7, zones: [zone("B-flower")], held: [zone("B-pool")], confirmed: null, confirm_text: "B safety check" };
+
+  function abSite(o: { holdA?: boolean; bAfter?: () => unknown; holdPost?: boolean }) {
+    const held: { a?: (r: Response) => void; post?: (r: Response) => void } = {};
+    const posted: [string, any][] = [];
+    let bGets = 0;
+    setFetch((async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (init?.method === "POST") {
+        posted.push([u, JSON.parse(String(init.body))]);
+        if (o.holdPost) return new Promise<Response>((r) => { held.post = r; });
+        return json({ ...B7, revision: 8, confirmed: { revision: 8, by: "admin", at_ms: 0, current: true, how: "confirm" } });
+      }
+      if (u === "/api/maps") return json(MAPS_AB);
+      if (u.endsWith("/preview")) return json(META);
+      if (u.endsWith("/areas")) return json({ areas: [] });
+      if (u === "/api/maps/A/1/zones" && o.holdA) return new Promise<Response>((r) => { held.a = r; });
+      if (u === "/api/maps/A/1/zones") return json({ revision: 7, zones: [zone("A-pool")], confirmed: null, confirm_text: "A safety check" });
+      if (u === "/api/maps/B/1/zones") { bGets += 1; return json(bGets > 1 && o.bAfter ? o.bAfter() : B7); }
+      return json({}, 404);
+    }) as never);
+    return { held, posted };
+  }
+  const panel = (c: Element) => c.querySelector("[data-navzones]")?.textContent ?? "";
+  const confirmYes = (c: Element) => [...c.ownerDocument.querySelectorAll("dialog button")].find((b) => b.textContent === "Confirm this revision")!;
+
+  it("A 的区域晚到:列表、确认框都还是 B 的;确认发到 B、带 B 看过的修订", async () => {
+    installScreenCTM();
+    const { held, posted } = abSite({ holdA: true });
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await ready(r.container);
+    fireEvent.change(r.getByLabelText("Map"), { target: { value: "A\u00001" } });
+    await waitFor(() => expect(held.a).toBeTruthy());
+    fireEvent.change(r.getByLabelText("Map"), { target: { value: "B\u00001" } });
+    await waitFor(() => expect(panel(r.container)).toContain("B-flower"));
+    held.a!(json({ revision: 7, zones: [zone("A-pool")], confirmed: null, confirm_text: "A safety check" }));
+    await new Promise((res) => setTimeout(res, 20));
+    expect(panel(r.container)).toContain("B-flower");
+    expect(panel(r.container)).not.toContain("A-pool");
+    fireEvent.click(r.getByText("Confirm this revision"));
+    await tick();
+    expect(r.container.ownerDocument.querySelector("dialog")!.textContent).toContain("B safety check");
+    fireEvent.click(confirmYes(r.container));
+    await waitFor(() => expect(posted.length).toBe(1));
+    expect(posted[0]).toEqual(["/api/maps/B/1/zones/confirm", { revision: 7, confirm: true }]);
+  });
+
+  it("弹框以后区域被人改了(同一个修订号、内容不一样也算):不确认,让人重看", async () => {
+    installScreenCTM();
+    const said: string[] = [];
+    const { posted } = abSite({ bAfter: () => ({ ...B7, zones: [] }) });   // 有人把花坛删了
+    const r = render(<MapsZonesPage say={(s) => said.push(s)} />);
+    await ready(r.container);
+    fireEvent.change(r.getByLabelText("Map"), { target: { value: "B\u00001" } });   // 一开始选的是 A(列表最后一张)
+    await waitFor(() => expect(panel(r.container)).toContain("B-flower"));
+    fireEvent.click(r.getByText("Confirm this revision"));
+    await tick();
+    fireEvent.click(confirmYes(r.container));
+    await waitFor(() => expect(said.some((s) => s.includes("look again"))).toBe(true));
+    expect(posted).toEqual([]);
+    await waitFor(() => expect(panel(r.container)).not.toContain("B-flower"));
+  });
+
+  it("确认框开着换了图:框关掉,不发确认", async () => {
+    installScreenCTM();
+    const { posted } = abSite({});
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await ready(r.container);
+    fireEvent.change(r.getByLabelText("Map"), { target: { value: "B\u00001" } });   // 一开始选的是 A(列表最后一张)
+    await waitFor(() => expect(panel(r.container)).toContain("B-flower"));
+    fireEvent.click(r.getByText("Confirm this revision"));
+    await tick();
+    expect(r.container.ownerDocument.querySelector("dialog")).not.toBeNull();
+    fireEvent.change(r.getByLabelText("Map"), { target: { value: "A\u00001" } });
+    await tick();
+    expect(r.container.ownerDocument.querySelector("dialog")).toBeNull();
+    expect(posted).toEqual([]);
+  });
+
+  it("换图以后才回来的保存结果:不在 A 上说「存好了」、不拿 B 的结果盖 A 的列表", async () => {
+    installScreenCTM();
+    const said: string[] = [];
+    const { held, posted } = abSite({ holdPost: true });
+    const r = render(<MapsZonesPage say={(s) => said.push(s)} />);
+    await ready(r.container);
+    fireEvent.change(r.getByLabelText("Map"), { target: { value: "B\u00001" } });   // 一开始选的是 A(列表最后一张)
+    await waitFor(() => expect(panel(r.container)).toContain("B-flower"));
+    fireEvent.click(r.container.querySelector('[data-navzone="B-flower"] button')!);
+    await tick();
+    fireEvent.click(r.container.ownerDocument.querySelector("dialog .btn.stop")!);
+    await waitFor(() => expect(posted.length).toBe(1));
+    fireEvent.change(r.getByLabelText("Map"), { target: { value: "A\u00001" } });
+    await waitFor(() => expect(panel(r.container)).toContain("A-pool"));
+    held.post!(json({ ...B7, revision: 8, zones: [] }));
+    await new Promise((res) => setTimeout(res, 20));
+    expect(panel(r.container)).toContain("A-pool");
+    expect(said.filter((s) => s.includes("revision 8"))).toEqual([]);
+  });
+});

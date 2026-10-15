@@ -216,3 +216,138 @@ def test_派单闸和运行配置_按在生效的那一份核(站点):
         v = s.disp.running_view(s.disp.clients["A"])
         return v is not None and (v["zones"] or {}).get("match") is True
     _等(摘要对上, timeout=8)
+
+
+# ------------------------------------------------------------ 外审 R1(2026-10-15 下午):连续改草稿
+
+STEP_BIG = STEP | {"polygon": [[9, 9], [12, 9], [12, 12], [9, 12]]}
+
+
+def _hard_ids(zs: ZoneSet) -> set:
+    return {z.polygon for z in zs.hard()}
+
+
+def test_R1_连续改两次_上一轮已经生效的新保护不丢(tmp_path):
+    """确认泳池(1);改成只有台阶(2,混合:台阶当场生效、泳池还守着);再改成空(3)—— 台阶从没人确认
+    删掉过,不能消失。"""
+    z, _ = _z(tmp_path)
+    z.put("m", "1", [HARD], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [STEP], base_revision=1, by="a")
+    assert len(z.effective("m", "1").hard()) == 2
+    z.put("m", "1", [], base_revision=2, by="a")
+    eff = z.effective("m", "1")
+    assert eff.revision == 3
+    assert len(eff.hard()) == 2, "台阶上一轮已经生效,没确认就不能撤"
+    z.put("m", "1", [], base_revision=3, by="a")
+    assert len(z.effective("m", "1").hard()) == 2, "第三次也一样"
+
+
+def test_R1_跟在生效的比才算只收紧_改回确认过的那份不免确认(tmp_path):
+    """确认泳池(1);改成台阶(2);改回泳池(3):跟最后确认的比是一样的,但台阶已经在守了 ——
+    去掉它是放宽。"""
+    z, _ = _z(tmp_path)
+    z.put("m", "1", [HARD], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [STEP], base_revision=1, by="a")
+    z.put("m", "1", [HARD], base_revision=2, by="a")
+    assert not z.confirmed_current("m", "1")
+    assert len(z.effective("m", "1").hard()) == 2
+
+
+def test_R1_放大了的硬禁区再缩回去_要确认(tmp_path):
+    z, _ = _z(tmp_path)
+    z.put("m", "1", [HARD], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [STEP_BIG], base_revision=1, by="a")      # 删泳池、加大台阶:混合
+    z.put("m", "1", [STEP], base_revision=2, by="a")          # 台阶缩回小的
+    eff = z.effective("m", "1")
+    big = tuple(map(tuple, STEP_BIG["polygon"]))
+    assert big in {zz.polygon for zz in eff.zones}, "大台阶还守着"
+
+
+def test_R1_调低过的限速再调高_要确认(tmp_path):
+    z, _ = _z(tmp_path)
+    z.put("m", "1", [SLOW, HARD], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [SLOW | {"max_speed_mps": 0.1}], base_revision=1, by="a")   # 调低 + 删泳池
+    z.put("m", "1", [SLOW | {"max_speed_mps": 0.8}], base_revision=2, by="a")
+    eff = z.effective("m", "1")
+    assert min(x.max_speed_mps for x in eff.slow()) == 0.1
+
+
+def test_R1_确认之后在生效的就是草稿_修订号加一(tmp_path):
+    z, _ = _z(tmp_path)
+    z.put("m", "1", [HARD], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [STEP], base_revision=1, by="a")
+    z.put("m", "1", [], base_revision=2, by="a")
+    z.confirm("m", "1", revision=3, by="admin", )
+    eff = z.effective("m", "1")
+    assert eff.zones == () and eff.revision == 4
+    assert z.confirmed_current("m", "1")
+
+
+def test_R1_站点重启_在生效的照旧(tmp_path):
+    z, _ = _z(tmp_path)
+    z.put("m", "1", [HARD], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [STEP], base_revision=1, by="a")
+    z.put("m", "1", [], base_revision=2, by="a")
+    z.db.close()
+    z2 = NavZones(SiteDB(tmp_path / "s.db"), now_ms=lambda: 1000)
+    assert len(z2.effective("m", "1").hard()) == 2
+
+
+def test_R1_守着的临时区到期_站点删_出新修订(tmp_path):
+    z, t = _z(tmp_path)
+    z.put("m", "1", [HARD], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [STEP | {"until_ms": 5000}], base_revision=1, by="a")
+    z.put("m", "1", [], base_revision=2, by="a")
+    before = z.effective("m", "1")
+    assert len(before.hard()) == 2
+    t[0] = 6000
+    assert z.effective("m", "1") == before
+    z.expire()
+    eff = z.effective("m", "1")
+    assert eff.revision == before.revision + 1 and len(eff.hard()) == 1
+
+
+def test_R1_装不下_守着上一份在生效的(tmp_path):
+    from d1max_contract.zones import MAX_ZONES
+    z, _ = _z(tmp_path)
+    many = [STEP | {"id": f"s{i}", "polygon": [[i, 20], [i + 0.5, 20], [i + 0.5, 21]]}
+            for i in range(MAX_ZONES)]
+    z.put("m", "1", [HARD], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", many, base_revision=1, by="a")             # 删泳池、加 200 个:并起来装不下
+    eff = z.effective("m", "1")
+    assert eff.revision == 2
+    assert tuple(map(tuple, HARD["polygon"])) in {x.polygon for x in eff.zones}, "泳池还守着"
+
+
+def test_R1_老库升上来_在生效的那一列是空的_按原来的算(tmp_path):
+    z, _ = _z(tmp_path)
+    z.put("m", "1", [HARD], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [], base_revision=1, by="a")
+    with z.db.tx() as c:
+        c.execute("UPDATE nav_zones SET effective_body=NULL")
+    assert len(z.effective("m", "1").hard()) == 1
+    z.put("m", "1", [STEP], base_revision=2, by="a")
+    assert len(z.effective("m", "1").hard()) == 2
+
+
+def test_R1_接口_连续改两次_狗内存和落盘都还守着上一轮的新保护(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _rev(s) is not None)
+    s.req("POST", ZP, {"zones": [HARD], "base_revision": 0}, token=alice)
+    s.req("POST", ZP + "/confirm", {"revision": 1, "confirm": True}, token=alice)
+    s.req("POST", ZP, {"zones": [STEP], "base_revision": 1}, token=alice)
+    _等(lambda: _rev(s) == 2, timeout=8)
+    s.req("POST", ZP, {"zones": [], "base_revision": 2}, token=alice)
+    _等(lambda: _rev(s) == 3, timeout=8)
+    assert len(s.agent._hard_zones()) == 2
+    assert len(s.agent.zonebook.get(*MAP).hard()) == 2

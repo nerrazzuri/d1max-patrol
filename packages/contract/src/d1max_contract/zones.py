@@ -71,6 +71,8 @@ MAX_WALL_POINTS = MAX_VERTICES // 2
 MIN_WALL_SEGMENT_M = 0.1
 #: 拐角最多拐多少度(再急斜接会伸得很长,而且两边贴在一起):要更急就分两段画。
 MAX_WALL_TURN_DEG = 150.0
+#: 墙线上每一处离带子边至少「半宽 - 这么多」(坐标取整到毫米)。
+_WALL_TOL_M = 0.003
 
 
 def _num(v: Any) -> bool:
@@ -297,6 +299,16 @@ def wall_polygon(line: Any, width: float = WALL_WIDTH_M) -> tuple[tuple[float, f
     poly = tuple((round(px, 3), round(py, 3)) for px, py in left + right[::-1])
     if not is_simple(poly):
         raise ContractError("虚拟墙自己交叉了(或者拐角挤在一起):分成几段画")
+    # 外审 M1(2026-10-15):每个拐角单独看没问题,短线段上相邻两个斜接还是可能互相挤,带子局部窄于半宽。
+    # 沿整条线每 2 cm 量一次到边的距离(取整到毫米,留 3 mm 余量),窄了就拒 —— 让人分段画或者把点拉开
+    need = h - _WALL_TOL_M
+    for (ax, ay), (bx, by) in zip(pts, pts[1:], strict=False):
+        steps = max(1, math.ceil(math.hypot(bx - ax, by - ay) / 0.02))
+        for k in range(steps + 1):
+            x, y = ax + (bx - ax) * k / steps, ay + (by - ay) * k / steps
+            if signed_distance(x, y, poly) > -need:
+                raise ContractError(f"虚拟墙在 ({x:.2f}, {y:.2f}) 附近被拐角挤窄了"
+                                    f"(不到 {h:.2f} m 半宽):分成几段画,或者把拐角附近的点拉开一点")
     return poly
 
 

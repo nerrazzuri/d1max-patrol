@@ -24,7 +24,12 @@
 任务)。现在凡是发给狗、跟狗报的核对的,都用在生效的那一份:当前这一份没确认时,是它再加上最后确认
 过的那一份里**没被它盖住**的区域(:func:`~d1max_contract.zones.covered`)—— 狗守手上的每一个区域,
 所以收紧的当场生效、放宽的等确认。**同一个修订号的内容不变**(狗不收同号不同内容):确认一份放宽了的,
-修订号加一;确认过的那一份里的临时区到期,由 :meth:`expire` 从两份里一起删、也出新修订号。
+修订号加一;临时区到期由 :meth:`expire` 从草稿、确认过的、在生效的三份里一起删,也出新修订号。
+
+外审 R1(2026-10-15 下午):在生效的那一份**存下来**(``effective_body``),不再每次临时拼 —— 原来只拼
+「草稿 + 最后确认的那一份」,连续改两次就会忘掉上一轮已经生效、但从没确认过的新保护(删泳池加台阶,
+再删台阶:台阶没人确认就没了)。现在改草稿时:跟**在生效的**那一份比只收紧(并且有确认过的底)才当场
+算确认;否则在生效的 = 新草稿 + 原来在生效、没被新草稿盖住的。只有确认能放宽(到期算预先确认过)。
 
 R2(2026-10-14):**新版本把上一版的东西带过来给人核**(:meth:`proposal`)。新版本(站点目录里有、还没
 画过区域)头一回被看的时候,把上一版的区域(没到期的)、待命点、拦截点抄一份**建议**(不生效、不发狗);
@@ -83,23 +88,39 @@ class NavZones:
         return ZoneSet.from_wire(json.loads(r["body"]))
 
     def effective(self, map_id: str, version: str) -> ZoneSet:
-        """**在生效的**那一份(外审 W38-I1):发给狗、跟狗报的核对都用它。见模块说明。"""
+        """**在生效的**那一份(外审 W38-I1、R1):发给狗、跟狗报的核对都用它。见模块说明。"""
         return self._effective_of(self._row(map_id, version), map_id, version)
 
     def _effective_of(self, r: Any, map_id: str, version: str) -> ZoneSet:
-        """不按此刻的钟去掉到期的:到期由 :meth:`expire` 删(连确认过的那一份里的一起删、出新修订号)——
-        同一个修订号的内容不能自己变(狗不收,摘要也对不上)。"""
+        """存着的那一份(R1);没存过(升上来的老库)按原来的算法:当前这一份 + 确认过的那一份里没被
+        盖住的。不按此刻的钟去掉到期的:到期由 :meth:`expire` 删、出新修订号 —— 同一个修订号的内容
+        不能自己变(狗不收,摘要也对不上)。"""
         if r is None:
             return ZoneSet(map_id, version, 0, ())
         cur = ZoneSet.from_wire(json.loads(r["body"]))
+        raw = r["effective_body"] if "effective_body" in r.keys() else None
+        if raw:
+            try:
+                eff = ZoneSet.from_wire(json.loads(raw))
+                if eff.revision == cur.revision:
+                    return eff
+            except (ValueError, ContractError):
+                log.error("%s:%s 存着的在生效的区域坏了:按确认过的那一份重拼", map_id, version)
         ok = self._confirmed_set(r)
         if ok is None or r["confirmed_rev"] == r["revision"]:
             return cur
-        held = [z for z in ok.zones if not covered(z, cur.zones)]
+        return self._merge(ok, cur)
+
+    @staticmethod
+    def _merge(prev: ZoneSet, new: ZoneSet) -> ZoneSet:
+        """新草稿 + ``prev`` 里**没被新草稿盖住**的(:func:`covered`);同 id 的换个名字一起守。
+        装不下(契约最多 MAX_ZONES 个)就整份守 ``prev`` —— 放宽的不生效,这次新加的也要等确认。
+        修订号用新的。"""
+        held = [z for z in prev.zones if not covered(z, new.zones)]
         if not held:
-            return cur
-        used = {z.id for z in cur.zones}
-        out = list(cur.zones)
+            return new
+        used = {z.id for z in new.zones}
+        out = list(new.zones)
         for z in held:
             zid, k = z.id, 1
             while zid in used:                    # 草稿里同名的是放宽了的那个:这个换个名字一起守
@@ -108,11 +129,15 @@ class NavZones:
             used.add(zid)
             out.append(z if zid == z.id else replace(z, id=zid))
         if len(out) > MAX_ZONES:
-            # 装不下(契约最多 MAX_ZONES 个):守确认过的那一份 —— 放宽的不生效,这次新加的也要等确认
-            log.warning("%s:%s 在生效的区域超过 %d 个:先按最后确认的那一份守", map_id, version,
-                        MAX_ZONES)
-            return ZoneSet(map_id, version, cur.revision, ok.zones)
-        return ZoneSet(map_id, version, cur.revision, tuple(out))
+            log.warning("%s:%s 在生效的区域超过 %d 个:先按上一份在生效的守", new.map_id,
+                        new.map_version, MAX_ZONES)
+            return ZoneSet(new.map_id, new.map_version, new.revision, prev.zones)
+        return ZoneSet(new.map_id, new.map_version, new.revision, tuple(out))
+
+    @staticmethod
+    def _store_effective(tx: Any, eff: ZoneSet) -> None:
+        tx.execute("UPDATE nav_zones SET effective_body=? WHERE map_id=? AND map_version=?",
+                   (json.dumps(eff.to_wire(), ensure_ascii=False), eff.map_id, eff.map_version))
 
     def view(self, map_id: str, version: str) -> dict[str, Any]:
         r = self._row(map_id, version)
@@ -211,6 +236,7 @@ class NavZones:
                                          "zones": self._prepare(zones, cur, now)})
             except ContractError as exc:
                 raise ZonesError(str(exc)) from exc
+            prev_eff = self._effective_of(rows[0] if rows else None, map_id, version)
             body = json.dumps(new.to_wire(), ensure_ascii=False)
             if rows:
                 tx.execute("UPDATE nav_zones SET revision=?, body=?, updated_by=?, updated_ms=? "
@@ -221,9 +247,14 @@ class NavZones:
                            " updated_ms) VALUES (?,?,?,?,?,?)",
                            (map_id, version, new.revision, body, by, now))
             ok = self._confirmed_set(rows[0] if rows else None)
-            if ok is not None and tightens(ok, new, now_ms=now):
-                # 决策 66:跟最后确认过的那一份比只收紧 → 改的人就算确认了这一版
+            if ok is not None and tightens(prev_eff, new, now_ms=now):
+                # 决策 66 + 外审 R1:跟**在生效的**那一份比只收紧(它本身不比最后确认的松,所以也比最后
+                # 确认的只收紧)→ 改的人就算确认了这一版
                 self._mark_confirmed(tx, map_id, version, new, by, now, "tighten")
+                self._store_effective(tx, new)
+            else:
+                # 放宽、混合、从没确认过:新的当场生效,原来在生效、没被盖住的照旧守,等确认
+                self._store_effective(tx, self._merge(prev_eff, new))
         return new, tightens(cur, new, now_ms=now)
 
     @staticmethod
@@ -282,6 +313,7 @@ class NavZones:
                            " updated_ms) VALUES (?,?,?,?,?,?)",
                            (map_id, version, new.revision, body, by, now))
             self._mark_confirmed(tx, map_id, version, new, by, now, "confirm")
+            self._store_effective(tx, new)
         return report
 
     def _adopt(self, tx: Any, map_id: str, version: str, cur: ZoneSet, adopt: dict, by: str,
@@ -338,7 +370,8 @@ class NavZones:
         now = self._now()
         out: list[ZoneSet] = []
         for r in self.db.query("SELECT map_id, map_version FROM nav_zones "
-                               "WHERE body LIKE '%until_ms%' OR confirmed_body LIKE '%until_ms%'"):
+                               "WHERE body LIKE '%until_ms%' OR confirmed_body LIKE '%until_ms%' "
+                               "OR effective_body LIKE '%until_ms%'"):
             with self.db.tx() as tx:
                 row = tx.execute("SELECT * FROM nav_zones WHERE map_id=? AND map_version=?",
                                  (r["map_id"], r["map_version"])).fetchone()
@@ -348,9 +381,12 @@ class NavZones:
                 keep = cur.without_expired(now)
                 ok = self._confirmed_set(row)
                 ok_keep = ok.without_expired(now) if ok is not None else None
-                # 外审 W38-I1:确认过的那一份里到期的也删(没确认的放宽期间狗还替它守着):在生效的内容
-                # 变了,同样出新修订号
-                if keep is cur and ok_keep is ok:
+                eff = self._effective_of(row, cur.map_id, cur.map_version)
+                eff_keep = eff.without_expired(now)
+                # 外审 W38-I1、R1:确认过的、在生效的那一份里到期的也删(没确认的放宽期间狗还替它
+                # 守着):
+                # 在生效的内容变了,同样出新修订号
+                if keep is cur and ok_keep is ok and eff_keep is eff:
                     continue
                 new = ZoneSet(cur.map_id, cur.map_version, cur.revision + 1, keep.zones)
                 tx.execute("UPDATE nav_zones SET revision=?, body=?, updated_by=?, updated_ms=? "
@@ -361,10 +397,15 @@ class NavZones:
                 if confirmed:
                     self._mark_confirmed(tx, new.map_id, new.map_version, new, EXPIRY_BY, now,
                                          "expiry")
-                elif ok_keep is not ok:
-                    tx.execute("UPDATE nav_zones SET confirmed_body=? WHERE map_id=? AND "
-                               "map_version=?", (json.dumps(ok_keep.to_wire(), ensure_ascii=False),
-                                                 new.map_id, new.map_version))
+                    self._store_effective(tx, new)
+                else:
+                    if ok_keep is not ok:
+                        tx.execute("UPDATE nav_zones SET confirmed_body=? WHERE map_id=? AND "
+                                   "map_version=?", (json.dumps(ok_keep.to_wire(),
+                                                                ensure_ascii=False),
+                                                     new.map_id, new.map_version))
+                    self._store_effective(tx, self._merge(
+                        ZoneSet(new.map_id, new.map_version, new.revision, eff_keep.zones), new))
             gone = sorted({z.id for z in cur.zones} - {z.id for z in new.zones})
             self._audit("zones_expired", f"{new.map_id}:{new.map_version}",
                         {"revision": new.revision, "removed": gone, "confirmed": confirmed})

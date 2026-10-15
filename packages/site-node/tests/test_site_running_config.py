@@ -85,8 +85,10 @@ def test_站点从旧备份恢复_修订号一样内容不一样_拒派_再保�
                                "zones": [LAWN]})
     import json
     with s.db.tx() as c:
-        c.execute("UPDATE nav_zones SET body=?, confirmed_body=? WHERE map_id=?",
-                  (json.dumps(other.to_wire()), json.dumps(other.to_wire()), MAP[0]))
+        # 恢复的是整行:草稿、确认过的、在生效的(库结构 60,外审 R1)三份一起是旧备份里的
+        c.execute("UPDATE nav_zones SET body=?, confirmed_body=?, effective_body=? WHERE map_id=?",
+                  (json.dumps(other.to_wire()), json.dumps(other.to_wire()),
+                   json.dumps(other.to_wire()), MAP[0]))
     assert s.disp.zones.confirmed_current(*MAP) and s.disp.zones.current(*MAP).revision == 1
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
     assert code == 409 and "内容不一样" in d["error"] and "第 1 版" in d["error"], (code, d)

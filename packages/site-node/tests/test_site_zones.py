@@ -160,7 +160,11 @@ def test_抹掉区_认得的狗原样发_老狗换成同一块禁行区_补发�
     s.disp.zones.put(MAP[0], MAP[1], [ERASE], base_revision=2, by="alice")   # 没发出去:补发
     _zcaps(s).pop("erase", None)
     assert s.loop.call(lambda: s.disp.sync_zones()) == ["A"]
-    assert [z["kind"] for z in _sent(s)["zones"]] == ["nogo"]
+    sent = _sent(s)["zones"]
+    assert [z["kind"] for z in sent if z["id"] == "junk"] == ["nogo"], "补发给老狗也换成禁行区"
+    assert "erase" not in {z["kind"] for z in sent}
+    # 外审 R1:这一版从没确认过,删掉的池子、限速区是放宽 —— 没确认前照样守着(随在生效的一起补发)
+    assert {z["id"] for z in sent} == {"junk", "pond", "lawn"}
 
 
 def test_派单门槛_修订对不上拒_补发之后放行(站点):
