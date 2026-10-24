@@ -176,6 +176,10 @@
     "en": "Spotlight failed",
     "zh": "探照灯出故障"
   },
+  "payload_amp": {
+    "en": "Amplifier failed",
+    "zh": "功放出故障"
+  },
   "finding": {
     "en": "Inspection finding",
     "zh": "判读有异常"

@@ -14,6 +14,7 @@ from d1max_agent.rtk import (
     _nmea_ok,
     parse_gga,
     parse_gst,
+    parse_heading,
     vendor_driver_running,
 )
 from d1max_contract.rtcm import frame
@@ -335,3 +336,33 @@ def test_初始化命令写进去0字节_当串口坏了重开_不放改正(monk
         assert r._fd is None, "初始化没写完:不放改正"
     finally:
         r.close()
+
+
+# -------------------------------------------- W40:UM982 双天线朝向
+
+
+@pytest.mark.parametrize("body, want", [
+    ("GNHDT,123.45,T", 123.45), ("GPHDT,0.0,T", 0.0), ("GNHDT,360.0,T", 0.0),
+    ("GNTHS,271.5,A", 271.5),
+    ("GNTHS,271.5,E", None), ("GNTHS,271.5,V", None), ("GNHDT,,T", None),
+    ("GNHDT,12.3,M", None), ("GNHDT,nan,T", None), ("GNHDT,361,T", None), ("GNHDT,-1,T", None),
+    ("GNGGA,1,2,3", None),
+])
+def test_朝向_HDT_THS(body, want):
+    assert parse_heading(body) == want
+
+
+def test_朝向跟GGA配_过时的不要_没有朝向就不带这个字段():
+    t = {"now": 0.0}
+    r = OwnRtk("/dev/x", 460800, now_ms=lambda: 0, mono=lambda: t["now"])
+    r._line(_nmea(GGA_FIX))
+    assert "heading_deg" not in r.latest(), "单天线(没有朝向):不带"
+    r._line(_nmea("GNHDT,87.25,T"))
+    r._line(_nmea(GGA_FIX))
+    assert r.latest()["heading_deg"] == 87.25
+    t["now"] = 5.0
+    r._line(_nmea(GGA_FIX))
+    assert "heading_deg" not in r.latest(), "朝向是 5 s 前的:不跟这一条配"
+    r._line(_nmea("GNTHS,10.0,V"))                     # 没有朝向了:清掉
+    r._line(_nmea(GGA_FIX))
+    assert "heading_deg" not in r.latest()

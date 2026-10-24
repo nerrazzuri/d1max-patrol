@@ -1,0 +1,6 @@
+{
+  "thermal": {
+    "url": "rtsp://admin:<热像的口令>@192.168.10.64:554/Streaming/Channels/101",
+    "record": false
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "relay": {
+    "port": "/dev/ttyCH9344USB5",
+    "baud": 9600,
+    "slave": 1,
+    "coils": {"spot_l": 0, "spot_r": 1, "bcn_r": 2, "bcn_g": 3, "bcn_b": 4, "amp": 5}
+  },
+  "spotlight": {"left": "spot_l", "right": "spot_r"},
+  "strobe": {
+    "colors": {
+      "red": "bcn_r",
+      "yellow": ["bcn_r", "bcn_g"],
+      "green": "bcn_g",
+      "blue": "bcn_b",
+      "white": ["bcn_r", "bcn_g", "bcn_b"]
+    },
+    "default": "red",
+    "blink_s": 0
+  },
+  "siren": {"clip": "siren"},
+  "audio": {
+    "device": "plughw:1,0",
+    "clips_dir": "/var/lib/d1max/clips",
+    "amp": "amp",
+    "amp_idle_s": 15
+  }
+}

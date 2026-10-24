@@ -131,6 +131,8 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
   int? _busyId;
   /// 这一屏的窗口：[_until - windowMin, _until]；null = 最新的。
   int? _until;
+  /// 这只狗有哪几路（W40：装了热像的多一路）。读单狗视图；读不到就是前后两路。
+  List<String> _cams = const <String>['front', 'back'];
 
   @override
   void initState() {
@@ -138,6 +140,16 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
     final a = widget.aroundMs;
     if (a != null) _until = a + SiteRecordingsPage.windowMin * 60000 ~/ 2;
     unawaited(_load());
+    unawaited(_loadCams());
+  }
+
+  Future<void> _loadCams() async {
+    try {
+      final cams = robotCameras(await widget.api.robot(widget.robotId));
+      if (mounted && cams.join(',') != _cams.join(',')) setState(() => _cams = cams);
+    } on Object {
+      // 读不到：照前后两路
+    }
   }
 
   Future<void> _load() async {
@@ -224,16 +236,12 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
             child: Text(tr('Later →', '更晚 →'))),
       ]),
       body: ListView(padding: const EdgeInsets.all(Nw.s16), children: [
-        // 按相机筛：全部 / 前 / 后
+        // 按相机筛：全部 / 前 / 后（/ 热像）
         NwSegment<String>(
-            values: const <String>['all', 'front', 'back'],
+            values: <String>['all', ..._cams],
             selected: _camera ?? 'all',
             keyOf: SiteRecordingsPage.cameraKey,
-            labelOf: (v) => v == 'all'
-                ? tr('All', '全部')
-                : v == 'front'
-                    ? tr('Front', '前')
-                    : tr('Back', '后'),
+            labelOf: (v) => v == 'all' ? tr('All', '全部') : cameraName(v),
             onChanged: (v) {
               _camera = v == 'all' ? null : v;
               unawaited(_load());

@@ -9,8 +9,9 @@
   :meth:`feed` 什么都不做。
 
 两种都给 :meth:`latest`:``{"fix", "lat", "lon", "alt", "sats", "hdop", "std_h_m", "age_s",
-"stamp_ms", "stale"}``(``fix`` ∈ ``none|single|dgps|float|fixed``;超过 :data:`STALE_S` 没更新
-``stale`` 为真)。
+"stamp_ms", "stale"}``,双天线模组(W40:上装 V1.2 的 UM982 + 前后两根天线)报了朝向时多一个
+``heading_deg``(真北起顺时针,0–360;NMEA ``HDT``,或 ``THS`` 里模式是 ``A`` 的)。
+``fix`` ∈ ``none|single|dgps|float|fixed``;超过 :data:`STALE_S` 没更新 ``stale`` 为真。
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ REOPEN_S = 3.0
 BACKOFF_MAX_S = 60.0
 #: GST(标准差)多久以内的才跟 GGA 配。
 GST_MAX_AGE_S = 1.5
+#: 双天线朝向(HDT/THS)多久以内的才跟 GGA 配。
+HEADING_MAX_AGE_S = 1.5
 #: 等着写进模组的改正最多攒几批(满了丢最旧的:过时的改正没用)。
 FEED_QUEUE = 16
 #: 厂家驱动的进程名:``own`` 模式发现它在跑就不开串口(两个进程读同一个口,字节被分走)。
@@ -115,6 +118,24 @@ def parse_gst(body: str) -> float | None:
         return None
     v = math.hypot(slat, slon)
     return v if math.isfinite(v) else None
+
+
+def parse_heading(body: str) -> float | None:
+    """``HDT``(``$GNHDT,123.4,T``)或 ``THS``(``$GNTHS,123.4,A``)→ 真北起顺时针的度数。
+    ``THS`` 只认模式 ``A``(自主算出来的;``E`` 是推算、``V`` 是没有);空的、不是有限数、不在
+    0–360 的不认。"""
+    f = body.split(",")
+    if len(f) < 3 or f[0][2:5] not in ("HDT", "THS"):
+        return None
+    if f[0][2:5] == "HDT" and f[2] != "T":
+        return None
+    if f[0][2:5] == "THS" and f[2] != "A":
+        return None
+    try:
+        v = float(f[1])
+    except ValueError:
+        return None
+    return v % 360.0 if math.isfinite(v) and 0.0 <= v <= 360.0 else None
 
 
 class _Base:
@@ -199,6 +220,7 @@ class OwnRtk(_Base):
         self._fd: int | None = None
         self._wlock = threading.Lock()
         self._std: tuple[float, float] | None = None       # (标准差, 收到的时刻)
+        self._heading: tuple[float, float] | None = None   # (朝向度数, 收到的时刻)
         self._framer = RtcmFramer()
         self._base: tuple[float, float, float] | None = None
         self._q: collections.deque[bytes] = collections.deque(maxlen=FEED_QUEUE)
@@ -340,11 +362,18 @@ class OwnRtk(_Base):
             v = parse_gst(body)
             self._std = None if v is None else (v, self._mono())
             return
+        if body[2:5] in ("HDT", "THS"):
+            h = parse_heading(body)
+            self._heading = None if h is None else (h, self._mono())
+            return
         g = parse_gga(body)
         if g is not None:
-            std = self._std
-            fresh = std is not None and self._mono() - std[1] <= GST_MAX_AGE_S
-            self._set(g | {"std_h_m": std[0] if fresh else None})
+            std, hd, now = self._std, self._heading, self._mono()
+            fresh = std is not None and now - std[1] <= GST_MAX_AGE_S
+            extra: dict[str, Any] = {"std_h_m": std[0] if fresh else None}
+            if hd is not None and now - hd[1] <= HEADING_MAX_AGE_S:
+                extra["heading_deg"] = round(hd[0], 2)
+            self._set(g | extra)
 
 
 class VendorRtk(_Base):

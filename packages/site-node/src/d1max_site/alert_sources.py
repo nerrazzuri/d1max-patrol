@@ -45,7 +45,7 @@ log = logging.getLogger(__name__)
 FALLEN_WORDS: tuple[str, ...] = ("跌倒", "摔倒", "倒地", "fallen", "fall down", "falldown",
                                  "tipped over")
 #: 上装接在继电器上的几路(W21):``payload_<哪一路>`` 故障 → 同名告警。
-PAYLOAD_OUTPUTS = {"strobe": "警灯", "siren": "警笛", "spotlight": "聚光灯"}
+PAYLOAD_OUTPUTS = {"strobe": "警灯", "siren": "警笛", "spotlight": "聚光灯", "amp": "功放"}
 
 #: 失败理由里出现这些词才认作「没电中止」。代理引擎那条理由原文是「电量 22% 低于中止线 25%」。
 BATTERY_WORDS: tuple[str, ...] = ("电量", "电池", "battery")
@@ -522,7 +522,9 @@ class SiteAlertSources:
                 if not self.desk.has_open(rid, kind):
                     self.desk.raise_alert(
                         kind=kind, robot=rid, title=f"上装{name}关不上或状态不明",
-                        detail="继电器板没确认(串口、板子供电?);狗上在接着关。去现场看是不是还开着")
+                        detail="继电器板没确认(串口、板子供电?);狗上在接着关。去现场看是不是还开着"
+                        if out != "siren" else
+                        "继电器板没确认,或者喇叭警笛放不出来(声卡、警笛声文件?);去现场看")
             else:
                 self.desk.resolve_all(rid, kind, who="site:payload_ok")
 

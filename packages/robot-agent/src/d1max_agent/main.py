@@ -180,6 +180,13 @@ def build_parser() -> argparse.ArgumentParser:
     # 后者两路都拉得到)。
     v.add_argument("--camera-host", default="192.168.168.168",
                    help="相机 RTSP 所在主机(rtsp://<host>:8554/front|back);缺省 RK3588 有线口")
+    v.add_argument("--cameras", type=Path,
+                   default=Path(os.environ.get("D1MAX_CAMERAS", "/etc/d1max/cameras.json")),
+                   help="自带两路以外的相机(W40:上装 V1.2 的热像)各从哪拉、录不录;"
+                        "没有这个文件就只有 front、back。文件里有口令:0640 root:robot")
+    v.add_argument("--links", default=os.environ.get("D1MAX_LINKS", ""),
+                   help="设备健康(W40)里要查连不连得上的网络设备:名字=主机:端口,逗号隔开"
+                        "(上装 V1.2 的路由器 router=192.168.10.1:80)。cameras.json 里的相机自动查")
     v.add_argument("--video-source", choices=("auto", "rtsp", "lavfi"), default="auto",
                    help="画面与录像从哪来:auto(缺省)真狗拉相机 RTSP、仿真用测试图;"
                         "rtsp 仿真也拉真相机(不抢控制权验视频、录像);lavfi 测试图")
@@ -489,7 +496,8 @@ def build(args: argparse.Namespace) -> Assembled:
         from d1max_agent.video_push import VideoPusher, lavfi_source, rtsp_source
         kind = args.video_source if args.video_source != "auto" else (
             "lavfi" if args.hal == "sim" else "rtsp")
-        source = lavfi_source if kind == "lavfi" else rtsp_source(args.camera_host)
+        source = lavfi_source if kind == "lavfi" else rtsp_source(args.camera_host,
+                                                                   extra_cameras(args))
         video = VideoPusher(source=source, ffmpeg=args.ffmpeg, transcode=args.video_transcode)
         pump = keeper = mapper = recorder = None
         cams = record_cameras(args)
@@ -519,6 +527,16 @@ def build(args: argparse.Namespace) -> Assembled:
                                persons_socket=args.persons_socket,
                                persons_snapshots=args.persons_snapshots)
         runtime.evidence_sealed = sealer is not None   # W30b:能力里报,没封站点报 P2
+        if runtime.devices is not None:                 # W40:设备健康补上盘、网络设备
+            from d1max_agent.devices import camera_links, parse_links
+            runtime.devices.outbox = Path(args.outbox) if args.outbox is not None else None
+            runtime.devices.outbox_mount = args.outbox_mount or ""
+            try:
+                links = parse_links(args.links or "")
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+            runtime.devices.links = camera_links(extra_cameras(args) if kind == "rtsp" else {}) \
+                | links
         if runtime.force is not None:                   # W26:标定过的门槛
             from d1max_agent.force import ForceConfig
             try:
@@ -553,18 +571,36 @@ class _NoIntake:
         raise SinkError("没有配站点接收口")
 
 
+def extra_cameras(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
+    """``--cameras``(W40):自带两路以外的相机。写错了代理不起(说清楚哪里错)。只读一次。"""
+    got = getattr(args, "_extra_cameras", None)
+    if got is None:
+        from d1max_agent.video_push import CameraConfigError, load_cameras
+        try:
+            got = load_cameras(args.cameras) if getattr(args, "cameras", None) else {}
+        except CameraConfigError as exc:
+            raise SystemExit(str(exc)) from exc
+        args._extra_cameras = got
+    return got
+
+
 def record_cameras(args: argparse.Namespace) -> list[str]:
-    """``--record`` → 录哪几路(W18)。``auto``:真狗前后两路、仿真不录;``none``/空:不录。"""
-    from d1max_contract.video import CAMERAS
+    """``--record`` → 录哪几路(W18)。``auto``:真狗前后两路(加上 ``--cameras`` 里写了 ``record`` 的,
+    W40)、仿真不录;``none``/空:不录。"""
+    from d1max_contract.video import STANDARD_CAMERAS
     raw = (args.record or "").strip()
+    extra = extra_cameras(args) if args.hal == "d1max" or raw not in ("auto", "", "none") else {}
+    have = list(dict.fromkeys([*STANDARD_CAMERAS, *extra]))
     if raw == "auto":
-        return list(CAMERAS) if args.hal == "d1max" else []
+        return [*STANDARD_CAMERAS, *(c for c, v in extra.items()
+                                     if v["record"] and c not in STANDARD_CAMERAS)] \
+            if args.hal == "d1max" else []
     if raw in ("", "none"):
         return []
     cams = [c.strip() for c in raw.split(",") if c.strip()]
-    bad = [c for c in cams if c not in CAMERAS]
+    bad = [c for c in cams if c not in have]
     if bad:
-        raise SystemExit(f"--record 不认识的相机 {bad}(只有 {list(CAMERAS)})")
+        raise SystemExit(f"--record 不认识的相机 {bad}(只有 {have})")
     return cams
 
 

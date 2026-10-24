@@ -48,6 +48,7 @@ from d1max_agent.tasks.base import Task
 from d1max_agent.tasks.engine_goto import EngineGotoTask
 from d1max_agent.transport import GuardedTransport
 from d1max_agent.zonebook import ZoneBook
+from d1max_contract.devices import DEVICES_EVERY_MS
 from d1max_contract.errors import ContractError
 from d1max_contract.hal import (
     Fault,
@@ -329,6 +330,13 @@ class AgentRuntime:
         #: 发件箱的盘况(W00c5d):随遥测每 ``STORAGE_EVERY_MS`` 带一次;满了不接巡检。
         self._storage = storage_facts
         self._next_storage_ms = 0
+        from d1max_agent.devices import DeviceHealth
+        #: 设备健康(W40):随遥测每 ``DEVICES_EVERY_MS`` 带一份(后台收,收好了下一拍带);
+        #: 装机入口再补上发件箱那块盘、网络上的设备。
+        self.devices: DeviceHealth | None = DeviceHealth(hal=hal, rtk=rtk, recorder=recorder)
+        self._next_devices_ms = 0
+        self._devices_task: asyncio.Task | None = None
+        self._devices_ready = False
         self.processor.admit_hook = self._admit
         #: 地图(W00c5d 第二部分):正在用的那一张(``MapKeeper``)、录包与重建(``MappingService``)。
         self.maps = maps
@@ -629,6 +637,10 @@ class AgentRuntime:
 
     def _extra_tasks(self) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
+        cams = getattr(self.video, "cameras", None)
+        if callable(cams):
+            # W40:这只狗有哪几路能看(上装 V1.2 多一路热像)。不报的老狗,站点当它有前后两路
+            out["video"] = {"cameras": list(cams())}
         if self.maps is not None and (self._locsrv is not None
                                       or getattr(self.hal, "load_map", None) is not None):
             # 正在用的图校验不过的原因(W09g 内审再议):告警被人手动解决之后,单狗视图里还看得到
@@ -1755,6 +1767,8 @@ class AgentRuntime:
         if self._closed:
             return
         self._closed = True
+        if self._devices_task is not None and not self._devices_task.done():
+            self._devices_task.cancel()
 
         async def _step(what: str, fn) -> None:
             try:
@@ -2281,6 +2295,15 @@ class AgentRuntime:
         self._next_status_ms = now + self.status_period_ms
         await self.transport.publish(self.topics.status, _dumps(wire), qos=1, retain=True)
 
+    async def _refresh_devices(self) -> None:
+        try:
+            # 一样都没有(没装上装、没配 RTK 的仿真狗)就不带:单狗视图里是 None,不是空清单
+            self._devices_ready = bool(await self.devices.refresh())
+        except asyncio.CancelledError:
+            raise
+        except Exception:                               # 下一轮再收
+            log.exception("设备健康没收成")
+
     async def _maybe_telemetry(self) -> None:
         now = self._now()
         if self._next_telemetry_ms is None:
@@ -2298,6 +2321,12 @@ class AgentRuntime:
                 n = self._unsealed_now()
                 if n is not None:
                     storage = dataclasses.replace(storage, unsealed=n)
+        dv = self.devices
+        if dv is not None and dv.wanted() and now >= self._next_devices_ms:
+            self._next_devices_ms = now + DEVICES_EVERY_MS
+            if self._devices_task is None or self._devices_task.done():
+                self._devices_task = asyncio.get_running_loop().create_task(
+                    self._refresh_devices())
         tele = compose_telemetry(
             now_ms=now, odom=await self.hal.odometry(), battery=await self.hal.battery(),
             health=await self.hal.health(), loaded_map=self.loaded_map,
@@ -2305,6 +2334,9 @@ class AgentRuntime:
             storage=storage, anchor=self.parts.nav.anchor if self.parts is not None else None)
         if self.rtk is not None:
             tele = dataclasses.replace(tele, rtk=self.rtk.latest())
+        if self._devices_ready and dv is not None and dv.last is not None:
+            self._devices_ready = False                 # 收好的那一份带一次
+            tele = dataclasses.replace(tele, devices=dv.last)
         nav_path = getattr(self.parts.nav, "current_path", None) if self.parts is not None else None
         nav = self._nav_report.wire(nav_path() if nav_path is not None else None, now)
         if nav is not None:

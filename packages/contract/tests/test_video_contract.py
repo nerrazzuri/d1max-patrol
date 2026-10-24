@@ -9,6 +9,7 @@ import pytest
 from d1max_contract.errors import ContractError
 from d1max_contract.video import (
     CAMERAS,
+    STANDARD_CAMERAS,
     VIDEO_TTL_MAX_MS,
     VIDEO_TTL_MIN_MS,
     VideoRequest,
@@ -28,7 +29,8 @@ def test_往返():
     assert r == VideoRequest(camera="front", url="srt://10.0.0.5:8890", passphrase="a" * 32,
                              ttl_ms=10_000)
     assert parse_video_payload(r.to_payload()) == r
-    assert CAMERAS == ("front", "back")
+    # W40:上装 V1.2 的热像是第三路;不报相机清单的老狗按前后两路
+    assert CAMERAS == ("front", "back", "thermal") and STANDARD_CAMERAS == ("front", "back")
 
 
 @pytest.mark.parametrize("bad", [

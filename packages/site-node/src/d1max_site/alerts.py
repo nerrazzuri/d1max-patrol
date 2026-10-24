@@ -147,6 +147,8 @@ LEVEL_OF: dict[str, Level] = {
     "payload_strobe": Level.P1,
     "payload_siren": Level.P1,
     "payload_spotlight": Level.P1,
+    # 功放(W40,上装 V1.2):关不上只是费电发热,开不了喇叭就哑了(驱离少一档)—— 今天之内去看
+    "payload_amp": Level.P2,
     # P2:今天之内处理。不影响这一趟巡检能不能跑完,但拖久了会变成 P1
     # (盘满了继续拖,就会变成没法记录;上传积压继续拖,数据就旧到没用)。
     "finding": Level.P2,

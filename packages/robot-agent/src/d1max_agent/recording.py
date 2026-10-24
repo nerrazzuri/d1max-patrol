@@ -56,6 +56,8 @@ class _Cam:
         self.err: IO[bytes] | None = None
         self.retry_at = 0.0
         self.failed = False
+        #: 最近一次断的原因(设备健康报给站点,W40)。
+        self.why = ""
 
 
 class Recorder:
@@ -144,15 +146,21 @@ class Recorder:
             return ""
         with contextlib.suppress(OSError, ValueError):
             s.err.seek(0)
-            return s.err.read()[-_ERR_TAIL:].decode("utf-8", "replace").strip()
+            from d1max_contract.video import scrub  # W40:热像的 RTSP 地址带口令
+            return scrub(s.err.read()[-_ERR_TAIL:].decode("utf-8", "replace").strip())
         return ""
 
     def _failed(self, camera: str, s: _Cam, why: str) -> None:
         s.retry_at = self._mono() + RESTART_AFTER_S
+        s.why = why[:200]
         if not s.failed:
             s.failed = True
             log.warning("%s 录像断了:%s", camera, why)
             self.emit("recording_failed", {"camera": camera, "reason": why[:300]})
+
+    def camera_health(self) -> dict[str, str]:
+        """每一路录着没有(W40 设备健康):相机名 → 空串(在录)或断了的原因。"""
+        return {c: (s.why or "录像断了") if s.failed else "" for c, s in self._cams.items()}
 
     # ------------------------------------------------------------ 每拍
 

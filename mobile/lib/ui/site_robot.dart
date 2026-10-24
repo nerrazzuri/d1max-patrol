@@ -551,6 +551,13 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             padding: const EdgeInsets.only(top: Nw.s8),
             child: Text(rtkText((v!['rtk'] as Map).cast<String, dynamic>()),
                 key: const Key('robot-rtk'), style: NwText.bodyMedium.copyWith(color: c.text))),
+      // W40：设备健康（上装 V1.2 的继电器板、喇叭、RTK、相机、存储盘、路由器……每台在线 / 离线 / 降级 / 故障）
+      if (v?['devices'] is Map &&
+          (v!['devices'] as Map)['items'] is List &&
+          ((v['devices'] as Map)['items'] as List).isNotEmpty)
+        Padding(
+            padding: const EdgeInsets.only(top: Nw.s8),
+            child: _Devices(view: (v['devices'] as Map).cast<String, dynamic>())),
       if (caps != null && headText(caps).isNotEmpty)
         Padding(
             padding: const EdgeInsets.only(top: Nw.s8),
@@ -655,5 +662,48 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
         ),
       ]),
     );
+  }
+}
+
+
+/// 设备健康（W40）：一台一行，圆点按状态上色；不在线的排前面；好一会儿没更新整块标出来。
+class _Devices extends StatelessWidget {
+  final Map<String, dynamic> view;
+  const _Devices({required this.view});
+
+  static const Key listKey = Key('robot-devices');
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Nw.of(context);
+    const order = <String, int>{'error': 0, 'offline': 1, 'degraded': 2, 'online': 3};
+    final items = <Map<String, dynamic>>[
+      for (final x in (view['items'] as List)) if (x is Map) x.cast<String, dynamic>(),
+    ]..sort((a, b) => (order['${a['state']}'] ?? 9).compareTo(order['${b['state']}'] ?? 9));
+    Color dot(String st) => switch (st) {
+          'online' => c.success,
+          'degraded' => c.warning,
+          _ => c.error,
+        };
+    return Column(key: listKey, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(
+          view['stale'] == true
+              ? tr('Devices (not updated for a while)', '设备（好一会儿没更新了）')
+              : tr('Devices', '设备'),
+          style: NwText.titleSmall.copyWith(color: view['stale'] == true ? c.warning : c.text)),
+      for (final d in items)
+        Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Row(key: Key('device-${d['id']}'), crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(
+                  padding: const EdgeInsets.only(top: 5, right: Nw.s8),
+                  child: Icon(Icons.circle, size: 10, color: dot('${d['state']}'))),
+              Expanded(
+                  child: Text(
+                      '${deviceName('${d['id']}')}${tr(': ', '：')}${deviceStateText('${d['state']}')}'
+                      '${'${d['detail'] ?? ''}'.isEmpty ? '' : ' · ${d['detail']}'}',
+                      style: NwText.bodyMedium.copyWith(color: c.text))),
+            ])),
+    ]);
   }
 }

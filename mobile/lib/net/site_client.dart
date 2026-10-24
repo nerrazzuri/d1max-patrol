@@ -299,6 +299,55 @@ String locText(Map<String, dynamic>? loc) {
       '定位：偏差约 ${s is num ? s.toStringAsFixed(1) : '?'} m');
 }
 
+/// 这只狗有哪几路相机（W40）：单狗视图里狗报的 `capabilities.tasks.video.cameras`；老狗不报就是前后两路。
+List<String> robotCameras(Map<String, dynamic>? view) {
+  final caps = view?['capabilities'];
+  final tasks = caps is Map ? caps['tasks'] : null;
+  final video = tasks is Map ? tasks['video'] : null;
+  final cams = video is Map ? video['cameras'] : null;
+  if (cams is! List) return const <String>['front', 'back'];
+  final got = <String>[for (final c in const ['front', 'back', 'thermal']) if (cams.contains(c)) c];
+  return got.isEmpty ? const <String>['front', 'back'] : got;
+}
+
+/// 设备健康（W40）里设备名说人话：`relay` 继电器板、`camera:<名>`、`link:<名>`……
+String deviceName(String id) {
+  final i = id.indexOf(':');
+  final kind = i < 0 ? id : id.substring(0, i);
+  final name = i < 0 ? '' : id.substring(i + 1);
+  return switch (kind) {
+    'relay' => tr('Relay board', '继电器板'),
+    'speaker' => tr('Speaker', '喇叭'),
+    'siren' => tr('Siren (speaker)', '警笛（喇叭）'),
+    'rtk' => 'RTK',
+    'disk' => tr('Storage disk', '存储盘'),
+    'camera' => tr('Camera ${cameraName(name)}', '相机 ${cameraName(name)}'),
+    'link' => name == 'router'
+        ? tr('Router', '路由器')
+        : name == 'thermal'
+            ? tr('Thermal camera (network)', '热像（网络）')
+            : tr('Network device $name', '网络设备 $name'),
+    _ => id,
+  };
+}
+
+/// 设备健康的四种状态说人话。
+String deviceStateText(String state) => switch (state) {
+      'online' => tr('online', '在线'),
+      'offline' => tr('offline', '离线'),
+      'degraded' => tr('degraded', '降级'),
+      'error' => tr('fault', '故障'),
+      _ => state,
+    };
+
+/// 相机名说人话。
+String cameraName(String c) => switch (c) {
+      'front' => tr('Front', '前'),
+      'back' => tr('Back', '后'),
+      'thermal' => tr('Thermal', '热像'),
+      _ => c,
+    };
+
 /// RTK 的人话（W09e）：单狗视图里的 `rtk`（站点从狗的遥测取的）。没配 RTK、老狗是空串。
 String rtkText(Map<String, dynamic>? rtk) {
   if (rtk == null) return '';
@@ -321,6 +370,11 @@ String rtkText(Map<String, dynamic>? rtk) {
         ? tr('accuracy about ${(std * 100).toStringAsFixed(0)} cm',
             '精度约 ${(std * 100).toStringAsFixed(0)} cm')
         : tr('accuracy about ${std.toStringAsFixed(1)} m', '精度约 ${std.toStringAsFixed(1)} m'));
+  }
+  final hd = rtk['heading_deg'];
+  if (hd is num) {
+    // W40：双天线模组（上装 V1.2 的 UM982）才报朝向
+    parts.add(tr('heading ${hd.toStringAsFixed(0)}°', '朝向 ${hd.toStringAsFixed(0)}°'));
   }
   final age = rtk['age_s'];
   if (age is num) {
@@ -565,7 +619,10 @@ abstract class SiteApi {
 
   /// 上装（W21）：开（带 [maxS] 秒，到点狗上自己关）/ 关一路：`strobe` 警灯、`siren` 警笛、`spotlight` 聚光灯、
   /// `speaker` 喇叭（开要 [clip]：话术名或 `tts:<语言>:<文字>`）。返回 `{ack}`。
-  Future<Map<String, dynamic>> deter(String robotId, String output, bool on, {double? maxS, String? clip});
+  /// W40：聚光灯可以只开、关一边（[side] `left`/`right`，狗报了 `spotlight_sides` 才给）；开警灯可以挑颜色
+  /// （[color]，狗报的 `strobe_colors` 之一）。
+  Future<Map<String, dynamic>> deter(String robotId, String output, bool on,
+      {double? maxS, String? clip, String? side, String? color});
 
   /// 在当前位置标原点（W00c6f，管理员）：狗用它此刻的位置当原点（定位不好就拒），站点登记成默认待命点（名字
   /// [name]，空就是 `home`）。返回 `{ack, standby}`。
@@ -1445,12 +1502,14 @@ class SiteClient implements SiteApi {
 
   @override
   Future<Map<String, dynamic>> deter(String robotId, String output, bool on,
-          {double? maxS, String? clip}) async =>
+          {double? maxS, String? clip, String? side, String? color}) async =>
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/deter', <String, dynamic>{
         'output': output,
         'on': on,
         if (on) 'max_s': ?maxS,
         if (on) 'clip': ?clip,
+        'side': ?side,
+        if (on) 'color': ?color,
       }));
 
   @override

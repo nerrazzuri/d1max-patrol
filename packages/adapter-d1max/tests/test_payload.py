@@ -553,3 +553,345 @@ async def test_外审3_放完_放坏了_到点_都回调_被打断的不回调(t
     await p.stop_sound()                                  # 关:也不回调
     await asyncio.sleep(0.1)
     assert len(ends) == 3
+
+
+# -------------------------------------------- W40:上装 V1.2(决策 70)
+
+
+V12 = {"relay": {"coils": {"spot_l": 0, "spot_r": 1, "bcn_r": 2, "bcn_g": 3, "bcn_b": 4,
+                           "amp": 5}},
+       "spotlight": {"left": "spot_l", "right": "spot_r"},
+       "strobe": {"colors": {"red": "bcn_r", "yellow": ["bcn_r", "bcn_g"], "green": "bcn_g",
+                             "blue": "bcn_b"}, "default": "red"},
+       "siren": {"clip": "siren"},
+       "audio": {"device": "hw:1", "amp": "amp", "amp_idle_s": 0.2}}
+
+
+def _v12(tmp_path, 板子=None, *, run=None, **改) -> Payload:
+    d = json.loads(json.dumps(V12))
+    for k, v in 改.items():
+        d[k] = v
+    d["audio"]["clips_dir"] = str(tmp_path)
+    p = tmp_path / "payload.json"
+    p.write_text(json.dumps(d))
+    cfg = PayloadConfig.load(p)
+    relay = ModbusRelay(板子.open, timeout_s=0.1, retries=0) if 板子 is not None else None
+    pl = Payload(cfg, relay=relay, run=run)
+    pl.RETRY_S = 0.1
+    return pl
+
+
+def test_V12配置_线圈起名_各路引用(tmp_path):
+    p = _v12(tmp_path)
+    c = p.cfg
+    assert c.spotlight == {"left": ("spot_l",), "right": ("spot_r",)}
+    assert c.strobe_colors["yellow"] == ("bcn_r", "bcn_g") and c.strobe_default == "red"
+    assert c.siren_clip == "siren" and not c.siren_coil and c.amp_coil == "amp"
+    assert c.role_of("spot_r") == "右聚光灯" and c.role_of("bcn_g") == "警灯"
+    assert c.role_of("amp") == "功放"
+
+
+@pytest.mark.parametrize("改, 说", [
+    ({"spotlight": {"left": "spot_l"}}, "left、right 都写"),
+    ({"spotlight": {"left": "spot_l", "right": "nope"}}, "不在 relay.coils"),
+    ({"spotlight": {"left": "spot_l", "right": "bcn_r"}}, "同时归"),
+    ({"strobe": {"colors": {"red": "bcn_r"}, "default": "red"}}, "没有哪一路用它"),
+    ({"strobe": {"colors": {"Red": ["bcn_r", "bcn_g", "bcn_b"]}}}, "颜色名"),
+    ({"strobe": {"colors": {"red": ["bcn_r", "bcn_g", "bcn_b"]}, "default": "pink"}}, "default"),
+    ({"strobe": {"colors": {"red": ["bcn_r", "bcn_g", "bcn_b"]}, "blink_s": 0.1}}, "blink_s"),
+    ({"siren": {"clip": "siren", "coil": "amp"}}, "二选一"),
+    ({"siren": {"clip": "../x"}}, "siren.clip"),
+])
+def test_V12配置_写错就拒(tmp_path, 改, 说):
+    with pytest.raises(PayloadError, match=说):
+        _v12(tmp_path, **改)
+
+
+def test_V12配置_喇叭警笛和功放要先接喇叭(tmp_path):
+    with pytest.raises(PayloadError, match="audio.device"):
+        _v12(tmp_path, audio={"amp": "amp"})
+
+
+async def test_V12左右灯_能只开一边_只关一边(板子, tmp_path):
+    p = _v12(tmp_path, 板子)
+    await p.set("spotlight", True, 60, side="left")
+    assert 板子.coils[0] and not 板子.coils[1]
+    await p.set("spotlight", True, 60, side="right")
+    assert 板子.coils[0] and 板子.coils[1]
+    await p.set("spotlight", False, 0, side="left")
+    assert not 板子.coils[0] and 板子.coils[1]
+    await p.set("spotlight", True, 60)                     # 两边
+    await p.set("spotlight", False, 0)
+    assert not 板子.coils[0] and not 板子.coils[1]
+    assert p.options()["spotlight_sides"] == ["left", "right"]
+    await p.close()
+
+
+async def test_老配置的聚光灯不分左右_只开一边就拒(板子):
+    p = _上装(板子)
+    with pytest.raises(PayloadError, match="不分左右"):
+        await p.set("spotlight", True, 5, side="left")
+    assert "spotlight_sides" not in p.options() and "strobe_colors" not in p.options()
+    await p.close()
+
+
+async def test_V12警灯_按颜色合线圈_换色先关后开(板子, tmp_path):
+    p = _v12(tmp_path, 板子)
+    await p.start()
+    await p.set("strobe", True, 60)                         # 缺省红
+    assert 板子.coils[2:5] == [True, False, False]
+    await p.set("strobe", True, 60, color="yellow")
+    assert 板子.coils[2:5] == [True, True, False]
+    n = len(板子.writes)
+    await p.set("strobe", True, 60, color="blue")
+    assert 板子.coils[2:5] == [False, False, True]
+    assert [w for w in 板子.writes[n:] if 2 <= w[0] <= 4] == [(2, False), (3, False), (4, True)], \
+        "先关旧颜色再开新颜色"
+    with pytest.raises(PayloadError, match="没有 pink 色"):
+        await p.set("strobe", True, 60, color="pink")
+    await p.set("strobe", False, 0)
+    assert 板子.coils[2:5] == [False, False, False]
+    o = p.options()
+    assert o["strobe_colors"] == ["red", "yellow", "green", "blue"] and o["strobe_default"] == "red"
+    await p.close()
+
+
+async def test_V12警灯换色开到一半没成_开了的那个也关回去(板子, tmp_path):
+    p = _v12(tmp_path, 板子)
+    await p.start()
+
+    orig = p.relay.write_coil
+
+    def 绿的写不进去(coil, on):
+        if coil == 3 and on:
+            raise PayloadError("没回")
+        return orig(coil, on)
+    p.relay.write_coil = 绿的写不进去
+    with pytest.raises(PayloadError):
+        await p.set("strobe", True, 60, color="yellow")
+    assert 板子.coils[2], "红的那个其实开了"
+    p.relay.write_coil = orig
+    assert await _等到(lambda: not 板子.coils[2]), "黄只开了一半是错的颜色:都关回去"
+    await p.close()
+
+
+async def test_V12警灯软件打闪_到点停_灭的半拍不算故障(板子, tmp_path):
+    d = dict(V12["strobe"], blink_s=0.5)
+    p = _v12(tmp_path, 板子, strobe=d)
+    await p.start()
+    await p.set("strobe", True, 1.6)
+    seen: list[bool] = []
+    probs: list[list[str]] = []
+    loop = asyncio.get_running_loop()
+    end = loop.time() + 1.4
+    while loop.time() < end:
+        seen.append(板子.coils[2])
+        probs.append(p.problems())
+        await asyncio.sleep(0.05)
+    assert True in seen and False in seen, "要一亮一灭"
+    assert all(x == [] for x in probs), "打闪灭的那半拍不是故障"
+    assert await _等到(lambda: not 板子.coils[2] and not p._blinking(), 2.0), "到点停在灭"
+    await p.close()
+
+
+async def test_V12功放_说话前合上_不出声了过一会断开(板子, tmp_path):
+    (tmp_path / "warn-zh.wav").write_bytes(b"RIFF")
+    log: list = []
+    order: list = []
+
+    async def run(*args, **kw):
+        order.append(("play", 板子.coils[5]))
+        return 假进程(log, args, 0.1)
+    p = _v12(tmp_path, 板子, run=run)
+    await p.start()
+    await p.sound("warn-zh", 5)
+    assert order == [("play", True)], "功放先合上再放"
+    assert await _等到(lambda: not p.playing())
+    assert 板子.coils[5], "刚放完:功放还留一会(连着放话术不来回开关)"
+    assert await _等到(lambda: not 板子.coils[5], 2.0), "闲置够了断开"
+    await p.close()
+
+
+async def test_V12功放合不上_喇叭当没放(板子, tmp_path):
+    (tmp_path / "warn-zh.wav").write_bytes(b"RIFF")
+    log: list = []
+    p = _v12(tmp_path, 板子, run=_假跑(log))
+    板子.mute = True
+    with pytest.raises(PayloadError, match="功放开不了"):
+        await p.sound("warn-zh", 5)
+    assert log == [] and not p.playing()
+    板子.mute = False
+    await p.close()
+
+
+async def test_V12喇叭警笛_循环放_到点停_关就停(tmp_path):
+    (tmp_path / "siren.wav").write_bytes(b"RIFF")
+    log: list = []
+    p = _v12(tmp_path, None, run=_假跑(log, 0.1), relay={"coils": {}},
+             spotlight={}, strobe={}, audio={"device": "hw:1"})
+    assert p.has("siren") and p.options()["siren_via"] == "speaker"
+    await p.set("siren", True, 0.45)
+    assert await _等到(lambda: len(log) >= 3), "一遍放完接着放"
+    assert all(a[-1].endswith("siren.wav") for a in log)
+    assert await _等到(lambda: not p.siren_on(), 2.0), "到点停"
+    n = len(log)
+    await asyncio.sleep(0.3)
+    assert len(log) == n
+    await p.set("siren", True, 30)
+    await asyncio.sleep(0.05)
+    proc = p._siren_proc
+    await p.set("siren", False, 0)
+    assert not p.siren_on() and proc.returncode == -9, "关:当场掐掉"
+    await p.close()
+
+
+async def test_V12喇叭警笛_说话时让一让_说完接着响(tmp_path):
+    (tmp_path / "siren.wav").write_bytes(b"RIFF")
+    (tmp_path / "notified-zh.wav").write_bytes(b"RIFF")
+    log: list = []
+    p = _v12(tmp_path, None, run=_假跑(log, 0.3), relay={"coils": {}},
+             spotlight={}, strobe={}, audio={"device": "hw:1"})
+    await p.set("siren", True, 30)
+    await asyncio.sleep(0.05)
+    siren1 = p._siren_proc
+    await p.sound("notified-zh", 5)
+    assert siren1.returncode == -9, "说话:先掐掉这一遍警笛"
+    assert p._siren_proc is None
+    await asyncio.sleep(0.1)
+    assert log[-1][-1].endswith("notified-zh.wav"), "说话时警笛不抢喇叭"
+    assert await _等到(lambda: not p.playing())
+    assert await _等到(lambda: p._siren_proc is not None), "说完接着响"
+    assert p.siren_error == "", "被说话掐掉的那一遍不算放坏"
+    await p.close()
+
+
+async def test_V12喇叭警笛_没有警笛声文件就不报这一路(tmp_path):
+    p = _v12(tmp_path, None, relay={"coils": {}}, spotlight={}, strobe={},
+             audio={"device": "hw:1"})
+    assert not p.has("siren") and "siren_via" not in p.options()
+    with pytest.raises(PayloadError, match="警笛声"):
+        await p.set("siren", True, 5)
+    await p.set("siren", False, 0)                          # 关永远可以
+
+
+async def test_V12喇叭警笛放坏了_报警笛故障_好了就没(tmp_path):
+    from d1max_adapter_d1max.hal import D1MaxHal
+    (tmp_path / "siren.wav").write_bytes(b"RIFF")
+    log: list = []
+    rc = {"v": 1}
+
+    async def run(*args, **kw):
+        return 坏进程(log, args, 0.05, rc["v"])
+
+    class 假旁路:
+        def current_faults(self, fresh_s):
+            return []
+    p = _v12(tmp_path, None, run=run, relay={"coils": {}}, spotlight={}, strobe={},
+             audio={"device": "hw:1"})
+    p.SIREN_RETRY_S = 0.1
+    hal = D1MaxHal(backend=假旁路(), payload=p)              # type: ignore[arg-type]
+    await p.set("siren", True, 30)
+    assert await _等到(lambda: p.problems() == ["siren"])
+    f = await hal.faults()
+    assert [x.code for x in f] == ["payload_siren"] and "退出码 1" in f[0].text
+    rc["v"] = 0
+    assert await _等到(lambda: p.problems() == []), "放成了就清掉"
+    await p.close()
+
+
+async def test_V12故障按路合起来报_线圈名站点不认识(板子, tmp_path):
+    from d1max_adapter_d1max.hal import D1MaxHal
+
+    class 假旁路:
+        def current_faults(self, fresh_s):
+            return []
+    板子.mute = True
+    p = _v12(tmp_path, 板子)
+    await p.start()
+    hal = D1MaxHal(backend=假旁路(), payload=p)              # type: ignore[arg-type]
+    f = {x.code: x.text for x in await hal.faults()}
+    assert sorted(f) == ["payload_amp", "payload_spotlight", "payload_strobe"]
+    assert "左聚光灯、右聚光灯" in f["payload_spotlight"] and "接着关" in f["payload_strobe"]
+    assert hal.deter_options()["spotlight_sides"] == ["left", "right"]
+    板子.mute = False
+    assert await _等到(lambda: p.problems() == [])
+    await p.close()
+
+
+async def test_V12真狗HAL_颜色和左右灯走到上装(板子, tmp_path):
+    from d1max_adapter_d1max.hal import D1MaxHal
+    p = _v12(tmp_path, 板子)
+    hal = D1MaxHal(backend=object(), payload=p)             # type: ignore[arg-type]
+    await hal.strobe("green", "flash", 5)
+    assert 板子.coils[2:5] == [False, True, False]
+    await hal.strobe("warn", "flash", 5)                    # 缺省颜色
+    assert 板子.coils[2:5] == [True, False, False]
+    await hal.strobe("warn", "off", 0)
+    assert 板子.coils[2:5] == [False, False, False]
+    await hal.spotlight_side("right", True, 5)
+    assert 板子.coils[:2] == [False, True]
+    await hal.spotlight(False, 0)
+    assert 板子.coils[:2] == [False, False]
+    await p.close()
+
+
+async def test_V12设备健康_继电器板_喇叭_喇叭警笛(板子, tmp_path):
+    from d1max_adapter_d1max.payload import alsa_card_present
+    (tmp_path / "warn-zh.wav").write_bytes(b"RIFF")
+    p = _v12(tmp_path, 板子, run=_假跑([]))
+    p.card_present = lambda dev: True
+    h = {d["id"]: d for d in p.health()}
+    assert h["relay"]["state"] == "offline", "还一个都没确认过"
+    assert h["siren"]["state"] == "error" and "警笛声" in h["siren"]["detail"]
+    await p.start()
+    h = {d["id"]: d for d in p.health()}
+    assert h["relay"]["state"] == "online" and h["speaker"]["state"] == "online"
+    板子.mute = True
+    with pytest.raises(PayloadError):
+        await p.set("spotlight", True, 5, side="left")
+    h = {d["id"]: d for d in p.health()}
+    assert h["relay"]["state"] == "error" and "左聚光灯" in h["relay"]["detail"]
+    板子.mute = False
+    assert await _等到(lambda: {d["id"]: d for d in p.health()}["relay"]["state"] == "online")
+    p.card_present = lambda dev: False
+    assert {d["id"]: d for d in p.health()}["speaker"]["state"] == "offline"
+    await p.close()
+    asound = tmp_path / "asound"
+    (asound / "card1").mkdir(parents=True)
+    (asound / "Device").mkdir()
+    assert alsa_card_present("plughw:1,0", asound) is True
+    assert alsa_card_present("hw:2", asound) is False
+    assert alsa_card_present("hw:CARD=Device,DEV=0", asound) is True
+    assert alsa_card_present("default", asound) is None
+
+
+async def test_V12设备健康_喇叭放坏了算故障_放成了就好(tmp_path):
+    (tmp_path / "w.wav").write_bytes(b"RIFF")
+    rc = {"v": 1}
+
+    async def run(*args, **kw):
+        return 坏进程([], args, 0.02, rc["v"])
+    p = Payload(PayloadConfig(audio_device="hw:1", clips_dir=str(tmp_path)), run=run)
+    p.card_present = lambda dev: None
+    await p.sound("w", 5)
+    assert await _等到(lambda: not p.playing())
+    assert p.health()[0]["state"] == "error" and "退出码 1" in p.health()[0]["detail"]
+    rc["v"] = 0
+    await p.sound("w", 5)
+    assert await _等到(lambda: not p.playing())
+    assert p.health()[0]["state"] == "online"
+
+
+def test_V12配置样例读得进来_警笛声生成得出来(tmp_path):
+    import subprocess
+    import sys
+    import wave
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    c = PayloadConfig.load(root / "deploy" / "payload.v12.example.json")
+    assert set(c.spotlight) == {"left", "right"} and c.siren_clip == "siren"
+    out = tmp_path / "siren.wav"
+    subprocess.run([sys.executable, "-m", "d1max_adapter_d1max.siren", str(out)], check=True,
+                   capture_output=True)
+    with wave.open(str(out)) as w:
+        assert w.getnchannels() == 1 and w.getframerate() == 16000 and w.getnframes() == 32000

@@ -368,6 +368,8 @@ void main() {
       'payload (all)': () => SiteDeterPage(api: FakeApi('guard'), robotId: 'A', caps: const <String, dynamic>{
             'outputs': ['strobe', 'siren', 'spotlight', 'speaker'],
             'clips': ['warn-zh', 'warn-en', 'leave-now-private-property'],
+            'spotlight_sides': ['left', 'right'],
+            'strobe_colors': ['red', 'yellow', 'green', 'blue', 'white'],
             'tts': true}),
     };
     for (final b in Brightness.values) {
