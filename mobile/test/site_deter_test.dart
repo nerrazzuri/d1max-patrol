@@ -101,4 +101,74 @@ void main() {
     await t.pumpAndSettle();
     expect(find.textContaining('设备没做成：继电器板'), findsOneWidget);
   });
+
+  testWidgets('W40：狗报了左右灯、警灯颜色：多两行、颜色下拉框，开的时候带上', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api, caps: <String, dynamic>{
+      ..._caps,
+      'outputs': <String>['strobe', 'siren', 'spotlight', 'speaker'],
+      'spotlight_sides': <String>['left', 'right'],
+      'strobe_colors': <String>['red', 'yellow', 'green'],
+      'strobe_default': 'yellow',
+    });
+    expect(find.byKey(const Key('deter-spotlight')), findsOneWidget);
+    expect(find.byKey(const Key('deter-spotlight-left')), findsOneWidget);
+    expect(find.byKey(const Key('deter-spotlight-right')), findsOneWidget);
+    await t.tap(find.byKey(const Key('deter-on-spotlight-left')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A spotlight true 120.0 side=left');
+    expect(find.text('开左聚光灯 120 秒：好了'), findsOneWidget);
+    await t.tap(find.byKey(const Key('deter-off-spotlight-right')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A spotlight false side=right');
+    await t.tap(find.byKey(const Key('deter-on-strobe')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A strobe true 60.0 color=yellow', reason: '缺省颜色按狗报的');
+    await t.tap(find.byKey(const Key('deter-color')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('绿').last);
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('deter-on-strobe')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A strobe true 60.0 color=green');
+    await t.tap(find.byKey(const Key('deter-off-strobe')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A strobe false', reason: '关不带颜色');
+  });
+
+  testWidgets('W40：老狗没报左右、颜色：跟原来一样', (t) async {
+    final api = FakeApi('guard');
+    await _open(t, api, caps: <String, dynamic>{..._caps, 'outputs': <String>['strobe', 'spotlight']});
+    expect(find.byKey(const Key('deter-spotlight-left')), findsNothing);
+    expect(find.byKey(const Key('deter-color')), findsNothing);
+    await t.tap(find.byKey(const Key('deter-on-strobe')));
+    await t.pumpAndSettle();
+    expect(api.calls.last, 'deter A strobe true 60.0');
+  });
+
+  testWidgets('W40：单狗页列设备健康，坏的排前面，过时了标出来', (t) async {
+    final v = _view()
+      ..['devices'] = <String, dynamic>{
+        'items': <Map<String, dynamic>>[
+          {'id': 'relay', 'state': 'online', 'detail': '6 个线圈都确认过'},
+          {'id': 'rtk', 'state': 'degraded', 'detail': '浮点解'},
+          {'id': 'link:router', 'state': 'offline', 'detail': '连不上 192.168.10.1:80'},
+          {'id': 'camera:thermal', 'state': 'error', 'detail': '录像断了'},
+        ],
+        'at_ms': 1,
+        'stale': false,
+      };
+    await _robotPage(t, FakeApi('guard', robotView: v));
+    await t.scrollUntilVisible(find.byKey(const Key('robot-devices')), 200);
+    expect(find.text('路由器：离线 · 连不上 192.168.10.1:80'), findsOneWidget);
+    expect(find.text('相机 热像：故障 · 录像断了'), findsOneWidget);
+    expect(find.text('RTK：降级 · 浮点解'), findsOneWidget);
+    final ys = [for (final k in ['camera:thermal', 'link:router', 'rtk', 'relay'])
+      t.getTopLeft(find.byKey(Key('device-$k'))).dy];
+    expect(ys, [...ys]..sort(), reason: '故障、离线、降级、在线');
+    (v['devices'] as Map)['stale'] = true;
+    await _robotPage(t, FakeApi('guard', robotView: v));
+    await t.scrollUntilVisible(find.byKey(const Key('robot-devices')), 200);
+    expect(find.text('设备（好一会儿没更新了）'), findsOneWidget);
+  });
 }

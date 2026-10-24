@@ -43,7 +43,11 @@ async def test_能力里报接了哪几路_能放哪些话术(tmp_path):
     broker, c, ears, dog, rt = await _台(tmp_path)
     d = ears.by["capabilities"][-1]["tasks"]["deter"]
     assert d == {"outputs": ["strobe", "siren", "spotlight", "speaker"], "max_s": 600.0,
-                 "clips": ["warn-zh", "warn-en"], "tts": False}
+                 "clips": ["warn-zh", "warn-en"], "tts": False,
+                 # W40:仿真上装是 V1.2 那套
+                 "spotlight_sides": ["left", "right"],
+                 "strobe_colors": ["red", "yellow", "green", "blue", "white"],
+                 "strobe_default": "red", "siren_via": "speaker"}
     await rt.close()
 
 
@@ -272,3 +276,55 @@ async def test_复查2_TTS合成中_关喇叭不排队_合成当场掐掉(tmp_pa
     await asyncio.sleep(0.1)
     assert [p.args[0] for p in procs] == ["espeak-ng"], "关掉之后不再起播放器"
     await rt.close()
+
+
+# -------------------------------------------- W40:上装 V1.2
+
+
+async def test_W40_只开一边聚光灯_挑颜色_事件里记着(tmp_path):
+    broker, c, ears, dog, rt = await _台(tmp_path)
+    ack = await _发(rt, broker, ears,
+                   {"output": "spotlight", "on": True, "max_s": 30, "side": "right"}, "d1", c)
+    assert ack["result"] == "accepted", ack
+    assert dog.deter_on("spotlight_right") and not dog.deter_on("spotlight_left")
+    ack = await _发(rt, broker, ears,
+                   {"output": "strobe", "on": True, "max_s": 30, "color": "green"}, "d2", c)
+    assert ack["result"] == "accepted" and dog.deter_color == "green"
+    await _跑(rt, broker, n=2, r=dog, c=c)          # 事件下一拍发出去
+    ev = _事件(ears)
+    assert ev[-2]["side"] == "right" and ev[-1]["color"] == "green"
+    ack = await _发(rt, broker, ears, {"output": "strobe", "on": True, "max_s": 30,
+                                       "color": "pink"}, "d3", c)
+    assert ack["result"] == "rejected" and "pink" in ack["reason"]
+    await rt.close()
+
+
+async def test_W40_HAL不报左右_颜色_代理回unsupported_不碰设备():
+    from types import SimpleNamespace
+
+    from d1max_agent.deter import DeterDesk
+    from d1max_contract.messages import Command
+    calls: list = []
+
+    class 老上装:
+        def hal_capabilities(self):
+            return SimpleNamespace(actuators={"strobe": True, "spotlight": True})
+
+        async def spotlight(self, on, max_s):
+            calls.append(("spot", on))
+
+        async def strobe(self, ch, pattern, max_s):
+            calls.append(("strobe", ch))
+    desk = DeterDesk(老上装(), emit=lambda k, d: None)
+
+    def cmd(p):
+        return Command(command_id="c", task_id="t", kind="deter", issued_at=1, expires_at=2,
+                       control_epoch=1, payload=p)
+    assert "spotlight_sides" not in desk.caps()
+    r = await desk.handle(cmd({"output": "spotlight", "on": True, "max_s": 5, "side": "left"}))
+    assert r.startswith("unsupported") and "不分左右" in r
+    r = await desk.handle(cmd({"output": "strobe", "on": True, "max_s": 5, "color": "red"}))
+    assert r.startswith("unsupported")
+    assert calls == []
+    assert await desk.handle(cmd({"output": "strobe", "on": True, "max_s": 5})) == ""
+    assert calls == [("strobe", "warn")]

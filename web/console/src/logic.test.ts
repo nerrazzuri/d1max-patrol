@@ -6,12 +6,12 @@ import { api, ApiError, onUnauthorized, setFetch } from "./api";
 import { alertTitle, DICTS, initialLang, knownKinds, lang, tr } from "./i18n";
 import { heading, onMap, toPx } from "./mapview";
 import { daysText, toMap } from "./zonesadmin";
-import { clientTooOld, type ClientRow } from "./admin";
+import { clientTooOld, deviceSummary, type ClientRow } from "./admin";
 import { applyKeep, ascending, belongs, clockSeconds, covered, dateInput, dayRange, firstAfter, minuteOf, nextSegment, prevSegment, recordingLink, segmentAt, spans, type Recording } from "./recordings";
 import { canReview } from "./recpage";
 import { alarmsCsv, csv, csvCell, fileTag, incidentsCsv, matches, minutes, patrolsCsv, period, secondsText, stamp, type AlarmRow } from "./reports";
 import { outcomeText } from "./reportpage";
-import { abnormal, alarmState, canDispatch, duration, openAlerts, queue, robotMap, robotState, SIREN_LEVEL, sirenState, wallOrder, type Alert, type Robot } from "./model";
+import { abnormal, alarmState, canDispatch, duration, openAlerts, queue, robotCams, robotMap, robotState, SIREN_LEVEL, sirenState, wallOrder, type Alert, type Robot } from "./model";
 
 const fx = (name: string) =>
   JSON.parse(readFileSync(new URL(`../../../mobile/test/fixtures/${name}.json`, import.meta.url), "utf-8"));
@@ -407,5 +407,29 @@ describe("App V2:手机扫码添加站点的二维码", () => {
     const { qrGrid } = await import("./qr");
     expect(qrGrid("a").d).toBe(qrGrid("a").d);
     expect(qrGrid("a").d).not.toBe(qrGrid("b").d);
+  });
+});
+
+describe("W40 热像相机", () => {
+  it("狗报了几路就几路;老狗不报当前后两路", () => {
+    const r = (tasks?: Record<string, Record<string, unknown>>) =>
+      ({ robot_id: "A", active: true, fresh: true, revoked: false, held: null, capabilities: tasks ? { tasks } : null }) as Robot;
+    expect(robotCams(r())).toEqual(["front", "back"]);
+    expect(robotCams(r({ video: { cameras: ["front", "back", "thermal"] } }))).toEqual(["front", "back", "thermal"]);
+    expect(robotCams(r({ video: { cameras: ["thermal", "front", "x"] } }))).toEqual(["front", "thermal"]);
+    expect(robotCams(undefined)).toEqual(["front", "back"]);
+  });
+});
+
+describe("W40 设备健康", () => {
+  it("都在线 / 几台有问题 / 没更新;没报是 null", () => {
+    expect(deviceSummary(null)).toBeNull();
+    expect(deviceSummary({ items: [] })).toBeNull();
+    expect(deviceSummary({ items: [{ id: "relay", state: "online" }] })).toMatchObject({ tone: "success", title: "" });
+    const s = deviceSummary({ items: [{ id: "relay", state: "online" }, { id: "rtk", state: "degraded", detail: "浮点解" }] });
+    expect(s?.tone).toBe("warning");
+    expect(s?.title).toContain("rtk");
+    expect(deviceSummary({ items: [{ id: "link:router", state: "offline" }, { id: "rtk", state: "degraded" }] })?.tone).toBe("error");
+    expect(deviceSummary({ items: [{ id: "relay", state: "online" }], stale: true })?.tone).toBe("warning");
   });
 });

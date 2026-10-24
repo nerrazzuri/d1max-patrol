@@ -31,6 +31,7 @@ import 'package:d1max_patrol/ui/site_weather.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/fake_site.dart';
 import 'site_page_test.dart' show FakeApi, busyView;
 import 'support/fake_map.dart' show Rot23Api;
 
@@ -59,6 +60,21 @@ final _pages = <String, Widget Function()>{
   'robots': () => SiteRobotsPage(api: FakeApi('admin'), title: 'East Gate Estate'),
   'robot (admin, busy)': () => SiteRobotPage(api: FakeApi('admin', robotView: busyView()), robotId: 'A'),
   'robot (guard)': () => SiteRobotPage(api: FakeApi('guard'), robotId: 'A'),
+  // W40：设备健康列得最长的样子（说明很长）
+  'robot (devices)': () => SiteRobotPage(
+      api: FakeApi('guard', robotView: <String, dynamic>{
+        ...siteFixture('site_robot'),
+        'devices': <String, dynamic>{
+          'items': <Map<String, dynamic>>[
+            for (final id in ['relay', 'speaker', 'siren', 'rtk', 'disk', 'camera:front', 'camera:thermal',
+              'link:router', 'link:thermal'])
+              {'id': id, 'state': 'error', 'detail': '一段很长很长的说明，比如继电器板没确认或者串口、站号、板子供电都要去现场看一看'},
+          ],
+          'at_ms': 1,
+          'stale': true,
+        },
+      }),
+      robotId: 'A'),
   'robot (owner)': () => SiteRobotPage(api: FakeApi('owner'), robotId: 'A'),
   'watch': () => SiteWatchPage(api: FakeApi('guard')),
   'alarm scene': () => SiteAlertScenePage(api: FakeApi('guard'), alert: _p1()),

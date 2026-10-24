@@ -3,6 +3,9 @@
 /// 每一路「开」都带时长，到点狗上自己关（站点、手机断了也一样）；「关」随时能按。喇叭放录好的话术，狗上配了 TTS 的
 /// 还能现打一段字。喇叭有优先级：事件派遣、驱离（W22）放的比手动的高，那时候手动的会回「忙」。
 /// 只列狗报了接上的那几路（`capabilities.tasks.deter.outputs`）。保安、管理员能用。
+///
+/// W40（上装 V1.2）：狗报了 `spotlight_sides` 就多两行「左聚光灯」「右聚光灯」（能只开一边）；报了
+/// `strobe_colors` 警灯那一行多一个颜色下拉框（开的时候带上）。
 library;
 
 import 'package:flutter/material.dart';
@@ -35,11 +38,28 @@ Map<String, (String, double)> get deterOutputs => <String, (String, double)>{
       'speaker': (tr('Speaker', '喇叭'), 30),
     };
 
+/// 警灯颜色名说人话（狗的配置里起的名字；不认识的原样显示）。
+String strobeColorText(String c) => switch (c) {
+      'red' => tr('Red', '红'),
+      'yellow' => tr('Yellow', '黄'),
+      'green' => tr('Green', '绿'),
+      'blue' => tr('Blue', '蓝'),
+      'white' => tr('White', '白'),
+      'purple' || 'magenta' => tr('Purple', '紫'),
+      'cyan' => tr('Cyan', '青'),
+      _ => c,
+    };
+
+/// 页面上的一行：哪一路、哪一边（只给聚光灯）、名字。
+typedef _Row = ({String key, String output, String? side, String name});
+
 /// 狗回的拒绝理由说人话。
 String deterReasonText(String r) => switch (r) {
       'busy' => tr('The speaker is playing something more urgent (incident, deterrence). Wait for it to finish',
           '喇叭正在放更要紧的（事件、驱离），等它放完'),
       'unsupported' => tr('This output is not fitted on the robot', '狗上没接这一路'),
+      _ when r.startsWith('unsupported:') => tr('Not supported by the robot: ${r.substring(12).trim()}',
+          '狗上不支持：${r.substring(12).trim()}'),
       _ when r.startsWith('device:') =>
         tr('Device failed: ${r.substring(7).trim()}', '设备没做成：${r.substring(7).trim()}'),
       _ => ackReasonText(r),
@@ -53,11 +73,27 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
 
   List<String> get _outputs => ((widget.caps['outputs'] as List?) ?? const []).map((e) => '$e').toList();
   List<String> get _clips => ((widget.caps['clips'] as List?) ?? const []).map((e) => '$e').toList();
+  List<String> get _sides => ((widget.caps['spotlight_sides'] as List?) ?? const []).map((e) => '$e').toList();
+  List<String> get _colors => ((widget.caps['strobe_colors'] as List?) ?? const []).map((e) => '$e').toList();
+  String? _color;
+
+  /// 喇叭以外的每一行。聚光灯分左右的：「两边」一行，再加左、右各一行。
+  List<_Row> get _rows => <_Row>[
+        for (final o in _outputs.where((o) => o != 'speaker')) ...[
+          (key: o, output: o, side: null, name: deterOutputs[o]?.$1 ?? o),
+          if (o == 'spotlight' && _sides.contains('left'))
+            (key: 'spotlight-left', output: o, side: 'left', name: tr('Left spotlight', '左聚光灯')),
+          if (o == 'spotlight' && _sides.contains('right'))
+            (key: 'spotlight-right', output: o, side: 'right', name: tr('Right spotlight', '右聚光灯')),
+        ],
+      ];
 
   @override
   void initState() {
     super.initState();
     _clip = _clips.isEmpty ? null : _clips.first;
+    final def = '${widget.caps['strobe_default'] ?? ''}';
+    _color = _colors.isEmpty ? null : (_colors.contains(def) ? def : _colors.first);
   }
 
   @override
@@ -66,15 +102,17 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
     super.dispose();
   }
 
-  Future<void> _go(String output, bool on, {String? clip}) async {
-    final name = deterOutputs[output]?.$1 ?? output;
+  Future<void> _go(String output, bool on, {String? clip, String? side, String? name}) async {
+    name ??= deterOutputs[output]?.$1 ?? output;
     final secs = deterOutputs[output]?.$2 ?? 10;
+    final color = output == 'strobe' && on ? _color : null;
     final what = on
         ? tr('$name on for ${secs.toStringAsFixed(0)} s', '开$name ${secs.toStringAsFixed(0)} 秒')
         : tr('$name off', '关$name');
     String msg;
     try {
-      final r = await widget.api.deter(widget.robotId, output, on, maxS: on ? secs : null, clip: clip);
+      final r = await widget.api.deter(widget.robotId, output, on,
+          maxS: on ? secs : null, clip: clip, side: side, color: color);
       final ack = r['ack'];
       final res = ack is Map ? '${ack['result']}' : 'accepted';
       if (res == 'accepted') {
@@ -108,7 +146,7 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
         if (outs.isEmpty)
           Text(tr('No payload fitted on this robot', '这只狗没接上装'),
               style: NwText.bodyLarge.copyWith(color: c.text)),
-        for (final o in outs.where((o) => o != 'speaker'))
+        for (final r in _rows)
           Padding(
               padding: const EdgeInsets.only(bottom: Nw.s8),
               child: NwCard(
@@ -116,21 +154,37 @@ class _SiteDeterPageState extends State<SiteDeterPage> {
                   // 竖屏的手机一行摆不下「名字 + 开 + 关」（名字会被挤成几个字一行）：按钮放到下面一行
                   child: LayoutBuilder(builder: (context, box) {
                     final narrow = box.maxWidth < 520;
-                    final buttons = Wrap(spacing: Nw.s8, children: [
-                      NwButton(buttonKey: Key('deter-on-$o'), onPressed: () => _go(o, true), label: tr('On', '开')),
+                    final o = r.output;
+                    final buttons = Wrap(spacing: Nw.s8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                      if (o == 'strobe' && _colors.isNotEmpty)
+                        DropdownButton<String>(
+                          key: const Key('deter-color'),
+                          value: _color,
+                          items: [
+                            for (final k in _colors) DropdownMenuItem(value: k, child: Text(strobeColorText(k))),
+                          ],
+                          onChanged: (v) => setState(() => _color = v ?? _color),
+                        ),
                       NwButton(
-                          buttonKey: Key('deter-off-$o'),
+                          buttonKey: Key('deter-on-${r.key}'),
+                          onPressed: () => _go(o, true, side: r.side, name: r.name),
+                          label: tr('On', '开')),
+                      NwButton(
+                          buttonKey: Key('deter-off-${r.key}'),
                           variant: NwButtonVariant.outline,
-                          onPressed: () => _go(o, false),
+                          onPressed: () => _go(o, false, side: r.side, name: r.name),
                           label: tr('Off', '关')),
                     ]);
+                    final secs = deterOutputs[o]?.$2.toStringAsFixed(0);
                     return ListTile(
-                      key: Key('deter-$o'),
+                      key: Key('deter-${r.key}'),
                       dense: true,
                       title: Text(
-                          tr(
-                              '${deterOutputs[o]?.$1 ?? o} (on for ${deterOutputs[o]?.$2.toStringAsFixed(0)} s, then switches off by itself)',
-                              '${deterOutputs[o]?.$1 ?? o}（开 ${deterOutputs[o]?.$2.toStringAsFixed(0)} 秒，到点自己关）'),
+                          r.side == null && o == 'spotlight' && _sides.isNotEmpty
+                              ? tr('Both spotlights (on for $secs s, then switch off by themselves)',
+                                  '两边聚光灯（开 $secs 秒，到点自己关）')
+                              : tr('${r.name} (on for $secs s, then switches off by itself)',
+                                  '${r.name}（开 $secs 秒，到点自己关）'),
                           style: NwText.bodyMedium.copyWith(color: c.text)),
                       subtitle: narrow ? Align(alignment: Alignment.centerRight, child: buttons) : null,
                       trailing: narrow ? null : buttons,

@@ -32,9 +32,14 @@ export function canReview(role: string): boolean {
   return role === "admin" || role === "guard";
 }
 
-export function RecordingsPage(props: { robots: string[]; role: string; now: number; robot: string | null; at: number | null; say: (s: string) => void }) {
+export function RecordingsPage(props: { robots: string[]; role: string; now: number; robot: string | null; at: number | null; say: (s: string) => void; camsOf?: (robot: string) => Cam[] }) {
   const [robot, setRobot] = useState(props.robot && props.robots.includes(props.robot) ? props.robot : props.robots[0] ?? "");
   const [cam, setCam] = useState<Cam>("front");
+  // 这只狗有哪几路(W40:装了热像的多一路);换到没有这一路的狗就回到前面那路
+  const cams = props.camsOf?.(robot) ?? CAMS;
+  useEffect(() => {
+    if (!cams.includes(cam)) setCam("front");
+  }, [robot, cams.join(",")]);
   const [date, setDate] = useState(dateInput(props.at ?? props.now));
   const [rows, setRows] = useState<Recording[] | null>(null);
   const [segS, setSegS] = useState(60);
@@ -153,7 +158,7 @@ export function RecordingsPage(props: { robots: string[]; role: string; now: num
           </select>
         </label>
         <div class="seg" role="group" aria-label={t("recCamera")}>
-          {CAMS.map((c) => <button key={c} type="button" aria-pressed={c === cam} onClick={() => { if (cur && head != null) want.current = head; setCam(c); }}>{t(c)}</button>)}
+          {cams.map((c) => <button key={c} type="button" aria-pressed={c === cam} onClick={() => { if (cur && head != null) want.current = head; setCam(c); }}>{t(c)}</button>)}
         </div>
         <label>{t("recDate")}
           <input type="date" value={date} max={dateInput(props.now)} onChange={(e) => setDate((e.target as HTMLInputElement).value)} />

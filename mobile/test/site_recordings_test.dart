@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'site_page_test.dart' show FakeApi;
+import 'support/fake_site.dart';
 
 const int t0 = 1791077400000; // 2026-10-04 01:30:00 UTC
 
@@ -112,5 +113,26 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteAlertScenePage(api: api, alert: alert('site'))));
     await t.pumpAndSettle();
     expect(find.byKey(SiteAlertScenePage.videoKey), findsNothing);
+  });
+
+  testWidgets('W40：狗报了热像，录像能按热像筛；老狗没有这一格', (t) async {
+    final view = <String, dynamic>{
+      ...siteFixture('site_robot'),
+      'capabilities': <String, dynamic>{
+        'tasks': <String, dynamic>{
+          'video': <String, dynamic>{'cameras': <String>['front', 'back', 'thermal']},
+        },
+      },
+    };
+    final api = FakeApi('guard', robotView: view)..recordingRows = _api('guard').recordingRows;
+    await _open(t, api);
+    expect(find.byKey(SiteRecordingsPage.cameraKey('thermal')), findsOneWidget);
+    expect(find.text('热像'), findsOneWidget);
+    await t.tap(find.byKey(SiteRecordingsPage.cameraKey('thermal')));
+    await t.pumpAndSettle();
+    expect(api.calls.where((c) => c.startsWith('recordings')).last, startsWith('recordings A thermal'));
+    await t.pumpWidget(const SizedBox()); // 换一只狗：不复用上一页的状态
+    await _open(t, _api('guard'));
+    expect(find.byKey(SiteRecordingsPage.cameraKey('thermal')), findsNothing);
   });
 }

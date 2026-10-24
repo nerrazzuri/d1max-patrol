@@ -16,8 +16,11 @@ from typing import Any
 
 from d1max_contract.errors import ContractError
 
-#: 认得的相机名。跟狗上老服务 ``app/video.py`` 的 ``CAMERAS`` 一致。
-CAMERAS = ("front", "back")
+#: 认得的相机名。``front``、``back`` 是狗自带的两路(跟狗上老服务 ``app/video.py`` 的一致);
+#: ``thermal`` 是上装 V1.2 的热像(W40,决策 70),装了的狗在能力 ``video.cameras`` 里报。
+CAMERAS = ("front", "back", "thermal")
+#: 不报 ``video.cameras`` 的狗(W40 之前的)当它有这两路。
+STANDARD_CAMERAS = ("front", "back")
 
 #: 有效期上下限。站点每 ttl/2 续一次;短于 2 s 续不过来,长于 60 s 站点没了狗还要白推一分钟。
 VIDEO_TTL_MIN_MS = 2_000
@@ -26,11 +29,14 @@ VIDEO_TTL_MAX_MS = 60_000
 _URL = re.compile(r"srt://([A-Za-z0-9.\-]{1,253}):(\d{1,5})")
 _PASS = re.compile(r"[A-Za-z0-9]{10,79}")
 _SCRUB = re.compile(r"(passphrase=)[^&\s]*")
+#: RTSP 地址里的口令(``rtsp://用户:口令@主机``,W40 热像那一路要登录)。
+_SCRUB_RTSP = re.compile(r"(rtsps?://[^:/@\s]*:)[^@\s]*@")
 
 
 def scrub(text: str) -> str:
-    """把文本里的 SRT 口令抹掉。ffmpeg 报错会原样带出完整地址 —— 那一段要进事件、日志、SSE。"""
-    return _SCRUB.sub(r"\1***", text)
+    """把文本里的 SRT 口令、RTSP 口令抹掉。ffmpeg 报错会原样带出完整地址 —— 那一段要进事件、日志、
+    SSE。"""
+    return _SCRUB_RTSP.sub(r"\1***@", _SCRUB.sub(r"\1***", text))
 
 
 @dataclass(frozen=True)

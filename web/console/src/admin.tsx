@@ -179,6 +179,20 @@ interface AdminRobot {
   /** 站点说这份状态还新鲜。狗失联以后 `status.online` 停在最后那一次，要看这个（跟值守页一个口径）。 */
   fresh?: boolean;
   capabilities?: { agent?: string } | null;
+  /** 设备健康(W40):狗每 10 s 带一份;老狗、没装上装的是 null。 */
+  devices?: { items: DeviceItem[]; stale?: boolean } | null;
+}
+export interface DeviceItem { id: string; state: "online" | "offline" | "degraded" | "error"; detail?: string }
+
+/** 设备那一格:都在线 / 几台有问题(悬停看是哪几台)/ 没更新。没报是 null。 */
+export function deviceSummary(d: AdminRobot["devices"]): { tone: "success" | "warning" | "error"; text: string; title: string } | null {
+  if (!d || !Array.isArray(d.items) || d.items.length === 0) return null;
+  const bad = d.items.filter((x) => x.state !== "online");
+  const title = bad.map((x) => `${x.id}: ${t(`dev_${x.state}` as Key)}${x.detail ? ` · ${x.detail}` : ""}`).join("\n");
+  if (d.stale) return { tone: "warning", text: t("devStale"), title };
+  if (!bad.length) return { tone: "success", text: t("devAllOk"), title: "" };
+  return { tone: bad.some((x) => x.state === "error" || x.state === "offline") ? "error" : "warning",
+    text: t("devBad", { n: bad.length }), title };
 }
 export interface ClientRow { name: string; kind: string; version?: string; platform?: string; api_level?: number; last_used: number }
 interface Versions { site: { version: string; min_app_level?: number }; robots: { robot_id: string; verdict: string; sidecar_proto?: number | null }[]; clients?: ClientRow[] }
@@ -212,7 +226,7 @@ export function RobotsAdminPage({ say }: { say: Say }) {
           <button type="button" class="btn primary push" onClick={() => setAdding(true)}>{t("addRobot")}</button>
         </div>
         <table class="grid">
-          <thead><tr><th>{t("robotId")}</th><th>{t("colOnline")}</th><th>{t("colVersion")}</th><th>{t("colCompat")}</th><th>{t("dispatchMode")}</th><th>{t("certExpires")}</th><th>{t("colActions")}</th></tr></thead>
+          <thead><tr><th>{t("robotId")}</th><th>{t("colOnline")}</th><th>{t("colVersion")}</th><th>{t("colDevices")}</th><th>{t("colCompat")}</th><th>{t("dispatchMode")}</th><th>{t("certExpires")}</th><th>{t("colActions")}</th></tr></thead>
           <tbody>
             {(robots?.robots ?? []).map((r) => {
               const v = verdict.get(r.robot_id) ?? "unknown";
@@ -221,6 +235,10 @@ export function RobotsAdminPage({ say }: { say: Say }) {
                   <td class="mono strong">{r.robot_id}</td>
                   <td>{r.revoked ? t("revokedTag") : r.status?.online && r.fresh === true ? <span class="state tone-success">{t("online")}</span> : <span class="state p2 tone-error"><Shape kind="offline" />{t("st_offline")}</span>}</td>
                   <td class="mono">{r.capabilities?.agent ?? "—"}</td>
+                  <td>{(() => {
+                    const s = deviceSummary(r.devices);
+                    return s ? <span class={`state tone-${s.tone}`} title={s.title || undefined}>{s.text}</span> : "—";
+                  })()}</td>
                   <td>{v === "ok" ? <span class="state tone-success">{t("compat_ok")}</span> : <span class="state p2"><Shape kind="P2" />{t(`compat_${v}` as Key)}</span>}</td>
                   <td>{r.manual_only ? t("manualOnly") : t("autoDispatch")}</td>
                   <td class="mono">{r.expires_at ? day(r.expires_at) : "—"}</td>

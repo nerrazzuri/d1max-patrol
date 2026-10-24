@@ -346,3 +346,44 @@ def test_续期被时间权威闸拒了_不每零点一秒猛续(站点):
         assert 1 <= len(calls) <= 4, calls
     finally:
         v.close()
+
+
+# -------------------------------------------- W40:上装 V1.2 的热像
+
+
+def test_W40_装了热像的狗_第三路能看_健康里有它(tmp_path):
+    s = _站(tmp_path, cameras=("front", "back", "thermal"))
+    try:
+        tok = _登(s)
+        _新鲜(s, tok)
+        _等(lambda: (s.req("GET", "/api/robots/A", token=tok)[1].get("capabilities") or {})
+            .get("tasks", {}).get("video", {}).get("cameras") == ["front", "back", "thermal"])
+        v = 观众(s, tok, "/api/robots/A/video/thermal")
+        try:
+            assert v.resp.status == 200, v.resp.read()
+            assert len(v.jpegs(2)) == 2
+            h = s.req("GET", "/api/robots/A/video/health", token=tok)[1]["cameras"]
+            assert set(h) == {"front", "back", "thermal"} and h["thermal"]["online"] is True
+        finally:
+            v.close()
+    finally:
+        s.close()
+
+
+def test_W40_没装热像的狗_热像404_健康里没有_不发命令(站点):
+    s = 站点
+    tok = _登(s)
+    _新鲜(s, tok)
+    _等(lambda: (s.req("GET", "/api/robots/A", token=tok)[1].get("capabilities") or {})
+        .get("tasks", {}).get("video") is not None)
+    code, d = s.req("GET", "/api/robots/A/video/thermal", token=tok)
+    assert code == 404 and "thermal" in d["error"], d
+    h = s.req("GET", "/api/robots/A/video/health", token=tok)[1]["cameras"]
+    assert set(h) == {"front", "back"}
+    assert s.pusher.starts == 0
+
+
+def test_W40_老狗不报相机清单_当它有前后两路(站点):
+    s = 站点
+    s.disp.clients["A"].capabilities.tasks.pop("video", None)
+    assert s.disp.cameras("A") == ("front", "back")

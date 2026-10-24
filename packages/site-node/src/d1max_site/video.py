@@ -387,6 +387,7 @@ class _Feed:
 class VideoHub:
     def __init__(self, *, send: Callable[..., str], srt_host: str,
                  known: Callable[[str], bool] | None = None,
+                 cameras: Callable[[str], tuple[str, ...]] | None = None,
                  ports: tuple[int, int] = (8890, 8989), bind_host: str = "0.0.0.0",
                  ffmpeg: str = "ffmpeg", ttl_ms: int = 10_000, idle_s: float = 10.0,
                  first_frame_timeout_s: float = 8.0, max_viewers: int = MAX_VIEWERS,
@@ -396,6 +397,8 @@ class VideoHub:
         self._send = send
         #: 这台狗登记过没有。没登记的回 404,不建路、不起进程。
         self._known = known
+        #: 这台狗有哪几路相机(W40:装了热像的多一路;不给就是契约里认得的全部)。
+        self._cameras = cameras
         self.srt_host, self.bind_host = srt_host, bind_host
         self._ports = range(ports[0], ports[1] + 1)
         self._used: set[int] = set()
@@ -414,6 +417,8 @@ class VideoHub:
             raise VideoError(404, f"没有登记过 {robot_id}")
         if camera not in CAMERAS:
             raise VideoError(404, f"没有相机 {camera!r}(只有 {'/'.join(CAMERAS)})")
+        if camera not in self.cameras(robot_id):
+            raise VideoError(404, f"{robot_id} 没有 {camera} 这路相机")
         with self._flock:
             f = self._feeds.get((robot_id, camera))
             if f is None:
@@ -423,8 +428,11 @@ class VideoHub:
     def stream(self, robot_id: str, camera: str) -> Iterator[bytes]:
         return self.feed(robot_id, camera).frames()
 
+    def cameras(self, robot_id: str) -> tuple[str, ...]:
+        return self._cameras(robot_id) if self._cameras is not None else CAMERAS
+
     def health(self, robot_id: str) -> dict[str, Any]:
-        return {cam: self.feed(robot_id, cam).health() for cam in CAMERAS}
+        return {cam: self.feed(robot_id, cam).health() for cam in self.cameras(robot_id)}
 
     def on_event(self, robot_id: str, e: Event) -> None:
         """狗报推流失败:这一路的观众立刻拿到原因,不用干等超时。"""

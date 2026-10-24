@@ -188,6 +188,8 @@ class Dispatcher:
         self.telemetry_at: dict[str, int] = {}
         #: 每台狗最近一份盘况与收到的时刻(站点的钟)。
         self.storage: dict[str, tuple[Any, int]] = {}
+        #: 设备健康(W40):狗每 10 s 随遥测带一份,记最近的那份和收到的时刻。
+        self.devices: dict[str, tuple[list[dict[str, Any]], int]] = {}
         #: 每台狗挂上客户端的站点时刻:一直只收到过 retained 状态的狗,从这一刻起算过期。
         self._attached_at: dict[str, int] = {}
         self._ack_cbs: list[Callable[[Ack], None]] = []
@@ -253,6 +255,8 @@ class Dispatcher:
         if t.storage is not None:
             # 盘况每 10 s 才带一次(W00c5d):单独记最近一份,值守汇总看的是它。
             self.storage[robot_id] = (t.storage, self._now())
+        if t.devices is not None:
+            self.devices[robot_id] = (t.devices, self._now())
         self._fire(self._telemetry_cbs, robot_id, t, "遥测")
 
     @staticmethod
@@ -331,7 +335,9 @@ class Dispatcher:
                "running": self.running_view(c),
                "loc": self._loc_view(c), "clock_skew_s": _round1(self.clock_skew_s(robot_id)),
                # W09e:最近一份遥测里的 RTK 解(没配 RTK、老狗都是 None)
-               "rtk": c.telemetry.rtk if c is not None and c.telemetry is not None else None}
+               "rtk": c.telemetry.rtk if c is not None and c.telemetry is not None else None,
+               # W40:设备健康(最近一份;老狗、没装上装的狗是 None)
+               "devices": self.devices_view(robot_id)}
         # 运营可视化:被挡多久、为什么、重规划几次(``runviz.RunViz``);没有被挡 / 重规划就没有这个键
         nav = self.runviz.nav_summary(robot_id) if self.runviz is not None else None
         if nav:
@@ -773,6 +779,28 @@ class Dispatcher:
         c = self._client_for(robot_id)
         return await self._send(c, robot_id, "abort", {}, issued_by=issued_by, task_id=task_id)
 
+    #: 设备健康多久没更新算过时(狗 10 s 带一次,丢两三份就是过时了)。
+    DEVICES_STALE_MS = 35_000
+
+    def devices_view(self, robot_id: str) -> dict[str, Any] | None:
+        """``{"items": [{"id", "state", "detail"}], "at_ms", "stale"}``;没收到过是 None。"""
+        got = self.devices.get(robot_id)
+        if got is None:
+            return None
+        items, at = got
+        return {"items": [dict(x) for x in items], "at_ms": at,
+                "stale": self._now() - at > self.DEVICES_STALE_MS}
+
+    def cameras(self, robot_id: str) -> tuple[str, ...]:
+        """这台狗有哪几路相机(W40):狗在能力 ``video.cameras`` 里报;不报的老狗当它有前后两路。"""
+        from d1max_contract.video import CAMERAS, STANDARD_CAMERAS
+        c = self.clients.get(robot_id)
+        v = c.capabilities.tasks.get("video") if c is not None and c.capabilities else None
+        cams = v.get("cameras") if isinstance(v, dict) else None
+        if isinstance(cams, list):
+            return tuple(x for x in CAMERAS if x in cams)
+        return STANDARD_CAMERAS
+
     async def video(self, robot_id: str, req: VideoRequest, *,
                     timeout_s: float | None = None) -> Ack:
         """按需推流的命令(W00c5b)。**不是任务**:只要在线、新鲜(不看就绪 —— 急停时正是要看画面
@@ -780,6 +808,8 @@ class Dispatcher:
         **命令的有效期跟推流的有效期分开**(至少 ``VIDEO_COMMAND_TTL_MS``):狗用自己的钟判命令过期,
         狗的钟现场就错过 —— 命令有效期只给 10 s 的话,钟差十几秒所有画面都会回 expired。"""
         c = self._client_for(robot_id)
+        if req.camera not in self.cameras(robot_id) and not req.stop:
+            raise Unsupported(f"{robot_id} 没有 {req.camera} 这路相机")
         if c.status is None or not c.status.online or not self._fresh(c):
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
         self._temporal_gate(robot_id, "video", req.to_payload(),
@@ -926,8 +956,14 @@ class Dispatcher:
         c = self._client_for(robot_id)
         if c.capabilities is None or "deter" not in c.capabilities.tasks:
             raise Unsupported(f"{robot_id} 没装上装")
-        if req.output not in c.capabilities.tasks["deter"].get("outputs", []):
+        caps = c.capabilities.tasks["deter"]
+        if req.output not in caps.get("outputs", []):
             raise Unsupported(f"{robot_id} 的上装没接 {req.output}")
+        # W40:老狗不认 side、color(会当成两边都开、缺省颜色),按能力在这里挡
+        if req.side != "both" and req.side not in caps.get("spotlight_sides", []):
+            raise Unsupported(f"{robot_id} 的聚光灯不分左右")
+        if req.color and req.color not in caps.get("strobe_colors", []):
+            raise Unsupported(f"{robot_id} 的警灯没有 {req.color} 色")
         if req.on and not self._fresh(c):
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
         return await self._send(c, robot_id, "deter", req.to_payload(), issued_by=issued_by,

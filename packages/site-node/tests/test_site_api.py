@@ -43,7 +43,7 @@ class 站:
                  agent_video: bool = True, teleop: dict | None = None,
                  runs: dict | None = None, maps: dict | None = None,
                  releases: dict | None = None, autonomy: str = "autonomous",
-                 payload: bool = False) -> None:
+                 payload: bool = False, cameras: tuple[str, ...] | None = None) -> None:
         self.loop = LoopThread()
         self.loop.start()
         self.db = SiteDB(tmp_path / "site.db")
@@ -68,7 +68,12 @@ class 站:
             self.pusher = None
             if video is not None and agent_video:      # W00c5b:狗这头用 ffmpeg 测试图顶相机
                 from d1max_agent.video_push import VideoPusher, lavfi_source
-                self.pusher = VideoPusher(source=lavfi_source)
+                src = lavfi_source
+                if cameras is not None:                # W40:装了热像的狗(测试图顶热像)
+                    def src(camera):
+                        return lavfi_source(camera)
+                    src.raw, src.cameras = True, cameras
+                self.pusher = VideoPusher(source=src)
             self.video_live = {"dog": True, "site": True}
             if teleop is not None and self.pusher is None:
                 # W00c5c 的测试不起 ffmpeg:狗这头「有没有在推」、站点那头「有没有画面」都可以翻
@@ -123,6 +128,7 @@ class 站:
             from d1max_site.video import VideoHub, dispatcher_sender
             self.hub = VideoHub(send=dispatcher_sender(self.disp, self.loop),
                                 known=lambda rid: rid in self.disp.clients,
+                                cameras=self.disp.cameras,
                                 srt_host="127.0.0.1", bind_host="127.0.0.1", **video)
             self.disp.on_event(self.hub.on_event)
         self.teleop = None

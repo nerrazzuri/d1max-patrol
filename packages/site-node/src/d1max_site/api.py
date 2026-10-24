@@ -1402,7 +1402,8 @@ class _Handler(TlsHandlerMixin):
                                      "was_manual_only": was})
 
     def _deter(self, robot_id: str, user) -> None:
-        """上装(W21):``{"output", "on", "max_s"?, "clip"?}``。``dispatch`` 权限(保安、管理员)。
+        """上装(W21):``{"output", "on", "max_s"?, "clip"?, "side"?, "color"?}``
+        (``side`` 只给聚光灯、``color`` 只给开警灯,W40)。``dispatch`` 权限(保安、管理员)。
         喇叭的优先级站点定成「人手动的」(``MANUAL``);请求体里的 ``priority`` 不认。"""
         from d1max_site.priorities import MANUAL
         self._need(user, DISPATCH)
@@ -1410,7 +1411,7 @@ class _Handler(TlsHandlerMixin):
         d = self._body()
         if not isinstance(d, dict):
             raise HttpError(400, "要一个对象")
-        d = {k: d[k] for k in ("output", "on", "max_s", "clip") if k in d}
+        d = {k: d[k] for k in ("output", "on", "max_s", "clip", "side", "color") if k in d}
         self._audit_detail = {k: str(v)[:80] for k, v in d.items()}
         from d1max_contract.deter import parse_deter
         from d1max_contract.errors import ContractError

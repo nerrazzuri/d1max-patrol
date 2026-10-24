@@ -32,6 +32,9 @@ void main() {
     expect(rtkText(<String, dynamic>{'fix': 'single', 'sats': 8, 'std_h_m': 2.4, 'stale': true}),
         'RTK：单点，卫星 8，精度约 2.4 m，（好一会儿没更新了）');
     expect(rtkText(<String, dynamic>{'fix': 'none'}), 'RTK：没有定位');
+    // W40：双天线（UM982）报朝向
+    expect(rtkText(<String, dynamic>{'fix': 'fixed', 'sats': 30, 'heading_deg': 87.6}),
+        'RTK：固定解，卫星 30，朝向 88°');
   });
 
   test('排程什么时候跑（W14）', () {

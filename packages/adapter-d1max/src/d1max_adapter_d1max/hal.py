@@ -376,10 +376,10 @@ class D1MaxHal:
         sdk = tuple(Fault(code=str(f.code), fatal=f.level >= 2, text=f.message)
                     for f in self._b.current_faults(FAULT_FRESH_S))
         # 上装(W21 外审):状态不明、关不上的几路当故障报(站点出告警);看护循环还在接着关
-        names = {"strobe": "警灯", "siren": "警笛", "spotlight": "聚光灯"}
-        up = tuple(Fault(code=f"payload_{o}", fatal=False,
-                         text=f"上装{names.get(o, o)}状态不明或关不上(继电器板没确认,正在接着关)")
-                   for o in (self._payload.problems() if self._payload is not None else ()))
+        # W40:线圈按路合起来报(``payload_<strobe|siren|spotlight|amp>``,站点按路出告警),说明由上装给
+        p = self._payload
+        up = tuple(Fault(code=f"payload_{o}", fatal=False, text=t)
+                   for o, t in sorted((p.faults() if p is not None else {}).items()))
         return sdk + up
 
     # ------------------------------------------------------------ 执行器与媒体
@@ -397,9 +397,11 @@ class D1MaxHal:
         return self._payload
 
     async def strobe(self, channel: str, pattern: str, max_s: float) -> None:
-        """上装警灯(只有一路,``channel`` 不看)。闪法由灯自己的模式定,这里只管开关。"""
+        """上装警灯(只有一盏)。``channel`` 是颜色名(W40);``warn`` 或空 = 配置里的缺省颜色。
+        闪法:配了 ``blink_s`` 软件打闪,不然由灯自己定。"""
         on = pattern != "off" and max_s > 0
-        await self._up("strobe").set("strobe", on, max_s)
+        color = "" if channel in ("", "warn") else channel
+        await self._up("strobe").set("strobe", on, max_s, color=color if on else "")
 
     async def siren(self, on: bool, max_s: float) -> None:
         await self._up("siren").set("siren", on and max_s > 0, max_s)
@@ -429,6 +431,18 @@ class D1MaxHal:
 
     async def spotlight(self, on: bool, max_s: float) -> None:
         await self._up("spotlight").set("spotlight", on and max_s > 0, max_s)
+
+    async def spotlight_side(self, side: str, on: bool, max_s: float) -> None:
+        """只开、关一边(W40,``left``/``right``);聚光灯不分左右的狗报错。"""
+        await self._up("spotlight").set("spotlight", on and max_s > 0, max_s, side=side)
+
+    def device_health(self) -> list[dict[str, Any]]:
+        """设备健康(W40):上装那几样(继电器板、喇叭、喇叭警笛)。没装上装是空的。"""
+        return self._payload.health() if self._payload is not None else []
+
+    def deter_options(self) -> dict[str, Any]:
+        """能力里多报的(W40):``spotlight_sides``、``strobe_colors``、``siren_via``。"""
+        return self._payload.options() if self._payload is not None else {}
 
     async def head(self, pan: float, tilt: float) -> None:
         raise HalUnsupported("ControlHead 的单位与方向没验过,先不开")

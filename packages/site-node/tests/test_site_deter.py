@@ -109,3 +109,77 @@ def test_W21复查_狗报上装关不上_站点出P1_好了自己解决(tmp_path
         _等(lambda: not 开着的())
     finally:
         s.close()
+
+
+# -------------------------------------------- W40:上装 V1.2(左右灯、警灯颜色)
+
+
+def test_W40_只开左边聚光灯_挑警灯颜色_狗上照做(站点):
+    s = 站点
+    gina = _登(s, "gina")
+    _新鲜(s, gina)
+    caps = s.req("GET", "/api/robots/A", token=gina)[1]["capabilities"]["tasks"]["deter"]
+    assert caps["spotlight_sides"] == ["left", "right"] and "yellow" in caps["strobe_colors"]
+    assert caps["siren_via"] == "speaker"
+    code, d = s.req("POST", "/api/robots/A/deter",
+                    {"output": "spotlight", "on": True, "max_s": 30, "side": "left"}, token=gina)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    assert s.dog.deter_on("spotlight_left") and not s.dog.deter_on("spotlight_right")
+    code, d = s.req("POST", "/api/robots/A/deter",
+                    {"output": "strobe", "on": True, "max_s": 30, "color": "yellow"}, token=gina)
+    assert code == 200 and d["ack"]["result"] == "accepted", d
+    assert s.dog.deter_color == "yellow"
+    rows = [r for r in s.api.audit.list() if r["action"] == "POST /api/robots/A/deter"]
+    assert any(r["detail"].get("color") == "yellow" for r in rows)
+    assert any(r["detail"].get("side") == "left" for r in rows)
+
+
+def test_W40_狗没报左右_颜色_站点挡住不发(站点):
+    s = 站点
+    gina = _登(s, "gina")
+    _新鲜(s, gina)
+    deter = s.dog.deter_options
+    # 当成老狗(上装 W21 那套):能力里没有左右、颜色。改了要等狗重报能力
+    s.dog.deter_options = lambda: {}
+    s.loop.call(s.agent._publish_caps)
+    _等(lambda: "spotlight_sides" not in (s.req("GET", "/api/robots/A", token=gina)[1]
+                                          ["capabilities"]["tasks"]["deter"]), timeout=5)
+    n = len([c for c in s.disp.commands("A", 50) if c["kind"] == "deter"])
+    code, d = s.req("POST", "/api/robots/A/deter",
+                    {"output": "spotlight", "on": True, "max_s": 30, "side": "left"}, token=gina)
+    assert code == 409 and "不分左右" in d["error"], d
+    code, d = s.req("POST", "/api/robots/A/deter",
+                    {"output": "strobe", "on": True, "max_s": 30, "color": "red"}, token=gina)
+    assert code == 409 and "red" in d["error"], d
+    assert len([c for c in s.disp.commands("A", 50) if c["kind"] == "deter"]) == n, "没发出去"
+    s.dog.deter_options = deter
+
+
+def test_W40_side_color写错400(站点):
+    s = 站点
+    gina = _登(s, "gina")
+    _新鲜(s, gina)
+    for bad in ({"output": "spotlight", "on": True, "max_s": 5, "side": "middle"},
+                {"output": "strobe", "on": True, "max_s": 5, "side": "left"},
+                {"output": "spotlight", "on": True, "max_s": 5, "color": "red"},
+                {"output": "strobe", "on": False, "color": "red"},
+                {"output": "strobe", "on": True, "max_s": 5, "color": "Red!"}):
+        assert s.req("POST", "/api/robots/A/deter", bad, token=gina)[0] == 400, bad
+
+
+def test_W40_设备健康_狗带上来_单狗视图里看得到(站点):
+    s = 站点
+    gina = _登(s, "gina")
+    _新鲜(s, gina)
+    _等(lambda: (s.req("GET", "/api/robots/A", token=gina)[1].get("devices") or {}).get("items"),
+        timeout=5)
+    d = s.req("GET", "/api/robots/A", token=gina)[1]["devices"]
+    got = {x["id"]: x["state"] for x in d["items"]}
+    assert got["relay"] == "online" and got["speaker"] == "online" and d["stale"] is False
+    s.dog.device_faults["relay"] = ("error", "左聚光灯没确认")
+    s.agent._next_devices_ms = 0                     # 不等 10 s
+    _等(lambda: {x["id"]: x["state"] for x in s.req("GET", "/api/robots/A", token=gina)[1]
+                ["devices"]["items"]}["relay"] == "error", timeout=5)
+    # 过时了标出来(狗 10 s 带一次,丢了两三份)
+    s.disp.devices["A"] = (s.disp.devices["A"][0], s.disp.devices["A"][1] - 60_000)
+    assert s.req("GET", "/api/robots/A", token=gina)[1]["devices"]["stale"] is True

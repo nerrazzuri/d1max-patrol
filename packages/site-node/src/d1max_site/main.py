@@ -746,6 +746,7 @@ class Server:
         vcfg = cfg.get("video", {})
         self.video = VideoHub(send=dispatcher_sender(self.dispatcher, self.loop),
                               known=lambda rid: rid in self.dispatcher.clients,
+                              cameras=self.dispatcher.cameras,
                               srt_host=vcfg.get("srt_host") or cfg["hostnames"][0],
                               ports=tuple(vcfg.get("ports", (8890, 8989))),
                               ffmpeg=vcfg.get("ffmpeg", "ffmpeg"))

@@ -6,6 +6,9 @@
 后来的覆盖先前的(开的时间从现在重算)。
 
 每次开、关都记一条 ``deter`` 事件(谁也不用猜狗刚才响没响过,W22 驱离要按它复盘)。
+
+W40:聚光灯可以只开一边(``side``)、警灯可以挑颜色(``color``);狗的 HAL 在 ``deter_options`` 里报了
+才认,不然回 ``unsupported``(站点按能力本来就不该发)。
 """
 
 from __future__ import annotations
@@ -52,13 +55,20 @@ class DeterDesk:
         outs = self.outputs()
         if not outs:
             return None
-        d: dict[str, Any] = {"outputs": outs, "max_s": MAX_S}
+        d: dict[str, Any] = {"outputs": outs, "max_s": MAX_S} | self.options()
         if "speaker" in outs:
             clips = getattr(self.hal, "sound_clips", None)
             tts = getattr(self.hal, "sound_tts", None)
             d["clips"] = list(clips()) if callable(clips) else []
             d["tts"] = bool(tts()) if callable(tts) else False
         return d
+
+    def options(self) -> dict[str, Any]:
+        """W40:聚光灯分不分左右、警灯有哪些颜色、警笛怎么响(HAL 不报就是都没有)。"""
+        fn = getattr(self.hal, "deter_options", None)
+        opts = fn() if callable(fn) else {}
+        return {k: opts[k] for k in ("spotlight_sides", "strobe_colors", "strobe_default",
+                                     "siren_via") if k in opts}
 
     def playing(self) -> tuple[int, float] | None:
         if self._sound is not None and self._mono() >= self._sound[1]:
@@ -73,15 +83,23 @@ class DeterDesk:
             return f"payload: {exc}"
         if req.output not in self.outputs():
             return "unsupported"
+        opts = self.options()
+        if req.side != "both" and req.side not in opts.get("spotlight_sides", []):
+            return "unsupported: 这台狗的聚光灯不分左右"
+        if req.color and req.color not in opts.get("strobe_colors", []):
+            return f"unsupported: 警灯没有 {req.color} 色"
         if req.output == "speaker" and req.on:
             cur = self.playing()
             if cur is not None and req.priority < cur[0]:
                 return "busy"
         try:
             if req.output == "strobe":
-                await self.hal.strobe("warn", "flash" if req.on else "off", req.max_s)
+                await self.hal.strobe(req.color or "warn", "flash" if req.on else "off",
+                                      req.max_s)
             elif req.output == "siren":
                 await self.hal.siren(req.on, req.max_s)
+            elif req.output == "spotlight" and req.side != "both":
+                await self.hal.spotlight_side(req.side, req.on, req.max_s)
             elif req.output == "spotlight":
                 await self.hal.spotlight(req.on, req.max_s)
             else:
@@ -96,6 +114,10 @@ class DeterDesk:
         data: dict[str, Any] = {"task_id": cmd.task_id, "output": req.output, "on": req.on}
         if req.on:
             data["max_s"] = req.max_s
+        if req.side != "both":
+            data["side"] = req.side
+        if req.color:
+            data["color"] = req.color
         if req.output == "speaker" and req.on:
             data |= {"clip": req.clip[:64] if not req.clip.startswith("tts:") else "tts",
                      "priority": req.priority}

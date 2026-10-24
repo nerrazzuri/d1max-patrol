@@ -1,6 +1,6 @@
 /// 站点模式的画面（W00c5b）：画面经站点来，手机不直连狗。
 ///
-/// 前、后两路切换；在线判定走站点的轮询（不看图片加载状态，理由见 `LiveVideo`）；
+/// 前、后两路切换（装了上装 V1.2 热像的狗多一路「热像」，W40：按狗报的 `video.cameras`）；在线判定走站点的轮询（不看图片加载状态，理由见 `LiveVideo`）；
 /// 取流用**钉住站点证书**的客户端。站点那头第一个观众来了才让狗开始推，最后一个走了才停 ——
 /// 所以这一格只在页面上时连着（`LiveVideo` 被盖住时自己断开，见它的 `_onstage`）。
 library;
@@ -9,7 +9,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../l10n.dart';
 import '../net/site_client.dart';
 import 'nw/nw_theme.dart';
 import 'nw/nw_widgets.dart';
@@ -38,6 +37,9 @@ class SiteVideoHealthPoller {
 
   Stream<VideoHealth> get stream => _ctl.stream;
 
+  /// 这只狗有哪几路（W40）：每次轮询从单狗视图里更新；读不到就不动。
+  final ValueNotifier<List<String>> cameras = ValueNotifier<List<String>>(const <String>['front', 'back']);
+
   bool _inFlight = false;
 
   Future<void> _tick() async {
@@ -47,7 +49,9 @@ class SiteVideoHealthPoller {
     try {
       final v = await _api.robot(robotId).timeout(period * 3);
       final up = v['fresh'] == true;
-      h = VideoHealth(<String, bool>{'front': up, 'back': up});
+      final cams = robotCameras(v);
+      if (cams.join(',') != cameras.value.join(',')) cameras.value = cams;
+      h = VideoHealth(<String, bool>{for (final c in cams) c: up});
     } on Object {
       h = const VideoHealth(<String, bool>{});
     } finally {
@@ -60,6 +64,7 @@ class SiteVideoHealthPoller {
     _closed = true;
     _timer?.cancel();
     unawaited(_ctl.close());
+    cameras.dispose();
   }
 }
 
@@ -89,13 +94,23 @@ class _SiteVideoState extends State<SiteVideo> {
   Widget build(BuildContext context) {
     final id = Uri.encodeComponent(widget.robotId);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // 前后切换：每一格的 Key 在能点的那一层上
-      NwSegment<String>(
-        values: const <String>['front', 'back'],
-        selected: _camera,
-        onChanged: (v) => setState(() => _camera = v),
-        labelOf: (v) => v == 'front' ? tr('Front', '前') : tr('Back', '后'),
-        keyOf: SiteVideo.cameraKey,
+      // 前后（热像）切换：每一格的 Key 在能点的那一层上
+      ValueListenableBuilder<List<String>>(
+        valueListenable: _poller.cameras,
+        builder: (context, cams, _) {
+          if (!cams.contains(_camera)) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && !_poller.cameras.value.contains(_camera)) setState(() => _camera = 'front');
+            });
+          }
+          return NwSegment<String>(
+            values: cams,
+            selected: cams.contains(_camera) ? _camera : cams.first,
+            onChanged: (v) => setState(() => _camera = v),
+            labelOf: cameraName,
+            keyOf: SiteVideo.cameraKey,
+          );
+        },
       ),
       const SizedBox(height: 8),
       // 横屏（app 只许横屏）：整宽的 16:9 比屏幕还高。最高到屏幕高的六成，居中、不拉伸。

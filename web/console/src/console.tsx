@@ -26,6 +26,7 @@ import {
   wallOrder,
   type Alert,
   type Mode,
+  robotCams,
 } from "./model";
 import { AlarmQueue } from "./queue";
 import { RobotsAdminPage, SystemPage, UsersPage } from "./admin";
@@ -190,6 +191,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
         {route.page === "reports" && <ReportsPage me={me} now={now} />}
         {route.page === "recordings" && (
           <RecordingsPage key={`${route.robot ?? ""}@${route.at ?? ""}`} robots={units.map((u) => u.robot.robot_id)} role={me.role} now={now}
+            camsOf={(id) => robotCams(units.find((u) => u.robot.robot_id === id)?.robot)}
             robot={route.robot} at={route.at} say={say} />
         )}
         {route.page === "map" && (
@@ -223,7 +225,8 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
         <ShelveDialog now={now} onClose={() => setPending(null)}
           onShelve={(until, reason) => { const a = pending.a; setPending(null); void act(() => api("POST", `/api/alerts/${enc(a.key)}/shelve`, { until_ms: until, reason })); }} />
       )}
-      {pending?.kind === "cam" && <FullCamera robot={pending.robot} cam={pending.cam} now={now} onClose={() => setPending(null)} />}
+      {pending?.kind === "cam" && <FullCamera robot={pending.robot} cam={pending.cam} now={now} onClose={() => setPending(null)}
+        cams={robotCams(units.find((u) => u.robot.robot_id === pending.robot)?.robot)} />}
       <div class="toast" role="status" aria-live="polite">{toast}</div>
     </div>
   );

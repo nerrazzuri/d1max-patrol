@@ -13,12 +13,15 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
+import re
 import subprocess
 import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import IO, Any
 
 from d1max_contract.video import VideoRequest, scrub, srt_push_url
@@ -33,9 +36,53 @@ _ERR_TAIL = 300
 _ERR_MAX = 256 * 1024
 
 
-def rtsp_source(host: str) -> Source:
-    """真狗:RK3588 上的相机 RTSP(``rtsp://<host>:8554/<camera>``),走 TCP。"""
-    return lambda camera: ["-rtsp_transport", "tcp", "-i", f"rtsp://{host}:8554/{camera}"]
+class CameraConfigError(ValueError):
+    """``cameras.json`` 写错了。"""
+
+
+#: 相机地址:``rtsp://`` 或 ``rtsps://``,可以带 ``用户:口令@``。
+_RTSP = re.compile(r"rtsps?://[^\s]{1,500}")
+
+
+def load_cameras(path: Path) -> dict[str, dict[str, Any]]:
+    """``/etc/d1max/cameras.json``(W40):狗自带两路以外的相机(上装 V1.2 的热像),或者改自带那两路的
+    地址。``{"thermal": {"url": "rtsp://用户:口令@192.168.10.64:554/Streaming/Channels/101",
+    "record": false}}``。文件里有口令:装机时 ``0640 root:robot``。没有这个文件 = 只有自带两路。
+
+    ``record``:``--record auto`` 时录不录这一路(缺省不录:热像 24 小时录要占盘)。"""
+    from d1max_contract.video import CAMERAS
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        raise CameraConfigError(f"相机配置 {path} 读不了: {exc}") from exc
+    if not isinstance(d, dict):
+        raise CameraConfigError("相机配置要是 JSON 对象")
+    out: dict[str, dict[str, Any]] = {}
+    for name, v in d.items():
+        if name not in CAMERAS:
+            raise CameraConfigError(f"相机名只认 {'/'.join(CAMERAS)}:{name!r}")
+        if not isinstance(v, dict) or not isinstance(v.get("url"), str) \
+                or not _RTSP.fullmatch(v["url"]):
+            raise CameraConfigError(f"{name}.url 要是 rtsp:// 地址")
+        if not isinstance(v.get("record", False), bool):
+            raise CameraConfigError(f"{name}.record 要是 true/false")
+        out[name] = {"url": v["url"], "record": v.get("record", False)}
+    return out
+
+
+def rtsp_source(host: str, extra: dict[str, dict[str, Any]] | None = None) -> Source:
+    """真狗:RK3588 上的相机 RTSP(``rtsp://<host>:8554/<camera>``),走 TCP。``extra``
+    (:func:`load_cameras`)里的相机按它自己的地址拉。返回的函数带 ``cameras``:这只狗有哪几路。"""
+    from d1max_contract.video import STANDARD_CAMERAS
+    urls = {c: f"rtsp://{host}:8554/{c}" for c in STANDARD_CAMERAS} | {
+        c: v["url"] for c, v in (extra or {}).items()}
+
+    def src(camera: str) -> list[str]:
+        return ["-rtsp_transport", "tcp", "-i", urls[camera]]
+    src.cameras = tuple(urls)  # type: ignore[attr-defined]
+    return src
 
 
 def lavfi_source(camera: str) -> list[str]:
@@ -44,6 +91,12 @@ def lavfi_source(camera: str) -> list[str]:
 
 
 lavfi_source.raw = True  # type: ignore[attr-defined]
+
+
+def source_cameras(source: Source) -> tuple[str, ...]:
+    """这个来源有哪几路相机(没说就是自带那两路)。"""
+    from d1max_contract.video import STANDARD_CAMERAS
+    return tuple(getattr(source, "cameras", STANDARD_CAMERAS))
 
 
 @dataclass
@@ -85,8 +138,13 @@ class VideoPusher:
         return [self._ffmpeg, "-nostdin", "-loglevel", "error", *self._source(req.camera),
                 "-an", *codec, "-f", "mpegts", srt_push_url(req, latency_ms=self._latency_ms)]
 
+    def cameras(self) -> tuple[str, ...]:
+        return source_cameras(self._source)
+
     def request(self, req: VideoRequest) -> str:
         """收下一条 ``video`` 命令。返回空串 = 收下;否则是拒绝原因。"""
+        if req.camera not in self.cameras():
+            return f"unsupported: 这只狗没有 {req.camera} 这路相机"
         if req.stop:
             self._stop(req.camera)                    # 站点收流之前说停:安静地停,不报失败
             return ""

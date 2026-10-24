@@ -39,6 +39,8 @@ def wrap_angle(a: float) -> float:
 #: 假充电桩(W13):对桩、出桩各要多久(秒,仿真的钟)。
 DOCK_S = 5.0
 UNDOCK_S = 3.0
+#: 仿真上装(W40,V1.2 的 PATLITE 多色警灯)有的颜色。
+SIM_STROBE_COLORS = ("red", "yellow", "green", "blue", "white")
 
 
 class SimRobot:
@@ -74,6 +76,9 @@ class SimRobot:
         self.payload = payload
         self.deter_until: dict[str, int] = {}
         self.deter_clip = ""
+        self.deter_color = ""
+        #: W40:仿真设备健康里要报坏的那几样:设备名 → (状态, 说明)。
+        self.device_faults: dict[str, tuple[str, str]] = {}
         self.clips: tuple[str, ...] = ("warn-zh", "warn-en") if payload else ()
         self.max_vx, self.max_wz, self.deadband_vx = max_vx, max_wz, deadband_vx
         #: W11 运动模型(W08 决定 10):链路延迟(命令晚这么久生效)、起步切步态(从站着到走要等这么久)、
@@ -372,7 +377,11 @@ class SimRobot:
         return self._now() < self.deter_until.get(output, 0)
 
     async def strobe(self, channel: str, pattern: str, max_s: float) -> None:
+        color = "red" if channel in ("", "warn") else channel
+        if pattern != "off" and self.payload and color not in SIM_STROBE_COLORS:
+            raise ValueError(f"警灯没有 {color} 色")
         self._deter("strobe", pattern != "off", max_s)
+        self.deter_color = color if pattern != "off" else ""
 
     async def siren(self, on: bool, max_s: float) -> None:
         self._deter("siren", on, max_s)
@@ -389,6 +398,31 @@ class SimRobot:
 
     async def spotlight(self, on: bool, max_s: float) -> None:
         self._deter("spotlight", on, max_s)
+        for side in ("left", "right"):
+            self._deter(f"spotlight_{side}", on, max_s)
+
+    async def spotlight_side(self, side: str, on: bool, max_s: float) -> None:
+        """W40:仿真的上装是 V1.2 那套,左右两只灯。"""
+        if side not in ("left", "right"):
+            raise ValueError(f"聚光灯只有 left/right:{side!r}")
+        self._deter(f"spotlight_{side}", on, max_s)
+        self.deter_until["spotlight"] = max(self.deter_until.get(f"spotlight_{s}", 0)
+                                            for s in ("left", "right"))
+
+    def device_health(self) -> list[dict[str, Any]]:
+        """W40:仿真上装的设备健康(都在线)。``device_faults`` 里写了的报成那个状态(测试、演示用)。"""
+        if not self.payload:
+            return []
+        base = {"relay": "6 个线圈都确认过", "speaker": "仿真声卡", "siren": "喇叭放警笛声"}
+        return [{"id": k, "state": self.device_faults.get(k, ("online", ""))[0],
+                 "detail": self.device_faults.get(k, ("", v))[1] or v} for k, v in base.items()]
+
+    def deter_options(self) -> dict[str, Any]:
+        """W40:跟上装 V1.2 一样报左右灯、警灯颜色、喇叭警笛。"""
+        if not self.payload:
+            return {}
+        return {"spotlight_sides": ["left", "right"], "strobe_colors": list(SIM_STROBE_COLORS),
+                "strobe_default": "red", "siren_via": "speaker"}
 
     async def head(self, pan: float, tilt: float) -> None:
         raise HalUnsupported("sim 没有云台")

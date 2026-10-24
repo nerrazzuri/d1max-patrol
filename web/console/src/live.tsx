@@ -167,12 +167,13 @@ export function JumpStrip({ units, p1, watching, total }: { units: UnitInfo[]; p
   );
 }
 
-export function FullCamera({ robot, cam, now, onClose }: { robot: string; cam: Cam; now: number; onClose: () => void }) {
+/** 全屏看一路;上面的按钮切这只狗的各路(``cams``:装了热像的多一路,W40)。 */
+export function FullCamera({ robot, cam, now, onClose, cams = CAMS }: { robot: string; cam: Cam; now: number; onClose: () => void; cams?: Cam[] }) {
   const [c, setC] = useState<Cam>(cam);
   return (
     <Modal label={camLabel(robot, c)} wide onClose={onClose}>
       <div class="seg" role="group" aria-label={robot}>
-        {CAMS.map((x) => (
+        {cams.map((x) => (
           <button key={x} type="button" aria-pressed={x === c} onClick={() => setC(x)}>{t(x)}</button>
         ))}
       </div>

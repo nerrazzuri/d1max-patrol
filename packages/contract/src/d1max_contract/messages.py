@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Any
 
 from d1max_contract import SCHEMA
+from d1max_contract.devices import parse_devices
 from d1max_contract.errors import ContractError
 from d1max_contract.hal import Fault
 from d1max_contract.storage import StorageFacts
@@ -443,6 +444,9 @@ class Telemetry:
     #: 运营可视化:正在导航时的规划路径 ``{"seq", "path"?: [[x, y], ...]}``
     #: (``d1max_agent.nav_report``;没在导航、老狗都不发这个键)。
     nav: dict[str, Any] | None = None
+    #: W40:设备健康 ``[{"id", "state", "detail"}]``(``d1max_contract.devices``;每 10 s 带一次,
+    #: 没有就不发这个键,老狗也不带)。
+    devices: list[dict[str, Any]] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         d = {"stamp": self.stamp, "pose": self.pose.to_wire() if self.pose else None,
@@ -457,6 +461,8 @@ class Telemetry:
             d["rtk"] = dict(self.rtk)
         if self.nav is not None:
             d["nav"] = dict(self.nav)
+        if self.devices is not None:
+            d["devices"] = [dict(x) for x in self.devices]
         return _stamped(d)
 
     @classmethod
@@ -475,4 +481,5 @@ class Telemetry:
                    else None,
                    loc=d["loc"] if isinstance(d.get("loc"), dict) else None,
                    rtk=d["rtk"] if isinstance(d.get("rtk"), dict) else None,
-                   nav=d["nav"] if isinstance(d.get("nav"), dict) else None)
+                   nav=d["nav"] if isinstance(d.get("nav"), dict) else None,
+                   devices=parse_devices(d.get("devices")))

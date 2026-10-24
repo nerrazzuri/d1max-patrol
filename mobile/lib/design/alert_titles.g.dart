@@ -46,6 +46,7 @@ const Map<String, (String, String)> alertTitles = <String, (String, String)>{
   'payload_strobe': ('Strobe failed', '警示灯出故障'),
   'payload_siren': ('Siren failed', '警笛出故障'),
   'payload_spotlight': ('Spotlight failed', '探照灯出故障'),
+  'payload_amp': ('Amplifier failed', '功放出故障'),
   'finding': ('Inspection finding', '判读有异常'),
   'recording_failed': ('Recording interrupted', '录像断了'),
   'agent_args_skipped': ('Unknown robot settings skipped', '狗上有启动参数不认识'),

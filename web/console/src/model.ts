@@ -69,6 +69,14 @@ export interface DeterSession {
   outputs?: string[] | null;
 }
 
+/** 这只狗有哪几路相机(W40:装了热像的多一路;老狗不报 video.cameras 就是前后两路)。 */
+export function robotCams(r: Robot | null | undefined): ("front" | "back" | "thermal")[] {
+  const v = r?.capabilities?.tasks?.video as { cameras?: unknown } | undefined;
+  const c = Array.isArray(v?.cameras) ? (v.cameras as unknown[]) : null;
+  if (!c) return ["front", "back"];
+  return (["front", "back", "thermal"] as const).filter((x) => c.includes(x));
+}
+
 /** 警笛在第 3 级(站点 deterrence.RELAYS);第 2 级只有灯和语音警告(C-B2 外审 I1)。 */
 export const SIREN_LEVEL = 3;
 
