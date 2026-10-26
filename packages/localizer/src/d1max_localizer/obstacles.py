@@ -47,6 +47,33 @@ TAIL_CLEAR_PROTO = 6
 #: 地面候选平面跟「上」最多差 45°(对着墙起来时别把墙当地面;外参歪 5–45° 照样查得出来)。
 MIN_UP_COS = math.cos(math.radians(45.0))
 SIDECAR = ("127.0.0.1", 8090)
+#: W41 全局重定位:墙那一层的位图(``wall`` 报文)多大一格、多少格、攒多久发一次;离狗身中心这么近的点
+#: 不要(机身、上装自己)。
+WALL_RES = 0.1
+WALL_SIZE = 200
+WALL_EVERY_S = 1.0
+WALL_MIN_R = 0.7
+
+
+def wall_cells(pts_base: Any, height: float, *, res: float = WALL_RES,
+               size: int = WALL_SIZE) -> Any:
+    """狗身系的点 → 落在墙那一层(离地 :data:`~d1max_contract.obsbridge.WALL_BAND`)的格子
+    (``size × size`` 个真假,行优先;格子约定同局部栅格)。"""
+    import numpy as np
+
+    from d1max_contract.obsbridge import WALL_BAND
+    out = np.zeros(size * size, dtype=bool)
+    p = np.asarray(pts_base, dtype=float).reshape(-1, 3)
+    if not len(p):
+        return out
+    h = p[:, 2] + height
+    keep = (h >= WALL_BAND[0]) & (h <= WALL_BAND[1]) & np.isfinite(p).all(axis=1) \
+        & (np.hypot(p[:, 0], p[:, 1]) >= WALL_MIN_R)
+    r = np.floor(p[keep, 0] / res + size / 2).astype(int)
+    c = np.floor(p[keep, 1] / res + size / 2).astype(int)
+    inb = (r >= 0) & (r < size) & (c >= 0) & (c < size)
+    out[r[inb] * size + c[inb]] = True
+    return out
 
 
 @dataclass(frozen=True)
@@ -465,6 +492,11 @@ class Perception:
         self.last_clear_tail = 0.0
         self.sidecar_proto: int | None = None
         self._rej_logged = -math.inf
+        #: 墙那一层攒着的格子、攒了几帧、从什么时候开始攒(W41)。
+        self._wall: Any = None
+        self._wall_frames = 0
+        self._wall_since = -math.inf
+        self.wall_seq = 0
         if sidecar is not None and sidecar.on_line is None:
             sidecar.on_line = self.on_sidecar
 
@@ -478,6 +510,32 @@ class Perception:
         self.front, self.rear = front, rear
         self.check = SelfCheck()
         self._rear_pts = None
+        self._wall = None
+
+    def _feed_wall(self, front: Any, rear: Any) -> None:
+        """墙那一层攒进来;攒够 :data:`WALL_EVERY_S` 就发一条 ``wall``(W41 全局重定位)。
+        后雷达标过才用。"""
+        import base64
+
+        import numpy as np
+        now = self._clock()
+        cells = wall_cells(front, self.check.height)
+        if rear is not None:
+            cells |= wall_cells(rear, self.check.height)
+        if self._wall is None:
+            self._wall, self._wall_frames, self._wall_since = cells, 0, now
+        else:
+            self._wall |= cells
+        self._wall_frames += 1
+        if now - self._wall_since < WALL_EVERY_S:
+            return
+        self.wall_seq += 1
+        msg = {"t": "wall", "seq": self.wall_seq, "res": WALL_RES, "size": WALL_SIZE,
+               "bits": base64.b64encode(np.packbits(self._wall).tobytes()).decode("ascii"),
+               "frames": self._wall_frames}
+        self._wall = None
+        if self.obs is not None:
+            self.obs.send(msg)
 
     def on_rear(self, pts_sensor: Any) -> None:
         if self.rear is not None:
@@ -531,6 +589,7 @@ class Perception:
             known = bytes(a | b for a, b in zip(known, seen, strict=True))
             sus = bytes(a | b for a, b in zip(sus, sus_r, strict=True))
         sus = bytes(s & (1 - o) for s, o in zip(sus, occ, strict=True))   # 已经挡的不用再标
+        self._feed_wall(p, self._rear_pts if rear and self.rear_cal else None)
         self.seq += 1
         grid = {"t": "grid", "seq": self.seq, "stamp_ns": max(0, int(stamp_ns)),
                 "res": self.cfg.res, "size": n, "occ": pack_bits(occ, n),

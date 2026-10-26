@@ -9,7 +9,7 @@ import { t } from "./i18n";
 import { StateText, type UnitInfo } from "./live";
 import { MapCanvas, type CanvasArea, type LegendKey } from "./mapcanvas";
 import { heading, namedAreas, onMap, toPx, type PreviewMeta, type Pt } from "./mapview";
-import { abnormal, alarmState, robotMap, type Alert } from "./model";
+import { abnormal, alarmState, canFindPose, robotMap, type Alert } from "./model";
 import { usePosePick } from "./posepick";
 import { RunInfo } from "./runinfo";
 import { RunLegendItems, VizWorld, vizAvoid, vizHas, vizMarks, vizOnMap } from "./runlayers";
@@ -60,7 +60,8 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
   // 点图 → 去这里 / 在这里设位置(posepick.tsx;只有管理员、保安)
   const pose = usePosePick({ meta, map: which ? { map_id: which.map_id, version: which.version } : null,
     robotId: sel?.robot.robot_id ?? null, robotMap: selMap,
-    robotAt: sel && onThisMap(sel) ? sel.robot.loc?.pose ?? null : null, role: props.role ?? "" });
+    robotAt: sel && onThisMap(sel) ? sel.robot.loc?.pose ?? null : null, role: props.role ?? "",
+    canFind: canFindPose(sel?.robot) });
   // 运行可视化:规划路径、轨迹、被挡位置(2 s 一拉),近 7 天定位出过问题的地方
   const viz = useRunViz(!!which);
   const vizRobots = which ? vizOnMap(viz, which.map_id, which.version) : [];

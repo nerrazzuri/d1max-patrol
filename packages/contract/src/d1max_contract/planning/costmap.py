@@ -261,7 +261,7 @@ def build(blocked: np.ndarray, res: float, origin: tuple[float, float],
     for z in zones:
         if z.keep_out:                                  # 禁行、抹掉(地图台账 44):一样硬挡
             hard |= polygon_mask(z.polygon, blocked.shape, res, origin, nogo_margin_m)
-        else:
+        elif z.kind == "slow":                          # 人员忽略区(W41)不管怎么走
             m = polygon_mask(z.polygon, blocked.shape, res, origin)
             speed[m] = np.minimum(speed[m], np.float32(z.max_speed_mps))
     lethal = dilate(hard, robot_radius_m / res, clearance=True)

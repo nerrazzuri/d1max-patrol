@@ -33,11 +33,11 @@ import { rasterShade, scheme } from "./theme";
 /** 图上画的有名字的多边形(地图坐标,米):area = 区域(淡),zone = 防区(防区页上能改的那些,显眼)。 */
 export interface CanvasArea { name: string; pts: Pt[]; kind: "area" | "zone" }
 
-export type LegendKey = "floor" | "wall" | "seen" | "unknown" | "nogo" | "hard" | "vwall" | "erase" | "slow" | "area" | "zone" | "robot" | "alarm";
-const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "seen", "unknown", "nogo", "hard", "vwall", "erase", "slow", "area", "zone", "robot", "alarm"];
+export type LegendKey = "floor" | "wall" | "seen" | "unknown" | "nogo" | "hard" | "vwall" | "erase" | "slow" | "ignore" | "area" | "zone" | "robot" | "alarm";
+const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "seen", "unknown", "nogo", "hard", "vwall", "erase", "slow", "ignore", "area", "zone", "robot", "alarm"];
 const LEGEND_TEXT: Record<LegendKey, Key> = {
   floor: "legendFloor", wall: "legendWall", seen: "legendSeen", unknown: "legendUnknown", nogo: "legendNoGo",
-  hard: "hardNoGoLegend", vwall: "legendVWall", erase: "legendErase", slow: "legendSlow",
+  hard: "hardNoGoLegend", vwall: "legendVWall", erase: "legendErase", slow: "legendSlow", ignore: "legendIgnore",
   area: "legendArea", zone: "legendZone", robot: "legendRobot", alarm: "legendAlarm",
 };
 
@@ -195,6 +195,7 @@ export function MapCanvas(props: {
   if (zones.some((z) => z.kind === "nogo" && z.hard && !z.wall)) present.add("hard");
   if (zones.some((z) => !!z.wall)) present.add("vwall");
   if (zones.some((z) => z.kind === "slow")) present.add("slow");
+  if (zones.some((z) => z.kind === "ignore")) present.add("ignore");
   // 地图台账 M9、44:看到过、狗没走过(站点说这一版有才列);抹掉区(站点已经把那一块画成没建图,这里只描边)
   if (meta.seen === true) present.add("seen");
   if (zones.some((z) => z.kind === "erase")) present.add("erase");
@@ -213,9 +214,9 @@ export function MapCanvas(props: {
               preserveAspectRatio="none" class={plan ? "mapimg plan" : "mapimg"}
               onError={plan ? () => setPlanBad(plan.url) : undefined} />
             {/* 虚拟墙(2026-10-15)画成一条粗线(画的那条),不画站点算的那条窄带子 */}
-            {zones.map((z) => (z.kind === "nogo" || z.kind === "slow" || z.kind === "erase") && !z.wall && (
+            {zones.map((z) => (z.kind === "nogo" || z.kind === "slow" || z.kind === "erase" || z.kind === "ignore") && !z.wall && (
               <polygon key={z.id} points={polyAttr(meta, z.polygon)}
-                class={z.kind === "nogo" ? (z.hard ? "nogo-area hard" : "nogo-area") : z.kind === "erase" ? "erase-area" : "slow-area"}>
+                class={z.kind === "nogo" ? (z.hard ? "nogo-area hard" : "nogo-area") : z.kind === "erase" ? "erase-area" : z.kind === "ignore" ? "ignore-area" : "slow-area"}>
                 {(z.kind === "nogo" || z.kind === "erase") && <title>{navZoneTip(z)}</title>}
               </polygon>
             ))}
@@ -295,6 +296,7 @@ function Swatch({ k, plan }: { k: LegendKey; plan: boolean }) {
   else if (k === "nogo") body = <rect x="1" y="1" width="14" height="10" class="nogo-area" />;
   else if (k === "hard") body = <rect x="1.5" y="1.5" width="13" height="9" class="nogo-area hard" />;
   else if (k === "slow") body = <rect x="1" y="1" width="14" height="10" class="slow-area" />;
+  else if (k === "ignore") body = <rect x="1" y="1" width="14" height="10" class="ignore-area" />;
   else if (k === "vwall") body = <path d="M1 9L7 3L15 3" class="vwall-line" />;
   else if (k === "area") body = <rect x="1" y="1" width="14" height="10" class="sec-area quiet" />;
   else if (k === "zone") body = <rect x="1" y="1" width="14" height="10" class="sec-area" />;

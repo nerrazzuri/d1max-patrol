@@ -140,3 +140,19 @@ def test_图号版本要成对_要是字符串(站点, bad):
     _能设(s)
     assert s.req("POST", "/api/robots/A/relocalize", {"x": 1, "y": 2, "yaw": 0} | bad,
                  token=gina)[0] == 400
+
+
+def test_W41_自动找位置_狗报了才发_不是true_400(站点):
+    s = 站点
+    gina = _登(s, "gina")
+    _能设(s)
+    assert s.req("POST", "/api/robots/A/relocalize", {"global": 1}, token=gina)[0] == 400
+    code, d = s.req("POST", "/api/robots/A/relocalize", {"global": True}, token=gina)
+    assert code == 409 and "自动找位置" in d["error"], "仿真狗没配避障和定位器:不能"
+    s.disp.clients["A"].capabilities.tasks["relocalize"]["global"] = True
+    code, d = s.req("POST", "/api/robots/A/relocalize", {"global": True}, token=gina)
+    assert code == 200, d
+    [cmd] = [c for c in s.disp.commands("A") if c["kind"] == "relocalize"]
+    assert cmd["payload"]["global"] is True and "x" not in cmd["payload"]
+    assert d["ack"]["result"] == "rejected" and "不能自动找位置" in d["ack"]["reason"], \
+        "能力是测试里硬改的,狗其实没配:狗拒,回执原样回"

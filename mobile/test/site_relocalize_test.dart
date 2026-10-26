@@ -9,13 +9,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/fake_site.dart';
 import 'site_page_test.dart' show FakeApi;
 
-Map<String, dynamic> _view(Map<String, dynamic>? loc, {bool canReloc = true}) {
+Map<String, dynamic> _view(Map<String, dynamic>? loc, {bool canReloc = true, bool canFind = false}) {
   final v = Map<String, dynamic>.of(siteFixture('site_robot'));
   v['loc'] = loc;
   final caps = Map<String, dynamic>.of(v['capabilities'] as Map<String, dynamic>);
   final tasks = Map<String, dynamic>.of(caps['tasks'] as Map<String, dynamic>);
   if (canReloc) {
-    tasks['relocalize'] = <String, dynamic>{'needs_pose': true};
+    tasks['relocalize'] = <String, dynamic>{'needs_pose': true, if (canFind) 'global': true};
   } else {
     tasks.remove('relocalize');
   }
@@ -176,5 +176,24 @@ void main() {
     expect(ackReasonText('moving'), contains('停'));
     expect(ackReasonText('no_home'), contains('原点'));
     expect(ackReasonText('map_mismatch'), contains('图'));
+  });
+
+  testWidgets('W41 让狗自己找：狗报了能力才有这一项；点了发 global', (t) async {
+    final no = FakeApi('guard', robotView: _view({'anchored': false, 'reason': 'x'}));
+    await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: no, robotId: 'A')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('btn-relocalize')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('reloc-find')), findsNothing);
+    await t.tapAt(const Offset(5, 5));
+    await t.pumpAndSettle();
+    final api = FakeApi('guard', robotView: _view({'anchored': false, 'reason': 'x'}, canFind: true));
+    await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A', key: UniqueKey())));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('btn-relocalize')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('reloc-find')));
+    await t.pumpAndSettle();
+    expect(api.calls.lastWhere((c) => c.startsWith('relocalize')), 'relocalize A global');
   });
 }

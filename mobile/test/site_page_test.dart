@@ -720,8 +720,18 @@ class FakeApi implements SiteApi {
   Completer<void>? relocalizeGate;
   @override
   Future<Map<String, dynamic>> relocalize(String robotId,
-      {bool atHome = false, double x = 0, double y = 0, double yaw = 0, String? mapId, String? version}) async {
-    calls.add(atHome ? 'relocalize $robotId home' : 'relocalize $robotId $x $y $yaw');
+      {bool atHome = false,
+      bool global = false,
+      double x = 0,
+      double y = 0,
+      double yaw = 0,
+      String? mapId,
+      String? version}) async {
+    calls.add(global
+        ? 'relocalize $robotId global'
+        : atHome
+        ? 'relocalize $robotId home'
+        : 'relocalize $robotId $x $y $yaw');
     relocalizeMaps.add(mapId == null ? null : '$mapId/$version');
     if (relocalizeGate != null) await relocalizeGate!.future;
     return <String, dynamic>{'ack': relocalizeAck};

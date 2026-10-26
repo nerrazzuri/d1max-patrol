@@ -319,3 +319,26 @@ def test_多边形包含():
     assert not polygon_contains(sq, tuple(map(tuple, BIG)))
     far = ((5.0, 5.0), (6.0, 5.0), (6.0, 6.0))
     assert not polygon_contains(sq, far) and not polygon_contains(far, sq)
+
+
+def test_W41_人员忽略区_认得_不带限速硬禁区墙线_不管狗怎么走():
+    import numpy as np
+
+    from d1max_contract.planning.costmap import build
+    from d1max_contract.zones import tightens, zones_digest
+    ign = {"id": "robot-exhibit", "kind": "ignore", "label": "展品",
+           "polygon": [[0, 0], [2, 0], [2, 2], [0, 2]]}
+    nogo = {"id": "pond", "kind": "nogo", "polygon": [[5, 5], [6, 5], [6, 6], [5, 6]]}
+    zs = _set([ign, nogo])
+    assert [z.id for z in zs.ignore()] == ["robot-exhibit"]
+    assert [z.id for z in zs.nogo()] == ["pond"] and zs.slow() == ()
+    for bad in ({"max_speed_mps": 0.3}, {"hard": True}, {"wall": [[0, 0], [1, 0]]}):
+        with pytest.raises(ContractError):
+            _set([ign | bad])
+    plain = _set([nogo])
+    assert zs.without_ignore() == plain and plain.without_ignore() is plain
+    assert zones_digest(zs) == zones_digest(plain), "摘要不算忽略区:老代理收的那份照样对得上"
+    assert tightens(plain, zs) and tightens(zs, plain), "加、删忽略区都不算放宽"
+    assert not tightens(_set([ign, nogo]), _set([ign])), "删禁行区照样是放宽"
+    cm = build(np.zeros((100, 100), dtype=bool), 0.1, (0.0, 0.0), zs.zones)
+    assert not cm.hard[5, 5] and np.isinf(cm.speed[5, 5]), "规划不看忽略区"

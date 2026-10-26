@@ -154,9 +154,19 @@ class _SiteRobotPageState extends State<SiteRobotPage> {
             key: const Key('reloc-xy'),
             onPressed: () => Navigator.pop(c, 'xy'),
             child: Text(tr('Enter map coordinates', '输地图坐标'))),
+        if (robotCanFindPose(_view))
+          SimpleDialogOption(
+              key: const Key('reloc-find'),
+              onPressed: () => Navigator.pop(c, 'find'),
+              child: Text(tr('Let it find itself (match the walls it sees)', '让狗自己找（拿看到的墙去套地图）'))),
       ]),
     );
     if (how == null || !mounted) return;
+    if (how == 'find') {
+      // W41：狗拿看到的墙在整张图上套；认不准它会拒、说原因（有两处差不多像……），那时再手动设。
+      await _do(() => widget.api.relocalize(widget.robotId, global: true), tr('Find position', '自动找位置'));
+      return;
+    }
     if (how == 'home') {
       // 点错了狗就按错的位置走（W00c6e 内审）：再确认一次。
       final sure = await showDialog<bool>(

@@ -155,3 +155,46 @@ def test_避障要配规划后端(tmp_path):
         AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG, hal=r,
                      store_dir=tmp_path, now_ms=lambda: 0, loaded_map=("m", "1"),
                      home=Pose.from_xy_yaw(0, 0, 0), nav="planned", obstacles="lidar")
+
+
+def _wall(seq, cells=((30, 50), (31, 50))):
+    from d1max_contract.obsbridge import Wall
+    n = 100
+    bits = [False] * (n * n)
+    for r, c in cells:
+        bits[r * n + c] = True
+    return Wall(seq=seq, res=0.1, size=n, bits=pack_bits(bits, n), frames=9)
+
+
+async def test_W41_墙层(tmp_path):
+    """墙那一层:桥转给视图;狗停着攒的才算数;过时的、之前收到的不要。"""
+    c = 钟()
+    view = ObstacleView(monotonic=c)
+    for _ in range(20):                                  # 停着 2 秒
+        view.note_odom(1.0, 2.0, 0.3)
+        c.t += 0.1
+    srv = ObsBridgeServer(tmp_path / "obs.sock", view, monotonic=c)
+    await srv.start()
+    try:
+        r, w = await _连(tmp_path / "obs.sock")
+        w.write(encode(Hello(proto=1)))
+        w.write(encode(_wall(1)))
+        await w.drain()
+        await r.readline()
+        await asyncio.sleep(0.05)
+        pts = view.wall_scan()
+        assert pts is not None and len(pts) == 2
+        assert pts[0] == pytest.approx(((30 - 50 + 0.5) * 0.1, 0.05))
+        assert view.wall_scan(since=c.t + 1) is None, "要的是之后收到的"
+        c.t += 3.0
+        assert view.wall_scan() is None, "过时了"
+        for _ in range(12):                              # 走着
+            view.note_odom(1.0 + c.t / 10, 2.0, 0.3)
+            c.t += 0.1
+        w.write(encode(_wall(2)))
+        await w.drain()
+        await asyncio.sleep(0.05)
+        assert view.wall_scan() is None, "攒的时候狗在动:点是糊的,不用"
+        w.close()
+    finally:
+        await srv.close()

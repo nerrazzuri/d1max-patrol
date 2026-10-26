@@ -76,6 +76,9 @@ const en = {
   poseNoAck: "no clear answer from the robot",
   poseOnlyDispatch: "Only admins and guards can send a robot or set its position.",
   poseNeedsSupervision: "Refused",
+  poseFind: "Find position automatically",
+  poseFindConfirm: "Let {robot} find where it is on this map by matching the walls it sees? It must be standing still. If it cannot tell for sure it will say so and you set the position by hand.",
+  poseFindDone: "{robot} found its position; the localizer is confirming it",
 } as const;
 
 export type RKey = keyof typeof en;
@@ -154,6 +157,9 @@ const zh: Record<RKey, string> = {
   poseNoAck: "狗没有明确回复",
   poseOnlyDispatch: "只有管理员和保安能派狗、设位置。",
   poseNeedsSupervision: "被拒",
+  poseFind: "自动找位置",
+  poseFindConfirm: "让 {robot} 拿看到的墙在这张图上自己找位置？狗要停着。找不准它会说，那时再手动设。",
+  poseFindDone: "{robot} 找到了位置，定位程序在确认",
 };
 
 export const RDICTS: Record<Lang, Record<RKey, string>> = { en, zh };

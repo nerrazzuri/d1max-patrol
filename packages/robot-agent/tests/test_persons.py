@@ -329,3 +329,52 @@ def test_W25_最近的人_只用确认的相机_一帧误检不算():
     assert v.target() == (5.0, 3.0)
     v.on_disconnect()
     assert v.target() is None
+
+
+def test_W41_人员忽略区_落在里面的不算人_没测到距离的照算():
+    """2026-10-26 现场:展厅里的人形机器人(右前方 34°、3.5 m)一直被当成人。"""
+    c, ev, v = _台()
+    v.ignore = lambda bearing, rng: 3.0 <= rng <= 4.0           # 忽略区在 3–4 m 那一圈
+    for _ in range(3):
+        v.on_persons(_帧(3.5))
+    assert ev == [] and v.ignored == 1, "展品:不算人"
+    for _ in range(3):
+        v.on_persons(_帧(3.5, 7.0))
+    assert [k for k, _ in ev] == ["person_seen"] and v.count == 1 and v.nearest_m == 7.0
+    _空帧(c, v, 30)
+    ev.clear()
+    for _ in range(3):
+        v.on_persons(_帧(None))
+    assert [k for k, _ in ev] == ["person_seen"], "没测到距离:不知道在哪,照算"
+
+    def 坏(bearing, rng):
+        raise RuntimeError("x")
+    c2, ev2, v2 = _台()
+    v2.ignore = 坏
+    for _ in range(3):
+        v2.on_persons(_帧(3.5))
+    assert [k for k, _ in ev2][:1] == ["person_seen"], "判不了:照算"
+
+
+async def test_W41_代理按狗此刻的位置把人放到图上_落在忽略区才忽略(tmp_path):
+    import math
+
+    from d1max_contract.zones import ZoneSet
+    r = SimRobot(now_ms=lambda: 1_000_000)
+    rt = AgentRuntime(transport=MemoryTransport(MemoryBroker(), "dog"), registration=REG, hal=r,
+                      store_dir=tmp_path / "agent", now_ms=lambda: 1_000_000,
+                      loaded_map=("m", "1"), boot_id="b", home=Pose.from_xy_yaw(0, 0, 0),
+                      nav="planned", persons="bridge", persons_socket=tmp_path / "p.sock")
+    assert rt.person_view.ignore == rt._person_ignored
+    rt.parts.nav._odom_pose = (1.0, 1.0, math.pi / 2)        # 狗在 (1, 1),朝 +y
+    rt.parts.nav.odom_ok = True                                # 仿真狗:里程即地图(锚定)
+    assert not rt._person_ignored(0.0, 3.0), "没有忽略区"
+    rt._zones = ZoneSet.from_wire({"map_id": "m", "map_version": "1", "revision": 2, "zones": [
+        {"id": "ex", "kind": "ignore", "polygon": [[0, 3], [2, 3], [2, 5], [0, 5]]},
+        {"id": "p", "kind": "nogo", "polygon": [[5, 5], [6, 5], [6, 6], [5, 6]]}]})
+    assert rt._person_ignored(0.0, 3.0), "正前方 3 m = (1, 4):在忽略区里"
+    assert not rt._person_ignored(90.0, 3.0), "左边 3 m = (−2, 1):不在"
+    assert not rt._person_ignored(0.0, 6.0), "正前方 6 m = (1, 7):不在"
+    rt._zones = ZoneSet.from_wire({"map_id": "m", "map_version": "2", "revision": 1, "zones": [
+        {"id": "ex", "kind": "ignore", "polygon": [[0, 3], [2, 3], [2, 5], [0, 5]]}]})
+    assert not rt._person_ignored(0.0, 3.0), "区域不是这张图的:不忽略"

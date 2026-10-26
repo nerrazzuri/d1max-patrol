@@ -29,7 +29,7 @@ interface NavZones {
   held?: NavZone[];
 }
 /** 正在画什么:防区(摄像头用)、抹掉区,或者狗守的禁行区、限速区、虚拟墙。 */
-type DrawKind = "zone" | "erase" | "nogo" | "slow" | "wall";
+type DrawKind = "zone" | "erase" | "nogo" | "slow" | "wall" | "ignore";
 /** 画完填的那几项。 */
 interface NavForm { label: string; hard: boolean; speed: number; temp: boolean; hours: number }
 
@@ -115,7 +115,7 @@ export function MapsZonesPage({ say }: { say: Say }) {
     loadNav();
   }, [base]);
   const erased = (nav?.zones ?? []).filter((z) => z.kind === "erase");
-  const navList = (nav?.zones ?? []).filter((z) => z.kind === "nogo" || z.kind === "slow");
+  const navList = (nav?.zones ?? []).filter((z) => z.kind === "nogo" || z.kind === "slow" || z.kind === "ignore");
   const minPts = drawKind === "wall" ? 2 : 3;
 
   /** 整份导航区域存回去(改之前看到的修订号先拉一次最新的,别盖掉手机上刚改的);存完重新取预览(抹掉区变了,
@@ -172,13 +172,13 @@ export function MapsZonesPage({ say }: { say: Say }) {
     const b = base;
     try {
       const d = await saveNav((zones, rev) => {
-        let id = `${kind === "wall" ? "w" : kind === "slow" ? "s" : "n"}${rev + 1}`;
+        let id = `${kind === "wall" ? "w" : kind === "slow" ? "s" : kind === "ignore" ? "i" : "n"}${rev + 1}`;
         while (zones.some((z) => z.id === id)) id += "x";
-        const z: Record<string, unknown> = { id, kind: kind === "slow" ? "slow" : "nogo", label: f.label.trim() };
+        const z: Record<string, unknown> = { id, kind: kind === "slow" || kind === "ignore" ? kind : "nogo", label: f.label.trim() };
         if (kind === "wall") z.wall = pts;
         else z.polygon = pts;
         if (kind === "slow") z.max_speed_mps = f.speed;
-        else if (f.hard) z.hard = true;
+        else if (f.hard && kind !== "ignore") z.hard = true;
         if (f.temp) z.for_s = Math.round(f.hours * 3600);
         return [...zones, z as unknown as NavZone];
       });
@@ -293,6 +293,7 @@ export function MapsZonesPage({ say }: { say: Say }) {
               <button type="button" class="btn" disabled={!meta || !nav} onClick={() => startDraw("nogo")}>{t("drawNoGo")}</button>
               <button type="button" class="btn" disabled={!meta || !nav} onClick={() => startDraw("slow")}>{t("drawSlow")}</button>
               <button type="button" class="btn" disabled={!meta || !nav} onClick={() => startDraw("erase")}>{t("drawErase")}</button>
+              <button type="button" class="btn" disabled={!meta || !nav} onClick={() => startDraw("ignore")}>{t("drawIgnore")}</button>
               <button type="button" class="btn primary" disabled={!meta} onClick={() => startDraw("zone")}>{t("drawZone")}</button>
             </div>
           )}
@@ -350,7 +351,7 @@ export function MapsZonesPage({ say }: { say: Say }) {
         </div>
       </section>
       {naming && <NameZone onClose={() => setNaming(false)} onSave={save} />}
-      {navForm && (drawKind === "nogo" || drawKind === "slow" || drawKind === "wall") && (
+      {navForm && (drawKind === "nogo" || drawKind === "slow" || drawKind === "wall" || drawKind === "ignore") && (
         <NavZoneForm kind={drawKind} onClose={() => setNavForm(false)} onSave={(f) => void addNav(f)} />
       )}
       {removingNav && (
@@ -521,7 +522,8 @@ function AddAuthz({ zones, onClose, onDone, say }: { zones: string[]; onClose: (
 
 /** 一个导航区域给人看的一行字:种类(虚拟墙、禁行区、限速区多少)、硬、临时到什么时候。 */
 export function navZoneLine(z: NavZone): string {
-  const kind = z.wall ? t("kindVWall") : z.kind === "slow" ? t("kindSlow", { v: z.max_speed_mps ?? "?" }) : t("kindNoGo");
+  const kind = z.wall ? t("kindVWall") : z.kind === "slow" ? t("kindSlow", { v: z.max_speed_mps ?? "?" })
+    : z.kind === "ignore" ? t("kindIgnore") : t("kindNoGo");
   const bits = [kind];
   if (z.hard) bits.push(t("kindHard"));
   if (typeof z.until_ms === "number") {
@@ -564,12 +566,13 @@ function NavPanel({ nav, list, onRemove, onConfirm }: {
 }
 
 /** 画完禁行区、限速区、虚拟墙填的那几项:名字;硬(禁行、虚拟墙);限速;临时几小时。 */
-function NavZoneForm({ kind, onClose, onSave }: { kind: "nogo" | "slow" | "wall"; onClose: () => void; onSave: (f: NavForm) => void }) {
+function NavZoneForm({ kind, onClose, onSave }: { kind: "nogo" | "slow" | "wall" | "ignore"; onClose: () => void; onSave: (f: NavForm) => void }) {
   const [f, setF] = useState<NavForm>({
-    label: kind === "wall" ? t("legendVWall") : kind === "slow" ? t("legendSlow") : t("legendNoGo"),
+    label: kind === "wall" ? t("legendVWall") : kind === "slow" ? t("legendSlow") : kind === "ignore" ? t("legendIgnore") : t("legendNoGo"),
     hard: false, speed: 0.3, temp: false, hours: 2,
   });
-  const title = kind === "wall" ? t("navFormTitleVWall") : kind === "slow" ? t("navFormTitleSlow") : t("navFormTitleNoGo");
+  const title = kind === "wall" ? t("navFormTitleVWall") : kind === "slow" ? t("navFormTitleSlow")
+    : kind === "ignore" ? t("navFormTitleIgnore") : t("navFormTitleNoGo");
   const ok = f.label.trim().length > 0 && f.label.trim().length <= 64 && (!f.temp || (f.hours > 0 && f.hours <= 8760))
     && (kind !== "slow" || (f.speed > 0 && f.speed <= 5));
   return (
@@ -580,7 +583,7 @@ function NavZoneForm({ kind, onClose, onSave }: { kind: "nogo" | "slow" | "wall"
         {kind === "slow" ? (
           <label class="field">{t("navSpeed")}<input type="number" min={0.1} max={5} step={0.1} value={f.speed}
             onInput={(e) => setF({ ...f, speed: Number(e.currentTarget.value) })} /></label>
-        ) : (
+        ) : kind === "ignore" ? null : (
           <label class="field-check"><input type="checkbox" checked={f.hard} onChange={(e) => setF({ ...f, hard: e.currentTarget.checked })} />{t("navHard")}</label>
         )}
         <label class="field-check"><input type="checkbox" checked={f.temp} onChange={(e) => setF({ ...f, temp: e.currentTarget.checked })} />{t("navTemp")}</label>

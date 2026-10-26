@@ -1423,19 +1423,29 @@ class _Handler(TlsHandlerMixin):
             robot_id, d, issued_by=str(user), priority=MANUAL)))
 
     def _relocalize(self, robot_id: str, user) -> None:
-        """设位置(W00c6e,里程锚定):``{"x", "y", "yaw"}`` 或 ``{"at_home": true}``,转成
-        ``relocalize`` 命令;坐标按狗**当前加载的那张图**(命令里带上图号,狗核对)。``dispatch`` 权限
-        —— 保安、管理员。不受监护闸约束(不动)。狗在走、原点没标过这些由狗拒,回执原样回。"""
+        """设位置(W00c6e,里程锚定):``{"x", "y", "yaw"}``、``{"at_home": true}`` 或
+        ``{"global": true}``(W41:狗拿看到的墙在整张图上自己找;狗报了 ``relocalize.global``
+        才发),转成 ``relocalize`` 命令;坐标按狗**当前加载的那张图**(命令里带上图号,狗核对)。
+        ``dispatch`` 权限 —— 保安、管理员。不受监护闸约束(不动)。狗在走、原点没标过这些由狗拒,
+        回执原样回。"""
         import math
         self._need(user, DISPATCH)
         self._audit_target = robot_id
         d = self._body()
         if not isinstance(d, dict):
             raise HttpError(400, "要一个对象")
-        if "at_home" in d:
+        if "global" in d:
+            if d.get("global") is not True:
+                raise HttpError(400, "global 只能是 true")
+            c0 = self.site.dispatcher.clients.get(robot_id)
+            rc = c0.capabilities.tasks.get("relocalize", {}) if c0 and c0.capabilities else {}
+            if not (isinstance(rc, dict) and rc.get("global") is True):
+                raise HttpError(409, f"{robot_id} 不能自动找位置(要新版代理、配了避障和定位器)")
+            payload: dict[str, Any] = {"global": True}
+        elif "at_home" in d:
             if d.get("at_home") is not True:
                 raise HttpError(400, "at_home 只能是 true")
-            payload: dict[str, Any] = {"at_home": True}
+            payload = {"at_home": True}
         else:
             payload = {}
             for k in ("x", "y", "yaw"):
@@ -1462,7 +1472,8 @@ class _Handler(TlsHandlerMixin):
             payload |= {"map_id": have[0], "map_version": have[1]}
         elif want is not None:
             payload |= {"map_id": want[0], "map_version": want[1]}   # 狗没报图:让狗自己核
-        self._audit_detail = {k: payload[k] for k in ("x", "y", "yaw", "at_home") if k in payload}
+        self._audit_detail = {k: payload[k] for k in ("x", "y", "yaw", "at_home", "global")
+                              if k in payload}
         # 有效期短一点(W00c6e 内审):晚到的旧命令会把「当时的位置」锚到「现在」。30 s 同视频、
         # 遥控续租
         # (Orin 的钟不准,再短就收不下)。

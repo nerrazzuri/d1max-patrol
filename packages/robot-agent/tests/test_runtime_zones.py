@@ -137,7 +137,7 @@ async def test_没有规划栅格_不宣告能自主(台):
     caps = _caps(ears)
     assert caps.tasks["zones_set"] == {"rev": 0, "enforced": True, "plan_ok": False,
                                        "problem": "没有规划栅格", "teleop_hard": True,
-                                       "erase": True}
+                                       "erase": True, "ignore": True}
     assert "goto" not in rt.processor.supported and "patrol" not in rt.processor.supported
 
 
@@ -147,7 +147,7 @@ async def test_换图载规划栅格_能规划(台):
     assert rt.parts.nav.plan_ok
     z = _caps(ears).tasks["zones_set"]
     assert z == {"rev": 0, "enforced": True, "plan_ok": True, "teleop_hard": True,
-                 "erase": True}
+                 "erase": True, "ignore": True}
     assert {"goto", "patrol"} <= rt.processor.supported
 
 
@@ -284,7 +284,8 @@ async def test_直线桥_报不守区域(tmp_path):
     try:
         await _跑(rt, broker, 2)
         assert _caps(ears).tasks["zones_set"] == {"rev": 0, "enforced": False,
-                                                  "teleop_hard": True, "erase": True}
+                                                  "teleop_hard": True, "erase": True,
+                                                  "ignore": True}
         await rt._on_cmd(_cmd("zones_set", _zs(1, [POND], ver="1"), "z1", c))
         await _跑(rt, broker, 2)
         assert ears.by["cmd/ack"][-1]["result"] == "accepted"
@@ -312,7 +313,8 @@ async def test_遥控守硬禁区_直线桥也守_续租回执带着为什么截
     try:
         await _跑(rt, broker, 2)
         assert _caps(ears).tasks["zones_set"] == {"rev": 0, "enforced": False,
-                                                  "teleop_hard": True, "erase": True}
+                                                  "teleop_hard": True, "erase": True,
+                                                  "ignore": True}
         pool = POND | {"polygon": [[2, -3], [6, -3], [6, 3], [2, 3]], "hard": True}
         await rt._on_cmd(_cmd("zones_set", _zs(1, [pool], ver="1"), "z1", c))
         await _跑(rt, broker, 2)

@@ -16,6 +16,9 @@
   「空」,狗尾为前才许自己走;``check``:启动自检 ``ok`` / ``extrinsic_bad`` / ``initializing``,
   不是 ``ok`` 时 ``reason`` 写原因。
 - ``hb {seq}``:心跳,每秒一条。
+- ``wall {seq, res, size, bits, frames}``(W41 全局重定位):最近约 1 秒里几帧雷达(前雷达,加上标过的
+  后雷达)离地 :data:`WALL_BAND` 那一层(墙、柱子、家具的立面)落在哪些格子里,**狗身系**位图,格子
+  约定同 ``grid``;``frames`` 是攒了几帧。代理拿它在整张图上套位置。老代理不认这一行,丢掉,不断开。
 
 代理 → 感知:``hello {proto}``、``error {reason}``(握手不对,说完就断)。
 """
@@ -36,6 +39,10 @@ MAX_LINE = 16 * 1024
 CHECKS = ("ok", "extrinsic_bad", "initializing")
 MIN_SIZE, MAX_SIZE = 10, 120
 MIN_RES, MAX_RES = 0.05, 0.5
+#: ``wall`` 位图最大边长(格):0.1 m 一格时 ±10 m,一行 base64 约 6.7 KB。
+WALL_MAX_SIZE = 200
+#: ``wall`` 取离地多高的那一层(米):低于它是地面、矮东西(会变),高于它多半是天花板、灯。
+WALL_BAND = (0.4, 1.8)
 
 
 def _pos_int(v: Any, what: str, *, zero: bool = False) -> None:
@@ -139,6 +146,37 @@ class Grid:
 
 
 @dataclass(frozen=True)
+class Wall:
+    T: ClassVar[str] = "wall"
+    seq: int
+    res: float
+    size: int
+    bits: str
+    frames: int = 1
+
+    def __post_init__(self) -> None:
+        _pos_int(self.seq, "seq")
+        if (isinstance(self.res, bool) or not isinstance(self.res, (int, float))
+                or not math.isfinite(self.res) or not MIN_RES <= self.res <= MAX_RES):
+            raise ContractError(f"障碍桥:res 要在 {MIN_RES}–{MAX_RES} 米:{self.res!r}")
+        _pos_int(self.size, "size")
+        if not MIN_SIZE <= self.size <= WALL_MAX_SIZE or self.size % 2:
+            raise ContractError(f"障碍桥:wall 的 size 要是 {MIN_SIZE}–{WALL_MAX_SIZE} 的偶数:"
+                                f"{self.size!r}")
+        if not isinstance(self.bits, str):
+            raise ContractError("障碍桥:bits 要是 base64 字符串")
+        unpack_bits(self.bits, self.size)
+        _pos_int(self.frames, "frames")
+
+    def points(self) -> list[tuple[float, float]]:
+        """→ 落了点的格子中心(狗身系,米)。"""
+        n, r = self.size, self.res
+        b = unpack_bits(self.bits, n)
+        return [((i // n - n / 2 + 0.5) * r, (i % n - n / 2 + 0.5) * r)
+                for i, v in enumerate(b) if v]
+
+
+@dataclass(frozen=True)
 class Heartbeat:
     T: ClassVar[str] = "hb"
     seq: int
@@ -156,8 +194,8 @@ class Error:
         _text(self.reason, "reason", 200)
 
 
-Message = Hello | Grid | Heartbeat | Error
-_TYPES: dict[str, type] = {c.T: c for c in (Hello, Grid, Heartbeat, Error)}
+Message = Hello | Grid | Wall | Heartbeat | Error
+_TYPES: dict[str, type] = {c.T: c for c in (Hello, Grid, Wall, Heartbeat, Error)}
 
 
 def encode(msg: Message) -> bytes:

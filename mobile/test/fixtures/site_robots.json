@@ -77,6 +77,7 @@
           "zones_set": {
             "enforced": false,
             "erase": true,
+            "ignore": true,
             "rev": 0,
             "teleop_hard": true
           }
@@ -84,7 +85,7 @@
       },
       "clock_skew_s": 0.0,
       "devices": null,
-      "expires_at": 1793866154666,
+      "expires_at": 1794022911773,
       "fresh": true,
       "held": null,
       "loc": {
@@ -127,9 +128,9 @@
         }
       },
       "status": {
-        "boot_id": "boot-017c7df450",
+        "boot_id": "boot-7350c89a39",
         "control_epoch": 1,
-        "last_seen": 1792866155351,
+        "last_seen": 1793022912445,
         "online": true,
         "ready": {
           "control": true,

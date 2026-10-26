@@ -825,6 +825,36 @@ describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出狗�
     expect(zones[1].hard).toBeUndefined();
   });
 
+  it("W41 画人员忽略区:没有硬禁区、限速,种类 ignore;图上虚线框、图例、列表里写种类", async () => {
+    installScreenCTM();
+    const posted = site({ revision: 1, zones: [NOGO] });
+    const r = render(<MapsZonesPage say={() => {}} />);
+    await ready(r.container);
+    fireEvent.click(r.getByText("Draw person-ignore zone"));
+    await tick();
+    await clickAt(r, [[-8, 6], [-4, 6], [-4, 3]]);
+    fireEvent.click(r.getByText("Finish"));
+    await tick();
+    const dlg = r.container.ownerDocument.querySelector("dialog")!;
+    expect(dlg.textContent).toContain("not reported");
+    expect(dlg.querySelectorAll('input[type="checkbox"]').length).toBe(1);   // 只有「临时」,没有硬禁区
+    fireEvent.submit(dlg.querySelector("form")!);
+    await waitFor(() => expect(posted.length).toBe(1));
+    const z = posted[0].body.zones[1];
+    expect(z).toMatchObject({ kind: "ignore", label: "Person-detection ignore zone" });
+    expect(z.id.startsWith("i")).toBe(true);
+    expect(z.hard).toBeUndefined();
+    expect(z.max_speed_mps).toBeUndefined();
+    cleanup();
+    const IGN = { id: "i2", kind: "ignore", label: "展品", polygon: [[-8, 6], [-4, 6], [-4, 3]] } as unknown as NavZone;
+    site({ revision: 2, zones: [NOGO, IGN] });
+    const r2 = render(<MapsZonesPage say={() => {}} />);
+    await ready(r2.container);
+    await waitFor(() => expect(r2.container.querySelector("g.map-world polygon.ignore-area")).not.toBeNull());
+    expect(legend(r2.container)).toContain("ignore");
+    expect(r2.container.querySelector('[data-navzone="i2"]')?.textContent).toContain("Person-detection ignore zone");
+  });
+
   it("虚拟墙画成一条粗线(画的那条),硬的实线;图例有虚拟墙;列表里写种类", async () => {
     installScreenCTM();
     site({ revision: 2, zones: [NOGO, WALL], confirmed: { revision: 2, by: "alice", at_ms: 0, current: true, how: "tighten" } });

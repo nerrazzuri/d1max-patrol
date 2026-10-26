@@ -557,3 +557,26 @@ def test_W35_自检没过之后_趴着站着的帧掺在一起_不算过():
     for i in range(12 * REFIT_EVERY):                           # 每一轮都是 3 次歪的、1 次正的
         c.feed(场景() if (i // REFIT_EVERY) % 4 == 3 else lying)
         assert c.check == "extrinsic_bad"
+
+
+def test_W41_墙那一层_攒一秒发一条wall_合契约_只要离地04到18米的():
+    from d1max_contract.obsbridge import Wall, parse
+    m = Mount.from_frames(AIRY)
+    obs = 假对端()
+    t = [0.0]
+    per = Perception(m, cfg=Config(), obs=LineClient(lambda: obs.a, {"t": "hello", "proto": 1}),
+                     clock=lambda: t[0])
+    per.check = SelfCheck(frames=2)
+    # 2 m 外一面 1.5 m 高的墙,1 m 外一个 0.3 m 高的矮箱子(不在墙那一层)
+    pts = np.vstack([场景(box=((2.0, 2.1), (-1.0, 1.0), 1.5)),
+                     场景(box=((1.0, 1.2), (-0.1, 0.1), 0.3))[-200:]])
+    sensor = 到雷达系(m, pts)
+    for _ in range(14):
+        per.on_front(sensor, 10)
+        t[0] += 0.1
+    walls = [x for x in obs.read() if x["t"] == "wall"]
+    assert len(walls) == 1, walls
+    w = parse(json.dumps(walls[0]).encode())
+    assert isinstance(w, Wall) and w.frames >= 10
+    xs = [p for p in w.points()]
+    assert xs and all(1.95 <= x <= 2.15 and abs(y) <= 1.05 for x, y in xs), xs[:5]

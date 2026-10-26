@@ -51,7 +51,10 @@ from typing import Any
 from d1max_contract.errors import ContractError
 from d1max_contract.maps import check_name
 
-KINDS = ("nogo", "slow", "erase")
+KINDS = ("nogo", "slow", "erase", "ignore")
+#: 人员检测忽略区(W41,2026-10-26 现场:展厅里的人形机器人、展品一直被当成人):检测到的人落在这里面
+#: 不算。**不管狗怎么走**(规划、守卫、收紧判定、内容摘要都不看它);老代理不认,站点发给它的那份去掉。
+IGNORE = "ignore"
 #: 狗不许进的种类:禁行、抹掉(规划、每拍回退、狗在里面就停,两样一模一样)。
 KEEP_OUT = ("nogo", "erase")
 MAX_ZONES = 200
@@ -414,6 +417,17 @@ class ZoneSet:
     def slow(self) -> tuple[Zone, ...]:
         return tuple(z for z in self.zones if z.kind == "slow")
 
+    def ignore(self) -> tuple[Zone, ...]:
+        """人员检测忽略区(W41)。"""
+        return tuple(z for z in self.zones if z.kind == IGNORE)
+
+    def without_ignore(self) -> ZoneSet:
+        """发给不认忽略区的老代理的那一份:去掉忽略区,修订号不变(对狗怎么走一模一样)。"""
+        if not any(z.kind == IGNORE for z in self.zones):
+            return self
+        return ZoneSet(self.map_id, self.map_version, self.revision,
+                       tuple(z for z in self.zones if z.kind != IGNORE))
+
     def erase(self) -> tuple[Zone, ...]:
         """抹掉区:站点画图时抹成没建图的那几块。"""
         return tuple(z for z in self.zones if z.kind == "erase")
@@ -464,8 +478,10 @@ def zones_digest(zs: ZoneSet) -> str:
     站点从自己存的算,狗从它落了盘、正在守的那份算,两边对:修订号一样、内容不一样(站点从旧备份
     恢复后又改了一次,正好改到同一个号)也认得出来。字段顺序、浮点写法都由 JSON 的规范写法定死,
     两头用同一个函数。"""
-    # 墙线(``wall``)不算:显示用的,狗按多边形守;还不认它的狗回报的摘要照样对得上
-    wires = [{k: v for k, v in z.to_wire().items() if k != "wall"} for z in zs.zones]
+    # 墙线(``wall``)不算:显示用的,狗按多边形守;还不认它的狗回报的摘要照样对得上。忽略区(W41)也不算:
+    # 不管狗怎么走,老代理收到的那份里没有它
+    wires = [{k: v for k, v in z.to_wire().items() if k != "wall"} for z in zs.zones
+             if z.kind != IGNORE]
     body = {"map_id": zs.map_id, "map_version": zs.map_version,
             "zones": sorted(wires, key=lambda w: str(w.get("id")))}
     raw = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -476,6 +492,8 @@ def _as_strict(new: Zone, old: Zone) -> bool:
     """``new`` 这个区域的规矩不比 ``old`` 松(不看几何)。"""
     if not (new.until_ms is None or (old.until_ms is not None and new.until_ms >= old.until_ms)):
         return False                                        # 到期提前了(含永久改临时)
+    if IGNORE in (old.kind, new.kind):                       # 忽略区只跟忽略区比(不管狗怎么走)
+        return old.kind == new.kind
     if old.keep_out:                                        # 禁行、抹掉:对狗一样严
         return new.keep_out and (new.hard or not old.hard)
     if new.keep_out:
@@ -506,5 +524,6 @@ def tightens(old: ZoneSet, new: ZoneSet, *, now_ms: int | None = None) -> bool:
     ``now_ms`` 给了的话,``old`` 里到期了的不用再盖(站点会删它)。"""
     if (old.map_id, old.map_version) != (new.map_id, new.map_version):
         return False
+    # 忽略区(W41)不管狗怎么走:加、删都不算放宽,也不替别的放宽顶账
     return all(covered(z, new.zones) for z in old.zones
-               if now_ms is None or not z.expired(now_ms))
+               if z.kind != IGNORE and (now_ms is None or not z.expired(now_ms)))
