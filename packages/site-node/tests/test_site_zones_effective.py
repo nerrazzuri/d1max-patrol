@@ -314,6 +314,108 @@ def test_R1_守着的临时区到期_站点删_出新修订(tmp_path):
     assert eff.revision == before.revision + 1 and len(eff.hard()) == 1
 
 
+# 外审 R1-续1(2026-10-15 PR #170 复查):到期清理判「能不能带上确认」原来跟最后确认的那一份比 ——
+# 一个不相干的临时区到期,会把另一项还等人确认的放宽一起批了(永久硬禁区的保护被撤、还标成已确认)。
+# 改成跟在生效的那一份比(到期的不用再盖):只解除到期的那一项。
+
+WORK = {"id": "work", "kind": "nogo", "hard": True, "label": "施工",
+        "polygon": [[20, 20], [21, 20], [21, 21], [20, 21]], "until_ms": 5000}
+
+
+def _poly(d: dict) -> tuple:
+    return tuple(map(tuple, d["polygon"]))
+
+
+def _到期后(z, t) -> ZoneSet:
+    t[0] = 6000
+    assert z.expire(), "施工区到期了要出新修订"
+    eff = z.effective("m", "1")
+    assert _poly(WORK) not in {x.polygon for x in eff.zones}, "到期的施工区删掉"
+    return eff
+
+
+def test_R1续1_无关临时区到期_待删的永久硬禁区不跟着批(tmp_path):
+    z, t = _z(tmp_path)
+    z.put("m", "1", [HARD, WORK], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [STEP, WORK], base_revision=1, by="a")         # 删泳池、加台阶:台阶当场生效
+    z.put("m", "1", [HARD, WORK], base_revision=2, by="a")         # 再删台阶:等确认
+    assert not z.confirmed_current("m", "1")
+    eff = _到期后(z, t)
+    assert _硬的几何(eff) == {_poly(HARD), _poly(STEP)}, "台阶还没人批准删,照旧守"
+    assert not z.confirmed_current("m", "1"), "删台阶还等确认,不能当成到期顺带批了"
+    v = z.view("m", "1")
+    assert v["confirmed"]["how"] == "confirm" and v["confirmed"]["revision"] == 1
+
+
+def test_R1续1_放大的台阶待缩回_到期不批(tmp_path):
+    z, t = _z(tmp_path)
+    z.put("m", "1", [HARD, WORK], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [STEP_BIG, WORK], base_revision=1, by="a")     # 删泳池、加大台阶
+    z.put("m", "1", [HARD, STEP, WORK], base_revision=2, by="a")   # 泳池回来、台阶缩小:等确认
+    eff = _到期后(z, t)
+    assert _poly(STEP_BIG) in _硬的几何(eff), "大台阶还守着"
+    assert not z.confirmed_current("m", "1")
+
+
+def test_R1续1_调低的限速待调回_到期不批(tmp_path):
+    z, t = _z(tmp_path)
+    z.put("m", "1", [SLOW, HARD, WORK], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [SLOW | {"max_speed_mps": 0.1}, WORK], base_revision=1, by="a")
+    z.put("m", "1", [SLOW, HARD, WORK], base_revision=2, by="a")  # 调回 0.3:等确认
+    eff = _到期后(z, t)
+    assert min(x.max_speed_mps for x in eff.slow()) == 0.1
+    assert not z.confirmed_current("m", "1")
+
+
+def test_R1续1_同名守着的硬标记_到期照旧守(tmp_path):
+    z, t = _z(tmp_path)
+    z.put("m", "1", [HARD, WORK], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [POND, STEP, WORK], base_revision=1, by="a")   # 去掉泳池的硬标记、加台阶
+    z.put("m", "1", [POND, WORK], base_revision=2, by="a")         # 再删台阶
+    eff = _到期后(z, t)
+    assert _硬的几何(eff) == {_poly(HARD), _poly(STEP)}, "泳池按硬的守(换了名字)、台阶也守"
+    assert not z.confirmed_current("m", "1")
+
+
+def test_R1续1_站点重启后到期_照样不批(tmp_path):
+    z, t = _z(tmp_path)
+    z.put("m", "1", [HARD, WORK], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [STEP, WORK], base_revision=1, by="a")
+    z.put("m", "1", [HARD, WORK], base_revision=2, by="a")
+    z.db.close()
+    z2 = NavZones(SiteDB(tmp_path / "s.db"), now_ms=lambda: t[0])
+    eff = _到期后(z2, t)
+    assert _硬的几何(eff) == {_poly(HARD), _poly(STEP)}
+    assert not z2.confirmed_current("m", "1")
+
+
+def test_R1续1_等确认的只是提前删临时区_到期后自动算确认(tmp_path):
+    """反过来:等确认的那项放宽就是提前删施工区,到期之后这项放宽已经不放宽了 —— 带上确认。"""
+    z, t = _z(tmp_path)
+    z.put("m", "1", [HARD, WORK], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    z.put("m", "1", [HARD], base_revision=1, by="a")               # 提前删施工区:等确认
+    assert not z.confirmed_current("m", "1")
+    eff = _到期后(z, t)
+    assert _硬的几何(eff) == {_poly(HARD)}
+    assert z.confirmed_current("m", "1")
+    assert z.view("m", "1")["confirmed"]["how"] == "expiry"
+
+
+def test_R1续1_全都确认过_只有到期_自动算确认(tmp_path):
+    z, t = _z(tmp_path)
+    z.put("m", "1", [HARD, STEP, WORK], base_revision=0, by="a")
+    z.confirm("m", "1", revision=1, by="a")
+    eff = _到期后(z, t)
+    assert _硬的几何(eff) == {_poly(HARD), _poly(STEP)}
+    assert z.confirmed_current("m", "1")
+
+
 def test_R1_装不下_守着上一份在生效的(tmp_path):
     from d1max_contract.zones import MAX_ZONES
     z, _ = _z(tmp_path)

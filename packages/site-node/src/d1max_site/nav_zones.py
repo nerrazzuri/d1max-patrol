@@ -15,7 +15,7 @@
   收紧也不算确认:那一句还没人说过。
 - **临时区**:区域可以带 ``until_ms``(或者接口给 ``for_s`` 时长,按**站点的钟**换成到期时刻 ——
   手机的钟可能不准)。到期由站点删(:meth:`expire`,每 10 秒一轮),删完是新修订、照常发给狗。
-  到期是放宽,但到期时间是写在确认过的那一份里的,**算预先确认过**:跟最后确认的那一份比(到期的不用
+  到期是放宽,但到期时间是写在确认过的那一份里的,**算预先确认过**:跟原来在生效的那一份比(到期的不用
   再盖住)还是只收紧就带上确认(``confirmed_how = 'expiry'``,确认人 ``site:expiry``);当前这一版本来
   就没确认的,删完照样没确认。狗不按自己的钟删(狗的钟可能是错的;过期了还守着是往安全那边错)。
 
@@ -365,8 +365,8 @@ class NavZones:
 
     def expire(self) -> list[ZoneSet]:
         """删掉到期了的临时区:每个有到期区域的几何版本出一个新修订(``updated_by = site:expiry``);
-        跟最后确认过的那一份比还是只收紧的,带上确认(``confirmed_how = 'expiry'``)。回改了的那几份
-        (调用方发给狗)。"""
+        跟原来**在生效的**那一份(去掉到期的)比还是只收紧的,带上确认(``confirmed_how = 'expiry'``),
+        还有别的放宽等人确认的照旧不确认(外审 R1-续1)。回改了的那几份(调用方发给狗)。"""
         now = self._now()
         out: list[ZoneSet] = []
         for r in self.db.query("SELECT map_id, map_version FROM nav_zones "
@@ -393,7 +393,9 @@ class NavZones:
                            "WHERE map_id=? AND map_version=?",
                            (new.revision, json.dumps(new.to_wire(), ensure_ascii=False),
                             EXPIRY_BY, now, new.map_id, new.map_version))
-                confirmed = ok is not None and tightens(ok, new, now_ms=now)
+                # 外审 R1-续1:跟**在生效的**那一份比(到期的不用再盖),不跟最后确认的比 —— 不然一个
+                # 不相干的临时区到期,会把另一项还等人确认的放宽(删永久硬禁区、缩、调高限速)一起批了
+                confirmed = ok is not None and tightens(eff, new, now_ms=now)
                 if confirmed:
                     self._mark_confirmed(tx, new.map_id, new.map_version, new, EXPIRY_BY, now,
                                          "expiry")
