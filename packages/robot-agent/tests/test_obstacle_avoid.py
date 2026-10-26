@@ -368,10 +368,11 @@ async def test_带链路延迟_起步切步态_刹车上限_也不撞(tmp_path):
     assert NavStatus.SUCCEED in t.status, t.status
 
 
-async def test_要掉头_身后看不见就不转_后雷达开着先往前挪再转(tmp_path):
-    """内审测试漏洞:原来只跑 3 s。身后、身侧没看过:不原地转,先往前挪,再转、走到。
+async def test_要掉头_身后看不见就不转_没后雷达先往前挪_有后雷达往终点那头退(tmp_path):
+    """内审测试漏洞:原来只跑 3 s。身后、身侧没看过:不原地转,先挪,再转、走到。
     W35:原来挪 1.0 m,没后雷达时转身那一圈最靠后的一条还没看过,挪了也转不过去、等满 20 s 放弃;
-    现在挪 1.3 m,转身那一圈全在前雷达刚看过的范围里,没后雷达也转得过去(每一步照样过守卫)。"""
+    现在挪 1.3 m,转身那一圈全在前雷达刚看过的范围里,没后雷达也转得过去(每一步照样过守卫)。
+    W41:终点在身后、后雷达标过 → 往后退(朝着终点),不再背着终点往前挪。"""
     blind = 台子(tmp_path, rear=False)
     await blind.start(5.0, 4.0, yaw=0.0)
     await blind.nav.goto(Pose.from_xy_yaw(2.0, 4.0))            # 目标在身后
@@ -395,7 +396,8 @@ async def test_要掉头_身后看不见就不转_后雷达开着先往前挪再
         if seeing.status and seeing.status[-1] is NavStatus.STANDBY:
             break
     assert NavStatus.SUCCEED in seeing.status and not seeing.crashed
-    assert max(xs) > 5.0 + CREEP_M - 0.2, "先往前挪了,再转"
+    assert max(xs) < 5.0 + 0.05, "不背着终点往前挪"
+    assert min(xs) < 5.0 - CREEP_M + 0.2, "往终点那头退了,再转"
 
 
 async def test_W34_现场视野_起步是弧线_只被两侧看不见挡住_先直着挪再走到(tmp_path):
@@ -411,14 +413,26 @@ async def test_W34_现场视野_起步是弧线_只被两侧看不见挡住_先�
     assert NavStatus.SUCCEED in t.status and not t.crashed, (t.status, t.nav.fail_reason)
 
 
-async def test_W34_现场视野_弧线被挡_前面真有东西_不挪照停(tmp_path):
-    """身外真有挡(正前方看得见的那块里):不往前挪,原地等、到时候放弃,不撞。"""
+async def test_W34_现场视野_弧线被挡_前面真有东西_不往前挪(tmp_path):
+    """身外真有挡(正前方看得见的那块里):不往前挪,不撞。W41:后雷达标过就往后退一个机身长,再绕过去;
+    没后雷达就原地等、到时候放弃。"""
     t = 台子(tmp_path, rear=True, cone=True, walls=[(3.85, 3.7, 3.95, 4.3)])
     await t.start(3.0, 4.0, yaw=0.0)
     await t.nav.goto(Pose.from_xy_yaw(5.0, 4.6))
-    await t.跑(40.0)
-    assert not t.crashed and t.r.x < 3.0 + 0.1, "前面挡着:不挪"
-    assert not t.nav._crept
+    xs = []
+    for _ in range(900):
+        await t.一拍()
+        xs.append(t.r.x)
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    assert not t.crashed and NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+    assert min(xs) < 3.0 - 1.0, "先往后退了"
+    blind = 台子(tmp_path, rear=False, cone=True, walls=[(3.85, 3.7, 3.95, 4.3)])
+    await blind.start(3.0, 4.0, yaw=0.0)
+    await blind.nav.goto(Pose.from_xy_yaw(5.0, 4.6))
+    await blind.跑(40.0)
+    assert not blind.crashed and blind.r.x < 3.0 + 0.1, "前面挡着、后面看不见:不挪"
+    assert not blind.nav._crept
 
 
 async def test_W34_转向被挡_有实打实的挡就不往前挪_只有看不见才挪(tmp_path):
@@ -741,8 +755,8 @@ async def test_W35_往前挪_机身要压上地图里的墙就不挪_狗身下�
 
 async def test_W35_弧线被拦_原地转也被拦_就不转(tmp_path):
     """弧线被拦时改成原地转,前提是原地转那条自己过得了守卫:刚起步两侧没看过、前面又有东西(挪不了),
-    哪条都过不了 —— 原地不动。"""
-    t = 台子(tmp_path, rear=True, cone=True, walls=[(3.85, 3.7, 3.95, 4.3)])
+    哪条都过不了 —— 原地不动(没后雷达;有后雷达的往后退见 W34 那条)。"""
+    t = 台子(tmp_path, rear=False, cone=True, walls=[(3.85, 3.7, 3.95, 4.3)])
     await t.start(3.0, 4.0, yaw=0.0)
     await t.nav.goto(Pose.from_xy_yaw(5.0, 4.6))
     await t.跑(8.0)
@@ -805,3 +819,98 @@ async def test_外审I2_前面是过得去的限速区_挪的时候不超它的�
             break
     assert t.nav._crept or fast > 0, "这一趟确实挪了"
     assert 0 < fast <= 0.1 + 1e-6, f"挪的时候 {fast} m/s,限速 0.1"
+
+
+# ---------------------------------------------------------------- W41(2026-10-26 C40221 第三轮)
+
+
+async def test_W41_现场视野_正前方箱子不拿走_两侧没看过_退一步再绕过去_不等到放弃(tmp_path):
+    """3f.16 / 3x.5(2026-10-26):正前方被挡,绕行要先转身,转身被「机身两侧没看过」拦住
+    (现场「有挡 0 处、看不见 149 处」),「先往前挪」又被箱子挡住 → 原地等满 20 s 放弃。
+    后雷达标过:往后退一个机身长(后雷达看着),两侧就看过了,再转、绕过去。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    t.world.dyn["box"] = (5.1, 3.5, 5.7, 4.5)
+    await t.start(4.4, 4.0)                                   # 起步就被挡:两侧一格都没看过
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    xs = []
+    for _ in range(900):
+        await t.一拍()
+        xs.append(t.r.x)
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    assert not t.crashed
+    assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason, t.events)
+    assert min(xs) < 4.4 - 1.0, "先往后退了"
+
+
+async def test_W41_现场视野_箱子拿走了_几秒内接着走_不等满20秒(tmp_path):
+    """3x.6:拿走箱子后晚了约 19 s 才走(路已经换成绕行的,转身照样被两侧看不见拦住)。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    t.world.dyn["box"] = (5.1, 3.5, 5.7, 4.5)
+    await t.start(4.4, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(4.0)
+    del t.world.dyn["box"]
+    await t.跑(6.0)
+    assert NavStatus.FAILED not in t.status, t.nav.fail_reason
+    assert t.nav._blocked_since is None, "6 s 内接着走了"
+    await t.跑(60.0)
+    assert NavStatus.SUCCEED in t.status and not t.crashed
+
+
+async def test_W41_离点只剩03米_转向被看不见挡住_不往前冲过头(tmp_path):
+    """3f.30:离点只剩 0.2、0.4 m 也往前挪满 1.3 m,冲过头 1 m 多,还记「到了」(狗停在 0.93 m 外)。
+    现在:往前挪会冲过终点就不往前;后雷达标过往后退、再走回来;没后雷达就原地等(到时候放弃),不冲。
+    记「到了」的时候狗一定在点上。"""
+    goal = Pose.from_xy_yaw(5.3, 4.25)
+    for rear in (True, False):
+        t = 台子(tmp_path, rear=rear, cone=True)
+        await t.start(5.0, 4.0, yaw=0.0)
+        await t.nav.goto(goal)
+        xs = []
+        for _ in range(900):
+            await t.一拍()
+            xs.append(t.r.x)
+            if t.status and t.status[-1] is NavStatus.STANDBY:
+                break
+        assert not t.crashed
+        assert max(xs) < 5.3 + 0.3, (rear, max(xs))
+        if rear:
+            assert NavStatus.SUCCEED in t.status, (t.status, t.nav.fail_reason)
+            assert min(xs) < 5.0 - 1.0, "往后退了"
+        if NavStatus.SUCCEED in t.status:
+            assert math.hypot(t.r.x - 5.3, t.r.y - 4.25) < 0.3, "记到了就在点上"
+
+
+async def test_W41_对朝向时被挪开_不算到了_重新走过去(tmp_path):
+    """进了「对朝向」以后离点超过容差 + 0.15 m(往后退了、定位一跳),不再按「在点上」对完朝向就
+    记到了。"""
+    t = 台子(tmp_path, rear=True, cone=True)
+    await t.start(3.0, 4.0, yaw=0.0)
+    await t.nav.goto(Pose.from_xy_yaw(5.0, 4.0, 0.5))
+    for _ in range(300):
+        await t.一拍()
+        if t.nav._aligning:
+            break
+    assert t.nav._aligning
+    t.r.teleport(t.r.x - 0.6, t.r.y, t.r.yaw)                 # 对朝向的时候被挪开 0.6 m
+    for _ in range(600):
+        await t.一拍()
+        if t.status and t.status[-1] is NavStatus.STANDBY:
+            break
+    assert NavStatus.SUCCEED in t.status, t.nav.fail_reason
+    assert math.hypot(t.r.x - 5.0, t.r.y - 4.0) < 0.3
+
+
+async def test_W41_放弃时写清楚前面真有挡_不只写转身那次的有挡0处(tmp_path):
+    t = 台子(tmp_path, rear=False, cone=True)
+    t.world.dyn["box"] = (5.1, 3.5, 5.7, 4.5)
+    await t.start(4.4, 4.0)
+    await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0))
+    await t.跑(40.0)
+    assert NavStatus.FAILED in t.status and not t.crashed
+    why = t.nav.fail_reason
+    assert why.startswith("被挡 ") and "扫过区有挡 0 处" not in why, why
+    assert "两侧看不见" in why, why
+    blocked = [d["reason"] for k, d in t.events if k == "nav_blocked"]
+    assert blocked and "扫过区有挡 0 处" not in blocked[0], blocked

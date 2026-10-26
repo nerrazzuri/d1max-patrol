@@ -88,6 +88,19 @@ TEMP_OBSTACLE_S = 30.0
 #: 要挪过:外接圆半径 0.59 + 机头盲区 0.47 + 一格 0.1 + 感知延迟那几厘米 ≈ 1.2,取 1.3。
 CREEP_M = 1.3
 CREEP_V = 0.2
+#: W41(2026-10-26 C40221):「挪」往哪边、挪不挪 —— 现场两个毛病:①正前方被挡时往前挪不动,转身又被
+#: 两侧看不见拦住,原地等满 20 s 放弃;②离点只剩 0.2 m 也往前挪满 1.3 m,沿当时的朝向冲过头 1 m 多、
+#: 往展台那侧偏 0.7 m;终点在身后也背着终点挪。现在按这个顺序挑:
+#:   1. 往前挪**顺路**(挪完离路径不超过 :data:`CREEP_OFF_PATH_M`、而且挪完离终点还有一段)→ 往前;
+#:   2. 不顺路就**往后退**一个机身长(后雷达看着、跟往前挪一样查地图和区域)—— 后雷达标过才过得了守卫;
+#:   3. 退不了,往前挪不会冲过终点(终点在身后、或者远在 1.3 m 之外)→ 还按老办法往前挪;
+#:   4. 都不行 → 原地等(到时候放弃)。
+CREEP_OFF_PATH_M = 0.4
+#: 同一段最多挪几次(往后退完又走回来、两侧还是看不见:不来回折腾)。
+MAX_CREEPS = 3
+#: 对朝向的时候被挪开(往后退)、或者定位一跳,离点超过到点容差 + 这么多 → 不算在对朝向了,重新走过去
+#: (W41:原来进了「对朝向」就一直算在点上,挪了 1.3 m 照样记「到了」,狗停在 0.93 m 外)。
+REALIGN_M = 0.15
 #: 偏离路径多远就停下重规划(W10 内审应修 5:原来 1 m,比膨胀半径还大)。
 MAX_DEVIATION_M = 0.3
 #: 每拍回退检查(S7):机身扫过的那一段(此刻速度再走一拍、再刹停)离当禁行的区域不到 σ + 这么多、而且
@@ -175,7 +188,18 @@ class PlannedNavBackend(HalNavBackend):
         self._detoured = False
         self._replan_kind = ""
         self._creep_from: tuple[float, float] | None = None
+        #: 这次挪的方向:+1 顺着行进方向往前,−1 往后退(W41)。
+        self._creep_way = 1
         self._crept = False
+        #: 这一段挪了几次(W41,:data:`MAX_CREEPS`)。
+        self._creeps = 0
+        #: 挪完了、下一次偏离重规划不算次数(挪本来就是离开路径)。
+        self._after_creep = False
+        #: 最近一次「真有挡」的原因和时刻(W41:放弃时只写最后一次转身的「有挡 0 处」会误导)。
+        #: 现场是被箱子挡 → 2 s 绕行、开始转(算「不被挡」了一下)→ 转身被两侧看不见拦住:
+        #: 跨过中间那一下也要记得。
+        self._hit_reason = ""
+        self._hit_at = -math.inf
         #: 临时障碍层:地图规划栅格的格 → 过期时刻(秒,后端的钟)。
         self._temp: dict[tuple[int, int], float] = {}
 
@@ -501,12 +525,13 @@ class PlannedNavBackend(HalNavBackend):
         """正在走的规划路径(地图坐标,米);没在走(没规划、收尾了)是 ``None``。给遥测上报用。"""
         return self._path.points if self._path is not None else None
 
-    def _start_replan(self, *, detour: bool = False, why: str = "off_route") -> None:
+    def _start_replan(self, *, detour: bool = False, why: str = "off_route",
+                      free: bool = False) -> None:
         if self._replan is not None and not self._replan.done():
             return
         self._replan_kind = "detour" if detour else ""
-        if detour:
-            pass                         # 绕障不算偏离重规划的次数(被挡另有 20 s 的账)
+        if detour or free:
+            pass                         # 绕障、挪完不算偏离重规划的次数(被挡另有 20 s 的账)
         elif self._replans >= MAX_REPLANS:
             self._replan_out = ("fail", f"重规划了 {MAX_REPLANS} 次还是走不上路径", 0)
             return
@@ -543,6 +568,10 @@ class PlannedNavBackend(HalNavBackend):
             self._invalidate()
         self._creep_from = None
         self._crept = False
+        self._creeps = 0
+        self._after_creep = False
+        self._hit_reason = ""
+        self._hit_at = -math.inf
         self._blocked_since = None
         self._blocked_told = False
         self._detoured = False
@@ -659,7 +688,12 @@ class PlannedNavBackend(HalNavBackend):
             await self._fail("没有路径")
             return
         dgoal = math.hypot(target.position.x - here.x, target.position.y - here.y)
+        if self._aligning and dgoal > ARRIVE_TOL_M + REALIGN_M and self._creep_from is None:
+            log.info("对朝向的时候离点 %.2f m 了:重新走过去", dgoal)
+            self._aligning = False                       # W41:不在点上就不算到了
         if self._aligning or dgoal <= ARRIVE_TOL_M:
+            if self._creep_from is not None and self._creep_way > 0:
+                self._creep_from = None                  # W41:往前挪到了点上就不再往前挪
             self._aligning = True
             err = _wrap(target.yaw - here.yaw)
             if abs(err) <= YAW_TOL_RAD:
@@ -672,9 +706,13 @@ class PlannedNavBackend(HalNavBackend):
         # 一次,正好用光 3 次的额度,再多一次就「走不上路径」失败
         if dev > MAX_DEVIATION_M and self._creep_from is None:
             log.warning("偏离路径 %.2f m,从当前位置重规划", dev)
-            self._start_replan()
+            # 挪完离开了路径(挪本来就是为了绕):记成绕障,不算偏离重规划的次数
+            self._start_replan(free=self._after_creep, why="detour" if self._after_creep
+                               else "off_route")
+            self._after_creep = False
             await self._send(0.0, 0.0, dt_s)
             return
+        self._after_creep = False
         pts = self._path.points
         while seg + 2 < len(pts) and math.dist((here.x, here.y), pts[seg + 1]) <= VERTEX_TOL_M:
             seg += 1                                     # 到了拐点:换下一段(对不准就原地转)
@@ -751,11 +789,13 @@ class PlannedNavBackend(HalNavBackend):
             moved = math.hypot(self._odom_pose[0] - self._creep_from[0],
                                self._odom_pose[1] - self._creep_from[1])
             if moved < CREEP_M:
-                # 往前挪着看两侧(守卫照样查)
-                vx, wz = (self._dir or 1) * self._creep_speed(here), 0.0
+                # 挪着看两侧(守卫照样查)
+                vx = (self._dir or 1) * self._creep_way * self._creep_speed(here, self._creep_way)
+                wz = 0.0
             else:
-                log.info("往前挪了 %.1f m,两侧看过了,接着转", moved)
+                log.info("%s了 %.1f m,两侧看过了,接着走", self._creep_word(), moved)
                 self._creep_from = None
+                self._after_creep = True
         if self.obstacles.state() in ("lost", "extrinsic_bad", "none"):
             from d1max_agent.obstacles import describe
             why = f"障碍数据{describe(self.obstacles.state())}"
@@ -793,28 +833,33 @@ class PlannedNavBackend(HalNavBackend):
             self._blocked_since = now
             self._next_detour = now + BLOCK_DETOUR_S
             log.info("被挡:%s", v.reason)
+        if v.hits:
+            self._hit_reason, self._hit_at = v.reason, now
+        reason = self._block_reason(v, now)
         waited = now - self._blocked_since
         await self._send(0.0, 0.0, dt_s)                 # 原地等(零速保住步态)
         if waited >= BLOCK_GIVEUP_S:
-            log.warning("被挡 %.0f s 还没走成:放弃这一段(%s)", waited, v.reason)
-            await self._fail(f"被挡 {waited:.0f} 秒还没走成({v.reason})")
+            log.warning("被挡 %.0f s 还没走成:放弃这一段(%s)", waited, reason)
+            await self._fail(f"被挡 {waited:.0f} 秒还没走成({reason})")
             return
         if waited >= BLOCK_REPORT_S and not self._blocked_told:
             self._blocked_told = True
             if self.on_event is not None:
-                self.on_event("nav_blocked", {"reason": v.reason, "x": round(here.x, 2),
+                self.on_event("nav_blocked", {"reason": reason, "x": round(here.x, 2),
                                               "y": round(here.y, 2),
                                               "waited_s": round(waited, 1)})
-        if (self._creep_from is None and not self._crept and not v.hits and abs(wz) > 1e-6
-                and not self._aligning and waited >= BLOCK_DETOUR_S
-                and self.guard.check((self._dir or 1) * CREEP_V, 0.0, self._v_meas,
-                                     self.obstacles, self._odom_pose).ok
-                and self._creep_clear(here)):
-            # 带转向(原地转、弧线)只被「看不见」挡住、前面看得清是空的:往前挪一个机身长再接着走
-            log.info("转向被看不见的格子挡住(机身两侧没看过):先往前挪 %.1f m", CREEP_M)
-            self._creep_from = (self._odom_pose[0], self._odom_pose[1])
-            self._crept = True
-            return
+        if (self._creep_from is None and not self._crept and self._creeps < MAX_CREEPS
+                and not v.hits and abs(wz) > 1e-6 and waited >= BLOCK_DETOUR_S):
+            way = self._pick_creep(here)
+            if way:
+                # 带转向(原地转、弧线)只被「看不见」挡住:往前挪 / 往后退一个机身长再接着走
+                self._creep_way = way
+                log.info("转向被看不见的格子挡住(机身两侧没看过):先%s %.1f m",
+                         self._creep_word(), CREEP_M)
+                self._creep_from = (self._odom_pose[0], self._odom_pose[1])
+                self._crept = True
+                self._creeps += 1
+                return
         if self._creep_from is not None:
             self._creep_from = None                     # 挪的时候前面也挡了:不挪了,接着等
         if now >= self._next_detour and v.hits and self._base is not None:
@@ -822,7 +867,61 @@ class PlannedNavBackend(HalNavBackend):
             self._remember(v.hits, here, now)
             self._start_replan(detour=True)
 
-    def _creep_clear(self, here: Any) -> bool:
+    def _block_reason(self, v: Any, now: float) -> str:
+        """给值班员看的被挡原因(W41):最后一次查的是转身(只有看不见),而这一回早先前面真有挡 →
+        两样都写,不然「有挡 0 处」会让人以为前面是空的。"""
+        if v.hits or not self._hit_reason or now - self._hit_at > TEMP_OBSTACLE_S:
+            return v.reason
+        return f"{self._hit_reason};绕开要转身,机身两侧看不见 {v.unknown} 处"
+
+    def _creep_word(self) -> str:
+        return "往前挪" if self._creep_way > 0 else "往后退"
+
+    def _can_creep(self, here: Any, way: int) -> bool:
+        """往 ``way`` 那头(+1 行进方向往前、−1 往后退)直着挪 :data:`CREEP_M`:守卫现看得清是空的、
+        地图和区域也让走。"""
+        return (self.guard.check((self._dir or 1) * way * CREEP_V, 0.0, self._v_meas,
+                                 self.obstacles, self._odom_pose).ok
+                and self._creep_clear(here, way))
+
+    def _creep_along(self, here: Any) -> float:
+        """终点在往前挪那条线上有多远(米;负的 = 在身后)。"""
+        assert self._target is not None
+        h = _heading(here.yaw, self._dir or 1)
+        return ((self._target.position.x - here.x) * math.cos(h)
+                + (self._target.position.y - here.y) * math.sin(h))
+
+    def _off_path(self, x: float, y: float) -> float:
+        """点离这条路径(从当前段往后)多远。"""
+        if self._path is None:
+            return math.inf
+        pts = self._path.points
+        best = math.inf
+        for i in range(self._seg, len(pts) - 1):
+            (ax, ay), (bx, by) = pts[i], pts[i + 1]
+            dx, dy = bx - ax, by - ay
+            L2 = dx * dx + dy * dy
+            t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / L2))
+            best = min(best, math.hypot(x - ax - t * dx, y - ay - t * dy))
+        return best
+
+    def _pick_creep(self, here: Any) -> int:
+        """挪的方向(W41,见 :data:`CREEP_OFF_PATH_M` 上面的说明):+1 往前、−1 往后退、0 不挪。对朝向的
+        时候不往前挪(挪了就不在点上了),往后退可以(退完重新走回来,两侧就看过了)。"""
+        along = self._creep_along(here) if self._target is not None else math.inf
+        fwd = not self._aligning and self._can_creep(here, 1)
+        if fwd and along >= CREEP_M + ARRIVE_TOL_M:
+            h = _heading(here.yaw, self._dir or 1)
+            if self._off_path(here.x + CREEP_M * math.cos(h),
+                              here.y + CREEP_M * math.sin(h)) <= CREEP_OFF_PATH_M:
+                return 1                                 # 顺路:往前挪本来就是往终点走
+        if self._can_creep(here, -1):
+            return -1
+        if fwd and not (0.0 < along < CREEP_M + ARRIVE_TOL_M):
+            return 1                                     # 退不了、也不会冲过终点:老办法
+        return 0
+
+    def _creep_clear(self, here: Any, way: int = 1) -> bool:
         """往前挪那一段在地图上也得能走:机身(含余量)扫过的那一条不压地图里的挡、不出图,离禁行区
         够远(内审阻断 1:原来只看守卫,禁行区要等狗身中心压上去才停 —— 落差在真机验过之前只靠禁行区
         挡)。
@@ -835,7 +934,7 @@ class PlannedNavBackend(HalNavBackend):
             return False
         blocked, res, origin = self._base
         rows, cols = blocked.shape
-        h = _heading(here.yaw, self._dir or 1)
+        h = _heading(here.yaw, (self._dir or 1) * way)
         c, s = math.cos(h), math.sin(h)
         hl = self.guard.body_len / 2 + self.guard.margin
         hw = self.guard.body_wid / 2 + self.guard.margin
@@ -871,12 +970,12 @@ class PlannedNavBackend(HalNavBackend):
                 return False
         return True
 
-    def _creep_speed(self, here: Any) -> float:
+    def _creep_speed(self, here: Any, way: int = 1) -> float:
         """往前挪的速度:不超过 :data:`CREEP_V`,也不超过机身前沿再往前半米这一段里限速区的上限
         (W35 外审 I2:原来固定 0.2 m/s,挪进限速 0.1 的区照样 0.2)。"""
         v = CREEP_V
         if self._cm is not None:
-            h = _heading(here.yaw, self._dir or 1)
+            h = _heading(here.yaw, (self._dir or 1) * way)
             c, s = math.cos(h), math.sin(h)
             ahead = self.guard.body_len / 2 + self.guard.margin + 0.5
             for i in range(int(ahead / 0.1) + 1):
