@@ -571,8 +571,12 @@ class SiteAlertSources:
             self._storage(rid, m, t.storage)
 
     def _nogo_check(self, rid: str, m: _Mem, pose: Any) -> None:
-        """「狗在禁行区里」的 P1:狗离开在生效的禁行区够远、连着够久就自己解决(W41)。"""
+        """「狗在禁行区里」的 P1:狗离开在生效的禁行区够远、连着够久就自己解决(W41)。定位不可信
+        (状态里 ``loc_ok`` 假)时报的位置不作数,重新计 —— 推算的位置可能离真位置很远。"""
         if self.nav_zones is None:
+            return
+        if m.loc_bad:
+            m.nogo_clear_since = None
             return
         from d1max_contract.zones import distance_to_polygon, point_in_polygon
         try:

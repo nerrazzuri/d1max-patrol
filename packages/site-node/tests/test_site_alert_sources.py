@@ -258,3 +258,45 @@ def test_W41_狗在禁行区里的P1_出了禁行区够远够久_或者区域删
     for _ in range(NOGO_CLEAR_S + 2):
         报(9.0)
     assert _开着的(desk, "nogo")
+
+
+def test_W41_定位不可信时报的位置不算出了禁行区(tmp_path):
+    """定位丢了、在推算时报的位置可能离真位置很远:狗可能还在池子里,P1 不能自己关。定位好了、
+    离开够远够久照常解决(从好了那一刻起重新计)。"""
+    from test_site_alerts import _status
+
+    from d1max_contract.messages import Event, MapPose, Telemetry
+    from d1max_contract.zones import ZoneSet
+    from d1max_site.alert_sources import NOGO_CLEAR_M, NOGO_CLEAR_S, SiteAlertSources
+    from d1max_site.alert_store import AlertDesk
+    from d1max_site.db import SiteDB
+    now = [1_000_000]
+    desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: now[0])
+    src = SiteAlertSources(desk, now_ms=lambda: now[0])
+    src.nav_zones = lambda mid, ver: ZoneSet.from_wire(
+        {"map_id": "m", "map_version": "1", "revision": 1, "zones": [
+            {"id": "pond", "kind": "nogo", "polygon": [[0, 0], [2, 0], [2, 2], [0, 2]]}]})
+
+    def 报(x):
+        now[0] += 1000
+        src.on_telemetry("A", Telemetry(
+            stamp=now[0], pose=MapPose(map_id="m", map_version="1", frame_id="map", x=x, y=1.0,
+                                       yaw=0.0), battery_pct=80.0, task_state=None,
+            loc_quality=0.2))
+
+    src.on_status("A", _status())
+    src.on_event("A", Event(event_id="e1", seq=1, boot_id="b1", stamp=1, kind="inside_nogo",
+                            data={"zone": "pond", "x": 1.0, "y": 1.0}))
+    assert _开着的(desk, "nogo")
+    src.on_status("A", _status(loc_ok=False))
+    far = 2.0 + NOGO_CLEAR_M + 3
+    for _ in range(NOGO_CLEAR_S + 5):
+        报(far)
+    assert _开着的(desk, "nogo"), "定位不可信:报的位置不作数"
+    src.on_status("A", _status())
+    for _ in range(NOGO_CLEAR_S - 1):
+        报(far)
+    assert _开着的(desk, "nogo"), "从定位好了那一刻起重新计"
+    报(far)
+    报(far)
+    assert not _开着的(desk, "nogo")
