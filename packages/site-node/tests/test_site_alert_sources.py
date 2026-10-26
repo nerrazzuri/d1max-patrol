@@ -202,3 +202,59 @@ def test_W21复查2_一台对账炸了_不挡别的台(tmp_path):
     _落库(db, "B", 1, "payload_siren", at=2)
     src.step()
     assert [a["robot"] for a in _开着的(desk, "payload_siren")] == ["B"]
+
+
+def test_W41_狗在禁行区里的P1_出了禁行区够远够久_或者区域删了_自己解决(tmp_path):
+    """2026-10-26 现场:禁行区删了、狗也不在里面了,P1 还挂着、也不提示能关。"""
+    from d1max_contract.messages import Event, MapPose, Telemetry
+    from d1max_contract.zones import ZoneSet
+    from d1max_site.alert_sources import NOGO_CLEAR_M, NOGO_CLEAR_S, SiteAlertSources
+    from d1max_site.alert_store import AlertDesk
+    from d1max_site.db import SiteDB
+    now = [1_000_000]
+    desk = AlertDesk(SiteDB(tmp_path / "s.db"), now_ms=lambda: now[0])
+    src = SiteAlertSources(desk, now_ms=lambda: now[0])
+    pond = {"map_id": "m", "map_version": "1", "revision": 3, "zones": [
+        {"id": "pond", "kind": "nogo", "label": "池子",
+         "polygon": [[0, 0], [2, 0], [2, 2], [0, 2]]}]}
+    zones = {"set": ZoneSet.from_wire(pond)}
+    src.nav_zones = lambda mid, ver: zones["set"]
+
+    def 报(x, dt=1000):
+        now[0] += dt
+        src.on_telemetry("A", Telemetry(
+            stamp=now[0], pose=MapPose(map_id="m", map_version="1", frame_id="map", x=x, y=1.0,
+                                       yaw=0.0), battery_pct=80.0, task_state=None,
+            loc_quality=1.0))
+
+    def 进去了():
+        src.on_event("A", Event(event_id=f"e{now[0]}", seq=1, boot_id="b", stamp=1,
+                                kind="inside_nogo", data={"zone": "pond", "label": "池子",
+                                                          "x": 1.0, "y": 1.0}))
+
+    进去了()
+    assert _开着的(desk, "nogo")
+    for _ in range(NOGO_CLEAR_S + 3):
+        报(1.0)                                                    # 还在里面
+    报(2.0 + NOGO_CLEAR_M / 2)                                     # 刚出来,离得不够远
+    assert _开着的(desk, "nogo")
+    for _ in range(NOGO_CLEAR_S - 1):
+        报(2.0 + NOGO_CLEAR_M + 0.1)
+    assert _开着的(desk, "nogo"), "还没够久"
+    报(2.0 + NOGO_CLEAR_M + 0.1)
+    报(2.0 + NOGO_CLEAR_M + 0.1)
+    assert not _开着的(desk, "nogo"), "出来够远够久:自己解决"
+    # 区域删了、生效了:狗还站在原地也解决
+    进去了()
+    报(1.0)
+    assert _开着的(desk, "nogo")
+    zones["set"] = ZoneSet.from_wire(pond | {"revision": 4, "zones": []})
+    for _ in range(NOGO_CLEAR_S + 1):
+        报(1.0)
+    assert not _开着的(desk, "nogo")
+    # 没接区域:不自己解决(老样子,等人关)
+    src.nav_zones = None
+    进去了()
+    for _ in range(NOGO_CLEAR_S + 2):
+        报(9.0)
+    assert _开着的(desk, "nogo")

@@ -422,9 +422,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         nonlocal stop
         stop = True
 
+    from d1max_localizer import rosinit
+    rosinit.init(rclpy)                                  # W41:不让 rclpy 抢停止信号
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    rclpy.init(args=None)
     node = rclpy.create_node("d1max_mapview")
     # best_effort:预览丢帧无所谓,不能让慢的 Python 订阅者拖住雷达(录包、MOLA 要全帧);也跟
     # reliable 的发送方配得上。

@@ -127,6 +127,8 @@ export function AlarmTile(props: {
         </span>
         <time class="mono">{hms(a.first_ms)}</time>
       </div>
+      {/* W41:报警卡片也要有定位那一行(出事时最要紧的就是它在哪、定位可不可信) */}
+      <RunInfo robot={u.robot} />
       <div class="pair">
         {CAMS.map((c) => <CameraWell key={c} robot={a.robot} cam={c} now={props.now} forceLive onOpen={() => props.onOpen(c)} />)}
       </div>

@@ -635,7 +635,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         host, port = a.sidecar.rsplit(":", 1)
         side = LineClient(lambda: socket.create_connection((host, int(port)), timeout=1.0), None)
     per = Perception(front, rear=rear, obs=obs, sidecar=side)
-    rclpy.init(args=None)
+    from d1max_localizer import rosinit
+    rosinit.init(rclpy)
+    stop = rosinit.stop_flag()                           # W41:正常停止退出码 0
     node = rclpy.create_node("d1max_obstacles")
     qos = QoSProfile(depth=2, history=HistoryPolicy.KEEP_LAST,
                      reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -663,7 +665,7 @@ def main(argv: Sequence[str] | None = None) -> int:
              a.socket, f",许可 → {a.sidecar}" if a.sidecar else "")
     hb = look = time.monotonic()
     try:
-        while rclpy.ok():
+        while rclpy.ok() and not stop.is_set():
             ex.spin_once(timeout_sec=0.2)
             if time.monotonic() - hb >= 1.0:
                 hb = time.monotonic()
@@ -675,6 +677,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     log.info("换图了(%s → %s):换外参、重新自检", cur[0], nxt[0])
                     cur = nxt
                     per.set_mount(*nxt[1])
+    except rosinit.shutdown_errors():
+        log.info("ROS 关了:停")
     finally:
         ex.shutdown()
         node.destroy_node()

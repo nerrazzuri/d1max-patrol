@@ -70,6 +70,8 @@ _LYING_MOTIONS = frozenset({SdkMotion.LIE_DOWN, SdkMotion.LOCKED})
 
 #: 里程多久没来算不新鲜(秒)。旁路进程 50 Hz 转发 ``OnMcData``,1 s 没来就是链路出事了。
 ODOM_STALE_S = 1.0
+#: 旁路进程发姿态帧的频率(W26;W41:能力里的 ``sensing.imu_hz`` 报它,原来写死 0)。
+IMU_HZ = 20
 #: 姿态帧(W26,20 Hz)多久没来算过期。
 IMU_STALE_S = 0.5
 #: 状态帧多久没来,就不拿它确认软急停(W26 复查)。
@@ -486,7 +488,7 @@ class D1MaxHal:
             max_vx=self.max_vx, max_wz=self.max_wz, deadband_vx=self._deadband, lateral=False,
             control_releasable=False, recharge_mode="none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": True,
-                     "joint_effort": False, "foot_force": False},
+                     "imu_hz": IMU_HZ, "joint_effort": False, "foot_force": False},
             actuators={"light": True, "head": False} | {
                 k: self._payload is not None and self._payload.has(k)
                 for k in ("strobe", "siren", "speaker", "spotlight")})

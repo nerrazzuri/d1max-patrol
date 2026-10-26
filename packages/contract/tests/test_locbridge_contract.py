@@ -114,3 +114,18 @@ def test_位姿可以说这一帧是它自己推了多久的():
     for bad in (-1, 1.5, True):
         with pytest.raises(ContractError):
             parse(_pose(meas_age_ms=bad))
+
+
+def test_W41_重定位带是不是人给的_缺省是人给的_不是布尔拒():
+    import pytest as _pt
+
+    from d1max_contract.errors import ContractError
+    from d1max_contract.locbridge import Relocalize, encode, parse
+    r = Relocalize(req=3, map_id="e", map_version="7", x=0.0, y=0.0, yaw=0.0, sigma_xy=0.5,
+                   human=False)
+    assert parse(encode(r)) == r
+    old = b'{"t":"relocalize","req":3,"map_id":"e","map_version":"7","x":0,"y":0,"yaw":0,' \
+          b'"sigma_xy":0.5}'
+    assert parse(old).human is True, "老代理不带:当人给的(跟原来一样)"
+    with _pt.raises(ContractError):
+        parse(old.replace(b"}", b',"human":1}'))

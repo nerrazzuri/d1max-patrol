@@ -387,3 +387,14 @@ def test_W40_老狗不报相机清单_当它有前后两路(站点):
     s = 站点
     s.disp.clients["A"].capabilities.tasks.pop("video", None)
     assert s.disp.cameras("A") == ("front", "back")
+
+
+def test_W41_帧率可配_没写是5_写错了报错():
+    import pytest as _pt
+
+    from d1max_site.video import FPS_DEFAULT, video_fps
+    assert video_fps({}) == FPS_DEFAULT == 5.0
+    assert video_fps({"fps": 15}) == 15.0 and video_fps({"fps": 12.5}) == 12.5
+    for bad in (0, 31, -1, "15", True, None, float("nan")):
+        with _pt.raises(ValueError, match="video.fps"):
+            video_fps({"fps": bad})

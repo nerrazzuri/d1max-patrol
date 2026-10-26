@@ -53,9 +53,16 @@ def compose_capabilities(*, robot_id: str, hal_caps: HalCapabilities, adapter_id
         sensing={"lidar": bool(hal_caps.sensing.get("lidar")),
                  "depth": bool(hal_caps.sensing.get("depth")),
                  "thermal": bool(hal_caps.sensing.get("thermal")),
-                 "imu_hz": 0,
+                 "imu_hz": _hz(hal_caps.sensing.get("imu_hz")),
                  "joint_effort": bool(hal_caps.sensing.get("joint_effort")),
                  "foot_force": bool(hal_caps.sensing.get("foot_force"))})
+
+
+def _hz(v: Any) -> int:
+    """HAL 报的 IMU 频率(W41:原来写死 0,受力检测明明在用 IMU);不是正的有限数就是 0。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v < 10_000:
+        return 0
+    return int(v)
 
 
 def compose_ready(health: Health, motion: MotionStatus, *, loc_ok: bool | None = None) -> Ready:

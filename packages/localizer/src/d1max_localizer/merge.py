@@ -116,7 +116,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError, LidarsError) as exc:
         log.warning("后雷达外参读不了(%s):只转发前雷达", exc)
     m = Merger(T if T is not None else np.eye(4))
-    rclpy.init(args=None)
+    from d1max_localizer import rosinit
+    rosinit.init(rclpy)
+    stop = rosinit.stop_flag()                           # W41:正常停止退出码 0
     node = rclpy.create_node("d1max_lidar_merge")
     qos = QoSProfile(depth=2, history=HistoryPolicy.KEEP_LAST,
                      reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -150,8 +152,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ex = SingleThreadedExecutor()
     ex.add_node(node)
     try:
-        while rclpy.ok():
+        while rclpy.ok() and not stop.is_set():
             ex.spin_once(timeout_sec=0.5)
+    except rosinit.shutdown_errors():
+        pass
     finally:
         ex.shutdown()
         node.destroy_node()

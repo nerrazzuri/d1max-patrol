@@ -553,7 +553,7 @@ class BridgeLocalizer:
             self._off_why = ""
             self._save_keep()
             return Relocalize(req=req, map_id=map_ref[0], map_version=map_ref[1], x=pose[0],
-                              y=pose[1], yaw=pose[2], sigma_xy=sigma_xy)
+                              y=pose[1], yaw=pose[2], sigma_xy=sigma_xy, human=human)
         def undo() -> None:
             """这次没成:请求不等了;锚还是这次给的那个(没被换图清掉、没被更新的请求换掉)就退回去。"""
             self._forget_reloc(mine)

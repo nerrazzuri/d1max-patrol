@@ -213,6 +213,11 @@ def test_删除_有狗在用拒_最新一版拒_旧的删得掉_文件和挂着�
     _確认(s, alice, "8")
     assert _publish(s, alice, "8")[1]["results"][0]["ok"]
     _wait_loaded(s, "8")
+    # W41:再换到 9,8 就是狗的退回目标(狗上留着,出事一键退回去),下面删它要拒
+    _確认(s, alice, "9")
+    assert _publish(s, alice, "9")[1]["results"][0]["ok"]
+    _wait_loaded(s, "9")
+    _等(lambda: _rc(s).get("previous") == [MAP[0], "8"])
     # 7 上挂了待命点、区域:删掉之后一起没
     with s.db.tx() as c:
         c.execute("INSERT INTO standby_points(robot_id, map_id, map_version, name, x, y, yaw, "
@@ -229,8 +234,8 @@ def test_删除_有狗在用拒_最新一版拒_旧的删得掉_文件和挂着�
     row = s.db.query("SELECT target, detail FROM audit WHERE action LIKE '%/delete' "
                      "ORDER BY id DESC LIMIT 1")[0]
     assert row["target"] == f"{MAP[0]}:7" and "freed_bytes" in row["detail"]
-    code, d = dele("8")                                   # 8 现在狗在用
-    assert code == 409 and d["reason"] == "in_use"
+    code, d = dele("8")                                   # 8 现在是退回目标
+    assert code == 409 and d["reason"] == "rollback_target" and d["robots"] == ["A"], d
 
 
 def test_删除_正在换过去的那一版也拒(站点):

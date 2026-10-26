@@ -178,6 +178,8 @@ class Relocalize:
     y: float
     yaw: float
     sigma_xy: float
+    #: 是不是人给的位置(W41:原来定位器一律当人给的,代理自己按最后位置请的也写「人给的」)。
+    human: bool = True
 
     def __post_init__(self) -> None:
         _pos_int(self.req, "req")
@@ -186,6 +188,8 @@ class Relocalize:
         for k in ("x", "y", "yaw"):
             _num(getattr(self, k), k)
         _num(self.sigma_xy, "sigma_xy", nonneg=True)
+        if not isinstance(self.human, bool):
+            raise ContractError("定位桥:human 要是布尔")
 
 
 @dataclass(frozen=True)

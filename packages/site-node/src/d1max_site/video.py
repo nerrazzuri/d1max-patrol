@@ -384,6 +384,23 @@ class _Feed:
             self.leave()
 
 
+#: 给观众的帧率(``site.json`` 的 ``video.fps``,W41):缺省 5;现场转身时 5 帧一跳一跳,15 帧明显顺
+#: (一路 MJPEG 约 15 Mbit/s,站点到浏览器的带宽要够)。只认这个范围里的数。
+FPS_DEFAULT = 5.0
+FPS_RANGE = (1.0, 30.0)
+
+
+def video_fps(vcfg: Any) -> float:
+    """``site.json`` 的 ``video.fps`` → 帧率;没写是缺省,写错了(不是数、不在范围里)报错,
+    不悄悄用缺省。"""
+    v = vcfg.get("fps", FPS_DEFAULT) if isinstance(vcfg, dict) else FPS_DEFAULT
+    if isinstance(v, bool) or not isinstance(v, (int, float)) \
+            or not FPS_RANGE[0] <= float(v) <= FPS_RANGE[1]:
+        raise ValueError(f"site.json 的 video.fps 要是 {FPS_RANGE[0]:g}–{FPS_RANGE[1]:g} 之间的数,"
+                         f"现在是 {v!r}")
+    return float(v)
+
+
 class VideoHub:
     def __init__(self, *, send: Callable[..., str], srt_host: str,
                  known: Callable[[str], bool] | None = None,

@@ -9,9 +9,12 @@
   (导航结束、老狗)就清;块里只带序号不带点(路径没变)就沿用上一份。站点这边再校验一遍:点数、数值有限、
   形状不对的丢掉(不信任线上的东西)。
 - **轨迹**:用遥测里**已经有**的地图位姿,挪了 :data:`TRAIL_STEP_M` 才记一个点,每台狗最多
-  :data:`TRAIL_MAX` 个点(满了丢最老的),超过 :data:`TRAIL_AGE_MS` 的丢掉;换了图、位置一下子跳了
-  :data:`TRAIL_JUMP_M` 以上(重定位)就从头记 —— 不把跳变连成一条穿墙的线。定位不可信时遥测没有位姿,
-  那段不记。
+  :data:`TRAIL_MAX` 个点(满了丢最老的),超过 :data:`TRAIL_AGE_MS` 的丢掉;换了图就从头记;位置一下子
+  跳了 :data:`TRAIL_JUMP_M` 以上(重定位)另起一段 —— 不把跳变连成一条穿墙的线。定位不可信时遥测没有
+  位姿,那段不记。**只画这一趟**(W41,用户 2026-10-26 定:原来是 30 分钟内一整条线、不分任务,来回测、
+  遥控器开回起点的路叠在一起看不清):只记**任务在跑、而且控制权在我们手上**时走的路;新任务一开始就清掉
+  上一趟的;遥控器(或别的上装)拿走控制权那段不记,拿回来以后另起一段(``trail_cuts``:从这些下标起是
+  新的一段,界面不连线)。任务结束后上一趟的线留着,到下一趟开始或者 30 分钟。
 - **被挡**:狗的 ``nav_blocked`` 事件(带原因、位置、已经等了几秒)→ 状态里写「被挡 N 秒:原因」;
   ``nav_unblocked``、这一趟结束、狗掉线都清。任务在跑、被挡超过 :data:`BLOCK_ALERT_S` 报 P2
   ``nav_blocked``(带被挡的位置),清了自动解决。*判据的由来*:现在狗自己等满 20 s 就放弃这一段(报
@@ -70,6 +73,12 @@ class _Robot:
     replan: dict[str, Any] | None = None
     running: bool = False
     task_id: str = ""
+    #: 控制权在我们手上(``Status.ready.control``);遥控器拿走了就不记轨迹。
+    control: bool = False
+    #: 下一个点另起一段(控制权被拿走过、位置跳了)。
+    cut: bool = False
+    #: 当前这一段的号(轨迹点带着它,视图按它切段)。
+    seg: int = 0
 
 
 def _num(v: Any) -> float | None:
@@ -147,28 +156,42 @@ class RunViz:
         if r.map != m:
             r.map = m
             r.trail.clear()
+        if not (r.running and r.control):
+            r.cut = True                                     # 不是我们在跑任务:不记,回来另起一段
+            return
         while r.trail and now - r.trail[0][2] > TRAIL_AGE_MS:
             r.trail.popleft()
-        if r.trail:
-            lx, ly, _ = r.trail[-1]
+        if r.trail and not r.cut:
+            lx, ly, _, _ = r.trail[-1]
             d = math.hypot(x - lx, y - ly)
             if d >= TRAIL_JUMP_M:
-                r.trail.clear()                              # 重定位跳了:不连成穿墙的线
+                r.cut = True                                 # 重定位跳了:不连成穿墙的线
             elif d < TRAIL_STEP_M:
                 return
-        r.trail.append((round(x, 2), round(y, 2), now))
+        if r.cut:
+            r.seg += 1
+            r.cut = False
+        r.trail.append((round(x, 2), round(y, 2), now, r.seg))
 
     def on_status(self, rid: str, s: Status) -> None:
         r = self._get(rid)
         if not s.online:
             self._clear_run(rid, r)
             r.running = False
+            r.cut = True
             return
         running = s.task is not None and s.task.state is TaskState.RUNNING
-        r.task_id = s.task.task_id if running and s.task is not None else ""
+        tid = s.task.task_id if running and s.task is not None else ""
+        if running and tid != r.task_id:
+            with self._lock:
+                r.trail.clear()                              # W41:新的一趟,只画这一趟
+        r.task_id = tid
         if r.running and not running:
             self._clear_run(rid, r)                          # 这一趟结束了
         r.running = running
+        r.control = bool(s.ready.control)
+        if not r.control:
+            r.cut = True
 
     def on_event(self, rid: str, e: Event) -> None:
         d = e.data if isinstance(e.data, dict) else {}
@@ -267,12 +290,14 @@ class RunViz:
         now = self._now()
         out: dict[str, Any] = {}
         with self._lock:
-            items = [(k, r, [[x, y] for x, y, ms in r.trail if now - ms <= TRAIL_AGE_MS])
+            items = [(k, r, [(x, y, sg) for x, y, ms, sg in r.trail if now - ms <= TRAIL_AGE_MS])
                      for k, r in self._r.items() if rid is None or k == rid]
-        for k, r, trail in items:
+        for k, r, pts in items:
             summary = self.nav_summary(k) or {}
-            if not trail and r.path is None and not summary:
+            if not pts and r.path is None and not summary:
                 continue
+            trail = [[x, y] for x, y, _ in pts]
+            cuts = [i for i in range(1, len(pts)) if pts[i][2] != pts[i - 1][2]]
             out[k] = {"map": None if r.map is None else {"map_id": r.map[0], "version": r.map[1]},
-                      "path": r.path or [], "trail": trail, **summary}
+                      "path": r.path or [], "trail": trail, "trail_cuts": cuts, **summary}
         return {"robots": out, "trail_max": TRAIL_MAX}

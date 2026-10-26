@@ -33,7 +33,10 @@ for i in $(seq 1 12); do
   nmcli dev wifi rescan 2>/dev/null; sleep 3
   if nmcli -f SSID dev wifi list 2>/dev/null | grep -q "$DOG_SSID"; then
     echo "第 $i 轮：看到热点，尝试连接..."
-    if nmcli dev wifi connect "$DOG_SSID" password "$DOG_PASS" 2>&1; then
+    # W41:存过同名连接就拉起它,不再新建重名的「$DOG_SSID 1」…
+    if nmcli -t -f NAME con show 2>/dev/null | grep -Fxq "$DOG_SSID"; then
+      if nmcli con up id "$DOG_SSID" 2>&1; then CONNECTED=yes; break; fi
+    elif nmcli dev wifi connect "$DOG_SSID" password "$DOG_PASS" name "$DOG_SSID" 2>&1; then
       CONNECTED=yes; break
     fi
   else

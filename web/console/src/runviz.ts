@@ -28,7 +28,22 @@ export interface NavSummary { blocked?: BlockedInfo; replan?: ReplanInfo }
 export interface VizRobot extends NavSummary {
   map: { map_id: string; version: string } | null;
   path: Pt[];
+  /** 这一趟任务走过的点(W41:每趟新任务开始时站点清掉;遥控器握着控制权时不记)。 */
   trail: Pt[];
+  /** 轨迹从这些下标起另起一段(中间是遥控器开的、或者没记的,不连线);老站点没有。 */
+  trail_cuts?: number[];
+}
+
+/** 轨迹按断点切成几段;每段至少两个点才画得出线。 */
+export function trailSegs(r: Pick<VizRobot, "trail" | "trail_cuts">): Pt[][] {
+  const cuts = (r.trail_cuts ?? []).filter((i) => Number.isInteger(i) && i > 0 && i < r.trail.length).sort((a, b) => a - b);
+  const out: Pt[][] = [];
+  let from = 0;
+  for (const c of [...cuts, r.trail.length]) {
+    if (c > from) out.push(r.trail.slice(from, c));
+    from = Math.max(from, c);
+  }
+  return out.filter((seg) => seg.length >= 2);
 }
 export interface VizData { robots: Record<string, VizRobot> }
 

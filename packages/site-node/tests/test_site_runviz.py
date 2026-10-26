@@ -73,6 +73,7 @@ def 台(tmp_path):
 
 def test_路径_收下_只带序号沿用上一份_没有nav块就清(台):
     c, rv, _ = 台
+    rv.on_status("A", _status(True))                    # 在跑任务:轨迹记着,狗一直在视图里
     rv.on_telemetry("A", _tele(1.0, nav={"seq": 1, "path": [[0, 0], [1, 0], [1, 2]]}))
     assert rv.view()["robots"]["A"]["path"] == [[0, 0], [1, 0], [1, 2]]
     rv.on_telemetry("A", _tele(1.0, nav={"seq": 1}))
@@ -109,6 +110,7 @@ def test_路径_任务结束就清(台):
 
 def test_轨迹_挪了一步才记_无位姿不记(台):
     c, rv, _ = 台
+    rv.on_status("A", _status(True))
     rv.on_telemetry("A", _tele(0.0))
     rv.on_telemetry("A", _tele(TRAIL_STEP_M / 2))               # 没挪够
     rv.on_telemetry("A", _tele(None))                           # 定位不可信:没位姿
@@ -118,6 +120,7 @@ def test_轨迹_挪了一步才记_无位姿不记(台):
 
 def test_轨迹_有界_满了丢最老的(台):
     c, rv, _ = 台
+    rv.on_status("A", _status(True))
     for i in range(TRAIL_MAX + 50):
         c.ms += 10
         rv.on_telemetry("A", _tele(i * (TRAIL_STEP_M + 0.05)))
@@ -127,8 +130,9 @@ def test_轨迹_有界_满了丢最老的(台):
     assert tr[0][0] == round(50 * (TRAIL_STEP_M + 0.05), 2)
 
 
-def test_轨迹_太老的丢_换图从头记_位置跳了从头记(台):
+def test_轨迹_太老的丢_换图从头记_位置跳了另起一段(台):
     c, rv, _ = 台
+    rv.on_status("A", _status(True))
     rv.on_telemetry("A", _tele(0.0))
     c.ms += TRAIL_AGE_MS + 1
     rv.on_telemetry("A", _tele(1.0))
@@ -136,14 +140,18 @@ def test_轨迹_太老的丢_换图从头记_位置跳了从头记(台):
     rv.on_telemetry("A", _tele(5.0, map_v="8"))                 # 换了图版本
     assert rv.view()["robots"]["A"]["trail"] == [[5.0, 0.0]]
     assert rv.view()["robots"]["A"]["map"] == {"map_id": "m", "version": "8"}
-    rv.on_telemetry("A", _tele(5.0 + TRAIL_JUMP_M + 1))         # 重定位跳了
-    assert rv.view()["robots"]["A"]["trail"] == [[round(5.0 + TRAIL_JUMP_M + 1, 2), 0.0]]
+    rv.on_telemetry("A", _tele(5.0 + TRAIL_JUMP_M + 1, map_v="8"))   # 重定位跳了
+    v = rv.view()["robots"]["A"]
+    assert v["trail"] == [[5.0, 0.0], [round(5.0 + TRAIL_JUMP_M + 1, 2), 0.0]]
+    assert v["trail_cuts"] == [1], "不连成穿墙的线"
 
 
 def test_视图_只给有东西可画的狗_按狗筛(台):
     c, rv, _ = 台
     rv.on_status("A", _status(False))
     assert rv.view()["robots"] == {}
+    for k in "BC":
+        rv.on_status(k, _status(True))
     rv.on_telemetry("B", _tele(0.0))
     rv.on_telemetry("C", _tele(0.0))
     assert set(rv.view()["robots"]) == {"B", "C"}
@@ -304,3 +312,48 @@ def test_接口_runviz_要登录_狗视图带nav块(tmp_path):
         assert code == 200 and v["robots"][0]["nav"]["blocked"]["reason"] == "前面有箱子"
     finally:
         s.close()
+
+
+# ------------------------------------------------------------ W41:只画这一趟、遥控器那段不画
+
+
+def _st(running=True, tid="t1", control=True):
+    task = TaskSummary(task_id=tid, kind="patrol", state=TaskState.RUNNING) if running else None
+    return Status(online=True, boot_id="b", ready=Ready(control, True, True, True),
+                  control_epoch=1, last_seen=1, task=task)
+
+
+def test_W41_轨迹_新任务开始清掉上一趟_没任务时不记_结束后留着(台):
+    c, rv, _ = 台
+    rv.on_status("A", _st(running=False))
+    rv.on_telemetry("A", _tele(0.0))
+    rv.on_telemetry("A", _tele(1.0))
+    assert "A" not in rv.view()["robots"], "没在跑任务:不记"
+    rv.on_status("A", _st(tid="t1"))
+    for x in (2.0, 3.0, 4.0):
+        rv.on_telemetry("A", _tele(x))
+    rv.on_status("A", _st(running=False))
+    rv.on_telemetry("A", _tele(9.0))                              # 收工以后挪的不记
+    assert rv.view()["robots"]["A"]["trail"] == [[2.0, 0.0], [3.0, 0.0], [4.0, 0.0]], \
+        "上一趟收工后留着"
+    rv.on_status("A", _st(tid="t2"))
+    rv.on_telemetry("A", _tele(5.0))
+    rv.on_status("A", _st(tid="t2"))                              # 同一趟的状态再来不清
+    rv.on_telemetry("A", _tele(6.0))
+    assert rv.view()["robots"]["A"]["trail"] == [[5.0, 0.0], [6.0, 0.0]]
+
+
+def test_W41_轨迹_遥控器拿走控制权那段不记_拿回来另起一段(台):
+    c, rv, _ = 台
+    rv.on_status("A", _st())
+    rv.on_telemetry("A", _tele(0.0))
+    rv.on_telemetry("A", _tele(1.0))
+    rv.on_status("A", _st(control=False))                         # 遥控器拿走了
+    rv.on_telemetry("A", _tele(1.5))
+    rv.on_telemetry("A", _tele(2.5))
+    rv.on_status("A", _st(control=True))                          # 拿回来,同一趟
+    rv.on_telemetry("A", _tele(2.6))
+    rv.on_telemetry("A", _tele(3.0))
+    v = rv.view()["robots"]["A"]
+    assert v["trail"] == [[0.0, 0.0], [1.0, 0.0], [2.6, 0.0], [3.0, 0.0]]
+    assert v["trail_cuts"] == [2]
