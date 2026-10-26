@@ -36,6 +36,12 @@ ODOM_KEEP_S = 12.0
 PERCEPTION_LATENCY_S = 0.15
 #: 「狗自己刚站过的地方算空」只信这么久(内审再议:人可能跟着走进来)。
 SELF_SWEPT_S = 3.0
+#: W41 全局重定位:感知攒一份墙那一层用多久(跟感知节点的 ``WALL_EVERY_S`` 一样)、这一段里狗挪了不到
+#: 这么远、转了不到这么多才算「没动」(动着攒的点是糊的);一份多久以内算新鲜。
+WALL_SPAN_S = 1.2
+WALL_STILL_M = 0.05
+WALL_STILL_RAD = 0.035
+WALL_MAX_AGE_S = 2.5
 
 
 def _compose(a: tuple[float, float, float], p: tuple[float, float]) -> tuple[float, float]:
@@ -77,6 +83,10 @@ class ObstacleView:
     rear_cal: bool = False
     connected: bool = False
     latency_s: float = PERCEPTION_LATENCY_S
+    #: W41:感知最新一份墙那一层(狗身系的点)、收到的时刻、攒的时候狗没动。
+    wall: Any = None
+    wall_at: float = -math.inf
+    wall_still: bool = False
 
     # ------------------------------------------------------------ 喂进来
 
@@ -116,6 +126,25 @@ class ObstacleView:
                                       suspect=np.frombuffer(g.suspect_bits(), dtype=np.uint8)))
         while self.frames and now - self.frames[-1].at > self.memory_s:
             self.frames.pop()
+
+    def on_wall(self, w: Any) -> None:
+        """感知发来一份墙那一层(W41 全局重定位)。"""
+        now = self.monotonic()
+        a = self.pose_at(now - self.latency_s - WALL_SPAN_S)
+        b = self.pose_at(now - self.latency_s)
+        still = (a is not None and b is not None and len(self.odom) >= 2
+                 and self.odom[0][0] <= now - self.latency_s - WALL_SPAN_S
+                 and math.hypot(b[0] - a[0], b[1] - a[1]) <= WALL_STILL_M
+                 and abs(math.remainder(b[2] - a[2], 2 * math.pi)) <= WALL_STILL_RAD)
+        self.wall, self.wall_at, self.wall_still = w.points(), now, still
+
+    def wall_scan(self, *, since: float = -math.inf,
+                  max_age: float = WALL_MAX_AGE_S) -> list[tuple[float, float]] | None:
+        """最新一份墙那一层:新鲜、攒的时候狗没动、``since`` 之后收到的;不然 None。"""
+        if self.wall is None or not self.wall_still or self.wall_at < since \
+                or self.monotonic() - self.wall_at > max_age:
+            return None
+        return list(self.wall)
 
     def on_connect(self) -> None:
         self.connected = True

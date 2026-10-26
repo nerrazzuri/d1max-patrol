@@ -43,11 +43,14 @@ export function usePosePick(o: {
   /** 狗此刻的位置(有就拿它当新点的默认朝向:从狗看向那个点)。 */
   robotAt?: { x: number; y: number } | null;
   role: string;
+  /** W41:目标狗能「自动找位置」(能力 ``relocalize.global``)。 */
+  canFind?: boolean;
 }): PosePick {
   const ctx = pickContext(o.robotId, o.map, o.robotMap);
   const [picked, setPicked] = useState<{ pose: Pose; ctx: string } | null>(null);
   const [said, setSaid] = useState<{ text: string; ctx: string } | null>(null);
   const [askedIn, setAskedIn] = useState<string | null>(null);
+  const [findIn, setFindIn] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   const guard = useRef(clickGuard());
@@ -117,6 +120,14 @@ export function usePosePick(o: {
     void run("relocalize", { x: pose.x, y: pose.y, yaw: pose.yaw, map_id: o.map.map_id, map_version: o.map.version },
       rt("poseSetDone", { robot: o.robotId }));
   };
+  const find = () => {
+    setFindIn(null);
+    if (!o.map || !o.robotId || wrongMap) return;
+    void run("relocalize", { global: true, map_id: o.map.map_id, map_version: o.map.version },
+      rt("poseFindDone", { robot: o.robotId }));
+  };
+  const finding = findIn === ctx;
+  const findable = !!(o.canFind && o.robotId && o.map && !wrongMap);
   const at = pose ? rt("poseAt", { x: pose.x, y: pose.y, deg: degOf(pose.yaw) }) : "";
 
   return {
@@ -135,6 +146,11 @@ export function usePosePick(o: {
     panel: !can ? null : (
       <div class={!pose && !msg ? "posebar idle" : "posebar"} data-posebar="1">
         {!pose ? <p class="muted small">{rt("poseHint")}</p> : <p class="mono small" data-pose-text="1">{at}</p>}
+        {findable && !pose && (
+          <div class="row">
+            <button type="button" class="btn sm" data-pose-find="1" disabled={busy} onClick={() => setFindIn(ctx)}>{rt("poseFind")}</button>
+          </div>
+        )}
         {pose && !o.robotId && <p class="muted small">{rt("poseNoRobot")}</p>}
         {pose && o.robotId && wrongMap && <p class="small warn" data-pose-wrongmap="1">{rt("poseWrongMap", { robot: o.robotId })}</p>}
         {(pose || msg) && <div class="row">
@@ -143,6 +159,10 @@ export function usePosePick(o: {
           <button type="button" class="btn sm" disabled={!pose} onClick={() => { setPose(null); setMsg(""); }}>{rt("poseClear")}</button>
         </div>}
         {msg && <p class="small" role="status" data-pose-msg="1">{msg}</p>}
+        {finding && findable && (
+          <Confirm text={rt("poseFindConfirm", { robot: o.robotId ?? "" })} yes={rt("poseFind")}
+            onNo={() => setFindIn(null)} onYes={find} />
+        )}
         {asking && pose && !wrongMap && (
           <Confirm text={rt("poseSetConfirm", { robot: o.robotId ?? "", x: pose.x, y: pose.y, deg: degOf(pose.yaw) })}
             yes={rt("poseSet")} onNo={() => setAsking(false)} onYes={set} />

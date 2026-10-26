@@ -583,6 +583,8 @@ class Dispatcher:
         # 同一块禁行区(对狗一样严;修订号不变,派单门槛照旧按修订号核)
         z = c.capabilities.tasks.get("zones_set") if c.capabilities is not None else None
         wire = zs if (z or {}).get("erase") else zs.erase_as_nogo()
+        if not (z or {}).get("ignore"):
+            wire = wire.without_ignore()         # W41:老代理不认人员忽略区(不管狗怎么走,去掉就是)
         try:
             r = await self._send(c, rid, "zones_set", {"zones": wire.to_wire(), "tighten": tighten},
                                  issued_by=issued_by)

@@ -252,6 +252,9 @@ class BridgeLocalizer:
         self._wrong_map = False
         #: RTK 核对说定位器不对(W09e,``RtkCheck``;代理每拍写):非空就不可信。
         self.rtk_disagree = ""
+        #: 点云套图说定位器锁错了(W41,``globalloc.judge``;代理写):非空就不可信。下一次请重定位、
+        #: 换图时清掉。
+        self.scan_disagree = ""
         #: 最近一次「变差了」(对账 S6):(时刻, 原因)。
         self._degraded: tuple[float, str] | None = None
         self._settle = 0
@@ -374,6 +377,7 @@ class BridgeLocalizer:
             self._anchor_hold = None
             self._unverified = False
             self.rtk_disagree = ""
+            self.scan_disagree = ""
             kept, self._kept = self._kept, None
             if kept is not None and map_ref is not None and kept[0] == map_ref:
                 # 代理重启前记下的锚(同一次开机、同一张图):只拿来核(对账 S1)
@@ -467,6 +471,8 @@ class BridgeLocalizer:
             return "定位器在别的图上"
         if self.rtk_disagree:
             return self.rtk_disagree
+        if self.scan_disagree:
+            return self.scan_disagree
         f = self._fix
         if f is None:
             return "定位器还没给出位置"
@@ -551,6 +557,7 @@ class BridgeLocalizer:
             self._anchor_what = "人给的位置" if human else "重定位给的位置"
             self._anchor_hold = req
             self._off_why = ""
+            self.scan_disagree = ""                  # 新请了一次:点云套图的结论等它稳下来再核
             self._save_keep()
             return Relocalize(req=req, map_id=map_ref[0], map_version=map_ref[1], x=pose[0],
                               y=pose[1], yaw=pose[2], sigma_xy=sigma_xy, human=human)
@@ -585,6 +592,10 @@ class BridgeLocalizer:
             # RTK 说它不对:按 RTK 的位置重定位归代理的 RTK 核对那一路,这里不按(可能是错的)最后可信
             # 位置再请一次、盖掉那一路(W09e 内审应修 2)
             log.info("丢定位后的重置:RTK 说定位器不对,按 RTK 那一路重定位,这里不请")
+            return
+        if self.scan_disagree:
+            # 点云套图说它锁错了(W41):最后可信的位置可能就是错解,不按它请;等人给位置
+            log.info("丢定位后的重置:点云套图说定位器锁错了,不按最后可信的位置请")
             return
         if g is None or m is None:
             log.info("丢定位后的重置:没有可信过的位置,等定位器自己找回来")
@@ -653,7 +664,7 @@ class BridgeLocalizer:
         # RTK 说它不对的时候不算「可信」:不然最后可信的位置一路跟着错的走,丢定位后的自动重定位
         # 又把它拉回错处(W09e 内审应修 2)
         return f.sigma_xy <= SIGMA_LOST_M and self._state not in ("initializing", "lost") \
-            and not self.rtk_disagree
+            and not self.rtk_disagree and not self.scan_disagree
 
     @property
     def busy(self) -> bool:

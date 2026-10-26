@@ -84,6 +84,10 @@ class PersonView:
         self._empty_since: float | None = None
         self.count = 0
         self.nearest_m: float | None = None
+        #: 人员检测忽略区(W41):``(方向°, 距离 m) → 落在忽略区里`` 的就不算这个人(代理接上;没测到距离
+        #: 的照算 —— 不知道在哪就不能说它在展台上)。
+        self.ignore: Callable[[float, float], bool] | None = None
+        self.ignored = 0
 
     # ------------------------------------------------------------ 健康
 
@@ -156,9 +160,18 @@ class PersonView:
             c.count, c.nearest, c.near, c.bearing = 0, None, False, 0.0
         else:
             self._watch.add(m.camera)
-            c.win.append(bool(m.people))
-            near = m.nearest()
-            c.count = len(m.people)
+            people = m.people
+            if self.ignore is not None and people:
+                keep = tuple(p for p in people
+                             if p.range_m is None or not self._ignored(p.bearing_deg, p.range_m))
+                self.ignored = len(people) - len(keep)
+                people = keep
+            c.win.append(bool(people))
+            ranged = [p for p in people if p.range_m is not None]
+            # 跟 ``Persons.nearest`` 一样:有距离的取最近的,都没距离取分数最高的
+            near = (min(ranged, key=lambda p: p.range_m) if ranged
+                    else max(people, key=lambda p: p.score) if people else None)
+            c.count = len(people)
             c.nearest = near.range_m if near is not None else None
             c.bearing = near.bearing_deg if near is not None else 0.0
             if c.nearest is not None and c.nearest <= NEAR_M:
@@ -166,6 +179,13 @@ class PersonView:
             elif c.nearest is None or c.nearest > NEAR_CLEAR_M:
                 c.near = False
         self._update(m)
+
+    def _ignored(self, bearing_deg: float, range_m: float) -> bool:
+        try:
+            return bool(self.ignore(bearing_deg, range_m))
+        except Exception:                                   # 判不了就当没忽略
+            log.exception("人员忽略区判不了,这个人照算")
+            return False
 
     def tick(self) -> None:
         self._update()

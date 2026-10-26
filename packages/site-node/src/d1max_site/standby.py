@@ -455,3 +455,13 @@ class StandbyManager:
                 await t
             except BaseException:  # noqa: BLE001 - 取消与其他异常都只是收尾
                 pass
+
+
+def copy_homes(db: Any, map_id: str, from_version: str, to_version: str) -> int:
+    """把 ``from_version`` 上每只狗的原点照抄到 ``to_version``(W41 清噪点另存的新版本:
+    同一个坐标系)。新版本上已经有的不动。回抄了几个。原点表归这个模块写(表的归属规矩)。"""
+    with db.tx() as c:
+        return c.execute(
+            "INSERT OR IGNORE INTO homes(robot_id, map_id, map_version, name, x, y, yaw, "
+            "marked_at_ms) SELECT robot_id, map_id, ?, name, x, y, yaw, marked_at_ms FROM homes "
+            "WHERE map_id=? AND map_version=?", (to_version, map_id, from_version)).rowcount

@@ -155,6 +155,9 @@ class ObsBridgeServer:
                         continue                         # 旧的、重的
                     self._seq = msg.seq
                     self._sink(self.DATA_CB, msg)
+                elif isinstance(msg, getattr(self.BRIDGE, "Wall", ())) \
+                        and hasattr(self.sink, "on_wall"):
+                    self._sink("on_wall", msg)               # W41:墙那一层(全局重定位)
                 elif not isinstance(msg, self.BRIDGE.Heartbeat):
                     continue
         finally:

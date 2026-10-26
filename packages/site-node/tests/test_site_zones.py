@@ -114,8 +114,9 @@ def test_改了区域_发给狗_狗上换上_能力里的修订跟着变(站点)
     s = 站点
     alice = _登(s, "alice")
     _等(lambda: _zcaps(s) is not None)
-    # 决策 65 起多一项 teleop_hard,地图台账 44 起多一项 erase
-    assert _zcaps(s) == {"rev": 0, "enforced": False, "teleop_hard": True, "erase": True}
+    # 决策 65 起多一项 teleop_hard,地图台账 44 起多一项 erase,W41 起多一项 ignore
+    assert _zcaps(s) == {"rev": 0, "enforced": False, "teleop_hard": True, "erase": True,
+                         "ignore": True}
     code, d = s.req("POST", ZP, {"zones": [SLOW], "base_revision": 0}, token=alice)
     assert code == 200 and d["pushed"] == {"A": ""}, d
     _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
@@ -599,3 +600,25 @@ def test_接口_新版本带过来的_采纳并确认_待命点拦截点跟着�
     assert code == 200 and v.get("proposal") is None
     gina = _登(s, "gina")
     assert s.req("POST", p9 + "/proposal", {"action": "discard"}, token=gina)[0] == 403
+
+
+EXHIBIT = {"id": "exhibit", "kind": "ignore", "label": "展品",
+           "polygon": [[-3, -3], [-2, -3], [-2, -2], [-3, -2]]}
+
+
+def test_W41_人员忽略区_认得的狗原样发_老狗去掉_摘要对得上_加了不算放宽(站点):
+    s = 站点
+    alice = _登(s, "alice")
+    _等(lambda: _zcaps(s) is not None and s.disp.clock_skew_s("A") is not None)
+    assert _zcaps(s)["ignore"] is True
+    code, d = s.req("POST", ZP, {"zones": [POND, EXHIBIT], "base_revision": 0}, token=alice)
+    assert code == 200 and d["pushed"] == {"A": ""} and d["tighten"] is True, d
+    assert [z["kind"] for z in _sent(s)["zones"]] == ["nogo", "ignore"]
+    _等(lambda: _zcaps(s)["rev"] == 1, timeout=8)
+    assert [z.kind for z in s.agent._zones.zones] == ["nogo", "ignore"]
+    del _zcaps(s)["ignore"]                              # 当它是认不得忽略区的老狗
+    code, d = s.req("POST", ZP, {"zones": [POND, EXHIBIT, SLOW], "base_revision": 1}, token=alice)
+    assert code == 200 and d["pushed"] == {"A": ""}, d
+    assert [z["kind"] for z in _sent(s)["zones"]] == ["nogo", "slow"], "老狗:去掉忽略区"
+    mine = s.req("GET", ZP, token=alice)[1]["zones"]
+    assert [z["kind"] for z in mine] == ["nogo", "ignore", "slow"]

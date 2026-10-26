@@ -199,6 +199,14 @@ String incidentOutcomeText(String outcome) => switch (outcome) {
       _ => outcome,
     };
 
+/// 这台狗能不能「自动找位置」（W41）：代理报了 `relocalize.global`（配了避障和定位器）。
+bool robotCanFindPose(Map<String, dynamic>? view) {
+  final caps = view?['capabilities'];
+  final tasks = caps is Map ? caps['tasks'] : null;
+  final r = tasks is Map ? tasks['relocalize'] : null;
+  return r is Map && r['global'] == true;
+}
+
 /// 这台狗能不能「在这儿设待命点」（W13a）：代理报了 `mark_home.standby`。老代理不认、会当成标原点。
 bool robotCanStandbyHere(Map<String, dynamic>? view) {
   final caps = view?['capabilities'];
@@ -604,8 +612,15 @@ abstract class SiteApi {
 
   /// 设位置（W00c6e，里程锚定）：[atHome] 狗在原点；否则 [x]、[y]（米）、[yaw]（弧度），地图坐标。保安、管理员。
   /// [mapId]、[version]：在哪张图上点的（外审 W39-I2；给了站点核对，跟狗加载的不一样 409）。
+  /// [global]：让狗拿看到的墙在整张图上自己找（W41；狗报了 `relocalize.global` 才给）。
   Future<Map<String, dynamic>> relocalize(String robotId,
-      {bool atHome = false, double x = 0, double y = 0, double yaw = 0, String? mapId, String? version});
+      {bool atHome = false,
+      bool global = false,
+      double x = 0,
+      double y = 0,
+      double yaw = 0,
+      String? mapId,
+      String? version});
 
   /// 分级驱离（W22）：正在进行的几场（每台狗最多一场）。站点没开回 404。
   Future<List<Map<String, dynamic>>> deterrence();
@@ -1514,9 +1529,17 @@ class SiteClient implements SiteApi {
 
   @override
   Future<Map<String, dynamic>> relocalize(String robotId,
-          {bool atHome = false, double x = 0, double y = 0, double yaw = 0, String? mapId, String? version}) async =>
+          {bool atHome = false,
+          bool global = false,
+          double x = 0,
+          double y = 0,
+          double yaw = 0,
+          String? mapId,
+          String? version}) async =>
       _map(await _send('POST', '/api/robots/${Uri.encodeComponent(robotId)}/relocalize',
-          atHome
+          global
+              ? <String, dynamic>{'global': true}
+              : atHome
               ? <String, dynamic>{'at_home': true}
               : <String, dynamic>{
                   'x': x,

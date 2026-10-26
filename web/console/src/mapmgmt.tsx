@@ -5,6 +5,7 @@ import { api, ApiError, enc } from "./api";
 import { Confirm, Modal } from "./dialogs";
 import { lang } from "./i18n";
 import "./mapmgmt.css";
+import { toPx, type PreviewMeta } from "./mapview";
 
 type Say = (s: string) => void;
 
@@ -99,6 +100,7 @@ export function MapManagePage({ say, pollMs = 5000 }: { say: Say; pollMs?: numbe
   const [rolling, setRolling] = useState<Dog | null>(null);
   const [pick, setPick] = useState<string[]>([]);
   const [diff, setDiff] = useState<{ map_id: string; a: string; b: string } | null>(null);
+  const [noise, setNoise] = useState<{ map_id: string; version: string } | null>(null);
   const gen = useRef(0);
 
   const load = useCallback(async () => {
@@ -184,6 +186,7 @@ export function MapManagePage({ say, pollMs = 5000 }: { say: Say; pollMs?: numbe
                   onNote={(n) => void saveNote(m.map_id, v.version, n)}
                   onPublish={() => setPublish({ map_id: m.map_id, version: v.version })}
                   onDelete={() => setDeleting({ map_id: m.map_id, version: v.version })}
+                  onNoise={() => setNoise({ map_id: m.map_id, version: v.version })}
                 />
               ))}
             </div>
@@ -239,6 +242,8 @@ export function MapManagePage({ say, pollMs = 5000 }: { say: Say; pollMs?: numbe
               : tr("The dog may not have it any more and will download it again.", "狗上可能已经没有这一版,会重新下载。"))} />
       )}
       {diff && <DiffDialog target={diff} onClose={() => setDiff(null)} />}
+      {noise && <NoiseDialog target={noise} onClose={() => setNoise(null)}
+        onDone={(r) => { setNoise(null); say(tr(`Saved as v${r.version}: ${r.cleaned} spots cleaned. Confirm its zones before publishing.`, `另存成 v${r.version}:清了 ${r.cleaned} 处。发布前先确认它的区域。`)); void load(); }} />}
     </div>
   );
 }
@@ -276,14 +281,15 @@ function RunningCell({ r }: { r: Running | null }) {
 
 function VersionCard(p: {
   map_id: string; v: Version; picked: boolean; onPick: (on: boolean) => void; onNote: (n: string) => void;
-  onPublish: () => void; onDelete: () => void;
+  onPublish: () => void; onDelete: () => void; onNoise?: () => void;
 }) {
   const { v } = p;
   // 没改过就跟着站点的备注走;改过的是草稿(存了、站点那边的备注变成它,草稿就等于它,按钮自然灰掉)
   const [draft, setDraft] = useState<string | null>(null);
   const note = draft ?? v.note;
   const inUse = v.loaded_on.length > 0;
-  const whyNot = inUse ? tr("A dog is using this version", "有狗在用这一版") : v.latest ? tr("Latest version of this map", "这张图的最新一版") : "";
+  const whyNot = inUse ? tr("A dog is using this version", "有狗在用这一版") : v.latest ? tr("Latest version of this map", "这张图的最新一版")
+    : v.previous_on.length > 0 ? tr("A dog would roll back to this version", "是狗的退回目标") : "";
   const b = v.build;
   return (
     <article class="mm-ver" aria-label={`${p.map_id}:${v.version}`}>
@@ -322,6 +328,7 @@ function VersionCard(p: {
         <div class="row mm-actions">
           <button type="button" class="btn sm primary" onClick={p.onPublish}>{tr("Publish to dogs…", "发布到狗…")}</button>
           <button type="button" class="btn sm" disabled={!!whyNot} title={whyNot} onClick={p.onDelete}>{tr("Delete", "删除")}</button>
+          {p.onNoise && <button type="button" class="btn sm" disabled={!v.has_raster} onClick={p.onNoise}>{tr("Clean noise…", "清噪点…")}</button>}
           <label class="field-inline small">
             <input type="checkbox" checked={p.picked} disabled={!v.has_raster} onChange={(e) => p.onPick(e.currentTarget.checked)} />
             {tr("Compare", "对比")}
@@ -452,6 +459,75 @@ export function DiffDialog({ target, onClose }: { target: { map_id: string; a: s
         </div>
       )}
       <div class="row end"><button type="button" class="btn" onClick={onClose}>{tr("Close", "关闭")}</button></div>
+    </Modal>
+  );
+}
+
+// ------------------------------------------------------------------ 清噪点(W41)
+
+interface Speck { id: number; x: number; y: number; px: number }
+interface NoiseList { digest: string; res: number; max_m2: number; ring_m: number; specks: Speck[] }
+export interface DenoiseResult { version: string; cleaned: number; cells: number; homes_copied: number }
+
+/** 这一版里「零星噪点」的候选画在图上(红圈),点一下去掉、再点加回;确认后清掉、另存成新的一版。 */
+export function NoiseDialog({ target, onClose, onDone }: {
+  target: { map_id: string; version: string }; onClose: () => void; onDone: (r: DenoiseResult) => void;
+}) {
+  const base = `/api/admin/maps/${enc(target.map_id)}/${enc(target.version)}`;
+  const view = `/api/maps/${enc(target.map_id)}/${enc(target.version)}`;
+  const [list, setList] = useState<NoiseList | null>(null);
+  const [meta, setMeta] = useState<PreviewMeta | null>(null);
+  const [skip, setSkip] = useState<Set<number>>(new Set());
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api<NoiseList>("GET", `${base}/noise`).then((d) => live && setList(d)).catch((e) => live && setErr(errText(e)));
+    api<PreviewMeta>("GET", `${view}/preview`).then((m) => live && setMeta(m)).catch(() => {});
+    return () => { live = false; };
+  }, [base, view]);
+  const n = list ? list.specks.filter((s) => !skip.has(s.id)).length : 0;
+  const toggle = (id: number) => setSkip((cur) => { const next = new Set(cur); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  async function go() {
+    if (!list) return;
+    setBusy(true);
+    try {
+      onDone(await api<DenoiseResult>("POST", `${base}/denoise`, { digest: list.digest, skip: [...skip] }));
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Modal wide label={tr(`Clean noise in v${target.version}`, `清 v${target.version} 的噪点`)} onClose={onClose}>
+      {err && <p class="error" role="alert">{err}</p>}
+      {!list && !err && <p class="muted">{tr("Looking for noise…", "正在找…")}</p>}
+      {list && (
+        <div class="mm-noise">
+          <p class="small">{tr(
+            `Red circles: tiny isolated obstacle specks (≤ ${list.max_m2} m², open floor all around within ${list.ring_m} m) — usually people walking while the map was built. They block the planner. Click a circle to keep that one (e.g. a thin post).`,
+            `红圈:很小、四周 ${list.ring_m} 米都是空地的占用格(每处不超过 ${list.max_m2} 平方米)—— 多半是建图时有人走动留下的,会把规划的路封住。是真东西(比如细杆子)就点一下那个圈,留着它。`)}</p>
+          {list.specks.length === 0 ? <p class="muted">{tr("No noise found in this version.", "这一版没找到噪点。")}</p> : meta && (
+            <svg class="mm-noiseimg" viewBox={`0 0 ${meta.width} ${meta.height}`} role="img" aria-label={tr("Noise on the map", "图上的噪点")}>
+              <image href={`${view}/preview.png`} x={0} y={0} width={meta.width} height={meta.height} />
+              {list.specks.map((s) => {
+                const p = toPx(meta, s.x, s.y);
+                const kept = skip.has(s.id);
+                return <circle key={s.id} data-speck={s.id} data-kept={kept ? "1" : "0"} cx={p.px} cy={p.py} r={6}
+                  fill="none" stroke={kept ? "#888" : "#e53935"} stroke-width={2} stroke-dasharray={kept ? "3 2" : undefined}
+                  style={{ cursor: "pointer" }} onClick={() => toggle(s.id)}><title>{`#${s.id} (${s.x}, ${s.y}) · ${s.px}`}</title></circle>;
+              })}
+            </svg>
+          )}
+        </div>
+      )}
+      <div class="row end">
+        <button type="button" class="btn" onClick={onClose}>{tr("Cancel", "取消")}</button>
+        <button type="button" class="btn primary" data-denoise="1" disabled={!list || n === 0 || busy} onClick={() => void go()}>
+          {tr(`Clean ${n} spots → save as a new version`, `清掉 ${n} 处,另存成新的一版`)}
+        </button>
+      </div>
     </Modal>
   );
 }

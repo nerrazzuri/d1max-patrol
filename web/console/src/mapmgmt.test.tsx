@@ -321,3 +321,46 @@ describe("换图状态和运行配置的文字", () => {
     expect(rows[1].textContent).toContain("night · abc123");
   });
 });
+
+describe("W41 清噪点", () => {
+  it("是退回目标的版本:删除按钮灰着带原因", async () => {
+    overview.maps[0].versions[2] = ver("1", { previous_on: ["A"] });
+    const { getByLabelText } = mount();
+    await waitFor(() => getByLabelText("estate:1"));
+    const del = Array.from(getByLabelText("estate:1").querySelectorAll("button")).find((b) => b.textContent === "Delete") as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.title).toContain("roll back");
+  });
+
+  it("红圈画在图上;点一个留着它;清掉其余的、另存新版,带上看过的那份摘要", async () => {
+    routes["GET /api/admin/maps/estate/1/noise"] = () => json({ digest: "d1", res: 0.05, max_m2: 0.05, ring_m: 0.2,
+      specks: [{ id: 1, x: 1.0, y: 2.0, px: 3 }, { id: 2, x: -1.0, y: 0.5, px: 1 }, { id: 3, x: 2.0, y: -1.0, px: 2 }] });
+    routes["GET /api/maps/estate/1/preview"] = () => json({ width: 400, height: 300, m_per_px: 0.05, left_x: -10, top_y: 8 });
+    routes["POST /api/admin/maps/estate/1/denoise"] = () => json({ version: "4", cleaned: 2, cells: 5, homes_copied: 1 });
+    const { container: c, getByLabelText } = mount();
+    await waitFor(() => getByLabelText("estate:1"));
+    fireEvent.click(Array.from(getByLabelText("estate:1").querySelectorAll("button")).find((b) => b.textContent === "Clean noise…") as HTMLElement);
+    await waitFor(() => expect(c.querySelectorAll("circle[data-speck]").length).toBe(3));
+    fireEvent.click(c.querySelector('circle[data-speck="2"]') as Element);
+    expect(c.querySelector('circle[data-speck="2"]')!.getAttribute("data-kept")).toBe("1");
+    const go = c.querySelector("[data-denoise]") as HTMLButtonElement;
+    expect(go.textContent).toContain("Clean 2 spots");
+    fireEvent.click(go);
+    await waitFor(() => expect(say).toHaveBeenCalledWith(expect.stringContaining("Saved as v4")));
+    const post = calls.find((x) => x.method === "POST" && x.path.endsWith("/denoise"))!;
+    expect(post.body).toEqual({ digest: "d1", skip: [2] });
+  });
+
+  it("站点拒了(图换了):原因显示在对话框里", async () => {
+    routes["GET /api/admin/maps/estate/1/noise"] = () => json({ digest: "d1", res: 0.05, max_m2: 0.05, ring_m: 0.2, specks: [{ id: 1, x: 1, y: 2, px: 3 }] });
+    routes["GET /api/maps/estate/1/preview"] = () => json({ width: 400, height: 300, m_per_px: 0.05, left_x: -10, top_y: 8 });
+    routes["POST /api/admin/maps/estate/1/denoise"] = () => json({ error: "这一版的栅格在你看过之后换了" }, 409);
+    const { container: c, getByLabelText } = mount();
+    await waitFor(() => getByLabelText("estate:1"));
+    fireEvent.click(Array.from(getByLabelText("estate:1").querySelectorAll("button")).find((b) => b.textContent === "Clean noise…") as HTMLElement);
+    await waitFor(() => expect(c.querySelector("[data-denoise]")).not.toBeNull());
+    await waitFor(() => expect((c.querySelector("[data-denoise]") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(c.querySelector("[data-denoise]") as HTMLElement);
+    await waitFor(() => expect(c.querySelector('[role="alert"]')?.textContent).toContain("换了"));
+  });
+});

@@ -132,6 +132,12 @@ export function openAlerts(all: Alert[]): Alert[] {
 }
 
 /** 这只狗巡的是哪张图(能力里 patrol 的 map_id / map_version)。 */
+/** W41:这只狗能不能「自动找位置」(拿看到的墙在整张图上套;能力 ``relocalize.global``)。 */
+export function canFindPose(r: Robot | null | undefined): boolean {
+  const rc = r?.capabilities?.tasks?.relocalize as { global?: unknown } | undefined;
+  return rc?.global === true;
+}
+
 export function robotMap(r: Robot): { map_id: string; version: string } | null {
   const p = r.capabilities?.tasks?.patrol as { map_id?: string; map_version?: string } | undefined;
   return p?.map_id && p.map_version ? { map_id: p.map_id, version: p.map_version } : null;

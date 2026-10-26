@@ -175,3 +175,39 @@ it("回执判定:只有 accepted 且命令号对得上才算", () => {
   expect(notAccepted({})).not.toBeNull();
   expect(notAccepted(null)).not.toBeNull();
 });
+
+it("W41 自动找位置:狗报了能力才有按钮;确认后发 global、带底图;狗收下才说找到了", async () => {
+  const sent: { url: string; body: unknown }[] = [];
+  setFetch((async (url: unknown, init?: RequestInit) => {
+    sent.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null });
+    return json({ command_id: "c1", ack: { command_id: "c1", result: "accepted", reason: "" } });
+  }) as never);
+  function H(p: { canFind: boolean }) {
+    const pick = usePosePick({ meta, map: MA, robotId: "A", robotMap: MA, role: "admin", canFind: p.canFind });
+    return <>{pick.panel}</>;
+  }
+  const no = render(<H canFind={false} />);
+  expect(no.container.querySelector("[data-pose-find]")).toBeNull();
+  cleanup();
+  const r = render(<H canFind />);
+  fireEvent.click(r.container.querySelector("[data-pose-find]")!);
+  await waitFor(() => expect(document.querySelector("dialog")).not.toBeNull());
+  expect(sent).toEqual([]);
+  fireEvent.click([...document.querySelectorAll("dialog button")].find((b) => b.textContent === "Find position automatically")!);
+  await waitFor(() => expect(r.container.querySelector("[data-pose-msg]")?.textContent).toContain("found its position"));
+  expect(sent[0].url).toBe("/api/robots/A/relocalize");
+  expect(sent[0].body).toEqual({ global: true, map_id: "map-A", map_version: "1" });
+});
+
+it("W41 自动找位置:狗认不出就把原因给人看", async () => {
+  setFetch((async () => json({ command_id: "c1", ack: { command_id: "c1", result: "rejected", reason: "not_found: 有两处差不多像" } })) as never);
+  function H() {
+    const pick = usePosePick({ meta, map: MA, robotId: "A", robotMap: MA, role: "admin", canFind: true });
+    return <>{pick.panel}</>;
+  }
+  const r = render(<H />);
+  fireEvent.click(r.container.querySelector("[data-pose-find]")!);
+  await waitFor(() => expect(document.querySelector("dialog")).not.toBeNull());
+  fireEvent.click([...document.querySelectorAll("dialog button")].find((b) => b.textContent === "Find position automatically")!);
+  await waitFor(() => expect(r.container.querySelector("[data-pose-msg]")?.textContent).toContain("差不多像"));
+});

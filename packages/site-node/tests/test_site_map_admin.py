@@ -309,3 +309,37 @@ def test_对比接口_统计加图_带必读的提醒_权限(站点):
         body = resp.read()
         assert resp.headers["Content-Type"] == "image/png"
     assert body.startswith(b"\x89PNG")
+
+
+def test_W41_清噪点_找候选_清掉另存新版_原点照抄_图换了拒_都去掉拒(站点):
+    s = 站点
+    alice, gina = _登(s, "alice"), _登(s, "gina")
+    base = f"/api/admin/maps/{MAP[0]}/9"
+    assert s.req("GET", f"{base}/noise", token=gina)[0] == 403
+    code, d = s.req("GET", f"{base}/noise", token=alice)
+    assert code == 200, d
+    assert [(sp["px"]) for sp in d["specks"]] == [2], "房里那一小块是候选;墙(大块)不是"
+    sp = d["specks"][0]
+    with s.db.tx() as c:
+        c.execute("INSERT INTO homes(robot_id, map_id, map_version, name, x, y, yaw) "
+                  "VALUES ('A', ?, '9', 'dock', 1.0, 2.0, 0.5)", (MAP[0],))
+    code, e = s.req("POST", f"{base}/denoise", {"digest": "x" * 16, "skip": []}, token=alice)
+    assert code == 409 and e["reason"] == "stale", e
+    code, e = s.req("POST", f"{base}/denoise", {"digest": d["digest"], "skip": [sp["id"]]},
+                    token=alice)
+    assert code == 409 and e["reason"] == "nothing", e
+    assert s.req("POST", f"{base}/denoise", {"digest": d["digest"], "skip": "1"},
+                 token=alice)[0] == 400
+    code, e = s.req("POST", f"{base}/denoise", {"digest": d["digest"], "skip": []}, token=alice)
+    assert code == 200 and e["version"] == "10" and e["cleaned"] == 1 and e["cells"] == 2, e
+    assert e["homes_copied"] == 1
+    new = s.maps.root / MAP[0] / "10"
+    assert (new / "frames.json").read_bytes() == b"{}", "别的文件照抄"
+    code, again = s.req("GET", f"/api/admin/maps/{MAP[0]}/10/noise", token=alice)
+    assert code == 200 and again["specks"] == [], "清干净了"
+    assert s.db.query("SELECT x FROM homes WHERE map_version='10'")[0]["x"] == 1.0
+    note = [m for m in s.maps.list() if m["version"] == "10"][0]["note"]
+    assert "从 9 清了 1 处" in note
+    row = s.db.query("SELECT detail FROM audit WHERE action LIKE '%/denoise' "
+                     "ORDER BY id DESC LIMIT 1")[0]
+    assert '"version": "10"' in row["detail"]

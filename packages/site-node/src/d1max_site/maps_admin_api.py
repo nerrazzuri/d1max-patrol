@@ -9,6 +9,8 @@
 - ``POST /api/admin/maps/<图>/<版本>/delete``      删旧版本;有狗在用、最新一版 → 409
 - ``GET  /api/admin/maps/<图>/<版本>/diff?with=<另一版>``      对比的统计(JSON,带必读的 ``caveat``)
 - ``GET  /api/admin/maps/<图>/<版本>/diff.png?with=<另一版>``  对比图
+- ``GET  /api/admin/maps/<图>/<版本>/noise``       零星噪点的候选(W41;编号、位置、几格,带栅格摘要)
+- ``POST /api/admin/maps/<图>/<版本>/denoise``     ``{digest, skip: [编号]}`` 清掉、另存成新的一版
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from d1max_site.maps_admin import AdminError, MapAdmin
 from d1max_site.permissions import MANAGE
 
 _ROUTE = re.compile(r"^/api/admin/maps(?:/(rollback)|/([^/]{1,64})/([^/]{1,64})/"
-                    r"(note|publish|delete|diff|diff\.png))?$")
+                    r"(note|publish|delete|diff|diff\.png|noise|denoise))?$")
 MAX_ROBOTS = 32
 
 
@@ -54,6 +56,10 @@ def handle(h: Any, method: str, path: str, user: Any) -> None:
             if method != "GET":
                 raise HttpError(404, f"没有 {method} {path}")
             return _diff(h, adm, map_id, version, what)
+        if what == "noise":
+            if method != "GET":
+                raise HttpError(404, f"没有 {method} {path}")
+            return h._send_json(200, adm.noise(map_id, version))
         if method != "POST":
             raise HttpError(404, f"没有 {method} {path}")
         h._audit_target = f"{map_id}:{version}"
@@ -64,6 +70,11 @@ def handle(h: Any, method: str, path: str, user: Any) -> None:
             return h._send_json(200, {"ok": True, "note": note})
         if what == "delete":
             out = adm.delete(map_id, version)
+            h._audit_detail = out
+            return h._send_json(200, out)
+        if what == "denoise":
+            out = adm.denoise(map_id, version, digest=d.get("digest"), skip=d.get("skip", []),
+                              by=str(user))
             h._audit_detail = out
             return h._send_json(200, out)
         return _publish(h, adm, user, map_id, version, d)

@@ -1285,17 +1285,23 @@ class _SiteMapPreviewPageState extends State<SiteMapPreviewPage> {
 /// 站点已经抹了。
 class ZoneShape {
   const ZoneShape(this.nogo, this.pixels,
-      {this.hard = false, this.proposed = false, this.erase = false, this.wall});
+      {this.hard = false, this.proposed = false, this.erase = false, this.ignore = false, this.wall});
 
   /// 按站点给的区域（`kind`、`hard`）；[wall]：虚拟墙画的那条线（图的像素，[zoneWallPixels]）。
   factory ZoneShape.of(Map<String, dynamic> z, List<Offset> pixels, {bool proposed = false, List<Offset>? wall}) =>
       ZoneShape(z['kind'] == 'nogo', pixels,
-          hard: z['hard'] == true, proposed: proposed, erase: z['kind'] == 'erase', wall: wall);
+          hard: z['hard'] == true,
+          proposed: proposed,
+          erase: z['kind'] == 'erase',
+          ignore: z['kind'] == 'ignore',
+          wall: wall);
   final bool nogo;
   final List<Offset> pixels;
   final bool hard;
   final bool proposed;
   final bool erase;
+  /// 人员检测忽略区（W41）：不管狗怎么走，画成靛蓝色的框。
+  final bool ignore;
   /// 虚拟墙（2026-10-15）：画的那条线；画成粗线，不画站点算的那条窄带子。
   final List<Offset>? wall;
 }
@@ -1328,6 +1334,7 @@ String zoneTitle(Map<String, dynamic> z, {bool withId = true}) {
     'erase' => z['hard'] == true
         ? tr('Erased, hard · ${zoneLabelText(label)}$idEn', '抹掉（硬） · $label$idZh')
         : tr('Erased · ${zoneLabelText(label)}$idEn', '抹掉 · $label$idZh'),
+    'ignore' => tr('Person-detection ignored · ${zoneLabelText(label)}$idEn', '人员忽略区 · $label$idZh'),
     _ => tr('Limit ${z['max_speed_mps']} m/s · ${zoneLabelText(label)}$idEn',
         '限速 ${z['max_speed_mps']} m/s · $label$idZh'),
   };
@@ -1380,7 +1387,7 @@ class ZonesPainter extends CustomPainter {
               ..strokeWidth = radius / 2);
         continue;
       }
-      final c = z.nogo ? (z.hard ? Colors.red.shade900 : Colors.red) : Colors.amber;
+      final c = z.ignore ? Colors.indigo : z.nogo ? (z.hard ? Colors.red.shade900 : Colors.red) : Colors.amber;
       canvas.drawPath(path, Paint()..color = c.withValues(alpha: z.hard ? 0.55 : 0.35));
       canvas.drawPath(
           path,

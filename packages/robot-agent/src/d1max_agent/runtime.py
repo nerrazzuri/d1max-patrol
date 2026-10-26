@@ -116,6 +116,9 @@ HOME_MAX_SIGMA_M = 0.5
 
 #: RTK 解跟此刻的位姿比,最多隔这么久(W09e 内审小:旧的解会差出 v·Δt)。
 RTK_FIX_MAX_AGE_MS = 300
+#: W41:定位器稳下来以后,最多等这么久(秒)拿到一份狗停着的点云去核;点云套图连着自动请几次重定位。
+SCAN_CHECK_WAIT_S = 10.0
+SCAN_RELOC_MAX = 2
 
 #: 一条回执编码之后最多这么大(字节)。站点 broker 单包上限 262144(``max_packet_size``,超了狗被断开),
 #: 留出主题与包头。带数据的回执各自有上限(日志尾巴、轨迹),这里是出口的兜底(外审 Qwen 第六节 2)。
@@ -221,6 +224,13 @@ class AgentRuntime:
             parts.nav.guard = ObstacleGuard()
             self._obs_srv = ObsBridgeServer(obs_socket or store_dir / "obs.sock", self.obs_view,
                                             monotonic=monotonic or time.monotonic)
+        #: W41 全局重定位:拿感知的墙那一层在整张图上套位置(配了避障、定位器才有)。
+        from d1max_agent.globalloc import GlobalLoc
+        self.globalloc: GlobalLoc | None = GlobalLoc(self.obs_view) \
+            if self.obs_view is not None else None
+        self._scan_job: asyncio.Task | None = None
+        #: 点云套图连着自动请了几次重定位(定位器又锁回错处就不再请,等人)。
+        self._scan_relocs = 0
         #: 人员检测(W24,决策 39):检测节点经本机人员桥报帧,这里判有没有人、记事件。
         if persons not in ("none", "bridge"):
             raise ValueError(f"persons 要是 none 或 bridge,给的是 {persons!r}")
@@ -235,6 +245,7 @@ class AgentRuntime:
                 monotonic=monotonic or time.monotonic,
                 snapshot_dir=persons_snapshots or store_dir / "person-snapshots",
                 save_snapshot=self._save_person_snapshot)
+            self.person_view.ignore = self._person_ignored     # W41:人员检测忽略区
             self._pers_srv = PersonBridgeServer(persons_socket or store_dir / "persons.sock",
                                                 self.person_view,
                                                 monotonic=monotonic or time.monotonic)
@@ -428,6 +439,23 @@ class AgentRuntime:
         if est is None or (callable(ok) and not ok(getattr(nav, "odom_ok", True))):
             return None
         return (est.x, est.y, est.yaw)
+
+    def _person_ignored(self, bearing_deg: float, range_m: float) -> bool:
+        """检测到的人(狗身系:方向°、距离 m)落在正用着的那张图的人员忽略区里(W41)。定位不可信、没有
+        忽略区:不忽略。"""
+        zs = self._zones
+        if zs is None or self.parts is None or self.loaded_map != (zs.map_id, zs.map_version):
+            return False
+        zones = zs.ignore()
+        if not zones or not hasattr(self.parts.nav, "_odom_pose"):
+            return False
+        here = self._standoff_here()
+        if here is None:
+            return False
+        from d1max_contract.zones import point_in_polygon
+        a = here[2] + math.radians(bearing_deg)
+        x, y = here[0] + range_m * math.cos(a), here[1] + range_m * math.sin(a)
+        return any(point_in_polygon(x, y, z.polygon) for z in zones)
 
     def _hard_zones(self) -> list[Any]:
         """遥控要守的硬禁区(决策 65):正在用的那一份**加上**等着换的那一份(放宽的等空闲才换,遥控
@@ -664,6 +692,8 @@ class AgentRuntime:
         if self.parts is not None and self.loaded_map is not None:
             # W00c6e:设位置(里程锚定)。真狗要人给位置;仿真按原样,也收(测试挪坐标用)。
             out["relocalize"] = {"needs_pose": not self.parts.nav.anchor.identity}
+            if self._global_ok():
+                out["relocalize"]["global"] = True        # W41:能「自动找位置」(点云套全图)
             # W00c6f:在当前位置标原点(定位不好就拒);W13a:也能只标待命点(不动原点)
             out["mark_home"] = {"standby": True}
             # W17:goto 到了能拍一张(事件派遣的现场照片,跟巡检点位的照片一样归档、传站点)。只报配了
@@ -680,7 +710,8 @@ class AgentRuntime:
             # teleop_hard(决策 65):这台狗遥控时守硬禁区(老狗不报,站点据此提醒操作的人)
             # erase(地图台账 44):认得抹掉区(老狗不报,站点发给它时换成同一块禁行区)
             z: dict[str, Any] = {"rev": self._zones.revision if self._zones else 0,
-                                 "enforced": self._planned, "teleop_hard": True, "erase": True}
+                                 "enforced": self._planned, "teleop_hard": True, "erase": True,
+                                 "ignore": True}
             if self._zones_pending is not None:
                 z["pending_rev"] = self._zones_pending.revision
             if self._planned:
@@ -1162,7 +1193,19 @@ class AgentRuntime:
                 return "map_mismatch"
         if self._running(self._map_job) or self._switching:
             return "busy: 在换图"                 # 给的是这张图上的位置,换完就作废(W09a 内审应修 2)
-        if "at_home" in p:
+        found: dict[str, Any] | None = None
+        if "global" in p:
+            # W41:自动找位置 —— 拿此刻看到的墙那一层在整张图上套
+            if p.get("global") is not True:
+                return "payload: global 只能是 true"
+            if not self._global_ok():
+                return "unsupported: 这台狗不能自动找位置(要配避障和定位器)"
+            got = await self._global_find()
+            if isinstance(got, str):
+                return got
+            pose, found = got
+            source = "global"
+        elif "at_home" in p:
             if p.get("at_home") is not True:
                 return "payload: at_home 只能是 true"
             home = self.parts.home
@@ -1193,10 +1236,13 @@ class AgentRuntime:
         loc = self.parts.nav.anchor
         if isinstance(loc, BridgeLocalizer):
             # 配了定位器(W09a):请它按人给的位置(初值)重定位;稳下来的时候修正量经 on_corrected
-            # 交给引擎。
-            why = await loc.relocalize(m, pose)
+            # 交给引擎。自动找到的(W41)给大一点的偏差,定位器在附近再找。
+            from d1max_agent.globalloc import GLOBAL_SIGMA_M
+            why = await (loc.relocalize(m, pose, GLOBAL_SIGMA_M) if found is not None
+                         else loc.relocalize(m, pose))
             if why:
                 return why
+            self._scan_relocs = 0
             # 人给的位置:RTK 核对之前的结论作废、一阵子不按 RTK 自动请(W09e 内审应修 4)
             self._rtk_check.human_override(self._mono())
             loc.rtk_disagree = ""
@@ -1207,8 +1253,28 @@ class AgentRuntime:
         self.events.emit("relocalized", {"task_id": cmd.task_id, "source": source,
                                          "map_id": m[0], "map_version": m[1],
                                          "x": round(pose[0], 3), "y": round(pose[1], 3),
-                                         "yaw": round(pose[2], 4)})
+                                         "yaw": round(pose[2], 4)} | (found or {}))
+        if found is not None:
+            return "", found
         return ""
+
+    def _global_ok(self) -> bool:
+        return (self.globalloc is not None and self.globalloc.ready and self.parts is not None
+                and isinstance(self.parts.nav.anchor, BridgeLocalizer))
+
+    async def _global_find(self) -> str | tuple[tuple[float, float, float], dict[str, Any]]:
+        """自动找位置(W41):→ 拒收原因,或者 (位姿, 回执里带的东西)。"""
+        from d1max_agent.globalloc import GlobalLocError, decide
+        try:
+            pts = self.globalloc.scan()
+            cands = await self.globalloc.locate(pts)
+        except GlobalLocError as exc:
+            return f"not_found: {exc}"[:200]
+        best, why = decide(cands)
+        top = [c.to_wire() for c in cands[:3]]
+        if best is None:
+            return f"not_found: {why}"[:200]
+        return (best.x, best.y, best.yaw), {"fit": round(best.fit, 3), "candidates": top}
 
     async def _mark_home(self, cmd: Command) -> str | tuple[str, dict[str, Any]]:
         """在当前位置标原点(W00c6f):用**此刻锚定后的地图位姿**当这张图上的原点。狗要停着、不在忙;定位
@@ -1277,9 +1343,71 @@ class AgentRuntime:
 
     def _loc_corrected(self, delta: tuple[float, float, float] | None, human: bool) -> None:
         """定位器跳过之后稳下来、重定位完(W09a):同人工重设(W00c6e),来路、出发点按修正量挪;给不出
-        就来路作废。只有人给的位置才把丢定位的次数从头算(内审应修 4)。"""
+        就来路作废。只有人给的位置才把丢定位的次数从头算(内审应修 4)。
+
+        W41:稳下来之后拿点云套图核一遍(:meth:`_scan_check`,后台):现场 MOLA 两次锁到 5 m 外的
+        错解,自己还说可信。"""
         if self.parts is not None:
             self.parts.engine.relocalized(delta, reset_attempts=human)
+        if self._global_ok() and not self._running(self._scan_job):
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self._scan_job = loop.create_task(self._scan_check(self._mono()))
+
+    async def _scan_check(self, since: float) -> None:
+        """定位器稳下来以后核一遍(W41):等一份「之后收到、狗没动」的点云(最多
+        :data:`SCAN_CHECK_WAIT_S` 秒),按定位器给的位置算贴合度;对得上就算了;锁错了 —— 能认出
+        对的那处就请定位器按那处重定位(连着最多 :data:`SCAN_RELOC_MAX` 次,定位器又锁回错处就
+        不再请),认不出就标定位不可信、等人。"""
+        from d1max_agent.globalloc import GLOBAL_SIGMA_M, GlobalLocError
+        anchor = self.parts.nav.anchor
+        m = self.loaded_map
+        deadline = self._mono() + SCAN_CHECK_WAIT_S
+        pts = None
+        while self._mono() < deadline:
+            await asyncio.sleep(0.5)
+            if self.loaded_map != m:
+                return
+            pts = self.globalloc.view.wall_scan(since=since + 1.0)
+            if pts is not None:
+                break
+        if pts is None or m is None:
+            log.info("点云套图核对:%s 秒内没等到狗停着的点云,这次不核", SCAN_CHECK_WAIT_S)
+            return
+        o = await self.hal.odometry()
+        est = anchor.estimate((o.x, o.y, o.yaw)) if o.valid else None
+        if est is None or (est.map_id, est.map_version) != m:
+            return
+        pose = (est.x, est.y, est.yaw)
+        try:
+            v = await self.globalloc.check(pts, pose)
+        except GlobalLocError as exc:
+            log.info("点云套图核对不了:%s", exc)
+            return
+        if self.loaded_map != m:
+            return
+        if v.ok:
+            log.info("点云套图核对:定位器给的 (%.2f, %.2f) 贴合度 %.2f,对得上", pose[0], pose[1],
+                     v.fit)
+            self._scan_relocs = 0
+            return
+        log.warning("%s", v.reason)
+        data: dict[str, Any] = {"map_id": m[0], "map_version": m[1], "fit": round(v.fit, 3),
+                                "x": round(pose[0], 2), "y": round(pose[1], 2),
+                                "reason": v.reason[:200]}
+        if v.reloc is not None and self._scan_relocs < SCAN_RELOC_MAX:
+            self._scan_relocs += 1
+            self.events.emit("loc_wrong_solution", data | {"reloc": v.reloc.to_wire()})
+            why = await anchor.relocalize(m, (v.reloc.x, v.reloc.y, v.reloc.yaw), GLOBAL_SIGMA_M,
+                                          human=False)
+            if not why:
+                return
+            log.warning("按点云套图请定位器重定位没成:%s", why)
+        anchor.scan_disagree = (v.reason if v.reloc is None else
+                                f"{v.reason};定位器又锁回去了,请重新设位置")[:200]
+        self.events.emit("loc_wrong_solution", data | {"stuck": True})
 
     async def _loc_health(self) -> Any:
         return self.parts.nav.anchor.health()
@@ -1545,6 +1673,10 @@ class AgentRuntime:
             # 换了图:锚定作废(W00c6e);定位器换先验(W09a,带上这张图在狗上的目录)。
             self.parts.nav.anchor.on_map(
                 self.loaded_map, str(self.maps.dir_of(ref)) if self.maps is not None else "")
+        if getattr(self, "globalloc", None) is not None:     # 构造时换第一张图,它还没建
+            self.globalloc.set_map(self.loaded_map,
+                                   self.maps.dir_of(ref) if self.maps is not None else None)
+            self._scan_relocs = 0
         # 区域跟着几何版本走(W10):换图就换成这一版记着的那份,等放宽的作废
         self._zones = self.zonebook.get(ref.map_id, ref.version)
         self._zones_pending = None
@@ -1769,6 +1901,8 @@ class AgentRuntime:
         self._closed = True
         if self._devices_task is not None and not self._devices_task.done():
             self._devices_task.cancel()
+        if self._scan_job is not None and not self._scan_job.done():
+            self._scan_job.cancel()
 
         async def _step(what: str, fn) -> None:
             try:

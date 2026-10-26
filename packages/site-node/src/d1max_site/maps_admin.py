@@ -296,6 +296,80 @@ class MapAdmin:
 
     # ------------------------------------------------------------ 删除
 
+    # ------------------------------------------------------------ 清噪点(W41)
+
+    def _grid(self, map_id: str, version: str) -> tuple[str, dict[str, Any], str, bytes]:
+        from d1max_site import map_preview as mp
+        from d1max_site.maps import MapError
+        self.ref(map_id, version)
+        try:
+            yname, meta, image, data, _, _ = self.cat._raster(map_id, version)
+        except (MapError, mp.PreviewError) as exc:
+            raise AdminError(409, f"{map_id}:{version} 没法清噪点:{exc}") from exc
+        return yname, meta, image, data
+
+    def noise(self, map_id: str, version: str) -> dict[str, Any]:
+        """这一版里「零星噪点」的候选(``map_denoise.find_specks``),给网页画出来让人挑。"""
+        from d1max_site import map_denoise as dn
+        map_id, version = self._names(map_id, version)
+        _, meta, _, data = self._grid(map_id, version)
+        specks = dn.find_specks(data, meta)
+        return {"map_id": map_id, "version": version, "digest": dn.digest(data),
+                "res": meta["resolution"], "max_m2": dn.SPECK_MAX_M2, "ring_m": dn.RING_M,
+                "specks": [{k: s[k] for k in ("id", "x", "y", "px")} for s in specks]}
+
+    def denoise(self, map_id: str, version: str, *, digest: Any, skip: Any,
+                by: str) -> dict[str, Any]:
+        """把这一版的噪点候选(``skip`` 里的编号除外)清掉,另存成新的一版:文件照抄、只换栅格;
+        这一版上每只狗的原点照抄(同一个坐标系)。区域、待命点、拦截点走「新版本带过来、要人核」(R2)。
+        ``digest`` 跟这一版现在的栅格对不上(找完之后图换了)→ 409。"""
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        from d1max_site import map_denoise as dn
+        from d1max_site.maps import MapError
+        map_id, version = self._names(map_id, version)
+        if not isinstance(skip, list) or not all(isinstance(i, int) and not isinstance(i, bool)
+                                                for i in skip):
+            raise AdminError(400, "skip 要是编号的列表")
+        _, meta, image, data = self._grid(map_id, version)
+        if digest != dn.digest(data):
+            raise AdminError(409, "这一版的栅格在你看过之后换了:重新打开清噪点再看一遍",
+                             reason="stale")
+        specks = [s for s in dn.find_specks(data, meta) if s["id"] not in set(skip)]
+        if not specks:
+            raise AdminError(409, "没有要清的(都去掉了,或者没找到)", reason="nothing")
+        new = self._next_version(map_id, version)
+        src = self.cat.root / map_id / version
+        tmp = Path(tempfile.mkdtemp(prefix="denoise-", dir=self.cat.root))
+        try:
+            for f in self.ref(map_id, version).files:
+                shutil.copy2(src / f.name, tmp / f.name)
+            (tmp / image).write_bytes(dn.clean(data, meta, specks))
+            px = sum(s["px"] for s in specks)
+            try:
+                self.cat.import_dir(tmp, map_id=map_id, version=new, source="denoise",
+                                    note=f"从 {version} 清了 {len(specks)} 处零星噪点({px} 格)")
+            except MapError as exc:
+                raise AdminError(409, str(exc)) from exc
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        from d1max_site.standby import copy_homes
+        homes = copy_homes(self.db, map_id, version, new)
+        return {"map_id": map_id, "from": version, "version": new, "cleaned": len(specks),
+                "cells": px, "homes_copied": homes}
+
+    def _next_version(self, map_id: str, version: str) -> str:
+        """新版本号:这个地图号下都是数字就取最大的加一;不然 ``<版本>-dn<n>``。"""
+        have = [m["version"] for m in self.cat.list() if m["map_id"] == map_id]
+        if have and all(v.isdigit() for v in have):
+            return str(max(int(v) for v in have) + 1)
+        n = 1
+        while f"{version}-dn{n}" in have:
+            n += 1
+        return f"{version}-dn{n}"
+
     def delete(self, map_id: str, version: str) -> dict[str, Any]:
         """删掉一个旧版本(文件 + 登记 + 挂在它上面的区域、待命点、拦截点、原点)。**拒绝**:有狗在用、
         这个地图号下最新的一版、有狗的换图正在路上要换到它、是哪只狗的「退回目标」(W41:
