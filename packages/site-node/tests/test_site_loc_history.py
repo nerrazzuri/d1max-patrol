@@ -224,3 +224,34 @@ def test_接口_要登录_过滤_坏参数400(tmp_path):
         assert s.req("GET", "/api/loc-episodes?robot=B", token=tok)[1]["episodes"] == []
     finally:
         s.close()
+
+
+def test_W41_最初的原因不丢_闪一下被打断的写在前面_开着时换了说法接在后面(台):
+    """2026-10-26 现场:盖住雷达那一次只剩后来的「刚跳过…等它稳下来」,最初的「雷达被挡」没了。"""
+    c, h, _ = 台
+    _拍(c, h, _lost("雷达被挡住了"), 2)
+    _拍(c, h, _degraded(), 1)                                      # 闪了一下变差
+    _拍(c, h, _lost("刚跳过,等它稳下来"), 4)
+    [e] = h.list()
+    assert e["cause"] == "雷达被挡住了;后来:刚跳过,等它稳下来", e["cause"]
+    _拍(c, h, _lost("匹配在来回跳"), 1)
+    _拍(c, h, _lost("匹配在来回跳"), 1)
+    [e] = h.list()
+    assert e["cause"] == "雷达被挡住了;后来:刚跳过,等它稳下来;后来:匹配在来回跳", e["cause"]
+    _拍(c, h, _lost("x" * 190), 1)
+    assert h.list()[0]["cause"] == e["cause"], "太长了不接"
+    # 刚结束又来、接着上一段:新说法也接上
+    _拍(c, h, OK, 1)
+    _拍(c, h, _lost("又被挡"), 4)
+    [e] = h.list()
+    assert e["ongoing"] and e["cause"].endswith(";后来:又被挡"), e["cause"]
+
+
+def test_W41_被打断的那一小段太久以前_不往前接(台):
+    c, h, _ = 台
+    _拍(c, h, _lost("雷达被挡住了"), 2)
+    _拍(c, h, OK, 1)
+    c.ms += MERGE_GAP_MS + 1000
+    _拍(c, h, _lost("刚跳过"), 4)
+    [e] = h.list()
+    assert e["cause"] == "刚跳过"

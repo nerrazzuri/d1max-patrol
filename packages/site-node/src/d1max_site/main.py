@@ -742,14 +742,15 @@ class Server:
         log.info("天气:%s", f"联网查(坐标 {latlon[0]:.2f},{latlon[1]:.2f})" if latlon
                  else "没配坐标,只能手动切")
         # W00c5b:视频经站点。狗按需把相机推到这里(SRT),这里转 MJPEG 给观众。
-        from d1max_site.video import VideoHub, dispatcher_sender
+        from d1max_site.video import VideoHub, dispatcher_sender, video_fps
         vcfg = cfg.get("video", {})
         self.video = VideoHub(send=dispatcher_sender(self.dispatcher, self.loop),
                               known=lambda rid: rid in self.dispatcher.clients,
                               cameras=self.dispatcher.cameras,
                               srt_host=vcfg.get("srt_host") or cfg["hostnames"][0],
                               ports=tuple(vcfg.get("ports", (8890, 8989))),
-                              ffmpeg=vcfg.get("ffmpeg", "ffmpeg"))
+                              ffmpeg=vcfg.get("ffmpeg", "ffmpeg"),
+                              fps=video_fps(vcfg))
         self.dispatcher.on_event(self.video.on_event)
         # W00c5c:遥控经站点(决策 7)。「没画面不许动」读的就是上面那个视频的画面健康。
         from d1max_site.teleop import TeleopDesk
@@ -768,6 +769,7 @@ class Server:
         self.dispatcher.maps = self.maps           # 派单前查点在不在「有图」的地方(W09c)
         from d1max_site.nav_zones import NavZones
         self.zones = NavZones(self.db, now_ms=wall_ms)
+        self.alert_sources.nav_zones = self.zones.effective     # W41:出了禁行区 P1 自己解决
         # W23:拦截点走不走得到(跟狗同一份规划);设的时候查,杂事线程每拍对账
         from d1max_site.intercept_reach import InterceptReach
         self.incidents.reach = InterceptReach(self.db, self.maps, self.zones)

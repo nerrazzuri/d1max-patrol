@@ -157,7 +157,7 @@ class BridgeClient:
         if self.core.map_ref != (m.map_id, m.map_version):
             return {"ok": False, "reason": "定位器载的不是这张图"}
         why = await self._ask(self.backend.relocalize(m.x, m.y, m.yaw, m.sigma_xy, req=m.req,
-                                                      human=True))
+                                                      human=m.human))
         if why:
             return {"ok": False, "reason": why}
         return {"ok": True, "reason": ""}

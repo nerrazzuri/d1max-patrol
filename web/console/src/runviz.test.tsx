@@ -366,3 +366,33 @@ describe("摄像头登记", () => {
     expect(document.querySelector(".camform [role=alert]")!.textContent).toContain("地址里不要带账号口令");
   });
 });
+
+describe("W41 轨迹分段:遥控器开的那段不连线", () => {
+  it("按断点切段,一个点的段不画;老站点没有断点就是一整条", async () => {
+    const { trailSegs } = await import("./runviz");
+    const tr: [number, number][] = [[0, 0], [1, 0], [2, 0], [5, 5], [9, 9], [10, 9]];
+    expect(trailSegs({ trail: tr, trail_cuts: [3, 4] })).toEqual([[[0, 0], [1, 0], [2, 0]], [[9, 9], [10, 9]]]);
+    expect(trailSegs({ trail: tr })).toEqual([tr]);
+    expect(trailSegs({ trail: tr, trail_cuts: [0, 99, -1, 1.5] })).toEqual([tr]);
+    expect(trailSegs({ trail: [[0, 0]] })).toEqual([]);
+  });
+  it("地图上每段一条线", async () => {
+    installScreenCTM();
+    const viz: VizData = { robots: { A: { ...VIZ.robots.A, trail: [[0, 3], [1, 3], [6, 6], [7, 6]], trail_cuts: [2] } } };
+    const { container: c } = mapPage(META, viz);
+    await waitFor(() => expect(c.querySelectorAll("polyline.rv-trail").length).toBe(2));
+  });
+});
+
+describe("W41 Live 页 P1 报警卡片", () => {
+  it("报警卡片里也有定位那一行", async () => {
+    const { AlarmTile } = await import("./live");
+    const a = { key: "k", kind: "intrusion", title: "有人闯入", robot: "A", first_ms: 0, acked_by: "", acked_ms: null, context: {} };
+    const { container: c } = render(
+      <AlarmTile a={a as never} u={unit(robot("A"))} role="admin" now={1000} onAck={() => {}} onSiren={() => {}} onFalse={() => {}} onMap={() => {}} onOpen={() => {}} />,
+    );
+    const ri = c.querySelector('.alarm-tile [data-testid="run-info"]');
+    expect(ri).not.toBeNull();
+    expect(ri!.textContent).toContain("scan matching");
+  });
+});

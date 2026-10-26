@@ -45,8 +45,8 @@ class MolaRos:
     def __init__(self, loop: asyncio.AbstractEventLoop, *, lidar_topic: str,
                  on_scan: Callable[[], None], on_estimate: Callable[[Estimate], None]) -> None:
         self._loop = loop
-        if not rclpy.ok():
-            rclpy.init(args=None)
+        from d1max_localizer import rosinit
+        rosinit.init(rclpy)               # W41:停止信号归 asyncio,rclpy 不抢(抢了进程 abort)
         self.node = rclpy.create_node("d1max_localizer")
         self._pairer = Pairer(lambda e: loop.call_soon_threadsafe(on_estimate, e))
         best_effort = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT,

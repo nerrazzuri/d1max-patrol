@@ -7,7 +7,9 @@
 # 站点主机:优先 D1MAX_SITE_NTP,没有就从 D1MAX_SITE_MQTT(mqtts://<主机>:<端口>)里取。**不 source 这份文件**:
 # 它是 systemd 的 EnvironmentFile=,按字面量读(同装机脚本的 read_env_value)—— `a;reboot` 这种手敲歪的值
 # bash 一求值就以 root 跑了。主机名只认字母、数字、点、减号。
-# 退出码:0 打出了配置;3 两个都没填(装完填了站点地址再跑一遍装机脚本);4 值不干净。
+# 从 D1MAX_SITE_MQTT 取出来是本机回环(127.x、localhost:站点经 SSH 隧道接过来,W41 2026-10-26 现场)
+# 不配:隧道只转 TCP,对时(UDP 123)过不去,写进去等于向自己对时。这种拓扑要单独填 D1MAX_SITE_NTP。
+# 退出码:0 打出了配置;3 两个都没填(装完填了站点地址再跑一遍装机脚本)、或者只能取到本机回环;4 值不干净。
 set -euo pipefail
 ENV_FILE="${1:-/etc/d1max/env}"
 if [[ ! -r "$ENV_FILE" ]]; then
@@ -32,6 +34,11 @@ if [[ -z "$host" ]]; then
 fi
 if [[ -z "$host" ]]; then
   echo "对时:$ENV_FILE 里 D1MAX_SITE_NTP、D1MAX_SITE_MQTT 都没填,先不配(填了站点地址再跑一遍装机脚本)" >&2
+  exit 3
+fi
+if [[ "$raw" != "$(read_env_value D1MAX_SITE_NTP)" && ( "$host" == 127.* || "$host" == localhost ) ]]; then
+  echo "对时:站点地址 [$host] 是本机回环(站点经隧道接过来):对时过不了隧道,先不配;" \
+       "要对时就在 $ENV_FILE 里填 D1MAX_SITE_NTP=<站点主机在狗这边能直接到的地址>" >&2
   exit 3
 fi
 if [[ "$raw" == \"* || "$raw" == \'* ]]; then

@@ -12,6 +12,10 @@
   :data:`MERGE_GAP_MS` 内又来同样的,接着上一段(不拆成一串碎段)。
 - **结束**:恢复了、转成另一种(丢了→变差)、狗掉线、遥测断了 :data:`SILENT_MS`、站点重启(``end_how``
   写明;后三种的结束时刻不是定位真的恢复的时刻)。
+- **原因不丢**(W41,2026-10-26 现场:盖住雷达那一次只剩后来的「刚跳过…等它稳下来」,最初的
+  「雷达被挡」没了):还没满 :data:`START_AFTER_MS` 就被打断的那一小段(中间闪了一下正常、或者
+  丢了↔变差)的原因留着,:data:`MERGE_GAP_MS` 内又开了一段就写在前面;一段开着时狗换了说法,接在后面
+  (「A;后来:B」,总长 :data:`CAUSE_MAX` 字以内)。
 - **有界**:每台狗最多 :data:`PER_ROBOT` 段、全站最多 :data:`MAX_ROWS` 段、最多留
   :data:`KEEP_MS`(没结束的不删)。老狗(遥测没有 ``loc`` 块)不记 —— 不猜。
 """
@@ -37,6 +41,17 @@ KEEP_MS = 90 * 24 * 3600 * 1000
 #: 每隔这么久修剪一次(毫秒)。
 PRUNE_EVERY_MS = 10 * 60_000
 KINDS = ("lost", "degraded")
+#: 原因一栏最多这么多字。
+CAUSE_MAX = 200
+LATER = ";后来:"
+
+
+def _join(first: str, later: str) -> str:
+    """把后来的说法接在后面(重复的不接;太长了就不接)。"""
+    if not later or later in first.split(LATER):
+        return first
+    out = f"{first}{LATER}{later}"
+    return out if len(out) <= CAUSE_MAX else first
 
 
 @dataclass
@@ -58,6 +73,10 @@ class _Mem:
     pose: tuple[str, str, float, float] | None = None
     task_id: str = ""
     seen_ms: int = 0
+    #: 开着的那一段现在的原因(换了说法就接上去)。
+    cur_cause: str = ""
+    #: 没满去抖时间就被打断的那一小段的原因和时刻(W41)。
+    early: tuple[str, int] | None = None
 
 
 class LocHistory:
@@ -100,26 +119,54 @@ class LocHistory:
         reason = str(t.loc.get("reason") or "")
         degraded = str(t.loc.get("degraded") or "")
         kind = "lost" if reason else "degraded" if degraded else ""
+        said = (reason or degraded)[:CAUSE_MAX]
         if not kind:
-            m.pending = None
+            self._drop_pending(m, now)
             self._end(rid, m, "recovered")
             return
         if m.cur_id is not None:
             if m.cur_kind == kind:
+                self._more_cause(rid, m, said)
                 return
             self._end(rid, m, f"became_{kind}")       # 丢了→变差(或反过来):前一段到此为止
             m.pending = None
         sigma = t.loc.get("sigma_m")
         pend = m.pending
+        if pend is not None and pend.kind == kind:
+            pend.cause = _join(pend.cause, said)
         if pend is None or pend.kind != kind:
+            self._drop_pending(m, now)
+            cause = said
+            if m.early is not None and now - m.early[1] <= MERGE_GAP_MS:
+                cause = _join(m.early[0], said)      # 先前被打断的那一小段的原因写在前面
+            m.early = None
             m.pending = _Pending(
-                kind=kind, since_ms=now, cause=(reason or degraded)[:200], place=m.pose,
+                kind=kind, since_ms=now, cause=cause, place=m.pose,
                 sigma=float(sigma) if isinstance(sigma, (int, float)) else None,
                 source=str(t.loc.get("source") or "")[:40])
             pend = m.pending
         if now - pend.since_ms >= START_AFTER_MS:
             self._open(rid, m, pend)
             m.pending = None
+
+    @staticmethod
+    def _drop_pending(m: _Mem, now: int) -> None:
+        """没满去抖时间的那一小段作废:原因留着,一会儿又开一段时写在前面。"""
+        if m.pending is not None:
+            m.early = (m.pending.cause.split(LATER)[0], now)     # 只带最初那一个原因
+        m.pending = None
+
+    def _more_cause(self, rid: str, m: _Mem, said: str) -> None:
+        cause = _join(m.cur_cause, said)
+        if cause == m.cur_cause or m.cur_id is None:
+            return
+        try:
+            with self.db.tx() as c:
+                c.execute("UPDATE loc_episodes SET cause=? WHERE id=?", (cause, m.cur_id))
+        except Exception:
+            log.exception("%s 定位历史的原因接不上", rid)
+            return
+        m.cur_cause = cause
 
     def tick(self) -> None:
         """遥测断了太久的狗,封掉没结束的段;每隔一阵修剪。"""
@@ -147,6 +194,12 @@ class LocHistory:
                 c.execute("UPDATE loc_episodes SET end_ms=NULL, end_how='' WHERE id=?",
                           (prev["id"],))                # 刚结束又来:接着上一段
                 m.cur_id, m.cur_kind = int(prev["id"]), p.kind
+                cause = str(c.execute("SELECT cause FROM loc_episodes WHERE id=?",
+                                      (prev["id"],)).fetchone()["cause"] or "")
+                for said in p.cause.split(LATER):
+                    cause = _join(cause, said)
+                c.execute("UPDATE loc_episodes SET cause=? WHERE id=?", (cause, prev["id"]))
+                m.cur_cause = cause
                 return
             cur = c.execute(
                 "INSERT INTO loc_episodes(robot_id, kind, start_ms, map_id, map_version, x, y, "
@@ -155,6 +208,7 @@ class LocHistory:
                  mp[2] if mp else None, mp[3] if mp else None, p.cause, p.source, p.sigma,
                  m.task_id))
             m.cur_id, m.cur_kind = int(cur.lastrowid), p.kind
+            m.cur_cause = p.cause
         self._prune_robot(rid)
 
     def _end(self, rid: str, m: _Mem, how: str) -> None:

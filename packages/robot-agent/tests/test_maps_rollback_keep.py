@@ -135,3 +135,19 @@ def test_下载失败不动当前和上一张(k):
     with pytest.raises(MapInstallError):
         keeper.install(site.add("m", "3", {"x.pgm": b"three"}))
     assert keeper.active() == b and keeper.previous() == a
+
+
+def test_W41_同一版重新登记_清单里文件顺序不一样_不整张重下(k):
+    """2026-10-26 现场:同一版在站点重新登记,清单只是排列不同,狗就整张重下(19 s)。"""
+    keeper, site, root = k
+    a = site.add("m", "1", {"x.pgm": b"one", "prior.mm": b"big", "y.yaml": b"res"})
+    _activate(keeper, a)
+    again = MapRef(map_id="m", version="1", files=tuple(reversed(a.files)))
+    assert again != a and map_digest(again) == map_digest(a)
+    site.calls.clear()
+    assert keeper.install(again) == root / "m" / "1"
+    assert site.calls == [], "内容一样:不下"
+    changed = site.add("m", "1", {"x.pgm": b"ONE", "prior.mm": b"big", "y.yaml": b"res"})
+    site.calls.clear()
+    keeper.install(changed)
+    assert site.calls, "内容真变了:照样下"

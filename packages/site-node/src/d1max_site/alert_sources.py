@@ -131,6 +131,16 @@ class _Mem:
     #: 最后一次遥测里的地图位姿(``MapPose`` 的报文)与收到的时刻(站点的钟),告警带现场用(W17)。
     pose: dict | None = None
     pose_ms: int = 0
+    #: 报过「狗在禁行区里」的 P1、还没自己解决(W41);狗离开禁行区够远从哪一刻起(站点的钟)。
+    nogo: bool = False
+    nogo_clear_since: int | None = None
+
+
+#: W41(2026-10-26 现场:禁行区删了、狗也不在里面了,P1 还挂着、也不提示能关):狗报的位置离每一个
+#: 在生效的禁行区(禁行、抹掉)都至少这么远、连着这么久,「狗在禁行区里」就自己解决。定位不可信时
+#: 遥测没有位姿,不解决。
+NOGO_CLEAR_M = 0.5
+NOGO_CLEAR_S = 5
 
 
 class SiteAlertSources:
@@ -158,6 +168,9 @@ class SiteAlertSources:
         #: 报、解决失败了下一拍再来;站点起来时从事件库读回每台狗最近一条 ``robot_fault``。
         self._payload: dict[str, frozenset[str]] = {}
         self._payload_loaded = False
+        #: 某一版图上在生效的禁行区、限速区(``NavZones.effective``,W41)。主程序接上;``None`` =
+        #: 「狗在禁行区里」不自己解决。
+        self.nav_zones: Callable[[str, str], Any] | None = None
 
     def here(self, robot: str) -> dict:
         """这台狗的现场(W17):最后一次报的地图位姿(带站点收到的时刻)、正在跑的那一趟。站点那一行、
@@ -390,12 +403,15 @@ class SiteAlertSources:
                                   detail=f"图 {d.get('map_id', '?')}:{d.get('map_version', '?')}")
         elif e.kind == "inside_nogo":
             # W10:狗在禁行区里 —— 原地停了,不自己往外走
+            m = self._m(rid)
+            m.nogo, m.nogo_clear_since = True, None
             zone = d.get("label") or d.get("zone", "?")
             self.desk.raise_alert(kind="nogo", robot=rid,
                                   title=f"狗在禁行区「{zone}」里,原地停着等人",
                                   detail=f"位置 ({d.get('x', '?')}, {d.get('y', '?')}),图 "
                                          f"{d.get('map_id', '?')}:{d.get('map_version', '?')};"
-                                         "人到场把它挪出来(遥控),或者核一下区域、定位")
+                                         "人到场把它挪出来(遥控),或者核一下区域、定位;"
+                                         "狗离开禁行区、或者区域删了生效以后,这条自己解决")
         elif e.kind == "map_integrity_failed":
             # W09g:狗起来时正在用的图校验不过 —— 没载、不宣告能自主(不退回命令行的图)。
             which = f"{d.get('map_id', '?')}:{d.get('version', '?')}"
@@ -541,6 +557,8 @@ class SiteAlertSources:
         m = self._m(rid)
         if t.pose is not None:
             m.pose, m.pose_ms = t.pose.to_wire(), self._now()
+            if m.nogo:
+                self._nogo_check(rid, m, t.pose)
         if isinstance(t.loc, dict):
             m.loc_reason = str(t.loc.get("reason") or "")[:200]   # 对账 S6:空闲丢定位的告警带上
         if abs(skew) > SKEW_ALARM_S and not m.skew:
@@ -551,6 +569,34 @@ class SiteAlertSources:
             m.skew = False
         if t.storage is not None:
             self._storage(rid, m, t.storage)
+
+    def _nogo_check(self, rid: str, m: _Mem, pose: Any) -> None:
+        """「狗在禁行区里」的 P1:狗离开在生效的禁行区够远、连着够久就自己解决(W41)。"""
+        if self.nav_zones is None:
+            return
+        from d1max_contract.zones import distance_to_polygon, point_in_polygon
+        try:
+            zs = self.nav_zones(pose.map_id, pose.map_version)
+            near = min((0.0 if point_in_polygon(pose.x, pose.y, z.polygon)
+                        else distance_to_polygon(pose.x, pose.y, z.polygon)
+                        for z in zs.nogo()), default=float("inf"))
+        except Exception:
+            log.exception("%s 查禁行区没成", rid)
+            return
+        now = self._now()
+        if near < NOGO_CLEAR_M:
+            m.nogo_clear_since = None
+            return
+        if m.nogo_clear_since is None:
+            m.nogo_clear_since = now
+        if now - m.nogo_clear_since < NOGO_CLEAR_S * 1000:
+            return
+        try:
+            self.desk.resolve_all(rid, "nogo", who="site:left_nogo")
+        except Exception:
+            log.exception("%s 出了禁行区,P1 解决不了,下一拍再来", rid)
+            return
+        m.nogo, m.nogo_clear_since = False, None
 
     def _storage(self, rid: str, m: _Mem, f) -> None:
         """狗的发件箱(W00c5d,决策 8):盘到 80%、证据积压半小时,各报一次;回落之后才重新武装。"""

@@ -29,6 +29,7 @@ class 假MOLA:
     def __init__(self, core):
         self.core = core
         self.priors, self.relocs = [], []
+        self.humans: list[bool] = []
         self.refuse = ""
         self.missing = set()
 
@@ -43,6 +44,7 @@ class 假MOLA:
 
     async def relocalize(self, x, y, yaw, sigma, *, req=None, human=True):
         self.relocs.append((x, y, yaw, sigma))
+        self.humans.append(human)
         if not self.refuse:
             self.core.relocalized(req=req, x=x, y=y, yaw=yaw, sigma=sigma, human=human)
         return self.refuse
@@ -173,3 +175,14 @@ async def test_没连上的时候照样能喂帧_不炸(tmp_path):
     assert "连不上" in cli.error
     cli.stop()
     await asyncio.wait_for(task, 1.0)
+
+
+async def test_W41_代理自己按最后位置请的重定位_定位器不当成人给的(台):
+    """现场日志:代理自动按最后位置重定位,定位器写「人给的」。"""
+    t = 台
+    await _等(lambda: t.srv.connected and t.agent.prior_task is not None)
+    await t.agent.prior_task
+    await _等(lambda: "等人给初始位置" in t.agent.why_not(True))
+    assert await t.agent.relocalize(M, (1.0, 2.0, 0.3)) == ""
+    assert await t.agent.relocalize(M, (1.0, 2.0, 0.3), human=False) == ""
+    assert t.mola.humans == [True, False]

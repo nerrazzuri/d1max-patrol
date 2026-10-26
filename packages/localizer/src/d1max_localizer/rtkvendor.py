@@ -52,7 +52,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"厂家 RTK 辅助进程起不来:{exc}(要在狗上、source 过厂家的 ROS 环境)", file=sys.stderr,
               flush=True)
         return 2
-    rclpy.init(args=None)
+    from rclpy.executors import SingleThreadedExecutor
+
+    from d1max_localizer import rosinit
+    rosinit.init(rclpy)
+    stop = rosinit.stop_flag()                           # W41:正常停止退出码 0
     node = rclpy.create_node("d1max_rtk_vendor")
 
     def on(msg: Any) -> None:
@@ -60,11 +64,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if line is not None:
             print(line, flush=True)
     node.create_subscription(UniRtkPvh, a.topic, on, 10)
+    ex = SingleThreadedExecutor()
+    ex.add_node(node)
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
+        while rclpy.ok() and not stop.is_set():
+            ex.spin_once(timeout_sec=0.5)
+    except rosinit.shutdown_errors():
         pass
     finally:
+        ex.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
     return 0

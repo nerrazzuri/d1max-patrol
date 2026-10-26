@@ -1517,6 +1517,12 @@ def test_对时配置_从env取站点主机_不求值_不干净的不写(tmp_pat
                 "D1MAX_SITE_NTP=\"x\"\n"):
         r = 跑(bad)
         assert r.returncode == 4 and r.stdout == "", bad
+    # W41(2026-10-26 现场):站点经 SSH 隧道接过来,D1MAX_SITE_MQTT 是本机回环 —— 对时过不了隧道,不配
+    for loop in ("mqtts://127.0.0.1:8883", "mqtts://localhost:8883"):
+        r = 跑(f"D1MAX_SITE_MQTT={loop}\n")
+        assert r.returncode == 3 and r.stdout == "" and "D1MAX_SITE_NTP" in r.stderr, loop
+    r = 跑("D1MAX_SITE_MQTT=mqtts://127.0.0.1:8883\nD1MAX_SITE_NTP=192.168.234.1\n")
+    assert r.returncode == 0 and "NTP=192.168.234.1\n" in r.stdout, "单独填了对时地址:照它配"
     subprocess.run(["bash", "-n", str(conf)], check=True)
 
 

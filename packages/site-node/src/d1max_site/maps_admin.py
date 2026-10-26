@@ -298,7 +298,8 @@ class MapAdmin:
 
     def delete(self, map_id: str, version: str) -> dict[str, Any]:
         """删掉一个旧版本(文件 + 登记 + 挂在它上面的区域、待命点、拦截点、原点)。**拒绝**:有狗在用、
-        这个地图号下最新的一版、有狗的换图正在路上要换到它。"""
+        这个地图号下最新的一版、有狗的换图正在路上要换到它、是哪只狗的「退回目标」(W41:
+        2026-10-26 现场误删了 v2,狗要退回去就没处退了)。"""
         from d1max_site.maps import MapError
         map_id, version = self._names(map_id, version)
         rows = [m for m in self.cat.list() if m["map_id"] == map_id]
@@ -314,6 +315,15 @@ class MapAdmin:
                              reason="latest")
         if (map_id, version) in self._pending_targets():
             raise AdminError(409, f"有狗正在换到 {map_id}:{version},等换完再说", reason="pending")
+        back = [rid for rid in self.robot_ids()
+                if (t := self.rollback_target(rid)) is not None
+                and (t["map_id"], t["version"]) == (map_id, version)]
+        if back:
+            who = "、".join(back)
+            raise AdminError(409, f"{map_id}:{version} 是 {who} 的退回目标"
+                                  "(狗上留着、出事能一键退回去):先让狗换到别的版本、"
+                                  "或者退回目标换了再删",
+                             reason="rollback_target", robots=back)
         gone = {"nav_zones": 0, "nav_zone_proposals": 0, "standby_points": 0, "intercepts": 0,
                 "homes": 0}
         try:

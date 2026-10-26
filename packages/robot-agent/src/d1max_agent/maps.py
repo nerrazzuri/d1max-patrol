@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from d1max_contract.errors import ContractError
-from d1max_contract.maps import MANIFEST, MapRef
+from d1max_contract.maps import MANIFEST, MapRef, map_digest
 
 log = logging.getLogger(__name__)
 
@@ -163,7 +163,9 @@ class MapKeeper:
             have = MapRef.from_wire(json.loads((d / MANIFEST).read_text("utf-8")))
         except (OSError, ValueError, ContractError) as exc:
             return f"的清单 {MANIFEST} 读不了或坏了: {exc}"[:200]
-        if have != ref:
+        # 按内容比(W41:原来整个比,同一版在站点重新登记、文件顺序不一样,就整张重下 19 s)
+        if (have.map_id, have.version) != (ref.map_id, ref.version) \
+                or map_digest(have) != map_digest(ref):
             return f"的清单 {MANIFEST} 跟声明的不一样"
         for f in ref.files:
             p = d / f.name                          # 名字契约里限死了(不许 / 与点开头):落在目录里

@@ -174,7 +174,13 @@ connect_wifi(){
   cur=$(nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2}')
   [ "$cur" = "$SSID" ] && return 0
   nmcli dev wifi rescan >/dev/null 2>&1
-  nmcli dev wifi connect "$SSID" password "$PASS" >/dev/null 2>&1
+  # W41(2026-10-26):每次都 `dev wifi connect` 会新建一条「$SSID 1」「$SSID 2」…的重名连接,
+  # 最后 WiFi 掉了(ssid-not-found)。已经存过同名的连接就直接拉起它,没有才新建。
+  if nmcli -t -f NAME con show 2>/dev/null | grep -Fxq "$SSID"; then
+    nmcli con up id "$SSID" >/dev/null 2>&1
+  else
+    nmcli dev wifi connect "$SSID" password "$PASS" name "$SSID" >/dev/null 2>&1
+  fi
   cur=$(nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2}')
   [ "$cur" = "$SSID" ]
 }

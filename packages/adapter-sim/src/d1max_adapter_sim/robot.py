@@ -482,6 +482,7 @@ class SimRobot:
             control_releasable=True,
             recharge_mode="vendor_dock" if self.charger is not None else "none",
             sensing={"lidar": False, "depth": False, "thermal": False, "imu": self._imu_on,
-                     "joint_effort": False, "foot_force": False},
+                     "imu_hz": 20 if self._imu_on else 0, "joint_effort": False,
+                     "foot_force": False},
             actuators={"light": False, "strobe": self.payload, "siren": self.payload,
                        "speaker": self.payload, "spotlight": self.payload, "head": False})
