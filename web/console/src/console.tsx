@@ -15,6 +15,7 @@ import { ReportsPage } from "./reportpage";
 import { MapPage } from "./mappage";
 import { FELL_KINDS, forGuard, queue, robotCams, robotState, type Alert, type Mode } from "./model";
 import { DutyPage } from "./duty";
+import { LiveWall } from "./livewall";
 import { NoticesPage } from "./notices";
 import { RobotsAdminPage, SystemPage, UsersPage } from "./admin";
 import { MapManagePage } from "./mapmgmt";
@@ -124,7 +125,10 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
           <DutyPage units={units} alerts={alerts} now={now} role={me.role} say={say} refresh={refresh}
             onZoom={(id) => setPending({ kind: "cam", robot: id, cam: "front" })} />
         )}
-        {(route.page === "live" || route.page === "alarms") && <p class="empty">{t("pageSoon")}</p>}
+        {route.page === "live" && (
+          <LiveWall units={units} alerts={alerts} now={now} onZoom={(id) => setPending({ kind: "cam", robot: id, cam: "front" })} />
+        )}
+        {route.page === "alarms" && <p class="empty">{t("pageSoon")}</p>}
         {isAdminPage(route.page) && admin && <AdminNav page={route.page} notices={notices} />}
         {route.page === "admin/notices" && admin && (
           <NoticesPage alerts={alerts} mode={data?.mode ?? null} onAck={ack} onDone={(a) => resolve(a, "handled")}
