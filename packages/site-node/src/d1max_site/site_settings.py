@@ -35,8 +35,13 @@ class SiteSettings:
 
     def put(self, key: str, value: Any) -> None:
         with self.db.tx() as c:
-            c.execute("INSERT OR REPLACE INTO site_settings(key, value) VALUES (?, ?)",
-                      (key, json.dumps(value, ensure_ascii=False)))
+            self.put_in(c, key, value)
+
+    @staticmethod
+    def put_in(c: Any, key: str, value: Any) -> None:
+        """在别人开着的事务里写(跟别的表一起提交,比如布防时间表的开关和时间段)。"""
+        c.execute("INSERT OR REPLACE INTO site_settings(key, value) VALUES (?, ?)",
+                  (key, json.dumps(value, ensure_ascii=False)))
 
     def duty(self) -> dict[str, Any]:
         got = self.get("duty", {})

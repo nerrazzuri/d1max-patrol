@@ -311,3 +311,52 @@ def test_接口权限(tmp_path):
         assert code == 200 and d["source"] == "schedule"
     finally:
         s.close()
+
+
+# ---- 外审 R1:开关和时间段一起存;存失败整份还是旧的 ----
+
+def test_外审R1_关时间表写一半失败_整份还是旧的(台, tmp_path, monkeypatch):
+    s = 台.schedule
+    s.put({"enabled": True, "slots": [slot(0, "00:00", "24:00")]}, by="alice")
+    assert 台.armed("gate")[0] is True
+    import d1max_site.site_settings as ss
+
+    def 坏(*a, **k):
+        raise OSError("写设置失败")
+    monkeypatch.setattr(ss.SiteSettings, "put_in", 坏)
+    with pytest.raises(OSError):
+        s.put({"enabled": False, "slots": []}, by="alice")
+    monkeypatch.undo()
+    v = s.view()
+    assert v["enabled"] is True and len(v["slots"]) == 1
+    assert 台.armed("gate")[0] is True
+    # 重开一次库(站点重启)也是旧的
+    db2 = SiteDB(tmp_path / "site.db")
+    try:
+        s2 = ArmingSchedule(db2, now_ms=台.clock, tz=lambda: KL)
+        assert s2.enabled() is True and len(s2.view()["slots"]) == 1
+    finally:
+        db2.close()
+
+
+def test_外审R1_读的时候看到的是同一份(台, monkeypatch):
+    """读开关和读时间段之间插进一次保存,也不会拼出「开着 + 空时间表」(= 全天撤防)。"""
+    s = 台.schedule
+    s.put({"enabled": True, "slots": [slot(0, "00:00", "24:00")]}, by="alice")
+    real = s._slots_in
+    done = []
+
+    def 插一脚(c):
+        if not done:
+            done.append(1)
+            import threading
+            t = threading.Thread(target=lambda: s.put({"enabled": False, "slots": []}, by="bob"))
+            t.start()
+            t.join(0.3)            # 拿不到锁就等着,不会插进来
+            done.append(t)
+        return real(c)
+    monkeypatch.setattr(s, "_slots_in", 插一脚)
+    assert s.scheduled("gate", 台.clock()) is True
+    done[1].join(5)
+    monkeypatch.undo()
+    assert s.scheduled("gate", 台.clock()) is None      # 后来那次关掉了:整份关
