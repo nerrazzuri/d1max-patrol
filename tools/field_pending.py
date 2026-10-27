@@ -6,7 +6,7 @@
     python3 tools/field_pending.py --all           # 每一条都列(带结论)
 
 结论写在每一条后面(表格最后一格、「—— 结论:…」、「〔结论:…〕」),做完了直接改那一格:
-✅ 真机做过 / ✅ 演示站点做完 / ◐ 做了一半(写着剩下什么)/ ⬜ 没做 / 退役。
+✅ 做完(真机 / 演示站点,写着结果)/ ❌ 没过 / ◐ 做了一半(写着剩下什么)/ ⬜ 没做 / — 不用做 / 退役。
 用户 2026-10-28:演示站点做完了成功了就算做完。
 """
 
@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 DOC = Path(__file__).resolve().parents[1] / "docs" / "真机验证.md"
-KINDS = ("✅", "◐", "⬜", "退役")
+KINDS = ("✅", "❌", "◐", "⬜", "—", "退役")
 #: 表头里「做什么」那一列可能叫的名字
 WHAT = ("做什么", "步骤", "要做的", "内容", "项目", "假设", "怎么做")
 
@@ -66,7 +66,8 @@ def items(path: Path = DOC) -> list[tuple[str, str, str, str]]:
 def kind(st: str) -> str:
     for k in KINDS:
         if st.startswith(k):
-            return {"✅": "做完", "◐": "做了一半", "⬜": "没做", "退役": "退役"}[k]
+            return {"✅": "做完", "❌": "没过", "◐": "做了一半", "⬜": "没做", "—": "不用做",
+                    "退役": "退役"}[k]
     return "?"
 
 
@@ -89,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{sec[:40]:<40} " + "、".join(f"{k} {v}" for k, v in c.items()))
         if a.list or a.all:
             for _, rid, what, st in rs:
-                if a.all or kind(st) in ("没做", "做了一半"):
+                if a.all or kind(st) in ("没做", "做了一半", "没过"):
                     print(f"    {rid:<8} {what[:70]} —— {st}")
     print("合计:" + "、".join(f"{k} {v}" for k, v in tot.items()) + f"(共 {len(rows)} 条)")
     return 0
