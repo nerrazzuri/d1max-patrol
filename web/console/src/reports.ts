@@ -151,3 +151,39 @@ export function fileTag(sinceMs: number, untilMs: number): string {
 export function matches(d: { since_ms: number; until_ms: number } | null, p: { since: number; until: number } | null): boolean {
   return d != null && p != null && d.since_ms === p.since && d.until_ms === p.until;
 }
+
+// ------------------------------------------------------------------ W44 第二期:业主的报表页(按天汇总)
+
+export type ReportKind = "week" | "lastweek" | "month" | "custom";
+
+/** 报表的时间段(本地时间):这周 = 星期一 0 点起 7 天,上周,这个月,自己选(两头都算,最长 31 天;不对回 null)。 */
+export function reportRange(kind: ReportKind, now: number, from?: string, to?: string): { since: number; until: number } | null {
+  const d = new Date(now);
+  const day = (y: number, m: number, dd: number) => new Date(y, m, dd).getTime();
+  if (kind === "month") return { since: day(d.getFullYear(), d.getMonth(), 1), until: day(d.getFullYear(), d.getMonth() + 1, 1) };
+  if (kind === "week" || kind === "lastweek") {
+    const back = (d.getDay() + 6) % 7 + (kind === "lastweek" ? 7 : 0);
+    const mon = day(d.getFullYear(), d.getMonth(), d.getDate() - back);
+    const m = new Date(mon);
+    return { since: mon, until: day(m.getFullYear(), m.getMonth(), m.getDate() + 7) };
+  }
+  if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return null;
+  const [fy, fm, fd] = from.split("-").map(Number);
+  const [ty, tm, td] = to.split("-").map(Number);
+  const since = day(fy, fm - 1, fd);
+  const until = day(ty, tm - 1, td + 1);
+  if (!(until > since) || until - since > 31 * 86_400_000 + 3_600_000) return null;
+  return { since, until };
+}
+
+export interface SummaryDay { day: string; patrols: number; incidents: number; false_alarms: number; robot_problems: number }
+export interface SummaryEvent { key: string; kind: string; level: string; robot: string; title: string; first_ms: number; verdict: string; resolved_by: string; audience: string }
+export interface Summary {
+  since_ms: number; until_ms: number;
+  totals: { patrols: number; incidents: number; false_alarms: number; robot_problems: number };
+  days: SummaryDay[]; events: SummaryEvent[]; truncated: boolean;
+}
+
+export function eventsCsv(rows: SummaryEvent[], title: (r: SummaryEvent) => string, verdict: (v: string) => string): string {
+  return csv(["time", "robot", "what", "verdict", "by"], rows.map((r) => [stamp(r.first_ms), r.robot, title(r), verdict(r.verdict), r.resolved_by]));
+}

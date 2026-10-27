@@ -772,3 +772,30 @@ p.warn { color: var(--c-text); background: var(--c-warningSoft); padding: 8px 12
 .robot-detail .field.grow { flex: 1; }
 .state.tone-muted { color: var(--c-textMuted); }
 @media (max-width: 900px) { .robots-split { grid-template-columns: minmax(0, 1fr); } }
+
+/* W44 第二期:报表页 */
+.reports { display: flex; flex-direction: column; gap: 12px; }
+.print-head { display: none; }
+.rep-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.rep-stats .stat { padding: 14px; border: 1px solid var(--c-outline); border-radius: 12px; background: var(--c-surface); display: flex; flex-direction: column; gap: 4px; }
+.rep-stats .stat-n { font-size: 32px; font-weight: 800; line-height: 1.1; }
+.rep-stats .stat-l { color: var(--c-textSecondary); font-size: 14px; }
+.rep-chart { display: flex; gap: 4px; align-items: stretch; height: 180px; padding: 8px 0; border-bottom: 1px solid var(--c-outline); }
+.rep-day { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.rep-col { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+.rep-bar { width: 70%; max-width: 36px; display: flex; flex-direction: column; border-radius: 4px 4px 0 0; overflow: hidden; }
+.rep-bar i { display: block; min-height: 2px; }
+.seg-pat { background: var(--c-success); }
+.seg-inc { background: var(--c-error); }
+.seg-help { background: var(--c-warning); }
+.rep-legend { display: flex; gap: 16px; }
+.rep-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; }
+.rep-lbl { font-size: 11px; color: var(--c-textMuted); }
+.rep-events tr.clickable { cursor: pointer; }
+.rep-events tr.clickable:hover { background: var(--c-surfaceVariant); }
+@media (max-width: 700px) { .rep-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media print {
+  .print-head { display: block; }
+  .reports .noprint { display: none !important; }
+  .rep-bar i { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

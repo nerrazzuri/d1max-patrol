@@ -151,7 +151,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
               {route.page === "admin/routes" && <RoutesPage say={say} />}
               {route.page === "admin/access" && <AccessPage say={say} now={now} />}
               {route.page === "admin/localization" && <LocHistoryPage robots={units.map((u) => u.robot.robot_id)} now={now} />}
-              {route.page === "admin/reports" && <ReportsPage me={me} now={now} />}
+              {route.page === "admin/reports" && <ReportsPage now={now} />}
             </div>
           </div>
         )}
