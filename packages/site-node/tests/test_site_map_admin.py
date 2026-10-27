@@ -184,9 +184,11 @@ def test_回退_狗本地留着上一张_不向站点下载一个字节(站点, 
     _wait_loaded(s, "8")
     _等(lambda: _rc(s).get("previous") == [MAP[0], "9"])
     assert reads == [], "回退用机器人本地留着的那张:站点没被要过任何文件"
-    row = s.db.query("SELECT target, detail FROM audit WHERE action LIKE '%/rollback' "
-                     "ORDER BY id DESC LIMIT 1")[0]
-    assert row["target"] == "A" and f"{MAP[0]}:8" in row["detail"]
+    # 审计是回完请求才写的:等那一条写进来(原来直接取最新一条,偶尔取到上面 ghost 那次的,时灵时不灵)
+    q = "SELECT target, detail FROM audit WHERE action LIKE '%/rollback' AND target='A'"
+    _等(lambda: s.db.query(q))
+    row = s.db.query(q + " ORDER BY id DESC LIMIT 1")[0]
+    assert f"{MAP[0]}:8" in row["detail"]
 
 
 def test_回退_没有上一版就409(站点):
