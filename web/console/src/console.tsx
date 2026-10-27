@@ -25,6 +25,7 @@ import { UpgradePage } from "./advupgrade";
 import { RobotsPage } from "./robotspage";
 import { UsersPage } from "./userspage";
 import { AdvMapsPage } from "./advmaps";
+import { editTarget, MapEditPage } from "./mapedit";
 import { AccessPage } from "./accesspage";
 import { LayoutPage } from "./layoutpage";
 import { LAYOUT_TABS } from "./layouttabs";
@@ -113,7 +114,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   const admin = isOwnerLike(me.role);
 
   // 带地图的页整页一屏(地图撑满顶栏以下):地图、防区、巡检路线
-  const fill = route.page === "duty" || route.page === "map" || route.page === "admin/layout";
+  const fill = route.page === "duty" || route.page === "map" || route.page === "admin/layout" || route.page === "admin/mapedit";
   return (
     <div class={fill ? "console fill" : "console"}>
       <TopBar me={me} page={route.page} mode={data?.mode ?? null} alarms={stale ? null : guardAlarms} now={now}
@@ -149,6 +150,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
               {route.page === "admin/robots" && <RobotsPage say={say} now={now} />}
               {route.page === "admin/system" && <SystemPage2 me={me} now={now} />}
               {route.page === "admin/diag" && <DiagPage />}
+              {route.page === "admin/mapedit" && <MapEditPage say={say} target={editTarget(location.hash)} />}
               {route.page === "admin/upgrade" && <UpgradePage say={say} />}
               {route.page === "admin/layout" && <LayoutPage say={say} robots={units.map((u) => u.robot.robot_id)} tabs={LAYOUT_TABS} />}
               {route.page === "admin/maps" && <AdvMapsPage say={say} />}
