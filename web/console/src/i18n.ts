@@ -898,6 +898,7 @@ const en = {
   terr_grass: "Grass",
   terr_gravel: "Gravel path",
   lyNogoNeverConfirmed: "Nobody has confirmed this version yet: draw the places robots must not go, then press Confirm this version. Until then robots on it only do remote-controlled work.",
+  meLoadErr: "Could not load this map version (preview, grid or display settings). Nothing can be saved until it loads: go back and open it again.",
 };
 
 type Key = keyof typeof en;
@@ -1795,6 +1796,7 @@ const zh: Partial<Record<Key, string>> = {
   terr_grass: "草地",
   terr_gravel: "碎石路",
   lyNogoNeverConfirmed: "这一版还没人确认过：把机器人不能去的地方画好，再按「确认这一版」。确认之前，这张图上只能遥控，不派自己走的任务。",
+  meLoadErr: "这一版地图没读全(预览、栅格或显示设置)。读全之前不能存：回地图页重新打开。",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };
