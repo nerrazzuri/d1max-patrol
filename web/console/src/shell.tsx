@@ -80,6 +80,12 @@ export function schemeFor(p: Page, pref: ThemePref, systemDark: boolean): "dark"
   return pageScheme(p);
 }
 
+/** 外壳要把主题定成哪一套:选了「跟随系统」就不定(``null``),交给系统换颜色的事件 —— 定成「当时」那一套的话,
+ *  系统后来再换就不跟了(真浏览器实测查出来的)。 */
+export function pinFor(p: Page, pref: ThemePref, systemDark: boolean): "dark" | "light" | null {
+  return pref === "system" ? null : schemeFor(p, pref, systemDark);
+}
+
 export function loadThemePref(): ThemePref {
   try {
     const v = localStorage.getItem(PREF_KEY);

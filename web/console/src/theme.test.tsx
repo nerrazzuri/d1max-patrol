@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import mobile from "../../../design/mobile.json";
 import { lang } from "./i18n";
 import { StateText } from "./live";
-import { applyTheme, followSystem, mapRasterFilter, palette, scheme, themeColor, tone, toneColor } from "./theme";
+import { pinFor } from "./shell";
+import { applyTheme, followSystem, mapRasterFilter, palette, pinScheme, scheme, themeColor, tone, toneColor } from "./theme";
 
 /** 假的 matchMedia("(prefers-color-scheme: dark)"):能改 matches、能发 change。 */
 function fakeQuery(dark: boolean) {
@@ -59,6 +60,24 @@ describe("主题跟着系统走(prefers-color-scheme)", () => {
     expect(q.listeners).toBe(0);
     q.flip(true);
     expect(root.dataset.theme).toBe("light");
+  });
+
+  it("真浏览器查出来的:个人选「跟随系统」以后,系统再换颜色也当场跟着换(不是只在打开那一刻对)", () => {
+    const root = document.createElement("div");
+    const q = fakeQuery(true);
+    const stop = followSystem(root, q as unknown as MediaQueryList);
+    pinScheme(pinFor("admin/users", "system", true), root);
+    expect(root.dataset.theme).toBe("dark");
+    q.flip(false);
+    expect(root.dataset.theme).toBe("light");
+    q.flip(true);
+    expect(root.dataset.theme).toBe("dark");
+    pinScheme(pinFor("admin/users", "auto", true), root);           // 回到按页面:管理页浅色,不跟系统
+    q.flip(false);
+    q.flip(true);
+    expect(root.dataset.theme).toBe("light");
+    pinScheme(null, root);
+    stop();
   });
 
   it("两套的每个颜色都挂上了(键跟 mobile.json 一样),字体是手机那三种", () => {

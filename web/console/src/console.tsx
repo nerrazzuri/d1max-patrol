@@ -29,7 +29,7 @@ import { editTarget, MapEditPage } from "./mapedit";
 import { AccessPage } from "./accesspage";
 import { LayoutPage } from "./layoutpage";
 import { LAYOUT_TABS } from "./layouttabs";
-import { AdminNav, isAdminPage, loadThemePref, readRoute, saveThemePref, schemeFor, TopBar, type Page, type ThemePref } from "./shell";
+import { AdminNav, isAdminPage, loadThemePref, pinFor, readRoute, saveThemePref, TopBar, type Page, type ThemePref } from "./shell";
 import { pinScheme, systemIsDark } from "./theme";
 
 const TASK: Record<string, Key> = { patrol: "st_patrolling", goto: "st_patrolling", standby: "st_returning" };
@@ -57,7 +57,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   }, []);
   const [pref, setPref] = useState<ThemePref>(loadThemePref);
   useEffect(() => {
-    pinScheme(schemeFor(route.page, pref, systemIsDark()));
+    pinScheme(pinFor(route.page, pref, systemIsDark()));
   }, [route.page, pref]);
   useEffect(() => () => pinScheme(null), []);
   const go = (page: Page, robot?: string) => {
