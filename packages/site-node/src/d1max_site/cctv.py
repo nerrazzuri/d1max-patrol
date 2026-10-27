@@ -630,6 +630,13 @@ def ffmpeg_major(ffmpeg: str) -> int:
     return _FFMPEG_MAJOR[ffmpeg]
 
 
+#: 出过画面以后这么多秒没新的一帧,算卡住(外审 R6):结束这条流、收掉 ffmpeg(下一个观众重新拉)。
+#: ffmpeg 出 8 帧每秒,6 秒没一帧不会是正常的。
+STALL_S = 6.0
+#: 健康里「在线」:最后一帧在这么多秒以内。
+FRESH_S = 3.0
+
+
 class CctvView:
     """一台摄像头的实时画面:一条 ffmpeg 拉 RTSP、出 MJPEG,观众共用;最后一个观众走了 ``idle_s``
     收掉。
@@ -660,6 +667,7 @@ class CctvView:
         self._err: IO[bytes] | None = None
         self._list: str | None = None
         self._frame: bytes | None = None
+        self._frame_at: float | None = None               # 最后一帧到站点的时刻(monotonic)
         self._seq = 0
         self._viewers = 0
         self._closed = False
@@ -706,6 +714,7 @@ class CctvView:
                     if self._gen != gen:
                         return
                     self._frame, self._seq = f, self._seq + 1
+                    self._frame_at = time.monotonic()
                     if first:                            # 画面出来了:清单(带口令)不用了
                         first = False
                         self._drop_list_locked()
@@ -753,6 +762,7 @@ class CctvView:
             self._err = None
         self._drop_list_locked()
         self._frame = None
+        self._frame_at = None
 
     def close(self) -> None:
         """站点收尾、换了配置:收掉,之后不再起。幂等。"""
@@ -760,6 +770,15 @@ class CctvView:
             self._closed = True
             self._reap_locked()
             self._cond.notify_all()
+
+    def health(self) -> dict[str, Any]:
+        """画面健康(外审 R6,网页按这个标「画面断了」):最后一帧到站点多少毫秒了(站点收到的时刻,
+        不是浏览器重载图片的时刻);没在拉是不在线。"""
+        with self._cond:
+            if self._proc is None or self._frame_at is None:
+                return {"online": False, "last_frame_age_ms": None}
+            age = time.monotonic() - self._frame_at
+            return {"online": age <= FRESH_S, "last_frame_age_ms": int(age * 1000)}
 
     def frames(self, *, first_timeout_s: float = 15.0) -> Iterator[bytes]:
         with self._cond:
@@ -776,7 +795,11 @@ class CctvView:
             while True:
                 with self._cond:
                     while self._seq == seen and self._proc is not None and self._gen == gen:
-                        left = deadline - time.monotonic() if not got_any else 5.0
+                        if not got_any:
+                            left = deadline - time.monotonic()
+                        else:
+                            at = self._frame_at
+                            left = STALL_S - (time.monotonic() - at) if at is not None else 0
                         if left <= 0 or not self._cond.wait(left):
                             if not got_any:
                                 raise TimeoutError("摄像头没出画面")
@@ -784,6 +807,15 @@ class CctvView:
                     if self._gen != gen or self._proc is None:
                         return                           # 这一代没了(断了、关了)
                     if self._seq == seen:
+                        at = self._frame_at
+                        if at is None or time.monotonic() - at >= STALL_S:
+                            # 卡住了(外审 R6):收掉这一代,结束这条流;浏览器那头断开、重连
+                            self.error = "画面卡住了"
+                            log.warning("摄像头 %s 的画面 %g 秒没动,收掉重拉", self.cam.name,
+                                        STALL_S)
+                            self._reap_locked()
+                            self._cond.notify_all()
+                            return
                         continue
                     seen, frame = self._seq, self._frame
                 if frame is not None:

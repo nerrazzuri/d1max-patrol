@@ -817,3 +817,54 @@ def test_接口_状态带图上的位置(站点):
     pl = {"map_id": "m", "map_version": "1", "x": 1.0, "y": 2.0, "yaw": 0.0, "fov_deg": 90.0}
     set_placement(s.db, "gate-cam", pl)
     assert s.req("GET", "/api/cameras", token=tok)[1]["cameras"][0]["placement"] == pl
+
+
+# ---- 外审 R6:出过画面以后静悄悄停了,站点要知道(结束这条流、收掉 ffmpeg),
+# 也报得出最后一帧多久了 ----
+
+def test_外审R6_出过画面后卡住_过了停帧时限结束流_收掉进程(monkeypatch):
+    import d1max_site.cctv as cc
+    monkeypatch.setattr(cc, "STALL_S", 0.4)
+    popen, procs = _ffmpeg(b"\xff\xd8A\xff\xd9", then_sleep=30)    # 一帧以后不出也不退
+    v = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 4)
+    it = v.frames()
+    assert next(it) == b"\xff\xd8A\xff\xd9"
+    assert list(it) == [], "卡住了:这条流结束,浏览器那头才断得开"
+    _等(lambda: procs[0][1].returncode is not None)
+    assert v._proc is None and v.error
+
+
+def test_外审R6_健康_最后一帧多久了_没人看是不在线(monkeypatch):
+    popen, procs = _ffmpeg(b"\xff\xd8A\xff\xd9", then_sleep=30)
+    v = CctvView(_cam(rtsp_url="rtsp://10.0.0.9/s1"), popen=popen, major=lambda f: 4)
+    assert v.health() == {"online": False, "last_frame_age_ms": None}
+    it = v.frames()
+    next(it)
+    h = v.health()
+    assert h["online"] is True and 0 <= h["last_frame_age_ms"] < 2000
+    import time
+    time.sleep(0.3)
+    assert v.health()["last_frame_age_ms"] >= 300
+    it.close()
+    v.close()
+    assert v.health() == {"online": False, "last_frame_age_ms": None}
+
+
+def test_外审R6_接口_摄像头画面健康(站点):
+    s = 站点
+    add_camera(s.db, _cam(80, rtsp_url="rtsp://10.0.0.9/s1"), now_ms=1)
+    s.cctv.sync()
+    tok = s.req("POST", "/api/login", {"name": "olga", "password": s.PW})[1]["token"]
+    assert s.req("GET", "/api/cameras/gate-cam/health", token=tok) == (
+        200, {"online": False, "last_frame_age_ms": None})            # 没人看:没开
+    popen, procs = _ffmpeg(b"\xff\xd8x\xff\xd9", then_sleep=30)
+    v = CctvView(s.cctv.camera("gate-cam"), popen=popen, idle_s=60, major=lambda f: 4)
+    s.api._cctv_views["gate-cam"] = v
+    it = v.frames()
+    next(it)
+    code, d = s.req("GET", "/api/cameras/gate-cam/health", token=tok)
+    assert code == 200 and d["online"] is True
+    assert s.req("GET", "/api/cameras/nope/health", token=tok)[0] == 404
+    assert s.req("GET", "/api/cameras/gate-cam/health")[0] == 401
+    it.close()
+    v.close()
