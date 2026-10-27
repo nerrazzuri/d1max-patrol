@@ -163,6 +163,8 @@ class SiteAlertSources:
         #: 入侵告警合并进来的防区(按告警的键),拼标题用(W16)。
         self._incident_zones: dict[str, list[str]] = {}
         #: 每条狗的告警都带上狗最后在哪、在跑哪一趟(W17)。
+        #: W44 第四期:地图位姿 → 在哪(站点主程序接上:命名区域,没命名用防区名)。
+        self.where_of: Callable[[dict], str | None] | None = None
         desk.context_for = self.here
         #: 每台狗最近一次报的上装故障(W21 复查,``payload_*`` 的集合)。告警按它**每拍对账**:
         #: 报、解决失败了下一拍再来;站点起来时从事件库读回每台狗最近一条 ``robot_fault``。
@@ -181,6 +183,15 @@ class SiteAlertSources:
         out: dict = {}
         if m.pose is not None:
             out["pose"] = dict(m.pose) | {"at_ms": m.pose_ms}
+            if self.where_of is not None:
+                # W44 第四期:在哪(命名的区域,没命名用防区名),报警、报表上写「在车库」
+                try:
+                    w = self.where_of(m.pose)
+                except Exception:                    # 现场拿不到不许挡住告警
+                    log.exception("%s 在哪算不出来", robot)
+                    w = None
+                if w:
+                    out["where"] = w
         if m.running and m.started:
             out["task_id"] = m.started
         return out

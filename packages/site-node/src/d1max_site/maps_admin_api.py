@@ -25,7 +25,7 @@ from d1max_site.maps_admin import AdminError, MapAdmin
 from d1max_site.permissions import MANAGE
 
 _ROUTE = re.compile(r"^/api/admin/maps(?:/(rollback)|/([^/]{1,64})/([^/]{1,64})/"
-                    r"(note|publish|delete|diff|diff\.png|noise|denoise))?$")
+                    r"(note|publish|delete|diff|diff\.png|noise|denoise|edit|display|basemap))?$")
 MAX_ROBOTS = 32
 
 
@@ -60,6 +60,10 @@ def handle(h: Any, method: str, path: str, user: Any) -> None:
             if method != "GET":
                 raise HttpError(404, f"没有 {method} {path}")
             return h._send_json(200, adm.noise(map_id, version))
+        if what == "display":
+            return _display(h, adm, user, method, map_id, version)
+        if what == "basemap":
+            return _basemap(h, adm, method, map_id, version)
         if method != "POST":
             raise HttpError(404, f"没有 {method} {path}")
         h._audit_target = f"{map_id}:{version}"
@@ -71,6 +75,12 @@ def handle(h: Any, method: str, path: str, user: Any) -> None:
         if what == "delete":
             out = adm.delete(map_id, version)
             h._audit_detail = out
+            return h._send_json(200, out)
+        if what == "edit":
+            out = adm.edit(map_id, version, digest=d.get("digest"), ops=d.get("ops"),
+                           note=d.get("note"), by=str(user))
+            h._audit_detail = {k: out[k] for k in ("version", "erased_m2", "obstacle_m2")} | {
+                "ops": len(d.get("ops") or [])}
             return h._send_json(200, out)
         if what == "denoise":
             out = adm.denoise(map_id, version, digest=d.get("digest"), skip=d.get("skip", []),
@@ -91,6 +101,9 @@ def _robots(adm: MapAdmin, raw: Any) -> list[str]:
 
 
 def _publish(h: Any, adm: MapAdmin, user: Any, map_id: str, version: str, d: dict) -> None:
+    if h._via_cookie:
+        # W44 第四期(设计 §5.2 第 4 条):网页上换图要再输一次密码(手机这一期不改)
+        h._confirm(user, d)
     ref = adm.ref(map_id, version)
     robots = _robots(adm, d.get("robots"))
     known = set(adm.robot_ids())
@@ -112,6 +125,87 @@ def _publish(h: Any, adm: MapAdmin, user: Any, map_id: str, version: str, d: dic
     out = [results[rid] for rid in robots]
     h._audit_detail = {"robots": robots, "results": {r["robot_id"]: r["state"] for r in out}}
     h._send_json(200, {"map_id": map_id, "version": version, "results": out})
+
+
+def _display(h: Any, adm: MapAdmin, user: Any, method: str, map_id: str, version: str) -> None:
+    """``GET`` 这一版的显示设置;``POST`` 整份存。特殊地面要放慢的那几块落成限速区(``t-`` 开头;
+    走 ``NavZones.put``:收紧当场生效,删了是放宽、照样要确认),发给机器人。"""
+    from d1max_site.map_display import TERRAIN_PREFIX, DisplayError, slow_zones
+    from d1max_site.nav_zones import ZonesConflict, ZonesError
+    adm.ref(map_id, version)
+    disp = h.site.map_display
+    if method == "GET":
+        return h._send_json(200, disp.get(map_id, version))
+    if method != "POST":
+        raise HttpError(405, "只支持 GET/POST")
+    d = h._body()
+    h._audit_target = f"{map_id}:{version}"
+    try:
+        body = disp.put(map_id, version, d, by=str(user))
+    except DisplayError as exc:
+        raise HttpError(400, str(exc)) from exc
+    zones = h.site.zones
+    if zones is not None:
+        cur = zones.current(map_id, version)
+        keep = [z.to_wire() for z in cur.zones if not z.id.startswith(TERRAIN_PREFIX)]
+        want = keep + slow_zones(body)
+        if want != [z.to_wire() for z in cur.zones]:
+            try:
+                zs, tighten = zones.put(map_id, version, want, base_revision=cur.revision,
+                                        by=str(user))
+            except ZonesConflict as exc:
+                raise HttpError(409, str(exc)) from exc
+            except ZonesError as exc:
+                raise HttpError(400, str(exc)) from exc
+            h.site.dispatch(lambda: h.site.dispatcher.push_zones(
+                zs, tighten=tighten, issued_by=str(user)))
+    h._audit_detail = {"regions": len(body["regions"]), "terrain": len(body["terrain"]),
+                       "rotate_deg": body["rotate_deg"]}
+    return h._send_json(200, body)
+
+
+#: 底图最大多少(W44 第四期)。
+MAX_BASEMAP = 8 * 1024 * 1024
+_IMG = {"image/png": "png", "image/jpeg": "jpg"}
+
+
+def _basemap_dir(h: Any, map_id: str, version: str) -> Any:
+    if h.site.home is None:
+        raise HttpError(404, "这个站点没接站点目录")
+    return h.site.home / "map-display" / map_id / version
+
+
+def _basemap(h: Any, adm: MapAdmin, method: str, map_id: str, version: str) -> None:
+    """底图(卫星截图、平面图):``POST`` 请求体就是 PNG / JPEG(≤ 8 MB),回 ``{"file"}``;``GET`` 取回。
+    只是显示用,不进地图文件。"""
+    adm.ref(map_id, version)
+    d = _basemap_dir(h, map_id, version)
+    if method == "GET":
+        for ext, ctype in (("png", "image/png"), ("jpg", "image/jpeg")):
+            if (d / f"basemap.{ext}").is_file():
+                return h._send_bytes((d / f"basemap.{ext}").read_bytes(), ctype)
+        raise HttpError(404, "这一版还没有底图")
+    if method != "POST":
+        raise HttpError(405, "只支持 GET/POST")
+    ext = _IMG.get((h.headers.get("Content-Type") or "").split(";")[0].strip().lower())
+    if ext is None:
+        raise HttpError(400, "底图要是 PNG 或 JPEG")
+    try:
+        n = int(h.headers.get("Content-Length") or 0)
+    except ValueError as exc:
+        raise HttpError(400, "Content-Length 不是数") from exc
+    if not 0 < n <= MAX_BASEMAP:
+        raise HttpError(413, "底图最大 8 MB")
+    data = h.rfile.read(n)
+    magic = b"\x89PNG" if ext == "png" else b"\xff\xd8"
+    if not data.startswith(magic):
+        raise HttpError(400, "文件不是 PNG / JPEG")
+    d.mkdir(parents=True, exist_ok=True)
+    for old in d.glob("basemap.*"):
+        old.unlink()
+    (d / f"basemap.{ext}").write_bytes(data)
+    h._audit_target = f"{map_id}:{version}"
+    return h._send_json(200, {"file": f"basemap.{ext}"})
 
 
 def _rollback(h: Any, adm: MapAdmin, user: Any) -> None:
