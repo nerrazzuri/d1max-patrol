@@ -5,7 +5,7 @@ import type { ComponentChildren } from "preact";
 // (大小不跟着缩放变),位置用跟底图同一个变换算。
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
-import { hm, useDutySettings } from "./data";
+import { hm, nameOf, useDutySettings } from "./data";
 import { alertTitle, lang, t, type Key } from "./i18n";
 import type { UnitInfo } from "./live";
 import { etaNext, LAYERS, loadLayers, saveLayers, shiftStart, staleAfter, staleCells, tonightEvents, zoneDecor,
@@ -189,7 +189,7 @@ export function SiteMap(props: {
                     <g key={u.robot.robot_id} class={`bot ${a ?? "ok"}${on ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); props.onSelect(u.robot.robot_id); }}>
                       <line x1={x} y1={y} x2={x + ((ex - x) / n) * len} y2={y + ((ey - y) / n) * len} class="bot-head" />
                       <circle cx={x} cy={y} r={BOT_R} class="bot-dot" />
-                      <text x={x} y={y + BOT_R + LABEL_PX + 2} class="bot-label" font-size={LABEL_PX}>{u.robot.robot_id}</text>
+                      <text x={x} y={y + BOT_R + LABEL_PX + 2} class="bot-label" font-size={LABEL_PX}>{nameOf(u.robot.robot_id)}</text>
                       {props.eta && etaOf(u) != null && (
                         <text x={x} y={y + BOT_R + LABEL_PX * 2 + 4} class="bot-label eta" font-size={LABEL_PX - 1}>
                           {t("etaNextMin", { n: Math.max(1, Math.round(etaOf(u)! / 60)) })}
@@ -416,7 +416,7 @@ export function GoLookCard(props: { map: { map_id: string; version: string }; at
       {got === "none" && <p>{t("lookNone")}</p>}
       {got === "error" && <p class="error">{why}</p>}
       {got && typeof got === "object" && (
-        <p>{t("lookWho", { id: got.robot_id, n: Math.max(1, Math.round(got.eta_s / 60)) })}</p>
+        <p>{t("lookWho", { id: nameOf(got.robot_id), n: Math.max(1, Math.round(got.eta_s / 60)) })}</p>
       )}
       {why && got !== "error" && <p class="error">{why}</p>}
       <div class="row end">

@@ -33,6 +33,8 @@ export interface Alert {
 
 export interface Robot {
   robot_id: string;
+  /** 业主起的名字(W44 第二期);没起是空串、老站点没有。 */
+  name?: string;
   active: boolean;
   fresh: boolean;
   revoked: boolean;

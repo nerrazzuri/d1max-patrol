@@ -53,6 +53,7 @@ def overview(dispatcher: Any, db: Any, *, now_ms: int, tz: tzinfo) -> list[dict[
         out.append({"robot_id": rid, "name": names.get(rid, ""), "revoked": rec.revoked,
                     "expires_at": rec.expires_at, "online": fresh,
                     "battery_pct": round(batt) if isinstance(batt, (int, float)) else None,
+                    "manual_only": reg.manual_only(rid) is not None,
                     "patrols_today": n["n"], "problems": problems, "recent_problems": recent,
                     "agent": getattr(caps, "agent", None),
                     "compat": _robot(rid, c)["verdict"] if c is not None else "unknown"})

@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api, enc } from "./api";
 import { camLabel, type Cam } from "./camera";
-import { hms } from "./data";
+import { hms, nameOf } from "./data";
 import { t } from "./i18n";
 import { MapCanvas } from "./mapcanvas";
 import { toPx, type PreviewMeta } from "./mapview";
@@ -223,7 +223,7 @@ export function RecordingsPage(props: { robots: string[]; role: string; now: num
         </label>
         <div class="seg recrobots" role="group" aria-label={t("recRobot")}>
           {props.robots.map((r) => (
-            <button key={r} type="button" aria-pressed={r === robot} onClick={() => switchTo(r, cur && head != null ? head : null)}>{r}</button>
+            <button key={r} type="button" aria-pressed={r === robot} onClick={() => switchTo(r, cur && head != null ? head : null)}>{nameOf(r)}</button>
           ))}
         </div>
         <div class="seg" role="group" aria-label={t("recCamera")}>
@@ -344,11 +344,11 @@ function RecMap(props: { robot: string; track: TrackPt[]; head: number | null; o
           marks={(s) => {
             if (!here) return null;
             const [x, y] = s.map(here.x, here.y);
-            return <g class="rec-here"><circle cx={x} cy={y} r="8" /><text x={x + 12} y={y + 4}>{props.robot}</text></g>;
+            return <g class="rec-here"><circle cx={x} cy={y} r="8" /><text x={x + 12} y={y + 4}>{nameOf(props.robot)}</text></g>;
           }} />
       ) : <div class="rmap-empty muted">{t("recMapNone")}</div>}
       <span class="rmap-hint">
-        {props.head == null ? t("recMapPick") : here ? t("recMapHere", { id: props.robot, t: hms(props.head) }) : t("recMapUnknown", { id: props.robot, t: hms(props.head) })}
+        {props.head == null ? t("recMapPick") : here ? t("recMapHere", { id: nameOf(props.robot), t: hms(props.head) }) : t("recMapUnknown", { id: nameOf(props.robot), t: hms(props.head) })}
       </span>
     </div>
   );
@@ -384,7 +384,7 @@ function Timeline(props: {
       }}>
         {props.lanes.map((l) => (
           <div key={l.robot} class={l.robot === props.robot ? "lane on" : "lane"}>
-            <b role="button" tabIndex={0} onClick={() => props.onPick(l.robot, props.head ?? props.day.since)}>{l.robot}</b>
+            <b role="button" tabIndex={0} onClick={() => props.onPick(l.robot, props.head ?? props.day.since)}>{nameOf(l.robot)}</b>
             <div class="track" onClick={(e) => props.onPick(l.robot, timeAt(e, e.currentTarget as Element))}>
               {l.segs.filter(([a, b]) => b > view.since && a < view.until).map(([a, b]) => (
                 <span key={a} class="seg-rec" style={{ left: `${Math.max(0, pct(a))}%`, width: `${Math.max(0.2, pct(Math.min(b, view.until)) - Math.max(0, pct(a)))}%` }} />

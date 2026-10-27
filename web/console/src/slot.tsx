@@ -6,6 +6,7 @@ import { CameraWell, type Cam } from "./camera";
 import { t } from "./i18n";
 import { StateText, type UnitInfo } from "./live";
 import { robotCams } from "./model";
+import { nameOf } from "./data";
 
 export interface Scene {
   /** 现场叫什么(「3 号 后花园」)。 */
@@ -24,7 +25,7 @@ export function SlotBar(props: {
   const { u } = props;
   return (
     <div class="slot-bar">
-      <span class="slot-name">{u.robot.robot_id}</span>
+      <span class="slot-name">{nameOf(u.robot.robot_id)}</span>
       <StateText s={u.state} stale={u.stale} />
       <span class="slot-mid">
         {u.speed != null && <span class="mono">{t("speedMps", { v: u.speed.toFixed(1) })}</span>}

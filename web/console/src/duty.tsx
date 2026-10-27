@@ -3,7 +3,7 @@
 // 保安只看四类事(有人闯入、起火或过热、机器人需要帮忙、机器人掉线);技术类不在这里。
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
-import { hm } from "./data";
+import { hm, nameOf } from "./data";
 import { Confirm } from "./dialogs";
 import { guardAlarms, pickSlots, rankUnits, type SlotPick } from "./dutyrank";
 import { alertTitle, lang, t } from "./i18n";
@@ -129,7 +129,7 @@ export function DutyPage(props: {
             <li key={u.robot.robot_id}>
               <button type="button" class={selected === u.robot.robot_id ? "duty-row on" : "duty-row"}
                 onClick={() => { put(u.robot.robot_id); setSelected(u.robot.robot_id); }}>
-                <span class="unit-id">{u.robot.robot_id}</span>
+                <span class="unit-id">{nameOf(u.robot.robot_id)}</span>
                 <StateText s={u.state} stale={u.stale} />
                 <span class="muted small">{zoneOf(u)}</span>
                 {u.battery != null && <span class="batt push">{Math.round(u.battery)}%</span>}

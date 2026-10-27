@@ -3,7 +3,7 @@
 // 画到 canvas 上压暗显示;浏览器页签藏起来也停。P1 的狗(forceLive)一直拉。
 import { useEffect, useRef, useState } from "preact/hooks";
 import { enc } from "./api";
-import { hms, usePageVisible } from "./data";
+import { hms, nameOf, usePageVisible } from "./data";
 import { t } from "./i18n";
 
 /** 相机:狗自带前后两路;装了上装 V1.2 热像的多一路 thermal(W40)。 */
@@ -14,7 +14,7 @@ const RETRY_MS = 3000;
 const RECOVERED_MS = 2500;
 
 export function camLabel(robot: string, cam: Cam): string {
-  return `${robot} ${t(cam)}`;
+  return `${nameOf(robot)} ${t(cam)}`;
 }
 
 export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean; now: number; onOpen?: () => void; variant?: "main" | "pip" }) {

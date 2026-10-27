@@ -1,4 +1,5 @@
 // 站点数据(商业化 B1):每 2 秒拉一次;事件流(/api/events)来了新东西立刻再拉。
+import { signal } from "@preact/signals";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "./api";
 import type { Alert, DeterSession, Mode, Robot, Summary } from "./model";
@@ -36,7 +37,16 @@ export async function fetchSite(): Promise<SiteData> {
     api<{ sessions: DeterSession[] }>("GET", "/api/deterrence").then((x) => x.sessions).catch(() => null),
     api<Summary>("GET", "/api/watch/summary").catch(() => null),
   ]);
+  robotNames.value = Object.fromEntries(r.robots.filter((x) => x.name).map((x) => [x.robot_id, x.name as string]));
   return { robots: r.robots, alerts: a.alerts, mode: m, deter: d, summary: s };
+}
+
+/** 业主给机器人起的名字(W44 第二期,站点 /api/robots 带 name);每次拉站点数据都更新。 */
+export const robotNames = signal<Record<string, string>>({});
+
+/** 给人看的机器人名字:起了名用名字,没起用编号。 */
+export function nameOf(id: string): string {
+  return robotNames.value[id] || id;
 }
 
 export function useSiteData(): [SiteData | null, () => Promise<void>, Conn] {
