@@ -10,18 +10,18 @@
       "incident_id": 1,
       "label": "语音警告",
       "level": 2,
-      "level_ms": 1792866149843,
+      "level_ms": 1793068684867,
       "next_in_s": 24,
       "outputs": [],
       "persons": {
-        "at_ms": 1792866154843,
+        "at_ms": 1793068689867,
         "count": 2,
         "near": false,
         "nearest_m": 7.5
       },
       "robot_id": "A",
       "standoff": "retreat",
-      "started_ms": 1792866094843,
+      "started_ms": 1793068629867,
       "task_id": "incident-abc",
       "withdraw": "",
       "zone": "yard"
