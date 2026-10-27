@@ -31,7 +31,7 @@ import {
 import { rasterShade, scheme } from "./theme";
 
 /** 图上画的有名字的多边形(地图坐标,米):area = 区域(淡),zone = 防区(防区页上能改的那些,显眼)。 */
-export interface CanvasArea { name: string; pts: Pt[]; kind: "area" | "zone" }
+export interface CanvasArea { name: string; pts: Pt[]; kind: "area" | "zone"; /** 报警的防区:标红(W44)。 */ hot?: boolean }
 
 export type LegendKey = "floor" | "wall" | "seen" | "unknown" | "nogo" | "hard" | "vwall" | "erase" | "slow" | "ignore" | "area" | "zone" | "robot" | "alarm";
 const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "seen", "unknown", "nogo", "hard", "vwall", "erase", "slow", "ignore", "area", "zone", "robot", "alarm"];
@@ -226,7 +226,7 @@ export function MapCanvas(props: {
               </polyline>
             ))}
             {areas.map((a, i) => (
-              <polygon key={`${i}:${a.kind}:${a.name}`} points={polyAttr(meta, a.pts)} class={a.kind === "zone" ? "sec-area" : "sec-area quiet"} />
+              <polygon key={`${i}:${a.kind}:${a.name}`} points={polyAttr(meta, a.pts)} class={`${a.kind === "zone" ? "sec-area" : "sec-area quiet"}${a.hot ? " hot" : ""}`} />
             ))}
             {props.world}
           </g>
