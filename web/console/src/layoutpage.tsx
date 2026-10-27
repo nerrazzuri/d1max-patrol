@@ -123,7 +123,7 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
       want("standby") ? Promise.all(robots.map((r) => api<{ points: StandbyPt[] }>("GET", `/api/robots/${enc(r)}/standby`)
         .then((d) => (d.points ?? []).map((p) => ({ ...p, robot_id: r }))).catch(() => [] as StandbyPt[])))
         .then((all) => all.flat().filter((p) => p.map_id === sel.map_id && p.map_version === sel.version)) : null,
-      want("cameras") ? api<{ cameras: CamRow[] }>("GET", "/api/cameras").then((d) => d.cameras ?? []).catch(() => null) : null,
+      want("cameras") ? api<{ cameras: CamRow[] }>("GET", "/api/admin/cameras").then((d) => d.cameras ?? []).catch(() => null) : null,
     ]);
     if (cur.current !== b) return;
     setData((o) => ({

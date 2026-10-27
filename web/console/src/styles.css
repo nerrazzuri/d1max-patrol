@@ -844,3 +844,6 @@ p.warn { color: var(--c-text); background: var(--c-warningSoft); padding: 8px 12
 .ly-history ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .ly-history li { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
 @media (max-width: 1000px) { .ly-body.with-history, .ly-tab { grid-template-columns: minmax(0, 1fr); } }
+.ly-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.ly-list .linklike.on { color: var(--c-primary); }
+.ly-detail { display: flex; flex-direction: column; gap: 8px; }
