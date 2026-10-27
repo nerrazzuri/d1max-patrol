@@ -76,10 +76,10 @@ describe("软件升级", () => {
     await waitFor(() => expect(uploads.length).toBe(1));
     expect(uploads[0].headers["X-D1Max-Confirm"]).toBe("my-own-password");
   });
-  it("等充电时换", async () => {
+  it("等充完电空闲时换", async () => {
     const { container: c } = render(<UpgradePage say={() => {}} />);
     await waitFor(() => expect(c.querySelector('[data-release="v1.4.0"]')).not.toBeNull());
-    fireEvent.click(btn(c.querySelector('[data-release="v1.4.0"]')!, "等充电时换"));
+    fireEvent.click(btn(c.querySelector('[data-release="v1.4.0"]')!, "等充完电空闲时换"));
     await waitFor(() => expect(posted[0]).toEqual({ url: "/api/robots/A/release", body: { action: "activate", name: "v1.4.0", when: "charging" } }));
   });
 });

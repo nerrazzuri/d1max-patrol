@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setFetch } from "./api";
 import { lang } from "./i18n";
 import type { UnitInfo } from "./live";
-import { camMarks, camsOnMap, camWorld, GoLookCard, MapPage, TempRoutePanel } from "./mappage";
+import { camMarks, camsOnMap, camWorld, GoLookCard, mapAreas, MapPage, TempRoutePanel } from "./mappage";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const MAP = { map_id: "m", version: "1" };
@@ -125,5 +125,15 @@ describe("地图页的摄像头图层(W44 第三期)", () => {
     const { container: c } = render(<svg>{camMarks(s, camsOnMap(cams, MAP), open)}</svg>);
     fireEvent.click(c.querySelector('[data-cam="cam1"]')!);
     expect(open).toHaveBeenCalledWith("cam1");
+  });
+});
+
+describe("地图上画编辑器里起的区域名(W44 第四期)", () => {
+  it("区域名跟防区一起画,同名的不重画", () => {
+    const meta = { width: 100, height: 100, m_per_px: 0.1, left_x: 0, top_y: 10,
+      display: { regions: [{ name: "车库", polygon: [[0, 0], [1, 0], [1, 1]] as [number, number][] },
+        { name: "后院", polygon: [[0, 0], [1, 0], [1, 1]] as [number, number][] }] } };
+    const got = mapAreas(meta, [{ zone: "后院", points: [[2, 2], [3, 2], [3, 3]] }]);
+    expect(got.map((a) => a.name)).toEqual(["后院", "车库"]);
   });
 });
