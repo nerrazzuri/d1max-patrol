@@ -565,3 +565,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 @media (max-width: 900px) {
   .duty-slots, .duty-bottom { grid-template-columns: 1fr; }
 }
+
+/* W44 实况页:2×2,每张卡片前后两路左右并排;超过 4 台往下翻(卡片高 = 顶栏以下的一半) */
+.livewall { display: flex; flex-direction: column; gap: 10px; }
+.lw-tools { display: flex; justify-content: flex-end; }
+.lw-grid { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: calc((100vh - 56px - 32px - 52px - 10px) / 2); gap: 10px; }
+.lw-card { min-height: 220px; }
+.lw-pair { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+.lw-pair .well { height: 100%; }
+@media (max-width: 900px) { .lw-grid { grid-template-columns: 1fr; grid-auto-rows: 260px; } }
