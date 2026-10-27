@@ -70,7 +70,7 @@ export function ReportsPage({ now }: { now: number }) {
           eventsCsv(d.events, (r) => title(r.kind, r.title), (v) => verdictText(v) || v))}>{t("rsCsv")}</button>
         <button type="button" class="btn primary" disabled={!d} onClick={() => window.print()}>{t("rsPdf")}</button>
       </div>
-      <h1 class="print-head">{t("tabReports")}</h1>
+      <h1 class="only-print">{t("tabReports")}</h1>
       <div class="row wrap noprint">
         <div class="seg" role="group" aria-label={t("rsPeriod")}>
           {KINDS.map((k) => <button key={k.v} type="button" aria-pressed={kind === k.v} onClick={() => setKind(k.v)}>{t(k.key)}</button>)}
