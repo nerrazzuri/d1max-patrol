@@ -3,6 +3,7 @@ import type { FunctionComponent } from "preact";
 import type { LayoutTab, TabProps } from "./layoutpage";
 import { NogoTab } from "./layoutnogo";
 import { RoutesTab } from "./layoutroutes";
+import { StandbyTab } from "./layoutstandby";
 import { ZonesTab } from "./layoutzones";
 
-export const LAYOUT_TABS: Partial<Record<LayoutTab, FunctionComponent<TabProps>>> = { zones: ZonesTab, nogo: NogoTab, routes: RoutesTab };
+export const LAYOUT_TABS: Partial<Record<LayoutTab, FunctionComponent<TabProps>>> = { zones: ZonesTab, nogo: NogoTab, routes: RoutesTab, standby: StandbyTab };

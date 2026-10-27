@@ -759,6 +759,19 @@ const en = {
   lyTemp: "Temporary",
   lyTempFor: "For",
   lyTempDays: "{n} days",
+  lyAddStandby: "Add a standby point",
+  lyAddStandbyHint: "Click on the map where it should be.",
+  lyStandbyHint: "Where a robot waits when it has nothing to do. Drag the icon to move it, drag the arrow to turn it.",
+  lyNoStandby: "No standby points on this map yet.",
+  lyDefault: "default",
+  lyStandbyMoveHint: "Drag it on the map, or click a spot to move it there.",
+  lyStandbyDefault: "This robot's default standby point",
+  lyStandbyRemove: "Remove standby point {name}?",
+  lyWhichRobot: "Which robot",
+  lyStandbyName: "Name (letters, digits, . _ -)",
+  lyStandbyNameHint: "A short name like dock or porch.",
+  lyStandbyDup: "This robot already has a point with that name.",
+  lyCharger: "Charger of {id}",
 };
 
 type Key = keyof typeof en;
@@ -1517,6 +1530,19 @@ const zh: Partial<Record<Key, string>> = {
   lyTemp: "临时的",
   lyTempFor: "多久",
   lyTempDays: "{n} 天",
+  lyAddStandby: "加一个待命点",
+  lyAddStandbyHint: "在图上点一下放在哪。",
+  lyStandbyHint: "机器人没事时去哪待着。拖图标改位置，拖箭头改朝向。",
+  lyNoStandby: "这张图上还没有待命点。",
+  lyDefault: "默认",
+  lyStandbyMoveHint: "在图上拖它，或者点一处把它挪过去。",
+  lyStandbyDefault: "这台机器人默认去这里",
+  lyStandbyRemove: "删掉待命点 {name}？",
+  lyWhichRobot: "哪台机器人",
+  lyStandbyName: "名字（字母、数字、. _ -）",
+  lyStandbyNameHint: "起个短名字，比如 dock、porch。",
+  lyStandbyDup: "这台机器人已经有这个名字的点了。",
+  lyCharger: "{id} 的充电桩",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };
