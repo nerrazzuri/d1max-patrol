@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setFetch } from "./api";
 import { lang } from "./i18n";
 import type { UnitInfo } from "./live";
-import { GoLookCard, MapPage, TempRoutePanel } from "./mappage";
+import { camMarks, camsOnMap, camWorld, GoLookCard, MapPage, TempRoutePanel } from "./mappage";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const MAP = { map_id: "m", version: "1" };
@@ -102,5 +102,28 @@ describe("地图页的图层开关", () => {
     expect(box("防区和布防").checked).toBe(true);
     expect(box("巡逻路线").checked).toBe(true);
     expect(c.textContent).not.toContain("定位");
+    expect(box("摄像头").checked).toBe(true);
+  });
+});
+
+describe("地图页的摄像头图层(W44 第三期)", () => {
+  const META = { width: 100, height: 100, m_per_px: 0.1, left_x: 0, top_y: 10, zones: [] };
+  const cams = [
+    { name: "cam1", live: true, placement: { map_id: "m", map_version: "1", x: 2, y: 2, yaw: 0, fov_deg: 90 } },
+    { name: "cam2", live: true, placement: { map_id: "m", map_version: "2", x: 2, y: 2, yaw: 0, fov_deg: 90 } },
+    { name: "cam3", live: true, placement: null },
+  ];
+  it("只画这张图这一版上的,画扇形", () => {
+    const on = camsOnMap(cams, MAP);
+    expect(on.map((c) => c.name)).toEqual(["cam1"]);
+    const { container: c } = render(<svg>{camWorld(META, on)}</svg>);
+    expect(c.querySelectorAll("path.cam-fan").length).toBe(1);
+  });
+  it("点摄像头看实时画面", () => {
+    const open = vi.fn();
+    const s = { map: (x: number, y: number) => [x * 10, 100 - y * 10] as [number, number], px: (a: number, b: number) => [a, b] as [number, number], k: 1 };
+    const { container: c } = render(<svg>{camMarks(s, camsOnMap(cams, MAP), open)}</svg>);
+    fireEvent.click(c.querySelector('[data-cam="cam1"]')!);
+    expect(open).toHaveBeenCalledWith("cam1");
   });
 });

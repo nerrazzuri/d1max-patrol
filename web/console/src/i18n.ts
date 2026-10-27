@@ -772,6 +772,18 @@ const en = {
   lyStandbyNameHint: "A short name like dock or porch.",
   lyStandbyDup: "This robot already has a point with that name.",
   lyCharger: "Charger of {id}",
+  lyAddCam: "Add a camera",
+  lyCamsHint: "Put each fixed camera on the map so guards can see what it watches. Click the map to place it, drag the arrow to aim it.",
+  lyCamNotPlaced: "not on the map",
+  lyCamOtherMap: "on another map",
+  lyCamPlace: "Place on the map",
+  lyCamPlaceHint: "Click where the camera is.",
+  lyCamMoveHint: "Click the map to move it; drag the arrow to aim it. Compare with the live picture below.",
+  lyCamFov: "View width (degrees)",
+  lyCamUnplace: "Remove from the map",
+  lyCamNoLive: "No live view address set.",
+  lyCamEdit: "Edit connection",
+  lyCamRemove: "Delete camera {name}? Its intrusion alarms stop.",
 };
 
 type Key = keyof typeof en;
@@ -1543,6 +1555,18 @@ const zh: Partial<Record<Key, string>> = {
   lyStandbyNameHint: "起个短名字，比如 dock、porch。",
   lyStandbyDup: "这台机器人已经有这个名字的点了。",
   lyCharger: "{id} 的充电桩",
+  lyAddCam: "加一台摄像头",
+  lyCamsHint: "把固定摄像头放到图上，保安就知道它看着哪。点图放下，拖箭头对准方向。",
+  lyCamNotPlaced: "没放到图上",
+  lyCamOtherMap: "放在别的图上",
+  lyCamPlace: "放到图上",
+  lyCamPlaceHint: "在图上点摄像头装的地方。",
+  lyCamMoveHint: "点图把它挪过去，拖箭头调朝向；跟下面的实时画面对一下。",
+  lyCamFov: "张角（度）",
+  lyCamUnplace: "从图上拿掉",
+  lyCamNoLive: "没填看画面的地址。",
+  lyCamEdit: "改连接信息",
+  lyCamRemove: "删掉摄像头 {name}？它报的入侵就收不到了。",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };

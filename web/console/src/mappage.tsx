@@ -6,10 +6,12 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { hm, nameOf, useDutySettings } from "./data";
+import { Modal } from "./dialogs";
 import { alertTitle, lang, t, type Key } from "./i18n";
 import type { UnitInfo } from "./live";
 import { etaNext, LAYERS, loadLayers, saveLayers, shiftStart, staleAfter, staleCells, tonightEvents, zoneDecor,
   type AuthzRow, type Cell, type Layer, type ModeView } from "./maplayers";
+import { fanPath } from "./layoutpage";
 import { MapCanvas, type CanvasArea, type LegendKey, type Screen } from "./mapcanvas";
 import { heading, namedAreas, onMap, toPx, type PreviewMeta, type Pt } from "./mapview";
 import { abnormal, alarmState, canArm, canDispatch, canFindPose, robotMap, type Alert } from "./model";
@@ -228,6 +230,12 @@ export function MapPage(props: {
   const [authz, setAuthz] = useState<AuthzRow[]>([]);
   const [recent, setRecent] = useState<Alert[]>([]);
   const [standby, setStandby] = useState<{ name: string; x: number; y: number }[]>([]);
+  // W44 第三期:固定摄像头放在图上的(业主在「布置 → 摄像头」放的);点了看实时画面
+  const [cams, setCams] = useState<PlacedCam[]>([]);
+  const [liveCam, setLiveCam] = useState<string | null>(null);
+  useEffect(() => {
+    api<{ cameras: PlacedCam[] }>("GET", "/api/cameras").then((d) => setCams(d.cameras ?? [])).catch(() => setCams([]));
+  }, []);
   const on = (l: Layer) => layers.has(l);
   const flip = (l: Layer) => {
     const n = new Set(layers);
@@ -306,6 +314,7 @@ export function MapPage(props: {
               const w = cells.cell_m / meta.m_per_px;
               return <rect key={`${c.i}:${c.j}`} x={tl.px} y={tl.py} width={w} height={w} class="stale-cell" />;
             })}
+            {on("cameras") && shown.map && camWorld(meta, camsOnMap(cams, shown.map))}
             {route && route.length > 1 && (
               <polyline class="temp-route" points={route.map(([x, y]) => { const p = toPx(meta, x, y); return `${p.px},${p.py}`; }).join(" ")} />
             )}
@@ -313,6 +322,7 @@ export function MapPage(props: {
         )}
         extraMarks={(s) => (
           <>
+            {on("cameras") && shown.map && camMarks(s, camsOnMap(cams, shown.map), setLiveCam)}
             {on("standby") && standby.map((p) => {
               const [x, y] = s.map(p.x, p.y);
               return <g key={`sb:${p.name}`} class="standby-mark"><rect x={x - 3} y={y - 3} width="6" height="6" /><text x={x + 6} y={y + 4}>{p.name}</text></g>;
@@ -337,7 +347,7 @@ export function MapPage(props: {
       <aside class="sidebar maprp" aria-label={t("tabMap")}>
         <h3>{t("mapShow")}</h3>
         <div class="layers">
-          {LAYERS.filter((l) => l !== "cameras").map((l) => (
+          {LAYERS.map((l) => (
             <label key={l}><input type="checkbox" checked={on(l)} onChange={() => flip(l)} />{t(names[l])}</label>
           ))}
         </div>
@@ -367,6 +377,11 @@ export function MapPage(props: {
         )}
       </aside>
       {look && <GoLookCard map={look.map} at={look.at} units={props.units} say={say} onClose={() => setLook(null)} />}
+      {liveCam && (
+        <Modal label={liveCam} onClose={() => setLiveCam(null)} wide>
+          <img class="cam-live" alt={liveCam} src={`/api/cameras/${enc(liveCam)}/live`} />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -377,6 +392,30 @@ export function verdictText(a: Alert): string {
 }
 
 /** 点图以后的小卡片:问站点最近的机器人是谁、大约几分钟,确认了才派(设计 §4.3)。 */
+/** 放在图上的固定摄像头(站点 /api/cameras 带 placement)。 */
+export interface PlacedCam { name: string; zone?: string; live?: boolean; placement?: { map_id: string; map_version: string; x: number; y: number; yaw: number; fov_deg: number } | null }
+
+export function camsOnMap(cams: PlacedCam[], map: { map_id: string; version: string }): PlacedCam[] {
+  return cams.filter((c) => c.placement && c.placement.map_id === map.map_id && c.placement.map_version === map.version);
+}
+
+/** 摄像头图层(世界层):看着的那一块扇形。 */
+export function camWorld(meta: PreviewMeta, cams: PlacedCam[]) {
+  return cams.map((c) => <path key={`fan:${c.name}`} class="cam-fan" d={fanPath(meta, c.placement!)} />);
+}
+
+/** 摄像头图层(标记层):一个点 + 名字,点了看实时画面。 */
+export function camMarks(s: Screen, cams: PlacedCam[], open: (name: string) => void) {
+  return cams.map((c) => {
+    const [x, y] = s.map(c.placement!.x, c.placement!.y);
+    return (
+      <g key={`cam:${c.name}`} class="cam-mark" data-cam={c.name} role="button" onClick={(e) => { e.stopPropagation(); if (c.live !== false) open(c.name); }}>
+        <circle cx={x} cy={y} r={6} /><text x={x + 9} y={y + 4}>{c.name}</text>
+      </g>
+    );
+  });
+}
+
 export function GoLookCard(props: { map: { map_id: string; version: string }; at: Pt; units: UnitInfo[]; onClose: () => void; say: (s: string) => void }) {
   const [got, setGot] = useState<{ robot_id: string; eta_s: number } | null | "none" | "error">(null);
   const [why, setWhy] = useState("");
