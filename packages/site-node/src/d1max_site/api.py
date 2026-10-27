@@ -2497,7 +2497,8 @@ class _Handler(TlsHandlerMixin):
         if d.get("confirm") is not True:
             raise HttpError(400, "要 confirm: true(确认那一句)")
         if self._via_cookie:
-            # W44 第三期(设计 §5.2 第 4 条):网页上确认的这一份比在生效的松(删了、缩了)→ 再输一次密码。
+            # W44 第三期(设计 §5.2 第 4 条):网页上确认的这一份比在生效的松(删了、缩了)
+            # → 再输一次密码。
             # 手机这一期不改(只改用词),照旧
             cur = zones.current(map_id, version).zones
             if any(z not in cur for z in zones.effective(map_id, version).zones):
