@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setFetch } from "./api";
 import { lang } from "./i18n";
 import type { UnitInfo } from "./live";
-import { MapPage } from "./mappage";
+import { SiteMap } from "./mappage";
 import { applyMat, toPx, type Mat, type PreviewMeta } from "./mapview";
 import type { Robot } from "./model";
 import { RoutesPage } from "./routepage";
@@ -482,8 +482,8 @@ function mapPage(meta: PreviewMeta, role: string, post?: (path: string) => Respo
     }
     return json({ error: "nope" }, 404);
   }) as never);
-  const r = render(<MapPage units={[unit(robot("A", { x: 0, y: 0, yaw: 0 }))]} p1={[]} now={0} role={role} selected={null}
-    onSelect={() => {}} onVideo={() => {}} />);
+  const r = render(<SiteMap units={[unit(robot("A", { x: 0, y: 0, yaw: 0 }))]} p1={[]} now={0} role={role} selected={null}
+    onSelect={() => {}} />);
   return { r, posted };
 }
 
