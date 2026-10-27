@@ -93,6 +93,7 @@ _ACCOUNT_RM = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})/remove$")
 _ROUTE = re.compile(r"^/api/routes/([^/]{1,64})(/delete)?$")
 _ROUTE_SCHED = re.compile(r"^/api/route-schedules(?:/([^/]{1,64})(/delete)?)?$")
 _AREAS = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/areas$")
+_HIST = re.compile(r"^/api/layout/history(?:/(\d{1,12})/restore)?$")
 _ARM_EX = re.compile(r"^/api/arming/exceptions/(\d{1,9})/remove$")
 _AUTHZ = re.compile(r"^/api/lists/authorizations(?:/(\d{1,9})/(remove|end))?$")
 #: 网页上登记 / 出开通码 / 吊销机器狗(商业化 B1b,管理员)。
@@ -265,6 +266,10 @@ class SiteApi:
         #: W44 第二期:站点的零散设置(交班时间、多久没巡过)。
         from d1max_site.site_settings import SiteSettings
         self.settings = SiteSettings(dispatcher.db) if dispatcher is not None else None
+        #: W44 第三期:「布置」的历史版本。
+        from d1max_site.layout_history import LayoutHistory
+        self.layout_history = (LayoutHistory(dispatcher.db, now_ms=self._now)
+                               if dispatcher is not None else None)
         #: W10:禁行区、限速区。有地图目录就有(测试台子不传也现建一个,派遣器共用这一份)。
         if zones is None and maps is not None:
             from d1max_site.nav_zones import NavZones
@@ -548,6 +553,9 @@ class _Handler(TlsHandlerMixin):
                 return self._shift_notes(method, user)
             if path == "/api/duty-settings":
                 return self._duty_settings(method, user)
+            m = _HIST.match(path)
+            if m is not None:
+                return self._layout_history(method, m.group(1), user)
             m = _TRACK.match(path)
             if m is not None or path == "/api/coverage":
                 return self._track(method, unquote(m.group(1)) if m else None, user)
@@ -778,6 +786,155 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, str(exc)) from exc
         self._audit_detail = {"chars": len(note["text"])}
         return self._send_json(200, {"note": note})
+
+    # ------------------------------------------------------------ 布置的历史版本(W44 第三期)
+
+    def _snapshot(self, kind: str, map_id: str, version: str, item: str) -> Any:
+        """这一样现在的样子(记历史用)。摄像头不带口令、地址里的账号口令抹掉(``list_cameras``)。"""
+        if kind == "zones":
+            return [{"zone": a["zone"], "points": a["points"]}
+                    for a in self.site.areas.list(map_id, version)]
+        if kind == "nogo":
+            return [z.to_wire() for z in self.site.zones.current(map_id, version).zones]
+        if kind == "route":
+            r = self.site.routes.get(item)
+            return {k: r[k] for k in ("map_id", "map_version", "waypoints", "policy")}
+        if kind == "standby":
+            return [{k: p[k] for k in ("name", "x", "y", "yaw", "default")}
+                    for p in self.site.standby.list(item)
+                    if p["map_id"] == map_id and p["map_version"] == version]
+        if kind == "cameras":
+            from d1max_site import cctv_admin
+            keep = ("name", "zone", "onvif_url", "rtsp_url", "username", "motion", "placement")
+            return [{k: c[k] for k in keep}
+                    for c in cctv_admin.list_cameras(self.site.dispatcher.db)]
+        raise ValueError(kind)
+
+    _NO_BODY = object()
+
+    def _hist(self, kind: str, map_id: str, version: str, item: str, user, *,
+              body: Any = _NO_BODY, note: str = "") -> None:
+        """保存成功以后记一版。记不下来不挡这次保存(只记日志)。"""
+        h = self.site.layout_history
+        if h is None:
+            return
+        try:
+            snap = self._snapshot(kind, map_id, version, item) if body is self._NO_BODY else body
+            h.record(kind, map_id, version, item, snap, by=str(user), note=note)
+        except Exception:
+            log.exception("布置的历史版本记不下来:%s %s:%s %s", kind, map_id, version, item)
+
+    def _layout_history(self, method: str, hid: str | None, user) -> None:
+        """``GET /api/layout/history?kind=&map_id=&version=&item=``;
+        ``POST …/{id}/restore`` 退回到那一版
+        (``manage``;走原来的保存路径)。"""
+        from d1max_site.layout_history import HistoryError
+        h = self.site.layout_history
+        if h is None:
+            raise HttpError(404, "这个站点没开历史版本")
+        self._need(user, MANAGE)
+        if hid is None:
+            if method != "GET":
+                raise HttpError(405, "只支持 GET")
+            q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            one = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+            try:
+                rows = h.list(one("kind"), one("map_id"), one("version"),
+                              item=(q.get("item") or [None])[0])
+            except HistoryError as exc:
+                raise HttpError(400, str(exc)) from exc
+            return self._send_json(200, {"history": rows})
+        if method != "POST":
+            raise HttpError(405, "只支持 POST")
+        self._body()
+        row = h.get(int(hid))
+        if row is None:
+            raise HttpError(404, "没有这一版")
+        self._audit_target = f"{row['kind']}:{row['map_id']}:{row['map_version']}/{row['item']}"
+        self._audit_detail = {"restore": row["id"]}
+        warnings = self._restore(row, user)
+        self._hist(row["kind"], row["map_id"], row["map_version"], row["item"], user,
+                   note=f"restored #{row['id']}")
+        return self._send_json(200, {"ok": True, "warnings": warnings})
+
+    def _restore(self, row: dict[str, Any], user) -> list[dict[str, str]]:
+        """退回:走各自原来的保存路径(规矩不变)。回给人看的提醒。"""
+        from d1max_site.areas import AreaError
+        from d1max_site.nav_zones import ZonesConflict, ZonesError
+        from d1max_site.routes import RouteConflict, RouteError, RouteNotFound
+        kind, mid, ver, item, body = (row["kind"], row["map_id"], row["map_version"],
+                                      row["item"], row["body"])
+        warnings: list[dict[str, str]] = []
+        try:
+            if kind == "zones":
+                book = self.site.areas
+                want = {a["zone"]: a["points"] for a in body or []}
+                for a in book.list(mid, ver):
+                    if a["zone"] not in want:
+                        book.remove(mid, ver, a["zone"])
+                for z, pts in want.items():
+                    book.set(mid, ver, z, pts, by=str(user))
+            elif kind == "nogo":
+                zones = self.site.zones
+                cur = zones.current(mid, ver)
+                zs, tighten = zones.put(mid, ver, body or [], base_revision=cur.revision,
+                                        by=str(user))
+                self.site.dispatch(lambda: self.site.dispatcher.push_zones(
+                    zs, tighten=tighten, issued_by=str(user)))
+            elif kind == "route":
+                store = self.site.routes
+                try:
+                    base = store.get(item)["revision"]
+                except RouteNotFound:
+                    base = 0
+                if body is None:
+                    if base:
+                        store.delete_route(item, base_revision=base, by=str(user))
+                else:
+                    store.put_route(item, dict(body) | {"base_revision": base}, by=str(user))
+            elif kind == "standby":
+                stb = self.site.standby
+                want = {p["name"]: p for p in body or []}
+                for p in stb.list(item):
+                    if p["map_id"] == mid and p["map_version"] == ver and p["name"] not in want:
+                        stb.remove(item, p["name"])
+                for p in sorted(want.values(), key=lambda p: bool(p.get("default"))):
+                    stb.set(item, p["name"], map_id=mid, map_version=ver, x=p["x"], y=p["y"],
+                            yaw=p["yaw"], default=bool(p.get("default")))
+            elif kind == "cameras":
+                warnings = self._restore_cameras(body or [])
+        except (AreaError, ZonesError, RouteError, ValueError) as exc:
+            code = 409 if isinstance(exc, (ZonesConflict, RouteConflict)) else 400
+            raise HttpError(code, f"退不回去:{exc}") from exc
+        return warnings
+
+    def _restore_cameras(self, body: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """摄像头:按名字换回去;口令用现在那一台的(历史里没有口令),没有这台了就空着、提醒重填。
+        地址:快照里的是抹掉账号口令的,跟现在那一台抹掉以后一样就用现在的原文。"""
+        from d1max_site import cctv_admin
+        from d1max_site.cctv import scrub
+        db = self.site.dispatcher.db
+        now = {r["name"]: dict(r) for r in db.query("SELECT * FROM cameras")}
+        want = {c["name"]: c for c in body}
+        warnings: list[dict[str, str]] = []
+        for name in now:
+            if name not in want:
+                cctv_admin.remove(db, name)
+        for name, c in want.items():
+            old = now.get(name)
+            d: dict[str, Any] = {k: c[k] for k in ("name", "zone", "onvif_url", "rtsp_url",
+                                                   "username", "motion")}
+            d["placement"] = c.get("placement")
+            if old is not None:
+                for k in ("onvif_url", "rtsp_url"):
+                    if "@" in old[k] and scrub(old[k]) == c[k]:
+                        d[k] = old[k]
+                d["edit"] = True
+            else:
+                d["password"] = ""
+                warnings.append({"camera": name, "problem": "password_missing"})
+            cctv_admin.save(db, d, now_ms=self.site._now())
+        return warnings
 
     def _duty_settings(self, method: str, user) -> None:
         """值班设置(W44 第二期):交班时间、多久没巡过。``GET`` 谁都要读(``view``,保安页面用);
@@ -1012,13 +1169,18 @@ class _Handler(TlsHandlerMixin):
         d = self._body()
         try:
             if d.get("remove") is True:
+                was = [p for p in stb.list(robot_id) if p["name"] == d.get("name")]
                 stb.remove(robot_id, d.get("name"))
+                maps = {(p["map_id"], p["map_version"]) for p in was}
             else:
                 stb.set(robot_id, d.get("name"), map_id=d.get("map_id"),
                         map_version=d.get("map_version"), x=d.get("x"), y=d.get("y"),
                         yaw=d.get("yaw", 0.0), default=d.get("default"))
+                maps = {(d.get("map_id"), d.get("map_version"))}
         except StandbyError as exc:
             raise HttpError(400, str(exc)) from exc
+        for mid, ver in maps:
+            self._hist("standby", str(mid), str(ver), robot_id, user)
         self._send_json(200, {"points": stb.list(robot_id)})
 
     def _confirm(self, user, d: dict[str, Any]) -> None:
@@ -1123,6 +1285,7 @@ class _Handler(TlsHandlerMixin):
                 book.set(map_id, version, zone, d.get("points"), by=str(user))
         except AreaError as exc:
             raise HttpError(400, str(exc)) from exc
+        self._hist("zones", map_id, version, "", user)
         return self._send_json(200, {"areas": book.list(map_id, version)})
 
     def _authz(self, method: str, entry_id: str | None, user, action: str | None = None) -> None:
@@ -1620,10 +1783,13 @@ class _Handler(TlsHandlerMixin):
                 rid = unquote(mr.group(1))
                 self._audit_target = rid
                 if mr.group(2):
+                    old = store.get(rid)
                     store.delete_route(rid, base_revision=d.get("base_revision"), by=str(user))
                     self._audit_detail = {"delete": True}
+                    self._hist("route", old["map_id"], old["map_version"], rid, user, body=None)
                     return self._send_json(200, {"ok": True})
                 out = store.put_route(rid, d, by=str(user))
+                self._hist("route", out["map_id"], out["map_version"], rid, user)
                 self._audit_detail = {"revision": out["revision"], "points": len(out["waypoints"]),
                                       "map": f"{out['map_id']}:{out['map_version']}"}
                 return self._send_json(200, out)
@@ -2309,6 +2475,7 @@ class _Handler(TlsHandlerMixin):
                                       "hard": len(zs.hard())}
                 pushed = self.site.dispatch(lambda: self.site.dispatcher.push_zones(
                     zs, tighten=tighten, issued_by=str(user)))
+                self._hist("nogo", map_id, version, "", user)
                 return self._send_json(200, zones.view(map_id, version)
                                        | {"tighten": tighten, "pushed": pushed,
                                           "auto_confirmed": auto})
@@ -2622,7 +2789,12 @@ class _Handler(TlsHandlerMixin):
         if mgr is None:
             raise HttpError(404, "这个站点没开摄像头")
         if path == "/api/cameras":
-            return self._send_json(200, {"cameras": mgr.view()})
+            # W44 第三期:带上放在图上的位置(保安地图页的摄像头图层)
+            from d1max_site.cctv import placement_of
+            pl = {r["name"]: placement_of(r) for r in self.site.dispatcher.db.query(
+                "SELECT name, map_id, map_version, x, y, yaw, fov_deg FROM cameras")}
+            return self._send_json(200, {"cameras": [c | {"placement": pl.get(c["name"])}
+                                                     for c in mgr.view()]})
         m = _CAM.match(path)
         assert m is not None
         cam = mgr.camera(m.group(1))

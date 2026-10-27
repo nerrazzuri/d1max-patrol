@@ -804,3 +804,16 @@ def test_W19复查_有人在看时改了地址_旧流关掉_再打开按新配�
     assert s.api._cctv_views["gate-cam"].cam.rtsp_url == "rtsp://10.0.0.9/new"
     s.api.close_cctv_views()
     _等(lambda: procs2[0][1].returncode is not None)
+
+
+def test_接口_状态带图上的位置(站点):
+    """W44 第三期:保安地图页的摄像头图层要知道摄像头放在哪(业主在「布置」里放的)。"""
+    from d1max_site.cctv import set_placement
+    s = 站点
+    add_camera(s.db, _cam(80), now_ms=1)
+    s.cctv.sync()
+    tok = s.req("POST", "/api/login", {"name": "olga", "password": s.PW})[1]["token"]
+    assert s.req("GET", "/api/cameras", token=tok)[1]["cameras"][0]["placement"] is None
+    pl = {"map_id": "m", "map_version": "1", "x": 1.0, "y": 2.0, "yaw": 0.0, "fov_deg": 90.0}
+    set_placement(s.db, "gate-cam", pl)
+    assert s.req("GET", "/api/cameras", token=tok)[1]["cameras"][0]["placement"] == pl

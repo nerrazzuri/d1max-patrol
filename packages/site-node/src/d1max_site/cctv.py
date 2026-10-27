@@ -407,6 +407,26 @@ def update_camera_keep_password(db: SiteDB, cam: Camera) -> bool:
                                           int(cam.motion), cam.name)).rowcount > 0
 
 
+def set_placement(db: SiteDB, name: str, pl: dict | None) -> None:
+    """摄像头放在图上的哪儿(W44 第三期);``None`` 从图上拿掉。校验在 ``cctv_admin``。"""
+    with db.tx() as c:
+        if pl is None:
+            c.execute("UPDATE cameras SET map_id='', map_version='', x=NULL, y=NULL, yaw=NULL, "
+                      "fov_deg=NULL WHERE name=?", (name,))
+        else:
+            c.execute("UPDATE cameras SET map_id=?, map_version=?, x=?, y=?, yaw=?, fov_deg=? "
+                      "WHERE name=?", (pl["map_id"], pl["map_version"], pl["x"], pl["y"],
+                                       pl["yaw"], pl["fov_deg"], name))
+
+
+def placement_of(r: Any) -> dict | None:
+    """库里一行 → 位置(没放是 ``None``)。"""
+    if not r["map_id"]:
+        return None
+    return {"map_id": r["map_id"], "map_version": r["map_version"], "x": r["x"], "y": r["y"],
+            "yaw": r["yaw"], "fov_deg": r["fov_deg"]}
+
+
 def remove_camera(db: SiteDB, name: str) -> bool:
     with db.tx() as c:
         return c.execute("DELETE FROM cameras WHERE name=?", (name,)).rowcount > 0

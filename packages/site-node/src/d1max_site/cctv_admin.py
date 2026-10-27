@@ -18,7 +18,15 @@ import re
 from typing import Any
 
 from d1max_site.ca import SAFE_ID
-from d1max_site.cctv import Camera, add_camera, remove_camera, scrub, update_camera_keep_password
+from d1max_site.cctv import (
+    Camera,
+    add_camera,
+    placement_of,
+    remove_camera,
+    scrub,
+    set_placement,
+    update_camera_keep_password,
+)
 from d1max_site.db import SiteDB
 
 _CTRL = re.compile(r"[\x00-\x1f\x7f\s]")
@@ -91,6 +99,30 @@ def check_camera(d: Any) -> dict[str, Any]:
             "rtsp_url": _rtsp_url(_text(d, "rtsp_url", maxlen=500))}
 
 
+def check_placement(v: Any) -> dict[str, Any] | None:
+    """摄像头放在图上的哪儿(W44 第三期):``{map_id, map_version, x, y, yaw, fov_deg}``;
+    ``None`` 从图上拿掉。"""
+    import math
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise ValueError("placement 要是对象(或 null 从图上拿掉)")
+    out: dict[str, Any] = {}
+    for k in ("map_id", "map_version"):
+        x = v.get(k)
+        if not isinstance(x, str) or not x or len(x) > 64:
+            raise ValueError(f"placement 要 {k}")
+        out[k] = x
+    for k in ("x", "y", "yaw", "fov_deg"):
+        x = v.get(k, 90.0 if k == "fov_deg" else None)
+        if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x):
+            raise ValueError(f"placement.{k} 要是有限数")
+        out[k] = float(x)
+    if not 10 <= out["fov_deg"] <= 180:
+        raise ValueError("张角(fov_deg)要在 10–180 度")
+    return out
+
+
 def zone_warnings(db: SiteDB, zone: str) -> list[dict[str, str]]:
     out = []
     if not db.query("SELECT 1 FROM zones WHERE zone=?", (zone,)):
@@ -112,6 +144,7 @@ def _row_view(db: SiteDB, r: Any) -> dict[str, Any]:
             "username": r["username"], "has_password": bool(r["password"]),
             "rtsp_set": bool(r["rtsp_url"]), "rtsp_url": _strip_userinfo(r["rtsp_url"]),
             "motion": bool(r["motion"]), "added_ms": r["added_ms"],
+            "placement": placement_of(r),
             "zone_mapped": not any(w["code"] == "zone_unmapped" for w in warns),
             "zone_polygon": not any(w["code"] == "zone_no_polygon" for w in warns),
             "warnings": warns}
@@ -124,6 +157,8 @@ def list_cameras(db: SiteDB) -> list[dict[str, Any]]:
 def save(db: SiteDB, d: Any, *, now_ms: int) -> dict[str, Any]:
     """登记(``edit`` 假)或改(``edit`` 真)。返回 ``{camera, warnings, password_changed}``。"""
     f = check_camera(d)
+    has_pl = isinstance(d, dict) and "placement" in d
+    pl = check_placement(d.get("placement")) if has_pl else None
     edit = d.get("edit", False)
     if not isinstance(edit, bool):
         raise ValueError("edit 要是 true / false")
@@ -146,6 +181,8 @@ def save(db: SiteDB, d: Any, *, now_ms: int) -> dict[str, Any]:
                               password=pw or "", zone=f["zone"], rtsp_url=f["rtsp_url"],
                               motion=f["motion"]), now_ms=now_ms)
         changed = True
+    # 位置:带了就按带的;没带就留着原来的(换口令那条路是整行重写,要补回去)
+    set_placement(db, f["name"], pl if has_pl else (placement_of(old[0]) if old else None))
     row = db.query("SELECT * FROM cameras WHERE name=?", (f["name"],))[0]
     view = _row_view(db, row)
     return {"camera": view, "warnings": view["warnings"], "password_changed": changed}
