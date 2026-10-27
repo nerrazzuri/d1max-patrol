@@ -105,7 +105,7 @@ export function CamerasPanel({ say }: { say: Say }) {
   );
 }
 
-function CameraForm({ initial, onClose, onSaved, say }: { initial: CamRow | null; onClose: () => void; onSaved: (w: CamWarning[], zone: string) => void; say: Say }) {
+export function CameraForm({ initial, onClose, onSaved, say }: { initial: CamRow | null; onClose: () => void; onSaved: (w: CamWarning[], zone: string) => void; say: Say }) {
   const edit = initial !== null;
   const [name, setName] = useState(initial?.name ?? "");
   const [onvif, setOnvif] = useState(initial?.onvif_url ?? "");

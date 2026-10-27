@@ -858,3 +858,9 @@ p.warn { color: var(--c-text); background: var(--c-warningSoft); padding: 8px 12
 .standby-pt .pm-body, .standby-pt circle:first-of-type { fill: var(--c-surface); }
 .standby-pt.default .pm-body { fill: var(--c-success); }
 .ly-charger circle { fill: var(--c-warning); stroke: var(--c-surface); stroke-width: 2; }
+.cam-fan { fill: var(--c-info); fill-opacity: .2; stroke: var(--c-info); vector-effect: non-scaling-stroke; }
+.cam-fan.on { fill-opacity: .35; }
+.cam-mark { cursor: pointer; }
+.cam-mark circle { fill: var(--c-info); stroke: var(--c-surface); stroke-width: 2; }
+.cam-mark text { font-size: 12px; fill: var(--c-text); paint-order: stroke; stroke: var(--c-surface); stroke-width: 3; }
+img.cam-live { width: 100%; max-height: 60vh; object-fit: contain; background: #000; border-radius: 8px; }

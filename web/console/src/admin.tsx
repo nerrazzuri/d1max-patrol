@@ -1,8 +1,7 @@
-// 「高级 → 系统」(商业化 B1b 起):体检、版本、手机配对;摄像头登记暂挂在这页底下(第三期挪进「布置」)。
+// 「高级 → 系统」(商业化 B1b 起):体检、版本、手机配对。摄像头登记在「布置 → 摄像头」(W44 第三期)。
 // 用户页挪到 userspage.tsx、机器人页挪到 robotspage.tsx(W44 第二期)。
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
-import { CamerasPanel } from "./camadmin";
 import { hm } from "./data";
 import { t, type Key } from "./i18n";
 import { Shape } from "./icons";
@@ -65,7 +64,7 @@ interface Health { ok: boolean; version: string; checks: Record<string, { ok: bo
 
 const CRITICAL = new Set(["db", "loop", "broker", "disk"]);
 
-export function SystemPage({ say }: { say: Say }) {
+export function SystemPage(_p: { say?: Say }) {
   const [health, reload] = useLoad<Health>("/api/health");
   const [versions] = useLoad<Versions>("/api/versions");
   useEffect(() => {
@@ -126,7 +125,6 @@ export function SystemPage({ say }: { say: Say }) {
         </table>
       </section>
       <PairPhone />
-      <CamerasPanel say={say} />
       <section class="panel">
         <div class="panel-head">
           <h2>{t("supportBundle")}</h2>
