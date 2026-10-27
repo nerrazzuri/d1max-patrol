@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { CamerasPanel } from "./camadmin";
-import { hm, hms } from "./data";
+import { hm } from "./data";
 import { Confirm, Modal } from "./dialogs";
 import { t, type Key } from "./i18n";
 import { Shape } from "./icons";
@@ -33,139 +33,6 @@ function errText(e: unknown): string {
 function day(ms: number): string {
   const d = new Date(ms);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-// ------------------------------------------------------------------ 用户
-
-interface Account { name: string; role: string; disabled: boolean; display_name: string }
-interface AuditRow { id: number; at: number; actor: string; action: string; target: string; status: number }
-
-export function UsersPage({ me, say }: { me: string; say: Say }) {
-  const [data, reload] = useLoad<{ accounts: Account[] }>("/api/accounts");
-  const [audit, reloadAudit] = useLoad<{ audit: AuditRow[] }>("/api/audit");
-  const [adding, setAdding] = useState(false);
-  const [resetFor, setResetFor] = useState<string | null>(null);
-  const change = async (name: string, body: Record<string, unknown>, msg = t("saved")) => {
-    try {
-      await api("POST", `/api/accounts/${enc(name)}`, body);
-      say(msg);
-    } catch (e) {
-      say(errText(e));
-    }
-    reload();
-    reloadAudit();
-  };
-  return (
-    <div class="admin">
-      <section class="panel">
-        <div class="panel-head">
-          <h1>{t("users")}</h1>
-          <button type="button" class="btn primary push" onClick={() => setAdding(true)}>{t("addUser")}</button>
-        </div>
-        <table class="grid">
-          <thead><tr><th>{t("name")}</th><th>{t("displayName")}</th><th>{t("role")}</th><th>{t("status")}</th><th>{t("colActions")}</th></tr></thead>
-          <tbody>
-            {(data?.accounts ?? []).map((a) => (
-              <tr key={a.name} class={a.disabled ? "off" : undefined}>
-                <td class="mono">{a.name}</td>
-                <td>{a.display_name || "—"}</td>
-                <td>
-                  <select aria-label={`${t("role")} ${a.name}`} value={a.role} disabled={a.name === me}
-                    onChange={(e) => void change(a.name, { role: e.currentTarget.value })}>
-                    {["admin", "guard", "owner"].map((r) => <option key={r} value={r}>{t(`role_${r}` as Key)}</option>)}
-                  </select>
-                </td>
-                <td>{a.disabled ? t("disabled") : t("active")}</td>
-                <td class="actions">
-                  {a.name !== me && (
-                    <>
-                      <button type="button" class="btn sm" onClick={() => void change(a.name, { disabled: !a.disabled })}>
-                        {a.disabled ? t("enable") : t("disable")}
-                      </button>
-                      <button type="button" class="btn sm" onClick={() => setResetFor(a.name)}>{t("resetPassword")}</button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-      <section class="panel">
-        <div class="panel-head"><h2>{t("auditLog")}</h2></div>
-        <div class="scrollbox">
-          <table class="grid">
-            <thead><tr><th>{t("colTime")}</th><th>{t("colWho")}</th><th>{t("colAction")}</th><th>{t("colTarget")}</th><th>{t("colResult")}</th></tr></thead>
-            <tbody>
-              {(audit?.audit ?? []).slice(0, 100).map((r) => (
-                <tr key={r.id}>
-                  <td class="mono">{day(r.at)} {hms(r.at)}</td>
-                  <td>{r.actor}</td>
-                  <td class="mono">{r.action}</td>
-                  <td>{r.target || "—"}</td>
-                  <td class={r.status >= 400 ? "bad" : undefined}>{r.status || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      {adding && <AddUser onClose={() => setAdding(false)} onDone={(n) => { setAdding(false); say(t("saved")); reload(); reloadAudit(); void n; }} say={say} />}
-      {resetFor && (
-        <PasswordDialog name={resetFor} onClose={() => setResetFor(null)}
-          onSave={(pw) => { const n = resetFor; setResetFor(null); void change(n, { password: pw }, t("passwordReset", { name: n })); }} />
-      )}
-    </div>
-  );
-}
-
-function AddUser({ onClose, onDone, say }: { onClose: () => void; onDone: (name: string) => void; say: Say }) {
-  const [name, setName] = useState("");
-  const [display, setDisplay] = useState("");
-  const [role, setRole] = useState("guard");
-  const [pw, setPw] = useState("");
-  async function submit(e: Event) {
-    e.preventDefault();
-    try {
-      await api("POST", "/api/accounts", { name, display_name: display, role, password: pw });
-      onDone(name);
-    } catch (x) {
-      say(errText(x));
-    }
-  }
-  return (
-    <Modal label={t("addUser")} onClose={onClose}>
-      <form class="form" onSubmit={submit}>
-        <label class="field">{t("name")}<input value={name} pattern="[A-Za-z0-9._\-]{1,64}" required autocomplete="off" onInput={(e) => setName(e.currentTarget.value)} /></label>
-        <label class="field">{t("displayName")}<input value={display} maxLength={64} onInput={(e) => setDisplay(e.currentTarget.value)} /></label>
-        <label class="field">{t("role")}
-          <select value={role} onChange={(e) => setRole(e.currentTarget.value)}>
-            {["guard", "owner", "admin"].map((r) => <option key={r} value={r}>{t(`role_${r}` as Key)}</option>)}
-          </select>
-        </label>
-        <label class="field">{t("newPassword")}<input type="password" minLength={10} required autocomplete="new-password" value={pw} onInput={(e) => setPw(e.currentTarget.value)} /></label>
-        <div class="row end">
-          <button type="button" class="btn" onClick={onClose}>{t("cancel")}</button>
-          <button type="submit" class="btn primary">{t("addUser")}</button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function PasswordDialog({ name, onClose, onSave }: { name: string; onClose: () => void; onSave: (pw: string) => void }) {
-  const [pw, setPw] = useState("");
-  return (
-    <Modal label={`${t("resetPassword")}: ${name}`} onClose={onClose}>
-      <form class="form" onSubmit={(e) => { e.preventDefault(); onSave(pw); }}>
-        <label class="field">{t("newPassword")}<input type="password" minLength={10} required autocomplete="new-password" value={pw} onInput={(e) => setPw(e.currentTarget.value)} /></label>
-        <div class="row end">
-          <button type="button" class="btn" onClick={onClose}>{t("cancel")}</button>
-          <button type="submit" class="btn primary">{t("save")}</button>
-        </div>
-      </form>
-    </Modal>
-  );
 }
 
 // ------------------------------------------------------------------ 机器狗与摄像头
