@@ -258,6 +258,9 @@ class SiteApi:
         from d1max_site.shift_notes import ShiftNotes
         self.shift_notes = (ShiftNotes(dispatcher.db, now_ms=self._now)
                             if dispatcher is not None else None)
+        #: W44 第二期:站点的零散设置(交班时间、多久没巡过)。
+        from d1max_site.site_settings import SiteSettings
+        self.settings = SiteSettings(dispatcher.db) if dispatcher is not None else None
         #: W10:禁行区、限速区。有地图目录就有(测试台子不传也现建一个,派遣器共用这一份)。
         if zones is None and maps is not None:
             from d1max_site.nav_zones import NavZones
@@ -529,6 +532,8 @@ class _Handler(TlsHandlerMixin):
                 return self._send_json(200, self.site.scheduler.view())
             if path == "/api/shift-notes":
                 return self._shift_notes(method, user)
+            if path == "/api/duty-settings":
+                return self._duty_settings(method, user)
             m = _TRACK.match(path)
             if m is not None or path == "/api/coverage":
                 return self._track(method, unquote(m.group(1)) if m else None, user)
@@ -757,6 +762,26 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, str(exc)) from exc
         self._audit_detail = {"chars": len(note["text"])}
         return self._send_json(200, {"note": note})
+
+    def _duty_settings(self, method: str, user) -> None:
+        """值班设置(W44 第二期):交班时间、多久没巡过。``GET`` 谁都要读(``view``,保安页面用);
+        ``POST`` 改(``manage``)。"""
+        from d1max_site.site_settings import SettingsError
+        st = self.site.settings
+        if st is None:
+            raise HttpError(404, "这个站点没开设置")
+        if method == "GET":
+            self._need(user, VIEW)
+            return self._send_json(200, st.duty())
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        self._need(user, MANAGE)
+        d = self._body()
+        self._audit_detail = {k: d.get(k) for k in ("shift_hours", "stale_hours") if k in d}
+        try:
+            return self._send_json(200, st.set_duty(d, by=str(user)))
+        except SettingsError as exc:
+            raise HttpError(400, str(exc)) from exc
 
     def _login(self) -> None:
         d = self._body()

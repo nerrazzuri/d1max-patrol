@@ -75,6 +75,25 @@ export function useSiteData(): [SiteData | null, () => Promise<void>, Conn] {
   return [data, refresh, conn];
 }
 
+/** 值班设置(W44 第二期,站点 /api/duty-settings):交班时间、多久没巡过算「没巡过」。 */
+export interface DutySettings { shift_hours: [number, number]; stale_hours: number }
+export const DEFAULT_DUTY: DutySettings = { shift_hours: [7, 19], stale_hours: 2 };
+
+/** 读一次站点的值班设置;拿不到用默认(7:00 / 19:00、2 小时)。 */
+export function useDutySettings(): DutySettings {
+  const [d, setD] = useState<DutySettings>(DEFAULT_DUTY);
+  useEffect(() => {
+    let live = true;
+    api<DutySettings>("GET", "/api/duty-settings")
+      .then((x) => {
+        if (live && Array.isArray(x?.shift_hours) && x.shift_hours.length === 2 && typeof x.stale_hours === "number") setD(x);
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+  return d;
+}
+
 /** 每秒走一下的「现在」。 */
 export function useNow(): number {
   const [now, setNow] = useState(() => Date.now());

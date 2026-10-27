@@ -17,7 +17,7 @@ from typing import Any
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
 #: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
-SCHEMA_VERSION = 61
+SCHEMA_VERSION = 62
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -623,6 +623,30 @@ CREATE TABLE IF NOT EXISTS pose_track (
     PRIMARY KEY (robot_id, stamp_ms)
 );
 CREATE INDEX IF NOT EXISTS pose_track_map ON pose_track(map_id, map_version, stamp_ms);
+-- W44 第二期(库 62):布防时间表。zone='' 是「全部防区一样」那一份;day 0=星期一 … 6=星期日;
+-- 0 <= start_min < end_min <= 1440(到 24:00)。arming_schedule.py。
+CREATE TABLE IF NOT EXISTS arming_slots (
+    zone      TEXT NOT NULL,
+    day       INTEGER NOT NULL,
+    start_min INTEGER NOT NULL,
+    end_min   INTEGER NOT NULL,
+    PRIMARY KEY (zone, day, start_min)
+);
+-- 例外日期(节假日、出远门):first_day..last_day(站点时区的日子,两头都算)全天全站 armed / disarmed。
+CREATE TABLE IF NOT EXISTS arming_exceptions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    first_day  TEXT NOT NULL,
+    last_day   TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_ms INTEGER NOT NULL
+);
+-- 站点的零散设置(值是 JSON):交班时间、多久没巡过、时间表开没开……site_settings.py。
+CREATE TABLE IF NOT EXISTS site_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -693,6 +717,15 @@ _ADDED_COLUMNS = (
     # W44(库 61):告警结论 —— intruder 确认有人 / false_alarm 误报 / handled 处理好了;
     # 空 = 没说(老的、自动解决的)。
     ("alerts", "verdict", "TEXT NOT NULL DEFAULT ''"),
+    # W44 第二期(库 62):工程师临时账号到期时刻(空 = 不到期)、最后一次登录。
+    ("accounts", "expires_ms", "INTEGER"),
+    ("accounts", "last_login_ms", "INTEGER"),
+    # 时间表开着时手动切的模式管到几点(空 = 不在手动期,按时间表)。
+    ("site_mode", "manual_until_ms", "INTEGER"),
+    # 业主给机器人起的名字(空 = 用编号)。
+    ("robots", "display_name", "TEXT NOT NULL DEFAULT ''"),
+    # 授权提前结束:这个时刻之前不算生效(这一段结束时刻;下一段照常)。
+    ("authorizations", "ended_until_ms", "INTEGER"),
 )
 
 
