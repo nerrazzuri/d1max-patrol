@@ -199,6 +199,10 @@ class RouteStore:
         return errors
 
     def _validate_route(self, route_id: str, body: dict[str, Any]) -> Mission:
+        return self.build_mission(route_id, body)
+
+    def build_mission(self, route_id: str, body: dict[str, Any]) -> Mission:
+        """按存路线的同一套规矩把接口里的一条路线变成任务定义(W44:保安的临时路线也走这里,不存)。"""
         if not NAME_RE.match(route_id):
             raise RouteError(f"路线名只许 ASCII 字母、数字、. _ -(1–64 个字符):{route_id!r}")
         unknown = sorted(set(body) - _EDITABLE)

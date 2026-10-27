@@ -48,12 +48,18 @@ class AuthzBook:
         self._now = now_ms
         self._local = localtime
 
-    def list(self) -> list[dict[str, Any]]:
+    def list(self, *, with_active: bool = False) -> list[dict[str, Any]]:
+        """``with_active``:每条加 ``active_now``(此刻生效没有;W44 地图页防区标签用)。"""
         rows = self.db.query("SELECT * FROM authorizations ORDER BY name, id")
-        return [{"id": r["id"], "name": r["name"], "zones": json.loads(r["zones"]),
-                 "days": r["days"], "start": _hhmm(r["start_min"]), "end": _hhmm(r["end_min"]),
-                 "until_ms": r["until_ms"], "note": r["note"], "created_by": r["created_by"],
-                 "created_ms": r["created_ms"]} for r in rows]
+        out = [{"id": r["id"], "name": r["name"], "zones": json.loads(r["zones"]),
+                "days": r["days"], "start": _hhmm(r["start_min"]), "end": _hhmm(r["end_min"]),
+                "until_ms": r["until_ms"], "note": r["note"], "created_by": r["created_by"],
+                "created_ms": r["created_ms"]} for r in rows]
+        if with_active:
+            now = self._now()
+            for e in out:
+                e["active_now"] = self._live(e, now)
+        return out
 
     def add(self, d: dict[str, Any], *, by: str) -> int:
         name = str(d.get("name") or "").strip()
@@ -93,19 +99,21 @@ class AuthzBook:
         说不清防区的时候只认全站授权。跨午夜的(22:00–06:00):开始那天的晚上和第二天的早上都算,
         星期按开始那天算。"""
         now = self._now() if now_ms is None else now_ms
-        lt = self._local(now / 1000)
-        minute, wday = lt.tm_hour * 60 + lt.tm_min, lt.tm_wday
         for e in self.list():
-            if e["until_ms"] is not None and now >= e["until_ms"]:
-                continue
             if e["zones"] and (zone is None or zone not in e["zones"]):
                 continue
-            s, t = _minutes(e["start"], ""), _minutes(e["end"], "")
-            if s < t:
-                ok = s <= minute < t and e["days"] >> wday & 1
-            else:                                        # 跨午夜
-                ok = (minute >= s and e["days"] >> wday & 1) or (
-                    minute < t and e["days"] >> ((wday - 1) % 7) & 1)
-            if ok:
+            if self._live(e, now):
                 return e["name"]
         return None
+
+    def _live(self, e: dict[str, Any], now: int) -> bool:
+        """这一条此刻生效没有(不看防区)。"""
+        if e["until_ms"] is not None and now >= e["until_ms"]:
+            return False
+        lt = self._local(now / 1000)
+        minute, wday = lt.tm_hour * 60 + lt.tm_min, lt.tm_wday
+        s, t = _minutes(e["start"], ""), _minutes(e["end"], "")
+        if s < t:
+            return bool(s <= minute < t and e["days"] >> wday & 1)
+        return bool((minute >= s and e["days"] >> wday & 1)          # 跨午夜
+                    or (minute < t and e["days"] >> ((wday - 1) % 7) & 1))

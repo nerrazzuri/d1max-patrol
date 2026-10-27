@@ -152,6 +152,8 @@ _TRAIL = re.compile(r"^/api/robots/([^/]{1,64})/mapping/(trail|preview)$")
 _RELCMD = re.compile(r"^/api/robots/([^/]{1,64})/release$")
 #: W44:某台机器人一段时间的位置轨迹。
 _TRACK = re.compile(r"^/api/robots/([^/]{1,64})/track$")
+#: 保安的临时路线最多几个点(W44)。
+TEMP_ROUTE_MAX = 20
 #: 轨迹一次最多问多长(毫秒)。
 TRACK_SPAN_MAX_MS = 86_400_000
 _ROBOT = re.compile(
@@ -617,6 +619,8 @@ class _Handler(TlsHandlerMixin):
                 if not SAFE_ID.match(robot_id):
                     raise HttpError(404, "没有这台机器人")
                 return self._video(robot_id, m.group(2), user)
+            if path == "/api/robots/nearest":
+                return self._nearest(method, user)
             m = _ROBOT.match(path)
             if m is not None:
                 robot_id = unquote(m.group(1))
@@ -841,6 +845,8 @@ class _Handler(TlsHandlerMixin):
             target = {"schema": CONTRACT_SCHEMA, **target}
             result = self.site.dispatch(lambda: disp.goto(
                 robot_id, target, speed, issued_by=str(user), priority=MANUAL))
+        elif action == "patrol" and "points" in d:
+            result = self._temp_patrol(robot_id, d, user)
         elif action == "patrol":
             mid = d.get("mission_id")
             if not isinstance(mid, str) or not mid:
@@ -858,6 +864,84 @@ class _Handler(TlsHandlerMixin):
                 raise HttpError(400, "要 task_id")
             result = self.site.dispatch(lambda: disp.abort(robot_id, task_id, issued_by=str(user)))
         self._send_json(200, result)
+
+    def _temp_patrol(self, robot_id: str, d: dict[str, Any], user: str) -> Any:
+        """保安的临时路线(W44,用户选的):按顺序的 1–20 个点,走一趟,**不进路线库**。校验跟存路线同一套
+        (点成不成形、在不在图上、走不走得到);朝向:每个点朝下一个点,最后一个跟前一个一样。"""
+        from d1max_site.routes import RouteError
+        pts = d.get("points")
+        if not isinstance(pts, list) or not 1 <= len(pts) <= TEMP_ROUTE_MAX:
+            raise HttpError(400, f"points 要是 1–{TEMP_ROUTE_MAX} 个点")
+        if self.site.routes is None:
+            raise HttpError(404, "这个站点没开路线库")
+        flat: list[dict[str, Any]] = []
+        for i, p in enumerate(pts):
+            q = p if isinstance(p, dict) else {}
+            flat.append({"name": f"P{i + 1}", "x": q.get("x"), "y": q.get("y")})
+        for i, p in enumerate(flat):
+            nxt = flat[i + 1] if i + 1 < len(flat) else None
+            prv = flat[i - 1] if i > 0 else None
+            a, b = (p, nxt) if nxt else (prv, p) if prv else (None, None)
+            try:
+                p["yaw"] = (math.atan2(float(b["y"]) - float(a["y"]),
+                                       float(b["x"]) - float(a["x"])) if a and b else 0.0)
+            except (TypeError, ValueError):
+                p["yaw"] = 0.0                            # 点不成形:下面逐点报
+        name = f"temp-{self.site._now()}"
+        body = {"map_id": d.get("map_id"), "map_version": d.get("map_version"), "waypoints": flat}
+        try:
+            m = self.site.routes.build_mission(name, body)
+        except RouteError as exc:
+            raise HttpError(400, str(exc), extra={"errors": exc.errors}) from exc
+        self._audit_detail = {"temp": True, "points": len(flat), "mission": name}
+        wire = m.to_wire()
+        return self.site.dispatch(lambda: self.site.dispatcher.patrol(
+            robot_id, wire, issued_by=str(user), priority=MANUAL))
+
+    def _nearest(self, method: str, user) -> None:
+        """让最近的机器人过去看看(W44):``GET ?map_id=&map_version=&x=&y=`` → 谁、多少米、约几秒。
+        候选:在线、数据新鲜、没被手动接管、不在驱离、加载的就是这一版图、有可信位姿。"""
+        if method != "GET":
+            raise HttpError(405, "只支持 GET")
+        self._need(user, DISPATCH)
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        map_id = (q.get("map_id") or [""])[0]
+        version = (q.get("map_version") or [""])[0]
+        if not map_id or not version:
+            raise HttpError(400, "要 map_id、map_version")
+        try:
+            x, y = float((q.get("x") or [""])[0]), float((q.get("y") or [""])[0])
+        except ValueError as exc:
+            raise HttpError(400, "x、y 要是数字(米)") from exc
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise HttpError(400, "x、y 要是有限数")
+        disp = self.site.dispatcher
+        deter = self.site.deterrence
+
+        def gather() -> list[tuple[str, str, str, float, float]]:
+            busy = deter.busy() if deter is not None else set()
+            out = []
+            for rid, c in disp.clients.items():
+                t = c.telemetry
+                if t is None or t.pose is None or c.status is None or not c.status.online:
+                    continue
+                if not disp._fresh(c) or disp.held(rid) or rid in busy:
+                    continue
+                out.append((rid, t.pose.map_id, t.pose.map_version,
+                            float(t.pose.x), float(t.pose.y)))
+            return out
+        cands = [c for c in self.site.loop.call(lambda: _sync(gather))
+                 if c[1] == map_id and c[2] == version]
+        reach = getattr(self.site.incidents, "reach", None)
+        if not cands:
+            raise HttpError(404, "这张图上没有能派的机器人")
+        if reach is None:
+            raise HttpError(404, "站点没有这张图的规划栅格,算不了谁最近")
+        from d1max_site.nearest import nearest
+        got = nearest(reach, cands, map_id, version, x, y)
+        if got is None:
+            raise HttpError(404, "这张图上没有能派的机器人")
+        return self._send_json(200, got)
 
     def _standby(self, method: str, robot_id: str, action: str, user: str) -> None:
         from d1max_site.standby import StandbyError
@@ -965,7 +1049,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(404, "这个站点没开名单")
         if method == "GET" and entry_id is None:
             self._need(user, VIEW)
-            return self._send_json(200, {"authorizations": book.list(),
+            return self._send_json(200, {"authorizations": book.list(with_active=True),
                                          "active": book.active(None)})
         if method != "POST":
             raise HttpError(405, "只支持 GET/POST")
