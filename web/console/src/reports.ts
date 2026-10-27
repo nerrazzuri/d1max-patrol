@@ -177,13 +177,14 @@ export function reportRange(kind: ReportKind, now: number, from?: string, to?: s
 }
 
 export interface SummaryDay { day: string; patrols: number; incidents: number; false_alarms: number; robot_problems: number }
-export interface SummaryEvent { key: string; kind: string; level: string; robot: string; title: string; first_ms: number; verdict: string; resolved_by: string; audience: string }
+export interface SummaryEvent { key: string; kind: string; level: string; robot: string; title: string; first_ms: number; verdict: string; resolved_by: string; audience: string; zone?: string }
 export interface Summary {
   since_ms: number; until_ms: number;
   totals: { patrols: number; incidents: number; false_alarms: number; robot_problems: number };
   days: SummaryDay[]; events: SummaryEvent[]; truncated: boolean;
 }
 
-export function eventsCsv(rows: SummaryEvent[], title: (r: SummaryEvent) => string, verdict: (v: string) => string): string {
-  return csv(["time", "robot", "what", "verdict", "by"], rows.map((r) => [stamp(r.first_ms), r.robot, title(r), verdict(r.verdict), r.resolved_by]));
+export function eventsCsv(rows: SummaryEvent[], title: (r: SummaryEvent) => string, verdict: (v: string) => string,
+  who: (r: SummaryEvent) => string = (r) => r.robot): string {
+  return csv(["time", "robot", "what", "verdict", "by"], rows.map((r) => [stamp(r.first_ms), who(r), title(r), verdict(r.verdict), r.resolved_by]));
 }

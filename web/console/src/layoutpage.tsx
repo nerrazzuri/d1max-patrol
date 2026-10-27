@@ -151,6 +151,19 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
     if (typeof location !== "undefined") replaceHash(`#/admin/layout?tab=${x}`);
   });
 
+  // 地址里的 tab 变了(浏览器后退、前进、手改地址)跟着换;有没存的先问,不丢就把地址改回来(演示站点实测查出)
+  const tabNow = useRef(tab);
+  tabNow.current = tab;
+  useEffect(() => {
+    const on = () => {
+      if (!location.hash.startsWith("#/admin/layout")) return;
+      const x = tabFromHash(location.hash);
+      if (x !== tabNow.current) switchTab(x);
+    };
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  });
+
   async function save() {
     if (!saveFn.current) return;
     setBusy(true);
@@ -232,7 +245,7 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
         )}
       </div>
       {ask && (
-        <Confirm text={t("lyDiscard")} yes={t("lyDiscardYes")} danger onNo={() => setAsk(null)}
+        <Confirm text={t("lyDiscard")} yes={t("lyDiscardYes")} danger onNo={() => { setAsk(null); replaceHash(`#/admin/layout?tab=${tab}`); }}
           onYes={() => { const go = ask; setAsk(null); setDirty(false); go(); }} />
       )}
     </section>

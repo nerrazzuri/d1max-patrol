@@ -86,6 +86,13 @@ export function pinFor(p: Page, pref: ThemePref, systemDark: boolean): "dark" | 
   return pref === "system" ? null : schemeFor(p, pref, systemDark);
 }
 
+/** 这个角色能不能开这一页(管理那几页要业主、家人、工程师;「用户」只有业主)。没权限的写清楚,不给空白页(演示站点实测查出)。 */
+export function pageAllowed(p: Page, role: string): boolean {
+  if (!isAdminPage(p)) return true;
+  if (p === "admin/users") return role === "admin";
+  return isOwnerLike(role);
+}
+
 export function loadThemePref(): ThemePref {
   try {
     const v = localStorage.getItem(PREF_KEY);

@@ -29,7 +29,7 @@ import { editTarget, MapEditPage } from "./mapedit";
 import { AccessPage } from "./accesspage";
 import { LayoutPage } from "./layoutpage";
 import { LAYOUT_TABS } from "./layouttabs";
-import { AdminNav, isAdminPage, loadThemePref, pinFor, readRoute, saveThemePref, TopBar, type Page, type ThemePref } from "./shell";
+import { AdminNav, isAdminPage, loadThemePref, pageAllowed, pinFor, readRoute, saveThemePref, TopBar, type Page, type ThemePref } from "./shell";
 import { pinScheme, systemIsDark } from "./theme";
 
 const TASK: Record<string, Key> = { patrol: "st_patrolling", goto: "st_patrolling", standby: "st_returning" };
@@ -137,6 +137,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
           <LiveWall units={units} alerts={alerts} now={now} onZoom={(id) => setPending({ kind: "cam", robot: id, cam: "front" })} />
         )}
         {route.page === "alarms" && <AlarmLogPage now={now} role={me.role} />}
+        {!pageAllowed(route.page, me.role) && <p class="empty noaccess" role="alert">{t("noAccess")}</p>}
         {isAdminPage(route.page) && admin && (
           <div class="adminwrap">
             <AdminNav page={route.page} notices={notices} role={me.role} />
@@ -146,7 +147,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
                   onMode={(m) => setPending({ kind: "mode", mode: m })} />
               )}
               {route.page === "admin/arming" && <ArmingPage say={say} now={now} />}
-              {route.page === "admin/users" && me.role === "admin" && <UsersPage me={me.name} say={say} now={now} />}
+              {route.page === "admin/users" && pageAllowed(route.page, me.role) && <UsersPage me={me.name} say={say} now={now} />}
               {route.page === "admin/robots" && <RobotsPage say={say} now={now} />}
               {route.page === "admin/system" && <SystemPage2 me={me} now={now} />}
               {route.page === "admin/diag" && <DiagPage />}

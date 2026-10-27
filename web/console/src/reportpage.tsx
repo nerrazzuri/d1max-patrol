@@ -6,7 +6,7 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "./api";
 import { hm, nameOf } from "./data";
 import { alertTitle, DICTS, lang, t, type Key } from "./i18n";
-import { eventsCsv, fileTag, matches, reportRange, type ReportKind, type Summary } from "./reports";
+import { eventsCsv, fileTag, matches, reportRange, type ReportKind, type Summary, type SummaryEvent } from "./reports";
 
 /** 入侵事件、排程的结果:认得的翻成人话,不认得的原样摆(站点以后可能多出新的)。 */
 export function outcomeText(v: string | null): string {
@@ -62,12 +62,14 @@ export function ReportsPage({ now }: { now: number }) {
 
   const max = d ? Math.max(1, ...d.days.map((x) => x.patrols + x.incidents + x.robot_problems)) : 1;
   const title = (k: string, tt: string) => alertTitle(lang.value, k, tt);
+  // 摄像头、站点自己报的事(robot 是 "site"):写哪个防区,不写 site(演示站点实测查出)
+  const who = (e: SummaryEvent) => (e.robot === "site" ? (e.zone ? t("rsCamZone", { z: e.zone }) : "—") : nameOf(e.robot));
   return (
     <section class="reports">
       <div class="panel-head noprint">
         <h1>{t("tabReports")}</h1>
         <button type="button" class="btn push" disabled={!d} onClick={() => d && save(`report-${fileTag(d.since_ms, d.until_ms)}.csv`,
-          eventsCsv(d.events, (r) => title(r.kind, r.title), (v) => verdictText(v) || v))}>{t("rsCsv")}</button>
+          eventsCsv(d.events, (r) => title(r.kind, r.title), (v) => verdictText(v) || v, who))}>{t("rsCsv")}</button>
         <button type="button" class="btn primary" disabled={!d} onClick={() => window.print()}>{t("rsPdf")}</button>
       </div>
       <h1 class="only-print">{t("tabReports")}</h1>
@@ -121,10 +123,10 @@ export function ReportsPage({ now }: { now: number }) {
               <thead><tr><th>{t("colTime")}</th><th>{t("robotsShort")}</th><th>{t("rsWhat")}</th><th>{t("rsVerdict")}</th></tr></thead>
               <tbody>
                 {d.events.map((e) => (
-                  <tr key={e.key} data-key={e.key} class="clickable" tabIndex={0}
-                    onClick={() => { location.hash = `#/recordings?robot=${encodeURIComponent(e.robot)}&t=${e.first_ms}`; }}>
+                  <tr key={e.key} data-key={e.key} class={e.robot === "site" ? undefined : "clickable"} tabIndex={e.robot === "site" ? undefined : 0}
+                    onClick={e.robot === "site" ? undefined : () => { location.hash = `#/recordings?robot=${encodeURIComponent(e.robot)}&t=${e.first_ms}`; }}>
                     <td class="mono">{ymd(e.first_ms).slice(5)} {hm(e.first_ms)}</td>
-                    <td>{nameOf(e.robot)}</td>
+                    <td>{who(e)}</td>
                     <td>{title(e.kind, e.title)}</td>
                     <td>{e.verdict ? verdictText(e.verdict) : "—"}{e.resolved_by ? ` · ${e.resolved_by}` : ""}</td>
                   </tr>
