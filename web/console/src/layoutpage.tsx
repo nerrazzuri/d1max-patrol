@@ -158,6 +158,8 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
     try {
       await saveFn.current();
       setDirty(false);
+      // 站点存下的那一份可能跟草稿不完全一样(临时区的天数换成到期时刻、坐标取整……):标签按新数据重开
+      setGen((g) => g + 1);
       say(t("saved"));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) setConflict(true);
