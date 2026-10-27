@@ -19,7 +19,9 @@ import { ArmingPage } from "./armingpage";
 import { DutyPage } from "./duty";
 import { LiveWall } from "./livewall";
 import { HomePage } from "./homepage";
-import { SystemPage } from "./admin";
+import { DiagPage } from "./advdiag";
+import { SystemPage2 } from "./advsystem";
+import { UpgradePage } from "./advupgrade";
 import { RobotsPage } from "./robotspage";
 import { UsersPage } from "./userspage";
 import { MapManagePage } from "./mapmgmt";
@@ -145,7 +147,9 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
               {route.page === "admin/arming" && <ArmingPage say={say} now={now} />}
               {route.page === "admin/users" && me.role === "admin" && <UsersPage me={me.name} say={say} now={now} />}
               {route.page === "admin/robots" && <RobotsPage say={say} now={now} />}
-              {route.page === "admin/system" && <SystemPage say={say} />}
+              {route.page === "admin/system" && <SystemPage2 me={me} now={now} />}
+              {route.page === "admin/diag" && <DiagPage />}
+              {route.page === "admin/upgrade" && <UpgradePage say={say} />}
               {route.page === "admin/layout" && <LayoutPage say={say} robots={units.map((u) => u.robot.robot_id)} tabs={LAYOUT_TABS} />}
               {route.page === "admin/maps" && <MapManagePage say={say} />}
               {route.page === "admin/access" && <AccessPage say={say} now={now} />}

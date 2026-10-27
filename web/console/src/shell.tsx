@@ -15,7 +15,7 @@ export type GuardPage = "duty" | "live" | "map" | "recordings" | "alarms";
  *  布置、高级两组先挂现有页面(第三、四期重做)。 */
 export type AdminPage =
   | "admin/home" | "admin/arming" | "admin/access" | "admin/users" | "admin/robots" | "admin/reports"
-  | "admin/layout" | "admin/maps" | "admin/localization" | "admin/system";
+  | "admin/layout" | "admin/maps" | "admin/localization" | "admin/diag" | "admin/upgrade" | "admin/system";
 export type Page = GuardPage | AdminPage;
 
 export const GUARD_PAGES: GuardPage[] = ["duty", "live", "map", "recordings", "alarms"];
@@ -28,7 +28,8 @@ export const ADMIN_GROUPS: NavGroup[] = [
   ] },
   { id: "setup", key: "navSetup", pages: [{ id: "admin/layout", key: "lyTitle" }] },
   { id: "advanced", key: "navAdvanced", pages: [
-    { id: "admin/maps", key: "tabMapMgmt" }, { id: "admin/localization", key: "tabLocalization" }, { id: "admin/system", key: "tabSystem" },
+    { id: "admin/maps", key: "tabMapMgmt" }, { id: "admin/localization", key: "tabLocalization" }, { id: "admin/diag", key: "tabDiag" },
+    { id: "admin/upgrade", key: "tabUpgrade" }, { id: "admin/system", key: "tabSystem" },
   ] },
 ];
 const ADMIN_PAGES: AdminPage[] = ADMIN_GROUPS.flatMap((g) => g.pages.map((p) => p.id));

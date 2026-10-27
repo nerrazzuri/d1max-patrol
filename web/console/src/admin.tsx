@@ -1,15 +1,13 @@
-// 「高级 → 系统」(商业化 B1b 起):体检、版本、手机配对。摄像头登记在「布置 → 摄像头」(W44 第三期)。
-// 用户页挪到 userspage.tsx、机器人页挪到 robotspage.tsx(W44 第二期)。
+// 管理页共用的小件(W44 起):读一次的 useLoad、设备一格、App 版本太老、手机扫码添加站点。各页在 adv*.tsx、
+// userspage.tsx、robotspage.tsx、layout*.tsx。
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
-import { hm } from "./data";
 import { t, type Key } from "./i18n";
 import { Shape } from "./icons";
 import { qrGrid } from "./qr";
 
-type Say = (s: string) => void;
 
-function useLoad<T>(path: string): [T | null, () => void, string] {
+export function useLoad<T>(path: string): [T | null, () => void, string] {
   const [data, setData] = useState<T | null>(null);
   const [err, setErr] = useState("");
   const load = useCallback(() => {
@@ -51,7 +49,6 @@ export function deviceSummary(d: AdminRobot["devices"]): { tone: "success" | "wa
     text: t("devBad", { n: bad.length }), title };
 }
 export interface ClientRow { name: string; kind: string; version?: string; platform?: string; api_level?: number; last_used: number }
-interface Versions { site: { version: string; min_app_level?: number }; robots: { robot_id: string; verdict: string; sidecar_proto?: number | null }[]; clients?: ClientRow[] }
 
 /** 登录着的 App 太老了没有:它报的接口级别比站点要的低(没报级别的说不清,不算)。 */
 export function clientTooOld(c: ClientRow, minAppLevel: number | undefined): boolean {
@@ -60,81 +57,7 @@ export function clientTooOld(c: ClientRow, minAppLevel: number | undefined): boo
 
 // ------------------------------------------------------------------ 系统
 
-interface Health { ok: boolean; version: string; checks: Record<string, { ok: boolean; detail?: string }> }
 
-const CRITICAL = new Set(["db", "loop", "broker", "disk"]);
-
-export function SystemPage(_p: { say?: Say }) {
-  const [health, reload] = useLoad<Health>("/api/health");
-  const [versions] = useLoad<Versions>("/api/versions");
-  useEffect(() => {
-    const id = window.setInterval(reload, 30_000);
-    return () => window.clearInterval(id);
-  }, [reload]);
-  const checks = Object.entries(health?.checks ?? {});
-  return (
-    <div class="admin">
-      <section class="panel">
-        <div class="panel-head">
-          <h1>{t("health")}</h1>
-          {health && (
-            <span class={health.ok ? "state tone-success" : "state p2"}>{!health.ok && <Shape kind="P2" />}{health.ok ? t("healthOk") : t("healthBad")}</span>
-          )}
-          <span class="muted small push">{health ? t("siteVersion", { v: health.version }) : ""} {health ? hm(Date.now()) : ""}</span>
-        </div>
-        <table class="grid">
-          <tbody>
-            {checks.map(([k, c]) => (
-              <tr key={k}>
-                <td class="strong">{t(`check_${k}` as Key)}{CRITICAL.has(k) ? <span class="muted small"> · {t("critical")}</span> : null}</td>
-                <td>{c.ok ? <span class="state tone-success">OK</span> : <span class={CRITICAL.has(k) ? "state p1" : "state p2"}><Shape kind={CRITICAL.has(k) ? "P1" : "P2"} />{t("checkFail")}</span>}</td>
-                <td class="muted small">{c.detail ?? ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-      <section class="panel">
-        <div class="panel-head"><h2>{t("versions")}</h2></div>
-        <table class="grid">
-          <tbody>
-            {(versions?.robots ?? []).map((r) => (
-              <tr key={r.robot_id}><td class="mono strong">{r.robot_id}</td><td>{t(`compat_${r.verdict}` as Key)}</td><td class="muted small">{r.sidecar_proto != null ? `sidecar ${r.sidecar_proto}` : ""}</td></tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-      <section class="panel">
-        <div class="panel-head"><h2>{t("clients")}</h2><span class="muted small push">{t("clientsHint")}</span></div>
-        <table class="grid">
-          <tbody>
-            {(versions?.clients ?? []).length === 0 && <tr><td class="muted">{t("clientsNone")}</td></tr>}
-            {(versions?.clients ?? []).map((c, i) => {
-              const old = clientTooOld(c, versions?.site.min_app_level);
-              return (
-                <tr key={i}>
-                  <td class="strong">{c.name}</td>
-                  <td>{c.kind === "web" ? t("clientWeb") : `${t("clientApp")} ${c.version ?? "?"}`}</td>
-                  <td class="muted small">{[c.platform, c.api_level != null ? `API ${c.api_level}` : ""].filter(Boolean).join(" · ")}</td>
-                  <td>{old ? <span class="state p2"><Shape kind="P2" />{t("clientOld")}</span> : ""}</td>
-                  <td class="muted small mono">{hm(c.last_used)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </section>
-      <PairPhone />
-      <section class="panel">
-        <div class="panel-head">
-          <h2>{t("supportBundle")}</h2>
-          <a class="btn push" href="/api/support-bundle" download="d1max-support.tar.gz">{t("supportBundle")}</a>
-        </div>
-        <p class="muted small pad">{t("supportHint")}</p>
-      </section>
-    </div>
-  );
-}
 
 // ------------------------------------------------------------------ 手机扫码添加站点(App V2)
 
@@ -142,7 +65,7 @@ interface Pairing { code: string; name: string; url: string; fingerprint: string
 
 /** 配对码 = 站点名 + 手机要连的地址 + 证书指纹(没有账号口令)。地址缺省是值班台现在的地址,
  * 手机走别的地址(VPN、另一个网段)就改一下。 */
-function PairPhone() {
+export function PairPhone() {
   const [url, setUrl] = useState(window.location.origin);
   const [asked, setAsked] = useState(window.location.origin);
   const [pair, setPair] = useState<Pairing | null>(null);
