@@ -13,7 +13,7 @@ import { LocHistoryPage } from "./locpage";
 import { RecordingsPage } from "./recpage";
 import { ReportsPage } from "./reportpage";
 import { MapPage } from "./mappage";
-import { FELL_KINDS, forGuard, queue, robotCams, robotState, type Alert, type Mode } from "./model";
+import { FELL_KINDS, forGuard, isOwnerLike, queue, robotCams, robotState, type Alert, type Mode } from "./model";
 import { AlarmLogPage } from "./alarmlog";
 import { DutyPage } from "./duty";
 import { LiveWall } from "./livewall";
@@ -104,7 +104,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   const resolve = (a: Alert, verdict: string) => act(() => api("POST", `/api/alerts/${enc(a.key)}/resolve`, { verdict }));
   const firstP1 = p1.find(forGuard);
   const notices = alerts.filter((a) => a.resolved_ms == null && !forGuard(a)).length;
-  const admin = me.role === "admin";
+  const admin = isOwnerLike(me.role);
 
   // 带地图的页整页一屏(地图撑满顶栏以下):地图、防区、巡检路线
   const fill = route.page === "duty" || route.page === "map" || route.page === "admin/zones" || route.page === "admin/routes";
@@ -130,20 +130,27 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
           <LiveWall units={units} alerts={alerts} now={now} onZoom={(id) => setPending({ kind: "cam", robot: id, cam: "front" })} />
         )}
         {route.page === "alarms" && <AlarmLogPage now={now} role={me.role} />}
-        {isAdminPage(route.page) && admin && <AdminNav page={route.page} notices={notices} />}
-        {route.page === "admin/notices" && admin && (
-          <NoticesPage alerts={alerts} mode={data?.mode ?? null} onAck={ack} onDone={(a) => resolve(a, "handled")}
-            onMode={(m) => setPending({ kind: "mode", mode: m })} />
+        {isAdminPage(route.page) && admin && (
+          <div class="adminwrap">
+            <AdminNav page={route.page} notices={notices} role={me.role} />
+            <div class="adminbody">
+              {route.page === "admin/home" && (
+                <NoticesPage alerts={alerts} mode={data?.mode ?? null} onAck={ack} onDone={(a) => resolve(a, "handled")}
+                  onMode={(m) => setPending({ kind: "mode", mode: m })} />
+              )}
+              {route.page === "admin/arming" && <p class="empty">…</p>}
+              {route.page === "admin/users" && me.role === "admin" && <UsersPage me={me.name} say={say} />}
+              {route.page === "admin/robots" && <RobotsAdminPage say={say} />}
+              {route.page === "admin/system" && <SystemPage />}
+              {route.page === "admin/zones" && <MapsZonesPage say={say} />}
+              {route.page === "admin/maps" && <MapManagePage say={say} />}
+              {route.page === "admin/routes" && <RoutesPage say={say} />}
+              {route.page === "admin/access" && <ListsPage say={say} />}
+              {route.page === "admin/localization" && <LocHistoryPage robots={units.map((u) => u.robot.robot_id)} now={now} />}
+              {route.page === "admin/reports" && <ReportsPage me={me} now={now} />}
+            </div>
+          </div>
         )}
-        {route.page === "admin/users" && admin && <UsersPage me={me.name} say={say} />}
-        {route.page === "admin/robots" && admin && <RobotsAdminPage say={say} />}
-        {route.page === "admin/system" && admin && <SystemPage />}
-        {route.page === "admin/zones" && admin && <MapsZonesPage say={say} />}
-        {route.page === "admin/maps" && admin && <MapManagePage say={say} />}
-        {route.page === "admin/routes" && admin && <RoutesPage say={say} />}
-        {route.page === "admin/lists" && admin && <ListsPage say={say} />}
-        {route.page === "admin/localization" && admin && <LocHistoryPage robots={units.map((u) => u.robot.robot_id)} now={now} />}
-        {route.page === "admin/reports" && admin && <ReportsPage me={me} now={now} />}
         {route.page === "recordings" && (
           <RecordingsPage key={`${route.robot ?? ""}@${route.at ?? ""}`} robots={units.map((u) => u.robot.robot_id)} role={me.role} now={now}
             camsOf={(id) => robotCams(units.find((u) => u.robot.robot_id === id)?.robot)}

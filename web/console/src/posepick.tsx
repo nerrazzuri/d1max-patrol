@@ -57,7 +57,7 @@ export function usePosePick(o: {
   // 上下文每变一次代次加一:变之前发出去的请求,回来时代次不对就不管
   const gen = useRef({ ctx, n: 0 });
   if (gen.current.ctx !== ctx) gen.current = { ctx, n: gen.current.n + 1 };
-  const can = o.role === "admin" || o.role === "guard";
+  const can = o.role === "admin" || o.role === "engineer" || o.role === "guard";
   const meta = o.meta;
   // 只认这个上下文里选的点、说的话、弹的框
   const pose = picked && picked.ctx === ctx ? picked.pose : null;

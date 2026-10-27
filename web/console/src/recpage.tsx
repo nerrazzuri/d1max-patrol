@@ -37,12 +37,12 @@ const CAMS: Cam[] = ["front", "back"];
 const SPEEDS = [1, 2, 4];
 
 export function canReview(role: string): boolean {
-  return role === "admin" || role === "guard";
+  return role === "admin" || role === "engineer" || role === "guard";
 }
 
 /** 导出证据只给业主(最高权限)(站点 permissions.EXPORT)。 */
 export function canExport(role: string): boolean {
-  return role === "admin";
+  return role === "admin" || role === "engineer";
 }
 
 export function RecordingsPage(props: { robots: string[]; role: string; now: number; robot: string | null; at: number | null; say: (s: string) => void; camsOf?: (robot: string) => Cam[] }) {

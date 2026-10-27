@@ -675,3 +675,25 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .it .res { font-size: 14px; }
 .it .res small { display: block; margin-top: 2px; color: var(--c-textMuted); font-size: 12px; }
 @media (max-width: 900px) { .it { grid-template-columns: 100px 1fr; } .it .shot { width: 100px; height: 56px; } }
+
+/* W44 第二期:「管理」左边一列(三组,高级默认收着) */
+.adminwrap { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; align-items: start; }
+.adminnav { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 16px; padding: 8px 0; }
+.navgroup { display: flex; flex-direction: column; gap: 2px; }
+.navgroup-title { padding: 4px 12px; font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--c-textMuted); text-transform: uppercase;
+  background: none; border: 0; text-align: left; font-family: inherit; }
+button.navgroup-title { cursor: pointer; }
+button.navgroup-title::after { content: " ▸"; }
+button.navgroup-title[aria-expanded="true"]::after { content: " ▾"; }
+.adminnav a { padding: 8px 12px; border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--c-textSecondary); text-decoration: none; }
+.adminnav a:hover { color: var(--c-text); background: var(--c-surfaceVariant); }
+.adminnav a[aria-current="page"] { color: var(--c-text); background: var(--c-surfaceVariant); box-shadow: inset 3px 0 0 var(--c-primary); }
+.adminnav .badge { margin-left: 6px; min-width: 18px; padding: 0 6px; border-radius: 999px; font-size: 12px; line-height: 18px; text-align: center;
+  display: inline-block; background: var(--c-warning); color: var(--c-onPrimary); }
+.adminbody { min-width: 0; }
+@media (max-width: 760px) {
+  .adminwrap { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .adminnav { position: static; flex-direction: row; flex-wrap: wrap; gap: 8px; }
+  .navgroup { flex-direction: row; flex-wrap: wrap; align-items: center; }
+}
+@media print { .adminnav { display: none !important; } .adminwrap { display: block; } }

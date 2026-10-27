@@ -160,12 +160,17 @@ export function robotMap(r: Robot): { map_id: string; version: string } | null {
   return p?.map_id && p.map_version ? { map_id: p.map_id, version: p.map_version } : null;
 }
 
+/** 业主或工程师(临时):权限一样,只是工程师不能管账号(W44 第二期,设计 §3)。 */
+export function isOwnerLike(role: string): boolean {
+  return role === "admin" || role === "engineer";
+}
+
 export function canDispatch(role: string): boolean {
-  return role === "admin" || role === "guard";
+  return isOwnerLike(role) || role === "guard";
 }
 
 export function canArm(role: string): boolean {
-  return role === "admin" || role === "guard" || role === "owner";
+  return isOwnerLike(role) || role === "guard" || role === "owner";
 }
 
 /** 异常状态(着色、带形状);别的都是中性(ISA-101)。 */
