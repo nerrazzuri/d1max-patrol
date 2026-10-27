@@ -608,3 +608,38 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .sec-area.armed { stroke: var(--c-success); fill: var(--c-success); fill-opacity: 0.1; }
 .sec-area.off { stroke: var(--c-textMuted); stroke-dasharray: 6 4; fill: var(--c-textMuted); fill-opacity: 0.06; }
 @media (max-width: 1100px) { .maprp { width: 300px; } .golook { right: 16px; } }
+
+/* W44 录像页:左播放器(大画面 + 另一路小窗)、右地图(那一刻在哪)、底下每台一行的时间轴 */
+.recbody { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 520px); gap: 12px; align-items: start; }
+.recbody .recview { width: auto; }
+.recpip { position: absolute; right: 12px; bottom: 48px; width: 26%; aspect-ratio: 16 / 9; border: 2px solid rgba(255, 255, 255, 0.8); border-radius: var(--r-r8); overflow: hidden; background: var(--c-well); }
+.recpip video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.rmap { position: relative; min-height: 300px; aspect-ratio: 4 / 3; border-radius: var(--r-r12); overflow: hidden; background: var(--c-mapBg); display: flex; flex-direction: column; }
+.rmap .mapcanvas { flex: 1; }
+.rmap-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 16px; text-align: center; }
+.rmap-hint { position: absolute; left: 12px; top: 12px; right: 12px; padding: 6px 10px; border-radius: var(--r-r8); background: var(--c-surface); color: var(--c-textSecondary); font-size: 13px; }
+.rec-trail { fill: none; stroke: var(--c-tertiary); stroke-width: 2; stroke-opacity: 0.7; vector-effect: non-scaling-stroke; }
+.rec-trail.after { stroke-dasharray: 6 4; }
+.rec-here circle { fill: var(--c-tertiary); stroke: var(--c-surface); stroke-width: 2; }
+.rec-here text { fill: var(--c-text); font-size: 12px; font-weight: 700; paint-order: stroke; stroke: var(--c-surface); stroke-width: 3px; }
+.tl { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px 8px; border: 1px solid var(--c-outline); border-radius: var(--r-r12); background: var(--c-surface); }
+.tl-tracks { position: relative; }
+.lane { display: grid; grid-template-columns: 70px 1fr; align-items: center; height: 30px; }
+.lane b { font-size: 14px; cursor: pointer; }
+.lane.on b { color: var(--c-tertiary); }
+.track { position: relative; height: 14px; border-radius: 3px; background: var(--c-surfaceVariant); cursor: pointer; }
+.seg-rec { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--c-textMuted); }
+.lane.on .seg-rec { background: var(--c-tertiary); }
+.mk { position: absolute; top: -4px; width: 3px; height: 22px; border-radius: 2px; transform: translateX(-1px); }
+.mk.alarm { background: var(--c-error); }
+.mk.help { background: var(--c-warning); }
+.tl-head { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--c-text); pointer-events: none; }
+.tl-head span { position: absolute; top: -16px; left: 4px; padding: 0 5px; border-radius: 3px; font-size: 11px; background: var(--c-text); color: var(--c-surface); white-space: nowrap; }
+.ticks { position: relative; height: 16px; font-size: 11px; color: var(--c-textMuted); }
+.ticks span { position: absolute; transform: translateX(-50%); }
+.lg { display: flex; flex-wrap: wrap; gap: 14px; padding-left: 70px; }
+.lg i.k { display: inline-block; width: 14px; height: 8px; margin-right: 6px; border-radius: 2px; vertical-align: middle; }
+.lg i.k.rec { background: var(--c-tertiary); }
+.lg i.k.alarm { width: 3px; height: 12px; background: var(--c-error); }
+.lg i.k.help { width: 3px; height: 12px; background: var(--c-warning); }
+@media (max-width: 1100px) { .recbody { grid-template-columns: 1fr; } }
