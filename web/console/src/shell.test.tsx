@@ -7,7 +7,7 @@ import type { Me } from "./app";
 import { Console } from "./console";
 import { lang } from "./i18n";
 import type { Alert } from "./model";
-import { pageScheme, readRoute, roleLabel, schemeFor } from "./shell";
+import { pageAllowed, pageScheme, readRoute, roleLabel, schemeFor } from "./shell";
 import { applyTheme } from "./theme";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -50,6 +50,15 @@ afterEach(() => {
 });
 
 describe("外壳的纯函数", () => {
+  it("实测查出:没权限的页面写清楚,不给空白", () => {
+    expect(pageAllowed("admin/users", "admin")).toBe(true);
+    expect(pageAllowed("admin/users", "engineer")).toBe(false);
+    expect(pageAllowed("admin/users", "owner")).toBe(false);
+    expect(pageAllowed("admin/home", "engineer")).toBe(true);
+    expect(pageAllowed("admin/home", "guard")).toBe(false);
+    expect(pageAllowed("duty", "guard")).toBe(true);
+  });
+
   it("角色的界面名字", () => {
     expect(roleLabel("admin")).toBe("roleOwner");
     expect(roleLabel("guard")).toBe("roleGuard");

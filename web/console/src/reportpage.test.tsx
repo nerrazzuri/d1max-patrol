@@ -25,7 +25,11 @@ function summaryFor(url: string) {
   }
   return { since_ms: since, until_ms: until, totals: { patrols: 2 * days.length, incidents: 2, false_alarms: 1, robot_problems: 0 }, days,
     events: [{ key: "i1", kind: "intrusion", level: "P1", robot: "A", title: "后花园有人闯入", first_ms: day0(2026, 10, 27) + 3_600_000,
-      verdict: "false_alarm", resolved_by: "gina", audience: "intrusion" }], truncated: false };
+      verdict: "false_alarm", resolved_by: "gina", audience: "intrusion" },
+    { key: "s1", kind: "intrusion_unanswered", level: "P1", robot: "site", title: "前门有入侵", first_ms: day0(2026, 10, 27) + 7_200_000,
+      verdict: "intruder", resolved_by: "g1", audience: "intrusion", zone: "前门" },
+    { key: "s2", kind: "intrusion_unanswered", level: "P1", robot: "site", title: "有入侵", first_ms: day0(2026, 10, 27) + 7_300_000,
+      verdict: "intruder", resolved_by: "g1", audience: "intrusion" }], truncated: false };
 }
 
 beforeEach(() => {
@@ -74,6 +78,18 @@ describe("报表页", () => {
     const tall = (d: string) => parseFloat((c.querySelector(`.rep-day[data-day="${d}"] .rep-bar`) as HTMLElement).style.height);
     expect(tall("2026-10-27")).toBeCloseTo(100, 0);
     expect(tall("2026-10-26")).toBeCloseTo(50, 0);
+  });
+
+  it("实测查出:摄像头报的事「机器人」一栏不写 site,写哪个防区;点了不跳录像", async () => {
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector('.rep-events tr[data-key="s1"]')).not.toBeNull());
+    const cells = (k: string) => Array.from(c.querySelectorAll(`.rep-events tr[data-key="${k}"] td`)).map((x) => x.textContent);
+    expect(cells("s1")[1]).toBe("前门（摄像头）");
+    expect(cells("s2")[1]).toBe("—");
+    expect(c.querySelector(".rep-events")!.textContent).not.toContain("site");
+    location.hash = "#/admin/reports";
+    fireEvent.click(c.querySelector('.rep-events tr[data-key="s1"]')!);
+    expect(location.hash).toBe("#/admin/reports");
   });
 
   it("点事件跳到录像那一刻", async () => {

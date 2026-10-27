@@ -179,4 +179,20 @@ describe("布置外框", () => {
     expect(readRoute("#/admin/routes").page).toBe("admin/layout");
     expect(readRoute("#/admin/layout?tab=routes").page).toBe("admin/layout");
   });
+
+  it("实测查出:地址里的 tab 变了(浏览器后退、前进)跟着换标签;有没存的先问,不丢就把地址改回来", async () => {
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
+    const on = () => c.querySelector('.ly-tabs button[aria-selected="true"], .ly-tabs button.on')?.textContent;
+    location.hash = "#/admin/layout?tab=nogo";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await waitFor(() => expect(on()).toBe("禁行区"));
+    fireEvent.click(btn(c, "改"));
+    location.hash = "#/admin/layout?tab=routes";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await waitFor(() => expect(document.querySelector(".modal")).not.toBeNull());
+    fireEvent.click(btn(document.querySelector(".modal")!, "取消"));
+    expect(on()).toBe("禁行区");
+    expect(location.hash).toBe("#/admin/layout?tab=nogo");
+  });
 });
