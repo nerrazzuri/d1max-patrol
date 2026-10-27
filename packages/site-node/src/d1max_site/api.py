@@ -94,7 +94,7 @@ _ROUTE = re.compile(r"^/api/routes/([^/]{1,64})(/delete)?$")
 _ROUTE_SCHED = re.compile(r"^/api/route-schedules(?:/([^/]{1,64})(/delete)?)?$")
 _AREAS = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/areas$")
 _ARM_EX = re.compile(r"^/api/arming/exceptions/(\d{1,9})/remove$")
-_AUTHZ = re.compile(r"^/api/lists/authorizations(?:/(\d{1,9})/remove)?$")
+_AUTHZ = re.compile(r"^/api/lists/authorizations(?:/(\d{1,9})/(remove|end))?$")
 #: 网页上登记 / 出开通码 / 吊销机器狗(商业化 B1b,管理员)。
 _ADMIN_ROBOT = re.compile(r"^/api/admin/robots(?:/([^/]{1,64})/(code|revoke|name))?$")
 #: ``GET /api/alerts?all=1&limit=`` 的上限。
@@ -502,7 +502,7 @@ class _Handler(TlsHandlerMixin):
                 return self._areas(method, unquote(m.group(1)), unquote(m.group(2)), user)
             m = _AUTHZ.match(path)
             if m is not None:
-                return self._authz(method, m.group(1), user)
+                return self._authz(method, m.group(1), user, m.group(2))
             m = _ADMIN_ROBOT.match(path)
             if m is not None:
                 self._need(user, MANAGE)
@@ -586,8 +586,8 @@ class _Handler(TlsHandlerMixin):
                 return self._incident_admin(method, path)
             if path == "/api/runs" or path.startswith(("/api/runs/", "/api/exports")):
                 return self._runs(method, path, user)
-            if path == "/api/reports/daily":
-                return self._report(method, user)
+            if path in ("/api/reports/daily", "/api/reports/summary"):
+                return self._report(method, user, path)
             if path in ("/api/recordings", "/api/recordings/frame") or _REC.match(path):
                 return self._recordings(method, path, user)
             from d1max_site import api_runviz
@@ -1125,7 +1125,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"areas": book.list(map_id, version)})
 
-    def _authz(self, method: str, entry_id: str | None, user) -> None:
+    def _authz(self, method: str, entry_id: str | None, user, action: str | None = None) -> None:
         """名单(B1c,时段 / 人员授权):``GET`` 看(``view``);``POST`` 加一条、``POST …/{id}/remove``
         删(``manage``)。"""
         from d1max_site.authz import AuthzError
@@ -1140,6 +1140,12 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(405, "只支持 GET/POST")
         self._need(user, MANAGE)
         d = self._body()
+        if entry_id is not None and action == "end":
+            # W44 第二期:正在生效的那一段提前结束(下一段照常)
+            self._audit_target = f"authorization/{entry_id}"
+            if not book.end_now(int(entry_id), by=str(user)):
+                raise HttpError(409, "现在不在这一条的授权时间里")
+            return self._send_json(200, {"authorizations": book.list(with_active=True)})
         if entry_id is not None:
             self._audit_target = f"authorization/{entry_id}"
             if not book.remove(int(entry_id)):
@@ -1151,7 +1157,7 @@ class _Handler(TlsHandlerMixin):
                 book.add(d, by=str(user))
             except AuthzError as exc:
                 raise HttpError(400, str(exc)) from exc
-        return self._send_json(200, {"authorizations": book.list()})
+        return self._send_json(200, {"authorizations": book.list(with_active=True)})
 
     def _pairing(self) -> None:
         """手机扫码添加站点的配对码(App V2):站点名 + 手机要连的地址 + 站点服务证书指纹,没有秘密。
@@ -2642,9 +2648,10 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(502, f"摄像头画面拉不下来:{v.error}") from exc
         self._mjpeg(frames, first)
 
-    def _report(self, method: str, user) -> None:
-        """值班日报(C-B3b):能看的都能看(保安交班、业主)。"""
-        from d1max_site.reports import ReportError, daily
+    def _report(self, method: str, user, path: str = "/api/reports/daily") -> None:
+        """值班日报(C-B3b)、按天汇总(W44 第二期):能看的都能看(保安交班、业主)。"""
+        from d1max_site.reports import ReportError, daily, summary
+        from d1max_site.sitetime import site_tz
         if method != "GET":
             raise HttpError(405, "只收 GET")
         self._need(user, VIEW)
@@ -2655,8 +2662,12 @@ class _Handler(TlsHandlerMixin):
             if not v.isdigit() or len(v) > 15:
                 raise HttpError(400, f"{k} 要是非负整数(毫秒)")
             return int(v)
+        db = self.site.accounts.db
         try:
-            return self._send_json(200, daily(self.site.accounts.db, num("since"), num("until")))
+            if path == "/api/reports/summary":
+                return self._send_json(200, summary(db, num("since"), num("until"),
+                                                    tz=site_tz(db)))
+            return self._send_json(200, daily(db, num("since"), num("until")))
         except ReportError as exc:
             raise HttpError(400, str(exc)) from exc
 
