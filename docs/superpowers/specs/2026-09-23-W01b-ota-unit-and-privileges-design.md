@@ -6,7 +6,7 @@
 
 1. `release pack` 只打 `pyproject.toml`/`src`/`config`，`deploy/` 不进包。OTA（`POST /api/release/install` + `activate`）升上来的机器，`/etc/systemd/system/d1max-patrol.service` 永远是装机那天的版本：没有 `Environment=D1MAX_DATA_ROOT`（W01）、`StartLimitIntervalSec` 在错的段（W01c）……巡检数据继续落在版本槽里，W01 只在启动时打一句警告。
 2. 服务以 `User=robot` 跑，写 `/etc/systemd/system/` 和 `systemctl daemon-reload` 都要 root。
-3. 同一个进程还要发 `systemctl restart`/`reboot`（升级、回滚、自检回滚）。`真机待验证清单.md` 第 6 条一直悬着：默认 polkit 下 `robot` 很可能发不出去，而 `_spawn_restart` 只 `Popen` 不看结果——**失败是静默的**，界面显示「已重启」而机器一动没动。
+3. 同一个进程还要发 `systemctl restart`/`reboot`（升级、回滚、自检回滚）。`真机验证.md` 第 6 条一直悬着：默认 polkit 下 `robot` 很可能发不出去，而 `_spawn_restart` 只 `Popen` 不看结果——**失败是静默的**，界面显示「已重启」而机器一动没动。
 4. 即便单元更新了，OTA 路径上没有人做 W01 的槽内数据迁移（装机脚本 7/7 做的 stop → migrate → start 只在 `install.sh` 里）。
 
 ## 方案比较

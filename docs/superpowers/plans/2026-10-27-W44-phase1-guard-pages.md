@@ -425,7 +425,7 @@ Run: `<Python 测试命令> packages/site-node/tests/test_site_alert_audience.py
 **Files:**
 - Modify: `packages/site-node/src/d1max_site/web/`（构建产物）
 - Create: `docs/W44-第一期-完工报告.md`
-- Modify: `docs/庄园场景待真机测试.md`（新增 §3aa 真机项）、`docs/庄园安防-差距核查与工单.md`（W44 行）
+- Modify: `docs/真机验证.md`（新增 §3aa 真机项）、`docs/庄园安防-差距核查与工单.md`（W44 行）
 
 - [ ] **Step 1: 构建** `cd web/console && npm run build`，Expected: 无类型错误，产物写进站点包。
 - [ ] **Step 2: 演示站点核对**：后台演示站点（`tools/site_demo.py`，已在跑的先 TaskStop 再起）上用截图脚本截五页（深色），对照设计 §4 逐条看：顶栏只有设计里的那几样、保安页没有技术字眼、没有「狗」。截图发给用户。

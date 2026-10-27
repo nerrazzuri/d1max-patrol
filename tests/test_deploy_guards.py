@@ -522,7 +522,7 @@ def test_每份shell脚本的语法都过得去(脚本: Path):
 #: (systemd 单元), 加上现场照着一行行敲的那两份文档。
 def 装机相关文件() -> list[Path]:
     出 = list(shell脚本()) + sorted(DEPLOY.glob("*.service"))
-    for 名 in ("装机清单.md", "真机现场执行单.md"):
+    for 名 in ("装机清单.md", "真机验证.md"):
         路径 = ROOT / "docs" / 名
         if 路径.exists():
             出.append(路径)

@@ -565,7 +565,7 @@ it("这周比上周")                   // 这周 3 次、上周 1 次 → 「�
 **Files:**
 - Modify: `packages/site-node/src/d1max_site/web/`（构建产物）
 - Create: `docs/W44-第二期-完工报告.md`
-- Modify: `docs/庄园场景待真机测试.md`（加 §3ab）、台账（W44 行）
+- Modify: `docs/真机验证.md`（加 §3ab）、台账（W44 行）
 
 - [ ] **Step 1: 构建网页、提交产物**（`npm run build`）
 

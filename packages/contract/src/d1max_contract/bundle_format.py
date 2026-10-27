@@ -316,7 +316,7 @@ def _gate_exec_bit(条目, mode_of) -> list[Violation]:
 
     **这道闸在 Windows 上是空转的** —— Windows 的 ``os.stat`` 给普通文件的
     mode 里根本没有可执行位。所以它必须在真机上被验一次(见
-    ``docs/真机待验证清单.md``),不许假装两边一样有效。
+    ``docs/真机验证.md（§5）``),不许假装两边一样有效。
     """
     out = []
     for rel, p, 是链接 in 条目:

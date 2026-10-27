@@ -50,4 +50,4 @@
 
 ### Task 6：文档、报告、工单
 
-- [ ] `docs/W00b-完工报告.md`；工单表 W00b 打勾；`分卷与进度.md` 口径段一句；`庄园场景待真机测试.md` 加 W00b 的一条（装机后 `ls /opt/d1max/current/venv/bin/d1max-agent`、`systemctl is-enabled d1max-agent` = disabled）。全量、突变检查、内部评审、push。
+- [ ] `docs/W00b-完工报告.md`；工单表 W00b 打勾；`分卷与进度.md` 口径段一句；`真机验证.md` 加 W00b 的一条（装机后 `ls /opt/d1max/current/venv/bin/d1max-agent`、`systemctl is-enabled d1max-agent` = disabled）。全量、突变检查、内部评审、push。
