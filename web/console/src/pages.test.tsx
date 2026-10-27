@@ -2,7 +2,6 @@
 // 录像页、报表页的页面交互(C-B3 外审):在途的回包、换了选择之后,页面不许串。真的把组件渲染出来点。
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RobotsAdminPage } from "./admin";
 import { setFetch } from "./api";
 import { lang } from "./i18n";
 import { dayRange } from "./recordings";
@@ -276,47 +275,6 @@ describe("报表页:导出、打印的只能是现在选的这一段的那一份
     expect(c.textContent).toContain("Evidence received");
     expect(c.textContent).toContain("0 evidence records");
     expect(c.textContent).not.toMatch(/Patrol records/);
-  });
-});
-
-describe("管理页的机器人:在线跟值守页一个口径(站点说新鲜才算)", () => {
-  const robot = (fresh: boolean | undefined) => ({
-    robot_id: "A", revoked: false, expires_at: 0, manual_only: false,
-    status: { online: true }, capabilities: { agent: "1.0" }, ...(fresh === undefined ? {} : { fresh }),
-  });
-  const page = async (fresh: boolean | undefined) => {
-    setFetch(async (url: RequestInfo | URL) => {
-      const u = String(url);
-      if (u.endsWith("/api/robots")) return json({ robots: [robot(fresh)] });
-      if (u.endsWith("/api/versions")) return json({ site: { version: "1" }, robots: [] });
-      if (u.endsWith("/api/cameras")) return json({ cameras: [] });
-      return json({});
-    });
-    const r = render(<RobotsAdminPage say={() => {}} />);
-    await waitFor(() => expect(r.getByText("A")).toBeTruthy());
-    return r;
-  };
-
-  it("机器人说在线、站点说新鲜:在线(绿)", async () => {
-    const r = await page(true);
-    const cell = r.getByText("Online");
-    expect(cell.className).toContain("tone-success");
-  });
-
-  for (const fresh of [false, undefined]) {
-    it(`机器人最后说在线、站点说不新鲜(fresh=${fresh}):写离线,不是绿的`, async () => {
-      const r = await page(fresh);
-      expect(r.queryByText("Online")).toBeNull();
-      expect(r.container.querySelector(".tone-success")?.textContent ?? "").not.toBe("Online");
-      expect(r.container.textContent).toContain("Offline");
-    });
-  }
-
-  it("离线那一格用离线的形状,不借 P2 的三角", async () => {
-    const r = await page(false);
-    const cell = r.getByText("Offline");
-    expect(cell.querySelector("svg.shape.offline")).toBeTruthy();
-    expect(cell.querySelector("svg.shape.P2")).toBeNull();
   });
 });
 

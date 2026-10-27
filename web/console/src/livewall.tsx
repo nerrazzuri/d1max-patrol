@@ -8,6 +8,7 @@ import { t } from "./i18n";
 import type { UnitInfo } from "./live";
 import { robotCams, type Alert } from "./model";
 import { SlotBar } from "./slot";
+import { nameOf } from "./data";
 
 export function LiveWall(props: { units: UnitInfo[]; alerts: Alert[]; now: number; onZoom: (robot: string) => void }) {
   const ranked = rankUnits(props.units, props.alerts);
@@ -38,7 +39,7 @@ export function LiveWall(props: { units: UnitInfo[]; alerts: Alert[]; now: numbe
           const second: Cam = thermal ? "thermal" : "back";
           const off = u.state === "offline";
           return (
-            <section key={id} class="lw-card slot" data-robot={id} aria-label={id}>
+            <section key={id} class="lw-card slot" data-robot={id} aria-label={nameOf(id)}>
               {off ? <div class="slot-off">{t("st_offline")}</div> : (
                 <div class="lw-pair">
                   <CameraWell key={`${id}-front`} robot={id} cam="front" now={props.now} variant="main" />

@@ -22,6 +22,8 @@ export function Shape({ kind, size = 12 }: { kind: ShapeKind; size?: number }): 
 }
 
 const P: Record<string, string[]> = {
+  // 四足机器人(侧面):身子、头、四条腿
+  robot: ["M5 9h11a3 3 0 0 1 3 3v1H5z", "M19 10l2-2", "M6 13l-1 6", "M9 13l1 6", "M14 13l-1 6", "M17 13l1 6"],
   octagon: ["M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9z"],
   x: ["M18 6L6 18", "M6 6l12 12"],
   expand: ["M15 3h6v6", "M9 21H3v-6", "M21 3l-7 7", "M3 21l7-7"],

@@ -1,10 +1,9 @@
-// 管理组(商业化 B1b,只有管理员看得到):用户、机器狗与摄像头、系统。都是站点已有的接口,
-// 外加这一单新加的 /api/admin/robots(登记 / 出开通码 / 吊销)。
+// 「高级 → 系统」(商业化 B1b 起):体检、版本、手机配对;摄像头登记暂挂在这页底下(第三期挪进「布置」)。
+// 用户页挪到 userspage.tsx、机器人页挪到 robotspage.tsx(W44 第二期)。
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
 import { CamerasPanel } from "./camadmin";
 import { hm } from "./data";
-import { Confirm, Modal } from "./dialogs";
 import { t, type Key } from "./i18n";
 import { Shape } from "./icons";
 import { qrGrid } from "./qr";
@@ -26,16 +25,7 @@ function useLoad<T>(path: string): [T | null, () => void, string] {
   return [data, load, err];
 }
 
-function errText(e: unknown): string {
-  return t("failed", { why: e instanceof ApiError ? e.message : String(e) });
-}
-
-function day(ms: number): string {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-// ------------------------------------------------------------------ 机器狗与摄像头
+// ------------------------------------------------------------------ 设备、版本(机器人页、系统页共用)
 
 interface AdminRobot {
   robot_id: string;
@@ -69,138 +59,13 @@ export function clientTooOld(c: ClientRow, minAppLevel: number | undefined): boo
   return c.kind === "app" && c.api_level != null && minAppLevel != null && c.api_level < minAppLevel;
 }
 
-export function RobotsAdminPage({ say }: { say: Say }) {
-  const [robots, reload] = useLoad<{ robots: AdminRobot[] }>("/api/robots");
-  const [versions] = useLoad<Versions>("/api/versions");
-  const [adding, setAdding] = useState(false);
-  const [code, setCode] = useState<{ id: string; code: string; hours: number } | null>(null);
-  const [revoking, setRevoking] = useState<string | null>(null);
-  const verdict = new Map((versions?.robots ?? []).map((v) => [v.robot_id, v.verdict]));
-  const act = async (fn: () => Promise<unknown>, msg?: string) => {
-    try {
-      await fn();
-      if (msg) say(msg);
-    } catch (e) {
-      say(errText(e));
-    }
-    reload();
-  };
-  return (
-    <div class="admin">
-      <section class="panel">
-        <div class="panel-head">
-          <h1>{t("robots")}</h1>
-          <button type="button" class="btn primary push" onClick={() => setAdding(true)}>{t("addRobot")}</button>
-        </div>
-        <table class="grid">
-          <thead><tr><th>{t("robotId")}</th><th>{t("colOnline")}</th><th>{t("colVersion")}</th><th>{t("colDevices")}</th><th>{t("colCompat")}</th><th>{t("dispatchMode")}</th><th>{t("certExpires")}</th><th>{t("colActions")}</th></tr></thead>
-          <tbody>
-            {(robots?.robots ?? []).map((r) => {
-              const v = verdict.get(r.robot_id) ?? "unknown";
-              return (
-                <tr key={r.robot_id} class={r.revoked ? "off" : undefined}>
-                  <td class="mono strong">{r.robot_id}</td>
-                  <td>{r.revoked ? t("revokedTag") : r.status?.online && r.fresh === true ? <span class="state tone-success">{t("online")}</span> : <span class="state p2 tone-error"><Shape kind="offline" />{t("st_offline")}</span>}</td>
-                  <td class="mono">{r.capabilities?.agent ?? "—"}</td>
-                  <td>{(() => {
-                    const s = deviceSummary(r.devices);
-                    return s ? <span class={`state tone-${s.tone}`} title={s.title || undefined}>{s.text}</span> : "—";
-                  })()}</td>
-                  <td>{v === "ok" ? <span class="state tone-success">{t("compat_ok")}</span> : <span class="state p2"><Shape kind="P2" />{t(`compat_${v}` as Key)}</span>}</td>
-                  <td>{r.manual_only ? t("manualOnly") : t("autoDispatch")}</td>
-                  <td class="mono">{r.expires_at ? day(r.expires_at) : "—"}</td>
-                  <td class="actions">
-                    {!r.revoked && (
-                      <>
-                        <button type="button" class="btn sm" onClick={() => void act(() => api("POST", `/api/robots/${enc(r.robot_id)}/service`, { manual_only: !r.manual_only }))}>
-                          {r.manual_only ? t("setAuto") : t("setManual")}
-                        </button>
-                        <button type="button" class="btn sm" onClick={() => void act(async () => {
-                          const d = await api<{ code: string; hours: number }>("POST", `/api/admin/robots/${enc(r.robot_id)}/code`, {});
-                          setCode({ id: r.robot_id, code: d.code, hours: d.hours });
-                        })}>{t("newCode")}</button>
-                        <button type="button" class="btn sm" onClick={() => setRevoking(r.robot_id)}>{t("revoke")}</button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </section>
-      <CamerasPanel say={say} />
-      {adding && (
-        <AddRobot onClose={() => setAdding(false)} say={say}
-          onDone={(id, c, h) => { setAdding(false); setCode({ id, code: c, hours: h }); reload(); }} />
-      )}
-      {code && <CodeDialog {...code} onClose={() => setCode(null)} say={say} />}
-      {revoking && (
-        <Confirm text={t("revokeConfirm", { id: revoking })} yes={t("revoke")} danger onNo={() => setRevoking(null)}
-          onYes={() => {
-            const id = revoking;
-            setRevoking(null);
-            void act(async () => {
-              const d = await api<{ summary: string; broker_restart: string }>("POST", `/api/admin/robots/${enc(id)}/revoke`, {});
-              say(t("revoked", { id, summary: d.summary, cmd: d.broker_restart }));
-            });
-          }} />
-      )}
-    </div>
-  );
-}
-
-function AddRobot({ onClose, onDone, say }: { onClose: () => void; onDone: (id: string, code: string, hours: number) => void; say: Say }) {
-  const [id, setId] = useState("");
-  const [days, setDays] = useState(365);
-  const [busy, setBusy] = useState(false);
-  async function submit(e: Event) {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      const d = await api<{ code: string; hours: number }>("POST", "/api/admin/robots", { robot_id: id, days });
-      onDone(id, d.code, d.hours);
-    } catch (x) {
-      say(errText(x));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <Modal label={t("addRobot")} onClose={onClose}>
-      <form class="form" onSubmit={submit}>
-        <p class="muted small">{t("addRobotHint")}</p>
-        <label class="field">{t("robotId")}<input value={id} pattern="[A-Za-z0-9._\-]{1,64}" required autocomplete="off" onInput={(e) => setId(e.currentTarget.value)} /></label>
-        <label class="field">{t("certDays")}<input type="number" min={1} max={3650} value={days} onInput={(e) => setDays(Number(e.currentTarget.value))} /></label>
-        <div class="row end">
-          <button type="button" class="btn" onClick={onClose}>{t("cancel")}</button>
-          <button type="submit" class="btn primary" disabled={busy}>{t("addRobot")}</button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function CodeDialog({ id, code, hours, onClose, say }: { id: string; code: string; hours: number; onClose: () => void; say: Say }) {
-  return (
-    <Modal label={t("activationCode", { id })} onClose={onClose}>
-      <p class="muted small">{t("codeHint", { h: hours })}</p>
-      <textarea class="codebox mono" readOnly rows={4} value={code} onFocus={(e) => e.currentTarget.select()} aria-label={t("activationCode", { id })} />
-      <div class="row end">
-        <button type="button" class="btn" onClick={() => { void navigator.clipboard?.writeText(code).then(() => say(t("copied"))); }}>{t("copy")}</button>
-        <button type="button" class="btn primary" onClick={onClose}>{t("close")}</button>
-      </div>
-    </Modal>
-  );
-}
-
 // ------------------------------------------------------------------ 系统
 
 interface Health { ok: boolean; version: string; checks: Record<string, { ok: boolean; detail?: string }> }
 
 const CRITICAL = new Set(["db", "loop", "broker", "disk"]);
 
-export function SystemPage() {
+export function SystemPage({ say }: { say: Say }) {
   const [health, reload] = useLoad<Health>("/api/health");
   const [versions] = useLoad<Versions>("/api/versions");
   useEffect(() => {
@@ -261,6 +126,7 @@ export function SystemPage() {
         </table>
       </section>
       <PairPhone />
+      <CamerasPanel say={say} />
       <section class="panel">
         <div class="panel-head">
           <h2>{t("supportBundle")}</h2>

@@ -121,6 +121,13 @@ def test_概览_电量和在线(台):
     assert r["online"] is False and r["battery_pct"] is None
 
 
+def test_概览_只能手动派(台):
+    d, db = 台
+    assert _one(d, db)["manual_only"] is False
+    d.registry.set_manual_only("A", True, by="alice", now_ms=NOW)
+    assert _one(d, db)["manual_only"] is True
+
+
 def test_起名(台):
     d, db = 台
     d.registry.set_name("A", "  前院  ")
