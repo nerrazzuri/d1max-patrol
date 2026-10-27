@@ -52,7 +52,7 @@ export function DutyPage(props: {
   function sceneOf(a: Alert | undefined): Scene | undefined {
     if (!a || a.audience !== "intrusion" || !a.context?.zone) return undefined;
     const c = cams.find((x) => x.zone === a.context?.zone);
-    return c ? { label: c.name, src: `/api/cameras/${enc(c.name)}/live` } : undefined;
+    return c ? { label: c.name, src: `/api/cameras/${enc(c.name)}/live`, health: `/api/cameras/${enc(c.name)}/health` } : undefined;
   }
 
   async function post(path: string, body: unknown) {

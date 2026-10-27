@@ -11,8 +11,10 @@ import { nameOf } from "./data";
 export interface Scene {
   /** 现场叫什么(「3 号 后花园」)。 */
   label: string;
-  /** 现场画面的地址(固定摄像头直播或抓拍)。 */
+  /** 现场画面的地址(固定摄像头直播)。 */
   src: string;
+  /** 画面健康(最后一帧多久了,外审 R6)。 */
+  health: string;
 }
 
 export function SlotBar(props: {
@@ -67,10 +69,9 @@ export function VideoSlot(props: {
         {off ? (
           <div class="slot-off">{t("st_offline")}</div>
         ) : props.scene ? (
-          <div class="well scene-well">
-            <img class="scene" src={props.scene.src} alt={props.scene.label} />
-            <div class="osd top"><span>{props.scene.label}</span></div>
-          </div>
+          // 跟机器人画面同一个组件(断流提示、重连);换现场整个换掉,上一个的回调碰不到新的
+          <CameraWell key={`s-${props.scene.src}`} robot={id} cam="front" now={props.now} forceLive={props.forceLive}
+            variant="main" feed={props.scene} />
         ) : (
           <CameraWell key={`m-${main}`} robot={id} cam={main} now={props.now} forceLive={props.forceLive} variant="main" />
         )}

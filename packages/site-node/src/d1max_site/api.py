@@ -109,7 +109,7 @@ _TELEOP = re.compile(r"^/api/robots/([^/]{1,64})/"
 _VIDEO = re.compile(r"^/api/robots/([^/]{1,64})/video/([a-z]{1,16})$")
 #: W00c5d:运行记录与导出。
 #: 固定摄像头的实时画面(W19)。
-_CAM = re.compile(r"^/api/cameras/([A-Za-z0-9._-]{1,64})/live$")
+_CAM = re.compile(r"^/api/cameras/([A-Za-z0-9._-]{1,64})/(live|health)$")
 #: 分级驱离(W22):``/api/deterrence/<狗>/level``、``/release``。
 _DETER = re.compile(r"^/api/deterrence/([^/]{1,64})/(level|release|start)$")
 _RANGE = re.compile(r"^bytes=(\d{0,18})-(\d{0,18})$")
@@ -2923,6 +2923,12 @@ class _Handler(TlsHandlerMixin):
         cam = mgr.camera(m.group(1))
         if cam is None:
             raise HttpError(404, "没有这台摄像头")
+        if m.group(2) == "health":
+            # 外审 R6:画面健康(最后一帧多久了),网页按这个标「画面断了」。没人在看:没在拉
+            with self.site._cctv_lock:
+                v = self.site._cctv_views.get(cam.name)
+            return self._send_json(200, v.health() if v is not None and v.cam == cam
+                                   else {"online": False, "last_frame_age_ms": None})
         if not cam.rtsp_url:
             raise HttpError(404, "这台摄像头没登记画面地址(camera-add --rtsp)")
         with self.site._cctv_lock:
