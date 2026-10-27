@@ -784,6 +784,13 @@ const en = {
   lyCamNoLive: "No live view address set.",
   lyCamEdit: "Edit connection",
   lyCamRemove: "Delete camera {name}? Its intrusion alarms stop.",
+  locWhen: "When you need this: a robot says it doesn't know where it is.",
+  locOk: "knows where it is",
+  locUnsure: "not quite sure",
+  locLost: "lost",
+  locUnknown: "unknown (offline or not reporting)",
+  locFindHow: "On the map, drag it to where it actually stands and drag the arrow to the way it faces.",
+  locDetails: "Details (numbers and history)",
 };
 
 type Key = keyof typeof en;
@@ -1567,6 +1574,13 @@ const zh: Partial<Record<Key, string>> = {
   lyCamNoLive: "没填看画面的地址。",
   lyCamEdit: "改连接信息",
   lyCamRemove: "删掉摄像头 {name}？它报的入侵就收不到了。",
+  locWhen: "什么时候用得上：机器人说找不到自己在哪。",
+  locOk: "知道自己在哪",
+  locUnsure: "不太确定",
+  locLost: "迷路了",
+  locUnknown: "不知道（离线或者没报）",
+  locFindHow: "在地图上把它拖到实际站的地方，拖箭头指它面朝的方向。",
+  locDetails: "详细（数字和历史）",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };

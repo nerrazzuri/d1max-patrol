@@ -864,3 +864,13 @@ p.warn { color: var(--c-text); background: var(--c-warningSoft); padding: 8px 12
 .cam-mark circle { fill: var(--c-info); stroke: var(--c-surface); stroke-width: 2; }
 .cam-mark text { font-size: 12px; fill: var(--c-text); paint-order: stroke; stroke: var(--c-surface); stroke-width: 3; }
 img.cam-live { width: 100%; max-height: 60vh; object-fit: contain; background: #000; border-radius: 8px; }
+
+/* W44 第四期:高级 → 定位 */
+.advloc { display: flex; flex-direction: column; gap: 12px; }
+.advloc .lead { margin: 0; }
+.loc-row { display: flex; gap: 8px; align-items: center; padding: 6px 0; }
+.loc-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--c-textMuted); }
+.loc-dot.ok { background: var(--c-success); }
+.loc-dot.unsure { background: var(--c-warning); }
+.loc-dot.lost { background: var(--c-error); }
+.loc-detail summary { cursor: pointer; font-weight: 600; }
