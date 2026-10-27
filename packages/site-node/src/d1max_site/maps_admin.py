@@ -360,6 +360,48 @@ class MapAdmin:
         return {"map_id": map_id, "from": version, "version": new, "cleaned": len(specks),
                 "cells": px, "homes_copied": homes}
 
+    def edit(self, map_id: str, version: str, *, digest: Any, ops: Any, note: Any,
+             by: str) -> dict[str, Any]:
+        """地图编辑第一版(W44 第四期,``map_edit``):橡皮擦、画障碍,另存成新的一版(跟清噪点一样:
+        文件照抄、只换栅格,原点照抄,区域等走「新版本带过来、要人核」)。``digest`` 对不上 → 409。"""
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        from d1max_site import map_denoise as dn
+        from d1max_site import map_edit as me
+        from d1max_site.maps import MapError
+        map_id, version = self._names(map_id, version)
+        try:
+            clean = me.check_ops(ops)
+        except me.EditError as exc:
+            raise AdminError(400, str(exc)) from exc
+        _, meta, image, data = self._grid(map_id, version)
+        if digest != dn.digest(data):
+            raise AdminError(409, "这一版的地图在你打开以后换了:重新打开再编辑", reason="stale")
+        new_pgm, stats = me.apply_ops(data, meta, clean)
+        new = self._next_version(map_id, version)
+        src = self.cat.root / map_id / version
+        tmp = Path(tempfile.mkdtemp(prefix="edit-", dir=self.cat.root))
+        text = str(note or "")[:120]
+        try:
+            for f in self.ref(map_id, version).files:
+                shutil.copy2(src / f.name, tmp / f.name)
+            (tmp / image).write_bytes(new_pgm)
+            try:
+                self.cat.import_dir(tmp, map_id=map_id, version=new, source="edit",
+                                    note=text or (f"从 {version} 编辑:擦了 "
+                                                  f"{stats['erased_m2']} 平方米、画了 "
+                                                  f"{stats['obstacle_m2']} 平方米障碍"))
+            except MapError as exc:
+                raise AdminError(409, str(exc)) from exc
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        from d1max_site.standby import copy_homes
+        homes = copy_homes(self.db, map_id, version, new)
+        return {"map_id": map_id, "from": version, "version": new, **stats,
+                "homes_copied": homes, "by": by}
+
     def _next_version(self, map_id: str, version: str) -> str:
         """新版本号:这个地图号下都是数字就取最大的加一;不然 ``<版本>-dn<n>``。"""
         have = [m["version"] for m in self.cat.list() if m["map_id"] == map_id]

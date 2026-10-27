@@ -327,6 +327,16 @@ def cmd_map_import(home: Path, src: Path, map_id: str, version: str, note: str) 
         db.close()
 
 
+def release_pubkey(home: Path) -> Path | None:
+    """登记升级包用哪把发行公钥验签(``site.json`` 的 ``release_pubkey``,默认
+    ``/etc/d1max-site/release-pub.pem``);``release_unsigned: true``(只该在开发环境)
+    → ``None`` 不验。"""
+    cfg = _load(home)
+    if cfg.get("release_unsigned") is True:
+        return None
+    return Path(cfg.get("release_pubkey") or "/etc/d1max-site/release-pub.pem")
+
+
 def cmd_release_add(home: Path, src: Path, note: str) -> dict:
     """W00c5d 第三部分:把一个发布包目录(``release pack`` 的产物)登记进站点的发布目录。"""
     from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
@@ -704,6 +714,17 @@ class Server:
         from d1max_site.authz import AuthzBook
         #: 防区多边形、名单(商业化 B1c)。
         self.areas = AreaBook(self.db, now_ms=wall_ms)
+        from d1max_site.map_display import MapDisplay
+        #: W44 第四期:地图的显示设置(摆正、底图、区域名、特殊地面)。
+        self.map_display = MapDisplay(self.db, now_ms=wall_ms)
+
+        def _where(pose: dict) -> str | None:
+            m, v, x, y = (pose.get(k) for k in ("map_id", "map_version", "x", "y"))
+            if not isinstance(m, str) or not isinstance(v, str) or \
+                    not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                return None
+            return self.map_display.region_at(m, v, x, y) or self.areas.zone_at(m, v, x, y)
+        self.alert_sources.where_of = _where
         self.authz = AuthzBook(self.db, now_ms=wall_ms)
         self.arming.authz = self.authz
         self.incidents.arming = self.arming
@@ -892,6 +913,7 @@ class Server:
         self.compat.alerts = self.alerts
         self.api.privacy = self.privacy                # W30:运行记录标「留着」
         self.api.charge = self.charge                  # W13:充电桩
+        self.release_queue = self.api.release_queue      # W44 第四期:充完电空闲再换
         self.arming.on_expired = lambda back, row: self.api.audit.record(
             actor="site", action="mode visitor_expired", target=back, status=200,
             detail={"visitor_zones": row["visitor_zones"], "set_by": row["set_by"]}, remote="")
@@ -1039,7 +1061,8 @@ class Server:
                                      ("回充", "charge", "tick"),          # W13
                                      ("受力警笛", "force", "sound"),      # W26:布防时被抱起来
                                      ("天气", "weather", "tick"),         # W29:雷暴撤排程、对账限速
-                                     ("推送", "push", "tick")):           # A6:P1 推到手机
+                                     ("推送", "push", "tick"),            # A6:P1 推到手机
+                                     ("升级排队", "release_queue", "tick")):  # W44:充完电空闲再换
                 try:
                     # 推送是同步的、要等网络:放线程里;别的本来就是协程
                     self._lane(what, getattr(getattr(self, part), meth), thread=part == "push")

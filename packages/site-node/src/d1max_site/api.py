@@ -266,6 +266,20 @@ class SiteApi:
         #: W44 第二期:站点的零散设置(交班时间、多久没巡过)。
         from d1max_site.site_settings import SiteSettings
         self.settings = SiteSettings(dispatcher.db) if dispatcher is not None else None
+        #: W44 第四期:地图的显示设置(摆正、底图、区域名、特殊地面)。
+        from d1max_site.map_display import MapDisplay
+        self.map_display = MapDisplay(dispatcher.db, now_ms=self._now) \
+            if dispatcher is not None else None
+        #: W44 第四期:等充完电、空闲时再换的升级。
+        from d1max_site.release_queue import ReleaseQueue
+
+        def _activate_payload(name: str) -> dict[str, Any]:
+            from d1max_site.catalog import active_bundle_schema
+            cur = active_bundle_schema(dispatcher.db)
+            return {"name": name, **({"mission_schema": cur[1]} if cur is not None else {})}
+        self.release_queue = (ReleaseQueue(dispatcher.db, dispatcher, now_ms=self._now,
+                                           payload=_activate_payload)
+                              if dispatcher is not None else None)
         #: W44 第三期:「布置」的历史版本。
         from d1max_site.layout_history import LayoutHistory
         self.layout_history = (LayoutHistory(dispatcher.db, now_ms=self._now)
@@ -612,6 +626,8 @@ class _Handler(TlsHandlerMixin):
             if path == "/api/maps" or _MAPCMD.match(path) or _MAPVIEW.match(path) \
                     or _ZONES.match(path):
                 return self._maps(method, path, user)
+            if method == "POST" and path == "/api/releases/upload":
+                return self._release_upload(user)
             if path == "/api/releases" or _RELCMD.match(path):
                 return self._releases(method, path, user)
             m = _TELEOP.match(path)
@@ -2652,8 +2668,15 @@ class _Handler(TlsHandlerMixin):
             tag = hashlib.sha256(json.dumps(erase).encode()).hexdigest()[:12]
             url += f"?e={tag}"
         plan = {"url": url, "scale": plan_scale(info["width"], info["height"])}
+        # W44 第四期:显示设置(摆正只转显示;区域名、特殊地面画在图上;底图只给管理页)
+        disp = (self.site.map_display.get(map_id, version)
+                if self.site.map_display is not None else None)
+        if disp is not None and disp.get("rotate_deg") is not None:
+            info = info | {"rotation_deg": disp["rotate_deg"]}
+        display = None if disp is None else {k: disp[k] for k in ("rotate_deg", "regions",
+                                                                    "terrain")}
         return self._send_json(200, info | {"standby": standby, "homes": homes, "zones": zones,
-                                            "areas": areas, "plan": plan})
+                                            "areas": areas, "plan": plan, "display": display})
 
     def _home_on(self, robot_id: str, map_id: str, version: str) -> dict[str, float] | None:
         """这台狗在这张图这个版本上的原点(W13a):**只看原点表**。待命点是运营调度的点、随时会加、挪、删,
@@ -2707,6 +2730,12 @@ class _Handler(TlsHandlerMixin):
                        if not c["ok"] and c["blocking"]]
                 if bad:
                     raise HttpError(409, bad[0]["detail"])
+                if d.get("when") == "charging":
+                    # W44 第四期:等充完电、空闲时再换(release_queue.py)
+                    self.site.release_queue.add(robot_id, payload["name"], by=str(user))
+                    self._audit_detail = {"action": "activate", "name": payload["name"],
+                                          "when": "charging"}
+                    return self._send_json(200, {"queued": True})
             elif action == "rollback":
                 kind, payload = "release_rollback", {}
             else:
@@ -2718,6 +2747,80 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {"action": action, "name": str(d.get("name", ""))[:32]}
         return self._send_json(200, self.site.dispatch(lambda: self.site.dispatcher.map_command(
             robot_id, kind, payload, issued_by=str(user))))
+
+    #: 网页上传的升级包最大多少(W44 第四期)。
+    MAX_UPLOAD = 500 * 1024 * 1024
+
+    def _release_upload(self, user) -> None:
+        """W44 第四期:网页上传升级包(``.tar.gz``,请求体就是文件;再输一次密码放在
+        ``X-D1Max-Confirm`` 头里)。解到临时目录,走跟命令行 ``release-add`` 同一个登记(照旧验签、
+        核指纹),错了说人话。"""
+        import shutil
+        import tarfile
+        import tempfile
+        from pathlib import Path
+
+        from d1max_site import main as site_main
+        from d1max_site.releases import ReleaseCatalog, ReleaseCatalogError
+        self._need(user, MANAGE)
+        if self.site.home is None or self.site.releases is None:
+            raise HttpError(404, "这个站点没开发布目录")
+        self._confirm(user, {"confirm_password": self.headers.get("X-D1Max-Confirm") or ""})
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError as exc:
+            raise HttpError(400, "Content-Length 不是数") from exc
+        if n <= 0:
+            raise HttpError(400, "没收到文件")
+        if n > self.MAX_UPLOAD:
+            raise HttpError(413, "升级包太大了(最多 500 MB)")
+        tmp = Path(tempfile.mkdtemp(prefix="upload-", dir=self.site.releases.root))
+        try:
+            raw = tmp / "pkg.tar.gz"
+            left = n
+            with open(raw, "wb") as fh:
+                while left > 0:
+                    chunk = self.rfile.read(min(left, 1 << 20))
+                    if not chunk:
+                        raise HttpError(400, "文件没传完")
+                    fh.write(chunk)
+                    left -= len(chunk)
+            out = tmp / "x"
+            out.mkdir()
+            try:
+                with tarfile.open(raw, "r:gz") as tf:
+                    for m in tf.getmembers():
+                        p = Path(m.name)
+                        if p.is_absolute() or ".." in p.parts or not (m.isfile() or m.isdir()):
+                            raise HttpError(400, "升级包里有不该有的东西(往外跳的路径、链接)")
+                    # 上面逐个核过;新的 Python 再加一道 data 过滤
+                    tf.extractall(out, **({"filter": "data"} if hasattr(tarfile, "data_filter")
+                                          else {}))
+            except (tarfile.TarError, OSError, EOFError) as exc:
+                raise HttpError(400, "这不是升级包(打不开)") from exc
+            tops = [p for p in out.iterdir() if (p / "release.json").is_file()]
+            if len(tops) != 1:
+                raise HttpError(400, "这不是升级包(里面没有 release.json)")
+            note = str(self.headers.get("X-Release-Note") or "")[:200]
+            self._audit_target = tops[0].name
+            try:
+                row = ReleaseCatalog(self.site.home, self.site.dispatcher.db, now_ms=self.site._now,
+                                     pubkey=site_main.release_pubkey(self.site.home)
+                                     ).add(tops[0], note=note or "网页上传")
+            except ReleaseCatalogError as exc:
+                msg = str(exc)
+                if "已经登记过了" in msg:
+                    raise HttpError(409, "这个版本已经有了") from exc
+                if "签名" in msg or "公钥" in msg:
+                    raise HttpError(400, f"升级包的签名对不上,不是公司发的({msg})") from exc
+                if "指纹" in msg:
+                    raise HttpError(400, "升级包坏了(文件跟清单对不上)") from exc
+                raise HttpError(400, msg) from exc
+            except site_main.SiteError as exc:
+                raise HttpError(500, str(exc)) from exc
+            return self._send_json(200, {"release": row})
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def _mission_schema(self) -> dict[str, int]:
         """站点当前任务包的 schema,放进 ``release_precheck``/``release_activate`` 给狗比(没有当前包
