@@ -147,3 +147,20 @@ def test_被撞报P2_门槛文件坏了报P2(tmp_path):
     got = {a.kind: a for a in desk.book.open()}
     assert set(got) == {"force_bump", "force_config_bad"}
     assert "2.3 g" in got["force_bump"].title and got["force_bump"].level.name == "P2"
+
+
+async def test_外审R2_时间表部分布防_在布防的防区被抱起来响_在撤防的不响(台):
+    """接上「看见人」那套按机器人位置判防区(站点主程序接 ``armed_for``)。"""
+    t = 台
+    where = {"A": "gate"}
+    t.w.armed_for = lambda rid: where[rid] == "gate"
+    t.d.force("lifted")
+    await t.w.tick()
+    assert {p["output"] for p in t.d.sent} == {"siren", "strobe"}
+    t.d.sent.clear()
+    t.d.force("ok")
+    await t.w.tick()
+    where["A"] = "house"
+    t.d.force("lifted")
+    await t.w.tick()
+    assert t.d.sent == []

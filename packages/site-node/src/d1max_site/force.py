@@ -47,8 +47,17 @@ class ForceWatch:
         self.arming = arming
         #: 告警台。站点主程序接上;没接就只落库(下一拍有了再报)。
         self.alerts: Any = None
+        #: 这台机器人此刻所在的地方布不布防(W44 外审 R2:时间表部分布防时按防区)。站点主程序接
+        #: :meth:`PersonWatch.armed_now`;没接按全站模式。
+        self.armed_for: Callable[[str], bool] | None = None
 
-    def _armed(self) -> bool:
+    def _armed(self, rid: str) -> bool:
+        if self.armed_for is not None:
+            try:
+                return bool(self.armed_for(rid))
+            except Exception:
+                log.exception("%s 所在防区布不布防读不出来:当布防(宁可多响)", rid)
+                return True
         if self.arming is None:
             return False
         try:
@@ -114,7 +123,7 @@ class ForceWatch:
             context["pose"] = {"map_id": pose.map_id, "map_version": pose.map_version,
                                "x": round(pose.x, 2), "y": round(pose.y, 2), "at_ms": now}
         # 被抱起来、又在布防:要响警笛(1 = 要响还没响成,0 = 不响或者响过了)
-        siren = 1 if st == "lifted" and self._armed() else 0
+        siren = 1 if st == "lifted" and self._armed(rid) else 0
         with self.db.tx() as tx:
             tx.execute("INSERT INTO force_episodes(robot_id, state, started_ms, siren) "
                        "VALUES (?,?,?,?) ON CONFLICT(robot_id) DO UPDATE SET state=excluded.state, "

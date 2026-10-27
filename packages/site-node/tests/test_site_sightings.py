@@ -107,3 +107,100 @@ def test_告警台报不出去_下一拍补报_不重复记(台):
     t.w.alerts = 假告警台()
     t.w.tick()
     assert len(t.w.alerts.raised) == 1
+
+
+# ---- 外审 R2:时间表部分布防时,按机器人可靠的现在位置看它那个防区布不布防 ----
+
+def _分区台(台, *, default_on: bool = True):
+    """gate(0–10)全天布防、house(20–30)撤防;「全部防区一样」那份 default_on 决定没画到的地方。"""
+    from datetime import timezone
+
+    from d1max_site.areas import AreaBook
+    from d1max_site.arming_schedule import ArmingSchedule
+    t = 台
+    sch = t.arming.schedule = ArmingSchedule(t.db, now_ms=lambda: t.ms[0], tz=lambda: timezone.utc)
+    slots = [{"zone": "gate", "day": d, "start": "00:00", "end": "24:00"} for d in range(7)]
+    slots += [{"zone": "house", "day": 6, "start": "00:00", "end": "00:01"}]
+    slots += [{"zone": "", "day": d, "start": "00:00", "end": "24:00" if default_on else "00:01"}
+              for d in range(7)]
+    sch.put({"enabled": True, "slots": slots}, by="olga")
+    areas = AreaBook(t.db, now_ms=lambda: t.ms[0])
+    areas.set("m", "1", "gate", [[0, 0], [10, 0], [10, 10], [0, 10]], by="olga")
+    areas.set("m", "1", "house", [[20, 0], [30, 0], [30, 10], [20, 10]], by="olga")
+    t.w.areas = areas
+    c = t.d.clients["A"]
+    c.status.ready = SimpleNamespace(loc_ok=True)
+    t.d.telemetry_at, t.d.stale_ms = {"A": t.ms[0]}, 10_000
+    assert t.arming.view()["state"] == "partial"
+    return t
+
+
+def _站在(t, x, y):
+    t.d.clients["A"].telemetry.pose.x, t.d.clients["A"].telemetry.pose.y = x, y
+
+
+def test_外审R2_部分布防_机器人在布防的门口看见人报P1(台):
+    t = _分区台(台)
+    _站在(t, 3, 4)
+    t.d.persons("A", present=True, count=1)
+    t.w.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["dog_sees_person"]
+
+
+def test_外审R2_在撤防的屋边不报_走进布防的门口就报(台):
+    t = _分区台(台)
+    _站在(t, 25, 4)
+    t.d.persons("A", present=True, count=1)
+    t.w.tick()
+    assert t.w.alerts.raised == [] and t.db.query("SELECT * FROM person_sightings") == []
+    _站在(t, 3, 4)
+    t.w.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["dog_sees_person"]
+
+
+def test_外审R2_位置说不清_部分布防时宁可报(台):
+    t = _分区台(台)
+    _站在(t, 25, 4)                                   # 最后报的位置在撤防的屋边,但已经过期
+    t.d.telemetry_at["A"] = t.ms[0] - 60_000
+    t.d.persons("A", present=True, count=1)
+    t.w.tick()
+    assert len(t.w.alerts.raised) == 1
+    t.w.alerts.raised.clear()
+    with t.db.tx() as c:
+        c.execute("DELETE FROM person_sightings")
+    t.d.telemetry_at["A"] = t.ms[0]
+    t.d.clients["A"].status.ready.loc_ok = False      # 定位丢了
+    t.w.tick()
+    assert len(t.w.alerts.raised) == 1
+
+
+def test_外审R2_没画防区的地方按全部防区那一份(台):
+    t = _分区台(台, default_on=False)
+    _站在(t, 50, 50)                                  # 位置可靠,不在任何防区里;那一份此刻撤防
+    t.d.persons("A", present=True, count=1)
+    t.w.tick()
+    assert t.w.alerts.raised == []
+
+
+def test_外审R2_布防的门口授权在场不报_授权没了补报(台):
+    t = _分区台(台)
+    who = ["王师傅"]
+    t.arming.authz = SimpleNamespace(active=lambda zone: who[0] if zone == "gate" else None)
+    _站在(t, 3, 4)
+    t.d.persons("A", present=True, count=1)
+    t.w.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["authorized_person"]
+    who[0] = None
+    t.w.tick()
+    assert [a["kind"] for a in t.w.alerts.raised] == ["authorized_person", "dog_sees_person"]
+
+
+def test_外审R2_armed_now_给受力警报用(台):
+    t = _分区台(台)
+    _站在(t, 3, 4)
+    assert t.w.armed_now("A") is True
+    _站在(t, 25, 4)
+    assert t.w.armed_now("A") is False
+    t.arming.set_mode("home", by="olga")              # 手动在家:老约定,不报
+    _站在(t, 3, 4)
+    assert t.w.armed_now("A") is False
