@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from test_site_api import MAP, PW, _等, target, 站
 
@@ -622,3 +624,57 @@ def test_W41_人员忽略区_认得的狗原样发_老狗去掉_摘要对得上_
     assert [z["kind"] for z in _sent(s)["zones"]] == ["nogo", "slow"], "老机器人:去掉忽略区"
     mine = s.req("GET", ZP, token=alice)[1]["zones"]
     assert [z["kind"] for z in mine] == ["nogo", "ignore", "slow"]
+
+
+# ------------------------------------------------------------ W44 第三期:网页上确认放宽要再输密码
+
+
+def _网页(s):
+    from test_site_webui import WEB, _cookie, _http
+    code, h, _ = _http(s, "POST", "/api/login", {"name": "alice", "password": PW, "web": True},
+                       headers=WEB)
+    assert code == 200
+    ck = {"Cookie": _cookie(h)} | WEB
+
+    def call(path, body):
+        code, _, raw = _http(s, "POST", path, body, headers=ck)
+        return code, json.loads(raw or b"{}")
+    return call
+
+
+def _放宽了(s, tok):
+    s.req("POST", ZP, {"zones": [POND], "base_revision": 0}, token=tok)
+    s.req("POST", ZP + "/confirm", {"revision": 1, "confirm": True}, token=tok)
+    s.req("POST", ZP, {"zones": [], "base_revision": 1}, token=tok)      # 删了泳池:放宽,没确认
+    return s.req("GET", ZP, token=tok)[1]["revision"]
+
+
+def test_网页放宽要密码(站点):
+    s = 站点
+    rev = _放宽了(s, _登(s, "alice"))
+    web = _网页(s)
+    code, d = web(ZP + "/confirm", {"revision": rev, "confirm": True, "empty_ok": True})
+    assert code == 403 and "密码" in d["error"]
+    code, d = web(ZP + "/confirm", {"revision": rev, "confirm": True, "empty_ok": True,
+                                    "confirm_password": "wrong-wrong-wrong"})
+    assert code == 403
+    code, d = web(ZP + "/confirm", {"revision": rev, "confirm": True, "empty_ok": True,
+                                    "confirm_password": PW})
+    assert code == 200, d
+
+
+def test_网页收紧不要密码(站点):
+    s = 站点
+    tok = _登(s, "alice")
+    s.req("POST", ZP, {"zones": [POND], "base_revision": 0}, token=tok)   # 从没确认过:要确认
+    code, d = _网页(s)(ZP + "/confirm", {"revision": 1, "confirm": True})
+    assert code == 200, d
+
+
+def test_手机放宽照旧不要密码(站点):
+    s = 站点
+    tok = _登(s, "alice")
+    rev = _放宽了(s, tok)
+    code, d = s.req("POST", ZP + "/confirm", {"revision": rev, "confirm": True, "empty_ok": True},
+                    token=tok)
+    assert code == 200, d
