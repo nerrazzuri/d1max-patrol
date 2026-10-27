@@ -513,3 +513,32 @@ def test_W18_录像的路径不合规的不收(站点):
         with pytest.raises(PathRefused):
             站点.recordings.put("A", run, rel, offset=0, data=b"x", total=1)
     assert 站点.recordings.list() == []
+
+
+def test_实测_握手没成_日志一行不打堆栈_别的错照打(caplog):
+    """演示站点实测:没信站点证书的浏览器、扫端口的,每条连接都在日志里打一整段堆栈。握手没成(已经记了一行)
+    和对方断开只记一行;别的意外错照样带堆栈。"""
+    import logging
+    import ssl
+
+    from d1max_site.tlsserve import TlsHandlerMixin, TlsThreadingServer
+    srv = TlsThreadingServer(("127.0.0.1", 0), TlsHandlerMixin, ctx=None, max_connections=2)
+    try:
+        with caplog.at_level(logging.INFO, logger="d1max_site.tlsserve"):
+            for exc in (ssl.SSLError(1, "[SSL: TLSV1_ALERT_UNKNOWN_CA] tlsv1 alert unknown ca"),
+                        ConnectionResetError(104, "reset"), TimeoutError("timed out")):
+                try:
+                    raise exc
+                except (OSError, TimeoutError):
+                    srv.handle_error(None, ("127.0.0.1", 1))
+            quiet = [r for r in caplog.records if r.name == "d1max_site.tlsserve"]
+            assert len(quiet) == 3 and all(r.exc_info is None for r in quiet)
+            caplog.clear()
+            try:
+                raise ValueError("意外")
+            except ValueError:
+                srv.handle_error(None, ("127.0.0.1", 1))
+            [r] = [r for r in caplog.records if r.name == "d1max_site.tlsserve"]
+            assert r.exc_info is not None
+    finally:
+        srv.server_close()

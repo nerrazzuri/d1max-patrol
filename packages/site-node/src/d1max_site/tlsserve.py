@@ -79,6 +79,13 @@ class TlsThreadingServer(ThreadingHTTPServer):
         return self.ctx.wrap_socket(sock, server_side=True, do_handshake_on_connect=False), addr
 
     def handle_error(self, request, client_address) -> None:
+        # 握手没成(setup 里已经记了一行)、对方断开、超时:记一行,不打堆栈(演示站点实测:没信站点证书
+        # 的浏览器、扫端口的,每条连接一整段堆栈,日志里全是它)。别的意外照样带堆栈。
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ssl.SSLError, ConnectionError, TimeoutError, socket.timeout)):
+            log.info("%s 这条连接断了: %s", client_address, exc)
+            return
         log.warning("%s 这条连接出错了", client_address, exc_info=True)
 
 
