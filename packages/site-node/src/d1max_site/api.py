@@ -247,6 +247,8 @@ class SiteApi:
         self.authz: Any = None
         #: W44:位置轨迹(录像页那一刻在哪、地图页多久没巡过;站点主程序接上)。
         self.pose_track: Any = None
+        #: W44:按时刻从录像抓一帧(报警记录的抓拍);第一次用时按录像库现建。
+        self.frames: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -565,7 +567,7 @@ class _Handler(TlsHandlerMixin):
                 return self._runs(method, path, user)
             if path == "/api/reports/daily":
                 return self._report(method, user)
-            if path == "/api/recordings" or _REC.match(path):
+            if path in ("/api/recordings", "/api/recordings/frame") or _REC.match(path):
                 return self._recordings(method, path, user)
             from d1max_site import api_runviz
             if api_runviz.handles(path):               # 运营可视化:路径轨迹、定位历史、摄像头登记
@@ -2525,6 +2527,27 @@ class _Handler(TlsHandlerMixin):
         except ReportError as exc:
             raise HttpError(400, str(exc)) from exc
 
+    def _rec_frame(self, method: str, store: Any, user) -> None:
+        """W44:``GET /api/recordings/frame?robot=&camera=&t=`` → 那一刻的一帧小图(JPEG)。
+
+        报警记录的抓拍。看证据,记审计(同看录像)。没有那一段、抓不出来:404。"""
+        if method != "GET":
+            raise HttpError(405, "只收 GET")
+        self._need(user, VIEW)
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+        robot, camera = (q.get("robot") or [""])[0], (q.get("camera") or ["front"])[0]
+        t = (q.get("t") or [""])[0]
+        if not robot or not SAFE_ID.match(robot) or not t.isdigit():
+            raise HttpError(400, "要 robot、t(毫秒)")
+        if self.site.frames is None:
+            from d1max_site.recordings import FrameCache
+            self.site.frames = FrameCache(store)
+        img = self.site.frames.frame(robot, camera, int(t))
+        if img is None:
+            raise HttpError(404, "那一刻没有录像,或者抓不出画面")
+        self._audit_view(f"recording-frame/{robot}/{camera}")
+        return self._send_bytes(img, "image/jpeg")
+
     def _recordings(self, method: str, path: str, user) -> None:
         """连续录像(W18)。看、放:``view``;标「留着」(过了 30 天也不删):``review``(值班的人
         判断留证据)。"""
@@ -2549,6 +2572,8 @@ class _Handler(TlsHandlerMixin):
                               camera=(q.get("camera") or [None])[0], since_ms=num("since"),
                               until_ms=num("until"), limit=num("limit") or 500)
             return self._send_json(200, {"recordings": rows, "segment_s": SEGMENT_S})
+        if path == "/api/recordings/frame":
+            return self._rec_frame(method, store, user)
         m = _REC.match(path)
         assert m is not None
         rid, what = int(m.group(1)), m.group(2)

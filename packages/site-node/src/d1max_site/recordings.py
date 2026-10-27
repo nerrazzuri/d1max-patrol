@@ -19,6 +19,7 @@ from __future__ import annotations
 import calendar
 import logging
 import shutil
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -188,6 +189,14 @@ class RecordingStore:
         args.append(max(1, min(limit, 5000)))
         return [dict(r) for r in self.db.query(q, tuple(args))]
 
+    def covering(self, robot_id: str, camera: str, t_ms: int) -> dict[str, Any] | None:
+        """W44:盖住 ``t_ms`` 那一刻的那一段(开头 ≤ t < 开头 + 一段);重叠时取开头晚的。"""
+        rows = self.db.query(
+            "SELECT * FROM recordings WHERE sealed=0 AND robot_id=? AND camera=? AND start_ms<=? "
+            "AND start_ms>? ORDER BY start_ms DESC, id DESC LIMIT 1",
+            (robot_id, camera, t_ms, t_ms - SEGMENT_S * 1000))
+        return dict(rows[0]) if rows else None
+
     def get(self, rid: int) -> dict[str, Any] | None:
         rows = self.db.query("SELECT * FROM recordings WHERE id=? AND sealed=0", (rid,))
         return dict(rows[0]) if rows else None
@@ -285,3 +294,49 @@ class RecordingStore:
                     except Exception:
                         log.exception("报「录像删不掉」失败")
         return aged, trimmed
+
+
+class FrameCache:
+    """W44:按时刻从录像抓一帧小图(报警记录页每行的抓拍)。
+
+    用 ffmpeg 从那一段里取一帧、缩到 320 宽、出 JPEG;按 (段, 偏移整秒) 缓存在内存里,
+    最多 ``max_items`` 张(满了丢最早的)。没有那一段、ffmpeg 失败或超时回 None。"""
+
+    def __init__(self, store: RecordingStore, *, ffmpeg: str = "ffmpeg", timeout_s: float = 5.0,
+                 max_items: int = 256) -> None:
+        self.store = store
+        self.ffmpeg = ffmpeg
+        self.timeout_s = timeout_s
+        self.max_items = max_items
+        self._cache: dict[tuple[int, int], bytes] = {}
+        self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        return len(self._cache)
+
+    def frame(self, robot_id: str, camera: str, t_ms: int) -> bytes | None:
+        import subprocess
+        row = self.store.covering(robot_id, camera, t_ms)
+        if row is None:
+            return None
+        off = max(0, (t_ms - int(row["start_ms"])) // 1000)
+        key = (int(row["id"]), int(off))
+        with self._lock:
+            hit = self._cache.get(key)
+        if hit is not None:
+            return hit
+        path = self.store.path(row)
+        cmd = [self.ffmpeg, "-nostdin", "-loglevel", "error", "-ss", str(off), "-i", str(path),
+               "-frames:v", "1", "-vf", "scale=320:-2", "-f", "image2", "-c:v", "mjpeg", "pipe:1"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=self.timeout_s, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            log.warning("抓帧没成(%s %s %s)", robot_id, camera, t_ms)
+            return None
+        if r.returncode != 0 or not r.stdout:
+            return None
+        with self._lock:
+            self._cache[key] = r.stdout
+            while len(self._cache) > self.max_items:
+                self._cache.pop(next(iter(self._cache)))
+        return r.stdout
