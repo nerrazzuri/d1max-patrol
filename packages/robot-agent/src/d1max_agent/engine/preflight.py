@@ -272,12 +272,12 @@ async def _check_removable(disks: Sequence[Removable] | None,
     if strangers:
         which = ", ".join(f"{d.mount.as_posix()}(SN {d.sn})" for d in strangers)
         return CheckResult("removable", False,
-                           f"还插着盘: {names} —— 其中 {which} 是别的狗的"
-                           f"镜像盘,这台狗是 {robot_sn};接着跑会把两只狗的"
+                           f"还插着盘: {names} —— 其中 {which} 是别的机器人的"
+                           f"镜像盘,这台机器人是 {robot_sn};接着跑会把两台机器人的"
                            f"数据写到一块盘上")
     return CheckResult("removable", False,
                        f"还插着盘: {names} —— 拔下来再出发。"
-                       f"盘挂在走动的狗身上是个杠杆,先坏的是接口")
+                       f"盘挂在走动的机器人身上是个杠杆,先坏的是接口")
 
 
 async def _guard(name: str, coro: Awaitable[CheckResult]) -> CheckResult:

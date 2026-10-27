@@ -772,7 +772,7 @@ Future<void> openRobot(WidgetTester t, FakeApi api) async {
 }
 
 void main() {
-  test('画面开流看的是狗在不在线（新鲜），不是画面健康 —— 不然两头互相等，一次都起不来', () async {
+  test('画面开流看的是机器人在不在线（新鲜），不是画面健康 —— 不然两头互相等，一次都起不来', () async {
     final api = FakeApi('owner'); // 画面健康夹具里两路都是 offline，狗的视图是新鲜的
     final p = SiteVideoHealthPoller(
         api: api, robotId: 'A', period: const Duration(milliseconds: 50));
@@ -785,16 +785,16 @@ void main() {
         api: stale, robotId: 'A', period: const Duration(milliseconds: 50));
     final h2 = await p2.stream.first;
     p2.close();
-    expect(h2.anyLive, isFalse, reason: '狗不新鲜就不去拉');
+    expect(h2.anyLive, isFalse, reason: '机器人不新鲜就不去拉');
   });
 
-  testWidgets('单狗页有画面：前后切换、问站点的画面健康、取流走站点路径与钉证书的客户端', (t) async {
+  testWidgets('单机器人页有画面：前后切换、问站点的画面健康、取流走站点路径与钉证书的客户端', (t) async {
     final api = FakeApi('owner');
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
     await t.pump();
     await t.pump(const Duration(milliseconds: 100));
     expect(find.byKey(SiteVideo.cameraKey('front')), findsOneWidget);
-    expect(api.robotCalls, greaterThan(1), reason: '开流看狗新不新鲜');
+    expect(api.robotCalls, greaterThan(1), reason: '开流看机器人新不新鲜');
     var lv = t.widget<LiveVideo>(find.byType(LiveVideo));
     expect(lv.streamPath, '/api/robots/A/video/front');
     expect(lv.openClient, isNotNull);
@@ -805,7 +805,7 @@ void main() {
     await t.pumpWidget(Container());
   });
 
-  testWidgets('狗的列表：来自真站点的夹具，显示在线与任务', (t) async {
+  testWidgets('机器人的列表：来自真站点的夹具，显示在线与任务', (t) async {
     final api = FakeApi('guard');
     await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: api)));
     await t.pumpAndSettle();
@@ -836,7 +836,7 @@ void main() {
     expect(find.byKey(const Key('btn-abort')), findsOneWidget);
   });
 
-  testWidgets('W33 狗卡片：只许手动派、狗确认看见几个人', (t) async {
+  testWidgets('W33 机器人卡片：只许手动派、机器人确认看见几个人', (t) async {
     final v = Map<String, dynamic>.of(siteFixture('site_robot'))
       ..['manual_only'] = <String, dynamic>{'by': 'enroll', 'at_ms': 1, 'note': '新登记'};
     final caps = Map<String, dynamic>.of(v['capabilities'] as Map<String, dynamic>);

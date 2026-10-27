@@ -139,7 +139,7 @@ class _SiteDeterrencePageState extends State<SiteDeterrencePage> {
       builder: (c) => AlertDialog(
         title: Text(tr(
             'End deterrence on ${widget.robotId}? (Light and sound off, robot returns to standby)',
-            '解除 ${widget.robotId} 的驱离？（声光全关、狗回待命点）')),
+            '解除 ${widget.robotId} 的驱离？（声光全关、机器人回待命点）')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
           FilledButton(key: const Key('deterrence-release-go'), onPressed: () => Navigator.pop(c, true), child: Text(tr('End deterrence', '解除'))),

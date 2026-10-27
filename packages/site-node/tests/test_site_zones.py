@@ -162,7 +162,7 @@ def test_抹掉区_认得的狗原样发_老狗换成同一块禁行区_补发�
     _zcaps(s).pop("erase", None)
     assert s.loop.call(lambda: s.disp.sync_zones()) == ["A"]
     sent = _sent(s)["zones"]
-    assert [z["kind"] for z in sent if z["id"] == "junk"] == ["nogo"], "补发给老狗也换成禁行区"
+    assert [z["kind"] for z in sent if z["id"] == "junk"] == ["nogo"], "补发给老机器人也换成禁行区"
     assert "erase" not in {z["kind"] for z in sent}
     # 外审 R1:这一版从没确认过,删掉的池子、限速区是放宽 —— 没确认前照样守着(随在生效的一起补发)
     assert {z["id"] for z in sent} == {"junk", "pond", "lawn"}
@@ -277,7 +277,7 @@ def test_避障用不了_不派会自己走的_遥控照常(站点):
         assert "避障用不了" in s.disp.dispatchable("A", "patrol")
         assert s.disp.dispatchable("A", "teleop") == ""
     tasks["obstacles"] = {"state": "stale", "rear": True}
-    assert s.disp.dispatchable("A", "goto") == "", "不新鲜是一两秒的事:狗那头原地等"
+    assert s.disp.dispatchable("A", "goto") == "", "不新鲜是一两秒的事:机器人那头原地等"
     tasks["obstacles"] = {"state": "ok", "rear": True}
     assert s.disp.dispatchable("A", "goto") == ""
 
@@ -289,7 +289,7 @@ def test_头尾调过来了_不派会自己走的_遥控照常(站点):
     s.disp.zones.confirm(MAP[0], MAP[1], revision=0, by="alice")
     assert s.disp.dispatchable("A", "goto") == ""
     tasks = s.disp.clients["A"].capabilities.tasks
-    for d, words in (("tail", "狗尾为前"), ("unknown", "不知道")):
+    for d, words in (("tail", "机器人尾为前"), ("unknown", "不知道")):
         for h in ({"direction": d}, {"direction": d, "autonomy": False}):   # 老狗、新狗
             tasks["head"] = h
             why = s.disp.dispatchable("A", "goto")
@@ -619,6 +619,6 @@ def test_W41_人员忽略区_认得的狗原样发_老狗去掉_摘要对得上_
     del _zcaps(s)["ignore"]                              # 当它是认不得忽略区的老狗
     code, d = s.req("POST", ZP, {"zones": [POND, EXHIBIT, SLOW], "base_revision": 1}, token=alice)
     assert code == 200 and d["pushed"] == {"A": ""}, d
-    assert [z["kind"] for z in _sent(s)["zones"]] == ["nogo", "slow"], "老狗:去掉忽略区"
+    assert [z["kind"] for z in _sent(s)["zones"]] == ["nogo", "slow"], "老机器人:去掉忽略区"
     mine = s.req("GET", ZP, token=alice)[1]["zones"]
     assert [z["kind"] for z in mine] == ["nogo", "ignore", "slow"]

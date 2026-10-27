@@ -105,7 +105,7 @@ def test_总览_版本信息_构建信息_数量_缩略图_只有管理员能看
     assert v8["size_bytes"] > 1000 and v8["thumbnail"].endswith("/8/preview.png")
     assert v8["counts"] == {"zones": 0, "nogo": 0, "slow": 0, "zones_rev": 0,
                             "zones_confirmed": False, "standby": 0, "intercepts": 0}
-    assert v7["loaded_on"] == ["A"], "狗开机加载的是 7"
+    assert v7["loaded_on"] == ["A"], "机器人开机加载的是 7"
     (r,) = d["robots"]
     assert r["robot_id"] == "A" and r["loaded"] == {"map_id": MAP[0], "version": "7"}
     assert r["online"] and r["activation"] is None and r["rollback"] is None
@@ -140,7 +140,7 @@ def test_发布_每只狗一个结果_禁行区没确认拒_确认后狗换上_�
     assert code == 200
     by = {r["robot_id"]: r for r in d["results"]}
     assert by["A"]["state"] == "refused" and by["A"]["code"] == "zones_unconfirmed", by
-    assert by["ghost"]["state"] == "refused" and "没有这台狗" in by["ghost"]["reason"]
+    assert by["ghost"]["state"] == "refused" and "没有这台机器人" in by["ghost"]["reason"]
     _確认(s, alice, "8")
     code, d = _publish(s, alice, "8", ("A", "ghost"))
     by = {r["robot_id"]: r for r in d["results"]}
@@ -183,7 +183,7 @@ def test_回退_狗本地留着上一张_不向站点下载一个字节(站点, 
     assert code == 200 and d["result"]["ok"] and d["target"]["local"] is True, d
     _wait_loaded(s, "8")
     _等(lambda: _rc(s).get("previous") == [MAP[0], "9"])
-    assert reads == [], "回退用狗本地留着的那张:站点没被要过任何文件"
+    assert reads == [], "回退用机器人本地留着的那张:站点没被要过任何文件"
     row = s.db.query("SELECT target, detail FROM audit WHERE action LIKE '%/rollback' "
                      "ORDER BY id DESC LIMIT 1")[0]
     assert row["target"] == "A" and f"{MAP[0]}:8" in row["detail"]

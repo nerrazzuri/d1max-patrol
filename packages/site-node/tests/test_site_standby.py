@@ -156,7 +156,7 @@ async def test_任务失败_不自动回_哪怕狗此刻看起来就绪(站, mon
     await t.run(200)
     kinds = [e["kind"] for e in reversed(t.site.recent_events("A", 100))]
     assert "task_failed" in kinds, kinds
-    assert t.site.dispatchable("A", "goto") == "", "狗看起来是就绪的"
+    assert t.site.dispatchable("A", "goto") == "", "机器人看起来是就绪的"
     assert len(_cmds(t, "goto")) == 1
 
 
@@ -595,7 +595,7 @@ async def test_W14_随机路线_会规划的狗打乱_狗收到的是固定顺�
         assert r["ack"]["result"] in ("accepted", "rejected"), r
         m = _cmds(t, "patrol")[-1]["payload"]["mission"]
         assert sorted(w["name"] for w in m["waypoints"]) == [f"p{i}" for i in range(6)]
-        assert "order" not in m["policy"], "狗收到的是固定顺序(老代理不受影响)"
+        assert "order" not in m["policy"], "机器人收到的是固定顺序(老代理不受影响)"
         orders.add(tuple(w["name"] for w in m["waypoints"]))
         await t.run(20)
         cur = t.site.busy("A")

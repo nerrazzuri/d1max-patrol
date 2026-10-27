@@ -13,9 +13,9 @@ const _allowed = <String, List<String>>{
   'lib/ui/site_list.dart': ["Text('中文')"],
   'lib/ui/site_deter.dart': ["Text('中文')"],
   // 跟站点回的报错原文对：剥掉开头那几个字
-  'lib/ui/site_robot.dart': [r"RegExp(r'^狗没标[:：]')"],
-  'lib/ui/site_standby.dart': [r"RegExp(r'^狗没标[:：]')"],
-  'lib/ui/site_intercepts.dart': [r"RegExp(r'^狗没标[:：]')"],
+  'lib/ui/site_robot.dart': [r"RegExp(r'^机器人没标[:：]')"],
+  'lib/ui/site_standby.dart': [r"RegExp(r'^机器人没标[:：]')"],
+  'lib/ui/site_intercepts.dart': [r"RegExp(r'^机器人没标[:：]')"],
   // 存到站点上的区域名字（数据，不是界面文字）；显示的时候另外翻（zoneLabelText）
   'lib/ui/site_mapping.dart': [
     "'nogo' => '禁行区', 'erase' => '抹掉区', 'wall' => '虚拟墙', _ => '限速区'",
@@ -149,7 +149,7 @@ void main() {
     expect(scan("final a = tr(\n  'A',\n  '甲'\n      '乙');\nfinal b = '丙';").single.$1, 5);
     expect(scan("Text(str('停'))").single.$2, contains('不在 tr()'), reason: 'str( 不是 tr(');
     expect(scan("x.tr('停', '停')").length, 1, reason: '别人的 .tr 方法不算');
-    expect(scan(r"final r = RegExp(r'^狗\$');").single.$2, contains('不在 tr()'));
+    expect(scan(r"final r = RegExp(r'^机器人\$');").single.$2, contains('不在 tr()'));
     expect(scan("final a = '''多行\n中文''';").map((e) => e.$1), [1, 2], reason: '三引号的多行字符串，行号跟着走');
     expect(scan("/* 块注释\n中文 */ final a = 1;"), isEmpty);
   });

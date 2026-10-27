@@ -541,7 +541,7 @@ def test_记忆_按收到时刻减延迟配位姿():
     v.note_odom(0.2, 0.0, 0.0)
     v.on_grid(_grid(cells_occ=[(15, 10)]))           # 这一帧是 0.0 那一刻扫的:x = 0.55
     hit, _ = v.lookup([(0.35, 0.05)], (0.2, 0.0, 0.0))
-    assert hit == [0], "挡在里程 0.55 处,狗现在在 0.2:离狗 0.35"
+    assert hit == [0], "挡在里程 0.55 处,机器人现在在 0.2:离机器人 0.35"
 
 
 def test_记忆_新的说空_旧的说挡_还有别的点没查完也不被旧的盖掉():
@@ -613,7 +613,7 @@ async def test_狗尾为前_后雷达标过_狗尾对着路倒着走_路上箱�
         await t.一拍()
         vxs.append(t.r.speed[0])
     assert min(vxs) < -0.1 and max(vxs) <= 1e-9, "倒着走(机身系往后)"
-    assert abs(math.remainder(t.r.yaw - math.pi, 2 * math.pi)) < 0.2, "不掉头:狗尾对着路"
+    assert abs(math.remainder(t.r.yaw - math.pi, 2 * math.pi)) < 0.2, "不掉头:机器人尾对着路"
     t.world.dyn["box"] = (5.0, 3.5, 5.6, 4.5)
     await t.跑(80.0)
     assert not t.crashed
@@ -639,10 +639,10 @@ async def test_狗尾为前_第二层单独也停得住_狗尾那头的许可(tm
     await t.start(1.5, 4.0, yaw=math.pi)
     await t.nav.goto(Pose.from_xy_yaw(10.0, 4.0, math.pi))
     await t.跑(2.0)
-    assert t.r.x > 1.6, "有狗尾的许可:走得动"
+    assert t.r.x > 1.6, "有机器人尾的许可:走得动"
     t.world.dyn["box"] = (5.0, 3.0, 5.6, 5.0)
     await t.跑(15.0)
-    assert not t.crashed, "第一层关了,狗尾那头的许可门照样挡"
+    assert not t.crashed, "第一层关了,机器人尾那头的许可门照样挡"
     assert t.r.x < 5.0 - 0.465
 
 

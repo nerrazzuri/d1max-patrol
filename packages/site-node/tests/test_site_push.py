@@ -57,10 +57,10 @@ def _队(db):
 
 def test_P1新起排一条_同一条再来不重排_升档再排一条_P2不排(台):
     desk, p, j, clock, db = 台
-    desk.raise_alert(kind="dog_sees_person", robot="A", title="狗看见人了:2 个人")
-    desk.raise_alert(kind="dog_sees_person", robot="A", title="狗看见人了:2 个人")
-    desk.raise_alert(kind="evidence_plain", robot="A", title="狗上没加密")
-    assert [(r["tier"], r["title"]) for r in _队(db)] == [(0, "狗看见人了:2 个人")]
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了:2 个人")
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了:2 个人")
+    desk.raise_alert(kind="evidence_plain", robot="A", title="机器人上没加密")
+    assert [(r["tier"], r["title"]) for r in _队(db)] == [(0, "机器人看见人了:2 个人")]
     clock[0] += 3 * 60_000
     desk.escalate()
     assert [r["tier"] for r in _队(db)] == [0, 1], "没人确认、升档:再推一次"
@@ -68,11 +68,11 @@ def test_P1新起排一条_同一条再来不重排_升档再排一条_P2不排(
 
 def test_只推标题给登记了的手机_停用账号不推(台):
     desk, p, j, clock, db = 台
-    desk.raise_alert(kind="dog_sees_person", robot="A", title="狗看见人了",
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了",
                      context={"pose": {"x": 3.0, "y": 4.0}})
     p.tick()
     [(reg, title, body, extras)] = j.sent
-    assert reg == ["rid-gina"] and title == "翠湖庄园 · P1" and body == "狗看见人了"
+    assert reg == ["rid-gina"] and title == "翠湖庄园 · P1" and body == "机器人看见人了"
     assert set(extras) == {"alert_key", "tier"}, "不带照片、位置"
     assert _队(db)[0]["sent_ms"] == NOW
     p.tick()
@@ -85,7 +85,7 @@ def test_已经确认或解决的不推_一小时没发出去作废_没有手机
     desk.ack(a.key, who="gina")
     p.tick()
     assert not j.sent and "确认" in _队(db)[0]["dropped"]
-    desk.raise_alert(kind="force_flipped", robot="B", title="狗翻倒了")
+    desk.raise_alert(kind="force_flipped", robot="B", title="机器人翻倒了")
     j.fail = "没外网"
     p.tick()
     clock[0] += 3601_000
@@ -141,13 +141,13 @@ def test_极光报文_鉴权_出错抛PushError():
         seen["req"], seen["timeout"] = req, timeout
         return 回(b'{"sendno":"0","msg_id":"123"}')
     jp = JPush("key1", "sec1", opener=开)
-    assert jp.send(["r1"], "站 · P1", "狗翻倒了", {"alert_key": "k"}) == "123"
+    assert jp.send(["r1"], "站 · P1", "机器人翻倒了", {"alert_key": "k"}) == "123"
     req = seen["req"]
     assert req.get_header("Authorization") == "Basic " + base64.b64encode(b"key1:sec1").decode()
     body = json.loads(req.data)
     assert body["audience"] == {"registration_id": ["r1"]}
     assert body["notification"]["android"]["title"] == "站 · P1"
-    assert body["notification"]["android"]["alert"] == "狗翻倒了"
+    assert body["notification"]["android"]["alert"] == "机器人翻倒了"
 
     def 坏(req, timeout):
         raise urllib.error.URLError("没网")
@@ -513,7 +513,7 @@ def test_H9_FCM_报文_鉴权换一次令牌反复用_快到期再换():
     signed = []
     f = Fcm("p", "svc@p.iam", "KEY", opener=opener, now_s=lambda: clock[0],
             signer=lambda key, data: signed.append((key, data)) or b"SIG")
-    assert f.send(["t1", "t2"], "站 · P1", "狗翻倒了", {"alert_key": "A/x#1", "tier": "2"}) \
+    assert f.send(["t1", "t2"], "站 · P1", "机器人翻倒了", {"alert_key": "A/x#1", "tier": "2"}) \
         == "projects/p/messages/9"
     assert [("oauth" in c.full_url) for c in calls] == [True, False, False], "令牌只换一次"
     key, signing = signed[0]
@@ -526,7 +526,7 @@ def test_H9_FCM_报文_鉴权换一次令牌反复用_快到期再换():
     msg = json.loads(calls[1].data)["message"]
     assert calls[1].full_url == "https://fcm.googleapis.com/v1/projects/p/messages:send"
     assert calls[1].get_header("Authorization") == "Bearer tok1"
-    assert msg["token"] == "t1" and msg["notification"] == {"title": "站 · P1", "body": "狗翻倒了"}
+    assert msg["token"] == "t1" and msg["notification"] == {"title": "站 · P1", "body": "机器人翻倒了"}
     assert msg["data"] == {"alert_key": "A/x#1", "tier": "2"}
     assert msg["android"]["priority"] == "HIGH" and msg["android"]["ttl"] == "3600s"
     assert msg["android"]["notification"]["tag"] == collapse_id("A/x#1", 2), "重发盖掉原来那条,不叠"

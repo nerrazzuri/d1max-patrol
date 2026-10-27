@@ -331,4 +331,4 @@ def _block_text(z: Zone | None, slowed: bool) -> str:
 
 
 def _inside_text(z: Zone | None) -> str:
-    return f"狗在硬禁区{_name(z)}边上或里面:只许往外开"
+    return f"机器人在硬禁区{_name(z)}边上或里面:只许往外开"

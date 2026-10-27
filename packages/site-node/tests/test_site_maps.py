@@ -87,7 +87,7 @@ def test_站点没让它建的图不收_版本撞了或文件对不上永远不�
                   "issued_at, priority, ack_result) VALUES ('c2','t2','B','map_build',?, 'alice',"
                   " 2, 0, 'rejected')",
                   (json.dumps({"bag": "b", "map_id": "estate-1", "version": "11"}),))
-    assert not cat.build_in_flight("estate-1", "11"), "狗没接的那次不算在建"
+    assert not cat.build_in_flight("estate-1", "11"), "机器人没接的那次不算在建"
     cat.put_map_chunk("A", "estate-1/9", "estate-1.pgm", offset=0, data=b"P5 bad",
                       total=len(b"P5 bad"))                   # 大小一样、内容不对
     with pytest.raises(PathRefused):

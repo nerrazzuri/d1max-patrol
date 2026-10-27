@@ -268,7 +268,7 @@ async def test_派单被拒的那条不吸收后续事件(站, monkeypatch):
         calls["n"] += 1
         if calls["n"] == 1:
             from d1max_site.dispatcher import DispatchRefused
-            raise DispatchRefused("模拟:狗不收")
+            raise DispatchRefused("模拟:机器人不收")
         return await real(*a, **k)
 
     monkeypatch.setattr(t.site, "goto", 第一次被拒)
@@ -464,7 +464,7 @@ async def test_收尾时收掉还在等回执的提升派单(站, monkeypatch):
     assert pending.cancelled() and not t.desk._followups
     rows = {r["event_id"]: r for r in t.desk.list()}
     assert rows["e2"]["outcome"] == "dispatch_failed" and "收尾" in rows["e2"]["note"], \
-        "被取消的派单不许一直挂在 dispatching(会占住狗与防区)"
+        "被取消的派单不许一直挂在 dispatching(会占住机器人与防区)"
 
 
 def test_站点重启_遗留的dispatching落成失败_不占住狗和防区(tmp_path):
@@ -544,7 +544,7 @@ async def test_W16_入侵没狗去_报P1没狗去_防区合在标题里(带告�
     assert r2["outcome"] == "unmapped"
     [a] = _开着的(t)
     assert a["kind"] == "intrusion_unanswered" and a["level"] == "P1" and a["robot"] == "site"
-    assert "back-yard" in a["title"] and "pond" in a["title"] and "没狗去" in a["title"]
+    assert "back-yard" in a["title"] and "pond" in a["title"] and "没机器人去" in a["title"]
 
 
 async def test_W16_重复的_不认的类型_不报(站):
@@ -793,7 +793,7 @@ async def test_W17_狗报能拍_派去拦截的goto带photo_不报就不带(站)
     t = 站
     await t.run(12)
     await _报(t, "e1")
-    assert "photo" not in _gotos(t)[0]["payload"], "狗没报 goto_photo(老代理、真狗还没取流)"
+    assert "photo" not in _gotos(t)[0]["payload"], "机器人没报 goto_photo(老代理、真机器人还没取流)"
     await t.run(200)
     t.agent.parts.engine._media = sim_media(t.clock)     # 给这只仿真狗装上相机、重报能力
     await t.agent._publish_caps()

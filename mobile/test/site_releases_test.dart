@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'site_page_test.dart' show FakeApi;
 
 void main() {
-  testWidgets('每台狗在跑哪一版；管理员装一版、切过去（要确认）、退回', (t) async {
+  testWidgets('每台机器人在跑哪一版；管理员装一版、切过去（要确认）、退回', (t) async {
     final api = FakeApi('admin');
     await t.pumpWidget(MaterialApp(home: SiteReleasesPage(api: api)));
     await t.pumpAndSettle();
@@ -51,7 +51,7 @@ void main() {
     expect(disk < busy, isTrue, reason: '拦住的排在过了的前面');
   });
 
-  testWidgets('切被狗拒：把回执里的清单摆出来', (t) async {
+  testWidgets('切被机器人拒：把回执里的清单摆出来', (t) async {
     final api = _PrecheckApi();
     await t.pumpWidget(MaterialApp(home: SiteReleasesPage(api: api)));
     await t.pumpAndSettle();
@@ -65,7 +65,7 @@ void main() {
     expect(find.text('双槽所在的盘不够'), findsOneWidget);
   });
 
-  testWidgets('狗没报在跑哪一版（不支持或不在线）：没有装切退按钮', (t) async {
+  testWidgets('机器人没报在跑哪一版（不支持或不在线）：没有装切退按钮', (t) async {
     final api = _TwoDogsApi();
     await t.pumpWidget(MaterialApp(home: SiteReleasesPage(api: api)));
     await t.pumpAndSettle();

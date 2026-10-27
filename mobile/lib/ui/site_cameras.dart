@@ -102,7 +102,7 @@ class _SiteCamerasPageState extends State<SiteCamerasPage> {
                         tr(
                             'No cameras yet. Register one on the site host with d1max-site camera-add (the '
                                 'camera reports its own intrusion detection to the site, which sends a robot)',
-                            '还没有摄像头：在站点主机上 d1max-site camera-add 登记（摄像头自带的入侵检测报到站点，派狗去）'),
+                            '还没有摄像头：在站点主机上 d1max-site camera-add 登记（摄像头自带的入侵检测报到站点，派机器人去）'),
                         style: NwText.bodyMedium.copyWith(color: nw.textSecondary))),
               if (_rows.isNotEmpty)
                 NwListCard(children: [

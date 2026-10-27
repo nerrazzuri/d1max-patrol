@@ -155,7 +155,7 @@ class RtcmRelay:
             self._publish(b"".join(frames))
         except Exception:
             # 发不出去这一批就丢了(过时的改正没用)
-            log.exception("改正数据发给狗没成")
+            log.exception("改正数据发给机器人没成")
 
     def stats(self) -> dict[str, Any]:
         with self._lock:

@@ -591,7 +591,7 @@ def test_叫停之后站点不再派它_人点恢复才派_业主能停不能恢
     assert v["held"] is not None and v["held"]["by"] == "olga"
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
     assert code == 409 and "叫停" in d["error"]
-    assert "叫停" in s.disp.dispatchable("A", "patrol"), "排程、事件派遣选狗时也跳过它"
+    assert "叫停" in s.disp.dispatchable("A", "patrol"), "排程、事件派遣选机器人时也跳过它"
     from d1max_site.dispatcher import DispatchRefused
 
     async def 开遥控():
@@ -624,11 +624,11 @@ def test_W33_只许手动派_设成要dispatch_接自动要manage_手动派照�
         "保安不能开(管理员确认)"
     s.reg.set_manual_only("A", False, by="t", now_ms=0)
     assert s.req("POST", "/api/robots/A/service", {"manual_only": "yes"}, token=alice)[0] == 400
-    code, d = s.req("POST", "/api/robots/A/service", {"manual_only": True, "note": "测试狗"},
+    code, d = s.req("POST", "/api/robots/A/service", {"manual_only": True, "note": "测试机器人"},
                     token=alice)
     assert code == 200 and d["manual_only"]["by"] == "alice" and d["was_manual_only"] is False
     v = s.req("GET", "/api/robots/A", token=alice)[1]
-    assert v["manual_only"]["note"] == "测试狗"
+    assert v["manual_only"]["note"] == "测试机器人"
     code, d = s.req("POST", "/api/robots/A/goto", {"target": target(1.0)}, token=alice)
     assert code == 200 and d["ack"]["result"] == "accepted", "人手动派的照收"
     assert s.req("POST", "/api/robots/Z/service", {"manual_only": True}, token=alice)[0] == 404

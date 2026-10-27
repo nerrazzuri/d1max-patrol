@@ -115,7 +115,7 @@ def test_标记_同一条同一档永远一样_不同告警不同档都不一样
 def test_FCM报文_带tag_不带collapse_key():
     net = _网()
     f = _通道(net)["fcm"]
-    f.send(["t1", "t2"], "站 · P1", "狗看见人了", {"alert_key": "A/x#1", "tier": "2"})
+    f.send(["t1", "t2"], "站 · P1", "机器人看见人了", {"alert_key": "A/x#1", "tier": "2"})
     tags = [_fcm键(m) for m in net.fcm]
     assert tags == [collapse_id("A/x#1", 2)] * 2
     assert all("collapse_key" not in m["android"] for m in net.fcm), \
@@ -125,7 +125,7 @@ def test_FCM报文_带tag_不带collapse_key():
 
 def test_极光报文_带apns_collapse_id和厂商notify_id():
     net = _网()
-    _通道(net)["jpush"].send(["r1"], "站 · P1", "狗看见人了", {"alert_key": "A/x#1", "tier": "0"})
+    _通道(net)["jpush"].send(["r1"], "站 · P1", "机器人看见人了", {"alert_key": "A/x#1", "tier": "0"})
     apns, ids = _极光键(net.jpush[0])
     assert apns == collapse_id("A/x#1", 0)
     assert ids == dict.fromkeys(JPUSH_NOTIFY_ID_VENDORS, vendor_notify_id("A/x#1", 0))
@@ -136,7 +136,7 @@ def test_回执丢了重发_两遍的标记一样_手机上盖掉不叠(tmp_path
     net = _网()
     net.lose = {"fcm-1", "jp-2"}
     desk, p, clock, db = _台(tmp_path, net)
-    desk.raise_alert(kind="dog_sees_person", robot="A", title="狗看见人了")
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了")
     p.tick()
     net.lose.clear()
     clock[0] += 61_000                             # 退避以后、时间变了:标记不能跟着时间变
@@ -152,7 +152,7 @@ def test_发出去了_记账之前站点崩了_重启再发_标记一样(tmp_pat
     再发一遍 —— 手机会收到两遍,通知栏里要只剩一条。"""
     net = _网()
     desk, p, clock, db = _台(tmp_path, net)
-    desk.raise_alert(kind="dog_sees_person", robot="A", title="狗看见人了")
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了")
     p.tick()
     with db.tx() as c:                             # 断电:记账那一步没落盘
         c.execute("DELETE FROM push_sent")
@@ -170,8 +170,8 @@ def test_发出去了_记账之前站点崩了_重启再发_标记一样(tmp_pat
 def test_不同的告警_各自一条_升档也另起一条(tmp_path):
     net = _网()
     desk, p, clock, db = _台(tmp_path, net)
-    desk.raise_alert(kind="dog_sees_person", robot="A", title="狗看见人了")
-    desk.raise_alert(kind="dog_sees_person", robot="B", title="狗看见人了")
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了")
+    desk.raise_alert(kind="dog_sees_person", robot="B", title="机器人看见人了")
     p.tick()
     clock[0] += 3 * 60_000
     desk.escalate()
@@ -253,7 +253,7 @@ def _极光400台(tmp_path, change):
     p = PushDesk(db, now_ms=lambda: clock[0], senders={"jpush": JPush("k", "s", opener=opener)})
     p.alerts = desk
     p.register("u", "jp-1", "android", session="s", provider="jpush")
-    desk.raise_alert(kind="dog_sees_person", robot="A", title="狗看见人了")
+    desk.raise_alert(kind="dog_sees_person", robot="A", title="机器人看见人了")
     return p, db, calls
 
 

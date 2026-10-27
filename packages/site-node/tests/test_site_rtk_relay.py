@@ -132,9 +132,9 @@ async def test_派遣器_改正只发给在线新鲜的狗_QoS0不保留(tmp_pat
             heard.append((topic, payload, qos, retain))
             return await real(topic, payload, qos=qos, retain=retain)
         t.site._t.publish = 听
-        assert await t.site.publish_rtcm(b"x") == 0, "狗没报 rtk.source == own:不发"
+        assert await t.site.publish_rtcm(b"x") == 0, "机器人没报 rtk.source == own:不发"
         t.site.clients["A"].capabilities.tasks["rtk"] = {"source": "vendor"}
-        assert await t.site.publish_rtcm(b"x") == 0, "厂家模式的狗不用我们的改正"
+        assert await t.site.publish_rtcm(b"x") == 0, "厂家模式的机器人不用我们的改正"
         t.site.clients["A"].capabilities.tasks["rtk"] = {"source": "own"}
         n = await t.site.publish_rtcm(b"\xd3rtcm")
         assert n == 1 and heard == [("site/estate-1/robot/A/rtcm", b"\xd3rtcm", 0, False)]

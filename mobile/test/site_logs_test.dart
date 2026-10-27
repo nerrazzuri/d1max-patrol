@@ -26,7 +26,7 @@ Map<String, dynamic> _view({bool can = true}) {
 }
 
 void main() {
-  testWidgets('管理员：单狗页 →「建图日志」→ 列表 → 点开看尾巴 → 刷新再取一次', (t) async {
+  testWidgets('管理员：单机器人页 →「建图日志」→ 列表 → 点开看尾巴 → 刷新再取一次', (t) async {
     final api = FakeApi('admin', robotView: _view());
     await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
     await t.pumpAndSettle();
@@ -49,7 +49,7 @@ void main() {
     expect(api.calls.where((c) => c == 'procLog A slam').length, n + 1);
   });
 
-  testWidgets('保安、狗不支持：没有入口', (t) async {
+  testWidgets('保安、机器人不支持：没有入口', (t) async {
     await t.pumpWidget(MaterialApp(
         home: SiteRobotPage(api: FakeApi('guard', robotView: _view()), robotId: 'A')));
     await t.pumpAndSettle();
@@ -66,7 +66,7 @@ void main() {
     await t.pumpWidget(MaterialApp(home: SiteProcLogsPage(api: api, robotId: 'A')));
     await t.pumpAndSettle();
     expect(find.textContaining('还没有日志'), findsOneWidget);
-    api.procLogError = const SiteError(404, '狗没给:no_such_log');
+    api.procLogError = const SiteError(404, '机器人没给:no_such_log');
     await t.pumpWidget(MaterialApp(
         home: SiteProcLogPage(key: UniqueKey(), api: api, robotId: 'A', name: 'slam')));
     await t.pumpAndSettle();

@@ -37,7 +37,7 @@ Widget _fleet(List<Map<String, dynamic>> robots, Future<Map<String, dynamic>> Fu
 num? _batteryOf(WidgetTester t, String id) => t.widget<NwDogCard>(find.byKey(Key('robot-$id'))).battery;
 
 void main() {
-  testWidgets('汇总里有电量：贴到对应的狗卡上；汇总里是「不知道」的那只不写数', (t) async {
+  testWidgets('汇总里有电量：贴到对应的机器人卡上；汇总里是「不知道」的那只不写数', (t) async {
     await t.pumpWidget(_fleet([_robot('A'), _robot('B')], () async => _summary({'A': 82, 'B': null})));
     expect(_batteryOf(t, 'A'), isNull, reason: '还没读到：不写数');
     await t.pump();
@@ -97,7 +97,7 @@ void main() {
     expect(n, 1);
   });
 
-  testWidgets('狗的视图自己带了电量：用它自己的，不用汇总的', (t) async {
+  testWidgets('机器人的视图自己带了电量：用它自己的，不用汇总的', (t) async {
     final r = {..._robot('A'), 'battery_pct': 15};
     await t.pumpWidget(_fleet([r], () async => _summary({'A': 82})));
     await t.pump();

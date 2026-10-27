@@ -78,7 +78,7 @@ async def test_电量够_不去充_狗忙着不去充(站):
     await t.send(t.site.goto("A", target(-3.0), 0.5, issued_by="alice", priority=60))
     await _跑(t, 3)
     charge = [c for c in _cmds(t, "goto") if c["task_id"].startswith("charge-")]
-    assert all(c["ack_result"] == "rejected" for c in charge), "狗在跑人派的任务:去充也被拒"
+    assert all(c["ack_result"] == "rejected" for c in charge), "机器人在跑人派的任务:去充也被拒"
     assert t.dog.x < -0.1, "人派的那一趟照走"
     assert not t.charge.view()["cycles"], "没派成:不记这一轮"
 

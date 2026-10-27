@@ -178,7 +178,7 @@ class _SiteWeatherPageState extends State<SiteWeatherPage> {
               tr(
                   'Thunderstorm: scheduled patrols pause and robots return to standby; an intrusion '
                       'still sends a robot. Rain and thunderstorm: all robots limited to 0.3 m/s.',
-                  '雷暴：排程巡检暂停、狗回待命点，有入侵照样派狗。下雨、雷暴：全狗限速 0.3 m/s。'),
+                  '雷暴：排程巡检暂停、机器人回待命点，有入侵照样派机器人。下雨、雷暴：全机器人限速 0.3 m/s。'),
               style: NwText.bodySmall.copyWith(color: nw.textSecondary)),
           nwGap16,
           Wrap(spacing: Nw.s8, runSpacing: Nw.s4, crossAxisAlignment: WrapCrossAlignment.center, children: [

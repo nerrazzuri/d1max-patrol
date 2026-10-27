@@ -275,7 +275,7 @@ class _NwFleetState extends State<NwFleet> {
         Padding(
             key: NwFleet.emptyKey,
             padding: const EdgeInsets.all(Nw.s16),
-            child: Text(tr('No robots match this filter', '没有符合这一格的狗'),
+            child: Text(tr('No robots match this filter', '没有符合这一格的机器人'),
                 textAlign: TextAlign.center, style: NwText.bodyMedium.copyWith(color: c.textSecondary))),
       for (final r in shown)
         Padding(

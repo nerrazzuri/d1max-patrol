@@ -430,7 +430,7 @@ def test_去向对应的告警与级别(告警, outcome, kind, level):
 def test_没派给哪只狗_报在站点名下(告警):
     from d1max_site.alert_sources import SITE
     desk, src = 告警
-    src.on_schedule_outcome("nightly", None, "ambiguous", "能派的狗不止一台")
+    src.on_schedule_outcome("nightly", None, "ambiguous", "能派的机器人不止一台")
     [a] = desk.book.all()
     assert a.robot == SITE
 

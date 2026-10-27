@@ -27,7 +27,7 @@ Future<void> _show(WidgetTester t, Size size, Widget page) async {
 void main() {
   for (final size in _sizes) {
     final label = '${size.width.toInt()}×${size.height.toInt()}';
-    testWidgets('桌面 $label 不溢出：狗列表、单狗页、地图、排程、待命点', (t) async {
+    testWidgets('桌面 $label 不溢出：机器人列表、单机器人页、地图、排程、待命点', (t) async {
       await _show(t, size, SiteRobotsPage(api: FakeApi('admin'), title: '庄园'));
       await _show(t, size, SiteRobotPage(api: FakeApi('admin', robotView: busyView()), robotId: 'A'));
       await _show(t, size, SiteMapsPage(api: FakeApi('admin')));
@@ -39,7 +39,7 @@ void main() {
       await _show(t, size, SiteWatchPage(api: FakeApi('guard')));
       final a = t.getRect(find.byKey(SiteWatchPage.alertsColumnKey));
       final r = t.getRect(find.byKey(SiteWatchPage.robotsColumnKey));
-      expect(a.right, lessThanOrEqualTo(r.left + 1), reason: '告警在左、每台狗在右');
+      expect(a.right, lessThanOrEqualTo(r.left + 1), reason: '告警在左、每台机器人在右');
     });
 
     testWidgets('桌面 $label 不溢出：遥控', (t) async {

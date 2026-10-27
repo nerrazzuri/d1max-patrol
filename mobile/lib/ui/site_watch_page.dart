@@ -349,7 +349,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       if (all > 0)
         NwHealthChip(
             icon: up == all ? Icons.check_circle_rounded : Icons.wifi_off_rounded,
-            label: tr('Robots online $up/$all', '狗在线 $up/$all'),
+            label: tr('Robots online $up/$all', '机器人在线 $up/$all'),
             bad: up < all),
       if (s.scheduleOk != null)
         NwHealthChip(
@@ -433,7 +433,7 @@ class _SiteWatchPageState extends State<SiteWatchPage> {
       ],
     ];
     final robots = <Widget>[
-      NwSectionLabel(tr('Robots', '每台狗')),
+      NwSectionLabel(tr('Robots', '每台机器人')),
       gap8,
       if (_summaryError != null)
         KeyedSubtree(

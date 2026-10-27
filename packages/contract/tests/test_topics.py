@@ -47,7 +47,7 @@ def test_acl_只许发自己的六个主题():
     acl = TopicAcl(T)
     for ok in (T.capabilities, T.status, T.ack, T.event, T.reconcile, T.telemetry):
         assert acl.may_publish(ok), ok
-    assert not acl.may_publish(T.cmd), "狗不许给自己(或别人)下命令"
+    assert not acl.may_publish(T.cmd), "机器人不许给自己(或别人)下命令"
     other = Topics(site_id="penang-1", robot_id="D1MAX-OTHER")
     for bad in (other.status, other.ack, other.event, other.cmd, "site/penang-1/robot/+/status",
                 "site/penang-2/robot/D1MAX-C40011/status"):

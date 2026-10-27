@@ -83,7 +83,7 @@ describe("录像页:「留着」的回包只动问的那一段(外审 I1)", () =
 
   // 换了之后页面该是什么样:换狗、换一天 = 没在放;换前后 = 接着同一刻放另一路(那一路自己的段 3)
   const switches: [string, (c: Element, q: (t: string) => HTMLElement) => void, number | null, string | null][] = [
-    ["换成 B 狗", (c) => fireEvent.change(c.querySelector("select")!, { target: { value: "B" } }), null, null],
+    ["换成 B 机器人", (c) => fireEvent.change(c.querySelector("select")!, { target: { value: "B" } }), null, null],
     ["换成后摄像头", (_c, q) => fireEvent.click(q("Back")), 3, "A Back"],
     ["换一天", (c) => fireEvent.change(c.querySelector('input[type="date"]')!, { target: { value: "2026-10-10" } }), null, null],
   ];
@@ -278,7 +278,7 @@ describe("报表页:导出、打印的只能是现在选的这一段的那一份
   });
 });
 
-describe("管理页的狗:在线跟值守页一个口径(站点说新鲜才算)", () => {
+describe("管理页的机器人:在线跟值守页一个口径(站点说新鲜才算)", () => {
   const robot = (fresh: boolean | undefined) => ({
     robot_id: "A", revoked: false, expires_at: 0, manual_only: false,
     status: { online: true }, capabilities: { agent: "1.0" }, ...(fresh === undefined ? {} : { fresh }),
@@ -296,14 +296,14 @@ describe("管理页的狗:在线跟值守页一个口径(站点说新鲜才算)"
     return r;
   };
 
-  it("狗说在线、站点说新鲜:在线(绿)", async () => {
+  it("机器人说在线、站点说新鲜:在线(绿)", async () => {
     const r = await page(true);
     const cell = r.getByText("Online");
     expect(cell.className).toContain("tone-success");
   });
 
   for (const fresh of [false, undefined]) {
-    it(`狗最后说在线、站点说不新鲜(fresh=${fresh}):写离线,不是绿的`, async () => {
+    it(`机器人最后说在线、站点说不新鲜(fresh=${fresh}):写离线,不是绿的`, async () => {
       const r = await page(fresh);
       expect(r.queryByText("Online")).toBeNull();
       expect(r.container.querySelector(".tone-success")?.textContent ?? "").not.toBe("Online");

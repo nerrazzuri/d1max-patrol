@@ -41,7 +41,7 @@ Future<void> _robotPage(WidgetTester t, FakeApi api) async {
 }
 
 void main() {
-  testWidgets('单狗页：保安、狗报了上装才有入口；业主没有；狗没装没有', (t) async {
+  testWidgets('单机器人页：保安、机器人报了上装才有入口；业主没有；机器人没装没有', (t) async {
     await _robotPage(t, FakeApi('guard', robotView: _view()));
     expect(find.byKey(const Key('btn-deter')), findsOneWidget);
     await _robotPage(t, FakeApi('owner', robotView: _view()));
@@ -55,7 +55,7 @@ void main() {
     await _open(t, api);
     expect(find.byKey(const Key('deter-strobe')), findsOneWidget);
     expect(find.byKey(const Key('deter-siren')), findsOneWidget);
-    expect(find.byKey(const Key('deter-spotlight')), findsNothing, reason: '狗没接聚光灯');
+    expect(find.byKey(const Key('deter-spotlight')), findsNothing, reason: '机器人没接聚光灯');
     await t.tap(find.byKey(const Key('deter-on-siren')));
     await t.pumpAndSettle();
     expect(api.calls.last, 'deter A siren true 10.0');
@@ -84,13 +84,13 @@ void main() {
     expect(api.calls.last, 'deter A speaker false');
   });
 
-  testWidgets('狗没配 TTS：没有现打那一行', (t) async {
+  testWidgets('机器人没配 TTS：没有现打那一行', (t) async {
     await _open(t, FakeApi('guard'), caps: <String, dynamic>{..._caps, 'tts': false});
     expect(find.byKey(const Key('deter-tts')), findsNothing);
     expect(find.byKey(const Key('deter-play')), findsOneWidget);
   });
 
-  testWidgets('狗拒了说人话：喇叭忙、设备没回', (t) async {
+  testWidgets('机器人拒了说人话：喇叭忙、设备没回', (t) async {
     final api = FakeApi('guard')..deterAck = <String, dynamic>{'result': 'rejected', 'reason': 'busy'};
     await _open(t, api);
     await t.tap(find.byKey(const Key('deter-play')));
@@ -102,7 +102,7 @@ void main() {
     expect(find.textContaining('设备没做成：继电器板'), findsOneWidget);
   });
 
-  testWidgets('W40：狗报了左右灯、警灯颜色：多两行、颜色下拉框，开的时候带上', (t) async {
+  testWidgets('W40：机器人报了左右灯、警灯颜色：多两行、颜色下拉框，开的时候带上', (t) async {
     final api = FakeApi('guard');
     await _open(t, api, caps: <String, dynamic>{
       ..._caps,
@@ -123,7 +123,7 @@ void main() {
     expect(api.calls.last, 'deter A spotlight false side=right');
     await t.tap(find.byKey(const Key('deter-on-strobe')));
     await t.pumpAndSettle();
-    expect(api.calls.last, 'deter A strobe true 60.0 color=yellow', reason: '缺省颜色按狗报的');
+    expect(api.calls.last, 'deter A strobe true 60.0 color=yellow', reason: '缺省颜色按机器人报的');
     await t.tap(find.byKey(const Key('deter-color')));
     await t.pumpAndSettle();
     await t.tap(find.text('绿').last);
@@ -136,7 +136,7 @@ void main() {
     expect(api.calls.last, 'deter A strobe false', reason: '关不带颜色');
   });
 
-  testWidgets('W40：老狗没报左右、颜色：跟原来一样', (t) async {
+  testWidgets('W40：老机器人没报左右、颜色：跟原来一样', (t) async {
     final api = FakeApi('guard');
     await _open(t, api, caps: <String, dynamic>{..._caps, 'outputs': <String>['strobe', 'spotlight']});
     expect(find.byKey(const Key('deter-spotlight-left')), findsNothing);
@@ -146,7 +146,7 @@ void main() {
     expect(api.calls.last, 'deter A strobe true 60.0');
   });
 
-  testWidgets('W40：单狗页列设备健康，坏的排前面，过时了标出来', (t) async {
+  testWidgets('W40：单机器人页列设备健康，坏的排前面，过时了标出来', (t) async {
     final v = _view()
       ..['devices'] = <String, dynamic>{
         'items': <Map<String, dynamic>>[

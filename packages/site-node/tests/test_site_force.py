@@ -29,7 +29,7 @@ class 假派遣:
 
     async def deter(self, rid, payload, *, issued_by, priority):
         if self.fail:
-            raise OSError("狗没信儿")
+            raise OSError("机器人没信儿")
         self.sent.append(payload)
         return {"ack": {"result": "accepted"}}
 

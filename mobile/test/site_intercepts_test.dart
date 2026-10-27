@@ -38,7 +38,7 @@ void main() {
     expect(find.byKey(const Key('zone-remove-front-yard')), findsNothing);
   });
 
-  testWidgets('管理员：在狗这儿设拦截点（只有一只能报位置的狗就直接用它）', (t) async {
+  testWidgets('管理员：在机器人这儿设拦截点（只有一只能报位置的机器人就直接用它）', (t) async {
     final api = _api('admin');
     await _open(t, api);
     await t.tap(find.byKey(SiteInterceptsPage.hereKey));
@@ -50,8 +50,8 @@ void main() {
     expect(find.byKey(const Key('intercept-back')), findsOneWidget);
   });
 
-  testWidgets('管理员：狗拒了说原因', (t) async {
-    final api = _api('admin')..interceptError = const SiteError(409, '狗没标:moving');
+  testWidgets('管理员：机器人拒了说原因', (t) async {
+    final api = _api('admin')..interceptError = const SiteError(409, '机器人没标:moving');
     await _open(t, api);
     await t.tap(find.byKey(SiteInterceptsPage.hereKey));
     await t.pumpAndSettle();
@@ -109,8 +109,8 @@ void main() {
   });
 
   test('去向说人话', () {
-    expect(incidentOutcomeText('unreachable'), '拦截点走不到，没狗去');
-    expect(incidentOutcomeText('no_robot'), '没有能派的狗');
+    expect(incidentOutcomeText('unreachable'), '拦截点走不到，没机器人去');
+    expect(incidentOutcomeText('no_robot'), '没有能派的机器人');
     expect(incidentOutcomeText('dispatched'), '已出动');
     expect(incidentOutcomeText('weird'), 'weird');
   });

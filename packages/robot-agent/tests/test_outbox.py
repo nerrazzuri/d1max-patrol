@@ -78,7 +78,7 @@ def test_传完而且一趟结束了_狗上就删掉(箱):
     box, site, clock = 箱
     run = _一趟(box.root)
     _跑到空(box, clock, 5)
-    assert not run.exists(), "站点确认了、这一趟结束了:狗上不留"
+    assert not run.exists(), "站点确认了、这一趟结束了:机器人上不留"
     assert ("巡检一/" + STAMP, "photos/P1__front.jpg") in site.files
     assert ("巡检一/" + STAMP, "state.json") not in site.files, "state.json 不传"
     assert box.queue.all() == [], "删掉的一趟,队列里也不留"

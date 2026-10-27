@@ -59,7 +59,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
     return ack['result'] == 'accepted'
         ? ok
         : tr('The robot did not accept: ${ack['result']} ${ack['reason'] ?? ''}',
-            '狗没接：${ack['result']} ${ack['reason'] ?? ''}');
+            '机器人没接：${ack['result']} ${ack['reason'] ?? ''}');
   }
 
   /// 选一台**报了这种能力**的狗（没这能力的狗会回 unsupported）。一台都没有就说一声、返回 null。
@@ -68,18 +68,18 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
     try {
       robots = (await widget.api.robots()).where((r) => robotCan(r, task)).toList();
     } on SiteError catch (e) {
-      _snack(tr('Robot list unavailable: $e', '拿不到狗的列表：$e'));
+      _snack(tr('Robot list unavailable: $e', '拿不到机器人的列表：$e'));
       return null;
     }
     if (!mounted) return null;
     if (robots.isEmpty) {
       _snack(tr('No robot can $what (none is online reporting this capability, or it is not supported)',
-          '没有能$what的狗（狗没在线报能力，或者这台狗不支持）'));
+          '没有能$what的机器人（机器人没在线报能力，或者这台机器人不支持）'));
       return null;
     }
     return showDialog<String>(
       context: context,
-      builder: (c) => SimpleDialog(title: Text(tr('Send to which robot', '下发给哪台狗')), children: [
+      builder: (c) => SimpleDialog(title: Text(tr('Send to which robot', '下发给哪台机器人')), children: [
         for (final r in robots)
           SimpleDialogOption(
               key: Key('pick-${r['robot_id']}'),
@@ -102,7 +102,7 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
             'The robot downloads and verifies the map first, then switches coordinate frames once its '
                 'current task is done. It accepts no new tasks during the switch. '
                 'Task packages and standby points must be on this map.',
-            '狗先下载、核对，等手上的任务做完再切换坐标系；切换那一小会儿不接新任务。'
+            '机器人先下载、核对，等手上的任务做完再切换坐标系；切换那一小会儿不接新任务。'
                 '任务包、待命点要是这张图上的。')),
         actions: [
           TextButton(
@@ -131,8 +131,8 @@ class _SiteMapsPageState extends State<SiteMapsPage> {
                     '(without an origin there is no safe place to return to). Remote control and '
                     'set position still work. Drive the robot to the origin (in front of the dock), '
                     'set its position, then tap "Mark origin here".',
-                '照样下发的话，狗载上这张图之后不接 goto、巡检（没有原点就没有安全返航的目标）；'
-                    '遥控、设位置照常。要先把狗开到原点（充电桩前），设好位置，再点「在这儿标原点」。')),
+                '照样下发的话，机器人载上这张图之后不接 goto、巡检（没有原点就没有安全返航的目标）；'
+                    '遥控、设位置照常。要先把机器人开到原点（充电桩前），设好位置，再点「在这儿标原点」。')),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
@@ -542,7 +542,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
                 overline: tr('Map', '地图'),
                 title: v?.mapId == null ? tr('Estate map', '庄园地图') : v!.tag,
                 subtitle:
-                    v?.mapId == null ? null : tr('$onMap robot(s) on this map', '这张图上 $onMap 只狗'),
+                    v?.mapId == null ? null : tr('$onMap robot(s) on this map', '这张图上 $onMap 台机器人'),
                 trailing: [
                   IconButton(
                       key: SiteMapTab.refreshKey,
@@ -579,7 +579,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
           hint: tr(
               'An administrator records a mapping run from a robot\'s page, then builds a map from it '
                   'in the map list.',
-              '管理员在单狗页录一趟包，再到地图列表里拿它建图。'),
+              '管理员在单机器人页录一趟包，再到地图列表里拿它建图。'),
           action: NwButton(
               label: tr('Open map list', '去地图列表'),
               icon: Icons.layers_rounded,
@@ -657,7 +657,7 @@ class _SiteMapTabState extends State<SiteMapTab> {
                 height: 12,
                 decoration: BoxDecoration(
                     color: c.surface, shape: BoxShape.circle, border: Border.all(color: c.success, width: 2))),
-            label: tr('Robot', '狗')),
+            label: tr('Robot', '机器人')),
       if (standby.isNotEmpty)
         NwLegendItem(swatch: swatch(_standbyPaint, round: true), label: tr('Standby point', '待命点')),
       if (homes.isNotEmpty)
@@ -925,20 +925,20 @@ class _SiteMapTabState extends State<SiteMapTab> {
             top: side ? BorderSide.none : BorderSide(color: c.outline),
             left: side ? BorderSide(color: c.outline) : BorderSide.none),
         child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(Nw.s16), children: [
-          NwSectionLabel(tr('Robots on this map', '这张图上的狗')),
+          NwSectionLabel(tr('Robots on this map', '这张图上的机器人')),
           nwGap8,
           if (v.robotsError != null)
             NwNotice(
                 tone: NwTone.warning,
-                text: tr('Robot list unavailable: ${v.robotsError}', '拿不到狗的列表：${v.robotsError}'))
+                text: tr('Robot list unavailable: ${v.robotsError}', '拿不到机器人的列表：${v.robotsError}'))
           else if (rows.isEmpty)
-            Text(tr('No robots yet.', '还没有狗。'), style: sub)
+            Text(tr('No robots yet.', '还没有机器人。'), style: sub)
           else if (!rows.any(here))
             Padding(
                 padding: const EdgeInsets.only(bottom: Nw.s8),
                 child: Text(
                     tr('No robot is on this map. It is the newest map on the site.',
-                        '没有狗在这张图上。这是站点上最新的一张。'),
+                        '没有机器人在这张图上。这是站点上最新的一张。'),
                     style: sub)),
           for (final r in rows)
             Padding(

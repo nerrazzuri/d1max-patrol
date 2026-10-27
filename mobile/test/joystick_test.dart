@@ -151,7 +151,7 @@ void main() {
     await g.moveBy(const Offset(0, -5000));
     await t.pump();
     expect(out!.dy.abs(), lessThanOrEqualTo(1.0),
-        reason: '狗那头 [-1,1] 之外直接 400，越界的一拍等于白发');
+        reason: '机器人那头 [-1,1] 之外直接 400，越界的一拍等于白发');
     await g.up();
   });
 
@@ -200,7 +200,7 @@ void main() {
     expect(seen.last, value,
         reason: '第二根手指落下来就把圆心挪走了：人手里正推着的那根杆突然跳一下');
     expect(t.getCenter(find.byKey(Joystick.knobKey)), knob,
-        reason: '屏幕上那根杆也跟着挪了 —— 杆是现场唯一的反馈，它跳一下人就以为狗跳了');
+        reason: '屏幕上那根杆也跟着挪了 —— 杆是现场唯一的反馈，它跳一下人就以为机器人跳了');
     await second.up();
     await first.up();
   });
@@ -222,7 +222,7 @@ void main() {
     await second.moveBy(const Offset(0, -60));
     await t.pump();
     expect(seen.last, value,
-        reason: '第二根手指一动就把杆拽走了：人的手没动，狗改了方向');
+        reason: '第二根手指一动就把杆拽走了：人的手没动，机器人改了方向');
     await second.up();
     await first.up();
   });
@@ -244,7 +244,7 @@ void main() {
     await second.up();
     await t.pump();
     expect(seen.last, value,
-        reason: '第二根手指抬起就把整根杆归零了：人的第一根手指还压着，狗却停了');
+        reason: '第二根手指抬起就把整根杆归零了：人的第一根手指还压着，机器人却停了');
     expect(find.byKey(Joystick.knobKey), findsOneWidget,
         reason: '杆都没了 —— 第一根手指还压着，屏幕上那根杆就该还在');
 

@@ -19,7 +19,7 @@ void main() {
     });
     tearDown(() async => site.close());
 
-    test('runViz 取 /api/runviz；locEpisodes 把图、狗、起点、条数编进查询串', () async {
+    test('runViz 取 /api/runviz；locEpisodes 把图、机器人、起点、条数编进查询串', () async {
       site.bodies['/api/runviz'] = <String, dynamic>{'robots': <String, dynamic>{'A': <String, dynamic>{'path': <dynamic>[]}}};
       site.bodies['/api/loc-episodes'] = <String, dynamic>{'episodes': _episodes};
       final c = SiteClient(site.url, testCertFingerprint());

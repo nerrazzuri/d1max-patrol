@@ -73,7 +73,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
           title: Text(tr('$robot: $what $name', '$robot $what $name')),
           content: Text(tr(
               'The robot restarts its agent (tens of seconds) and refuses while a task is running. Continue?',
-              '狗要重启代理（几十秒）：跑着任务的时候狗会拒绝。确定？')),
+              '机器人要重启代理（几十秒）：跑着任务的时候机器人会拒绝。确定？')),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
@@ -200,7 +200,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
               await _data.catchError((Object _) => <String, dynamic>{});
             },
             child: NwListView(children: [
-              NwSectionLabel(tr('Running on each robot', '每台狗在跑')),
+              NwSectionLabel(tr('Running on each robot', '每台机器人在跑')),
               nwGap8,
               for (final e in robots.entries)
                 Padding(
@@ -214,7 +214,7 @@ class _SiteReleasesPageState extends State<SiteReleasesPage> {
                               Text(e.key, style: NwText.titleMedium.copyWith(color: nw.text, fontWeight: FontWeight.w700)),
                               nwGap4,
                               Text(
-                                  '${e.value ?? tr('Unknown (not reported: the robot is offline, or does not support releases from the site)', '不知道（狗没报：不在线，或者不支持站点下发版本）')}',
+                                  '${e.value ?? tr('Unknown (not reported: the robot is offline, or does not support releases from the site)', '不知道（机器人没报：不在线，或者不支持站点下发版本）')}',
                                   style: NwText.bodyMedium.copyWith(color: nw.textSecondary)),
                               // 狗没报在跑哪一版 = 没报发布能力（或者不在线）：按了也是 unsupported，不给按钮。
                               if (admin && e.value != null) ...[

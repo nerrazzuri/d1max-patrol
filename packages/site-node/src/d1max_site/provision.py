@@ -136,5 +136,5 @@ def claim(db: Any, home: Path, robot_id: str, token: str, *, now_ms: int) -> dic
             raise ProvisionError(DENIED)
         c.execute("UPDATE enroll_claims SET used_ms=? WHERE robot_id=?", (now_ms, robot_id))
     if snap is None or any(n not in snap for n in REQUIRED):
-        raise ProvisionError("站点上这只狗的证书包不全:重新 enroll")
+        raise ProvisionError("站点上这台机器人的证书包不全:重新 enroll")
     return {n: base64.b64encode(v).decode("ascii") for n, v in snap.items()}

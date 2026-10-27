@@ -141,7 +141,7 @@ def _check_tree(rep: Report, root: Path, suffix: str, runs: list[tuple[str, ...]
     for need in REQUIRED:
         rel = need if not need.startswith("config/") or where == "备份里" else need[7:]
         if not (root / (rel + suffix)).is_file():
-            rep.bad(f"{where}没有 {rel}:恢复出来的站点起不来,或者狗、手机要全部重配")
+            rep.bad(f"{where}没有 {rel}:恢复出来的站点起不来,或者机器人、手机要全部重配")
     missing = [r for r in runs if not (root / "evidence" / r[0] / r[1] / r[2]).is_dir()]
     if missing:
         rep.bad(f"{where}登记的 {len(missing)} 趟没有目录(比如 {'/'.join(missing[0])})")

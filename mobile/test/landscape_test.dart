@@ -216,11 +216,11 @@ void main() {
     expect(find.byKey(SiteStandbyPage.goKey), findsOneWidget);
   });
 
-  testWidgets('横屏不溢出：狗列表', (t) async {
+  testWidgets('横屏不溢出：机器人列表', (t) async {
     await _show(t, SiteRobotsPage(api: FakeApi('admin'), title: '庄园'));
   });
 
-  testWidgets('横屏不溢出：单狗页（管理员、在跑任务）', (t) async {
+  testWidgets('横屏不溢出：单机器人页（管理员、在跑任务）', (t) async {
     await _show(t, SiteRobotPage(api: FakeApi('admin', robotView: busyView()), robotId: 'A'));
     expect(t.getRect(find.byKey(const Key('btn-abort'))).bottom, lessThanOrEqualTo(_h),
         reason: '叫停一进来就看得见');

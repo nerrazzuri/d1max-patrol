@@ -148,7 +148,7 @@ describe("地图上的规划路径、轨迹、被挡、定位问题的点", () =
     await waitFor(() => expect(r.container.querySelector("g.map-world")).not.toBeNull());
   });
 
-  it("侧栏:选中的狗下面写定位和被挡;定位问题只查这张图近 7 天", async () => {
+  it("侧栏:选中的机器人下面写定位和被挡;定位问题只查这张图近 7 天", async () => {
     installScreenCTM();
     const { container: c, urls } = mapPage(META);
     await waitFor(() => expect(c.querySelector('[data-testid="run-info"]')).not.toBeNull());
@@ -156,8 +156,8 @@ describe("地图上的规划路径、轨迹、被挡、定位问题的点", () =
   });
 });
 
-describe("每只狗下面的定位和被挡", () => {
-  it("定位正常:来源、偏差、质量;变差:带原因;丢了:原话;没设位置;老狗没上报", () => {
+describe("每台机器人下面的定位和被挡", () => {
+  it("定位正常:来源、偏差、质量;变差:带原因;丢了:原话;没设位置;老机器人没上报", () => {
     expect(locState(robot("A").loc)).toBe("ok");
     expect(locLine(robot("A").loc)).toBe("Localization: scan matching, error about 0.1 m");
     const deg = { ...robot("A").loc!, degraded: "定位偏差可能到 0.60 m" };
@@ -219,7 +219,7 @@ describe("定位历史页", () => {
     return { ...r, urls };
   }
 
-  it("列出每一段:时长、种类、地点、狗的原话、任务、怎么结束的;没结束的写还没恢复;没有地点的不给地图链接", async () => {
+  it("列出每一段:时长、种类、地点、机器人的原话、任务、怎么结束的;没结束的写还没恢复;没有地点的不给地图链接", async () => {
     const { container: c } = page();
     await waitFor(() => expect(c.querySelectorAll("tbody tr").length).toBe(2));
     const rows = [...c.querySelectorAll("tbody tr")];
@@ -234,7 +234,7 @@ describe("定位历史页", () => {
     expect(rows[1].querySelector("a")).toBeNull();
   });
 
-  it("过滤:选狗、种类、时间段都进查询;默认最近 7 天", async () => {
+  it("过滤:选机器人、种类、时间段都进查询;默认最近 7 天", async () => {
     const { container: c, urls } = page();
     await waitFor(() => expect(urls.length).toBeGreaterThan(0));
     expect(urls[0]).toMatch(/^\/api\/loc-episodes\?since_ms=\d+&limit=500$/);

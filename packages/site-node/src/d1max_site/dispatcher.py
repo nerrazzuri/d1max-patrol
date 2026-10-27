@@ -42,7 +42,7 @@ from d1max_site.temporal import GATED, temporal_class
 
 log = logging.getLogger(__name__)
 
-_HEAD_TEXT = {"tail": "狗尾为前", "unknown": "不知道"}
+_HEAD_TEXT = {"tail": "机器人尾为前", "unknown": "不知道"}
 
 #: 多久没收到**实时** status 就算不新鲜(按站点自己的钟,见 ``DispatchClient.status_live_at``)。
 #: 代理空闲时每 30 s 发一次 status。
@@ -73,7 +73,7 @@ def version_mismatch_text(mission: str, map_id: str, version: str, robot_id: str
     """任务绑的那一版跟狗加载的不一样(R1;派遣器、排程共用)。"""
     return (f"任务 {mission} 的点是在 {map_id} 第 {version} 版上量的,"
             f"{robot_id} 加载的是第 {loaded} 版:每次建图原点都不一样,老坐标在新图上不可信 —— "
-            "在新图上核过点、改 map_version、重新打包导入(或者让狗换回那一版图)")
+            "在新图上核过点、改 map_version、重新打包导入(或者让机器人换回那一版图)")
 
 
 class Unsupported(DispatchRefused):
@@ -483,7 +483,7 @@ class Dispatcher:
         if z.get("plan_ok") is False:
             raise DispatchRefused(f"{robot_id} 规划不了:{z.get('problem') or '没有规划栅格'}")
         if z.get("rev") != site.revision:
-            raise DispatchRefused(f"{robot_id} 的区域还没同步(狗上第 {z.get('rev')} 版,站点第 "
+            raise DispatchRefused(f"{robot_id} 的区域还没同步(机器人上第 {z.get('rev')} 版,站点第 "
                                   f"{site.revision} 版)")
         if site.zones and not z.get("enforced"):
             # 限速区也一样(内审小 11):直线桥两样都不守
@@ -528,8 +528,8 @@ class Dispatcher:
             mp["match"] = mp["dog"] == mp["site"]
             if not mp["match"]:
                 problems.append(
-                    f"{m_id}:{m_ver} 狗上的内容(摘要 {mp['dog'][:8]})跟站点登记的(摘要 "
-                    f"{mp['site'][:8]})不一样:狗上的图被改过、或者站点换过这一版的文件;"
+                    f"{m_id}:{m_ver} 机器人上的内容(摘要 {mp['dog'][:8]})跟站点登记的(摘要 "
+                    f"{mp['site'][:8]})不一样:机器人上的图被改过、或者站点换过这一版的文件;"
                     "重新下发这一版(会重新下载、逐个核对)")
         out["map"] = mp
         # 区域
@@ -545,7 +545,7 @@ class Dispatcher:
                     problems.append(
                         f"{m_id}:{m_ver} 的区域修订号一样(第 {site.revision} 版)但内容不一样:"
                         "站点多半从旧备份恢复过又改了一次;在地图页再保存一次区域(出新修订),"
-                        "新内容会发给狗")
+                        "新内容会发给机器人")
             else:
                 zp["basis"] = "revision"             # 老代理:能力里没有摘要
                 zp["match"] = zp["dog_rev"] == site.revision
@@ -633,13 +633,13 @@ class Dispatcher:
         过期,起一趟没人握着的遥控)。"""
         skew = self.clock_skew_s(robot_id)
         if skew is None:
-            raise DispatchRefused(f"{robot_id} 的钟差还不知道(站点刚起来、狗刚连上,或者最近一分钟没"
+            raise DispatchRefused(f"{robot_id} 的钟差还不知道(站点刚起来、机器人刚连上,或者最近一分钟没"
                                   "收到它的遥测):先不派会让它动、依赖命令有效期的命令")
         limit = min(SKEW_DISPATCH_MAX_S, ttl_ms / 2000.0)
         if abs(skew) > limit:
             # 狗按自己的钟判有效期 —— 差一半以上,旧命令不过期、新命令一到就过期
             raise DispatchRefused(f"{robot_id} 的钟差 {skew:+.0f} 秒:这条命令的有效期 "
-                                  f"{ttl_ms / 1000:.0f} 秒,对不上,先对时(狗向站点主机对时,见 W09d)")
+                                  f"{ttl_ms / 1000:.0f} 秒,对不上,先对时(机器人向站点主机对时,见 W09d)")
 
     def _temporal_gate(self, robot_id: str, kind: str, payload: dict[str, Any],
                        ttl_ms: int) -> None:
@@ -976,7 +976,7 @@ class Dispatcher:
         """全狗限速(W29,下雨、雷暴):不是任务。要狗报了 ``speed_cap``、状态新鲜。"""
         c = self._client_for(robot_id)
         if c.capabilities is None or "speed_cap" not in c.capabilities.tasks:
-            raise Unsupported(f"{robot_id} 不认全狗限速")
+            raise Unsupported(f"{robot_id} 不认全机器人限速")
         if not self._fresh(c):
             raise DispatchRefused(f"{robot_id} 不在线或状态不新鲜")
         return await self._send(c, robot_id, "speed_cap", cap.to_payload(), issued_by=issued_by,

@@ -250,7 +250,7 @@ class WeatherDesk:
             if t is not None and t.state.value in ("running", "pending"):
                 if t.task_id == tid:
                     continue                            # 还在撤:等它停
-                self._drop_return(rid, f"狗在跑别的了({t.task_id}),不抢")
+                self._drop_return(rid, f"机器人在跑别的了({t.task_id}),不抢")
                 continue
             if self.standby is None:
                 continue
@@ -269,7 +269,7 @@ class WeatherDesk:
                         tx.execute("DELETE FROM weather_returns WHERE robot_id=?", (rid,))
                         queue(tx, kind="standby_failed", robot=rid, title="没回待命点",
                               detail=f"雷暴撤了巡检 {tid},不能安全回待命点({exc}),"
-                                     "狗原地等,要人到场"[:300],
+                                     "机器人原地等,要人到场"[:300],
                               context={"task_id": tid}, now_ms=now)
                 except Exception:
                     log.exception("%s 回不得,落库没成(下一拍再来)", rid)

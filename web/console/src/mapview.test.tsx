@@ -147,7 +147,7 @@ describe("区域名放在多边形的视觉中心", () => {
     expect(pointInPolygon(avg, u)).toBe(false);
     expect(pointInPolygon(visualCentre(u), u)).toBe(true);
   });
-  it("名字会压在狗、报警点上:挪到它上面或下面(还在多边形里);挪不开就放回中心", () => {
+  it("名字会压在机器人、报警点上:挪到它上面或下面(还在多边形里);挪不开就放回中心", () => {
     const room: [number, number][] = [[0, 0], [300, 0], [300, 200], [0, 200]];
     expect(placeLabel(room, "Lobby", 13, [])).toEqual(visualCentre(room));
     const [cx, cy] = visualCentre(room);
@@ -248,7 +248,7 @@ const legend = (c: Element) => [...c.querySelectorAll("[data-legend]")].map((e) 
 
 describe("地图页:整张图和上面的东西一起转,字是正的", () => {
   for (const deg of [23, -31]) {
-    it(`转 ${deg}°:底图、禁行区、区域多边形在世界层里;狗、报警点跟着转到对的屏上位置;字不转`, async () => {
+    it(`转 ${deg}°:底图、禁行区、区域多边形在世界层里;机器人、报警点跟着转到对的屏上位置;字不转`, async () => {
       installScreenCTM();
       const meta = { ...META, rotation_deg: deg, zones: [NOGO], areas: ROOMS };
       const { container: c } = mapPage(meta, { p1: [P1(-4, 2)] });
@@ -303,7 +303,7 @@ describe("地图页:整张图和上面的东西一起转,字是正的", () => {
     expect(Number(labels[0].getAttribute("y"))).toBeCloseTo(ly, 6);
   });
 
-  it("狗站在区域名的位置上:名字让开,不压在狗身上", async () => {
+  it("机器人站在区域名的位置上:名字让开,不压在机器人身上", async () => {
     installScreenCTM();
     const meta = { ...META, rotation_deg: 23, areas: [ROOMS[0]] };
     // 先不放狗,看名字本来在哪儿
@@ -339,7 +339,7 @@ describe("地图页:整张图和上面的东西一起转,字是正的", () => {
     expect([...both.container.querySelectorAll("text.area-label")].map((l) => l.textContent)).toEqual(["Back garden"]);
   });
 
-  it("新字段都没有:不转(matrix 的 b、c 为 0)、用栅格、照样画狗", async () => {
+  it("新字段都没有:不转(matrix 的 b、c 为 0)、用栅格、照样画机器人", async () => {
     installScreenCTM();
     const { container: c } = mapPage(META);
     await ready(c);
@@ -380,7 +380,7 @@ describe("图例只列图上真有的东西", () => {
     await ready(c);
     expect(legend(c)).toEqual(["floor", "wall", "unknown"]);
   });
-  it("禁行区、区域、狗、报警点都有:都列;没有限速区就不列限速区", async () => {
+  it("禁行区、区域、机器人、报警点都有:都列;没有限速区就不列限速区", async () => {
     installScreenCTM();
     const { container: c } = mapPage({ ...META, zones: [NOGO], areas: ROOMS }, { p1: [P1(-4, 2)] });
     await ready(c);
@@ -443,7 +443,7 @@ describe("比例尺、缩放、全图按钮", () => {
     expect(worldOf(c)).toEqual(fit);
   });
 
-  it("拖动平移;拖完松手不算点了狗", async () => {
+  it("拖动平移;拖完松手不算点了机器人", async () => {
     installScreenCTM();
     const onSelect = vi.fn();
     setFetch((async (url: RequestInfo | URL) => {
@@ -599,9 +599,9 @@ describe("全图按有内容的范围(content_bbox,预览像素):转过的范围
   });
 });
 
-describe("看到过、狗没走过 + 抹掉区:图例只在有的时候列;抹掉区只描边(底图站点已经抹了)", () => {
+describe("看到过、机器人没走过 + 抹掉区:图例只在有的时候列;抹掉区只描边(底图站点已经抹了)", () => {
   const ERASE: NavZone = { id: "e1", kind: "erase", label: "Junk", polygon: [[-9, 7], [-7, 7], [-7, 5], [-9, 5]] };
-  it("站点说有看到过、图上有抹掉区:都列;抹掉区画成细虚线,悬停说狗不去", async () => {
+  it("站点说有看到过、图上有抹掉区:都列;抹掉区画成细虚线,悬停说机器人不去", async () => {
     installScreenCTM();
     const { container: c } = mapPage({ ...META, seen: true, zones: [NOGO, ERASE] }, { units: [unit(robot("A", null))] });
     await ready(c);
@@ -617,7 +617,7 @@ describe("看到过、狗没走过 + 抹掉区:图例只在有的时候列;抹�
     const { container: c } = mapPage({ ...META, seen: true, zones: [ERASE] }, { units: [unit(robot("A", null))] });
     await ready(c);
     const text = c.querySelector(".maplegend")!.textContent!;
-    for (const w of ["看到过、狗没走过", "已抹掉（狗不去）"]) expect(text).toContain(w);
+    for (const w of ["看到过、机器人没走过", "已抹掉（机器人不去）"]) expect(text).toContain(w);
   });
   it("刚打开就按有内容的范围放;「全图」也回到它", async () => {
     installScreenCTM();
@@ -733,7 +733,7 @@ describe("防区页:抹掉一块(导航区域 erase),点出来的地图点原样
 
 // ------------------------------------------------------------------ 虚拟墙、网页画禁行区限速区(2026-10-15)
 
-describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出狗守的区域、删、确认", () => {
+describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出机器人守的区域、删、确认", () => {
   const WALL: NavZone = { id: "w3", kind: "nogo", label: "Fence", hard: true, wall: [[-5, 2], [0, 2], [0, -2]],
     polygon: [[-5.15, 2.15], [0.15, 2.15], [0.15, -2.15], [-0.15, -2.15], [-0.15, 1.85], [-5.15, 1.85]] };
 
@@ -873,7 +873,7 @@ describe("地图与防区:网页画禁行区、限速区、虚拟墙;列出狗�
     expect(r.queryByText("Confirm this revision")).toBeNull();
   });
 
-  it("没确认:写明狗照旧守着哪些;确认这一版带修订号;删一个是整份存回去少它", async () => {
+  it("没确认:写明机器人照旧守着哪些;确认这一版带修订号;删一个是整份存回去少它", async () => {
     installScreenCTM();
     const posted = site({ revision: 7, zones: [WALL], confirmed: { revision: 6, by: "bob", at_ms: 0, current: false, how: "confirm" }, held: [NOGO] });
     const r = render(<MapsZonesPage say={() => {}} />);

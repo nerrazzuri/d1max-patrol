@@ -95,7 +95,7 @@ def zone_warnings(db: SiteDB, zone: str) -> list[dict[str, str]]:
     out = []
     if not db.query("SELECT 1 FROM zones WHERE zone=?", (zone,)):
         out.append({"code": "zone_unmapped",
-                    "text": f"防区「{zone}」还没映射到拦截点:这台摄像头报入侵时没有狗可派"})
+                    "text": f"防区「{zone}」还没映射到拦截点:这台摄像头报入侵时没有机器人可派"})
     if not db.query("SELECT 1 FROM zone_areas WHERE zone=? LIMIT 1", (zone,)):
         out.append({"code": "zone_no_polygon",
                     "text": f"防区「{zone}」没在任何一张图上画多边形:名单(时段 / 人员授权)判不了"})

@@ -44,12 +44,12 @@ const _navKeys = [NwShell.dutyKey, NwShell.dogsKey, NwShell.mapKey, NwShell.hist
 
 void main() {
   group('五栏', () {
-    testWidgets('管理员：值守、狗、地图、记录、管理；进来先看值守；原来顶栏那几个入口的 Key 在导航上', (t) async {
+    testWidgets('管理员：值守、机器人、地图、记录、管理；进来先看值守；原来顶栏那几个入口的 Key 在导航上', (t) async {
       _size(t);
       await _show(t, FakeApi('admin'));
       for (final (key, label) in [
         (const Key('open-watch'), '值守'),
-        (const Key('open-dogs'), '狗'),
+        (const Key('open-dogs'), '机器人'),
         (const Key('open-maps'), '地图'),
         (const Key('open-runs'), '记录'),
         (const Key('open-health'), '管理'),
@@ -60,7 +60,7 @@ void main() {
       }
       expect(find.byKey(NwShell.moreKey), findsNothing);
       expect(find.byType(SiteWatchPage), findsOneWidget);
-      expect(find.byType(SiteRobotsPage), findsNothing, reason: '狗列表在背后，不显示');
+      expect(find.byType(SiteRobotsPage), findsNothing, reason: '机器人列表在背后，不显示');
       expect(find.byType(SiteRobotsPage, skipOffstage: false), findsOneWidget, reason: '但是活着');
       // 五栏等宽、够手指点、都在屏幕里
       final rects = [for (final k in [..._navKeys, NwShell.adminKey]) t.getRect(find.byKey(k))];
@@ -151,7 +151,7 @@ void main() {
       await t.pumpWidget(Container());
     });
 
-    testWidgets('狗列表的顶栏上不再有那一排入口（挪到导航上了）；推送、后台值守的图标还在它那儿', (t) async {
+    testWidgets('机器人列表的顶栏上不再有那一排入口（挪到导航上了）；推送、后台值守的图标还在它那儿', (t) async {
       _size(t);
       await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: FakeApi('admin'), title: '庄园')));
       await t.pumpAndSettle();
@@ -162,8 +162,8 @@ void main() {
     });
   });
 
-  group('狗列表身上的站点级逻辑切栏不断', () {
-    testWidgets('切到别的栏，事件来了照样刷新狗列表；切回来看到的是新的；它一直是同一个', (t) async {
+  group('机器人列表身上的站点级逻辑切栏不断', () {
+    testWidgets('切到别的栏，事件来了照样刷新机器人列表；切回来看到的是新的；它一直是同一个', (t) async {
       _size(t);
       final api = FakeApi('guard');
       await _show(t, api);
@@ -177,7 +177,7 @@ void main() {
       await t.pump();
       await t.pump(const Duration(milliseconds: 600)); // 狗列表半秒内的事件合成一次刷新
       await t.pump();
-      expect(api.robotsCalls, greaterThan(before), reason: '不在眼前也收到了事件、重新读了狗列表');
+      expect(api.robotsCalls, greaterThan(before), reason: '不在眼前也收到了事件、重新读了机器人列表');
       expect(find.byKey(const Key('robot-Z9')), findsNothing, reason: '人还在地图栏');
       await _tab(t, NwShell.historyKey);
       await _tab(t, NwShell.dogsKey);
@@ -248,7 +248,7 @@ void main() {
       expect(find.byType(NwShell), findsOneWidget);
       expect(find.byType(NwBottomNav), findsOneWidget);
       await _tab(t, NwShell.dogsKey);
-      expect(find.text('庄园（admin）'), findsOneWidget, reason: '站点名交给了狗列表');
+      expect(find.text('庄园（admin）'), findsOneWidget, reason: '站点名交给了机器人列表');
       await t.pageBack();
       await t.pumpAndSettle();
       expect(find.byType(NwShell), findsNothing);

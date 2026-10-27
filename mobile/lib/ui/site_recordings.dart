@@ -252,7 +252,7 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
               padding: const EdgeInsets.only(bottom: Nw.s8),
               child: Text(
                   tr('Alarm time: ${clipTime(around)} (times are by the robot clock)',
-                      '告警那一刻：${clipTime(around)}（时刻是狗的钟）'),
+                      '告警那一刻：${clipTime(around)}（时刻是机器人的钟）'),
                   style: NwText.bodyMedium.copyWith(color: c.text))),
         if (_msg.isNotEmpty)
           Padding(
@@ -263,7 +263,7 @@ class _SiteRecordingsPageState extends State<SiteRecordingsPage> {
           Text(
               tr(
                   'No recordings in this period (recording is off on the robot, not uploaded yet, or deleted after 30 days)',
-                  '这段时间没有录像（狗没开录像、还没传上来，或者过了 30 天删了）'),
+                  '这段时间没有录像（机器人没开录像、还没传上来，或者过了 30 天删了）'),
               style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
         // 一段一行，装在一张卡里；盖住告警那一刻的那一段有底色（selected）
         if (_rows.isNotEmpty)

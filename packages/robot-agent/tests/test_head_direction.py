@@ -92,7 +92,7 @@ async def test_跑着的时候调过头尾_当场中止_狗停_发事件_调回�
         assert abs(r.speed[0]) > 0.1, "前提:在走"
         r.inject_head("tail")
         await _跑(rt, broker, r, c, 15)
-        assert abs(r.speed[0]) < 1e-9, "狗停下了"
+        assert abs(r.speed[0]) < 1e-9, "机器人停下了"
         assert rt.processor.current is None or rt.processor.current.done
         ends = [e for e in ears.by["event"] if e["kind"].startswith("task_")
                 and e["data"].get("task_id") == "t-g1" and e["kind"] != "task_progress"]
@@ -148,7 +148,7 @@ async def test_狗尾为前_后面看得清就照收_能力里报能走_看不�
         await broker.drain()
         assert ears.by["cmd/ack"][-1]["result"] == "accepted"
         await _跑(rt, broker, r, c, 15)
-        assert r.speed[0] < -0.1, "倒着走(狗尾对着路)"
+        assert r.speed[0] < -0.1, "倒着走(机器人尾对着路)"
         ok["v"] = False
         await _跑(rt, broker, r, c, 15)
         assert abs(r.speed[0]) < 1e-9

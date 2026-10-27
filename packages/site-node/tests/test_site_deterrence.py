@@ -61,7 +61,7 @@ class 假派遣:
 
     async def deter(self, rid, payload, *, issued_by, priority):
         if self.fail:
-            raise RuntimeError("狗不在线")
+            raise RuntimeError("机器人不在线")
         if payload["output"] in self.reject and payload["on"]:
             return {"ack": {"result": "rejected", "reason": "device"}}
         self.sent.append((rid, payload, priority))
@@ -414,7 +414,7 @@ async def test_外审2_开的回执丢了_降级照样关(台):
         return {"ack": {"result": "accepted"}}
     t.disp.deter = 开了但回执丢了
     await t.desk.set_level("A", 1, by="gina")
-    assert t.disp.on() == {"strobe", "spotlight"}, "狗上其实开了"
+    assert t.disp.on() == {"strobe", "spotlight"}, "机器人上其实开了"
     t.disp.deter = real
     await t.desk.set_level("A", 0, by="gina")
     assert t.disp.on() == set(), "没记到成了,不等于没开"
@@ -846,7 +846,7 @@ def _会守(t, *, fail=False, report=True, abort_fail=0):
 
     async def standoff(rid, task_id, req, *, issued_by):
         if fail:
-            raise RuntimeError("狗不在线")
+            raise RuntimeError("机器人不在线")
         t.disp.standoffs.append((rid, task_id, req))
         if report:                                        # 狗的能力马上就报在守(不报:还没到)
             t.disp.clients[rid].capabilities.tasks["standoff"] = {"state": "hold",
@@ -1208,7 +1208,7 @@ async def test_W33外审2_等撤的回执时到了拦截点_不另开一场盖�
     assert v["level"] == 1
     row = t.db.query("SELECT level, zone, standoff_center FROM deter_sessions")[0]
     assert (row["level"], row["zone"]) == (1, "就地"), dict(row)
-    assert json.loads(row["standoff_center"])["x"] == 8.0, "拴绳中心是狗此刻的位置,不是拦截点"
+    assert json.loads(row["standoff_center"])["x"] == 8.0, "拴绳中心是机器人此刻的位置,不是拦截点"
     again = DeterrenceDesk(t.db, t.disp, now_ms=t.clock, standby=t.stb)
     assert again.sessions["A"].zone == "就地" and again.sessions["A"].level == 1
 
@@ -1345,7 +1345,7 @@ async def test_警笛没发出去_不算开着_续不上过了保持时间也不
     _到了(t.disp)
     t.disp.fail = True
     v = await t.desk.set_level("A", 3, by="gina")
-    assert v["level"] == 3 and v["active"] == [], "级别到了 3,但狗没收到:不说开着"
+    assert v["level"] == 3 and v["active"] == [], "级别到了 3,但机器人没收到:不说开着"
     t.disp.fail = False
     await t.desk.tick()
     assert "siren" in t.desk.view()[0]["active"]
@@ -1367,7 +1367,7 @@ async def test_狗没装警笛_给人看的说得出来_能力不知道是None(t
     v = await desk.set_level("A", 3, by="gina")
     assert v["outputs"] == ["speaker", "strobe"] and "siren" not in v["active"]
     disp.clients["A"].capabilities = None
-    assert desk.view()[0]["outputs"] is None, "狗的能力还没报上来:不知道,不是没有"
+    assert desk.view()[0]["outputs"] is None, "机器人的能力还没报上来:不知道,不是没有"
     del disp.clients["A"]
     assert desk.view()[0]["outputs"] is None
     db.close()
@@ -1392,7 +1392,7 @@ async def test_警笛开成了_续开没成_马上不算开着_下一拍重发_�
         t.disp.fail = True
     await t.desk.tick()
     [s] = t.desk.view()
-    assert s["level"] == 3 and "siren" not in s["active"], "狗上开失败会转成关:不拿上次成功当现在"
+    assert s["level"] == 3 and "siren" not in s["active"], "机器人上开失败会转成关:不拿上次成功当现在"
     if how == "rejected":
         assert "strobe" in s["active"], "别的路续上了的照旧"
     n = len(t.disp.sent)

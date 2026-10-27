@@ -174,7 +174,7 @@ def test_W00c1_端到端(现场):
     code, early = req(ctx, "POST", "/api/robots/A/goto", {"target": target(0.5)}, token=tok)
     assert code == 200 or (code == 409 and "钟差还不知道" in early["error"]), early
     等(lambda: req(ctx, "GET", "/api/robots/A", token=tok)[1].get("clock_skew_s") is not None,
-      what="站点估出狗的钟差", timeout=30.0)
+      what="站点估出机器人的钟差", timeout=30.0)
     if code == 200:                                       # 碰巧已经估出来了:等它走完再往下
         等(lambda: _task_event(ctx, tok, early["task_id"], "task_done"), what="task_done")
 

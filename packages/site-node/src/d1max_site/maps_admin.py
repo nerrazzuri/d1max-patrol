@@ -286,7 +286,7 @@ class MapAdmin:
                 return {"robot_id": rid, "ok": False, "state": "refused", "reason": str(exc)}
             except (DispatchTimeout, TimeoutError) as exc:
                 return {"robot_id": rid, "ok": False, "state": "refused",
-                        "reason": f"等狗的回执超时: {exc}"}
+                        "reason": f"等机器人的回执超时: {exc}"}
             ack = r.get("ack", {}) if isinstance(r, dict) else {}
             ok = ack.get("result") in ("accepted", "duplicate")
             return {"robot_id": rid, "ok": ok, "state": "pending" if ok else "refused",
@@ -382,20 +382,20 @@ class MapAdmin:
         users = self._in_use().get((map_id, version), [])
         if users:
             who = "、".join(users)
-            raise AdminError(409, f"{map_id}:{version} 还有狗在用({who}):先让它们换到别的版本再删",
+            raise AdminError(409, f"{map_id}:{version} 还有机器人在用({who}):先让它们换到别的版本再删",
                              reason="in_use", robots=users)
         if rows[0]["version"] == version:
             raise AdminError(409, f"{map_id}:{version} 是 {map_id} 的最新一版,不能删(删旧的)",
                              reason="latest")
         if (map_id, version) in self._pending_targets():
-            raise AdminError(409, f"有狗正在换到 {map_id}:{version},等换完再说", reason="pending")
+            raise AdminError(409, f"有机器人正在换到 {map_id}:{version},等换完再说", reason="pending")
         back = [rid for rid in self.robot_ids()
                 if (t := self.rollback_target(rid)) is not None
                 and (t["map_id"], t["version"]) == (map_id, version)]
         if back:
             who = "、".join(back)
             raise AdminError(409, f"{map_id}:{version} 是 {who} 的退回目标"
-                                  "(狗上留着、出事能一键退回去):先让狗换到别的版本、"
+                                  "(机器人上留着、出事能一键退回去):先让机器人换到别的版本、"
                                   "或者退回目标换了再删",
                              reason="rollback_target", robots=back)
         gone = {"nav_zones": 0, "nav_zone_proposals": 0, "standby_points": 0, "intercepts": 0,

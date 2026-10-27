@@ -66,10 +66,10 @@ void main() {
     await t.pumpWidget(const SizedBox());
   });
 
-  testWidgets('老狗（409）：退回录包轨迹', (t) async {
+  testWidgets('老机器人（409）：退回录包轨迹', (t) async {
     final api = FakeApi('admin')
       ..previewReplies = [
-        const SiteError(409, '狗没给：unsupported', body: <String, dynamic>{'unsupported': true}),
+        const SiteError(409, '机器人没给：unsupported', body: <String, dynamic>{'unsupported': true}),
       ]
       ..trailReplies = [
         <String, dynamic>{'points': [[0, 0]], 'since': 0, 'total': 1, 'full': false, 'recording': true},
@@ -87,7 +87,7 @@ void main() {
     await t.pumpWidget(const SizedBox());
   });
 
-  testWidgets('狗暂时不在线（409、不是不支持）：不退回轨迹，说连不上、接着问（内审应修 1）', (t) async {
+  testWidgets('机器人暂时不在线（409、不是不支持）：不退回轨迹，说连不上、接着问（内审应修 1）', (t) async {
     final api = FakeApi('admin')
       ..previewReplies = [const SiteError(409, 'A 不在线或状态不新鲜'), _pv(1)];
     await _open(t, api);
@@ -213,7 +213,7 @@ void main() {
     await t.pumpWidget(const SizedBox());
   });
 
-  testWidgets('图太大狗没发：说', (t) async {
+  testWidgets('图太大机器人没发：说', (t) async {
     final api = FakeApi('admin')..previewReplies = [{..._pv(1, png: false), 'too_big': true}];
     await _open(t, api);
     expect(_status(t), contains('太大'));

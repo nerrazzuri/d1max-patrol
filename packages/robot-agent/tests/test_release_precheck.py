@@ -164,7 +164,7 @@ async def test_release_precheck_回执里带清单_什么都不做(tmp_path):
     await rt.start()
     await broker.drain()
     caps = ears.by["capabilities"][-1]["tasks"]
-    assert "release_precheck" in caps, "站点据此知道这台狗会回清单"
+    assert "release_precheck" in caps, "站点据此知道这台机器人会回清单"
     await rt._on_cmd(_cmd("release_precheck", {"name": NEW}, "p1", c))
     await broker.drain()
     ack = _ack(ears)

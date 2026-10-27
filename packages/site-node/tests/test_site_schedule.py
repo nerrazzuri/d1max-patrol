@@ -143,7 +143,7 @@ async def test_记账写到一半失败_整个回滚_下一拍照样派(站):
     await _拍(t)
     assert [r["outcome"] for r in t.sched.runs("nightly")] == ["started"], "下一拍照样派"
     [cmd] = [c for c in t.site.commands("A") if c["kind"] == "patrol"]
-    assert cmd["ack_result"] == "accepted", "狗上没有一趟「发出去了、没记账」的在跑"
+    assert cmd["ack_result"] == "accepted", "机器人上没有一趟「发出去了、没记账」的在跑"
 
 
 async def test_站点重启后同一轮不起第二次(站):

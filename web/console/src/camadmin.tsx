@@ -26,7 +26,7 @@ export interface CamRow {
 interface LiveRow { name: string; connected: boolean; error: string }
 
 export function warningText(w: CamWarning, zone: string): string {
-  if (w.code === "zone_unmapped") return L("Zone “{z}” is not mapped to an intercept point: an intrusion from this camera has no robot to send.", "防区「{z}」还没映射到拦截点:这台摄像头报入侵时没有狗可派。", { z: zone });
+  if (w.code === "zone_unmapped") return L("Zone “{z}” is not mapped to an intercept point: an intrusion from this camera has no robot to send.", "防区「{z}」还没映射到拦截点:这台摄像头报入侵时没有机器人可派。", { z: zone });
   if (w.code === "zone_no_polygon") return L("Zone “{z}” has no polygon on any map: the lists (time slots / people) cannot tell whether someone is on authorised ground.", "防区「{z}」没在任何一张图上画多边形:名单(时段 / 人员授权)判不了。", { z: zone });
   return w.text;
 }
@@ -49,7 +49,7 @@ export function CamerasPanel({ say }: { say: Say }) {
     <section class="panel" aria-label={L("Cameras", "摄像头")}>
       <div class="panel-head">
         <h2>{L("Cameras", "摄像头")}</h2>
-        <span class="muted small push">{L("Fixed ONVIF cameras: their intrusion events dispatch a robot. Changes reach the site within about 30 s.", "固定的 ONVIF 摄像头:它们报的入侵会派狗。改动 30 秒内生效。")}</span>
+        <span class="muted small push">{L("Fixed ONVIF cameras: their intrusion events dispatch a robot. Changes reach the site within about 30 s.", "固定的 ONVIF 摄像头:它们报的入侵会派机器人。改动 30 秒内生效。")}</span>
         <button type="button" class="btn primary" onClick={() => setForm("new")}>{L("Add camera", "添加摄像头")}</button>
       </div>
       <table class="grid">

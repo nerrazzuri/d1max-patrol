@@ -402,7 +402,7 @@ void main() {
     expect(api.link!.released && api.link!.isClosed, isTrue);
   });
 
-  testWidgets('单狗页：保安有遥控按钮，业主没有', (t) async {
+  testWidgets('单机器人页：保安有遥控按钮，业主没有', (t) async {
     for (final (role, has) in [('guard', true), ('owner', false)]) {
       final api = FakeApi(role);
       await t.pumpWidget(MaterialApp(home: SiteRobotPage(api: api, robotId: 'A')));
@@ -479,7 +479,7 @@ void main() {
     await t.pumpWidget(Container());
   });
 
-  testWidgets('硬禁区（决策 65）：狗说截了、减速、位置不可信，屏上说为什么；没事了就收起来', (t) async {
+  testWidgets('硬禁区（决策 65）：机器人说截了、减速、位置不可信，屏上说为什么；没事了就收起来', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);
     expect(find.byKey(SiteTeleopPage.zoneKey), findsNothing);
@@ -499,11 +499,11 @@ void main() {
     expect(find.textContaining('0.2 m/s'), findsOneWidget);
     await say({'state': 'ok'});
     expect(find.byKey(SiteTeleopPage.zoneKey), findsNothing);
-    expect(_stickEnabled(t, 0), isTrue, reason: '只是告诉人,杆照常(截速度是狗那头的事)');
+    expect(_stickEnabled(t, 0), isTrue, reason: '只是告诉人,杆照常(截速度是机器人那头的事)');
     await t.pumpWidget(Container());
   });
 
-  testWidgets('硬禁区：老狗不守，开场（granted 里）就说', (t) async {
+  testWidgets('硬禁区：老机器人不守，开场（granted 里）就说', (t) async {
     final api = FakeApi('guard');
     await t.pumpWidget(MaterialApp(home: SiteTeleopPage(key: UniqueKey(), api: api, robotId: 'A')));
     await t.pump();

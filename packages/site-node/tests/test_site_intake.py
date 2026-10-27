@@ -107,7 +107,7 @@ def test_狗传上来_站点登记一趟_狗上删掉(站点, ca, tmp_path):
     run = _一趟(box.root)
     want = {p.relative_to(run).as_posix(): p.read_bytes() for p in run.rglob("*") if p.is_file()}
     _跑(box, 3)
-    assert not run.exists(), "站点确认了、这一趟结束了:狗上不留"
+    assert not run.exists(), "站点确认了、这一趟结束了:机器人上不留"
     got = 站点.store.run_dir("A", "巡检一", STAMP)
     for rel, data in want.items():
         assert (got / rel).read_bytes() == data, rel
@@ -230,7 +230,7 @@ def test_狗建的图和录包传上来_站点收齐登记_别的狗下载核对
     for _ in range(4):
         bags.step()
         maps.step()
-    assert not bag.exists() and not out.exists(), "站点确认了:狗上不留"
+    assert not bag.exists() and not out.exists(), "站点确认了:机器人上不留"
     assert [b["name"] for b in 站点.maps.bags("A")] == ["yard"]
     assert 站点.maps.get("estate-1", "9") == ref and 站点.maps.list()[0]["source"] == "A"
     keeper = MapKeeper(tmp_path / "dogB-maps", fetch=https_fetch(站点.intake.url, _ctx(ca, ca.b)))
@@ -347,7 +347,7 @@ def test_站点永远不收的_狗隔离不再重试_这一趟留着_站点出�
         box.step()
         clock["ms"] += 600_000                                # 十分钟一拍:按老规矩早该重试好几次了
     assert len(got) == 1 and "控制字符" in got[0][3], "隔离了:不再重试"
-    assert run.exists(), "没全确认:这一趟留在狗上"
+    assert run.exists(), "没全确认:这一趟留在机器人上"
     items = {i.key.split("/")[-1]: i for i in box.queue.all()}
     assert items["坏\x01名.jpg"].refused and items["events.jsonl"].done
     box.close()
@@ -476,7 +476,7 @@ def test_W18_录像一段一段传上来_站点登记_狗上删掉(站点, ca, t
     p1, d1 = _一段(root, "front", "20261004T013000Z", 2_500_000)   # 不止一块(1 MiB 一块)
     p2, d2 = _一段(root, "back", "20261004T013000Z")
     _跑(box, 10)
-    assert not p1.parent.exists() and not p2.parent.exists(), "站点确认了:狗上不留"
+    assert not p1.parent.exists() and not p2.parent.exists(), "站点确认了:机器人上不留"
     rows = 站点.recordings.list(robot_id="A")
     assert {(r["camera"], r["stamp"], r["bytes"]) for r in rows} == {
         ("front", "20261004T013000Z", len(d1)), ("back", "20261004T013000Z", len(d2))}

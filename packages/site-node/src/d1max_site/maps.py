@@ -524,7 +524,7 @@ class MapCatalog:
         dst = self.root / map_id / version
         if dst.exists() or self.db.query("SELECT 1 FROM maps WHERE map_id=? AND version=?",
                                          (map_id, version)):
-            raise MapError(f"{map_id}:{version} 已经有了;换一个版本号(狗上可能正用着它)")
+            raise MapError(f"{map_id}:{version} 已经有了;换一个版本号(机器人上可能正用着它)")
         dst.parent.mkdir(parents=True, exist_ok=True)
         return dst
 

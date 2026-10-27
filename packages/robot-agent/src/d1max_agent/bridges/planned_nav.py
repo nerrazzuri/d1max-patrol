@@ -360,14 +360,14 @@ class PlannedNavBackend(HalNavBackend):
         return False
 
     def _report_nogo(self, z: Zone, here: Any, *, idle: bool = False) -> None:
-        log.error("狗在禁行区 %s 里面(或压上了边):原地停,等人处理", z.id)
+        log.error("机器人在禁行区 %s 里面(或压上了边):原地停,等人处理", z.id)
         if self.on_event is not None:
             self.on_event("inside_nogo", {"zone": z.id, "label": z.label, "idle": idle,
                                           "x": round(here.x, 2), "y": round(here.y, 2)})
 
     async def _inside_nogo(self, z: Zone, here: Any) -> None:
         self._report_nogo(z, here)
-        await self._fail(f"狗进了禁行区 {z.label or z.id}:停,不自己往外走")
+        await self._fail(f"机器人进了禁行区 {z.label or z.id}:停,不自己往外走")
 
     async def _near_nogo(self, z: Zone, here: Any, dt_s: float) -> None:
         """S7:再走就离(当禁行的)区域太近了 —— 刹车,从这儿按此刻的 σ 重规划(路先离开它);重规划
@@ -472,7 +472,7 @@ class PlannedNavBackend(HalNavBackend):
             raise NavNotLocalizedError(op, "没有可信定位,不规划")
         z = self.nogo_at(here.x, here.y)
         if z is not None:
-            raise NavRequestError(op, f"狗在禁行区 {z.id} 里面,不自己往外走")
+            raise NavRequestError(op, f"机器人在禁行区 {z.id} 里面,不自己往外走")
         for _ in range(3):
             epoch = self._epoch
             cm = await self._costmap_async(self._margin(here, pose))

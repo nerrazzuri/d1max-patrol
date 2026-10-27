@@ -76,13 +76,13 @@ function mb(bytes: number): string {
 export function activationText(a: Activation): string {
   switch (a.state) {
     case "pending":
-      return tr("Waiting for the dog", "等狗换");
+      return tr("Waiting for the robot", "等机器人换");
     case "confirmed":
       return a.confirmed === "localizer"
         ? tr("Confirmed by the localizer", "定位器已确认")
         : a.confirmed === "load"
-          ? tr("Loaded (this dog has no localizer)", "已载入(这只狗没有定位器)")
-          : tr("Reported done (old agent: did not wait for the localizer)", "狗报已换(老代理:没等定位器确认)");
+          ? tr("Loaded (this robot has no localizer)", "已载入(这台机器人没有定位器)")
+          : tr("Reported done (old agent: did not wait for the localizer)", "机器人报已换(老代理:没等定位器确认)");
     case "failed":
       return tr("Failed", "没成") + (a.reason ? `: ${a.reason}` : "");
     default:
@@ -196,13 +196,13 @@ export function MapManagePage({ say, pollMs = 5000 }: { say: Say; pollMs?: numbe
       </section>
 
       <section class="panel">
-        <div class="panel-head"><h2>{tr("Dogs", "每只狗")}</h2></div>
-        {robots.length === 0 && <p class="pad muted">{tr("No dogs enrolled.", "没有登记的狗。")}</p>}
+        <div class="panel-head"><h2>{tr("Robots", "每台机器人")}</h2></div>
+        {robots.length === 0 && <p class="pad muted">{tr("No robots enrolled.", "没有登记的机器人。")}</p>}
         {robots.length > 0 && (
           <table class="grid mm-dogs">
             <thead>
               <tr>
-                <th>{tr("Dog", "狗")}</th><th>{tr("Loaded", "加载的")}</th><th>{tr("Last publish", "最近一次下发")}</th>
+                <th>{tr("Robot", "机器人")}</th><th>{tr("Loaded", "加载的")}</th><th>{tr("Last publish", "最近一次下发")}</th>
                 <th>{tr("Running config", "实际在跑的配置")}</th><th>{tr("Actions", "操作")}</th>
               </tr>
             </thead>
@@ -215,7 +215,7 @@ export function MapManagePage({ say, pollMs = 5000 }: { say: Say; pollMs?: numbe
                   <td><RunningCell r={d.running} /></td>
                   <td class="actions">
                     <button type="button" class="btn sm" disabled={!d.rollback} onClick={() => setRolling(d)}
-                      title={d.rollback ? "" : tr("No previous version known for this dog", "不知道这只狗的上一版")}>
+                      title={d.rollback ? "" : tr("No previous version known for this robot", "不知道这台机器人的上一版")}>
                       {tr("Roll back", "退回上一版")}{d.rollback ? ` → ${d.rollback.version}` : ""}
                     </button>
                   </td>
@@ -238,8 +238,8 @@ export function MapManagePage({ say, pollMs = 5000 }: { say: Say; pollMs?: numbe
         <Confirm yes={tr("Roll back", "退回")} onNo={() => setRolling(null)} onYes={() => void doRollback(rolling)}
           text={tr(`Roll ${rolling.robot_id} back to ${rolling.rollback.map_id}:${rolling.rollback.version}? `, `把 ${rolling.robot_id} 退回到 ${rolling.rollback.map_id}:${rolling.rollback.version}?`)
             + (rolling.rollback.local
-              ? tr("The dog still has it locally — nothing is downloaded.", "狗本地还留着这一版,不用重新下载。")
-              : tr("The dog may not have it any more and will download it again.", "狗上可能已经没有这一版,会重新下载。"))} />
+              ? tr("The robot still has it locally — nothing is downloaded.", "机器人本地还留着这一版,不用重新下载。")
+              : tr("The robot may not have it any more and will download it again.", "机器人上可能已经没有这一版,会重新下载。"))} />
       )}
       {diff && <DiffDialog target={diff} onClose={() => setDiff(null)} />}
       {noise && <NoiseDialog target={noise} onClose={() => setNoise(null)}
@@ -288,8 +288,8 @@ function VersionCard(p: {
   const [draft, setDraft] = useState<string | null>(null);
   const note = draft ?? v.note;
   const inUse = v.loaded_on.length > 0;
-  const whyNot = inUse ? tr("A dog is using this version", "有狗在用这一版") : v.latest ? tr("Latest version of this map", "这张图的最新一版")
-    : v.previous_on.length > 0 ? tr("A dog would roll back to this version", "是狗的退回目标") : "";
+  const whyNot = inUse ? tr("A robot is using this version", "有机器人在用这一版") : v.latest ? tr("Latest version of this map", "这张图的最新一版")
+    : v.previous_on.length > 0 ? tr("A robot would roll back to this version", "是机器人的退回目标") : "";
   const b = v.build;
   return (
     <article class="mm-ver" aria-label={`${p.map_id}:${v.version}`}>
@@ -326,7 +326,7 @@ function VersionCard(p: {
           {v.previous_on.length > 0 && <span class="muted">{tr("Rollback target of", "是退回目标")}: {v.previous_on.map((r) => <span key={r} class="mm-chip mono">{r}</span>)}</span>}
         </p>
         <div class="row mm-actions">
-          <button type="button" class="btn sm primary" onClick={p.onPublish}>{tr("Publish to dogs…", "发布到狗…")}</button>
+          <button type="button" class="btn sm primary" onClick={p.onPublish}>{tr("Publish to robots…", "发布到机器人…")}</button>
           <button type="button" class="btn sm" disabled={!!whyNot} title={whyNot} onClick={p.onDelete}>{tr("Delete", "删除")}</button>
           {p.onNoise && <button type="button" class="btn sm" disabled={!v.has_raster} onClick={p.onNoise}>{tr("Clean noise…", "清噪点…")}</button>}
           <label class="field-inline small">
@@ -367,7 +367,7 @@ export function PublishDialog({ target, dogs, onClose }: { target: { map_id: str
             {results.map((r) => (
               <li key={r.robot_id} class={r.ok ? "ok" : "bad"}>
                 <b class="mono">{r.robot_id}</b>{" "}
-                {r.ok ? tr("Dog accepted — it is downloading / loading. Watch its status in the Dogs table.", "狗收下了,正在下载、载入。结果看「每只狗」那张表。") : r.reason}
+                {r.ok ? tr("Robot accepted — it is downloading / loading. Watch its status in the Robots table.", "机器人收下了,正在下载、载入。结果看「每台机器人」那张表。") : r.reason}
               </li>
             ))}
           </ul>
@@ -376,8 +376,8 @@ export function PublishDialog({ target, dogs, onClose }: { target: { map_id: str
       ) : (
         <>
           <fieldset class="checks">
-            <legend>{tr("Dogs", "发到这几只狗")}</legend>
-            {dogs.length === 0 && <span class="muted">{tr("No dogs enrolled.", "没有登记的狗。")}</span>}
+            <legend>{tr("Robots", "发到这几台机器人")}</legend>
+            {dogs.length === 0 && <span class="muted">{tr("No robots enrolled.", "没有登记的机器人。")}</span>}
             {dogs.map((d) => {
               const ok = d.online && d.can_activate;
               return (
@@ -391,11 +391,11 @@ export function PublishDialog({ target, dogs, onClose }: { target: { map_id: str
               );
             })}
           </fieldset>
-          {eligible.length === 0 && dogs.length > 0 && <p class="muted small">{tr("No dog is online and able to switch maps.", "没有在线、又能换图的狗。")}</p>}
+          {eligible.length === 0 && dogs.length > 0 && <p class="muted small">{tr("No robot is online and able to switch maps.", "没有在线、又能换图的机器人。")}</p>}
           <label class="checks">
-            <span><input type="checkbox" checked={noHome} onChange={(e) => setNoHome(e.currentTarget.checked)} /> {tr("Publish even if a dog has no home origin on this version", "狗在这一版上没有原点也照发")}</span>
+            <span><input type="checkbox" checked={noHome} onChange={(e) => setNoHome(e.currentTarget.checked)} /> {tr("Publish even if a robot has no home origin on this version", "机器人在这一版上没有原点也照发")}</span>
           </label>
-          <p class="muted small">{tr("Each dog switches on its own: it downloads, waits until idle, loads, and (if it has a localizer) waits for the localizer to accept the map. A dog the localizer rejects goes back to its previous map.", "每只狗各自换:下载、等空闲、载入,有定位器的还要等定位器收下新图;定位器不收的,狗会退回原来那张。")}</p>
+          <p class="muted small">{tr("Each robot switches on its own: it downloads, waits until idle, loads, and (if it has a localizer) waits for the localizer to accept the map. A robot the localizer rejects goes back to its previous map.", "每台机器人各自换:下载、等空闲、载入,有定位器的还要等定位器收下新图;定位器不收的,机器人会退回原来那张。")}</p>
           {err && <p class="error" role="alert">{err}</p>}
           <div class="row end">
             <button type="button" class="btn" onClick={onClose}>{tr("Cancel", "取消")}</button>

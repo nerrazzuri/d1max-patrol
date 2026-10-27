@@ -102,7 +102,7 @@ async def test_引擎死了之后叫停_狗停得住(台子):
     broker, c, r, ears, rt, site = 台子
     await site.publish(T.cmd, json.dumps(_goto(20.0, "g1", c)).encode())
     await _跑(rt, r, c, broker, 20)
-    assert (await r.odometry()).vx > 0.3, "前提:狗在走"
+    assert (await r.odometry()).vx > 0.3, "前提:机器人在走"
     await _杀掉引擎(rt.parts.engine)
     await site.publish(T.cmd, json.dumps(_cmd("halt", {"reason": "operator"}, "h1", c)).encode())
     await _跑(rt, r, c, broker, 5)

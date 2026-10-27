@@ -42,7 +42,7 @@ POSITION_TOL_M = 0.1
 YAW_TOL_RAD = 0.15
 #: HAL 拒速度命令的原因 → 任务失败原因里的话(W34;C40221 急停时只写了「导航回了 Failed」)。
 _REJECT_TEXT = {"estop": "急停按下了", "no_control": "没控制权(遥控器或厂家 App 拿着)",
-                "fault": "狗报故障"}
+                "fault": "机器人报故障"}
 #: 里程锚定丢了定位,引擎等人给位置等多久(秒)。过渡期有人监护(W00c6i),监护一断任务本来就中止。
 HUMAN_RELOCALIZE_WAIT_S = 600.0
 #: 定位器自己能找回来(雷达定位):丢了 / 打滑(跟里程对不上)等多久(秒),等不回来整趟中止、站点报 P1
@@ -197,7 +197,7 @@ class HalNavBackend(NavBackend):
         if self.travel():
             return ""
         if self.head == "tail":
-            return "狗尾为前:要后雷达标过、配了避障才能自己走"
+            return "机器人尾为前:要后雷达标过、配了避障才能自己走"
         return "头尾方向不知道"
 
     # ------------------------------------------------------------ 导航
@@ -377,7 +377,7 @@ class HalNavBackend(NavBackend):
             seq=self._seq, ttl_ms=max(300, int(dt_s * 3000)), frame="base", vx=vx, vy=0.0, wz=wz))
         if got.rejected:
             log.warning("HAL 拒了速度命令(%s),导航按 Failed 收尾", got.reason)
-            await self._fail(_REJECT_TEXT.get(got.reason or "", f"狗不收速度命令({got.reason})"))
+            await self._fail(_REJECT_TEXT.get(got.reason or "", f"机器人不收速度命令({got.reason})"))
 
     # ------------------------------------------------------------ 内部
 

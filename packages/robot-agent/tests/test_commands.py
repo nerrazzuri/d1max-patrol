@@ -329,13 +329,13 @@ async def test_R1_patrol_任务要绑版本_跟命令和加载的那一版都对
     没绑 = {k: v for k, v in _MISSION.items() if k != "map_version"}
     ack = await cp.handle(_patrol("u1", 没绑).to_wire(), TOPIC)
     assert ack.result is AckResult.REJECTED and "map_version" in ack.reason, \
-        "老站点派来的(命令里是狗自己的 3、任务没绑):不收"
+        "老站点派来的(命令里是机器人自己的 3、任务没绑):不收"
     ack = await cp.handle(_patrol("u2", dict(_MISSION, map_version="2")).to_wire(), TOPIC)
     assert ack.result is AckResult.REJECTED and ack.reason.startswith("payload:") \
         and "第 2 版" in ack.reason, "任务说 2、命令说 3:对不上不收"
     ack = await cp.handle(_patrol("u3", dict(_MISSION, map_version="4"), version="4").to_wire(),
                           TOPIC)
-    assert ack.result is AckResult.REJECTED and ack.reason == "map_mismatch", "狗加载的是 3"
+    assert ack.result is AckResult.REJECTED and ack.reason == "map_mismatch", "机器人加载的是 3"
     ack = await cp.handle(_patrol("u4", _MISSION).to_wire(), TOPIC)
     assert ack.result is AckResult.ACCEPTED, ack
 

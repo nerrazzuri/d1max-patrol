@@ -77,7 +77,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("总览", () => {
-  it("每个版本:备注、构建信息、数量、哪几只狗在用;最新一版标出来", async () => {
+  it("每个版本:备注、构建信息、数量、哪几台机器人在用;最新一版标出来", async () => {
     const { container: c, getByLabelText } = mount();
     await waitFor(() => expect(c.textContent).toContain("v3"));
     const v3 = getByLabelText("estate:3");
@@ -100,7 +100,7 @@ describe("总览", () => {
     await waitFor(() => expect(c.textContent).toContain("MIRRORED"));
   });
 
-  it("每只狗:加载的版本、最近一次下发的状态、实际配置核对;中文", async () => {
+  it("每台机器人:加载的版本、最近一次下发的状态、实际配置核对;中文", async () => {
     lang.value = "zh";
     const { container: c } = mount();
     await waitFor(() => expect(c.textContent).toContain("定位器已确认"));
@@ -127,7 +127,7 @@ describe("备注", () => {
 });
 
 describe("发布", () => {
-  it("只列在线又能换图的狗;选了才能发;结果一只一行(成功和拒绝分开)", async () => {
+  it("只列在线又能换图的机器人;选了才能发;结果一只一行(成功和拒绝分开)", async () => {
     routes["POST /api/admin/maps/estate/3/publish"] = (b) => json({ results: [
       { robot_id: "A", ok: true, state: "pending", reason: "" },
       { robot_id: "B", ok: false, state: "refused", reason: "estate:3 的禁行区还没确认", code: "zones_unconfirmed" },
@@ -171,7 +171,7 @@ describe("发布", () => {
 });
 
 describe("回退", () => {
-  it("按钮上写着退到哪一版;确认文字说明狗本地留着不用下载;点了发 rollback", async () => {
+  it("按钮上写着退到哪一版;确认文字说明机器人本地留着不用下载;点了发 rollback", async () => {
     routes["POST /api/admin/maps/rollback"] = () => json({ result: { robot_id: "A", ok: true, state: "pending", reason: "" } });
     const { container: c, getAllByText } = mount();
     await waitFor(() => getAllByText(/Roll back/));
@@ -186,7 +186,7 @@ describe("回退", () => {
     expect(calls.find((x) => x.path === "/api/admin/maps/rollback")?.body).toEqual({ robot_id: "A", without_home: true });
   });
 
-  it("狗上没留的上一版:确认文字说会重新下载", async () => {
+  it("机器人上没留的上一版:确认文字说会重新下载", async () => {
     overview.robots[0].rollback = { map_id: "estate", version: "1", local: false };
     const { container: c, getAllByText } = mount();
     await waitFor(() => getAllByText(/Roll back/));
@@ -197,7 +197,7 @@ describe("回退", () => {
 });
 
 describe("删除", () => {
-  it("有狗在用、最新一版:按钮灰着带原因;旧版本:确认后删,提示腾出多少", async () => {
+  it("有机器人在用、最新一版:按钮灰着带原因;旧版本:确认后删,提示腾出多少", async () => {
     routes["POST /api/admin/maps/estate/1/delete"] = () => json({ deleted: "estate:1", freed_bytes: 12_500_000 });
     const { container: c, getByLabelText } = mount();
     await waitFor(() => getByLabelText("estate:3"));
@@ -205,7 +205,7 @@ describe("删除", () => {
     expect(del("3").disabled).toBe(true);
     expect(del("3").title).toContain("Latest version");
     expect(del("2").disabled).toBe(true);
-    expect(del("2").title).toContain("A dog is using");
+    expect(del("2").title).toContain("A robot is using");
     expect(del("1").disabled).toBe(false);
     fireEvent.click(del("1"));
     const dialog = await waitFor(() => c.querySelector("dialog") as HTMLDialogElement);
@@ -215,13 +215,13 @@ describe("删除", () => {
   });
 
   it("站点拒了(409):把原因显示出来", async () => {
-    routes["POST /api/admin/maps/estate/1/delete"] = () => json({ error: "estate:1 还有狗在用(A)" }, 409);
+    routes["POST /api/admin/maps/estate/1/delete"] = () => json({ error: "estate:1 还有机器人在用(A)" }, 409);
     const { container: c, getByLabelText } = mount();
     await waitFor(() => getByLabelText("estate:1"));
     fireEvent.click(Array.from(getByLabelText("estate:1").querySelectorAll("button")).find((b) => b.textContent === "Delete") as HTMLElement);
     const dialog = await waitFor(() => c.querySelector("dialog") as HTMLDialogElement);
     fireEvent.click(Array.from(dialog.querySelectorAll("button")).find((b) => b.textContent === "Delete") as HTMLElement);
-    await waitFor(() => expect(say).toHaveBeenCalledWith("Failed: estate:1 还有狗在用(A)"));
+    await waitFor(() => expect(say).toHaveBeenCalledWith("Failed: estate:1 还有机器人在用(A)"));
   });
 });
 
@@ -298,7 +298,7 @@ describe("对比", () => {
 
 describe("换图状态和运行配置的文字", () => {
   it("各个状态的说法;老代理的成功标出没等定位器", () => {
-    expect(activationText(act("pending"))).toBe("Waiting for the dog");
+    expect(activationText(act("pending"))).toBe("Waiting for the robot");
     expect(activationText(act("confirmed", { confirmed: "localizer" }))).toBe("Confirmed by the localizer");
     expect(activationText(act("confirmed", { confirmed: "load" }))).toContain("no localizer");
     expect(activationText(act("confirmed", { confirmed: "legacy" }))).toContain("did not wait for the localizer");

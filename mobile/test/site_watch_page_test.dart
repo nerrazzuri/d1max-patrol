@@ -51,7 +51,7 @@ void main() {
     expect(find.byKey(SiteWatchPage.p1NoneKey), findsNothing);
   });
 
-  testWidgets('狗报了盘况：盘水位印百分比、积压印文件数和最老的等了多久；站点那一行印备份', (t) async {
+  testWidgets('机器人报了盘况：盘水位印百分比、积压印文件数和最老的等了多久；站点那一行印备份', (t) async {
     final api = FakeApi('owner');
     await _open(t, api);
     final tile = find.byKey(SiteWatchPage.robotKey('A'));
@@ -61,14 +61,14 @@ void main() {
     expect(find.textContaining('备份：上次成功在', skipOffstage: false), findsOneWidget);
   });
 
-  testWidgets('狗上存储那几项不知道就印「不知道」和理由，不写 0；站点没配备份就明说', (t) async {
+  testWidgets('机器人上存储那几项不知道就印「不知道」和理由，不写 0；站点没配备份就明说', (t) async {
     final body = siteFixture('site_watch_summary');
     final r = (body['robots'] as List).first as Map<String, dynamic>;
     r['disk_used_ratio'] = null;
     r['upload_backlog'] = null;
     r['oldest_backlog_s'] = null;
-    (r['why'] as Map)['disk_used_ratio'] = '狗上的存储情况还没接到站点';
-    (r['why'] as Map)['upload_backlog'] = '狗上的存储情况还没接到站点';
+    (r['why'] as Map)['disk_used_ratio'] = '机器人上的存储情况还没接到站点';
+    (r['why'] as Map)['upload_backlog'] = '机器人上的存储情况还没接到站点';
     final site = body['site'] as Map<String, dynamic>;
     site['backup'] = null;
     (site['why'] as Map)['backup'] = '站点没配备份目录';
@@ -76,7 +76,7 @@ void main() {
     await _open(t, api);
     final tile = find.byKey(SiteWatchPage.robotKey('A'));
     final text = (t.widget<ListTile>(tile).subtitle! as Text).data!;
-    expect(text, contains('盘水位 不知道（狗上的存储情况还没接到站点'));
+    expect(text, contains('盘水位 不知道（机器人上的存储情况还没接到站点'));
     expect(text, contains('证据积压 不知道'));
     expect(text, contains('在线'));
     expect(find.textContaining('备份：站点没配备份目录', skipOffstage: false), findsOneWidget);
@@ -119,7 +119,7 @@ void main() {
 
   // 2026-10-14 重做：值守入口从狗列表的顶栏挪到了底部导航（进来先看的就是值守）；响铃还是狗列表管，
   // 它在外壳里一直活着。
-  testWidgets('狗列表页：声音档的告警帧响铃；值守入口打得开', (t) async {
+  testWidgets('机器人列表页：声音档的告警帧响铃；值守入口打得开', (t) async {
     final api = FakeApi('guard');
     var rang = 0;
     await t.pumpWidget(MaterialApp(home: NwShell(api: api, ring: () => rang++)));
@@ -176,7 +176,7 @@ void main() {
     expect(r.whyFor('disk_used_ratio'), isNotEmpty);
   });
 
-  test('汇总：钟差不知道（W09h：站点重启、狗重连后十来秒都是这样）不塌成 0，带上站点给的原因', () {
+  test('汇总：钟差不知道（W09h：站点重启、机器人重连后十来秒都是这样）不塌成 0，带上站点给的原因', () {
     final r = SiteWatchRobot.fromWire(const <String, dynamic>{
       'robot_id': 'A',
       'clock_skew_s': null,
@@ -229,7 +229,7 @@ void main() {
     expect(api.alertsCalls, greaterThan(before));
   });
 
-  testWidgets('狗列表页连上时补一次：有声音档没人确认的就响', (t) async {
+  testWidgets('机器人列表页连上时补一次：有声音档没人确认的就响', (t) async {
     final f = siteFixture('site_alerts_all');
     final api = FakeApi('guard')..alertsBody = f;
     var rang = 0;

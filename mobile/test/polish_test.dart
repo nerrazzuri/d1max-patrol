@@ -33,7 +33,7 @@ Future<void> _realFonts(WidgetTester t) => t.runAsync(() async {
 
 Alert _p1() => Alert.fromWire(<String, dynamic>{
       'key': 'A/dog_sees_person#1', 'level': 'P1', 'kind': 'dog_sees_person', 'robot': 'A',
-      'title': '狗看见人了', 'detail': '', 'count': 1, 'first_ms': 1000, 'last_ms': 1000, 'acked_by': '',
+      'title': '机器人看见人了', 'detail': '', 'count': 1, 'first_ms': 1000, 'last_ms': 1000, 'acked_by': '',
       'acked_ms': null, 'context': <String, dynamic>{'zone': 'East wall'},
     });
 

@@ -72,7 +72,7 @@ def test_不变式_旧主收到一条站点过期的回执就下台_重启也不
     w.partition("a", "b")                       # 两台主机互相够不着,旧主够得着狗
     w.send("a", "r1", "move")                   # r1 见过新任期:拒
     assert w.a.state == "deposed" and w.leaders() == ["b"]
-    assert w.send("a", "r2", "move") is None, "下台以后对没见过新任期的狗也不发"
+    assert w.send("a", "r2", "move") is None, "下台以后对没见过新任期的机器人也不发"
     w.a.restart()
     assert w.a.state == "deposed" and w.a.issue("move") is None
 
@@ -125,11 +125,11 @@ def test_脑裂_人没断开旧主就升了_碰过新主的狗不听旧的_没�
     w.partition("b", "near_a")                  # 网分成两半,各带一台狗
     _failover(w)                                # 人以为旧主断了,其实没有
     assert sorted(w.leaders()) == ["a", "b"], "两个主:设计稿明说这种情况防不住"
-    assert w.send("a", "near_a", "move").accepted, "只跟旧主连着的狗还听旧主的"
+    assert w.send("a", "near_a", "move").accepted, "只跟旧主连着的机器人还听旧主的"
     assert w.send("b", "near_b", "move").accepted
     w.heal()
     assert not w.send("a", "near_b", "move").accepted
-    assert w.a.state == "deposed" and w.leaders() == ["b"], "一碰到见过新任期的狗就下台"
+    assert w.a.state == "deposed" and w.leaders() == ["b"], "一碰到见过新任期的机器人就下台"
     assert w.send("a", "near_a", "move") is None
     assert w.send("b", "near_a", "move").accepted and w.robots["near_a"].disk_epoch == 2
     assert [c.leader_id for c in w.robots["near_a"].executed] == ["a", "b"]
@@ -213,7 +213,7 @@ def test_外审I3_会话没复制过来_声光45秒关了_保持距离的任务�
     assert "驱离会话1" not in w.b.log
     w.now = KEEP_S + 1
     assert not r.outputs_on(w.now), "不变式 8:声光关了"
-    assert r.running(w.now) is not None, "可是狗还在退:不能说它原地等"
+    assert r.running(w.now) is not None, "可是机器人还在退:不能说它原地等"
 
 
 def test_决策62_新主不续不撤_这台狗占用到任务结束_结束了才派():
@@ -228,14 +228,14 @@ def test_决策62_新主不续不撤_这台狗占用到任务结束_结束了才
     assert r.running(w.now) == ("standoff", "驱离会话1", 300), "任务原样在跑,时限没变长"
     w.now = 300
     assert r.running(w.now) is None, "到自己的时限:停了"
-    assert w.send("b", "r1", "move").accepted and w.b.busy == {}, "狗报结束了才回到可派"
+    assert w.send("b", "r1", "move").accepted and w.b.busy == {}, "机器人报结束了才回到可派"
 
 
 def test_决策62_人随时可以叫停_叫停之后可派():
     w = _驱离中换主(max_s=600)
     w.now = 30
     assert w.send("b", "r1", "move") is None
-    assert w.send("b", "r1", "stop").accepted, "人下的叫停带新任期,狗照办"
+    assert w.send("b", "r1", "stop").accepted, "人下的叫停带新任期,机器人照办"
     assert w.robots["r1"].running(w.now) is None and w.b.busy == {}
     assert w.send("b", "r1", "move").accepted
 

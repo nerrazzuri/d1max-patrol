@@ -167,7 +167,7 @@ async def test_要人监护_监护中收下_监护过期当场中止_狗停下(�
     aborted = [e for e in ears.by.get("event", []) if e["kind"] == "task_aborted"]
     assert aborted and aborted[-1]["data"]["reason"] == "supervision_lost"
     o = await r.odometry()
-    assert abs(o.vx) < 0.01, "监护过期,狗要停"
+    assert abs(o.vx) < 0.01, "监护过期,机器人要停"
 
 
 async def test_过期的监护命令续不上租约(监护台):

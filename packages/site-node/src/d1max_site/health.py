@@ -124,7 +124,7 @@ class HealthDesk:
             for d in sorted(issued.iterdir()):
                 crt = d / "robot.crt"
                 if crt.is_file() and d.name not in revoked:
-                    out.append((f"狗 {d.name} 的证书", self._cert_end(crt)))
+                    out.append((f"机器人 {d.name} 的证书", self._cert_end(crt)))
         return out
 
     def _has(self, table: str) -> bool:
@@ -176,7 +176,7 @@ class HealthDesk:
             online = [rid for rid, c in clients.items()
                       if c.status is not None and c.status.online]
             out["robots"] = {"ok": True, "value": len(online),
-                             "detail": f"{len(online)}/{len(clients)} 只狗在线"}
+                             "detail": f"{len(online)}/{len(clients)} 台机器人在线"}
         soon, worst = [], None
         for who, end in self._certs():
             if end is None:
@@ -330,7 +330,7 @@ def support_bundle(out: Path, *, home: Path, db: Any, health: HealthDesk | None,
     def put(name: str, obj: Any) -> None:
         files[name] = (obj if isinstance(obj, bytes) else
                        json.dumps(obj, ensure_ascii=False, indent=1, default=str).encode())
-    put("README.txt", ("Nexus Warden 站点诊断包。不含密钥、令牌、库文件、照片录像、狗的位置;"
+    put("README.txt", ("Nexus Warden 站点诊断包。不含密钥、令牌、库文件、照片录像、机器人的位置;"
                        "站点配置里像口令、密钥的值打了码,"
                        "日志里长串十六进制只留前 8 位。\n").encode())
     put("versions.json", {"site": site_version(), "python": platform.python_version(),

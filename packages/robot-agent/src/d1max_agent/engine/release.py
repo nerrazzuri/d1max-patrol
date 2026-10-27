@@ -376,7 +376,7 @@ def _copy_tree_into(src: Path, staging: Path, wheels: Path | None = None) -> str
             shutil.copy2(source, staging / entry)
         else:
             raise ReleaseError(f"源目录里少了 {entry},这棵树打出来的包"
-                               f"在狗上起不来: {source}")
+                               f"在机器人上起不来: {source}")
     if wheels is not None:
         # 离线轮子(W00c5d 第三部分内部评审):现场的狗上不了网,站点下发的版本建 venv 只能从包里
         # 带的轮子装(``release_ops.build_venv`` 见到 ``wheels/`` 就 ``--no-index`` 只从它装)。

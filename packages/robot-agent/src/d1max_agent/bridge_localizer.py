@@ -717,7 +717,7 @@ class BridgeLocalizer:
             bad = f"朝向 {math.degrees(turn):.0f}°"
         else:
             return ""
-        return (f"定位器稳住的地方跟{self._anchor_what}差 {bad},里程说狗没这么动过:"
+        return (f"定位器稳住的地方跟{self._anchor_what}差 {bad},里程说机器人没这么动过:"
                 "请重新设位置")
 
     # ------------------------------------------------------------ 锚记在盘上(对账 S1)

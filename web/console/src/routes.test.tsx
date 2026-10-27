@@ -557,7 +557,7 @@ describe("地图页:点一点去这里 / 设位置,发出去的就是点的坐�
     }
   });
 
-  it("点狗(选狗)不会同时选出一个位置", async () => {
+  it("点机器人(选机器人)不会同时选出一个位置", async () => {
     installScreenCTM();
     const { r } = mapPage(META, "admin");
     await ready(r.container);

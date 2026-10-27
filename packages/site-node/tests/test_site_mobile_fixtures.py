@@ -140,12 +140,12 @@ def _collect(tmp_path) -> dict[str, object]:
         def _seed():
             async def go():
                 b = s.desk.book
-                b.raise_alert(kind="fallen", robot="A", title="狗跌倒了",
+                b.raise_alert(kind="fallen", robot="A", title="机器人跌倒了",
                               now_ms=wall() - 6 * 60_000)
                 b.due_escalations(now_ms=wall())
-                b.raise_alert(kind="clock_skew", robot="A", title="狗的钟不准",
+                b.raise_alert(kind="clock_skew", robot="A", title="机器人的钟不准",
                               now_ms=wall() - 60_000)
-                lag = b.raise_alert(kind="clock_skew", robot="A", title="狗的钟不准",
+                lag = b.raise_alert(kind="clock_skew", robot="A", title="机器人的钟不准",
                                     now_ms=wall())
                 b.resolve(lag.key, who="alice", now_ms=wall())
             return go()

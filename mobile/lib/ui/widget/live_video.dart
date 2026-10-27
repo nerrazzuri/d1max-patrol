@@ -471,7 +471,7 @@ class _LiveVideoState extends State<LiveVideo> {
               tr('No frame within 3 s of opening the stream', '开了流之后 3 秒一帧都没切出来')),
           say: tr(
               'No video data received. Check on the site that this robot is online and its camera is streaming',
-              '一直没收到画面数据。看看站点上这台狗在不在线、相机有没有推流'));
+              '一直没收到画面数据。看看站点上这台机器人在不在线、相机有没有推流'));
     });
   }
 
@@ -530,13 +530,13 @@ class _LiveVideoState extends State<LiveVideo> {
       return tr(
           "The site can't serve this video right now (viewer limit reached, or the robot is not streaming yet). "
               'It will retry shortly',
-          '站点那头现在接不了这一路（看的人满了，或者狗还没推上来）。过一会儿会自己再试');
+          '站点那头现在接不了这一路（看的人满了，或者机器人还没推上来）。过一会儿会自己再试');
     }
     return tr(
         'This video dropped. It will retry in a few seconds. '
             'If this message stays, check on the site that this robot is online',
         '这一路的画面断了，过几秒会自己再试一次。'
-            '一直是这句就看看站点上这台狗在不在线');
+            '一直是这句就看看站点上这台机器人在不在线');
   }
 
   /// 掐掉当前这条流。
@@ -638,7 +638,7 @@ class _LiveVideoState extends State<LiveVideo> {
     return _panel(
         tr('${widget.camera}: no video', '${widget.camera} 没有画面'),
         tr('The site reports this robot is offline. Check its network, or go and look at it',
-            '站点说这台狗现在不在线。看看它的网络，或者走过去看看'));
+            '站点说这台机器人现在不在线。看看它的网络，或者走过去看看'));
   }
 
   /// 没画面时那块板子。

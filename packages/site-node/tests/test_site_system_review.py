@@ -148,7 +148,7 @@ def test_S07_删过的照片_又传上来照收照回执_不复活(tmp_path):
     assert privacy.purge(since_ms=now[0] - 1, until_ms=now[0] + 1)["runs"] == 1
     now[0] += 1000
     got = store.put("A", run, rel, offset=0, data=data[:5], total=len(data))
-    assert got.discarded, "回执叫狗当传完(PR #87 复查 R3:一个字节都不收)"
+    assert got.discarded, "回执叫机器人当传完(PR #87 复查 R3:一个字节都不收)"
     assert not db.query("SELECT * FROM runs") and not db.query("SELECT * FROM run_photos")
     assert not [p for p in tmp_path.rglob("*") if p.is_file() and p.suffix == ".jpg"]
     db.close()
@@ -415,7 +415,7 @@ def test_R3_端到端_狗传站点已经删过的那一趟_站点不收_狗当�
                  now_ms=lambda: NOW)
     run = _一趟(box.root)
     _跑(box, 3)
-    assert not run.exists(), "狗当传完:整趟删掉,不无限重试"
+    assert not run.exists(), "机器人当传完:整趟删掉,不无限重试"
     assert not 站点.store.runs(robot_id="A")
     assert not [p for p in 站点.store.root.rglob("*") if p.is_file()]
     box.close()

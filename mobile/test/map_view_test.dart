@@ -69,7 +69,7 @@ Uint8List _bytesOf(WidgetTester t, Finder image) => (t.widget<Image>(image).imag
 
 Alert _alarm({String version = '8'}) => Alert.fromWire(<String, dynamic>{
       'key': 'A/dog_sees_person#1', 'level': 'P1', 'kind': 'dog_sees_person', 'robot': 'A',
-      'title': '狗看见人了', 'detail': '', 'first_ms': 1, 'last_ms': 1, 'count': 1, 'acked_by': '', 'acked_ms': null,
+      'title': '机器人看见人了', 'detail': '', 'first_ms': 1, 'last_ms': 1, 'count': 1, 'acked_by': '', 'acked_ms': null,
       'context': <String, dynamic>{
         'zone': 'East wall',
         'pose': <String, dynamic>{'map_id': 'estate-1', 'map_version': version, 'x': 0.0, 'y': 0.0},
@@ -163,7 +163,7 @@ void main() {
   });
 
   group('地图栏：摆正', () {
-    testWidgets('转角的方向和中心：+90° 把图右边的狗转到中心正下方；中心就是画布的中心', (t) async {
+    testWidgets('转角的方向和中心：+90° 把图右边的机器人转到中心正下方；中心就是画布的中心', (t) async {
       _size(t);
       final (x, y) = _m(180, 50); // 图右边、中线上
       final api = _GeoApi('guard', extra: <String, dynamic>{'rotation_deg': 90})..robotsOverride = robotsOnMap('8', x, y);
@@ -181,7 +181,7 @@ void main() {
     });
 
     for (final deg in const [30.0, -30.0]) {
-      testWidgets('$deg°：底图、区域、待命点、片区跟着图转；狗的牌子、片区名字是正的、在转过的位置上', (t) async {
+      testWidgets('$deg°：底图、区域、待命点、片区跟着图转；机器人的牌子、片区名字是正的、在转过的位置上', (t) async {
         _size(t);
         final (x, y) = _m(40, 20);
         final api = _GeoApi('guard', extra: <String, dynamic>{
@@ -333,13 +333,13 @@ void main() {
 
     Finder inLegend(String text) => find.descendant(of: find.byKey(SiteMapTab.legendKey), matching: find.text(text));
 
-    testWidgets('图例只列图上有的：底图三样总有；没画的狗、原点、区域、片区不列', (t) async {
+    testWidgets('图例只列图上有的：底图三样总有；没画的机器人、原点、区域、片区不列', (t) async {
       _size(t);
       await _pump(t, SiteMapTab(api: FakeApi('guard'))); // 狗不在这张图上、只有待命点
       for (final s in ['地面', '墙、障碍物', '没扫到', '待命点']) {
         expect(inLegend(s), findsOneWidget, reason: s);
       }
-      for (final s in ['狗', '原点', '禁行区', '限速区', '片区']) {
+      for (final s in ['机器人', '原点', '禁行区', '限速区', '片区']) {
         expect(inLegend(s), findsNothing, reason: s);
       }
       await t.pumpWidget(Container());
@@ -359,7 +359,7 @@ void main() {
           <String, dynamic>{'id': 'b', 'kind': 'slow', 'label': 'y', 'max_speed_mps': 0.3, 'polygon': [[2, 0], [3, 0], [3, 1]]},
         ]};
       await _pump(t, SiteMapTab(api: api));
-      for (final s in ['地面', '墙、障碍物', '没扫到', '狗', '待命点', '原点', '禁行区', '限速区', '片区']) {
+      for (final s in ['地面', '墙、障碍物', '没扫到', '机器人', '待命点', '原点', '禁行区', '限速区', '片区']) {
         expect(inLegend(s), findsOneWidget, reason: s);
       }
       appLang.value = AppLang.en;
@@ -382,7 +382,7 @@ void main() {
       expect(inLegend('图例'), findsOneWidget);
       await t.tap(find.byKey(SiteMapTab.legendToggleKey));
       await t.pump();
-      for (final s in ['地面', '墙、障碍物', '没扫到', '狗', '待命点', '原点', '禁行区', '限速区', '片区']) {
+      for (final s in ['地面', '墙、障碍物', '没扫到', '机器人', '待命点', '原点', '禁行区', '限速区', '片区']) {
         expect(inLegend(s), findsOneWidget, reason: s);
       }
       expect(t.takeException(), isNull);

@@ -70,8 +70,8 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
       msg = tr('$what: done', '$what：好了');
     } on SiteError catch (e) {
       msg = e.status == 409
-          ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''))}',
-              '$what没成：${ackReasonText(e.message.replaceFirst(RegExp(r'^狗没标[:：]'), ''))}')
+          ? tr('$what failed: ${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}',
+              '$what没成：${ackReasonText(e.message.replaceFirst(RegExp(r'^机器人没标[:：]'), ''))}')
           : tr('$what failed: $e', '$what没成：$e');
     }
     if (mounted) setState(() => _msg = msg);
@@ -82,14 +82,14 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
     try {
       robots = (await widget.api.robots()).where(robotCanStandbyHere).toList();
     } on SiteError catch (e) {
-      if (mounted) setState(() => _msg = tr("Can't load the robot list: $e", '拿不到狗的列表：$e'));
+      if (mounted) setState(() => _msg = tr("Can't load the robot list: $e", '拿不到机器人的列表：$e'));
       return;
     }
     if (!mounted) return;
     if (robots.isEmpty) {
       setState(() => _msg = tr(
           'No robot can report its position (offline, or its software is too old)',
-          '没有能报位置的狗（不在线，或者狗上的版本太老）'));
+          '没有能报位置的机器人（不在线，或者机器人上的版本太老）'));
       return;
     }
     final robot = robots.length == 1
@@ -97,7 +97,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
         : await showDialog<String>(
             context: context,
             builder: (c) => SimpleDialog(
-                title: Text(tr("Use which robot's current position?", '用哪只狗现在的位置？')),
+                title: Text(tr("Use which robot's current position?", '用哪台机器人现在的位置？')),
                 children: [
               for (final r in robots)
                 SimpleDialogOption(
@@ -191,7 +191,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
           BarAction(
               key: SiteInterceptsPage.hereKey,
               onPressed: _here,
-              label: tr('Set intercept point at robot', '在狗这儿设拦截点')),
+              label: tr('Set intercept point at robot', '在机器人这儿设拦截点')),
           BarAction(
               key: SiteInterceptsPage.zoneKey, onPressed: _addZone, label: tr('Link zone', '绑防区')),
         ],
@@ -212,13 +212,13 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
                   tr(
                       'Zone → intercept point (when a camera reports an intrusion in the zone, '
                           'a robot is sent to that point)',
-                      '防区 → 拦截点（摄像头报这个防区有入侵，派狗去那个拦截点）'),
+                      '防区 → 拦截点（摄像头报这个防区有入侵，派机器人去那个拦截点）'),
                   style: NwText.titleSmall.copyWith(color: nw.text)),
               nwGap8,
               NwListCard(children: [
                 if (_zones.isEmpty)
                   NwCardText(tr('No zones yet: intrusions are logged as "not mapped" and no robot is sent',
-                      '还没有防区：这时候来的入侵都记「没映射」，没狗去')),
+                      '还没有防区：这时候来的入侵都记「没映射」，没机器人去')),
                 for (final z in _zones)
                   ListTile(
                     key: Key('zone-${z['zone']}'),
@@ -228,11 +228,11 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
                     trailing: manage
                         ? IconButton(
                             key: Key('zone-remove-${z['zone']}'),
-                            tooltip: tr('Stop sending robots', '不再派狗'),
+                            tooltip: tr('Stop sending robots', '不再派机器人'),
                             icon: Icon(Icons.link_off_rounded, color: nw.text),
                             onPressed: () => _confirm(
                                 tr('Stop sending robots to zone ${z['zone']}? (Intrusions still raise alarms)',
-                                    '防区 ${z['zone']} 不再派狗？（之后的入侵照样报告警）'),
+                                    '防区 ${z['zone']} 不再派机器人？（之后的入侵照样报告警）'),
                                 () => _run(() => widget.api.unmapZone('${z['zone']}'),
                                     tr('Unlink zone ${z['zone']}', '取消防区 ${z['zone']}')),
                                 Key('zone-remove-go-${z['zone']}')))
@@ -259,7 +259,7 @@ class _SiteInterceptsPageState extends State<SiteInterceptsPage> {
                       if ('${p['reach'] ?? ''}'.isNotEmpty)
                         Text(
                             tr('Unreachable, no robot is sent on an intrusion: ${p['reach']}',
-                                '走不到，入侵来了不派狗：${p['reach']}'),
+                                '走不到，入侵来了不派机器人：${p['reach']}'),
                             key: Key('intercept-reach-${p['name']}'), style: small.copyWith(color: nw.error)),
                       if ('${p['reach_note'] ?? ''}'.isNotEmpty)
                         Text('${p['reach_note']}', style: small.copyWith(color: nw.textMuted)),

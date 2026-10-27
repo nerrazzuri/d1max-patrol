@@ -99,7 +99,7 @@ def test_站点证书总带本机地址_站点自己连127001不会被主机名�
 
 
 def test_robot_id只许安全字符(ca):
-    for bad in ("a\tb", "a\nb", "a\\b", "CN=x", "狗1", "a" * 65, "a,b"):
+    for bad in ("a\tb", "a\nb", "a\\b", "CN=x", "机器人1", "a" * 65, "a,b"):
         with pytest.raises(CAError):
             ca.issue_robot(bad, days=1, now_ms=NOW)
 

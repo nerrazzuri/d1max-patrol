@@ -85,7 +85,7 @@ class DeterDesk:
             return "unsupported"
         opts = self.options()
         if req.side != "both" and req.side not in opts.get("spotlight_sides", []):
-            return "unsupported: 这台狗的聚光灯不分左右"
+            return "unsupported: 这台机器人的聚光灯不分左右"
         if req.color and req.color not in opts.get("strobe_colors", []):
             return f"unsupported: 警灯没有 {req.color} 色"
         if req.output == "speaker" and req.on:

@@ -275,7 +275,7 @@ async def test_真代理(tmp_path):
         bad = {"max_s": 60, "leash_m": 6.0, "center": {**CENTER.to_wire(), "map_version": "9"}}
         await rt._on_cmd(_cmd("standoff", bad, "s0", c))
         await broker.drain()
-        assert ears.by["cmd/ack"][-1]["reason"] == "map_mismatch", "拦截点不在狗加载的图上:拒"
+        assert ears.by["cmd/ack"][-1]["reason"] == "map_mismatch", "拦截点不在机器人加载的图上:拒"
         await rt._on_cmd(_cmd("standoff", {"max_s": 60, "leash_m": 6.0,
                                            "center": CENTER.to_wire()}, "s1", c))
         await broker.drain()

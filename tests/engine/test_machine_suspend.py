@@ -835,7 +835,7 @@ async def test_返航中暂停再让开腿再继续_也重新规划回家(返航
     eng = 返航中的引擎
     await eng.pause()
     await eng.wait_state(RunState.PAUSED)
-    await eng.suspend("地上有水,人把狗牵到一边")
+    await eng.suspend("地上有水,人把机器人牵到一边")
     await eng.wait_state(RunState.SUSPENDED)
     点 = eng.snapshot.suspended_at
     assert 点 is not None
@@ -1288,7 +1288,7 @@ async def test_等定位时让开腿再继续_整趟还能跑完(等定位收敛
     断到整趟:让开腿 → 人开着走 → 点继续 → 接着等收敛 → 收敛 → 跑完。
     """
     eng = 等定位收敛的引擎
-    await eng.suspend("狗在空走廊里收不敛,人把它牵到配电柜那边去")
+    await eng.suspend("机器人在空走廊里收不敛,人把它牵到配电柜那边去")
     await eng.wait_state(RunState.SUSPENDED)
     点 = eng.snapshot.suspended_at
     assert 点 is not None

@@ -1566,7 +1566,7 @@ class MissionEngine(EventEmitter[RunSnapshot]):
                                 # **不离开 SUSPENDED**:报错不是中止,人可以把狗
                                 # 牵回地图里再点一次。走 abort 的话这一趟就没了,
                                 # 而人要的恰恰是把它救回来。
-                                deny = "狗不在地图里,找不到下一个点"
+                                deny = "机器人不在地图里,找不到下一个点"
                                 self._note("resume_refused", reason=deny)
                                 base = live.suspended.reason if live.suspended else ""
                                 self._publish(f"{base} —— 还不能继续: {deny}"

@@ -60,10 +60,10 @@ void main() {
     expect(Alert.fromWire(<String, dynamic>{'key': 'k', 'context': 'x'}).context, isEmpty);
   });
 
-  test('图上标什么：狗（红）与拦截点（紫）；别的图上的不往这张图上画；都没有就不给看图', () {
+  test('图上标什么：机器人（红）与拦截点（紫）；别的图上的不往这张图上画；都没有就不给看图', () {
     final (m, v, marks) = sceneMarks(_intrusion())!;
     expect((m, v), ('estate-1', '7'));
-    expect(marks.map((x) => x.label), ['狗 A', '拦截点 gate']);
+    expect(marks.map((x) => x.label), ['机器人 A', '拦截点 gate']);
     final other = sceneMarks(_intrusion(context: <String, dynamic>{
       'pose': <String, dynamic>{'map_id': 'estate-1', 'map_version': '7', 'x': 1, 'y': 1},
       'intercept': <String, dynamic>{'name': 'g', 'map_id': 'estate-1', 'map_version': '9',
@@ -73,14 +73,14 @@ void main() {
     expect(sceneMarks(_intrusion(context: <String, dynamic>{'zone': 'z'})), isNull);
   });
 
-  testWidgets('现场页：防区、拦截点、狗在哪、那一趟；在图上看带着标记', (t) async {
+  testWidgets('现场页：防区、拦截点、机器人在哪、那一趟；在图上看带着标记', (t) async {
     await _land(t);
     final api = FakeApi('guard');
     await t.pumpWidget(MaterialApp(home: SiteAlertScenePage(api: api, alert: _intrusion())));
     await t.pumpAndSettle();
     expect(find.textContaining('防区：front-yard'), findsOneWidget);
     expect(find.textContaining('拦截点：gate'), findsOneWidget);
-    expect(find.textContaining('狗最后在：(3.0, -1.0)'), findsOneWidget);
+    expect(find.textContaining('机器人最后在：(3.0, -1.0)'), findsOneWidget);
     expect(find.textContaining('incident-abc'), findsOneWidget);
     await t.ensureVisible(find.byKey(SiteAlertScenePage.mapKey));
     await t.tap(find.byKey(SiteAlertScenePage.mapKey));
@@ -181,12 +181,12 @@ void main() {
     expect(api.calls, isNot(contains('watch-token')));
   });
 
-  testWidgets('W33 狗看见人了：现场页有「就地驱离」，按了开一场；别的告警没有这个按钮', (t) async {
+  testWidgets('W33 机器人看见人了：现场页有「就地驱离」，按了开一场；别的告警没有这个按钮', (t) async {
     await _land(t);
     final api = FakeApi('guard');
     final seen = Alert.fromWire(<String, dynamic>{
       'key': 'A/dog_sees_person#1', 'level': 'P1', 'kind': 'dog_sees_person', 'robot': 'A',
-      'title': '狗看见人了:2 个人,最近 3.5 m', 'detail': '布防中', 'first_ms': 1, 'last_ms': 1,
+      'title': '机器人看见人了:2 个人,最近 3.5 m', 'detail': '布防中', 'first_ms': 1, 'last_ms': 1,
       'count': 1, 'acked_by': '', 'acked_ms': null, 'resolved_by': '', 'resolved_ms': null,
       'escalated': 0, 'channel': 'sound',
       'context': <String, dynamic>{'task_id': 'persons', 'persons': <String, dynamic>{'count': 2},

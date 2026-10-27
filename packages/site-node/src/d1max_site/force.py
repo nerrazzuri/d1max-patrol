@@ -31,10 +31,10 @@ SIREN_S = 45
 #: 定时按剩余时长再开一次,最多晚这么久补回来;过了 45 秒就不发)。
 RENEW_S = 5
 
-_TITLES = {"flipped": "狗翻倒了", "lifted": "狗被抱起来了"}
+_TITLES = {"flipped": "机器人翻倒了", "lifted": "机器人被抱起来了"}
 _DETAILS = {
-    "flipped": "狗已经停下、软急停(不让它自己乱蹬);派人去扶起来,检查没坏再在手机上解除急停",
-    "lifted": "四条腿上不承重:有人把狗抱起来了(可能是偷狗)。狗已经停下;看现场、录像",
+    "flipped": "机器人已经停下、软急停(不让它自己乱蹬);派人去扶起来,检查没坏再在手机上解除急停",
+    "lifted": "四条腿上不承重:有人把机器人抱起来了(可能是偷机器人)。机器人已经停下;看现场、录像",
 }
 
 
@@ -121,7 +121,7 @@ class ForceWatch:
                        "started_ms=excluded.started_ms, siren=excluded.siren",
                        (rid, st, now, siren))
             queue(tx, kind=f"force_{st}", robot=rid, title=_TITLES[st],
-                  detail=_DETAILS[st] + (";布防中,狗上警笛、警灯响 45 秒" if siren else ""),
+                  detail=_DETAILS[st] + (";布防中,机器人上警笛、警灯响 45 秒" if siren else ""),
                   context=context, now_ms=now)
         log.warning("%s %s", rid, _TITLES[st])
         return {"robot_id": rid, "state": st, "started_ms": now, "siren": siren}

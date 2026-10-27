@@ -156,7 +156,7 @@ class _NwShellState extends State<NwShell> {
     final admin = widget.api.session?.canSeeHealth ?? false;
     final items = <NwNavItem>[
       NwNavItem(key: NwShell.dutyKey, icon: Icons.shield_rounded, label: tr('Duty', '值守')),
-      NwNavItem(key: NwShell.dogsKey, icon: Icons.pets_rounded, label: tr('Dogs', '狗')),
+      NwNavItem(key: NwShell.dogsKey, icon: Icons.smart_toy_rounded, label: tr('Robots', '机器人')),
       NwNavItem(key: NwShell.mapKey, icon: Icons.map_rounded, label: tr('Map', '地图')),
       NwNavItem(key: NwShell.historyKey, icon: Icons.history_rounded, label: tr('History', '记录')),
       if (admin)

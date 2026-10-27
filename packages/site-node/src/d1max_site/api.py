@@ -332,7 +332,7 @@ class SiteApi:
         except DispatchRefused as exc:
             raise HttpError(409, str(exc)) from exc
         except (DispatchTimeout, TimeoutError) as exc:
-            raise HttpError(504, f"等狗的回执超时: {exc}") from exc
+            raise HttpError(504, f"等机器人的回执超时: {exc}") from exc
 
 
 class _Handler(TlsHandlerMixin):
@@ -566,7 +566,7 @@ class _Handler(TlsHandlerMixin):
             if m is not None:
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台狗")
+                    raise HttpError(404, "没有这台机器人")
                 if m.group(2) == "halt" and method == "POST":
                     return self._halt(robot_id, user)
                 if m.group(2) == "resume" and method == "POST":
@@ -588,25 +588,25 @@ class _Handler(TlsHandlerMixin):
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台狗")
+                    raise HttpError(404, "没有这台机器人")
                 return self._mapping_read(robot_id, m.group(2), user)
             m = _LOGS.match(path)
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台狗")
+                    raise HttpError(404, "没有这台机器人")
                 return self._proc_logs(robot_id, m.group(2), user)
             m = _VIDEO.match(path)
             if m is not None and method == "GET":
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台狗")
+                    raise HttpError(404, "没有这台机器人")
                 return self._video(robot_id, m.group(2), user)
             m = _ROBOT.match(path)
             if m is not None:
                 robot_id = unquote(m.group(1))
                 if not SAFE_ID.match(robot_id):
-                    raise HttpError(404, "没有这台狗")
+                    raise HttpError(404, "没有这台机器人")
                 return self._robot(method, robot_id, m.group(2), user)
             raise HttpError(404, f"没有 {method} {path}")
         except HttpError as exc:
@@ -957,7 +957,7 @@ class _Handler(TlsHandlerMixin):
                                              "manual_only": True})
             rid = unquote(robot_id or "")
             if not SAFE_ID.match(rid):
-                raise HttpError(404, "没有这台狗")
+                raise HttpError(404, "没有这台机器人")
             self._audit_target = rid
             if action == "code":
                 hours = d.get("hours", 24)
@@ -1114,7 +1114,7 @@ class _Handler(TlsHandlerMixin):
         assert m is not None
         rid = unquote(m.group(1))
         if not SAFE_ID.match(rid):
-            raise HttpError(404, "没有这台狗")
+            raise HttpError(404, "没有这台机器人")
         self._need(user, MANAGE)
         self._audit_target = rid
         if method != "POST":
@@ -1364,11 +1364,11 @@ class _Handler(TlsHandlerMixin):
         except DispatchRefused as exc:
             raise HttpError(409, str(exc)) from exc
         except (DispatchTimeout, TimeoutError, FutureTimeout) as exc:
-            raise HttpError(504, "狗没回停车的回执:看不到它停了没有,按机身急停") from exc
+            raise HttpError(504, "机器人没回停车的回执:看不到它停了没有,按机身急停") from exc
         ack = r.get("ack") if isinstance(r, dict) else None
         if isinstance(ack, dict) and ack.get("result") != "accepted":
             # 狗说停车没成(W00c5e 内部评审):任务它中止了,腿停没停住不知道。
-            raise HttpError(502, f"狗说停车没成({ack.get('reason', '')}):按机身急停")
+            raise HttpError(502, f"机器人说停车没成({ack.get('reason', '')}):按机身急停")
         return self._send_json(200, r)
 
     def _resume(self, robot_id: str, user) -> None:
@@ -1378,7 +1378,7 @@ class _Handler(TlsHandlerMixin):
         self._body()
         self._audit_target = robot_id
         if self.site.dispatcher.registry.get(robot_id) is None:
-            raise HttpError(404, "没有这台狗")
+            raise HttpError(404, "没有这台机器人")
         was = self.site.dispatcher.resume(robot_id, by=str(user))
         return self._send_json(200, {"robot_id": robot_id, "was_held": was})
 
@@ -1395,7 +1395,7 @@ class _Handler(TlsHandlerMixin):
         self._audit_detail = {"manual_only": on, **({"note": note[:200]} if note else {})}
         reg = self.site.dispatcher.registry
         if reg.get(robot_id) is None:
-            raise HttpError(404, "没有这台狗")
+            raise HttpError(404, "没有这台机器人")
         was = reg.set_manual_only(robot_id, on, by=str(user), now_ms=self.site.dispatcher._now(),
                                   note=note)
         return self._send_json(200, {"robot_id": robot_id, "manual_only": reg.manual_only(robot_id),
@@ -1468,7 +1468,7 @@ class _Handler(TlsHandlerMixin):
             have = (caps["map_id"], caps.get("map_version"))
             if want is not None and want != have:
                 raise HttpError(409, f"位置是在 {want[0]} v{want[1]} 上点的,{robot_id} 加载的是 "
-                                     f"{have[0]} v{have[1]}:换到这只狗的图上重新点")
+                                     f"{have[0]} v{have[1]}:换到这台机器人的图上重新点")
             payload |= {"map_id": have[0], "map_version": have[1]}
         elif want is not None:
             payload |= {"map_id": want[0], "map_version": want[1]}   # 狗没报图:让狗自己核
@@ -1517,7 +1517,7 @@ class _Handler(TlsHandlerMixin):
         if old is not None and loaded[0] is not None and not replace \
                 and (old["map_id"], old["map_version"]) != loaded:
             raise HttpError(409, f"待命点 {name} 登记在 {old['map_id']}:{old['map_version']} 上,"
-                                 f"狗现在用的是 {loaded[0]}:{loaded[1]}:换个名字,或者说明要替换",
+                                 f"机器人现在用的是 {loaded[0]}:{loaded[1]}:换个名字,或者说明要替换",
                             extra={"name_taken": {"map_id": old["map_id"],
                                                   "map_version": old["map_version"]}})
         # 有效期同设位置(30 s,Orin 的钟不准,再短就收不下);超时之后狗照样标了的,按事件补登记。
@@ -1527,14 +1527,14 @@ class _Handler(TlsHandlerMixin):
                 ttl_ms=VIDEO_COMMAND_TTL_MS))
         except HttpError as exc:
             if exc.status == 504:
-                raise HttpError(504, "等狗回话超时:狗可能已经标了 —— 标了的话站点收到狗的消息会自动"
+                raise HttpError(504, "等机器人回话超时:机器人可能已经标了 —— 标了的话站点收到机器人的消息会自动"
                                      "登记待命点,过一会儿刷新看看") from exc
             raise
         ack = r["ack"]
         got = ack if ack.get("result") != "duplicate" else (ack.get("original") or {})
         self._audit_detail |= {"command_id": r.get("command_id"), "task_id": r.get("task_id")}
         if got.get("result") != "accepted":
-            raise HttpError(409, f"狗没标:{got.get('reason') or got.get('result')}")
+            raise HttpError(409, f"机器人没标:{got.get('reason') or got.get('result')}")
         data = got.get("data")
         if isinstance(data, dict):
             self._audit_detail |= {"map": f"{data.get('map_id')}:{data.get('map_version')}",
@@ -1542,7 +1542,7 @@ class _Handler(TlsHandlerMixin):
         try:
             stb.mark(robot_id, name, data)
         except (StandbyError, KeyError, TypeError) as exc:
-            raise HttpError(500, f"狗上的原点已经换了,站点登记原点没成:{exc}。"
+            raise HttpError(500, f"机器人上的原点已经换了,站点登记原点没成:{exc}。"
                                  "按下面的位置手工登记",
                             extra={"command_id": r.get("command_id"), "task_id": r.get("task_id"),
                                    "data": data}) from exc
@@ -1558,23 +1558,23 @@ class _Handler(TlsHandlerMixin):
         caps = c.capabilities.tasks if c and c.capabilities else {}
         if not (caps.get("mark_home") or {}).get("standby"):
             raise HttpError(409, f"{robot_id} 的代理报不了「只要位置」(老代理会把它当成标原点):"
-                                 "先升级狗上的版本")
+                                 "先升级机器人上的版本")
         try:
             r = self.site.dispatch(lambda: self.site.dispatcher.map_command(
                 robot_id, "mark_home", {"name": name, "target": "standby"},
                 issued_by=str(user), ttl_ms=VIDEO_COMMAND_TTL_MS))
         except HttpError as exc:
             if exc.status == 504:
-                raise HttpError(504, "等狗回话超时:狗上什么都没改,再按一次") from exc
+                raise HttpError(504, "等机器人回话超时:机器人上什么都没改,再按一次") from exc
             raise
         ack = r["ack"]
         got = ack if ack.get("result") != "duplicate" else (ack.get("original") or {})
         self._audit_detail |= {"command_id": r.get("command_id"), "task_id": r.get("task_id")}
         if got.get("result") != "accepted":
-            raise HttpError(409, f"狗没标:{got.get('reason') or got.get('result')}")
+            raise HttpError(409, f"机器人没标:{got.get('reason') or got.get('result')}")
         data = got.get("data")
         if not isinstance(data, dict) or data.get("target") != "standby":
-            raise HttpError(500, "狗没按「只要位置」回(老代理会把它当成标原点),什么都没登记")
+            raise HttpError(500, "机器人没按「只要位置」回(老代理会把它当成标原点),什么都没登记")
         return data
 
     def _intercept_here(self, robot_id: str, user) -> None:
@@ -1660,11 +1660,11 @@ class _Handler(TlsHandlerMixin):
         ack = r["ack"]
         if ack.get("result") != "accepted":
             reason = ack.get("reason") or ack.get("result")
-            raise HttpError(409, f"狗没给:{reason}",
+            raise HttpError(409, f"机器人没给:{reason}",
                             extra={"unsupported": True} if reason == "unsupported" else None)
         data = ack.get("data")
         if not isinstance(data, dict):
-            raise HttpError(502, "狗的回执里没有" + ("轨迹" if what == "trail" else "预览"))
+            raise HttpError(502, "机器人的回执里没有" + ("轨迹" if what == "trail" else "预览"))
         return self._send_json(200, data)
 
     def _proc_logs(self, robot_id: str, name: str | None, user) -> None:
@@ -1693,10 +1693,10 @@ class _Handler(TlsHandlerMixin):
         ack = r["ack"]
         if ack.get("result") != "accepted":
             reason = ack.get("reason") or ack.get("result")
-            raise HttpError(404 if reason == "no_such_log" else 409, f"狗没给:{reason}")
+            raise HttpError(404 if reason == "no_such_log" else 409, f"机器人没给:{reason}")
         data = ack.get("data")
         if not isinstance(data, dict):
-            raise HttpError(502, "狗的回执里没有日志")
+            raise HttpError(502, "机器人的回执里没有日志")
         return self._send_json(200, data)
 
     def _supervise(self, robot_id: str, user) -> None:
@@ -1714,7 +1714,7 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, "要 seq(≥1 的整数)")
         self._audit_target = robot_id
         if self.site.dispatcher.registry.get(robot_id) is None:
-            raise HttpError(404, "没有这台狗")
+            raise HttpError(404, "没有这台机器人")
         desk = self.site.supervision
         try:
             if action == "renew":
@@ -1727,7 +1727,7 @@ class _Handler(TlsHandlerMixin):
         except DispatchRefused as exc:
             raise HttpError(409, str(exc)) from exc
         except (DispatchTimeout, TimeoutError, FutureTimeout) as exc:
-            raise HttpError(504, f"等狗的回执超时: {exc}") from exc
+            raise HttpError(504, f"等机器人的回执超时: {exc}") from exc
         return self._send_json(200, {"robot_id": robot_id, "ack": ack})
 
     def _teleop_ws(self, robot_id: str, user) -> None:
@@ -1896,7 +1896,7 @@ class _Handler(TlsHandlerMixin):
         self._need(user, MANAGE)
         robot_id, what = unquote(m.group(1)), m.group(2)
         if not SAFE_ID.match(robot_id):
-            raise HttpError(404, "没有这台狗")
+            raise HttpError(404, "没有这台机器人")
         self._audit_target = robot_id
         d = self._body()
         try:
@@ -1907,7 +1907,7 @@ class _Handler(TlsHandlerMixin):
             elif what == "mapping":
                 action, name = parse_mapping(d)
                 if len(name) > 40:
-                    raise HttpError(400, "包名最多 40 个字符(狗还要加录的时刻、文件名还要加后缀)")
+                    raise HttpError(400, "包名最多 40 个字符(机器人还要加录的时刻、文件名还要加后缀)")
                 kind, payload = "mapping", {"action": action, **({"name": name} if name else {})}
                 target = mapping_target(d)
                 if target is not None:           # W09c2:录包的同时在线建这一版
@@ -1962,8 +1962,8 @@ class _Handler(TlsHandlerMixin):
         elif not any(f.name == "home.json" for f in ref.files):
             if not without:
                 raise HttpError(
-                    409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上还没有原点:下发之后狗"
-                         "不接 goto、巡检,要先把狗开到原点(充电桩前)、设好位置、"
+                    409, f"{robot_id} 在 {ref.map_id}:{ref.version} 上还没有原点:下发之后机器人"
+                         "不接 goto、巡检,要先把机器人开到原点(充电桩前)、设好位置、"
                          "「在这儿标原点」。确认要这样下发就带上 without_home",
                     extra={"reason": "no_home"})
             self._audit_detail = {"without_home": True}
@@ -2042,7 +2042,7 @@ class _Handler(TlsHandlerMixin):
             have_ic = {p["name"] for p in prop.get("intercepts", [])}
             if not isinstance(sb, list) or not all(
                     isinstance(p, list) and len(p) == 2 and tuple(p) in have_sb for p in sb):
-                raise HttpError(400, "adopt.standby 要是带过来的待命点 [狗, 名字] 的列表")
+                raise HttpError(400, "adopt.standby 要是带过来的待命点 [机器人, 名字] 的列表")
             if not isinstance(ic, list) or not all(isinstance(n, str) and n in have_ic
                                                    for n in ic):
                 raise HttpError(400, "adopt.intercepts 要是带过来的拦截点名字的列表")
@@ -2207,7 +2207,7 @@ class _Handler(TlsHandlerMixin):
         self._need(user, MANAGE)
         robot_id = unquote(m.group(1))
         if not SAFE_ID.match(robot_id):
-            raise HttpError(404, "没有这台狗")
+            raise HttpError(404, "没有这台机器人")
         self._audit_target = robot_id
         d = self._body()
         action = d.get("action")
@@ -2289,11 +2289,11 @@ class _Handler(TlsHandlerMixin):
             issued_by=str(user)))
         ack = r["ack"]
         if ack["result"] not in ("accepted", "duplicate"):
-            raise HttpError(409, f"狗没查:{ack.get('reason') or ack['result']}")
+            raise HttpError(409, f"机器人没查:{ack.get('reason') or ack['result']}")
         data = ack.get("data") if ack["result"] == "accepted" else \
             (ack.get("original") or {}).get("data")
         if not isinstance(data, dict) or not isinstance(data.get("checks"), list):
-            raise HttpError(502, "狗的回执里没有清单")
+            raise HttpError(502, "机器人的回执里没有清单")
         checks = [c for c in data["checks"] if isinstance(c, dict)]
         dog_has = {c.get("name") for c in checks}
         # 狗按槽里的自述比过 schema 就用狗的;老代理没比,用站点按登记目录比的那一份。

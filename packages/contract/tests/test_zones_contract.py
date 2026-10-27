@@ -261,7 +261,7 @@ def test_抹掉区_来回一致_狗当禁行守_硬的另说():
     assert e.kind == "erase" and e.keep_out and a.keep_out and not s.keep_out
     assert e.to_wire() == {"id": "e", "kind": "erase", "label": "抹掉",
                            "polygon": [[0, 0], [2, 0], [2, 2], [0, 2]]}
-    assert [z.id for z in zs.nogo()] == ["a", "e", "h"], "狗守的禁行 = 禁行 + 抹掉"
+    assert [z.id for z in zs.nogo()] == ["a", "e", "h"], "机器人守的禁行 = 禁行 + 抹掉"
     assert [z.id for z in zs.erase()] == ["e", "h"]
     assert [z.id for z in zs.hard()] == ["h"], "抹掉区只有标了硬的遥控才守"
 
@@ -286,8 +286,8 @@ def test_抹掉区_收紧放宽():
     assert not tightens(er, _set([], rev=2)), "删抹掉区:放宽"
     assert not tightens(er, _set([_erase("e", poly=[[0, 0], [1, 0], [1, 1], [0, 1]])], rev=2))
     assert tightens(er, _set([_erase("e", poly=BIG)], rev=2)), "放大"
-    assert tightens(er, _set([_nogo("n")], rev=2)), "抹掉换成同一块禁行:狗一样不去"
-    assert tightens(base, _set([_erase("e")], rev=2)), "禁行换成同一块抹掉:狗一样不去"
+    assert tightens(er, _set([_nogo("n")], rev=2)), "抹掉换成同一块禁行:机器人一样不去"
+    assert tightens(base, _set([_erase("e")], rev=2)), "禁行换成同一块抹掉:机器人一样不去"
     assert not tightens(er, _set([_slow("s", 0.1, poly=BIG)], rev=2)), "抹掉改成限速:放宽"
     assert tightens(_set([_slow("s", 0.3)]), _set([_erase("e")], rev=2)), "限速改成抹掉:更严"
     hard = _set([_erase("e", hard=True)])

@@ -85,7 +85,7 @@ def handle(h: Any, method: str, path: str, user: Any) -> None:
 def _robots(adm: MapAdmin, raw: Any) -> list[str]:
     if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_ROBOTS \
             or not all(isinstance(x, str) and SAFE_ID.match(x) for x in raw):
-        raise AdminError(400, f"robots 要是 1–{MAX_ROBOTS} 个狗的号")
+        raise AdminError(400, f"robots 要是 1–{MAX_ROBOTS} 个机器人的号")
     out = list(dict.fromkeys(raw))                    # 去重、保序
     return out
 
@@ -99,7 +99,7 @@ def _publish(h: Any, adm: MapAdmin, user: Any, map_id: str, version: str, d: dic
     for rid in robots:
         if rid not in known:
             results[rid] = {"robot_id": rid, "ok": False, "state": "refused",
-                            "reason": "没有这台狗"}
+                            "reason": "没有这台机器人"}
             continue
         try:
             jobs.append((rid, h._map_activate_payload(rid, ref, d.get("without_home", False))))
@@ -118,11 +118,11 @@ def _rollback(h: Any, adm: MapAdmin, user: Any) -> None:
     d = h._body()
     rid = d.get("robot_id")
     if not isinstance(rid, str) or not SAFE_ID.match(rid) or rid not in set(adm.robot_ids()):
-        raise AdminError(404, "没有这台狗")
+        raise AdminError(404, "没有这台机器人")
     h._audit_target = rid
     target = adm.rollback_target(rid)
     if target is None:
-        raise AdminError(409, f"{rid} 没有可以退回的上一版(狗上没留、命令账里也没有换过别的版本)",
+        raise AdminError(409, f"{rid} 没有可以退回的上一版(机器人上没留、命令账里也没有换过别的版本)",
                          reason="no_previous")
     ref = adm.ref(target["map_id"], target["version"])
     try:

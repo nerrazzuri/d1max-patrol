@@ -61,7 +61,7 @@ Map<String, dynamic> _alert(String level, String kind, String title, {String det
     };
 
 /// 没确认的 P1：狗看见人（带防区、距离、位置）。
-Map<String, dynamic> _p1Row({Map<String, dynamic>? pose}) => _alert('P1', 'dog_sees_person', '狗看见人了:1 个人,最近 6.2 m', detail: '布防中', context: <String, dynamic>{
+Map<String, dynamic> _p1Row({Map<String, dynamic>? pose}) => _alert('P1', 'dog_sees_person', '机器人看见人了:1 个人,最近 6.2 m', detail: '布防中', context: <String, dynamic>{
       'zone': 'East wall', 'task_id': 'persons',
       'persons': <String, dynamic>{'count': 1, 'nearest_m': 6.2},
       'pose': pose ?? <String, dynamic>{'map_id': 'estate-1', 'map_version': '7', 'x': 3.0, 'y': 4.0},

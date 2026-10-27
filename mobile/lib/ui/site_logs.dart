@@ -72,7 +72,7 @@ class _SiteProcLogsPageState extends State<SiteProcLogsPage> {
             return NwEmpty(
                 icon: Icons.article_outlined,
                 text: tr('No logs yet: this robot has not recorded a bag or rebuilt a map',
-                    '还没有日志：这只狗还没录过包、没重建过图'));
+                    '还没有日志：这台机器人还没录过包、没重建过图'));
           }
           return NwListView(children: [
             NwListCard(children: [

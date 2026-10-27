@@ -249,7 +249,7 @@ async def test_狗尾为前的会话_人眼往前是机身往后_照样守(tmp_p
     s = 台(tmp_path, [_zone(behind)], head="tail")
     await s.start()
     await s.开(vx=0.4, secs=20.0)                          # 人推「往前」= 机身往后,冲着池子
-    assert s.r.x < -1.0, "确实往狗尾那头走了"
+    assert s.r.x < -1.0, "确实往机器人尾那头走了"
     assert s.worst > 0.0 and s.r.x - BODY_HL > -3.0
 
 

@@ -18,7 +18,7 @@
   },
   "deter_cornered": {
     "en": "Robot cornered during deterrence",
-    "zh": "驱离时狗被逼到角落"
+    "zh": "驱离时机器人被逼到角落"
   },
   "battery_abort": {
     "en": "Low battery, stopped on the way back",
@@ -34,7 +34,7 @@
   },
   "fallen": {
     "en": "Robot fell over",
-    "zh": "狗跌倒了"
+    "zh": "机器人跌倒了"
   },
   "loc_lost_paused": {
     "en": "Localization lost, needs someone on site",
@@ -46,11 +46,11 @@
   },
   "dock_stuck": {
     "en": "Robot may be stuck on the dock",
-    "zh": "狗可能卡在充电桩上"
+    "zh": "机器人可能卡在充电桩上"
   },
   "charge_overlap": {
     "en": "Two robots charging, area uncovered",
-    "zh": "两台同时在充，区域暂时没狗守"
+    "zh": "两台同时在充，区域暂时没机器人守"
   },
   "dog_sees_person": {
     "en": "Person detected",
@@ -58,7 +58,7 @@
   },
   "evidence_plain": {
     "en": "Evidence on robot is not encrypted",
-    "zh": "狗上的证据没加密"
+    "zh": "机器人上的证据没加密"
   },
   "evidence_unopened": {
     "en": "Sealed evidence cannot be opened",
@@ -70,15 +70,15 @@
   },
   "force_flipped": {
     "en": "Robot flipped over",
-    "zh": "狗翻倒了"
+    "zh": "机器人翻倒了"
   },
   "force_lifted": {
     "en": "Robot was lifted",
-    "zh": "狗被抱起来了"
+    "zh": "机器人被抱起来了"
   },
   "force_bump": {
     "en": "Robot was bumped",
-    "zh": "狗被撞了一下"
+    "zh": "机器人被撞了一下"
   },
   "force_config_bad": {
     "en": "Force thresholds unreadable, using defaults",
@@ -110,11 +110,11 @@
   },
   "agent_too_old": {
     "en": "Robot software too old",
-    "zh": "狗上的代理太老"
+    "zh": "机器人上的代理太老"
   },
   "site_too_old": {
     "en": "Site software older than robot",
-    "zh": "站点比狗上的代理老"
+    "zh": "站点比机器人上的代理老"
   },
   "loc_degraded": {
     "en": "Localization degraded, robot paused",
@@ -122,11 +122,11 @@
   },
   "loc_lost_idle": {
     "en": "Idle robot not localized, cannot dispatch",
-    "zh": "空闲的狗定位不可信，派不了单"
+    "zh": "空闲的机器人定位不可信，派不了单"
   },
   "nav_blocked": {
     "en": "Robot blocked for over a minute",
-    "zh": "狗被挡住了，一分钟还没走成"
+    "zh": "机器人被挡住了，一分钟还没走成"
   },
   "estop_pressed": {
     "en": "E-stop pressed",
@@ -142,7 +142,7 @@
   },
   "watchdog_died": {
     "en": "Site watchdog stopped",
-    "zh": "站点看门狗停了"
+    "zh": "站点看门机器人停了"
   },
   "schedule_died": {
     "en": "Scheduled patrol failed",
@@ -154,11 +154,11 @@
   },
   "robot_offline": {
     "en": "Robot offline during a task",
-    "zh": "狗掉线了（跑着任务）"
+    "zh": "机器人掉线了（跑着任务）"
   },
   "nogo": {
     "en": "Robot inside a no-go zone",
-    "zh": "狗在禁行区里"
+    "zh": "机器人在禁行区里"
   },
   "recording_delete_failed": {
     "en": "Old recordings cannot be deleted",
@@ -190,11 +190,11 @@
   },
   "agent_args_skipped": {
     "en": "Unknown robot settings skipped",
-    "zh": "狗上有启动参数不认识"
+    "zh": "机器人上有启动参数不认识"
   },
   "recording_dropped": {
     "en": "Robot recordings dropped",
-    "zh": "狗上的录像没传上来"
+    "zh": "机器人上的录像没传上来"
   },
   "recording_trimmed": {
     "en": "Oldest recordings removed (disk full)",
@@ -206,7 +206,7 @@
   },
   "disk_80": {
     "en": "Robot storage almost full",
-    "zh": "狗的盘快满了"
+    "zh": "机器人的盘快满了"
   },
   "backup_stale": {
     "en": "Site backup out of date",
@@ -218,7 +218,7 @@
   },
   "map_integrity": {
     "en": "Robot map is corrupted",
-    "zh": "狗上的图坏了"
+    "zh": "机器人上的图坏了"
   },
   "rtk": {
     "en": "RTK base station moved",
@@ -242,11 +242,11 @@
   },
   "bundle_lag": {
     "en": "Robot mission data out of date",
-    "zh": "狗上的任务包落后"
+    "zh": "机器人上的任务包落后"
   },
   "clock_skew": {
     "en": "Robot clock is off",
-    "zh": "狗的钟不准"
+    "zh": "机器人的钟不准"
   },
   "schedule_skipped": {
     "en": "Scheduled patrol skipped",
@@ -266,7 +266,7 @@
   },
   "robot_offline_idle": {
     "en": "Robot offline",
-    "zh": "狗掉线了"
+    "zh": "机器人掉线了"
   },
   "run_done": {
     "en": "Patrol finished",

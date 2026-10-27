@@ -35,7 +35,7 @@ Future<void> _open(WidgetTester t, FakeApi api) async {
 int _count(FakeApi api, String action) => api.calls.where((c) => c == 'supervise A $action').length;
 
 void main() {
-  testWidgets('要人监护的狗、保安才有开关；可自主的狗、业主没有', (t) async {
+  testWidgets('要人监护的机器人、保安才有开关；可自主的机器人、业主没有', (t) async {
     await _open(t, FakeApi('guard', robotView: _view('supervised')));
     expect(find.byKey(SupervisionSwitch.switchKey), findsOneWidget);
     await _open(t, FakeApi('guard', robotView: _view('autonomous')));
@@ -95,9 +95,9 @@ void main() {
     await t.pumpWidget(Container());
   });
 
-  testWidgets('续不上一次不关、连续两次才关；狗不接也一样', (t) async {
+  testWidgets('续不上一次不关、连续两次才关；机器人不接也一样', (t) async {
     final api = FakeApi('guard', robotView: _view('supervised'))
-      ..superviseError = SiteError(504, '等狗的回执超时');
+      ..superviseError = SiteError(504, '等机器人的回执超时');
     await _open(t, api);
     await t.tap(find.byKey(SupervisionSwitch.switchKey));
     await t.pump();
@@ -115,7 +115,7 @@ void main() {
     await t.pump();
     await t.pump(const Duration(seconds: 1));
     await t.pump();
-    expect(find.textContaining('狗没接监护'), findsOneWidget);
+    expect(find.textContaining('机器人没接监护'), findsOneWidget);
     expect(find.text('我在现场监护'), findsOneWidget);
     await t.pumpWidget(Container());
   });
@@ -164,7 +164,7 @@ void main() {
     await t.pumpWidget(Container());
   });
 
-  testWidgets('派单被狗以 unsupervised 拒：说人话', (t) async {
+  testWidgets('派单被机器人以 unsupervised 拒：说人话', (t) async {
     final api = _RejectingApi('guard', robotView: _view('supervised'));
     await _open(t, api);
     await t.tap(find.byKey(const Key('btn-standby')));

@@ -365,7 +365,7 @@ def test_pack的帮助说清了它跑在笔记本上(capsys):
     with pytest.raises(SystemExit):
         build_parser().parse_args(["release", "pack", "--help"])
     帮助 = capsys.readouterr().out
-    assert "笔记本" in 帮助 and "狗" in 帮助
+    assert "笔记本" in 帮助 and "机器人" in 帮助
 
 
 # ------------------------------------------------------------ W00c5e:切版本不碰单元

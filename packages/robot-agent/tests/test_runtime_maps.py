@@ -151,7 +151,7 @@ async def test_哈希不对_或适配器载不进_不换图_发失败事件(台)
     await _跑(rt, broker)
     assert rt.loaded_map == ("m", "1")
     from d1max_contract.maps import MapRef
-    assert not rt.maps.dir_of(MapRef.from_wire(ref)).exists(), "载不进去的扔掉,狗上不留"
+    assert not rt.maps.dir_of(MapRef.from_wire(ref)).exists(), "载不进去的扔掉,机器人上不留"
     assert "定位起不来" in [e for e in ears.by["event"]
                             if e["kind"] == "map_activate_failed"][-1]["data"]["reason"]
 
@@ -177,7 +177,7 @@ async def test_跑着任务先下载_等狗空下来才换_坏载荷拒(台):
         await _跑(rt, broker, 5, r, c, settle_s=0)
         if rt.loaded_map == ("m", "5"):
             break
-    assert rt.loaded_map == ("m", "5"), "狗空下来就换"
+    assert rt.loaded_map == ("m", "5"), "机器人空下来就换"
 
 
 async def test_没有载入这一步的适配器_不报换图能力_命令回unsupported(tmp_path):

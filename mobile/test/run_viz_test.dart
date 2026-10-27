@@ -77,7 +77,7 @@ Future<void> _pump(WidgetTester t, Widget page) async {
 
 void main() {
   group('纯算', () {
-    test('runVizShapes：只取报着这张图的狗；坐标换成画布像素；乱写的点丢掉', () {
+    test('runVizShapes：只取报着这张图的机器人；坐标换成画布像素；乱写的点丢掉', () {
       Offset px(double x, double y) => Offset(x * 10, y * 10);
       final shapes = runVizShapes(_viz(), 'estate-1', '8', px);
       expect(shapes.length, 1);
@@ -128,7 +128,7 @@ void main() {
           '被挡 1 秒：x\n重规划 3 次（区域换了）');
     });
 
-    test('locText：可信但变差了，带狗说的原因', () {
+    test('locText：可信但变差了，带机器人说的原因', () {
       final l = <String, dynamic>{'localizer': 'bridge', 'anchored': true, 'reason': '', 'source': 'scan_match', 'sigma_m': 0.6};
       expect(locText(l), '定位：点云匹配，偏差约 0.6 m');
       expect(locText(<String, dynamic>{...l, 'degraded': '定位偏差可能到 0.60 m'}), '定位：点云匹配，偏差约 0.6 m · 变差：定位偏差可能到 0.60 m');
@@ -201,7 +201,7 @@ void main() {
     });
   });
 
-  group('单狗页', () {
+  group('单机器人页', () {
     testWidgets('被挡、重规划写在定位下面；没有就不出现', (t) async {
       final view = <String, dynamic>{
         ...siteFixture('site_robot'),

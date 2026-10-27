@@ -114,7 +114,7 @@ def check_package(pkg: Path, public: Path | None, *, allow_unsigned: bool = Fals
     except (OSError, ValueError) as exc:
         return f"读不了 release.json: {exc}"
     if public is None or not trusted_keys(Path(public)):
-        return "" if allow_unsigned else f"狗上没装发行公钥({public or DEFAULT_PUBKEY}),不装"
+        return "" if allow_unsigned else f"机器人上没装发行公钥({public or DEFAULT_PUBKEY}),不装"
     try:
         verify(manifest, public)
     except SignError as exc:

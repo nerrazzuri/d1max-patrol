@@ -347,11 +347,11 @@ async def test_净空许可分两头_往前走向哪头要哪头的许可():
         assert (await client.call("clear", ms=800, dist=2.0, end="tail")).ok
         assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
         await asyncio.sleep(0.15)
-        assert sim.vx > 0, "狗尾为前、有狗尾的许可:放"
+        assert sim.vx > 0, "机器人尾为前、有机器人尾的许可:放"
         sim.head = 1
         assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
         await asyncio.sleep(0.15)
-        assert sim.vx == 0.0, "狗头为前:狗尾的许可不算"
+        assert sim.vx == 0.0, "机器人头为前:机器人尾的许可不算"
         assert not (await client.call("clear", ms=800, dist=2.0, end="side")).ok
     async with _client(require_clearance=True, follows_head=False) as (sim, client):
         await _站起(sim, client)
@@ -359,7 +359,7 @@ async def test_净空许可分两头_往前走向哪头要哪头的许可():
         assert (await client.call("clear", ms=800, dist=2.0, end="tail")).ok
         assert (await client.call("vel", fwd=0.4, lat=0.0, yaw=0.0, ttl_ms=300)).ok
         await asyncio.sleep(0.15)
-        assert sim.vx == 0.0, "SDK 不跟着调头:往前还是往狗头走,要狗头的许可"
+        assert sim.vx == 0.0, "SDK 不跟着调头:往前还是往机器人头走,要机器人头的许可"
 
 
 async def test_速度档位_被换掉就不走_过一会儿自己设回去():

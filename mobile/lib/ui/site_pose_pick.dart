@@ -201,7 +201,7 @@ class _PoseBarState extends State<PoseBar> {
       msg = result == 'accepted'
           ? ok
           : tr('The robot did not accept: $result ${ack is Map ? (ack['reason'] ?? '') : ''}',
-              '狗没接：$result ${ack is Map ? (ack['reason'] ?? '') : ''}');
+              '机器人没接：$result ${ack is Map ? (ack['reason'] ?? '') : ''}');
     } on SiteError catch (e) {
       // 站点拒了：原因原样给人看（监护模式要租约、没就绪、点不可达……）
       msg = tr('Refused: ${e.message}', '被拒：${e.message}');
@@ -236,7 +236,7 @@ class _PoseBarState extends State<PoseBar> {
                   'Tell $id it is standing at x ${at.dx} m, y ${at.dy} m, heading ${yawDegText(yaw)}° on this map. '
                       'If that is wrong the robot will navigate from the wrong place.',
                   '告诉 $id：它现在站在这张图上 x ${at.dx} 米、y ${at.dy} 米、朝向 ${yawDegText(yaw)}°。'
-                      '设错了狗会按错的位置走。')),
+                      '设错了机器人会按错的位置走。')),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('Cancel', '算了'))),
                 FilledButton(
@@ -248,7 +248,7 @@ class _PoseBarState extends State<PoseBar> {
     if (ok != true || !mounted) return;
     // 确认框开着的时候图、狗、点换了：不发（外审 W39-I2）。换了图的狗由站点按带上的图号拒
     if (mine != _gen || _selected != id || widget.controller.at != at || widget.controller.yaw != yaw) {
-      setState(() => _msg = tr('The map, robot or spot changed — choose again.', '图、狗或位置变了：请重新选。'));
+      setState(() => _msg = tr('The map, robot or spot changed — choose again.', '图、机器人或位置变了：请重新选。'));
       return;
     }
     await _run(() => widget.api.relocalize(id, x: at.dx, y: at.dy, yaw: yaw, mapId: mapId, version: version),
@@ -324,7 +324,7 @@ class _PoseBarState extends State<PoseBar> {
                             }),
                       ]),
                       if (sel == null)
-                        Text(tr('No robot on this map can be sent.', '这张图上没有能派的狗。'),
+                        Text(tr('No robot on this map can be sent.', '这张图上没有能派的机器人。'),
                             style: NwText.bodySmall.copyWith(color: c.textSecondary)),
                     ],
                     if (_msg != null)

@@ -38,7 +38,7 @@ const _dock = <String, dynamic>{'kind': 'dock', 'state': 'running', 'task_id': '
 const _toCharge = <String, dynamic>{'kind': 'goto', 'state': 'running', 'task_id': 'charge-goto-1'};
 
 void main() {
-  group('狗的状态', () {
+  group('机器人的状态', () {
     test('按站点给的视图算，从重到轻', () {
       expect(robotPhase(_robot('A', over: {'revoked': true})), RobotPhase.revoked);
       expect(robotPhase(_robot('A', over: {'status': null})), RobotPhase.unknown);
@@ -89,11 +89,11 @@ void main() {
     test('电量：视图里有才有（站点现在没放），不编', () {
       expect(robotBattery(_robot('A')), isNull);
       expect(robotBattery(_robot('A', over: {'battery_pct': 41.6})), 41.6);
-      expect(robotBattery(siteFixture('site_robot')), isNull, reason: '真站点的狗视图里没有电量');
+      expect(robotBattery(siteFixture('site_robot')), isNull, reason: '真站点的机器人视图里没有电量');
     });
   });
 
-  group('狗列表', () {
+  group('机器人列表', () {
     FakeApi fleet() => FakeApi('guard')
       ..robotsOverride = <Map<String, dynamic>>[
         _robot('A'),
@@ -105,7 +105,7 @@ void main() {
     Finder card(String id) => find.byKey(Key('robot-$id'));
     NwDogCard dog(WidgetTester t, String id) => t.widget<NwDogCard>(card(id));
 
-    testWidgets('一只狗一张卡：药丸的字和颜色按真实状态，在做什么照原来那一行', (t) async {
+    testWidgets('一台机器人一张卡：药丸的字和颜色按真实状态，在做什么照原来那一行', (t) async {
       await t.pumpWidget(MaterialApp(home: SiteRobotsPage(api: fleet())));
       await t.pumpAndSettle();
       expect(dog(t, 'A').tone, NwTone.neutral);
@@ -180,7 +180,7 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
 
-    testWidgets('正在驱离的狗：红药丸、红框', (t) async {
+    testWidgets('正在驱离的机器人：红药丸、红框', (t) async {
       final api = FakeApi('guard')
         ..robotsOverride = <Map<String, dynamic>>[_robot('A', status: {'task': _patrol})]
         ..deterRows = <Map<String, dynamic>>[
@@ -198,7 +198,7 @@ void main() {
     });
   });
 
-  group('单狗页', () {
+  group('单机器人页', () {
     testWidgets('叫停在页头、红的；这一页看着没任务时也按得动（外审 I1）', (t) async {
       await t.pumpWidget(MaterialApp(
           home: SiteRobotPage(api: FakeApi('guard', robotView: busyView()), robotId: 'A')));
@@ -222,7 +222,7 @@ void main() {
       await t.pumpWidget(const SizedBox());
     });
 
-    testWidgets('电量读不到写「--」；诊断卡只放狗报的，没有运行时长、延迟', (t) async {
+    testWidgets('电量读不到写「--」；诊断卡只放机器人报的，没有运行时长、延迟', (t) async {
       await t.pumpWidget(MaterialApp(
           home: SiteRobotPage(api: FakeApi('admin', robotView: busyView()), robotId: 'A')));
       await t.pumpAndSettle();
@@ -291,7 +291,7 @@ void main() {
       expect(Nw.of(ctx).bg, NwColors.dark.bg);
       final stop = t.widget<FilledButton>(find.byKey(SiteTeleopPage.stopKey));
       expect(stop.style!.backgroundColor!.resolve(<WidgetState>{}), NwColors.dark.error);
-      expect(find.text('A'), findsOneWidget, reason: '哪只狗');
+      expect(find.text('A'), findsOneWidget, reason: '哪台机器人');
       await t.tap(find.byKey(const Key('teleop-close')));
       await t.pumpAndSettle();
       expect(find.byType(SiteTeleopPage), findsNothing);
@@ -369,7 +369,7 @@ void main() {
           });
         }
 
-        testWidgets('[${th.key} ${lang.name}] 各种状态的狗列表（390×844、800×360）', (t) async {
+        testWidgets('[${th.key} ${lang.name}] 各种状态的机器人列表（390×844、800×360）', (t) async {
           FakeApi api() => FakeApi('admin')
             ..robotsOverride = <Map<String, dynamic>>[
               _robot('D1-02', status: {'task': _patrol}),
@@ -397,7 +397,7 @@ void main() {
           await t.pumpWidget(Container());
         });
 
-        testWidgets('[${th.key} ${lang.name}] 单狗页：被叫停、要人监护、有定位和 RTK（390×844、800×360）', (t) async {
+        testWidgets('[${th.key} ${lang.name}] 单机器人页：被叫停、要人监护、有定位和 RTK（390×844、800×360）', (t) async {
           final v = Map<String, dynamic>.of(busyView())
             ..['held'] = <String, dynamic>{'by': 'olga'}
             ..['loc'] = <String, dynamic>{'anchored': false, 'reason': '还没设位置：开机之后要人给一次', 'source': 'odom_anchor'}

@@ -674,10 +674,10 @@ def test_值守文档把守死人和看门狗说清了():
     """
     值守 = (ROOT / "docs" / "值守与告警.md").read_text(encoding="utf-8")
     开篇 = 值守.split("## 一、")[0]
-    for 词 in ("守死人", "值守的看门狗"):
+    for 词 in ("守死人", "值守的看门机器人"):
         assert 词 in 开篇, f"开篇的名词那一段没说清「{词}」"
     assert "300 毫秒" in 开篇, "「守死人」那句没说出它多久停"
-    assert "重启站点服务" in 开篇, "「看门狗自己死了」那句没给处置"
+    assert "重启站点服务" in 开篇, "「看门机器人自己死了」那句没给处置"
 
 
 def test_值守文档说清了接管会结束正在跑的这一趟():
@@ -1186,7 +1186,7 @@ def test_狗上代码import的第三方库都声明了依赖_也就都有离线�
                         continue
                     if _轮子名(_发行名.get(顶, 顶)) not in 声明的:
                         漏的.setdefault(顶, str(py.relative_to(ROOT)))
-    assert not 漏的, f"狗上的代码 import 了没声明的第三方库(狗上装不上、代理起不来):{漏的}"
+    assert not 漏的, f"机器人上的代码 import 了没声明的第三方库(机器人上装不上、代理起不来):{漏的}"
 
 
 def test_agent入口在robot_agent的scripts里():

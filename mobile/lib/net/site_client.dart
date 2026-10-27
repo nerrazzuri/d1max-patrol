@@ -188,14 +188,14 @@ String incidentOutcomeText(String outcome) => switch (outcome) {
       'dispatching' => tr('Dispatching', '正在派'),
       'merged' => tr('Merged into an active dispatch', '并进已出动的'),
       'duplicate' => tr('Duplicate (same incident)', '重复（同一条事件）'),
-      'unmapped' => tr('Zone has no intercept point, no robot sent', '防区没映射到拦截点，没狗去'),
-      'no_robot' => tr('No robot available', '没有能派的狗'),
-      'dispatch_failed' => tr('Dispatched, but the robot did not accept', '派了，狗没收'),
+      'unmapped' => tr('Zone has no intercept point, no robot sent', '防区没映射到拦截点，没机器人去'),
+      'no_robot' => tr('No robot available', '没有能派的机器人'),
+      'dispatch_failed' => tr('Dispatched, but the robot did not accept', '派了，机器人没收'),
       'ignored_type' => tr('Not an intrusion, logged only', '不是入侵，只记账'),
       'disarmed' => tr(
           'Disarmed, logged only (no robot sent, no alarm sounded)',
-          '撤防中，只记录（没派狗、没响铃）'),
-      'unreachable' => tr('Intercept point unreachable, no robot sent', '拦截点走不到，没狗去'),
+          '撤防中，只记录（没派机器人、没响铃）'),
+      'unreachable' => tr('Intercept point unreachable, no robot sent', '拦截点走不到，没机器人去'),
       _ => outcome,
     };
 
@@ -257,7 +257,7 @@ String ackReasonText(String reason) {
   if (reason.startsWith('persist_failed')) {
     return tr(
         'Robot could not save it (disk full?): ${reason.substring(14).replaceFirst(':', '').trim()}',
-        '狗上记不下（盘满了？）：${reason.substring(14).replaceFirst(':', '').trim()}');
+        '机器人上记不下（盘满了？）：${reason.substring(14).replaceFirst(':', '').trim()}');
   }
   return _ackReasonText(reason);
 }
@@ -269,19 +269,19 @@ String _ackReasonText(String reason) => switch (reason) {
       'busy' => tr('Robot is busy', '它正忙着别的'),
       'expired' => tr(
           'Command had expired when it reached the robot (robot clock may be off, or the network is too slow)',
-          '命令到狗那儿已经过期了（狗的钟可能不准，或者网络太慢）'),
+          '命令到机器人那儿已经过期了（机器人的钟可能不准，或者网络太慢）'),
       'stale_epoch' => tr(
           'Site and robot control epochs do not match. Refresh and try again',
-          '站点和狗的控制代次对不上，刷新一下再试'),
-      'stale_seq' => tr('Late heartbeat, ignored by the robot', '这是一条迟到的旧心跳，狗没认'),
+          '站点和机器人的控制代次对不上，刷新一下再试'),
+      'stale_seq' => tr('Late heartbeat, ignored by the robot', '这是一条迟到的旧心跳，机器人没认'),
       'halting' => tr('Robot is stopping. Try again shortly', '它正在叫停，稍后再派'),
       'moving' => tr('Robot is moving. Try again once it has stopped', '它在走：停稳了再试'),
       'no_home' => tr('This map has no origin marked. Enter coordinates', '这张图没标过原点：输坐标'),
-      'map_mismatch' => tr('Robot just switched maps. Refresh and set again', '狗刚换了图：刷新一下再设'),
-      'no_map' => tr('Robot has no map loaded', '狗没加载地图'),
+      'map_mismatch' => tr('Robot just switched maps. Refresh and set again', '机器人刚换了图：刷新一下再设'),
+      'no_map' => tr('Robot has no map loaded', '机器人没加载地图'),
       'odom_invalid' => tr(
           'Cannot read robot odometry (sidecar process down?)',
-          '狗的里程读不到（旁路进程断了？）'),
+          '机器人的里程读不到（旁路进程断了？）'),
       _ => reason,
     };
 
@@ -400,7 +400,7 @@ String headText(Map<String, dynamic>? caps) {
   final h = tasks is Map ? tasks['head'] : null;
   if (h is! Map || h['direction'] == 'head') return '';
   final tail = h['direction'] == 'tail';
-  final d = tail ? tr('tail first', '狗尾为前') : tr('unknown', '不知道');
+  final d = tail ? tr('tail first', '机器人尾为前') : tr('unknown', '不知道');
   if (h['autonomy'] == true) {
     return tr(
         'Heading: $d (rear lidar calibrated, autonomous as usual)',

@@ -381,7 +381,7 @@ void main() {
     c.close();
   });
 
-  test('运行记录：列表带狗号、一趟、照片（钉证书带令牌）、复核与重判的请求形状', () async {
+  test('运行记录：列表带机器人号、一趟、照片（钉证书带令牌）、复核与重判的请求形状', () async {
     final c = SiteClient(site.url, testCertFingerprint());
     await c.login('gina', 'pw');
     final rows = await c.runs(robotId: 'A 1');
