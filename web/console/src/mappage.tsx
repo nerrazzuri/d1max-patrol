@@ -36,6 +36,12 @@ export function mapAreas(meta: PreviewMeta, sec: { zone: string; points: Pt[] }[
     seen.add(s.zone);
     named.push({ name: s.zone, pts: s.points, kind: "area" });
   }
+  // W44 第四期:地图编辑器里起的区域名(车库、后花园……)也画上
+  for (const r of meta.display?.regions ?? []) {
+    if (!r.name || seen.has(r.name) || !Array.isArray(r.polygon) || r.polygon.length < 3) continue;
+    seen.add(r.name);
+    named.push({ name: r.name, pts: r.polygon, kind: "area" });
+  }
   return named;
 }
 
