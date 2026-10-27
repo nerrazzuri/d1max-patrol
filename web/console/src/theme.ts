@@ -74,13 +74,32 @@ export function applyTheme(s: Scheme, root: HTMLElement = document.documentEleme
 type SchemeQuery = Pick<MediaQueryList, "matches" | "addEventListener" | "removeEventListener">;
 
 /** 按系统的设置挂上一套,并且跟着系统换(当场)。回一个取消跟随的函数。 */
+/** 外壳按页面定了用哪一套(W44:保安页深色、管理页浅色):定了就不跟系统换;``null`` = 跟系统。 */
+let pinned: Scheme | null = null;
+let systemDark = false;
+
+/** 外壳调:定成某一套,或者放开(回到跟系统)。 */
+export function pinScheme(s: Scheme | null, root: HTMLElement = document.documentElement): void {
+  pinned = s;
+  applyTheme(s ?? (systemDark ? "dark" : "light"), root);
+}
+
+/** 系统现在是不是深色(followSystem 记下的)。 */
+export function systemIsDark(): boolean {
+  return systemDark;
+}
+
 export function followSystem(
   root: HTMLElement = document.documentElement,
   mql: SchemeQuery | null = typeof window !== "undefined" && window.matchMedia ? window.matchMedia(QUERY) : null,
 ): () => void {
-  applyTheme(mql?.matches ? "dark" : "light", root);
+  systemDark = !!mql?.matches;
+  applyTheme(pinned ?? (systemDark ? "dark" : "light"), root);
   if (!mql) return () => {};
-  const on = (e: { matches: boolean }) => applyTheme(e.matches ? "dark" : "light", root);
+  const on = (e: { matches: boolean }) => {
+    systemDark = e.matches;
+    if (pinned == null) applyTheme(e.matches ? "dark" : "light", root);
+  };
   mql.addEventListener("change", on as (e: MediaQueryListEvent) => void);
   return () => mql.removeEventListener("change", on as (e: MediaQueryListEvent) => void);
 }

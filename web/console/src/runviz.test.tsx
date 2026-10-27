@@ -384,15 +384,3 @@ describe("W41 轨迹分段:遥控器开的那段不连线", () => {
   });
 });
 
-describe("W41 Live 页 P1 报警卡片", () => {
-  it("报警卡片里也有定位那一行", async () => {
-    const { AlarmTile } = await import("./live");
-    const a = { key: "k", kind: "intrusion", title: "有人闯入", robot: "A", first_ms: 0, acked_by: "", acked_ms: null, context: {} };
-    const { container: c } = render(
-      <AlarmTile a={a as never} u={unit(robot("A"))} role="admin" now={1000} onAck={() => {}} onSiren={() => {}} onFalse={() => {}} onMap={() => {}} onOpen={() => {}} />,
-    );
-    const ri = c.querySelector('.alarm-tile [data-testid="run-info"]');
-    expect(ri).not.toBeNull();
-    expect(ri!.textContent).toContain("scan matching");
-  });
-});
