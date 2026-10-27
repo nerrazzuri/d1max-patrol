@@ -11,12 +11,13 @@ export type Cam = "front" | "back" | "thermal";
 
 const PAUSE_AFTER_MS = 2000;
 const RETRY_MS = 3000;
+const RECOVERED_MS = 2500;
 
 export function camLabel(robot: string, cam: Cam): string {
   return `${robot} ${t(cam)}`;
 }
 
-export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean; now: number; onOpen?: () => void }) {
+export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean; now: number; onOpen?: () => void; variant?: "main" | "pip" }) {
   const box = useRef<HTMLDivElement>(null);
   const img = useRef<HTMLImageElement>(null);
   const frozen = useRef<HTMLCanvasElement>(null);
@@ -24,6 +25,8 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
   const [streaming, setStreaming] = useState(false);
   const [pausedAt, setPausedAt] = useState<number | null>(null);
   const [broken, setBroken] = useState(false);
+  /** W44:断流的那一刻(停在最后一帧、写已断几秒);重连上、2.5 秒没再断才清掉。 */
+  const [lostAt, setLostAt] = useState<number | null>(null);
   const [nonce, setNonce] = useState(0);
   const pageVisible = usePageVisible();
 
@@ -67,6 +70,12 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
   }
 
   useEffect(() => {
+    if (broken || lostAt == null) return;
+    const id = window.setTimeout(() => setLostAt(null), RECOVERED_MS);
+    return () => window.clearTimeout(id);
+  }, [broken, lostAt]);
+
+  useEffect(() => {
     if (!broken) return;
     const id = window.setTimeout(() => {
       setBroken(false);
@@ -78,11 +87,18 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
   const label = camLabel(props.robot, props.cam);
   const src = `/api/robots/${enc(props.robot)}/video/${props.cam}?v=${nonce}`;
   const status = broken ? t("reconnecting") : streaming ? t("live") : pausedAt ? t("pausedAt", { t: hms(pausedAt) }) : t("noFeed");
+  const cls = `${streaming ? "well" : "well paused"}${lostAt != null ? " lostfeed" : ""}${props.variant ? ` ${props.variant}` : ""}`;
   return (
-    <div ref={box} class={streaming ? "well" : "well paused"} title={!streaming ? t("pausedHint") : undefined}>
+    <div ref={box} class={cls} title={!streaming ? t("pausedHint") : undefined}>
       <canvas ref={frozen} class="frozen" aria-hidden="true" />
       {streaming && !broken && (
-        <img ref={img} class="feed" src={src} alt={label} onError={() => setBroken(true)} />
+        <img ref={img} class="feed" src={src} alt={label}
+          onError={() => { freeze(); setLostAt((x) => x ?? Date.now()); setBroken(true); }} />
+      )}
+      {lostAt != null && (
+        <div class="lost" role="status">
+          {t("feedLost", { t: hms(lostAt), s: Math.max(0, Math.round((props.now - lostAt) / 1000)) })}
+        </div>
       )}
       <div class="osd top">
         <span>{label}</span>

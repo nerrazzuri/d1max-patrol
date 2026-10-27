@@ -516,3 +516,29 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .notice.P1 { border-left: 4px solid var(--c-error); }
 .notice.P2 { border-left: 4px solid var(--c-warning); }
 .notice-body { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+/* W44 画面位:前摄像头大、后摄像头小窗(点了互换)、顶上状态栏;断流停在最后一帧、变灰、写已断几秒 */
+.well.lostfeed .frozen { display: block; opacity: 1; filter: grayscale(1) brightness(0.55); }
+.well .lost { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 90%; padding: 8px 14px; border-radius: var(--r-r8);
+  background: var(--c-scrim); color: var(--c-onScrim); font-size: 15px; font-weight: 600; text-align: center; }
+.well.main, .well.pip { aspect-ratio: auto; width: 100%; height: 100%; }
+.well.main .osd.bottom .osd-btn, .well.pip .osd { display: none; }
+.slot { position: relative; min-height: 0; border-radius: var(--r-r12); overflow: hidden; background: var(--c-well); }
+.slot.alarm { box-shadow: 0 0 0 3px var(--c-error); }
+.slot-main { position: absolute; inset: 0; }
+.slot-main .scene-well { width: 100%; height: 100%; aspect-ratio: auto; }
+.slot-main img.scene { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.slot-off { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--c-onScrim); font-size: 18px; font-weight: 600; }
+.slot-pip { position: absolute; right: 12px; bottom: 12px; width: 28%; aspect-ratio: 16 / 9; padding: 0; border: 2px solid rgba(255, 255, 255, 0.8);
+  border-radius: var(--r-r8); overflow: hidden; background: var(--c-well); cursor: pointer; }
+.slot-pip:disabled { cursor: default; }
+.slot-bar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 10px; padding: 10px 14px 18px;
+  background: linear-gradient(rgba(10, 14, 20, 0.85), rgba(10, 14, 20, 0)); color: #fff; }
+.slot-name { font-size: 20px; font-weight: 700; }
+.slot-mid { display: flex; gap: 16px; margin: 0 auto; padding: 3px 14px; border-radius: 999px; background: rgba(0, 0, 0, 0.45); font-size: 15px; }
+.slot-mid:empty { display: none; }
+.slot-btn { height: 30px; padding: 0 12px; border: 1px solid rgba(255, 255, 255, 0.35); border-radius: var(--r-r8); background: rgba(255, 255, 255, 0.14);
+  color: #fff; font-size: 14px; cursor: pointer; }
+.slot-btn:first-of-type { margin-left: auto; }
+.slot-mid ~ .slot-btn:first-of-type { margin-left: 0; }
+.slot-btn[aria-pressed="true"] { background: var(--c-primary); border-color: var(--c-primary); color: var(--c-onPrimary); }
