@@ -18,7 +18,7 @@ import { AlarmLogPage } from "./alarmlog";
 import { ArmingPage } from "./armingpage";
 import { DutyPage } from "./duty";
 import { LiveWall } from "./livewall";
-import { NoticesPage } from "./notices";
+import { HomePage } from "./homepage";
 import { SystemPage } from "./admin";
 import { RobotsPage } from "./robotspage";
 import { UsersPage } from "./userspage";
@@ -139,7 +139,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
             <AdminNav page={route.page} notices={notices} role={me.role} />
             <div class="adminbody">
               {route.page === "admin/home" && (
-                <NoticesPage alerts={alerts} mode={data?.mode ?? null} onAck={ack} onDone={(a) => resolve(a, "handled")}
+                <HomePage alerts={alerts} mode={data?.mode ?? null} now={now} onAck={ack} onDone={(a) => resolve(a, "handled")}
                   onMode={(m) => setPending({ kind: "mode", mode: m })} />
               )}
               {route.page === "admin/arming" && <ArmingPage say={say} now={now} />}

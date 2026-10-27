@@ -799,3 +799,26 @@ p.warn { color: var(--c-text); background: var(--c-warningSoft); padding: 8px 12
   .reports .noprint { display: none !important; }
   .rep-bar i { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* W44 第二期:家里的状况 */
+.home { display: flex; flex-direction: column; gap: 12px; }
+.home ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.home-todo { border-color: var(--c-warning); }
+.home-todo li.todo { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; background: var(--c-warningSoft); }
+.home-todo li.todo.P1 { background: var(--c-errorSoft); }
+.todo-body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.todo-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.home-today-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: start; }
+.home-mode { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; max-width: 320px; }
+.home-mode .arm-who { text-align: right; }
+.mini-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.mini-card { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--c-outline); border-radius: 10px;
+  color: var(--c-text); text-decoration: none; font-size: 14px; background: var(--c-surface); }
+.mini-card:hover { border-color: var(--c-primary); }
+.warn-text { color: var(--c-warning); font-weight: 600; }
+@media (max-width: 700px) {
+  .home-today-grid { grid-template-columns: minmax(0, 1fr); }
+  .home-mode { align-items: flex-start; }
+  .home-mode .arm-who { text-align: left; }
+  .home-todo li.todo { flex-direction: column; align-items: flex-start; }
+}

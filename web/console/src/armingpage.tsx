@@ -10,7 +10,7 @@ import { t, type Key } from "./i18n";
 type Say = (s: string) => void;
 interface Exception { id: number; first_day: string; last_day: string; state: "armed" | "disarmed"; note: string }
 interface Schedule { enabled: boolean; slots: WireSlot[]; exceptions: Exception[] }
-interface ModeView { mode: string; label: string; source?: "schedule" | "manual"; next_change_ms?: number | null; manual_until_ms?: number | null; zones?: { zone: string }[] }
+interface ModeView { mode: string; label?: string; state?: string; source?: "schedule" | "manual"; next_change_ms?: number | null; manual_until_ms?: number | null; zones?: { zone: string }[] }
 
 const DAY_KEYS: Key[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -19,14 +19,23 @@ function errText(e: unknown): string {
   return t("failed", { why: e instanceof ApiError ? e.message : String(e) });
 }
 
+/** 模式给人看的名字(网页自己翻,站点的 label 只有中文):按时间表:布防 / 部分布防 / 撤防;手动的:布防 / 在家 / 访客。 */
+export function modeLabel(m: { mode: string; source?: string; state?: string }): string {
+  if (m.source === "schedule") {
+    return t("armSched", { s: t(m.state === "armed" ? "armStArmed" : m.state === "disarmed" ? "armStDisarmed" : "armStPartial") });
+  }
+  return t(m.mode === "armed" ? "modeArmed" : m.mode === "home" ? "modeHome" : "modeVisitor");
+}
+
 /** 现在谁说了算:按时间表 / 手动到几点回时间表 / 时间表没开。 */
 export function whoText(m: ModeView | null, enabled: boolean): string {
   if (!m) return "";
+  const s = modeLabel(m);
   if (m.source === "schedule") {
-    return m.next_change_ms ? t("armWhoSchedule", { s: m.label, t: hm(m.next_change_ms) }) : t("armWhoScheduleNoNext", { s: m.label });
+    return m.next_change_ms ? t("armWhoSchedule", { s, t: hm(m.next_change_ms) }) : t("armWhoScheduleNoNext", { s });
   }
-  if (enabled && m.manual_until_ms) return t("armWhoManual", { s: m.label, t: hm(m.manual_until_ms) });
-  return t("armWhoOff", { s: m.label });
+  if (enabled && m.manual_until_ms) return t("armWhoManual", { s, t: hm(m.manual_until_ms) });
+  return t("armWhoOff", { s });
 }
 
 export function ArmingPage({ say, now }: { say: Say; now: number }) {

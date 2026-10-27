@@ -164,17 +164,17 @@ describe("新外壳", () => {
     c.unmount();
   });
 
-  it("业主的提醒页只列技术类,保安进不去", async () => {
+  it("家里的状况只列技术类的要你处理的事,保安进不去", async () => {
     alerts = [alert({ key: "a", kind: "cert_expiring", level: "P2", title: "证书快到期", audience: "owner" }),
       alert({ key: "b", kind: "stuck", title: "卡住了", audience: "help" })];
     location.hash = "#/admin/notices";
     const a = render(<Console me={me("admin")} onOut={() => {}} />);
-    await waitFor(() => expect(a.container.querySelector(".notices")!.textContent).toContain("证书"));
-    expect(a.container.querySelector(".notices")!.textContent).not.toContain("卡住了");
-    fireEvent.click(Array.from(a.container.querySelectorAll(".notices button")).find((b) => b.textContent === "处理好了")!);
+    await waitFor(() => expect(a.container.querySelector(".home-todo")!.textContent).toContain("证书"));
+    expect(a.container.querySelector(".home-todo")!.textContent).not.toContain("卡住了");
+    fireEvent.click(Array.from(a.container.querySelectorAll(".home-todo button")).find((b) => b.textContent === "处理好了")!);
     await waitFor(() => expect(posted).toContainEqual({ url: "/api/alerts/a/resolve", body: { verdict: "handled" } }));
     cleanup();
     const g = render(<Console me={me("guard")} onOut={() => {}} />);
-    expect(g.container.querySelector(".notices")).toBeNull();
+    expect(g.container.querySelector(".home")).toBeNull();
   });
 });
