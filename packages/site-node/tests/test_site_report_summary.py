@@ -95,6 +95,9 @@ def test_接口(tmp_path):
     s = 站(tmp_path)
     try:
         s.accounts.add("gina", PW, role="guard")
+        with s.db.tx() as c:                       # 站点时区设成吉隆坡(CI 的主机是 UTC)
+            c.execute("INSERT OR REPLACE INTO route_store(id, timezone) VALUES (1, ?)",
+                      ("Asia/Kuala_Lumpur",))
         gina = s.req("POST", "/api/login", {"name": "gina", "password": PW})[1]["token"]
         code, d = s.req("GET", f"/api/reports/summary?since={WEEK[0]}&until={WEEK[1]}",
                         token=gina)
