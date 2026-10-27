@@ -1,6 +1,9 @@
 """站点账号(W00c1 起;W00c3 加角色、停用、改口令)。**每条命令都绑在一个已认证的账号上**
 (总设计 §5)。角色见 ``permissions.py``:admin / guard / owner。
 
+- 工程师临时账号(W44 第二期,``add_engineer``):角色 ``engineer``,4 或 24 小时到点(``expires_ms``),
+  到点当停用 —— 令牌下一次请求就失效、登录不了。只能这样开,不能把别的账号改成工程师,也不能把工程师
+  改成别的(只能提前关、删)。
 - 停用、改角色、重设口令都**吊销这个账号的全部会话**(权限变了,旧令牌不能继续按旧权限用)。
 - **最后一个启用的 admin 不许停用、不许降级**:不然站点上就没人能管账号了。
 
@@ -22,6 +25,7 @@ import re
 import secrets
 import threading
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from d1max_site.db import SiteDB
@@ -49,6 +53,11 @@ LOCK_MS = 5 * 60_000
 MIN_PASSWORD = 10
 MAX_CONCURRENT_HASH = 4
 _NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+#: 工程师临时账号能开多久(小时)。
+ENGINEER_HOURS = (4, 24)
+ENGINEER = "engineer"
+#: 接口路径里占用的名字(``/api/accounts/engineer`` 是开工程师账号)。
+RESERVED_NAMES = frozenset({ENGINEER})
 _DUMMY_SALT = b"\0" * 16
 
 
@@ -132,6 +141,8 @@ class Accounts:
         (W20 操作人实名:一人一个账号,账号名就是操作人,显示名让审计、告警里看得出是谁)。"""
         if not isinstance(name, str) or not _NAME.match(name):
             raise AuthError("账号名只许字母、数字、. _ -,1–64 个字符")
+        if name in RESERVED_NAMES:
+            raise AuthError(f"账号名不能叫 {name}")
         self._check_role(role)
         self._check_password(password)
         self._check_display(display_name)
@@ -148,8 +159,37 @@ class Accounts:
 
     @staticmethod
     def _check_role(role: str) -> None:
+        if role == ENGINEER:
+            raise AuthError("工程师账号只能用「给工程师开临时账号」开")
         if not isinstance(role, str) or role not in ROLES:
-            raise AuthError(f"角色只有 {', '.join(sorted(ROLES))},给的是 {role!r}")
+            roles = ", ".join(sorted(set(ROLES) - {ENGINEER}))
+            raise AuthError(f"角色只有 {roles},给的是 {role!r}")
+
+    def add_engineer(self, display_name: Any, hours: Any, *, by: str) -> tuple[str, str, int]:
+        """开工程师临时账号 → ``(账号名, 口令, 到期时刻)``。口令站点随机生成,只回这一次。账号名
+        ``eng-YYYYMMDD-HHMM``(站点时区),重了加 ``-2``、``-3``。"""
+        if isinstance(hours, bool) or not isinstance(hours, int) or hours not in ENGINEER_HOURS:
+            raise AuthError("工程师账号只能开 4 小时或 24 小时")
+        if not isinstance(display_name, str):
+            raise AuthError("要写工程师的名字")
+        self._check_display(display_name)
+        from d1max_site.sitetime import site_tz
+        now = self._now()
+        at = datetime.fromtimestamp(now / 1000, site_tz(self.db))
+        base = "eng-" + at.strftime("%Y%m%d-%H%M")
+        password = secrets.token_urlsafe(12)
+        salt = secrets.token_bytes(16)
+        digest = _hash(password, salt)
+        until = now + hours * 3_600_000
+        with self.db.tx() as c:
+            name, n = base, 1
+            while c.execute("SELECT 1 FROM accounts WHERE name=?", (name,)).fetchone():
+                n += 1
+                name = f"{base}-{n}"
+            c.execute("INSERT INTO accounts(name, role, salt, pw_hash, created_at, display_name, "
+                      "expires_ms) VALUES (?,?,?,?,?,?,?)",
+                      (name, ENGINEER, salt, digest, now, display_name.strip() or name, until))
+        return name, password, until
 
     @staticmethod
     def _check_display(display_name: str) -> None:
@@ -168,10 +208,14 @@ class Accounts:
             raise AuthError(f"口令至少 {MIN_PASSWORD} 个字符")
 
     def list(self) -> list[dict]:
+        now = self._now()
         return [{"name": r["name"], "role": r["role"], "disabled": bool(r["disabled"]),
-                 "display_name": r["display_name"]}
+                 "display_name": r["display_name"], "expires_ms": r["expires_ms"],
+                 "last_login_ms": r["last_login_ms"],
+                 "expired": r["expires_ms"] is not None and now >= r["expires_ms"]}
                 for r in self.db.query(
-                    "SELECT name, role, disabled, display_name FROM accounts ORDER BY name")]
+                    "SELECT name, role, disabled, display_name, expires_ms, last_login_ms "
+                    "FROM accounts ORDER BY name")]
 
     def _get(self, c, name: str):
         row = c.execute("SELECT * FROM accounts WHERE name=?", (name,)).fetchone()
@@ -200,6 +244,9 @@ class Accounts:
         digest = _hash(password, salt) if password is not None else None
         with self.db.tx() as c:
             row = self._get(c, name)
+            if row["role"] == ENGINEER and (role is not None or password is not None
+                                            or disabled is False):
+                raise AuthError("工程师临时账号只能提前关或删,不能改角色、口令,也不能再打开")
             new_role = role if role is not None else row["role"]
             new_disabled = disabled if disabled is not None else bool(row["disabled"])
             was_admin = row["role"] == "admin" and not row["disabled"]
@@ -225,6 +272,8 @@ class Accounts:
         self._check_role(role)
         with self.db.tx() as c:
             row = self._get(c, name)
+            if row["role"] == ENGINEER:
+                raise AuthError("工程师临时账号不能改角色")
             if row["role"] == "admin" and role != "admin" and not row["disabled"] \
                     and self._other_admins(c, name) == 0:
                 raise AuthError("这是最后一个启用的 admin,不能降级")
@@ -240,6 +289,49 @@ class Accounts:
             c.execute("UPDATE accounts SET disabled=? WHERE name=?", (int(bool(disabled)), name))
             c.execute("DELETE FROM sessions WHERE name=?", (name,))
             _drop_push(c, name)
+
+    def remove(self, name: str) -> None:
+        """删账号(W44 第二期):连它的会话、登记的手机一起删;做过的事还留在审计里。最后一个启用的
+        业主删不掉。"""
+        with self.db.tx() as c:
+            row = self._get(c, name)
+            if row["role"] == "admin" and not row["disabled"] and self._other_admins(c, name) == 0:
+                raise AuthError("这是最后一个启用的业主账号,不能删")
+            c.execute("DELETE FROM sessions WHERE name=?", (name,))
+            _drop_push(c, name)
+            c.execute("DELETE FROM accounts WHERE name=?", (name,))
+
+    def _attempt(self, name: str) -> None:
+        """记一次尝试(先占位再算,见模块说明);锁着抛 ``LockedOut``。"""
+        now = self._now()
+        with self._lock:
+            until = self._locked_until.get(name, 0)
+            if now < until:
+                raise LockedOut(f"错太多次了,{(until - now) // 1000 + 1} 秒后再试")
+            recent = [t for t in self._fails.get(name, []) if now - t < FAIL_WINDOW_MS]
+            recent.append(now)
+            self._fails[name] = recent
+            if len(recent) >= FAIL_LIMIT:
+                self._locked_until[name] = now + LOCK_MS
+                self._fails[name] = []
+
+    def _clear(self, name: str) -> None:
+        with self._lock:
+            self._fails.pop(name, None)
+            self._locked_until.pop(name, None)
+
+    def verify(self, name: str, password: Any) -> bool:
+        """敏感操作再输一次密码(W44 第二期):对不对。跟登录同一个失败计数和锁(拿着偷来的令牌也不能
+        靠这条路无限次地猜)。锁着抛 ``LockedOut``。"""
+        self._attempt(name)
+        rows = self.db.query("SELECT salt, pw_hash FROM accounts WHERE name=?", (name,))
+        salt, stored = (rows[0]["salt"], rows[0]["pw_hash"]) if rows else (_DUMMY_SALT, b"")
+        with self._hash_slots:
+            ok = hmac.compare_digest(_hash(password if isinstance(password, str) else "", salt),
+                                     stored) and bool(rows)
+        if ok:
+            self._clear(name)
+        return ok
 
     def reset_password(self, name: str, password: str) -> None:
         """管理员重设别人的口令。"""
@@ -298,13 +390,14 @@ class Accounts:
             if len(recent) >= FAIL_LIMIT:
                 self._locked_until[name] = now + LOCK_MS
                 self._fails[name] = []
-        rows = self.db.query("SELECT salt, pw_hash, disabled FROM accounts WHERE name=?",
-                             (name,))
+        rows = self.db.query("SELECT salt, pw_hash, disabled, expires_ms FROM accounts "
+                             "WHERE name=?", (name,))
         salt, stored = (rows[0]["salt"], rows[0]["pw_hash"]) if rows else (_DUMMY_SALT, b"")
         with self._hash_slots:
             digest = _hash(password or "", salt)
         # 停用的账号跟错口令同一个说法:不告诉外人「有这个账号但停用了」。
-        ok = hmac.compare_digest(digest, stored) and bool(rows) and not rows[0]["disabled"]
+        ok = hmac.compare_digest(digest, stored) and bool(rows) and not rows[0]["disabled"] \
+            and (rows[0]["expires_ms"] is None or now < rows[0]["expires_ms"])
         if not ok:
             raise AuthError("账号或口令不对")
         with self._lock:
@@ -316,6 +409,7 @@ class Accounts:
             c.execute("INSERT INTO sessions(token_hash, name, created_at, last_used, client) "
                       "VALUES (?,?,?,?,?)",
                       (_token_hash(token), name, now, now, clean_client(client)))
+            c.execute("UPDATE accounts SET last_login_ms=? WHERE name=?", (now, name))
         return token
 
     def clients(self) -> list[dict[str, Any]]:
@@ -344,15 +438,16 @@ class Accounts:
         now = self._now()
         with self.db.tx() as c:
             row = c.execute("SELECT s.name, s.created_at, s.last_used, s.scope, a.role, "
-                            "a.disabled FROM sessions s JOIN accounts a ON a.name = s.name "
-                            "WHERE s.token_hash=?", (h,)).fetchone()
+                            "a.disabled, a.expires_ms FROM sessions s JOIN accounts a "
+                            "ON a.name = s.name WHERE s.token_hash=?", (h,)).fetchone()
             if row is None:
                 return None
             watch = row["scope"] == "watch"
             expired = (now - row["created_at"] > WATCH_ABS_MS if watch
                        else now - row["last_used"] > self.idle_ms
                        or now - row["created_at"] > self.abs_ms)
-            if row["disabled"] or expired:
+            gone = row["expires_ms"] is not None and now >= row["expires_ms"]   # 工程师到点
+            if row["disabled"] or expired or gone:
                 c.execute("DELETE FROM sessions WHERE token_hash=?", (h,))
                 return None
             c.execute("UPDATE sessions SET last_used=? WHERE token_hash=?", (now, h))
@@ -362,14 +457,14 @@ class Accounts:
         """这个令牌(哈希)现在还有效吗:跟 :meth:`check` 同样的规矩,但不续期、不删(推送名单用,A6)。"""
         if not token_hash:
             return False
-        rows = self.db.query("SELECT s.created_at, s.last_used, s.scope, a.disabled "
+        rows = self.db.query("SELECT s.created_at, s.last_used, s.scope, a.disabled, a.expires_ms "
                              "FROM sessions s JOIN accounts a ON a.name = s.name "
                              "WHERE s.token_hash=?",
                              (token_hash,))
         if not rows:
             return False
         r, now = rows[0], self._now()
-        if r["disabled"]:
+        if r["disabled"] or (r["expires_ms"] is not None and now >= r["expires_ms"]):
             return False
         if r["scope"] == "watch":
             return now - r["created_at"] <= WATCH_ABS_MS

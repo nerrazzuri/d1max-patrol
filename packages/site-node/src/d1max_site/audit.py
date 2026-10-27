@@ -61,6 +61,11 @@ class AuditLog:
                       (self._now(), actor[:128], action[:128], target[:256], int(status),
                        encode_detail(detail), remote[:64]))
 
-    def list(self, limit: int = 200) -> list[dict[str, Any]]:
-        rows = self.db.query("SELECT * FROM audit ORDER BY id DESC LIMIT ?", (int(limit),))
+    def list(self, limit: int = 200, actor: str | None = None) -> list[dict[str, Any]]:
+        """新的在前。``actor``:只看这个人做的(W44 第二期,用户页「他做过什么」)。每行带
+        ``actor_role``(这个账号现在的角色;删了的账号、站点自己是 ``None``)。"""
+        where, args = ("WHERE a.actor=?", (actor,)) if actor is not None else ("", ())
+        rows = self.db.query(f"SELECT a.*, c.role AS actor_role FROM audit a LEFT JOIN accounts c "
+                             f"ON c.name = a.actor {where} ORDER BY a.id DESC LIMIT ?",
+                             (*args, int(limit)))
         return [dict(r) | {"detail": decode_detail(r["detail"])} for r in rows]
