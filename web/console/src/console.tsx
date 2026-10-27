@@ -9,7 +9,7 @@ import { Confirm } from "./dialogs";
 import { lang, t, type Key } from "./i18n";
 import { Shape } from "./icons";
 import { FullCamera, type UnitInfo } from "./live";
-import { LocHistoryPage } from "./locpage";
+import { LocPage } from "./advloc";
 import { RecordingsPage } from "./recpage";
 import { ReportsPage } from "./reportpage";
 import { MapPage } from "./mappage";
@@ -149,7 +149,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
               {route.page === "admin/layout" && <LayoutPage say={say} robots={units.map((u) => u.robot.robot_id)} tabs={LAYOUT_TABS} />}
               {route.page === "admin/maps" && <MapManagePage say={say} />}
               {route.page === "admin/access" && <AccessPage say={say} now={now} />}
-              {route.page === "admin/localization" && <LocHistoryPage robots={units.map((u) => u.robot.robot_id)} now={now} />}
+              {route.page === "admin/localization" && <LocPage units={units} alerts={alerts} now={now} role={me.role} />}
               {route.page === "admin/reports" && <ReportsPage now={now} />}
             </div>
           </div>
