@@ -3,7 +3,7 @@
 // 位置先记在页面上,外框「保存」一起存(不带口令,站点保留原来的)。
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
-import { CameraForm, type CamRow as AdminCam } from "./camadmin";
+import { CameraForm, warningText, type CamRow as AdminCam } from "./camadmin";
 import { Confirm } from "./dialogs";
 import { clickGuard, startDrag, swallowClick } from "./dragpt";
 import { t } from "./i18n";
@@ -85,6 +85,7 @@ export function CamerasTab(p: TabProps) {
             <li key={c.name}>
               <button type="button" class={c.name === sel ? "linklike on" : "linklike"} onClick={() => { setSel(c.name); setPlacing(false); }}>{c.name}</button>
               <span class="muted small"> {c.zone}{here(place[c.name]) ? "" : place[c.name] ? ` · ${t("lyCamOtherMap")}` : ` · ${t("lyCamNotPlaced")}`}</span>
+              {(c.warnings ?? []).map((w) => <div key={w.code} class="warncell small" data-warning={w.code}>{warningText(w, c.zone)}</div>)}
             </li>
           ))}
         </ul>
@@ -114,7 +115,12 @@ export function CamerasTab(p: TabProps) {
       </div>
       {form && (
         <CameraForm initial={form === "new" ? null : (form as unknown as AdminCam)} onClose={() => setForm(null)} say={p.say}
-          onSaved={() => { setForm(null); p.say(t("saved")); void p.reload("cameras"); }} />
+          onSaved={(warnings, zone) => {
+            // 站点回的警告(防区没映射到拦截点、没画多边形)照样说出来(演示站点实测:原来只说「已保存」)
+            setForm(null);
+            p.say(warnings.length ? `${t("saved")} ${warnings.map((w) => warningText(w, zone)).join(" ")}` : t("saved"));
+            void p.reload("cameras");
+          }} />
       )}
       {removing && (
         <Confirm text={t("lyCamRemove", { name: removing })} yes={t("remove")} danger onNo={() => setRemoving(null)}

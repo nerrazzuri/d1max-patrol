@@ -81,6 +81,7 @@ def route(h: Any, method: str, path: str, user: Any) -> None:
             raise HttpError(404, f"没有摄像头 {m.group(1)}")
         h._body()
         h._hist("cameras", "", "", "", user)                     # W44 第三期:历史版本
+        _sync_now(site)
         return h._send_json(200, {"ok": True})
     d = h._body()
     name = str(d.get("name", ""))[:64]
@@ -96,4 +97,15 @@ def route(h: Any, method: str, path: str, user: Any) -> None:
                        "edit": bool(d.get("edit")), "password_changed": got["password_changed"],
                        "warnings": [w["code"] for w in got["warnings"]]}
     h._hist("cameras", "", "", "", user)                         # W44 第三期:历史版本
+    _sync_now(site)
     return h._send_json(200, {"ok": True, "camera": got["camera"], "warnings": got["warnings"]})
+
+
+def _sync_now(site) -> None:
+    """网页加、改、删了摄像头:当场同步订阅(演示站点实测:原来等下一拍,最多 30 秒,删了的摄像头这几秒里
+    报的入侵照样报警)。在后台线程里做:停旧订阅要等它退干净,不挡这个请求。"""
+    mgr = getattr(site, "cctv", None)
+    if mgr is None:
+        return
+    import threading
+    threading.Thread(target=mgr.sync, daemon=True, name="cctv-sync-now").start()
