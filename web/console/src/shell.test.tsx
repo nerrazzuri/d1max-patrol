@@ -105,7 +105,7 @@ describe("新外壳", () => {
     const nav = a.container.querySelector(".adminnav")!;
     expect(Array.from(nav.querySelectorAll(".navgroup-title")).map((x) => x.textContent)).toEqual(["常用", "布置", "高级"]);
     const hrefs = () => Array.from(nav.querySelectorAll("a")).map((x) => x.getAttribute("href"));
-    expect(hrefs()).toEqual(expect.arrayContaining(["#/admin/home", "#/admin/arming", "#/admin/access", "#/admin/users", "#/admin/robots", "#/admin/reports", "#/admin/zones", "#/admin/routes"]));
+    expect(hrefs()).toEqual(expect.arrayContaining(["#/admin/home", "#/admin/arming", "#/admin/access", "#/admin/users", "#/admin/robots", "#/admin/reports", "#/admin/layout"]));
     expect(hrefs()).not.toContain("#/admin/system");
     fireEvent.click(Array.from(nav.querySelectorAll(".navgroup-title")).find((x) => x.textContent === "高级")!);
     expect(hrefs()).toEqual(expect.arrayContaining(["#/admin/maps", "#/admin/localization", "#/admin/system"]));

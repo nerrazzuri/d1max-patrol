@@ -23,9 +23,9 @@ import { SystemPage } from "./admin";
 import { RobotsPage } from "./robotspage";
 import { UsersPage } from "./userspage";
 import { MapManagePage } from "./mapmgmt";
-import { RoutesPage } from "./routepage";
-import { MapsZonesPage } from "./zonesadmin";
 import { AccessPage } from "./accesspage";
+import { LayoutPage } from "./layoutpage";
+import { LAYOUT_TABS } from "./layouttabs";
 import { AdminNav, isAdminPage, loadThemePref, readRoute, saveThemePref, schemeFor, TopBar, type Page, type ThemePref } from "./shell";
 import { pinScheme, systemIsDark } from "./theme";
 
@@ -111,7 +111,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
   const admin = isOwnerLike(me.role);
 
   // 带地图的页整页一屏(地图撑满顶栏以下):地图、防区、巡检路线
-  const fill = route.page === "duty" || route.page === "map" || route.page === "admin/zones" || route.page === "admin/routes";
+  const fill = route.page === "duty" || route.page === "map" || route.page === "admin/layout";
   return (
     <div class={fill ? "console fill" : "console"}>
       <TopBar me={me} page={route.page} mode={data?.mode ?? null} alarms={stale ? null : guardAlarms} now={now}
@@ -146,9 +146,8 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
               {route.page === "admin/users" && me.role === "admin" && <UsersPage me={me.name} say={say} now={now} />}
               {route.page === "admin/robots" && <RobotsPage say={say} now={now} />}
               {route.page === "admin/system" && <SystemPage say={say} />}
-              {route.page === "admin/zones" && <MapsZonesPage say={say} />}
+              {route.page === "admin/layout" && <LayoutPage say={say} robots={units.map((u) => u.robot.robot_id)} tabs={LAYOUT_TABS} />}
               {route.page === "admin/maps" && <MapManagePage say={say} />}
-              {route.page === "admin/routes" && <RoutesPage say={say} />}
               {route.page === "admin/access" && <AccessPage say={say} now={now} />}
               {route.page === "admin/localization" && <LocHistoryPage robots={units.map((u) => u.robot.robot_id)} now={now} />}
               {route.page === "admin/reports" && <ReportsPage now={now} />}
