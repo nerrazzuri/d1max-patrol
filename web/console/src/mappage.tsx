@@ -34,7 +34,24 @@ export function mapAreas(meta: PreviewMeta, sec: { zone: string; points: Pt[] }[
   return named;
 }
 
-export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; selected: string | null; onSelect: (id: string) => void; onVideo: (id: string) => void; role?: string }) {
+/** 地图本体(W44:值班页下半屏、地图页共用):底图、区域、机器人、报警圈、运行图层、点图「去这里 / 在这里设位置」。 */
+export function SiteMap(props: {
+  units: UnitInfo[];
+  /** 图上画报警圈的告警(带位置的)。 */
+  p1: Alert[];
+  now: number;
+  selected: string | null;
+  onSelect: (id: string) => void;
+  role?: string;
+  /** 标红的防区(报警的那几个,W44 值班页)。 */
+  hot?: Set<string>;
+  /** 画不画「近 7 天定位出过问题的地方」(保安页不画,设计 §4.3)。 */
+  episodes?: boolean;
+  /** 浮在图左上角的一句提示(值班页「帮它找位置」时说怎么做)。 */
+  hint?: string | null;
+  /** 这张图上有名字的区域(值班页拿来算每台机器人在哪个防区)。 */
+  onAreas?: (areas: CanvasArea[]) => void;
+}) {
   const sel = props.units.find((u) => u.robot.robot_id === props.selected) ?? props.units[0];
   // 底图跟着选中的狗(外审 W39-I2:原来总是第一只有图的狗,选中的狗可能在另一张图上);选中的狗没报图
   // 才退回第一只有图的
@@ -55,6 +72,10 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
   }, [key]);
   const meta = got.key === key ? got.meta : null;
   const areas = got.key === key ? got.areas : [];
+  const onAreas = props.onAreas;
+  useEffect(() => {
+    if (onAreas) onAreas(meta ? mapAreas(meta, areas) : []);
+  }, [meta, areas]);
   // 只画加载着这张图的狗(别的图上的坐标画在这张图上是错的)
   const onThisMap = (u: UnitInfo) => { const m = robotMap(u.robot); return !!(m && which && m.map_id === which.map_id && m.version === which.version); };
   // 点图 → 去这里 / 在这里设位置(posepick.tsx;只有管理员、保安)
@@ -66,8 +87,8 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
   const viz = useRunViz(!!which);
   const vizRobots = which ? vizOnMap(viz, which.map_id, which.version) : [];
   const since = useMemo(() => Date.now() - 7 * 86_400_000, [key]);
-  const { rows: episodes } = useEpisodes({ map_id: which?.map_id, map_version: which?.version, since_ms: since, limit: 300 }, !!which);
-  const eps = episodes ?? [];
+  const { rows: episodes } = useEpisodes({ map_id: which?.map_id, map_version: which?.version, since_ms: since, limit: 300 }, !!which && props.episodes !== false);
+  const eps = props.episodes === false ? [] : episodes ?? [];
 
   // 图上真画得出来的报警点、狗(图例只列有的)
   const pins = !which || !meta ? [] : props.p1.flatMap((a) => {
@@ -85,16 +106,15 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
   const legend: LegendKey[] = [...(bots.length ? ["robot" as const] : []), ...(pins.length ? ["alarm" as const] : [])];
 
   return (
-    <div class="mappage">
-      <div class="mapbox" {...pose.wrapProps}>
+    <div class="mapbox" {...pose.wrapProps}>
         {!which || !meta ? (
           <p class="empty">{t("noMap")}</p>
         ) : (
           <MapCanvas meta={meta} raster={`/api/maps/${enc(which.map_id)}/${enc(which.version)}/preview.png`} label={t("mapAria")}
-            areas={mapAreas(meta, areas)} legend={legend} drawing={!!pose.onPick} onPick={pose.onPick}
+            areas={mapAreas(meta, areas).map((a) => (props.hot?.has(a.name) ? { ...a, hot: true } : a))} legend={legend} drawing={!!pose.onPick} onPick={pose.onPick}
             world={<VizWorld meta={meta} robots={vizRobots} />}
             // 「去这里」浮在图的右上角(不在图下面另占一块);运行图层的图例并进底图图例那一行
-            overlay={pose.panel}
+            overlay={<>{props.hint && <div class="map-hint" role="status">{props.hint}</div>}{pose.panel}</>}
             legendExtra={<RunLegendItems has={vizHas(vizRobots, eps)} />}
             // 区域名让开报警圈、狗(圆点 + 下面的编号)
             avoid={(s) => [
@@ -137,6 +157,14 @@ export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; se
             )} />
         )}
       </div>
+  );
+}
+
+export function MapPage(props: { units: UnitInfo[]; p1: Alert[]; now: number; selected: string | null; onSelect: (id: string) => void; onVideo: (id: string) => void; role?: string }) {
+  const sel = props.units.find((u) => u.robot.robot_id === props.selected) ?? props.units[0];
+  return (
+    <div class="mappage">
+      <SiteMap units={props.units} p1={props.p1} now={props.now} selected={props.selected} onSelect={props.onSelect} role={props.role} />
       <aside class="sidebar" aria-label={t("tabMap")}>
         {sel && (
           <div class="sel">
