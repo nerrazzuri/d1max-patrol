@@ -172,7 +172,7 @@ class MemoryTransport(Transport): __init__(broker, client_id); 断线时 publish
 
 ### Task 14：文档、报告、工单
 
-- [ ] `docs/W00-完工报告.md`；工单表 W00 打勾；`docs/分卷与进度.md` 口径段加一句「packages/ 三包已建」；`docs/庄园场景待真机测试.md` 加 W00d 的预留一节（真机验 HAL 归 W00d，不在本单）。全量测试；突变检查；内部评审；push。
+- [ ] `docs/W00-完工报告.md`；工单表 W00 打勾；`docs/分卷与进度.md` 口径段加一句「packages/ 三包已建」；`docs/真机验证.md` 加 W00d 的预留一节（真机验 HAL 归 W00d，不在本单）。全量测试；突变检查；内部评审；push。
 
 ## 自查
 

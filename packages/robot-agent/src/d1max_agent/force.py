@@ -16,7 +16,7 @@
 (:attr:`ForceWatch.owed`),都写进代理存储目录的 ``force.json``。代理重启了照旧锁着、照旧补做,
 要数据确认安全(扶正稳住、放回地上承重回来)才解锁;锁着的时候不学基线(悬空的低承重学不进去)。
 
-**门槛全是占位**:真狗上标定(``庄园场景待真机测试.md`` §3r),标好写进 ``/etc/d1max/force.json``
+**门槛全是占位**:真狗上标定(``真机验证.md`` §3r),标好写进 ``/etc/d1max/force.json``
 (:meth:`ForceConfig.load`,只写要改的项)。厂家 SDK 给哪几样就判哪几样,:attr:`ForceWatch.checks`
 报站点(读不到承重就不判抱起来)。
 """

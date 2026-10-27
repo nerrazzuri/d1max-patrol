@@ -26,7 +26,7 @@
 | `src/d1max_patrol/app/server.py` | `AppContext.privileged`；`_spawn_restart` 走助手并先探权限；activate / rollback / 开机回滚调 `install_unit` |
 | `src/d1max_patrol/cli.py` | `release activate` / `rollback` 调 `install_unit` |
 | `tests/engine/test_release_pack.py`、`tests/test_deploy_files.py`、`tests/test_deploy_privileged.py`（新）、`tests/engine/test_privileged.py`（新）、`tests/app/test_api_release.py`、`tests/test_cli_release.py` | 各自的测试 |
-| `docs/装机清单.md`、`docs/真机待验证清单.md`、`docs/W01b-完工报告.md`、工单表 | 文档 |
+| `docs/装机清单.md`、`docs/真机验证.md（§5）`、`docs/W01b-完工报告.md`、工单表 | 文档 |
 
 ---
 
@@ -155,7 +155,7 @@ class Privileged:
 
 ### Task 7：文档、报告、工单
 
-- [ ] `docs/装机清单.md`：装机会多出两处文件；OTA 后如何核对 `systemctl cat d1max-patrol`。`docs/真机待验证清单.md` 第 6 条改写：现在有 sudoers 白名单，验证命令 `sudo -u robot sudo -n /usr/local/sbin/d1max-privileged check`。
+- [ ] `docs/装机清单.md`：装机会多出两处文件；OTA 后如何核对 `systemctl cat d1max-patrol`。`docs/真机验证.md（§5）` 第 6 条改写：现在有 sudoers 白名单，验证命令 `sudo -u robot sudo -n /usr/local/sbin/d1max-privileged check`。
 - [ ] `docs/W01b-完工报告.md`（供审核）；工单表 W01b 打勾。
 - [ ] 全量测试，失败集合 ⊆ 已知 5 条；突变检查；内部评审；push。
 

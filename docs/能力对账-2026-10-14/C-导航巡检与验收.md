@@ -1,6 +1,6 @@
 # C 段对账：导航与巡检（24–37）、高级 A / B / E、验收测试表
 
-基准：`d1max-patrol` master `1c80242`（2026-10-14），只读核对。代码路径省略前缀：`agent/` = `packages/robot-agent/src/d1max_agent/`，`site/` = `packages/site-node/src/d1max_site/`，`contract/` = `packages/contract/src/d1max_contract/`。真机结果全部取自 `docs/庄园场景待真机测试.md` §4（只有 C40221 两轮：2026-10-08、2026-10-13），§4 没写的一律算「没跑」。
+基准：`d1max-patrol` master `1c80242`（2026-10-14），只读核对。代码路径省略前缀：`agent/` = `packages/robot-agent/src/d1max_agent/`，`site/` = `packages/site-node/src/d1max_site/`，`contract/` = `packages/contract/src/d1max_contract/`。真机结果全部取自 `docs/真机验证.md` §4（只有 C40221 两轮：2026-10-08、2026-10-13），§4 没写的一律算「没跑」。
 
 ## 0. 先说口径：真狗上默认是关的
 

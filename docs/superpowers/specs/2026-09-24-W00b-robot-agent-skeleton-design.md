@@ -62,5 +62,5 @@ W00 的 `test_acceptance_w00.py` 四条**原样通过**，但 `goto` 走的是 `
 ## 4. 风险
 
 - 别名壳让 `d1max_patrol.engine` 与 `d1max_agent.engine` 是同一批对象：monkeypatch 一处两处都变——这正是要的，但要写进壳的 docstring。
-- `HalNavBackend` 要模拟厂商导航状态机的时序（终态保持 ~0.5 s 回落 StandBy 等，`真机待验证清单` #1 那一条），引擎压在这上面；sim 上按现有仿真器的时序参数走。
+- `HalNavBackend` 要模拟厂商导航状态机的时序（终态保持 ~0.5 s 回落 StandBy 等，`真机验证 §5` #1 那一条），引擎压在这上面；sim 上按现有仿真器的时序参数走。
 - `release pack` 加 `packages/` 后包体变大、树哈希覆盖面变大；装机 4/7 多三次 `pip install`，离线轮子目录要多放 paho。
