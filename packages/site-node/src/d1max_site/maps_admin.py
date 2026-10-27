@@ -379,7 +379,10 @@ class MapAdmin:
         _, meta, image, data = self._grid(map_id, version)
         if digest != dn.digest(data):
             raise AdminError(409, "这一版的地图在你打开以后换了:重新打开再编辑", reason="stale")
-        new_pgm, stats = me.apply_ops(data, meta, clean)
+        try:
+            new_pgm, stats = me.apply_ops(data, meta, clean)
+        except me.EditError as exc:
+            raise AdminError(400, str(exc)) from exc
         new = self._next_version(map_id, version)
         src = self.cat.root / map_id / version
         tmp = Path(tempfile.mkdtemp(prefix="edit-", dir=self.cat.root))

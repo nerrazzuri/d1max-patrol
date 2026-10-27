@@ -192,3 +192,60 @@ def test_区域命名_报警写在车库_没命名用防区名(站点):
                                             "y": 1.0}, "pose_ms": 1, "running": False,
                                    "started": None})()
     assert src.here("A")["where"] == "后院"
+
+
+# ---- 外审 R4:按地图自己的编码写空地 / 障碍(negate=1 的图 0 是空地) ----
+
+def _三乘三(negate, fill):
+    meta = {"resolution": 1.0, "origin": [0, 0, 0], "negate": negate,
+            "occupied_thresh": 0.65, "free_thresh": 0.196}
+    return b"P5\n3 3\n255\n" + bytes([fill] * 9), meta
+
+
+@pytest.mark.parametrize("negate,free", [(0, 254), (1, 0)])
+def test_外审R4_画障碍按编码写成占用_规划读出来是墙(negate, free):
+    pgm, meta = _三乘三(negate, free)
+    ops = me.check_ops([{"op": "obstacle", "shape": "rect", "points": [[1, 1], [2, 2]]}])
+    out, stats = me.apply_ops(pgm, meta, ops)
+    r = mp.grid_ranks(out, meta)
+    assert stats["obstacle_m2"] == 1.0
+    assert r[1, 1] == 0                                  # 占用
+    assert r[0, 0] == 1 and r[2, 2] == 1                 # 别处还是空地
+
+
+@pytest.mark.parametrize("negate,occ", [(0, 0), (1, 255)])
+def test_外审R4_擦掉按编码写成空地(negate, occ):
+    pgm, meta = _三乘三(negate, occ)
+    ops = me.check_ops([{"op": "erase", "shape": "rect", "points": [[1, 1], [2, 2]]}])
+    out, _ = me.apply_ops(pgm, meta, ops)
+    r = mp.grid_ranks(out, meta)
+    assert r[1, 1] == 1 and r[0, 0] == 0
+
+
+@pytest.mark.parametrize("negate", [0, 1])
+def test_外审R4_图上一格空地都没有_擦掉照样是空地(negate):
+    pgm, meta = _三乘三(negate, 205 if negate == 0 else 50)   # 全是未知
+    assert set(mp.grid_ranks(pgm, meta).ravel()) == {2}
+    ops = me.check_ops([{"op": "erase", "shape": "rect", "points": [[1, 1], [2, 2]]}])
+    out, _ = me.apply_ops(pgm, meta, ops)
+    assert mp.grid_ranks(out, meta)[1, 1] == 1
+
+
+def test_外审R4_阈值让某一种写不出来_明确拒绝():
+    pgm, meta = _三乘三(0, 254)
+    meta["occupied_thresh"] = 1.0                        # 没有哪个灰度算占用
+    ops = me.check_ops([{"op": "obstacle", "shape": "rect", "points": [[1, 1], [2, 2]]}])
+    with pytest.raises(me.EditError):
+        me.apply_ops(pgm, meta, ops)
+
+
+def test_外审R4_写不出来接口回400不是500(站点, monkeypatch):
+    s = 站点
+    tok = _登(s)
+    dg = s.req("GET", f"{ADM}/noise", token=tok)[1]["digest"]
+
+    def 写不出(*a, **k):
+        raise me.EditError("这张图的 floor.yaml 阈值下没有哪个灰度算障碍,改不了")
+    monkeypatch.setattr(me, "apply_ops", 写不出)
+    code, d = s.req("POST", f"{ADM}/edit", {"digest": dg, "ops": ERASE}, token=tok)
+    assert code == 400 and "改不了" in d["error"]

@@ -6,7 +6,9 @@
 一个操作:``{"op": "erase" | "obstacle", "shape": "stroke" | "line" | "rect",
 "points": [[x, y], ...](米), "width_m": 0.05–2.0}``。``stroke`` 是一笔(点连成线、按粗细画),
 ``line`` 两个点的直线,``rect`` 两个对角的
-方框(实心,不看粗细)。``erase`` 改成空地(图里空闲格最常见的灰度),``obstacle`` 改成占用(0)。
+方框(实心,不看粗细)。``erase`` 改成空地(图里空闲格最常见的灰度),``obstacle`` 改成占用。
+空地、占用写哪个灰度按这张图的 ``floor.yaml``(``negate``、两个阈值)算(外审 R4:``negate=1`` 的图 0 是
+空地);阈值让某一种写不出来就拒绝,不写错。
 """
 
 from __future__ import annotations
@@ -57,6 +59,20 @@ def check_ops(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _value(lut: bytes, rank: int, prefer: tuple[int, ...], what: str | None) -> int:
+    """按这张图的编码,哪个灰度读出来是 ``rank``(0 占用 / 1 空地);先挑 ``prefer`` 里的(标准写法)。
+    一个都没有:要用(``what``)就拒绝,不用回 0 占位。"""
+    for v in prefer:
+        if lut[v] == rank:
+            return v
+    for v in range(256):
+        if lut[v] == rank:
+            return v
+    if what is not None:
+        raise EditError(f"这张图的 floor.yaml 阈值下没有哪个灰度算{what},改不了")
+    return 0
+
+
 def apply_ops(pgm: bytes, meta: dict[str, Any], ops: list[dict[str, Any]]) -> tuple[bytes, dict]:
     """→ (新的 PGM(P5、最大值 255), ``{"erased_m2", "obstacle_m2"}``)。
     ``ops`` 先过 :func:`check_ops`。"""
@@ -65,7 +81,13 @@ def apply_ops(pgm: bytes, meta: dict[str, Any], ops: list[dict[str, Any]]) -> tu
     img = np.frombuffer(body, dtype=np.uint8).reshape(h, w).copy()
     ranks = mp.grid_ranks(pgm, meta)
     free_vals = img[ranks == 1]
-    free = int(np.bincount(free_vals).argmax()) if free_vals.size else 254
+    lut = mp._rank_lut(meta)
+    need = {o["op"] for o in ops}
+    if free_vals.size:
+        free = int(np.bincount(free_vals).argmax())
+    else:
+        free = _value(lut, 1, (254, 0), "空地" if "erase" in need else None)
+    occ = _value(lut, 0, (0, 255), "障碍" if "obstacle" in need else None)
     res = float(meta["resolution"])
     ox, oy = float(meta["origin"][0]), float(meta["origin"][1])
     rows, cols = np.mgrid[0:h, 0:w]
@@ -93,7 +115,7 @@ def apply_ops(pgm: bytes, meta: dict[str, Any], ops: list[dict[str, Any]]) -> tu
             erased |= mask
             added &= ~mask
         else:
-            img[mask] = 0
+            img[mask] = occ
             added |= mask
             erased &= ~mask
     cell = res * res
