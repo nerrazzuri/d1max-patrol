@@ -728,3 +728,10 @@ button.navgroup-title[aria-expanded="true"]::after { content: " ▾"; }
   .armrow .arm-copy { grid-column: 2; justify-self: start; }
   .armhours { margin: 0 0 0 40px; }
 }
+
+/* W44 第二期:授权和访客页 */
+.access { display: flex; flex-direction: column; gap: 12px; }
+.access .lead { margin: 0; }
+.acc-now ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.acc-now li.row { gap: 12px; padding: 8px 12px; border-radius: 8px; background: var(--c-successSoft); }
+.acc-visitor .row { gap: 12px; align-items: end; }

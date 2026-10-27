@@ -22,7 +22,8 @@ import { NoticesPage } from "./notices";
 import { RobotsAdminPage, SystemPage, UsersPage } from "./admin";
 import { MapManagePage } from "./mapmgmt";
 import { RoutesPage } from "./routepage";
-import { ListsPage, MapsZonesPage } from "./zonesadmin";
+import { MapsZonesPage } from "./zonesadmin";
+import { AccessPage } from "./accesspage";
 import { AdminNav, isAdminPage, loadThemePref, readRoute, saveThemePref, schemeFor, TopBar, type Page, type ThemePref } from "./shell";
 import { pinScheme, systemIsDark } from "./theme";
 
@@ -146,7 +147,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
               {route.page === "admin/zones" && <MapsZonesPage say={say} />}
               {route.page === "admin/maps" && <MapManagePage say={say} />}
               {route.page === "admin/routes" && <RoutesPage say={say} />}
-              {route.page === "admin/access" && <ListsPage say={say} />}
+              {route.page === "admin/access" && <AccessPage say={say} now={now} />}
               {route.page === "admin/localization" && <LocHistoryPage robots={units.map((u) => u.robot.robot_id)} now={now} />}
               {route.page === "admin/reports" && <ReportsPage me={me} now={now} />}
             </div>
