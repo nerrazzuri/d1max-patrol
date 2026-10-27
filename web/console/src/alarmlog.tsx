@@ -17,7 +17,7 @@ interface Note { id: number; at_ms: number; author: string; text: string }
 
 /** 能留话的(站点 HANDLE_ALERTS):业主、保安、家人。 */
 function canNote(role: string): boolean {
-  return role === "admin" || role === "guard" || role === "owner";
+  return role === "admin" || role === "engineer" || role === "guard" || role === "owner";
 }
 
 export function AlarmLogPage(props: { now: number; role: string }) {

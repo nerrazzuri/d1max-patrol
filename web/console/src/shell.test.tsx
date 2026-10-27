@@ -54,6 +54,7 @@ describe("外壳的纯函数", () => {
     expect(roleLabel("admin")).toBe("roleOwner");
     expect(roleLabel("guard")).toBe("roleGuard");
     expect(roleLabel("owner")).toBe("roleFamily");
+    expect(roleLabel("engineer")).toBe("roleEngineer");
   });
   it("保安页深色,管理页浅色", () => {
     for (const p of ["duty", "live", "map", "recordings", "alarms"] as const) expect(pageScheme(p)).toBe("dark");
@@ -70,6 +71,8 @@ describe("外壳的纯函数", () => {
   it("老地址跳新地址", () => {
     expect(readRoute("#/reports").page).toBe("admin/reports");
     expect(readRoute("#/localization").page).toBe("admin/localization");
+    expect(readRoute("#/admin/notices").page).toBe("admin/home");
+    expect(readRoute("#/admin/lists").page).toBe("admin/access");
     expect(readRoute("").page).toBe("duty");
     expect(readRoute("#/nonsense").page).toBe("duty");
     expect(readRoute("#/recordings?robot=A&t=5")).toMatchObject({ page: "recordings", robot: "A", at: 5 });
@@ -88,6 +91,45 @@ describe("新外壳", () => {
     cleanup();
     const a = render(<Console me={me("admin")} onOut={() => {}} />);
     expect(a.container.querySelector(".tabsnav")!.textContent).toContain("管理");
+  });
+
+  it("管理入口指家里的状况", () => {
+    const a = render(<Console me={me("admin")} onOut={() => {}} />);
+    const link = Array.from(a.container.querySelectorAll(".tabsnav a")).find((x) => x.textContent === "管理")!;
+    expect(link.getAttribute("href")).toBe("#/admin/home");
+  });
+
+  it("管理导航分三组,高级默认收着", async () => {
+    location.hash = "#/admin/home";
+    const a = render(<Console me={me("admin")} onOut={() => {}} />);
+    const nav = a.container.querySelector(".adminnav")!;
+    expect(Array.from(nav.querySelectorAll(".navgroup-title")).map((x) => x.textContent)).toEqual(["常用", "布置", "高级"]);
+    const hrefs = () => Array.from(nav.querySelectorAll("a")).map((x) => x.getAttribute("href"));
+    expect(hrefs()).toEqual(expect.arrayContaining(["#/admin/home", "#/admin/arming", "#/admin/access", "#/admin/users", "#/admin/robots", "#/admin/reports", "#/admin/zones", "#/admin/routes"]));
+    expect(hrefs()).not.toContain("#/admin/system");
+    fireEvent.click(Array.from(nav.querySelectorAll(".navgroup-title")).find((x) => x.textContent === "高级")!);
+    expect(hrefs()).toEqual(expect.arrayContaining(["#/admin/maps", "#/admin/localization", "#/admin/system"]));
+  });
+
+  it("在高级的页里,高级是展开的", () => {
+    location.hash = "#/admin/system";
+    const a = render(<Console me={me("admin")} onOut={() => {}} />);
+    expect(a.container.querySelector('.adminnav a[href="#/admin/system"]')).not.toBeNull();
+  });
+
+  it("工程师看得到管理、看不到用户", () => {
+    location.hash = "#/admin/home";
+    const e = render(<Console me={me("engineer")} onOut={() => {}} />);
+    expect(e.container.querySelector(".tabsnav")!.textContent).toContain("管理");
+    expect(e.container.querySelector('.adminnav a[href="#/admin/users"]')).toBeNull();
+    expect(e.container.querySelector('.adminnav a[href="#/admin/robots"]')).not.toBeNull();
+  });
+
+  it("家人看不到管理", () => {
+    location.hash = "#/admin/home";
+    const f = render(<Console me={me("owner")} onOut={() => {}} />);
+    expect(f.container.querySelector(".tabsnav")!.textContent).not.toContain("管理");
+    expect(f.container.querySelector(".adminnav")).toBeNull();
   });
 
   it("顶栏没有语言按钮,在用户菜单里", () => {

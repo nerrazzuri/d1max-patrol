@@ -7,19 +7,34 @@ import { Modal } from "./dialogs";
 import { hm } from "./data";
 import { lang, setLang, t, type Key } from "./i18n";
 import { Icon } from "./icons";
-import { canDispatch, type Mode } from "./model";
+import { canDispatch, isOwnerLike, type Mode } from "./model";
 
 export type GuardPage = "duty" | "live" | "map" | "recordings" | "alarms";
+/** 「管理」各页(W44 第二期,设计 §5):常用 = 家里的状况、布防时间、授权和访客、用户、机器人、报表;
+ *  布置、高级两组先挂现有页面(第三、四期重做)。 */
 export type AdminPage =
-  | "admin/notices" | "admin/robots" | "admin/zones" | "admin/maps" | "admin/routes" | "admin/users"
-  | "admin/lists" | "admin/system" | "admin/localization" | "admin/reports";
+  | "admin/home" | "admin/arming" | "admin/access" | "admin/users" | "admin/robots" | "admin/reports"
+  | "admin/zones" | "admin/routes" | "admin/maps" | "admin/localization" | "admin/system";
 export type Page = GuardPage | AdminPage;
 
 export const GUARD_PAGES: GuardPage[] = ["duty", "live", "map", "recordings", "alarms"];
-const ADMIN_PAGES: AdminPage[] = ["admin/notices", "admin/robots", "admin/zones", "admin/maps", "admin/routes",
-  "admin/users", "admin/lists", "admin/system", "admin/localization", "admin/reports"];
+
+interface NavGroup { id: "common" | "setup" | "advanced"; key: Key; pages: { id: AdminPage; key: Key }[] }
+export const ADMIN_GROUPS: NavGroup[] = [
+  { id: "common", key: "navCommon", pages: [
+    { id: "admin/home", key: "tabHome" }, { id: "admin/arming", key: "tabArming" }, { id: "admin/access", key: "tabAccess" },
+    { id: "admin/users", key: "tabUsers" }, { id: "admin/robots", key: "tabRobotsAdmin" }, { id: "admin/reports", key: "tabReports" },
+  ] },
+  { id: "setup", key: "navSetup", pages: [{ id: "admin/zones", key: "tabMapsZones" }, { id: "admin/routes", key: "tabRoutes" }] },
+  { id: "advanced", key: "navAdvanced", pages: [
+    { id: "admin/maps", key: "tabMapMgmt" }, { id: "admin/localization", key: "tabLocalization" }, { id: "admin/system", key: "tabSystem" },
+  ] },
+];
+const ADMIN_PAGES: AdminPage[] = ADMIN_GROUPS.flatMap((g) => g.pages.map((p) => p.id));
 /** 改版前的地址(书签、手机分享的链接)。 */
-const LEGACY: Record<string, Page> = { localization: "admin/localization", reports: "admin/reports" };
+const LEGACY: Record<string, Page> = {
+  localization: "admin/localization", reports: "admin/reports", "admin/notices": "admin/home", "admin/lists": "admin/access",
+};
 
 export interface Route {
   page: Page;
@@ -40,9 +55,9 @@ export function isAdminPage(p: Page): p is AdminPage {
   return p.startsWith("admin/");
 }
 
-/** 角色的界面名字(设计 §3):admin 叫业主,现在的 owner 叫家人 / 只看。 */
+/** 角色的界面名字(设计 §3):admin 叫业主,现在的 owner 叫家人 / 只看,engineer 是工程师(临时)。 */
 export function roleLabel(role: string): Key {
-  return role === "admin" ? "roleOwner" : role === "guard" ? "roleGuard" : "roleFamily";
+  return role === "admin" ? "roleOwner" : role === "guard" ? "roleGuard" : role === "engineer" ? "roleEngineer" : "roleFamily";
 }
 
 /** 页面默认的明暗(设计 §2.2):保安页深色,管理页浅色。 */
@@ -107,10 +122,10 @@ export function TopBar(props: {
         {NAV.map((x) => (
           <a key={x.id} href={`#/${x.id}`} aria-current={props.page === x.id ? "page" : undefined}>{t(x.key)}</a>
         ))}
-        {props.me.role === "admin" && (
+        {isOwnerLike(props.me.role) && (
           <>
             <span class="navsep" aria-hidden="true" />
-            <a href="#/admin/notices" aria-current={isAdminPage(props.page) ? "page" : undefined}>{t("adminGroup")}</a>
+            <a href="#/admin/home" aria-current={isAdminPage(props.page) ? "page" : undefined}>{t("adminGroup")}</a>
           </>
         )}
       </nav>
@@ -215,27 +230,29 @@ function OwnPassword({ onClose, onDone }: { onClose: () => void; onDone: () => v
   );
 }
 
-const ADMIN_NAV: { id: AdminPage; key: Key }[] = [
-  { id: "admin/notices", key: "tabNotices" },
-  { id: "admin/robots", key: "tabRobotsAdmin" },
-  { id: "admin/zones", key: "tabMapsZones" },
-  { id: "admin/maps", key: "tabMapMgmt" },
-  { id: "admin/routes", key: "tabRoutes" },
-  { id: "admin/users", key: "tabUsers" },
-  { id: "admin/lists", key: "tabLists" },
-  { id: "admin/localization", key: "tabLocalization" },
-  { id: "admin/reports", key: "tabReports" },
-  { id: "admin/system", key: "tabSystem" },
-];
-
-export function AdminNav({ page, notices }: { page: Page; notices: number }) {
+/** 「管理」左边一列(设计 §5):三组,高级默认收着(在高级的页里就展开)。用户页只给业主(工程师不能管账号)。 */
+export function AdminNav({ page, notices, role }: { page: Page; notices: number; role: string }) {
+  const inAdvanced = ADMIN_GROUPS[2].pages.some((p) => p.id === page);
+  const [open, setOpen] = useState(inAdvanced);
+  useEffect(() => { if (inAdvanced) setOpen(true); }, [inAdvanced]);
   return (
-    <nav class="subnav" aria-label={t("adminGroup")}>
-      {ADMIN_NAV.map((x) => (
-        <a key={x.id} href={`#/${x.id}`} aria-current={page === x.id ? "page" : undefined}>
-          {t(x.key)}{x.id === "admin/notices" && notices > 0 ? <span class="badge">{notices}</span> : null}
-        </a>
-      ))}
+    <nav class="adminnav" aria-label={t("adminGroup")}>
+      {ADMIN_GROUPS.map((g) => {
+        const fold = g.id === "advanced";
+        const shown = !fold || open;
+        return (
+          <div key={g.id} class="navgroup">
+            {fold
+              ? <button type="button" class="navgroup-title" aria-expanded={open} onClick={() => setOpen(!open)}>{t(g.key)}</button>
+              : <div class="navgroup-title">{t(g.key)}</div>}
+            {shown && g.pages.filter((x) => x.id !== "admin/users" || role === "admin").map((x) => (
+              <a key={x.id} href={`#/${x.id}`} aria-current={page === x.id ? "page" : undefined}>
+                {t(x.key)}{x.id === "admin/home" && notices > 0 ? <span class="badge">{notices}</span> : null}
+              </a>
+            ))}
+          </div>
+        );
+      })}
     </nav>
   );
 }
