@@ -85,7 +85,7 @@
       },
       "clock_skew_s": 0.0,
       "devices": null,
-      "expires_at": 1794068689668,
+      "expires_at": 1794096195869,
       "fresh": true,
       "held": null,
       "loc": {
@@ -101,6 +101,7 @@
         "source": "odom_identity"
       },
       "manual_only": null,
+      "name": "",
       "revoked": false,
       "robot_id": "A",
       "rtk": null,
@@ -128,9 +129,9 @@
         }
       },
       "status": {
-        "boot_id": "boot-ce2a29ab3a",
+        "boot_id": "boot-ae92e414fb",
         "control_epoch": 1,
-        "last_seen": 1793068690375,
+        "last_seen": 1793096196573,
         "online": true,
         "ready": {
           "control": true,
