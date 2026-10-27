@@ -15,6 +15,7 @@ import { ReportsPage } from "./reportpage";
 import { MapPage } from "./mappage";
 import { FELL_KINDS, forGuard, isOwnerLike, queue, robotCams, robotState, type Alert, type Mode } from "./model";
 import { AlarmLogPage } from "./alarmlog";
+import { ArmingPage } from "./armingpage";
 import { DutyPage } from "./duty";
 import { LiveWall } from "./livewall";
 import { NoticesPage } from "./notices";
@@ -138,7 +139,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
                 <NoticesPage alerts={alerts} mode={data?.mode ?? null} onAck={ack} onDone={(a) => resolve(a, "handled")}
                   onMode={(m) => setPending({ kind: "mode", mode: m })} />
               )}
-              {route.page === "admin/arming" && <p class="empty">…</p>}
+              {route.page === "admin/arming" && <ArmingPage say={say} now={now} />}
               {route.page === "admin/users" && me.role === "admin" && <UsersPage me={me.name} say={say} />}
               {route.page === "admin/robots" && <RobotsAdminPage say={say} />}
               {route.page === "admin/system" && <SystemPage />}

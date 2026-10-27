@@ -697,3 +697,34 @@ button.navgroup-title[aria-expanded="true"]::after { content: " ▾"; }
   .navgroup { flex-direction: row; flex-wrap: wrap; align-items: center; }
 }
 @media print { .adminnav { display: none !important; } .adminwrap { display: block; } }
+
+/* W44 第二期:布防时间页 */
+.arming { display: flex; flex-direction: column; gap: 12px; }
+.arming .lead { margin: 0; }
+.arm-dirty { margin: 0; padding: 6px 12px; border-radius: 8px; background: var(--c-warningSoft); color: var(--c-text); font-weight: 600; }
+.arm-who { margin: 0; font-weight: 600; }
+.arm-zones { display: flex; flex-wrap: wrap; gap: 6px; }
+.arm-follow { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px dashed var(--c-outline); border-radius: 8px; }
+.armgrid { display: flex; flex-direction: column; gap: 6px; padding-top: 18px; position: relative; }
+.armhours { position: relative; height: 14px; margin: 0 92px 0 48px; font-size: 11px; color: var(--c-textMuted); }
+.armhours span { position: absolute; transform: translateX(-50%); }
+.armrow { display: grid; grid-template-columns: 40px minmax(0, 1fr) 84px; gap: 8px; align-items: center; }
+.armday { font-size: 13px; font-weight: 600; color: var(--c-textSecondary); }
+.armtrack { position: relative; height: 32px; border-radius: 6px; background: var(--c-surfaceVariant); cursor: crosshair; touch-action: none;
+  background-image: linear-gradient(to right, var(--c-outline) 1px, transparent 1px); background-size: calc(100% / 24) 100%; }
+.armblock { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; background: var(--c-success); color: var(--c-onPrimary);
+  font-size: 11px; display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: pointer; }
+.armblock.on { outline: 2px solid var(--c-focus); }
+.armblock.ghost { background: var(--c-successSoft); pointer-events: none; }
+.armlabel { white-space: nowrap; pointer-events: none; }
+.armedge { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; left: 0; }
+.armedge.end { left: auto; right: 0; }
+.arm-selected { gap: 12px; }
+.arm-copyto { padding: 12px; }
+.arm-ex ul.plain { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
+.arm-ex li.row { gap: 12px; }
+@media (max-width: 600px) {
+  .armrow { grid-template-columns: 32px minmax(0, 1fr); }
+  .armrow .arm-copy { grid-column: 2; justify-self: start; }
+  .armhours { margin: 0 0 0 40px; }
+}
