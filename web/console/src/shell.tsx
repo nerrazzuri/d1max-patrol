@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "./api";
 import type { Me } from "./app";
+import { modeLabel } from "./armingpage";
 import { Modal } from "./dialogs";
 import { hm } from "./data";
 import { lang, setLang, t, type Key } from "./i18n";
@@ -144,10 +145,10 @@ export function TopBar(props: {
 
 /** 布防状态:只显示(设计 §4.0,用户说的),切模式在别处。 */
 function ArmState({ mode }: { mode: Mode }) {
-  const text = mode.mode === "armed" ? t("armArmed")
+  const text = mode.source === "schedule" ? modeLabel(mode) : mode.mode === "armed" ? t("armArmed")
     : mode.mode === "home" ? t("armHome")
     : t("armVisitor", { t: mode.until_ms ? hm(mode.until_ms) : "—" });
-  return <span class={`armstate ${mode.mode}`}><i class="dot" aria-hidden="true" />{text}</span>;
+  return <span class={`armstate ${mode.source === "schedule" ? (mode.state === "armed" ? "armed" : "home") : mode.mode}`}><i class="dot" aria-hidden="true" />{text}</span>;
 }
 
 function UserMenu(props: { me: Me; pref: ThemePref; onPref: (p: ThemePref) => void; onSignOut: () => void; onSay: (s: string) => void }) {

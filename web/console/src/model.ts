@@ -106,6 +106,14 @@ export interface Mode {
   until_ms?: number | null;
   /** 每个防区此刻布没布防(站点 modes.view)。 */
   zones?: { zone: string; armed: boolean }[];
+  /** W44 第二期:谁说了算(时间表 / 手动)、整体布防到什么程度、下一次变是几点、手动管到几点。 */
+  source?: "schedule" | "manual";
+  state?: "armed" | "partial" | "disarmed";
+  next_change_ms?: number | null;
+  manual_until_ms?: number | null;
+  label?: string;
+  prev_mode?: string;
+  visitor_zones?: string[];
 }
 
 /** 给保安看的四类(W44,设计 §7)。 */
