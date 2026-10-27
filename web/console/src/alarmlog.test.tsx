@@ -52,6 +52,14 @@ const rows = (c: Element) => Array.from(c.querySelectorAll(".it"));
 const chip = (c: Element, text: string) => Array.from(c.querySelectorAll(".chip")).find((b) => b.textContent === text) as HTMLButtonElement;
 
 describe("报警记录页", () => {
+  it("实测查出:站点给的「在哪」写在那一行", async () => {
+    duty = null;
+    alerts = [alert({ key: "w", kind: "robot_offline_idle", audience: "offline", robot: "A", title: "机器人掉线了", detail: "", context: { where: "车库" } as never, first_ms: at(21, 50) })];
+    const { container: c } = page();
+    await waitFor(() => expect(rows(c).length).toBe(1));
+    expect(rows(c)[0].textContent).toContain("在车库");
+  });
+
   it("交班时间按站点设置", async () => {
     duty = { shift_hours: [8, 20], stale_hours: 2 };
     alerts = [alert({ key: "a", first_ms: at(19, 30) }), alert({ key: "b", first_ms: at(20, 30) })];

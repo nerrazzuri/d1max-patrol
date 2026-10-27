@@ -125,7 +125,7 @@ function Row({ a }: { a: Alert }) {
       <time class="mono">{hm(a.first_ms)}</time>
       <div class="what">
         <h5 class={tone}>{alertTitle(lang.value, a.kind, a.title)}</h5>
-        {a.detail && <p>{a.detail}</p>}
+        {(a.detail || a.context?.where) && <p>{[a.context?.where && !a.context?.zone ? t("atWhere", { w: a.context.where }) : "", a.detail].filter(Boolean).join(" · ")}</p>}
       </div>
       <div class="res">
         {open ? t("evOpen") : verdictText(a)}
