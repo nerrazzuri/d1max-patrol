@@ -50,7 +50,7 @@ export function HomePage(props: {
   ];
 
   return (
-    <section class="home">
+    <section class="homepage">
       <h1>{t("tabHome")}</h1>
 
       {todo.length > 0 && (
