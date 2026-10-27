@@ -15,7 +15,7 @@ export type GuardPage = "duty" | "live" | "map" | "recordings" | "alarms";
  *  布置、高级两组先挂现有页面(第三、四期重做)。 */
 export type AdminPage =
   | "admin/home" | "admin/arming" | "admin/access" | "admin/users" | "admin/robots" | "admin/reports"
-  | "admin/zones" | "admin/routes" | "admin/maps" | "admin/localization" | "admin/system";
+  | "admin/layout" | "admin/maps" | "admin/localization" | "admin/system";
 export type Page = GuardPage | AdminPage;
 
 export const GUARD_PAGES: GuardPage[] = ["duty", "live", "map", "recordings", "alarms"];
@@ -26,7 +26,7 @@ export const ADMIN_GROUPS: NavGroup[] = [
     { id: "admin/home", key: "tabHome" }, { id: "admin/arming", key: "tabArming" }, { id: "admin/access", key: "tabAccess" },
     { id: "admin/users", key: "tabUsers" }, { id: "admin/robots", key: "tabRobotsAdmin" }, { id: "admin/reports", key: "tabReports" },
   ] },
-  { id: "setup", key: "navSetup", pages: [{ id: "admin/zones", key: "tabMapsZones" }, { id: "admin/routes", key: "tabRoutes" }] },
+  { id: "setup", key: "navSetup", pages: [{ id: "admin/layout", key: "lyTitle" }] },
   { id: "advanced", key: "navAdvanced", pages: [
     { id: "admin/maps", key: "tabMapMgmt" }, { id: "admin/localization", key: "tabLocalization" }, { id: "admin/system", key: "tabSystem" },
   ] },
@@ -35,6 +35,7 @@ const ADMIN_PAGES: AdminPage[] = ADMIN_GROUPS.flatMap((g) => g.pages.map((p) => 
 /** 改版前的地址(书签、手机分享的链接)。 */
 const LEGACY: Record<string, Page> = {
   localization: "admin/localization", reports: "admin/reports", "admin/notices": "admin/home", "admin/lists": "admin/access",
+  "admin/zones": "admin/layout", "admin/routes": "admin/layout",
 };
 
 export interface Route {

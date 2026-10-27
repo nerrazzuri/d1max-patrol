@@ -32,8 +32,8 @@ describe("管理组各页铺满宽度", () => {
 
 describe("巡检路线页整页一屏(跟防区页一样)", () => {
   const consoleSrc = readFileSync(`${process.cwd()}/src/console.tsx`, "utf-8");
-  it("路线页算「带地图的页」", () => {
-    expect(consoleSrc).toMatch(/fill = [^\n]*"admin\/routes"/);
+  it("布置页(路线在里面)算「带地图的页」", () => {
+    expect(consoleSrc).toMatch(/fill = [^\n]*"admin\/layout"/);
   });
   it("路线页的地图在一屏模式里撑满(不写死高度)", () => {
     expect(flat).toMatch(/\.console\.fill \.routemap \.mapwrap \{ ?flex: ?1; ?height: ?auto;? ?\}/);
