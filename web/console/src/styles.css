@@ -898,3 +898,17 @@ img.cam-live { width: 100%; max-height: 60vh; object-fit: contain; background: #
 .rb-steps li.now { color: var(--c-text); font-weight: 600; }
 .rb-steps li.done { color: var(--c-success); }
 .rb-steps li .btn { margin-left: 8px; }
+
+/* W44 第四期:地图编辑器 */
+.mapedit { display: flex; flex-direction: column; gap: 10px; }
+.me-canvas { min-height: 460px; height: 66vh; }
+.me-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.me-tools button { padding: 6px 10px; border: 1px solid var(--c-outline); border-radius: 8px; background: var(--c-surface); color: var(--c-text); font: inherit; cursor: pointer; }
+.me-tools button[aria-pressed="true"] { background: var(--c-primary); color: var(--c-onPrimary); border-color: var(--c-primary); }
+.me-op { fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+.me-op.erase { stroke: var(--c-success); }
+.me-op.obstacle { stroke: var(--c-text); }
+polygon.me-op.erase { fill: var(--c-success); stroke: none; }
+polygon.me-op.obstacle { fill: var(--c-text); stroke: none; }
+.me-terrain { fill: var(--c-warning); fill-opacity: .25; stroke: var(--c-warning); stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.me-terrain.grass, .me-terrain.gravel { fill: var(--c-success); stroke: var(--c-success); }

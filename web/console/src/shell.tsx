@@ -15,7 +15,8 @@ export type GuardPage = "duty" | "live" | "map" | "recordings" | "alarms";
  *  布置、高级两组先挂现有页面(第三、四期重做)。 */
 export type AdminPage =
   | "admin/home" | "admin/arming" | "admin/access" | "admin/users" | "admin/robots" | "admin/reports"
-  | "admin/layout" | "admin/maps" | "admin/localization" | "admin/diag" | "admin/upgrade" | "admin/system";
+  | "admin/layout" | "admin/maps" | "admin/localization" | "admin/diag" | "admin/upgrade" | "admin/system"
+  | "admin/mapedit";
 export type Page = GuardPage | AdminPage;
 
 export const GUARD_PAGES: GuardPage[] = ["duty", "live", "map", "recordings", "alarms"];
@@ -32,7 +33,8 @@ export const ADMIN_GROUPS: NavGroup[] = [
     { id: "admin/upgrade", key: "tabUpgrade" }, { id: "admin/system", key: "tabSystem" },
   ] },
 ];
-const ADMIN_PAGES: AdminPage[] = ADMIN_GROUPS.flatMap((g) => g.pages.map((p) => p.id));
+/** 不在导航里、从别的页打开的(地图编辑器从「高级 → 地图」每一版的「编辑…」进)。 */
+const ADMIN_PAGES: AdminPage[] = [...ADMIN_GROUPS.flatMap((g) => g.pages.map((p) => p.id)), "admin/mapedit"];
 /** 改版前的地址(书签、手机分享的链接)。 */
 const LEGACY: Record<string, Page> = {
   localization: "admin/localization", reports: "admin/reports", "admin/notices": "admin/home", "admin/lists": "admin/access",
@@ -235,7 +237,7 @@ function OwnPassword({ onClose, onDone }: { onClose: () => void; onDone: () => v
 
 /** 「管理」左边一列(设计 §5):三组,高级默认收着(在高级的页里就展开)。用户页只给业主(工程师不能管账号)。 */
 export function AdminNav({ page, notices, role }: { page: Page; notices: number; role: string }) {
-  const inAdvanced = ADMIN_GROUPS[2].pages.some((p) => p.id === page);
+  const inAdvanced = ADMIN_GROUPS[2].pages.some((p) => p.id === page) || page === "admin/mapedit";
   const [open, setOpen] = useState(inAdvanced);
   useEffect(() => { if (inAdvanced) setOpen(true); }, [inAdvanced]);
   return (
