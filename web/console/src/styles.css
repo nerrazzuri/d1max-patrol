@@ -874,3 +874,18 @@ img.cam-live { width: 100%; max-height: 60vh; object-fit: contain; background: #
 .loc-dot.unsure { background: var(--c-warning); }
 .loc-dot.lost { background: var(--c-error); }
 .loc-detail summary { cursor: pointer; font-weight: 600; }
+
+/* W44 第四期:诊断、系统、升级 */
+.advdiag, .advsystem, .advupgrade { display: flex; flex-direction: column; gap: 12px; }
+.advdiag .lead, .advsystem .lead, .advupgrade .lead { margin: 0; }
+.checklist ul.plain, .advupgrade ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.chk { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.chk .mark { width: 18px; font-weight: 800; }
+.chk.ok .mark { color: var(--c-success); }
+.chk.warn .mark { color: var(--c-warning); }
+.chk.bad .mark, .chk.bad b { color: var(--c-error); }
+.sys-row { display: flex; gap: 12px; align-items: baseline; padding: 4px 0; flex-wrap: wrap; }
+.sys-row > .muted { min-width: 140px; }
+.sys-row.bad b { color: var(--c-error); }
+.up-rel { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--c-outline); }
+.up-robot { display: inline-flex; gap: 4px; align-items: center; margin-right: 12px; }

@@ -55,3 +55,29 @@ export async function api<T = unknown>(method: "GET" | "POST", path: string, bod
 }
 
 export const enc = encodeURIComponent;
+
+/** 传文件(W44 第四期:升级包):请求体就是文件本身,别的放头里。回包、出错跟 ``api`` 一样。 */
+export async function apiUpload<T = unknown>(path: string, file: Blob, headers: Record<string, string> = {}): Promise<T> {
+  let resp: Response;
+  try {
+    resp = await fetcher(path, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/octet-stream", "X-D1Max-Web": "1", ...headers },
+      credentials: "same-origin",
+      body: file,
+    });
+  } catch {
+    throw new ApiError(0, "network");
+  }
+  let data: unknown = {};
+  try {
+    data = await resp.json();
+  } catch {
+    data = {};
+  }
+  if (!resp.ok) {
+    if (resp.status === 401) onUnauthorized.cb();
+    throw new ApiError(resp.status, (data as { error?: string }).error ?? `HTTP ${resp.status}`, data);
+  }
+  return data as T;
+}
