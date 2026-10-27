@@ -25,6 +25,8 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
+from d1max_site.alert_audience import audience
+
 
 class Level(str, Enum):
     """告警级别 —— 按"人要做什么"分三档,不是按严重程度打分。"""
@@ -296,6 +298,8 @@ class Alert:
             "shelved_ms": self.shelved_ms,
             "shelved_until_ms": self.shelved_until_ms,
             "shelved_reason": self.shelved_reason,
+            # W44:给谁看(保安四类 / 业主),网页、推送按它分
+            "audience": audience(self.kind),
         }
 
 
