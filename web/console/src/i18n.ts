@@ -902,6 +902,7 @@ const en = {
   noAccess: "Your account cannot open this page. Ask the owner if you need it.",
   rsCamZone: "{z} (camera)",
   stillEvery: "One frame every {s} s",
+  meStrokePts: "Points so far: {n}.",
 };
 
 type Key = keyof typeof en;
@@ -1803,6 +1804,7 @@ const zh: Partial<Record<Key, string>> = {
   noAccess: "你的账号打不开这一页。要用的话找业主。",
   rsCamZone: "{z}（摄像头）",
   stillEvery: "每 {s} 秒一张",
+  meStrokePts: "已点 {n} 个点。",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };

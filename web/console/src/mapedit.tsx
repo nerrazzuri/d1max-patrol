@@ -225,7 +225,7 @@ function Editor({ say, target, Canvas }: { say: Say; target: Target; Canvas?: Fu
           {(tool === "region" || tool === "terrain") && <p class="muted small">{t("mePolyHint")}</p>}
           {pts.length > 0 && (
             <div class="row wrap">
-              <span class="muted small">{t("drawHint", { n: pts.length })}</span>
+              <span class="muted small">{t(grid ? "meStrokePts" : "drawHint", { n: pts.length })}</span>
               <button type="button" class="btn sm" onClick={() => setPts(pts.slice(0, -1))}>{t("undoPoint")}</button>
               <button type="button" class="btn sm primary" disabled={pts.length < need || (tool === "region" && !name.trim())} onClick={() => finish()}>{t("lyDrawDone")}</button>
             </div>

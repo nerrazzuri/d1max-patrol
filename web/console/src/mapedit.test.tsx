@@ -169,4 +169,12 @@ describe("地图编辑器", () => {
     await waitFor(() => expect(posted.map((p) => p.url)).toEqual(["/api/admin/maps/A/1/edit", "/api/admin/maps/A/2/display"]));
     expect(location.hash).toBe("#/admin/mapedit?map=B&version=1");
   });
+
+  it("实测查出的用词:橡皮擦一笔写「已点 N 个点」,不写「点出各个角」", async () => {
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector(".mapedit[data-ready]")).not.toBeNull());
+    fireEvent.click(c.querySelector(".pick")!);
+    expect(c.textContent).toContain("已点 1 个点");
+    expect(c.textContent).not.toContain("各个角");
+  });
 });
