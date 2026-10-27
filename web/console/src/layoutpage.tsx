@@ -27,7 +27,8 @@ export interface NavZones {
 export interface LayoutRoute { id: string; revision: number; waypoints: { name: string; x: number; y: number; yaw: number }[] }
 export interface StandbyPt { robot_id: string; name: string; x: number; y: number; yaw: number; map_id: string; map_version: string; default?: boolean }
 export interface Placement { map_id: string; map_version: string; x: number; y: number; yaw: number; fov_deg: number }
-export interface CamRow { name: string; zone: string; onvif_url: string; rtsp_url?: string; username?: string; has_password?: boolean; motion?: boolean; placement?: Placement | null }
+export interface CamRow { name: string; zone: string; onvif_url: string; rtsp_url?: string; username?: string; has_password?: boolean; motion?: boolean; placement?: Placement | null;
+  warnings?: { code: string; text: string }[] }
 export interface LayerData { areas: Area[]; nav: NavZones | null; routes: LayoutRoute[]; standby: StandbyPt[]; cameras: CamRow[]; robots: string[] }
 
 export interface TabProps {

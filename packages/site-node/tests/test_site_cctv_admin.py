@@ -232,3 +232,36 @@ def test_原来的只读接口不变(站点):
     s = 站点
     tok = _tok(s)
     assert s.req("POST", "/api/cameras", {}, token=tok)[0] == 405
+
+
+def test_实测_网页加删摄像头_站点当场跟上_不等下一拍(tmp_path):
+    """演示站点实测:网页上删了摄像头,值班用的摄像头列表(和订阅)还要等下一次同步(最多 30 秒),
+    这几秒里它报的入侵照样报警。网页加、改、删以后当场同步。"""
+    import time
+
+    from test_site_api import PW, 站
+    from test_site_cctv import _假订阅
+
+    from d1max_site.cctv import CctvManager
+    s = 站(tmp_path)
+    try:
+        s.cctv = CctvManager(s.db, report=lambda c, e: None, now_ms=lambda: 1,
+                             watch_factory=_假订阅)
+        s.api.cctv = s.cctv
+        s.PW = PW
+        tok = _tok(s)
+        body = {"name": "gate-cam", "onvif_url": "http://10.0.0.9", "username": "admin",
+                "password": "p", "zone": "front-gate"}
+        assert s.req("POST", "/api/admin/cameras", body, token=tok)[0] == 200
+        names = lambda: [c["name"] for c in s.cctv.view()]  # noqa: E731
+        deadline = time.monotonic() + 3
+        while "gate-cam" not in names() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert "gate-cam" in names()
+        assert s.req("POST", "/api/admin/cameras/gate-cam/remove", {}, token=tok)[0] == 200
+        deadline = time.monotonic() + 3
+        while "gate-cam" in names() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert "gate-cam" not in names()
+    finally:
+        s.close()

@@ -61,4 +61,23 @@ describe("布置 → 摄像头", () => {
     await save!();
     expect(posted).toEqual([]);
   });
+
+  it("实测查出:站点回的警告(防区没映射、没画多边形)要说出来,列表里也标着", async () => {
+    const said: string[] = [];
+    setFetch(((_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return Promise.resolve(json({ ok: true, camera: {}, warnings: [{ code: "zone_unmapped", text: "x" }, { code: "zone_no_polygon", text: "y" }] }));
+      return Promise.resolve(json({}));
+    }) as typeof fetch);
+    const r = render(<CamerasTab {...props([cam({ warnings: [{ code: "zone_unmapped", text: "x" }] })])} say={(s: string) => said.push(s)} />);
+    expect(r.container.querySelector('.ly-list [data-warning="zone_unmapped"]')).not.toBeNull();
+    fireEvent.click(btn(r.container, "加一台摄像头"));
+    const ins = Array.from(document.querySelectorAll(".modal input:not([type=checkbox]):not([type=password])")) as HTMLInputElement[];
+    fireEvent.input(ins[0], { target: { value: "cam2" } });
+    fireEvent.input(ins[1], { target: { value: "http://10.0.0.6" } });
+    fireEvent.input(ins[3], { target: { value: "后院" } });
+    fireEvent.submit(document.querySelector(".modal form")!);
+    await new Promise((x) => setTimeout(x, 30));
+    expect(said.join(" ")).toContain("还没映射到拦截点");
+    expect(said.join(" ")).toContain("没在任何一张图上画多边形");
+  });
 });
