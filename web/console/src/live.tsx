@@ -13,6 +13,8 @@ export interface UnitInfo {
   battery: number | null;
   deter?: DeterSession;
   task: string;
+  /** 现在的速度(米/秒;遥测有才有)。 */
+  speed?: number | null;
   /** 数据过期了(B 阶段外审 I5):状态显示「未知」。 */
   stale?: boolean;
   /** 驱离接口这一次没拿到:说不清有没有驱离,不是「没有」。 */
