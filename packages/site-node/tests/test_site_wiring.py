@@ -86,3 +86,8 @@ def test_W33_狗看见人接到布防模式_驱离_告警台上(srv):
     """决策 48:布防中狗没在驱离时看见人报 P1;驱离中的不报(问驱离台)。"""
     assert srv.sightings.arming is srv.arming and srv.sightings.deterrence is srv.deterrence
     assert srv.sightings.alerts is srv.alerts
+
+
+def test_外审R2_被抱起来响不响警笛跟看见人报不报同一套按防区的判断(srv):
+    assert srv.sightings.areas is srv.areas
+    assert srv.force.armed_for == srv.sightings.armed_now

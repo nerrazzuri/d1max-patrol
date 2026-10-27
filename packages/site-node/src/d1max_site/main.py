@@ -880,6 +880,7 @@ class Server:
         self.api.arming = self.arming
         self.api.areas, self.api.authz = self.areas, self.authz      # B1c
         self.sightings.areas = self.areas
+        self.force.armed_for = self.sightings.armed_now          # W44 外审 R2
         self.api.deterrence = self.deterrence
         self.api.weather = self.weather
         from d1max_site.push import PushDesk, load_senders
