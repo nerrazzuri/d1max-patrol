@@ -76,6 +76,23 @@ class Registry:
                 c.execute("DELETE FROM robot_service WHERE robot_id=?", (robot_id,))
         return was
 
+    def names(self) -> dict[str, str]:
+        """业主起的名字(W44 第二期):``{robot_id: 名字}``,没起名的不在里面。"""
+        return {r["robot_id"]: r["display_name"] for r in self.db.query(
+            "SELECT robot_id, display_name FROM robots WHERE display_name<>''")}
+
+    def set_name(self, robot_id: str, name: object) -> None:
+        """起名:1–32 个字,不许控制字符;空串 = 不起名(用编号)。"""
+        if not isinstance(name, str):
+            raise RegistryError("名字要是文字")
+        name = name.strip()
+        if len(name) > 32 or any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in name):
+            raise RegistryError("名字最多 32 个字,不许有控制字符")
+        with self.db.tx() as c:
+            if c.execute("UPDATE robots SET display_name=? WHERE robot_id=?",
+                         (name, robot_id)).rowcount == 0:
+                raise RegistryError(f"没有登记过 {robot_id}")
+
     def revoke(self, robot_id: str) -> None:
         with self.db.tx() as c:
             cur = c.execute("UPDATE robots SET revoked=1 WHERE robot_id=?", (robot_id,))

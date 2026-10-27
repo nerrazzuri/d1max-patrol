@@ -87,6 +87,7 @@ SSE_HEARTBEAT_S = 15.0
 REQUEST_TIMEOUT_S = 30.0
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
+_ACCOUNT_RM = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})/remove$")
 #: 防区多边形(商业化 B1c)、名单(时段 / 人员授权)。
 #: 路线库:路线 ``/api/routes/<名>[/delete]``、排程 ``/api/route-schedules/<id>[/delete]``。
 _ROUTE = re.compile(r"^/api/routes/([^/]{1,64})(/delete)?$")
@@ -95,7 +96,7 @@ _AREAS = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/areas$")
 _ARM_EX = re.compile(r"^/api/arming/exceptions/(\d{1,9})/remove$")
 _AUTHZ = re.compile(r"^/api/lists/authorizations(?:/(\d{1,9})/remove)?$")
 #: 网页上登记 / 出开通码 / 吊销机器狗(商业化 B1b,管理员)。
-_ADMIN_ROBOT = re.compile(r"^/api/admin/robots(?:/([^/]{1,64})/(code|revoke))?$")
+_ADMIN_ROBOT = re.compile(r"^/api/admin/robots(?:/([^/]{1,64})/(code|revoke|name))?$")
 #: ``GET /api/alerts?all=1&limit=`` 的上限。
 ALERTS_LIMIT_MAX = 2000
 #: 告警键 ``robot/kind#seq`` 里有 ``/`` 与 ``#``:客户端整个键编码成一段(``%2F``、``%23``)。
@@ -505,16 +506,26 @@ class _Handler(TlsHandlerMixin):
             m = _ADMIN_ROBOT.match(path)
             if m is not None:
                 self._need(user, MANAGE)
-                return self._admin_robot(method, m.group(1), m.group(2))
-            if path == "/api/accounts" or _ACCOUNT.match(path):
+                return self._admin_robot(method, m.group(1), m.group(2), user)
+            if path == "/api/accounts" or _ACCOUNT.match(path) or _ACCOUNT_RM.match(path):
                 self._need(user, MANAGE_ACCOUNTS)
-                return self._accounts(method, path)
+                return self._accounts(method, path, user)
             if method == "GET" and path == "/api/audit":
                 self._need(user, VIEW_AUDIT)
-                return self._send_json(200, {"audit": self.site.audit.list()})
+                q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                actor = (q.get("actor") or [None])[0]
+                return self._send_json(200, {"audit": self.site.audit.list(actor=actor)})
             if method == "GET" and path == "/api/robots":
                 self._need(user, VIEW)
                 return self._send_json(200, {"robots": self.site.dispatcher.robots_view()})
+            if method == "GET" and path == "/api/robots/overview":
+                # W44 第二期:业主看的机器人卡片(今天几趟、毛病、电量)
+                self._need(user, MANAGE)
+                from d1max_site.robot_overview import overview
+                from d1max_site.sitetime import site_tz
+                disp = self.site.dispatcher
+                return self._send_json(200, {"robots": overview(
+                    disp, disp.db, now_ms=self.site._now(), tz=site_tz(disp.db))})
             if method == "GET" and path == "/api/events":
                 self._need(user, VIEW)
                 return self._sse()
@@ -1010,8 +1021,50 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, str(exc)) from exc
         self._send_json(200, {"points": stb.list(robot_id)})
 
-    def _accounts(self, method: str, path: str) -> None:
+    def _confirm(self, user, d: dict[str, Any]) -> None:
+        """敏感操作再输一次密码(W44 第二期,设计 §5.2 第 4 条):开工程师账号、解绑机器人……
+        跟登录同一个失败计数;不对回 403,锁了回 429。"""
+        pw = d.get("confirm_password")
+        if not isinstance(pw, str) or not pw:
+            raise HttpError(403, "这一步要再输一次你的密码")
+        try:
+            ok = self.site.accounts.verify(str(user), pw)
+        except LockedOut as exc:
+            raise HttpError(429, str(exc)) from exc
+        if not ok:
+            raise HttpError(403, "密码不对")
+
+    def _accounts(self, method: str, path: str, user=None) -> None:
         acc = self.site.accounts
+        if path == "/api/accounts/engineer":
+            # W44 第二期:给工程师开临时账号(4 / 24 小时);口令只在这一次回包里
+            if method != "POST":
+                raise HttpError(405, "只支持 POST")
+            d = self._body()
+            self._audit_detail = {"engineer": str(d.get("display_name", ""))[:64],
+                                  "hours": d.get("hours")}
+            self._confirm(user, d)
+            try:
+                name, pw, until = acc.add_engineer(d.get("display_name"), d.get("hours"),
+                                                   by=str(user))
+            except AuthError as exc:
+                raise HttpError(400, str(exc)) from exc
+            self._audit_target = name
+            return self._send_json(200, {"name": name, "password": pw, "expires_ms": until,
+                                         "accounts": acc.list()})
+        m = _ACCOUNT_RM.match(path)
+        if m is not None:
+            if method != "POST":
+                raise HttpError(405, "只支持 POST")
+            name = m.group(1)
+            self._audit_target = name
+            if name == str(user):
+                raise HttpError(400, "不能删自己")
+            try:
+                acc.remove(name)
+            except AuthError as exc:
+                raise HttpError(404 if "没有账号" in str(exc) else 400, str(exc)) from exc
+            return self._send_json(200, {"accounts": acc.list()})
         if path == "/api/accounts":
             if method == "GET":
                 return self._send_json(200, {"accounts": acc.list()})
@@ -1120,16 +1173,30 @@ class _Handler(TlsHandlerMixin):
         self._send_json(200, {"code": code, "name": name[:64], "url": check_url(url),
                               "fingerprint": fp})
 
-    def _admin_robot(self, method: str, robot_id: str | None, action: str | None) -> None:
+    def _admin_robot(self, method: str, robot_id: str | None, action: str | None,
+                     user=None) -> None:
         """登记新狗并出开通码、给已登记的狗重出开通码、吊销(商业化 B1b,``manage``)。跟命令行
-        ``enroll --code`` / ``enroll-code`` / ``revoke`` 是同一套函数(证书、注册表、CRL 都一样)。"""
+        ``enroll --code`` / ``enroll-code`` / ``revoke`` 是同一套函数(证书、注册表、CRL 都一样)。
+        W44 第二期:起名(``…/name``);吊销(界面上叫解绑)要再输一次密码。"""
         if method != "POST":
             raise HttpError(405, "只支持 POST")
+        d = self._body()
+        if action == "name":
+            from d1max_site.registry import RegistryError
+            rid = unquote(robot_id or "")
+            self._audit_target, self._audit_detail = rid, {"name": str(d.get("name"))[:64]}
+            try:
+                self.site.dispatcher.registry.set_name(rid, d.get("name"))
+            except RegistryError as exc:
+                raise HttpError(404 if "没有登记" in str(exc) else 400, str(exc)) from exc
+            return self._send_json(200, {"robots": self.site.dispatcher.robots_view()})
+        if action == "revoke":
+            self._audit_target = unquote(robot_id or "")
+            self._confirm(user, d)
         home = self.site.home
         if home is None:
             raise HttpError(404, "这个站点没接站点目录")
         from d1max_site import main as site_main
-        d = self._body()
         try:
             if action is None:                                     # 登记新狗 + 出开通码
                 rid = str(d.get("robot_id") or "")

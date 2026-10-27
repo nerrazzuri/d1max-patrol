@@ -317,8 +317,8 @@ def test_显示名_登录回包带_改显示名不吊销会话_改角色照样�
     assert _登(s, "olga")[1]["display_name"] == "olga", "没设就是账号名"
     alice, _ = _登(s, "alice")
     code, d = s.req("POST", "/api/accounts/gina", {"display_name": "王大保安"}, token=alice)
-    assert code == 200 and {"name": "gina", "role": "guard", "disabled": False,
-                            "display_name": "王大保安"} in d["accounts"]
+    assert code == 200 and any({"name": "gina", "role": "guard", "disabled": False,
+                            "display_name": "王大保安"}.items() <= a.items() for a in d["accounts"])
     assert s.req("GET", "/api/robots", token=gina)[0] == 200, "只改显示名不吊销"
     assert s.req("POST", "/api/accounts/gina", {"display_name": "x\n"}, token=alice)[0] == 400
     assert s.req("POST", "/api/accounts/gina", {"role": "owner"}, token=alice)[0] == 200

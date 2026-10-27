@@ -327,7 +327,8 @@ class Dispatcher:
         status = c.status.to_wire() if c is not None and c.status is not None else None
         caps = (c.capabilities.to_wire()
                 if c is not None and c.capabilities is not None else None)
-        out = {"robot_id": robot_id, "revoked": rec.revoked,
+        out = {"robot_id": robot_id, "name": self.registry.names().get(robot_id, ""),
+               "revoked": rec.revoked,
                "active": self.registry.active(robot_id, now_ms=self._now()),
                "expires_at": rec.expires_at, "status": status, "capabilities": caps,
                "fresh": self._fresh(c), "held": self.held(robot_id),

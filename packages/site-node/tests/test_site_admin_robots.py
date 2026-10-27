@@ -57,7 +57,8 @@ def test_重出开通码_旧码作废_吊销以后码领不到_也不能再出�
                             now_ms=site_main.wall_ms())
     finally:
         db.close()
-    code, d = s.req("POST", "/api/admin/robots/D1-08/revoke", {}, token=tok)
+    code, d = s.req("POST", "/api/admin/robots/D1-08/revoke", {"confirm_password": PW},
+                    token=tok)
     assert code == 200 and "CRL" in d["summary"] and "mosquitto" in d["broker_restart"]
     db = SiteDB(home / "site.db")
     try:
@@ -67,7 +68,8 @@ def test_重出开通码_旧码作废_吊销以后码领不到_也不能再出�
     finally:
         db.close()
     assert s.req("POST", "/api/admin/robots/D1-08/code", {}, token=tok)[0] == 409
-    assert s.req("POST", "/api/admin/robots/nope/revoke", {}, token=tok)[0] == 409
+    assert s.req("POST", "/api/admin/robots/nope/revoke", {"confirm_password": PW},
+                 token=tok)[0] == 409
 
 
 def test_只有管理员_坏参数400(台):
