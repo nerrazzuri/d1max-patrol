@@ -6,7 +6,7 @@
 // 不是浏览器重载图片的时刻):停了就按断了处理;重连以后站点说又有新帧了才把提示收掉。报警现场的固定摄像头
 // (``feed``)走同一套。
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, enc } from "./api";
+import { api, ApiError, enc } from "./api";
 import { hms, nameOf, usePageVisible } from "./data";
 import { t } from "./i18n";
 import { slotRank, STILL_MS, useStreamSlot } from "./streams";
@@ -44,6 +44,8 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
   const [noHealth, setNoHealth] = useState(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
+  /** 连着几次问不通站点(网断了)。只有站点回 404 才算「没有健康接口」,网断了照样接着问(演示站点实测)。 */
+  const misses = useRef(0);
   const pageVisible = usePageVisible();
   /** 拿到长连了没有(一页最多几路,见 streams.ts);没拿到的隔 2 秒取一张。 */
   const [shot, setShot] = useState(0);
@@ -108,6 +110,7 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
       api<Health & { cameras?: Record<string, Health> }>("GET", healthUrl)
         .then((d) => {
           if (stop || !alive.current) return;
+          misses.current = 0;
           const h = props.feed ? d : d.cameras?.[props.cam];
           if (!h) return;
           const age = typeof h.last_frame_age_ms === "number" ? h.last_frame_age_ms : null;
@@ -119,7 +122,12 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
             lose(Date.now());                           // 出过画面,站点那头已经没在拉了
           }
         })
-        .catch(() => { if (!stop && alive.current) setNoHealth(true); });
+        .catch((e) => {
+          if (stop || !alive.current) return;
+          if (e instanceof ApiError && e.status === 404) { setNoHealth(true); return; }
+          misses.current += 1;
+          if (misses.current >= 2) lose(Date.now());     // 连着问不通站点:画面不可能是实时的
+        });
     }, HEALTH_MS);
     return () => { stop = true; window.clearInterval(id); };
   }, [streaming, broken, noHealth, started, healthUrl]);
