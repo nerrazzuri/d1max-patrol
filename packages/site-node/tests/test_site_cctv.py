@@ -868,3 +868,21 @@ def test_外审R6_接口_摄像头画面健康(站点):
     assert s.req("GET", "/api/cameras/gate-cam/health")[0] == 401
     it.close()
     v.close()
+
+
+def test_实测_摄像头取一张(站点):
+    import urllib.request
+    s = 站点
+    add_camera(s.db, _cam(80, rtsp_url="rtsp://10.0.0.9/s1"), now_ms=1)
+    s.cctv.sync()
+    popen, procs = _ffmpeg(b"\xff\xd8x\xff\xd9", then_sleep=30)
+    v = CctvView(s.cctv.camera("gate-cam"), popen=popen, idle_s=60, major=lambda f: 4)
+    s.api._cctv_views["gate-cam"] = v
+    tok = s.req("POST", "/api/login", {"name": "olga", "password": s.PW})[1]["token"]
+    host, port = s.api.httpd.server_address[:2]
+    req = urllib.request.Request(f"http://{host}:{port}/api/cameras/gate-cam/live?still=1",
+                                 headers={"Authorization": f"Bearer {tok}"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        assert resp.headers["Content-Type"] == "image/jpeg"
+        assert resp.read() == b"\xff\xd8x\xff\xd9"
+    v.close()

@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { api, enc } from "./api";
 import { hms, nameOf, usePageVisible } from "./data";
 import { t } from "./i18n";
+import { slotRank, STILL_MS, useStreamSlot } from "./streams";
 
 /** 相机:狗自带前后两路;装了上装 V1.2 热像的多一路 thermal(W40)。 */
 export type Cam = "front" | "back" | "thermal";
@@ -44,6 +45,8 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
   const pageVisible = usePageVisible();
+  /** 拿到长连了没有(一页最多几路,见 streams.ts);没拿到的隔 2 秒取一张。 */
+  const [shot, setShot] = useState(0);
 
   useEffect(() => {
     const el = box.current;
@@ -130,20 +133,26 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
     return () => window.clearTimeout(id);
   }, [broken]);
 
+  const slot = useStreamSlot(streaming, slotRank(props));
+  const stillMode = streaming && !slot;
+  // 取一张:这一张到了(或没到)再等 2 秒取下一张;不叠请求
+  const nextShot = () => window.setTimeout(() => { if (alive.current) setShot((n) => n + 1); }, STILL_MS);
   const label = props.feed ? props.feed.label : camLabel(props.robot, props.cam);
   const src = props.feed
     ? (nonce ? `${props.feed.src}${props.feed.src.includes("?") ? "&" : "?"}v=${nonce}` : props.feed.src)
     : `/api/robots/${enc(props.robot)}/video/${props.cam}?v=${nonce}`;
   // 断过、重连了但第一帧还没到:还是「正在重连」,不写「实时」(真浏览器上查出来的)
   const retrying = broken || (lostAt != null && !started);
-  const status = retrying ? t("reconnecting") : streaming ? t("live") : pausedAt ? t("pausedAt", { t: hms(pausedAt) }) : t("noFeed");
+  const status = retrying ? t("reconnecting") : stillMode ? t("stillEvery", { s: STILL_MS / 1000 }) : streaming ? t("live")
+    : pausedAt ? t("pausedAt", { t: hms(pausedAt) }) : t("noFeed");
+  const imgSrc = stillMode ? `${src}${src.includes("?") ? "&" : "?"}still=1&s=${shot}` : src;
   const cls = `${streaming ? "well" : "well paused"}${lostAt != null ? " lostfeed" : ""}${props.variant ? ` ${props.variant}` : ""}`;
   return (
     <div ref={box} class={cls} title={!streaming ? t("pausedHint") : undefined}>
       <canvas ref={frozen} class="frozen" aria-hidden="true" />
       {streaming && !broken && (
-        <img ref={img} class={props.feed ? "feed scene" : "feed"} src={src} alt={label}
-          onLoad={() => setStarted(true)}
+        <img ref={img} class={props.feed ? "feed scene" : "feed"} src={imgSrc} alt={label}
+          onLoad={() => { setStarted(true); if (stillMode) nextShot(); }}
           onError={() => lose(Date.now())} />
       )}
       {lostAt != null && (
@@ -156,7 +165,7 @@ export function CameraWell(props: { robot: string; cam: Cam; forceLive?: boolean
         <span>{hms(streaming ? props.now : pausedAt ?? props.now)}</span>
       </div>
       <div class="osd bottom">
-        <span class="osd-status">{streaming && !retrying && <span class="livedot" aria-hidden="true" />}{props.feed ? `${label} · ` : ""}{status}</span>
+        <span class="osd-status">{streaming && !retrying && !stillMode && <span class="livedot" aria-hidden="true" />}{props.feed ? `${label} · ` : ""}{status}</span>
         {props.onOpen && (
           <button type="button" class="osd-btn" onClick={props.onOpen} aria-label={`${t("fullScreen")}: ${label}`}>{t("fullScreen")}</button>
         )}
