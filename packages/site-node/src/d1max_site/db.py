@@ -17,7 +17,7 @@ from typing import Any
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
 #: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
-SCHEMA_VERSION = 62
+SCHEMA_VERSION = 63
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -647,6 +647,22 @@ CREATE TABLE IF NOT EXISTS site_settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- W44 第三期(库 63):「布置」的历史版本。kind:zones / nogo / route / standby / cameras;item:路线名、
+-- 机器人(待命点),别的空串;body 是那一刻的快照(JSON;路线删了是 NULL;摄像头不带口令)。
+-- layout_history.py。
+CREATE TABLE IF NOT EXISTS layout_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    item        TEXT NOT NULL DEFAULT '',
+    body        TEXT,
+    note        TEXT NOT NULL DEFAULT '',
+    by          TEXT NOT NULL,
+    at_ms       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS layout_history_key
+    ON layout_history(kind, map_id, map_version, item, id);
 """
 
 
@@ -726,6 +742,13 @@ _ADDED_COLUMNS = (
     ("robots", "display_name", "TEXT NOT NULL DEFAULT ''"),
     # 授权提前结束:这个时刻之前不算生效(这一段结束时刻;下一段照常)。
     ("authorizations", "ended_until_ms", "INTEGER"),
+    # W44 第三期(库 63):摄像头放在哪张图的哪儿、朝哪、张角(没放 = map_id 空)。
+    ("cameras", "map_id", "TEXT NOT NULL DEFAULT ''"),
+    ("cameras", "map_version", "TEXT NOT NULL DEFAULT ''"),
+    ("cameras", "x", "REAL"),
+    ("cameras", "y", "REAL"),
+    ("cameras", "yaw", "REAL"),
+    ("cameras", "fov_deg", "REAL"),
 )
 
 

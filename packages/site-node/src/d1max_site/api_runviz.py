@@ -80,6 +80,7 @@ def route(h: Any, method: str, path: str, user: Any) -> None:
         if not cctv_admin.remove(db, m.group(1)):
             raise HttpError(404, f"没有摄像头 {m.group(1)}")
         h._body()
+        h._hist("cameras", "", "", "", user)                     # W44 第三期:历史版本
         return h._send_json(200, {"ok": True})
     d = h._body()
     name = str(d.get("name", ""))[:64]
@@ -94,4 +95,5 @@ def route(h: Any, method: str, path: str, user: Any) -> None:
     h._audit_detail = {"zone": got["camera"]["zone"], "motion": got["camera"]["motion"],
                        "edit": bool(d.get("edit")), "password_changed": got["password_changed"],
                        "warnings": [w["code"] for w in got["warnings"]]}
+    h._hist("cameras", "", "", "", user)                         # W44 第三期:历史版本
     return h._send_json(200, {"ok": True, "camera": got["camera"], "warnings": got["warnings"]})
