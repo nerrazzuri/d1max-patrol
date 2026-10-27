@@ -170,3 +170,73 @@ def test_接口_等充电时换是排队(站点, tmp_path):
                                                         "when": "charging"}, token=tok)
     assert code == 200 and got["queued"] is True
     assert [r["robot_id"] for r in s.api.release_queue.list()] == ["A"]
+
+
+# ---- 外审 R7:每次排队一个不复用的编号,旧回执只删它自己那一条 ----
+
+class 回执前插一脚(假派遣):
+    def __init__(self, q_box, result="accepted"):
+        super().__init__()
+        self.q_box, self.result = q_box, result
+
+    async def map_command(self, rid, kind, payload, *, issued_by):
+        self.sent.append((rid, kind, payload))
+        if len(self.sent) == 1:
+            self.q_box[0].add(rid, "release-B", by="olga")     # 回执还没回来,业主又排了一个
+        return {"ack": {"result": self.result}}
+
+
+@pytest.mark.parametrize("result", ["accepted", "rejected"])
+def test_外审R7_旧的回执不删后排的(tmp_path, result):
+    box: list = []
+    d = 回执前插一脚(box, result)
+    q = ReleaseQueue(SiteDB(tmp_path / "s.db"), d, now_ms=lambda: 1, payload=lambda n: {"name": n})
+    box.append(q)
+    _狗(d)
+    q.add("A", "release-A", by="alice")
+    asyncio.run(q.tick())
+    assert [p["name"] for _, _, p in d.sent] == ["release-A"]
+    assert [r["name"] for r in q.list()] == ["release-B"]
+    asyncio.run(q.tick())
+    assert [p["name"] for _, _, p in d.sent] == ["release-A", "release-B"]
+    if result == "accepted":
+        assert q.list() == []
+
+
+def test_外审R7_排队编号不复用_删光了再排也是新号(tmp_path):
+    q = ReleaseQueue(SiteDB(tmp_path / "s.db"), 假派遣(), now_ms=lambda: 1,
+                     payload=lambda n: {"name": n})
+    q.add("A", "r1", by="alice")
+    first = q.list()[0]["id"]
+    q.remove("A")
+    q.add("A", "r1", by="alice")
+    assert q.list()[0]["id"] > first
+    assert q.done("A", first) is False and len(q.list()) == 1     # 旧号的回执:什么都不删
+
+
+def test_外审R7_站点重启排着的还在(tmp_path):
+    db = SiteDB(tmp_path / "s.db")
+    ReleaseQueue(db, 假派遣(), now_ms=lambda: 1, payload=lambda n: {"name": n}).add(
+        "A", "r1", by="alice")
+    db.close()
+    d = 假派遣()
+    _狗(d)
+    q = ReleaseQueue(SiteDB(tmp_path / "s.db"), d, now_ms=lambda: 1, payload=lambda n: {"name": n})
+    asyncio.run(q.tick())
+    assert [p["name"] for _, _, p in d.sent] == ["r1"] and q.list() == []
+
+
+def test_外审R7_库64升上来排着的还在_有了编号(tmp_path):
+    import sqlite3
+    from pathlib import Path
+    v64 = Path(__file__).parent / "fixtures" / "schema" / "site-v64.sql"
+    con = sqlite3.connect(tmp_path / "s.db")
+    con.executescript(v64.read_text(encoding="utf-8"))
+    con.execute("INSERT INTO release_queue(robot_id, name, by, at_ms) VALUES ('A','r1','alice',5)")
+    con.commit()
+    con.close()
+    q = ReleaseQueue(SiteDB(tmp_path / "s.db"), 假派遣(), now_ms=lambda: 9,
+                     payload=lambda n: {"name": n})
+    [r] = q.list()
+    assert r["name"] == "r1" and r["id"] >= 1
+    assert q.add("A", "r2", by="alice") > r["id"]

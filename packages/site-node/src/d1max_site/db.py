@@ -17,7 +17,7 @@ from typing import Any
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
 #: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
 #: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
-SCHEMA_VERSION = 64
+SCHEMA_VERSION = 65
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -664,8 +664,10 @@ CREATE TABLE IF NOT EXISTS layout_history (
 CREATE INDEX IF NOT EXISTS layout_history_key
     ON layout_history(kind, map_id, map_version, item, id);
 -- W44 第四期(库 64):等充完电、空闲时再换的升级(一台一条;换出去了删)。release_queue.py。
+-- 库 65(外审 R7):每次排队一个不复用的编号(AUTOINCREMENT),旧的回执只删它自己那一条。
 CREATE TABLE IF NOT EXISTS release_queue (
-    robot_id TEXT PRIMARY KEY,
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    robot_id TEXT NOT NULL UNIQUE,
     name     TEXT NOT NULL,
     by       TEXT NOT NULL,
     at_ms    INTEGER NOT NULL
@@ -837,6 +839,15 @@ class SiteDB:
                     "WHERE confirmed_rev = revision AND confirmed_body IS NULL")
             if row is not None and str(row[0]).isdigit() and int(row[0]) < 58:
                 self._migrate_routes()
+            rq = {r[1] for r in self._conn.execute("PRAGMA table_info(release_queue)")}
+            if "id" not in rq:
+                # 库 64 → 65(外审 R7):升级队列加不复用的编号。换一张表,排着的原样搬过去。
+                self._conn.execute("ALTER TABLE release_queue RENAME TO release_queue_64")
+                self._conn.executescript(_DDL)
+                self._conn.execute("INSERT INTO release_queue(robot_id, name, by, at_ms) "
+                                   "SELECT robot_id, name, by, at_ms FROM release_queue_64 "
+                                   "ORDER BY at_ms")
+                self._conn.execute("DROP TABLE release_queue_64")
             self._conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                                (str(SCHEMA_VERSION),))
 
