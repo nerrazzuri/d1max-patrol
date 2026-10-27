@@ -2765,7 +2765,6 @@ class _Handler(TlsHandlerMixin):
         self._need(user, MANAGE)
         if self.site.home is None or self.site.releases is None:
             raise HttpError(404, "这个站点没开发布目录")
-        self._confirm(user, {"confirm_password": self.headers.get("X-D1Max-Confirm") or ""})
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError as exc:
@@ -2785,6 +2784,8 @@ class _Handler(TlsHandlerMixin):
                         raise HttpError(400, "文件没传完")
                     fh.write(chunk)
                     left -= len(chunk)
+            # 先收完再验密码:没读完就回 403,浏览器那边多半只看到「连接断了」,看不到「密码不对」
+            self._confirm(user, {"confirm_password": self.headers.get("X-D1Max-Confirm") or ""})
             out = tmp / "x"
             out.mkdir()
             try:
