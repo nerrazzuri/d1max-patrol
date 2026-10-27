@@ -699,3 +699,17 @@ describe("路线页:读、存、删的回包晚到,不进现在这一页(换了�
     expect(r.container.querySelector('[data-route-row="br"]')).not.toBeNull();
   });
 });
+
+describe("实测查出的用词", () => {
+  it("路线列表写「N 个点」,不写「个角」(角是多边形的)", async () => {
+    lang.value = "zh";
+    installScreenCTM();
+    routesApi({ meta: META, routes: [{ id: "night", map_id: "m1", map_version: "1", revision: 1, bound: true, policy: {},
+      updated_by: "a", updated_ms: 0, waypoints: [{ name: "P1", x: 0, y: 0, yaw: 0 }, { name: "P2", x: 1, y: 0, yaw: 0 }, { name: "P3", x: 2, y: 0, yaw: 0 }] }] as never });
+    const r = render(<RoutesPage say={() => {}} />);
+    await waitFor(() => expect(r.container.querySelector('[data-route-row="night"]')).not.toBeNull());
+    const row = r.container.querySelector('[data-route-row="night"]')!.textContent!;
+    expect(row).toContain("3 个点");
+    expect(row).not.toContain("角");
+  });
+});

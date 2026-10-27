@@ -106,6 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--map-dir", type=Path, default=None, help="建好的图(版本目录);不给用一张假的")
     ap.add_argument("--robots", type=int, default=1, choices=range(1, 9), metavar="N",
                     help="起几台仿真狗(A、B、C……;每台推测试图画面),试多台同时看画面的负载用")
+    ap.add_argument("--backup", action="store_true",
+                    help="开备份(备份目录、口令密钥、备份密钥都放在 --dir 下面,不碰 /etc):"
+                         "试备份、解开备份、演练、托管包用")
     ap.add_argument("--recordings", type=int, default=0, metavar="N",
                     help="往站点里放 N 分钟的假录像(要 ffmpeg;看值班台的录像页用)")
     a = ap.parse_args(argv)
@@ -121,6 +124,19 @@ def main(argv: list[str] | None = None) -> int:
     names = [chr(ord("A") + i) for i in range(a.robots)]
     for n in names:
         _site(home, "enroll", n, "--days", "30")
+    if a.backup:
+        import json
+        keys = a.dir / "keys"
+        keys.mkdir(mode=0o700)
+        for k in ("secrets", "backup", "evidence"):
+            (keys / f"{k}.key").write_bytes(os.urandom(32))
+            (keys / f"{k}.key").chmod(0o600)
+        cfg_path = home / "site.json"
+        cfg = json.loads(cfg_path.read_text())
+        (a.dir / "backup").mkdir()                 # 真站点上是挂好的备份盘;站点不替你建
+        cfg |= {"backup_dir": str(a.dir / "backup"), "secrets_key": str(keys / "secrets.key"),
+                "backup_key": str(keys / "backup.key"), "evidence_key": str(keys / "evidence.key")}
+        cfg_path.write_text(json.dumps(cfg, indent=1))
     if a.host.startswith("127.") and a.host != "127.0.0.1":
         # 站点绑在回环别名(127.0.0.2)上时,SRT 收流回包的源地址是 127.0.0.1,狗推到 127.0.0.2 连不上
         # (「Input/output error」):画面让狗推到 127.0.0.1。真站点用局域网地址,没这个事。

@@ -351,7 +351,7 @@ export function RoutesPage({ say, embed }: { say: Say; embed?: RouteEmbed }) {
                     <button type="button" class="routerow" data-route-row={r.id} onClick={() => edit(r)}>
                       <span class="routerow-name">{r.id}</span>
                       <span class="muted small">
-                        {t("points", { n: r.waypoints.length })}
+                        {rt("routePointsN", { n: r.waypoints.length })}
                         {n > 0 && ` · ${rt("routeSchedN", { n })}`}
                         {!r.bound && <span class="bad"> · {rt("routeUnboundTag")}</span>}
                       </span>
