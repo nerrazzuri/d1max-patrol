@@ -346,7 +346,7 @@ const en = {
   failed: "Failed: {why}",
   language: "Language",
   adminGroup: "Admin",
-  tabRobotsAdmin: "Robots & cameras",
+  tabRobotsAdmin: "Robots",
   tabMapsZones: "Maps & zones",
   tabMapMgmt: "Maps",
   tabRoutes: "Routes",
@@ -897,6 +897,7 @@ const en = {
   terr_slope: "Slope",
   terr_grass: "Grass",
   terr_gravel: "Gravel path",
+  lyNogoNeverConfirmed: "Nobody has confirmed this version yet: draw the places robots must not go, then press Confirm this version. Until then robots on it only do remote-controlled work.",
 };
 
 type Key = keyof typeof en;
@@ -1242,7 +1243,7 @@ const zh: Partial<Record<Key, string>> = {
   failed: "没成：{why}",
   language: "语言",
   adminGroup: "管理",
-  tabRobotsAdmin: "四足机器人与摄像头",
+  tabRobotsAdmin: "机器人",
   tabMapsZones: "地图与防区",
   tabMapMgmt: "地图管理",
   tabRoutes: "巡检路线",
@@ -1793,6 +1794,7 @@ const zh: Partial<Record<Key, string>> = {
   terr_slope: "斜坡",
   terr_grass: "草地",
   terr_gravel: "碎石路",
+  lyNogoNeverConfirmed: "这一版还没人确认过：把机器人不能去的地方画好，再按「确认这一版」。确认之前，这张图上只能遥控，不派自己走的任务。",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };

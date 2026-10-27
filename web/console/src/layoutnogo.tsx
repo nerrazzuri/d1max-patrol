@@ -95,7 +95,8 @@ export function NogoTab(p: TabProps) {
         <div class="nogo-status">
           {!nav ? <p class="muted">…</p> : current && held.length === 0
             ? <p class="ok-text">{t("lyNogoLive")}</p>
-            : <p class="warn-text">{t("lyNogoWaitYou", { names: held.map((z) => z.label || z.id).join("、") || "—" })}</p>}
+            : held.length > 0 ? <p class="warn-text">{t("lyNogoWaitYou", { names: held.map((z) => z.label || z.id).join("、") })}</p>
+            : <p class="warn-text">{t("lyNogoNeverConfirmed")}</p>}
           {behind.length > 0 && <p class="warn-text">{t("lyNogoWaitRobot", { ids: behind.join("、") })}</p>}
           {nav && !current && !changed && <button type="button" class="btn sm primary" onClick={() => setConfirming("ask")}>{t("navConfirmBtn")}</button>}
         </div>
