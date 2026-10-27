@@ -3148,7 +3148,7 @@ class _Handler(TlsHandlerMixin):
         except VideoError as exc:
             raise HttpError(exc.status, exc.message) from exc
         if self._still():
-            frames.close()                         # 取一张就走;站点那一路还留 idle_s 秒,下一张接得上
+            frames.close()                     # 取一张就走;那一路还留 idle_s 秒,下一张接得上
             return self._send_bytes(first, "image/jpeg")
         self._mjpeg(frames, first, VideoError)
 
