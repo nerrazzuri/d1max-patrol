@@ -227,7 +227,7 @@ export function LayoutPage({ say, robots, tabs }: { say: Say; robots: string[]; 
           ) : !sel ? <p class="empty">{t("noMap")}</p> : null}
         </div>
         {history && sel && (
-          <HistoryDrawer kind={HISTORY_KIND[tab]} map={tab === "cameras" ? null : sel} say={say}
+          <HistoryDrawer key={`${HISTORY_KIND[tab]}|${tab === "cameras" ? "" : base}`} kind={HISTORY_KIND[tab]} map={tab === "cameras" ? null : sel} say={say}
             onRestored={() => { setDirty(false); setGen((g) => g + 1); void reload(); }} onClose={() => setHistory(false)} />
         )}
       </div>
@@ -275,16 +275,24 @@ function dimMarks(tab: LayoutTab, d: LayerData, s: Screen): ComponentChildren {
 
 interface HistoryRow { id: number; kind: string; item: string; by: string; at_ms: number; note: string; summary?: string }
 
+/** 历史抽屉。外审 R3:一个抽屉只管一个「哪一层 + 哪张图哪一版」(上面按这个 key 重建,换了就整个换掉,
+ *  旧的列表、确认框跟着没了);晚到的回包按代次不认;退回请求带上这三样,站点对不上就拒绝。 */
 function HistoryDrawer({ kind, map, say, onRestored, onClose }: {
   kind: string; map: MapRow | null; say: Say; onRestored: () => void; onClose: () => void;
 }) {
   const [rows, setRows] = useState<HistoryRow[] | null>(null);
   const [restoring, setRestoring] = useState<HistoryRow | null>(null);
+  const gen = useRef(0);
+  const expect = { kind, map_id: map?.map_id ?? "", version: map?.version ?? "" };
   const load = () => {
-    const q = `kind=${enc(kind)}&map_id=${enc(map?.map_id ?? "")}&version=${enc(map?.version ?? "")}`;
-    api<{ history: HistoryRow[] }>("GET", `/api/layout/history?${q}`).then((d) => setRows(d.history ?? [])).catch(() => setRows([]));
+    const my = ++gen.current;
+    setRows(null);
+    const q = `kind=${enc(expect.kind)}&map_id=${enc(expect.map_id)}&version=${enc(expect.version)}`;
+    api<{ history: HistoryRow[] }>("GET", `/api/layout/history?${q}`)
+      .then((d) => { if (my === gen.current) setRows(d.history ?? []); })
+      .catch(() => { if (my === gen.current) setRows([]); });
   };
-  useEffect(load, [kind, map?.map_id, map?.version]);
+  useEffect(() => { load(); return () => { gen.current += 1; }; }, []);
   return (
     <aside class="panel ly-history" aria-label={t("lyHistory")}>
       <div class="panel-head">
@@ -313,7 +321,7 @@ function HistoryDrawer({ kind, map, say, onRestored, onClose }: {
           onYes={() => {
             const r = restoring;
             setRestoring(null);
-            api<{ warnings?: { camera: string; problem: string }[] }>("POST", `/api/layout/history/${r.id}/restore`, {})
+            api<{ warnings?: { camera: string; problem: string }[] }>("POST", `/api/layout/history/${r.id}/restore`, { expect })
               .then((d) => {
                 say((d.warnings ?? []).some((w) => w.problem === "password_missing") ? t("lyRestoredPw") : t("lyRestored"));
                 load();
