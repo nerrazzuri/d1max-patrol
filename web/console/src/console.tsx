@@ -24,7 +24,7 @@ import { SystemPage2 } from "./advsystem";
 import { UpgradePage } from "./advupgrade";
 import { RobotsPage } from "./robotspage";
 import { UsersPage } from "./userspage";
-import { MapManagePage } from "./mapmgmt";
+import { AdvMapsPage } from "./advmaps";
 import { AccessPage } from "./accesspage";
 import { LayoutPage } from "./layoutpage";
 import { LAYOUT_TABS } from "./layouttabs";
@@ -151,7 +151,7 @@ export function Console({ me, onOut }: { me: Me; onOut: () => void }) {
               {route.page === "admin/diag" && <DiagPage />}
               {route.page === "admin/upgrade" && <UpgradePage say={say} />}
               {route.page === "admin/layout" && <LayoutPage say={say} robots={units.map((u) => u.robot.robot_id)} tabs={LAYOUT_TABS} />}
-              {route.page === "admin/maps" && <MapManagePage say={say} />}
+              {route.page === "admin/maps" && <AdvMapsPage say={say} />}
               {route.page === "admin/access" && <AccessPage say={say} now={now} />}
               {route.page === "admin/localization" && <LocPage units={units} alerts={alerts} now={now} role={me.role} />}
               {route.page === "admin/reports" && <ReportsPage now={now} />}

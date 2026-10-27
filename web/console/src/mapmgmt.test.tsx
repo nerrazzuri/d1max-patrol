@@ -147,9 +147,11 @@ describe("发布", () => {
     fireEvent.click(boxes[0]);
     fireEvent.click(boxes[1]);
     fireEvent.click(dialog.querySelector("label.checks input[type=checkbox]") as HTMLElement);
+    expect(publish.disabled).toBe(true);                                          // 还没输密码
+    fireEvent.input(dialog.querySelector('input[name="confirm_pw"]') as HTMLElement, { target: { value: "my-own-password" } });
     fireEvent.click(publish);
     await waitFor(() => expect(dialog.querySelectorAll(".mm-results li").length).toBe(2));
-    expect(calls.find((x) => x.method === "POST")?.body).toEqual({ robots: ["A", "B"], without_home: true });
+    expect(calls.find((x) => x.method === "POST")?.body).toEqual({ robots: ["A", "B"], without_home: true, confirm_password: "my-own-password" });
     const items = Array.from(dialog.querySelectorAll(".mm-results li"));
     expect(items[0].className).toBe("ok");
     expect(items[0].textContent).toContain("accepted");
@@ -165,6 +167,7 @@ describe("发布", () => {
     fireEvent.click(getByLabelText("estate:3").querySelector(".btn.primary") as HTMLElement);
     const dialog = await waitFor(() => c.querySelector("dialog") as HTMLDialogElement);
     fireEvent.click(dialog.querySelector("fieldset input[type=checkbox]") as HTMLElement);
+    fireEvent.input(dialog.querySelector('input[name="confirm_pw"]') as HTMLElement, { target: { value: "pw" } });
     fireEvent.click(Array.from(dialog.querySelectorAll("button")).find((b) => b.textContent === "Publish") as HTMLElement);
     await waitFor(() => expect(dialog.textContent).toContain("boom"));
   });

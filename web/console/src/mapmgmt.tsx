@@ -329,6 +329,8 @@ function VersionCard(p: {
           <button type="button" class="btn sm primary" onClick={p.onPublish}>{tr("Publish to robots…", "发布到机器人…")}</button>
           <button type="button" class="btn sm" disabled={!!whyNot} title={whyNot} onClick={p.onDelete}>{tr("Delete", "删除")}</button>
           {p.onNoise && <button type="button" class="btn sm" disabled={!v.has_raster} onClick={p.onNoise}>{tr("Clean noise…", "清噪点…")}</button>}
+          {/* W44 第四期:地图编辑器(橡皮擦、画障碍、区域名、特殊地面、摆正、底图),另存成新的一版 */}
+          {v.has_raster && <a class="btn sm" href={`#/admin/mapedit?map=${enc(p.map_id)}&version=${enc(v.version)}`}>{tr("Edit…", "编辑…")}</a>}
           <label class="field-inline small">
             <input type="checkbox" checked={p.picked} disabled={!v.has_raster} onChange={(e) => p.onPick(e.currentTarget.checked)} />
             {tr("Compare", "对比")}
@@ -345,6 +347,7 @@ export function PublishDialog({ target, dogs, onClose }: { target: { map_id: str
   const eligible = dogs.filter((d) => d.online && d.can_activate);
   const [chosen, setChosen] = useState<string[]>([]);
   const [noHome, setNoHome] = useState(false);
+  const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<PublishResult[] | null>(null);
   const [err, setErr] = useState("");
@@ -352,10 +355,11 @@ export function PublishDialog({ target, dogs, onClose }: { target: { map_id: str
     setBusy(true);
     setErr("");
     try {
-      const r = await api<{ results: PublishResult[] }>("POST", `/api/admin/maps/${enc(target.map_id)}/${enc(target.version)}/publish`, { robots: chosen, without_home: noHome });
+      const r = await api<{ results: PublishResult[] }>("POST", `/api/admin/maps/${enc(target.map_id)}/${enc(target.version)}/publish`, { robots: chosen, without_home: noHome, confirm_password: pw });
       setResults(r.results);
     } catch (e) {
-      setErr(errText(e));
+      setErr(e instanceof ApiError && e.status === 403 ? tr("Wrong password.", "密码不对。") : errText(e));
+      setPw("");
     }
     setBusy(false);
   }
@@ -396,10 +400,14 @@ export function PublishDialog({ target, dogs, onClose }: { target: { map_id: str
             <span><input type="checkbox" checked={noHome} onChange={(e) => setNoHome(e.currentTarget.checked)} /> {tr("Publish even if a robot has no home origin on this version", "机器人在这一版上没有原点也照发")}</span>
           </label>
           <p class="muted small">{tr("Each robot switches on its own: it downloads, waits until idle, loads, and (if it has a localizer) waits for the localizer to accept the map. A robot the localizer rejects goes back to its previous map.", "每台机器人各自换:下载、等空闲、载入,有定位器的还要等定位器收下新图;定位器不收的,机器人会退回原来那张。")}</p>
+          {/* W44 第四期(设计 §5.2 第 4 条):换图要再输一次密码 */}
+          <label class="field">{tr("Your password (switching maps matters)", "你的密码(换图要紧,再输一次)")}
+            <input type="password" name="confirm_pw" autoComplete="current-password" value={pw} onInput={(e) => setPw(e.currentTarget.value)} />
+          </label>
           {err && <p class="error" role="alert">{err}</p>}
           <div class="row end">
             <button type="button" class="btn" onClick={onClose}>{tr("Cancel", "取消")}</button>
-            <button type="button" class="btn primary" disabled={busy || chosen.length === 0} onClick={() => void go()}>{tr("Publish", "发布")}</button>
+            <button type="button" class="btn primary" disabled={busy || chosen.length === 0 || !pw} onClick={() => void go()}>{tr("Publish", "发布")}</button>
           </div>
         </>
       )}
