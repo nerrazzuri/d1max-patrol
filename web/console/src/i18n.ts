@@ -901,6 +901,7 @@ const en = {
   meLoadErr: "Could not load this map version (preview, grid or display settings). Nothing can be saved until it loads: go back and open it again.",
   noAccess: "Your account cannot open this page. Ask the owner if you need it.",
   rsCamZone: "{z} (camera)",
+  stillEvery: "One frame every {s} s",
 };
 
 type Key = keyof typeof en;
@@ -1801,6 +1802,7 @@ const zh: Partial<Record<Key, string>> = {
   meLoadErr: "这一版地图没读全(预览、栅格或显示设置)。读全之前不能存：回地图页重新打开。",
   noAccess: "你的账号打不开这一页。要用的话找业主。",
   rsCamZone: "{z}（摄像头）",
+  stillEvery: "每 {s} 秒一张",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };

@@ -104,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
                          "同一个网里的手机就连得上;默认只本机")
     ap.add_argument("--password", default="demo-password-123")
     ap.add_argument("--map-dir", type=Path, default=None, help="建好的图(版本目录);不给用一张假的")
+    ap.add_argument("--robots", type=int, default=1, choices=range(1, 9), metavar="N",
+                    help="起几台仿真狗(A、B、C……;每台推测试图画面),试多台同时看画面的负载用")
     ap.add_argument("--recordings", type=int, default=0, metavar="N",
                     help="往站点里放 N 分钟的假录像(要 ffmpeg;看值班台的录像页用)")
     a = ap.parse_args(argv)
@@ -116,7 +118,17 @@ def main(argv: list[str] | None = None) -> int:
     logs.mkdir(parents=True)
     bport = _free_port()
     _site(home, "init", "--site-id", "demo", "--hostname", a.host, "--broker-port", str(bport))
-    _site(home, "enroll", "A", "--days", "30")
+    names = [chr(ord("A") + i) for i in range(a.robots)]
+    for n in names:
+        _site(home, "enroll", n, "--days", "30")
+    if a.host.startswith("127.") and a.host != "127.0.0.1":
+        # 站点绑在回环别名(127.0.0.2)上时,SRT 收流回包的源地址是 127.0.0.1,狗推到 127.0.0.2 连不上
+        # (「Input/output error」):画面让狗推到 127.0.0.1。真站点用局域网地址,没这个事。
+        import json
+        cfg_path = home / "site.json"
+        cfg = json.loads(cfg_path.read_text())
+        cfg.setdefault("video", {})["srt_host"] = "127.0.0.1"
+        cfg_path.write_text(json.dumps(cfg, indent=1))
     _site(home, "add-admin", "demo", env={"D1MAX_SITE_PASSWORD": a.password})
     src = a.map_dir
     if src is None:
@@ -141,19 +153,24 @@ def main(argv: list[str] | None = None) -> int:
               "mosquitto version")
         start("site", [sys.executable, "-m", "d1max_site.main", "--home", str(home), "serve",
                        "--api-host", a.host, "--api-port", str(a.api_port)], "d1max-site 起来了")
-        crt = home / "ca" / "issued" / "A"
-        start("agent", [sys.executable, "-m", "d1max_agent.main",
-                        "--transport", f"mqtts://127.0.0.1:{bport}",
-                        "--tls-ca", str(crt / "ca.crt"), "--tls-cert", str(crt / "robot.crt"),
-                        "--tls-key", str(crt / "robot.key"), "--hal", "sim",
-                        "--registration", str(crt / "registration.json"),
-                        "--store-dir", str(a.dir / "agent"), "--runs-root", str(a.dir / "runs"),
-                        "--map", "estate-1:7", "--home", "0,0,0"], "d1max-agent 起来了")
+        for i, n in enumerate(names):
+            crt = home / "ca" / "issued" / n
+            sub = "" if n == "A" else f"-{n}"          # A 跟以前一样,别的各用各的目录
+            start("agent" + sub, [sys.executable, "-m", "d1max_agent.main",
+                                  "--transport", f"mqtts://127.0.0.1:{bport}",
+                                  "--tls-ca", str(crt / "ca.crt"),
+                                  "--tls-cert", str(crt / "robot.crt"),
+                                  "--tls-key", str(crt / "robot.key"), "--hal", "sim",
+                                  "--registration", str(crt / "registration.json"),
+                                  "--store-dir", str(a.dir / f"agent{sub}"),
+                                  "--runs-root", str(a.dir / f"runs{sub}"),
+                                  "--map", "estate-1:7", "--home", f"{i * 1.0},0,0"],
+                  "d1max-agent 起来了")
         print(f"演示站点起来了(日志在 {logs}):\n"
               f"  地址  https://{a.host}:{a.api_port}\n"
               f"  指纹  {fp}\n"
               f"  账号  demo / {a.password}\n"
-              f"  狗    A(仿真)\n"
+              f"  狗    {'、'.join(names)}(仿真)\n"
               f"Ctrl+C 全部收掉。", flush=True)
         # 等 Ctrl+C:用处理函数立个旗,不用屏蔽信号(屏蔽会被子进程继承,收掉时它们就不理 SIGTERM)
         stop = threading.Event()

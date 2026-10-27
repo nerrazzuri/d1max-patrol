@@ -2954,6 +2954,9 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(504, f"摄像头没出画面:{v.error or exc}") from exc
         except StopIteration as exc:
             raise HttpError(502, f"摄像头画面拉不下来:{v.error}") from exc
+        if self._still():
+            frames.close()
+            return self._send_bytes(first, "image/jpeg")
         self._mjpeg(frames, first)
 
     def _report(self, method: str, user, path: str = "/api/reports/daily") -> None:
@@ -3144,7 +3147,16 @@ class _Handler(TlsHandlerMixin):
             first = next(frames)
         except VideoError as exc:
             raise HttpError(exc.status, exc.message) from exc
+        if self._still():
+            frames.close()                         # 取一张就走;站点那一路还留 idle_s 秒,下一张接得上
+            return self._send_bytes(first, "image/jpeg")
         self._mjpeg(frames, first, VideoError)
+
+    def _still(self) -> bool:
+        """``?still=1``:只要一张 JPEG(演示站点实测:四台机器人 8 路长连占满浏览器对一个站点的 6 条
+        连接,页面自己的数据进不来;超出的画面位改成隔一会儿取一张)。"""
+        q = self.path.split("?", 1)[1] if "?" in self.path else ""
+        return "still=1" in q.split("&")
 
     def _mjpeg(self, frames, first: bytes, *errors: type[BaseException]) -> None:
         """一条 MJPEG 长连(狗的画面、固定摄像头共用)。令牌每隔一会儿复查:注销、过期、停用,

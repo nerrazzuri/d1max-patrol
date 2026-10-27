@@ -399,3 +399,20 @@ def test_W41_帧率可配_没写是5_写错了报错():
     for bad in (0, 31, -1, "15", True, None, float("nan")):
         with _pt.raises(ValueError, match="video.fps"):
             video_fps({"fps": bad})
+
+
+def test_实测_取一张_回一张JPEG就结束_不占着连接(站点):
+    """四台机器人 8 路画面时浏览器连接数不够(HTTP/1.1 一个站点 6 条):超出的画面位改成隔一会儿取一张。"""
+    s = 站点
+    tok = _登(s)
+    _新鲜(s, tok)
+    host, port = s.api.httpd.server_address[:2]
+    for _ in range(2):
+        conn = http.client.HTTPConnection(host, port, timeout=30)
+        conn.request("GET", "/api/robots/A/video/front?still=1",
+                     headers={"Authorization": f"Bearer {tok}"})
+        r = conn.getresponse()
+        body = r.read()                                # 读得完:回包有长度、不是长连
+        conn.close()
+        assert r.status == 200 and r.getheader("Content-Type") == "image/jpeg"
+        assert body.startswith(b"\xff\xd8") and body.endswith(b"\xff\xd9")
