@@ -3,7 +3,8 @@
 
     python3 tools/field_pending.py docs/庄园场景待真机测试.md docs/真机待验清单.md
 
-演示站点验过的编号写在下面 ``demo`` 里(§3af);以后在演示站点上又验了别的,加进去再生成。
+演示站点做成了的编号写在下面 ``DEMO_DONE``、做了一半的写在 ``DEMO_HALF``(§3af、§3ag);
+以后又验了别的,加进去再生成。
 """
 
 import re
@@ -14,36 +15,23 @@ L = open(src, encoding="utf-8").read().split("\n")
 s4 = [i for i, ln in enumerate(L) if ln.startswith("## 4.")][0]
 paren = " ".join(re.findall(r"[（(]([^）)]*)[）)]", "\n".join(L[s4:])))
 done = set(re.findall(r"(?<![\w.])(\d+[a-z]{0,3}\.\d+)(?!\d)", paren))
-demo = {
-    "3ae.1",
-    "3ae.2",
-    "3ae.5",
-    "3ae.6",
-    "3aa.4",
-    "3aa.5",
-    "3aa.9",
-    "3aa.10",
-    "3aa.11",
-    "3ab.1",
-    "3ab.2",
-    "3ab.4",
-    "3ab.5",
-    "3ab.6",
-    "3ac.1",
-    "3ac.3",
-    "3ac.4",
-    "3ac.5",
-    "3ad.2",
-    "3ad.4",
-    "3ad.6",
-}
-demo_half = {
-    "3ab.3": "到点失效没等",
-    "3ad.1": "真发布要真机",
-    "3ac.4": "朝向对实物要真摄像头",
+# 演示站点上做成了的(§3af、§3ag):用户 2026-10-28「演示站点做完了成功了就当做完了」
+DEMO_DONE = set("""
+3ae.1 3ae.2 3ae.5 3aa.3 3aa.4 3aa.5 3aa.9 3aa.10 3aa.11 3ab.1 3ab.2 3ab.3 3ab.4 3ab.5 3ab.6
+3ac.3 3ac.5 3ad.3 3ad.4 3ad.6 3c.20 3p.3 3p.5 3t.4 3t.6 3t.7 3t.8 3t.9 3t.10 3t.11 3t.12 3t.13
+3t.15 3t.16 3t.17 3t.18 3t.19 3v.1 3v.2 3v.3 3v.4 3v.5 3v.6 3v.8 3w.1 3w.2 3w.8 3w.9 3w.10
+3x.8 3x.12 3x.13 3x.14 3x.15 3x.16 3x.17 3x.18 3x.19
+""".split())
+# 演示站点上做了一半的:剩下那一半要真机(写在状态里)
+DEMO_HALF = {
+    "3aa.1": "热像、机器人 WiFi 上行要真机",
+    "3aa.2": "热像要实物",
     "3ac.1": "机器人照旧绕开要动狗",
-    "3ab.1": "站点主机时区不同的站点",
+    "3ac.4": "朝向对不对实物要真摄像头",
+    "3ad.1": "发布到机器人、从擦掉的地方走要真机",
+    "3ad.2": "机器人过楼梯放慢要动狗",
     "3ae.6": "真换版本要真机",
+    "3t.5": "跟装机有关的几条(站点用户、服务)要真装机",
 }
 
 
@@ -73,7 +61,8 @@ for ln in L[:s4]:
     if n and hdr is None and cur["id"] == "3v.":
         txt = clean(n.group(2))
         rid = f"3v.{n.group(1)}"
-        st = "真机做过（§4 留档）" if rid in done else "没做"
+        st = ("真机做过（§4 留档）" if rid in done else "演示站点做完" if rid in DEMO_DONE
+              else f"演示站点做了一半（{DEMO_HALF[rid]}）" if rid in DEMO_HALF else "没做")
         cur["rows"].append((rid, txt[:90], int(n.group(1)) >= 9, st))
         continue
     m = re.match(r"^\|\s*(\d+[a-z]{0,3}\.\d+)\s*(🐕)?\s*\|", ln)
@@ -91,8 +80,10 @@ for ln in L[:s4]:
         st = "退役"
     elif rid in done:
         st = "真机做过（§4 留档）"
-    elif rid in demo:
-        st = "演示站点验过，真机再走一遍" + (f"（{demo_half[rid]}）" if rid in demo_half else "")
+    elif rid in DEMO_HALF:
+        st = f"演示站点做了一半（{DEMO_HALF[rid]}）"
+    elif rid in DEMO_DONE:
+        st = "演示站点做完"
     else:
         st = "没做"
     dog = dog or bool(re.search(r"动狗|🐕|（动狗|要动机器", ln))
@@ -102,7 +93,9 @@ o = [
     "",
     f"从 `docs/庄园场景待真机测试.md` 生成（{sum(len(s['rows']) for s in secs)} 项）："
     "划掉的算「退役」；§4 留档里括号点名的编号算「真机做过」；"
-    "§3af 演示站点验过的算「演示站点验过，真机再走一遍」；其余都是「没做」。"
+    "§3af、§3ag 演示站点上做成的算「演示站点做完」"
+    "（用户：演示站点做完了成功了就当做完了）、做了一半的写明剩下哪一半；"
+    "其余都是「没做」。"
     "🐕 = 要动机器人（按动作批准规矩先问用户）。"
     "「做过」只说明留档点过名，有的只做了一半，细节看 §4。",
     "",
@@ -112,7 +105,7 @@ for s in secs:
     rows = [r for r in s["rows"] if r[3] != "退役"]
     if not rows:
         continue
-    pend = [r for r in rows if r[3] != "真机做过（§4 留档）"]
+    pend = [r for r in rows if r[3] not in ("真机做过（§4 留档）", "演示站点做完")]
     if not pend:
         continue
     o.append(f"## {s['id']} {s['title']}（还剩 {len(pend)} / {len(rows)}）")
@@ -126,7 +119,7 @@ for s in secs:
 allrows = [r for s in secs for r in s["rows"]]
 summ = {
     k: sum(1 for r in allrows if r[3].startswith(k))
-    for k in ("退役", "真机做过", "演示站点验过", "没做")
+    for k in ("退役", "真机做过", "演示站点做完", "演示站点做了一半", "没做")
 }
 o.insert(
     4,
@@ -138,6 +131,6 @@ o.insert(5, "")
 open(out, "w", encoding="utf-8").write("\n".join(o) + "\n")
 print(summ, "dog-pending", sum(1 for r in allrows if r[3] == "没做" and r[2]))
 for s in secs:
-    rows = [r for r in s["rows"] if r[3] not in ("退役", "真机做过（§4 留档）")]
+    rows = [r for r in s["rows"] if r[3] not in ("退役", "真机做过（§4 留档）", "演示站点做完")]
     if rows:
         print(s["id"], len(rows), sum(1 for r in rows if r[3] == "没做"))
