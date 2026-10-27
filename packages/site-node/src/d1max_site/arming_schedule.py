@@ -191,8 +191,9 @@ class ArmingSchedule:
             c.execute("DELETE FROM arming_slots")
             c.executemany("INSERT INTO arming_slots(zone, day, start_min, end_min) "
                           "VALUES (?,?,?,?)", rows)
-            c.execute("INSERT OR REPLACE INTO site_settings(key, value) VALUES (?, ?)",
-                      (_KEY, json.dumps({"enabled": enabled, "by": by, "at": self._now()})))
+        # 开没开存在站点设置里(那张表只有 site_settings.py 写,数据访问层边界)
+        from d1max_site.site_settings import SiteSettings
+        SiteSettings(self.db).put(_KEY, {"enabled": enabled, "by": by, "at": self._now()})
         return self.view()
 
     def add_exception(self, d: Any, *, by: str) -> int:
