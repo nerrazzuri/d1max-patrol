@@ -748,6 +748,17 @@ const en = {
   lyNoCams: "No cameras yet.",
   lyZoneArming: "Set its arming times",
   lyZoneReplace: "A zone with this name exists; it will be replaced by what you drew.",
+  lyNogoLive: "In force. Robots keep out of these areas.",
+  lyNogoWaitYou: "Waiting for your confirmation: you removed or shrank a no-go area ({names}). Until you confirm, robots keep avoiding the old area.",
+  lyNogoWaitRobot: "Waiting for robots to confirm: {ids} hasn't received the latest version yet.",
+  lyNogoHint: "Adding or enlarging takes effect when you save. Removing or shrinking needs your confirmation.",
+  lyNogoRemoveAsk: "Remove {label}? Robots keep avoiding it until you confirm the change.",
+  lyNogoConfirmLead: "Before confirming, check the map once more.",
+  lyNogoSure: "Pools, step edges, steep slopes, flower beds and other places robots must not go are all drawn as no-go areas.",
+  lyConfirm: "Confirm",
+  lyTemp: "Temporary",
+  lyTempFor: "For",
+  lyTempDays: "{n} days",
 };
 
 type Key = keyof typeof en;
@@ -1495,6 +1506,17 @@ const zh: Partial<Record<Key, string>> = {
   lyNoCams: "还没有摄像头。",
   lyZoneArming: "去设它的布防时间",
   lyZoneReplace: "已经有这个名字的防区，会换成刚画的这一块。",
+  lyNogoLive: "已生效，机器人会绕开这些地方。",
+  lyNogoWaitYou: "等你确认：你删掉或缩小了禁行区（{names}）。确认之前，机器人照旧绕开原来的范围。",
+  lyNogoWaitRobot: "等机器人确认中：{ids} 还没收到最新的这一份。",
+  lyNogoHint: "加的、扩大的，保存就生效；删掉、缩小的要你确认。",
+  lyNogoRemoveAsk: "删掉{label}？要你确认以后才生效，之前机器人照旧绕开它。",
+  lyNogoConfirmLead: "确认之前，再看一眼地图。",
+  lyNogoSure: "水池、台阶边、陡坡、花坛这些机器人不能去的地方，都已经画成禁行区了。",
+  lyConfirm: "确认",
+  lyTemp: "临时的",
+  lyTempFor: "多久",
+  lyTempDays: "{n} 天",
 };
 
 export const DICTS: Record<Lang, Partial<Record<Key, string>>> = { en, zh };
