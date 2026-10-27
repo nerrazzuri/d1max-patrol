@@ -115,4 +115,10 @@ describe("布置 → 禁行区", () => {
     expect(zs[1].kind).toBe("ignore");
     expect(zs[1].hard).toBeUndefined();
   });
+
+  it("从没确认过的写清楚,不说删了什么", () => {
+    const { container: c } = render(<NogoTab {...props(nav({ confirmed: null, held: [], zones: [] }))} />);
+    expect(c.querySelector(".nogo-status")!.textContent).toContain("还没人确认过");
+    expect(c.querySelector(".nogo-status")!.textContent).not.toContain("删掉");
+  });
 });

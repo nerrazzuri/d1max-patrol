@@ -6,7 +6,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { advice } from "./advice";
 import { api } from "./api";
-import { modeLabel, whoText } from "./armingpage";
+import { whoText } from "./armingpage";
 import type { Authz } from "./accesspage";
 import { hm } from "./data";
 import { alertTitle, lang, t, type Key } from "./i18n";
@@ -79,7 +79,7 @@ export function HomePage(props: {
       )}
 
       <section class="panel home-today">
-        <div class="panel-head"><h2>{t("homeToday")}</h2></div>
+        <h2>{t("homeToday")}</h2>
         <div class="home-today-grid">
           <div>
             {today && today.enabled ? (
@@ -116,7 +116,6 @@ export function HomePage(props: {
                     onClick={() => props.onMode(x.m)}>{t(x.key)}</button>
                 ))}
               </div>
-              <p class="muted small">{modeLabel(m)}</p>
             </div>
           )}
         </div>

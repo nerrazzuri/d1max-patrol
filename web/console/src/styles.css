@@ -912,3 +912,10 @@ polygon.me-op.erase { fill: var(--c-success); stroke: none; }
 polygon.me-op.obstacle { fill: var(--c-text); stroke: none; }
 .me-terrain { fill: var(--c-warning); fill-opacity: .25; stroke: var(--c-warning); stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
 .me-terrain.grass, .me-terrain.gravel { fill: var(--c-success); stroke: var(--c-success); }
+
+/* W44 第二到四期:新页里的卡片留内边距(老页用 .panel-head / .pad,新页直接放内容) */
+:is(.home, .arming, .access, .users, .robots, .reports, .layout, .advdiag, .advsystem, .advupgrade, .advmaps, .advloc, .mapedit) .panel:not(:has(> .panel-head)) { padding: 12px 16px; }
+:is(.home, .arming, .access, .advdiag, .advsystem, .advupgrade) .panel > h2 { margin: 0 0 8px; font-size: 17px; }
+/* 布置、地图编辑器的地图在一屏模式里也要够高 */
+.layout-map .mapwrap, .me-canvas .mapwrap, .console.fill .layout-map .mapwrap, .console.fill .me-canvas .mapwrap { flex: none; height: calc(100vh - 280px); min-height: 420px; }
+.ly-side .row { flex-wrap: wrap; }
