@@ -150,6 +150,10 @@ _LOG_NAME = re.compile(r"[a-z0-9_.-]{1,48}")
 _TRAIL = re.compile(r"^/api/robots/([^/]{1,64})/mapping/(trail|preview)$")
 #: W00c5d 第三部分:给狗装、切、退版本。
 _RELCMD = re.compile(r"^/api/robots/([^/]{1,64})/release$")
+#: W44:某台机器人一段时间的位置轨迹。
+_TRACK = re.compile(r"^/api/robots/([^/]{1,64})/track$")
+#: 轨迹一次最多问多长(毫秒)。
+TRACK_SPAN_MAX_MS = 86_400_000
 _ROBOT = re.compile(
     r"^/api/robots/([^/]+)"
     r"(?:/(goto|abort|patrol|standby|standby/return|standby/here|intercept/here))?$")
@@ -239,6 +243,8 @@ class SiteApi:
         #: 防区多边形、名单(商业化 B1c;站点主程序接上)。
         self.areas: Any = None
         self.authz: Any = None
+        #: W44:位置轨迹(录像页那一刻在哪、地图页多久没巡过;站点主程序接上)。
+        self.pose_track: Any = None
         self._cctv_views: dict[str, Any] = {}
         self._cctv_lock = threading.Lock()
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
@@ -246,7 +252,8 @@ class SiteApi:
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
         #: W44:交班留言(报警记录页)。
         from d1max_site.shift_notes import ShiftNotes
-        self.shift_notes = ShiftNotes(dispatcher.db, now_ms=self._now)
+        self.shift_notes = (ShiftNotes(dispatcher.db, now_ms=self._now)
+                            if dispatcher is not None else None)
         #: W10:禁行区、限速区。有地图目录就有(测试台子不传也现建一个,派遣器共用这一份)。
         if zones is None and maps is not None:
             from d1max_site.nav_zones import NavZones
@@ -518,6 +525,9 @@ class _Handler(TlsHandlerMixin):
                 return self._send_json(200, self.site.scheduler.view())
             if path == "/api/shift-notes":
                 return self._shift_notes(method, user)
+            m = _TRACK.match(path)
+            if m is not None or path == "/api/coverage":
+                return self._track(method, unquote(m.group(1)) if m else None, user)
             if path == "/api/alerts" or path == "/api/watch/summary" or _ALERT.match(path):
                 return self._alerts(method, path, user)
             if method == "POST" and path == "/api/bundles":
@@ -690,10 +700,44 @@ class _Handler(TlsHandlerMixin):
             raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"alert": a.to_wire()})
 
+    def _track(self, method: str, robot_id: str | None, user) -> None:
+        """位置轨迹(W44):``GET /api/robots/{id}/track?since=&until=``(最多 24 小时)、
+        ``GET /api/coverage?map_id=&map_version=&since=``(每格最后一次有机器人到过的时刻)。"""
+        if method != "GET":
+            raise HttpError(405, "只支持 GET")
+        self._need(user, VIEW)
+        pt = self.site.pose_track
+        if pt is None:
+            raise HttpError(404, "这个站点没开位置轨迹")
+        q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+
+        def num(k: str) -> int:
+            v = (q.get(k) or [""])[0]
+            if not v.isdigit():
+                raise HttpError(400, f"{k} 要是非负整数(毫秒)")
+            return int(v)
+        if robot_id is not None:
+            since, until = num("since"), num("until")
+            if until <= since or until - since > TRACK_SPAN_MAX_MS:
+                raise HttpError(400, "until 要比 since 大,最多问 24 小时")
+            from d1max_site.pose_track import TRACK_LIMIT
+            raw = pt.track(robot_id, since, until, limit=TRACK_LIMIT + 1)
+            pts = pt.track(robot_id, since, until) if len(raw) > TRACK_LIMIT else raw
+            return self._send_json(200, {"points": pts, "thinned": len(raw) > TRACK_LIMIT})
+        map_id = (q.get("map_id") or [""])[0]
+        version = (q.get("map_version") or [""])[0]
+        if not map_id or not version:
+            raise HttpError(400, "要 map_id、map_version")
+        from d1max_site.pose_track import CELL_M
+        cells = pt.last_visit(map_id, version, num("since"))
+        return self._send_json(200, {"cell_m": CELL_M, "cells": cells})
+
     def _shift_notes(self, method: str, user) -> None:
         """交班留言(W44):``GET`` 最近一条(``view``);``POST {"text"}`` 写一条(``handle_alerts``,
         作者取登录账号)。"""
         notes = self.site.shift_notes
+        if notes is None:
+            raise HttpError(404, "这个站点没开交班留言")
         if method == "GET":
             self._need(user, VIEW)
             return self._send_json(200, {"latest": notes.latest()})
