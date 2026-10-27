@@ -64,18 +64,36 @@ class ArmingSchedule:
 
     # ------------------------------------------------------------ 读
 
-    def enabled(self) -> bool:
-        rows = self.db.query("SELECT value FROM site_settings WHERE key=?", (_KEY,))
-        if not rows:
+    # 开关和时间段一起存(一个事务)、一起读(:meth:`SiteDB.snapshot`):外审 R1,不会读到「开着 + 空时间表」
+    # 那种半截的样子(那就是全天撤防)。
+
+    @staticmethod
+    def _enabled_in(c: Any) -> bool:
+        row = c.execute("SELECT value FROM site_settings WHERE key=?", (_KEY,)).fetchone()
+        if row is None:
             return False
         try:
-            return json.loads(rows[0]["value"]).get("enabled") is True
+            return json.loads(row["value"]).get("enabled") is True
         except (ValueError, AttributeError):
             return False
 
-    def _slots(self) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.query(
+    @staticmethod
+    def _slots_in(c: Any) -> list[dict[str, Any]]:
+        return [dict(r) for r in c.execute(
             "SELECT zone, day, start_min, end_min FROM arming_slots ORDER BY zone, day, start_min")]
+
+    def enabled(self) -> bool:
+        with self.db.snapshot() as c:
+            return self._enabled_in(c)
+
+    def _slots(self) -> list[dict[str, Any]]:
+        with self.db.snapshot() as c:
+            return self._slots_in(c)
+
+    def _state(self, day: date) -> tuple[bool, list[dict[str, Any]], str | None]:
+        """开没开、时间段、这一天的例外:同一时刻的一份。"""
+        with self.db.snapshot() as c:
+            return self._enabled_in(c), self._slots_in(c), self._exception_in(c, day)
 
     def exceptions(self) -> list[dict[str, Any]]:
         return [{k: r[k] for k in ("id", "first_day", "last_day", "state", "note", "created_by")}
@@ -87,16 +105,18 @@ class ArmingSchedule:
             "SELECT DISTINCT zone FROM arming_slots WHERE zone<>'' ORDER BY zone")]
 
     def view(self) -> dict[str, Any]:
-        slots = self._slots()
-        return {"enabled": self.enabled(),
+        now = datetime.fromtimestamp(self._now() / 1000, self._tz())
+        with self.db.snapshot():
+            on, slots, ex = self._state(now.date())
+            excs = self.exceptions()
+        return {"enabled": on,
                 "slots": [{"zone": s["zone"], "day": s["day"], "start": _hhmm(s["start_min"]),
                            "end": _hhmm(s["end_min"])} for s in slots],
-                "exceptions": self.exceptions(), "today": self._today(slots)}
+                "exceptions": excs, "today": self._today(slots, now, ex)}
 
-    def _today(self, slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _today(slots: list[dict[str, Any]], now: datetime, ex: str | None) -> list[dict[str, Any]]:
         """今天(站点时区)每一份(``''`` 和单独设的防区)的布防时间。例外的日子按例外。"""
-        now = datetime.fromtimestamp(self._now() / 1000, self._tz())
-        ex = self._exception_on(now.date())
         zones = [""] + sorted({s["zone"] for s in slots if s["zone"]})
         out = []
         for z in zones:
@@ -108,20 +128,21 @@ class ArmingSchedule:
             out.append({"zone": z, "windows": wins})
         return out
 
-    def _exception_on(self, d: date) -> str | None:
-        rows = self.db.query("SELECT state FROM arming_exceptions WHERE first_day<=? AND "
-                             "last_day>=? ORDER BY id DESC LIMIT 1", (d.isoformat(), d.isoformat()))
-        return rows[0]["state"] if rows else None
+    @staticmethod
+    def _exception_in(c: Any, d: date) -> str | None:
+        row = c.execute("SELECT state FROM arming_exceptions WHERE first_day<=? AND "
+                        "last_day>=? ORDER BY id DESC LIMIT 1",
+                        (d.isoformat(), d.isoformat())).fetchone()
+        return row["state"] if row else None
 
     def scheduled(self, zone: str | None, now_ms: int) -> bool | None:
         """``zone`` 此刻按时间表布不布防;没开时间表回 ``None``。"""
-        if not self.enabled():
-            return None
         now = datetime.fromtimestamp(now_ms / 1000, self._tz())
-        ex = self._exception_on(now.date())
+        on, slots, ex = self._state(now.date())
+        if not on:
+            return None
         if ex is not None:
             return ex == "armed"
-        slots = self._slots()
         if not slots:
             return False                        # 开着、一段都没画:业主画的就是全天撤防
         mine = [s for s in slots if zone and s["zone"] == zone]
@@ -136,12 +157,13 @@ class ArmingSchedule:
     def next_boundary(self, now_ms: int) -> int | None:
         """下一个布防状态可能变的时刻:今天剩下的段头段尾,最晚是今天 24:00(明天 0 点,例外按天
         换)。没开回 ``None``。"""
-        if not self.enabled():
-            return None
         tz = self._tz()
         today = datetime.fromtimestamp(now_ms / 1000, tz).date()
+        on, slots, _ = self._state(today)
+        if not on:
+            return None
         edges: dict[int, set[int]] = {}
-        for s in self._slots():
+        for s in slots:
             edges.setdefault(s["day"], set()).update((s["start_min"], s["end_min"]))
         midnight = datetime.combine(today, time(0), tz)
         nxt = datetime.combine(today + timedelta(days=1), time(0), tz)
@@ -187,13 +209,13 @@ class ArmingSchedule:
                 where = a[0] or "全部防区"
                 raise ScheduleError(f"{where} 星期{'一二三四五六日'[a[1]]}的两段重叠了:"
                                     f"{_hhmm(a[2])}–{_hhmm(a[3])} 和 {_hhmm(b[2])}–{_hhmm(b[3])}")
+        # 开没开存在站点设置里(那张表的 SQL 只在 site_settings.py,数据访问层边界),跟时间段同一个事务
+        from d1max_site.site_settings import SiteSettings
         with self.db.tx() as c:
             c.execute("DELETE FROM arming_slots")
             c.executemany("INSERT INTO arming_slots(zone, day, start_min, end_min) "
                           "VALUES (?,?,?,?)", rows)
-        # 开没开存在站点设置里(那张表只有 site_settings.py 写,数据访问层边界)
-        from d1max_site.site_settings import SiteSettings
-        SiteSettings(self.db).put(_KEY, {"enabled": enabled, "by": by, "at": self._now()})
+            SiteSettings.put_in(c, _KEY, {"enabled": enabled, "by": by, "at": self._now()})
         return self.view()
 
     def add_exception(self, d: Any, *, by: str) -> int:

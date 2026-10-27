@@ -922,6 +922,12 @@ class SiteDB:
                 raise
             self._conn.execute("COMMIT")
 
+    @contextmanager
+    def snapshot(self) -> Iterator[sqlite3.Connection]:
+        """连着读几次、看到同一个样子:拿着库锁读(写都走这把锁,读的中间插不进别的提交)。只读,别在里面写。"""
+        with self._lock:
+            yield self._conn
+
     def query(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:
             return list(self._conn.execute(sql, args))
