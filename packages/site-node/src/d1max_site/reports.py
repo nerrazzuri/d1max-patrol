@@ -174,8 +174,9 @@ def summary(db: SiteDB, since_ms: Any, until_ms: Any, *, tz: tzinfo) -> dict[str
         days[day_of(r["issued_at"])]["patrols"] += 1
     events: list[dict[str, Any]] = []
     total_events = 0
-    for r in db.query("SELECT key, kind, level, robot, title, first_ms, verdict, resolved_by "
-                      "FROM alerts WHERE first_ms>=? AND first_ms<? ORDER BY first_ms, key", w):
+    for r in db.query("SELECT key, kind, level, robot, title, first_ms, verdict, resolved_by, "
+                      "context FROM alerts WHERE first_ms>=? AND first_ms<? "
+                      "ORDER BY first_ms, key", w):
         aud = audience(r["kind"])
         if aud not in GUARD_AUDIENCES:
             continue
@@ -188,9 +189,16 @@ def summary(db: SiteDB, since_ms: Any, until_ms: Any, *, tz: tzinfo) -> dict[str
             bucket["robot_problems"] += 1
         total_events += 1
         if len(events) < ROWS_MAX:
-            events.append({k: r[k] for k in ("key", "kind", "level", "robot", "title",
-                                             "first_ms", "verdict", "resolved_by")}
-                          | {"audience": aud})
+            ev = {k: r[k] for k in ("key", "kind", "level", "robot", "title",
+                                    "first_ms", "verdict", "resolved_by")} | {"audience": aud}
+            if r["robot"] == "site":                   # 摄像头报的:带上防区(报表上写哪个防区)
+                try:
+                    zone = json.loads(r["context"] or "{}").get("zone")
+                except (ValueError, AttributeError):
+                    zone = None
+                if isinstance(zone, str) and zone:
+                    ev["zone"] = zone
+            events.append(ev)
     totals = dict(_ZERO)
     for b in days.values():
         for k in totals:

@@ -105,3 +105,16 @@ def test_接口(tmp_path):
         assert s.req("GET", "/api/reports/summary?since=x&until=1", token=gina)[0] == 400
     finally:
         s.close()
+
+
+def test_实测_摄像头报的事带上防区(db):
+    """报表「机器人」一栏:站点自己(摄像头)报的写哪个防区,网页不写 site(演示站点实测记下)。"""
+    with db.tx() as c:
+        c.execute("INSERT INTO alerts(key, level, kind, robot, title, detail, first_ms, last_ms, "
+                  "count, acked_by, resolved_by, escalated, verdict, context) "
+                  "VALUES ('s1','P1','intrusion_unanswered','site','x','',?,?,1,'','',0,'',?)",
+                  (kl(2026, 10, 27, 1), kl(2026, 10, 27, 1), '{"zone": "前门"}'))
+    _alert(db, "h1", "stuck", kl(2026, 10, 27, 3))
+    ev = {e["key"]: e for e in summary(db, *WEEK, tz=KL)["events"]}
+    assert ev["s1"]["zone"] == "前门"
+    assert "zone" not in ev["h1"]
