@@ -866,10 +866,16 @@ class _Handler(TlsHandlerMixin):
             return self._send_json(200, {"history": rows})
         if method != "POST":
             raise HttpError(405, "只支持 POST")
-        self._body()
+        body = self._body()
         row = h.get(int(hid))
         if row is None:
             raise HttpError(404, "没有这一版")
+        # 外审 R3:请求要说清是哪一层、哪张图的哪一版(人在页面上看的那个);跟这一条对不上就拒绝,
+        # 不按编号悄悄去改别的图
+        exp = body.get("expect") if isinstance(body, dict) else None
+        if not isinstance(exp, dict) or (exp.get("kind"), exp.get("map_id"), exp.get("version")) \
+                != (row["kind"], row["map_id"], row["map_version"]):
+            raise HttpError(409, "这一版不是你现在看的那张图、那一层的:刷新历史再退")
         self._audit_target = f"{row['kind']}:{row['map_id']}:{row['map_version']}/{row['item']}"
         self._audit_detail = {"restore": row["id"]}
         warnings = self._restore(row, user)

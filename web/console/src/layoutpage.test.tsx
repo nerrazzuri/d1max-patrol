@@ -119,6 +119,61 @@ describe("布置外框", () => {
     await waitFor(() => expect(posted.map((p) => p.url)).toContain("/api/layout/history/7/restore"));
   });
 
+  it("外审R3:退回带上是哪一层、哪张图", async () => {
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
+    fireEvent.click(btn(c, "历史版本"));
+    await waitFor(() => expect(c.querySelector(".ly-history")!.textContent).toContain("olga"));
+    fireEvent.click(btn(c.querySelector(".ly-history")!, "退回到这一版"));
+    fireEvent.click(btn(document.querySelector(".modal")!, "退回到这一版"));
+    await waitFor(() => expect(posted.find((p) => p.url.endsWith("/7/restore"))).toBeTruthy());
+    expect(posted.find((p) => p.url.endsWith("/7/restore"))!.body).toEqual({ expect: { kind: "zones", map_id: "home", version: "3" } });
+  });
+
+  it("外审R3:换了图,旧图的历史和确认框立刻撤掉,晚到的旧回包不认", async () => {
+    const pendingB: ((r: Response) => void)[] = [];
+    const lateA: ((r: Response) => void)[] = [];
+    let aCalls = 0;
+    setFetch(((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") { posted.push({ url, body: JSON.parse(String(init.body ?? "{}")) }); return Promise.resolve(json({})); }
+      if (url === "/api/maps") return Promise.resolve(json({ maps: [{ map_id: "A", version: "1", active: true }, { map_id: "B", version: "1", active: false }] }));
+      if (url.endsWith("/preview")) return Promise.resolve(json(META));
+      if (url.endsWith("/areas")) return Promise.resolve(json({ areas: [] }));
+      if (url.endsWith("/zones")) return Promise.resolve(json({ revision: 0, zones: [] }));
+      if (url.startsWith("/api/routes")) return Promise.resolve(json({ routes: [] }));
+      if (url.startsWith("/api/admin/cameras")) return Promise.resolve(json({ cameras: [] }));
+      if (url.startsWith("/api/layout/history?")) {
+        if (url.includes("map_id=B")) return new Promise<Response>((r) => pendingB.push(r));
+        aCalls += 1;
+        const rows = json({ history: [{ id: 12, kind: "zones", by: "A-now", at_ms: 2, note: "", item: "" }, { id: 11, kind: "zones", by: "A-old", at_ms: 1, note: "", item: "" }] });
+        if (aCalls === 2) return new Promise<Response>((r) => lateA.push(() => r(rows)));
+        return Promise.resolve(rows);
+      }
+      return Promise.resolve(json({}, 404));
+    }) as typeof fetch);
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector(".fake")).not.toBeNull());
+    fireEvent.click(btn(c, "历史版本"));
+    await waitFor(() => expect(c.querySelector(".ly-history")!.textContent).toContain("A-old"));
+    fireEvent.click(btn(c.querySelector(".ly-history")!, "退回到这一版"));
+    expect(document.querySelector(".modal")).not.toBeNull();
+    const sel = c.querySelector("select") as HTMLSelectElement;
+    fireEvent.change(sel, { target: { value: "B\u00001" } });
+    await waitFor(() => expect(pendingB.length).toBe(1));
+    expect(document.querySelector(".modal")).toBeNull();
+    expect(c.querySelector(".ly-history")!.textContent).not.toContain("A-old");
+    expect(btn(c.querySelector(".ly-history")!, "退回到这一版")).toBeUndefined();
+    // A → B → A:第二次 A 的回包晚到之前,B 的回包也晚到 —— 不能把 B 的那份当成 A 的
+    fireEvent.change(sel, { target: { value: "A\u00001" } });
+    await waitFor(() => expect(lateA.length).toBe(1));
+    pendingB[0](json({ history: [{ id: 30, kind: "zones", by: "B-now", at_ms: 2, note: "", item: "" }, { id: 29, kind: "zones", by: "B-old", at_ms: 1, note: "", item: "" }] }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(c.querySelector(".ly-history")!.textContent).not.toContain("B-old");
+    lateA[0](json({}));
+    await waitFor(() => expect(c.querySelector(".ly-history")!.textContent).toContain("A-old"));
+    expect(posted.filter((p) => p.url.includes("/restore"))).toEqual([]);
+  });
+
   it("旧地址跳过来", () => {
     expect(readRoute("#/admin/zones").page).toBe("admin/layout");
     expect(readRoute("#/admin/routes").page).toBe("admin/layout");

@@ -77,7 +77,11 @@ def _hist(s, tok, kind, item=None, map_id=MAP[0], version=MAP[1]):
 
 
 def _restore(s, tok, hid):
-    return s.req("POST", f"/api/layout/history/{hid}/restore", {}, token=tok)
+    """退回要说清是哪一层、哪张图(外审 R3):按那一条自己的填,跟网页一样。"""
+    rows = s.db.query("SELECT kind, map_id, map_version FROM layout_history WHERE id=?", (hid,))
+    exp = ({"kind": rows[0]["kind"], "map_id": rows[0]["map_id"],
+            "version": rows[0]["map_version"]} if rows else {})
+    return s.req("POST", f"/api/layout/history/{hid}/restore", {"expect": exp}, token=tok)
 
 
 def test_退回防区(站点):
@@ -209,3 +213,18 @@ def test_位置不合规矩(站点, bad):
                                     "onvif_url": "http://10.0.0.5/onvif", "placement": bad},
                                    allow_nan=True).encode(), token=_登(s))
     assert code == 400
+
+
+def test_外审R3_退回带的图和层对不上_拒绝不动(站点):
+    s = 站点
+    tok = _登(s)
+    s.req("POST", f"{BASE}/areas", {"zone": "A", "points": SQ}, token=tok)
+    s.req("POST", f"{BASE}/areas", {"zone": "B", "points": SQ2}, token=tok)
+    old = _hist(s, tok, "zones")[1]
+    for exp in ({"kind": "zones", "map_id": "B", "version": MAP[1]},
+                {"kind": "zones", "map_id": MAP[0], "version": "99"},
+                {"kind": "nogo", "map_id": MAP[0], "version": MAP[1]}, None):
+        body = {} if exp is None else {"expect": exp}
+        code, d = s.req("POST", f"/api/layout/history/{old['id']}/restore", body, token=tok)
+        assert code == 409, (exp, d)
+    assert len(_hist(s, tok, "zones")) == 2                # 没退
