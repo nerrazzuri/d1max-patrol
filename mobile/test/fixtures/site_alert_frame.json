@@ -2,17 +2,18 @@
   "alert": {
     "acked_by": "",
     "acked_ms": null,
+    "audience": "help",
     "channel": "screen",
     "context": {
-      "task_id": "task-94a61090ed07"
+      "task_id": "task-19e1f2c951a5"
     },
     "count": 1,
     "detail": "机器人报急停没解除",
     "escalated": 0,
-    "first_ms": 1792866154904,
+    "first_ms": 1793068689924,
     "key": "A/estop_pressed#1",
     "kind": "estop_pressed",
-    "last_ms": 1792866154904,
+    "last_ms": 1793068689924,
     "level": "P1",
     "resolved_by": "",
     "resolved_ms": null,
@@ -21,7 +22,8 @@
     "shelved_ms": null,
     "shelved_reason": "",
     "shelved_until_ms": null,
-    "title": "急停被按下"
+    "title": "急停被按下",
+    "verdict": ""
   },
   "kind": "alert"
 }

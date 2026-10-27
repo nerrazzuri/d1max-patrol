@@ -15,8 +15,9 @@ from pathlib import Path
 from typing import Any
 
 #: 58 路线库(站点存的路线、排程是唯一真理源);59 运营可视化:定位历史 loc_episodes(只加表);
-#: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15)。
-SCHEMA_VERSION = 60
+#: 60 区域「在生效的那一份」nav_zones.effective_body(外审 R1,2026-10-15);
+#: 61 W44:告警结论 alerts.verdict、交班留言 shift_notes、位置轨迹 pose_track(只加列、加表)。
+SCHEMA_VERSION = 61
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -603,6 +604,25 @@ CREATE TABLE IF NOT EXISTS loc_episodes (
     task_id     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS loc_episodes_robot ON loc_episodes(robot_id, start_ms);
+-- W44(库 61):交班留言(报警记录页显示最近一条;作者是登录账号)。
+CREATE TABLE IF NOT EXISTS shift_notes (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    at_ms  INTEGER NOT NULL,
+    author TEXT NOT NULL,
+    text   TEXT NOT NULL
+);
+-- W44(库 61):位置轨迹(录像页那一刻在哪、地图页多久没巡过)。stamp_ms 是机器人的钟(跟录像同一个钟);
+-- 挪了 1 米或过了 10 秒记一个,留 30 天(pose_track.py)。
+CREATE TABLE IF NOT EXISTS pose_track (
+    robot_id    TEXT NOT NULL,
+    stamp_ms    INTEGER NOT NULL,
+    map_id      TEXT NOT NULL,
+    map_version TEXT NOT NULL,
+    x           REAL NOT NULL,
+    y           REAL NOT NULL,
+    PRIMARY KEY (robot_id, stamp_ms)
+);
+CREATE INDEX IF NOT EXISTS pose_track_map ON pose_track(map_id, map_version, stamp_ms);
 """
 
 
@@ -670,6 +690,9 @@ _ADDED_COLUMNS = (
     # 外审 R1(2026-10-15 下午):狗上**在生效的**那一份(没确认的放宽不生效、上一轮生效的收紧不丢);
     # 升上来时留空 = 按原来的算法(当前这一份 + 确认过的那一份里没被盖住的),下一次改动起存下来
     ("nav_zones", "effective_body", "TEXT"),
+    # W44(库 61):告警结论 —— intruder 确认有人 / false_alarm 误报 / handled 处理好了;
+    # 空 = 没说(老的、自动解决的)。
+    ("alerts", "verdict", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

@@ -60,6 +60,9 @@ class AlertNotFound(KeyError):
 #:
 #: 任务 12 要新增 kind(``suspend_stale``)时,必须先在这里登记一行,否则
 #: ``raise_alert`` 会抛 ``KeyError`` —— 这是设计,不是缺陷。
+#: W44:解决时人下的结论 —— 确认有人、误报、处理好了(报警记录页、报表用)。
+VERDICTS: tuple[str, ...] = ("intruder", "false_alarm", "handled")
+
 LEVEL_OF: dict[str, Level] = {
     # P1:立刻动身。狗动不了、狗倒了、狗失控、控制权没了 —— 这些事拖到"今
     # 天之内"处理,狗可能已经在原地卡了一整天,或者没人管的情况下继续乱动。
@@ -258,6 +261,8 @@ class Alert:
     shelved_ms: int | None = None
     shelved_until_ms: int | None = None
     shelved_reason: str = ""
+    #: W44:人下的结论(``VERDICTS`` 之一);空 = 没说(老客户端、自动解决的)。报表按它数误报。
+    verdict: str = ""
 
     def shelved_at(self, now_ms: int) -> bool:
         return self.shelved_until_ms is not None and now_ms < self.shelved_until_ms
@@ -300,6 +305,7 @@ class Alert:
             "shelved_reason": self.shelved_reason,
             # W44:给谁看(保安四类 / 业主),网页、推送按它分
             "audience": audience(self.kind),
+            "verdict": self.verdict,
         }
 
 
@@ -465,7 +471,7 @@ class AlertBook:
         self._by_key[key] = alert
         return alert
 
-    def resolve(self, key: str, *, who: str = "", now_ms: int) -> Alert:
+    def resolve(self, key: str, *, who: str = "", verdict: str = "", now_ms: int) -> Alert:
         """这件事没了。只改 ``resolved_by``/``resolved_ms``,**不碰
         ``acked_by``/``acked_ms``** —— 解决了不等于确认过,"没人看见"是这个
         模块要暴露出来的事实,不是要替调用方悄悄圆过去的细节。
@@ -474,10 +480,12 @@ class AlertBook:
         链关掉(所以那边是 ValueError),而空姓名的解决只是交接班那张表上少一
         个名字 —— 拿它去挡住"这件事没了"这个事实,代价大得多。
         """
+        if verdict and verdict not in VERDICTS:
+            raise ValueError(f"结论只有 {'、'.join(VERDICTS)},给的是 {verdict!r}")
         existing = self._by_key.get(key)
         if existing is None:
             raise AlertNotFound(key)
-        alert = replace(existing, resolved_by=who, resolved_ms=now_ms)
+        alert = replace(existing, resolved_by=who, resolved_ms=now_ms, verdict=verdict)
         self._spill(alert)
         self._by_key[key] = alert
         return alert

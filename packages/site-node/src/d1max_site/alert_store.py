@@ -25,7 +25,7 @@ RESTORE_RECENT = 200
 
 _COLS = ("key", "level", "kind", "robot", "title", "detail", "first_ms", "last_ms", "count",
          "acked_by", "acked_ms", "resolved_by", "resolved_ms", "escalated", "context",
-         "shelved_by", "shelved_ms", "shelved_until_ms", "shelved_reason")
+         "shelved_by", "shelved_ms", "shelved_until_ms", "shelved_reason", "verdict")
 
 
 def _from_row(r: Any) -> Alert:
@@ -36,7 +36,7 @@ def _from_row(r: Any) -> Alert:
                  resolved_ms=r["resolved_ms"], escalated=r["escalated"],
                  context=_context(r["context"]), shelved_by=r["shelved_by"],
                  shelved_ms=r["shelved_ms"], shelved_until_ms=r["shelved_until_ms"],
-                 shelved_reason=r["shelved_reason"])
+                 shelved_reason=r["shelved_reason"], verdict=r["verdict"])
 
 
 def _context(raw: Any) -> dict[str, Any]:
@@ -110,8 +110,8 @@ class AlertDesk:
     def ack(self, key: str, *, who: str) -> Alert:
         return self.book.ack(key, who=who, now_ms=self._now())
 
-    def resolve(self, key: str, *, who: str) -> Alert:
-        return self.book.resolve(key, who=who, now_ms=self._now())
+    def resolve(self, key: str, *, who: str, verdict: str = "") -> Alert:
+        return self.book.resolve(key, who=who, verdict=verdict, now_ms=self._now())
 
     def shelve(self, key: str, *, who: str, until_ms: int, reason: str) -> Alert:
         return self.book.shelve(key, who=who, until_ms=until_ms, reason=reason, now_ms=self._now())

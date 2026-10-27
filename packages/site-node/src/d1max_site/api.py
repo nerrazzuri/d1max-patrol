@@ -244,6 +244,9 @@ class SiteApi:
         #: 造 ``CctvView`` 的(测试换成假 ffmpeg 的)。
         self.cctv_view_factory: Callable[[Any], Any] | None = None
         self._now = now_ms or (lambda: int(__import__("time").time() * 1000))
+        #: W44:交班留言(报警记录页)。
+        from d1max_site.shift_notes import ShiftNotes
+        self.shift_notes = ShiftNotes(dispatcher.db, now_ms=self._now)
         #: W10:禁行区、限速区。有地图目录就有(测试台子不传也现建一个,派遣器共用这一份)。
         if zones is None and maps is not None:
             from d1max_site.nav_zones import NavZones
@@ -513,6 +516,8 @@ class _Handler(TlsHandlerMixin):
                 if self.site.scheduler is None:
                     raise HttpError(404, "这个站点没开排程")
                 return self._send_json(200, self.site.scheduler.view())
+            if path == "/api/shift-notes":
+                return self._shift_notes(method, user)
             if path == "/api/alerts" or path == "/api/watch/summary" or _ALERT.match(path):
                 return self._alerts(method, path, user)
             if method == "POST" and path == "/api/bundles":
@@ -672,13 +677,36 @@ class _Handler(TlsHandlerMixin):
             elif m.group(2) == "ack":
                 a = self.site.loop.call(lambda: _sync(self.site.alerts.ack, key, who=str(user)))
             else:
+                # W44:结论(确认有人 / 误报 / 处理好了);不给 = 空(老客户端照旧能用),别的值 400
+                verdict = d.get("verdict", "")
+                if not isinstance(verdict, str):
+                    raise HttpError(400, "verdict 要是字符串")
+                self._audit_detail = {"verdict": verdict}
                 a = self.site.loop.call(
-                    lambda: _sync(self.site.alerts.resolve, key, who=str(user)))
+                    lambda: _sync(self.site.alerts.resolve, key, who=str(user), verdict=verdict))
         except AlertNotFound as exc:
             raise HttpError(404, "没有这条告警") from exc
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
         return self._send_json(200, {"alert": a.to_wire()})
+
+    def _shift_notes(self, method: str, user) -> None:
+        """交班留言(W44):``GET`` 最近一条(``view``);``POST {"text"}`` 写一条(``handle_alerts``,
+        作者取登录账号)。"""
+        notes = self.site.shift_notes
+        if method == "GET":
+            self._need(user, VIEW)
+            return self._send_json(200, {"latest": notes.latest()})
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST")
+        self._need(user, HANDLE_ALERTS)
+        d = self._body()
+        try:
+            note = notes.add(str(user), d.get("text"))
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
+        self._audit_detail = {"chars": len(note["text"])}
+        return self._send_json(200, {"note": note})
 
     def _login(self) -> None:
         d = self._body()
