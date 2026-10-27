@@ -672,7 +672,7 @@ class SiteAlertSources:
                 what += "(雷暴中出动)"                     # W29:雷暴照派,写明
         elif outcome in ("no_robot", "unmapped", "dispatch_failed", "merged"):
             kind, robot = "intrusion_unanswered", SITE
-            what = {"no_robot": "没有能派的机器人", "unmapped": "防区没映射到拦截点",
+            what = {"no_robot": "没有能派的机器人", "unmapped": "这个防区没设机器人去的拦截点",
                     "dispatch_failed": "派了,机器人没收"}.get(str(outcome), "没机器人去")
         else:
             return
@@ -683,8 +683,10 @@ class SiteAlertSources:
         names = "、".join(zones[:5]) + (f" 等 {len(zones)} 个防区" if len(zones) > 5 else "")
         title = (f"防区 {names} 有入侵:{what}" if kind == "intrusion"
                  else f"防区 {names} 有入侵,没机器人去:{what}")
-        detail = (f"事件源 {row.get('source', '?')} · {row.get('type', '?')} · "
-                  f"{row.get('note') or ''}")
+        # 给保安看的说明(演示站点实测记下):谁报的、怎么回事,不写事件源编号、事件类型这些技术用语
+        src = str(row.get("source") or "?")
+        who = f"摄像头 {src[5:]}" if src.startswith("cctv-") else src
+        detail = f"{who} 报的;{what}"
         ctx: dict = {"zone": zone}
         if row.get("intercept_pose"):
             ctx["intercept"] = row["intercept_pose"]

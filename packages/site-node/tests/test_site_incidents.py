@@ -545,6 +545,9 @@ async def test_W16_入侵没狗去_报P1没狗去_防区合在标题里(带告�
     [a] = _开着的(t)
     assert a["kind"] == "intrusion_unanswered" and a["level"] == "P1" and a["robot"] == "site"
     assert "back-yard" in a["title"] and "pond" in a["title"] and "没机器人去" in a["title"]
+    # 演示站点实测记下:给保安看的说明不写「事件源 nvr-1 · intrusion」这种技术用语
+    assert "事件源" not in a["detail"] and "intrusion" not in a["detail"]
+    assert "nvr-1 报的" in a["detail"] and "拦截点" in a["detail"]
 
 
 async def test_W16_重复的_不认的类型_不报(站):
