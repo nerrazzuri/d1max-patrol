@@ -103,7 +103,8 @@ def cmd_init(home: Path, site_id: str, hostnames: list[str], broker_port: int) -
         raise SiteError(f"{home} 已经 init 过了")
     if (home / "ca").exists():
         raise SiteError(f"{home} 里有上一次 init 没做完留下的 ca/(没有 site.json)。确认这个站点"
-                        f"还没给任何机器人签过证书之后,删掉 {home}/ca 再 init;签过的话别删,找人处理")
+                        f"还没给任何机器人签过证书之后,删掉 {home}/ca 再 init;签过的话别删,"
+                        "找人处理")
     home.mkdir(parents=True, exist_ok=True)
     os.chmod(home, 0o750)
     ca = SiteCA(home / "ca")
@@ -142,7 +143,8 @@ def cmd_fingerprint(home: Path) -> str:
 
 def _code_text(code: str) -> str:
     return ("开通码(一次性,用过、过期就作废;别贴到公开的地方):\n" + code +
-            "\n机器人上:sudo /opt/d1max/bin/python -m d1max_patrol.cli provision --code '<上面那一行>'")
+            "\n机器人上:sudo /opt/d1max/bin/python -m d1max_patrol.cli provision --code "
+            "'<上面那一行>'")
 
 
 def cmd_enroll_code(home: Path, robot_id: str, host: str | None, hours: float) -> str:
@@ -1165,12 +1167,14 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--days", type=int, default=365)
     e.add_argument("--code", action="store_true",
                    help="顺带出一个开通码(A4):机器人上 d1max-patrol provision --code 一条命令开通")
-    e.add_argument("--host", default=None, help="开通码里机器人连站点用的主机名(缺省第一个 --hostname)")
+    e.add_argument("--host", default=None, help="开通码里机器人连站点用的主机名(缺省第一个 "
+                                                "--hostname)")
     ec = sub.add_parser("enroll-code", help="给已登记的机器人重新出一个开通码(A4,旧码作废)")
     ec.add_argument("robot_id")
     ec.add_argument("--host", default=None, help="机器人连站点用的主机名(缺省第一个 --hostname)")
     ec.add_argument("--hours", type=float, default=24.0, help="多少小时内有效")
-    ra_ = sub.add_parser("robot-auto", help="让机器人接自动派遣(排程、入侵、回充、自动回待命点)(W33)")
+    ra_ = sub.add_parser("robot-auto", help="让机器人接自动派遣(排程、入侵、回充、自动回待命点)"
+                                            "(W33)")
     ra_.add_argument("robot_id")
     rm_ = sub.add_parser("robot-manual", help="设成只许手动派:站点不自己让它动(W33)")
     rm_.add_argument("robot_id")
@@ -1220,7 +1224,8 @@ def build_parser() -> argparse.ArgumentParser:
     bo.add_argument("dst", help="解到哪儿(要空目录)")
     bo.add_argument("--key", default="/etc/d1max-site/backup.key",
                     help="备份密钥(装机时离线另存的那一份)")
-    sub.add_parser("versions", help="站点、每台机器人的版本、兼容级别、配不配(A7;机器人的要站点在跑)")
+    sub.add_parser("versions", help="站点、每台机器人的版本、兼容级别、配不配(A7;"
+                                    "机器人的要站点在跑)")
     ks = sub.add_parser("keys-status", help="站点密钥在不在、长度、权限、短指纹(A3)")
     ks.add_argument("--json", action="store_true")
     ke = sub.add_parser("keys-export", help="站点密钥打成一个口令加密的托管包,离线保管(A3)")

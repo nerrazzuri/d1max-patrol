@@ -1517,7 +1517,8 @@ class _Handler(TlsHandlerMixin):
         if old is not None and loaded[0] is not None and not replace \
                 and (old["map_id"], old["map_version"]) != loaded:
             raise HttpError(409, f"待命点 {name} 登记在 {old['map_id']}:{old['map_version']} 上,"
-                                 f"机器人现在用的是 {loaded[0]}:{loaded[1]}:换个名字,或者说明要替换",
+                                 f"机器人现在用的是 {loaded[0]}:{loaded[1]}:换个名字,"
+                                 "或者说明要替换",
                             extra={"name_taken": {"map_id": old["map_id"],
                                                   "map_version": old["map_version"]}})
         # 有效期同设位置(30 s,Orin 的钟不准,再短就收不下);超时之后狗照样标了的,按事件补登记。
@@ -1527,7 +1528,8 @@ class _Handler(TlsHandlerMixin):
                 ttl_ms=VIDEO_COMMAND_TTL_MS))
         except HttpError as exc:
             if exc.status == 504:
-                raise HttpError(504, "等机器人回话超时:机器人可能已经标了 —— 标了的话站点收到机器人的消息会自动"
+                raise HttpError(504, "等机器人回话超时:机器人可能已经标了 —— "
+                                     "标了的话站点收到机器人的消息会自动"
                                      "登记待命点,过一会儿刷新看看") from exc
             raise
         ack = r["ack"]
@@ -1907,7 +1909,8 @@ class _Handler(TlsHandlerMixin):
             elif what == "mapping":
                 action, name = parse_mapping(d)
                 if len(name) > 40:
-                    raise HttpError(400, "包名最多 40 个字符(机器人还要加录的时刻、文件名还要加后缀)")
+                    raise HttpError(400, "包名最多 40 个字符(机器人还要加录的时刻、"
+                                         "文件名还要加后缀)")
                 kind, payload = "mapping", {"action": action, **({"name": name} if name else {})}
                 target = mapping_target(d)
                 if target is not None:           # W09c2:录包的同时在线建这一版

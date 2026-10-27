@@ -1,4 +1,5 @@
-"""界面用词(W44,用户 2026-10-27):给人看的文字写「四足机器人 / 机器人」、英文写 robot,不写「狗」「dog」。
+"""界面用词(W44,用户 2026-10-27):给人看的文字写「四足机器人 / 机器人」、英文写 robot,
+不写「狗」「dog」。
 
 扫的是**字符串和界面文字**,不扫注释、文档字符串、标识符(那些是写给开发者看的)。
 """
@@ -16,7 +17,9 @@ BAD_EN = re.compile(r"\bdogs?\b", re.IGNORECASE)
 
 
 def code_outside_comments(src: str) -> list[tuple[int, str]]:
-    """JS/TS/Dart:去掉 ``//``、``/* */`` 注释后,每行剩下的(行号, 文字)。字符串里的 ``//`` 不当注释。"""
+    """JS/TS/Dart:去掉 ``//``、``/* */`` 注释后,每行剩下的(行号, 文字)。
+
+    字符串里的 ``//`` 不当注释。"""
     out: list[list[str]] = [[]]
     i, n = 0, len(src)
     quote: str | None = None            # 在字符串里:引号(' " ` 或三引号)
@@ -118,7 +121,8 @@ def _docstring_ids(tree: ast.AST) -> set[int]:
 
 def test_站点给人看的文字不写狗():
     bad = []
-    srcs = [ROOT / "packages/site-node/src", ROOT / "packages/robot-agent/src", ROOT / "packages/contract/src"]
+    srcs = [ROOT / "packages/site-node/src", ROOT / "packages/robot-agent/src",
+            ROOT / "packages/contract/src"]
     for p in sorted(f for d in srcs for f in d.rglob("*.py")):
         tree = ast.parse(p.read_text(encoding="utf-8"))
         skip = _docstring_ids(tree)

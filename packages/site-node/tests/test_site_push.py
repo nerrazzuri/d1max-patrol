@@ -526,7 +526,8 @@ def test_H9_FCM_报文_鉴权换一次令牌反复用_快到期再换():
     msg = json.loads(calls[1].data)["message"]
     assert calls[1].full_url == "https://fcm.googleapis.com/v1/projects/p/messages:send"
     assert calls[1].get_header("Authorization") == "Bearer tok1"
-    assert msg["token"] == "t1" and msg["notification"] == {"title": "站 · P1", "body": "机器人翻倒了"}
+    assert msg["token"] == "t1" and msg["notification"] == {"title": "站 · "
+                                                                     "P1", "body": "机器人翻倒了"}
     assert msg["data"] == {"alert_key": "A/x#1", "tier": "2"}
     assert msg["android"]["priority"] == "HIGH" and msg["android"]["ttl"] == "3600s"
     assert msg["android"]["notification"]["tag"] == collapse_id("A/x#1", 2), "重发盖掉原来那条,不叠"

@@ -337,7 +337,8 @@ class StandbyManager:
             m = parse_mission(payload["mission"])
             version = payload.get("map_version")
         except (ValueError, KeyError, TypeError, MissionError, ContractError) as exc:
-            raise StandbyError(f"直线的机器人要沿来路回待命点,取不到 {task_id} 的来路: {exc}") from exc
+            raise StandbyError(f"直线的机器人要沿来路回待命点,取不到 {task_id} 的来路: "
+                               f"{exc}") from exc
         p = self._checked_default(robot_id, name)
         if (m.map_id, version) != (p["map_id"], p["map_version"]):
             raise StandbyError(f"{task_id} 跑在 {m.map_id}:{version},待命点 {p['name']} 登记在 "

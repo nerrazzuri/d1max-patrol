@@ -125,7 +125,8 @@ def test_FCM报文_带tag_不带collapse_key():
 
 def test_极光报文_带apns_collapse_id和厂商notify_id():
     net = _网()
-    _通道(net)["jpush"].send(["r1"], "站 · P1", "机器人看见人了", {"alert_key": "A/x#1", "tier": "0"})
+    _通道(net)["jpush"].send(["r1"], "站 · "
+                                   "P1", "机器人看见人了", {"alert_key": "A/x#1", "tier": "0"})
     apns, ids = _极光键(net.jpush[0])
     assert apns == collapse_id("A/x#1", 0)
     assert ids == dict.fromkeys(JPUSH_NOTIFY_ID_VENDORS, vendor_notify_id("A/x#1", 0))

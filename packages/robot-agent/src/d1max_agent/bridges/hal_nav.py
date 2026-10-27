@@ -377,7 +377,8 @@ class HalNavBackend(NavBackend):
             seq=self._seq, ttl_ms=max(300, int(dt_s * 3000)), frame="base", vx=vx, vy=0.0, wz=wz))
         if got.rejected:
             log.warning("HAL 拒了速度命令(%s),导航按 Failed 收尾", got.reason)
-            await self._fail(_REJECT_TEXT.get(got.reason or "", f"机器人不收速度命令({got.reason})"))
+            await self._fail(_REJECT_TEXT.get(got.reason or "",
+                                              f"机器人不收速度命令({got.reason})"))
 
     # ------------------------------------------------------------ 内部
 

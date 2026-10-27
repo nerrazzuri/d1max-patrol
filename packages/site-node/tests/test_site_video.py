@@ -304,7 +304,8 @@ def test_续期偶尔失败一次不断画面(站点):
         while time.monotonic() - t0 < 3.0:
             assert v.jpegs(1), "续期失败一次就把正在出画面的流收掉了"
         assert once["left"] == 0
-        assert calls[1] - calls[0] < 0.3, "续期没成要马上再续,不等满一轮(那样会跟机器人那头有效期抢)"
+        assert calls[1] - calls[0] < 0.3, \
+            "续期没成要马上再续,不等满一轮(那样会跟机器人那头有效期抢)"
     finally:
         v.close()
 

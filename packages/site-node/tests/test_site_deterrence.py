@@ -1392,7 +1392,8 @@ async def test_警笛开成了_续开没成_马上不算开着_下一拍重发_�
         t.disp.fail = True
     await t.desk.tick()
     [s] = t.desk.view()
-    assert s["level"] == 3 and "siren" not in s["active"], "机器人上开失败会转成关:不拿上次成功当现在"
+    assert s["level"] == 3 and "siren" not in s["active"], \
+        "机器人上开失败会转成关:不拿上次成功当现在"
     if how == "rejected":
         assert "strobe" in s["active"], "别的路续上了的照旧"
     n = len(t.disp.sent)

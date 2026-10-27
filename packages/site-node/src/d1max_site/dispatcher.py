@@ -633,13 +633,15 @@ class Dispatcher:
         过期,起一趟没人握着的遥控)。"""
         skew = self.clock_skew_s(robot_id)
         if skew is None:
-            raise DispatchRefused(f"{robot_id} 的钟差还不知道(站点刚起来、机器人刚连上,或者最近一分钟没"
+            raise DispatchRefused(f"{robot_id} 的钟差还不知道(站点刚起来、机器人刚连上,"
+                                  "或者最近一分钟没"
                                   "收到它的遥测):先不派会让它动、依赖命令有效期的命令")
         limit = min(SKEW_DISPATCH_MAX_S, ttl_ms / 2000.0)
         if abs(skew) > limit:
             # 狗按自己的钟判有效期 —— 差一半以上,旧命令不过期、新命令一到就过期
             raise DispatchRefused(f"{robot_id} 的钟差 {skew:+.0f} 秒:这条命令的有效期 "
-                                  f"{ttl_ms / 1000:.0f} 秒,对不上,先对时(机器人向站点主机对时,见 W09d)")
+                                  f"{ttl_ms / 1000:.0f} 秒,对不上,先对时(机器人向站点主机对时,见 "
+                                  "W09d)")
 
     def _temporal_gate(self, robot_id: str, kind: str, payload: dict[str, Any],
                        ttl_ms: int) -> None:

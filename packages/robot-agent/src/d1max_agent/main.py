@@ -107,7 +107,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hal", choices=("sim", "d1max"), default="sim", help="品牌适配器")
     p.add_argument("--autonomy", choices=("supervised", "autonomous"), default=None,
                    help="自主级别(W00c6i):supervised = goto/巡检只在有人现场监护时才接;"
-                        "默认 --hal d1max 是 supervised、sim 是 autonomous。**真机器人改成 autonomous "
+                        "默认 --hal d1max 是 supervised、sim 是 autonomous。**真机器人改成 "
+                        "autonomous "
                         "要等 W11 避障真机验收过了、用户同意**")
     p.add_argument("--localizer", choices=("anchor", "bridge"), default="anchor",
                    help="地图位姿从哪来(W09a):anchor = 里程锚定(人给一次位置);bridge = "
