@@ -607,3 +607,49 @@ async def test_库里改的排程_排程执行器照跑_旧钟点不补(tmp_path
                                           "version": store.view()["revision"]}
     finally:
         await t.close()
+
+
+# ------------------------------------------------------------ W44 第三期:逐段查走不走得通
+
+
+def _接规划(台, door: float | None = None):
+    from d1max_site.intercept_reach import InterceptReach
+    from d1max_site.nav_zones import NavZones
+    zones = NavZones(台.db, now_ms=lambda: 1000)
+    if door is not None:                                 # 另一版图:门宽 door
+        src = _files(台.tmp / f"src-door{door}")
+        _屋子(src, door)
+        台.cat.import_dir(src, map_id="house", version=f"d{door}")
+    台.store.reach = InterceptReach(台.db, 台.cat, zones)
+    return zones
+
+
+def test_两点之间走不通_标那一段(台):
+    _接规划(台, door=0.0)                                 # 门关死:左右两间不通
+    with pytest.raises(RouteError) as e:
+        台.store.put_route("r", body("d0.0", [pt("左", 1.0, 2.0), pt("右", 6.0, 2.0)]), by="a")
+    errs = e.value.errors
+    assert [x.get("segment") for x in errs] == [[0, 1]]
+    assert errs[0]["index"] is None and "左" in errs[0]["problem"] and "右" in errs[0]["problem"]
+
+
+def test_禁行区隔开也算走不通(台):
+    zones = _接规划(台)
+    door = {"id": "d", "kind": "nogo", "label": "门口", "polygon": [[3.5, 0.0], [4.5, 0.0], [4.5, 4.0],
+                                                                  [3.5, 4.0]]}
+    zones.put("house", "wide", [door], base_revision=0, by="a")
+    with pytest.raises(RouteError) as e:
+        台.store.put_route("r", body("wide", [pt("左", 1.0, 2.0), pt("右", 6.0, 2.0)]), by="a")
+    assert [x.get("segment") for x in e.value.errors] == [[0, 1]]
+
+
+def test_都走得通不报(台):
+    _接规划(台)
+    out = 台.store.put_route("r", body("wide", [pt("左", 1.0, 2.0), pt("右", 6.0, 2.0),
+                                                pt("回", 1.5, 1.0)]), by="a")
+    assert out["revision"] == 1
+
+
+def test_没接规划不查(台):
+    out = 台.store.put_route("r", body("wide", [pt("左", 1.0, 2.0), pt("右", 6.0, 2.0)]), by="a")
+    assert out["revision"] == 1
