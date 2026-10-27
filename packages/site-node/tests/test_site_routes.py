@@ -635,8 +635,8 @@ def test_两点之间走不通_标那一段(台):
 
 def test_禁行区隔开也算走不通(台):
     zones = _接规划(台)
-    door = {"id": "d", "kind": "nogo", "label": "门口", "polygon": [[3.5, 0.0], [4.5, 0.0], [4.5, 4.0],
-                                                                  [3.5, 4.0]]}
+    door = {"id": "d", "kind": "nogo", "label": "门口",
+            "polygon": [[3.5, 0.0], [4.5, 0.0], [4.5, 4.0], [3.5, 4.0]]}
     zones.put("house", "wide", [door], base_revision=0, by="a")
     with pytest.raises(RouteError) as e:
         台.store.put_route("r", body("wide", [pt("左", 1.0, 2.0), pt("右", 6.0, 2.0)]), by="a")
