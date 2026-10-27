@@ -200,4 +200,31 @@ describe("外审R6 报警现场断流", () => {
     expect(sceneImg(r.container)!.getAttribute("src")).toBe("/api/cameras/cam4/live");
     expect(r.container.querySelector(".slot-main .lost")).toBeNull();
   });
+
+  it("实测查出:网断了(健康问不通)不当成「站点没这个接口」从此不问;连着两次问不通标断了,网回来照常恢复", async () => {
+    let down = false;
+    setFetch(((url: string) => {
+      if (down) return Promise.reject(new TypeError("Failed to fetch"));
+      const h = health[url];
+      return Promise.resolve(h ? new Response(JSON.stringify(h), { headers: { "Content-Type": "application/json" } })
+        : new Response("{}", { status: 404, headers: { "Content-Type": "application/json" } }));
+    }) as typeof fetch);
+    health[SCENE.health] = { online: true, last_frame_age_ms: 100 };
+    const r = render(slot(Date.now()));
+    fireEvent.load(sceneImg(r.container)!);
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(r.container.querySelector(".slot-main .lost")).toBeNull();
+    down = true;
+    await vi.advanceTimersByTimeAsync(4200);                      // 两次问不通
+    expect(r.container.querySelector(".slot-main .lost")).not.toBeNull();
+    down = false;
+    await vi.advanceTimersByTimeAsync(3100);                      // 重连
+    fireEvent.load(sceneImg(r.container)!);
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(r.container.querySelector(".slot-main .lost")).toBeNull();
+    // 之后照样能发现停帧(没有因为那两次问不通就不再问)
+    health[SCENE.health] = { online: false, last_frame_age_ms: 8000 };
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(r.container.querySelector(".slot-main .lost")).not.toBeNull();
+  });
 });
