@@ -404,3 +404,74 @@ def test_复查R1二_PR105升过的库里真报过P1的_修复以后还是p1_不
     n = [a["kind"] for a in w.alerts.raised].count("dog_sees_person")
     assert n == (0 if P1发出去了 else 1)
     db.close()
+
+
+# ------------------------------------------------------------ W44 第二期:提前结束、今天有没有
+
+
+def _本子(tmp_path, clock, local):
+    db = SiteDB(tmp_path / "s2.db")
+    return AuthzBook(db, now_ms=lambda: clock[0], localtime=lambda s: local[0](s))
+
+
+def test_授权提前结束(tmp_path):
+    clock, local = [NOW], [_lt(0, 10, 0)]
+    b = _本子(tmp_path, clock, local)
+    eid = b.add({"name": "园丁", "zones": [], "days": ALL_DAYS, "start": "09:00",
+                 "end": "18:00"}, by="olga")
+    assert b.active(None) == "园丁"
+    assert b.end_now(eid, by="olga") is True
+    clock[0], local[0] = NOW + 60_000, _lt(0, 10, 1)
+    assert b.active(None) is None
+    assert [e["active_now"] for e in b.list(with_active=True)] == [False]
+    # 第二天 09:30 照常
+    clock[0], local[0] = NOW + 23 * 3_600_000 + 30 * 60_000, _lt(1, 9, 30)
+    assert b.active(None) == "园丁"
+
+
+def test_授权提前结束_跨午夜那一段(tmp_path):
+    clock, local = [NOW], [_lt(0, 23, 0)]
+    b = _本子(tmp_path, clock, local)
+    eid = b.add({"name": "夜班", "zones": [], "days": ALL_DAYS, "start": "22:00",
+                 "end": "06:00"}, by="olga")
+    assert b.end_now(eid, by="olga") is True
+    clock[0], local[0] = NOW + 6 * 3_600_000, _lt(1, 5, 0)          # 第二天 05:00 还是这一段
+    assert b.active(None) is None
+    clock[0], local[0] = NOW + 23 * 3_600_000, _lt(1, 22, 0)        # 第二天 22:00 新的一段
+    assert b.active(None) == "夜班"
+
+
+def test_授权提前结束_不在时间里(tmp_path):
+    clock, local = [NOW], [_lt(0, 8, 0)]
+    b = _本子(tmp_path, clock, local)
+    eid = b.add({"name": "园丁", "zones": [], "days": ALL_DAYS, "start": "09:00",
+                 "end": "18:00"}, by="olga")
+    assert b.end_now(eid, by="olga") is False
+    assert b.end_now(999, by="olga") is False
+
+
+def test_授权今天有没有(tmp_path):
+    clock, local = [NOW], [_lt(0, 8, 0)]                            # 星期一
+    b = _本子(tmp_path, clock, local)
+    b.add({"name": "周末保洁", "zones": [], "days": 0b1100000, "start": "09:00",
+           "end": "12:00"}, by="olga")
+    b.add({"name": "园丁", "zones": [], "days": 0b0000001, "start": "09:00",
+           "end": "12:00"}, by="olga")
+    got = {e["name"]: e["on_today"] for e in b.list(with_active=True)}
+    assert got == {"周末保洁": False, "园丁": True}
+
+
+def test_接口_提前结束(tmp_path):
+    s = 站(tmp_path)
+    try:
+        clock, local = [NOW], [_lt(0, 10, 0)]
+        s.api.authz = AuthzBook(s.db, now_ms=lambda: clock[0], localtime=lambda x: local[0](x))
+        tok = s.login()
+        s.req("POST", "/api/lists/authorizations", {"name": "园丁", "start": "09:00",
+              "end": "18:00"}, token=tok)
+        eid = s.req("GET", "/api/lists/authorizations", token=tok)[1]["authorizations"][0]["id"]
+        code, d = s.req("POST", f"/api/lists/authorizations/{eid}/end", {}, token=tok)
+        assert code == 200 and d["authorizations"][0]["active_now"] is False
+        assert s.req("POST", f"/api/lists/authorizations/{eid}/end", {}, token=tok)[0] == 409
+    finally:
+        s.close()

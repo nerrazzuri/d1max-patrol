@@ -54,11 +54,16 @@ class AuthzBook:
         out = [{"id": r["id"], "name": r["name"], "zones": json.loads(r["zones"]),
                 "days": r["days"], "start": _hhmm(r["start_min"]), "end": _hhmm(r["end_min"]),
                 "until_ms": r["until_ms"], "note": r["note"], "created_by": r["created_by"],
-                "created_ms": r["created_ms"]} for r in rows]
+                "created_ms": r["created_ms"], "ended_until_ms": r["ended_until_ms"]}
+               for r in rows]
         if with_active:
             now = self._now()
+            wday = self._local(now / 1000).tm_wday
             for e in out:
                 e["active_now"] = self._live(e, now)
+                # W44 第二期:今天(本地时间)有没有这一条的时间段(「家里的状况」今天的安排)
+                e["on_today"] = bool(e["days"] >> wday & 1) and (
+                    e["until_ms"] is None or e["until_ms"] > now)
         return out
 
     def add(self, d: dict[str, Any], *, by: str) -> int:
@@ -93,6 +98,21 @@ class AuthzBook:
         with self.db.tx() as c:
             return c.execute("DELETE FROM authorizations WHERE id=?", (entry_id,)).rowcount > 0
 
+    def end_now(self, entry_id: int, *, by: str) -> bool:
+        """此刻生效的那一段提前结束(W44 第二期,「授权和访客」页):这一段剩下的时间不算生效,
+        下一段照常。不在生效中(或没有这一条)回 ``False``。"""
+        now = self._now()
+        e = next((x for x in self.list() if x["id"] == entry_id), None)
+        if e is None or not self._live(e, now):
+            return False
+        lt = self._local(now / 1000)
+        minute = lt.tm_hour * 60 + lt.tm_min
+        left = (_minutes(e["end"], "") - minute) % 1440 or 1440
+        end_ms = now - (lt.tm_sec * 1000 + now % 1000) + left * 60_000
+        with self.db.tx() as c:
+            c.execute("UPDATE authorizations SET ended_until_ms=? WHERE id=?", (end_ms, entry_id))
+        return True
+
     def active(self, zone: str | None, now_ms: int | None = None) -> str | None:
         """此刻在 ``zone``(``None`` = 说不清在哪个防区)生效的授权的名字;没有就 ``None``。
 
@@ -110,6 +130,8 @@ class AuthzBook:
         """这一条此刻生效没有(不看防区)。"""
         if e["until_ms"] is not None and now >= e["until_ms"]:
             return False
+        if e.get("ended_until_ms") is not None and now < e["ended_until_ms"]:
+            return False                                   # 这一段提前结束了
         lt = self._local(now / 1000)
         minute, wday = lt.tm_hour * 60 + lt.tm_min, lt.tm_wday
         s, t = _minutes(e["start"], ""), _minutes(e["end"], "")
