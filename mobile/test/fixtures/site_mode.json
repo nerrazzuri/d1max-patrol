@@ -1,10 +1,14 @@
 {
   "label": "访客",
+  "manual_until_ms": null,
   "mode": "visitor",
+  "next_change_ms": 1793096458977,
   "prev_mode": "armed",
   "set_by": "alice",
-  "set_ms": 1793068689847,
-  "until_ms": 1793072289847,
+  "set_ms": 1793092858977,
+  "source": "manual",
+  "state": "disarmed",
+  "until_ms": 1793096458977,
   "visitor_zones": [
     "drive"
   ],

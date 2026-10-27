@@ -191,9 +191,9 @@ class _SiteModePageState extends State<SiteModePage> {
                       style: NwText.titleMedium.copyWith(color: c.text)),
                   subtitle: Text(
                       tr(
-                          '${m['set_by'] == 'site:visitor_expired' ? 'Reverted automatically when visitor mode ended' : 'Set by ${m['set_by']}'}'
+                          '${m['source'] == 'schedule' ? 'Switched by the schedule' : m['set_by'] == 'site:visitor_expired' ? 'Reverted automatically when visitor mode ended' : 'Set by ${m['set_by']}'}'
                               '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · visitor mode disarmed ${(m['visitor_zones'] as List).join(', ')}' : ''}',
-                          '${m['set_by'] == 'site:visitor_expired' ? '访客到点自动回来的' : '${m['set_by']} 切的'}'
+                          '${m['source'] == 'schedule' ? '按时间表切的' : m['set_by'] == 'site:visitor_expired' ? '访客到点自动回来的' : '${m['set_by']} 切的'}'
                               '${(m['visitor_zones'] as List? ?? const []).isNotEmpty ? ' · 访客撤了 ${(m['visitor_zones'] as List).join('、')}' : ''}'),
                       style: NwText.bodyMedium.copyWith(color: c.textSecondary)),
                 )),

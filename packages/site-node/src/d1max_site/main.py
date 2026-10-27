@@ -895,6 +895,11 @@ class Server:
         self.arming.on_expired = lambda back, row: self.api.audit.record(
             actor="site", action="mode visitor_expired", target=back, status=200,
             detail={"visitor_zones": row["visitor_zones"], "set_by": row["set_by"]}, remote="")
+        # W44 第二期:时间表管着时防区布防状态变了
+        self.arming.on_schedule = lambda v: self.api.audit.record(
+            actor="site", action="arming.schedule", target=v["state"], status=200,
+            detail={"armed": [z["zone"] for z in v["zones"] if z["armed"]],
+                    "disarmed": [z["zone"] for z in v["zones"] if not z["armed"]]}, remote="")
         #: 基站改正数据转发(W09e):配了 ``--rtcm-source`` 才有。
         self.rtk = None
         if rtcm_source:

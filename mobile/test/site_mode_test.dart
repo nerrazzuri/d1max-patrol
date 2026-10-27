@@ -31,6 +31,22 @@ void main() {
     expect(incidentOutcomeText('disarmed'), contains('撤防'));
   });
 
+  test('按时间表管着时（W44 第二期）：写按时间表，不写在家', () {
+    expect(modeText(<String, dynamic>{'mode': 'home', 'source': 'schedule', 'state': 'partial'}), '按时间表：部分布防');
+    expect(modeText(<String, dynamic>{'mode': 'armed', 'source': 'schedule', 'state': 'armed'}), '按时间表：布防');
+    expect(modeText(<String, dynamic>{'mode': 'home', 'source': 'schedule', 'state': 'disarmed'}), '按时间表：撤防');
+    expect(modeText(<String, dynamic>{'mode': 'home', 'source': 'manual', 'state': 'partial'}), '在家');
+  });
+
+  testWidgets('按时间表管着时，副标题写按时间表切的', (t) async {
+    final api = FakeApi('owner')..modeView = <String, dynamic>{
+      ...siteFixture('site_mode'), 'mode': 'home', 'visitor_zones': <String>[], 'until_ms': null,
+      'source': 'schedule', 'state': 'partial', 'set_by': 'olga'};
+    await _open(t, api);
+    expect(find.text('现在：按时间表：部分布防'), findsOneWidget);
+    expect(find.textContaining('按时间表切的'), findsOneWidget);
+  });
+
   testWidgets('保安：只有「布防」，没有在家、访客，也改不了防区', (t) async {
     final api = FakeApi('guard');
     await _open(t, api);

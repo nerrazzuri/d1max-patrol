@@ -22,6 +22,8 @@
 - ``POST /api/incidents``:外部事件(**不要登录,要签名**,见 ``incidents.py``;W00c2c)
 - ``GET  /api/incidents``、``POST /api/intercepts``、``POST /api/zones``:
   事件账、拦截点、防区(W00c2c)
+- ``GET/POST /api/arming/schedule``、``POST /api/arming/exceptions``、``…/{id}/remove``:布防时间表
+  (W44 第二期);``GET/POST /api/duty-settings``:交班时间、多久没巡过
 - ``GET/POST /api/accounts``、``POST /api/accounts/<name>``、``POST /api/me/password``、
   ``GET /api/audit``:账号、角色、审计(W00c3)
 - ``GET  /api/schedule``:路线库的排程,每条下一轮何时、最近一次去向与结果(W00c2a)
@@ -90,6 +92,7 @@ _ACCOUNT = re.compile(r"^/api/accounts/([A-Za-z0-9._-]{1,64})$")
 _ROUTE = re.compile(r"^/api/routes/([^/]{1,64})(/delete)?$")
 _ROUTE_SCHED = re.compile(r"^/api/route-schedules(?:/([^/]{1,64})(/delete)?)?$")
 _AREAS = re.compile(r"^/api/maps/([^/]{1,64})/([^/]{1,32})/areas$")
+_ARM_EX = re.compile(r"^/api/arming/exceptions/(\d{1,9})/remove$")
 _AUTHZ = re.compile(r"^/api/lists/authorizations(?:/(\d{1,9})/remove)?$")
 #: 网页上登记 / 出开通码 / 吊销机器狗(商业化 B1b,管理员)。
 _ADMIN_ROBOT = re.compile(r"^/api/admin/robots(?:/([^/]{1,64})/(code|revoke))?$")
@@ -549,6 +552,8 @@ class _Handler(TlsHandlerMixin):
                 return self._deterrence(method, path, user)
             if path in ("/api/mode", "/api/mode/zones"):
                 return self._mode(method, path, user)
+            if path in ("/api/arming/schedule", "/api/arming/exceptions") or _ARM_EX.match(path):
+                return self._arming_schedule(method, path, user)
             if path == "/api/weather":
                 return self._weather(method, user)
             if method == "GET" and path == "/api/versions":
@@ -1279,6 +1284,42 @@ class _Handler(TlsHandlerMixin):
                                                       minutes=d.get("minutes")))
         except ModeError as exc:
             raise HttpError(400, str(exc)) from exc
+
+    def _arming_schedule(self, method: str, path: str, user) -> None:
+        """布防时间表(W44 第二期):``GET /api/arming/schedule`` 看(``view``);``POST`` 整份换、
+        ``POST /api/arming/exceptions`` 加例外、``…/{id}/remove`` 删例外(``manage``)。改了以后防区的
+        布防状态可能跟着变:推一帧模式给手机。"""
+        from d1max_site.arming_schedule import ScheduleError
+        desk = self.site.arming
+        sch = getattr(desk, "schedule", None)
+        if sch is None:
+            raise HttpError(404, "这个站点没开布防时间表")
+        if method == "GET" and path == "/api/arming/schedule":
+            self._need(user, VIEW)
+            return self._send_json(200, sch.view())
+        if method != "POST":
+            raise HttpError(405, "只支持 GET/POST" if path == "/api/arming/schedule"
+                            else "只支持 POST")
+        self._need(user, MANAGE)
+        d = self._body()
+        try:
+            if path == "/api/arming/schedule":
+                slots = d.get("slots")
+                self._audit_detail = {"enabled": d.get("enabled"),
+                                      "slots": len(slots) if isinstance(slots, list) else None}
+                sch.put(d, by=str(user))
+            elif path == "/api/arming/exceptions":
+                self._audit_detail = {k: d.get(k) for k in ("first_day", "last_day", "state")}
+                sch.add_exception(d, by=str(user))
+            else:
+                eid = int(_ARM_EX.match(path).group(1))
+                self._audit_target = f"exception/{eid}"
+                if not sch.remove_exception(eid):
+                    raise HttpError(404, "没有这一条例外")
+        except ScheduleError as exc:
+            raise HttpError(400, str(exc)) from exc
+        desk._changed()
+        return self._send_json(200, sch.view())
 
     def _chargers(self, method: str, path: str, user) -> None:
         """充电桩(W13)。看:``view``(带每台狗这一轮回充走到哪一步);登记、改桩前对准点
