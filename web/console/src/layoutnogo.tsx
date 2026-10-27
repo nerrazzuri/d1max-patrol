@@ -3,7 +3,7 @@
 // - 加、收紧:保存就生效。删、缩小(放宽):要确认,确认之前机器人照旧绕开原来的范围;网页上确认放宽要再输一次密码。
 // - 机器人还没收到在生效的那一份:写「等机器人确认中」。
 // 改的先记在页面上,外框「保存」整份存(带打开时看到的修订号;别人改过回 409,外框说「刚才有人改过」)。
-// 抹掉区(地图编辑)、人员忽略区不在这里画,原样带着存。
+// 人员忽略区(W41,机器人在里面看见人不报)也在这里画;抹掉区是地图编辑的事(第四期),这里不画、原样带着存。
 import { useEffect, useState } from "preact/hooks";
 import { api, ApiError } from "./api";
 import { ConfirmPassword } from "./confirmpw";
@@ -12,7 +12,7 @@ import { t } from "./i18n";
 import { polyPx, toMap, type NavZones, type TabProps } from "./layoutpage";
 import type { NavZone, Pt } from "./mapview";
 
-type Draw = "nogo" | "wall" | "slow";
+type Draw = "nogo" | "wall" | "slow" | "ignore";
 interface Form { label: string; hard: boolean; speed: number; temp: boolean; days: number }
 /** 新画的:站点要的格式(临时的带 for_s,站点按自己的钟换成到期时刻)。 */
 type Draft = NavZone & { for_s?: number };
@@ -111,6 +111,7 @@ export function NogoTab(p: TabProps) {
             <button type="button" class="btn" onClick={() => { setDraw("nogo"); setPts([]); }}>{t("drawNoGo")}</button>
             <button type="button" class="btn" onClick={() => { setDraw("wall"); setPts([]); }}>{t("drawVWall")}</button>
             <button type="button" class="btn" onClick={() => { setDraw("slow"); setPts([]); }}>{t("drawSlow")}</button>
+            <button type="button" class="btn" onClick={() => { setDraw("ignore"); setPts([]); }}>{t("drawIgnore")}</button>
           </div>
         )}
         <p class="muted small">{t("lyNogoHint")}</p>
@@ -126,12 +127,12 @@ export function NogoTab(p: TabProps) {
       </div>
       {form && draw && (
         <NogoForm kind={draw} onClose={() => setForm(false)} onSave={(f) => {
-          let id = `${draw === "wall" ? "w" : draw === "slow" ? "s" : "n"}${(nav?.revision ?? 0) + 1}`;
+          let id = `${draw === "wall" ? "w" : draw === "slow" ? "s" : draw === "ignore" ? "i" : "n"}${(nav?.revision ?? 0) + 1}`;
           while (zones.some((z) => z.id === id)) id += "x";
-          const z: Draft = { id, kind: draw === "slow" ? "slow" : "nogo", label: f.label.trim(), polygon: draw === "wall" ? [] : pts };
+          const z: Draft = { id, kind: draw === "slow" || draw === "ignore" ? draw : "nogo", label: f.label.trim(), polygon: draw === "wall" ? [] : pts };
           if (draw === "wall") { z.wall = pts; delete (z as Partial<Draft>).polygon; }
           if (draw === "slow") z.max_speed_mps = f.speed;
-          else if (f.hard) z.hard = true;
+          else if (f.hard && draw !== "ignore") z.hard = true;
           if (f.temp) z.for_s = f.days * 86400;
           setZones([...zones, z]);
           setForm(false);
@@ -171,17 +172,18 @@ function SureDialog({ onYes, onNo }: { onYes: () => void; onNo: () => void }) {
 
 function NogoForm({ kind, onClose, onSave }: { kind: Draw; onClose: () => void; onSave: (f: Form) => void }) {
   const [f, setF] = useState<Form>({
-    label: kind === "wall" ? t("legendVWall") : kind === "slow" ? t("legendSlow") : t("legendNoGo"), hard: false, speed: 0.3, temp: false, days: 3,
+    label: kind === "wall" ? t("legendVWall") : kind === "slow" ? t("legendSlow") : kind === "ignore" ? t("legendIgnore") : t("legendNoGo"),
+    hard: false, speed: 0.3, temp: false, days: 3,
   });
   const ok = f.label.trim().length > 0 && f.label.trim().length <= 64 && (kind !== "slow" || (f.speed > 0 && f.speed <= 5));
   return (
-    <Modal label={kind === "wall" ? t("navFormTitleVWall") : kind === "slow" ? t("navFormTitleSlow") : t("navFormTitleNoGo")} onClose={onClose}>
+    <Modal label={kind === "wall" ? t("navFormTitleVWall") : kind === "slow" ? t("navFormTitleSlow") : kind === "ignore" ? t("navFormTitleIgnore") : t("navFormTitleNoGo")} onClose={onClose}>
       <form class="form" onSubmit={(e) => { e.preventDefault(); if (ok) onSave(f); }}>
         <label class="field">{t("navName")}<input name="label" value={f.label} maxLength={64} onInput={(e) => setF({ ...f, label: e.currentTarget.value })} /></label>
         {kind === "slow" ? (
           <label class="field">{t("navSpeed")}<input type="number" min={0.1} max={5} step={0.1} value={f.speed}
             onInput={(e) => setF({ ...f, speed: Number(e.currentTarget.value) })} /></label>
-        ) : (
+        ) : kind === "ignore" ? null : (
           <label class="field-check"><input type="checkbox" name="hard" checked={f.hard} onChange={(e) => setF({ ...f, hard: e.currentTarget.checked })} />{t("navHard")}</label>
         )}
         <label class="field-check"><input type="checkbox" name="temp" checked={f.temp} onChange={(e) => setF({ ...f, temp: e.currentTarget.checked })} />{t("lyTemp")}</label>

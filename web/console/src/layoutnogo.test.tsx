@@ -104,4 +104,15 @@ describe("布置 → 禁行区", () => {
     const { container: c } = render(<NogoTab {...props(nav())} />);
     await waitFor(() => expect(c.querySelector(".nogo-status")!.textContent).toContain("等机器人确认中"));
   });
+
+  it("人员忽略区:没有硬禁区那一项,种类 ignore", async () => {
+    const { container: c } = render(<NogoTab {...props(nav())} />);
+    draw(c, "画人员忽略区", 3);
+    expect(document.querySelector('.modal input[name="hard"]')).toBeNull();
+    fireEvent.submit(document.querySelector(".modal form")!);
+    await save!();
+    const zs = posted.find((p) => p.url === "/api/maps/home/3/zones")!.body.zones as { kind: string; hard?: boolean }[];
+    expect(zs[1].kind).toBe("ignore");
+    expect(zs[1].hard).toBeUndefined();
+  });
 });
