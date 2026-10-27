@@ -91,7 +91,7 @@ def test_S11_厂家导航的goto_walk默认不跑_连都不连_指到站点(caps
     for argv in (["goto", "1", "2"], ["walk", "m", "p"]):
         assert main(["--url", "ws://127.0.0.1:1", *argv]) == 2
         err = capsys.readouterr().err
-        assert "厂家导航" in err and "/api/robots/<机器人>/goto" in err and "--allow-vendor-nav" in err
+        assert "厂家导航" in err and "/api/robots/<狗>/goto" in err and "--allow-vendor-nav" in err
     assert main(["--url", "ws://127.0.0.1:1", "goto", "--allow-vendor-nav", "1", "2"]) == 1, \
         "显式说了才去连(这里连不上)"
 
