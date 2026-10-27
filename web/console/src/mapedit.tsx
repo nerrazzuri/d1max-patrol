@@ -4,7 +4,7 @@
 // - 撤销、重做;「另存」之前列出这一次擦了多少、画了多少,确认才存。虚拟墙、禁行区、限速区去「布置 → 禁行区」。
 // 清噪点在「地图」页每一版的「清噪点…」里(那一页外审过,自己另存一版)。
 import type { FunctionComponent } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { api, apiUpload, ApiError, enc } from "./api";
 import { Confirm } from "./dialogs";
 import { t, type Key } from "./i18n";
@@ -31,9 +31,20 @@ function errText(e: unknown): string {
   return t("failed", { why: e instanceof ApiError ? e.message : String(e) });
 }
 
-export function MapEditPage({ say, target, Canvas }: { say: Say; target: { map_id: string; version: string } | null; Canvas?: FunctionComponent<OwnLayer> }) {
-  const base = target ? `/api/maps/${enc(target.map_id)}/${enc(target.version)}` : "";
-  const adm = target ? `/api/admin/maps/${enc(target.map_id)}/${enc(target.version)}` : "";
+type Target = { map_id: string; version: string };
+
+/** 外审 R5:编辑器跟「哪张图哪一版」绑死 —— 换了就按 key 整个重建(草稿、选的点、确认框、文件全清掉),
+ *  旧的回包、旧的另存回来不碰新的那个。 */
+export function MapEditPage({ say, target, Canvas }: { say: Say; target: Target | null; Canvas?: FunctionComponent<OwnLayer> }) {
+  if (!target) return <p class="empty">{t("meNoTarget")}</p>;
+  return <Editor key={`${target.map_id}\u0000${target.version}`} say={say} target={target} Canvas={Canvas} />;
+}
+
+function Editor({ say, target, Canvas }: { say: Say; target: Target; Canvas?: FunctionComponent<OwnLayer> }) {
+  const base = `/api/maps/${enc(target.map_id)}/${enc(target.version)}`;
+  const adm = `/api/admin/maps/${enc(target.map_id)}/${enc(target.version)}`;
+  const alive = useRef(true);
+  const [loadErr, setLoadErr] = useState(false);
   const [meta, setMeta] = useState<PreviewMeta | null>(null);
   const [digest, setDigest] = useState("");
   const [hist, setHist] = useState<History | null>(null);
@@ -50,11 +61,15 @@ export function MapEditPage({ say, target, Canvas }: { say: Say; target: { map_i
   const [bmSize, setBmSize] = useState<[number, number] | null>(null);
 
   useEffect(() => {
-    if (!target) return;
-    api<PreviewMeta>("GET", `${base}/preview`).then(setMeta).catch((e) => say(errText(e)));
-    api<{ digest: string }>("GET", `${adm}/noise`).then((d) => setDigest(d.digest)).catch(() => setDigest(""));
-    api<Display>("GET", `${adm}/display`).then((d) => setHist(start({ ...EMPTY, ...d }))).catch(() => setHist(start(EMPTY)));
-  }, [base]);
+    // 三样(预览、栅格摘要、显示设置)都读到了才算就绪;哪样读不出来都不能存(显示设置读不出来不当成空的:
+    // 存了会把区域名、特殊地面全抹掉)
+    const ok = <T,>(f: (v: T) => void) => (v: T) => { if (alive.current) f(v); };
+    const bad = () => { if (alive.current) setLoadErr(true); };
+    api<PreviewMeta>("GET", `${base}/preview`).then(ok(setMeta)).catch(bad);
+    api<{ digest: string }>("GET", `${adm}/noise`).then(ok((d) => setDigest(d.digest || ""))).catch(bad);
+    api<Display>("GET", `${adm}/display`).then(ok((d) => setHist(start({ ...EMPTY, ...d })))).catch(bad);
+    return () => { alive.current = false; };
+  }, []);
 
   const bmFile = hist?.now.display.basemap?.file;
   useEffect(() => {
@@ -64,7 +79,7 @@ export function MapEditPage({ say, target, Canvas }: { say: Say; target: { map_i
     img.src = `${adm}/basemap?f=${enc(bmFile)}`;
   }, [bmFile, adm]);
 
-  if (!target) return <p class="empty">{t("meNoTarget")}</p>;
+  const ready = !!meta && !!digest && !!hist && !loadErr;
   const now = hist?.now;
   const dirty = !!hist && hist.past.length > 0;
   const sum = now ? summary(now) : { erased: 0, obstacle: 0 };
@@ -95,7 +110,7 @@ export function MapEditPage({ say, target, Canvas }: { say: Say; target: { map_i
   }
 
   async function save() {
-    if (!hist || !target) return;
+    if (!hist || !ready) return;
     setAsking(false);
     setBusy(true);
     try {
@@ -111,20 +126,23 @@ export function MapEditPage({ say, target, Canvas }: { say: Say; target: { map_i
         const up = await apiUpload<{ file: string }>(`${vb}/basemap`, file, { "Content-Type": file.type || "image/png" });
         display = { ...display, basemap: { ...display.basemap, file: up.file } };
       }
+      // 等回包的时候换了图:人确认过的这一次照样存完(显示设置跟着它的新版本),只是不跳、不碰新的那个
       await api("POST", `${vb}/display`, display);
       say(version === target.version ? t("saved") : t("meSavedAs", { v: version }));
-      location.hash = `#/admin/mapedit?map=${enc(target.map_id)}&version=${enc(version)}`;
+      if (alive.current) location.hash = `#/admin/mapedit?map=${enc(target.map_id)}&version=${enc(version)}`;
     } catch (e) {
+      if (!alive.current) return;
       if (e instanceof ApiError && e.status === 409) setStale(true);
       else say(errText(e));
     } finally {
-      setBusy(false);
+      if (alive.current) setBusy(false);
     }
   }
 
   async function upload(f: File) {
     try {
       const d = await apiUpload<{ file: string }>(`${adm}/basemap`, f, { "Content-Type": f.type || "image/png" });
+      if (!alive.current) return;
       setFile(f);
       change((s) => ({ ...s, display: { ...s.display, basemap: { file: d.file, x: meta?.left_x ?? 0, y: meta?.top_y ?? 0, scale: meta?.m_per_px ?? 0.05, rotate_deg: 0, opacity: 0.5 } } }));
     } catch (e) {
@@ -140,16 +158,17 @@ export function MapEditPage({ say, target, Canvas }: { say: Say; target: { map_i
   const bm = now?.display.basemap;
 
   return (
-    <section class="mapedit" data-ready={meta && hist ? "1" : undefined}>
+    <section class="mapedit" data-ready={ready ? "1" : undefined}>
       <div class="panel-head">
         <h1>{t("meTitle")} · <span class="mono">{target.map_id}:{target.version}</span></h1>
         <a class="btn push" href="#/admin/maps">{t("meBack")}</a>
         <button type="button" class="btn" disabled={!hist?.past.length} onClick={() => setHist((h) => (h ? undo(h) : h))}>{t("meUndo")}</button>
         <button type="button" class="btn" disabled={!hist?.future.length} onClick={() => setHist((h) => (h ? redo(h) : h))}>{t("meRedo")}</button>
-        <button type="button" class="btn primary me-save" disabled={!dirty || busy} onClick={() => setAsking(true)}>{now?.ops.length ? t("meSaveNew") : t("save")}</button>
+        <button type="button" class="btn primary me-save" disabled={!dirty || busy || !ready} onClick={() => setAsking(true)}>{now?.ops.length ? t("meSaveNew") : t("save")}</button>
       </div>
       <p class="muted small">{t("meExplain")}</p>
       {stale && <div class="ly-conflict" role="alert">{t("meStale")}</div>}
+      {loadErr && <div class="ly-conflict me-loaderr" role="alert">{t("meLoadErr")}</div>}
       <div class="ly-tab">
         <div class="me-canvas">
           <Map

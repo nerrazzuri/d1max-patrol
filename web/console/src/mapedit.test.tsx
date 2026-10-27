@@ -100,4 +100,73 @@ describe("地图编辑器", () => {
     fireEvent.click(btn(document.querySelector(".modal")!, "另存成新的一版"));
     await waitFor(() => expect(c.querySelector(".ly-conflict")!.textContent).toContain("换了"));
   });
+
+  it("外审R5:换了图,旧图的草稿不带过去;三样都到了才能存", async () => {
+    let resolveB!: (r: Response) => void;
+    setFetch(((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") { posted.push({ url, body: JSON.parse(String(init.body ?? "{}")) }); return Promise.resolve(json({ version: "2" })); }
+      if (url.endsWith("/preview")) return Promise.resolve(json(META));
+      if (url.endsWith("/noise")) return Promise.resolve(json({ digest: url.includes("/B/") ? "digest-B" : "digest-A" }));
+      if (url.includes("/B/") && url.endsWith("/display")) return new Promise<Response>((r) => { resolveB = r; });
+      return Promise.resolve(json({ rotate_deg: null, basemap: null, regions: [], terrain: [] }));
+    }) as typeof fetch);
+    const ui = render(<MapEditPage say={() => {}} target={{ map_id: "A", version: "1" }} Canvas={Fake} />);
+    await waitFor(() => expect(ui.container.querySelector(".mapedit[data-ready]")).not.toBeNull());
+    fireEvent.click(ui.container.querySelector(".pick")!);
+    fireEvent.click(btn(ui.container, "画好了"));
+    expect((ui.container.querySelector(".me-save") as HTMLButtonElement).disabled).toBe(false);
+    ui.rerender(<MapEditPage say={() => {}} target={{ map_id: "B", version: "1" }} Canvas={Fake} />);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ui.container.textContent).toContain("B:1");
+    expect(ui.container.querySelector(".mapedit[data-ready]")).toBeNull();
+    expect((ui.container.querySelector(".me-save") as HTMLButtonElement).disabled).toBe(true);
+    expect(ui.container.querySelector(".me-op")).toBeNull();
+    resolveB(json({ rotate_deg: null, basemap: null, regions: [], terrain: [] }));
+    await waitFor(() => expect(ui.container.querySelector(".mapedit[data-ready]")).not.toBeNull());
+    expect((ui.container.querySelector(".me-save") as HTMLButtonElement).disabled).toBe(true);   // B 上什么都没画
+    expect(posted).toEqual([]);
+  });
+
+  it("外审R5:显示设置读不出来不当成空的,不能存(存了会把区域名全抹掉)", async () => {
+    setFetch(((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") { posted.push({ url, body: {} }); return Promise.resolve(json({})); }
+      if (url.endsWith("/preview")) return Promise.resolve(json(META));
+      if (url.endsWith("/noise")) return Promise.resolve(json({ digest: "abc" }));
+      return Promise.resolve(json({ error: "坏了" }, 500));
+    }) as typeof fetch);
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector(".me-loaderr")).not.toBeNull());
+    expect(c.querySelector(".mapedit[data-ready]")).toBeNull();
+    fireEvent.click(c.querySelector(".pick")!);
+    expect(c.querySelector(".me-save")!.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("外审R5:另存还没回来就换了图,回来以后不跳、不改新图", async () => {
+    let finishEdit!: (r: Response) => void;
+    setFetch(((url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        posted.push({ url, body: JSON.parse(String(init.body ?? "{}")) });
+        if (url.endsWith("/edit")) return new Promise<Response>((r) => { finishEdit = r; });
+        return Promise.resolve(json({}));
+      }
+      if (url.endsWith("/preview")) return Promise.resolve(json(META));
+      if (url.endsWith("/noise")) return Promise.resolve(json({ digest: "abc" }));
+      return Promise.resolve(json({ rotate_deg: null, basemap: null, regions: [], terrain: [] }));
+    }) as typeof fetch);
+    const ui = render(<MapEditPage say={() => {}} target={{ map_id: "A", version: "1" }} Canvas={Fake} />);
+    await waitFor(() => expect(ui.container.querySelector(".mapedit[data-ready]")).not.toBeNull());
+    fireEvent.click(ui.container.querySelector(".pick")!);
+    fireEvent.click(btn(ui.container, "画好了"));
+    fireEvent.click(ui.container.querySelector(".me-save")!);
+    fireEvent.click(btn(document.querySelector(".modal")!, "另存成新的一版"));
+    await waitFor(() => expect(posted.some((p) => p.url.endsWith("/A/1/edit"))).toBe(true));
+    location.hash = "#/admin/mapedit?map=B&version=1";
+    ui.rerender(<MapEditPage say={() => {}} target={{ map_id: "B", version: "1" }} Canvas={Fake} />);
+    finishEdit(json({ version: "2" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(location.hash).toBe("#/admin/mapedit?map=B&version=1");
+    // 确认过的那次照样存完(A 的新版本 2 的显示设置),B 那边一个请求都没有
+    await waitFor(() => expect(posted.map((p) => p.url)).toEqual(["/api/admin/maps/A/1/edit", "/api/admin/maps/A/2/display"]));
+    expect(location.hash).toBe("#/admin/mapedit?map=B&version=1");
+  });
 });
