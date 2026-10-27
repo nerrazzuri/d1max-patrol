@@ -82,6 +82,36 @@ class InterceptReach:
                 self._costmaps.pop(next(iter(self._costmaps)))
         return cm
 
+    def path_m(self, map_id: str, version: str, start: tuple[float, float],
+               goal: tuple[float, float]) -> float | None:
+        """W44:从 ``start`` 到 ``goal`` 按跟机器人同一份的规划要走多少米。
+
+        走不通、栅格没有、出图 → None。"""
+        import math
+        import time
+
+        from d1max_contract.planning import astar
+        try:
+            self.maps.get(map_id, version)
+            cm = self._costmap(map_id, version)
+        except Exception:                                # noqa: BLE001 - 不认识的图、栅格坏了
+            return None
+        if cm is None:
+            return None
+        s, g = cm.cell_of(*start), cm.cell_of(*goal)
+        if s is None or g is None:
+            return None
+        h, w = cm.shape
+        try:
+            cells = astar.plan(cm.cost.tobytes(), cm.hard.astype("uint8").tobytes(), w, h, s, g,
+                               deadline=time.monotonic() + self.timeout_s)
+        except astar.PlanError:
+            return None
+        res = float(cm.res)
+        steps = sum(math.hypot(a[0] - b[0], a[1] - b[1])
+                    for a, b in zip(cells, cells[1:], strict=False))
+        return round(steps * res, 2)
+
     def check(self, name: str, map_id: str, version: str, x: float, y: float) -> Reach:
         try:
             self.maps.get(map_id, version)
