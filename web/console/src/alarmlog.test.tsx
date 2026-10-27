@@ -21,6 +21,7 @@ let alerts: Alert[] = [];
 let truncated = false;
 let note: unknown = null;
 let posted: unknown[] = [];
+let duty: unknown = null;
 
 beforeEach(() => {
   lang.value = "zh";
@@ -28,6 +29,7 @@ beforeEach(() => {
   truncated = false;
   note = null;
   posted = [];
+  duty = null;
   setFetch(((url: string, init?: RequestInit) => {
     if (url.startsWith("/api/shift-notes")) {
       if (init?.method === "POST") {
@@ -38,6 +40,7 @@ beforeEach(() => {
       }
       return Promise.resolve(json({ latest: note }));
     }
+    if (url.startsWith("/api/duty-settings")) return Promise.resolve(duty ? json(duty) : json({}, 404));
     if (url.startsWith("/api/alerts")) return Promise.resolve(json({ alerts, limit: 500, truncated }));
     return Promise.resolve(json({}, 404));
   }) as typeof fetch);
@@ -49,6 +52,14 @@ const rows = (c: Element) => Array.from(c.querySelectorAll(".it"));
 const chip = (c: Element, text: string) => Array.from(c.querySelectorAll(".chip")).find((b) => b.textContent === text) as HTMLButtonElement;
 
 describe("报警记录页", () => {
+  it("交班时间按站点设置", async () => {
+    duty = { shift_hours: [8, 20], stale_hours: 2 };
+    alerts = [alert({ key: "a", first_ms: at(19, 30) }), alert({ key: "b", first_ms: at(20, 30) })];
+    const { container: c } = page();
+    await waitFor(() => expect(c.querySelector(".sum .box span")!.textContent).toContain("20:00"));
+    await waitFor(() => expect(rows(c).length).toBe(1));
+  });
+
   it("本班按19点算", async () => {
     alerts = [alert({ key: "a", first_ms: at(19, 30) }), alert({ key: "b", first_ms: at(18, 0), resolved_ms: at(18, 5) })];
     const { container: c } = page();

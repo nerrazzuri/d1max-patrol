@@ -5,10 +5,10 @@ import type { ComponentChildren } from "preact";
 // (大小不跟着缩放变),位置用跟底图同一个变换算。
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, ApiError, enc } from "./api";
-import { hm } from "./data";
+import { hm, useDutySettings } from "./data";
 import { alertTitle, lang, t, type Key } from "./i18n";
 import type { UnitInfo } from "./live";
-import { etaNext, LAYERS, loadLayers, saveLayers, shiftStart, staleCells, STALE_AFTER_MS, tonightEvents, zoneDecor,
+import { etaNext, LAYERS, loadLayers, saveLayers, shiftStart, staleAfter, staleCells, tonightEvents, zoneDecor,
   type AuthzRow, type Cell, type Layer, type ModeView } from "./maplayers";
 import { MapCanvas, type CanvasArea, type LegendKey, type Screen } from "./mapcanvas";
 import { heading, namedAreas, onMap, toPx, type PreviewMeta, type Pt } from "./mapview";
@@ -219,6 +219,7 @@ export function MapPage(props: {
   say?: (s: string) => void;
 }) {
   const say = props.say ?? (() => {});
+  const duty = useDutySettings();
   const [layers, setLayers] = useState<Set<Layer>>(loadLayers);
   const [shown, setShown] = useState<{ map: { map_id: string; version: string } | null; meta: PreviewMeta | null }>({ map: null, meta: null });
   const [look, setLook] = useState<{ at: Pt; map: { map_id: string; version: string } } | null>(null);
@@ -273,9 +274,9 @@ export function MapPage(props: {
     return () => { live = false; };
   }, [mapKey, props.units.length]);
 
-  const since = shiftStart(props.now);
+  const since = shiftStart(props.now, duty.shift_hours);
   const events = tonightEvents(recent, since);
-  const stale = cells ? staleCells(cells.cells, props.now, STALE_AFTER_MS) : [];
+  const stale = cells ? staleCells(cells.cells, props.now, staleAfter(duty.stale_hours)) : [];
   const onThisMap = (u: UnitInfo) => { const m = robotMap(u.robot); return !!(m && shown.map && m.map_id === shown.map.map_id && m.version === shown.map.version); };
   const robotsHere = props.units.filter((u) => u.state !== "offline" && onThisMap(u)).map((u) => u.robot.robot_id);
   const toRec = (a: Alert) => { location.hash = `#/recordings?robot=${enc(a.robot)}&t=${a.first_ms}`; };

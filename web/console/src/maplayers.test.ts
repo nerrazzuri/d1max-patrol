@@ -1,7 +1,7 @@
 // W44 地图页的图层规则(设计 §4.3):多久没巡过、今晚的事、本班从几点算、下一个巡检点几分钟到、防区标签。
 import { beforeEach, describe, expect, it } from "vitest";
 import { lang } from "./i18n";
-import { DEFAULT_LAYERS, etaNext, shiftStart, staleCells, STALE_AFTER_MS, tonightEvents, zoneDecor } from "./maplayers";
+import { DEFAULT_LAYERS, etaNext, shiftStart, staleAfter, staleCells, STALE_AFTER_MS, tonightEvents, zoneDecor } from "./maplayers";
 import type { Alert } from "./model";
 
 beforeEach(() => {
@@ -86,5 +86,12 @@ describe("防区的标签", () => {
   });
   it("模式里没有这个防区:没配过的一律布防(跟站点一样)", () => {
     expect(zoneDecor("新防区", { mode: "armed", until_ms: null, zones: [] }, []).tone).toBe("armed");
+  });
+});
+
+describe("多久没巡过按站点设置", () => {
+  it("小时换成毫秒,拿不到用默认", () => {
+    expect(staleAfter(3)).toBe(3 * 3_600_000);
+    expect(staleAfter(undefined)).toBe(STALE_AFTER_MS);
   });
 });

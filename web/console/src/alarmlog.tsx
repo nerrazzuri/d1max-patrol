@@ -3,7 +3,7 @@
 // 每行:抓拍(录像那一刻的一帧)、时间、什么事、结论和谁处理的、看录像 / 去处理。技术类(给业主的)不列。
 import { useEffect, useState } from "preact/hooks";
 import { api, ApiError } from "./api";
-import { hm } from "./data";
+import { hm, useDutySettings } from "./data";
 import { alertTitle, lang, t, type Key } from "./i18n";
 import { shiftStart } from "./maplayers";
 import { verdictText } from "./mappage";
@@ -43,7 +43,8 @@ export function AlarmLogPage(props: { now: number; role: string }) {
   const pullNote = () => api<{ latest: Note | null }>("GET", "/api/shift-notes").then((d) => setNote(d.latest ?? null)).catch(() => {});
   useEffect(() => { void pullNote(); }, []);
 
-  const shift = shiftStart(props.now);
+  const duty = useDutySettings();
+  const shift = shiftStart(props.now, duty.shift_hours);
   const today = dayRange(dateInput(props.now))!;
   const picked = dayRange(date);
   const [since, until] = scope === "shift" ? [shift, Infinity] : scope === "today" ? [today.since, today.until]

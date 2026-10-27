@@ -28,8 +28,13 @@ export function saveLayers(s: Set<Layer>): void {
   }
 }
 
-/** 多久没机器人去过算「没巡过」(设计 §11 第 4 条;第二期挪到「布防时间」页可改)。 */
+/** 多久没机器人去过算「没巡过」的默认(设计 §11 第 4 条);业主在「布防时间」页改(站点 /api/duty-settings)。 */
 export const STALE_AFTER_MS = 2 * 3_600_000;
+
+/** 站点设的小时数换成毫秒;没拿到用默认。 */
+export function staleAfter(hours: number | undefined): number {
+  return typeof hours === "number" && hours > 0 ? hours * 3_600_000 : STALE_AFTER_MS;
+}
 
 export interface Cell { i: number; j: number; t: number }
 
