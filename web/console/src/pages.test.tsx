@@ -83,7 +83,8 @@ describe("录像页:「留着」的回包只动问的那一段(外审 I1)", () =
 
   // 换了之后页面该是什么样:换狗、换一天 = 没在放;换前后 = 接着同一刻放另一路(那一路自己的段 3)
   const switches: [string, (c: Element, q: (t: string) => HTMLElement) => void, number | null, string | null][] = [
-    ["换成 B 机器人", (c) => fireEvent.change(c.querySelector("select")!, { target: { value: "B" } }), null, null],
+    // W44:换机器人接着同一刻放(时间轴共用一根播放线),B 那一刻有自己的段 4
+    ["换成 B 机器人", (c) => fireEvent.click(Array.from(c.querySelectorAll(".recrobots button")).find((b) => b.textContent === "B")!), 4, "B Front"],
     ["换成后摄像头", (_c, q) => fireEvent.click(q("Back")), 3, "A Back"],
     ["换一天", (c) => fireEvent.change(c.querySelector('input[type="date"]')!, { target: { value: "2026-10-10" } }), null, null],
   ];

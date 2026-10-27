@@ -1,6 +1,8 @@
 // 录像页的算术(C-B3):一天的范围、哪一段盖住某一刻、有录像的时间段、下一段。不碰 DOM,好测。
 // 站点的录像是一段一段的(每段 segment_s 秒,按开头时刻登记);时间轴按**当地的一天**画。
 
+import { forGuard, type Alert } from "./model";
+
 export interface Recording {
   id: number;
   robot_id: string;
@@ -108,4 +110,55 @@ export function belongs(rec: Recording | null, robot: string, cam: string): rec 
 /** 从一条告警去录像页:那台狗、告警前 10 秒起。 */
 export function recordingLink(a: { robot: string; first_ms: number }): string {
   return `#/recordings?robot=${encodeURIComponent(a.robot)}&t=${Math.max(1, a.first_ms - 10_000)}`;
+}
+
+/** 录像页地图上的一个轨迹点(站点 ``/api/robots/{id}/track``;时刻是机器人的钟,跟录像同一个钟)。 */
+export interface TrackPt { t: number; map_id: string; map_version: string; x: number; y: number }
+
+/** 跟上一个点差太久就算那一刻不知道在哪(站点没挪也每 10 秒记一个,两倍留余量)。 */
+export const MAX_GAP_MS = 20_000;
+
+/** ``t`` 那一刻机器人在哪:取 ≤ t 的最后一个点;离它超过 {@link MAX_GAP_MS} 就是不知道。 */
+export function poseAt(points: TrackPt[], t: number): TrackPt | null {
+  let hit: TrackPt | null = null;
+  for (const p of points) {
+    if (p.t > t) break;
+    hit = p;
+  }
+  return hit && t - hit.t <= MAX_GAP_MS ? hit : null;
+}
+
+/** 点了轨迹:离点的那一处最近(3 米以内)、在同一张图上的那个点的时刻;没有回 null。 */
+export function nearestTime(points: TrackPt[], x: number, y: number, map: { map_id: string; version: string }): number | null {
+  let best: TrackPt | null = null;
+  let d = 3;
+  for (const p of points) {
+    if (p.map_id !== map.map_id || p.map_version !== map.version) continue;
+    const e = Math.hypot(p.x - x, p.y - y);
+    if (e <= d) { d = e; best = p; }
+  }
+  return best ? best.t : null;
+}
+
+export interface Lane { robot: string; segs: [number, number][]; marks: { t: number; kind: "alarm" | "help" }[] }
+
+/** 时间轴每台一行:有录像的段、报警(有人闯入、起火)和需要帮忙(帮忙、掉线)的记号;技术类不标。 */
+export function lanes(robots: string[], recs: Recording[], alerts: Alert[], day: { since: number; until: number }, segS: number): Lane[] {
+  return robots.map((robot) => {
+    const sp = spans(ascending(recs.filter((r) => r.robot_id === robot)), segS);
+    const marks = alerts.filter((a) => a.robot === robot && a.first_ms >= day.since && a.first_ms < day.until && forGuard(a))
+      .map((a) => ({ t: a.first_ms, kind: (a.audience === "intrusion" || a.audience === "fire" ? "alarm" : "help") as "alarm" | "help" }))
+      .sort((a, b) => a.t - b.t);
+    return { robot, segs: sp.map((s): [number, number] => [s.from, s.to]), marks };
+  });
+}
+
+/** 时间轴拉宽拉窄:新宽度 = 现在 × ``factor``(夹在 5 分钟到一整天),``at`` 那一刻留在原来的位置;不出这一天。 */
+export function viewSpan(day: { since: number; until: number }, cur: { since: number; until: number }, at: number, factor: number): { since: number; until: number } {
+  const full = day.until - day.since;
+  const w = Math.min(full, Math.max(300_000, (cur.until - cur.since) * factor));
+  const f = (at - cur.since) / (cur.until - cur.since);
+  let since = at - f * w;
+  since = Math.min(day.until - w, Math.max(day.since, since));
+  return { since, until: since + w };
 }
