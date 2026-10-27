@@ -101,6 +101,8 @@ export interface Mode {
   mode: "armed" | "home" | "visitor";
   /** 访客模式到几点(站点 modes.view)。 */
   until_ms?: number | null;
+  /** 每个防区此刻布没布防(站点 modes.view)。 */
+  zones?: { zone: string; armed: boolean }[];
 }
 
 /** 给保安看的四类(W44,设计 §7)。 */

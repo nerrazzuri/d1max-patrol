@@ -31,7 +31,17 @@ import {
 import { rasterShade, scheme } from "./theme";
 
 /** 图上画的有名字的多边形(地图坐标,米):area = 区域(淡),zone = 防区(防区页上能改的那些,显眼)。 */
-export interface CanvasArea { name: string; pts: Pt[]; kind: "area" | "zone"; /** 报警的防区:标红(W44)。 */ hot?: boolean }
+export interface CanvasArea {
+  name: string;
+  pts: Pt[];
+  kind: "area" | "zone";
+  /** 报警的防区:标红(W44)。 */
+  hot?: boolean;
+  /** 图上写的字(不给 = 名字);W44 地图页写「主楼 · 布防」。 */
+  label?: string;
+  /** 布防绿色实框、撤防灰色虚框(W44 地图页的防区和布防图层)。 */
+  tone?: "armed" | "off";
+}
 
 export type LegendKey = "floor" | "wall" | "seen" | "unknown" | "nogo" | "hard" | "vwall" | "erase" | "slow" | "ignore" | "area" | "zone" | "robot" | "alarm";
 const LEGEND_ORDER: LegendKey[] = ["floor", "wall", "seen", "unknown", "nogo", "hard", "vwall", "erase", "slow", "ignore", "area", "zone", "robot", "alarm"];
@@ -109,6 +119,8 @@ export function MapCanvas(props: {
   overlay?: ComponentChildren;
   /** 图例那一行里多加的项(页面自己画的图层,比如规划路径、轨迹),跟底图图例排一行。 */
   legendExtra?: ComponentChildren;
+  /** 画不画禁行区、限速区、虚拟墙(默认画;W44 地图页禁行区图层默认关)。抹掉区照画。 */
+  navZones?: boolean;
 }) {
   const { meta } = props;
   const wrap = useRef<HTMLDivElement>(null);
@@ -188,7 +200,8 @@ export function MapCanvas(props: {
     k: view.k,
   };
   const obstacles = props.avoid?.(screen) ?? [];
-  const zones = (meta.zones ?? []).filter((z) => Array.isArray(z.polygon) && z.polygon.length >= 3);
+  const zones = (meta.zones ?? []).filter((z) => Array.isArray(z.polygon) && z.polygon.length >= 3)
+    .filter((z) => props.navZones !== false || z.kind === "erase");
   const areas = props.areas ?? [];
   const present = new Set<LegendKey>(["floor", "wall", "unknown", ...(props.legend ?? [])]);
   if (zones.some((z) => z.kind === "nogo" && !z.hard && !z.wall)) present.add("nogo");
@@ -226,19 +239,20 @@ export function MapCanvas(props: {
               </polyline>
             ))}
             {areas.map((a, i) => (
-              <polygon key={`${i}:${a.kind}:${a.name}`} points={polyAttr(meta, a.pts)} class={`${a.kind === "zone" ? "sec-area" : "sec-area quiet"}${a.hot ? " hot" : ""}`} />
+              <polygon key={`${i}:${a.kind}:${a.name}`} points={polyAttr(meta, a.pts)} class={`${a.kind === "zone" ? "sec-area" : "sec-area quiet"}${a.tone ? ` ${a.tone}` : ""}${a.hot ? " hot" : ""}`} />
             ))}
             {props.world}
           </g>
           <g class="map-marks">
             {areas.map((a, i) => {
               const font = a.kind === "zone" ? 14 : 13;
-              const at = placeLabel(a.pts.map(([x, y]) => screen.map(x, y)), a.name, font, obstacles);
+              const text = a.label ?? a.name;
+              const at = placeLabel(a.pts.map(([x, y]) => screen.map(x, y)), text, font, obstacles);
               if (!at) return null;
               const [x, y] = at;
               return (
                 <text key={`${i}:${a.kind}:${a.name}`} x={x} y={y} class={a.kind === "zone" ? "area-label" : "area-label quiet"}
-                  font-size={font} dominant-baseline="central">{a.name}</text>
+                  font-size={font} dominant-baseline="central">{text}</text>
               );
             })}
             {props.marks?.(screen)}

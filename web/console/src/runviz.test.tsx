@@ -8,7 +8,7 @@ import { CamerasPanel } from "./camadmin";
 import { lang } from "./i18n";
 import type { UnitInfo } from "./live";
 import { LocHistoryPage } from "./locpage";
-import { MapPage } from "./mappage";
+import { SiteMap } from "./mappage";
 import { applyMat, toPx, type Mat, type PreviewMeta } from "./mapview";
 import type { Robot } from "./model";
 import { RunInfo } from "./runinfo";
@@ -77,7 +77,7 @@ function mapPage(meta: PreviewMeta, viz: VizData | null = VIZ, eps: Episode[] = 
     if (u.startsWith("/api/loc-episodes")) return json({ episodes: eps });
     return json({ error: "nope" }, 404);
   }) as never);
-  const r = render(<MapPage units={[unit(robot("A"))]} p1={[]} now={0} selected={null} onSelect={() => {}} onVideo={() => {}} />);
+  const r = render(<SiteMap units={[unit(robot("A"))]} p1={[]} now={0} selected={null} onSelect={() => {}} />);
   return { ...r, urls };
 }
 
@@ -144,16 +144,10 @@ describe("地图上的规划路径、轨迹、被挡、定位问题的点", () =
       if (u.endsWith("/areas")) return json({ areas: [] });
       return json({ error: "boom" }, 500);
     }) as never);
-    const r = render(<MapPage units={[unit(robot("A"))]} p1={[]} now={0} selected={null} onSelect={() => {}} onVideo={() => {}} />);
+    const r = render(<SiteMap units={[unit(robot("A"))]} p1={[]} now={0} selected={null} onSelect={() => {}} />);
     await waitFor(() => expect(r.container.querySelector("g.map-world")).not.toBeNull());
   });
 
-  it("侧栏:选中的机器人下面写定位和被挡;定位问题只查这张图近 7 天", async () => {
-    installScreenCTM();
-    const { container: c, urls } = mapPage(META);
-    await waitFor(() => expect(c.querySelector('[data-testid="run-info"]')).not.toBeNull());
-    expect(urls.some((u) => u.startsWith("/api/loc-episodes?") && u.includes("map_id=m1") && u.includes("map_version=1") && u.includes("since_ms="))).toBe(true);
-  });
 });
 
 describe("每台机器人下面的定位和被挡", () => {

@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { setFetch } from "./api";
 import { lang } from "./i18n";
-import { MapPage } from "./mappage";
+import { SiteMap } from "./mappage";
 import { notAccepted, usePosePick } from "./posepick";
 
 const meta = { width: 400, height: 300, m_per_px: 0.05, left_x: -10, top_y: 8 };
@@ -52,8 +52,8 @@ async function pickAndConfirmSet(r: ReturnType<typeof render>) {
 
 it("选中 B(在 map-B 上):底图是 map-B,只画 B,不画 map-A 上的 A", async () => {
   mapFetch();
-  const r = render(<MapPage units={[unit("A", "map-A"), unit("B", "map-B")] as never} p1={[]} now={0}
-    selected="B" role="admin" onSelect={() => {}} onVideo={() => {}} />);
+  const r = render(<SiteMap units={[unit("A", "map-A"), unit("B", "map-B")] as never} p1={[]} now={0}
+    selected="B" role="admin" onSelect={() => {}} />);
   await waitFor(() => expect(r.container.querySelector("g.map-world")).not.toBeNull());
   expect(r.container.querySelector("image")?.getAttribute("href")).toContain("/map-B/1/");
   const bots = [...r.container.querySelectorAll("g.bot")].map((g) => g.textContent);
@@ -62,8 +62,8 @@ it("选中 B(在 map-B 上):底图是 map-B,只画 B,不画 map-A 上的 A", asy
 
 it("选中的机器人没报图:底图退回第一只有图的机器人的,没报图的机器人不画在上面", async () => {
   mapFetch();
-  const r = render(<MapPage units={[unit("A", "map-A"), unit("C", null)] as never} p1={[]} now={0}
-    selected="C" role="admin" onSelect={() => {}} onVideo={() => {}} />);
+  const r = render(<SiteMap units={[unit("A", "map-A"), unit("C", null)] as never} p1={[]} now={0}
+    selected="C" role="admin" onSelect={() => {}} />);
   await waitFor(() => expect(r.container.querySelector("g.map-world")).not.toBeNull());
   expect(r.container.querySelector("image")?.getAttribute("href")).toContain("/map-A/1/");
   expect([...r.container.querySelectorAll("g.bot")].map((g) => g.textContent)).toEqual(["A"]);
@@ -83,9 +83,9 @@ it("换图以后才回来的旧预览不认", async () => {
     return json({ episodes: [] });
   }) as never);
   const units = [unit("A", "map-A"), unit("B", "map-B")] as never;
-  const r = render(<MapPage units={units} p1={[]} now={0} selected="A" role="admin" onSelect={() => {}} onVideo={() => {}} />);
+  const r = render(<SiteMap units={units} p1={[]} now={0} selected="A" role="admin" onSelect={() => {}} />);
   await waitFor(() => expect(pending.length).toBe(1));
-  r.rerender(<MapPage units={units} p1={[]} now={0} selected="B" role="admin" onSelect={() => {}} onVideo={() => {}} />);
+  r.rerender(<SiteMap units={units} p1={[]} now={0} selected="B" role="admin" onSelect={() => {}} />);
   await waitFor(() => expect(r.container.querySelector("image")?.getAttribute("href")).toContain("/map-B/1/"));
   pending[0]();
   await new Promise((res) => setTimeout(res, 20));

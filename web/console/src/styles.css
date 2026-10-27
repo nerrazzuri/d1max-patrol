@@ -574,3 +574,37 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--c-primary); }
 .lw-pair { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
 .lw-pair .well { height: 100%; }
 @media (max-width: 900px) { .lw-grid { grid-template-columns: 1fr; grid-auto-rows: 260px; } }
+
+/* W44 地图页:右栏图层开关、今晚的事、过去看看、临时路线;图上的多久没巡过、待命点、事件旗、临时路线点 */
+.maprp { width: 380px; display: flex; flex-direction: column; gap: 10px; }
+.maprp h3 { margin: 6px 0 0; font-size: 15px; font-weight: 600; color: var(--c-textSecondary); }
+.layers { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; font-size: 14px; }
+.layers label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.evlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.evrow { width: 100%; display: grid; grid-template-columns: 52px 1fr; gap: 2px 10px; padding: 8px 4px; border: 0; border-bottom: 1px solid var(--c-outline);
+  background: transparent; color: var(--c-text); text-align: left; cursor: pointer; font: inherit; }
+.evrow small { grid-column: 2; }
+.ev-what.intrusion, .ev-what.fire { color: var(--c-error); }
+.ev-what.help, .ev-what.offline { color: var(--c-warning); }
+.maprp .tip, .temproute { margin-top: auto; padding: 12px 14px; border-radius: var(--r-r8); background: var(--c-surfaceVariant); display: flex; flex-direction: column; gap: 8px; }
+.maprp .tip p { margin: 0; }
+.golook { position: fixed; right: 400px; bottom: 32px; z-index: 15; width: 340px; padding: 14px 16px; border-radius: var(--r-r12);
+  background: var(--c-surface); border: 1px solid var(--c-outline); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.golook p { margin: 0 0 6px; }
+.stale-bg { fill: var(--c-warning); fill-opacity: 0.08; }
+.stale-line { stroke: var(--c-warning); stroke-opacity: 0.35; stroke-width: 3; }
+.stale-cell { fill: url(#stale-hatch); }
+.temp-route { fill: none; stroke: var(--c-primary); stroke-width: 2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+.temp-pt circle { fill: var(--c-primary); }
+.temp-pt text { fill: var(--c-onPrimary); font-size: 11px; font-weight: 700; text-anchor: middle; }
+.standby-mark rect { fill: var(--c-surface); stroke: var(--c-textSecondary); }
+.standby-mark text { fill: var(--c-textSecondary); font-size: 11px; }
+.event-pin { cursor: pointer; }
+.event-pin line { stroke: var(--c-warning); stroke-width: 2; }
+.event-pin text { fill: var(--c-warning); font-size: 11px; font-weight: 600; text-anchor: middle; paint-order: stroke; stroke: var(--c-surface); stroke-width: 3px; }
+.event-pin.intrusion line, .event-pin.fire line { stroke: var(--c-error); }
+.event-pin.intrusion text, .event-pin.fire text { fill: var(--c-error); }
+.bot-label.eta { fill: var(--c-tertiary); }
+.sec-area.armed { stroke: var(--c-success); fill: var(--c-success); fill-opacity: 0.1; }
+.sec-area.off { stroke: var(--c-textMuted); stroke-dasharray: 6 4; fill: var(--c-textMuted); fill-opacity: 0.06; }
+@media (max-width: 1100px) { .maprp { width: 300px; } .golook { right: 16px; } }

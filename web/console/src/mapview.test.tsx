@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setFetch } from "./api";
 import { lang } from "./i18n";
 import type { UnitInfo } from "./live";
-import { MapPage } from "./mappage";
+import { SiteMap } from "./mappage";
 import {
   applyMat,
   contentBox,
@@ -241,7 +241,7 @@ function mapPage(meta: PreviewMeta, opts: { units?: UnitInfo[]; p1?: Alert[]; se
     return json({ error: "nope" }, 404);
   }) as never);
   const units = opts.units ?? [unit(robot("A", { x: 2, y: 3, yaw: 0 }))];
-  return render(<MapPage units={units} p1={opts.p1 ?? []} now={0} selected={null} onSelect={() => {}} onVideo={() => {}} />);
+  return render(<SiteMap units={units} p1={opts.p1 ?? []} now={0} selected={null} onSelect={() => {}} />);
 }
 const ready = async (c: Element) => waitFor(() => expect(c.querySelector("g.map-world")).not.toBeNull());
 const legend = (c: Element) => [...c.querySelectorAll("[data-legend]")].map((e) => e.getAttribute("data-legend"));
@@ -452,7 +452,7 @@ describe("比例尺、缩放、全图按钮", () => {
       if (u.endsWith("/areas")) return json({ areas: [] });
       return json({}, 404);
     }) as never);
-    const { container: c } = render(<MapPage units={[unit(robot("A", { x: 0, y: 0, yaw: 0 }))]} p1={[]} now={0} selected={null} onSelect={onSelect} onVideo={() => {}} />);
+    const { container: c } = render(<SiteMap units={[unit(robot("A", { x: 0, y: 0, yaw: 0 }))]} p1={[]} now={0} selected={null} onSelect={onSelect} />);
     await ready(c);
     const before = worldOf(c);
     const svg = c.querySelector("svg.map")!;
